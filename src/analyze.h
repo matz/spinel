@@ -239,6 +239,11 @@ typedef struct {
   unsigned char unplaced; /* in a body the walk does not place (a builder's
                              block, lr_body_defs): no version, and no query
                              at a point sees it */
+  int body;             /* a version a method body makes (lr_body_versions):
+                           the def whose body holds it; such a version has
+                           no load point but an extent, from the first
+                           statement that body may run on, any number of
+                           times (lr_version_order); 0 for one at a point */
   int scope;            /* a def's or a define_method's: the method scope
                            the scope walk made of it (its Scope index; 0,
                            the program's top level, for none); a
@@ -355,6 +360,10 @@ int elab_method_replaced(Compiler *c, const char *name);
    run, or open the window of the bodies around it, ahead of the first
    version, where the name is absent? */
 int elab_method_late(Compiler *c, const char *name);
+/* Does a reflection reader that answers from the method table (respond_to?,
+   method_defined?, defined?, a list of methods: not a Method's maker) name
+   `name`, or one name any (lr_refl_take)? */
+int elab_method_reflected(Compiler *c, const char *name);
 /* The record's histories of method `name`, one class and side at a time:
    the first with i -1, then the one after i; -1 past the last. *cls the
    class (-1 main's), *sg 1 for its singleton side. */

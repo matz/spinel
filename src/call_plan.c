@@ -991,11 +991,13 @@ static unsigned ver_mix(unsigned h) {
   h ^= h >> 15; h *= 0xC2B2AE35u; h ^= h >> 13;
   return h;
 }
-/* How many versions rcls's chain holds of name (two at most counted: 0, 1 or
-   2 for more), and whether the first is a plain def, kept by (class, side,
-   name) for the record as it stands (elab_stamp): every call
-   asked of every class of a name asks it, and the answer is the chain's. */
-struct VerChain { struct VerChainSlot { const char *name; int rcls, sg, n, def; } *slot; int cap, used; ElabStamp stamp; };
+/* How many versions rcls's chain holds of name (-1 past VER_MAX_ARMS),
+   whether the first is a plain def, and whether a method body makes one
+   (LrDef.body: a call may run before that body does, where the chain may
+   hold none of them), kept by (class, side, name) for the record as it
+   stands (elab_stamp): every call asked of every class of a name asks it,
+   and the answer is the chain's. */
+struct VerChain { struct VerChainSlot { const char *name; int rcls, sg, n, def, body; } *slot; int cap, used; ElabStamp stamp; };
 void ver_chain_free(Compiler *c) {
   if (!c->ver_chain) return;
   free(c->ver_chain->slot);
@@ -1005,7 +1007,7 @@ void ver_chain_free(Compiler *c) {
 static unsigned ver_chain_hash(const char *name, int rcls, int sg) {
   return ver_mix(sp_strhash(name) + (unsigned)rcls * 0x9E3779B1u + (unsigned)sg * 0x85EBCA6Bu);
 }
-static int ver_chain_count(Compiler *c, int rcls, int sg, const char *name, int *first_def) {
+static int ver_chain_count(Compiler *c, int rcls, int sg, const char *name, int *first_def, int *body) {
   struct VerChain *m = c->ver_chain;
   if (m && !elab_stamp_same(m->stamp, elab_stamp(c))) { ver_chain_free(c); m = NULL; }
   if (!m) {
@@ -1029,13 +1031,16 @@ static int ver_chain_count(Compiler *c, int rcls, int sg, const char *name, int 
   for (; m->slot[j].name; j = (j + 1) & (m->cap - 1))
     if (m->slot[j].rcls == rcls && m->slot[j].sg == sg && sp_streq(m->slot[j].name, name)) {
       *first_def = m->slot[j].def;
+      *body = m->slot[j].body;
       return m->slot[j].n;
     }
-  ElabVersion one[2];
-  int n = elab_chain_versions(c, rcls, sg, name, one, 2), def = n >= 1 && one[0].v->kind == LR_DEF;
-  m->slot[j] = (struct VerChainSlot){ name, rcls, sg, n, def };
+  ElabVersion vs[VER_MAX_ARMS];
+  int n = elab_chain_versions(c, rcls, sg, name, vs, VER_MAX_ARMS), def = n >= 1 && vs[0].v->kind == LR_DEF, any = 0;
+  for (int k = 0; k < n; k++) any |= vs[k].v->body != 0;
+  m->slot[j] = (struct VerChainSlot){ name, rcls, sg, n, def, any };
   m->used++;
   *first_def = def;
+  *body = any;
   return n;
 }
 /* Does call id run any time after its point: in a block the record
@@ -1168,18 +1173,32 @@ static int ver_mm_at(Compiler *c, int rcls, int sg, LoadPoint p, int at, const E
    was made. *span (when asked): how many versions the window reaches
    (elab_method_span), 0 when no window was asked. */
 static int ct_version_at(Compiler *c, int id, int cls, const char *name, unsigned flags, int mi, int *def_class, int *span) {
-  int sg = (flags & CT_CMETHOD) != 0, rcls = flags & CT_TOP ? -1 : cls, vi = -1, dc = -1, n = 0, first_def = 0, none = 0;
-  int late = elab_method_late(c, name);
+  int sg = (flags & CT_CMETHOD) != 0, rcls = flags & CT_TOP ? -1 : cls, vi = -1, dc = -1, n = 0, first_def = 0, none = 0, body = 0;
   const LrDef *d = NULL, *ds[VER_MAX_ARMS];
+  /* a call may meet the chain with no version made yet: the name's late
+     bit, or a version a method body makes on the chain (its extent opens
+     where that body first runs). Not for a capture (CT_CAPTURE): a Method
+     made where no version is live would need an entry that checks the
+     method is there, which captures do not have yet, so a capture keeps
+     the table's answer until presence-checked captures retire this */
+  int nc = ver_chain_count(c, rcls, sg, name, &first_def, &body), late = elab_method_late(c, name) || (body && !(flags & CT_CAPTURE));
   /* one def on rcls's whole chain, which no call runs ahead of: the
      table's (a name with versions on other chains only) */
-  if (ver_chain_count(c, rcls, sg, name, &first_def) == 1 && first_def && !late) {
+  if (nc == 1 && first_def && !late) {
     if (span) *span = 0;
     return mi;
   }
   LoadPoint p = elab_point_of(c, id);
   /* An unplaced capture chooses at construction through the existing
-     entry, even when a later wrapper changes the call's live window. */
+     entry, even when a later wrapper changes the call's live window. Not
+     where a reader that answers from the table names the method
+     (elab_method_reflected, the fact that keeps the name off the late
+     bit): a respond_to? guarding the capture says it is there, so the
+     capture binds the table's method too, as the guarded call does. */
+  if ((flags & CT_CAPTURE) && p.region < 0 && elab_method_reflected(c, name)) {
+    if (span) *span = 0;
+    return mi;
+  }
   if ((flags & CT_CAPTURE) && p.region < 0 &&
       (vi = ct_entry_of(c, 0, rcls, sg, name, ver_call_arity(c, id, rcls, sg, name, mi))) >= 0) {
     if (def_class && !(flags & CT_TOP)) *def_class = rcls;
@@ -1195,6 +1214,7 @@ static int ct_version_at(Compiler *c, int id, int cls, const char *name, unsigne
     if (kept) elab_window_open(c, &w);
     n = elab_method_span(c, rcls, name, sg, &w, ds, VER_MAX_ARMS);
     for (int k = 0; k < n && k < VER_MAX_ARMS; k++) none |= late && !ds[k];
+    if (n == ELAB_SPAN_ANY) none |= body;   /* (a method body's version may not be made yet) */
     if (n == 1 && ds[0]) vi = ct_def_version(c, rcls, name, sg, d = ds[0], &dc);
   }
   if (vi < 0 && (n >= 2 || n == ELAB_SPAN_ANY || none)) {
@@ -1291,6 +1311,10 @@ static int cm_self_kind(Compiler *c, int self) {
    answers on any self (`U.format`, private in CRuby). */
 static int ct_undefined_at(Compiler *c, int id, int cls, const char *name, unsigned flags) {
   if (!(flags & (CT_CMETHOD | CT_TOP)) || !elab_method_versions(c, name)) return 0;
+  /* (a capture on a chain a method body makes a version on keeps the
+     table's answer, as in ct_version_at, until captures check presence) */
+  int first_def = 0, body = 0;
+  if ((flags & CT_CAPTURE) && (ver_chain_count(c, flags & CT_TOP ? -1 : cls, (flags & CT_CMETHOD) != 0, name, &first_def, &body), body)) return 0;
   int framed = elab_plan_enter(c, id);
   int none = elab_call_method(c, id, flags & CT_TOP ? -1 : cls, name, (flags & CT_CMETHOD) != 0) == ELAB_NO;
   if (framed) elab_plan_leave(c);
@@ -5328,7 +5352,7 @@ int ver_cell_put(Compiler *c, const char *cell, int list, int at, int after, int
    own history's versions. The writes are placed list by list, one rebuild
    of each list's statements: ahead of a statement in the order made, after
    it in the reverse order, as one insertion at a time placed them. */
-typedef struct { int list, stmt, node, n, hist, after, k, g; } VerWrite;
+typedef struct { int list, stmt, node, n, hist, after, k, g, body; } VerWrite;   /* body: a method body's version (LrDef.body) */
 /* The statement of a list a cell write of the version def `node` makes
    goes beside: the def's own; for a def in a class_eval-family block,
    whose defs the reopen registers and whose call runs none of its
@@ -5351,6 +5375,37 @@ static int ver_write_cmp(const void *a, const void *b) {
   if (x->stmt != y->stmt) return x->stmt < y->stmt ? -1 : 1;
   if (x->after != y->after) return x->after - y->after;
   return x->after ? y->k - x->k : x->k - y->k;
+}
+/* ...and beside each copy of a method body's version (VerWrite.body): a
+   module's method cloned into each class that includes, prepends or
+   extends it (nt_clone_subtree) holds a copy of a def its body makes
+   (LrDef.body), which writes the same cell where the copy runs. Only those:
+   a version at a point writes its cell at its own statement. A copy names
+   the node it copies (nt_origin, 'c'), along a chain of up to 64 copies;
+   only the writes made now are copied, since a copy made after an earlier
+   write carries that write */
+static void ver_copy_writes(Compiler *c, const int *par, unsigned char *seen, VerWrite **wp, int *nwp) {
+  const NodeTable *nt = c->nt;
+  int nw0 = *nwp, *of = nw0 ? calloc((size_t)nt->count + 1, sizeof(int)) : NULL;
+  if (!nw0) return;
+  if (!of) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  for (int k = 0; k < nw0; k++) if ((*wp)[k].node >= 0 && (*wp)[k].body) of[(*wp)[k].node] = k + 1;
+  NT_FOREACH_KIND(nt, NK_DefNode, d) {
+    int o = d, k = 0, st;
+    for (int depth = 0; depth < 64 && !k; depth++) {
+      char how = 0; int a = 0, n = 0; unsigned pass = 0;
+      if ((o = nt_origin(nt, o, &how, &a, &pass, &n)) < 0 || how != 'c' || o >= nt->count) break;
+      k = of[o];
+    }
+    if (!k || seen[d] || (st = ver_write_stmt(nt, par, d)) < 0 || par[st] < 0) continue;
+    seen[d] = 1;
+    if (!(*nwp & (*nwp - 1)) && !(*wp = realloc(*wp, sizeof **wp * (size_t)(*nwp ? 2 * *nwp : 1)))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    VerWrite x = (*wp)[k - 1];
+    x.list = par[st]; x.stmt = st; x.node = d;
+    x.after = nt_kind(nt, st) != NK_DefNode && nt_kind(nt, st) != NK_AliasMethodNode && nt_kind(nt, st) != NK_UndefNode;
+    (*wp)[(*nwp)++] = x;
+  }
+  free(of);
 }
 void ver_cells_write(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
@@ -5389,7 +5444,7 @@ void ver_cells_write(Compiler *c) {
       NodeKind sk = nt_kind(nt, st);
       /* (ahead of a def, an alias or an undef, which runs no program code: after one that ends a branch, the write would be the branch's value) */
       w[nw++] = (VerWrite){ par[st], st, node, vs[j].v->kind == LR_REMOVE ? 0 : vs[j].n, vs[j].hist,
-                            sk != NK_DefNode && sk != NK_AliasMethodNode && sk != NK_UndefNode, 0, -1 };
+                            sk != NK_DefNode && sk != NK_AliasMethodNode && sk != NK_UndefNode, 0, -1, vs[j].v->body != 0 };
       if (vs[j].hist >= nh) nh = vs[j].hist + 1;
       /* Not the lone conditional def's dispatcher alone: it stands after the condition, and the
          method is there as soon as an arm (`name#__condN`) runs in its branch */
@@ -5407,6 +5462,7 @@ void ver_cells_write(Compiler *c) {
       }
     }
   }
+  ver_copy_writes(c, par, seen, &w, &nw);
   free(seen); free(par);
   /* the zero writes: one per cell, at its first write, none where the first statement writes it */
   unsigned char *hz = calloc((size_t)nh + 1, 1);

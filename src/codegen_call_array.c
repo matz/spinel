@@ -2100,7 +2100,14 @@ int emit_op_array_index_v(Compiler *c, const BopCtx *x, Buf *b) {
     buf_printf(b, " for (sp_int _t%d = 0; _t%d < sp_PolyArray_length(_t%d); _t%d++)", ti, ti, trecv, ti);
     buf_printf(b, " if (sp_poly_rb_equal(sp_PolyArray_get(_t%d, _t%d), _t%d)) { _t%d = sp_oint_of(_t%d); break; }",
                trecv, ti, ta, tres, ti);
-    buf_puts(b, " "); oint_open(c, id, TY_INT, b); buf_printf(b, "_t%d", tres); oint_close(c, id, b); buf_puts(b, "; })");
+    buf_puts(b, " ");
+    /* A boxed node is consumed as the sp_oint it is (the yield site boxes it
+       with sp_box_oint), so the bare oint stays; unwrapping it to sp_int
+       there handed the boxer a plain Integer (the Hash site of a yield beside
+       an Array site, K-037). */
+    if (repr_of(c, id).kind == RK_BOXED) buf_printf(b, "_t%d", tres);
+    else { oint_open(c, id, TY_INT, b); buf_printf(b, "_t%d", tres); oint_close(c, id, b); }
+    buf_puts(b, "; })");
     return 1;
   }
   return 0;

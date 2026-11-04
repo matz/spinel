@@ -8123,6 +8123,15 @@ static int infer_last_resort_call(Compiler *c, int id, const NodeTable *nt, cons
       if (oc_mi >= 0 && c->scopes[oc_mi].yields && nt_ref(c->nt, id, "block") >= 0) { *out = TY_POLY; return 1; }
       if (oc_mi >= 0) { *out = c->scopes[oc_mi].ret; return 1; }
     }
+    /* NilClass methods on a String, Integer or Float that may be nil and
+       has no method of the name: the call is dispatched boxed
+       (cplan_nil_scalar_reach), nil's answer a boxed value */
+    if (nt_ref(nt, id, "block") < 0 &&
+        (rt == TY_STRING || rt == TY_STRBUF || ((rt == TY_INT || rt == TY_FLOAT) && nullable_int_value(c, recv)))) {
+      int oc_mi = an_reopen_method(c, CORE_NILCLASS, name);
+      int nk = comp_core_class(c, CORE_NILCLASS);
+      if (oc_mi >= 0 && comp_method_vis_declared(c, nk, name, NULL) == SP_VIS_PUBLIC) { *out = TY_POLY; return 1; }
+    }
     /* A poly receiver may hold a Class at runtime, where `name` is a class
        method (`def self.name`) -- codegen dispatches it on the class tag (#3215).
        Type the call poly (not unknown) so the result flows as a value instead of

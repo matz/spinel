@@ -4681,6 +4681,33 @@ PolyPlan *cplan_poly_cls_values(Compiler *c, int id) {
   return vp;
 }
 
+/* Does call id's receiver, a String, Integer or Float that may be nil,
+   reach another method when it is nil: the program's NilClass defines the
+   name, and the receiver's class runs another method of it or none? Boxed, the call's dispatch then runs
+   NilClass's method for nil and raises NoMethodError for the rest. */
+int cplan_nil_scalar_reach(Compiler *c, int id) {
+  const NodeTable *nt = c->nt;
+  /* (a call with a block keeps the old path: the boxed dispatch has no
+     arm for a NilClass method no boxed receiver reaches) */
+  if (id < 0 || nt_kind(nt, id) != NK_CallNode || nt_safe_nav(nt, id) || nt_ref(nt, id, "block") >= 0) return 0;
+  const char *name = cplan_call_name(nt, id);
+  int recv = nt_ref(nt, id, "receiver");
+  if (!name || recv < 0) return 0;
+  TyKind rt = comp_ntype(c, recv);
+  int core = rt == TY_STRING || rt == TY_STRBUF ? CORE_STRING
+           : rt == TY_INT ? CORE_INTEGER : rt == TY_FLOAT ? CORE_FLOAT : -1;
+  if (core < 0) return 0;
+  if (core == CORE_STRING ? !repr_of(c, recv).may_nil : !nullable_int_value(c, recv)) return 0;
+  int nilcls = 0, nmi = cplan_nil_program_method(c, id, name, &nilcls);
+  if (nmi < 0 || !nilcls) return 0;
+  /* (a private or protected one keeps the old path: the boxed dispatch
+     does not check visibility) */
+  int nk = comp_core_class(c, CORE_NILCLASS);
+  if (comp_method_vis_declared(c, nk, name, NULL) != SP_VIS_PUBLIC) return 0;
+  int k = comp_core_class(c, core);
+  return k < 0 || call_target(c, id, k, name, 0, NULL) != nmi;
+}
+
 const PolyPlan *cplan_poly_sub(Compiler *c, int id) {
   static PolyPlan sp;
   free(sp.arm);
@@ -4690,6 +4717,7 @@ const PolyPlan *cplan_poly_sub(Compiler *c, int id) {
   const char *name = nt_str(c->nt, id, "name");
   int recv = nt_ref(c->nt, id, "receiver");
   if (!name || recv < 0) return &sp;
+  if (cplan_nil_scalar_reach(c, id)) { cpoly_family(&sp, &cap, PB_SUBDISPATCH); return &sp; }
   TyKind rt = comp_ntype(c, recv);
   if (!ty_is_object(rt) || comp_ty_value_obj(c, rt)) return &sp;
   int bcid = ty_object_class(rt);

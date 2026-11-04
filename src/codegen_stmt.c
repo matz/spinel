@@ -10546,7 +10546,7 @@ static int emit_when_user_eq(Compiler *c, int cond, int t, TyKind pt, Buf *b) {
   if (weq < 0) weq = comp_method_in_chain(c, wcid, "==", &wdef);
   if (weq < 0) return 0;
   Scope *ws = &c->scopes[weq];
-  LocalVar *wp = ws->nparams >= 1 ? scope_local(ws, ws->pnames[0]) : NULL;
+  LocalVar *wp = ws->nparams == 1 ? scope_local(ws, ws->pnames[0]) : NULL;
   /* a parameter the case subject alone typed (infer_block_params) takes it
      as it is */
   int raw = wp && wp->type == pt && pt != TY_POLY;
@@ -10680,7 +10680,7 @@ static void emit_when_boxed_user_arms(Compiler *c, int cond, int t, TyKind pt, i
     int weq = comp_method_in_chain(c, k, "===", &wdef);
     if (weq < 0 || wdef < 0) continue;
     Scope *ws = &c->scopes[weq];
-    LocalVar *wp = ws->nparams >= 1 ? scope_local(ws, ws->pnames[0]) : NULL;
+    LocalVar *wp = ws->nparams == 1 ? scope_local(ws, ws->pnames[0]) : NULL;
     int raw = wp && wp->type == pt && pt != TY_POLY;
     int ret_ptr = needs_root(ws->ret) && !comp_ty_value_obj(c, ws->ret);
     if (!wp || (wp->type != TY_POLY && !raw) || ws->rest_idx >= 0 || ws->kwrest_idx >= 0 || ws->blk_param ||

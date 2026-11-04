@@ -9,7 +9,7 @@ case 3; when M4 then p :m4; else p :no; end
 case "s"; when M4 then p :m4; else p :no; end
 
 LIM = 7
-class M5; def self.===(o, a = "s", h = LIM, f = 1.5, y = :y, t = true) = [o, a, h, f, y, t]; end
+class M5; def self.===(o, a = :s, h = LIM, f = 1.5, y = :y, t = true) = [o, a, h, f, y, t]; end
 def t(x) = case x; when M5 then :m5; else :no; end
 p t(1), t("a"), t(nil)
 p [1, "a", :b].grep(M5)
@@ -30,3 +30,4 @@ end
 case 3; when Ns::K then p :k3; else p :no; end
 case 1; when Ns::K then p :k1; else p :no; end
 p [1, 3].grep(Ns::K)
+

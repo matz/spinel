@@ -5957,11 +5957,13 @@ int class_any_cmethod_eqq(Compiler *c, int ci) {
 /* Can the call give this default in its place, with no frame of the
    method: a literal or a constant read, which reads no local, no self, and
    calls nothing. (An Array or Hash literal is left out: the boxed dispatch
-   that grep and a class value use builds no value of its own.) */
+   that grep and a class value use builds no value of its own. A String
+   literal too: given in place it is the frozen literal, where the method's
+   own default is a new String.) */
 static int eqq_default_is_plain(const NodeTable *nt, int node) {
   switch (nt_kind(nt, node)) {
     case NK_IntegerNode: case NK_FloatNode: case NK_NilNode: case NK_TrueNode:
-    case NK_FalseNode: case NK_SymbolNode: case NK_StringNode: case NK_ConstantReadNode:
+    case NK_FalseNode: case NK_SymbolNode: case NK_ConstantReadNode:
       return 1;
     default: return 0;
   }

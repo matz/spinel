@@ -45808,6 +45808,26 @@ static int tmcv_const(Compiler *c, int at, const char *name) {
   }
   return k;
 }
+/* The program's class methods named `nm` a call of `argc` positionals can
+   reach: not a parser rule `at(i)` beside tzinfo's two-argument `klass.at`,
+   which that call would only raise ArgumentError in */
+static int tmcv_cands_taking(Compiler *c, const char *nm, int argc) {
+  int ncc = 0, fit = 0;
+  const PolyCand *cc = comp_cmethod_candidates(c, nm, &ncc);
+  for (int i = 0; i < ncc; i++) {
+    int mi = cc[i].mi;
+    if (mi < 0 || mi >= c->nscopes) { fit++; continue; }
+    const Scope *s = &c->scopes[mi];
+    int req = 0, max = 0;
+    for (int p = 0; p < s->nparams; p++) {
+      if (p == s->rest_idx || p == s->kwrest_idx) continue;
+      max++;
+      if (!s->pdefault || s->pdefault[p] < 0) req++;
+    }
+    if (argc >= req && (s->rest_idx >= 0 || argc <= max)) fit++;
+  }
+  return fit;
+}
 static int rewrite_time_maker_class_value(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int changed = 0;
@@ -45822,9 +45842,9 @@ static int rewrite_time_maker_class_value(Compiler *c) {
     NodeKind rk = nt_kind(nt, recv);
     if (rk != NK_LocalVariableReadNode && rk != NK_InstanceVariableReadNode) continue;
     if (infer_type(c, recv) != TY_CLASS || nt_int(nt, id, "tmcv_else", 0)) continue;
-    int ncc = 0;
-    comp_cmethod_candidates(c, nm, &ncc);
-    int args = nt_ref(nt, id, "arguments");
+    int args = nt_ref(nt, id, "arguments"), argc = 0;
+    if (args >= 0) nt_arr(nt, args, "arguments", &argc);
+    int ncc = tmcv_cands_taking(c, nm, argc);
     int base = nt->count;
     int tail;
     if (ncc > 0) {

@@ -393,16 +393,18 @@ void an_const_presence(Compiler *c) {
         ((w.cmissing && !listed_only[i]) || comp_class_index(c, c->consts[i].name) >= 0))
       c->consts[i].const_early = 0;
   /* the name a flagged read shows ahead of the constant: "" at the top
-     level; all found before any is set, which edits the tree the points
-     and the parent map are of */
+     level. Each mark is a string (nt_node_set_str), which changes the
+     table's version, and the next ask for the map after it (the presence
+     loop's load-point queries, comp_parent_map) rebuilds the map and frees
+     the one w.par holds: every mark is found first and set after the last
+     read, below the presence marks. */
   int *cref = calloc(nn, sizeof(int));   /* per node: 1 + its cw_cref_at, 0 for no flagged read */
-  if (!cref) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  char *own = calloc(nn, 1);             /* per node: a read that asks its own class's flag */
+  if (!cref || !own) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   for (int id = 0; id < nt->count; id++) {
     LocalVar *lv = nt_kind(nt, id) == NK_ConstantReadNode ? comp_const(c, nt_str(nt, id, "name")) : NULL;
     if (lv && lv->const_early && cw_placed(&w, id)) cref[id] = 1 + cw_cref_at(&w, id);
   }
-  for (int id = 0; id < nt->count; id++)
-    if (cref[id]) nt_node_set_str((NodeTable *)nt, id, "const_cref", cref[id] > 1 ? w.crefs[cref[id] - 2] : "");
   /* Compute consumption once, while the constant pass visits reads. A
      syntactic read may become reachable later in inference. */
   for (int ci = 0; ci < c->nclasses; ci++) c->classes[ci].presence_read = c->classes[ci].path_ns = 0;
@@ -420,10 +422,13 @@ void an_const_presence(Compiler *c) {
     int ci = const_class_presence(c, id, 1);
     if (!ci) continue;
     c->classes[ci - 1].presence_read = 1;
-    if (nt_kind(nt, c->classes[ci - 1].def_node) == NK_ConstantPathWriteNode)
-      nt_node_set_str((NodeTable *)nt, id, "own_presence", "1");
+    if (nt_kind(nt, c->classes[ci - 1].def_node) == NK_ConstantPathWriteNode && id < (int)nn) own[id] = 1;
   }
-  free(cref);
+  for (int id = 0; id < (int)nn && id < nt->count; id++) {
+    if (cref[id]) nt_node_set_str((NodeTable *)nt, id, "const_cref", cref[id] > 1 ? w.crefs[cref[id] - 2] : "");
+    if (own[id]) nt_node_set_str((NodeTable *)nt, id, "own_presence", "1");
+  }
+  free(cref); free(own);
   for (int i = 0; i < w.ncrefs; i++) free(w.crefs[i]);
   free(w.crefs);
   free(w.settled);

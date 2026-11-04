@@ -5148,7 +5148,11 @@ const char *time_strict_parser_call(Compiler *c, int id) {
 /* The program's parent map (an_parent_map), kept on the Compiler as the
    emitter's is (codegen_parents, the same fields) and rebuilt whenever the
    node table changed, for an analysis that asks where a node sits on every
-   round. */
+   round. The map is borrowed: the first ask after an edit that changes the
+   table's version or count (a string, a type, a new node, a placement)
+   rebuilds it and frees the one handed out before. A caller that holds it
+   across such an edit reads freed memory once anything asks again: it finds
+   what it needs from the map first and edits after. */
 const int *comp_parent_map(Compiler *c) {
   const NodeTable *nt = c->nt;
   if (!c->cg_parent || c->cg_parent_n != nt->count || c->cg_parent_ver != nt->version) {

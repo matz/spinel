@@ -2155,7 +2155,10 @@ void emit_poly_prearms0(Compiler *c, int id, const char *name, const PolySpecial
     buf_printf(b, "if (_t%d.tag == SP_TAG_OBJ && _t%d.cls_id == SP_BUILTIN_OPENSTRUCT) _t%d = ",
                tv, tv, tr);
     if (ret == TY_POLY) buf_puts(b, osget);
-    else emit_unbox_text(c, ret, osget, b);   /* result slot is user-typed (#3264) */
+    /* the result slot is user-typed (#3264): an Integer or Float one that
+       holds nil (an oint) takes the member with its nil, as the other arms'
+       answers are taken */
+    else plan_put_boxed(c, plan_slot_oint(c, id, ret), ret, osget, b);
     buf_puts(b, "; else ");
   }
   /* to_a on a runtime builtin hash/array: pair-array via the boxed

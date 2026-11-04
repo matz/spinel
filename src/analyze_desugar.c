@@ -14008,6 +14008,40 @@ int desugar_concat_builtin_version(Compiler *c) {
   return 1;
 }
 
+/* the branches of the if / unless chain statement `top` heads, each one's
+   StatementsNode (-1 for an empty one), in order; *closed when the chain ends
+   in an else, so that one branch surely runs */
+static int cdef_chain_branches(const NodeTable *nt, int top, int *out, int cap, int *closed) {
+  int n = 0, node = top;
+  *closed = 0;
+  while (node >= 0 && n < cap) {
+    NodeKind k = nt_kind(nt, node);
+    if (k == NK_IfNode) { out[n++] = nt_ref(nt, node, "statements"); node = nt_ref(nt, node, "subsequent"); }
+    else if (k == NK_UnlessNode) { out[n++] = nt_ref(nt, node, "statements"); node = nt_ref(nt, node, "else_clause"); }
+    else if (k == NK_ElseNode) { out[n++] = nt_ref(nt, node, "statements"); *closed = 1; node = -1; }
+    else break;
+  }
+  return n;
+}
+/* Does every branch of one if / unless chain, the else included, hold
+   exactly one of the group's defs as a statement of its own? Then the name
+   is defined whichever way the condition goes once the body has run. */
+static int cdef_group_exhaustive(const NodeTable *nt, const CondDef *g, int ng) {
+  enum { CDEF_MAX_BRANCHES = 64 };
+  int br[CDEF_MAX_BRANCHES + 1], closed = 0;
+  if (ng < 2 || ng > CDEF_MAX_BRANCHES || g[0].top < 0) return 0;
+  for (int k = 0; k < ng; k++)
+    if (g[k].top != g[0].top || g[k].br < 0 || g[k].st != g[k].br) return 0;
+  int n = cdef_chain_branches(nt, g[0].top, br, ng + 1, &closed);
+  if (!closed || n != ng) return 0;
+  for (int i = 0; i < n; i++) {
+    int hits = 0;
+    for (int k = 0; k < ng; k++) hits += g[k].br == br[i];
+    if (hits != 1) return 0;
+  }
+  return 1;
+}
+
 int desugar_conditional_defs(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   CondDef *v = NULL;
@@ -14110,7 +14144,12 @@ int desugar_conditional_defs(Compiler *c) {
        whatever the number of arms: a list of methods asks them
        (ver_list_held), and the record answers such a def as possibly
        made, not made (elab_own_method_at) */
-    nt_node_set_int(nt, def, "cond_lone_disp", 1); c->ncond_disp++;
+    nt_node_set_int(nt, def, "cond_lone_disp", 1);
+    /* one of every branch of one chain (cond_all_arms): the name is there
+       once the body has run, so a list of methods is not refused for it
+       (ver_cond_scope); the dispatcher still answers before any arm ran */
+    if (cdef_group_exhaustive(nt, g, ng)) nt_node_set_int(nt, def, "cond_all_arms", 1);
+    else c->ncond_disp++;
     /* a lone one in a class other than Object or BasicObject is that
        class's and the classes below it, asked by the chain as the
        dispatchers of several arms are. One at the top level or in Object

@@ -2553,7 +2553,8 @@ static int ver_refl_named(Compiler *c, int id) {
    dispatcher a lone def under a run-time condition is lowered to
    (cond_lone_disp)? */
 static int ver_cond_scope(Compiler *c, const Scope *s) {
-  return s->def_node >= 0 && (nt_int(c->nt, s->def_node, "cond_def_refl", 0) || nt_int(c->nt, s->def_node, "cond_lone_disp", 0));
+  return s->def_node >= 0 && (nt_int(c->nt, s->def_node, "cond_def_refl", 0) ||
+                              (nt_int(c->nt, s->def_node, "cond_lone_disp", 0) && !nt_int(c->nt, s->def_node, "cond_all_arms", 0)));
 }
 /* Does a class's chain (its class side when sg) find, for a method of a
    conditional scope, such a scope, so that a list of its methods names a

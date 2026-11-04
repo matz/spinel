@@ -1356,7 +1356,7 @@ static inline const char *sp_File_read_n(sp_File *f, sp_int n) {
   sp_io_wait_readable(f);
   if (n == 0) return sp_str_empty_binary();
   char *r = sp_str_alloc((size_t)n);
-  size_t got = SP_SIG_BLOCKING(fread(r, 1, (size_t)n, f->fp));
+  size_t got = sp_io_fread(f, r, (size_t)n);
   if (got == 0) return NULL;
   /* record the byte count read: without it an embedded NUL truncated every
      later length/slice, which read the bytes back through strlen (#3540) */

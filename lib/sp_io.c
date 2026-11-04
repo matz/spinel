@@ -1499,7 +1499,6 @@ sp_int sp_sock_send(sp_File *f, const char *data, sp_int len, sp_int flags, cons
   }
   return (sp_int)n;
 }
-static long sp_io_buffered(FILE *fp);
 /* #recv reads one datagram (or up to `len` stream bytes) as a String;
    #recvfrom pairs it with the sender's address, CRuby's 4-element form.
    The payload is BINARY in every shape, as CRuby answers it. */
@@ -1510,7 +1509,8 @@ const char *sp_sock_recv(sp_File *f, sp_int len) {SP_GC_ROOT(f);
   /* bytes a read on the stream already pulled into stdio's buffer are the
      peer's next ones: served first, as readpartial does, or recv stepped
      over them (#7195) */
-  long pend = sp_io_buffered(sp_io_use(f));
+  (void)sp_io_use(f);
+  long pend = (long)sp_io_pending(f);
   sp_io_unuse(f);
   /* a zero-length read of a stream with bytes waiting answers nil, as
      recv(2) of none answers 0 below */
@@ -1518,7 +1518,8 @@ const char *sp_sock_recv(sp_File *f, sp_int len) {SP_GC_ROOT(f);
   if (pend > 0) {
     size_t want = (size_t)len < (size_t)pend ? (size_t)len : (size_t)pend;
     char *r = sp_str_alloc(want);
-    size_t got = SP_SIG_BLOCKING(fread(r, 1, want, sp_io_use(f)));
+    (void)sp_io_use(f);
+    size_t got = sp_io_fread(f, r, want);
     sp_io_unuse(f);
     r[got] = 0;
     sp_str_set_len(r, got);
@@ -1625,19 +1626,6 @@ sp_int sp_sock_listen(sp_File *f, sp_int backlog) {SP_GC_ROOT(f);
    error: with `exception: false` the caller gets :wait_readable /
    :wait_writable, otherwise the matching IO::*Wait* exception, which carries
    both its Errno parent and the IO::Wait* module (see lib/sp_exc.c). */
-/* Bytes stdio already buffered for this handle. A #gets followed by a
-   #read_nonblock must see them: the raw read(2) below goes straight to the
-   descriptor and would skip the buffer. Same platform probe sp_io_wait_readable
-   uses. The stream is one the caller holds a use of (sp_io_use). */
-static long sp_io_buffered(FILE *fp) {
-#if defined(__GLIBC__)
-  return (long)(fp->_IO_read_end - fp->_IO_read_ptr);
-#elif defined(__APPLE__)
-  return (long)fp->_r;
-#else
-  return (long)__freadahead(fp);
-#endif
-}
 /* O_NONBLOCK is set for the duration of one call and put back: leaving it on
    would make a later blocking #gets treat EAGAIN as EOF. */
 static int sp_io_nb_begin(sp_File *f) {
@@ -1654,25 +1642,25 @@ static ssize_t sp_io_read_chunk_timed(sp_File *f, char *buf, size_t count) {
   SP_GC_ROOT(f);
   double deadline = -2.0;
   for (;;) {
-    FILE *fp = sp_io_use(f);
-    size_t buffered = sp_io_stdio_buffered(fp);
+    (void)sp_io_use(f);
+    size_t buffered = sp_io_pending(f);
     if (buffered) {
       size_t want = buffered < count ? buffered : count;
-      size_t got = SP_SIG_BLOCKING(fread(buf, 1, want, fp));
+      size_t got = sp_io_fread(f, buf, want);
       sp_io_unuse(f);
       return (ssize_t)got;
     }
     sp_io_unuse(f);
     if (!sp_io_parkable(f)) {
       (void)sp_io_timeout_seconds(f);
-      fp = sp_io_use(f);
-      size_t got = SP_SIG_BLOCKING(fread(buf, 1, count, fp));
+      (void)sp_io_use(f);
+      size_t got = sp_io_fread(f, buf, count);
       sp_io_unuse(f);
       return (ssize_t)got;
     }
     if (deadline == -2.0) deadline = sp_io_deadline(f);
     sp_io_wait_deadline(f, POLLIN, deadline);
-    fp = sp_io_use(f);
+    FILE *fp = sp_io_use(f);
     int saved = sp_io_nb_begin(f);
     ssize_t got = SP_SIG_BLOCKING(read(fileno(fp), buf, count));
     int error = errno;
@@ -1771,10 +1759,10 @@ const char *sp_File_readpartial_or_nil(sp_File *f, sp_int n) {SP_GC_ROOT(f);
   char *r = sp_str_alloc((size_t)n);
   ssize_t got;
   FILE *fp = sp_io_use(f);
-  long pend = sp_io_buffered(fp);
+  long pend = (long)sp_io_pending(f);
   if (pend > 0) {
     size_t want = (size_t)n < (size_t)pend ? (size_t)n : (size_t)pend;
-    got = (ssize_t)SP_SIG_BLOCKING(fread(r, 1, want, fp));
+    got = (ssize_t)sp_io_fread(f, r, want);
   }
   else {
     do { got = SP_SIG_BLOCKING(read(fileno(fp), r, (size_t)n)); } while (got < 0 && errno == EINTR);
@@ -1823,10 +1811,10 @@ const char *sp_sock_read_nb(sp_File *f, sp_int len, sp_bool exc, sp_bool is_recv
   ssize_t n;
   FILE *fp = sp_io_try_use(f);
   if (!fp) { free(buf); sp_raise_cls("IOError", "stream closed in another thread"); }
-  long pend = sp_io_buffered(fp);
+  long pend = (long)sp_io_pending(f);
   if (pend > 0) {   /* serve what stdio already holds, as CRuby does */
     size_t want = (size_t)len < (size_t)pend ? (size_t)len : (size_t)pend;
-    n = (ssize_t)SP_SIG_BLOCKING(fread(buf, 1, want, fp));
+    n = (ssize_t)sp_io_fread(f, buf, want);
   }
   else {
     int saved = sp_io_nb_begin(f);

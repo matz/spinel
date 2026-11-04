@@ -1214,7 +1214,7 @@ const char *sp_slurp_stream_parked(sp_File *f) {SP_GC_ROOT(f);
   if (!buf) return &("\xff" "")[1];
   for (;;) {
     sp_io_wait_readable(f);
-    int ch = SP_SIG_BLOCKING(fgetc(f->fp));
+    int ch = sp_io_getc(f);
     if (ch == EOF) break;
     if (len + 2 >= cap) {
       char *nb = (char *)realloc(buf, cap * 2);
@@ -1223,13 +1223,13 @@ const char *sp_slurp_stream_parked(sp_File *f) {SP_GC_ROOT(f);
     }
     buf[len++] = (char)ch;
     /* whatever the same read(2) already delivered: no kernel wait for these */
-    for (size_t avail; (avail = sp_io_stdio_buffered(f->fp)) > 0; ) {
+    for (size_t avail; (avail = sp_io_pending(f)) > 0; ) {
       while (len + avail + 1 >= cap) {
         char *nb = (char *)realloc(buf, cap * 2);
         if (!nb) { free(buf); return &("\xff" "")[1]; }
         buf = nb; cap *= 2;
       }
-      size_t got = SP_SIG_BLOCKING(fread(buf + len, 1, avail, f->fp));
+      size_t got = sp_io_fread(f, buf + len, avail);
       len += got;
       if (got == 0) break;
     }

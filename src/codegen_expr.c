@@ -3543,12 +3543,6 @@ static int emit_constant_value(Compiler *c, int id, Buf *b, Buf *checks, const N
     if (nm && sp_streq(nm, "STDOUT")) { buf_puts(b, "sp_io_stdout()"); return 1; }
     if (nm && sp_streq(nm, "STDERR")) { buf_puts(b, "sp_io_stderr()"); return 1; }
     if (nm && sp_streq(nm, "STDIN"))  { buf_puts(b, "sp_io_stdin()"); return 1; }
-    /* `OpenStruct` as a class value, matching what an OpenStruct's #class
-       returns (name-keyed, cls_id -1); require "ostruct" gated (#3155). */
-    if (nm && sp_streq(nm, "OpenStruct") && sp_feature_required("ostruct")) {
-      buf_puts(b, "((sp_Class){(sp_int)-1, SPL(\"OpenStruct\")})");
-      return 1;
-    }
     if (nm) {
       int _cidx = comp_class_index(c, nm);
       emit_const_read_open(c, id, NULL, b);
@@ -3562,9 +3556,9 @@ static int emit_constant_value(Compiler *c, int id, Buf *b, Buf *checks, const N
         else if (is_builtin_exception_name(nm) || is_builtin_class_name(nm) ||
                  is_builtin_module_name(nm)) {
           /* a builtin class, module or exception class with no cls_id of its
-             own (SystemCallError, LoadError, Process, GC, Method, Random): a
-             name-backed Class value, like OpenStruct above -- sp_class_eq and
-             the boxed form both compare by name, and an instance's #class
+             own (SystemCallError, LoadError, Process, GC, Method, Random,
+             OpenStruct): a name-backed Class value -- sp_class_eq and the
+             boxed form both compare by name, and an instance's #class
              answers the same (`Random.new.class`) */
           buf_printf(b, "((sp_Class){(sp_int)-1, SPL(\"%s\")})", nm);
         }

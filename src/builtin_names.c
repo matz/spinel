@@ -2570,9 +2570,9 @@ const char *core_class_name(int k) {
   }
 }
 /* Is `n` a class or module Spinel has natively (any row, the socket ones
-   whether or not "socket" is required)? The load graph asks it of a
-   library's `class X`: a native X is reopened, and the methods the library
-   adds to it are what a program's names reach. */
+   and OpenStruct whether or not their library is required)? The load
+   graph asks it of a library's `class X`: a native X is reopened, and the
+   methods the library adds to it are what a program's names reach. */
 int is_native_class_name(const char *n) {
   if (!n) return 0;
   for (int i = 0; i < BUILTIN_CLASS_N; i++) if (sp_streq(n, BUILTIN_CLASSES[i].name)) return 1;

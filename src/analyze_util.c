@@ -10,13 +10,14 @@
    classes (builtin_class_at, builtin_names.c), read here and by the load
    graph. */
 
-/* A socket row is a constant only after `require "socket"`, as in CRuby. */
+/* Library classes are constants only after their require, as in CRuby. */
 static const BuiltinClass *builtin_row(const char *n) {
   if (!n) return NULL;
   int i = builtin_core_class_slot(n);
   const BuiltinClass *r = i >= 0 ? builtin_class_at(i) : NULL;
   if (!r) return NULL;
   if ((r->flags & BC_SOCKET) && !sp_feature_required("socket")) return NULL;
+  if ((r->flags & BC_OSTRUCT) && !sp_feature_required("ostruct")) return NULL;
   return r;
 }
 

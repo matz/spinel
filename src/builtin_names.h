@@ -449,6 +449,7 @@ int is_object_base_name(const char *n); /* BasicObject Object */
   X(METHOD, "Method", 0, BC_CLASS) \
   X(NOMEMORYERROR, "NoMemoryError", 0, BC_EXCEPTION) \
   X(OBJECTSPACE, "ObjectSpace", 0, BC_CLASS | BC_MODULE | BC_SG_BOOT) \
+  X(OPENSTRUCT, "OpenStruct", 0, BC_CLASS | BC_OSTRUCT) \
   X(PROCESS, "Process", 0, BC_CLASS | BC_MODULE | BC_SG_BOOT) \
   X(RANDOM, "Random", 0, BC_CLASS) \
   X(STRINGSCANNER_ERROR, "StringScanner::Error", 0, BC_EXCEPTION) \
@@ -775,8 +776,9 @@ int boot_package_rank_of_path(const char *path, size_t len);   /* the same for s
    cls_id (0 when codegen has none). BC_PLAIN marks Object, BasicObject and
    Data, below which a program's class is an object of its own; BC_SG_BOOT
    a module CRuby 4.0 boots with its singleton class made (its module
-   functions'), as Comparable and Enumerable are not. */
-enum { BC_CLASS = 1, BC_MODULE = 2, BC_EXCEPTION = 4, BC_SOCKET = 8, BC_PLAIN = 16, BC_SG_BOOT = 32 };
+   functions'), as Comparable and Enumerable are not; BC_OSTRUCT
+   OpenStruct, a constant only after `require "ostruct"` (builtin_row). */
+enum { BC_CLASS = 1, BC_MODULE = 2, BC_EXCEPTION = 4, BC_SOCKET = 8, BC_PLAIN = 16, BC_SG_BOOT = 32, BC_OSTRUCT = 64 };
 typedef struct { const char *name; int id; unsigned flags; } BuiltinClass;
 const BuiltinClass *builtin_class_at(int i);   /* the i-th row, NULL past the last */
 int is_native_class_name(const char *n);       /* any row: a class Spinel has without a library */

@@ -209,7 +209,7 @@ typedef enum {
 /* A set of argument kinds, one bit per TyKind: BOP_K(TY_INT) | BOP_K(TY_FLOAT) */
 typedef unsigned long long BopKinds;
 #define BOP_K(k) (1ULL << (k))
-_Static_assert(TY_FLOAT_ARRAY_ARRAY < 64, "a BopKinds set holds a bit per TyKind");
+_Static_assert(TY_OBJ_RANGE < 64, "a BopKinds set holds a bit per TyKind");
 
 typedef struct BuiltinOp {
   TyKind recv;            /* receiver kind the row applies to */

@@ -1414,12 +1414,10 @@ spinel: test/reject/range_reopened_endpoint_write.rb:11: a method the program de
 spinel: test/reject/range_reopened_member_answer.rb:9: a method the program defines in Range, called on a Range of Strings: only an Integer Range runs it
 == test/reject/range_reopened_member_answer.rb [promote] rc=1
 spinel: test/reject/range_reopened_member_answer.rb:9: a method the program defines in Range, called on a Range of Strings: only an Integer Range runs it
-== test/reject/range_time_bound.rb [default] rc=1
-spinel: test/reject/range_time_bound.rb:4: a Range of Time objects cannot be built: a Range is an unboxed value with sp_int bounds, so it has nowhere to hold them. Comparing against the bounds directly (`t >= lo && t < hi`) needs no Range and does work (see docs/limitations.md)
-spinel: 1 refusal, nothing written
-== test/reject/range_time_bound.rb [promote] rc=1
-spinel: test/reject/range_time_bound.rb:4: a Range of Time objects cannot be built: a Range is an unboxed value with sp_int bounds, so it has nowhere to hold them. Comparing against the bounds directly (`t >= lo && t < hi`) needs no Range and does work (see docs/limitations.md)
-spinel: 1 refusal, nothing written
+== test/reject/range_reopened_time_range.rb [default] rc=1
+spinel: test/reject/range_reopened_time_range.rb:9: a method the program defines in Range, called on a Range of Times: only an Integer Range runs it
+== test/reject/range_reopened_time_range.rb [promote] rc=1
+spinel: test/reject/range_reopened_time_range.rb:9: a method the program defines in Range, called on a Range of Times: only an Integer Range runs it
 == test/reject/rational_include_method.rb [default] rc=1
 spinel: test/reject/rational_include_method.rb:9: unsupported a method of a module included or prepended into Rational or Complex (define it in the class body instead): node N (CallNode `desc`) recv=RationalNode/ty15 argc=0
 spinel: 1 refusal, nothing written

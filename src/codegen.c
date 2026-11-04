@@ -1012,6 +1012,8 @@ void emit_rbs_checked_text(Compiler *c, TyKind slot, const char *slotname,
     case TY_THREAD: tag = "SP_TAG_OBJ"; cls = "SP_BUILTIN_THREAD"; want = "a Thread"; break;
     case TY_FIBER:  tag = "SP_TAG_OBJ"; cls = "SP_BUILTIN_FIBER";  want = "a Fiber"; break;
     case TY_RANDOM: tag = "SP_TAG_OBJ"; cls = "SP_BUILTIN_RANDOM"; want = "a Random"; break;
+    case TY_TIME_RANGE: tag = "SP_TAG_OBJ"; cls = "SP_BUILTIN_TIME_RANGE"; want = "a Range"; break;
+    case TY_OBJ_RANGE: tag = "SP_TAG_OBJ"; cls = "SP_BUILTIN_OBJ_RANGE"; want = "a Range"; break;
     case TY_IO:     tag = "SP_TAG_OBJ"; cls = "SP_BUILTIN_IO";     want = "an IO"; break;
     case TY_CLASS:  tag = "SP_TAG_CLASS"; want = "a Class"; break;
     default:
@@ -1373,7 +1375,7 @@ const char *conv_wrong_cls_name(TyKind t) {
   if (t == TY_FLOAT) return "Float";
   if (t == TY_SYMBOL) return "Symbol";
   if (t == TY_STRING || t == TY_STRBUF) return "String";
-  if (t == TY_RANGE || t == TY_FLOAT_RANGE || t == TY_STR_RANGE) return "Range";
+  if (t == TY_RANGE || t == TY_FLOAT_RANGE || t == TY_STR_RANGE || t == TY_TIME_RANGE || t == TY_OBJ_RANGE) return "Range";
   if (t == TY_TIME) return "Time";
   if (t == TY_REGEX) return "Regexp";
   if (t == TY_PROC) return "Proc";
@@ -8416,6 +8418,7 @@ int proc_slot_is_ptr(TyKind t) {
     case TY_DIR: case TY_ADDRINFO: case TY_SOCKOPT: case TY_OPENSTRUCT:
     case TY_METHOD: case TY_IO: case TY_ARGF: case TY_ENUMERATOR:
     case TY_REGEX: case TY_TIME:   /* a Time is a heap reference */
+    case TY_TIME_RANGE: case TY_OBJ_RANGE:
       return 1;
     default: break;
   }
@@ -8644,7 +8647,7 @@ int fiber_cap_needs_root(TyKind t) {
             (a TCPServer captured into a Thread block was collected, #2922) */
          t == TY_IO || t == TY_DIR || t == TY_ADDRINFO || t == TY_SOCKOPT || t == TY_ENUMERATOR || t == TY_METHOD || t == TY_OPENSTRUCT ||
          t == TY_RANDOM || t == TY_CURRY || t == TY_STRBUF ||
-         t == TY_MATCHDATA || t == TY_REGEX || t == TY_TIME;
+         t == TY_MATCHDATA || t == TY_REGEX || t == TY_TIME || t == TY_TIME_RANGE || t == TY_OBJ_RANGE;
 }
 
 /* Returns 1 if the fiber body accesses instance state (ivars, self, or
@@ -17773,6 +17776,8 @@ static void ty_to_rbs_into(Compiler *c, TyKind t, Buf *b) {
     case TY_RANGE:                 buf_puts(b, "Range[Integer]"); break;
     case TY_FLOAT_RANGE:           buf_puts(b, "Range[Float]"); break;
     case TY_STR_RANGE:             buf_puts(b, "Range[String]"); break;
+    case TY_TIME_RANGE:            buf_puts(b, "Range[Time]"); break;
+    case TY_OBJ_RANGE:             buf_puts(b, "Range[untyped]"); break;
     case TY_TIME:                  buf_puts(b, "Time"); break;
     case TY_REGEX:                 buf_puts(b, "Regexp"); break;
     case TY_MATCHDATA:             buf_puts(b, "MatchData"); break;
@@ -19474,7 +19479,7 @@ static void reject_range_reopen_nonint(Compiler *c) {
     int rv = nt_ref(nt, id, "receiver");
     if (rv < 0) continue;
     TyKind rk = comp_ntype(c, rv);
-    if (rk != TY_STR_RANGE && rk != TY_FLOAT_RANGE) continue;
+    if (rk != TY_STR_RANGE && rk != TY_FLOAT_RANGE && rk != TY_TIME_RANGE && rk != TY_OBJ_RANGE) continue;
     const char *name = nt_str(nt, id, "name");
     if (!name || nt_int(nt, id, "builtin_only", 0)) continue;
     Scope *sc = comp_scope_of(c, id);
@@ -19486,6 +19491,10 @@ static void reject_range_reopen_nonint(Compiler *c) {
     if (c->scopes[mi].is_include_copy && !c->scopes[mi].is_prepend_copy && builtin_method_known("Range", name)) continue;
     unsupported_feature(c, id, rk == TY_STR_RANGE
       ? "a method the program defines in Range, called on a Range of Strings: only an Integer Range runs it"
+      : rk == TY_TIME_RANGE
+      ? "a method the program defines in Range, called on a Range of Times: only an Integer Range runs it"
+      : rk == TY_OBJ_RANGE
+      ? "a method the program defines in Range, called on a Range of objects: only an Integer Range runs it"
       : "a method the program defines in Range, called on a Range of Floats: only an Integer Range runs it");
   }
 }

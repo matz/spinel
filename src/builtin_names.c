@@ -2302,7 +2302,7 @@ int core_of_type(TyKind t) {
   if (t == TY_FLOAT) return CORE_FLOAT;
   if (t == TY_STRING || t == TY_STRBUF) return CORE_STRING;
   if (t == TY_SYMBOL) return CORE_SYMBOL;
-  if (t == TY_RANGE || t == TY_FLOAT_RANGE || t == TY_STR_RANGE) return CORE_RANGE;
+  if (t == TY_RANGE || t == TY_FLOAT_RANGE || t == TY_STR_RANGE || t == TY_TIME_RANGE || t == TY_OBJ_RANGE) return CORE_RANGE;
   if (t == TY_TIME) return CORE_TIME;
   if (t == TY_IO) return CORE_FILE;
   if (t == TY_CLASS) return CORE_CLASS;

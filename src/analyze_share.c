@@ -81,7 +81,7 @@ int sh_may_hold(const Compiler *c, TyKind t) {
   case TY_STR_INT_HASH: case TY_INT_INT_HASH: case TY_PROC: case TY_CURRY: case TY_FIBER:
   case TY_THREAD: case TY_QUEUE: case TY_MUTEX: case TY_CONDVAR: case TY_RANDOM: case TY_DIR:
   case TY_ADDRINFO: case TY_SOCKOPT: case TY_TMS: case TY_PROCESS_STATUS:
-  case TY_METHOD: case TY_IO: case TY_ARGF: case TY_CLASS:
+  case TY_METHOD: case TY_IO: case TY_ARGF: case TY_CLASS: case TY_TIME_RANGE: case TY_OBJ_RANGE:
     return 0;
   default:
     return 1;

@@ -112,6 +112,7 @@ typedef struct {
 } PolyTemps;
 int  emit_poly_callable_kwh_decl(Compiler *c, const char *name, const PolySpecialsN *ps, const PolyTemps *T,
                                  const PolyKw *kw, Buf *b);
+int trange_poly_name(const char *name, int argc);
 void emit_poly_prearms_n(Compiler *c, const char *name, const PolySpecialsN *ps, const PolyTemps *T, Buf *b);
 void emit_poly_str_aset_prearm(Compiler *c, int recv, const PolySpecialsN *ps, const PolyTemps *T, Buf *b);
 void emit_poly_str_aset_writeback(Compiler *c, int recv, const PolySpecialsN *ps, const PolyTemps *T, Buf *b);

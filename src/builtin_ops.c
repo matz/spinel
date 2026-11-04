@@ -1052,6 +1052,86 @@ static const BuiltinOp bop_rows[] = {
   { TY_RANGE, "clone", 1, 1, BF_ANY, TY_RANGE, BOPE_RANGE_CLONE, NULL, 0, 0, 0, 1 },
   { TY_RANGE, "freeze", 0, 0, BF_ANY, TY_RANGE, BOPE_RANGE_FREEZE, NULL, 0, 0, 0, 1 },
 
+  /* a Range of Times: its ends and membership compare the Times; anything that iterates raises CRuby's TypeError */
+  { TY_TIME_RANGE, "begin", 0, 0, BF_ANY, TY_POLY, BOPE_TEMPLATE, "sp_trange_begin_v($r)", 0 },
+  { TY_TIME_RANGE, "end", 0, 0, BF_ANY, TY_POLY, BOPE_TEMPLATE, "sp_trange_end_v($r)", 0 },
+  { TY_TIME_RANGE, "first", 0, 0, BF_ANY, TY_POLY, BOPE_TEMPLATE, "sp_trange_first_v($r)", 0 },
+  { TY_TIME_RANGE, "last", 0, 0, BF_ANY, TY_POLY, BOPE_TEMPLATE, "sp_trange_last_v($r)", 0 },
+  { TY_TIME_RANGE, "min", 0, 0, BF_NONE, TY_POLY, BOPE_TEMPLATE, "sp_trange_min_v($r)", 0 },
+  { TY_TIME_RANGE, "max", 0, 0, BF_NONE, TY_POLY, BOPE_TEMPLATE, "sp_trange_max_v($r)", 0 },
+  { TY_TIME_RANGE, "min", 0, 0, BF_REQUIRED, TY_POLY, BOPE_TEMPLATE, "({ (void)($r); sp_trange_iterate_raise(); sp_box_nil(); })", 0 },
+  { TY_TIME_RANGE, "max", 0, 0, BF_REQUIRED, TY_POLY, BOPE_TEMPLATE, "({ (void)($r); sp_trange_iterate_raise(); sp_box_nil(); })", 0 },
+  { TY_TIME_RANGE, "each", 0, 0, BF_REQUIRED, TY_POLY, BOPE_TEMPLATE, "({ (void)($r); sp_trange_iterate_raise(); sp_box_nil(); })", 0 },
+  { TY_TIME_RANGE, "sum", 0, 0, BF_REQUIRED, TY_POLY, BOPE_TEMPLATE, "({ (void)($r); sp_trange_iterate_raise(); sp_box_nil(); })", 0 },
+  { TY_TIME_RANGE, "exclude_end?", 0, 0, BF_ANY, TY_BOOL, BOPE_TEMPLATE, "(sp_bool)($r)->excl", 0 },
+  { TY_TIME_RANGE, "cover?", 1, 1, BF_ANY, TY_BOOL, BOPE_TEMPLATE, "({ sp_TimeRange *_t$T = $r; SP_GC_ROOT(_t$T); sp_trange_cover(_t$T, $e0); })", BOP_K(TY_TIME) },
+  { TY_TIME_RANGE, "cover?", 1, 1, BF_ANY, TY_BOOL, BOPE_TEMPLATE, "({ sp_TimeRange *_t$T = $r; SP_GC_ROOT(_t$T); sp_trange_cover_range(_t$T, $e0); })", BOP_K(TY_TIME_RANGE) },
+  { TY_TIME_RANGE, "cover?", 1, 1, BF_ANY, TY_BOOL, BOPE_TEMPLATE, "({ sp_TimeRange *_t$T = $r; SP_GC_ROOT(_t$T); sp_RbVal _a$T = $b0; sp_trange_cover_any(_t$T, _a$T); })", BOP_K(TY_POLY) },
+  { TY_TIME_RANGE, "cover?", 1, 1, BF_ANY, TY_BOOL, BOPE_TEMPLATE, "((void)($r), (void)($e0), (sp_bool)0)", 0 },
+  { TY_TIME_RANGE, "include?", 1, 1, BF_ANY, TY_BOOL, BOPE_TEMPLATE, "({ sp_TimeRange *_t$T = $r; SP_GC_ROOT(_t$T); sp_trange_cover(_t$T, $e0); })", BOP_K(TY_TIME) },
+  { TY_TIME_RANGE, "include?", 1, 1, BF_ANY, TY_BOOL, BOPE_TEMPLATE, "({ sp_TimeRange *_t$T = $r; SP_GC_ROOT(_t$T); sp_RbVal _a$T = $b0; sp_trange_cover_poly(_t$T, _a$T); })", BOP_K(TY_POLY) },
+  { TY_TIME_RANGE, "include?", 1, 1, BF_ANY, TY_BOOL, BOPE_TEMPLATE, "((void)($r), (void)($e0), (sp_bool)0)", 0 },
+  { TY_TIME_RANGE, "member?", 1, 1, BF_ANY, TY_BOOL, BOPE_TEMPLATE, "({ sp_TimeRange *_t$T = $r; SP_GC_ROOT(_t$T); sp_trange_cover(_t$T, $e0); })", BOP_K(TY_TIME) },
+  { TY_TIME_RANGE, "member?", 1, 1, BF_ANY, TY_BOOL, BOPE_TEMPLATE, "({ sp_TimeRange *_t$T = $r; SP_GC_ROOT(_t$T); sp_RbVal _a$T = $b0; sp_trange_cover_poly(_t$T, _a$T); })", BOP_K(TY_POLY) },
+  { TY_TIME_RANGE, "member?", 1, 1, BF_ANY, TY_BOOL, BOPE_TEMPLATE, "((void)($r), (void)($e0), (sp_bool)0)", 0 },
+  { TY_TIME_RANGE, "===", 1, 1, BF_ANY, TY_BOOL, BOPE_TEMPLATE, "({ sp_TimeRange *_t$T = $r; SP_GC_ROOT(_t$T); sp_trange_cover(_t$T, $e0); })", BOP_K(TY_TIME) },
+  { TY_TIME_RANGE, "===", 1, 1, BF_ANY, TY_BOOL, BOPE_TEMPLATE, "({ sp_TimeRange *_t$T = $r; SP_GC_ROOT(_t$T); sp_RbVal _a$T = $b0; sp_trange_cover_poly(_t$T, _a$T); })", BOP_K(TY_POLY) },
+  { TY_TIME_RANGE, "===", 1, 1, BF_ANY, TY_BOOL, BOPE_TEMPLATE, "((void)($r), (void)($e0), (sp_bool)0)", 0 },
+  { TY_TIME_RANGE, "==", 1, 1, BF_ANY, TY_BOOL, BOPE_TEMPLATE, "({ sp_TimeRange *_t$T = $r; SP_GC_ROOT(_t$T); sp_trange_eq(_t$T, $e0); })", BOP_K(TY_TIME_RANGE) },
+  { TY_TIME_RANGE, "==", 1, 1, BF_ANY, TY_BOOL, BOPE_TEMPLATE, "({ sp_TimeRange *_t$T = $r; SP_GC_ROOT(_t$T); sp_RbVal _a$T = $b0; (sp_bool)(_a$T.tag == SP_TAG_OBJ && _a$T.cls_id == SP_BUILTIN_TIME_RANGE && sp_trange_eq(_t$T, (sp_TimeRange *)_a$T.v.p)); })", BOP_K(TY_POLY) },
+  { TY_TIME_RANGE, "==", 1, 1, BF_ANY, TY_BOOL, BOPE_TEMPLATE, "((void)($r), (void)($e0), (sp_bool)0)", 0 },
+  { TY_TIME_RANGE, "eql?", 1, 1, BF_ANY, TY_BOOL, BOPE_TEMPLATE, "({ sp_TimeRange *_t$T = $r; SP_GC_ROOT(_t$T); sp_trange_eq(_t$T, $e0); })", BOP_K(TY_TIME_RANGE) },
+  { TY_TIME_RANGE, "eql?", 1, 1, BF_ANY, TY_BOOL, BOPE_TEMPLATE, "({ sp_TimeRange *_t$T = $r; SP_GC_ROOT(_t$T); sp_RbVal _a$T = $b0; (sp_bool)(_a$T.tag == SP_TAG_OBJ && _a$T.cls_id == SP_BUILTIN_TIME_RANGE && sp_trange_eq(_t$T, (sp_TimeRange *)_a$T.v.p)); })", BOP_K(TY_POLY) },
+  { TY_TIME_RANGE, "eql?", 1, 1, BF_ANY, TY_BOOL, BOPE_TEMPLATE, "((void)($r), (void)($e0), (sp_bool)0)", 0 },
+  { TY_TIME_RANGE, "equal?", 1, 1, BF_ANY, TY_BOOL, BOPE_TEMPLATE, "({ sp_TimeRange *_t$T = $r; SP_GC_ROOT(_t$T); (sp_bool)(_t$T == $e0); })", BOP_K(TY_TIME_RANGE) },
+  { TY_TIME_RANGE, "equal?", 1, 1, BF_ANY, TY_BOOL, BOPE_TEMPLATE, "({ sp_TimeRange *_t$T = $r; SP_GC_ROOT(_t$T); sp_RbVal _a$T = $b0; (sp_bool)(_a$T.tag == SP_TAG_OBJ && _a$T.v.p == (void *)_t$T); })", BOP_K(TY_POLY) },
+  { TY_TIME_RANGE, "equal?", 1, 1, BF_ANY, TY_BOOL, BOPE_TEMPLATE, "((void)($r), (void)($e0), (sp_bool)0)", 0 },
+  { TY_TIME_RANGE, "overlap?", 1, 1, BF_ANY, TY_BOOL, BOPE_TEMPLATE, "({ sp_TimeRange *_t$T = $r; SP_GC_ROOT(_t$T); sp_trange_overlap(_t$T, $e0); })", BOP_K(TY_TIME_RANGE) },
+  { TY_TIME_RANGE, "overlap?", 1, 1, BF_ANY, TY_BOOL, BOPE_TEMPLATE, "({ sp_TimeRange *_t$T = $r; SP_GC_ROOT(_t$T); sp_RbVal _a$T = $b0; sp_trange_overlap_poly(_t$T, _a$T); })", 0 },
+  { TY_TIME_RANGE, "step", 1, 1, BF_NONE, TY_POLY_ARRAY, BOPE_TEMPLATE, "({ sp_TimeRange *_t$T = $r; SP_GC_ROOT(_t$T); sp_trange_step_ary(_t$T, $f0); })", BOP_K(TY_INT) | BOP_K(TY_FLOAT) },
+  { TY_TIME_RANGE, "step", 1, 1, BF_REQUIRED, TY_TIME_RANGE, BOPE_NONE },  /* with a block: the receiver, as CRuby; codegen_iter walks it */
+  { TY_TIME_RANGE, "to_s", 0, 0, BF_ANY, TY_STRING, BOPE_TEMPLATE, "sp_trange_to_s($r)", 0 },
+  { TY_TIME_RANGE, "inspect", 0, 0, BF_ANY, TY_STRING, BOPE_TEMPLATE, "sp_trange_inspect($r)", 0 },
+  { TY_TIME_RANGE, "hash", 0, 0, BF_ANY, TY_INT, BOPE_TEMPLATE, "sp_trange_hash($r)", 0 },
+  { TY_TIME_RANGE, "class", 0, 0, BF_ANY, TY_CLASS, BOPE_TEMPLATE, "((void)($r), ((sp_Class){0, SPL(\"Range\")}))", 0 },
+  { TY_TIME_RANGE, "frozen?", 0, 0, BF_ANY, TY_BOOL, BOPE_TEMPLATE, "(sp_bool)!($r)->unfrozen", 0 },
+  { TY_TIME_RANGE, "dup", 0, 0, BF_ANY, TY_TIME_RANGE, BOPE_TEMPLATE, "sp_trange_copy($r, 0)", 0 },
+  { TY_TIME_RANGE, "clone", 0, 0, BF_ANY, TY_TIME_RANGE, BOPE_TEMPLATE, "sp_trange_copy($r, 1)", 0 },
+  { TY_TIME_RANGE, "itself", 0, 0, BF_ANY, TY_TIME_RANGE, BOPE_TEMPLATE, "$r", 0 },
+  { TY_TIME_RANGE, "freeze", 0, 0, BF_ANY, TY_TIME_RANGE, BOPE_TEMPLATE, "({ sp_TimeRange *_t$T = $r; _t$T->unfrozen = 0; _t$T; })", 0 },
+  { TY_TIME_RANGE, "to_a", 0, 0, BF_NONE, TY_POLY, BOPE_TEMPLATE, "sp_trange_to_a($r)", 0 },
+  { TY_TIME_RANGE, "entries", 0, 0, BF_NONE, TY_POLY, BOPE_TEMPLATE, "sp_trange_to_a($r)", 0 },
+  { TY_TIME_RANGE, "count", 0, 0, BF_NONE, TY_POLY, BOPE_TEMPLATE, "sp_trange_count($r)", 0 },
+  { TY_TIME_RANGE, "size", 0, 0, BF_NONE, TY_POLY, BOPE_TEMPLATE, "({ (void)($r); sp_trange_iterate_raise(); sp_box_nil(); })", 0 },
+  { TY_TIME_RANGE, "sum", 0, 0, BF_NONE, TY_POLY, BOPE_TEMPLATE, "({ (void)($r); sp_trange_iterate_raise(); sp_box_nil(); })", 0 },
+  /* a Range of the program's objects: its ends and membership compare through the class's <=>; it is not walked (no succ) */
+  { TY_OBJ_RANGE, "begin", 0, 0, BF_ANY, TY_POLY, BOPE_TEMPLATE, "($r)->first", 0 },
+  { TY_OBJ_RANGE, "end", 0, 0, BF_ANY, TY_POLY, BOPE_TEMPLATE, "($r)->last", 0 },
+  { TY_OBJ_RANGE, "first", 0, 0, BF_ANY, TY_POLY, BOPE_TEMPLATE, "sp_orange_first($r)", 0 },
+  { TY_OBJ_RANGE, "last", 0, 0, BF_ANY, TY_POLY, BOPE_TEMPLATE, "sp_orange_last($r)", 0 },
+  { TY_OBJ_RANGE, "min", 0, 0, BF_NONE, TY_POLY, BOPE_TEMPLATE, "sp_orange_min($r)", 0 },
+  { TY_OBJ_RANGE, "max", 0, 0, BF_NONE, TY_POLY, BOPE_TEMPLATE, "sp_orange_max($r)", 0 },
+  { TY_OBJ_RANGE, "exclude_end?", 0, 0, BF_ANY, TY_BOOL, BOPE_TEMPLATE, "(sp_bool)($r)->excl", 0 },
+  { TY_OBJ_RANGE, "cover?", 1, 1, BF_ANY, TY_BOOL, BOPE_TEMPLATE, "({ sp_ObjRange *_t$T = $r; SP_GC_ROOT(_t$T); sp_RbVal _a$T = $b0; sp_orange_cover(_t$T, _a$T); })", 0 },
+  { TY_OBJ_RANGE, "include?", 1, 1, BF_ANY, TY_BOOL, BOPE_TEMPLATE, "({ sp_ObjRange *_t$T = $r; SP_GC_ROOT(_t$T); sp_RbVal _a$T = $b0; (sp_bool)(!(_a$T.tag == SP_TAG_OBJ && _a$T.cls_id == SP_BUILTIN_OBJ_RANGE) && sp_orange_cover(_t$T, _a$T)); })", 0 },
+  { TY_OBJ_RANGE, "member?", 1, 1, BF_ANY, TY_BOOL, BOPE_TEMPLATE, "({ sp_ObjRange *_t$T = $r; SP_GC_ROOT(_t$T); sp_RbVal _a$T = $b0; (sp_bool)(!(_a$T.tag == SP_TAG_OBJ && _a$T.cls_id == SP_BUILTIN_OBJ_RANGE) && sp_orange_cover(_t$T, _a$T)); })", 0 },
+  { TY_OBJ_RANGE, "===", 1, 1, BF_ANY, TY_BOOL, BOPE_TEMPLATE, "({ sp_ObjRange *_t$T = $r; SP_GC_ROOT(_t$T); sp_RbVal _a$T = $b0; (sp_bool)(!(_a$T.tag == SP_TAG_OBJ && _a$T.cls_id == SP_BUILTIN_OBJ_RANGE) && sp_orange_cover(_t$T, _a$T)); })", 0 },
+  { TY_OBJ_RANGE, "==", 1, 1, BF_ANY, TY_BOOL, BOPE_TEMPLATE, "({ sp_ObjRange *_t$T = $r; SP_GC_ROOT(_t$T); sp_orange_eq(_t$T, $e0); })", BOP_K(TY_OBJ_RANGE) },
+  { TY_OBJ_RANGE, "==", 1, 1, BF_ANY, TY_BOOL, BOPE_TEMPLATE, "({ sp_ObjRange *_t$T = $r; SP_GC_ROOT(_t$T); sp_RbVal _a$T = $b0; (sp_bool)(_a$T.tag == SP_TAG_OBJ && _a$T.cls_id == SP_BUILTIN_OBJ_RANGE && sp_orange_eq(_t$T, (sp_ObjRange *)_a$T.v.p)); })", BOP_K(TY_POLY) },
+  { TY_OBJ_RANGE, "==", 1, 1, BF_ANY, TY_BOOL, BOPE_TEMPLATE, "((void)($r), (void)($e0), (sp_bool)0)", 0 },
+  { TY_OBJ_RANGE, "eql?", 1, 1, BF_ANY, TY_BOOL, BOPE_TEMPLATE, "({ sp_ObjRange *_t$T = $r; SP_GC_ROOT(_t$T); sp_orange_eq(_t$T, $e0); })", BOP_K(TY_OBJ_RANGE) },
+  { TY_OBJ_RANGE, "eql?", 1, 1, BF_ANY, TY_BOOL, BOPE_TEMPLATE, "({ sp_ObjRange *_t$T = $r; SP_GC_ROOT(_t$T); sp_RbVal _a$T = $b0; (sp_bool)(_a$T.tag == SP_TAG_OBJ && _a$T.cls_id == SP_BUILTIN_OBJ_RANGE && sp_orange_eq(_t$T, (sp_ObjRange *)_a$T.v.p)); })", BOP_K(TY_POLY) },
+  { TY_OBJ_RANGE, "eql?", 1, 1, BF_ANY, TY_BOOL, BOPE_TEMPLATE, "((void)($r), (void)($e0), (sp_bool)0)", 0 },
+  { TY_OBJ_RANGE, "equal?", 1, 1, BF_ANY, TY_BOOL, BOPE_TEMPLATE, "({ sp_ObjRange *_t$T = $r; SP_GC_ROOT(_t$T); sp_RbVal _a$T = $b0; (sp_bool)(_a$T.tag == SP_TAG_OBJ && _a$T.v.p == (void *)_t$T); })", 0 },
+  { TY_OBJ_RANGE, "to_s", 0, 0, BF_ANY, TY_STRING, BOPE_TEMPLATE, "sp_orange_to_s($r)", 0 },
+  { TY_OBJ_RANGE, "inspect", 0, 0, BF_ANY, TY_STRING, BOPE_TEMPLATE, "sp_orange_inspect($r)", 0 },
+  { TY_OBJ_RANGE, "hash", 0, 0, BF_ANY, TY_INT, BOPE_TEMPLATE, "sp_orange_hash($r)", 0 },
+  { TY_OBJ_RANGE, "class", 0, 0, BF_ANY, TY_CLASS, BOPE_TEMPLATE, "((void)($r), ((sp_Class){0, SPL(\"Range\")}))", 0 },
+  { TY_OBJ_RANGE, "frozen?", 0, 0, BF_ANY, TY_BOOL, BOPE_TEMPLATE, "(sp_bool)!($r)->unfrozen", 0 },
+  { TY_OBJ_RANGE, "dup", 0, 0, BF_ANY, TY_OBJ_RANGE, BOPE_TEMPLATE, "sp_orange_copy($r, 0)", 0 },
+  { TY_OBJ_RANGE, "clone", 0, 0, BF_ANY, TY_OBJ_RANGE, BOPE_TEMPLATE, "sp_orange_copy($r, 1)", 0 },
+  { TY_OBJ_RANGE, "itself", 0, 0, BF_ANY, TY_OBJ_RANGE, BOPE_TEMPLATE, "$r", 0 },
+  { TY_OBJ_RANGE, "freeze", 0, 0, BF_ANY, TY_OBJ_RANGE, BOPE_TEMPLATE, "({ sp_ObjRange *_t$T = $r; _t$T->unfrozen = 0; _t$T; })", 0 },
   /* String range ("a".."e"): the endpoints answer natively (with a count,
      the materialized prefix); every traversal rides the element array
      (#3064). step(n) / %(n) is an Enumerator over every nth member (#3671).
@@ -3938,6 +4018,7 @@ static const IterRow iter_rows[] = {
   { TY_RANGE, "each_with_object", 1, 1, 2, { YS_ELEM, YS_MEMO }, IA_MEMO, IRF_GAP_FWD },
   { TY_RANGE, "step",             1, 1, 1, { YS_NUM }, IA_RECV, IRF_GAP_FWD },
   { TY_FLOAT_RANGE, "step",       1, 1, 1, { YS_NUM }, IA_RECV, 0 },
+  { TY_TIME_RANGE, "step",        1, 1, 1, { YS_NUM }, IA_RECV, 0 },
 
   { TY_INT, "times",   0, 0, 1, { YS_NUM }, IA_RECV, 0 },
   { TY_INT, "upto",    1, 1, 1, { YS_NUM }, IA_RECV, 0 },
@@ -4192,7 +4273,7 @@ TyKind iter_yield_kind(const IterRow *r, int k, TyKind rt) {
   case YS_SUB:      return boxed || (r->flags & IRF_GAP_RUN_BOXED) ? TY_POLY_ARRAY : rt;
   case YS_TUPLE:    return TY_POLY_ARRAY;
   case YS_FRESH:    return TY_STRING;
-  case YS_NUM:      return rt == TY_FLOAT || rt == TY_FLOAT_RANGE ? TY_FLOAT : TY_INT;
+  case YS_NUM:      return rt == TY_TIME_RANGE ? TY_TIME : rt == TY_FLOAT || rt == TY_FLOAT_RANGE ? TY_FLOAT : TY_INT;
   case YS_INDEX:    return TY_INT;
   case YS_RECV:     return rt;
   default:          return TY_UNKNOWN;
@@ -4232,7 +4313,7 @@ int iter_shape_count(TyKind rt, const char *nm, int argc, TyKind *elem, int *has
 /* What is wrong with a row on its face, or NULL. */
 static const char *iter_row_malformed(const IterRow *r) {
   if (r->fam != TY_STRING && r->fam != BOP_ANY_ARRAY && r->fam != BOP_ANY_HASH &&
-      r->fam != TY_RANGE && r->fam != TY_FLOAT_RANGE && r->fam != TY_INT && r->fam != TY_FLOAT &&
+      r->fam != TY_RANGE && r->fam != TY_FLOAT_RANGE && r->fam != TY_TIME_RANGE && r->fam != TY_INT && r->fam != TY_FLOAT &&
       r->fam != BOP_KERNEL && r->fam != BOP_ANY_RECV) return "not a row family";
   if (r->argc_min < 0 || r->argc_min > r->argc_max) return "argument counts out of order";
   if (r->nyield > 3) return "more than three values a step";

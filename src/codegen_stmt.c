@@ -249,6 +249,14 @@ void emit_puts_one(Compiler *c, int arg, Buf *b, int indent) {
     buf_puts(b, "{ const char *_ps = "); emit_obj_to_s(c, arg, t, b);
     buf_puts(b, "; sp_puts_cstr_line(_ps); }\n");
   }
+  else if (t == TY_TIME_RANGE) {
+    buf_puts(b, "{ sp_TimeRange *_ptr = ("); emit_expr(c, arg, b);
+    buf_puts(b, "); sp_puts_cstr_line(_ptr ? sp_trange_to_s(_ptr) : \"\"); }\n");
+  }
+  else if (t == TY_OBJ_RANGE) {
+    buf_puts(b, "{ sp_ObjRange *_por = ("); emit_expr(c, arg, b);
+    buf_puts(b, "); sp_puts_cstr_line(_por ? sp_orange_to_s(_por) : \"\"); }\n");
+  }
   else if (t == TY_IO || t == TY_DIR) {
     /* a handle renders as Object's to_s does for it (the protocol arm's render) */
     buf_puts(b, t == TY_IO ? "puts(sp_io_to_s(" : "puts(sp_Dir_to_s("); emit_expr(c, arg, b);
@@ -655,6 +663,14 @@ void emit_p_one(Compiler *c, int arg, Buf *b, int indent) {
     int iv = ++g_tmp;
     buf_printf(b, "{ sp_File *_t%d = (", iv); emit_expr(c, arg, b);
     buf_printf(b, "); sp_puts_line(_t%d ? sp_File_inspect(_t%d) : \"nil\"); }\n", iv, iv);
+  }
+  else if (t == TY_TIME_RANGE) {
+    buf_puts(b, "{ sp_TimeRange *_ptr = ("); emit_expr(c, arg, b);
+    buf_puts(b, "); sp_puts_line(_ptr ? sp_trange_inspect(_ptr) : \"nil\"); }\n");
+  }
+  else if (t == TY_OBJ_RANGE) {
+    buf_puts(b, "{ sp_ObjRange *_por = ("); emit_expr(c, arg, b);
+    buf_puts(b, "); sp_puts_line(_por ? sp_orange_inspect(_por) : \"nil\"); }\n");
   }
   else if (t == TY_RANDOM) {
     buf_puts(b, "{ sp_Random *_pr = ("); emit_expr(c, arg, b);
@@ -6842,7 +6858,7 @@ void emit_cond(Compiler *c, int id, Buf *b) {
   if (t == TY_STRING || t == TY_STRBUF || ty_is_array(t) || ty_is_hash(t) || ty_is_object(t) ||
       t == TY_PROC || t == TY_MATCHDATA || t == TY_EXCEPTION ||
       t == TY_BIGINT || t == TY_REGEX || t == TY_CURRY || t == TY_FIBER || t == TY_THREAD || t == TY_QUEUE || t == TY_MUTEX || t == TY_CONDVAR || t == TY_RANDOM || t == TY_DIR || t == TY_ADDRINFO || t == TY_SOCKOPT ||
-      t == TY_METHOD || t == TY_IO || t == TY_ARGF || t == TY_ENUMERATOR || t == TY_OPENSTRUCT) {
+      t == TY_METHOD || t == TY_IO || t == TY_ARGF || t == TY_ENUMERATOR || t == TY_OPENSTRUCT || t == TY_TIME_RANGE || t == TY_OBJ_RANGE) {
     buf_puts(b, "(("); emit_expr(c, id, b); buf_puts(b, ") != 0)"); return;
   }
   if (oint_kind(t)) { emit_oint_truthy(c, id, t, b); return; }
@@ -10867,6 +10883,23 @@ static int emit_when_typed_test(Compiler *c, int cond, int t, TyKind pt, Buf *b)
   }
   else if (pt == TY_STRING && emit_when_string_range(c, cond, t, b)) {
     /* emitted the lexicographic cover check */
+  }
+  /* a Range of Times covers a Time, and a boxed subject by its class */
+  else if (comp_ntype(c, cond) == TY_TIME_RANGE) {
+    int tr = ++g_tmp;
+    buf_printf(b, "({ sp_TimeRange *_t%d = ", tr); emit_expr(c, cond, b);
+    if (pt == TY_TIME) buf_printf(b, "; sp_trange_cover(_t%d, _t%d); })", tr, t);
+    else if (pt == TY_POLY) buf_printf(b, "; sp_trange_cover_poly(_t%d, _t%d); })", tr, t);
+    else buf_printf(b, "; (void)_t%d; (void)_t%d; (sp_bool)0; })", tr, t);
+  }
+  /* a Range of objects covers what its ends compare with, boxed */
+  else if (comp_ntype(c, cond) == TY_OBJ_RANGE) {
+    int tr = ++g_tmp;
+    char sv[24]; snprintf(sv, sizeof sv, "_t%d", t);
+    buf_printf(b, "({ sp_ObjRange *_t%d = ", tr); emit_expr(c, cond, b);
+    buf_printf(b, "; SP_GC_ROOT(_t%d); sp_orange_case_eq(_t%d, ", tr, tr);
+    emit_boxed_text(c, pt, sv, b);
+    buf_puts(b, "); })");
   }
   /* a numeric Range never covers an Array or a Hash (nor a String):
      evaluate the arm for its effects and answer false */

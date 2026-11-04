@@ -869,10 +869,12 @@ differs. `Integer ** Complex` and a `Complex` exponent generally evaluate to
 the correct `Complex`, and `Integer#fdiv` / `#div` with a `Rational` argument
 are exact.
 
-#### A `Range` object needs `Integer`/`Float`/`String` bounds
+#### A `Range` object needs `Integer`/`Float`/`String`/`Time` bounds
 
-A `Range` is an unboxed value with `sp_int` bounds, so a Range **object** over
-user objects cannot be built (`rng = (Ver.new(1)..Ver.new(9))` is a compile
+An Integer Range is an unboxed value with `sp_int` bounds; a Range of
+Times and a Range of objects whose class defines `<=>` are their own
+kinds (below). A Range **object** over user objects without `<=>` cannot
+be built (`rng = (Ver.new(1)..Ver.new(9))` is a compile
 error naming the class). Comparing against such a range does not need one:
 `Comparable#clamp` folds the bounds straight into the comparison, so the inline
 and one-sided forms work.
@@ -884,12 +886,19 @@ x.clamp(..hi)       # works (one-sided)
 x.clamp(lo..)       # works
 rng = (lo..hi)      # compile error: a Range of Ver objects cannot be built
 rng = (0..2**70)    # compile error: a Bignum bound does not fit sp_int
-rng = (since..)     # compile error with a Time: a Range of Time objects cannot be built
 ```
 
-A one-sided Range with a `Time` bound (`since..`, `..till`, common in query
-code) is refused the same way; compare against the bound (`t >= since`)
-instead.
+A Range of Times (`t1..t2`, `since..`, `..till`) is a Range of its own: it
+keeps the two Times, and its ends, `cover?` / `include?` / `===` (a Time or
+another Range of Times), `==`, `eql?`, `hash`, `min`, `max`, `to_s`,
+`inspect` and `case`/`when` answer as CRuby's, typed or boxed. What would
+iterate it (`each`, `to_a`, `size`, `count`) raises CRuby's TypeError, as
+CRuby does. `overlap?` answers as CRuby's. `step(n)` walks n seconds at a
+time: with a block it runs until the end (an endless Range until the block
+breaks); without one it answers an Array of the Times, where CRuby answers an
+Enumerator (so its `size` and `inspect` differ), and an endless one raises
+NotImplementedError. A boxed Range of Times does not take `step` with a
+block.
 
 Ends known only at run time (`a[0]..a[1]` over a mixed Array) pick the
 Range's kind from their values: Integers an Integer Range, a Float begin a

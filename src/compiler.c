@@ -5211,6 +5211,10 @@ static int super_plain_argc(Compiler *c, int id, const Scope *s) {
     (void)nt_arr(nt, pn, "requireds", &n);
     return n == s->nparams ? n : -1;
   }
+  /* a block argument (`super(&side)`) is evaluated, and these methods take
+     no block: the old path keeps it */
+  int bk = nt_ref(nt, id, "block");
+  if (bk >= 0 && nt_kind(nt, bk) == NK_BlockArgumentNode) return -1;
   int sa = nt_ref(nt, id, "arguments"), n = 0;
   const int *av = sa >= 0 ? nt_arr(nt, sa, "arguments", &n) : NULL;
   for (int i = 0; i < n; i++) {

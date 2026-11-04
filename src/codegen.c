@@ -15672,7 +15672,9 @@ static int emit_super_object_builtin(Compiler *c, int id, Scope *s, const char *
     if (nt_kind(c->nt, id) == NK_ForwardingSuperNode) {
       LocalVar *lv = scope_local(s, s->pnames[0]);
       Buf pn; memset(&pn, 0, sizeof pn); buf_printf(&pn, "lv_%s", rename_local(s->pnames[0]));
-      emit_boxed_text(c, lv && lv->type != TY_UNKNOWN ? lv->type : TY_POLY, pn.p, &kb);
+      /* an Integer or Float parameter that also takes nil boxes as its oint */
+      if (lv && slot_is_oint(lv)) buf_printf(&kb, "%s(%s)", oint_box(lv->type), pn.p);
+      else emit_boxed_text(c, lv && lv->type != TY_UNKNOWN ? lv->type : TY_POLY, pn.p, &kb);
       free(pn.p);
     }
     else {

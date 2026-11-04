@@ -38,3 +38,10 @@ rescue NoMethodError
   puts "NoMethodError"
 end
 
+
+# A forwarded parameter that takes an Integer and nil is compared too.
+class Opt
+  def ==(o) = super
+end
+q = Opt.new
+p q == 1, q == nil

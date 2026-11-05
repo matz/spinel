@@ -932,13 +932,14 @@ block.
 A Range of objects (`d1..d2` over Dates, or any class that defines `<=>`)
 walks its members by the class's `succ` while `<=>` keeps them within the
 end, as CRuby's does, and a class with no `succ` raises CRuby's TypeError.
-`each` and `first(n)` walk a member at a time, so an endless one stops where
-the block breaks, and `each` answers the Range; over a boxed one (a Range of
-Dates) most Enumerable methods (`find`, `each_with_index`, `filter_map`,
-`count`, ...) walk the same way, but `map`, `select`, `inject`, `each_slice`,
-`take` and `lazy` read the members' Array. Where the class is known at
-compile time (`Ver.new(1)..Ver.new(9)`, not a boxed Date) the Enumerable
-methods other than `each` and `first(n)` read the members' Array. A method
+`each`, `first(n)` and `take(n)` walk a member at a time, so an endless one
+stops where the block breaks (or after n members), and `each` answers the
+Range; over a boxed one (a Range of Dates) most Enumerable methods (`find`,
+`each_with_index`, `filter_map`, `count`, ...) walk the same way, but `map`,
+`select`, `inject`, `each_slice` and `lazy` read the members' Array. Where the
+class is known at compile time (`Ver.new(1)..Ver.new(9)`, not a boxed Date)
+the Enumerable methods other than `each`, `first(n)` and `take(n)` read the
+members' Array. A method
 that reads the Array raises RangeError on an endless Range where CRuby runs
 until the block breaks, and calls `succ` for every member before its block
 runs for the first. An exclusive one's `max`

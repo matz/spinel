@@ -4510,6 +4510,8 @@ int desugar_obj_range_via_a(Compiler *c) {
     if (!hit && sp_streq(nm, "last")) hit = an > 0;
     /* each with a block walks by succ itself (codegen_iter), so an endless one stops where it breaks */
     if (sp_streq(nm, "each") && blk && an == 0) hit = 0;
+    /* take(n) walks n members (sp_orange_take), as first(n) does */
+    if (sp_streq(nm, "take") && !blk && an == 1) hit = 0;
     if (!hit) continue;
     if (infer_type(c, recv) != TY_OBJ_RANGE) continue;
     /* a Range reopen's method of the name, or an Enumerable reopening's the

@@ -3805,16 +3805,19 @@ static int lr_sg_tail(Compiler *c, int cls, const char *name, int mod, LoadPoint
    vis, an ancestor's visibility change of the name is found as well, for
    the visibility it gives. */
 static int lr_search(Compiler *c, int cls, int sg, const char *name, int mod, LoadPoint p, int late, int vis, const LrDef **out, int depth) {
-  if (depth > lr_chain_bound(c) || cls < LR_MAIN) return ELAB_UNKNOWN;
-  if (!name && cls == mod && !sg) return ELAB_YES;
-  int unsure = 0, o = lr_search_one(c, cls, sg, name, mod, p, late, vis, out, depth, &unsure, 0);
-  if (o == ELAB_NO) {
+  /* the superclass steps are a loop, not a call each: a chain is as deep as
+     the program makes it, and the native stack is not */
+  int unsure = 0, o;
+  for (;; depth++) {
+    if (depth > lr_chain_bound(c) || cls < LR_MAIN) { o = ELAB_UNKNOWN; break; }
+    if (!name && cls == mod && !sg) { o = ELAB_YES; break; }
+    if ((o = lr_search_one(c, cls, sg, name, mod, p, late, vis, out, depth, &unsure, 0)) != ELAB_NO) break;
     /* a class's chain ends at Object, whose methods main's top level
        defines (main's own singleton is not Object's) */
     int sup = lr_super(c, cls);
     if (sg && sup == LR_MAIN) sup = LR_UNKNOWN_CLASS;
-    o = sup >= LR_MAIN ? lr_search(c, sup, sg, name, mod, p, late, vis, out, depth + 1)
-      : sg ? lr_sg_tail(c, cls, name, mod, p, late, vis, out, depth, &unsure) : ELAB_NO;
+    if (sup < LR_MAIN) { o = sg ? lr_sg_tail(c, cls, name, mod, p, late, vis, out, depth, &unsure) : ELAB_NO; break; }
+    cls = sup;
   }
   if (o == LR_STOP) o = ELAB_NO;
   return unsure ? ELAB_UNKNOWN : o;
@@ -3827,10 +3830,13 @@ static int lr_search(Compiler *c, int cls, int sg, const char *name, int mod, Lo
    own singleton: Object's, main's top level's, Kernel's) */
 static int lr_chain_one(Compiler *c, int cls, int sg, const char *name, ElabVersion *out, int n, int cap, int depth);
 static int lr_chain_versions(Compiler *c, int cls, int sg, const char *name, ElabVersion *out, int n, int cap, int depth) {
-  if (depth > lr_chain_bound(c) || (n = lr_chain_one(c, cls, sg, name, out, n, cap, depth)) < 0) return -1;
-  int sup = lr_super(c, cls), tail[5];
-  if (sg && sup == LR_MAIN) sup = LR_UNKNOWN_CLASS;
-  if (sup >= LR_MAIN) return lr_chain_versions(c, sup, sg, name, out, n, cap, depth + 1);
+  int sup, tail[5];
+  for (;; depth++, cls = sup) {   /* (the superclass steps a loop, as lr_search's) */
+    if (depth > lr_chain_bound(c) || (n = lr_chain_one(c, cls, sg, name, out, n, cap, depth)) < 0) return -1;
+    sup = lr_super(c, cls);
+    if (sg && sup == LR_MAIN) sup = LR_UNKNOWN_CLASS;
+    if (sup < LR_MAIN) break;
+  }
   if (!sg) return n;
   for (int i = lr_sg_tail_of(c, cls, tail), j0 = i, end = lr_sg_tail_end(name); i < end && n >= 0; i++) {
     int seen = 0;   /* (no reopened Object: comp_class_index's -1 is main's) */
@@ -5652,31 +5658,38 @@ static int lr_owner_last(Compiler *c, int key, int owner, const char *name, Load
    class's. A scoped read (`A::B`) leaves Object's out, as CRuby does. */
 static int lr_const_in(Compiler *c, int cls, const char *name, LoadPoint p, int late, int top, const LrDef **out, int depth, int key) {
   LoadRecord *r = c->lrec;
-  if (depth > lr_chain_bound(c)) return ELAB_UNKNOWN;
-  if (cls < LR_MAIN) {
-    for (int i = 0; builtin_class_at(i); i++) {
-      const BuiltinClass *b = builtin_class_at(i);
-      if (b->id == cls && builtin_mixin_module_id(b->name))
-        return is_constless_builtin_name(b->name) ? ELAB_NO : ELAB_UNKNOWN;
+  /* the superclass steps are a loop, as lr_search's; an unsure mixin on
+     the way makes the answer unknown */
+  int unsure = 0, o;
+  for (;; depth++) {
+    if (depth > lr_chain_bound(c)) { o = ELAB_UNKNOWN; break; }
+    if (cls < LR_MAIN) {
+      o = ELAB_UNKNOWN;
+      for (int i = 0; builtin_class_at(i); i++) {
+        const BuiltinClass *b = builtin_class_at(i);
+        if (b->id == cls && builtin_mixin_module_id(b->name)) { o = is_constless_builtin_name(b->name) ? ELAB_NO : ELAB_UNKNOWN; break; }
+      }
+      break;
     }
-    return ELAB_UNKNOWN;
+    if ((o = lr_owner_last(c, key, lr_const_owner(cls), name, p, late, out)) != ELAB_NO) break;
+    if (cls >= 0 && builtin_mixin_module_id(c->classes[cls].name) &&
+        !is_constless_builtin_name(c->classes[cls].name)) { o = ELAB_UNKNOWN; break; }
+    const LrClass *k = lr_class(r, cls);
+    int found = 0;
+    for (int i = k ? k->nmix - 1 : -1; i >= 0; i--) {
+      LrMixin *m = &k->mix[i];
+      int b = elab_mix_on_singleton(m->kind) ? ELAB_NO : lr_mixed_before(c, m, p, late, elab_point_may(c, m->node));
+      if (b == ELAB_NO) continue;
+      int mo = lr_const_in(c, lr_mixin_class(c, m), name, p, late, top, out, depth + 1, key);
+      if (mo == ELAB_YES && b == ELAB_YES) { found = 1; break; }
+      if (mo != ELAB_NO) unsure = 1;
+    }
+    if (found) { o = ELAB_YES; break; }
+    int sup = lr_super(c, cls);
+    if (sup == LR_MAIN && !top) sup = LR_UNKNOWN_CLASS;
+    if (sup < LR_MAIN) { o = ELAB_NO; break; }
+    cls = sup;
   }
-  int o = lr_owner_last(c, key, lr_const_owner(cls), name, p, late, out), unsure = 0;
-  if (o != ELAB_NO) return o;
-  if (cls >= 0 && builtin_mixin_module_id(c->classes[cls].name) &&
-      !is_constless_builtin_name(c->classes[cls].name)) return ELAB_UNKNOWN;
-  const LrClass *k = lr_class(r, cls);
-  for (int i = k ? k->nmix - 1 : -1; i >= 0; i--) {
-    LrMixin *m = &k->mix[i];
-    int b = elab_mix_on_singleton(m->kind) ? ELAB_NO : lr_mixed_before(c, m, p, late, elab_point_may(c, m->node));
-    if (b == ELAB_NO) continue;
-    int mo = lr_const_in(c, lr_mixin_class(c, m), name, p, late, top, out, depth + 1, key);
-    if (mo == ELAB_YES && b == ELAB_YES) return unsure ? ELAB_UNKNOWN : ELAB_YES;
-    if (mo != ELAB_NO) unsure = 1;
-  }
-  int sup = lr_super(c, cls);
-  if (sup == LR_MAIN && !top) sup = LR_UNKNOWN_CLASS;
-  o = sup >= LR_MAIN ? lr_const_in(c, sup, name, p, late, top, out, depth + 1, key) : ELAB_NO;
   return unsure ? ELAB_UNKNOWN : o;
 }
 

@@ -39723,6 +39723,12 @@ int nullable_int_value(Compiler *c, int v) {
       int ft = call_block_tail(c, v);
       if (ft >= 0 && nullable_int_value(c, ft)) return 1;
     }
+    /* so is then's, and instance_exec's and instance_eval's, which the
+       block's ivar read or write of the receiver's nil-able slot answers */
+    if (cn && (is_then_alias(cn) || sp_streq(cn, "instance_exec") || sp_streq(cn, "instance_eval"))) {
+      int ft = call_block_tail(c, v);
+      if (ft >= 0 && (nt_kind(nt, ft) == NK_NilNode || nullable_int_value(c, ft))) return 1;
+    }
     if (rcv0 >= 0 && cn && (is_find_alias(cn)) &&
         nullable_int_elem_expr(c, rcv0, 0)) return 1;
     int rcv = nt_ref(nt, v, "receiver");

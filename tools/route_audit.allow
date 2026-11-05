@@ -150,6 +150,7 @@ src/analyze.c a_super_target super, by its def's name
 src/analyze.c an_presence_observe a scope's own name
 src/analyze.c an_super_object_text super, by its def's name
 src/analyze.c an_super_struct_text super, by its def's name
+src/analyze.c proc_form_origin_kwrest_any the method a proc-form clone was made from, by the clone's name less its #pf
 src/analyze.c check_seed_contradictions =sc->name a scope's own name
 src/analyze.c dyn_site_may_reach a scope's own name
 src/analyze.c dyn_site_misses a scope's own name

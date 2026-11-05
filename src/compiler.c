@@ -517,6 +517,7 @@ void comp_free(Compiler *c) {
   share_plan_free(c);
   builtin_given_free(c);
   ic_free(c);
+  yvt_free(c);
   free(c->bsl_gen);
   free(c->bsl_val);
   if (g_repr_check) repr_channel_free(c);

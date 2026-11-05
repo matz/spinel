@@ -1602,6 +1602,7 @@ typedef struct {
   /* the methods CRuby calls that the program does not name, as the last
      reachability run found them (implicit_calls.h); freed with the Compiler */
   struct IcState *ic;
+  struct YvtIndex *yvt;   /* yield_value_type's call-site index (analyze_internal.h), built on first use */
   int uses_exc_text_handle;  /* emitted shared exception text routes, to_s/message bits */
   char *exc_text_late;  /* the plain exception text dispatchers, defined after the globals (emit_exc_text_dispatch) */
   int exc_text_super;        /* exc_text_override_calls_super's memo: 0 unasked, 1 no, 2 yes */
@@ -1857,6 +1858,7 @@ AutoloadRegistration *comp_autoloads(const Compiler *c, int node, int *count);
 Compiler *comp_new(const NodeTable *nt);
 void comp_free(Compiler *c);
 void ic_free(Compiler *c);   /* implicit_calls.c */
+void yvt_free(Compiler *c);  /* analyze_util.c */
 /* Is `name` one of the n strings in `list`? (0 for a NULL name) */
 int name_list_has(char **list, int n, const char *name);
 void comp_def_asked_add(Compiler *c, const char *name);   /* a fold answered a definition query of name (def_asked) */

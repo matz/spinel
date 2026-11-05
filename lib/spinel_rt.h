@@ -21304,7 +21304,7 @@ void sp_sig_thread_dispatch(void) {
 extern volatile int sp_sig_pending_flag;
 extern volatile int sp_sig_default_pending;
 extern void (*sp_sig_default_raiser)(int);
-SP_NORETURN void sp_sig_poll_raise(void);
+void sp_sig_poll_raise(void);   /* returns after a collection a safe point was asked to run (sp_gc_poll_request) */
 static SP_UNUSED SP_NORETURN void sp_sig_default_raise(int no) {
   sp_sig_async_ok = 0;
   if (no == SIGINT) sp_raise_cls("Interrupt", sp_exc_no_msg);   /* the message is empty, as the interrupt CRuby raises for the signal */

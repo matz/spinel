@@ -1655,7 +1655,7 @@ test: lib/spinel_rt_responds_generated.h $(SPINEL_TIMEOUT) cext-header-test cext
 # The actual run. rbs-test golden-checks the RBS extractor (cheap, C-only).
 # rbs-seed-test checks the seeds actually reach the analyzer (incl. nested
 # classes, #1417).
-test-run: int-min-test timing-test signal-default-test source-marker-test magic-comment-test rbs-test rbs-seed-test inline-rbs-test re-lit-test value-pos-test value-edges-check implied-calls-check implied-calls-test node-kinds-check package-facts-check reject-test cli-opts-test link-names-test reach-test defer-refusals-test check-stores-test backtrace-test gc-minor-test gc-phases-test gc-stress-test gc-threshold-test gc-none-test gc-obj-budget-test gc-str-budget-test gc-str-major-test threaded-render-test gc-locality-test byref-capture-test thread-puts-test ext-test ext-cruby-test test-corpus-summary
+test-run: int-min-test timing-test signal-default-test source-marker-test magic-comment-test rbs-test rbs-seed-test inline-rbs-test re-lit-test value-pos-test value-edges-check implied-calls-check implied-calls-test node-kinds-check package-facts-check reject-test cli-opts-test link-names-test reach-test defer-refusals-test check-stores-test backtrace-test gc-minor-test gc-phases-test gc-stress-test gc-threshold-test gc-none-test gc-obj-budget-test gc-nogc-poll-test gc-str-budget-test gc-str-major-test threaded-render-test gc-locality-test byref-capture-test thread-puts-test ext-test ext-cruby-test test-corpus-summary
 
 # The test/*.rb corpus (and the bundled packages') on its own, without the
 # C-side legs: what a 32-bit target runs (`make test-corpus CC='cc -m32'`),
@@ -2620,6 +2620,22 @@ gc-str-major-test: $(SPINEL) $(SP_RT_LIB) $(SP_RT_MT_LIB) $(SPINEL_TIMEOUT)
 	  { echo "gc-str-major-test: FAIL (the schedule left MORE old behind: $$io -> $$do)"; ok=0; }; \
 	rm -rf "$$tmp"; \
 	if [ $$ok -eq 1 ]; then echo "gc-str-major-test: pass"; else exit 1; fi
+
+# A loop whose only allocations are a Bignum operation's (sp_gc_alloc_nogc,
+# which may not collect: the operands are temporaries nothing roots) asks
+# the loop's back-edge to collect (sp_gc_poll_request): 200000 rounds
+# collected once, at exit, and its memory grew with the rounds (#11106).
+gc-nogc-poll-test: $(SPINEL) $(SP_RT_LIB) $(SPINEL_TIMEOUT)
+	@tmp=$$(mktemp -d /tmp/spinel-gcpoll.XXXXXX); \
+	$(SPINEL) test/gc_bignum_loop_collects.rb -o "$$tmp/p" >"$$tmp/cc.out" 2>&1 || \
+	  { echo "gc-nogc-poll-test: FAIL (compile)"; tail -5 "$$tmp/cc.out"; rm -rf "$$tmp"; exit 1; }; \
+	SPINEL_GC_STATS=1 $(TIMEOUT60) "$$tmp/p" > "$$tmp/out" 2> "$$tmp/err"; \
+	n=$$(grep -o '[0-9]* collections' "$$tmp/err" | tail -1 | cut -d' ' -f1); \
+	cmp -s "$$tmp/out" test/gc_bignum_loop_collects.rb.expected || \
+	  { echo "gc-nogc-poll-test: FAIL (the answer changed)"; rm -rf "$$tmp"; exit 1; }; \
+	[ "$${n:-0}" -ge 10 ] || \
+	  { echo "gc-nogc-poll-test: FAIL ($${n:-0} collections over 200000 rounds of Bignums: the back-edge ran none)"; rm -rf "$$tmp"; exit 1; }; \
+	rm -rf "$$tmp"; echo "gc-nogc-poll-test: pass ($$n collections)"
 
 # The object budget is priced off objects PLUS strings by default;
 # SPINEL_GC_OBJ_BUDGET=obj restores pricing it off the object heap alone.

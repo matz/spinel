@@ -4173,10 +4173,31 @@ volatile int sp_sig_default_pending;
 void (*sp_sig_default_raiser)(int);
 /* A safe point of a program that sets no trap: the recorded default signal
    is raised. Never returns. */
+/* A collection sp_gc_alloc_nogc could not run, asked of the next safe
+   point: the safe points' flag is set, and the safe point collects
+   (sp_gc_poll_collect) before it looks for a signal */
+static volatile int sp_gc_poll_due;
+void sp_gc_poll_collect(void);
+void sp_gc_poll_request(void) {
+  if (sp_gc_poll_due) return;
+  sp_gc_poll_due = 1;
+  SP_ATOMIC_STORE(&sp_sig_pending_flag, 1, __ATOMIC_RELEASE);
+}
+static void sp_gc_poll_run(void) {
+  if (!sp_gc_poll_due) return;
+  sp_gc_poll_due = 0;
+  sp_gc_poll_collect();
+}
+/* A safe point of a program that sets no trap: a collection asked of it
+   runs, and the recorded default signal is raised. Returns only when it
+   had a collection and no signal to run. */
 void sp_sig_poll_raise(void) {
-  int no = sp_sig_default_pending;
-  sp_sig_default_pending = 0;
   SP_ATOMIC_STORE(&sp_sig_pending_flag, 0, __ATOMIC_RELAXED);
+  int gc = sp_gc_poll_due;
+  sp_gc_poll_run();
+  int no = sp_sig_default_pending;
+  if (gc && !no) return;
+  sp_sig_default_pending = 0;
   if (no && sp_sig_default_raiser) sp_sig_default_raiser(no);
   abort();
 }
@@ -4204,6 +4225,7 @@ void sp_sig_c_handler(int no) {
    leaves by a raise or a throw. */
 void sp_sig_run_pending(void) {
   SP_ATOMIC_STORE(&sp_sig_pending_flag, 0, __ATOMIC_RELAXED);
+  sp_gc_poll_run();   /* (a collection sp_gc_alloc_nogc asked of this safe point) */
   /* a recorded default SIGINT / SIGTERM first: its raise leaves */
   if (sp_sig_default_pending && sp_sig_default_raiser) {
     int no = sp_sig_default_pending;

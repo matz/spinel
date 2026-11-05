@@ -9294,10 +9294,56 @@ void specialize_inherited_cls_new(Compiler *c) {
 /* The class body `body` of class ci, where its statement reopens the class
    at a file's top level after the class's first body ran (`class Dog; ...;
    end; d.speak; class Dog; prepend Loud; end`): that statement, or -1. */
+/* Does node hold a call that runs where it stands: a call outside a def,
+   a class body or a block, other than a declaration (include, attr_reader,
+   private, ...)? */
+static int body_stmt_calls(const NodeTable *nt, int node) {
+  if (node < 0) return 0;
+  NodeKind k = nt_kind(nt, node);
+  if (k == NK_DefNode || k == NK_ClassNode || k == NK_ModuleNode || k == NK_SingletonClassNode ||
+      k == NK_BlockNode || k == NK_LambdaNode) return 0;
+  if (k == NK_CallNode) {
+    const char *nm = nt_str(nt, node, "name");
+    int recv = nt_ref(nt, node, "receiver");
+    int decl = nm && (recv < 0 || nt_self_singleton_class(nt, recv)) &&
+               (is_mixin_call(nm) || is_attr_decl_reader(nm) || is_attr_decl_writer(nm) || visibility_of_name(nm) ||
+                is_alias_method_name(nm) || is_define_method_name(nm) || is_define_singleton_method_name(nm));
+    if (!decl) return 1;
+  }
+  int nr = nt_num_refs(nt, node);
+  for (int i = 0; i < nr; i++) if (body_stmt_calls(nt, nt_ref_at(nt, node, i))) return 1;
+  int na = nt_num_arrs(nt, node);
+  for (int i = 0; i < na; i++) {
+    int m = 0; const int *ids = nt_arr_at(nt, node, i, &m);
+    for (int q = 0; q < m; q++) if (body_stmt_calls(nt, ids[q])) return 1;
+  }
+  return 0;
+}
+/* In a class's first body, a statement ahead of its first prepend (or
+   singleton prepend) that runs a call: the call ran before the prepend */
+static int prepend_after_call(Compiler *c, int ci, int body) {
+  const NodeTable *nt = c->nt;
+  int n = 0, bn = 0;
+  BodyMix *mx = body_mixins(c, ci, body, 1u << LR_PREPEND | 1u << LR_SG_PREPEND, &n);
+  int first = n ? mx[0].stmt : -1;
+  for (int j = 1; j < n; j++) if (elab_sort_key(c, mx[j].stmt) < elab_sort_key(c, first)) first = mx[j].stmt;
+  free(mx);
+  const int *bb = first >= 0 && body >= 0 ? nt_arr(nt, body, "body", &bn) : NULL;
+  for (int i = 0; i < bn && bb[i] != first; i++) if (body_stmt_calls(nt, bb[i])) return 1;
+  return 0;
+}
 static int prepend_late_stmt(Compiler *c, int ci, int body) {
   const NodeTable *nt = c->nt;
   int nb = 0;
   const LrOpen *ob = elab_class_bodies(c, ci, &nb);
+  /* the first body, where a call runs ahead of its prepend: guarded from
+     the class's own statement, as a reopening's are */
+  if (nb >= 1 && ob[0].body == body && nt_kind(nt, ob[0].node) == NK_ClassNode && prepend_after_call(c, ci, body)) {
+    int s = ob[0].node, f, rank, cp = nt_ref(nt, s, "constant_path");
+    elab_top_place(c, s, &f, &rank);
+    if (cp >= 0 && (nt_kind(nt, cp) == NK_ConstantReadNode || nt_kind(nt, cp) == NK_ConstantPathNode) && f >= 0 &&
+        comp_parent_map(c)[s] == prog_root_stmts(c, f)) return s;
+  }
   for (int k = 1; k < nb; k++) {
     int s = ob[k].node, f, rank;
     if (nt_kind(nt, s) != NK_ClassNode || nt_ref(nt, s, "body") != body) continue;
@@ -9491,7 +9537,16 @@ static void process_prepend_body(Compiler *c, int ci, int body) {
     }
     free(mx);
   }
-  if (cell) {   /* after the reopening's statement, in its file's top level */
+  if (cell && nt_ref(nt, late, "body") == body && elab_class_bodies(c, ci, &(int){0})[0].node == late) {
+    /* the first body, a call ahead of the prepend: after the body's last
+       prepend statement, where the calls after it run */
+    int n = 0, last = -1;
+    BodyMix *mx = body_mixins(c, ci, body, 1u << LR_PREPEND, &n);
+    for (int j = 0; j < n; j++) if (last < 0 || elab_sort_key(c, mx[j].stmt) > elab_sort_key(c, last)) last = mx[j].stmt;
+    free(mx);
+    if (last >= 0) prepend_cell_write(c, late, body, last, cell);
+  }
+  else if (cell) {   /* after the reopening's statement, in its file's top level */
     int f, rank;
     elab_top_place(c, late, &f, &rank);
     prepend_cell_write(c, late, prog_root_stmts(c, f), late, cell);

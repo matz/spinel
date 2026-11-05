@@ -15432,14 +15432,17 @@ int emit_super_inline(Compiler *c, int id, Buf *b, int indent, int as_expr) {
     /* A nil or non-returning block has no C value type. As for an ordinary
        yielding call, its result still needs a slot while the body runs. */
     if (rt == TY_NIL || rt == TY_VOID || rt == TY_UNKNOWN) rt = TY_POLY;
-    if (fwd_yield_proc || explicit_block_arg) g_yield_slot_ty = rt;
+    /* (also under the proc an enclosing inline's yields call, which this
+       super's yields call too: their tail fills this super's slot) */
+    int yslot = fwd_yield_proc || explicit_block_arg || g_yield_proc_ref;
+    if (yslot) g_yield_slot_ty = rt;
     int rtag = ++g_tmp;
     char rvbuf[32]; snprintf(rvbuf, sizeof rvbuf, "_t%d", rtag);
     /* the super's own form: its oint where it answers one (a block that
        can answer nil) */
     int ro = oint_kind(rt) && node_is_oint(c, id);
     /* the proc's answer stays boxed for the tail to read with its nil */
-    if (ro && (fwd_yield_proc || explicit_block_arg)) g_yield_slot_ty = TY_POLY;
+    if (ro && yslot) g_yield_slot_ty = TY_POLY;
     emit_indent(b, din); emit_res_ctype(c, rt, ro, b);
     buf_printf(b, " _t%d = %s;\n", rtag, ro ? oint_nil(rt) : default_value_from_compiler(c, rt));
     const char *sv_rv = g_result_var; g_result_var = rvbuf;

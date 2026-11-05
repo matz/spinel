@@ -45717,15 +45717,12 @@ static void an_method_holders_build(Compiler *c, AnMethodHolders *mh) {
 }
 
 /* The method a `super` in s reaches: the next shadow in s's own class (an
-   earlier include's, prepend's or extend's copy), or else the parent's. */
+   earlier include's, prepend's or extend's copy), or else the parent's:
+   the call plan's answer, which takes a hidden method's name for the one
+   it stands for */
 static int super_reach(Compiler *c, Scope *s) {
-  const char *shadow = comp_super_shadow(c, s);
-  if (shadow) return s->is_cmethod ? comp_cmethod_in_class(c, s->class_id, shadow)
-                                   : comp_method_in_class(c, s->class_id, shadow);
-  int p = comp_super_parent(c, s->class_id, s->is_cmethod);
-  if (p < 0) return -1;
-  return s->is_cmethod ? comp_cmethod_in_chain(c, p, s->name, NULL)
-                       : comp_method_in_chain(c, p, s->name, NULL);
+  int at;
+  return cplan_super_target(c, -1, s, &at);
 }
 
 static int super_new_init_keeps_block(Compiler *c, Scope *s) {

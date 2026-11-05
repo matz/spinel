@@ -7113,19 +7113,26 @@ static int mc_same_method(const Scope *a, const Scope *b) {
 static const char *const mc_class_helpers[] = { "_alloc", "_dup", "_gc_scan", "_struct_inspect", NULL };
 enum { MC_NHELPERS = 4 };
 /* A method whose name another has, as *first and *later; *first is -1 when
-   the name is a class's helper. */
+   the name is a class's helper or typedef. A class helper's name that is
+   another class's typedef (`class Y__gc_scan` beside Y's sp_Y__gc_scan) is
+   *first -2 and *later that class, whose C name is to change. */
 static int mc_find_clash(Compiler *c, int *first, int *later) {
-  int cap = 64;
-  while (cap < (c->nscopes + MC_NHELPERS * c->nclasses) * 2) cap *= 2;
+  int cap = 64, nh = MC_NHELPERS * c->nclasses;
+  while (cap < (c->nscopes + nh + c->nclasses) * 2) cap *= 2;
   char **key = calloc((size_t)cap, sizeof *key);
   int *who = malloc(sizeof(int) * (size_t)cap);
   int found = 0;
-  for (int i = -MC_NHELPERS * c->nclasses; i < c->nscopes && !found; i++) {
+  /* each class's typedef, then its helpers, then the methods */
+  for (int i = -nh - c->nclasses; i < c->nscopes && !found; i++) {
     const Scope *s = i >= 0 ? &c->scopes[i] : NULL;
     const char *nm;
     if (s) {
       if (!s->name || s->c_name) continue;
       nm = mc_method(c, s);
+    } else if (i < -nh) {
+      const ClassInfo *ci = &c->classes[-i - 1 - nh];
+      if (ci->is_builtin_const || !ci->c_name) continue;
+      nm = mc_ring_setf(c, "sp_%s", ci->c_name);
     } else {
       const ClassInfo *ci = &c->classes[(-i - 1) / MC_NHELPERS];
       if (ci->is_builtin_const || !ci->c_name) continue;
@@ -7137,6 +7144,7 @@ static int mc_find_clash(Compiler *c, int *first, int *later) {
     while (key[j] && strcmp(key[j], nm)) j = (j + 1) & (cap - 1);
     if (!key[j]) { key[j] = strdup(nm); who[j] = i; }
     else if (s && (who[j] < 0 || !mc_same_method(&c->scopes[who[j]], s))) { *first = who[j] < 0 ? -1 : who[j]; *later = i; found = 1; }
+    else if (!s && who[j] < -nh) { *first = -2; *later = -who[j] - 1 - nh; found = 1; }
   }
   for (int j = 0; j < cap; j++) free(key[j]);
   free(key); free(who);
@@ -7165,6 +7173,14 @@ void mc_resolve_clashes(Compiler *c) {
   int a, b;
   /* each round renames one method or class; the bound only guards a loop */
   for (int round = 0, n = 2; round < 4096 && mc_find_clash(c, &a, &b); round++, n++) {
+    if (a == -2) {
+      /* the class whose typedef a helper's name is takes a C name of its own */
+      char cn[300];
+      snprintf(cn, sizeof cn, "%s__%d", c->classes[b].c_name, n);
+      free(c->classes[b].c_name);
+      c->classes[b].c_name = strdup(cn);
+      continue;
+    }
     /* the name each is spelled from, a replaced version's with its number
        (`f#redef1` meets a method `f_redef1`): renaming `f` would not move it */
     char *nb = mc_version_name(&c->scopes[b]), *na = NULL;

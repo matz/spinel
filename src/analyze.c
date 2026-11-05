@@ -48731,15 +48731,17 @@ int desugar_bind_attr_helpers_at(Compiler *c, LowerCtx *lc, int id) {
 /* The body the helpers of record definition id go in (made when make), and
    its record call in *call; -1 when id is no such definition. */
 static int bind_member_body(NodeTable *nt, int id, int *call, int make) {
-  int rc = class_def_record(nt, id);
-  /* `Ns::S = Struct.new(:d)`: class_def_record takes a plain write only */
-  if (rc < 0 && nt_kind(nt, id) == NK_ConstantPathWriteNode && class_def_is_record_call(nt, nt_ref(nt, id, "value")))
-    rc = nt_ref(nt, id, "value");
-  if (rc < 0 && nt_kind(nt, id) == NK_ClassNode && class_def_is_record_call(nt, nt_ref(nt, id, "superclass")))
-    rc = nt_ref(nt, id, "superclass");
-  if (rc < 0) return -1;
+  /* the write's value or the superclass, inside any parentheses
+     (`Ns::S = (Struct.new(:d))`); class_def_record takes a plain write's
+     bare value only */
+  NodeKind k = nt_kind(nt, id);
+  int sub = k == NK_ClassNode;
+  int rc = sub ? nt_ref(nt, id, "superclass")
+         : k == NK_ConstantWriteNode || k == NK_LocalVariableWriteNode || k == NK_ConstantPathWriteNode ? nt_ref(nt, id, "value") : -1;
+  rc = rc >= 0 ? nt_paren_single(nt, rc) : -1;
+  if (!class_def_is_record_call(nt, rc)) return -1;
   *call = rc;
-  int owner = rc == nt_ref(nt, id, "superclass") ? id : -1, blk = -1;
+  int owner = sub ? id : -1, blk = -1;
   if (owner < 0) {
     blk = nt_ref(nt, rc, "block");
     if (blk >= 0 && nt_kind(nt, blk) != NK_BlockNode) return -1;   /* `Struct.new(:d, &b)` */
@@ -49541,7 +49543,6 @@ static void an_phase_desugar_register(Compiler *c) {
   lower_run(c, &lc, LW_EXPLICIT_INITIALIZE_CALLS);  /* initialize(x) in a method -> a copy of it as a method */
   lower_run(c, &lc, LW_NOARG_DISPLAY_WRAPPERS);     /* def inspect(i = 0) -> + `__noarg inspect` = inspect */
   lower_run(c, &lc, LW_BIND_ATTR_HELPERS);          /* attr_reader :x an instance_method names -> + `__bind x` = @x */
-  lower_run(c, &lc, LW_BIND_MEMBER_HELPERS);        /* the same for a Struct.new / Data.define member -> + `__bind x` = @x */
   /* a bare constant CRuby's lookup cannot reach, bound by its leaf name to a
      nested definition: refused while the source still says where each
      reference is written */
@@ -49556,6 +49557,10 @@ static void an_phase_desugar_register(Compiler *c) {
   lower_run(c, &lc, LW_STRUCT_SUBCLASS_NEW_WRITE);
   lower_run(c, &lc, LW_REFUSE_SUPERCLASS_EXPRS);
   lower_run(c, &lc, LW_RESCUE_BLOCK_BODIES);
+  /* the same for a Struct.new / Data.define member -> + `__bind x` = @x, once a
+     record block's body is a StatementsNode and `Struct.send(:new, ..)` is
+     Struct.new */
+  lower_run(c, &lc, LW_BIND_MEMBER_HELPERS);
   AN_STEP_V("desugar_cext_decls", desugar_cext_decls(c));
   lower_run(c, &lc, LW_MARK_SYM_PROC_BLOCKS);               /* { |_spx| _spx.m } is `&:m` */
   lower_run(c, &lc, LW_BUILDER_BLOCK_PARAM);        /* X = Class.new do |k| -> k = self, ahead of the body's locals */

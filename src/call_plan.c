@@ -1260,7 +1260,9 @@ static int cplan_capture_names(Compiler *c, int id, int cls, int sg, const char 
    on: a capture whose NameError cannot be stated (cplan_capture_names)?
    (A respond_to? that asks as a capture reads the cells all the same.) */
 static int ct_capture_keeps_table(Compiler *c, int id, int cls, int sg, const char *name, unsigned flags, int entry) {
-  return (flags & CT_CAPTURE) && id >= 0 && is_method_obj_call(c, id) && !cplan_capture_names(c, id, cls, sg, name, entry);
+  if (!(flags & CT_CAPTURE) || id < 0 || !is_method_obj_call(c, id)) return 0;
+  int k = cplan_capture_names(c, id, cls, sg, name, entry);
+  return k == CP_ABSENT_NONE || k == CP_ABSENT_UNTOLD;
 }
 /* The version of `name` call id runs, when the method has more than one
    (#9898), or one the call may run before (elab_versions_late): a call at
@@ -1909,21 +1911,26 @@ static int cm_capture_class(Compiler *c, int id, const char **name) {
   return ci >= 0 && ci < c->nclasses ? ci : -1;
 }
 /* Can capture id (`K.method(:k)`, `public_method`) of cls's `name`, on
-   its class side for sg, state CRuby's NameError when it finds no method?
-   The message names the receiver's class, which must be the one asked: a
-   constant's (a Class.new class's by the constant that names it), self's
-   in a class body, or for a version entry's (entry) instance side a class
-   nothing inherits from. Not main's, nor a module's: a module's instance
-   side is an includer's, and its class side is named 'Module' until CRuby
-   makes its singleton class (a def on it, an extend, singleton_class),
-   which the record does not tell. method() also finds private methods,
-   which the call does not reach: not for a name a top-level function has
-   (Object's), nor for the class side one a builtin class's reopening
-   (Object's, Module's) or a module (an extend's) has as an instance
-   method. */
+   its class side for sg, state CRuby's NameError when it finds no method,
+   and how (CP_ABSENT_*)? The message names the receiver's class, which
+   must be the one asked: a constant's (a Class.new class's by the constant
+   that names it), self's in a class body, or for a version entry's
+   (entry) instance side a class nothing inherits from. Not main's, nor a
+   module's instance side, which is an includer's. A module's class side
+   is named 'Module' until CRuby makes its singleton class, `#<Class:M>`
+   from then on (elab_singleton_made): CP_ABSENT_UNTOLD where the record
+   cannot tell which (cplan_refuse_resolve refuses it). method() also
+   finds private methods, which the call does not reach: not for a name a
+   top-level function has (Object's), nor for the class side one a builtin
+   class's reopening (Object's, Module's) or a module, a builtin's
+   reopening too, that may be on a singleton class's chain
+   (elab_module_on_singleton_chain: Kernel, an extend's) has as an
+   instance method. CP_ABSENT_NONE where it cannot state it. */
 static int cplan_capture_names(Compiler *c, int id, int cls, int sg, const char *name, int entry) {
   int nd = 0;
-  if (cls < 0 || cls >= c->nclasses || !name || comp_class_is_module(c, &c->classes[cls])) return 0;
+  if (cls < 0 || cls >= c->nclasses || !name) return 0;
+  int mod = comp_class_is_module(c, &c->classes[cls]);
+  if (mod && !sg) return 0;
   if (entry) {
     int recv = nt_ref(c->nt, id, "receiver");
     NodeKind rk = recv >= 0 ? nt_kind(c->nt, recv) : NK_SelfNode;
@@ -1932,20 +1939,26 @@ static int cplan_capture_names(Compiler *c, int id, int cls, int sg, const char 
   }
   for (int s = an_scopes_named_first(c, name); s >= 0; s = an_scopes_named_next(c, name, s)) {
     int sc = c->scopes[s].class_id;
-    if (sc < 0 || (sg && !c->scopes[s].is_cmethod && (comp_class_is_module(c, &c->classes[sc]) || c->classes[sc].is_builtin_const)))
+    if (sc < 0) return 0;
+    int smod = comp_class_is_module(c, &c->classes[sc]);
+    if (sg && !c->scopes[s].is_cmethod && (smod ? elab_module_on_singleton_chain(c, sc) : c->classes[sc].is_builtin_const))
       return 0;
   }
-  return 1;
+  if (!mod) return sg ? CP_ABSENT_SG : CP_ABSENT_INST;
+  int made = elab_singleton_made(c, cls, elab_point_of(c, id));
+  return made == ELAB_YES ? CP_ABSENT_SG : made == ELAB_NO ? CP_ABSENT_MODULE : CP_ABSENT_UNTOLD;
 }
 /* Where does capture id (`K.method(:k)`, `public_method`; mi its target,
-   -1 for none) raise CRuby's NameError: 2, naming K's class side, where
-   the record proves no class method of the name is defined where it runs,
-   as a call there raises (ct_undefined_at, cplan_missing), with no builtin
-   answering it; for mi a version entry, 2 or 1 (its instance side) while
-   none of its versions is live, where the else arm the call runs then
-   finds no method (cplan_entry_finds), so neither does method(). 0
-   otherwise, and where the message cannot be stated
-   (cplan_capture_names). */
+   -1 for none) raise CRuby's NameError: CP_ABSENT_SG (or
+   CP_ABSENT_MODULE, a module whose singleton class is not made yet),
+   naming K's class side, where the record proves no class method of the
+   name is defined where it runs, as a call there raises (ct_undefined_at,
+   cplan_missing), with no builtin answering it; for mi a version entry,
+   that or CP_ABSENT_INST (its instance side) while none of its versions
+   is live, where the else arm the call runs then finds no method
+   (cplan_entry_finds), so neither does method(); CP_ABSENT_UNTOLD where
+   the record cannot tell which a module's is (cplan_capture_names). 0
+   otherwise, and where the message cannot be stated. */
 static int cplan_capture_absent(Compiler *c, int id, int mi) {
   const char *name = NULL;
   const Scope *m = mi >= 0 ? &c->scopes[mi] : NULL;
@@ -1955,7 +1968,7 @@ static int cplan_capture_absent(Compiler *c, int id, int mi) {
     if (m->entry != ENTRY_DISPATCH || cplan_entry_finds(c, mi) != VER_FINDS_NONE || is_instance_method_name(nt_str(c->nt, id, "name"))) return 0;
   }
   else if (cls < 0 || !ct_undefined_at(c, id, cls, name, CT_CMETHOD) || cm_builtin_answers(c, cls, name)) return 0;
-  return cplan_capture_names(c, id, cls, sg, name, m != NULL) ? (sg ? 2 : 1) : 0;
+  return cplan_capture_names(c, id, cls, sg, name, m != NULL);
 }
 /* Is ci's class method `name` defined wherever node at runs? */
 static int capture_live_at(Compiler *c, int at, int ci, const char *name) {
@@ -3482,6 +3495,19 @@ static void cplan_refuse_resolve(Compiler *c, int id, CallPlan *p, char *buf, si
     cplan_refuse_set(p, CRF_RECORD_NEW, CR_FEATURE,
                      "a Struct or Data class's `new` or `[]` the program defines, called where the record "
                      "cannot tell whether that def has run: CRuby runs it once it has, the builtin before", buf, cap);
+    return;
+  }
+  /* the plan's capture of a module's class method it does not have, where
+     the record cannot tell the class its NameError names */
+  CallPlan mp = { .absent = CP_ABSENT_NONE };
+  if (!what && is_method_object_maker(nt_str(c->nt, id, "name"))) mp = cplan_method_call(c, id);
+  if (mp.absent == CP_ABSENT_UNTOLD) {
+    const char *cn = class_ruby_name(c, mp.owner_ci);
+    char msg[640];
+    snprintf(msg, sizeof msg, "a Method of a module's class method it does not have, made where the program does not tell "
+             "whether the module's singleton class is made yet (a form that makes it may run before): "
+             "CRuby's NameError names the class `#<Class:%s>` once it is, `Module` before", cn ? cn : c->classes[mp.owner_ci].name);
+    cplan_refuse_set(p, CRF_CAPTURE, CR_FEATURE, msg, buf, cap);
     return;
   }
   if (!what && cplan_capture_gap(c, id)) {

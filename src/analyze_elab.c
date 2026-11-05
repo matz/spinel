@@ -146,6 +146,8 @@ struct LoadRecord {
   unsigned char *clsmod; int clsmod_all; struct { int nhist, ncls, recorded; unsigned ver; } clsmod_of;   /* lr_class_object_modules, and the record state it is of */
   int *mixed, nmixed; struct { int nhist, ncls, recorded; unsigned ver; } mixed_of;   /* lr_mixed */
   int *rclass; struct { unsigned long hgen, nedits; unsigned shape, nver; int nclasses; } rclass_of;   /* [nclasses] by class: elab_record_class_of's answer + 2, 0 for not asked yet, and the state it is of */
+  struct LrSgMaker { int node, cls; unsigned char sure; } *sgm; int nsgm, csgm;   /* lr_sg_makers, with the modules a singleton chain may hold (any of them: sgchain_any) */
+  unsigned char *sgchain; int sgchain_any; struct { int recorded, nclasses; unsigned ver; } sgm_of;
   /* elab_class_unsettled's answers from the record, the tables and the
      nodes, by call, class and window start (key: the quadruples, -1 for
      none), asked again each pass, while the epochs in of hold
@@ -5424,6 +5426,261 @@ int elab_self_value_at(Compiler *c, int node) {
   return elab_self_at(c, node);
 }
 
+/* ---- a module's singleton class (elab_singleton_made) ---- */
+/* Which module a form makes the singleton class of: a class id, or */
+enum { LR_SG_ANY = -1, LR_SG_NONE = -2, LR_SG_MAIN = -3 };   /* any module it may be; none (an instance, a class); main, as self */
+static int lr_sg_at(Compiler *c, int node, int *sing);
+static int lr_cvar_cref_at(Compiler *c, int node);
+/* Is cls, whose methods a def or a define_method block becomes, a class a
+   module may be an instance of: Object, BasicObject, Kernel, Module, the
+   Class reopening, or a module mixed into one of them (or none known) */
+static int lr_sg_core_host(Compiler *c, int cls) {
+  int ks[5] = { comp_core_class(c, CORE_OBJECT), comp_core_class(c, CORE_BASIC_OBJECT), comp_core_class(c, CORE_KERNEL),
+                comp_core_class(c, CORE_MODULE), comp_core_class(c, CORE_CLASS_REOPEN) };
+  if (cls < 0) return 1;
+  for (int i = 0; i < 5; i++) {
+    if (ks[i] < 0) continue;
+    if (ks[i] == cls) return 1;
+    const ClassInfo *k = &c->classes[ks[i]];
+    for (int j = 0; j < k->nincluded_mods; j++) if (k->included_mods[j] == cls) return 1;
+  }
+  return 0;
+}
+/* ...the self of the body of the method def node `def` makes (a def, or a
+   define_method call whose block is the body): an instance of the class
+   it defines on, which may be a module only where that is Object, Kernel,
+   Module or the like (lr_sg_core_host), as for main's top-level defs,
+   which are Object's; none for a singleton method, whose def made the
+   singleton class (`def self.m`, a def in a `class << x` body or an
+   instance_eval block: lr_sg_at's *sing) */
+static int lr_sg_body_self(Compiler *c, int def) {
+  int sing = 0;
+  if (nt_kind(c->nt, def) == NK_DefNode && nt_ref(c->nt, def, "receiver") >= 0) return LR_SG_NONE;
+  int s = lr_sg_at(c, def, &sing);
+  return !sing && (s == LR_SG_MAIN || s == LR_SG_ANY || (s >= 0 && lr_sg_core_host(c, s))) ? LR_SG_ANY : LR_SG_NONE;
+}
+/* ...expression e at node at (-1 for self): self's (lr_sg_at; main is no
+   module), a constant's class (lr_class_ref_at), none for a builtin class
+   or module the program has no class of, and any module for any other
+   value */
+static int lr_sg_who(Compiler *c, int at, int e) {
+  NodeKind k = e >= 0 ? nt_kind(c->nt, e) : NK_SelfNode;
+  int sing, core, ci;
+  if (k == NK_SelfNode) return (ci = lr_sg_at(c, at, &sing)) == LR_SG_MAIN ? LR_SG_NONE : ci;
+  if (k != NK_ConstantReadNode && k != NK_ConstantPathNode) return LR_SG_ANY;
+  ci = lr_class_ref_at(c, e, &core);
+  if (ci == LR_LATER) lr_later(c, &ci, e);
+  return ci >= 0 ? ci : core >= 0 ? LR_SG_NONE : LR_SG_ANY;
+}
+/* The class body the analysis puts placed node in (node_cbody) where the
+   walk does not open it as a frame, whose self the record's frame (self,
+   elab_self_at) is not: a body in a value, as `module V; @x = 1; end
+   rescue nil`; -1 otherwise */
+static int lr_sg_unframed(Compiler *c, int node, int self) {
+  int cb = holder_cbody(c, node);
+  return cb >= 0 && (self >= 0 || self == LR_MAIN) && cb != self ? cb : -1;
+}
+/* ...self where node runs, and in *sing whether a def there makes a
+   singleton method of it. A placed node's is the record's (elab_self_at:
+   a class or module body's, a constant builder's block's, main's), or in
+   a frame that names none, a `class << x` body's (a singleton class) or
+   an eval form's receiver (lr_frame_call), on which an instance_eval's
+   defs are singleton methods. A node run later (in a method body, a
+   lambda, a block kept) runs on the receiver of the nearest eval form
+   around it, in a define_method block or a def on that body's self
+   (lr_sg_body_self), else on the self of the placed node around it that
+   makes the closure. */
+static int lr_sg_at(Compiler *c, int node, int *sing) {
+  LoadRecord *r = c->lrec;
+  const NodeTable *nt = c->nt;
+  const LrStmt *s = lr_stmt_of(r, node);
+  *sing = 0;
+  if (!s) {
+    int n;
+    const int *par = elab_node_parents(c, &n);
+    for (int v = node, p; v >= 0 && v < n && (p = par[v]) >= 0 && p < n; v = p) {
+      if (nt_kind(nt, p) == NK_DefNode) return lr_sg_body_self(c, p);
+      int call = nt_kind(nt, p) == NK_BlockNode ? par[p] : -1;
+      const char *nm = call >= 0 && call < n && nt_kind(nt, call) == NK_CallNode ? nt_str(nt, call, "name") : NULL;
+      if (nm && is_eval_exec_family(nm)) { *sing = is_instance_eval_family(nm); return lr_sg_who(c, call, nt_ref(nt, call, "receiver")); }
+      if (nm && is_define_method_name(nm)) return lr_sg_body_self(c, call);
+      if (nm && is_define_singleton_method_name(nm)) return LR_SG_NONE;
+      if (lr_stmt_of(r, p)) return lr_sg_at(c, p, sing);
+    }
+    return LR_SG_ANY;
+  }
+  int self = elab_self_at(c, node), u = lr_sg_unframed(c, node, self), f = s->frame >= 0 ? r->st[s->frame].node : -1;
+  if (u >= 0) return u;
+  if (self >= 0) return self;
+  if (self == LR_MAIN) return LR_SG_MAIN;
+  if (f >= 0 && nt_kind(nt, f) == NK_SingletonClassNode) { *sing = 1; return LR_SG_NONE; }
+  int call = f >= 0 ? lr_frame_call(nt, f) : -1;
+  const char *nm = call >= 0 ? nt_str(nt, call, "name") : NULL;
+  if (!nm || !is_eval_exec_family(nm)) return LR_SG_ANY;
+  *sing = is_instance_eval_family(nm);
+  return lr_sg_who(c, call, nt_ref(nt, call, "receiver"));
+}
+/* The writes that set a variable whatever it holds: `@x &&= v` and
+   `@x += v` read it first, which raises or keeps it unset where no write
+   made it before */
+static int lr_ivar_write_kind(NodeKind k) {
+  return k == NK_InstanceVariableWriteNode || k == NK_InstanceVariableOrWriteNode || k == NK_InstanceVariableTargetNode;
+}
+static int lr_cvar_write_kind(NodeKind k) {
+  return k == NK_ClassVariableWriteNode || k == NK_ClassVariableOrWriteNode || k == NK_ClassVariableTargetNode;
+}
+/* Is a call of `name` on module who the class-level ivar write a desugar
+   made of an `@x = v` or an instance_variable_set (civ_ensure_accessor)? */
+static int lr_civ_setter_call(Compiler *c, int who, const char *name) {
+  int si = who >= 0 ? comp_cmethod_in_class(c, who, name) : -1;
+  return si >= 0 && c->scopes[si].def_node >= 0 && nt_int(c->nt, c->scopes[si].def_node, "civ_accessor", 0) == 2;
+}
+static void lr_sgm_add(Compiler *c, int node, int who, int sure) {
+  LoadRecord *r = c->lrec;
+  if (who < LR_SG_ANY || (who >= 0 && !comp_class_is_module(c, &c->classes[who]))) return;
+  if (r->nsgm == r->csgm) {
+    r->csgm = r->csgm ? 2 * r->csgm : 16;
+    r->sgm = realloc(r->sgm, sizeof *r->sgm * (size_t)r->csgm);
+    if (!r->sgm) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  }
+  r->sgm[r->nsgm++] = (struct LrSgMaker){ node, who, (unsigned char)sure };
+}
+/* The forms of the program that may make a module's singleton class, but
+   for the singleton's own entries the histories hold: a maker call
+   (is_singleton_class_maker), also through a send of its name, or a
+   Method made of it (whose call may come any time: not sure); a send or a
+   Method maker of a computed name; `class << x`; an instance variable
+   write on a module; a class variable write in one; a def in an
+   instance_eval block, the receiver's singleton method; and an eval of a
+   String, which may do any of these on any module. Each with the module
+   it makes it on (lr_sg_who) and whether it does whenever its node runs.
+   With them, the modules a singleton class's chain may hold
+   (elab_module_on_singleton_chain): the core hosts' (lr_sg_core_host),
+   each extend's and singleton prepend's, and, for an include or a prepend
+   into a receiver the record cannot hold as a class
+   (`m.singleton_class.include(M)`), any. Made once per map. */
+static void lr_sg_makers(Compiler *c) {
+  LoadRecord *r = c->lrec;
+  if (r->sgm && r->sgm_of.recorded == r->recorded && r->sgm_of.ver == r->ver && r->sgm_of.nclasses == c->nclasses) return;
+  r->nsgm = 0;
+  r->sgm_of.recorded = r->recorded; r->sgm_of.ver = r->ver; r->sgm_of.nclasses = c->nclasses;
+  if (!r->sgm && !(r->sgm = malloc(sizeof *r->sgm * (size_t)(r->csgm = 16)))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  free(r->sgchain);
+  if (!(r->sgchain = calloc((size_t)c->nclasses + 1, 1))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  r->sgchain_any = 0;
+  for (int k = 0; k < c->nclasses; k++) r->sgchain[k] = (unsigned char)lr_sg_core_host(c, k);
+  for (int k = LR_MAIN; k + 1 < r->ncls; k++) {
+    const LrClass *lc = lr_class(r, k);
+    for (int i = 0; lc && i < lc->nmix; i++) {
+      int mod = lc->mix[i].mod;
+      if (lc->mix[i].kind != LR_EXTEND && lc->mix[i].kind != LR_SG_PREPEND) continue;
+      if (mod >= 0 && mod < c->nclasses) r->sgchain[mod] = 1;
+      else r->sgchain_any = 1;
+    }
+  }
+  const NodeTable *nt = c->nt;
+  for (int id = 0; id < nt->count; id++) {
+    NodeKind k = nt_kind(nt, id);
+    if (k == NK_CallNode) {
+      const char *nm = nt_str(nt, id, "name");
+      int a = nt_ref(nt, id, "arguments"), an = 0, recv = nt_ref(nt, id, "receiver");
+      const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &an) : NULL;
+      if (!nm) continue;
+      NodeKind ak = an > 0 ? nt_kind(nt, av[0]) : NK_ProgramNode, rk = recv >= 0 ? nt_kind(nt, recv) : NK_SelfNode;
+      if ((is_include_name(nm) || is_prepend_name(nm)) && rk != NK_ConstantReadNode && rk != NK_ConstantPathNode && rk != NK_SelfNode)
+        r->sgchain_any = 1;
+      if (id >= r->n) continue;   /* (appended since the map: a desugar's, not the program's) */
+      const char *ln = ak == NK_SymbolNode ? nt_str(nt, av[0], "value") : ak == NK_StringNode ? nt_str(nt, av[0], "unescaped") : NULL;
+      int lit = ak == NK_SymbolNode || ak == NK_StringNode, sure = 1;
+      if (is_code_eval_name(nm) && an > 0) { lr_sgm_add(c, id, LR_SG_ANY, 0); continue; }
+      int who = lr_sg_who(c, id, recv);
+      if (!is_singleton_class_maker(nm, an)) {
+        if (an > 0 && is_send_family(nm) && (!lit || is_singleton_class_maker(ln, an - 1))) sure = 1;
+        else if (an > 0 && is_method_object_maker(nm) && (!lit || is_singleton_class_maker(ln, 1))) sure = 0;
+        else if (!lr_civ_setter_call(c, who, nm)) continue;
+      }
+      lr_sgm_add(c, id, who, sure);
+    }
+    else if (id >= r->n) continue;
+    else if (k == NK_SingletonClassNode) lr_sgm_add(c, id, lr_sg_who(c, id, nt_ref(nt, id, "expression")), 1);
+    else if (lr_ivar_write_kind(k)) lr_sgm_add(c, id, lr_sg_who(c, id, -1), 1);
+    else if (lr_cvar_write_kind(k)) {
+      int u = lr_stmt_of(r, id) ? lr_sg_unframed(c, id, elab_self_at(c, id)) : -1, ci = u >= 0 ? u : lr_cvar_cref_at(c, id);
+      lr_sgm_add(c, id, ci >= 0 ? ci : ci == LR_MAIN ? LR_SG_NONE : LR_SG_ANY, 1);
+    }
+    else if (k == NK_DefNode && nt_ref(nt, id, "receiver") < 0) {
+      int sing, who = lr_sg_at(c, id, &sing);
+      if (sing) lr_sgm_add(c, id, who, 1);
+    }
+  }
+}
+/* When form node, which makes a module's singleton class whenever it runs
+   (sure) or may, runs as of p: ELAB_YES surely before p, ELAB_NO surely
+   not before it, ELAB_UNKNOWN. Surely: a statement placed under no
+   condition, which is the form itself or holds it as a value only (an
+   assignment's, a multiple assignment's, a call's argument or receiver,
+   parentheses), but for a block, which its call runs when it decides,
+   and the arguments of a `&.` call, which run only on a receiver that is
+   not nil. */
+static int lr_sg_when(Compiler *c, int node, int may, int sure, LoadPoint p) {
+  LoadRecord *r = c->lrec;
+  const NodeTable *nt = c->nt;
+  const LrStmt *s = lr_stmt_of(r, node);
+  if (!s || s->region < 0 || lr_unplaced(c, node)) return ELAB_UNKNOWN;
+  LoadPoint q = { s->region, (int)(s - r->st), node };
+  int o = elab_cmp(q, p);
+  if (o == PROG_AFTER) return lr_runs_again(c, node, p) ? ELAB_UNKNOWN : ELAB_NO;
+  if (o != PROG_BEFORE || may || !sure || s->may || s->partial || s->kept) return ELAB_UNKNOWN;
+  int n;
+  const int *par = elab_node_parents(c, &n);
+  for (int v = node; v != s->node; v = par[v]) {
+    if (v < 0 || v >= n || par[v] < 0) return ELAB_UNKNOWN;
+    int pv = par[v];
+    NodeKind k = nt_kind(nt, pv);
+    if (k == NK_CallNode && (nt_ref(nt, pv, "block") == v || (nt_safe_nav(nt, pv) && nt_ref(nt, pv, "receiver") != v))) return ELAB_UNKNOWN;
+    if (k != NK_CallNode && k != NK_ArgumentsNode && k != NK_ParenthesesNode && k != NK_StatementsNode && k != NK_MultiWriteNode &&
+        k != NK_LocalVariableWriteNode && k != NK_InstanceVariableWriteNode && k != NK_ConstantWriteNode) return ELAB_UNKNOWN;
+  }
+  return ELAB_YES;
+}
+int elab_module_on_singleton_chain(Compiler *c, int cls) {
+  LoadRecord *r = elab_fresh(c);
+  if (!r->recorded || cls < 0 || cls >= c->nclasses) return 1;
+  lr_sg_makers(c);
+  return r->sgchain_any || r->sgchain[cls];
+}
+int elab_singleton_made(Compiler *c, int cls, LoadPoint p) {
+  LoadRecord *r = elab_fresh(c);
+  if (cls < 0 || cls >= c->nclasses) return ELAB_UNKNOWN;
+  /* a builtin module CRuby boots with its singleton class made (Math's,
+     Process's: their module functions) */
+  int slot = builtin_core_class_slot(c->classes[cls].name);
+  if (slot >= 0 && comp_core_class(c, slot) == cls && builtin_singleton_at_boot(slot)) return ELAB_YES;
+  if (!r->recorded || p.region < 0 || elab_runs_unseen(c)) return ELAB_UNKNOWN;
+  int o = ELAB_NO;
+  /* the singleton's own entries: its defs and accessors, a
+     module_function's copies, define_singleton_method's */
+  for (int i = 0; i < r->nhist && o != ELAB_YES; i++) {
+    const LrHist *h = &r->hist[i];
+    if (h->a != cls || !h->b) continue;
+    for (int j = 0; j < h->n && o != ELAB_YES; j++) {
+      const LrDef *v = &h->v[j];
+      if (v->node >= 0 && nt_int(c->nt, v->node, "civ_accessor", 0)) continue;   /* a class-level ivar's accessor: its calls are the forms */
+      int w = v->unplaced || v->body ? ELAB_UNKNOWN : lr_sg_when(c, v->node, v->may, 1, p);
+      if (w != ELAB_NO) o = w;
+    }
+  }
+  lr_sg_makers(c);
+  for (int i = 0; i < r->nsgm && o != ELAB_YES; i++) {
+    const struct LrSgMaker *m = &r->sgm[i];
+    if (m->cls != cls && m->cls != LR_SG_ANY) continue;
+    int w = lr_sg_when(c, m->node, 0, m->sure, p);
+    if (w == ELAB_YES && m->cls == LR_SG_ANY) w = ELAB_UNKNOWN;
+    if (w != ELAB_NO) o = w;
+  }
+  return o;
+}
+
 int elab_cref_at(Compiler *c, int node) {
   (void)elab_fresh(c);
   LoadPoint p = elab_point_of(c, node);
@@ -7562,7 +7819,7 @@ void elab_free(Compiler *c) {
   for (int i = 0; i < r->nsrcw; i++) free(r->srcw[i].name);
   free(r->srcw);
   free(r->slot); free(r->slot_head); free(r->slotp);
-  free(r->hist); free(r->mixed); free(r->rclass); free(r->unset.key); free(r->unset.un); free(r->clsmod); free(r->hhead); free(r->cls); free(r->vers); free(r->vers_head); free(r->set);
+  free(r->hist); free(r->mixed); free(r->rclass); free(r->sgm); free(r->sgchain); free(r->unset.key); free(r->unset.un); free(r->clsmod); free(r->hhead); free(r->cls); free(r->vers); free(r->vers_head); free(r->set);
   for (int i = 0; i < r->nhdr; i++) free(r->hdr[i].leaf);
   free(r->hdr); free(r->hdr_head);
   free(r->st); free(r->at); free(r->bits); free(r->dscope); free(r->rend); free(r->rinst); free(r->urun); free(r);

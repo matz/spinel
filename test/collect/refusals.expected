@@ -1294,6 +1294,12 @@ spinel: 1 refusal, nothing written
 == test/reject/method_string_handed_to_appender.rb [promote] rc=1
 spinel: test/reject/method_string_handed_to_appender.rb:15: a String is passed through `g.call`, and a proc or Method it can reach appends to the String it is handed: this call hands it a copy, so the append would not reach the caller's String (a String is not yet shared by reference from an instance variable). Return the String from the proc or Method and assign it, or append to it in the caller.
 spinel: 1 refusal, nothing written
+== test/reject/module_method_capture_singleton_untold.rb [default] rc=1
+spinel: test/reject/module_method_capture_singleton_untold.rb:12: a Method of a module's class method it does not have, made where the program does not tell whether the module's singleton class is made yet (a form that makes it may run before): CRuby's NameError names the class `#<Class:V>` once it is, `Module` before
+spinel: 1 refusal, nothing written
+== test/reject/module_method_capture_singleton_untold.rb [promote] rc=1
+spinel: test/reject/module_method_capture_singleton_untold.rb:12: a Method of a module's class method it does not have, made where the program does not tell whether the module's singleton class is made yet (a form that makes it may run before): CRuby's NameError names the class `#<Class:V>` once it is, `Module` before
+spinel: 1 refusal, nothing written
 == test/reject/module_named_like_monitor.rb [default] rc=1
 spinel: test/reject/module_named_like_monitor.rb:3: Monitor is not a module (TypeError)
 == test/reject/module_named_like_monitor.rb [promote] rc=1

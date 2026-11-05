@@ -2316,6 +2316,10 @@ static const BuiltinClass BUILTIN_CLASSES[] = { SP_BUILTIN_CLASSES(X) };
 const BuiltinClass *builtin_class_at(int i) {
   return i >= 0 && i < BUILTIN_CLASS_N ? &BUILTIN_CLASSES[i] : NULL;
 }
+int builtin_singleton_at_boot(int slot) {
+  const BuiltinClass *r = builtin_class_at(slot);
+  return r && (r->flags & BC_SG_BOOT);
+}
 /* Is a yielding method a program's reopening of builtin class `core`
    (CORE_*) defines called through its proc form, with the call's block as a
    proc, since it has no function of its own? (The Array, Hash, NilClass,
@@ -2422,6 +2426,20 @@ int is_core_change_call(const char *n) {
 int is_singleton_reach_call(const char *n) {
   return n && (sp_streq(n, "define_singleton_method") || sp_streq(n, "extend") ||
                sp_streq(n, "singleton_class") || is_instance_eval_family(n));
+}
+/* A call on a module that makes its singleton class, given argc
+   arguments: CRuby makes a module's singleton class only on the first of
+   its makers, and Method's NameError names it `#<Class:M>` from then on,
+   `Module` before (elab_singleton_made). A bare module_function makes
+   none; the defs after it make the copies the record holds. A def on the
+   singleton, `class << m`, an instance or class variable write and an
+   eval's text are the record's own forms. */
+int is_singleton_class_maker(const char *n, int argc) {
+  if (!n) return 0;
+  if (sp_streq(n, "module_function")) return argc > 0;
+  return sp_streq(n, "singleton_class") || is_extend_name(n) || is_define_singleton_method_name(n) ||
+         is_ivar_set_name(n) || is_cvar_set_name(n) || sp_streq(n, "private_class_method") ||
+         sp_streq(n, "public_class_method") || sp_streq(n, "refine");
 }
 int is_method_naming_call(const char *n) {
   return n && (sp_streq(n, "define_method") || sp_streq(n, "define_singleton_method") ||

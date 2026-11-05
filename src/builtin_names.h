@@ -344,7 +344,7 @@ int is_object_base_name(const char *n); /* BasicObject Object */
   X(OBJECT, "Object", -116, BC_CLASS | BC_PLAIN) \
   X(BASIC_OBJECT, "BasicObject", -117, BC_CLASS | BC_PLAIN) \
   X(PROC, "Proc", -118, BC_CLASS) \
-  X(KERNEL, "Kernel", -119, BC_CLASS | BC_MODULE) \
+  X(KERNEL, "Kernel", -119, BC_CLASS | BC_MODULE | BC_SG_BOOT) \
   X(IO, "IO", -120, BC_CLASS) \
   X(FILE, "File", -121, BC_CLASS) \
   X(EXCEPTION, "Exception", -122, BC_CLASS | BC_EXCEPTION) \
@@ -355,7 +355,7 @@ int is_object_base_name(const char *n); /* BasicObject Object */
   X(NAMEERROR, "NameError", -127, BC_CLASS | BC_EXCEPTION) \
   X(NOMETHODERROR, "NoMethodError", -128, BC_CLASS | BC_EXCEPTION) \
   X(STOPITERATION, "StopIteration", -129, BC_CLASS | BC_EXCEPTION) \
-  X(MATH, "Math", -130, BC_CLASS | BC_MODULE) \
+  X(MATH, "Math", -130, BC_CLASS | BC_MODULE | BC_SG_BOOT) \
   X(COMPLEX, "Complex", -131, BC_CLASS) \
   X(INDEXERROR, "IndexError", -132, BC_CLASS | BC_EXCEPTION) \
   X(KEYERROR, "KeyError", -133, BC_CLASS | BC_EXCEPTION) \
@@ -387,7 +387,7 @@ int is_object_base_name(const char *n); /* BasicObject Object */
   X(EOFERROR, "EOFError", -159, BC_CLASS | BC_EXCEPTION) \
   X(MATH_DOMAINERROR, "Math::DomainError", -160, BC_EXCEPTION) \
   X(SYSTEMEXIT, "SystemExit", -161, BC_CLASS | BC_EXCEPTION) \
-  X(SIGNAL, "Signal", -162, BC_CLASS | BC_MODULE) \
+  X(SIGNAL, "Signal", -162, BC_CLASS | BC_MODULE | BC_SG_BOOT) \
   X(PROCESS_STATUS, "Process::Status", -163, BC_CLASS) \
   X(PROCESS_TMS, "Process::Tms", -164, 0) \
   X(DIR, "Dir", -165, BC_CLASS) \
@@ -425,7 +425,7 @@ int is_object_base_name(const char *n); /* BasicObject Object */
   X(ENCODING_INVALIDBYTESEQUENCEERROR, "Encoding::InvalidByteSequenceError", 0, BC_EXCEPTION) \
   X(ENCODING_UNDEFINEDCONVERSIONERROR, "Encoding::UndefinedConversionError", 0, BC_EXCEPTION) \
   X(ERRNO_ENOENT, "Errno::ENOENT", 0, BC_EXCEPTION) \
-  X(GC, "GC", 0, BC_CLASS | BC_MODULE) \
+  X(GC, "GC", 0, BC_CLASS | BC_MODULE | BC_SG_BOOT) \
   X(IO_EAGAINWAITREADABLE, "IO::EAGAINWaitReadable", 0, BC_EXCEPTION) \
   X(IO_TIMEOUTERROR, "IO::TimeoutError", 0, BC_EXCEPTION) \
   /* the socket library's: lib/sp_exc.c gives them their parents, so \
@@ -440,11 +440,11 @@ int is_object_base_name(const char *n); /* BasicObject Object */
   X(IO_WAITREADABLE, "IO::WaitReadable", 0, BC_EXCEPTION) \
   X(IO_WAITWRITABLE, "IO::WaitWritable", 0, BC_EXCEPTION) \
   X(LOADERROR, "LoadError", 0, BC_EXCEPTION) \
-  X(MARSHAL, "Marshal", 0, BC_CLASS | BC_MODULE) \
+  X(MARSHAL, "Marshal", 0, BC_CLASS | BC_MODULE | BC_SG_BOOT) \
   X(METHOD, "Method", 0, BC_CLASS) \
   X(NOMEMORYERROR, "NoMemoryError", 0, BC_EXCEPTION) \
-  X(OBJECTSPACE, "ObjectSpace", 0, BC_CLASS | BC_MODULE) \
-  X(PROCESS, "Process", 0, BC_CLASS | BC_MODULE) \
+  X(OBJECTSPACE, "ObjectSpace", 0, BC_CLASS | BC_MODULE | BC_SG_BOOT) \
+  X(PROCESS, "Process", 0, BC_CLASS | BC_MODULE | BC_SG_BOOT) \
   X(RANDOM, "Random", 0, BC_CLASS) \
   X(STRINGSCANNER_ERROR, "StringScanner::Error", 0, BC_EXCEPTION) \
   X(SYSTEMCALLERROR, "SystemCallError", 0, BC_EXCEPTION) \
@@ -742,12 +742,15 @@ int boot_package_rank_of_path(const char *path, size_t len);   /* the same for s
 /* ---- Spinel's native classes, modules and exceptions (BUILTIN_CLASSES) ----
    One row per name: which predicate accepts it (BC_*) and its negative
    cls_id (0 when codegen has none). BC_PLAIN marks Object, BasicObject and
-   Data, below which a program's class is an object of its own. */
-enum { BC_CLASS = 1, BC_MODULE = 2, BC_EXCEPTION = 4, BC_SOCKET = 8, BC_PLAIN = 16 };
+   Data, below which a program's class is an object of its own; BC_SG_BOOT
+   a module CRuby 4.0 boots with its singleton class made (its module
+   functions'), as Comparable and Enumerable are not. */
+enum { BC_CLASS = 1, BC_MODULE = 2, BC_EXCEPTION = 4, BC_SOCKET = 8, BC_PLAIN = 16, BC_SG_BOOT = 32 };
 typedef struct { const char *name; int id; unsigned flags; } BuiltinClass;
 const BuiltinClass *builtin_class_at(int i);   /* the i-th row, NULL past the last */
 int is_native_class_name(const char *n);       /* any row: a class Spinel has without a library */
 int is_plain_builtin_superclass(int id);       /* BC_PLAIN or an exception: gives a program's subclass no method of an Enumerable walk */
+int builtin_singleton_at_boot(int slot);      /* BC_SG_BOOT of row slot (CORE_*): the module's singleton class exists before the program runs */
 /* names the compile-time evaluation and its questions ask about (ct_eval.c,
    analyze_ct.c) */
 int is_class_const_name(const char *n);    /* Class: the constant Class.new is called on */
@@ -760,6 +763,7 @@ int is_to_a_name(const char *n);           /* to_a: the receiver's own Array, fo
 int is_hash_self_answer(const char *n);    /* each each_pair each_key each_value freeze to_h: answer the Hash itself */
 int is_core_change_call(const char *n);    /* class_eval .. module_exec include prepend define_method send family alias_method remove_method undef_method: may change a class's methods */
 int is_singleton_reach_call(const char *n);/* define_singleton_method extend singleton_class instance_eval instance_exec: give an object methods of its own */
+int is_singleton_class_maker(const char *n, int argc); /* singleton_class extend define_singleton_method instance_variable_set class_variable_set private_class_method public_class_method refine, module_function with names: make a module's singleton class */
 int is_method_naming_call(const char *n);  /* define_method define_singleton_method alias_method remove_method undef_method attr*: give or take a method its argument names */
 int is_attr_decl_reader(const char *n);    /* attr attr_reader attr_accessor, and Spinel's class-body attribute attributes: declare a reader of each name */
 int is_attr_decl_writer(const char *n);    /* attr_writer attr_accessor attribute attributes: declare a writer of each name */

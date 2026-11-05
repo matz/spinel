@@ -2113,11 +2113,12 @@ static int emit_method_obj_target(Compiler *c, int id, Buf *b, const NodeTable *
 
 /* CRuby's NameError for capture id, whose plan finds no method (CallPlan.absent), as a statement. A
    Class.new class is named as it prints at run time: by the constant written with it, once written
-   (obj_default_name's display). The method name is an argument of that format, not part of it: an
-   operator's name may hold a `%`. */
+   (obj_default_name's display). A module whose singleton class is not made yet is named 'Module'.
+   The method name is an argument of that format, not part of it: an operator's name may hold a `%`. */
 static void emit_capture_absent_raise(Compiler *c, int id, const CallPlan *plan, Buf *b) {
-  const char *cn = class_ruby_name(c, plan->owner_ci), *open = plan->absent == 2 ? "#<Class:" : "", *close = plan->absent == 2 ? ">" : "";
-  if (comp_class_anonymous(c, plan->owner_ci)) {
+  int module = plan->absent == CP_ABSENT_MODULE;
+  const char *cn = module ? "Module" : class_ruby_name(c, plan->owner_ci), *open = plan->absent == CP_ABSENT_SG ? "#<Class:" : "", *close = plan->absent == CP_ABSENT_SG ? ">" : "";
+  if (!module && comp_class_anonymous(c, plan->owner_ci)) {
     buf_printf(b, "sp_raise_cls(\"NameError\", sp_sprintf(\"undefined method '%%s' for class '%s%%s%s'\", \"%s\", sp_class_display((sp_Class){%d})));",
                open, close, method_sym_arg(c, id), plan->owner_ci);
     return;

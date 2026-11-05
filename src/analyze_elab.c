@@ -5549,7 +5549,8 @@ static void lr_sgm_add(Compiler *c, int node, int who, int sure) {
    for the singleton's own entries the histories hold: a maker call
    (is_singleton_class_maker), also through a send of its name, or a
    Method made of it (whose call may come any time: not sure); a send or a
-   Method maker of a computed name; `class << x`; an instance variable
+   Method maker of a computed name (which may name another method: not
+   sure); `class << x`; an instance variable
    write on a module; a class variable write in one; a def in an
    instance_eval block, the receiver's singleton method; and an eval of a
    String, which may do any of these on any module. Each with the module
@@ -5595,7 +5596,7 @@ static void lr_sg_makers(Compiler *c) {
       if (is_code_eval_name(nm) && an > 0) { lr_sgm_add(c, id, LR_SG_ANY, 0); continue; }
       int who = lr_sg_who(c, id, recv);
       if (!is_singleton_class_maker(nm, an)) {
-        if (an > 0 && is_send_family(nm) && (!lit || is_singleton_class_maker(ln, an - 1))) sure = 1;
+        if (an > 0 && is_send_family(nm) && (!lit || is_singleton_class_maker(ln, an - 1))) sure = lit;
         else if (an > 0 && is_method_object_maker(nm) && (!lit || is_singleton_class_maker(ln, 1))) sure = 0;
         else if (!lr_civ_setter_call(c, who, nm)) continue;
       }

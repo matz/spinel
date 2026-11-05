@@ -2983,6 +2983,11 @@ static void cf_call_known(CF *f, int v, int pidx, int recv_el, const char *nm, c
         cf_construct(f, v, kc, argv, argc, blk, nm);
         continue;
       }
+      /* a Class value's `exception`, too, as the call is desugared later */
+      if (is_exception_ctor_name(nm) && exc_ctor_class(c, v, kc)) {
+        cf_construct(f, v, kc, argv, argc, blk, "new");
+        continue;
+      }
       int cm = call_target(c, v, kc, nm, CT_CMETHOD, NULL);
       if (cm >= 0 && CF_UT(cm)) continue;
       if (cm < 0 && cf_sg_access(f, v, kc, nm, argv, argc)) continue;
@@ -3519,6 +3524,13 @@ static void cf_call(CF *f, int v) {
     NodeKind k0 = nt_kind(nt, argv[0]);
     const char *lit = k0 == NK_SymbolNode ? nt_str(nt, argv[0], "value") : k0 == NK_StringNode ? nt_str(nt, argv[0], "content") : NULL;
     if (lit) { nm = lit; argv++; argc--; }
+  }
+  /* `K.exception(a)` on a class of Exception named here is `K.new(a)`: the
+     walk comes ahead of the call's desugaring (desugar_exception_class_ctor) */
+  if (is_exception_ctor_name(nm)) {
+    NodeKind rk = r >= 0 ? nt_kind(nt, r) : NK_SelfNode;
+    int nc = rk == NK_SelfNode ? exc_ctor_self_class(c, v) : cf_is_class_const(f, r);
+    if (nc >= 0 && exc_ctor_class(c, v, nc)) nm = "new";
   }
   cf_scal_bind(f, v, nm, r, argv, argc, blk);
   cf_anon_struct_value(f, v);

@@ -10256,13 +10256,20 @@ static void fwd_branch_on_callable(Compiler *c, int id, int cx) {
 }
 static void fwd_branch_on_block_given(Compiler *c, int id) { fwd_branch_on_callable(c, id, -1); }
 
-/* Does `exception` on the exception class `ci` reach Exception's own? A
-   class method of that name answers instead. Exception's builds through
-   allocate and initialize, so a `new` of the class's own never runs for it,
-   and there is no `new` to spell it with. */
-static int exc_ctor_reached(Compiler *c, int id, int ci) {
+/* See analyze_internal.h. A class method of the name answers instead.
+   Exception's builds through allocate and initialize, so a `new` of the
+   class's own never runs for it, and there is no `new` to spell it with. */
+int exc_ctor_class(Compiler *c, int id, int ci) {
+  if (!class_is_exc_subclass(c, ci) && !(is_builtin_reopen(c->classes[ci].name) && is_builtin_exception_name(c->classes[ci].name))) return 0;
   return call_target(c, id, ci, "exception", CT_CMETHOD, NULL) < 0 &&
          call_target(c, id, ci, "new", CT_CMETHOD, NULL) < 0;
+}
+
+/* See analyze_internal.h. */
+int exc_ctor_self_class(Compiler *c, int id) {
+  if (id >= c->node_cap) return -1;
+  Scope *sc = comp_scope_of(c, id);
+  return sc && sc->name ? (sc->is_cmethod ? sc->class_id : -1) : c->node_cbody[id];
 }
 
 /* `k` as the class a desugared `exception` is sent to: `__exc_class(k)`,
@@ -10389,8 +10396,7 @@ int desugar_exception_class_ctor(Compiler *c) {
     TyKind rt = recv >= 0 && rk != NK_SelfNode ? infer_type(c, recv) : TY_CLASS;
     int ci = -1;
     if (rk == NK_SelfNode) {
-      Scope *sc = comp_scope_of(c, id);
-      ci = sc && sc->name ? (sc->is_cmethod ? sc->class_id : -1) : c->node_cbody[id];
+      ci = exc_ctor_self_class(c, id);
       if (ci < 0) continue;
     }
     else if (constant || rt == TY_CLASS) {
@@ -10404,8 +10410,7 @@ int desugar_exception_class_ctor(Compiler *c) {
       }
     }
     if (ci >= 0) {
-      if (!class_is_exc_subclass(c, ci) && !(is_builtin_reopen(c->classes[ci].name) && is_builtin_exception_name(c->classes[ci].name))) continue;
-      if (!exc_ctor_reached(c, id, ci)) continue;
+      if (!exc_ctor_class(c, id, ci)) continue;
       if (recv < 0) {
         int sn = fwd_new_node_like(nt, id, "SelfNode");
         comp_grow_node_arrays(c);

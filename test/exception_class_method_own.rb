@@ -32,3 +32,16 @@ show NotAnError.exception("z")
 show Plain.exception("still Exception's")
 show RuntimeError.exception("and a builtin's")
 [Own, OwnBelow].each { |k| show k.exception("v") }
+
+# what a class method of the name answers keeps its class's methods
+class OwnReader < StandardError
+  attr_reader :r
+  def self.exception(v) = new(v)
+
+  def initialize(v)
+    super("r=#{v}")
+    @r = v
+  end
+end
+puts OwnReader.exception(4).r
+puts [OwnReader].first.exception(5).r

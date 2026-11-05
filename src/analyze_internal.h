@@ -977,6 +977,11 @@ int desugar_reduce_splat_args(Compiler *c);
 int desugar_block_capture_wrap(Compiler *c);
 int desugar_user_not_match(Compiler *c);
 int desugar_exception_class_ctor(Compiler *c);
+/* Does `exception` at call id on class ci build as `new` does: a class of
+   Exception, with neither a class method `exception` nor a `new` of its own? */
+int exc_ctor_class(Compiler *c, int id, int ci);
+/* The class self is at call id, in a class method or a class body; else -1 */
+int exc_ctor_self_class(Compiler *c, int id);
 int desugar_env_enum(Compiler *c);
 int desugar_dir_surface(Compiler *c);
 int local_write_binds_value(NodeKind k);

@@ -1,0 +1,5 @@
+1
+2
+undefined method 'arity' for an instance of Integer
+undefined method 'arity' for an instance of String
+undefined method 'arity' for nil

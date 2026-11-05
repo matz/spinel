@@ -2574,6 +2574,11 @@ static void emit_poly_callable_blk_call(Compiler *c, int t, int argc, const int 
   if (pubs) buf_puts(b, ")");
 }
 
+/* A boxed value's callable surface: a Method read out of a container
+   answers name, owner and receiver from its sp_BoundMethod; arity is a
+   Method's or a Proc's, NoMethodError naming the receiver's class for
+   any other value; call, (), yield and a bare [] call a boxed Proc or
+   Method. */
 int emit_call_poly_callable_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc, const int *argv) {
   /* A Method read out of a container widened to poly: answer from the
      sp_BoundMethod itself, which carries everything the compile-time arms
@@ -2650,7 +2655,8 @@ int emit_call_poly_callable_arms(Compiler *c, int id, Buf *b, const NodeTable *n
   }
   /* poly_val.arity -- a Method read out of a container widened to poly. The
      arity was stamped onto the sp_BoundMethod at creation, so read it back
-     (a non-Method poly here is a genuine NoMethodError, as before) (#3231). */
+     (a non-Method poly here is a genuine NoMethodError, as before) (#3231),
+     naming the receiver's class as CRuby's does. */
   if (recv >= 0 && argc == 0 && sp_streq(name, "arity") && repr_of(c, recv).kind == RK_BOXED) {
     /* (a class method of the name too: the boxed value may be the class
        itself, `handler.arity` for sqlite3's aggregator class, which the
@@ -2668,8 +2674,8 @@ int emit_call_poly_callable_arms(Compiler *c, int id, Buf *b, const NodeTable *n
       buf_printf(b, "({ sp_RbVal _t%d = ", t); emit_expr(c, recv, b);
       buf_printf(b, "; _t%d.cls_id == SP_BUILTIN_METHOD ? ((sp_BoundMethod *)_t%d.v.p)->arity"
                     " : _t%d.cls_id == SP_BUILTIN_PROC ? sp_proc_arity((sp_Proc *)_t%d.v.p)"
-                    " : (sp_raise_cls(\"NoMethodError\", (&(\"\\xff\" \"undefined method 'arity'\")[1])), (sp_int)0); })",
-                 t, t, t, t);
+                    " : (sp_raise_nomethod(sp_nomethod_msg(\"arity\", _t%d)), (sp_int)0); })",
+                 t, t, t, t, t);
       if (boxed) buf_puts(b, ")");
       return 1;
     }

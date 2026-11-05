@@ -30,3 +30,7 @@ begin
 rescue NameError => e
   puts e.message
 end
+# a top-level module and a nested one share the leaf M: each reads its own
+module M; Foo = 30; end
+module A; module M; Foo = 10; end; end
+[A::M, M].each { |m| p look(m) }

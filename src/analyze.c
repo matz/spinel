@@ -3659,29 +3659,36 @@ static void desugar_dyn_parent_class_leaf(Compiler *c) {
        or `Foo = Real`), answers that constant: CRuby looks constants up by
        name, whatever they hold. (One the class arms already have is left
        alone.) */
-    { int *cands, ncands = comp_const_tail_cands(c, nm, &cands);
-      for (int k = 0; k < c->nclasses && na < 63; k++) {
-        int ci2 = comp_class_owned_const(c, k, nm, cands, ncands);
-        if (ci2 < 0 || !c->classes[k].name) continue;
+    { for (int k = 0; k < c->nclasses && na < 63; k++) {
+        if (!c->classes[k].name) continue;
+        /* the holder's leaves, outermost last (its own name and those of
+           the classes it is written in, as class_ruby_name would give them,
+           which this early pass must not ask) */
+        const char *lv[16]; int nl = 0, deep = 0;
+        for (int e = k; e >= 0 && e < c->nclasses; e = c->classes[e].enclosing_class) {
+          const char *leaf = c->classes[e].name;
+          if (!leaf || nl == 16) { deep = 1; break; }
+          if (c->classes[e].enclosing_class >= 0) for (const char *q = leaf; (q = strstr(q, "__")) != NULL; q += 2) leaf = q + 2;
+          lv[nl++] = leaf;
+        }
+        if (deep || nl == 0) continue;
+        /* the constant keyed by the holder's whole path, `A__M__Foo`: a
+           match on the key's tail would give a top-level M the Foo of A::M */
+        char key[600] = "", hn[600] = "";
+        for (int i = nl - 1; i >= 0; i--) {
+          size_t l = strlen(key); snprintf(key + l, sizeof key - l, "%s__", lv[i]);
+          l = strlen(hn); snprintf(hn + l, sizeof hn - l, "%s%s", lv[i], i ? "::" : "");
+        }
+        { size_t l = strlen(key); snprintf(key + l, sizeof key - l, "%s", nm); }
+        if (!comp_const(c, key)) continue;
         int dup = 0;
         for (int i = 0; i < na; i++) if (arms_k[i] == k) dup = 1;
         if (dup) continue;
-        arms_c[na] = te_const(nt, c->consts[ci2].name); arms_h[na] = te_const(nt, c->classes[k].name);
-        /* (a NameError before the write runs names the holder, `Ext::Foo`:
-           its Ruby name from the leaves of its enclosing classes, as
-           class_ruby_name would give it, which this early pass must not ask) */
-        { char hn[512] = ""; const char *lv[16]; int nl = 0;
-          for (int e = k; e >= 0 && e < c->nclasses && nl < 16; e = c->classes[e].enclosing_class) {
-            const char *leaf = c->classes[e].name;
-            if (!leaf) break;
-            if (c->classes[e].enclosing_class >= 0) for (const char *q = leaf; (q = strstr(q, "__")) != NULL; q += 2) leaf = q + 2;
-            lv[nl++] = leaf;
-          }
-          for (int i = nl - 1; i >= 0; i--) { size_t l = strlen(hn); snprintf(hn + l, sizeof hn - l, "%s%s", lv[i], i ? "::" : ""); }
-          if (nl > 0) nt_node_set_str(nt, arms_c[na], "const_cref", hn); }
+        arms_c[na] = te_const(nt, key); arms_h[na] = te_const(nt, c->classes[k].name);
+        /* (a NameError before the write runs names the holder, `Ext::Foo`) */
+        nt_node_set_str(nt, arms_c[na], "const_cref", hn);
         arms_k[na] = k; na++;
       }
-      free(cands);
       /* (and Object's own, a top-level `Foo = 5`) */
       if (top < 0 && comp_const(c, nm)) top = te_const(nt, nm);
     }

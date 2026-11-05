@@ -48553,6 +48553,64 @@ static int bind_attr_missing(Compiler *c, const LowerCtx *lc, int d, char (*out)
   }
   return n;
 }
+/* The helper def named hn ("__bind x" or "__bind x=", the reader's or the
+   writer's), its nodes on node at's line: the attr's ivar read or write, or
+   for a record member (member) the member's reader or writer call, a member
+   being no ivar in CRuby. A writer answers its argument either way. */
+static int bind_helper_def(NodeTable *nt, const char *hn, int member, int at) {
+  long long line = nt_int(nt, at, "node_line", 0), file = nt_int(nt, at, "node_file", 0);
+  const char *x = hn + 7;   /* past "__bind " */
+  size_t xl = strlen(x);
+  int wr = x[xl - 1] == '=';
+  int base = nt->count;
+  int st = nt_new_node(nt, "StatementsNode"), def = nt_new_node(nt, "DefNode");
+  int val = nt_new_node(nt, member ? "CallNode" : wr ? "InstanceVariableWriteNode" : "InstanceVariableReadNode");
+  int params = -1, rd = -1;
+  if (st < 0 || def < 0 || val < 0) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  if (wr) {
+    int req = nt_new_node(nt, "RequiredParameterNode");
+    rd = nt_new_node(nt, "LocalVariableReadNode");
+    params = nt_new_node(nt, "ParametersNode");
+    if (req < 0 || rd < 0 || params < 0) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    nt_node_set_str(nt, req, "name", "__bind_v");
+    nt_node_set_str(nt, rd, "name", "__bind_v");
+    nt_node_set_arr(nt, params, "requireds", &req, 1);
+  }
+  if (member) {
+    /* `x` / `self.x = __bind_v; __bind_v` */
+    nt_node_set_str(nt, val, "name", x);
+    nt_node_set_ref(nt, val, "block", -1);
+    nt_node_set_ref(nt, val, "receiver", -1);
+    nt_node_set_ref(nt, val, "arguments", -1);
+    if (wr) {
+      int self = nt_new_node(nt, "SelfNode"), args = nt_new_node(nt, "ArgumentsNode");
+      int ret = nt_new_node(nt, "LocalVariableReadNode");
+      if (self < 0 || args < 0 || ret < 0) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+      nt_node_set_arr(nt, args, "arguments", &rd, 1);
+      nt_node_set_ref(nt, val, "receiver", self);
+      nt_node_set_ref(nt, val, "arguments", args);
+      nt_node_set_str(nt, ret, "name", "__bind_v");
+      int body[2] = { val, ret };
+      nt_node_set_arr(nt, st, "body", body, 2);
+    }
+    else nt_node_set_arr(nt, st, "body", &val, 1);
+  }
+  else {
+    char iv[300]; snprintf(iv, sizeof iv, "@%.*s", (int)(wr ? xl - 1 : xl), x);
+    nt_node_set_str(nt, val, "name", iv);
+    if (wr) nt_node_set_ref(nt, val, "value", rd);
+    nt_node_set_arr(nt, st, "body", &val, 1);
+  }
+  nt_node_set_str(nt, def, "name", hn);
+  nt_node_set_ref(nt, def, "receiver", -1);
+  nt_node_set_ref(nt, def, "parameters", params);
+  nt_node_set_ref(nt, def, "body", st);
+  for (int j = base; j < nt->count && line > 0; j++) {
+    nt_node_set_int(nt, j, "node_line", line);
+    nt_node_set_int(nt, j, "node_file", file);
+  }
+  return def;
+}
 int desugar_bind_attr_helpers_left(Compiler *c, LowerCtx *lc, int id) {
   return bind_attr_missing(c, lc, id, NULL) > 0;
 }
@@ -48564,38 +48622,7 @@ int desugar_bind_attr_helpers_at(Compiler *c, LowerCtx *lc, int id) {
   int *defs = malloc(sizeof(int) * (size_t)nn);
   if (!nms || !defs) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   bind_attr_missing(c, lc, id, nms);
-  long long line = nt_int(nt, id, "node_line", 0), file = nt_int(nt, id, "node_file", 0);
-  for (int i = 0; i < nn; i++) {
-    const char *x = nms[i] + 7;   /* past "__bind " */
-    size_t xl = strlen(x);
-    int wr = x[xl - 1] == '=';
-    char iv[300]; snprintf(iv, sizeof iv, "@%.*s", (int)(wr ? xl - 1 : xl), x);
-    int base = nt->count;
-    int st = nt_new_node(nt, "StatementsNode"), def = nt_new_node(nt, "DefNode");
-    int val = nt_new_node(nt, wr ? "InstanceVariableWriteNode" : "InstanceVariableReadNode");
-    int params = -1;
-    if (st < 0 || def < 0 || val < 0) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-    nt_node_set_str(nt, val, "name", iv);
-    if (wr) {
-      int req = nt_new_node(nt, "RequiredParameterNode"), rd = nt_new_node(nt, "LocalVariableReadNode");
-      params = nt_new_node(nt, "ParametersNode");
-      if (req < 0 || rd < 0 || params < 0) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-      nt_node_set_str(nt, req, "name", "__bind_v");
-      nt_node_set_str(nt, rd, "name", "__bind_v");
-      nt_node_set_arr(nt, params, "requireds", &req, 1);
-      nt_node_set_ref(nt, val, "value", rd);
-    }
-    nt_node_set_arr(nt, st, "body", &val, 1);
-    nt_node_set_str(nt, def, "name", nms[i]);
-    nt_node_set_ref(nt, def, "receiver", -1);
-    nt_node_set_ref(nt, def, "parameters", params);
-    nt_node_set_ref(nt, def, "body", st);
-    for (int j = base; j < nt->count && line > 0; j++) {
-      nt_node_set_int(nt, j, "node_line", line);
-      nt_node_set_int(nt, j, "node_file", file);
-    }
-    defs[i] = def;
-  }
+  for (int i = 0; i < nn; i++) defs[i] = bind_helper_def(nt, nms[i], 0, id);
   /* the helpers follow the attr call */
   int at = lower_stmt_at(nt, lc, id), bn = 0;
   const int *bb = nt_arr(nt, lc->body, "body", &bn);
@@ -48606,6 +48633,89 @@ int desugar_bind_attr_helpers_at(Compiler *c, LowerCtx *lc, int id) {
   memcpy(nb + at + 1 + nn, bb + at + 1, sizeof(int) * (size_t)(bn - at - 1));
   nt_node_set_arr(nt, lc->body, "body", nb, bn + nn);
   free(nb); free(nms); free(defs);
+  return 1;
+}
+
+/* The same for a member of a record class, `S = Struct.new(:d)` (Data.define,
+   a local's write, `class T < Struct.new(:d)`): a member is a reader (and a
+   Struct's a writer) with no attr declaration in a body, so a bind_call of
+   `S.instance_method(:d)` raised NameError. The helpers go into the record
+   call's block, one made for a blockless call, or into the subclass's body.
+   A member given by a splat or a constant has none. */
+/* The body the helpers of record definition id go in (made when make), and
+   its record call in *call; -1 when id is no such definition. */
+static int bind_member_body(NodeTable *nt, int id, int *call, int make) {
+  int rc = class_def_record(nt, id);
+  if (rc < 0 && nt_kind(nt, id) == NK_ClassNode && class_def_is_record_call(nt, nt_ref(nt, id, "superclass")))
+    rc = nt_ref(nt, id, "superclass");
+  if (rc < 0) return -1;
+  *call = rc;
+  int owner = rc == nt_ref(nt, id, "superclass") ? id : -1, blk = -1;
+  if (owner < 0) {
+    blk = nt_ref(nt, rc, "block");
+    if (blk >= 0 && nt_kind(nt, blk) != NK_BlockNode) return -1;   /* `Struct.new(:d, &b)` */
+    if (blk < 0 && !make) return -2;
+    if (blk < 0) {
+      if ((blk = nt_new_node(nt, "BlockNode")) < 0) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+      nt_node_set_ref(nt, blk, "parameters", -1);
+      nt_node_set_ref(nt, blk, "body", -1);
+      nt_node_set_ref(nt, rc, "block", blk);
+    }
+    owner = blk;
+  }
+  int body = nt_ref(nt, owner, "body");
+  if (body >= 0 && nt_kind(nt, body) != NK_StatementsNode) return -1;   /* a body with rescue/ensure */
+  if (body < 0 && !make) return -2;
+  if (body < 0) {
+    if ((body = nt_new_node(nt, "StatementsNode")) < 0) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    nt_node_set_arr(nt, body, "body", NULL, 0);
+    nt_node_set_ref(nt, owner, "body", body);
+  }
+  return body;
+}
+/* How many helpers record definition id wants that its body has no def of
+   yet; with out, their names are written there too. */
+static int bind_member_missing(Compiler *c, const LowerCtx *lc, int id, char (*out)[300]) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  int call = -1, body = bind_member_body(nt, id, &call, 0);
+  if (body == -1) return 0;
+  int wr = !class_def_record_is_data(nt, call), n = 0;
+  int an = 0; const int *av = nt_arr(nt, nt_ref(nt, call, "arguments"), "arguments", &an);
+  int bn = 0; const int *bb = body >= 0 ? nt_arr(nt, body, "body", &bn) : NULL;
+  for (int a = 0; a < an; a++) {
+    const char *x = nt_kind(nt, av[a]) == NK_SymbolNode ? nt_str(nt, av[a], "value") : NULL;
+    if (!x || strlen(x) > 200) continue;
+    for (int w = 0; w < 1 + wr; w++) {
+      char nm[256], hn[300]; snprintf(nm, sizeof nm, "%s%s", x, w ? "=" : "");
+      if (!bind_attr_named(c, lc, nm)) continue;
+      snprintf(hn, sizeof hn, "__bind %s", nm);
+      int have = 0;
+      for (int k = 0; k < bn && !have; k++)
+        have = nt_kind(nt, bb[k]) == NK_DefNode && nt_str(nt, bb[k], "name") && sp_streq(nt_str(nt, bb[k], "name"), hn);
+      if (!have && out) memcpy(out[n], hn, sizeof hn);
+      if (!have) n++;
+    }
+  }
+  return n;
+}
+int desugar_bind_member_helpers_left(Compiler *c, LowerCtx *lc, int id) {
+  return bind_member_missing(c, lc, id, NULL) > 0;
+}
+int desugar_bind_member_helpers_at(Compiler *c, LowerCtx *lc, int id) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  int nn = bind_member_missing(c, lc, id, NULL);
+  if (!nn) return 0;
+  char (*nms)[300] = malloc(sizeof *nms * (size_t)nn);
+  if (!nms) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  bind_member_missing(c, lc, id, nms);
+  int call = -1, body = bind_member_body(nt, id, &call, 1), bn = 0;
+  const int *bb = nt_arr(nt, body, "body", &bn);
+  int *nb = malloc(sizeof(int) * (size_t)(bn + nn));
+  if (!nb) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  if (bn) memcpy(nb, bb, sizeof(int) * (size_t)bn);
+  for (int i = 0; i < nn; i++) nb[bn + i] = bind_helper_def(nt, nms[i], 1, id);
+  nt_node_set_arr(nt, body, "body", nb, bn + nn);
+  free(nb); free(nms);
   return 1;
 }
 
@@ -49342,6 +49452,7 @@ static void an_phase_desugar_register(Compiler *c) {
   lower_run(c, &lc, LW_EXPLICIT_INITIALIZE_CALLS);  /* initialize(x) in a method -> a copy of it as a method */
   lower_run(c, &lc, LW_NOARG_DISPLAY_WRAPPERS);     /* def inspect(i = 0) -> + `__noarg inspect` = inspect */
   lower_run(c, &lc, LW_BIND_ATTR_HELPERS);          /* attr_reader :x an instance_method names -> + `__bind x` = @x */
+  lower_run(c, &lc, LW_BIND_MEMBER_HELPERS);        /* the same for a Struct.new / Data.define member -> + `__bind x` = x */
   /* a bare constant CRuby's lookup cannot reach, bound by its leaf name to a
      nested definition: refused while the source still says where each
      reference is written */

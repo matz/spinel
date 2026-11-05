@@ -20276,7 +20276,7 @@ static void emit_class_machinery(const NodeTable *nt, Compiler *c, Buf *b, char 
   buf_puts(b, "static sp_Class sp_builtin_superclass(sp_Class c);\n");
   {
     buf_puts(b, "static sp_Class sp_class_superclass(sp_Class c){\n  sp_sclass_unmodeled(c);\n");
-    /* A rescued exception's #class carries its name with cls_id 0, which would
+    /* A class carried by its name with cls_id 0 (a Range's #class) would
        otherwise read as user class 0; resolve those by name first (#3031). */
     buf_puts(b, "  if(c.name){const char*_p=sp_exc_parent_of_name(c.name);"
                  "if(_p){sp_int _id=sp_builtin_id_of_name(_p);"
@@ -20848,8 +20848,8 @@ static void emit_class_machinery(const NodeTable *nt, Compiler *c, Buf *b, char 
     buf_puts(b, "  return 0;\n}\n");
     /* A rescued exception's #class, from its name: a class of the program
        answers its own id, so #superclass and #ancestors walk the user chain
-       from it; any other name stays name-carried on cls_id 0, which
-       sp_class_superclass resolves by name first. */
+       from it; any other name is a name-backed class on cls_id -1, which no
+       dispatch on the id takes for one of the program's classes. */
     buf_puts(b, "static sp_Class sp_user_exc_class(const char *cls) SP_UNUSED;\n");
     buf_puts(b, "static sp_Class sp_user_exc_class(const char *cls){\n");
     for (int i = 0; any && i < c->nclasses; i++) {
@@ -20863,7 +20863,7 @@ static void emit_class_machinery(const NodeTable *nt, Compiler *c, Buf *b, char 
         buf_printf(b, "  if(!strcmp(cls,\"%s\"))return ((sp_Class){%d});\n", c->classes[i].name, i);
       free(cn);
     }
-    buf_puts(b, "  return ((sp_Class){0, cls});\n}\n");
+    buf_puts(b, "  return ((sp_Class){-1, cls});\n}\n");
     /* The modules each exception class includes, for the module-aware match.
        Reuses the same include walk sp_class_ancestors is built from, so
        `rescue SomeModule` and `e.is_a?(SomeModule)` agree. */

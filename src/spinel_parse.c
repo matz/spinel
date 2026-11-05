@@ -8355,6 +8355,17 @@ static void sp_load_enter(SpLoadGraph *g, int e) {
   const SpGraphFile *r = g->gf[x->to];
   for (int i = 0; i < r->nsite; i++) sp_load_enter(g, r->site[i].edge);
 }
+/* Does a boot library's load run file `f`'s top level (an edge of g->boot,
+   or the top-level requires of a file one runs)? It runs before the entry's
+   first statement, so no other require runs it first. */
+static int sp_load_by_boot(const SpLoadGraph *g, int f) {
+  while (g->entered[f] >= 0) {
+    int e = g->entered[f];
+    for (int b = 0; b < g->nboot; b++) if (g->boot[b] == e) return 1;
+    f = g->edge[e].from;
+  }
+  return 0;
+}
 static void sp_load_order_build(SpLoadGraph *g) {
   g->entered = malloc(sizeof(int) * (size_t)(g->nfile + 1));
   if (!g->entered) { fprintf(stderr, "spinel_parse: out of memory\n"); exit(1); }
@@ -8363,12 +8374,12 @@ static void sp_load_order_build(SpLoadGraph *g) {
   for (int b = 0; b < g->nboot; b++) sp_load_enter(g, g->boot[b]);
   for (int i = 0; i < g->gf[0]->nsite; i++) sp_load_enter(g, g->gf[0]->site[i].edge);
   /* a file another require may run first is not placed, nor is any file
-     only such a file places */
+     only such a file places (not a boot library's: nothing runs before it) */
   for (int changed = 1; changed; ) {
     changed = 0;
     for (int e = 0; e < g->nedge; e++) {
       const SpLoadEdge *x = &g->edge[e];
-      if (x->how != SP_LOAD_FILE || x->to <= 0 || g->entered[x->to] == -1) continue;
+      if (x->how != SP_LOAD_FILE || x->to <= 0 || g->entered[x->to] == -1 || sp_load_by_boot(g, x->to)) continue;
       int by = g->entered[x->to];
       if (!x->top || g->entered[x->from] == -1 || (by >= 0 && g->entered[g->edge[by].from] == -1)) {
         g->entered[x->to] = -1;

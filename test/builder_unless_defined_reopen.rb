@@ -12,3 +12,15 @@ o = Outer::Bar.new
 p o.k, o.b
 p Other::Bar.new.k
 p((Other::Bar.new.b rescue :nob))
+# a builder and its header in one list of statements run together, under
+# an if or a begin
+if __FILE__ == $0
+  Baz = Class.new { def b = 3 }
+  class Baz; def k = 4; end
+  p Baz.new.k, Baz.new.b
+end
+begin
+  Qux = Class.new { def b = 5 }
+  class Qux; def k = 6; end
+end
+p Qux.new.k, Qux.new.b

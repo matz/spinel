@@ -6381,17 +6381,6 @@ static int qc_written_before(const NodeTable *nt, int a, int b) {
    the builder's kind and names no superclass (CRuby checks a superclass
    against the builder's, which the passes do not); otherwise the header
    stays a class of its own, as before. */
-/* Does write w run whenever its body runs: a statement of a class or
-   module body, or of a file's top level, not under an if, a loop, a
-   rescue or a block? par: an_parent_map */
-static int qc_write_unconditional(const NodeTable *nt, const int *par, int w) {
-  int st = par && w < nt->count ? par[w] : -1;
-  if (st < 0 || nt_kind(nt, st) != NK_StatementsNode) return 0;
-  int body = par[st];
-  if (body < 0) return 0;
-  NodeKind bk = nt_kind(nt, body);
-  return bk == NK_ClassNode || bk == NK_ModuleNode || bk == NK_ProgramNode;
-}
 static int qc_class_name_defined(Compiler *c, const char *nm, int hdr) {
   const NodeTable *nt = c->nt;
   int ndk = 0, builders = 0, reopens = 0; const NodeKind *dk = class_def_kinds(&ndk);
@@ -6442,7 +6431,7 @@ static unsigned char *qc_colliding_leaves(QCWrite *ws, int wn) {
   return collide;
 }
 /* The class or module body (or file top level) that node n sits in,
-   through ifs, loops, blocks and defs. par: an_parent_map */
+   through ifs, loops, blocks and defs. par: comp_parent_map */
 static int qc_enclosing_body(const NodeTable *nt, const int *par, int n) {
   for (int p = par[n]; p >= 0; p = par[p]) {
     NodeKind k = nt_kind(nt, p);
@@ -6450,30 +6439,63 @@ static int qc_enclosing_body(const NodeTable *nt, const int *par, int n) {
   }
   return -1;
 }
-/* `Bar = Class.new { }` that may not run (under an if, a loop, a rescue, a
-   block or a def) beside a header `class Bar` in the same body: CRuby's
-   header reopens the builder's class when the write ran and makes a fresh
-   class when it did not. The passes merge the two as one class, so the
-   header's class had the builder's methods when the write never ran. Such
-   a program is refused. `Bar = Class.new unless defined?(Bar)` runs in a
-   program that writes Bar nowhere else, and stays. */
+/* Is node n inside node anc? */
+static int qc_inside(const int *par, int n, int anc) {
+  for (int p = n; p >= 0; p = par[p]) if (p == anc) return 1;
+  return 0;
+}
+/* `Bar = Class.new { } unless defined?(Bar)` (cond, the unless) ahead of
+   header hd in the same statements, in a program that writes Bar nowhere
+   else and has no other class or module Bar that the body can see (one of
+   an enclosing body or the top level): the write runs, and the header
+   reopens what it built. */
+static int qc_unless_defined_runs(const NodeTable *nt, const int *par, int w, int cond,
+                                  int hd, int body, const char *wn) {
+  if (nt_kind(nt, cond) != NK_UnlessNode) return 0;
+  int pr = nt_ref(nt, cond, "predicate");
+  int dv = pr >= 0 && nt_kind(nt, pr) == NK_DefinedNode ? nt_ref(nt, pr, "value") : -1;
+  if (dv < 0 || nt_kind(nt, dv) != NK_ConstantReadNode || !nt_str(nt, dv, "name") ||
+      !sp_streq(nt_str(nt, dv, "name"), wn))
+    return 0;
+  int cs = par[cond];
+  if (cs < 0 || nt_kind(nt, cs) != NK_StatementsNode || !qc_inside(par, hd, cs) ||
+      !qc_written_before(nt, w, hd))
+    return 0;
+  NT_FOREACH_KIND(nt, NK_ConstantWriteNode, o) {
+    const char *on = nt_str(nt, o, "name");
+    if (o != w && on && sp_streq(on, wn)) return 0;
+  }
+  static const NodeKind HK[] = { NK_ClassNode, NK_ModuleNode };
+  for (int h = 0; h < 2; h++)
+    NT_FOREACH_KIND(nt, HK[h], o) {
+      int cp = nt_ref(nt, o, "constant_path");
+      const char *on = cp >= 0 ? nt_str(nt, cp, "name") : NULL;
+      if (!on || !sp_streq(on, wn)) continue;
+      int ob = qc_enclosing_body(nt, par, o);
+      if (ob == body) { if (!qc_written_before(nt, w, o)) return 0; continue; }
+      for (int e = body; e >= 0; e = qc_enclosing_body(nt, par, e)) if (e == ob) return 0;
+    }
+  return 1;
+}
+/* `Bar = Class.new { }` (or Module.new) and a header `class Bar` in the
+   same body, where the write may run without the header or the header
+   without the write (the write under an if, a loop, a rescue or a block
+   that the header is not in): CRuby's header reopens the built class only
+   when the write ran, and makes a fresh class when it did not. The passes
+   merge the two as one class, so the header's class had the builder's
+   methods when the write never ran. Such a program is refused. A write and
+   a header in one list of statements run together (`if __FILE__ == $0`
+   around both), and so does `Bar = Class.new { } unless defined?(Bar)`
+   where nothing else names Bar (qc_unless_defined_runs). */
 static void qc_refuse_conditional_builder(Compiler *c) {
   const NodeTable *nt = c->nt;
-  int *par = NULL;
+  const int *par = NULL;
   NT_FOREACH_KIND(nt, NK_ConstantWriteNode, w) {
     const char *wn = nt_str(nt, w, "name");
     if (!wn || class_def_builder(nt, w) < 0) continue;
-    if (!par) par = an_parent_map(nt);
-    if (!par) return;
-    if (qc_write_unconditional(nt, par, w)) continue;
-    int st = par[w], cond = st >= 0 ? par[st] : -1;
-    if (cond >= 0 && nt_kind(nt, cond) == NK_UnlessNode) {
-      int pr = nt_ref(nt, cond, "predicate");
-      int dv = pr >= 0 && nt_kind(nt, pr) == NK_DefinedNode ? nt_ref(nt, pr, "value") : -1;
-      if (dv >= 0 && nt_kind(nt, dv) == NK_ConstantReadNode && nt_str(nt, dv, "name") &&
-          sp_streq(nt_str(nt, dv, "name"), wn) && qc_write_unconditional(nt, par, cond))
-        continue;
-    }
+    if (!par) par = comp_parent_map(c);
+    int st = par[w];
+    if (st >= 0 && nt_kind(nt, st) != NK_StatementsNode) st = -1;
     int body = qc_enclosing_body(nt, par, w);
     static const NodeKind HK[] = { NK_ClassNode, NK_ModuleNode };
     for (int h = 0; h < 2; h++)
@@ -6482,15 +6504,17 @@ static void qc_refuse_conditional_builder(Compiler *c) {
         if (cp < 0 || nt_kind(nt, cp) != NK_ConstantReadNode || !nt_str(nt, cp, "name") ||
             !sp_streq(nt_str(nt, cp, "name"), wn) || qc_enclosing_body(nt, par, hd) != body)
           continue;
+        if (st >= 0 && qc_inside(par, hd, st)) continue;
+        int cond = st >= 0 ? par[st] : -1;
+        if (cond >= 0 && qc_unless_defined_runs(nt, par, w, cond, hd, body, wn)) continue;
         char msg[512];
-        snprintf(msg, sizeof msg, "a %s = Class.new or Module.new that may not run, beside a "
-                 "`class %s` or `module %s` in the same body, is not supported: spinel cannot "
-                 "tell whether the header reopens the built class; write the builder "
-                 "unconditionally or rename one of them", wn, wn, wn);
+        snprintf(msg, sizeof msg, "a %s = Class.new or Module.new that may run without a "
+                 "`class %s` or `module %s` in the same body, or the header without it, is not "
+                 "supported: spinel cannot tell whether the header reopens the built class; write "
+                 "the two together or rename one of them", wn, wn, wn);
         unsupported_feature(c, w, msg);
       }
   }
-  free(par);
 }
 
 void qualify_colliding_classes(Compiler *c) {

@@ -145,6 +145,7 @@ struct LoadRecord {
   long nentries, indexed;
   unsigned char *clsmod; int clsmod_all; struct { int nhist, ncls, recorded; unsigned ver; } clsmod_of;   /* lr_class_object_modules, and the record state it is of */
   int *mixed, nmixed; struct { int nhist, ncls, recorded; unsigned ver; } mixed_of;   /* lr_mixed */
+  int *rclass; struct { unsigned long hgen, nedits; unsigned shape, nver; int nclasses; } rclass_of;   /* [nclasses] by class: elab_record_class_of's answer + 2, 0 for not asked yet, and the state it is of */
   /* elab_class_unsettled's answers from the record, the tables and the
      nodes, by call, class and window start (key: the quadruples, -1 for
      none), asked again each pass, while the epochs in of hold
@@ -1824,6 +1825,7 @@ static int lr_callbacks_define(Compiler *c, int depth);
 static int lr_body_def(const NodeTable *nt, const int *par, int n, int node);
 static int lr_const_seen(Compiler *c, const char *name);
 static int lr_super(Compiler *c, int cls);
+static int lr_chain_bound(Compiler *c);
 
 /* Is constant `name` bound once, so that what it names never changes: the
    record sees every write of it (lr_const_seen), the source writes it with
@@ -1875,7 +1877,7 @@ static int lr_body_holds(Compiler *c, int def) {
     lr_place_ref(r, nt, k, r->at[body], LR_LATE | LR_BODY);   /* (where the climb places it: a placed def's receiver, lr_receiver) */
     int cls = lr_class_ref_at(c, k, NULL);
     held = cls >= LR_MAIN && !lr_chain_open(c, cls);
-    for (int a = cls, d = 0; held && a >= 0 && a < c->nclasses && d < 64; a = lr_super(c, a), d++) {
+    for (int a = cls, d = 0; held && a >= 0 && a < c->nclasses && d < lr_chain_bound(c); a = lr_super(c, a), d++) {
       const LrClass *kc = lr_class(r, a);
       if (!c->classes[a].is_builtin_const && (!kc || !kc->nopen)) held = 0;
     }
@@ -3683,6 +3685,15 @@ static int lr_super(Compiler *c, int cls) {
   if (c->classes[cls].parent >= 0) return c->classes[cls].parent;
   return comp_class_is_module(c, &c->classes[cls]) ? LR_UNKNOWN_CLASS : LR_MAIN;
 }
+/* The depth bound of the walks along a chain: a chain, with the modules
+   mixed into it, never repeats a class or module, and the modules are
+   among the program's classes (nclasses), so nclasses + 1 (main) bounds
+   every path a walk takes, a superclass step, a mixin or the singleton
+   tail alike. A guard against a cycle in a malformed record only; a walk
+   under it reaches the chain's end. */
+static int lr_chain_bound(Compiler *c) {
+  return c->nclasses + 1;
+}
 
 /* Did mixin m of a class happen before p (late: in the load phase)?
    ELAB_YES / NO / UNKNOWN; unknown too for one after p that may run
@@ -3794,7 +3805,7 @@ static int lr_sg_tail(Compiler *c, int cls, const char *name, int mod, LoadPoint
    vis, an ancestor's visibility change of the name is found as well, for
    the visibility it gives. */
 static int lr_search(Compiler *c, int cls, int sg, const char *name, int mod, LoadPoint p, int late, int vis, const LrDef **out, int depth) {
-  if (depth > 64 || cls < LR_MAIN) return ELAB_UNKNOWN;
+  if (depth > lr_chain_bound(c) || cls < LR_MAIN) return ELAB_UNKNOWN;
   if (!name && cls == mod && !sg) return ELAB_YES;
   int unsure = 0, o = lr_search_one(c, cls, sg, name, mod, p, late, vis, out, depth, &unsure, 0);
   if (o == ELAB_NO) {
@@ -3816,7 +3827,7 @@ static int lr_search(Compiler *c, int cls, int sg, const char *name, int mod, Lo
    own singleton: Object's, main's top level's, Kernel's) */
 static int lr_chain_one(Compiler *c, int cls, int sg, const char *name, ElabVersion *out, int n, int cap, int depth);
 static int lr_chain_versions(Compiler *c, int cls, int sg, const char *name, ElabVersion *out, int n, int cap, int depth) {
-  if (depth > 64 || (n = lr_chain_one(c, cls, sg, name, out, n, cap, depth)) < 0) return -1;
+  if (depth > lr_chain_bound(c) || (n = lr_chain_one(c, cls, sg, name, out, n, cap, depth)) < 0) return -1;
   int sup = lr_super(c, cls), tail[5];
   if (sg && sup == LR_MAIN) sup = LR_UNKNOWN_CLASS;
   if (sup >= LR_MAIN) return lr_chain_versions(c, sup, sg, name, out, n, cap, depth + 1);
@@ -3845,7 +3856,7 @@ int elab_history_versions(Compiler *c, int cls, int sg, const char *name, ElabVe
 static int lr_chain_one(Compiler *c, int cls, int sg, const char *name, ElabVersion *out, int n, int cap, int depth) {
   LoadRecord *r = c->lrec;
   const LrClass *k = lr_class(r, cls);
-  if (depth > 64 || !k) return -1;
+  if (depth > lr_chain_bound(c) || !k) return -1;
   for (int pass = 0; pass < 3 && n >= 0; pass++) {   /* prepends, own, includes or extends, as lr_search */
     if (pass == 1) {
       n = lr_hist_versions(r, lr_hist(r, cls, sg, name, 0), out, n, cap);
@@ -3927,7 +3938,7 @@ int elab_version_end(Compiler *c, int cls, const char *name, int sg, int node, L
 
 /* Is k cls or a superclass of it? */
 static int lr_under(Compiler *c, int cls, int k) {
-  for (int a = cls, d = 0; a >= LR_MAIN && d < 64; a = lr_super(c, a), d++)
+  for (int a = cls, d = 0; a >= LR_MAIN && d < lr_chain_bound(c); a = lr_super(c, a), d++)
     if (a == k) return 1;
   return 0;
 }
@@ -4266,6 +4277,7 @@ typedef struct {
   unsigned char *hreach, *rq, *sub, *ext, *seen;
   int allinst, cb, allcls, any, builders, ncname;
   LrRtaName *cname;
+  int *kid, *kids;   /* the classes by superclass: kids[kid[p + 1] .. kid[p + 2]) are p's (main's at p = LR_MAIN) */
 } LrRta;
 
 /* name's index in the program's method names (r->names), -1 for none */
@@ -4274,6 +4286,7 @@ static int lr_name_ix(const LoadRecord *r, const char *nm) {
   return p ? (int)(p - r->names) : -1;
 }
 static void lr_rta_reach(LrRta *t, int hi);
+static void lr_rta_add(LrRta *t, int k);
 static void lr_rta_recv(LrRta *t, int a) {   /* an object with a among its ancestors may exist */
   LoadRecord *r = t->r;
   LrClass *kc = lr_class(r, a);
@@ -4282,10 +4295,14 @@ static void lr_rta_recv(LrRta *t, int a) {   /* an object with a among its ances
   for (int h = t->hfirst[a + 1]; h >= 0; h = t->hnext[h])
     if (t->allinst || t->rq[lr_name_ix(r, r->hist[h].name)] & RQ_INST) lr_rta_reach(t, h);
   for (int j = 0; kc && j < kc->nmix; j++)
-    if (!elab_mix_on_singleton(kc->mix[j].kind)) lr_rta_recv(t, lr_later(t->c, &kc->mix[j].mod, kc->mix[j].ref));
+    if (!elab_mix_on_singleton(kc->mix[j].kind)) lr_rta_add(t, lr_later(t->c, &kc->mix[j].mod, kc->mix[j].ref));
 }
+/* k and its superclasses into E. A class lr_rta_recv has reached got its
+   superclasses with it (every way in is through here, a mixin's too), so
+   the walk stops at the first one reached: the rest of the chain is in
+   already. That is also what ends a chain that loops. */
 static void lr_rta_add(LrRta *t, int k) {   /* k into E */
-  for (int a = k, d = 0; a >= LR_MAIN && a < t->c->nclasses && d < 64; a = lr_super(t->c, a), d++) lr_rta_recv(t, a);
+  for (int a = k; a >= LR_MAIN && a < t->c->nclasses && t->r->rinst[a + 1] == LR_NEVER; a = lr_super(t->c, a)) lr_rta_recv(t, a);
 }
 static void lr_rta_ext(LrRta *t, int m, int d) {   /* module m extended onto a class, or included into one that is */
   LrClass *mc = lr_class(t->r, m);
@@ -4315,7 +4332,7 @@ static void lr_rta_reach_by(LrRta *t, int hi);
 static void lr_rta_call_on(LrRta *t, const char *name, int k, int once) {
   LoadRecord *r = t->r;
   lr_rta_call(t, name, RQ_INST);
-  for (int a = k, d = 0; a >= LR_MAIN && a < t->c->nclasses && d < 64; a = lr_super(t->c, a), d++) {
+  for (int a = k, d = 0; a >= LR_MAIN && a < t->c->nclasses && d < lr_chain_bound(t->c); a = lr_super(t->c, a), d++) {
     LrClass *kc = lr_class(r, a);
     LrHist *h = lr_hist(r, a, 1, name, 0);
     if (h && once) lr_rta_reach_by(t, (int)(h - r->hist));
@@ -4445,9 +4462,21 @@ static void lr_rta_made(LrRta *t, int id, int recv) {
   if (k == LR_CORE || (rk == NK_CallNode && is_class_query(nt_str(nt, recv, "name")) && !lr_defines(t->r, "class"))) return;
   if (k < LR_MAIN || k >= t->c->nclasses) { lr_rta_any(t); return; }
   lr_rta_add(t, k);
-  for (int j = LR_MAIN; v && !t->sub[k + 1] && j < t->c->nclasses; j++)
-    if (lr_under(t->c, j, k)) lr_rta_add(t, j);
-  if (v) t->sub[k + 1] = 1;
+  if (!v || t->sub[k + 1]) return;
+  t->sub[k + 1] = 1;
+  /* a class method's new makes an object of the class self is: k or any
+     subclass of it. The subclasses come from the index of the classes by
+     superclass, collected before any is added. sub marks the classes whose subclasses are in (or
+     are being added by the call that collected them), so a class under
+     one is not walked again. */
+  int *low = malloc(sizeof(int) * (size_t)(t->c->nclasses + 1)), n = 0;
+  if (!low) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  low[n++] = k;
+  for (int i = 0; i < n; i++)
+    for (int j = t->kid[low[i] + 1]; j < t->kid[low[i] + 2]; j++)
+      if (!t->sub[t->kids[j] + 1]) { t->sub[t->kids[j] + 1] = 1; low[n++] = t->kids[j]; }
+  for (int i = 1; i < n; i++) lr_rta_add(t, low[i]);
+  free(low);
 }
 
 static void lr_rta_node(LrRta *t, int id) {
@@ -4513,7 +4542,7 @@ static void lr_rta_node(LrRta *t, int id) {
   if (is_refine_name(nm)) {   /* a refinement's methods: the refining module's, live from here */
     int m = id;
     while (m >= 0 && nt_kind(nt, m) != NK_ModuleNode) m = comp_parent_map(t->c)[m];
-    if ((m = m >= 0 ? elab_header_class(t->c, m, NULL, NULL) : LR_UNKNOWN_CLASS) >= 0) lr_rta_recv(t, m);
+    if ((m = m >= 0 ? elab_header_class(t->c, m, NULL, NULL) : LR_UNKNOWN_CLASS) >= 0) lr_rta_add(t, m);
     else lr_rta_any(t);
   }
   if (rc >= LR_MAIN) lr_rta_call_on(t, by, rc, by == nm && lr_rta_once(t, id));   /* a method called, sent or made a callable by its name */
@@ -4539,7 +4568,7 @@ static void lr_rta_node(LrRta *t, int id) {
      (on an object, in a method body): its methods have instances */
   for (int i = 0; is_mixin_call(by) && (rk != NK_SelfNode || elab_body_def(t->c, id) >= 0) && i < ac; i++) {
     int m = nt_kind(nt, av[i]) == NK_ConstantReadNode || nt_kind(nt, av[i]) == NK_ConstantPathNode ? lr_rta_const(t, av[i]) : LR_UNKNOWN_CLASS;
-    if (m >= 0) lr_rta_recv(t, m);
+    if (m >= 0) lr_rta_add(t, m);
     else lr_rta_any(t);
   }
   for (int sg = 0; sg < 2; sg++)
@@ -4598,6 +4627,12 @@ static void lr_rta(Compiler *c) {
   for (int i = 1; i < nk + 2; i++) t.ustart[i] += t.ustart[i - 1];
   for (int i = 0; i < n; i++) if (t.key[i] >= 0) t.ulist[t.ustart[t.key[i] + 1]++] = i;
   for (int k = 0; k < ncl; k++) { t.hfirst[k] = -1; r->rinst[k] = LR_NEVER; }
+  t.kid = calloc((size_t)(2 * ncl + 2), sizeof(int));   /* the classes by superclass: counted, summed, filled as ustart is */
+  if (!t.kid) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  t.kids = t.kid + ncl + 2;
+  for (int k = 0; k < c->nclasses; k++) { int p = lr_super(c, k); if (p >= LR_MAIN && p < c->nclasses) t.kid[p + 3]++; }
+  for (int i = 1; i < ncl + 2; i++) t.kid[i] += t.kid[i - 1];
+  for (int k = 0; k < c->nclasses; k++) { int p = lr_super(c, k); if (p >= LR_MAIN && p < c->nclasses) t.kids[t.kid[p + 2]++] = k; }
   for (int i = r->nhist - 1; i >= 0; i--) {
     const LrHist *h = &r->hist[i];
     if (h->a < LR_MAIN || !h->name || h->a >= c->nclasses) continue;
@@ -4620,7 +4655,7 @@ static void lr_rta(Compiler *c) {
         int d = r->nst + t.stack[--t.nstack];
         for (int j = t.ustart[d]; j < t.ustart[d + 1]; j++) lr_rta_node(&t, t.ulist[j]);
       }
-  free(t.key); free(t.hreach); free(t.cname);
+  free(t.key); free(t.hreach); free(t.cname); free(t.kid);
 }
 
 /* Each statement's run bit and the count before it (LrStmt.runs, nrun),
@@ -5210,7 +5245,7 @@ static int lr_record_class(Compiler *c, int cls) {
    then Object (lr_record_class). */
 static int lr_chain_open(Compiler *c, int cls) {
   for (int a = cls, d = 0; a >= 0 && a < c->nclasses; a = lr_super(c, a)) {
-    if (++d > 64) return 1;
+    if (++d > lr_chain_bound(c)) return 1;
     LrClass *k = lr_class(c->lrec, a);
     int dn = c->classes[a].def_node;
     if (k && k->has_sup) { if (lr_later(c, &k->sup, k->sup_ref) < 0) return 1; continue; }
@@ -5225,7 +5260,7 @@ static int lr_chain_open(Compiler *c, int cls) {
    that defines no method of new's name? */
 static int lr_new_makes_object(Compiler *c, int cls, const char *new_name) {
   if (cls < 0 || lr_named(c, new_name) || lr_chain_open(c, cls)) return 0;
-  for (int a = cls, g = 0; g < 64; g++, a = lr_super(c, a)) {
+  for (int a = cls, g = 0; g < lr_chain_bound(c); g++, a = lr_super(c, a)) {
     if (a == LR_MAIN || (a >= 0 && a == comp_core_class(c, CORE_OBJECT))) return 1;
     if (!class_def_is_class(c->nt, a >= 0 && a < c->nclasses ? c->classes[a].def_node : -1)) return 0;
   }
@@ -5254,12 +5289,39 @@ int elab_value_not_module(Compiler *c, int node) {
   return is_new_name(mn) && lr_new_makes_object(c, lr_class_ref_at(c, r, NULL), mn);
 }
 
-int elab_record_class_of(Compiler *c, int cls) {
-  for (int a = cls, i = 0; a >= 0 && a < c->nclasses && i < 64; a = lr_super(c, a), i++) {
-    int d = c->classes[a].def_node;
-    if (lr_record_class(c, a) || (d >= 0 && class_def_is_record_call(c->nt, class_def_super(c->nt, d)))) return a;
+/* The memo of elab_record_class_of, kept while what it reads holds: the
+   histories (the record's superclasses), the parents (comp_class_shape_gen),
+   the class count and the nodes' refs (the node table's version and edits),
+   as lr_unset_kept's. NULL while the record is still being made, whose
+   superclasses are not all set. */
+static int *lr_rclass_memo(Compiler *c) {
+  LoadRecord *r = c->lrec;
+  if (!r->recorded || r->rec) return NULL;
+  if (!r->rclass || r->rclass_of.hgen != r->hgen || r->rclass_of.shape != comp_class_shape_gen() || r->rclass_of.nclasses != c->nclasses ||
+      r->rclass_of.nver != c->nt->version || r->rclass_of.nedits != c->nt->edits) {
+    free(r->rclass);
+    if (!(r->rclass = calloc((size_t)c->nclasses + 1, sizeof(int)))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    r->rclass_of.hgen = r->hgen; r->rclass_of.shape = comp_class_shape_gen(); r->rclass_of.nclasses = c->nclasses;
+    r->rclass_of.nver = c->nt->version; r->rclass_of.nedits = c->nt->edits;
   }
-  return -1;
+  return r->rclass;
+}
+
+/* The record class cls is or inherits from (-1 for none): a class of the
+   program that is a Struct or Data builder's, or whose superclass is such
+   a call. It is a fact of the class, kept per class, so asking it of every
+   class down a chain walks the chain once: the walk goes up to the first
+   class that answers or is kept, and keeps the answer for each class it
+   passed. */
+int elab_record_class_of(Compiler *c, int cls) {
+  int *memo = lr_rclass_memo(c), ans = -1, a = cls, n = 0;
+  for (; a >= 0 && a < c->nclasses && n < lr_chain_bound(c); a = lr_super(c, a), n++) {
+    int d = c->classes[a].def_node;
+    if (memo && memo[a]) { ans = memo[a] - 2; break; }
+    if (lr_record_class(c, a) || (d >= 0 && class_def_is_record_call(c->nt, class_def_super(c->nt, d)))) { ans = a; if (memo) memo[a] = a + 2; break; }
+  }
+  for (int b = cls; memo && n-- > 0; b = lr_super(c, b)) memo[b] = ans + 2;
+  return ans;
 }
 
 int elab_record_cmethod(Compiler *c, int cls, const char *name) {
@@ -5590,7 +5652,7 @@ static int lr_owner_last(Compiler *c, int key, int owner, const char *name, Load
    class's. A scoped read (`A::B`) leaves Object's out, as CRuby does. */
 static int lr_const_in(Compiler *c, int cls, const char *name, LoadPoint p, int late, int top, const LrDef **out, int depth, int key) {
   LoadRecord *r = c->lrec;
-  if (depth > 64) return ELAB_UNKNOWN;
+  if (depth > lr_chain_bound(c)) return ELAB_UNKNOWN;
   if (cls < LR_MAIN) {
     for (int i = 0; builtin_class_at(i); i++) {
       const BuiltinClass *b = builtin_class_at(i);
@@ -5678,7 +5740,7 @@ static int lr_const_at(Compiler *c, int node, const char *name, LoadPoint p, con
   /* then the innermost scope's ancestors, and Object's for a module too:
      a lexical read falls back to Object */
   for (int cls = sgowner ? lr_super(c, -sgowner - 2) : LR_UNKNOWN_CLASS, depth = 0;
-       singleton && cls >= 0 && depth < 64; cls = lr_super(c, cls), depth++) {
+       singleton && cls >= 0 && depth < lr_chain_bound(c); cls = lr_super(c, cls), depth++) {
     int o = lr_owner_last(c, key, lr_sg_const_owner(cls), name, p, late, out);
     if (o != ELAB_NO) return o;
   }
@@ -6071,7 +6133,7 @@ static int lr_opaque_may_define_hook(Compiler *c, int k) {
 static int lr_hook_live(Compiler *c, int cls, const char *hook, LoadPoint p, const LrDef **d) {
   if (elab_method_at(c, cls, hook, 1, p, d) != ELAB_NO) return 1;
   if (!lr_defines(c->lrec, hook)) return 0;
-  for (int a = cls, i = 0; a >= 0 && i < 64; a = lr_super(c, a), i++)
+  for (int a = cls, i = 0; a >= 0 && i < lr_chain_bound(c); a = lr_super(c, a), i++)
     if (elab_opaque_before(c, a, p) != ELAB_NO && lr_opaque_may_define_hook(c, a)) return 1;
   return 0;
 }
@@ -6341,7 +6403,7 @@ int elab_rec_open(Compiler *c, int node, int cp, const char *cname, int encl) {
            (class_def_builder(c->nt, c->classes[ci].def_node) < 0 ||
             !class_def_is_class(c->nt, c->classes[ci].def_node) ||
             !elab_names_object(c->nt, class_def_super(c->nt, node))))
-    comp_class_set_def(c, ci, node);
+    { comp_class_set_def(c, ci, node); if (c->lrec) { free(c->lrec->rclass); c->lrec->rclass = NULL; } }   /* (the record class of a class is of its definition: elab_record_class_of) */
   elab_header_opened(c, node, ci, made);
   if (made) lr_fire_inherited(c, node);
   return ci;
@@ -6592,7 +6654,7 @@ static int lr_const_seen(Compiler *c, const char *name) {
    include a builtin's own (a builtin class or module that has constants:
    File's Stat, Process's Status), which the record does not hold? */
 static int lr_builtin_consts(Compiler *c, int cls) {
-  for (int k = cls, g = 0; g < 64; g++) {
+  for (int k = cls, g = 0; g < lr_chain_bound(c); g++) {
     if (k == LR_MAIN) return 0;
     if (k < 0 || k >= c->nclasses) return 1;
     const char *nm = c->classes[k].name;
@@ -6700,7 +6762,7 @@ int elab_method_vis_at(Compiler *c, int cls, const char *name, int sg, LoadPoint
 
 int elab_method_vis_held_from(Compiler *c, int cls, const char *name, int sg, LoadPoint p) {
   int vis = elab_method_vis_at(c, cls, name, sg, p);
-  for (int k = cls, n = 0; vis >= 0 && k >= LR_MAIN && n < 64; k = lr_super(c, k), n++) {
+  for (int k = cls, n = 0; vis >= 0 && k >= LR_MAIN && n < lr_chain_bound(c); k = lr_super(c, k), n++) {
     const LrHist *h = lr_hist(c->lrec, k, sg != 0, name, 0);
     for (int i = 0; h && i < h->n; i++) {
       const LrDef *v = &h->v[i];
@@ -7435,7 +7497,7 @@ void elab_free(Compiler *c) {
   for (int i = 0; i < r->nsrcw; i++) free(r->srcw[i].name);
   free(r->srcw);
   free(r->slot); free(r->slot_head); free(r->slotp);
-  free(r->hist); free(r->mixed); free(r->unset.key); free(r->unset.un); free(r->clsmod); free(r->hhead); free(r->cls); free(r->vers); free(r->vers_head); free(r->set);
+  free(r->hist); free(r->mixed); free(r->rclass); free(r->unset.key); free(r->unset.un); free(r->clsmod); free(r->hhead); free(r->cls); free(r->vers); free(r->vers_head); free(r->set);
   for (int i = 0; i < r->nhdr; i++) free(r->hdr[i].leaf);
   free(r->hdr); free(r->hdr_head);
   free(r->st); free(r->at); free(r->bits); free(r->dscope); free(r->rend); free(r->rinst); free(r->urun); free(r);
@@ -7582,7 +7644,7 @@ static int lr_named_reach(const NodeTable *nt, int node) {
    before it raises NameError. ELAB_NO for a module and a BasicObject-rooted
    class, ELAB_UNKNOWN for a chain the record does not know. */
 static int lr_reaches_object(Compiler *c, int cls) {
-  for (int a = cls, g = 0; g < 64; g++) {
+  for (int a = cls, g = 0; g < lr_chain_bound(c); g++) {
     if (a == LR_MAIN) return ELAB_YES;
     if (a < 0 || a >= c->nclasses) return ELAB_UNKNOWN;
     int dn = c->classes[a].def_node;

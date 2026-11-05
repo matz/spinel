@@ -6117,6 +6117,9 @@ int emit_collect_expr(Compiler *c, int id, Buf *b) {
       emit_indent(g_pre, g_indent);
       if (res_poly2) buf_printf(g_pre, "sp_RbVal _t%d = sp_box_nil(); SP_GC_ROOT_RBVAL(_t%d);\n", tv4, tv4);
       else { emit_ctype(c, res_r2.elem, g_pre); buf_printf(g_pre, " _t%d = %s;\n", tv4, default_value_from_compiler(c, res_r2.elem)); }
+      /* (one representation: the slot is the bytes face, as emit_ctype declares a
+         String; a `next` or a tail that reads as the handle is stored as its bytes) */
+      if (!res_poly2 && res_r2.elem == TY_STRING) g_bv_dest_ty = TY_STRING;
       emit_block_value_into(c, block, tvbuf4, res_poly2, g_indent);
       buf_puts(&vb2, tvbuf4);
     }

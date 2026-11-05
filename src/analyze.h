@@ -482,7 +482,8 @@ void elab_window_open(Compiler *c, ElabWindow *w);
 enum { ELAB_SPAN_ANY = -2 };
 int elab_method_span(Compiler *c, int cls, const char *name, int sg, const ElabWindow *w, const LrDef **out, int cap);
 /* The versions call id may meet as cls's `name` (singleton when sg), the
-   one fact the call plan binds the call from (ct_version_at): where the call runs
+   one fact the call plan binds the call from (ct_version_at) and the record
+   asks whether a version is met by (elab_version_met): where the call runs
    at its point (how without 1: not in a block run later or kept,
    ct_after_point), the version live there (at, d: elab_method_at); where
    that is not known, its window (win, w: elab_call_window, opened where it
@@ -493,6 +494,12 @@ int elab_method_span(Compiler *c, int cls, const char *name, int sg, const ElabW
 typedef struct { int at, win, n; const LrDef *d; ElabWindow w; } ElabMeet;
 enum { ELAB_MEET_COPY = 2 };
 void elab_call_meet(Compiler *c, int id, int cls, const char *name, int sg, int how, ElabMeet *m, const LrDef **out, int cap);
+/* does the program reach the version made at def node `def` on cls's
+   chain (its singleton's when sg) under `name`: is a call of the name, or
+   a Method's maker naming it, whose self may be cls or a class under it,
+   bound to it by the versions it may meet (elab_call_meet), or does an
+   alias capture it? */
+int elab_version_met(Compiler *c, int cls, int sg, const char *name, int def);
 /* does cls's chain (its singleton's when sg) hold still for `name` from p
    to the load's end: each mixin of a module that has or may have the name
    into a class on it ran before p for certain, and no code the record
@@ -725,6 +732,11 @@ ElabEntry *elab_replaced_attrs(Compiler *c, int *n);
 void elab_attr_scope(Compiler *c, const ElabEntry *e, int scope);
 /* does class cls's own side hold such an accessor version of name? */
 int elab_attr_replaced(Compiler *c, int cls, const char *name);
+/* The attr_* call that declares the accessor name (a writer's as `x=`)
+   class cls's instances answer: its own, or a module's it includes or
+   prepends, or a superclass's; -1 for none (a Struct's or a Data's member,
+   which no call declares) */
+int elab_accessor_node(Compiler *c, int cls, const char *name);
 /* did code the record cannot follow (a send, an eval of a String, a mixin
    of a module it does not know, a computed method name, a method of the
    program its body calls) run on cls before p? */
@@ -1198,12 +1210,20 @@ int is_method_obj_call(Compiler *c, int node);        /* is node a method(:sym) 
 int method_obj_target_mi(Compiler *c, int node);      /* target method scope idx, or -1 */
 int method_super_target(Compiler *c, int mi);         /* the scope <m>.super_method answers, or -1 */
 int method_obj_alias_owner(Compiler *c, int node, int *sg); /* the class an alias it names was made in, or -1 */
+/* The class whose chain a `method(:sym)` node's lookup searched: its
+   receiver's (a constant's, self's, an object's class), which a Method of a
+   method it inherits or copies renders ahead of the owner, CRuby's
+   `#<Class:D>(V)#v`; -1 for main's chain or none */
+int method_obj_from_class(Compiler *c, int node);
 const char *class_value_instance_method_sym(Compiler *c, int node); /* instance_method on a run-time class */
 int class_value_bind_call_target(Compiler *c, int ci, const char *sym, int *armless);
 int class_value_bind_call_gap(Compiler *c, int node);
 TyKind method_obj_adapter_ret(TyKind arr, const char *op); /* typed-array adapter Ruby return */
 int method_recv_node(Compiler *c, int recv);          /* the method(:sym) node behind a Method expr */
 int method_recv_nodes(Compiler *c, int recv, int **out); /* every one a re-written local may hold */
+int method_recv_stamped(Compiler *c, int recv);           /* ...each from a bind site that stamps its position */
+int method_recv_owner_unknown(Compiler *c, int recv);     /* may a Method expr hold a builtin's whose owner no fact names */
+int bam_owner(Compiler *c, int mi, const char **name);     /* the owner a builtin's or accessor's wrapper stands for */
 int method_expr_is_unbound(Compiler *c, int recv);    /* instance_method with no #bind crossed */
 int proc_to_proc_method_nodes(Compiler *c, int recv, int **out); /* the method(:sym) nodes behind <method>.to_proc */
 int method_call_param_shift(Compiler *c, int mn, int mi); /* 1 when self carries param[0] (__bam wrapper) */

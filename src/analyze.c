@@ -10865,6 +10865,10 @@ static int desugar_builtin_method_obj(Compiler *c) {
       nt_node_set_ref(nt, kdef, "parameters", kparams);
       nt_node_set_ref(nt, kdef, "body", kbody);
       nt_node_set_str(nt, kdef, "bam_sym", ksym);   /* the Method's name */
+      /* its #owner, Kernel's (a class's const_get is Module's, which the
+         facts do not list) */
+      const char *kown = kcls < 0 ? builtin_function_owner(ksym) : NULL;
+      if (kown) nt_node_set_str(nt, kdef, "bam_owner", kown);
       Scope *kws = comp_scope_new(c, kwname, kdef);
       { kws->class_id = -1; comp_touch_scope(kws->idx); }
       { kws->body = kbody; comp_touch_scope(kws->idx); }
@@ -10902,19 +10906,28 @@ static int desugar_builtin_method_obj(Compiler *c) {
        wrapper whose body `__bam_r.attr` (or `__bam_r.attr = __bam_a`) inlines
        the accessor -- a writer takes the binop-style 2-param shape. A real def
        is already handled via the resolved-target path (#3110 follow-up). */
+    int accessor = 0;     /* the wrapper stands for an accessor */
+    int attr_decl = -1;   /* the attr_* call an accessor's wrapper stands for */
+    int owner_ci = -1;    /* the class declaring it, its Method's #owner */
     if (ty_is_object(rt)) {
       int ocid = ty_object_class(rt);
       int obj_accessor = 0;
       if (ocid >= 0 && comp_method_in_chain(c, ocid, sym, NULL) < 0) {
         char basew[256];
         if (setter_base_name(sym, basew, sizeof basew)) {
-          if (comp_writer_in_chain(c, ocid, basew, NULL)) { obj_accessor = 1; binop = 1; }
+          if (comp_writer_in_chain(c, ocid, basew, &owner_ci)) { obj_accessor = 1; binop = 1; }
         }
-        else if (comp_reader_in_chain(c, ocid, sym, NULL)) {
+        else if (comp_reader_in_chain(c, ocid, sym, &owner_ci)) {
           obj_accessor = 1;
         }
       }
       if (!obj_accessor) continue;                    /* real def / non-accessor: handled elsewhere */
+      accessor = 1;
+      attr_decl = elab_accessor_node(c, ocid, sym);
+      /* (a subclass's accessor lists hold its ancestors' too: the attr_*
+         call's own body names the class that declares it; a Struct's
+         member has no such call) */
+      if (attr_decl >= 0 && c->node_cbody[attr_decl] >= 0) owner_ci = c->node_cbody[attr_decl];
     }
     else if (rt == TY_UNKNOWN || rt == TY_VOID || rt == TY_NIL ||
              rt == TY_CLASS || rt == TY_METHOD || rt == TY_PROC)
@@ -10935,6 +10948,7 @@ static int desugar_builtin_method_obj(Compiler *c) {
     int cmp_only = 0;   /* a Comparable method the class does not define itself */
     int num_only = 0;   /* a Numeric method Integer or Float inherits */
     int sym_arity = 0, have_arity = 0;   /* the builtin's Method#arity */
+    const char *owner_name = NULL;   /* the builtin's class or module, its Method's #owner */
     /* an undefined name must reach codegen's immediate NameError, not become
        a wrapper whose body call aborts the build (#2752) */
     {
@@ -10955,6 +10969,9 @@ static int desugar_builtin_method_obj(Compiler *c) {
         continue;
       cmp_only = bcls && !builtin_method_known(bcls, sym) && builtin_comparable_owns(bcls, sym);
       num_only = bcls && !builtin_method_known(bcls, sym) && builtin_numeric_owns(bcls, sym);
+      /* (a true's or false's own method is TrueClass's or FalseClass's,
+         which no single name answers) */
+      owner_name = rt == TY_BOOL ? NULL : builtin_method_owner(bcls, sym);
       if (bcls && builtin_method_arity(bcls, sym, &sym_arity)) have_arity = 1;
       else if (cmp_only) { sym_arity = builtin_comparable_arity(sym); have_arity = 1; }
       else if (num_only && builtin_numeric_arity(sym, &sym_arity)) have_arity = 1;
@@ -11034,6 +11051,14 @@ static int desugar_builtin_method_obj(Compiler *c) {
        call is renamed ([] for slice) or rewritten (a splat dispatched on its
        length) */
     nt_node_set_str(nt, def, "bam_sym", sym);
+    /* an accessor's #source_location is its attr_* call's, a Struct
+       member's none (nil); a builtin's no fact gives: CRuby writes some in
+       C (nil) and some in Ruby (an `<internal:...>` pair, method_source_pos) */
+    if (accessor) nt_node_set_int(nt, def, "bam_accessor", 1);
+    if (attr_decl >= 0) nt_node_set_int(nt, def, "bam_src", attr_decl);
+    /* its #owner: the accessor's class, or the builtin's (bam_owner) */
+    if (owner_ci >= 0) nt_node_set_int(nt, def, "bam_owner_ci", owner_ci + 1);
+    else if (owner_name) nt_node_set_str(nt, def, "bam_owner", owner_name);
     /* its Method#arity is Comparable's, which a boxed self reads off the
        Method at run time (method_scope_arity) */
     if (cmp_only) nt_node_set_int(nt, def, "bam_cmp", 1);

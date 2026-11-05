@@ -7,9 +7,13 @@
 # that calls the modules' functions and the classes'. Each copy is a version of
 # the singleton's method that the load record holds and the call plan maps to
 # the def's scope, so a pass that rescans the record, the scopes or the copies
-# per copy or per call grows as N^2.
+# per copy or per call grows as N^2. With a second argument, `read`, each
+# class reads both names in its body before its own defs: the extended
+# version is the one a call meets there, so the extend's copy is kept behind
+# the own def and the call is bound to it, and a pass that asks every call
+# of a name per kept copy grows as N^2 too.
 N=${1:-10}
-awk -v N="$N" 'BEGIN {
+awk -v N="$N" -v R="${2:-}" 'BEGIN {
   for (i = 0; i < N; i++) {
     printf "module M%d\n", i
     print  "  module_function"
@@ -40,6 +44,7 @@ awk -v N="$N" 'BEGIN {
     printf "class C%d\n", i
     printf "  extend M%d\n", i
     printf "  extend W%d\n", i
+    if (R != "") print  "  R = f3 + g4"
     print  "  def self.f3 = -1"
     print  "  def self.g4 = -1"
     print  "end"

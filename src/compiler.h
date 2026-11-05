@@ -547,8 +547,9 @@ typedef struct {
   int is_cmethod_copy;        /* a class method specialize_cmethod_for copied
                                  into class_id from another class or module (an
                                  inherited class method, an extend's method):
-                                 no method of class_id's own singleton, though
-                                 it carries no origin (Method#owner) */
+                                 no method of class_id's own singleton. An
+                                 extend's copy carries its module as
+                                 origin_module_ci; an inherited one no origin */
   int is_proc_form;  /* a clone of a yielding method whose `yield` is a call on
                         a real &blk parameter, for the poly dispatch. Its body
                         is typed independently of the inlined original: the

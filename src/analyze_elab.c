@@ -168,6 +168,11 @@ struct LoadRecord {
   int *rentry;               /* ...and each region's load (all three statements of region 0) */
   unsigned char defs_computed;          /* ...and whether the program makes or copies a method by a computed name */
   struct LrVers *vers; int nvers, cvers, *vers_head;
+  struct LrValias { int hist, j, next; } *valias; int nvalias, cvalias;   /* the aliases of each name the histories hold (LrVers.alias) */
+  /* elab_version_met's readers of each name, filed by the classes their
+     self may be (lr_readers), made at its first ask after a walk and kept
+     with the map while it is held */
+  struct LrReader { const char *name; int node, key, next; unsigned char kind, sg, copy; } *rdr; int nrdr, crdr, *rdr_head; struct { int n; unsigned ver; } rdr_of;
   int follow;                /* the aliases lr_class_of is following, to cap a chain */
   signed char *bread; int nbread;   /* [nbread] by def node: lr_def_block's reading + 3, 1 while it is read, 0 for not read yet */
   struct LrHeader *hdr; int nhdr, chdr, *hdr_head;   /* the class and module headers, in the order the walk reaches them (elab_header_class), and the class builders' calls and writes noted ahead of the walk (elab_builder_note) */
@@ -806,10 +811,11 @@ static LoadRecord *elab_fresh(Compiler *c) {
 /* While held, the map is made at the first question and then kept as it
    is, whatever the table's nodes become: a pass that rewrites nodes as it
    asks (desugar_engine_branches folds a guard to true or false, which
-   moves no statement) answers every question from the program as it was
-   read, instead of rebuilding the map after each rewrite. A hold does not
-   nest: releasing it ends it, so there is one holder at a time (the guard
-   fold of desugar_engine_branches). */
+   moves no statement; register_extends copies method bodies, which stand
+   at no point) answers every question from the program as it was read,
+   instead of rebuilding the map after each rewrite. A hold does not nest:
+   releasing it ends it, so there is one holder at a time (the guard fold
+   of desugar_engine_branches, or register_extends). */
 void elab_hold(Compiler *c, int on) {
   lr_get(c)->hold = on ? 1 : 0;
 }
@@ -3036,7 +3042,7 @@ static void lr_settle_regions(Compiler *c) {
    define_method, an attr, an alias, a module_function copy, an undef or
    remove), not a visibility change. lr_vers_index indexes the histories as
    they stand, again once more entries have been recorded. */
-typedef struct LrVers { const char *name; int first, nver, next, pend; unsigned char captured, replaced, late; } LrVers;   /* captured: elab_version_captured's memo, 1 no, 2 yes; replaced: one history holds two versions, or an alias; late: lr_late_make's, 1 no history late, 2 one is, 3 none asked; pend: the histories asked that are not late yet */
+typedef struct LrVers { const char *name; int first, nver, next, pend, alias; unsigned char captured, replaced, late; } LrVers;   /* captured: elab_version_captured's memo, 1 no, 2 yes; replaced: one history holds two versions, or an alias; late: lr_late_make's, 1 no history late, 2 one is, 3 none asked; pend: the histories asked that are not late yet; alias: the first alias of the name, in LoadRecord.valias, -1 for none */
 
 static int lr_is_version(const LrDef *v) { return v->kind <= LR_REMOVE && !v->unplaced; }
 
@@ -3055,7 +3061,7 @@ static void lr_vers_index(LoadRecord *r) {
     if (k < 0) {
       r->vers = lr_grow(r->vers, &r->cvers, r->nvers, sizeof *r->vers);
       k = r->nvers++;
-      r->vers[k] = (LrVers){ h->name, -1, 0, r->vers_head[b], 0, 0 };
+      r->vers[k] = (LrVers){ h->name, -1, 0, r->vers_head[b], 0, -1 };
       r->vers_head[b] = k;
     }
     h->nlink = r->vers[k].first;
@@ -3068,6 +3074,19 @@ static void lr_vers_index(LoadRecord *r) {
     r->vers[k].nver += nh;
     if (nh > 1) r->vers[k].replaced = 1;
   }
+  /* each alias on its target's entry, where the target has a history */
+  r->nvalias = 0;
+  for (int i = 0; i < r->nhist; i++)
+    for (int j = 0; r->hist[i].a >= LR_MAIN && j < r->hist[i].n; j++) {
+      const LrDef *v = &r->hist[i].v[j];
+      if (v->kind != LR_ALIAS || !v->target || v->unplaced) continue;
+      int k = r->vers_head[lr_hash(0, 0, v->target)];
+      while (k >= 0 && !sp_streq(r->vers[k].name, v->target)) k = r->vers[k].next;
+      if (k < 0) continue;
+      r->valias = lr_grow(r->valias, &r->cvalias, r->nvalias, sizeof *r->valias);
+      r->valias[r->nvalias] = (struct LrValias){ i, j, r->vers[k].alias };
+      r->vers[k].alias = r->nvalias++;
+    }
   r->indexed = r->nentries;
 }
 
@@ -3826,12 +3845,25 @@ static int lr_mixin_class(Compiler *c, LrMixin *m) {
    mixin. Answers given while the record is made are dropped at its end
    (elab_program). The search starts at depth 0, so the kept answer does
    not depend on where it was first asked; an ask while it runs (modules
-   that include each other) answers unknown. */
-static int lr_mixin_dup(Compiler *c, int cls, int sg, LrMixin *m) {
+   that include each other) answers unknown. The modules its own call
+   mixed in ahead of it count too, which the search at the call's point
+   does not take as run: `extend M1, M2, M1` extends M1, then M2, and its
+   first M1 stays behind M2 (the record holds a call's modules the last
+   first). */
+static int lr_mixin_dup(Compiler *c, int cls, int sg, LrClass *k, int i) {
+  LrMixin *m = &k->mix[i];
   if (lr_mixin_class(c, m) < 0) return ELAB_NO;
   if (!m->dup) {
     m->dup = 1 + ELAB_UNKNOWN;
-    m->dup = (unsigned char)(1 + lr_search(c, cls, sg, NULL, m->mod, elab_point_of(c, m->node), 0, 0, NULL, 0));
+    LoadPoint p = elab_point_of(c, m->node);
+    int o = ELAB_NO;
+    for (int j = 0; j < i && o != ELAB_YES; j++) {
+      LrMixin *e = &k->mix[j];
+      if (e->node == m->node && e->kind == m->kind && lr_mixin_class(c, e) >= 0)
+        o = e->mod == m->mod || lr_search(c, e->mod, 0, NULL, m->mod, p, 0, 0, NULL, 0) == ELAB_YES ? ELAB_YES : ELAB_NO;
+    }
+    if (o != ELAB_YES) o = lr_search(c, cls, sg, NULL, m->mod, p, 0, 0, NULL, 0);
+    m->dup = (unsigned char)(1 + o);
   }
   return m->dup - 1;
 }
@@ -3860,7 +3892,7 @@ static int lr_search_one(Compiler *c, int cls, int sg, const char *name, int mod
       if (b == ELAB_NO) continue;
       /* a module already among the ancestors where the mixin runs (an
          earlier mixin's, the superclass's) stays where it is */
-      int dup = lr_mixin_dup(c, cls, sg, m);
+      int dup = lr_mixin_dup(c, cls, sg, k, i);
       if (dup == ELAB_YES) continue;
       if (dup == ELAB_UNKNOWN) *unsure = 1;
       int o = lr_mixin_class(c, m) < 0 ? ELAB_UNKNOWN : !name && m->mod == mod ? ELAB_YES : lr_search(c, m->mod, 0, name, mod, p, late, vis, out, depth + 1);
@@ -5070,16 +5102,21 @@ int elab_call_window(Compiler *c, int id, ElabWindow *w) {
   return ELAB_YES;
 }
 
-int elab_in_kept_block(Compiler *c, int id) {
+/* ...in a block the record takes to run at once, one whose typed call
+   target keeps it when kept (blk_kept), any when not: a call there may be
+   one a target keeps, before the typed pass has marked it */
+static int lr_in_assumed_block(Compiler *c, const int *par, int n, int id, int kept) {
   const NodeTable *nt = c->nt;
-  const int *par = comp_parent_map(c);
-  for (int a = id; a >= 0 && par[a] >= 0; a = par[a]) {
+  for (int a = id; a >= 0 && a < n && par[a] >= 0; a = par[a]) {
     NodeKind k = nt_kind(nt, a);
     if (k == NK_DefNode || k == NK_LambdaNode) break;   /* (a body of its own: its window is the def's) */
-    if (k == NK_BlockNode && nt_ref(nt, par[a], "block") == a && nt_int(nt, par[a], "blk_kept", 0) &&
+    if (k == NK_BlockNode && nt_ref(nt, par[a], "block") == a && (!kept || nt_int(nt, par[a], "blk_kept", 0)) &&
         elab_block_runs(c, par[a]) == ELAB_BLK_ASSUMED) return 1;
   }
   return 0;
+}
+int elab_in_kept_block(Compiler *c, int id) {
+  return lr_in_assumed_block(c, comp_parent_map(c), c->nt->count, id, 1);
 }
 /* Does node id run later than its point, at a time the syntax does not
    tell: in a block whose call the record answers ELAB_BLK_LATER for (a
@@ -5454,6 +5491,293 @@ void elab_call_meet(Compiler *c, int id, int cls, const char *name, int sg, int 
   if (m->at != ELAB_UNKNOWN || (m->win = elab_call_window(c, id, &m->w)) != ELAB_YES) return;
   if (after) elab_window_open(c, &m->w);
   m->n = lr_span(c, cls, name, sg, &m->w, out, cap, NULL);
+}
+
+/* ---- the readers of a version (elab_version_met) ----
+   Who may meet a version on cls's singleton chain: each call of the name
+   the map was made of, and each Method's maker naming it (`C.method(:v)`),
+   whose self may be cls or a class under it. lr_readers files each once
+   per walk by the classes its self may be, under the keys a question about
+   cls looks up:
+     - RD_UNDER at each ancestor of x: self is x, so a question about cls
+       finds it where x is cls or a class under it;
+     - RD_AT at x: self is x or a class under it, so a question about cls
+       finds it, looking up cls's superclasses, where cls is under x too;
+     - RD_ANY: self may be any class, or the record cannot say.
+   Who self is: for a constant receiver, its class, and for self in a class
+   body, that class (RD_UNDER). For a bare call or one on self in a def,
+   where the def is written directly in a class or module body (or in a
+   `class << self` there) on no receiver or self, with no block or lambda
+   between the call and the def, the def's owner says:
+     - a class method of K runs on K or a class under it (both, at K);
+     - a module's own method runs on the module (RD_UNDER at it);
+     - a module's instance method (a module function's too) runs on what
+       the module is mixed into: on a class object, through a mixin's copy
+       of the method in a class whose singleton chain holds the module or
+       a class under one (both, at each holder: lr_holders_make), or any
+       where Class, Module, Object, BasicObject or Kernel holds it. Such a
+       reader is asked as the copy's call (ELAB_MEET_COPY), as the call
+       plan asks it;
+     - a class's instance method runs on a class object only where the
+       class is Class, Module, Object or BasicObject (RD_ANY), else never.
+   A Method made of the def's name or of an alias of it may run the body on
+   any object (`instance_method(:f).bind_call(x)`), as may a maker or a
+   send of one whose name the record cannot read: RD_ANY. A question about
+   cls reads its RD_UNDER bucket, the RD_AT bucket of each of its
+   superclasses and the RD_ANY one, not every call of the name. The
+   instance side is not filed by class yet: there each reader is RD_ANY. */
+enum { RD_UNDER, RD_AT, RD_ANY, RD_MAKER };
+
+static void lr_reader_add(LoadRecord *r, const char *name, int node, int kind, int key, int sg, int copy) {
+  unsigned b = lr_hash(key, kind * 2 + sg, name);
+  r->rdr = lr_grow(r->rdr, &r->crdr, r->nrdr, sizeof *r->rdr);
+  r->rdr[r->nrdr] = (struct LrReader){ name, node, key, r->rdr_head[b], (unsigned char)kind, (unsigned char)sg, (unsigned char)copy };
+  r->rdr_head[b] = r->nrdr++;
+}
+/* ...a reader whose self is x (RD_UNDER at x's ancestors), or x or a class
+   under it as well (at: RD_AT at x) */
+static void lr_reader_under(Compiler *c, LoadRecord *r, const char *name, int node, int x, int at, int copy) {
+  for (int a = x, d = 0; a >= LR_MAIN && d < lr_chain_bound(c); a = lr_super(c, a), d++) lr_reader_add(r, name, node, RD_UNDER, a, 1, copy);
+  if (at) lr_reader_add(r, name, node, RD_AT, x, 1, copy);
+}
+static int lr_reader_has(LoadRecord *r, const char *name, int kind, int key, int sg) {
+  for (int v = r->rdr_head[lr_hash(key, kind * 2 + sg, name)]; v >= 0; v = r->rdr[v].next)
+    if (r->rdr[v].kind == kind && r->rdr[v].key == key && sp_streq(r->rdr[v].name, name)) return 1;
+  return 0;
+}
+
+/* The modules on module m's own chain (m, the modules it includes or
+   prepends, theirs), into out[0..cap); -1 where one is a module the record
+   does not know, or past cap */
+static int lr_module_closure(Compiler *c, int m, int *out, int cap) {
+  int n = 0;
+  if (cap < 1) return -1;
+  out[n++] = m;
+  for (int i = 0; i < n; i++) {
+    LrClass *kc = lr_class(c->lrec, out[i]);
+    for (int j = 0; kc && j < kc->nmix; j++) {
+      if (elab_mix_on_singleton(kc->mix[j].kind)) continue;
+      int mod = lr_mixin_class(c, &kc->mix[j]), have = 0;
+      if (mod < LR_MAIN) return -1;
+      for (int k = 0; k < n && !have; k++) have = out[k] == mod;
+      if (have) continue;
+      if (n >= cap) return -1;
+      out[n++] = mod;
+    }
+  }
+  return n;
+}
+
+/* Which classes' singleton chains may hold each module, made once per
+   walk for lr_readers: a class or module holds m by a mixin of its own (an
+   extend, a singleton prepend, an include in `class << self`) of m or of a
+   module whose chain holds m (lr_module_closure); it may hold any (wild)
+   where one is of a module the record does not know, or code it cannot
+   follow that may define runs on it; and every class's chain holds m
+   (every) where Class, Module, Object, BasicObject, main's (Object's) or
+   Kernel does, or holds any where the program may run code the record has
+   not seen or one of those holds a module it does not know (all). */
+typedef struct { int *head, n, cap, *wild, nwild; struct { int who, next; } *by; unsigned char *every, all; } LrHolders;
+static void lr_holders_make(Compiler *c, LrHolders *h) {
+  LoadRecord *r = c->lrec;
+  int mods[64], nk = r->ncls;
+  memset(h, 0, sizeof *h);
+  h->head = malloc(sizeof(int) * (size_t)(nk > 0 ? nk : 1));
+  h->every = calloc((size_t)(nk > 0 ? nk : 1), 1);
+  h->wild = malloc(sizeof(int) * (size_t)(nk > 0 ? nk : 1));
+  if (!h->head || !h->every || !h->wild) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  for (int i = 0; i < nk; i++) h->head[i] = -1;
+  int core[6] = { comp_core_class(c, CORE_CLASS_REOPEN), lr_core(r, CORE_MODULE), lr_core(r, CORE_OBJECT), LR_MAIN,
+                  lr_core(r, CORE_KERNEL), comp_core_class(c, CORE_BASIC_OBJECT) };
+  h->all = (unsigned char)elab_runs_unseen(c);
+  for (int i = 0; i < 6 && !h->all; i++) {
+    if (core[i] < LR_MAIN) continue;
+    int nm = lr_module_closure(c, core[i], mods, 64);
+    h->all = nm < 0 || lr_opaque_defines(r, core[i]);
+    for (int k = 0; k < nm; k++) if (mods[k] + 1 < nk) h->every[mods[k] + 1] = 1;
+  }
+  for (int e = LR_MAIN; e + 1 < nk; e++) {
+    const LrClass *kc = lr_class(r, e);
+    int wild = lr_opaque_defines(r, e);
+    for (int j = 0; kc && j < kc->nmix && !wild; j++) {
+      if (!elab_mix_on_singleton(kc->mix[j].kind)) continue;
+      int mod = lr_mixin_class(c, &kc->mix[j]), nm = mod >= LR_MAIN ? lr_module_closure(c, mod, mods, 64) : -1;
+      wild = nm < 0;
+      for (int k = 0; k < nm && !wild; k++) {
+        if (mods[k] + 1 >= nk) continue;
+        h->by = lr_grow(h->by, &h->cap, h->n, sizeof *h->by);
+        h->by[h->n].who = e; h->by[h->n].next = h->head[mods[k] + 1]; h->head[mods[k] + 1] = h->n++;
+      }
+    }
+    if (wild) h->wild[h->nwild++] = e;
+  }
+}
+static void lr_holders_free(LrHolders *h) {
+  free(h->head); free(h->by); free(h->wild); free(h->every);
+}
+
+/* ...the reader at call id whose receiver is self and whose value the
+   record does not hold, filed by its def's owner (see above) */
+static void lr_reader_self(Compiler *c, LoadRecord *r, const LrHolders *hd, int id, const char *name) {
+  const NodeTable *nt = c->nt;
+  int np, def = -1, body = -1;
+  const int *par = elab_node_parents(c, &np);
+  for (int a = id < np ? par[id] : -1; a >= 0 && a < np && body < 0; a = par[a]) {
+    NodeKind k = nt_kind(nt, a);
+    if (k == NK_BlockNode || k == NK_LambdaNode || (k == NK_DefNode && def >= 0) ||
+        (k == NK_SingletonClassNode && (def < 0 || nt_kind(nt, nt_ref(nt, a, "expression")) != NK_SelfNode))) {
+      def = -1;
+      break;
+    }
+    if (k == NK_DefNode) def = a;
+    else if (k == NK_ClassNode || k == NK_ModuleNode) body = a;
+  }
+  int dr = def >= 0 ? nt_ref(nt, def, "receiver") : -1;
+  const Scope *sc = def >= 0 && body >= 0 && (dr < 0 || nt_kind(nt, dr) == NK_SelfNode) ? comp_scope_of(c, id) : NULL;
+  int k = sc && sc->def_node == def ? sc->class_id : -1;
+  /* a Method made of the def's name, or of an alias of it */
+  const char *names[8] = { def >= 0 ? nt_str(nt, def, "name") : NULL };
+  int nn = names[0] ? 1 : 0, made = 0;
+  for (int i = 0; i < nn && !made; i++) {
+    made = lr_reader_has(r, names[i], RD_MAKER, -3, 1);
+    const LrVers *x = lr_vers(r, names[i]);
+    for (int a = x ? x->alias : -1; a >= 0 && nn < 8; a = r->valias[a].next) {
+      const char *an = r->hist[r->valias[a].hist].name;
+      int have = 0;
+      for (int j = 0; j < nn && !have; j++) have = sp_streq(names[j], an);
+      if (!have) names[nn++] = an;
+    }
+    if (nn == 8) made = 1;
+  }
+  if (k < 0 || k >= c->nclasses || made) { lr_reader_add(r, name, id, RD_ANY, -2, 1, 0); return; }
+  if (!comp_class_is_module(c, &c->classes[k])) {
+    int core = k == comp_core_class(c, CORE_CLASS_REOPEN) || k == lr_core(r, CORE_MODULE) || k == lr_core(r, CORE_OBJECT) ||
+               k == comp_core_class(c, CORE_BASIC_OBJECT);
+    if (sc->is_cmethod) lr_reader_under(c, r, name, id, k, 1, 0);
+    else if (core) lr_reader_add(r, name, id, RD_ANY, -2, 1, 0);
+    return;
+  }
+  if (sc->is_cmethod) lr_reader_under(c, r, name, id, k, 0, 0);
+  if (sc->is_cmethod && !sc->is_module_function) return;
+  if (hd->all || k + 1 >= r->ncls || hd->every[k + 1]) { lr_reader_add(r, name, id, RD_ANY, -2, 1, 1); return; }
+  for (int v = hd->head[k + 1]; v >= 0; v = hd->by[v].next) lr_reader_under(c, r, name, id, hd->by[v].who, 1, 1);
+  for (int i = 0; i < hd->nwild; i++) lr_reader_under(c, r, name, id, hd->wild[i], 1, 1);
+}
+
+/* The readers' buckets, filed once per walk: a pass that asks while it
+   copies method bodies (register_extends, under a hold) asks of the calls
+   the program was read with, a mixin's copy's call as the call it copies,
+   asked as a copy's (ELAB_MEET_COPY). */
+static void lr_readers(Compiler *c, LoadRecord *r) {
+  const NodeTable *nt = c->nt;
+  if (r->rdr_head && r->rdr_of.n == r->n && r->rdr_of.ver == r->ver) return;
+  if (!r->rdr_head && !(r->rdr_head = malloc(sizeof(int) * LR_BUCKETS))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  for (int b = 0; b < LR_BUCKETS; b++) r->rdr_head[b] = -1;
+  r->nrdr = 0;
+  r->rdr_of.n = r->n; r->rdr_of.ver = r->ver;
+  int anymaker = 0;
+  /* the makers first, by the name they take: a def whose name one takes
+     runs on any self */
+  for (int id = 0; id < r->n; id++) {
+    if (nt_kind(nt, id) != NK_CallNode) continue;
+    const char *nm = nt_str(nt, id, "name");
+    if (nm && is_send_family(nm)) {
+      int an = nt_ref(nt, id, "arguments"), ac = 0;
+      const int *av = an >= 0 ? nt_arr(nt, an, "arguments", &ac) : NULL;
+      const char *by = ac ? vis_arg_name(nt, av[0]) : NULL;
+      anymaker |= !by || is_method_object_maker(by);
+    }
+    if (!nm || !is_method_object_maker(nm)) continue;
+    const char *sym = method_sym_arg(c, id);
+    if (sym) lr_reader_add(r, sym, id, RD_MAKER, -3, 1, 0);
+    else anymaker = 1;
+  }
+  LrHolders hd;
+  lr_holders_make(c, &hd);
+  for (int id = 0; id < r->n; id++) {
+    if (nt_kind(nt, id) != NK_CallNode) continue;
+    const char *nm = nt_str(nt, id, "name"), *keys[2] = { nm, nm && is_method_object_maker(nm) ? method_sym_arg(c, id) : NULL };
+    int recv = nt_ref(nt, id, "receiver");
+    NodeKind rk = recv >= 0 ? nt_kind(nt, recv) : NK_SelfNode;
+    int k = rk == NK_ConstantReadNode || rk == NK_ConstantPathNode ? lr_class_ref_at(c, recv, NULL)
+          : rk == NK_SelfNode ? elab_self_value_at(c, id) : LR_UNKNOWN_CLASS;
+    for (int i = 0; i < 2; i++) {
+      if (!keys[i]) continue;
+      lr_reader_add(r, keys[i], id, RD_ANY, -2, 0, 0);
+      if (k >= 0) lr_reader_under(c, r, keys[i], id, k, 0, 0);
+      else if (k == LR_MAIN) continue;   /* (main is no class) */
+      else if (rk == NK_SelfNode && !anymaker) lr_reader_self(c, r, &hd, id, keys[i]);
+      else lr_reader_add(r, keys[i], id, RD_ANY, -2, 1, 0);
+    }
+  }
+  lr_holders_free(&hd);
+}
+
+/* ...call id's part of elab_version_met: does the call plan bind it to the
+   version made at def node `def` on cls's chain, or to an entry that holds
+   it, from the versions it may meet (elab_call_meet): the one at its
+   point, the one over its window, or, over a chain that holds still from
+   the window's start, any of several (an entry, ct_version_at); copy: as
+   the call in a mixin's copy of its body. In a block the record takes to
+   run at once, a call may be one its typed target keeps
+   (elab_in_kept_block), which no pass has marked yet: it is asked as
+   running after its point as well. */
+static int lr_meet_holds(Compiler *c, const ElabMeet *m, const LrDef **ds, int cap, int cls, int sg, const char *name, int def) {
+  if (m->at == ELAB_YES) return m->d && m->d->node == def;
+  if (m->at == ELAB_NO || m->win != ELAB_YES || (m->n < 1 && m->n != ELAB_SPAN_ANY)) return 0;
+  if (m->n == 1) return ds[0] && ds[0]->node == def;
+  if (!elab_chain_settled(c, cls, sg, name, m->w.from)) return 0;
+  if (m->n == ELAB_SPAN_ANY || m->n > cap) return 1;
+  for (int k = 0; k < m->n; k++) if (ds[k] && ds[k]->node == def) return 1;
+  return 0;
+}
+static int lr_call_meets(Compiler *c, int id, int copy, int cls, int sg, const char *name, int def) {
+  int np;
+  const int *par = elab_node_parents(c, &np);
+  int later = elab_runs_later(c, id), held = lr_in_assumed_block(c, par, np, id, 0);
+  const LrDef *ds[16] = { NULL };
+  ElabMeet m;
+  elab_call_meet(c, id, cls, name, sg, later | (copy ? ELAB_MEET_COPY : 0), &m, ds, 16);
+  if (lr_meet_holds(c, &m, ds, 16, cls, sg, name, def)) return 1;
+  if (later || !held) return 0;
+  elab_call_meet(c, id, cls, name, sg, 1 | (copy ? ELAB_MEET_COPY : 0), &m, ds, 16);
+  return lr_meet_holds(c, &m, ds, 16, cls, sg, name, def);
+}
+/* ...one bucket's part */
+static int lr_readers_meet(Compiler *c, LoadRecord *r, int kind, int key, int cls, int sg, const char *name, int def) {
+  for (int v = r->rdr_head[lr_hash(key, kind * 2 + sg, name)]; v >= 0; v = r->rdr[v].next) {
+    const struct LrReader *e = &r->rdr[v];
+    if (e->kind == kind && e->key == key && e->sg == sg && sp_streq(e->name, name) && lr_call_meets(c, e->node, e->copy, cls, sg, name, def)) return 1;
+  }
+  return 0;
+}
+/* Does the program reach the version made at def node `def` on cls's
+   chain (its singleton's when sg) under `name`: does the call plan bind a
+   call of the name, or a Method's maker naming it, whose self may be cls
+   or a class under it (lr_readers) to it or to an entry holding it, from
+   the versions the call may meet (elab_call_meet, lr_call_meets), or does
+   an alias of the name on cls or a class under it capture it where it is
+   made? */
+int elab_version_met(Compiler *c, int cls, int sg, const char *name, int def) {
+  LoadRecord *r = elab_fresh(c);
+  if (!r->recorded || !name || def < 0 || cls < 0) return 0;
+  sg = sg ? 1 : 0;
+  lr_readers(c, r);
+  /* the readers whose self is cls or a class under it, or a class cls is
+     under, or any */
+  int met = lr_readers_meet(c, r, RD_UNDER, cls, cls, sg, name, def);
+  for (int a = cls, d = 0; sg && !met && a >= LR_MAIN && d < lr_chain_bound(c); a = lr_super(c, a), d++)
+    met = lr_readers_meet(c, r, RD_AT, a, cls, sg, name, def);
+  if (!met) met = lr_readers_meet(c, r, RD_ANY, -2, cls, sg, name, def);
+  const LrVers *x = lr_vers(r, name);
+  for (int a = x ? x->alias : -1; a >= 0 && !met; a = r->valias[a].next) {
+    const LrHist *h = &r->hist[r->valias[a].hist];
+    const LrDef *d = NULL;
+    LoadPoint p = elab_point_of(c, h->v[r->valias[a].j].node);
+    met = h->b == sg && lr_under(c, h->a, cls) && p.region >= 0 &&
+          elab_method_at(c, h->a, name, sg, p, &d) == ELAB_YES && d && d->node == def;
+  }
+  return met;
 }
 
 /* Can the program run code the record has not seen? Only through a load
@@ -7588,6 +7912,29 @@ int elab_attr_replaced(Compiler *c, int cls, const char *name) {
   return 0;
 }
 
+/* The node of the last attr_* entry for name on cls's instance side, or of
+   a module's it prepends or includes, the way a lookup meets them; -1 */
+static int lr_accessor_in(Compiler *c, int cls, const char *name, int depth) {
+  const ClassInfo *k = &c->classes[cls];
+  const LrHist *h = lr_hist(c->lrec, cls, 0, name, 0);
+  int node = -1;
+  for (int m = k->nprepended_mods - 1; node < 0 && depth < 16 && m >= 0; m--)
+    node = lr_accessor_in(c, k->prepended_mods[m], name, depth + 1);
+  for (int j = h ? h->n - 1 : -1; node < 0 && j >= 0; j--)
+    if ((h->v[j].kind == LR_READER || h->v[j].kind == LR_WRITER) && lr_applied(c, &h->v[j]) == 1) node = h->v[j].node;
+  for (int m = k->nincluded_mods - 1; node < 0 && depth < 16 && m >= 0; m--)
+    node = lr_accessor_in(c, k->included_mods[m], name, depth + 1);
+  return node;
+}
+/* See analyze.h. */
+int elab_accessor_node(Compiler *c, int cls, const char *name) {
+  LoadRecord *r = c->lrec;
+  int node = -1;
+  for (int k = cls; node < 0 && r && r->recorded && k >= 0 && k < c->nclasses; k = c->classes[k].parent)
+    node = lr_accessor_in(c, k, name, 0);
+  return node;
+}
+
 /* (every entry, one that only writes too: the macro splice in analyze_ct.c
    runs code at compile time that may read the instance variable it wrote) */
 int elab_opaque_before(Compiler *c, int cls, LoadPoint p) {
@@ -8146,7 +8493,7 @@ void elab_free(Compiler *c) {
   for (int i = 0; i < r->nsrcw; i++) free(r->srcw[i].name);
   free(r->srcw);
   free(r->slot); free(r->slot_head); free(r->slotp);
-  free(r->hist); free(r->mixed); free(r->rclass); free(r->sgm); free(r->sgchain); free(r->unset.key); free(r->unset.un); free(r->clsmod); free(r->hhead); free(r->cls); free(r->vers); free(r->vers_head); free(r->set);
+  free(r->hist); free(r->mixed); free(r->rclass); free(r->sgm); free(r->sgchain); free(r->unset.key); free(r->unset.un); free(r->clsmod); free(r->hhead); free(r->cls); free(r->vers); free(r->vers_head); free(r->valias); free(r->rdr); free(r->rdr_head); free(r->set);
   for (int i = 0; i < r->nhdr; i++) free(r->hdr[i].leaf);
   free(r->hdr); free(r->hdr_head);
   free(r->st); free(r->at); free(r->bits); free(r->dscope); free(r->rend); free(r->rinst); free(r->urun); free(r->rentry); free(r);

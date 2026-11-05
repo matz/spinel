@@ -846,16 +846,16 @@ static int ct_def_version(Compiler *c, int rcls, const char *name, int sg, const
 static unsigned ver_key_hash(int rcls, int sg, const char *name, int ar) {
   return sp_strhash(name) * 31u + (unsigned)(rcls + 1) * 131u + (unsigned)sg * 7u + (unsigned)ar;
 }
-static int ver_entry_ix(const Compiler *c, int guard, int rcls, int sg, const char *name, int ar) {
+static int ver_entry_ix(const Compiler *c, int guard, int from, int rcls, int sg, const char *name, int ar) {
   if (!c->ver_ix_nb) return -1;
   for (int i = c->ver_ix[ver_key_hash(rcls, sg, name, ar) % c->ver_ix_nb]; i >= 0; i = c->ver_ix_next[i]) {
     const struct VerEntry *e = &c->ver_entries[i];
-    if (e->guard == guard && e->cls == rcls && e->sg == sg && e->ar == ar && sp_streq(e->name, name)) return i;
+    if (e->guard == guard && e->from == from && e->cls == rcls && e->sg == sg && e->ar == ar && sp_streq(e->name, name)) return i;
   }
   return -1;
 }
 static int ct_entry_of(const Compiler *c, int guard, int rcls, int sg, const char *name, int ar) {
-  int i = ver_entry_ix(c, guard, rcls, sg, name, ar);
+  int i = ver_entry_ix(c, guard, 0, rcls, sg, name, ar);
   return i >= 0 ? c->ver_entries[i].scope : -1;
 }
 static void ver_cell_name(int hist, char out[32]) {
@@ -986,7 +986,7 @@ static int guard_chain(Compiler *c, int mi, int *to, DispArm *arm, char sel[][32
   to[n++] = mi;
   return n;
 }
-static int mixin_copy_versions(Compiler *c, int mi, int *to, ElabVersion *vs);
+static int mixin_copy_versions(Compiler *c, int mi, int from, int *to, ElabVersion *vs);
 /* A call that reaches mi, a copy a later prepend puts in front of a method,
    runs it once the prepend's statement has run and the method behind it
    until then: the guard entry of mi's class for the call's arguments
@@ -1004,7 +1004,7 @@ static int ct_guard(Compiler *c, int id, int mi, unsigned flags) {
     if (p.region >= 0 && elab_method_at(c, m->class_id, name, m->is_cmethod, p, &d) == ELAB_YES && d)
       for (int i = 0; i < n; i++) {
         ElabVersion vs[VER_MAX_ARMS];
-        int vt[VER_MAX_ARMS], nv = c->scopes[to[i]].mixin_guarded ? mixin_copy_versions(c, to[i], vt, vs) : 0;
+        int vt[VER_MAX_ARMS], nv = c->scopes[to[i]].mixin_guarded ? mixin_copy_versions(c, to[i], m->class_id, vt, vs) : 0;
         if (!nv) vt[nv++] = to[i];
         for (int k = 0; k < nv; k++) if (c->scopes[vt[k]].def_node == d->node) return vt[k];
       }
@@ -1505,10 +1505,18 @@ static int ct_capture_keeps_table(Compiler *c, int id, int cls, int sg, const ch
    over, of the classes the fixpoint finds the receiver can be
    (ver_absent_note), and made by ver_entries_demand. mi, the table's
    answer (the last version), where the record cannot tell or no entry
-   was made. *span (when asked): how many versions the window reaches
-   (elab_method_span), 0 when no window was asked, -1 when the answer is
-   mi for want of a version or an entry. */
-static int ct_version_at(Compiler *c, int id, int cls, const char *name, unsigned flags, int mi, int *def_class, int *span) {
+   was made. Where the record cannot tell over a window rcls's chain moves
+   in, or one before the chain holds still (a mixin that may not have run:
+   a conditional include, one in a block), and mi is one of the copies a
+   class holds of a module's versions (mixin_copies_module), the entry
+   over the copies, whose cells tell which version the module holds (the
+   mixin taken as run, as with one version). *span (when asked): in n,
+   how many versions the window reaches (elab_method_span), 0 when no
+   window was asked, -1 when the answer is mi for want of a version or an
+   entry; copies set for the copies' entry, whose n is 2. */
+typedef struct { int n, copies; } VerSpan;
+static int mixin_copies_module(Compiler *c, int mi, int *to, ElabVersion *vs, int *n);
+static int ct_version_at(Compiler *c, int id, int cls, const char *name, unsigned flags, int mi, int *def_class, VerSpan *span) {
   int sg = (flags & CT_CMETHOD) != 0, rcls = flags & CT_TOP ? -1 : cls, vi = -1, dc = -1, n = 0, first_def = 0, none = 0, body = 0, cl = 0;
   const LrDef *d = NULL, *ds[VER_MAX_ARMS];
   /* a call may meet the chain with no version made yet: the late bit of
@@ -1522,7 +1530,7 @@ static int ct_version_at(Compiler *c, int id, int cls, const char *name, unsigne
   /* one def on rcls's whole chain, which no call runs ahead of: the
      table's (a name with versions on other chains only) */
   if (nc == 1 && first_def && !late) {
-    if (span) *span = 0;
+    if (span) *span = (VerSpan){ 0, 0 };
     return mi;
   }
   LoadPoint p = elab_point_of(c, id);
@@ -1537,13 +1545,13 @@ static int ct_version_at(Compiler *c, int id, int cls, const char *name, unsigne
      hold, and an instance-side reader leaves a class-side capture on the
      entry. */
   if ((flags & CT_CAPTURE) && p.region < 0 && elab_method_reflected(c, name, sg)) {
-    if (span) *span = 0;
+    if (span) *span = (VerSpan){ 0, 0 };
     return mi;
   }
   if ((flags & CT_CAPTURE) && p.region < 0 &&
       (vi = ct_entry_of(c, 0, rcls, sg, name, ver_call_arity(c, id, rcls, sg, name, mi))) >= 0) {
     if (def_class && !(flags & CT_TOP)) *def_class = rcls;
-    if (span) *span = 2;
+    if (span) *span = (VerSpan){ 2, 0 };
     return vi;
   }
   ElabMeet m;
@@ -1561,11 +1569,21 @@ static int ct_version_at(Compiler *c, int id, int cls, const char *name, unsigne
     if (n == ELAB_SPAN_ANY) none |= body;   /* (a method body's version may not be made yet) */
     if (n == 1 && ds[0]) vi = ct_def_version(c, rcls, name, sg, d = ds[0], &dc);
   }
+  ElabVersion cvs[VER_MAX_ARMS];
+  int cto[VER_MAX_ARMS], cn = 0;
+  if (vi < 0 && at == ELAB_UNKNOWN && m.win == ELAB_YES && n != 0 && n != 1 &&
+      (n == -1 || !elab_chain_settled(c, rcls, sg, name, w.from)) && mixin_copies_module(c, mi, cto, cvs, &cn) >= 0) {
+    int ix = ver_entry_ix(c, 0, c->scopes[mi].origin_module_ci, rcls, sg, name, ver_call_arity(c, id, rcls, sg, name, mi));
+    if (span) *span = (VerSpan){ 2, 1 };
+    if (ix < 0) return mi;
+    if (def_class && !(flags & CT_TOP)) *def_class = rcls;
+    return c->ver_entries[ix].scope;
+  }
   if (vi < 0 && (n >= 2 || n == ELAB_SPAN_ANY || none)) {
     /* the entry, where the chain holds still over the window: asked of
        an entry that was made, or by the entries' build (span); for a
        call that only meets no version, one that answers for none */
-    int many = n >= 2 || n == ELAB_SPAN_ANY, ar = ver_call_arity(c, id, rcls, sg, name, mi), ix = ver_entry_ix(c, 0, rcls, sg, name, ar);
+    int many = n >= 2 || n == ELAB_SPAN_ANY, ar = ver_call_arity(c, id, rcls, sg, name, mi), ix = ver_entry_ix(c, 0, 0, rcls, sg, name, ar);
     int settled = at == ELAB_NO || elab_chain_settled(c, rcls, sg, name, w.from);
     const Scope *in = comp_scope_of(c, id);
     /* (an entry only where the call takes it, in a body that may run) */
@@ -1583,13 +1601,13 @@ static int ct_version_at(Compiler *c, int id, int cls, const char *name, unsigne
   else if (vi < 0) n = 0;
   if (vi < 0 && !kept && elab_method_at(c, rcls, name, sg, p, &d) == ELAB_YES && d && d->kind == LR_ALIAS)
     vi = ct_def_version(c, rcls, name, sg, d, &dc);
-  if (span) *span = n;
+  if (span) *span = (VerSpan){ n, 0 };
   /* only a version that is a function of its own: a replaced one
      (lr_mark_versions), an entry, or one no later scope of its name
      shadows; not one a scope no def made (a define_method's) passes over.
-     (*span -1: no version told and no entry asked, the table's answer) */
+     (span n -1: no version told and no entry asked, the table's answer) */
   if (vi < 0 || (!c->scopes[vi].replaced && !c->scopes[vi].entry && scope_is_shadowed(c, vi))) {
-    if (span && !n) *span = -1;
+    if (span && !n) span->n = -1;
     return mi;
   }
   if (ct_top_version(c, vi, flags)) return -1;
@@ -1626,7 +1644,7 @@ static struct VerMemo *ver_memo_slot(Compiler *c, int id, int cls, const char *n
 /* ...asked in the record's frame for the call plan (elab_plan_enter): the
    version is decided from the facts the record had for the call when the
    plan first asked, not from a map rebuilt per ask */
-static int ct_version(Compiler *c, int id, int cls, const char *name, unsigned flags, int mi, int *def_class, int *span) {
+static int ct_version(Compiler *c, int id, int cls, const char *name, unsigned flags, int mi, int *def_class, VerSpan *span) {
   int memo = !span && c->ver_built && !elab_check_on(c);
   const struct VerMemo *m = memo ? ver_memo_slot(c, id, cls, name, flags) : NULL;
   if (m && m->name) {
@@ -1693,10 +1711,11 @@ int cplan_sg_accessor(Compiler *c, int id, int ci, const char *name, char *slot,
 /* See call_plan.h. */
 int cplan_sg_version(Compiler *c, int id, int ci, const char *name) {
   if (id < 0 || !elab_attr_replaced(c, ci, name)) return CP_SG_NONE;
-  int m = call_target(c, id, ci, name, CT_CMETHOD, NULL), told = 0;
+  int m = call_target(c, id, ci, name, CT_CMETHOD, NULL);
+  VerSpan told = { 0, 0 };
   if (m < 0 || c->scopes[m].attr_version) return CP_SG_SLOT;
   if (!c->scopes[m].entry) ct_version(c, id, ci, name, CT_CMETHOD, m, NULL, &told);
-  return told < 0 ? CP_SG_UNTOLD : CP_SG_METHOD;
+  return told.n < 0 ? CP_SG_UNTOLD : CP_SG_METHOD;
 }
 /* See call_plan.h. */
 int cplan_sg_slot_call(Compiler *c, int id, int ci, const char *name) {
@@ -2013,6 +2032,26 @@ void ver_hold_free(Compiler *c) {
   free(m->key); free(m->lo); free(m->n); free(m->pool); free(m);
   c->ver_hold = NULL;
 }
+static void ver_hold_add(struct VerHold *m, int k, int sg) {
+  if (m->npool + 2 > m->cpool && !(m->pool = realloc(m->pool, sizeof(int) * (size_t)(m->cpool = m->cpool ? 2 * m->cpool : 64)))) {
+    fprintf(stderr, "spinel: out of memory\n"); exit(1);
+  }
+  m->pool[m->npool++] = k;
+  m->pool[m->npool++] = sg;
+}
+/* ...and of a module's: the classes that include or prepend it, which hold
+   copies of its versions (analyze_scope.c, mixin_prev_version) and none
+   of the name's histories */
+static void ver_hold_mixers(Compiler *c, struct VerHold *m, int mod, const char *nm) {
+  ElabVersion vs[VER_MAX_ARMS];
+  for (int j = 0; j < c->nclasses; j++) {
+    const ClassInfo *k = &c->classes[j];
+    int in = 0;
+    for (int i = 0; i < k->nincluded_mods && !in; i++) in = k->included_mods[i] == mod;
+    for (int i = 0; i < k->nprepended_mods && !in; i++) in = k->prepended_mods[i] == mod;
+    if (in && !comp_class_is_module(c, k) && elab_chain_versions(c, j, 0, nm, vs, VER_MAX_ARMS) >= 2) ver_hold_add(m, j, 0);
+  }
+}
 static const int *ver_holders(Compiler *c, const char *nm, int *n) {
   ElabVersion vs[VER_MAX_ARMS];
   struct VerHold *m = c->ver_hold;
@@ -2026,11 +2065,8 @@ static const int *ver_holders(Compiler *c, const char *nm, int *n) {
     int lo = m->npool, k, sg;
     for (int h = -1; (h = elab_method_holder(c, nm, h, &k, &sg)) >= 0;) {
       if (k < 0 || elab_chain_versions(c, k, sg, nm, vs, VER_MAX_ARMS) < 2) continue;
-      if (m->npool + 2 > m->cpool && !(m->pool = realloc(m->pool, sizeof(int) * (size_t)(m->cpool = m->cpool ? 2 * m->cpool : 64)))) {
-        fprintf(stderr, "spinel: out of memory\n"); exit(1);
-      }
-      m->pool[m->npool++] = k;
-      m->pool[m->npool++] = sg;
+      ver_hold_add(m, k, sg);
+      if (!sg && comp_class_is_module(c, &c->classes[k])) ver_hold_mixers(c, m, k, nm);
     }
     ix = m->names.n;
     if (!(m->key = realloc(m->key, sizeof *m->key * (size_t)(ix + 1))) || !(m->lo = realloc(m->lo, sizeof(int) * (size_t)(ix + 1))) ||
@@ -5563,13 +5599,13 @@ static int ver_entry_emit(Compiler *c, int rcls, int sg, const char *name, int a
    (analyze_scope.c, mixin_prev_version): those of mi's class and side
    under mi's name, with its cell and the method it stands in front of
    where a later include or prepend guards them, each with the record's
-   version on the class's chain it copies (vs[k], whose history's cell
-   tells it), in the chain's order. How many, 0 where one is not on the
-   chain (mi stands alone). */
-static int mixin_copy_versions(Compiler *c, int mi, int *to, ElabVersion *vs) {
+   version it copies on the chain of class `from` (vs[k], whose history's
+   cell tells it): mi's class's own, or the module's. In the chain's order.
+   How many, 0 where one is not on the chain (mi stands alone). */
+static int mixin_copy_versions(Compiler *c, int mi, int from, int *to, ElabVersion *vs) {
   const Scope *m = &c->scopes[mi];
   ElabVersion cv[VER_MAX_ARMS];
-  int n = 0, ns = 0, nv = elab_chain_versions(c, m->class_id, m->is_cmethod, comp_scope_user_name(m), cv, VER_MAX_ARMS);
+  int n = 0, ns = 0, nv = elab_chain_versions(c, from, m->is_cmethod, comp_scope_user_name(m), cv, VER_MAX_ARMS);
   for (int s = 0; s < c->nscopes; s++) {
     const Scope *k = &c->scopes[s];
     ns += k->class_id == m->class_id && k->is_cmethod == m->is_cmethod && k->mixin_guarded == m->mixin_guarded &&
@@ -5590,6 +5626,18 @@ static int mixin_copy_versions(Compiler *c, int mi, int *to, ElabVersion *vs) {
     }
   return ns > 1 && n == ns ? n : 0;
 }
+/* The module whose versions mi, the table's answer in its class, is one of
+   the unguarded copies of (mixin_copy_versions, asked of the module's
+   chain), with the copies and versions; -1 for none, and for the plain
+   copies of a mixin that may not run or runs at a point no guard sees
+   (Scope.mixin_unversioned), where no cell tells whether they are there
+   yet and the module's later versions are layers of their own */
+static int mixin_copies_module(Compiler *c, int mi, int *to, ElabVersion *vs, int *n) {
+  const Scope *m = &c->scopes[mi];
+  if (!m->versioned || !m->is_include_copy || m->mixin_guarded || m->mixin_unversioned || m->origin_module_ci <= 0) return -1;
+  *n = mixin_copy_versions(c, mi, m->origin_module_ci - 1, to, vs);
+  return *n ? m->origin_module_ci - 1 : -1;
+}
 /* The entry over the versions of guarded copy mi, one layer of a guard
    chain (mixin_copy_versions): an if-chain over the cells of their
    histories, nearest first, whose arm for each version calls its copy;
@@ -5598,7 +5646,7 @@ static int guard_layer_versions(Compiler *c, int mi, int ar) {
   ElabVersion vs[VER_MAX_ARMS];
   DispArm arm[VER_MAX_ARMS];
   char sel[VER_MAX_ARMS][32];
-  int to[VER_MAX_ARMS], nv = mixin_copy_versions(c, mi, to, vs), blk = 0, spliced = 1;
+  int to[VER_MAX_ARMS], nv = mixin_copy_versions(c, mi, c->scopes[mi].class_id, to, vs), blk = 0, spliced = 1;
   if (!nv) return mi;
   for (int k = 0; k < nv; k++) {
     blk |= c->scopes[to[k]].blk_param || c->scopes[to[k]].yields;
@@ -6149,15 +6197,15 @@ int cplan_method_arms(Compiler *c, int e, int *out, int *tests) {
   }
   return m;
 }
-typedef struct { int guard, cls, sg, mi, ar; const char *name; } VerNeed;
+typedef struct { int guard, cls, sg, mi, ar; const char *name; int from; } VerNeed;   /* (from: VerEntry.from) */
 /* ...and, to tell the asks that repeat one, an open addressing table over them (ix holds an index into v, -1 free) */
 typedef struct { VerNeed *v; int n; int *ix; unsigned nb; } VerNeeds;
 static int ver_need_has(const Compiler *c, const VerNeeds *o, VerNeed w) {
-  if (ver_entry_ix(c, w.guard, w.cls, w.sg, w.name, w.ar) >= 0) return 1;
+  if (ver_entry_ix(c, w.guard, w.from, w.cls, w.sg, w.name, w.ar) >= 0) return 1;
   unsigned at = o->nb ? ver_key_hash(w.cls, w.sg, w.name, w.ar) & (o->nb - 1) : 0;
   for (; o->nb && o->ix[at] >= 0; at = (at + 1) & (o->nb - 1)) {
     const VerNeed *v = &o->v[o->ix[at]];
-    if (v->guard == w.guard && v->cls == w.cls && v->sg == w.sg && v->ar == w.ar && sp_streq(v->name, w.name)) return 1;
+    if (v->guard == w.guard && v->from == w.from && v->cls == w.cls && v->sg == w.sg && v->ar == w.ar && sp_streq(v->name, w.name)) return 1;
   }
   return 0;
 }
@@ -6229,7 +6277,8 @@ static const VerPre *ver_pre(Compiler *c, int id, const char *nm, int k, unsigne
 }
 static void ver_need(Compiler *c, int id, const char *nm, int k, unsigned flags, void *arg) {
   ElabVersion vs[VER_MAX_ARMS];
-  int mi, n = 0, ar, rcls = flags & CT_TOP ? -1 : k, sg;
+  int mi, ar, rcls = flags & CT_TOP ? -1 : k, sg;
+  VerSpan n = { 0, 0 };
   /* (an entry arms two or more versions of the chain: with fewer, or a
      chain the record does not hold, no call is asked. A call on main may
      ask main's chain, which ends in Object's: ct_lookup. A later prepend's
@@ -6245,10 +6294,11 @@ static void ver_need(Compiler *c, int id, const char *nm, int k, unsigned flags,
     sg = (flags & CT_CMETHOD) != 0;
     ar = ver_call_arity(c, id, rcls, sg, nm, mi);
   }
-  VerNeed w = { 0, rcls, sg, mi, ar, nm };
-  if (ver_need_has(c, arg, w)) return;
   ct_version(c, id, k, nm, flags, mi, NULL, &n);
-  if (n >= 2) ver_need_add(arg, w);
+  /* (the copies' entry over the module's versions: mixin_copies_module) */
+  int to[VER_MAX_ARMS], nc = 0;
+  VerNeed w = { 0, rcls, sg, mi, ar, nm, n.copies ? mixin_copies_module(c, mi, to, vs, &nc) + 1 : 0 };
+  if (n.n >= 2 && !ver_need_has(c, arg, w)) ver_need_add(arg, w);
 }
 /* The entries the calls need, made once the passes after the record have
    made their methods (an_phase_pre_fixpoint, before the scope index
@@ -6389,8 +6439,8 @@ void ver_entries_build(Compiler *c) {
     int bare = n && c->scopes[to[n - 1]].super_behind && cplan_super_target(c, -1, &c->scopes[to[n - 1]], &at) < 0;
     int finds = bare ? VER_FINDS_NONE : ver_else_finds(c, VK_KEEP, o.v[i].cls, o.v[i].sg, o.v[i].name, SP_VIS_PUBLIC, -1);
     int e = o.v[i].guard ? guard_entry_make(c, o.v[i].mi, o.v[i].ar)
-                         : ver_entry_make(c, NULL, o.v[i].cls, o.v[i].cls, o.v[i].sg, o.v[i].name, o.v[i].mi, o.v[i].ar, 1, NULL, &finds);
-    ver_entry_add(c, e >= 0 ? c->scopes[e].name : o.v[i].name, (struct VerEntry){ NULL, o.v[i].guard, o.v[i].cls, o.v[i].sg, o.v[i].ar, e, .finds = finds });
+                         : ver_entry_make(c, NULL, o.v[i].from ? o.v[i].from - 1 : o.v[i].cls, o.v[i].cls, o.v[i].sg, o.v[i].name, o.v[i].mi, o.v[i].ar, 1, NULL, &finds);
+    ver_entry_add(c, e >= 0 ? c->scopes[e].name : o.v[i].name, (struct VerEntry){ NULL, o.v[i].guard, o.v[i].cls, o.v[i].sg, o.v[i].ar, e, .finds = finds, .from = o.v[i].from });
   }
   free(o.v); free(o.ix);
   free(ver_pre_tab); ver_pre_tab = NULL; ver_pre_n = 0; ver_pre_nb = 0;   /* (the asks' memo lives for one build) */
@@ -6542,7 +6592,7 @@ void ver_cells_write(Compiler *c) {
         for (int j = 0, ns = ver_entry_targets(c, arms[k], sub, st); j < ns && na < 2 * (VER_MAX_ARMS + 1); j++) tests[na++] = st[j];
       }
     int nv = e->guard == 2 ? elab_history_versions(c, e->cls, e->sg, e->name, vs, VER_MAX_ARMS)
-                           : elab_chain_versions(c, e->cls, e->sg, e->name, vs, VER_MAX_ARMS);
+                           : elab_chain_versions(c, e->from ? e->from - 1 : e->cls, e->sg, e->name, vs, VER_MAX_ARMS);
     for (int j = 0; j < nv; j++) {
       if (e->guard == 1) {
         int reads = 0;
@@ -6647,7 +6697,7 @@ static int ver_late_make(Compiler *c) {
   qsort(c->ver_late, (size_t)c->nver_late, sizeof *c->ver_late, ver_late_cmp);
   for (int i = 0; i < c->nver_late; i++) {
     const struct VerLate *l = &c->ver_late[i];
-    int ix = ver_entry_ix(c, 0, l->cls, l->sg, l->name, l->ar), absent = 0, e, mm = 0, finds = VER_FINDS_NONE;
+    int ix = ver_entry_ix(c, 0, 0, l->cls, l->sg, l->name, l->ar), absent = 0, e, mm = 0, finds = VER_FINDS_NONE;
     if ((i && !ver_late_cmp(l - 1, l)) || (ix >= 0 && c->ver_entries[ix].absent)) continue;
     if (l->span) {   /* (the build's entry for a call that spans versions, unless the key's others made one) */
       if (ix < 0 && !(i && !ver_late_key_cmp(l - 1, l)) && (e = ver_entry_make(c, NULL, l->cls, l->cls, l->sg, l->name, l->mi, l->ar, 1, NULL, &finds)) >= 0) {

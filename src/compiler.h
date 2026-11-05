@@ -531,6 +531,17 @@ typedef struct {
                                  behind it, guard_behind, until the cell is
                                  set */
   int guard_behind;
+  unsigned char mixin_unversioned;   /* a plain copy of a mixin that may
+                                        not run and is not guarded
+                                        (include_module_methods' plain),
+                                        or of an include in a reopening
+                                        the record does not order after
+                                        the first body (one in a block,
+                                        include_late_stmt): the module's
+                                        later versions of its name are
+                                        layers of their own, and a call
+                                        takes no entry over them
+                                        (mixin_copies_module) */
   unsigned char super_behind;   /* the method a later include's copy stands
                                    in front of where the class had none of
                                    its own: a hidden `def = super`
@@ -1802,11 +1813,13 @@ typedef struct {
      for none, 1 when it keeps the last version (ver_entries_demand);
      cells: its histories' cells are written (ver_cells_write); finds:
      what its else arm finds while no version is live, one of
-     VER_FINDS_* (call_plan.c, ver_else_finds). Each name is the entry's
-     own copy (ver_entry_add), as in ver_late, ver_memo and the chain
-     counts: a caller may ask with a name it frees itself
+     VER_FINDS_* (call_plan.c, ver_else_finds); from: 1 + the module
+     whose chain's versions its arms test, those of the copies cls holds of
+     them (call_plan.c, mixin_copies_module); 0 for cls's chain. Each name
+     is the entry's own copy (ver_entry_add), as in ver_late, ver_memo and
+     the chain counts: a caller may ask with a name it frees itself
      (desugar_call_op_write's setter name) */
-  struct VerEntry { char *name; int guard, cls, sg, ar, scope, absent, cells, finds; } *ver_entries;
+  struct VerEntry { char *name; int guard, cls, sg, ar, scope, absent, cells, finds, from; } *ver_entries;
   int nver_entries;
   /* the chains a typed call may meet with no version made yet, whose
      entry is not asked for that yet (call_plan.c, ver_absent_note); mm:

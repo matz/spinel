@@ -7708,7 +7708,10 @@ static void prepend_cell_set(Compiler *c, int list, int after, int cell);
    prepend's are (prepend_late_stmt), wherever the record orders the
    reopening after the first body, which is where the refusal rule asks
    (refuse_mixin_after_calls counts a call in an earlier statement's lambda
-   too, though no code runs between the two bodies). */
+   too, though no code runs between the two bodies). *unplaced: a class's
+   reopening whose order to the first body the record does not fix (one in
+   a block): its include changes the class's chain at a point no guard
+   sees. */
 /* Does a top-level statement that runs code lie between places lo and hi?
    A module's reopening is guarded only then (include_late_stmt). */
 static int top_code_runs_between(Compiler *c, int lo, int hi) {
@@ -7744,9 +7747,10 @@ static int foreign_late_stmt(Compiler *c, int ci, int body, const LrOpen *ob, in
   int o = elab_cmp(p0, p1);
   return o == PROG_BEFORE || (o == PROG_UNKNOWN && p0.region >= 0 && p1.region >= 0) ? s : -1;
 }
-static int include_late_stmt(Compiler *c, int ci, int body) {
+static int include_late_stmt(Compiler *c, int ci, int body, int *unplaced) {
   const NodeTable *nt = c->nt;
   int nb = 0;
+  *unplaced = 0;
   const LrOpen *ob = elab_class_bodies(c, ci, &nb);
   int fl = foreign_late_stmt(c, ci, body, ob, nb);
   if (fl >= 0) {
@@ -7763,12 +7767,16 @@ static int include_late_stmt(Compiler *c, int ci, int body) {
        region's runs at a time the record does not fix */
     LoadPoint p0 = elab_point_of(c, ob[0].node), p1 = elab_point_of(c, s);
     int o = elab_cmp(p0, p1);
-    if (!(o == PROG_BEFORE || (o == PROG_UNKNOWN && p0.region >= 0 && p1.region >= 0))) return -1;
+    int is_mod = comp_class_is_module(c, &c->classes[ci]);
+    if (!(o == PROG_BEFORE || (o == PROG_UNKNOWN && p0.region >= 0 && p1.region >= 0))) {
+      *unplaced = !is_mod && o == PROG_UNKNOWN;
+      return -1;
+    }
     /* (a module's reopening only where code runs between its bodies: the
        hidden method a guarded copy falls back to is not carried into the
        module's includers, so a module guarded with nothing run between
        called a function no one defined) */
-    if (!comp_class_is_module(c, &c->classes[ci])) return s;
+    if (!is_mod) return s;
     int f0, r0, f1, r1;
     elab_top_place(c, ob[0].node, &f0, &r0);
     elab_top_place(c, s, &f1, &r1);
@@ -7916,7 +7924,7 @@ void process_include_body(Compiler *c, int ci, int body_node) {
      extends) */
   const char *cn = c->classes[ci].name;
   int core = is_builtin_reopen_name(cn) || is_builtin_module_name(cn) || sp_streq(cn, CLASS_REOPEN_NAME);
-  int late = core ? -1 : include_late_stmt(c, ci, body_node);
+  int unplaced = 0, late = core ? -1 : include_late_stmt(c, ci, body_node, &unplaced);
   int sc = class_def_super(nt, c->classes[ci].def_node);
   NodeKind sk = sc >= 0 ? nt_kind(nt, sc) : NK_NONE;
   if ((sk == NK_ConstantReadNode || sk == NK_ConstantPathNode) &&
@@ -8013,7 +8021,10 @@ void process_include_body(Compiler *c, int ci, int body_node) {
     int *cells = guard ? calloc((size_t)c->nclasses, sizeof(int)) : NULL;
     if (guard && !cells) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
     int s0 = c->nscopes;
-    include_module_methods(c, ci, mod_id, guard, here && !guard, cells);
+    int plain = (here && !guard) || unplaced;
+    include_module_methods(c, ci, mod_id, guard, plain, cells);
+    for (int s = s0; plain && s < c->nscopes; s++)
+      if (c->scopes[s].class_id == ci && c->scopes[s].is_include_copy) c->scopes[s].mixin_unversioned = 1;
     for (int s = s0; here && !guard && !layered && s < c->nscopes; s++)
       if (c->scopes[s].class_id == ci && c->scopes[s].is_include_copy) c->scopes[s].mixin_plain_late = 1;
     /* the writes that set the cells its copies' guard entries read, one
@@ -8812,7 +8823,10 @@ void register_extends(Compiler *c) {
         int sprep = mx[j].kind == LR_SG_PREPEND;
         if (sprep && late == -2) late = prepend_late_stmt(c, ci, body, 0);
         int guard = sprep && late >= 0, plain = !guard && bi > 0 && bi < nb && reopening_may_not_run(c, ob[bi].node);
+        int s0 = c->nscopes;
         did_clone |= extend_class_with(c, ci, mod_id, inherited, sprep, plain, guard ? &cell : NULL);
+        for (int k = s0; plain && k < c->nscopes; k++)
+          if (c->scopes[k].class_id == ci && c->scopes[k].is_cmethod) c->scopes[k].mixin_unversioned = 1;
       }
       /* after the call's last module, the write that sets the cell its
          copies read */
@@ -9853,6 +9867,7 @@ static void process_prepend_body(Compiler *c, int ci, int body) {
           if (guard) { dst->mixin_guarded = prepend_cell(c, &cell); dst->guard_behind = behind; }
           else if (vguard >= 0) { dst->mixin_guarded = c->scopes[vguard].mixin_guarded; dst->guard_behind = c->scopes[vguard].guard_behind; }
           dst->mixin_plain_late = stmt_here && !layered && !dst->mixin_guarded;
+          dst->mixin_unversioned = stmt_here && !here;
           { dst->origin_module_ci = mod_id + 1; comp_touch_scope(dst->idx); }   /* #owner names the module */
           { dst->reachable = sc->reachable; comp_touch_scope(dst->idx); }
           scope_set_ret(dst, sc->ret);

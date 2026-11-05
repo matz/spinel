@@ -7277,7 +7277,7 @@ int elab_rec_open(Compiler *c, int node, int cp, const char *cname, int encl) {
   if (made) {
     comp_class_new(c, cname, node);
     ci = c->nclasses - 1;
-    c->classes[ci].enclosing_class = encl;
+    c->classes[ci].enclosing_class = encl; comp_class_path_moved();
     /* a name qualify_colliding_classes gave carries the Ruby path it
        resolved the header to (`AP = P; class AP::Foo` is P::Foo) */
     const char *qrn = cp >= 0 ? nt_str(c->nt, cp, "qc_ruby_name") : NULL;
@@ -7297,8 +7297,9 @@ int elab_rec_open(Compiler *c, int node, int cp, const char *cname, int encl) {
     }
     /* `class ::B` (`::B = Class.new do ... end`) names B at the top level
        wherever it is written: no module encloses it, and its name is B */
-    else if (par < 0 && path)
-      c->classes[ci].enclosing_class = -1;
+    else if (par < 0 && path) {
+      c->classes[ci].enclosing_class = -1; comp_class_path_moved();
+    }
   }
   /* A class can be opened bare first (no superclass -- e.g. just to hold a
      nested class) and reopened later with `< Super`. The parent link is read

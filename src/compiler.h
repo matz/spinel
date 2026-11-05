@@ -2284,6 +2284,11 @@ int        comp_self_method_in_chain(Compiler *c, int class_id, const char *name
    renamed its scope; *def_class (when asked) the class that holds it. -1
    when no scope there has that def node. */
 int        comp_method_version(Compiler *c, int class_id, const char *name, int is_cm, int def_node, int *def_class);
+/* ...the class's own body at def node def_node that a later prepend's copy
+   shadows (`__prep <n> m`, SHADOW_PREP), which comp_method_version leaves
+   out (a call of the name reaches it through the copy), on class_id's
+   superclass chain; -1 for none */
+int        comp_shadowed_body(Compiler *c, int class_id, int is_cm, int def_node, int *def_class);
 /* The classes whose chain answers (name, is_cm) -- comp_method_in_chain's
    or comp_cmethod_in_chain's -- ascending, two ints per class (the class,
    the scope its chain finds), *n their count. NULL with *n -1 while the

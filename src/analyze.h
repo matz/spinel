@@ -1179,6 +1179,7 @@ const char *block_param_multi_leaf(Compiler *c, int block, int idx, int leaf_idx
 const char *method_sym_arg(Compiler *c, int node);   /* :sym arg name, or NULL */
 int is_method_obj_call(Compiler *c, int node);        /* is node a method(:sym) call? */
 int method_obj_target_mi(Compiler *c, int node);      /* target method scope idx, or -1 */
+int method_super_target(Compiler *c, int mi);         /* the scope <m>.super_method answers, or -1 */
 const char *class_value_instance_method_sym(Compiler *c, int node); /* instance_method on a run-time class */
 int class_value_bind_call_target(Compiler *c, int ci, const char *sym, int *armless);
 int class_value_bind_call_gap(Compiler *c, int node);

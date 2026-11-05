@@ -1757,6 +1757,18 @@ static int sm_version_renamed(Compiler *c, int class_id, int is_cm, int def_node
   return -1;
 }
 
+/* See compiler.h. */
+int comp_shadowed_body(Compiler *c, int class_id, int is_cm, int def_node, int *def_class) {
+  for (int dc = class_id; dc >= 0; dc = c->classes[dc].parent)
+    for (int s = c->nscopes - 1; s >= 0; s--)
+      if (c->scopes[s].def_node == def_node && c->scopes[s].shadow == SHADOW_PREP && sm_owns(c, s, dc, is_cm)) {
+        IMEMO_DEP_SCOPE(s);
+        if (def_class) *def_class = dc;
+        return s;
+      }
+  return -1;
+}
+
 int comp_method_version(Compiler *c, int class_id, const char *name, int is_cm, int def_node, int *def_class) {
   int mi = -1, dc = class_id;
   if (class_id < 0) mi = sm_version(c, -1, name, 0, def_node);

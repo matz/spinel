@@ -20491,6 +20491,15 @@ void cr_collect_calls(Compiler *c, const NodeTable *nt, int id,
           cr_add_name(out, n, cap, hn);
       }
     }
+    /* `<m>.super_method` takes a reference to the method one step up m's
+       chain, which no call of the program may name: an alias made before a
+       prepend captures m under a name of its own (method_super_target) */
+    int smi = is_super_method_name(nm) ? method_obj_target_mi(c, id) : -1;
+    if (smi >= 0) {
+      char mark[24];
+      snprintf(mark, sizeof mark, "\x01%d", smi);
+      cr_add_name(out, n, cap, mark);
+    }
   }
   /* a multiple assignment's attribute or index target calls its writer */
   else if (ty_k == NK_CallTargetNode) nm = nt_str(nt, id, "name");

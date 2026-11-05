@@ -4377,22 +4377,27 @@ int is_method_obj_call(Compiler *c, int node) {
   return 1;
 }
 
+/* The method scope <m>.super_method answers for m's scope mi: the method of
+   mi's def's name (comp_scope_def_name, the name its super asks for) one step
+   up mi's class's chain, or -1 (nil). A copy's own name is internal: an alias
+   made before a prepend captures the class's body as `__prep <n> m`. */
+int method_super_target(Compiler *c, int mi) {
+  if (mi < 0 || c->scopes[mi].class_id < 0) return -1;
+  int par = c->classes[c->scopes[mi].class_id].parent;
+  if (par < 0) return -1;
+  const char *nm = comp_scope_def_name(c, &c->scopes[mi]);
+  return c->scopes[mi].is_cmethod ? comp_cmethod_in_chain(c, par, nm, NULL) : comp_method_in_chain(c, par, nm, NULL);
+}
+
 /* The target method scope index bound by a `method(:sym)` node, or -1
    (e.g. a top-level Kernel method like `puts`, or a builtin-array receiver). */
 static int method_obj_target_mi_raw(Compiler *c, int node) {
   const NodeTable *nt = c->nt;
   /* <method>.super_method: the same-named method one step up the defining
      class's ancestor chain, or -1 (nil) when there is none (#3247). */
-  if (node >= 0 && nt_kind(nt, node) == NK_CallNode && nt_str(nt, node, "name") &&
-      sp_streq(nt_str(nt, node, "name"), "super_method")) {
+  if (node >= 0 && nt_kind(nt, node) == NK_CallNode && is_super_method_name(nt_str(nt, node, "name"))) {
     int imn = method_recv_node(c, nt_ref(nt, node, "receiver"));
-    int imi = imn >= 0 ? method_obj_target_mi_raw(c, imn) : -1;
-    if (imi < 0 || c->scopes[imi].class_id < 0) return -1;
-    int par = c->classes[c->scopes[imi].class_id].parent;
-    if (par < 0) return -1;
-    return c->scopes[imi].is_cmethod
-             ? comp_cmethod_in_chain(c, par, c->scopes[imi].name, NULL)
-             : comp_method_in_chain(c, par, c->scopes[imi].name, NULL);
+    return method_super_target(c, imn >= 0 ? method_obj_target_mi_raw(c, imn) : -1);
   }
   const char *sym = method_sym_arg(c, node);
   if (!sym) return -1;

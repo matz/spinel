@@ -202,6 +202,7 @@ src/analyze_scope.c pivs_callable_lit a Symbol argument's method
 src/analyze_util.c class_value_bind_call_gap a Symbol argument's method
 src/analyze_util.c class_value_bind_call_target a Symbol argument's method
 src/analyze_util.c method_obj_target_mi_raw a Method object's method
+src/analyze_util.c method_super_target super_method: the Method's def's own name, a step up its owner
 src/codegen_call.c class_responds_to a Symbol argument's method (respond_to?)
 src/codegen_call.c method_hidden_from_reflection a reflected method's name
 src/codegen_call.c obj_responds_answer a Symbol argument's method (respond_to?)
@@ -217,7 +218,6 @@ src/codegen_call_class.c emit_refl_method_defined a reflected method's name
 src/codegen_call_method.c emit_method_obj_target =disp arity metadata for a boxed receiver's method, not an invocation target
 src/codegen_call_method.c emit_op_method_arity a Symbol argument's method
 src/codegen_call_method.c emit_method_source_target a Symbol argument's method
-src/codegen_call_method.c emit_op_method_super_method super, by the Method object's own name
 src/codegen_call_object.c emit_blank_slate_defined_ask a Symbol argument's method
 src/codegen_stmt.c emit_call_stmt =mn a visibility call's Symbol argument
 

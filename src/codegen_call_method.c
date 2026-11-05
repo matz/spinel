@@ -334,14 +334,7 @@ int emit_op_method_super_method(Compiler *c, const BopCtx *x, Buf *b) {
   int recv = x->recv;
   int mnp = method_recv_node(c, recv);
   int imip = mnp >= 0 ? method_obj_target_mi(c, mnp) : -1;
-  int pmip = -1;
-  if (imip >= 0 && c->scopes[imip].class_id >= 0 &&
-      c->classes[c->scopes[imip].class_id].parent >= 0) {
-    int parp = c->classes[c->scopes[imip].class_id].parent;
-    pmip = c->scopes[imip].is_cmethod
-             ? comp_cmethod_in_chain(c, parp, c->scopes[imip].name, NULL)
-             : comp_method_in_chain(c, parp, c->scopes[imip].name, NULL);
-  }
+  int pmip = method_super_target(c, imip);
   if (pmip >= 0) {
     int tvp = ++g_tmp;
     buf_printf(b, "({ sp_BoundMethod *_t%d = ", tvp);

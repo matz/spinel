@@ -814,6 +814,12 @@ static int ct_def_version(Compiler *c, int rcls, const char *name, int sg, const
     if (elab_method_at(c, cls, name, sg, p, &d) != ELAB_YES || !d ||
         (d->kind != LR_DEF && d->kind != LR_ALIAS && d->kind != LR_COPY)) return -1;
     int mi = call_target(c, at, cls, name, CT_CAPTURE | (cls < 0 ? CT_TOP : sg ? CT_CMETHOD : 0), NULL);
+    /* The alias holds the def's own body, which a later prepend's copy
+       shadows: the table answers the copy there, which a call of the name
+       reaches, and an alias of the name does not */
+    int bi = d->kind == LR_DEF && (mi < 0 || c->scopes[mi].def_node != d->node) && cls >= 0
+               ? comp_shadowed_body(c, cls, sg, d->node, dc) : -1;
+    if (bi >= 0) return bi;
     /* A module's captured body runs as the receiving class's copy. */
     return mi >= 0 ? comp_method_version(c, rcls, c->scopes[mi].name, sg, c->scopes[mi].def_node, dc) : -1;
   }

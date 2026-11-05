@@ -297,6 +297,7 @@ int is_method_owner_query(const char *n); /* owner */
 int is_instance_method_name(const char *n); /* instance_method public_instance_method */
 int is_method_object_maker(const char *n); /* method public_method singleton_method instance_method public_instance_method */
 int is_bound_method_maker(const char *n);  /* method public_method: a Method of the receiver's own method */
+int is_super_method_name(const char *n);   /* super_method: the Method one step up its owner's chain */
 /* const_get const_source_location nesting attached_object each_object eval binding */
 int is_constant_or_object_reflection(const char *n);
 int is_const_set_name(const char *n); /* const_set */

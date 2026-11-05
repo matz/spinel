@@ -8212,6 +8212,14 @@ static int emit_iteration_stmt_body(Compiler *c, int id, Buf *b, int indent) {
     int args = nt_ref(nt, id, "arguments"); int sargc = 0;
     const int *sargv = args >= 0 ? nt_arr(nt, args, "arguments", &sargc) : NULL;
     if (sargc != 1) return 0;
+    /* a parameter whose slot holds no Time (the face's arm of a boxed
+       receiver whose block was typed by another owner, an Integer's step):
+       no Range of Times reaches this call, and the arm is left out */
+    if (p0) {
+      Scope *bs = comp_scope_of(c, block);
+      LocalVar *lv = bs ? scope_local(bs, p0_orig) : NULL;
+      if (lv && lv->type != TY_UNKNOWN && lv->type != TY_TIME && lv->type != TY_POLY) return 0;
+    }
     int tr = ++g_tmp, ts = ++g_tmp, tv = ++g_tmp;
     emit_indent(b, indent);
     buf_printf(b, "sp_TimeRange *_t%d = ", tr); emit_expr(c, recv, b);

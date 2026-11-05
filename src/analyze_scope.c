@@ -7613,6 +7613,8 @@ static BodyMix *body_mixins(Compiler *c, int ci, int body, unsigned kinds, int *
 }
 
 static void prepend_cell_write(Compiler *c, int late, int list, int after, int cell);
+static void cell_writes_defer(Compiler *c);
+static void cell_writes_flush(Compiler *c);
 /* The class or module body `body` of ci, where its statement reopens it
    after its first body ran (`class Dog; end; d.speak; class Dog; include
    Loud; end`, at a file's top level or in a module's body): that
@@ -7647,12 +7649,14 @@ static int top_code_runs_between(Compiler *c, int lo, int hi) {
 static int foreign_late_stmt(Compiler *c, int ci, int body, const LrOpen *ob, int nb) {
   if (nb < 1 || elab_foreign_mixin_open(c, ci, body) < 0) return -1;
   for (int k = 0; k < nb; k++) if (ob[k].body == body) return -1;
-  int nmx = 0, s = -1, bn = 0;
+  /* the first of them in the list (the record's list of each statement,
+     elab_stmt_list: not a scan of the list, which a top level of N such
+     statements made N^2) */
+  int nmx = 0, s = -1;
   const LrMixin *mx = elab_class_mixins(c, ci, &nmx);
-  const int *bb = nt_arr(c->nt, body, "body", &bn);
-  for (int i = 0; i < bn && s < 0; i++)
-    for (int j = 0; j < nmx && s < 0; j++)
-      if (mx[j].node == bb[i] && nt_int(c->nt, bb[i], "mixin_by_record", 0)) s = bb[i];
+  for (int j = 0; j < nmx; j++)
+    if (nt_int(c->nt, mx[j].node, "mixin_by_record", 0) && elab_stmt_list(c, mx[j].node, NULL) == body &&
+        (s < 0 || elab_sort_key(c, mx[j].node) < elab_sort_key(c, s))) s = mx[j].node;
   if (s < 0) return -1;
   LoadPoint p0 = elab_point_of(c, ob[0].node), p1 = elab_point_of(c, s);
   int o = elab_cmp(p0, p1);
@@ -7691,10 +7695,14 @@ static int include_late_stmt(Compiler *c, int ci, int body) {
   }
   return -1;
 }
+static Compiler *g_list_has_c;   /* (register_includes / register_prepends: list_has_stmt asks the record) */
 /* Is `stmt` one of statement list `list`'s own statements? (where the
    cell's write goes, after it) */
 static int list_has_stmt(const NodeTable *nt, int list, int stmt) {
   if (list < 0 || nt_kind(nt, list) != NK_StatementsNode) return 0;
+  /* a statement the record placed in the list (a record-taken mixin's,
+     in a top level of many): answered without the scan */
+  if (nt_int(nt, stmt, "mixin_by_record", 0) && g_list_has_c && elab_stmt_list(g_list_has_c, stmt, NULL) == list) return 1;
   int n = 0;
   const int *st = nt_arr(nt, list, "body", &n);
   for (int i = 0; i < n; i++) if (st[i] == stmt) return 1;
@@ -7826,6 +7834,8 @@ static int body_mixin_dependencies_ready(Compiler *c, int ci, int body_node, con
 
 void register_includes(Compiler *c) {
   const NodeTable *nt = c->nt;
+  g_list_has_c = c;
+  cell_writes_defer(c);
   g_inc_did_clone = 0;
   /* Every class body that can carry an `include`: the definition first, then
      each reopening in source order. A body is processed only once every
@@ -7864,6 +7874,7 @@ void register_includes(Compiler *c) {
     }
   }
   free(bo); free(remaining); free(done);
+  cell_writes_flush(c);
   /* What the program adds to Struct or Data by reopening it, every
      Struct.new / Data.define class answers, each with its own self: copied
      like an include into the root of each record class (a subclass reaches
@@ -8513,6 +8524,7 @@ void desugar_module_prepends(Compiler *c) {
 
 void register_extends(Compiler *c) {
   int did_clone = 0;
+  cell_writes_defer(c);
   int cls_mod = comp_core_class(c, CORE_CLASS_REOPEN);
   int nseen = 0, capseen = 8;
   int *seen = malloc(sizeof(int) * (size_t)capseen);
@@ -8592,6 +8604,7 @@ void register_extends(Compiler *c) {
      it was never declared and every read of it answered nil (#4535). The
      include and inherited-class-method clones re-register the same way. */
   free(seen);
+  cell_writes_flush(c);
   if (did_clone) register_locals(c);
 }
 
@@ -9399,14 +9412,39 @@ static int prepend_cell(Compiler *c, int *cell) {
    the first statement of the file of `late`, the top-level statement that
    makes it, so that the cell holds an Integer wherever a guard entry
    reads it */
+/* The cell writes a mixin pass made, recorded together at its end
+   (cell_writes_flush): recording one rebuilds the record's map of the
+   nodes the pass has added since, which per write made a program of N
+   late mixins N^2 */
+static int *g_cell_writes, g_ncell_writes, g_ccell_writes, g_defer_cell_writes;
+static void cell_write_note(Compiler *c, int stmt) {
+  if (!g_defer_cell_writes) { elab_record_write(c, stmt); return; }
+  if (g_ncell_writes == g_ccell_writes) {
+    g_ccell_writes = g_ccell_writes ? g_ccell_writes * 2 : 16;
+    g_cell_writes = realloc(g_cell_writes, sizeof(int) * (size_t)g_ccell_writes);
+    if (!g_cell_writes) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  }
+  g_cell_writes[g_ncell_writes++] = stmt;
+}
+/* (and the passes ask the record of the program's own statements only --
+   a late mixin's, a class's first body's -- which their copies and cell
+   writes do not move: the record's map is held through the pass, made at
+   its first question, rather than rebuilt at each after an edit) */
+static void cell_writes_defer(Compiler *c) { g_defer_cell_writes = 1; elab_hold(c, 1); }
+static void cell_writes_flush(Compiler *c) {
+  elab_hold(c, 0);
+  for (int i = 0; i < g_ncell_writes; i++) elab_record_write(c, g_cell_writes[i]);
+  g_ncell_writes = 0;
+  g_defer_cell_writes = 0;
+}
 static void prepend_cell_write(Compiler *c, int late, int list, int after, int cell) {
   int f, rank, n = 0;
   char name[32];
   ver_prepend_cell_name(cell, name);
-  elab_record_write(c, ver_cell_put(c, name, list, after, 1, 1));
+  cell_write_note(c, ver_cell_put(c, name, list, after, 1, 1));
   elab_top_place(c, late, &f, &rank);
   const int *st = f >= 0 ? nt_arr(c->nt, prog_root_stmts(c, f), "body", &n) : NULL;
-  if (n) elab_record_write(c, ver_cell_put(c, name, prog_root_stmts(c, f), st[0], 0, 0));
+  if (n) cell_write_note(c, ver_cell_put(c, name, prog_root_stmts(c, f), st[0], 0, 0));
 }
 
 /* Has module mod been prepended into class ci already: ci holds a copy
@@ -9587,9 +9625,12 @@ static void process_prepend_body(Compiler *c, int ci, int body) {
    included, the same two passes register_includes makes (#4200). */
 void register_prepends(Compiler *c) {
   int nb = 0;
+  g_list_has_c = c;
+  cell_writes_defer(c);
   ElabBody *bo = elab_all_bodies(c, &nb);
   for (int b = 0; b < nb; b++) process_prepend_body(c, bo[b].cls, bo[b].body);
   free(bo);
+  cell_writes_flush(c);
 }
 
 /* Merge inherited ivar/reader/writer NAMES into subclasses so the struct

@@ -7610,7 +7610,7 @@ ElabBody *elab_all_bodies(Compiler *c, int *n) {
   int (*rest)[3] = malloc(sizeof *rest * (size_t)(tot > 0 ? tot : 1));   /* (seq, class, body) */
   if (!v || !rest) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   for (int ci = 0; ci < c->nclasses; ci++) {
-    int no = 0, d = -1;
+    int no = 0, d = -1, from0 = nr;
     const LrOpen *o = elab_class_bodies(c, ci, &no);
     int dn = c->classes[ci].def_node, own = 0;
     for (int i = 0; i < no; i++) if (o[i].node == dn) { d = i; own = 1; }
@@ -7623,12 +7623,12 @@ ElabBody *elab_all_bodies(Compiler *c, int *n) {
     }
     /* the frames whose `K.include M` the record takes as K's (a statement
        marked mixin_by_record), each once, where the statement runs */
-    int nmx = 0;
+    int nmx = 0;   /* (ci's own later bodies and frames are rest[from0..]) */
     const LrMixin *mx = elab_class_mixins(c, ci, &nmx);
     for (int i = 0; i < nmx; i++) {
       if (!nt_int(c->nt, mx[i].node, "mixin_by_record", 0) || (mx[i].kind != LR_INCLUDE && mx[i].kind != LR_PREPEND)) continue;
       int fb = lr_frame_body(c->nt, mx[i].open), seen = 0;
-      for (int q = 0; q < nr && !seen; q++) seen = rest[q][1] == ci && rest[q][2] == fb;
+      for (int q = from0; q < nr && !seen; q++) seen = rest[q][1] == ci && rest[q][2] == fb;
       if (fb < 0 || seen) continue;
       if (nr >= tot) {
         tot = tot * 2 + 4;

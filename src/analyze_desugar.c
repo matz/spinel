@@ -24495,7 +24495,14 @@ static int rbself_body_defs(NodeTable *nt, int n0, int module, const char *cn, c
    `String.include(M)`), and nothing extends with it: its methods then run
    with that builtin value as self, as a reopening's do. NULL otherwise, a
    mixin the walk cannot place included. */
+static const char *rbself_module_host_in(NodeTable *nt, int n0, const char *mod, int object);
 static const char *rbself_module_host(NodeTable *nt, int n0, const char *mod) {
+  return rbself_module_host_in(nt, n0, mod, 0);
+}
+/* the same, `object` set: Object is a host too (`class Object; include M;
+   end`, the module's methods then run on every value as a reopening of
+   Object's do) */
+static const char *rbself_module_host_in(NodeTable *nt, int n0, const char *mod, int object) {
   const char *host = NULL;
   for (int id = 0; id < n0; id++) {
     if (nt_kind(nt, id) != NK_CallNode) continue;
@@ -24520,7 +24527,8 @@ static const char *rbself_module_host(NodeTable *nt, int n0, const char *mod) {
         for (int k = 0; k < bn; k++)
           if (bs[k] == id) { target = class_def_name(nt, m); break; }
       }
-    if (!target || !rbself_builtin(target) || (host && !sp_streq(host, target))) return NULL;
+    if (!target || !(rbself_builtin(target) || (object && sp_streq(target, "Object"))) ||
+        (host && !sp_streq(host, target))) return NULL;
     host = target;
   }
   return host;
@@ -26092,6 +26100,23 @@ static int biv_attr_defs(NodeTable *nt, int call, int **defs, int *nd) {
   return 1;
 }
 
+/* does a body of module mn call module_function? Its methods' copies on
+   the module then run with the module as self, whose instance variables
+   are its own */
+static int biv_module_function(const NodeTable *nt, int n0, const char *mn) {
+  for (int m = 0; m < n0; m++) {
+    const char *bn0 = class_def_is_module(nt, m) ? class_def_bare_name(nt, m) : NULL;
+    if (!bn0 || !sp_streq(bn0, mn)) continue;
+    int b = class_def_body(nt, m), bn = 0;
+    const int *bs = b >= 0 ? nt_arr(nt, b, "body", &bn) : NULL;
+    for (int k = 0; k < bn; k++)
+      if (nt_kind(nt, bs[k]) == NK_CallNode && nt_ref(nt, bs[k], "receiver") < 0 &&
+          sp_streq(nt_str(nt, bs[k], "name"), "module_function"))
+        return 1;
+  }
+  return 0;
+}
+
 int desugar_builtin_ivars(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int n0 = nt->count, changed = 0;
@@ -26106,7 +26131,16 @@ int desugar_builtin_ivars(Compiler *c) {
     int cp = nt_ref(nt, m, "constant_path");
     if (cp < 0 || nt_kind(nt, cp) != NK_ConstantReadNode) continue;
     int mode = biv_mode(nt_str(nt, cp, "name"));
-    if (class_def_is_module(nt, m) && mode != BIV_OBJECT) continue;
+    /* a module mixed into one builtin class alone (rbself_module_host):
+       its methods and attr_* run with that builtin value as self, so they
+       read and write the value's instance variables as a reopening's do
+       (`module Q; attr_reader :q; end; class Integer; include Q; end`);
+       Object too, as a reopening of Object's methods do */
+    if (class_def_is_module(nt, m) && mode != BIV_OBJECT) {
+      const char *mn = class_def_bare_name(nt, m);
+      const char *host = mn && !biv_module_function(nt, n0, mn) ? rbself_module_host_in(nt, n0, mn, 1) : NULL;
+      mode = host ? biv_mode(host) : BIV_NONE;
+    }
     int body = class_def_body(nt, m);
     if (mode == BIV_NONE || body < 0 || nt_kind(nt, body) != NK_StatementsNode) continue;
     /* `module Text; class String` is the program's own class */

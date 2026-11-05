@@ -163,7 +163,7 @@ static int scope_method_params(Compiler *c, int mi, MethodParam **out) {
     *out = v;
     return n;
   }
-  if (sym && (bam_owner(c, mi, &own), bp = builtin_method_params(own, sym))) {
+  if (sym && (bam_owner(c, mi, &own), bp = builtin_method_params(own, sym, NULL))) {
     method_params_parse(bp, &v, &n, &cap);
     *out = v;
     return n;
@@ -174,6 +174,41 @@ static int scope_method_params(Compiler *c, int mi, MethodParam **out) {
     return n;
   }
   return method_params_of(c, scope_params_node(c, mi), out);
+}
+
+/* The rules a Method's proc's #parameters follow, as the run time's
+   SP_BM_PROC_PARAMS_* name them (proc_params_arg) */
+enum { PROC_PARAMS_LIST, PROC_PARAMS_ARITY, PROC_PARAMS_PLAIN };
+/* Which rule the #parameters of method mi's proc follow
+   (sp_BoundMethod.proc_params): PROC_PARAMS_LIST for a Ruby body, the
+   Method's own list; PROC_PARAMS_ARITY for none, the unnamed list of its
+   arity; PROC_PARAMS_PLAIN where the bind site cannot tell which method
+   the Method stands for, a plain proc's answer. A def or a define_method
+   block has a Ruby body, and so has a builtin's wrapper that reaches one
+   instead (cplan_bam_reopen_target). An accessor's wrapper (bam_accessor)
+   and a method made of an accessor (attr_version) have none, nor a C
+   extension's method (cext_arity), nor a builtin CRuby writes in C
+   (builtin_method_params's C column; one the facts do not list is taken
+   as C, as all but a few are). The record cannot tell for a wrapper that
+   may reach a reopen's def or the builtin, until a run-time version of the
+   method tells. */
+static int method_proc_params(Compiler *c, int mi) {
+  const char *own = NULL, *sym = mi >= 0 ? bam_builtin_sym(c, mi, NULL) : NULL;
+  int in_c = 1, pn = mi >= 0 ? scope_params_node(c, mi) : -1, rd = cplan_bam_reopen_target(c, mi);
+  if (mi < 0) return PROC_PARAMS_LIST;
+  if (rd >= 0) return method_proc_params(c, rd);
+  if (rd == -2) return PROC_PARAMS_PLAIN;
+  if (c->scopes[mi].attr_version || (pn >= 0 && nt_int(c->nt, pn, "cext_arity", -99) != -99)) return PROC_PARAMS_ARITY;
+  if (!sym) return PROC_PARAMS_LIST;
+  if (nt_int(c->nt, c->scopes[mi].def_node, "bam_accessor", 0)) return PROC_PARAMS_ARITY;
+  bam_owner(c, mi, &own);
+  builtin_method_params(own, sym, &in_c);
+  return in_c ? PROC_PARAMS_ARITY : PROC_PARAMS_LIST;
+}
+/* The run time's name of rule pp, the argument of sp_bm_set_proc_params,
+   or NULL for PROC_PARAMS_LIST, which a new Method has already */
+static const char *proc_params_arg(int pp) {
+  return pp == PROC_PARAMS_ARITY ? "SP_BM_PROC_PARAMS_ARITY" : pp == PROC_PARAMS_PLAIN ? "SP_BM_PROC_PARAMS_PLAIN" : NULL;
 }
 
 /* Push the entries v[0..n) onto the PolyArray _t<tr4>, as [kind, name], or
@@ -418,7 +453,7 @@ int emit_op_proc_parameters(Compiler *c, const BopCtx *x, Buf *b) {
     }
   }
   if (pmode_ok) {
-    buf_printf(b, "sp_proc_parameters_ids("); emit_expr(c, recv, b);
+    buf_printf(b, "sp_proc_parameters_of("); emit_expr(c, recv, b);
     buf_printf(b, ", %d, (sp_sym)%d, (sp_sym)%d)",
                pmode, comp_sym_intern(c, "req"), comp_sym_intern(c, "opt"));
     return 1;
@@ -475,10 +510,17 @@ int emit_op_method_unbind(Compiler *c, const BopCtx *x, Buf *b) {
   int tvu = ++g_tmp;
   buf_printf(b, "({ sp_BoundMethod *_t%d = ", tvu);
   emit_expr(c, recv, b);
-  buf_printf(b, "; sp_bm_set_unbound(sp_bm_set_abi(sp_bound_method_new_d(NULL, SP_BM_SELF_NONE, _t%d->fn, _t%d->name, _t%d->arity, ", tvu, tvu, tvu);
+  /* (an unknown target's fact is the source Method's) */
+  char ppv[32];
+  const char *pp = tmu >= 0 ? proc_params_arg(method_proc_params(c, tmu)) : (snprintf(ppv, sizeof ppv, "_t%d->proc_params", tvu), ppv);
+  buf_puts(b, "; ");
+  if (pp) buf_puts(b, "sp_bm_set_proc_params(");
+  buf_printf(b, "sp_bm_set_unbound(sp_bm_set_abi(sp_bound_method_new_d(NULL, SP_BM_SELF_NONE, _t%d->fn, _t%d->name, _t%d->arity, ", tvu, tvu, tvu);
   if (tmu >= 0) emit_method_desc_args(c, mnu, tmu, -1, method_sym_arg(c, mnu), 1, b);
   else buf_printf(b, "NULL, _t%d->params, _t%d->owner, _t%d->src_file, _t%d->src_line", tvu, tvu, tvu, tvu);
-  buf_printf(b, "), 0, _t%d->legacy_int_abi, _t%d->legacy_sig, _t%d->legacy_fixed, _t%d->legacy_rest, _t%d->legacy_ret, _t%d->poly_abi, _t%d->poly_fixed)); })", tvu, tvu, tvu, tvu, tvu, tvu, tvu);
+  buf_printf(b, "), 0, _t%d->legacy_int_abi, _t%d->legacy_sig, _t%d->legacy_fixed, _t%d->legacy_rest, _t%d->legacy_ret, _t%d->poly_abi, _t%d->poly_fixed))", tvu, tvu, tvu, tvu, tvu, tvu, tvu);
+  if (pp) buf_printf(b, ", %s)", pp);
+  buf_puts(b, "; })");
   return 1;
   return 0;
 }
@@ -498,6 +540,8 @@ int emit_op_method_super_method(Compiler *c, const BopCtx *x, Buf *b) {
        (loaded as the new self below) cannot be swept mid-call. */
     buf_printf(b, "; SP_GC_ROOT(_t%d); ", tvp);
     int sup_unb = method_expr_is_unbound(c, recv);
+    const char *pp = proc_params_arg(method_proc_params(c, pmip));
+    if (pp) buf_puts(b, "sp_bm_set_proc_params(");
     buf_printf(b, "%ssp_bm_set_thunk(sp_bm_set_abi(sp_bound_method_new_d(_t%d->self, _t%d->self_kind, (sp_int)(uintptr_t)&", sup_unb ? "sp_bm_set_unbound(" : "", tvp, tvp);
     buf_puts(b, mc_method(c, &c->scopes[pmip]));
     buf_puts(b, ", ");
@@ -517,6 +561,7 @@ int emit_op_method_super_method(Compiler *c, const BopCtx *x, Buf *b) {
       const char *_th = sup_unb ? NULL : emit_method_thunk(c, pmip, _prb, &_tmin, &_tmax);
       emit_bm_abi_args(b, _rbb, _ab, _s, _fx, _rs, _ab ? _rt : _prt, _pa, _pf, _th, _tmin, _tmax); }
     if (sup_unb) buf_puts(b, ")");
+    if (pp) buf_printf(b, ", %s)", pp);
     buf_puts(b, "; })");
   }
   else {
@@ -552,7 +597,10 @@ static int emit_method_bind_target(Compiler *c, const BopCtx *x, Buf *b, int t2)
     int bt = ++g_tmp;
     buf_printf(b, "({ void *_t%d = (void *)(", bt);
     emit_expr(c, argv[0], b);
-    buf_printf(b, "); SP_GC_ROOT(_t%d); sp_bm_set_thunk(sp_bm_set_abi(sp_bound_method_new_d(_t%d, SP_BM_SELF_OBJ, (sp_int)(uintptr_t)&", bt, bt);
+    const char *pp = proc_params_arg(method_proc_params(c, t2));
+    buf_printf(b, "); SP_GC_ROOT(_t%d); ", bt);
+    if (pp) buf_puts(b, "sp_bm_set_proc_params(");
+    buf_printf(b, "sp_bm_set_thunk(sp_bm_set_abi(sp_bound_method_new_d(_t%d, SP_BM_SELF_OBJ, (sp_int)(uintptr_t)&", bt);
     buf_puts(b, mc_method(c, &c->scopes[t2]));
     buf_puts(b, ", ");
     emit_str_literal(b, method_sym_arg(c, mn2));
@@ -566,6 +614,7 @@ static int emit_method_bind_target(Compiler *c, const BopCtx *x, Buf *b, int t2)
       int _tmin = 0, _tmax = 0;
       const char *_th = emit_method_thunk(c, t2, 1, &_tmin, &_tmax);
       emit_bm_abi_args(b, "1", _ab, _s, _fx, _rs, _ab ? _rt : _prt, _pa, _pf, _th, _tmin, _tmax); }
+    if (pp) buf_printf(b, ", %s)", pp);
     buf_puts(b, "; })");
     return 1;
   }
@@ -627,14 +676,16 @@ int emit_op_method_to_proc(Compiler *c, const BopCtx *x, Buf *b) {
        optionals/rest into nparams > nrequired). */
     int m_arity = (np != tm->nrequired) ? -(tm->nrequired - shift + 1)
                                         : tm->nrequired - shift;
-    /* The capture is built before sp_proc_new_meta allocates the proc it
-       goes into, and until the proc holds it the C argument slot is the only
-       thing that does, so the proc's own allocation could collect it. */
+    /* The capture, the Method, which answers the proc's #parameters too
+       (sp_method_proc_scan, sp_proc_parameters_of), is built before
+       sp_proc_new_meta allocates the proc it goes into, and until the proc
+       holds it the C argument slot is the only thing that does, so the
+       proc's own allocation could collect it. */
     { int tcap = ++g_tmp;
       buf_printf(b, "({ void *_t%d = (void *)(", tcap);
       emit_expr(c, recv, b);
       buf_printf(b, "); SP_GC_ROOT(_t%d);", tcap);
-      buf_printf(b, " sp_proc_new_meta((void *)_mtp_%s, _t%d, sp_bm_cap_scan, %d, TRUE, 0, NULL, NULL); })",
+      buf_printf(b, " sp_proc_new_meta((void *)_mtp_%s, _t%d, sp_method_proc_scan, %d, TRUE, 0, NULL, NULL); })",
                  tid, tcap, m_arity); }
     return 1;
   }
@@ -1808,6 +1859,8 @@ static int emit_method_obj_target(Compiler *c, int id, Buf *b, const NodeTable *
   if (sp_streq(name, "instance_method") && method_sym_arg(c, id) != NULL) {
     int umi = capture;
     if (umi >= 0) {
+      const char *pp = proc_params_arg(method_proc_params(c, umi));
+      if (pp) buf_puts(b, "sp_bm_set_proc_params(");
       buf_puts(b, "sp_bm_set_unbound(sp_bm_set_thunk(sp_bm_set_abi(sp_bound_method_new_d(NULL, SP_BM_SELF_NONE, (sp_int)(uintptr_t)&");
       buf_puts(b, mc_method(c, &c->scopes[umi]));
       buf_puts(b, ", ");
@@ -1824,6 +1877,7 @@ static int emit_method_obj_target(Compiler *c, int id, Buf *b, const NodeTable *
         const char *_th = c->scopes[umi].is_cmethod ? emit_method_thunk(c, umi, 0, &_tmin, &_tmax) : NULL;
         emit_bm_abi_args(b, "0", _ab, _s, _fx, _rs, _ab ? _rt : _prt, _pa, _pf, _th, _tmin, _tmax); }
       buf_puts(b, ")");
+      if (pp) buf_printf(b, ", %s)", pp);
       return 1;
     }
   }
@@ -2018,6 +2072,11 @@ static int emit_method_obj_target(Compiler *c, int id, Buf *b, const NodeTable *
     Repr br = repr_of(c, recv);
     const char *bk = ty_is_array(br.as_ty) ? array_kind(br.as_ty) : NULL;
     const char *bop = mi < 0 && bk && (br.elem == TY_INT || br.elem == TY_STRING) ? typed_array_adapter_op(sym) : NULL;
+    /* (an adapter stands for Array's op, which CRuby writes in C) */
+    int in_c = 1;
+    if (bop) builtin_method_params("Array", sym, &in_c);
+    const char *pp = proc_params_arg(mi >= 0 ? method_proc_params(c, mi) : bop && in_c ? PROC_PARAMS_ARITY : PROC_PARAMS_LIST);
+    if (pp) buf_puts(b, "sp_bm_set_proc_params(");
     buf_puts(b, mi >= 0 || bop ? "sp_bm_set_thunk(sp_bm_set_abi(sp_bound_method_new_d(" : "sp_bm_set_thunk(sp_bm_set_abi(sp_bound_method_new(");
     if (self_rooted) buf_printf(b, "_t%d", self_tmp);
     else if (recv >= 0 && repr_of(c, recv).as_ty == TY_CLASS) buf_puts(b, "NULL");
@@ -2228,6 +2287,7 @@ static int emit_method_obj_target(Compiler *c, int id, Buf *b, const NodeTable *
       emit_bm_abi_args(b, _rbb, mi_legacy, mi >= 0 ? mi_sig : bop_sig,
                        mi >= 0 ? mi_fixed : bop_argc, mi >= 0 ? mi_rest : bop_rest,
                        mi >= 0 ? (mi_legacy ? mi_ret : mi_pret) : bop_ret, mi_poly, mi_pfixed, _th, _tmin, _tmax); }
+    if (pp) buf_printf(b, ", %s)", pp);
     if (self_rooted) buf_puts(b, "; })");
     return 1;
   }

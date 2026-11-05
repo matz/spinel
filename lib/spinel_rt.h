@@ -16847,6 +16847,38 @@ static sp_PolyArray *sp_bm_parameters(sp_BoundMethod *m) {
   }
   return out;
 }
+/* Proc#parameters, mode as sp_proc_parameters_ids takes it, of a Method's
+   proc (its capture scanned by sp_method_proc_scan), by CRuby's rule for
+   it. A target with a Ruby body answers the list its bind site stamped,
+   the one Method#parameters reads, with every required positional (named
+   or a destructuring group) optional in the proc view. One with none
+   (SP_BM_PROC_PARAMS_ARITY) answers the unnamed list of its arity in either
+   view: n required, or for a negative arity -n-1 required and a rest.
+   Any other proc answers its own list, and so does a Method's whose bind
+   site could not tell which method it stands for (SP_BM_PROC_PARAMS_PLAIN). */
+static sp_PolyArray *sp_proc_parameters_of(sp_Proc *p, int mode, sp_sym req_id, sp_sym opt_id) {
+  if (!p || p->cap_scan != sp_method_proc_scan) return sp_proc_parameters_ids(p, mode, req_id, opt_id);
+  SP_GC_ROOT(p);
+  sp_BoundMethod *m = (sp_BoundMethod *)p->cap;
+  if (m && m->proc_params == SP_BM_PROC_PARAMS_PLAIN) return sp_proc_parameters_ids(p, mode, req_id, opt_id);
+  sp_sym rq = sp_sym_intern_n("req", 3), op = sp_sym_intern_n("opt", 3);
+  if (m && m->proc_params == SP_BM_PROC_PARAMS_ARITY) {
+    sp_PolyArray *r = sp_PolyArray_new(); SP_GC_ROOT(r);
+    sp_int n = m->arity < 0 ? -m->arity - 1 : m->arity;
+    for (sp_int i = 0; i < n + (m->arity < 0); i++) {
+      sp_PolyArray *pair = sp_PolyArray_new(); SP_GC_ROOT(pair);
+      sp_PolyArray_push(pair, sp_box_sym(i < n ? rq : sp_sym_intern_n("rest", 4)));
+      sp_PolyArray_push(r, sp_box_poly_array(pair));
+    }
+    return r;
+  }
+  sp_PolyArray *r = sp_bm_parameters(m);
+  for (sp_int i = 0; mode == 0 && i < r->len; i++) {
+    sp_PolyArray *pair = (sp_PolyArray *)r->data[i].v.p;
+    if ((sp_sym)pair->data[0].v.i == rq) pair->data[0] = sp_box_sym(op);
+  }
+  return r;
+}
 
 /* `round(half: :even)` on a BOXED number. sp_poly_round_n answers the
    half-up rule the bare `round` has; the tie-break mode is a keyword the

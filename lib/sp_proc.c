@@ -106,6 +106,9 @@ sp_Curry *sp_curry_apply(sp_Curry *c, sp_RbVal arg) {SP_GC_ROOT_RBVAL(arg);
 /* Method#to_proc: wrap the bound method in a Proc whose trampoline forwards
    through the (void *self, sp_int...) ABI (the arity dispatches the cast). */
 void sp_bm_cap_scan(void *p) { sp_gc_mark(p); }
+/* A Method's proc's capture is its Method, which answers the proc's
+   #parameters too (sp_proc_parameters_of) */
+void sp_method_proc_scan(void *p) { sp_gc_mark(p); }
 /* Whether every fixed position of the stamped signature is a scalar-kind
    token (the TY_UNKNOWN wildcard 0 through TY_NIL 4; see abi_sig_token in
    codegen_call.c). A pointer token is 100000 + TyKind. The generic
@@ -402,7 +405,7 @@ sp_int sp_method_proc_tramp(void *cap, sp_int argc, sp_int *args) {
 }
 sp_Proc *sp_method_to_proc(sp_BoundMethod *m) {
   SP_GC_ROOT(m);   /* `&method(:m)` hands over a Method nothing else holds */
-  return sp_proc_new_meta((void *)sp_method_proc_tramp, m, sp_bm_cap_scan, 1, TRUE, 0, NULL, NULL);
+  return sp_proc_new_meta((void *)sp_method_proc_tramp, m, sp_method_proc_scan, 1, TRUE, 0, NULL, NULL);
 }
 /* Bound Method object: `obj.method(:foo)` / `method(:foo)`. `self` is the
    bound receiver (NULL for a top-level method), `fn` the function address

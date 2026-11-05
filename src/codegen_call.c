@@ -23246,6 +23246,25 @@ static void unresolved_builtin_refusal(Compiler *c, int id, int recv, const char
            "(CRuby calls the method; this would raise NoMethodError)", cls, nm, cls);
   unsupported(c, id, msg);
 }
+/* Call id emitted again with its receiver recv boxed (PB_SUBDISPATCH, the
+   call plan's cplan_poly_sub): the poly dispatch picks the method by the
+   value's class. */
+static void emit_call_reboxed(Compiler *c, int id, int recv, Buf *b) {
+  int tsd = ++g_tmp;
+  tsd = hold_operand_pre(c, recv, TY_POLY, 1, tsd, 1);
+  view_bind(recv, "_t%d", tsd);
+  if (g_plan_check) {   /* the re-entry, held against the plan before the view */
+    int pa_frame = pa_begin(id);
+    pa_observe(PA_BUILTIN, PA_KEY_BUILTIN + PB_SUBDISPATCH, -1, TY_UNKNOWN, PC_SAME);
+    pa_end(c, pa_frame, cplan_poly_sub(c, id));
+  }
+  int vw = view_push(c, recv, TY_POLY);
+  int svid = g_subdispatch_id; g_subdispatch_id = id;
+  emit_call(c, id, b);
+  g_subdispatch_id = svid;
+  view_pop(c, vw);
+  view_unbind(g_n_argov - 1);
+}
 int emit_unresolved_call(Compiler *c, int id, Buf *b) {
   const NodeTable *nt = c->nt;
   const char *name = nt_str(nt, id, "name");
@@ -23856,23 +23875,7 @@ int emit_unresolved_call(Compiler *c, int id, Buf *b) {
          whose default raises exactly the NoMethodError this site would have. */
       if (recv >= 0 && nm && ty_is_object(grt) && !comp_ty_value_obj(c, grt) &&
           g_n_argov < MAX_ARG_OVERRIDE && g_subdispatch_id != id) {
-        if (comp_subclass_answers(c, ty_object_class(grt), nm)) {
-          int tsd = ++g_tmp;
-          tsd = hold_operand_pre(c, recv, TY_POLY, 1, tsd, 1);
-          view_bind(recv, "_t%d", tsd);
-          if (g_plan_check) {   /* the re-entry, held against the plan before the view */
-            int pa_frame = pa_begin(id);
-            pa_observe(PA_BUILTIN, PA_KEY_BUILTIN + PB_SUBDISPATCH, -1, TY_UNKNOWN, PC_SAME);
-            pa_end(c, pa_frame, cplan_poly_sub(c, id));
-          }
-          int vw = view_push(c, recv, TY_POLY);
-          int svid = g_subdispatch_id; g_subdispatch_id = id;
-          emit_call(c, id, b);
-          g_subdispatch_id = svid;
-          view_pop(c, vw);
-          view_unbind(g_n_argov - 1);
-          return 1;
-        }
+        if (comp_subclass_answers(c, ty_object_class(grt), nm)) { emit_call_reboxed(c, id, recv, b); return 1; }
       }
       /* The multi-set forms of String#count/#delete/#squeeze, and Hash#store:
          the rows of #4149's table with a second argument (#4195). No user
@@ -29361,6 +29364,14 @@ static int emit_call_on_missing_builtin_path(Compiler *c, int id, Buf *b) {
   return 1;
 }
 void emit_call(Compiler *c, int id, Buf *b) {
+  /* a String, Integer or Float that may be nil, for a name only the
+     program's NilClass has (cplan_nil_scalar_reach): boxed, the poly
+     dispatch runs NilClass's method for nil and raises for the rest */
+  int nrv = nt_ref(c->nt, id, "receiver");
+  if (nrv >= 0 && g_n_argov < MAX_ARG_OVERRIDE && g_subdispatch_id != id && cplan_nil_scalar_reach(c, id)) {
+    emit_call_reboxed(c, id, nrv, b);
+    return;
+  }
   if (emit_autoload_register(c, id, b)) return;
   if (emit_call_on_missing_builtin_path(c, id, b)) return;
   if (emit_const_class_call_wrap(c, id, b, emit_call)) return;

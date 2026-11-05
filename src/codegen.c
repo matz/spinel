@@ -17564,8 +17564,8 @@ void emit_regex_section(Compiler *c, Buf *b) {
      so hand it the raise (see sp_raise_stack_overflow). */
   buf_puts(b, "  sp_stack_overflow_raise_fn = sp_raise_stack_overflow;\n");
   buf_puts(b, "  sp_stack_guard_init();\n");
-  if (g_has_user_cmp)
-    buf_puts(b, "  sp_obj_cmp_hook = sp_obj_cmp_dispatch;\n");
+  if (g_has_user_cmp)   /* (and the Range walk, which the cold half reaches through the unit's copy: SP_ORANGE_WALK) */
+    buf_puts(b, "  sp_obj_cmp_hook = sp_obj_cmp_dispatch;\n  sp_orange_walk_lib = sp_orange_to_a;\n");
   if (c->gen_comparable)
     buf_puts(b, "  sp_obj_comparable_hook = sp_obj_comparable_dispatch;\n");
   if (g_has_user_binop)

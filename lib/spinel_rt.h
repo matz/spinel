@@ -3222,6 +3222,18 @@ static inline const void *sp_poly_identity_ptr(sp_RbVal v) {
 }
 static sp_int sp_rbval_hash_key(sp_RbVal v);   /* with the Hash key machinery below */
 static SP_UNUSED sp_PolyArray *sp_orange_to_a(const sp_ObjRange *r);
+/* The Range walk, as the cold half (lib/sp_poly_cold.c) reaches it: the walk
+   calls the program's succ and <=> through hooks the generated unit keeps
+   static, which the cold half's own copy would read unset. So the cold half
+   walks through the generated unit's copy, which a unit that can make a
+   Range of objects (one with a `<=>` of its own) hands it at startup. */
+typedef sp_PolyArray *(*sp_orange_walk_fn)(const sp_ObjRange *r);
+extern sp_orange_walk_fn sp_orange_walk_lib;
+#ifdef SPINEL_EXT_HOST
+#define SP_ORANGE_WALK(r) sp_orange_walk_lib(r)
+#else
+#define SP_ORANGE_WALK(r) sp_orange_to_a(r)
+#endif
 static sp_bool sp_orange_eq(const sp_ObjRange *a, const sp_ObjRange *b);   /* defined with the Range helpers below */
 static sp_int sp_orange_hash(const sp_ObjRange *r);
 static sp_RbVal sp_orange_min(const sp_ObjRange *r);
@@ -12099,7 +12111,7 @@ static sp_PolyPolyHash *sp_PolyPolyHash_from_poly(sp_RbVal src);
 static sp_PolyArray *sp_enum_items_from(sp_RbVal v);
 static sp_RbVal sp_poly_iter_subject(sp_RbVal v) {
   /* a Range of objects walks its members by succ, and a Range of Times has none */
-  if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_OBJ_RANGE && v.v.p) return sp_box_poly_array(sp_orange_to_a((sp_ObjRange *)v.v.p));
+  if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_OBJ_RANGE && v.v.p) return sp_box_poly_array(SP_ORANGE_WALK((sp_ObjRange *)v.v.p));
   if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_TIME_RANGE && v.v.p) sp_trange_iterate_raise();
   /* an Enumerator too: it has no length or element read of its own, so a
      boxed `h.each_pair` (or a boxed Struct's) walked zero elements and
@@ -15535,7 +15547,7 @@ static sp_RbVal sp_poly_arr_drop(sp_RbVal v, sp_int n) {
 static sp_int sp_poly_count(sp_RbVal v) {
   if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_DIR) return sp_poly_dir_count(v);
   if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_FLOAT_RANGE && v.v.p) return sp_frange_poly_count((*(sp_FloatRange *)v.v.p));
-  if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_OBJ_RANGE && v.v.p) return sp_orange_to_a((sp_ObjRange *)v.v.p)->len;
+  if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_OBJ_RANGE && v.v.p) return SP_ORANGE_WALK((sp_ObjRange *)v.v.p)->len;
   sp_poly_coll_chk(v, "count");
   /* String#count needs the character set to count */
   if (v.tag == SP_TAG_STR || sp_poly_is_strbuf(v))
@@ -18358,7 +18370,7 @@ sp_Enumerator *sp_Enumerator_dup(sp_Enumerator *e);
 sp_Enumerator *sp_Enumerator_dup_unfrozen(sp_Enumerator *e);
 static sp_PolyArray *sp_enum_items_from(sp_RbVal v) {
   SP_GC_ROOT_RBVAL(v);   /* the hash arm allocates before reading v again */
-  if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_OBJ_RANGE && v.v.p) return sp_orange_to_a((sp_ObjRange *)v.v.p);
+  if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_OBJ_RANGE && v.v.p) return SP_ORANGE_WALK((sp_ObjRange *)v.v.p);
   if (v.tag == SP_TAG_OBJ) {
     void *p = v.v.p;
     switch (v.cls_id) {
@@ -18485,7 +18497,7 @@ static sp_RbVal sp_poly_enum_chk(sp_RbVal v, const char *m) {
   /* a user object's elements are read once, by walking its #each, and handed
      on as the Array they are, so that walk is not run again by the caller */
   if (v.tag == SP_TAG_OBJ && v.cls_id >= 0) return sp_box_poly_array(sp_poly_to_a_arr_as(v, m, 0));
-  if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_OBJ_RANGE && v.v.p) return sp_box_poly_array(sp_orange_to_a((sp_ObjRange *)v.v.p));
+  if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_OBJ_RANGE && v.v.p) return sp_box_poly_array(SP_ORANGE_WALK((sp_ObjRange *)v.v.p));
   return v;
 }
 /* One end of a numeric Range for Range#overlap?: absent (nil), or an
@@ -18663,8 +18675,8 @@ static sp_RbVal sp_orange_send(sp_ObjRange *r, const char *n, int argc, sp_RbVal
     if (!strcmp(n, "last")) return sp_orange_last(r);
     if (!strcmp(n, "min")) return sp_orange_min(r);
     if (!strcmp(n, "max")) return sp_orange_max(r);
-    if (!strcmp(n, "to_a") || !strcmp(n, "entries")) return sp_box_poly_array(sp_orange_to_a(r));
-    if (!strcmp(n, "count")) return r->last.tag == SP_TAG_NIL || r->first.tag == SP_TAG_NIL ? sp_box_float(HUGE_VAL) : sp_box_int(sp_orange_to_a(r)->len);
+    if (!strcmp(n, "to_a") || !strcmp(n, "entries")) return sp_box_poly_array(SP_ORANGE_WALK(r));
+    if (!strcmp(n, "count")) return r->last.tag == SP_TAG_NIL || r->first.tag == SP_TAG_NIL ? sp_box_float(HUGE_VAL) : sp_box_int(SP_ORANGE_WALK(r)->len);
     if (!strcmp(n, "exclude_end?")) return sp_box_bool(r->excl != 0);
     if (!strcmp(n, "to_s")) return sp_box_str(sp_orange_to_s(r));
     if (!strcmp(n, "inspect")) return sp_box_str(sp_orange_inspect(r));
@@ -19946,7 +19958,7 @@ static sp_Enumerator *sp_Enumerator_new_indices(sp_RbVal arr) {
 static sp_PolyArray *sp_poly_to_a_call(sp_RbVal v) {
   if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_MATCHDATA && v.v.p) return sp_MatchData_to_a((sp_MatchData *)v.v.p);
   if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_FLOAT_RANGE && v.v.p) { sp_frange_iter_raise((*(sp_FloatRange *)v.v.p), 1); return NULL; }
-  if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_OBJ_RANGE && v.v.p) return sp_orange_to_a((sp_ObjRange *)v.v.p);
+  if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_OBJ_RANGE && v.v.p) return SP_ORANGE_WALK((sp_ObjRange *)v.v.p);
   if (!(v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_TIME && v.v.p)) return sp_poly_to_a_arr(v);
   sp_Time t = *(sp_Time *)v.v.p;
   sp_PolyArray *a = sp_PolyArray_new(); SP_GC_ROOT(a);

@@ -1107,7 +1107,7 @@ static const BuiltinOp bop_rows[] = {
   { TY_TIME_RANGE, "count", 0, 0, BF_NONE, TY_POLY, BOPE_TEMPLATE, "sp_trange_count($r)", 0 },
   { TY_TIME_RANGE, "size", 0, 0, BF_NONE, TY_POLY, BOPE_TEMPLATE, "({ (void)($r); sp_trange_iterate_raise(); sp_box_nil(); })", 0 },
   { TY_TIME_RANGE, "sum", 0, 0, BF_NONE, TY_POLY, BOPE_TEMPLATE, "({ (void)($r); sp_trange_iterate_raise(); sp_box_nil(); })", 0 },
-  /* a Range of the program's objects: its ends and membership compare through the class's <=>; it is not walked (no succ) */
+  /* a Range of the program's objects: its ends and membership compare through the class's <=>; it is walked by the class's succ (to_a) */
   { TY_OBJ_RANGE, "begin", 0, 0, BF_ANY, TY_POLY, BOPE_TEMPLATE, "($r)->first", 0 },
   { TY_OBJ_RANGE, "end", 0, 0, BF_ANY, TY_POLY, BOPE_TEMPLATE, "($r)->last", 0 },
   { TY_OBJ_RANGE, "first", 0, 0, BF_ANY, TY_POLY, BOPE_TEMPLATE, "sp_orange_first($r)", 0 },
@@ -1134,6 +1134,8 @@ static const BuiltinOp bop_rows[] = {
   { TY_OBJ_RANGE, "dup", 0, 0, BF_ANY, TY_OBJ_RANGE, BOPE_TEMPLATE, "sp_orange_copy($r, 0)", 0 },
   { TY_OBJ_RANGE, "clone", 0, 0, BF_ANY, TY_OBJ_RANGE, BOPE_TEMPLATE, "sp_orange_copy($r, 1)", 0 },
   { TY_OBJ_RANGE, "itself", 0, 0, BF_ANY, TY_OBJ_RANGE, BOPE_TEMPLATE, "$r", 0 },
+  { TY_OBJ_RANGE, "to_a", 0, 0, BF_NONE, TY_POLY_ARRAY, BOPE_TEMPLATE, "sp_orange_to_a($r)", 0 },
+  { TY_OBJ_RANGE, "entries", 0, 0, BF_NONE, TY_POLY_ARRAY, BOPE_TEMPLATE, "sp_orange_to_a($r)", 0 },
   { TY_OBJ_RANGE, "freeze", 0, 0, BF_ANY, TY_OBJ_RANGE, BOPE_TEMPLATE, "({ sp_ObjRange *_t$T = $r; _t$T->unfrozen = 0; _t$T; })", 0 },
   /* String range ("a".."e"): the endpoints answer natively (with a count,
      the materialized prefix); every traversal rides the element array

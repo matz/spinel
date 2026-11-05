@@ -17024,6 +17024,42 @@ int class_to_io_dispatched(Compiler *c, int k) {
   return 1;
 }
 
+/* Does class k's #succ take an arm of sp_obj_succ_dispatch, the Range walk's
+   step (sp_orange_to_a)? */
+static int class_succ_dispatched(Compiler *c, int k) {
+  if (k < 0 || k >= c->nclasses || !c->classes[k].instantiated || is_builtin_reopen(c->classes[k].name)) return 0;
+  int defcls = -1;
+  int mi = comp_method_in_chain(c, k, "succ", &defcls);
+  if (mi < 0 || defcls < 0) return 0;
+  Scope *m = &c->scopes[mi];
+  if (!m->reachable || m->yields || m->nparams != 0 || m->rest_idx >= 0) return 0;
+  if (scope_is_shadowed(c, mi) || m->is_transplanted_source) return 0;
+  return 1;
+}
+static int g_has_user_succ = 0;
+
+static void emit_obj_succ_dispatch(Compiler *c, Buf *b) {
+  buf_puts(b, "static sp_RbVal sp_obj_succ_dispatch(sp_RbVal v, int probe, sp_bool *ok) {\n");
+  emit_hook_object_root(b, "SP_GC_ROOT_RBVAL", "v");
+  buf_puts(b, "  *ok = TRUE;\n  switch (v.cls_id) {\n");
+  for (int k = 0; k < c->nclasses; k++) {
+    if (!class_succ_dispatched(c, k)) continue;
+    int defcls = -1;
+    int mi = comp_method_in_chain(c, k, "succ", &defcls);
+    Scope *m = &c->scopes[mi];
+    const char *dcn = c->classes[defcls].c_name;
+    int has_blk = m->blk_param && m->blk_param[0];
+    char call[256];
+    snprintf(call, sizeof call, "%s(%s(sp_%s *)v.v.p%s)", mc_method(c, m),
+             c->classes[defcls].is_value_type ? "*" : "", dcn, has_blk ? ", NULL" : "");
+    buf_printf(b, "    case %d: if (probe) return sp_box_nil(); return ", k);
+    if (m->ret == TY_POLY || m->ret == TY_UNKNOWN) buf_puts(b, call);
+    else emit_boxed_text(c, m->ret, call, b);
+    buf_puts(b, ";\n");
+  }
+  buf_puts(b, "    default: break;\n  }\n  *ok = FALSE;\n  return sp_box_nil();\n}\n");
+}
+
 static void emit_user_to_io_dispatch(Compiler *c, Buf *b) {
   buf_puts(b, "static sp_File *sp_user_to_io_dispatch(sp_RbVal v) {\n");
   emit_hook_object_root(b, "SP_GC_ROOT_RBVAL", "v");
@@ -17418,6 +17454,8 @@ void emit_regex_section(Compiler *c, Buf *b) {
     buf_puts(b, "static sp_RbVal sp_user_coerce_dispatch(const char *op, sp_RbVal recv, sp_RbVal obj, sp_bool *handled);\n");
   if (g_has_user_to_io)
     buf_puts(b, "static sp_File *sp_user_to_io_dispatch(sp_RbVal v);\n");
+  if (g_has_user_succ)
+    buf_puts(b, "static sp_RbVal sp_obj_succ_dispatch(sp_RbVal v, int probe, sp_bool *ok);\n");
   if (g_has_user_init_copy)
     buf_puts(b, "static void sp_user_init_copy_dispatch(sp_RbVal copy, sp_RbVal orig);\n");
   if (program_has_arysub(c))
@@ -17534,6 +17572,8 @@ void emit_regex_section(Compiler *c, Buf *b) {
     buf_puts(b, "  sp_user_coerce_hook = sp_user_coerce_dispatch;\n");
   if (g_has_user_to_io)
     buf_puts(b, "  sp_user_to_io_hook = sp_user_to_io_dispatch;\n");
+  if (g_has_user_succ)
+    buf_puts(b, "  sp_obj_succ_hook = sp_obj_succ_dispatch;\n");
   if (g_has_user_init_copy)
     buf_puts(b, "  SP_INSTALL_HOOK(sp_user_init_copy_hook, sp_user_init_copy_dispatch);\n");
   if (program_has_arysub(c)) buf_puts(b, "  SP_INSTALL_HOOK(sp_bsub_dup_hook, sp_arysub_dup_dispatch);\n");   /* #7449 */
@@ -22812,6 +22852,9 @@ char *codegen_program(const NodeTable *nt) {
         (m2->ret == TY_IO || m2->ret == TY_UNKNOWN || m2->ret == TY_POLY) &&
         !scope_is_shadowed(c, mi2) && !m2->is_transplanted_source) { g_has_user_to_io = 1; break; }
   }
+  g_has_user_succ = 0;
+  for (int k = 0; k < c->nclasses; k++)
+    if (class_succ_dispatched(c, k)) { g_has_user_succ = 1; break; }
   g_gen_obj_hashkey = 0;
   for (int k = 0; k < c->nclasses; k++)
     if (class_is_hashkey(c, k) || class_is_hashonly_key(c, k) || class_is_valuekey(c, k)) { g_gen_obj_hashkey = 1; break; }
@@ -22938,6 +22981,7 @@ char *codegen_program(const NodeTable *nt) {
   if (g_has_user_aset) emit_user_aset_dispatch(c, body);
   if (g_has_user_coerce) emit_user_coerce_dispatch(c, body);
   if (g_has_user_to_io) emit_user_to_io_dispatch(c, body);
+  if (g_has_user_succ) emit_obj_succ_dispatch(c, body);
   if (g_has_user_init_copy) emit_user_init_copy_dispatch(c, body);
   if (program_has_arysub(c)) emit_arysub_dup_dispatch(c, body);
   if (program_has_own_cmethod_eqq(c)) emit_cmeth_eqq_dispatch(c, body);

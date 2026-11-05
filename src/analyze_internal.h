@@ -978,6 +978,7 @@ int desugar_block_capture_wrap(Compiler *c);
 int desugar_user_not_match(Compiler *c);
 int desugar_exception_class_ctor(Compiler *c);
 int desugar_env_enum(Compiler *c);
+int desugar_obj_range_via_a(Compiler *c);
 int desugar_dir_surface(Compiler *c);
 int local_write_binds_value(NodeKind k);
 int desugar_enumerable_chain(Compiler *c);

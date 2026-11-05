@@ -3216,6 +3216,7 @@ static inline const void *sp_poly_identity_ptr(sp_RbVal v) {
   return sp_poly_literal_identity(v).v.p;
 }
 static sp_int sp_rbval_hash_key(sp_RbVal v);   /* with the Hash key machinery below */
+static SP_UNUSED sp_PolyArray *sp_orange_to_a(const sp_ObjRange *r);
 static sp_bool sp_orange_eq(const sp_ObjRange *a, const sp_ObjRange *b);   /* defined with the Range helpers below */
 static sp_int sp_orange_hash(const sp_ObjRange *r);
 static sp_RbVal sp_orange_min(const sp_ObjRange *r);
@@ -5097,7 +5098,7 @@ static SP_INLINE sp_RbVal sp_poly_ary_chk(sp_RbVal v, const char *m, int range_o
   if (v.tag == SP_TAG_STR || v.tag == SP_TAG_SYM || sp_poly_is_strbuf(v) ||
       (v.tag == SP_TAG_OBJ && sp_poly_is_hash_kind(v.cls_id)) ||
       (!range_ok && v.tag == SP_TAG_OBJ &&
-       (v.cls_id == SP_BUILTIN_RANGE || v.cls_id == SP_BUILTIN_STR_RANGE ||
+       (v.cls_id == SP_BUILTIN_RANGE || v.cls_id == SP_BUILTIN_STR_RANGE || v.cls_id == SP_BUILTIN_OBJ_RANGE ||
         v.cls_id == SP_BUILTIN_FLOAT_RANGE)))
     sp_raise_poly_nomethod(m, v);
   return v;
@@ -6464,6 +6465,11 @@ static sp_int sp_poly_arr_cmp(sp_RbVal a, sp_RbVal b, sp_bool *comparable);
 typedef sp_int (*sp_obj_cmp_fn)(sp_RbVal a, sp_RbVal b, sp_bool *comparable);
 static sp_obj_cmp_fn sp_obj_cmp_hook = NULL;
 static sp_bool (*sp_obj_comparable_hook)(int cls_id) = NULL;
+/* `succ` of a program's class, for the Range walk (sp_orange_to_a): the
+   generated TU installs the cls_id switch; *ok is false where none answers,
+   and a probe only asks, as CRuby's respond_to?(:succ) check comes first */
+typedef sp_RbVal (*sp_obj_succ_fn)(sp_RbVal v, int probe, sp_bool *ok);
+static sp_obj_succ_fn sp_obj_succ_hook = NULL;
 #define SP_IS_BUILTIN_ARRAY(id) ((id) == SP_BUILTIN_INT_ARRAY || (id) == SP_BUILTIN_STR_ARRAY || \
                                  (id) == SP_BUILTIN_FLT_ARRAY || (id) == SP_BUILTIN_POLY_ARRAY)
 /* A String compared with a user object that answers #to_str: CRuby's
@@ -8224,7 +8230,7 @@ static sp_RbVal sp_splat_to_array(sp_RbVal v) {
   if (v.tag == SP_TAG_NIL) return sp_box_poly_array(sp_PolyArray_new());
   if (v.tag == SP_TAG_OBJ && sp_poly_is_array_kind(v.cls_id)) return v;
   if (v.tag == SP_TAG_OBJ && sp_poly_is_hash_kind(v.cls_id)) return sp_box_poly_array(sp_poly_to_a_arr(v));
-  if (v.tag == SP_TAG_OBJ && (v.cls_id == SP_BUILTIN_RANGE || v.cls_id == SP_BUILTIN_STR_RANGE ||
+  if (v.tag == SP_TAG_OBJ && (v.cls_id == SP_BUILTIN_RANGE || v.cls_id == SP_BUILTIN_STR_RANGE || v.cls_id == SP_BUILTIN_OBJ_RANGE ||
                               (v.cls_id == SP_BUILTIN_ENUMERATOR && v.v.p)))
     return sp_box_poly_array(sp_enum_items_from(v));
   if (v.tag == SP_TAG_OBJ && v.v.p &&
@@ -8519,7 +8525,8 @@ static sp_PolyArray *sp_poly_arr_recv(sp_RbVal v, const char *m) {
     return sp_enum_to_a_boxed(v);
   /* an Integer or String Range enumerates its members: select / filter /
      reject on a boxed one raised NoMethodError naming Range (#4837) */
-  if (v.tag == SP_TAG_OBJ && (v.cls_id == SP_BUILTIN_RANGE || v.cls_id == SP_BUILTIN_STR_RANGE))
+  if (v.tag == SP_TAG_OBJ && (v.cls_id == SP_BUILTIN_RANGE || v.cls_id == SP_BUILTIN_STR_RANGE || v.cls_id == SP_BUILTIN_OBJ_RANGE ||
+                              (v.cls_id == SP_BUILTIN_OBJ_RANGE && m[0] && m[strlen(m) - 1] != '!')))
     return sp_enum_items_from(v);
   /* A boxed Hash enumerates as its [key, value] pairs, which is what every
      Enumerable name reaching here wants (#3449). The few whose Hash result is
@@ -12086,10 +12093,13 @@ static sp_PolyPolyHash *sp_PolyPolyHash_from_poly(sp_RbVal src);
    rather than loop forever (#4837). */
 static sp_PolyArray *sp_enum_items_from(sp_RbVal v);
 static sp_RbVal sp_poly_iter_subject(sp_RbVal v) {
+  /* a Range of objects walks its members by succ, and a Range of Times has none */
+  if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_OBJ_RANGE && v.v.p) return sp_box_poly_array(sp_orange_to_a((sp_ObjRange *)v.v.p));
+  if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_TIME_RANGE && v.v.p) sp_trange_iterate_raise();
   /* an Enumerator too: it has no length or element read of its own, so a
      boxed `h.each_pair` (or a boxed Struct's) walked zero elements and
      `.map { |k, v| k }` answered [] */
-  if (v.tag == SP_TAG_OBJ && (v.cls_id == SP_BUILTIN_RANGE || v.cls_id == SP_BUILTIN_STR_RANGE ||
+  if (v.tag == SP_TAG_OBJ && (v.cls_id == SP_BUILTIN_RANGE || v.cls_id == SP_BUILTIN_STR_RANGE || v.cls_id == SP_BUILTIN_OBJ_RANGE ||
                               v.cls_id == SP_BUILTIN_ENUMERATOR))
     return sp_box_poly_array(sp_enum_items_from(v));
   return v;
@@ -12140,7 +12150,8 @@ static void sp_poly_iter_check(sp_RbVal v, const char *m) {
   if (v.tag == SP_TAG_OBJ &&
       (v.cls_id >= 0 || sp_poly_is_array_kind(v.cls_id) ||
        sp_poly_is_hash_kind(v.cls_id) || v.cls_id == SP_BUILTIN_RANGE ||
-       v.cls_id == SP_BUILTIN_STR_RANGE || v.cls_id == SP_BUILTIN_ENUMERATOR))
+       v.cls_id == SP_BUILTIN_STR_RANGE || v.cls_id == SP_BUILTIN_ENUMERATOR ||
+       v.cls_id == SP_BUILTIN_OBJ_RANGE || v.cls_id == SP_BUILTIN_TIME_RANGE))
     return;
   sp_raise_poly_nomethod(m, v);
 }
@@ -14685,7 +14696,7 @@ static sp_int sp_poly_count_val(sp_RbVal v, sp_RbVal x) {
      Enumerator its values (sp_enum_items_from), as the typed receivers do;
      each answered 0 before. */
   if (sp_poly_is_hash_kind(v.cls_id) || v.cls_id == SP_BUILTIN_RANGE ||
-      v.cls_id == SP_BUILTIN_STR_RANGE || v.cls_id == SP_BUILTIN_ENUMERATOR) {
+      v.cls_id == SP_BUILTIN_STR_RANGE || v.cls_id == SP_BUILTIN_OBJ_RANGE || v.cls_id == SP_BUILTIN_ENUMERATOR) {
     SP_GC_ROOT_RBVAL(x);
     sp_PolyArray *items = sp_enum_items_from(v);
     SP_GC_ROOT(items);
@@ -15187,7 +15198,7 @@ static int sp_poly_enum_find_index_val(sp_RbVal v, sp_RbVal x, sp_oint *out) {
   SP_GC_ROOT_RBVAL(x);
   sp_PolyArray *items = NULL;
   if (sp_poly_is_hash_kind(v.cls_id) || v.cls_id == SP_BUILTIN_RANGE ||
-      v.cls_id == SP_BUILTIN_STR_RANGE || v.cls_id == SP_BUILTIN_ENUMERATOR)
+      v.cls_id == SP_BUILTIN_STR_RANGE || v.cls_id == SP_BUILTIN_OBJ_RANGE || v.cls_id == SP_BUILTIN_ENUMERATOR)
     items = sp_enum_items_from(v);
   else items = sp_poly_user_elems(v);
   if (!items) return 0;
@@ -15519,6 +15530,7 @@ static sp_RbVal sp_poly_arr_drop(sp_RbVal v, sp_int n) {
 static sp_int sp_poly_count(sp_RbVal v) {
   if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_DIR) return sp_poly_dir_count(v);
   if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_FLOAT_RANGE && v.v.p) return sp_frange_poly_count((*(sp_FloatRange *)v.v.p));
+  if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_OBJ_RANGE && v.v.p) return sp_orange_to_a((sp_ObjRange *)v.v.p)->len;
   sp_poly_coll_chk(v, "count");
   /* String#count needs the character set to count */
   if (v.tag == SP_TAG_STR || sp_poly_is_strbuf(v))
@@ -18341,6 +18353,7 @@ sp_Enumerator *sp_Enumerator_dup(sp_Enumerator *e);
 sp_Enumerator *sp_Enumerator_dup_unfrozen(sp_Enumerator *e);
 static sp_PolyArray *sp_enum_items_from(sp_RbVal v) {
   SP_GC_ROOT_RBVAL(v);   /* the hash arm allocates before reading v again */
+  if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_OBJ_RANGE && v.v.p) return sp_orange_to_a((sp_ObjRange *)v.v.p);
   if (v.tag == SP_TAG_OBJ) {
     void *p = v.v.p;
     switch (v.cls_id) {
@@ -18412,7 +18425,7 @@ static sp_Enumerator *sp_poly_bsearch_enum(sp_RbVal v) {
 static sp_PolyArray *sp_poly_ewi_items(sp_RbVal v) {
   if (v.tag == SP_TAG_OBJ &&
       (sp_poly_is_hash_kind(v.cls_id) || v.cls_id == SP_BUILTIN_RANGE ||
-       v.cls_id == SP_BUILTIN_STR_RANGE || (v.cls_id == SP_BUILTIN_ENUMERATOR && v.v.p)))
+       v.cls_id == SP_BUILTIN_STR_RANGE || v.cls_id == SP_BUILTIN_OBJ_RANGE || (v.cls_id == SP_BUILTIN_ENUMERATOR && v.v.p)))
     return sp_enum_items_from(v);
   /* anything but an Array is no collection here: each_with_index's
      NoMethodError, where it walked nil or a String as empty */
@@ -18439,7 +18452,7 @@ static sp_PolyArray *sp_poly_to_a_arr_as(sp_RbVal v, const char *m, int nil_ok) 
     return (sp_PolyArray *)v.v.p;
   if (v.tag == SP_TAG_OBJ &&
       (sp_poly_is_array_kind(v.cls_id) || sp_poly_is_hash_kind(v.cls_id) ||
-       v.cls_id == SP_BUILTIN_RANGE || v.cls_id == SP_BUILTIN_STR_RANGE))
+       v.cls_id == SP_BUILTIN_RANGE || v.cls_id == SP_BUILTIN_STR_RANGE || v.cls_id == SP_BUILTIN_OBJ_RANGE))
     return sp_enum_items_from(v);   /* Range#to_a -> its element array (#3162) */
   /* a Struct/Data read out of a container: Struct#to_a is its member values in
      order, which the symbol-keyed to_h (via the generated hook) preserves. */
@@ -18467,6 +18480,7 @@ static sp_RbVal sp_poly_enum_chk(sp_RbVal v, const char *m) {
   /* a user object's elements are read once, by walking its #each, and handed
      on as the Array they are, so that walk is not run again by the caller */
   if (v.tag == SP_TAG_OBJ && v.cls_id >= 0) return sp_box_poly_array(sp_poly_to_a_arr_as(v, m, 0));
+  if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_OBJ_RANGE && v.v.p) return sp_box_poly_array(sp_orange_to_a((sp_ObjRange *)v.v.p));
   return v;
 }
 /* One end of a numeric Range for Range#overlap?: absent (nil), or an
@@ -18562,6 +18576,24 @@ static int sp_orange_le(sp_RbVal a, sp_RbVal b, int strict) {
   sp_bool ok = FALSE; sp_int c = sp_poly_cmp(a, b, &ok);
   return ok && (strict ? c < 0 : c <= 0);
 }
+/* Range#each over objects: from the begin by succ while <=> keeps it within
+   the end, CRuby's range_each_func; materialized, so an endless one cannot */
+static SP_UNUSED sp_PolyArray *sp_orange_to_a(const sp_ObjRange *r) {
+  SP_GC_ROOT(r);
+  if (r->first.tag == SP_TAG_NIL) sp_raise_cls("TypeError", "can't iterate from NilClass");
+  if (r->last.tag == SP_TAG_NIL) sp_raise_cls("RangeError", "cannot convert endless range to an array");
+  sp_PolyArray *a = sp_PolyArray_new(); SP_GC_ROOT(a);
+  sp_RbVal v = r->first; SP_GC_ROOT_RBVAL(v);
+  sp_bool ok = FALSE;
+  if (sp_obj_succ_hook && v.tag == SP_TAG_OBJ && v.cls_id >= 0) sp_obj_succ_hook(v, 1, &ok);
+  if (!ok) sp_raise_cls("TypeError", sp_sprintf("can't iterate from %s", sp_poly_class_name(v)));
+  while (sp_orange_le(v, r->last, (int)r->excl)) {
+    sp_PolyArray_push(a, v);
+    v = sp_obj_succ_hook(v, 0, &ok);
+    if (!ok) sp_raise_nomethod(sp_nomethod_msg("succ", v));
+  }
+  return a;
+}
 /* the ends must compare, as the boxed constructor (sp_range_new_box) checks */
 static SP_UNUSED sp_ObjRange *sp_orange_new_typed(sp_RbVal f, sp_RbVal l, sp_int x) {
   if (f.tag != SP_TAG_NIL && l.tag != SP_TAG_NIL) {
@@ -18626,6 +18658,8 @@ static sp_RbVal sp_orange_send(sp_ObjRange *r, const char *n, int argc, sp_RbVal
     if (!strcmp(n, "last")) return sp_orange_last(r);
     if (!strcmp(n, "min")) return sp_orange_min(r);
     if (!strcmp(n, "max")) return sp_orange_max(r);
+    if (!strcmp(n, "to_a") || !strcmp(n, "entries")) return sp_box_poly_array(sp_orange_to_a(r));
+    if (!strcmp(n, "count")) return r->last.tag == SP_TAG_NIL || r->first.tag == SP_TAG_NIL ? sp_box_float(HUGE_VAL) : sp_box_int(sp_orange_to_a(r)->len);
     if (!strcmp(n, "exclude_end?")) return sp_box_bool(r->excl != 0);
     if (!strcmp(n, "to_s")) return sp_box_str(sp_orange_to_s(r));
     if (!strcmp(n, "inspect")) return sp_box_str(sp_orange_inspect(r));
@@ -18670,7 +18704,7 @@ static sp_bool sp_range_overlap_v(sp_RbVal a, sp_RbVal o) {
 static sp_PolyArray *sp_poly_entries(sp_RbVal v) {
   if (v.tag == SP_TAG_OBJ &&
       (sp_poly_is_array_kind(v.cls_id) || sp_poly_is_hash_kind(v.cls_id) ||
-       v.cls_id == SP_BUILTIN_RANGE || v.cls_id == SP_BUILTIN_STR_RANGE ||
+       v.cls_id == SP_BUILTIN_RANGE || v.cls_id == SP_BUILTIN_STR_RANGE || v.cls_id == SP_BUILTIN_OBJ_RANGE ||
        (v.cls_id == SP_BUILTIN_ENUMERATOR && v.v.p)))
     return sp_enum_items_from(v);
   sp_RbVal sv = sp_poly_struct_values(v);
@@ -18686,7 +18720,7 @@ static sp_PolyArray *sp_poly_entries(sp_RbVal v) {
 static sp_PolyArray *sp_poly_enum_recv_arr(sp_RbVal v, const char *nm) {
   if (v.tag != SP_TAG_OBJ) sp_raise_nomethod(sp_nomethod_msg(nm, v));
   if (!(sp_poly_is_array_kind(v.cls_id) || sp_poly_is_hash_kind(v.cls_id) ||
-        v.cls_id == SP_BUILTIN_RANGE || v.cls_id == SP_BUILTIN_STR_RANGE ||
+        v.cls_id == SP_BUILTIN_RANGE || v.cls_id == SP_BUILTIN_STR_RANGE || v.cls_id == SP_BUILTIN_OBJ_RANGE ||
         (v.cls_id == SP_BUILTIN_ENUMERATOR && v.v.p))) {
     sp_RbVal sv = sp_poly_struct_values(v);
     if (sv.tag == SP_TAG_OBJ && sv.cls_id == SP_BUILTIN_POLY_ARRAY) return (sp_PolyArray *)sv.v.p;
@@ -19386,7 +19420,7 @@ static sp_Enumerator *sp_poly_lazy_src(sp_RbVal v) {
   if (v.tag != SP_TAG_OBJ || !v.v.p) sp_raise_nomethod(sp_nomethod_msg("lazy", v));
   if (v.cls_id == SP_BUILTIN_ENUMERATOR) return (sp_Enumerator *)v.v.p;
   int ok = sp_poly_is_array_kind(v.cls_id) || sp_poly_is_hash_kind(v.cls_id) ||
-           v.cls_id == SP_BUILTIN_RANGE || v.cls_id == SP_BUILTIN_STR_RANGE;
+           v.cls_id == SP_BUILTIN_RANGE || v.cls_id == SP_BUILTIN_STR_RANGE || v.cls_id == SP_BUILTIN_OBJ_RANGE;
   /* a user object streams through its own #to_a, as sp_enum_items_from reads it */
   if (!ok && v.cls_id >= 0 && sp_obj_to_a_fn) {
     sp_RbVal a = sp_obj_to_a_fn(v);
@@ -19459,7 +19493,7 @@ static sp_Enumerator *sp_poly_enum_for_each(sp_RbVal v) {
   if (v.tag == SP_TAG_OBJ && v.v.p) {
     if (v.cls_id == SP_BUILTIN_ENUMERATOR) return (sp_Enumerator *)v.v.p;
     if (sp_poly_is_array_kind(v.cls_id) || sp_poly_is_hash_kind(v.cls_id) ||
-        v.cls_id == SP_BUILTIN_RANGE || v.cls_id == SP_BUILTIN_STR_RANGE)
+        v.cls_id == SP_BUILTIN_RANGE || v.cls_id == SP_BUILTIN_STR_RANGE || v.cls_id == SP_BUILTIN_OBJ_RANGE)
       return sp_Enumerator_new_from(v);
   }
   sp_raise_cls("NoMethodError", sp_nomethod_msg("each", v));
@@ -19907,6 +19941,7 @@ static sp_Enumerator *sp_Enumerator_new_indices(sp_RbVal arr) {
 static sp_PolyArray *sp_poly_to_a_call(sp_RbVal v) {
   if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_MATCHDATA && v.v.p) return sp_MatchData_to_a((sp_MatchData *)v.v.p);
   if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_FLOAT_RANGE && v.v.p) { sp_frange_iter_raise((*(sp_FloatRange *)v.v.p), 1); return NULL; }
+  if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_OBJ_RANGE && v.v.p) return sp_orange_to_a((sp_ObjRange *)v.v.p);
   if (!(v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_TIME && v.v.p)) return sp_poly_to_a_arr(v);
   sp_Time t = *(sp_Time *)v.v.p;
   sp_PolyArray *a = sp_PolyArray_new(); SP_GC_ROOT(a);

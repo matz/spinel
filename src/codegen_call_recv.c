@@ -19319,16 +19319,21 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
   if (recv >= 0 && rt == TY_POLY && nt_ref(nt, id, "block") < 0 &&
       ((argc == 0 && (sp_streq(name, "to_h") || sp_streq(name, "to_r") || sp_streq(name, "to_c"))) ||
        (argc <= 1 && sp_streq(name, "rationalize")))) {
+    /* a class of the program that defines the name answers it, unless the
+       class facts rule its objects out of the receiver (#11094) */
     int has_user = 0;
     for (int k = 0; k < c->nclasses && !has_user; k++)
-      if (comp_poly_arm_defines_n(c, k, name, argc)) has_user = 1;
+      if (comp_poly_arm_defines_n(c, k, name, argc) && !cls_fact_excludes(c, recv, k)) has_user = 1;
     if (!has_user) {
       /* (--int-overflow=promote holds the Rational boxed, a big one too:
          the box is the answer, unopened) */
-      if (sp_streq(name, "to_r") && g_promote_mode) {
+      /* (--int-overflow=promote holds it boxed, as does a call typed by a
+         program's own to_r the class facts rule out here) */
+      int boxed_ans = g_promote_mode || comp_ntype(c, id) == TY_POLY;
+      if (sp_streq(name, "to_r") && boxed_ans) {
         buf_puts(b, "sp_poly_to_r_m("); emit_expr(c, recv, b); buf_puts(b, ")");
       }
-      else if (sp_streq(name, "rationalize") && g_promote_mode) {
+      else if (sp_streq(name, "rationalize") && boxed_ans) {
         buf_puts(b, "sp_poly_rationalize_m("); emit_expr(c, recv, b);
         buf_printf(b, ", %d, ", argc);
         if (argc == 1) emit_boxed(c, argv[0], b); else buf_puts(b, "sp_box_nil()");

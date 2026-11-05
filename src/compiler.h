@@ -537,6 +537,17 @@ typedef struct {
                                    (inc_super_behind), which a Method made
                                    of it does not hold: it holds what the
                                    super reaches */
+  unsigned char mixin_plain_late;   /* a plain copy an include or prepend
+                                       that may not run made where its
+                                       guard could not tell the copy's
+                                       readers or a brought module's
+                                       hidden copies apart
+                                       (mixin_presence_unguarded,
+                                       mixin_rebrought_behind): a later
+                                       mixin's guard entry never runs it as
+                                       the method behind, so that mixin
+                                       makes plain copies too
+                                       (mixin_meets_plain_late) */
   /* a hidden copy: a body the compiler moved behind another method of its
      name. A SHADOW_PREP copy is named apart from every method the program
      names (comp_shadow_name); a SHADOW_INC copy's name is not checked against

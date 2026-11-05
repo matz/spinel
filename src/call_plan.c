@@ -5580,6 +5580,10 @@ static int mixin_copy_versions(Compiler *c, int mi, int *to, ElabVersion *vs) {
       const Scope *k = &c->scopes[s];
       if (k->class_id != m->class_id || k->is_cmethod != m->is_cmethod || k->mixin_guarded != m->mixin_guarded ||
           k->guard_behind != m->guard_behind || !k->name || !sp_streq(k->name, m->name) || k->def_node != cv[i].v->node) continue;
+      /* (a module included again lists its versions again: one copy each) */
+      int dup = 0;
+      for (int j = 0; j < n && !dup; j++) dup = to[j] == s;
+      if (dup) break;
       vs[n] = cv[i];
       to[n++] = s;
       break;

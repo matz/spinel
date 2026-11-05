@@ -15932,6 +15932,10 @@ static int local_class_test(const NodeTable *nt, int pred, int *local, const cha
    and classes are left to the run-time test for it, because an object's
    class may be an Array's subclass. */
 static int settled_local_is_a(Compiler *c, TyKind t, const char *kn, int exact, int case_eq) {
+  /* an object of a class rooted in a builtin's storage (`class SubA <
+     Array`, or a Hash, String or Time subclass) is an instance of that
+     builtin and its modules: only the run-time test knows those */
+  if (comp_ty_ary_root(c, t) >= 0) return -1;
   int is_array_class = ty_matches_class(c, TY_POLY_ARRAY, kn, 1) == 1;
   if (!case_eq && !exact && is_array_class) return ty_is_array(t) || ty_is_obj_array(t);
   if (!ty_is_array(t) && !ty_is_obj_array(t)) return -1;

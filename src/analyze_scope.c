@@ -7364,6 +7364,34 @@ static int mixin_versions_super_reached(Compiler *c, int mod_id, const char *nam
   }
   return 0;
 }
+/* A later mixin's copy takes the name `own` stands under in class ci:
+   `own` goes to the hidden name `shadow` (Scope.shadow `kind`, standing
+   for `user`), and where it is a mixin's copy, so do the copies of its
+   module's other versions of the name that mixin made, which are versions
+   of it (mixin_prev_version): the copies of the same module, side, kind
+   and guard under the copy's own name. A hidden copy the earlier module
+   brought keeps its own name, which the earlier copy's super calls.
+   `keep` 0: nothing reaches the renamed copies now, but, with `met`, one
+   a call meets the version of before the later mixin runs
+   (elab_version_met). */
+static void mixin_copies_rename(Compiler *c, int ci, int own, const char *shadow, int kind, const char *user, int keep, int met) {
+  const Scope *o = &c->scopes[own];
+  int om = o->origin_module_ci, og = o->mixin_guarded, ob = o->guard_behind, side = o->is_cmethod;
+  int inc = o->is_include_copy, ext = o->is_extend_copy;
+  char oname[256];
+  snprintf(oname, sizeof oname, "%s", o->name);
+  for (int v = 0; v < c->nscopes; v++) {
+    Scope *k = &c->scopes[v];
+    if (v != own && (!(inc || ext) || k->class_id != ci || k->is_cmethod != side || k->entry || k->is_include_copy != inc ||
+                     k->is_extend_copy != ext || k->origin_module_ci != om || k->mixin_guarded != og ||
+                     k->guard_behind != ob || !k->name || !sp_streq(k->name, oname))) continue;
+    free(k->name);
+    k->name = strdup(shadow);
+    comp_scope_set_shadow(c, v, kind, user);
+    k = &c->scopes[v];
+    if (!keep && !(met && elab_version_met(c, ci, k->is_cmethod, user, k->def_node))) { k->reachable = 0; comp_touch_scope(k->idx); }
+  }
+}
 
 /* Copy module mod_id's instance methods into class ci, one clone per
    includer, as `include` does (process_include_body). guard: an include a
@@ -7447,13 +7475,14 @@ static void include_module_methods(Compiler *c, int ci, int mod_id, int guard, i
           free(cif->prep_from[kk]); cif->prep_from[kk] = strdup(inc_shadow);
           break;
         }
-      free(c->scopes[own].name);
-      c->scopes[own].name = strdup(inc_shadow);
-      comp_scope_set_shadow(c, own, SHADOW_INC, src->name);
-      if (mixin_versions_super_reached(c, mod_id, src->name)) comp_prep_chain_add(cif, src->name, inc_shadow);
+      /* (with the copies of the earlier module's other versions of the
+         name, which are versions of the renamed copy: mixin_prev_version) */
+      int reached = mixin_versions_super_reached(c, mod_id, src->name);
       /* (a guarded copy's entry runs the earlier copy until the include
          has run) */
-      else if (!guarded) { c->scopes[own].reachable = 0; comp_touch_scope(c->scopes[own].idx); }   /* nothing can reach it now */
+      mixin_copies_rename(c, ci, own, inc_shadow, SHADOW_INC, src->name, reached || guarded, 0);
+      src = &c->scopes[ms];
+      if (reached) comp_prep_chain_add(cif, src->name, inc_shadow);
       if (guarded) behind = own;
       own = -1;
     }
@@ -8352,9 +8381,6 @@ static int extend_class_with(Compiler *c, int ci, int mod_id, int inherited, int
           cif->prep_from[kk] = strdup(key);
           break;
         }
-      free(c->scopes[own].name);
-      c->scopes[own].name = strdup(shadow);
-      comp_scope_set_shadow(c, own, SHADOW_INC, src->name);
       int reached = scope_body_has_super(c, ms);
       if (prepend && cell) {
         /* the copy's own super reaches the method it stands in front of,
@@ -8376,12 +8402,10 @@ static int extend_class_with(Compiler *c, int ci, int mod_id, int inherited, int
         comp_cprep_chain_add(cif, ac->name, shadow);
         reached = 1;
       }
-      /* nothing can reach it now, but a call that meets the earlier
-         module's version before this extend runs (elab_version_met) */
-      if (!reached && !elab_version_met(c, ci, 1, src->name, c->scopes[own].def_node)) {
-        c->scopes[own].reachable = 0;
-        comp_touch_scope(c->scopes[own].idx);
-      }
+      /* the earlier copy goes to the shadow name with its versions; nothing
+         can reach them now, but a call that meets the earlier module's
+         version before this extend runs (elab_version_met) */
+      mixin_copies_rename(c, ci, own, shadow, SHADOW_INC, src->name, reached, 1);
       src = &c->scopes[ms];
     }
     else if (prepend && cell && c->classes[ci].parent >= 0 &&
@@ -9599,10 +9623,11 @@ static void process_prepend_body(Compiler *c, int ci, int body) {
               break;
             }
           }
-          /* Rename the currently active scope to the shadow name. */
-          free(active->name);
-          active->name = strdup(shadow);
-          comp_scope_set_shadow(c, active_mi, SHADOW_PREP, method_name);
+          /* Rename the currently active scope to the shadow name, with an
+             earlier mixin's copies of its module's other versions of the
+             name, which are versions of it (mixin_prev_version), by the
+             copy's own name */
+          mixin_copies_rename(c, ci, active_mi, shadow, SHADOW_PREP, method_name, 1, 0);
           /* Record the new dispatch chain entry: method_name -> shadow. */
           comp_prep_chain_add(&c->classes[ci], method_name, shadow);
           /* Visibility is registered before prepends, by name: the class's

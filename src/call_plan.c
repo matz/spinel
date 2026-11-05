@@ -986,6 +986,7 @@ static int guard_chain(Compiler *c, int mi, int *to, DispArm *arm, char sel[][32
   to[n++] = mi;
   return n;
 }
+static int mixin_copy_versions(Compiler *c, int mi, int *to, ElabVersion *vs);
 /* A call that reaches mi, a copy a later prepend puts in front of a method,
    runs it once the prepend's statement has run and the method behind it
    until then: the guard entry of mi's class for the call's arguments
@@ -998,8 +999,15 @@ static int ct_guard(Compiler *c, int id, int mi, unsigned flags) {
   if (flags & CT_CAPTURE) {
     const LrDef *d = NULL;
     LoadPoint p = elab_point_of(c, id);
+    /* (a mixin's arm, or the copy of its module's version live there:
+       guard_layer_versions) */
     if (p.region >= 0 && elab_method_at(c, m->class_id, name, m->is_cmethod, p, &d) == ELAB_YES && d)
-      for (int i = 0; i < n; i++) if (c->scopes[to[i]].def_node == d->node) return to[i];
+      for (int i = 0; i < n; i++) {
+        ElabVersion vs[VER_MAX_ARMS];
+        int vt[VER_MAX_ARMS], nv = c->scopes[to[i]].mixin_guarded ? mixin_copy_versions(c, to[i], vt, vs) : 0;
+        if (!nv) vt[nv++] = to[i];
+        for (int k = 0; k < nv; k++) if (c->scopes[vt[k]].def_node == d->node) return vt[k];
+      }
   }
   if (!c->ver_built) return mi;
   int e = ct_entry_of(c, 1, m->class_id, m->is_cmethod, name, ver_arity(c, id, to, n));
@@ -5551,23 +5559,77 @@ static int ver_entry_emit(Compiler *c, int rcls, int sg, const char *name, int a
   if (pin) ver_pin(c, els, els_to);
   return e;
 }
+/* The copies that are the versions of one module method a mixin copies
+   (analyze_scope.c, mixin_prev_version): those of mi's class and side
+   under mi's name, with its cell and the method it stands in front of
+   where a later include or prepend guards them, each with the record's
+   version on the class's chain it copies (vs[k], whose history's cell
+   tells it), in the chain's order. How many, 0 where one is not on the
+   chain (mi stands alone). */
+static int mixin_copy_versions(Compiler *c, int mi, int *to, ElabVersion *vs) {
+  const Scope *m = &c->scopes[mi];
+  ElabVersion cv[VER_MAX_ARMS];
+  int n = 0, ns = 0, nv = elab_chain_versions(c, m->class_id, m->is_cmethod, comp_scope_user_name(m), cv, VER_MAX_ARMS);
+  for (int s = 0; s < c->nscopes; s++) {
+    const Scope *k = &c->scopes[s];
+    ns += k->class_id == m->class_id && k->is_cmethod == m->is_cmethod && k->mixin_guarded == m->mixin_guarded &&
+          k->guard_behind == m->guard_behind && k->name && sp_streq(k->name, m->name) && !k->entry;
+  }
+  for (int i = 0; i < nv && n < VER_MAX_ARMS; i++)
+    for (int s = 0; cv[i].v->kind == LR_DEF && s < c->nscopes; s++) {
+      const Scope *k = &c->scopes[s];
+      if (k->class_id != m->class_id || k->is_cmethod != m->is_cmethod || k->mixin_guarded != m->mixin_guarded ||
+          k->guard_behind != m->guard_behind || !k->name || !sp_streq(k->name, m->name) || k->def_node != cv[i].v->node) continue;
+      vs[n] = cv[i];
+      to[n++] = s;
+      break;
+    }
+  return ns > 1 && n == ns ? n : 0;
+}
+/* The entry over the versions of guarded copy mi, one layer of a guard
+   chain (mixin_copy_versions): an if-chain over the cells of their
+   histories, nearest first, whose arm for each version calls its copy;
+   mi where it stands alone, -1 where none can be made */
+static int guard_layer_versions(Compiler *c, int mi, int ar) {
+  ElabVersion vs[VER_MAX_ARMS];
+  DispArm arm[VER_MAX_ARMS];
+  char sel[VER_MAX_ARMS][32];
+  int to[VER_MAX_ARMS], nv = mixin_copy_versions(c, mi, to, vs), blk = 0, spliced = 1;
+  if (!nv) return mi;
+  for (int k = 0; k < nv; k++) {
+    blk |= c->scopes[to[k]].blk_param || c->scopes[to[k]].yields;
+    spliced &= c->scopes[to[k]].yields;
+    ver_cell_name(vs[k].hist, sel[k]);
+    arm[k] = (DispArm){ sel[k], vs[k].n, c->scopes[to[k]].name, vs[k].hist + 1 };
+  }
+  const Scope *m = &c->scopes[mi];
+  return ver_entry_emit(c, m->class_id, m->is_cmethod, comp_scope_user_name(m), ar, blk, spliced, arm, to, nv, to[nv - 1], -1);
+}
 /* The guard entry of mi, a copy a later prepend puts in front of a method
    (Scope.mixin_guarded), with ar parameters: the same if-chain over the
    cells of the prepends in front of the method, nearest first, its else
-   arm the method behind them all */
+   arm the method behind them all. The arm of a mixin whose module defines
+   the method again runs the entry over its copies of the versions
+   (guard_layer_versions): whether the mixin has run and which version its
+   module holds are told apart, each by its own cell. */
 static int guard_entry_make(Compiler *c, int mi, int ar) {
   DispArm arm[VER_MAX_ARMS];
   char sel[VER_MAX_ARMS][32];
   int to[VER_MAX_ARMS + 1], n = guard_chain(c, mi, to, arm, sel), blk = 0, spliced = 1;
-  const Scope *m = &c->scopes[mi];
   if (n < 2) return -1;
+  /* Cloned forwarding bodies retain the hidden name even when the clone
+     has no pin in the original entry's node index. */
+  for (int k = 0; k < n - 1; k++) {
+    int e = c->scopes[to[k]].mixin_guarded ? guard_layer_versions(c, to[k], ar) : to[k];
+    if (e < 0) return -1;
+    arm[k].callee = e == to[k] ? c->scopes[to[k]].name : comp_scope_user_name(&c->scopes[mi]);
+    to[k] = e;
+  }
   for (int k = 0; k < n; k++) {
     blk |= c->scopes[to[k]].blk_param || c->scopes[to[k]].yields;
     spliced &= c->scopes[to[k]].yields;
   }
-  /* Cloned forwarding bodies retain the hidden name even when the clone
-     has no pin in the original entry's node index. */
-  for (int k = 0; k < n - 1; k++) arm[k].callee = c->scopes[to[k]].name;
+  const Scope *m = &c->scopes[mi];   /* (after the layers' entries, which grow the scopes) */
   return ver_entry_emit(c, m->class_id, m->is_cmethod, comp_scope_user_name(m), ar, blk, spliced, arm, to, n - 1, to[n - 1], -1);
 }
 static void ver_entry_add(Compiler *c, const char *name, struct VerEntry e) {
@@ -6442,8 +6504,15 @@ void ver_cells_write(Compiler *c) {
     /* (not only the entries reached now: a send's arms, made in the fixpoint, reach methods whose calls bind entries this first pass leaves unreached) */
     if (e->scope < 0 || e->cells == pass) continue;
     e->cells = 1;
-    int arms[VER_MAX_ARMS + 1], tests[VER_MAX_ARMS + 1];
+    int arms[VER_MAX_ARMS + 1], tests[2 * (VER_MAX_ARMS + 1)];
     int na = e->guard == 1 ? ver_entry_targets(c, e->scope, arms, tests) : 0;
+    /* (and an arm's own, of the entry over a mixin's versions:
+       guard_layer_versions) */
+    for (int k = 0, n0 = na; k < n0; k++)
+      if (arms[k] >= 0 && c->scopes[arms[k]].entry == ENTRY_DISPATCH) {
+        int sub[VER_MAX_ARMS + 1], st[VER_MAX_ARMS + 1];
+        for (int j = 0, ns = ver_entry_targets(c, arms[k], sub, st); j < ns && na < 2 * (VER_MAX_ARMS + 1); j++) tests[na++] = st[j];
+      }
     int nv = e->guard == 2 ? elab_history_versions(c, e->cls, e->sg, e->name, vs, VER_MAX_ARMS)
                            : elab_chain_versions(c, e->cls, e->sg, e->name, vs, VER_MAX_ARMS);
     for (int j = 0; j < nv; j++) {

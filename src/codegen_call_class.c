@@ -491,6 +491,24 @@ static int emit_boxed_responds_builtin_absent(Compiler *c, int recv, const char 
 }
 
 /* respond_to?, method_defined? and its kin, const_set / const_get / const_defined? */
+/* The visibility of qm's method on the first of Object (a top-level def
+   is a private Object method), Kernel and BasicObject that defines it;
+   -1 when an undef on Object hides it */
+static int root_method_vis(Compiler *c, const char *qm) {
+  static const int roots[] = { CORE_OBJECT, CORE_KERNEL, CORE_BASIC_OBJECT, -1 };
+  char wbase[256];
+  int is_wr = setter_base_name(qm, wbase, sizeof wbase);
+  for (int i = 0; roots[i] >= 0; i++) {
+    int k = comp_core_class(c, roots[i]);
+    /* (-1: an undef on Object hides the lower roots' method) */
+    if (k >= 0 && roots[i] == CORE_OBJECT && comp_is_undeffed_in_chain(c, k, qm)) return -1;
+    if (k >= 0 && (comp_method_in_class(c, k, qm) >= 0 || comp_is_reader(&c->classes[k], qm) ||
+                   (is_wr && comp_is_writer(&c->classes[k], wbase))))
+      return comp_method_vis_declared(c, k, qm, NULL);
+    if (roots[i] == CORE_OBJECT && call_target(c, -1, -1, qm, CT_TOP, NULL) >= 0) return SP_VIS_PRIVATE;
+  }
+  return SP_VIS_PUBLIC;
+}
 int emit_call_reflection_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc, const int *argv, TyKind rt) {
   if (sp_streq(name, "respond_to?") && argc >= 1 && !respond_to_user_defined(c, id, recv)) {
     NodeKind ak = nt_kind(nt, argv[0]);
@@ -549,8 +567,21 @@ int emit_call_reflection_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
     }
     if (qm) {
       int ans = respond_to_static_answer(c, id, recv, rt, qm, argc, argv);
-      if (ans >= 0 && g_rto_nil_obj) {
-        int nil_too = nil_answers_name(qm) || sp_streq(qm, "rationalize");
+      int nil_prog, nil_too = nil_responds_static(c, qm, argc, argv, &nil_prog);
+      /* (a String slot that may hold nil holds it as NULL, as an object's) */
+      int nil_str = ans >= 0 && !g_rto_nil_obj && recv >= 0 && nil_prog &&
+                    (rt == TY_STRING || rt == TY_STRBUF) && repr_of(c, recv).may_nil;
+      if (ans >= 0 && (g_rto_nil_obj || nil_str)) {
+        /* (nil's answer is the include_all, read after the receiver) */
+        if (nil_too == 2) {
+          int st = ++g_tmp;
+          buf_printf(b, "({ const void *_t%d = (const void *)(", st);
+          emit_expr(c, recv, b);
+          buf_printf(b, "); int _ia%d = ", st);
+          emit_cond(c, argv[1], b);
+          buf_printf(b, "; _t%d != NULL ? %d : _ia%d; })", st, ans, st);
+          return 1;
+        }
         if (ans && !nil_too) { buf_puts(b, "(("); emit_expr(c, recv, b); buf_puts(b, ") != NULL)"); return 1; }
         if (!ans && nil_too) { buf_puts(b, "(("); emit_expr(c, recv, b); buf_puts(b, ") == NULL)"); return 1; }
       }
@@ -560,10 +591,16 @@ int emit_call_reflection_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
           call_returns_nullable_int(c, recv)) {
         char ref[24];
         buf_puts(b, "({ "); emit_sentinel_bind(c, rt, recv, ref, sizeof ref, b);
+        int ia = nil_too == 2 ? ++g_tmp : 0;
+        if (ia) { buf_printf(b, "int _ia%d = ", ia); emit_cond(c, argv[1], b); buf_puts(b, "; "); }
         emit_slot_truthy(rt, ref, b);
-        buf_printf(b, " ? %d : sp_poly_responds_builtin(sp_box_nil(), ", ans);
-        emit_str_literal(b, qm);
-        buf_puts(b, "); })");
+        if (ia) buf_printf(b, " ? %d : _ia%d; })", ans, ia);
+        else if (nil_prog) buf_printf(b, " ? %d : %d; })", ans, nil_too);
+        else {
+          buf_printf(b, " ? %d : sp_poly_responds_builtin(sp_box_nil(), ", ans);
+          emit_str_literal(b, qm);
+          buf_puts(b, "); })");
+        }
         return 1;
       }
       /* boxed when the call is typed so ($stderr, a global, is folded here
@@ -659,12 +696,21 @@ int emit_call_reflection_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
              method (a `class Object` reopening) is every value's. */
           buf_printf(b, "sp_int _k%d = ", tv);
           emit_poly_dispatch_key(c, tv, 1, 1, poly_exc_cand(c, qm), b);
-          buf_puts(b, "; (");
+          buf_puts(b, "; ");
+          /* an include_all only the run time knows: read once */
+          NodeKind iak = argc >= 2 ? nt_kind(nt, argv[1]) : NK_TrueNode;
+          int ia_once = argc >= 2 && iak != NK_TrueNode && iak != NK_FalseNode;
+          if (ia_once) { buf_printf(b, "int _ia%d = ", tv); emit_cond(c, argv[1], b); buf_puts(b, "; "); }
+          buf_puts(b, "(");
           char wbase[256]; wbase[0] = '\0';
           int is_wr = setter_base_name(qm, wbase, sizeof wbase);
-          int first = 1;
+          int first = 1, root_seen = 0, own[256], nown = 0, own_full = 0;
           for (int k = 0; k < c->nclasses; k++) {
-            if (comp_is_undeffed_in_chain(c, k, qm)) continue;
+            /* (an undef hides a root class's method from the class's values) */
+            if (comp_is_undeffed_in_chain(c, k, qm)) {
+              if (nown < (int)(sizeof own / sizeof own[0])) own[nown++] = k; else own_full = 1;
+              continue;
+            }
             int nk = comp_native_binding_class(c, k, qm);
             int native = nk >= 0 && comp_native_method_find(c, nk, qm, 0, 0) >= 0;
             int has = (comp_method_in_chain(c, k, qm, NULL) >= 0 &&
@@ -685,8 +731,9 @@ int emit_call_reflection_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
             if (!has && xn <= 0) continue;
             const char *kn = c->classes[k].name;
             int root = kn && is_object_root(kn);
-            if (root) buf_printf(b, "%s1", first ? "" : " || ");
-            else if (!has) {
+            if (root) { root_seen = 1; continue; }
+            if (has) { if (nown < (int)(sizeof own / sizeof own[0])) own[nown++] = k; else own_full = 1; }
+            if (!has) {
               buf_printf(b, "%s(_k%d == %d && (", first ? "" : " || ", tv, k);
               for (int q = 0; q < xn; q++)
                 buf_printf(b, "%ssp_exc_cls_matches(((sp_Exception *)_t%d.v.p)->cls_name, \"%s\")",
@@ -695,7 +742,8 @@ int emit_call_reflection_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
             }
             else if (nonpublic) {
               buf_printf(b, "%s(_k%d == %d && (", first ? "" : " || ", tv, k);
-              if (argc >= 2) emit_cond(c, argv[1], b); else buf_puts(b, "0");
+              if (ia_once) buf_printf(b, "_ia%d", tv);
+              else buf_puts(b, argc >= 2 && iak == NK_TrueNode ? "1" : "0");
               buf_puts(b, "))");
             }
             else {
@@ -709,6 +757,21 @@ int emit_call_reflection_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
                            first ? "" : " || ", tv, k, tv, dk);
               else buf_printf(b, "%s_k%d == %d", first ? "" : " || ", tv, k);
             }
+            first = 0;
+          }
+          /* A root class's method (a `class Object` reopening) answers for
+             every other value, by the first of Object, Kernel and
+             BasicObject that defines it: a private one only to a true
+             include_all. A class with its own term above answers by it. */
+          if (root_seen) {
+            int vis = root_method_vis(c, qm);
+            buf_printf(b, "%s(", first ? "" : " || ");
+            if (vis < 0) buf_puts(b, "0");
+            else if (vis == SP_VIS_PUBLIC) buf_puts(b, "1");
+            else if (ia_once) buf_printf(b, "_ia%d", tv);
+            else buf_puts(b, argc >= 2 && iak == NK_TrueNode ? "1" : "0");
+            for (int i = 0; i < nown && !own_full; i++) buf_printf(b, " && _k%d != %d", tv, own[i]);
+            buf_puts(b, ")");
             first = 0;
           }
           if (first) buf_puts(b, "0");

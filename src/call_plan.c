@@ -4838,6 +4838,30 @@ int cplan_nil_program_method(Compiler *c, int call, const char *name, int *nilcl
   return mi;
 }
 
+/* nil's answer to respond_to?(name) by a method of the program's: the
+   first of NilClass, Object (a top-level def is a private Object method),
+   Kernel and BasicObject that defines it answers, true when that method is
+   public or include_all is set (a literal `true` 2nd argument); -1 when
+   none of them defines it. */
+int cplan_nil_program_responds(Compiler *c, const char *name, int include_all) {
+  static const int owners[] = { CORE_NILCLASS, CORE_OBJECT, CORE_KERNEL, CORE_BASIC_OBJECT, -1 };
+  /* an undef on NilClass or Object (above the first definer) hides the
+     lower owners' method */
+  int nk = comp_core_class(c, CORE_NILCLASS);
+  if (nk >= 0 && comp_is_undeffed_in_chain(c, nk, name)) return 0;
+  int ia = include_all < 0 ? 2 : include_all;
+  for (int i = 0; owners[i] >= 0; i++) {
+    int k = comp_core_class(c, owners[i]);
+    if (k < 0 || call_target(c, -1, k, name, 0, NULL) < 0) {
+      if (owners[i] == CORE_OBJECT && call_target(c, -1, -1, name, CT_TOP, NULL) >= 0)
+        return ia;
+      continue;
+    }
+    return comp_method_vis_declared(c, k, name, NULL) == SP_VIS_PUBLIC ? 1 : ia;
+  }
+  return -1;
+}
+
 /* Does the receiver of call `call` (of type rt) run another method than
    nil does, or none: a reopened String's, Array's or Hash's, or the
    object's class's own, where nil runs NilClass's or Object's? */

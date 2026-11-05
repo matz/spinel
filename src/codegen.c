@@ -17190,7 +17190,14 @@ static void emit_obj_succ_dispatch(Compiler *c, Buf *b) {
     snprintf(call, sizeof call, "%s(%s(sp_%s *)v.v.p%s)", mc_method(c, m),
              c->classes[defcls].is_value_type ? "*" : "", c->classes[defcls].c_name, has_blk ? ", NULL" : "");
     buf_printf(b, "    case %d: { sp_RbVal _r = ", k);
-    if (m->ret == TY_POLY || m->ret == TY_UNKNOWN) buf_puts(b, call);
+    /* (a to_int that answers nothing -- one that raises or throws -- is a
+       void C function: it runs, and the answer is nil) */
+    /* (one that may answer nil beside an Integer answers its oint) */
+    const char *rct = c_type_name(m->ret);
+    if (m->ret == TY_POLY) buf_puts(b, call);
+    else if (method_ret_is_oint(m)) buf_printf(b, "%s(%s)", oint_box(m->ret), call);
+    else if (m->ret == TY_VOID || !rct || sp_streq(rct, "void")) buf_printf(b, "(%s, sp_box_nil())", call);
+    else if (m->ret == TY_UNKNOWN) buf_puts(b, call);
     else emit_boxed_text(c, m->ret, call, b);
     buf_puts(b, "; if (_r.tag == SP_TAG_INT || _r.tag == SP_TAG_BIGINT) return sp_box_nil(); break; }\n");
   }

@@ -1,0 +1,5 @@
+[[], nil, nil, {"/hello" => "hello#index"}]
+[["/post"], :post, "hello#create", {}]
+[:session, {"/hello" => "hello#index"}, {}]
+[:session, "/post", {to: "hello#create", as: :post}]
+[[], nil, nil, {"/direct" => "x"}]

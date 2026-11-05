@@ -35389,6 +35389,23 @@ static int pf_in_class_dispatch(Compiler *c, const Scope *src) {
 }
 
 /* The method named `name` beside src: in its class, or a top-level one */
+/* Does the method a proc-form clone was made from take a key of any class in
+   its `**kwrest` (TY_POLY_POLY_HASH, widen_kwrest_any_key)? The clone is
+   "<name>#pf" on the same class. */
+static int proc_form_origin_kwrest_any(Compiler *c, const Scope *d) {
+  if (!d->name || d->kwrest_idx < 0) return 0;
+  size_t n = strlen(d->name);
+  if (n < 3 || strcmp(d->name + n - 3, "#pf") != 0) return 0;
+  char oname[192];
+  snprintf(oname, sizeof oname, "%.*s", (int)(n - 3), d->name);
+  int oi = d->class_id < 0 ? comp_method_index(c, oname)
+         : (d->is_cmethod ? comp_cmethod_in_class : comp_method_in_class)(c, d->class_id, oname);
+  if (oi < 0) return 0;
+  Scope *o = &c->scopes[oi];
+  if (o->kwrest_idx < 0 || !o->pnames || !o->pnames[o->kwrest_idx]) return 0;
+  LocalVar *lv = scope_local(o, o->pnames[o->kwrest_idx]);
+  return lv && lv->type == TY_POLY_POLY_HASH;
+}
 static int pf_scope_named(Compiler *c, const Scope *src, const char *name) {
   if (src->class_id < 0) return comp_method_index(c, name);
   return (src->is_cmethod ? comp_cmethod_in_class : comp_method_in_class)(c, src->class_id, name);
@@ -35515,7 +35532,13 @@ int make_yield_proc_forms(Compiler *c) {
            method it clones; typed poly, the arm's sp_PolyArray * did not fit
            the clone's sp_RbVal parameter */
         if (lv->type == TY_UNKNOWN && p == d->rest_idx) lv_set_type(lv, TY_POLY_ARRAY);
-        else if (lv->type == TY_UNKNOWN && p == d->kwrest_idx) lv_set_type(lv, TY_SYM_POLY_HASH);
+        else if (lv->type == TY_UNKNOWN && p == d->kwrest_idx) {
+          /* ... of any key when the method's own rest takes one: a call
+             brought a key of another class than Symbol (kwrest_any_key), and
+             the arm packs the same hash for the clone, where a Symbol-keyed
+             one refused the key at run time */
+          lv_set_type(lv, proc_form_origin_kwrest_any(c, d) ? TY_POLY_POLY_HASH : TY_SYM_POLY_HASH);
+        }
         if (lv->type == TY_UNKNOWN) { lv_set_type(lv, TY_POLY); lv->poly_dispatch_widened = 1; }
       }
       if (d->blk_param) {

@@ -8490,7 +8490,17 @@ static int widen_kwrest_any_key(Compiler *c, Scope *m, int node) {
   if (m->kwrest_idx < 0 || !m->pnames[m->kwrest_idx]) return 0;
   LocalVar *p = scope_local(m, m->pnames[m->kwrest_idx]);
   if (!p || p->rbs_seeded || p->type != TY_SYM_POLY_HASH) return 0;
-  return slot_set(c, p, TY_POLY_POLY_HASH, TY_POLY_POLY_HASH, node);
+  int changed = slot_set(c, p, TY_POLY_POLY_HASH, TY_POLY_POLY_HASH, node);
+  /* the method's proc-form clone, which the dispatch arms call with the
+     same hash, takes any key with it (one made later takes the type at its
+     making) */
+  int pf = scope_proc_form_of(c, m->idx);
+  if (pf >= 0) {
+    Scope *pm = &c->scopes[pf];
+    LocalVar *q = pm->kwrest_idx >= 0 && pm->pnames[pm->kwrest_idx] ? scope_local(pm, pm->pnames[pm->kwrest_idx]) : NULL;
+    if (q && !q->rbs_seeded && q->type == TY_SYM_POLY_HASH) changed |= slot_set(c, q, TY_POLY_POLY_HASH, TY_POLY_POLY_HASH, node);
+  }
+  return changed;
 }
 
 /* May source `s` of a gathered call -- argument s, or at pos_argc the

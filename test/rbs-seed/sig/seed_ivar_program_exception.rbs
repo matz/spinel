@@ -1,0 +1,3 @@
+class Holder
+  attr_accessor err: MyErr?
+end

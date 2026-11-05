@@ -7420,6 +7420,10 @@ static TyKind parse_seed_type(Compiler *c, const char *tok) {
        own (`class MyError < StandardError`). Boxing would do for both but
        a Range's box is a copy, so `equal?` would stop answering true. */
     if (t == TY_RANGE || t == TY_EXCEPTION) { g_seed_unpinned = 1; return TY_UNKNOWN; }
+    /* nor the program's own exception class: its instances are exceptions
+       too (TY_EXCEPTION, what `rescue MyError => e` binds), not objects of
+       a struct the pin would lay out */
+    if (ci >= 0 && class_is_exc_subclass(c, ci)) { g_seed_unpinned = 1; return TY_UNKNOWN; }
     if (t != TY_UNKNOWN) {
       const TyTraits *tr = ty_traits_of(t);
       return nilable && tr && !tr->null_is_nil ? TY_POLY : t;

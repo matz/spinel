@@ -8,7 +8,11 @@ end
 class Foo
   include M
 end
-p((Foo.new.go(1) rescue :nme))
+begin
+  Foo.new.go(1)
+rescue NoMethodError => e
+  p e.class
+end
 class K
   def self.rec(x) = [:k, x]
 end

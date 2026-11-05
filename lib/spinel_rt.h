@@ -15517,9 +15517,17 @@ static sp_RbVal sp_poly_span_subject(sp_RbVal v) {
     return sp_box_poly_array(sp_poly_to_a_arr(v));
   return v;
 }
+/* first(n): a negative n reads as each receiver's own first raises it --
+   Array#first, Range#first (rb_ary_new_capa) and Enumerable#first */
 static sp_RbVal sp_poly_arr_take(sp_RbVal v, sp_int n) {
   if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_OBJ_RANGE && v.v.p) return sp_box_poly_array(sp_orange_first_n((sp_ObjRange *)v.v.p, n));
-  if (n < 0) sp_raise_cls("ArgumentError", "negative array size");
+  if (n < 0) {
+    int range = v.tag == SP_TAG_OBJ && (v.cls_id == SP_BUILTIN_RANGE || v.cls_id == SP_BUILTIN_STR_RANGE ||
+                                        v.cls_id == SP_BUILTIN_FLOAT_RANGE);
+    int en = v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_ENUMERATOR;
+    sp_raise_cls("ArgumentError", range ? "negative array size (or size too big)" :
+                                  en ? "attempt to take negative size" : "negative array size");
+  }
   /* Range#first(n) on a boxed Integer Range: the leading members, built
      directly so an endless range is fine. sp_poly_length has no Range arm
      (a Range has no #length), and the call answered [] (#4837). */
@@ -15536,6 +15544,11 @@ static sp_RbVal sp_poly_arr_take(sp_RbVal v, sp_int n) {
   v = sp_poly_span_subject(v);
   sp_int alen = sp_poly_length(v);
   return sp_poly_arr_span(v, 0, n > alen ? alen : n);
+}
+/* take(n): every receiver's take raises the same message, unlike first */
+static sp_RbVal sp_poly_arr_take_n(sp_RbVal v, sp_int n) {
+  if (n < 0) sp_raise_cls("ArgumentError", "attempt to take negative size");
+  return sp_poly_arr_take(v, n);
 }
 static sp_RbVal sp_poly_arr_last_n(sp_RbVal v, sp_int n) {
   sp_poly_ary_chk(v, "last", 1);

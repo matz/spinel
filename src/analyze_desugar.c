@@ -4934,13 +4934,23 @@ static int cvb_split(Compiler *c, int id, const char *nm, const int *bval, int n
   /* not a keyword hash: its `**h` the boxed dispatch already counts as the run time's arguments */
   if (argc > 16 || nt_argv_has_splat(nt, argv, argc) || nt_argv_kwh(nt, argv, argc) >= 0 || bop_class_answers(nm, argc, 0)) return 0;
   for (int a = 0; a < argc; a++) if (nt_kind(nt, argv[a]) == NK_BlockArgumentNode) return 0;
-  int arms[64], na = 0;
+  const char *arms[64];
+  int na = 0, time_arm = 0;
   for (int i = 0; i < nb && na < 64; i++) {
     const char *bn = cvb_builtin_name(bval[i]);
     /* not where B's instances answer m too (`t.utc`): a boxed receiver is far more often the instance */
-    if (bn && builtin_cmethod_known(bn, nm) && !builtin_instance_method_known(bn, nm)) arms[na++] = bval[i];
+    if (bn && builtin_cmethod_known(bn, nm) && !builtin_instance_method_known(bn, nm)) {
+      arms[na++] = bn;
+      time_arm |= sp_streq(bn, "Time");
+    }
   }
   if (na == 0) return 0;
+  /* a Time subclass is no program class with the maker either: by its own name, which qualify_colliding_classes may have renamed, as `K.m` makes a K */
+  for (int k = 0; time_arm && k < c->nclasses && na < 64; k++) {
+    if (!comp_ary_is_time(c, k) || !c->classes[k].name || sp_streq(c->classes[k].name, "Time")) continue;
+    if (call_target(c, id, k, nm, CT_CMETHOD, NULL) >= 0) continue;
+    arms[na++] = c->classes[k].name;
+  }
   int base = nt->count;
   /* everything else: the call as written, left to the dispatch */
   int keep = nt_clone_subtree(nt, id);
@@ -4948,11 +4958,13 @@ static int cvb_split(Compiler *c, int id, const char *nm, const int *bval, int n
   int tail = keep;
   for (int i = na - 1; i >= 0; i--) {
     int kc = nt_new_node(nt, "ConstantReadNode");
-    nt_node_set_str(nt, kc, "name", cvb_builtin_name(arms[i]));
+    nt_node_set_str(nt, kc, "name", arms[i]);
     int kc2 = nt_clone_subtree(nt, kc);
     int arm = nt_clone_subtree(nt, id);
     nt_node_set_ref(nt, arm, "receiver", kc2);
     nt_node_set_int(nt, arm, "cvb_split", 1);
+    /* the pass that makes `K.now` a K ran before this arm existed */
+    if (!builtin_class_id(arms[i])) an_rewrite_array_subclass_new(c, arm);
     int test = fwd_new_call(nt, nt_clone_subtree(nt, recv), "equal?", kc);
     int ys = nt_new_node(nt, "StatementsNode"), ns = nt_new_node(nt, "StatementsNode");
     int el = nt_new_node(nt, "ElseNode"), ifn = nt_new_node(nt, "IfNode");

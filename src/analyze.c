@@ -46588,6 +46588,8 @@ static void rewrite_array_subclass_calls(Compiler *c) {
   }
 }
 
+void an_rewrite_array_subclass_new(Compiler *c, int id) { rewrite_array_subclass_new(c, id); }
+
 static int hp_hash_node = -1;   /* the Hash the last hp_hash_walk answered yes for */
 
 

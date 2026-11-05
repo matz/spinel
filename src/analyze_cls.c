@@ -5278,8 +5278,10 @@ static int cf_kretry_out;
    inference joins the kinds of the locals that share a site
    (join_container_alias_groups), or an assignment between two of them
    converts by copying and the program sees two containers. A local whose
-   set went past the cap (a summary), and a rest parameter, whose Array is
-   a new one at every call, are left out. */
+   set went past the cap (a summary), a local that may hold an untracked
+   container, whose set is the contents classes the flow joined rather
+   than the containers it holds, and a rest parameter, whose Array is a
+   new one at every call, are left out. */
 static int cf_container_site(CF *f, int x) {
   const NodeTable *nt = f->nt;
   NodeKind k = nt_kind(nt, x);
@@ -5295,7 +5297,7 @@ static int cf_alias_local_el(CF *f, int s, int i) {
   Compiler *c = f->c;
   if (!f->nlv || i >= f->nlv[s] || !f->lv_el[s]) return -1;
   int e = f->lv_el[s][i];
-  if (e < 0 || e >= f->nel || f->summ[e] >= 0) return -1;
+  if (e < 0 || e >= f->nel || f->summ[e] >= 0 || (f->ptop && f->ptop[e])) return -1;
   const Scope *sc = &c->scopes[s];
   const char *ln = sc->locals[i].name;
   if (ln && ((sc->rest_idx >= 0 && sc->rest_idx < sc->nparams && sp_streq(ln, sc->pnames[sc->rest_idx])) ||

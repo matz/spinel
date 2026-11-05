@@ -1919,6 +1919,18 @@ int json_parse_ostruct_opts(Compiler *c, int kwh) {
          sp_streq(nt_str(nt, ocv, "name"), "OpenStruct") && sp_feature_required("ostruct");
 }
 
+static void emit_json_parse_call(Compiler *c, const NativeFunc *nf, int argc, const int *argv, Buf *b) {
+  if (argc == 1) {
+    buf_printf(b, "%s(", nf->csym); emit_str_expr(c, argv[0], b); buf_puts(b, ")");
+  } else {
+    g_conv_emitted++; /* max_nesting may run a user conversion */
+    int t = ++g_tmp;
+    buf_printf(b, "({ const char *_t%d = ", t); emit_str_expr(c, argv[0], b);
+    buf_printf(b, "; SP_GC_ROOT_STR(_t%d); sp_json_parse_options(_t%d, ", t, t); emit_boxed(c, argv[1], b);
+    buf_puts(b, "); })");
+  }
+}
+
 /* a call on a module or a class: native and FFI functions, singleton accessors, a writer in an instance_eval block, class methods */
 int emit_call_cmethod_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc, const int *argv) {
   /* native binding dispatch (Path B): Module.func(...) where Module declared
@@ -1950,38 +1962,14 @@ int emit_call_cmethod_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
            pack or File.binread once any of them is >= 0x80. */
         int nv_bin_ret = sp_streq(nf->ret, "cbinstr");
         int nv_bin_tmp = nv_bin_ret ? ++g_tmp : 0;
-        /* JSON.parse's symbolize_names: the option rides a keyword hash the
-           1-arg native signature would silently drop. Route the parse
-           through the deep key-symbolizer: a literal true wraps directly, a
-           dynamic value decides at runtime over a single parse. Other
-           options keep the prior ignored-with-string-keys behavior. */
-        if (sp_streq(nvmod, "JSON") && sp_streq(name, "parse") && argc == 2 &&
-            nt_type(nt, argv[1]) &&
-            (nt_kind(nt, argv[1]) == NK_KeywordHashNode ||
-             nt_kind(nt, argv[1]) == NK_HashNode)) {
-          /* object_class: OpenStruct (json_parse_ostruct_opts);
-             symbolize_names then changes nothing, the members are symbols
-             either way */
-          if (json_parse_ostruct_opts(c, argv[1])) {
-            buf_printf(b, "sp_json_ostructify(%s(", nf->csym); emit_str_expr(c, argv[0], b); buf_puts(b, "))");
-            return 1;
-          }
-          int symv = struct_kwarg_value(c, argv[1], "symbolize_names");
-          if (symv >= 0) {
-            NodeKind svk = nt_kind(nt, symv);
-            int lit_true  = svk == NK_TrueNode;
-            int lit_false = (svk == NK_FalseNode || svk == NK_NilNode);
-            if (lit_true) { buf_printf(b, "sp_json_symbolize(%s(", nf->csym); emit_str_expr(c, argv[0], b); buf_puts(b, "))"); return 1; }
-            if (!lit_false) {
-              int tj = ++g_tmp;
-              buf_printf(b, "({ sp_RbVal _t%d = %s(", tj, nf->csym); emit_str_expr(c, argv[0], b);
-              buf_puts(b, "); (");
-              emit_cond(c, symv, b);
-              buf_printf(b, ") ? sp_json_symbolize(_t%d) : _t%d; })", tj, tj);
-              return 1;
-            }
-            /* literal false/nil: fall through to the plain 1-arg call */
-          }
+        /* Evaluate JSON's options once, including max_nesting and dynamic
+           symbolize_names. OpenStruct still needs its known class here. */
+        if (sp_streq(nvmod, "JSON") && sp_streq(name, "parse") && argc >= 1 && argc <= 2) {
+          int ostruct = argc == 2 && json_parse_ostruct_opts(c, argv[1]);
+          if (ostruct) buf_puts(b, "sp_json_ostructify(");
+          emit_json_parse_call(c, nf, argc, argv, b);
+          if (ostruct) buf_puts(b, ")");
+          return 1;
         }
         /* one String representation: a handle argument's read publishes it
            to the deep-return channel, which a caller's pickup would take for

@@ -16371,6 +16371,15 @@ static void sp_poly_hash_pair(sp_RbVal v, sp_int i, sp_RbVal *k, sp_RbVal *out) 
 }
 /* JSON.parse object builders: a string-keyed poly hash (the parser owns the
    key strings; StrPolyHash stores the pointer without copying). */
+static sp_int sp_json_nesting_limit(sp_RbVal limit) {
+  if (!sp_poly_truthy(limit)) return 0;
+  SP_GC_ROOT_RBVAL(limit);
+  sp_int n = sp_poly_to_int_arg(limit);
+  if (n > INT32_MAX || n < INT32_MIN)
+    sp_raise_cls("RangeError", sp_sprintf("integer %lld too %s to convert to 'int'",
+                                        (long long)n, n > 0 ? "big" : "small"));
+  return n;
+}
 static sp_RbVal sp_json_new_strhash(void) {
   return sp_box_obj(sp_StrPolyHash_new(), SP_BUILTIN_STR_POLY_HASH);
 }
@@ -16411,6 +16420,21 @@ static sp_RbVal sp_json_symbolize(sp_RbVal v) {
     return v;
   }
   return v;
+}
+extern sp_RbVal sp_json_parse_limit(const char *s, sp_int max_nesting);
+static sp_RbVal sp_json_parse_options(const char *s, sp_RbVal options) {
+  SP_GC_ROOT_STR(s); SP_GC_ROOT_RBVAL(options);
+  sp_int limit = 100;
+  sp_bool symbolize = FALSE;
+  sp_sym nesting_key = sp_json_sym_intern_fn("max_nesting"), symbol_key = sp_json_sym_intern_fn("symbolize_names");
+  for (sp_int i = 0; options.tag == SP_TAG_OBJ && sp_poly_is_hash_kind(options.cls_id) && i < sp_poly_length(options); i++) {
+    sp_RbVal key, value; sp_poly_hash_pair(options, i, &key, &value);
+    if (key.tag != SP_TAG_SYM) continue;
+    if (key.v.i == nesting_key) limit = sp_json_nesting_limit(value);
+    else if (key.v.i == symbol_key) symbolize = sp_poly_truthy(value);
+  }
+  sp_RbVal value = sp_json_parse_limit(s, limit);
+  return symbolize ? sp_json_symbolize(value) : value;
 }
 /* JSON.parse(object_class: OpenStruct): every parsed object becomes an
    OpenStruct over its members. CRuby's parser makes one per object and

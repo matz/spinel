@@ -1,0 +1,21 @@
+[ depth 100
+accepted
+[ depth 101
+JSON::NestingError
+nesting of 101 is too deep
+[ depth 201
+JSON::NestingError
+nesting of 101 is too deep
+{"a": depth 100
+accepted
+{"a": depth 101
+JSON::NestingError
+nesting of 101 is too deep
+{"a": depth 201
+JSON::NestingError
+nesting of 101 is too deep
+JSON::NestingError
+nesting of 101 is too deep
+JSON::NestingError
+JSON::ParserError
+JSON::JSONError

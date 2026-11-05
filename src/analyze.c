@@ -1579,6 +1579,18 @@ void compute_reachable(Compiler *c, int typed) {
      which likewise has no call site of its own in the AST. */
   if (sp_feature_required("json")) {
     MARK_NAME("to_json");
+    /* A live JSON parser's options may convert max_nesting through #to_int. */
+    NT_FOREACH_KIND(c->nt, NK_CallNode, id) {
+      int scope = c->nscope[id], argc = 0, args = nt_ref(c->nt, id, "arguments");
+      const char *name = nt_str(c->nt, id, "name");
+      if (scope >= 0 && !c->scopes[scope].reachable) continue;
+      int recv = nt_ref(c->nt, id, "receiver");
+      NodeKind kind = recv >= 0 ? nt_kind(c->nt, recv) : NK_NONE;
+      if (kind != NK_ConstantReadNode && !(kind == NK_ConstantPathNode && nt_ref(c->nt, recv, "parent") < 0)) continue;
+      const char *receiver = nt_str(c->nt, recv, "name");
+      if (args >= 0) nt_arr(c->nt, args, "arguments", &argc);
+      if (argc > 1 && name && sp_streq(name, "parse") && receiver && sp_streq(receiver, "JSON")) MARK_NAME("to_int");
+    }
     while (qhead < qtail) { int s = queue[qhead++]; for (int ni = 0; ni < sc_n[s]; ni++) MARK_NAME(scope_calls[s][ni]); cr_live_scope(&lv, s, scope_calls[s], sc_n[s]); }
   }
 

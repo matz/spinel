@@ -10734,7 +10734,7 @@ static int emit_scalar_recv_arms(Compiler *c, int id, Buf *b, const NodeTable *n
       /* Float#divmod(n) -> [Integer quotient, Float mod], CRuby's flodivmod */
       int tx = ++g_tmp, tn = ++g_tmp, tq = ++g_tmp, tm = ++g_tmp, o = ++g_tmp;
       buf_printf(b, "({ sp_float _t%d = (%s); sp_float _t%d = ", tx, r, tn);
-      emit_coerce(c, argv[0], TY_FLOAT, CO_CONVERT, "a Float operand", b);
+      emit_float_operand_in(c, argv[0], "Float", b);
       buf_printf(b, "; if (isnan(_t%d) || isnan(_t%d)) sp_raise_cls(\"FloatDomainError\", \"NaN\");"
                     /* an infinite dividend has no quotient: FloatDomainError (#3008) */
                     " if (isinf(_t%d)) sp_raise_cls(\"FloatDomainError\", _t%d > 0 ? \"Infinity\" : \"-Infinity\");"
@@ -10846,7 +10846,11 @@ static int emit_scalar_recv_arms(Compiler *c, int id, Buf *b, const NodeTable *n
       }
       else {
         buf_printf(b, "({ sp_float _t%d = ", ta);
-        emit_coerce(c, argv[0], TY_FLOAT, CO_CONVERT, "a Float operand", b);
+        /* a nil goes as above, in Float()'s words */
+        if (a0 == TY_FLOAT && cmp_operand_may_be_nil(c, argv[0])) {
+          buf_puts(b, "sp_ofloat_arg("); emit_oint_expr(c, argv[0], TY_FLOAT, b); buf_puts(b, ")");
+        }
+        else emit_coerce(c, argv[0], TY_FLOAT, CO_CONVERT, "a Float operand", b);
         buf_printf(b, "; sp_FloatArray *_t%d = sp_FloatArray_new();"
                       " sp_FloatArray_push(_t%d, _t%d);"
                       " sp_FloatArray_push(_t%d, (%s)); _t%d; })", o, o, ta, o, r, o);

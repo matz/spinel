@@ -4941,7 +4941,15 @@ int cplan_nil_program_responds(Compiler *c, const char *name, int include_all) {
   int nk = comp_core_class(c, CORE_NILCLASS);
   if (nk >= 0 && comp_is_undeffed_in_chain(c, nk, name)) return 0;
   int ia = include_all < 0 ? 2 : include_all;
+  /* NilClass's own public methods (CRuby's NilClass.public_instance_methods
+     false): one sits below every program method of Object, Kernel and
+     BasicObject, so a top-level `def to_a` leaves nil's answer true */
+  static const char *const nil_own[] = {
+    "&", "===", "=~", "^", "|", "inspect", "nil?", "rationalize", "to_a", "to_c",
+    "to_f", "to_h", "to_i", "to_r", "to_s", NULL };
   for (int i = 0; owners[i] >= 0; i++) {
+    if (owners[i] == CORE_OBJECT)
+      for (int j = 0; nil_own[j]; j++) if (sp_streq(name, nil_own[j])) return 1;
     int k = comp_core_class(c, owners[i]);
     if (k < 0 || call_target(c, -1, k, name, 0, NULL) < 0) {
       if (owners[i] == CORE_OBJECT && call_target(c, -1, -1, name, CT_TOP, NULL) >= 0)

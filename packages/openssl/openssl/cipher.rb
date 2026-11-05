@@ -28,10 +28,13 @@
 # knows: a mode nothing here has run against vectors must not start working by
 # accident. Widen it when something real needs a mode, with vectors.
 module OpenSSL
-  class CipherError < OpenSSLError
-  end
-
   class Cipher
+    class CipherError < OpenSSLError
+    end
+
+    class AuthTagError < ::OpenSSL::Cipher::CipherError
+    end
+
     # name => [key bytes, iv bytes]. GCM's 12-byte IV is the one every
     # protocol that names AES-GCM uses; another length is accepted, since GCM
     # defines them, but this is what #random_iv answers.
@@ -47,7 +50,7 @@ module OpenSSL
     def initialize(name)
       @name = [name.to_s].join.downcase
       unless CIPHERS.key?(@name)
-        raise CipherError,
+        raise ::OpenSSL::Cipher::CipherError,
               "unsupported cipher: #{name} (this package has #{CIPHERS.keys.join(", ")})"
       end
       @encrypting = true
@@ -124,7 +127,7 @@ module OpenSSL
     # because #final is what verifies it.
     def auth_tag=(t)
       unless t.bytesize == 16
-        raise CipherError, "auth tag must be 16 bytes"
+        raise ::OpenSSL::Cipher::CipherError, "auth tag must be 16 bytes"
       end
       @expected_tag = [t].join
       t
@@ -140,7 +143,7 @@ module OpenSSL
 
     # Keep the bytes consumed by each call, even if the caller changes its input.
     def update(data)
-      raise CipherError, "cipher already finished" if @done
+      raise ::OpenSSL::Cipher::CipherError, "cipher already finished" if @done
       part = [data].join
       needed = @emitted + part.bytesize
       if needed > @keystream.bytesize || @keystream.empty?
@@ -148,7 +151,7 @@ module OpenSSL
         length = [needed, [2 * @keystream.bytesize, 2_147_483_647].min].max
         zeros = "\0" * length
         out = Native.aes_gcm_encrypt(@name, @key, @iv, @auth_data, zeros)
-        raise CipherError, reason("AES-GCM update failed") if out.empty?
+        raise ::OpenSSL::Cipher::CipherError, reason("AES-GCM update failed") if out.empty?
         @keystream = out.byteslice(0, length)
       end
       chunk = String.new(encoding: Encoding::BINARY)
@@ -164,9 +167,9 @@ module OpenSSL
 
     # The whole operation, in one C call.
     def final
-      raise CipherError, "cipher already finished" if @done
-      raise CipherError, "key not set" if @key.empty?
-      raise CipherError, "iv not set" if @iv.empty?
+      raise ::OpenSSL::Cipher::CipherError, "cipher already finished" if @done
+      raise ::OpenSSL::Cipher::CipherError, "key not set" if @key.empty?
+      raise ::OpenSSL::Cipher::CipherError, "iv not set" if @iv.empty?
       @done = true
       @keystream = ""
       data = @parts.join
@@ -175,28 +178,29 @@ module OpenSSL
         # Encrypt needs no status byte: the answer always carries a 16-byte
         # tag, so empty is unambiguously a failure.
         out = Native.aes_gcm_encrypt(@name, @key, @iv, @auth_data, data)
-        raise CipherError, reason("AES-GCM encrypt failed") if out.empty?
+        raise ::OpenSSL::Cipher::CipherError, reason("AES-GCM encrypt failed") if out.empty?
         # ciphertext || tag: the C returns both in one value, and the tag is
         # always the last 16 bytes.
         @auth_tag = out.byteslice(out.bytesize - 16, 16)
         out.byteslice(@emitted, out.bytesize - 16 - @emitted)
       else
         if @expected_tag.empty?
-          raise CipherError, "auth_tag must be set before final on a decrypt"
+          raise AuthTagError, "AEAD authentication tag verification failed"
         end
         out = Native.aes_gcm_decrypt(@name, @key, @iv, @auth_data, data, @expected_tag)
         # The verdict is the answer's own first byte, not a second call: an
         # empty string is a legitimate plaintext, so it cannot also mean
         # "forged", and an out-of-band verdict can be read after another
         # thread has overwritten it. last_error is only the wording.
-        raise CipherError, reason("AES-GCM decrypt failed") if out.empty?
+        raise ::OpenSSL::Cipher::CipherError, reason("AES-GCM decrypt failed") if out.empty?
+        raise AuthTagError, "AEAD authentication tag verification failed" if out.getbyte(0) == 0
         out.byteslice(1 + @emitted, out.bytesize - 1 - @emitted)
       end
     end
 
     # Available after #final on the encrypt side, as in CRuby.
     def auth_tag
-      raise CipherError, "auth_tag is not available until final" unless @done
+      raise ::OpenSSL::Cipher::CipherError, "auth_tag is not available until final" unless @done
       [@auth_tag].join
     end
 
@@ -210,4 +214,7 @@ module OpenSSL
       err.empty? ? fallback : err
     end
   end
+
+  # Preserve the package's older spelling as an alias.
+  CipherError = ::OpenSSL::Cipher::CipherError
 end

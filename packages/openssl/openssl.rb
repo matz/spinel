@@ -98,8 +98,8 @@ module OpenSSL
 
     # AES-GCM, one shot. The whole operation in one call, because the Ruby
     # Cipher over it holds the state -- see openssl/cipher.rb. Encrypt answers
-    # ciphertext || tag; both answer "" with the reason in last_error, since an
-    # empty result is legitimate here (the plaintext of an empty message).
+    # ciphertext || tag. Decrypt answers 0x01 || plaintext, 0x00 for a tag
+    # failure, or "" for other errors; empty plaintext remains a success.
     native_func :aes_gcm_encrypt, [:string, :string, :string, :string, :string],
                 :string, "sp_aes_gcm_encrypt"
     native_func :aes_gcm_decrypt, [:string, :string, :string, :string, :string, :string],

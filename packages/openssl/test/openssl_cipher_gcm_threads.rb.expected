@@ -1,3 +1,3 @@
 0
 true
-CipherError: AES-GCM decrypt failed: auth tag did not verify
+CipherError: AEAD authentication tag verification failed

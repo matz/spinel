@@ -15,6 +15,9 @@ module OpenSSL
   class OpenSSLError < StandardError
   end
 
+  class HMACError < OpenSSLError
+  end
+
   module Crypto
     native_lib "openssl"
     native_func :sha256_hex,      [:string],          :cstring, "sp_crypto_sha256_hex"

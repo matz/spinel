@@ -27,3 +27,8 @@ x = mk(false)
 y = x.t
 p y.upcase, y.class
 p mk(false)&.t
+
+# a name that ends in `?` gives nil's result, not a bool
+class NilClass; def ready? = :nope; end
+r = mk(false).ready?
+p r, ms(false).ready?, mf(false).ready?

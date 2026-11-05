@@ -1431,13 +1431,16 @@ int emit_ptr_array_build(Compiler *c, int v, TyKind want, Buf *b) {
 
 /* A constant write that builds its table in place (emit_ptr_array_build)
    from `[..].freeze`: the build, then the freeze that empty_literal_node
-   stripped (#3828). Answers 0 as emit_ptr_array_build does. */
+   stripped (#3828). The table is stamped first (#4486): the runtime boxes
+   it unstamped for a FrozenError's receiver, which then showed opaque
+   objects. Answers 0 as emit_ptr_array_build does. */
 static int emit_const_ptr_array_build(Compiler *c, int v, int vlit, TyKind want, Buf *b) {
   if (vlit == v) return emit_ptr_array_build(c, v, want, b);
   Buf built; memset(&built, 0, sizeof built);
   if (!emit_ptr_array_build(c, vlit, want, &built)) { free(built.p); return 0; }
   int t = ++g_tmp;
-  buf_printf(b, "({ sp_PtrArray *_t%d = %s; _t%d->frozen = 1; _t%d; })", t, built.p, t, t);
+  buf_printf(b, "({ sp_PtrArray *_t%d = %s; (void)sp_box_ptr_array_k(_t%d, %s); _t%d->frozen = 1; _t%d; })",
+             t, built.p, t, ptr_array_stamp(c, want), t, t);
   free(built.p);
   return 1;
 }

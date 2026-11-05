@@ -1,7 +1,9 @@
 # A frozen constant table that narrows to a typed table keeps its frozen
-# state: a push, pop, shift or clear on it raises FrozenError, as in CRuby.
+# state: a push, pop, shift or clear on it raises FrozenError, as in CRuby,
+# and the error's receiver shows the table's elements.
 class Cell
   def initialize(value) = (@value = value)
+  def inspect = "Cell(#{@value})"
 end
 
 module Grid; end
@@ -29,7 +31,7 @@ end
 begin
   CELLS.pop
 rescue FrozenError => e
-  p e.class
+  p e.class, e.receiver
 end
 begin
   CELLS.shift

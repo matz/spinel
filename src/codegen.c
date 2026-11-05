@@ -17155,7 +17155,9 @@ static int class_succ_dispatched(Compiler *c, int k) {
 /* Range#include?'s classification (sp_obj_succ_dispatch's probes 2 and 3):
    1 for a Numeric of the program's own, 2 for a class with a to_int, which
    probe 3 calls, as CRuby's rb_check_to_integer does */
+static int g_obj_range_used = 0;   /* only a Range of objects asks (sp_orange_include) */
 static int class_range_linear(Compiler *c, int k) {
+  if (!g_obj_range_used) return 0;
   if (k < 0 || k >= c->nclasses || !c->classes[k].instantiated || is_builtin_reopen(c->classes[k].name)) return 0;
   for (int j = k; j >= 0; j = c->classes[j].parent) {
     int sup = class_def_super(c->nt, c->classes[j].def_node);
@@ -17190,14 +17192,9 @@ static void emit_obj_succ_dispatch(Compiler *c, Buf *b) {
     snprintf(call, sizeof call, "%s(%s(sp_%s *)v.v.p%s)", mc_method(c, m),
              c->classes[defcls].is_value_type ? "*" : "", c->classes[defcls].c_name, has_blk ? ", NULL" : "");
     buf_printf(b, "    case %d: { sp_RbVal _r = ", k);
-    /* (a to_int that answers nothing -- one that raises or throws -- is a
-       void C function: it runs, and the answer is nil) */
-    /* (one that may answer nil beside an Integer answers its oint) */
-    const char *rct = c_type_name(m->ret);
-    if (m->ret == TY_POLY) buf_puts(b, call);
-    else if (method_ret_is_oint(m)) buf_printf(b, "%s(%s)", oint_box(m->ret), call);
-    else if (m->ret == TY_VOID || !rct || sp_streq(rct, "void")) buf_printf(b, "(%s, sp_box_nil())", call);
-    else if (m->ret == TY_UNKNOWN) buf_puts(b, call);
+    if (method_is_void(m)) buf_printf(b, "(%s, sp_box_nil())", call);
+    else if (oint_kind(m->ret) && method_ret_is_oint(m)) buf_printf(b, "%s(%s)", oint_box(m->ret), call);
+    else if (m->ret == TY_POLY || m->ret == TY_UNKNOWN) buf_puts(b, call);
     else emit_boxed_text(c, m->ret, call, b);
     buf_puts(b, "; if (_r.tag == SP_TAG_INT || _r.tag == SP_TAG_BIGINT) return sp_box_nil(); break; }\n");
   }
@@ -23009,6 +23006,9 @@ char *codegen_program(const NodeTable *nt) {
         !scope_is_shadowed(c, mi2) && !m2->is_transplanted_source) { g_has_user_to_io = 1; break; }
   }
   g_has_user_succ = 0;
+  g_obj_range_used = 0;
+  for (int i = 0; i < c->nt->count && !g_obj_range_used; i++)
+    if (comp_ntype(c, i) == TY_OBJ_RANGE) g_obj_range_used = 1;
   for (int k = 0; k < c->nclasses; k++)
     if (class_succ_dispatched(c, k) || class_range_linear(c, k)) { g_has_user_succ = 1; break; }
   g_gen_obj_hashkey = 0;

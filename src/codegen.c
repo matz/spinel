@@ -22996,8 +22996,10 @@ char *codegen_program(const NodeTable *nt) {
   }
   g_has_user_succ = 0;
   g_obj_range_used = 0;
+  /* a Range with boxed ends (sp_range_new_box) may turn out a Range of objects */
   for (int i = 0; i < c->nt->count && !g_obj_range_used; i++)
-    if (comp_ntype(c, i) == TY_OBJ_RANGE) g_obj_range_used = 1;
+    if (comp_ntype(c, i) == TY_OBJ_RANGE ||
+        (nt_kind(c->nt, i) == NK_RangeNode && repr_of(c, i).kind == RK_BOXED)) g_obj_range_used = 1;
   for (int k = 0; k < c->nclasses; k++)
     if (class_succ_dispatched(c, k) || class_range_linear(c, k)) { g_has_user_succ = 1; break; }
   g_gen_obj_hashkey = 0;

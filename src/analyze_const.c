@@ -424,9 +424,27 @@ void an_const_presence(Compiler *c) {
     c->classes[ci - 1].presence_read = 1;
     if (nt_kind(nt, c->classes[ci - 1].def_node) == NK_ConstantPathWriteNode && id < (int)nn) own[id] = 1;
   }
-  for (int id = 0; id < (int)nn && id < nt->count; id++) {
-    if (cref[id]) nt_node_set_str((NodeTable *)nt, id, "const_cref", cref[id] > 1 ? w.crefs[cref[id] - 2] : "");
-    if (own[id]) nt_node_set_str((NodeTable *)nt, id, "own_presence", "1");
+  /* Class#subclasses lists the subclasses whose header has run, as CRuby's
+     does while classes load (a library walking a class's descendants from
+     class bodies sees only those loaded so far): the call asks each
+     candidate's flag, a constant receiver's direct subclasses (by the
+     superclass their headers name: the class graph's parents are linked
+     later), any class value's every subclass, and their headers store it. */
+  NT_FOREACH_KIND(nt, NK_CallNode, id) {
+    const char *nm = nt_str(nt, id, "name");
+    int argc = 0;
+    if (!nm || !sp_streq(nm, "subclasses") || (call_args(nt, id, &argc), argc)) continue;
+    int r = nt_ref(nt, id, "receiver");
+    const char *rn = r >= 0 && nt_kind(nt, r) == NK_ConstantReadNode ? nt_str(nt, r, "name") : NULL;
+    for (int k = 0; k < c->nclasses; k++) {
+      ClassInfo *ci = &c->classes[k];
+      if (ci->def_node < 0 || ci->is_singleton_of || is_builtin_reopen(ci->name)) continue;
+      int sn = nt_kind(nt, ci->def_node) == NK_ClassNode ? class_def_super(nt, ci->def_node) : -1;
+      if (sn < 0) continue;
+      const char *pn = nt_str(nt, sn, "name");
+      if (rn && !(pn && sp_streq(pn, rn))) continue;
+      ci->presence_read = 1;
+    }
   }
   free(cref); free(own);
   for (int i = 0; i < w.ncrefs; i++) free(w.crefs[i]);

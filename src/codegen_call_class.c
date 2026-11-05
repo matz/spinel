@@ -4368,7 +4368,9 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
              singleton class, which Class#subclasses leaves out */
           if (c->classes[k].is_singleton_of) continue;
           /* boxed by id: a class-side dispatch switches on it, and
-             sp_class_to_s names it */
+             sp_class_to_s names it; listed once its header has run (the
+             flag the constant pass had the call ask) */
+          if (an_class_presence_is_read(c, k)) buf_printf(b, " if (sp_class_present_%d)", k);
           buf_printf(b, " sp_PolyArray_push(_t%d, sp_box_class(((sp_Class){%d, NULL})));", ta, k);
         }
         buf_printf(b, " _t%d; })", ta);

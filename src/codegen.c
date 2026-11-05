@@ -17047,7 +17047,7 @@ static void emit_user_op_dispatch(Compiler *c, Buf *b, const char *fname, const 
              already allows. A `<=>` that can return nil is typed poly (or has
              no value at all), and `sp_X_cmp(...) == 0` on it is ill-typed C
              -- reachable as soon as the class also defines #coerce. */
-          int cmp_ret_ok = (cm2->ret == TY_INT || cm2->ret == TY_FLOAT);
+          int cmp_ret_ok = (cm2->ret == TY_INT || cm2->ret == TY_FLOAT || cm2->ret == TY_BIGINT || cm2->ret == TY_POLY);
           if (cmp_ret_ok && (ty_is_object(cpt) || cpt == TY_POLY)) {
             char cargs[160];
             const char *cguard = NULL;
@@ -17070,6 +17070,16 @@ static void emit_user_op_dispatch(Compiler *c, Buf *b, const char *fname, const 
             if (method_ret_is_oint(cm2))
               buf_printf(b, "        *handled = TRUE; return sp_box_bool((b.tag == SP_TAG_OBJ && b.v.p == a.v.p) || "
                             "({ sp_oint _c = %s(%s(sp_%s *)a.v.p, %s); !_c.nil && _c.v == 0; }));\n      }\n",
+                         mc_method(c, cm2), cvt ? "*" : "", ccn, cargs);
+            /* a boxed answer (nil beside a Bignum) is read as cmp_equal reads it */
+            else if (cm2->ret == TY_POLY)
+              buf_printf(b, "        *handled = TRUE; return sp_box_bool((b.tag == SP_TAG_OBJ && b.v.p == a.v.p) || "
+                            "({ sp_RbVal _c = %s(%s(sp_%s *)a.v.p, %s); _c.tag != SP_TAG_NIL && sp_poly_eq(_c, sp_box_int(0)); }));\n      }\n",
+                         mc_method(c, cm2), cvt ? "*" : "", ccn, cargs);
+            /* a Bignum answer is a pointer (NULL for nil), not a number to compare with 0 */
+            else if (cm2->ret == TY_BIGINT)
+              buf_printf(b, "        *handled = TRUE; return sp_box_bool((b.tag == SP_TAG_OBJ && b.v.p == a.v.p) || "
+                            "({ sp_Bigint *_c = %s(%s(sp_%s *)a.v.p, %s); _c && sp_bigint_sign(_c) == 0; }));\n      }\n",
                          mc_method(c, cm2), cvt ? "*" : "", ccn, cargs);
             else
             buf_printf(b, "        *handled = TRUE; return sp_box_bool((b.tag == SP_TAG_OBJ && b.v.p == a.v.p) || "
@@ -17131,12 +17141,28 @@ static int class_succ_dispatched(Compiler *c, int k) {
   if (scope_is_shadowed(c, mi) || m->is_transplanted_source) return 0;
   return 1;
 }
+/* Does class k answer Range#include? by cover? (sp_obj_succ_dispatch's
+   probe 2): a Numeric of the program's own, or one with a to_int */
+static int class_range_linear(Compiler *c, int k) {
+  if (k < 0 || k >= c->nclasses || !c->classes[k].instantiated || is_builtin_reopen(c->classes[k].name)) return 0;
+  for (int j = k; j >= 0; j = c->classes[j].parent) {
+    int sup = class_def_super(c->nt, c->classes[j].def_node);
+    const char *sn = sup >= 0 ? nt_str(c->nt, sup, "name") : NULL;
+    if (sn && sp_streq(sn, "Numeric")) return 1;
+  }
+  int defcls = -1;
+  return comp_method_in_chain(c, k, "to_int", &defcls) >= 0 && defcls >= 0;
+}
 static int g_has_user_succ = 0;
 
 static void emit_obj_succ_dispatch(Compiler *c, Buf *b) {
   buf_puts(b, "static sp_RbVal sp_obj_succ_dispatch(sp_RbVal v, int probe, sp_bool *ok) {\n");
   emit_hook_object_root(b, "SP_GC_ROOT_RBVAL", "v");
-  buf_puts(b, "  *ok = TRUE;\n  switch (v.cls_id) {\n");
+  buf_puts(b, "  *ok = TRUE;\n  if (probe == 2) {\n    switch (v.cls_id) {\n");
+  for (int k = 0; k < c->nclasses; k++)
+    if (class_range_linear(c, k)) buf_printf(b, "    case %d: return sp_box_nil();\n", k);
+  buf_puts(b, "    default: break;\n    }\n    *ok = FALSE;\n    return sp_box_nil();\n  }\n");
+  buf_puts(b, "  switch (v.cls_id) {\n");
   for (int k = 0; k < c->nclasses; k++) {
     if (!class_succ_dispatched(c, k)) continue;
     int defcls = -1;
@@ -22944,7 +22970,7 @@ char *codegen_program(const NodeTable *nt) {
   }
   g_has_user_succ = 0;
   for (int k = 0; k < c->nclasses; k++)
-    if (class_succ_dispatched(c, k)) { g_has_user_succ = 1; break; }
+    if (class_succ_dispatched(c, k) || class_range_linear(c, k)) { g_has_user_succ = 1; break; }
   g_gen_obj_hashkey = 0;
   for (int k = 0; k < c->nclasses; k++)
     if (class_is_hashkey(c, k) || class_is_hashonly_key(c, k) || class_is_valuekey(c, k)) { g_gen_obj_hashkey = 1; break; }

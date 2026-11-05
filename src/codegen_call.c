@@ -16363,10 +16363,13 @@ static void emit_cmp_derived_eq(Compiler *c, int id, int recv, int arg, int ecid
   int same_ok = !comp_ty_value_obj(c, rt) &&
                 ((ty_is_object(at) && !comp_ty_value_obj(c, at)) || at == TY_POLY);
   Buf selfb = emit_cmp_self(c, recv, rt);
+  int cmi = comp_method_in_chain(c, ecid, "<=>", NULL);
+  /* a Bignum answer is a pointer, which `== 0` would read as NULL */
+  int big = cmi >= 0 && c->scopes[cmi].ret == TY_BIGINT;
   if (!same_ok) {
-    buf_puts(b, "(");
+    buf_puts(b, big ? "(sp_bigint_sign(" : "(");
     emit_dispatch(c, ecid, "<=>", selfb.p, args, -1, b);
-    buf_printf(b, " %s 0)", eq ? "==" : "!=");
+    buf_printf(b, "%s %s 0)", big ? ")" : "", eq ? "==" : "!=");
     free(selfb.p);
     return;
   }
@@ -16399,8 +16402,9 @@ static void emit_cmp_derived_eq(Compiler *c, int id, int recv, int arg, int ecid
     buf_printf(b, "((%s).tag == SP_TAG_OBJ && (void *)(%s).v.p == (void *)(%s))", argb.p, argb.p, selfb.p);
   else
     buf_printf(b, "((void *)(%s) == (void *)(%s))", argb.p, selfb.p);
-  buf_puts(b, " || ");
+  buf_puts(b, big ? " || sp_bigint_sign(" : " || ");
   emit_dispatch(c, ecid, "<=>", selfb.p, args, -1, b);
+  if (big) buf_puts(b, ")");
   buf_puts(b, eq ? " == 0)" : " == 0))");
   if (mark >= 0) view_unbind(mark);
   free(argb.p);

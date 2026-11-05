@@ -82,9 +82,13 @@ void emit_trailing_blk_arg(Compiler *c, const Scope *m, int id, int blk_tmp, Buf
 typedef struct {
   int lengthlike, empty, class_named, class_reflect, cls_members, pred, ostruct, io_rewind,
       poly_to_a, poly_to_h;
+  int class_reflect_cls_only;   /* the class arm skips a module value */
   int ncand, ncall_arm;
 } PolySpecials0;
 void poly_specials0(Compiler *c, int id, const char *name, PolySpecials0 *s);
+/* Does a poly dispatch of `name` at call id answer a class value with
+   Class's or Module's own method (the class-reflection arm)? */
+int poly_class_reflect_arm(Compiler *c, int id, const char *name, int *cls_only);
 /* what a poly dispatch with arguments answers beside its user arms, and its
    keyword split and user candidates (poly_specials_n) */
 typedef struct {

@@ -22312,14 +22312,20 @@ static int object_reopen_builtin_owns(Compiler *c, int id, int oci, const char *
    has public (a Class-only one such as new or subclasses is not a
    module's), that the call paths know, and that the program leaves alone
    on a reopened Class or Module (private :name, undef_method, its own
-   def). */
+   def). With is_class, the value is known to be a class (not a module),
+   so a public method of Class's (superclass, new, allocate) answers too. */
 int builtin_cmethod_name_known(const char *m);   /* below */
-static int class_value_builtin_answers(Compiler *c, const char *vnm) {
-  if (core_method_vis("Module", vnm, 1) != 1) return 0;
+static int class_value_builtin_answers(Compiler *c, const char *vnm, int is_class) {
+  if (core_method_vis(is_class ? "Class" : "Module", vnm, 1) != 1) return 0;
+  /* (of Class's own, only those the class-value paths answer: a typed
+     receiver's superclass, subclasses, allocate and new) */
+  if (core_method_vis("Module", vnm, 1) != 1 && !sp_streq(vnm, "superclass") && !sp_streq(vnm, "subclasses") &&
+      !sp_streq(vnm, "allocate") && !sp_streq(vnm, "new")) return 0;
   if (!builtin_instance_method_known("Class", vnm) && !builtin_instance_method_known("Module", vnm)) return 0;
-  const char *cm[] = { "Class", "Module" };
+  /* a `class Class` reopening is registered as the module Class__reopen */
+  int cm[] = { comp_core_class(c, CORE_CLASS_REOPEN), comp_class_index(c, "Module") };
   for (int i = 0; i < 2; i++) {
-    int k = comp_class_index(c, cm[i]);
+    int k = cm[i];
     if (k < 0) continue;
     const ClassInfo *ki = &c->classes[k];
     for (int j = 0; j < ki->nvis; j++) if (sp_streq(ki->vis_names[j], vnm)) return 0;
@@ -22385,7 +22391,7 @@ static int emit_object_reopen_vis_refusal(Compiler *c, int id, int vrecv, TyKind
       return 0;
     /* a class value answers Class's and Module's public methods (K.name)
        before Object's */
-    if (class_value_builtin_answers(c, vnm)) return 0;
+    if (class_value_builtin_answers(c, vnm, !comp_class_is_module(c, &c->classes[ci]))) return 0;
     snprintf(cvname, sizeof cvname, "%s %s", comp_class_is_module(c, &c->classes[ci]) ? "module" : "class",
              class_ruby_name(c, ci) ? class_ruby_name(c, ci) : c->classes[ci].name);
     cname = cvname; named = 1;
@@ -22405,6 +22411,9 @@ static int emit_object_reopen_vis_refusal(Compiler *c, int id, int vrecv, TyKind
       if (k != oci && (comp_class_is_module(c, &c->classes[k]) ? call_target(c, id, k, vnm, CT_OWN, NULL) >= 0
                                                                : object_reopen_class_owns(c, id, k, oci, vnm))) return 0;
     if (object_reopen_class_value_owns(c, id, oci, vnm, 1, -1)) return 0;
+    /* a class value answers Class's or Module's public method: the
+       dispatch's precheck lets only those values through */
+    if (class_value_builtin_answers(c, vnm, 1) && poly_class_reflect_arm(c, id, vnm, NULL)) return 0;
     boxed = 1;
   }
   else {
@@ -22721,7 +22730,7 @@ static void emit_object_reopen_vis_precheck(Compiler *c, int id, int tv, const c
   int obj_cmeth = call_target(c, id, oci, vnm, CT_CMETHOD, NULL) >= 0;
   /* and Class's and Module's own public methods (name, ancestors) answer
      every class value before Object's */
-  int cls_builtin = class_value_builtin_answers(c, vnm);
+  int cls_builtin = class_value_builtin_answers(c, vnm, 0);
   if (obj_cmeth || cls_builtin || object_reopen_class_value_owns(c, id, oci, vnm, 1, -1)) {
     Buf cv; memset(&cv, 0, sizeof cv);
     /* (a module Object extends answers every class value, as does a
@@ -22744,6 +22753,13 @@ static void emit_object_reopen_vis_precheck(Compiler *c, int id, int tv, const c
       buf_printf(b, " && !(_t%d.tag == SP_TAG_CLASS && (0%s))", tv, cv.p);
     free(cv.p);
   }
+  /* a Class-only public name (superclass, allocate) answers every value
+     that is a class, not a module. (Not when a program's module or class
+     method has the name too: the dispatch then has no arm for Class's own
+     method.) */
+  if (!obj_cmeth && !cls_builtin && class_value_builtin_answers(c, vnm, 1) &&
+      poly_class_reflect_arm(c, id, vnm, NULL) && !object_reopen_class_value_owns(c, id, oci, vnm, 1, -1))
+    buf_printf(b, " && !(_t%d.tag == SP_TAG_CLASS && !sp_class_is_module_val(sp_unbox_class(_t%d)))", tv, tv);
   /* `x&.public_send(:top)` never calls on nil */
   if (nt_safe_nav(c->nt, id)) buf_printf(b, " && _t%d.tag != SP_TAG_NIL", tv);
   buf_puts(b, ") { ");

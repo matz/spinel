@@ -191,7 +191,7 @@ int emit_call_poly_builtin_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
     }
   }
   if (recv >= 0 && rt == TY_POLY && argc == 0 && nt_ref(nt, id, "block") < 0 &&
-      !poly_ostruct_member_call(c, id, name, recv, argc)) {
+      !poly_ostruct_member_call(c, id)) {
     const char *pm = NULL;
     if (sp_streq(name, "sum")) pm = "sp_poly_sum";
     else if (sp_streq(name, "min")) pm = "sp_poly_min";

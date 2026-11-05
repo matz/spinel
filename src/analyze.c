@@ -14391,6 +14391,8 @@ static int desugar_enum_named_call(Compiler *c, int id, NodeTable *nt, const cha
                  !an_user_defines_or_reads(c, nm) &&
                  !an_user_defines_or_reads(c, sp_streq(nm, "grapheme_clusters") ? "chars" : "each_char");
     if (grt == TY_STRING || grpoly) {
+      /* (an OpenStruct reads its member by the name as written) */
+      if (!nt_str(nt, id, "written_name")) nt_node_set_str(nt, id, "written_name", nm);
       nt_node_set_str(nt, id, "name",
                       sp_streq(nm, "grapheme_clusters") ? "chars" : "each_char");
       *changed = 1;

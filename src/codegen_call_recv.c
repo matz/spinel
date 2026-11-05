@@ -16507,7 +16507,7 @@ static void emit_poly_str_array_call(Compiler *c, int id, int recv, const char *
 /* A zero-argument call on a boxed receiver (emit_poly_call's arms, in their order) */
 static int emit_poly_call0_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc, const int *argv, TyKind rt, int *out) {
   if (!(recv >= 0 && rt == TY_POLY && argc == 0)) return 0;
-  if (poly_ostruct_member_call(c, id, name, recv, argc)) return 0;
+  if (poly_ostruct_member_call(c, id)) return 0;
   /* Skip when a user class defines nil? so its method wins the dispatch --
      the same reason the to_a arm below gives. A Null Object answering true
      was folded to the tag test and its guard silently never fired. */
@@ -16750,9 +16750,10 @@ static int emit_poly_call0_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
      CRuby's NoMethodError. A user class defining to_sym wins via poly dispatch.
      `intern` answers as `to_sym` does on both, and stands aside, as the
      arm did not exist for it before, wherever the dispatch reads the name
-     some other way: a user reader (an attr_reader, a Struct member) or an
-     OpenStruct member when ostruct is loaded (#3197). */
-  int intern_read = sp_streq(name, "intern") && (sp_feature_required("ostruct") || user_defines_or_reads(c, name));
+     some other way: a user reader (an attr_reader, a Struct member). An
+     OpenStruct's member read takes the dispatch ahead of here
+     (poly_ostruct_member_call, #3197). */
+  int intern_read = sp_streq(name, "intern") && user_defines_or_reads(c, name);
   if (sp_streq(name, "to_sym") || (sp_streq(name, "intern") && !intern_read)) {
     if (!poly_name_user_claimed(c, name, argc)) {
       int t = ++g_tmp;

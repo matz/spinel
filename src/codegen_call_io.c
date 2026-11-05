@@ -893,9 +893,9 @@ int emit_call_poly_io_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
           one of these reached the unresolved-call gate (#4611) */
        /* File::Stat's mode and numeric fields: a stat read out of a
           container is the same boxed handle. Not where a class method may
-          own the name, or an OpenStruct may carry it as a field. */
-       (argc == 0 && boxed_stat_name(name) && !class_method_named(c, name) &&
-        !sp_feature_required("ostruct")) ||
+          own the name (an OpenStruct's member read takes the poly dispatch
+          ahead of here, poly_ostruct_member_call). */
+       (argc == 0 && boxed_stat_name(name) && !class_method_named(c, name)) ||
        sp_streq(name, "stat") || sp_streq(name, "seek") || sp_streq(name, "tell") ||
        sp_streq(name, "pos") || sp_streq(name, "pread") || sp_streq(name, "pwrite") ||
        sp_streq(name, "fsync") || sp_streq(name, "fdatasync") ||

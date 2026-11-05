@@ -17396,6 +17396,9 @@ int desugar_builtin_scalar_defs(Compiler *c) {
     for (int k = 0; k < bn; k++) {
       int def = bb[k];
       if (nt_kind(nt, def) != NK_DefNode) continue;
+      /* `def self.times`: a method of the class, never the instance
+         generic for `3.times` */
+      if (nt_ref(nt, def, "receiver") >= 0) continue;
       const char *name = nt_str(nt, def, "name");
       if (!name) continue;
       /* a method the body leaves private or protected (`private :m`, a
@@ -17426,6 +17429,12 @@ int desugar_builtin_scalar_defs(Compiler *c) {
           nt_subtree_blank(nt, gdef[bx][bi0]);
           gdef[bx][bi0] = -1;
         }
+        /* and the clone of an earlier reopen of the same name */
+        for (int m = 0; m < odef_n[bx]; m++)
+          if (odef_def[bx][m] >= 0 && sp_streq(odef_name[bx][m], name)) {
+            nt_subtree_blank(nt, odef_def[bx][m]);
+            odef_def[bx][m] = -1;
+          }
         continue;
       }
       int clone = nt_clone_subtree(nt, def);
@@ -17735,7 +17744,10 @@ int desugar_builtin_scalar_calls(Compiler *c) {
       int crn = 0; if (cpn >= 0) nt_arr(nt, cpn, "requireds", &crn);
       int con = 0; if (cpn >= 0) nt_arr(nt, cpn, "optionals", &con);
       int crest = cpn >= 0 && nt_ref(nt, cpn, "rest") >= 0;
-      if (an + 1 < crn || (!crest && an + 1 > crn + con)) continue; }
+      /* a `*arr` argument left after expand_static_splat_args can
+         stand for any count of arguments */
+      int csplat = av && nt_argv_has_splat(nt, av, an);
+      if ((!csplat && an + 1 < crn) || (!crest && an + 1 > crn + con)) continue; }
     int encl = c->nscope[id];
     int base = nt->count;
     int *na = (int *)malloc(sizeof(int) * (size_t)(an + 1));

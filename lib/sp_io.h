@@ -117,6 +117,9 @@ sp_File *sp_File_open_perm(const char *path, const char *mode, sp_oint perm);   
    CRuby sockets' sync = true. `kind` labels the handle ("tcp", "tcpserver",
    ...) for #class rendering. (#2922) */
 sp_File *sp_io_fdopen_sock(int fd, const char *kind);
+/* TCPSocket.new's connect under connect_timeout:: the fd, or -1 as sp_net_connect
+   answers it; a deadline that passes raises IO::TimeoutError. */
+int sp_io_connect_timeout(const char *host, sp_int port, sp_float timeout_s);
 /* Access-mode checks retain closed-stream error precedence. */
 void sp_io_check_readable(sp_File *f);
 void sp_io_check_writable(sp_File *f);

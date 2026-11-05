@@ -1136,6 +1136,22 @@ sp_File *sp_sock_unix_socket(const char *path) {SP_GC_ROOT_STR(path);
   f->mode = SPL("socket");
   return f;
 }
+/* TCPSocket.new(host, port, connect_timeout: t): the connect with a deadline
+   (sp_net_connect_timeout). A deadline that passes is CRuby's
+   IO::TimeoutError, worded as CRuby words it; a refusal or a name that does
+   not resolve answers -1 as sp_net_connect does, for sp_io_fdopen_sock to
+   raise as it raises for that. */
+int sp_io_connect_timeout(const char *host, sp_int port, sp_float timeout_s) {SP_GC_ROOT_STR(host);
+  extern int sp_net_connect_timeout(const char *host, int port, double timeout_s);
+  extern int sp_net_take_connect_timeout(void);
+  int fd = sp_net_connect_timeout(host, (int)port, (double)timeout_s);
+  if (fd < 0 && sp_net_take_connect_timeout()) {
+    char msg[320];
+    snprintf(msg, sizeof msg, "connect(2) for \"%s\" port %d", host, (int)port);
+    sp_raise_cls("IO::TimeoutError", msg);
+  }
+  return fd;
+}
 sp_File *sp_sock_tcp_socket(const char *host, sp_int port) {SP_GC_ROOT_STR(host);
   extern int sp_net_connect(const char *host, int port);
   sp_File *f = sp_io_fdopen_sock(sp_net_connect(host, (int)port), SPL("tcp"));

@@ -15743,9 +15743,39 @@ static int emit_new_call_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
       { *out = 1; return 1; }
     }
     if (cn && sp_streq(cn, "TCPSocket") && sp_feature_required("socket") && argc >= 2) {
-      buf_puts(b, "sp_io_fdopen_sock(sp_net_connect(");
-      emit_str_expr(c, argv[0], b); buf_puts(b, ", ");
-      emit_int_expr(c, argv[1], b);
+      /* TCPSocket.new(host, port, connect_timeout: t): CRuby bounds the
+         connect by the keyword, and a deadline that passes is
+         IO::TimeoutError. The runtime has had the timed connect
+         (sp_net_connect_timeout, lib/sp_net.c) without this emission
+         calling it, so the keyword was dropped without a word and the
+         connect waited as long as the kernel does. A nil is no deadline, as
+         in CRuby. The other keywords CRuby takes (local_host:, local_port:,
+         resolv_timeout:, open_timeout:) are not implemented: refused, not
+         dropped. */
+      int kwh = nt_kind(nt, argv[argc - 1]) == NK_KeywordHashNode ? argv[argc - 1] : -1;
+      int ct = -1;
+      if (kwh >= 0) {
+        int kn = 0; const int *kels = nt_arr(nt, kwh, "elements", &kn);
+        for (int k = 0; k < kn; k++) {
+          int key = nt_kind(nt, kels[k]) == NK_AssocNode ? nt_ref(nt, kels[k], "key") : -1;
+          const char *kname = key >= 0 && nt_kind(nt, key) == NK_SymbolNode ? nt_str(nt, key, "value") : NULL;
+          if (!kname || !sp_streq(kname, "connect_timeout"))
+            unsupported(c, id, "TCPSocket.new keyword other than connect_timeout:");
+        }
+        ct = struct_kwarg_value(c, kwh, "connect_timeout");
+        if (ct >= 0 && nt_kind(nt, ct) == NK_NilNode) ct = -1;
+      }
+      if ((kwh >= 0 ? argc - 1 : argc) < 2) unsupported(c, id, "TCPSocket.new without a host and a port");
+      if (ct >= 0) {
+        buf_puts(b, "sp_io_fdopen_sock(sp_io_connect_timeout(");
+        emit_str_expr(c, argv[0], b); buf_puts(b, ", ");
+        emit_int_expr(c, argv[1], b); buf_puts(b, ", ");
+        emit_float_expr(c, ct, b);
+      } else {
+        buf_puts(b, "sp_io_fdopen_sock(sp_net_connect(");
+        emit_str_expr(c, argv[0], b); buf_puts(b, ", ");
+        emit_int_expr(c, argv[1], b);
+      }
       buf_puts(b, "), (&(\"\\xff\" \"tcp\")[1]))");
       { *out = 1; return 1; }
     }

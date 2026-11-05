@@ -1373,7 +1373,9 @@ sp_Time *sp_trange_step_next(const sp_TimeRange *r, const sp_Time *t, double sec
    object holding its two ends boxed, nil for an open end. Its comparisons
    run through sp_poly_cmp in the generated TU (spinel_rt.h), which reaches
    the class's own <=>; it is not iterated here (no succ walk). */
-typedef struct { sp_RbVal first; sp_RbVal last; sp_int excl; sp_int unfrozen; } sp_ObjRange;
+/* wbuf/wcur/wnext/wdone: a walker's members pulled so far (sp_orange_walker), NULL on a Range itself */
+typedef struct { sp_RbVal first; sp_RbVal last; sp_int excl; sp_int unfrozen;
+                 sp_PolyArray *wbuf; sp_RbVal wcur; sp_int wnext; sp_int wdone; } sp_ObjRange;
 sp_ObjRange *sp_orange_new(sp_RbVal first, sp_RbVal last, sp_int excl);
 sp_RbVal sp_box_orange(sp_ObjRange *r);
 sp_RbVal sp_orange_first(const sp_ObjRange *r);

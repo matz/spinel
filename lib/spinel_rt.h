@@ -3234,6 +3234,10 @@ extern sp_orange_walk_fn sp_orange_walk_lib;
 #else
 #define SP_ORANGE_WALK(r) sp_orange_to_a(r)
 #endif
+static SP_UNUSED sp_RbVal sp_orange_walker(const sp_ObjRange *r);
+static SP_UNUSED sp_int sp_orange_walk_len(sp_ObjRange *w);
+static SP_UNUSED sp_PolyArray *sp_orange_first_n(const sp_ObjRange *r, sp_int n);
+static SP_UNUSED sp_RbVal sp_orange_walk_at(sp_ObjRange *w, sp_int i);
 static sp_bool sp_orange_eq(const sp_ObjRange *a, const sp_ObjRange *b);   /* defined with the Range helpers below */
 static sp_int sp_orange_hash(const sp_ObjRange *r);
 static sp_RbVal sp_orange_min(const sp_ObjRange *r);
@@ -12155,6 +12159,7 @@ static sp_RbVal sp_poly_iter_walk(sp_RbVal v) {
     if (w.tag != SP_TAG_NIL) return w;
   }
   if (sp_poly_range_walks(v)) return v;
+  if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_OBJ_RANGE && v.v.p) return sp_orange_walker((sp_ObjRange *)v.v.p);
   return sp_poly_iter_subject(v);
 }
 static void sp_poly_iter_check(sp_RbVal v, const char *m) {
@@ -12221,6 +12226,7 @@ static SP_NOINLINE sp_int sp_poly_for_next(const sp_Range *r, sp_PolyArray *a, s
 static SP_NOINLINE sp_int sp_poly_arr_len_ex_slow(sp_RbVal a) {
   if (a.tag != SP_TAG_OBJ) return 0;
   if (sp_enum_is_walker(a)) return sp_enum_walk_len(a);
+  if (a.cls_id == SP_BUILTIN_OBJ_RANGE && a.v.p && ((sp_ObjRange *)a.v.p)->wbuf) return sp_orange_walk_len((sp_ObjRange *)a.v.p);
   /* a finite materialized Enumerator is its items: read as none, any?, all?,
      none? and one? on a boxed one counted nothing and answered as if empty */
   { sp_PolyArray *fi = sp_enum_finite_items(a); if (fi) return fi->len; }
@@ -12242,6 +12248,7 @@ static SP_NOINLINE sp_RbVal sp_poly_each_elem_slow(sp_RbVal a, sp_int i) {
   SP_GC_ROOT_RBVAL(a);   /* the boxing arms below allocate */
   if (a.tag != SP_TAG_OBJ) return sp_box_nil();
   if (sp_enum_is_walker(a)) return sp_enum_walk_at(a, i);
+  if (a.cls_id == SP_BUILTIN_OBJ_RANGE && a.v.p && ((sp_ObjRange *)a.v.p)->wbuf) return sp_orange_walk_at((sp_ObjRange *)a.v.p, i);
   { sp_PolyArray *fi = sp_enum_finite_items(a); if (fi) return (i >= 0 && i < fi->len) ? fi->data[i] : sp_box_nil(); }
   switch (a.cls_id) {
     case SP_BUILTIN_INT_ARRAY: case SP_BUILTIN_FLT_ARRAY:
@@ -15510,6 +15517,7 @@ static sp_RbVal sp_poly_span_subject(sp_RbVal v) {
   return v;
 }
 static sp_RbVal sp_poly_arr_take(sp_RbVal v, sp_int n) {
+  if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_OBJ_RANGE && v.v.p) return sp_box_poly_array(sp_orange_first_n((sp_ObjRange *)v.v.p, n));
   if (n < 0) sp_raise_cls("ArgumentError", "negative array size");
   /* Range#first(n) on a boxed Integer Range: the leading members, built
      directly so an endless range is fine. sp_poly_length has no Range arm
@@ -18502,7 +18510,8 @@ static sp_RbVal sp_poly_enum_chk(sp_RbVal v, const char *m) {
   /* a user object's elements are read once, by walking its #each, and handed
      on as the Array they are, so that walk is not run again by the caller */
   if (v.tag == SP_TAG_OBJ && v.cls_id >= 0) return sp_box_poly_array(sp_poly_to_a_arr_as(v, m, 0));
-  if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_OBJ_RANGE && v.v.p) return sp_box_poly_array(SP_ORANGE_WALK((sp_ObjRange *)v.v.p));
+  /* first(n) walks only n members (sp_poly_arr_take), so an endless one answers */
+  if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_OBJ_RANGE && v.v.p && strcmp(m, "first") != 0) return sp_box_poly_array(SP_ORANGE_WALK((sp_ObjRange *)v.v.p));
   return v;
 }
 /* One end of a numeric Range for Range#overlap?: absent (nil), or an
@@ -18616,6 +18625,62 @@ static SP_UNUSED sp_PolyArray *sp_orange_to_a(const sp_ObjRange *r) {
   }
   return a;
 }
+/* A walk by succ one member at a time, as range_each_func does: an endless
+   Range runs until the block breaks. The begin must answer succ. */
+static SP_UNUSED sp_RbVal sp_orange_walk_start(const sp_ObjRange *r) {
+  SP_GC_ROOT(r);
+  if (r->first.tag == SP_TAG_NIL) sp_raise_cls("TypeError", "can't iterate from NilClass");
+  sp_bool ok = FALSE;
+  if (sp_obj_succ_hook && r->first.tag == SP_TAG_OBJ && r->first.cls_id >= 0) sp_obj_succ_hook(r->first, 1, &ok);
+  if (!ok) sp_raise_cls("TypeError", sp_sprintf("can't iterate from %s", sp_poly_class_name(r->first)));
+  return r->first;
+}
+static SP_UNUSED sp_bool sp_orange_walk_on(const sp_ObjRange *r, sp_RbVal v) {
+  return r->last.tag == SP_TAG_NIL || sp_orange_le(v, r->last, (int)r->excl);
+}
+static SP_UNUSED sp_RbVal sp_orange_walk_succ(sp_RbVal v) {
+  sp_bool ok = FALSE;
+  sp_RbVal n = sp_obj_succ_hook(v, 0, &ok);
+  if (!ok) sp_raise_nomethod(sp_nomethod_msg("succ", v));
+  return n;
+}
+/* the boxed walk (sp_poly_iter_walk): a copy of the Range that pulls its
+   next member only when the loop asks whether there is one more */
+static SP_UNUSED sp_RbVal sp_orange_walker(const sp_ObjRange *r) {
+  SP_GC_ROOT(r);
+  sp_RbVal v = sp_orange_walk_start(r); SP_GC_ROOT_RBVAL(v);
+  sp_ObjRange *w = sp_orange_new(r->first, r->last, r->excl); SP_GC_ROOT(w);
+  sp_PolyArray *buf = sp_PolyArray_new();
+  sp_gc_wb((void *)w); w->wbuf = buf; w->wcur = v;
+  return sp_box_obj(w, SP_BUILTIN_OBJ_RANGE);
+}
+static SP_UNUSED sp_int sp_orange_walk_len(sp_ObjRange *w) {
+  SP_GC_ROOT(w);
+  while (!w->wdone && w->wbuf->len <= w->wnext) {
+    if (!sp_orange_walk_on(w, w->wcur)) { w->wdone = 1; break; }
+    sp_PolyArray_push(w->wbuf, w->wcur);
+    sp_RbVal n = sp_orange_walk_succ(w->wcur);
+    sp_gc_wb((void *)w); w->wcur = n;
+  }
+  return w->wbuf->len;
+}
+static SP_UNUSED sp_RbVal sp_orange_walk_at(sp_ObjRange *w, sp_int i) {
+  if (i + 1 > w->wnext) w->wnext = i + 1;
+  return i >= 0 && i < w->wbuf->len ? w->wbuf->data[i] : sp_box_nil();
+}
+/* first(n): n members walked, so an endless Range answers too */
+static SP_UNUSED sp_PolyArray *sp_orange_first_n(const sp_ObjRange *r, sp_int n) {
+  SP_GC_ROOT(r);
+  if (n < 0) sp_raise_cls("ArgumentError", "negative array size (or size too big)");
+  sp_PolyArray *a = sp_PolyArray_new(); SP_GC_ROOT(a);
+  if (n == 0) return a;
+  sp_RbVal v = sp_orange_walk_start(r); SP_GC_ROOT_RBVAL(v);
+  while (a->len < n && sp_orange_walk_on(r, v)) {
+    sp_PolyArray_push(a, v);
+    if (a->len < n) v = sp_orange_walk_succ(v);
+  }
+  return a;
+}
 /* the ends must compare, as the boxed constructor (sp_range_new_box) checks */
 static SP_UNUSED sp_ObjRange *sp_orange_new_typed(sp_RbVal f, sp_RbVal l, sp_int x) {
   if (f.tag != SP_TAG_NIL && l.tag != SP_TAG_NIL) {
@@ -18670,7 +18735,7 @@ static sp_RbVal sp_orange_max(const sp_ObjRange *r) {
   if (r->last.tag == SP_TAG_NIL) sp_raise_cls("RangeError", "cannot get the maximum of endless range");
   if (r->excl) {
     if (r->first.tag == SP_TAG_NIL) sp_raise_cls("RangeError", "cannot get the maximum of beginless range with custom comparison method");
-    return sp_PolyArray_max(sp_orange_to_a(r));
+    return sp_PolyArray_max(SP_ORANGE_WALK(r));
   }
   if (r->first.tag != SP_TAG_NIL && !sp_orange_le(r->first, r->last, 0)) return sp_box_nil();
   return r->last;
@@ -18734,6 +18799,7 @@ static sp_RbVal sp_orange_send(sp_ObjRange *r, const char *n, int argc, sp_RbVal
     if (!strcmp(n, "==") || !strcmp(n, "eql?"))
       return sp_box_bool(a0.tag == SP_TAG_OBJ && a0.cls_id == SP_BUILTIN_OBJ_RANGE && sp_orange_eq(r, (sp_ObjRange *)a0.v.p));
     if (!strcmp(n, "overlap?")) return sp_box_bool(sp_orange_overlap_v(sp_box_obj(r, SP_BUILTIN_OBJ_RANGE), a0));
+    if (!strcmp(n, "first")) return sp_box_poly_array(sp_orange_first_n(r, sp_poly_to_i(a0)));
   }
   sp_raise_cls("NoMethodError", sp_sprintf("undefined method '%s' for an instance of Range", n));
   return sp_box_nil();

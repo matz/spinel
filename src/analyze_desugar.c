@@ -4471,12 +4471,14 @@ int desugar_obj_range_via_a(Compiler *c) {
     if (!nm || recv < 0 || nt_int(nt, recv, "made_to_a", 0)) continue;
     int hit = 0;
     for (int q = 0; VIA_A[q]; q++) if (sp_streq(nm, VIA_A[q])) { hit = 1; break; }
-    /* count, first(n) and min/max with a block walk it; include? stays cover? */
+    /* count, last(n) and min/max with a block walk it; include? stays cover? */
     int args = nt_ref(nt, id, "arguments"), an = 0;
     if (args >= 0) nt_arr(nt, args, "arguments", &an);
     int blk = nt_ref(nt, id, "block") >= 0;
     if (!hit && (sp_streq(nm, "count") || sp_streq(nm, "min") || sp_streq(nm, "max"))) hit = blk || an > 0;
-    if (!hit && (sp_streq(nm, "first") || sp_streq(nm, "last"))) hit = an > 0;
+    if (!hit && sp_streq(nm, "last")) hit = an > 0;
+    /* each with a block walks by succ itself (codegen_iter), so an endless one stops where it breaks */
+    if (sp_streq(nm, "each") && blk && an == 0) hit = 0;
     if (!hit) continue;
     if (infer_type(c, recv) != TY_OBJ_RANGE) continue;
     int toa = nt_new_node(nt, "CallNode");

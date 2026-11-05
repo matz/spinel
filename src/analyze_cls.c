@@ -4764,15 +4764,22 @@ static void cf_collect_blk_local(CF *f) {
     if (!nm || !sp_streq(nm, c->scopes[mi].blk_param)) continue;
     int p = f->par ? f->par[id] : -1, ok = 0;
     /* handed on as the block of a receiverless call of a method of the
-       class's own (`each_line(sep, &blk)`): that method's yields are this
-       one's (cf_bind_block) */
+       class's own (`each_line(sep, &blk)`), or of a call on a receiver of a
+       name some method of the program has (a tree's `left.each(&block)`
+       walking its children): that method's yields are this one's
+       (cf_bind_block, which binds the forwarded block to each callee the
+       receiver's classes answer with) */
     if (p >= 0 && nt_kind(nt, p) == NK_BlockArgumentNode) {
       int pc = f->par[p];
       while (pc >= 0 && nt_kind(nt, pc) == NK_ArgumentsNode) pc = f->par[pc];
       const char *cn = pc >= 0 && nt_kind(nt, pc) == NK_CallNode ? nt_str(nt, pc, "name") : NULL;
       int k = c->scopes[mi].class_id;
-      ok = cn && nt_ref(nt, pc, "receiver") < 0 && nt_ref(nt, pc, "block") == p && k >= 0 && !c->scopes[mi].is_cmethod &&
-           call_target(c, pc, k, cn, 0, NULL) >= 0;
+      if (cn && nt_ref(nt, pc, "block") == p) {
+        if (nt_ref(nt, pc, "receiver") < 0)
+          ok = k >= 0 && !c->scopes[mi].is_cmethod && call_target(c, pc, k, cn, 0, NULL) >= 0;
+        else
+          ok = cf_byname(f, cn)->n > 0;
+      }
     }
     if (p >= 0 && nt_kind(nt, p) == NK_CallNode && nt_ref(nt, p, "receiver") == id) {
       const char *cn = nt_str(nt, p, "name");

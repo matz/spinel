@@ -5492,8 +5492,10 @@ static int ver_builtin_chain(Compiler *c, int cls, int sg, const char *name, int
    an arm per version, nearest history first, each testing its history's
    cell; asked for a call that may meet no version (q), its else arm what
    the lookup finds past every version of the chain (ver_absent_else),
-   when they share a visibility. -1 for none. */
-static int ver_entry_make(Compiler *c, const struct VerNamedAsks *q, int rcls, int sg, const char *name, int mi, int ar, int mm,
+   when they share a visibility. Its arms call class into's scope of each
+   version, and it is into's method: rcls's own, or the copies a class
+   holds of module rcls's versions. -1 for none. */
+static int ver_entry_make(Compiler *c, const struct VerNamedAsks *q, int rcls, int into, int sg, const char *name, int mi, int ar, int mm,
                           int *absent, int *finds) {
   ElabVersion vs[VER_MAX_ARMS];
   DispArm arm[VER_MAX_ARMS];
@@ -5503,7 +5505,7 @@ static int ver_entry_make(Compiler *c, const struct VerNamedAsks *q, int rcls, i
   int nv = elab_chain_versions(c, rcls, sg, name, vs, VER_MAX_ARMS);
   for (int i = 0; i < nv; i++) {
     if (vs[i].v->kind == LR_REMOVE) continue;   /* its write passes the search on */
-    int s = vs[i].v->kind == LR_UNDEF ? -1 : ct_def_version(c, rcls, name, sg, vs[i].v, &dc);
+    int s = vs[i].v->kind == LR_UNDEF ? -1 : ct_def_version(c, into, name, sg, vs[i].v, &dc);
     if (s < 0 || c->scopes[s].is_transplanted_source || (!c->scopes[s].replaced && scope_is_shadowed(c, s)))
       return -1;
     blk |= c->scopes[s].blk_param || c->scopes[s].yields;
@@ -5520,7 +5522,7 @@ static int ver_entry_make(Compiler *c, const struct VerNamedAsks *q, int rcls, i
   if (absent) *absent = els >= 0;
   *finds = ver_else_finds(c, kind, rcls, sg, name, nv > 0 ? vs[0].v->vis : SP_VIS_PUBLIC, na ? to[na - 1] : -1);
   if (els < 0 && (q || nv < 2 || !na || same)) return -1;   /* (asked for its else arm only: ver_late_make stores no scope for an entry without one) */
-  return ver_entry_emit(c, rcls, sg, name, ar, blk, spliced, arm, to, na, fallback, els);
+  return ver_entry_emit(c, into, sg, name, ar, blk, spliced, arm, to, na, fallback, els);
 }
 /* The entry's def, its arms' calls pinned to to[] and its else arm's to
    els_to, beside els_to's def; or, given els, that else arm, pinned to
@@ -6297,7 +6299,7 @@ void ver_entries_build(Compiler *c) {
     /* (a guard entry's else arm runs the method behind the prepends) */
     int finds = ver_else_finds(c, VK_KEEP, o.v[i].cls, o.v[i].sg, o.v[i].name, SP_VIS_PUBLIC, -1);
     int e = o.v[i].guard ? guard_entry_make(c, o.v[i].mi, o.v[i].ar)
-                         : ver_entry_make(c, NULL, o.v[i].cls, o.v[i].sg, o.v[i].name, o.v[i].mi, o.v[i].ar, 1, NULL, &finds);
+                         : ver_entry_make(c, NULL, o.v[i].cls, o.v[i].cls, o.v[i].sg, o.v[i].name, o.v[i].mi, o.v[i].ar, 1, NULL, &finds);
     ver_entry_add(c, e >= 0 ? c->scopes[e].name : o.v[i].name, (struct VerEntry){ NULL, o.v[i].guard, o.v[i].cls, o.v[i].sg, o.v[i].ar, e, .finds = finds });
   }
   free(o.v); free(o.ix);
@@ -6551,14 +6553,14 @@ static int ver_late_make(Compiler *c) {
     int ix = ver_entry_ix(c, 0, l->cls, l->sg, l->name, l->ar), absent = 0, e, mm = 0, finds = VER_FINDS_NONE;
     if ((i && !ver_late_cmp(l - 1, l)) || (ix >= 0 && c->ver_entries[ix].absent)) continue;
     if (l->span) {   /* (the build's entry for a call that spans versions, unless the key's others made one) */
-      if (ix < 0 && !(i && !ver_late_key_cmp(l - 1, l)) && (e = ver_entry_make(c, NULL, l->cls, l->sg, l->name, l->mi, l->ar, 1, NULL, &finds)) >= 0) {
+      if (ix < 0 && !(i && !ver_late_key_cmp(l - 1, l)) && (e = ver_entry_make(c, NULL, l->cls, l->cls, l->sg, l->name, l->mi, l->ar, 1, NULL, &finds)) >= 0) {
         ver_entry_add(c, c->scopes[e].name, (struct VerEntry){ NULL, 0, l->cls, l->sg, l->ar, e, .finds = finds });
         made = 1;
       }
       continue;
     }
     for (int j = i; j < c->nver_late && !ver_late_cmp(l, &c->ver_late[j]); j++) mm |= c->ver_late[j].mm;   /* (over every call of the key) */
-    e = ver_entry_make(c, &q, l->cls, l->sg, l->name, l->mi, l->ar, mm, &absent, &finds);
+    e = ver_entry_make(c, &q, l->cls, l->cls, l->sg, l->name, l->mi, l->ar, mm, &absent, &finds);
     if (ix < 0) ver_entry_add(c, e >= 0 ? c->scopes[e].name : l->name, (struct VerEntry){ NULL, 0, l->cls, l->sg, l->ar, absent ? e : -1, absent ? 2 : 1, .finds = finds });
     else {
       c->ver_entries[ix].absent = absent ? 2 : 1;

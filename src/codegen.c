@@ -12194,6 +12194,42 @@ static int class_pooled(Compiler *c, int cid) {
   return !class_is_exc_subclass(c, cid) && ci->ary_root <= 0 && ci->nsub_root <= 0;
 }
 
+/* Does a String member of Struct/Data class cid own the name nm (inspect or
+   to_s), as any generated reader does in CRuby (#4190)? Only a String member
+   takes it: a non-String one falls back to the default at interpolation in
+   CRuby too, and the direct call goes through the reader arm. */
+static int struct_member_owns(Compiler *c, int cid, const char *nm) {
+  ClassInfo *ci = &c->classes[cid];
+  char iv[64]; snprintf(iv, sizeof iv, "@%s", nm);
+  int idx = comp_ivar_index(ci, iv);
+  return idx >= 0 && (ci->ivar_types[idx] == TY_STRING || ci->ivar_types[idx] == TY_STRBUF) &&
+         comp_resolve_member(c, cid, nm, 0, NULL, NULL) == SP_MEMBER_ATTR;
+}
+/* Does the program (a def) or a member own class cid's inspect or to_s? */
+static int struct_display_owned(Compiler *c, int cid, const char *nm) {
+  return comp_method_in_chain(c, cid, nm, NULL) >= 0 || struct_member_owns(c, cid, nm);
+}
+/* The sp_<C name>_<fn> that answers class cid's default text: inspect when
+   nothing owns it, else to_s when nothing owns that, else a copy of its own
+   (struct_inspect), made only then. */
+static const char *struct_default_text_fn(Compiler *c, int cid) {
+  return !struct_display_owned(c, cid, "inspect") ? "inspect"
+       : !struct_display_owned(c, cid, "to_s") ? "to_s" : "struct_inspect";
+}
+
+/* Forward-declares the generated stringifiers of Struct/Data class cid, so
+   one struct's #inspect may recurse into a struct-typed member, and a super
+   reach its default text, whatever the order of definition. */
+static void emit_struct_display_decls(Compiler *c, int cid, Buf *b) {
+  const char *cn = c->classes[cid].c_name;
+  if (comp_method_in_chain(c, cid, "inspect", NULL) < 0)
+    buf_printf(b, "static const char *sp_%s_inspect(sp_%s *self);\n", cn, cn);
+  if (comp_method_in_chain(c, cid, "to_s", NULL) < 0)
+    buf_printf(b, "static const char *sp_%s_to_s(sp_%s *self);\n", cn, cn);
+  if (sp_streq(struct_default_text_fn(c, cid), "struct_inspect"))
+    buf_printf(b, "static const char *sp_%s_struct_inspect(sp_%s *self);\n", cn, cn);
+}
+
 /* The default Struct/Data representation, `#<struct Name m=v, ...>` (Data
    shows `data`), as sp_<C name>_<fn>. It is #inspect unless a member or the
    program owns inspect, and it is #to_s then too: CRuby's Struct#to_s and
@@ -12215,12 +12251,20 @@ static void emit_struct_default_inspect(Compiler *c, ClassInfo *ci, int cid, con
   /* a class its Struct.new / Data.define block runs in before the
      constant names it (comp_class_anonymous) shows the name it has then */
   int anon_now = comp_class_anonymous(c, cid);
+  /* An owned inspect or to_s of the class can run for a subclass's instance
+     and reach this body (a to_s call or a super in it), which then shows
+     the class the object has, as CRuby's does. */
+  int rt_name = !anon_now && !ci->is_anon_struct && !ci->is_value_type && class_has_subclass(c, cid) &&
+                (struct_display_owned(c, cid, "inspect") || struct_display_owned(c, cid, "to_s"));
   if (anon_now) { char nx[96]; anon_name_expr(nx, sizeof nx, cid); buf_printf(b, "  const char *_anm = %s;\n", nx); }
-  if (ci->nmembers > 0 && anon_now)
+  if (rt_name) { buf_puts(b, "  const char *_anm = sp_obj_cls_name_rt(self->cls_id);\n"); anon_now = 1; }
+  if (ci->nmembers > 0 && anon_now) {
+    char fb[96]; snprintf(fb, sizeof fb, "sp_class_display((sp_Class){%d, NULL})", cid);
     buf_printf(b, "  if (sp_poly_recur_seen(SP_POLY_RECUR_INSPECT, self, NULL))\n"
-                  "    return sp_sprintf(SPL(\"#<%s %%s:...>\"), _anm ? _anm : sp_class_display((sp_Class){%d, NULL}));\n"
+                  "    return sp_sprintf(SPL(\"#<%s %%s:...>\"), %s%s);\n"
                   "  int _rcm = sp_poly_recur_push(SP_POLY_RECUR_INSPECT, self, NULL);\n",
-               ci->is_data ? "data" : "struct", cid);
+               ci->is_data ? "data" : "struct", rt_name ? "_anm" : "_anm ? _anm : ", rt_name ? "" : fb);
+  }
   else if (ci->nmembers > 0)
     buf_printf(b, "  if (sp_poly_recur_seen(SP_POLY_RECUR_INSPECT, self, NULL)) return \"#<%s %s:...>\";\n"
                   "  int _rcm = sp_poly_recur_push(SP_POLY_RECUR_INSPECT, self, NULL);\n",
@@ -12383,41 +12427,32 @@ void emit_class_new(Compiler *c, ClassInfo *ci, Buf *b) {
     /* Struct/Data #inspect: the default representation, generated unless the
        user redefined the method, so a user override wins. */
     /* the same ownership for a member named inspect (#4190) */
-    int inspect_owned = comp_method_in_chain(c, cid, "inspect", NULL) >= 0;
-    { char insiv[64]; snprintf(insiv, sizeof insiv, "@%s", "inspect");
-      int insidx = comp_ivar_index(ci, insiv);
-      if (!inspect_owned &&
-          insidx >= 0 && (ci->ivar_types[insidx] == TY_STRING ||
-                          (ci->ivar_types[insidx] == TY_STRBUF)) &&
-          comp_resolve_member(c, cid, "inspect", 0, NULL, NULL) == SP_MEMBER_ATTR) {
-        /* (one-String mode: the member is the handle, answered as its bytes face) */
+    if (comp_method_in_chain(c, cid, "inspect", NULL) < 0) {
+      /* (one-String mode: the member is the handle, answered as its bytes face) */
+      if (struct_member_owns(c, cid, "inspect"))
         buf_printf(b, "static const char *sp_%s_inspect(sp_%s *self) { return SP_STR_B(self->iv_inspect); }\n",
                    ci->c_name, ci->c_name);
-        inspect_owned = 1;
-      }
-      else if (!inspect_owned)
+      else
         emit_struct_default_inspect(c, ci, cid, "inspect", b);
     }
     if (comp_method_in_chain(c, cid, "to_s", NULL) < 0) {
       /* A MEMBER named to_s owns the name, as any generated reader does in
          CRuby: `Data.define(:to_s)` answers the member, not the default
-         representation. Only a String member takes this -- a non-String
-         to_s falls back to the default at interpolation in CRuby too, and
-         the direct call goes through the reader arm (#4190). */
-      char tosiv[64]; snprintf(tosiv, sizeof tosiv, "@%s", "to_s");
-      int tosidx = comp_ivar_index(ci, tosiv);
-      if (tosidx >= 0 && (ci->ivar_types[tosidx] == TY_STRING ||
-                          (ci->ivar_types[tosidx] == TY_STRBUF)) &&
-          comp_resolve_member(c, cid, "to_s", 0, NULL, NULL) == SP_MEMBER_ATTR)
+         representation (struct_member_owns). */
+      if (struct_member_owns(c, cid, "to_s"))
         buf_printf(b, "static const char *sp_%s_to_s(sp_%s *self) { return SP_STR_B(self->iv_to_s); }\n",
                    ci->c_name, ci->c_name);
       /* to_s is the default representation even when inspect is not */
-      else if (inspect_owned)
+      else if (struct_display_owned(c, cid, "inspect"))
         emit_struct_default_inspect(c, ci, cid, "to_s", b);
       else
         buf_printf(b, "static const char *sp_%s_to_s(sp_%s *self) { return sp_%s_inspect(self); }\n",
                    ci->c_name, ci->c_name, ci->c_name);
     }
+    /* with both owned, the default text a super in either reaches
+       (an_super_struct_text) is a function of its own */
+    if (sp_streq(struct_default_text_fn(c, cid), "struct_inspect"))
+      emit_struct_default_inspect(c, ci, cid, "struct_inspect", b);
     return;
   }
   /* Nothing builds an object of this class, so it has no constructor. The pool
@@ -15826,6 +15861,14 @@ void emit_super(Compiler *c, int id, Buf *b) {
     else
       buf_printf(b, "sp_sprintf(\"#<%%s:0x%%016llx>\", sp_obj_cls_name_rt(%s), (unsigned long long)(uintptr_t)%s%s)",
                  cls, vt ? "&" : "", g_self);
+    return;
+  }
+  /* the same super in a Struct or Data class's own inspect or to_s: the
+     default #<struct ...> text (an_super_struct_text) */
+  if (an_super_struct_text(c, id, (int)(s - c->scopes))) {
+    int cid = s->class_id;
+    buf_printf(b, "sp_%s_%s(%s%s)", c->classes[cid].c_name, struct_default_text_fn(c, cid),
+               comp_ty_value_obj(c, ty_object(cid)) ? "&" : "", g_self);
     return;
   }
   NodeKind ty_k = nt_kind(c->nt, id);
@@ -22632,12 +22675,7 @@ char *codegen_program(const NodeTable *nt) {
         if (ci->nmembers == 0) buf_puts(&b, "void");
       }
       buf_puts(&b, ");\n");
-      /* forward-declare the generated stringifiers so one struct's #inspect may
-         recurse into a struct-typed member regardless of definition order */
-      if (comp_method_in_chain(c, i, "inspect", NULL) < 0)
-        buf_printf(&b, "static const char *sp_%s_inspect(sp_%s *self);\n", ci->c_name, ci->c_name);
-      if (comp_method_in_chain(c, i, "to_s", NULL) < 0)
-        buf_printf(&b, "static const char *sp_%s_to_s(sp_%s *self);\n", ci->c_name, ci->c_name);
+      emit_struct_display_decls(c, i, &b);
     }
     else if (class_has_ctor(ci)) {
       int icid = i;

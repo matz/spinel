@@ -26853,6 +26853,26 @@ int an_super_object_text(Compiler *c, int n, int mi) {
      plan's target) */
   return cplan_user_fresh(c, n)->mi < 0;
 }
+/* The same super in a Struct or Data class's own inspect or to_s, where no
+   class of the program above it defines the name: CRuby's Struct#inspect
+   (#to_s is its alias), the default #<struct ...> text, a new String
+   (emit_super; struct_default_text_fn names the function that builds it). */
+int an_super_struct_text(Compiler *c, int n, int mi) {
+  if (mi <= 0 || mi >= c->nscopes) return 0;
+  const Scope *s = &c->scopes[mi];
+  const char *nm = s->name ? comp_scope_def_name(c, s) : NULL;
+  if (!nm || s->is_cmethod || s->class_id < 0 || s->nparams != 0 ||
+      (!sp_streq(nm, "inspect") && !sp_streq(nm, "to_s")))
+    return 0;
+  NodeKind k = nt_kind(c->nt, n);
+  if (k != NK_SuperNode && k != NK_ForwardingSuperNode) return 0;
+  if (k == NK_SuperNode && nt_ref(c->nt, n, "arguments") >= 0) return 0;
+  ClassInfo *ci = &c->classes[s->class_id];
+  if (!ci->is_struct || comp_class_is_module(c, ci)) return 0;
+  if (ci->parent >= 0 && comp_method_in_chain(c, ci->parent, nm, NULL) >= 0) return 0;
+  /* (an included module's method is the call plan's target) */
+  return cplan_user_fresh(c, n)->mi < 0;
+}
 /* Method mi is decided: yes or no, and for the handle walk its field. */
 static int an_ret_decided(Compiler *c, RetHandles *R, int mi, int yes) {
   R->st[mi] = yes ? RH_YES : RH_NO;

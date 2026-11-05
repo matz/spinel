@@ -185,6 +185,7 @@ int class_inherits_builtin_exception(Compiler *c, int ci);
 /* 1 if super node n, in instance method mi `inspect` / `to_s` of a plain
    class, reaches Kernel's, which builds a new String each call. */
 int an_super_object_text(Compiler *c, int n, int mi);
+int an_super_struct_text(Compiler *c, int n, int mi);
 int an_user_defines_or_reads(Compiler *c, const char *name);
 /* Defined in codegen_util.c: does a value of builtin type t answer `is_a?(cn)` (1), not (0), or
    only at run time (-1); exact is the instance_of? form. Reached by name, as codegen_internal.h is

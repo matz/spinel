@@ -1,0 +1,14 @@
+S#<struct Sup a=2>
+T#<struct Sub2 b=3>
+S#<struct Sub3 a=4>
+#<struct Sub3 a=5>
+to_s:#<struct TS c=6>
+#<struct TS c=7>
+i:#<struct Both e=8>
+s:#<struct Both e=9>
+D#<data DD x=10>
+M#<struct Mem to_s="mem", k=11>
+mem2
+R#<struct Rec r=R#<struct Rec:...>>
+S#<struct Sup a=S#<struct Sup a=1>>
+S#<struct Sub3 a=14>

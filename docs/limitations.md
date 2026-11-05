@@ -166,6 +166,13 @@ PEM or DER into a `PKey::EC`, and RSA keys (PKCS#1 or PKCS#8) into a
 half and has no `n`, `d` or other BN readers; any other kind of key raises
 `PKeyError` naming EC and RSA as the kinds it reads, where CRuby answers a
 DSA or DH object.
+EC keys expose `group.curve_name`, SPKI `public_to_der`, PKCS#8
+`private_to_der` / `private_to_pem`, and `dsa_sign_asn1` / `dsa_verify_asn1`
+over an already-computed digest with DER signatures. `EC::Group` supplies
+curve metadata only. `PKey.new_raw_private_key("ED25519", seed)` supports
+`sign(nil, data)` with a 32-byte seed on OpenSSL 1.1.1 or later; Ed25519
+verification, raw public-key extraction and import through `PKey.read`
+are not supported.
 EC parameters with no key in them raise too, where CRuby answers a `PKey::EC`
 with neither half, and so does an encrypted PEM, since there is no passphrase
 argument.

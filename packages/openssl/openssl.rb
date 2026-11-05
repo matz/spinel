@@ -9,7 +9,7 @@
 # is its DER, read from PEM or DER and written back, and its fields are not
 # read (openssl/x509.rb). PKey::EC and Cipher are subsets of
 # CRuby's in a second sense, each spelled out in its own file: EC keeps
-# CRuby's method names but trades BN, EC::Group and EC::Point for the raw
+# CRuby's method names but trades BN and EC::Point for the raw
 # bytes every protocol that names an EC key means by them, and Cipher keeps
 # CRuby's object while buffering rather than streaming, over aes-128-gcm and
 # aes-256-gcm only.
@@ -105,12 +105,13 @@ module OpenSSL
     native_func :aes_gcm_decrypt, [:string, :string, :string, :string, :string, :string],
                 :string, "sp_aes_gcm_decrypt"
 
-    # ECDSA over the same curves, with signatures as raw r || s rather than
-    # DER -- the conversion is in the C because a DER signature is a
-    # well-formed String that every JWT verifier rejects.
-    native_func :ecdsa_sign,    [:string, :string, :string],          :cbinstr, "sp_ecdsa_sign"
-    native_func :ecdsa_verify,  [:string, :string, :string, :string], :int,     "sp_ecdsa_verify"
+    # ECDSA's last argument selects raw r || s (0) or ASN.1 DER (1).
+    native_func :ecdsa_sign,    [:string, :string, :string, :int],          :cbinstr, "sp_ecdsa_sign"
+    native_func :ecdsa_verify,  [:string, :string, :string, :string, :int], :int,     "sp_ecdsa_verify"
     native_func :ec_check_point, [:string, :string],                  :int,     "sp_ec_check_point"
+    native_func :ec_curve_name, [:string, :int], :string, "sp_ec_curve_name"
+    native_func :ec_export, [:string, :string, :string, :int, :int, :int], :cbinstr, "sp_ec_export"
+    native_func :ed25519_sign, [:string, :string], :cbinstr, "sp_ed25519_sign"
 
     # RSA verify over a public key given as its modulus and exponent bytes:
     # n, e, digest, data, signature, then PSS (1) or PKCS#1 v1.5 (0), and for

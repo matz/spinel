@@ -18739,7 +18739,7 @@ static int emit_multi_write_stmt(Compiler *c, int id, Buf *b, int indent, const 
         emit_local_ref(c, lefts[1], wn0, &wb);
         emit_indent(b, indent);
         buf_printf(b, "{ int _t%d[2]; sp_io_make_pipe(_t%d); ", tf, tf);
-        buf_printf(b, "%s = sp_io_fdopen(_t%d[0], SPL(\"r\")); ", rb.p, tf);
+        buf_printf(b, "%s = sp_io_pipe_reader(_t%d[0]); ", rb.p, tf);
         /* the write end is sync in CRuby: a write reaches the descriptor at
            once, so the reader (or an IO.select on it) sees it without a
            flush. sp_io_pipe does the same for the non-destructured call

@@ -31,6 +31,12 @@ static inline unsigned sp_strhash(const char *s) {
   for (; *s; s++) { h ^= (unsigned char)*s; h *= 16777619u; }
   return h;
 }
+/* sp_strhash of the first n bytes of s (a name without its suffix, with no copy) */
+static inline unsigned sp_strnhash(const char *s, unsigned n) {
+  unsigned h = 2166136261u;
+  for (unsigned i = 0; i < n; i++) { h ^= (unsigned char)s[i]; h *= 16777619u; }
+  return h;
+}
 
 /* ---- The boxed-receiver face table ----
 

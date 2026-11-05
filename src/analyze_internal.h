@@ -1121,6 +1121,9 @@ struct YvtIndex {
   const NodeTable *nt;
   int ntc, n, sup_n;
   int *ids, *sup_ids;
+  /* per sup_ids entry: the key of the name its super asks for, 0 where a method of
+     any name may be what it reaches (yield_value_type_via_super) */
+  unsigned *sup_key;
   /* the entries by call name, each chain ascending (nm_head by name hash
      into nb buckets, nm_next along the chain), and the ones any method may
      be reached by (always) */

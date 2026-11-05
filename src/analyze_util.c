@@ -2413,11 +2413,28 @@ static int yvt_may_reach(Compiler *c, int ii, int mi) {
   if (c->scopes[mi].shadow == SHADOW_PREP) return 1;
   return y->alias_name && y->alias_name[ii];
 }
+/* A method name's key in YvtIndex.sup_key: its hash, a proc-form clone's
+   "#pf" left off (a clone's super asks for the plain name); never 0 */
+static unsigned yvt_name_key(const char *name) {
+  size_t n = strlen(name);
+  if (n > 3 && strcmp(name + n - 3, "#pf") == 0) n -= 3;
+  return sp_strnhash(name, (unsigned)n) | 1;
+}
+/* The key of the name the super in method scope cs asks for, 0 when a
+   method of any other name may be what it reaches: a name some alias
+   stands for, a name other than the one its method is known by, or a
+   method with a prepend chain, whose next method is a hidden copy. */
+static unsigned yvt_sup_name_key(Compiler *c, Scope *cs) {
+  const char *dn = comp_scope_def_name(c, cs);
+  if (!dn || !sp_streq(dn, comp_scope_user_name(cs)) || comp_super_shadow(c, cs) || yvt_name_is_alias(c, dn)) return 0;
+  return yvt_name_key(dn);
+}
 static void yvt_build(Compiler *c) {
   YvtIndex *y = c->yvt;
   const NodeTable *nt = c->nt;
   int n = nt->count;
-  free(y->ids); free(y->sup_ids); free(y->alias_name); free(y->fwd);
+  free(y->ids); free(y->sup_ids); free(y->alias_name); free(y->fwd); free(y->sup_key);
+  y->sup_key = NULL;
   y->alias_name = NULL; y->fwd = NULL;
   y->ids = malloc((size_t)(n > 0 ? n : 1) * sizeof(int));
   y->sup_ids = malloc((size_t)(n > 0 ? n : 1) * sizeof(int));
@@ -2437,6 +2454,14 @@ static void yvt_build(Compiler *c) {
     if (ck != NK_CallNode) continue;
     if (nt_ref(nt, cid, "block") < 0 && !yvt_call_forwards_block(nt, cid)) continue;
     y->ids[y->n++] = cid;
+  }
+  /* the name each super asks for, so that a yielding method resolves the
+     supers that can reach its name, not every super of the program */
+  y->sup_key = calloc((size_t)(y->sup_n > 0 ? y->sup_n : 1), sizeof(unsigned));
+  if (!y->sup_key) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  for (int ii = 0; ii < y->sup_n; ii++) {
+    Scope *cs = comp_scope_of(c, y->sup_ids[ii]);
+    if (cs && cs->class_id >= 0 && cs->name) y->sup_key[ii] = yvt_sup_name_key(c, cs);
   }
   /* the forward test is structural, and was re-run for every entry of this
      list once per yielding method: 7% of a 16K-line analysis (#4847) */
@@ -2596,7 +2621,7 @@ static YvtIndex *yvt_get(Compiler *c) {
 void yvt_free(Compiler *c) {
   YvtIndex *y = c->yvt;
   if (!y) return;
-  free(y->ids); free(y->sup_ids); free(y->alias_name); free(y->fwd);
+  free(y->ids); free(y->sup_ids); free(y->sup_key); free(y->alias_name); free(y->fwd);
   free(y->nm_head); free(y->nm_next); free(y->always);
   anh_free(&y->tg_names);
   for (int i = 0; i < y->tg_nowned; i++) free(y->tg_owned[i]);
@@ -3165,15 +3190,23 @@ TyKind yield_value_type_via_super(Compiler *c, int mi) {
   const NodeTable *nt = c->nt;
   YvtIndex *y = yvt_get(c);
   TyKind result = TY_UNKNOWN;
+  /* (a method with no name, a prepend shadow, or one known by a name other
+     than its def's -- an alias captured it as an earlier version and
+     renamed it -- takes every super, as yvt_it_init does for the calls) */
+  const char *mn = comp_scope_user_name(&c->scopes[mi]);
+  unsigned mkey = mn ? yvt_name_key(mn) : 0;
+  if (c->scopes[mi].shadow == SHADOW_PREP || (mn && !sp_streq(comp_scope_def_name(c, &c->scopes[mi]), mn))) mkey = 0;
   for (int ii = 0; ii < y->sup_n; ii++) {
+    if (mkey && y->sup_key[ii] && y->sup_key[ii] != mkey) continue;
     Scope *cs = comp_scope_of(c, y->sup_ids[ii]);
     if (!cs || cs->class_id < 0 || !cs->name) continue;
     int cmi = (int)(cs - c->scopes);
     if (cmi == mi) continue;
-    /* where that super lands: the next shadow in its own class (an earlier
-       include's or extend's copy), or the superclass chain */
-    int rmi = a_super_target(c, cs);
-    if (rmi != mi) continue;
+    /* where the call plan binds that super: the next shadow in its own
+       class (an earlier include's or extend's copy), or the superclass
+       chain's method, or a version entry one of whose arms runs mi */
+    int at;
+    if (!cplan_target_runs(c, cplan_super_target(c, y->sup_ids[ii], cs, &at), mi)) continue;
     /* `super(a) { }` in the child: its own literal block is what mi's
        yield runs, not a block of the child's callers (none reaches it) */
     int sb = nt_ref(nt, y->sup_ids[ii], "block");

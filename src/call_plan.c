@@ -5728,6 +5728,12 @@ int ver_entry_targets(const Compiler *c, int e, int *out, int *tests) {
   if (n > 1 && out[n - 1] < 0 && c->scopes[e].entry == ENTRY_NAMED) out[n - 1] = out[n - 2];
   return n;
 }
+int cplan_target_runs(const Compiler *c, int t, int mi) {
+  if (t < 0 || t == mi) return t >= 0;
+  int to[VER_MAX_ARMS + 1], n = c->scopes[t].entry != ENTRY_NONE ? ver_entry_targets(c, t, to, NULL) : 0;
+  for (int k = 0; k < n; k++) if (to[k] == mi) return 1;
+  return 0;
+}
 typedef struct { int guard, cls, sg, mi, ar; const char *name; } VerNeed;
 /* ...and, to tell the asks that repeat one, an open addressing table over them (ix holds an index into v, -1 free) */
 typedef struct { VerNeed *v; int n; int *ix; unsigned nb; } VerNeeds;

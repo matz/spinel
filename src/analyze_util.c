@@ -4442,7 +4442,8 @@ int method_super_target(Compiler *c, int mi) {
    (e.g. a top-level Kernel method like `puts`, or a builtin-array receiver).
    *cls and *sg (when given) are where the lookup searched: the class whose
    chain it took (-1 for main's or none) and its side (1: the class
-   methods), as an alias's owner is asked (method_obj_alias_owner). */
+   methods), as an alias's owner is asked (method_obj_alias_owner) and a
+   Method of a copy renders the class (method_obj_from_class). */
 static int method_obj_lookup(Compiler *c, int node, int *cls, int *sg) {
   const NodeTable *nt = c->nt;
   int k = -1, side = 0;
@@ -4533,6 +4534,13 @@ int method_obj_target_mi(Compiler *c, int node) {
   if (comp_scope_is_private_helper(c, mi)) return -1;
   int pf = scope_proc_form_of(c, mi);
   return pf >= 0 ? pf : mi;
+}
+
+/* See analyze.h. */
+int method_obj_from_class(Compiler *c, int node) {
+  int from;
+  (void)method_obj_lookup(c, node, &from, NULL);
+  return from;
 }
 
 /* The method name of `k.instance_method(:m)` that names no one target, or

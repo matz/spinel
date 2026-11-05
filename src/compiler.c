@@ -1783,13 +1783,15 @@ static int sm_version(Compiler *c, int class_id, const char *name, int is_cm, in
 
 /* the scope of (class_id, is_cm; top level when class_id < 0) whose def
    node is def_node, under whatever name an alias that captured the def gave
-   it (alias_capture_earlier_def), or -1, also for a def-less scope's
-   question; not a body a mixin's copy shadows (`__prep <n> m`), which a
-   call reaches through the copy */
+   it (alias_capture_earlier_def), or a mixin's copy kept behind a method
+   that shadows it (`__inc <n> m`), which runs where the record finds the
+   module's version; -1 for none, also for a def-less scope's question.
+   Not a body a prepend's copy shadows (`__prep <n> m`), which a call
+   reaches through the copy */
 static int sm_version_renamed(Compiler *c, int class_id, int is_cm, int def_node) {
   for (int s = comp_def_newest(c, def_node); s >= 0; s = comp_def_older(c, s))
     if (c->scopes[s].name && !c->scopes[s].is_proc_form &&
-        !c->scopes[s].shadow &&
+        c->scopes[s].shadow != SHADOW_PREP &&
         (class_id < 0 ? sm_toplevel(c, s) : sm_owns(c, s, class_id, is_cm))) return s;
   return -1;
 }

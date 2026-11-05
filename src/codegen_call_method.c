@@ -179,24 +179,45 @@ static const char *method_def_name(Compiler *c, int mi) {
   return nt_str(nt, dn, "name");
 }
 
+/* A class's name as a Method's rendering writes it */
+static const char *method_desc_class_name(Compiler *c, int ci) {
+  const char *rn = class_ruby_name(c, ci);
+  return rn ? rn : c->classes[ci].name;
+}
+
 /* "#<Method: Owner#name(a, b=..., *r, k:, o: ..., **kw, &blk)>" -- CRuby's
    Method#inspect rendering, built at compile time from the target scope and
    emitted as a C string literal; " file:line" is appended when positions
    were stamped (--line-map). The text grows with the parameter names, so it
    is built in a Buf: a fixed array cut it off, and wrote past its end once
-   the names filled it. */
-static void emit_method_desc_literal(Compiler *c, int mi, const char *sym, int unbound, Buf *b) {
+   the names filled it.
+   A bound Method of a module's copy names the receiver's class ahead of
+   the module, as CRuby does: `C(V)#v` for an include's, `#<Class:C>(V)#v`
+   for an extend's, the receiver's class being `from` (the class the maker
+   searched, method_obj_from_class), else the class the copy is in. An
+   alias node mn's Method made in a `class << self` is the singleton's,
+   whatever it aliases: `C.vv(v)`, or `E(D).vv(v)` taken on a class below. */
+static void emit_method_desc_literal(Compiler *c, int mn, int mi, int from, const char *sym, int unbound, Buf *b) {
   Scope *m = &c->scopes[mi];
   const char *ow = "Object"; char sep = '#';
-  int owci = m->origin_module_ci ? m->origin_module_ci - 1 : m->class_id;
+  int om = m->origin_module_ci - 1, owci = om >= 0 ? om : m->class_id, rc = from >= 0 ? from : m->class_id;
+  int asg = 0, ah = mn >= 0 && !unbound ? method_obj_alias_owner(c, mn, &asg) : -1;
   if (owci >= 0) {
-    const char *rn = class_ruby_name(c, owci);
-    ow = rn ? rn : c->classes[owci].name;
-    if (m->is_cmethod) sep = '.';
+    ow = method_desc_class_name(c, owci);
+    if (m->is_cmethod && om < 0) sep = '.';
   }
   Buf d; memset(&d, 0, sizeof d);
   const char *nm = sym ? sym : (m->name ? m->name : "?"), *orig = method_def_name(c, mi);
-  buf_printf(&d, "#<%s: %s%c%s", unbound ? "UnboundMethod" : "Method", ow, sep, nm);
+  buf_printf(&d, "#<%s: ", unbound ? "UnboundMethod" : "Method");
+  if (ah >= 0 && asg) {
+    sep = '.';
+    buf_puts(&d, method_desc_class_name(c, rc >= 0 ? rc : ah));
+    if (rc >= 0 && rc != ah) buf_printf(&d, "(%s)", method_desc_class_name(c, ah));
+  }
+  else if (om >= 0 && !unbound && rc >= 0)
+    buf_printf(&d, m->is_cmethod ? "#<Class:%s>(%s)" : "%s(%s)", method_desc_class_name(c, rc), ow);
+  else buf_puts(&d, ow);
+  buf_printf(&d, "%c%s", sep, nm);
   /* a Method named apart from its def (an alias's) writes the def's name
      after its own, `C#bar(foo)(...)`, as CRuby does */
   if (orig && strcmp(orig, nm) != 0) buf_printf(&d, "(%s)", orig);
@@ -306,13 +327,14 @@ static void emit_source_path_literal(Buf *b, const char *file) {
 }
 
 /* The descriptor arguments of sp_bound_method_new_d for method mi, which
-   node mn (-1: none) makes the Method of: its rendering, its parameter
+   node mn (-1: none) makes the Method of, the class the maker searched
+   being from (-1: none, method_obj_from_class): its rendering, its parameter
    list, its owner as the static #owner answers it (emit_method_owner_class),
    and the file and line of its def (NULL, 0 for none, as source_location's
    nil). The bind site knows each; the run time reads them from the fields,
    never from the rendering. */
-static void emit_method_desc_args(Compiler *c, int mn, int mi, const char *sym, int unbound, Buf *b) {
-  emit_method_desc_literal(c, mi, sym, unbound, b);
+static void emit_method_desc_args(Compiler *c, int mn, int mi, int from, const char *sym, int unbound, Buf *b) {
+  emit_method_desc_literal(c, mn, mi, from, sym, unbound, b);
   buf_puts(b, ", ");
   emit_method_params_literal(c, mi, b);
   buf_puts(b, ", ");
@@ -418,7 +440,7 @@ int emit_op_method_unbind(Compiler *c, const BopCtx *x, Buf *b) {
   buf_printf(b, "({ sp_BoundMethod *_t%d = ", tvu);
   emit_expr(c, recv, b);
   buf_printf(b, "; sp_bm_set_unbound(sp_bm_set_abi(sp_bound_method_new_d(NULL, SP_BM_SELF_NONE, _t%d->fn, _t%d->name, _t%d->arity, ", tvu, tvu, tvu);
-  if (tmu >= 0) emit_method_desc_args(c, mnu, tmu, method_sym_arg(c, mnu), 1, b);
+  if (tmu >= 0) emit_method_desc_args(c, mnu, tmu, -1, method_sym_arg(c, mnu), 1, b);
   else buf_printf(b, "NULL, _t%d->params, _t%d->owner, _t%d->src_file, _t%d->src_line", tvu, tvu, tvu, tvu);
   buf_printf(b, "), 0, _t%d->legacy_int_abi, _t%d->legacy_sig, _t%d->legacy_fixed, _t%d->legacy_rest, _t%d->legacy_ret, _t%d->poly_abi, _t%d->poly_fixed)); })", tvu, tvu, tvu, tvu, tvu, tvu, tvu);
   return 1;
@@ -446,7 +468,7 @@ int emit_op_method_super_method(Compiler *c, const BopCtx *x, Buf *b) {
     emit_str_literal(b, c->scopes[pmip].name ? c->scopes[pmip].name : "?");
     { int ar; if (method_scope_arity(c, pmip, &ar)) buf_printf(b, ", (sp_int)%d", ar); else buf_puts(b, ", (sp_int)-1"); }
     buf_puts(b, ", ");
-    emit_method_desc_args(c, -1, pmip, c->scopes[pmip].name, sup_unb, b);
+    emit_method_desc_args(c, -1, pmip, -1, c->scopes[pmip].name, sup_unb, b);
     buf_puts(b, ")");
     { char _s[8 * 64 + 1]; int _fx = 0, _rs = 0, _rt = 0, _pf = 0, _prt = 0;
       int _ab = method_legacy_int_abi(c, pmip, !sup_unb, _s, sizeof _s, &_fx, &_rs, &_rt);
@@ -500,7 +522,7 @@ static int emit_method_bind_target(Compiler *c, const BopCtx *x, Buf *b, int t2)
     emit_str_literal(b, method_sym_arg(c, mn2));
     { int ar; if (method_scope_arity(c, t2, &ar)) buf_printf(b, ", (sp_int)%d", ar); else buf_puts(b, ", (sp_int)-1"); }
     buf_puts(b, ", ");
-    emit_method_desc_args(c, mn2, t2, method_sym_arg(c, mn2), 0, b);
+    emit_method_desc_args(c, mn2, t2, -1, method_sym_arg(c, mn2), 0, b);
     buf_puts(b, ")");
     { char _s[8 * 64 + 1]; int _fx = 0, _rs = 0, _rt = 0, _pf = 0, _prt = 0;
       int _ab = method_legacy_int_abi(c, t2, 1, _s, sizeof _s, &_fx, &_rs, &_rt);
@@ -1745,7 +1767,7 @@ static int emit_method_obj_target(Compiler *c, int id, Buf *b, const NodeTable *
       emit_str_literal(b, method_sym_arg(c, id));
       { int ar; if (method_scope_arity(c, umi, &ar)) buf_printf(b, ", (sp_int)%d", ar); else buf_puts(b, ", (sp_int)-1"); }
       buf_puts(b, ", ");
-      emit_method_desc_args(c, id, umi, method_sym_arg(c, id), 1, b);
+      emit_method_desc_args(c, id, umi, -1, method_sym_arg(c, id), 1, b);
       buf_puts(b, ")");
       { char _s[8 * 64 + 1]; int _fx = 0, _rs = 0, _rt = 0, _pf = 0, _prt = 0;
         int _ab = method_legacy_int_abi(c, umi, 0, _s, sizeof _s, &_fx, &_rs, &_rt);
@@ -2141,7 +2163,7 @@ static int emit_method_obj_target(Compiler *c, int id, Buf *b, const NodeTable *
       else buf_puts(b, ", (sp_int)-1"); }
     if (mi >= 0) {
       buf_puts(b, ", ");
-      emit_method_desc_args(c, id, mi, disp, 0, b);
+      emit_method_desc_args(c, id, mi, method_obj_from_class(c, id), disp, 0, b);
     }
     buf_puts(b, ")");
     { char _rbb[16]; snprintf(_rbb, sizeof _rbb, "%d", recv_bound);

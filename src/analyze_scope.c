@@ -8262,13 +8262,15 @@ static int extend_class_with(Compiler *c, int ci, int mod_id, int inherited, int
     /* The class's own class method comes first, and a module it extends
        sits behind it: a super in the own method reaches the module's,
        copied in under a shadow name, in front of any module extended
-       earlier. With no super there, nothing can reach the copy. */
+       earlier. So does a call that meets the module's version before the
+       own method replaces it (elab_version_met): the call plan maps that
+       version to the copy. With neither, nothing can reach the copy. */
     char *own_name = NULL;
     int guard = 0, behind_mi = -1;
     char behind[256] = "";
     if (own >= 0 && !c->scopes[own].is_extend_copy && !prepend) {
       extend_alias_refuse_own(c, mod_id, ci, src->name);
-      if (!scope_body_has_super(c, own)) continue;
+      if (!scope_body_has_super(c, own) && !elab_version_met(c, ci, 1, src->name, src->def_node)) continue;
       ClassInfo *cif = &c->classes[ci];
       char key[320];
       snprintf(behind, sizeof behind, "__inc %d %s", cif->prep_shadow_count++, src->name);
@@ -8326,7 +8328,12 @@ static int extend_class_with(Compiler *c, int ci, int mod_id, int inherited, int
         comp_cprep_chain_add(cif, ac->name, shadow);
         reached = 1;
       }
-      if (!reached) { c->scopes[own].reachable = 0; comp_touch_scope(c->scopes[own].idx); }   /* nothing can reach it now */
+      /* nothing can reach it now, but a call that meets the earlier
+         module's version before this extend runs (elab_version_met) */
+      if (!reached && !elab_version_met(c, ci, 1, src->name, c->scopes[own].def_node)) {
+        c->scopes[own].reachable = 0;
+        comp_touch_scope(c->scopes[own].idx);
+      }
       src = &c->scopes[ms];
     }
     else if (prepend && cell && c->classes[ci].parent >= 0 &&
@@ -8362,7 +8369,9 @@ static int extend_class_with(Compiler *c, int ci, int mod_id, int inherited, int
     { int cp = comp_cmethod_in_class(c, ci, src->name);
       if (cp >= 0) { c->scopes[cp].is_extend_copy = 1; made[ms] = cp + 1; }
       /* The copy keeps the module's visibility, and a later extend wins. A
-         copy behind the class's own method is out of reach of a call. */
+         copy behind the class's own method leaves the name's visibility to
+         that method: a call reaches the copy only by the module's version
+         (elab_version_met), and the tables hold one visibility per name. */
       if (cp >= 0 && !own_name)
         comp_cmethod_extend_vis_set(&c->classes[ci], src->name, src->is_module_function && ci != mod_id
                                     ? SP_VIS_PRIVATE : comp_method_vis_in_chain(c, mod_id, src->name));
@@ -8870,6 +8879,9 @@ static void specialize_cmethod_for(Compiler *c, int mi, const char *as, int def_
   { dst->class_id = ci; comp_touch_scope(dst->idx); }
   { dst->is_cmethod = 1; comp_touch_scope(dst->idx); }
   { dst->is_cmethod_copy = 1; comp_touch_scope(dst->idx); }
+  /* an extended module's method, as an include's copy: #owner names the
+     module (#3662) */
+  if (def_cls >= 0 && comp_class_is_module(c, &c->classes[def_cls])) { dst->origin_module_ci = def_cls + 1; comp_touch_scope(dst->idx); }
   /* a copy a later top-level reopening makes: a call reaches the method
      behind it until that statement has run (Scope.mixin_guarded) */
   dst->mixin_guarded = cell;

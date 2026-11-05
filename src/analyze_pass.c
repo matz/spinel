@@ -3396,6 +3396,11 @@ static int fold_named_slot_evidence(Compiler *c, int recv, int is_push, int is_s
   TyRef nslot = named_array_slot(c, recv);
   int nhash = nslot && ty_is_hash(*nslot) && is_idx_write && !is_push && !is_splice;
   if (!nslot || (!nhash && ((!ty_is_array(*nslot)) || *nslot == TY_POLY_ARRAY))) return 0;
+  /* a table narrow_object_arrays pinned (of Integer or Float rows, as of
+     objects, which ty_is_array refuses above) took every push into it as a
+     row already: folding the row's kind would widen it to the poly array
+     each round, and the narrowing would put it back */
+  if (ty_is_ptr_array(*nslot)) return 0;
   TyKind nt2 = *nslot;
   fold_evidence(&nt2, is_push, is_splice, kt, vt);
   if (nt2 == *nslot || (nhash && !ty_is_hash(nt2))) return 0;

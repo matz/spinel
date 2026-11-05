@@ -535,14 +535,14 @@ static SP_NOINLINE int sp_PtrArray_take_back(sp_PtrArray*a){int room=a->head>=a-
 static inline void sp_PtrArray_push(sp_PtrArray*a,void*v){sp_gc_wb((void*)a); if(!a)return;if(a->frozen){sp_raise_frozen_array_at(a, SP_BUILTIN_PTR_ARRAY);return;}if(a->len>=a->cap){if(SP_UNLIKELY(a->head>0)&&sp_PtrArray_take_back(a))goto put;sp_gc_hdr*h=(sp_gc_hdr*)((char*)a-sizeof(sp_gc_hdr));sp_gc_bytes_sub(sizeof(void*)*a->cap);h->size-=sizeof(void*)*a->cap;a->cap=((((((a->cap*2))))))+1;void*nd=sp_pl_realloc(a->data,sizeof(void*)*a->cap);if(!nd)sp_oom_die();a->data=(void**)nd;h->size+=sizeof(void*)*a->cap;sp_gc_bytes_add(sizeof(void*)*a->cap);}put:a->data[a->len++]=v;}
 /* Array#pop on a `<X>_ptr_array`. Returns NULL when empty (matches CRuby's
    nil for typed-element arrays since the slot can't carry nil). #520. */
-static inline void *sp_PtrArray_pop(sp_PtrArray*a){sp_gc_wb((void*)a); if(!a||a->len==0)return NULL;return a->data[--a->len];}
+static inline void *sp_PtrArray_pop(sp_PtrArray*a){sp_gc_wb((void*)a); if(!a)return NULL;if(a->frozen){sp_raise_frozen_array_at(a, SP_BUILTIN_PTR_ARRAY);return NULL;}if(a->len==0)return NULL;return a->data[--a->len];}
 /* Array#shift and Array#clear on an object array, the partners of pop and
    delete_at: NULL for an empty array's nil. A frozen array is never narrowed
    to one (freeze is not an op the narrowing admits), so there is no frozen
    test. A shift is O(1): the array steps past its first element (head,
    sp_types.h). */
-static inline void *sp_PtrArray_shift(sp_PtrArray*a){sp_gc_wb((void*)a); if(!a||a->len==0)return NULL;void*v=a->data[0];if(SP_LIKELY(a->head<INT32_MAX)){a->data++;a->cap--;a->head++;a->len--;}else memmove(a->data,a->data+1,(size_t)(--a->len)*sizeof(void*));return v;}
-static inline sp_PtrArray *sp_PtrArray_clear(sp_PtrArray*a){sp_gc_wb((void*)a); if(a)a->len=0;return a;}
+static inline void *sp_PtrArray_shift(sp_PtrArray*a){sp_gc_wb((void*)a); if(!a)return NULL;if(a->frozen){sp_raise_frozen_array_at(a, SP_BUILTIN_PTR_ARRAY);return NULL;}if(a->len==0)return NULL;void*v=a->data[0];if(SP_LIKELY(a->head<INT32_MAX)){a->data++;a->cap--;a->head++;a->len--;}else memmove(a->data,a->data+1,(size_t)(--a->len)*sizeof(void*));return v;}
+static inline sp_PtrArray *sp_PtrArray_clear(sp_PtrArray*a){sp_gc_wb((void*)a); if(!a)return a;if(a->frozen){sp_raise_frozen_array_at(a, SP_BUILTIN_PTR_ARRAY);return a;}a->len=0;return a;}
 /* A pointer array boxed by reference (#4486): its elements are what the stamp
    says (sp_box_ptr_array_k), so an element read boxes a row as the typed
    array it is and an object as its own class, and a store takes exactly that

@@ -5203,6 +5203,11 @@ infer-test: $(SPINEL) $(SP_RT_LIB)
 	$(SPINEL) test/infer/class_method_table_arg.rb -c --no-line-map -o "$$tmp/m.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (compile class_method_table_arg)"; exit 1; }; \
 	grep -Eq 'sp_PtrArray \* *lv_rows' "$$tmp/m.c" || { echo "infer-test: FAIL (a table passed to a class method lost its typed representation)"; grep -E 'sp_M_s_consume\(' "$$tmp/m.c" | head -1; ok=0; }; \
 	grep -Eq 'static (inline )?((__attribute__\(\(always_inline\)\)|SP_ALWAYS_INLINE) )?sp_int sp_F_s_mul\(sp_o?int [A-Za-z_]+, sp_o?int [A-Za-z_]+\)' "$$tmp/m.c" || { echo "infer-test: FAIL (a helper reading an element of the table bound a boxed parameter)"; grep -E 'sp_F_s_mul\(' "$$tmp/m.c" | head -1; ok=0; }; \
+	$(SPINEL) test/infer/const_float_table_arg.rb -c --no-line-map -o "$$tmp/cft.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (compile const_float_table_arg)"; exit 1; }; \
+	grep -Eq 'sp_Curve_s_land\(sp_PtrArray \* *lv_table,' "$$tmp/cft.c" || { echo "infer-test: FAIL (a constant table of Float rows passed to a class method stayed a boxed poly array)"; grep -E 'sp_Curve_s_land\(' "$$tmp/cft.c" | head -1; ok=0; }; \
+	grep -Eq 'sp_o?float sp_Curve_s_spline\(sp_FloatArray \* *lv_xs, sp_FloatArray \* *lv_ys, sp_float lv_v\)' "$$tmp/cft.c" || { echo "infer-test: FAIL (a row of a constant Float table bound a boxed parameter or return)"; grep -E 'sp_Curve_s_spline\(' "$$tmp/cft.c" | head -1; ok=0; }; \
+	$(SPINEL) test/const_int_table_rows.rb -c --no-line-map -o "$$tmp/cit.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (compile const_int_table_rows)"; exit 1; }; \
+	grep -Eq 'sp_Grid_s_cell\(sp_PtrArray \* *lv_table,' "$$tmp/cit.c" || { echo "infer-test: FAIL (a constant table of Integer rows passed to a class method stayed a boxed poly array)"; grep -E 'sp_Grid_s_cell\(' "$$tmp/cit.c" | head -1; ok=0; }; \
 	$(SPINEL) test/infer/return_table_across_methods.rb -c --no-line-map -o "$$tmp/r.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (compile return_table_across_methods)"; exit 1; }; \
 	grep -Eq 'static (inline )?((__attribute__\(\(always_inline\)\)|SP_ALWAYS_INLINE) )?sp_PtrArray \* *sp_T_s_build\(' "$$tmp/r.c" || { echo "infer-test: FAIL (a method returning a table of int arrays stayed a boxed poly array)"; grep -E 'sp_T_s_build\(' "$$tmp/r.c" | head -1; ok=0; }; \
 	grep -Eq 'sp_PtrArray \* *lv_rows' "$$tmp/r.c" || { echo "infer-test: FAIL (the caller's table did not follow the callee's return type)"; ok=0; }; \
@@ -5266,6 +5271,10 @@ infer-test: $(SPINEL) $(SP_RT_LIB)
 	rounds=$$(SP_FIXPOINT_LOG=1 $(SPINEL) test/infer/const_array_new_object_table_converges.rb -c --no-line-map -o "$$tmp/cao.c" 2>&1 | sed -n 's/^\[fp\] rounds=\([0-9]*\).*/\1/p' | tail -1); \
 	case "$$rounds" in ''|*[!0-9]*) echo "infer-test: FAIL (no fixpoint round count for const_array_new_object_table_converges)"; ok=0;; \
 	  *) [ "$$rounds" -lt 128 ] || { echo "infer-test: FAIL (a constant written Array.new(n) { Obj.new } was widened back to the general Array every round: the fixpoint ran to its cap)"; ok=0; };; \
+	esac; \
+	rounds=$$(SP_FIXPOINT_LOG=1 $(SPINEL) test/infer/const_row_table_push_converges.rb -c --no-line-map -o "$$tmp/crp.c" 2>&1 | sed -n 's/^\[fp\] rounds=\([0-9]*\).*/\1/p' | tail -1); \
+	case "$$rounds" in ''|*[!0-9]*) echo "infer-test: FAIL (no fixpoint round count for const_row_table_push_converges)"; ok=0;; \
+	  *) [ "$$rounds" -lt 128 ] || { echo "infer-test: FAIL (a push into a constant table of Integer or Float rows widened it to the general Array every round: the fixpoint ran to its cap)"; ok=0; };; \
 	esac; \
 	$(SPINEL) test/infer/module_source_call_binds_nothing.rb -c --no-line-map -o "$$tmp/msc.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (compile module_source_call_binds_nothing)"; exit 1; }; \
 	grep -Eq 'sp_int sp_Seq_output\(sp_Seq \*self, sp_int lv_col, sp_int lv_shift\)' "$$tmp/msc.c" && grep -Eq 'sp_int sp_Port_output\(sp_Port \*self, sp_int lv_port, sp_int lv_value\)' "$$tmp/msc.c" || { echo "infer-test: FAIL (a call in a module method an include copied away boxed the parameters of every method of its name)"; grep -E 'sp_(Seq|Port)_output\(' "$$tmp/msc.c" | head -2; ok=0; }; \

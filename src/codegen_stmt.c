@@ -1438,6 +1438,22 @@ int emit_ptr_array_build(Compiler *c, int v, TyKind want, Buf *b) {
   return 0;
 }
 
+/* A constant write that builds its table in place (emit_ptr_array_build)
+   from `[..].freeze`: the build, then the freeze that empty_literal_node
+   stripped (#3828). The table is stamped first (#4486): the runtime boxes
+   it unstamped for a FrozenError's receiver, which then showed opaque
+   objects. Answers 0 as emit_ptr_array_build does. */
+static int emit_const_ptr_array_build(Compiler *c, int v, int vlit, TyKind want, Buf *b) {
+  if (vlit == v) return emit_ptr_array_build(c, v, want, b);
+  Buf built; memset(&built, 0, sizeof built);
+  if (!emit_ptr_array_build(c, vlit, want, &built)) { free(built.p); return 0; }
+  int t = ++g_tmp;
+  buf_printf(b, "({ sp_PtrArray *_t%d = %s; (void)sp_box_ptr_array_k(_t%d, %s); _t%d->frozen = 1; _t%d; })",
+             t, built.p, t, ptr_array_stamp(c, want), t, t);
+  free(built.p);
+  return 1;
+}
+
 static void emit_poly_array_from(Compiler *c, int v, Buf *b) {
   TyKind vt = comp_ntype(c, v);
   if (vt == TY_INT_ARRAY) { buf_puts(b, "sp_PolyArray_from_int_array("); emit_expr(c, v, b); buf_puts(b, ")"); }
@@ -21432,7 +21448,7 @@ static int emit_attr_global_const_write_stmt(Compiler *c, int id, Buf *b, int in
        kind, as a local's and an ivar's write already do. Without it the
        call was emitted at its own poly type and the write refused, since
        no conversion keeps a poly array in an sp_PtrArray slot. */
-    else if (ty_is_ptr_array(lv->type) && emit_ptr_array_build(c, v, lv->type, b)) { }
+    else if (ty_is_ptr_array(lv->type) && emit_const_ptr_array_build(c, v, vlit, lv->type, b)) { }
     else emit_coerce(c, v, lv->type, CO_HOLD, isg ? "a global variable write" : "a constant write", b);
     buf_puts(b, ";\n");
     if (!isg && lv->init_guarded) {
@@ -21521,7 +21537,7 @@ static int emit_attr_global_const_write_stmt(Compiler *c, int id, Buf *b, int in
     else if (cv->type == TY_POLY && repr_of(c, v).kind != RK_BOXED) emit_boxed(c, v, b);
     /* `Mod::X = Array.new(n) { Obj.new }` into an object table builds in
        place at the slot's kind, as the plain ConstantWriteNode does. */
-    else if (ty_is_ptr_array(cv->type) && emit_ptr_array_build(c, v, cv->type, b)) { }
+    else if (ty_is_ptr_array(cv->type) && emit_const_ptr_array_build(c, v, vlit, cv->type, b)) { }
     else if (val_t < 0 && one_str_to_open(b, cv->type, "cst_%s", nm)) { emit_expr(c, v, b); buf_puts(b, ")"); }
     else emit_expr(c, v, b);
     buf_puts(b, ";\n");

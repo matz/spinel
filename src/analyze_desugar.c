@@ -1680,12 +1680,13 @@ static int erm_rewrite_stmt(Compiler *c, int st, const char *self_leaf, const in
   const char *leaf = nt_str(nt, recv, "name");
   if (!leaf || (sp_streq(leaf, "Object") && sp_streq(nm, "extend"))) return st;
   int decl = erm_declared_as(nt, leaf), pdecl = decl;
-  /* `K.include(M)` / `K.prepend(M)` at the top level on a class of the
-     program, of modules of the program or core modules: the load record
-     takes it as one of K's bodies' (mixin_by_record), where it runs; and
-     `K.extend(M)` of modules of the program (desugar_extend_enumerable
-     reads `extend Enumerable` in K's body) */
-  if (decl && !self_leaf && !attr && sclass < 0 && (!sp_streq(nm, "extend") || erm_args_program_modules(nt, av, first, an)) &&
+  /* `K.include(M)` / `K.prepend(M)` at the top level or in a class or
+     module body (K's own or another's) on a class of the program, of
+     modules of the program or core modules: the load record takes it as a
+     mixin of K's (mixin_by_record), where it runs; and `K.extend(M)` of
+     modules of the program (desugar_extend_enumerable reads `extend
+     Enumerable` in K's body) */
+  if (decl && !attr && sclass < 0 && (!sp_streq(nm, "extend") || erm_args_program_modules(nt, av, first, an)) &&
       !is_builtin_reopen_name(leaf) && !is_builtin_module_name(leaf) && erm_args_modules(nt, av, first, an))
     return st;
   /* Fiber and Thread take a mixin in a reopening (fiber-annotation's

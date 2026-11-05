@@ -2203,8 +2203,8 @@ static int lr_frame_body(const NodeTable *nt, int fnode) {
   return -1;
 }
 /* Is mixin m, of call node on class cls, one an explicit receiver names
-   from a frame that is not cls's own body -- `K.include M` at the top
-   level or in another class's body -- as a statement of that frame's list
+   -- `K.include M` at the top level, in another class's body or in K's
+   own -- as a statement of that frame's list
    that always runs there, an include or a prepend of a module of the
    program or a core module, on a class of the program or a builtin's
    reopening (desugar_explicit_receiver_mixin makes an empty one for a
@@ -2222,7 +2222,6 @@ static int lr_foreign_mixin(ElabRec *x, int node, const LrMixin *m, int cls, int
         !(recv >= 0 && nt_kind(nt, recv) == NK_CallNode && is_singleton_class_name(nt_str(nt, recv, "name")))) return 0;
   }
   else {
-    if (cls == fc) return 0;
     if (recv < 0 || nt_kind(nt, recv) == NK_SelfNode) return 0;
     if (nt_kind(nt, recv) != NK_ConstantReadNode && nt_kind(nt, recv) != NK_ConstantPathNode) return 0;
     if (m->kind != LR_INCLUDE && m->kind != LR_PREPEND && m->kind != LR_EXTEND) return 0;

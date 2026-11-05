@@ -13362,8 +13362,8 @@ static int desugar_enum_named_call(Compiler *c, int id, NodeTable *nt, const cha
   }
   if (nm && sp_streq(nm, "step") && nt_ref(nt, id, "receiver") >= 0) {
     /* Numeric#step keyword forms lower to the positional (limit, step):
-       step(to: T, by: B) / step(by: B, to: T) / step(T, by: B). An
-       endless step (by: only, no to:) stays a loud reject. */
+       step(to: T, by: B) / step(by: B, to: T) / step(T, by: B), and the
+       endless step(by: B), whose limit is nil. */
     int sargs = nt_ref(nt, id, "arguments");
     int sac = 0;
     const int *sav = sargs >= 0 ? nt_arr(nt, sargs, "arguments", &sac) : NULL;
@@ -13382,7 +13382,7 @@ static int desugar_enum_named_call(Compiler *c, int id, NodeTable *nt, const cha
       }
       if (sac == 2 && to_v < 0) to_v = sav[0];   /* step(limit, by: B) */
       if (other && step_kw_unknown(c, nt, id, sargs)) { *changed = 1; return 1; }
-      if (!other && to_v >= 0 && by_v >= 0) {
+      if (!other && by_v >= 0 && (to_v >= 0 || sac == 1)) {
         step_kw_positional(c, nt, id, sargs, to_v, by_v, by_first && sac == 1);
         *changed = 1;
         return 1;

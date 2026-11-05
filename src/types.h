@@ -68,15 +68,16 @@ enum {
   PF_FRANGE = 1 << 7,  /* TY_FLOAT_RANGE */
   PF_SRANGE = 1 << 8,  /* TY_STR_RANGE */
   PF_RANDOM = 1 << 9,  /* TY_RANDOM */
-  PF_OWNERS = 0x3ff,
-  PF_MUT      = 1 << 10,  /* mutates the receiver: the result is written back through the box */
-  PF_STR_BANG = 1 << 11, /* String value-form bang: re-enter the plain name, nil when unchanged */
-  PF_STR_SELF = 1 << 12, /* ... but a bang that answers self (succ!/next!): never nil */
-  PF_ARGS_OWN = 1 << 13, /* the arguments must be of the owner's own kind (concat) */
-  PF_VAL_SELF = 1 << 14, /* a mutator whose value is the receiver: the box itself, or for a String the box its variable holds after the write */
-  PF_SAME_OK  = 1 << 16, /* ... and contents that are the receiver's own mean no write, so no frozen check (scrub!) */
-  PF_ENC      = 1 << 17, /* ... and the new contents carry the result's encoding, which a shared handle takes, binary or text (bytesplice) */
-  PF_LAST     = 1 << 15  /* answers only once no poly-receiver emitter of its own has claimed the name */
+  PF_TRANGE = 1 << 10, /* TY_TIME_RANGE: a Range of Times (step with a block) */
+  PF_OWNERS = 0x7ff,
+  PF_MUT      = 1 << 11,  /* mutates the receiver: the result is written back through the box */
+  PF_STR_BANG = 1 << 12, /* String value-form bang: re-enter the plain name, nil when unchanged */
+  PF_STR_SELF = 1 << 13, /* ... but a bang that answers self (succ!/next!): never nil */
+  PF_ARGS_OWN = 1 << 14, /* the arguments must be of the owner's own kind (concat) */
+  PF_VAL_SELF = 1 << 15, /* a mutator whose value is the receiver: the box itself, or for a String the box its variable holds after the write */
+  PF_SAME_OK  = 1 << 17, /* ... and contents that are the receiver's own mean no write, so no frozen check (scrub!) */
+  PF_ENC      = 1 << 18, /* ... and the new contents carry the result's encoding, which a shared handle takes, binary or text (bytesplice) */
+  PF_LAST     = 1 << 16  /* answers only once no poly-receiver emitter of its own has claimed the name */
 };
 typedef struct {
   const char *name;
@@ -195,6 +196,7 @@ static inline TyKind ty_poly_face_kind(unsigned owner) {
     case PF_FRANGE: return TY_FLOAT_RANGE;
     case PF_SRANGE: return TY_STR_RANGE;
     case PF_RANDOM: return TY_RANDOM;
+    case PF_TRANGE: return TY_TIME_RANGE;
   }
   return TY_UNKNOWN;
 }

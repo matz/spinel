@@ -55,7 +55,7 @@ static const PolyFace ty_poly_face_tbl[] = {
      An Array owns bsearch too: a row for the name decides every receiver
      kind, so leaving it out made a boxed Array's bsearch a NoMethodError.
      A String Range's bsearch is its TypeError, raised by its own row. */
-  {"step", PF_RANGE | PF_FRANGE | PF_SRANGE, 0, 1, 1},
+  {"step", PF_RANGE | PF_FRANGE | PF_SRANGE | PF_TRANGE, 0, 1, 1},
   {"bsearch", PF_ARRAY | PF_RANGE | PF_FRANGE | PF_SRANGE, 0, 0, 1},
   /* bsearch_index with a block is Array's alone (a Range has none) */
   {"bsearch_index", PF_ARRAY, 0, 0, 1},

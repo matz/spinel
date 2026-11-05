@@ -15663,6 +15663,9 @@ static TyKind emit_face_arm(Compiler *c, int id, unsigned kind, unsigned flags, 
     case PF_FRANGE:
       buf_printf(g_pre, "sp_FloatRange _t%d = sp_poly_frange_recv(%s, \"%s\");\n", t, rs, name);
       break;
+    case PF_TRANGE:
+      buf_printf(g_pre, "sp_TimeRange *_t%d = sp_poly_trange_recv(%s, \"%s\"); SP_GC_ROOT(_t%d);\n", t, rs, name, t);
+      break;
     case PF_SRANGE:
       buf_printf(g_pre, "sp_StrRange _t%d = sp_poly_srange_recv(%s, \"%s\"); SP_GC_ROOT_STR(_t%d.first); SP_GC_ROOT_STR(_t%d.last);",
                  t, rs, name, t, t);
@@ -15704,7 +15707,7 @@ static TyKind emit_face_arm(Compiler *c, int id, unsigned kind, unsigned flags, 
      union, which emit_face_value reads as "already boxed" and hands the raw
      sp_int / sp_float to the poly slot (#4774). The value is the receiver. */
   if (nat == TY_POLY && has_blk &&
-      (kind == PF_INT || kind == PF_FLOAT || kind == PF_RANGE || kind == PF_FRANGE || kind == PF_SRANGE) &&
+      (kind == PF_INT || kind == PF_FLOAT || kind == PF_RANGE || kind == PF_FRANGE || kind == PF_SRANGE || kind == PF_TRANGE) &&
       (is_integer_iteration(name)))
     nat = as;
   /* ...and so does a written-back mutator its row says always answers the
@@ -16070,6 +16073,7 @@ static void emit_face_kind_test(unsigned kind, int t, Buf *b) {
     case PF_RANGE:  buf_printf(b, "(_t%d.tag == SP_TAG_OBJ && _t%d.cls_id == SP_BUILTIN_RANGE)", t, t); break;
     case PF_FRANGE: buf_printf(b, "(_t%d.tag == SP_TAG_OBJ && _t%d.cls_id == SP_BUILTIN_FLOAT_RANGE)", t, t); break;
     case PF_SRANGE: buf_printf(b, "(_t%d.tag == SP_TAG_OBJ && _t%d.cls_id == SP_BUILTIN_STR_RANGE)", t, t); break;
+    case PF_TRANGE: buf_printf(b, "(_t%d.tag == SP_TAG_OBJ && _t%d.cls_id == SP_BUILTIN_TIME_RANGE)", t, t); break;
     case PF_ARRAY:  buf_printf(b, "(_t%d.tag == SP_TAG_OBJ && sp_poly_is_array_kind(_t%d.cls_id))", t, t); break;
     case PF_HASH:   buf_printf(b, "(_t%d.tag == SP_TAG_OBJ && sp_poly_is_hash_kind(_t%d.cls_id))", t, t); break;
     case PF_ENUM:   buf_printf(b, "(_t%d.tag == SP_TAG_OBJ && (sp_poly_is_array_kind(_t%d.cls_id) || sp_poly_is_hash_kind(_t%d.cls_id)))", t, t, t); break;

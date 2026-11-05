@@ -1,0 +1,6 @@
+Base
+Object
+[Sub, Base]
+[Base, Object]
+[M]
+NoMethodError

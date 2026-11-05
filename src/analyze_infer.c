@@ -9777,7 +9777,10 @@ static TyKind infer_call_inner(Compiler *c, int id) {
   if (recv >= 0 && ty_is_hash(rt) && argc == 1 && sp_streq(name, "default_proc="))
     return TY_PROC;
 
-  { TyKind r; if (infer_class_module_call(c, id, nt, name, recv, argc, argv, rt, &r)) return r; }
+  /* a class method of the program's on a known class answers what it
+     answers, not Class's own reflection (`def self.superclass`) */
+  int own_cm = cplan_own_class_reflection(c, id, recv, name);
+  { TyKind r; if (!own_cm && infer_class_module_call(c, id, nt, name, recv, argc, argv, rt, &r)) return r; }
 
   { TyKind r; if (infer_new_call(c, id, nt, name, recv, argc, argv, &r)) return r; }
 
@@ -12048,12 +12051,20 @@ TyKind infer_uncached(Compiler *c, int id) {
        an Array of classes (emit_super's twin) */
     int subs_super = s->is_cmethod && uname && sp_streq(uname, "subclasses") &&
                      nt_ref(nt, id, "arguments") < 0;
+    /* and `super` in a class method named superclass or ancestors reaches
+       Class#superclass (a class) or Module#ancestors (an Array of them);
+       a module has no #superclass (emit_super's twin) */
+    int rel_super = 0;
+    if (s->is_cmethod && uname && nt_ref(nt, id, "arguments") < 0 && s->class_id >= 0)
+      rel_super = sp_streq(uname, "ancestors") ? 2
+                : sp_streq(uname, "superclass") && !comp_class_is_module(c, &c->classes[s->class_id]) ? 1 : 0;
     /* and `super` in a ` override reaches Kernel#`: the command's output */
     int bt_arg, bt_super = uname && sp_streq(uname, "`") && an_super_backtick_shape(c, id, s, &bt_arg) > 0;
     TyKind none = super_reaches_exc_text(c, id, 0) ? TY_STRING
                 : an_super_object_text(c, id, (int)(s - c->scopes)) ? TY_STRING
                 : bt_super ? TY_STRING
-                : subs_super ? TY_POLY_ARRAY
+                : subs_super || rel_super == 2 ? TY_POLY_ARRAY
+                : rel_super == 1 ? TY_CLASS
                 : rto_super ? TY_BOOL
                 : freeze_super ? ty_object(s->class_id)
                 : obj_super == SUPER_OBJ_SELF ? ty_object(s->class_id)

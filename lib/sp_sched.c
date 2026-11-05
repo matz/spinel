@@ -3209,6 +3209,41 @@ static void sp_sched_pump(sp_thread *target, int may_wait) {
   }
 }
 
+#ifdef SP_THREADS
+/* The first thread on worker 0's queue that is pinned there, off the queue. An
+   unstarted one stays for a helper to steal: after a helper that failed to
+   start, a thread running here can have spawned one onto this queue. PRE: the
+   queue's lock held. */
+static sp_thread *runq_pop_pinned(sp_runq *q) {
+  if (!q->head || q->head->home_wid >= 0) return runq_pop(q);
+  sp_thread *prev = q->head;
+  while (prev->rq_next && prev->rq_next->home_wid < 0) prev = prev->rq_next;
+  sp_thread *t = prev->rq_next;
+  if (!t) return NULL;
+  prev->rq_next = t->rq_next;
+  if (q->tail == t) q->tail = prev;
+  if (q->woke == t) q->woke = NULL;
+  t->rq_next = NULL;
+  RUNNABLE_DEC();
+  return t;
+}
+
+/* What main's sweep runs when nothing is pinned to its worker. A thread a helper
+   spawned waits on that helper's queue for a worker to come round to it, and a
+   helper in a blocking call does not. A new helper takes it, when the pool can
+   grow. When it cannot and every helper is in such a call, main does, the one
+   worker left, and the thread is pinned here. */
+static sp_thread *sched_pass_stranded(void) {
+  if (!SP_ATOMIC_LOAD(&g_lrq_unstarted, __ATOMIC_SEQ_CST)) return NULL;
+  int before = g_helpers_spawned;
+  sp_sched_maybe_grow();
+  if (g_helpers_spawned > before) return NULL;
+  for (int i = 1; i < sp_active_workers; i++)
+    if (SP_ATOMIC_LOAD(&g_native_out[i], __ATOMIC_RELAXED) != SP_OUT_NATIVE) return NULL;
+  return sched_pick(sp_worker_id);
+}
+#endif
+
 /* One round-robin sweep for Thread.pass from the main thread: give each thread
    that is runnable *right now* exactly one timeslice, then return to main.
    Threads that re-queue themselves (their own Thread.pass) during the sweep land
@@ -3245,7 +3280,10 @@ static void sp_sched_pass(void) {
        in a blocking C call, for as long as that call lasts. A thread spawned
        just before the Thread.pass found the new helper not up yet, so it took
        that road every time. */
-    if (sp_active_workers > 1) { RQ_LOCK(0); t = runq_pop(&g_lrq[0]); RQ_UNLOCK(0); }
+    if (sp_active_workers > 1) {
+      RQ_LOCK(0); t = runq_pop_pinned(&g_lrq[0]); RQ_UNLOCK(0);
+      if (!t) t = sched_pass_stranded();
+    }
     else
 #endif
     t = sched_pick(sp_worker_id);

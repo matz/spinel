@@ -509,6 +509,91 @@ static int root_method_vis(Compiler *c, const char *qm) {
   }
   return SP_VIS_PUBLIC;
 }
+/* `v.respond_to?(:m, flag)` on a builtin value, where the flag is known
+   only at run time and it alone decides (a private method of an Object
+   reopening): the answer to each flag, picked by the flag, which is read
+   after the receiver. A nil the slot may hold (a nullable Integer or Float,
+   a pointer that may be NULL) answers its own surface. 0 when an answer
+   turns on more than the flag. */
+/* Is qm a name only the program's Object, Kernel or BasicObject defines,
+   with no class or module of its own defining or undefining it and no
+   respond_to_missing? anywhere? Then a builtin value's answer to each flag
+   is Object's visibility, which respond_to_static_answer reads. */
+static int flag_split_root_only(Compiler *c, const char *qm) {
+  if (!root_reopen_defines(c, qm) || any_class_defines(c, "respond_to_missing?")) return 0;
+  for (int k = 0; k < c->nclasses; k++) {
+    if (name_list_has(c->classes[k].undefs, c->classes[k].nundefs, qm)) return 0;
+    if (c->classes[k].name && is_object_root(c->classes[k].name)) continue;
+    if (comp_method_in_class(c, k, qm) >= 0 || comp_is_reader(&c->classes[k], qm)) return 0;
+  }
+  return 1;
+}
+/* the answer nil gives in a nil-able slot's nil arm: `_ia<ia>` the
+   run-time include_all, 0 for none */
+static void emit_nil_side_answer(Compiler *c, const char *qm, int argc, const int *argv, int ia, Buf *b) {
+  int nil_prog, nil_too = nil_responds_static(c, qm, argc, argv, &nil_prog);
+  if (ia && nil_too == 2) buf_printf(b, "_ia%d", ia);
+  else if (nil_prog) buf_printf(b, "%d", nil_too);
+  else {
+    buf_puts(b, "sp_poly_responds_builtin(sp_box_nil(), ");
+    emit_str_literal(b, qm);
+    buf_puts(b, ")");
+  }
+}
+static int emit_respond_to_flag_split(Compiler *c, int id, int recv, TyKind rt, const char *qm,
+                                      int argc, const int *argv, Buf *b) {
+  const NodeTable *nt = c->nt;
+  if (argc != 2 || recv < 0) return 0;
+  NodeKind fk = nt_kind(nt, argv[1]);
+  if (fk == NK_TrueNode || fk == NK_FalseNode) return 0;
+  if (ty_is_object(rt) || rt == TY_CLASS || rt == TY_POLY || rt == TY_UNKNOWN || rt == TY_VOID ||
+      !flag_split_root_only(c, qm))
+    return 0;
+  int s_nil = g_rto_nil_obj, s_cls = g_rto_by_cls, s_exc = g_rto_exc;
+  int an[2], ok = 1;
+  for (int ia = 0; ia < 2; ia++) {
+    g_rto_force_ia = ia;
+    an[ia] = respond_to_static_answer(c, id, recv, rt, qm, argc, argv);
+    if (an[ia] < 0 || g_rto_nil_obj || g_rto_by_cls >= 0 || g_rto_exc) ok = 0;
+  }
+  g_rto_force_ia = -1;
+  g_rto_nil_obj = s_nil; g_rto_by_cls = s_cls; g_rto_exc = s_exc;
+  if (!ok) return 0;
+  int num = (rt == TY_INT || rt == TY_FLOAT) && call_returns_nullable_int(c, recv), str = 0;
+  if (!num) {
+    Repr rr = repr_of(c, recv);
+    /* (a pointer whose NULL is its nil; any other nil form is left alone) */
+    if (rr.may_nil && (rr.nil_scalar || (rr.kind != RK_PTR && rr.kind != RK_STRBUF))) return 0;
+    str = rr.may_nil;
+  }
+  int t = ++g_tmp, boxed = repr_of(c, id).kind == RK_BOXED;
+  if (boxed) buf_puts(b, "sp_box_bool(");
+  buf_puts(b, "({ ");
+  char ref[32];
+  if (num) emit_sentinel_bind(c, rt, recv, ref, sizeof ref, b);
+  else if (str) {
+    buf_printf(b, "const void *_t%d = (const void *)(", t);
+    emit_expr(c, recv, b);
+    buf_puts(b, "); ");
+    snprintf(ref, sizeof ref, "_t%d", t);
+  } else {
+    buf_puts(b, "(void)(");
+    emit_expr_for_effect(c, recv, b);
+    buf_puts(b, "); ");
+  }
+  buf_printf(b, "int _ia%d = ", t);
+  emit_cond(c, argv[1], b);
+  buf_puts(b, "; ");
+  if (num || str) {
+    if (num) emit_slot_truthy(rt, ref, b);
+    else buf_printf(b, "%s != NULL", ref);
+    buf_printf(b, " ? (_ia%d ? %d : %d) : ", t, an[1], an[0]);
+    emit_nil_side_answer(c, qm, argc, argv, t, b);
+  } else buf_printf(b, "(_ia%d ? %d : %d)", t, an[1], an[0]);
+  buf_puts(b, "; })");
+  if (boxed) buf_puts(b, ")");
+  return 1;
+}
 int emit_call_reflection_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc, const int *argv, TyKind rt) {
   if (sp_streq(name, "respond_to?") && argc >= 1 && !respond_to_user_defined(c, id, recv)) {
     NodeKind ak = nt_kind(nt, argv[0]);
@@ -594,13 +679,9 @@ int emit_call_reflection_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
         int ia = nil_too == 2 ? ++g_tmp : 0;
         if (ia) { buf_printf(b, "int _ia%d = ", ia); emit_cond(c, argv[1], b); buf_puts(b, "; "); }
         emit_slot_truthy(rt, ref, b);
-        if (ia) buf_printf(b, " ? %d : _ia%d; })", ans, ia);
-        else if (nil_prog) buf_printf(b, " ? %d : %d; })", ans, nil_too);
-        else {
-          buf_printf(b, " ? %d : sp_poly_responds_builtin(sp_box_nil(), ", ans);
-          emit_str_literal(b, qm);
-          buf_puts(b, "); })");
-        }
+        buf_printf(b, " ? %d : ", ans);
+        emit_nil_side_answer(c, qm, argc, argv, ia, b);
+        buf_puts(b, "; })");
         return 1;
       }
       /* boxed when the call is typed so ($stderr, a global, is folded here
@@ -615,6 +696,7 @@ int emit_call_reflection_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
         return 1;
       }
       if (emit_respond_to_cells(c, id, qm, argc, argv, b)) return 1;
+      if (ans < 0 && emit_respond_to_flag_split(c, id, recv, rt, qm, argc, argv, b)) return 1;
       /* a user object's include_all known only at run time, or one of
          Object's private methods (exit, puts) to a literal one where some
          class could answer otherwise: the run-time answer, which reads the

@@ -125,6 +125,7 @@ extern int g_rto_nil_obj;
 extern int g_rto_by_cls;
 int emit_respond_to_by_cls(Compiler *c, int recv, const char *qm, int argc, const int *argv, Buf *b);
 extern int g_rto_exc;
+extern int g_rto_force_ia;
 int emit_respond_to_exc_cls(Compiler *c, int recv, const char *qm, int argc, const int *argv, Buf *b);
 int method_hidden_from_reflection(Compiler *c, int cid, const char *m);
 int refl_member_of_struct_superclass(Compiler *c, int ci, const char *m);

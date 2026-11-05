@@ -5293,6 +5293,9 @@ static int cf_container_site(CF *f, int x) {
   const char *cn = nt_str(nt, r, "name");
   return cn && (sp_streq(cn, "Array") || sp_streq(cn, "Hash"));
 }
+/* The walk's element of local `i` of scope `s` when the local may join an
+   alias group, else -1: a summarized local, one that may hold an untracked
+   container, and a rest or keyword-rest parameter join none (above). */
 static int cf_alias_local_el(CF *f, int s, int i) {
   Compiler *c = f->c;
   if (!f->nlv || i >= f->nlv[s] || !f->lv_el[s]) return -1;

@@ -3203,6 +3203,7 @@ int node_has_oint_form(Compiler *c, int node);
    in sp_oint_of, nil as sp_oint_nil(); a slot read as its slot's own oint */
 void emit_oint_expr(Compiler *c, int node, TyKind t, Buf *b);
 void emit_float_operand_in(Compiler *c, int node, const char *lcls, Buf *b);
+void emit_float_pair_in_order(Compiler *c, const char *r, int r_oint, const char *name, int arg, const char *lcls, int tx, int tn, Buf *b);
 /* set by emit_oint_expr for the one node it is about to emit: emit_expr
    consumes it (leaves the oint producer bare) before any child is emitted */
 extern int g_want_oint;

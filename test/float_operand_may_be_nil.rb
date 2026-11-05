@@ -97,3 +97,81 @@ try_class { recv ** $z }
 try_class { recv % $z }
 try_class { recv.divmod($z) }
 try_class { recv.coerce($z) }
+
+# Both run before either's nil raises. An operand that raises comes first too.
+def opnd
+  puts "opnd"
+  raise ArgumentError, "opnd" if $opnd_raises
+  $z
+end
+
+def float_opnd
+  puts "float_opnd"
+  3.0
+end
+
+def local_pow(x)
+  p(x ** opnd)
+rescue TypeError, NoMethodError, ArgumentError => e
+  puts e.class
+end
+
+def local_mod(x)
+  p(x % opnd)
+rescue TypeError, NoMethodError, ArgumentError => e
+  puts e.class
+end
+
+def local_divmod(x)
+  p(x.divmod(opnd))
+rescue TypeError, NoMethodError, ArgumentError => e
+  puts e.class
+end
+
+def local_coerce(x)
+  p(x.coerce(opnd))
+rescue TypeError, NoMethodError, ArgumentError => e
+  puts e.class
+end
+
+def local_pow_float(x)
+  p(x ** float_opnd)
+rescue NoMethodError => e
+  puts e.class
+end
+
+def local_mod_float(x)
+  p(x % float_opnd)
+rescue NoMethodError => e
+  puts e.class
+end
+
+def local_divmod_float(x)
+  p(x.divmod(float_opnd))
+rescue NoMethodError => e
+  puts e.class
+end
+
+def local_all(x)
+  local_pow(x)
+  local_mod(x)
+  local_divmod(x)
+  local_coerce(x)
+end
+
+$opnd_raises = false
+$z = 3.0
+local_all(2.0)
+$z = nil
+local_all(2.0)
+local_all(nil)
+$z = 3.0
+local_all(nil)
+$opnd_raises = true
+local_all(nil)
+local_pow_float(2.0)
+local_mod_float(2.0)
+local_divmod_float(2.0)
+local_pow_float(nil)
+local_mod_float(nil)
+local_divmod_float(nil)

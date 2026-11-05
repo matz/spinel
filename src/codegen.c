@@ -16739,7 +16739,9 @@ static void emit_obj_cmp_dispatch(Compiler *c, Buf *b) {
     else if (m->ret == TY_BIGINT) {
       /* a Bignum is an Integer answer too: its sign orders the pair */
       buf_printf(b, "      sp_Bigint *_rb = %s(%s%s);\n", callee, selfarg, args.p ? args.p : "");
-      buf_puts(b, "      *comparable = TRUE; return sp_bigint_sign(_rb);\n");
+      /* a nil one (an unset Bignum ivar) compares as nothing, as a nil `<=>` does */
+      buf_puts(b, "      if (!_rb) { *comparable = FALSE; return 0; }\n"
+                  "      *comparable = TRUE; return sp_bigint_sign(_rb);\n");
     }
     else {
       /* poly `<=>`: an Integer or Float result is comparable (use its sign);

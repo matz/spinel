@@ -641,6 +641,7 @@ TyKind infer_sum_block_ty(Compiler *c, int block);
 TyKind infer_map_block_ty(Compiler *c, int id, int block);
 TyKind infer_map_block_elem_ty(Compiler *c, int block);
 void step_kw_positional(Compiler *c, NodeTable *nt, int id, int args, int to_v, int by_v, int by_first);
+int step_kw_numeric_recv(Compiler *c, NodeTable *nt, int id);
 int step_kw_unknown(Compiler *c, NodeTable *nt, int id, int args);
 void kw_error_message(char *out, size_t n, const char *kind, int count, const char *names);
 void kw_names_add(char *list, size_t n, int *count, const char *inspected);

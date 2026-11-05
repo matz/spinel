@@ -1114,6 +1114,7 @@ static const BuiltinOp bop_rows[] = {
   { TY_OBJ_RANGE, "last", 0, 0, BF_ANY, TY_POLY, BOPE_TEMPLATE, "sp_orange_last($r)", 0 },
   { TY_OBJ_RANGE, "min", 0, 0, BF_NONE, TY_POLY, BOPE_TEMPLATE, "sp_orange_min($r)", 0 },
   { TY_OBJ_RANGE, "max", 0, 0, BF_NONE, TY_POLY, BOPE_TEMPLATE, "sp_orange_max($r)", 0 },
+  { TY_OBJ_RANGE, "overlap?", 1, 1, BF_ANY, TY_BOOL, BOPE_TEMPLATE, "({ sp_ObjRange *_t$T = $r; SP_GC_ROOT(_t$T); sp_RbVal _a$T = $b0; sp_orange_overlap_v(sp_box_obj(_t$T, SP_BUILTIN_OBJ_RANGE), _a$T); })", 0 },
   { TY_OBJ_RANGE, "exclude_end?", 0, 0, BF_ANY, TY_BOOL, BOPE_TEMPLATE, "(sp_bool)($r)->excl", 0 },
   { TY_OBJ_RANGE, "cover?", 1, 1, BF_ANY, TY_BOOL, BOPE_TEMPLATE, "({ sp_ObjRange *_t$T = $r; SP_GC_ROOT(_t$T); sp_RbVal _a$T = $b0; sp_orange_cover(_t$T, _a$T); })", 0 },
   { TY_OBJ_RANGE, "include?", 1, 1, BF_ANY, TY_BOOL, BOPE_TEMPLATE, "({ sp_ObjRange *_t$T = $r; SP_GC_ROOT(_t$T); sp_RbVal _a$T = $b0; (sp_bool)(!(_a$T.tag == SP_TAG_OBJ && _a$T.cls_id == SP_BUILTIN_OBJ_RANGE) && sp_orange_cover(_t$T, _a$T)); })", 0 },
@@ -1134,6 +1135,8 @@ static const BuiltinOp bop_rows[] = {
   { TY_OBJ_RANGE, "dup", 0, 0, BF_ANY, TY_OBJ_RANGE, BOPE_TEMPLATE, "sp_orange_copy($r, 0)", 0 },
   { TY_OBJ_RANGE, "clone", 0, 0, BF_ANY, TY_OBJ_RANGE, BOPE_TEMPLATE, "sp_orange_copy($r, 1)", 0 },
   { TY_OBJ_RANGE, "itself", 0, 0, BF_ANY, TY_OBJ_RANGE, BOPE_TEMPLATE, "$r", 0 },
+  { TY_OBJ_RANGE, "each", 0, 0, BF_REQUIRED, TY_OBJ_RANGE, BOPE_NONE },  /* the receiver, as CRuby; codegen_iter walks it */
+  { TY_OBJ_RANGE, "first", 1, 1, BF_NONE, TY_POLY_ARRAY, BOPE_TEMPLATE, "({ sp_ObjRange *_t$T = $r; SP_GC_ROOT(_t$T); sp_orange_first_n(_t$T, $i0); })", 0 },
   { TY_OBJ_RANGE, "to_a", 0, 0, BF_NONE, TY_POLY_ARRAY, BOPE_TEMPLATE, "sp_orange_to_a($r)", 0 },
   { TY_OBJ_RANGE, "entries", 0, 0, BF_NONE, TY_POLY_ARRAY, BOPE_TEMPLATE, "sp_orange_to_a($r)", 0 },
   { TY_OBJ_RANGE, "freeze", 0, 0, BF_ANY, TY_OBJ_RANGE, BOPE_TEMPLATE, "({ sp_ObjRange *_t$T = $r; _t$T->unfrozen = 0; _t$T; })", 0 },
@@ -4024,6 +4027,7 @@ static const IterRow iter_rows[] = {
   { TY_RANGE, "step",             1, 1, 1, { YS_NUM }, IA_RECV, IRF_GAP_FWD },
   { TY_FLOAT_RANGE, "step",       1, 1, 1, { YS_NUM }, IA_RECV, 0 },
   { TY_TIME_RANGE, "step",        1, 1, 1, { YS_NUM }, IA_RECV, 0 },
+  { TY_OBJ_RANGE, "each",         0, 0, 1, { YS_ELEM }, IA_RECV, 0 },
 
   { TY_INT, "times",   0, 0, 1, { YS_NUM }, IA_RECV, 0 },
   { TY_INT, "upto",    1, 1, 1, { YS_NUM }, IA_RECV, 0 },
@@ -4272,7 +4276,7 @@ int bop_share(TyKind fam, const char *name) {
 TyKind iter_yield_kind(const IterRow *r, int k, TyKind rt) {
   int boxed = rt == TY_POLY;
   switch (k >= 0 && k < r->nyield ? r->yield[k] : YS_NONE) {
-  case YS_ELEM:     return boxed ? TY_POLY : rt == TY_RANGE ? TY_INT : ty_array_elem(rt);
+  case YS_ELEM:     return boxed || rt == TY_OBJ_RANGE ? TY_POLY : rt == TY_RANGE ? TY_INT : ty_array_elem(rt);
   case YS_PAIR_KEY: return boxed ? TY_POLY : ty_hash_key(rt);
   case YS_PAIR_VAL: return boxed ? TY_POLY : ty_hash_val(rt);
   case YS_SUB:      return boxed || (r->flags & IRF_GAP_RUN_BOXED) ? TY_POLY_ARRAY : rt;

@@ -4471,14 +4471,20 @@ int desugar_obj_range_via_a(Compiler *c) {
     if (!nm || recv < 0 || nt_int(nt, recv, "made_to_a", 0)) continue;
     int hit = 0;
     for (int q = 0; VIA_A[q]; q++) if (sp_streq(nm, VIA_A[q])) { hit = 1; break; }
-    /* count, first(n) and min/max with a block walk it; include? stays cover? */
+    /* count, last(n) and min/max with a block walk it; include? stays cover? */
     int args = nt_ref(nt, id, "arguments"), an = 0;
     if (args >= 0) nt_arr(nt, args, "arguments", &an);
     int blk = nt_ref(nt, id, "block") >= 0;
     if (!hit && (sp_streq(nm, "count") || sp_streq(nm, "min") || sp_streq(nm, "max"))) hit = blk || an > 0;
-    if (!hit && (sp_streq(nm, "first") || sp_streq(nm, "last"))) hit = an > 0;
+    if (!hit && sp_streq(nm, "last")) hit = an > 0;
+    /* each with a block walks by succ itself (codegen_iter), so an endless one stops where it breaks */
+    if (sp_streq(nm, "each") && blk && an == 0) hit = 0;
     if (!hit) continue;
     if (infer_type(c, recv) != TY_OBJ_RANGE) continue;
+    /* a Range reopen's method of the name, or an Enumerable reopening's the
+       Range has none of, is the call's target (as desugar_enumerable_via_to_a) */
+    if (an_reopen_owner(c, id, CORE_RANGE) >= 0) continue;
+    if (an_enum_prog_method(c, nm) && !builtin_method_known("Range", nm)) continue;
     int toa = nt_new_node(nt, "CallNode");
     if (toa < 0) continue;
     nt_node_set_str(nt, toa, "name", "to_a");
@@ -5228,9 +5234,19 @@ static int step_kw_paren(NodeTable *nt, int v) {
   return p;
 }
 
+/* Numeric#step only: a program's own step(by:) takes its keywords as they are */
+int step_kw_numeric_recv(Compiler *c, NodeTable *nt, int id) {
+  static const int owners[] = { CORE_INTEGER, CORE_FLOAT, CORE_NUMERIC };
+  for (size_t i = 0; i < sizeof(owners) / sizeof(*owners); i++)
+    if (an_reopen_owner(c, id, owners[i]) >= 0) return 0;
+  return !ty_is_object(infer_type(c, nt_ref(nt, id, "receiver")));
+}
+
 void step_kw_positional(Compiler *c, NodeTable *nt, int id, int args, int to_v, int by_v, int by_first) {
   int sc = c->nscope[id], base = nt->count;
   Scope *scp = comp_scope_of(c, id);
+  /* by: nil is the default step, where a positional nil step raises */
+  if (by_v >= 0 && nt_kind(nt, by_v) == NK_NilNode) { by_v = -1; by_first = 0; }
   if (by_v < 0) { by_v = nt_new_node(nt, "IntegerNode"); nt_node_set_int(nt, by_v, "value", 1); }
   /* step(by: B) alone is endless: the positional form's nil limit */
   if (to_v < 0) { to_v = nt_new_node(nt, "NilNode"); by_first = 0; }
@@ -5363,6 +5379,7 @@ int desugar_step_kwargs(Compiler *c) {
       else { other = 1; break; }
     }
     if (other || (to_v < 0 && by_v < 0)) continue;
+    if (!step_kw_numeric_recv(c, nt, id)) continue;
     step_kw_positional(c, nt, id, args, to_v, by_v, by_first);
     changed = 1;
   }

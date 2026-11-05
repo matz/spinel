@@ -5709,6 +5709,8 @@ static void sp_orange_scan(void *p) {
   sp_ObjRange *r = (sp_ObjRange *)p;
   sp_mark_rbval(r->first);
   sp_mark_rbval(r->last);
+  if (r->wbuf) sp_gc_mark(r->wbuf);
+  sp_mark_rbval(r->wcur);
 }
 sp_ObjRange *sp_orange_new(sp_RbVal first, sp_RbVal last, sp_int excl) {
   SP_GC_ROOT_RBVAL(first); SP_GC_ROOT_RBVAL(last);

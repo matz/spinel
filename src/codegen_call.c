@@ -24776,6 +24776,7 @@ static int plain_prog_defines_unseen(Compiler *c) {
   if (g) { memo_gen = g; memo = found; }
   return found;
 }
+int program_defines_unseen(Compiler *c) { return plain_prog_defines_unseen(c); }
 /* Is a call of `nm` on a builtin's value provably the builtin's own: the
    program has no def of that name anywhere, no attr of that name, and no
    way to define one that the node table does not show? Asked by the name
@@ -32803,6 +32804,9 @@ int g_rto_by_cls = -1;
    classes define: the exception's own class answers at run time
    (emit_respond_to_exc_cls) */
 int g_rto_exc = 0;
+/* 0 or 1: respond_to_static_answer reads a non-literal include_all as this
+   value (emit_respond_to_flag_split asks both); -1: as the call writes it */
+int g_rto_force_ia = -1;
 static int rto_exact_class_answer(Compiler *c, int cid, const char *qm,
                                   int include_all, int foldable);
 /* Does an exception class of the program define qm, public or not, which
@@ -33007,7 +33011,8 @@ int respond_to_static_answer(Compiler *c, int id, int recv, TyKind rt, const cha
   int include_all = 0, foldable = 1;
   if (argc >= 2) {
     NodeKind a1_k = nt_kind(nt, argv[1]);
-    if (a1_k == NK_TrueNode) include_all = 1;
+    if (g_rto_force_ia >= 0) include_all = g_rto_force_ia;
+    else if (a1_k == NK_TrueNode) include_all = 1;
     else if (a1_k == NK_FalseNode) include_all = 0;
     else foldable = 0;
   }

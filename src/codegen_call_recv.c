@@ -15121,10 +15121,11 @@ int emit_range_call(Compiler *c, int id, Buf *b) {
         /* Enumerable#take checks the count first, and take(0) never iterates
            (a beginless one included) */
         int tf = ++g_tmp, tn = ++g_tmp, ti = ++g_tmp, tc = ++g_tmp;
-        buf_printf(b, "({ sp_IntArray *_t%d = sp_IntArray_new(); sp_int _t%d = ", tf, tn);
+        buf_printf(b, "({ sp_int _t%d = ", tn);
         emit_int_expr(c, argv[0], b);
         buf_printf(b, "; if (_t%d < 0) sp_raise_cls(\"ArgumentError\", \"attempt to take negative size\");"
                       " if (_t%d > 0 && _t%d.nobeg) sp_raise_cls(\"TypeError\", \"can't iterate from NilClass\");", tn, tn, t);
+        buf_printf(b, " sp_IntArray *_t%d = sp_IntArray_new(); SP_GC_ROOT(_t%d);", tf, tf);
         buf_printf(b, " sp_int _t%d = _t%d > 0 ? sp_range_count(_t%d) : 0; sp_int _t%d = sp_range_step(_t%d);"
                       " for (sp_int _i%d = 0; _i%d < _t%d && _i%d < _t%d; _i%d++)"
                       " sp_IntArray_push(_t%d, _t%d.first + _i%d * _t%d); _t%d; })",
@@ -15143,9 +15144,10 @@ int emit_range_call(Compiler *c, int id, Buf *b) {
           int tf = ++g_tmp, tn = ++g_tmp, ti = ++g_tmp, tc = ++g_tmp;
           /* range_first refuses a beginless Range before it reads the count */
           buf_printf(b, "({ if (_t%d.nobeg) sp_raise_cls(\"RangeError\", \"cannot get the first element of beginless range\");"
-                        " sp_IntArray *_t%d = sp_IntArray_new(); sp_int _t%d = ", t, tf, tn);
+                        " sp_int _t%d = ", t, tn);
           emit_int_expr(c, argv[0], b);   /* first(nil) is CRuby's TypeError */
           buf_printf(b, "; if (_t%d < 0) sp_raise_cls(\"ArgumentError\", \"negative array size (or size too big)\");", tn);
+          buf_printf(b, " sp_IntArray *_t%d = sp_IntArray_new(); SP_GC_ROOT(_t%d);", tf, tf);
           buf_printf(b, " sp_int _t%d = sp_range_count(_t%d); sp_int _t%d = sp_range_step(_t%d);"
                         " for (sp_int _i%d = 0; _i%d < _t%d && _i%d < _t%d; _i%d++)"
                         " sp_IntArray_push(_t%d, _t%d.first + _i%d * _t%d); _t%d; })",

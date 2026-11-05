@@ -8139,6 +8139,17 @@ int emit_pm_cond(Compiler *c, int pat, int t, TyKind pt, Buf *b) {
   return emit_pm_cond_subj(c, pat, t, pt, -1, b);
 }
 static int emit_pm_cond_subj(Compiler *c, int pat, int t, TyKind pt, int subj, Buf *b) {
+  /* a parenthesized pattern `("==" | "!=")` is the pattern it holds */
+  while (pat >= 0 && nt_kind(c->nt, pat) == NK_ParenthesesNode) {
+    int body = nt_ref(c->nt, pat, "body"), cnt = 0;
+    if (body >= 0 && nt_kind(c->nt, body) == NK_StatementsNode) {
+      const int *st = nt_arr(c->nt, body, "body", &cnt);
+      if (cnt != 1) break;
+      body = st[0];
+    }
+    if (body < 0) break;
+    pat = body;
+  }
   return emit_class_condition(c, pat, NULL, t, pt, subj, b);
 }
 static int when_builtin_value_const(Compiler *c, int cond);

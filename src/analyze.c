@@ -15571,6 +15571,22 @@ static void oa_note_src(int S, int node) {
   }
   g_oa_src_slot[g_oa_src_n] = S; g_oa_src_node[g_oa_src_n] = node; g_oa_src_n++;
 }
+/* The receiver of a bare `RECV.freeze` (no arguments, no block), else -1. */
+static int freeze_receiver(const NodeTable *nt, int v) {
+  if (v < 0 || nt_kind(nt, v) != NK_CallNode) return -1;
+  const char *nm = nt_str(nt, v, "name");
+  if (!nm || !is_freeze_name(nm) ||
+      nt_ref(nt, v, "arguments") >= 0 || nt_ref(nt, v, "block") >= 0)
+    return -1;
+  return nt_ref(nt, v, "receiver");
+}
+/* The literal that `LITERAL.freeze` freezes, else v itself: the literal
+   gives the table its kind, and the constant write sets the frozen flag
+   (emit_const_ptr_array_build). */
+static int oa_frozen_literal(const NodeTable *nt, int v) {
+  int recv = freeze_receiver(nt, v);
+  return recv >= 0 && nt_kind(nt, recv) == NK_ArrayNode ? recv : v;
+}
 /* Element evidence taken from another slot's last decision (oa_elem_evidence):
    slot T took class K from an element of slot A, which holds only if A
    narrows to K again this round (checked at resolution). Cleared with the
@@ -17615,8 +17631,7 @@ static int narrow_object_arrays(Compiler *c) {
          field also carries the element-narrowing's decision (a local bound
          from a container read), and resetting one of those to a poly ARRAY
          made the two passes trade the slot every round (#3781) */
-      if (pn == TY_INT_ARRAY_ARRAY || pn == TY_FLOAT_ARRAY_ARRAY ||
-          ty_is_obj_array(pn)) lv_set_type(&sc->locals[li], TY_POLY_ARRAY);
+      if (ty_is_ptr_array(pn)) lv_set_type(&sc->locals[li], TY_POLY_ARRAY);
       /* Enumerable's per-site copy types `__self` from its argument, so a
          nested table arrives here already narrowed and would miss the
          candidate list. The argument loop then reads "param not a candidate"
@@ -17631,7 +17646,7 @@ static int narrow_object_arrays(Compiler *c) {
     }
   }
   for (int i = 0; i < c->nconsts; i++)
-    if (ty_is_obj_array(c->consts[i].oa_pin)) lv_set_type(&c->consts[i], TY_POLY_ARRAY);
+    if (ty_is_ptr_array(c->consts[i].oa_pin)) lv_set_type(&c->consts[i], TY_POLY_ARRAY);
   /* 1. candidate slots: POLY_ARRAY locals/params (skip block params + rbs). */
   int cap = 16, n = 0;
   OAS *sl = (OAS *)malloc(sizeof(OAS) * cap);
@@ -17770,13 +17785,14 @@ static int narrow_object_arrays(Compiler *c) {
       sl[n].old_pin = cl->ivar_oa_type[iv]; cl->ivar_oa_type[iv] = TY_UNKNOWN; n++;
     }
   }
-  /* 1d. one slot per constant holding a poly array of objects (scope index
-        OA_CONST): a table built once (`BODIES = [Body.new(...), ...]`) and
-        read from the methods. A constant is kept by its leaf name, as
-        every read and write of the name reaches the one entry. Its reads
-        are vetted as a local's are, its writes are its sources, and a
-        route by name (const_get, a Symbol) keeps it boxed, and so does a
-        C extension, which reaches any constant by name (rb_const_get). */
+  /* 1d. one slot per constant holding a poly array of objects or of Integer
+        or Float rows (scope index OA_CONST): a table built once
+        (`BODIES = [Body.new(...), ...]`) and read from the methods. A
+        constant is kept by its leaf name, as every read and write of the
+        name reaches the one entry. Its reads are vetted as a local's are,
+        its writes are its sources, and a route by name (const_get, a
+        Symbol) keeps it boxed, and so does a C extension, which reaches
+        any constant by name (rb_const_get). */
   for (int i = 0; i < c->nconsts && !c->n_cext_extensions; i++) {
     LocalVar *cv = &c->consts[i];
     if (cv->type != TY_POLY_ARRAY || cv->rbs_seeded) continue;
@@ -18233,11 +18249,12 @@ static int narrow_object_arrays(Compiler *c) {
       sl[S].alive = 0;
       continue;
     }
-    oa_classify_value(c, sl, n, read_slot, call_ret, claimed, S, v);
+    int lit = oa_frozen_literal(nt, v);
+    oa_classify_value(c, sl, n, read_slot, call_ret, claimed, S, lit);
     if (tgt >= 0) claimed[tgt] = 1;   /* `M::X =`'s target path is the write, no read */
     /* nothing re-derives a constant's literal from the constant: built at
        the narrowed kind in place, or the write would hand it a poly array */
-    if (nt_kind(nt, v) == NK_ArrayNode) oa_note_src(S, v);
+    if (nt_kind(nt, lit) == NK_ArrayNode) oa_note_src(S, lit);
   }
 
   /* 5b. a return slot's own value: the method's tail expression and every
@@ -18467,11 +18484,6 @@ static int narrow_object_arrays(Compiler *c) {
     if (rows && !unbuilt) sl[i].cls = sl[i].row_cls;
   }
   oa_seeded_literal_rows(c, sl, n);
-  /* a constant holding a table of Integer or Float rows keeps the row kinds
-     its literal gives it (a const table): this pass narrows only a
-     constant's objects */
-  for (int i = 0; i < n; i++)
-    if (sl[i].sidx == OA_CONST && OA_CLS_IS_NESTED(sl[oa_uf_find(sl, i)].cls)) sl[oa_uf_find(sl, i)].alive = 0;
   /* A call step 5d decided on the class of a slot's element holds only if
      the slot narrows to that class; one whose slot does not was a dynamic
      call after all, and makes its kills. A kill can undo another such
@@ -37617,8 +37629,8 @@ static int carr_lit(const NodeTable *nt, int v, int *blk) {
   *blk = -1;
   if (v >= 0 && nt_kind(nt, v) == NK_CallNode && nt_str(nt, v, "name") && nt_ref(nt, v, "arguments") < 0) {
     const char *nm = nt_str(nt, v, "name");
-    int b = nt_ref(nt, v, "block");
-    if (sp_streq(nm, "freeze") && b < 0) v = nt_ref(nt, v, "receiver");
+    int b = nt_ref(nt, v, "block"), frozen = freeze_receiver(nt, v);
+    if (frozen >= 0) v = frozen;
     else if ((sp_streq(nm, "map") || sp_streq(nm, "collect")) && b >= 0 && nt_kind(nt, b) == NK_BlockNode) {
       *blk = b; v = nt_ref(nt, v, "receiver");
     }

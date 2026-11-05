@@ -429,7 +429,7 @@ module Net
 
     # CRuby's, handed to the TLS context the connection is made with. nil,
     # the default, leaves the context's own, VERIFY_PEER.
-    attr_accessor :verify_mode
+    attr_accessor :verify_mode, :verify_hostname, :cert_store
 
     # CRuby's `ssl_timeout` is the TLS SESSION timeout (it becomes
     # `SSLContext#timeout`), how long a cached session may be resumed -- not
@@ -490,6 +490,9 @@ module Net
       @reusable = false
       @last_communicated = 0.0
       @verify_mode = nil
+      @verify_hostname = nil
+      @cert_store = nil
+      @wire_buffer = String.new
       @debug_output = nil
       @socket = nil
       @tls = nil
@@ -591,21 +594,37 @@ module Net
     def connect
       debug "opening connection to #{conn_address}:#{@port}..."
       @socket = connect_with_timeout
+      @wire_buffer = String.new
       debug "opened"
       if @use_ssl
         begin
           context = OpenSSL::SSL::SSLContext.new
           context.verify_mode = @verify_mode unless @verify_mode.nil?
+          context.verify_hostname = @verify_hostname unless @verify_hostname.nil?
+          context.cert_store = @cert_store
           tls = OpenSSL::SSL::SSLSocket.new(@socket, context)
         rescue NameError
           raise "net/http: an https request needs the openssl package (require \"openssl\")"
         end
         tls.hostname = @address
-        tls.connect
         @tls = tls
+        # TCP and TLS each get open_timeout, rather than sharing a deadline.
+        deadline = @open_timeout && Process.clock_gettime(Process::CLOCK_MONOTONIC) + @open_timeout
+        loop do
+          raise OpenTimeout if deadline && deadline <= Process.clock_gettime(Process::CLOCK_MONOTONIC)
+          step = tls.connect_nonblock(exception: false)
+          break unless step == :wait_readable || step == :wait_writable
+          remaining = deadline ? deadline - Process.clock_gettime(Process::CLOCK_MONOTONIC) : nil
+          raise OpenTimeout if remaining && remaining <= 0
+          ready = step == :wait_readable ? IO.select([@socket], nil, nil, remaining) : IO.select(nil, [@socket], nil, remaining)
+          raise OpenTimeout if ready.nil?
+        end
       end
       @fresh = true
       nil
+    rescue StandardError
+      close_socket
+      raise
     end
 
     # Closes the session, and raises IOError when none is open, as CRuby's
@@ -674,23 +693,6 @@ module Net
       nil
     end
     private :debug
-
-    # Wait for the peer to START answering, or give up. Without this a server
-    # that accepts the connection and never replies held the caller forever,
-    # whatever read_timeout was set to (#4133).
-    #
-    # Once. Not before every read, and the reason is worth stating: after the
-    # first byte arrives the rest of the response is normally already in a
-    # buffer this cannot see -- stdio's on the plain path, the TLS record
-    # layer's on the other -- so waiting again would time out on data the
-    # caller is holding. What this covers is the failure that hangs: a peer
-    # that accepts and then says nothing. A stall PART WAY through a response
-    # is not covered, and CRuby's per-read timeout does cover it.
-    def wait_for_response
-      limit = @read_timeout.nil? ? 0 : @read_timeout
-      return if limit <= 0
-      raise ReadTimeout if IO.select([@socket], nil, nil, limit).nil?
-    end
 
     def get(path, headers = nil)
       req = HTTPRequest.new("GET", path, headers)
@@ -823,17 +825,44 @@ module Net
     end
 
     def wire_gets
-      @tls.nil? ? @socket.gets : @tls.gets
+      while (index = @wire_buffer.index("\n")).nil?
+        chunk = wire_receive(16384)
+        break if chunk.nil?
+        @wire_buffer << chunk
+      end
+      return nil if @wire_buffer.empty?
+      n = index.nil? ? @wire_buffer.bytesize : index + 1
+      line = @wire_buffer.byteslice(0, n)
+      @wire_buffer = @wire_buffer.byteslice(n, @wire_buffer.bytesize).to_s
+      line
     end
 
     def wire_read(n)
-      @tls.nil? ? @socket.readpartial(n) : @tls.readpartial(n)
-    rescue EOFError
-      nil
+      return wire_receive(n) if @wire_buffer.empty?
+      chunk = @wire_buffer.byteslice(0, n)
+      @wire_buffer = @wire_buffer.byteslice(chunk.bytesize, @wire_buffer.bytesize).to_s
+      chunk
+    end
+
+    # Try buffered TLS data before waiting; each read has its own deadline.
+    def wire_receive(n)
+      loop do
+        deadline = @read_timeout && Process.clock_gettime(Process::CLOCK_MONOTONIC) + @read_timeout
+        chunk = @tls.nil? ? @socket.read_nonblock(n, exception: false) : @tls.sysread_nonblock(n, exception: false)
+        return chunk unless chunk == :wait_readable || chunk == :wait_writable
+        remaining = deadline ? deadline - Process.clock_gettime(Process::CLOCK_MONOTONIC) : nil
+        raise ReadTimeout if remaining && remaining <= 0
+        ready = chunk == :wait_readable ? IO.select([@socket], nil, nil, remaining) : IO.select(nil, [@socket], nil, remaining)
+        raise ReadTimeout if ready.nil?
+      end
     end
 
     def wire_read_all
-      @tls.nil? ? @socket.read : @tls.read
+      body = String.new
+      while (chunk = wire_read(16384))
+        body << chunk
+      end
+      body
     end
 
     def write_request(req)
@@ -864,7 +893,6 @@ module Net
     end
 
     def read_response(method, decode_content)
-      wait_for_response
       version = ""
       code = ""
       message = ""

@@ -1,0 +1,10 @@
+body 1
+succ 1
+body 2
+1
+succ 1
+2
+[1, []]
+succ 1
+[2, []]
+NoMethodError

@@ -927,10 +927,14 @@ walks its members by the class's `succ` while `<=>` keeps them within the
 end, as CRuby's does, and a class with no `succ` raises CRuby's TypeError.
 `each` and `first(n)` walk a member at a time, so an endless one stops where
 the block breaks, and `each` answers the Range; over a boxed one (a Range of
-Dates) the Enumerable methods walk the same way. Where the class is known at
-compile time (`Ver.new(1)..Ver.new(9)`, not a boxed Date) the other
-Enumerable methods read the members' Array, so on an endless one they raise
-RangeError where CRuby runs until the block breaks. An exclusive one's `max`
+Dates) most Enumerable methods (`find`, `each_with_index`, `filter_map`,
+`count`, ...) walk the same way, but `map`, `select`, `inject`, `each_slice`,
+`take` and `lazy` read the members' Array. Where the class is known at
+compile time (`Ver.new(1)..Ver.new(9)`, not a boxed Date) the Enumerable
+methods other than `each` and `first(n)` read the members' Array. A method
+that reads the Array raises RangeError on an endless Range where CRuby runs
+until the block breaks, and calls `succ` for every member before its block
+runs for the first. An exclusive one's `max`
 is the largest member of the walk, as Enumerable#max answers it, and
 `overlap?` compares the ends by `<=>` as CRuby's does.
 

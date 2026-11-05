@@ -15782,6 +15782,7 @@ static sp_RbVal sp_poly_first(sp_RbVal v) {
      nil (a boxed 1.5..2.5 reaching a run-time-typed callable, #4804) */
   if (v.cls_id == SP_BUILTIN_FLOAT_RANGE) return sp_box_float(((sp_FloatRange *)v.v.p)->first);
   if (v.cls_id == SP_BUILTIN_STR_RANGE) return sp_poly_srange_end_box(v, 0);   /* the String itself */
+  if (v.cls_id == SP_BUILTIN_OBJ_RANGE && v.v.p) return sp_orange_first((sp_ObjRange *)v.v.p);
   /* an Enumerator answers the first item it yields, running a generator
      only that far */
   if (v.cls_id == SP_BUILTIN_ENUMERATOR && v.v.p) return sp_enum_first_boxed(v);
@@ -18665,12 +18666,12 @@ static SP_UNUSED sp_RbVal sp_orange_walker(const sp_ObjRange *r) {
 static SP_UNUSED sp_int sp_orange_walk_len(sp_ObjRange *w) {
   SP_GC_ROOT(w);
   while (!w->wdone && w->wbuf->len <= w->wnext) {
+    /* the last member's succ waits for the next pull, after its block ran */
+    if (w->wbuf->len > 0) { sp_RbVal n = sp_orange_walk_succ(w->wcur); sp_gc_wb((void *)w); w->wcur = n; }
     int st = sp_orange_walk_on(w, w->wcur);
     if (!st) { w->wdone = 1; break; }
     sp_PolyArray_push(w->wbuf, w->wcur);
     if (st == 2) { w->wdone = 1; break; }
-    sp_RbVal n = sp_orange_walk_succ(w->wcur);
-    sp_gc_wb((void *)w); w->wcur = n;
   }
   return w->wbuf->len;
 }
@@ -18760,11 +18761,14 @@ static int sp_orange_empty_region(sp_RbVal b, sp_RbVal e, int excl) {
   sp_int c = sp_poly_cmp(b, e, &ok);
   return !ok || c > 0 || (excl && c == 0);
 }
+#define SP_IS_ANY_RANGE(x) ((x).tag == SP_TAG_OBJ && (x).v.p && \
+  ((x).cls_id == SP_BUILTIN_RANGE || (x).cls_id == SP_BUILTIN_FLOAT_RANGE || (x).cls_id == SP_BUILTIN_STR_RANGE || \
+   (x).cls_id == SP_BUILTIN_TIME_RANGE || (x).cls_id == SP_BUILTIN_OBJ_RANGE))
 static sp_bool sp_orange_overlap_v(sp_RbVal a, sp_RbVal o) {
   SP_GC_ROOT_RBVAL(a); SP_GC_ROOT_RBVAL(o);
-  if (!(o.tag == SP_TAG_OBJ && o.v.p &&
-        (o.cls_id == SP_BUILTIN_RANGE || o.cls_id == SP_BUILTIN_FLOAT_RANGE || o.cls_id == SP_BUILTIN_STR_RANGE ||
-         o.cls_id == SP_BUILTIN_TIME_RANGE || o.cls_id == SP_BUILTIN_OBJ_RANGE)))
+  /* reached when either side is a Range of objects, so the receiver may be no Range */
+  if (!SP_IS_ANY_RANGE(a)) sp_raise_nomethod(sp_nomethod_msg("overlap?", a));
+  if (!SP_IS_ANY_RANGE(o))
     sp_raise_cls("TypeError", sp_sprintf("wrong argument type %s (expected Range)", sp_poly_class_name(o)));
   sp_RbVal ab = sp_poly_range_begin_v(a); SP_GC_ROOT_RBVAL(ab);
   sp_RbVal ae = sp_poly_range_end_v(a); SP_GC_ROOT_RBVAL(ae);

@@ -34,3 +34,18 @@ class H
 end
 p H.new(false).r, H.new(true).r
 p "lit".respond_to?(:t), 3.respond_to?(:t), nil.respond_to?(:t)
+
+# the first of NilClass, Object, Kernel and BasicObject that defines the
+# name answers: a private NilClass method hides a public Object one
+class Object; def sh = 1; end
+class NilClass; private def sh = 2; end
+module Kernel; def k3 = 1; end
+class NilClass; private def k3 = 1; end
+class BasicObject; def b2 = 1; end
+class Object; private def b2 = 1; end
+[false, true].each do |f|
+  x = mk(f); y = mf(f); s = ms(f)
+  p [x.respond_to?(:sh), y.respond_to?(:sh), s.respond_to?(:sh)]
+  p [x.respond_to?(:k3), s.respond_to?(:k3), x.respond_to?(:b2), s.respond_to?(:b2)]
+  p [x.respond_to?(:sh, true), s.respond_to?(:k3, true)]
+end

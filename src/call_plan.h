@@ -635,8 +635,8 @@ int cplan_nil_answer_served(Compiler *c, int id);   /* codegen_call.c: nil's ans
    else Object's (-1 for none, or one only Kernel, BasicObject or the top
    level gives it); *nilcls whether it is NilClass's. */
 int cplan_nil_program_method(Compiler *c, int call, const char *name, int *nilcls);
-/* nil responds to name through a method of the program's NilClass, Object,
-   Kernel or BasicObject: a public one, or any one with include_all */
+/* nil's answer to respond_to?(name) by the first method of the program's
+   on NilClass, Object, Kernel or BasicObject (-1 for none) */
 int cplan_nil_program_responds(Compiler *c, const char *name, int include_all);
 int cplan_nil_program_served(Compiler *c, int id);  /* codegen_call.c: nil's method's answer has the call's type */
 /* Is a nil fact's source `why` (nil_fact_why) a nil the program writes --

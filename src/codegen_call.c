@@ -33269,6 +33269,15 @@ int respond_to_static_answer(Compiler *c, int id, int recv, TyKind rt, const cha
   }
   return resolved ? yes : -1;
 }
+/* nil's static answer to respond_to?(qm, ...): by the program's method on
+   NilClass, Object, Kernel or BasicObject (*prog set), a public one or any
+   one with a literal `true` include_all; else by its builtin surface */
+int nil_responds_static(Compiler *c, const char *qm, int argc, const int *argv, int *prog) {
+  int r = argc <= 2 ?
+          cplan_nil_program_responds(c, qm, argc == 2 && nt_kind(c->nt, argv[1]) == NK_TrueNode) : -1;
+  *prog = r >= 0;
+  return r >= 0 ? r : nil_answers_name(qm) || sp_streq(qm, "rationalize");
+}
 /* the predicate form for the branch folds: a `respond_to?` call with a
    literal name whose answer is known */
 int static_respond_to_cond(Compiler *c, int pred) {
@@ -33292,17 +33301,11 @@ int static_respond_to_cond(Compiler *c, int pred) {
   int ans = respond_to_static_answer(c, pred, recv, rt, qm, ac, av);
   /* a heap object slot may hold nil, which answers only its own surface:
      the branch is not folded where the answer turns on that */
-  /* nil's answer by a method of the program's (include_all: a literal
-     `true` 2nd argument) */
-  int nil_prog = ac <= 2 &&
-                 cplan_nil_program_responds(c, qm, ac == 2 && nt_kind(nt, av[1]) == NK_TrueNode);
-  if (ans >= 0 && g_rto_nil_obj) {
-    int nil_too = nil_answers_name(qm) || sp_streq(qm, "rationalize") || nil_prog;
-    if ((ans && !nil_too) || (!ans && nil_too)) return -1;
-  }
-  /* a String, Integer or Float that may be nil, where nil answers by a
-     method of the program's: not folded */
-  if (ans >= 0 && recv >= 0 && nil_prog &&
+  int nil_prog = 0, nil_too = nil_responds_static(c, qm, ac, av, &nil_prog);
+  if (ans >= 0 && g_rto_nil_obj && ans != nil_too) return -1;
+  /* a String, Integer or Float that may be nil, where nil answers
+     otherwise by a method of the program's: not folded */
+  if (ans >= 0 && ans != nil_too && recv >= 0 && nil_prog &&
       (((rt == TY_STRING || rt == TY_STRBUF) && repr_of(c, recv).may_nil) ||
        ((rt == TY_INT || rt == TY_FLOAT) && call_returns_nullable_int(c, recv))))
     return -1;

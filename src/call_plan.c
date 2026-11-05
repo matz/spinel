@@ -1324,14 +1324,17 @@ static int ct_version_at(Compiler *c, int id, int cls, const char *name, unsigne
     if (span) *span = 2;
     return vi;
   }
-  ElabWindow w;
+  ElabMeet m;
   int kept = ct_after_point(c, id);   /* (it runs at its point only if nothing around it runs later) */
-  int at = p.region >= 0 && !kept ? elab_method_at(c, rcls, name, sg, p, &d) : ELAB_UNKNOWN;
+  const Scope *own = comp_scope_of(c, id);
+  elab_call_meet(c, id, rcls, name, sg, kept | (own && own->origin_module_ci > 0 ? ELAB_MEET_COPY : 0), &m, ds, VER_MAX_ARMS);
+  int at = m.at;
+  ElabWindow w = m.w;
+  d = m.d;
   if (at == ELAB_YES) vi = ct_def_version(c, rcls, name, sg, d, &dc);
   else if (at == ELAB_NO) none = late && !d && elab_class_live_at(c, rcls, sg, p);   /* (not an undef's, nor on a class no call can run on yet) */
-  else if (elab_call_window(c, id, &w) == ELAB_YES) {
-    if (kept) elab_window_open(c, &w);
-    n = elab_method_span(c, rcls, name, sg, &w, ds, VER_MAX_ARMS);
+  else if (m.win == ELAB_YES) {
+    n = m.n;
     for (int k = 0; k < n && k < VER_MAX_ARMS; k++) none |= late && !ds[k];
     if (n == ELAB_SPAN_ANY) none |= body;   /* (a method body's version may not be made yet) */
     if (n == 1 && ds[0]) vi = ct_def_version(c, rcls, name, sg, d = ds[0], &dc);

@@ -5180,6 +5180,16 @@ static int lr_span(Compiler *c, int cls, const char *name, int sg, const ElabWin
 int elab_method_span(Compiler *c, int cls, const char *name, int sg, const ElabWindow *w, const LrDef **out, int cap) {
   return lr_span(c, cls, name, sg, w, out, cap, NULL);
 }
+void elab_call_meet(Compiler *c, int id, int cls, const char *name, int sg, int how, ElabMeet *m, const LrDef **out, int cap) {
+  LoadPoint p = elab_point_of(c, id);
+  int after = how & 1;
+  memset(m, 0, sizeof *m);
+  m->at = p.region >= 0 && !after && !(how & ELAB_MEET_COPY) ? elab_method_at(c, cls, name, sg, p, &m->d) : ELAB_UNKNOWN;
+  m->win = ELAB_NO;
+  if (m->at != ELAB_UNKNOWN || (m->win = elab_call_window(c, id, &m->w)) != ELAB_YES) return;
+  if (after) elab_window_open(c, &m->w);
+  m->n = lr_span(c, cls, name, sg, &m->w, out, cap, NULL);
+}
 
 /* Can the program run code the record has not seen? Only through a load
    whose target it could not resolve: under --load-model=graph a LoadNode

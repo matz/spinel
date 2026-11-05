@@ -478,6 +478,18 @@ void elab_window_open(Compiler *c, ElabWindow *w);
    define). */
 enum { ELAB_SPAN_ANY = -2 };
 int elab_method_span(Compiler *c, int cls, const char *name, int sg, const ElabWindow *w, const LrDef **out, int cap);
+/* The versions call id may meet as cls's `name` (singleton when sg), the
+   one fact the call plan binds the call from (ct_version_at): where the call runs
+   at its point (how without 1: not in a block run later or kept,
+   ct_after_point), the version live there (at, d: elab_method_at); where
+   that is not known, its window (win, w: elab_call_window, opened where it
+   runs after its point) and the versions over it into out[0..cap) (n:
+   elab_method_span; 0 where not asked). With ELAB_MEET_COPY, id is asked as
+   the call in a mixin's copy of the body holding it: at no point, in the
+   window elab_call_window answers for the copy's call. */
+typedef struct { int at, win, n; const LrDef *d; ElabWindow w; } ElabMeet;
+enum { ELAB_MEET_COPY = 2 };
+void elab_call_meet(Compiler *c, int id, int cls, const char *name, int sg, int how, ElabMeet *m, const LrDef **out, int cap);
 /* does cls's chain (its singleton's when sg) hold still for `name` from p
    to the load's end: each mixin of a module that has or may have the name
    into a class on it ran before p for certain, and no code the record

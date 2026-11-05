@@ -5921,13 +5921,8 @@ static int qc_expand_read_alias(char (*path)[64], int depth, char (*chain)[64], 
   *abs_anchor = 1;
   return n;
 }
-/* While the constant pass rewrites reads (qualify_colliding_consts), every
-   write it matches is a value constant's, which the load record keys after
-   the walk (elab_const_keys): a read keeps its name. 0 for the class pass. */
-static int qc_reads_kept;
 static void qc_rename_read(const NodeTable *nt, int node, int w, const char *qn, int keep) {
   (void)w;
-  if (qc_reads_kept) return;
   if (keep) qc_keep_orig_name(nt, node);
   nt_set_str((NodeTable *)nt, node, "name", qn);
 }
@@ -6132,6 +6127,60 @@ static int qc_leaf_elsewhere(const QCWrite *w, const QCWrite *os, int on) {
   return 0;
 }
 
+/* Writes ordered by name, then by module path: the writes of one name are
+   adjacent, and those under one path too. */
+static const QCWrite *qc_order_ws;
+static int qc_write_order(const void *a, const void *b) {
+  const QCWrite *x = &qc_order_ws[*(const int *)a], *y = &qc_order_ws[*(const int *)b];
+  int r = strcmp(x->name, y->name);
+  if (r) return r;
+  if (x->depth != y->depth) return x->depth < y->depth ? -1 : 1;
+  for (int k = 0; k < x->depth; k++) if ((r = strcmp(x->path[k], y->path[k]))) return r;
+  return 0;
+}
+static int qc_name_order(const void *a, const void *b) {
+  return strcmp(*(const char *const *)a, *(const char *const *)b);
+}
+/* What the constant pass does to reads, all the writes in ws colliding: a
+   `::X` read of a colliding name is Object's X, read as the bare constant
+   X with root_anchored (the load record reads it there; the builtin
+   receivers such as `Hash.new` are recognised by the bare name); and the
+   superclass of `class Foo < Foo` is read around the header
+   (qc_outer_super), which the class pass's reads leave alone. */
+static void qc_value_reads(Compiler *c, const QCWrite *ws, int wn) {
+  const NodeTable *nt = c->nt;
+  const char **names = malloc(sizeof(char *) * (size_t)(wn ? wn : 1));
+  if (!names) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  for (int i = 0; i < wn; i++) names[i] = ws[i].name;
+  qsort(names, (size_t)wn, sizeof *names, qc_name_order);
+  qc_build_reverse_flags(c);
+  int n = nt->count;
+  for (int id = 0; id < n; id++) {
+    NodeKind k = nt_kind(nt, id);
+    if (class_def_opens_cref(nt, id)) {
+      int sup = class_def_super(nt, id);
+      int hcp = nt_ref(nt, id, "constant_path");
+      const char *hn = hcp >= 0 ? nt_str(nt, hcp, "name") : NULL;
+      if (sup >= 0 && hn && nt_kind(nt, sup) == NK_ConstantReadNode && nt_str(nt, sup, "name") &&
+          sp_streq(nt_str(nt, sup, "name"), hn))
+        nt_node_set_int((NodeTable *)nt, sup, "qc_outer_super", 1);
+    }
+    else if (k == NK_ConstantPathNode && !(qc_cpath_parent && qc_cpath_parent[id]) &&
+             !(qc_def_cpath && qc_def_cpath[id])) {
+      char chain[QC_MAXDEPTH + 1][64];
+      int abs_anchor = 0;
+      int cl = qc_read_chain(nt, id, chain, &abs_anchor);
+      const char *key = chain[0];
+      if (cl == 1 && abs_anchor && bsearch(&key, names, (size_t)wn, sizeof *names, qc_name_order)) {
+        nt_node_set_type((NodeTable *)nt, id, "ConstantReadNode");
+        nt_node_set_int((NodeTable *)nt, id, "root_anchored", 1);   /* Object's X, for the load record */
+      }
+    }
+  }
+  qc_free_reverse_flags();
+  free(names);
+}
+
 void qualify_colliding_consts(Compiler *c) {
   const NodeTable *nt = c->nt;
   QCWrite *ws = NULL; int wn = 0, wcap = 0;
@@ -6147,24 +6196,34 @@ void qualify_colliding_consts(Compiler *c) {
   QCWrite *cws = NULL; int cwn = 0, cwcap = 0;
   for (int r = 0; r < nt_nroots(nt); r++)
     qc_collect_class_writes(c, nt_root(nt, r), path, 0, &cws, &cwn, &cwcap);
-  /* keep only names written under 2+ distinct module paths */
+  /* keep only names written under 2+ distinct module paths: in name order,
+     a name's writes are under two paths when its first and last differ */
+  int *ord = malloc(sizeof(int) * (size_t)(wn ? wn : 1));
+  unsigned char *two = calloc((size_t)wn + 1, 1);
+  if (!ord || !two) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  for (int i = 0; i < wn; i++) ord[i] = i;
+  qc_order_ws = ws;
+  qsort(ord, (size_t)wn, sizeof *ord, qc_write_order);
+  for (int s0 = 0, e; s0 < wn; s0 = e) {
+    for (e = s0 + 1; e < wn && sp_streq(ws[ord[e]].name, ws[ord[s0]].name); e++) {}
+    const QCWrite *f = &ws[ord[s0]], *l = &ws[ord[e - 1]];
+    if (!qc_path_eq((char (*)[64])f->path, f->depth, (char (*)[64])l->path, l->depth))
+      for (int q = s0; q < e; q++) two[ord[q]] = 1;
+  }
+  free(ord);
   int any = 0;
   for (int i = 0; i < wn; i++) {
-    int collide = 0;
-    for (int j = 0; j < wn && !collide; j++) {
-      if (i == j || !sp_streq(ws[i].name, ws[j].name)) continue;
-      if (ws[i].depth != ws[j].depth) { collide = 1; break; }
-      for (int k = 0; k < ws[i].depth; k++) if (!sp_streq(ws[i].path[k], ws[j].path[k])) { collide = 1; break; }
-    }
+    int collide = two[i];
     if (!collide && ws[i].depth > 0 && builtin_class_id(ws[i].name) != 0) collide = 1;
     /* ... and a nested constant named like a class defined elsewhere. A
        class-defining write (`Point = Struct.new`) is the class pass's to
        qualify, as a class. */
     if (!collide && ws[i].depth > 0 && !qc_is_class_write(&ws[i], cws, cwn) &&
         qc_leaf_elsewhere(&ws[i], cws, cwn)) collide = 1;
-    if (!collide) { ws[i] = ws[--wn]; i--; continue; }
+    if (!collide) { ws[i] = ws[--wn]; two[i] = two[wn]; i--; continue; }
     any = 1;
   }
+  free(two);
   free(cws);
   if (any) {
     /* A value constant's write and the reads that match it keep their
@@ -6172,12 +6231,7 @@ void qualify_colliding_consts(Compiler *c) {
        which takes qualify's name as the key of a write of an owner it does
        not know. A write that makes a class (a builder's, a record's) is the
        class pass's. */
-    char mods[QC_MAXDEPTH][64];
-    qc_build_reverse_flags(c);
-    qc_reads_kept = 1;
-    for (int r = 0; r < nt_nroots(nt); r++) qc_rewrite_reads(c, nt_root(nt, r), mods, 0, ws, wn);
-    qc_reads_kept = 0;
-    qc_free_reverse_flags();
+    qc_value_reads(c, ws, wn);
     for (int i = 0; i < wn; i++) {
       if (ws[i].depth == 0) continue;
       char qn[512]; qc_qualified_name(qn, sizeof qn, &ws[i]);

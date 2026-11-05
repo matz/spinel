@@ -19170,6 +19170,31 @@ typedef struct {
 } IrtCtx;
 static int irt_settle_callers(Compiler *c, IrtCtx *x);
 
+typedef struct {
+  Compiler *c;
+  TyKind type;
+  int empty, boxed, gave_up;
+} IrtHashValue;
+static int irt_hash_value_leaf(const VpLeaf *leaf, void *ud) {
+  IrtHashValue *v = ud;
+  if (leaf->kind == VPK_GAVE_UP) { v->gave_up = 1; return 1; }
+  if (leaf->kind == VPK_NIL) return 0;
+  if ((leaf->reach & (VPR_TRUTHY | VPR_FALSY)) == (VPR_TRUTHY | VPR_FALSY)) return 0;
+  TyKind t = infer_type(v->c, leaf->node);
+  if ((leaf->reach & VPR_FALSY) && t != TY_POLY && t != TY_BOOL && t != TY_UNKNOWN && t != TY_NIL) return 0;
+  if (an_empty_container_kind(v->c, leaf->node) == 2) { v->empty = 1; return 0; }
+  if (t == TY_POLY_POLY_HASH) v->boxed = 1;
+  if (t != TY_NIL) v->type = ty_unify(v->type, t);
+  return 0;
+}
+static TyKind irt_hash_value(Compiler *c, int node, TyKind inferred) {
+  if (node < 0) return inferred;
+  IrtHashValue v = { .c = c, .type = TY_UNKNOWN };
+  for_each_value_position(c->nt, node, VP_FOLLOW_RETURN | VP_AND_LEFT | VPS_ALL, irt_hash_value_leaf, &v);
+  if (!v.empty || v.gave_up) return inferred;
+  return v.boxed ? TY_POLY_POLY_HASH : v.type;
+}
+
 /* The Hash a seeded Hash return of scope s answers through its explicit
    returns: their types joined, a `return nil` (or a bare one) left out, as
    the seed's pointer holds nil as NULL whatever the Hash's form. *boxed:
@@ -19183,6 +19208,7 @@ static TyKind irt_returns_hash(Compiler *c, int s, const IrtCtx *x, int *boxed) 
   if (!x->ret_head || !x->ret_next) return x->ret_acc[s];
   for (int id = x->ret_head[s]; id >= 0; id = x->ret_next[id]) {
     TyKind rt = (x->ret_narrow && x->ret_narrow[id]) ? x->ret_narrow[id] : return_node_type(c, id);
+    rt = irt_hash_value(c, return_value_node(c, id), rt);
     if (rt == TY_POLY_POLY_HASH) *boxed = 1;
     if (rt != TY_NIL) r = ty_unify(r, rt);
   }
@@ -19420,6 +19446,7 @@ static int irt_scope(Compiler *c, int s, IrtCtx *x) {
   TyKind hbr = TY_UNKNOWN;
   if (sc->ret_rbs_seeded && ty_is_hash(sc->ret)) {
     hbr = sc->body >= 0 ? infer_type(c, sc->body) : TY_UNKNOWN;
+    hbr = irt_hash_value(c, sc->body, hbr);
     /* (a nil the body ends in is the seed's NULL too: only the Hashes the
        method answers decide the form, `return params` beside a last nil) */
     if (hbr == TY_NIL) hbr = TY_UNKNOWN;

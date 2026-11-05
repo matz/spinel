@@ -181,6 +181,15 @@ void emit_puts_one(Compiler *c, int arg, Buf *b, int indent) {
     buf_puts(b, "puts(sp_re_to_s_str((void *)("); emit_expr(c, arg, b); buf_puts(b, ")));\n");
     return;
   }
+  else if (t == TY_TIME && program_has_timesub(c)) {
+    /* a Time subclass instance reads as its Time here: boxed, it shows
+       through its class's to_s (one of its own too), as print and "#{}" do.
+       (sp_box_time keeps the subclass: the instance starts with its Time) */
+    int tv = ++g_tmp;
+    buf_printf(b, "{ SP_TIME_TMP(_t%d) = (sp_Time *)(", tv); emit_expr(c, arg, b);
+    /* (nil, a NULL slot, is puts nil's empty line) */
+    buf_printf(b, "); sp_poly_puts(_t%d ? sp_box_time(_t%d) : sp_box_nil()); }\n", tv, tv);
+  }
   else if (t == TY_TIME) {
     int tv = ++g_tmp;
     buf_printf(b, "{ SP_TIME_TMP(_t%d) = ", tv); emit_expr(c, arg, b);

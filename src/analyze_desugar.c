@@ -24495,15 +24495,26 @@ static int rbself_body_defs(NodeTable *nt, int n0, int module, const char *cn, c
    `String.include(M)`), and nothing extends with it: its methods then run
    with that builtin value as self, as a reopening's do. NULL otherwise, a
    mixin the walk cannot place included. */
-static const char *rbself_module_host_in(NodeTable *nt, int n0, const char *mod, int object);
+static const char *rbself_module_host_in(NodeTable *nt, int n0, const char *mod, int strict);
 static const char *rbself_module_host(NodeTable *nt, int n0, const char *mod) {
   return rbself_module_host_in(nt, n0, mod, 0);
 }
-/* the same, `object` set: Object is a host too (`class Object; include M;
+/* the same, `strict` set (the ivar rewrite, which changes what the
+   module's methods read): Object is a host too (`class Object; include M;
    end`, the module's methods then run on every value as a reopening of
-   Object's do) */
-static const char *rbself_module_host_in(NodeTable *nt, int n0, const char *mod, int object) {
+   Object's do); a class nested in another body (`module A; class
+   Integer`) is the program's own, no host; and the module's name is read
+   nowhere but in those include and prepend calls and its own headers, so
+   no alias (`QQ = Q`), `send(:include, Q)` or `Q.instance_method` can
+   take its methods to another class unseen */
+static const char *rbself_module_host_in(NodeTable *nt, int n0, const char *mod, int strict) {
   const char *host = NULL;
+  int reads = 0, used = 0;
+  for (int id = 0; strict && id < n0; id++) {
+    NodeKind k = nt_kind(nt, id);
+    if (k == NK_ModuleNode) { int cp = nt_ref(nt, id, "constant_path"); if (cp >= 0 && sp_streq(nt_str(nt, cp, "name") ? nt_str(nt, cp, "name") : "", mod)) reads--; }
+    if ((k == NK_ConstantReadNode || k == NK_ConstantPathNode) && sp_streq(nt_str(nt, id, "name") ? nt_str(nt, id, "name") : "", mod)) reads++;
+  }
   for (int id = 0; id < n0; id++) {
     if (nt_kind(nt, id) != NK_CallNode) continue;
     const char *nm = nt_str(nt, id, "name");
@@ -24513,8 +24524,9 @@ static const char *rbself_module_host_in(NodeTable *nt, int n0, const char *mod,
     int names = 0;
     for (int i = 0; i < an; i++)
       if (nt_kind(nt, av[i]) == NK_ConstantReadNode && sp_streq(nt_str(nt, av[i], "name") ? nt_str(nt, av[i], "name") : "", mod))
-        names = 1;
+        names++;
     if (!names) continue;
+    used += names;
     if (sp_streq(nm, "extend")) return NULL;
     const char *target = NULL;
     int recv = nt_ref(nt, id, "receiver");
@@ -24525,12 +24537,17 @@ static const char *rbself_module_host_in(NodeTable *nt, int n0, const char *mod,
         int b = class_def_body(nt, m), bn = 0;
         const int *bs = b >= 0 ? nt_arr(nt, b, "body", &bn) : NULL;
         for (int k = 0; k < bn; k++)
-          if (bs[k] == id) { target = class_def_name(nt, m); break; }
+          if (bs[k] == id) {
+            target = strict && engine_lexically_nested(nt, m) ? NULL : class_def_name(nt, m);
+            if (!target) return NULL;
+            break;
+          }
       }
-    if (!target || !(rbself_builtin(target) || (object && sp_streq(target, "Object"))) ||
+    if (!target || !(rbself_builtin(target) || (strict && sp_streq(target, "Object"))) ||
         (host && !sp_streq(host, target))) return NULL;
     host = target;
   }
+  if (strict && reads != used) return NULL;
   return host;
 }
 

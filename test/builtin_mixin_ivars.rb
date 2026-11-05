@@ -61,3 +61,17 @@ end
 class String; include Fn; end
 Fn.instance_variable_set(:@fget, 9)
 p Fn.fget
+
+# a program class that only shares a builtin's name keeps the module's
+# ivars as its own
+module NsAttrs
+  attr_accessor :nv
+end
+module Ns
+  class Integer
+    include NsAttrs
+  end
+end
+o = Ns::Integer.new
+o.nv = 8
+p o.nv

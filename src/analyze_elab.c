@@ -4725,12 +4725,23 @@ static int lr_runs_in(const LoadRecord *r, int a, int b) {
   return (b < r->nst ? r->st[b].nrun : r->nrun) - (a < r->nst ? r->st[a].nrun : r->nrun);
 }
 
+/* The node the climb to a point goes on to from a: its parent; from a
+   clone no file's root reaches (a method body a pass copied: a mixin's
+   copy, a module_function's), the node it copies, where it stands as the
+   call plan's frame stands it (lr_plan_place) */
+static int lr_climb_up(Compiler *c, const int *par, int a) {
+  if (par[a] >= 0) return par[a];
+  char how = 0; int x = 0, k = 0; unsigned pass = 0;
+  int o = nt_origin(c->nt, a, &how, &x, &pass, &k);
+  return how == 'c' && o >= 0 && o < a ? o : -1;
+}
+
 int elab_call_window(Compiler *c, int id, ElabWindow *w) {
   LoadRecord *r = elab_fresh(c);
   const int *par = comp_parent_map(c);
   int a = id;
   *w = (ElabWindow){ { -1, -1 }, { -1, -1 }, 0, 0 };
-  while (a >= 0 && a < r->n && elab_point_of(c, a).region < 0) a = par[a];
+  while (a >= 0 && a < r->n && elab_point_of(c, a).region < 0) a = lr_climb_up(c, par, a);
   LoadPoint p = elab_point_of(c, a), end;
   if (!r->recorded || p.region < 0) return ELAB_UNKNOWN;
   lr_run_points(c);

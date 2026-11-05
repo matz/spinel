@@ -12915,6 +12915,8 @@ static void emit_disp_arm_assign(Compiler *c, const Scope *s, const char *call, 
   }
   else if (g_disp_ro && !arm_o) buf_printf(b, "%s(%s)", oint_of(disp_ret), call);
   else if (!g_disp_ro && arm_o) buf_printf(b, "%s(%s)", oint_arg(arm_ret), call);
+  /* ty_unify widens an Integer arm beside a Bignum one: the slot is a pointer */
+  else if (disp_ret == TY_BIGINT && arm_ret == TY_INT) buf_printf(b, "sp_bigint_new_int(%s)", call);
   else buf_puts(b, call);
   if (one_s) buf_puts(b, ")");
   buf_puts(b, "; ");

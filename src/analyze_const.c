@@ -447,7 +447,8 @@ void an_const_presence(Compiler *c) {
     }
   }
   for (int id = 0; id < (int)nn && id < nt->count; id++) {
-    if (cref[id]) nt_node_set_str((NodeTable *)nt, id, "const_cref", cref[id] > 1 ? w.crefs[cref[id] - 2] : "");
+    /* (a read a desugar made with its holder's name keeps it) */
+    if (cref[id] && !nt_str(nt, id, "const_cref")) nt_node_set_str((NodeTable *)nt, id, "const_cref", cref[id] > 1 ? w.crefs[cref[id] - 2] : "");
     if (own[id]) nt_node_set_str((NodeTable *)nt, id, "own_presence", "1");
   }
   free(cref); free(own);

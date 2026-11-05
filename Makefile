@@ -6127,6 +6127,17 @@ MODULE_FUNCTIONS_LIMIT ?= 2.4
 # the classes; filed, 2.21x, as the copies alone read without the
 # questions. The limit sits between them.
 SHADOWED_EXTENDS_LIMIT ?= 2.35
+# N classes, each given a module by `K.include(M)` at the top level, a
+# singleton module by `singleton_class.prepend(S)` in its body and a module
+# that extends itself (test/scale/explicit_mixins.sh), compiled to C at N=200
+# and N=400: the work of that program less the work of the same classes with
+# the modules' methods their own (`plain`), which is what the mixins and
+# their copies cost. The load record's cells, rewritten after each copy, read
+# 3.03x at 2x the classes, and 2.70x with the mixin passes held (elab_hold);
+# a walk of every node per top-level mixin (erm_declared_as) was most of
+# the rest: 2.42x with the names indexed once a pass, about what the plain
+# program itself grows by (2.36x). The limit sits between them.
+EXPLICIT_MIXINS_LIMIT ?= 2.55
 # A chain of forty bangs over a String a method answers, compiled to C with
 # --share-strings under a CPU-time limit, as the hash-literal fan-out is:
 # strbuf_bang_self_local asked each link once per path that reaches it,
@@ -6235,6 +6246,12 @@ scale-test: $(SPINEL_WORK)
 	seb=$$(sw -c -o "$$tmp/se8.c" "$$tmp/se8.rb") || { rm -rf "$$tmp"; exit 1; }; \
 	spa=$$(sw -c -o "$$tmp/sp4.c" "$$tmp/sp4.rb") || { rm -rf "$$tmp"; exit 1; }; \
 	spb=$$(sw -c -o "$$tmp/sp8.c" "$$tmp/sp8.rb") || { rm -rf "$$tmp"; exit 1; }; \
+	gen explicit_mixins 200 em2.rb; gen explicit_mixins 400 em4.rb; \
+	gen explicit_mixins "200 plain" ep2.rb; gen explicit_mixins "400 plain" ep4.rb; \
+	ema=$$(sw -c -o "$$tmp/em2.c" "$$tmp/em2.rb") || { rm -rf "$$tmp"; exit 1; }; \
+	emb=$$(sw -c -o "$$tmp/em4.c" "$$tmp/em4.rb") || { rm -rf "$$tmp"; exit 1; }; \
+	epa=$$(sw -c -o "$$tmp/ep2.c" "$$tmp/ep2.rb") || { rm -rf "$$tmp"; exit 1; }; \
+	epb=$$(sw -c -o "$$tmp/ep4.c" "$$tmp/ep4.rb") || { rm -rf "$$tmp"; exit 1; }; \
 	gen module_functions "100 read" jr1.rb; gen module_functions "200 read" jr2.rb; \
 	jra=$$(sw -c -o "$$tmp/jr1.c" "$$tmp/jr1.rb") || { rm -rf "$$tmp"; exit 1; }; \
 	jrb=$$(sw -c -o "$$tmp/jr2.c" "$$tmp/jr2.rb") || { rm -rf "$$tmp"; exit 1; }; \
@@ -6335,6 +6352,11 @@ scale-test: $(SPINEL_WORK)
 	  r = b / a; \
 	  printf "scale-test: shadowed extend work at 2x the classes is %.2fx (limit %.2f)\n", r, lim; exit (r > lim) }' || \
 	  { [ $$? -eq 2 ] || echo "scale-test: FAIL (each shadowing question read every call of the name: see lr_readers)"; exit 1; }; \
+	awk -v na="$$ema" -v nb="$$emb" -v ta="$$epa" -v tb="$$epb" -v lim="$(EXPLICIT_MIXINS_LIMIT)" 'BEGIN { a = na - ta; b = nb - tb; \
+	  if (a <= 0 || b <= 0) { printf "scale-test: FAIL (the mixed-in classes cost no more than the plain ones, %d - %d and %d - %d: the difference measures nothing; see test/scale/explicit_mixins.sh)\n", na, ta, nb, tb; exit 2 } \
+	  r = b / a; \
+	  printf "scale-test: explicit mixin work at 2x the classes is %.2fx (limit %.2f)\n", r, lim; exit (r > lim) }' || \
+	  { [ $$? -eq 2 ] || echo "scale-test: FAIL (the mixins grew superlinearly: a walk of the program per mixin statement, see erm_declared_as, or the load record's cells rewritten per copy, see elab_hold)"; exit 1; }; \
 	awk -v a="$$qta" -v b="$$qtb" -v lim="$(COND_DEFS_CPU_LIMIT)" 'BEGIN { if (a <= 0) a = 0.01; r = b / a; \
 	  printf "scale-test: open method history CPU time at 4x the histories is %.2fx (limit %.2f)\n", r, lim; exit (r > lim) }' || \
 	  { echo "scale-test: FAIL (the open histories' asks or makes did work the count does not see once per history, such as a whole-program map: see ver_entries_build)"; exit 1; }

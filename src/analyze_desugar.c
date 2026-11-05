@@ -1546,14 +1546,30 @@ int desugar_kernel_reopen(Compiler *c) {
    builtin such as Thread, whose own pass takes Thread.attr_accessor, or a
    constant holding a class, `AliasObject = Object`, which `class AliasObject`
    would not reopen here) */
+/* the classes and modules the program declares, by name in node order
+   (the first declaration answers), grown over the nodes a rewrite adds;
+   and whether the program defines a mixin hook or calls autoload. One
+   pass of desugar_explicit_receiver_mixin builds them once: asked per
+   statement by a walk of every node, N top-level mixins took N^2. */
+static struct { char **names; int *kind; int n, cap, upto; NameIdx ix; int hooks; } erm_d;
+static void erm_decls_reset(void) { erm_d.n = 0; erm_d.upto = 0; erm_d.hooks = -1; erm_d.ix.list = NULL; }
 static int erm_declared_as(const NodeTable *nt, const char *leaf) {
-  for (int id = 0; id < nt->count; id++) {
-    int mod = class_def_is_module(nt, id);
+  for (; erm_d.upto < nt->count; erm_d.upto++) {
+    int id = erm_d.upto, mod = class_def_is_module(nt, id);
     if (!mod && !class_def_is_class(nt, id)) continue;
     const char *n = class_def_name(nt, id);
-    if (n && sp_streq(n, leaf)) return mod ? 2 : 1;
+    if (!n) continue;
+    if (erm_d.n == erm_d.cap) {
+      erm_d.cap = erm_d.cap ? erm_d.cap * 2 : 64;
+      erm_d.names = realloc(erm_d.names, sizeof(char *) * (size_t)erm_d.cap);
+      erm_d.kind = realloc(erm_d.kind, sizeof(int) * (size_t)erm_d.cap);
+      if (!erm_d.names || !erm_d.kind) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    }
+    erm_d.names[erm_d.n] = (char *)n;
+    erm_d.kind[erm_d.n++] = mod ? 2 : 1;
   }
-  return 0;
+  int i = name_idx_find(&erm_d.ix, erm_d.names, erm_d.n, leaf);
+  return i < 0 ? 0 : erm_d.kind[i];
 }
 /* `K.send(:include, M)` (or __send__ / public_send) is K.include(M): the name
    it calls, and the index of its first mixin argument; NULL when it is not one */
@@ -1603,18 +1619,21 @@ static int erm_body_declares(const NodeTable *nt, const int *parent, int encl, c
 static int erm_args_modules(const NodeTable *nt, const int *av, int first, int an) {
   if (!av || an - first < 1) return 0;
   /* (a program that defines a mixin hook keeps the reopening, whose body
-     fires it) */
-  static const char *const hooks[] = { "included", "prepended", "append_features", "prepend_features", NULL };
-  NT_FOREACH_KIND(nt, NK_DefNode, d) {
-    const char *dn = nt_str(nt, d, "name");
-    for (int h = 0; dn && hooks[h]; h++) if (sp_streq(dn, hooks[h])) return 0;
+     fires it; nor does one that autoloads: a module an autoload brings may
+     be named before the walk has it. A rewrite adds neither.) */
+  if (erm_d.hooks < 0) {
+    static const char *const hooks[] = { "included", "prepended", "append_features", "prepend_features", NULL };
+    erm_d.hooks = 0;
+    NT_FOREACH_KIND(nt, NK_DefNode, d) {
+      const char *dn = nt_str(nt, d, "name");
+      for (int h = 0; dn && hooks[h]; h++) if (sp_streq(dn, hooks[h])) erm_d.hooks = 1;
+    }
+    NT_FOREACH_KIND(nt, NK_CallNode, a) {
+      const char *an_ = nt_str(nt, a, "name");
+      if (an_ && sp_streq(an_, "autoload")) erm_d.hooks = 1;
+    }
   }
-  /* (nor does one that autoloads: a module an autoload brings may be
-     named before the walk has it) */
-  NT_FOREACH_KIND(nt, NK_CallNode, a) {
-    const char *an_ = nt_str(nt, a, "name");
-    if (an_ && sp_streq(an_, "autoload")) return 0;
-  }
+  if (erm_d.hooks) return 0;
   for (int i = first; i < an; i++) {
     NodeKind k = nt_kind(nt, av[i]);
     const char *mn = k == NK_ConstantReadNode || k == NK_ConstantPathNode ? nt_str(nt, av[i], "name") : NULL;
@@ -1891,6 +1910,7 @@ static int desugar_method_body_singleton_mixin(Compiler *c) {
 int desugar_explicit_receiver_mixin(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int n0 = nt->count, changed = 0;
+  erm_decls_reset();
   int *parent = NULL;   /* (made when a body's statement names another class: erm_body_declares) */
   int parent_n = 0;     /* the node count it was made at: a rewrite adds class nodes, read past its end */
   for (int id = 0; id < n0; id++) {

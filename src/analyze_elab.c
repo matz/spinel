@@ -2238,6 +2238,7 @@ static int lr_foreign_mixin(ElabRec *x, int node, const LrMixin *m, int cls, int
   return 0;
 }
 
+static int lr_const_root_undefined(const NodeTable *nt, int n);
 static void lr_call(ElabRec *x, int node, int fc, int fs, unsigned char *vs, int fnode, int may, int nested) {
   const NodeTable *nt = x->c->nt;
   const char *nm = nt_str(nt, node, "name");
@@ -2321,6 +2322,11 @@ static void lr_call(ElabRec *x, int node, int fc, int fs, unsigned char *vs, int
          (codegen reads the mark), and no mixin, not of the modules beside it */
       if (lr_mix_names_class(x->c, av, ac)) { nt_node_set_int((NodeTable *)nt, node, "mixin_class_arg", 1); continue; }
       if (mod < 0 && mod != LR_LATER) opaque = LR_OPAQUE_DEFINES;
+      /* a constant the program defines nowhere: the statement raises
+         NameError where it runs, and mixes nothing in (codegen reads the
+         mark) */
+      if (mod < 0 && mod != LR_LATER && lr_const_root_undefined(nt, av[i]))
+        nt_node_set_int((NodeTable *)nt, node, "mixin_undefined_const", 1);
       if (!k) continue;
       k->mix = lr_grow(k->mix, &k->cmix, k->nmix, sizeof *k->mix);
       x->r->hgen++;
@@ -7020,6 +7026,38 @@ static int lr_form_leads(const NodeTable *nt, int stmt, int form) {
    prepend of core modules alone (`include Comparable`), which the record
    keeps as opaque since it does not hold the module, and which defines no
    method of the program's on the includer (#11040) */
+/* Is constant read n (`Missing`, `Missing::Thing`) one whose first name
+   the program defines nowhere -- no class or module of it, no constant
+   write, no const_set or autoload naming it, no const_missing to answer
+   it -- and no builtin has? Reading it raises NameError, so a mixin of it
+   mixes nothing in (#11132). */
+static int lr_const_root_undefined(const NodeTable *nt, int n) {
+  while (n >= 0 && nt_kind(nt, n) == NK_ConstantPathNode && nt_ref(nt, n, "parent") >= 0) n = nt_ref(nt, n, "parent");
+  NodeKind k = n >= 0 ? nt_kind(nt, n) : NK_NONE;
+  const char *nm = k == NK_ConstantReadNode || k == NK_ConstantPathNode ? nt_str(nt, n, "name") : NULL;
+  if (!nm || is_builtin_class_name(nm) || is_builtin_module_const_name(nm)) return 0;
+  for (int id = 0; id < nt->count; id++) {
+    NodeKind ik = nt_kind(nt, id);
+    const char *in = NULL;
+    if (ik == NK_ClassNode || ik == NK_ModuleNode) in = class_def_name(nt, id);
+    else if (ik == NK_ConstantWriteNode || ik == NK_ConstantOrWriteNode || ik == NK_ConstantTargetNode) in = nt_str(nt, id, "name");
+    else if (ik == NK_ConstantPathTargetNode) in = nt_str(nt, id, "name");
+    else if (ik == NK_DefNode) { const char *dn = nt_str(nt, id, "name"); if (dn && sp_streq(dn, "const_missing")) return 0; }
+    else if (ik == NK_CallNode) {
+      const char *cn = nt_str(nt, id, "name");
+      if (cn && (sp_streq(cn, "const_set") || sp_streq(cn, "autoload"))) {
+        int an = nt_ref(nt, id, "arguments"), ac = 0;
+        const int *av = an >= 0 ? nt_arr(nt, an, "arguments", &ac) : NULL;
+        if (ac < 1) return 0;
+        NodeKind ak = nt_kind(nt, av[0]);
+        in = ak == NK_SymbolNode ? nt_str(nt, av[0], "value") : ak == NK_StringNode ? nt_str(nt, av[0], "unescaped") : NULL;
+        if (!in) return 0;   /* a computed name may be any */
+      }
+    }
+    if (in && sp_streq(in, nm)) return 0;
+  }
+  return 1;
+}
 static int lr_opaque_may_define_hook(Compiler *c, int k) {
   const NodeTable *nt = c->nt;
   const LrHist *op = lr_hist(c->lrec, LR_KEY_OPAQUE, lr_const_owner(k), "", 0);
@@ -7031,10 +7069,11 @@ static int lr_opaque_may_define_hook(Compiler *c, int k) {
       int an = nt_ref(nt, n, "arguments"), ac = 0;
       const int *av = an >= 0 ? nt_arr(nt, an, "arguments", &ac) : NULL;
       core = ac > 0;
+      /* (core modules, or constants the program defines nowhere: a NameError) */
       for (int q = 0; q < ac && core; q++)
-        core = nt_kind(nt, av[q]) == NK_ConstantReadNode && nt_str(nt, av[q], "name") &&
-               is_builtin_module_const_name(nt_str(nt, av[q], "name")) &&
-               lr_class_ref_at(c, av[q], NULL) < 0;
+        core = (nt_kind(nt, av[q]) == NK_ConstantReadNode && nt_str(nt, av[q], "name") &&
+                is_builtin_module_const_name(nt_str(nt, av[q], "name")) &&
+                lr_class_ref_at(c, av[q], NULL) < 0) || lr_const_root_undefined(nt, av[q]);
     }
     if (!core) return 1;
   }

@@ -19678,6 +19678,27 @@ static int emit_call_stmt(Compiler *c, int id, Buf *b, int indent, const NodeTab
          define raises NameError when the body executes, per CRuby, and a
          mixin of a class (`include K`) raises TypeError there (the load
          record marks it, and mixes nothing in). */
+      /* a mixin of a constant the program defines nowhere raises its
+         NameError here, as CRuby's lookup does (the load record marks it) */
+      if (nt_int(nt, id, "mixin_undefined_const", 0)) {
+        int an = nt_ref(nt, id, "arguments"), ac = 0;
+        const int *av = an >= 0 ? nt_arr(nt, an, "arguments", &ac) : NULL;
+        int r = ac > 0 ? av[0] : -1;
+        for (int q = 0; q < ac; q++) {   /* the first argument the lookup fails on */
+          int x = av[q];
+          while (x >= 0 && nt_kind(nt, x) == NK_ConstantPathNode && nt_ref(nt, x, "parent") >= 0) x = nt_ref(nt, x, "parent");
+          const char *xn = x >= 0 ? nt_str(nt, x, "name") : NULL;
+          if (xn && comp_class_index(c, xn) < 0 && !comp_const(c, xn)) { r = x; break; }
+        }
+        while (r >= 0 && nt_kind(nt, r) == NK_ConstantPathNode && nt_ref(nt, r, "parent") >= 0) r = nt_ref(nt, r, "parent");
+        const char *rn = r >= 0 ? nt_str(nt, r, "name") : NULL;
+        int cid = g_class_body_id >= 0 ? g_class_body_id : -1;
+        const char *own = cid >= 0 ? class_ruby_name(c, cid) : NULL;
+        emit_indent(b, indent);
+        buf_printf(b, "sp_raise_cls(\"NameError\", \"uninitialized constant %s%s%s\");\n",
+                   own ? own : "", own ? "::" : "", rn ? rn : "");
+        return 1;
+      }
       if (nt_int(nt, id, "mixin_class_arg", 0)) {
         emit_indent(b, indent);
         buf_puts(b, "sp_raise_cls(\"TypeError\", \"wrong argument type Class (expected Module)\");\n");

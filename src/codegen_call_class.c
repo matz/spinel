@@ -549,8 +549,16 @@ int emit_call_reflection_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
     }
     if (qm) {
       int ans = respond_to_static_answer(c, id, recv, rt, qm, argc, argv);
-      if (ans >= 0 && g_rto_nil_obj) {
-        int nil_too = nil_answers_name(qm) || sp_streq(qm, "rationalize");
+      /* nil's own answer: its builtin surface, or a method of the
+         program's NilClass, Object, Kernel or BasicObject (a public one, or
+         any one with a literal `true` include_all) */
+      int nil_prog = argc <= 2 &&
+                     cplan_nil_program_responds(c, qm, argc == 2 && nt_kind(nt, argv[1]) == NK_TrueNode);
+      /* (a String slot that may hold nil holds it as NULL, as an object's) */
+      int nil_str = ans >= 0 && !g_rto_nil_obj && recv >= 0 && nil_prog &&
+                    (rt == TY_STRING || rt == TY_STRBUF) && repr_of(c, recv).may_nil;
+      if (ans >= 0 && (g_rto_nil_obj || nil_str)) {
+        int nil_too = nil_answers_name(qm) || sp_streq(qm, "rationalize") || nil_prog;
         if (ans && !nil_too) { buf_puts(b, "(("); emit_expr(c, recv, b); buf_puts(b, ") != NULL)"); return 1; }
         if (!ans && nil_too) { buf_puts(b, "(("); emit_expr(c, recv, b); buf_puts(b, ") == NULL)"); return 1; }
       }
@@ -561,9 +569,12 @@ int emit_call_reflection_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
         char ref[24];
         buf_puts(b, "({ "); emit_sentinel_bind(c, rt, recv, ref, sizeof ref, b);
         emit_slot_truthy(rt, ref, b);
-        buf_printf(b, " ? %d : sp_poly_responds_builtin(sp_box_nil(), ", ans);
-        emit_str_literal(b, qm);
-        buf_puts(b, "); })");
+        if (nil_prog) buf_printf(b, " ? %d : 1; })", ans);
+        else {
+          buf_printf(b, " ? %d : sp_poly_responds_builtin(sp_box_nil(), ", ans);
+          emit_str_literal(b, qm);
+          buf_puts(b, "); })");
+        }
         return 1;
       }
       /* boxed when the call is typed so ($stderr, a global, is folded here

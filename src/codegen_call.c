@@ -33292,10 +33292,20 @@ int static_respond_to_cond(Compiler *c, int pred) {
   int ans = respond_to_static_answer(c, pred, recv, rt, qm, ac, av);
   /* a heap object slot may hold nil, which answers only its own surface:
      the branch is not folded where the answer turns on that */
+  /* nil's answer by a method of the program's (include_all: a literal
+     `true` 2nd argument) */
+  int nil_prog = ac <= 2 &&
+                 cplan_nil_program_responds(c, qm, ac == 2 && nt_kind(nt, av[1]) == NK_TrueNode);
   if (ans >= 0 && g_rto_nil_obj) {
-    int nil_too = nil_answers_name(qm) || sp_streq(qm, "rationalize");
+    int nil_too = nil_answers_name(qm) || sp_streq(qm, "rationalize") || nil_prog;
     if ((ans && !nil_too) || (!ans && nil_too)) return -1;
   }
+  /* a String, Integer or Float that may be nil, where nil answers by a
+     method of the program's: not folded */
+  if (ans >= 0 && recv >= 0 && nil_prog &&
+      (((rt == TY_STRING || rt == TY_STRBUF) && repr_of(c, recv).may_nil) ||
+       ((rt == TY_INT || rt == TY_FLOAT) && call_returns_nullable_int(c, recv))))
+    return -1;
   return ans;
 }
 

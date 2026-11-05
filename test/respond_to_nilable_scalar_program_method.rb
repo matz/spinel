@@ -1,0 +1,36 @@
+# nil answers respond_to? by the program's own NilClass and Object methods,
+# also where the receiver is a String, an Integer or a Float that may be nil
+class NilClass
+  def t = 1
+  private def pv = 2
+end
+class Object
+  def zz = 3
+end
+class Foo; end
+
+def mk(f) = f ? 7 : nil
+def mf(f) = f ? 1.5 : nil
+def ms(f) = f ? "s" : nil
+def ma(f) = f ? [1] : nil
+def mo(f) = f ? Foo.new : nil
+
+[false, true].each do |f|
+  x = mk(f); y = mf(f); s = ms(f); a = ma(f); o = mo(f)
+  puts(x.respond_to?(:t) ? "x-yes" : "x-no")
+  if s.respond_to?(:t) then puts "s-yes" else puts "s-no" end
+  p y.respond_to?(:t), a.respond_to?(:t), o.respond_to?(:t)
+  p x.respond_to?(:zz), s.respond_to?(:zz), a.respond_to?(:zz), o.respond_to?(:zz)
+  # a private method answers only with include_all
+  p x.respond_to?(:pv), x.respond_to?(:pv, true), s.respond_to?(:pv), s.respond_to?(:pv, true)
+  p x.respond_to?(:t, false), s.respond_to?(:t, true)
+  # builtin names keep their answers
+  p x.respond_to?(:succ), s.respond_to?(:upcase), x.respond_to?(:even?)
+end
+
+class H
+  def initialize(f) = (@v = f ? "q" : nil)
+  def r = @v.respond_to?(:t)
+end
+p H.new(false).r, H.new(true).r
+p "lit".respond_to?(:t), 3.respond_to?(:t), nil.respond_to?(:t)

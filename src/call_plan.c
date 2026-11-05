@@ -4832,6 +4832,20 @@ int cplan_nil_program_method(Compiler *c, int call, const char *name, int *nilcl
   return mi;
 }
 
+/* Does nil respond to name through a method of the program's on
+   NilClass, Object, Kernel or BasicObject: a public one, or any one with
+   include_all (a respond_to? with a literal `true` 2nd argument)? */
+int cplan_nil_program_responds(Compiler *c, const char *name, int include_all) {
+  static const int owners[] = { CORE_NILCLASS, CORE_OBJECT, CORE_KERNEL, CORE_BASIC_OBJECT, -1 };
+  for (int i = 0; owners[i] >= 0; i++) {
+    int k = comp_core_class(c, owners[i]);
+    if (k >= 0 && call_target(c, -1, k, name, 0, NULL) >= 0 &&
+        (include_all || comp_method_vis_declared(c, k, name, NULL) == SP_VIS_PUBLIC))
+      return 1;
+  }
+  return 0;
+}
+
 /* Does the receiver of call `call` (of type rt) run another method than
    nil does, or none: a reopened String's, Array's or Hash's, or the
    object's class's own, where nil runs NilClass's or Object's? */

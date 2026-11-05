@@ -5,6 +5,9 @@
 # its own name (the default text runs for its instance), with both inspect
 # and to_s owned the super has a default of its own to reach, a member named
 # to_s does not answer for it, and a struct holding itself stops as usual.
+# The program's own struct_inspect or _struct_inspect is no default, and a
+# super's block argument runs for its effect, here and in a plain class's
+# super to Kernel#inspect.
 Sup = Struct.new(:a) do
   def inspect = "S" + super
 end
@@ -45,3 +48,20 @@ n = Sup.new(Sup.new(1))
 p n
 x = [Sup.new(13), Sub3.new(14), 5][ARGV.size + 1]
 p x
+Own = Struct.new(:o) do
+  def inspect = "i:" + super
+  def to_s = "s:" + super
+  def struct_inspect = "mine"
+  def _struct_inspect = "under"
+end
+p Own.new(15)
+puts Own.new(16)
+p Own.new(17).struct_inspect, Own.new(18)._struct_inspect
+Eff = Struct.new(:f) do
+  def inspect = "E" + super(&(puts("side"); nil))
+end
+p Eff.new(19)
+class Plain
+  def inspect = "P" + super(&(puts("plain side"); nil)).sub(/0x\h+/, "X")
+end
+p Plain.new

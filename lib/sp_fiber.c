@@ -1050,10 +1050,17 @@ static void sp_fiber_check_transfer(sp_Fiber*f){
     else g=g->return_to;
   }
 }
+extern SP_TLS void *_sp_ret_strbuf;   /* sp_alloc.h */
 /* The switch itself, past CRuby's checks: save prev's (the current fiber's)
    context and run f. Inlined, so a transfer costs what it did before the
    scheduler's switch shared it. The caller roots f. */
 static SP_INLINE sp_RbVal sp_fiber_switch(sp_Fiber*f,sp_Fiber*prev,sp_RbVal val){f->resumed_value=val;
+  /* The deep-return channel (_sp_ret_strbuf) is per worker, and a call site
+     clears it, makes the call and reads it: a call that parks in between
+     lets another fiber on this worker publish its own String there, which
+     the site would take for its answer. It travels with the fiber, on its
+     stack, like the handler stacks below. */
+  void*ret_strbuf=_sp_ret_strbuf;
   sp_fiber_save_roots(prev);sp_fiber_restore_roots(f);if(!prev->exc_ctx)prev->exc_ctx=sp_exc_ctx_new();sp_exc_ctx_save(prev->exc_ctx);sp_exc_ctx_load(f->exc_ctx);sp_fiber_current=f;SP_TSAN_SWITCH(f);if(f->state==0&&f!=&sp_fiber_root){f->state=1;f->transferred=1;sp_ctx_make(&f->ctx,f->stack+sp_fiber_guard(),f->stack_size,sp_fiber_trampoline);sp_ctx_swap(&prev->ctx,&f->ctx);}
 else{/* the root fiber is the implicit running coroutine: it has no mmap'd
    stack/body, so it must never be ctx_make'd. Its context was already
@@ -1064,7 +1071,7 @@ else{/* the root fiber is the implicit running coroutine: it has no mmap'd
    saved state with prev's -- losing a blocked/sleeping thread's roots/handlers
    and freeing its live locals on the next collection -- and, since f may already
    be running on another worker (woken between its switch-out and here), that
-   write races that worker's load of f's context. We only restore prev's. */sp_exc_ctx_load(prev->exc_ctx);sp_fiber_restore_roots(prev);sp_fiber_current=prev;return prev->resumed_value;}
+   write races that worker's load of f's context. We only restore prev's. */sp_exc_ctx_load(prev->exc_ctx);sp_fiber_restore_roots(prev);sp_fiber_current=prev;_sp_ret_strbuf=ret_strbuf;return prev->resumed_value;}
 static sp_RbVal sp_Fiber_transfer_core(sp_Fiber*f,sp_RbVal val){SP_GC_ROOT(f);sp_fiber_check_thread(f);sp_fiber_check_transfer(f);sp_Fiber*prev=sp_fiber_current;
   /* it returns where its transferrer would: to that fiber if it was resumed */
   if(f!=&sp_fiber_root&&f!=prev)f->return_to=prev->resumer?prev:prev->return_to;

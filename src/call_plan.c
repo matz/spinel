@@ -5990,6 +5990,23 @@ static int ver_write_cmp(const void *a, const void *b) {
   if (x->after != y->after) return x->after - y->after;
   return x->after ? y->k - x->k : x->k - y->k;
 }
+/* The cells each node writes, as they are placed: a cell is written once
+   at a node, and one node may make versions in several histories, each with
+   a cell of its own (`module_function :a, :b` copies both names at its
+   node; a bare module_function def is the instance method's version and the
+   singleton's copy; `attr_accessor :x` makes a reader and a writer) */
+typedef struct { int *at; struct { int hist, next; } *e; int n; } VerCellsAt;
+/* 1 the first time node writes the cell of history hist (recording it),
+   else 0 */
+static int ver_cell_once(VerCellsAt *m, int node, int hist) {
+  for (int k = m->at[node]; k; k = m->e[k - 1].next)
+    if (m->e[k - 1].hist == hist) return 0;
+  if (!(m->n & (m->n - 1)) && !(m->e = realloc(m->e, sizeof *m->e * (size_t)(m->n ? 2 * m->n : 1)))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  m->e[m->n].hist = hist;
+  m->e[m->n].next = m->at[node];
+  m->at[node] = ++m->n;
+  return 1;
+}
 /* ...and beside each copy of a method body's version (VerWrite.body): a
    module's method cloned into each class that includes, prepends or
    extends it (nt_clone_subtree) holds a copy of a def its body makes
@@ -5998,7 +6015,7 @@ static int ver_write_cmp(const void *a, const void *b) {
    the node it copies (nt_origin, 'c'), along a chain of up to 64 copies;
    only the writes made now are copied, since a copy made after an earlier
    write carries that write */
-static void ver_copy_writes(Compiler *c, const int *par, unsigned char *seen, VerWrite **wp, int *nwp) {
+static void ver_copy_writes(Compiler *c, const int *par, VerCellsAt *cells, VerWrite **wp, int *nwp) {
   const NodeTable *nt = c->nt;
   int nw0 = *nwp, *of = nw0 ? calloc((size_t)nt->count + 1, sizeof(int)) : NULL;
   if (!nw0) return;
@@ -6011,8 +6028,7 @@ static void ver_copy_writes(Compiler *c, const int *par, unsigned char *seen, Ve
       if ((o = nt_origin(nt, o, &how, &a, &pass, &n)) < 0 || how != 'c' || o >= nt->count) break;
       k = of[o];
     }
-    if (!k || seen[d] || (st = ver_write_stmt(nt, par, d)) < 0 || par[st] < 0) continue;
-    seen[d] = 1;
+    if (!k || (st = ver_write_stmt(nt, par, d)) < 0 || par[st] < 0 || !ver_cell_once(cells, d, (*wp)[k - 1].hist)) continue;
     if (!(*nwp & (*nwp - 1)) && !(*wp = realloc(*wp, sizeof **wp * (size_t)(*nwp ? 2 * *nwp : 1)))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
     VerWrite x = (*wp)[k - 1];
     x.list = par[st]; x.stmt = st; x.node = d;
@@ -6031,8 +6047,8 @@ void ver_cells_write(Compiler *c) {
      into its class body still names its statements, and the statement a
      write goes beside is the class body's) */
   int *par = c->nver_entries ? du_parent_map(nt) : NULL;
-  unsigned char *seen = c->nver_entries ? calloc((size_t)nt->count + 1, 1) : NULL;
-  if (c->nver_entries && (!seen || !par)) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  VerCellsAt cells = { c->nver_entries ? calloc((size_t)nt->count + 1, sizeof(int)) : NULL, NULL, 0 };
+  if (c->nver_entries && (!cells.at || !par)) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   for (int pass = 0; pass < 2; pass++)   /* (the entries written before first: a cell is written once) */
   for (int i = 0; i < c->nver_entries; i++) {
     struct VerEntry *e = &c->ver_entries[i];
@@ -6051,8 +6067,7 @@ void ver_cells_write(Compiler *c) {
         if (!reads) continue;   /* prepend cells are written at their statements */
       }
       int node = vs[j].v->node, st = ver_write_stmt(nt, par, node);
-      if (seen[node] || st < 0 || par[st] < 0) continue;
-      seen[node] = 1;
+      if (st < 0 || par[st] < 0 || !ver_cell_once(&cells, node, vs[j].hist)) continue;
       if (!pass) continue;
       if (!(nw & (nw - 1)) && !(w = realloc(w, sizeof *w * (size_t)(nw ? 2 * nw : 1)))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
       NodeKind sk = nt_kind(nt, st);
@@ -6061,23 +6076,20 @@ void ver_cells_write(Compiler *c) {
                             sk != NK_DefNode && sk != NK_AliasMethodNode && sk != NK_UndefNode, 0, -1, vs[j].v->body != 0 };
       if (vs[j].hist >= nh) nh = vs[j].hist + 1;
       /* Not the lone conditional def's dispatcher alone: it stands after the condition, and the
-         method is there as soon as an arm (`name#__condN`) runs in its branch */
+         method is there as soon as one of its arms (`name#__condN`, cond_disp) runs in its branch */
       if (nt_int(nt, node, "cond_lone_disp", 0)) {
-        size_t bl = strlen(e->name);
         NT_FOREACH_KIND(nt, NK_DefNode, d) {
-          const char *dn = nt_str(nt, d, "name");
-          if (!nt_int(nt, d, "cond_arm", 0) || !dn || strncmp(dn, e->name, bl) || strncmp(dn + bl, "#__cond", 7) || seen[d]) continue;
+          if (!nt_int(nt, d, "cond_arm", 0) || nt_int(nt, d, "cond_disp", -1) != node) continue;
           int ast = ver_write_stmt(nt, par, d);
-          if (ast < 0 || par[ast] < 0) continue;
-          seen[d] = 1;
+          if (ast < 0 || par[ast] < 0 || !ver_cell_once(&cells, d, vs[j].hist)) continue;
           if (!(nw & (nw - 1)) && !(w = realloc(w, sizeof *w * (size_t)(nw ? 2 * nw : 1)))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
           w[nw++] = (VerWrite){ par[ast], ast, d, vs[j].n, vs[j].hist, nt_kind(nt, ast) != NK_DefNode, 0, -1 };
         }
       }
     }
   }
-  ver_copy_writes(c, par, seen, &w, &nw);
-  free(seen); free(par);
+  ver_copy_writes(c, par, &cells, &w, &nw);
+  free(cells.at); free(cells.e); free(par);
   /* the zero writes: one per cell, at its first write, none where the first statement writes it */
   unsigned char *hz = calloc((size_t)nh + 1, 1);
   int at0 = ntop ? first[0] : -1, nz = 0;

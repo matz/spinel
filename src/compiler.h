@@ -1139,7 +1139,9 @@ typedef struct {
   int nargs;
   int blocking;    /* `blocking: true`: the call may block for a while and touches
                       no Ruby object, so the worker leaves the world for it
-                      (sp_native_enter/leave): a collection does not wait for it */
+                      (sp_native_enter/leave): a collection does not wait for it.
+                      An ffi_callback from inside it comes back in for the method
+                      (sp_native_callback_enter/leave) */
 } FfiFunc;
 
 typedef struct { char *mod; char *name; int val; } FfiConst;     /* ffi_const */

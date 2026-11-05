@@ -19698,13 +19698,23 @@ void emit_cmethod_block_arg(Compiler *c, int id, Scope *cm, int blk_tmp, Buf *b)
    an ffi_callback C function pointer. It takes the C-ABI args the callback
    declares, converts each to the target method's inferred parameter type
    (boxing a poly param, casting a scalar one), calls the compiled method, and
-   converts the result to the callback's return type. The definition is appended
-   to g_procs; returns the trampoline's unique name. */
+   converts the result to the callback's return type. In a program that declares
+   a blocking call the callback may come from inside one, so the trampoline brings
+   the worker back into the world around all of that, and out again before C sees
+   the result. The definition is appended to g_procs; returns the trampoline's
+   unique name. */
+static int ffi_declares_blocking(Compiler *c) {
+  for (int i = 0; i < c->n_ffi_funcs; i++)
+    if (c->ffi_funcs[i].blocking) return 1;
+  return 0;
+}
+
 static const char *emit_ffi_cb_trampoline(Compiler *c, int cbidx, int mi) {
   FfiCallback *k = &c->ffi_callbacks[cbidx];
   Scope *ts = &c->scopes[mi];
   const char *tid = uid_new();
   Buf *pb = &g_procs;
+  int bracket = ffi_declares_blocking(c);
   buf_printf(pb, "static %s __sp_ffi_cb_%s(", ffi_c_type(k->ret_spec), tid);
   for (int i = 0; i < k->nargs; i++) {
     if (i) buf_puts(pb, ", ");
@@ -19712,6 +19722,7 @@ static const char *emit_ffi_cb_trampoline(Compiler *c, int cbidx, int mi) {
   }
   if (k->nargs == 0) buf_puts(pb, "void");
   buf_puts(pb, ") {\n  ");
+  if (bracket) buf_puts(pb, "int _nd = sp_native_callback_enter();\n  ");
   /* sp_<target>(converted args) */
   Buf call; memset(&call, 0, sizeof call);
   buf_puts(&call, mc_method(c, ts));
@@ -19739,9 +19750,10 @@ static const char *emit_ffi_cb_trampoline(Compiler *c, int cbidx, int mi) {
     }
   }
   buf_puts(&call, ")");
+  const char *out = bracket ? "sp_native_callback_leave(_nd); " : "";
   /* convert the result to the callback's return type */
   if (sp_streq(k->ret_spec, "void")) {
-    buf_printf(pb, "%s;\n}\n", call.p ? call.p : "");
+    buf_printf(pb, "%s;\n%s}\n", call.p ? call.p : "", bracket ? "  sp_native_callback_leave(_nd);\n" : "");
   }
   else {
     const char *rc = ffi_c_type(k->ret_spec);
@@ -19751,19 +19763,23 @@ static const char *emit_ffi_cb_trampoline(Compiler *c, int cbidx, int mi) {
        under a boxed nil's tag, or the slot's nil as a number. */
     int dbl = sp_streq(k->ret_spec, "float") || sp_streq(k->ret_spec, "double");
     int num = dbl || (!sp_streq(k->ret_spec, "ptr") && !sp_streq(k->ret_spec, "bool"));
+    Buf val; memset(&val, 0, sizeof val);   /* the value C gets */
     if (rt == TY_POLY || rt == TY_UNKNOWN) {
-      if (sp_streq(k->ret_spec, "ptr"))                             buf_printf(pb, "return (%s)(%s).v.p;\n}\n", rc, call.p);
-      else if (dbl) buf_printf(pb, "return (%s)sp_ffi_dbl_of(%s);\n}\n", rc, call.p);
-      else if (num) buf_printf(pb, "return (%s)sp_ffi_int_of(%s);\n}\n", rc, call.p);
-      else                                                          buf_printf(pb, "return (%s)(%s).v.i;\n}\n", rc, call.p);
+      if (sp_streq(k->ret_spec, "ptr"))                             buf_printf(&val, "(%s)(%s).v.p", rc, call.p);
+      else if (dbl) buf_printf(&val, "(%s)sp_ffi_dbl_of(%s)", rc, call.p);
+      else if (num) buf_printf(&val, "(%s)sp_ffi_int_of(%s)", rc, call.p);
+      else                                                          buf_printf(&val, "(%s)(%s).v.i", rc, call.p);
     }
     else if (rt == TY_NIL && num) buf_printf(pb, "%s; %s(); return (%s)0;\n}\n", call.p, dbl ? "sp_ffi_nil_dbl_raise" : "sp_ffi_nil_int_raise", rc);
-    else if (rt == TY_NIL) buf_printf(pb, "%s; return (%s)0;\n}\n", call.p, rc);
+    else if (rt == TY_NIL) buf_printf(pb, "%s; %sreturn (%s)0;\n}\n", call.p, out, rc);
     else if (num && (rt == TY_INT || rt == TY_FLOAT) && ts->ret_nullable_int) {
       const char *ck = rt == TY_FLOAT ? (dbl ? "sp_ffi_dbl_of_f" : "sp_ffi_int_of_f") : (dbl ? "sp_ffi_dbl_of_i" : "sp_ffi_int_of_i");
-      buf_printf(pb, "return (%s)%s(%s);\n}\n", rc, ck, call.p);
+      buf_printf(&val, "(%s)%s(%s)", rc, ck, call.p);
     }
-    else                   buf_printf(pb, "return (%s)(%s);\n}\n", rc, call.p);
+    else                   buf_printf(&val, "(%s)(%s)", rc, call.p);
+    if (val.p && bracket) buf_printf(pb, "%s _r = %s; %sreturn _r;\n}\n", rc, val.p, out);
+    else if (val.p)       buf_printf(pb, "return %s;\n}\n", val.p);
+    free(val.p);
   }
   free(call.p);
   return tid;

@@ -2043,8 +2043,8 @@ int emit_call_cmethod_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
         int is_binstr_ret = sp_streq(ret_spec, "binstr");
         int call_argc = c->ffi_funcs[fi].nargs;
         /* A function taking an ffi_callback is called through its own extern
-           like any other (codegen.c); the callback may run Ruby, so it is
-           never a blocking call. */
+           like any other (codegen.c). The callback may run Ruby, whether the
+           call is blocking or not: its trampoline sees to the world. */
         int takes_cb = 0;
         for (int hi = 0; hi < call_argc; hi++)
           if (ffi_find_callback(c, rcmod, c->ffi_funcs[fi].args[hi]) >= 0) { takes_cb = 1; break; }
@@ -2059,9 +2059,9 @@ int emit_call_cmethod_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
         int fixed_argc = is_vararg ? call_argc - 1 : call_argc;
         /* `blocking: true`: the arguments are evaluated into temps first (they
            may allocate, or run Ruby), then the worker leaves the world for
-           the call itself and comes back for the return. A callback-taking
-           or variadic function keeps the plain call. */
-        int blocking = c->ffi_funcs[fi].blocking && !takes_cb && !is_vararg;
+           the call itself and comes back for the return. A variadic function
+           keeps the plain call. */
+        int blocking = c->ffi_funcs[fi].blocking && !is_vararg;
         /* An IO::Buffer in a pointer slot hands C its base address. The
            buffer is evaluated in argument order into a rooted temp, and its
            base is taken once every argument has run (a later one may resize

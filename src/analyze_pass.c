@@ -20256,11 +20256,17 @@ static void cr_collect_versions(Compiler *c, const NodeTable *nt, int id, char *
    builtin table does not cover may call any callback name. The scope's nodes
    are collected whether the scope is reachable or not, as its called names
    are; only a reachable scope marks them. */
-static void cr_mark_implied(Compiler *c, char ***out, int *n, int *cap, const char *name, const char *cause) {
+static void cr_mark_implied(Compiler *c, char ***out, int *n, int *cap, const char *name, int class_side, const char *cause) {
   if (!ic_defined(c, name)) return;
   /* by bare name, whatever the side: a def on one object (`def obj.to_a`) is a
-     class method of the class registered for it, and an instance call reaches it */
-  if (cr_add_name(out, n, cap, name) && cause) ic_record(c, name, cause);
+     class method of the class registered for it, and an instance call reaches it.
+     A call CRuby makes on a class alone (a constant read's const_missing) keeps
+     the defs a class can answer with: "\x05<name>", cr_class_side_scope */
+  if (class_side) {
+    char cls_name[300]; snprintf(cls_name, sizeof cls_name, "\x05%s", name);
+    if (cr_add_name(out, n, cap, cls_name) && cause) ic_record(c, name, cause);
+  }
+  else if (cr_add_name(out, n, cap, name) && cause) ic_record(c, name, cause);
   /* A callback resolves the table answer, not an argument-specific entry. */
   if (c->ver_ix_nb)
     for (int i = c->ver_names[sp_strhash(name) % c->ver_ix_nb]; i >= 0; i = c->ver_names_next[i]) {
@@ -20291,7 +20297,7 @@ static void cr_collect_implied(Compiler *c, const NodeTable *nt, int id, char **
     }
     for (int i = 0; i < nn; i++)
       if (!is_definition_hook_name(names[i].name) && !is_hook_protocol_name(names[i].name))
-        cr_mark_implied(c, out, n, cap, names[i].name, g_dump_implicit ? cause : NULL);
+        cr_mark_implied(c, out, n, cap, names[i].name, 0, g_dump_implicit ? cause : NULL);
     return;
   }
   if (k > 64) {
@@ -20318,7 +20324,9 @@ static void cr_collect_implied(Compiler *c, const NodeTable *nt, int id, char **
       if (calls[i].role) handed = 1;
       if (!defined) continue;
       if (g_dump_implicit) ic_cause(c, id, &calls[i], cause, sizeof cause);
-      cr_mark_implied(c, out, n, cap, calls[i].name, g_dump_implicit ? cause : NULL);
+      /* a syntax row whose name every row sends to a class (const_missing) */
+      int class_side = !calls[i].role && nt_implied_name_sides(calls[i].name) == NTS_CLASS;
+      cr_mark_implied(c, out, n, cap, calls[i].name, class_side, g_dump_implicit ? cause : NULL);
     }
   if (calls != buf) free(calls);
 }

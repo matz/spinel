@@ -1193,6 +1193,31 @@ static void cr_reach_counted(CrLive *lv, int first, const int *link, int argc, i
       cr_live_reach(lv, t);
 }
 
+/* Whether a class or module anywhere extends module `mod`, directly or
+   through a module an extender includes: its instance methods are then class
+   methods of the extender, which a call CRuby makes on a class can reach. */
+static int cr_module_extended(Compiler *c, int mod, int depth) {
+  if (depth > 8) return 1;
+  for (int k = 0; k < c->nclasses; k++) {
+    const ClassInfo *ci = &c->classes[k];
+    for (int e = 0; e < ci->nextended_mods; e++) if (ci->extended_mods[e] == mod) return 1;
+    if (!comp_class_is_module(c, ci)) continue;
+    for (int j = 0; j < ci->nincluded_mods; j++)
+      if (ci->included_mods[j] == mod && cr_module_extended(c, k, depth + 1)) return 1;
+  }
+  return 0;
+}
+
+/* Can scope `t` answer a call made on a class or module: a class method, a
+   module_function, or an instance method of a module some class extends. An
+   instance method of a class, or of a module nothing extends, cannot. */
+static int cr_class_side_scope(Compiler *c, int t) {
+  const Scope *s = &c->scopes[t];
+  if (s->is_cmethod || s->is_module_function) return 1;
+  if (s->class_id < 0 || !comp_class_is_module(c, &c->classes[s->class_id])) return 0;
+  return cr_module_extended(c, s->class_id, 0);
+}
+
 void compute_reachable(Compiler *c, int typed) {
   /* Build per-scope call sets (CallNode names, not entering nested DefNodes). */
   char ***scope_calls = calloc((size_t)c->nscopes, sizeof(char **));
@@ -1339,6 +1364,10 @@ void compute_reachable(Compiler *c, int typed) {
     else if(_mn && _mn[0]=='\x03'){ if(!anh_has(&cn_set,_mn) && !anh_has(&cn_set,_mn+1)){ CN_ADD(_mn); \
       for(int _t=SN_FIRST(_mn+1);_t>=0;_t=sn_link[_t]) \
         if((!c->scopes[_t].is_cmethod || c->scopes[_t].is_module_function) && !c->scopes[_t].replaced && !c->scopes[_t].reachable) \
+          cr_live_reach(&lv, _t); } } \
+    else if(_mn && _mn[0]=='\x05'){ if(!anh_has(&cn_set,_mn) && !anh_has(&cn_set,_mn+1)){ CN_ADD(_mn); \
+      for(int _t=SN_FIRST(_mn+1);_t>=0;_t=sn_link[_t]) \
+        if(cr_class_side_scope(c, _t) && !c->scopes[_t].replaced && !c->scopes[_t].reachable) \
           cr_live_reach(&lv, _t); } } \
     else if(_mn && _mn[0]=='\x04'){ const char *_nm=strchr(_mn,' ')+1; int _in=_nm[0]=='\x03'; \
       if(!anh_has(&cn_set,_mn) && !anh_has(&cn_set,_nm) && !anh_has(&cn_set,_nm+_in)){ \

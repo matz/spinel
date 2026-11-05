@@ -11379,10 +11379,42 @@ int desugar_sym_to_proc_call_at(Compiler *c, LowerCtx *lc, int id) {
    method (not an operator) folds pairwise through that method. The operator
    symbols ride the typed/boxed fold emitters; rewrite the method-naming form
    into the equivalent block, which the block fold already serves. (#3125) */
+/* Does a class of the program define its own instance method nm
+   (reduce, inject), other than Enumerable's Ruby definition
+   (builtins/enumerable.rb)? */
+static int rms_program_defines(Compiler *c, const char *nm) {
+  const NodeTable *nt = c->nt;
+  NT_FOREACH_KIND(nt, NK_DefNode, d) {
+    const char *dn = nt_str(nt, d, "name");
+    if (!dn || !sp_streq(dn, nm) || nt_ref(nt, d, "receiver") >= 0) continue;
+    Scope *s = comp_scope_of(c, d);
+    int k = s ? s->class_id : -1;
+    const char *kn = k >= 0 ? c->classes[k].name : NULL;
+    if (kn && sp_streq(kn, "Enumerable")) continue;
+    return 1;
+  }
+  return 0;
+}
+/* Is the fold call id's receiver one whose reduce/inject is the builtin's:
+   an Array, a Hash, a Range, or an object of a class that defines no
+   method of the name itself (Enumerable's, builtins/enumerable.rb)? */
+static int rms_builtin_receiver(Compiler *c, int id, const char *nm) {
+  int recv = nt_ref(c->nt, id, "receiver");
+  if (recv < 0) return 0;
+  TyKind rt = infer_type(c, recv);
+  if (ty_is_array(rt) || ty_is_obj_array(rt) || ty_is_hash(rt) || rt == TY_RANGE || rt == TY_FLOAT_RANGE) return 1;
+  if (!ty_is_object(rt)) return 0;
+  int mi = comp_method_in_chain(c, ty_object_class(rt), nm, NULL);
+  return mi < 0 || (c->scopes[mi].name && !strncmp(c->scopes[mi].name, "__enum_", 7));
+}
 static int desugar_reduce_method_symbol(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int changed = 0;
   int n0 = nt->count;
+  /* a program class's own reduce / inject takes the Symbol as an argument,
+     and no block, as CRuby passes it (#11117): where the program defines
+     one, only a receiver known to take the builtin's is rewritten */
+  int own_reduce = -1, own_inject = -1;
   for (int id = 0; id < n0; id++) {
     NodeKind k = nt_kind(nt, id);
     if (k != NK_CallNode) continue;
@@ -11398,6 +11430,9 @@ static int desugar_reduce_method_symbol(Compiler *c) {
     /* only an identifier-named method: operators keep their fold emitters */
     if (!((sym[0] >= 'a' && sym[0] <= 'z') || (sym[0] >= 'A' && sym[0] <= 'Z') || sym[0] == '_'))
       continue;
+    int *own = sp_streq(nm, "reduce") ? &own_reduce : &own_inject;
+    if (*own < 0) *own = rms_program_defines(c, nm);
+    if (*own && !rms_builtin_receiver(c, id, nm)) continue;
     char pa[64], pb[64];
     snprintf(pa, sizeof pa, "__rms_a_%s", comp_node_tag(c, id));
     snprintf(pb, sizeof pb, "__rms_b_%s", comp_node_tag(c, id));

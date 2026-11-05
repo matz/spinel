@@ -1929,8 +1929,13 @@ int comp_ary_is_time(Compiler *c, int cid) {
 /* Whether type t is an instance of a Time subclass. Such an instance is
    its Time: Time's comparisons take it as an operand (boxed, it is
    SP_BUILTIN_TIME, so the boxed operand arms read its Time). */
+static int comp_time_reopen_defines(Compiler *c, const char *n);
 int comp_ty_is_timesub(Compiler *c, TyKind t) {
-  return ty_is_object(t) && comp_ary_is_time(c, ty_object_class(t));
+  /* (a reopen of Time's own <=>, ==, eql? or === answers those, which the
+     Time comparison arms do not ask) */
+  return ty_is_object(t) && comp_ary_is_time(c, ty_object_class(t)) &&
+         !comp_time_reopen_defines(c, "<=>") && !comp_time_reopen_defines(c, "==") &&
+         !comp_time_reopen_defines(c, "eql?") && !comp_time_reopen_defines(c, "===");
 }
 /* The builtin cid's chain embeds as the flag the comp_arysub_answer family
    takes: 0 Array, 1 Hash, 2 String */

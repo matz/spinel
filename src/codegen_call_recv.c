@@ -14015,6 +14015,12 @@ static void emit_strbuf_encode_bang(Compiler *c, const char *ref, int hr, const 
   emit_encode_args(ta, npos, b);
   buf_printf(b, ")); sp_strbuf_read_pub(_t%d); })", th);
 }
+/* Whether node n is a Time: a Time, or a Time subclass instance, which starts
+   with its Time (read through a cast to sp_Time *) */
+static int time_operand(Compiler *c, int n) {
+  TyKind t = comp_ntype(c, n);
+  return t == TY_TIME || comp_ty_is_timesub(c, t);
+}
 int emit_value_recv_call(Compiler *c, int id, Buf *b) {
   const NodeTable *nt = c->nt;
   const char *name = nt_str(nt, id, "name");
@@ -14081,10 +14087,11 @@ int emit_value_recv_call(Compiler *c, int id, Buf *b) {
         buf_printf(b, "({ SP_TIME_TMP(_t%d) = %s; SP_TIME_TMP(_t%d) = ", tt, r, tu); emit_expr(c, argv[0], b);
         buf_printf(b, "; sp_time_cmp(_t%d, _t%d) == 0; })", tt, tu);
       }
-      /* a poly operand may hold a Time: unwrap and compare by instant */
-      else if (repr_of(c, argv[0]).kind == RK_BOXED) {
+      /* a poly operand may hold a Time: unwrap and compare by instant. A
+         Time subclass instance boxes as its Time. */
+      else if (repr_of(c, argv[0]).kind == RK_BOXED || comp_ty_is_timesub(c, repr_of(c, argv[0]).as_ty)) {
         int tt = ++g_tmp, tq = ++g_tmp;
-        buf_printf(b, "({ SP_TIME_TMP(_t%d) = %s; sp_RbVal _t%d = ", tt, r, tq); emit_expr(c, argv[0], b);
+        buf_printf(b, "({ SP_TIME_TMP(_t%d) = %s; sp_RbVal _t%d = ", tt, r, tq); emit_boxed(c, argv[0], b);
         buf_printf(b, "; (sp_bool)(_t%d.tag == SP_TAG_OBJ && _t%d.cls_id == SP_BUILTIN_TIME && "
                       "sp_time_cmp(_t%d, (sp_Time *)_t%d.v.p) == 0); })", tq, tq, tt, tq);
       }
@@ -14155,6 +14162,7 @@ int emit_value_recv_call(Compiler *c, int id, Buf *b) {
        ArgumentError ("comparison of Time with 1 failed") for anything else,
        where reading the operand as an sp_Time did not compile (#3865). */
     else if ((sp_streq(name, "between?") || sp_streq(name, "clamp")) && argc == 2 &&
+             !(sp_streq(name, "between?") && time_operand(c, argv[0]) && time_operand(c, argv[1])) &&
              (comp_ntype(c, argv[0]) != TY_TIME || comp_ntype(c, argv[1]) != TY_TIME)) {
       int tt = ++g_tmp;
       buf_printf(b, "({ SP_TIME_TMP(_t%d) = %s; (void)(", tt, r);
@@ -14167,9 +14175,9 @@ int emit_value_recv_call(Compiler *c, int id, Buf *b) {
     }
     else if (sp_streq(name, "between?") && argc == 2) {
       int tt = ++g_tmp, ta = ++g_tmp, tb2 = ++g_tmp;
-      buf_printf(b, "({ SP_TIME_TMP(_t%d) = %s; SP_TIME_TMP(_t%d) = ", tt, r, ta); emit_expr(c, argv[0], b);
-      buf_printf(b, "; SP_TIME_TMP(_t%d) = ", tb2); emit_expr(c, argv[1], b);
-      buf_printf(b, "; sp_time_cmp(_t%d, _t%d) >= 0 && sp_time_cmp(_t%d, _t%d) <= 0; })", tt, ta, tt, tb2);
+      buf_printf(b, "({ SP_TIME_TMP(_t%d) = %s; SP_TIME_TMP(_t%d) = (sp_Time *)(", tt, r, ta); emit_expr(c, argv[0], b);
+      buf_printf(b, "); SP_TIME_TMP(_t%d) = (sp_Time *)(", tb2); emit_expr(c, argv[1], b);
+      buf_printf(b, "); sp_time_cmp(_t%d, _t%d) >= 0 && sp_time_cmp(_t%d, _t%d) <= 0; })", tt, ta, tt, tb2);
     }
     else if (sp_streq(name, "clamp") && argc == 2) {
       int tt = ++g_tmp, ta = ++g_tmp, tb2 = ++g_tmp;
@@ -14189,7 +14197,8 @@ int emit_value_recv_call(Compiler *c, int id, Buf *b) {
     /* a poly operand (a `Time | nil` local past its nil guard, #4465) is
        checked at run time: a Time compares, anything else raises as below */
     else if (is_cmp_op(name) && argc == 1 &&
-             (repr_of(c, argv[0]).kind == RK_BOXED || repr_of(c, argv[0]).untyped)) {
+             (repr_of(c, argv[0]).kind == RK_BOXED || repr_of(c, argv[0]).untyped ||
+              comp_ty_is_timesub(c, repr_of(c, argv[0]).as_ty))) {
       int tt = ++g_tmp, tu = ++g_tmp;
       buf_printf(b, "({ SP_TIME_TMP(_t%d) = %s; sp_RbVal _t%d = ", tt, r, tu); emit_boxed(c, argv[0], b);
       buf_printf(b, "; sp_poly_time_cmp_arg(_t%d, _t%d) %s 0; })", tt, tu, name);
@@ -14210,7 +14219,7 @@ int emit_value_recv_call(Compiler *c, int id, Buf *b) {
     else if (sp_streq(name, "<=>") && argc == 1) {
       Repr a0tr = repr_of(c, argv[0]);
       TyKind a0t = a0tr.as_ty;
-      if (a0tr.kind == RK_BOXED || a0t == TY_UNKNOWN) {
+      if (a0tr.kind == RK_BOXED || a0t == TY_UNKNOWN || comp_ty_is_timesub(c, a0t)) {
         int tt = ++g_tmp, tu = ++g_tmp;
         buf_printf(b, "({ SP_TIME_TMP(_t%d) = %s; sp_RbVal _t%d = ", tt, r, tu); emit_boxed(c, argv[0], b);
         buf_printf(b, "; (_t%d.tag == SP_TAG_OBJ && _t%d.cls_id == SP_BUILTIN_TIME) ? "

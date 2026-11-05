@@ -5075,7 +5075,7 @@ static int infer_handle_call(Compiler *c, int id, const NodeTable *nt, const cha
          there gives the duration (#2456), a number an earlier Time, which
          only the run time tells apart. An int/float offset keeps the Time
          type via the general `-` arm below. */
-      if (at == TY_TIME) { *out = TY_FLOAT; return 1; }
+      if (at == TY_TIME || comp_ty_is_timesub(c, at)) { *out = TY_FLOAT; return 1; }
       if (at == TY_POLY) { *out = TY_POLY; return 1; }
       /* an argument not typed yet (a parameter whose callers are still
          being read) may turn out poly: answering Time now pins a local

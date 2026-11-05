@@ -907,7 +907,7 @@ int emit_call_compare_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
       }
       /* Time <=> non-Time is nil (poly result). A poly operand is checked at
          run time; a concrete non-Time operand is unconditionally nil. */
-      if (a0tr.kind == RK_BOXED || a0t == TY_UNKNOWN) {
+      if (a0tr.kind == RK_BOXED || a0t == TY_UNKNOWN || comp_ty_is_timesub(c, a0t)) {
         int ta = ++g_tmp, tb = ++g_tmp;
         buf_printf(b, "({ SP_TIME_TMP(_t%d) = ", ta); emit_expr(c, recv, b);
         buf_printf(b, "; sp_RbVal _t%d = ", tb); emit_boxed(c, argv[0], b);
@@ -1177,9 +1177,10 @@ int emit_call_compare_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
         buf_printf(b, "; sp_time_cmp(_t%d, _t%d) %s 0; })", tt, tu, name);
         return 1;
       }
-      /* a poly operand is a Time or not at run time (#4465) */
+      /* a poly operand is a Time or not at run time (#4465); a Time
+         subclass instance boxes as its Time */
       Repr tar = repr_of(c, argv[0]);
-      if (tar.kind == RK_BOXED || tar.untyped) {
+      if (tar.kind == RK_BOXED || tar.untyped || comp_ty_is_timesub(c, tar.as_ty)) {
         int tt = ++g_tmp, tu = ++g_tmp;
         buf_puts(b, "({ SP_TIME_TMP(_t"); buf_printf(b, "%d) = ", tt); emit_expr(c, recv, b);
         buf_printf(b, "; sp_RbVal _t%d = ", tu); emit_boxed(c, argv[0], b);

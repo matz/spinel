@@ -2,8 +2,9 @@
 # Data class reads (or, for a Struct, writes) the member, as it does for an
 # attr reader: on the record constant, a class with a block, a subclass of
 # `Struct.new`, a Data class, a local's record class, a record written to a
-# constant path and a Class value only the run time knows. A def of the
-# member's name answers ahead of the member.
+# constant path, a record in parentheses, a record block with a rescue
+# clause, `Struct.send(:new, ..)` and a Class value only the run time
+# knows. A def of the member's name answers ahead of the member.
 # A member is a reader with no attr declaration in a body, so the bind_call
 # found no method of the class and raised NameError.
 S = Struct.new(:d, :f)
@@ -32,3 +33,13 @@ p((S.instance_method(:d).bind_call(B.new(1)) rescue $!.class))
 module Ns; end
 Ns::P = Struct.new(:z)
 p Ns::P.instance_method(:z).bind_call(Ns::P.new(12))
+Ns::Q = (Struct.new(:w))
+p Ns::Q.instance_method(:w).bind_call(Ns::Q.new(15))
+R = Struct.new(:r) do
+  def r2 = r + 1
+rescue
+  nil
+end
+p R.instance_method(:r).bind_call(R.new(16)), R.new(16).r2
+M = Struct.send(:new, :m)
+p M.instance_method(:m).bind_call(M.new(17))

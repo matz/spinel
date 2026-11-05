@@ -20071,12 +20071,22 @@ static int cr_method_value_queried(const NodeTable *nt, int id) {
   return mn && (sp_streq(mn, "method") || sp_streq(mn, "public_method"));
 }
 
+/* The methods a capture m makes a method_missing Method of
+   (cplan_capture_missing): its respond_to_missing? test, which runs where
+   the capture does, and with called the Method's target */
+static void cr_add_missing(Compiler *c, int m, char ***out, int *n, int *cap, int called) {
+  int mw = cplan_capture_missing(c, m), mq = cplan_missing_guard(c, mw);
+  if (mq >= 0) cr_add_name(out, n, cap, c->scopes[mq].name);
+  if (mq >= 0 && called) cr_add_name(out, n, cap, c->scopes[mw].name);
+}
+
 /* The operands of a `method` call whose Method is only queried: the
    `method` call itself (a program may define its own), its receiver and its
    name argument, but not the method the name names. */
 static void cr_collect_method_operands(Compiler *c, const NodeTable *nt, int m,
                                        char ***out, int *n, int *cap, int instance_self) {
   cr_add_name(out, n, cap, nt_str(nt, m, "name"));   /* a program's own `method` */
+  cr_add_missing(c, m, out, n, cap, 0);
   cr_collect_calls(c, nt, nt_ref(nt, m, "receiver"), out, n, cap, instance_self);
   int ma = nt_ref(nt, m, "arguments");
   if (ma >= 0) cr_collect_calls(c, nt, ma, out, n, cap, instance_self);
@@ -20508,6 +20518,7 @@ void cr_collect_calls(Compiler *c, const NodeTable *nt, int id,
         if (ak == NK_SymbolNode) msym = nt_str(nt, mav[0], "value");
         else if (ak == NK_StringNode) { msym = nt_str(nt, mav[0], "content"); if (!msym) msym = nt_str(nt, mav[0], "unescaped"); }
         if (msym) cr_add_name(out, n, cap, msym);
+        cr_add_missing(c, id, out, n, cap, 1);
         /* and an accessor's helper for a bind_call of it (desugar_bind_attr_helpers) */
         char hn[300];
         if (msym && sp_streq(nm, "instance_method") && snprintf(hn, sizeof hn, "__bind %s", msym) < (int)sizeof hn)

@@ -5064,6 +5064,9 @@ static int lr_runs_in(const LoadRecord *r, int a, int b) {
    call plan's frame stands it (lr_plan_place) */
 static int lr_climb_up(Compiler *c, const int *par, int a) {
   if (par[a] >= 0) return par[a];
+  /* a method a pass made for a node, which runs no earlier than it */
+  int rf = nt_kind(c->nt, a) == NK_DefNode ? (int)nt_int(c->nt, a, "runs_from", 0) - 1 : -1;
+  if (rf >= 0) return rf;
   char how = 0; int x = 0, k = 0; unsigned pass = 0;
   int o = nt_origin(c->nt, a, &how, &x, &pass, &k);
   return how == 'c' && o >= 0 && o < a ? o : -1;

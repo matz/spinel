@@ -4605,6 +4605,9 @@ int desugar_public_method(Compiler *c) {
     if (!nm || !sp_streq(nm, "public_method")) continue;
     if (!method_sym_arg(c, id)) continue;   /* literal symbol/string arg only */
     nt_node_set_str(nt, id, "name", "method");
+    /* (respond_to_missing? is asked with include_private false for it:
+       desugar_missing_method_obj) */
+    nt_node_set_int(nt, id, "public_capture", 1);
     changed = 1;
   }
   return changed;

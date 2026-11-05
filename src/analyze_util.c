@@ -4263,6 +4263,9 @@ int name_is_synth_method(Compiler *c, const char *m) {
   /* `__bind x`: the method a bind_call of an attr accessor's
      instance_method calls (desugar_bind_attr_helpers), spaced as __noarg is */
   if (strncmp(m, "__bind ", 7) == 0) return 1;
+  /* `__mm a` / `__rtm a`: a method_missing Method's target and its
+     respond_to_missing? test (desugar_missing_method_obj), spaced too */
+  if (strncmp(m, "__mm ", 5) == 0 || strncmp(m, "__rtm ", 6) == 0) return 1;
   /* `__inc <n> <name>`: the shadow copy of an included module's method, kept
      so an override can reach it through super (#3738); a name no such copy
      has, as `__inc foo`, is the program's own */
@@ -4475,7 +4478,7 @@ static int method_obj_lookup(Compiler *c, int node, int *cls, int *sg) {
      method lookup, comp_self_call_mi) */
   if (recv < 0) {
     int mi = comp_self_call_mi(c, node, sym);
-    if (mi < 0) return mi;
+    if (mi < 0) return cplan_capture_missing(c, node);
     k = c->scopes[mi].class_id, side = k >= 0 && c->scopes[mi].is_cmethod;
     if (k < 0) return call_target(c, node, k, sym, CT_CAPTURE | CT_TOP, NULL);
     goto found;
@@ -4512,7 +4515,8 @@ found:
   if (k < 0) return -1;
   if (cls) *cls = k;
   if (sg) *sg = side;
-  return call_target(c, node, k, sym, CT_CAPTURE | (side ? CT_CMETHOD : 0), NULL);
+  int mi = call_target(c, node, k, sym, CT_CAPTURE | (side ? CT_CMETHOD : 0), NULL);
+  return mi >= 0 || side ? mi : cplan_capture_missing(c, node);
 }
 
 /* The class or module the alias a `method(:sym)` node names was made in, as
@@ -4821,8 +4825,9 @@ static int method_write_target(Compiler *c, int w) {
    find the method (a module function's instance copy, a name
    respond_to_missing? answers), a boxed receiver's wrapper (bam_poly)
    names no method until its receiver's class is known, and of a builtin's
-   wrapper (bam_sym) only an accessor's (bam_accessor) has a known position:
-   whether CRuby writes a builtin in C or in Ruby no fact tells. */
+   wrapper (bam_sym) only an accessor's (bam_accessor) and a method_missing
+   Method's (cplan_missing_guard: none) have a known position: whether
+   CRuby writes a builtin in C or in Ruby no fact tells. */
 int method_recv_stamped(Compiler *c, int recv) {
   const NodeTable *nt = c->nt;
   if (recv < 0 || nt_kind(nt, recv) != NK_LocalVariableReadNode) return 0;
@@ -4835,7 +4840,7 @@ int method_recv_stamped(Compiler *c, int recv) {
     int mi = method_write_target(c, w);
     int dn = mi >= 0 ? c->scopes[mi].def_node : -1;
     if (dn < 0 || nt_int(nt, dn, "bam_poly", 0) ||
-        (nt_str(nt, dn, "bam_sym") && !nt_int(nt, dn, "bam_accessor", 0))) return 0;
+        (nt_str(nt, dn, "bam_sym") && !nt_int(nt, dn, "bam_accessor", 0) && cplan_missing_guard(c, mi) < 0)) return 0;
     n++;
   }
   return n > 0;

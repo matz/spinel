@@ -151,11 +151,18 @@ static void method_params_parse(const char *p, MethodParam **v, int *n, int *cap
    stands for (builtin_method_params, by its owner), where the facts have
    one. Where the record cannot tell which of the two the Method stands for
    (a conditional reopen, a maker run before and after the def), it keeps
-   the wrapper's own list, until a run-time version of the method tells. */
+   the wrapper's own list, until a run-time version of the method tells. A
+   method_missing Method (cplan_missing_guard) answers one anonymous rest,
+   [[:rest]]. */
 static int scope_method_params(Compiler *c, int mi, MethodParam **out) {
   MethodParam *v = NULL;
   int n = 0, cap = 0, dn = mi >= 0 ? c->scopes[mi].def_node : -1, rd = cplan_bam_reopen_target(c, mi);
   const char *sym = mi >= 0 ? bam_builtin_sym(c, mi, NULL) : NULL, *own = NULL, *bp = NULL;
+  if (mi >= 0 && cplan_missing_guard(c, mi) >= 0) {
+    method_param_add_n(&v, &n, &cap, "rest", NULL, 0);
+    *out = v;
+    return n;
+  }
   if (rd >= 0) return scope_method_params(c, rd, out);
   if (rd == -2) return method_params_of(c, scope_params_node(c, mi), out);
   if (sym && nt_int(c->nt, dn, "bam_accessor", 0)) {
@@ -187,15 +194,17 @@ enum { PROC_PARAMS_LIST, PROC_PARAMS_ARITY, PROC_PARAMS_PLAIN };
    block has a Ruby body, and so has a builtin's wrapper that reaches one
    instead (cplan_bam_reopen_target). An accessor's wrapper (bam_accessor)
    and a method made of an accessor (attr_version) have none, nor a C
-   extension's method (cext_arity), nor a builtin CRuby writes in C
-   (builtin_method_params's C column; one the facts do not list is taken
-   as C, as all but a few are). The record cannot tell for a wrapper that
+   extension's method (cext_arity), nor a method_missing Method
+   (cplan_missing_guard: CRuby's calls method_missing, no body of its own),
+   nor a builtin CRuby writes in C (builtin_method_params's C column; one
+   the facts do not list is taken as C, as all but a few are). The record cannot tell for a wrapper that
    may reach a reopen's def or the builtin, until a run-time version of the
    method tells. */
 static int method_proc_params(Compiler *c, int mi) {
   const char *own = NULL, *sym = mi >= 0 ? bam_builtin_sym(c, mi, NULL) : NULL;
   int in_c = 1, pn = mi >= 0 ? scope_params_node(c, mi) : -1, rd = cplan_bam_reopen_target(c, mi);
   if (mi < 0) return PROC_PARAMS_LIST;
+  if (cplan_missing_guard(c, mi) >= 0) return PROC_PARAMS_ARITY;
   if (rd >= 0) return method_proc_params(c, rd);
   if (rd == -2) return PROC_PARAMS_PLAIN;
   if (c->scopes[mi].attr_version || (pn >= 0 && nt_int(c->nt, pn, "cext_arity", -99) != -99)) return PROC_PARAMS_ARITY;
@@ -269,6 +278,14 @@ static const char *method_desc_class_name(Compiler *c, int ci) {
    whatever it aliases: `C.vv(v)`, or `E(D).vv(v)` taken on a class below. */
 static void emit_method_desc_literal(Compiler *c, int mn, int mi, int from, const char *sym, int unbound, Buf *b) {
   Scope *m = &c->scopes[mi];
+  /* a method_missing Method's: its receiver's class, `(*)`, no position */
+  if (cplan_missing_guard(c, mi) >= 0) {
+    Buf d; memset(&d, 0, sizeof d);
+    buf_printf(&d, "#<%s: %s#%s(*)>", unbound ? "UnboundMethod" : "Method", method_desc_class_name(c, m->class_id), sym);
+    emit_str_literal(b, d.p);
+    free(d.p);
+    return;
+  }
   const char *ow = "Object"; char sep = '#';
   int om = m->origin_module_ci - 1, owci = om >= 0 ? om : m->class_id, rc = from >= 0 ? from : m->class_id;
   int asg = 0, ah = mn >= 0 && !unbound ? method_obj_alias_owner(c, mn, &asg) : -1;
@@ -383,7 +400,8 @@ static int method_source_pos(Compiler *c, int mi, const char **file, int *line) 
   int dn = mi >= 0 ? c->scopes[mi].def_node : -1, known = 1;
   if (bam_builtin_sym(c, mi, NULL)) {
     int src = (int)nt_int(nt, dn, "bam_src", -1);
-    if (src >= 0 || nt_int(nt, dn, "bam_accessor", 0)) dn = src;
+    /* (a method_missing Method's is nil, as CRuby's) */
+    if (src >= 0 || nt_int(nt, dn, "bam_accessor", 0) || cplan_missing_guard(c, mi) >= 0) dn = src;
     else known = -1;
   }
   if (dn < 0 || nt_int(nt, dn, "cext_extension", 0)) return 0;
@@ -712,7 +730,7 @@ int emit_op_method_original_name(Compiler *c, const BopCtx *x, Buf *b) {
   if (tg4 >= 0 && c->scopes[tg4].name) {
     buf_puts(b, "((void)("); emit_expr_for_effect(c, recv, b);
     buf_puts(b, "), sp_sym_intern(");
-    emit_str_literal(b, comp_scope_user_name(&c->scopes[tg4]));
+    emit_str_literal(b, bam_builtin_sym(c, tg4, comp_scope_user_name(&c->scopes[tg4])));
     buf_puts(b, "))");
   }
   else {
@@ -1852,6 +1870,19 @@ int emit_call_callable_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, co
 
 /* Method and UnboundMethod objects: instance_method, method(:sym), bind / bind_call, owner,
    original_name, arity, parameters, receiver, unbind, super_method, source_location, to_proc */
+/* The test a method_missing Method mi's capture id runs first, the
+   respond_to_missing? method q of mi's class (cplan_missing_guard) on the
+   receiver held in _t<tmp> (-1: self), with include_private false for a
+   public_method, as the head of a comma expression the caller closes:
+   CRuby's NameError when it answers false */
+static void emit_missing_guard(Compiler *c, int id, int mi, int q, int tmp, Buf *b) {
+  buf_printf(b, "((void)(%s(", mc_method(c, &c->scopes[q]));
+  if (tmp >= 0) buf_printf(b, "_t%d", tmp);
+  else buf_puts(b, g_self);
+  buf_printf(b, ", %d) || (sp_raise_cls(\"NameError\", (&(\"\\xff\" \"undefined method '%s' for class '%s'\")[1])), 0)), ",
+             !nt_int(c->nt, id, "public_capture", 0), method_sym_arg(c, id), method_desc_class_name(c, c->scopes[mi].class_id));
+}
+
 static int emit_method_obj_target(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc, const int *argv, int capture) {
   /* Klass.instance_method(:sym) -> the unbound object: the same
      sp_BoundMethod with a NULL self, so name/arity/owner ride the Method
@@ -1974,6 +2005,9 @@ static int emit_method_obj_target(Compiler *c, int id, Buf *b, const NodeTable *
       return 1;
     }
     /* bare method(:sym) on an instance method binds the current self */
+    /* a method_missing Method (cplan_capture_missing) binds its receiver
+       after its respond_to_missing? test */
+    int mmq = cplan_missing_guard(c, mi);
     int self_bound = (recv < 0 && mi >= 0 && c->scopes[mi].class_id >= 0 &&
                       !c->scopes[mi].is_cmethod);
     /* Whether this Method's target can ride the legacy sp_int poly-call ABI.
@@ -2076,6 +2110,7 @@ static int emit_method_obj_target(Compiler *c, int id, Buf *b, const NodeTable *
     int in_c = 1;
     if (bop) builtin_method_params("Array", sym, &in_c);
     const char *pp = proc_params_arg(mi >= 0 ? method_proc_params(c, mi) : bop && in_c ? PROC_PARAMS_ARITY : PROC_PARAMS_LIST);
+    if (mmq >= 0 && (self_rooted || recv < 0)) emit_missing_guard(c, id, mi, mmq, self_rooted ? self_tmp : -1, b);
     if (pp) buf_puts(b, "sp_bm_set_proc_params(");
     buf_puts(b, mi >= 0 || bop ? "sp_bm_set_thunk(sp_bm_set_abi(sp_bound_method_new_d(" : "sp_bm_set_thunk(sp_bm_set_abi(sp_bound_method_new(");
     if (self_rooted) buf_printf(b, "_t%d", self_tmp);
@@ -2288,6 +2323,7 @@ static int emit_method_obj_target(Compiler *c, int id, Buf *b, const NodeTable *
                        mi >= 0 ? mi_fixed : bop_argc, mi >= 0 ? mi_rest : bop_rest,
                        mi >= 0 ? (mi_legacy ? mi_ret : mi_pret) : bop_ret, mi_poly, mi_pfixed, _th, _tmin, _tmax); }
     if (pp) buf_printf(b, ", %s)", pp);
+    if (mmq >= 0 && (self_rooted || recv < 0)) buf_puts(b, ")");
     if (self_rooted) buf_puts(b, "; })");
     return 1;
   }
@@ -2378,7 +2414,7 @@ int emit_call_method_obj_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
       continue;
     }
     buf_printf(b, "{ _t%d = ", tr);
-    if (!emit_method_obj_target(c, id, b, nt, name, recv, argc, argv, to[i])) {
+    if (!emit_method_obj_target(c, id, b, nt, name, recv, argc, argv, cplan_capture_arm(c, id, to[i]))) {
       if (vr >= 0) view_unbind(vr);
       buf_erase(b, start, b->len - start);
       return 0;

@@ -96,6 +96,35 @@ int cplan_super_target(Compiler *c, int id, Scope *s, int *at);
 /* A conversion performed by a helper, separately from the enclosing call. */
 CallPlan cplan_conversion(Compiler *c, int ci, const char *name);
 CallPlan cplan_method_call(Compiler *c, int id);
+/* The Method a capture (`k.method(:a)`) makes where it finds no method of
+   the name and k's class answers respond_to_missing?: the method
+   desugar_missing_method_obj made for it (its scope on the capture), whose
+   call runs method_missing(:a, ...); -1 for none. method_obj_lookup binds it in
+   call_target's miss. */
+int cplan_capture_missing(Compiler *c, int id);
+/* May capture id (`recv.method(:sym)` on an object of program class k)
+   make a method_missing Method: k's chain holds no method of the name and
+   no accessor of it (a stand-in a later include or prepend puts in front
+   of none aside), no builtin does or may (one of Object's instance
+   methods as the oracle lists them, of a builtin module k includes, or of
+   a native class; any name where the chain holds a builtin class other
+   than Object, an Array's, an Exception's or a Struct's subclass, whose
+   methods the tables do not all list: ver_builtin_chain), no class under
+   k has one, and k's method_missing and respond_to_missing? are each a
+   def the record shows surely live where id runs (ct_met_version, in the
+   call plan's frame)? 0 where the record cannot tell: the capture keeps
+   its NameError. desugar_missing_method_obj makes the Method's methods
+   where it answers 1. */
+int cplan_capture_misses(Compiler *c, int id, int k, const char *sym);
+/* The test a capture of target t runs first,
+   respond_to_missing?(:a, include_private), which raises NameError when
+   false (the method desugar_missing_method_obj made, its scope on t's
+   def); -1 for a target no such test guards. */
+int cplan_missing_guard(Compiler *c, int t);
+/* What capture id binds for t, an arm of its target's guard: the
+   method_missing Method (cplan_capture_missing) where t is the stand-in a
+   later include put in front of no method (inc_super_behind), else t. */
+int cplan_capture_arm(Compiler *c, int id, int t);
 CallPlan cplan_send_arm(Compiler *c, int id);
 CallPlan cplan_exception_render(Compiler *c, int id, int ci);
 const CallPlan *cplan_user(Compiler *c, int id);

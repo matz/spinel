@@ -122,6 +122,8 @@ src/analyze_infer.c kconv_integer_kind to_int / to_i
 src/call_plan.c cplan_conversion the conversion protocol's names
 src/call_plan.c cplan_mm_method =METHOD_MISSING_NAME method_missing, which a call of a name no method answers runs, not one call's name
 src/call_plan.c cplan_mm_chain =METHOD_MISSING_NAME method_missing, which a call of a name no method answers runs, not one call's name
+src/call_plan.c cplan_dispatch_miss =METHOD_MISSING_NAME method_missing, which a call of a name no method answers runs, not one call's name
+src/call_plan.c cplan_capture_misses a capture's Symbol argument's method, and the method_missing and respond_to_missing? that answer for it, not one call's name
 src/codegen.c codegen_program the operators' and protocol methods' names
 src/codegen.c conv_bridge_callee the conversion protocol's names
 src/codegen.c display_method_scope the display protocol's names
@@ -226,6 +228,7 @@ src/codegen_call_object.c emit_blank_slate_defined_ask a Symbol argument's metho
 src/codegen_stmt.c emit_call_stmt =mn a visibility call's Symbol argument
 
 src/analyze.c desugar_builtin_method_obj a Symbol argument's method, and its wrapper's name
+src/analyze.c desugar_missing_method_obj a Symbol argument's helpers, found by their hidden names
 src/analyze.c desugar_kernel_method_block_arg a Symbol argument's method
 src/analyze.c dyn_method_prints a Symbol argument's method
 src/analyze.c dyn_reach_value a String argument's method

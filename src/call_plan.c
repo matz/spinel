@@ -685,6 +685,19 @@ CallPlan cplan_method_call(Compiler *c, int id) {
   return p;
 }
 
+/* See call_plan.h. */
+int cplan_capture_missing(Compiler *c, int id) {
+  return id >= 0 ? (int)nt_int(c->nt, id, "mm_target", 0) - 1 : -1;
+}
+int cplan_missing_guard(Compiler *c, int t) {
+  return t >= 0 && c->scopes[t].def_node >= 0 ? (int)nt_int(c->nt, c->scopes[t].def_node, "mm_test", 0) - 1 : -1;
+}
+int cplan_capture_arm(Compiler *c, int id, int t) {
+  int sup = t >= 0 && c->scopes[t].def_node >= 0 ? (int)nt_int(c->nt, c->scopes[t].def_node, "behind_super", 0) - 1 : -1;
+  int mw = sup >= 0 && cplan_user(c, sup)->mi < 0 && !cplan_user(c, sup)->core_hook ? cplan_capture_missing(c, id) : -1;
+  return mw >= 0 ? mw : t;
+}
+
 /* A literal-name arm emitted on boxed self uses the existing boxed
    candidates. Its record must not admit new arms to the outer send. */
 CallPlan cplan_send_arm(Compiler *c, int id) {
@@ -1417,12 +1430,12 @@ unsigned cplan_target_store_effect(Compiler *c, int tgt) {
 }
 /* A chain a typed call may meet with no version made yet (ct_version_at),
    kept for ver_entries_demand to make its entry (Compiler.ver_late) */
-static void ver_absent_note(Compiler *c, int rcls, int sg, const char *name, int mi, int ar, int mm) {
+static void ver_absent_note(Compiler *c, int rcls, int sg, const char *name, int mi, int ar, int mm, int span) {
   if (!(c->nver_late & (c->nver_late - 1)) &&
       !(c->ver_late = realloc(c->ver_late, sizeof *c->ver_late * (size_t)(c->nver_late ? 2 * c->nver_late : 1)))) {
     fprintf(stderr, "spinel: out of memory\n"); exit(1);
   }
-  c->ver_late[c->nver_late++] = (struct VerLate){ name_dup(name), rcls, sg, mi, ar, mm };
+  c->ver_late[c->nver_late++] = (struct VerLate){ name_dup(name), rcls, sg, mi, ar, mm, span };
 }
 /* The method_missing of class ci's own chain in the tables (its class
    side when cmethod), Object's left out; -1 for none, and for main (-1) */
@@ -1549,7 +1562,11 @@ static int ct_version_at(Compiler *c, int id, int cls, const char *name, unsigne
     const Scope *in = comp_scope_of(c, id);
     /* (an entry only where the call takes it, in a body that may run) */
     if (none && settled && in && comp_scope_may_run(c, (int)(in - c->scopes)) && c->ver_built && !span && (ix < 0 || !c->ver_entries[ix].absent))
-      ver_absent_note(c, rcls, sg, name, mi, ar, ver_mm_at(c, rcls, sg, p, at, &w));
+      ver_absent_note(c, rcls, sg, name, mi, ar, ver_mm_at(c, rcls, sg, p, at, &w), 0);
+    /* a call the build did not ask (one in a method made after it) whose
+       window spans versions asks the entry the build makes for such a call */
+    else if (many && ix < 0 && settled && in && comp_scope_may_run(c, (int)(in - c->scopes)) && c->ver_built && !span)
+      ver_absent_note(c, rcls, sg, name, mi, ar, 0, 1);
     vi = ix >= 0 && (many || c->ver_entries[ix].absent == 2) ? c->ver_entries[ix].scope : -1;
     n = ((span && many) || vi >= 0) && settled ? 2 : 0;
     if (!n) vi = -1;
@@ -2252,6 +2269,50 @@ static int cplan_capture_gap(Compiler *c, int id) {
     if (!capture_live_at(c, sites[k], ci, name)) return 1;
   return n < 0;
 }
+/* (does a builtin answer name for an instance of program class cid, or
+   may it: one of Object's instance methods, public or private, as the
+   oracle lists them (Kernel's, BasicObject's: object_instance_method_name),
+   one of a builtin module's cid includes (Comparable, Enumerable:
+   core_method_vis), or any where cid's chain holds a native class?) */
+static int capture_builtin_answers(Compiler *c, int cid, const char *name) {
+  if (object_instance_method_name(name) ||
+      (class_is_comparable(c, cid) && core_method_vis("Comparable", name, 0) > 0) ||
+      (class_mixes_in(c, cid, elab_module_named(c, "Enumerable"), 0) && core_method_vis("Enumerable", name, 0) > 0))
+    return 1;
+  for (int k = cid, d = 0; k >= 0 && d <= c->nclasses; k = c->classes[k].parent, d++)
+    if (c->classes[k].is_native_class) return 1;
+  return 0;
+}
+/* (is d a def that surely ran where it stands: under no condition, past
+   no statement that may raise first, elab_point_partial?) */
+static int ct_def_sure(Compiler *c, const LrDef *d) {
+  return d && d->kind == LR_DEF && !d->may && !d->unplaced && !elab_point_partial(c, d->node);
+}
+static int ver_builtin_chain(Compiler *c, int cls, int sg, const char *name, int ar, int blk);
+/* See call_plan.h. */
+int cplan_capture_misses(Compiler *c, int id, int k, const char *sym) {
+  static const char *const hooks[] = { METHOD_MISSING_NAME, RESPOND_TO_MISSING_NAME };
+  if (k < 0 || !sym || capture_builtin_answers(c, k, sym) || ver_builtin_chain(c, k, 0, sym, 0, 0) ||
+      ct_accessor_class(c, k, sym) >= 0)
+    return 0;
+  for (int i = 0; i < 2; i++)
+    if (comp_method_in_chain(c, k, hooks[i], NULL) < 0) return 0;
+  /* (a method of the name, but for the stand-in a later include or
+     prepend puts in front of none, cplan_capture_arm) */
+  int mi = comp_method_in_chain(c, k, sym, NULL), nd = 0;
+  if (mi >= 0 && !c->scopes[mi].mixin_guarded && c->scopes[mi].entry == ENTRY_NONE) return 0;
+  /* a class under k that has one: the receiver may be of it */
+  const int *ds = comp_descendants(c, k, &nd);
+  for (int i = 0; i < nd; i++) {
+    int d = ds[i], dm = comp_method_in_chain(c, d, sym, NULL);
+    if (!c->classes[d].unreferenced && ((dm >= 0 && dm != mi) || ct_accessor_class(c, d, sym) >= 0)) return 0;
+  }
+  /* both hooks a def surely live where the capture runs */
+  int framed = elab_plan_enter(c, id), live = 1, none;
+  for (int i = 0; i < 2 && live; i++) live = ct_def_sure(c, ct_met_version(c, id, k, hooks[i], 0, &none));
+  if (framed) elab_plan_leave(c);
+  return live;
+}
 /* See call_plan.h. */
 int cplan_builtin_method_vis(Compiler *c, int node, int ci, const char *cls, const char *m, int inherit) {
   const ClassInfo *ki = ci >= 0 ? &c->classes[ci] : NULL;
@@ -2269,7 +2330,7 @@ CplanMissing cplan_dispatch_miss(Compiler *c, int id, int cid) {
       builtin_object_method_known(name) || is_kernel_module_function(name) ||
       (is_comparable_module_method(name) && class_is_comparable(c, cid)) ||
       (name_is_enumerable_module_method(name) && class_mixes_in(c, cid, elab_module_named(c, "Enumerable"), 0)) ||
-      comp_method_in_chain(c, cid, "method_missing", NULL) >= 0 || an_user_defines_method(c, "method_missing"))
+      comp_method_in_chain(c, cid, METHOD_MISSING_NAME, NULL) >= 0 || an_user_defines_method(c, METHOD_MISSING_NAME))
     return CM_NONE;
   for (int k = cid, d = 0; k >= 0 && d <= c->nclasses; k = c->classes[k].parent, d++)
     if (c->classes[k].is_native_class) return CM_NONE;
@@ -6462,10 +6523,14 @@ void ver_memo_drop(Compiler *c) {
   c->ver_memo = NULL;
   c->ver_memo_cap = c->ver_memo_n = 0;
 }
-static int ver_late_cmp(const void *a, const void *b) {
-  const struct VerLate *x = a, *y = b;
+static int ver_late_key_cmp(const struct VerLate *x, const struct VerLate *y) {
   int d = strcmp(x->name, y->name);
   return d ? d : x->cls != y->cls ? x->cls - y->cls : x->sg != y->sg ? x->sg - y->sg : x->ar - y->ar;
+}
+static int ver_late_cmp(const void *a, const void *b) {   /* (a key's spanning calls last) */
+  const struct VerLate *x = a, *y = b;
+  int d = ver_late_key_cmp(x, y);
+  return d ? d : x->span - y->span;
 }
 /* The entries of the chains a typed call may meet with no version made
    yet (ver_absent_note), each asked once: one whose else arm answers for
@@ -6482,6 +6547,13 @@ static int ver_late_make(Compiler *c) {
     const struct VerLate *l = &c->ver_late[i];
     int ix = ver_entry_ix(c, 0, l->cls, l->sg, l->name, l->ar), absent = 0, e, mm = 0, finds = VER_FINDS_NONE;
     if ((i && !ver_late_cmp(l - 1, l)) || (ix >= 0 && c->ver_entries[ix].absent)) continue;
+    if (l->span) {   /* (the build's entry for a call that spans versions, unless the key's others made one) */
+      if (ix < 0 && !(i && !ver_late_key_cmp(l - 1, l)) && (e = ver_entry_make(c, NULL, l->cls, l->sg, l->name, l->mi, l->ar, 1, NULL, &finds)) >= 0) {
+        ver_entry_add(c, c->scopes[e].name, (struct VerEntry){ NULL, 0, l->cls, l->sg, l->ar, e, .finds = finds });
+        made = 1;
+      }
+      continue;
+    }
     for (int j = i; j < c->nver_late && !ver_late_cmp(l, &c->ver_late[j]); j++) mm |= c->ver_late[j].mm;   /* (over every call of the key) */
     e = ver_entry_make(c, &q, l->cls, l->sg, l->name, l->mi, l->ar, mm, &absent, &finds);
     if (ix < 0) ver_entry_add(c, e >= 0 ? c->scopes[e].name : l->name, (struct VerEntry){ NULL, 0, l->cls, l->sg, l->ar, absent ? e : -1, absent ? 2 : 1, .finds = finds });

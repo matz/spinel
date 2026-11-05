@@ -1,0 +1,30 @@
+[:g, :echo, [1, 2], {}, nil]
+[:g, :echo, [3], {k: 4}, :blk]
+[:g, :echo, [5], {}, nil]
+[:g, :echo, [6], {}, nil]
+40
+-1
+[[:rest]]
+:echo
+:echo
+Ghost
+true
+nil
+nil
+"#<Method: Ghost#echo(*)>"
+"#<UnboundMethod: Ghost#echo(*)>"
+true
+true
+true
+false
+[:g, :echo, [7], {}, nil]
+[[:g, :echo, [1], {}, nil], [:g, :echo, [2], {}, nil]]
+true
+[[:real, 8], [:g, :echo, [8], {}, nil]]
+[1, -1]
+[:g, :echo, [9], {}, nil]
+[Ghost, Ghost]
+[NameError, :nothing]
+[NameError, :a]
+[:mm, :=~]
+[:=~, -1, AnyName]

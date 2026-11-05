@@ -15773,6 +15773,10 @@ static int emit_super_object_builtin(Compiler *c, int id, Scope *s, const char *
   }
   else {
     buf_puts(&vb, "({ ");
+    /* (respond_to_missing?'s two arguments are run for their effect) */
+    int sa = nt_kind(c->nt, id) == NK_SuperNode ? nt_ref(c->nt, id, "arguments") : -1, na = 0;
+    const int *av = sa >= 0 ? nt_arr(c->nt, sa, "arguments", &na) : NULL;
+    for (int i = 0; i < na; i++) { buf_puts(&vb, "(void)("); emit_expr_for_effect(c, av[i], &vb); buf_puts(&vb, "); "); }
     emit_super_blockarg_effect(c, id, &vb);
     if (kind == SUPER_OBJ_FALSE) buf_puts(&vb, "((sp_bool)0); })");
     else if (kind == SUPER_OBJ_FROZEN) buf_printf(&vb, "((sp_bool)sp_gc_is_frozen(%s)); })", g_self);

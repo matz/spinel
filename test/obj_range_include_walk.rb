@@ -77,3 +77,11 @@ begin
 rescue TypeError => e
   p e.message
 end
+
+# a Range built from boxed ends becomes a Range of objects at run time, and
+# its ends are classified the same way
+bv = [N.new(1), 1, K.new(1)]
+br = (bv[0]..)
+p br.include?(N.new(2.5))
+bk = (bv[2]..bv[2].succ.succ)
+p bk.include?(K.new(2))

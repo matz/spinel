@@ -518,9 +518,50 @@ static int root_method_vis(Compiler *c, const char *qm) {
 /* Is qm a name only the program's Object, Kernel or BasicObject defines,
    with no class or module of its own defining or undefining it and no
    respond_to_missing? anywhere? Then a builtin value's answer to each flag
-   is Object's visibility, which respond_to_static_answer reads. */
+   is Object's visibility, which respond_to_static_answer reads. Not when
+   the program can hold a method the table does not show (an alias, a
+   visibility word with a name, define_method). */
+/* Does a class or module other than Object, Kernel or BasicObject (or a
+   call outside any class body) name qm to a visibility word, an alias or
+   define_method? (`class Integer; public :op; end` gives Integer a
+   public op the class table does not list) */
+static int qm_named_off_root(Compiler *c, const char *qm) {
+  const NodeTable *nt = c->nt;
+  static const char *const W[] = { "public", "private", "protected", "module_function",
+    "alias_method", "define_method", "public_class_method", "private_class_method", NULL };
+  int n = 0;
+  const int *ids = nt_nodes_of_kind(nt, NK_AliasMethodNode, &n);
+  for (int i = 0; i < n; i++) {
+    int nn = nt_ref(nt, ids[i], "new_name");
+    const char *an = nn >= 0 ? nt_str(nt, nn, "value") : NULL;
+    if (!an || sp_streq(an, qm)) return 1;
+  }
+  ids = nt_nodes_of_kind(nt, NK_CallNode, &n);
+  for (int i = 0; i < n; i++) {
+    const char *nm = nt_str(nt, ids[i], "name");
+    int w = 0;
+    for (int k = 0; nm && W[k]; k++) if (sp_streq(nm, W[k])) { w = 1; break; }
+    if (!w) continue;
+    int a = nt_ref(nt, ids[i], "arguments"), ac = 0;
+    const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &ac) : NULL;
+    int names = 0;
+    for (int j = 0; j < ac; j++) {
+      NodeKind k = nt_kind(nt, av[j]);
+      const char *v = k == NK_SymbolNode ? nt_str(nt, av[j], "value") : NULL;
+      if (k == NK_DefNode) continue;
+      if (!v || sp_streq(v, qm)) names = 1;
+    }
+    if (!names) continue;
+    int cb = ids[i] < nt->count && c->node_cbody ? c->node_cbody[ids[i]] : -1;
+    if (cb < 0 || !c->classes[cb].name || !is_object_root(c->classes[cb].name)) return 1;
+  }
+  return 0;
+}
 static int flag_split_root_only(Compiler *c, const char *qm) {
-  if (!root_reopen_defines(c, qm) || any_class_defines(c, "respond_to_missing?")) return 0;
+  if (qm_named_off_root(c, qm)) return 0;
+  if (!root_reopen_defines(c, qm) || any_class_defines(c, "respond_to_missing?") ||
+      program_defines_unseen(c))
+    return 0;
   for (int k = 0; k < c->nclasses; k++) {
     if (name_list_has(c->classes[k].undefs, c->classes[k].nundefs, qm)) return 0;
     if (c->classes[k].name && is_object_root(c->classes[k].name)) continue;

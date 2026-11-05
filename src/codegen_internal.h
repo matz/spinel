@@ -707,6 +707,9 @@ int subtree_is_plain_value(Compiler *c, int id);
    show (plain_uses_walk, codegen_call.c), asked of the table as the parser
    wrote it: called ahead of analyze_program, whose desugars may rewrite one. */
 void plain_note_parsed(Compiler *c);
+/* ...and asked of the table as it is now (an alias, an undef, a visibility
+   word or a by-name call with a name that is no def's) */
+int program_defines_unseen(Compiler *c);
 int operand_is_held_read(Compiler *c, int id);
 /* Is the call a reader the emitter lowers to a plain field read? *allocates is
    set when the read builds a copy (a shared String slot). codegen_call.c */

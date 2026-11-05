@@ -24776,6 +24776,7 @@ static int plain_prog_defines_unseen(Compiler *c) {
   if (g) { memo_gen = g; memo = found; }
   return found;
 }
+int program_defines_unseen(Compiler *c) { return plain_prog_defines_unseen(c); }
 /* Is a call of `nm` on a builtin's value provably the builtin's own: the
    program has no def of that name anywhere, no attr of that name, and no
    way to define one that the node table does not show? Asked by the name

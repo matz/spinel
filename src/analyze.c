@@ -5895,11 +5895,10 @@ static int qc_expand_read_alias(char (*path)[64], int depth, char (*chain)[64], 
 /* While the constant pass rewrites reads (qualify_colliding_consts),
    qc_hint_only[i] says write i is a value constant's, which the load
    record keys after the walk (elab_const_keys): a read that matches it
-   keeps its name and takes qualify's answer as a hint (qc_key_hint), used
-   where the record cannot resolve the read. NULL for the class pass. */
+   keeps its name. NULL for the class pass. */
 static const unsigned char *qc_hint_only;
 static void qc_rename_read(const NodeTable *nt, int node, int w, const char *qn, int keep) {
-  if (qc_hint_only && qc_hint_only[w]) { nt_node_set_str((NodeTable *)nt, node, "qc_key_hint", qn); return; }
+  if (qc_hint_only && qc_hint_only[w]) return;
   if (keep) qc_keep_orig_name(nt, node);
   nt_set_str((NodeTable *)nt, node, "name", qn);
 }

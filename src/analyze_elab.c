@@ -7911,6 +7911,93 @@ static int lr_holder_path_write(Compiler *c, const LrHist *h) {
   return 0;
 }
 
+/* The class of the program's whose Ruby name is the path p spells (a path
+   through a builtin the program does not reopen, `Regexp::Syntax::Token`,
+   which the record cannot step through), LR_UNKNOWN_CLASS for none */
+static int lr_class_by_written_path_at(Compiler *c, int p, int read);
+static int lr_class_by_written_path(Compiler *c, int p) { return lr_class_by_written_path_at(c, p, -1); }
+/* ...where a relative path names a class under one of read's lexical scopes
+   (`Constants::Open` in `module SQLite3`'s class Database), innermost first */
+static int lr_class_by_written_path_at(Compiler *c, int p, int read) {
+  const NodeTable *nt = c->nt;
+  char path[512] = "", seg[QC_MAXDEPTH + 2][128];
+  int n = 0;
+  for (int q = p; q >= 0 && n < QC_MAXDEPTH + 2; q = nt_kind(nt, q) == NK_ConstantPathNode ? nt_ref(nt, q, "parent") : -1) {
+    NodeKind k = nt_kind(nt, q);
+    if (k != NK_ConstantPathNode && k != NK_ConstantReadNode) return LR_UNKNOWN_CLASS;
+    const char *w = lr_written_name(nt, q);
+    if (!w) return LR_UNKNOWN_CLASS;
+    snprintf(seg[n++], sizeof seg[0], "%s", w);
+  }
+  for (int i = n - 1; i >= 0; i--) {
+    if (path[0]) strncat(path, "::", sizeof path - strlen(path) - 1);
+    strncat(path, seg[i], sizeof path - strlen(path) - 1);
+  }
+  LoadRecord *r = c->lrec;
+  int e = read >= 0 && read < r->n ? r->at[read] : -1;
+  for (int g = e >= 0 ? r->st[e].frame : -1; g >= 0 && n > 1; g = r->st[g].frame) {
+    NodeKind gk = nt_kind(nt, r->st[g].node);
+    if (gk != NK_ClassNode && gk != NK_ModuleNode) continue;
+    int ci = elab_header_class(c, r->st[g].node, NULL, NULL);
+    const char *cn = ci >= 0 ? class_ruby_name(c, ci) : NULL;
+    if (!cn) continue;
+    char full[640]; snprintf(full, sizeof full, "%s::%s", cn, path);
+    for (int k = 0; k < c->nclasses; k++) {
+      const char *rn = class_ruby_name(c, k);
+      if (rn && sp_streq(rn, full)) return k;
+    }
+  }
+  int leaf = LR_UNKNOWN_CLASS, nleaf = 0;
+  for (int k = 0; path[0] && k < c->nclasses; k++) {
+    const char *rn = class_ruby_name(c, k), *l = rn;
+    if (rn && sp_streq(rn, path)) return k;
+    for (const char *q = rn ? strstr(rn, "::") : NULL; q; q = strstr(q + 2, "::")) l = q + 2;
+    if (n == 1 && l && sp_streq(l, path)) { leaf = k; nleaf++; }
+  }
+  /* a bare name (`UnicodeProperty`, found through an ancestor's module the
+     record cannot place either): the one class of the program by that leaf */
+  return nleaf == 1 ? leaf : LR_UNKNOWN_CLASS;
+}
+
+/* The entity a constant read names when the record cannot say whether it
+   is bound yet (a write that may not have run, one in another region): the
+   lookup's order, lexical scopes innermost first, then the innermost
+   class's ancestors and Object's, the first history of the name with any
+   write, sure or not. A scoped read (`A::X`) looks in A and its
+   superclasses. NULL where none is. */
+static const LrHist *lr_const_cand(Compiler *c, int node, const char *name) {
+  LoadRecord *r = c->lrec;
+  const NodeTable *nt = c->nt;
+  const LrHist *h;
+  if (!name) return NULL;
+  if (nt_kind(nt, node) == NK_ConstantPathNode && !lr_root_read(nt, node)) {
+    int par = nt_ref(nt, node, "parent"), pc = par >= 0 ? lr_class_ref_at(c, par, NULL) : LR_MAIN;
+    if (pc < LR_MAIN && par >= 0) pc = lr_class_by_written_path_at(c, par, node);
+    for (int d = 0; pc >= LR_MAIN && d < 64; pc = pc == LR_MAIN ? LR_UNKNOWN_CLASS : lr_super(c, pc), d++)
+      if ((h = lr_hist(r, LR_KEY_CONST, lr_const_owner(pc), name, 0)) && h->n) return h;
+    return NULL;
+  }
+  int e = node >= 0 && node < r->n ? r->at[node] : -1, first = LR_MAIN;
+  if (e < 0) return NULL;
+  if (!lr_root_read(nt, node))
+    for (int g = r->st[e].frame; g >= 0; g = r->st[g].frame) {
+      NodeKind k = nt_kind(nt, r->st[g].node);
+      if (k == NK_SingletonClassNode) {
+        int owner = lr_singleton_owner(c, g);
+        if (owner && (h = lr_hist(r, LR_KEY_CONST, owner, name, 0)) && h->n) return h;
+        continue;
+      }
+      if (k != NK_ClassNode && k != NK_ModuleNode) continue;
+      int ci = elab_header_class(c, r->st[g].node, NULL, NULL);
+      if (ci < 0) return NULL;
+      if (first == LR_MAIN) first = ci;
+      if ((h = lr_hist(r, LR_KEY_CONST, lr_const_owner(ci), name, 0)) && h->n) return h;
+    }
+  for (int cls = first == LR_MAIN ? LR_UNKNOWN_CLASS : lr_super(c, first), d = 0; cls >= 0 && d < 64; cls = lr_super(c, cls), d++)
+    if ((h = lr_hist(r, LR_KEY_CONST, lr_const_owner(cls), name, 0)) && h->n) return h;
+  return (h = lr_hist(r, LR_KEY_CONST, lr_const_owner(LR_MAIN), name, 0)) && h->n ? h : NULL;
+}
+
 void elab_const_keys(Compiler *c) {
   LoadRecord *r = c->lrec;
   const char *e = getenv("SPINEL_CONST_KEY_CHECK");
@@ -7994,11 +8081,7 @@ void elab_const_keys(Compiler *c) {
   for (int id = 0; id < nt->count; id++) {
     NodeKind k = nt_kind(nt, id);
     if ((k != NK_ConstantReadNode && k != NK_ConstantPathNode) || skip[id]) continue;
-    if (id >= r->n || r->at[id] < 0) {   /* (no point: qualify's answer, as for a read the record cannot resolve) */
-      const char *hint = nt_str(nt, id, "qc_key_hint");
-      if (hint && !sp_streq(hint, nt_str(nt, id, "name") ? nt_str(nt, id, "name") : "")) lr_key_queue(&q, &nq, &cq, id, hint);
-      continue;
-    }
+    if (id >= r->n || r->at[id] < 0) continue;   /* (no point: the name as written) */
     const LrDef *d = NULL;
     const char *nm = lr_written_name(nt, id);
     int o;
@@ -8011,9 +8094,15 @@ void elab_const_keys(Compiler *c) {
     }
     if (o != ELAB_YES || !d) {
       if (o == ELAB_NO) rno++; else runk++;
-      /* a read the record cannot resolve takes qualify's answer (qc_key_hint) */
-      const char *hint = nt_str(nt, id, "qc_key_hint");
-      if (hint && !sp_streq(hint, nt_str(nt, id, "name") ? nt_str(nt, id, "name") : "")) lr_key_queue(&q, &nq, &cq, id, hint);
+      /* a read the record cannot bind yet names the entity the lookup
+         meets first (lr_const_cand) */
+      const LrHist *ch = lr_const_cand(c, id, nm);
+      for (int i = 0; ch && i < ne; i++)
+        if (&r->hist[es[i].h] == ch) {
+          if (!es[i].cls_ent && es[i].key && !sp_streq(es[i].key, nt_str(nt, id, "name") ? nt_str(nt, id, "name") : ""))
+            lr_key_queue(&q, &nq, &cq, id, es[i].key);
+          break;
+        }
       const char *rn = nt_str(nt, id, "name");
       if (check && rn && nm && !sp_streq(rn, nm))
         fprintf(stderr, "constkey: unresolved-renamed %s %s line %lld name=%s written=%s\n", o == ELAB_NO ? "no" : "unknown",

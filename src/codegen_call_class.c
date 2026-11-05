@@ -790,15 +790,34 @@ int emit_call_reflection_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
         if (0) { }
         else if ((rt == TY_CLASS && class_value_responds(c, 0, qm, NULL)) ||
                  ((rt == TY_POLY || rt == TY_UNKNOWN) && !any_class_responds(c, qm))) {
-          int tv = class_value_responds(c, 0, qm, NULL) ? ++g_tmp : 0;
+          /* a nil the poly value holds answers by the program's NilClass
+             (Object, Kernel) where it defines, undefines or hides the name */
+          int nil_prog = 0, nil_ans = rt == TY_CLASS ? 0 : nil_responds_static(c, qm, argc, argv, &nil_prog);
+          /* (an include_all only the run time knows, which a private name
+             of the program's NilClass, Object or Kernel answers by: read once) */
+          NodeKind iak = argc >= 2 ? nt_kind(nt, argv[1]) : NK_TrueNode;
+          int ia_once = rt != TY_CLASS && nil_prog && nil_ans == 2 && argc >= 2 &&
+                        iak != NK_TrueNode && iak != NK_FalseNode;
+          int nil_arm = rt != TY_CLASS && nil_prog && (nil_ans != 2 || ia_once);
+          int cls_arm = class_value_responds(c, 0, qm, NULL);
+          int tv = cls_arm || nil_arm ? ++g_tmp : 0;
           if (!tv && argc == 1 && (rt == TY_POLY || rt == TY_UNKNOWN) &&
               emit_boxed_responds_builtin_absent(c, recv, qm, b)) return 1;
-          if (tv) { buf_printf(b, "({ sp_RbVal _t%d = ", tv); emit_boxed(c, recv, b); buf_printf(b, "; sp_poly_responds_builtin(_t%d", tv); }
+          if (tv) {
+            buf_printf(b, "({ sp_RbVal _t%d = ", tv); emit_boxed(c, recv, b); buf_puts(b, "; ");
+            if (ia_once) { buf_printf(b, "int _ia%d = ", tv); emit_cond(c, argv[1], b); buf_puts(b, "; "); }
+            if (nil_arm) {
+              buf_printf(b, "_t%d.tag == SP_TAG_NIL ? (sp_bool)(", tv);
+              emit_nil_side_answer(c, qm, argc, argv, ia_once ? tv : 0, b);
+              buf_puts(b, ") : ");
+            }
+            buf_printf(b, "sp_poly_responds_builtin(_t%d", tv);
+          }
           else { buf_puts(b, "sp_poly_responds_builtin("); emit_boxed(c, recv, b); }
           buf_puts(b, ", \"");
           emit_c_escaped(b, qm);
           buf_puts(b, "\")");
-          if (tv) { class_value_responds(c, tv, qm, b); buf_puts(b, "; })"); }
+          if (tv) { if (cls_arm) class_value_responds(c, tv, qm, b); buf_puts(b, "; })"); }
           return 1;
         }
         else if ((rt == TY_POLY || rt == TY_UNKNOWN) && any_class_responds(c, qm)) {
@@ -824,6 +843,15 @@ int emit_call_reflection_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
           NodeKind iak = argc >= 2 ? nt_kind(nt, argv[1]) : NK_TrueNode;
           int ia_once = argc >= 2 && iak != NK_TrueNode && iak != NK_FalseNode;
           if (ia_once) { buf_printf(b, "int _ia%d = ", tv); emit_cond(c, argv[1], b); buf_puts(b, "; "); }
+          /* a nil the value holds answers by the program's NilClass (Object,
+             Kernel) where it defines, undefines or hides the name: the
+             builtin surface below does not know a private or undefined one */
+          { int nil_prog = 0, nil_ans = nil_responds_static(c, qm, argc, argv, &nil_prog);
+            if (nil_prog && (nil_ans != 2 || ia_once)) {
+              buf_printf(b, "_t%d.tag == SP_TAG_NIL ? (sp_bool)(", tv);
+              emit_nil_side_answer(c, qm, argc, argv, ia_once ? tv : 0, b);
+              buf_puts(b, ") : ");
+            } }
           buf_puts(b, "(");
           char wbase[256]; wbase[0] = '\0';
           int is_wr = setter_base_name(qm, wbase, sizeof wbase);

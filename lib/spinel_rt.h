@@ -2366,8 +2366,8 @@ static sp_bool sp_poly_responds_builtin(sp_RbVal v, const char *m) {
      a flat false (#3815). */
   if (strcmp(cn, "NilClass") == 0) {
     static const char *const nilm[] = {
-      "to_a", "to_h", "to_i", "to_f", "to_r", "to_c", "&", "|", "^",
-      "inspect", "nil?", "instance_variables", NULL };
+      "to_a", "to_h", "to_i", "to_f", "to_r", "to_c", "rationalize", "&", "|", "^",
+      "=~", "inspect", "nil?", "instance_variables", NULL };
     return sp_str_in_list(m, nilm);
   }
   if (strcmp(cn, "TrueClass") == 0 || strcmp(cn, "FalseClass") == 0) {

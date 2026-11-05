@@ -724,9 +724,9 @@ int emit_call_exception_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, c
       /* a class of the program carries its own id (sp_user_exc_class), so
          #superclass and #ancestors walk past a user parent */
       if (g_needs_class_machinery)
-        buf_printf(b, "(_t%d ? sp_user_exc_class(sp_exc_class_name(_t%d)) : ((sp_Class){0, SPL(\"NilClass\")}))", t, t);
+        buf_printf(b, "(_t%d ? sp_user_exc_class(sp_exc_class_name(_t%d)) : ((sp_Class){(sp_int)-1, SPL(\"NilClass\")}))", t, t);
       else
-        buf_printf(b, "((sp_Class){0, _t%d ? sp_exc_class_name(_t%d) : SPL(\"NilClass\")})", t, t);
+        buf_printf(b, "((sp_Class){(sp_int)-1, _t%d ? sp_exc_class_name(_t%d) : SPL(\"NilClass\")})", t, t);
       return 1;
     }
     /* object identity: the same raised object compares equal to $! / a `=> e`

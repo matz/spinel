@@ -25243,6 +25243,9 @@ static void civ_ensure_accessor(NodeTable *nt, int m, const char *iv, int kind) 
   nt_node_set_str(nt, d, "name", mname);
   nt_node_set_ref(nt, d, "receiver", fwd_new_node_like(nt, m, "SelfNode"));
   nt_node_set_ref(nt, d, "body", db);
+  /* no method of the program's: a call of it is the access it stands for
+     (2 for the setter, whose call elab_singleton_made reads as the write) */
+  nt_node_set_int(nt, d, "civ_accessor", kind == 1 ? 2 : 1);
   int *nb = malloc(sizeof(int) * (size_t)(bn + 1));
   if (!nb) return;
   nb[0] = d;

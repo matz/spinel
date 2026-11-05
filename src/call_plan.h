@@ -49,9 +49,16 @@ typedef enum {
   CRF_IO_REOPEN,   /* an IO reopening that yields (emit_io_reopen_call) */
   CRF_BIND_CALL,   /* a bind_call on a Class value with an armless class */
   CRF_TOP_SELF,    /* a receiverless call in a top-level def to a name main has a singleton method for (diagnose_unsupported_call) */
-  CRF_CAPTURE,     /* a record class's class method captured where its def may not have run (emit_call_method_obj_arms) */
+  CRF_CAPTURE,     /* a record class's class method captured where its def may not have run, or a module's absent one where its NameError's class is not told (emit_call_method_obj_arms) */
   CRF_RECORD_NEW   /* a record class's own `new` or `[]` called where its def may not have run (emit_new_call_arms, the bare new) */
 } CplanRefuseFrom;
+
+/* CallPlan.absent: the side a `method(:sym)` that finds no method names in
+   CRuby's NameError: an instance side ('K'), a class side ('#<Class:K>'),
+   or a module's class side before its singleton class is made ('Module');
+   untold: a module's, where the record cannot tell which of the last two,
+   whose capture the plan refuses (cplan_refuse_resolve) */
+enum { CP_ABSENT_NONE, CP_ABSENT_INST, CP_ABSENT_SG, CP_ABSENT_MODULE, CP_ABSENT_UNTOLD };
 
 typedef struct {
   int mi;                  /* the method scope, or -1 */
@@ -69,10 +76,10 @@ typedef struct {
                               reopen) */
   unsigned char method_call; /* a Method invocation, even with no source node */
   unsigned char absent;    /* a `method(:sym)` that finds no method of
-                              owner_ci's side (2 its class side, 1 its
-                              instance side): CRuby's NameError, where it
-                              runs (mi -1) or while no version of the entry
-                              mi is live (cplan_capture_absent) */
+                              owner_ci's side (CP_ABSENT_*): CRuby's
+                              NameError, where it runs (mi -1) or while no
+                              version of the entry mi is live
+                              (cplan_capture_absent) */
   unsigned char rkind;     /* CP_REFUSE: CplanRefuse */
   const char *msg;         /* CP_REFUSE: the message, as the compiler prints it */
   unsigned char rfrom;     /* CP_REFUSE: CplanRefuseFrom */

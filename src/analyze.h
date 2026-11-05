@@ -328,6 +328,21 @@ int elab_self_at(Compiler *c, int node);
    itself (a block of another call may run under another self, as
    class_exec's does); -2 otherwise, and for main's top level */
 int elab_self_value_at(Compiler *c, int node);
+/* Has module cls's singleton class been made at p, which CRuby makes on
+   the first of its makers (is_singleton_class_maker, a def on the
+   singleton, `class << m`, an instance or class variable write), or at
+   boot for a builtin module (builtin_singleton_at_boot): ELAB_YES it is
+   or a maker surely ran before p; ELAB_NO no form of the program can make
+   it before p; ELAB_UNKNOWN otherwise, and for a p with no point.
+   A Method's NameError names the class `#<Class:M>` once it is made,
+   `Module` before. */
+int elab_singleton_made(Compiler *c, int cls, LoadPoint p);
+/* May module cls be on a singleton class's chain, so that a Method of
+   that class side finds its instance methods: an extend of it (or of a
+   module the record cannot name), a prepend to a singleton, an include
+   into a core class (Object, Kernel, Module, ...), or one into a receiver
+   the record does not hold as a class */
+int elab_module_on_singleton_chain(Compiler *c, int cls);
 /* What a reflection on class cls at call id (from the first statement of
    its window, elab_call_window) cannot answer as the load's end does: of
    `kinds`, each whose every contributor the record cannot prove ran for

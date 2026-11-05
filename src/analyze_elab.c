@@ -113,7 +113,7 @@ struct LoadRecord {
   /* the call plan's frame (elab_plan_enter): the map one build made, swapped
      in while call_target asks its questions, with the parents it climbed and
      the run points made of it (lr_run_points) */
-  struct LrPlan { LrStmt *st; int nst, cst, *at; unsigned char *bits; int n, ncap, runs_of, nrun, *rend, *rinst, *urun; } plan;
+  struct LrPlan { LrStmt *st; int nst, cst, *at; unsigned char *bits; int n, ncap, runs_of, nrun, *rend, *rinst, *urun, *rentry; } plan;
   int *up;                   /* [n] the parent each node's point was climbed from */
   int *plan_par, plan_depth;
   unsigned char plan_made;
@@ -163,6 +163,7 @@ struct LoadRecord {
   LrSlotPoint *slotp; int nslotp, cslotp; long slot_entries;
   int runs_of, nrun, *rend;  /* lr_run_points: the build its bits are of, how many statements run code, each region's end */
   int *rinst, *urun;         /* ...from which statement on an object of each class may exist, each def's body may run (lr_rta) */
+  int *rentry;               /* ...and each region's load (all three statements of region 0) */
   unsigned char defs_computed;          /* ...and whether the program makes or copies a method by a computed name */
   struct LrVers *vers; int nvers, cvers, *vers_head;
   int follow;                /* the aliases lr_class_of is following, to cap a chain */
@@ -832,10 +833,11 @@ void elab_hold(Compiler *c, int on) {
    lr_rta's first statements) are facts of one map's statement numbers, so
    they swap with it: the frame and the live map each make their own. */
 static void lr_plan_swap(LoadRecord *r) {
-  struct LrPlan live = { r->st, r->nst, r->cst, r->at, r->bits, r->n, r->ncap, r->runs_of, r->nrun, r->rend, r->rinst, r->urun };
+  struct LrPlan live = { r->st, r->nst, r->cst, r->at, r->bits, r->n, r->ncap, r->runs_of, r->nrun, r->rend, r->rinst, r->urun, r->rentry };
   r->st = r->plan.st; r->nst = r->plan.nst; r->cst = r->plan.cst; r->at = r->plan.at;
   r->bits = r->plan.bits; r->n = r->plan.n; r->ncap = r->plan.ncap;
   r->runs_of = r->plan.runs_of; r->nrun = r->plan.nrun; r->rend = r->plan.rend; r->rinst = r->plan.rinst; r->urun = r->plan.urun;
+  r->rentry = r->plan.rentry;
   r->plan = live;
 }
 static void *lr_dup(const void *v, size_t sz) {
@@ -4246,11 +4248,21 @@ static int lr_node_runs(Compiler *c, int id) {
    allocate, a builder's [], exception and raise make the class
    of a constant they are given (of a class method's self, that class and
    its subclasses; of `x.class`, none new; else any). Main and the core
-   classes have instances from the start. rinst[k + 1]: the first statement
-   an object with k among its ancestors may exist (LR_NEVER: none);
-   urun[def]: the first statement a recorded def's body may run, 0 for one
-   the record did not record. */
-enum { LR_NEVER = INT_MAX, LR_CORE = -4, RQ_INST = 1, RQ_CLASS = 2 };
+   classes have instances from the start. A region no load places runs
+   inside the statement of region 0 that loads it, so the walk goes over
+   region 0's statements and scans a region's at the first one that may
+   load it: a require naming one of its files, a call of every name or of
+   a file loader's name (which may load any file); and from the start
+   where no keyed require names it (one in any body, even a method never
+   called). Each region is scanned once: a require loads once, and what a
+   scan finds holds from its statement on.
+   rinst[k + 1]: the first statement an object with k among its ancestors
+   may exist (LR_NEVER: none); urun[def]: the first statement a recorded
+   def's body may run, 0 for one the record did not record; rentry[k]: the
+   first statement region k's load may run (LR_NEVER: none). All three are
+   statements of region 0, the one time every region's code shares: a
+   statement of another region is not ordered against them. */
+enum { LR_NEVER = INT_MAX, LR_CORE = -4, RQ_INST = 1, RQ_CLASS = 2, LR_RG_NAMED = 1, LR_RG_IN = 2 };
 /* The order of version v against point p (late == 1: as of the load phase's
    end): a version at a point, its point's; one a method body makes
    (LrDef.body), its extent's: after p where p comes before the first
@@ -4279,9 +4291,9 @@ static int lr_rta_builder(Compiler *c, int w) {
 typedef struct { const char *name; int cls; } LrRtaName;
 typedef struct {
   Compiler *c; LoadRecord *r;
-  int s, n, *key, *ustart, *ulist, *stack, nstack, *hnext, *hfirst;
-  unsigned char *hreach, *rq, *sub, *ext, *seen;
-  int allinst, cb, allcls, any, builders, ncname;
+  int s, n, *key, *ustart, *ulist, *stack, nstack, *hnext, *hfirst, *pend, npend;
+  unsigned char *hreach, *rq, *sub, *ext, *seen, *rbits;   /* (rbits: by region, LR_RG_*) */
+  int allinst, cb, allcls, any, builders, ncname, allreg;
   LrRtaName *cname;
   int *kid, *kids;   /* the classes by superclass: kids[kid[p + 1] .. kid[p + 2]) are p's (main's at p = LR_MAIN) */
 } LrRta;
@@ -4317,9 +4329,46 @@ static void lr_rta_ext(LrRta *t, int m, int d) {   /* module m extended onto a c
   for (int j = 0; mc && j < mc->nmix; j++)
     if (!elab_mix_on_singleton(mc->mix[j].kind)) lr_rta_ext(t, lr_later(t->c, &mc->mix[j].mod, mc->mix[j].ref), d + 1);
 }
-/* name called on an object of E (RQ_INST) or on any class object (RQ_CLASS) */
+/* Region k's load may run from statement t->s on: its statements are
+   scanned there (lr_rta_drain), once */
+static void lr_rta_enter(LrRta *t, int k) {
+  if (k <= 0 || k >= t->r->nregion || (t->rbits[k] & LR_RG_IN)) return;
+  t->rbits[k] |= LR_RG_IN;
+  t->r->rentry[k] = t->s;
+  t->pend[t->npend++] = k;
+}
+static void lr_rta_enter_all(LrRta *t) {
+  for (int k = 1; !t->allreg && k < t->r->nregion; k++) lr_rta_enter(t, k);
+  t->allreg = 1;
+}
+/* The region file f's statements are in, -1 for none */
+static int lr_rta_region(const LrRta *t, int f) {
+  const NodeTable *nt = t->c->nt;
+  int root = f > 0 && f < nt_nroots(nt) ? nt_root(nt, f) : -1;
+  return root >= 0 && root < t->n && t->r->at[root] >= 0 ? t->r->st[t->r->at[root]].region : -1;
+}
+/* The regions require id may load: its file's, those of the set its
+   computed path may name, every one for a set of any file; entered
+   (enter), or else only marked as named by a require */
+static void lr_rta_loads(LrRta *t, int id, int enter) {
+  const NodeTable *nt = t->c->nt;
+  if (prog_load_open(nt, id)) {
+    if (enter) lr_rta_enter_all(t);
+    for (int k = 1; !enter && k < t->r->nregion; k++) t->rbits[k] |= LR_RG_NAMED;
+    return;
+  }
+  for (int k = -1, nc = prog_load_ncand(nt, id); k < nc; k++) {
+    int g = lr_rta_region(t, k < 0 ? (int)nt_int(nt, id, "target_file", -1) : prog_load_cand(nt, id, k));
+    if (g > 0 && enter) lr_rta_enter(t, g);
+    else if (g > 0) t->rbits[g] |= LR_RG_NAMED;
+  }
+}
+/* name called on an object of E (RQ_INST) or on any class object (RQ_CLASS);
+   a file loader's name (a send of require, its method object, an alias of
+   it) may load any file */
 static void lr_rta_call(LrRta *t, const char *name, int how) {
   LoadRecord *r = t->r;
+  if (!t->allreg && is_file_load_name(name)) lr_rta_enter_all(t);
   int x = lr_name_ix(r, name);
   if (x < 0 || (t->rq[x] & how) == how) return;
   how &= ~t->rq[x];
@@ -4417,6 +4466,7 @@ static int lr_rta_once(LrRta *t, int id) {
    invoked names, and on class objects its callbacks) */
 static void lr_rta_all(LrRta *t, int disp) {
   LoadRecord *r = t->r;
+  if (!disp) lr_rta_enter_all(t);   /* require among them */
   if (!disp && !t->allinst) {
     t->allinst = 1;
     for (int i = 0; i < r->nhist; i++)
@@ -4522,6 +4572,9 @@ static void lr_rta_node(LrRta *t, int id) {
       }
       return;
     case NK_CallNode: break;
+    case NK_LoadNode:
+      lr_rta_loads(t, id, 1);
+      /* fallthrough */
     default:
       if (lr_node_runs(t->c, id) == LR_DISPATCH) lr_rta_all(t, 1);
       return;
@@ -4611,23 +4664,37 @@ static void lr_rta_names(LrRta *t) {
   t->ncname = m;
 }
 
+/* The code reached at statement t->s and not scanned yet: each body first
+   reached (lr_rta_unit), and each region entered (lr_rta_enter), whose
+   statements' nodes are one run of the groups */
+static void lr_rta_drain(LrRta *t) {
+  const LoadRecord *r = t->r;
+  for (;;) {
+    int lo, hi;
+    if (t->nstack) { lo = r->nst + t->stack[--t->nstack]; hi = lo + 1; }
+    else if (t->npend) { int k = t->pend[--t->npend]; lo = r->rend[k - 1]; hi = r->rend[k]; }
+    else return;
+    for (int j = t->ustart[lo]; j < t->ustart[hi]; j++) lr_rta_node(t, t->ulist[j]);
+  }
+}
+
 static void lr_rta(Compiler *c) {
   LoadRecord *r = c->lrec;
   const int *par = comp_parent_map(c);
-  LrRta t = { .c = c, .r = r, .n = c->nt->count < r->n ? c->nt->count : r->n };
+  LrRta t = { .c = c, .r = r, .n = c->nt->count < r->n ? c->nt->count : r->n, .allreg = r->nregion < 2 };
   int n = t.n, ncl = c->nclasses + 1, nk = r->nst + n;
-  t.key = malloc(sizeof(int) * (size_t)(4 * n + r->nst + 2 + r->nhist + ncl));
-  t.hreach = calloc((size_t)(r->nhist + r->nnames + 3 * ncl + n) + 1, 1);
+  t.key = malloc(sizeof(int) * (size_t)(4 * n + r->nst + 2 + r->nhist + ncl + r->nregion));
+  t.hreach = calloc((size_t)(r->nhist + r->nnames + 3 * ncl + n + r->nregion) + 1, 1);
   if (!t.key || !t.hreach) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-  t.ustart = t.key + n; t.ulist = t.ustart + nk + 2; t.stack = t.ulist + n; t.hnext = t.stack + n; t.hfirst = t.hnext + r->nhist;
-  t.rq = t.hreach + r->nhist; t.sub = t.rq + r->nnames; t.ext = t.sub + ncl; t.seen = t.ext + ncl;
+  t.ustart = t.key + n; t.ulist = t.ustart + nk + 2; t.stack = t.ulist + n; t.hnext = t.stack + n; t.hfirst = t.hnext + r->nhist; t.pend = t.hfirst + ncl;
+  t.rq = t.hreach + r->nhist; t.sub = t.rq + r->nnames; t.ext = t.sub + ncl; t.seen = t.ext + ncl; t.rbits = t.seen + n;
   for (int i = 0; i < n; i++) {   /* each node's innermost def (the def itself is its outer one's) */
     int p = par[i];
     while (p >= 0 && p < n && p > i && nt_kind(c->nt, p) != NK_DefNode) p = par[p];
     t.key[i] = p < 0 || p >= n ? -1 : nt_kind(c->nt, p) == NK_DefNode ? p : t.key[p];
   }
-  for (int i = 0; i < n; i++)   /* grouped: a def's nodes; the others by their statement of region 0 */
-    t.key[i] = t.key[i] >= 0 ? r->nst + t.key[i] : r->at[i] >= 0 && r->st[r->at[i]].region == 0 ? r->at[i] : -1;
+  for (int i = 0; i < n; i++)   /* grouped: a def's nodes; the others by their statement */
+    t.key[i] = t.key[i] >= 0 ? r->nst + t.key[i] : r->at[i] >= 0 ? r->at[i] : -1;
   memset(t.ustart, 0, sizeof(int) * (size_t)(nk + 2));
   for (int i = 0; i < n; i++) if (t.key[i] >= 0) t.ustart[t.key[i] + 2]++;
   for (int i = 1; i < nk + 2; i++) t.ustart[i] += t.ustart[i - 1];
@@ -4655,12 +4722,16 @@ static void lr_rta(Compiler *c) {
   lr_rta_names(&t);
   lr_rta_add(&t, LR_MAIN);
   for (int k = 0; k < c->nclasses; k++) if (c->classes[k].is_builtin_const) lr_rta_add(&t, k);
-  for (t.s = 0; t.s < r->nst; t.s++)
-    for (int i = t.ustart[t.s]; i < t.ustart[t.s + 1]; i++)
-      for (lr_rta_node(&t, t.ulist[i]); t.nstack;) {
-        int d = r->nst + t.stack[--t.nstack];
-        for (int j = t.ustart[d]; j < t.ustart[d + 1]; j++) lr_rta_node(&t, t.ulist[j]);
-      }
+  for (int k = 1; k < r->nregion; k++) r->rentry[k] = LR_NEVER;
+  NT_FOREACH_KIND(c->nt, NK_LoadNode, id)   /* a region no keyed require names, in any body: from the start */
+    if (id < n && t.key[id] >= 0) lr_rta_loads(&t, id, 0);
+  for (int k = 1; k < r->nregion; k++) if (!t.rbits[k]) lr_rta_enter(&t, k);
+  lr_rta_drain(&t);
+  for (t.s = 0; t.s < r->rend[0]; t.s++)
+    for (int i = t.ustart[t.s]; i < t.ustart[t.s + 1]; i++) {
+      lr_rta_node(&t, t.ulist[i]);
+      lr_rta_drain(&t);
+    }
   free(t.key); free(t.hreach); free(t.cname); free(t.kid);
 }
 
@@ -4712,11 +4783,12 @@ static void lr_run_points(Compiler *c) {
     r->rend[e->region] = s + 1;
   }
   r->nrun = n;
-  free(r->rinst); free(r->urun);
+  free(r->rinst); free(r->urun); free(r->rentry);
   r->rinst = calloc((size_t)(r->ncls > c->nclasses ? r->ncls : c->nclasses + 1) + 1, sizeof(int));
   r->urun = calloc((size_t)r->n + 1, sizeof(int));
-  if (!r->rinst || !r->urun) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-  if (r->nregion == 1) lr_rta(c);
+  r->rentry = calloc((size_t)r->nregion, sizeof(int));
+  if (!r->rinst || !r->urun || !r->rentry) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  lr_rta(c);
   r->runs_of = r->builds;
 }
 
@@ -7279,7 +7351,9 @@ void elab_dump(Compiler *c, FILE *out) {
   for (int i = 0; i < r->nhdr; i++)
     if (r->hdr[i].want == LR_NEW)
       fprintf(out, "entity %s: owner %s leaf %s\n", lr_class_name(c, r->hdr[i].cls), lr_class_name(c, r->hdr[i].owner), r->hdr[i].leaf);
-  if (r->nhist) lr_run_points(c);
+  if (r->nhist || r->nregion > 1) lr_run_points(c);
+  for (int k = 1; k < r->nregion; k++)   /* the first statement of region 0 each other region's load may run on (lr_rta) */
+    r->rentry[k] == LR_NEVER ? fprintf(out, "region %d: never\n", k) : fprintf(out, "region %d: entered #%d\n", k, r->rentry[k]);
   for (int i = 0; i < r->nhist; i++) {
     const LrHist *h = &r->hist[i];
     if (h->a == LR_KEY_RUNS) {   /* only the forms that run the program's code */
@@ -7307,7 +7381,7 @@ void elab_dump(Compiler *c, FILE *out) {
         int from = r->urun[v->body];   /* (0: a body lr_rta did not record, whose extent opens anywhere) */
         from == LR_NEVER ? fputs(" from=never", out) : from ? fprintf(out, " from=#%d", from) : fputs(" from=?", out);
       }
-      if (v->kind == LR_DEF && !v->body && h->a >= LR_MAIN && r->nregion == 1 && v->node < r->n && elab_method_versions(c, h->name) > 1)   /* lr_rta */
+      if (v->kind == LR_DEF && !v->body && h->a >= LR_MAIN && v->node < r->n && elab_method_versions(c, h->name) > 1)   /* lr_rta */
         r->urun[v->node] == LR_NEVER ? fputs(" runs=never", out) : fprintf(out, " runs=#%d", r->urun[v->node]);
       if (v->kind == LR_ALIAS && v->target) {   /* the version the alias takes, as the query answers it */
         const LrDef *d = NULL;
@@ -7505,7 +7579,7 @@ void elab_free(Compiler *c) {
     fprintf(stderr, "spinel-elab-check: family=\"%s\" asked=%ld differ=%ld\n", r->fam[i].reader, r->fam[i].asked, r->fam[i].differ);
   lr_record_drop(r);
   free(r->plan.st); free(r->plan.at); free(r->plan.bits); free(r->plan_par); free(r->up);
-  free(r->plan.rend); free(r->plan.rinst); free(r->plan.urun);
+  free(r->plan.rend); free(r->plan.rinst); free(r->plan.urun); free(r->plan.rentry);
   for (int i = 0; i < r->nnames; i++) free(r->names[i]);
   for (int i = 0; i < r->nreopens; i++) free(r->reopens[i]);
   for (int i = 0; i < r->nrefl; i++) free(r->refl[i]);
@@ -7523,7 +7597,7 @@ void elab_free(Compiler *c) {
   free(r->hist); free(r->mixed); free(r->rclass); free(r->unset.key); free(r->unset.un); free(r->clsmod); free(r->hhead); free(r->cls); free(r->vers); free(r->vers_head); free(r->set);
   for (int i = 0; i < r->nhdr; i++) free(r->hdr[i].leaf);
   free(r->hdr); free(r->hdr_head);
-  free(r->st); free(r->at); free(r->bits); free(r->dscope); free(r->rend); free(r->rinst); free(r->urun); free(r);
+  free(r->st); free(r->at); free(r->bits); free(r->dscope); free(r->rend); free(r->rinst); free(r->urun); free(r->rentry); free(r);
   c->lrec = NULL;
 }
 

@@ -1,0 +1,46 @@
+load record: 30 points, 5 regions
+r0 #0 f0 ProgramNode line 9
+r0 #1 f0 ClassNode K line 9
+  r0 #2 f0 DefNode v line 9
+r0 #3 f0 DefNode probe line 10
+r0 #4 f0 DefNode load_a line 11
+r0 #5 f0 DefNode load_d line 12
+r0 #6 f0 CallNode load_a line 13
+r0 #7 f0 IfNode line 14
+  r0 #8 may f0 LoadNode line 14
+r0 #9 f0 CallNode each line 15
+  r0 #10 f0 LoadNode line 15
+r0 #11 f0 LoadNode line 16
+r0 #12 f0 LoadNode line 17
+r0 #13 f0 ClassNode K line 18
+  r0 #14 f0 DefNode v line 18
+r0 #15 f0 CallNode puts line 19
+r1 #16 f1 ProgramNode line 1
+r1 #17 f1 CallNode puts line 1
+r2 #18 f2 ProgramNode line 1
+r2 #19 f2 ClassNode K line 1
+  r2 #20 f2 DefNode v line 1
+r2 #21 f2 CallNode puts line 2
+r3 #22 f3 ProgramNode line 1
+r3 #23 f3 ClassNode K line 1
+  r3 #24 f3 DefNode b line 1
+r3 #25 f3 CallNode puts line 2
+r4 #26 f4 ProgramNode line 1
+r4 #27 f4 ClassNode K line 1
+  r4 #28 f4 DefNode c line 1
+r4 #29 f4 CallNode puts line 2
+block each line 15: now
+class K: body#1 body#13 body#19 body#23 body#27
+entity K: owner main leaf K
+region 1: entered #6
+region 2: never
+region 3: entered #8
+region 4: entered #10
+const K: write#1
+K#v: def#2 runs=#6 def#14 runs=#6 def#20 runs=#6 end=unknown
+main#probe: def#3 private end=yes
+main#load_a: def#4 private end=yes
+main#load_d: def#5 private end=yes
+K#b: def#24 end=unknown
+K#c: def#28 end=unknown
+versions K#v: def#2..?, def#14..?, def#20..?; 3 of the name

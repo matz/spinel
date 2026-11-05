@@ -8399,6 +8399,11 @@ static SP_UNUSED sp_FloatRange sp_poly_frange_recv(sp_RbVal v, const char *m) {
   sp_raise_nomethod(sp_nomethod_msg(m, v));
   return r;
 }
+static SP_UNUSED sp_TimeRange *sp_poly_trange_recv(sp_RbVal v, const char *m) {
+  if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_TIME_RANGE && v.v.p) return (sp_TimeRange *)v.v.p;
+  sp_raise_nomethod(sp_nomethod_msg(m, v));
+  return NULL;
+}
 static SP_UNUSED sp_StrRange sp_poly_srange_recv(sp_RbVal v, const char *m) {
   sp_StrRange r = {0};
   /* the Range as kept: its readers take the endpoints off the handles */

@@ -810,10 +810,14 @@ static int class_path_key(Compiler *c, int k, char *out, size_t cap) {
 }
 /* Which class's whole path is key P (-1 for none): a table of every
    class's path, made again when classes are added or move. A hit is
-   checked against the class's path as it is now. */
-static struct { const ClassInfo *base; int n, cap; int *slot; } cpk_tab = { NULL, -1, 0, NULL };
+   checked against the class's path as it is now. A class whose
+   enclosing class is set after it is added (header_parent_encloses)
+   moves it: comp_class_path_moved marks the table old. */
+static struct { const ClassInfo *base; int n, cap; unsigned epoch; int *slot; } cpk_tab = { NULL, -1, 0, 0, NULL };
+static unsigned cpk_epoch;
+void comp_class_path_moved(void) { cpk_epoch++; }
 static int class_with_path_key(Compiler *c, const char *p) {
-  if (cpk_tab.base != c->classes || cpk_tab.n != c->nclasses) {
+  if (cpk_tab.base != c->classes || cpk_tab.n != c->nclasses || cpk_tab.epoch != cpk_epoch) {
     int cap = 64;
     while (cap < c->nclasses * 2) cap *= 2;
     free(cpk_tab.slot);
@@ -827,7 +831,7 @@ static int class_with_path_key(Compiler *c, const char *p) {
       while (cpk_tab.slot[j] >= 0) j = (j + 1) & (unsigned)(cap - 1);
       cpk_tab.slot[j] = k;
     }
-    cpk_tab.base = c->classes; cpk_tab.n = c->nclasses; cpk_tab.cap = cap;
+    cpk_tab.base = c->classes; cpk_tab.n = c->nclasses; cpk_tab.cap = cap; cpk_tab.epoch = cpk_epoch;
   }
   for (unsigned j = sp_strhash(p) & (unsigned)(cpk_tab.cap - 1); cpk_tab.slot[j] >= 0; j = (j + 1) & (unsigned)(cpk_tab.cap - 1)) {
     char kp[512];

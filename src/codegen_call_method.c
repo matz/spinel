@@ -169,6 +169,16 @@ void emit_scope_parameters_pushes(Compiler *c, int mi, int tr4, Buf *b) {
   free(v);
 }
 
+/* The name method mi's def gives it, CRuby's #original_name; NULL where no
+   def of the program names it: a define_method block, or a builtin's
+   wrapper (desugar_builtin_method_obj), which stands for the builtin */
+static const char *method_def_name(Compiler *c, int mi) {
+  const NodeTable *nt = c->nt;
+  int dn = c->scopes[mi].def_node;
+  if (dn < 0 || nt_kind(nt, dn) != NK_DefNode || bam_builtin_sym(c, mi, NULL)) return NULL;
+  return nt_str(nt, dn, "name");
+}
+
 /* "#<Method: Owner#name(a, b=..., *r, k:, o: ..., **kw, &blk)>" -- CRuby's
    Method#inspect rendering, built at compile time from the target scope and
    emitted as a C string literal; " file:line" is appended when positions
@@ -185,8 +195,12 @@ static void emit_method_desc_literal(Compiler *c, int mi, const char *sym, int u
     if (m->is_cmethod) sep = '.';
   }
   Buf d; memset(&d, 0, sizeof d);
-  buf_printf(&d, "#<%s: %s%c%s(", unbound ? "UnboundMethod" : "Method", ow, sep,
-             sym ? sym : (m->name ? m->name : "?"));
+  const char *nm = sym ? sym : (m->name ? m->name : "?"), *orig = method_def_name(c, mi);
+  buf_printf(&d, "#<%s: %s%c%s", unbound ? "UnboundMethod" : "Method", ow, sep, nm);
+  /* a Method named apart from its def (an alias's) writes the def's name
+     after its own, `C#bar(foo)(...)`, as CRuby does */
+  if (orig && strcmp(orig, nm) != 0) buf_printf(&d, "(%s)", orig);
+  buf_puts(&d, "(");
   for (int i = 0; i < m->nparams; i++) {
     if (!m->pnames[i]) continue;
     if (i) buf_puts(&d, ", ");

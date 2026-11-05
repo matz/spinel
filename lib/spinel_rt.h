@@ -1332,7 +1332,7 @@ static inline const char *sp_File_read(sp_File *f) {
      handle answers ASCII-8BIT (CRuby); a text one stays on the text side.
      This is the one read whose answer depends on the mode -- read(n), pread
      and readpartial are BINARY whatever the handle was opened as. */
-  const char *r = (f->park == 2) ? sp_slurp_stream_parked(f) : sp_slurp_stream(f->fp);
+  const char *r = (f->own_buf || f->park == 2) ? sp_slurp_stream_parked(f) : sp_slurp_stream(f->fp);
   if (r && sp_File_reads_binary(f)) sp_str_mark_binary((char *)r);
   return r;
 }
@@ -1356,7 +1356,12 @@ static inline const char *sp_File_read_n(sp_File *f, sp_int n) {
   sp_io_wait_readable(f);
   if (n == 0) return sp_str_empty_binary();
   char *r = sp_str_alloc((size_t)n);
-  size_t got = sp_io_fread(f, r, (size_t)n);
+  size_t got;
+  if (f->own_buf) {   /* reads straight into r, and can park with it */
+    SP_GC_ROOT_STR(r);
+    got = sp_io_rbuf_read_into(f, r, (size_t)n);
+  }
+  else got = sp_io_fread(f, r, (size_t)n);
   if (got == 0) return NULL;
   /* record the byte count read: without it an embedded NUL truncated every
      later length/slice, which read the bytes back through strlen (#3540) */

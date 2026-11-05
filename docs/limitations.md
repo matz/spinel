@@ -569,12 +569,25 @@ address or options; they answer a `Socket`, as CRuby's do).
 `#read_nonblock`, `#write_nonblock`. Would-block raises the CRuby exception --
 `IO::EAGAINWaitReadable` and friends, which answer to `IO::WaitReadable`, to
 `Errno::EAGAIN` and to `SystemCallError` alike -- or, with `exception: false`,
-returns the `:wait_readable` / `:wait_writable` marker. O_NONBLOCK is set for
-the duration of one call and put back, so a blocking `#gets` on the same handle
-still works.
+returns the `:wait_readable` / `:wait_writable` marker.
+
+A connected TCP socket's descriptor is non-blocking, as CRuby's is, and the
+handle reads through a buffer of its own rather than stdio: a read that finds
+nothing parks the thread until the peer sends, and a write that does not fit
+parks until it does. An `IO#dup` or `IO.for_fd` of it does the same. Given
+to a child (a `spawn` redirect) it turns blocking, for the child and for
+the parent, as CRuby's does; the parent's reads still park, each one
+asking the kernel not to wait (`MSG_DONTWAIT`), and its writes wait for the
+descriptor before each call instead. On every
+other socket (listening, UDP, Unix) O_NONBLOCK is set for the duration of one
+call and put back, so a blocking `#gets` on the same handle still works.
+`SPINEL_SOCK_STDIO=1` keeps every socket on the blocking stdio path.
 
 **Divergences and gaps.**
 
+- A C library called through FFI with the `#fileno` of a connected TCP socket
+  gets `EAGAIN` where the descriptor has nothing to read or no room to write,
+  as it would with CRuby's.
 - Only the **integer-valued** socket options are reachable, so
   `Socket::Option` carries an int rather than a byte string: `#data` and
   `#unpack` are missing, and `SO_LINGER` cannot be read back.

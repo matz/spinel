@@ -1210,24 +1210,29 @@ const char *sp_slurp_stream(FILE *fp) {
 const char *sp_slurp_stream_parked(sp_File *f) {SP_GC_ROOT(f);
   if (!f || !f->fp) return &("\xff" "")[1];
   size_t cap = 8192, len = 0;
-  char *buf = (char *)malloc(cap);
-  if (!buf) return &("\xff" "")[1];
+  /* the collector's memory, not malloc's: a park below can raise (a close,
+     IO#timeout, a reset on a socket), or a Thread#raise or #kill can land
+     in it, and neither comes back to free the buffer */
+  char *buf = sp_str_alloc(cap);
+  SP_GC_ROOT_STR(buf);
   for (;;) {
     sp_io_wait_readable(f);
     int ch = sp_io_getc(f);
     if (ch == EOF) break;
     if (len + 2 >= cap) {
-      char *nb = (char *)realloc(buf, cap * 2);
-      if (!nb) { free(buf); return &("\xff" "")[1]; }
+      char *nb = sp_str_alloc(cap * 2);
+      memcpy(nb, buf, len);
       buf = nb; cap *= 2;
     }
     buf[len++] = (char)ch;
     /* whatever the same read(2) already delivered: no kernel wait for these */
     for (size_t avail; (avail = sp_io_pending(f)) > 0; ) {
-      while (len + avail + 1 >= cap) {
-        char *nb = (char *)realloc(buf, cap * 2);
-        if (!nb) { free(buf); return &("\xff" "")[1]; }
-        buf = nb; cap *= 2;
+      if (len + avail + 1 >= cap) {
+        size_t nc = cap * 2;
+        while (len + avail + 1 >= nc) nc *= 2;
+        char *nb = sp_str_alloc(nc);
+        memcpy(nb, buf, len);
+        buf = nb; cap = nc;
       }
       size_t got = sp_io_fread(f, buf + len, avail);
       len += got;
@@ -1238,7 +1243,6 @@ const char *sp_slurp_stream_parked(sp_File *f) {SP_GC_ROOT(f);
   if (len) memcpy(r, buf, len);
   r[len] = 0;
   sp_str_set_len(r, len);
-  free(buf);
   return r;
 }
 
@@ -2488,8 +2492,11 @@ const char *sp_File_gets_sep(sp_File *f, const char *sep, sp_int limit, sp_bool 
     return r;
   }
   size_t cap = 256, len = 0;
-  char *buf = (char *)malloc(cap);
-  if (!buf) return NULL;
+  /* the collector's memory: a read below can raise or park (a handle with
+     its own buffer, sp_io_rbuf_fill), and a raise would not come back to
+     free a malloc'd one */
+  char *buf = sp_str_alloc(cap);
+  SP_GC_ROOT_STR(buf);
   int ch;
   /* a paragraph does not start with blank lines */
   if (para) {
@@ -2499,7 +2506,7 @@ const char *sp_File_gets_sep(sp_File *f, const char *sep, sp_int limit, sp_bool 
   int ended = 0, extra = 16;
   sp_int lim = limit;
   while ((ch = sp_io_getc(f)) != EOF) {
-    if (len + 2 > cap) { cap *= 2; char *nb = (char *)realloc(buf, cap); if (!nb) { free(buf); return NULL; } buf = nb; }
+    if (len + 2 > cap) { char *nb = sp_str_alloc(cap * 2); memcpy(nb, buf, len); buf = nb; cap *= 2; }
     buf[len++] = (char)ch;
     /* the separator ends the line where it is matched whole, and not where
        it would start inside a character (on a continuation byte) */
@@ -2521,7 +2528,7 @@ const char *sp_File_gets_sep(sp_File *f, const char *sep, sp_int limit, sp_bool 
     while ((ch = sp_io_getc(f)) == '\n') { }
     if (ch != EOF) sp_io_ungetc(f, ch);
   }
-  if (len == 0) { free(buf); return NULL; }
+  if (len == 0) return NULL;
   if (chomp && ended && sl && len >= sl && memcmp(buf + len - sl, sep, sl) == 0) {
     len -= sl;
     if (sl == 1 && sep[0] == '\n' && len && buf[len - 1] == '\r') len--;
@@ -2529,7 +2536,6 @@ const char *sp_File_gets_sep(sp_File *f, const char *sep, sp_int limit, sp_bool 
   char *r = sp_str_alloc(len);
   memcpy(r, buf, len); r[len] = 0;
   sp_str_set_len(r, len);
-  free(buf);
   f->lineno++;
   return r;
 }
@@ -2564,6 +2570,7 @@ const char *sp_File_getc(sp_File *f) {SP_GC_ROOT(f);
   int bin = sp_File_reads_binary(f);
   int extra = bin ? 0 : ((ch & 0xE0) == 0xC0) ? 1 : ((ch & 0xF0) == 0xE0) ? 2 : ((ch & 0xF8) == 0xF0) ? 3 : 0;
   char *r = sp_str_alloc((size_t)(1 + extra));
+  SP_GC_ROOT_STR(r);   /* the next bytes' read can park (own_buf) */
   size_t n = 0;
   r[n++] = (char)ch;
   for (int i = 0; i < extra; i++) {
@@ -2636,12 +2643,12 @@ sp_RbVal sp_File_putc(sp_File *f, sp_RbVal v) {
      as its bytes for the write only */
   sp_RbVal w = sp_rbval_str(v);
   SP_IO_OPEN(f);
-  if (v.tag == SP_TAG_INT) fputc((int)(v.v.i & 0xff), f->fp);
-  else if (w.tag == SP_TAG_STR) { if (w.v.s && w.v.s[0]) fputc(w.v.s[0], f->fp); }
+  if (v.tag == SP_TAG_INT) sp_File_put_byte(f, (int)(v.v.i & 0xff));
+  else if (w.tag == SP_TAG_STR) { if (w.v.s && w.v.s[0]) sp_File_put_byte(f, w.v.s[0]); }
   /* anything else is no character: CRuby converts it as an Integer and
      raises for nil (the boxed nil wrote nothing and answered nil) */
   else if (v.tag == SP_TAG_NIL) sp_raise_nil_to_int(0);
-  else if (v.tag == SP_TAG_FLT && v.v.f > -9.0e18 && v.v.f < 9.0e18) fputc((int)((sp_int)v.v.f & 0xff), f->fp);
+  else if (v.tag == SP_TAG_FLT && v.v.f > -9.0e18 && v.v.f < 9.0e18) sp_File_put_byte(f, (int)((sp_int)v.v.f & 0xff));
   else if (v.tag == SP_TAG_BOOL)
     sp_raise_cls("TypeError", v.v.b ? "no implicit conversion of true into Integer" : "no implicit conversion of false into Integer");
   return v;
@@ -6018,10 +6025,11 @@ sp_File *sp_io_for_fd(sp_int fd, const char *mode, sp_bool autoclose) {SP_GC_ROO
     int d = dup((int)fd);
     if (d < 0) sp_raise_cls("SystemCallError", sp_sprintf("dup(2) failed for fd %d", (int)fd));
     sp_File *f = sp_io_fdopen_ex(d, mode && *mode ? mode : SPL("r"), 0);
-    if (f) { f->no_autoclose = 1; f->fno_plus1 = (int)fd + 1; }
+    if (f) { f->no_autoclose = 1; f->fno_plus1 = (int)fd + 1; sp_io_take_own_buf(f); }
     return f;
   }
   sp_File *f = sp_io_fdopen_ex((int)fd, mode && *mode ? mode : SPL("r"), 0);
+  if (f) sp_io_take_own_buf(f);
   return f;
 }
 

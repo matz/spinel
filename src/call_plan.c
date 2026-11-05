@@ -785,19 +785,25 @@ static int ct_calls(Compiler *c, int id, const char *name) {
 }
 /* The method scope of version d of `name` for a call on class rcls (class
    side when sg; main when rcls < 0), as the record answered it: a def's
-   scope (rcls's copy of it, when a mixin copied it); for an alias, the
-   version of its target live where the alias was made, in the class whose
-   body made it; for a class-side accessor a later def replaces, the method
-   made of it (elab_attr_scope). -1 for any other version (a
-   define_method's, any other attribute's) or an alias made where the
-   record has no point. A chain of
-   aliases ends: each step asks for the version live at an alias's point,
-   one recorded ahead of that point, so the points only go back. */
+   scope (rcls's copy of it, when a mixin copied it); for a module_function
+   copy, the scope of the def it copies; for an alias, the version of its
+   target (a def, an alias or a copy) live where the alias was made, in the
+   class whose body made it; for a class-side accessor a later def
+   replaces, the method made of it (elab_attr_scope). -1 for any other
+   version (a define_method's or its copy, any other attribute's) or an
+   alias made where the record has no point. A chain of aliases ends: each
+   step asks for the version live at an alias's point, one recorded ahead
+   of that point, so the points only go back. */
 static int ct_def_version(Compiler *c, int rcls, const char *name, int sg, const LrDef *d, int *dc) {
   int cls = rcls;
   while (d) {
     if (d->kind == LR_DEF) return comp_method_version(c, rcls, name, sg, d->node, dc);
     if ((d->kind == LR_READER || d->kind == LR_WRITER) && d->scope > 0)
+      return comp_method_version(c, rcls, name, sg, c->scopes[d->scope].def_node, dc);
+    /* a module_function copy: the module's singleton method made of the def
+       it copies (mf_copy_entries), as the load record keeps its scope (the
+       named form's too); a define_method's copy is not mapped */
+    if (d->kind == LR_COPY && d->scope > 0 && nt_kind(c->nt, c->scopes[d->scope].def_node) == NK_DefNode)
       return comp_method_version(c, rcls, name, sg, c->scopes[d->scope].def_node, dc);
     if (d->kind != LR_ALIAS || !d->target) return -1;
     int at = d->node;
@@ -806,7 +812,7 @@ static int ct_def_version(Compiler *c, int rcls, const char *name, int sg, const
     if (p.region < 0) return -1;
     cls = c->node_cbody[at];
     if (elab_method_at(c, cls, name, sg, p, &d) != ELAB_YES || !d ||
-        (d->kind != LR_DEF && d->kind != LR_ALIAS)) return -1;
+        (d->kind != LR_DEF && d->kind != LR_ALIAS && d->kind != LR_COPY)) return -1;
     int mi = call_target(c, at, cls, name, CT_CAPTURE | (cls < 0 ? CT_TOP : sg ? CT_CMETHOD : 0), NULL);
     /* A module's captured body runs as the receiving class's copy. */
     return mi >= 0 ? comp_method_version(c, rcls, c->scopes[mi].name, sg, c->scopes[mi].def_node, dc) : -1;

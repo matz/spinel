@@ -4423,28 +4423,10 @@ static void mf_copy_scope(Compiler *c, int cls, int si, const char *name) {
   scope_own_defaults(c, di);
 }
 
-/* The method scope a module_function copy entry copies, or -1: the def or
-   define_method it stands at (a method under the bare word, the scope the
-   record keeps with the copy), else the version of the name live where
-   `module_function :n` stands, followed through the aliases to the def each
-   captured. Each step asks at an alias's own point, where only a version
-   recorded before it is live, so the chain ends. */
-static int mf_entry_scope(Compiler *c, const ElabEntry *e) {
-  if (e->scope > 0) return e->scope;
-  const char *nm = e->name;
-  LoadPoint p = elab_point_of(c, e->node);
-  for (;;) {
-    const LrDef *d = NULL;
-    if (elab_method_at(c, e->cls, nm, 0, p, &d) != ELAB_YES || !d) return -1;
-    if (d->kind == LR_DEF || d->kind == LR_DEFINE_METHOD) return d->scope > 0 ? d->scope : -1;
-    if (d->kind != LR_ALIAS || !d->target) return -1;
-    nm = d->target;
-    p = elab_point_of(c, d->node);
-  }
-}
-
 /* A module's module functions, from the load record's copies to its
-   singleton (elab_entries): a def's own scope when the module defines it
+   singleton (elab_entries), each with the scope of the method it copies
+   (the copy's .scope, which the record keeps for the named form as well,
+   lr_copy_scopes): a def's own scope when the module defines it
    under that name, else the module function the name stood for (an alias
    of one is a singleton alias of it) or a copy of the method it stood for.
    A define_method under the bare word gets a copy too, and its instance
@@ -4465,8 +4447,8 @@ static void mf_copy_entries(Compiler *c) {
     src[i] = -1;
     if (!a[i].sg || a[i].cls < 0 || !comp_class_is_module(c, &c->classes[a[i].cls])) continue;
     if (a[i].node >= 0 && nt_int(c->nt, a[i].node, "cond_arm", 0)) continue;
-    src[i] = mf_entry_scope(c, &a[i]);
-    int dm = a[i].scope > 0 && nt_kind(c->nt, a[i].node) != NK_DefNode;
+    src[i] = a[i].scope > 0 ? a[i].scope : -1;
+    int dm = a[i].scope > 0 && a[i].node == c->scopes[a[i].scope].def_node && nt_kind(c->nt, a[i].node) != NK_DefNode;
     if (src[i] >= 0 && !dm && c->scopes[src[i]].class_id == a[i].cls && c->scopes[src[i]].name &&
         sp_streq(c->scopes[src[i]].name, a[i].name)) {
       mf_mark(c, src[i]);

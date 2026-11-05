@@ -15010,12 +15010,29 @@ static int def_at_top_level(const NodeTable *nt, int n0, int def) {
    builtin's left it no method. A top-level method is private: a call on a
    receiver other than self never reaches it, and kept as written
    `[[1], [2]].collect_concat { }` found no method of that name. */
+/* Does the module whose header is mod make its instance methods its own,
+   by `extend self` or a module_function statement in that body? */
+static int module_answers_own_defs(const NodeTable *nt, int mod) {
+  if (xs_body_extends_self(nt, mod)) return 1;
+  int body = class_def_body(nt, mod);
+  if (body < 0 || nt_kind(nt, body) != NK_StatementsNode) return 0;
+  int bn = 0; const int *bb = nt_arr(nt, body, "body", &bn);
+  for (int i = 0; i < bn; i++)
+    if (nt_kind(nt, bb[i]) == NK_CallNode && nt_ref(nt, bb[i], "receiver") < 0 &&
+        nt_str(nt, bb[i], "name") && sp_streq(nt_str(nt, bb[i], "name"), "module_function")) return 1;
+  return 0;
+}
 static int program_defines_name_off_class(const NodeTable *nt, int n0, const char *name, int recv) {
   int other_recv = recv >= 0 && nt_kind(nt, recv) != NK_SelfNode;
   for (int id = 0; id < n0; id++) {
     if (nt_kind(nt, id) != NK_DefNode || !nt_str(nt, id, "name") || !sp_streq(nt_str(nt, id, "name"), name)) continue;
     int ct = nt_ref(nt, id, "receiver") < 0 ? fwd_lex_parent(nt, id) : -1;
     if (ct < 0 && other_recv && nt_ref(nt, id, "receiver") < 0 && def_at_top_level(nt, n0, id)) continue;
+    /* a module's instance method is its includers', as a class's is its
+       instances' (a view lookup's `find_all(name, prefixes)` in a mixin);
+       one the module answers itself (`extend self`, module_function) is
+       callable on the module object, off any class */
+    if (ct >= 0 && nt_kind(nt, ct) == NK_ModuleNode && !module_answers_own_defs(nt, ct)) continue;
     if (ct < 0 || !class_def_is_class(nt, ct)) return 1;
   }
   return 0;

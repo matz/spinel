@@ -2225,7 +2225,7 @@ static int lr_foreign_mixin(ElabRec *x, int node, const LrMixin *m, int cls, int
     if (cls == fc) return 0;
     if (recv < 0 || nt_kind(nt, recv) == NK_SelfNode) return 0;
     if (nt_kind(nt, recv) != NK_ConstantReadNode && nt_kind(nt, recv) != NK_ConstantPathNode) return 0;
-    if (m->kind != LR_INCLUDE && m->kind != LR_PREPEND) return 0;
+    if (m->kind != LR_INCLUDE && m->kind != LR_PREPEND && m->kind != LR_EXTEND) return 0;
   }
   /* a module of the program's, or a core module by its name (Comparable) */
   if (m->mod >= x->c->nclasses) return 0;

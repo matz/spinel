@@ -269,6 +269,7 @@ typedef struct { int node, kind, mod, ref; unsigned char dup, cond, applied; int
 typedef enum { ELAB_GVAR, ELAB_MAIN_IVAR, ELAB_CONST } ElabVar;
 struct HostStep;
 void elab_program(Compiler *c, struct HostStep *h);
+void elab_const_keys(Compiler *c);   /* each constant write and resolved read takes its entity's key (#10787); SPINEL_CONST_KEY_CHECK reports the changes */
 /* the version of cls's method `name` (singleton when sg) live at p, through
    its ancestors as they stood at p; *out (when asked) the version found. A
    hook (`inherited`, `included`, `method_added`, ...) is asked as the

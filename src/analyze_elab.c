@@ -7745,3 +7745,219 @@ int elab_autoload_file_defines(Compiler *c, int slot, int file) {
   }
   return 0;
 }
+
+/* ---- Constant keys from the record (#10787) ----------------------------
+   Each constant entity, a history keyed (owner, leaf) with a known owner,
+   takes one key: the leaf, or, for a nested entity whose leaf another
+   entity writes under another owner path (or a builtin class's leaf),
+   the owner's Ruby path joined by `__`, then `__` and the leaf. This is
+   qualify_colliding_consts' rule, run over the record's entities instead
+   of the lexical writes. */
+typedef struct { int h, cls_ent; char *path, *key; } LrKeyEnt;
+
+/* The Ruby path of a constant owner (lr_const_owner's numbering), its
+   segments joined by `__`; "" for main */
+static void lr_owner_path(Compiler *c, int owner, char *buf, size_t n) {
+  buf[0] = 0;
+  int cls = owner > 0 ? owner - 2 : -owner - 2;
+  if (cls < 0 || cls >= c->nclasses) return;
+  /* the classes around it, out to the top level (a reopened Object's
+     constants are top-level ones); a builtin's reopening gives no segment
+     (`class Regexp::Syntax::V1_9_1`: Syntax__V1_9_1) */
+  int chain[32], d = 0, obj = comp_core_class(c, CORE_OBJECT);
+  const char *rn = NULL;   /* a class that carries its Ruby path (an aliased or rebased header): the path above it */
+  for (int k = cls; k >= 0 && k != obj && d < 32; k = c->classes[k].enclosing_class) {
+    if (c->classes[k].ruby_name_cache) { rn = c->classes[k].ruby_name_cache; break; }
+    chain[d++] = k;
+  }
+  size_t o = 0;
+  int head = 1;
+  for (const char *p = rn; p && *p; head = 0) {
+    const char *q = strstr(p, "::");
+    size_t l = q ? (size_t)(q - p) : strlen(p);
+    char seg[128]; snprintf(seg, sizeof seg, "%.*s", (int)l, p);
+    p += l; if (q) p += 2;
+    if (head && (q || d) && (builtin_class_id(seg) != 0 || is_builtin_class_name(seg) || is_builtin_module_name(seg))) continue;
+    if (o + l + 3 >= n) break;
+    if (o) { buf[o++] = '_'; buf[o++] = '_'; }
+    memcpy(buf + o, seg, l); o += l;
+  }
+  for (int i = d - 1; i >= 0; i--, head = 0) {
+    const char *nm = c->classes[chain[i]].name, *leaf = nm;
+    if (!nm) continue;
+    for (const char *q = strstr(nm, "__"); q; q = strstr(q + 2, "__")) leaf = q + 2;
+    if (head && i > 0 && leaf == nm && (builtin_class_id(nm) != 0 || is_builtin_class_name(nm) || is_builtin_module_name(nm))) continue;
+    size_t l = strlen(leaf);
+    if (o + l + 3 >= n) break;
+    if (o) { buf[o++] = '_'; buf[o++] = '_'; }
+    memcpy(buf + o, leaf, l); o += l;
+  }
+  buf[o] = 0;
+}
+
+static int lr_write_is_class(Compiler *c, int node) {
+  NodeKind k = nt_kind(c->nt, node);
+  return k == NK_ClassNode || k == NK_ModuleNode || class_def_builder(c->nt, node) >= 0 || class_def_record(c->nt, node) >= 0;
+}
+
+/* The node whose name a write's key goes on: a path write's target */
+static int lr_key_node(const NodeTable *nt, int node) {
+  switch (nt_kind(nt, node)) {
+    case NK_ConstantPathWriteNode: case NK_ConstantPathOrWriteNode: case NK_ConstantPathAndWriteNode:
+    case NK_ConstantPathOperatorWriteNode: return nt_ref(nt, node, "target");
+    case NK_ConstantWriteNode: case NK_ConstantOrWriteNode: case NK_ConstantAndWriteNode:
+    case NK_ConstantOperatorWriteNode: case NK_ConstantTargetNode: case NK_ConstantPathTargetNode: return node;
+    default: return -1;
+  }
+}
+
+static const LrHist *lr_key_hists;   /* the histories lr_key_ent_cmp sorts the entities of */
+static int lr_key_ent_cmp(const void *a, const void *b) {
+  const LrKeyEnt *x = a, *y = b;
+  int o = strcmp(lr_key_hists[x->h].name, lr_key_hists[y->h].name);
+  return o ? o : strcmp(x->path, y->path);
+}
+
+/* A rename the keys make, applied after the last ask */
+typedef struct { int node; char *key; } LrKeyRename;
+static void lr_key_queue(LrKeyRename **q, int *n, int *cap, int node, const char *key) {
+  *q = lr_grow(*q, cap, *n, sizeof **q);
+  (*q)[(*n)++] = (LrKeyRename){ node, strdup(key) };
+}
+
+/* Is history h a path write's onto a Struct or Data holder (`Rim::LIMIT =
+   v`) that a subclass of the holder writes too (an entity of the same leaf
+   whose owner descends from it)? */
+static int lr_holder_path_write(Compiler *c, const LrHist *h) {
+  const NodeTable *nt = c->nt;
+  const LoadRecord *r = c->lrec;
+  int cls = h->b - 2, path = 0;
+  if (cls < 0 || cls >= c->nclasses || c->classes[cls].def_node < 0 || class_def_record(nt, c->classes[cls].def_node) < 0) return 0;
+  for (int v = 0; v < h->n && !path; v++) {
+    NodeKind k = h->v[v].node >= 0 ? nt_kind(nt, h->v[v].node) : NK_NilNode;
+    path = k == NK_ConstantPathWriteNode || k == NK_ConstantPathOrWriteNode || k == NK_ConstantPathAndWriteNode ||
+           k == NK_ConstantPathOperatorWriteNode;
+  }
+  for (int i = 0; path && i < r->nhist; i++) {
+    const LrHist *o = &r->hist[i];
+    if (o == h || o->a != LR_KEY_CONST || o->b < 2 || !sp_streq(o->name, h->name)) continue;
+    for (int k = lr_super(c, o->b - 2), d = 0; k >= 0 && d < 64; k = lr_super(c, k), d++) if (k == cls) return 1;
+  }
+  return 0;
+}
+
+void elab_const_keys(Compiler *c) {
+  LoadRecord *r = c->lrec;
+  const char *e = getenv("SPINEL_CONST_KEY_CHECK");
+  int check = e && *e;
+  if (!r || !r->recorded) return;
+  LrKeyRename *q = NULL; int nq = 0, cq = 0;
+  const NodeTable *nt = c->nt;
+  LrKeyEnt *es = calloc((size_t)r->nhist + 1, sizeof *es);
+  int ne = 0;
+  char buf[512];
+  for (int i = 0; i < r->nhist; i++) {
+    const LrHist *h = &r->hist[i];
+    if (h->a != LR_KEY_CONST || h->b == 0) continue;
+    int cls_ent = 0;
+    for (int v = 0; v < h->n; v++) if (h->v[v].node >= 0 && lr_write_is_class(c, h->v[v].node)) cls_ent = 1;
+    lr_owner_path(c, h->b, buf, sizeof buf);
+    es[ne++] = (LrKeyEnt){ i, cls_ent, strdup(buf) };
+  }
+  lr_key_hists = r->hist;
+  qsort(es, (size_t)ne, sizeof *es, lr_key_ent_cmp);
+  long same = 0, differ = 0;
+  for (int i = 0, g0 = 0, g1 = 0; i < ne; i++) {
+    const LrHist *h = &r->hist[es[i].h];
+    /* the entities of the leaf, [g0, g1): es is sorted by leaf, then path */
+    if (i == g1) {
+      g0 = i;
+      for (g1 = i + 1; g1 < ne && sp_streq(r->hist[es[g1].h].name, h->name); g1++) ;
+    }
+    if (es[i].cls_ent) continue;
+    int nested = es[i].path[0] != 0;
+    int collide = 0, sgc = 0;
+    collide = !sp_streq(es[g0].path, es[i].path) || !sp_streq(es[g1 - 1].path, es[i].path);
+    /* a singleton's constant beside its class's own of the leaf */
+    for (int j = g0; h->b < 0 && j < g1 && !sgc; j++) sgc = j != i && r->hist[es[j].h].b == -h->b;
+    if (!collide && nested && builtin_class_id(h->name) != 0) collide = 1;
+    /* a Struct or Data holder's constant a subclass also writes keeps its
+       leaf: `self::NAME` in the holder's block stays a read through the
+       class value (desugar_holder_block_self_const), which finds it so */
+    if (collide && nested && h->b > 0 && lr_holder_path_write(c, h)) collide = 0;
+    char key[640];
+    if (sgc) snprintf(key, sizeof key, "%s__singleton__%s", es[i].path, h->name);
+    else if (collide && nested) snprintf(key, sizeof key, "%s__%s", es[i].path, h->name);
+    else snprintf(key, sizeof key, "%s", h->name);
+    es[i].key = strdup(key);
+    for (int v = 0; v < h->n; v++) {
+      int kn = h->v[v].node >= 0 ? lr_key_node(nt, h->v[v].node) : -1;
+      if (kn < 0) continue;
+      const char *qn = nt_str(nt, kn, "name");
+      if (!qn) continue;
+      if (sp_streq(qn, key)) { same++; continue; }
+      differ++;
+      lr_key_queue(&q, &nq, &cq, kn, key);
+      if (check) fprintf(stderr, "constkey: %s line %lld owner=%s qualify=%s record=%s\n", nt_type(nt, h->v[v].node),
+                         (long long)nt_int(nt, h->v[v].node, "node_line", 0), es[i].path[0] ? es[i].path : "main", qn, key);
+    }
+  }
+  if (check) fprintf(stderr, "constkey: same=%ld differ=%ld\n", same, differ);
+  /* the reads: the write each resolves to, by the record, and that write's key */
+  int *ent = calloc((size_t)nt->count + 1, sizeof *ent);
+  for (int i = 0; i < ne; i++) {
+    const LrHist *h = &r->hist[es[i].h];
+    for (int v = 0; v < h->n; v++) if (h->v[v].node >= 0 && h->v[v].node < nt->count) ent[h->v[v].node] = i + 1;
+  }
+  unsigned char *skip = calloc((size_t)nt->count + 1, 1);
+  for (int id = 0; id < nt->count; id++) {
+    NodeKind k = nt_kind(nt, id);
+    if (k == NK_ConstantPathNode) { int pa = nt_ref(nt, id, "parent"); if (pa >= 0) skip[pa] = 1; }
+    else if (k == NK_ClassNode || k == NK_ModuleNode) { int cp = nt_ref(nt, id, "constant_path"); if (cp >= 0) skip[cp] = 1; }
+    else if (lr_key_node(nt, id) >= 0 && lr_key_node(nt, id) != id) skip[lr_key_node(nt, id)] = 1;
+  }
+  long ragree = 0, rdiffer = 0, rno = 0, runk = 0, rcls = 0;
+  for (int id = 0; id < nt->count; id++) {
+    NodeKind k = nt_kind(nt, id);
+    if ((k != NK_ConstantReadNode && k != NK_ConstantPathNode) || skip[id] || id >= r->n || r->at[id] < 0) continue;
+    const LrDef *d = NULL;
+    const char *nm = lr_written_name(nt, id);
+    int o;
+    if (k == NK_ConstantReadNode && !lr_root_read(nt, id)) o = lr_const_at(c, id, nm, elab_point_of(c, id), &d, LR_KEY_CONST);
+    else {
+      int par = k == NK_ConstantPathNode ? nt_ref(nt, id, "parent") : -1, pc = LR_MAIN;
+      LoadPoint p = elab_point_of(c, id);
+      if (par >= 0) pc = lr_class_ref_at(c, par, NULL);
+      o = pc < LR_MAIN ? ELAB_UNKNOWN : lr_const_in(c, pc, nm, p, p.region < 0, pc == LR_MAIN, &d, 0, LR_KEY_CONST);
+    }
+    if (o != ELAB_YES || !d) {
+      if (o == ELAB_NO) rno++; else runk++;
+      const char *rn = nt_str(nt, id, "name");
+      if (check && rn && nm && !sp_streq(rn, nm))
+        fprintf(stderr, "constkey: unresolved-renamed %s %s line %lld name=%s written=%s\n", o == ELAB_NO ? "no" : "unknown",
+                nt_type(nt, id), (long long)nt_int(nt, id, "node_line", 0), rn, nm);
+      continue;
+    }
+    int ei = d->node >= 0 && d->node < nt->count ? ent[d->node] - 1 : -1;
+    if (ei < 0 || es[ei].cls_ent || !es[ei].key) { rcls++; continue; }
+    const char *rn = nt_str(nt, id, "name");
+    if (rn && sp_streq(rn, es[ei].key)) { ragree++; continue; }
+    rdiffer++;
+    lr_key_queue(&q, &nq, &cq, id, es[ei].key);
+    if (check) fprintf(stderr, "constkey: read %s line %lld name=%s record=%s\n", nt_type(nt, id),
+                       (long long)nt_int(nt, id, "node_line", 0), rn ? rn : "?", es[ei].key);
+  }
+  if (check) fprintf(stderr, "constkey: reads agree=%ld differ=%ld no=%ld unknown=%ld class=%ld\n", ragree, rdiffer, rno, runk, rcls);
+  /* the renames, once every ask is answered: the name as written stays
+     (qc_orig_name), which the record's histories and the path lookups read */
+  for (int i = 0; i < nq; i++) {
+    const char *was = lr_written_name(nt, q[i].node);
+    if (was && !nt_str(nt, q[i].node, "qc_orig_name")) nt_node_set_str((NodeTable *)nt, q[i].node, "qc_orig_name", was);
+    nt_node_set_str((NodeTable *)nt, q[i].node, "name", q[i].key);
+    free(q[i].key);
+  }
+  free(q);
+  free(ent); free(skip);
+  for (int i = 0; i < ne; i++) { free(es[i].path); free(es[i].key); }
+  free(es);
+}

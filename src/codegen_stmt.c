@@ -7994,6 +7994,14 @@ static int const_toplevel_alias(Compiler *c, const char *name) {
   free(st);
   return ok && n == 1;
 }
+/* `when Enumerable` (or `in`) on an IO subject: the handle answers, since a
+   nil one (NULL) or a File.stat result is none, where a live IO, File or
+   socket is */
+static int emit_io_enumerable_when(TyKind pt, const char *cn, int t, Buf *b) {
+  if (pt != TY_IO || !cn || !sp_streq(cn, "Enumerable")) return 0;
+  buf_printf(b, "sp_io_is_a(_t%d, \"Enumerable\")", t);
+  return 1;
+}
 /* The class arm of a `when` (statement or value form) or an `in` on a
    statically typed object subject, decided from the class table: 1 when it
    wrote a condition, 0 when the pattern names neither a root the object
@@ -8355,6 +8363,7 @@ static int emit_pm_cond_value(Compiler *c, int pat, int t, TyKind pt, int subj, 
       emit_class_val_when(cn2, t, b);
       return 1;
     }
+    if (emit_io_enumerable_when(pt, cn2, t, b)) return 1;
     int yes = ty_matches_class(c, pt, cn2, 0);
     /* a scalar subject holding nil (its nil flag) is a NilClass, and is not
        the Integer or Float its slot is; Object and its ancestors hold for
@@ -10871,6 +10880,7 @@ static int when_builtin_value_const(Compiler *c, int cond) {
 }
 
 static int emit_when_scalar_class(Compiler *c, TyKind pt, const char *cn, int t, Buf *b) {
+  if (emit_io_enumerable_when(pt, cn, t, b)) return 1;
   if (pt != TY_INT && pt != TY_FLOAT && pt != TY_STRING) return 0;
   int yes = ty_matches_class(c, pt, cn, 0);
   int nilcls = sp_streq(cn, "NilClass");

@@ -33,3 +33,7 @@ true
 [Dir, Enumerable, Object]
 :other
 :other
+:other
+:other
+:other
+:nil

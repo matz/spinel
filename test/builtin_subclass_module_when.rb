@@ -54,3 +54,15 @@ module Ns
   def self.u = case SubA[1] when Enumerable then :ns_enum else :other end
 end
 p Ns.t(SubA[1]), Ns.u
+
+# a File.stat result and a nil IO slot are no Enumerable
+st = File.stat(__FILE__)
+case st when Enumerable then p :enum else p :other end
+p(case st
+  in Enumerable then :enum
+  else :other
+  end)
+f = nil
+case f when Enumerable then p :enum else p :other end
+g = ARGV.size > 5 ? File.open(__FILE__) : nil
+case g when Enumerable then p :enum when nil then p :nil else p :other end

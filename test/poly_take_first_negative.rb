@@ -63,3 +63,25 @@ tl("typed bl_int first(-1)") { (..2).first(-1) }
 tl("typed bl_int first(1)") { (..2).first(1) }
 tl("typed int first(-1)") { (1..3).first(-1) }
 tl("typed hash first(-1)") { {a: 1}.first(-1) }
+
+# take(0) answers [] without iterating; a typed Integer Range's take(n) walks n
+t1 = Time.at(0)
+b = [(1.0..2.0), (t1..t1 + 3), (..2), (1.0..), {a: 1}, [1]]
+%w[flt trange bl_int el_flt hash arr].each_with_index do |nm, i|
+  tl("#{nm} take(0)") { b[i].take(0) }
+  tl("#{nm} first(0)") { b[i].first(0) }
+end
+tl("typed flt take(0)") { (1.0..2.0).take(0) }
+tl("typed flt first(0)") { (1.0..2.0).first(0) }
+tl("typed bl_int take(0)") { (..2).take(0) }
+tl("typed bl_int first(0)") { (..2).first(0) }
+p (1..5).take(2)
+p (1..).take(3)
+p (1...4).take(9)
+p (5..1).take(2)
+p (1..10).step(3).take(2) rescue p $!
+x=1..5
+p x.take(0)
+p (..2).take(1) rescue p $!
+x = ..2
+p x.take(0) rescue p $!

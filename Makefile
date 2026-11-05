@@ -6058,6 +6058,12 @@ CLASS_MACROS_LIMIT ?= 2.2
 # linearly in the analysis whichever way they are written, so the pair is
 # not K against 2K.)
 CLASS_MACROS_ONE_LIMIT ?= 1.2
+# One class of K macro calls that set per-class state and K that read it
+# (test/scale/class_macro_state.sh), under graph at K = 200 and 400: each
+# reading call follows the state from where the last call stood
+# (ct_class_state), so the body is followed once; from the body's start
+# at each call it reads as K^2.
+CLASS_MACRO_STATE_LIMIT ?= 2.2
 # A chain of forty bangs over a String a method answers, compiled to C with
 # --share-strings under a CPU-time limit, as the hash-literal fan-out is:
 # strbuf_bang_self_local asked each link once per path that reaches it,
@@ -6131,6 +6137,9 @@ scale-test: $(SPINEL_WORK)
 	gen class_macros_one "2000 written" o1.rb; gen class_macros_one 2000 o2.rb; \
 	oa=$$(sw --load-model=graph -c -o "$$tmp/o1.c" "$$tmp/o1.rb") || { rm -rf "$$tmp"; exit 1; }; \
 	ob=$$(sw --load-model=graph -c -o "$$tmp/o2.c" "$$tmp/o2.rb") || { rm -rf "$$tmp"; exit 1; }; \
+	gen class_macro_state 200 cs2.rb; gen class_macro_state 400 cs4.rb; \
+	csa=$$(sw --load-model=graph -c -o "$$tmp/cs2.c" "$$tmp/cs2.rb") || { rm -rf "$$tmp"; exit 1; }; \
+	csb=$$(sw --load-model=graph -c -o "$$tmp/cs4.c" "$$tmp/cs4.rb") || { rm -rf "$$tmp"; exit 1; }; \
 	gen cond_defs 200 q2.rb; gen cond_defs 400 q4.rb; \
 	qa=$$(sw -c -o "$$tmp/q2.c" "$$tmp/q2.rb") || { rm -rf "$$tmp"; exit 1; }; \
 	qb=$$(sw -c -o "$$tmp/q4.c" "$$tmp/q4.rb") || { rm -rf "$$tmp"; exit 1; }; \
@@ -6201,6 +6210,9 @@ scale-test: $(SPINEL_WORK)
 	awk -v a="$$oa" -v b="$$ob" -v lim="$(CLASS_MACROS_ONE_LIMIT)" 'BEGIN { r = b / a; \
 	  printf "scale-test: one class of macro calls against its methods written out is %.2fx (limit %.2f)\n", r, lim; exit (r > lim) }' || \
 	  { echo "scale-test: FAIL (a row visited the whole class body per macro call: see lower_later and lower_span)"; exit 1; }; \
+	awk -v a="$$csa" -v b="$$csb" -v lim="$(CLASS_MACRO_STATE_LIMIT)" 'BEGIN { r = b / a; \
+	  printf "scale-test: class-body macro state work at 2x the calls is %.2fx (limit %.2f)\n", r, lim; exit (r > lim) }' || \
+	  { echo "scale-test: FAIL (a macro call followed the class's state from the body's start: see ct_class_state)"; exit 1; }; \
 	awk -v a="$$qa" -v b="$$qb" -v lim="$(COND_DEFS_LIMIT)" 'BEGIN { r = b / a; \
 	  printf "scale-test: open method history work at 2x the histories is %.2fx (limit %.2f)\n", r, lim; exit (r > lim) }' || \
 	  { echo "scale-test: FAIL (the open histories' entries or their cell writes grew superlinearly: see ver_named_one and ver_cells_write)"; exit 1; }; \

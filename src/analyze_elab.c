@@ -7018,6 +7018,18 @@ int elab_opaque_before(Compiler *c, int cls, LoadPoint p) {
   return lr_last_before(c, lr_hist(c->lrec, LR_KEY_OPAQUE, lr_const_owner(cls), "", 0), p, p.region < 0, 0, NULL);
 }
 
+/* ...leaving out a class-body macro call the walk ran and left as written,
+   whose run wrote the class's instance variables alone (ct_state_note marks
+   it ct_state_only): the record keeps it as code it does not follow, and
+   the macro form follows that state itself */
+int elab_opaque_before_bar_state(Compiler *c, int cls, LoadPoint p) {
+  int o = elab_opaque_before(c, cls, p);
+  const LrHist *h = o != ELAB_NO ? lr_hist(c->lrec, LR_KEY_OPAQUE, lr_const_owner(cls), "", 0) : NULL;
+  for (int i = 0; h && i < h->n; i++)
+    if (h->v[i].node < 0 || !nt_int(c->nt, h->v[i].node, "ct_state_only", 0)) return o;
+  return h ? ELAB_NO : o;
+}
+
 /* The bodies and mixins of a class, once the record is made */
 const LrOpen *elab_class_bodies(Compiler *c, int cls, int *n) {
   LrClass *k = c->lrec && c->lrec->recorded ? lr_class(c->lrec, cls) : NULL;
@@ -7973,4 +7985,13 @@ void elab_const_keys(Compiler *c) {
   free(ent); free(skip);
   for (int i = 0; i < ne; i++) { free(es[i].path); free(es[i].key); }
   free(es);
+}
+
+/* The statements of the i-th opening of class cls the record holds, in
+   the order the walk reached them (-1 for one with no body); -2 past the
+   last. *header: its header */
+int elab_class_opening_body(Compiler *c, int cls, int i, int *header) {
+  LrClass *k = c->lrec ? lr_class(c->lrec, cls) : NULL;
+  if (header) *header = k && i >= 0 && i < k->nopen ? k->open[i].node : -1;
+  return k && i >= 0 && i < k->nopen ? k->open[i].body : -2;
 }

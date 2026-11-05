@@ -697,6 +697,7 @@ int elab_attr_replaced(Compiler *c, int cls, const char *name);
    of a module it does not know, a computed method name, a method of the
    program its body calls) run on cls before p? */
 int elab_opaque_before(Compiler *c, int cls, LoadPoint p);
+int elab_opaque_before_bar_state(Compiler *c, int cls, LoadPoint p);   /* ...leaving out the state-only macro calls the walk ran (ct_state_note) */
 int nil_fact_node(const Compiler *c, int node);
 int nil_fact_ivar(const Compiler *c, int cid, const char *ivn);
 /* where a nil comes from: a node's (nil_fact_why), a slot's flag itself.

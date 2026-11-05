@@ -886,6 +886,7 @@ struct HostStep *elab_walk_host(Compiler *c);   /* analyze_elab.c: the host a wa
 int mf_arm_base_len(const char *nm);   /* analyze_scope.c: the length of the name a conditional def's arm (`m#__condN`) stands for, -1 when nm is no arm */
 int elab_fire_after(Compiler *c, int list, int j);   /* analyze_elab.c: the hook calls the versions statement j of `list` added, spliced after it (the number) */
 int elab_walk_replace(Compiler *c, int old, int with);   /* ...and node with, spliced in place of entered statement old, takes its point */
+int elab_class_opening_body(Compiler *c, int cls, int i, int *header);   /* the i-th opening's statements of class cls the record holds (-1: none), -2 past the last; *header its header */
 int elab_stmt_list(Compiler *c, int node, int *frame);   /* the statement list statement node is an element of, *frame the class or module header around it (-1: main's); -1 for no statement */
 int desugar_static_class_eval(Compiler *c, HostStep *h);   /* analyze_desugar.c: the graft over every class and module body */
 int sce_span(Compiler *c, HostStep *h, int owner, int body, int at, int n, const char *locals, const char *gone);   /* ... over spliced statements */

@@ -10845,15 +10845,23 @@ static int emit_scalar_recv_arms(Compiler *c, int id, Buf *b, const NodeTable *n
                       " sp_FloatArray_push(_t%d, (%s)); _t%d; })", o, o, ta, o, r, o);
       }
       else {
-        buf_printf(b, "({ sp_float _t%d = ", ta);
-        /* a nil goes as above, in Float()'s words */
+        /* a nil goes as above, in Float()'s words, once the receiver has run:
+           its own nil raises first */
         if (a0 == TY_FLOAT && cmp_operand_may_be_nil(c, argv[0])) {
-          buf_puts(b, "sp_ofloat_arg("); emit_oint_expr(c, argv[0], TY_FLOAT, b); buf_puts(b, ")");
+          int tr = ++g_tmp;
+          buf_printf(b, "({ sp_float _t%d = (%s); sp_float _t%d = sp_ofloat_arg(", tr, r, ta);
+          emit_oint_expr(c, argv[0], TY_FLOAT, b);
+          buf_printf(b, "); sp_FloatArray *_t%d = sp_FloatArray_new();"
+                        " sp_FloatArray_push(_t%d, _t%d);"
+                        " sp_FloatArray_push(_t%d, _t%d); _t%d; })", o, o, ta, o, tr, o);
         }
-        else emit_coerce(c, argv[0], TY_FLOAT, CO_CONVERT, "a Float operand", b);
-        buf_printf(b, "; sp_FloatArray *_t%d = sp_FloatArray_new();"
-                      " sp_FloatArray_push(_t%d, _t%d);"
-                      " sp_FloatArray_push(_t%d, (%s)); _t%d; })", o, o, ta, o, r, o);
+        else {
+          buf_printf(b, "({ sp_float _t%d = ", ta);
+          emit_coerce(c, argv[0], TY_FLOAT, CO_CONVERT, "a Float operand", b);
+          buf_printf(b, "; sp_FloatArray *_t%d = sp_FloatArray_new();"
+                        " sp_FloatArray_push(_t%d, _t%d);"
+                        " sp_FloatArray_push(_t%d, (%s)); _t%d; })", o, o, ta, o, r, o);
+        }
       }
     }
     /* fdiv(Complex) is self / c, as Float#/ divides by one: a Complex

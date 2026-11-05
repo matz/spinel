@@ -4773,6 +4773,86 @@ int method_recv_nodes(Compiler *c, int recv, int **out) {
   return n;
 }
 
+/* The #owner a bound builtin's or accessor's wrapper, method mi, stands
+   for (desugar_builtin_method_obj records it on the def): the class
+   declaring the accessor, or -1 and the builtin's class or module by name
+   in *name (NULL where no fact names one) */
+int bam_owner(Compiler *c, int mi, const char **name) {
+  int dn = mi >= 0 ? c->scopes[mi].def_node : -1;
+  *name = dn >= 0 ? nt_str(c->nt, dn, "bam_owner") : NULL;
+  return dn >= 0 ? (int)nt_int(c->nt, dn, "bam_owner_ci", 0) - 1 : -1;
+}
+
+/* The method a local's write w makes a Method of: its target, or -1 */
+static int method_write_target(Compiler *c, int w) {
+  int mn = method_recv_node(c, nt_ref(c->nt, w, "value"));
+  return mn >= 0 ? method_obj_target_mi(c, mn) : -1;
+}
+
+/* Does recv, a local written more than one Method, hold only Methods whose
+   bind site stamped the position a read answers from (emit_method_desc_args)?
+   Each of its writes must make one, by a `method(:sym)` node with a
+   target: one with none raises NameError at the bind, where CRuby may
+   find the method (a module function's instance copy, a name
+   respond_to_missing? answers), a boxed receiver's wrapper (bam_poly)
+   names no method until its receiver's class is known, and of a builtin's
+   wrapper (bam_sym) only an accessor's (bam_accessor) has a known position:
+   whether CRuby writes a builtin in C or in Ruby no fact tells. */
+int method_recv_stamped(Compiler *c, int recv) {
+  const NodeTable *nt = c->nt;
+  if (recv < 0 || nt_kind(nt, recv) != NK_LocalVariableReadNode) return 0;
+  const char *vn = nt_str(nt, recv, "name");
+  Scope *sc = comp_scope_of(c, recv);
+  int n = 0;
+  for (int w = an_local_writes_named_first(c, vn); w >= 0; w = an_local_writes_named_next(w)) {
+    const char *wn = nt_str(nt, w, "name");
+    if (comp_scope_of(c, w) != sc || !wn || !vn || !sp_streq(wn, vn)) continue;
+    int mi = method_write_target(c, w);
+    int dn = mi >= 0 ? c->scopes[mi].def_node : -1;
+    if (dn < 0 || nt_int(nt, dn, "bam_poly", 0) ||
+        (nt_str(nt, dn, "bam_sym") && !nt_int(nt, dn, "bam_accessor", 0))) return 0;
+    n++;
+  }
+  return n > 0;
+}
+
+/* Is method mi a builtin's wrapper whose bind site stamps no owner: one
+   (bam_sym) for which no fact names the class or module that defines the
+   builtin (bam_owner)? */
+static int bam_owner_unknown(Compiler *c, int mi) {
+  int dn = mi >= 0 ? c->scopes[mi].def_node : -1;
+  const char *bn;
+  return dn >= 0 && nt_str(c->nt, dn, "bam_sym") && bam_owner(c, mi, &bn) < 0 && !bn;
+}
+
+/* Does the program make a Method of such a wrapper anywhere? */
+static int program_has_bam_owner_unknown(Compiler *c) {
+  for (int i = 0; i < c->nscopes; i++) if (bam_owner_unknown(c, i)) return 1;
+  return 0;
+}
+
+/* May recv, a Method expression no one node names, hold a builtin's Method
+   whose bind site stamps no owner (bam_owner_unknown)? A local answers by
+   its writes, each a `method(:sym)` node of its own; any other expression,
+   a container's element, a parameter, or a local written something else,
+   may hold any Method the program makes. */
+int method_recv_owner_unknown(Compiler *c, int recv) {
+  const NodeTable *nt = c->nt;
+  if (recv < 0 || nt_kind(nt, recv) != NK_LocalVariableReadNode) return program_has_bam_owner_unknown(c);
+  const char *vn = nt_str(nt, recv, "name");
+  Scope *sc = comp_scope_of(c, recv);
+  int n = 0;
+  for (int w = an_local_writes_named_first(c, vn); w >= 0; w = an_local_writes_named_next(w)) {
+    const char *wn = nt_str(nt, w, "name");
+    if (comp_scope_of(c, w) != sc || !wn || !vn || !sp_streq(wn, vn)) continue;
+    int mn = method_recv_node(c, nt_ref(nt, w, "value"));
+    if (mn < 0) return program_has_bam_owner_unknown(c);
+    if (bam_owner_unknown(c, method_obj_target_mi(c, mn))) return 1;
+    n++;
+  }
+  return n ? 0 : program_has_bam_owner_unknown(c);
+}
+
 /* Every `method(:sym)` node behind a Proc-typed expression created by
    `<method>.to_proc`: the to_proc call itself, or a local variable's
    single assignment to one. The Method it converts may be a local written

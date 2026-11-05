@@ -1,0 +1,20 @@
+[nil, "C"]
+[false, true]
+true
+#<Class:C>
+nil
+false
+"#<Class:C>"
+L
+2
+S
+2
+Comparable
+Kernel
+L
+S
+Array
+Kernel
+BasicObject
+Kernel
+Numeric

@@ -182,6 +182,15 @@ typedef struct sp_BoundMethod { void *self; sp_int fn; const char *name; sp_int 
                            signature); 0 when the bind site had no static target
                            or the target's shape declines (keywords). */
   sp_int thunk_min, thunk_max;   /* the argument counts it binds (max -1 for a rest: any count) */
+  sp_Class owner;         /* compile-time #owner, the class value the static
+                             #owner answers (a singleton's id for
+                             #<Class:C>), or SP_CLASS_NIL where the bind
+                             site knows no target: what sp_bm_owner answers */
+  const char *src_file;   /* compile-time #source_location: the def's file,
+                             a frozen literal (CRuby's path is frozen), and
+                             line; NULL / 0 for none (nil): what
+                             sp_bm_source_location answers */
+  sp_int src_line;
 } sp_BoundMethod;
 void sp_bm_cap_scan(void *p);
 sp_int sp_method_proc_tramp(void *cap, sp_int argc, sp_int *args);
@@ -205,7 +214,7 @@ static inline sp_int sp_bm_fn_opaque(sp_int fn) {
   return fn;
 #endif
 }
-static inline sp_BoundMethod *sp_bound_method_new(void *self, sp_int self_kind, sp_int fn, const char *name, sp_int arity) { sp_BoundMethod *m = (sp_BoundMethod *)sp_gc_alloc(sizeof(sp_BoundMethod), NULL, sp_BoundMethod_scan); m->self = self; m->self_kind = self_kind; m->fn = sp_bm_fn_opaque(fn); m->name = name; m->arity = arity; m->desc = NULL; m->params = NULL; m->unbound = 0; m->recv_bound = 0; m->legacy_int_abi = 0; m->legacy_sig = NULL; m->legacy_fixed = 0; m->legacy_rest = 0; m->legacy_ret = SP_BM_RET_INT; m->poly_abi = 0; m->poly_fixed = 0; m->thunk = 0; m->thunk_min = 0; m->thunk_max = 0; return m; }
+static inline sp_BoundMethod *sp_bound_method_new(void *self, sp_int self_kind, sp_int fn, const char *name, sp_int arity) { sp_BoundMethod *m = (sp_BoundMethod *)sp_gc_alloc(sizeof(sp_BoundMethod), NULL, sp_BoundMethod_scan); m->self = self; m->self_kind = self_kind; m->fn = sp_bm_fn_opaque(fn); m->name = name; m->arity = arity; m->desc = NULL; m->params = NULL; m->unbound = 0; m->recv_bound = 0; m->legacy_int_abi = 0; m->legacy_sig = NULL; m->legacy_fixed = 0; m->legacy_rest = 0; m->legacy_ret = SP_BM_RET_INT; m->poly_abi = 0; m->poly_fixed = 0; m->thunk = 0; m->thunk_min = 0; m->thunk_max = 0; m->owner = SP_CLASS_NIL; m->src_file = NULL; m->src_line = 0; return m; }
 /* Tag a freshly-built Method with whether its target has the legacy sp_int C
    ABI, the per-position type signature, the fixed/rest slot counts, and how
    its sp_int C return boxes. The constructors default to 0 (unsafe), so every
@@ -315,7 +324,7 @@ static inline sp_bool sp_bm_legacy_abi_ok(sp_BoundMethod *m, sp_int argc, const 
     if (!sp_bm_sig_pos_match(arg_sig + 8 * k, m->legacy_sig + 8 * k)) return FALSE;
   return TRUE;
 }
-static inline sp_BoundMethod *sp_bound_method_new_d(void *self, sp_int self_kind, sp_int fn, const char *name, sp_int arity, const char *desc, const char *params) { sp_BoundMethod *m = sp_bound_method_new(self, self_kind, fn, name, arity); m->desc = desc; m->params = params; return m; }
+static inline sp_BoundMethod *sp_bound_method_new_d(void *self, sp_int self_kind, sp_int fn, const char *name, sp_int arity, const char *desc, const char *params, sp_Class owner, const char *src_file, sp_int src_line) { sp_BoundMethod *m = sp_bound_method_new(self, self_kind, fn, name, arity); m->desc = desc; m->params = params; m->owner = owner; m->src_file = src_file; m->src_line = src_line; return m; }
 /* Method#unbind on a BOXED method: the same target with the receiver dropped.
    A boxed value carries no syntax for the compile-time unbound rendering, so
    the copy records it (the #class arm reads `unbound`) (#3692). */
@@ -324,6 +333,9 @@ static inline sp_BoundMethod *sp_bm_unbind(sp_BoundMethod *m) {
   sp_BoundMethod *u = sp_bound_method_new(NULL, SP_BM_SELF_NONE, m->fn, m->name, m->arity);
   u->desc = m->desc;
   u->params = m->params;
+  u->owner = m->owner;
+  u->src_file = m->src_file;
+  u->src_line = m->src_line;
   u->unbound = 1;
   u->legacy_int_abi = m->legacy_int_abi;
   u->legacy_sig = m->legacy_sig;

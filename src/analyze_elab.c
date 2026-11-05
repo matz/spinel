@@ -7588,6 +7588,29 @@ int elab_attr_replaced(Compiler *c, int cls, const char *name) {
   return 0;
 }
 
+/* The node of the last attr_* entry for name on cls's instance side, or of
+   a module's it prepends or includes, the way a lookup meets them; -1 */
+static int lr_accessor_in(Compiler *c, int cls, const char *name, int depth) {
+  const ClassInfo *k = &c->classes[cls];
+  const LrHist *h = lr_hist(c->lrec, cls, 0, name, 0);
+  int node = -1;
+  for (int m = k->nprepended_mods - 1; node < 0 && depth < 16 && m >= 0; m--)
+    node = lr_accessor_in(c, k->prepended_mods[m], name, depth + 1);
+  for (int j = h ? h->n - 1 : -1; node < 0 && j >= 0; j--)
+    if ((h->v[j].kind == LR_READER || h->v[j].kind == LR_WRITER) && lr_applied(c, &h->v[j]) == 1) node = h->v[j].node;
+  for (int m = k->nincluded_mods - 1; node < 0 && depth < 16 && m >= 0; m--)
+    node = lr_accessor_in(c, k->included_mods[m], name, depth + 1);
+  return node;
+}
+/* See analyze.h. */
+int elab_accessor_node(Compiler *c, int cls, const char *name) {
+  LoadRecord *r = c->lrec;
+  int node = -1;
+  for (int k = cls; node < 0 && r && r->recorded && k >= 0 && k < c->nclasses; k = c->classes[k].parent)
+    node = lr_accessor_in(c, k, name, 0);
+  return node;
+}
+
 /* (every entry, one that only writes too: the macro splice in analyze_ct.c
    runs code at compile time that may read the instance variable it wrote) */
 int elab_opaque_before(Compiler *c, int cls, LoadPoint p) {

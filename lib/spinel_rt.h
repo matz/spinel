@@ -16748,20 +16748,17 @@ static sp_Proc *sp_poly_to_block(sp_RbVal v) {
 }
 
 /* A Method read back out of a container has only its sp_BoundMethod: #owner
-   comes from the compile-time rendering it carries ("#<Method: Owner#name>"),
-   and #receiver from the object's own class id (#3692). */
-static const char *sp_bm_owner_name(sp_BoundMethod *m) {
-  if (!m || !m->desc) return NULL;
-  const char *p = strstr(m->desc, ": ");
-  if (!p) return NULL;
-  p += 2;
-  const char *e = p;
-  while (*e && *e != '#' && *e != '.' && *e != '>') e++;
-  if (e == p) return NULL;
-  { size_t n = (size_t)(e - p);
-    char *r = sp_str_alloc(n);
-    memcpy(r, p, n); r[n] = 0;
-    return r; }
+   and #source_location come from the facts its bind site stamped, and
+   #receiver from the object's own class id (#3692). */
+static sp_Class sp_bm_owner(sp_BoundMethod *m) {
+  return m ? m->owner : SP_CLASS_NIL;
+}
+static sp_PolyArray *sp_bm_source_location(sp_BoundMethod *m) {
+  if (!m || !m->src_file) return NULL;
+  sp_PolyArray *a = sp_PolyArray_new(); SP_GC_ROOT(a);
+  sp_PolyArray_push(a, sp_box_str(m->src_file));
+  sp_PolyArray_push(a, sp_box_int(m->src_line));
+  return a;
 }
 /* #parameters from the list the bind site stamped (sp_BoundMethod.params):
    [kind] or [kind, name] per entry */

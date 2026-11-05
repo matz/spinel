@@ -18070,6 +18070,7 @@ static int emit_array_arith_call(Compiler *c, int id, Buf *b) {
       buf_puts(b, "sp_float_pow(");
       if (rt == TY_INT) { buf_puts(b, "(double)("); emit_expr(c, recv, b); buf_puts(b, ")"); }
       else if (rt == TY_BIGINT) { buf_puts(b, "sp_bigint_to_double("); emit_expr(c, recv, b); buf_puts(b, ")"); }
+      else if (rt == TY_FLOAT && cmp_operand_may_be_nil(c, recv)) { buf_puts(b, "sp_ofloat_val("); emit_oint_expr(c, recv, TY_FLOAT, b); buf_puts(b, ", \"**\")"); }
       else emit_coerce(c, recv, TY_FLOAT, CO_HOLD, "the receiver of a Float `**`", b);
       buf_puts(b, ", ");
       if (at0 == TY_INT) { buf_puts(b, "(double)("); emit_expr(c, argv[0], b); buf_puts(b, ")"); }
@@ -18086,6 +18087,8 @@ static int emit_array_arith_call(Compiler *c, int id, Buf *b) {
       buf_puts(b, at0 == TY_INT ? "sp_fmod_intdiv(" : "sp_fmod(");
       if (rt == TY_INT) { buf_puts(b, "(double)("); emit_expr(c, recv, b); buf_puts(b, ")"); }
       else if (rt == TY_BIGINT) { buf_puts(b, "sp_bigint_to_double("); emit_expr(c, recv, b); buf_puts(b, ")"); }
+      /* a receiver that may be nil is unwrapped as the other Float operators unwrap theirs: NoMethodError, not a refusal */
+      else if (rt == TY_FLOAT && cmp_operand_may_be_nil(c, recv)) { buf_puts(b, "sp_ofloat_val("); emit_oint_expr(c, recv, TY_FLOAT, b); buf_puts(b, ", \"%\")"); }
       else emit_coerce(c, recv, TY_FLOAT, CO_HOLD, "the receiver of a Float `%`", b);
       buf_puts(b, ", ");
       if (a0r.big) { buf_puts(b, "sp_bigint_to_double("); emit_expr(c, argv[0], b); buf_puts(b, ")"); }

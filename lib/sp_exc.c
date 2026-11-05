@@ -1152,9 +1152,8 @@ sp_bool sp_exc_has_acc(sp_Exception *e, const char *acc) {
    type is class-erased at compile time, so the check is a runtime one. */
 sp_RbVal sp_exc_name_acc(sp_Exception *e) {SP_GC_ROOT(e);
   if (!e) return sp_box_nil();
-  if (sp_exc_cls_matches(e->cls_name, "NameError")) return e->xname;
-  sp_raise_cls("NoMethodError",
-               sp_sprintf("undefined method 'name' for an instance of %s", e->cls_name));
+  sp_exc_acc_gate(e, "NameError", "name");
+  return e->xname;
 }
 /* Exception accessors on a POLY receiver (an exception rescued into a
    union-typed local): unbox and delegate; a non-exception value is CRuby's

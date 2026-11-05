@@ -5291,10 +5291,15 @@ void emit_exc_attrs_new(Compiler *c, int id, int ci, int argc, const int *argv, 
   buf_printf(b, "; _t%d; })", te);
 }
 /* `Cls.new(a, b)` on a class below an exception whose initialize takes one
-   message: the arguments run, and the call raises as CRuby's does. 0 where
-   the count is fine, or known only at run time, or the class's own rule. */
+   message: the arguments run, and the call raises as CRuby's does. With only
+   `**h` for keywords, the count is the run time's: an empty one passes nothing
+   and any other one more argument, a Hash, and sp_exc_attrs_super reads a class
+   of none of its families as Exception#initialize alone. 0 where the count is
+   fine, or known only at run time, or the class's own rule. */
 int emit_exc_extra_args(Compiler *c, int id, int ci, int argc, const int *argv, Buf *b) {
-  if (argc < 2 || class_is_syserr(c, ci) || nt_argv_has_splat(c->nt, argv, argc)) return 0;
+  int kwh = nt_argv_kwh(c->nt, argv, argc);
+  int spreads = kwh >= 0 && kwh_only_spreads(c->nt, kwh);
+  if (class_is_syserr(c, ci) || (!spreads && (argc < 2 || nt_argv_has_splat(c->nt, argv, argc)))) return 0;
   /* the builtins whose initialize takes other arguments of its own */
   static const char *const other[] = { "SystemExit", "UncaughtThrowError", "SignalException",
                                        "Interrupt", "NoMatchingPatternKeyError", NULL };
@@ -5302,6 +5307,17 @@ int emit_exc_extra_args(Compiler *c, int id, int ci, int argc, const int *argv, 
   for (int i = 0; other[i]; i++) if (sp_streq(par, other[i])) return 0;
   int ta, tk;
   emit_exc_args_gather(c, id, argc, argv, &ta, &tk);
+  if (spreads) {
+    int te = ++g_tmp;
+    Buf alloc; memset(&alloc, 0, sizeof alloc);
+    const char *dim = "sp_Exception";
+    emit_sysexit_alloc(c, ci, &dim, &alloc);
+    buf_printf(b, "({ %s *_t%d = %s; SP_GC_ROOT(_t%d); if (_t%d.tag == SP_TAG_OBJ && sp_poly_keys(_t%d)->len > 0) sp_PolyArray_push(_t%d, _t%d); "
+                  "sp_exc_attrs_super((sp_Exception *)_t%d, _t%d->len, _t%d->data, sp_box_nil()); _t%d; })",
+               dim, te, alloc.p, te, tk, tk, ta, tk, te, ta, ta, te);
+    free(alloc.p);
+    return 1;
+  }
   buf_printf(b, "({ sp_raise_cls(\"ArgumentError\", \"wrong number of arguments (given %d, expected 0..1)\"); ", argc);
   if (c->classes[ci].nivars > 0) buf_printf(b, "(sp_%s *)NULL; })", c->classes[ci].c_name);
   else buf_puts(b, "(sp_Exception *)NULL; })");

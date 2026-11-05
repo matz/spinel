@@ -6439,9 +6439,18 @@ static int qc_enclosing_body(const NodeTable *nt, const int *par, int n) {
   }
   return -1;
 }
-/* Is node n inside node anc? */
-static int qc_inside(const int *par, int n, int anc) {
-  for (int p = n; p >= 0; p = par[p]) if (p == anc) return 1;
+/* Does header hd run whenever statements st run? Only a statements list,
+   a begin's main body or ensure, and parentheses may lie between them;
+   an if, a loop, a rescue or a block may not run. */
+static int qc_runs_with(const NodeTable *nt, const int *par, int hd, int st) {
+  int ch = hd;
+  for (int p = par[hd]; p >= 0; ch = p, p = par[p]) {
+    if (p == st) return 1;
+    NodeKind k = nt_kind(nt, p);
+    if (k == NK_StatementsNode || k == NK_EnsureNode || k == NK_ParenthesesNode) continue;
+    if (k == NK_BeginNode && nt_ref(nt, p, "statements") == ch) continue;
+    return 0;
+  }
   return 0;
 }
 /* `Bar = Class.new { } unless defined?(Bar)` (cond, the unless) ahead of
@@ -6458,7 +6467,7 @@ static int qc_unless_defined_runs(const NodeTable *nt, const int *par, int w, in
       !sp_streq(nt_str(nt, dv, "name"), wn))
     return 0;
   int cs = par[cond];
-  if (cs < 0 || nt_kind(nt, cs) != NK_StatementsNode || !qc_inside(par, hd, cs) ||
+  if (cs < 0 || nt_kind(nt, cs) != NK_StatementsNode || !qc_runs_with(nt, par, hd, cs) ||
       !qc_written_before(nt, w, hd))
     return 0;
   NT_FOREACH_KIND(nt, NK_ConstantWriteNode, o) {
@@ -6506,7 +6515,7 @@ static void qc_refuse_conditional_builder(Compiler *c) {
         if (cp < 0 || nt_kind(nt, cp) != NK_ConstantReadNode || !nt_str(nt, cp, "name") ||
             !sp_streq(nt_str(nt, cp, "name"), wn) || qc_enclosing_body(nt, par, hd) != body)
           continue;
-        if (st >= 0 && qc_inside(par, hd, st)) continue;
+        if (st >= 0 && qc_runs_with(nt, par, hd, st)) continue;
         int cond = st >= 0 ? par[st] : -1;
         if (cond >= 0 && qc_unless_defined_runs(nt, par, w, cond, hd, body, wn)) continue;
         char msg[512];

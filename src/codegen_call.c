@@ -4661,6 +4661,11 @@ static int emit_lazy_pipeline_expr_1(Compiler *c, int id, Buf *b) {
       int tfm = ++g_tmp, tfj = ++g_tmp;
       emit_indent(g_pre, g_indent + 1);
       buf_printf(g_pre, "sp_RbVal _t%d = %s; SP_GC_ROOT_RBVAL(_t%d);\n", tfm, eb.p ? eb.p : "sp_box_nil()", tfm); free(eb.p);
+      /* a program object answering #to_ary splices as that Array, and one
+         whose to_ary gives a non-Array is CRuby's TypeError (the eager
+         flat_map's rule) */
+      emit_indent(g_pre, g_indent + 1);
+      buf_printf(g_pre, "_t%d = sp_poly_ary_operand(_t%d);\n", tfm, tfm);
       emit_indent(g_pre, g_indent + 1);
       buf_printf(g_pre, "if (_t%d.tag == SP_TAG_OBJ && sp_poly_is_array_kind(_t%d.cls_id)) {\n", tfm, tfm);
       emit_indent(g_pre, g_indent + 2);

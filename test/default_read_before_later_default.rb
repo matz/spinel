@@ -113,7 +113,7 @@ def lg(a = f(:a), b = $log.size, c = f(:c), k: f(:k), j: $log.dup)
 end
 lg
 lg(k: [1])
-lg(1, j: 0)
+lg([1], j: 0)   # (an Array: Integer#size is the word, 4 on a 32-bit target)
 p $log
 
 # a keyword the call gives runs before the default it leaves out reads

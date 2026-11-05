@@ -19,6 +19,10 @@ class M
   def pick(t, v) = t.instance_exec { @flag = v ? 5 : nil }
   def look(u) = u.instance_exec { @n }
   def via_then(t) = t.then { |x| x.flag }
+  def empty(t, c) = c ? t.instance_exec { @flag } : t.instance_exec {}
+  def empty_then(t, c) = c ? 1 : t.then {}
+  def by_proc(t) = t.instance_exec(&proc { @flag = nil })
+  def by_local(t) = (pr = proc { @flag = nil }; t.instance_exec(&pr))
 end
 
 t = T.new
@@ -34,3 +38,7 @@ t.flag = nil
 p M.new.via_then(t)
 t.flag = 8
 p M.new.via_then(t) + 1
+p M.new.empty(t, true), M.new.empty(t, false), M.new.empty_then(t, true), M.new.empty_then(t, false)
+p M.new.by_proc(t), t.flag
+t.flag = 6
+p M.new.by_local(t), t.flag

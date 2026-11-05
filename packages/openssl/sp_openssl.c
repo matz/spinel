@@ -452,7 +452,7 @@ const char *sp_x509_pem(const char *der) {
    context has none; OpenSSL sends them only to a server that asks. */
 static int sp_ssl_use_chain(SSL_CTX *ctx, const char *chain, const char *curve, const char *priv);
 
-static int sp_ssl_setup(sp_int fd, const char *hostname, sp_int verify, sp_RbVal cert_store,
+static int sp_ssl_setup(sp_int fd, const char *hostname, sp_int verify, sp_int verify_hostname, sp_RbVal cert_store,
                         const char *chain, const char *curve, const char *priv) {
   sp_ssl_errbuf[0] = 0;
 
@@ -498,7 +498,7 @@ else {
   SSL_set_connect_state(ssl);
   if (hostname && hostname[0]) {
     SSL_set_tlsext_host_name(ssl, hostname);     /* SNI */
-    if (verify) {
+    if (verify && verify_hostname) {
       /* Without this the chain validates and the NAME does not, which is the
          classic way to have TLS and no security. */
       SSL_set_hostflags(ssl, X509_CHECK_FLAG_NO_PARTIAL_WILDCARDS);
@@ -573,9 +573,9 @@ static void sp_ssl_handshake_step(sp_ssl_conn *c) {
    exists -- the handshake may well be unfinished, and sp_ssl_want says so --
    or -1 when the connection could not be built. The handle is kept across
    calls so the handshake can be resumed. */
-sp_int sp_ssl_connect_nb(sp_int fd, const char *hostname, sp_int verify, sp_RbVal cert_store,
+sp_int sp_ssl_connect_nb(sp_int fd, const char *hostname, sp_int verify, sp_int verify_hostname, sp_RbVal cert_store,
                          const char *chain, const char *curve, const char *priv) {
-  int i = sp_ssl_setup(fd, hostname, verify, cert_store, chain, curve, priv);
+  int i = sp_ssl_setup(fd, hostname, verify, verify_hostname, cert_store, chain, curve, priv);
   if (i < 0) { sp_ssl_want_state = 4; return -1; }
   sp_ssl_conn *c = &sp_ssl_tab[i];
   int fl = fcntl(c->fd, F_GETFL, 0);

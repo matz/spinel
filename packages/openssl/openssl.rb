@@ -75,7 +75,7 @@ module OpenSSL
     native_func :peer_subject, [:int],                :string, "sp_ssl_peer_subject"
     native_func :version,      [:int],                :string, "sp_ssl_version"
     native_func :cipher,       [:int],                :string, "sp_ssl_cipher"
-    native_func :connect_nb,   [:int, :string, :int, :any, :string, :string, :string], :int, "sp_ssl_connect_nb"
+    native_func :connect_nb,   [:int, :string, :int, :int, :any, :string, :string, :string], :int, "sp_ssl_connect_nb"
     native_func :handshake_cont, [:int],              :int,    "sp_ssl_handshake_cont"
     native_func :read_nb,      [:int, :int],          :string, "sp_ssl_read_nb"
     native_func :want,         [],                    :int,    "sp_ssl_want"
@@ -544,6 +544,7 @@ module OpenSSL
         key = own_key
         h = Native.connect_nb(@io.fileno, @hostname,
                               @context.verify_mode == VERIFY_NONE ? 0 : 1,
+                              @context.verify_hostname ? 1 : 0,
                               @context.cert_store, @context.own_chain,
                               key ? SSLContext.key_curve(key) : "", key ? SSLContext.key_bytes(key) : "")
         if h < 0

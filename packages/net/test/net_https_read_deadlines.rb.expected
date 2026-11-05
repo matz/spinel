@@ -1,0 +1,19 @@
+[nil, nil]
+false
+"ok"
+"ok"
+OpenSSL::SSL::SSLError
+OpenSSL::SSL::SSLError
+OpenSSL::SSL::SSLError
+"ok"
+true
+Net::ReadTimeout
+true
+Net::ReadTimeout
+true
+Net::ReadTimeout
+true
+Net::ReadTimeout
+true
+"xxxxxxxx"
+true

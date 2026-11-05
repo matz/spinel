@@ -984,6 +984,7 @@ int desugar_enumerable_chain(Compiler *c);
 int desugar_implicit_send(Compiler *c);
 int desugar_public_send_recv(Compiler *c);
 int desugar_class_value_builtin_cmethod(Compiler *c);
+void an_rewrite_array_subclass_new(Compiler *c, int id);
 int type_block_rest_params(Compiler *c);
 void check_block_rest_support(Compiler *c);
 int desugar_dynamic_send(Compiler *c);

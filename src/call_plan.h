@@ -720,6 +720,11 @@ int cplan_self_builtin(Compiler *c, int id);
    is answered by (desugar_defined_method_call) asks at the point of the
    call `C.z` (the defined?'s). */
 int cplan_cmethod_later(Compiler *c, int id, int cls, const char *name);
+/* The class an alias that node id meets as cls's `name` (singleton when sg)
+   was made in, as Method#owner names it (*own_sg: on its singleton); -1 for
+   none or not known. It asks for the versions ct_version_at does
+   (elab_call_meet) and answers only where that meets one. */
+int cplan_alias_holder(Compiler *c, int id, int cls, const char *name, int sg, int *own_sg);
 /* What call id of class method `name` on program class ci runs where ci
    has a `class << self` accessor of the name: CP_SG_NONE where it has none
    (the call is an ordinary class method's); CP_SG_SLOT, the slot, named

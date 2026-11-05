@@ -438,6 +438,9 @@ void elab_check_visibility(Compiler *c);   /* SPINEL_ELAB_CHECK: after all scope
    when node is no version there or has no point, or the next version may
    not run or runs in another region */
 int elab_version_end(Compiler *c, int cls, const char *name, int sg, int node, LoadPoint *end);
+/* ...and is that version on cls's singleton (cls's history of `name` on its
+   class side), not its instance side? */
+int elab_version_on_singleton(Compiler *c, int cls, const char *name, int node);
 /* The statements over which a call may run, [from, to): its own, or the
    outermost body around it that runs again (wraps: a loop's body, an
    iterator's block); in a method body, from the def with a point around it
@@ -1192,6 +1195,7 @@ const char *method_sym_arg(Compiler *c, int node);   /* :sym arg name, or NULL *
 int is_method_obj_call(Compiler *c, int node);        /* is node a method(:sym) call? */
 int method_obj_target_mi(Compiler *c, int node);      /* target method scope idx, or -1 */
 int method_super_target(Compiler *c, int mi);         /* the scope <m>.super_method answers, or -1 */
+int method_obj_alias_owner(Compiler *c, int node, int *sg); /* the class an alias it names was made in, or -1 */
 const char *class_value_instance_method_sym(Compiler *c, int node); /* instance_method on a run-time class */
 int class_value_bind_call_target(Compiler *c, int ci, const char *sym, int *armless);
 int class_value_bind_call_gap(Compiler *c, int node);

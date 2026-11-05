@@ -84,6 +84,7 @@ int is_method_obj_call(Compiler *c, int node);
 int method_user_override_recv(Compiler *c, int node);
 int method_obj_target_mi(Compiler *c, int node);
 int method_super_target(Compiler *c, int mi);
+int method_obj_alias_owner(Compiler *c, int node, int *sg);
 int method_recv_node(Compiler *c, int recv);
 int method_recv_nodes(Compiler *c, int recv, int **out);
 int method_expr_is_unbound(Compiler *c, int recv);

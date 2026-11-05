@@ -668,11 +668,21 @@ static int method_owner_singleton(Compiler *c, int mi, int unbound) {
   return m->is_cmethod && !m->origin_module_ci && !m->is_cmethod_copy && m->class_id >= 0 && !unbound;
 }
 
-static void emit_method_owner_class(Compiler *c, int mi, int unbound, Buf *b) {
+/* Method#owner of method mi as node mn makes the Method (-1: none): the
+   class an alias was made in (method_obj_alias_owner), else the module a
+   copy came from or mi's class; *sg 1 for that class's singleton */
+static int method_owner_ci(Compiler *c, int mn, int mi, int unbound, int *sg) {
+  int h = mn >= 0 ? method_obj_alias_owner(c, mn, sg) : -1;
+  if (h >= 0) { *sg = *sg && !unbound; return h; }
   const Scope *m = &c->scopes[mi];
-  int ci = m->origin_module_ci ? m->origin_module_ci - 1 : m->class_id;
+  *sg = method_owner_singleton(c, mi, unbound);
+  return m->origin_module_ci ? m->origin_module_ci - 1 : m->class_id;
+}
+
+static void emit_method_owner_class(Compiler *c, int mn, int mi, int unbound, Buf *b) {
+  int sg, ci = method_owner_ci(c, mn, mi, unbound, &sg);
   if (ci < 0) buf_puts(b, "((sp_Class){(sp_int)-1, SPL(\"Object\")})");
-  else if (method_owner_singleton(c, mi, unbound)) buf_printf(b, "((sp_Class){sp_sclass_id(%d), NULL})", ci);
+  else if (sg) buf_printf(b, "((sp_Class){sp_sclass_id(%d), NULL})", ci);
   else buf_printf(b, "((sp_Class){%d, NULL})", ci);
 }
 
@@ -690,7 +700,7 @@ int emit_op_method_owner(Compiler *c, const BopCtx *x, Buf *b) {
     buf_printf(b, "; SP_GC_ROOT(_t%d); ", tr);
     for (int i = 0; i < n; i++) {
       if (i < n - 1) buf_printf(b, "_t%d->fn == (sp_int)(uintptr_t)&%s ? ", tr, mc_method(c, &c->scopes[to[i]]));
-      emit_method_owner_class(c, to[i], unbound, b);
+      emit_method_owner_class(c, mn, to[i], unbound, b);
       if (i < n - 1) buf_puts(b, " : ");
     }
     buf_puts(b, "; })");
@@ -701,15 +711,14 @@ int emit_op_method_owner(Compiler *c, const BopCtx *x, Buf *b) {
   int mrecv = mn >= 0 ? nt_ref(nt, mn, "receiver") : -1;
   if (target >= 0 && !is_bam) {
     /* a method a module provides is owned by that module, however many
-       classes include it (#3662); a class method by its class's singleton */
-    int ocid = c->scopes[target].origin_module_ci
-                 ? c->scopes[target].origin_module_ci - 1
-                 : c->scopes[target].class_id;
+       classes include it (#3662); a class method by its class's singleton;
+       an alias by the class it was made in */
+    int osg, ocid = method_owner_ci(c, mn, target, unbound, &osg);
     const char *ocn = ocid >= 0 ? (class_ruby_name(c, ocid) ? class_ruby_name(c, ocid)
                                                             : c->classes[ocid].name) : "Object";
     buf_printf(b, "((void)("); emit_expr_for_effect(c, recv, b);
     buf_puts(b, "), ");
-    if (method_owner_singleton(c, target, unbound)) emit_method_owner_class(c, target, unbound, b);
+    if (osg) emit_method_owner_class(c, mn, target, unbound, b);
     else buf_printf(b, "((sp_Class){(sp_int)-1, SPL(\"%s\")})", ocn);
     buf_puts(b, ")");
     return 1;

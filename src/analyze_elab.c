@@ -3949,6 +3949,16 @@ int elab_own_method_at(Compiler *c, int cls, const char *name, LoadPoint p) {
   return unsure ? ELAB_UNKNOWN : o == LR_STOP ? ELAB_YES : o;
 }
 
+/* Is the version recorded at node in cls's history of `name` on its
+   singleton (an alias in a `class << self`), not on its instance side? */
+int elab_version_on_singleton(Compiler *c, int cls, const char *name, int node) {
+  LoadRecord *r = c->lrec;
+  const LrHist *h = r && r->recorded ? lr_hist(r, cls, 1, name, 0) : NULL;
+  for (int i = 0; h && i < h->n; i++)
+    if (h->v[i].node == node) return 1;
+  return 0;
+}
+
 /* Where the version recorded at node in cls's history of `name` (its
    singleton's when sg) stops being that history's live entry: the next
    version's point. */

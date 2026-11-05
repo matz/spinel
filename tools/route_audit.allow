@@ -201,7 +201,7 @@ src/analyze_desugar.c dsend_receiver_names_uncached a dynamic send's candidate n
 src/analyze_scope.c pivs_callable_lit a Symbol argument's method
 src/analyze_util.c class_value_bind_call_gap a Symbol argument's method
 src/analyze_util.c class_value_bind_call_target a Symbol argument's method
-src/analyze_util.c method_obj_target_mi_raw a Method object's method
+src/analyze_util.c method_obj_lookup a Method object's method
 src/analyze_util.c method_super_target super_method: the Method's def's own name, a step up its owner
 src/codegen_call.c class_responds_to a Symbol argument's method (respond_to?)
 src/codegen_call.c method_hidden_from_reflection a reflected method's name

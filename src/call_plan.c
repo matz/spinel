@@ -1103,6 +1103,24 @@ static int ct_window_version(Compiler *c, int id, int cls, const char *name, int
   int dc = -1;
   return ct_def_version(c, cls, name, sg, ds[0], &dc);
 }
+/* The class an alias that node id meets as cls's `name` (singleton when
+   sg) was made in, as Method#owner names it: the class or module whose body
+   holds the alias statement, the version the record answers at id's point
+   or the one version over the statements id may run in; *own_sg 1 where
+   the alias is on that class's singleton. -1 where the name meets no alias
+   there, or the record cannot tell */
+int cplan_alias_holder(Compiler *c, int id, int cls, const char *name, int sg, int *own_sg) {
+  const LrDef *d = NULL, *ds[2];
+  ElabMeet m;
+  if (cls < 0 || !name) return -1;
+  const Scope *own = comp_scope_of(c, id);
+  elab_call_meet(c, id, cls, name, sg, ct_after_point(c, id) | (own && own->origin_module_ci > 0 ? ELAB_MEET_COPY : 0), &m, ds, 2);
+  if (m.at == ELAB_YES) d = m.d;
+  else if (m.at == ELAB_UNKNOWN && m.win == ELAB_YES && m.n == 1) d = ds[0];
+  int h = d && d->kind == LR_ALIAS ? c->node_cbody[d->node] : -1;
+  *own_sg = h >= 0 && elab_version_on_singleton(c, h, name, d->node);
+  return h;
+}
 /* Does node id make the implied call `name` on operand op (a node, or an
    NTI_ word): a row of tools/implied_calls.yml says so (nt_implied_calls),
    the rows the load record reads */

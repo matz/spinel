@@ -4322,7 +4322,8 @@ int iter_shape_count(TyKind rt, const char *nm, int argc, TyKind *elem, int *has
 /* What is wrong with a row on its face, or NULL. */
 static const char *iter_row_malformed(const IterRow *r) {
   if (r->fam != TY_STRING && r->fam != BOP_ANY_ARRAY && r->fam != BOP_ANY_HASH &&
-      r->fam != TY_RANGE && r->fam != TY_FLOAT_RANGE && r->fam != TY_TIME_RANGE && r->fam != TY_INT && r->fam != TY_FLOAT &&
+      r->fam != TY_RANGE && r->fam != TY_FLOAT_RANGE && r->fam != TY_TIME_RANGE && r->fam != TY_OBJ_RANGE &&
+      r->fam != TY_INT && r->fam != TY_FLOAT &&
       r->fam != BOP_KERNEL && r->fam != BOP_ANY_RECV) return "not a row family";
   if (r->argc_min < 0 || r->argc_min > r->argc_max) return "argument counts out of order";
   if (r->nyield > 3) return "more than three values a step";

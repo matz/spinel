@@ -46163,6 +46163,24 @@ static void rewrite_array_subclass_new(Compiler *c, int id) {
     Scope *s = comp_scope_of(c, id);
     if (s && s->is_cmethod) k = s->class_id;
   }
+  /* `self.class.at(...)` in an instance method of a Time subclass nothing
+     inherits (tzinfo's TimeWithOffset#round): self.class is that class */
+  else if (nt_kind(nt, recv) == NK_CallNode && nt_str(nt, recv, "name") && sp_streq(nt_str(nt, recv, "name"), "class") &&
+           nt_ref(nt, recv, "arguments") < 0 && nt_ref(nt, recv, "block") < 0) {
+    int sr = nt_ref(nt, recv, "receiver");
+    Scope *s = comp_scope_of(c, id);
+    int nd = 0;
+    if (time_maker && (sr < 0 || nt_kind(nt, sr) == NK_SelfNode) && s && !s->is_cmethod && s->class_id >= 0 &&
+        comp_ary_is_time(c, s->class_id) && (comp_descendants(c, s->class_id, &nd), nd == 0)) {
+      int kc = arysub_node(c, "ConstantReadNode", id);
+      if (kc >= 0) {
+        nt_node_set_str((NodeTable *)nt, kc, "name", c->classes[s->class_id].name);
+        nt_node_set_ref((NodeTable *)nt, id, "receiver", kc);
+        recv = kc;
+        k = s->class_id;
+      }
+    }
+  }
   if (k < 0 || comp_ary_root(c, k) < 0 || call_target(c, id, k, nm, CT_CMETHOD, NULL) >= 0) return;
   int brackets = sp_streq(nm, "[]");
   /* String has no `[]` of its own class: X[...] is a NoMethodError */

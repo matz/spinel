@@ -916,7 +916,9 @@ block.
 A Range of objects (`d1..d2` over Dates, or any class that defines `<=>`)
 walks its members by the class's `succ` while `<=>` keeps them within the
 end, as CRuby's does: `each`, `to_a`, `count` and the Enumerable methods
-read that list, and a class with no `succ` raises CRuby's TypeError. The
+read that list, and a class with no `succ` raises CRuby's TypeError. An
+exclusive one's `max` is the largest member of that walk, as Enumerable#max
+answers it, and `overlap?` compares the ends by `<=>` as CRuby's does. The
 walk is materialized first, so an endless one raises RangeError where CRuby
 runs until the block breaks, and where the class is known at compile time
 (`Ver.new(1)..Ver.new(9)`, not a boxed Date) `r.each { }` answers the

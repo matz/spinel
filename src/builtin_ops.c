@@ -1114,6 +1114,7 @@ static const BuiltinOp bop_rows[] = {
   { TY_OBJ_RANGE, "last", 0, 0, BF_ANY, TY_POLY, BOPE_TEMPLATE, "sp_orange_last($r)", 0 },
   { TY_OBJ_RANGE, "min", 0, 0, BF_NONE, TY_POLY, BOPE_TEMPLATE, "sp_orange_min($r)", 0 },
   { TY_OBJ_RANGE, "max", 0, 0, BF_NONE, TY_POLY, BOPE_TEMPLATE, "sp_orange_max($r)", 0 },
+  { TY_OBJ_RANGE, "overlap?", 1, 1, BF_ANY, TY_BOOL, BOPE_TEMPLATE, "({ sp_ObjRange *_t$T = $r; SP_GC_ROOT(_t$T); sp_RbVal _a$T = $b0; sp_orange_overlap_v(sp_box_obj(_t$T, SP_BUILTIN_OBJ_RANGE), _a$T); })", 0 },
   { TY_OBJ_RANGE, "exclude_end?", 0, 0, BF_ANY, TY_BOOL, BOPE_TEMPLATE, "(sp_bool)($r)->excl", 0 },
   { TY_OBJ_RANGE, "cover?", 1, 1, BF_ANY, TY_BOOL, BOPE_TEMPLATE, "({ sp_ObjRange *_t$T = $r; SP_GC_ROOT(_t$T); sp_RbVal _a$T = $b0; sp_orange_cover(_t$T, _a$T); })", 0 },
   { TY_OBJ_RANGE, "include?", 1, 1, BF_ANY, TY_BOOL, BOPE_TEMPLATE, "({ sp_ObjRange *_t$T = $r; SP_GC_ROOT(_t$T); sp_RbVal _a$T = $b0; (sp_bool)(!(_a$T.tag == SP_TAG_OBJ && _a$T.cls_id == SP_BUILTIN_OBJ_RANGE) && sp_orange_cover(_t$T, _a$T)); })", 0 },

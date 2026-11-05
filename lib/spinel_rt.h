@@ -18659,7 +18659,8 @@ static SP_UNUSED sp_bool sp_orange_case_eq(const sp_ObjRange *r, sp_RbVal v) {
   return sp_orange_cover(r, v);
 }
 /* Range#min / #max without iterating: the begin, or an inclusive end; nil
-   for an empty Range. An exclusive max needs the succ walk */
+   for an empty Range. An exclusive max is Enumerable#max over the succ walk,
+   as range_max hands it to super */
 static sp_RbVal sp_orange_min(const sp_ObjRange *r) {
   if (r->first.tag == SP_TAG_NIL) sp_raise_cls("RangeError", "cannot get the minimum of beginless range");
   if (r->last.tag != SP_TAG_NIL && !sp_orange_le(r->first, r->last, (int)r->excl)) return sp_box_nil();
@@ -18667,9 +18668,46 @@ static sp_RbVal sp_orange_min(const sp_ObjRange *r) {
 }
 static sp_RbVal sp_orange_max(const sp_ObjRange *r) {
   if (r->last.tag == SP_TAG_NIL) sp_raise_cls("RangeError", "cannot get the maximum of endless range");
-  if (r->excl) sp_raise_cls("NotImplementedError", "Range#max of an exclusive Range of objects (it walks succ)");
+  if (r->excl) {
+    if (r->first.tag == SP_TAG_NIL) sp_raise_cls("RangeError", "cannot get the maximum of beginless range with custom comparison method");
+    return sp_PolyArray_max(sp_orange_to_a(r));
+  }
   if (r->first.tag != SP_TAG_NIL && !sp_orange_le(r->first, r->last, 0)) return sp_box_nil();
   return r->last;
+}
+/* Range#overlap? as range_overlap answers it: the ends compared by <=>, an
+   incomparable pair an empty region, the other side any kind of Range */
+static int sp_orange_empty_region(sp_RbVal b, sp_RbVal e, int excl) {
+  if (b.tag == SP_TAG_NIL || e.tag == SP_TAG_NIL) return 0;
+  sp_bool ok = FALSE;
+  sp_int c = sp_poly_cmp(b, e, &ok);
+  return !ok || c > 0 || (excl && c == 0);
+}
+static sp_bool sp_orange_overlap_v(sp_RbVal a, sp_RbVal o) {
+  SP_GC_ROOT_RBVAL(a); SP_GC_ROOT_RBVAL(o);
+  if (!(o.tag == SP_TAG_OBJ && o.v.p &&
+        (o.cls_id == SP_BUILTIN_RANGE || o.cls_id == SP_BUILTIN_FLOAT_RANGE || o.cls_id == SP_BUILTIN_STR_RANGE ||
+         o.cls_id == SP_BUILTIN_TIME_RANGE || o.cls_id == SP_BUILTIN_OBJ_RANGE)))
+    sp_raise_cls("TypeError", sp_sprintf("wrong argument type %s (expected Range)", sp_poly_class_name(o)));
+  sp_RbVal ab = sp_poly_range_begin_v(a); SP_GC_ROOT_RBVAL(ab);
+  sp_RbVal ae = sp_poly_range_end_v(a); SP_GC_ROOT_RBVAL(ae);
+  sp_RbVal ob = sp_poly_range_begin_v(o); SP_GC_ROOT_RBVAL(ob);
+  sp_RbVal oe = sp_poly_range_end_v(o); SP_GC_ROOT_RBVAL(oe);
+  int ax = sp_poly_range_exclude_end_p(a), ox = sp_poly_range_exclude_end_p(o);
+  if (sp_orange_empty_region(ab, oe, ox) || sp_orange_empty_region(ob, ae, ax)) return FALSE;
+  if (ab.tag != SP_TAG_NIL && ob.tag != SP_TAG_NIL) {
+    sp_bool ok = FALSE;
+    sp_int c = sp_poly_cmp(ab, ob, &ok);
+    if (!ok) return FALSE;
+    if (c == 0) return TRUE;
+  }
+  else if (ab.tag == SP_TAG_NIL && ob.tag == SP_TAG_NIL) {
+    if (ae.tag == SP_TAG_NIL && oe.tag == SP_TAG_NIL) return TRUE;
+    sp_bool ok = FALSE;
+    (void)sp_poly_cmp(ae, oe, &ok);
+    return ok;
+  }
+  return !sp_orange_empty_region(ab, ae, ax) && !sp_orange_empty_region(ob, oe, ox);
 }
 static sp_RbVal sp_orange_send(sp_ObjRange *r, const char *n, int argc, sp_RbVal a0) {
   SP_GC_ROOT(r);
@@ -18695,11 +18733,15 @@ static sp_RbVal sp_orange_send(sp_ObjRange *r, const char *n, int argc, sp_RbVal
       return sp_box_bool(!(a0.tag == SP_TAG_OBJ && a0.cls_id == SP_BUILTIN_OBJ_RANGE) && sp_orange_cover(r, a0));
     if (!strcmp(n, "==") || !strcmp(n, "eql?"))
       return sp_box_bool(a0.tag == SP_TAG_OBJ && a0.cls_id == SP_BUILTIN_OBJ_RANGE && sp_orange_eq(r, (sp_ObjRange *)a0.v.p));
+    if (!strcmp(n, "overlap?")) return sp_box_bool(sp_orange_overlap_v(sp_box_obj(r, SP_BUILTIN_OBJ_RANGE), a0));
   }
   sp_raise_cls("NoMethodError", sp_sprintf("undefined method '%s' for an instance of Range", n));
   return sp_box_nil();
 }
 static sp_bool sp_range_overlap_v(sp_RbVal a, sp_RbVal o) {
+  /* a Range of objects on either side compares its ends as they are */
+  if ((a.tag == SP_TAG_OBJ && a.cls_id == SP_BUILTIN_OBJ_RANGE) || (o.tag == SP_TAG_OBJ && o.cls_id == SP_BUILTIN_OBJ_RANGE))
+    return sp_orange_overlap_v(a, o);
   /* a Range of Times overlaps no Range of other ends, whichever side holds it: they do not compare */
   if (o.tag == SP_TAG_OBJ && o.cls_id == SP_BUILTIN_TIME_RANGE && a.tag == SP_TAG_OBJ &&
       (a.cls_id == SP_BUILTIN_RANGE || a.cls_id == SP_BUILTIN_FLOAT_RANGE || a.cls_id == SP_BUILTIN_STR_RANGE)) return FALSE;

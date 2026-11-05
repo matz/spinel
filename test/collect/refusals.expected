@@ -1402,6 +1402,10 @@ spinel: test/reject/range_rational_walk_own_map.rb:8: a Range with a Rational or
 spinel: test/reject/range_reopen_float_range.rb:8: a method the program defines in Range, called on a Range of Floats: only an Integer Range runs it
 == test/reject/range_reopen_float_range.rb [promote] rc=1
 spinel: test/reject/range_reopen_float_range.rb:8: a method the program defines in Range, called on a Range of Floats: only an Integer Range runs it
+== test/reject/range_reopen_obj_range.rb [default] rc=1
+spinel: test/reject/range_reopen_obj_range.rb:16: a method the program defines in Range, called on a Range of objects: only an Integer Range runs it
+== test/reject/range_reopen_obj_range.rb [promote] rc=1
+spinel: test/reject/range_reopen_obj_range.rb:16: a method the program defines in Range, called on a Range of objects: only an Integer Range runs it
 == test/reject/range_reopen_string_range.rb [default] rc=1
 spinel: test/reject/range_reopen_string_range.rb:12: a method the program defines in Range, called on a Range of Strings: only an Integer Range runs it
 == test/reject/range_reopen_string_range.rb [promote] rc=1

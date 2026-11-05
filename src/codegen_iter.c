@@ -8215,14 +8215,15 @@ static int emit_iteration_stmt_body(Compiler *c, int id, Buf *b, int indent) {
     int args = nt_ref(nt, id, "arguments"); int sargc = 0;
     if (args >= 0) nt_arr(nt, args, "arguments", &sargc);
     if (sargc != 0) return 0;
-    int tr = ++g_tmp, tv = ++g_tmp;
+    int tr = ++g_tmp, tv = ++g_tmp, ts = ++g_tmp;
     emit_indent(b, indent);
     buf_printf(b, "sp_ObjRange *_t%d = ", tr); emit_expr(c, recv, b);
     buf_printf(b, "; SP_GC_ROOT(_t%d);\n", tr);
     emit_indent(b, indent);
     buf_printf(b, "sp_RbVal _t%d = sp_orange_walk_start(_t%d); SP_GC_ROOT_RBVAL(_t%d);\n", tv, tr, tv);
     emit_indent(b, indent);
-    buf_printf(b, "for (; sp_orange_walk_on(_t%d, _t%d); _t%d = sp_orange_walk_succ(_t%d)) {\n", tr, tv, tv, tv);
+    buf_printf(b, "for (int _t%d = sp_orange_walk_on(_t%d, _t%d); _t%d; _t%d = _t%d == 2 ? 0 : (_t%d = sp_orange_walk_succ(_t%d), sp_orange_walk_on(_t%d, _t%d))) {\n",
+               ts, tr, tv, ts, ts, ts, tv, tv, tr, tv);
     char elem[32]; snprintf(elem, sizeof elem, "_t%d", tv);
     if (p0) emit_iter_param_assign(c, block, p0_orig, p0, TY_POLY, elem, b, indent + 1);
     { int rs_np = 0; while (block_param_name(c, block, rs_np)) rs_np++;
@@ -8558,9 +8559,12 @@ static int emit_iteration_stmt_body(Compiler *c, int id, Buf *b, int indent) {
        one (an Integer local under --int-overflow=promote, the argument of a
        boxed receiver's Float arm) unboxes, a typed Integer widens, and a
        non-Numeric is CRuby's TypeError rather than a C build error (#4774) */
-    emit_indent(b, indent); buf_printf(b, "sp_float _t%d = ", tl); emit_float_expr(c, sargv[0], b); buf_puts(b, ";\n");
     emit_indent(b, indent); buf_printf(b, "sp_float _t%d = ", ts);
     if (sargc >= 2) emit_float_expr(c, sargv[1], b); else buf_puts(b, "1.0");
+    buf_puts(b, ";\n");
+    /* a nil limit is ruby_float_step's infinite end in the step's direction */
+    emit_indent(b, indent); buf_printf(b, "sp_float _t%d = ", tl);
+    if (no_limit) buf_printf(b, "_t%d < 0 ? -HUGE_VAL : HUGE_VAL", ts); else emit_float_expr(c, sargv[0], b);
     buf_puts(b, ";\n");
     /* a zero step never advances, so CRuby rejects it outright (#3648) */
     emit_indent(b, indent);

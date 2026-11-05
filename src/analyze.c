@@ -13505,7 +13505,7 @@ static int desugar_enum_named_call(Compiler *c, int id, NodeTable *nt, const cha
       }
       if (sac == 2 && to_v < 0) to_v = sav[0];   /* step(limit, by: B) */
       if (other && step_kw_unknown(c, nt, id, sargs)) { *changed = 1; return 1; }
-      if (!other && by_v >= 0 && (to_v >= 0 || sac == 1)) {
+      if (!other && by_v >= 0 && (to_v >= 0 || sac == 1) && step_kw_numeric_recv(c, nt, id)) {
         step_kw_positional(c, nt, id, sargs, to_v, by_v, by_first && sac == 1);
         *changed = 1;
         return 1;

@@ -3234,6 +3234,7 @@ extern sp_orange_walk_fn sp_orange_walk_lib;
 #else
 #define SP_ORANGE_WALK(r) sp_orange_to_a(r)
 #endif
+static SP_UNUSED int sp_orange_walk_on(const sp_ObjRange *r, sp_RbVal v);
 static SP_UNUSED sp_RbVal sp_orange_walker(const sp_ObjRange *r);
 static SP_UNUSED sp_int sp_orange_walk_len(sp_ObjRange *w);
 static SP_UNUSED sp_PolyArray *sp_orange_first_n(const sp_ObjRange *r, sp_int n);
@@ -18618,8 +18619,10 @@ static SP_UNUSED sp_PolyArray *sp_orange_to_a(const sp_ObjRange *r) {
   sp_bool ok = FALSE;
   if (sp_obj_succ_hook && v.tag == SP_TAG_OBJ && v.cls_id >= 0) sp_obj_succ_hook(v, 1, &ok);
   if (!ok) sp_raise_cls("TypeError", sp_sprintf("can't iterate from %s", sp_poly_class_name(v)));
-  while (sp_orange_le(v, r->last, (int)r->excl)) {
+  int st;
+  while ((st = sp_orange_walk_on(r, v)) != 0) {
     sp_PolyArray_push(a, v);
+    if (st == 2) break;
     v = sp_obj_succ_hook(v, 0, &ok);
     if (!ok) sp_raise_nomethod(sp_nomethod_msg("succ", v));
   }
@@ -18635,8 +18638,13 @@ static SP_UNUSED sp_RbVal sp_orange_walk_start(const sp_ObjRange *r) {
   if (!ok) sp_raise_cls("TypeError", sp_sprintf("can't iterate from %s", sp_poly_class_name(r->first)));
   return r->first;
 }
-static SP_UNUSED sp_bool sp_orange_walk_on(const sp_ObjRange *r, sp_RbVal v) {
-  return r->last.tag == SP_TAG_NIL || sp_orange_le(v, r->last, (int)r->excl);
+/* 2 for a member equal to an inclusive end: it is the last, and its succ is
+   not called, as range_each_func stops (that succ may raise or not advance) */
+static SP_UNUSED int sp_orange_walk_on(const sp_ObjRange *r, sp_RbVal v) {
+  if (r->last.tag == SP_TAG_NIL) return 1;
+  sp_bool ok = FALSE; sp_int c = sp_poly_cmp(v, r->last, &ok);
+  if (!ok || c > 0) return 0;
+  return c < 0 ? 1 : r->excl ? 0 : 2;
 }
 static SP_UNUSED sp_RbVal sp_orange_walk_succ(sp_RbVal v) {
   sp_bool ok = FALSE;
@@ -18657,8 +18665,10 @@ static SP_UNUSED sp_RbVal sp_orange_walker(const sp_ObjRange *r) {
 static SP_UNUSED sp_int sp_orange_walk_len(sp_ObjRange *w) {
   SP_GC_ROOT(w);
   while (!w->wdone && w->wbuf->len <= w->wnext) {
-    if (!sp_orange_walk_on(w, w->wcur)) { w->wdone = 1; break; }
+    int st = sp_orange_walk_on(w, w->wcur);
+    if (!st) { w->wdone = 1; break; }
     sp_PolyArray_push(w->wbuf, w->wcur);
+    if (st == 2) { w->wdone = 1; break; }
     sp_RbVal n = sp_orange_walk_succ(w->wcur);
     sp_gc_wb((void *)w); w->wcur = n;
   }
@@ -18675,8 +18685,10 @@ static SP_UNUSED sp_PolyArray *sp_orange_first_n(const sp_ObjRange *r, sp_int n)
   sp_PolyArray *a = sp_PolyArray_new(); SP_GC_ROOT(a);
   if (n == 0) return a;
   sp_RbVal v = sp_orange_walk_start(r); SP_GC_ROOT_RBVAL(v);
-  while (a->len < n && sp_orange_walk_on(r, v)) {
+  int st;
+  while (a->len < n && (st = sp_orange_walk_on(r, v)) != 0) {
     sp_PolyArray_push(a, v);
+    if (st == 2) break;
     if (a->len < n) v = sp_orange_walk_succ(v);
   }
   return a;

@@ -17,7 +17,7 @@ vectors.each do |name, expected|
   p OpenSSL::HMAC.digest(digest, key, message).unpack1("H*") == expected
   hmac = OpenSSL::HMAC.new(key, digest)
   p hmac.update("Hi ").update("There").hexdigest == expected
-  p hmac.dup.reset.update(message).digest.unpack1("H*") == expected
+  p OpenSSL::HMAC.new(key, digest).update(message).digest.unpack1("H*") == expected
   p OpenSSL::HMAC.hexdigest(name, "wrong", message) == expected
 end
 

@@ -20,3 +20,18 @@ b.each do |x|
   p x.take(1)
   p x.first(1)
 end
+
+# a Float Range checks the count before it says it cannot iterate
+f = [1.0..2.0, [1]]
+t { f[0].take(-1) }
+t { f[0].first(-1) }
+t { f[0].take(1) }
+t { f[0].first(1) }
+t { (1.0..2.0).take(-1) }
+t { (1.0..2.0).first(-1) }
+t { (1.0..2.0).take(1) }
+t { (1.0..2.0).first(1) }
+# an endless Range of objects too, where take used to walk first
+t { (V.new(1)..).take(-1) }
+t { [V.new(1).., 1][0].take(-1) }
+p [V.new(1).., 1][0].take(2)

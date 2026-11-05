@@ -4373,6 +4373,13 @@ static SP_NOINLINE SP_COLD SP_UNUSED void sp_frange_iter_raise(sp_FloatRange r, 
   if (to_a && (r.omitted & SP_FRANGE_NO_END)) sp_raise_cls("RangeError", "cannot convert endless range to an array");
   sp_raise_cls("TypeError", "can't iterate from Float");
 }
+/* Range#first(n) and Enumerable#take(n) convert and check the count before
+   they iterate, so a bad count is the error a Float Range raises */
+static SP_NOINLINE SP_COLD SP_UNUSED void sp_frange_count_raise(sp_FloatRange r, sp_RbVal n, int take) {
+  if (sp_poly_arg_int_chk(n) < 0)
+    sp_raise_cls("ArgumentError", take ? "attempt to take negative size" : "negative array size (or size too big)");
+  sp_frange_iter_raise(r, 0);
+}
 /* #max(n) / #min(n): the n greatest or least members, which an open side
    has none of (RangeError) and a Float range cannot enumerate (TypeError) */
 static SP_NOINLINE SP_COLD SP_UNUSED void sp_frange_maxn_raise(sp_FloatRange r, sp_int n) {
@@ -15528,6 +15535,7 @@ static sp_RbVal sp_poly_arr_take(sp_RbVal v, sp_int n) {
     sp_raise_cls("ArgumentError", range ? "negative array size (or size too big)" :
                                   en ? "attempt to take negative size" : "negative array size");
   }
+  if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_FLOAT_RANGE && v.v.p) sp_frange_iter_raise(*(sp_FloatRange *)v.v.p, 0);
   /* Range#first(n) on a boxed Integer Range: the leading members, built
      directly so an endless range is fine. sp_poly_length has no Range arm
      (a Range has no #length), and the call answered [] (#4837). */
@@ -18521,12 +18529,15 @@ static sp_PolyArray *sp_poly_to_a_arr_as(sp_RbVal v, const char *m, int nil_ok) 
    NoMethodError when the call is made, where the Enumerator walked it as
    empty (nil, a user object with no #each) */
 static sp_RbVal sp_poly_enum_chk(sp_RbVal v, const char *m) {
+  /* a Float Range's first(n) / take(n) check the count before they iterate
+     (sp_poly_arr_take raises can't iterate after it) */
+  if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_FLOAT_RANGE && v.v.p && (!strcmp(m, "first") || !strcmp(m, "take"))) return v;
   sp_poly_iter_check(v, m);
   /* a user object's elements are read once, by walking its #each, and handed
      on as the Array they are, so that walk is not run again by the caller */
   if (v.tag == SP_TAG_OBJ && v.cls_id >= 0) return sp_box_poly_array(sp_poly_to_a_arr_as(v, m, 0));
   /* first(n) walks only n members (sp_poly_arr_take), so an endless one answers */
-  if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_OBJ_RANGE && v.v.p && strcmp(m, "first") != 0) return sp_box_poly_array(SP_ORANGE_WALK((sp_ObjRange *)v.v.p));
+  if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_OBJ_RANGE && v.v.p && strcmp(m, "first") != 0 && strcmp(m, "take") != 0) return sp_box_poly_array(SP_ORANGE_WALK((sp_ObjRange *)v.v.p));
   return v;
 }
 /* One end of a numeric Range for Range#overlap?: absent (nil), or an
@@ -18706,6 +18717,11 @@ static SP_UNUSED sp_PolyArray *sp_orange_first_n(const sp_ObjRange *r, sp_int n)
     if (a->len < n) v = sp_orange_walk_succ(v);
   }
   return a;
+}
+/* Enumerable#take: first(n) but for the negative count's message */
+static SP_UNUSED sp_PolyArray *sp_orange_take(const sp_ObjRange *r, sp_int n) {
+  if (n < 0) sp_raise_cls("ArgumentError", "attempt to take negative size");
+  return sp_orange_first_n(r, n);
 }
 /* the ends must compare, as the boxed constructor (sp_range_new_box) checks */
 static SP_UNUSED sp_ObjRange *sp_orange_new_typed(sp_RbVal f, sp_RbVal l, sp_int x) {

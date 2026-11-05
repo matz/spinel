@@ -1,8 +1,9 @@
 # `K.instance_method(:x).bind_call(obj)` where x is a member of a Struct or
 # Data class reads (or, for a Struct, writes) the member, as it does for an
 # attr reader: on the record constant, a class with a block, a subclass of
-# `Struct.new`, a Data class, a local's record class and a Class value only
-# the run time knows. A def of the member's name answers ahead of the member.
+# `Struct.new`, a Data class, a local's record class, a record written to a
+# constant path and a Class value only the run time knows. A def of the
+# member's name answers ahead of the member.
 # A member is a reader with no attr declaration in a body, so the bind_call
 # found no method of the class and raised NameError.
 S = Struct.new(:d, :f)
@@ -28,3 +29,6 @@ p k.instance_method(:y).bind_call(k.new(10))
 def go(cls, o) = cls.instance_method(:d).bind_call(o)
 p go(S, S.new(11, 0))
 p((S.instance_method(:d).bind_call(B.new(1)) rescue $!.class))
+module Ns; end
+Ns::P = Struct.new(:z)
+p Ns::P.instance_method(:z).bind_call(Ns::P.new(12))

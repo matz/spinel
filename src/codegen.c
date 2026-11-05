@@ -14356,7 +14356,18 @@ static void emit_obj_inspect_dispatch(Compiler *c, Buf *b) {
   }
   if (kernel) {
     buf_printf(b, "static const char *sp_obj_kernel_inspect(int cls_id, void *p) {\n");
-    emit_hook_object_root(b, "SP_GC_ROOT", "p");
+    /* a value-type class's super passes the address of its by-value self,
+       on the caller's stack (emit_super), which a collection must not mark
+       as an object; such a class has no subclass, so its id names it */
+    Buf byval; memset(&byval, 0, sizeof byval);
+    for (int i = 0; i < c->nclasses; i++)
+      if (comp_ty_value_obj(c, ty_object(i))) buf_printf(&byval, "%scls_id == %d", byval.p ? " || " : "", i);
+    if (byval.p) {
+      buf_printf(b, "  void *held = %s ? NULL : p;\n", byval.p);
+      emit_hook_object_root(b, "SP_GC_ROOT", "held");
+    }
+    else emit_hook_object_root(b, "SP_GC_ROOT", "p");
+    free(byval.p);
     buf_printf(b, "  const sp_insp_cls *d = cls_id >= 0 && cls_id < %d ? sp_insp_ktab[cls_id] : NULL;\n"
                   "  if (d) return sp_insp_walk_row(d, cls_id, p);\n"
                   "  return sp_sprintf(\"#<%%s:0x%%016llx>\", sp_obj_cls_name_rt(cls_id), (unsigned long long)(uintptr_t)p);\n}\n",

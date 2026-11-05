@@ -8227,7 +8227,15 @@ static int emit_iteration_stmt_body(Compiler *c, int id, Buf *b, int indent) {
     char elem[32]; snprintf(elem, sizeof elem, "_t%d", tv);
     if (p0) emit_iter_param_assign(c, block, p0_orig, p0, TY_POLY, elem, b, indent + 1);
     { int rs_np = 0; while (block_param_name(c, block, rs_np)) rs_np++;
-      emit_iter_bind_rest(c, block, rs_np, TY_POLY, elem, b, indent + 1); }
+      /* a member is never an Array (one has no succ to walk by), so `|x, *r|`
+         binds r empty -- unless a to_ary of the program's would split it */
+      const char *rn = block_rest_name(c, block);
+      if (rs_np >= 1 && rn && *rn && an_user_defines_method(c, "to_ary")) {
+        unsupported(c, id, "block splat parameter alongside required params over a Range of objects with a to_ary");
+        return 1;
+      }
+      if (rs_np >= 1 && rn && *rn) { emit_indent(b, indent + 1); buf_printf(b, "lv_%s = sp_PolyArray_new();\n", rename_local(rn)); }
+      else emit_iter_bind_rest(c, block, rs_np, TY_POLY, elem, b, indent + 1); }
     emit_loop_body(c, body, b, indent + 1);
     emit_indent(b, indent); buf_puts(b, "}\n");
     return 1;

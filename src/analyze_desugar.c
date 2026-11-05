@@ -5239,7 +5239,19 @@ int step_kw_numeric_recv(Compiler *c, NodeTable *nt, int id) {
   static const int owners[] = { CORE_INTEGER, CORE_FLOAT, CORE_NUMERIC };
   for (size_t i = 0; i < sizeof(owners) / sizeof(*owners); i++)
     if (an_reopen_owner(c, id, owners[i]) >= 0) return 0;
-  return !ty_is_object(infer_type(c, nt_ref(nt, id, "receiver")));
+  int recv = nt_ref(nt, id, "receiver");
+  TyKind rt = infer_type(c, recv);
+  /* a boxed one only where no class it may hold has a step of its own */
+  if (rt == TY_POLY) {
+    const ClsSet *cs = cls_fact_node(c, recv);
+    if (!cs || cs->all) return 0;
+    for (int k = cls_set_next(cs, -1); k >= 0; k = cls_set_next(cs, k)) {
+      int dc = -1;
+      if (comp_method_in_chain(c, k, "step", &dc) >= 0) return 0;
+    }
+    return 1;
+  }
+  return !ty_is_object(rt);
 }
 
 void step_kw_positional(Compiler *c, NodeTable *nt, int id, int args, int to_v, int by_v, int by_first) {

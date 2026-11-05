@@ -75,6 +75,7 @@ struct IcState {
   ANameHash defined;   /* the names some scope or alias defines */
   ANameHash cext;      /* the names of the methods a C extension defines: a call of one hands its values to C code */
   int has_cext;        /* the program loads a C extension */
+  int obj_range;       /* some value is a Range of objects (TY_OBJ_RANGE), typed run only */
   unsigned char *plain;/* per class: 0 not asked, 1 not plain, 2 plain (comp_plain_class) */
   /* --dump-implicit alone: what each scope's nodes call, and the calls of
      the reachable scopes, one per name */

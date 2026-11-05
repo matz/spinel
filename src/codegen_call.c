@@ -17133,7 +17133,8 @@ static int emit_case_eq_call(Compiler *c, int id, Buf *b) {
         buf_printf(b, "; sp_time_cmp(_t%d, _t%d) %s 0; })", tt, tu, eq ? "==" : "!=");
         return 1;
       }
-      if (a0tr.kind == RK_BOXED || a0t == TY_UNKNOWN) {
+      /* (a Time subclass instance boxes as its Time) */
+      if (a0tr.kind == RK_BOXED || a0t == TY_UNKNOWN || comp_ty_is_timesub(c, a0t)) {
         int tt = ++g_tmp, tu = ++g_tmp;
         buf_printf(b, "({ SP_TIME_TMP(_t%d) = ", tt); emit_expr(c, recv, b);
         buf_printf(b, "; sp_RbVal _t%d = ", tu); emit_boxed(c, argv[0], b);
@@ -18200,11 +18201,11 @@ static int emit_array_arith_call(Compiler *c, int id, Buf *b) {
       Repr ar = repr_of(c, argc > 0 ? argv[0] : -1);
       TyKind at = argc > 0 ? ar.as_ty : TY_UNKNOWN;
       int tt = ++g_tmp, tu = ++g_tmp;
-      if (sp_streq(name, "-") && at == TY_TIME) {
-        /* Time - Time -> Float */
+      if (sp_streq(name, "-") && (at == TY_TIME || comp_ty_is_timesub(c, at))) {
+        /* Time - Time -> Float (a Time subclass instance starts with its Time) */
         buf_printf(b, "({ SP_TIME_TMP(_t%d) = ", tt); emit_expr(c, recv, b);
-        buf_printf(b, "; SP_TIME_TMP(_t%d) = ", tu); emit_expr(c, argv[0], b);
-        buf_printf(b, "; sp_time_sub_t(_t%d, _t%d); })", tt, tu);
+        buf_printf(b, "; SP_TIME_TMP(_t%d) = (sp_Time *)(", tu); emit_expr(c, argv[0], b);
+        buf_printf(b, "); sp_time_sub_t(_t%d, _t%d); })", tt, tu);
       }
       else if (is_minus_op(name) && ar.kind == RK_BOXED) {
         /* Time - poly: a Time held there gives the Float duration (#2456), a

@@ -1963,6 +1963,17 @@ int comp_ary_is_str(Compiler *c, int cid) {
 int comp_ary_is_time(Compiler *c, int cid) {
   return comp_ary_root(c, cid) >= 0 && c->classes[cid].ary_time;
 }
+/* Whether type t is an instance of a Time subclass. Such an instance is
+   its Time: Time's comparisons take it as an operand (boxed, it is
+   SP_BUILTIN_TIME, so the boxed operand arms read its Time). */
+static int comp_time_reopen_defines(Compiler *c, const char *n);
+int comp_ty_is_timesub(Compiler *c, TyKind t) {
+  /* (a reopen of Time's own <=>, ==, eql? or === answers those, which the
+     Time comparison arms do not ask) */
+  return ty_is_object(t) && comp_ary_is_time(c, ty_object_class(t)) &&
+         !comp_time_reopen_defines(c, "<=>") && !comp_time_reopen_defines(c, "==") &&
+         !comp_time_reopen_defines(c, "eql?") && !comp_time_reopen_defines(c, "===");
+}
 /* The builtin cid's chain embeds as the flag the comp_arysub_answer family
    takes: 0 Array, 1 Hash, 2 String */
 int an_str_mutator_name(const char *nm);
@@ -2070,6 +2081,13 @@ int comp_arysub_name_is_array(Compiler *c, int cid, const char *n) {
        comp_reader_in_chain(c, cid, n, NULL)) && !comp_enum_answers_first(c, cid, n)) return 0;
   char base[256];
   if (setter_base_name(n, base, sizeof base) && comp_writer_in_chain(c, cid, base, NULL)) return 0;
+  /* Time's comparisons come from Comparable, which asks <=>: a Time
+     subclass defining its own <=> answers them with it */
+  if (c->classes[cid].ary_time && (is_cmp_op(n) || sp_streq(n, "==") || sp_streq(n, "!=") ||
+                                   sp_streq(n, "between?") || sp_streq(n, "clamp"))) {
+    int dc2 = -1, ro2 = comp_arysub_reopen(c, cid);
+    if (comp_method_in_chain(c, cid, "<=>", &dc2) >= 0 && (ro2 < 0 || dc2 != ro2)) return 0;
+  }
   return !is_arysub_object_name(n) && comp_arysub_builtin_name(c, cid, n);
 }
 /* Whether call `id` on a receiver of type rt, an Array subclass instance, is

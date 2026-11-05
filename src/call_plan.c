@@ -3202,7 +3202,9 @@ static const char *feature_limit(Compiler *c, int id, int *stop, int *lx, char *
      for it: `Object.include M` (or through `O = Object`) otherwise compiled
      to a NoMethodError at run time. */
   int mixin = sp_streq(name, "include") || sp_streq(name, "prepend");
-  if (!why && rcn && (comp_class_index(c, rcn) >= 0 || sp_streq(rcn, "Object") ||
+  /* (one the load record takes as a mixin of the class's: mixin_by_record) */
+  if (mixin && nt_int(nt, id, "mixin_by_record", 0)) mixin = -1;
+  if (!why && rcn && mixin >= 0 && (comp_class_index(c, rcn) >= 0 || sp_streq(rcn, "Object") ||
                       (mixin && is_builtin_reopen_name(rcn))) &&
       (mixin ||
        sp_streq(name, "attr_accessor") || sp_streq(name, "attr_reader") ||

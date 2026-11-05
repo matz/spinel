@@ -554,6 +554,7 @@ const LrOpen *elab_class_bodies(Compiler *c, int cls, int *n);
    frees the array. */
 typedef struct { int cls, body; } ElabBody;
 ElabBody *elab_all_bodies(Compiler *c, int *n);
+int elab_foreign_mixin_open(Compiler *c, int cls, int body);   /* the frame of cls's mixins taken from another body's list body, -1 */
 /* the mixins run on cls (-1: main's, at a file's top level), one per
    module, in the order they run: `include A, B` as `include B` then
    `include A`, A nearest; *n their number */

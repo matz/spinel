@@ -7591,9 +7591,12 @@ static BodyMix *body_mixins(Compiler *c, int ci, int body, unsigned kinds, int *
   const LrOpen *ob = nmx && body >= 0 ? elab_class_bodies(c, ci, &nb) : NULL;
   for (int b = 0; b < nb && open < 0; b++)
     if (ob[b].body == body) open = ob[b].node;
+  int foreign = 0;
+  if (open < 0 && nmx && body >= 0 && (open = elab_foreign_mixin_open(c, ci, body)) >= 0) foreign = 1;
   BodyMix *v = NULL;
   for (int i = 0; i < nmx; i++) {
     if (!(kinds >> mx[i].kind & 1) || open < 0 || mx[i].open != open || !mx[i].applied) continue;
+    if (foreign && !nt_int(c->nt, mx[i].node, "mixin_by_record", 0)) continue;
     int mod = elab_mixin_module(c, &mx[i]), pre[64], np = 0;
     if (mod < 0) mod = -1;
     if (mx[i].kind != LR_PREPEND) np = module_prepend_list(c, mod, pre, 64);

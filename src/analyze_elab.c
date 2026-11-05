@@ -2186,6 +2186,40 @@ static int lr_mix_names_class(Compiler *c, const int *av, int ac) {
   return 0;
 }
 
+/* The statement list a frame's statements are in: a file's, a class or
+   module body's; -1 for any other frame */
+static int lr_frame_body(const NodeTable *nt, int fnode) {
+  if (fnode < 0) return -1;
+  NodeKind k = nt_kind(nt, fnode);
+  if (k == NK_ProgramNode) return nt_ref(nt, fnode, "statements");
+  if (k == NK_ClassNode || k == NK_ModuleNode) return class_def_body(nt, fnode);
+  return -1;
+}
+/* Is mixin m, of call node on class cls, one an explicit receiver names
+   from a frame that is not cls's own body -- `K.include M` at the top
+   level or in another class's body -- as a statement of that frame's list
+   that always runs there, an include or a prepend of a module of the
+   program, on a class of the program that is no builtin's reopening? */
+static int lr_foreign_mixin(ElabRec *x, int node, const LrMixin *m, int cls, int fc, int sg, int nested) {
+  const NodeTable *nt = x->c->nt;
+  int recv = nt_ref(nt, node, "receiver");
+  if (nested || sg || x->unplaced || !m->applied || m->cond || cls < 0 || cls >= x->c->nclasses || cls == fc) return 0;
+  if (recv < 0 || nt_kind(nt, recv) == NK_SelfNode) return 0;
+  if (nt_kind(nt, recv) != NK_ConstantReadNode && nt_kind(nt, recv) != NK_ConstantPathNode) return 0;
+  if (m->kind != LR_INCLUDE && m->kind != LR_PREPEND) return 0;
+  /* a module of the program's, or a core module by its name (Comparable) */
+  if (m->mod >= x->c->nclasses) return 0;
+  if (m->mod >= 0 && !comp_class_is_module(x->c, &x->c->classes[m->mod])) return 0;
+  if (m->mod < 0 && !(m->ref >= 0 && nt_kind(nt, m->ref) == NK_ConstantReadNode &&
+                      is_builtin_module_name(nt_str(nt, m->ref, "name")))) return 0;
+  const char *cn = x->c->classes[cls].name;
+  if (!cn || is_builtin_reopen_name(cn) || is_builtin_module_name(cn)) return 0;
+  int body = lr_frame_body(nt, m->open), bn = 0;
+  const int *bb = body >= 0 ? nt_arr(nt, body, "body", &bn) : NULL;
+  for (int i = 0; i < bn; i++) if (bb[i] == node) return 1;
+  return 0;
+}
+
 static void lr_call(ElabRec *x, int node, int fc, int fs, unsigned char *vs, int fnode, int may, int nested) {
   const NodeTable *nt = x->c->nt;
   const char *nm = nt_str(nt, node, "name");
@@ -2274,6 +2308,12 @@ static void lr_call(ElabRec *x, int node, int fc, int fs, unsigned char *vs, int
       x->r->hgen++;
       k->mix[k->nmix++] = (LrMixin){ node, lr_mix_kind(nt, node, nm, sg), mod, av[i], .cond = !x->unplaced && x->r->at[node] >= 0 && x->r->st[x->r->at[node]].fmay,
                                      .applied = lr_stmt_applied(x->unplaced ? NULL : lr_stmt_of(x->r, node), x->unplaced, may) == 1, .open = fnode };
+      /* `K.include M` in another class's body or at the top level, on a
+         class of the program: a mixin the passes take as one of K's
+         bodies' (elab_all_bodies), so the statement itself does nothing
+         where it runs (lr_foreign_mixin) */
+      if (lr_foreign_mixin(x, node, &k->mix[k->nmix - 1], cls, fc, sg, nested))
+        nt_node_set_int((NodeTable *)nt, node, "mixin_by_record", 1);
       /* include, extend or prepend on the body's own class: the module's
          hook fires after it (elab_fire_after) */
       if (mod >= 0 && !nested && fs == LR_FS_NONE && cls == fc && !sg && (recv < 0 || nt_kind(nt, recv) == NK_SelfNode))
@@ -7564,12 +7604,39 @@ ElabBody *elab_all_bodies(Compiler *c, int *n) {
       if (i <= d) v[k++] = (ElabBody){ ci, o[i].body };
       else { rest[nr][0] = r->at[o[i].node]; rest[nr][1] = ci; rest[nr][2] = o[i].body; nr++; }
     }
+    /* the frames whose `K.include M` the record takes as K's (a statement
+       marked mixin_by_record), each once, where the statement runs */
+    int nmx = 0;
+    const LrMixin *mx = elab_class_mixins(c, ci, &nmx);
+    for (int i = 0; i < nmx; i++) {
+      if (!nt_int(c->nt, mx[i].node, "mixin_by_record", 0)) continue;
+      int fb = lr_frame_body(c->nt, mx[i].open), seen = 0;
+      for (int q = 0; q < nr && !seen; q++) seen = rest[q][1] == ci && rest[q][2] == fb;
+      if (fb < 0 || seen) continue;
+      if (nr >= tot) {
+        tot = tot * 2 + 4;
+        v = realloc(v, sizeof *v * (size_t)tot);
+        rest = realloc(rest, sizeof *rest * (size_t)tot);
+        if (!v || !rest) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+      }
+      rest[nr][0] = r->at[mx[i].node]; rest[nr][1] = ci; rest[nr][2] = fb; nr++;
+    }
   }
   qsort(rest, (size_t)nr, sizeof *rest, lr_body_cmp);
   for (int i = 0; i < nr; i++) v[k++] = (ElabBody){ rest[i][1], rest[i][2] };
   free(rest);
   *n = k;
   return v;
+}
+
+/* The frame of class cls's record-taken mixins (mixin_by_record) whose
+   statements are in list body, or -1 */
+int elab_foreign_mixin_open(Compiler *c, int cls, int body) {
+  int nmx = 0;
+  const LrMixin *mx = elab_class_mixins(c, cls, &nmx);
+  for (int i = 0; i < nmx; i++)
+    if (nt_int(c->nt, mx[i].node, "mixin_by_record", 0) && lr_frame_body(c->nt, mx[i].open) == body) return mx[i].open;
+  return -1;
 }
 
 const LrMixin *elab_class_mixins(Compiler *c, int cls, int *n) {

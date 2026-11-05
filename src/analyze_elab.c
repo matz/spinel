@@ -2190,11 +2190,28 @@ static void lr_call(ElabRec *x, int node, int fc, int fs, unsigned char *vs, int
   const NodeTable *nt = x->c->nt;
   const char *nm = nt_str(nt, node, "name");
   int sg, recv = nt_ref(nt, node, "receiver"), cls = lr_receiver(x, recv, fc, fs, &sg, 0), an = nt_ref(nt, node, "arguments"), ac = 0;
+  const int *av = an >= 0 ? nt_arr(nt, an, "arguments", &ac) : NULL;
+  /* `K.send(:include, M)`: the mixin `K.include(M)` */
+  if (nm && is_send_family(nm) && ac >= 2 && nt_kind(nt, av[0]) == NK_SymbolNode) {
+    const char *sn = nt_str(nt, av[0], "value");
+    if (sn && is_mixin_call(sn)) { nm = sn; av++; ac--; }
+  }
   /* `singleton_class.attr_reader :x` in a class or module body: an attr of
      the body's singleton, as `class << self; attr_reader :x; end` records */
   if (nm && (is_attr_decl_reader(nm) || is_attr_decl_writer(nm)) && fc >= 0 && fs == LR_FS_NONE &&
       nt_self_singleton_class(nt, recv)) { cls = fc; sg = 1; }
-  const int *av = an >= 0 ? nt_arr(nt, an, "arguments", &ac) : NULL;
+  /* `singleton_class.include M` in a body, `K.singleton_class.prepend M`: a
+     mixin of the singleton, as in `class << K` */
+  else if (nm && is_mixin_call(nm) && recv >= 0 && nt_kind(nt, recv) == NK_CallNode &&
+           is_singleton_class_name(nt_str(nt, recv, "name")) && nt_ref(nt, recv, "arguments") < 0 &&
+           nt_ref(nt, recv, "block") < 0) {
+    int in = nt_ref(nt, recv, "receiver");
+    if (in < 0 || nt_kind(nt, in) == NK_SelfNode) { cls = fc >= 0 && fs == LR_FS_NONE ? fc : LR_UNKNOWN_CLASS; sg = 1; }
+    else {
+      if (!x->unplaced) lr_place_ref(x->r, nt, in, x->cur, 0);
+      cls = lr_class_ref_at(x->c, in, NULL); sg = 1;
+    }
+  }
   int bvis = visibility_of_name(nm), cvis = class_method_vis_of_name(nm), opaque = 0;
   int self = recv < 0 || nt_kind(nt, recv) == NK_SelfNode, st = self ? *vs : BVIS_PUBLIC;
   if (!nested && nm && (bvis || is_method_naming_call(nm) || is_mixin_call(nm))) lr_form_runs(x, node, cls, sg, may);

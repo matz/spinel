@@ -4286,6 +4286,9 @@ static SP_UNUSED sp_int sp_poly_arg_i_of(sp_RbVal v) { if (SP_UNLIKELY(v.tag == 
 static SP_UNUSED sp_int sp_poly_cmp_ans(sp_RbVal r, sp_RbVal a, sp_RbVal b) {
   if (SP_UNLIKELY(r.tag == SP_TAG_NIL))
     sp_raise_cls("ArgumentError", sp_sprintf("comparison of %s with %s failed", sp_poly_class_name(a), sp_cmperr_desc(b)));
+  /* a Bignum or a Float answer counts by its sign, as rb_cmpint reads it */
+  if (SP_UNLIKELY(r.tag == SP_TAG_BIGINT && r.v.p)) { int s = sp_bigint_sign((sp_Bigint *)r.v.p); return (s > 0) - (s < 0); }
+  if (SP_UNLIKELY(r.tag == SP_TAG_FLT)) return (r.v.f > 0) - (r.v.f < 0);
   return sp_poly_to_i(r);
 }
 /* A method nil does not have, called on a boxed receiver that is nil:
@@ -6633,7 +6636,7 @@ static sp_oint sp_poly_spaceship(sp_RbVal a, sp_RbVal b) { return sp_poly_spaces
    Bignum, which the sp_oint answer above cannot carry */
 static SP_UNUSED sp_RbVal sp_poly_spaceship_v(sp_RbVal a, sp_RbVal b) {
   sp_RbVal u;
-  if (sp_poly_user_cmp("<=>", a, b, &u)) return u.tag == SP_TAG_BIGINT ? u : sp_box_oint(sp_spaceship_answer(u));
+  if (sp_poly_user_cmp("<=>", a, b, &u)) return u.tag == SP_TAG_BIGINT || u.tag == SP_TAG_FLT ? u : sp_box_oint(sp_spaceship_answer(u));
   return sp_box_oint(sp_poly_spaceship(a, b));
 }
 /* String#<=> alone falls back to rb_invcmp: an operand that is neither a

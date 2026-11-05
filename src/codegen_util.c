@@ -7768,7 +7768,7 @@ int ty_matches_class(Compiler *c, TyKind t, const char *cn, int exact) {
   if (sp_streq(cn, "Numeric") && (t == TY_INT || t == TY_BIGINT || t == TY_FLOAT ||
                                   t == TY_COMPLEX || t == TY_RATIONAL)) return 1;
   if (sp_streq(cn, "Enumerable") && (ty_is_array(t) || ty_is_hash(t) || t == TY_RANGE || t == TY_TIME_RANGE || t == TY_OBJ_RANGE ||
-                                     t == TY_ENUMERATOR)) return 1;
+                                     t == TY_ENUMERATOR || t == TY_IO)) return 1;
   /* a program module the program mixed into this builtin by reopening it */
   if (tmc_prog_module_in_builtin(c, self_cls, cn)) return 1;
   return 0;

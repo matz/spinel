@@ -20758,8 +20758,8 @@ static void emit_class_machinery(const NodeTable *nt, Compiler *c, Buf *b, char 
     emit_builtin_reopen_mod_arms(c, cls_incs, cls_nincs, NULL, NULL, b);
     /* Numeric includes Comparable; Array/Hash include Enumerable; String includes Comparable */
     buf_puts(b, "        if(cur.cls_id==-113) if(sp_class_anc_step(a,want,sp_box_class(((sp_Class){-114}))))return 1;\n");  /* Numeric->Comparable */
-    buf_puts(b, "        if(cur.cls_id==-104||cur.cls_id==-105||cur.cls_id==-106||cur.cls_id==-144||cur.cls_id==-145) if(sp_class_anc_step(a,want,sp_box_class(((sp_Class){-115}))))return 1;\n");  /* Array/Hash/Range/Enumerator/Struct->Enumerable */
-    buf_puts(b, "        if(cur.cls_id==-102||cur.cls_id==-103) if(sp_class_anc_step(a,want,sp_box_class(((sp_Class){-114}))))return 1;\n");  /* String/Symbol->Comparable */
+    buf_puts(b, "        if(cur.cls_id==-104||cur.cls_id==-105||cur.cls_id==-106||cur.cls_id==-144||cur.cls_id==-145||cur.cls_id==-120||cur.cls_id==-165) if(sp_class_anc_step(a,want,sp_box_class(((sp_Class){-115}))))return 1;\n");  /* Array/Hash/Range/Enumerator/Struct/IO/Dir->Enumerable (File and the sockets through IO) */
+    buf_puts(b, "        if(cur.cls_id==-102||cur.cls_id==-103||cur.cls_id==-107) if(sp_class_anc_step(a,want,sp_box_class(((sp_Class){-114}))))return 1;\n");  /* String/Symbol/Time->Comparable */
     buf_puts(b, "        if(cur.cls_id==-116) if(sp_class_anc_step(a,want,sp_box_class(((sp_Class){-119}))))return 1;\n");  /* Object->Kernel */
     /* a name-backed exception class's modules (IO::EAGAINWaitReadable
        includes IO::WaitReadable), as the rescue match reads them */

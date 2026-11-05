@@ -8039,6 +8039,22 @@ static int emit_obj_class_when(Compiler *c, TyKind pt, const char *cn, int t, Bu
       if (p == bid) { emit_obj_live(c, pt, t, b); return 1; }
     }
   }
+  /* a builtin module that builtin class (or one above it) mixes in:
+     `class SubA < Array` is an Enumerable, `class SubT < Time` a
+     Comparable, as is_a? on the same object answers. A program's
+     reopening of the module (`module Comparable; def m`) is still it, and
+     a reopening of the builtin class at the chain's root (`class Time;
+     include M; end`) is that builtin */
+  if (is_mod && is_builtin_module_name(cn) && (tcid < 0 || sp_streq(c->classes[tcid].name, cn)) &&
+      !comp_const(c, cn)) {
+    int root = cid;
+    while (root >= 0 && c->classes[root].parent >= 0) root = c->classes[root].parent;
+    int top = root >= 0 && class_is_builtin_reopen(c, root) ? builtin_class_id(c->classes[root].name)
+                                                            : class_builtin_parent(c, cid);
+    for (int p = top, g = 0; p < 0 && p != -116 && g < 8; p = builtin_class_parent_id(p), g++) {
+      if (builtin_class_mixes_module(p, cn)) { emit_obj_live(c, pt, t, b); return 1; }
+    }
+  }
   /* a builtin exception above the class table: the runtime chain answers,
      asked of a live object only (sp_exc_is_a reads the NULL otherwise) */
   Buf eb; memset(&eb, 0, sizeof eb);

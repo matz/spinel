@@ -1574,6 +1574,22 @@ int is_enumerable_module_name(const char *n) {
   return n && sp_streq(n, "Enumerable");
 }
 
+/* Does the builtin class of id `bid`, or a builtin class above it, mix in
+   the builtin module `mod` (Comparable or Enumerable), as CRuby lists its
+   ancestors? Time and the numbers are Comparable, as String and Symbol
+   are; IO, File, Dir and the sockets are Enumerable, as the containers,
+   Range, Enumerator and Struct are. */
+int builtin_class_mixes_module(int bid, const char *mod) {
+  const BuiltinClass *r = NULL;
+  for (int i = 0; (r = builtin_class_at(i)); i++) if (r->id == bid && (r->flags & BC_CLASS)) break;
+  if (!r || !mod) return 0;
+  if (sp_streq(mod, "Comparable")) return is_comparable_builtin_name(r->name);
+  if (!sp_streq(mod, "Enumerable")) return 0;
+  static const char *const en[] = { "Array", "Hash", "Range", "Enumerator", "Struct", "IO", "File", "Dir", NULL };
+  for (int i = 0; en[i]; i++) if (sp_streq(r->name, en[i])) return 1;
+  return (r->flags & BC_SOCKET) != 0;
+}
+
 /* The index of n among the methods `extend Enumerable` sends from a class
    to an instance-side twin, unless a class method of the name comes first
    (desugar_extend_enumerable), or -1 */

@@ -6440,15 +6440,18 @@ static int qc_enclosing_body(const NodeTable *nt, const int *par, int n) {
   return -1;
 }
 /* Does header hd run whenever statements st run? Only a statements list,
-   a begin's main body or ensure, and parentheses may lie between them;
-   an if, a loop, a rescue or a block may not run. */
+   the main body of a begin without rescue, a begin's ensure, and
+   parentheses may lie between them; an if, a loop, a rescue or a block
+   may not run, and a rescue can skip the rest of its begin's body. */
 static int qc_runs_with(const NodeTable *nt, const int *par, int hd, int st) {
   int ch = hd;
   for (int p = par[hd]; p >= 0; ch = p, p = par[p]) {
     if (p == st) return 1;
     NodeKind k = nt_kind(nt, p);
     if (k == NK_StatementsNode || k == NK_EnsureNode || k == NK_ParenthesesNode) continue;
-    if (k == NK_BeginNode && nt_ref(nt, p, "statements") == ch) continue;
+    if (k == NK_BeginNode && nt_ref(nt, p, "statements") == ch &&
+        nt_ref(nt, p, "rescue_clause") < 0) continue;
+    if (k == NK_BeginNode && nt_ref(nt, p, "ensure_clause") == ch) continue;
     return 0;
   }
   return 0;

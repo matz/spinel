@@ -70,6 +70,10 @@ spinel: 1 refusal, nothing written
 spinel: test/reject/builder_beside_conditional_header.rb:5: a Foo = Class.new or Module.new that may run without a `class Foo` or `module Foo` in the same body, or the header without it, is not supported: spinel cannot tell whether the header reopens the built class; write the two together or rename one of them
 == test/reject/builder_beside_conditional_header.rb [promote] rc=1
 spinel: test/reject/builder_beside_conditional_header.rb:5: a Foo = Class.new or Module.new that may run without a `class Foo` or `module Foo` in the same body, or the header without it, is not supported: spinel cannot tell whether the header reopens the built class; write the two together or rename one of them
+== test/reject/builder_beside_header_in_rescued_begin.rb [default] rc=1
+spinel: test/reject/builder_beside_header_in_rescued_begin.rb:6: a Foo = Class.new or Module.new that may run without a `class Foo` or `module Foo` in the same body, or the header without it, is not supported: spinel cannot tell whether the header reopens the built class; write the two together or rename one of them
+== test/reject/builder_beside_header_in_rescued_begin.rb [promote] rc=1
+spinel: test/reject/builder_beside_header_in_rescued_begin.rb:6: a Foo = Class.new or Module.new that may run without a `class Foo` or `module Foo` in the same body, or the header without it, is not supported: spinel cannot tell whether the header reopens the built class; write the two together or rename one of them
 == test/reject/builder_conditional_beside_header.rb [default] rc=1
 spinel: test/reject/builder_conditional_beside_header.rb:7: a Bar = Class.new or Module.new that may run without a `class Bar` or `module Bar` in the same body, or the header without it, is not supported: spinel cannot tell whether the header reopens the built class; write the two together or rename one of them
 == test/reject/builder_conditional_beside_header.rb [promote] rc=1

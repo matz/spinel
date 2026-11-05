@@ -2570,7 +2570,7 @@ static const BuiltinOp bop_rows[] = {
   { BOP_ANY_HASH, "eql?",             1,   1, BF_ANY,      TY_UNKNOWN,     BOPE_NONE, NULL, 0, 0, BOPF_ARGS_BUILTIN },
   { BOP_ANY_HASH, "hash",             0,   0, BF_ANY,      TY_UNKNOWN,     BOPE_NONE },
   { BOP_ANY_HASH, "default_proc=",    1,   1, BF_ANY,      TY_UNKNOWN,     BOPE_NONE },  /* the assigned proc */
-  { BOP_ANY_HASH, "compare_by_identity", 0,   0, BF_ANY,      TY_UNKNOWN,     BOPE_NONE, NULL, 0, 0, BOPF_SELF },
+  { BOP_ANY_HASH, "compare_by_identity", 0,   0, BF_ANY,      BOPR_SELF,      BOPE_NONE, NULL, 0, 0, BOPF_SELF },
   { BOP_ANY_HASH, "merge",            1, 127, BF_ANY,      TY_UNKNOWN,     BOPE_NONE, NULL, 0, 0, BOPF_COPY_CLASS | BOPF_ARGS_BUILTIN },
   { BOP_ANY_HASH, "merge!",           0, 127, BF_ANY,      TY_UNKNOWN,     BOPE_NONE, NULL, 0, 0, BOPF_SELF | BOPF_ARGS_BUILTIN },
   { BOP_ANY_HASH, "update",           0, 127, BF_ANY,      TY_UNKNOWN,     BOPE_NONE, NULL, 0, 0, BOPF_SELF | BOPF_ARGS_BUILTIN },

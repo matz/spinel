@@ -17342,11 +17342,13 @@ int desugar_builtin_scalar_defs(Compiler *c) {
     }
     /* A program's own reopen: left fully intact (still in `nb`) for
        ordinary class compilation and the poly dispatch's prim-reopen arm.
-       Each of its own simple-signature defs (no block, splat, or keyword
-       params -- the same restricted shape desugar_builtin_scalar_calls'
-       arity check already assumes) additionally gets a clone-based
+       Each of its own defs with no keyword or post-splat params (the
+       shapes desugar_builtin_scalar_calls' arity check knows: requireds,
+       optionals, a splat, a block param) additionally gets a clone-based
        generic registered by name, built from a CLONE of the def so the
-       original is never touched. */
+       original is never touched. A splat or a block param must be cloned
+       too: a call with a block (`1.step(3, 1) { }`) that the generic does
+       not take stays on the builtin iteration, which ignores the reopen. */
     if (!tfile[i]) nb[nbn++] = st;
     for (int k = 0; k < bn; k++) {
       int def = bb[k];
@@ -17360,12 +17362,13 @@ int desugar_builtin_scalar_defs(Compiler *c) {
       int closed = bi_def_visibility(nt, def) != BVIS_PUBLIC;
       int pn0 = nt_ref(nt, def, "parameters");
       int shape_ok = 1;
-      if (pn0 >= 0 && (nt_ref(nt, pn0, "block") >= 0 || nt_ref(nt, pn0, "rest") >= 0 ||
-                       nt_ref(nt, pn0, "keyword_rest") >= 0)) shape_ok = 0;
+      if (pn0 >= 0 && nt_ref(nt, pn0, "keyword_rest") >= 0)
+        shape_ok = 0;
+      if (shape_ok && pn0 >= 0) { int psn = 0; nt_arr(nt, pn0, "posts", &psn); if (psn > 0) shape_ok = 0; }
       if (shape_ok && pn0 >= 0) { int kwn = 0; nt_arr(nt, pn0, "keywords", &kwn); if (kwn > 0) shape_ok = 0; }
       if (!shape_ok) {
-        /* A reopen this registration cannot clone (a splat, a block or
-           keyword parameters) still REPLACES the name for the program.
+        /* A reopen this registration cannot clone (keyword or post-splat
+           parameters) still REPLACES the name for the program.
            Skipping it silently was only safe while the name was the
            program's alone; when it is also one a builtins/ file defines,
            the spliced generic stays in the table and every concrete call
@@ -17688,7 +17691,8 @@ int desugar_builtin_scalar_calls(Compiler *c) {
     { int cpn = nt_ref(nt, copy, "parameters");
       int crn = 0; if (cpn >= 0) nt_arr(nt, cpn, "requireds", &crn);
       int con = 0; if (cpn >= 0) nt_arr(nt, cpn, "optionals", &con);
-      if (an + 1 < crn || an + 1 > crn + con) continue; }
+      int crest = cpn >= 0 && nt_ref(nt, cpn, "rest") >= 0;
+      if (an + 1 < crn || (!crest && an + 1 > crn + con)) continue; }
     int encl = c->nscope[id];
     int base = nt->count;
     int *na = (int *)malloc(sizeof(int) * (size_t)(an + 1));

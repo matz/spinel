@@ -21540,11 +21540,17 @@ static void sp_dyn_new_arity(sp_int given, sp_int max) {
 }
 sp_RbVal sp_builtin_class_new(int kind, sp_int argc, const sp_RbVal *av, sp_Proc *blk);
 /* The class `exception` is sent to as a value: a class of Exception, and
-   NoMethodError for any other. */
+   NoMethodError for any other. A class of the program can come by its name
+   alone, from a boxed exception's #class, and takes its id here: the id is
+   what the dispatch of its `new` arms on. */
 static sp_Class sp_exc_class(sp_Class k) {
+  if (sp_is_exc_subclass_cls(k.cls_id)) return k;
   const char *cn = sp_class_to_s(k);
-  if (!sp_is_exc_subclass_cls(k.cls_id) &&
-      !(cn && (sp_syserr_kind(cn, NULL) != SP_SYSERR_NONE || !strcmp(cn, "Exception") || sp_exc_parent_of_name(cn))))
+  for (sp_int i = 0; cn && i < sp_exc_subclass_count; i++) {
+    sp_Class u = { sp_exc_subclass_ids[i], NULL };
+    if (!strcmp(cn, sp_class_to_s(u))) return u;
+  }
+  if (!(cn && (sp_syserr_kind(cn, NULL) != SP_SYSERR_NONE || !strcmp(cn, "Exception") || sp_exc_parent_of_name(cn))))
     sp_raise_nomethod(sp_nomethod_msg("exception", sp_box_class(k)));
   return k;
 }

@@ -1,0 +1,21 @@
+Boom "rebuilt"
+Deep "rebuilt"
+ArgumentError "rebuilt"
+Boom "Boom"
+Deep "Deep"
+ArgumentError "ArgumentError"
+Boom "seven"
+Deep "seven"
+Space::Inner "seven"
+Stat "n=seven"
+RuntimeError "seven"
+Errno::ENOENT "No such file or directory - seven"
+9
+9
+Boom
+true
+Boom "again"
+Boom "n"
+undefined method 'exception' for class Object
+undefined method 'exception' for class String
+undefined method 'exception' for class Integer

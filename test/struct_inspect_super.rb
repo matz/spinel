@@ -5,7 +5,8 @@
 # its own name (the default text runs for its instance), with both inspect
 # and to_s owned the super has a default of its own to reach, a member named
 # to_s does not answer for it, and a struct holding itself stops as usual.
-# The program's own struct_inspect or _struct_inspect is no default, and a
+# The program's own struct_inspect or _struct_inspect, or a class of that
+# name, is no default, and a
 # super's block argument runs for its effect, here and in a plain class's
 # super to Kernel#inspect.
 Sup = Struct.new(:a) do
@@ -57,6 +58,9 @@ end
 p Own.new(15)
 puts Own.new(16)
 p Own.new(17).struct_inspect, Own.new(18)._struct_inspect
+# a class whose C typedef the default's own copy is named after
+class Own__struct_inspect; end
+p Own__struct_inspect.new.class
 Eff = Struct.new(:f) do
   def inspect = "E" + super(&(puts("side"); nil))
 end

@@ -16,6 +16,7 @@ i:#<struct Own o=15>
 s:#<struct Own o=16>
 "mine"
 "under"
+Own__struct_inspect
 side
 E#<struct Eff f=19>
 plain side

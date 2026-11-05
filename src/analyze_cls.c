@@ -186,6 +186,7 @@ typedef struct CF {
   int *kpair;
   unsigned char *kskiparm;   /* per node: a run-time-name send's arm for a name it cannot send */
   unsigned char *knoskip;
+  unsigned char *exc_kw;   /* per node, made when first needed: cf_exc_ctor_kw */
   int *kesc, nkesc, ckesc, *kqs, nkqs, ckqs, *kk, nkk, ckk;
   int *kx, nkx, ckx, *kstr, nkstr, ckstr, *kcu, nkcu, ckcu;
 } CF;
@@ -1867,6 +1868,13 @@ static void cf_all_params_at(CF *f, int mi, int line) {
   if (m->blk_param && m->blk_param[0]) cf_add_set_at(f, cf_lv_in(f, mi, m->blk_param), CF_ALL, line);
 }
 #define cf_all_params(f, mi) cf_all_params_at((f), (mi), __LINE__)
+/* Exception's `exception` hands its keywords to initialize as a positional
+   Hash, whatever else initialize takes, as exc_ctor_spell_new spells it */
+static void cf_exc_ctor_kw(CF *f, const int *argv, int argc) {
+  if (argc == 0 || nt_kind(f->nt, argv[argc - 1]) != NK_KeywordHashNode) return;
+  if (!f->exc_kw && !(f->exc_kw = calloc((size_t)f->nnodes + 1, 1))) cf_oom();
+  f->exc_kw[argv[argc - 1]] = 1;
+}
 /* the call's arguments to method mi's parameters */
 static void cf_bind_args(CF *f, int mi, const int *argv, int argc) {
   const NodeTable *nt = f->nt;
@@ -1891,7 +1899,8 @@ static void cf_bind_args(CF *f, int mi, const int *argv, int argc) {
     ppos[np++] = i;
   }
   /* a keyword hash the method takes as a positional Hash */
-  if (kwh >= 0 && !has_kw && npos < 256) { pos[npos++] = kwh; kwh = -1; }
+  int kw_as_hash = kwh >= 0 && (!has_kw || (f->exc_kw && f->exc_kw[kwh] && m->name && is_initialize_name(m->name)));
+  if (kw_as_hash && npos < 256) { pos[npos++] = kwh; kwh = -1; }
   /* (the kinds' walk) no splat, a rest parameter after required ones only:
      the leading arguments are those parameters, the others the rest's
      elements */
@@ -2985,6 +2994,7 @@ static void cf_call_known(CF *f, int v, int pidx, int recv_el, const char *nm, c
       }
       /* a Class value's `exception`, too, as the call is desugared later */
       if (is_exception_ctor_name(nm) && exc_ctor_class(c, v, kc)) {
+        cf_exc_ctor_kw(f, argv, argc);
         cf_construct(f, v, kc, argv, argc, blk, "new");
         continue;
       }
@@ -3530,7 +3540,7 @@ static void cf_call(CF *f, int v) {
   if (is_exception_ctor_name(nm)) {
     NodeKind rk = r >= 0 ? nt_kind(nt, r) : NK_SelfNode;
     int nc = rk == NK_SelfNode ? exc_ctor_self_class(c, v) : cf_is_class_const(f, r);
-    if (nc >= 0 && exc_ctor_class(c, v, nc)) nm = "new";
+    if (nc >= 0 && exc_ctor_class(c, v, nc)) { nm = "new"; cf_exc_ctor_kw(f, argv, argc); }
   }
   cf_scal_bind(f, v, nm, r, argv, argc, blk);
   cf_anon_struct_value(f, v);
@@ -5726,6 +5736,7 @@ static void cf_solve(Compiler *c, int directed, int dump_facts) {
     free(f.ptop); free(f.esc); free(f.elobj); free(f.summ); free(f.smc); free(f.obj_cont); free(f.obj_str); free(f.fs);
     free(f.kseed); free(f.kdone); free(f.kx); free(f.kstr); free(f.kcu); free(f.kesc); free(f.kqs); free(f.kk); free(f.knarrow); free(f.kskp); free(f.kdefs); free(f.kpair); free(f.ksend); free(f.kskiparm);
   }
+  free(f.exc_kw);
 }
 
 /* SPINEL_CLS_FLOW: the directed sets beside the unified ones, per call

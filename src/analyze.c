@@ -13582,7 +13582,7 @@ static int desugar_enum_named_call(Compiler *c, int id, NodeTable *nt, const cha
       return 1;
     }
   }
-  if (nm && sp_streq(nm, "step") && nt_ref(nt, id, "receiver") >= 0) {
+  if (nm && sp_streq(nm, "step") && nt_ref(nt, id, "receiver") >= 0 && !step_kw_own_method(c, id)) {
     /* Numeric#step keyword forms lower to the positional (limit, step):
        step(to: T, by: B) / step(by: B, to: T) / step(T, by: B), and the
        endless step(by: B), whose limit is nil. */
@@ -13604,7 +13604,7 @@ static int desugar_enum_named_call(Compiler *c, int id, NodeTable *nt, const cha
       }
       if (sac == 2 && to_v < 0) to_v = sav[0];   /* step(limit, by: B) */
       if (other && step_kw_unknown(c, nt, id, sargs)) { *changed = 1; return 1; }
-      if (!other && by_v >= 0 && (to_v >= 0 || sac == 1) && step_kw_numeric_recv(c, nt, id)) {
+      if (!other && by_v >= 0 && (to_v >= 0 || sac == 1)) {
         step_kw_positional(c, nt, id, sargs, to_v, by_v, by_first && sac == 1);
         *changed = 1;
         return 1;

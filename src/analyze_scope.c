@@ -4423,28 +4423,39 @@ static void mf_copy_scope(Compiler *c, int cls, int si, const char *name) {
   scope_own_defaults(c, di);
 }
 
-/* The method scope a module_function copy entry copies, or -1: the def or
-   define_method it stands at (a method under the bare word, the scope the
-   record keeps with the copy), else the version of the name live where
-   `module_function :n` stands, followed through the aliases to the def each
-   captured. Each step asks at an alias's own point, where only a version
-   recorded before it is live, so the chain ends. */
-static int mf_entry_scope(Compiler *c, const ElabEntry *e) {
-  if (e->scope > 0) return e->scope;
-  const char *nm = e->name;
-  LoadPoint p = elab_point_of(c, e->node);
-  for (;;) {
-    const LrDef *d = NULL;
-    if (elab_method_at(c, e->cls, nm, 0, p, &d) != ELAB_YES || !d) return -1;
-    if (d->kind == LR_DEF || d->kind == LR_DEFINE_METHOD) return d->scope > 0 ? d->scope : -1;
-    if (d->kind != LR_ALIAS || !d->target) return -1;
-    nm = d->target;
-    p = elab_point_of(c, d->node);
+/* The arms of the conditional def whose dispatcher, scope disp, module
+   cls copies at node `at`: the copy calls them on the module's side, so the
+   module gets them, once the record answers one of them surely made where
+   the copy is (until an arm has run, the dispatcher's NoMethodError names
+   an instance, and CRuby's names the module). A module function made of
+   the dispatcher itself (own) is one scope for both sides, and so is each
+   arm (mf_mark); a copy of it under another name leaves the instance
+   method as it is, and each arm gets a class-level copy of its own once
+   (mf_copy_scope), unless it is a module function already. */
+static void mf_copy_arms(Compiler *c, int cls, int disp, int at, int own) {
+  const NodeTable *nt = c->nt;
+  const char *base = c->scopes[disp].name;
+  if (c->scopes[disp].class_id != cls || !base || !nt_int(nt, c->scopes[disp].def_node, "cond_lone_disp", 0)) return;
+  int len = (int)strlen(base), sure = 0, n0 = c->nscopes;
+  LoadPoint p = elab_point_of(c, at);
+  for (int mi = 0; mi < n0 && !sure; mi++)
+    sure = c->scopes[mi].class_id == cls && !c->scopes[mi].is_cmethod && mf_arm_of(nt, c->scopes[mi].def_node, base, len) &&
+           elab_own_method_at(c, cls, c->scopes[mi].name, p) == ELAB_YES;
+  for (int mi = 0; sure && mi < n0; mi++) {
+    const Scope *s = &c->scopes[mi];
+    if (s->class_id != cls || s->is_cmethod || !mf_arm_of(nt, s->def_node, base, len)) continue;
+    if (own) { mf_mark(c, mi); continue; }
+    int had = 0;
+    for (int k = 0; k < c->nscopes && !had; k++)
+      had = c->scopes[k].class_id == cls && c->scopes[k].is_cmethod && c->scopes[k].def_node == s->def_node;
+    if (!had) mf_copy_scope(c, cls, mi, s->name);
   }
 }
 
 /* A module's module functions, from the load record's copies to its
-   singleton (elab_entries): a def's own scope when the module defines it
+   singleton (elab_entries), each with the scope of the method it copies
+   (the copy's .scope, which the record keeps for the named form as well,
+   lr_copy_scopes): a def's own scope when the module defines it
    under that name, else the module function the name stood for (an alias
    of one is a singleton alias of it) or a copy of the method it stood for.
    A define_method under the bare word gets a copy too, and its instance
@@ -4452,10 +4463,10 @@ static int mf_entry_scope(Compiler *c, const ElabEntry *e) {
    includer by a bare call only (desugar_module_function_call), and the
    method is the includer's to send. A copy under a run-time condition is
    taken as made, as the tree reading took it. The arms of a conditional
-   def (`m#__cond1`, ...) are not taken from the record: mf_mark_cond_arms
-   gives them to the module only where every branch defines one, since
-   where none may run, the dispatcher's NoMethodError names an instance,
-   and CRuby's names the module. */
+   def (`m#__cond1`, ...) are not taken from the record: a copy of the
+   dispatcher gives the module its arms (mf_copy_arms), and so does a
+   bare module_function over an if/else chain every branch of which
+   defines one (mf_mark_cond_arms). */
 static void mf_copy_entries(Compiler *c) {
   int n = 0;
   ElabEntry *a = elab_entries(c, 1u << LR_COPY | ELAB_ENTRY_MAY, &n);
@@ -4465,11 +4476,12 @@ static void mf_copy_entries(Compiler *c) {
     src[i] = -1;
     if (!a[i].sg || a[i].cls < 0 || !comp_class_is_module(c, &c->classes[a[i].cls])) continue;
     if (a[i].node >= 0 && nt_int(c->nt, a[i].node, "cond_arm", 0)) continue;
-    src[i] = mf_entry_scope(c, &a[i]);
-    int dm = a[i].scope > 0 && nt_kind(c->nt, a[i].node) != NK_DefNode;
+    src[i] = a[i].scope > 0 ? a[i].scope : -1;
+    int dm = a[i].scope > 0 && a[i].node == c->scopes[a[i].scope].def_node && nt_kind(c->nt, a[i].node) != NK_DefNode;
     if (src[i] >= 0 && !dm && c->scopes[src[i]].class_id == a[i].cls && c->scopes[src[i]].name &&
         sp_streq(c->scopes[src[i]].name, a[i].name)) {
       mf_mark(c, src[i]);
+      mf_copy_arms(c, a[i].cls, src[i], a[i].node, 1);
       src[i] = -1;
     }
   }
@@ -4490,6 +4502,7 @@ static void mf_copy_entries(Compiler *c) {
                c->classes[a[i].cls].name, a[i].name, s->name);
       unsupported_feature(c, a[i].node, msg);
     }
+    mf_copy_arms(c, a[i].cls, src[i], a[i].node, 0);
     mf_copy_scope(c, a[i].cls, src[i], a[i].name);
   }
   free(src);

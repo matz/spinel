@@ -6064,6 +6064,17 @@ CLASS_MACROS_ONE_LIMIT ?= 1.2
 # (ct_class_state), so the body is followed once; from the body's start
 # at each call it reads as K^2.
 CLASS_MACRO_STATE_LIMIT ?= 2.2
+# Module functions (test/scale/module_functions.sh), compiled to C at N=100
+# and N=200, in both load models: N modules of ten functions after a bare
+# `module_function`, N of ten copied by name, a class per pair that extends
+# both and defines a name on its singleton, and a loop that calls them. Each
+# copy is a singleton version the load record holds and the call plan maps to
+# the def's scope (ct_def_version); a pass that walks the record, the scopes
+# or the copies per copy or per call reads as N^2. The pair reads 2.28x at
+# N=100 and N=200 before copies are mapped (the rest of the compiler grows
+# faster than linearly in the classes, as COND_DEFS_CPU_LIMIT says); the
+# limit sits about 5% above.
+MODULE_FUNCTIONS_LIMIT ?= 2.4
 # A chain of forty bangs over a String a method answers, compiled to C with
 # --share-strings under a CPU-time limit, as the hash-literal fan-out is:
 # strbuf_bang_self_local asked each link once per path that reaches it,
@@ -6155,6 +6166,11 @@ scale-test: $(SPINEL_WORK)
 	gen struct_blocks 100 sb1.rb; gen struct_blocks 200 sb2.rb; \
 	sba=$$(sw --emit-rbs -o "$$tmp/sb1.rbs" "$$tmp/sb1.rb") || { rm -rf "$$tmp"; exit 1; }; \
 	sbb=$$(sw --emit-rbs -o "$$tmp/sb2.rbs" "$$tmp/sb2.rb") || { rm -rf "$$tmp"; exit 1; }; \
+	gen module_functions 100 jf1.rb; gen module_functions 200 jf2.rb; \
+	jia=$$(sw -c -o "$$tmp/jf1.c" "$$tmp/jf1.rb") || { rm -rf "$$tmp"; exit 1; }; \
+	jib=$$(sw -c -o "$$tmp/jf2.c" "$$tmp/jf2.rb") || { rm -rf "$$tmp"; exit 1; }; \
+	jga=$$(sw --load-model=graph -c -o "$$tmp/jf1.c" "$$tmp/jf1.rb") || { rm -rf "$$tmp"; exit 1; }; \
+	jgb=$$(sw --load-model=graph -c -o "$$tmp/jf2.c" "$$tmp/jf2.rb") || { rm -rf "$$tmp"; exit 1; }; \
 	cpu () { b=; for i in 1 2 3; do \
 	  o=$$( ( $(SPINEL_WORK) -c -o "$$tmp/qt.c" "$$tmp/$$1" >/dev/null 2>&1 || exit 1; times ) ) || \
 	    { echo "scale-test: FAIL (spinel-work failed on $$1)" >&2; return 1; }; \
@@ -6169,7 +6185,8 @@ scale-test: $(SPINEL_WORK)
 	   [ -z "$$ka" ] || [ -z "$$kb" ] || [ -z "$$ea" ] || [ -z "$$eb" ] || [ -z "$$ra" ] || [ -z "$$rb" ] || [ -z "$$ta" ] || [ -z "$$tb" ] || \
 	   [ -z "$$xa" ] || [ -z "$$xb" ] || [ -z "$$ma" ] || [ -z "$$mb" ] || [ -z "$$oa" ] || [ -z "$$ob" ] || [ -z "$$qa" ] || [ -z "$$qb" ] || \
 	   [ -z "$$yna" ] || [ -z "$$ynb" ] || [ -z "$$yta" ] || [ -z "$$ytb" ] || \
-	   [ -z "$$uda" ] || [ -z "$$udb" ] || [ -z "$$sba" ] || [ -z "$$sbb" ]; then \
+	   [ -z "$$uda" ] || [ -z "$$udb" ] || [ -z "$$sba" ] || [ -z "$$sbb" ] || \
+	   [ -z "$$jia" ] || [ -z "$$jib" ] || [ -z "$$jga" ] || [ -z "$$jgb" ]; then \
 	  echo "scale-test: FAIL (the counting compiler reported no work count)"; exit 1; fi; \
 	awk -v a="$$ha" -v b="$$hb" 'BEGIN { r = b / a; \
 	  printf "scale-test: boxed Hash store work at 2x the methods is %.2fx (limit 2.20)\n", r; exit (r > 2.20) }' || \
@@ -6226,6 +6243,12 @@ scale-test: $(SPINEL_WORK)
 	awk -v a="$$sba" -v b="$$sbb" -v lim="$(STRUCT_BLOCKS_LIMIT)" 'BEGIN { r = b / a; \
 	  printf "scale-test: Struct block anonymity work at 2x the blocks is %.2fx (limit %.2f)\n", r, lim; exit (r > lim) }' || \
 	  { echo "scale-test: FAIL (the anonymity pass scanned the program per call of a Struct block: see block_only_declares)"; exit 1; }; \
+	awk -v a="$$jia" -v b="$$jib" -v lim="$(MODULE_FUNCTIONS_LIMIT)" 'BEGIN { r = b / a; \
+	  printf "scale-test: module function work at 2x the modules is %.2fx (limit %.2f)\n", r, lim; exit (r > lim) }' || \
+	  { echo "scale-test: FAIL (a module function's copy or its mapping to the def grew superlinearly: see ct_def_version and mf_copy_entries)"; exit 1; }; \
+	awk -v a="$$jga" -v b="$$jgb" -v lim="$(MODULE_FUNCTIONS_LIMIT)" 'BEGIN { r = b / a; \
+	  printf "scale-test: module function work at 2x the modules, under graph, is %.2fx (limit %.2f)\n", r, lim; exit (r > lim) }' || \
+	  { echo "scale-test: FAIL (a module function's copy or its mapping to the def grew superlinearly under graph: see ct_def_version and mf_copy_entries)"; exit 1; }; \
 	awk -v a="$$qta" -v b="$$qtb" -v lim="$(COND_DEFS_CPU_LIMIT)" 'BEGIN { if (a <= 0) a = 0.01; r = b / a; \
 	  printf "scale-test: open method history CPU time at 4x the histories is %.2fx (limit %.2f)\n", r, lim; exit (r > lim) }' || \
 	  { echo "scale-test: FAIL (the open histories' asks or makes did work the count does not see once per history, such as a whole-program map: see ver_entries_build)"; exit 1; }

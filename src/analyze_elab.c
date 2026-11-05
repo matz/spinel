@@ -2648,6 +2648,36 @@ static void lr_record_again(ElabRec *x) {
   r->recorded = 1;
 }
 
+/* The method scope each named module_function copy copies: that of the def
+   or define_method live where `module_function :n` stands, followed through
+   the aliases to the one each captured (a bare copy took its def's scope as
+   lr_method recorded it). Each step asks at an alias's own point, where only
+   a version recorded before it is live, so the chain ends. Asked once the
+   record is made, since what is live at a point depends on the entries after
+   it; a copy of a method with no scope (an attribute, a method a mixin
+   brought) keeps none. */
+static void lr_copy_scopes(Compiler *c) {
+  LoadRecord *r = c->lrec;
+  for (int i = 0; i < r->nhist; i++) {
+    LrHist *h = &r->hist[i];
+    if (h->a < LR_MAIN || !h->b) continue;
+    for (int j = 0; j < h->n; j++) {
+      LrDef *v = &h->v[j];
+      if (v->kind != LR_COPY || v->scope > 0 || !v->target) continue;
+      const char *nm = v->target;
+      LoadPoint p = elab_point_of(c, v->node);
+      for (;;) {
+        const LrDef *d = NULL;
+        if (elab_method_at(c, h->a, nm, 0, p, &d) != ELAB_YES || !d) break;
+        if (d->kind == LR_DEF || d->kind == LR_DEFINE_METHOD) { v->scope = d->scope; break; }
+        if (d->kind != LR_ALIAS || !d->target) break;
+        nm = d->target;
+        p = elab_point_of(c, d->node);
+      }
+    }
+  }
+}
+
 /* The references recorded before the header that makes their class
    (LR_LATER), as the walk leaves them: the class, or not known */
 static void lr_later_settle(Compiler *c) {
@@ -2712,6 +2742,7 @@ void elab_program(Compiler *c, struct HostStep *h) {
      what was recorded by then (lr_mixin_dup) */
   for (int k = 0; k < r->ncls; k++)
     for (int i = 0; i < r->cls[k].nmix; i++) r->cls[k].mix[i].dup = 0;
+  lr_copy_scopes(c);
   lr_def_owners(c, r->check ? LR_OWNERS_WALK | LR_OWNERS_HELD : 0);
   elab_mark_versions(c);
   lr_block_cond_dms(c);
@@ -4365,9 +4396,9 @@ static void lr_rta_inst(LrRta *t, int a, const char *name, int depth) {
     if (h->v[j].kind == LR_ALIAS && h->v[j].target) lr_rta_inst(t, a, h->v[j].target, depth + 1);
 }
 /* A module_function copy (on h, the singleton's history) runs the instance
-   method as it stood at the copy: the def of the copy's scope for a bare
-   copy; for a named one (`module_function :a`, which has no scope), the
-   instance history of the name */
+   method as it stood at the copy: the def of the copy's scope (lr_copy_scopes
+   gives a named copy one); for a copy of a method with none, the instance
+   history of the name */
 static void lr_rta_copy(LrRta *t, const LrHist *h, const LrDef *v) {
   if (v->scope > 0) lr_rta_unit(t, t->c->scopes[v->scope].def_node);
   else lr_rta_inst(t, h->a, v->target, 0);

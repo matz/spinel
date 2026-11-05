@@ -50,7 +50,7 @@ visibility in #15: vis#16 module_function
 W#e: def#17 runs=never private def#18 runs=never private end=yes
 W.e: copy#17 copy#18 end=yes
 const Y: write#19
-Y#yb: def#20 runs=#24 def#26 runs=#24 end=yes
+Y#yb: def#20 runs=#24 def#26 runs=never end=yes
 Y#yc: def#21 runs=#24 vis#23 private end=yes
 Y#ya: alias#22 (yb: def#20) vis#23 private end=yes
 Y.ya: copy#23 end=yes

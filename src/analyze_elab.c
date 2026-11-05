@@ -2206,7 +2206,9 @@ static int lr_frame_body(const NodeTable *nt, int fnode) {
    from a frame that is not cls's own body -- `K.include M` at the top
    level or in another class's body -- as a statement of that frame's list
    that always runs there, an include or a prepend of a module of the
-   program, on a class of the program that is no builtin's reopening? */
+   program or a core module, on a class of the program or a builtin's
+   reopening (desugar_explicit_receiver_mixin makes an empty one for a
+   builtin the program does not reopen)? */
 static int lr_foreign_mixin(ElabRec *x, int node, const LrMixin *m, int cls, int fc, int sg, int nested) {
   const NodeTable *nt = x->c->nt;
   int recv = nt_ref(nt, node, "receiver");
@@ -2231,7 +2233,7 @@ static int lr_foreign_mixin(ElabRec *x, int node, const LrMixin *m, int cls, int
   if (m->mod < 0 && !(m->ref >= 0 && nt_kind(nt, m->ref) == NK_ConstantReadNode &&
                       is_builtin_module_name(nt_str(nt, m->ref, "name")))) return 0;
   const char *cn = x->c->classes[cls].name;
-  if (!cn || is_builtin_reopen_name(cn) || is_builtin_module_name(cn)) return 0;
+  if (!cn) return 0;
   int body = lr_frame_body(nt, m->open), bn = 0;
   const int *bb = body >= 0 ? nt_arr(nt, body, "body", &bn) : NULL;
   for (int i = 0; i < bn; i++) if (bb[i] == node) return 1;

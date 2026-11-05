@@ -1642,6 +1642,7 @@ static int erm_args_modules(const NodeTable *nt, const int *av, int first, int a
   }
   return 1;
 }
+static int erm_keep;   /* (the statement stays, after the reopening erm_rewrite_stmt made) */
 static int erm_rewrite_stmt(Compiler *c, int st, const char *self_leaf, const int *parent, int encl) {
   NodeTable *nt = (NodeTable *)c->nt;
   if (nt_kind(nt, st) != NK_CallNode || nt_ref(nt, st, "block") >= 0) return st;
@@ -1666,7 +1667,7 @@ static int erm_rewrite_stmt(Compiler *c, int st, const char *self_leaf, const in
   if (recv < 0 || (nt_kind(nt, recv) != NK_ConstantReadNode && nt_kind(nt, recv) != NK_ConstantPathNode)) return st;
   const char *leaf = nt_str(nt, recv, "name");
   if (!leaf || (sp_streq(leaf, "Object") && sp_streq(nm, "extend"))) return st;
-  int decl = erm_declared_as(nt, leaf);
+  int decl = erm_declared_as(nt, leaf), pdecl = decl;
   /* `K.include(M)` / `K.prepend(M)` at the top level on a class of the
      program, of modules of the program or core modules: the load record
      takes it as one of K's bodies' (mixin_by_record), where it runs */
@@ -1704,6 +1705,23 @@ static int erm_rewrite_stmt(Compiler *c, int st, const char *self_leaf, const in
      the body's module declares it itself (erm_body_declares), where the
      nested reopening is that class: a sanitizer's `Sanitizer.extend(M)` in
      a reopening of the module that holds Sanitizer */
+  /* the same on a builtin class or module the program does not declare
+     (`Integer.include(M)`, `Fiber.prepend(M)`, `::Process.singleton_class
+     .prepend(M)`): an empty reopening ahead of the statement gives the
+     record the class, and the record takes the statement as above */
+  if (!pdecl && !self_leaf && !attr && !sp_streq(nm, "extend") && erm_args_modules(nt, av, first, an)) {
+    int rn = nt_new_node(nt, decl == 2 ? "ModuleNode" : "ClassNode");
+    int body = nt_new_node(nt, "StatementsNode");
+    int path = nt_clone_subtree(nt, recv);
+    if (rn < 0 || body < 0 || path < 0) return st;
+    nt_node_set_int(nt, rn, "node_line", nt_int(nt, st, "node_line", 0));
+    nt_node_set_int(nt, rn, "node_file", nt_int(nt, st, "node_file", 0));
+    nt_node_set_ref(nt, rn, "constant_path", path);
+    nt_node_set_arr(nt, body, "body", NULL, 0);
+    nt_node_set_ref(nt, rn, "body", body);
+    erm_keep = 1;
+    return rn;
+  }
   int nested = 0;
   if (self_leaf && (nt_kind(nt, recv) != NK_ConstantReadNode || !sp_streq(leaf, self_leaf))) {
     if (attr || sclass >= 0 || nt_kind(nt, recv) != NK_ConstantReadNode) return st;
@@ -1920,7 +1938,7 @@ int desugar_explicit_receiver_mixin(Compiler *c) {
     if (stmts < 0 || nt_kind(nt, stmts) != NK_StatementsNode) continue;
     int bn = 0; const int *bb = nt_arr(nt, stmts, "body", &bn);
     if (!bb || bn == 0) continue;
-    int *nb = (int *)malloc(sizeof(int) * (size_t)bn);
+    int *nb = (int *)malloc(sizeof(int) * (size_t)bn * 2), nn = 0;
     if (!nb) continue;
     int any = 0;
     const char *self_leaf = NULL;
@@ -1930,17 +1948,19 @@ int desugar_explicit_receiver_mixin(Compiler *c) {
     }
     for (int i = 0; i < bn; i++) {
       int sd = is_prog ? erm_sclass_const_decl(nt, bb[i]) : 0;
-      if (sd) { nb[i] = erm_sclass_const_rewrite(nt, bb[i], sd); any |= nb[i] != bb[i]; continue; }
+      if (sd) { nb[nn] = erm_sclass_const_rewrite(nt, bb[i], sd); any |= nb[nn++] != bb[i]; continue; }
       if (!is_prog && (!parent || parent_n != nt->count)) {
         free(parent);
         if (!(parent = an_parent_map(nt))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
         parent_n = nt->count;
       }
+      erm_keep = 0;
       int r = erm_rewrite_stmt(c, bb[i], self_leaf, parent, id);
-      if (r == -2) { nb[i] = bb[i]; changed = 1; continue; }
-      nb[i] = r; any |= r != bb[i];
+      if (r == -2) { nb[nn++] = bb[i]; changed = 1; continue; }
+      nb[nn++] = r; any |= r != bb[i];
+      if (erm_keep) nb[nn++] = bb[i];
     }
-    if (any) { nt_node_set_arr(nt, stmts, "body", nb, bn); changed = 1; }
+    if (any) { nt_node_set_arr(nt, stmts, "body", nb, nn); changed = 1; }
     free(nb);
   }
   free(parent);
@@ -2079,12 +2099,20 @@ int desugar_handle_ivars(Compiler *c) {
   /* the modules a reopening mixes in: name, which handle, how often */
   const char *mods[64]; int mkind[64], mcount[64], nm = 0;
   for (int id = 0; id < n0; id++) {
-    int h = hiv_handle_class(nt, id);
-    int body = h ? class_def_body(nt, id) : -1;
+    int h = hiv_handle_class(nt, id), top = nt_kind(nt, id) == NK_ProgramNode;
+    int body = h ? class_def_body(nt, id) : top ? nt_ref(nt, id, "statements") : -1;
     int bn = 0; const int *bb = body >= 0 ? nt_arr(nt, body, "body", &bn) : NULL;
     for (int i = 0; bb && i < bn; i++) {
-      const char *cn = nt_kind(nt, bb[i]) == NK_CallNode && nt_ref(nt, bb[i], "receiver") < 0
-                       ? nt_str(nt, bb[i], "name") : NULL;
+      int r = nt_kind(nt, bb[i]) == NK_CallNode ? nt_ref(nt, bb[i], "receiver") : -1;
+      /* `Fiber.prepend(M)` at the top level too: the load record takes it
+         as one of the class's (mixin_by_record) */
+      if (top) {
+        const char *rn = r >= 0 && nt_kind(nt, r) == NK_ConstantReadNode ? nt_str(nt, r, "name") : NULL;
+        h = !rn ? 0 : sp_streq(rn, "Fiber") ? 1 : sp_streq(rn, "Thread") ? 2 : 0;
+        if (!h) continue;
+      }
+      else if (r >= 0) continue;
+      const char *cn = nt_kind(nt, bb[i]) == NK_CallNode ? nt_str(nt, bb[i], "name") : NULL;
       if (!cn || (!sp_streq(cn, "include") && !sp_streq(cn, "prepend"))) continue;
       int args = nt_ref(nt, bb[i], "arguments");
       int an = 0; const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &an) : NULL;

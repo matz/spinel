@@ -24509,8 +24509,8 @@ static const char *rbself_module_host(NodeTable *nt, int n0, const char *mod) {
    take its methods to another class unseen */
 /* Does the program write a class of this name under a path or in another
    body (`class Ns::Integer`, `module Ns; class Integer`)? A receiver
-   `Integer` in `Integer.include(M)` can then name that class, not the
-   builtin. */
+   `Integer` in `Integer.include(M)` inside another body can then name
+   that class, not the builtin. At the top level it names the builtin. */
 static int rbself_names_own_class(NodeTable *nt, int n0, const char *name) {
   for (int m = 0; m < n0; m++) {
     if (!class_def_is_class(nt, m) && !class_def_is_module(nt, m)) continue;
@@ -24544,7 +24544,7 @@ static const char *rbself_module_host_in(NodeTable *nt, int n0, const char *mod,
     int recv = nt_ref(nt, id, "receiver");
     if (recv >= 0) {
       target = nt_kind(nt, recv) == NK_ConstantReadNode ? nt_str(nt, recv, "name") : NULL;
-      if (strict && target && rbself_names_own_class(nt, n0, target)) return NULL;
+      if (strict && target && engine_lexically_nested(nt, id) && rbself_names_own_class(nt, n0, target)) return NULL;
     } else
       for (int m = 0; m < n0 && !target; m++) {
         if (!class_def_is_class(nt, m)) continue;

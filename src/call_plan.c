@@ -947,11 +947,36 @@ static int ver_call_arity(Compiler *c, int id, int rcls, int sg, const char *nam
   }
   return ver_arity(c, id, to, nto);
 }
+/* guard_chain's answer kept for mi (Compiler.guard_memo), into to: their
+   count, 0 for none kept */
+static int guard_memo_get(Compiler *c, int mi, int *to) {
+  const struct GuardMemo *g = &c->guard_memo;
+  if (mi >= g->nat || !g->at[mi]) return 0;
+  const int *p = g->to + g->at[mi] - 1;
+  memcpy(to, p + 1, sizeof *to * (size_t)p[0]);
+  return p[0];
+}
+static void guard_memo_put(Compiler *c, int mi, const int *to, int n) {
+  struct GuardMemo *g = &c->guard_memo;
+  if (mi >= g->nat) {
+    int nat = c->nscopes > mi ? c->nscopes : mi + 1, *at = realloc(g->at, sizeof *at * (size_t)nat);
+    if (!at) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    memset(at + g->nat, 0, sizeof *at * (size_t)(nat - g->nat));
+    g->at = at; g->nat = nat;
+  }
+  if (g->nto + n + 1 > g->cto && !(g->to = realloc(g->to, sizeof *g->to * (size_t)(g->cto = 2 * (g->nto + n + 1))))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  g->at[mi] = g->nto + 1;
+  g->to[g->nto++] = n;
+  memcpy(g->to + g->nto, to, sizeof *to * (size_t)n);
+  g->nto += n;
+}
 /* The methods a guard entry chooses from for mi, a later prepend's copy
    (Scope.mixin_guarded): mi, each guarded copy it stands in front of, and
-   the method behind the last */
+   the method behind the last. Kept once the entries are made, when the
+   scopes no longer change (as ct_version's answers are) */
 static int guard_chain(Compiler *c, int mi, int *to, DispArm *arm, char sel[][32]) {
-  int n = 0;
+  int memo = !arm && c->ver_built, asked = mi, n = memo ? guard_memo_get(c, mi, to) : 0;
+  if (n) return n;
   if (c->scopes[mi].entry == ENTRY_TABLE) mi = c->scopes[mi].guard_behind;
   while (n < VER_MAX_ARMS && c->scopes[mi].mixin_guarded && c->scopes[mi].guard_behind >= 0) {
     if (arm) {
@@ -984,6 +1009,7 @@ static int guard_chain(Compiler *c, int mi, int *to, DispArm *arm, char sel[][32
     }
   }
   to[n++] = mi;
+  if (memo) guard_memo_put(c, asked, to, n);
   return n;
 }
 static int mixin_copy_versions(Compiler *c, int mi, int from, int *to, ElabVersion *vs);
@@ -6674,6 +6700,8 @@ void ver_memo_drop(Compiler *c) {
   free(c->ver_memo);
   c->ver_memo = NULL;
   c->ver_memo_cap = c->ver_memo_n = 0;
+  free(c->guard_memo.at); free(c->guard_memo.to);
+  c->guard_memo = (struct GuardMemo){ NULL, 0, NULL, 0, 0 };
 }
 static int ver_late_key_cmp(const struct VerLate *x, const struct VerLate *y) {
   int d = strcmp(x->name, y->name);

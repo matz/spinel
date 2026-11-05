@@ -1867,6 +1867,11 @@ typedef struct {
      copy) NULL for a free slot; dc the class it answers, -2 for the table's */
   struct VerMemo { char *name; int id, cls; unsigned flags; int vi, dc; } *ver_memo;
   int ver_memo_cap, ver_memo_n;
+  /* the methods a guard entry chooses from for each scope asked once the
+     entries are made (call_plan.c, guard_chain): at[mi] - 1 is where in
+     `to` their count and then they are, 0 for a scope not asked yet;
+     dropped with ver_memo */
+  struct GuardMemo { int *at, nat, *to, nto, cto; } guard_memo;
   /* the operand-local reads splat_dispatch_on_length marked splat_view,
      which desugar_splat_view_scalars rewrites once typed (-1 once seen) */
   int *splat_views;

@@ -886,6 +886,33 @@ void sp_native_leave(void) {
   sp_out_leave_locked(sp_worker_id);
   SCHED_UNLOCK();
 }
+/* An ffi_callback from inside a blocking call runs Ruby, so it comes back into
+   the world for the method and goes out again when the method has returned:
+   by then its frames are off the shadow stack, and what the way out publishes
+   is what stands below the call. Only the trampoline can do this: a Ruby method
+   that went out itself would publish its own frame and return. The depth drops
+   to 0 meanwhile, as this worker is in the world like any other, so a raise
+   that unwinds out of the blocking call lands in that state, and a blocking
+   call the method makes starts over. Answers what the way out restores. */
+int sp_native_callback_enter(void) {
+  int depth = g_native_depth;
+  if (depth == 0) return 0;   /* a plain call: this worker never left */
+  g_native_depth = 0;
+  if (g_native_noop) g_native_noop = 0;   /* entered before the pool existed: it never left either */
+  else {
+    SCHED_LOCK();
+    sp_out_leave_locked(sp_worker_id);
+    SCHED_UNLOCK();
+  }
+  return depth;
+}
+/* A real way out even if the call began with no pool: the method may have
+   started the first thread, and its collections do not wait for this call. */
+void sp_native_callback_leave(int depth) {
+  if (depth == 0) return;
+  sp_native_enter();
+  g_native_depth = depth;
+}
 /* What a parking worker publishes for the collector: the shadow-stack roots
    plus this worker's live match registers (TLS, so the collector's globals
    hook does not reach them) into the green thread's saved snapshot, then

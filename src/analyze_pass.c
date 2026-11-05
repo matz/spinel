@@ -20759,6 +20759,56 @@ static struct {
   int n, cap, *node;
 } bi_memo;
 
+/* Does a write of body local `lname` give it a kind no Bignum seed can stand
+   for? The seed then only meets that kind as untyped: `y = 1.0` and `y = y * 10.0`
+   in a `while` have the shape of Integer growth, and came out on the boxed path.
+   The seed comes before this round's writes are typed, so a value that is only
+   arithmetic over other locals (`t = a + b`, with `a = 1.0`) is asked of them. A
+   nil, a value still unknown or one already untyped says nothing. Each local is
+   asked once, so the cost is its writes', however they read one another. */
+enum { BI_KIND_LOCALS = 8 };
+typedef struct { const char *seen[BI_KIND_LOCALS]; int n; } BiKindWalk;
+static int bi_kind_says_no_integer(TyKind t) {
+  return t != TY_UNKNOWN && t != TY_INT && t != TY_BIGINT && t != TY_NIL && t != TY_POLY;
+}
+static int bi_local_no_integer(Compiler *c, Scope *s, const char *lname, BiKindWalk *w);
+static int bi_value_no_integer(Compiler *c, Scope *s, int v, BiKindWalk *w) {
+  const NodeTable *nt = c->nt;
+  if (v < 0) return 0;
+  NodeKind k = nt_kind(nt, v);
+  if (k == NK_LocalVariableReadNode) return bi_local_no_integer(c, s, nt_str(nt, v, "name"), w);
+  if (k != NK_CallNode) return bi_kind_says_no_integer(infer_type(c, v));
+  const char *op = nt_str(nt, v, "name");
+  if (!op || !(is_add_sub_mul(op) || is_mul_or_pow(op) || sp_streq(op, "/") || sp_streq(op, "%")))
+    return bi_kind_says_no_integer(infer_type(c, v));
+  if (bi_value_no_integer(c, s, nt_ref(nt, v, "receiver"), w)) return 1;
+  int args = nt_ref(nt, v, "arguments"), an = 0;
+  const int *argv = args >= 0 ? nt_arr(nt, args, "arguments", &an) : NULL;
+  return an >= 1 && bi_value_no_integer(c, s, argv[0], w);
+}
+static int bi_local_no_integer(Compiler *c, Scope *s, const char *lname, BiKindWalk *w) {
+  const NodeTable *nt = c->nt;
+  if (!lname) return 0;
+  for (int i = 0; i < w->n; i++) if (sp_streq(w->seen[i], lname)) return 0;
+  if (w->n == BI_KIND_LOCALS) return 0;
+  w->seen[w->n++] = lname;
+  int si = (int)(s - c->scopes);
+  for (int r = lw_shared_first(c, lname, si); r >= 0; r = lw_shared_next(r)) {
+    int id = lw_shared_node(r);
+    if (comp_scope_of(c, id) != s || !sp_streq(nt_str(nt, id, "name"), lname)) continue;
+    /* a plain write by what it holds; any other reads the slot's prior type */
+    if (nt_kind(nt, id) == NK_LocalVariableWriteNode) {
+      int val = nt_ref(nt, id, "value");
+      if (nt_kind(nt, val) == NK_LocalVariableReadNode || nt_kind(nt, val) == NK_CallNode) {
+        if (bi_value_no_integer(c, s, val, w)) return 1;
+        continue;
+      }
+    }
+    if (bi_kind_says_no_integer(local_write_ty(c, id, 1))) return 1;
+  }
+  return 0;
+}
+
 static void bi_promote(Compiler *c, int write_id, const char *lname) {
   if (bi_memo.recording) {
     if (bi_memo.n == bi_memo.cap) {
@@ -20777,8 +20827,13 @@ static void bi_promote(Compiler *c, int write_id, const char *lname) {
      and Method#call, whose arguments arrive boxed and may be Floats: widened
      to Bignum here, the thunk refused the Float (#4695). A parameter
      bound int from a call site still widens; a body local derives its type
-     from the body the scan is reading and widens from unknown as before. */
+     from the body the scan is reading and widens from unknown, unless a write
+     says it is no Integer. */
   if (lv->is_param && lv->type == TY_UNKNOWN) return;
+  if (lv->type == TY_UNKNOWN) {
+    BiKindWalk walk; walk.n = 0;
+    if (bi_local_no_integer(c, s, lname, &walk)) return;
+  }
   if (lv->type == TY_UNKNOWN || lv->type == TY_INT) lv_set_type(lv, TY_BIGINT);
 }
 

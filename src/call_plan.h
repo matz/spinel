@@ -99,6 +99,10 @@ CallPlan cplan_method_call(Compiler *c, int id);
 CallPlan cplan_send_arm(Compiler *c, int id);
 CallPlan cplan_exception_render(Compiler *c, int id, int ci);
 const CallPlan *cplan_user(Compiler *c, int id);
+/* The program's def a builtin's wrapper, method mi, stands for in place of
+   the builtin where its Method is made (a reopen's def of the name), -1
+   where it stands for the builtin, -2 where the record cannot tell */
+int cplan_bam_reopen_target(Compiler *c, int mi);
 /* The method scope call `id` runs when it asks for `name`: on cls's
    instance side through its chain, CT_CMETHOD on its class side, CT_OWN
    in cls's own table only, CT_TOP among the top-level functions (cls not

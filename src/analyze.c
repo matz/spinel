@@ -10991,6 +10991,7 @@ static int desugar_builtin_method_obj(Compiler *c) {
     int num_only = 0;   /* a Numeric method Integer or Float inherits */
     int sym_arity = 0, have_arity = 0;   /* the builtin's Method#arity */
     const char *owner_name = NULL;   /* the builtin's class or module, its Method's #owner */
+    const char *bclasses = NULL;   /* the builtin classes the receiver may be of */
     /* an undefined name must reach codegen's immediate NameError, not become
        a wrapper whose body call aborts the build (#2752) */
     {
@@ -10999,6 +11000,7 @@ static int desugar_builtin_method_obj(Compiler *c) {
                        : ty_is_array(rt) ? "Array" : ty_is_hash(rt) ? "Hash"
                        : rt == TY_RANGE ? "Range" : rt == TY_TIME ? "Time"
                        : rt == TY_BOOL ? "Object" : NULL;
+      bclasses = rt == TY_BOOL ? "TrueClass FalseClass" : bcls;
       /* TrueClass/FalseClass define the logical operators (#2835) */
       int bool_op = rt == TY_BOOL &&
                     is_bit_op(sym);
@@ -11101,6 +11103,11 @@ static int desugar_builtin_method_obj(Compiler *c) {
     /* its #owner: the accessor's class, or the builtin's (bam_owner) */
     if (owner_ci >= 0) nt_node_set_int(nt, def, "bam_owner_ci", owner_ci + 1);
     else if (owner_name) nt_node_set_str(nt, def, "bam_owner", owner_name);
+    /* the receiver's builtin classes and the Method's maker, which a
+       reopen's def of the name answers for where it is live
+       (cplan_bam_reopen_target) */
+    if (bclasses) nt_node_set_str(nt, def, "bam_classes", bclasses);
+    nt_node_set_int(nt, def, "bam_site", id + 1);
     /* its Method#arity is Comparable's, which a boxed self reads off the
        Method at run time (method_scope_arity) */
     if (cmp_only) nt_node_set_int(nt, def, "bam_cmp", 1);

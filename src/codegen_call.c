@@ -2433,6 +2433,7 @@ const char *const comparable_names[] = {
     "<", ">", "<=", ">=", "==", "between?", "clamp", NULL };
 
 #define BAK(...)
+#define BAP(...)
 /* Method#arity reads the introspection column of the shared facts. */
 #define BAI(c,m,a,...) {c,m,a},
 #define BAM(c,m,a) {c,m,a},
@@ -2505,6 +2506,10 @@ int method_scope_arity(Compiler *c, int target, int *out) {
      the Kernel table (String 1, Integer -2, puts -1, ...) instead (#4395). */
   if (c->scopes[target].name && strncmp(c->scopes[target].name, "__bam_", 6) == 0 &&
       c->scopes[target].body >= 0) {
+    /* one that reaches the program's def of the name instead (a reopen's)
+       has that def's arity */
+    int rd = cplan_bam_reopen_target(c, target);
+    if (rd >= 0) return method_scope_arity(c, rd, out);
     int bn = 0;
     const int *bb = nt_arr(nt, c->scopes[target].body, "body", &bn);
     if (bn >= 1 && bb && nt_kind(nt, bb[0]) == NK_CallNode &&
@@ -20241,6 +20246,7 @@ static const struct { const char *cls; const char *m; } sp_builtin_kwpos_tbl[] =
 #undef BAS
 #undef BAC
 #undef BAK
+#undef BAP
 static int kwh_counts(const char *cls, const char *name) {
   int fa, fixed = 0;
   if (builtin_method_arity(cls, name, &fa)) { if (fa >= 0) return 1; }
@@ -20252,6 +20258,32 @@ static int kwh_counts(const char *cls, const char *name) {
   for (int i = 0; sp_builtin_kwpos_tbl[i].cls; i++)
     if (sp_streq(sp_builtin_kwpos_tbl[i].cls, cls) && sp_streq(sp_builtin_kwpos_tbl[i].m, name)) return 1;
   return 0;
+}
+/* Method#parameters of the builtins, by the class or module that defines
+   each (BAP: CRuby's instance_method(m).parameters) */
+#define BAI(...)
+#define BAM(...)
+#define BAS(...)
+#define BAC(...)
+#define BAK(...)
+#define BAP(c,m,p,cside) {c,m,p},
+static const struct { const char *owner, *m, *params; } sp_builtin_params_tbl[] = {
+#include "builtin_arity.inc"
+  {NULL, NULL, NULL}
+};
+#undef BAI
+#undef BAM
+#undef BAS
+#undef BAC
+#undef BAK
+#undef BAP
+/* The parameters CRuby lists for owner's instance method m, as
+   sp_BoundMethod.params carries them ("kind[:name]" entries separated by
+   spaces); NULL where the facts have none */
+const char *builtin_method_params(const char *owner, const char *m) {
+  for (int i = 0; owner && m && sp_builtin_params_tbl[i].owner; i++)
+    if (sp_streq(sp_builtin_params_tbl[i].owner, owner) && sp_streq(sp_builtin_params_tbl[i].m, m)) return sp_builtin_params_tbl[i].params;
+  return NULL;
 }
 /* Does any builtin class or module have a class method `m` (Integer.sqrt)? */
 int builtin_cmethod_name_known(const char *m) {

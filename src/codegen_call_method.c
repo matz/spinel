@@ -70,10 +70,10 @@ static void method_param_add(Compiler *c, MethodParam **v, int *n, int *cap, con
 }
 
 /* The #parameters entries of the parameters node pn4 (-1: none), in CRuby's
-   order: req, opt, rest, post-req, key(req), keyrest, block, each by the
-   name the program wrote (method_param_add); a destructuring group has
-   none, and neither has a C extension's method. Returns the count; *out is
-   malloc'd. */
+   order: req, opt, rest, post-req, keyreq, key, keyrest (nokey for
+   `**nil`), block, each by the name the program wrote (method_param_add);
+   a destructuring group has none, and neither has a C extension's method.
+   Returns the count; *out is malloc'd. */
 static int method_params_of(Compiler *c, int pn4, MethodParam **out) {
   const NodeTable *nt = c->nt;
   MethodParam *v = NULL;
@@ -87,10 +87,12 @@ static int method_params_of(Compiler *c, int pn4, MethodParam **out) {
     *out = v;
     return n;
   }
-  static const struct { const char *arr; const char *kind; const char *optkind; } PKINDS[] = {
-    { "requireds", "req", NULL }, { "optionals", "opt", NULL },
-    { "rest", NULL, NULL },   /* placeholder: rest emitted in this slot */
-    { "posts", "req", NULL }, { "keywords", "keyreq", "key" },
+  /* (the keywords twice: the required ones first, as CRuby lists them) */
+  static const struct { const char *arr; const char *kind; NodeKind only; } PKINDS[] = {
+    { "requireds", "req", NK_NONE }, { "optionals", "opt", NK_NONE },
+    { "rest", NULL, NK_NONE },   /* placeholder: rest emitted in this slot */
+    { "posts", "req", NK_NONE }, { "keywords", "keyreq", NK_RequiredKeywordParameterNode },
+    { "keywords", "key", NK_OptionalKeywordParameterNode },
   };
   for (size_t pk = 0; pk < sizeof PKINDS / sizeof PKINDS[0]; pk++) {
     if (!PKINDS[pk].kind) {   /* the rest param, in CRuby's slot */
@@ -103,13 +105,13 @@ static int method_params_of(Compiler *c, int pn4, MethodParam **out) {
       const char *pnm4 = nt_str(nt, av4[e4], "name");
       /* a destructuring group (`def d((x, y), z)`) has no name of its own */
       if (!pnm4 && nt_kind(nt, av4[e4]) != NK_MultiTargetNode) continue;
-      const char *kind4 = PKINDS[pk].kind;
-      if (PKINDS[pk].optkind && nt_kind(nt, av4[e4]) == NK_OptionalKeywordParameterNode) kind4 = PKINDS[pk].optkind;
-      method_param_add(c, &v, &n, &cap, kind4, av4[e4]);
+      if (PKINDS[pk].only != NK_NONE && nt_kind(nt, av4[e4]) != PKINDS[pk].only) continue;
+      method_param_add(c, &v, &n, &cap, PKINDS[pk].kind, av4[e4]);
     }
   }
   int kwr4 = nt_ref(nt, pn4, "keyword_rest");
-  if (kwr4 >= 0 && nt_str(nt, kwr4, "name")) method_param_add(c, &v, &n, &cap, "keyrest", kwr4);
+  if (kwr4 >= 0 && nt_kind(nt, kwr4) == NK_NoKeywordsParameterNode) method_param_add_n(&v, &n, &cap, "nokey", NULL, 0);
+  else if (kwr4 >= 0 && nt_str(nt, kwr4, "name")) method_param_add(c, &v, &n, &cap, "keyrest", kwr4);
   int blk4 = nt_ref(nt, pn4, "block");
   if (blk4 >= 0 && nt_str(nt, blk4, "name")) method_param_add(c, &v, &n, &cap, "block", blk4);
   *out = v;
@@ -126,14 +128,47 @@ static int scope_params_node(Compiler *c, int mi) {
   return pn >= 0 && nt_kind(nt, pn) == NK_BlockParametersNode ? nt_ref(nt, pn, "parameters") : pn;
 }
 
+/* The entries of a list as sp_BoundMethod.params carries it, "kind[:name]"
+   separated by spaces (builtin_method_params), onto v */
+static void method_params_parse(const char *p, MethodParam **v, int *n, int *cap) {
+  static const char *const KINDS[] = { "req", "opt", "rest", "keyreq", "key", "keyrest", "nokey", "block", NULL };
+  while (*p) {
+    size_t len = strcspn(p, " "), kl = strcspn(p, ": ");
+    for (int k = 0; KINDS[k]; k++)
+      if (strlen(KINDS[k]) == kl && strncmp(KINDS[k], p, kl) == 0)
+        method_param_add_n(v, n, cap, KINDS[k], kl < len ? p + kl + 1 : NULL, kl < len ? len - kl - 1 : 0);
+    p += len + (p[len] == ' ');
+  }
+}
+
 /* The #parameters entries of method mi. A method made of an accessor
-   (Scope.attr_version) answers CRuby's accessor list, not its synthesized
-   def's: a writer's one parameter has no name ([[:req]]), a reader has
-   none ([]). */
+   (Scope.attr_version), or an accessor's wrapper (bam_accessor), answers
+   CRuby's accessor list, not its synthesized def's: a writer's one
+   parameter has no name ([[:req]]; a Struct member's is `_`,
+   bam_struct_member), a reader has none ([]). A builtin's wrapper answers
+   the list of the program's def it reaches instead of the builtin (a
+   reopen's, cplan_bam_reopen_target), else CRuby's list for the method it
+   stands for (builtin_method_params, by its owner), where the facts have
+   one. Where the record cannot tell which of the two the Method stands for
+   (a conditional reopen, a maker run before and after the def), it keeps
+   the wrapper's own list, until a run-time version of the method tells. */
 static int scope_method_params(Compiler *c, int mi, MethodParam **out) {
+  MethodParam *v = NULL;
+  int n = 0, cap = 0, dn = mi >= 0 ? c->scopes[mi].def_node : -1, rd = cplan_bam_reopen_target(c, mi);
+  const char *sym = mi >= 0 ? bam_builtin_sym(c, mi, NULL) : NULL, *own = NULL, *bp = NULL;
+  if (rd >= 0) return scope_method_params(c, rd, out);
+  if (rd == -2) return method_params_of(c, scope_params_node(c, mi), out);
+  if (sym && nt_int(c->nt, dn, "bam_accessor", 0)) {
+    if (name_is_plain_setter(sym)) method_param_add_n(&v, &n, &cap, "req", bam_struct_member(c, mi) ? "_" : NULL, 1);
+    *out = v;
+    return n;
+  }
+  if (sym && (bam_owner(c, mi, &own), bp = builtin_method_params(own, sym))) {
+    method_params_parse(bp, &v, &n, &cap);
+    *out = v;
+    return n;
+  }
   if (mi >= 0 && c->scopes[mi].attr_version) {
-    MethodParam *v = NULL;
-    int n = 0, cap = 0;
     for (int i = 0; i < c->scopes[mi].nparams; i++) method_param_add_n(&v, &n, &cap, "req", NULL, 0);
     *out = v;
     return n;
@@ -904,6 +939,10 @@ int emit_op_method_arity(Compiler *c, const BopCtx *x, Buf *b) {
      name from the wrapper body's tail call. */
   int is_bam = target >= 0 && c->scopes[target].name &&
                strncmp(c->scopes[target].name, "__bam_", 6) == 0;
+  /* ...unless it reaches the program's def of the name instead (a reopen's,
+     cplan_bam_reopen_target), whose arity it has */
+  int rd = is_bam ? cplan_bam_reopen_target(c, target) : -1;
+  if (rd >= 0) { target = rd; is_bam = 0; }
   /* a boxed receiver's wrapper: the Method carries the arity its receiver's
      run-time class gave it */
   if (is_bam && c->scopes[target].def_node >= 0 &&

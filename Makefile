@@ -6082,8 +6082,22 @@ CONST_COLLISIONS_LIMIT ?= 2.2
 # or the copies per copy or per call reads as N^2. The pair reads 2.28x at
 # N=100 and N=200 before copies are mapped (the rest of the compiler grows
 # faster than linearly in the classes, as COND_DEFS_CPU_LIMIT says); the
-# limit sits about 5% above.
+# limit sits about 5% above. The same pair with each class reading both
+# names before its own defs (`read`) keeps each extend's copy behind the own
+# def, and the record asks every call of the name whether it meets the
+# module's version (elab_version_met): it reads 2.29x to 2.33x, against
+# 2.26x before those questions, so it takes the same limit.
 MODULE_FUNCTIONS_LIMIT ?= 2.4
+# N classes that each extend one module, read its method in the body and
+# then define it on their own singleton (test/scale/shadowed_extends.sh), at
+# N=400 and N=800: the work of that program less the work of the same
+# classes extending nothing and reading no method (`plain`), which is what
+# the extends, their copies and the shadowing questions cost. A question
+# that read every call of the name (elab_version_met before its readers
+# were filed by the classes their self may be, lr_readers) read 2.52x at 2x
+# the classes; filed, 2.21x, as the copies alone read without the
+# questions. The limit sits between them.
+SHADOWED_EXTENDS_LIMIT ?= 2.35
 # A chain of forty bangs over a String a method answers, compiled to C with
 # --share-strings under a CPU-time limit, as the hash-literal fan-out is:
 # strbuf_bang_self_local asked each link once per path that reaches it,
@@ -6186,6 +6200,17 @@ scale-test: $(SPINEL_WORK)
 	jib=$$(sw -c -o "$$tmp/jf2.c" "$$tmp/jf2.rb") || { rm -rf "$$tmp"; exit 1; }; \
 	jga=$$(sw --load-model=graph -c -o "$$tmp/jf1.c" "$$tmp/jf1.rb") || { rm -rf "$$tmp"; exit 1; }; \
 	jgb=$$(sw --load-model=graph -c -o "$$tmp/jf2.c" "$$tmp/jf2.rb") || { rm -rf "$$tmp"; exit 1; }; \
+	gen shadowed_extends 400 se4.rb; gen shadowed_extends 800 se8.rb; \
+	gen shadowed_extends "400 plain" sp4.rb; gen shadowed_extends "800 plain" sp8.rb; \
+	sea=$$(sw -c -o "$$tmp/se4.c" "$$tmp/se4.rb") || { rm -rf "$$tmp"; exit 1; }; \
+	seb=$$(sw -c -o "$$tmp/se8.c" "$$tmp/se8.rb") || { rm -rf "$$tmp"; exit 1; }; \
+	spa=$$(sw -c -o "$$tmp/sp4.c" "$$tmp/sp4.rb") || { rm -rf "$$tmp"; exit 1; }; \
+	spb=$$(sw -c -o "$$tmp/sp8.c" "$$tmp/sp8.rb") || { rm -rf "$$tmp"; exit 1; }; \
+	gen module_functions "100 read" jr1.rb; gen module_functions "200 read" jr2.rb; \
+	jra=$$(sw -c -o "$$tmp/jr1.c" "$$tmp/jr1.rb") || { rm -rf "$$tmp"; exit 1; }; \
+	jrb=$$(sw -c -o "$$tmp/jr2.c" "$$tmp/jr2.rb") || { rm -rf "$$tmp"; exit 1; }; \
+	jha=$$(sw --load-model=graph -c -o "$$tmp/jr1.c" "$$tmp/jr1.rb") || { rm -rf "$$tmp"; exit 1; }; \
+	jhb=$$(sw --load-model=graph -c -o "$$tmp/jr2.c" "$$tmp/jr2.rb") || { rm -rf "$$tmp"; exit 1; }; \
 	cpu () { b=; for i in 1 2 3; do \
 	  o=$$( ( $(SPINEL_WORK) -c -o "$$tmp/qt.c" "$$tmp/$$1" >/dev/null 2>&1 || exit 1; times ) ) || \
 	    { echo "scale-test: FAIL (spinel-work failed on $$1)" >&2; return 1; }; \
@@ -6201,7 +6226,9 @@ scale-test: $(SPINEL_WORK)
 	   [ -z "$$xa" ] || [ -z "$$xb" ] || [ -z "$$ma" ] || [ -z "$$mb" ] || [ -z "$$oa" ] || [ -z "$$ob" ] || [ -z "$$qa" ] || [ -z "$$qb" ] || \
 	   [ -z "$$yna" ] || [ -z "$$ynb" ] || [ -z "$$yta" ] || [ -z "$$ytb" ] || \
 	   [ -z "$$uda" ] || [ -z "$$udb" ] || [ -z "$$sba" ] || [ -z "$$sbb" ] || \
-	   [ -z "$$jia" ] || [ -z "$$jib" ] || [ -z "$$jga" ] || [ -z "$$jgb" ]; then \
+	   [ -z "$$jia" ] || [ -z "$$jib" ] || [ -z "$$jga" ] || [ -z "$$jgb" ] || \
+	   [ -z "$$jra" ] || [ -z "$$jrb" ] || [ -z "$$jha" ] || [ -z "$$jhb" ] || \
+	   [ -z "$$sea" ] || [ -z "$$seb" ] || [ -z "$$spa" ] || [ -z "$$spb" ]; then \
 	  echo "scale-test: FAIL (the counting compiler reported no work count)"; exit 1; fi; \
 	awk -v a="$$ha" -v b="$$hb" 'BEGIN { r = b / a; \
 	  printf "scale-test: boxed Hash store work at 2x the methods is %.2fx (limit 2.20)\n", r; exit (r > 2.20) }' || \
@@ -6268,6 +6295,17 @@ scale-test: $(SPINEL_WORK)
 	awk -v a="$$jga" -v b="$$jgb" -v lim="$(MODULE_FUNCTIONS_LIMIT)" 'BEGIN { r = b / a; \
 	  printf "scale-test: module function work at 2x the modules, under graph, is %.2fx (limit %.2f)\n", r, lim; exit (r > lim) }' || \
 	  { echo "scale-test: FAIL (a module function's copy or its mapping to the def grew superlinearly under graph: see ct_def_version and mf_copy_entries)"; exit 1; }; \
+	awk -v a="$$jra" -v b="$$jrb" -v lim="$(MODULE_FUNCTIONS_LIMIT)" 'BEGIN { r = b / a; \
+	  printf "scale-test: kept extend copy work at 2x the modules is %.2fx (limit %.2f)\n", r, lim; exit (r > lim) }' || \
+	  { echo "scale-test: FAIL (the calls that meet an extend's version were asked superlinearly: see elab_version_met)"; exit 1; }; \
+	awk -v a="$$jha" -v b="$$jhb" -v lim="$(MODULE_FUNCTIONS_LIMIT)" 'BEGIN { r = b / a; \
+	  printf "scale-test: kept extend copy work at 2x the modules, under graph, is %.2fx (limit %.2f)\n", r, lim; exit (r > lim) }' || \
+	  { echo "scale-test: FAIL (the calls that meet an extend's version were asked superlinearly under graph: see elab_version_met)"; exit 1; }; \
+	awk -v na="$$sea" -v nb="$$seb" -v ta="$$spa" -v tb="$$spb" -v lim="$(SHADOWED_EXTENDS_LIMIT)" 'BEGIN { a = na - ta; b = nb - tb; \
+	  if (a <= 0 || b <= 0) { printf "scale-test: FAIL (the shadowing classes cost no more than the plain ones, %d - %d and %d - %d: the difference measures nothing; see test/scale/shadowed_extends.sh)\n", na, ta, nb, tb; exit 2 } \
+	  r = b / a; \
+	  printf "scale-test: shadowed extend work at 2x the classes is %.2fx (limit %.2f)\n", r, lim; exit (r > lim) }' || \
+	  { [ $$? -eq 2 ] || echo "scale-test: FAIL (each shadowing question read every call of the name: see lr_readers)"; exit 1; }; \
 	awk -v a="$$qta" -v b="$$qtb" -v lim="$(COND_DEFS_CPU_LIMIT)" 'BEGIN { if (a <= 0) a = 0.01; r = b / a; \
 	  printf "scale-test: open method history CPU time at 4x the histories is %.2fx (limit %.2f)\n", r, lim; exit (r > lim) }' || \
 	  { echo "scale-test: FAIL (the open histories' asks or makes did work the count does not see once per history, such as a whole-program map: see ver_entries_build)"; exit 1; }

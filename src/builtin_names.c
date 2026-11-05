@@ -755,6 +755,8 @@ int is_method_owner_query(const char *n) {
 int is_instance_method_name(const char *n) { return n && (sp_streq(n, "instance_method") || sp_streq(n, "public_instance_method")); }
 /* method, public_method: a Method of the receiver's own method by name */
 int is_bound_method_maker(const char *n) { return n && (sp_streq(n, "method") || sp_streq(n, "public_method")); }
+/* super_method: the Method of the same method one step up its owner's chain */
+int is_super_method_name(const char *n) { return n && sp_streq(n, "super_method"); }
 int is_method_object_maker(const char *n) {
   return n && (sp_streq(n, "method") || sp_streq(n, "public_method") || sp_streq(n, "singleton_method") ||
                sp_streq(n, "instance_method") || sp_streq(n, "public_instance_method"));

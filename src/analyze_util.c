@@ -4426,22 +4426,33 @@ int is_method_obj_call(Compiler *c, int node) {
   return 1;
 }
 
+/* The method scope <m>.super_method answers for m's scope mi: the method of
+   mi's def's name (comp_scope_def_name, the name its super asks for) one step
+   up mi's class's chain, or -1 (nil). A copy's own name is internal: an alias
+   made before a prepend captures the class's body as `__prep <n> m`. */
+int method_super_target(Compiler *c, int mi) {
+  if (mi < 0 || c->scopes[mi].class_id < 0) return -1;
+  int par = c->classes[c->scopes[mi].class_id].parent;
+  if (par < 0) return -1;
+  const char *nm = comp_scope_def_name(c, &c->scopes[mi]);
+  return c->scopes[mi].is_cmethod ? comp_cmethod_in_chain(c, par, nm, NULL) : comp_method_in_chain(c, par, nm, NULL);
+}
+
 /* The target method scope index bound by a `method(:sym)` node, or -1
-   (e.g. a top-level Kernel method like `puts`, or a builtin-array receiver). */
-static int method_obj_target_mi_raw(Compiler *c, int node) {
+   (e.g. a top-level Kernel method like `puts`, or a builtin-array receiver).
+   *cls and *sg (when given) are where the lookup searched: the class whose
+   chain it took (-1 for main's or none) and its side (1: the class
+   methods), as an alias's owner is asked (method_obj_alias_owner). */
+static int method_obj_lookup(Compiler *c, int node, int *cls, int *sg) {
   const NodeTable *nt = c->nt;
+  int k = -1, side = 0;
+  if (cls) *cls = -1;
+  if (sg) *sg = 0;
   /* <method>.super_method: the same-named method one step up the defining
      class's ancestor chain, or -1 (nil) when there is none (#3247). */
-  if (node >= 0 && nt_kind(nt, node) == NK_CallNode && nt_str(nt, node, "name") &&
-      sp_streq(nt_str(nt, node, "name"), "super_method")) {
+  if (node >= 0 && nt_kind(nt, node) == NK_CallNode && is_super_method_name(nt_str(nt, node, "name"))) {
     int imn = method_recv_node(c, nt_ref(nt, node, "receiver"));
-    int imi = imn >= 0 ? method_obj_target_mi_raw(c, imn) : -1;
-    if (imi < 0 || c->scopes[imi].class_id < 0) return -1;
-    int par = c->classes[c->scopes[imi].class_id].parent;
-    if (par < 0) return -1;
-    return c->scopes[imi].is_cmethod
-             ? comp_cmethod_in_chain(c, par, c->scopes[imi].name, NULL)
-             : comp_method_in_chain(c, par, c->scopes[imi].name, NULL);
+    return method_super_target(c, imn >= 0 ? method_obj_lookup(c, imn, NULL, NULL) : -1);
   }
   const char *sym = method_sym_arg(c, node);
   if (!sym) return -1;
@@ -4454,8 +4465,8 @@ static int method_obj_target_mi_raw(Compiler *c, int node) {
       const char *rn = (recv >= 0 && (nt_kind(nt, recv) == NK_ConstantReadNode ||
                                       nt_kind(nt, recv) == NK_ConstantPathNode))
                        ? nt_str(nt, recv, "name") : NULL;
-      int ci = rn ? comp_class_index(c, rn) : -1;
-      return ci >= 0 ? call_target(c, node, ci, sym, CT_CAPTURE, NULL) : -1;
+      k = rn ? comp_class_index(c, rn) : -1;
+      goto found;
     }
   }
   /* a bare `method(:m)` names what a bare `m` would call: inside a class
@@ -4464,14 +4475,14 @@ static int method_obj_target_mi_raw(Compiler *c, int node) {
   if (recv < 0) {
     int mi = comp_self_call_mi(c, node, sym);
     if (mi < 0) return mi;
-    Scope *s = &c->scopes[mi];
-    return call_target(c, node, s->class_id, sym, CT_CAPTURE | (s->class_id < 0 ? CT_TOP : s->is_cmethod ? CT_CMETHOD : 0), NULL);
+    k = c->scopes[mi].class_id, side = k >= 0 && c->scopes[mi].is_cmethod;
+    if (k < 0) return call_target(c, node, k, sym, CT_CAPTURE | CT_TOP, NULL);
+    goto found;
   }
   /* `self.method(:m)` in a class method: self is the class */
   if (nt_kind(nt, recv) == NK_SelfNode) {
     Scope *ss = comp_scope_of(c, node);
-    if (ss && ss->is_cmethod && ss->class_id >= 0)
-      return call_target(c, node, ss->class_id, sym, CT_CAPTURE | CT_CMETHOD, NULL);
+    if (ss && ss->is_cmethod && ss->class_id >= 0) { k = ss->class_id, side = 1; goto found; }
   }
   TyKind rt = infer_type(c, recv);
   /* a receiver whose method() was retargeted at a synthesized __bam_* wrapper
@@ -4479,23 +4490,37 @@ static int method_obj_target_mi_raw(Compiler *c, int node) {
      TOP-LEVEL def, not in the object's own class chain, so resolve it there. */
   if (sym[0] == '_' && sym[1] == '_' && sym[2] == 'b' && sym[3] == 'a' && sym[4] == 'm')
     return comp_method_index(c, sym);
-  if (ty_is_object(rt)) return call_target(c, node, ty_object_class(rt), sym, CT_CAPTURE, NULL);
+  if (ty_is_object(rt)) { k = ty_object_class(rt); goto found; }
   /* Klass.method(:cmeth) / Module.method(:mf): the class-side method */
   if (rt == TY_CLASS && (nt_kind(nt, recv) == NK_ConstantReadNode ||
                          nt_kind(nt, recv) == NK_ConstantPathNode)) {
     /* `Outer::Mod.method(:m)` names the class by its last segment, as every
        other constant receiver resolves */
     const char *rn2 = nt_str(nt, recv, "name");
-    int ci2 = rn2 ? comp_class_index(c, rn2) : -1;
-    if (ci2 >= 0) return call_target(c, node, ci2, sym, CT_CAPTURE | CT_CMETHOD, NULL);
+    k = rn2 ? comp_class_index(c, rn2) : -1, side = 1;
+    if (k >= 0) goto found;
   }
   /* `self.class.method(:cmeth)` in an instance method of a class nothing
      inherits from: that class's class-side method */
   if (rt == TY_CLASS) {
-    int ci3 = self_class_static_ci(c, recv);
-    if (ci3 >= 0) return call_target(c, node, ci3, sym, CT_CAPTURE | CT_CMETHOD, NULL);
+    k = self_class_static_ci(c, recv), side = 1;
+    if (k >= 0) goto found;
   }
   return -1;
+found:
+  if (k < 0) return -1;
+  if (cls) *cls = k;
+  if (sg) *sg = side;
+  return call_target(c, node, k, sym, CT_CAPTURE | (side ? CT_CMETHOD : 0), NULL);
+}
+
+/* The class or module the alias a `method(:sym)` node names was made in, as
+   the Method's #owner answers (cplan_alias_holder), *sg 1 for its singleton
+   (an alias in a `class << self`); -1 where the name is no alias's there */
+int method_obj_alias_owner(Compiler *c, int node, int *sg) {
+  int k, side, mi = method_obj_lookup(c, node, &k, &side);
+  *sg = 0;
+  return mi >= 0 ? cplan_alias_holder(c, node, k, method_sym_arg(c, node), side, sg) : -1;
 }
 
 /* A yielding method is spliced into each call site and has no function of
@@ -4503,7 +4528,7 @@ static int method_obj_target_mi_raw(Compiler *c, int node) {
    `yield` is a call on the block the Method passes (make_yield_proc_forms
    makes one for every method a `method(:name)` names). */
 int method_obj_target_mi(Compiler *c, int node) {
-  int mi = method_obj_target_mi_raw(c, node);
+  int mi = method_obj_lookup(c, node, NULL, NULL);
   /* a lowering's own helper is no method a Method can name */
   if (comp_scope_is_private_helper(c, mi)) return -1;
   int pf = scope_proc_form_of(c, mi);

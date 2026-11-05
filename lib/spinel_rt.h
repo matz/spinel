@@ -16432,7 +16432,7 @@ static sp_RbVal sp_json_symbolize(sp_RbVal v) {
   return v;
 }
 extern sp_RbVal sp_json_parse_limit(const char *s, sp_int max_nesting);
-static sp_RbVal sp_json_parse_options(const char *s, sp_RbVal options) {
+static inline sp_RbVal sp_json_parse_options(const char *s, sp_RbVal options) {
   SP_GC_ROOT_STR(s); SP_GC_ROOT_RBVAL(options);
   sp_int limit = 100;
   sp_bool symbolize = FALSE;

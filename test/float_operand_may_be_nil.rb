@@ -61,3 +61,39 @@ try { box.bignum_pow }
 try { box.bignum_mod }
 try { box.float_divmod }
 try { box.float_coerce }
+
+# The receiver comes first: it runs, and its own nil is what raises.
+def both(a, z)
+  $a = a
+  $z = z
+end
+
+def recv
+  puts "recv"
+  $a
+end
+
+def int_recv
+  puts "int_recv"
+  7
+end
+
+def try_class
+  p yield
+rescue TypeError, NoMethodError => e
+  puts e.class
+end
+
+both(2.0, nil)
+try_class { recv ** $z }
+try_class { recv % $z }
+try_class { recv.divmod($z) }
+try_class { recv.coerce($z) }
+try_class { int_recv ** $z }
+try_class { int_recv % $z }
+
+both(nil, nil)
+try_class { recv ** $z }
+try_class { recv % $z }
+try_class { recv.divmod($z) }
+try_class { recv.coerce($z) }

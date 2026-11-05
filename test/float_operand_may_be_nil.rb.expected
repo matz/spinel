@@ -21,3 +21,23 @@ TypeError: nil can't be coerced into Integer
 TypeError: nil can't be coerced into Integer
 TypeError: nil can't be coerced into Float
 TypeError: can't convert nil into Float
+recv
+TypeError
+recv
+TypeError
+recv
+TypeError
+recv
+TypeError
+int_recv
+TypeError
+int_recv
+TypeError
+recv
+NoMethodError
+recv
+NoMethodError
+recv
+NoMethodError
+recv
+NoMethodError

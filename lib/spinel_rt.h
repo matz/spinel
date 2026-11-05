@@ -4376,6 +4376,8 @@ static SP_NOINLINE SP_COLD SP_UNUSED void sp_frange_iter_raise(sp_FloatRange r, 
 /* Range#first(n) and Enumerable#take(n) convert and check the count before
    they iterate, so a bad count is the error a Float Range raises */
 static SP_NOINLINE SP_COLD SP_UNUSED void sp_frange_count_raise(sp_FloatRange r, sp_RbVal n, int take) {
+  /* range_first refuses a beginless Range before it reads the count */
+  if (!take && (r.omitted & SP_FRANGE_NO_BEGIN)) sp_raise_cls("RangeError", "cannot get the first element of beginless range");
   if (sp_poly_arg_int_chk(n) < 0)
     sp_raise_cls("ArgumentError", take ? "attempt to take negative size" : "negative array size (or size too big)");
   sp_frange_iter_raise(r, 0);
@@ -15530,12 +15532,16 @@ static sp_RbVal sp_poly_arr_take(sp_RbVal v, sp_int n) {
   if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_OBJ_RANGE && v.v.p) return sp_box_poly_array(sp_orange_first_n((sp_ObjRange *)v.v.p, n));
   if (n < 0) {
     int range = v.tag == SP_TAG_OBJ && (v.cls_id == SP_BUILTIN_RANGE || v.cls_id == SP_BUILTIN_STR_RANGE ||
-                                        v.cls_id == SP_BUILTIN_FLOAT_RANGE);
-    int en = v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_ENUMERATOR;
+                                        v.cls_id == SP_BUILTIN_FLOAT_RANGE || v.cls_id == SP_BUILTIN_TIME_RANGE);
+    int en = v.tag == SP_TAG_OBJ && (v.cls_id == SP_BUILTIN_ENUMERATOR || sp_poly_is_hash_kind(v.cls_id));
     sp_raise_cls("ArgumentError", range ? "negative array size (or size too big)" :
                                   en ? "attempt to take negative size" : "negative array size");
   }
   if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_FLOAT_RANGE && v.v.p) sp_frange_iter_raise(*(sp_FloatRange *)v.v.p, 0);
+  if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_TIME_RANGE && v.v.p)
+    sp_raise_cls("TypeError", ((sp_TimeRange *)v.v.p)->first ? "can't iterate from Time" : "can't iterate from NilClass");
+  if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_RANGE && v.v.p && ((sp_Range *)v.v.p)->nobeg)
+    sp_raise_cls("TypeError", "can't iterate from NilClass");
   /* Range#first(n) on a boxed Integer Range: the leading members, built
      directly so an endless range is fine. sp_poly_length has no Range arm
      (a Range has no #length), and the call answered [] (#4837). */
@@ -18529,9 +18535,19 @@ static sp_PolyArray *sp_poly_to_a_arr_as(sp_RbVal v, const char *m, int nil_ok) 
    NoMethodError when the call is made, where the Enumerator walked it as
    empty (nil, a user object with no #each) */
 static sp_RbVal sp_poly_enum_chk(sp_RbVal v, const char *m) {
-  /* a Float Range's first(n) / take(n) check the count before they iterate
+  int ft = !strcmp(m, "first") || !strcmp(m, "take");
+  /* range_first refuses a beginless Range before it reads the count */
+  if (!strcmp(m, "first") && v.tag == SP_TAG_OBJ && v.v.p &&
+      ((v.cls_id == SP_BUILTIN_RANGE && ((sp_Range *)v.v.p)->nobeg) ||
+       (v.cls_id == SP_BUILTIN_FLOAT_RANGE && (((sp_FloatRange *)v.v.p)->omitted & SP_FRANGE_NO_BEGIN)) ||
+       (v.cls_id == SP_BUILTIN_TIME_RANGE && !((sp_TimeRange *)v.v.p)->first) ||
+       (v.cls_id == SP_BUILTIN_OBJ_RANGE && ((sp_ObjRange *)v.v.p)->first.tag == SP_TAG_NIL)))
+    sp_raise_cls("RangeError", "cannot get the first element of beginless range");
+  /* a Range's first(n) / take(n) check the count before they iterate
      (sp_poly_arr_take raises can't iterate after it) */
-  if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_FLOAT_RANGE && v.v.p && (!strcmp(m, "first") || !strcmp(m, "take"))) return v;
+  if (ft && v.tag == SP_TAG_OBJ && v.v.p &&
+      (v.cls_id == SP_BUILTIN_FLOAT_RANGE || v.cls_id == SP_BUILTIN_TIME_RANGE ||
+       (v.cls_id == SP_BUILTIN_RANGE && ((sp_Range *)v.v.p)->nobeg))) return v;
   sp_poly_iter_check(v, m);
   /* a user object's elements are read once, by walking its #each, and handed
      on as the Array they are, so that walk is not run again by the caller */

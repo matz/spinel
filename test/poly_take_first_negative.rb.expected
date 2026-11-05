@@ -33,3 +33,37 @@
 [ArgumentError, "attempt to take negative size"]
 [ArgumentError, "attempt to take negative size"]
 [V1, V2]
+hash first(-1): ArgumentError attempt to take negative size
+hash take(-1): ArgumentError attempt to take negative size
+hash first(nil): TypeError no implicit conversion from nil to integer
+hash take(nil): TypeError no implicit conversion from nil to integer
+hash first(1): [[:a, 1]]
+trange first(-1): ArgumentError negative array size (or size too big)
+trange take(-1): ArgumentError attempt to take negative size
+trange first(nil): TypeError no implicit conversion from nil to integer
+trange take(nil): TypeError no implicit conversion from nil to integer
+trange first(1): TypeError can't iterate from Time
+bl_flt first(-1): RangeError cannot get the first element of beginless range
+bl_flt take(-1): ArgumentError attempt to take negative size
+bl_flt first(nil): RangeError cannot get the first element of beginless range
+bl_flt take(nil): TypeError no implicit conversion from nil to integer
+bl_flt first(1): RangeError cannot get the first element of beginless range
+bl_int first(-1): RangeError cannot get the first element of beginless range
+bl_int take(-1): ArgumentError attempt to take negative size
+bl_int first(nil): RangeError cannot get the first element of beginless range
+bl_int take(nil): TypeError no implicit conversion from nil to integer
+bl_int first(1): RangeError cannot get the first element of beginless range
+el_flt first(-1): ArgumentError negative array size (or size too big)
+el_flt take(-1): ArgumentError attempt to take negative size
+el_flt first(nil): TypeError no implicit conversion from nil to integer
+el_flt take(nil): TypeError no implicit conversion from nil to integer
+el_flt first(1): TypeError can't iterate from Float
+typed bl_flt first(-1): RangeError cannot get the first element of beginless range
+typed bl_flt take(-1): ArgumentError attempt to take negative size
+typed bl_flt first(nil): RangeError cannot get the first element of beginless range
+typed el_flt first(-1): ArgumentError negative array size (or size too big)
+typed el_flt take(-1): ArgumentError attempt to take negative size
+typed bl_int first(-1): RangeError cannot get the first element of beginless range
+typed bl_int first(1): RangeError cannot get the first element of beginless range
+typed int first(-1): ArgumentError negative array size (or size too big)
+typed hash first(-1): ArgumentError attempt to take negative size

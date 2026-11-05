@@ -15127,9 +15127,11 @@ int emit_range_call(Compiler *c, int id, Buf *b) {
         else if (argc == 1) {
           /* first(n): the first n elements from `first`, walking by step. */
           int tf = ++g_tmp, tn = ++g_tmp, ti = ++g_tmp, tc = ++g_tmp;
-          buf_printf(b, "({ sp_IntArray *_t%d = sp_IntArray_new(); sp_int _t%d = ", tf, tn);
+          /* range_first refuses a beginless Range before it reads the count */
+          buf_printf(b, "({ if (_t%d.nobeg) sp_raise_cls(\"RangeError\", \"cannot get the first element of beginless range\");"
+                        " sp_IntArray *_t%d = sp_IntArray_new(); sp_int _t%d = ", t, tf, tn);
           emit_int_expr(c, argv[0], b);   /* first(nil) is CRuby's TypeError */
-          buf_printf(b, "; if (_t%d < 0) sp_raise_cls(\"ArgumentError\", \"negative array size\");", tn);
+          buf_printf(b, "; if (_t%d < 0) sp_raise_cls(\"ArgumentError\", \"negative array size (or size too big)\");", tn);
           buf_printf(b, " sp_int _t%d = sp_range_count(_t%d); sp_int _t%d = sp_range_step(_t%d);"
                         " for (sp_int _i%d = 0; _i%d < _t%d && _i%d < _t%d; _i%d++)"
                         " sp_IntArray_push(_t%d, _t%d.first + _i%d * _t%d); _t%d; })",

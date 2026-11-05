@@ -594,6 +594,10 @@ void comp_free(Compiler *c) {
     free(sc->pdefault);
   }
   free(c->scopes);
+  free(c->def_oldest);
+  free(c->def_newest);
+  free(c->def_older);
+  free(c->def_newer);
   free(c->shadow_copies);
   free(c->file_scope);
   free(c->load_sets_flag);
@@ -856,10 +860,31 @@ int comp_sym_intern(Compiler *c, const char *name) {
   return comp_sym_intern_n(c, name, name ? strlen(name) : 0);
 }
 
+/* scope s, the newest, onto the chain of def node d (Compiler.def_oldest) */
+static void scope_link_def(Compiler *c, int s, int d) {
+  c->def_older[s] = c->def_newer[s] = -1;
+  if (d < 0) return;
+  if (d >= c->ndef_nodes) {
+    int n = c->ndef_nodes ? c->ndef_nodes : 64;
+    while (n <= d) n *= 2;
+    c->def_oldest = realloc(c->def_oldest, sizeof(int) * (size_t)n);
+    c->def_newest = realloc(c->def_newest, sizeof(int) * (size_t)n);
+    for (int i = c->ndef_nodes; i < n; i++) c->def_oldest[i] = c->def_newest[i] = -1;
+    c->ndef_nodes = n;
+  }
+  int last = c->def_newest[d];
+  c->def_older[s] = last;
+  if (last >= 0) c->def_newer[last] = s;
+  else c->def_oldest[d] = s;
+  c->def_newest[d] = s;
+}
+
 Scope *comp_scope_new(Compiler *c, const char *name, int def_node) {
   if (c->nscopes >= c->cscopes) {
     c->cscopes = c->cscopes ? c->cscopes * 2 : 8;
     c->scopes = realloc(c->scopes, sizeof(Scope) * (size_t)c->cscopes);
+    c->def_older = realloc(c->def_older, sizeof(int) * (size_t)c->cscopes);
+    c->def_newer = realloc(c->def_newer, sizeof(int) * (size_t)c->cscopes);
   }
   Scope *s = &c->scopes[c->nscopes++];
   memset(s, 0, sizeof(*s));
@@ -878,8 +903,18 @@ Scope *comp_scope_new(Compiler *c, const char *name, int def_node) {
   scope_set_ret_pin_guard(s, -1);
   why_reset(&s->ret_why);
   s->dm_subst_node = -1;
+  scope_link_def(c, s->idx, def_node);
   return s;
 }
+
+int comp_def_newest(const Compiler *c, int d) {
+  return d >= 0 && d < c->ndef_nodes ? c->def_newest[d] : -1;
+}
+int comp_def_older(const Compiler *c, int s) { return c->def_older[s]; }
+int comp_def_oldest(const Compiler *c, int d) {
+  return d >= 0 && d < c->ndef_nodes ? c->def_oldest[d] : -1;
+}
+int comp_def_newer(const Compiler *c, int s) { return c->def_newer[s]; }
 
 int g_infer_round = 0;
 
@@ -1730,8 +1765,8 @@ static int sm_version(Compiler *c, int class_id, const char *name, int is_cm, in
   if (!name || def_node < 0) return -1;
   int top = class_id < 0;
   if (!sm_frozen) {
-    for (int s = c->nscopes - 1; s >= 0; s--)
-      if (c->scopes[s].def_node == def_node && (top ? sm_toplevel(c, s) : sm_owns(c, s, class_id, is_cm)) &&
+    for (int s = comp_def_newest(c, def_node); s >= 0; s = comp_def_older(c, s))
+      if ((top ? sm_toplevel(c, s) : sm_owns(c, s, class_id, is_cm)) &&
           c->scopes[s].name && (sp_streq(c->scopes[s].name, name) ||
             (!c->ver_built && c->scopes[s].mixin_guarded && sp_streq(comp_scope_user_name(&c->scopes[s]), name)))) return s;
     return -1;
@@ -1747,11 +1782,12 @@ static int sm_version(Compiler *c, int class_id, const char *name, int is_cm, in
 
 /* the scope of (class_id, is_cm; top level when class_id < 0) whose def
    node is def_node, under whatever name an alias that captured the def gave
-   it (alias_capture_earlier_def), or -1; not a body a mixin's copy shadows
-   (`__prep <n> m`), which a call reaches through the copy */
+   it (alias_capture_earlier_def), or -1, also for a def-less scope's
+   question; not a body a mixin's copy shadows (`__prep <n> m`), which a
+   call reaches through the copy */
 static int sm_version_renamed(Compiler *c, int class_id, int is_cm, int def_node) {
-  for (int s = c->nscopes - 1; s >= 0; s--)
-    if (c->scopes[s].def_node == def_node && c->scopes[s].name && !c->scopes[s].is_proc_form &&
+  for (int s = comp_def_newest(c, def_node); s >= 0; s = comp_def_older(c, s))
+    if (c->scopes[s].name && !c->scopes[s].is_proc_form &&
         !c->scopes[s].shadow &&
         (class_id < 0 ? sm_toplevel(c, s) : sm_owns(c, s, class_id, is_cm))) return s;
   return -1;

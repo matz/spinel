@@ -10014,28 +10014,6 @@ int infer_cvar_types(Compiler *c, int nil_only) {
   return changed;
 }
 
-/* def_node -> scopes sharing it (transplanted module copies), cached per scope
-   count. infer_ivar_types propagates each ivar write to copies of its method in
-   other classes; without this it rescanned every scope per ivar write
-   (O(ivar_writes * scopes)). Built once per fixpoint run (scope shape is fixed
-   there); dn_head is indexed by node id, dn_next chains scopes. */
-static int dn_nscopes = -1, dn_count = -1;
-static int *dn_head = NULL, *dn_next = NULL;
-static void dn_build(Compiler *c) {
-  int nc = c->nt->count, ns = c->nscopes;
-  free(dn_head); free(dn_next);
-  dn_head = malloc((size_t)(nc > 0 ? nc : 1) * sizeof(int));
-  dn_next = malloc((size_t)(ns > 0 ? ns : 1) * sizeof(int));
-  dn_count = nc; dn_nscopes = ns;
-  if (!dn_head || !dn_next) { dn_nscopes = -1; return; }
-  for (int i = 0; i < nc; i++) dn_head[i] = -1;
-  for (int s = 0; s < ns; s++) {
-    int d = c->scopes[s].def_node;
-    if (d >= 0 && d < nc) { dn_next[s] = dn_head[d]; dn_head[d] = s; }
-    else dn_next[s] = -1;
-  }
-}
-
 /* `@iv = cond ? nil : <int>` (a literal-nil ternary arm) pins the ivar as a
    nullable int -- its nil beside the value in an sp_oint slot, the same
    representation a direct `@iv = nil` / `@iv = <int>` pair already yields
@@ -11681,7 +11659,6 @@ int infer_ivar_types(Compiler *c) {
   NilWrites nilw = {0};
   StructAsetIx aset = {0};
   if (c->pivs) c->pivs->sweep++;
-  if (dn_nscopes != c->nscopes || dn_count != nt->count) dn_build(c);
   for (int id = 0; id < nt->count; id++) {
     const char *ty = nt_type(nt, id);
     NodeKind ty_k = nt_kind(nt, id);
@@ -11744,11 +11721,9 @@ int infer_ivar_types(Compiler *c) {
         nil_write_note(&nilw, cls_id2 >= 0 ? cls_id2 : c->toplevel_class, nm);
         /* the transplanted copies of this method (see below) */
         if (s->class_id >= 0 && s->def_node >= 0) {
-          int use_idx = dn_head && dn_nscopes == c->nscopes && s->def_node < dn_count;
-          int si = use_idx ? dn_head[s->def_node] : 0;
-          for (; use_idx ? (si >= 0) : (si < c->nscopes); si = use_idx ? dn_next[si] : si + 1) {
+          for (int si = comp_def_newest(c, s->def_node); si >= 0; si = comp_def_older(c, si)) {
             Scope *ts = &c->scopes[si];
-            if (ts->def_node != s->def_node || ts->class_id == s->class_id || ts->class_id < 0) continue;
+            if (ts->class_id == s->class_id || ts->class_id < 0) continue;
             nil_write_note(&nilw, ts->class_id, nm);
           }
         }
@@ -11850,11 +11825,9 @@ int infer_ivar_types(Compiler *c) {
       if (s->class_id >= 0 && s->def_node >= 0) {
         int sdef = s->def_node;
         int orig_cid = s->class_id;
-        int use_idx = dn_head && dn_nscopes == c->nscopes && sdef < dn_count;
-        int si = use_idx ? dn_head[sdef] : 0;
-        for (; use_idx ? (si >= 0) : (si < c->nscopes); si = use_idx ? dn_next[si] : si + 1) {
+        for (int si = comp_def_newest(c, sdef); si >= 0; si = comp_def_older(c, si)) {
           Scope *ts = &c->scopes[si];
-          if (ts->def_node != sdef || ts->class_id == orig_cid || ts->class_id < 0) continue;
+          if (ts->class_id == orig_cid || ts->class_id < 0) continue;
           ClassInfo *tc = &c->classes[ts->class_id];
           if (class_ivar_pinned(tc, nm)) continue;
           int tiv = comp_ivar_intern(tc, nm);

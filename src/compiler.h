@@ -1379,6 +1379,13 @@ typedef struct {
 
   Scope *scopes;    /* scope[0] = top level */
   int nscopes, cscopes;
+  /* the scopes of each def node (a method's body and its copies), in
+     scope order: def_oldest[d] and def_newest[d] end the chain of def node
+     d, def_older[s] and def_newer[s] are scope s's neighbours on it, -1 at
+     either end. A scope's def node is fixed at comp_scope_new, which links
+     it, so the chains hold however scopes are renamed or moved */
+  int *def_oldest, *def_newest, ndef_nodes;
+  int *def_older, *def_newer;
   /* the top-level scope of each file root (nt_root), by graph id: 0 for the
      entry (analyze_program.c) */
   int *file_scope;
@@ -1880,6 +1887,12 @@ int comp_scalar_literal_chain_bottom(const NodeTable *nt, int v);
 
 /* Scopes. */
 Scope *comp_scope_new(Compiler *c, const char *name, int def_node);
+/* the scopes of def node d (Compiler.def_oldest): the newest and each
+   older one, or the oldest and each newer one; -1 past the end */
+int comp_def_newest(const Compiler *c, int d);
+int comp_def_older(const Compiler *c, int s);
+int comp_def_oldest(const Compiler *c, int d);
+int comp_def_newer(const Compiler *c, int s);
 Scope *comp_scope_of(Compiler *c, int node_id);        /* owning scope */
 
 /* Walk the local-variable writes that bind `name`, newest id first: plain

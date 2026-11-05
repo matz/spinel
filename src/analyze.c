@@ -21047,57 +21047,6 @@ int an_scopes_named_next(Compiler *c, const char *nm, int s) {
   return -1;
 }
 
-/* The scopes sharing scope s's def_node (its copies: a transplanted module
-   method's body, once per includer), ascending: the first, and the next
-   after s (-1 at the end). Frozen, from a table built once per scope-index
-   epoch, as the by-name lists are; else the scan. The share facts asked
-   every scope for a copied self call's twins, at every such call, every
-   build. */
-static int *an_sdn_next, *an_sdn_first_of, an_sdn_stamp_n = -1;
-static unsigned an_sdn_stamp_gen;
-static void an_sdn_build(Compiler *c) {
-  int n = c->nscopes > 0 ? c->nscopes : 1;
-  free(an_sdn_next); free(an_sdn_first_of);
-  an_sdn_next = malloc(sizeof(int) * (size_t)n);
-  an_sdn_first_of = malloc(sizeof(int) * (size_t)n);
-  unsigned cap = 16;
-  while (cap < 2u * (unsigned)n) cap *= 2;
-  int *tab = malloc(sizeof(int) * (size_t)cap);   /* the last scope seen of each def_node */
-  if (!an_sdn_next || !an_sdn_first_of || !tab) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-  for (unsigned i = 0; i < cap; i++) tab[i] = -1;
-  for (int i = 0; i < c->nscopes; i++) {
-    an_sdn_next[i] = -1; an_sdn_first_of[i] = i;
-    int d = c->scopes[i].def_node;
-    if (d < 0) continue;
-    unsigned h = ((unsigned)d * 2654435761u) & (cap - 1);
-    while (tab[h] >= 0 && c->scopes[tab[h]].def_node != d) h = (h + 1) & (cap - 1);
-    if (tab[h] >= 0) { an_sdn_next[tab[h]] = i; an_sdn_first_of[i] = an_sdn_first_of[tab[h]]; }
-    tab[h] = i;
-  }
-  free(tab);
-  an_sdn_stamp_n = c->nscopes; an_sdn_stamp_gen = comp_scope_index_gen();
-}
-int an_scopes_same_def_first(Compiler *c, int s) {
-  if (s < 0 || s >= c->nscopes || c->scopes[s].def_node < 0) return -1;
-  if (comp_scope_index_is_frozen()) {
-    if (an_sdn_stamp_n != c->nscopes || an_sdn_stamp_gen != comp_scope_index_gen()) an_sdn_build(c);
-    return an_sdn_first_of[s];
-  }
-  for (int i = 0; i < c->nscopes; i++)
-    if (c->scopes[i].def_node == c->scopes[s].def_node) return i;
-  return -1;
-}
-int an_scopes_same_def_next(Compiler *c, int s) {
-  if (s < 0 || s >= c->nscopes || c->scopes[s].def_node < 0) return -1;
-  if (comp_scope_index_is_frozen()) {
-    if (an_sdn_stamp_n != c->nscopes || an_sdn_stamp_gen != comp_scope_index_gen()) an_sdn_build(c);
-    return an_sdn_next[s];
-  }
-  for (int i = s + 1; i < c->nscopes; i++)
-    if (c->scopes[i].def_node == c->scopes[s].def_node) return i;
-  return -1;
-}
-
 /* Unique method scope index by name across the program, or -1 (absent or
    defined more than once). Scope 0 is the top level (name NULL). */
 static int an_unique_scope_by_name(Compiler *c, const char *nm) {

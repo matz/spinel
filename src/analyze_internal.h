@@ -1119,9 +1119,6 @@ void cr_class_only_names(Compiler *c, ANameHash *out);   /* the names only plain
    asks these instead. */
 int an_scopes_named_first(Compiler *c, const char *nm);
 int an_scopes_named_next(Compiler *c, const char *nm, int s);
-/* The scopes sharing scope s's def_node (its copies), the same way. */
-int an_scopes_same_def_first(Compiler *c, int s);
-int an_scopes_same_def_next(Compiler *c, int s);
 int a_is_local_node(const char *ty);
 int a_is_write_node(const char *ty);
 void a_mark_subtree(Compiler *c, int id, char *inproc);

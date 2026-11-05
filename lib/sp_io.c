@@ -242,8 +242,9 @@ static unsigned int sp_io_child_fds_gen;
    spawn that gives the descriptor to a child clears the flag on the open
    file the two share (give_blocking, sp_process.c); the handle asks again
    after a spawn, and does not set it back while the child may hold it.
-   Blocking, its writes take the socket path a stdio handle takes; its reads
-   say MSG_DONTWAIT per recv(2) and need no answer from here. */
+   Blocking, a socket's writes take the socket path a stdio handle takes,
+   and a pipe's reads ask poll first (sp_io_own_read); a socket's reads say
+   MSG_DONTWAIT per recv(2) and need no answer from here. */
 static int sp_io_own_nb(sp_File *f, int fd) {
   unsigned int gen = SP_ATOMIC_LOAD(&sp_io_child_fds_gen, __ATOMIC_ACQUIRE);
   if (!f->wnonblock || (f->wnonblock == 1 && f->wgen != gen)) {
@@ -254,13 +255,18 @@ static int sp_io_own_nb(sp_File *f, int fd) {
   return f->wnonblock == 1;
 }
 
-/* A connected stream socket, TCP or Unix, reads through its own buffer on a
-   non-blocking descriptor; a listening socket and a datagram socket keep the
-   stdio read side. SPINEL_SOCK_STDIO=1 keeps every socket on stdio. */
-static int sp_io_sock_takes_own_buf(int fd) {
+/* SPINEL_SOCK_STDIO=1 keeps every socket and pipe on the stdio read side. */
+static int sp_io_stdio_forced(void) {
   static int stdio = -1;
   if (stdio < 0) { const char *e = getenv("SPINEL_SOCK_STDIO"); stdio = e && *e && *e != '0'; }
-  if (stdio) return 0;
+  return stdio;
+}
+
+/* A connected stream socket, TCP or Unix, reads through its own buffer on a
+   non-blocking descriptor; a listening socket and a datagram socket keep the
+   stdio read side. */
+static int sp_io_sock_takes_own_buf(int fd) {
+  if (sp_io_stdio_forced()) return 0;
   int type = 0; socklen_t tl = sizeof type;
   if (getsockopt(fd, SOL_SOCKET, SO_TYPE, &type, &tl) != 0 || type != SOCK_STREAM) return 0;
   struct sockaddr_storage ss; socklen_t sl = sizeof ss;
@@ -275,13 +281,39 @@ static int sp_io_sock_takes_own_buf(int fd) {
    socket's own handle does. Its descriptor may share a non-blocking open
    file with that handle, where stdio would read EAGAIN as the end of file
    and drop a write that cannot finish. The flag is left as it is: the
-   descriptor may be a child's too. */
+   descriptor may be a child's too. A pipe's read end reads as IO.pipe's
+   does when its descriptor is non-blocking already, IO.pipe's own reader
+   among them; a blocking one keeps stdio, as before. */
 void sp_io_take_own_buf(sp_File *f) {
   int fd = fileno(f->fp);
-  if (!sp_io_sock_takes_own_buf(fd)) return;
-  f->own_buf = 1;
-  f->wstream = 1;
+  if (sp_io_sock_takes_own_buf(fd)) {
+    f->own_buf = SP_OWN_SOCK;
+    f->wstream = 1;
+    (void)sp_io_own_nb(f, fd);
+    return;
+  }
+  struct stat st;
+  int fl;
+  if (sp_io_stdio_forced() || fstat(fd, &st) != 0 || !S_ISFIFO(st.st_mode)) return;
+  if ((fl = fcntl(fd, F_GETFL)) < 0 || (fl & O_ACCMODE) != O_RDONLY || !(fl & O_NONBLOCK)) return;
+  f->own_buf = SP_OWN_PIPE;
   (void)sp_io_own_nb(f, fd);
+}
+
+/* IO.pipe's read end is O_NONBLOCK, as CRuby's is, and reads through a
+   buffer of its own: a read(n) that finds part of n parks for the rest in
+   the runtime instead of sleeping in read(2) inside fread, where a
+   collection another thread started waited on this worker while the writer
+   that would finish the read stood at the safepoint. The write end is a
+   separate open file and keeps its own flag (sp_sock_write). */
+sp_File *sp_io_pipe_reader(int fd) {
+  sp_File *f = sp_io_fdopen(fd, SPL("r"));
+  if (!f || sp_io_stdio_forced()) return f;
+  int fl = fcntl(fd, F_GETFL);
+  if (fl < 0 || (!(fl & O_NONBLOCK) && fcntl(fd, F_SETFL, fl | O_NONBLOCK) != 0)) return f;
+  f->own_buf = SP_OWN_PIPE;
+  f->wnonblock = 1; f->wgen = SP_ATOMIC_LOAD(&sp_io_child_fds_gen, __ATOMIC_ACQUIRE);
+  return f;
 }
 
 /* Wrap a socket fd (#2922). The FILE* serves the buffered READ side (gets and
@@ -311,7 +343,7 @@ sp_File *sp_io_fdopen_sock(int fd, const char *kind) {SP_GC_ROOT_STR(kind);
   f->lineno = 0;
   f->is_sock = 1; f->rev_lookup = !sp_sock_dnrl_default;
   if (own) {
-    f->own_buf = 1; f->wstream = 1;
+    f->own_buf = SP_OWN_SOCK; f->wstream = 1;
     f->wnonblock = 1; f->wgen = SP_ATOMIC_LOAD(&sp_io_child_fds_gen, __ATOMIC_ACQUIRE);
   }
   return f;
@@ -568,13 +600,32 @@ static void sp_io_rbuf_park(sp_File *f, int fd) {
   if (SP_ATOMIC_LOAD(&f->closed, __ATOMIC_RELAXED)) sp_raise_cls("IOError", "stream closed in another thread");
 }
 
+/* One read of a handle with own_buf, which answers EAGAIN rather than
+   sleep. A socket's recv(2) says MSG_DONTWAIT itself rather than trust the
+   descriptor's O_NONBLOCK, which a spawn on another thread can clear at any
+   moment (the open file is shared, sp_io_own_nb). A pipe has no such flag
+   for one call: its read(2) does not sleep while the descriptor is
+   O_NONBLOCK, and once a spawn has given the pipe to a child and cleared
+   the flag, it reads only after poll says it can. A pipe the parent reads
+   while it gives it to a child can still sleep, if the spawn lands between
+   the question and the read(2) or the child takes the bytes between the
+   poll and the read: the pipe then has two readers, and stdio's read slept
+   the same way. */
+static ssize_t sp_io_own_read(sp_File *f, int fd, void *buf, size_t n) {
+  if (f->own_buf == SP_OWN_SOCK) return recv(fd, buf, n, SP_MSG_DONTWAIT);
+  if (!sp_io_own_nb(f, fd)) {
+    struct pollfd p = { .fd = fd, .events = POLLIN, .revents = 0 };
+    int ready = poll(&p, 1, 0);
+    if (ready == 0) { errno = EAGAIN; return -1; }
+    if (ready < 0) return -1;
+  }
+  return read(fd, buf, n);
+}
+
 /* Bytes in rbuf: 1, or 0 at the end of the stream. When rbuf is empty, one
-   recv(2) fills it; a recv that answers EAGAIN parks and tries again. The
-   recv says MSG_DONTWAIT itself rather than trust the descriptor's
-   O_NONBLOCK, which a spawn on another thread can clear at any moment (the
-   open file is shared, sp_io_own_nb). The handle is held across the recv
-   only, never across the park. If another reader's fill brought bytes
-   meanwhile, those are the answer.
+   read (sp_io_own_read) fills it; one that answers EAGAIN parks and tries
+   again. The handle is held across the read only, never across the park.
+   If another reader's fill brought bytes meanwhile, those are the answer.
 
    A read that found nothing makes the next fill on an empty rbuf park before
    it reads (park_first): a peer that was just answered is not sending its
@@ -608,7 +659,7 @@ int sp_io_rbuf_fill(sp_File *f) {SP_GC_ROOT(f);
       }
     }
     size_t space = f->rcap;
-    ssize_t r = recv(fd, f->rbuf, space, SP_MSG_DONTWAIT);
+    ssize_t r = sp_io_own_read(f, fd, f->rbuf, space);
     int e = errno;
     if (r > 0) f->rlen = (size_t)r;
     sp_io_runlock(f);
@@ -742,7 +793,7 @@ char *sp_io_rbuf_fgets(sp_File *f, char *buf, int size) {
 
 /* Bytes straight into buf, past rbuf, parking on EAGAIN: until n bytes
    (all) or the first that arrive, fewer only at the end of the stream. Each
-   turn takes what rbuf holds first, under rlock with the recv(2), so bytes
+   turn takes what rbuf holds first, under rlock with the read, so bytes
    another reader's fill brought while this read parked are this read's
    next ones, not left behind in rbuf. buf is a String the caller holds
    rooted across the call, since the reads can park. */
@@ -760,7 +811,7 @@ static size_t sp_io_rbuf_direct(sp_File *f, char *buf, size_t n, int all) {SP_GC
       memcpy(buf + got, f->rbuf + f->rpos, (size_t)r);
       f->rpos += (size_t)r;
     }
-    else r = recv(fd, buf + got, n - got, SP_MSG_DONTWAIT);   /* per call, as in sp_io_rbuf_fill */
+    else r = sp_io_own_read(f, fd, buf + got, n - got);
     int e = errno;
     sp_io_runlock(f);
     sp_io_unuse(f);
@@ -788,8 +839,8 @@ size_t sp_io_rbuf_read_into(sp_File *f, char *buf, size_t n) {
 }
 
 /* #readpartial / #recv of up to n bytes, n larger than rbuf: what rbuf
-   holds, or else the bytes one recv(2) straight into buf brings, so a large
-   read is one recv(2) as with stdio, not one per rbuf's worth. 0 at the end
+   holds, or else the bytes one read straight into buf brings, so a large
+   read is one read as with stdio, not one per rbuf's worth. 0 at the end
    of the stream. */
 size_t sp_io_rbuf_read_some(sp_File *f, char *buf, size_t n) {
   return sp_io_rbuf_direct(f, buf, n, 0);
@@ -841,8 +892,8 @@ static sp_int sp_sock_write(sp_File *f, const char *s, size_t n) {
      a spawn gives it to a child (sp_io_own_nb), which can happen while this
      write is parked: the flag is asked again after each park. An IO.for_fd
      of such a socket writes as the socket does. */
-  int sock = f->is_sock || f->own_buf;
-  int nb = f->own_buf && sp_io_own_nb(f, fd);
+  int sock = f->is_sock || f->own_buf == SP_OWN_SOCK;
+  int nb = f->own_buf == SP_OWN_SOCK && sp_io_own_nb(f, fd);
   if (!sock) {
     unsigned int gen = SP_ATOMIC_LOAD(&sp_io_child_fds_gen, __ATOMIC_ACQUIRE);
     if (!f->wnonblock) {
@@ -867,7 +918,7 @@ static sp_int sp_sock_write(sp_File *f, const char *s, size_t n) {
       sp_io_unuse(f);
       sp_io_write_wait(f, deadline);
       fd = fileno(sp_io_use(f));
-      if (f->own_buf) nb = sp_io_own_nb(f, fd);
+      if (f->own_buf == SP_OWN_SOCK) nb = sp_io_own_nb(f, fd);
     }
     if (sock) {
       /* A datagram or seqpacket send is one message: shortening it would
@@ -909,7 +960,7 @@ static sp_int sp_sock_write(sp_File *f, const char *s, size_t n) {
         sp_io_unuse(f);
         sp_io_write_wait(f, deadline);
         fd = fileno(sp_io_use(f));
-        if (f->own_buf) nb = sp_io_own_nb(f, fd);
+        if (f->own_buf == SP_OWN_SOCK) nb = sp_io_own_nb(f, fd);
         continue;
       }
       int e = errno;
@@ -988,7 +1039,7 @@ void sp_io_check_readable(sp_File *f) {
 }
 
 static sp_int sp_File_write_len(sp_File *f, const char *s, size_t n) {SP_GC_ROOT(f);SP_GC_ROOT_STR(s);
-  if (f->is_sock || f->own_buf) return sp_sock_write(f, s, n);
+  if (f->is_sock || f->own_buf == SP_OWN_SOCK) return sp_sock_write(f, s, n);
   /* An IO.pipe write end is sync, so setvbuf left it unbuffered and stdio
      holds nothing between calls: the raw loop is what fwrite would do anyway,
      and it can park between attempts. Every other handle keeps stdio. */
@@ -1033,7 +1084,7 @@ sp_int sp_File_write_bin(sp_File *f, const char *s) {SP_GC_ROOT(f);SP_GC_ROOT_ST
 sp_int sp_File_syswrite(sp_File *f, const char *s, size_t n) {SP_GC_ROOT(f);SP_GC_ROOT_STR(s);
   SP_IO_OPEN(f);
   if (!s) return 0;
-  if (f->is_sock || f->own_buf) return sp_sock_write(f, s, n);
+  if (f->is_sock || f->own_buf == SP_OWN_SOCK) return sp_sock_write(f, s, n);
   if (f->sync_on && sp_io_parkable(f)) return sp_sock_write(f, s, n);
   return sp_io_write_raw(f, s, n);
 }
@@ -2365,7 +2416,7 @@ const char *sp_File_inspect(sp_File *f) {SP_GC_ROOT(f);
 
 static void sp_File_puts_n(sp_File *f, const char *s, size_t n) {
   sp_io_check_writable(f);
-  if (f->is_sock || f->own_buf) {
+  if (f->is_sock || f->own_buf == SP_OWN_SOCK) {
     sp_sock_write(f, s, n);
     if (n == 0 || s[n - 1] != '\n') sp_sock_write(f, "\n", 1);
     return;
@@ -2391,14 +2442,14 @@ void sp_File_puts_bin(sp_File *f, const char *s) {SP_GC_ROOT(f);SP_GC_ROOT_STR(s
 /* IO#putc's one byte: stdio's, except on a handle with its own buffer, whose
    writes go straight to its non-blocking descriptor. */
 void sp_File_put_byte(sp_File *f, int c) {SP_GC_ROOT(f);
-  if (f->own_buf) { char b = (char)c; sp_sock_write(f, &b, 1); return; }
+  if (f->own_buf == SP_OWN_SOCK) { char b = (char)c; sp_sock_write(f, &b, 1); return; }
   fputc(c, f->fp);
 }
 void sp_File_print(sp_File *f, const char *s) {SP_GC_ROOT(f);SP_GC_ROOT_STR(s);
   SP_IO_OPEN(f);
   if (!s || !s[0]) return;
   sp_io_check_writable(f);
-  if (f->is_sock || f->own_buf) { sp_sock_write(f, s, strlen(s)); return; }
+  if (f->is_sock || f->own_buf == SP_OWN_SOCK) { sp_sock_write(f, s, strlen(s)); return; }
   fputs(s, f->fp);
 }
 
@@ -2716,7 +2767,7 @@ sp_File *sp_File_dup(sp_File *f, int keep_frozen) {SP_GC_ROOT(f);
   g->ext_enc = f->ext_enc;
   g->is_sock = f->is_sock;
   if (f->own_buf) {   /* the dup shares the open file, and its flag */
-    g->own_buf = 1; g->wstream = 1;
+    g->own_buf = f->own_buf; g->wstream = f->wstream;
     g->wnonblock = f->wnonblock; g->wgen = f->wgen;
   }
   g->rev_lookup = f->rev_lookup;

@@ -59,7 +59,9 @@ typedef struct {
                                   that could block (#4307) */
   unsigned char own_buf;       /* reads take rbuf below, never stdio: the
                                   descriptor is non-blocking and a read that
-                                  finds nothing parks in the runtime */
+                                  finds nothing parks in the runtime.
+                                  SP_OWN_SOCK a connected stream socket,
+                                  SP_OWN_PIPE a pipe's read end */
   unsigned char park_first;    /* own_buf: the last read found nothing, so a
                                   fill on an empty rbuf parks before it reads */
   unsigned char park_first_run; /* own_buf: fills in a row that parked first */
@@ -134,8 +136,14 @@ sp_File *sp_File_open_perm(const char *path, const char *mode, sp_oint perm);   
    write(2), matching CRuby sockets' sync = true. `kind` labels the handle
    ("tcp", "tcpserver", ...) for #class rendering. (#2922) */
 sp_File *sp_io_fdopen_sock(int fd, const char *kind);
-/* IO.for_fd / IO.new over a connected stream socket: the handle takes own_buf. */
+#define SP_OWN_SOCK 1
+#define SP_OWN_PIPE 2
+/* IO.for_fd / IO.new over a connected stream socket, or over a pipe's read
+   end that is non-blocking: the handle takes own_buf. */
 void sp_io_take_own_buf(sp_File *f);
+/* IO.pipe's read end over fd: a non-blocking descriptor read through
+   own_buf. */
+sp_File *sp_io_pipe_reader(int fd);
 /* IO#putc's byte: through stdio, or straight to the descriptor (own_buf). */
 void sp_File_put_byte(sp_File *f, int c);
 /* Access-mode checks retain closed-stream error precedence. */

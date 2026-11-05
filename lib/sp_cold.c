@@ -5995,7 +5995,7 @@ sp_PolyArray *sp_io_pipe(void) {
   if (sp_io_make_pipe(fds) != 0) sp_raise_cls("IOError", "pipe failed");
   sp_PolyArray *a = sp_PolyArray_new();
   SP_GC_ROOT(a);
-  sp_PolyArray_push(a, sp_box_obj(sp_io_fdopen(fds[0], SPL("r")), SP_BUILTIN_IO));
+  sp_PolyArray_push(a, sp_box_obj(sp_io_pipe_reader(fds[0]), SP_BUILTIN_IO));
   { sp_File *wf = sp_io_fdopen(fds[1], SPL("w"));
     /* CRuby documents the write end as sync: a write reaches the descriptor
        at once, so a reader on the other end (or an IO.select on it) sees the

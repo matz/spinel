@@ -24507,6 +24507,18 @@ static const char *rbself_module_host(NodeTable *nt, int n0, const char *mod) {
    nowhere but in those include and prepend calls and its own headers, so
    no alias (`QQ = Q`), `send(:include, Q)` or `Q.instance_method` can
    take its methods to another class unseen */
+/* Does the program write a class of this name under a path or in another
+   body (`class Ns::Integer`, `module Ns; class Integer`)? A receiver
+   `Integer` in `Integer.include(M)` can then name that class, not the
+   builtin. */
+static int rbself_names_own_class(NodeTable *nt, int n0, const char *name) {
+  for (int m = 0; m < n0; m++) {
+    if (!class_def_is_class(nt, m) && !class_def_is_module(nt, m)) continue;
+    const char *cn = class_def_name(nt, m);
+    if (cn && sp_streq(cn, name) && (!class_def_bare_name(nt, m) || engine_lexically_nested(nt, m))) return 1;
+  }
+  return 0;
+}
 static const char *rbself_module_host_in(NodeTable *nt, int n0, const char *mod, int strict) {
   const char *host = NULL;
   int reads = 0, used = 0;
@@ -24530,8 +24542,10 @@ static const char *rbself_module_host_in(NodeTable *nt, int n0, const char *mod,
     if (sp_streq(nm, "extend")) return NULL;
     const char *target = NULL;
     int recv = nt_ref(nt, id, "receiver");
-    if (recv >= 0) target = nt_kind(nt, recv) == NK_ConstantReadNode ? nt_str(nt, recv, "name") : NULL;
-    else
+    if (recv >= 0) {
+      target = nt_kind(nt, recv) == NK_ConstantReadNode ? nt_str(nt, recv, "name") : NULL;
+      if (strict && target && rbself_names_own_class(nt, n0, target)) return NULL;
+    } else
       for (int m = 0; m < n0 && !target; m++) {
         if (!class_def_is_class(nt, m)) continue;
         int b = class_def_body(nt, m), bn = 0;

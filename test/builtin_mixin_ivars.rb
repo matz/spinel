@@ -75,3 +75,18 @@ end
 o = Ns::Integer.new
 o.nv = 8
 p o.nv
+
+# ...also when a call with that name as its receiver includes the module
+module NsRecvAttrs
+  attr_accessor :rv
+end
+module NsRecv
+  class Integer
+    def initialize(v) = @rv = v
+  end
+  Integer.include(NsRecvAttrs)
+end
+r = NsRecv::Integer.new(5)
+p r.rv
+r.rv = 7
+p r.rv

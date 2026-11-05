@@ -4382,6 +4382,14 @@ static SP_NOINLINE SP_COLD SP_UNUSED void sp_frange_count_raise(sp_FloatRange r,
     sp_raise_cls("ArgumentError", take ? "attempt to take negative size" : "negative array size (or size too big)");
   sp_frange_iter_raise(r, 0);
 }
+/* take(n) on a Float Range: [] for 0, which takes nothing, else the raise */
+static SP_UNUSED sp_RbVal sp_frange_take_v(sp_FloatRange r, sp_RbVal n) {
+  sp_int k = sp_poly_arg_int_chk(n);
+  if (k < 0) sp_raise_cls("ArgumentError", "attempt to take negative size");
+  if (k == 0) return sp_box_poly_array(sp_PolyArray_new());
+  sp_frange_iter_raise(r, 0);
+  return sp_box_nil();
+}
 /* #max(n) / #min(n): the n greatest or least members, which an open side
    has none of (RangeError) and a Float range cannot enumerate (TypeError) */
 static SP_NOINLINE SP_COLD SP_UNUSED void sp_frange_maxn_raise(sp_FloatRange r, sp_int n) {
@@ -15564,6 +15572,8 @@ static sp_RbVal sp_poly_arr_take(sp_RbVal v, sp_int n) {
 /* take(n): every receiver's take raises the same message, unlike first */
 static sp_RbVal sp_poly_arr_take_n(sp_RbVal v, sp_int n) {
   if (n < 0) sp_raise_cls("ArgumentError", "attempt to take negative size");
+  /* Enumerable#take(0) answers [] without iterating; first(0) iterates */
+  if (n == 0) return sp_box_poly_array(sp_PolyArray_new());
   return sp_poly_arr_take(v, n);
 }
 static sp_RbVal sp_poly_arr_last_n(sp_RbVal v, sp_int n) {

@@ -446,6 +446,10 @@ void an_const_presence(Compiler *c) {
       ci->presence_read = 1;
     }
   }
+  for (int id = 0; id < (int)nn && id < nt->count; id++) {
+    if (cref[id]) nt_node_set_str((NodeTable *)nt, id, "const_cref", cref[id] > 1 ? w.crefs[cref[id] - 2] : "");
+    if (own[id]) nt_node_set_str((NodeTable *)nt, id, "own_presence", "1");
+  }
   free(cref); free(own);
   for (int i = 0; i < w.ncrefs; i++) free(w.crefs[i]);
   free(w.crefs);

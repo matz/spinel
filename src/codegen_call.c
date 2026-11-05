@@ -2341,6 +2341,18 @@ int name_is_enumerable_module_method(const char *m) {
 int cmp_operand_may_be_nil(Compiler *c, int id) {
   return id >= 0 && nullable_int_value(c, id);
 }
+
+/* The right operand of `**`, `%` or divmod, as a double. A Float that may be nil
+   is the left class's coercion TypeError at run time, as `2.0 + x` makes it: only
+   an operand that is plainly no number is refused here. */
+void emit_float_operand_in(Compiler *c, int node, const char *lcls, Buf *b) {
+  if (comp_ntype(c, node) == TY_FLOAT && cmp_operand_may_be_nil(c, node)) {
+    buf_puts(b, "sp_ofloat_opnd_in(");
+    emit_oint_expr(c, node, TY_FLOAT, b);
+    buf_printf(b, ", \"%s\")", lcls);
+  }
+  else emit_coerce(c, node, TY_FLOAT, CO_CONVERT, "a Float operand", b);
+}
 /* A float-result operand as the arithmetic arm reads it (emit_scalar_operand). */
 static void emit_float_operand_expr(Compiler *c, int node, Buf *b) {
   emit_scalar_operand(c, node, "0.0", b);
@@ -18075,7 +18087,7 @@ static int emit_array_arith_call(Compiler *c, int id, Buf *b) {
       buf_puts(b, ", ");
       if (at0 == TY_INT) { buf_puts(b, "(double)("); emit_expr(c, argv[0], b); buf_puts(b, ")"); }
       else if (a0r.big) { buf_puts(b, "sp_bigint_to_double("); emit_expr(c, argv[0], b); buf_puts(b, ")"); }
-      else emit_coerce(c, argv[0], TY_FLOAT, CO_CONVERT, "a Float operand", b);
+      else emit_float_operand_in(c, argv[0], rt == TY_FLOAT ? "Float" : "Integer", b);
       buf_puts(b, ")");
       return 1;
     }
@@ -18092,7 +18104,7 @@ static int emit_array_arith_call(Compiler *c, int id, Buf *b) {
       else emit_coerce(c, recv, TY_FLOAT, CO_HOLD, "the receiver of a Float `%`", b);
       buf_puts(b, ", ");
       if (a0r.big) { buf_puts(b, "sp_bigint_to_double("); emit_expr(c, argv[0], b); buf_puts(b, ")"); }
-      else emit_coerce(c, argv[0], TY_FLOAT, CO_CONVERT, "a Float operand", b);
+      else emit_float_operand_in(c, argv[0], rt == TY_FLOAT ? "Float" : "Integer", b);
       buf_puts(b, ")");
       return 1;
     }

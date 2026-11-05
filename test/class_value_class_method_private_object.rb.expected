@@ -1,0 +1,20 @@
+Object
+K
+StandardError
+K
+K
+[K, Object]
+[M]
+"private method 'superclass' called for module M"
+Object
+Object
+K
+"private method 'superclass' called for module M"
+"private method 'superclass' called for an instance of Integer"
+Numeric
+"private method 'superclass' called for module Comparable"
+K
+M
+"private method 'ancestors' called for an instance of Integer"
+K
+"private method 'allocate' called for module M"

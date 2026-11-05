@@ -1615,6 +1615,48 @@ static int recv_user_cdefines(Compiler *c, const char *name) {
   return 0;
 }
 
+/* Can a class value (a boxed class) answer `name` with a method of the
+   program, not Class's or Module's own? Only a class method (`def
+   self.superclass`), a module's method (an `extend` gives it to a class),
+   or a method of a reopened Class (the module Class__reopen) or Module. A
+   plain class's instance method (Object's too) is not in a class value's
+   chain ahead of Class's. A module value has no Class method, so it keeps
+   those instance methods: the caller guards the arm on the value's kind
+   (*cls_only). */
+static int recv_class_value_defines(Compiler *c, const char *name) {
+  if (g_poly_builtin_arm) return 0;
+  if (comp_name_is_shadow_copy(c, name, SHADOW_PREP)) return 0;
+  if (recv_user_cdefines(c, name)) return 1;
+  for (int uk = 0; uk < c->nclasses; uk++) {
+    const char *kn = c->classes[uk].name;
+    if ((comp_class_is_module(c, &c->classes[uk]) || (kn && sp_streq(kn, "Module"))) &&
+        comp_method_in_chain(c, uk, name, NULL) >= 0) return 1;
+  }
+  return 0;
+}
+
+/* The Module reflection a class-tagged poly value answers. `ancestors` and
+   friends had an arm only for a receiver typed TY_CLASS -- a constant --
+   so iterating an Array of classes and asking the block parameter left the
+   call with no arm at all and it reported the method as undefined (#4018).
+   superclass, subclasses and allocate are Class's only: where a program's
+   instance method of the name stands beside the arm, a module value takes
+   that method, so the arm answers a class value only (*cls_only). */
+int poly_class_reflect_arm(Compiler *c, int id, const char *name, int *cls_only) {
+  const NodeTable *nt = c->nt;
+  int class_side = sp_streq(name, "subclasses") || sp_streq(name, "allocate");
+  int arm = (sp_streq(name, "ancestors") || sp_streq(name, "included_modules") ||
+             sp_streq(name, "superclass") ||
+             /* the class-side names the generated sp_cls_* answer
+                (members has its arm in emit_poly_call) */
+             (g_gen_cls_answers && nt_ref(nt, id, "block") < 0 &&
+              (class_side || sp_streq(name, "keyword_init?")))) &&
+            !recv_class_value_defines(c, name);
+  if (cls_only)
+    *cls_only = arm && (class_side || sp_streq(name, "superclass")) && recv_user_defines(c, name);
+  return arm;
+}
+
 /* The names a blockless-or-not zero-argument poly dispatch answers
    beside its user arms (the pre-arms and builtin cases of
    emit_poly_method_dispatch), and its user candidates: ncand classes own
@@ -1661,18 +1703,8 @@ void poly_specials0(Compiler *c, int id, const char *name, PolySpecials0 *s) {
      class arm's text beside it does not fit a shared String slot. */
   int is_class_named = is_name_reader(name) &&
                        !(sp_streq(name, "name") ? recv_user_cdefines(c, name) : recv_user_defines(c, name));
-  /* The Module reflection a class-tagged poly value answers. `ancestors` and
-     friends had an arm only for a receiver typed TY_CLASS -- a constant --
-     so iterating an Array of classes and asking the block parameter left the
-     call with no arm at all and it reported the method as undefined (#4018). */
-  int is_class_reflect = (sp_streq(name, "ancestors") || sp_streq(name, "included_modules") ||
-                          sp_streq(name, "superclass") ||
-                          /* the class-side names the generated sp_cls_* answer
-                             (members has its arm in emit_poly_call) */
-                          (g_gen_cls_answers && nt_ref(nt, id, "block") < 0 &&
-                           (sp_streq(name, "subclasses") || sp_streq(name, "allocate") ||
-                            sp_streq(name, "keyword_init?")))) &&
-                         !recv_user_defines(c, name);
+  int is_class_reflect_cls_only = 0;
+  int is_class_reflect = poly_class_reflect_arm(c, id, name, &is_class_reflect_cls_only);
   /* `members` on a Class read out of a container is its member list (the
      generated sp_cls_members). emit_poly_call's arm answers that, unless
      a class reads a value of its own as `members` or defines the method:
@@ -1765,6 +1797,7 @@ void poly_specials0(Compiler *c, int id, const char *name, PolySpecials0 *s) {
   s->empty = is_empty;
   s->class_named = is_class_named;
   s->class_reflect = is_class_reflect;
+  s->class_reflect_cls_only = is_class_reflect_cls_only;
   s->cls_members = is_cls_members;
   s->pred = is_pred;
   s->ostruct = is_ostruct;
@@ -2083,7 +2116,10 @@ void emit_poly_prearms0(Compiler *c, int id, const char *name, const PolySpecial
                         ? (sp_streq(name, "superclass") ? "sp_box_class(" : "sp_box_poly_array(")
                         : "";
     const char *cbc = (ret == TY_POLY && !boxed_ans) ? ")" : "";
-    buf_printf(b, "if (_t%d.tag == SP_TAG_CLASS) _t%d = %s", tv, tr, cbo);
+    if (ps->class_reflect_cls_only)
+      buf_printf(b, "if (_t%d.tag == SP_TAG_CLASS && !sp_class_is_module_val(sp_unbox_class(_t%d))) _t%d = %s", tv, tv, tr, cbo);
+    else
+      buf_printf(b, "if (_t%d.tag == SP_TAG_CLASS) _t%d = %s", tv, tr, cbo);
     if (sp_streq(name, "ancestors"))
       buf_printf(b, "sp_class_ancestors(sp_unbox_class(_t%d))", tv);
     else if (sp_streq(name, "included_modules"))

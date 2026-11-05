@@ -22727,6 +22727,10 @@ int num_iter_answers_recv(Compiler *c, int id) {
 /* Does this statement list end in something that leaves the function -- a
    `return`, or a bare `raise`/`throw`? Used to decide whether a construct in
    tail position produces a value at all. Parentheses preserve divergence. */
+/* (`exit`, `exit!` and `abort` too, the names the analysis goes by
+   (an_call_diverges): it types a call by its method's own rescue where the
+   block ends in one, and a splice that took the body to return had no value
+   for that slot, `x = g { exit 2 }` under a rescuing g) */
 int stmts_diverge(Compiler *c, int stmts) {
   const NodeTable *nt = c->nt;
   if (stmts < 0) return 0;
@@ -22741,7 +22745,7 @@ int stmts_diverge(Compiler *c, int stmts) {
   if (lk == NK_CallNode && nt_ref(nt, last, "receiver") < 0 &&
       !bare_call_class_owned(c, last)) {
     const char *nm = nt_str(nt, last, "name");
-    if (nm && (is_raise_alias(nm) || is_throw_name(nm)) && cplan_user_fresh(c, last)->mi < 0) return 1;
+    if (nm && is_diverging_call(nm) && cplan_user_fresh(c, last)->mi < 0) return 1;
   }
   return 0;
 }

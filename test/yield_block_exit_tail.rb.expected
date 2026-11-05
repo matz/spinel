@@ -1,0 +1,29 @@
+[2, false]
+[0, true]
+[1, false]
+[0, true]
+[3, false]
+[4, false]
+[5, false]
+[6, false]
+["a"]
+{"a" => "1"}
+[7, false]
+[8, false]
+[9, false]
+[1]
+[11, false]
+1
+[12, false]
+[13, false]
+ensure
+[14, false]
+[15, false]
+[16, false]
+"v"
+[17, false]
+[1, false]
+[1, false]
+[1, false]
+["a"]
+at_exit

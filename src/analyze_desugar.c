@@ -5265,24 +5265,37 @@ static int step_kw_paren(NodeTable *nt, int v) {
   return p;
 }
 
-/* Numeric#step only: a program's own step(by:) takes its keywords as they are */
-int step_kw_numeric_recv(Compiler *c, NodeTable *nt, int id) {
-  static const int owners[] = { CORE_INTEGER, CORE_FLOAT, CORE_NUMERIC };
-  for (size_t i = 0; i < sizeof(owners) / sizeof(*owners); i++)
-    if (an_reopen_owner(c, id, owners[i]) >= 0) return 0;
-  int recv = nt_ref(nt, id, "receiver");
-  TyKind rt = infer_type(c, recv);
-  /* a boxed one only where no class it may hold has a step of its own */
+/* Whether call `id`, a `step` with keyword arguments, stays as written,
+   so the keywords go to a program's own step. A receiver that is a class
+   value or an object of the program keeps them. Otherwise, when the
+   program defines or reads no step, it is Numeric#step, whose keyword
+   forms are lowered to positional arguments. When it does, the call is
+   lowered only for a receiver known to be a number whose class the
+   program does not give its own step, or a boxed receiver no class of
+   which has a step of its own (a receiver typed later is asked again on
+   a later pass). */
+int step_kw_own_method(Compiler *c, int id) {
+  int recv = nt_ref(c->nt, id, "receiver");
+  TyKind rt = recv >= 0 ? infer_type(c, recv) : TY_UNKNOWN;
+  /* (a class value or an object of the program is no number: its own
+     class method or method takes the keywords, or none does) */
+  if (rt == TY_CLASS || ty_is_object(rt)) return 1;
+  if (!an_user_defines_or_reads(c, "step")) return 0;
   if (rt == TY_POLY) {
+    static const int owners[] = { CORE_INTEGER, CORE_FLOAT, CORE_NUMERIC };
+    for (size_t i = 0; i < sizeof(owners) / sizeof(*owners); i++)
+      if (an_reopen_owner(c, id, owners[i]) >= 0) return 1;
+    /* a boxed one only where no class it may hold has a step of its own */
     const ClsSet *cs = cls_fact_node(c, recv);
     if (!cs || cs->all) return 0;
     for (int k = cls_set_next(cs, -1); k >= 0; k = cls_set_next(cs, k)) {
       int dc = -1;
-      if (comp_method_in_chain(c, k, "step", &dc) >= 0) return 0;
+      if (comp_method_in_chain(c, k, "step", &dc) >= 0) return 1;
     }
-    return 1;
+    return 0;
   }
-  return !ty_is_object(rt);
+  int num = ty_is_numeric(rt) || rt == TY_RATIONAL || rt == TY_BIGINT;
+  return !num || comp_builtin_kind_reopen_mi(c, rt, "step") >= 0;
 }
 
 void step_kw_positional(Compiler *c, NodeTable *nt, int id, int args, int to_v, int by_v, int by_first) {
@@ -5421,8 +5434,7 @@ int desugar_step_kwargs(Compiler *c) {
       else if (kn && sp_streq(kn, "by")) { by_v = nt_ref(nt, els[i], "value"); by_first = to_v < 0; }
       else { other = 1; break; }
     }
-    if (other || (to_v < 0 && by_v < 0)) continue;
-    if (!step_kw_numeric_recv(c, nt, id)) continue;
+    if (other || (to_v < 0 && by_v < 0) || step_kw_own_method(c, id)) continue;
     step_kw_positional(c, nt, id, args, to_v, by_v, by_first);
     changed = 1;
   }

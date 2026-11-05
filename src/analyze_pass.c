@@ -20806,6 +20806,9 @@ static int bi_local_no_integer(Compiler *c, Scope *s, const char *lname, BiKindW
   for (int i = 0; i < w->n; i++) if (sp_streq(w->seen[i], lname)) return 0;
   if (w->n == BI_KIND_LOCALS) return 0;
   w->seen[w->n++] = lname;
+  /* a parameter takes its type from its call sites, and may have no write */
+  LocalVar *lv = scope_local(s, lname);
+  if (lv && bi_kind_says_no_integer(lv->type)) return 1;
   int si = (int)(s - c->scopes);
   for (int r = lw_shared_first(c, lname, si); r >= 0; r = lw_shared_next(r)) {
     int id = lw_shared_node(r);

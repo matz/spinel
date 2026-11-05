@@ -70,6 +70,16 @@ def float_from_method(n)
   y
 end
 
+def float_from_parameter(x, n)
+  y = x
+  i = 0
+  while i < n
+    y = y * 2
+    i += 1
+  end
+  y
+end
+
 def float_fibonacci(n)
   a = 1.0
   b = 1.0
@@ -161,6 +171,7 @@ p float_by_integer(3)
 p float_pow(3)
 p float_from_to_f(3)
 p float_from_method(3)
+p float_from_parameter(1.5, 3)
 p float_fibonacci(3)
 p float_through_temp(3)
 p string_repeated(3)

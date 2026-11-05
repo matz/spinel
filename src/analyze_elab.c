@@ -5264,7 +5264,11 @@ int elab_record_class_of(Compiler *c, int cls) {
 
 int elab_record_cmethod(Compiler *c, int cls, const char *name) {
   int a = elab_record_class_of(c, cls);
-  return a >= 0 && is_record_class_cmethod(name, c->classes[a].is_data);
+  if (a < 0) return 0;
+  /* (a Data class by its record call, the write's or the superclass's: the
+     walk asks before register_structs sets is_data, lr_late_make) */
+  int d = c->classes[a].def_node, call = class_def_record(c->nt, d);
+  return is_record_class_cmethod(name, class_def_record_is_data(c->nt, call >= 0 ? call : class_def_super(c->nt, d)));
 }
 
 int elab_call_method(Compiler *c, int id, int cls, const char *name, int sg) {

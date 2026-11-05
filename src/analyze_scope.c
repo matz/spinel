@@ -2441,6 +2441,14 @@ int class_def_record(const NodeTable *nt, int def_node) {
   return class_def_is_record_call(nt, v) ? v : -1;
 }
 
+/* Is the record call `call` (class_def_is_record_call) `Data.define(...)`,
+   whose class is a Data class? The node's answer, there from the parse on:
+   ClassInfo.is_data is set only once the walk is done (register_structs). */
+int class_def_record_is_data(const NodeTable *nt, int call) {
+  int vr = class_def_is_record_call(nt, call) ? nt_ref(nt, call, "receiver") : -1;
+  return vr >= 0 && is_data_class_builder(nt_str(nt, vr, "name"), nt_str(nt, call, "name"));
+}
+
 /* The class body a definition node carries: a ClassNode's or ModuleNode's
    own, or the block of `Name = Struct.new(...) do ... end` (and
    Data.define) or of a class builder's write, the class's def_node.
@@ -2632,12 +2640,7 @@ static int resolve_symbol_list(Compiler *c, int node, const char **out, int cap,
 void register_struct_members(Compiler *c, ClassInfo *cls, int val) {
   const NodeTable *nt = c->nt;
   cls->is_struct = 1;
-  {
-    int vr = nt_ref(nt, val, "receiver");
-    const char *rn = vr >= 0 && nt_kind(nt, vr) == NK_ConstantReadNode
-                     ? nt_str(nt, vr, "name") : NULL;
-    if (rn && sp_streq(rn, "Data")) cls->is_data = 1;
-  }
+  if (class_def_record_is_data(nt, val)) cls->is_data = 1;
   int args = nt_ref(nt, val, "arguments");
   int an = 0;
   const int *argv = args >= 0 ? nt_arr(nt, args, "arguments", &an) : NULL;

@@ -17,3 +17,7 @@ true
 true
 false
 false
+false
+true
+true
+"cannot determine inclusion in beginless/endless ranges"

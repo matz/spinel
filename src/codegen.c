@@ -17141,8 +17141,9 @@ static int class_succ_dispatched(Compiler *c, int k) {
   if (scope_is_shadowed(c, mi) || m->is_transplanted_source) return 0;
   return 1;
 }
-/* Does class k answer Range#include? by cover? (sp_obj_succ_dispatch's
-   probe 2): a Numeric of the program's own, or one with a to_int */
+/* Range#include?'s classification (sp_obj_succ_dispatch's probes 2 and 3):
+   1 for a Numeric of the program's own, 2 for a class with a to_int, which
+   probe 3 calls, as CRuby's rb_check_to_integer does */
 static int class_range_linear(Compiler *c, int k) {
   if (k < 0 || k >= c->nclasses || !c->classes[k].instantiated || is_builtin_reopen(c->classes[k].name)) return 0;
   for (int j = k; j >= 0; j = c->classes[j].parent) {
@@ -17151,7 +17152,12 @@ static int class_range_linear(Compiler *c, int k) {
     if (sn && sp_streq(sn, "Numeric")) return 1;
   }
   int defcls = -1;
-  return comp_method_in_chain(c, k, "to_int", &defcls) >= 0 && defcls >= 0;
+  int mi = comp_method_in_chain(c, k, "to_int", &defcls);
+  if (mi < 0 || defcls < 0) return 0;
+  Scope *m = &c->scopes[mi];
+  if (!m->reachable || m->yields || m->nparams != 0 || m->rest_idx >= 0) return 0;
+  if (scope_is_shadowed(c, mi) || m->is_transplanted_source) return 0;
+  return 2;
 }
 static int g_has_user_succ = 0;
 
@@ -17160,7 +17166,23 @@ static void emit_obj_succ_dispatch(Compiler *c, Buf *b) {
   emit_hook_object_root(b, "SP_GC_ROOT_RBVAL", "v");
   buf_puts(b, "  *ok = TRUE;\n  if (probe == 2) {\n    switch (v.cls_id) {\n");
   for (int k = 0; k < c->nclasses; k++)
-    if (class_range_linear(c, k)) buf_printf(b, "    case %d: return sp_box_nil();\n", k);
+    if (class_range_linear(c, k) == 1) buf_printf(b, "    case %d: return sp_box_nil();\n", k);
+  buf_puts(b, "    default: break;\n    }\n    *ok = FALSE;\n    return sp_box_nil();\n  }\n");
+  buf_puts(b, "  if (probe == 3) {\n    switch (v.cls_id) {\n");
+  for (int k = 0; k < c->nclasses; k++) {
+    if (class_range_linear(c, k) != 2) continue;
+    int defcls = -1;
+    int mi = comp_method_in_chain(c, k, "to_int", &defcls);
+    Scope *m = &c->scopes[mi];
+    int has_blk = m->blk_param && m->blk_param[0];
+    char call[256];
+    snprintf(call, sizeof call, "%s(%s(sp_%s *)v.v.p%s)", mc_method(c, m),
+             c->classes[defcls].is_value_type ? "*" : "", c->classes[defcls].c_name, has_blk ? ", NULL" : "");
+    buf_printf(b, "    case %d: { sp_RbVal _r = ", k);
+    if (m->ret == TY_POLY || m->ret == TY_UNKNOWN) buf_puts(b, call);
+    else emit_boxed_text(c, m->ret, call, b);
+    buf_puts(b, "; if (_r.tag == SP_TAG_INT || _r.tag == SP_TAG_BIGINT) return sp_box_nil(); break; }\n");
+  }
   buf_puts(b, "    default: break;\n    }\n    *ok = FALSE;\n    return sp_box_nil();\n  }\n");
   buf_puts(b, "  switch (v.cls_id) {\n");
   for (int k = 0; k < c->nclasses; k++) {

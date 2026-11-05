@@ -49,3 +49,31 @@ boxed = [V.new(1)..V.new(5), 1..5, "a".."e"]
 boxed.each { |b| p b.include?(b.first.succ) }
 p boxed[0].include?(V.new(2.5))
 p boxed[0].member?(V.new(2.5))
+
+# to_int is called: one answering nil leaves the walk, one answering an
+# Integer takes cover?
+class U
+  include Comparable
+  attr_reader :n
+  def initialize(n) = @n = n
+  def <=>(o) = n <=> o.n
+  def succ = U.new(n + 2)
+  def to_int = nil
+end
+class K
+  include Comparable
+  attr_reader :n
+  def initialize(n) = @n = n
+  def <=>(o) = n <=> o.n
+  def succ = K.new(n + 2)
+  def to_int = n
+end
+p (U.new(1)..U.new(5)).include?(U.new(2))
+p (U.new(1)..U.new(5)).include?(U.new(3))
+p (K.new(1)..K.new(5)).include?(K.new(2))
+# an open end is refused whatever the argument, a Range too
+begin
+  p (U.new(1)..).include?(U.new(1)..U.new(2))
+rescue TypeError => e
+  p e.message
+end

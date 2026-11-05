@@ -26,3 +26,16 @@ y = [w, 1]
 p y[0] == W.new(2)
 p y[0] == W.new(-1)
 p y[0] == W.new(5)
+
+# a <=> reading an unset Bignum ivar answers nil: unequal, not a crash
+class B
+  include Comparable
+  def initialize(set) = (@x = 2**70 if set)
+  def <=>(o) = @x
+end
+p B.new(false) == B.new(false)
+p B.new(false) != B.new(false)
+p B.new(true) == B.new(true)
+c = B.new(false)
+p c == B.new(false)
+p c != B.new(false)

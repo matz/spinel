@@ -254,9 +254,9 @@ static int sp_io_own_nb(sp_File *f, int fd) {
   return f->wnonblock == 1;
 }
 
-/* A connected TCP stream reads through its own buffer on a non-blocking
-   descriptor; a listening socket, a datagram socket and a Unix socket keep
-   the stdio read side. SPINEL_SOCK_STDIO=1 keeps every socket on stdio. */
+/* A connected stream socket, TCP or Unix, reads through its own buffer on a
+   non-blocking descriptor; a listening socket and a datagram socket keep the
+   stdio read side. SPINEL_SOCK_STDIO=1 keeps every socket on stdio. */
 static int sp_io_sock_takes_own_buf(int fd) {
   static int stdio = -1;
   if (stdio < 0) { const char *e = getenv("SPINEL_SOCK_STDIO"); stdio = e && *e && *e != '0'; }
@@ -265,13 +265,13 @@ static int sp_io_sock_takes_own_buf(int fd) {
   if (getsockopt(fd, SOL_SOCKET, SO_TYPE, &type, &tl) != 0 || type != SOCK_STREAM) return 0;
   struct sockaddr_storage ss; socklen_t sl = sizeof ss;
   if (getsockname(fd, (struct sockaddr *)&ss, &sl) != 0) return 0;
-  if (ss.ss_family != AF_INET && ss.ss_family != AF_INET6) return 0;
+  if (ss.ss_family != AF_INET && ss.ss_family != AF_INET6 && ss.ss_family != AF_UNIX) return 0;
   sl = sizeof ss;
   return getpeername(fd, (struct sockaddr *)&ss, &sl) == 0;
 }
 
 /* A handle made over a descriptor someone else holds (IO.for_fd, IO.new):
-   when it is a connected TCP stream, the handle reads and writes as the
+   when it is a connected stream socket, the handle reads and writes as the
    socket's own handle does. Its descriptor may share a non-blocking open
    file with that handle, where stdio would read EAGAIN as the end of file
    and drop a write that cannot finish. The flag is left as it is: the
@@ -2635,7 +2635,7 @@ sp_bool sp_File_autoclose_p(sp_File *f) { SP_IO_OPEN(f); return !f->no_autoclose
 void sp_File_set_autoclose(sp_File *f, sp_bool on) { SP_IO_OPEN(f); f->no_autoclose = !on; }
 /* #reopen: the handle's descriptor is another one now. The bytes rbuf held
    were the old one's, and its flag answer too; the new one reads through
-   its own buffer only if it is a connected TCP stream as well. */
+   its own buffer only if it is a connected stream socket as well. */
 static void sp_io_own_buf_reopened(sp_File *f) {
   sp_io_rlock(f);
   f->rpos = f->rlen = 0;

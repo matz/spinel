@@ -3535,9 +3535,13 @@ void emit_block_invoke(Compiler *c, int args_node, Buf *b, int indent, int as_ex
     emit_stmt_tail(c, bd3[bn3 - 1], b, 0);
     g_result_var = sv_rv; g_result_poly = sv_rp; g_result_ty = sv_rty; g_result_oint = sv_ro;
   }
-  else if (as_expr && !nx_own && want_ty == TY_STRBUF && bn3 > 0) {
+  else if (as_expr && !nx_own && want_ty == TY_STRBUF && bn3 > 0 && !stmts_diverge(c, bbody)) {
     /* --share-strings: a yield read as the shared handle (emit_strbuf_route)
        answers its block's String as one */
+    /* (a block that ends in a raise has no String to answer: asked for its
+       handle, `raise "b"` was wrapped as one, a void in SP_STR_HDL, and the
+       C did not build. Its statements run in the arms below, and the slot
+       takes the nil the end of the splice gives a body that diverges.) */
     if (block_of_body(c, bbody) >= 0) emit_block_locals_reset(c, block_of_body(c, bbody), b, 0);
     for (int k3 = 0; k3 < bn3 - 1; k3++) {
       if (rd_lbl && k3 == rd_head) buf_printf(b, "_redo_%d: ; ", rd_lbl);

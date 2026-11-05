@@ -3124,7 +3124,7 @@ static void sp_sched_pump(sp_thread *target, int may_wait) {
        roots a stale snapshot a collector could later mark. Main instead waits
        and lets a helper run the work. At N=1 there are no helpers, so it must
        pump. EXCEPTION: a thread pinned to main's worker (home_wid 0 -- it first
-       ran here via a Thread.pass sweep, sp_sched_pass) can run NOWHERE else:
+       ran here before main had a helper) can run NOWHERE else:
        helpers must not resume it (TLS affinity) and stealing skips it. If one
        is requeued while main pumps (a #kill/#raise or Queue wake unblocked it),
        main is the only worker that can finish it, so run it here -- otherwise
@@ -3197,7 +3197,7 @@ static void sp_sched_pass(void) {
   (void)nrun;
 #ifdef SP_EV_BACKEND
   /* Main's own readiness set holds the I/O of the threads pinned to main's
-     worker (a thread that first ran in one of these sweeps is), and only a
+     worker (one that first ran in a sweep with no helper is), and only a
      drain of it readies them. The pump drains it; a Thread.pass loop did not,
      so main spinning on Thread.pass until such a thread got a connection
      spun for good. A drain is a few syscalls (about 12 us on Darwin), and a
@@ -3211,7 +3211,17 @@ static void sp_sched_pass(void) {
   }
 #endif
   while (n-- > 0) {
-    sp_thread *t = sched_pick(sp_worker_id);
+    sp_thread *t;
+#ifdef SP_THREADS
+    /* With helpers main starts no thread, as in its pump: a thread that first
+       runs here is pinned to main's worker, and stands still whenever main is
+       in a blocking C call, for as long as that call lasts. A thread spawned
+       just before the Thread.pass found the new helper not up yet, so it took
+       that road every time. */
+    if (sp_active_workers > 1) { RQ_LOCK(0); t = runq_pop(&g_lrq[0]); RQ_UNLOCK(0); }
+    else
+#endif
+    t = sched_pick(sp_worker_id);
     if (!t) return;
     run_thread_once(t);
   }

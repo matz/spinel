@@ -480,6 +480,9 @@ static char *emit_hash_block_eval(Compiler *c, int block, Repr hr, const char *h
   else { emit_ctype(c, bret, g_pre); buf_printf(g_pre, " _t%d = %s;\n", tvv, default_value_from_compiler(c, bret)); }
   int sv_bvo = g_bv_dest_oint;
   if (vo) g_bv_dest_oint = 1;
+  /* (one representation: the slot is the bytes face, bret above; a `next` or
+     a tail that reads as the handle is stored as its bytes) */
+  if (!want_poly && !vo && bret == TY_STRING) g_bv_dest_ty = TY_STRING;
   emit_block_value_into(c, block, tvvb, want_poly, g_indent + 1);
   g_bv_dest_oint = sv_bvo;
   if (ns0 && p0_lv) lv_set_type(p0_lv, p0_decl);
@@ -5441,8 +5444,9 @@ static void emit_block_value_into_inner(Compiler *c, int block, const char *dest
   if (!want_poly && bn > 0) {
     TyKind dt = dest_ty != TY_UNKNOWN ? dest_ty : repr_of(c, bb[bn - 1]).as_ty;
     if (ty_is_array(dt) || ty_is_hash(dt)) g_ie_next_ty = dt;
-    /* (one representation: a `next` into a handle slot adopts its value) */
-    else if (dt == TY_STRBUF) g_ie_next_ty = dt;
+    /* (one representation: a `next` into a handle slot adopts its value, and
+       one into a slot its caller declared as the bytes face stores the bytes) */
+    else if (dt == TY_STRBUF || dt == TY_STRING) g_ie_next_ty = dt;
     /* an Integer or Float slot: a `next v` stores its plain value, or its
        oint where the caller declared the slot as one (dest_oint) */
     else if (dt == TY_INT || dt == TY_FLOAT) { g_ie_next_ty = dt; g_ie_next_oint = dest_oint; }
@@ -5490,6 +5494,8 @@ static void emit_block_value_into_inner(Compiler *c, int block, const char *dest
         buf_puts(&vb, ")");
       }
       else if (dest_ty == TY_STRBUF) emit_strbuf_handle_of(c, tail, &vb);
+      /* (one representation: a bytes slot takes the tail's String of either face as its bytes) */
+      else if (g_ie_next_ty == TY_STRING) { buf_puts(&vb, "SP_STR_B("); emit_expr(c, tail, &vb); buf_puts(&vb, ")"); }
       else if (apf) { buf_printf(&vb, "%s(", apf); emit_expr(c, tail, &vb); buf_puts(&vb, ")"); }
       else if (dest_oint && oint_kind(g_ie_next_ty)) emit_oint_expr(c, tail, g_ie_next_ty, &vb);
       else emit_expr(c, tail, &vb);

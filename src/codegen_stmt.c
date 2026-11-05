@@ -22354,6 +22354,8 @@ static void emit_stmt_node(Compiler *c, int id, Buf *b, int indent) {
           emit_expr(c, nv[0], b);
           buf_puts(b, ")");
         }
+        /* (one representation: a bytes slot takes a value of either face as its bytes) */
+        else if (g_ie_next_ty == TY_STRING) { buf_puts(b, "SP_STR_B("); emit_expr(c, nv[0], b); buf_puts(b, ")"); }
         else if (c->strbuf_handle_demand[id]) emit_strbuf_handle_of(c, nv[0], b);
         else if (g_ie_res_poly) emit_boxed(c, nv[0], b);
         else if (g_ie_next_oint && oint_kind(g_ie_next_ty)) emit_oint_expr(c, nv[0], g_ie_next_ty, b);

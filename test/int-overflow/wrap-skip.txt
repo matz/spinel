@@ -23,3 +23,6 @@ test/bigint_poly_arith.rb
 test/bigint_pow_shift.rb
 test/int_overflow_promote.rb
 test/loop_bigint_return.rb
+# a local a while multiplies past 2^64: the default mode grows it into a
+# Bignum (#10094), which wrap never makes
+test/while_mul_keeps_local_kind.rb

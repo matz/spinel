@@ -4163,7 +4163,7 @@ sp_PolyArray *sp_Enumerator_to_a(sp_Enumerator *e) {
    stays blocked in a read or a sleep. Nothing here but the two
    atomics and the write(2) is called from the handler. */
 static int sp_sig_pending[SP_SIG_MAX];
-volatile int sp_sig_pending_flag;
+extern volatile int sp_sig_pending_flag;   /* (lib/sp_alloc.c: sp_gc_alloc_nogc sets it too) */
 /* #9222: the default SIGINT / SIGTERM's handler records a signal that
    arrives outside a blocking call (sp_sig_async_ok, sp_types.h) in
    sp_sig_default_pending, and the raise it makes is the generated program's
@@ -4176,13 +4176,8 @@ void (*sp_sig_default_raiser)(int);
 /* A collection sp_gc_alloc_nogc could not run, asked of the next safe
    point: the safe points' flag is set, and the safe point collects
    (sp_gc_poll_collect) before it looks for a signal */
-static volatile int sp_gc_poll_due;
+extern volatile int sp_gc_poll_due;   /* (lib/sp_alloc.c) */
 void sp_gc_poll_collect(void);
-void sp_gc_poll_request(void) {
-  if (sp_gc_poll_due) return;
-  sp_gc_poll_due = 1;
-  SP_ATOMIC_STORE(&sp_sig_pending_flag, 1, __ATOMIC_RELEASE);
-}
 static void sp_gc_poll_run(void) {
   if (!sp_gc_poll_due) return;
   sp_gc_poll_due = 0;

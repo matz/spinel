@@ -26148,21 +26148,139 @@ static int biv_attr_defs(NodeTable *nt, int call, int **defs, int *nd) {
   return 1;
 }
 
-/* does a body of module mn call module_function? Its methods' copies on
-   the module then run with the module as self, whose instance variables
-   are its own */
-static int biv_module_function(const NodeTable *nt, int n0, const char *mn) {
-  for (int m = 0; m < n0; m++) {
-    const char *bn0 = class_def_is_module(nt, m) ? class_def_bare_name(nt, m) : NULL;
-    if (!bn0 || !sp_streq(bn0, mn)) continue;
-    int b = class_def_body(nt, m), bn = 0;
-    const int *bs = b >= 0 ? nt_arr(nt, b, "body", &bn) : NULL;
-    for (int k = 0; k < bn; k++)
-      if (nt_kind(nt, bs[k]) == NK_CallNode && nt_ref(nt, bs[k], "receiver") < 0 &&
-          sp_streq(nt_str(nt, bs[k], "name"), "module_function"))
-        return 1;
+static int biv_name_cmp(const void *a, const void *b) { return strcmp(*(const char *const *)a, *(const char *const *)b); }
+/* rbself_module_host_in's strict answer for every module, from one walk of
+   the program: asked per module, its walks (the reads of the name, every
+   include, prepend and extend, the class body each is in, whether that
+   body is nested) took the program's size per module, and a program that
+   mixes N modules in took N times it */
+typedef struct { const char *name; int call; } BivMix;
+typedef struct {
+  BivMix *mix; int nmix;              /* a constant argument of an include, prepend or extend: by name, then call */
+  const char **rn; int *reads; int nr;   /* the names of mix, once each, sorted; their reads less their module headers */
+  int *owner;                         /* the first class whose body holds the statement, or -1 */
+  int *parent;                        /* (an_parent_map) */
+  const char **own; int nown;         /* a class or module of the name is under a path or nested (rbself_names_own_class) */
+  const char **mf; int nmf;           /* a module of the name calls module_function in its body: its methods'
+                                         copies then run with the module as self, whose ivars are its own */
+} BivHosts;
+static int biv_mix_cmp(const void *a, const void *b) {
+  const BivMix *x = a, *y = b;
+  int r = strcmp(x->name, y->name);
+  return r ? r : (x->call > y->call) - (x->call < y->call);
+}
+static void *biv_grow(void *p, int n, int *cap, size_t sz) {
+  if (n < *cap) return p;
+  *cap = *cap ? *cap * 2 : 16;
+  p = realloc(p, sz * (size_t)*cap);
+  if (!p) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  return p;
+}
+/* engine_lexically_nested by the parent map: is id in the body of a class,
+   module or singleton class other than itself? */
+static int biv_nested(const NodeTable *nt, const int *parent, int id) {
+  for (int ch = id, p = parent[id]; p >= 0; ch = p, p = parent[p]) {
+    if (!class_def_opens_cref(nt, p) && nt_kind(nt, p) != NK_SingletonClassNode) continue;
+    if (ch == class_def_body(nt, p)) return 1;
   }
   return 0;
+}
+static int biv_has(const char **v, int n, const char *name) {
+  return n && name && bsearch(&name, v, (size_t)n, sizeof(*v), biv_name_cmp) != NULL;
+}
+static void biv_hosts_build(NodeTable *nt, int n0, BivHosts *h) {
+  memset(h, 0, sizeof *h);
+  int cmix = 0, cown = 0, cmf = 0;
+  h->parent = an_parent_map(nt);
+  h->owner = malloc(sizeof(int) * (size_t)(n0 ? n0 : 1));
+  if (!h->parent || !h->owner) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  for (int id = 0; id < n0; id++) h->owner[id] = -1;
+  for (int id = 0; id < n0; id++) {
+    NodeKind k = nt_kind(nt, id);
+    if (k == NK_CallNode) {
+      const char *cn = nt_str(nt, id, "name");
+      if (!cn || (!sp_streq(cn, "include") && !sp_streq(cn, "prepend") && !sp_streq(cn, "extend"))) continue;
+      int args = nt_ref(nt, id, "arguments"), an = 0;
+      const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &an) : NULL;
+      for (int i = 0; i < an; i++) {
+        const char *a = nt_kind(nt, av[i]) == NK_ConstantReadNode ? nt_str(nt, av[i], "name") : NULL;
+        if (!a) continue;
+        h->mix = biv_grow(h->mix, h->nmix, &cmix, sizeof *h->mix);
+        h->mix[h->nmix++] = (BivMix){ a, id };
+      }
+      continue;
+    }
+    int cls = class_def_is_class(nt, id), mod = !cls && class_def_is_module(nt, id);
+    if (!cls && !mod) continue;
+    const char *cn = class_def_name(nt, id);
+    if (cn && (!class_def_bare_name(nt, id) || biv_nested(nt, h->parent, id))) {
+      h->own = biv_grow(h->own, h->nown, &cown, sizeof *h->own);
+      h->own[h->nown++] = cn;
+    }
+    int b = class_def_body(nt, id), bn = 0;
+    const int *bs = b >= 0 ? nt_arr(nt, b, "body", &bn) : NULL;
+    for (int k2 = 0; cls && k2 < bn; k2++) if (bs[k2] >= 0 && bs[k2] < n0 && h->owner[bs[k2]] < 0) h->owner[bs[k2]] = id;
+    const char *bn0 = mod ? class_def_bare_name(nt, id) : NULL;
+    for (int k2 = 0; bn0 && k2 < bn; k2++)
+      if (nt_kind(nt, bs[k2]) == NK_CallNode && nt_ref(nt, bs[k2], "receiver") < 0 &&
+          sp_streq(nt_str(nt, bs[k2], "name"), "module_function")) {
+        h->mf = biv_grow(h->mf, h->nmf, &cmf, sizeof *h->mf);
+        h->mf[h->nmf++] = bn0;
+        break;
+      }
+  }
+  if (h->nmix > 1) qsort(h->mix, (size_t)h->nmix, sizeof *h->mix, biv_mix_cmp);
+  if (h->nown > 1) qsort(h->own, (size_t)h->nown, sizeof *h->own, biv_name_cmp);
+  if (h->nmf > 1) qsort(h->mf, (size_t)h->nmf, sizeof *h->mf, biv_name_cmp);
+  h->rn = malloc(sizeof(*h->rn) * (size_t)(h->nmix ? h->nmix : 1));
+  h->reads = calloc((size_t)(h->nmix ? h->nmix : 1), sizeof(int));
+  if (!h->rn || !h->reads) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  for (int i = 0; i < h->nmix; i++)
+    if (!h->nr || !sp_streq(h->rn[h->nr - 1], h->mix[i].name)) h->rn[h->nr++] = h->mix[i].name;
+  for (int id = 0; h->nr && id < n0; id++) {
+    NodeKind k = nt_kind(nt, id);
+    const char *nm = NULL; int d = 0;
+    if (k == NK_ModuleNode) { int cp = nt_ref(nt, id, "constant_path"); nm = cp >= 0 ? nt_str(nt, cp, "name") : NULL; d = -1; }
+    else if (k == NK_ConstantReadNode || k == NK_ConstantPathNode) { nm = nt_str(nt, id, "name"); d = 1; }
+    if (!nm) continue;
+    const char **at = bsearch(&nm, h->rn, (size_t)h->nr, sizeof(*h->rn), biv_name_cmp);
+    if (at) h->reads[at - h->rn] += d;
+  }
+}
+static void biv_hosts_free(BivHosts *h) {
+  free(h->mix); free(h->rn); free(h->reads); free(h->owner); free(h->parent); free(h->own); free(h->mf);
+}
+/* rbself_module_host_in(nt, n0, mod, 1), from the index */
+static const char *biv_host_of(NodeTable *nt, const BivHosts *h, const char *mod) {
+  const char **at = mod && h->nr ? bsearch(&mod, h->rn, (size_t)h->nr, sizeof(*h->rn), biv_name_cmp) : NULL;
+  if (!at) return NULL;
+  int lo = 0, hi = h->nmix;
+  while (lo < hi) { int md = (lo + hi) / 2; if (strcmp(h->mix[md].name, mod) < 0) lo = md + 1; else hi = md; }
+  const char *host = NULL;
+  int used = 0;
+  for (int e = lo; e < h->nmix && sp_streq(h->mix[e].name, mod);) {
+    int id = h->mix[e].call, names = 0;
+    while (e < h->nmix && h->mix[e].call == id && sp_streq(h->mix[e].name, mod)) { names++; e++; }
+    used += names;
+    const char *nm = nt_str(nt, id, "name");
+    if (sp_streq(nm, "extend")) return NULL;
+    const char *target = NULL;
+    int recv = nt_ref(nt, id, "receiver");
+    if (recv >= 0) {
+      target = nt_kind(nt, recv) == NK_ConstantReadNode ? nt_str(nt, recv, "name") : NULL;
+      if (target && biv_has(h->own, h->nown, target) && biv_nested(nt, h->parent, id)) return NULL;
+    }
+    else if (h->owner[id] >= 0) {
+      int m = h->owner[id];
+      target = biv_nested(nt, h->parent, m) ? NULL : class_def_name(nt, m);
+      if (!target) return NULL;
+    }
+    if (!target || !(rbself_builtin(target) || sp_streq(target, "Object")) ||
+        (host && !sp_streq(host, target))) return NULL;
+    host = target;
+  }
+  if (h->reads[at - h->rn] != used) return NULL;
+  return host;
 }
 
 int desugar_builtin_ivars(Compiler *c) {
@@ -26174,6 +26292,8 @@ int desugar_builtin_ivars(Compiler *c) {
     if (nt_kind(nt, id) == NK_CallNode && biv_is_reflective_set(nt, id) && !biv_is_self_or_implicit(nt, id) &&
         !biv_frozen_literal(nt, nt_ref(nt, id, "receiver")))
       c->bivar_table = 1;
+  BivHosts hosts;
+  biv_hosts_build(nt, n0, &hosts);
   for (int m = 0; m < n0; m++) {
     if (!class_def_opens_frame(nt, m) || class_def_super(nt, m) >= 0) continue;
     int cp = nt_ref(nt, m, "constant_path");
@@ -26186,13 +26306,13 @@ int desugar_builtin_ivars(Compiler *c) {
        Object too, as a reopening of Object's methods do */
     if (class_def_is_module(nt, m) && mode != BIV_OBJECT) {
       const char *mn = class_def_bare_name(nt, m);
-      const char *host = mn && !biv_module_function(nt, n0, mn) ? rbself_module_host_in(nt, n0, mn, 1) : NULL;
+      const char *host = mn && !biv_has(hosts.mf, hosts.nmf, mn) ? biv_host_of(nt, &hosts, mn) : NULL;
       mode = host ? biv_mode(host) : BIV_NONE;
     }
     int body = class_def_body(nt, m);
     if (mode == BIV_NONE || body < 0 || nt_kind(nt, body) != NK_StatementsNode) continue;
     /* `module Text; class String` is the program's own class */
-    if (engine_lexically_nested(nt, m)) continue;
+    if (biv_nested(nt, hosts.parent, m)) continue;
     int bn = 0; const int *bs0 = nt_arr(nt, body, "body", &bn);
     int *bs = malloc(sizeof(int) * (size_t)(bn ? bn : 1));
     memcpy(bs, bs0, sizeof(int) * (size_t)bn);
@@ -26218,6 +26338,7 @@ int desugar_builtin_ivars(Compiler *c) {
     }
     free(nb); free(bs);
   }
+  biv_hosts_free(&hosts);
   if (changed) comp_grow_node_arrays(c);
   return changed;
 }

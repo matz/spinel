@@ -1,0 +1,5 @@
+class BeginRetCounter
+  def size_of: (String text) -> Integer
+  def double: (Float x) -> Float
+  def size_or_nil: (String text) -> Integer?
+end

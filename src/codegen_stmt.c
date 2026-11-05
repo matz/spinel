@@ -22837,7 +22837,8 @@ void emit_stmt_tail_inner(Compiler *c, int id, Buf *b, int indent) {
                is_scalar_ret(slot_t)) {
         char ex[24]; snprintf(ex, sizeof ex, "_t%d", t);
         Buf ux; memset(&ux, 0, sizeof ux);
-        emit_unbox_nilable_text(c, slot_t, ex, &ux);
+        if (slot_o) emit_unbox_nilable_text(c, slot_t, ex, &ux);
+        else emit_unbox_text(c, slot_t, ex, &ux);
         buf_printf(b, "%s;\n", ux.p ? ux.p : "0"); free(ux.p);
       }
       /* a typed Array begin value into a general Array slot (an --rbs

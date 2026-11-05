@@ -4450,6 +4450,50 @@ int desugar_env_enum(Compiler *c) {
   return changed;
 }
 
+/* r.each { } / r.map { } / ... over a Range of the program's objects walk
+   the members its to_a lists (sp_orange_to_a, by succ): the Enumerable
+   surface is the Array's. The Range's own names (cover?, first, min, ...)
+   keep their rows. */
+int desugar_obj_range_via_a(Compiler *c) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  static const char *const VIA_A[] = {
+    "each", "map", "collect", "flat_map", "collect_concat", "select", "filter", "reject",
+    "filter_map", "each_with_index", "each_with_object", "each_slice", "each_cons",
+    "inject", "reduce", "find", "detect", "find_index", "find_all", "any?", "all?",
+    "none?", "one?", "sort", "sort_by", "min_by", "max_by", "minmax", "group_by",
+    "partition", "chunk_while", "slice_when", "zip", "take", "take_while", "drop",
+    "drop_while", "tally", "uniq", "to_set", "sum", "reverse_each", "each_entry", NULL };
+  int changed = 0, n0 = nt->count;
+  for (int id = 0; id < n0; id++) {
+    if (nt_kind(nt, id) != NK_CallNode) continue;
+    const char *nm = nt_str(nt, id, "name");
+    int recv = nt_ref(nt, id, "receiver");
+    if (!nm || recv < 0 || nt_int(nt, recv, "made_to_a", 0)) continue;
+    int hit = 0;
+    for (int q = 0; VIA_A[q]; q++) if (sp_streq(nm, VIA_A[q])) { hit = 1; break; }
+    /* count, first(n) and min/max with a block walk it; include? stays cover? */
+    int args = nt_ref(nt, id, "arguments"), an = 0;
+    if (args >= 0) nt_arr(nt, args, "arguments", &an);
+    int blk = nt_ref(nt, id, "block") >= 0;
+    if (!hit && (sp_streq(nm, "count") || sp_streq(nm, "min") || sp_streq(nm, "max"))) hit = blk || an > 0;
+    if (!hit && (sp_streq(nm, "first") || sp_streq(nm, "last"))) hit = an > 0;
+    if (!hit) continue;
+    if (infer_type(c, recv) != TY_OBJ_RANGE) continue;
+    int toa = nt_new_node(nt, "CallNode");
+    if (toa < 0) continue;
+    nt_node_set_str(nt, toa, "name", "to_a");
+    nt_node_set_int(nt, toa, "made_to_a", 1);
+    nt_node_set_ref(nt, toa, "receiver", recv);
+    nt_node_set_ref(nt, toa, "arguments", -1);
+    nt_node_set_ref(nt, toa, "block", -1);
+    comp_grow_node_arrays(c);
+    c->nscope[toa] = c->nscope[id];
+    nt_node_set_ref(nt, id, "receiver", toa);
+    changed = 1;
+  }
+  return changed;
+}
+
 int desugar_public_method(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int changed = 0;

@@ -165,6 +165,8 @@ int method_name_implicitly_invoked(const char *nm) {
                     in the program names it (#4105-adjacent, the TLS socket
                     shape) */
     "initialize_copy",
+    "succ",      /* Range#each over the program's objects steps by it, through
+                    the generated dispatch behind sp_obj_succ_hook */
     /* the materializer synthesized for a class that includes Enumerable: the
        generated sp_obj_to_a dispatch calls it for an instance the poly
        machinery meets, and nothing in the program names it (#3761) */
@@ -51320,6 +51322,7 @@ static void an_phase_infer_fixpoint(Compiler *c) {
     ch |= AN_PASS("desugar_user_not_match", desugar_user_not_match(c));            /* a !~ b -> !(a =~ b) for a user =~ (#3019) */
     ch |= AN_PASS("desugar_exception_class_ctor", desugar_exception_class_ctor(c));   /* K.exception(a) -> K.new(a) */
     ch |= AN_PASS("desugar_env_enum", desugar_env_enum(c));                 /* ENV.keys/... -> __env_to_h.keys/... */
+    ch |= AN_PASS("desugar_obj_range_via_a", desugar_obj_range_via_a(c));   /* (d1..d2).each { } -> (d1..d2).to_a.each { } */
     ch |= AN_PASS("desugar_io_console_modes", desugar_io_console_modes(c));         /* io.raw { } / io.noecho { } -> mode, begin, ensure restore */
     ch |= AN_PASS("desugar_dir_surface", desugar_dir_surface(c));              /* Dir.foreach{} -> entries.each{}, chdir{} splice, ... */           /* C.class_eval { v } -> (->(){v}).call */
     ch |= AN_PASS("desugar_enumerable_chain", desugar_enumerable_chain(c));               /* x.chain(y) / enum+enum -> __enum_chain(x.to_a + y.to_a) */

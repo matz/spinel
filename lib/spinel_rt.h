@@ -6489,7 +6489,9 @@ static sp_obj_cmp_fn sp_obj_cmp_hook = NULL;
 static sp_bool (*sp_obj_comparable_hook)(int cls_id) = NULL;
 /* `succ` of a program's class, for the Range walk (sp_orange_to_a): the
    generated TU installs the cls_id switch; *ok is false where none answers,
-   and a probe only asks, as CRuby's respond_to?(:succ) check comes first */
+   and a probe only asks, as CRuby's respond_to?(:succ) check comes first.
+   Probe 2 asks instead whether the class is a Numeric, probe 3 whether its
+   to_int answers an Integer. */
 typedef sp_RbVal (*sp_obj_succ_fn)(sp_RbVal v, int probe, sp_bool *ok);
 static sp_obj_succ_fn sp_obj_succ_hook = NULL;
 #define SP_IS_BUILTIN_ARRAY(id) ((id) == SP_BUILTIN_INT_ARRAY || (id) == SP_BUILTIN_STR_ARRAY || \
@@ -18760,6 +18762,45 @@ static SP_UNUSED sp_bool sp_orange_case_eq(const sp_ObjRange *r, sp_RbVal v) {
   if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_OBJ_RANGE) return FALSE;
   return sp_orange_cover(r, v);
 }
+/* An end CRuby's range_include_internal answers by cover? for without a
+   call: a numeric one or a Time (linear_object_p) */
+static SP_UNUSED int sp_orange_end_linear(sp_RbVal v) {
+  if (v.tag == SP_TAG_INT || v.tag == SP_TAG_BIGINT || v.tag == SP_TAG_FLT) return 1;
+  if (v.tag != SP_TAG_OBJ) return 0;
+  if (v.cls_id == SP_BUILTIN_TIME || v.cls_id == SP_BUILTIN_RATIONAL || v.cls_id == SP_BUILTIN_COMPLEX) return 1;
+  sp_bool ok = FALSE;
+  if (v.cls_id >= 0 && sp_obj_succ_hook) sp_obj_succ_hook(v, 2, &ok);
+  return ok;
+}
+/* ... and one whose to_int answers an Integer (rb_check_to_integer), asked
+   of each end after neither is linear */
+static SP_UNUSED int sp_orange_end_to_int(sp_RbVal v) {
+  sp_bool ok = FALSE;
+  if (v.tag == SP_TAG_OBJ && v.cls_id >= 0 && sp_obj_succ_hook) sp_obj_succ_hook(v, 3, &ok);
+  return ok;
+}
+/* Range#include? / #member?: for program objects that are not numeric-like,
+   CRuby refuses an open end and otherwise walks by succ, comparing each
+   member with == (Enumerable#include?), so a value between members is not
+   included although cover? says it is */
+static SP_UNUSED sp_bool sp_orange_include(const sp_ObjRange *r, sp_RbVal v) {
+  SP_GC_ROOT(r); SP_GC_ROOT_RBVAL(v);
+  int fo = r->first.tag == SP_TAG_OBJ && r->first.cls_id >= 0;
+  int lo = r->last.tag == SP_TAG_OBJ && r->last.cls_id >= 0;
+  if ((!fo && !lo) || sp_orange_end_linear(r->first) || sp_orange_end_linear(r->last) ||
+      sp_orange_end_to_int(r->first) || sp_orange_end_to_int(r->last))
+    return !(v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_OBJ_RANGE) && sp_orange_cover(r, v);
+  if (r->first.tag == SP_TAG_NIL || r->last.tag == SP_TAG_NIL)
+    sp_raise_cls("TypeError", "cannot determine inclusion in beginless/endless ranges");
+  sp_RbVal m = sp_orange_walk_start(r); SP_GC_ROOT_RBVAL(m);
+  int st;
+  while ((st = sp_orange_walk_on(r, m)) != 0) {
+    if (sp_poly_rb_equal(m, v)) return TRUE;
+    if (st == 2) break;
+    m = sp_orange_walk_succ(m);
+  }
+  return FALSE;
+}
 /* Range#min / #max without iterating: the begin, or an inclusive end; nil
    for an empty Range. An exclusive max is Enumerable#max over the succ walk,
    as range_max hands it to super */
@@ -18833,8 +18874,9 @@ static sp_RbVal sp_orange_send(sp_ObjRange *r, const char *n, int argc, sp_RbVal
   }
   if (argc == 1) {
     if (!strcmp(n, "cover?")) return sp_box_bool(sp_orange_cover(r, a0));
-    /* include?, member? and === take no Range, as cover? does */
-    if (!strcmp(n, "include?") || !strcmp(n, "member?") || !strcmp(n, "==="))
+    if (!strcmp(n, "include?") || !strcmp(n, "member?")) return sp_box_bool(sp_orange_include(r, a0));
+    /* === takes no Range, as cover? does */
+    if (!strcmp(n, "==="))
       return sp_box_bool(!(a0.tag == SP_TAG_OBJ && a0.cls_id == SP_BUILTIN_OBJ_RANGE) && sp_orange_cover(r, a0));
     if (!strcmp(n, "==") || !strcmp(n, "eql?"))
       return sp_box_bool(a0.tag == SP_TAG_OBJ && a0.cls_id == SP_BUILTIN_OBJ_RANGE && sp_orange_eq(r, (sp_ObjRange *)a0.v.p));

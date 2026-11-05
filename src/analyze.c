@@ -6445,8 +6445,8 @@ static int qc_inside(const int *par, int n, int anc) {
   return 0;
 }
 /* `Bar = Class.new { } unless defined?(Bar)` (cond, the unless) ahead of
-   header hd in the same statements, in a program that writes Bar nowhere
-   else and has no other class or module Bar that the body can see (one of
+   header hd in the same statements, where no other write of Bar and no
+   other class or module Bar is in a body the write can see (its own body,
    an enclosing body or the top level): the write runs, and the header
    reopens what it built. */
 static int qc_unless_defined_runs(const NodeTable *nt, const int *par, int w, int cond,
@@ -6463,7 +6463,9 @@ static int qc_unless_defined_runs(const NodeTable *nt, const int *par, int w, in
     return 0;
   NT_FOREACH_KIND(nt, NK_ConstantWriteNode, o) {
     const char *on = nt_str(nt, o, "name");
-    if (o != w && on && sp_streq(on, wn)) return 0;
+    if (o == w || !on || !sp_streq(on, wn)) continue;
+    int ob = qc_enclosing_body(nt, par, o);
+    for (int e = body; e >= 0; e = qc_enclosing_body(nt, par, e)) if (e == ob) return 0;
   }
   static const NodeKind HK[] = { NK_ClassNode, NK_ModuleNode };
   for (int h = 0; h < 2; h++)

@@ -24,3 +24,15 @@ begin
   class Qux; def k = 6; end
 end
 p Qux.new.k, Qux.new.b
+# a write of the same name in a body the write cannot see does not stop it
+module Inner
+  Bar = Class.new { def b = 7 } unless defined?(Bar)
+  class Bar; def k = 8; end
+end
+module Cfg
+  Bar = 9
+end
+module Mod
+  Bar = Class.new { def j = 10 }
+end
+p Inner::Bar.new.k, Inner::Bar.new.b, Cfg::Bar, Mod::Bar.new.j

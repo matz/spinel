@@ -18782,6 +18782,14 @@ int scope_block_given_else_last(Compiler *c, Scope *sc) {
   return en > 0 ? eb[en - 1] : -1;
 }
 
+/* Did a Hash body widen its value kind to poly while keeping its keys (or
+   become the poly-keyed Hash)? The late ivar widening re-run lets such a
+   return follow its body (irt_scope). */
+static int an_hash_value_widened(TyKind now, TyKind was) {
+  if (!ty_is_hash(now) || !ty_is_hash(was) || now == was || ty_hash_val(now) != TY_POLY) return 0;
+  return now == TY_POLY_POLY_HASH || ty_hash_key(now) == ty_hash_key(was);
+}
+
 static int irt_scope(Compiler *c, int s, IrtCtx *x) {
   const NodeTable *nt = c->nt;
   TyKind *ret_acc = x->ret_acc; char *has_ret = x->has_ret; char *ret_empty = x->ret_empty;
@@ -18975,9 +18983,15 @@ static int irt_scope(Compiler *c, int s, IrtCtx *x) {
   if (g_ret_no_new_poly == 4 && !ty_is_hash(sc->ret) && !ty_is_array(sc->ret) &&
       (!(r == TY_POLY && sc->ret != TY_POLY && sc->ret != TY_UNKNOWN && sc->ret != TY_VOID && sc->ret != TY_NIL) ||
        (g_promote_mode && ty_is_numeric(sc->ret)))) return ch;
+  /* ... and a Hash whose VALUE kind widened to poly over the same keys: a
+     body `{ "a" => @a }` is a Hash[String, Integer] while @a is one, and a
+     Hash[String, untyped] once the ivar widened here. The two are separate
+     C structs, so a return left at the narrower kind made the C return an
+     sp_StrPolyHash * as an sp_StrIntHash *, and the build stopped. */
   if (g_ret_no_new_poly == 2 &&
       !(r == TY_POLY && sc->ret != TY_POLY && sc->ret != TY_UNKNOWN && sc->ret != TY_VOID && sc->ret != TY_NIL) &&
-      !(r == TY_BIGINT && sc->ret == TY_INT)) return ch;
+      !(r == TY_BIGINT && sc->ret == TY_INT) &&
+      !an_hash_value_widened(r, sc->ret)) return ch;
   /* An element-less-hash body (`{}` / Hash.new) infers TY_UNKNOWN every pass
      (no witnessed element). Once a caller has pinned it to a concrete hash
      (backprop_hash_return_types), don't collapse it back to UNKNOWN -- that

@@ -6610,6 +6610,13 @@ static SP_INLINE sp_oint sp_poly_spaceship_body(sp_RbVal a, sp_RbVal b) {
   return sp_oint_nil();
 }
 static sp_oint sp_poly_spaceship(sp_RbVal a, sp_RbVal b) { return sp_poly_spaceship_body(a, b); }
+/* `a <=> b` read as a value: a program's <=> answering a Bignum is that
+   Bignum, which the sp_oint answer above cannot carry */
+static SP_UNUSED sp_RbVal sp_poly_spaceship_v(sp_RbVal a, sp_RbVal b) {
+  sp_RbVal u;
+  if (sp_poly_user_cmp("<=>", a, b, &u)) return u.tag == SP_TAG_BIGINT ? u : sp_box_oint(sp_spaceship_answer(u));
+  return sp_box_oint(sp_poly_spaceship(a, b));
+}
 /* String#<=> alone falls back to rb_invcmp: an operand that is neither a
    string nor convertible by #to_str is asked to compare itself AGAINST the
    string and its answer is negated, giving nil when the operand's class has

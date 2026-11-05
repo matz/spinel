@@ -38,6 +38,14 @@ TyKind ivar_value_ty(ClassInfo *ci, int iv) {
    emitters then decline the very call they were re-entered to serve). One
    node at a time; -1 clears the pin. */
 /* inference's own face pins (the face loop in infer_call), innermost last */
+/* Does any program class define a <=> whose answer is typed Bignum? */
+static int an_some_cmp_answers_bigint(Compiler *c) {
+  for (int k = 0; k < c->nclasses; k++) {
+    int mi = comp_method_in_chain(c, k, "<=>", NULL);
+    if (mi >= 0 && c->scopes[mi].ret == TY_BIGINT) return 1;
+  }
+  return 0;
+}
 static struct { int node; TyKind kind; } an_pin[16];
 static int an_npin;
 void an_face_push(int node, TyKind kind) {
@@ -5792,7 +5800,12 @@ static int infer_operator_call(Compiler *c, int id, const NodeTable *nt, const c
       { *out = TY_FLOAT; return 1; }
     { *out = TY_UNKNOWN; return 1; }
   }
-  if (recv >= 0 && argc == 1 && sp_streq(name, "<=>")) { *out = an_planned_call_ret(c, id, TY_INT); return 1; }
+  if (recv >= 0 && argc == 1 && sp_streq(name, "<=>")) {
+    /* a boxed receiver may reach a program <=> answering a Bignum, which an
+       Integer slot cannot hold */
+    if (rt == TY_POLY && an_some_cmp_answers_bigint(c)) { *out = an_planned_call_ret(c, id, TY_POLY); return 1; }
+    *out = an_planned_call_ret(c, id, TY_INT); return 1;
+  }
   if (recv >= 0 && argc == 1 && is_cmp_op(name)) {
     /* The comparison is Boolean even when the plan routes it through a
        user method returning the ordering value. Keep that target too. */

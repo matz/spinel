@@ -4098,11 +4098,13 @@ static int lr_literal_args(const NodeTable *nt, const int *av, int ac, int form)
    header or constant write whose hook the program defines; a mixin into an object
    the program holds; code, or a method made or called, by a name the
    record cannot read; a callable made to run later (a lambda, a kept
-   block, a method object, a block argument). Or may it (LR_DISPATCH): any
-   other call, and any node but those that only hold, read or write
-   values, may run a method of the program's the runtime calls by itself
-   (method_name_implicitly_invoked) on an object it meets, a callable, or
-   one made by a name the record cannot read. */
+   block, a method object, a block argument). A require, or the read of a
+   constant an autoload is registered for, runs the code of the file it loads
+   (a file of another region: lr_region_runs adds what that region runs).
+   Or may it (LR_DISPATCH): any other call, and any node but those that
+   only hold, read or write values, may run a method of the program's the
+   runtime calls by itself (method_name_implicitly_invoked) on an object it
+   meets, a callable, or one made by a name the record cannot read. */
 enum { LR_RUN = 1, LR_DISPATCH = 2 };
 static int lr_list_has(const char *list, const char *w) {
   size_t n = w ? strlen(w) : 0;
@@ -4181,6 +4183,52 @@ static int lr_header_hooks(Compiler *c, int id) {
   for (int i = 0; i < n && i < 16; i++)
     if ((rows[i].side & NTS_CLASS) && lr_class_hook(c, rows[i].name, core_method_vis("Class", rows[i].name, 0) >= 0)) return 1;   /* (a hook Class itself has is a class's) */
   return n > 16;
+}
+
+/* The loads of lr_region_runs: edge lists the regions other than 0 that
+   the loading nodes read (a node's own run from its estart), 0 for any
+   region (an open set); au, the autoload registrations by name */
+typedef struct {
+  Compiler *c;
+  const AutoloadRegistration **au;
+  int nau, *edge, nedge, cedge;
+} LrLoads;
+
+static int lr_au_cmp(const void *a, const void *b) {
+  return strcmp((*(const AutoloadRegistration *const *)a)->name, (*(const AutoloadRegistration *const *)b)->name);
+}
+
+/* Add the region of file f to the edges: none for a file of region 0, which the walk places */
+static void lr_load_file(LrLoads *t, int f) {
+  const NodeTable *nt = t->c->nt;
+  const LoadRecord *r = t->c->lrec;
+  int root = f > 0 && f < nt_nroots(nt) ? nt_root(nt, f) : -1;
+  int g = root >= 0 && root < r->n && r->at[root] >= 0 ? r->st[r->at[root]].region : 0;
+  if (g <= 0) return;
+  t->edge = lr_grow(t->edge, &t->cedge, t->nedge, sizeof *t->edge);
+  t->edge[t->nedge++] = g;
+}
+
+/* Add the regions of the files that node id may load: a require's target, a
+   computed path's candidates, any for an open set; for a constant read, those
+   of the autoloads registered under its name. (The registration's owner is
+   not asked: a read's owner is a lookup that reads the run points this pass
+   makes, and a name is a superset of it.) */
+static void lr_load_regions(LrLoads *t, int id) {
+  const NodeTable *nt = t->c->nt;
+  if (nt_kind(nt, id) != NK_LoadNode) {
+    const char *nm = lr_written_name(nt, id);
+    int lo = 0, hi = t->nau;
+    while (nm && lo < hi) { int mid = lo + (hi - lo) / 2; if (strcmp(t->au[mid]->name, nm) < 0) lo = mid + 1; else hi = mid; }
+    for (; nm && lo < t->nau && sp_streq(t->au[lo]->name, nm); lo++) lr_load_file(t, t->au[lo]->file);
+  }
+  else if (prog_load_open(nt, id)) {
+    t->edge = lr_grow(t->edge, &t->cedge, t->nedge, sizeof *t->edge);
+    t->edge[t->nedge++] = 0;
+  }
+  else
+    for (int k = -1, nc = prog_load_ncand(nt, id); k < nc; k++)
+      lr_load_file(t, k < 0 ? (int)nt_int(nt, id, "target_file", -1) : prog_load_cand(nt, id, k));
 }
 
 static int lr_node_runs(Compiler *c, int id) {
@@ -4664,6 +4712,66 @@ static void lr_rta(Compiler *c) {
   free(t.key); free(t.hreach); free(t.cname); free(t.kid);
 }
 
+/* Add to each statement that loads a file of another region (lr_load_regions)
+   what that region runs: the union of the run bits of its statements, itself
+   including those of the regions its own statements load, so a region that
+   only dispatches makes a require of it dispatch, not run. The loading nodes
+   and the regions they read are collected once; a region's bits (rr; rr[0],
+   all regions' for an open set) only grow, each at most twice, and each time
+   they do only the loads that read the region are visited again (rd, by
+   region), so the work is linear in the loads whatever their order. */
+static void lr_region_runs(Compiler *c) {
+  LoadRecord *r = c->lrec;
+  if (r->nregion < 2) return;
+  int nr = r->nregion, ncand = 0, nstack = 0, *cand = malloc(sizeof(int) * (size_t)(r->n + 1)), *est = malloc(sizeof(int) * (size_t)(r->n + 2));
+  LrLoads t = { c, NULL, 0, NULL, 0, 0 };
+  if (!cand || !est) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  if (c->nautoloads) {
+    t.au = malloc(sizeof *t.au * (size_t)c->nautoloads);
+    if (!t.au) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    for (int k = 0; k < c->nautoloads; k++) t.au[t.nau++] = &c->autoloads[k];
+    qsort(t.au, (size_t)t.nau, sizeof *t.au, lr_au_cmp);
+  }
+  for (int id = 0; id < r->n; id++) {
+    NodeKind k = nt_kind(c->nt, id);
+    if (r->at[id] < 0 || (r->bits[id] & LR_LATE) || (k != NK_LoadNode && !(t.nau && nt_kind_is_constant(k)))) continue;
+    est[ncand] = t.nedge;
+    lr_load_regions(&t, id);
+    if (t.nedge > est[ncand]) cand[ncand++] = id;   /* (a node that reads no region is overwritten by the next) */
+  }
+  est[ncand] = t.nedge;
+  unsigned char *rr = calloc((size_t)nr, 1), *b = calloc((size_t)ncand + 1, 1), *queued = calloc((size_t)nr, 1);
+  int *rd = malloc(sizeof(int) * (size_t)(t.nedge + 1)), *off = calloc((size_t)nr + 1, sizeof *off);
+  int *fill = calloc((size_t)nr, sizeof *fill), *stack = malloc(sizeof(int) * (size_t)nr);
+  if (!rr || !b || !queued || !rd || !off || !fill || !stack) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  for (int j = 0; j < t.nedge; j++) off[t.edge[j] + 1]++;
+  for (int g = 0; g < nr; g++) off[g + 1] += off[g];
+  for (int i = 0; i < ncand; i++)
+    for (int j = est[i]; j < est[i + 1]; j++) rd[off[t.edge[j]] + fill[t.edge[j]]++] = i;
+  for (int s = 0; s < r->nst; s++)
+    if (r->st[s].region > 0) rr[r->st[s].region] |= r->st[s].runs, rr[0] |= r->st[s].runs;
+  for (int g = 0; g < nr; g++) if (rr[g]) queued[g] = 1, stack[nstack++] = g;
+  while (nstack) {
+    int h = stack[--nstack];
+    queued[h] = 0;
+    for (int j = off[h]; j < off[h + 1]; j++) {
+      int i = rd[j], g = r->st[r->at[cand[i]]].region;
+      unsigned char nb = b[i] | rr[h];
+      if (nb == b[i]) continue;
+      b[i] = nb;
+      int grows[2] = { g, 0 };   /* the statement's region grows, and all regions' */
+      for (int q = 0; g > 0 && q < 2; q++) {
+        int x = grows[q];
+        if ((rr[x] | nb) == rr[x]) continue;
+        rr[x] |= nb;
+        if (!queued[x]) queued[x] = 1, stack[nstack++] = x;
+      }
+    }
+  }
+  for (int i = 0; i < ncand; i++) r->st[r->at[cand[i]]].runs |= b[i];
+  free(cand); free(est); free(t.au); free(t.edge); free(rr); free(b); free(queued); free(rd); free(off); free(fill); free(stack);
+}
+
 /* Each statement's run bit and the count before it (LrStmt.runs, nrun),
    for the map's build, and each region's end. A statement runs code of
    the program's when a node of its own does (LR_RUN), or may when it
@@ -4702,6 +4810,7 @@ static void lr_run_points(Compiler *c) {
     if (r->at[id] >= 0 && !(r->bits[id] & LR_LATE)) {
       r->st[r->at[id]].runs |= (unsigned char)lr_node_runs(c, id);
     }
+  lr_region_runs(c);
   for (int s = 0; s < r->nst; s++) {
     LrStmt *e = &r->st[s];
     seen |= e->region != 0;

@@ -1,3 +1,4 @@
 [:parent, :child]
 [:parent]
 [:gp, :p, :c]
+[:b, :c]

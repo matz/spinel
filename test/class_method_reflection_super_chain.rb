@@ -13,3 +13,9 @@ class GP; def self.included_modules = [:gp]; end
 class P2 < GP; def self.included_modules = super + [:p]; end
 class C2 < P2; def self.included_modules = super + [:c]; end
 p C2.included_modules
+
+# a parent that reopens the method: the later version, which calls no super
+class RP; def self.included_modules = [:a]; end
+class RC < RP; def self.included_modules = super + [:c]; end
+class RP; def self.included_modules = [:b]; end
+p RC.included_modules

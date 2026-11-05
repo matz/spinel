@@ -785,19 +785,20 @@ int comp_const_tail_cands(Compiler *c, const char *nm, int **out) {
   }
   return n;
 }
-/* The constant class k owns under NM (comp_const_tail_cands above), or -1:
-   the first, in table order, whose key is "<c_name>__NM" or ends in
-   "__<c_name>__NM". A key too long for the buffer is matched as it was
-   before the list, against every constant. */
+/* Class k's leaf name, the last part of its key ("M" for A__M) */
+static const char *class_key_leaf(const Compiler *c, int k) {
+  const char *leaf = c->classes[k].name;
+  if (leaf && c->classes[k].enclosing_class >= 0) for (const char *q = leaf; (q = strstr(q, "__")) != NULL; q += 2) leaf = q + 2;
+  return leaf;
+}
 /* Class k's whole path as constant keys spell it (A__M for A::M, M for a
    top-level M): the leaves of k and of the classes it is written in. 0 when
    it does not fit or a name is missing. */
 static int class_path_key(Compiler *c, int k, char *out, size_t cap) {
   const char *lv[32]; int nl = 0;
   for (int e = k; e >= 0 && e < c->nclasses; e = c->classes[e].enclosing_class) {
-    const char *leaf = c->classes[e].name;
+    const char *leaf = class_key_leaf(c, e);
     if (!leaf || nl == 32) return 0;
-    if (c->classes[e].enclosing_class >= 0) for (const char *q = leaf; (q = strstr(q, "__")) != NULL; q += 2) leaf = q + 2;
     lv[nl++] = leaf;
   }
   out[0] = 0;
@@ -807,17 +808,22 @@ static int class_path_key(Compiler *c, int k, char *out, size_t cap) {
   }
   return nl > 0;
 }
+/* The constant class k owns under NM (comp_const_tail_cands above), or -1:
+   the one keyed by k's whole path (A__M__NM). Only when that path cannot be
+   spelled (a name missing, too deep), the first, in table order, whose key
+   is "<c_name>__NM" or ends in "__<c_name>__NM". A key too long for the
+   buffer is matched as it was before the list, against every constant. */
 int comp_class_owned_const(Compiler *c, int k, const char *nm, const int *cands, int ncands) {
   const char *kn = c->classes[k].c_name;
   if (!kn || !nm) return -1;
-  /* the constant keyed by k's whole path (A__M__NM) is k's own. A key that
-     only ends in "M__NM" may be another class's whole path (A::M's, for a
-     top-level M): that one is not k's. */
   char kp[512], full[600];
   int have_kp = class_path_key(c, k, kp, sizeof kp);
   if (have_kp) {
     snprintf(full, sizeof full, "%s__%s", kp, nm);
     for (int j = 0; j < ncands; j++) if (sp_streq(c->consts[cands[j]].name, full)) return cands[j];
+    /* (a key that only ends the same way is another class's: A::M's
+       A__M__NM is not a top-level M's, nor M__NM A::M's) */
+    return -1;
   }
   char tail[512];
   snprintf(tail, sizeof tail, "%s__%s", kn, nm);
@@ -831,17 +837,6 @@ int comp_class_owned_const(Compiler *c, int k, const char *nm, const int *cands,
     if (l < tl || strcmp(cn + l - tl, tail) != 0) continue;
     /* either the whole key, or a component edge before it */
     if (l > tl && strncmp(cn + l - tl - 2, "__", 2) != 0) continue;
-    /* (not one keyed by another class's whole path) */
-    if (have_kp) {
-      int other = 0;
-      for (int o = 0; o < c->nclasses && !other; o++) {
-        char op[512], of[600];
-        if (o == k || !class_path_key(c, o, op, sizeof op)) continue;
-        snprintf(of, sizeof of, "%s__%s", op, nm);
-        other = sp_streq(of, cn);
-      }
-      if (other) continue;
-    }
     return ci;
   }
   return -1;

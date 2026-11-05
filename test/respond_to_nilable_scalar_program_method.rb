@@ -49,3 +49,8 @@ class Object; private def b2 = 1; end
   p [x.respond_to?(:k3), s.respond_to?(:k3), x.respond_to?(:b2), s.respond_to?(:b2)]
   p [x.respond_to?(:sh, true), s.respond_to?(:k3, true)]
 end
+
+# a boxed value answers by the same first class
+[nil, 7, "s", 1.5, :y].each do |v|
+  p [v.respond_to?(:sh), v.respond_to?(:b2), v.respond_to?(:b2, true), v.respond_to?(:zz)]
+end

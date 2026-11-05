@@ -130,6 +130,11 @@ int call_target(Compiler *c, int id, int cls, const char *name, unsigned flags, 
    an explicit receiver and does not ignore visibility (a send does): that is
    NoMethodError. */
 int cplan_class_row(Compiler *c, int id, int recv, const char *name);
+/* Does the call id on a known class (recv) run the program's own class
+   method of a Class or Module reflection name (superclass, ancestors,
+   instance_methods, ...) in place of the builtin? Not when that method's
+   `super` reaches a builtin only the builtin path answers. */
+int cplan_own_class_reflection(Compiler *c, int id, int recv, const char *name);
 /* Is class value recv, of call id, proven a Class and not a Module: a program
    class (not a module) it names, a core class, `Class.new`, `self` in a class
    body, or a superclass reference of a class made (the fired hook's receiver)?

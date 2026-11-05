@@ -1672,6 +1672,20 @@ int cplan_class_row(Compiler *c, int id, int recv, const char *name) {
   return !((fl & BOPF_PRIVATE) && recv >= 0 && nt_kind(nt, recv) != NK_SelfNode && !nt_ignore_visibility(nt, id) && !nt_str(nt, id, "send_blind"));
 }
 
+int cplan_own_class_reflection(Compiler *c, int id, int recv, const char *name) {
+  static const char *const R[] = { "superclass", "ancestors", "subclasses", "included_modules",
+    "instance_methods", "public_instance_methods", "private_instance_methods",
+    "protected_instance_methods", NULL };
+  int r = 0;
+  for (int i = 0; name && R[i]; i++) if (sp_streq(name, R[i])) { r = 1; break; }
+  int ci = r && recv >= 0 ? class_recv_static_ci(c, recv) : -1;
+  int mi = ci >= 0 ? call_target(c, id, ci, name, CT_CMETHOD, NULL) : -1;
+  if (mi < 0) return 0;
+  /* (emit_super answers a bare super of these three) */
+  return !scope_calls_super(c, mi) || sp_streq(name, "superclass") || sp_streq(name, "ancestors") ||
+         sp_streq(name, "subclasses");
+}
+
 int cplan_recv_class(Compiler *c, int id, int recv) {
   const NodeTable *nt = c->nt;
   NodeKind k = nt_kind(nt, recv);

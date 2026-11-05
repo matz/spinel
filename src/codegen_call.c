@@ -34683,9 +34683,12 @@ static void emit_call_body_ordinary(Compiler *c, int id, Buf *b) {
 
   if (recv >= 0 && emit_call_untyped_array_arms(c, b, nt, name, recv, argc, comp_ntype(c, recv))) return;
 
-  if (emit_value_methods_reflection(c, id, b)) return;
+  /* a class method of the program's on a known class answers before
+     Class's own reflection (`def self.superclass`) */
+  int own_cm = cplan_own_class_reflection(c, id, recv, name);
+  if (!own_cm && emit_value_methods_reflection(c, id, b)) return;
   if (emit_marshal_value_call(c, id, b)) return;
-  if (emit_call_class_value_arms(c, id, b, nt, name, recv, argc, argv)) return;
+  if (!own_cm && emit_call_class_value_arms(c, id, b, nt, name, recv, argc, argv)) return;
 
   if (emit_call_freeze_dup_arms(c, id, b, nt, name, recv, argc)) return;
 

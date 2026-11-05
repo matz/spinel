@@ -15982,6 +15982,24 @@ void emit_super(Compiler *c, int id, Buf *b) {
       else buf_printf(b, " _t%d; })", ta);
       return;
     }
+    /* Class#superclass and Module#ancestors at the end of the chain: the
+       receiving class's (analysis's twin: rel_super) */
+    if (cmi < 0 && nt_ref(c->nt, id, "arguments") < 0 && s->class_id >= 0 &&
+        (sp_streq(uname, "ancestors") ||
+         (sp_streq(uname, "superclass") && !comp_class_is_module(c, &c->classes[s->class_id])))) {
+      int tc = ++g_tmp;
+      int si = (int)(s - c->scopes);
+      buf_printf(b, "({ sp_Class _t%d = ", tc);
+      if (cmethod_takes_self_cls(c, si)) buf_puts(b, cmethod_cls_token(c, s));
+      else buf_printf(b, "((sp_Class){%d, NULL})", s->class_id);
+      Repr sr = repr_of(c, id);
+      if (sp_streq(uname, "ancestors"))
+        buf_printf(b, "; %s(sp_class_ancestors(_t%d)); })", sr.kind == RK_BOXED ? "sp_box_poly_array" : "", tc);
+      else
+        buf_printf(b, "; %s(_t%d.cls_id>=0?sp_class_superclass(_t%d):sp_builtin_superclass(_t%d)); })",
+                   sr.kind == RK_BOXED ? "sp_box_class" : "", tc, tc, tc);
+      return;
+    }
     /* `super` in a class-level ` override is Kernel#` too */
     if (cmi < 0 && sp_streq(uname, "`") && emit_super_backtick(c, id, s, b)) return;
     if (cmi < 0) {

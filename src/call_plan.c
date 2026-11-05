@@ -1108,17 +1108,21 @@ static int ct_window_version(Compiler *c, int id, int cls, const char *name, int
    holds the alias statement, the version the record answers at id's point
    or the one version over the statements id may run in; *own_sg 1 where
    the alias is on that class's singleton. -1 where the name meets no alias
-   there, or the record cannot tell */
+   there, or the record cannot tell. Asked in the record's frame for the
+   call plan (elab_plan_enter), as ct_version asks for the target, so the
+   owner and the target are read from the same facts */
 int cplan_alias_holder(Compiler *c, int id, int cls, const char *name, int sg, int *own_sg) {
   const LrDef *d = NULL, *ds[2];
   ElabMeet m;
   if (cls < 0 || !name) return -1;
   const Scope *own = comp_scope_of(c, id);
+  int framed = elab_plan_enter(c, id);
   elab_call_meet(c, id, cls, name, sg, ct_after_point(c, id) | (own && own->origin_module_ci > 0 ? ELAB_MEET_COPY : 0), &m, ds, 2);
   if (m.at == ELAB_YES) d = m.d;
   else if (m.at == ELAB_UNKNOWN && m.win == ELAB_YES && m.n == 1) d = ds[0];
   int h = d && d->kind == LR_ALIAS ? c->node_cbody[d->node] : -1;
   *own_sg = h >= 0 && elab_version_on_singleton(c, h, name, d->node);
+  if (framed) elab_plan_leave(c);
   return h;
 }
 /* Does node id make the implied call `name` on operand op (a node, or an

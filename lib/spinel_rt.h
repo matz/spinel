@@ -16847,12 +16847,6 @@ static sp_PolyArray *sp_bm_parameters(sp_BoundMethod *m) {
   }
   return out;
 }
-static sp_RbVal sp_bm_receiver(sp_BoundMethod *m) {
-  if (!m || !m->self) return sp_box_nil();
-  if (m->self_kind == SP_BM_SELF_STR) return sp_box_str((const char *)m->self);
-  if (m->self_kind == SP_BM_SELF_OBJ) return sp_box_obj(m->self, *(sp_int *)m->self);
-  return sp_box_nil();
-}
 
 /* `round(half: :even)` on a BOXED number. sp_poly_round_n answers the
    half-up rule the bare `round` has; the tie-break mode is a keyword the

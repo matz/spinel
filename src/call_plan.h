@@ -733,6 +733,15 @@ int cplan_cmethod_later(Compiler *c, int id, int cls, const char *name);
    none or not known. It asks for the versions ct_version_at does
    (elab_call_meet) and answers only where that meets one. */
 int cplan_alias_holder(Compiler *c, int id, int cls, const char *name, int sg, int *own_sg);
+/* What node id, a Method's maker, meets as an instance of cls's accessor
+   `name` (a writer's as `x=`), as its Method answers #owner and
+   #source_location: node, the attr_* call it meets (-1: none); owner,
+   the class or module #owner names (-1: not known); pos, 1 for node's
+   line, 0 for none (nil). Where the record cannot tell which accessor
+   id meets, node is the last attr_* call on cls's chain sure to run
+   (elab_accessor_node) and owner the class whose body makes it. */
+typedef struct { int node, owner, pos; } CplanAccessor;
+void cplan_accessor_met(Compiler *c, int id, int cls, const char *name, CplanAccessor *a);
 /* What call id of class method `name` on program class ci runs where ci
    has a `class << self` accessor of the name: CP_SG_NONE where it has none
    (the call is an ordinary class method's); CP_SG_SLOT, the slot, named

@@ -240,6 +240,7 @@ int is_push_operator(const char *n); /* << push */
 int is_eq_or_eql(const char *n); /* == eql? */
 int is_element_access(const char *n); /* [] []= */
 int is_index_assign(const char *n); /* []= */
+const char *typed_array_adapter_op(const char *n); /* [] get, []= set, push: a typed array's Method adapter */
 int is_fill_name(const char *n);        /* fill */
 
 int is_current_method(const char *n); /* __callee__ __method__ */
@@ -594,6 +595,7 @@ int is_kernel_module_name(const char *n);
 int is_kernel_module_function(const char *n);
 int builtin_object_method_known(const char *m);   /* one of Object's own methods every object answers */
 const char *builtin_method_owner(const char *cls, const char *m);   /* the class or module defining builtin cls's m */
+const char *builtin_bool_method_owner(const char *m);   /* ...a true's or false's m, where both answer the same; NULL otherwise */
 const char *builtin_function_owner(const char *m);   /* the module defining the function a receiverless method(:m) binds */
 int is_respond_to_name(const char *n); /* respond_to?: does the receiver itself answer a name */
 int is_method_presence_query(const char *n); /* 1: respond_to? *method_defined? (public_)instance_method (public_)method; 2: (public_)instance_methods (public_)methods, answered for the whole program; 3: private_/protected_instance_methods, private_/protected_methods, singleton_methods, answered by the receiver's chain */

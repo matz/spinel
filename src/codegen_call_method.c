@@ -305,8 +305,9 @@ static void emit_method_owner_class(Compiler *c, int mn, int mi, int unbound, Bu
    `<internal:...>` pair), which nothing records, and *file and *line are
    then the wrapper's own def's, line 0, as #source_location answered it
    before. An accessor's wrapper (bam_accessor) stands at the attr_* call
-   that declares it (bam_src), a Struct member's at none. A boxed receiver's wrapper (bam_poly) answers by its
-   receiver's class at run time, which its readers emit. */
+   its bind site meets (bam_src), a Struct member's or an alias's of a
+   module's accessor at none. A boxed receiver's wrapper (bam_poly)
+   answers by its receiver's class at run time, which its readers emit. */
 static int method_source_pos(Compiler *c, int mi, const char **file, int *line) {
   const NodeTable *nt = c->nt;
   int dn = mi >= 0 ? c->scopes[mi].def_node : -1, known = 1;
@@ -636,8 +637,9 @@ int emit_op_method_original_name(Compiler *c, const BopCtx *x, Buf *b) {
 }
 
 /* Method#source_location: [file, line] of the target's def, from the same
-   node position the #line machinery uses (#3247). */
-static int emit_method_source_target(Compiler *c, const BopCtx *x, Buf *b, int tg4) {
+   node position the #line machinery uses (#3247); mn is the node that
+   makes the Method (-1: none). */
+static int emit_method_source_target(Compiler *c, const BopCtx *x, Buf *b, int tg4, int mn) {
   const NodeTable *nt = c->nt;
   int recv = x->recv;
   int dn4 = tg4 >= 0 ? c->scopes[tg4].def_node : -1;
@@ -655,8 +657,14 @@ static int emit_method_source_target(Compiler *c, const BopCtx *x, Buf *b, int t
       if (comp_class_is_module(c, &c->classes[k])) continue;
       int mk = comp_method_in_chain(c, k, sym4, NULL);
       int dk = mk >= 0 ? c->scopes[mk].def_node : -1;
-      /* an attr method stands at its attr_* call, a Struct's member at none */
-      if (comp_resolve_member(c, k, sym4, 0, NULL, NULL) == SP_MEMBER_ATTR) dk = elab_accessor_node(c, k, sym4);
+      /* an attr method stands where the accessor the bind site meets
+         answers (cplan_accessor_met): its attr_* call, or none (a Struct's
+         member, an alias of a module's accessor) */
+      if (comp_resolve_member(c, k, sym4, 0, NULL, NULL) == SP_MEMBER_ATTR) {
+        CplanAccessor acc;
+        cplan_accessor_met(c, mn, k, sym4, &acc);
+        dk = acc.pos == 1 ? acc.node : -1;
+      }
       else if (dk < 0 || nt_int(nt, dk, "bam_poly", 0)) continue;
       buf_printf(b, "if (_t%d.tag == SP_TAG_OBJ && _t%d.cls_id == %d) { ", tv4, tv4, k);
       if (dk < 0) { buf_printf(b, "_t%d = NULL; } else ", tr4); continue; }
@@ -715,7 +723,7 @@ int emit_op_method_source_location(Compiler *c, const BopCtx *x, Buf *b) {
     buf_puts(b, ")");
     return 1;
   }
-  if (plan.dispatch != CP_SWITCH) return emit_method_source_target(c, x, b, mi);
+  if (plan.dispatch != CP_SWITCH) return emit_method_source_target(c, x, b, mi, plan.method_node);
   size_t start = b->len;
   int to[VER_MAX_ARMS + 1], n = ver_entry_targets(c, mi, to, NULL), tr = ++g_tmp;
   buf_printf(b, "({ sp_BoundMethod *_t%d = ", tr); emit_expr(c, x->recv, b);
@@ -723,7 +731,7 @@ int emit_op_method_source_location(Compiler *c, const BopCtx *x, Buf *b) {
   int vr = view_bind(x->recv, "_t%d", tr);
   for (int i = 0; i < n; i++) {
     if (i < n - 1) buf_printf(b, "_t%d->fn == (sp_int)(uintptr_t)&%s ? ", tr, mc_method(c, &c->scopes[to[i]]));
-    if (!emit_method_source_target(c, x, b, to[i])) {
+    if (!emit_method_source_target(c, x, b, to[i], plan.method_node)) {
       if (vr >= 0) view_unbind(vr);
       buf_erase(b, start, b->len - start);
       return 0;
@@ -1946,6 +1954,9 @@ static int emit_method_obj_target(Compiler *c, int id, Buf *b, const NodeTable *
          reference the collector can follow. */
       if (rt2 == TY_STRING || rt2 == TY_STRBUF) { self_kind = "SP_BM_SELF_STR"; self_is_str = 1; self_rooted = 1; }
       else if (needs_root(rt2) && rr2.kind != RK_BOXED && rr2.kind != RK_VOBJ) { self_kind = "SP_BM_SELF_OBJ"; self_rooted = 1; }
+      /* (a true or a false is its value, which a #receiver read back out of a
+         container answers by this kind) */
+      else if (rt2 == TY_BOOL && rr2.kind != RK_BOXED) self_kind = "SP_BM_SELF_BOOL";
       /* The constructor allocates and may collect: a fresh receiver
          (`M.new.method(:v)`) is otherwise unreachable and would be swept, so
          hold it in a rooted C temporary across the call -- the same shape as
@@ -1962,7 +1973,13 @@ static int emit_method_obj_target(Compiler *c, int id, Buf *b, const NodeTable *
           buf_printf(b, "if (!_t%d) sp_raise_cls(\"NameError\", \"undefined method '%s' for class 'NilClass'\"); ", self_tmp, sym);
       }
     }
-    buf_puts(b, mi >= 0 ? "sp_bm_set_thunk(sp_bm_set_abi(sp_bound_method_new_d(" : "sp_bm_set_thunk(sp_bm_set_abi(sp_bound_method_new(");
+    /* `<typed_array>.method(:op)` with no method scope: a per-(type, op)
+       adapter (below), which takes the descriptor constructor for its
+       owner, Array's */
+    Repr br = repr_of(c, recv);
+    const char *bk = ty_is_array(br.as_ty) ? array_kind(br.as_ty) : NULL;
+    const char *bop = mi < 0 && bk && (br.elem == TY_INT || br.elem == TY_STRING) ? typed_array_adapter_op(sym) : NULL;
+    buf_puts(b, mi >= 0 || bop ? "sp_bm_set_thunk(sp_bm_set_abi(sp_bound_method_new_d(" : "sp_bm_set_thunk(sp_bm_set_abi(sp_bound_method_new(");
     if (self_rooted) buf_printf(b, "_t%d", self_tmp);
     else if (recv >= 0 && repr_of(c, recv).as_ty == TY_CLASS) buf_puts(b, "NULL");
     else if (recv >= 0) { buf_puts(b, "(void *)("); emit_expr(c, recv, b); buf_puts(b, ")"); }
@@ -1975,15 +1992,7 @@ static int emit_method_obj_target(Compiler *c, int id, Buf *b, const NodeTable *
       /* `<typed_array>.method(:op)`: lower through a per-(type, op) adapter
          matching the Method dispatch ABI (optcarrot's
          `add_mappings(.., @ram, @ram.method(:[]=))` shape). */
-      Repr br = repr_of(c, recv);
       TyKind brt = br.as_ty;
-      const char *bk = ty_is_array(brt) ? array_kind(brt) : NULL;
-      const char *bop = NULL;
-      if (bk && (br.elem == TY_INT || br.elem == TY_STRING)) {
-        if (sp_streq(sym, "[]")) bop = "get";
-        else if (sp_streq(sym, "[]=")) bop = "set";
-        else if (sp_streq(sym, "push")) bop = "push";
-      }
       if (bop) {
         /* Under promote the adapter is emitted poly-signatured (sp_RbVal
            self/arg/return), so it claims the POLY stamp there -- its C
@@ -2164,6 +2173,14 @@ static int emit_method_obj_target(Compiler *c, int id, Buf *b, const NodeTable *
     if (mi >= 0) {
       buf_puts(b, ", ");
       emit_method_desc_args(c, id, mi, method_obj_from_class(c, id), disp, 0, b);
+    }
+    else if (bop) {
+      /* (the facts name Array for each of the ops; none answered is nil) */
+      const char *aown = builtin_method_owner("Array", sym);
+      buf_puts(b, ", NULL, NULL, ");
+      if (aown) buf_printf(b, "((sp_Class){(sp_int)-1, SPL(\"%s\")})", aown);
+      else buf_puts(b, "SP_CLASS_NIL");
+      buf_puts(b, ", NULL, (sp_int)0");
     }
     buf_puts(b, ")");
     { char _rbb[16]; snprintf(_rbb, sizeof _rbb, "%d", recv_bound);
@@ -2357,9 +2374,11 @@ int emit_call_poly_callable_arms(Compiler *c, int id, Buf *b, const NodeTable *n
         buf_printf(b, "sp_box_obj(sp_bm_unbind((sp_BoundMethod *)_t%d.v.p), SP_BUILTIN_METHOD)", t);
       else if (sp_streq(name, "receiver"))
         /* the object the Method bound: a reference self carries its own class
-           id in its first field, which is how any boxed object names its class */
+           id in its first field, which is how any boxed object names its
+           class; a true or a false is the value its kind says it is */
         buf_printf(b, "({ sp_BoundMethod *_m = (sp_BoundMethod *)_t%d.v.p;"
-                      " (_m->self && _m->self_kind == SP_BM_SELF_OBJ)"
+                      " _m->self_kind == SP_BM_SELF_BOOL ? sp_box_bool(_m->self != NULL)"
+                      " : (_m->self && _m->self_kind == SP_BM_SELF_OBJ)"
                       " ? sp_box_nullable_obj_dyn(_m->self, 0) : sp_box_nil(); })", t);
       else
         buf_printf(b, "sp_box_obj(sp_method_to_proc((sp_BoundMethod *)_t%d.v.p), SP_BUILTIN_PROC)", t);

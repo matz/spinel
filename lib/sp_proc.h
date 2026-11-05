@@ -81,6 +81,7 @@ sp_Curry *sp_curry_apply(sp_Curry *c, sp_RbVal arg);
 #define SP_BM_SELF_NONE 0   /* not a reference: a number, a class value, unbound */
 #define SP_BM_SELF_OBJ  1
 #define SP_BM_SELF_STR  2
+#define SP_BM_SELF_BOOL 3   /* true or false, held as 1 or 0: no reference either, but a value #receiver answers */
 /* How the legacy sp_int C return is boxed back into a Ruby value. Any method
    whose C return fits the register records its kind here: a plain Integer, a
    `const char *` String, a nullable `sp_Bigint *`, a void/nil, a bool, a

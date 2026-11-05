@@ -10960,12 +10960,16 @@ static int desugar_builtin_method_obj(Compiler *c) {
         }
       }
       if (!obj_accessor) continue;                    /* real def / non-accessor: handled elsewhere */
+      /* the owner and the position of the accessor the bind site meets, as
+         of the bind (cplan_accessor_met): a subclass's accessor lists hold
+         its ancestors' too, and a later reopening's attr_* the Method does
+         not see; where the record cannot tell which one the bind meets,
+         the last one sure to run */
+      CplanAccessor acc;
+      cplan_accessor_met(c, id, ocid, sym, &acc);
       accessor = 1;
-      attr_decl = elab_accessor_node(c, ocid, sym);
-      /* (a subclass's accessor lists hold its ancestors' too: the attr_*
-         call's own body names the class that declares it; a Struct's
-         member has no such call) */
-      if (attr_decl >= 0 && c->node_cbody[attr_decl] >= 0) owner_ci = c->node_cbody[attr_decl];
+      owner_ci = acc.owner;
+      attr_decl = acc.pos == 1 ? acc.node : -1;
     }
     else if (rt == TY_UNKNOWN || rt == TY_VOID || rt == TY_NIL ||
              rt == TY_CLASS || rt == TY_METHOD || rt == TY_PROC)
@@ -11008,8 +11012,8 @@ static int desugar_builtin_method_obj(Compiler *c) {
       cmp_only = bcls && !builtin_method_known(bcls, sym) && builtin_comparable_owns(bcls, sym);
       num_only = bcls && !builtin_method_known(bcls, sym) && builtin_numeric_owns(bcls, sym);
       /* (a true's or false's own method is TrueClass's or FalseClass's,
-         which no single name answers) */
-      owner_name = rt == TY_BOOL ? NULL : builtin_method_owner(bcls, sym);
+         which no single name answers: only one both answer the same) */
+      owner_name = rt == TY_BOOL ? builtin_bool_method_owner(sym) : builtin_method_owner(bcls, sym);
       if (bcls && builtin_method_arity(bcls, sym, &sym_arity)) have_arity = 1;
       else if (cmp_only) { sym_arity = builtin_comparable_arity(sym); have_arity = 1; }
       else if (num_only && builtin_numeric_arity(sym, &sym_arity)) have_arity = 1;

@@ -115,7 +115,7 @@ made = SystemExit.new(1, direct)
 direct << " more"
 puts made.message
 puts made.message.equal?(direct)
-puts SystemExit.new(1, "literal").message.frozen?
+puts SystemExit.new(1, "literal".freeze).message.frozen?
 puts SystemExit.new(1, "").message.empty?
 
 # A second super takes the place of the first, and without a message clears it.

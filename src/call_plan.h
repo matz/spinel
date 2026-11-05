@@ -175,6 +175,9 @@ int cplan_pinned(const Compiler *c, int id);
    last version (the method a Method object of it captured before) */
 enum { VER_MAX_ARMS = 64 };
 int ver_entry_targets(const Compiler *c, int e, int *out, int *tests);
+/* Does target t of a call run method mi: t itself, or one of the methods
+   the arms of t call where t is a version entry (ver_entry_targets)? */
+int cplan_target_runs(const Compiler *c, int t, int mi);
 int cplan_bool_sides(Compiler *c, int id, int *tmi, int *fmi);
 void cplan_check_missing(Compiler *c, int id, int mi, int ci, const char *name, int cmeth, const char *site);
 /* The same plan resolved afresh and never kept, for a reader that runs in

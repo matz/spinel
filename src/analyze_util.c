@@ -2370,14 +2370,12 @@ TyKind scan_throw_type(Compiler *c, const char *tag) {
    these once per method during the fixpoint; without the index that is
    O(methods * nodes * iterations). The structural shape is stable across the
    pass; the callee resolution below still runs fresh. */
-static const NodeTable *yvt_nt = NULL;
-static int yvt_ntc = -1, yvt_n = 0, yvt_sup_n = 0;
-static int *yvt_ids = NULL, *yvt_sup_ids = NULL;
 static int yvt_call_forwards_block(const NodeTable *nt, int cid) {
   int a = nt_ref(nt, cid, "arguments");
   int an = 0; const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &an) : NULL;
   return nt_argv_only_forwarding(nt, av, an);
 }
+static void yvt_tg_build(Compiler *c);
 /* Could block-passing call site `cid` reach method `mi` at all? A callee is
    found by name: the call's own name, that name through an `alias`, or `new`
    for `initialize` (yvt_callee_index). So a call whose name is none of those
@@ -2385,30 +2383,20 @@ static int yvt_call_forwards_block(const NodeTable *nt, int cid) {
    skipped for it. Every yielding method used to resolve every block call in
    the program, methods x calls per round (#4847). An aliased name, and a
    prepend shadow (named `__prep N m`), are left to the full resolution. */
-static int *yvt_nm_head = NULL, *yvt_nm_next = NULL, *yvt_always = NULL;
-static int yvt_nb = 0, yvt_always_n = 0;
-/* the alias-named entries by the names their alias may stand for: name t's
-   are yvt_tg_ii[yvt_tg_off[t] .. yvt_tg_off[t + 1]), ascending (yvt_tg_build) */
-static ANameHash yvt_tg_names;
-static int *yvt_tg_off = NULL, *yvt_tg_ii = NULL, yvt_tg_nn = 0;
 /* the names are copies of their own: an alias table's string is replaced
    when the alias settles (settle_mixin_aliases), and a node's when a
    desugar renames it, neither of which rebuilds this index */
-static char **yvt_tg_owned = NULL; static int yvt_tg_nowned = 0, yvt_tg_ocap = 0;
-static const char *yvt_tg_own(const char *s) {
-  if (yvt_tg_nowned == yvt_tg_ocap) {
-    yvt_tg_ocap = yvt_tg_ocap ? yvt_tg_ocap * 2 : 64;
-    yvt_tg_owned = realloc(yvt_tg_owned, sizeof(char *) * (size_t)yvt_tg_ocap);
-    if (!yvt_tg_owned) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+static const char *yvt_tg_own(YvtIndex *y, const char *s) {
+  if (y->tg_nowned == y->tg_ocap) {
+    y->tg_ocap = y->tg_ocap ? y->tg_ocap * 2 : 64;
+    y->tg_owned = realloc(y->tg_owned, sizeof(char *) * (size_t)y->tg_ocap);
+    if (!y->tg_owned) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   }
   char *cp = strdup(s);
   if (!cp) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-  yvt_tg_owned[yvt_tg_nowned++] = cp;
+  y->tg_owned[y->tg_nowned++] = cp;
   return cp;
 }
-static void yvt_tg_build(Compiler *c);
-static unsigned char *yvt_alias_name = NULL;   /* per yvt_ids entry: its name is an alias somewhere */
-static unsigned char *yvt_fwd = NULL;          /* per yvt_ids entry: yvt_call_forwards_block */
 static int yvt_name_is_alias(Compiler *c, const char *cn) {
   for (int k = 0; k < c->nclasses; k++)
     for (int i = 0; i < c->classes[k].naliases; i++)
@@ -2416,24 +2404,43 @@ static int yvt_name_is_alias(Compiler *c, const char *cn) {
   return 0;
 }
 static int yvt_may_reach(Compiler *c, int ii, int mi) {
+  const YvtIndex *y = c->yvt;
   const char *mn = c->scopes[mi].name;
-  const char *cn = nt_str(c->nt, yvt_ids[ii], "name");
+  const char *cn = nt_str(c->nt, y->ids[ii], "name");
   if (!mn || !cn) return 1;
   if (sp_streq(cn, mn)) return 1;
   if (sp_streq(cn, "new") && sp_streq(mn, "initialize")) return 1;
   if (c->scopes[mi].shadow == SHADOW_PREP) return 1;
-  return yvt_alias_name && yvt_alias_name[ii];
+  return y->alias_name && y->alias_name[ii];
+}
+/* A method name's key in YvtIndex.sup_key: its hash, a proc-form clone's
+   "#pf" left off (a clone's super asks for the plain name); never 0 */
+static unsigned yvt_name_key(const char *name) {
+  size_t n = strlen(name);
+  if (n > 3 && strcmp(name + n - 3, "#pf") == 0) n -= 3;
+  return sp_strnhash(name, (unsigned)n) | 1;
+}
+/* The key of the name the super in method scope cs asks for, 0 when a
+   method of any other name may be what it reaches: a name some alias
+   stands for, a name other than the one its method is known by, or a
+   method with a prepend chain, whose next method is a hidden copy. */
+static unsigned yvt_sup_name_key(Compiler *c, Scope *cs) {
+  const char *dn = comp_scope_def_name(c, cs);
+  if (!dn || !sp_streq(dn, comp_scope_user_name(cs)) || comp_super_shadow(c, cs) || yvt_name_is_alias(c, dn)) return 0;
+  return yvt_name_key(dn);
 }
 static void yvt_build(Compiler *c) {
+  YvtIndex *y = c->yvt;
   const NodeTable *nt = c->nt;
   int n = nt->count;
-  free(yvt_ids); free(yvt_sup_ids); free(yvt_alias_name); free(yvt_fwd);
-  yvt_alias_name = NULL; yvt_fwd = NULL;
-  yvt_ids = malloc((size_t)(n > 0 ? n : 1) * sizeof(int));
-  yvt_sup_ids = malloc((size_t)(n > 0 ? n : 1) * sizeof(int));
-  yvt_n = 0; yvt_sup_n = 0;
-  yvt_nt = nt; yvt_ntc = n;
-  if (!yvt_ids || !yvt_sup_ids) return;
+  free(y->ids); free(y->sup_ids); free(y->alias_name); free(y->fwd); free(y->sup_key);
+  y->sup_key = NULL;
+  y->alias_name = NULL; y->fwd = NULL;
+  y->ids = malloc((size_t)(n > 0 ? n : 1) * sizeof(int));
+  y->sup_ids = malloc((size_t)(n > 0 ? n : 1) * sizeof(int));
+  y->n = 0; y->sup_n = 0;
+  y->nt = nt; y->ntc = n;
+  if (!y->ids || !y->sup_ids) return;
   for (int cid = 0; cid < n; cid++) {
     const char *cty = nt_type(nt, cid);
     NodeKind ck = nt_kind(nt, cid);
@@ -2441,45 +2448,53 @@ static void yvt_build(Compiler *c) {
     /* a `super` reaching a yielding parent is a call site of that parent: the
        block that arrives is the child's own */
     if (ck == NK_SuperNode || ck == NK_ForwardingSuperNode) {
-      yvt_sup_ids[yvt_sup_n++] = cid;
+      y->sup_ids[y->sup_n++] = cid;
       continue;
     }
     if (ck != NK_CallNode) continue;
     if (nt_ref(nt, cid, "block") < 0 && !yvt_call_forwards_block(nt, cid)) continue;
-    yvt_ids[yvt_n++] = cid;
+    y->ids[y->n++] = cid;
+  }
+  /* the name each super asks for, so that a yielding method resolves the
+     supers that can reach its name, not every super of the program */
+  y->sup_key = calloc((size_t)(y->sup_n > 0 ? y->sup_n : 1), sizeof(unsigned));
+  if (!y->sup_key) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  for (int ii = 0; ii < y->sup_n; ii++) {
+    Scope *cs = comp_scope_of(c, y->sup_ids[ii]);
+    if (cs && cs->class_id >= 0 && cs->name) y->sup_key[ii] = yvt_sup_name_key(c, cs);
   }
   /* the forward test is structural, and was re-run for every entry of this
      list once per yielding method: 7% of a 16K-line analysis (#4847) */
-  yvt_fwd = malloc((size_t)(yvt_n > 0 ? yvt_n : 1));
-  if (yvt_fwd)
-    for (int ii = 0; ii < yvt_n; ii++) yvt_fwd[ii] = (unsigned char)yvt_call_forwards_block(nt, yvt_ids[ii]);
-  yvt_alias_name = malloc((size_t)(yvt_n > 0 ? yvt_n : 1));
-  if (yvt_alias_name)
-    for (int ii = 0; ii < yvt_n; ii++) {
-      const char *cn = nt_str(nt, yvt_ids[ii], "name");
-      yvt_alias_name[ii] = cn ? (unsigned char)yvt_name_is_alias(c, cn) : 1;
+  y->fwd = malloc((size_t)(y->n > 0 ? y->n : 1));
+  if (y->fwd)
+    for (int ii = 0; ii < y->n; ii++) y->fwd[ii] = (unsigned char)yvt_call_forwards_block(nt, y->ids[ii]);
+  y->alias_name = malloc((size_t)(y->n > 0 ? y->n : 1));
+  if (y->alias_name)
+    for (int ii = 0; ii < y->n; ii++) {
+      const char *cn = nt_str(nt, y->ids[ii], "name");
+      y->alias_name[ii] = cn ? (unsigned char)yvt_name_is_alias(c, cn) : 1;
     }
   /* The entries by call name, each chain ascending, and the ones any method
      may be reached by (no name, or an alias). A yielding method walked every
      entry to find those of its own name, per ask: (yielding methods x block
      calls), quadratic in a program of many same-shaped classes. */
-  free(yvt_nm_head); free(yvt_nm_next); free(yvt_always);
-  yvt_nb = yvt_n > 0 ? yvt_n : 1;
-  yvt_nm_head = malloc(sizeof(int) * (size_t)yvt_nb);
-  yvt_nm_next = malloc(sizeof(int) * (size_t)(yvt_n > 0 ? yvt_n : 1));
-  yvt_always = malloc(sizeof(int) * (size_t)(yvt_n > 0 ? yvt_n : 1));
-  yvt_always_n = 0;
-  if (!yvt_nm_head || !yvt_nm_next || !yvt_always) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-  for (int b = 0; b < yvt_nb; b++) yvt_nm_head[b] = -1;
-  for (int ii = yvt_n - 1; ii >= 0; ii--) {
-    const char *cn = nt_str(nt, yvt_ids[ii], "name");
-    yvt_nm_next[ii] = -1;
+  free(y->nm_head); free(y->nm_next); free(y->always);
+  y->nb = y->n > 0 ? y->n : 1;
+  y->nm_head = malloc(sizeof(int) * (size_t)y->nb);
+  y->nm_next = malloc(sizeof(int) * (size_t)(y->n > 0 ? y->n : 1));
+  y->always = malloc(sizeof(int) * (size_t)(y->n > 0 ? y->n : 1));
+  y->always_n = 0;
+  if (!y->nm_head || !y->nm_next || !y->always) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  for (int b = 0; b < y->nb; b++) y->nm_head[b] = -1;
+  for (int ii = y->n - 1; ii >= 0; ii--) {
+    const char *cn = nt_str(nt, y->ids[ii], "name");
+    y->nm_next[ii] = -1;
     if (!cn) continue;
-    int b = (int)(sp_strhash(cn) % (unsigned)yvt_nb);
-    yvt_nm_next[ii] = yvt_nm_head[b]; yvt_nm_head[b] = ii;
+    int b = (int)(sp_strhash(cn) % (unsigned)y->nb);
+    y->nm_next[ii] = y->nm_head[b]; y->nm_head[b] = ii;
   }
-  for (int ii = 0; ii < yvt_n; ii++)
-    if (!nt_str(nt, yvt_ids[ii], "name")) yvt_always[yvt_always_n++] = ii;
+  for (int ii = 0; ii < y->n; ii++)
+    if (!nt_str(nt, y->ids[ii], "name")) y->always[y->always_n++] = ii;
   yvt_tg_build(c);
 }
 /* The alias-named entries, by the names their alias may stand for: the
@@ -2492,10 +2507,11 @@ static void yvt_build(Compiler *c) {
    method's name resolves to that method along no path: the lookup matches
    names, and only an alias edge changes the name it matches. */
 static void yvt_tg_build(Compiler *c) {
-  anh_free(&yvt_tg_names); memset(&yvt_tg_names, 0, sizeof yvt_tg_names);
-  for (int i = 0; i < yvt_tg_nowned; i++) free(yvt_tg_owned[i]);
-  yvt_tg_nowned = 0;
-  free(yvt_tg_off); free(yvt_tg_ii); yvt_tg_off = NULL; yvt_tg_ii = NULL; yvt_tg_nn = 0;
+  YvtIndex *yv = c->yvt;
+  anh_free(&yv->tg_names); memset(&yv->tg_names, 0, sizeof yv->tg_names);
+  for (int i = 0; i < yv->tg_nowned; i++) free(yv->tg_owned[i]);
+  yv->tg_nowned = 0;
+  free(yv->tg_off); free(yv->tg_ii); yv->tg_off = NULL; yv->tg_ii = NULL; yv->tg_nn = 0;
   const NodeTable *nt = c->nt;
   /* the edges, chained by their new name */
   ANameHash en; memset(&en, 0, sizeof en);
@@ -2527,9 +2543,9 @@ static void yvt_tg_build(Compiler *c) {
   ANameHash yn; memset(&yn, 0, sizeof yn);
   int *yoff = NULL, *ylen = NULL, ycap = 0, *tpool = NULL, tn = 0, tcap = 0;
   int *pair_t = NULL, *pair_ii = NULL, np = 0, pcap = 0;
-  for (int ii = 0; ii < yvt_n; ii++) {
-    if (!yvt_alias_name || !yvt_alias_name[ii]) continue;
-    const char *cn = nt_str(nt, yvt_ids[ii], "name");
+  for (int ii = 0; ii < yv->n; ii++) {
+    if (!yv->alias_name || !yv->alias_name[ii]) continue;
+    const char *cn = nt_str(nt, yv->ids[ii], "name");
     if (!cn) continue;
     int y = anh_find(&yn, cn);
     if (y < 0) {
@@ -2554,9 +2570,9 @@ static void yvt_tg_build(Compiler *c) {
           anh_add(&seen, eold[j]);
           if (qn == qcap) { qcap *= 2; q = realloc(q, sizeof(const char *) * (size_t)qcap); if (!q) { fprintf(stderr, "spinel: out of memory\n"); exit(1); } }
           q[qn++] = eold[j];
-          int t = anh_find(&yvt_tg_names, eold[j]);
-          if (t < 0) { const char *own = yvt_tg_own(eold[j]); anh_add(&yvt_tg_names, own); t = anh_find(&yvt_tg_names, own); }
-          if (t >= yvt_tg_nn) yvt_tg_nn = t + 1;
+          int t = anh_find(&yv->tg_names, eold[j]);
+          if (t < 0) { const char *own = yvt_tg_own(yv, eold[j]); anh_add(&yv->tg_names, own); t = anh_find(&yv->tg_names, own); }
+          if (t >= yv->tg_nn) yv->tg_nn = t + 1;
           if (tn == tcap) { tcap = tcap ? tcap * 2 : 64; tpool = realloc(tpool, sizeof(int) * (size_t)tcap); if (!tpool) { fprintf(stderr, "spinel: out of memory\n"); exit(1); } }
           tpool[tn++] = t; ylen[y]++;
         }
@@ -2574,15 +2590,15 @@ static void yvt_tg_build(Compiler *c) {
   }
   /* the pairs by target name, each name's entries ascending (they were
      met ascending): counting sort */
-  yvt_tg_off = calloc((size_t)yvt_tg_nn + 1, sizeof(int));
-  yvt_tg_ii = malloc(sizeof(int) * (size_t)(np > 0 ? np : 1));
-  if (!yvt_tg_off || !yvt_tg_ii) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-  for (int p = 0; p < np; p++) yvt_tg_off[pair_t[p] + 1]++;
-  for (int t = 0; t < yvt_tg_nn; t++) yvt_tg_off[t + 1] += yvt_tg_off[t];
-  int *fill = malloc(sizeof(int) * (size_t)(yvt_tg_nn > 0 ? yvt_tg_nn : 1));
+  yv->tg_off = calloc((size_t)yv->tg_nn + 1, sizeof(int));
+  yv->tg_ii = malloc(sizeof(int) * (size_t)(np > 0 ? np : 1));
+  if (!yv->tg_off || !yv->tg_ii) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  for (int p = 0; p < np; p++) yv->tg_off[pair_t[p] + 1]++;
+  for (int t = 0; t < yv->tg_nn; t++) yv->tg_off[t + 1] += yv->tg_off[t];
+  int *fill = malloc(sizeof(int) * (size_t)(yv->tg_nn > 0 ? yv->tg_nn : 1));
   if (!fill) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-  for (int t = 0; t < yvt_tg_nn; t++) fill[t] = yvt_tg_off[t];
-  for (int p = 0; p < np; p++) yvt_tg_ii[fill[pair_t[p]]++] = pair_ii[p];
+  for (int t = 0; t < yv->tg_nn; t++) fill[t] = yv->tg_off[t];
+  for (int p = 0; p < np; p++) yv->tg_ii[fill[pair_t[p]]++] = pair_ii[p];
   free(fill); free(pair_t); free(pair_ii); free(tpool); free(yoff); free(ylen); anh_free(&yn);
   free(ehead); free(enext); free(eold); anh_free(&en);
 }
@@ -2590,32 +2606,57 @@ static void yvt_tg_build(Compiler *c) {
    an initialize, the alias-named entries whose alias may stand for its
    name, and the always-list, merged. A method with no name, or a prepend
    shadow, takes every entry (see yvt_may_reach). */
-typedef struct { int s[3]; int ai; int tp, te; int all; int next_all; int last; } YvtIt;
+/* The index, built (again) when the node table is not the one it was built
+   from, or has grown since */
+static YvtIndex *yvt_get(Compiler *c) {
+  if (!c->yvt) {
+    c->yvt = calloc(1, sizeof *c->yvt);
+    if (!c->yvt) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    c->yvt->ntc = -1;
+  }
+  const NodeTable *nt = c->nt;
+  if (c->yvt->nt != nt || c->yvt->ntc != nt->count) yvt_build(c);
+  return c->yvt;
+}
+void yvt_free(Compiler *c) {
+  YvtIndex *y = c->yvt;
+  if (!y) return;
+  free(y->ids); free(y->sup_ids); free(y->sup_key); free(y->alias_name); free(y->fwd);
+  free(y->nm_head); free(y->nm_next); free(y->always);
+  anh_free(&y->tg_names);
+  for (int i = 0; i < y->tg_nowned; i++) free(y->tg_owned[i]);
+  free(y->tg_owned); free(y->tg_off); free(y->tg_ii);
+  free(y);
+  c->yvt = NULL;
+}
+typedef struct { const YvtIndex *y; int s[3]; int ai; int tp, te; int all; int next_all; int last; } YvtIt;
 static void yvt_it_init(Compiler *c, YvtIt *it, int mi) {
+  const YvtIndex *y = it->y = c->yvt;
   const char *mn = c->scopes[mi].name;
-  it->all = !mn || c->scopes[mi].shadow == SHADOW_PREP || !yvt_nm_head;
+  it->all = !mn || c->scopes[mi].shadow == SHADOW_PREP || !y->nm_head;
   it->next_all = 0; it->last = -1; it->ai = 0; it->tp = it->te = 0;
   it->s[0] = it->s[1] = -1;
   if (it->all) return;
-  it->s[0] = yvt_nm_head[sp_strhash(mn) % (unsigned)yvt_nb];
-  if (sp_streq(mn, "initialize")) it->s[1] = yvt_nm_head[sp_strhash("new") % (unsigned)yvt_nb];
-  int t = yvt_tg_off ? anh_find(&yvt_tg_names, mn) : -1;
-  if (t >= 0 && t < yvt_tg_nn) { it->tp = yvt_tg_off[t]; it->te = yvt_tg_off[t + 1]; }
+  it->s[0] = y->nm_head[sp_strhash(mn) % (unsigned)y->nb];
+  if (sp_streq(mn, "initialize")) it->s[1] = y->nm_head[sp_strhash("new") % (unsigned)y->nb];
+  int t = y->tg_off ? anh_find(&y->tg_names, mn) : -1;
+  if (t >= 0 && t < y->tg_nn) { it->tp = y->tg_off[t]; it->te = y->tg_off[t + 1]; }
 }
 static int yvt_it_next(YvtIt *it) {
-  if (it->all) return it->next_all < yvt_n ? it->next_all++ : -1;
+  const YvtIndex *y = it->y;
+  if (it->all) return it->next_all < y->n ? it->next_all++ : -1;
   for (;;) {
     int a = it->s[0], b = it->s[1];
-    int c3 = it->ai < yvt_always_n ? yvt_always[it->ai] : -1;
-    int d = it->tp < it->te ? yvt_tg_ii[it->tp] : -1;
+    int c3 = it->ai < y->always_n ? y->always[it->ai] : -1;
+    int d = it->tp < it->te ? y->tg_ii[it->tp] : -1;
     int m = -1;
     if (a >= 0) m = a;
     if (b >= 0 && (m < 0 || b < m)) m = b;
     if (c3 >= 0 && (m < 0 || c3 < m)) m = c3;
     if (d >= 0 && (m < 0 || d < m)) m = d;
     if (m < 0) return -1;
-    if (a == m) it->s[0] = yvt_nm_next[a];
-    if (b == m) it->s[1] = yvt_nm_next[b];
+    if (a == m) it->s[0] = y->nm_next[a];
+    if (b == m) it->s[1] = y->nm_next[b];
     if (c3 == m) it->ai++;
     if (d == m) it->tp++;
     if (m > it->last) { it->last = m; return m; }
@@ -2930,7 +2971,7 @@ TyKind yield_value_type(Compiler *c, int mi) {
   const NodeTable *nt = c->nt;
   TyKind result = TY_UNKNOWN;
   int pf_fwd = 0, poly_site = 0;
-  if (yvt_nt != nt || yvt_ntc != nt->count) yvt_build(c);
+  YvtIndex *y = yvt_get(c);
   YvtIt yit; yvt_it_init(c, &yit, mi);
   /* Under --load-model=graph the call sites are taken in the program's
      order (prog_sort): where the first site's block answers (a method
@@ -2948,14 +2989,14 @@ TyKind yield_value_type(Compiler *c, int mi) {
       }
       site[nsite++] = ii;
     }
-    prog_sort(c, site, nsite, yvt_ids);
+    prog_sort(c, site, nsite, y->ids);
   }
   for (int ii; (ii = site ? (si < nsite ? site[si++] : -1) : yvt_it_next(&yit)) >= 0; ) {
-    int cid = yvt_ids[ii];
+    int cid = y->ids[ii];
     /* A `callee(...)` forward carries its block implicitly inside the `...`
        (no explicit block node); treat it as a forwarded block too. */
     if (!yvt_may_reach(c, ii, mi)) continue;
-    int fwd_args = yvt_fwd ? yvt_fwd[ii] : yvt_call_forwards_block(nt, cid);
+    int fwd_args = y->fwd ? y->fwd[ii] : yvt_call_forwards_block(nt, cid);
     /* skip calls that live inside method mi itself (recursive self-calls);
        only external call sites provide a concrete block value type */
     if ((int)(comp_scope_of(c, cid) - c->scopes) == mi) continue;
@@ -3065,13 +3106,13 @@ int yield_block_tails(Compiler *c, int mi, int *out, int max) {
 
   const NodeTable *nt = c->nt;
   int n = 0;
-  if (yvt_nt != nt || yvt_ntc != nt->count) yvt_build(c);
+  YvtIndex *y = yvt_get(c);
   YvtIt yit; yvt_it_init(c, &yit, mi);
   for (int ii; n < max && (ii = yvt_it_next(&yit)) >= 0; ) {
-    int cid = yvt_ids[ii];
+    int cid = y->ids[ii];
     int blk = nt_ref(nt, cid, "block");
     if (!yvt_may_reach(c, ii, mi)) continue;
-    int fwd_args = yvt_fwd ? yvt_fwd[ii] : yvt_call_forwards_block(nt, cid);
+    int fwd_args = y->fwd ? y->fwd[ii] : yvt_call_forwards_block(nt, cid);
     if ((int)(comp_scope_of(c, cid) - c->scopes) == mi) continue;
     if (!yvt_reaches(c, cid, mi)) continue;
     if (fwd_args || nt_call_has_block_arg(nt, cid)) {
@@ -3112,12 +3153,12 @@ int yield_block_calls(Compiler *c, int mi, int *out, int max) {
   g_yvt_mi[g_yvt_depth++] = mi;
   const NodeTable *nt = c->nt;
   int n = 0;
-  if (yvt_nt != nt || yvt_ntc != nt->count) yvt_build(c);
+  YvtIndex *y = yvt_get(c);
   YvtIt yit; yvt_it_init(c, &yit, mi);
   for (int ii; n < max && (ii = yvt_it_next(&yit)) >= 0; ) {
-    int cid = yvt_ids[ii];
+    int cid = y->ids[ii];
     if (!yvt_may_reach(c, ii, mi)) continue;
-    int fwd_args = yvt_fwd ? yvt_fwd[ii] : yvt_call_forwards_block(nt, cid);
+    int fwd_args = y->fwd ? y->fwd[ii] : yvt_call_forwards_block(nt, cid);
     if (!yvt_reaches(c, cid, mi)) continue;
     if (fwd_args || nt_call_has_block_arg(nt, cid)) {
       /* (a call in mi itself forwarding mi's own block is mi's caller's) */
@@ -3147,25 +3188,33 @@ TyKind yield_value_type_via_super(Compiler *c, int mi) {
   if (g_yvt_depth >= MAX_YVT_DEPTH) return TY_UNKNOWN;
   g_yvt_mi[g_yvt_depth++] = mi;
   const NodeTable *nt = c->nt;
-  if (yvt_nt != nt || yvt_ntc != nt->count) yvt_build(c);
+  YvtIndex *y = yvt_get(c);
   TyKind result = TY_UNKNOWN;
-  for (int ii = 0; ii < yvt_sup_n; ii++) {
-    Scope *cs = comp_scope_of(c, yvt_sup_ids[ii]);
+  /* (a method with no name, a prepend shadow, or one known by a name other
+     than its def's -- an alias captured it as an earlier version and
+     renamed it -- takes every super, as yvt_it_init does for the calls) */
+  const char *mn = comp_scope_user_name(&c->scopes[mi]);
+  unsigned mkey = mn ? yvt_name_key(mn) : 0;
+  if (c->scopes[mi].shadow == SHADOW_PREP || (mn && !sp_streq(comp_scope_def_name(c, &c->scopes[mi]), mn))) mkey = 0;
+  for (int ii = 0; ii < y->sup_n; ii++) {
+    if (mkey && y->sup_key[ii] && y->sup_key[ii] != mkey) continue;
+    Scope *cs = comp_scope_of(c, y->sup_ids[ii]);
     if (!cs || cs->class_id < 0 || !cs->name) continue;
     int cmi = (int)(cs - c->scopes);
     if (cmi == mi) continue;
-    /* where that super lands: the next shadow in its own class (an earlier
-       include's or extend's copy), or the superclass chain */
-    int rmi = a_super_target(c, cs);
-    if (rmi != mi) continue;
+    /* where the call plan binds that super: the next shadow in its own
+       class (an earlier include's or extend's copy), or the superclass
+       chain's method, or a version entry one of whose arms runs mi */
+    int at;
+    if (!cplan_target_runs(c, cplan_super_target(c, y->sup_ids[ii], cs, &at), mi)) continue;
     /* `super(a) { }` in the child: its own literal block is what mi's
        yield runs, not a block of the child's callers (none reaches it) */
-    int sb = nt_ref(nt, yvt_sup_ids[ii], "block");
+    int sb = nt_ref(nt, y->sup_ids[ii], "block");
     TyKind ft;
     if (sb >= 0 && nt_kind(nt, sb) == NK_BlockNode) ft = yvt_literal_block_value(c, sb);
     /* `super(a, &pr)` with a proc value of the child's own (not the child's
        block forwarded on): mi's yield runs that proc, as a call's does */
-    else if (sb >= 0 && nt_kind(nt, sb) == NK_BlockArgumentNode && !call_forwards_own_block(c, yvt_sup_ids[ii]))
+    else if (sb >= 0 && nt_kind(nt, sb) == NK_BlockArgumentNode && !call_forwards_own_block(c, y->sup_ids[ii]))
       ft = yvt_proc_arg_value(c, sb);
     else {
       ft = yield_value_type(c, cmi);

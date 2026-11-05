@@ -12014,10 +12014,12 @@ TyKind infer_uncached(Compiler *c, int id) {
     if (g_plan_check && !an_pure_reads && id >= 0 && id < c->node_cap) c->ucall_inf[id].via = UC_NONE;
     Scope *s = comp_scope_of(c, id);
     if (s->class_id < 0 || !s->name) return TY_UNKNOWN;
-    const char *shadow = comp_super_shadow(c, s);
-    if (shadow) {
-      int mi = s->is_cmethod ? comp_cmethod_in_class(c, s->class_id, shadow)
-                         : comp_method_in_class(c, s->class_id, shadow);
+    /* where the call plan binds the super: the next method of the prepend
+       chain, else the parent chain's, found from class `at` (a class
+       method's through the parent's CLASS-method chain, which the instance
+       chain would miss `def self.x` entirely) */
+    int at, mi = cplan_super_target(c, id, s, &at);
+    if (comp_super_shadow(c, s)) {
       if (mi < 0) return TY_UNKNOWN;
       /* a yielding shadow is spliced as a parent is */
       an_user_call_record(c, id, mi, UC_SUPER, s->class_id);
@@ -12028,7 +12030,7 @@ TyKind infer_uncached(Compiler *c, int id) {
        comp_super_class_new_boxed) */
     if (comp_super_is_class_new(c, id))
       return comp_super_class_new_boxed(c, id) ? TY_POLY : ty_object(s->class_id);
-    int p = comp_super_parent(c, s->class_id, s->is_cmethod);
+    int p = at;
     const char *uname = comp_super_name(c, p, comp_scope_def_name(c, s), s->is_cmethod);
     /* `super` in a respond_to? override no ancestor defines is Object's
        respond_to?: a boolean (see emit_super_respond_to) */
@@ -12074,9 +12076,6 @@ TyKind infer_uncached(Compiler *c, int id) {
     if (!s->is_cmethod && uname && sp_streq(uname, "with") &&
         c->classes[s->class_id].is_struct && c->classes[s->class_id].is_data) none = ty_object(s->class_id);
     if (p < 0) return none;
-    /* super inside a class method resolves through the parent's CLASS-method
-       chain (the instance chain would miss `def self.x` entirely). */
-    int mi = cplan_super_chain_mi(c, id, s, p, uname);
     /* a subclass of a native class (#9269): super reaches the native
        class's constructor (initialize) or binding */
     if (mi < 0 && !s->is_cmethod && uname && c->classes[s->class_id].nsub_root > 0) {

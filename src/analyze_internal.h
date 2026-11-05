@@ -1116,6 +1116,33 @@ int anh_find(const ANameHash *st, const char *nm);   /* insertion index, or -1 *
 void anh_add(ANameHash *st, const char *nm);
 void anh_free(ANameHash *st);
 void cr_class_only_names(Compiler *c, ANameHash *out);   /* the names only plain classes' methods hold */
+/* The block-passing call sites, and the supers, of the node table, indexed
+   for yield_value_type and its kin (yvt_build, analyze_util.c): built once
+   per node table and held by the Compiler (Compiler.yvt), freed with it
+   (yvt_free). nt and ntc are the table and the node count it was built from. */
+struct YvtIndex {
+  const NodeTable *nt;
+  int ntc, n, sup_n;
+  int *ids, *sup_ids;
+  /* per sup_ids entry: the key of the name its super asks for, 0 where a method of
+     any name may be what it reaches (yield_value_type_via_super) */
+  unsigned *sup_key;
+  /* the entries by call name, each chain ascending (nm_head by name hash
+     into nb buckets, nm_next along the chain), and the ones any method may
+     be reached by (always) */
+  int *nm_head, *nm_next, *always;
+  int nb, always_n;
+  /* the alias-named entries by the names their alias may stand for: name t's
+     are tg_ii[tg_off[t] .. tg_off[t + 1]), ascending (yvt_tg_build); the
+     names are copies of their own (tg_owned) */
+  ANameHash tg_names;
+  int *tg_off, *tg_ii, tg_nn;
+  char **tg_owned;
+  int tg_nowned, tg_ocap;
+  unsigned char *alias_name;   /* per ids entry: its name is an alias somewhere */
+  unsigned char *fwd;          /* per ids entry: yvt_call_forwards_block */
+};
+typedef struct YvtIndex YvtIndex;
 /* The scopes of a name, ascending: the first, and the next after s (-1 at
    the end); from a table while the scope index is frozen, else a scan
    (analyze.c). A pass walking every scope for a name's methods per call

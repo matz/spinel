@@ -1679,11 +1679,33 @@ int cplan_own_class_reflection(Compiler *c, int id, int recv, const char *name) 
   int r = 0;
   for (int i = 0; name && R[i]; i++) if (sp_streq(name, R[i])) { r = 1; break; }
   int ci = r && recv >= 0 ? class_recv_static_ci(c, recv) : -1;
-  int mi = ci >= 0 ? call_target(c, id, ci, name, CT_CMETHOD, NULL) : -1;
+  int dc = -1, mi = ci >= 0 ? call_target(c, id, ci, name, CT_CMETHOD, &dc) : -1;
   if (mi < 0) return 0;
+  if (!scope_calls_super(c, mi)) return 1;
   /* (emit_super answers a bare super of these three) */
-  return !scope_calls_super(c, mi) || sp_streq(name, "superclass") || sp_streq(name, "ancestors") ||
-         sp_streq(name, "subclasses");
+  if (sp_streq(name, "superclass") || sp_streq(name, "ancestors") || sp_streq(name, "subclasses")) return 1;
+  /* a super that reaches a class method of the program above it, whose
+     own super (if any) does so too: the last one in the chain calls no
+     super. A class on the chain that holds more than one version of the
+     method (a reopen replaced it) takes part only when none of them calls
+     super; otherwise the old path stays */
+  ElabVersion vs[8];
+  for (int depth = 0; depth < 64 && dc >= 0; depth++) {
+    if (elab_history_versions(c, dc, 1, name, vs, 8) != 1) return 0;
+    int p = comp_super_parent(c, dc, 1), pdc = -1;
+    int pm = p >= 0 ? comp_cmethod_in_chain(c, p, name, &pdc) : -1;
+    if (pm < 0 || pdc < 0) return 0;
+    int nv = elab_history_versions(c, pdc, 1, name, vs, 8);
+    if (nv < 1 || nv > 8) return 0;
+    if (nv > 1) {
+      for (int i = 0; i < nv; i++)
+        if (vs[i].v->scope <= 0 || scope_calls_super(c, vs[i].v->scope)) return 0;
+      return 1;
+    }
+    if (!scope_calls_super(c, pm)) return 1;
+    dc = pdc;
+  }
+  return 0;
 }
 
 int cplan_recv_class(Compiler *c, int id, int recv) {

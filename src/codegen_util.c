@@ -7108,25 +7108,28 @@ void mc_number_versions(Compiler *c) {
 static int mc_same_method(const Scope *a, const Scope *b) {
   return a->class_id == b->class_id && a->is_cmethod == b->is_cmethod && (a->entry == ENTRY_DISPATCH) == (b->entry == ENTRY_DISPATCH) && sp_streq(a->name, b->name);
 }
-static const char *const mc_class_helpers[] = { "_alloc", "_dup", "_gc_scan", NULL };
+/* (`_struct_inspect` is a Struct's default text where both inspect and to_s
+   are the program's: struct_default_text_fn) */
+static const char *const mc_class_helpers[] = { "_alloc", "_dup", "_gc_scan", "_struct_inspect", NULL };
+enum { MC_NHELPERS = 4 };
 /* A method whose name another has, as *first and *later; *first is -1 when
    the name is a class's helper. */
 static int mc_find_clash(Compiler *c, int *first, int *later) {
   int cap = 64;
-  while (cap < (c->nscopes + 3 * c->nclasses) * 2) cap *= 2;
+  while (cap < (c->nscopes + MC_NHELPERS * c->nclasses) * 2) cap *= 2;
   char **key = calloc((size_t)cap, sizeof *key);
   int *who = malloc(sizeof(int) * (size_t)cap);
   int found = 0;
-  for (int i = -3 * c->nclasses; i < c->nscopes && !found; i++) {
+  for (int i = -MC_NHELPERS * c->nclasses; i < c->nscopes && !found; i++) {
     const Scope *s = i >= 0 ? &c->scopes[i] : NULL;
     const char *nm;
     if (s) {
       if (!s->name || s->c_name) continue;
       nm = mc_method(c, s);
     } else {
-      const ClassInfo *ci = &c->classes[(-i - 1) / 3];
+      const ClassInfo *ci = &c->classes[(-i - 1) / MC_NHELPERS];
       if (ci->is_builtin_const || !ci->c_name) continue;
-      nm = mc_ring_setf(c, "sp_%s_%s", ci->c_name, mc_class_helpers[(-i - 1) % 3]);
+      nm = mc_ring_setf(c, "sp_%s_%s", ci->c_name, mc_class_helpers[(-i - 1) % MC_NHELPERS]);
     }
     unsigned h = 2166136261u;
     for (const char *q = nm; *q; q++) h = (h ^ (unsigned char)*q) * 16777619u;

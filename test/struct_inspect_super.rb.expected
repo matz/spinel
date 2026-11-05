@@ -12,3 +12,11 @@ mem2
 R#<struct Rec r=R#<struct Rec:...>>
 S#<struct Sup a=S#<struct Sup a=1>>
 S#<struct Sub3 a=14>
+i:#<struct Own o=15>
+s:#<struct Own o=16>
+"mine"
+"under"
+side
+E#<struct Eff f=19>
+plain side
+P#<Plain:X>

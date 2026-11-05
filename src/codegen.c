@@ -12211,10 +12211,11 @@ static int struct_display_owned(Compiler *c, int cid, const char *nm) {
 }
 /* The sp_<C name>_<fn> that answers class cid's default text: inspect when
    nothing owns it, else to_s when nothing owns that, else a copy of its own
-   (struct_inspect), made only then. */
+   (sp_X__struct_inspect, a class helper's name that mc_resolve_clashes
+   keeps clear of the program's methods), made only then. */
 static const char *struct_default_text_fn(Compiler *c, int cid) {
   return !struct_display_owned(c, cid, "inspect") ? "inspect"
-       : !struct_display_owned(c, cid, "to_s") ? "to_s" : "struct_inspect";
+       : !struct_display_owned(c, cid, "to_s") ? "to_s" : "_struct_inspect";
 }
 
 /* Forward-declares the generated stringifiers of Struct/Data class cid, so
@@ -12226,8 +12227,8 @@ static void emit_struct_display_decls(Compiler *c, int cid, Buf *b) {
     buf_printf(b, "static const char *sp_%s_inspect(sp_%s *self);\n", cn, cn);
   if (comp_method_in_chain(c, cid, "to_s", NULL) < 0)
     buf_printf(b, "static const char *sp_%s_to_s(sp_%s *self);\n", cn, cn);
-  if (sp_streq(struct_default_text_fn(c, cid), "struct_inspect"))
-    buf_printf(b, "static const char *sp_%s_struct_inspect(sp_%s *self);\n", cn, cn);
+  if (sp_streq(struct_default_text_fn(c, cid), "_struct_inspect"))
+    buf_printf(b, "static const char *sp_%s__struct_inspect(sp_%s *self);\n", cn, cn);
 }
 
 /* The default Struct/Data representation, `#<struct Name m=v, ...>` (Data
@@ -12451,8 +12452,8 @@ void emit_class_new(Compiler *c, ClassInfo *ci, Buf *b) {
     }
     /* with both owned, the default text a super in either reaches
        (an_super_struct_text) is a function of its own */
-    if (sp_streq(struct_default_text_fn(c, cid), "struct_inspect"))
-      emit_struct_default_inspect(c, ci, cid, "struct_inspect", b);
+    if (sp_streq(struct_default_text_fn(c, cid), "_struct_inspect"))
+      emit_struct_default_inspect(c, ci, cid, "_struct_inspect", b);
     return;
   }
   /* Nothing builds an object of this class, so it has no constructor. The pool
@@ -15845,6 +15846,10 @@ void emit_super(Compiler *c, int id, Buf *b) {
      (sp_obj_kernel_inspect; #<Name:0x...> for to_s) */
   if (an_super_object_text(c, id, (int)(s - c->scopes))) {
     int cid = s->class_id;
+    /* (a block argument runs for its effect, as below) */
+    Buf eb; memset(&eb, 0, sizeof eb);
+    emit_super_blockarg_effect(c, id, &eb);
+    if (eb.p) buf_printf(b, "({ %s", eb.p);
     int vt = comp_ty_value_obj(c, ty_object(cid));
     char cls[96];
     if (!vt && class_has_subclass(c, cid)) snprintf(cls, sizeof cls, "(%s)->cls_id", g_self);
@@ -15861,14 +15866,20 @@ void emit_super(Compiler *c, int id, Buf *b) {
     else
       buf_printf(b, "sp_sprintf(\"#<%%s:0x%%016llx>\", sp_obj_cls_name_rt(%s), (unsigned long long)(uintptr_t)%s%s)",
                  cls, vt ? "&" : "", g_self);
+    if (eb.p) buf_puts(b, "; })");
+    free(eb.p);
     return;
   }
   /* the same super in a Struct or Data class's own inspect or to_s: the
      default #<struct ...> text (an_super_struct_text) */
   if (an_super_struct_text(c, id, (int)(s - c->scopes))) {
     int cid = s->class_id;
-    buf_printf(b, "sp_%s_%s(%s%s)", c->classes[cid].c_name, struct_default_text_fn(c, cid),
-               comp_ty_value_obj(c, ty_object(cid)) ? "&" : "", g_self);
+    /* (a block argument runs for its effect: the default text takes none) */
+    Buf eb; memset(&eb, 0, sizeof eb);
+    emit_super_blockarg_effect(c, id, &eb);
+    buf_printf(b, "%s%ssp_%s_%s(%s%s)%s", eb.p ? "({ " : "", eb.p ? eb.p : "", c->classes[cid].c_name,
+               struct_default_text_fn(c, cid), comp_ty_value_obj(c, ty_object(cid)) ? "&" : "", g_self, eb.p ? "; })" : "");
+    free(eb.p);
     return;
   }
   NodeKind ty_k = nt_kind(c->nt, id);

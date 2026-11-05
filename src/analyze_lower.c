@@ -102,7 +102,7 @@ static const Lowering lowerings[LW__COUNT] = {
     desugar_noarg_display_wrappers_at, desugar_noarg_display_wrappers_left, "`def inspect(i = 0)` in a body" },
   [LW_BIND_ATTR_HELPERS] = { "desugar_bind_attr_helpers", LF_STMT | LF_FRAMES, { NK_NONE },
     desugar_bind_attr_helpers_at, desugar_bind_attr_helpers_left, "`attr_reader :x` an `instance_method(:x)` names", desugar_bind_attr_helpers_gate },
-  [LW_BIND_MEMBER_HELPERS] = { "desugar_bind_member_helpers", 0, { NK_ConstantWriteNode, NK_LocalVariableWriteNode, NK_ClassNode },
+  [LW_BIND_MEMBER_HELPERS] = { "desugar_bind_member_helpers", 0, { NK_ConstantWriteNode, NK_LocalVariableWriteNode, NK_ConstantPathWriteNode, NK_ClassNode },
     desugar_bind_member_helpers_at, desugar_bind_member_helpers_left, "a Struct.new member an `instance_method(:x)` names", desugar_bind_attr_helpers_gate },
   [LW_PAREN_BLOCK_ARG] = { "desugar_paren_block_arg", 0, { NK_BlockArgumentNode },
     desugar_paren_block_arg_at, desugar_paren_block_arg_left, "`&(e)`: a block argument in parentheses" },

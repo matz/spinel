@@ -6463,23 +6463,24 @@ static int qc_rescue_above(const NodeTable *nt, const int *par, int st) {
   }
   return 0;
 }
-/* Are statements a and b of list st next to each other? */
+/* Does statement b come right after statement a in list st? */
 static int qc_adjacent(const NodeTable *nt, int st, int a, int b) {
   int n = 0; const int *body = nt_arr(nt, st, "body", &n);
   for (int i = 0; i + 1 < n; i++)
-    if ((body[i] == a && body[i + 1] == b) || (body[i] == b && body[i + 1] == a)) return 1;
+    if (body[i] == a && body[i + 1] == b) return 1;
   return 0;
 }
 /* Does header hd run whenever statements st run? w, when not -1, is the
-   builder write in st. Only a statements list, the main body of a begin
+   statement of st that holds the builder write. Only a statements list, the main body of a begin
    without rescue, a begin's ensure, and parentheses may lie between them;
    an if, a loop, a rescue or a block may not run, and a rescue can skip
    the rest of its begin's body. A rescue around st itself can skip the
-   header too, unless the header is the statement right next to w. */
+   header too, unless the header is the statement right after w. */
 static int qc_runs_with(const NodeTable *nt, const int *par, int hd, int st, int w) {
   int ch = hd;
   for (int p = par[hd]; p >= 0; ch = p, p = par[p]) {
-    /* (a header right next to the builder: no statement between can raise) */
+    /* (a header right after the builder: no statement between can raise,
+       and a raise in the builder skips the header too) */
     if (p == st) return (ch == hd && w >= 0 && qc_adjacent(nt, st, w, hd)) || !qc_rescue_above(nt, par, st);
     NodeKind k = nt_kind(nt, p);
     if (k == NK_StatementsNode || k == NK_EnsureNode || k == NK_ParenthesesNode) continue;
@@ -6504,7 +6505,7 @@ static int qc_unless_defined_runs(const NodeTable *nt, const int *par, int w, in
       !sp_streq(nt_str(nt, dv, "name"), wn))
     return 0;
   int cs = par[cond];
-  if (cs < 0 || nt_kind(nt, cs) != NK_StatementsNode || !qc_runs_with(nt, par, hd, cs, -1) ||
+  if (cs < 0 || nt_kind(nt, cs) != NK_StatementsNode || !qc_runs_with(nt, par, hd, cs, cond) ||
       !qc_written_before(nt, w, hd))
     return 0;
   NT_FOREACH_KIND(nt, NK_ConstantWriteNode, o) {

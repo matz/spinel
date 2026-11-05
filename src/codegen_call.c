@@ -19402,6 +19402,19 @@ static const char *const *builtin_value_ancestry(TyKind rt) {
    through a predicate name (`zork?` reads as a bool) or through a method the
    program adds to another builtin (`class Integer; include M; end` asked of
    a String). */
+/* Does class or module k mix in a builtin module (Enumerable), itself or
+   through a module of the program it mixes in? Such a module's methods
+   are in no table of the program. */
+static int mixes_in_builtin_module(Compiler *c, int k, int depth) {
+  int n = 0;
+  const LrMixin *mx = elab_class_mixins(c, k, &n);
+  for (int i = 0; i < n; i++) {
+    int m = elab_mixin_module(c, &mx[i]);
+    if (m < 0 || m >= c->nclasses || c->classes[m].is_builtin_const) return 1;
+    if (m != k && depth < 16 && mixes_in_builtin_module(c, m, depth + 1)) return 1;
+  }
+  return 0;
+}
 static int rt_probe_unfounded(Compiler *c, TyKind rt, const char *qm) {
   const char *const *anc = builtin_value_ancestry(rt);
   if (!anc || !qm || builtin_instance_method_known(anc[0], qm) ||
@@ -19421,7 +19434,32 @@ static int rt_probe_unfounded(Compiler *c, TyKind rt, const char *qm) {
     if (is_builtin_reopen(kn)) foreign = 1;
   }
   size_t ql = strlen(qm);
-  return foreign || (ql > 0 && qm[ql - 1] == '?');
+  if (foreign || (ql > 0 && qm[ql - 1] == '?')) return 1;
+  /* The rows of a class without Enumerable among its ancestors carry its
+     whole public surface, the names it inherits from Numeric and
+     Comparable included (tools/gen_builtin_arity_spec.rb writes them from
+     CRuby). So the probe typing `7.to_a` (a conversion the compiler
+     answers for any value) is no basis: CRuby's Integer has no to_a.
+     Enumerable has no rows, so an Array, Hash or Range keeps the probe's
+     answer for its names (chain, to_set). */
+  for (int a = 0; anc[a]; a++) if (sp_streq(anc[a], "Enumerable")) return 0;
+  /* The program's reopenings of the value's ancestors keep the probe's
+     answer when they could add the name some other way: a
+     respond_to_missing? (only a run-time call could tell), an alias of a
+     builtin method (`alias to_a digits`, which the class's own table does
+     not list), or a builtin module mixed in (`include Enumerable` gives
+     Integer to_a). */
+  for (int k = 0; k < c->nclasses; k++) {
+    const char *kn = c->classes[k].name;
+    int a = 0;
+    while (kn && anc[a] && !sp_streq(anc[a], kn)) a++;
+    if (!kn || !anc[a]) continue;
+    if (comp_method_in_chain(c, k, "respond_to_missing?", NULL) >= 0) return 0;
+    const char *al = comp_resolve_alias(c, k, qm);
+    if (al && !sp_streq(al, qm)) return 0;
+    if (mixes_in_builtin_module(c, k, 0)) return 0;
+  }
+  return 1;
 }
 /* Read the analyze-time `recv.<qm>` probes stashed on a respond_to? node: a
    recognized method infers a concrete type, an unrecognized one stays UNKNOWN.

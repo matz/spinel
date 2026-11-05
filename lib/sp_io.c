@@ -65,9 +65,6 @@ static long sp_sock_room(int fd) {
   long room = (long)capacity - (long)queued;
   return room > 0 ? room : 0;
 }
-#if !defined(__APPLE__) && !defined(__GLIBC__)
-#include <stdio_ext.h>  /* musl __freadahead: pending stdio read-buffer bytes */
-#endif
 
 /* Provided by the generated TU / libspinel_rt.a. */
 extern void *sp_gc_alloc(size_t sz, void (*fin)(void *), void (*scn)(void *));
@@ -276,20 +273,6 @@ sp_File *sp_io_fdopen_sock(int fd, const char *kind) {SP_GC_ROOT_STR(kind);
    on SPINEL_WORKERS=1 (#4307). A character device (a tty, /dev/urandom) is
    the same shape. A regular file is always ready and pays only the one
    fstat, once per handle. */
-/* Bytes stdio has already buffered for this stream. They are readable without
-   a read(2), so a drain of exactly this many cannot block -- which is what
-   lets a slurp fill from a pipe without ever sitting in the kernel. */
-size_t sp_io_stdio_buffered(FILE *fp) {
-  if (!fp) return 0;
-#if defined(__GLIBC__)
-  return fp->_IO_read_end > fp->_IO_read_ptr ? (size_t)(fp->_IO_read_end - fp->_IO_read_ptr) : 0;
-#elif defined(__APPLE__)
-  return fp->_r > 0 ? (size_t)fp->_r : 0;
-#else
-  return __freadahead(fp);   /* musl */
-#endif
-}
-
 /* A thread reading or writing a handle's descriptor while another thread
    closes it (#4546's shape: a connection's two pumps, either of which may
    close both ends). The close used to fclose at once, and a reader that had
@@ -342,7 +325,7 @@ static int sp_io_unuse(sp_File *f) {
 int sp_io_readiness_fd(sp_File *f, int *buffered) {
   FILE *fp = sp_io_use(f);
   int fd = fileno(fp);
-  if (buffered) *buffered = sp_io_stdio_buffered(fp) > 0;
+  if (buffered) *buffered = sp_io_pending(f) > 0;
   sp_io_unuse(f);
   return fd;
 }
@@ -483,7 +466,7 @@ void sp_io_wait_readable(sp_File *f) {SP_GC_ROOT(f);
   if (!f || !SP_ATOMIC_LOAD(&f->fp, __ATOMIC_RELAXED)) return;
   if (!sp_io_parkable(f)) return;
   FILE *fp = sp_io_use(f);
-  size_t buffered = sp_io_stdio_buffered(fp);
+  size_t buffered = sp_io_pending(f);
   int fd = fileno(fp);
   sp_io_unuse(f);
   if (buffered > 0) return;
@@ -1499,7 +1482,6 @@ sp_int sp_sock_send(sp_File *f, const char *data, sp_int len, sp_int flags, cons
   }
   return (sp_int)n;
 }
-static long sp_io_buffered(FILE *fp);
 /* #recv reads one datagram (or up to `len` stream bytes) as a String;
    #recvfrom pairs it with the sender's address, CRuby's 4-element form.
    The payload is BINARY in every shape, as CRuby answers it. */
@@ -1510,7 +1492,8 @@ const char *sp_sock_recv(sp_File *f, sp_int len) {SP_GC_ROOT(f);
   /* bytes a read on the stream already pulled into stdio's buffer are the
      peer's next ones: served first, as readpartial does, or recv stepped
      over them (#7195) */
-  long pend = sp_io_buffered(sp_io_use(f));
+  (void)sp_io_use(f);
+  long pend = (long)sp_io_pending(f);
   sp_io_unuse(f);
   /* a zero-length read of a stream with bytes waiting answers nil, as
      recv(2) of none answers 0 below */
@@ -1518,7 +1501,8 @@ const char *sp_sock_recv(sp_File *f, sp_int len) {SP_GC_ROOT(f);
   if (pend > 0) {
     size_t want = (size_t)len < (size_t)pend ? (size_t)len : (size_t)pend;
     char *r = sp_str_alloc(want);
-    size_t got = SP_SIG_BLOCKING(fread(r, 1, want, sp_io_use(f)));
+    (void)sp_io_use(f);
+    size_t got = sp_io_fread(f, r, want);
     sp_io_unuse(f);
     r[got] = 0;
     sp_str_set_len(r, got);
@@ -1625,19 +1609,6 @@ sp_int sp_sock_listen(sp_File *f, sp_int backlog) {SP_GC_ROOT(f);
    error: with `exception: false` the caller gets :wait_readable /
    :wait_writable, otherwise the matching IO::*Wait* exception, which carries
    both its Errno parent and the IO::Wait* module (see lib/sp_exc.c). */
-/* Bytes stdio already buffered for this handle. A #gets followed by a
-   #read_nonblock must see them: the raw read(2) below goes straight to the
-   descriptor and would skip the buffer. Same platform probe sp_io_wait_readable
-   uses. The stream is one the caller holds a use of (sp_io_use). */
-static long sp_io_buffered(FILE *fp) {
-#if defined(__GLIBC__)
-  return (long)(fp->_IO_read_end - fp->_IO_read_ptr);
-#elif defined(__APPLE__)
-  return (long)fp->_r;
-#else
-  return (long)__freadahead(fp);
-#endif
-}
 /* O_NONBLOCK is set for the duration of one call and put back: leaving it on
    would make a later blocking #gets treat EAGAIN as EOF. */
 static int sp_io_nb_begin(sp_File *f) {
@@ -1654,25 +1625,25 @@ static ssize_t sp_io_read_chunk_timed(sp_File *f, char *buf, size_t count) {
   SP_GC_ROOT(f);
   double deadline = -2.0;
   for (;;) {
-    FILE *fp = sp_io_use(f);
-    size_t buffered = sp_io_stdio_buffered(fp);
+    (void)sp_io_use(f);
+    size_t buffered = sp_io_pending(f);
     if (buffered) {
       size_t want = buffered < count ? buffered : count;
-      size_t got = SP_SIG_BLOCKING(fread(buf, 1, want, fp));
+      size_t got = sp_io_fread(f, buf, want);
       sp_io_unuse(f);
       return (ssize_t)got;
     }
     sp_io_unuse(f);
     if (!sp_io_parkable(f)) {
       (void)sp_io_timeout_seconds(f);
-      fp = sp_io_use(f);
-      size_t got = SP_SIG_BLOCKING(fread(buf, 1, count, fp));
+      (void)sp_io_use(f);
+      size_t got = sp_io_fread(f, buf, count);
       sp_io_unuse(f);
       return (ssize_t)got;
     }
     if (deadline == -2.0) deadline = sp_io_deadline(f);
     sp_io_wait_deadline(f, POLLIN, deadline);
-    fp = sp_io_use(f);
+    FILE *fp = sp_io_use(f);
     int saved = sp_io_nb_begin(f);
     ssize_t got = SP_SIG_BLOCKING(read(fileno(fp), buf, count));
     int error = errno;
@@ -1771,10 +1742,10 @@ const char *sp_File_readpartial_or_nil(sp_File *f, sp_int n) {SP_GC_ROOT(f);
   char *r = sp_str_alloc((size_t)n);
   ssize_t got;
   FILE *fp = sp_io_use(f);
-  long pend = sp_io_buffered(fp);
+  long pend = (long)sp_io_pending(f);
   if (pend > 0) {
     size_t want = (size_t)n < (size_t)pend ? (size_t)n : (size_t)pend;
-    got = (ssize_t)SP_SIG_BLOCKING(fread(r, 1, want, fp));
+    got = (ssize_t)sp_io_fread(f, r, want);
   }
   else {
     do { got = SP_SIG_BLOCKING(read(fileno(fp), r, (size_t)n)); } while (got < 0 && errno == EINTR);
@@ -1823,10 +1794,10 @@ const char *sp_sock_read_nb(sp_File *f, sp_int len, sp_bool exc, sp_bool is_recv
   ssize_t n;
   FILE *fp = sp_io_try_use(f);
   if (!fp) { free(buf); sp_raise_cls("IOError", "stream closed in another thread"); }
-  long pend = sp_io_buffered(fp);
+  long pend = (long)sp_io_pending(f);
   if (pend > 0) {   /* serve what stdio already holds, as CRuby does */
     size_t want = (size_t)len < (size_t)pend ? (size_t)len : (size_t)pend;
-    n = (ssize_t)SP_SIG_BLOCKING(fread(buf, 1, want, fp));
+    n = (ssize_t)sp_io_fread(f, buf, want);
   }
   else {
     int saved = sp_io_nb_begin(f);
@@ -2027,9 +1998,9 @@ sp_int sp_File_flush(sp_File *f) {
 sp_bool sp_File_eof_p(sp_File *f) {
   SP_IO_OPEN(f);
   sp_io_wait_readable(f);
-  int c = SP_SIG_BLOCKING(fgetc(f->fp));
+  int c = sp_io_getc(f);
   if (c == EOF) return TRUE;
-  ungetc(c, f->fp);
+  sp_io_ungetc(f, c);
   return FALSE;
 }
 
@@ -2208,14 +2179,14 @@ void sp_file_rename(const char *from, const char *to) {SP_GC_ROOT_STR(from);SP_G
 sp_int sp_File_readbyte(sp_File *f) {
   SP_IO_OPEN(f);
   sp_io_wait_readable(f);
-  int ch = SP_SIG_BLOCKING(fgetc(f->fp));
+  int ch = sp_io_getc(f);
   if (ch == EOF) sp_raise_cls("EOFError", "end of file reached");
   return (sp_int)(unsigned char)ch;
 }
 /* IO#ungetbyte: push one byte back onto the read buffer; returns nil. */
 void sp_File_ungetbyte(sp_File *f, sp_int byte) {
   SP_IO_OPEN(f);
-  ungetc((int)(unsigned char)byte, f->fp);
+  sp_io_ungetc(f, (int)(unsigned char)byte);
 }
 /* IO#binmode?: true after #binmode, or for a handle opened in binary mode.
    A socket is binary too, as CRuby's is (its encoding is BINARY). */

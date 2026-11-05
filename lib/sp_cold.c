@@ -1214,7 +1214,7 @@ const char *sp_slurp_stream_parked(sp_File *f) {SP_GC_ROOT(f);
   if (!buf) return &("\xff" "")[1];
   for (;;) {
     sp_io_wait_readable(f);
-    int ch = SP_SIG_BLOCKING(fgetc(f->fp));
+    int ch = sp_io_getc(f);
     if (ch == EOF) break;
     if (len + 2 >= cap) {
       char *nb = (char *)realloc(buf, cap * 2);
@@ -1223,13 +1223,13 @@ const char *sp_slurp_stream_parked(sp_File *f) {SP_GC_ROOT(f);
     }
     buf[len++] = (char)ch;
     /* whatever the same read(2) already delivered: no kernel wait for these */
-    for (size_t avail; (avail = sp_io_stdio_buffered(f->fp)) > 0; ) {
+    for (size_t avail; (avail = sp_io_pending(f)) > 0; ) {
       while (len + avail + 1 >= cap) {
         char *nb = (char *)realloc(buf, cap * 2);
         if (!nb) { free(buf); return &("\xff" "")[1]; }
         buf = nb; cap *= 2;
       }
-      size_t got = SP_SIG_BLOCKING(fread(buf + len, 1, avail, f->fp));
+      size_t got = sp_io_fread(f, buf + len, avail);
       len += got;
       if (got == 0) break;
     }
@@ -2475,7 +2475,7 @@ const char *sp_File_gets_sep(sp_File *f, const char *sep, sp_int limit, sp_bool 
   if (sl == 1 && sep[0] == '\n' && limit <= 0) {
     char *buf = NULL;
     size_t bcap = 0;
-    ssize_t got = SP_SIG_BLOCKING(getline(&buf, &bcap, f->fp));
+    ssize_t got = sp_io_getline(f, &buf, &bcap);
     if (got < 0) { free(buf); return NULL; }
     size_t n = (size_t)got;
     /* chomp takes the "\r\n" of a line as well as its "\n" */
@@ -2493,12 +2493,12 @@ const char *sp_File_gets_sep(sp_File *f, const char *sep, sp_int limit, sp_bool 
   int ch;
   /* a paragraph does not start with blank lines */
   if (para) {
-    while ((ch = SP_SIG_BLOCKING(fgetc(f->fp))) == '\n') { }
-    if (ch != EOF) ungetc(ch, f->fp);
+    while ((ch = sp_io_getc(f)) == '\n') { }
+    if (ch != EOF) sp_io_ungetc(f, ch);
   }
   int ended = 0, extra = 16;
   sp_int lim = limit;
-  while ((ch = SP_SIG_BLOCKING(fgetc(f->fp))) != EOF) {
+  while ((ch = sp_io_getc(f)) != EOF) {
     if (len + 2 > cap) { cap *= 2; char *nb = (char *)realloc(buf, cap); if (!nb) { free(buf); return NULL; } buf = nb; }
     buf[len++] = (char)ch;
     /* the separator ends the line where it is matched whole, and not where
@@ -2518,8 +2518,8 @@ const char *sp_File_gets_sep(sp_File *f, const char *sep, sp_int limit, sp_bool 
   }
   /* and the blank lines after one are not part of the next */
   if (para && ended) {
-    while ((ch = SP_SIG_BLOCKING(fgetc(f->fp))) == '\n') { }
-    if (ch != EOF) ungetc(ch, f->fp);
+    while ((ch = sp_io_getc(f)) == '\n') { }
+    if (ch != EOF) sp_io_ungetc(f, ch);
   }
   if (len == 0) { free(buf); return NULL; }
   if (chomp && ended && sl && len >= sl && memcmp(buf + len - sl, sep, sl) == 0) {
@@ -2555,7 +2555,7 @@ const char *sp_File_readline_sep(sp_File *f, const char *sep, sp_int limit, sp_b
 const char *sp_File_getc(sp_File *f) {SP_GC_ROOT(f);
   SP_IO_OPEN(f);
   sp_io_wait_readable(f);
-  int ch = SP_SIG_BLOCKING(fgetc(f->fp));
+  int ch = sp_io_getc(f);
   if (ch == EOF) return NULL;
   /* A binary handle (a socket, a File opened "rb", one put in binmode or
      given ASCII-8BIT by set_encoding) has one-byte characters: reading on after a byte that looks like a UTF-8
@@ -2567,7 +2567,7 @@ const char *sp_File_getc(sp_File *f) {SP_GC_ROOT(f);
   size_t n = 0;
   r[n++] = (char)ch;
   for (int i = 0; i < extra; i++) {
-    int c2 = SP_SIG_BLOCKING(fgetc(f->fp));
+    int c2 = sp_io_getc(f);
     if (c2 == EOF) break;
     r[n++] = (char)c2;
   }
@@ -2584,7 +2584,7 @@ const char *sp_File_readchar(sp_File *f) {SP_GC_ROOT(f);
 sp_oint sp_File_getbyte(sp_File *f) {
   SP_IO_OPEN(f);
   sp_io_wait_readable(f);
-  int ch = SP_SIG_BLOCKING(fgetc(f->fp));
+  int ch = sp_io_getc(f);
   return ch == EOF ? sp_oint_nil() : sp_oint_of((sp_int)ch);
 }
 sp_RbVal sp_File_ungetc(sp_File *f, sp_RbVal v) {
@@ -2592,9 +2592,9 @@ sp_RbVal sp_File_ungetc(sp_File *f, sp_RbVal v) {
   SP_IO_OPEN(f);
   if (v.tag == SP_TAG_STR && v.v.s && v.v.s[0]) {
     size_t n = sp_str_byte_len(v.v.s);
-    for (size_t i = n; i > 0; i--) ungetc((unsigned char)v.v.s[i - 1], f->fp);
+    for (size_t i = n; i > 0; i--) sp_io_ungetc(f, (unsigned char)v.v.s[i - 1]);
   }
-  else if (v.tag == SP_TAG_INT) ungetc((int)v.v.i, f->fp);
+  else if (v.tag == SP_TAG_INT) sp_io_ungetc(f, (int)v.v.i);
   return sp_box_nil();
 }
 sp_int sp_File_sysseek(sp_File *f, sp_int off, sp_int whence) {
@@ -6123,7 +6123,7 @@ static sp_File *sp_select_io_of(sp_RbVal v) {
    whatever else is ready right now (rb_io_read_pending). */
 static int sp_select_pending(sp_RbVal v) {
   sp_File *f = sp_select_io_of(v);
-  return f && f->fp && !f->closed && sp_io_stdio_buffered(f->fp) > 0;
+  return f && f->fp && !f->closed && sp_io_pending(f) > 0;
 }
 sp_RbVal sp_io_select(sp_PolyArray *rd, sp_PolyArray *wr, sp_PolyArray *er, double timeout) {
   sp_PolyArray *src[3] = { rd, wr, er };

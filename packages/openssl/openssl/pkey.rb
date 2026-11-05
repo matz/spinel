@@ -25,8 +25,7 @@ module OpenSSL
     class PKeyError < OpenSSLError
     end
 
-    class ECError < PKeyError
-    end
+    ECError = PKeyError
 
     class EC
       # The curve is carried, not inferred: the byte lengths of both halves

@@ -20,4 +20,4 @@ ECError: private key is not a scalar on this curve
 ECError: private key is not a scalar on this curve
 OpenSSL::Digest::DigestError: unsupported digest algorithm: MD5
 OpenSSL::KDF::KDFError: length exceeds 8160 for SHA256
-["OpenSSL::PKey::ECError", "OpenSSL::PKey::PKeyError", "OpenSSL::OpenSSLError", "StandardError"]
+["OpenSSL::PKey::PKeyError", "OpenSSL::OpenSSLError", "StandardError", "Exception"]

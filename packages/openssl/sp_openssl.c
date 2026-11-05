@@ -1005,8 +1005,8 @@ const char *sp_aes_gcm_encrypt(const char *name, const char *key, const char *iv
   return sp_str_as_binary(out);
 }
 
-/* On success, 0x01 || plaintext; on failure, an empty string with the reason in
-   last_error. A tag that does not verify is a failure like any other and must
+/* On success, 0x01 || plaintext; 0x00 for a tag failure; empty for other errors.
+   A tag that does not verify is a failure like any other and must
    not answer plaintext: EVP_CipherFinal_ex performs that check, which is why
    the tag is set before it and the result of that call is not ignored.
 
@@ -1024,7 +1024,7 @@ const char *sp_aes_gcm_decrypt(const char *name, const char *key, const char *iv
   size_t cn = sp_str_byte_len(ct);
   EVP_CIPHER_CTX *ctx;
   char *out;
-  int n1 = 0, n2 = 0, ok;
+  int n1 = 0, n2 = 0, ok, auth_failed = 0;
 
   sp_ssl_errbuf[0] = 0;
   if (sp_str_byte_len(tag) != SP_GCM_TAG) {
@@ -1039,15 +1039,18 @@ const char *sp_aes_gcm_decrypt(const char *name, const char *key, const char *iv
        EVP_CipherUpdate(ctx, (unsigned char *)out + 1, &n1,
                         (const unsigned char *)ct, (int)cn) &&
        EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_AEAD_SET_TAG, SP_GCM_TAG,
-                           (void *)tag) &&
-       EVP_CipherFinal_ex(ctx, (unsigned char *)out + 1 + n1, &n2);
+                           (void *)tag);
+  if (ok) {
+    ok = EVP_CipherFinal_ex(ctx, (unsigned char *)out + 1 + n1, &n2);
+    auth_failed = !ok;
+  }
   EVP_CIPHER_CTX_free(ctx);
   if (!ok || (size_t)(n1 + n2) != cn) {
     /* Never hand back a partial plaintext from a message that did not
        authenticate, not even to a caller that would discard it. */
     OPENSSL_cleanse(out, cn + 1);
     sp_ssl_note("AES-GCM decrypt failed: auth tag did not verify");
-    return sp_str_from_bytes("", 0);
+    return sp_str_from_bytes(auth_failed ? "\0" : "", auth_failed);
   }
   out[cn + 1] = 0;
   sp_str_set_len(out, cn + 1);

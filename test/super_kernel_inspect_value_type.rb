@@ -1,3 +1,4 @@
+# spinel: gc-stress
 # `def inspect = super` in a class held by value (scalar or frozen-literal
 # ivars, no subclass) reaches Kernel's inspect with the address of self's
 # struct on the caller's stack. The hook rooted that address as an object,

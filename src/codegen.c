@@ -12194,6 +12194,79 @@ static int class_pooled(Compiler *c, int cid) {
   return !class_is_exc_subclass(c, cid) && ci->ary_root <= 0 && ci->nsub_root <= 0;
 }
 
+/* The default Struct/Data representation, `#<struct Name m=v, ...>` (Data
+   shows `data`), as sp_<C name>_<fn>. It is #inspect unless a member or the
+   program owns inspect, and it is #to_s then too: CRuby's Struct#to_s and
+   Data#to_s alias the builtin inspect, they do not call self.inspect. */
+static void emit_struct_default_inspect(Compiler *c, ClassInfo *ci, int cid, const char *fn, Buf *b) {
+  const char *rn = class_ruby_name(c, cid); if (!rn) rn = ci->name;
+  buf_printf(b, "static const char *sp_%s_%s(sp_%s *self) {\n", ci->c_name, fn, ci->c_name);
+  buf_puts(b, "  if (!self) return \"nil\";\n");
+  /* the String built below allocates while the members are still to be
+     read, and the caller may hold the object only in an unrooted temp
+     (`p D.make(1)`): swept at the first allocation, the members read
+     freed memory under SPINEL_GC_STRESS=1 */
+  if (!ci->is_value_type) buf_puts(b, "  SP_GC_ROOT(self);\n");
+  /* A member can hold the struct itself (`s.a = s`), and this function
+     renders a member of its own class by calling straight back into
+     itself. Stop at the object the render is already inside, as CRuby's
+     #<struct S a=#<struct S:...>> does. Only a struct with members can be
+     reached from inside itself, so a memberless one keeps its old body. */
+  /* a class its Struct.new / Data.define block runs in before the
+     constant names it (comp_class_anonymous) shows the name it has then */
+  int anon_now = comp_class_anonymous(c, cid);
+  if (anon_now) { char nx[96]; anon_name_expr(nx, sizeof nx, cid); buf_printf(b, "  const char *_anm = %s;\n", nx); }
+  if (ci->nmembers > 0 && anon_now)
+    buf_printf(b, "  if (sp_poly_recur_seen(SP_POLY_RECUR_INSPECT, self, NULL))\n"
+                  "    return sp_sprintf(SPL(\"#<%s %%s:...>\"), _anm ? _anm : sp_class_display((sp_Class){%d, NULL}));\n"
+                  "  int _rcm = sp_poly_recur_push(SP_POLY_RECUR_INSPECT, self, NULL);\n",
+               ci->is_data ? "data" : "struct", cid);
+  else if (ci->nmembers > 0)
+    buf_printf(b, "  if (sp_poly_recur_seen(SP_POLY_RECUR_INSPECT, self, NULL)) return \"#<%s %s:...>\";\n"
+                  "  int _rcm = sp_poly_recur_push(SP_POLY_RECUR_INSPECT, self, NULL);\n",
+               ci->is_data ? "data" : "struct", ci->is_anon_struct ? "" : rn);
+  if (anon_now)
+    buf_printf(b, "  sp_String *s = sp_String_new(\"#<%s\"); SP_GC_ROOT(s);\n"
+                  "  if (_anm) { sp_String_append(s, \" \"); sp_String_append(s, _anm); }%s\n",
+               ci->is_data ? "data" : "struct", ci->nmembers == 0 ? " else sp_String_append(s, \" \");" : "");
+  /* an anonymous struct class has no name to show: #<struct a=1, b=2> */
+  else if (ci->is_anon_struct)
+    /* the space that would precede the first member is CRuby's even when
+       there is none to precede: `Struct.new.new.inspect` is "#<struct >" */
+    buf_printf(b, "  sp_String *s = sp_String_new(\"#<%s%s\"); SP_GC_ROOT(s);\n",
+               ci->is_data ? "data" : "struct", ci->nmembers == 0 ? " " : "");
+  else
+    buf_printf(b, "  sp_String *s = sp_String_new(\"#<%s %s\"); SP_GC_ROOT(s);\n",
+               ci->is_data ? "data" : "struct", rn);
+  for (int i = 0; i < ci->nmembers; i++) {
+    /* CRuby shows a non-identifier member as a symbol: `:verbose?=` (a
+       plain identifier stays bare, `name=`) (#3110) */
+    const char *mnm = ci->ivars[i] + 1;
+    int simple = ((mnm[0] >= 'a' && mnm[0] <= 'z') || (mnm[0] >= 'A' && mnm[0] <= 'Z') || mnm[0] == '_');
+    for (const char *q = mnm; simple && *q; q++)
+      if (!((*q >= 'a' && *q <= 'z') || (*q >= 'A' && *q <= 'Z') ||
+            (*q >= '0' && *q <= '9') || *q == '_')) simple = 0;
+    buf_printf(b, "  sp_String_append(s, \"%s%s%s=\");\n", i ? ", " : " ", simple ? "" : ":", mnm);
+    TyKind mt = ci->ivar_types[i];
+    const char *mcn = ty_is_object(mt) ? obj_str_cname(c, ty_object_class(mt), 1) : NULL;
+    if (mcn) {
+      /* a struct/data (or user-#inspect) member recurses into its own inspect */
+      char ivn[128]; snprintf(ivn, sizeof ivn, "%s", iv_c(ci->ivars[i] + 1));
+      buf_printf(b, "  sp_String_append(s, self->iv_%s ? %s((sp_%s *)self->iv_%s) : \"nil\");\n",
+                 ivn, obj_str_fn(c, ty_object_class(mt), 1), mcn, ivn);
+    }
+    else {
+      Buf ivb; memset(&ivb, 0, sizeof ivb); buf_printf(&ivb, "self->iv_%s", iv_c(ci->ivars[i] + 1));
+      Buf bx; memset(&bx, 0, sizeof bx); emit_member_boxed_text(c, ci, i, "self->", ivb.p, &bx);
+      buf_printf(b, "  sp_String_append(s, sp_poly_inspect(%s));\n", bx.p);
+      free(bx.p); free(ivb.p);
+    }
+  }
+  buf_puts(b, "  sp_String_append(s, \">\");\n");
+  if (ci->nmembers > 0) buf_puts(b, "  sp_poly_recur_pop(_rcm);\n");
+  buf_puts(b, "  return s->data;\n}\n");
+}
+
 void emit_class_new(Compiler *c, ClassInfo *ci, Buf *b) {
   /* Native (C-backed) class: constructor + methods live in the package; nothing
      is generated here (see the native_method externs + .new emission). */
@@ -12307,88 +12380,23 @@ void emit_class_new(Compiler *c, ClassInfo *ci, Buf *b) {
     if (ci->is_data) buf_puts(b, "  sp_gc_freeze(self);\n");
     buf_puts(b, "  return self;\n}\n");
     struct_meta:;
-    /* Struct/Data #inspect (== #to_s): `#<struct Name m=v, ...>` (Data uses
-       `data`). Generated unless the user redefined the method, so a user
-       override wins. to_s defers to inspect, which always exists here. */
+    /* Struct/Data #inspect: the default representation, generated unless the
+       user redefined the method, so a user override wins. */
     /* the same ownership for a member named inspect (#4190) */
+    int inspect_owned = comp_method_in_chain(c, cid, "inspect", NULL) >= 0;
     { char insiv[64]; snprintf(insiv, sizeof insiv, "@%s", "inspect");
       int insidx = comp_ivar_index(ci, insiv);
-      if (comp_method_in_chain(c, cid, "inspect", NULL) < 0 &&
+      if (!inspect_owned &&
           insidx >= 0 && (ci->ivar_types[insidx] == TY_STRING ||
                           (ci->ivar_types[insidx] == TY_STRBUF)) &&
           comp_resolve_member(c, cid, "inspect", 0, NULL, NULL) == SP_MEMBER_ATTR) {
         /* (one-String mode: the member is the handle, answered as its bytes face) */
         buf_printf(b, "static const char *sp_%s_inspect(sp_%s *self) { return SP_STR_B(self->iv_inspect); }\n",
                    ci->c_name, ci->c_name);
+        inspect_owned = 1;
       }
-      else if (comp_method_in_chain(c, cid, "inspect", NULL) < 0) {
-      const char *rn = class_ruby_name(c, cid); if (!rn) rn = ci->name;
-      buf_printf(b, "static const char *sp_%s_inspect(sp_%s *self) {\n", ci->c_name, ci->c_name);
-      buf_puts(b, "  if (!self) return \"nil\";\n");
-      /* the String built below allocates while the members are still to be
-         read, and the caller may hold the object only in an unrooted temp
-         (`p D.make(1)`): swept at the first allocation, the members read
-         freed memory under SPINEL_GC_STRESS=1 */
-      if (!ci->is_value_type) buf_puts(b, "  SP_GC_ROOT(self);\n");
-      /* A member can hold the struct itself (`s.a = s`), and this function
-         renders a member of its own class by calling straight back into
-         itself. Stop at the object the render is already inside, as CRuby's
-         #<struct S a=#<struct S:...>> does. Only a struct with members can be
-         reached from inside itself, so a memberless one keeps its old body. */
-      /* a class its Struct.new / Data.define block runs in before the
-         constant names it (comp_class_anonymous) shows the name it has then */
-      int anon_now = comp_class_anonymous(c, cid);
-      if (anon_now) { char nx[96]; anon_name_expr(nx, sizeof nx, cid); buf_printf(b, "  const char *_anm = %s;\n", nx); }
-      if (ci->nmembers > 0 && anon_now)
-        buf_printf(b, "  if (sp_poly_recur_seen(SP_POLY_RECUR_INSPECT, self, NULL))\n"
-                      "    return sp_sprintf(SPL(\"#<%s %%s:...>\"), _anm ? _anm : sp_class_display((sp_Class){%d, NULL}));\n"
-                      "  int _rcm = sp_poly_recur_push(SP_POLY_RECUR_INSPECT, self, NULL);\n",
-                   ci->is_data ? "data" : "struct", cid);
-      else if (ci->nmembers > 0)
-        buf_printf(b, "  if (sp_poly_recur_seen(SP_POLY_RECUR_INSPECT, self, NULL)) return \"#<%s %s:...>\";\n"
-                      "  int _rcm = sp_poly_recur_push(SP_POLY_RECUR_INSPECT, self, NULL);\n",
-                   ci->is_data ? "data" : "struct", ci->is_anon_struct ? "" : rn);
-      if (anon_now)
-        buf_printf(b, "  sp_String *s = sp_String_new(\"#<%s\"); SP_GC_ROOT(s);\n"
-                      "  if (_anm) { sp_String_append(s, \" \"); sp_String_append(s, _anm); }%s\n",
-                   ci->is_data ? "data" : "struct", ci->nmembers == 0 ? " else sp_String_append(s, \" \");" : "");
-      /* an anonymous struct class has no name to show: #<struct a=1, b=2> */
-      else if (ci->is_anon_struct)
-        /* the space that would precede the first member is CRuby's even when
-           there is none to precede: `Struct.new.new.inspect` is "#<struct >" */
-        buf_printf(b, "  sp_String *s = sp_String_new(\"#<%s%s\"); SP_GC_ROOT(s);\n",
-                   ci->is_data ? "data" : "struct", ci->nmembers == 0 ? " " : "");
-      else
-        buf_printf(b, "  sp_String *s = sp_String_new(\"#<%s %s\"); SP_GC_ROOT(s);\n",
-                   ci->is_data ? "data" : "struct", rn);
-      for (int i = 0; i < ci->nmembers; i++) {
-        /* CRuby shows a non-identifier member as a symbol: `:verbose?=` (a
-           plain identifier stays bare, `name=`) (#3110) */
-        const char *mnm = ci->ivars[i] + 1;
-        int simple = ((mnm[0] >= 'a' && mnm[0] <= 'z') || (mnm[0] >= 'A' && mnm[0] <= 'Z') || mnm[0] == '_');
-        for (const char *q = mnm; simple && *q; q++)
-          if (!((*q >= 'a' && *q <= 'z') || (*q >= 'A' && *q <= 'Z') ||
-                (*q >= '0' && *q <= '9') || *q == '_')) simple = 0;
-        buf_printf(b, "  sp_String_append(s, \"%s%s%s=\");\n", i ? ", " : " ", simple ? "" : ":", mnm);
-        TyKind mt = ci->ivar_types[i];
-        const char *mcn = ty_is_object(mt) ? obj_str_cname(c, ty_object_class(mt), 1) : NULL;
-        if (mcn) {
-          /* a struct/data (or user-#inspect) member recurses into its own inspect */
-          char ivn[128]; snprintf(ivn, sizeof ivn, "%s", iv_c(ci->ivars[i] + 1));
-          buf_printf(b, "  sp_String_append(s, self->iv_%s ? %s((sp_%s *)self->iv_%s) : \"nil\");\n",
-                     ivn, obj_str_fn(c, ty_object_class(mt), 1), mcn, ivn);
-        }
-        else {
-          Buf ivb; memset(&ivb, 0, sizeof ivb); buf_printf(&ivb, "self->iv_%s", iv_c(ci->ivars[i] + 1));
-          Buf bx; memset(&bx, 0, sizeof bx); emit_member_boxed_text(c, ci, i, "self->", ivb.p, &bx);
-          buf_printf(b, "  sp_String_append(s, sp_poly_inspect(%s));\n", bx.p);
-          free(bx.p); free(ivb.p);
-        }
-      }
-      buf_puts(b, "  sp_String_append(s, \">\");\n");
-      if (ci->nmembers > 0) buf_puts(b, "  sp_poly_recur_pop(_rcm);\n");
-      buf_puts(b, "  return s->data;\n}\n");
-      }
+      else if (!inspect_owned)
+        emit_struct_default_inspect(c, ci, cid, "inspect", b);
     }
     if (comp_method_in_chain(c, cid, "to_s", NULL) < 0) {
       /* A MEMBER named to_s owns the name, as any generated reader does in
@@ -12403,6 +12411,9 @@ void emit_class_new(Compiler *c, ClassInfo *ci, Buf *b) {
           comp_resolve_member(c, cid, "to_s", 0, NULL, NULL) == SP_MEMBER_ATTR)
         buf_printf(b, "static const char *sp_%s_to_s(sp_%s *self) { return SP_STR_B(self->iv_to_s); }\n",
                    ci->c_name, ci->c_name);
+      /* to_s is the default representation even when inspect is not */
+      else if (inspect_owned)
+        emit_struct_default_inspect(c, ci, cid, "to_s", b);
       else
         buf_printf(b, "static const char *sp_%s_to_s(sp_%s *self) { return sp_%s_inspect(self); }\n",
                    ci->c_name, ci->c_name, ci->c_name);
@@ -14160,9 +14171,11 @@ static void emit_obj_inspect_dispatch(Compiler *c, Buf *b) {
        "#{b}" disagreed with a directly-typed receiver, which compiles straight
        to the same inspect. The inspect dispatcher beside this one already
        carries the arm for the same reason (#4387). A user #to_s still wins:
-       it is taken above. */
+       it is taken above. The generated to_s, not inspect: a member or a user
+       method owning inspect does not change to_s. */
     if (tci->is_struct || tci->is_data) {
-      buf_printf(b, "    case %d: return sp_%s_inspect((sp_%s *)p);\n", i, tci->c_name, tci->c_name);
+      buf_printf(b, "    case %d: return sp_%s_%s((sp_%s *)p);\n", i, tci->c_name,
+                 comp_method_in_chain(c, i, "to_s", NULL) < 0 ? "to_s" : "inspect", tci->c_name);
       continue;
     }
     /* an Array subclass instance's #to_s is its Array's (#7449) */

@@ -7890,6 +7890,7 @@ void elab_const_keys(Compiler *c) {
   lr_key_hists = r->hist;
   qsort(es, (size_t)ne, sizeof *es, lr_key_ent_cmp);
   long same = 0, differ = 0;
+  unsigned char *keyed = calloc((size_t)nt->count + 1, 1);   /* the writes an entity keys */
   for (int i = 0, g0 = 0, g1 = 0; i < ne; i++) {
     const LrHist *h = &r->hist[es[i].h];
     /* the entities of the leaf, [g0, g1): es is sorted by leaf, then path */
@@ -7918,6 +7919,7 @@ void elab_const_keys(Compiler *c) {
       if (kn < 0) continue;
       const char *qn = nt_str(nt, kn, "name");
       if (!qn) continue;
+      if (kn < nt->count) keyed[kn] = 1;
       if (sp_streq(qn, key)) { same++; continue; }
       differ++;
       lr_key_queue(&q, &nq, &cq, kn, key);
@@ -7925,6 +7927,13 @@ void elab_const_keys(Compiler *c) {
                          (long long)nt_int(nt, h->v[v].node, "node_line", 0), es[i].path[0] ? es[i].path : "main", qn, key);
     }
   }
+  /* a write of an owner the record does not know keeps qualify's name
+     for it (qc_value_key, qualify_colliding_consts) */
+  for (int id = 0; id < nt->count; id++) {
+    const char *qv = keyed[id] ? NULL : nt_str(nt, id, "qc_value_key");
+    if (qv && !sp_streq(qv, nt_str(nt, id, "name") ? nt_str(nt, id, "name") : "")) lr_key_queue(&q, &nq, &cq, id, qv);
+  }
+  free(keyed);
   if (check) fprintf(stderr, "constkey: same=%ld differ=%ld\n", same, differ);
   /* the reads: the write each resolves to, by the record, and that write's key */
   int *ent = calloc((size_t)nt->count + 1, sizeof *ent);
@@ -7942,7 +7951,12 @@ void elab_const_keys(Compiler *c) {
   long ragree = 0, rdiffer = 0, rno = 0, runk = 0, rcls = 0;
   for (int id = 0; id < nt->count; id++) {
     NodeKind k = nt_kind(nt, id);
-    if ((k != NK_ConstantReadNode && k != NK_ConstantPathNode) || skip[id] || id >= r->n || r->at[id] < 0) continue;
+    if ((k != NK_ConstantReadNode && k != NK_ConstantPathNode) || skip[id]) continue;
+    if (id >= r->n || r->at[id] < 0) {   /* (no point: qualify's answer, as for a read the record cannot resolve) */
+      const char *hint = nt_str(nt, id, "qc_key_hint");
+      if (hint && !sp_streq(hint, nt_str(nt, id, "name") ? nt_str(nt, id, "name") : "")) lr_key_queue(&q, &nq, &cq, id, hint);
+      continue;
+    }
     const LrDef *d = NULL;
     const char *nm = lr_written_name(nt, id);
     int o;
@@ -7955,6 +7969,9 @@ void elab_const_keys(Compiler *c) {
     }
     if (o != ELAB_YES || !d) {
       if (o == ELAB_NO) rno++; else runk++;
+      /* a read the record cannot resolve takes qualify's answer (qc_key_hint) */
+      const char *hint = nt_str(nt, id, "qc_key_hint");
+      if (hint && !sp_streq(hint, nt_str(nt, id, "name") ? nt_str(nt, id, "name") : "")) lr_key_queue(&q, &nq, &cq, id, hint);
       const char *rn = nt_str(nt, id, "name");
       if (check && rn && nm && !sp_streq(rn, nm))
         fprintf(stderr, "constkey: unresolved-renamed %s %s line %lld name=%s written=%s\n", o == ELAB_NO ? "no" : "unknown",

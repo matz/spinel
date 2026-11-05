@@ -5892,6 +5892,17 @@ static int qc_expand_read_alias(char (*path)[64], int depth, char (*chain)[64], 
   *abs_anchor = 1;
   return n;
 }
+/* While the constant pass rewrites reads (qualify_colliding_consts),
+   qc_hint_only[i] says write i is a value constant's, which the load
+   record keys after the walk (elab_const_keys): a read that matches it
+   keeps its name and takes qualify's answer as a hint (qc_key_hint), used
+   where the record cannot resolve the read. NULL for the class pass. */
+static const unsigned char *qc_hint_only;
+static void qc_rename_read(const NodeTable *nt, int node, int w, const char *qn, int keep) {
+  if (qc_hint_only && qc_hint_only[w]) { nt_node_set_str((NodeTable *)nt, node, "qc_key_hint", qn); return; }
+  if (keep) qc_keep_orig_name(nt, node);
+  nt_set_str((NodeTable *)nt, node, "name", qn);
+}
 void qc_rewrite_reads(Compiler *c, int node, char (*mods)[64], int mdepth,
                              QCWrite *ws, int wn) {
   const NodeTable *nt = c->nt;
@@ -5970,8 +5981,7 @@ void qc_rewrite_reads(Compiler *c, int node, char (*mods)[64], int mdepth,
         if (matched < 0) matched = qc_object_mixin_write(c, nm, ws, wn);
         if (matched >= 0 && ws[matched].depth > 0) {
           char qn[512]; qc_qualified_name(qn, sizeof qn, &ws[matched]);
-          qc_keep_orig_name(nt, node);
-          nt_set_str((NodeTable *)nt, node, "name", qn);
+          qc_rename_read(nt, node, matched, qn, 1);
         }
       }
     }
@@ -6029,8 +6039,7 @@ void qc_rewrite_reads(Compiler *c, int node, char (*mods)[64], int mdepth,
             if (matched >= 0) {
               if (ws[matched].depth > 0) {
                 char qn[512]; qc_qualified_name(qn, sizeof qn, &ws[matched]);
-                qc_keep_orig_name(nt, node);
-                nt_set_str((NodeTable *)nt, node, "name", qn);
+                qc_rename_read(nt, node, matched, qn, 1);
               }
               break;
             }
@@ -6044,7 +6053,7 @@ void qc_rewrite_reads(Compiler *c, int node, char (*mods)[64], int mdepth,
               int m = on > 0 ? qc_ancestor_lookup(nt, owner, on, cname, ws, wn, 0, 0) : -1;
               if (m >= 0 && ws[m].depth > 0) {
                 char qn[512]; qc_qualified_name(qn, sizeof qn, &ws[m]);
-                nt_set_str((NodeTable *)nt, node, "name", qn);
+                qc_rename_read(nt, node, m, qn, 0);
               }
             }
           }
@@ -6130,20 +6139,42 @@ void qualify_colliding_consts(Compiler *c) {
   }
   free(cws);
   if (any) {
+    /* A value constant's write and the reads that match it keep their
+       names: the load record keys them after the walk (elab_const_keys),
+       which takes qualify's names as hints where it has no answer (a write
+       of an owner it does not know, a read it cannot resolve). A write
+       that makes a class (a builder's) is the class pass's, renamed here. */
+    unsigned char *hint = calloc((size_t)wn + 1, 1);
+    int *par = NULL;
+    for (int i = 0; i < wn; i++) {
+      int w = ws[i].node;
+      if (nt_kind(nt, w) != NK_ConstantWriteNode) {   /* a path write's target: the write is its parent */
+        if (!par) par = an_parent_map(nt);
+        w = par && w < nt->count ? par[w] : -1;
+      }
+      hint[i] = w >= 0 && class_def_record(nt, w) < 0 && class_def_builder(nt, w) < 0;
+    }
+    free(par);
     /* rewrite reads first (they match against the original write names) */
     char mods[QC_MAXDEPTH][64];
     qc_build_reverse_flags(c);
+    qc_hint_only = hint;
     for (int r = 0; r < nt_nroots(nt); r++) qc_rewrite_reads(c, nt_root(nt, r), mods, 0, ws, wn);
+    qc_hint_only = NULL;
     qc_free_reverse_flags();
     /* then qualify the nested writes themselves */
     for (int i = 0; i < wn; i++) {
       if (ws[i].depth == 0) continue;
       char qn[512]; qc_qualified_name(qn, sizeof qn, &ws[i]);
-      qc_keep_orig_name(nt, ws[i].node);
-      nt_set_str((NodeTable *)nt, ws[i].node, "name", qn);
+      if (hint[i]) nt_node_set_str((NodeTable *)nt, ws[i].node, "qc_value_key", qn);
+      else {
+        qc_keep_orig_name(nt, ws[i].node);
+        nt_set_str((NodeTable *)nt, ws[i].node, "name", qn);
+      }
       qc_const_quals = realloc(qc_const_quals, sizeof(char *) * (size_t)(qc_nconst_quals + 1));
       qc_const_quals[qc_nconst_quals++] = strdup(qn);
     }
+    free(hint);
   }
   qc_free_headers();
   free(ws);
@@ -6368,6 +6399,9 @@ void qualify_colliding_classes(Compiler *c) {
     qc_collect_writes(c, nt_root(nt, r), path, 0, &kws, &kwn, &kwcap);
   for (int i = 0; i < kwn; i++)
     if (qc_is_class_write(&kws[i], ws, wn)) { kws[i] = kws[--kwn]; i--; }
+    /* (a value constant the constant pass qualified keeps its name until the
+       walk: here it is the name that pass gave it) */
+    else if (nt_str(nt, kws[i].node, "qc_value_key")) snprintf(kws[i].name, sizeof kws[i].name, "%s", nt_str(nt, kws[i].node, "qc_value_key"));
   /* keep only leaf names defined under 2+ distinct module paths */
   unsigned char *leaf_collides = qc_colliding_leaves(ws, wn);   /* moves with its write */
   int any = 0;

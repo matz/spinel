@@ -568,14 +568,22 @@ for the child and for the parent, as CRuby's does; the parent's reads still
 park, each one asking the kernel not to wait (`MSG_DONTWAIT`), and its
 writes wait for the descriptor before each call instead. On every other
 socket (listening, datagram) O_NONBLOCK is set for the duration of one call
-and put back, so a blocking `#gets` on the same handle still works.
-`SPINEL_SOCK_STDIO=1` keeps every socket on the blocking stdio path.
+and put back, so a blocking `#gets` on the same handle still works. An
+`IO.pipe`'s read end is non-blocking too, as CRuby's is, and reads through a
+buffer of its own the same way; given to a child it turns blocking for the
+parent as well, whose reads then ask the kernel whether bytes are there
+before each `read(2)`.
+`SPINEL_SOCK_STDIO=1` keeps every socket and pipe on the blocking stdio path.
 
 **Divergences and gaps.**
 
 - A C library called through FFI with the `#fileno` of a connected stream
   socket gets `EAGAIN` where the descriptor has nothing to read or no room to
   write, as it would with CRuby's.
+- A pipe the parent keeps reading after handing its read end to a child is
+  a pipe with two readers: a `read(2)` can sleep in the kernel if the child
+  takes the bytes first, as it did before. CRuby does not stop there, since
+  it releases its lock around the read.
 - Only the **integer-valued** socket options are reachable, so
   `Socket::Option` carries an int rather than a byte string: `#data` and
   `#unpack` are missing, and `SO_LINGER` cannot be read back.

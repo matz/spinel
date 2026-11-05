@@ -13417,6 +13417,8 @@ static void emit_obj_to_a_dispatch(Compiler *c, Buf *b) {
    and then to wrapping, so an absent dispatch costs nothing (#4187). */
 static int obj_to_ary_method(Compiler *c, int cid, int *defc) {
   int mi = comp_method_in_chain(c, cid, "to_ary", defc);
+  /* (an undef_method / undef of it leaves the class without one) */
+  if (mi >= 0 && comp_is_undeffed_in_chain(c, cid, "to_ary")) return -1;
   if (mi >= 0 && c->scopes[mi].nparams == 0 && scope_has_callable_symbol(c, mi)) return mi;
   return -1;
 }

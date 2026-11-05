@@ -1,12 +1,21 @@
+[1, 10, 2, 20]
+[1, 2]
+[1, 1, 2, 3, 3]
+["aa", "bb"]
+[#<Opaque>]
 [:a, :b, :a, :b]
 [:a, :b, :a, :b]
 [:a, :b, :a]
 [1, :a, :b, 3]
-[NoConv]
-[NoConv]
+[LNoConv]
+[LNoConv]
 can't convert BadConv to Array (BadConv#to_ary gives Integer)
 can't convert BadConv to Array (BadConv#to_ary gives Integer)
 can't convert StrConv to Array (StrConv#to_ary gives String)
 can't convert BadConv to Array (BadConv#to_ary gives Integer)
 [1, 2]
 [{1 => 1}, {2 => 2}]
+[7, 8]
+[7, 8]
+[Gone]
+[Gone]

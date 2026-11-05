@@ -5188,6 +5188,8 @@ void step_kw_positional(Compiler *c, NodeTable *nt, int id, int args, int to_v, 
   int sc = c->nscope[id], base = nt->count;
   Scope *scp = comp_scope_of(c, id);
   if (by_v < 0) { by_v = nt_new_node(nt, "IntegerNode"); nt_node_set_int(nt, by_v, "value", 1); }
+  /* step(by: B) alone is endless: the positional form's nil limit */
+  if (to_v < 0) { to_v = nt_new_node(nt, "NilNode"); by_first = 0; }
   if (by_first && (subtree_has_side_effect(c, by_v) || subtree_has_side_effect(c, to_v))) {
     int recv = nt_ref(nt, id, "receiver"), k = nt_kind(nt, recv), st[3], n = 0, sn = nt_safe_nav(nt, id);
     char rn[32], bn[32];
@@ -5316,7 +5318,7 @@ int desugar_step_kwargs(Compiler *c) {
       else if (kn && sp_streq(kn, "by")) { by_v = nt_ref(nt, els[i], "value"); by_first = to_v < 0; }
       else { other = 1; break; }
     }
-    if (other || to_v < 0) continue;   /* only the to:[/by:] form; `to` is required */
+    if (other || (to_v < 0 && by_v < 0)) continue;
     step_kw_positional(c, nt, id, args, to_v, by_v, by_first);
     changed = 1;
   }

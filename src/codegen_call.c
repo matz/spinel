@@ -33271,10 +33271,15 @@ int respond_to_static_answer(Compiler *c, int id, int recv, TyKind rt, const cha
 }
 /* nil's static answer to respond_to?(qm, ...): by the program's method on
    NilClass, Object, Kernel or BasicObject (*prog set), a public one or any
-   one with a literal `true` include_all; else by its builtin surface */
+   one with a true include_all (2: a private one where only the run time
+   knows the include_all); else by its builtin surface */
 int nil_responds_static(Compiler *c, const char *qm, int argc, const int *argv, int *prog) {
-  int r = argc <= 2 ?
-          cplan_nil_program_responds(c, qm, argc == 2 && nt_kind(c->nt, argv[1]) == NK_TrueNode) : -1;
+  int ia = 0;
+  if (argc == 2) {
+    NodeKind k = nt_kind(c->nt, argv[1]);
+    ia = k == NK_TrueNode ? 1 : k == NK_FalseNode || k == NK_NilNode ? 0 : -1;
+  }
+  int r = argc <= 2 ? cplan_nil_program_responds(c, qm, ia) : -1;
   *prog = r >= 0;
   return r >= 0 ? r : nil_answers_name(qm) || sp_streq(qm, "rationalize");
 }

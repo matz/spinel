@@ -54,3 +54,28 @@ end
 [nil, 7, "s", 1.5, :y].each do |v|
   p [v.respond_to?(:sh), v.respond_to?(:b2), v.respond_to?(:b2, true), v.respond_to?(:zz)]
 end
+
+# an undef on NilClass hides Object's method; an accessor on Object counts
+class Object
+  def un = 1
+  attr_writer :aw
+  attr_reader :ar
+end
+class NilClass; undef_method :un; end
+[false, true].each do |f|
+  x = mk(f); s = ms(f)
+  p [x.respond_to?(:un), s.respond_to?(:un), x.respond_to?(:aw=), s.respond_to?(:ar)]
+end
+[nil, 7, "s"].each { |v| p [v.respond_to?(:un), v.respond_to?(:aw=), v.respond_to?(:ar)] }
+
+# an include_all only the run time knows runs once and decides nil's answer
+class NilClass; private def pn = 1; end
+$ia = 0
+def ia(v) = ($ia += 1; v)
+[false, true].each do |f|
+  x = mk(f); s = ms(f)
+  p [x.respond_to?(:pn, ia(true)), x.respond_to?(:pn, ia(false)), s.respond_to?(:pn, ia(true)), s.respond_to?(:pn, ia(false))]
+  p(x.respond_to?(:pn, ia(true)) ? :yes : :no)
+end
+[nil, 7, "s"].each { |v| p [v.respond_to?(:b2, ia(true)), v.respond_to?(:pn, ia(true)), v.respond_to?(:pn, ia(nil))] }
+p $ia

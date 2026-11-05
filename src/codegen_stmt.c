@@ -7001,7 +7001,7 @@ int static_isa_cond(Compiler *c, int pred) {
   /* a class rooted in a builtin's storage (`class SubA < Array`) has that
      builtin and its modules among its ancestors, which the class table
      does not chain: a builtin name is answered at run time */
-  if (c->classes[rcls].ary_root > 0 && (is_builtin_class_name(target_name) || builtin_mod)) return -1;
+  if (comp_ary_root(c, rcls) >= 0 && (is_builtin_class_name(target_name) || builtin_mod)) return -1;
   if (has_sub && !builtin_mod && is_descendant(c, target, rcls)) return -1;
   if (exact) return 0;
   if (!builtin_mod && is_descendant(c, rcls, target)) return nilable ? -1 : 1;

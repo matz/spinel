@@ -1234,7 +1234,36 @@ static int yield_builtin_method_site_type(const Compiler *c, int id, TyKind *out
   return an_yield_site_builtin_answer((Compiler *)c, id, rt, out);
 }
 
+/* Is `id` an untyped call to a method that yields? Such a method has no
+   function of its own; it is spliced where it is called, and the splice
+   holds the result of an untyped call boxed (emit_inline_expr, #3716): the
+   block that would answer it leaves by throw or exit instead. Asked once
+   for a node, as comp_ntype asks on every read. */
+static int untyped_call_held_boxed(const Compiler *c, int id) {
+  static unsigned char *memo;   /* 0 not asked, 1 held, 2 not, 3 being asked */
+  static const NodeTable *memo_nt;
+  static int cap;
+  if (c->ntype[id] != TY_UNKNOWN || nt_kind(c->nt, id) != NK_CallNode) return 0;
+  if (memo_nt != c->nt) { if (cap) memset(memo, 0, (size_t)cap); memo_nt = c->nt; }
+  if (id >= cap) {
+    int n = c->nt->count > id ? c->nt->count : id + 1;
+    unsigned char *m = realloc(memo, (size_t)n);
+    if (!m) return 0;
+    memset(m + cap, 0, (size_t)(n - cap));
+    memo = m; cap = n;
+  }
+  if (!memo[id]) {
+    memo[id] = 3;   /* the lookup reads types itself */
+    memo[id] = call_targets_yielding_method((Compiler *)c, id) ? 1 : 2;
+  }
+  return memo[id] == 1;
+}
+
 int sp_yield_site_type(const Compiler *c, int id, TyKind *out) {
+  /* an untyped call that is held boxed reads as the box: the emitters around
+     it took an untyped value as it is, and the box went raw into a String
+     element or an Integer operand (`out << t { throw :x, "v" }`) */
+  if (id >= 0 && id < c->nt->count && untyped_call_held_boxed(c, id)) { *out = TY_POLY; return 1; }
   if (g_block_id < 0 || id < 0) return 0;
   /* A parenthesized yield answers its value at this inline site too. The
      cached union can still be nil when another copy yields another kind. */

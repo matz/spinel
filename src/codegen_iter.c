@@ -2016,7 +2016,7 @@ static int program_defines_builtin_aset(Compiler *c, int cn) {
   return mi >= 0 && mi < c->nscopes && c->scopes[mi].def_node >= 0 &&
          !nt_int(c->nt, c->scopes[mi].def_node, "node_bi", 0);
 }
-static int call_targets_yielding_method(Compiler *c, int id);
+int call_targets_yielding_method(Compiler *c, int id);
 static int block_tail_needs_value_form(Compiler *c, int id) {
   const NodeTable *nt = c->nt;
   /* a tail `yield`: the splice is read for the block's value, and that is
@@ -4264,7 +4264,7 @@ int emit_poly_recv_block_value(Compiler *c, int id, Buf *b) {
 /* Does this call target a user method that yields (so it has no standalone C
    function -- it is only ever inlined at its call sites)? A compact echo of
    emit_inline_call_x's own method resolution. (#2948) */
-static int call_targets_yielding_method(Compiler *c, int id) {
+int call_targets_yielding_method(Compiler *c, int id) {
   const NodeTable *nt = c->nt;
   const char *name = nt_str(nt, id, "name");
   if (!name) return 0;

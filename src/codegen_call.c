@@ -2353,6 +2353,51 @@ void emit_float_operand_in(Compiler *c, int node, const char *lcls, Buf *b) {
   }
   else emit_coerce(c, node, TY_FLOAT, CO_CONVERT, "a Float operand", b);
 }
+/* A Float method's receiver and operand bound as the doubles _t<tx> and _t<tn>,
+   with a nil in either in Ruby's order: both run, then the receiver's nil raises
+   (the call finds no method), then the operand's (the method converts it). `r` is
+   the receiver's value, or its oint where `r_oint`. An operand's nil raises in
+   the coercion words of `lcls`, or in Float()'s where lcls is NULL. The last
+   declaration is left for the caller to end. */
+void emit_float_pair_in_order(Compiler *c, const char *r, int r_oint, const char *name, int arg, const char *lcls, int tx, int tn, Buf *b) {
+  int a_oint = comp_ntype(c, arg) == TY_FLOAT && cmp_operand_may_be_nil(c, arg);
+  int tr = ++g_tmp, ta = ++g_tmp;
+  if (r_oint) buf_printf(b, "sp_ofloat _t%d = %s; ", tr, r);
+  else buf_printf(b, "sp_float _t%d = (%s); ", tx, r);
+  if (a_oint) {
+    buf_printf(b, "sp_ofloat _t%d = ", ta);
+    emit_oint_expr(c, arg, TY_FLOAT, b);
+  }
+  else {
+    Repr ar = repr_of(c, arg);
+    buf_printf(b, "sp_float _t%d = ", tn);
+    if (ar.as_ty == TY_INT) { buf_puts(b, "(double)("); emit_expr(c, arg, b); buf_puts(b, ")"); }
+    else if (ar.big) { buf_puts(b, "sp_bigint_to_double("); emit_expr(c, arg, b); buf_puts(b, ")"); }
+    else emit_float_operand_in(c, arg, lcls ? lcls : "Float", b);
+  }
+  if (r_oint) buf_printf(b, "; sp_float _t%d = sp_ofloat_val(_t%d, \"%s\")", tx, tr, name);
+  if (a_oint && lcls) buf_printf(b, "; sp_float _t%d = sp_ofloat_opnd_in(_t%d, \"%s\")", tn, ta, lcls);
+  else if (a_oint) buf_printf(b, "; sp_float _t%d = sp_ofloat_arg(_t%d)", tn, ta);
+}
+/* `recv ** arg` or `recv % arg` where either may be nil, as `fn(recv, arg)`, in
+   the order above (a receiver's nil is NoMethodError there, not a refusal). 0 for
+   neither, which keeps the plain call. */
+static int emit_float_op_nil_in_order(Compiler *c, int recv, int arg, TyKind rt, const char *name, const char *fn, const char *what, Buf *b) {
+  if (arg < 0) return 0;
+  int r_oint = rt == TY_FLOAT && cmp_operand_may_be_nil(c, recv);
+  if (!r_oint && !(comp_ntype(c, arg) == TY_FLOAT && cmp_operand_may_be_nil(c, arg))) return 0;
+  Buf rb; memset(&rb, 0, sizeof rb);
+  if (r_oint) emit_oint_expr(c, recv, TY_FLOAT, &rb);
+  else if (rt == TY_INT) { buf_puts(&rb, "(double)("); emit_expr(c, recv, &rb); buf_puts(&rb, ")"); }
+  else if (rt == TY_BIGINT) { buf_puts(&rb, "sp_bigint_to_double("); emit_expr(c, recv, &rb); buf_puts(&rb, ")"); }
+  else emit_coerce(c, recv, TY_FLOAT, CO_HOLD, what, &rb);
+  int tx = ++g_tmp, tn = ++g_tmp;
+  buf_puts(b, "({ ");
+  emit_float_pair_in_order(c, rb.p ? rb.p : "", r_oint, name, arg, rt == TY_FLOAT ? "Float" : "Integer", tx, tn, b);
+  buf_printf(b, "; %s(_t%d, _t%d); })", fn, tx, tn);
+  free(rb.p);
+  return 1;
+}
 /* A float-result operand as the arithmetic arm reads it (emit_scalar_operand). */
 static void emit_float_operand_expr(Compiler *c, int node, Buf *b) {
   emit_scalar_operand(c, node, "0.0", b);
@@ -18096,22 +18141,16 @@ static int emit_array_arith_call(Compiler *c, int id, Buf *b) {
       TyKind at0 = a0r.as_ty;
       /* sp_float_pow raises loudly where CRuby would promote to a Complex
          (negative base, fractional exponent) instead of returning NaN */
-      /* an operand that may raise for its nil comes after the receiver, whose
-         own nil raises first: C does not sequence the arguments of a call */
-      int seq = at0 == TY_FLOAT && cmp_operand_may_be_nil(c, argv[0]);
-      int seqt = seq ? ++g_tmp : 0;
-      if (seq) buf_printf(b, "({ sp_float _t%d = ", seqt);
-      else buf_puts(b, "sp_float_pow(");
+      if (emit_float_op_nil_in_order(c, recv, argc > 0 ? argv[0] : -1, rt, "**", "sp_float_pow", "the receiver of a Float `**`", b)) return 1;
+      buf_puts(b, "sp_float_pow(");
       if (rt == TY_INT) { buf_puts(b, "(double)("); emit_expr(c, recv, b); buf_puts(b, ")"); }
       else if (rt == TY_BIGINT) { buf_puts(b, "sp_bigint_to_double("); emit_expr(c, recv, b); buf_puts(b, ")"); }
-      else if (rt == TY_FLOAT && cmp_operand_may_be_nil(c, recv)) { buf_puts(b, "sp_ofloat_val("); emit_oint_expr(c, recv, TY_FLOAT, b); buf_puts(b, ", \"**\")"); }
       else emit_coerce(c, recv, TY_FLOAT, CO_HOLD, "the receiver of a Float `**`", b);
-      if (seq) buf_printf(b, "; sp_float_pow(_t%d, ", seqt);
-      else buf_puts(b, ", ");
+      buf_puts(b, ", ");
       if (at0 == TY_INT) { buf_puts(b, "(double)("); emit_expr(c, argv[0], b); buf_puts(b, ")"); }
       else if (a0r.big) { buf_puts(b, "sp_bigint_to_double("); emit_expr(c, argv[0], b); buf_puts(b, ")"); }
       else emit_float_operand_in(c, argv[0], rt == TY_FLOAT ? "Float" : "Integer", b);
-      buf_puts(b, seq ? "); })" : ")");
+      buf_puts(b, ")");
       return 1;
     }
     if (eff_res == TY_FLOAT && sp_streq(name, "%") && rt != TY_TIME && argc == 1) {
@@ -18119,22 +18158,16 @@ static int emit_array_arith_call(Compiler *c, int id, Buf *b) {
       TyKind at0 = a0r.as_ty;
       /* an integer zero divisor raises (5.0 % 0), a float one is NaN (5.0 % 0.0):
          route the int-divisor form through the checking helper. */
-      const char *fmodfn = at0 == TY_INT ? "sp_fmod_intdiv(" : "sp_fmod(";
-      /* the receiver before an operand that may raise for its nil, as `**` */
-      int seq = at0 == TY_FLOAT && cmp_operand_may_be_nil(c, argv[0]);
-      int seqt = seq ? ++g_tmp : 0;
-      if (seq) buf_printf(b, "({ sp_float _t%d = ", seqt);
-      else buf_puts(b, fmodfn);
+      const char *fmodfn = at0 == TY_INT ? "sp_fmod_intdiv" : "sp_fmod";
+      if (emit_float_op_nil_in_order(c, recv, argv[0], rt, "%", fmodfn, "the receiver of a Float `%`", b)) return 1;
+      buf_printf(b, "%s(", fmodfn);
       if (rt == TY_INT) { buf_puts(b, "(double)("); emit_expr(c, recv, b); buf_puts(b, ")"); }
       else if (rt == TY_BIGINT) { buf_puts(b, "sp_bigint_to_double("); emit_expr(c, recv, b); buf_puts(b, ")"); }
-      /* a receiver that may be nil is unwrapped as the other Float operators unwrap theirs: NoMethodError, not a refusal */
-      else if (rt == TY_FLOAT && cmp_operand_may_be_nil(c, recv)) { buf_puts(b, "sp_ofloat_val("); emit_oint_expr(c, recv, TY_FLOAT, b); buf_puts(b, ", \"%\")"); }
       else emit_coerce(c, recv, TY_FLOAT, CO_HOLD, "the receiver of a Float `%`", b);
-      if (seq) buf_printf(b, "; %s_t%d, ", fmodfn, seqt);
-      else buf_puts(b, ", ");
+      buf_puts(b, ", ");
       if (a0r.big) { buf_puts(b, "sp_bigint_to_double("); emit_expr(c, argv[0], b); buf_puts(b, ")"); }
       else emit_float_operand_in(c, argv[0], rt == TY_FLOAT ? "Float" : "Integer", b);
-      buf_puts(b, seq ? "); })" : ")");
+      buf_puts(b, ")");
       return 1;
     }
     if (eff_res == TY_FLOAT && rt != TY_TIME && !sp_streq(name, "%") && !sp_streq(name, "**")) {

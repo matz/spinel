@@ -10335,6 +10335,8 @@ static int emit_scalar_recv_arms(Compiler *c, int id, Buf *b, const NodeTable *n
      true, `nil.abs` read back as nil, `nil.round` a FloatDomainError).
      Only where the #3505 marking says the slot can hold it. */
   Buf rfg; memset(&rfg, 0, sizeof rfg);
+  /* the same receiver as its oint, for an arm whose operand runs before the nil raises */
+  Buf rfo; memset(&rfo, 0, sizeof rfo);
   if (rt == TY_FLOAT && name && nullable_int_value(c, recv) &&
       !(sp_streq(name, "to_s") || sp_streq(name, "inspect") || sp_streq(name, "nil?") ||
         sp_streq(name, "to_i") || sp_streq(name, "to_f") || sp_streq(name, "==") ||
@@ -10346,9 +10348,8 @@ static int emit_scalar_recv_arms(Compiler *c, int id, Buf *b, const NodeTable *n
         sp_streq(name, "&") || sp_streq(name, "|") || sp_streq(name, "^") ||
         sp_streq(name, "to_a") || sp_streq(name, "to_h") || sp_streq(name, "<=>") ||
         sp_streq(name, "<") || sp_streq(name, ">") || sp_streq(name, "<=") || sp_streq(name, ">="))) {
-    buf_printf(&rfg, "sp_ofloat_val(");
-    emit_oint_expr(c, recv, TY_FLOAT, &rfg);
-    buf_printf(&rfg, ", \"%s\")", name);
+    emit_oint_expr(c, recv, TY_FLOAT, &rfo);
+    buf_printf(&rfg, "sp_ofloat_val(%s, \"%s\")", rfo.p ? rfo.p : "", name);
     r = rfg.p;
   }
   else if (rt == TY_FLOAT && name && nullable_int_value(c, recv) &&
@@ -10733,8 +10734,14 @@ static int emit_scalar_recv_arms(Compiler *c, int id, Buf *b, const NodeTable *n
     else if (sp_streq(name, "divmod") && argc == 1) {
       /* Float#divmod(n) -> [Integer quotient, Float mod], CRuby's flodivmod */
       int tx = ++g_tmp, tn = ++g_tmp, tq = ++g_tmp, tm = ++g_tmp, o = ++g_tmp;
-      buf_printf(b, "({ sp_float _t%d = (%s); sp_float _t%d = ", tx, r, tn);
-      emit_float_operand_in(c, argv[0], "Float", b);
+      if (rfo.p || (a0 == TY_FLOAT && cmp_operand_may_be_nil(c, argv[0]))) {
+        buf_puts(b, "({ ");
+        emit_float_pair_in_order(c, rfo.p ? rfo.p : r, rfo.p != NULL, name, argv[0], "Float", tx, tn, b);
+      }
+      else {
+        buf_printf(b, "({ sp_float _t%d = (%s); sp_float _t%d = ", tx, r, tn);
+        emit_float_operand_in(c, argv[0], "Float", b);
+      }
       buf_printf(b, "; if (isnan(_t%d) || isnan(_t%d)) sp_raise_cls(\"FloatDomainError\", \"NaN\");"
                     /* an infinite dividend has no quotient: FloatDomainError (#3008) */
                     " if (isinf(_t%d)) sp_raise_cls(\"FloatDomainError\", _t%d > 0 ? \"Infinity\" : \"-Infinity\");"
@@ -10845,13 +10852,12 @@ static int emit_scalar_recv_arms(Compiler *c, int id, Buf *b, const NodeTable *n
                       " sp_FloatArray_push(_t%d, (%s)); _t%d; })", o, o, ta, o, r, o);
       }
       else {
-        /* a nil goes as above, in Float()'s words, once the receiver has run:
-           its own nil raises first */
+        /* a nil goes as above, in Float()'s words, after the receiver's own */
         if (a0 == TY_FLOAT && cmp_operand_may_be_nil(c, argv[0])) {
           int tr = ++g_tmp;
-          buf_printf(b, "({ sp_float _t%d = (%s); sp_float _t%d = sp_ofloat_arg(", tr, r, ta);
-          emit_oint_expr(c, argv[0], TY_FLOAT, b);
-          buf_printf(b, "); sp_FloatArray *_t%d = sp_FloatArray_new();"
+          buf_puts(b, "({ ");
+          emit_float_pair_in_order(c, rfo.p ? rfo.p : r, rfo.p != NULL, name, argv[0], NULL, tr, ta, b);
+          buf_printf(b, "; sp_FloatArray *_t%d = sp_FloatArray_new();"
                         " sp_FloatArray_push(_t%d, _t%d);"
                         " sp_FloatArray_push(_t%d, _t%d); _t%d; })", o, o, ta, o, tr, o);
         }
@@ -10964,6 +10970,7 @@ static int emit_scalar_recv_arms(Compiler *c, int id, Buf *b, const NodeTable *n
   }
   free(rs.p);
   free(rfg.p);
+  free(rfo.p);
   if (handled) { *out = 1; return 1; }
   return 0;
 }

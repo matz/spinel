@@ -5981,20 +5981,27 @@ static int sp_src_defines_module(const char *source, const char *cname) {
   return 0;
 }
 
-static char *sp_prepend_require(char *source, const char *exe_path, const char *head,
-                                unsigned char **fsl, size_t *fsl_n) {
+/* `head` (a require line) written into `source` at offset `at`, which is the
+   start of a line, and resolved there. The file it splices is marked as
+   inserted, so the program's own line numbers stay where they are. */
+static char *sp_splice_require_at(char *source, const char *exe_path, const char *head, size_t at,
+                                  unsigned char **fsl, size_t *fsl_n) {
   size_t sl = strlen(source), hl = strlen(head);
   char *ns = (char *)malloc(sl + hl + 1);
   if (!ns) return source;
-  memcpy(ns, head, hl); memcpy(ns + hl, source, sl + 1);
+  memcpy(ns, source, at); memcpy(ns + at, head, hl); memcpy(ns + at + hl, source + at, sl - at + 1);
+  {   /* (the line is one of the buffer's, and has no flag yet) */
+    unsigned char z = 0;
+    sp_fsl_splice(fsl, fsl_n, sp_fsl_line_at(source, at), 0, &z, 1);
+  }
   sp_req_written++;   /* (the head is one require) */
   sp_src_lex_drop();
   free(source);
   ns = resolve_plain_requires(NULL, ns, exe_path, fsl, fsl_n);
   size_t pl = strlen(SP_PUSH_PREFIX), il = strlen(SP_INSERT_PREFIX), nl = strlen(ns);
-  char *w = strncmp(ns, SP_PUSH_PREFIX, pl) == 0 ? (char *)malloc(nl - pl + il + 1) : NULL;
+  char *w = strncmp(ns + at, SP_PUSH_PREFIX, pl) == 0 ? (char *)malloc(nl - pl + il + 1) : NULL;
   if (!w) return ns;
-  memcpy(w, SP_INSERT_PREFIX, il); memcpy(w + il, ns + pl, nl - pl + 1);
+  memcpy(w, ns, at); memcpy(w + at, SP_INSERT_PREFIX, il); memcpy(w + at + il, ns + at + pl, nl - at - pl + 1);
   free(ns);
   return w;
 }
@@ -6003,7 +6010,7 @@ static char *sp_splice_named_builtin(char *source, const char *exe_path, const c
                                      const char *file, unsigned char **fsl, size_t *fsl_n) {
   if (!sp_src_names_const(source, cname) || sp_src_defines_module(source, cname)) return source;
   char head[96]; snprintf(head, sizeof head, "require \"%s\"\n", file);
-  return sp_prepend_require(source, exe_path, head, fsl, fsl_n);
+  return sp_splice_require_at(source, exe_path, head, 0, fsl, fsl_n);
 }
 
 /* builtins/monitor_mixin.rb: MonitorMixin, for a program that names it in
@@ -6024,7 +6031,7 @@ static char *sp_splice_monitor_mixin(char *source, const char *exe_path,
     if (*bol != '#') named = 1;
   }
   if (!named || sp_src_defines_module(source, w)) return source;
-  return sp_prepend_require(source, exe_path, "require \"builtins/monitor_mixin\"\n", fsl, fsl_n);
+  return sp_splice_require_at(source, exe_path, "require \"builtins/monitor_mixin\"\n", 0, fsl, fsl_n);
 }
 
 /* builtins/object_space.rb: the finalizer API. Only for a program that names
@@ -6037,7 +6044,7 @@ static char *sp_splice_object_space(char *source, const char *exe_path,
   if (!strstr(source, "define_finalizer")) return source;
   { SpSrcLex *lx = sp_src_lex_of(source); if (!lx->fin && !lx->evals) return source; }
   if (sp_src_defines_module(source, "ObjectSpace")) return source;
-  return sp_prepend_require(source, exe_path, "require \"builtins/object_space\"\n", fsl, fsl_n);
+  return sp_splice_require_at(source, exe_path, "require \"builtins/object_space\"\n", 0, fsl, fsl_n);
 }
 
 /* builtins/process_detach.rb: Process.detach, for a program that calls it
@@ -6045,7 +6052,7 @@ static char *sp_splice_object_space(char *source, const char *exe_path,
 static char *sp_splice_process_detach(char *source, const char *exe_path,
                                       unsigned char **fsl, size_t *fsl_n) {
   if (!strstr(source, "Process.detach") || sp_src_defines_module(source, "Process")) return source;
-  return sp_prepend_require(source, exe_path, "require \"builtins/process_detach\"\n", fsl, fsl_n);
+  return sp_splice_require_at(source, exe_path, "require \"builtins/process_detach\"\n", 0, fsl, fsl_n);
 }
 
 /* builtins/system_spawn.rb: Kernel#system with an options or environment
@@ -6076,7 +6083,7 @@ static int sp_src_system_call_has_keyword(const char *source) {
 static char *sp_splice_system_spawn(char *source, const char *exe_path,
                                     unsigned char **fsl, size_t *fsl_n) {
   if (!sp_src_system_call_has_keyword(source)) return source;
-  return sp_prepend_require(source, exe_path, "require \"builtins/system_spawn\"\n", fsl, fsl_n);
+  return sp_splice_require_at(source, exe_path, "require \"builtins/system_spawn\"\n", 0, fsl, fsl_n);
 }
 
 /* builtins/file_foreach_first.rb: File.foreach(path).first(n), for a program
@@ -6084,7 +6091,7 @@ static char *sp_splice_system_spawn(char *source, const char *exe_path,
 static char *sp_splice_foreach_first(char *source, const char *exe_path,
                                      unsigned char **fsl, size_t *fsl_n) {
   if (!strstr(source, "foreach(") || !strstr(source, ".first(")) return source;
-  return sp_prepend_require(source, exe_path, "require \"builtins/file_foreach_first\"\n", fsl, fsl_n);
+  return sp_splice_require_at(source, exe_path, "require \"builtins/file_foreach_first\"\n", 0, fsl, fsl_n);
 }
 
 /* builtins/io_popen.rb: IO.popen with a block, for a program that calls
@@ -6093,7 +6100,7 @@ static char *sp_splice_io_popen(char *source, const char *exe_path,
                                 unsigned char **fsl, size_t *fsl_n) {
   if (!strstr(source, "IO.popen")) return source;
   { SpSrcLex *lx = sp_src_lex_of(source); if (!lx->popen && !(lx->evals && lx->popen_str)) return source; }
-  return sp_prepend_require(source, exe_path, "require \"builtins/io_popen\"\n", fsl, fsl_n);
+  return sp_splice_require_at(source, exe_path, "require \"builtins/io_popen\"\n", 0, fsl, fsl_n);
 }
 
 static char *sp_splice_builtins(char *source, const char *exe_path,
@@ -6142,7 +6149,7 @@ static char *sp_splice_builtins(char *source, const char *exe_path,
     if (known && sp_source_mentions_method(source, aliases[k][0])) any = 1;
   }
   if (!any) return source;
-  return sp_prepend_require(source, exe_path, "require \"builtins/enumerable\"\n", fsl, fsl_n);
+  return sp_splice_require_at(source, exe_path, "require \"builtins/enumerable\"\n", 0, fsl, fsl_n);
 }
 
 /* builtins/enumerator.rb: the Enumerator walks desugar_enum_walk_calls
@@ -6178,7 +6185,7 @@ static char *sp_splice_builtin_enumerator(char *source, const char *exe_path,
   if (!fp) { snprintf(gp, sizeof gp, "%.*s/../builtins/enumerator.rb", base_len, lib_dir); fp = fopen(gp, "r"); }
   if (!fp) return source;
   fclose(fp);
-  return sp_prepend_require(source, exe_path, "require \"builtins/enumerator\"\n", fsl, fsl_n);
+  return sp_splice_require_at(source, exe_path, "require \"builtins/enumerator\"\n", 0, fsl, fsl_n);
 }
 
 /* ---- builtins/: the other containers (Integer, Float, Comparable, Monitor) ----
@@ -6230,7 +6237,7 @@ static char *sp_splice_builtin_extra(char *source, const char *exe_path, SpBuilt
     if (sp_source_mentions_method(source, bf->names[i])) any = 1;
   if (!any) return source;
   char head[160]; snprintf(head, sizeof head, "require \"%s\"\n", bf->req);
-  return sp_prepend_require(source, exe_path, head, fsl, fsl_n);
+  return sp_splice_require_at(source, exe_path, head, 0, fsl, fsl_n);
 }
 
 static char *sp_splice_builtin_extras(char *source, const char *exe_path,
@@ -8541,20 +8548,20 @@ static NodeTable *sp_parse_emit(const char *source_file, const char *argv0) {
      notifications/fanout.rb; #6740 for IO::Buffer). Ask over the resolved
      program, the way the builtins splice below does, and splice the binding
      ahead of everything when it is named and was not required.
-     sp_prepend_require marks the splice as inserted, so the program's own
+     sp_splice_require_at marks the splice as inserted, so the program's own
      line numbers stay where they are; a require written into the entry
      file's text instead took a line of its own and pushed every later line
      down by one. */
   if (!sp_feature_required("set") && !sp_src_opens(source, "class Set") &&
       source_references_set(source))
-    source = sp_prepend_require(source, argv0, "require \"set\"\n", &fsl, &fsl_n);
+    source = sp_splice_require_at(source, argv0, "require \"set\"\n", 0, &fsl, &fsl_n);
   if (!sp_feature_required("io/buffer") && source_references_io_buffer(source))
-    source = sp_prepend_require(source, argv0, "require \"io/buffer\"\n", &fsl, &fsl_n);
+    source = sp_splice_require_at(source, argv0, "require \"io/buffer\"\n", 0, &fsl, &fsl_n);
   /* CRuby's time.rb (packages/time) for a program that requires "time" and
      calls Time.parse or Time.strptime; any other program keeps the
      runtime's C (#9946). */
   if (sp_feature_required("time") && source_calls_time_parser(source))
-    source = sp_prepend_require(source, argv0, "require \"" SP_TIME_PARSERS_FEATURE "\"\n", &fsl, &fsl_n);
+    source = sp_splice_require_at(source, argv0, "require \"" SP_TIME_PARSERS_FEATURE "\"\n", 0, &fsl, &fsl_n);
   source = sp_splice_builtins(source, argv0, &fsl, &fsl_n);
   source = sp_splice_builtin_extras(source, argv0, &fsl, &fsl_n);
   source = sp_splice_builtin_enumerator(source, argv0, &fsl, &fsl_n);

@@ -24512,8 +24512,38 @@ static int rbself_body_defs(NodeTable *nt, int n0, int module, const char *cn, c
    `String.include(M)`), and nothing extends with it: its methods then run
    with that builtin value as self, as a reopening's do. NULL otherwise, a
    mixin the walk cannot place included. */
+static const char *rbself_module_host_in(NodeTable *nt, int n0, const char *mod, int strict);
 static const char *rbself_module_host(NodeTable *nt, int n0, const char *mod) {
+  return rbself_module_host_in(nt, n0, mod, 0);
+}
+/* the same, `strict` set (the ivar rewrite, which changes what the
+   module's methods read): Object is a host too (`class Object; include M;
+   end`, the module's methods then run on every value as a reopening of
+   Object's do); a class nested in another body (`module A; class
+   Integer`) is the program's own, no host; and the module's name is read
+   nowhere but in those include and prepend calls and its own headers, so
+   no alias (`QQ = Q`), `send(:include, Q)` or `Q.instance_method` can
+   take its methods to another class unseen */
+/* Does the program write a class of this name under a path or in another
+   body (`class Ns::Integer`, `module Ns; class Integer`)? A receiver
+   `Integer` in `Integer.include(M)` inside another body can then name
+   that class, not the builtin. At the top level it names the builtin. */
+static int rbself_names_own_class(NodeTable *nt, int n0, const char *name) {
+  for (int m = 0; m < n0; m++) {
+    if (!class_def_is_class(nt, m) && !class_def_is_module(nt, m)) continue;
+    const char *cn = class_def_name(nt, m);
+    if (cn && sp_streq(cn, name) && (!class_def_bare_name(nt, m) || engine_lexically_nested(nt, m))) return 1;
+  }
+  return 0;
+}
+static const char *rbself_module_host_in(NodeTable *nt, int n0, const char *mod, int strict) {
   const char *host = NULL;
+  int reads = 0, used = 0;
+  for (int id = 0; strict && id < n0; id++) {
+    NodeKind k = nt_kind(nt, id);
+    if (k == NK_ModuleNode) { int cp = nt_ref(nt, id, "constant_path"); if (cp >= 0 && sp_streq(nt_str(nt, cp, "name") ? nt_str(nt, cp, "name") : "", mod)) reads--; }
+    if ((k == NK_ConstantReadNode || k == NK_ConstantPathNode) && sp_streq(nt_str(nt, id, "name") ? nt_str(nt, id, "name") : "", mod)) reads++;
+  }
   for (int id = 0; id < n0; id++) {
     if (nt_kind(nt, id) != NK_CallNode) continue;
     const char *nm = nt_str(nt, id, "name");
@@ -24523,23 +24553,32 @@ static const char *rbself_module_host(NodeTable *nt, int n0, const char *mod) {
     int names = 0;
     for (int i = 0; i < an; i++)
       if (nt_kind(nt, av[i]) == NK_ConstantReadNode && sp_streq(nt_str(nt, av[i], "name") ? nt_str(nt, av[i], "name") : "", mod))
-        names = 1;
+        names++;
     if (!names) continue;
+    used += names;
     if (sp_streq(nm, "extend")) return NULL;
     const char *target = NULL;
     int recv = nt_ref(nt, id, "receiver");
-    if (recv >= 0) target = nt_kind(nt, recv) == NK_ConstantReadNode ? nt_str(nt, recv, "name") : NULL;
-    else
+    if (recv >= 0) {
+      target = nt_kind(nt, recv) == NK_ConstantReadNode ? nt_str(nt, recv, "name") : NULL;
+      if (strict && target && engine_lexically_nested(nt, id) && rbself_names_own_class(nt, n0, target)) return NULL;
+    } else
       for (int m = 0; m < n0 && !target; m++) {
         if (!class_def_is_class(nt, m)) continue;
         int b = class_def_body(nt, m), bn = 0;
         const int *bs = b >= 0 ? nt_arr(nt, b, "body", &bn) : NULL;
         for (int k = 0; k < bn; k++)
-          if (bs[k] == id) { target = class_def_name(nt, m); break; }
+          if (bs[k] == id) {
+            target = strict && engine_lexically_nested(nt, m) ? NULL : class_def_name(nt, m);
+            if (!target) return NULL;
+            break;
+          }
       }
-    if (!target || !rbself_builtin(target) || (host && !sp_streq(host, target))) return NULL;
+    if (!target || !(rbself_builtin(target) || (strict && sp_streq(target, "Object"))) ||
+        (host && !sp_streq(host, target))) return NULL;
     host = target;
   }
+  if (strict && reads != used) return NULL;
   return host;
 }
 
@@ -26109,6 +26148,23 @@ static int biv_attr_defs(NodeTable *nt, int call, int **defs, int *nd) {
   return 1;
 }
 
+/* does a body of module mn call module_function? Its methods' copies on
+   the module then run with the module as self, whose instance variables
+   are its own */
+static int biv_module_function(const NodeTable *nt, int n0, const char *mn) {
+  for (int m = 0; m < n0; m++) {
+    const char *bn0 = class_def_is_module(nt, m) ? class_def_bare_name(nt, m) : NULL;
+    if (!bn0 || !sp_streq(bn0, mn)) continue;
+    int b = class_def_body(nt, m), bn = 0;
+    const int *bs = b >= 0 ? nt_arr(nt, b, "body", &bn) : NULL;
+    for (int k = 0; k < bn; k++)
+      if (nt_kind(nt, bs[k]) == NK_CallNode && nt_ref(nt, bs[k], "receiver") < 0 &&
+          sp_streq(nt_str(nt, bs[k], "name"), "module_function"))
+        return 1;
+  }
+  return 0;
+}
+
 int desugar_builtin_ivars(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int n0 = nt->count, changed = 0;
@@ -26123,7 +26179,16 @@ int desugar_builtin_ivars(Compiler *c) {
     int cp = nt_ref(nt, m, "constant_path");
     if (cp < 0 || nt_kind(nt, cp) != NK_ConstantReadNode) continue;
     int mode = biv_mode(nt_str(nt, cp, "name"));
-    if (class_def_is_module(nt, m) && mode != BIV_OBJECT) continue;
+    /* a module mixed into one builtin class alone (rbself_module_host):
+       its methods and attr_* run with that builtin value as self, so they
+       read and write the value's instance variables as a reopening's do
+       (`module Q; attr_reader :q; end; class Integer; include Q; end`);
+       Object too, as a reopening of Object's methods do */
+    if (class_def_is_module(nt, m) && mode != BIV_OBJECT) {
+      const char *mn = class_def_bare_name(nt, m);
+      const char *host = mn && !biv_module_function(nt, n0, mn) ? rbself_module_host_in(nt, n0, mn, 1) : NULL;
+      mode = host ? biv_mode(host) : BIV_NONE;
+    }
     int body = class_def_body(nt, m);
     if (mode == BIV_NONE || body < 0 || nt_kind(nt, body) != NK_StatementsNode) continue;
     /* `module Text; class String` is the program's own class */

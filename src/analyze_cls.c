@@ -5346,6 +5346,14 @@ static void cf_alias_groups(CF *f) {
       LocalVar *lv = &c->scopes[s].locals[i];
       free(lv->ctr_sites); lv->ctr_sites = NULL; lv->nctr_sites = 0;
       int e = cf_alias_local_el(f, s, i), n = 0;
+      /* an --rbs-seeded local joins no group, and keeps its sites to be left
+         out of them (join_container_alias_groups' excl), the seed copying
+         what it takes: so also one whose set may hold an untracked
+         container or went past the cap (#11133) */
+      if (e < 0 && lv->rbs_seeded && f->nlv && i < f->nlv[s] && f->lv_el[s]) {
+        int e2 = f->lv_el[s][i];
+        if (e2 >= 0 && e2 < f->nel) e = e2;
+      }
       for (int j = 0; e >= 0 && j < f->npts[e]; j++) { int o = f->pts[e][j]; if (o >= 0 && o < f->nobj && oidx[o] >= 0) n++; }
       if (!n) continue;
       lv->ctr_sites = malloc(sizeof(int) * (size_t)n);

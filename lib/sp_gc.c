@@ -622,6 +622,7 @@ else{void*obj=*e;if(obj)sp_gc_mark(obj);}}
   if(vd)sp_gc_dbg_phase="globals";if(sp_gc_mark_globals_hook)sp_gc_mark_globals_hook();
   void (*mark_io_timeouts)(void) = SP_ATOMIC_LOAD(&sp_gc_mark_io_timeouts_hook, __ATOMIC_ACQUIRE);
   if(mark_io_timeouts)mark_io_timeouts();
+  sp_slab_mark_pinned();   /* frozen heap Strings outside the slab, which no bitmap pins */
 #ifdef SP_CEXT
   if(sp_gc_mark_cext_hook)sp_gc_mark_cext_hook();
 #endif

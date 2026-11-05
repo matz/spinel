@@ -497,6 +497,7 @@ void  sp_slab_set_fin(void *hdr);        /* the object gained a finalizer or rec
 void  sp_slab_park(void *hdr);           /* a dead header about to be pooled: out of every generation's reach */
 void  sp_slab_relive(void *hdr);         /* a pooled header handed out again */
 void  sp_slab_pin(const void *p);        /* a frozen heap string: immortal, as a literal is */
+void  sp_slab_mark_pinned(void);         /* the mark's roots: the pinned Strings in blocks the slab does not own */
 int   sp_slab_is_str(const void *p);
 int   sp_slab_is_live(const void *p);    /* allocated, in some generation */
 int   sp_slab_is_old(const void *p);

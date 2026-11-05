@@ -1,0 +1,13 @@
+#<Method: C#bar(foo)(a, b=...)>
+#<UnboundMethod: C#bar(foo)(a, b=...)>
+#<Method: C#foo(a, b=...)>
+#<Method: C#inspect(to_s)()>
+#<Method: C#z(x)()>
+#<Method: C#eql?(==)(o)>
+#<Method: C.b(a)()>
+#<Method: C.a()>
+#<UnboundMethod: C#bar(foo)(a, b=...)>
+#<Method: C#y(x)()>
+#<Method: C#x()>
+#<Method: C#y(x)()>
+:x

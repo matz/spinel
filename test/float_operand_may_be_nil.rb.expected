@@ -1,0 +1,23 @@
+[8.0, 1.5, 8.0, 1.0, [2, 1.5], [3.0, 7.5]]
+2.8284271247461903
+0.0
+2.8284271247461903
+1.0
+4.056481920730334e+31
+1.0
+[5, 0.0]
+[1.5, 7.5]
+TypeError: nil can't be coerced into Float
+TypeError: nil can't be coerced into Float
+TypeError: nil can't be coerced into Integer
+TypeError: nil can't be coerced into Integer
+TypeError: nil can't be coerced into Float
+TypeError: can't convert nil into Float
+TypeError: nil can't be coerced into Float
+TypeError: nil can't be coerced into Float
+TypeError: nil can't be coerced into Integer
+TypeError: nil can't be coerced into Integer
+TypeError: nil can't be coerced into Integer
+TypeError: nil can't be coerced into Integer
+TypeError: nil can't be coerced into Float
+TypeError: can't convert nil into Float

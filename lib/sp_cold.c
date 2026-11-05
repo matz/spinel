@@ -4163,7 +4163,7 @@ sp_PolyArray *sp_Enumerator_to_a(sp_Enumerator *e) {
    stays blocked in a read or a sleep. Nothing here but the two
    atomics and the write(2) is called from the handler. */
 static int sp_sig_pending[SP_SIG_MAX];
-volatile int sp_sig_pending_flag;
+extern volatile int sp_sig_pending_flag;   /* (lib/sp_alloc.c: sp_gc_alloc_nogc sets it too) */
 /* #9222: the default SIGINT / SIGTERM's handler records a signal that
    arrives outside a blocking call (sp_sig_async_ok, sp_types.h) in
    sp_sig_default_pending, and the raise it makes is the generated program's
@@ -4173,10 +4173,26 @@ volatile int sp_sig_default_pending;
 void (*sp_sig_default_raiser)(int);
 /* A safe point of a program that sets no trap: the recorded default signal
    is raised. Never returns. */
+/* A collection sp_gc_alloc_nogc could not run, asked of the next safe
+   point: the safe points' flag is set, and the safe point collects
+   (sp_gc_poll_collect) before it looks for a signal */
+extern volatile int sp_gc_poll_due;   /* (lib/sp_alloc.c) */
+void sp_gc_poll_collect(void);
+static void sp_gc_poll_run(void) {
+  if (!sp_gc_poll_due) return;
+  sp_gc_poll_due = 0;
+  sp_gc_poll_collect();
+}
+/* A safe point of a program that sets no trap: a collection asked of it
+   runs, and the recorded default signal is raised. Returns only when it
+   had a collection and no signal to run. */
 void sp_sig_poll_raise(void) {
-  int no = sp_sig_default_pending;
-  sp_sig_default_pending = 0;
   SP_ATOMIC_STORE(&sp_sig_pending_flag, 0, __ATOMIC_RELAXED);
+  int gc = sp_gc_poll_due;
+  sp_gc_poll_run();
+  int no = sp_sig_default_pending;
+  if (gc && !no) return;
+  sp_sig_default_pending = 0;
   if (no && sp_sig_default_raiser) sp_sig_default_raiser(no);
   abort();
 }
@@ -4204,6 +4220,7 @@ void sp_sig_c_handler(int no) {
    leaves by a raise or a throw. */
 void sp_sig_run_pending(void) {
   SP_ATOMIC_STORE(&sp_sig_pending_flag, 0, __ATOMIC_RELAXED);
+  sp_gc_poll_run();   /* (a collection sp_gc_alloc_nogc asked of this safe point) */
   /* a recorded default SIGINT / SIGTERM first: its raise leaves */
   if (sp_sig_default_pending && sp_sig_default_raiser) {
     int no = sp_sig_default_pending;

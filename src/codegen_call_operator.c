@@ -950,9 +950,14 @@ int emit_call_compare_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
          sp_RbVal -- box it, or the raw compare goes out through an sp_RbVal
          signature and the build fails (#3498). */
       int cmp_poly = repr_of(c, id).kind == RK_BOXED;
-      if (cmp_poly) buf_puts(b, "sp_box_oint("); else oint_open(c, id, TY_INT, b);
+      if (cmp_poly) {
+        /* a program <=> answering a Bignum hands it on whole */
+        emit_poly_cmp_ordered(c, "sp_poly_spaceship_v", recv, argv[0], b);
+        return 1;
+      }
+      oint_open(c, id, TY_INT, b);
       emit_poly_cmp_ordered(c, "sp_poly_spaceship", recv, argv[0], b);
-      if (cmp_poly) buf_puts(b, ")"); else oint_close(c, id, b);
+      oint_close(c, id, b);
       return 1;
     }
     /* Statically incomparable concrete operands (1 <=> "a"): Ruby answers

@@ -1655,7 +1655,7 @@ test: lib/spinel_rt_responds_generated.h $(SPINEL_TIMEOUT) cext-header-test cext
 # The actual run. rbs-test golden-checks the RBS extractor (cheap, C-only).
 # rbs-seed-test checks the seeds actually reach the analyzer (incl. nested
 # classes, #1417).
-test-run: int-min-test timing-test signal-default-test source-marker-test magic-comment-test rbs-test rbs-seed-test inline-rbs-test re-lit-test value-pos-test value-edges-check implied-calls-check implied-calls-test node-kinds-check package-facts-check reject-test cli-opts-test link-names-test reach-test defer-refusals-test check-stores-test backtrace-test gc-minor-test gc-phases-test gc-stress-test gc-threshold-test gc-none-test gc-obj-budget-test gc-str-budget-test gc-str-major-test threaded-render-test gc-locality-test byref-capture-test thread-puts-test ext-test ext-cruby-test test-corpus-summary
+test-run: int-min-test timing-test signal-default-test source-marker-test magic-comment-test rbs-test rbs-seed-test inline-rbs-test re-lit-test value-pos-test value-edges-check implied-calls-check implied-calls-test node-kinds-check package-facts-check reject-test cli-opts-test link-names-test reach-test defer-refusals-test check-stores-test backtrace-test gc-minor-test gc-phases-test gc-stress-test gc-threshold-test gc-none-test gc-obj-budget-test gc-nogc-poll-test gc-str-budget-test gc-str-major-test threaded-render-test gc-locality-test byref-capture-test thread-puts-test ext-test ext-cruby-test test-corpus-summary
 
 # The test/*.rb corpus (and the bundled packages') on its own, without the
 # C-side legs: what a 32-bit target runs (`make test-corpus CC='cc -m32'`),
@@ -2620,6 +2620,22 @@ gc-str-major-test: $(SPINEL) $(SP_RT_LIB) $(SP_RT_MT_LIB) $(SPINEL_TIMEOUT)
 	  { echo "gc-str-major-test: FAIL (the schedule left MORE old behind: $$io -> $$do)"; ok=0; }; \
 	rm -rf "$$tmp"; \
 	if [ $$ok -eq 1 ]; then echo "gc-str-major-test: pass"; else exit 1; fi
+
+# A loop whose only allocations are a Bignum operation's (sp_gc_alloc_nogc,
+# which may not collect: the operands are temporaries nothing roots) asks
+# the loop's back-edge to collect (sp_gc_poll_request): 200000 rounds
+# collected once, at exit, and its memory grew with the rounds (#11106).
+gc-nogc-poll-test: $(SPINEL) $(SP_RT_LIB) $(SPINEL_TIMEOUT)
+	@tmp=$$(mktemp -d /tmp/spinel-gcpoll.XXXXXX); \
+	$(SPINEL) test/gc_bignum_loop_collects.rb -o "$$tmp/p" >"$$tmp/cc.out" 2>&1 || \
+	  { echo "gc-nogc-poll-test: FAIL (compile)"; tail -5 "$$tmp/cc.out"; rm -rf "$$tmp"; exit 1; }; \
+	SPINEL_GC_STATS=1 $(TIMEOUT60) "$$tmp/p" > "$$tmp/out" 2> "$$tmp/err"; \
+	n=$$(grep -o '[0-9]* collections' "$$tmp/err" | tail -1 | cut -d' ' -f1); \
+	cmp -s "$$tmp/out" test/gc_bignum_loop_collects.rb.expected || \
+	  { echo "gc-nogc-poll-test: FAIL (the answer changed)"; rm -rf "$$tmp"; exit 1; }; \
+	[ "$${n:-0}" -ge 10 ] || \
+	  { echo "gc-nogc-poll-test: FAIL ($${n:-0} collections over 200000 rounds of Bignums: the back-edge ran none)"; rm -rf "$$tmp"; exit 1; }; \
+	rm -rf "$$tmp"; echo "gc-nogc-poll-test: pass ($$n collections)"
 
 # The object budget is priced off objects PLUS strings by default;
 # SPINEL_GC_OBJ_BUDGET=obj restores pricing it off the object heap alone.
@@ -4761,6 +4777,8 @@ infer-test: $(SPINEL) $(SP_RT_LIB)
 	  grep -q 'static sp_PointValue sp_PointValue_new(' "$$tmp/oir.c" && ! grep -q 'iv_unused;' "$$tmp/oir.c" || { echo "infer-test: FAIL (an Object setter changes unrelated layouts)"; ok=0; }; \
 	  $(SPINEL) $$flags test/hash_store_boxed_unbounded.rb -c --no-line-map -o "$$tmp/hbu.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (hash_store_boxed_unbounded: -c)"; ok=0; }; \
 	  ! grep -q 'sp_PolyPolyHash_new' "$$tmp/hbu.c" || { echo "infer-test: FAIL (an unbounded boxed store widened a known Hash)"; ok=0; }; \
+	  $(SPINEL) $$flags test/container_alias_untracked_local.rb -c --no-line-map -o "$$tmp/cau.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (container_alias_untracked_local: -c)"; ok=0; }; \
+	  awk '/^struct sp_Area_s \{/,/^\}/' "$$tmp/cau.c" | grep -Fq 'sp_StrArray * iv_except;' || { echo "infer-test: FAIL (a local that may hold an untracked container joined an alias group and widened an Array[String])"; ok=0; }; \
 	  $(SPINEL) $$flags test/struct_member_index_op_write_box.rb -c --no-line-map -o "$$tmp/smo.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (struct_member_index_op_write_box: -c)"; ok=0; }; \
 	  [ "$$(awk '/^struct sp_Point_s \{/,/^\}/' "$$tmp/smo.c" | grep -c 'sp_int iv_[xy];')" = 2 ] && awk '/^struct sp_Pair_s \{/,/^\}/' "$$tmp/smo.c" | grep -q 'sp_RbVal iv_a;' && awk '/^struct sp_Cell_s \{/,/^\}/' "$$tmp/smo.c" | grep -q 'sp_RbVal iv_v;' || { echo "infer-test: FAIL (an index op-write through a box typed a Struct the box cannot hold, or not one it can)"; ok=0; }; \
 	  $(SPINEL) $$flags test/index_read_unsettled_local.rb -c --no-line-map -o "$$tmp/iru.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (index_read_unsettled_local: -c)"; ok=0; }; \
@@ -5152,6 +5170,8 @@ infer-test: $(SPINEL) $(SP_RT_LIB)
 	grep -q '^spinel: test/infer/emit_types_fields.rb:13:28: note: passed `pts\[0\]` is untyped' "$$tmp/ww.err" && grep -q '^spinel: test/infer/emit_types_fields.rb:12:7: note: from `\[Point.new(1, 2), Point.new(3, 4)\]` is Array\[untyped\] -- born here' "$$tmp/ww.err" || { echo "infer-test: FAIL (--warn-widen: why: an inherited poly is followed to the expression it was born at)"; cat "$$tmp/ww.err"; ok=0; }; \
 	grep -q '^spinel: test/infer/emit_types_fields.rb:15:7: note: passed `"s"` is String, where the slot was Integer (two kinds meet: untyped)' "$$tmp/ww.err" && grep -q '^spinel: test/infer/emit_types_fields.rb:14:7: note: and `1` is Integer' "$$tmp/ww.err" || { echo "infer-test: FAIL (--warn-widen: why: two kinds meeting name both call sites)"; cat "$$tmp/ww.err"; ok=0; }; \
 	grep -q '"param":"a",.*"why":\[{"file":"test/infer/emit_types_fields.rb","line":15,"col":6,"end_line":15,"end_col":9,"role":"passed","rbs":"String","note":", where the slot was Integer (two kinds meet: untyped)"},{"file":"test/infer/emit_types_fields.rb","line":14,"col":6,"end_line":14,"end_col":7,"role":"and","rbs":"Integer"}\]' "$$tmp/et.json" || { echo "infer-test: FAIL (--emit-types: the widening diagnostic carries its why)"; ok=0; }; \
+	$(SPINEL) test/while_mul_keeps_local_kind.rb --warn-widen -c -o "$$tmp/wml.c" 2> "$$tmp/wml.err" >/dev/null || { echo "infer-test: FAIL (compile while_mul_keeps_local_kind)"; cat "$$tmp/wml.err"; ok=0; }; \
+	if grep -q ': warning: ' "$$tmp/wml.err"; then echo "infer-test: FAIL (--warn-widen: a local a while multiplies keeps the kind its writes give it)"; cat "$$tmp/wml.err"; ok=0; fi; \
 	$(SPINEL) test/infer/why_widen_chain.rb --warn-widen -c -o "$$tmp/wwc.c" 2> "$$tmp/wwc.err" >/dev/null || { echo "infer-test: FAIL (compile why_widen_chain)"; cat "$$tmp/wwc.err"; exit 1; }; \
 	grep -q '^spinel: test/infer/why_widen_chain.rb:10:16: note: returned `v.to_s` is untyped (a candidate of the send, `Bad#to_s`, returns untyped)' "$$tmp/wwc.err" && grep -q '^spinel: test/infer/why_widen_chain.rb:7:14: note: returned `@v` is untyped' "$$tmp/wwc.err" || { echo "infer-test: FAIL (--warn-widen: why: a send on a poly receiver follows the candidate whose return degraded, not the receiver)"; cat "$$tmp/wwc.err"; ok=0; }; \
 	grep -q '^spinel: test/infer/why_widen_chain.rb:15:13: note: written `\[\]` is untyped (no type of its own) (no type of its own: an empty literal); the Foo pushed into it makes an Array of objects, which has no typed form: Array\[untyped\] by representation' "$$tmp/wwc.err" || { echo "infer-test: FAIL (--warn-widen: why: an empty literal filled with objects is untyped by representation, not by the round)"; cat "$$tmp/wwc.err"; ok=0; }; \
@@ -6082,8 +6102,22 @@ CONST_COLLISIONS_LIMIT ?= 2.2
 # or the copies per copy or per call reads as N^2. The pair reads 2.28x at
 # N=100 and N=200 before copies are mapped (the rest of the compiler grows
 # faster than linearly in the classes, as COND_DEFS_CPU_LIMIT says); the
-# limit sits about 5% above.
+# limit sits about 5% above. The same pair with each class reading both
+# names before its own defs (`read`) keeps each extend's copy behind the own
+# def, and the record asks every call of the name whether it meets the
+# module's version (elab_version_met): it reads 2.29x to 2.33x, against
+# 2.26x before those questions, so it takes the same limit.
 MODULE_FUNCTIONS_LIMIT ?= 2.4
+# N classes that each extend one module, read its method in the body and
+# then define it on their own singleton (test/scale/shadowed_extends.sh), at
+# N=400 and N=800: the work of that program less the work of the same
+# classes extending nothing and reading no method (`plain`), which is what
+# the extends, their copies and the shadowing questions cost. A question
+# that read every call of the name (elab_version_met before its readers
+# were filed by the classes their self may be, lr_readers) read 2.52x at 2x
+# the classes; filed, 2.21x, as the copies alone read without the
+# questions. The limit sits between them.
+SHADOWED_EXTENDS_LIMIT ?= 2.35
 # A chain of forty bangs over a String a method answers, compiled to C with
 # --share-strings under a CPU-time limit, as the hash-literal fan-out is:
 # strbuf_bang_self_local asked each link once per path that reaches it,
@@ -6186,6 +6220,17 @@ scale-test: $(SPINEL_WORK)
 	jib=$$(sw -c -o "$$tmp/jf2.c" "$$tmp/jf2.rb") || { rm -rf "$$tmp"; exit 1; }; \
 	jga=$$(sw --load-model=graph -c -o "$$tmp/jf1.c" "$$tmp/jf1.rb") || { rm -rf "$$tmp"; exit 1; }; \
 	jgb=$$(sw --load-model=graph -c -o "$$tmp/jf2.c" "$$tmp/jf2.rb") || { rm -rf "$$tmp"; exit 1; }; \
+	gen shadowed_extends 400 se4.rb; gen shadowed_extends 800 se8.rb; \
+	gen shadowed_extends "400 plain" sp4.rb; gen shadowed_extends "800 plain" sp8.rb; \
+	sea=$$(sw -c -o "$$tmp/se4.c" "$$tmp/se4.rb") || { rm -rf "$$tmp"; exit 1; }; \
+	seb=$$(sw -c -o "$$tmp/se8.c" "$$tmp/se8.rb") || { rm -rf "$$tmp"; exit 1; }; \
+	spa=$$(sw -c -o "$$tmp/sp4.c" "$$tmp/sp4.rb") || { rm -rf "$$tmp"; exit 1; }; \
+	spb=$$(sw -c -o "$$tmp/sp8.c" "$$tmp/sp8.rb") || { rm -rf "$$tmp"; exit 1; }; \
+	gen module_functions "100 read" jr1.rb; gen module_functions "200 read" jr2.rb; \
+	jra=$$(sw -c -o "$$tmp/jr1.c" "$$tmp/jr1.rb") || { rm -rf "$$tmp"; exit 1; }; \
+	jrb=$$(sw -c -o "$$tmp/jr2.c" "$$tmp/jr2.rb") || { rm -rf "$$tmp"; exit 1; }; \
+	jha=$$(sw --load-model=graph -c -o "$$tmp/jr1.c" "$$tmp/jr1.rb") || { rm -rf "$$tmp"; exit 1; }; \
+	jhb=$$(sw --load-model=graph -c -o "$$tmp/jr2.c" "$$tmp/jr2.rb") || { rm -rf "$$tmp"; exit 1; }; \
 	cpu () { b=; for i in 1 2 3; do \
 	  o=$$( ( $(SPINEL_WORK) -c -o "$$tmp/qt.c" "$$tmp/$$1" >/dev/null 2>&1 || exit 1; times ) ) || \
 	    { echo "scale-test: FAIL (spinel-work failed on $$1)" >&2; return 1; }; \
@@ -6201,7 +6246,9 @@ scale-test: $(SPINEL_WORK)
 	   [ -z "$$xa" ] || [ -z "$$xb" ] || [ -z "$$ma" ] || [ -z "$$mb" ] || [ -z "$$oa" ] || [ -z "$$ob" ] || [ -z "$$qa" ] || [ -z "$$qb" ] || \
 	   [ -z "$$yna" ] || [ -z "$$ynb" ] || [ -z "$$yta" ] || [ -z "$$ytb" ] || \
 	   [ -z "$$uda" ] || [ -z "$$udb" ] || [ -z "$$sba" ] || [ -z "$$sbb" ] || \
-	   [ -z "$$jia" ] || [ -z "$$jib" ] || [ -z "$$jga" ] || [ -z "$$jgb" ]; then \
+	   [ -z "$$jia" ] || [ -z "$$jib" ] || [ -z "$$jga" ] || [ -z "$$jgb" ] || \
+	   [ -z "$$jra" ] || [ -z "$$jrb" ] || [ -z "$$jha" ] || [ -z "$$jhb" ] || \
+	   [ -z "$$sea" ] || [ -z "$$seb" ] || [ -z "$$spa" ] || [ -z "$$spb" ]; then \
 	  echo "scale-test: FAIL (the counting compiler reported no work count)"; exit 1; fi; \
 	awk -v a="$$ha" -v b="$$hb" 'BEGIN { r = b / a; \
 	  printf "scale-test: boxed Hash store work at 2x the methods is %.2fx (limit 2.20)\n", r; exit (r > 2.20) }' || \
@@ -6268,6 +6315,17 @@ scale-test: $(SPINEL_WORK)
 	awk -v a="$$jga" -v b="$$jgb" -v lim="$(MODULE_FUNCTIONS_LIMIT)" 'BEGIN { r = b / a; \
 	  printf "scale-test: module function work at 2x the modules, under graph, is %.2fx (limit %.2f)\n", r, lim; exit (r > lim) }' || \
 	  { echo "scale-test: FAIL (a module function's copy or its mapping to the def grew superlinearly under graph: see ct_def_version and mf_copy_entries)"; exit 1; }; \
+	awk -v a="$$jra" -v b="$$jrb" -v lim="$(MODULE_FUNCTIONS_LIMIT)" 'BEGIN { r = b / a; \
+	  printf "scale-test: kept extend copy work at 2x the modules is %.2fx (limit %.2f)\n", r, lim; exit (r > lim) }' || \
+	  { echo "scale-test: FAIL (the calls that meet an extend's version were asked superlinearly: see elab_version_met)"; exit 1; }; \
+	awk -v a="$$jha" -v b="$$jhb" -v lim="$(MODULE_FUNCTIONS_LIMIT)" 'BEGIN { r = b / a; \
+	  printf "scale-test: kept extend copy work at 2x the modules, under graph, is %.2fx (limit %.2f)\n", r, lim; exit (r > lim) }' || \
+	  { echo "scale-test: FAIL (the calls that meet an extend's version were asked superlinearly under graph: see elab_version_met)"; exit 1; }; \
+	awk -v na="$$sea" -v nb="$$seb" -v ta="$$spa" -v tb="$$spb" -v lim="$(SHADOWED_EXTENDS_LIMIT)" 'BEGIN { a = na - ta; b = nb - tb; \
+	  if (a <= 0 || b <= 0) { printf "scale-test: FAIL (the shadowing classes cost no more than the plain ones, %d - %d and %d - %d: the difference measures nothing; see test/scale/shadowed_extends.sh)\n", na, ta, nb, tb; exit 2 } \
+	  r = b / a; \
+	  printf "scale-test: shadowed extend work at 2x the classes is %.2fx (limit %.2f)\n", r, lim; exit (r > lim) }' || \
+	  { [ $$? -eq 2 ] || echo "scale-test: FAIL (each shadowing question read every call of the name: see lr_readers)"; exit 1; }; \
 	awk -v a="$$qta" -v b="$$qtb" -v lim="$(COND_DEFS_CPU_LIMIT)" 'BEGIN { if (a <= 0) a = 0.01; r = b / a; \
 	  printf "scale-test: open method history CPU time at 4x the histories is %.2fx (limit %.2f)\n", r, lim; exit (r > lim) }' || \
 	  { echo "scale-test: FAIL (the open histories' asks or makes did work the count does not see once per history, such as a whole-program map: see ver_entries_build)"; exit 1; }

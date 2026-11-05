@@ -726,7 +726,7 @@ sp_int sp_ssl_discard(sp_int h) {
 /* ---------- EC over the named prime curves ----------
 
    The shape is the one #4221 settled on: one-shot functions over raw bytes.
-   No BN, EC::Group or EC::Point is built on the Ruby side, and -- unlike the
+   No BN or EC::Point is built on the Ruby side, and -- unlike the
    connection table above -- nothing here outlives a call. An EC key is fully
    described by its two byte strings (the private scalar and the uncompressed
    point), so Ruby holds those and hands them back, rather than holding a
@@ -814,6 +814,65 @@ static EC_POINT *sp_ec_peer(const EC_GROUP *g, const char *pub, int flen) {
   }
   return p;
 }
+
+const char *sp_ec_curve_name(const char *curve, sp_int aliases) {
+  int flen = 0;
+  /* EC keys accept OBJ_txt2nid spellings; Group.new accepts short names. */
+  EC_GROUP *group = aliases ? sp_ec_group(curve, &flen) : EC_GROUP_new_by_curve_name(OBJ_sn2nid(curve));
+  const char *name = group ? OBJ_nid2sn(EC_GROUP_get_curve_name(group)) : NULL;
+  if (!group) ERR_clear_error();
+  EC_GROUP_free(group);
+  return name ? name : "";
+}
+
+static SP_TLS sp_x509_out sp_ec_export_out;
+
+/* SPKI public DER, PKCS#8 private DER or PEM. EC_KEY is confined to the
+   same compatibility boundary as ECDSA below (OpenSSL 1.1.0 through 3.x). */
+#if defined(__GNUC__) || defined(__clang__)
+# pragma GCC diagnostic push
+# pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+#endif
+const char *sp_ec_export(const char *curve, const char *priv, const char *pub,
+                       sp_int format, sp_int point_form, sp_int encoding_flags) {
+  int flen = 0, ok = 0;
+  EC_GROUP *group = sp_ec_group(curve, &flen);
+  EC_POINT *point = group ? sp_ec_peer(group, pub, flen) : NULL;
+  BIGNUM *scalar = group && format ? sp_ec_scalar(group, priv, flen) : NULL;
+  EC_KEY *ec = EC_KEY_new();
+  EVP_PKEY *key = EVP_PKEY_new();
+  BIO *bio = BIO_new(BIO_s_mem());
+  char *data = NULL;
+  long length = 0;
+  sp_ssl_errbuf[0] = 0;
+  if (format >= 0 && format <= 2 && ec && key && bio && group && point &&
+      (!format || scalar) && EC_KEY_set_group(ec, group) && EC_KEY_set_public_key(ec, point) &&
+      (!format || EC_KEY_set_private_key(ec, scalar)) && EC_KEY_check_key(ec)) {
+    EC_KEY_set_asn1_flag(ec, OPENSSL_EC_NAMED_CURVE);
+    EC_KEY_set_conv_form(ec, (point_conversion_form_t)point_form);
+    EC_KEY_set_enc_flags(ec, (unsigned)encoding_flags);
+    if (!EVP_PKEY_set1_EC_KEY(key, ec)) goto done;
+    if (format == 0) ok = i2d_PUBKEY_bio(bio, key);
+    else if (format == 1) ok = i2d_PKCS8PrivateKey_bio(bio, key, NULL, NULL, 0, NULL, NULL);
+    else ok = PEM_write_bio_PKCS8PrivateKey(bio, key, NULL, NULL, 0, NULL, NULL);
+    length = BIO_get_mem_data(bio, &data);
+    ok = ok && length > 0 && length <= INT_MAX && sp_x509_room(&sp_ec_export_out, (size_t)length);
+    if (ok) memcpy(sp_ec_export_out.p, data, (size_t)length);
+  }
+done:
+  BIO_free(bio);
+  EVP_PKEY_free(key);
+  EC_KEY_free(ec);
+  BN_clear_free(scalar);
+  EC_POINT_free(point);
+  EC_GROUP_free(group);
+  if (!ok) return sp_ec_fail("EC key export failed");
+  sp_ffi_bin_len = (int)length;
+  return sp_ec_export_out.p;
+}
+#if defined(__GNUC__) || defined(__clang__)
+# pragma GCC diagnostic pop
+#endif
 
 /* A fresh private scalar, uniform in [1, n-1]. BN_rand_range draws from the
    same CSPRNG the rest of libcrypto uses; the retry is for the zero it can
@@ -1071,30 +1130,31 @@ const char *sp_aes_gcm_decrypt(const char *name, const char *key, const char *iv
    Everything either side of that call is current: ECDSA_SIG_get0 and
    BN_bn2binpad are not deprecated in 3.x and are present at 1.1.0.
 
-   Signatures cross the boundary as raw r || s, two field-width integers, and
-   never as DER. ES256 (RFC 7518) names that encoding, and it is the one place
+   sign_raw signatures cross the boundary as raw r || s, two field-width integers.
+   dsa_sign_asn1 uses DER instead. ES256 (RFC 7518) names the raw encoding, and it is the one place
    the two shapes are silently interchangeable: a DER signature is a
    well-formed String that every JWT verifier rejects, so handing one out
    would fail remotely, in someone else's stack, long after the call. The
    conversion is here rather than in each caller for exactly that reason. */
 
-static SP_TLS char sp_ecdsa_sig_buf[2 * SP_EC_MAX_FIELD];
+static SP_TLS char sp_ecdsa_sig_buf[2 * SP_EC_MAX_FIELD + 10];
 
 /* Sign a digest that has already been computed: ECDSA signs a hash, and which
    hash is the caller's business (SHA-256 for ES256). A digest longer than the
    curve's order is truncated by the standard, which is OpenSSL's behaviour and
    not something to reimplement here. */
-const char *sp_ecdsa_sign(const char *curve, const char *priv, const char *digest) {
+const char *sp_ecdsa_sign(const char *curve, const char *priv, const char *digest, sp_int der) {
   int flen = 0;
   EC_GROUP *g = sp_ec_group(curve, &flen);
   BIGNUM *d = NULL;
   EC_KEY *k = NULL;
   ECDSA_SIG *sig = NULL;
   const BIGNUM *r, *s;
-  int ok = 0;
+  int ok = 0, length = 2 * flen;
 
   sp_ssl_errbuf[0] = 0;
   if (!g) return sp_ec_fail("unknown or unsupported curve");
+  if (sp_str_byte_len(digest) > INT_MAX) { EC_GROUP_free(g); return sp_ec_fail("digest too long"); }
   if (!(d = sp_ec_scalar(g, priv, flen))) {
     EC_GROUP_free(g);
     return sp_ec_fail("private key is not a scalar on this curve");
@@ -1117,24 +1177,29 @@ const char *sp_ecdsa_sign(const char *curve, const char *priv, const char *diges
 #endif
 
   if (sig) {
-    ECDSA_SIG_get0(sig, &r, &s);
-    ok = BN_bn2binpad(r, (unsigned char *)sp_ecdsa_sig_buf, flen) == flen &&
-         BN_bn2binpad(s, (unsigned char *)sp_ecdsa_sig_buf + flen, flen) == flen;
+    if (der) {
+      unsigned char *out = (unsigned char *)sp_ecdsa_sig_buf;
+      length = i2d_ECDSA_SIG(sig, NULL);
+      ok = length > 0 && (size_t)length <= sizeof sp_ecdsa_sig_buf && i2d_ECDSA_SIG(sig, &out) == length;
+    } else {
+      ECDSA_SIG_get0(sig, &r, &s);
+      ok = BN_bn2binpad(r, (unsigned char *)sp_ecdsa_sig_buf, flen) == flen &&
+           BN_bn2binpad(s, (unsigned char *)sp_ecdsa_sig_buf + flen, flen) == flen;
+    }
     ECDSA_SIG_free(sig);
   }
   BN_clear_free(d);
   EC_GROUP_free(g);
   if (!ok) return sp_ec_fail("ECDSA signing failed");
-  sp_ffi_bin_len = 2 * flen;
+  sp_ffi_bin_len = length;
   return sp_ecdsa_sig_buf;
 }
 
-/* Verify raw r || s against a public point. Answers 1 only for a signature
-   that verifies: a malformed signature, a point that is not on the curve and
-   a mismatch are all 0, because a caller asking "is this signature good"
-   must not be able to read "the input was strange" as yes. */
+/* Verify raw r || s or DER against a public point. Only 1 verifies; 0 is a
+   mismatch, and a DER decode or verification error returns -1 so Ruby can
+   raise. None of those failures may leave errors queued for another call. */
 sp_int sp_ecdsa_verify(const char *curve, const char *pub, const char *digest,
-                       const char *sig_bytes) {
+                       const char *sig_bytes, sp_int der) {
   int flen = 0;
   EC_GROUP *g = sp_ec_group(curve, &flen);
   EC_POINT *pt = NULL;
@@ -1145,7 +1210,13 @@ sp_int sp_ecdsa_verify(const char *curve, const char *pub, const char *digest,
 
   sp_ssl_errbuf[0] = 0;
   if (!g) { sp_ssl_note("unknown or unsupported curve"); return 0; }
-  if (sp_str_byte_len(sig_bytes) != (size_t)(2 * flen)) {
+  if (sp_str_byte_len(digest) > INT_MAX || sp_str_byte_len(sig_bytes) > INT_MAX) {
+    EC_GROUP_free(g);
+    ERR_clear_error();
+    sp_ssl_note(der ? "invalid DER signature" : "signature did not verify");
+    return der ? -1 : 0;
+  }
+  if (!der && sp_str_byte_len(sig_bytes) != (size_t)(2 * flen)) {
     sp_ssl_note("signature must be r || s, two field-width integers");
     EC_GROUP_free(g);
     return 0;
@@ -1158,18 +1229,23 @@ sp_int sp_ecdsa_verify(const char *curve, const char *pub, const char *digest,
 
   /* ECDSA_SIG_set0 takes ownership of both BIGNUMs on success, so they are
      freed through the signature and not again here. */
-  r = BN_bin2bn((const unsigned char *)sig_bytes, flen, NULL);
-  s = BN_bin2bn((const unsigned char *)sig_bytes + flen, flen, NULL);
-  sig = ECDSA_SIG_new();
-  if (r && s && sig && ECDSA_SIG_set0(sig, r, s)) {
-    r = NULL; s = NULL;
+  if (!der) {
+    r = BN_bin2bn((const unsigned char *)sig_bytes, flen, NULL);
+    s = BN_bin2bn((const unsigned char *)sig_bytes + flen, flen, NULL);
+    sig = ECDSA_SIG_new();
+    if (r && s && sig && ECDSA_SIG_set0(sig, r, s)) { r = NULL; s = NULL; }
+    else { ECDSA_SIG_free(sig); sig = NULL; }
+  }
+  if (der || sig) {
 #if defined(__GNUC__) || defined(__clang__)
 # pragma GCC diagnostic push
 # pragma GCC diagnostic ignored "-Wdeprecated-declarations"
 #endif
     if ((k = EC_KEY_new()) && EC_KEY_set_group(k, g) && EC_KEY_set_public_key(k, pt))
-      rc = ECDSA_do_verify((const unsigned char *)digest,
-                           (int)sp_str_byte_len(digest), sig, k) == 1;
+      /* ECDSA_verify checks the complete canonical DER, including its end. */
+      rc = der ? ECDSA_verify(0, (const unsigned char *)digest, (int)sp_str_byte_len(digest),
+                             (const unsigned char *)sig_bytes, (int)sp_str_byte_len(sig_bytes), k)
+               : ECDSA_do_verify((const unsigned char *)digest, (int)sp_str_byte_len(digest), sig, k) == 1;
     if (k) EC_KEY_free(k);
 #if defined(__GNUC__) || defined(__clang__)
 # pragma GCC diagnostic pop
@@ -1181,8 +1257,36 @@ sp_int sp_ecdsa_verify(const char *curve, const char *pub, const char *digest,
   BN_free(s);
   EC_POINT_free(pt);
   EC_GROUP_free(g);
-  if (!rc) sp_ssl_note("signature did not verify");
+  if (rc < 0) {
+    ERR_clear_error();
+    sp_ssl_note("invalid DER signature");
+  }
+  else if (!rc) sp_ssl_note("signature did not verify");
   return rc;
+}
+
+/* Ed25519 is present from OpenSSL 1.1.1. Older supported libraries report
+   the missing algorithm without referring to an API they cannot link. */
+const char *sp_ed25519_sign(const char *seed, const char *data) {
+#if defined(EVP_PKEY_ED25519)
+  static SP_TLS unsigned char signature[64];
+  EVP_PKEY *key;
+  EVP_MD_CTX *ctx = EVP_MD_CTX_new();
+  size_t length = sizeof signature;
+  int ok;
+  sp_ssl_errbuf[0] = 0;
+  key = seed && sp_str_byte_len(seed) == 32 ?
+    EVP_PKEY_new_raw_private_key(EVP_PKEY_ED25519, NULL, (const unsigned char *)seed, 32) : NULL;
+  ok = key && ctx && EVP_DigestSignInit(ctx, NULL, NULL, NULL, key) == 1 &&
+       EVP_DigestSign(ctx, signature, &length, (const unsigned char *)data, sp_str_byte_len(data)) == 1;
+  EVP_MD_CTX_free(ctx);
+  EVP_PKEY_free(key);
+  if (!ok || length != sizeof signature) return sp_ec_fail("Ed25519 signing failed");
+  sp_ffi_bin_len = (int)length;
+  return (const char *)signature;
+#else
+  return sp_ec_fail("Ed25519 is unavailable in the linked OpenSSL");
+#endif
 }
 
 /* Is this a usable public key on this curve? The same test sp_ec_dh makes
@@ -1206,12 +1310,13 @@ sp_int sp_ec_check_point(const char *curve, const char *pub) {
    The key is parsed here, where it crosses the boundary, and what comes back
    is what the Ruby key is made of. For an EC key that is the curve's name and
    the key's bytes: one byte for the half it carries (1 private, 0 public),
-   one for the length of the curve's name, the name, and then the private
-   scalar, field-width, or the public point in uncompressed form. An RSA key
+   one for the length of the curve's name, one for its point-conversion form,
+   one for its SEC1 encoding flags, the name, and then the private scalar,
+   field-width, or the public point in uncompressed form. An RSA key
    answers as sp_pkey_rsa_answer lays it out. openssl/pkey.rb builds the key
    from those, so a key read here is the same object as one built from
    bytes. */
-static SP_TLS char sp_pkey_read_buf[2 + 64 + SP_EC_MAX_POINT];
+static SP_TLS char sp_pkey_read_buf[4 + 64 + SP_EC_MAX_POINT];
 
 /* No passphrase is ever supplied. OpenSSL's default callback would prompt on
    the terminal for an encrypted PEM; this makes that PEM a key that does not
@@ -1372,13 +1477,26 @@ static const char *sp_pkey_kind(int id) {
   }
 }
 
+/* A provider-backed key's legacy EC_KEY copy may normalize its point form.
+   Read the flag from its SPKI instead, through APIs also present in 1.1.0. */
+static int sp_pkey_point_form(EVP_PKEY *key) {
+  X509_PUBKEY *spki = NULL;
+  const unsigned char *point = NULL;
+  int length = 0, form = 0;
+  if (X509_PUBKEY_set(&spki, key) &&
+      X509_PUBKEY_get0_param(NULL, &point, &length, NULL, spki) && length > 0)
+    form = point[0] & ~1;
+  X509_PUBKEY_free(spki);
+  return form;
+}
+
 const char *sp_pkey_read(const char *data) {
   unsigned char *out = (unsigned char *)sp_pkey_read_buf;
   const EC_KEY *ec;
   const EC_GROUP *g = NULL;
   const char *curve = NULL;
   size_t clen = 0, n = 0;
-  int priv = 0, flen = 0, nid = NID_undef;
+  int priv = 0, flen = 0, nid = NID_undef, point_form = 0;
   EVP_PKEY *k;
 
   sp_ssl_errbuf[0] = 0;
@@ -1417,20 +1535,22 @@ const char *sp_pkey_read(const char *data) {
     flen = (EC_GROUP_get_degree(g) + 7) / 8;
     if (flen <= 0 || flen > SP_EC_MAX_FIELD) curve = NULL;
   }
-  if (curve) {
+  if (curve && (point_form = sp_pkey_point_form(k))) {
     out[0] = (unsigned char)priv;
     out[1] = (unsigned char)clen;
-    memcpy(out + 2, curve, clen);
+    out[2] = (unsigned char)point_form;
+    out[3] = (unsigned char)(EC_KEY_get_enc_flags(ec) & EC_PKEY_NO_PUBKEY);
+    memcpy(out + 4, curve, clen);
     if (priv) {
       const BIGNUM *d = EC_KEY_get0_private_key(ec);
-      if (d && BN_bn2binpad(d, out + 2 + clen, flen) == flen) n = 2 + clen + (size_t)flen;
+      if (d && BN_bn2binpad(d, out + 4 + clen, flen) == flen) n = 4 + clen + (size_t)flen;
     }
     else {
       const EC_POINT *q = EC_KEY_get0_public_key(ec);
       size_t want = (size_t)(1 + 2 * flen);
       if (q && EC_POINT_point2oct(g, q, POINT_CONVERSION_UNCOMPRESSED,
-                                  out + 2 + clen, want, NULL) == want)
-        n = 2 + clen + want;
+                                  out + 4 + clen, want, NULL) == want)
+        n = 4 + clen + want;
     }
   }
 #if defined(__GNUC__) || defined(__clang__)

@@ -1579,6 +1579,18 @@ void compute_reachable(Compiler *c, int typed) {
      which likewise has no call site of its own in the AST. */
   if (sp_feature_required("json")) {
     MARK_NAME("to_json");
+    /* A live JSON parser's options may convert max_nesting through #to_int. */
+    NT_FOREACH_KIND(c->nt, NK_CallNode, id) {
+      int scope = c->nscope[id], argc = 0, args = nt_ref(c->nt, id, "arguments");
+      const char *name = nt_str(c->nt, id, "name");
+      if (scope >= 0 && !c->scopes[scope].reachable) continue;
+      int recv = nt_ref(c->nt, id, "receiver");
+      NodeKind kind = recv >= 0 ? nt_kind(c->nt, recv) : NK_NONE;
+      if (kind != NK_ConstantReadNode && !(kind == NK_ConstantPathNode && nt_ref(c->nt, recv, "parent") < 0)) continue;
+      const char *receiver = nt_str(c->nt, recv, "name");
+      if (args >= 0) nt_arr(c->nt, args, "arguments", &argc);
+      if (argc > 1 && name && sp_streq(name, "parse") && receiver && sp_streq(receiver, "JSON")) MARK_NAME("to_int");
+    }
     while (qhead < qtail) { int s = queue[qhead++]; for (int ni = 0; ni < sc_n[s]; ni++) MARK_NAME(scope_calls[s][ni]); cr_live_scope(&lv, s, scope_calls[s], sc_n[s]); }
   }
 
@@ -3655,6 +3667,43 @@ static void desugar_dyn_parent_class_leaf(Compiler *c) {
         if (!nst) { top = path; continue; }
         arms_c[na] = path; arms_h[na] = h; arms_k[na] = ci->enclosing_class; na++;
       }
+    /* a holder whose Foo is a constant, not a class (`module Ext; Foo = 5`
+       or `Foo = Real`), answers that constant: CRuby looks constants up by
+       name, whatever they hold. (One the class arms already have is left
+       alone.) */
+    { for (int k = 0; k < c->nclasses && na < 63; k++) {
+        if (!c->classes[k].name) continue;
+        /* the holder's leaves, outermost last (its own name and those of
+           the classes it is written in, as class_ruby_name would give them,
+           which this early pass must not ask) */
+        const char *lv[16]; int nl = 0, deep = 0;
+        for (int e = k; e >= 0 && e < c->nclasses; e = c->classes[e].enclosing_class) {
+          const char *leaf = c->classes[e].name;
+          if (!leaf || nl == 16) { deep = 1; break; }
+          if (c->classes[e].enclosing_class >= 0) for (const char *q = leaf; (q = strstr(q, "__")) != NULL; q += 2) leaf = q + 2;
+          lv[nl++] = leaf;
+        }
+        if (deep || nl == 0) continue;
+        /* the constant keyed by the holder's whole path, `A__M__Foo`: a
+           match on the key's tail would give a top-level M the Foo of A::M */
+        char key[600] = "", hn[600] = "";
+        for (int i = nl - 1; i >= 0; i--) {
+          size_t l = strlen(key); snprintf(key + l, sizeof key - l, "%s__", lv[i]);
+          l = strlen(hn); snprintf(hn + l, sizeof hn - l, "%s%s", lv[i], i ? "::" : "");
+        }
+        { size_t l = strlen(key); snprintf(key + l, sizeof key - l, "%s", nm); }
+        if (!comp_const(c, key)) continue;
+        int dup = 0;
+        for (int i = 0; i < na; i++) if (arms_k[i] == k) dup = 1;
+        if (dup) continue;
+        arms_c[na] = te_const(nt, key); arms_h[na] = te_const(nt, c->classes[k].name);
+        /* (a NameError before the write runs names the holder, `Ext::Foo`) */
+        nt_node_set_str(nt, arms_c[na], "const_cref", hn);
+        arms_k[na] = k; na++;
+      }
+      /* (and Object's own, a top-level `Foo = 5`) */
+      if (top < 0 && comp_const(c, nm)) top = te_const(nt, nm);
+    }
     /* a holder another holder reaches (Kid < Base, a module including
        another) is tested first: CRuby finds the nearest ancestor's Foo */
     for (int i = 0; i < na; i++)
@@ -6439,16 +6488,42 @@ static int qc_enclosing_body(const NodeTable *nt, const int *par, int n) {
   }
   return -1;
 }
-/* Does header hd run whenever statements st run? Only a statements list,
-   a begin's main body or ensure, and parentheses may lie between them;
-   an if, a loop, a rescue or a block may not run. */
-static int qc_runs_with(const NodeTable *nt, const int *par, int hd, int st) {
+/* Is statements st inside the body of a begin with a rescue, or under a
+   rescue modifier, anywhere up to the file's top level? A raise between two
+   statements of st can then skip the rest of st while the program goes on. */
+static int qc_rescue_above(const NodeTable *nt, const int *par, int st) {
+  int ch = st;
+  for (int p = par[st]; p >= 0; ch = p, p = par[p]) {
+    NodeKind k = nt_kind(nt, p);
+    if (k == NK_BeginNode && nt_ref(nt, p, "statements") == ch && nt_ref(nt, p, "rescue_clause") >= 0) return 1;
+    if (k == NK_RescueModifierNode && nt_ref(nt, p, "expression") == ch) return 1;
+  }
+  return 0;
+}
+/* Does statement b come right after statement a in list st? */
+static int qc_adjacent(const NodeTable *nt, int st, int a, int b) {
+  int n = 0; const int *body = nt_arr(nt, st, "body", &n);
+  for (int i = 0; i + 1 < n; i++)
+    if (body[i] == a && body[i + 1] == b) return 1;
+  return 0;
+}
+/* Does header hd run whenever statements st run? w, when not -1, is the
+   statement of st that holds the builder write. Only a statements list, the main body of a begin
+   without rescue, a begin's ensure, and parentheses may lie between them;
+   an if, a loop, a rescue or a block may not run, and a rescue can skip
+   the rest of its begin's body. A rescue around st itself can skip the
+   header too, unless the header is the statement right after w. */
+static int qc_runs_with(const NodeTable *nt, const int *par, int hd, int st, int w) {
   int ch = hd;
   for (int p = par[hd]; p >= 0; ch = p, p = par[p]) {
-    if (p == st) return 1;
+    /* (a header right after the builder: no statement between can raise,
+       and a raise in the builder skips the header too) */
+    if (p == st) return (ch == hd && w >= 0 && qc_adjacent(nt, st, w, hd)) || !qc_rescue_above(nt, par, st);
     NodeKind k = nt_kind(nt, p);
     if (k == NK_StatementsNode || k == NK_EnsureNode || k == NK_ParenthesesNode) continue;
-    if (k == NK_BeginNode && nt_ref(nt, p, "statements") == ch) continue;
+    if (k == NK_BeginNode && nt_ref(nt, p, "statements") == ch &&
+        nt_ref(nt, p, "rescue_clause") < 0) continue;
+    if (k == NK_BeginNode && nt_ref(nt, p, "ensure_clause") == ch) continue;
     return 0;
   }
   return 0;
@@ -6467,7 +6542,7 @@ static int qc_unless_defined_runs(const NodeTable *nt, const int *par, int w, in
       !sp_streq(nt_str(nt, dv, "name"), wn))
     return 0;
   int cs = par[cond];
-  if (cs < 0 || nt_kind(nt, cs) != NK_StatementsNode || !qc_runs_with(nt, par, hd, cs) ||
+  if (cs < 0 || nt_kind(nt, cs) != NK_StatementsNode || !qc_runs_with(nt, par, hd, cs, cond) ||
       !qc_written_before(nt, w, hd))
     return 0;
   NT_FOREACH_KIND(nt, NK_ConstantWriteNode, o) {
@@ -6515,7 +6590,7 @@ static void qc_refuse_conditional_builder(Compiler *c) {
         if (cp < 0 || nt_kind(nt, cp) != NK_ConstantReadNode || !nt_str(nt, cp, "name") ||
             !sp_streq(nt_str(nt, cp, "name"), wn) || qc_enclosing_body(nt, par, hd) != body)
           continue;
-        if (st >= 0 && qc_runs_with(nt, par, hd, st)) continue;
+        if (st >= 0 && qc_runs_with(nt, par, hd, st, w)) continue;
         int cond = st >= 0 ? par[st] : -1;
         if (cond >= 0 && qc_unless_defined_runs(nt, par, w, cond, hd, body, wn)) continue;
         char msg[512];
@@ -10828,6 +10903,10 @@ static int desugar_builtin_method_obj(Compiler *c) {
       nt_node_set_ref(nt, kdef, "parameters", kparams);
       nt_node_set_ref(nt, kdef, "body", kbody);
       nt_node_set_str(nt, kdef, "bam_sym", ksym);   /* the Method's name */
+      /* its #owner, Kernel's (a class's const_get is Module's, which the
+         facts do not list) */
+      const char *kown = kcls < 0 ? builtin_function_owner(ksym) : NULL;
+      if (kown) nt_node_set_str(nt, kdef, "bam_owner", kown);
       Scope *kws = comp_scope_new(c, kwname, kdef);
       { kws->class_id = -1; comp_touch_scope(kws->idx); }
       { kws->body = kbody; comp_touch_scope(kws->idx); }
@@ -10865,19 +10944,28 @@ static int desugar_builtin_method_obj(Compiler *c) {
        wrapper whose body `__bam_r.attr` (or `__bam_r.attr = __bam_a`) inlines
        the accessor -- a writer takes the binop-style 2-param shape. A real def
        is already handled via the resolved-target path (#3110 follow-up). */
+    int accessor = 0;     /* the wrapper stands for an accessor */
+    int attr_decl = -1;   /* the attr_* call an accessor's wrapper stands for */
+    int owner_ci = -1;    /* the class declaring it, its Method's #owner */
     if (ty_is_object(rt)) {
       int ocid = ty_object_class(rt);
       int obj_accessor = 0;
       if (ocid >= 0 && comp_method_in_chain(c, ocid, sym, NULL) < 0) {
         char basew[256];
         if (setter_base_name(sym, basew, sizeof basew)) {
-          if (comp_writer_in_chain(c, ocid, basew, NULL)) { obj_accessor = 1; binop = 1; }
+          if (comp_writer_in_chain(c, ocid, basew, &owner_ci)) { obj_accessor = 1; binop = 1; }
         }
-        else if (comp_reader_in_chain(c, ocid, sym, NULL)) {
+        else if (comp_reader_in_chain(c, ocid, sym, &owner_ci)) {
           obj_accessor = 1;
         }
       }
       if (!obj_accessor) continue;                    /* real def / non-accessor: handled elsewhere */
+      accessor = 1;
+      attr_decl = elab_accessor_node(c, ocid, sym);
+      /* (a subclass's accessor lists hold its ancestors' too: the attr_*
+         call's own body names the class that declares it; a Struct's
+         member has no such call) */
+      if (attr_decl >= 0 && c->node_cbody[attr_decl] >= 0) owner_ci = c->node_cbody[attr_decl];
     }
     else if (rt == TY_UNKNOWN || rt == TY_VOID || rt == TY_NIL ||
              rt == TY_CLASS || rt == TY_METHOD || rt == TY_PROC)
@@ -10898,6 +10986,7 @@ static int desugar_builtin_method_obj(Compiler *c) {
     int cmp_only = 0;   /* a Comparable method the class does not define itself */
     int num_only = 0;   /* a Numeric method Integer or Float inherits */
     int sym_arity = 0, have_arity = 0;   /* the builtin's Method#arity */
+    const char *owner_name = NULL;   /* the builtin's class or module, its Method's #owner */
     /* an undefined name must reach codegen's immediate NameError, not become
        a wrapper whose body call aborts the build (#2752) */
     {
@@ -10918,6 +11007,9 @@ static int desugar_builtin_method_obj(Compiler *c) {
         continue;
       cmp_only = bcls && !builtin_method_known(bcls, sym) && builtin_comparable_owns(bcls, sym);
       num_only = bcls && !builtin_method_known(bcls, sym) && builtin_numeric_owns(bcls, sym);
+      /* (a true's or false's own method is TrueClass's or FalseClass's,
+         which no single name answers) */
+      owner_name = rt == TY_BOOL ? NULL : builtin_method_owner(bcls, sym);
       if (bcls && builtin_method_arity(bcls, sym, &sym_arity)) have_arity = 1;
       else if (cmp_only) { sym_arity = builtin_comparable_arity(sym); have_arity = 1; }
       else if (num_only && builtin_numeric_arity(sym, &sym_arity)) have_arity = 1;
@@ -10997,6 +11089,14 @@ static int desugar_builtin_method_obj(Compiler *c) {
        call is renamed ([] for slice) or rewritten (a splat dispatched on its
        length) */
     nt_node_set_str(nt, def, "bam_sym", sym);
+    /* an accessor's #source_location is its attr_* call's, a Struct
+       member's none (nil); a builtin's no fact gives: CRuby writes some in
+       C (nil) and some in Ruby (an `<internal:...>` pair, method_source_pos) */
+    if (accessor) nt_node_set_int(nt, def, "bam_accessor", 1);
+    if (attr_decl >= 0) nt_node_set_int(nt, def, "bam_src", attr_decl);
+    /* its #owner: the accessor's class, or the builtin's (bam_owner) */
+    if (owner_ci >= 0) nt_node_set_int(nt, def, "bam_owner_ci", owner_ci + 1);
+    else if (owner_name) nt_node_set_str(nt, def, "bam_owner", owner_name);
     /* its Method#arity is Comparable's, which a boxed self reads off the
        Method at run time (method_scope_arity) */
     if (cmp_only) nt_node_set_int(nt, def, "bam_cmp", 1);
@@ -11342,10 +11442,42 @@ int desugar_sym_to_proc_call_at(Compiler *c, LowerCtx *lc, int id) {
    method (not an operator) folds pairwise through that method. The operator
    symbols ride the typed/boxed fold emitters; rewrite the method-naming form
    into the equivalent block, which the block fold already serves. (#3125) */
+/* Does a class of the program define its own instance method nm
+   (reduce, inject), other than Enumerable's Ruby definition
+   (builtins/enumerable.rb)? */
+static int rms_program_defines(Compiler *c, const char *nm) {
+  const NodeTable *nt = c->nt;
+  NT_FOREACH_KIND(nt, NK_DefNode, d) {
+    const char *dn = nt_str(nt, d, "name");
+    if (!dn || !sp_streq(dn, nm) || nt_ref(nt, d, "receiver") >= 0) continue;
+    Scope *s = comp_scope_of(c, d);
+    int k = s ? s->class_id : -1;
+    const char *kn = k >= 0 ? c->classes[k].name : NULL;
+    if (kn && sp_streq(kn, "Enumerable")) continue;
+    return 1;
+  }
+  return 0;
+}
+/* Is the fold call id's receiver one whose reduce/inject is the builtin's:
+   an Array, a Hash, a Range, or an object of a class that defines no
+   method of the name itself (Enumerable's, builtins/enumerable.rb)? */
+static int rms_builtin_receiver(Compiler *c, int id, const char *nm) {
+  int recv = nt_ref(c->nt, id, "receiver");
+  if (recv < 0) return 0;
+  TyKind rt = infer_type(c, recv);
+  if (ty_is_array(rt) || ty_is_obj_array(rt) || ty_is_hash(rt) || rt == TY_RANGE || rt == TY_FLOAT_RANGE) return 1;
+  if (!ty_is_object(rt)) return 0;
+  int mi = comp_method_in_chain(c, ty_object_class(rt), nm, NULL);
+  return mi < 0 || (c->scopes[mi].name && !strncmp(c->scopes[mi].name, "__enum_", 7));
+}
 static int desugar_reduce_method_symbol(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int changed = 0;
   int n0 = nt->count;
+  /* a program class's own reduce / inject takes the Symbol as an argument,
+     and no block, as CRuby passes it (#11117): where the program defines
+     one, only a receiver known to take the builtin's is rewritten */
+  int own_reduce = -1, own_inject = -1;
   for (int id = 0; id < n0; id++) {
     NodeKind k = nt_kind(nt, id);
     if (k != NK_CallNode) continue;
@@ -11361,6 +11493,9 @@ static int desugar_reduce_method_symbol(Compiler *c) {
     /* only an identifier-named method: operators keep their fold emitters */
     if (!((sym[0] >= 'a' && sym[0] <= 'z') || (sym[0] >= 'A' && sym[0] <= 'Z') || sym[0] == '_'))
       continue;
+    int *own = sp_streq(nm, "reduce") ? &own_reduce : &own_inject;
+    if (*own < 0) *own = rms_program_defines(c, nm);
+    if (*own && !rms_builtin_receiver(c, id, nm)) continue;
     char pa[64], pb[64];
     snprintf(pa, sizeof pa, "__rms_a_%s", comp_node_tag(c, id));
     snprintf(pb, sizeof pb, "__rms_b_%s", comp_node_tag(c, id));
@@ -13582,7 +13717,7 @@ static int desugar_enum_named_call(Compiler *c, int id, NodeTable *nt, const cha
       return 1;
     }
   }
-  if (nm && sp_streq(nm, "step") && nt_ref(nt, id, "receiver") >= 0) {
+  if (nm && sp_streq(nm, "step") && nt_ref(nt, id, "receiver") >= 0 && !step_kw_own_method(c, id)) {
     /* Numeric#step keyword forms lower to the positional (limit, step):
        step(to: T, by: B) / step(by: B, to: T) / step(T, by: B), and the
        endless step(by: B), whose limit is nil. */
@@ -13604,7 +13739,7 @@ static int desugar_enum_named_call(Compiler *c, int id, NodeTable *nt, const cha
       }
       if (sac == 2 && to_v < 0) to_v = sav[0];   /* step(limit, by: B) */
       if (other && step_kw_unknown(c, nt, id, sargs)) { *changed = 1; return 1; }
-      if (!other && by_v >= 0 && (to_v >= 0 || sac == 1) && step_kw_numeric_recv(c, nt, id)) {
+      if (!other && by_v >= 0 && (to_v >= 0 || sac == 1)) {
         step_kw_positional(c, nt, id, sargs, to_v, by_v, by_first && sac == 1);
         *changed = 1;
         return 1;
@@ -39722,6 +39857,12 @@ int nullable_int_value(Compiler *c, int v) {
     if (cn && (is_reduce_alias(cn))) {
       int ft = call_block_tail(c, v);
       if (ft >= 0 && nullable_int_value(c, ft)) return 1;
+    }
+    /* so is then's, and instance_exec's and instance_eval's, which the
+       block's ivar read or write of the receiver's nil-able slot answers */
+    if (cn && (is_then_alias(cn) || sp_streq(cn, "instance_exec") || sp_streq(cn, "instance_eval"))) {
+      int ft = call_block_tail(c, v);
+      if (ft >= 0 && (nt_kind(nt, ft) == NK_NilNode || nullable_int_value(c, ft))) return 1;
     }
     if (rcv0 >= 0 && cn && (is_find_alias(cn)) &&
         nullable_int_elem_expr(c, rcv0, 0)) return 1;

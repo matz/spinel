@@ -4373,6 +4373,23 @@ static SP_NOINLINE SP_COLD SP_UNUSED void sp_frange_iter_raise(sp_FloatRange r, 
   if (to_a && (r.omitted & SP_FRANGE_NO_END)) sp_raise_cls("RangeError", "cannot convert endless range to an array");
   sp_raise_cls("TypeError", "can't iterate from Float");
 }
+/* Range#first(n) and Enumerable#take(n) convert and check the count before
+   they iterate, so a bad count is the error a Float Range raises */
+static SP_NOINLINE SP_COLD SP_UNUSED void sp_frange_count_raise(sp_FloatRange r, sp_RbVal n, int take) {
+  /* range_first refuses a beginless Range before it reads the count */
+  if (!take && (r.omitted & SP_FRANGE_NO_BEGIN)) sp_raise_cls("RangeError", "cannot get the first element of beginless range");
+  if (sp_poly_arg_int_chk(n) < 0)
+    sp_raise_cls("ArgumentError", take ? "attempt to take negative size" : "negative array size (or size too big)");
+  sp_frange_iter_raise(r, 0);
+}
+/* take(n) on a Float Range: [] for 0, which takes nothing, else the raise */
+static SP_UNUSED sp_RbVal sp_frange_take_v(sp_FloatRange r, sp_RbVal n) {
+  sp_int k = sp_poly_arg_int_chk(n);
+  if (k < 0) sp_raise_cls("ArgumentError", "attempt to take negative size");
+  if (k == 0) return sp_box_poly_array(sp_PolyArray_new());
+  sp_frange_iter_raise(r, 0);
+  return sp_box_nil();
+}
 /* #max(n) / #min(n): the n greatest or least members, which an open side
    has none of (RangeError) and a Float range cannot enumerate (TypeError) */
 static SP_NOINLINE SP_COLD SP_UNUSED void sp_frange_maxn_raise(sp_FloatRange r, sp_int n) {
@@ -6612,6 +6629,13 @@ static SP_INLINE sp_oint sp_poly_spaceship_body(sp_RbVal a, sp_RbVal b) {
   return sp_oint_nil();
 }
 static sp_oint sp_poly_spaceship(sp_RbVal a, sp_RbVal b) { return sp_poly_spaceship_body(a, b); }
+/* `a <=> b` read as a value: a program's <=> answering a Bignum is that
+   Bignum, which the sp_oint answer above cannot carry */
+static SP_UNUSED sp_RbVal sp_poly_spaceship_v(sp_RbVal a, sp_RbVal b) {
+  sp_RbVal u;
+  if (sp_poly_user_cmp("<=>", a, b, &u)) return u.tag == SP_TAG_BIGINT ? u : sp_box_oint(sp_spaceship_answer(u));
+  return sp_box_oint(sp_poly_spaceship(a, b));
+}
 /* String#<=> alone falls back to rb_invcmp: an operand that is neither a
    string nor convertible by #to_str is asked to compare itself AGAINST the
    string and its answer is negated, giving nil when the operand's class has
@@ -15519,9 +15543,22 @@ static sp_RbVal sp_poly_span_subject(sp_RbVal v) {
     return sp_box_poly_array(sp_poly_to_a_arr(v));
   return v;
 }
+/* first(n): a negative n reads as each receiver's own first raises it --
+   Array#first, Range#first (rb_ary_new_capa) and Enumerable#first */
 static sp_RbVal sp_poly_arr_take(sp_RbVal v, sp_int n) {
   if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_OBJ_RANGE && v.v.p) return sp_box_poly_array(sp_orange_first_n((sp_ObjRange *)v.v.p, n));
-  if (n < 0) sp_raise_cls("ArgumentError", "negative array size");
+  if (n < 0) {
+    int range = v.tag == SP_TAG_OBJ && (v.cls_id == SP_BUILTIN_RANGE || v.cls_id == SP_BUILTIN_STR_RANGE ||
+                                        v.cls_id == SP_BUILTIN_FLOAT_RANGE || v.cls_id == SP_BUILTIN_TIME_RANGE);
+    int en = v.tag == SP_TAG_OBJ && (v.cls_id == SP_BUILTIN_ENUMERATOR || sp_poly_is_hash_kind(v.cls_id));
+    sp_raise_cls("ArgumentError", range ? "negative array size (or size too big)" :
+                                  en ? "attempt to take negative size" : "negative array size");
+  }
+  if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_FLOAT_RANGE && v.v.p) sp_frange_iter_raise(*(sp_FloatRange *)v.v.p, 0);
+  if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_TIME_RANGE && v.v.p)
+    sp_raise_cls("TypeError", ((sp_TimeRange *)v.v.p)->first ? "can't iterate from Time" : "can't iterate from NilClass");
+  if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_RANGE && v.v.p && ((sp_Range *)v.v.p)->nobeg)
+    sp_raise_cls("TypeError", "can't iterate from NilClass");
   /* Range#first(n) on a boxed Integer Range: the leading members, built
      directly so an endless range is fine. sp_poly_length has no Range arm
      (a Range has no #length), and the call answered [] (#4837). */
@@ -15538,6 +15575,13 @@ static sp_RbVal sp_poly_arr_take(sp_RbVal v, sp_int n) {
   v = sp_poly_span_subject(v);
   sp_int alen = sp_poly_length(v);
   return sp_poly_arr_span(v, 0, n > alen ? alen : n);
+}
+/* take(n): every receiver's take raises the same message, unlike first */
+static sp_RbVal sp_poly_arr_take_n(sp_RbVal v, sp_int n) {
+  if (n < 0) sp_raise_cls("ArgumentError", "attempt to take negative size");
+  /* Enumerable#take(0) answers [] without iterating; first(0) iterates */
+  if (n == 0) return sp_box_poly_array(sp_PolyArray_new());
+  return sp_poly_arr_take(v, n);
 }
 static sp_RbVal sp_poly_arr_last_n(sp_RbVal v, sp_int n) {
   sp_poly_ary_chk(v, "last", 1);
@@ -16383,6 +16427,15 @@ static void sp_poly_hash_pair(sp_RbVal v, sp_int i, sp_RbVal *k, sp_RbVal *out) 
 }
 /* JSON.parse object builders: a string-keyed poly hash (the parser owns the
    key strings; StrPolyHash stores the pointer without copying). */
+static sp_int sp_json_nesting_limit(sp_RbVal limit) {
+  if (!sp_poly_truthy(limit)) return 0;
+  SP_GC_ROOT_RBVAL(limit);
+  sp_int n = sp_poly_to_int_arg(limit);
+  if (n > INT32_MAX || n < INT32_MIN)
+    sp_raise_cls("RangeError", sp_sprintf("integer %lld too %s to convert to 'int'",
+                                        (long long)n, n > 0 ? "big" : "small"));
+  return n;
+}
 static sp_RbVal sp_json_new_strhash(void) {
   return sp_box_obj(sp_StrPolyHash_new(), SP_BUILTIN_STR_POLY_HASH);
 }
@@ -16423,6 +16476,21 @@ static sp_RbVal sp_json_symbolize(sp_RbVal v) {
     return v;
   }
   return v;
+}
+extern sp_RbVal sp_json_parse_limit(const char *s, sp_int max_nesting);
+static inline sp_RbVal sp_json_parse_options(const char *s, sp_RbVal options) {
+  SP_GC_ROOT_STR(s); SP_GC_ROOT_RBVAL(options);
+  sp_int limit = 100;
+  sp_bool symbolize = FALSE;
+  sp_sym nesting_key = sp_json_sym_intern_fn("max_nesting"), symbol_key = sp_json_sym_intern_fn("symbolize_names");
+  for (sp_int i = 0; options.tag == SP_TAG_OBJ && sp_poly_is_hash_kind(options.cls_id) && i < sp_poly_length(options); i++) {
+    sp_RbVal key, value; sp_poly_hash_pair(options, i, &key, &value);
+    if (key.tag != SP_TAG_SYM) continue;
+    if (key.v.i == nesting_key) limit = sp_json_nesting_limit(value);
+    else if (key.v.i == symbol_key) symbolize = sp_poly_truthy(value);
+  }
+  sp_RbVal value = sp_json_parse_limit(s, limit);
+  return symbolize ? sp_json_symbolize(value) : value;
 }
 /* JSON.parse(object_class: OpenStruct): every parsed object becomes an
    OpenStruct over its members. CRuby's parser makes one per object and
@@ -16750,20 +16818,17 @@ static sp_Proc *sp_poly_to_block(sp_RbVal v) {
 }
 
 /* A Method read back out of a container has only its sp_BoundMethod: #owner
-   comes from the compile-time rendering it carries ("#<Method: Owner#name>"),
-   and #receiver from the object's own class id (#3692). */
-static const char *sp_bm_owner_name(sp_BoundMethod *m) {
-  if (!m || !m->desc) return NULL;
-  const char *p = strstr(m->desc, ": ");
-  if (!p) return NULL;
-  p += 2;
-  const char *e = p;
-  while (*e && *e != '#' && *e != '.' && *e != '>') e++;
-  if (e == p) return NULL;
-  { size_t n = (size_t)(e - p);
-    char *r = sp_str_alloc(n);
-    memcpy(r, p, n); r[n] = 0;
-    return r; }
+   and #source_location come from the facts its bind site stamped, and
+   #receiver from the object's own class id (#3692). */
+static sp_Class sp_bm_owner(sp_BoundMethod *m) {
+  return m ? m->owner : SP_CLASS_NIL;
+}
+static sp_PolyArray *sp_bm_source_location(sp_BoundMethod *m) {
+  if (!m || !m->src_file) return NULL;
+  sp_PolyArray *a = sp_PolyArray_new(); SP_GC_ROOT(a);
+  sp_PolyArray_push(a, sp_box_str(m->src_file));
+  sp_PolyArray_push(a, sp_box_int(m->src_line));
+  return a;
 }
 /* #parameters from the list the bind site stamped (sp_BoundMethod.params):
    [kind] or [kind, name] per entry */
@@ -18510,12 +18575,25 @@ static sp_PolyArray *sp_poly_to_a_arr_as(sp_RbVal v, const char *m, int nil_ok) 
    NoMethodError when the call is made, where the Enumerator walked it as
    empty (nil, a user object with no #each) */
 static sp_RbVal sp_poly_enum_chk(sp_RbVal v, const char *m) {
+  int ft = !strcmp(m, "first") || !strcmp(m, "take");
+  /* range_first refuses a beginless Range before it reads the count */
+  if (!strcmp(m, "first") && v.tag == SP_TAG_OBJ && v.v.p &&
+      ((v.cls_id == SP_BUILTIN_RANGE && ((sp_Range *)v.v.p)->nobeg) ||
+       (v.cls_id == SP_BUILTIN_FLOAT_RANGE && (((sp_FloatRange *)v.v.p)->omitted & SP_FRANGE_NO_BEGIN)) ||
+       (v.cls_id == SP_BUILTIN_TIME_RANGE && !((sp_TimeRange *)v.v.p)->first) ||
+       (v.cls_id == SP_BUILTIN_OBJ_RANGE && ((sp_ObjRange *)v.v.p)->first.tag == SP_TAG_NIL)))
+    sp_raise_cls("RangeError", "cannot get the first element of beginless range");
+  /* a Range's first(n) / take(n) check the count before they iterate
+     (sp_poly_arr_take raises can't iterate after it) */
+  if (ft && v.tag == SP_TAG_OBJ && v.v.p &&
+      (v.cls_id == SP_BUILTIN_FLOAT_RANGE || v.cls_id == SP_BUILTIN_TIME_RANGE ||
+       (v.cls_id == SP_BUILTIN_RANGE && ((sp_Range *)v.v.p)->nobeg))) return v;
   sp_poly_iter_check(v, m);
   /* a user object's elements are read once, by walking its #each, and handed
      on as the Array they are, so that walk is not run again by the caller */
   if (v.tag == SP_TAG_OBJ && v.cls_id >= 0) return sp_box_poly_array(sp_poly_to_a_arr_as(v, m, 0));
   /* first(n) walks only n members (sp_poly_arr_take), so an endless one answers */
-  if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_OBJ_RANGE && v.v.p && strcmp(m, "first") != 0) return sp_box_poly_array(SP_ORANGE_WALK((sp_ObjRange *)v.v.p));
+  if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_OBJ_RANGE && v.v.p && strcmp(m, "first") != 0 && strcmp(m, "take") != 0) return sp_box_poly_array(SP_ORANGE_WALK((sp_ObjRange *)v.v.p));
   return v;
 }
 /* One end of a numeric Range for Range#overlap?: absent (nil), or an
@@ -18695,6 +18773,11 @@ static SP_UNUSED sp_PolyArray *sp_orange_first_n(const sp_ObjRange *r, sp_int n)
     if (a->len < n) v = sp_orange_walk_succ(v);
   }
   return a;
+}
+/* Enumerable#take: first(n) but for the negative count's message */
+static SP_UNUSED sp_PolyArray *sp_orange_take(const sp_ObjRange *r, sp_int n) {
+  if (n < 0) sp_raise_cls("ArgumentError", "attempt to take negative size");
+  return sp_orange_first_n(r, n);
 }
 /* the ends must compare, as the boxed constructor (sp_range_new_box) checks */
 static SP_UNUSED sp_ObjRange *sp_orange_new_typed(sp_RbVal f, sp_RbVal l, sp_int x) {
@@ -21346,7 +21429,7 @@ void sp_sig_thread_dispatch(void) {
 extern volatile int sp_sig_pending_flag;
 extern volatile int sp_sig_default_pending;
 extern void (*sp_sig_default_raiser)(int);
-SP_NORETURN void sp_sig_poll_raise(void);
+void sp_sig_poll_raise(void);   /* returns after a collection a safe point was asked to run (sp_gc_poll_due) */
 static SP_UNUSED SP_NORETURN void sp_sig_default_raise(int no) {
   sp_sig_async_ok = 0;
   if (no == SIGINT) sp_raise_cls("Interrupt", sp_exc_no_msg);   /* the message is empty, as the interrupt CRuby raises for the signal */

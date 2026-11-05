@@ -1,0 +1,69 @@
+[ max_nesting 100
+JSON::NestingError
+nesting of 101 is too deep
+[ max_nesting 101
+accepted
+[ max_nesting false
+accepted
+[ max_nesting nil
+accepted
+[ max_nesting 0
+accepted
+[ max_nesting true
+TypeError
+no implicit conversion of true into Integer
+[ max_nesting "5"
+TypeError
+no implicit conversion of String into Integer
+{"a": max_nesting 100
+JSON::NestingError
+nesting of 101 is too deep
+{"a": max_nesting 101
+accepted
+{"a": max_nesting false
+accepted
+{"a": max_nesting nil
+accepted
+{"a": max_nesting 0
+accepted
+{"a": max_nesting true
+TypeError
+no implicit conversion of true into Integer
+{"a": max_nesting "5"
+TypeError
+no implicit conversion of String into Integer
+custom boundary
+JSON::NestingError
+nesting of 3 is too deep
+scalar with limit one
+accepted
+container with limit one
+JSON::NestingError
+nesting of 2 is too deep
+positional options
+JSON::NestingError
+nesting of 3 is too deep
+options variable
+JSON::NestingError
+nesting of 3 is too deep
+options splat
+JSON::NestingError
+nesting of 3 is too deep
+empty options
+JSON::NestingError
+nesting of 101 is too deep
+nil options
+JSON::NestingError
+nesting of 101 is too deep
+ignored option beside nesting
+JSON::NestingError
+nesting of 3 is too deep
+symbolized keys beside nesting
+accepted
+symbolized keys past nesting
+JSON::NestingError
+nesting of 3 is too deep
+option evaluated once
+accepted
+symbolized options variable
+accepted

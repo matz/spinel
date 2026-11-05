@@ -1137,6 +1137,7 @@ static const BuiltinOp bop_rows[] = {
   { TY_OBJ_RANGE, "itself", 0, 0, BF_ANY, TY_OBJ_RANGE, BOPE_TEMPLATE, "$r", 0 },
   { TY_OBJ_RANGE, "each", 0, 0, BF_REQUIRED, TY_OBJ_RANGE, BOPE_NONE },  /* the receiver, as CRuby; codegen_iter walks it */
   { TY_OBJ_RANGE, "first", 1, 1, BF_NONE, TY_POLY_ARRAY, BOPE_TEMPLATE, "({ sp_ObjRange *_t$T = $r; SP_GC_ROOT(_t$T); sp_orange_first_n(_t$T, $i0); })", 0 },
+  { TY_OBJ_RANGE, "take", 1, 1, BF_NONE, TY_POLY_ARRAY, BOPE_TEMPLATE, "({ sp_ObjRange *_t$T = $r; SP_GC_ROOT(_t$T); sp_orange_take(_t$T, $i0); })", 0 },
   { TY_OBJ_RANGE, "to_a", 0, 0, BF_NONE, TY_POLY_ARRAY, BOPE_TEMPLATE, "sp_orange_to_a($r)", 0 },
   { TY_OBJ_RANGE, "entries", 0, 0, BF_NONE, TY_POLY_ARRAY, BOPE_TEMPLATE, "sp_orange_to_a($r)", 0 },
   { TY_OBJ_RANGE, "freeze", 0, 0, BF_ANY, TY_OBJ_RANGE, BOPE_TEMPLATE, "({ sp_ObjRange *_t$T = $r; _t$T->unfrozen = 0; _t$T; })", 0 },
@@ -1258,6 +1259,7 @@ static const BuiltinOp bop_rows[] = {
   { TY_FLOAT_RANGE, "clone",        0,   0, BF_ANY,  TY_FLOAT_RANGE, BOPE_TEMPLATE, "$r", 0, 0, 0, 1 },
   { TY_FLOAT_RANGE, "clone",        1,   1, BF_ANY,  TY_FLOAT_RANGE, BOPE_RANGE_CLONE, NULL, 0, 0, 0, 1 },
   { TY_FLOAT_RANGE, "nil?",         0,   0, BF_ANY,  TY_BOOL,        BOPE_TEMPLATE, "((void)($r), (sp_bool)0)", 0 },  /* a Range value is never nil */
+  { TY_FLOAT_RANGE, "first",        1,   1, BF_ANY,  TY_POLY,        BOPE_TEMPLATE, "({ sp_frange_count_raise($r, $b0, 0); sp_box_nil(); })", 0 },  /* the count is checked before the walk */
   { TY_FLOAT_RANGE, "first",        0, 127, BF_ANY,  TY_POLY,        BOPE_TEMPLATE, "({ sp_frange_iter_raise($r, 0); sp_box_nil(); })", 0 },  /* first(n)/last(n) iterate */
   { TY_FLOAT_RANGE, "last",         0,   0, BF_ANY,  TY_UNKNOWN,     BOPE_TEMPLATE, "({ sp_frange_iter_raise($r, 0); sp_box_nil(); })", 0, 0, BOPF_INFERRED },  /* the endpoint the literal wrote is typed in infer_range_call */
   { TY_FLOAT_RANGE, "last",         1, 127, BF_ANY,  TY_POLY,        BOPE_TEMPLATE, "({ sp_frange_iter_raise($r, 0); sp_box_nil(); })", 0 },  /* first(n)/last(n) iterate */
@@ -1315,6 +1317,7 @@ static const BuiltinOp bop_rows[] = {
   { TY_FLOAT_RANGE, "all?",             0, 127, BF_ANY,      TY_POLY,        BOPE_TEMPLATE, "({ sp_frange_iter_raise($r, 0); sp_box_nil(); })" },
   { TY_FLOAT_RANGE, "none?",            0, 127, BF_ANY,      TY_POLY,        BOPE_TEMPLATE, "({ sp_frange_iter_raise($r, 0); sp_box_nil(); })" },
   { TY_FLOAT_RANGE, "one?",             0, 127, BF_ANY,      TY_POLY,        BOPE_TEMPLATE, "({ sp_frange_iter_raise($r, 0); sp_box_nil(); })" },
+  { TY_FLOAT_RANGE, "take",             1,   1, BF_ANY,      TY_POLY,        BOPE_TEMPLATE, "sp_frange_take_v($r, $b0)" },
   { TY_FLOAT_RANGE, "take",             0, 127, BF_ANY,      TY_POLY,        BOPE_TEMPLATE, "({ sp_frange_iter_raise($r, 0); sp_box_nil(); })" },
   { TY_FLOAT_RANGE, "drop",             0, 127, BF_ANY,      TY_POLY,        BOPE_TEMPLATE, "({ sp_frange_iter_raise($r, 0); sp_box_nil(); })" },
   { TY_FLOAT_RANGE, "take_while",       0, 127, BF_ANY,      TY_POLY,        BOPE_TEMPLATE, "({ sp_frange_iter_raise($r, 0); sp_box_nil(); })" },

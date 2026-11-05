@@ -755,6 +755,8 @@ int is_method_owner_query(const char *n) {
 int is_instance_method_name(const char *n) { return n && (sp_streq(n, "instance_method") || sp_streq(n, "public_instance_method")); }
 /* method, public_method: a Method of the receiver's own method by name */
 int is_bound_method_maker(const char *n) { return n && (sp_streq(n, "method") || sp_streq(n, "public_method")); }
+/* super_method: the Method of the same method one step up its owner's chain */
+int is_super_method_name(const char *n) { return n && sp_streq(n, "super_method"); }
 int is_method_object_maker(const char *n) {
   return n && (sp_streq(n, "method") || sp_streq(n, "public_method") || sp_streq(n, "singleton_method") ||
                sp_streq(n, "instance_method") || sp_streq(n, "public_instance_method"));
@@ -1881,16 +1883,45 @@ int is_kernel_module_function(const char *m) {
   return m && builtin_name_in(m, K);
 }
 
-/* Is m one of Object's own methods every object answers? */
-int builtin_object_method_known(const char *m) {
-  static const char *const OBJM2[] = {
-    "class", "clone", "dup", "display", "enum_for", "eql?", "equal?",
+/* The module that defines m, one of Object's own methods every object
+   answers: BasicObject for the few it defines, Kernel for the rest; NULL
+   for a name that is none of them */
+static const char *builtin_object_method_owner(const char *m) {
+  static const char *const BASIC[] = { "equal?", "__send__", "==", "!=", "!", NULL };
+  static const char *const KERN[] = {
+    "class", "clone", "dup", "display", "enum_for", "eql?",
     "extend", "freeze", "frozen?", "hash", "inspect", "instance_of?",
     "instance_variable_get", "instance_variable_set", "instance_variables",
     "is_a?", "itself", "kind_of?", "method", "methods", "nil?",
-    "object_id", "public_send", "respond_to?", "send", "__send__",
-    "tap", "then", "to_s", "yield_self", "==", "!=", "!", "===", NULL };
-  return m && builtin_name_in(m, OBJM2);
+    "object_id", "public_send", "respond_to?", "send",
+    "tap", "then", "to_s", "yield_self", "===", NULL };
+  return !m ? NULL : builtin_name_in(m, BASIC) ? "BasicObject" : builtin_name_in(m, KERN) ? "Kernel" : NULL;
+}
+
+/* Is m one of Object's own methods every object answers? */
+int builtin_object_method_known(const char *m) {
+  return builtin_object_method_owner(m) != NULL;
+}
+
+/* The builtin class or module that defines instance method m of cls (one
+   of the classes the arity facts list their own methods for), as
+   Method#owner names it: cls for one of its own (CRuby's
+   public_instance_methods(false), which the facts are read from), Numeric
+   or Comparable for one Integer and Float, or a class including Comparable,
+   have from them, BasicObject or Kernel for one every object answers; NULL
+   where the facts name none */
+const char *builtin_method_owner(const char *cls, const char *m) {
+  if (!cls || !m) return NULL;
+  if (builtin_method_known(cls, m)) return cls;
+  if (builtin_numeric_owns(cls, m)) return "Numeric";
+  if (builtin_comparable_owns(cls, m)) return "Comparable";
+  return builtin_object_method_owner(m);
+}
+
+/* The module that defines function m, which a receiverless method(:m)
+   binds: Kernel, where the arity facts list m under it; NULL otherwise */
+const char *builtin_function_owner(const char *m) {
+  return m && builtin_method_known("Kernel", m) ? "Kernel" : NULL;
 }
 
 /* respond_to?: whether the receiver itself answers a name, publicly or

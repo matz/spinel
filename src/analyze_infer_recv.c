@@ -202,7 +202,7 @@ int infer_range_call(Compiler *c, int id, TyKind rt, TyKind *out) {
   /* min(n) / max(n) on an Integer Range answer an Array of its ints, however
      the Range is bounded (#3665) */
   if (rt == TY_RANGE && recv >= 0 && argc == 1 && nt_ref(nt, id, "block") < 0 &&
-      (is_minmax_query(name)))
+      (is_minmax_query(name) || sp_streq(name, "take")))
     { *out = TY_INT_ARRAY; return 1; }
   /* Range#sum(seed): CRuby adds the closed form to an INTEGER seed and answers
      a Float for a seed of any other class (it runs the seed through

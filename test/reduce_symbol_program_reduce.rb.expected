@@ -1,0 +1,6 @@
+"initial=0 op=:merge block=false"
+"initial=:merge op=nil block=false"
+"pile gcd 3"
+6
+12
+12

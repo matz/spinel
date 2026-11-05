@@ -166,6 +166,13 @@ PEM or DER into a `PKey::EC`, and RSA keys (PKCS#1 or PKCS#8) into a
 half and has no `n`, `d` or other BN readers; any other kind of key raises
 `PKeyError` naming EC and RSA as the kinds it reads, where CRuby answers a
 DSA or DH object.
+EC keys expose `group.curve_name`, SPKI `public_to_der`, PKCS#8
+`private_to_der` / `private_to_pem`, and `dsa_sign_asn1` / `dsa_verify_asn1`
+over an already-computed digest with DER signatures. `EC::Group` supplies
+curve metadata only. `PKey.new_raw_private_key("ED25519", seed)` supports
+`sign(nil, data)` with a 32-byte seed on OpenSSL 1.1.1 or later; Ed25519
+verification, raw public-key extraction and import through `PKey.read`
+are not supported.
 EC parameters with no key in them raise too, where CRuby answers a `PKey::EC`
 with neither half, and so does an encrypted PEM, since there is no passphrase
 argument.
@@ -925,13 +932,14 @@ block.
 A Range of objects (`d1..d2` over Dates, or any class that defines `<=>`)
 walks its members by the class's `succ` while `<=>` keeps them within the
 end, as CRuby's does, and a class with no `succ` raises CRuby's TypeError.
-`each` and `first(n)` walk a member at a time, so an endless one stops where
-the block breaks, and `each` answers the Range; over a boxed one (a Range of
-Dates) most Enumerable methods (`find`, `each_with_index`, `filter_map`,
-`count`, ...) walk the same way, but `map`, `select`, `inject`, `each_slice`,
-`take` and `lazy` read the members' Array. Where the class is known at
-compile time (`Ver.new(1)..Ver.new(9)`, not a boxed Date) the Enumerable
-methods other than `each` and `first(n)` read the members' Array. A method
+`each`, `first(n)` and `take(n)` walk a member at a time, so an endless one
+stops where the block breaks (or after n members), and `each` answers the
+Range; over a boxed one (a Range of Dates) most Enumerable methods (`find`,
+`each_with_index`, `filter_map`, `count`, ...) walk the same way, but `map`,
+`select`, `inject`, `each_slice` and `lazy` read the members' Array. Where the
+class is known at compile time (`Ver.new(1)..Ver.new(9)`, not a boxed Date)
+the Enumerable methods other than `each`, `first(n)` and `take(n)` read the
+members' Array. A method
 that reads the Array raises RangeError on an endless Range where CRuby runs
 until the block breaks, and calls `succ` for every member before its block
 runs for the first. An exclusive one's `max`

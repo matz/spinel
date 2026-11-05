@@ -814,6 +814,12 @@ static int ct_def_version(Compiler *c, int rcls, const char *name, int sg, const
     if (elab_method_at(c, cls, name, sg, p, &d) != ELAB_YES || !d ||
         (d->kind != LR_DEF && d->kind != LR_ALIAS && d->kind != LR_COPY)) return -1;
     int mi = call_target(c, at, cls, name, CT_CAPTURE | (cls < 0 ? CT_TOP : sg ? CT_CMETHOD : 0), NULL);
+    /* The alias holds the def's own body, which a later prepend's copy
+       shadows: the table answers the copy there, which a call of the name
+       reaches, and an alias of the name does not */
+    int bi = d->kind == LR_DEF && (mi < 0 || c->scopes[mi].def_node != d->node) && cls >= 0
+               ? comp_shadowed_body(c, cls, sg, d->node, dc) : -1;
+    if (bi >= 0) return bi;
     /* A module's captured body runs as the receiving class's copy. */
     return mi >= 0 ? comp_method_version(c, rcls, c->scopes[mi].name, sg, c->scopes[mi].def_node, dc) : -1;
   }
@@ -1097,6 +1103,28 @@ static int ct_window_version(Compiler *c, int id, int cls, const char *name, int
   int dc = -1;
   return ct_def_version(c, cls, name, sg, ds[0], &dc);
 }
+/* The class an alias that node id meets as cls's `name` (singleton when
+   sg) was made in, as Method#owner names it: the class or module whose body
+   holds the alias statement, the version the record answers at id's point
+   or the one version over the statements id may run in; *own_sg 1 where
+   the alias is on that class's singleton. -1 where the name meets no alias
+   there, or the record cannot tell. Asked in the record's frame for the
+   call plan (elab_plan_enter), as ct_version asks for the target, so the
+   owner and the target are read from the same facts */
+int cplan_alias_holder(Compiler *c, int id, int cls, const char *name, int sg, int *own_sg) {
+  const LrDef *d = NULL, *ds[2];
+  ElabMeet m;
+  if (cls < 0 || !name) return -1;
+  const Scope *own = comp_scope_of(c, id);
+  int framed = elab_plan_enter(c, id);
+  elab_call_meet(c, id, cls, name, sg, ct_after_point(c, id) | (own && own->origin_module_ci > 0 ? ELAB_MEET_COPY : 0), &m, ds, 2);
+  if (m.at == ELAB_YES) d = m.d;
+  else if (m.at == ELAB_UNKNOWN && m.win == ELAB_YES && m.n == 1) d = ds[0];
+  int h = d && d->kind == LR_ALIAS ? c->node_cbody[d->node] : -1;
+  *own_sg = h >= 0 && elab_version_on_singleton(c, h, name, d->node);
+  if (framed) elab_plan_leave(c);
+  return h;
+}
 /* Does node id make the implied call `name` on operand op (a node, or an
    NTI_ word): a row of tools/implied_calls.yml says so (nt_implied_calls),
    the rows the load record reads */
@@ -1318,14 +1346,17 @@ static int ct_version_at(Compiler *c, int id, int cls, const char *name, unsigne
     if (span) *span = 2;
     return vi;
   }
-  ElabWindow w;
+  ElabMeet m;
   int kept = ct_after_point(c, id);   /* (it runs at its point only if nothing around it runs later) */
-  int at = p.region >= 0 && !kept ? elab_method_at(c, rcls, name, sg, p, &d) : ELAB_UNKNOWN;
+  const Scope *own = comp_scope_of(c, id);
+  elab_call_meet(c, id, rcls, name, sg, kept | (own && own->origin_module_ci > 0 ? ELAB_MEET_COPY : 0), &m, ds, VER_MAX_ARMS);
+  int at = m.at;
+  ElabWindow w = m.w;
+  d = m.d;
   if (at == ELAB_YES) vi = ct_def_version(c, rcls, name, sg, d, &dc);
   else if (at == ELAB_NO) none = late && !d && elab_class_live_at(c, rcls, sg, p);   /* (not an undef's, nor on a class no call can run on yet) */
-  else if (elab_call_window(c, id, &w) == ELAB_YES) {
-    if (kept) elab_window_open(c, &w);
-    n = elab_method_span(c, rcls, name, sg, &w, ds, VER_MAX_ARMS);
+  else if (m.win == ELAB_YES) {
+    n = m.n;
     for (int k = 0; k < n && k < VER_MAX_ARMS; k++) none |= late && !ds[k];
     if (n == ELAB_SPAN_ANY) none |= body;   /* (a method body's version may not be made yet) */
     if (n == 1 && ds[0]) vi = ct_def_version(c, rcls, name, sg, d = ds[0], &dc);

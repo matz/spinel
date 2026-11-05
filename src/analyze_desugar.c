@@ -4510,6 +4510,8 @@ int desugar_obj_range_via_a(Compiler *c) {
     if (!hit && sp_streq(nm, "last")) hit = an > 0;
     /* each with a block walks by succ itself (codegen_iter), so an endless one stops where it breaks */
     if (sp_streq(nm, "each") && blk && an == 0) hit = 0;
+    /* take(n) walks n members (sp_orange_take), as first(n) does */
+    if (sp_streq(nm, "take") && !blk && an == 1) hit = 0;
     if (!hit) continue;
     if (infer_type(c, recv) != TY_OBJ_RANGE) continue;
     /* a Range reopen's method of the name, or an Enumerable reopening's the
@@ -5265,24 +5267,37 @@ static int step_kw_paren(NodeTable *nt, int v) {
   return p;
 }
 
-/* Numeric#step only: a program's own step(by:) takes its keywords as they are */
-int step_kw_numeric_recv(Compiler *c, NodeTable *nt, int id) {
-  static const int owners[] = { CORE_INTEGER, CORE_FLOAT, CORE_NUMERIC };
-  for (size_t i = 0; i < sizeof(owners) / sizeof(*owners); i++)
-    if (an_reopen_owner(c, id, owners[i]) >= 0) return 0;
-  int recv = nt_ref(nt, id, "receiver");
-  TyKind rt = infer_type(c, recv);
-  /* a boxed one only where no class it may hold has a step of its own */
+/* Whether call `id`, a `step` with keyword arguments, stays as written,
+   so the keywords go to a program's own step. A receiver that is a class
+   value or an object of the program keeps them. Otherwise, when the
+   program defines or reads no step, it is Numeric#step, whose keyword
+   forms are lowered to positional arguments. When it does, the call is
+   lowered only for a receiver known to be a number whose class the
+   program does not give its own step, or a boxed receiver no class of
+   which has a step of its own (a receiver typed later is asked again on
+   a later pass). */
+int step_kw_own_method(Compiler *c, int id) {
+  int recv = nt_ref(c->nt, id, "receiver");
+  TyKind rt = recv >= 0 ? infer_type(c, recv) : TY_UNKNOWN;
+  /* (a class value or an object of the program is no number: its own
+     class method or method takes the keywords, or none does) */
+  if (rt == TY_CLASS || ty_is_object(rt)) return 1;
+  if (!an_user_defines_or_reads(c, "step")) return 0;
   if (rt == TY_POLY) {
+    static const int owners[] = { CORE_INTEGER, CORE_FLOAT, CORE_NUMERIC };
+    for (size_t i = 0; i < sizeof(owners) / sizeof(*owners); i++)
+      if (an_reopen_owner(c, id, owners[i]) >= 0) return 1;
+    /* a boxed one only where no class it may hold has a step of its own */
     const ClsSet *cs = cls_fact_node(c, recv);
     if (!cs || cs->all) return 0;
     for (int k = cls_set_next(cs, -1); k >= 0; k = cls_set_next(cs, k)) {
       int dc = -1;
-      if (comp_method_in_chain(c, k, "step", &dc) >= 0) return 0;
+      if (comp_method_in_chain(c, k, "step", &dc) >= 0) return 1;
     }
-    return 1;
+    return 0;
   }
-  return !ty_is_object(rt);
+  int num = ty_is_numeric(rt) || rt == TY_RATIONAL || rt == TY_BIGINT;
+  return !num || comp_builtin_kind_reopen_mi(c, rt, "step") >= 0;
 }
 
 void step_kw_positional(Compiler *c, NodeTable *nt, int id, int args, int to_v, int by_v, int by_first) {
@@ -5421,8 +5436,7 @@ int desugar_step_kwargs(Compiler *c) {
       else if (kn && sp_streq(kn, "by")) { by_v = nt_ref(nt, els[i], "value"); by_first = to_v < 0; }
       else { other = 1; break; }
     }
-    if (other || (to_v < 0 && by_v < 0)) continue;
-    if (!step_kw_numeric_recv(c, nt, id)) continue;
+    if (other || (to_v < 0 && by_v < 0) || step_kw_own_method(c, id)) continue;
     step_kw_positional(c, nt, id, args, to_v, by_v, by_first);
     changed = 1;
   }
@@ -14998,12 +15012,29 @@ static int def_at_top_level(const NodeTable *nt, int n0, int def) {
    builtin's left it no method. A top-level method is private: a call on a
    receiver other than self never reaches it, and kept as written
    `[[1], [2]].collect_concat { }` found no method of that name. */
+/* Does the module whose header is mod make its instance methods its own,
+   by `extend self` or a module_function statement in that body? */
+static int module_answers_own_defs(const NodeTable *nt, int mod) {
+  if (xs_body_extends_self(nt, mod)) return 1;
+  int body = class_def_body(nt, mod);
+  if (body < 0 || nt_kind(nt, body) != NK_StatementsNode) return 0;
+  int bn = 0; const int *bb = nt_arr(nt, body, "body", &bn);
+  for (int i = 0; i < bn; i++)
+    if (nt_kind(nt, bb[i]) == NK_CallNode && nt_ref(nt, bb[i], "receiver") < 0 &&
+        nt_str(nt, bb[i], "name") && sp_streq(nt_str(nt, bb[i], "name"), "module_function")) return 1;
+  return 0;
+}
 static int program_defines_name_off_class(const NodeTable *nt, int n0, const char *name, int recv) {
   int other_recv = recv >= 0 && nt_kind(nt, recv) != NK_SelfNode;
   for (int id = 0; id < n0; id++) {
     if (nt_kind(nt, id) != NK_DefNode || !nt_str(nt, id, "name") || !sp_streq(nt_str(nt, id, "name"), name)) continue;
     int ct = nt_ref(nt, id, "receiver") < 0 ? fwd_lex_parent(nt, id) : -1;
     if (ct < 0 && other_recv && nt_ref(nt, id, "receiver") < 0 && def_at_top_level(nt, n0, id)) continue;
+    /* a module's instance method is its includers', as a class's is its
+       instances' (a view lookup's `find_all(name, prefixes)` in a mixin);
+       one the module answers itself (`extend self`, module_function) is
+       callable on the module object, off any class */
+    if (ct >= 0 && nt_kind(nt, ct) == NK_ModuleNode && !module_answers_own_defs(nt, ct)) continue;
     if (ct < 0 || !class_def_is_class(nt, ct)) return 1;
   }
   return 0;
@@ -17385,15 +17416,20 @@ int desugar_builtin_scalar_defs(Compiler *c) {
     }
     /* A program's own reopen: left fully intact (still in `nb`) for
        ordinary class compilation and the poly dispatch's prim-reopen arm.
-       Each of its own simple-signature defs (no block, splat, or keyword
-       params -- the same restricted shape desugar_builtin_scalar_calls'
-       arity check already assumes) additionally gets a clone-based
+       Each of its own defs with no keyword or post-splat params (the
+       shapes desugar_builtin_scalar_calls' arity check knows: requireds,
+       optionals, a splat, a block param) additionally gets a clone-based
        generic registered by name, built from a CLONE of the def so the
-       original is never touched. */
+       original is never touched. A splat or a block param must be cloned
+       too: a call with a block (`1.step(3, 1) { }`) that the generic does
+       not take stays on the builtin iteration, which ignores the reopen. */
     if (!tfile[i]) nb[nbn++] = st;
     for (int k = 0; k < bn; k++) {
       int def = bb[k];
       if (nt_kind(nt, def) != NK_DefNode) continue;
+      /* `def self.times`: a method of the class, never the instance
+         generic for `3.times` */
+      if (nt_ref(nt, def, "receiver") >= 0) continue;
       const char *name = nt_str(nt, def, "name");
       if (!name) continue;
       /* a method the body leaves private or protected (`private :m`, a
@@ -17403,12 +17439,13 @@ int desugar_builtin_scalar_defs(Compiler *c) {
       int closed = bi_def_visibility(nt, def) != BVIS_PUBLIC;
       int pn0 = nt_ref(nt, def, "parameters");
       int shape_ok = 1;
-      if (pn0 >= 0 && (nt_ref(nt, pn0, "block") >= 0 || nt_ref(nt, pn0, "rest") >= 0 ||
-                       nt_ref(nt, pn0, "keyword_rest") >= 0)) shape_ok = 0;
+      if (pn0 >= 0 && nt_ref(nt, pn0, "keyword_rest") >= 0)
+        shape_ok = 0;
+      if (shape_ok && pn0 >= 0) { int psn = 0; nt_arr(nt, pn0, "posts", &psn); if (psn > 0) shape_ok = 0; }
       if (shape_ok && pn0 >= 0) { int kwn = 0; nt_arr(nt, pn0, "keywords", &kwn); if (kwn > 0) shape_ok = 0; }
       if (!shape_ok) {
-        /* A reopen this registration cannot clone (a splat, a block or
-           keyword parameters) still REPLACES the name for the program.
+        /* A reopen this registration cannot clone (keyword or post-splat
+           parameters) still REPLACES the name for the program.
            Skipping it silently was only safe while the name was the
            program's alone; when it is also one a builtins/ file defines,
            the spliced generic stays in the table and every concrete call
@@ -17423,6 +17460,12 @@ int desugar_builtin_scalar_defs(Compiler *c) {
           nt_subtree_blank(nt, gdef[bx][bi0]);
           gdef[bx][bi0] = -1;
         }
+        /* and the clone of an earlier reopen of the same name */
+        for (int m = 0; m < odef_n[bx]; m++)
+          if (odef_def[bx][m] >= 0 && sp_streq(odef_name[bx][m], name)) {
+            nt_subtree_blank(nt, odef_def[bx][m]);
+            odef_def[bx][m] = -1;
+          }
         continue;
       }
       int clone = nt_clone_subtree(nt, def);
@@ -17731,7 +17774,11 @@ int desugar_builtin_scalar_calls(Compiler *c) {
     { int cpn = nt_ref(nt, copy, "parameters");
       int crn = 0; if (cpn >= 0) nt_arr(nt, cpn, "requireds", &crn);
       int con = 0; if (cpn >= 0) nt_arr(nt, cpn, "optionals", &con);
-      if (an + 1 < crn || an + 1 > crn + con) continue; }
+      int crest = cpn >= 0 && nt_ref(nt, cpn, "rest") >= 0;
+      /* a `*arr` argument left after expand_static_splat_args can
+         stand for any count of arguments */
+      int csplat = av && nt_argv_has_splat(nt, av, an);
+      if ((!csplat && an + 1 < crn) || (!crest && an + 1 > crn + con)) continue; }
     int encl = c->nscope[id];
     int base = nt->count;
     int *na = (int *)malloc(sizeof(int) * (size_t)(an + 1));

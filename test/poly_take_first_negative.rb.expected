@@ -1,0 +1,93 @@
+[ArgumentError, "negative array size (or size too big)"]
+[ArgumentError, "attempt to take negative size"]
+[V1]
+[V1]
+[ArgumentError, "negative array size"]
+[ArgumentError, "attempt to take negative size"]
+[1]
+[1]
+[ArgumentError, "negative array size (or size too big)"]
+[ArgumentError, "attempt to take negative size"]
+[1]
+[1]
+[ArgumentError, "negative array size (or size too big)"]
+[ArgumentError, "attempt to take negative size"]
+["a"]
+["a"]
+[ArgumentError, "attempt to take negative size"]
+[ArgumentError, "attempt to take negative size"]
+[1]
+[1]
+[ArgumentError, "negative array size (or size too big)"]
+[ArgumentError, "attempt to take negative size"]
+[1]
+[1]
+[ArgumentError, "attempt to take negative size"]
+[ArgumentError, "negative array size (or size too big)"]
+[TypeError, "can't iterate from Float"]
+[TypeError, "can't iterate from Float"]
+[ArgumentError, "attempt to take negative size"]
+[ArgumentError, "negative array size (or size too big)"]
+[TypeError, "can't iterate from Float"]
+[TypeError, "can't iterate from Float"]
+[ArgumentError, "attempt to take negative size"]
+[ArgumentError, "attempt to take negative size"]
+[V1, V2]
+hash first(-1): ArgumentError attempt to take negative size
+hash take(-1): ArgumentError attempt to take negative size
+hash first(nil): TypeError no implicit conversion from nil to integer
+hash take(nil): TypeError no implicit conversion from nil to integer
+hash first(1): [[:a, 1]]
+trange first(-1): ArgumentError negative array size (or size too big)
+trange take(-1): ArgumentError attempt to take negative size
+trange first(nil): TypeError no implicit conversion from nil to integer
+trange take(nil): TypeError no implicit conversion from nil to integer
+trange first(1): TypeError can't iterate from Time
+bl_flt first(-1): RangeError cannot get the first element of beginless range
+bl_flt take(-1): ArgumentError attempt to take negative size
+bl_flt first(nil): RangeError cannot get the first element of beginless range
+bl_flt take(nil): TypeError no implicit conversion from nil to integer
+bl_flt first(1): RangeError cannot get the first element of beginless range
+bl_int first(-1): RangeError cannot get the first element of beginless range
+bl_int take(-1): ArgumentError attempt to take negative size
+bl_int first(nil): RangeError cannot get the first element of beginless range
+bl_int take(nil): TypeError no implicit conversion from nil to integer
+bl_int first(1): RangeError cannot get the first element of beginless range
+el_flt first(-1): ArgumentError negative array size (or size too big)
+el_flt take(-1): ArgumentError attempt to take negative size
+el_flt first(nil): TypeError no implicit conversion from nil to integer
+el_flt take(nil): TypeError no implicit conversion from nil to integer
+el_flt first(1): TypeError can't iterate from Float
+typed bl_flt first(-1): RangeError cannot get the first element of beginless range
+typed bl_flt take(-1): ArgumentError attempt to take negative size
+typed bl_flt first(nil): RangeError cannot get the first element of beginless range
+typed el_flt first(-1): ArgumentError negative array size (or size too big)
+typed el_flt take(-1): ArgumentError attempt to take negative size
+typed bl_int first(-1): RangeError cannot get the first element of beginless range
+typed bl_int first(1): RangeError cannot get the first element of beginless range
+typed int first(-1): ArgumentError negative array size (or size too big)
+typed hash first(-1): ArgumentError attempt to take negative size
+flt take(0): []
+flt first(0): TypeError can't iterate from Float
+trange take(0): []
+trange first(0): TypeError can't iterate from Time
+bl_int take(0): []
+bl_int first(0): RangeError cannot get the first element of beginless range
+el_flt take(0): []
+el_flt first(0): TypeError can't iterate from Float
+hash take(0): []
+hash first(0): []
+arr take(0): []
+arr first(0): []
+typed flt take(0): []
+typed flt first(0): TypeError can't iterate from Float
+typed bl_int take(0): []
+typed bl_int first(0): RangeError cannot get the first element of beginless range
+[1, 2]
+[1, 2, 3]
+[1, 2, 3]
+[]
+[1, 4]
+[]
+#<TypeError: can't iterate from NilClass>
+[]

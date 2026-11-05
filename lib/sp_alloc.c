@@ -779,6 +779,13 @@ int sp_gc_collection_wanted(void) {
 /* sp_gc_alloc lives in lib/sp_slab.c: the allocation fast path is one
    function there, the slab's claim and the collector's bookkeeping in one
    frame. */
+/* The safe points' flag (a loop's back-edge, a method's entry: the signals'
+   sp_sig_pending_flag, read by lib/sp_cold.c's polls) and the collection
+   asked of them. Defined here, which every runtime links, so asking needs
+   nothing of sp_cold.o: a weak reference to a function there pulled
+   sp_cold.o, and what it needs, into a C extension's link on macOS. */
+volatile int sp_sig_pending_flag;
+volatile int sp_gc_poll_due;
 void *sp_gc_alloc_nogc(size_t sz, void (*fin)(void *), void (*scn)(void *)) {
   size_t need = sizeof(sp_gc_hdr) + sz;
   sp_gc_hdr *h = (sp_gc_hdr *)sp_slab_alloc(need);
@@ -788,7 +795,29 @@ void *sp_gc_alloc_nogc(size_t sz, void (*fin)(void *), void (*scn)(void *)) {
   SP_HEAP_LOCK();
   SP_GC_HEAP_PUSH(h); sp_gc_bytes_add(need);
   SP_HEAP_UNLOCK();
+#ifndef SP_GC_NONE
+  /* A collection this allocation may not run (a Bignum operation's
+     operands are temporaries nothing roots) is asked of the next safe point
+     the program has, a loop's back-edge or a method's entry: a loop whose
+     only allocations come this way (`s = (s * 75 + 74) % m`) otherwise never
+     collected, and its memory grew with its round count (#11106). */
+  if (SP_GC_CTR_GET(sp_gc_bytes) > SP_GC_CTR_GET(sp_gc_threshold) && !sp_gc_poll_due) {
+    sp_gc_poll_due = 1;
+    SP_ATOMIC_STORE(&sp_sig_pending_flag, 1, __ATOMIC_RELEASE);
+  }
+#endif
   return (char *)h + sizeof(sp_gc_hdr);
+}
+/* The collection a safe point runs for sp_gc_alloc_nogc (sp_gc_poll_due):
+   the one an allocation would have run, if it is still due */
+void sp_gc_poll_collect(void) {
+#ifndef SP_GC_NONE
+#ifdef SP_THREADS
+  if (SP_GC_CTR_GET(sp_gc_bytes) > SP_GC_CTR_GET(sp_gc_threshold)) sp_stw_collect();
+#else
+  if (SP_GC_CTR_GET(sp_gc_bytes) > SP_GC_CTR_GET(sp_gc_threshold)) sp_gc_collect_retune();
+#endif
+#endif
 }
 
 SP_TLS struct sp_str_lcache_entry sp_str_lcache[SP_STR_LCACHE_SIZE];

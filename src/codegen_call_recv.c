@@ -10734,7 +10734,7 @@ static int emit_scalar_recv_arms(Compiler *c, int id, Buf *b, const NodeTable *n
       /* Float#divmod(n) -> [Integer quotient, Float mod], CRuby's flodivmod */
       int tx = ++g_tmp, tn = ++g_tmp, tq = ++g_tmp, tm = ++g_tmp, o = ++g_tmp;
       buf_printf(b, "({ sp_float _t%d = (%s); sp_float _t%d = ", tx, r, tn);
-      emit_coerce(c, argv[0], TY_FLOAT, CO_CONVERT, "a Float operand", b);
+      emit_float_operand_in(c, argv[0], "Float", b);
       buf_printf(b, "; if (isnan(_t%d) || isnan(_t%d)) sp_raise_cls(\"FloatDomainError\", \"NaN\");"
                     /* an infinite dividend has no quotient: FloatDomainError (#3008) */
                     " if (isinf(_t%d)) sp_raise_cls(\"FloatDomainError\", _t%d > 0 ? \"Infinity\" : \"-Infinity\");"
@@ -10846,7 +10846,11 @@ static int emit_scalar_recv_arms(Compiler *c, int id, Buf *b, const NodeTable *n
       }
       else {
         buf_printf(b, "({ sp_float _t%d = ", ta);
-        emit_coerce(c, argv[0], TY_FLOAT, CO_CONVERT, "a Float operand", b);
+        /* a nil goes as above, in Float()'s words */
+        if (a0 == TY_FLOAT && cmp_operand_may_be_nil(c, argv[0])) {
+          buf_puts(b, "sp_ofloat_arg("); emit_oint_expr(c, argv[0], TY_FLOAT, b); buf_puts(b, ")");
+        }
+        else emit_coerce(c, argv[0], TY_FLOAT, CO_CONVERT, "a Float operand", b);
         buf_printf(b, "; sp_FloatArray *_t%d = sp_FloatArray_new();"
                       " sp_FloatArray_push(_t%d, _t%d);"
                       " sp_FloatArray_push(_t%d, (%s)); _t%d; })", o, o, ta, o, r, o);
@@ -15034,9 +15038,10 @@ int emit_range_call(Compiler *c, int id, Buf *b) {
     static const char *const rmeths[] = {
       "to_a", "entries", "include?", "member?", "cover?", "===", "sum", "min", "max",
       "first", "last", "size", "count", "begin", "end",
-      "exclude_end?", "eql?", "equal?", "minmax", "overlap?", NULL };
+      "exclude_end?", "eql?", "equal?", "minmax", "overlap?", "take", NULL };
     int known = 0;
     for (int i = 0; rmeths[i]; i++) if (sp_streq(name, rmeths[i])) known = 1;
+    if (sp_streq(name, "take") && (argc != 1 || block >= 0)) known = 0;
     /* `count` with a block or argument is Enumerable#count, not Range#size:
        let it fall through to the int-array redispatch below. */
     if (sp_streq(name, "count") && (block >= 0 || argc >= 1)) known = 0;
@@ -15116,6 +15121,20 @@ int emit_range_call(Compiler *c, int id, Buf *b) {
       else if (sp_streq(name, "min")) {  /* smallest enumerated element (direction-aware), nil when empty */
         oint_open(c, id, TY_INT, b); buf_printf(b, "sp_range_min_v(_t%d)", t); oint_close(c, id, b);
       }
+      else if (sp_streq(name, "take")) {
+        /* Enumerable#take checks the count first, and take(0) never iterates
+           (a beginless one included) */
+        int tf = ++g_tmp, tn = ++g_tmp, ti = ++g_tmp, tc = ++g_tmp;
+        buf_printf(b, "({ sp_int _t%d = ", tn);
+        emit_int_expr(c, argv[0], b);
+        buf_printf(b, "; if (_t%d < 0) sp_raise_cls(\"ArgumentError\", \"attempt to take negative size\");"
+                      " if (_t%d > 0 && _t%d.nobeg) sp_raise_cls(\"TypeError\", \"can't iterate from NilClass\");", tn, tn, t);
+        buf_printf(b, " sp_IntArray *_t%d = sp_IntArray_new(); SP_GC_ROOT(_t%d);", tf, tf);
+        buf_printf(b, " sp_int _t%d = _t%d > 0 ? sp_range_count(_t%d) : 0; sp_int _t%d = sp_range_step(_t%d);"
+                      " for (sp_int _i%d = 0; _i%d < _t%d && _i%d < _t%d; _i%d++)"
+                      " sp_IntArray_push(_t%d, _t%d.first + _i%d * _t%d); _t%d; })",
+                   tc, tn, t, ti, t, tf, tf, tn, tf, tc, tf, tf, t, tf, ti, tf);
+      }
       else if (sp_streq(name, "first") || sp_streq(name, "begin")) {
         /* #first enumerates, so a beginless range has none (#3668) */
         if (argc == 0 && sp_streq(name, "first")) {
@@ -15127,9 +15146,12 @@ int emit_range_call(Compiler *c, int id, Buf *b) {
         else if (argc == 1) {
           /* first(n): the first n elements from `first`, walking by step. */
           int tf = ++g_tmp, tn = ++g_tmp, ti = ++g_tmp, tc = ++g_tmp;
-          buf_printf(b, "({ sp_IntArray *_t%d = sp_IntArray_new(); sp_int _t%d = ", tf, tn);
+          /* range_first refuses a beginless Range before it reads the count */
+          buf_printf(b, "({ if (_t%d.nobeg) sp_raise_cls(\"RangeError\", \"cannot get the first element of beginless range\");"
+                        " sp_int _t%d = ", t, tn);
           emit_int_expr(c, argv[0], b);   /* first(nil) is CRuby's TypeError */
-          buf_printf(b, "; if (_t%d < 0) sp_raise_cls(\"ArgumentError\", \"negative array size\");", tn);
+          buf_printf(b, "; if (_t%d < 0) sp_raise_cls(\"ArgumentError\", \"negative array size (or size too big)\");", tn);
+          buf_printf(b, " sp_IntArray *_t%d = sp_IntArray_new(); SP_GC_ROOT(_t%d);", tf, tf);
           buf_printf(b, " sp_int _t%d = sp_range_count(_t%d); sp_int _t%d = sp_range_step(_t%d);"
                         " for (sp_int _i%d = 0; _i%d < _t%d && _i%d < _t%d; _i%d++)"
                         " sp_IntArray_push(_t%d, _t%d.first + _i%d * _t%d); _t%d; })",

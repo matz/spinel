@@ -18994,9 +18994,35 @@ static int emit_multi_write_stmt(Compiler *c, int id, Buf *b, int indent, const 
        an sp_String * bare, the C did not build) */
     if (!fresh_str && !boxed_el && !nilish && elt == TY_STRBUF && share_value_fresh(c, els[i], 0))
       fresh_str = 1;
+    /* an Array literal into a local that holds an Array of any value, which
+       the literal shares no alias group with (cf_alias_local_el leaves out
+       a local that may hold an untracked container): built as one, as a
+       new Array no other name holds can be */
+    int lit_poly = 0;
+    if (!nilish && !boxed_el && i < ln && nt_kind(nt, lefts[i]) == NK_LocalVariableTargetNode &&
+        nt_kind(nt, els[i]) == NK_ArrayNode && ty_is_array(elt) && elt != TY_POLY_ARRAY) {
+      const char *pln = nt_str(nt, lefts[i], "name");
+      LocalVar *plv = pln ? scope_local(comp_scope_of(c, id), pln) : NULL;
+      int pec = 0; const int *pev = nt_arr(nt, els[i], "elements", &pec);
+      lit_poly = plv && plv->type == TY_POLY_ARRAY && pec > 0;
+      for (int q = 0; q < pec && lit_poly; q++)
+        if (nt_kind(nt, pev[q]) == NK_SplatNode || nt_kind(nt, pev[q]) == NK_KeywordHashNode) lit_poly = 0;
+      if (lit_poly) elt = TY_POLY_ARRAY;
+    }
     emit_ctype(c, nilish || boxed_el ? TY_POLY : elt, b);
     buf_printf(b, " _t%d = ", tmps[i]);
-    if (nilish) {
+    if (lit_poly) {
+      int pec = 0; const int *pev = nt_arr(nt, els[i], "elements", &pec);
+      int pt = ++g_tmp;
+      buf_printf(b, "({ sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d); ", pt, pt);
+      for (int q = 0; q < pec; q++) {
+        buf_printf(b, "sp_PolyArray_push(_t%d, ", pt);
+        emit_boxed(c, pev[q], b);
+        buf_puts(b, "); ");
+      }
+      buf_printf(b, "_t%d; })", pt);
+    }
+    else if (nilish) {
       /* A void element (e.g. a call that raises) still runs for its side
          effects; only its absent value is replaced with nil. */
       if (!node_is_pure_literal(nt, els[i])) {

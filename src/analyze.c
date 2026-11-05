@@ -6381,6 +6381,17 @@ static int qc_written_before(const NodeTable *nt, int a, int b) {
    the builder's kind and names no superclass (CRuby checks a superclass
    against the builder's, which the passes do not); otherwise the header
    stays a class of its own, as before. */
+/* Does write w run whenever its body runs: a statement of a class or
+   module body, or of a file's top level, not under an if, a loop, a
+   rescue or a block? par: an_parent_map */
+static int qc_write_unconditional(const NodeTable *nt, const int *par, int w) {
+  int st = par && w < nt->count ? par[w] : -1;
+  if (st < 0 || nt_kind(nt, st) != NK_StatementsNode) return 0;
+  int body = par[st];
+  if (body < 0) return 0;
+  NodeKind bk = nt_kind(nt, body);
+  return bk == NK_ClassNode || bk == NK_ModuleNode || bk == NK_ProgramNode;
+}
 static int qc_class_name_defined(Compiler *c, const char *nm, int hdr) {
   const NodeTable *nt = c->nt;
   int ndk = 0, builders = 0, reopens = 0; const NodeKind *dk = class_def_kinds(&ndk);
@@ -6430,10 +6441,63 @@ static unsigned char *qc_colliding_leaves(QCWrite *ws, int wn) {
   free(group); free(first); free(differ);
   return collide;
 }
+/* The class or module body (or file top level) that node n sits in,
+   through ifs, loops, blocks and defs. par: an_parent_map */
+static int qc_enclosing_body(const NodeTable *nt, const int *par, int n) {
+  for (int p = par[n]; p >= 0; p = par[p]) {
+    NodeKind k = nt_kind(nt, p);
+    if (k == NK_ClassNode || k == NK_ModuleNode || k == NK_ProgramNode) return p;
+  }
+  return -1;
+}
+/* `Bar = Class.new { }` that may not run (under an if, a loop, a rescue, a
+   block or a def) beside a header `class Bar` in the same body: CRuby's
+   header reopens the builder's class when the write ran and makes a fresh
+   class when it did not. The passes merge the two as one class, so the
+   header's class had the builder's methods when the write never ran. Such
+   a program is refused. `Bar = Class.new unless defined?(Bar)` runs in a
+   program that writes Bar nowhere else, and stays. */
+static void qc_refuse_conditional_builder(Compiler *c) {
+  const NodeTable *nt = c->nt;
+  int *par = NULL;
+  NT_FOREACH_KIND(nt, NK_ConstantWriteNode, w) {
+    const char *wn = nt_str(nt, w, "name");
+    if (!wn || class_def_builder(nt, w) < 0) continue;
+    if (!par) par = an_parent_map(nt);
+    if (!par) return;
+    if (qc_write_unconditional(nt, par, w)) continue;
+    int st = par[w], cond = st >= 0 ? par[st] : -1;
+    if (cond >= 0 && nt_kind(nt, cond) == NK_UnlessNode) {
+      int pr = nt_ref(nt, cond, "predicate");
+      int dv = pr >= 0 && nt_kind(nt, pr) == NK_DefinedNode ? nt_ref(nt, pr, "value") : -1;
+      if (dv >= 0 && nt_kind(nt, dv) == NK_ConstantReadNode && nt_str(nt, dv, "name") &&
+          sp_streq(nt_str(nt, dv, "name"), wn) && qc_write_unconditional(nt, par, cond))
+        continue;
+    }
+    int body = qc_enclosing_body(nt, par, w);
+    static const NodeKind HK[] = { NK_ClassNode, NK_ModuleNode };
+    for (int h = 0; h < 2; h++)
+      NT_FOREACH_KIND(nt, HK[h], hd) {
+        int cp = nt_ref(nt, hd, "constant_path");
+        if (cp < 0 || nt_kind(nt, cp) != NK_ConstantReadNode || !nt_str(nt, cp, "name") ||
+            !sp_streq(nt_str(nt, cp, "name"), wn) || qc_enclosing_body(nt, par, hd) != body)
+          continue;
+        char msg[512];
+        snprintf(msg, sizeof msg, "a %s = Class.new or Module.new that may not run, beside a "
+                 "`class %s` or `module %s` in the same body, is not supported: spinel cannot "
+                 "tell whether the header reopens the built class; write the builder "
+                 "unconditionally or rename one of them", wn, wn, wn);
+        unsupported_feature(c, w, msg);
+      }
+  }
+  free(par);
+}
+
 void qualify_colliding_classes(Compiler *c) {
   const NodeTable *nt = c->nt;
   QCWrite *ws = NULL; int wn = 0, wcap = 0;
   char path[QC_MAXDEPTH][64];
+  qc_refuse_conditional_builder(c);
   qc_resolve_headers(c);
   /* Headers ask only about native_struct declarations: collected once here,
      not looked for among every call for each nested class. */

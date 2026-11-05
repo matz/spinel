@@ -247,6 +247,7 @@ Each row below is a separate program; the blocks shown capture no outer locals.
 | `foo = Class.new(base) {}` | refused | no binary |
 | `Foo = Class.new(base)` | refused | no binary |
 | `foo = Class.new(base)` | refused | no binary |
+| `Foo = Class.new {}` that may not run (under an `if`, a loop, a `rescue`, a block or a `def`), beside a `class Foo` or `module Foo` in the same body | refused | the header reopens the built class only when the write ran; `Foo = Class.new {} unless defined?(Foo)` works |
 
 An instance of an unnamed class inspects as `#<#<Class:0x...>:0x... @a=1>`,
 and as `#<Foo:0x... @a=1>` once a constant assignment names the class.

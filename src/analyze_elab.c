@@ -2328,7 +2328,8 @@ static void lr_call(ElabRec *x, int node, int fc, int fs, unsigned char *vs, int
         nt_node_set_int((NodeTable *)nt, node, "mixin_by_record", 1);
       /* include, extend or prepend on the body's own class: the module's
          hook fires after it (elab_fire_after) */
-      if (mod >= 0 && !nested && fs == LR_FS_NONE && cls == fc && !sg && (recv < 0 || nt_kind(nt, recv) == NK_SelfNode))
+      if (mod >= 0 && !nested && fs == LR_FS_NONE && !sg &&
+          ((cls == fc && (recv < 0 || nt_kind(nt, recv) == NK_SelfNode)) || nt_int(nt, node, "mixin_by_record", 0)))
         lr_mix_event(x, cls, node, av[i], mod, lr_mix_kind(nt, node, nm, sg));
     }
     else if (is_undef_method_name(nm) || is_remove_method_name(nm)) {
@@ -6755,7 +6756,10 @@ static void lr_fire_mixin(Compiler *c, const LrEvent *v, int node, int frame, Lo
   if (!lr_hook_live(c, v->mod, v->name, p, &d)) return;
   int dn = d ? d->node : -1;
   if (dn >= 0 && nt_kind(nt, dn) == NK_DefNode && incl_hook_declined(nt, dn)) return;
-  int base = lr_frame_const(c, frame);
+  /* the includer: the frame's class, or the receiver a record-taken
+     mixin names (`K.include(M)` at the top level or in another body) */
+  int recv = nt_int(nt, node, "mixin_by_record", 0) ? nt_ref(nt, node, "receiver") : -1;
+  int base = recv >= 0 ? nt_clone_subtree(nt, recv) : lr_frame_const(c, frame);
   if (base < 0) return;   /* (a body with no constant to name its class by) */
   /* spliced: the module's own def self.<hook>(base), one required parameter
      (a keyword or a block parameter beside it as the pre-walk splice takes
@@ -6841,7 +6845,8 @@ int elab_fire_after(Compiler *c, int list, int j) {
   for (int i = first; i < r->nev; i++) {
     LrEvent *v = &r->ev[i];
     if (v->mix) {   /* a mixin's: the module's hook, after the mixin (lr_fire_mixin) */
-      if (body && v->stmt == e && v->node == node) lr_fire_mixin(c, v, node, frame, p, &mix);
+      if ((body || nt_int(nt, node, "mixin_by_record", 0)) && v->stmt == e && v->node == node)
+        lr_fire_mixin(c, v, node, frame, p, &mix);
       continue;
     }
     const char *hook = lr_event_hook((LrKind)v->kind, v->sg);

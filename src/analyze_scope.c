@@ -7640,10 +7640,36 @@ static int top_code_runs_between(Compiler *c, int lo, int hi) {
   free(st);
   return runs;
 }
+/* The first of class ci's record-taken mixins (mixin_by_record) in list
+   body, a frame that is none of ci's bodies, when the class's first body is
+   known to run before it: that statement, from which its copies are
+   guarded, as a reopening's are; -1 otherwise */
+static int foreign_late_stmt(Compiler *c, int ci, int body, const LrOpen *ob, int nb) {
+  if (nb < 1 || elab_foreign_mixin_open(c, ci, body) < 0) return -1;
+  for (int k = 0; k < nb; k++) if (ob[k].body == body) return -1;
+  int nmx = 0, s = -1, bn = 0;
+  const LrMixin *mx = elab_class_mixins(c, ci, &nmx);
+  const int *bb = nt_arr(c->nt, body, "body", &bn);
+  for (int i = 0; i < bn && s < 0; i++)
+    for (int j = 0; j < nmx && s < 0; j++)
+      if (mx[j].node == bb[i] && nt_int(c->nt, bb[i], "mixin_by_record", 0)) s = bb[i];
+  if (s < 0) return -1;
+  LoadPoint p0 = elab_point_of(c, ob[0].node), p1 = elab_point_of(c, s);
+  int o = elab_cmp(p0, p1);
+  return o == PROG_BEFORE || (o == PROG_UNKNOWN && p0.region >= 0 && p1.region >= 0) ? s : -1;
+}
 static int include_late_stmt(Compiler *c, int ci, int body) {
   const NodeTable *nt = c->nt;
   int nb = 0;
   const LrOpen *ob = elab_class_bodies(c, ci, &nb);
+  int fl = foreign_late_stmt(c, ci, body, ob, nb);
+  if (fl >= 0) {
+    if (!comp_class_is_module(c, &c->classes[ci])) return fl;
+    int f0, r0, f1, r1;
+    elab_top_place(c, ob[0].node, &f0, &r0);
+    elab_top_place(c, fl, &f1, &r1);
+    return r0 < 0 || r1 < 0 || top_code_runs_between(c, r0, r1) ? fl : -1;
+  }
   for (int k = 1; k < nb; k++) {
     int s = ob[k].node;
     if ((nt_kind(nt, s) != NK_ClassNode && nt_kind(nt, s) != NK_ModuleNode) || nt_ref(nt, s, "body") != body) continue;
@@ -9336,6 +9362,8 @@ static int prepend_late_stmt(Compiler *c, int ci, int body) {
   const NodeTable *nt = c->nt;
   int nb = 0;
   const LrOpen *ob = elab_class_bodies(c, ci, &nb);
+  int fl = foreign_late_stmt(c, ci, body, ob, nb);
+  if (fl >= 0) return fl;
   /* the first body, where a call runs ahead of its prepend: guarded from
      the class's own statement, as a reopening's are */
   if (nb >= 1 && ob[0].body == body && nt_kind(nt, ob[0].node) == NK_ClassNode && prepend_after_call(c, ci, body)) {
@@ -9537,9 +9565,11 @@ static void process_prepend_body(Compiler *c, int ci, int body) {
     }
     free(mx);
   }
-  if (cell && nt_ref(nt, late, "body") == body && elab_class_bodies(c, ci, &(int){0})[0].node == late) {
-    /* the first body, a call ahead of the prepend: after the body's last
-       prepend statement, where the calls after it run */
+  if (cell && ((nt_ref(nt, late, "body") == body && elab_class_bodies(c, ci, &(int){0})[0].node == late) ||
+               list_has_stmt(nt, body, late))) {
+    /* the first body, a call ahead of the prepend, or another frame's list
+       whose `K.prepend M` the record takes (foreign_late_stmt): after the
+       list's last prepend statement, where the calls after it run */
     int n = 0, last = -1;
     BodyMix *mx = body_mixins(c, ci, body, 1u << LR_PREPEND, &n);
     for (int j = 0; j < n; j++) if (last < 0 || elab_sort_key(c, mx[j].stmt) > elab_sort_key(c, last)) last = mx[j].stmt;

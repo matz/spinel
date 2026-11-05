@@ -1598,6 +1598,31 @@ static int erm_body_declares(const NodeTable *nt, const int *parent, int encl, c
     }
   return decl;
 }
+/* Are arguments first.. of a mixin each a module the program declares or a
+   core module, by a constant's name? */
+static int erm_args_modules(const NodeTable *nt, const int *av, int first, int an) {
+  if (!av || an - first < 1) return 0;
+  /* (a program that defines a mixin hook keeps the reopening, whose body
+     fires it) */
+  static const char *const hooks[] = { "included", "prepended", "append_features", "prepend_features", NULL };
+  NT_FOREACH_KIND(nt, NK_DefNode, d) {
+    const char *dn = nt_str(nt, d, "name");
+    for (int h = 0; dn && hooks[h]; h++) if (sp_streq(dn, hooks[h])) return 0;
+  }
+  /* (nor does one that autoloads: a module an autoload brings may be
+     named before the walk has it) */
+  NT_FOREACH_KIND(nt, NK_CallNode, a) {
+    const char *an_ = nt_str(nt, a, "name");
+    if (an_ && sp_streq(an_, "autoload")) return 0;
+  }
+  for (int i = first; i < an; i++) {
+    NodeKind k = nt_kind(nt, av[i]);
+    const char *mn = k == NK_ConstantReadNode || k == NK_ConstantPathNode ? nt_str(nt, av[i], "name") : NULL;
+    if (!mn) return 0;
+    if (!(k == NK_ConstantReadNode && is_builtin_module_name(mn)) && erm_declared_as(nt, mn) != 2) return 0;
+  }
+  return 1;
+}
 static int erm_rewrite_stmt(Compiler *c, int st, const char *self_leaf, const int *parent, int encl) {
   NodeTable *nt = (NodeTable *)c->nt;
   if (nt_kind(nt, st) != NK_CallNode || nt_ref(nt, st, "block") >= 0) return st;
@@ -1623,6 +1648,12 @@ static int erm_rewrite_stmt(Compiler *c, int st, const char *self_leaf, const in
   const char *leaf = nt_str(nt, recv, "name");
   if (!leaf || (sp_streq(leaf, "Object") && sp_streq(nm, "extend"))) return st;
   int decl = erm_declared_as(nt, leaf);
+  /* `K.include(M)` / `K.prepend(M)` at the top level on a class of the
+     program, of modules of the program or core modules: the load record
+     takes it as one of K's bodies' (mixin_by_record), where it runs */
+  if (decl && !self_leaf && !attr && sclass < 0 && !sp_streq(nm, "extend") && !is_builtin_reopen_name(leaf) &&
+      !is_builtin_module_name(leaf) && erm_args_modules(nt, av, first, an))
+    return st;
   /* Fiber and Thread take a mixin in a reopening (fiber-annotation's
      `Fiber.prepend(Fiber::Annotation)`); their attr_* have a pass of
      their own */

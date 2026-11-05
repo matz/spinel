@@ -7338,6 +7338,33 @@ static void include_chain_copy(Compiler *c, int ci, int mod_id, const int *made,
   }
 }
 
+/* The copy class ci holds, from this include (made, of the snap scopes
+   before it), of an earlier version of module mod_id's method ms: a def
+   of the same name and side the module made before (a reopening's, or
+   one more in the same body), -1 for none. CRuby's module holds one
+   method of the name at a time, so a later version is a version of that
+   copy, under its name: the record orders them (elab_mark_versions,
+   ct_def_version), and the super of each reaches past the module. */
+static int mixin_prev_version(Compiler *c, int mod_id, int ms, const int *made) {
+  const Scope *src = &c->scopes[ms];
+  for (int s = ms - 1; s >= 0; s--) {
+    const Scope *k = &c->scopes[s];
+    if (k->class_id != mod_id || k->shadow || k->is_cmethod != src->is_cmethod || !k->name || !sp_streq(k->name, src->name)) continue;
+    return made[s] ? made[s] - 1 : -1;
+  }
+  return -1;
+}
+/* Does a super reach any version of module mod_id's method `name`
+   (inc_super_reached)? The include keeps what the module stands in
+   front of when one does. */
+static int mixin_versions_super_reached(Compiler *c, int mod_id, const char *name) {
+  for (int s = 0; s < c->nscopes; s++) {
+    const Scope *k = &c->scopes[s];
+    if (k->class_id == mod_id && !k->shadow && !k->is_cmethod && k->name && sp_streq(k->name, name) && inc_super_reached(c, s, mod_id, name)) return 1;
+  }
+  return 0;
+}
+
 /* Copy module mod_id's instance methods into class ci, one clone per
    includer, as `include` does (process_include_body). guard: an include a
    reopening runs after the class's first body; the copy that becomes the
@@ -7394,7 +7421,19 @@ static void include_module_methods(Compiler *c, int ci, int mod_id, int guard, i
        same definition (reached through another module included before) is
        Ruby's no-op: the copy stands as it is */
     if (own >= 0 && c->scopes[own].is_include_copy && c->scopes[own].def_node == src->def_node) continue;
-    if (own >= 0 && c->scopes[own].is_include_copy) {
+    /* a later version of a method of the module's: a version of the
+       earlier one's copy, by its name, where that stands under the real
+       name (mixin_prev_version) */
+    int prev = src->shadow ? -1 : mixin_prev_version(c, mod_id, ms, made), vguard = -1;
+    if (prev >= 0 && c->scopes[prev].mixin_guarded && c->scopes[prev].guard_behind >= 0 &&
+        sp_streq(comp_scope_user_name(&c->scopes[prev]), src->name)) {
+      /* (a guarded copy's: under its hidden name, with its guard) */
+      snprintf(inc_shadow, sizeof inc_shadow, "%s", c->scopes[prev].name);
+      dst_name = inc_shadow;
+      own = -1, guarded = 0, vguard = prev;
+    }
+    else if (prev >= 0 && !c->scopes[prev].shadow && sp_streq(c->scopes[prev].name, src->name)) own = -1, guarded = 0;
+    else if (own >= 0 && c->scopes[own].is_include_copy) {
       /* An earlier include of another module put this name here. Ruby's MRO
          puts the LAST include first, so this module supersedes it: rename
          the earlier copy to a shadow (carrying its own super target with
@@ -7411,7 +7450,7 @@ static void include_module_methods(Compiler *c, int ci, int mod_id, int guard, i
       free(c->scopes[own].name);
       c->scopes[own].name = strdup(inc_shadow);
       comp_scope_set_shadow(c, own, SHADOW_INC, src->name);
-      if (inc_super_reached(c, ms, mod_id, src->name)) comp_prep_chain_add(cif, src->name, inc_shadow);
+      if (mixin_versions_super_reached(c, mod_id, src->name)) comp_prep_chain_add(cif, src->name, inc_shadow);
       /* (a guarded copy's entry runs the earlier copy until the include
          has run) */
       else if (!guarded) { c->scopes[own].reachable = 0; comp_touch_scope(c->scopes[own].idx); }   /* nothing can reach it now */
@@ -7479,7 +7518,8 @@ static void include_module_methods(Compiler *c, int ci, int mod_id, int guard, i
     int dst_idx = c->nscopes - 1;
     /* comp_scope_new may realloc c->scopes; re-derive src pointer. */
     src = &c->scopes[ms];
-    if (dst_name == inc_shadow) comp_scope_set_shadow(c, dst_idx, src->shadow ? src->shadow : SHADOW_INC, comp_scope_user_name(src));
+    if (vguard >= 0) comp_scope_copy_shadow(c, dst_idx, vguard, NULL);
+    else if (dst_name == inc_shadow) comp_scope_set_shadow(c, dst_idx, src->shadow ? src->shadow : SHADOW_INC, comp_scope_user_name(src));
     else comp_scope_copy_shadow(c, dst_idx, ms, NULL);
     /* Clone the body and re-attribute it to the target when either:
        (a) the target is a built-in class, where `self` has a different
@@ -7555,6 +7595,7 @@ else {
       prepend_copy_name(c, dst_idx);
       src = &c->scopes[ms]; dst = &c->scopes[dst_idx];
     }
+    else if (vguard >= 0) { dst->mixin_guarded = c->scopes[vguard].mixin_guarded; dst->guard_behind = c->scopes[vguard].guard_behind; }
     else if (src->mixin_guarded) { dst->mixin_guarded = src->mixin_guarded; dst->guard_behind = -1 - src->guard_behind; }
     made[ms] = dst_idx + 1;
     /* Scan source body for ivar accesses and register them in the
@@ -7936,6 +7977,7 @@ static void prepend_copy_name(Compiler *c, int mi) {
   free(user);
 }
 static void specialize_cmethod_for(Compiler *c, int mi, const char *as, int def_cls, int ci, int cell, int behind);
+static void cmethod_copy_into(Compiler *c, int mi, const char *as, int def_cls, int ci, int cell, int behind);
 static int prepend_late_stmt(Compiler *c, int ci, int body);
 static int prepend_cell(Compiler *c, int *cell);
 static void prepend_cell_write(Compiler *c, int late, int list, int after, int cell);
@@ -8260,6 +8302,11 @@ static int extend_class_with(Compiler *c, int ci, int mod_id, int inherited, int
     }
     int own = comp_cmethod_in_class(c, ci, src->name);
     if (own >= 0 && inherited) continue;
+    /* a later version of a method of the module's: a version of the
+       earlier one's copy, by its name (mixin_prev_version) */
+    int prev = mixin_prev_version(c, mod_id, ms, made);
+    int ver = prev >= 0 && !c->scopes[prev].shadow && sp_streq(c->scopes[prev].name, src->name);
+    if (ver) own = -1;
     /* The class's own class method comes first, and a module it extends
        sits behind it: a super in the own method reaches the module's,
        copied in under a shadow name, in front of any module extended
@@ -8365,7 +8412,8 @@ static int extend_class_with(Compiler *c, int ci, int mod_id, int inherited, int
         NT_FOREACH_KIND(nt2, ow[k], ivid)
           if (c->nscope[ivid] == ms && nt_str(nt2, ivid, "name"))
             comp_ivar_intern(&c->classes[ci], nt_str(nt2, ivid, "name")); }
-    specialize_cmethod_for(c, ms, NULL, mod_id, ci, guard, behind_mi);
+    if (ver) cmethod_copy_into(c, ms, src->name, mod_id, ci, 0, -1);
+    else specialize_cmethod_for(c, ms, NULL, mod_id, ci, guard, behind_mi);
     src = &c->scopes[ms];  /* realloc-safe */
     { int cp = comp_cmethod_in_class(c, ci, src->name);
       if (cp >= 0) { c->scopes[cp].is_extend_copy = 1; made[ms] = cp + 1; }
@@ -8863,6 +8911,12 @@ static int body_tail_is_bare_new(const NodeTable *nt, int body) {
 static void specialize_cmethod_for(Compiler *c, int mi, const char *as, int def_cls, int ci, int cell, int behind) {
   if (!as) as = c->scopes[mi].name;
   if (!cell && comp_cmethod_in_class(c, ci, as) >= 0) return;
+  cmethod_copy_into(c, mi, as, def_cls, ci, cell, behind);
+}
+/* ...the copy itself, as `as`, whatever ci holds of that name: a later
+   version of a module's method an extend copies is a version of the
+   earlier one's copy (mixin_prev_version) */
+static void cmethod_copy_into(Compiler *c, int mi, const char *as, int def_cls, int ci, int cell, int behind) {
   NodeTable *nt = (NodeTable *)c->nt;
   int has_new = 0;
   (void)cmethod_needs_specialization(c, mi, ci, def_cls, &has_new);
@@ -9521,7 +9575,16 @@ static void process_prepend_body(Compiler *c, int ci, int body) {
           mixin_shadow_name(c, ci, sc, hidden, sizeof hidden);
           method_name = hidden;
         }
-        int active_mi = sc->shadow ? -1 : comp_method_in_class(c, ci, method_name);
+        /* a later version of a method of the module's: a version of the
+           earlier one's copy, under its name, with its guard
+           (mixin_prev_version) */
+        int prev = sc->shadow ? -1 : mixin_prev_version(c, mod_id, ms, made), vguard = -1;
+        if (prev >= 0 && c->scopes[prev].mixin_guarded && sp_streq(comp_scope_user_name(&c->scopes[prev]), method_name)) {
+          snprintf(hidden, sizeof hidden, "%s", c->scopes[prev].name);
+          method_name = hidden;
+          vguard = prev;
+        }
+        int active_mi = sc->shadow || prev >= 0 ? -1 : comp_method_in_class(c, ci, method_name);
         int guard = active_mi >= 0 && late >= 0;
         if (active_mi >= 0) {
           Scope *active = &c->scopes[active_mi];
@@ -9569,7 +9632,7 @@ static void process_prepend_body(Compiler *c, int ci, int body) {
           Scope *dst = comp_scope_new(c, method_name, sc->def_node);
           int dst_i = c->nscopes - 1;
           sc = &c->scopes[ms_i];               /* comp_scope_new may realloc */
-          comp_scope_copy_shadow(c, dst_i, ms_i, NULL);
+          comp_scope_copy_shadow(c, dst_i, vguard >= 0 ? vguard : ms_i, NULL);
           if (sc->body >= 0) {
             int nb = nt_clone_subtree((NodeTable *)nt, sc->body);
             comp_grow_node_arrays(c);
@@ -9591,6 +9654,7 @@ static void process_prepend_body(Compiler *c, int ci, int body) {
           /* a call reaches the method behind it until the reopening's
              statement has run (Scope.mixin_guarded) */
           if (guard) { dst->mixin_guarded = prepend_cell(c, &cell); dst->guard_behind = active_mi; }
+          else if (vguard >= 0) { dst->mixin_guarded = c->scopes[vguard].mixin_guarded; dst->guard_behind = c->scopes[vguard].guard_behind; }
           { dst->origin_module_ci = mod_id + 1; comp_touch_scope(dst->idx); }   /* #owner names the module */
           { dst->reachable = sc->reachable; comp_touch_scope(dst->idx); }
           scope_set_ret(dst, sc->ret);

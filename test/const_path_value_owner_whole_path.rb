@@ -16,3 +16,8 @@ rescue NameError => e
   puts e.message
 end
 p A::M::Foo, M::Foo
+# a header written through an alias keeps its constants
+AliasA = A
+module AliasA::M2; Foo = 9; end
+class AliasA::K2; Foo = 8; end
+[A::M2, A::K2].each { |m| p look(m) }

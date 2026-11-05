@@ -808,11 +808,42 @@ static int class_path_key(Compiler *c, int k, char *out, size_t cap) {
   }
   return nl > 0;
 }
+/* Which class's whole path is key P (-1 for none): a table of every
+   class's path, made again when classes are added or move. A hit is
+   checked against the class's path as it is now. */
+static struct { const ClassInfo *base; int n, cap; int *slot; } cpk_tab = { NULL, -1, 0, NULL };
+static int class_with_path_key(Compiler *c, const char *p) {
+  if (cpk_tab.base != c->classes || cpk_tab.n != c->nclasses) {
+    int cap = 64;
+    while (cap < c->nclasses * 2) cap *= 2;
+    free(cpk_tab.slot);
+    cpk_tab.slot = malloc(sizeof(int) * (size_t)cap);
+    if (!cpk_tab.slot) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    for (int i = 0; i < cap; i++) cpk_tab.slot[i] = -1;
+    for (int k = 0; k < c->nclasses; k++) {
+      char kp[512];
+      if (!class_path_key(c, k, kp, sizeof kp)) continue;
+      unsigned j = sp_strhash(kp) & (unsigned)(cap - 1);
+      while (cpk_tab.slot[j] >= 0) j = (j + 1) & (unsigned)(cap - 1);
+      cpk_tab.slot[j] = k;
+    }
+    cpk_tab.base = c->classes; cpk_tab.n = c->nclasses; cpk_tab.cap = cap;
+  }
+  for (unsigned j = sp_strhash(p) & (unsigned)(cpk_tab.cap - 1); cpk_tab.slot[j] >= 0; j = (j + 1) & (unsigned)(cpk_tab.cap - 1)) {
+    char kp[512];
+    int k = cpk_tab.slot[j];
+    if (class_path_key(c, k, kp, sizeof kp) && sp_streq(kp, p)) return k;
+  }
+  return -1;
+}
 /* The constant class k owns under NM (comp_const_tail_cands above), or -1:
-   the one keyed by k's whole path (A__M__NM). Only when that path cannot be
-   spelled (a name missing, too deep), the first, in table order, whose key
-   is "<c_name>__NM" or ends in "__<c_name>__NM". A key too long for the
+   the one keyed by k's whole path (A__M__NM) first. Otherwise the first, in
+   table order, whose key is "<c_name>__NM" or ends in "__<c_name>__NM"
+   (a header written through an alias, `module AliasA::M2`, keys its
+   constants by the alias), unless that key is another class's whole path
+   (A__M__NM is A::M's, not a top-level M's). A key too long for the
    buffer is matched as it was before the list, against every constant. */
+static int const_index_raw(Compiler *c, const char *name);
 int comp_class_owned_const(Compiler *c, int k, const char *nm, const int *cands, int ncands) {
   const char *kn = c->classes[k].c_name;
   if (!kn || !nm) return -1;
@@ -820,14 +851,12 @@ int comp_class_owned_const(Compiler *c, int k, const char *nm, const int *cands,
   int have_kp = class_path_key(c, k, kp, sizeof kp);
   if (have_kp) {
     snprintf(full, sizeof full, "%s__%s", kp, nm);
-    for (int j = 0; j < ncands; j++) if (sp_streq(c->consts[cands[j]].name, full)) return cands[j];
-    /* (a key that only ends the same way is another class's: A::M's
-       A__M__NM is not a top-level M's, nor M__NM A::M's) */
-    return -1;
+    int own = const_index_raw(c, full);
+    if (own >= 0) return own;
   }
   char tail[512];
   snprintf(tail, sizeof tail, "%s__%s", kn, nm);
-  size_t tl = strlen(tail);
+  size_t tl = strlen(tail), nl = strlen(nm);
   int all = strlen(kn) + 2 + strlen(nm) >= sizeof tail;
   int n = all ? c->nconsts : ncands;
   for (int j = 0; j < n; j++) {
@@ -837,6 +866,13 @@ int comp_class_owned_const(Compiler *c, int k, const char *nm, const int *cands,
     if (l < tl || strcmp(cn + l - tl, tail) != 0) continue;
     /* either the whole key, or a component edge before it */
     if (l > tl && strncmp(cn + l - tl - 2, "__", 2) != 0) continue;
+    /* (not one keyed by another class's whole path) */
+    if (l > nl + 2 && l - nl - 2 < 512) {
+      char pre[512];
+      memcpy(pre, cn, l - nl - 2); pre[l - nl - 2] = 0;
+      int o = class_with_path_key(c, pre);
+      if (o >= 0 && o != k) continue;
+    }
     return ci;
   }
   return -1;
@@ -845,15 +881,16 @@ int comp_class_owned_const(Compiler *c, int k, const char *nm, const int *cands,
    large program has thousands: a hash over the names, rebuilt when the table
    grows or moves (its names are unique, interned by comp_const_intern). */
 static int *cst_idx; static int cst_cap, cst_n = -1; static const LocalVar *cst_base;
-LocalVar *comp_const(Compiler *c, const char *name) {
-  if (!name) return NULL;
-  IMEMO_DEP_GLOBAL();
-  if (c->nconsts < 16) return lv_find(c->consts, c->nconsts, name);
+/* (the lookup itself, which comp_const below also records as a read of
+   the whole table for the memo) */
+static int const_index_raw(Compiler *c, const char *name) {
+  if (c->nconsts < 16) { for (int i = 0; i < c->nconsts; i++) if (sp_streq(c->consts[i].name, name)) return i; return -1; }
   if (cst_n != c->nconsts || cst_base != c->consts) {
     int cap = 64;
     while (cap < c->nconsts * 2) cap *= 2;
     free(cst_idx);
     cst_idx = malloc(sizeof(int) * (size_t)cap);
+    if (!cst_idx) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
     for (int i = 0; i < cap; i++) cst_idx[i] = -1;
     for (int i = 0; i < c->nconsts; i++) {
       unsigned j = sp_strhash(c->consts[i].name) & (unsigned)(cap - 1);
@@ -864,8 +901,14 @@ LocalVar *comp_const(Compiler *c, const char *name) {
   }
   unsigned j = sp_strhash(name) & (unsigned)(cst_cap - 1);
   for (; cst_idx[j] >= 0; j = (j + 1) & (unsigned)(cst_cap - 1))
-    if (sp_streq(c->consts[cst_idx[j]].name, name)) return &c->consts[cst_idx[j]];
-  return NULL;
+    if (sp_streq(c->consts[cst_idx[j]].name, name)) return cst_idx[j];
+  return -1;
+}
+LocalVar *comp_const(Compiler *c, const char *name) {
+  if (!name) return NULL;
+  IMEMO_DEP_GLOBAL();
+  int i = const_index_raw(c, name);
+  return i >= 0 ? &c->consts[i] : NULL;
 }
 LocalVar *comp_const_intern(Compiler *c, const char *name) { return lv_intern(&c->consts, &c->nconsts, &c->cconsts, name); }
 

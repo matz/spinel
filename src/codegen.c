@@ -16519,7 +16519,7 @@ static void emit_obj_cmp_dispatch(Compiler *c, Buf *b) {
     if (m->nparams < 1) continue;
     /* a `<=>` that answers no number (always nil) still runs: Comparable's
        == and the sorts call it and read its answer as not-comparable */
-    int non_numeric = m->ret != TY_INT && m->ret != TY_POLY && m->ret != TY_FLOAT;
+    int non_numeric = m->ret != TY_INT && m->ret != TY_POLY && m->ret != TY_FLOAT && m->ret != TY_BIGINT;
     /* the operand's parameter, the one the argument layout binds it to: not
        the first when an optional comes ahead of it (`def <=>(s = 1, o)`);
        none when a rest takes it (`def <=>(*r)`): the boxed operand, which
@@ -16649,12 +16649,18 @@ static void emit_obj_cmp_dispatch(Compiler *c, Buf *b) {
       buf_printf(b, "      sp_float _rf = %s(%s%s);\n", callee, selfarg, args.p ? args.p : "");
       buf_puts(b, "      *comparable = TRUE; return (_rf > 0) - (_rf < 0);\n");
     }
+    else if (m->ret == TY_BIGINT) {
+      /* a Bignum is an Integer answer too: its sign orders the pair */
+      buf_printf(b, "      sp_Bigint *_rb = %s(%s%s);\n", callee, selfarg, args.p ? args.p : "");
+      buf_puts(b, "      *comparable = TRUE; return sp_bigint_sign(_rb);\n");
+    }
     else {
       /* poly `<=>`: an Integer or Float result is comparable (use its sign);
          nil or any other type (String, ...) is incomparable -> ArgumentError */
       buf_printf(b, "      sp_RbVal _r = %s(%s%s);\n", callee, selfarg, args.p ? args.p : "");
       buf_puts(b, "      if (_r.tag == SP_TAG_INT) { *comparable = TRUE; return _r.v.i; }\n");
       buf_puts(b, "      if (_r.tag == SP_TAG_FLT) { *comparable = TRUE; return (_r.v.f > 0) - (_r.v.f < 0); }\n");
+      buf_puts(b, "      if (_r.tag == SP_TAG_BIGINT) { *comparable = TRUE; return sp_bigint_sign((sp_Bigint *)_r.v.p); }\n");
       buf_puts(b, "      *comparable = FALSE; return 0;\n");
     }
     buf_puts(b, "    }\n");

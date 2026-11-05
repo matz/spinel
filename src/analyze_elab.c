@@ -5148,13 +5148,13 @@ int elab_version_captured(Compiler *c, const char *name) {
 }
 
 /* Did a pass make node, a copy included (nt_origin), or does it come from
-   the builtin prelude (node_bi) or a file the resolver found under
-   builtins/ or a pre-installed package (nt_file_tier)? Such a node stands
-   where the pass linked it, which for a def or a mixin a lowering appends,
-   or a method body it copies into a helper, is after every file, or where
-   the program's require of the library is, which CRuby may have loaded
-   before the program (`set`, `pathname` at boot): no point in CRuby's
-   load order the record holds. Not a copy a rewrite put in its source's
+   the builtin prelude (node_bi)? Such a node stands where the pass linked
+   it, which for a def or a mixin a lowering appends, or a method body it
+   copies into a helper, is after every file: no point in CRuby's load
+   order the record holds. A library file's nodes are not among them: the
+   load model places the file (a boot library at the program's start, any
+   other at its require), and the record reads the point as it does for the
+   program's own. Not a copy a rewrite put in its source's
    place (node_in_place: the source became the parentheses that run it), which
    runs where the source stood, in its frame, once, and stands where it is
    linked; nor a node of an eval's text the graft put in place of the eval
@@ -5162,11 +5162,9 @@ int elab_version_captured(Compiler *c, const char *name) {
    does. A clone of either (how 'c') stands where the clone is. */
 static int lr_unplaced(Compiler *c, int node) {
   char how = 0; int a = 0, k = 0; unsigned pass = 0;
-  int tier = nt_file_tier(c->nt, (int)nt_int(c->nt, node, "node_file", -1));
   int made = nt_origin(c->nt, node, &how, &a, &pass, &k) >= 0;
   return nt_int(c->nt, node, "node_bi", 0) ||
-         (made && (how == 'c' || (!nt_int(c->nt, node, "node_in_place", 0) && !nt_int(c->nt, node, "node_eval", 0)))) ||
-         tier == SP_LIB_BUILTIN || tier == SP_LIB_PACKAGE;
+         (made && (how == 'c' || (!nt_int(c->nt, node, "node_in_place", 0) && !nt_int(c->nt, node, "node_eval", 0))));
 }
 
 /* May what the record cannot order supply `name` on cls's chain (its

@@ -10,6 +10,7 @@
 #ifndef SPINEL_BUILTIN_NAMES_H
 #define SPINEL_BUILTIN_NAMES_H
 
+#include <stddef.h>
 #include "types.h"
 
 int is_zip_name(const char *n);       /* zip: tuple-yielding iteration */
@@ -734,6 +735,8 @@ typedef struct {
   const char *rides;     /* the require that makes the add-on available ("time"), or NULL */
 } PackageFact;
 const PackageFact *package_fact_at(int i);   /* the i-th row, NULL past the last */
+int boot_package_rank(const char *feature);          /* a require of a package CRuby has at boot: its place in their load order, else -1 */
+int boot_package_rank_of_path(const char *path, size_t len);   /* the same for such a package's file (`len` bytes of its path) */
 
 /* ---- Spinel's native classes, modules and exceptions (BUILTIN_CLASSES) ----
    One row per name: which predicate accepts it (BC_*) and its negative

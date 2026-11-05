@@ -5981,6 +5981,40 @@ static int sp_src_defines_module(const char *source, const char *cname) {
   return 0;
 }
 
+/* Where boot package `rank` (boot_package_rank) goes among the boot packages
+   `text` already has spliced: the packages' files are the blocks of lines
+   from a PUSH or INSERT marker to the POP that closes it, which stand in a
+   row at the text's start (a package's file carries the package tier in its
+   marker; a program's own file of the same name does not), and the
+   packages' load order is the facts' order (as sp_graph_boot loads them).
+   The offset of the first block of a package that loads after it, else the
+   end of the last block of one that loads before it, else 0. */
+static size_t sp_boot_insert_at(const char *text, int rank) {
+  size_t pos = 0, after = 0;
+  for (;;) {
+    const char *line = text + pos, *eol = strchr(line, '\n');
+    size_t pl = !strncmp(line, SP_PUSH_PREFIX, strlen(SP_PUSH_PREFIX)) ? strlen(SP_PUSH_PREFIX)
+              : !strncmp(line, SP_INSERT_PREFIX, strlen(SP_INSERT_PREFIX)) ? strlen(SP_INSERT_PREFIX) : 0;
+    if (!pl || !eol) return after;
+    size_t fl = (size_t)(eol - line) - pl;
+    int tier;
+    const char *fp = sp_marker_file(line + pl, &fl, &tier);
+    int depth = 0;
+    const char *q = line;
+    do {
+      if (!strncmp(q, SP_PUSH_PREFIX, strlen(SP_PUSH_PREFIX)) || !strncmp(q, SP_INSERT_PREFIX, strlen(SP_INSERT_PREFIX))) depth++;
+      else if (!strncmp(q, SP_POP_PREFIX, strlen(SP_POP_PREFIX))) depth--;
+      const char *nl = strchr(q, '\n');
+      if (!nl) return after;   /* (a block with no end: not one) */
+      q = nl + 1;
+    } while (depth > 0);
+    int r = (tier & ~SP_FILE_DEFERRED) == SP_LIB_PACKAGE ? boot_package_rank_of_path(fp, fl) : -1;
+    if (r > rank) return pos;
+    if (r >= 0) after = (size_t)(q - text);
+    pos = (size_t)(q - text);
+  }
+}
+
 /* `head` (a require line) written into `source` at offset `at`, which is the
    start of a line, and resolved there. The file it splices is marked as
    inserted, so the program's own line numbers stay where they are. */
@@ -6004,6 +6038,15 @@ static char *sp_splice_require_at(char *source, const char *exe_path, const char
   memcpy(w, ns, at); memcpy(w + at, SP_INSERT_PREFIX, il); memcpy(w + at + il, ns + at + pl, nl - at - pl + 1);
   free(ns);
   return w;
+}
+
+/* Boot package `feature`, which the program names without requiring it
+   (CRuby has it loaded at boot): spliced among the boot packages by their
+   load order. */
+static char *sp_splice_boot_package(char *source, const char *exe_path, const char *feature,
+                                    unsigned char **fsl, size_t *fsl_n) {
+  char head[96]; snprintf(head, sizeof head, "require \"%s\"\n", feature);
+  return sp_splice_require_at(source, exe_path, head, sp_boot_insert_at(source, boot_package_rank(feature)), fsl, fsl_n);
 }
 
 static char *sp_splice_named_builtin(char *source, const char *exe_path, const char *cname,
@@ -6454,8 +6497,6 @@ else {
         sp_req_resolved++;
       }
     }
-    if (g) sp_load_edge(&g->spl, &g->nspl, &g->splcap, -1, 0, 1, lib_name, spl_how,
-                        spl_how == SP_LOAD_FILE ? sp_load_file(g, spl_to) : -1);
     /* Stub arms above leave cfsl NULL: their content is a one-line comment. */
     if (!cfsl) cfsl = sp_fsl_make(content, 0, &cfsl_n);
     if (sp_require_preloaded(lib_name)) req_val = "false";
@@ -6465,6 +6506,29 @@ else {
        line map's accounting for code after the require. No-op without --debug. */
     content = sp_wrap_included(content, lib_path, lib_tier);
     sp_fsl_pad_wrap(&cfsl, &cfsl_n);
+
+    /* A library CRuby has loaded at boot is loaded before the program's first
+       statement, as --load-model=graph loads it (sp_graph_boot), and the
+       boot packages in the order the facts list them: its text goes among
+       theirs at the start (sp_boot_insert_at), and the call stays where it
+       is, to find the file already included and answer so (the next round of
+       this scan). A call that stands at that place is there already. */
+    int boot_rank = lib_tier == SP_LIB_PACKAGE ? boot_package_rank(lib_name) : -1;
+    size_t boot_at = boot_rank >= 0 ? sp_boot_insert_at(result, boot_rank) : 0;
+    if (boot_rank >= 0 && (size_t)(hit.kw - result) != boot_at) {
+      char *call = strndup(hit.kw, (size_t)(hit.expr_end - hit.kw));
+      if (!call) { fprintf(stderr, "spinel_parse: out of memory\n"); exit(1); }
+      sp_req_hoist_splice(&result, fsl, fsl_n, &hit, boot_at, content, cfsl, cfsl_n, call);
+      free(call);
+      free(cfsl);
+      free(content);
+      free(canon_keep);
+      continue;
+    }
+
+    /* (a boot library's call is recorded by the round that finds it again) */
+    if (g) sp_load_edge(&g->spl, &g->nspl, &g->splcap, -1, 0, 1, lib_name, spl_how,
+                        spl_how == SP_LOAD_FILE ? sp_load_file(g, spl_to) : -1);
 
     /* The call's value is live: the require sits in a condition, an
        assignment, a receiver chain, or carries a trailing modifier
@@ -8547,16 +8611,16 @@ static NodeTable *sp_parse_emit(const char *source_file, const char *argv0) {
      they are used, in a required file as well (activesupport's
      notifications/fanout.rb; #6740 for IO::Buffer). Ask over the resolved
      program, the way the builtins splice below does, and splice the binding
-     ahead of everything when it is named and was not required.
-     sp_splice_require_at marks the splice as inserted, so the program's own
-     line numbers stay where they are; a require written into the entry
-     file's text instead took a line of its own and pushed every later line
-     down by one. */
+     among the boot packages at the start (sp_boot_insert_at) when it is
+     named and was not required. sp_splice_require_at marks the splice as
+     inserted, so the program's own line numbers stay where they are; a
+     require written into the entry file's text instead took a line of its
+     own and pushed every later line down by one. */
   if (!sp_feature_required("set") && !sp_src_opens(source, "class Set") &&
       source_references_set(source))
-    source = sp_splice_require_at(source, argv0, "require \"set\"\n", 0, &fsl, &fsl_n);
+    source = sp_splice_boot_package(source, argv0, "set", &fsl, &fsl_n);
   if (!sp_feature_required("io/buffer") && source_references_io_buffer(source))
-    source = sp_splice_require_at(source, argv0, "require \"io/buffer\"\n", 0, &fsl, &fsl_n);
+    source = sp_splice_boot_package(source, argv0, "io/buffer", &fsl, &fsl_n);
   /* CRuby's time.rb (packages/time) for a program that requires "time" and
      calls Time.parse or Time.strptime; any other program keeps the
      runtime's C (#9946). */

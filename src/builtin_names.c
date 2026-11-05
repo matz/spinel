@@ -2256,6 +2256,32 @@ static const PackageFact package_facts[] = { SP_PACKAGE_FACTS(SP_PACKAGE_FACT_RO
 const PackageFact *package_fact_at(int i) {
   return i >= 0 && i < (int)(sizeof package_facts / sizeof package_facts[0]) ? &package_facts[i] : NULL;
 }
+/* The place of boot package `feature` ("set") among the packages CRuby has
+   loaded at boot, in the order the facts list them (the order they load in),
+   or -1 when a require of it is not one. */
+int boot_package_rank(const char *feature) {
+  const PackageFact *pf;
+  int rank = 0;
+  for (int i = 0; feature && (pf = package_fact_at(i)) != NULL; i++) {
+    if (!pf->boot) continue;
+    if (sp_streq(pf->feature, feature)) return rank;
+    rank++;
+  }
+  return -1;
+}
+/* The same for a package's file, the `len` bytes of `path` (".../set/set.rb") */
+int boot_package_rank_of_path(const char *path, size_t len) {
+  const PackageFact *pf;
+  int rank = 0;
+  for (int i = 0; path && (pf = package_fact_at(i)) != NULL; i++) {
+    if (!pf->boot) continue;
+    char tail[256];
+    int tl = snprintf(tail, sizeof tail, "/%s/%s.rb", pf->package, pf->feature);
+    if (tl > 0 && (size_t)tl <= len && !strncmp(path + len - (size_t)tl, tail, (size_t)tl)) return rank;
+    rank++;
+  }
+  return -1;
+}
 
 /* One table for the builtin class/module/exception names. These four
    predicates were four independent lists that had to be kept in step by hand,

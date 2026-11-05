@@ -2193,6 +2193,7 @@ static int lr_frame_body(const NodeTable *nt, int fnode) {
   NodeKind k = nt_kind(nt, fnode);
   if (k == NK_ProgramNode) return nt_ref(nt, fnode, "statements");
   if (k == NK_ClassNode || k == NK_ModuleNode) return class_def_body(nt, fnode);
+  if (k == NK_SingletonClassNode) return nt_ref(nt, fnode, "body");
   return -1;
 }
 /* Is mixin m, of call node on class cls, one an explicit receiver names
@@ -2203,10 +2204,21 @@ static int lr_frame_body(const NodeTable *nt, int fnode) {
 static int lr_foreign_mixin(ElabRec *x, int node, const LrMixin *m, int cls, int fc, int sg, int nested) {
   const NodeTable *nt = x->c->nt;
   int recv = nt_ref(nt, node, "receiver");
-  if (nested || sg || x->unplaced || !m->applied || m->cond || cls < 0 || cls >= x->c->nclasses || cls == fc) return 0;
-  if (recv < 0 || nt_kind(nt, recv) == NK_SelfNode) return 0;
-  if (nt_kind(nt, recv) != NK_ConstantReadNode && nt_kind(nt, recv) != NK_ConstantPathNode) return 0;
-  if (m->kind != LR_INCLUDE && m->kind != LR_PREPEND) return 0;
+  if (nested || x->unplaced || !m->applied || m->cond || cls < 0 || cls >= x->c->nclasses) return 0;
+  if (sg) {
+    /* a singleton's: `include M` in a `class << self` / `class << K` body,
+       or `K.singleton_class.prepend M` */
+    int sbody = m->open >= 0 && nt_kind(nt, m->open) == NK_SingletonClassNode;
+    if (m->kind != LR_EXTEND && m->kind != LR_SG_PREPEND) return 0;
+    if (sbody ? !(recv < 0 || nt_kind(nt, recv) == NK_SelfNode) : !nt_self_singleton_class(nt, recv) &&
+        !(recv >= 0 && nt_kind(nt, recv) == NK_CallNode && is_singleton_class_name(nt_str(nt, recv, "name")))) return 0;
+  }
+  else {
+    if (cls == fc) return 0;
+    if (recv < 0 || nt_kind(nt, recv) == NK_SelfNode) return 0;
+    if (nt_kind(nt, recv) != NK_ConstantReadNode && nt_kind(nt, recv) != NK_ConstantPathNode) return 0;
+    if (m->kind != LR_INCLUDE && m->kind != LR_PREPEND) return 0;
+  }
   /* a module of the program's, or a core module by its name (Comparable) */
   if (m->mod >= x->c->nclasses) return 0;
   if (m->mod >= 0 && !comp_class_is_module(x->c, &x->c->classes[m->mod])) return 0;
@@ -7609,7 +7621,7 @@ ElabBody *elab_all_bodies(Compiler *c, int *n) {
     int nmx = 0;
     const LrMixin *mx = elab_class_mixins(c, ci, &nmx);
     for (int i = 0; i < nmx; i++) {
-      if (!nt_int(c->nt, mx[i].node, "mixin_by_record", 0)) continue;
+      if (!nt_int(c->nt, mx[i].node, "mixin_by_record", 0) || (mx[i].kind != LR_INCLUDE && mx[i].kind != LR_PREPEND)) continue;
       int fb = lr_frame_body(c->nt, mx[i].open), seen = 0;
       for (int q = 0; q < nr && !seen; q++) seen = rest[q][1] == ci && rest[q][2] == fb;
       if (fb < 0 || seen) continue;
@@ -7637,6 +7649,24 @@ int elab_foreign_mixin_open(Compiler *c, int cls, int body) {
   for (int i = 0; i < nmx; i++)
     if (nt_int(c->nt, mx[i].node, "mixin_by_record", 0) && lr_frame_body(c->nt, mx[i].open) == body) return mx[i].open;
   return -1;
+}
+
+/* The statement lists of the frames whose mixins of cls the record takes
+   (mixin_by_record) that are a singleton's (a `class << self` body), each
+   once, in the order they run; *n of them; the caller frees */
+int *elab_foreign_mixin_bodies(Compiler *c, int cls, int *n) {
+  int nmx = 0, k = 0;
+  const LrMixin *mx = elab_class_mixins(c, cls, &nmx);
+  int *v = malloc(sizeof(int) * (size_t)(nmx ? nmx : 1));
+  if (!v) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  for (int i = 0; i < nmx; i++) {
+    if (!nt_int(c->nt, mx[i].node, "mixin_by_record", 0) || (mx[i].kind != LR_EXTEND && mx[i].kind != LR_SG_PREPEND)) continue;
+    int fb = lr_frame_body(c->nt, mx[i].open), seen = 0;
+    for (int q = 0; q < k && !seen; q++) seen = v[q] == fb;
+    if (fb >= 0 && !seen) v[k++] = fb;
+  }
+  *n = k;
+  return v;
 }
 
 const LrMixin *elab_class_mixins(Compiler *c, int cls, int *n) {

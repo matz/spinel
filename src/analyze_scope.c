@@ -8510,8 +8510,11 @@ void register_extends(Compiler *c) {
       to one did not resolve (#3802). */
    int nb = 0;
    const LrOpen *ob = elab_class_bodies(c, ci, &nb);
-   for (int bi = 0; bi < nb; bi++) {
-    int body = ob[bi].body;
+   /* and the frames whose singleton mixins the record takes as ci's (a
+      `class << self` body, mixin_by_record), after its own bodies */
+   int nf = 0, *fb = elab_foreign_mixin_bodies(c, ci, &nf);
+   for (int bi = 0; bi < nb + nf; bi++) {
+    int body = bi < nb ? ob[bi].body : fb[bi - nb];
     int n = 0;
     /* `extend A, B` extends B first, so A ends up in front */
     BodyMix *mx = body_mixins(c, ci, body, 1u << LR_EXTEND | 1u << LR_SG_PREPEND, &n);
@@ -8556,6 +8559,7 @@ void register_extends(Compiler *c) {
     }
     free(mx);
    }
+   free(fb);
   }
   /* The cloned bodies introduced new local nodes, and register_locals ran
      before this pass: a local first assigned in the clone had no slot, so

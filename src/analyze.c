@@ -5892,13 +5892,13 @@ static int qc_expand_read_alias(char (*path)[64], int depth, char (*chain)[64], 
   *abs_anchor = 1;
   return n;
 }
-/* While the constant pass rewrites reads (qualify_colliding_consts),
-   qc_hint_only[i] says write i is a value constant's, which the load
-   record keys after the walk (elab_const_keys): a read that matches it
-   keeps its name. NULL for the class pass. */
-static const unsigned char *qc_hint_only;
+/* While the constant pass rewrites reads (qualify_colliding_consts), every
+   write it matches is a value constant's, which the load record keys after
+   the walk (elab_const_keys): a read keeps its name. 0 for the class pass. */
+static int qc_reads_kept;
 static void qc_rename_read(const NodeTable *nt, int node, int w, const char *qn, int keep) {
-  if (qc_hint_only && qc_hint_only[w]) return;
+  (void)w;
+  if (qc_reads_kept) return;
   if (keep) qc_keep_orig_name(nt, node);
   nt_set_str((NodeTable *)nt, node, "name", qn);
 }
@@ -6140,40 +6140,22 @@ void qualify_colliding_consts(Compiler *c) {
   if (any) {
     /* A value constant's write and the reads that match it keep their
        names: the load record keys them after the walk (elab_const_keys),
-       which takes qualify's names as hints where it has no answer (a write
-       of an owner it does not know, a read it cannot resolve). A write
-       that makes a class (a builder's) is the class pass's, renamed here. */
-    unsigned char *hint = calloc((size_t)wn + 1, 1);
-    int *par = NULL;
-    for (int i = 0; i < wn; i++) {
-      int w = ws[i].node;
-      if (nt_kind(nt, w) != NK_ConstantWriteNode) {   /* a path write's target: the write is its parent */
-        if (!par) par = an_parent_map(nt);
-        w = par && w < nt->count ? par[w] : -1;
-      }
-      hint[i] = w >= 0 && class_def_record(nt, w) < 0 && class_def_builder(nt, w) < 0;
-    }
-    free(par);
-    /* rewrite reads first (they match against the original write names) */
+       which takes qualify's name as the key of a write of an owner it does
+       not know. A write that makes a class (a builder's, a record's) is the
+       class pass's. */
     char mods[QC_MAXDEPTH][64];
     qc_build_reverse_flags(c);
-    qc_hint_only = hint;
+    qc_reads_kept = 1;
     for (int r = 0; r < nt_nroots(nt); r++) qc_rewrite_reads(c, nt_root(nt, r), mods, 0, ws, wn);
-    qc_hint_only = NULL;
+    qc_reads_kept = 0;
     qc_free_reverse_flags();
-    /* then qualify the nested writes themselves */
     for (int i = 0; i < wn; i++) {
       if (ws[i].depth == 0) continue;
       char qn[512]; qc_qualified_name(qn, sizeof qn, &ws[i]);
-      if (hint[i]) nt_node_set_str((NodeTable *)nt, ws[i].node, "qc_value_key", qn);
-      else {
-        qc_keep_orig_name(nt, ws[i].node);
-        nt_set_str((NodeTable *)nt, ws[i].node, "name", qn);
-      }
+      nt_node_set_str((NodeTable *)nt, ws[i].node, "qc_value_key", qn);
       qc_const_quals = realloc(qc_const_quals, sizeof(char *) * (size_t)(qc_nconst_quals + 1));
       qc_const_quals[qc_nconst_quals++] = strdup(qn);
     }
-    free(hint);
   }
   qc_free_headers();
   free(ws);
@@ -6228,18 +6210,39 @@ void qc_collect_class_writes(Compiler *c, int node, char (*path)[64], int depth,
       if (hn && (is_builtin_class_name(hn) || is_builtin_module_name(hn))) snprintf(w->head, sizeof w->head, "%s", hn);
     }
   }
-  /* `Node = Struct.new(...)` / `Data.define(...)` inside a class or module
-     defines a class just as `class Node` does, and its leaf name collides the
-     same way -- two sibling namespaces each with their own `TreeNode` bound
-     every reference to whichever was registered first. */
+  /* `Node = Struct.new(...)` / `Data.define(...)` / `Class.new` /
+     `Module.new` inside a class or module defines a class (or module) just
+     as `class Node` does, and its leaf name collides the same way -- two
+     sibling namespaces each with their own `TreeNode` bound every reference
+     to whichever was registered first. */
   if (ty_k == NK_ConstantWriteNode && depth > 0) {
     const char *cn = nt_str(nt, node, "name");
-    if (cn && class_def_is_record_call(nt, nt_ref(nt, node, "value"))) {
+    int bld = class_def_builder(nt, node) >= 0;
+    if (cn && (class_def_is_record_call(nt, nt_ref(nt, node, "value")) || bld)) {
       if (*n >= *cap) { *cap = *cap ? *cap * 2 : 16; *ws = realloc(*ws, sizeof(QCWrite) * (size_t)*cap); }
       QCWrite *w = &(*ws)[(*n)++];
-      w->node = node; w->depth = depth; w->salt = 0; w->head[0] = 0; w->is_class = 1;
+      w->node = node; w->depth = depth; w->salt = 0; w->head[0] = 0; w->is_class = bld ? !class_def_is_module(nt, node) : 1;
       for (int i = 0; i < depth; i++) snprintf(w->path[i], 64, "%s", path[i]);
       snprintf(w->name, sizeof w->name, "%s", cn);
+    }
+  }
+  /* `A::B = Class.new` (or `Struct.new`) at the top level defines B under
+     A, as `class A::B` does: ws[i].node is the target, whose name the
+     rewrite qualifies */
+  if (ty_k == NK_ConstantPathWriteNode && depth == 0 &&
+      (class_def_builder(nt, node) >= 0 || class_def_is_record_call(nt, nt_ref(nt, node, "value")))) {
+    int tgt = nt_ref(nt, node, "target");
+    char chain[QC_MAXDEPTH + 1][64], mods[QC_MAXDEPTH + 1][64];
+    int abs = 0, cn = tgt >= 0 ? qc_read_chain(nt, tgt, chain, &abs) : 0;
+    QCScope top = { chain, 0 };
+    int via, md = cn >= 2 && cn <= QC_MAXDEPTH ? qc_alias_chain(&top, 1, chain, cn - 1, mods, &via) : 0;
+    if (md >= 1) {
+      if (*n >= *cap) { *cap = *cap ? *cap * 2 : 16; *ws = realloc(*ws, sizeof(QCWrite) * (size_t)*cap); }
+      QCWrite *w = &(*ws)[(*n)++];
+      w->node = tgt; w->depth = md; w->salt = 0; w->head[0] = 0;
+      w->is_class = class_def_builder(nt, node) < 0 || !class_def_is_module(nt, node);
+      for (int i = 0; i < md; i++) snprintf(w->path[i], 64, "%s", mods[i]);
+      snprintf(w->name, sizeof w->name, "%s", chain[cn - 1]);
     }
   }
   int nr = nt_num_refs(nt, node);

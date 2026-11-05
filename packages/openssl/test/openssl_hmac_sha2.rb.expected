@@ -1,0 +1,28 @@
+true
+true
+true
+true
+true
+false
+true
+true
+true
+true
+true
+false
+true
+true
+true
+true
+true
+false
+80b24263c7c1a3ebb71493c1dd7be8b49b46d1f41b4aeec1121b013783f8f3526b56d037e05f2598bd0fd2215d6a1e5295e64f73f63f0aec8b915a985d786598
+4ece084485813e9088d2c63a041bc5b44f9ef1012a2b588f3cd11f05033ac4c60c2ef6ab4030fe8296248df163f44952
+b936cee86c9f87aa5d3c6f2e84cb5a4239a5fe50480a6ec66b70ab5b1f4ac6730c6c515421b327ec1d69402e53dfb49ad7381eb067b338fd7b0cb22247225d47
+51181db0ce21fcdb5da8de07a9b6de4969a2f39dc81bfc1f451b7ce55f6d4c825ea20d184dafd0e9ef6c42c429a9dc1f
+OpenSSL::Digest::DigestError: unsupported digest algorithm
+OpenSSL::Digest::DigestError: unsupported digest algorithm
+TypeError: no implicit conversion of nil into String
+TypeError: no implicit conversion of nil into String
+ArgumentError: string contains null byte
+true

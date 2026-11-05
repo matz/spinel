@@ -18,12 +18,8 @@ module OpenSSL
     # The length ceiling is the RFC's: expand emits 255 hash-lengths at most,
     # because the counter it appends is one octet.
     def self.hkdf(ikm, salt:, info:, length:, hash:)
-      algo = hash.to_s.upcase
-      hlen = case algo
-             when "SHA256" then 32
-             when "SHA1"   then 20
-             else raise Digest::DigestError, "unsupported digest algorithm: #{hash}"
-             end
+      algo = HMAC.algorithm(hash)
+      hlen = Digest.length_of(algo)
       raise KDFError, "length must be positive" if length <= 0
       raise KDFError, "length exceeds #{255 * hlen} for #{algo}" if length > 255 * hlen
 

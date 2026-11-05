@@ -1,18 +1,14 @@
 # OpenSSL::Digest and OpenSSL::HMAC -- the names a CRuby program writes for a
-# hash or a signature, over the hashes the runtime already carries
-# (lib/sp_crypto.c, the same implementations the `digest` package binds).
-# Nothing here reaches libssl: these are not the TLS surface, they are the
-# other half of the OpenSSL namespace that programs name, and there is no
-# reason to route them through a second implementation.
+# hash or signature. SHA1/SHA256 and MD5 digests use the runtime functions
+# (lib/sp_crypto.c); SHA384/SHA512 use platform libcrypto functions.
 #
 # The class-method forms (`OpenSSL::Digest::SHA256.hexdigest(data)`) and the
 # object (`OpenSSL::Digest.new("SHA256")`, `OpenSSL::Digest::SHA256.new`)
 # with update / << / digest / hexdigest / base64digest and their `!` forms /
 # reset / digest_length / length / size / name / new / file / to_s / inspect /
 # ==, and the class methods with the algorithm first
-# (`OpenSSL::Digest.hexdigest("SHA256", data)`). The object keeps the hash
-# state between updates (a binary String of about a hundred bytes), not what
-# it is given.
+# (`OpenSSL::Digest.hexdigest("SHA256", data)`). Runtime hashes keep incremental
+# state; SHA384/SHA512 retain input for one-shot finalization.
 module OpenSSL
   # CRuby's base for everything in this namespace; SSLError and DigestError
   # both descend from it, so `rescue OpenSSL::OpenSSLError` catches either.
@@ -58,16 +54,22 @@ module OpenSSL
       when "SHA256" then Crypto.sha256_bin(data)
       when "SHA1"   then Crypto.sha1_bin(data)
       when "MD5"    then Crypto.md5_bin(data)
+      when "SHA384", "SHA512" then Native.digest_bytes(name, data)
       else raise DigestError, "Unsupported digest algorithm (#{name}).: unknown object name"
       end
     end
 
     def self.length_of(name)
+      raise ArgumentError, "string contains null byte" if name.include?("\0")
       case name.to_s.upcase
       when "SHA256" then 32
       when "SHA1"   then 20
       when "MD5"    then 16
-      else raise DigestError, "Unsupported digest algorithm (#{name}).: unknown object name"
+      when "SHA384" then 48
+      when "SHA512" then 64
+      else
+        Native.digest_bytes(name, "")
+        raise DigestError, "unsupported digest algorithm: #{name}"
       end
     end
 
@@ -78,12 +80,15 @@ module OpenSSL
     def self.base64digest(name, data) = new(name).base64digest(data)
     def self.file(path, name)         = new(name).file(path)
 
-    # The hash state after `data`, and the raw digest of a state, under the
-    # algorithm #initialize keeps in @name. An empty state is a fresh hash.
+    # SHA384/SHA512 append to an owned buffer and hash it once at finish.
+    # Storage remains proportional to input size; copies own their buffers.
     def self.step(name, state, data)
       case name
       when "SHA256" then Crypto.sha256_update(state, data)
       when "SHA1"   then Crypto.sha1_update(state, data)
+      when "SHA384", "SHA512"
+        # StringValue bytes avoid Integer codepoints and encoding conflicts.
+        state << String.new(OpenSSL.send(:comparison_string, data), encoding: Encoding::BINARY)
       else Crypto.md5_update(state, data)
       end
     end
@@ -92,6 +97,7 @@ module OpenSSL
       case name
       when "SHA256" then Crypto.sha256_final(state)
       when "SHA1"   then Crypto.sha1_final(state)
+      when "SHA384", "SHA512" then Native.digest_bytes(name, state)
       else Crypto.md5_final(state)
       end
     end
@@ -103,9 +109,14 @@ module OpenSSL
       update(data) if data
     end
 
+    def initialize_copy(other)
+      super
+      @state = @state.dup if @name == "SHA384" || @name == "SHA512"
+    end
+
     def name = @name
     def digest_length = Digest.length_of(@name)
-    def block_length = 64
+    def block_length = (@name == "SHA384" || @name == "SHA512") ? 128 : 64
 
     def update(data)
       @state = Digest.step(@name, @state, data)
@@ -158,7 +169,7 @@ module OpenSSL
       other.respond_to?(:to_str) && hexdigest == other.to_str
     end
 
-    # The file is read 16 KiB at a time, so its size does not count.
+    # Read 16 KiB at a time; SHA384/SHA512 retain the input until reset.
     def file(name)
       File.open(name.respond_to?(:to_path) ? name.to_path : name, "rb") do |f|
         while (chunk = f.read(16_384))
@@ -181,6 +192,22 @@ module OpenSSL
       def self.hexdigest(data)    = Crypto.sha1_hex(data)
       def self.digest(data)       = Crypto.sha1_bin(data)
       def self.base64digest(data) = Crypto.sha1_b64(data)
+      def self.file(name)         = new.file(name)
+    end
+
+    class SHA384 < Digest
+      def initialize(data = nil) = super("SHA384", data)
+      def self.hexdigest(data)    = new.hexdigest(data)
+      def self.digest(data)       = new.digest(data)
+      def self.base64digest(data) = new.base64digest(data)
+      def self.file(name)         = new.file(name)
+    end
+
+    class SHA512 < Digest
+      def initialize(data = nil) = super("SHA512", data)
+      def self.hexdigest(data)    = new.hexdigest(data)
+      def self.digest(data)       = new.digest(data)
+      def self.base64digest(data) = new.base64digest(data)
       def self.file(name)         = new.file(name)
     end
 
@@ -208,15 +235,15 @@ module OpenSSL
     # the data it goes on to add to.
     def initialize(key, digest)
       @algo = HMAC.algorithm(digest)
-      unless @algo == "SHA256" || @algo == "SHA1"
+      unless @algo == "SHA256" || @algo == "SHA1" || @algo == "SHA384" || @algo == "SHA512"
         raise Digest::DigestError, "unsupported digest algorithm: #{digest}"
       end
-      @key = key.to_s
+      @key = OpenSSL.send(:comparison_string, key)
       @data = ""
     end
 
     def update(data)
-      @data = @data + data.to_s
+      @data = @data + OpenSSL.send(:comparison_string, data)
       self
     end
 
@@ -233,16 +260,18 @@ module OpenSSL
 
     # CRuby takes the algorithm first, as a String or a Digest instance
     # (`OpenSSL::Digest.new("sha256")`, whose name is the algorithm), and
-    # only the two the runtime carries are here: an algorithm that is not
+    # the runtime hashes and libcrypto's SHA384/SHA512 are here. An algorithm not
     # one of them raises DigestError -- the class CRuby raises, so
     # `rescue OpenSSL::Digest::DigestError` catches the same thing -- rather
     # than answering a hash from the wrong function. HMAC-MD5 is one of
     # those: CRuby has it, the runtime's crypto does not (its MD5 is the
     # digest alone).
     def self.hexdigest(algo, key, data)
-      case HMAC.algorithm(algo)
+      algo = HMAC.algorithm(algo)
+      case algo
       when "SHA256" then Crypto.hmac_sha256_hex(key, data)
       when "SHA1"   then Crypto.hmac_sha1_hex(key, data)
+      when "SHA384", "SHA512" then platform_digest(algo, key, data).unpack1("H*")
       else raise Digest::DigestError, "unsupported digest algorithm: #{algo}"
       end
     end
@@ -260,9 +289,11 @@ module OpenSSL
     # Same algorithm set and the same refusal as `hexdigest`: whatever one
     # answers, the other answers.
     def self.digest(algo, key, data)
-      case HMAC.algorithm(algo)
+      algo = HMAC.algorithm(algo)
+      case algo
       when "SHA256" then Crypto.hmac_sha256_bin(key, data)
       when "SHA1"   then Crypto.hmac_sha1_bin(key, data)
+      when "SHA384", "SHA512" then platform_digest(algo, key, data)
       else raise Digest::DigestError, "unsupported digest algorithm: #{algo}"
       end
     end
@@ -270,7 +301,16 @@ module OpenSSL
     # The algorithm's name, upcased: a Digest instance's own (only its
     # algorithm counts, not what it was given to hash), or the String's.
     def self.algorithm(algo)
-      algo.is_a?(Digest) ? algo.name : algo.to_s.upcase
+      name = algo.is_a?(Digest) ? algo.name : algo.to_s
+      Digest.length_of(name)
+      name.upcase
     end
+
+    def self.platform_digest(algo, key, data)
+      key = OpenSSL.send(:comparison_string, key)
+      data = OpenSSL.send(:comparison_string, data)
+      Native.hmac_bytes(algo, key, data)
+    end
+    private_class_method :platform_digest
   end
 end

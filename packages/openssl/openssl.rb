@@ -65,6 +65,8 @@ module OpenSSL
   module Native
     native_lib "openssl"
     native_obj "packages/openssl/sp_openssl.o"
+    native_func :digest_bytes, [:string, :string], :cbinstr, "sp_openssl_digest"
+    native_func :hmac_bytes, [:string, :string, :string], :cbinstr, "sp_openssl_hmac"
     native_func :fixed_length_secure_compare, [:string, :string], :int, "sp_openssl_fixed_length_secure_compare"
     native_func :pending,      [:int],                :int,    "sp_ssl_pending"
     native_func :close,        [:int],                :int,    "sp_ssl_close"

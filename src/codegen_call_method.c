@@ -646,7 +646,7 @@ int emit_op_method_bind(Compiler *c, const BopCtx *x, Buf *b) {
   int mi = plan.mi;
   if (plan.dispatch != CP_SWITCH) return emit_method_bind_target(c, x, b, mi);
   size_t start = b->len;
-  int argc, to[2 * (VER_MAX_ARMS + 1)], n = cplan_method_arms(c, mi, to, NULL);
+  int argc, to[2 * (VER_MAX_ARMS + 1)], n = cplan_method_held(c, mi, plan.method_node, to);
   const int *argv = call_args(c->nt, x->id, &argc);
   int tr = ++g_tmp, vr;
   buf_printf(b, "({ sp_BoundMethod *_t%d = ", tr); emit_expr(c, x->recv, b);
@@ -829,7 +829,7 @@ int emit_op_method_source_location(Compiler *c, const BopCtx *x, Buf *b) {
   }
   if (plan.dispatch != CP_SWITCH) return emit_method_source_target(c, x, b, mi, plan.method_node);
   size_t start = b->len;
-  int to[2 * (VER_MAX_ARMS + 1)], n = cplan_method_arms(c, mi, to, NULL), tr = ++g_tmp;
+  int to[2 * (VER_MAX_ARMS + 1)], n = cplan_method_held(c, mi, plan.method_node, to), tr = ++g_tmp;
   buf_printf(b, "({ sp_BoundMethod *_t%d = ", tr); emit_expr(c, x->recv, b);
   buf_printf(b, "; SP_GC_ROOT(_t%d); ", tr);
   int vr = view_bind(x->recv, "_t%d", tr);
@@ -887,7 +887,7 @@ int emit_op_method_owner(Compiler *c, const BopCtx *x, Buf *b) {
   int mn = plan.method_node, target = plan.mi;
   int unbound = mn >= 0 && is_instance_method_name(nt_str(nt, mn, "name"));
   if (plan.dispatch == CP_SWITCH) {
-    int to[2 * (VER_MAX_ARMS + 1)], n = cplan_method_arms(c, target, to, NULL), tr = ++g_tmp;
+    int to[2 * (VER_MAX_ARMS + 1)], n = cplan_method_held(c, target, mn, to), tr = ++g_tmp;
     buf_printf(b, "({ sp_BoundMethod *_t%d = ", tr); emit_expr(c, recv, b);
     buf_printf(b, "; SP_GC_ROOT(_t%d); ", tr);
     for (int i = 0; i < n; i++) {
@@ -2393,7 +2393,7 @@ int emit_call_method_obj_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
   if (mi < 0 || plan.dispatch != CP_SWITCH)
     return emit_method_obj_target(c, id, b, nt, name, recv, argc, argv, mi);
   size_t start = b->len;
-  int to[2 * (VER_MAX_ARMS + 1)], tests[4 * (VER_MAX_ARMS + 1)], n = cplan_method_arms(c, mi, to, tests);
+  int to[2 * (VER_MAX_ARMS + 1)], tests[4 * (VER_MAX_ARMS + 1)], n = cplan_method_arms(c, mi, id, to, tests);
   int tr = ++g_tmp, vr = -1;
   buf_puts(b, "({ ");
   /* Evaluate and root the receiver before testing the cells. */
@@ -2420,8 +2420,10 @@ int emit_call_method_obj_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
       buf_printf(b, " _t%d = NULL; }\n", tr);
       continue;
     }
+    /* (no method there, CPLAN_ARM_NONE: the maker's NameError, as where no
+       entry is made) */
     buf_printf(b, "{ _t%d = ", tr);
-    if (!emit_method_obj_target(c, id, b, nt, name, recv, argc, argv, cplan_capture_arm(c, id, to[i]))) {
+    if (!emit_method_obj_target(c, id, b, nt, name, recv, argc, argv, to[i] == CPLAN_ARM_NONE ? -1 : cplan_capture_arm(c, id, to[i]))) {
       if (vr >= 0) view_unbind(vr);
       buf_erase(b, start, b->len - start);
       return 0;

@@ -5683,17 +5683,43 @@ static int guard_layer_versions(Compiler *c, int mi, int ar) {
   const Scope *m = &c->scopes[mi];
   return ver_entry_emit(c, m->class_id, m->is_cmethod, comp_scope_user_name(m), ar, blk, spliced, arm, to, nv, to[nv - 1], -1);
 }
+static int ver_other_answers(Compiler *c, int cls, int sg, const char *name);
+/* Does the method a guard entry's else arm runs, behind (the hidden method
+   behind a later include's copy, Scope.super_behind), find no method of
+   `name` on cls's side sg: its super reaches no method of the program, and
+   no builtin, reader or builtin mixin answers (ver_other_answers)? Then the
+   chain's method_missing is what CRuby calls there (guard_entry_make), and
+   where none may answer, the arm finds nothing (guard_else_bare). A
+   module function of a module cls's chain includes answers on the instance
+   side too, as the private instance method CRuby gives every includer:
+   the super does not reach it, as it reaches no module function. */
+static int guard_behind_finds_none(Compiler *c, int behind, int cls, int sg, const char *name) {
+  int at;
+  if (!c->scopes[behind].super_behind || cplan_super_target(c, -1, &c->scopes[behind], &at) >= 0 ||
+      ver_other_answers(c, cls, sg, name))
+    return 0;
+  for (int s = 0; !sg && s < c->nscopes; s++) {
+    const Scope *m = &c->scopes[s];
+    if (!m->is_module_function || m->class_id < 0 || !m->name || !sp_streq(m->name, name)) continue;
+    for (int k = cls; k >= 0; k = c->classes[k].parent)
+      if (k != m->class_id && comp_module_includes(c, k, m->class_id, 0)) return 0;
+  }
+  return 1;
+}
 /* The guard entry of mi, a copy a later prepend puts in front of a method
    (Scope.mixin_guarded), with ar parameters: the same if-chain over the
    cells of the prepends in front of the method, nearest first, its else
    arm the method behind them all. The arm of a mixin whose module defines
    the method again runs the entry over its copies of the versions
    (guard_layer_versions): whether the mixin has run and which version its
-   module holds are told apart, each by its own cell. */
-static int guard_entry_make(Compiler *c, int mi, int ar) {
+   module holds are told apart, each by its own cell. *behind: the method
+   behind them all where the else arm calls method_missing in its place,
+   -1 otherwise. */
+static int guard_entry_make(Compiler *c, int mi, int ar, int *behind) {
   DispArm arm[VER_MAX_ARMS];
   char sel[VER_MAX_ARMS][32];
   int to[VER_MAX_ARMS + 1], n = guard_chain(c, mi, to, arm, sel), blk = 0, spliced = 1;
+  *behind = -1;
   if (n < 2) return -1;
   /* Cloned forwarding bodies retain the hidden name even when the clone
      has no pin in the original entry's node index. */
@@ -5708,7 +5734,16 @@ static int guard_entry_make(Compiler *c, int mi, int ar) {
     spliced &= c->scopes[to[k]].yields;
   }
   const Scope *m = &c->scopes[mi];   /* (after the layers' entries, which grow the scopes) */
-  return ver_entry_emit(c, m->class_id, m->is_cmethod, comp_scope_user_name(m), ar, blk, spliced, arm, to, n - 1, to[n - 1], -1);
+  int cls = m->class_id, sg = m->is_cmethod, els = -1;
+  const char *name = comp_scope_user_name(m);
+  /* the hidden method behind a later include's copy that finds no method:
+     CRuby calls the chain's method_missing there, as an open history's
+     entry does for none run (VK_MM) */
+  if (guard_behind_finds_none(c, to[n - 1], cls, sg, name) && cplan_mm_method(c, cls, sg) >= 0) {
+    els = ver_absent_else(c, VK_MM, cls, sg, name, to, n, ar, &blk, &spliced);
+    *behind = to[n - 1];
+  }
+  return ver_entry_emit(c, cls, sg, name, ar, blk, spliced, arm, to, n - 1, to[n - 1], els);
 }
 static void ver_entry_add(Compiler *c, const char *name, struct VerEntry e) {
   if (!(c->nver_entries & (c->nver_entries - 1)) &&
@@ -5821,9 +5856,10 @@ static int ver_named_else(Compiler *c, const VerNamed *w) {
 }
 /* Does a method the entry's else arm cannot run answer `name` on cls's
    side sg: a builtin's that every object (class, module) answers, cls's
-   builtin superclass's or an included builtin module's, cls's own reader,
-   a Struct or Data member in its chain, or on the class side a record
-   class's own builtin (elab_record_cmethod)? */
+   builtin superclass's or an included builtin module's (Comparable's and
+   Enumerable's own among them), cls's own reader, a Struct or Data member
+   in its chain, or on the class side a record class's own builtin
+   (elab_record_cmethod)? */
 static int ver_other_answers(Compiler *c, int cls, int sg, const char *name) {
   int dc = -1, mod = cls >= 0 && comp_class_is_module(c, &c->classes[cls]);
   if (builtin_every_object_answers(name, sg) || is_object_receiver_handoff(name) || is_method_missing_name(name) ||
@@ -5840,7 +5876,10 @@ static int ver_other_answers(Compiler *c, int cls, int sg, const char *name) {
       int r = mx[j].ref;
       NodeKind rk = r >= 0 ? nt_kind(c->nt, r) : NK_NilNode;
       const char *mn = mx[j].kind == LR_INCLUDE && mx[j].mod < 0 && (rk == NK_ConstantReadNode || rk == NK_ConstantPathNode) ? nt_str(c->nt, r, "name") : NULL;
-      if (mn && is_builtin_module_name(mn) && builtin_instance_method_known(mn, name)) return 1;
+      if (mn && is_builtin_module_name(mn) &&
+          (builtin_instance_method_known(mn, name) || (is_comparable_module_name(mn) && is_comparable_module_method(name)) ||
+           (is_enumerable_module_name(mn) && name_is_enumerable_module_method(name))))
+        return 1;
     }
   }
   return 0;
@@ -6202,12 +6241,47 @@ int cplan_target_runs(const Compiler *c, int t, int mi) {
   for (int k = 0; k < n; k++) if (to[k] == mi) return 1;
   return 0;
 }
+/* (may an instance of class cls, or of a class under it, have a
+   respond_to_missing?, which a capture asks where it finds no method?) */
+static int capture_hook_reach(Compiler *c, int cls) {
+  int nd = 0;
+  if (comp_method_in_chain(c, cls, RESPOND_TO_MISSING_NAME, NULL) >= 0) return 1;
+  const int *ds = comp_descendants(c, cls, &nd);
+  for (int i = 0; i < nd; i++)
+    if (comp_method_in_chain(c, ds[i], RESPOND_TO_MISSING_NAME, NULL) >= 0) return 1;
+  return 0;
+}
+/* (the method a guard entry e's method_missing else arm stands for: the
+   one behind its mixins, guard_entry_make; -1 for none) */
+static int cplan_entry_behind(const Compiler *c, int e) {
+  for (int i = 0; e >= 0 && i < c->nver_entries; i++)
+    if (c->ver_entries[i].scope == e) return c->ver_entries[i].behind - 1;
+  return -1;
+}
+/* (entry e's else arm, which it answers itself, as a Method capture cap
+   makes holds it: cplan_method_arms) */
+static int capture_else_arm(Compiler *c, int e, int cap) {
+  int mw = cplan_capture_missing(c, cap), bh = cplan_entry_behind(c, e);
+  if (mw >= 0) return mw;
+  if (cap < 0 || c->scopes[e].is_cmethod || bh < 0) return e;
+  return capture_hook_reach(c, c->scopes[e].class_id) ? bh : CPLAN_ARM_NONE;
+}
 /* ...as a Method made of entry e holds them, each the method that runs
    at the bind: an arm that is itself the entry over a mixin's versions
    (guard_layer_versions) by its own arms, under its test and theirs, and
    a later include's behind (Scope.super_behind) by what its super
-   reaches. At most 2 * (VER_MAX_ARMS + 1) of them. */
-int cplan_method_arms(Compiler *c, int e, int *out, int *tests) {
+   reaches, and an else arm the entry answers itself (a method_missing
+   call: guard_entry_make) by the method_missing Method's target that
+   capture cap (the maker the Method came from) binds where it finds no
+   method (cplan_capture_missing). An instance method's capture that binds
+   none finds no method there where no respond_to_missing? can answer
+   (CPLAN_ARM_NONE: CRuby's NameError, as with no entry), and holds the
+   method behind the mixins the else arm stands for where one may answer
+   (cplan_entry_behind): the Method such a capture makes with no entry,
+   whose respond_to_missing? the plan does not ask. Where no capture is
+   known (cap -1), or on the class side, the arm is the entry. At most
+   2 * (VER_MAX_ARMS + 1) of them. */
+int cplan_method_arms(Compiler *c, int e, int cap, int *out, int *tests) {
   int to[VER_MAX_ARMS + 1], t[VER_MAX_ARMS + 1], n = ver_entry_targets(c, e, to, t), m = 0;
   for (int k = 0; k < n; k++) {
     int sub[VER_MAX_ARMS + 1], st[VER_MAX_ARMS + 1], ns = 0, at;
@@ -6219,8 +6293,16 @@ int cplan_method_arms(Compiler *c, int e, int *out, int *tests) {
     if (ns || m >= 2 * (VER_MAX_ARMS + 1)) continue;
     int sup = to[k] >= 0 && c->scopes[to[k]].super_behind ? cplan_super_target(c, -1, &c->scopes[to[k]], &at) : -1;
     if (tests) tests[2 * m] = t[k], tests[2 * m + 1] = -1;
-    out[m++] = sup >= 0 ? sup : to[k];
+    out[m++] = sup >= 0 ? sup : to[k] >= 0 ? to[k] : capture_else_arm(c, e, cap);
   }
+  return m;
+}
+/* See call_plan.h. */
+int cplan_method_held(Compiler *c, int e, int cap, int *out) {
+  int n = cplan_method_arms(c, e, cap, out, NULL), m = 0;
+  for (int k = 0; k < n; k++)
+    if (out[k] != CPLAN_ARM_NONE) out[m++] = out[k];
+  if (!m) out[m++] = e;
   return m;
 }
 typedef struct { int guard, cls, sg, mi, ar; const char *name; int from; } VerNeed;   /* (from: VerEntry.from) */
@@ -6412,6 +6494,16 @@ static void ver_named_asks(Compiler *c, int demand) {
   for (int i = 0; i < q.n; i++) if (q.v[i].atdef) ver_named_refuse_defs(c, &q.v[i]);
   ver_named_facts_free(&q);
 }
+/* Does nothing answer `name` on cls's side sg where a guard entry's else
+   arm runs behind: that method finds none (guard_behind_finds_none), and
+   no method_missing or respond_to_missing? may (VerEntry.finds)? *hooks:
+   whether the program defines either, asked once per build (-1 not yet:
+   each is a walk of the program) */
+static int guard_else_bare(Compiler *c, int behind, int cls, int sg, const char *name, int *hooks) {
+  if (!guard_behind_finds_none(c, behind, cls, sg, name)) return 0;
+  if (*hooks < 0) *hooks = an_user_defines_method(c, METHOD_MISSING_NAME) || respond_to_missing_defined(c);
+  return !*hooks;
+}
 void ver_entries_build(Compiler *c) {
   const NodeTable *nt = c->nt;
   const char *names[2];
@@ -6458,15 +6550,15 @@ void ver_entries_build(Compiler *c) {
     }
   }
   c->ver_asking = 0;
+  int hooks = -1;   /* (guard_else_bare) */
   for (int i = 0; i < o.n; i++) {
     /* (a guard entry's else arm runs the method behind the mixins: for a
        later include's behind, what its super reaches, if anything) */
-    int to[VER_MAX_ARMS + 1], n = o.v[i].guard ? guard_chain(c, o.v[i].mi, to, NULL, NULL) : 0, at;
-    int bare = n && c->scopes[to[n - 1]].super_behind && cplan_super_target(c, -1, &c->scopes[to[n - 1]], &at) < 0;
-    int finds = bare ? VER_FINDS_NONE : ver_else_finds(c, VK_KEEP, o.v[i].cls, o.v[i].sg, o.v[i].name, SP_VIS_PUBLIC, -1);
-    int e = o.v[i].guard ? guard_entry_make(c, o.v[i].mi, o.v[i].ar)
+    int to[VER_MAX_ARMS + 1], n = o.v[i].guard ? guard_chain(c, o.v[i].mi, to, NULL, NULL) : 0;
+    int finds = n && guard_else_bare(c, to[n - 1], o.v[i].cls, o.v[i].sg, o.v[i].name, &hooks) ? VER_FINDS_NONE : ver_else_finds(c, VK_KEEP, o.v[i].cls, o.v[i].sg, o.v[i].name, SP_VIS_PUBLIC, -1);
+    int behind = -1, e = o.v[i].guard ? guard_entry_make(c, o.v[i].mi, o.v[i].ar, &behind)
                          : ver_entry_make(c, NULL, o.v[i].from ? o.v[i].from - 1 : o.v[i].cls, o.v[i].cls, o.v[i].sg, o.v[i].name, o.v[i].mi, o.v[i].ar, 1, NULL, &finds);
-    ver_entry_add(c, e >= 0 ? c->scopes[e].name : o.v[i].name, (struct VerEntry){ NULL, o.v[i].guard, o.v[i].cls, o.v[i].sg, o.v[i].ar, e, .finds = finds, .from = o.v[i].from });
+    ver_entry_add(c, e >= 0 ? c->scopes[e].name : o.v[i].name, (struct VerEntry){ NULL, o.v[i].guard, o.v[i].cls, o.v[i].sg, o.v[i].ar, e, .finds = finds, .from = o.v[i].from, .behind = behind + 1 });
   }
   free(o.v); free(o.ix);
   free(ver_pre_tab); ver_pre_tab = NULL; ver_pre_n = 0; ver_pre_nb = 0;   /* (the asks' memo lives for one build) */

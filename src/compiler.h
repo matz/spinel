@@ -1815,11 +1815,14 @@ typedef struct {
      what its else arm finds while no version is live, one of
      VER_FINDS_* (call_plan.c, ver_else_finds); from: 1 + the module
      whose chain's versions its arms test, those of the copies cls holds of
-     them (call_plan.c, mixin_copies_module); 0 for cls's chain. Each name
+     them (call_plan.c, mixin_copies_module); 0 for cls's chain; behind:
+     1 + the method a guard entry's method_missing else arm stands for,
+     the one behind the mixins that finds no method (guard_entry_make),
+     0 for none. Each name
      is the entry's own copy (ver_entry_add), as in ver_late, ver_memo and
      the chain counts: a caller may ask with a name it frees itself
      (desugar_call_op_write's setter name) */
-  struct VerEntry { char *name; int guard, cls, sg, ar, scope, absent, cells, finds, from; } *ver_entries;
+  struct VerEntry { char *name; int guard, cls, sg, ar, scope, absent, cells, finds, from, behind; } *ver_entries;
   int nver_entries;
   /* the chains a typed call may meet with no version made yet, whose
      entry is not asked for that yet (call_plan.c, ver_absent_note); mm:

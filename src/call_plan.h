@@ -213,8 +213,15 @@ int ver_entry_targets(const Compiler *c, int e, int *out, int *tests);
 int cplan_target_runs(const Compiler *c, int t, int mi);
 /* The methods a Method made of entry e can hold, one for each arm that
    may run at the bind (call_plan.c); tests, when asked: 2k and 2k + 1 the
-   tests of arm k and of its inner arm, -1 for none */
-int cplan_method_arms(Compiler *c, int e, int *out, int *tests);
+   tests of arm k and of its inner arm, -1 for none. cap: the capture the
+   Method came from (CallPlan.method_node), -1 for none known. An arm
+   where that capture finds no method is CPLAN_ARM_NONE: no Method is
+   made there, the capture raises CRuby's NameError */
+enum { CPLAN_ARM_NONE = -1 };
+int cplan_method_arms(Compiler *c, int e, int cap, int *out, int *tests);
+/* ...those of them a Method made there holds: all but CPLAN_ARM_NONE's
+   (entry e itself where no other is left) */
+int cplan_method_held(Compiler *c, int e, int cap, int *out);
 int cplan_bool_sides(Compiler *c, int id, int *tmi, int *fmi);
 void cplan_check_missing(Compiler *c, int id, int mi, int ci, const char *name, int cmeth, const char *site);
 /* The same plan resolved afresh and never kept, for a reader that runs in

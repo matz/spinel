@@ -2236,7 +2236,7 @@ static int cplan_capture_absent(Compiler *c, int id, int mi) {
   int cls = m ? m->class_id : cm_capture_class(c, id, &name), sg = m ? m->is_cmethod : 1;
   if (m) {
     name = method_sym_arg(c, id);
-    if (m->entry != ENTRY_DISPATCH || cplan_entry_finds(c, mi) != VER_FINDS_NONE || is_instance_method_name(nt_str(c->nt, id, "name"))) return 0;
+    if ((m->entry != ENTRY_DISPATCH && m->entry != ENTRY_TABLE) || cplan_entry_finds(c, mi) != VER_FINDS_NONE || is_instance_method_name(nt_str(c->nt, id, "name"))) return 0;
   }
   else if (cls < 0 || !ct_undefined_at(c, id, cls, name, CT_CMETHOD) || cm_builtin_answers(c, cls, name)) return 0;
   return cplan_capture_names(c, id, cls, sg, name, m != NULL);
@@ -6124,6 +6124,27 @@ int cplan_target_runs(const Compiler *c, int t, int mi) {
   for (int k = 0; k < n; k++) if (to[k] == mi) return 1;
   return 0;
 }
+/* ...as a Method made of entry e holds them, each the method that runs
+   at the bind: an arm that is itself the entry over a mixin's versions
+   (guard_layer_versions) by its own arms, under its test and theirs, and
+   a later include's behind (Scope.super_behind) by what its super
+   reaches. At most 2 * (VER_MAX_ARMS + 1) of them. */
+int cplan_method_arms(Compiler *c, int e, int *out, int *tests) {
+  int to[VER_MAX_ARMS + 1], t[VER_MAX_ARMS + 1], n = ver_entry_targets(c, e, to, t), m = 0;
+  for (int k = 0; k < n; k++) {
+    int sub[VER_MAX_ARMS + 1], st[VER_MAX_ARMS + 1], ns = 0, at;
+    if (to[k] >= 0 && c->scopes[to[k]].entry == ENTRY_DISPATCH) ns = ver_entry_targets(c, to[k], sub, st);
+    for (int j = 0; j < ns && m < 2 * (VER_MAX_ARMS + 1); j++, m++) {
+      if (tests) tests[2 * m] = t[k], tests[2 * m + 1] = st[j];
+      out[m] = sub[j];
+    }
+    if (ns || m >= 2 * (VER_MAX_ARMS + 1)) continue;
+    int sup = to[k] >= 0 && c->scopes[to[k]].super_behind ? cplan_super_target(c, -1, &c->scopes[to[k]], &at) : -1;
+    if (tests) tests[2 * m] = t[k], tests[2 * m + 1] = -1;
+    out[m++] = sup >= 0 ? sup : to[k];
+  }
+  return m;
+}
 typedef struct { int guard, cls, sg, mi, ar; const char *name; } VerNeed;
 /* ...and, to tell the asks that repeat one, an open addressing table over them (ix holds an index into v, -1 free) */
 typedef struct { VerNeed *v; int n; int *ix; unsigned nb; } VerNeeds;
@@ -6358,8 +6379,11 @@ void ver_entries_build(Compiler *c) {
   }
   c->ver_asking = 0;
   for (int i = 0; i < o.n; i++) {
-    /* (a guard entry's else arm runs the method behind the prepends) */
-    int finds = ver_else_finds(c, VK_KEEP, o.v[i].cls, o.v[i].sg, o.v[i].name, SP_VIS_PUBLIC, -1);
+    /* (a guard entry's else arm runs the method behind the mixins: for a
+       later include's behind, what its super reaches, if anything) */
+    int to[VER_MAX_ARMS + 1], n = o.v[i].guard ? guard_chain(c, o.v[i].mi, to, NULL, NULL) : 0, at;
+    int bare = n && c->scopes[to[n - 1]].super_behind && cplan_super_target(c, -1, &c->scopes[to[n - 1]], &at) < 0;
+    int finds = bare ? VER_FINDS_NONE : ver_else_finds(c, VK_KEEP, o.v[i].cls, o.v[i].sg, o.v[i].name, SP_VIS_PUBLIC, -1);
     int e = o.v[i].guard ? guard_entry_make(c, o.v[i].mi, o.v[i].ar)
                          : ver_entry_make(c, NULL, o.v[i].cls, o.v[i].cls, o.v[i].sg, o.v[i].name, o.v[i].mi, o.v[i].ar, 1, NULL, &finds);
     ver_entry_add(c, e >= 0 ? c->scopes[e].name : o.v[i].name, (struct VerEntry){ NULL, o.v[i].guard, o.v[i].cls, o.v[i].sg, o.v[i].ar, e, .finds = finds });

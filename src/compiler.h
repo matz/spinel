@@ -531,6 +531,12 @@ typedef struct {
                                  behind it, guard_behind, until the cell is
                                  set */
   int guard_behind;
+  unsigned char super_behind;   /* the method a later include's copy stands
+                                   in front of where the class had none of
+                                   its own: a hidden `def = super`
+                                   (inc_super_behind), which a Method made
+                                   of it does not hold: it holds what the
+                                   super reaches */
   /* a hidden copy: a body the compiler moved behind another method of its
      name. A SHADOW_PREP copy is named apart from every method the program
      names (comp_shadow_name); a SHADOW_INC copy's name is not checked against

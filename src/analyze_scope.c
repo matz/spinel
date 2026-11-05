@@ -7204,6 +7204,7 @@ static int inc_super_behind(Compiler *c, int ci, const char *name, int like) {
   comp_scope_set_shadow(c, e, SHADOW_PREP, name);
   { c->scopes[e].class_id = ci; comp_touch_scope(c->scopes[e].idx); }
   { c->scopes[e].reachable = 1; comp_touch_scope(c->scopes[e].idx); }
+  c->scopes[e].super_behind = 1;
   g_inc_did_clone = 1;
   return e;
 }

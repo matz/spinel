@@ -12045,10 +12045,25 @@ static int ee_is_enumerable_ref(const NodeTable *nt, int n) {
          nt_str(nt, n, "name") && sp_streq(nt_str(nt, n, "name"), "Enumerable");
 }
 /* a body statement `extend Enumerable` (beside other modules or not) */
-static int ee_extends_enumerable(const NodeTable *nt, int st) {
-  if (nt_kind(nt, st) != NK_CallNode || nt_ref(nt, st, "receiver") >= 0 || nt_ref(nt, st, "block") >= 0) return 0;
+/* Does statement st mix modules into its class's singleton, as `extend`
+   does: `extend M` in a class body, `include M` or `prepend M` in a `class
+   << self` body (sclass), `singleton_class.include M` or `.prepend M` in a
+   class body? 2 for a prepend, ahead of Enumerable wherever it is; 1 for
+   the others; 0 for none */
+static int ee_extend_form(const NodeTable *nt, int st, int sclass) {
+  if (nt_kind(nt, st) != NK_CallNode || nt_ref(nt, st, "block") >= 0) return 0;
   const char *nm = nt_str(nt, st, "name");
-  if (!nm || !sp_streq(nm, "extend")) return 0;
+  if (!nm) return 0;
+  int r = nt_ref(nt, st, "receiver"), self_r = r < 0 || nt_kind(nt, r) == NK_SelfNode;
+  if (sp_streq(nm, "extend")) return !sclass && self_r;
+  int pre = sp_streq(nm, "prepend");
+  if (!pre && !sp_streq(nm, "include")) return 0;
+  if (sclass ? !self_r : !(r >= 0 && nt_self_singleton_class(nt, r))) return 0;
+  return pre ? 2 : 1;
+}
+static int ee_extends_enumerable(const NodeTable *nt, int st, int sclass) {
+  if (!ee_extend_form(nt, st, sclass)) return 0;
+  if (!sclass && nt_ref(nt, st, "receiver") >= 0 && sp_streq(nt_str(nt, st, "name"), "extend")) return 0;
   int an = 0; const int *av = nt_arr(nt, nt_ref(nt, st, "arguments"), "arguments", &an);
   for (int j = 0; j < an; j++) if (ee_is_enumerable_ref(nt, av[j])) return 1;
   return 0;
@@ -12215,11 +12230,11 @@ static void ee_mark_stmt(const NodeTable *nt, const int *parent, EeClass *v, int
     return;
   }
   if (k != NK_CallNode) return;
-  int r = nt_ref(nt, st, "receiver");
-  if (r >= 0 && nt_kind(nt, r) != NK_SelfNode) return;
+  int r = nt_ref(nt, st, "receiver"), ef = ee_extend_form(nt, st, sclass);
+  if (!ef && r >= 0 && nt_kind(nt, r) != NK_SelfNode) return;
   const char *nm = nt_str(nt, st, "name");
   int an = 0; const int *av = nt_arr(nt, nt_ref(nt, st, "arguments"), "arguments", &an);
-  if (nm && sp_streq(nm, "extend") && !sclass) {
+  if (ef) {
     char ctx[512];
     ee_own_key(nt, ct, ctx, sizeof ctx);
     int en = -1;
@@ -12281,7 +12296,13 @@ static int ee_body_stmts(NodeTable *nt, int cls) {
 int desugar_extend_enumerable(Compiler *c, HostStep *h) {
   NodeTable *nt = (NodeTable *)c->nt;
   int any = 0;
-  NT_FOREACH_KIND(nt, NK_CallNode, id) if (ee_extends_enumerable(nt, id)) { any = 1; break; }
+  NT_FOREACH_KIND(nt, NK_CallNode, id) if (ee_extends_enumerable(nt, id, 0)) { any = 1; break; }
+  if (!any) NT_FOREACH_KIND(nt, NK_SingletonClassNode, sc) {
+    if (nt_kind(nt, nt_ref(nt, sc, "expression")) != NK_SelfNode) continue;
+    int sn = 0; const int *ss = nt_arr(nt, nt_ref(nt, sc, "body"), "body", &sn);
+    for (int q = 0; q < sn && !any; q++) any = ee_extends_enumerable(nt, ss[q], 1);
+    if (any) break;
+  }
   if (!any) return 0;
   int n0 = nt->count, nv = 0, ndefs = 0, ndk = 0;
   const NodeKind *dk = class_def_kinds(&ndk);
@@ -12302,7 +12323,12 @@ int desugar_extend_enumerable(Compiler *c, HostStep *h) {
       ee_ref_key(nt, ctx, sup, v[i].sup, sizeof v[i].sup);
     }
     int bn = 0; const int *bb = ee_body_list(nt, id, &bn);
-    for (int j = 0; j < bn; j++) if (ee_extends_enumerable(nt, bb[j])) v[i].extends = v[i].in_set = 1;
+    for (int j = 0; j < bn; j++) {
+      if (ee_extends_enumerable(nt, bb[j], 0)) v[i].extends = v[i].in_set = 1;
+      if (ee_sclass_owner(nt, parent, bb[j]) < 0) continue;
+      int sn = 0; const int *ss = nt_arr(nt, nt_ref(nt, bb[j], "body"), "body", &sn);
+      for (int q = 0; q < sn; q++) if (ee_extends_enumerable(nt, ss[q], 1)) v[i].extends = v[i].in_set = 1;
+    }
   }
   for (int grew = 1; grew;) {
     grew = 0;
@@ -12329,11 +12355,17 @@ int desugar_extend_enumerable(Compiler *c, HostStep *h) {
     int bn = 0; const int *bb = ee_body_list(nt, id, &bn);
     for (int j = 0; j < bn; j++) {
       ee_mark_stmt(nt, parent, v, i, id, bb[j], 0,
-                   !v[i].extends || v[i].en_seen || nt_int(nt, bb[j], "sclass_prepend", 0));
-      if (ee_extends_enumerable(nt, bb[j])) v[i].en_seen = 1;
+                   !v[i].extends || v[i].en_seen || ee_extend_form(nt, bb[j], 0) == 2 ||
+                   nt_int(nt, bb[j], "sclass_prepend", 0));
+      if (ee_extends_enumerable(nt, bb[j], 0)) v[i].en_seen = 1;
       if (ee_sclass_owner(nt, parent, bb[j]) < 0) continue;
       int sn = 0; const int *ss = nt_arr(nt, nt_ref(nt, bb[j], "body"), "body", &sn);
-      for (int q = 0; q < sn; q++) ee_mark_stmt(nt, parent, v, i, id, ss[q], 1, 1);
+      /* (an include in the singleton's body is an extend at its point) */
+      for (int q = 0; q < sn; q++) {
+        int ef = ee_extend_form(nt, ss[q], 1);
+        ee_mark_stmt(nt, parent, v, i, id, ss[q], 1, !ef || !v[i].extends || v[i].en_seen || ef == 2);
+        if (ee_extends_enumerable(nt, ss[q], 1)) v[i].en_seen = 1;
+      }
     }
   }
   /* the calls that go to a twin, all chosen before any is rewritten */

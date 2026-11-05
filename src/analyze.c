@@ -2224,7 +2224,6 @@ static int a_scope_forwards_block_to_lowered(Compiler *c, int mi) {
   return 0;
 }
 
-static int super_reach(Compiler *c, Scope *s);
 int builtin_instance_method_known(const char *cls, const char *m);
 /* Is a block handed to a builtin receiver's reopened yielding method run as
    a real proc? The reopen arms (emit_call_reopen_arms) reach a String's,
@@ -2271,9 +2270,9 @@ int a_block_is_lifted(Compiler *c, int id) {
      parent's clone (a constructor cycle's subclass, mark_ctor_cycles) --
      hands it the block as a proc (emit_super_block_arg) */
   if (nt_kind(nt, id) == NK_SuperNode || nt_kind(nt, id) == NK_ForwardingSuperNode) {
-    int blk = nt_ref(nt, id, "block"), s = c->nscope[id];
+    int blk = nt_ref(nt, id, "block"), s = c->nscope[id], at;
     if (nt_kind(nt, blk) != NK_BlockNode || s < 0 || s >= c->nscopes || c->scopes[s].class_id < 0) return 0;
-    int t = super_reach(c, &c->scopes[s]);
+    int t = cplan_super_target(c, -1, &c->scopes[s], &at);
     return t >= 0 && c->scopes[t].blk_param && c->scopes[t].blk_param[0] && !c->scopes[t].yields;
   }
   if (ty_k != NK_CallNode) return 0;
@@ -35574,7 +35573,8 @@ static int scope_yields_inside_lifted_body(Compiler *c, int mi) {
    a yielding initialize the way a constant `X.new` site does, so the class
    needs the clone for its constructor to run the body at all. */
 static int super_new_init_yields(Compiler *c, Scope *s) {
-  if (!s->is_cmethod || !sp_streq(comp_scope_user_name(s), "new") || super_reach(c, s) >= 0) return 0;
+  int at;
+  if (!s->is_cmethod || !is_new_name(comp_scope_user_name(s)) || cplan_super_target(c, -1, s, &at) >= 0) return 0;
   for (int k = 0; k < c->nclasses; k++) {
     int mi = k == s->class_id || is_descendant(c, k, s->class_id) ? comp_method_in_chain(c, k, "initialize", NULL) : -1;
     if (mi >= 0 && c->scopes[mi].yields) return 1;
@@ -45716,18 +45716,10 @@ static void an_method_holders_build(Compiler *c, AnMethodHolders *mh) {
       an_method_holders_add(mh, -1, nt_str(nt, id, "name"));
 }
 
-/* The method a `super` in s reaches: the next shadow in s's own class (an
-   earlier include's, prepend's or extend's copy), or else the parent's:
-   the call plan's answer, which takes a hidden method's name for the one
-   it stands for */
-static int super_reach(Compiler *c, Scope *s) {
-  int at;
-  return cplan_super_target(c, -1, s, &at);
-}
-
 static int super_new_init_keeps_block(Compiler *c, Scope *s) {
+  int at;
   if (super_new_init_yields(c, s)) return 1;
-  if (!s->is_cmethod || !sp_streq(comp_scope_user_name(s), "new") || super_reach(c, s) >= 0) return 0;
+  if (!s->is_cmethod || !is_new_name(comp_scope_user_name(s)) || cplan_super_target(c, -1, s, &at) >= 0) return 0;
   for (int k = 0; k < c->nclasses; k++) {
     int mi = k == s->class_id || is_descendant(c, k, s->class_id) ? comp_method_in_chain(c, k, "initialize", NULL) : -1;
     if (mi >= 0 && c->scopes[mi].blk_param && c->scopes[mi].blk_param[0] && !c->scopes[mi].yields) return 1;
@@ -45758,7 +45750,7 @@ static int ctor_graph_init(Compiler *c, int s) {
    splices none. */
 static int ctor_graph_target(Compiler *c, int id) {
   const NodeTable *nt = c->nt;
-  int t = -1;
+  int t = -1, at;
   if (nt_kind(nt, id) == NK_CallNode) {
     const char *name = nt_str(nt, id, "name");
     int recv = nt_ref(nt, id, "receiver");
@@ -45782,7 +45774,7 @@ static int ctor_graph_target(Compiler *c, int id) {
       if (ty_is_object(rt)) t = call_target(c, id, ty_object_class(rt), name, 0, NULL);
     }
   }
-  else t = super_reach(c, &c->scopes[c->nscope[id]]);
+  else t = cplan_super_target(c, -1, &c->scopes[c->nscope[id]], &at);
   return ctor_graph_node(c, t) ? t : -1;
 }
 
@@ -45793,7 +45785,8 @@ static void ctor_graph_edge(Compiler *c, int id, int *cnt, int *adj, int *fill) 
   if (!ctor_graph_node(c, s)) return;
   /* A super reaching Class#new splices initialize on the receiving class,
      including a descendant that inherits this class method. It has no
-     user superclass method for super_reach to find. */
+     user superclass method for the call plan's super target
+     (cplan_super_target) to find. */
   if (comp_super_is_class_new(c, id)) {
     int ci = c->scopes[s].class_id, nd = 0;
     const int *ds = comp_descendants(c, ci, &nd);
@@ -45938,8 +45931,9 @@ static void rewrite_prepended_builtin_supers(Compiler *c) {
     Scope *s = &c->scopes[si];
     if (!s->is_prepend_copy || s->is_cmethod || !s->name || s->class_id < 0) continue;
     const char *cn = c->classes[s->class_id].name;
+    int at;
     if (!cn || !is_builtin_reopen_name(cn) || sp_streq(cn, "Object") || s->class_id == c->toplevel_class) continue;
-    if (super_reach(c, s) >= 0) continue;
+    if (cplan_super_target(c, -1, s, &at) >= 0) continue;
     int args = k == NK_SuperNode ? nt_ref(nt, id, "arguments") : -1;
     if (k == NK_ForwardingSuperNode) {
       int kw = 0;
@@ -45993,7 +45987,8 @@ static void rewrite_ivar_reflection_supers(Compiler *c) {
     if (s->is_cmethod || !s->name || s->class_id < 0 || !is_ivar_reflection_name(s->name) ||
         c->classes[s->class_id].is_native_class ||
         (is_builtin_reopen_name(c->classes[s->class_id].name) && s->class_id != comp_core_class(c, CORE_OBJECT))) continue;
-    if (super_reach(c, s) >= 0) continue;
+    int at;
+    if (cplan_super_target(c, -1, s, &at) >= 0) continue;
     int args = k == NK_SuperNode ? nt_ref(nt, id, "arguments") : -1;
     if (k == NK_ForwardingSuperNode) {
       int kw = 0;
@@ -50244,7 +50239,7 @@ static void an_phase_class_structure(Compiler *c) {
         for (int i = 0; i < ns; i++) {
           Scope *s = &c->scopes[i];
           if (s->yields || !has_super[i] || s->class_id < 0 || !s->name) continue;
-          int mi = super_reach(c, s);
+          int at, mi = cplan_super_target(c, -1, s, &at);
           if (mi >= 0 && mi < ns && c->scopes[mi].yields) { s->yields = 1; changed = 1; }
         }
         if (!changed) break;
@@ -50270,7 +50265,7 @@ static void an_phase_class_structure(Compiler *c) {
           for (int i = 0; i < ns; i++) {
             Scope *s = &c->scopes[i];
             if (s->yields || s->blk_param || !bare_super[i] || s->class_id < 0 || !s->name) continue;
-            int mi = super_reach(c, s);
+            int at, mi = cplan_super_target(c, -1, s, &at);
             Scope *pm = mi >= 0 && mi < ns ? &c->scopes[mi] : NULL;
             if (!(pm ? pm->blk_param && pm->blk_param[0] && !pm->yields : super_new_init_keeps_block(c, s))) continue;
             s->blk_param = strdup("__sblk__");

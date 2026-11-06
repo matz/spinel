@@ -1,0 +1,11 @@
+["1", "tag2", "yield3"]
+[1, #<Tagged 2>, #<Yielding 3>]
+1
+tag2
+yield3
+<1>
+<tag2>
+<yield3>
+"block4"
+"block5"
+{a: #<Yielding 6>, b: #<Tagged 7>}

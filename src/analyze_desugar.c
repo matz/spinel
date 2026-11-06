@@ -8601,6 +8601,9 @@ int desugar_array_at(Compiler *c) {
     TyKind rt = infer_type(c, recv);
     /* Time#at and a Struct's own member reader are different methods */
     if (rt == TY_TIME || rt == TY_CLASS || ty_is_object(rt)) continue;
+    /* a call not typed yet may answer a Class (`klass.at(s)`, Time's maker):
+       a later round, with its type, decides */
+    if (rt == TY_UNKNOWN && nt_kind(nt, recv) == NK_CallNode) continue;
     /* Array#at takes an index, never a Range: rewriting it to #[] handed the
        slice form a call CRuby answers with a TypeError (#3924). */
     { TyKind aat = infer_type(c, argv[0]);

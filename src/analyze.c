@@ -46778,11 +46778,25 @@ static int rewrite_time_maker_class_value(Compiler *c) {
     if (!(sp_streq(nm, "at") || sp_streq(nm, "now") || sp_streq(nm, "utc") || sp_streq(nm, "gm") ||
           sp_streq(nm, "local") || sp_streq(nm, "mktime"))) continue;
     NodeKind rk = nt_kind(nt, recv);
-    if (rk != NK_LocalVariableReadNode && rk != NK_InstanceVariableReadNode) continue;
+    if (rk != NK_LocalVariableReadNode && rk != NK_InstanceVariableReadNode && rk != NK_CallNode) continue;
     if (infer_type(c, recv) != TY_CLASS || nt_int(nt, id, "tmcv_else", 0)) continue;
     int args = nt_ref(nt, id, "arguments");
     int ncc = tmcv_cands_taking(c, nm, args);
     int base = nt->count;
+    /* a call's Class value (`self.class`, `klass`) is read once, into a
+       local each arm reads: the arms test and use it more than once */
+    int hoist = -1;
+    if (rk == NK_CallNode) {
+      char tname[48]; snprintf(tname, sizeof tname, "__tmcv_%d", id);
+      hoist = tmcv_node(c, "LocalVariableWriteNode", id);
+      int rd = tmcv_node(c, "LocalVariableReadNode", id);
+      if (hoist < 0 || rd < 0) continue;
+      nt_node_set_str(nt, hoist, "name", tname); nt_node_set_int(nt, hoist, "depth", 0);
+      nt_node_set_ref(nt, hoist, "value", recv);
+      nt_node_set_str(nt, rd, "name", tname); nt_node_set_int(nt, rd, "depth", 0);
+      scope_local_intern(comp_scope_of(c, id), tname);
+      recv = rd;
+    }
     int tail;
     if (ncc > 0) {
       /* Not skipped when another class has the class method (a parser
@@ -46828,7 +46842,8 @@ static int rewrite_time_maker_class_value(Compiler *c) {
     }
     long long line = nt_int(nt, id, "node_line", 0), file = nt_int(nt, id, "node_file", 0);
     int body = tmcv_node(c, "StatementsNode", id);
-    nt_node_set_arr(nt, body, "body", &tail, 1);
+    int stmts[2] = { hoist, tail };
+    nt_node_set_arr(nt, body, "body", hoist >= 0 ? stmts : &tail, hoist >= 0 ? 2 : 1);
     nt_node_reset(nt, id, "ParenthesesNode");
     nt_node_set_ref(nt, id, "body", body);
     nt_node_set_int(nt, id, "node_line", line);

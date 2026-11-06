@@ -1103,6 +1103,29 @@ static int ct_window_version(Compiler *c, int id, int cls, const char *name, int
   int dc = -1;
   return ct_def_version(c, cls, name, sg, ds[0], &dc);
 }
+/* How call id asks the record for the versions it may meet
+   (elab_call_meet): after its point where it runs later, and as the
+   mixin's copy's call in a mixin's copy of its body */
+static int ct_meet_how(Compiler *c, int id) {
+  const Scope *own = comp_scope_of(c, id);
+  return ct_after_point(c, id) | (own && own->origin_module_ci > 0 ? ELAB_MEET_COPY : 0);
+}
+/* The one version node id meets as cls's `name` (singleton when sg): the
+   one the record answers at id's point, or the one over the statements id
+   may run in (elab_call_meet, asked as ct_version_at asks); NULL where it
+   meets none or the record cannot tell which, also for no node (id < 0),
+   *none 1 where it surely meets none. Its callers ask it in the record's
+   frame for the call plan (elab_plan_enter). */
+static const LrDef *ct_met_version(Compiler *c, int id, int cls, const char *name, int sg, int *none) {
+  const LrDef *ds[2];
+  ElabMeet m;
+  *none = 0;
+  if (id < 0) return NULL;
+  elab_call_meet(c, id, cls, name, sg, ct_meet_how(c, id), &m, ds, 2);
+  *none = m.at == ELAB_NO || (m.at == ELAB_UNKNOWN && m.win == ELAB_YES && m.n == 0);
+  if (m.at == ELAB_YES) return m.d;
+  return m.at == ELAB_UNKNOWN && m.win == ELAB_YES && m.n == 1 ? ds[0] : NULL;
+}
 /* The class an alias that node id meets as cls's `name` (singleton when
    sg) was made in, as Method#owner names it: the class or module whose body
    holds the alias statement, the version the record answers at id's point
@@ -1112,18 +1135,97 @@ static int ct_window_version(Compiler *c, int id, int cls, const char *name, int
    call plan (elab_plan_enter), as ct_version asks for the target, so the
    owner and the target are read from the same facts */
 int cplan_alias_holder(Compiler *c, int id, int cls, const char *name, int sg, int *own_sg) {
-  const LrDef *d = NULL, *ds[2];
-  ElabMeet m;
+  int none;
   if (cls < 0 || !name) return -1;
-  const Scope *own = comp_scope_of(c, id);
   int framed = elab_plan_enter(c, id);
-  elab_call_meet(c, id, cls, name, sg, ct_after_point(c, id) | (own && own->origin_module_ci > 0 ? ELAB_MEET_COPY : 0), &m, ds, 2);
-  if (m.at == ELAB_YES) d = m.d;
-  else if (m.at == ELAB_UNKNOWN && m.win == ELAB_YES && m.n == 1) d = ds[0];
+  const LrDef *d = ct_met_version(c, id, cls, name, sg, &none);
   int h = d && d->kind == LR_ALIAS ? c->node_cbody[d->node] : -1;
   *own_sg = h >= 0 && elab_version_on_singleton(c, h, name, d->node);
   if (framed) elab_plan_leave(c);
   return h;
+}
+/* (the class whose accessor lists answer cls's `name` on its chain, a
+   writer's as `x=`; -1 for none) */
+static int ct_accessor_class(Compiler *c, int cls, const char *name) {
+  int dc = -1;
+  char base[256];
+  int found = setter_base_name(name, base, sizeof base) ? comp_writer_in_chain(c, cls, base, &dc)
+                                                         : comp_reader_in_chain(c, cls, name, &dc);
+  return found ? dc : -1;
+}
+/* (the Struct or the Data whose member cls's `name` is, the class
+   answering it on cls's chain; -1 for none) */
+static int ct_struct_member(Compiler *c, int cls, const char *name) {
+  int dc = ct_accessor_class(c, cls, name);
+  return dc >= 0 && (c->classes[dc].is_struct || c->classes[dc].is_data) ? dc : -1;
+}
+/* (is v an attr_* call's version that surely ran where it stands?) */
+static int ct_attr_version(const LrDef *v) {
+  return v && (v->kind == LR_READER || v->kind == LR_WRITER) && !v->may && !v->unplaced;
+}
+/* What node id, a Method's maker, meets as an instance of cls's accessor
+   `name` (a writer's as `x=`): the version it meets (ct_met_version), past
+   an alias to the version of its target live where the alias was made, in
+   the class whose body made it (as ct_def_version follows one; the points
+   only go back). As CRuby answers its Method:
+     - the owner is the class or module whose body holds the first alias
+       met, else the one whose body declares the accessor;
+     - the position is the attr_* call's line, or none (nil) through an
+       alias of an accessor a module declares: CRuby makes such an alias
+       an entry of its own around the module's method, and
+       #source_location reads an attr's position off the attr's own
+       entry alone, not through that wrapper (an alias of a class's
+       accessor shares its entry, and of a module's def answers the
+       def's line). A Struct's or a Data's member, which no call
+       declares, has none either. */
+static void ct_accessor_met(Compiler *c, int id, int cls, const char *name, CplanAccessor *a) {
+  int none, holder = -1;
+  const LrDef *d = ct_met_version(c, id, cls, name, 0, &none);
+  if (!d) {
+    int sm = none ? ct_struct_member(c, cls, name) : -1;
+    if (sm >= 0) { a->owner = sm; a->pos = 0; }
+    return;
+  }
+  while (d->kind == LR_ALIAS && d->target && !d->may) {
+    LoadPoint p = elab_point_of(c, d->node);
+    int h = c->node_cbody[d->node], o, sm;
+    const char *t = d->target;
+    if (p.region < 0 || h < 0) return;
+    if (holder < 0) holder = h;
+    if ((o = elab_method_at(c, h, t, 0, p, &d)) == ELAB_NO) {
+      if ((sm = ct_struct_member(c, h, t)) >= 0) { a->owner = holder; a->pos = 0; }
+      return;
+    }
+    if (o != ELAB_YES || !d) return;
+  }
+  if (!ct_attr_version(d)) return;
+  int body = c->node_cbody[d->node];
+  if (body < 0) return;
+  a->node = d->node;
+  a->owner = holder >= 0 ? holder : body;
+  a->pos = holder >= 0 && comp_class_is_module(c, &c->classes[body]) ? 0 : 1;
+}
+/* ...asked in the record's frame for the call plan (elab_plan_enter), as
+   cplan_alias_holder asks. Where the record cannot tell which accessor id
+   meets (or there is no id), the Method stands at the last attr_* call on
+   cls's chain sure to run, whatever id's point (elab_accessor_node), and
+   is owned by the class whose body makes it, else by the one whose
+   accessor lists answer the name: CRuby's answer where no later version
+   ran, not the one a version run only under a condition gives. Which of
+   them ran is a run-time fact no accessor records. */
+void cplan_accessor_met(Compiler *c, int id, int cls, const char *name, CplanAccessor *a) {
+  *a = (CplanAccessor){ -1, -1, -1 };
+  if (cls < 0 || !name) return;
+  if (id >= 0) {
+    int framed = elab_plan_enter(c, id);
+    ct_accessor_met(c, id, cls, name, a);
+    if (framed) elab_plan_leave(c);
+  }
+  if (a->pos < 0) {
+    a->node = elab_accessor_node(c, cls, name);
+    a->pos = a->node >= 0;
+    a->owner = a->node >= 0 && c->node_cbody[a->node] >= 0 ? c->node_cbody[a->node] : ct_accessor_class(c, cls, name);
+  }
 }
 /* Does node id make the implied call `name` on operand op (a node, or an
    NTI_ word): a row of tools/implied_calls.yml says so (nt_implied_calls),

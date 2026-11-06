@@ -1157,6 +1157,13 @@ int is_index_assign(const char *n) {
   return sp_streq(n, "[]=");
 }
 
+/* The typed-array adapter a Method of an Integer or a String array's n
+   binds (`@ram.method(:[]=)`, emit_method_obj_target): "get" for [],
+   "set" for []=, "push"; NULL for any other name */
+const char *typed_array_adapter_op(const char *n) {
+  return !n ? NULL : sp_streq(n, "[]") ? "get" : is_index_assign(n) ? "set" : sp_streq(n, "push") ? "push" : NULL;
+}
+
 int is_fill_name(const char *n) { return sp_streq(n, "fill"); }
 
 int is_first_or_take(const char *n) {
@@ -1916,6 +1923,17 @@ const char *builtin_method_owner(const char *cls, const char *m) {
   if (builtin_numeric_owns(cls, m)) return "Numeric";
   if (builtin_comparable_owns(cls, m)) return "Comparable";
   return builtin_object_method_owner(m);
+}
+
+/* The class or module that defines builtin method m of a true or a false,
+   as Method#owner names it, where that is the same for both: one every
+   object answers (builtin_object_method_owner: Kernel's frozen?,
+   BasicObject's ==). NULL for one of the value's own class, TrueClass's
+   for true and FalseClass's for false, which the instance facts list
+   under TrueClass (the rows of the methods outside Object's ancestry; the
+   two classes define the same names), and for one no fact names */
+const char *builtin_bool_method_owner(const char *m) {
+  return m && !builtin_instance_method_known("TrueClass", m) ? builtin_object_method_owner(m) : NULL;
 }
 
 /* The module that defines function m, which a receiverless method(:m)

@@ -53,17 +53,17 @@ grep -q 'nocolon\|"x.erb"\|^#line [0-9]* ""' out.c && fail "a malformed marker w
 # deferring file whose path it names, and two files that give one name each
 # keep their own answer, in either order they are read.
 sp="$OLDPWD/$SPINEL"
-refused='  "a".unicode_normalize(:nfc)'
+refused='  proc { "a" }.ruby2_keywords'
 # a refusal in several kinds of statement, so the nodes a rewrite makes over them are asked too
 many() { cat <<RB
-def plain = "a".unicode_normalize(:nfc)
+def plain = proc { "a" }.ruby2_keywords
 def forwarded(...) = plain(...)
-def blocked = [1].map { |i| "a#{i}".unicode_normalize(:nfc) }
-def interpolated = "v=#{"a".unicode_normalize(:nfc)}"
+def blocked = [1].map { |i| proc { "a#{i}" }.ruby2_keywords }
+def interpolated = "v=#{proc { "a" }.ruby2_keywords}"
 def ensured
   yield
 ensure
-  "a".unicode_normalize(:nfc)
+  proc { "a" }.ruby2_keywords
 end
 [:plain, :forwarded, :blocked, :interpolated].each { |m| begin; send(m); rescue NotImplementedError; puts m; end }
 begin; ensured { 1 }; rescue NotImplementedError; puts :ensured; end
@@ -96,7 +96,7 @@ for order in "a b" "b a"; do
   cat > a.rb <<'RB'
 # spinel: defer-refusals
 #<SPINEL_SOURCE>shared.erb:1
-def from_a = "a".unicode_normalize(:nfc)
+def from_a = proc { "a" }.ruby2_keywords
 RB
   printf '#<SPINEL_SOURCE>shared.erb:1\ndef from_b = 1\n' > b.rb
   : > req.rb; for f in $order; do echo "require_relative \"$f\"" >> req.rb; done
@@ -105,7 +105,7 @@ RB
   [ "$(./two | tr '\n' ' ')" = "a_deferred 1 " ] || fail "two files sharing a marker name ran wrong ($order)"
   "$sp" two.rb -S > two.c 2>/dev/null
   [ "$(grep -c '^#line 1 "shared.erb"' two.c)" -ge 1 ] || fail "two files sharing a marker name: the position is not shown ($order)"
-  printf '#<SPINEL_SOURCE>shared.erb:1\ndef from_b = "b".unicode_normalize(:nfc)\n' > b.rb
+  printf '#<SPINEL_SOURCE>shared.erb:1\ndef from_b = proc { "b" }.ruby2_keywords\n' > b.rb
   "$sp" two.rb -o two > two.out 2>&1 && fail "two files sharing a marker name: the one without the comment deferred ($order)"
   grep -q '^spinel: shared.erb:' two.out || fail "two files sharing a marker name: no refusal shown at the marker ($order)"
 done
@@ -114,7 +114,7 @@ done
 cat > lib0.rb <<'RB'
 # spinel: defer-refusals
 RB
-printf '#<SPINEL_SOURCE>%s/entry.rb:40\ndef from_lib = "a".unicode_normalize(:nfc)\n' "$tmp" >> lib0.rb
+printf '#<SPINEL_SOURCE>%s/entry.rb:40\ndef from_lib = proc { "a" }.ruby2_keywords\n' "$tmp" >> lib0.rb
 printf 'require_relative "lib0"\nbegin; from_lib; rescue NotImplementedError => e; puts e.message[/\\A[^:]*lib0.rb:\\d+/]; end\n' > "$tmp/entry.rb"
 "$sp" "$tmp/entry.rb" -o entry > entry.out 2>&1 || { cat entry.out; fail "a marker naming the entry script made a deferring file refused"; }
 [ "$(./entry)" = "$tmp/lib0.rb:3" ] || fail "a marker naming the entry script moved a deferring file's position"

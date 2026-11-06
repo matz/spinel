@@ -15310,6 +15310,13 @@ static int desugar_multi_yield_map_param(Compiler *c) {
       int enum_first = 0;
       for (int cur = cid; cur >= 0 && cur < c->nclasses && cur != dcls; cur = c->classes[cur].parent) {
         if (an_class_includes_enumerable(c, cur)) { enum_first = 1; break; }
+        for (int j = 0; j < c->classes[cur].nincluded_mods && !enum_first; j++) {
+          unsigned char *seen = calloc((size_t)c->nclasses + 1, 1);
+          if (!seen) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+          enum_first = an_enum_reaches_v(c, c->classes[cur].included_mods[j], seen);
+          free(seen);
+        }
+        if (enum_first) break;
         if (c->classes[cur].parent == cur) break;
       }
       if (!enum_first) continue;

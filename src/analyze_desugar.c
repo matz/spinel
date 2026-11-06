@@ -4558,7 +4558,6 @@ int desugar_env_enum(Compiler *c) {
    the copy is an ordinary call there, with nothing the default's caller
    has to declare. */
 static int enum_sym_proc_block(const NodeTable *nt, int blk);
-static unsigned char *find_calls_in_param_defaults(const NodeTable *nt, int n0);
 static int obj_range_stop_walk(const NodeTable *nt, int id) {
   const char *nm = nt_str(nt, id, "name");
   int args = nt_ref(nt, id, "arguments"), an = 0;
@@ -16222,7 +16221,8 @@ static void mark_subtree_ids(const NodeTable *nt, int id, unsigned char *mark) {
    find/detect call reachable from a default value keeps its emitter instead
    of taking the rewrite. A Range of objects has no such emitter (its walk
    went through the member Array, so succ ran on every member first): its
-   call takes the rewrite (obj_range_stop_walk). */
+   call takes the rewrite (obj_range_stop_walk), and so does a String
+   Range's: its walks by succ ride the copy outside a default too. */
 static unsigned char *find_calls_in_param_defaults(const NodeTable *nt, int n0) {
   unsigned char *mark = (unsigned char *)calloc((size_t)(n0 ? n0 : 1), 1);
   if (!mark) return NULL;
@@ -17193,7 +17193,7 @@ int desugar_builtin_enum_calls(Compiler *c) {
         nt_str(nt, recv, "enum_recv")) continue;
     /* find/detect reachable from an optional/keyword parameter's default
        value: see find_calls_in_param_defaults. */
-    if (in_default && in_default[id] && rt != TY_OBJ_RANGE &&
+    if (in_default && in_default[id] && rt != TY_OBJ_RANGE && rt != TY_STR_RANGE &&
         (sp_streq(name, "find") || sp_streq(name, "detect") ||
          sp_streq(name, "any?") || sp_streq(name, "all?") ||
          sp_streq(name, "none?") || sp_streq(name, "one?"))) continue;

@@ -39,3 +39,10 @@ $log = []
 p((N.new(0)..).any? { |v| v.n > 2 }, $log)
 $log = []
 p((N.new(0)...N.new(3)).any? { |v| v.n > 7 }, $log)
+
+# A String Range in a default takes the same walk.
+def s_find(r, k = r.find { |v| v > "b" }) = k
+def s_any(r = "a".."e", ok = r.any? { |v| v == "c" }) = ok
+def s_none(r, ok: r.none? { |v| v == "z" }) = ok
+def s_all(r = "a".."e", ok: r.all? { |v| v.size == 1 }) = ok
+p s_find("a".."e"), s_any, s_none("a".."e"), s_all

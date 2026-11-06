@@ -79,3 +79,13 @@ end
 start = 128
 start = :a if ARGV.size > 5
 p lowest_from([300, 200, 900], start)
+
+# A === of the program's own on another class leaves Range#=== as it is, so
+# the literal still compares in place.
+class Matcher
+  def ===(other)
+    other == :match
+  end
+end
+p Matcher.new === :match
+p lowest_from([300, 250], start)

@@ -10527,11 +10527,14 @@ int emit_poly_default_blk_arm(Compiler *c, int id, const char *name, int argc, c
   return 1;
 }
 
+static int emit_range_literal_cover(Compiler *c, int id, Buf *b);
 int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
   /* Re-entered from this very dispatch's builtin-container arm: decline, so
      the call falls through to the builtin emitters the arm is there to
      reach. Without this the arm rebuilt the same switch (#3459). */
   if (g_pd_skip == id) return 0;
+  /* (not switched on the receiver's class: a Range literal's is known, and holding it to switch would build it) */
+  if (emit_or_take_back(c, id, b, emit_range_literal_cover)) return 1;
   const NodeTable *nt = c->nt;
   const char *name = nt_str(nt, id, "name");
   int recv = nt_ref(nt, id, "receiver");
@@ -21595,6 +21598,14 @@ int emit_hash_new_arg_guard(Compiler *c, int id, Buf *b) {
    followed them. */
 /* (compared in place, not built: sp_Range has sp_int bounds and a Bignum end has nowhere to live; ahead of every
    arm that holds the receiver first, which would build the Range to hold it) */
+/* (Range's own reopening or a module it prepends, not any class's: a `===` of the program's elsewhere leaves Range#=== as it is) */
+static int range_redefines(Compiler *c, int id, const char *name) {
+  int rci = comp_core_class(c, CORE_RANGE);
+  if (rci < 0) return 0;
+  int dc = -1, mi = call_target(c, id, rci, name, 0, &dc);
+  return mi >= 0 && (c->scopes[mi].is_prepend_copy || dc == rci);
+}
+
 static int emit_range_literal_cover(Compiler *c, int id, Buf *b) {
   const NodeTable *nt = c->nt;
   int rr = nt_paren_single(nt, nt_ref(nt, id, "receiver"));
@@ -21602,7 +21613,7 @@ static int emit_range_literal_cover(Compiler *c, int id, Buf *b) {
   int ra = nt_ref(nt, id, "arguments");
   int rc = 0; const int *rv = ra >= 0 ? nt_arr(nt, ra, "arguments", &rc) : NULL;
   if (rr >= 0 && nt_kind(nt, rr) == NK_RangeNode && rn && is_range_membership(rn) && rc == 1 && rv &&
-      rv[0] >= 0 && !user_defines_or_reads(c, rn)) {
+      rv[0] >= 0 && !range_redefines(c, id, rn)) {
     int lo = nt_ref(nt, rr, "left"), hi = nt_ref(nt, rr, "right");
     /* (a boxed end too, asked about a number: it can hold a Bignum the sp_Range would cut to its low bits) */
     int big = 0, boxed = 0;

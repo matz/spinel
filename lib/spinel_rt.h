@@ -6612,11 +6612,17 @@ static int sp_poly_coerce_binop(const char *op, sp_RbVal a, sp_RbVal b, sp_RbVal
 static SP_NOINLINE SP_COLD sp_oint sp_spaceship_answer(sp_RbVal u) { return sp_unbox_oint(u); }
 /* The body, inlined where a hot loop compares (a sort's comparator); the
    function below is the one every other caller shares */
+static SP_INLINE sp_oint sp_poly_spaceship_rest(sp_RbVal a, sp_RbVal b);
 static SP_INLINE sp_oint sp_poly_spaceship_body(sp_RbVal a, sp_RbVal b) {
   { sp_RbVal _u; if (sp_poly_user_cmp("<=>", a, b, &_u))
       return sp_spaceship_answer(_u); }
   { sp_RbVal _u; if (sp_poly_coerce_binop("<=>", a, b, &_u))
       return sp_spaceship_answer(_u); }
+  return sp_poly_spaceship_rest(a, b);
+}
+/* what follows the program's own <=> and #coerce: asked once each, so a
+   caller that tried them itself goes on here */
+static SP_INLINE sp_oint sp_poly_spaceship_rest(sp_RbVal a, sp_RbVal b) {
   sp_bool comparable; sp_int cmp = sp_poly_cmp(a, b, &comparable);
   if (comparable) return sp_oint_of(cmp);
   if (a.tag == b.tag &&
@@ -6638,7 +6644,8 @@ static SP_UNUSED sp_RbVal sp_poly_spaceship_v(sp_RbVal a, sp_RbVal b) {
   sp_RbVal u;
   if (sp_poly_user_cmp("<=>", a, b, &u) || sp_poly_coerce_binop("<=>", a, b, &u))
     return u.tag == SP_TAG_BIGINT || u.tag == SP_TAG_FLT ? u : sp_box_oint(sp_spaceship_answer(u));
-  return sp_box_oint(sp_poly_spaceship(a, b));
+  /* neither answered: the rest, without asking #coerce a second time */
+  return sp_box_oint(sp_poly_spaceship_rest(a, b));
 }
 /* String#<=> alone falls back to rb_invcmp: an operand that is neither a
    string nor convertible by #to_str is asked to compare itself AGAINST the
@@ -6826,7 +6833,12 @@ static sp_int sp_poly_cmp_ck(sp_RbVal a, sp_RbVal b) {
     /* a number beside an object answering #coerce compares through it, as
        Comparable's <=> on a Numeric does (between?, clamp) */
     sp_RbVal u;
-    if (sp_poly_coerce_binop("<=>", a, b, &u) && u.tag == SP_TAG_INT) return u.v.i;
+    if (sp_poly_coerce_binop("<=>", a, b, &u)) {
+      if (u.tag == SP_TAG_INT) return u.v.i;
+      /* a Bignum or Float answer of the coerced pair counts by its sign */
+      if (u.tag == SP_TAG_BIGINT && u.v.p) { int s = sp_bigint_sign((sp_Bigint *)u.v.p); return (s > 0) - (s < 0); }
+      if (u.tag == SP_TAG_FLT) return (u.v.f > 0) - (u.v.f < 0);
+    }
     sp_raise_cls("ArgumentError", sp_sprintf("comparison of %s with %s failed", sp_poly_class_name(a), sp_cmperr_desc(b)));
   }
   return r;

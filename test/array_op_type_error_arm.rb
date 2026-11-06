@@ -29,3 +29,17 @@ p r
 p((x + 1 rescue $!.message))
 p((x - nil rescue $!.message))
 p((y + "s" rescue $!.message))
+
+# the same for concat, union, difference, product and Array#* with nil
+a = [1, 2]
+p(((x.is_a?(Array) ? a.union(1) : [1]) rescue $!.message))
+p(((x.is_a?(Array) ? a.difference(true) : 2.5) rescue $!.message))
+p(x.is_a?(Integer) ? a.concat(nil) : x.size)
+p(x.is_a?(Integer) ? a.product(3) : x.size)
+def times_nil(v) = v.is_a?(Integer) ? ([1] * nil) : 1
+p times_nil([1])
+z = x.is_a?(Integer) ? [1] * nil : 3
+p z
+def show(v) = (puts "eval #{v.inspect}"; v)
+p((show(a).union(show(nil)) rescue $!.message))
+p(([1].freeze.concat(nil) rescue $!.class))

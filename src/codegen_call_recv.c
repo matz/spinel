@@ -3364,7 +3364,10 @@ static int emit_array_operand_misfit(Compiler *c, int id, const char *name, int 
   int tb = ++g_tmp, t0 = g_tmp + 1;
   g_tmp += argc;
   Buf *sv_pre = g_pre;
-  buf_puts(b, "({ ");
+  /* the operands are evaluated inside the raise's message argument, so the
+     text leads with the raise (text_diverges), as
+     emit_array_operand_type_error does */
+  buf_puts(b, "({ sp_raise_cls(\"TypeError\", ({ ");
   /* concat and replace change the receiver: CRuby's frozen check comes
      before any argument converts, so a frozen one raises FrozenError, not
      the operand's TypeError. The receiver is held for that test. */
@@ -3408,15 +3411,15 @@ static int emit_array_operand_misfit(Compiler *c, int id, const char *name, int 
                     " sp_raise_cls(\"TypeError\", sp_sprintf(\"no implicit conversion of %%s into Array\", sp_convert_src_name(_t%d))); } ",
                  t0 + ai, t0 + ai);
   if (comp_ntype(c, argv[bad]) == TY_NIL)
-    buf_puts(b, "sp_raise_cls(\"TypeError\", \"no implicit conversion of nil into Array\");");
+    buf_puts(b, "\"no implicit conversion of nil into Array\"; }));");
   else if (comp_ntype(c, argv[bad]) == TY_BOOL)
-    buf_printf(b, "sp_raise_cls(\"TypeError\", _t%d"
+    buf_printf(b, "_t%d"
                   " ? \"no implicit conversion of true into Array\""
-                  " : \"no implicit conversion of false into Array\");", tb);
+                  " : \"no implicit conversion of false into Array\"; }));", tb);
   else if (ty_is_object(comp_ntype(c, argv[bad])))
-    buf_printf(b, "sp_raise_cls(\"TypeError\", sp_sprintf(\"no implicit conversion of %%s into Array\", sp_convert_src_name(_t%d)));", tb);
+    buf_printf(b, "sp_sprintf(\"no implicit conversion of %%s into Array\", sp_convert_src_name(_t%d)); }));", tb);
   else
-    buf_printf(b, "sp_raise_cls(\"TypeError\", \"no implicit conversion of %s into Array\");",
+    buf_printf(b, "\"no implicit conversion of %s into Array\"; }));",
                conv_builtin_class_name(comp_ntype(c, argv[bad])));
   buf_printf(b, " %s; })", raise_tail_value(arty));
   return 1;

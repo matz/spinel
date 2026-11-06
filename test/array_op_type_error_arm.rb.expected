@@ -11,3 +11,13 @@
 "no implicit conversion of Integer into Array"
 "no implicit conversion of nil into Array"
 "no implicit conversion of String into Array"
+"no implicit conversion of Integer into Array"
+"no implicit conversion of true into Array"
+2
+2
+1
+3
+eval [1, 2]
+eval nil
+"no implicit conversion of nil into Array"
+FrozenError

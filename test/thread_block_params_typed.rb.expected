@@ -7,6 +7,11 @@
 "s1"
 "nil"
 true
+:none
+2
+"nil"
+"1.5"
+2
 7
 1
 [1, nil]

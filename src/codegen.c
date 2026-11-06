@@ -8854,9 +8854,7 @@ static void emit_fiber_new_here(Compiler *c, int id, Buf *b, int as_gen, int siz
   int body = nt_ref(nt, blk, "body");
   Scope *encl = comp_scope_of(c, id);
   /* a Thread's parameters may be typed from its arguments (emit_thread_param_unbox) */
-  int trecv = nt_ref(nt, id, "receiver");
-  int is_thread = !as_gen && trecv >= 0 && nt_kind(nt, trecv) == NK_ConstantReadNode &&
-                  nt_str(nt, trecv, "name") && sp_streq(nt_str(nt, trecv, "name"), "Thread");
+  int is_thread = !as_gen && recv_is_const(nt, nt_ref(nt, id, "receiver"), "Thread");
 
   /* Collect locals written inside this fiber body (not in nested blocks). */
   NameSet fib_locals = {0};

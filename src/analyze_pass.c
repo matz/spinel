@@ -18544,18 +18544,15 @@ int infer_block_params(Compiler *c) {
      runtime boundary boxed, as a Fiber's resume value does, and the body
      unboxes an Integer or a Float parameter on entry (emit_fiber_new_here);
      any other kind, an argument missing or spread, or a parameter of
-     another form leaves them all boxed. A worker loop over its index
-     (`i = wid; while i < n; ...; i += nt`) ran on boxed values. */
+     another form leaves them all boxed, as --int-overflow=promote, which
+     boxes every Integer, does. A worker loop over its index
+     (`i = wid; while i < n; ...; i += nt`) ran on boxed values. The nil
+     an argument can be is the parameter's too (the nil marking pass). */
   NT_FOREACH_KIND(nt, NK_CallNode, id) {
     const char *cname = nt_str(nt, id, "name");
     if (!cname || !sp_streq(cname, "new")) continue;
-    int recv = nt_ref(nt, id, "receiver");
-    if (recv < 0 || !nt_type(nt, recv)) continue;
-    NodeKind rrk = nt_kind(nt, recv);
-    if (!(rrk == NK_ConstantReadNode || (rrk == NK_ConstantPathNode && nt_ref(nt, recv, "parent") < 0))) continue;
-    const char *rn = nt_str(nt, recv, "name");
-    int blk = nt_ref(nt, id, "block");
-    if (!rn || !sp_streq(rn, "Thread") || blk < 0 || nt_kind(nt, blk) != NK_BlockNode) continue;
+    int recv = nt_ref(nt, id, "receiver"), blk = nt_ref(nt, id, "block");
+    if (!recv_is_const(nt, recv, "Thread") || blk < 0 || nt_kind(nt, blk) != NK_BlockNode) continue;
     int pn = nt_ref(nt, blk, "parameters");
     int inner = pn >= 0 ? nt_ref(nt, pn, "parameters") : -1;
     if (inner < 0) continue;
@@ -18568,7 +18565,7 @@ int infer_block_params(Compiler *c) {
     for (int a = 0; a < argc; a++)
       if (nt_kind(nt, argv[a]) == NK_SplatNode || nt_kind(nt, argv[a]) == NK_KeywordHashNode ||
           nt_kind(nt, argv[a]) == NK_BlockArgumentNode) other = 1;
-    if (rnp == 0 || argc < rnp) other = 1;
+    if (rnp == 0 || argc < rnp || g_promote_mode) other = 1;
     Scope *bs = comp_scope_of(c, blk);
     for (int k = 0; k < rnp; k++) {
       const char *p = nt_str(nt, reqs[k], "name");

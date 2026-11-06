@@ -44,6 +44,17 @@ p Thread.new(1) { |x| x = "s#{x}"; x }.value
 p Thread.new { |x| x.inspect }.value
 p Thread.new(nil) { |x| x.nil? }.value
 
+# an argument that may be nil: the parameter holds it
+def maybe_int(flag) = Thread.new(flag ? nil : 1) { |x| x.nil? ? :none : x + 1 }.value
+p maybe_int(true)
+p maybe_int(false)
+def maybe_float(flag) = Thread.new(flag ? nil : 1.5) { |x| x.inspect }.value
+p maybe_float(true)
+p maybe_float(false)
+
+# a receiver written from the root
+p ::Thread.new(1) { |x| x + 1 }.value
+
 # a parameter a lambda in the body captures and changes
 p Thread.new(5) { |x| pr = -> { x += 1 }; pr.call; pr.call; x }.value
 

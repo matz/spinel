@@ -1637,6 +1637,21 @@ sp_File *sp_sock_pair_end(sp_int domain, sp_int type, sp_int proto, sp_int which
   return sp_io_fdopen_sock(fd, SPL("socket"));
 }
 
+/* The two connected descriptors of a socket pair, into the caller's fds:
+   each call keeps its own, so two threads making pairs at once cannot
+   hand each other an end. */
+void sp_sock_socketpair(sp_int domain, sp_int type, sp_int proto, int fds[2]) {
+  extern int sp_net_socketpair(int domain, int type, int protocol, int fds[2]);
+  if (sp_net_socketpair((int)domain, (int)type, (int)proto, fds) != 0)
+    sp_file_raise_errno("socketpair", "");
+}
+
+/* One end of a socket pair as a handle: a UNIXSocket for UNIXSocket.pair
+   (is_unix set), a Socket for Socket.pair. */
+sp_File *sp_sock_pair_handle(int fd, sp_int is_unix) {
+  return sp_io_fdopen_sock(fd, is_unix ? SPL("unix") : SPL("socket"));
+}
+
 /* A family or socket type named by a String or Symbol, with or without its
    AF_ or PF_ (SOCK_) prefix, as CRuby reads the name. An unknown name is
    CRuby's SocketError, which names it. */

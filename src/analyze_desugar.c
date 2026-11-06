@@ -19639,9 +19639,36 @@ static int user_block_method(Compiler *c, const char *nm) {
    class-id dispatch may serve: it lifts the block, so a user method
    yielding two values reaches it without sym_proc_pair.
    { |*__spr_N| __spr_N.length > 1 ? __spr_N[0].m(__spr_N[1]) : __spr_N[0].m } */
+/* Drop `name` from block `blk`'s comma-joined `locals`: emit_block_locals_reset
+   nils every name there that is no parameter, and a block lifted to a proc
+   function declares only the names its body still binds. */
+static void blk_locals_drop(NodeTable *nt, int blk, const char *name) {
+  const char *locs = nt_str(nt, blk, "locals");
+  if (!locs || !*locs || !name) return;
+  size_t nlen = strlen(name), w = 0;
+  char *out = (char *)malloc(strlen(locs) + 1);
+  if (!out) return;
+  out[0] = 0;
+  for (const char *p = locs; ; ) {
+    const char *e = strchr(p, ',');
+    size_t seg = e ? (size_t)(e - p) : strlen(p);
+    if (seg && !(seg == nlen && !strncmp(p, name, seg))) {
+      if (w) out[w++] = ',';
+      memcpy(out + w, p, seg); w += seg; out[w] = 0;
+    }
+    if (!e) break;
+    p = e + 1;
+  }
+  nt_set_str(nt, blk, "locals", out);
+  free(out);
+}
+
 static int sym_proc_rest_view(Compiler *c, int blk, const char *mn) {
   NodeTable *nt = (NodeTable *)c->nt;
   int pn = nt_ref(nt, nt_ref(nt, blk, "parameters"), "parameters");
+  int P = 0; const int *pre = nt_arr(nt, pn, "requireds", &P);
+  char xn[64] = "";
+  if (P == 1 && nt_str(nt, pre[0], "name")) snprintf(xn, sizeof xn, "%s", nt_str(nt, pre[0], "name"));
   char rn[48]; snprintf(rn, sizeof rn, "__spr_%s", comp_node_tag(c, blk));
   BsB b = { nt, 1 };
   int base = nt->count;
@@ -19656,6 +19683,7 @@ static int sym_proc_rest_view(Compiler *c, int blk, const char *mn) {
   if (!b.ok || stmts < 0) return 0;
   nt_node_set_arr(nt, pn, "requireds", NULL, 0);
   nt_node_set_ref(nt, pn, "rest", rest);
+  if (*xn) blk_locals_drop(nt, blk, xn);
   /* A view desugar_builtin_iter_block_shapes lowered (its receiver read as
      an Array for a round) is viewed again: the body it replaces assigns the
      rest name, and left in the table that is the method's write of it, so

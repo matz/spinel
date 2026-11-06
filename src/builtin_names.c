@@ -282,7 +282,8 @@ int is_select_bang(const char *n) {
 
 
 int is_stop_walk(const char *n) {
-  return is_find_or_take_while(n) || sp_streq(n, "find_index") || sp_streq(n, "each_with_index");
+  return is_find_or_take_while(n) || sp_streq(n, "find_index") || sp_streq(n, "each_with_index") ||
+         sp_streq(n, "any?") || sp_streq(n, "all?") || sp_streq(n, "none?") || sp_streq(n, "one?");
 }
 
 int is_range_member_walk(const char *n) {

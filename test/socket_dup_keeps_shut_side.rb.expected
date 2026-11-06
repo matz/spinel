@@ -1,0 +1,3 @@
+write through the dup: IOError: not opened for writing
+syswrite through the dup: IOError: not opened for writing
+the dup reads: "hi"

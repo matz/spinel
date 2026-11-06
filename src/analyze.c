@@ -44623,13 +44623,16 @@ static void refuse_mixin_after_calls(Compiler *c) {
   if (nev > 1) qsort(ev, (size_t)nev, sizeof *ev, mixin_event_cmp);
   /* the ranks of the top-level statements that run code, in load order:
      the record holds definitions, not which statements run code (a load's
-     file's statements follow it, and run or not themselves) */
+     file's statements follow it, and run or not themselves). One that only
+     answers a value -- a literal, a constant, as a require a build step
+     dropped leaves `false` -- runs none. */
   int n = 0, *st = nev ? prog_top_seq(c, &n, NULL) : NULL, nrun = 0;
   int *run = n ? malloc(sizeof(int) * (size_t)n) : NULL;
   if (n && !run) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   for (int q = 0; q < n; q++) {
     NodeKind qk = nt_kind(nt, st[q]);
     if (qk == NK_ClassNode || qk == NK_ModuleNode || qk == NK_DefNode || qk == NK_LoadNode) continue;
+    if (!bo_may_act(nt, st[q])) continue;
     int f, r;
     elab_top_place(c, st[q], &f, &r);
     if (r >= 0) run[nrun++] = r;

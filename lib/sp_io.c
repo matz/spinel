@@ -1021,7 +1021,7 @@ SP_NORETURN SP_COLD void sp_io_raise_closed(void) {
    kind label instead of an fopen mode and takes both; a handle with no
    mode reads. */
 static int sp_io_mode_allows(sp_File *f, int writing) {
-  if (f->is_sock) return 1;
+  if (f->is_sock) return !(f->shut & (writing ? 2 : 1));
   const char *m = f->mode && f->mode[0] ? f->mode : "r";
   for (const char *p = m; *p && *p != ':'; p++)
     if (*p == '+') return 1;
@@ -2879,6 +2879,21 @@ void sp_File_close_half(sp_File *f, sp_bool reading) {SP_GC_ROOT(f);
      BasicSocket's do */
   if (f && f->closed) {
     if (f->is_sock) sp_io_raise_closed();
+    return;
+  }
+  /* A socket shuts that direction down and keeps the other; once both are
+     down the handle closes. #close_write on a socket that reads no more
+     closes it without a shutdown. A failed shutdown (the peer is gone, or
+     the side is already down) is not an error here. */
+  if (f && f->is_sock && f->fp) {
+    if (reading || !(f->shut & 1)) {
+      extern int sp_net_shutdown(int fd, int how);
+      int fd = fileno(sp_io_use(f));
+      (void)sp_net_shutdown(fd, reading ? 0 : 1);   /* SHUT_RD / SHUT_WR */
+      sp_io_unuse(f);
+    }
+    f->shut |= reading ? 1 : 2;
+    if (f->shut == 3) sp_io_close_handle(f);
     return;
   }
   const char *m = (f && f->mode) ? f->mode : "r";

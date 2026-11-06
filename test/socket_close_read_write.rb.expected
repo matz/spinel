@@ -1,0 +1,13 @@
+close_write: nil
+peer reads to the end: "answer"
+still reads: "late bytes"
+write after close_write: IOError: not opened for writing
+close_write again: nil
+closed? with one side down: false
+close_read: nil
+closed? with both down: true
+close_write once closed: IOError: closed stream
+close_read first: nil
+write after close_read: 1
+peer reads it: "y"
+closed? after close_read: false

@@ -3822,6 +3822,13 @@ static SP_INLINE const char *sp_poly_arg_str_chk(sp_RbVal v) {
   if (v.tag == SP_TAG_STR) return v.v.s;
   return sp_poly_arg_str_chk_slow(v);
 }
+/* A String argument that is nil at run time (a String-or-nil, such as
+   byteslice answers): TypeError, where a NULL passed on was taken as
+   nothing to do. */
+static SP_INLINE const char *sp_str_arg_not_nil(const char *s) {
+  if (SP_UNLIKELY(!s)) sp_raise_cls("TypeError", "no implicit conversion of nil into String");
+  return s;
+}
 /* An argument of String#append_as_bytes, boxed: an Integer is its low byte
    (CRuby masks it with 0xff, so 256 appends "\x00", -1 "\xff" and a Bignum
    the last byte of its two's complement), a String its bytes. A user object

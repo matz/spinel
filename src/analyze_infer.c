@@ -1569,7 +1569,8 @@ static int an_own_row_read(Compiler *c, int n, const char *ivname, int depth) {
 }
 
 /* Whether a value position of stored value `n` (an arm of an `if`, a
-   ternary, a `case` or `||`, through parentheses) has no type yet and is a
+   ternary, a `case` or `||`, through parentheses and the value an
+   assignment stores, `(x = @m[i])`) has no type yet and is a
    variable with none, or a call on one (`@m[i]`, `@m.fetch(i)`, `x.last`,
    `@m[i][0]`). The loop after the fixpoint clears a boxed ivar or local and
    derives it again, and the tables' stores are checked in between: what the
@@ -1595,7 +1596,7 @@ static int an_untyped_read_leaf(const VpLeaf *leaf, void *ud) {
 }
 static int an_row_from_untyped_slot(Compiler *c, int n) {
   AnUntypedRead u = { c, 0 };
-  for_each_value_position(c->nt, n, VPS_ALL, an_untyped_read_leaf, &u);
+  for_each_value_position(c->nt, n, VPS_ALL | VP_WRITES, an_untyped_read_leaf, &u);
   return u.hit;
 }
 

@@ -19,3 +19,10 @@ p w.map { |v| case v when MyErr then 1 when MySet then 2 when Pt then 3 when Obj
 p w.map { |v| [v.is_a?(Struct), v.is_a?(StandardError), v.is_a?(Object)] }
 x = w[ARGV.size + 5]
 p(case x when Struct then 1 else 0 end)
+
+# a program class under BasicObject is no Object, also with Object reopened
+class Bo < BasicObject; end
+class Bo2 < Bo; end
+v = [Bo.new, Bo2.new, nil, 1, BasicObject.new, Pt.new(1)]
+p v.map { |o| case o when Object then 1 when BasicObject then 2 else 0 end }
+p v.map { |o| [Object === o, Kernel === o, BasicObject === o] }

@@ -3275,8 +3275,9 @@ int elab_method_holder(Compiler *c, const char *name, int i, int *cls, int *sg) 
 }
 
 /* Each method scope's version facts (analyze.h):
-   Scope.versioned when the record holds more than one version of its name,
-   or one that a call may run before (elab_method_late);
+   Scope.versioned when the record holds more than one version of its name
+   (a mixin's hidden copy's: the program's name of it), or one that a call
+   may run before (elab_method_late);
    Scope.replaced when it is a def's scope that a later scope of the same
    class, side and name takes the method table's place of (a top-level
    method: a later def's), so that the tables answer the later one. */
@@ -3298,9 +3299,12 @@ void elab_mark_versions(Compiler *c) {
   for (int s = 1; s < c->nscopes; s++) {
     Scope *sc = &c->scopes[s];
     if (sc->versioned || sc->replaced) { sc->versioned = sc->replaced = 0; comp_touch_scope(sc->idx); }
+    /* (a mixin's hidden copy, a layer below a later one, by the program's
+       name: its versions are the module's, told apart under its own) */
     const char *name = sc->mixin_guarded ? comp_scope_user_name(sc) : sc->name;
-    const LrVers *x = name && sc->def_node >= 0 ? lr_vers(r, name) : NULL;
-    if (!x || (x->nver < 2 && !elab_method_late(c, name))) continue;
+    const char *vname = (sc->is_include_copy || sc->is_extend_copy) && sc->shadow ? comp_scope_user_name(sc) : name;
+    const LrVers *x = vname && sc->def_node >= 0 ? lr_vers(r, vname) : NULL;
+    if (!x || (x->nver < 2 && !elab_method_late(c, vname))) continue;
     { sc->versioned = 1; comp_touch_scope(sc->idx); }
     /* an accessor's version (elab_attr_scope) is one the def that ends its
        history replaces; its scope, made after that def's, takes no key */

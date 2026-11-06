@@ -7219,6 +7219,7 @@ static int inc_super_behind(Compiler *c, int ci, const char *name, int like) {
   comp_scope_set_shadow(c, e, SHADOW_PREP, name);
   { c->scopes[e].class_id = ci; comp_touch_scope(c->scopes[e].idx); }
   { c->scopes[e].reachable = 1; comp_touch_scope(c->scopes[e].idx); }
+  c->scopes[e].super_behind = 1;
   g_inc_did_clone = 1;
   return e;
 }
@@ -7353,12 +7354,74 @@ static void include_chain_copy(Compiler *c, int ci, int mod_id, const int *made,
   }
 }
 
+/* The copy class ci holds, from this include (made, of the snap scopes
+   before it), of an earlier version of module mod_id's method ms: a def
+   of the same name and side the module made before (a reopening's, or
+   one more in the same body), -1 for none. CRuby's module holds one
+   method of the name at a time, so a later version is a version of that
+   copy, under its name: the record orders them (elab_mark_versions,
+   ct_def_version), and the super of each reaches past the module. */
+static int mixin_prev_version(Compiler *c, int mod_id, int ms, const int *made) {
+  const Scope *src = &c->scopes[ms];
+  for (int s = ms - 1; s >= 0; s--) {
+    const Scope *k = &c->scopes[s];
+    if (k->class_id != mod_id || k->shadow || k->is_cmethod != src->is_cmethod || !k->name || !sp_streq(k->name, src->name)) continue;
+    return made[s] ? made[s] - 1 : -1;
+  }
+  return -1;
+}
+/* Does a super reach any version of module mod_id's method `name`
+   (inc_super_reached)? The include keeps what the module stands in
+   front of when one does. */
+static int mixin_versions_super_reached(Compiler *c, int mod_id, const char *name) {
+  for (int s = 0; s < c->nscopes; s++) {
+    const Scope *k = &c->scopes[s];
+    if (k->class_id == mod_id && !k->shadow && !k->is_cmethod && k->name && sp_streq(k->name, name) && inc_super_reached(c, s, mod_id, name)) return 1;
+  }
+  return 0;
+}
+/* A later mixin's copy takes the name `own` stands under in class ci:
+   `own` goes to the hidden name `shadow` (Scope.shadow `kind`, standing
+   for `user`), and where it is a mixin's copy, so do the copies of its
+   module's other versions of the name that mixin made, which are versions
+   of it (mixin_prev_version): the copies of the same module, side, kind
+   and guard under the copy's own name. A hidden copy the earlier module
+   brought keeps its own name, which the earlier copy's super calls.
+   `keep` 0: nothing reaches the renamed copies now, but, with `met`, one
+   a call meets the version of before the later mixin runs
+   (elab_version_met). */
+static void mixin_copies_rename(Compiler *c, int ci, int own, const char *shadow, int kind, const char *user, int keep, int met) {
+  const Scope *o = &c->scopes[own];
+  int om = o->origin_module_ci, og = o->mixin_guarded, ob = o->guard_behind, side = o->is_cmethod;
+  int inc = o->is_include_copy, ext = o->is_extend_copy;
+  char oname[256];
+  snprintf(oname, sizeof oname, "%s", o->name);
+  for (int v = 0; v < c->nscopes; v++) {
+    Scope *k = &c->scopes[v];
+    if (v != own && (!(inc || ext) || k->class_id != ci || k->is_cmethod != side || k->entry || k->is_include_copy != inc ||
+                     k->is_extend_copy != ext || k->origin_module_ci != om || k->mixin_guarded != og ||
+                     k->guard_behind != ob || !k->name || !sp_streq(k->name, oname))) continue;
+    free(k->name);
+    k->name = strdup(shadow);
+    comp_scope_set_shadow(c, v, kind, user);
+    k = &c->scopes[v];
+    if (!keep && !(met && elab_version_met(c, ci, k->is_cmethod, user, k->def_node))) { k->reachable = 0; comp_touch_scope(k->idx); }
+  }
+}
+
 /* Copy module mod_id's instance methods into class ci, one clone per
    includer, as `include` does (process_include_body). guard: an include a
    reopening runs after the class's first body; the copy that becomes the
    class's method is then a guarded copy (Scope.mixin_guarded) of the cell
-   *cell, standing in front of what the class answered until then. */
-static void include_module_methods(Compiler *c, int ci, int mod_id, int guard, int *cell) {
+   cells[m] of m, the module whose method it copies (mod_id, or one mod_id
+   brings), standing in front of what the class answered until then.
+   plain: an include that may not run whose copies are not guarded
+   (process_include_body): they are made as an unguarded include's were
+   before the module's versions were told apart, a later version of a
+   module's method a layer of its own in front of the earlier one's
+   renamed copy (no version of it: mixin_prev_version), as the call before
+   the include cannot be told from the call after it. */
+static void include_module_methods(Compiler *c, int ci, int mod_id, int guard, int plain, int *cells) {
   const NodeTable *nt = c->nt;
   /* snapshot count before adding new scopes to avoid re-scanning them */
   int snap = c->nscopes;
@@ -7409,7 +7472,19 @@ static void include_module_methods(Compiler *c, int ci, int mod_id, int guard, i
        same definition (reached through another module included before) is
        Ruby's no-op: the copy stands as it is */
     if (own >= 0 && c->scopes[own].is_include_copy && c->scopes[own].def_node == src->def_node) continue;
-    if (own >= 0 && c->scopes[own].is_include_copy) {
+    /* a later version of a method of the module's: a version of the
+       earlier one's copy, by its name, where that stands under the real
+       name (mixin_prev_version) */
+    int prev = src->shadow || plain ? -1 : mixin_prev_version(c, mod_id, ms, made), vguard = -1;
+    if (prev >= 0 && c->scopes[prev].mixin_guarded && c->scopes[prev].guard_behind >= 0 &&
+        sp_streq(comp_scope_user_name(&c->scopes[prev]), src->name)) {
+      /* (a guarded copy's: under its hidden name, with its guard) */
+      snprintf(inc_shadow, sizeof inc_shadow, "%s", c->scopes[prev].name);
+      dst_name = inc_shadow;
+      own = -1, guarded = 0, vguard = prev;
+    }
+    else if (prev >= 0 && !c->scopes[prev].shadow && sp_streq(c->scopes[prev].name, src->name)) own = -1, guarded = 0;
+    else if (own >= 0 && c->scopes[own].is_include_copy) {
       /* An earlier include of another module put this name here. Ruby's MRO
          puts the LAST include first, so this module supersedes it: rename
          the earlier copy to a shadow (carrying its own super target with
@@ -7423,13 +7498,15 @@ static void include_module_methods(Compiler *c, int ci, int mod_id, int guard, i
           free(cif->prep_from[kk]); cif->prep_from[kk] = strdup(inc_shadow);
           break;
         }
-      free(c->scopes[own].name);
-      c->scopes[own].name = strdup(inc_shadow);
-      comp_scope_set_shadow(c, own, SHADOW_INC, src->name);
-      if (inc_super_reached(c, ms, mod_id, src->name)) comp_prep_chain_add(cif, src->name, inc_shadow);
+      /* (with the copies of the earlier module's other versions of the
+         name, which are versions of the renamed copy: mixin_prev_version;
+         a plain copy's super alone, as its versions are layers) */
+      int reached = plain ? inc_super_reached(c, ms, mod_id, src->name) : mixin_versions_super_reached(c, mod_id, src->name);
       /* (a guarded copy's entry runs the earlier copy until the include
          has run) */
-      else if (!guarded) { c->scopes[own].reachable = 0; comp_touch_scope(c->scopes[own].idx); }   /* nothing can reach it now */
+      mixin_copies_rename(c, ci, own, inc_shadow, SHADOW_INC, src->name, reached || guarded, 0);
+      src = &c->scopes[ms];
+      if (reached) comp_prep_chain_add(cif, src->name, inc_shadow);
       if (guarded) behind = own;
       own = -1;
     }
@@ -7494,7 +7571,8 @@ static void include_module_methods(Compiler *c, int ci, int mod_id, int guard, i
     int dst_idx = c->nscopes - 1;
     /* comp_scope_new may realloc c->scopes; re-derive src pointer. */
     src = &c->scopes[ms];
-    if (dst_name == inc_shadow) comp_scope_set_shadow(c, dst_idx, src->shadow ? src->shadow : SHADOW_INC, comp_scope_user_name(src));
+    if (vguard >= 0) comp_scope_copy_shadow(c, dst_idx, vguard, NULL);
+    else if (dst_name == inc_shadow) comp_scope_set_shadow(c, dst_idx, src->shadow ? src->shadow : SHADOW_INC, comp_scope_user_name(src));
     else comp_scope_copy_shadow(c, dst_idx, ms, NULL);
     /* Clone the body and re-attribute it to the target when either:
        (a) the target is a built-in class, where `self` has a different
@@ -7566,10 +7644,12 @@ else {
        guard entry by the public name; a clone of a module's own guarded copy
        keeps its cell (its behind, cloned too, is set below) */
     if (dst_name == src->name && behind >= 0) {
-      dst->mixin_guarded = prepend_cell(c, cell); dst->guard_behind = behind;
+      int dm = mixin_def_module(c, src);
+      dst->mixin_guarded = prepend_cell(c, &cells[dm >= 0 ? dm : mod_id]); dst->guard_behind = behind;
       prepend_copy_name(c, dst_idx);
       src = &c->scopes[ms]; dst = &c->scopes[dst_idx];
     }
+    else if (vguard >= 0) { dst->mixin_guarded = c->scopes[vguard].mixin_guarded; dst->guard_behind = c->scopes[vguard].guard_behind; }
     else if (src->mixin_guarded) { dst->mixin_guarded = src->mixin_guarded; dst->guard_behind = -1 - src->guard_behind; }
     made[ms] = dst_idx + 1;
     /* Scan source body for ivar accesses and register them in the
@@ -7631,6 +7711,7 @@ static BodyMix *body_mixins(Compiler *c, int ci, int body, unsigned kinds, int *
 static void prepend_cell_write(Compiler *c, int late, int list, int after, int cell);
 static void cell_writes_defer(Compiler *c);
 static void cell_writes_flush(Compiler *c);
+static void prepend_cell_set(Compiler *c, int list, int after, int cell);
 /* The class or module body `body` of ci, where its statement reopens it
    after its first body ran (`class Dog; end; d.speak; class Dog; include
    Loud; end`, at a file's top level or in a module's body): that
@@ -7642,7 +7723,10 @@ static void cell_writes_flush(Compiler *c);
    prepend's are (prepend_late_stmt), wherever the record orders the
    reopening after the first body, which is where the refusal rule asks
    (refuse_mixin_after_calls counts a call in an earlier statement's lambda
-   too, though no code runs between the two bodies). */
+   too, though no code runs between the two bodies). *unplaced: a class's
+   reopening whose order to the first body the record does not fix (one in
+   a block): its include changes the class's chain at a point no guard
+   sees. */
 /* Does a top-level statement that runs code lie between places lo and hi?
    A module's reopening is guarded only then (include_late_stmt). */
 static int top_code_runs_between(Compiler *c, int lo, int hi) {
@@ -7678,9 +7762,10 @@ static int foreign_late_stmt(Compiler *c, int ci, int body, const LrOpen *ob, in
   int o = elab_cmp(p0, p1);
   return o == PROG_BEFORE || (o == PROG_UNKNOWN && p0.region >= 0 && p1.region >= 0) ? s : -1;
 }
-static int include_late_stmt(Compiler *c, int ci, int body) {
+static int include_late_stmt(Compiler *c, int ci, int body, int *unplaced) {
   const NodeTable *nt = c->nt;
   int nb = 0;
+  *unplaced = 0;
   const LrOpen *ob = elab_class_bodies(c, ci, &nb);
   int fl = foreign_late_stmt(c, ci, body, ob, nb);
   if (fl >= 0) {
@@ -7697,12 +7782,16 @@ static int include_late_stmt(Compiler *c, int ci, int body) {
        region's runs at a time the record does not fix */
     LoadPoint p0 = elab_point_of(c, ob[0].node), p1 = elab_point_of(c, s);
     int o = elab_cmp(p0, p1);
-    if (!(o == PROG_BEFORE || (o == PROG_UNKNOWN && p0.region >= 0 && p1.region >= 0))) return -1;
+    int is_mod = comp_class_is_module(c, &c->classes[ci]);
+    if (!(o == PROG_BEFORE || (o == PROG_UNKNOWN && p0.region >= 0 && p1.region >= 0))) {
+      *unplaced = !is_mod && o == PROG_UNKNOWN;
+      return -1;
+    }
     /* (a module's reopening only where code runs between its bodies: the
        hidden method a guarded copy falls back to is not carried into the
        module's includers, so a module guarded with nothing run between
        called a function no one defined) */
-    if (!comp_class_is_module(c, &c->classes[ci])) return s;
+    if (!is_mod) return s;
     int f0, r0, f1, r1;
     elab_top_place(c, ob[0].node, &f0, &r0);
     elab_top_place(c, s, &f1, &r1);
@@ -7725,6 +7814,122 @@ static int list_has_stmt(const NodeTable *nt, int list, int stmt) {
   return 0;
 }
 
+/* An include (a prepend, with prepend) of module mod into class ci,
+   statement `after` of list `list`, of a module an earlier late one of the
+   same kind that may not have run brought already: it adds the module to
+   the ancestors where it runs if that one did not, so it sets the cells
+   that one's copies of the methods of mod, and of the modules mod brings,
+   are guarded by (Scope.mixin_guarded, one per module whose methods they
+   are) */
+static void mixin_cells_set(Compiler *c, int ci, int mod, int prepend, int list, int after) {
+  char *seen = calloc((size_t)(c->nclasses > 0 ? c->nclasses : 1), 1);
+  char *set = calloc((size_t)c->n_prepend_cells + 1, 1);
+  if (!seen || !set) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  for (int s = 0; s < c->nscopes; s++) {
+    Scope *k = &c->scopes[s];
+    if (k->class_id != ci || !k->is_include_copy || k->is_prepend_copy != prepend || !k->mixin_guarded || set[k->mixin_guarded]) continue;
+    memset(seen, 0, (size_t)(c->nclasses > 0 ? c->nclasses : 1));
+    if (!mixin_brings(c, mod, mixin_def_module(c, k), seen)) continue;
+    set[k->mixin_guarded] = 1;
+    prepend_cell_set(c, list, after, k->mixin_guarded);
+  }
+  free(seen); free(set);
+}
+
+/* May reopening `late` not run, or run more than once: does the load
+   record place it under a condition or in an iterator's block (may,
+   partial), or not place it? A reopening in another class's or module's
+   body runs where that body does. */
+static int reopening_may_not_run(Compiler *c, int late) {
+  return elab_point_from(c, late).region < 0 || elab_point_may(c, late) || elab_point_partial(c, late);
+}
+/* Does an include or prepend of module mod into class ci from reopening
+   `late`, one that may not run (the reopening under a condition or in a
+   block), copy a method of mod's (its own, or a copy of one a module it
+   includes) that nothing on ci's chain answers before it and whose
+   presence a reader asks (respond_to?, method_defined?:
+   elab_method_reflected)? Its guard tells the method's calls apart but not
+   the readers, which answer from the method table: such a mixin makes
+   plain copies, as an unguarded one does, and a call made before it
+   answers as there (an include's is refused). */
+static int mixin_presence_unguarded(Compiler *c, int ci, int mod, int late) {
+  if (!reopening_may_not_run(c, late)) return 0;
+  for (int s = 0; s < c->nscopes; s++) {
+    const Scope *m = &c->scopes[s];
+    if (m->class_id != mod || m->is_cmethod || !m->name || m->shadow || m->entry) continue;
+    if (comp_method_in_chain(c, ci, m->name, NULL) < 0 && elab_method_reflected(c, m->name, 0)) return 1;
+  }
+  return 0;
+}
+/* Does an include or prepend of module mod into class ci from reopening
+   `late`, one that may not run, bring a module another include or prepend
+   of ci mixes in again, one with a method mod's chain answers ahead of it
+   (`module V; include B; def a`, B#a)? That copy of B's method stands
+   hidden behind V's, where the other mixin's cells cannot reach it when
+   this one did not run: such a mixin makes plain copies, as an unguarded
+   one does, and a call made before it is refused as there. */
+static int mixin_rebrought_behind(Compiler *c, int ci, int mod, int late) {
+  int nmx = 0, hit = 0;
+  if (!reopening_may_not_run(c, late)) return 0;
+  const LrMixin *mx = elab_class_mixins(c, ci, &nmx);
+  char *seen = calloc((size_t)(c->nclasses > 0 ? c->nclasses : 1), 1);
+  if (!seen) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  for (int i = 0; i < nmx && !hit; i++) {
+    int b = mx[i].kind == LR_INCLUDE || mx[i].kind == LR_PREPEND ? elab_mixin_module(c, &mx[i]) : -1;
+    memset(seen, 0, (size_t)(c->nclasses > 0 ? c->nclasses : 1));
+    if (b < 0 || b == mod || !mixin_brings(c, mod, b, seen)) continue;
+    for (int s = 0; s < c->nscopes && !hit; s++) {
+      const Scope *m = &c->scopes[s];
+      if (m->class_id != b || m->is_cmethod || !m->name || m->shadow || m->entry || m->is_include_copy) continue;
+      int mi = comp_method_in_chain(c, mod, m->name, NULL);
+      hit = mi >= 0 && c->scopes[mi].def_node != m->def_node;
+    }
+  }
+  free(seen);
+  return hit;
+}
+/* Does a mixin of module mod into class ci put a copy in front of a plain
+   copy that an include or prepend that may not run made
+   (Scope.mixin_plain_late)? Its guard entry would run that copy as the
+   method behind where the earlier mixin has not run: such a mixin makes
+   plain copies too, as an unguarded one does. */
+static int mixin_meets_plain_late(Compiler *c, int ci, int mod) {
+  for (int s = 0; s < c->nscopes; s++) {
+    const Scope *m = &c->scopes[s];
+    if (m->class_id != mod || m->is_cmethod || !m->name || m->shadow || m->entry) continue;
+    int mi = comp_method_in_chain(c, ci, m->name, NULL);
+    if (mi >= 0 && c->scopes[mi].mixin_plain_late) return 1;
+  }
+  return 0;
+}
+/* Does an include or prepend `stmt` of module mod into class ci from
+   reopening `late`, one that may not run, meet another late include or
+   prepend of ci (a reopening's) whose module answers one of mod's names
+   with another method (a layer of its own: the same module mixed in again
+   is the same layer), where either one's method of the name calls super? A
+   super is bound to one method (cplan_super_target), past the cells of the
+   layers between: such a mixin makes plain copies, as an unguarded one
+   does, and leaves them unmarked (Scope.mixin_plain_late), so the mixins
+   over them keep their guards and the chain answers as it did before
+   mixins that may not run were guarded. */
+static int mixin_layers_call_super(Compiler *c, int ci, int mod, int late, int stmt) {
+  int nmx = 0, nb = 0, hit = 0;
+  if (!reopening_may_not_run(c, late)) return 0;
+  const LrMixin *mx = elab_class_mixins(c, ci, &nmx);
+  const LrOpen *ob = elab_class_bodies(c, ci, &nb);
+  for (int i = 0; i < nmx && !hit; i++) {
+    int b = mx[i].kind == LR_INCLUDE || mx[i].kind == LR_PREPEND ? elab_mixin_module(c, &mx[i]) : -1;
+    if (b < 0 || mx[i].node == stmt || nb < 1 || mx[i].open == ob[0].node) continue;
+    for (int s = 0; s < c->nscopes && !hit; s++) {
+      const Scope *m = &c->scopes[s];
+      if (m->class_id != b || m->is_cmethod || !m->name || m->shadow || m->entry) continue;
+      int mi = comp_method_in_chain(c, mod, m->name, NULL), bi = comp_method_in_chain(c, b, m->name, NULL);
+      hit = mi >= 0 && bi >= 0 && c->scopes[mi].def_node != c->scopes[bi].def_node &&
+            (scope_calls_super(c, mi) || scope_calls_super(c, bi));
+    }
+  }
+  return hit;
+}
 void process_include_body(Compiler *c, int ci, int body_node) {
   const NodeTable *nt = c->nt;
   /* (a core class's or module's reopening keeps its includes as they were:
@@ -7734,7 +7939,7 @@ void process_include_body(Compiler *c, int ci, int body_node) {
      extends) */
   const char *cn = c->classes[ci].name;
   int core = is_builtin_reopen_name(cn) || is_builtin_module_name(cn) || sp_streq(cn, CLASS_REOPEN_NAME);
-  int late = core ? -1 : include_late_stmt(c, ci, body_node), cell = 0, cell_stmt = -1;
+  int unplaced = 0, late = core ? -1 : include_late_stmt(c, ci, body_node, &unplaced);
   int sc = class_def_super(nt, c->classes[ci].def_node);
   NodeKind sk = sc >= 0 ? nt_kind(nt, sc) : NK_NONE;
   if ((sk == NK_ConstantReadNode || sk == NK_ConstantPathNode) &&
@@ -7745,9 +7950,6 @@ void process_include_body(Compiler *c, int ci, int body_node) {
   for (int j = 0; j < n; j++) {
     int arg = mx[j].ref, mod_id = mx[j].mod;
     NodeKind ak = arg >= 0 ? nt_kind(nt, arg) : NK_NONE;
-    /* after an include's last module, the write that sets the cell its
-       copies' guard entries read */
-    if (cell && mx[j].stmt != cell_stmt) { prepend_cell_write(c, late, body_node, cell_stmt, cell); cell = 0; }
     const char *mname = arg < 0 ? c->classes[mod_id].name
                       : ak == NK_ConstantReadNode || ak == NK_ConstantPathNode ? nt_str(nt, arg, "name") : NULL;
     if (mx[j].kind == LR_PREPEND) {
@@ -7820,15 +8022,33 @@ void process_include_body(Compiler *c, int ci, int body_node) {
                                         c->classes[ci].nincluded_mods);
     /* record membership for `rescue M` matching (dedup across reopenings) */
     class_note_included_mod(c, ci, mod_id);
+    /* (one an earlier late include that may not have run brought: this
+       include sets that include's cells too, where it runs) */
+    if (brought && late >= 0 && list_has_stmt(nt, body_node, mx[j].stmt)) mixin_cells_set(c, ci, mod_id, 0, body_node, mx[j].stmt);
     if (brought) continue;
-    /* an include a reopening runs after the first body (one that may not
-       run keeps the class's methods as they are, as the refusal of a call
-       ahead of it does) */
-    int guard = late >= 0 && list_has_stmt(nt, body_node, mx[j].stmt) && !elab_point_may(c, mx[j].stmt);
-    if (guard) cell_stmt = mx[j].stmt;
-    include_module_methods(c, ci, mod_id, guard, &cell);
+    /* an include a reopening runs after the first body, also one that may
+       not run (under a condition, in a block): the cell its copies' guard
+       entries read is set where the include runs, if it does */
+    int here = late >= 0 && list_has_stmt(nt, body_node, mx[j].stmt);
+    int layered = here && mixin_layers_call_super(c, ci, mod_id, late, mx[j].stmt);
+    int guard = here && !mixin_presence_unguarded(c, ci, mod_id, late) && !mixin_rebrought_behind(c, ci, mod_id, late) &&
+                !mixin_meets_plain_late(c, ci, mod_id) && !layered;
+    int *cells = guard ? calloc((size_t)c->nclasses, sizeof(int)) : NULL;
+    if (guard && !cells) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    int s0 = c->nscopes;
+    int plain = (here && !guard) || unplaced;
+    include_module_methods(c, ci, mod_id, guard, plain, cells);
+    for (int s = s0; plain && s < c->nscopes; s++)
+      if (c->scopes[s].class_id == ci && c->scopes[s].is_include_copy) c->scopes[s].mixin_unversioned = 1;
+    for (int s = s0; here && !guard && !layered && s < c->nscopes; s++)
+      if (c->scopes[s].class_id == ci && c->scopes[s].is_include_copy) c->scopes[s].mixin_plain_late = 1;
+    /* the writes that set the cells its copies' guard entries read, one
+       per module whose methods they are, so that a later include of one
+       of them sets that one's alone */
+    for (int k = 0; cells && k < c->nclasses; k++)
+      if (cells[k]) prepend_cell_write(c, late, body_node, mx[j].stmt, cells[k]);
+    free(cells);
   }
-  if (cell) prepend_cell_write(c, late, body_node, cell_stmt, cell);
   free(mx);
 }
 
@@ -7903,12 +8123,12 @@ void register_includes(Compiler *c) {
        (#9292): what that class and the classes up to Struct define is
        answered with this class's members, as a reopening of Struct is */
     for (int k = par, g = 0; k >= 0 && g < 64; k = c->classes[k].parent, g++) {
-      include_module_methods(c, ci, k, 0, NULL);
+      include_module_methods(c, ci, k, 0, 0, NULL);
       if (k == c->classes[k].parent) break;
     }
     int base = comp_core_class(c, c->classes[ci].is_data ? CORE_DATA : CORE_STRUCT);
     if (base >= 0 && base != ci && !c->classes[base].is_struct)
-      include_module_methods(c, ci, base, 0, NULL);
+      include_module_methods(c, ci, base, 0, 0, NULL);
   }
   /* A reopening of Struct in a program with no Struct.new class (activesupport's
      core_ext/object/json gives Struct an #as_json): a Struct value is always a
@@ -7951,7 +8171,8 @@ static void prepend_copy_name(Compiler *c, int mi) {
   free(user);
 }
 static void specialize_cmethod_for(Compiler *c, int mi, const char *as, int def_cls, int ci, int cell, int behind);
-static int prepend_late_stmt(Compiler *c, int ci, int body);
+static void cmethod_copy_into(Compiler *c, int mi, const char *as, int def_cls, int ci, int cell, int behind);
+static int prepend_late_stmt(Compiler *c, int ci, int body, int nested);
 static int prepend_cell(Compiler *c, int *cell);
 static void prepend_cell_write(Compiler *c, int late, int list, int after, int cell);
 
@@ -8238,8 +8459,12 @@ static void extend_alias_refuse_own(Compiler *c, int mod_id, int ci, const char 
    `cell`: the run-time cell of a prepend that a later top-level reopening
    makes (prepend_late_stmt), NULL otherwise; a call reaches the copies once
    that statement has run and the method behind them until then, as a
-   prepend's do (Scope.mixin_guarded). */
-static int extend_class_with(Compiler *c, int ci, int mod_id, int inherited, int prepend, int *cell) {
+   prepend's do (Scope.mixin_guarded).
+   `plain`: an extend in a reopening that may not run, whose copies are
+   made as an include's that may not run and is not guarded are
+   (include_module_methods): a later version of a module's method is a
+   layer of its own in front of the earlier one's renamed copy. */
+static int extend_class_with(Compiler *c, int ci, int mod_id, int inherited, int prepend, int plain, int *cell) {
   int did_clone = 0;
   int snap = c->nscopes;
   int *made = calloc((size_t)(snap > 0 ? snap : 1), sizeof(int));
@@ -8275,6 +8500,13 @@ static int extend_class_with(Compiler *c, int ci, int mod_id, int inherited, int
     }
     int own = comp_cmethod_in_class(c, ci, src->name);
     if (own >= 0 && inherited) continue;
+    /* a later version of a method of the module's: a version of the
+       earlier one's copy, by its name (mixin_prev_version) */
+    int prev = plain ? -1 : mixin_prev_version(c, mod_id, ms, made);
+    int ver = prev >= 0 && !c->scopes[prev].shadow && sp_streq(c->scopes[prev].name, src->name);
+    /* (a guarded copy's: under its hidden name, with its guard) */
+    int gver = !ver && prev >= 0 && c->scopes[prev].mixin_guarded && sp_streq(comp_scope_user_name(&c->scopes[prev]), src->name);
+    if (ver || gver) own = -1;
     /* The class's own class method comes first, and a module it extends
        sits behind it: a super in the own method reaches the module's,
        copied in under a shadow name, in front of any module extended
@@ -8320,11 +8552,8 @@ static int extend_class_with(Compiler *c, int ci, int mod_id, int inherited, int
           cif->prep_from[kk] = strdup(key);
           break;
         }
-      free(c->scopes[own].name);
-      c->scopes[own].name = strdup(shadow);
-      comp_scope_set_shadow(c, own, SHADOW_INC, src->name);
       int reached = scope_body_has_super(c, ms);
-      if (prepend && cell) {
+      if (cell) {
         /* the copy's own super reaches the method it stands in front of,
            and so does a call until the prepend has run */
         guard = prepend_cell(c, cell);
@@ -8344,15 +8573,13 @@ static int extend_class_with(Compiler *c, int ci, int mod_id, int inherited, int
         comp_cprep_chain_add(cif, ac->name, shadow);
         reached = 1;
       }
-      /* nothing can reach it now, but a call that meets the earlier
-         module's version before this extend runs (elab_version_met) */
-      if (!reached && !elab_version_met(c, ci, 1, src->name, c->scopes[own].def_node)) {
-        c->scopes[own].reachable = 0;
-        comp_touch_scope(c->scopes[own].idx);
-      }
+      /* the earlier copy goes to the shadow name with its versions; nothing
+         can reach them now, but a call that meets the earlier module's
+         version before this extend runs (elab_version_met) */
+      mixin_copies_rename(c, ci, own, shadow, SHADOW_INC, src->name, reached, 1);
       src = &c->scopes[ms];
     }
-    else if (prepend && cell && c->classes[ci].parent >= 0 &&
+    else if (!ver && !gver && cell && c->classes[ci].parent >= 0 &&
              (behind_mi = comp_cmethod_in_chain(c, c->classes[ci].parent, src->name, NULL)) >= 0)
       /* no class method of the class's own, but one it inherits: until the
          reopening's statement has run, a call reaches that one, which the
@@ -8380,9 +8607,17 @@ static int extend_class_with(Compiler *c, int ci, int mod_id, int inherited, int
         NT_FOREACH_KIND(nt2, ow[k], ivid)
           if (c->nscope[ivid] == ms && nt_str(nt2, ivid, "name"))
             comp_ivar_intern(&c->classes[ci], nt_str(nt2, ivid, "name")); }
-    specialize_cmethod_for(c, ms, NULL, mod_id, ci, guard, behind_mi);
+    int vat = c->nscopes;
+    if (gver) {
+      char vname[256];
+      snprintf(vname, sizeof vname, "%s", c->scopes[prev].name);
+      cmethod_copy_into(c, ms, vname, mod_id, ci, c->scopes[prev].mixin_guarded, c->scopes[prev].guard_behind);
+      comp_scope_copy_shadow(c, vat, prev, NULL);
+    }
+    else if (ver) cmethod_copy_into(c, ms, src->name, mod_id, ci, 0, -1);
+    else specialize_cmethod_for(c, ms, NULL, mod_id, ci, guard, behind_mi);
     src = &c->scopes[ms];  /* realloc-safe */
-    { int cp = comp_cmethod_in_class(c, ci, src->name);
+    { int cp = gver ? vat : comp_cmethod_in_class(c, ci, src->name);
       if (cp >= 0) { c->scopes[cp].is_extend_copy = 1; made[ms] = cp + 1; }
       /* The copy keeps the module's visibility, and a later extend wins. A
          copy behind the class's own method leaves the name's visibility to
@@ -8560,12 +8795,12 @@ void register_extends(Compiler *c) {
       of Class among the singleton's ancestors, so its copies, made after,
       take the place of these */
    if (cls_mod >= 0 && (ci == cls_mod || class_is_root(c, ci))) {
-     did_clone |= extend_class_with(c, ci, cls_mod, 0, 0, NULL);
+     did_clone |= extend_class_with(c, ci, cls_mod, 0, 0, 0, NULL);
      /* `class Class; prepend P; end`: P in front of the reopening, as an
         `extend` of it would put it (see desugar_module_prepends) */
      int pre[64];
      int np = module_prepend_list(c, cls_mod, pre, 64);
-     for (int q = np - 1; q >= 0; q--) did_clone |= extend_class_with(c, ci, pre[q], 0, 0, NULL);
+     for (int q = np - 1; q >= 0; q--) did_clone |= extend_class_with(c, ci, pre[q], 0, 0, 0, NULL);
    }
    /* Every body that defines this class, not only the first: `extend M` is
       commonly written in a REOPENING of the class, and reading def_node alone
@@ -8610,8 +8845,14 @@ void register_extends(Compiler *c) {
         for (int p = c->classes[ci].parent; p >= 0 && !inherited; p = c->classes[p].parent)
           inherited = class_extends_module(c, p, mod_id);
         int sprep = mx[j].kind == LR_SG_PREPEND;
-        if (sprep && late == -2) late = prepend_late_stmt(c, ci, body);
-        did_clone |= extend_class_with(c, ci, mod_id, inherited, sprep, sprep && late >= 0 ? &cell : NULL);
+        /* (a record-taken extend, `K.extend(M)` at the top level, is the
+           record's where it runs: its copies need no guard, foreign_late_stmt) */
+        if (late == -2) late = sprep || bi < nb ? prepend_late_stmt(c, ci, body, 0) : -1;
+        int guard = late >= 0, plain = !guard && bi > 0 && bi < nb && reopening_may_not_run(c, ob[bi].node);
+        int s0 = c->nscopes;
+        did_clone |= extend_class_with(c, ci, mod_id, inherited, sprep, plain, guard ? &cell : NULL);
+        for (int k = s0; plain && k < c->nscopes; k++)
+          if (c->scopes[k].class_id == ci && c->scopes[k].is_cmethod) c->scopes[k].mixin_unversioned = 1;
       }
       /* after the call's last module, the write that sets the cell its
          copies read */
@@ -8878,6 +9119,12 @@ static int body_tail_is_bare_new(const NodeTable *nt, int body) {
 static void specialize_cmethod_for(Compiler *c, int mi, const char *as, int def_cls, int ci, int cell, int behind) {
   if (!as) as = c->scopes[mi].name;
   if (!cell && comp_cmethod_in_class(c, ci, as) >= 0) return;
+  cmethod_copy_into(c, mi, as, def_cls, ci, cell, behind);
+}
+/* ...the copy itself, as `as`, whatever ci holds of that name: a later
+   version of a module's method an extend copies is a version of the
+   earlier one's copy (mixin_prev_version) */
+static void cmethod_copy_into(Compiler *c, int mi, const char *as, int def_cls, int ci, int cell, int behind) {
   NodeTable *nt = (NodeTable *)c->nt;
   int has_new = 0;
   (void)cmethod_needs_specialization(c, mi, ci, def_cls, &has_new);
@@ -9399,7 +9646,7 @@ static int prepend_after_call(Compiler *c, int ci, int body) {
   for (int i = 0; i < bn && bb[i] != first; i++) if (body_stmt_calls(nt, bb[i])) return 1;
   return 0;
 }
-static int prepend_late_stmt(Compiler *c, int ci, int body) {
+static int prepend_late_stmt(Compiler *c, int ci, int body, int nested) {
   const NodeTable *nt = c->nt;
   int nb = 0;
   const LrOpen *ob = elab_class_bodies(c, ci, &nb);
@@ -9422,7 +9669,7 @@ static int prepend_late_stmt(Compiler *c, int ci, int body) {
        region's runs at a time the record does not fix */
     LoadPoint p0 = elab_point_of(c, ob[0].node), p1 = elab_point_of(c, s);
     int o = elab_cmp(p0, p1);
-    if (cp >= 0 && (nt_kind(nt, cp) == NK_ConstantReadNode || nt_kind(nt, cp) == NK_ConstantPathNode) && f >= 0 && comp_parent_map(c)[s] == prog_root_stmts(c, f) &&
+    if (cp >= 0 && (nt_kind(nt, cp) == NK_ConstantReadNode || nt_kind(nt, cp) == NK_ConstantPathNode) && f >= 0 && (nested || comp_parent_map(c)[s] == prog_root_stmts(c, f)) &&
         (o == PROG_BEFORE || (o == PROG_UNKNOWN && p0.region >= 0 && p1.region >= 0))) return s;
     return -1;
   }
@@ -9465,11 +9712,19 @@ static void cell_writes_flush(Compiler *c) {
   g_ncell_writes = 0;
   g_defer_cell_writes = 0;
 }
+/* ...the first of a later prepend's cell writes alone, 1 after
+   statement `after` of list `list` (a later mixin setting an earlier
+   one's cells, mixin_cells_set) */
+static void prepend_cell_set(Compiler *c, int list, int after, int cell) {
+  char name[32];
+  ver_prepend_cell_name(cell, name);
+  cell_write_note(c, ver_cell_put(c, name, list, after, 1, 1));
+}
 static void prepend_cell_write(Compiler *c, int late, int list, int after, int cell) {
   int f, rank, n = 0;
   char name[32];
   ver_prepend_cell_name(cell, name);
-  cell_write_note(c, ver_cell_put(c, name, list, after, 1, 1));
+  prepend_cell_set(c, list, after, cell);
   elab_top_place(c, late, &f, &rank);
   const int *st = f >= 0 ? nt_arr(c->nt, prog_root_stmts(c, f), "body", &n) : NULL;
   if (n) cell_write_note(c, ver_cell_put(c, name, prog_root_stmts(c, f), st[0], 0, 0));
@@ -9486,8 +9741,7 @@ static int mixin_prepended(Compiler *c, int ci, int mod) {
 
 static void process_prepend_body(Compiler *c, int ci, int body) {
   const NodeTable *nt = c->nt;
-  int late = prepend_late_stmt(c, ci, body);
-  int cell = 0;
+  int late = prepend_late_stmt(c, ci, body, 1);
   /* a module's prepend goes wherever the module is mixed in, which brings
      it in front of the module (body_mixins) */
   if (comp_class_is_module(c, &c->classes[ci])) return;
@@ -9496,11 +9750,18 @@ static void process_prepend_body(Compiler *c, int ci, int body) {
     /* prepend A, B has A first in the ancestor chain: install B first. */
     BodyMix *mx = body_mixins(c, ci, body, 1u << LR_PREPEND, &n);
     for (int j = 0; j < n; j++) {
-      int mod_id = mx[j].mod;
+      int mod_id = mx[j].mod, cell = 0;
       if (mod_id < 0) continue;
+      /* a reopening's prepend, also one that may not run: the cell its
+         copies' guard entries read is set right after it, where it runs */
+      int stmt_here = late >= 0 && list_has_stmt(nt, body, mx[j].stmt);
+      int layered = stmt_here && mixin_layers_call_super(c, ci, mod_id, late, mx[j].stmt);
+      int here = stmt_here && !mixin_presence_unguarded(c, ci, mod_id, late) && !mixin_rebrought_behind(c, ci, mod_id, late) &&
+                 !mixin_meets_plain_late(c, ci, mod_id) && !layered;
       /* a module prepended before, or one such a module brings, is among
          the class's ancestors already: CRuby's prepend of it changes
-         nothing (`prepend M` then `prepend Base`, where M includes Base) */
+         nothing (`prepend M` then `prepend Base`, where M includes Base),
+         but where that prepend may not have run, this one sets its cells */
       {
         const ClassInfo *cls = &c->classes[ci];
         int *done = malloc(sizeof(int) * (size_t)(cls->nprepended_mods > 0 ? cls->nprepended_mods : 1)), nd = 0;
@@ -9509,6 +9770,7 @@ static void process_prepend_body(Compiler *c, int ci, int body) {
           if (mixin_prepended(c, ci, cls->prepended_mods[m])) done[nd++] = cls->prepended_mods[m];
         int brought = mixin_already_brought(c, ci, mod_id, LR_PREPEND, done, nd);
         free(done);
+        if (brought && here) mixin_cells_set(c, ci, mod_id, 1, body, mx[j].stmt);
         if (brought) continue;
       }
       /* its readers answer in front of the class's own, as its methods do */
@@ -9536,8 +9798,30 @@ static void process_prepend_body(Compiler *c, int ci, int body) {
           mixin_shadow_name(c, ci, sc, hidden, sizeof hidden);
           method_name = hidden;
         }
-        int active_mi = sc->shadow ? -1 : comp_method_in_class(c, ci, method_name);
-        int guard = active_mi >= 0 && late >= 0;
+        /* a later version of a method of the module's: a version of the
+           earlier one's copy, under its name, with its guard
+           (mixin_prev_version); a layer of its own in front of it among
+           an unguarded prepend's copies that may not run, as an include's
+           (include_module_methods) */
+        int prev = sc->shadow || (stmt_here && !here) ? -1 : mixin_prev_version(c, mod_id, ms, made), vguard = -1;
+        if (prev >= 0 && c->scopes[prev].mixin_guarded && sp_streq(comp_scope_user_name(&c->scopes[prev]), method_name)) {
+          snprintf(hidden, sizeof hidden, "%s", c->scopes[prev].name);
+          method_name = hidden;
+          vguard = prev;
+        }
+        int active_mi = sc->shadow || prev >= 0 ? -1 : comp_method_in_class(c, ci, method_name);
+        int guard = here && !sc->shadow && prev < 0 && (active_mi >= 0 || !is_builtin_reopen(c->classes[ci].name)),
+            behind = active_mi;
+        /* (where the class has no method of the name yet, the copy stands
+           in front of a hidden method whose super reaches the superclass's,
+           as a later include's does: inc_super_behind; a builtin's own
+           method is no super such a method reaches) */
+        if (guard && active_mi < 0) {
+          behind = inc_super_behind(c, ci, method_name, sc->def_node);
+          sc = &c->scopes[ms];   /* inc_super_behind's comp_scope_new may realloc */
+          method_name = sc->name;
+          guard = behind >= 0;
+        }
         if (active_mi >= 0) {
           Scope *active = &c->scopes[active_mi];
           char shadow[256];
@@ -9551,10 +9835,11 @@ static void process_prepend_body(Compiler *c, int ci, int body) {
               break;
             }
           }
-          /* Rename the currently active scope to the shadow name. */
-          free(active->name);
-          active->name = strdup(shadow);
-          comp_scope_set_shadow(c, active_mi, SHADOW_PREP, method_name);
+          /* Rename the currently active scope to the shadow name, with an
+             earlier mixin's copies of its module's other versions of the
+             name, which are versions of it (mixin_prev_version), by the
+             copy's own name */
+          mixin_copies_rename(c, ci, active_mi, shadow, SHADOW_PREP, method_name, 1, 0);
           /* Record the new dispatch chain entry: method_name -> shadow. */
           comp_prep_chain_add(&c->classes[ci], method_name, shadow);
           /* Visibility is registered before prepends, by name: the class's
@@ -9584,7 +9869,7 @@ static void process_prepend_body(Compiler *c, int ci, int body) {
           Scope *dst = comp_scope_new(c, method_name, sc->def_node);
           int dst_i = c->nscopes - 1;
           sc = &c->scopes[ms_i];               /* comp_scope_new may realloc */
-          comp_scope_copy_shadow(c, dst_i, ms_i, NULL);
+          comp_scope_copy_shadow(c, dst_i, vguard >= 0 ? vguard : ms_i, NULL);
           if (sc->body >= 0) {
             int nb = nt_clone_subtree((NodeTable *)nt, sc->body);
             comp_grow_node_arrays(c);
@@ -9605,7 +9890,10 @@ static void process_prepend_body(Compiler *c, int ci, int body) {
           dst->is_prepend_copy = 1;
           /* a call reaches the method behind it until the reopening's
              statement has run (Scope.mixin_guarded) */
-          if (guard) { dst->mixin_guarded = prepend_cell(c, &cell); dst->guard_behind = active_mi; }
+          if (guard) { dst->mixin_guarded = prepend_cell(c, &cell); dst->guard_behind = behind; }
+          else if (vguard >= 0) { dst->mixin_guarded = c->scopes[vguard].mixin_guarded; dst->guard_behind = c->scopes[vguard].guard_behind; }
+          dst->mixin_plain_late = stmt_here && !layered && !dst->mixin_guarded;
+          dst->mixin_unversioned = stmt_here && !here;
           { dst->origin_module_ci = mod_id + 1; comp_touch_scope(dst->idx); }   /* #owner names the module */
           { dst->reachable = sc->reachable; comp_touch_scope(dst->idx); }
           scope_set_ret(dst, sc->ret);
@@ -9628,24 +9916,9 @@ static void process_prepend_body(Compiler *c, int ci, int body) {
          reaches what M includes before the class */
       include_chain_copy(c, ci, mod_id, made, snap, 0);
       free(made);
+      if (cell) prepend_cell_write(c, late, body, mx[j].stmt, cell);
     }
     free(mx);
-  }
-  if (cell && ((nt_ref(nt, late, "body") == body && elab_class_bodies(c, ci, &(int){0})[0].node == late) ||
-               list_has_stmt(nt, body, late))) {
-    /* the first body, a call ahead of the prepend, or another frame's list
-       whose `K.prepend M` the record takes (foreign_late_stmt): after the
-       list's last prepend statement, where the calls after it run */
-    int n = 0, last = -1;
-    BodyMix *mx = body_mixins(c, ci, body, 1u << LR_PREPEND, &n);
-    for (int j = 0; j < n; j++) if (last < 0 || elab_sort_key(c, mx[j].stmt) > elab_sort_key(c, last)) last = mx[j].stmt;
-    free(mx);
-    if (last >= 0) prepend_cell_write(c, late, body, last, cell);
-  }
-  else if (cell) {   /* after the reopening's statement, in its file's top level */
-    int f, rank;
-    elab_top_place(c, late, &f, &rank);
-    prepend_cell_write(c, late, prog_root_stmts(c, f), late, cell);
   }
 }
 

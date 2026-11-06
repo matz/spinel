@@ -3625,7 +3625,7 @@ static int bp_calls(Compiler *c, int mi, int *cut) {
       for (int j = 0, nb = nt_ == CPT_UNKNOWN ? cplan_entries_bound_names(c, id, bn) : 0; j < nb && !hit; j++)
         hit = sp_streq(bn[j], mn);
       for (int j = 0; j < nt_ && !hit; j++) hit = tg[j] == mi;
-      if (hit || (s && s->class_id >= 0 && s->name && cplan_super_target(c, id, s, &at) == mi))
+      if (hit || (s && s->class_id >= 0 && s->name && cplan_target_runs(c, cplan_super_target(c, id, s, &at), mi)))
         bits |= bp_site(c, id, nt_ref(nt, id, "block"), 1, mi, cut);
     }
   ids = NULL;

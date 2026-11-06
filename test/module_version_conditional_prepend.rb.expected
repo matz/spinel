@@ -1,0 +1,10 @@
+:taken
+:untaken
+[:v, :taken]
+:untaken
+[:v, :twice]
+[:v, :inside]
+[:v, :twice]
+[:v2, :taken]
+:untaken
+[:v2, :twice]

@@ -15273,7 +15273,7 @@ int emit_super_inline(Compiler *c, int id, Buf *b, int indent, int as_expr) {
         fprintf(stderr, "plan-check: cplan-fallback: super-inline node %d %s\n", id, s->name);
       mi = omi; defcls = odef;
     }
-    else if (omi != mi || (!shadow && odef != defcls))
+    else if ((omi != mi && !(shadow && cplan_target_runs(c, mi, omi))) || (!shadow && odef != defcls))
       fprintf(stderr, "plan-check: cplan-conflict: super-inline node %d %s: plan %d/%d, lookup %d/%d\n",
               id, s->name, mi, defcls, omi, odef);
   }
@@ -15447,14 +15447,17 @@ int emit_super_inline(Compiler *c, int id, Buf *b, int indent, int as_expr) {
     /* A nil or non-returning block has no C value type. As for an ordinary
        yielding call, its result still needs a slot while the body runs. */
     if (rt == TY_NIL || rt == TY_VOID || rt == TY_UNKNOWN) rt = TY_POLY;
-    if (fwd_yield_proc || explicit_block_arg) g_yield_slot_ty = rt;
+    /* (also under the proc an enclosing inline's yields call, which this
+       super's yields call too: their tail fills this super's slot) */
+    int yslot = fwd_yield_proc || explicit_block_arg || g_yield_proc_ref;
+    if (yslot) g_yield_slot_ty = rt;
     int rtag = ++g_tmp;
     char rvbuf[32]; snprintf(rvbuf, sizeof rvbuf, "_t%d", rtag);
     /* the super's own form: its oint where it answers one (a block that
        can answer nil) */
     int ro = oint_kind(rt) && node_is_oint(c, id);
     /* the proc's answer stays boxed for the tail to read with its nil */
-    if (ro && (fwd_yield_proc || explicit_block_arg)) g_yield_slot_ty = TY_POLY;
+    if (ro && yslot) g_yield_slot_ty = TY_POLY;
     emit_indent(b, din); emit_res_ctype(c, rt, ro, b);
     buf_printf(b, " _t%d = %s;\n", rtag, ro ? oint_nil(rt) : default_value_from_compiler(c, rt));
     const char *sv_rv = g_result_var; g_result_var = rvbuf;
@@ -15917,10 +15920,13 @@ void emit_super(Compiler *c, int id, Buf *b) {
      method's chain is taken below, in the class-method form). */
   const char *shadow = s->is_cmethod ? NULL : comp_super_shadow(c, s);
   if (shadow) {
-    /* The plan's target for the generated shadow in this class. */
+    /* The plan's target for the generated shadow in this class: it, or the
+       entry over a layer of versions under its name (the call plan's
+       super_layer_entry), whose arms run it */
     int smi = super_plan_mi(c, id, s->class_id);
-    if (smi >= 0 && !(c->scopes[smi].class_id == s->class_id && c->scopes[smi].name &&
-                      sp_streq(c->scopes[smi].name, shadow)))
+    if (smi >= 0 && !(c->scopes[smi].class_id == s->class_id &&
+                      (c->scopes[smi].entry == ENTRY_DISPATCH ||
+                       (c->scopes[smi].name && sp_streq(c->scopes[smi].name, shadow)))))
       smi = -1;
     int served = smi >= 0;
     if (g_plan_check && served) cplan_served("super");

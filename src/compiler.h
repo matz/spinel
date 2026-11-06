@@ -531,6 +531,34 @@ typedef struct {
                                  behind it, guard_behind, until the cell is
                                  set */
   int guard_behind;
+  unsigned char mixin_unversioned;   /* a plain copy of a mixin that may
+                                        not run and is not guarded
+                                        (include_module_methods' plain),
+                                        or of an include in a reopening
+                                        the record does not order after
+                                        the first body (one in a block,
+                                        include_late_stmt): the module's
+                                        later versions of its name are
+                                        layers of their own, and a call
+                                        takes no entry over them
+                                        (mixin_copies_module) */
+  unsigned char super_behind;   /* the method a later include's copy stands
+                                   in front of where the class had none of
+                                   its own: a hidden `def = super`
+                                   (inc_super_behind), which a Method made
+                                   of it does not hold: it holds what the
+                                   super reaches */
+  unsigned char mixin_plain_late;   /* a plain copy an include or prepend
+                                       that may not run made where its
+                                       guard could not tell the copy's
+                                       readers or a brought module's
+                                       hidden copies apart
+                                       (mixin_presence_unguarded,
+                                       mixin_rebrought_behind): a later
+                                       mixin's guard entry never runs it as
+                                       the method behind, so that mixin
+                                       makes plain copies too
+                                       (mixin_meets_plain_late) */
   /* a hidden copy: a body the compiler moved behind another method of its
      name. A SHADOW_PREP copy is named apart from every method the program
      names (comp_shadow_name); a SHADOW_INC copy's name is not checked against
@@ -1778,18 +1806,25 @@ typedef struct {
   int n_prepend_cells;
   /* the version entries (call_plan.c, ver_entries_build): one method per
      (class, side, name, parameter count) for the calls whose version is
-     known only at run time, or with guard, for the calls that reach a
-     later prepend's copy (Scope.mixin_guarded), and each of its arms'
+     known only at run time, or by guard (VER_ENTRY_*, call_plan.h), for
+     the calls that reach a later prepend's copy (Scope.mixin_guarded), or
+     for the supers that reach a layer of a mixin's copies of a module's
+     versions (call_plan.c, super_layer_entry), and each of its arms'
      calls pinned to the method it runs. absent: asked for a call that may
      meet no version of the chain yet, 2 when the entry's else arm answers
      for none, 1 when it keeps the last version (ver_entries_demand);
      cells: its histories' cells are written (ver_cells_write); finds:
      what its else arm finds while no version is live, one of
-     VER_FINDS_* (call_plan.c, ver_else_finds). Each name is the entry's
-     own copy (ver_entry_add), as in ver_late, ver_memo and the chain
-     counts: a caller may ask with a name it frees itself
+     VER_FINDS_* (call_plan.c, ver_else_finds); from: 1 + the module
+     whose chain's versions its arms test, those of the copies cls holds of
+     them (call_plan.c, mixin_copies_module); 0 for cls's chain; behind:
+     1 + the method a guard entry's method_missing else arm stands for,
+     the one behind the mixins that finds no method (guard_entry_make),
+     0 for none. Each name
+     is the entry's own copy (ver_entry_add), as in ver_late, ver_memo and
+     the chain counts: a caller may ask with a name it frees itself
      (desugar_call_op_write's setter name) */
-  struct VerEntry { char *name; int guard, cls, sg, ar, scope, absent, cells, finds; } *ver_entries;
+  struct VerEntry { char *name; int guard, cls, sg, ar, scope, absent, cells, finds, from, behind; } *ver_entries;
   int nver_entries;
   /* the chains a typed call may meet with no version made yet, whose
      entry is not asked for that yet (call_plan.c, ver_absent_note); mm:
@@ -1825,6 +1860,10 @@ typedef struct {
      are kept, and a call that reaches a later prepend's copy binds its
      guard entry */
   int ver_built;
+  /* the entries' build asks its calls (ver_entries_build), which make and
+     rename no scope: scope_is_shadowed answers from its table, as where
+     the scope index is frozen, not by a scan per ask */
+  int ver_asking;
   /* the scopes that are hidden copies (Scope.shadow), which
      comp_name_is_shadow_copy reads */
   int *shadow_copies, nshadow_copies, cshadow_copies;
@@ -1833,6 +1872,11 @@ typedef struct {
      copy) NULL for a free slot; dc the class it answers, -2 for the table's */
   struct VerMemo { char *name; int id, cls; unsigned flags; int vi, dc; } *ver_memo;
   int ver_memo_cap, ver_memo_n;
+  /* the methods a guard entry chooses from for each scope asked once the
+     entries are made (call_plan.c, guard_chain): at[mi] - 1 is where in
+     `to` their count and then they are, 0 for a scope not asked yet;
+     dropped with ver_memo */
+  struct GuardMemo { int *at, nat, *to, nto, cto; } guard_memo;
   /* the operand-local reads splat_dispatch_on_length marked splat_view,
      which desugar_splat_view_scalars rewrites once typed (-1 once seen) */
   int *splat_views;

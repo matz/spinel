@@ -93,6 +93,10 @@ int cplan_super_chain_mi(Compiler *c, int id, Scope *s, int par, const char *nam
 /* ...and the method `super` in s reaches (its prepend chain's next, else
    that), *at the class it is found from */
 int cplan_super_target(Compiler *c, int id, Scope *s, int *at);
+/* ...and the methods a super in s that no call stands for may run, into
+   to[VER_MAX_ARMS]: that one, or each version a layer of a mixin's copies
+   holds below a later one. How many, 0 for none */
+int cplan_super_runs(Compiler *c, Scope *s, int *to);
 /* A conversion performed by a helper, separately from the enclosing call. */
 CallPlan cplan_conversion(Compiler *c, int ci, const char *name);
 CallPlan cplan_method_call(Compiler *c, int id);
@@ -211,6 +215,17 @@ int ver_entry_targets(const Compiler *c, int e, int *out, int *tests);
 /* Does target t of a call run method mi: t itself, or one of the methods
    the arms of t call where t is a version entry (ver_entry_targets)? */
 int cplan_target_runs(const Compiler *c, int t, int mi);
+/* The methods a Method made of entry e can hold, one for each arm that
+   may run at the bind (call_plan.c); tests, when asked: 2k and 2k + 1 the
+   tests of arm k and of its inner arm, -1 for none. cap: the capture the
+   Method came from (CallPlan.method_node), -1 for none known. An arm
+   where that capture finds no method is CPLAN_ARM_NONE: no Method is
+   made there, the capture raises CRuby's NameError */
+enum { CPLAN_ARM_NONE = -1 };
+int cplan_method_arms(Compiler *c, int e, int cap, int *out, int *tests);
+/* ...those of them a Method made there holds: all but CPLAN_ARM_NONE's
+   (entry e itself where no other is left) */
+int cplan_method_held(Compiler *c, int e, int cap, int *out);
 int cplan_bool_sides(Compiler *c, int id, int *tmi, int *fmi);
 void cplan_check_missing(Compiler *c, int id, int mi, int ci, const char *name, int cmeth, const char *site);
 /* The same plan resolved afresh and never kept, for a reader that runs in
@@ -832,6 +847,12 @@ int cplan_cmethod_presence(Compiler *c, int id, int cls, const char *name, int i
    (VerEntry.finds): a public method, a private or protected one, or none
    (NoMethodError, method_missing); -1 for a scope that is no entry */
 enum { VER_FINDS_NONE, VER_FINDS_HIDDEN, VER_FINDS_PUBLIC };
+/* What a version entry tells apart (Compiler.ver_entries, VerEntry.guard):
+   the versions a chain holds for a call whose version is known only at
+   run time; a later mixin's guarded copies (Scope.mixin_guarded); an open
+   history's versions, for a call that may meet none yet; the versions of
+   a layer of a mixin's copies that a super reaches (super_layer_entry) */
+enum { VER_ENTRY_CHAIN, VER_ENTRY_GUARD, VER_ENTRY_HISTORY, VER_ENTRY_LAYER };
 int cplan_entry_finds(const Compiler *c, int e);
 /* The program's `self.new` a `new` call id on class ci runs, -1 for
    none: for an arm of a version entry, its pin (call_target); for a

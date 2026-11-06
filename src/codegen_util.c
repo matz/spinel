@@ -7396,7 +7396,7 @@ int scope_is_shadowed(Compiler *c, int s) {
      index's epoch moves. Each ask scanned every later scope, and the call
      planner asks per arm of every dispatch it weighs, every round. */
   int raw = !g_scopes_settled;
-  if (raw && !comp_scope_index_is_frozen()) return scope_is_shadowed_scan(c, s);
+  if (raw && !comp_scope_index_is_frozen() && !c->ver_asking) return scope_is_shadowed_scan(c, s);
   if (g_shadow_c != c || g_shadow_raw != raw || (raw && g_shadow_gen != comp_scope_index_gen()) ||
       (g_shadow_n != c->nscopes && !shadow_tab_extend(c)))
     shadow_tab_build(c, raw);

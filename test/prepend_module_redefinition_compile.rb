@@ -1,7 +1,8 @@
-# spinel: not-cruby
-# Compile check: every guard arm and super target must have a declaration.
-# Reopening a prepended module still stacks both copies, as on the base.
-# CRuby instead prints "k", "L1 k", "L2 k".
+# A prepend a reopening runs after the class's first body, of a module a
+# later reopening redefines the method of: a call runs the class's own
+# method until the prepend has run, then the module's version it holds
+# then, whose super reaches the class's method. Every guard arm and super
+# target has a declaration.
 module L
   def m = "L1 " + super
 end

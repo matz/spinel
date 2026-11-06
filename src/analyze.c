@@ -53914,6 +53914,12 @@ static int an_total_ivars(Compiler *c) {
 }
 
 /* The late widening and narrowing: unresolved locals and returns to poly, ivars fed by nil-only params, the arithmetic widen, the object-array and poly-int narrowing, then the gc-root marks and the full node type cache (analyze_program's steps, in their order) */
+/* Is a node `before` held as a Hash now something else? */
+static int an_hash_changed_since(Compiler *c, const NodeTypes *before) {
+  for (int id = 0; id < before->n; id++)
+    if (ty_is_hash(before->ty[id]) && infer_type(c, id) != before->ty[id]) return 1;
+  return 0;
+}
 static void an_phase_late_widen(Compiler *c, NodeTypes *promote_before) {
   /* A non-parameter local that inference never resolved holds a value of unknown
      static type -- a block param bound to an element of a poly receiver, or a
@@ -54026,11 +54032,11 @@ static void an_phase_late_widen(Compiler *c, NodeTypes *promote_before) {
     if (an_total_ivars(c) != ivars_before) { inherit_members(c); ch = 1; }
     if (!ch) break;
   }
-  /* A Hash return that followed its widened ivar reaches calls that bound
-     the narrower Hash: they bind again against this snapshot, as they do
-     after promote's widening (an_phase_nullable_returns), which then
-     keeps this earlier one. */
-  if (g_late_hash_return_widened) *promote_before = before_ivars;
+  /* A Hash that took another kind here reaches what the fixpoint settled on
+     the old one: the calls, stores and destructuring that hold it join again
+     against this snapshot, as they do after promote's widening
+     (an_phase_nullable_returns), which then keeps this earlier one. */
+  if (an_hash_changed_since(c, &before_ivars)) *promote_before = before_ivars;
   else free(before_ivars.ty);
 
   /* --int-overflow=promote: widen every statically-int slot (param / return /
@@ -56331,6 +56337,11 @@ static void an_phase_nullable_returns(Compiler *c, const NodeTypes *promoted) {
   NodeTypes settled;
   node_types_take(c, &settled);
   const NodeTypes *calls = promoted->ty ? promoted : &settled;
+  /* what changed a Hash since that snapshot is an input the stores and the
+     destructuring below have yet to take */
+  if (promoted->ty)
+    for (int id = 0; id < settled.n && id < promoted->n; id++)
+      if (ty_is_hash(promoted->ty[id])) settled.ty[id] = promoted->ty[id];
   AN_STEP_V("mark_nullable_int_locals", mark_nullable_int_locals(c));
   sync_captured_nullable(c);
   infer_memo_boundary();

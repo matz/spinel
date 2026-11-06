@@ -2070,17 +2070,20 @@ static void ver_hold_add(struct VerHold *m, int k, int sg) {
   m->pool[m->npool++] = k;
   m->pool[m->npool++] = sg;
 }
-/* ...and of a module's: the classes that include or prepend it, which hold
-   copies of its versions (analyze_scope.c, mixin_prev_version) and none
-   of the name's histories */
+/* ...and of a module's: the classes that include or prepend it, or extend
+   it (on their class side), which hold copies of its versions
+   (analyze_scope.c, mixin_prev_version) and none of the name's histories */
 static void ver_hold_mixers(Compiler *c, struct VerHold *m, int mod, const char *nm) {
   ElabVersion vs[VER_MAX_ARMS];
   for (int j = 0; j < c->nclasses; j++) {
     const ClassInfo *k = &c->classes[j];
-    int in = 0;
+    int in = 0, ext = 0;
     for (int i = 0; i < k->nincluded_mods && !in; i++) in = k->included_mods[i] == mod;
     for (int i = 0; i < k->nprepended_mods && !in; i++) in = k->prepended_mods[i] == mod;
-    if (in && !comp_class_is_module(c, k) && elab_chain_versions(c, j, 0, nm, vs, VER_MAX_ARMS) >= 2) ver_hold_add(m, j, 0);
+    for (int i = 0; i < k->nextended_mods && !ext; i++) ext = k->extended_mods[i] == mod;
+    if (comp_class_is_module(c, k)) continue;
+    if (in && elab_chain_versions(c, j, 0, nm, vs, VER_MAX_ARMS) >= 2) ver_hold_add(m, j, 0);
+    if (ext && elab_chain_versions(c, j, 1, nm, vs, VER_MAX_ARMS) >= 2) ver_hold_add(m, j, 1);
   }
 }
 static const int *ver_holders(Compiler *c, const char *nm, int *n) {
@@ -5569,7 +5572,9 @@ static int ver_builtin_chain(Compiler *c, int cls, int sg, const char *name, int
    the lookup finds past every version of the chain (ver_absent_else),
    when they share a visibility. Its arms call class into's scope of each
    version, and it is into's method: rcls's own, or the copies a class
-   holds of module rcls's versions. -1 for none. */
+   holds of module rcls's versions, which are the module's instance
+   methods also where an extend copies them to into's class side. -1 for
+   none. */
 static int ver_entry_make(Compiler *c, const struct VerNamedAsks *q, int rcls, int into, int sg, const char *name, int mi, int ar, int mm,
                           int *absent, int *finds) {
   ElabVersion vs[VER_MAX_ARMS];
@@ -5577,7 +5582,7 @@ static int ver_entry_make(Compiler *c, const struct VerNamedAsks *q, int rcls, i
   int to[VER_MAX_ARMS], na = 0, blk = c->scopes[mi].blk_param || c->scopes[mi].yields, dc, same = 1, vis = 1, els = -1, fallback = mi, kind = VK_KEEP;
   int spliced = c->scopes[mi].yields;
   char sel[VER_MAX_ARMS][32];
-  int nv = elab_chain_versions(c, rcls, sg, name, vs, VER_MAX_ARMS);
+  int nv = elab_chain_versions(c, rcls, rcls != into ? 0 : sg, name, vs, VER_MAX_ARMS);
   for (int i = 0; i < nv; i++) {
     if (vs[i].v->kind == LR_REMOVE) continue;   /* its write passes the search on */
     int s = vs[i].v->kind == LR_UNDEF ? -1 : ct_def_version(c, into, name, sg, vs[i].v, &dc);
@@ -5631,12 +5636,14 @@ static int ver_entry_emit(Compiler *c, int rcls, int sg, const char *name, int a
    under mi's name, with its cell and the method it stands in front of
    where a later include or prepend guards them, each with the record's
    version it copies on the chain of class `from` (vs[k], whose history's
-   cell tells it): mi's class's own, or the module's. In the chain's order.
+   cell tells it): mi's class's own, or the module's, whose instance
+   methods an extend's class-side copies copy. In the chain's order.
    How many, 0 where one is not on the chain (mi stands alone). */
 static int mixin_copy_versions(Compiler *c, int mi, int from, int *to, ElabVersion *vs) {
   const Scope *m = &c->scopes[mi];
   ElabVersion cv[VER_MAX_ARMS];
-  int n = 0, ns = 0, nv = elab_chain_versions(c, from, m->is_cmethod, comp_scope_user_name(m), cv, VER_MAX_ARMS);
+  int side = m->is_extend_copy && from == m->origin_module_ci - 1 ? 0 : m->is_cmethod;
+  int n = 0, ns = 0, nv = elab_chain_versions(c, from, side, comp_scope_user_name(m), cv, VER_MAX_ARMS);
   for (int s = 0; s < c->nscopes; s++) {
     const Scope *k = &c->scopes[s];
     ns += k->class_id == m->class_id && k->is_cmethod == m->is_cmethod && k->mixin_guarded == m->mixin_guarded &&
@@ -5665,7 +5672,7 @@ static int mixin_copy_versions(Compiler *c, int mi, int from, int *to, ElabVersi
    yet and the module's later versions are layers of their own */
 static int mixin_copies_module(Compiler *c, int mi, int *to, ElabVersion *vs, int *n) {
   const Scope *m = &c->scopes[mi];
-  if (!m->versioned || !m->is_include_copy || m->mixin_guarded || m->mixin_unversioned || m->origin_module_ci <= 0) return -1;
+  if (!m->versioned || !(m->is_include_copy || m->is_extend_copy) || m->mixin_guarded || m->mixin_unversioned || m->origin_module_ci <= 0) return -1;
   *n = mixin_copy_versions(c, mi, m->origin_module_ci - 1, to, vs);
   return *n ? m->origin_module_ci - 1 : -1;
 }
@@ -5704,7 +5711,7 @@ static int super_layer_versions(Compiler *c, const Scope *s, int t, int *to) {
   ElabVersion vs[VER_MAX_ARMS];
   const Scope *m = &c->scopes[t];
   if (m->mixin_guarded && s && !m->entry && m->shadow && layer_ran_before(c, s, m)) return mixin_copy_versions(c, t, m->class_id, to, vs);
-  if (!m->is_include_copy || !m->shadow || m->mixin_guarded || m->entry || m->mixin_unversioned || m->origin_module_ci <= 0) return 0;
+  if (!(m->is_include_copy || m->is_extend_copy) || !m->shadow || m->mixin_guarded || m->entry || m->mixin_unversioned || m->origin_module_ci <= 0) return 0;
   return mixin_copy_versions(c, t, m->origin_module_ci - 1, to, vs);
 }
 /* Has t, a later mixin's guarded copy below s, the copy of a later mixin
@@ -6791,7 +6798,7 @@ void ver_cells_write(Compiler *c) {
     /* (a guarded layer's copies: versions on cls's chain, super_layer_versions) */
     int lg = e->guard == 3 && na && arms[0] >= 0 && c->scopes[arms[0]].mixin_guarded, mod = e->from && !lg;
     int nv = e->guard == 2 ? elab_history_versions(c, e->cls, e->sg, e->name, vs, VER_MAX_ARMS)
-                           : elab_chain_versions(c, mod ? e->from - 1 : e->cls, e->sg, e->name, vs, VER_MAX_ARMS);
+                           : elab_chain_versions(c, mod ? e->from - 1 : e->cls, mod ? 0 : e->sg, e->name, vs, VER_MAX_ARMS);
     for (int j = 0; j < nv; j++) {
       if (e->guard == 1 || e->guard == 3) {
         int reads = 0;

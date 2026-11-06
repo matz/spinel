@@ -3296,7 +3296,7 @@ void elab_mark_versions(Compiler *c) {
     /* (a mixin's hidden copy, a layer below a later one, by the program's
        name: its versions are the module's, told apart under its own) */
     const char *name = sc->mixin_guarded ? comp_scope_user_name(sc) : sc->name;
-    const char *vname = sc->is_include_copy && sc->shadow ? comp_scope_user_name(sc) : name;
+    const char *vname = (sc->is_include_copy || sc->is_extend_copy) && sc->shadow ? comp_scope_user_name(sc) : name;
     const LrVers *x = vname && sc->def_node >= 0 ? lr_vers(r, vname) : NULL;
     if (!x || (x->nver < 2 && !elab_method_late(c, vname))) continue;
     { sc->versioned = 1; comp_touch_scope(sc->idx); }

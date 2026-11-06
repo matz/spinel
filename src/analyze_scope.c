@@ -8489,7 +8489,9 @@ static int extend_class_with(Compiler *c, int ci, int mod_id, int inherited, int
        earlier one's copy, by its name (mixin_prev_version) */
     int prev = plain ? -1 : mixin_prev_version(c, mod_id, ms, made);
     int ver = prev >= 0 && !c->scopes[prev].shadow && sp_streq(c->scopes[prev].name, src->name);
-    if (ver) own = -1;
+    /* (a guarded copy's: under its hidden name, with its guard) */
+    int gver = !ver && prev >= 0 && c->scopes[prev].mixin_guarded && sp_streq(comp_scope_user_name(&c->scopes[prev]), src->name);
+    if (ver || gver) own = -1;
     /* The class's own class method comes first, and a module it extends
        sits behind it: a super in the own method reaches the module's,
        copied in under a shadow name, in front of any module extended
@@ -8536,7 +8538,7 @@ static int extend_class_with(Compiler *c, int ci, int mod_id, int inherited, int
           break;
         }
       int reached = scope_body_has_super(c, ms);
-      if (prepend && cell) {
+      if (cell) {
         /* the copy's own super reaches the method it stands in front of,
            and so does a call until the prepend has run */
         guard = prepend_cell(c, cell);
@@ -8562,7 +8564,7 @@ static int extend_class_with(Compiler *c, int ci, int mod_id, int inherited, int
       mixin_copies_rename(c, ci, own, shadow, SHADOW_INC, src->name, reached, 1);
       src = &c->scopes[ms];
     }
-    else if (prepend && cell && c->classes[ci].parent >= 0 &&
+    else if (!ver && !gver && cell && c->classes[ci].parent >= 0 &&
              (behind_mi = comp_cmethod_in_chain(c, c->classes[ci].parent, src->name, NULL)) >= 0)
       /* no class method of the class's own, but one it inherits: until the
          reopening's statement has run, a call reaches that one, which the
@@ -8590,10 +8592,17 @@ static int extend_class_with(Compiler *c, int ci, int mod_id, int inherited, int
         NT_FOREACH_KIND(nt2, ow[k], ivid)
           if (c->nscope[ivid] == ms && nt_str(nt2, ivid, "name"))
             comp_ivar_intern(&c->classes[ci], nt_str(nt2, ivid, "name")); }
-    if (ver) cmethod_copy_into(c, ms, src->name, mod_id, ci, 0, -1);
+    int vat = c->nscopes;
+    if (gver) {
+      char vname[256];
+      snprintf(vname, sizeof vname, "%s", c->scopes[prev].name);
+      cmethod_copy_into(c, ms, vname, mod_id, ci, c->scopes[prev].mixin_guarded, c->scopes[prev].guard_behind);
+      comp_scope_copy_shadow(c, vat, prev, NULL);
+    }
+    else if (ver) cmethod_copy_into(c, ms, src->name, mod_id, ci, 0, -1);
     else specialize_cmethod_for(c, ms, NULL, mod_id, ci, guard, behind_mi);
     src = &c->scopes[ms];  /* realloc-safe */
-    { int cp = comp_cmethod_in_class(c, ci, src->name);
+    { int cp = gver ? vat : comp_cmethod_in_class(c, ci, src->name);
       if (cp >= 0) { c->scopes[cp].is_extend_copy = 1; made[ms] = cp + 1; }
       /* The copy keeps the module's visibility, and a later extend wins. A
          copy behind the class's own method leaves the name's visibility to
@@ -8821,8 +8830,10 @@ void register_extends(Compiler *c) {
         for (int p = c->classes[ci].parent; p >= 0 && !inherited; p = c->classes[p].parent)
           inherited = class_extends_module(c, p, mod_id);
         int sprep = mx[j].kind == LR_SG_PREPEND;
-        if (sprep && late == -2) late = prepend_late_stmt(c, ci, body, 0);
-        int guard = sprep && late >= 0, plain = !guard && bi > 0 && bi < nb && reopening_may_not_run(c, ob[bi].node);
+        /* (a record-taken extend, `K.extend(M)` at the top level, is the
+           record's where it runs: its copies need no guard, foreign_late_stmt) */
+        if (late == -2) late = sprep || bi < nb ? prepend_late_stmt(c, ci, body, 0) : -1;
+        int guard = late >= 0, plain = !guard && bi > 0 && bi < nb && reopening_may_not_run(c, ob[bi].node);
         int s0 = c->nscopes;
         did_clone |= extend_class_with(c, ci, mod_id, inherited, sprep, plain, guard ? &cell : NULL);
         for (int k = s0; plain && k < c->nscopes; k++)

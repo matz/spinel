@@ -19,3 +19,24 @@ w = "abc123".dup
 p cut(w, [/(\d+)/, 1][0]), w
 t = "hello world".dup
 p((t.slice!(h[:n], 1) rescue $!.class), t)
+# The same call as a statement, its value unused.
+h2 = {r: /(or)/, i: 1}
+s = "hello world".dup
+s.slice!(h2[:r], 1)
+p s
+s = "hello world".dup
+s.slice!(/(or)/, 1)
+p s
+s = "hello world".dup
+re = /(l+)/
+s.slice!(re, 1)
+p s
+s = "hello world".dup
+s.slice!(h2[:i], 2)
+p s
+s = "hello world".dup
+s.slice!(1, 2)
+p s
+class K; def initialize = @s = "hello world".dup; def cut(x) = (@s.slice!(x, 1); @s); end
+p K.new.cut(/(o)/)
+[1].each { s = "abc".dup; s.slice!(/(b)/, 1) if true; p s }

@@ -24933,7 +24933,10 @@ static int str_mutate_append_bang_arms(Compiler *c, int id, Buf *b, int indent, 
         buf_printf(b, ", _t%d + _t%d, _t%d - _t%d - _t%d)); } }\n", ti2, tl2, tn2, ti2, tl2);
         return 1;
       }
-      if (argc == 2) {
+      /* a Regexp first argument (`slice!(/(or)/, 1)`, a boxed value that may
+         hold one) cuts a capture group: the expression's arms answer it */
+      if (argc == 2 && re_lit_index(c, argv[0]) < 0 && comp_ntype(c, argv[0]) != TY_REGEX &&
+          repr_of(c, argv[0]).kind != RK_BOXED) {
         /* splice out [i, i+len): head + tail, bounds clamped to the string in
            characters (a negative i counts from the end; OOB is a no-op) (#3084) */
         int ti2 = ++g_tmp, tl2 = ++g_tmp, tn2 = ++g_tmp;

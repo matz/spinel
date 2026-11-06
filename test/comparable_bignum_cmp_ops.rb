@@ -1,3 +1,4 @@
+# spinel: int64
 # A <=> whose result is a Bignum (here (a - b) * 2**70) gives its sign to
 # every Comparable operator: ==, !=, <, <=, >, >=, between? and clamp.
 class V
@@ -46,3 +47,17 @@ end
 fs = [F.new(3), F.new(1), F.new(2)]
 p fs.sort { |x, y| x <=> y }.map(&:n), fs.sort { |x, y| y <=> x }.map(&:n)
 p fs.min_by { |x| x }.n, fs.max_by { |x| x }.n
+# a Float answer of the pair #coerce makes is handed on whole
+class Wq
+  attr_reader :n
+  def initialize(n); @n = n; end
+  def <=>(o); (n - o.n) * 0.25; end
+end
+class Nq
+  attr_reader :n
+  def initialize(n); @n = n; end
+  def coerce(x); [Wq.new(x), Wq.new(n)]; end
+end
+qs = [5, Nq.new(3), 1]
+p qs[0] <=> qs[1], qs[2] <=> qs[1]
+p [[5, Nq.new(3)], [1, Nq.new(3)]].map { |a, b| (a <=> b) > 0 }

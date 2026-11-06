@@ -6636,7 +6636,8 @@ static sp_oint sp_poly_spaceship(sp_RbVal a, sp_RbVal b) { return sp_poly_spaces
    Bignum, which the sp_oint answer above cannot carry */
 static SP_UNUSED sp_RbVal sp_poly_spaceship_v(sp_RbVal a, sp_RbVal b) {
   sp_RbVal u;
-  if (sp_poly_user_cmp("<=>", a, b, &u)) return u.tag == SP_TAG_BIGINT || u.tag == SP_TAG_FLT ? u : sp_box_oint(sp_spaceship_answer(u));
+  if (sp_poly_user_cmp("<=>", a, b, &u) || sp_poly_coerce_binop("<=>", a, b, &u))
+    return u.tag == SP_TAG_BIGINT || u.tag == SP_TAG_FLT ? u : sp_box_oint(sp_spaceship_answer(u));
   return sp_box_oint(sp_poly_spaceship(a, b));
 }
 /* String#<=> alone falls back to rb_invcmp: an operand that is neither a
@@ -8183,7 +8184,8 @@ static sp_RbVal sp_poly_binop_apply(const char *op, sp_RbVal a, sp_RbVal b) {
   if (strcmp(op, "<=") == 0) return sp_box_bool(sp_poly_le(a, b));
   if (strcmp(op, ">=") == 0) return sp_box_bool(sp_poly_ge(a, b));
   if (strcmp(op, "<=>") == 0) {
-    return sp_box_oint(sp_poly_spaceship(a, b));
+    /* a Bignum or Float answer of the coerced pair is handed on whole */
+    return sp_poly_spaceship_v(a, b);
   }
   if (strcmp(op, "div") == 0) return sp_poly_div_m(a, b);
   if (strcmp(op, "modulo") == 0) return sp_poly_mod(a, b);

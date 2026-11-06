@@ -526,6 +526,7 @@ int is_load_how_native(const char *how);
 int is_native_lib_at_boot(const char *path);
 int is_comparable_module_name(const char *n);
 int is_enumerable_module_name(const char *n);
+int builtin_class_mixes_module(int bid, const char *mod); /* Time: Comparable; IO, Dir: Enumerable; ... */
 /* the index of n among the methods `extend Enumerable` sends to an
    instance-side twin (desugar_extend_enumerable), or -1 */
 enum { EXTEND_ENUMERABLE_NNAMES = 63 };

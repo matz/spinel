@@ -1359,6 +1359,10 @@ static const char *sp_io_super_of(const char *k) {
 sp_bool sp_io_is_a(sp_File *f, const char *cls) {SP_GC_ROOT(f);
   if (!cls) return 0;
   if (strcmp(cls, "Kernel") == 0) return 1;   /* Object includes Kernel */
+  /* IO includes Enumerable (File and the sockets through it); a NULL
+     handle is nil, and a stat answer a File::Stat, neither of them one */
+  if (strcmp(cls, "Enumerable") == 0)
+    return f && !(f->mode && (strcmp(f->mode, "stat") == 0 || strcmp(f->mode, "lstat") == 0));
   for (const char *k = sp_io_kind_name(f); k; k = sp_io_super_of(k))
     if (strcmp(k, cls) == 0) return 1;
   return 0;

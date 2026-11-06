@@ -1,0 +1,2 @@
+write before reopen: IOError: not opened for writing
+write after reopen, read by the peer: "y"

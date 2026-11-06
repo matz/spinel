@@ -69,3 +69,13 @@ rescue ArgumentError => e
   p [e.message, seen]
 end
 # (`(nil..bad) === "c"` with a boxed String end is left out for the same promote gap)
+
+# Both ends boxed, the begin too: the Range is never built ahead of the test.
+def lowest_from(input, n)
+  m = MAXINT
+  input.each { |x| m = x if (n...m) === x }
+  m
+end
+start = 128
+start = :a if ARGV.size > 5
+p lowest_from([300, 200, 900], start)

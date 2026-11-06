@@ -21593,6 +21593,47 @@ int emit_hash_new_arg_guard(Compiler *c, int id, Buf *b) {
    Split out of emit_call; pure code movement, no logic change. Called at the
    point these arms occupied, and declining (0) falls through to the arms that
    followed them. */
+/* (compared in place, not built: sp_Range has sp_int bounds and a Bignum end has nowhere to live; ahead of every
+   arm that holds the receiver first, which would build the Range to hold it) */
+static int emit_range_literal_cover(Compiler *c, int id, Buf *b) {
+  const NodeTable *nt = c->nt;
+  int rr = nt_paren_single(nt, nt_ref(nt, id, "receiver"));
+  const char *rn = nt_str(nt, id, "name");
+  int ra = nt_ref(nt, id, "arguments");
+  int rc = 0; const int *rv = ra >= 0 ? nt_arr(nt, ra, "arguments", &rc) : NULL;
+  if (rr >= 0 && nt_kind(nt, rr) == NK_RangeNode && rn && is_range_membership(rn) && rc == 1 && rv &&
+      rv[0] >= 0 && !user_defines_or_reads(c, rn)) {
+    int lo = nt_ref(nt, rr, "left"), hi = nt_ref(nt, rr, "right");
+    /* (a boxed end too, asked about a number: it can hold a Bignum the sp_Range would cut to its low bits) */
+    int big = 0, boxed = 0;
+    for (int e = 0; e < 2; e++) {
+      int end = e ? hi : lo;
+      if (end < 0) continue;
+      Repr er = repr_of(c, end);
+      if (er.big) big = 1;
+      else if (er.as_ty == TY_POLY) boxed = 1;
+    }
+    TyKind at = comp_ntype(c, rv[0]);
+    int num = at == TY_INT || at == TY_FLOAT || repr_of(c, rv[0]).big;
+    /* (=== alone for any boxed value: include? walks a String Range, and cover? of a Range is containment) */
+    int any = sp_streq(rn, "===") && at == TY_POLY;
+    if ((big || boxed) && (num || any)) {
+      int tl = ++g_tmp, th = ++g_tmp, tx = ++g_tmp;
+      int boxed_ans = comp_ntype(c, id) != TY_BOOL;
+      buf_printf(b, "({ sp_RbVal _t%d = ", tl);
+      if (lo >= 0) emit_boxed(c, lo, b); else buf_puts(b, "sp_box_nil()");
+      buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); sp_RbVal _t%d = ", tl, th);
+      if (hi >= 0) emit_boxed(c, hi, b); else buf_puts(b, "sp_box_nil()");
+      buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); sp_range_poly_check(_t%d, _t%d); sp_RbVal _t%d = ", th, tl, th, tx);
+      emit_boxed(c, rv[0], b);
+      buf_printf(b, "; %ssp_range_poly_cover(_t%d, _t%d, %d, _t%d)%s; })", boxed_ans ? "sp_box_bool(" : "", tl, th,
+                 nt_range_excl(nt, rr) ? 1 : 0, tx, boxed_ans ? ")" : "");
+      return 1;
+    }
+  }
+  return 0;
+}
+
 int emit_arg_type_guards(Compiler *c, int id, Buf *b) {
   const NodeTable *nt = c->nt;
   (void)nt;
@@ -21669,43 +21710,6 @@ int emit_arg_type_guards(Compiler *c, int id, Buf *b) {
                          (st == TY_STRING || st == TY_STRBUF) ? "Integer" : "String";
       int conv = srr.range == TY_STRING;
       if (emit_range_step_bad_stride(c, id, sr, sv2[0], into, conv, b)) return 1;
-    }
-  }
-  /* (compared in place, not built: sp_Range has sp_int bounds and a Bignum end has nowhere to live) */
-  {
-    int rr = nt_paren_single(nt, nt_ref(nt, id, "receiver"));
-    const char *rn = nt_str(nt, id, "name");
-    int ra = nt_ref(nt, id, "arguments");
-    int rc = 0; const int *rv = ra >= 0 ? nt_arr(nt, ra, "arguments", &rc) : NULL;
-    if (rr >= 0 && nt_kind(nt, rr) == NK_RangeNode && rn && is_range_membership(rn) && rc == 1 && rv &&
-        rv[0] >= 0 && !user_defines_or_reads(c, rn)) {
-      int lo = nt_ref(nt, rr, "left"), hi = nt_ref(nt, rr, "right");
-      /* (a boxed end too, asked about a number: it can hold a Bignum the sp_Range would cut to its low bits) */
-      int big = 0, boxed = 0;
-      for (int e = 0; e < 2; e++) {
-        int end = e ? hi : lo;
-        if (end < 0) continue;
-        Repr er = repr_of(c, end);
-        if (er.big) big = 1;
-        else if (er.as_ty == TY_POLY) boxed = 1;
-      }
-      TyKind at = comp_ntype(c, rv[0]);
-      int num = at == TY_INT || at == TY_FLOAT || repr_of(c, rv[0]).big;
-      /* (=== alone for any boxed value: include? walks a String Range, and cover? of a Range is containment) */
-      int any = sp_streq(rn, "===") && at == TY_POLY;
-      if ((big || boxed) && (num || any)) {
-        int tl = ++g_tmp, th = ++g_tmp, tx = ++g_tmp;
-        int boxed_ans = comp_ntype(c, id) != TY_BOOL;
-        buf_printf(b, "({ sp_RbVal _t%d = ", tl);
-        if (lo >= 0) emit_boxed(c, lo, b); else buf_puts(b, "sp_box_nil()");
-        buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); sp_RbVal _t%d = ", tl, th);
-        if (hi >= 0) emit_boxed(c, hi, b); else buf_puts(b, "sp_box_nil()");
-        buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); sp_range_poly_check(_t%d, _t%d); sp_RbVal _t%d = ", th, tl, th, tx);
-        emit_boxed(c, rv[0], b);
-        buf_printf(b, "; %ssp_range_poly_cover(_t%d, _t%d, %d, _t%d)%s; })", boxed_ans ? "sp_box_bool(" : "", tl, th,
-                   nt_range_excl(nt, rr) ? 1 : 0, tx, boxed_ans ? ")" : "");
-        return 1;
-      }
     }
   }
   /* An integer Range method handed a literal of the wrong kind: the pointer
@@ -29621,6 +29625,7 @@ void emit_call(Compiler *c, int id, Buf *b) {
     return;
   }
   if (emit_autoload_register(c, id, b)) return;
+  if (emit_or_take_back(c, id, b, emit_range_literal_cover)) return;
   if (emit_call_on_missing_builtin_path(c, id, b)) return;
   if (emit_const_class_call_wrap(c, id, b, emit_call)) return;
   if (emit_missing_in_operand(c, id, b)) return;

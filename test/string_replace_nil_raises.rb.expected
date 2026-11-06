@@ -1,0 +1,10 @@
+replace(byteslice nil): TypeError: no implicit conversion of nil into String
+replace(nil): TypeError: no implicit conversion of nil into String
+replace(nil local): TypeError: no implicit conversion of nil into String
+handle replace(nil): TypeError: no implicit conversion of nil into String
+replace(1): TypeError: no implicit conversion of Integer into String
+plain replace(byteslice nil): TypeError: no implicit conversion of nil into String
+value form: ""
+frozen and nil: FrozenError: can't modify frozen String: "frozen"
+frozen handle and nil: FrozenError: can't modify frozen String: "f"
+expr form: TypeError: no implicit conversion of nil into String

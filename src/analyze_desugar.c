@@ -1645,17 +1645,6 @@ static int erm_args_modules(const NodeTable *nt, const int *av, int first, int a
   }
   return 1;
 }
-/* ...each a module the program declares, by a constant's name, and no
-   core module's (a prelude reopens Enumerable) */
-static int erm_args_program_modules(const NodeTable *nt, const int *av, int first, int an) {
-  if (!av || an - first < 1) return 0;
-  for (int i = first; i < an; i++) {
-    NodeKind k = nt_kind(nt, av[i]);
-    const char *mn = k == NK_ConstantReadNode || k == NK_ConstantPathNode ? nt_str(nt, av[i], "name") : NULL;
-    if (!mn || is_builtin_module_name(mn) || erm_declared_as(nt, mn) != 2) return 0;
-  }
-  return 1;
-}
 static int erm_keep;   /* (the statement stays, after the reopening erm_rewrite_stmt made) */
 static int erm_rewrite_stmt(Compiler *c, int st, const char *self_leaf, const int *parent, int encl) {
   NodeTable *nt = (NodeTable *)c->nt;
@@ -1688,8 +1677,8 @@ static int erm_rewrite_stmt(Compiler *c, int st, const char *self_leaf, const in
      mixin of K's (mixin_by_record), where it runs; and `K.extend(M)` of
      modules of the program (desugar_extend_enumerable reads `extend
      Enumerable` in K's body) */
-  if (decl && !attr && sclass < 0 && (!sp_streq(nm, "extend") || erm_args_program_modules(nt, av, first, an)) &&
-      !is_builtin_reopen_name(leaf) && !is_builtin_module_name(leaf) && erm_args_modules(nt, av, first, an))
+  if (decl && !attr && sclass < 0 && !is_builtin_reopen_name(leaf) && !is_builtin_module_name(leaf) &&
+      erm_args_modules(nt, av, first, an))
     return st;
   /* Fiber and Thread take a mixin in a reopening (fiber-annotation's
      `Fiber.prepend(Fiber::Annotation)`); their attr_* have a pass of
@@ -12240,6 +12229,40 @@ static void ee_mark_module(const NodeTable *nt, const int *parent, EeClass *v, i
     }
   }
 }
+/* the modules an extend-form statement st of class i (its node ct) puts
+   on the singleton: each ahead of Enumerable (`ahead`), or only those
+   before Enumerable in its own list */
+static void ee_mark_extend_args(const NodeTable *nt, const int *parent, EeClass *v, int i, int ct, int st, int ahead) {
+  int an = 0; const int *av = nt_arr(nt, nt_ref(nt, st, "arguments"), "arguments", &an);
+  char ctx[512];
+  ee_own_key(nt, ct, ctx, sizeof ctx);
+  int en = -1;
+  for (int j = 0; j < an && en < 0; j++) if (ee_is_enumerable_ref(nt, av[j])) en = j;
+  for (int j = 0; j < an; j++) {
+    char mk[512];
+    if (j == en || (!ahead && (en < 0 || j > en)) || !ee_ref_key(nt, ctx, av[j], mk, sizeof mk)) continue;
+    ee_mark_module(nt, parent, v, i, mk, 0);
+  }
+}
+/* `K.extend(M, ...)` as a statement anywhere, K a constant naming a class
+   or module in v (resolved where the statement stands): the index of that
+   class in v, or -1. The load record takes the statement as K's extend
+   (mixin_by_record); the twin this pass makes reads it here. */
+static int ee_explicit_extend(const NodeTable *nt, const int *parent, const EeClass *v, int nv, int st) {
+  if (nt_kind(nt, st) != NK_CallNode || nt_ref(nt, st, "block") >= 0 || nt_safe_nav(nt, st)) return -1;
+  const char *nm = nt_str(nt, st, "name");
+  int r = nt_ref(nt, st, "receiver");
+  if (!nm || !sp_streq(nm, "extend") || r < 0 || (nt_kind(nt, r) != NK_ConstantReadNode && nt_kind(nt, r) != NK_ConstantPathNode)) return -1;
+  char ctx[512], key[512];
+  ee_ctx_of(nt, parent, st, ctx, sizeof ctx);
+  if (!ee_ref_key(nt, ctx, r, key, sizeof key)) return -1;
+  return ee_find(v, nv, key);
+}
+static int ee_args_enumerable(const NodeTable *nt, int st) {
+  int an = 0; const int *av = nt_arr(nt, nt_ref(nt, st, "arguments"), "arguments", &an);
+  for (int j = 0; j < an; j++) if (ee_is_enumerable_ref(nt, av[j])) return 1;
+  return 0;
+}
 static void ee_mark_stmt(const NodeTable *nt, const int *parent, EeClass *v, int i, int ct, int st, int sclass,
                          int ahead) {
   NodeKind k = nt_kind(nt, st);
@@ -12254,18 +12277,7 @@ static void ee_mark_stmt(const NodeTable *nt, const int *parent, EeClass *v, int
   if (!ef && r >= 0 && nt_kind(nt, r) != NK_SelfNode) return;
   const char *nm = nt_str(nt, st, "name");
   int an = 0; const int *av = nt_arr(nt, nt_ref(nt, st, "arguments"), "arguments", &an);
-  if (ef) {
-    char ctx[512];
-    ee_own_key(nt, ct, ctx, sizeof ctx);
-    int en = -1;
-    for (int j = 0; j < an && en < 0; j++) if (ee_is_enumerable_ref(nt, av[j])) en = j;
-    for (int j = 0; j < an; j++) {
-      char mk[512];
-      if (j == en || (!ahead && (en < 0 || j > en)) || !ee_ref_key(nt, ctx, av[j], mk, sizeof mk)) continue;
-      ee_mark_module(nt, parent, v, i, mk, 0);
-    }
-    return;
-  }
+  if (ef) { ee_mark_extend_args(nt, parent, v, i, ct, st, ahead); return; }
   if (nm && (sp_streq(nm, "extend") || sp_streq(nm, "include") || sp_streq(nm, "prepend"))) return;
   if (!sclass && ee_instance_decl(nm)) return;
   for (int j = 0; j < an; j++) {
@@ -12316,7 +12328,12 @@ static int ee_body_stmts(NodeTable *nt, int cls) {
 int desugar_extend_enumerable(Compiler *c, HostStep *h) {
   NodeTable *nt = (NodeTable *)c->nt;
   int any = 0;
-  NT_FOREACH_KIND(nt, NK_CallNode, id) if (ee_extends_enumerable(nt, id, 0)) { any = 1; break; }
+  NT_FOREACH_KIND(nt, NK_CallNode, id) {
+    int r = nt_ref(nt, id, "receiver");
+    int xr = r >= 0 && (nt_kind(nt, r) == NK_ConstantReadNode || nt_kind(nt, r) == NK_ConstantPathNode) &&
+             nt_str(nt, id, "name") && sp_streq(nt_str(nt, id, "name"), "extend") && nt_ref(nt, id, "block") < 0;
+    if (ee_extends_enumerable(nt, id, 0) || (xr && ee_args_enumerable(nt, id))) { any = 1; break; }
+  }
   if (!any) NT_FOREACH_KIND(nt, NK_SingletonClassNode, sc) {
     if (nt_kind(nt, nt_ref(nt, sc, "expression")) != NK_SelfNode) continue;
     int sn = 0; const int *ss = nt_arr(nt, nt_ref(nt, sc, "body"), "body", &sn);
@@ -12350,6 +12367,11 @@ int desugar_extend_enumerable(Compiler *c, HostStep *h) {
       for (int q = 0; q < sn; q++) if (ee_extends_enumerable(nt, ss[q], 1)) v[i].extends = v[i].in_set = 1;
     }
   }
+  /* `K.extend(Enumerable)` as a statement outside K's body */
+  NT_FOREACH_KIND(nt, NK_CallNode, id) {
+    int i = ee_explicit_extend(nt, parent, v, nv, id);
+    if (i >= 0 && ee_args_enumerable(nt, id)) v[i].extends = v[i].in_set = 1;
+  }
   for (int grew = 1; grew;) {
     grew = 0;
     for (int i = 0; i < nv; i++) {
@@ -12367,7 +12389,16 @@ int desugar_extend_enumerable(Compiler *c, HostStep *h) {
     if (i >= 0) v[i].shadow[ni] = 1;
   }
   for (int id = 0; id < n0; id++) {
-    if (!class_def_opens_cref(nt, id)) continue;
+    if (!class_def_opens_cref(nt, id)) {
+      /* (an explicit `K.extend(...)` stands in node order among K's
+         bodies: the modules it lists, Enumerable among them from here on) */
+      int xi = nt_kind(nt, id) == NK_CallNode ? ee_explicit_extend(nt, parent, v, nv, id) : -1;
+      if (xi >= 0 && v[xi].in_set) {
+        ee_mark_extend_args(nt, parent, v, xi, v[xi].node, id, !v[xi].extends || v[xi].en_seen);
+        if (ee_args_enumerable(nt, id)) v[xi].en_seen = 1;
+      }
+      continue;
+    }
     char key[512];
     ee_own_key(nt, id, key, sizeof key);
     int i = ee_find(v, nv, key);

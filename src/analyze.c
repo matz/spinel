@@ -15302,25 +15302,9 @@ static int desugar_multi_yield_map_param(Compiler *c) {
     int cid = ty_object_class(rt);
     if (cid < 0 || cid >= c->nclasses ||
         (c->classes[cid].enum_yield_arity <= 1 && !c->classes[cid].enum_yield_packed)) continue;
-    /* a map the program defines takes what it yields, not what #each does --
-       unless a class below the one defining it includes Enumerable, whose map
-       comes first in the ancestors */
-    int dcls = -1;
-    if (call_target(c, id, cid, nm, 0, &dcls) >= 0) {
-      int enum_first = 0;
-      for (int cur = cid; cur >= 0 && cur < c->nclasses && cur != dcls; cur = c->classes[cur].parent) {
-        if (an_class_includes_enumerable(c, cur)) { enum_first = 1; break; }
-        for (int j = 0; j < c->classes[cur].nincluded_mods && !enum_first; j++) {
-          unsigned char *seen = calloc((size_t)c->nclasses + 1, 1);
-          if (!seen) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-          enum_first = an_enum_reaches_v(c, c->classes[cur].included_mods[j], seen);
-          free(seen);
-        }
-        if (enum_first) break;
-        if (c->classes[cur].parent == cur) break;
-      }
-      if (!enum_first) continue;
-    }
+    /* a map the program defines takes what it yields, not what #each does,
+       unless Enumerable's comes first in the receiver's ancestors */
+    if (call_target(c, id, cid, nm, 0, NULL) >= 0 && !comp_enum_answers_first(c, cid, nm)) continue;
     int packed = c->classes[cid].enum_yield_packed;
     if (packed && comp_method_in_chain(c, cid, "__enum_to_a_raw", NULL) < 0) continue;
     int bp = nt_ref(nt, blk, "parameters");

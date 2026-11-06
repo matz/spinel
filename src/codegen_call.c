@@ -6538,12 +6538,13 @@ int obj_cmp_by_identity(TyKind t) {
 
 /* Can a `next v` of this block body (not one of a nested block, lambda,
    def or loop, which `next` leaves instead) hand the slot a nil: a bare
-   `next`, `next nil`, or a value that can be nil. */
-int block_next_may_be_nil(Compiler *c, int id, int depth) {
+   `next`, `next nil`, or a value that can be nil. A `break` where jk asks
+   for one: it leaves the call the block was given to, with its value. */
+static int block_jump_may_be_nil(Compiler *c, int id, int depth, NodeKind jk) {
   const NodeTable *nt = c->nt;
   if (id < 0 || depth > 200) return 0;
   NodeKind k = nt_kind(nt, id);
-  if (k == NK_NextNode) {
+  if (k == jk) {
     int a = nt_ref(nt, id, "arguments"), an = 0;
     const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &an) : NULL;
     if (an == 0) return 1;
@@ -6553,18 +6554,20 @@ int block_next_may_be_nil(Compiler *c, int id, int depth) {
       k == NK_UntilNode || k == NK_LambdaNode || k == NK_ForNode) return 0;
   if (k == NK_CallNode && nt_ref(nt, id, "block") >= 0 && nt_kind(nt, nt_ref(nt, id, "block")) == NK_BlockNode) {
     /* a nested block's `next` is its own; its receiver and arguments are this body's */
-    return block_next_may_be_nil(c, nt_ref(nt, id, "receiver"), depth + 1) ||
-           block_next_may_be_nil(c, nt_ref(nt, id, "arguments"), depth + 1);
+    return block_jump_may_be_nil(c, nt_ref(nt, id, "receiver"), depth + 1, jk) ||
+           block_jump_may_be_nil(c, nt_ref(nt, id, "arguments"), depth + 1, jk);
   }
   int nr = nt_num_refs(nt, id);
-  for (int i = 0; i < nr; i++) if (block_next_may_be_nil(c, nt_ref_at(nt, id, i), depth + 1)) return 1;
+  for (int i = 0; i < nr; i++) if (block_jump_may_be_nil(c, nt_ref_at(nt, id, i), depth + 1, jk)) return 1;
   int na = nt_num_arrs(nt, id);
   for (int i = 0; i < na; i++) {
     int n = 0; const int *ids = nt_arr_at(nt, id, i, &n);
-    for (int j = 0; j < n; j++) if (block_next_may_be_nil(c, ids[j], depth + 1)) return 1;
+    for (int j = 0; j < n; j++) if (block_jump_may_be_nil(c, ids[j], depth + 1, jk)) return 1;
   }
   return 0;
 }
+int block_next_may_be_nil(Compiler *c, int id, int depth) { return block_jump_may_be_nil(c, id, depth, NK_NextNode); }
+int block_break_may_be_nil(Compiler *c, int id, int depth) { return block_jump_may_be_nil(c, id, depth, NK_BreakNode); }
 
 /* Does the program define `<=>` on Object itself? Every class that has none of
    its own then answers it. */

@@ -1065,6 +1065,12 @@ int emit_call_instance_eval_arms(Compiler *c, int id, Buf *b, const NodeTable *n
         /* In statement position the value is discarded, so emit the whole body
            as statements -- the last node may not be expressible (e.g. puts). */
         int last_as_stmt = g_ie_discard_value && !scalar_res;
+        /* a `next` or `break` tail is a statement too: its own lowering stores
+           the slot (g_ie_next_var / g_loop_break_var) and leaves the wrapper
+           (not a passed-on block's `break`, which leaves the method it was
+           given to: the method's value does not hold it) */
+        NodeKind ie_tk = ie_bn > 0 ? nt_kind(nt, ie_bb[ie_bn - 1]) : NK_NilNode;
+        if (ie_tk == NK_NextNode || (ie_tk == NK_BreakNode && !nt_call_has_block_arg(nt, id))) last_as_stmt = 1;
         int upto = last_as_stmt ? ie_bn : ie_bn - 1;
         int saved_discard = g_ie_discard_value; g_ie_discard_value = 0;
         /* A break/next that binds to the splice (not a nested loop) needs a C

@@ -268,7 +268,8 @@ static int node_is_oint_asked(Compiler *c, int node) {
            : comp_trampoline_kind(c, ty_object_class(iert), nm, NULL) != 0)) {
       int bb = nt_ref(nt, ieb, "body");
       int bn = 0; const int *bs = bb >= 0 ? nt_arr(nt, bb, "body", &bn) : NULL;
-      return (bn > 0 && node_is_oint(c, bs[bn - 1])) || (bb >= 0 && block_next_may_be_nil(c, bb, 0));
+      return (bn > 0 && node_is_oint(c, bs[bn - 1])) ||
+             (bb >= 0 && (block_next_may_be_nil(c, bb, 0) || block_break_may_be_nil(c, bb, 0)));
     }
     /* Array's, Hash's or String's own method on an instance of a subclass
        of one (comp_arysub_call, a `super` into it too): the rows below for

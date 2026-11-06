@@ -11,3 +11,9 @@ p mf(false).w, mf(true).w, ms(false).w, ms(true).w
 p mk(false).z, mk(true).z
 x = mk(ARGV.size > 3)
 p((x.w + 1 rescue $!.class))
+r = []
+r << mk(false).w << mk(true).w(5)
+p r
+q = []
+q << 5.w << 2.5.w
+p q

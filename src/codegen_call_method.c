@@ -2935,12 +2935,22 @@ int emit_send_blind(Compiler *c, int id, Buf *b) {
         for (int k = 0; k < arms->n; k++)
           if (arms->arm[k].key >= 0 && arms->arm[k].key < c->nclasses)
             buf_printf(b, " || _t%d.cls_id == %d", tv, arms->arm[k].key);
-        buf_puts(b, "))) ? (");
+        buf_puts(b, "))");
+        /* a builtin value whose class below Object answers the name
+           (Integer#to_s) takes the dispatch too: its method comes before
+           the top-level def */
+        { Buf lb; memset(&lb, 0, sizeof lb);
+          if (builtin_classes_below_object_list(nt_str(c->nt, id, "name"), &lb))
+            buf_printf(b, " || sp_str_in_list(sp_poly_class_name(_t%d), %s)", tv, lb.p);
+          free(lb.p); }
+        /* (a builtin's emitter may write its answer unboxed, sp_poly_to_s's
+           String: boxed by its C type, as the other arm is) */
+        buf_puts(b, ") ? (SP_BI_BOX(");
         int sv_split = view_push_arm(g_pd_skip, g_prbd_skip, g_poly_builtin_arm);
         g_arm.send_split = id;
         emit_expr(c, id, b);
         view_pop(c, sv_split);
-        buf_puts(b, ") : (");
+        buf_puts(b, ")) : (");
         Buf mb; memset(&mb, 0, sizeof mb);
         emit_method_call(c, id, &mb);
         emit_boxed_text(c, c->scopes[smi].ret, mb.p ? mb.p : "0", b);

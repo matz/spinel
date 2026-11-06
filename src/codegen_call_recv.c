@@ -1369,6 +1369,14 @@ static void emit_repl_arg(Compiler *c, int arg, Buf *b) {
 static int str_arms_convert(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc, const int *argv, TyKind a0, const char *r);
 void emit_lines_sep(Compiler *c, int a, Buf *b) {
   if (comp_ntype(c, a) == TY_STRING) { emit_expr(c, a, b); return; }
+  /* the arguments handed on in a splat (`s.each_line(*args, &block)`): its
+     first element is the separator, and an empty one leaves the default */
+  if (nt_kind(c->nt, a) == NK_SplatNode) {
+    int ts = ++g_tmp;
+    buf_printf(b, "({ sp_RbVal _t%d = ", ts); emit_boxed(c, a, b);
+    buf_printf(b, "; sp_poly_length(_t%d) > 0 ? sp_poly_arg_str_or_null(sp_poly_arr_get(_t%d, 0)) : \"\\n\"; })", ts, ts);
+    return;
+  }
   buf_puts(b, "sp_poly_arg_str_or_null("); emit_boxed(c, a, b); buf_puts(b, ")");
 }
 static void emit_blk_value_as(Compiler *c, int blk, TyKind vt, Buf *b);

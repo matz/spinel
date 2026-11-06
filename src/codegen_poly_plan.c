@@ -2505,6 +2505,29 @@ int emit_poly_prearms0_blk(Compiler *c, int id, const char *name, const PolySpec
       buf_puts(b, "; }\nelse ");
     }
   }
+  /* each_line with a block on a boxed String, in a dispatch that exists
+     because a user class also defines it (a buffer that hands the block
+     on): the shared proc is driven over the lines, each a String of its
+     own, and the String answers itself */
+  if (sp_streq(name, "each_line") && argc == 0 && nt_ref(nt, id, "block") >= 0) {
+    if (blk_tmp0 < 0) {
+      int cblk5 = resolve_forwarded_block(c, nt_ref(nt, id, "block"));
+      if (cblk5 >= 0) blk_tmp0 = hoist_block_proc(c, cblk5);
+    }
+    if (blk_tmp0 >= 0) {
+      if (g_plan_check) pa_observe(PA_BUILTIN, PA_KEY_BUILTIN + PB_ENUM_PROC, -1, TY_UNKNOWN, PC_SAME);
+      int ta = ++g_tmp, ti = ++g_tmp;
+      char lcall[400];
+      snprintf(lcall, sizeof lcall, "({ sp_StrArray *_t%d = sp_str_lines(sp_poly_recv_s(_t%d, \"each_line\")); SP_GC_ROOT(_t%d);"
+                                    " for (sp_int _t%d = 0; _t%d < sp_StrArray_length(_t%d); _t%d++)"
+                                    " sp_penum_call1(_t%d, SP_SEBOX(sp_StrArray_get_e(_t%d, _t%d))); _t%d; })",
+               ta, tv, ta, ti, ti, ta, ti, blk_tmp0, ta, ti, tv);
+      buf_printf(b, "if (_t%d.tag == SP_TAG_STR || sp_poly_is_strbuf(_t%d)) { _t%d = ", tv, tv, tr);
+      if (ret == TY_POLY) buf_puts(b, lcall);
+      else emit_unbox_text(c, ret, lcall, b);
+      buf_puts(b, "; }\nelse ");
+    }
+  }
   /* a boxed Proc/Curry/Method in a slot a user `call`/`[]` shadows (#4395) */
   if (emit_poly_callable_prearm(c, name, 0, NULL, NULL, NULL, tv, tr, ret, 0,
                                 callable_prearm_blk(c, id, name, blk_tmp0), b) && g_plan_check)

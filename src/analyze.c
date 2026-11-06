@@ -2415,7 +2415,7 @@ else {
              escapes like any other, and without cells the block's writes to
              enclosing locals went to a copy -- `a.map { |x| n = n + 1 }` on a
              real Array ran the block and left n at 0 (#3459). So do the
-             pre-arms of each_index, times and synchronize. */
+             pre-arms of each_index, times, each_line and synchronize. */
           { int bargs = nt_ref(nt, id, "arguments");
             int bn2 = 0;
             if (bargs >= 0) nt_arr(nt, bargs, "arguments", &bn2);

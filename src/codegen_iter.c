@@ -1128,6 +1128,12 @@ static int inline_target_plan(Compiler *c, int id, const char *name, int recv, i
     int top_ok = ecls >= 0 || g_class_body_id < 0 ||
                  (c->node_cbody[id] == g_class_body_id && !(encl && encl->name));
     if (ecls >= 0 && p->via == UC_INST && p->chain && p->owner_ci == ecls) {
+      /* a switch whose default is a top-level def or Object's method
+         (cplan_self_root_override): the def is the free function the
+         lookup names, Object's method no target of self's chain */
+      int rcls = c->scopes[p->mi].class_id;
+      if (rcls < 0) { t->mi = p->mi; return 1; }
+      if (rcls == comp_core_class(c, CORE_OBJECT) && rcls != ecls) return 0;
       t->mi = p->mi; t->implicit_self = 1;
       return 1;
     }
@@ -1175,6 +1181,10 @@ static int inline_target_plan(Compiler *c, int id, const char *name, int recv, i
   }
   if (ci < 0 && p->via == UC_INST && p->chain) {
     TyKind rt = comp_ntype(c, recv);
+    /* Object's method as the default of a switch on self's class
+       (cplan_self_root_override): no target of the receiver's chain */
+    int rcls = c->scopes[p->mi].class_id;
+    if (rcls == comp_core_class(c, CORE_OBJECT) && rcls != p->owner_ci) return 0;
     if (ty_is_object(rt) && p->owner_ci == ty_object_class(rt)) {
       t->mi = p->mi; t->recv_class = p->owner_ci;
       return 1;

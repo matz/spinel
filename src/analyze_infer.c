@@ -6586,6 +6586,10 @@ static int infer_receiverless_call(Compiler *c, int id, const NodeTable *nt, con
       if (mi < 0 && !self->is_cmethod) {
         int oc = comp_core_class(c, CORE_OBJECT);
         int omi = oc >= 0 && oc != self->class_id ? call_target(c, id, oc, name, 0, NULL) : -1;
+        if (omi >= 0 && cplan_self_root_override(c, id, self->class_id, omi)) {
+          *out = dispatch_ret_over(c, self->class_id, name, 0, omi, an_user_call(c, id, omi, UC_INST, self->class_id), id);
+          return 1;
+        }
         if (omi >= 0) { *out = c->scopes[omi].ret; return 1; }
       }
       /* Method defined only in descendants (not in base chain): unify the
@@ -9323,6 +9327,10 @@ static TyKind infer_call_inner(Compiler *c, int id) {
       /* A callee that yields carries a block parameter in its C signature,
          which the arm below is what establishes: answering here left the call
          site and the definition disagreeing about the signature. */
+      /* a top-level def a descendant of self's class overrides: the switch
+         on self's class answers any of their returns (cplan_self_root_override) */
+      if (!shadowed && bvia == UC_TOP && bsc && biec < 0 && cplan_self_root_override(c, id, bcls, bmi))
+        return dispatch_ret_over(c, bcls, name, 0, bmi, an_user_call(c, id, bmi, UC_INST, bcls), id);
       if (!shadowed && !(bmi < c->nscopes && c->scopes[bmi].yields))
         return an_user_call(c, id, bmi, bvia, bvia == UC_TOP ? -1 : c->scopes[bmi].class_id);
     }

@@ -4970,6 +4970,9 @@ int emit_call_class_method_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
                       ? call_target(c, id, ecls, name, CT_CMETHOD, NULL) >= 0
                       : (call_target(c, id, ecls, name, 0, NULL) >= 0 ||
                          comp_is_reader(&c->classes[ecls], name)));
+    /* a descendant of self's class overrides the def (cplan_self_root_override) */
+    if (!shadowed && g_ie_class_id < 0 && (g_emitting_class_id < 0 || g_emitting_class_id == ecls) &&
+        cplan_root_switch(c, id, ecls)) shadowed = 1;
     if (!shadowed) { emit_method_call(c, id, b); return 1; }
   }
   /* bare call to a sibling class method (inside def self.foo, calling bar()) */

@@ -32,6 +32,52 @@ int cplan_dispatch_form(Compiler *c, int call, int cid, const char *name, int ha
          ? CP_PER_ARM : CP_SWITCH;
 }
 
+int cplan_self_root_override(Compiler *c, int id, int scls, int root_mi) {
+  const NodeTable *nt = c->nt;
+  if (id < 0 || scls < 0 || scls >= c->nclasses || root_mi < 0 || root_mi >= c->nscopes) return 0;
+  int recv = nt_kind(nt, id) == NK_CallNode ? nt_ref(nt, id, "receiver") : -1;
+  if (nt_kind(nt, id) != NK_CallNode || (recv >= 0 && nt_kind(nt, recv) != NK_SelfNode) || nt_ref(nt, id, "block") >= 0) return 0;
+  const char *name = nt_str(nt, id, "name");
+  if (!name || nt_int(nt, id, "builtin_only", 0) || nt_int(nt, id, "kernel_recv", 0)) return 0;
+  Scope *self = comp_scope_of(c, id);
+  if (!self || self->is_cmethod || self->class_id != scls || ie_class_of(c, id) >= 0) return 0;
+  ClassInfo *ci = &c->classes[scls];
+  if (comp_class_is_module(c, ci) || ci->is_native_class) return 0;
+  /* (a call in a block or a lambda keeps the old path: the body may be a
+     function of its own, where no self is at hand) */
+  const int *par = comp_parent_map(c);
+  for (int a = par[id]; a >= 0; a = par[a]) {
+    NodeKind k = nt_kind(nt, a);
+    if (k == NK_DefNode) break;
+    if (k == NK_BlockNode || k == NK_LambdaNode) return 0;
+  }
+  Scope *rm = &c->scopes[root_mi];
+  int oci = comp_core_class(c, CORE_OBJECT);
+  if (rm->yields || rm->is_cmethod || (rm->class_id >= 0 && rm->class_id != oci) || scls == oci) return 0;
+  /* the chain of scls itself answers first */
+  int own = call_target(c, id, scls, name, 0, NULL);
+  if ((own >= 0 && own != root_mi) || comp_reader_in_chain(c, scls, name, NULL)) return 0;
+  int nd = 0, found = 0;
+  const int *ds = comp_descendants(c, scls, &nd);
+  for (int i = 0; i < nd; i++) {
+    int k = ds[i];
+    if (k == scls) continue;
+    if (comp_reader_in_chain(c, k, name, NULL)) return 0;
+    int kmi = call_target(c, id, k, name, 0, NULL);
+    if (kmi < 0 || kmi == root_mi) continue;
+    if (c->scopes[kmi].yields) return 0;
+    found = 1;
+  }
+  return found;
+}
+
+int cplan_root_switch(Compiler *c, int id, int scls) {
+  const CallPlan *p = cplan_user(c, id);
+  if (p->mi < 0 || p->via != UC_INST || !p->chain || p->owner_ci != scls || scls < 0) return 0;
+  int rc = c->scopes[p->mi].class_id, oci = comp_core_class(c, CORE_OBJECT);
+  return rc < 0 || (rc == oci && scls != oci);
+}
+
 static void cplan_set(CallPlan *p, int mi, int owner, int via, int dispatch) {
   p->method_node = -1;
   p->method_call = 0;
@@ -330,8 +376,16 @@ static void cplan_resolve_call(Compiler *c, int id, CallPlan *p) {
     int mi = comp_self_call_mi(c, id, name);
     if (mi >= 0) {
       Scope *m = &c->scopes[mi];
-      if (m->class_id < 0) { cplan_set(p, mi, -1, UC_TOP, CP_DIRECT); return; }
       Scope *self = comp_scope_of(c, id);
+      /* a top-level def a descendant of self's class overrides: a switch
+         on self's class, the def its default */
+      if (self && (m->class_id < 0 || m->class_id == comp_core_class(c, CORE_OBJECT)) &&
+          cplan_self_root_override(c, id, self->class_id, mi)) {
+        cplan_set(p, mi, self->class_id, UC_INST, CP_PER_ARM);
+        p->chain = 1;
+        return;
+      }
+      if (m->class_id < 0) { cplan_set(p, mi, -1, UC_TOP, CP_DIRECT); return; }
       int scls = self ? self->class_id : m->class_id;
       int form = m->is_cmethod ? (scls >= 0 && cplan_overridden(c, scls, name, 1) ? CP_SWITCH : CP_DIRECT)
                : scls >= 0 ? cplan_dispatch_form(c, id, scls, name, 1) : CP_DIRECT;
@@ -345,6 +399,14 @@ static void cplan_resolve_call(Compiler *c, int id, CallPlan *p) {
     /* outside a class method, self reaches a program's own Object method */
     Scope *self = comp_scope_of(c, id);
     if (!(self && self->is_cmethod)) cplan_object_reopen(c, id, name, p);
+    /* ...unless a descendant of self's class overrides it: a switch on
+       self's class, Object's method its default */
+    if (p->mi >= 0 && p->via == UC_REOPEN && self && cplan_self_root_override(c, id, self->class_id, p->mi)) {
+      int omi = p->mi;
+      cplan_set(p, omi, self->class_id, UC_INST, CP_PER_ARM);
+      p->chain = 1;
+      return;
+    }
     if (p->mi < 0 && self && self->class_id >= 0)
       cplan_descendant_call(c, id, self->class_id, name, self->is_cmethod, p);
     return;
@@ -420,7 +482,18 @@ static void cplan_resolve_call(Compiler *c, int id, CallPlan *p) {
       }
     }
     if (class_is_exc_subclass(c, cid)) cplan_exc_reopen(c, id, name, p);
-    if (p->mi < 0) cplan_object_reopen(c, id, name, p);
+    if (p->mi < 0) {
+      cplan_object_reopen(c, id, name, p);
+      /* `self.m` (or a bare m the analysis gave self) reaching Object's
+         method that a descendant of self's class overrides: a switch on
+         self's class, Object's method its default */
+      if (p->mi >= 0 && rk == NK_SelfNode && cplan_self_root_override(c, id, cid, p->mi)) {
+        int omi = p->mi;
+        cplan_set(p, omi, cid, UC_INST, CP_PER_ARM);
+        p->chain = 1;
+        return;
+      }
+    }
     if (p->mi < 0 && !comp_reader_in_chain(c, cid, name, NULL) && !c->classes[cid].is_native_class)
       cplan_descendant_call(c, id, cid, name, 0, p);
     return;

@@ -47,6 +47,19 @@ class EnumerableSub < Base
   end
 end
 
+module Listing
+  include Enumerable
+end
+
+# Enumerable through an included module also comes before a parent's map.
+class ListingSub < Base
+  include Listing
+
+  def each
+    yield 3, :three
+  end
+end
+
 # A class's own map comes before the Enumerable it includes.
 class OwnOverEnumerable
   include Enumerable
@@ -66,3 +79,4 @@ p SubPair.new(5, 6).map { |x| x + 1 }
 p Entries.new.map { |x| x }
 p EnumerableSub.new.map { |x| x }
 p OwnOverEnumerable.new.map { |x| x }
+p ListingSub.new.map { |x| x }

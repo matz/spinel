@@ -5495,9 +5495,17 @@ void elab_call_meet(Compiler *c, int id, int cls, const char *name, int sg, int 
   memset(m, 0, sizeof *m);
   m->at = p.region >= 0 && !after && !(how & ELAB_MEET_COPY) ? elab_method_at(c, cls, name, sg, p, &m->d) : ELAB_UNKNOWN;
   m->win = ELAB_NO;
-  if (m->at != ELAB_UNKNOWN || (m->win = elab_call_window(c, id, &m->w)) != ELAB_YES) return;
-  if (after) elab_window_open(c, &m->w);
-  m->n = lr_span(c, cls, name, sg, &m->w, out, cap, NULL);
+  if (m->at != ELAB_UNKNOWN) return;
+  m->n = elab_call_span(c, id, cls, name, sg, after, &m->w, out, cap);
+  m->win = m->n == ELAB_SPAN_NO_WINDOW ? ELAB_UNKNOWN : ELAB_YES;
+  if (m->win != ELAB_YES) m->n = 0;
+}
+int elab_call_span(Compiler *c, int id, int cls, const char *name, int sg, int open, ElabWindow *w, const LrDef **out, int cap) {
+  ElabWindow own;
+  if (!w) w = &own;
+  if (elab_call_window(c, id, w) != ELAB_YES) return ELAB_SPAN_NO_WINDOW;
+  if (open) elab_window_open(c, w);
+  return lr_span(c, cls, name, sg, w, out, cap, NULL);
 }
 
 /* ---- the readers of a version (elab_version_met) ----

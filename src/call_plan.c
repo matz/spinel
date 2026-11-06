@@ -1085,19 +1085,16 @@ static int ct_after_point(Compiler *c, int id) {
 }
 /* The method call id meets as cls's `name` (singleton when sg) wherever
    it runs: the one version of the name on cls's chain over the statements
-   id may run in (elab_call_window, elab_method_span), a def that ran there
-   for sure, as cls's copy of it when a mixin brought it (ct_def_version);
+   id may run in (elab_call_span), a def that ran there for sure, as
+   cls's copy of it when a mixin brought it (ct_def_version);
    -1 where the record cannot prove one -- no version yet at some point of
    the window (a def or the include that brings it comes later), more than
    one, or one that may not have run (under a condition, or after a
    statement that may raise in a begin body with rescue clauses:
    elab_point_partial) */
 static int ct_window_version(Compiler *c, int id, int cls, const char *name, int sg) {
-  ElabWindow w;
   const LrDef *ds[2];
-  if (elab_call_window(c, id, &w) != ELAB_YES) return -1;
-  if (ct_after_point(c, id)) elab_window_open(c, &w);
-  int n = elab_method_span(c, cls, name, sg, &w, ds, 2);
+  int n = elab_call_span(c, id, cls, name, sg, ct_after_point(c, id), NULL, ds, 2);
   if (n != 1 || !ds[0] || ds[0]->kind != LR_DEF || ds[0]->may || ds[0]->unplaced ||
       elab_point_partial(c, ds[0]->node)) return -1;
   int dc = -1;
@@ -1573,10 +1570,8 @@ static int user_new_at(Compiler *c, int id, int ci, int *unplaced) {
   /* (a call in a method or a block: the def in force over its window, or
      none over all of it) */
   int made = at == ELAB_YES || ct_window_version(c, id, ci, nm, 1) == t;
-  ElabWindow w;
   const LrDef *ds[2];
-  if (!made && !absent && elab_call_window(c, id, &w) == ELAB_YES)
-    absent = elab_method_span(c, ci, nm, 1, &w, ds, 2) == 1 && !ds[0];
+  if (!made && !absent) absent = elab_call_span(c, id, ci, nm, 1, 0, NULL, ds, 2) == 1 && !ds[0];
   if (framed) elab_plan_leave(c);
   if (unplaced) *unplaced = !made && !absent;
   return made ? t : -1;
@@ -2039,11 +2034,10 @@ static int cplan_capture_absent(Compiler *c, int id, int mi) {
 }
 /* Is ci's class method `name` defined wherever node at runs? */
 static int capture_live_at(Compiler *c, int at, int ci, const char *name) {
-  ElabWindow w;
   const LrDef *ds[VER_MAX_ARMS];
-  int framed = elab_plan_enter(c, at), n = 0;
+  int framed = elab_plan_enter(c, at), n;
   int live = elab_call_method(c, at, ci, name, 1) == ELAB_YES;
-  if (!live && elab_call_window(c, at, &w) == ELAB_YES && (n = elab_method_span(c, ci, name, 1, &w, ds, VER_MAX_ARMS)) >= 1) {
+  if (!live && (n = elab_call_span(c, at, ci, name, 1, 0, NULL, ds, VER_MAX_ARMS)) >= 1) {
     live = 1;
     for (int k = 0; k < n && k < VER_MAX_ARMS; k++) live &= ds[k] != NULL;
   }

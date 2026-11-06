@@ -1,0 +1,20 @@
+20
+50
+"top1"
+"top5"
+"top1"
+20
+"m3"
+"priv4"
+["top1", 20, 20]
+["obj", "obj", "<obj>"]
+[42, 42, "<42>"]
+[:sym, :sym, "<sym>"]
+top log
+loud log
+:done
+:done
+2
+40
+"err2"
+"top1"

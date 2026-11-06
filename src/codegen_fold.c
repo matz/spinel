@@ -12930,9 +12930,28 @@ static void emit_disp_arm_assign(Compiler *c, const Scope *s, const char *call, 
 
 /* The call of arm method kmi (of class kd) on selfptr, its argument
    setup into apre and the call itself into call. */
+/* The class of the dispatch whose default arm is being written when that
+   arm runs a top-level def or Object's method (cplan_self_root_override),
+   else -1: such a method takes no self, or self boxed. */
+static int g_root_arm_cid = -1;
+static void emit_obj_self_box(Compiler *c, int cid, const char *selfptr, Buf *b);
 static void emit_dispatch_arm_text(Compiler *c, int kd, int kmi, const char *selfptr,
                                    int argsNode, int blk_tmp, Buf *apre, Buf *call) {
   Scope *s = &c->scopes[kmi];
+  if (g_root_arm_cid >= 0) {
+    Buf *sv_pre = g_pre; int sv_ind = g_indent;
+    g_pre = apre; g_indent = 0;
+    buf_printf(call, "%s(", mc_method(c, s));
+    if (s->class_id >= 0) emit_obj_self_box(c, g_root_arm_cid, selfptr, call);
+    emit_args_filled(c, kmi, argsNode, s->class_id >= 0 ? ", " : "", call);
+    g_pre = sv_pre; g_indent = sv_ind;
+    if (arm_takes_blk(s)) {
+      if (blk_tmp >= 0) buf_printf(call, "%s_t%d", s->class_id >= 0 || s->nparams ? ", " : "", blk_tmp);
+      else buf_puts(call, s->class_id >= 0 || s->nparams ? ", NULL" : "NULL");
+    }
+    buf_puts(call, ")");
+    return;
+  }
   const char *cn = c->classes[kd].c_name;
   Buf *sv_pre = g_pre; int sv_ind = g_indent;
   const char *sv_arm_self = g_arm_self; const Scope *sv_arm_scope = g_arm_scope;
@@ -13147,7 +13166,15 @@ static void emit_dispatch_per_arm(Compiler *c, int cid, int miss_id, const char 
   free(at);
   buf_puts(b, " default: ");
   int dmi = mi >= 0 && dispatch_arm_scope(c, mi) >= 0 ? dispatch_arm_scope(c, mi) : mi;
-  if (dmi >= 0)
+  int oci = comp_core_class(c, CORE_OBJECT);
+  int root = dmi >= 0 && cid != oci && (c->scopes[dmi].class_id < 0 || c->scopes[dmi].class_id == oci);
+  if (root) {
+    nd_callee(c, g_nd_call_id, dmi, c->scopes[dmi].class_id, 1);
+    g_root_arm_cid = cid;
+    emit_dispatch_arm_call(c, defcls, dmi, selfptr, argsNode, blk_tmp, ret, disp_ret, rtmp, b);
+    g_root_arm_cid = -1;
+  }
+  else if (dmi >= 0)
     emit_dispatch_arm_call(c, defcls, dmi, selfptr, argsNode, blk_tmp, ret, disp_ret, rtmp, b);
   else
     emit_dispatch_miss_default(c, cid, miss_id, name, selfptr, argsNode, rtmp, ret, disp_ret, b);
@@ -13494,11 +13521,20 @@ static void emit_dispatch_in(Compiler *c, int cid, const char *name,
         fprintf(stderr, "plan-check: cplan-fallback: dispatch node %d %s\n", g_nd_call_id, name);
       mi = omi; defcls = odef;
     }
+    /* a default arm the chain of cid does not hold: the rule's own answer
+       (cplan_self_root_override) */
+    else if (omi < 0 && mi >= 0 && (c->scopes[mi].class_id < 0 || c->scopes[mi].class_id == comp_core_class(c, CORE_OBJECT)) &&
+             cplan_self_root_override(c, g_nd_call_id, cid, mi) && defcls == c->scopes[mi].class_id) {}
     else if (omi != mi || odef != defcls)
       fprintf(stderr, "plan-check: cplan-conflict: dispatch node %d %s: plan %d/%d, lookup %d/%d\n",
               g_nd_call_id, name, mi, defcls, omi, odef);
   }
   Scope *m = mi >= 0 ? &c->scopes[mi] : NULL;
+  /* the default arm's method is a top-level def or Object's, which the
+     chain of cid does not hold (cplan_self_root_override) */
+  int root_oci = comp_core_class(c, CORE_OBJECT);
+  int root_m = m && cid >= 0 && cid != root_oci && (m->class_id < 0 || m->class_id == root_oci) &&
+               !(defcls >= 0 && defcls != m->class_id);
   /* Only subclasses define a method that takes a block: it has no function, a
      switch arm reaches it through its proc-form clone, and inference does not
      type the call by the block. Refused; the parent defining it avoids this. */
@@ -13558,9 +13594,11 @@ static void emit_dispatch_in(Compiler *c, int cid, const char *name,
   int form = dpl ? dpl->dispatch : -1;
   if (!dpl || g_plan_check) {
     int impl_n = dispatch_impl_count(c, g_nd_call_id, cid, name);
-    int sw = impl_n > 1 || (!m && impl_n >= 1);
+    /* a top-level def or Object's method the call falls back to is no
+       implementation of cid's chain (cplan_self_root_override) */
+    int sw = impl_n > 1 || ((!m || root_m) && impl_n >= 1);
     int oform = !sw ? (m ? CP_DIRECT : CP_NONE)
-              : dispatch_arms_disagree(c, g_nd_call_id, cid, name) || (!m && dispatch_count_misfits(c, g_nd_call_id, cid, name))
+              : root_m || dispatch_arms_disagree(c, g_nd_call_id, cid, name) || (!m && dispatch_count_misfits(c, g_nd_call_id, cid, name))
               ? CP_PER_ARM : CP_SWITCH;
     if (!dpl) form = oform;
     else if (form != oform)
@@ -14089,8 +14127,15 @@ else {
   /* default arm uses the base-class (defcls) implementation */
   {
     Buf _dc; memset(&_dc, 0, sizeof _dc);
-    buf_printf(&_dc, "%s((sp_%s *)%s", mc_method(c, m), c->classes[defcls].c_name, selfptr);
-    for (int a = 0; a < np; a++) buf_printf(&_dc, ", _t%d", atmp[a]);
+    /* a top-level def takes no self; Object's method takes self boxed */
+    if (root_m && m->class_id < 0) buf_printf(&_dc, "%s(", mc_method(c, m));
+    else if (root_m) {
+      buf_printf(&_dc, "%s(", mc_method(c, m));
+      emit_boxed_text(c, ty_object(cid), selfptr, &_dc);
+    }
+    else buf_printf(&_dc, "%s((sp_%s *)%s", mc_method(c, m), c->classes[defcls].c_name, selfptr);
+    for (int a = 0; a < np; a++)
+      buf_printf(&_dc, (root_m && m->class_id < 0 && a == 0) ? "_t%d" : ", _t%d", atmp[a]);
     buf_puts(&_dc, ")");
     buf_puts(b, " default: { ");
     emit_disp_arm_assign(c, m, _dc.p, ret, disp_ret, rtmp, b);

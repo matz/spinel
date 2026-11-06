@@ -34548,6 +34548,10 @@ static void emit_call_body_ordinary(Compiler *c, int id, Buf *b) {
                   ((g_ie_class_id < 0 && esc0->is_cmethod) ? call_target(c, id, ecls0, bn0, CT_CMETHOD, NULL) >= 0
                                     : (call_target(c, id, ecls0, bn0, 0, NULL) >= 0 ||
                                        comp_is_reader(&c->classes[ecls0], bn0)));
+      /* a descendant of self's class overrides the def: the dispatch on
+         self's class below, the def its default (cplan_self_root_override) */
+      if (!shad0 && g_ie_class_id < 0 && (g_emitting_class_id < 0 || g_emitting_class_id == ecls0) &&
+          cplan_self_root_override(c, id, ecls0, bmi0)) shad0 = 1;
       if (!shad0) { emit_method_call(c, id, b); return; }
     }
   }

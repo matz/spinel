@@ -55,3 +55,19 @@ a = "x" if ARGV.size > 5
 r2 = 2..3
 r2 = 9 if ARGV.size > 5
 p [(a..MAXINT) === r2, (a..MAXINT) === 5]
+
+# A Complex compares when it is real and answers false when it is not.
+zs = [Complex(1, 1), Complex(1, 0), 3]
+zs.each { |z| p [(..MAXINT) === z, (0..MAXINT) === z] }
+
+# Ends that do not compare are CRuby's bad value for range, raised before
+# the value is evaluated.
+bad = "z"
+bad = 1 if ARGV.size > 5
+seen = []
+begin
+  p((0..bad) === (seen << :x; 5))
+rescue ArgumentError => e
+  p [e.message, seen]
+end
+p((nil..bad) === "c")

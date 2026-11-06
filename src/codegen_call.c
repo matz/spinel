@@ -21700,7 +21700,7 @@ int emit_arg_type_guards(Compiler *c, int id, Buf *b) {
         if (lo >= 0) emit_boxed(c, lo, b); else buf_puts(b, "sp_box_nil()");
         buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); sp_RbVal _t%d = ", tl, th);
         if (hi >= 0) emit_boxed(c, hi, b); else buf_puts(b, "sp_box_nil()");
-        buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); sp_RbVal _t%d = ", th, tx);
+        buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); sp_range_poly_check(_t%d, _t%d); sp_RbVal _t%d = ", th, tl, th, tx);
         emit_boxed(c, rv[0], b);
         buf_printf(b, "; %ssp_range_poly_cover(_t%d, _t%d, %d, _t%d)%s; })", boxed_ans ? "sp_box_bool(" : "", tl, th,
                    nt_range_excl(nt, rr) ? 1 : 0, tx, boxed_ans ? ")" : "");

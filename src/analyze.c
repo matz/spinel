@@ -12367,14 +12367,6 @@ static int pin_arg_position_hash_new(Compiler *c) {
   return changed;
 }
 
-static int name_is_math_fn(const char *nm) {
-  static const char *const fns[] = {
-    "sin", "cos", "tan", "asin", "acos", "atan", "atan2", "sinh", "cosh",
-    "tanh", "asinh", "acosh", "atanh", "exp", "log", "log2", "log10", "sqrt",
-    "cbrt", "hypot", "ldexp", "erf", "erfc", "gamma", "lgamma", "frexp",
-    "expm1", "log1p", NULL };
-  return str_in(nm, fns);
-}
 
 /* `include Math` exposes the module's functions as bare calls: rewrite
    `sqrt(x)` to `Math.sqrt(x)` so the existing Math-receiver machinery serves
@@ -12932,7 +12924,7 @@ int desugar_include_math(Compiler *c) {
     if (nt_kind(nt, id) != NK_CallNode) continue;
     if (nt_ref(nt, id, "receiver") >= 0) continue;
     const char *nm = nt_str(nt, id, "name");
-    if (!nm || !name_is_math_fn(nm)) continue;
+    if (!nm || !is_math_fn_name(nm)) continue;
     int anode = nt_ref(nt, id, "arguments");
     int an = 0;
     if (anode >= 0) nt_arr(nt, anode, "arguments", &an);

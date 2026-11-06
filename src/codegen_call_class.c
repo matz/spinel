@@ -3953,15 +3953,26 @@ static int emit_cvar_reflection(Compiler *c, int id, Buf *b, const NodeTable *nt
   return 0;
 }
 
-/* Whether an exception class (a program one or a reopened builtin one)
-   defines class method `name` itself, with no parameter. */
-static int exc_cls_name_definers(Compiler *c, int id, const char *name) {
+/* An exception class whose own class methods a pick by name may call: a
+   reopened builtin one, or a program one some reached code can hold (a
+   class no reached code names, and none descends from, has no class
+   methods compiled, and no exception of it is raised). */
+static int exc_cls_pick_class(Compiler *c, int k) {
+  if (!class_is_exc_subclass(c, k) && !class_is_exc_reopen(c, k)) return 0;
+  return class_is_exc_reopen(c, k) || is_builtin_reopen(c->classes[k].name) || class_value_possible(c, k);
+}
+/* How many such exception classes define class method `name` themselves,
+   with no parameter; with str_only, 0 unless each of them answers a String. */
+static int exc_cls_name_definers(Compiler *c, int id, const char *name, int str_only) {
+  int n = 0;
   for (int k = 0; k < c->nclasses; k++) {
-    if (!class_is_exc_subclass(c, k) && !class_is_exc_reopen(c, k)) continue;
     int dc = -1, kmi = call_target(c, id, k, name, CT_CMETHOD, &dc);
-    if (kmi >= 0 && dc == k && !comp_scope_copied_away(c, kmi) && c->scopes[kmi].nparams == 0) return 1;
+    if (!exc_cls_pick_class(c, k)) continue;
+    if (kmi < 0 || dc != k || comp_scope_copied_away(c, kmi) || c->scopes[kmi].nparams > 0) continue;
+    if (str_only && c->scopes[kmi].ret != TY_STRING) return 0;
+    n++;
   }
-  return 0;
+  return n;
 }
 /* The class value of an exception carries its class by name (cls_id -1):
    a reopened builtin exception class (`class RuntimeError; def self.name`)
@@ -3972,19 +3983,19 @@ static int exc_cls_name_definers(Compiler *c, int id, const char *name) {
    arm (class value _t<tk>, result _t<tr>), a head that sets the result and
    leaves the switch when one of them answers; nothing when none can. */
 static void emit_exc_cls_name_pick(Compiler *c, int id, const char *name, int tk, int tr,
-                                   TyKind slot, int onil, Buf *b) {
+                                   TyKind slot, int onil, int any_id, Buf *b) {
   if (onil) return;
   int xk[32], xm[32], xn = 0;
   for (int k = 0; k < c->nclasses && xn < 32; k++) {
-    if (!class_is_exc_subclass(c, k) && !class_is_exc_reopen(c, k)) continue;
+    if (!exc_cls_pick_class(c, k)) continue;
     int dc = -1, kmi = call_target(c, id, k, name, CT_CMETHOD, &dc);
     if (kmi < 0 || dc != k || comp_scope_copied_away(c, kmi) || c->scopes[kmi].nparams > 0) continue;
     xk[xn] = k; xm[xn] = kmi; xn++;
   }
   if (!xn) return;
   int t = ++g_tmp;
-  buf_printf(b, "{ const char *_xc%d = _t%d.cls_id < 0 ? sp_class_to_s(_t%d) : NULL; static const char *const _xn%d[] = {",
-             t, tk, tk, t);
+  buf_printf(b, "{ const char *_xc%d = %s_t%d.cls_id < 0 ? sp_class_to_s(_t%d) : NULL; static const char *const _xn%d[] = {",
+             t, any_id ? "1 || " : "", tk, tk, t);
   for (int q = 0; q < xn; q++) {
     const char *rn = class_ruby_name(c, xk[q]);
     buf_printf(b, "%s\"%s\"", q ? ", " : "", rn ? rn : c->classes[xk[q]].name);
@@ -4988,7 +4999,7 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
             if (is_class_name_name(name)) snprintf(nb, sizeof nb, "sp_str_frozen_name(sp_class_name_or_nil(_t%d))", tk9);
             else snprintf(nb, sizeof nb, "%s(_t%d)", comp_class_reader_fn(c, name, 0), tk9);
             buf_puts(b, " default: ");
-            emit_exc_cls_name_pick(c, id, name, tk9, tr9, slot9, onil9, b);
+            emit_exc_cls_name_pick(c, id, name, tk9, tr9, slot9, onil9, 0, b);
             if (slot9 == TY_POLY) buf_printf(b, "_t%d = sp_box_nullable_str(%s); break;", tr9, nb);
             else buf_printf(b, "_t%d = %s; break;", tr9, nb);
           }
@@ -5313,23 +5324,30 @@ int emit_call_class_method_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
     if (comp_ntype(c, recv) == TY_CLASS) {
       /* A class method `name` / `to_s` / `inspect` of the program's own:
          the class value dispatch calls it for the classes that define one.
-         Only for the class of a program object or of a boxed value, whose
-         class value holds the class's own id, and for an exception's
-         `name`, which the dispatch picks by the class's name; any other
-         value's class is a builtin one, which has no such method. */
+         Only for the class of a program object (not an exception, whose
+         class value carries its class by name) or of a boxed value, whose
+         class value holds the class's own id; any other value's class is
+         a builtin one, which has no such method. */
       int orr = nt_ref(nt, recv, "receiver");
       TyKind ort = orr >= 0 ? comp_ntype(c, orr) : TY_UNKNOWN;
       int ocid = ty_is_object(ort) ? ty_object_class(ort) : -1;
       int exc_recv = ort == TY_EXCEPTION || (ocid >= 0 && class_is_exc_subclass(c, ocid));
-      /* (an exception's `name` only: emit_exc_cls_name_pick answers it) */
-      int own_cls = ort == TY_POLY || (ocid >= 0 && !exc_recv) || (exc_recv && is_class_name_name(name));
+      int own_cls = ort == TY_POLY || (ocid >= 0 && !exc_recv);
       int ncc = 0;
       if (own_cls) comp_cmethod_candidates(c, name, &ncc);
-      /* an exception's class value carries its class by name: the dispatch
-         answers by a reopened builtin exception class's own method too
-         (emit_exc_cls_name_pick), which no candidate list names */
-      if (exc_recv && own_cls && ncc == 0 && exc_cls_name_definers(c, id, name)) ncc = 1;
       if (ncc > 0) return 0;
+      /* An exception's `name`: the exception classes that define it
+         themselves -- a program one, or a reopened builtin one -- answer by
+         the class's name, the nearest up its ancestry first
+         (emit_exc_cls_name_pick); Module#name for any other class */
+      if (exc_recv && is_class_name_name(name) && exc_cls_name_definers(c, id, name, 1)) {
+        int tk = ++g_tmp, tr = ++g_tmp;
+        buf_printf(b, "({ sp_Class _t%d = ", tk); emit_expr(c, recv, b);
+        buf_printf(b, "; const char *_t%d = NULL; do { ", tr);
+        emit_exc_cls_name_pick(c, id, name, tk, tr, TY_STRING, 0, 1, b);
+        buf_printf(b, "_t%d = %s(_t%d); } while (0); _t%d; })", tr, comp_class_reader_fn(c, name, 0), tk, tr);
+        return 1;
+      }
       /* every .class now yields an sp_Class (the poly path included, via
          sp_poly_class_val): stringify uniformly. */
       int _clt = ++g_tmp;

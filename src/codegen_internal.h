@@ -643,6 +643,7 @@ int emit_object_methods_reflection(Compiler *c, int recv, int cid, const char *n
                                    int arg, Buf *b);
 int scope_reads_callee(Compiler *c, int si);
 int sp_yield_site_type(const Compiler *c, int id, TyKind *out);
+int call_targets_yielding_method(Compiler *c, int id);   /* codegen_iter.c */
 TyKind block_next_value_ntype(const Compiler *c, int node);
 /* Argument-hoist overrides (see emit_args_filled): node id -> rooted temp
    name substituted by emit_expr. A site checks for room against

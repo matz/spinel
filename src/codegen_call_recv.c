@@ -5070,7 +5070,7 @@ static int emit_str_mutator_call(Compiler *c, int id, Buf *b, const NodeTable *n
           buf_printf(b, "({ sp_String *_t%d = SP_STR_HDL(%s);", tbR, lbR.p ? lbR.p : srefR.p);
           free(lbR.p); free(srefR.p);
           emit_route_recv_root(c, hrR, tbR, argc, argv, TY_STRING, b);
-          buf_printf(b, " sp_String_set_bin(_t%d, ", tbR);
+          buf_printf(b, " sp_String_set_bin_enc(_t%d, ", tbR);   /* the argument's encoding too */
           emit_str_expr(c, argv[0], b);
           /* marked to hand out the handle (`r = obj.buf.replace(x)`): the
              receiver itself, as for the appends */

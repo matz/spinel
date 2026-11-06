@@ -1,0 +1,6 @@
+pair: [UNIXSocket, "hi"]
+the other way: "back"
+end of stream: ""
+multiple assignment: [UNIXSocket, UNIXSocket, "x"]
+datagrams: ["one", "two"]
+Socket.pair: [Socket, "s"]

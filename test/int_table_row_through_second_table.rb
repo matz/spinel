@@ -312,6 +312,66 @@ o.fill(1)
 o.take
 p o.first
 
+# an attribute reader of the mixed Array
+class Reader
+  attr_reader :mixed
+
+  def initialize(mixed)
+    @rows = [[1, 2]]
+    @other = [[3, 4]]
+    @mixed = mixed
+  end
+
+  def fill(i) = (@other[0] = mixed[i])
+  def take = (@rows[0] = @other[0])
+  def first = @rows[0]
+end
+
+o = Reader.new([[7, 8], "row"])
+o.fill(1)
+o.take
+p o.first
+
+# the same reader called on self
+class ReaderSelf
+  attr_reader :mixed
+
+  def initialize(mixed)
+    @rows = [[1, 2]]
+    @other = [[3, 4]]
+    @mixed = mixed
+  end
+
+  def fill(i) = (@other[0] = self.mixed[i])
+  def take = (@rows[0] = @other[0])
+  def first = @rows[0]
+end
+
+o = ReaderSelf.new([[7, 8], "row"])
+o.fill(1)
+o.take
+p o.first
+
+# fetch on the reader
+class ReaderFetch
+  attr_reader :mixed
+
+  def initialize(mixed)
+    @rows = [[1, 2]]
+    @other = [[3, 4]]
+    @mixed = mixed
+  end
+
+  def fill(i) = (@other[0] = mixed.fetch(i))
+  def take = (@rows[0] = @other[0])
+  def first = @rows[0]
+end
+
+o = ReaderFetch.new([[7, 8], "row"])
+o.fill(1)
+o.take
+p o.first
+
 # every row an Integer Array: the tables still read rows
 class AllRows
   def initialize

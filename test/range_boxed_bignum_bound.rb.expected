@@ -1,0 +1,4 @@
+"a Range with a Bignum bound decided at run time is not supported by spinel"
+"a Range with a Bignum bound decided at run time is not supported by spinel"
+true
+172

@@ -14032,7 +14032,8 @@ static sp_bool sp_poly_kind_of_builtin(sp_RbVal v, const char *cn) {
   }
   int is_int = (v.tag == SP_TAG_INT || v.tag == SP_TAG_BIGINT);
   int is_flt = (v.tag == SP_TAG_FLT);
-  int is_rat = (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_RATIONAL);
+  /* a Rational past 64 bits boxes as its own kind */
+  int is_rat = (v.tag == SP_TAG_OBJ && (v.cls_id == SP_BUILTIN_RATIONAL || v.cls_id == SP_BUILTIN_BIG_RATIONAL));
   int is_cpx = (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_COMPLEX);
   int is_arr = (v.tag == SP_TAG_OBJ && sp_poly_is_array_kind(v.cls_id));
   int is_range = (v.tag == SP_TAG_OBJ && (v.cls_id == SP_BUILTIN_RANGE ||

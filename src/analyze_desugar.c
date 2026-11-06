@@ -1677,8 +1677,8 @@ static int erm_rewrite_stmt(Compiler *c, int st, const char *self_leaf, const in
      mixin of K's (mixin_by_record), where it runs; and `K.extend(M)` of
      modules of the program (desugar_extend_enumerable reads `extend
      Enumerable` in K's body) */
-  if (decl && !attr && sclass < 0 && !is_builtin_reopen_name(leaf) && !is_builtin_module_name(leaf) &&
-      erm_args_modules(nt, av, first, an))
+  int bi = is_builtin_reopen_name(leaf) || is_builtin_module_name(leaf);
+  if (decl && !bi && !attr && sclass < 0 && erm_args_modules(nt, av, first, an))
     return st;
   /* Fiber and Thread take a mixin in a reopening (fiber-annotation's
      `Fiber.prepend(Fiber::Annotation)`); their attr_* have a pass of
@@ -1715,7 +1715,10 @@ static int erm_rewrite_stmt(Compiler *c, int st, const char *self_leaf, const in
      (`Integer.include(M)`, `Fiber.prepend(M)`, `::Process.singleton_class
      .prepend(M)`): an empty reopening ahead of the statement gives the
      record the class, and the record takes the statement as above */
-  if (!pdecl && !self_leaf && !attr && !sp_streq(nm, "extend") && erm_args_modules(nt, av, first, an)) {
+  /* (a builtin the program reopens too: its header may come after this
+     statement, which the record reaches first, so the empty reopening
+     gives it the class here) */
+  if ((!pdecl || bi) && !self_leaf && !attr && !sp_streq(nm, "extend") && erm_args_modules(nt, av, first, an)) {
     int rn = nt_new_node(nt, decl == 2 ? "ModuleNode" : "ClassNode");
     int body = nt_new_node(nt, "StatementsNode");
     int path = nt_clone_subtree(nt, recv);
@@ -2289,11 +2292,16 @@ int desugar_fiber_prepended_init(Compiler *c) {
   /* the modules prepended onto Fiber, and how often they are mixed in */
   const char *mods[16]; int mcount[16], nm = 0;
   for (int id = 0; id < n0; id++) {
-    int body = hiv_handle_class(nt, id) == 1 ? class_def_body(nt, id) : -1;
+    int top = nt_kind(nt, id) == NK_ProgramNode;
+    int body = hiv_handle_class(nt, id) == 1 ? class_def_body(nt, id) : top ? nt_ref(nt, id, "statements") : -1;
     int bn = 0; const int *bb = body >= 0 ? nt_arr(nt, body, "body", &bn) : NULL;
     for (int i = 0; bb && i < bn; i++) {
-      const char *cn = nt_kind(nt, bb[i]) == NK_CallNode && nt_ref(nt, bb[i], "receiver") < 0
-                       ? nt_str(nt, bb[i], "name") : NULL;
+      int r = nt_kind(nt, bb[i]) == NK_CallNode ? nt_ref(nt, bb[i], "receiver") : -1;
+      /* (`Fiber.prepend(M)` at the top level too: the load record takes
+         it as one of the class's, mixin_by_record) */
+      if (top ? !(r >= 0 && nt_kind(nt, r) == NK_ConstantReadNode && nt_str(nt, r, "name") && sp_streq(nt_str(nt, r, "name"), "Fiber"))
+              : r >= 0) continue;
+      const char *cn = nt_kind(nt, bb[i]) == NK_CallNode ? nt_str(nt, bb[i], "name") : NULL;
       if (!cn || !sp_streq(cn, "prepend")) continue;
       int args = nt_ref(nt, bb[i], "arguments");
       int an = 0; const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &an) : NULL;
@@ -2531,6 +2539,13 @@ int desugar_singleton_class_mixin(Compiler *c) {
      changes is not modeled */
   for (int id = 0; id < n0; id++) {
     if (nt_kind(nt, id) != NK_SingletonClassNode || nt_kind(nt, nt_ref(nt, id, "expression")) == NK_SelfNode) continue;
+    /* (`class << K`, K a class the program declares: the load record takes
+       the body's mixins as K's singleton's, mixin_by_record. A module K
+       keeps the refusal: a prepend over its own singleton method under a
+       cell is not dispatched yet.) */
+    int ex = nt_ref(nt, id, "expression");
+    if ((nt_kind(nt, ex) == NK_ConstantReadNode || nt_kind(nt, ex) == NK_ConstantPathNode) &&
+        nt_str(nt, ex, "name") && erm_declared_as(nt, nt_str(nt, ex, "name")) == 1) continue;
     int sb = nt_ref(nt, id, "body"), sn = 0;
     const int *ss = sb >= 0 && nt_kind(nt, sb) == NK_StatementsNode ? nt_arr(nt, sb, "body", &sn) : NULL;
     for (int j = 0; j < sn; j++) {

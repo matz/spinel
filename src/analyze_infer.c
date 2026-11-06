@@ -1568,6 +1568,37 @@ static int an_own_row_read(Compiler *c, int n, const char *ivname, int depth) {
   return seen;
 }
 
+/* Whether a value position of stored value `n` (an arm of an `if`, a
+   ternary, a `case` or `||`, through parentheses) has no type yet and is a
+   variable with none, or a call on one (`@m[i]`, `@m.fetch(i)`, `x.last`,
+   `@m[i][0]`). The loop after the fixpoint clears a boxed ivar or local and
+   derives it again, and the tables' stores are checked in between: what the
+   value reads may yet be a String. A ternary whose other arm is a row is
+   typed as a row meanwhile, so this is asked of a value of any type. */
+typedef struct { Compiler *c; int hit; } AnUntypedRead;
+static int an_untyped_read_leaf(const VpLeaf *leaf, void *ud) {
+  AnUntypedRead *u = ud;
+  if (leaf->kind == VPK_GAVE_UP) { u->hit = 1; return 1; }
+  if (leaf->kind != VPK_EXPR || infer_type(u->c, leaf->node) != TY_UNKNOWN) return 0;
+  const NodeTable *nt = u->c->nt;
+  for (int n = leaf->node, d = 0; n >= 0; d++) {
+    NodeKind k = nt_kind(nt, n);
+    if (k == NK_InstanceVariableReadNode || k == NK_LocalVariableReadNode) {
+      u->hit = infer_type(u->c, n) == TY_UNKNOWN;
+      return u->hit;
+    }
+    if (k != NK_CallNode) return 0;
+    if (d == 8) { u->hit = 1; return 1; }   /* a longer chain: not looked at */
+    n = nt_ref(nt, n, "receiver");
+  }
+  return 0;
+}
+static int an_row_from_untyped_slot(Compiler *c, int n) {
+  AnUntypedRead u = { c, 0 };
+  for_each_value_position(c->nt, n, VPS_ALL, an_untyped_read_leaf, &u);
+  return u.hit;
+}
+
 /* Whether every element stored into poly-array ivar `@<ivname>` is an int
    array (a nested array of int arrays, e.g. @chr_banks / @nmt_mem). Element
    reads then yield an int array rather than a boxed poly. */
@@ -1622,9 +1653,13 @@ static int ivar_array_elems_all_int_array_impl(Compiler *c, int cid, const char 
           if (ak != NK_ArrayNode || !an_elems_int_rows(c, av[a], &saw)) return 0;
           continue;
         }
+        /* (a row the table moves, read out of it or out of a table whose
+           check is running, says nothing of the rows either way) */
+        int own = an_own_row_read(c, av[a], ivname, 0);
+        if (!own && !an_scanned_row_read(c, cid, av[a]) && an_row_from_untyped_slot(c, av[a])) return 0;
         TyKind vt = comp_ntype(c, av[a]);
         if (vt == TY_INT_ARRAY) { saw = 1; continue; }
-        if (an_own_row_read(c, av[a], ivname, 0)) continue;
+        if (own) continue;
         if (an_row_open_empty(c, av[a])) return 0;
         /* a value with no type yet this pass: in the passes after the
            fixpoint a boxed one (`@rows[0] = @other[i]`, @other holding a

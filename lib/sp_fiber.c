@@ -593,6 +593,15 @@ static void sp_main_stack_entry(void) {
    any size, down to the floor -- run it where we are: a program must not fail
    to start because it could not reserve a big stack. */
 void sp_main_stack_run(void (*body)(void)) {
+  /* STDOUT on a terminal is written through, as CRuby's is (its FMODE_TTY):
+     what a write call wrote is on the terminal when the call returns, though
+     STDOUT.sync answers false. stdio's line buffering kept a partial line
+     back until its newline, so a prompt was not shown while the program
+     waited in STDIN.gets, or slept. Every write to STDOUT is a stdio call on
+     this stream, the ones generated code makes itself as well, so the stream
+     is what is set, once, before the program's first write and its first
+     thread. A file or a pipe keeps the buffer stdio gives it. */
+  if (isatty(1)) setvbuf(stdout, NULL, _IONBF, 0);
   size_t guard = sp_fiber_guard();
   size_t want = sp_main_stack_bytes();
   char *base = MAP_FAILED;

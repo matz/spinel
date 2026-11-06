@@ -2698,10 +2698,12 @@ sp_bool sp_File_set_sync(sp_File *f, sp_bool on) {
      stdio, so the flag alone did nothing for a file or a pipe -- a test that
      set `$stdout.sync = true` and was killed by the CI timeout left an EMPTY
      output, with no clue where it had hung. The stream is flushed first so
-     the buffer swap loses nothing. */
+     the buffer swap loses nothing. A handle on a terminal stays unbuffered
+     when sync goes off: CRuby writes a terminal through whatever #sync
+     answers (sp_main_stack_run does the same for STDOUT at start). */
   fflush(f->fp);
   if (f->fp != sp_io_closed_sentinel())
-    setvbuf(f->fp, NULL, on ? _IONBF : (isatty(fileno(f->fp)) ? _IOLBF : _IOFBF), 0);
+    setvbuf(f->fp, NULL, (on || isatty(fileno(f->fp))) ? _IONBF : _IOFBF, 0);
   return on;
 }
 sp_bool sp_File_autoclose_p(sp_File *f) { SP_IO_OPEN(f); return !f->no_autoclose; }
@@ -2728,8 +2730,20 @@ sp_File *sp_File_reopen_io(sp_File *f, sp_File *other) {SP_GC_ROOT(f);SP_GC_ROOT
   SP_IO_OPEN(other);
   fflush(f->fp);
   fflush(other->fp);
+  int was_tty = f->fp == stdout && isatty(fileno(stdout));
   if (dup2(fileno(other->fp), fileno(f->fp)) < 0)
     sp_file_raise_errno("reopen", other->path ? other->path : "");
+  /* STDOUT is unbuffered while it is on a terminal (sp_main_stack_run), and
+     that goes with the descriptor, as CRuby's handle takes the other's
+     terminal flag: moved onto a terminal the stream is written through, and
+     moved off one it is buffered again, or every puts into the file it now
+     writes would be two write(2) calls. The buffer is handed over because
+     glibc and musl give an unbuffered stream none of their own back. */
+  if (f->fp == stdout && !f->sync_on) {
+    static char buf[BUFSIZ];
+    if (isatty(fileno(stdout))) setvbuf(stdout, NULL, _IONBF, 0);
+    else if (was_tty) setvbuf(stdout, buf, _IOFBF, sizeof buf);
+  }
   if (f->own_buf || other->own_buf) sp_io_own_buf_reopened(f);
   f->path = other->path;
   f->mode = other->mode;

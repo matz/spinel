@@ -515,14 +515,26 @@ int elab_method_span(Compiler *c, int cls, const char *name, int sg, const ElabW
    asks whether a version is met by (elab_version_met): where the call runs
    at its point (how without 1: not in a block run later or kept,
    ct_after_point), the version live there (at, d: elab_method_at); where
-   that is not known, its window (win, w: elab_call_window, opened where it
-   runs after its point) and the versions over it into out[0..cap) (n:
-   elab_method_span; 0 where not asked). With ELAB_MEET_COPY, id is asked as
+   that is not known, its window and the versions over it (win, w, n and
+   out[0..cap): elab_call_span, the window opened where it runs after its
+   point; n is 0 where not asked). With ELAB_MEET_COPY, id is asked as
    the call in a mixin's copy of the body holding it: at no point, in the
    window elab_call_window answers for the copy's call. */
 typedef struct { int at, win, n; const LrDef *d; ElabWindow w; } ElabMeet;
 enum { ELAB_MEET_COPY = 2 };
 void elab_call_meet(Compiler *c, int id, int cls, const char *name, int sg, int how, ElabMeet *m, const LrDef **out, int cap);
+/* ...and its window half, which needs no point: the versions of cls's
+   `name` (singleton when sg) call id may meet over its window
+   (elab_call_window; *w when given), widened to its region's end
+   (elab_window_open) when `open` (the call may run after its point: how & 1
+   to elab_call_meet), into out[0..cap): elab_method_span's answer, or
+   ELAB_SPAN_NO_WINDOW for a call with no window. elab_call_meet asks it
+   after its answer at the point (elab_method_at). The call plan asks it
+   itself in three places: ct_window_version, which has no answer at the
+   point, and user_new_at and capture_live_at, whose answer there is
+   elab_call_method's, not elab_method_at's. */
+enum { ELAB_SPAN_NO_WINDOW = -3 };
+int elab_call_span(Compiler *c, int id, int cls, const char *name, int sg, int open, ElabWindow *w, const LrDef **out, int cap);
 /* does the program reach the version made at def node `def` on cls's
    chain (its singleton's when sg) under `name`: is a call of the name, or
    a Method's maker naming it, whose self may be cls or a class under it,

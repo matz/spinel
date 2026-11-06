@@ -43,6 +43,14 @@ int cplan_self_root_override(Compiler *c, int id, int scls, int root_mi) {
   if (!self || self->is_cmethod || self->class_id != scls || ie_class_of(c, id) >= 0) return 0;
   ClassInfo *ci = &c->classes[scls];
   if (comp_class_is_module(c, ci) || ci->is_native_class) return 0;
+  /* (a call in a block or a lambda keeps the old path: the body may be a
+     function of its own, where no self is at hand) */
+  const int *par = comp_parent_map(c);
+  for (int a = par[id]; a >= 0; a = par[a]) {
+    NodeKind k = nt_kind(nt, a);
+    if (k == NK_DefNode) break;
+    if (k == NK_BlockNode || k == NK_LambdaNode) return 0;
+  }
   Scope *rm = &c->scopes[root_mi];
   int oci = comp_core_class(c, CORE_OBJECT);
   if (rm->yields || rm->is_cmethod || (rm->class_id >= 0 && rm->class_id != oci) || scls == oci) return 0;
@@ -61,6 +69,13 @@ int cplan_self_root_override(Compiler *c, int id, int scls, int root_mi) {
     found = 1;
   }
   return found;
+}
+
+int cplan_root_switch(Compiler *c, int id, int scls) {
+  const CallPlan *p = cplan_user(c, id);
+  if (p->mi < 0 || p->via != UC_INST || !p->chain || p->owner_ci != scls || scls < 0) return 0;
+  int rc = c->scopes[p->mi].class_id, oci = comp_core_class(c, CORE_OBJECT);
+  return rc < 0 || (rc == oci && scls != oci);
 }
 
 static void cplan_set(CallPlan *p, int mi, int owner, int via, int dispatch) {

@@ -394,10 +394,14 @@ int cplan_dispatch_form(Compiler *c, int call, int cid, const char *name, int ha
    name, CRuby runs that method for an instance of the descendant. 1 when the
    call is then a switch on self's class whose default arm runs root_mi
    (CP_PER_ARM: each arm binds the arguments by its own parameters). Only
-   for a bare call or `self.m` without a block, in an instance method of a
-   class (not a module), and a root_mi that does not yield; a descendant's
-   reader or yielding method keeps the old path. */
+   for a bare call or `self.m` without a block, not inside a block or a
+   lambda, in an instance method of a class (not a module), and a root_mi
+   that does not yield; a descendant's reader or yielding method keeps the
+   old path. */
 int cplan_self_root_override(Compiler *c, int id, int scls, int root_mi);
+/* Is call id's plan that switch on class scls (cplan_self_root_override),
+   its default arm a top-level def or Object's method? Read off the plan. */
+int cplan_root_switch(Compiler *c, int id, int scls);
 
 /* The most candidate classes the statement-level block dispatch takes
    (poly_block_dispatch_cands refuses a program with more). */

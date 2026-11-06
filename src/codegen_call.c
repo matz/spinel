@@ -34551,7 +34551,7 @@ static void emit_call_body_ordinary(Compiler *c, int id, Buf *b) {
       /* a descendant of self's class overrides the def: the dispatch on
          self's class below, the def its default (cplan_self_root_override) */
       if (!shad0 && g_ie_class_id < 0 && (g_emitting_class_id < 0 || g_emitting_class_id == ecls0) &&
-          cplan_self_root_override(c, id, ecls0, bmi0)) shad0 = 1;
+          cplan_root_switch(c, id, ecls0)) shad0 = 1;
       if (!shad0) { emit_method_call(c, id, b); return; }
     }
   }

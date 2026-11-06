@@ -14127,15 +14127,8 @@ else {
   /* default arm uses the base-class (defcls) implementation */
   {
     Buf _dc; memset(&_dc, 0, sizeof _dc);
-    /* a top-level def takes no self; Object's method takes self boxed */
-    if (root_m && m->class_id < 0) buf_printf(&_dc, "%s(", mc_method(c, m));
-    else if (root_m) {
-      buf_printf(&_dc, "%s(", mc_method(c, m));
-      emit_boxed_text(c, ty_object(cid), selfptr, &_dc);
-    }
-    else buf_printf(&_dc, "%s((sp_%s *)%s", mc_method(c, m), c->classes[defcls].c_name, selfptr);
-    for (int a = 0; a < np; a++)
-      buf_printf(&_dc, (root_m && m->class_id < 0 && a == 0) ? "_t%d" : ", _t%d", atmp[a]);
+    buf_printf(&_dc, "%s((sp_%s *)%s", mc_method(c, m), c->classes[defcls].c_name, selfptr);
+    for (int a = 0; a < np; a++) buf_printf(&_dc, ", _t%d", atmp[a]);
     buf_puts(&_dc, ")");
     buf_puts(b, " default: { ");
     emit_disp_arm_assign(c, m, _dc.p, ret, disp_ret, rtmp, b);

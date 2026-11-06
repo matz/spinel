@@ -1110,6 +1110,7 @@ int scope_has_return(Compiler *c, int scope_idx);
    wrapper can compute the call's normal (no-break) result type. */
 extern int g_infer_ignore_brk;
 extern int g_ret_no_new_poly;
+extern int g_late_hash_return_widened;
 /* Recompute a node's type without consulting the cache (used by the break
    wrapper with g_infer_ignore_brk set to recover the normal result type). */
 TyKind infer_uncached(Compiler *c, int id);

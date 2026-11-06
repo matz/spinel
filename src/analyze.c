@@ -54005,6 +54005,8 @@ static void an_phase_late_widen(Compiler *c, NodeTypes *promote_before) {
      Symbol param's return may still be Symbol; with the return now poly,
      its write must widen too, or storing nil loses the tag. Limit this late
      cvar widening to Bool and Symbol slots, which have no nil representation. */
+  NodeTypes before_ivars = { NULL, 0 };
+  node_types_take(c, &before_ivars);
   for (int it = 0; it < 8; it++) {
     int ivars_before = an_total_ivars(c);
     int ch = infer_ivar_types(c);
@@ -54044,6 +54046,12 @@ static void an_phase_late_widen(Compiler *c, NodeTypes *promote_before) {
     if (an_total_ivars(c) != ivars_before) { inherit_members(c); ch = 1; }
     if (!ch) break;
   }
+  /* A Hash return that followed its widened ivar reaches calls that bound
+     the narrower Hash: they bind again against this snapshot, as they do
+     after promote's widening (an_phase_nullable_returns), which then
+     keeps this earlier one. */
+  if (g_late_hash_return_widened) *promote_before = before_ivars;
+  else free(before_ivars.ty);
 
   /* --int-overflow=promote: widen every statically-int slot (param / return /
      local / ivar / cvar / global) to poly so an arithmetic result that
@@ -54056,7 +54064,7 @@ static void an_phase_late_widen(Compiler *c, NodeTypes *promote_before) {
   if (g_promote_mode) {
     /* (a Hash literal of the Integers it widens turns poly-valued: the calls
        it reaches bind again, an_phase_nullable_returns) */
-    node_types_take(c, promote_before);
+    if (!promote_before->ty) node_types_take(c, promote_before);
     for (int s = 0; s < c->nscopes; s++) {
       Scope *sc = &c->scopes[s];
       /* `<=>` yields a bounded -1/0/1 and is consumed as `(a <=> b) <cmp> 0`;

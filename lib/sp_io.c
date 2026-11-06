@@ -2748,6 +2748,7 @@ sp_File *sp_File_reopen_io(sp_File *f, sp_File *other) {SP_GC_ROOT(f);SP_GC_ROOT
   if (f->own_buf || other->own_buf) sp_io_own_buf_reopened(f);
   f->path = other->path;
   f->mode = other->mode;
+  f->shut = other->shut;        /* the sides the other socket has shut, none for a file */
   f->lineno = 0;
   return f;
 }

@@ -5070,8 +5070,13 @@ static int emit_str_mutator_call(Compiler *c, int id, Buf *b, const NodeTable *n
           buf_printf(b, "({ sp_String *_t%d = SP_STR_HDL(%s);", tbR, lbR.p ? lbR.p : srefR.p);
           free(lbR.p); free(srefR.p);
           emit_route_recv_root(c, hrR, tbR, argc, argv, TY_STRING, b);
-          buf_printf(b, " sp_String_set_bin_enc(_t%d, ", tbR);   /* the argument's encoding too */
+          /* the argument, then the freeze, then a nil argument's TypeError,
+             as CRuby checks them: a nil one was taken as nothing to do */
+          int taR = ++g_tmp;
+          buf_printf(b, " const char *_t%d = ", taR);
           emit_str_expr(c, argv[0], b);
+          buf_printf(b, "; if (sp_String_is_frozen(_t%d)) sp_raise_frozen_str(_t%d->data);", tbR, tbR);
+          buf_printf(b, " sp_String_set_bin_enc(_t%d, sp_str_arg_not_nil(_t%d)", tbR, taR);   /* the argument's encoding too */
           /* marked to hand out the handle (`r = obj.buf.replace(x)`): the
              receiver itself, as for the appends */
           if (repr_of(c, id).handle) buf_printf(b, "); _t%d; })", tbR);
@@ -5086,7 +5091,7 @@ static int emit_str_mutator_call(Compiler *c, int id, Buf *b, const NodeTable *n
       /* the receiver takes a copy of the argument's bytes: handed the
          argument's own pointer it became that object (`t.replace(s)` then
          `t.equal?(s)`, and `s.freeze` froze t) */
-      buf_printf(b, "); const char *_t%d = sp_str_dup(", tn2); emit_str_expr(c, argv[0], b); buf_puts(b, "); ");
+      buf_printf(b, "); const char *_t%d = sp_str_dup(sp_str_arg_not_nil(", tn2); emit_str_expr(c, argv[0], b); buf_puts(b, ")); ");
       emit_str_mut_writeback(c, recv, lvw, tn2, NULL, b);
       buf_printf(b, "_t%d; })", tn2);
       { *out = 1; return 1; }

@@ -24232,14 +24232,21 @@ static int str_mutate_reassign_arms(Compiler *c, Buf *b, int indent, const NodeT
       if (strbuf_slot_text(c, recv, &srefR2)) {
         int tbR = ++g_tmp;
         emit_indent(b, indent);
-        buf_printf(b, "{ sp_String *_t%d = SP_STR_HDL(%s); %s(_t%d, ", tbR, srefR2.p,
-                   sp_streq(name, "replace") ? "sp_String_set_bin_enc" : "sp_String_set_bin", tbR);
-        free(srefR2.p);
-        if (sp_streq(name, "prepend")) {
-          buf_puts(b, "sp_str_concat("); emit_str_expr(c, argv[0], b);
-          buf_printf(b, ", sp_String_cstr(_t%d))", tbR);
+        if (sp_streq(name, "replace")) {
+          /* the argument, then the freeze, then a nil argument's TypeError,
+             as CRuby checks them: a nil one was taken as nothing to do */
+          int taR = ++g_tmp;
+          buf_printf(b, "{ sp_String *_t%d = SP_STR_HDL(%s); const char *_t%d = ", tbR, srefR2.p, taR);
+          emit_expr_face(c, argv[0], TY_STRING, b);   /* (one representation: its bytes, whatever the face) */
+          buf_printf(b, "; if (sp_String_is_frozen(_t%d)) sp_raise_frozen_str(_t%d->data); "
+                        "sp_String_set_bin_enc(_t%d, sp_str_arg_not_nil(_t%d)); }\n", tbR, tbR, tbR, taR);
+          free(srefR2.p);
+          return 1;
         }
-        else emit_expr_face(c, argv[0], TY_STRING, b);   /* (one representation: its bytes, whatever the face) */
+        buf_printf(b, "{ sp_String *_t%d = SP_STR_HDL(%s); sp_String_set_bin(_t%d, ", tbR, srefR2.p, tbR);
+        free(srefR2.p);
+        buf_puts(b, "sp_str_concat("); emit_str_expr(c, argv[0], b);
+        buf_printf(b, ", sp_String_cstr(_t%d))", tbR);
         buf_puts(b, "); }\n");
         return 1;
       }

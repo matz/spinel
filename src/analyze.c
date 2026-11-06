@@ -16662,7 +16662,15 @@ static int narrowed_local_other_writes_fit(Compiler *c, int s, const char *nm, T
    narrow_locals_from_arrays: it takes the element class, so its reads
    unbox. A block parameter is a local of the enclosing scope, so every
    block or lambda that binds it must be such a walk of the same class, and
-   nothing else may write it. */
+   nothing else may write it.
+
+   An each-family walk over a table of Integer or Float rows binds a row the
+   same way. Typed by the walk's binding alone, the parameter first saw the
+   table boxed (a parameter's table narrows a round later) and kept that,
+   and only the re-narrow after the fixpoint retyped it: the rewrites of
+   the rounds had already passed it by, and `row.each(&h)` stayed in a form
+   no emitter takes for a typed row. */
+static int walk_row_kind(TyKind t) { return t == TY_INT_ARRAY || t == TY_FLOAT_ARRAY; }
 static int narrow_walk_block_params(Compiler *c) {
   const NodeTable *nt = c->nt;
   int ns = c->nscopes, total = 0;
@@ -16695,8 +16703,9 @@ static int narrow_walk_block_params(Compiler *c) {
       for (int m = 0; more[m]; m++) { int mn = 0; nt_arr(nt, pn, more[m], &mn); extra |= mn > 0; }
       extra |= nt_ref(nt, pn, "rest") >= 0 || nt_ref(nt, pn, "keyword_rest") >= 0 || nt_ref(nt, pn, "block") >= 0;
     }
+    int table = (rt == TY_INT_ARRAY_ARRAY || rt == TY_FLOAT_ARRAY_ARRAY) && cn && is_each_walk_or_with_index(cn);
     int walk = cn && (is_each_walk_or_with_index(cn) || is_map_alias(cn) || oa_filter_call(c, id)) &&
-               ca < 0 && blk != id && ty_is_obj_array(rt) && !extra &&
+               ca < 0 && blk != id && (ty_is_obj_array(rt) || table) && !extra &&
                (np == 1 || (np == 2 && sp_streq(cn, "each_with_index"))) && !block_param_is_multi(c, blk, 0);
     for (int pi = 0; pi < np; pi++) {
       const char *nm = block_param_name(c, blk, pi);
@@ -16717,12 +16726,12 @@ static int narrow_walk_block_params(Compiler *c) {
       LocalVar *lv = &sc->locals[li];
       if (!lv->is_block_param || lv->rbs_seeded) continue;
       int gi = off[s] + li;
-      int fits = !bad[gi] && ty_is_object(elem[gi]) &&
+      int fits = !bad[gi] && (ty_is_object(elem[gi]) || walk_row_kind(elem[gi])) &&
                  !comp_lvw_any_sc(c, s, lv->name);   /* not written in the body */
       /* a pin whose walk no longer qualifies (the array widened, another
          block binds the name) goes, and the parameter is the walk's boxed
          element again */
-      if (ty_is_object(lv->oa_pin) && (!fits || elem[gi] != lv->oa_pin)) {
+      if ((ty_is_object(lv->oa_pin) || walk_row_kind(lv->oa_pin)) && (!fits || elem[gi] != lv->oa_pin)) {
         lv->oa_pin = TY_UNKNOWN;
         lv_set_type(lv, TY_POLY);
         any = 1;

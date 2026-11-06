@@ -619,6 +619,9 @@ int is_define_method_name(const char *n); /* define_method */
 int is_define_singleton_method_name(const char *n); /* define_singleton_method */
 int is_singleton_class_name(const char *n); /* singleton_class */
 int is_reopen_self_name(const char *n);       /* __self: the receiver of a method a builtin's reopening defines */
+int is_math_fn_name(const char *n);         /* sqrt sin log ...: Math's module functions */
+int is_math_module_name(const char *n);     /* Math */
+int is_native_decl_name(const char *n);     /* native_lib native_struct native_method ...: a module body's native binding declarations */
 int is_ffi_decl_name(const char *n);        /* ffi_lib attach_function attach_variable callback native_func ...: declarations made methods before the walk */
 int is_method_defined_query(const char *n); /* method_defined? public_/private_/protected_method_defined? */
 int is_undef_method_name(const char *n);  /* undef_method */

@@ -10,10 +10,13 @@
 
      - nothing that runs before it, in program order and entering the bodies,
        can run code of the program's: only definitions (def, class, module,
-       alias, attr_*, include, extend, prepend, a visibility call) and the
+       alias, attr_*, include, extend, prepend, a visibility call, a native
+       binding's declarations: native_lib, native_method ...) and the
        settled assignments of other constants, whose values are built of
        literals, settled constants, class constructors and the builtin
-       operators on those; or
+       operators on those, Math's functions (unless the program defines on
+       Math) and a native binding's functions (`IOBufferPackage.__page_size`,
+       C handed no proc) called with those; or
      - no read of the constant (a bare name or a path, defined?, const_get,
        const_defined?) and no `constants` call comes earlier in program order
        than the assignment: a method that reads it and is written before the
@@ -61,6 +64,7 @@ typedef struct {
   int hooks;         /* a definition can run a hook of the program's */
   int cmissing;      /* the program defines const_missing, which spinel does not call */
   int reopened;      /* a builtin class is reopened: its operators may be the program's */
+  int math_own;      /* the program defines on Math or reaches its singleton: its functions may be the program's */
 } ConstWalk;
 
 static int cw_index(const ConstWalk *w, const LocalVar *lv) { return (int)(lv - w->c->consts); }
@@ -142,6 +146,8 @@ static int cw_value_walk(ConstWalk *w, int id, int depth) {
         /* the declarations of a body; a mixin runs the module's hook, if any */
         if (is_attr_reader_family(nm) || is_attr_writer_family(nm) || visibility_of_name(nm))
           return 1;
+        /* a native binding's declarations, which make methods */
+        if (is_native_decl_name(nm)) return w->hooks ? 0 : 1;
         return is_mixin_call(nm) && !w->hooks ? 1 : 0;
       }
       int rv = cw_value(w, r, depth + 1);
@@ -156,6 +162,10 @@ static int cw_value_walk(ConstWalk *w, int id, int depth) {
       }
       if (blk >= 0) return 0;
       if (rn && is_value_constructor(rn, nm) && ar == 2 && !w->reopened) return 1;
+      /* Math.sqrt(2.0) */
+      if (rn && is_math_module_name(rn) && is_math_fn_name(nm) && ar == 2 && !w->math_own) return 2;
+      /* a module's native_func (`Mod.f`) runs C, handed no proc to call */
+      if (rn && ar == 2 && comp_native_find(w->c, rn, nm) >= 0) return 1;
       if (is_freeze_family(nm) && an == 0) return rv;
       if (rv == 2 && ar == 2 && !w->reopened &&
           (is_arith_op(nm) || is_cmp_op(nm) || is_eq_op(nm) || is_bit_op(nm) || is_shift_op(nm)))
@@ -354,6 +364,14 @@ void an_const_presence(Compiler *c) {
     else if (k == NK_ClassNode || k == NK_ModuleNode) {
       const char *cn = class_def_name(nt, id);
       if (cn && (is_builtin_class_name(cn) || is_builtin_reopen_name(cn))) w.reopened = 1;
+      if (is_math_module_name(cn)) w.math_own = 1;
+    }
+    /* def Math.f, class << Math, Math.define_singleton_method ... */
+    if (k == NK_DefNode || k == NK_SingletonClassNode || k == NK_CallNode) {
+      int r = nt_ref(nt, id, k == NK_SingletonClassNode ? "expression" : "receiver");
+      if (r >= 0 && nt_kind(nt, r) == NK_ConstantReadNode && is_math_module_name(nt_str(nt, r, "name")) &&
+          !(k == NK_CallNode && is_math_fn_name(nt_str(nt, id, "name"))))
+        w.math_own = 1;
     }
   }
   prog_top_stmts(c, cw_top_stmt, &w);   /* the files' top levels, in load order */

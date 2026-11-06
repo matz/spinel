@@ -2090,6 +2090,24 @@ int is_singleton_class_name(const char *n) { return n && sp_streq(n, "singleton_
    Array): `def self.m` there names it, and the object it is a method of is the
    builtin one, whose class-method filing the walk keeps */
 int is_reopen_self_name(const char *n) { return n && sp_streq(n, "__self"); }
+/* Math's module functions, which answer from their arguments alone */
+int is_math_fn_name(const char *n) {
+  static const char *const fns[] = {
+    "sin", "cos", "tan", "asin", "acos", "atan", "atan2", "sinh", "cosh",
+    "tanh", "asinh", "acosh", "atanh", "exp", "log", "log2", "log10", "sqrt",
+    "cbrt", "hypot", "ldexp", "erf", "erfc", "gamma", "lgamma", "frexp",
+    "expm1", "log1p", NULL };
+  return n && str_in(n, fns);
+}
+int is_math_module_name(const char *n) { return n && sp_streq(n, "Math"); }
+/* The native binding declarations of a module body (`native_lib`,
+   `native_struct`, `native_method` ...), which the registration reads before
+   any pass and the program never runs (register_ffi_decls) */
+int is_native_decl_name(const char *n) {
+  return n && (sp_streq(n, "native_lib") || sp_streq(n, "native_struct") || sp_streq(n, "native_new") ||
+               sp_streq(n, "native_method") || sp_streq(n, "native_func") || sp_streq(n, "native_share") ||
+               sp_streq(n, "native_obj") || sp_streq(n, "native_obj_reflect") || sp_streq(n, "native_subclass"));
+}
 /* The ffi gem's and native_func's declarations, which a step before the
    registration's walk turns into methods (desugar_ffi_library_functions,
    desugar_native_func_defs) */

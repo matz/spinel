@@ -167,6 +167,10 @@ struct LoadRecord {
   char **ckey; int nckey; int *cent; int ncent; int ckey_gen;
   LrSlot *slot; int nslot, cslot, *slot_head, slot_builds;
   LrSlotPoint *slotp; int nslotp, cslotp; long slot_entries;
+  /* lr_const_seen's and lr_const_final's facts of every written name (lr_final_index), and what they are of */
+  struct LrFinal { const char *name; int writes, headers, next; unsigned char unseen, removed; } *fin; int nfin, cfin, *fin_head;
+  struct { int builds, nst; long entries; const int *at; unsigned ver; unsigned long edits; } fin_of;
+  unsigned char fin_calls;   /* ...1 when a remove_const or a send names no name the record reads: no name is final */
   int runs_of, nrun, *rend;  /* lr_run_points: the build its bits are of, how many statements run code, each region's end */
   int *rinst, *urun;         /* ...from which statement on an object of each class may exist, each def's body may run (lr_rta) */
   int *rentry;               /* ...and each region's load (all three statements of region 0) */
@@ -1847,27 +1851,18 @@ static int lr_chain_bound(Compiler *c);
    record sees every write of it (lr_const_seen), the source writes it with
    class and module headers alone, which reopen what the first made, or
    with one write and no header, and no remove_const may take it away? */
+static const struct LrFinal *lr_final_of(Compiler *c, const char *name);
 static int lr_const_final(Compiler *c, const char *name) {
-  const LoadRecord *r = c->lrec;
-  const NodeTable *nt = c->nt;
-  int writes = 0, headers = 0;
   if (!lr_const_seen(c, name)) return 0;
-  for (int i = 0; i < r->nsrcw; i++)
-    if (sp_streq(r->srcw[i].name, name)) {
-      NodeKind wk = nt_kind(nt, r->srcw[i].node);
-      if (wk == NK_ClassNode || wk == NK_ModuleNode) headers++;
-      else writes++;
-    }
-  if (writes > 1 || (writes && headers)) return 0;
-  NT_FOREACH_KIND(nt, NK_CallNode, n) {
-    const char *m = nt_str(nt, n, "name");
-    int ac = 0, a = 0;
-    const int *av = call_args(nt, n, &ac);
-    while (m && is_send_family(m)) m = a < ac ? vis_arg_name(nt, av[a++]) : NULL;
-    if (!m) return 0;   /* (lr_const_seen: no name the record cannot read) */
-    if (is_remove_const_name(m) && (a >= ac || !vis_arg_name(nt, av[a]) || sp_streq(vis_arg_name(nt, av[a]), name))) return 0;
-  }
-  return 1;
+  const struct LrFinal *f = lr_final_of(c, name);
+  int writes = f ? f->writes : 0, headers = f ? f->headers : 0;
+  return !(writes > 1 || (writes && headers)) && !c->lrec->fin_calls && !(f && f->removed);
+}
+
+/* ...asked of a write of it after the walk (an_const_presence) */
+int elab_const_write_final(Compiler *c, int write) {
+  const char *nm = c->lrec ? lr_const_written(c->nt, write) : NULL;
+  return nm && lr_const_final(c, nm);
 }
 
 /* Does the record hold def node `def` (a `def K.m` in a method body) as
@@ -7578,6 +7573,83 @@ int elab_consts_by_value(Compiler *c, int unheld) {
   return hit;
 }
 
+static struct LrFinal *lr_final(LoadRecord *r, const char *name, int make) {
+  unsigned b = lr_hash(0, 1, name);
+  for (int k = r->fin_head[b]; k >= 0; k = r->fin[k].next)
+    if (sp_streq(r->fin[k].name, name)) return &r->fin[k];
+  if (!make) return NULL;
+  r->fin = lr_grow(r->fin, &r->cfin, r->nfin, sizeof *r->fin);
+  int k = r->nfin++;
+  r->fin[k] = (struct LrFinal){ .name = name, .next = r->fin_head[b] };
+  r->fin_head[b] = k;
+  return &r->fin[k];
+}
+
+/* The facts lr_const_seen and lr_const_final read, of every written name
+   at once: one pass over the source's writes, the tree's writes and its
+   calls, kept while the tree, the recorded statements and the histories
+   stand. Asked per constant, a scan per name was quadratic in the
+   program's constants. */
+static void lr_final_index(Compiler *c) {
+  LoadRecord *r = c->lrec;
+  const NodeTable *nt = c->nt;
+  if (r->fin_head && r->fin_of.builds == r->builds && r->fin_of.entries == r->nentries && r->fin_of.nst == r->nst &&
+      r->fin_of.at == r->at && r->fin_of.ver == nt->version && r->fin_of.edits == nt->edits) return;
+  if (!r->fin_head && !(r->fin_head = malloc(sizeof(int) * LR_BUCKETS))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  for (int b = 0; b < LR_BUCKETS; b++) r->fin_head[b] = -1;
+  r->nfin = 0;
+  r->fin_calls = 0;
+  /* a write the source has that a pass since renamed or dropped */
+  for (int i = 0; i < r->nsrcw; i++) {
+    struct LrFinal *f = lr_final(r, r->srcw[i].name, 1);
+    NodeKind wk = nt_kind(nt, r->srcw[i].node);
+    if (wk == NK_ClassNode || wk == NK_ModuleNode) f->headers++;
+    else f->writes++;
+    const char *now = lr_const_written(nt, r->srcw[i].node);
+    if (!now || !sp_streq(now, r->srcw[i].name)) f->unseen = 1;
+  }
+  /* a write the record does not order */
+  const int *par = comp_parent_map(c);
+  int nk = 0;
+  const NodeKind *kinds = elab_const_write_kinds(&nk);
+  for (int k = 0; k < nk; k++) {
+    int n = 0;
+    const int *v = nt_nodes_of_kind(nt, kinds[k], &n);
+    for (int i = 0; i < n; i++) {
+      const char *nm = lr_const_written(nt, v[i]);
+      if (!nm) continue;
+      struct LrFinal *f = lr_final(r, nm, 1);
+      if (kinds[k] != NK_ConstantWriteNode && kinds[k] != NK_ConstantOrWriteNode &&
+          kinds[k] != NK_ClassNode && kinds[k] != NK_ModuleNode) { f->unseen = 1; continue; }
+      int top = v[i];
+      for (int a = par[v[i]]; a >= 0; top = a, a = par[a]) {
+        NodeKind ak = nt_kind(nt, a);
+        if (ak == NK_DefNode || ak == NK_LambdaNode || ak == NK_BlockNode) f->unseen = 1;
+      }
+      int e = top < r->n ? r->at[top] : -1;   /* the file's root's statement */
+      if (e < 0 || r->st[e].region != 0) f->unseen = 1;
+    }
+  }
+  /* a remove_const, and a send of a name the record cannot read */
+  NT_FOREACH_KIND(nt, NK_CallNode, n) {
+    const char *m = nt_str(nt, n, "name");
+    int ac = 0, a = 0;
+    const int *av = call_args(nt, n, &ac);
+    while (m && is_send_family(m)) m = a < ac ? vis_arg_name(nt, av[a++]) : NULL;
+    if (!m) { r->fin_calls = 1; continue; }
+    if (!is_remove_const_name(m)) continue;
+    const char *k = a < ac ? vis_arg_name(nt, av[a]) : NULL;
+    if (k) lr_final(r, k, 1)->removed = 1;
+    else r->fin_calls = 1;
+  }
+  r->fin_of.builds = r->builds; r->fin_of.entries = r->nentries; r->fin_of.nst = r->nst;
+  r->fin_of.at = r->at; r->fin_of.ver = nt->version; r->fin_of.edits = nt->edits;
+}
+static const struct LrFinal *lr_final_of(Compiler *c, const char *name) {
+  lr_final_index(c);
+  return lr_final(c->lrec, name, 0);
+}
+
 /* Does the record see every write of constant `name` there can be? Not
    when the program runs code it cannot follow (elab_runs_unseen), loads a
    C extension, or may make a constant by a name it computes, a held one or
@@ -7594,30 +7666,8 @@ static int lr_const_seen(Compiler *c, const char *name) {
   const NodeTable *nt = c->nt;
   if (!r->consts) r->consts = elab_runs_unseen(c) || nt->has_cext_decls || elab_consts_by_value(c, 1) ? 2 : 1;
   if (r->consts == 2) return 0;
-  for (int i = 0; i < r->nsrcw; i++) {
-    const char *now = sp_streq(r->srcw[i].name, name) ? lr_const_written(nt, r->srcw[i].node) : name;
-    if (!now || !sp_streq(now, name)) return 0;
-  }
-  const int *par = comp_parent_map(c);
-  int nk = 0;
-  const NodeKind *kinds = elab_const_write_kinds(&nk);
-  for (int k = 0; k < nk; k++) {
-    int n = 0;
-    const int *v = nt_nodes_of_kind(nt, kinds[k], &n);
-    for (int i = 0; i < n; i++) {
-      if (!sp_streq(lr_const_written(nt, v[i]), name)) continue;
-      if (kinds[k] != NK_ConstantWriteNode && kinds[k] != NK_ConstantOrWriteNode &&
-          kinds[k] != NK_ClassNode && kinds[k] != NK_ModuleNode) return 0;
-      int top = v[i];
-      for (int a = par[v[i]]; a >= 0; top = a, a = par[a]) {
-        NodeKind ak = nt_kind(nt, a);
-        if (ak == NK_DefNode || ak == NK_LambdaNode || ak == NK_BlockNode) return 0;
-      }
-      int e = top < r->n ? r->at[top] : -1;   /* the file's root's statement */
-      if (e < 0 || r->st[e].region != 0) return 0;
-    }
-  }
-  return 1;
+  const struct LrFinal *f = lr_final_of(c, name);
+  return !(f && f->unseen);
 }
 
 /* May the constants of class cls (LR_MAIN: Object's) or of an ancestor
@@ -8563,6 +8613,7 @@ void elab_free(Compiler *c) {
   for (int i = 0; i < r->nsrcw; i++) free(r->srcw[i].name);
   free(r->srcw);
   free(r->slot); free(r->slot_head); free(r->slotp);
+  free(r->fin); free(r->fin_head);
   free(r->hist); free(r->mixed); free(r->rclass); free(r->sgm); free(r->sgchain); free(r->unset.key); free(r->unset.un); free(r->clsmod); free(r->hhead); free(r->cls); free(r->vers); free(r->vers_head); free(r->valias); free(r->rdr); free(r->rdr_head); free(r->set);
   for (int i = 0; i < r->nhdr; i++) free(r->hdr[i].leaf);
   free(r->hdr); free(r->hdr_head);

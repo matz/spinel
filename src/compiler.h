@@ -324,6 +324,9 @@ typedef struct {
                       slot has a presence flag (cst_NAME__set) that every
                       assignment sets and every read, defined?, const_defined?
                       and const_get tests (analyze_const.c) */
+  int const_lit;   /* (consts) 1 + the Integer or Float literal node the
+                      constant's only write assigns, or 0: a read emits the
+                      literal rather than loading the slot (analyze_const.c) */
   int gvar_seeded; /* (globals) gvar_seeded_before_read's answer, asked once:
                       0 not asked yet, 1 a read can see its first nil, 2 a
                       non-nil value is written before anything can read it */

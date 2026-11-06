@@ -10468,14 +10468,23 @@ static int infer_constant_path(Compiler *c, int id, const NodeTable *nt, NodeKin
     if (nm && dyn && (prt == TY_CLASS || prt == TY_POLY)) {
       TyKind ct = TY_UNKNOWN; int nc = 0, uniform = 1;
       int *cands, ncands = comp_const_tail_cands(c, nm, &cands);
+      /* (each class's own chain, and Object's top-level one) */
+      int obj_k = comp_class_index(c, "Object");
       for (int k = 0; k < c->nclasses; k++) {
-        int ci2 = comp_class_owned_const(c, k, nm, cands, ncands);
+        if (k == obj_k) continue;
+        int ci2 = const_path_value_const(c, k, nm, cands, ncands);
         if (ci2 < 0) continue;
         if (nc == 0) ct = c->consts[ci2].type;
         else if (c->consts[ci2].type != ct) uniform = 0;
         nc++;
       }
       free(cands);
+      LocalVar *topc = const_name_resolves_top_level(c, nm) ? comp_const(c, nm) : NULL;
+      if (topc && !comp_is_wellknown_const(nm)) {
+        if (nc == 0) ct = topc->type;
+        else if (topc->type != ct) uniform = 0;
+        nc++;
+      }
       if (nc > 0 && uniform && ct != TY_UNKNOWN) { *out = ct; return 1; }
     }
   }

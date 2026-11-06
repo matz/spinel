@@ -2130,6 +2130,44 @@ int const_seen_by_class(Compiler *c, int k, const char *cgn) {
   }
   return 0;
 }
+/* The constant `m::NM` reads when m holds class or module K at run time,
+   as an index into c->consts, or -1 when CRuby raises NameError. CRuby
+   looks in K's own constants first, then in each module K prepends or
+   includes (the last one first, with the modules that one includes), then
+   in K's superclass the same way. It stops at Object: a top-level constant
+   is not found through another class or module. (Object itself, the
+   caller asks: const_name_resolves_top_level.) */
+static int cpv_own(Compiler *c, int k, const char *nm, const int *cands, int ncands) {
+  int ci = comp_class_owned_const(c, k, nm, cands, ncands);
+  if (ci >= 0) return ci;
+  const char *key = const_value_owned_key(c, k, nm);
+  LocalVar *lv = key ? comp_const(c, key) : NULL;
+  return lv ? (int)(lv - c->consts) : -1;
+}
+static int cpv_walk(Compiler *c, int k, const char *nm, const int *cands, int ncands, int depth) {
+  if (depth > 16) return -1;
+  for (int n = 0; k >= 0 && k < c->nclasses && n < 64; k = c->classes[k].parent, n++) {
+    const ClassInfo *ci = &c->classes[k];
+    if (ci->name && is_object_base_name(ci->name)) break;
+    for (int i = ci->nprepended_mods - 1; i >= 0; i--) {
+      int m = ci->prepended_mods[i];
+      int r = m != k ? cpv_walk(c, m, nm, cands, ncands, depth + 1) : -1;
+      if (r >= 0) return r;
+    }
+    int own = cpv_own(c, k, nm, cands, ncands);
+    if (own >= 0) return own;
+    for (int i = ci->nincluded_mods - 1; i >= 0; i--) {
+      int m = ci->included_mods[i];
+      int r = m != k ? cpv_walk(c, m, nm, cands, ncands, depth + 1) : -1;
+      if (r >= 0) return r;
+    }
+  }
+  return -1;
+}
+int const_path_value_const(Compiler *c, int k, const char *nm, const int *cands, int ncands) {
+  if (k < 0 || k >= c->nclasses || !nm) return -1;
+  return cpv_walk(c, k, nm, cands, ncands, 0);
+}
 /* `R.const_defined?(:N)` with R's class: N known to the program and seen
    from R. The table is flat, keyed by the leaf, so a constant another class
    holds answered for every receiver (#9876). A receiver the class table

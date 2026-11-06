@@ -3638,21 +3638,29 @@ static int emit_constant_value(Compiler *c, int id, Buf *b, Buf *checks, const N
        value carries and read the one that class owns. */
     { Repr prtr = repr_of(c, par_idc >= 0 ? par_idc : -1);
       TyKind prt = par_idc >= 0 ? prtr.as_ty : TY_UNKNOWN;
-    if (nm && par_idc >= 0 && !par_nmc && (prt == TY_CLASS || prt == TY_POLY)) {
+    /* (a slot emit_const_recv_wrap already holds is read below: the switch
+       ran there, and the receiver runs once) */
+    if (nm && par_idc >= 0 && !par_nmc && (prt == TY_CLASS || prt == TY_POLY) && !nt_int(nt, id, "const_ptr", 0)) {
       /* A constant is stored under its OWNER's qualified spelling
          (Probe__Block__CODE) while the class's c_name is its leaf (Block), so
          the owner is found by asking each class whether a constant keyed
          "<...>__<c_name>__<nm>" or "<c_name>__<nm>" exists. */
       /* every class that owns one: a fixed 64 left the rest to the default
          arm, which raised NameError for a class that defines the constant */
-      int *ccls = malloc(sizeof(int) * (size_t)(c->nclasses > 0 ? c->nclasses : 1));
-      const char **ckey = malloc(sizeof(char *) * (size_t)(c->nclasses > 0 ? c->nclasses : 1));
+      /* Each class answers the constant its own chain holds: the class, the
+         modules it includes, its superclass (const_path_value_const), so a
+         subclass or an includer reads its ancestor's and a class with none
+         is CRuby's NameError. Object alone reads a top-level one. */
+      int *ccls = malloc(sizeof(int) * (size_t)(c->nclasses + 2));
+      const char **ckey = malloc(sizeof(char *) * (size_t)(c->nclasses + 2));
       if (!ccls || !ckey) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
       int nc = 0;
       TyKind ct = TY_UNKNOWN; int uniform = 1;
       int *cands, ncands = comp_const_tail_cands(c, nm, &cands);
+      int obj_k = comp_class_index(c, "Object");
       for (int k = 0; k < c->nclasses; k++) {
-        int ci2 = comp_class_owned_const(c, k, nm, cands, ncands);
+        if (k == obj_k) continue;
+        int ci2 = const_path_value_const(c, k, nm, cands, ncands);
         if (ci2 < 0) continue;
         const char *found = c->consts[ci2].name; TyKind ft = c->consts[ci2].type;
         if (nc == 0) ct = ft;
@@ -3660,6 +3668,13 @@ static int emit_constant_value(Compiler *c, int id, Buf *b, Buf *checks, const N
         ccls[nc] = k; ckey[nc] = found; nc++;
       }
       free(cands);
+      LocalVar *topc = const_name_resolves_top_level(c, nm) ? comp_const(c, nm) : NULL;
+      if (topc && !comp_is_wellknown_const(nm)) {
+        if (nc == 0) ct = topc->type;
+        else if (topc->type != ct) uniform = 0;
+        ccls[nc] = builtin_class_id("Object"); ckey[nc] = topc->name; nc++;
+        if (obj_k >= 0) { ccls[nc] = obj_k; ckey[nc] = topc->name; nc++; }
+      }
       if (nc > 0 && uniform && ct != TY_UNKNOWN) {
         int tk = ++g_tmp, tr = ++g_tmp;
         buf_printf(b, "({ sp_Class _t%d = ", tk);

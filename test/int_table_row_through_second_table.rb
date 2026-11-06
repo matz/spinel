@@ -6,6 +6,7 @@
 # as a table of rows and @rows was read as one. The String's bytes were read
 # as an Integer row and the program crashed. A stored value read out of a
 # variable with no type yet is now taken as one that may be no row.
+# infer-test greps the C: Through's @rows stays boxed, AllRows' narrows.
 class Through
   def initialize(mixed)
     @rows = [[1, 2]]
@@ -235,6 +236,138 @@ class LocalArm
 end
 
 o = LocalArm.new([[7, 8], "row"])
+o.fill(1)
+o.take
+p o.first
+
+# an assignment to a local
+class WriteLocal
+  def initialize(mixed)
+    @rows = [[1, 2]]
+    @other = [[3, 4]]
+    @mixed = mixed
+  end
+
+  def fill(i) = (@other[0] = (x = @mixed[i]))
+  def take = (@rows[0] = @other[0])
+  def first = @rows[0]
+end
+
+o = WriteLocal.new([[7, 8], "row"])
+o.fill(1)
+o.take
+p o.first
+
+# an assignment in a ternary arm
+class WriteArm
+  def initialize(mixed)
+    @rows = [[1, 2]]
+    @other = [[3, 4]]
+    @mixed = mixed
+  end
+
+  def fill(i) = (@other[0] = i > 5 ? [1] : (x = @mixed[i]))
+  def take = (@rows[0] = @other[0])
+  def first = @rows[0]
+end
+
+o = WriteArm.new([[7, 8], "row"])
+o.fill(1)
+o.take
+p o.first
+
+# an assignment to another ivar
+class WriteIvar
+  def initialize(mixed)
+    @rows = [[1, 2]]
+    @other = [[3, 4]]
+    @mixed = mixed
+  end
+
+  def fill(i) = (@other[0] = (@last = @mixed[i]))
+  def take = (@rows[0] = @other[0])
+  def first = @rows[0]
+end
+
+o = WriteIvar.new([[7, 8], "row"])
+o.fill(1)
+o.take
+p o.first
+
+# an ||= of a local
+class WriteOr
+  def initialize(mixed)
+    @rows = [[1, 2]]
+    @other = [[3, 4]]
+    @mixed = mixed
+  end
+
+  def fill(i) = (@other[0] = (y ||= @mixed[i]))
+  def take = (@rows[0] = @other[0])
+  def first = @rows[0]
+end
+
+o = WriteOr.new([[7, 8], "row"])
+o.fill(1)
+o.take
+p o.first
+
+# an attribute reader of the mixed Array
+class Reader
+  attr_reader :mixed
+
+  def initialize(mixed)
+    @rows = [[1, 2]]
+    @other = [[3, 4]]
+    @mixed = mixed
+  end
+
+  def fill(i) = (@other[0] = mixed[i])
+  def take = (@rows[0] = @other[0])
+  def first = @rows[0]
+end
+
+o = Reader.new([[7, 8], "row"])
+o.fill(1)
+o.take
+p o.first
+
+# the same reader called on self
+class ReaderSelf
+  attr_reader :mixed
+
+  def initialize(mixed)
+    @rows = [[1, 2]]
+    @other = [[3, 4]]
+    @mixed = mixed
+  end
+
+  def fill(i) = (@other[0] = self.mixed[i])
+  def take = (@rows[0] = @other[0])
+  def first = @rows[0]
+end
+
+o = ReaderSelf.new([[7, 8], "row"])
+o.fill(1)
+o.take
+p o.first
+
+# fetch on the reader
+class ReaderFetch
+  attr_reader :mixed
+
+  def initialize(mixed)
+    @rows = [[1, 2]]
+    @other = [[3, 4]]
+    @mixed = mixed
+  end
+
+  def fill(i) = (@other[0] = mixed.fetch(i))
+  def take = (@rows[0] = @other[0])
+  def first = @rows[0]
+end
+
+o = ReaderFetch.new([[7, 8], "row"])
 o.fill(1)
 o.take
 p o.first

@@ -7491,9 +7491,13 @@ static int desugar_dynamic_send_inner(Compiler *c) {
        reads as `args[0]` and every arm takes `*args.drop(1)`; the array is
        read more than once, so only a variable's -- a rest parameter, an
        ivar -- not an expression with effects. Interning the whole array as
-       the name answered "undefined method '[:name]'". */
-    int splat_src = -1;
-    if (argc == 1 && nt_kind(nt, argv[0]) == NK_SplatNode) {
+       the name answered "undefined method '[:name]'". Keywords after the
+       rest (`public_send(*args, **kwargs, &block)`, Object#try as Rails
+       writes it) go on to every arm after it; read as two arguments, the
+       Splat was the name. */
+    int splat_src = -1, splat_kwh = -1;
+    if ((argc == 1 || (argc == 2 && nt_kind(nt, argv[1]) == NK_KeywordHashNode)) &&
+        nt_kind(nt, argv[0]) == NK_SplatNode) {
       int se = nt_ref(nt, argv[0], "expression");
       if (se < 0) {
         /* an anonymous `*` (a `...` forwarder's `__send__(*, **, &)`): the
@@ -7508,6 +7512,7 @@ static int desugar_dynamic_send_inner(Compiler *c) {
       NodeKind sk = se >= 0 ? nt_kind(nt, se) : NK_NONE;
       if (sk != NK_LocalVariableReadNode && sk != NK_InstanceVariableReadNode) continue;
       splat_src = se;
+      if (argc == 2) splat_kwh = argv[1];
     }
     int nrest = argc - 1;
     if (nrest > 64) continue;
@@ -7742,6 +7747,7 @@ static int desugar_dynamic_send_inner(Compiler *c) {
       int sp = nt_new_node(nt, "SplatNode"); if (sp < 0) continue;
       nt_node_set_ref(nt, sp, "expression", drop);
       rest[0] = sp; nrest = 1;                                 /* the arms: *args.drop(1) */
+      if (splat_kwh >= 0) rest[nrest++] = splat_kwh;           /* ...and the keywords */
     }
     /* a `*args` or `**kwargs` among the arguments makes the count a run-time
        matter (`send(method, *args, **kwargs, &block)`): the arity filter
@@ -19639,9 +19645,36 @@ static int user_block_method(Compiler *c, const char *nm) {
    class-id dispatch may serve: it lifts the block, so a user method
    yielding two values reaches it without sym_proc_pair.
    { |*__spr_N| __spr_N.length > 1 ? __spr_N[0].m(__spr_N[1]) : __spr_N[0].m } */
+/* Drop `name` from block `blk`'s comma-joined `locals`: emit_block_locals_reset
+   nils every name there that is no parameter, and a block lifted to a proc
+   function declares only the names its body still binds. */
+static void blk_locals_drop(NodeTable *nt, int blk, const char *name) {
+  const char *locs = nt_str(nt, blk, "locals");
+  if (!locs || !*locs || !name) return;
+  size_t nlen = strlen(name), w = 0;
+  char *out = (char *)malloc(strlen(locs) + 1);
+  if (!out) return;
+  out[0] = 0;
+  for (const char *p = locs; ; ) {
+    const char *e = strchr(p, ',');
+    size_t seg = e ? (size_t)(e - p) : strlen(p);
+    if (seg && !(seg == nlen && !strncmp(p, name, seg))) {
+      if (w) out[w++] = ',';
+      memcpy(out + w, p, seg); w += seg; out[w] = 0;
+    }
+    if (!e) break;
+    p = e + 1;
+  }
+  nt_set_str(nt, blk, "locals", out);
+  free(out);
+}
+
 static int sym_proc_rest_view(Compiler *c, int blk, const char *mn) {
   NodeTable *nt = (NodeTable *)c->nt;
   int pn = nt_ref(nt, nt_ref(nt, blk, "parameters"), "parameters");
+  int P = 0; const int *pre = nt_arr(nt, pn, "requireds", &P);
+  char xn[64] = "";
+  if (P == 1 && nt_str(nt, pre[0], "name")) snprintf(xn, sizeof xn, "%s", nt_str(nt, pre[0], "name"));
   char rn[48]; snprintf(rn, sizeof rn, "__spr_%s", comp_node_tag(c, blk));
   BsB b = { nt, 1 };
   int base = nt->count;
@@ -19656,6 +19689,7 @@ static int sym_proc_rest_view(Compiler *c, int blk, const char *mn) {
   if (!b.ok || stmts < 0) return 0;
   nt_node_set_arr(nt, pn, "requireds", NULL, 0);
   nt_node_set_ref(nt, pn, "rest", rest);
+  if (*xn) blk_locals_drop(nt, blk, xn);
   /* A view desugar_builtin_iter_block_shapes lowered (its receiver read as
      an Array for a round) is viewed again: the body it replaces assigns the
      rest name, and left in the table that is the method's write of it, so

@@ -1083,6 +1083,7 @@ sp_int sp_File_write_bin(sp_File *f, const char *s) {SP_GC_ROOT(f);SP_GC_ROOT_ST
    them without a flush. */
 sp_int sp_File_syswrite(sp_File *f, const char *s, size_t n) {SP_GC_ROOT(f);SP_GC_ROOT_STR(s);
   SP_IO_OPEN(f);
+  sp_io_check_writable(f);
   if (!s) return 0;
   if (f->is_sock || f->own_buf == SP_OWN_SOCK) return sp_sock_write(f, s, n);
   if (f->sync_on && sp_io_parkable(f)) return sp_sock_write(f, s, n);
@@ -2747,6 +2748,7 @@ sp_File *sp_File_reopen_io(sp_File *f, sp_File *other) {SP_GC_ROOT(f);SP_GC_ROOT
   if (f->own_buf || other->own_buf) sp_io_own_buf_reopened(f);
   f->path = other->path;
   f->mode = other->mode;
+  f->shut = other->shut;        /* the sides the other socket has shut, none for a file */
   f->lineno = 0;
   return f;
 }
@@ -2802,6 +2804,7 @@ sp_File *sp_File_dup(sp_File *f, int keep_frozen) {SP_GC_ROOT(f);
   g->bin_flag = f->bin_flag;
   g->ext_enc = f->ext_enc;
   g->is_sock = f->is_sock;
+  g->shut = f->shut;            /* a side shut down stays shut in the copy */
   if (f->own_buf) {   /* the dup shares the open file, and its flag */
     g->own_buf = f->own_buf; g->wstream = f->wstream;
     g->wnonblock = f->wnonblock; g->wgen = f->wgen;

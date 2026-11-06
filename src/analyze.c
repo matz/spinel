@@ -15302,6 +15302,8 @@ static int desugar_multi_yield_map_param(Compiler *c) {
     int cid = ty_object_class(rt);
     if (cid < 0 || cid >= c->nclasses ||
         (c->classes[cid].enum_yield_arity <= 1 && !c->classes[cid].enum_yield_packed)) continue;
+    /* a map the program defines takes what it yields, not what #each does */
+    if (call_target(c, id, cid, nm, 0, NULL) >= 0) continue;
     int packed = c->classes[cid].enum_yield_packed;
     if (packed && comp_method_in_chain(c, cid, "__enum_to_a_raw", NULL) < 0) continue;
     int bp = nt_ref(nt, blk, "parameters");

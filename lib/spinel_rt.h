@@ -10160,6 +10160,24 @@ static sp_RbVal sp_PolyArray_min(sp_PolyArray *a) {sp_gc_wb((void*)a);
   }
   return best;
 }
+/* One side of Array#minmax: CRuby asks the extreme so far, `best <=> v`, where
+   Array#min and #max ask the new element (`v <=> best`). A user `<=>` that is
+   not antisymmetric sees the difference. */
+static SP_UNUSED sp_RbVal sp_PolyArray_minmax_side(sp_PolyArray *a, int want_max) {
+  if (SP_UNLIKELY(!a)) sp_nil_recv("minmax"); if (a->len == 0) return sp_box_nil();
+  SP_GC_ROOT(a);
+  /* the element is read once, before the call: a user <=> may shrink the
+     array, and the extreme may be an element it dropped */
+  sp_RbVal best = a->data[0]; SP_GC_ROOT_RBVAL(best);
+  for (sp_int i = 1; i < a->len; i++) {
+    sp_RbVal v = a->data[i]; SP_GC_ROOT_RBVAL(v);
+    sp_bool ok = FALSE;
+    sp_int r = sp_poly_order_cmp(best, v, &ok);
+    if (!ok) sp_raise_cls("ArgumentError", sp_sprintf("comparison of %s with %s failed", sp_poly_class_name(best), sp_cmperr_desc(v)));
+    if (want_max ? r < 0 : r > 0) best = v;
+  }
+  return best;
+}
 static void sp_PolyArray_sort_bang(sp_PolyArray *a) {
   if (SP_UNLIKELY(!a)) sp_nil_recv("sort!");if (a->frozen) {sp_raise_frozen_array_at(a, SP_BUILTIN_POLY_ARRAY);return;}
   /* Root the array across the sort: the comparator runs sp_poly_cmp, which can

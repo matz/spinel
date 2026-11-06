@@ -80,3 +80,56 @@ p Entries.new.map { |x| x }
 p EnumerableSub.new.map { |x| x }
 p OwnOverEnumerable.new.map { |x| x }
 p ListingSub.new.map { |x| x }
+
+module OwnMap
+  def map
+    [yield(:own_map)]
+  end
+end
+
+# A module with map, then one carrying Enumerable: the later include comes first.
+class MapThenListing
+  include OwnMap
+  include Listing
+
+  def each
+    yield 4, :four
+  end
+end
+
+# The other order: OwnMap's map comes first.
+class ListingThenMap
+  include Listing
+  include OwnMap
+
+  def each
+    yield 5, :five
+  end
+end
+
+class EnumBase
+  include Enumerable
+
+  def map
+    [yield([6, :six])]
+  end
+
+  def each
+    yield 6, :six
+  end
+end
+
+# Enumerable behind the parent stays behind the parent's own map.
+module Marker
+  def marker
+    :marker
+  end
+end
+
+class EnumBaseSub < EnumBase
+  include Marker
+end
+
+p MapThenListing.new.map { |x| x }
+p ListingThenMap.new.map { |x| x }
+p EnumBaseSub.new.map { |x| x }

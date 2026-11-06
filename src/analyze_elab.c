@@ -161,6 +161,10 @@ struct LoadRecord {
   unsigned char unseen;      /* elab_runs_unseen's memo: 1 no, 2 yes */
   unsigned char consts;      /* lr_const_seen's memo: 1 the program makes constants only as it writes them, 2 not */
   struct { int node; char *name; } *srcw; int nsrcw;   /* the constant writes the source has, before any pass (elab_note_const_writes) */
+  /* the value constants' entities elab_const_keys keyed: each one's key,
+     and by node, the entity + 1 a write is of or a read names (0: none, a
+     class's, or a node made since) */
+  char **ckey; int nckey; int *cent; int ncent; int ckey_gen;
   LrSlot *slot; int nslot, cslot, *slot_head, slot_builds;
   LrSlotPoint *slotp; int nslotp, cslotp; long slot_entries;
   int runs_of, nrun, *rend;  /* lr_run_points: the build its bits are of, how many statements run code, each region's end */
@@ -6450,7 +6454,8 @@ static const char *lr_const_slot_name(const NodeTable *nt, int node) {
       vis_arg_name(nt, av[0]) : NULL;
   }
   int target = nt_ref(nt, node, "target");
-  return nt_str(nt, target >= 0 ? target : node, "name");
+  int kn = target >= 0 ? target : node;
+  return nt_const_key_or_name(nt, kn);   /* (const_key_at) */
 }
 
 /* A plain assignment is a statement directly in a file or class body,
@@ -7419,8 +7424,9 @@ void elab_swap_nodes(Compiler *c, int a, int b) {
 
 int elab_const_at(Compiler *c, int node, const char *name, LoadPoint p, const LrDef **out) {
   if (out) *out = NULL;
-  const char *nm = node >= 0 ? nt_str(c->nt, node, "name") : NULL;
-  if (name && nm && sp_streq(name, nm)) name = lr_written_name(c->nt, node);
+  const char *nm = node >= 0 ? nt_str(c->nt, node, "name") : NULL, *ky = node >= 0 ? nt_const_key(c->nt, node) : NULL;
+  /* (the name the node carries, or its key: the record has the name written) */
+  if (name && ((nm && sp_streq(name, nm)) || (ky && sp_streq(name, ky)))) name = lr_written_name(c->nt, node);
   if (p.region < 0) p = elab_point_of(c, node);
   if (!c->lrec || !lr_ready(c, p)) return ELAB_UNKNOWN;
   return lr_root_read(c->nt, node) ? lr_const_in(c, LR_MAIN, name, p, p.region < 0, 1, out, 0, LR_KEY_CONST)
@@ -8970,6 +8976,18 @@ static const LrHist *lr_const_cand(Compiler *c, int node, const char *name) {
   return (h = lr_hist(r, LR_KEY_CONST, lr_const_owner(LR_MAIN), name, 0)) && h->n ? h : NULL;
 }
 
+/* A node's key (elab_const_node_key), and the name it carried then: a pass
+   that renames the node later (the class half's qualifying) leaves the key
+   behind */
+static void lr_set_ckey(NodeTable *nt, int node, const char *key) {
+  const char *n = nt_str(nt, node, "name");
+  if (!n) return;
+  char *was = strdup(n);
+  if (!was) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  nt_node_set_str(nt, node, "ckey", key);
+  nt_node_set_str(nt, node, "ckey_at", was);
+  free(was);
+}
 void elab_const_keys(Compiler *c) {
   LoadRecord *r = c->lrec;
   const char *e = getenv("SPINEL_CONST_KEY_CHECK");
@@ -9043,6 +9061,8 @@ void elab_const_keys(Compiler *c) {
     for (int v = 0; v < h->n; v++) if (h->v[v].node >= 0 && h->v[v].node < nt->count) ent[h->v[v].node] = i + 1;
   }
   unsigned char *skip = calloc((size_t)nt->count + 1, 1);
+  int *rent = calloc((size_t)nt->count + 1, sizeof *rent);   /* by read: the entity + 1 it names */
+  if (!ent || !skip || !rent) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   for (int id = 0; id < nt->count; id++) {
     NodeKind k = nt_kind(nt, id);
     if (k == NK_ConstantPathNode) { int pa = nt_ref(nt, id, "parent"); if (pa >= 0) skip[pa] = 1; }
@@ -9071,6 +9091,7 @@ void elab_const_keys(Compiler *c) {
       const LrHist *ch = lr_const_cand(c, id, nm);
       for (int i = 0; ch && i < ne; i++)
         if (&r->hist[es[i].h] == ch) {
+          if (!es[i].cls_ent && es[i].key) rent[id] = i + 1;
           if (!es[i].cls_ent && es[i].key && !sp_streq(es[i].key, nt_str(nt, id, "name") ? nt_str(nt, id, "name") : ""))
             lr_key_queue(&q, &nq, &cq, id, es[i].key);
           break;
@@ -9083,6 +9104,7 @@ void elab_const_keys(Compiler *c) {
     }
     int ei = d->node >= 0 && d->node < nt->count ? ent[d->node] - 1 : -1;
     if (ei < 0 || es[ei].cls_ent || !es[ei].key) { rcls++; continue; }
+    rent[id] = ei + 1;
     const char *rn = nt_str(nt, id, "name");
     if (rn && sp_streq(rn, es[ei].key)) { ragree++; continue; }
     rdiffer++;
@@ -9091,18 +9113,47 @@ void elab_const_keys(Compiler *c) {
                        (long long)nt_int(nt, id, "node_line", 0), rn ? rn : "?", es[ei].key);
   }
   if (check) fprintf(stderr, "constkey: reads agree=%ld differ=%ld no=%ld unknown=%ld class=%ld\n", ragree, rdiffer, rno, runk, rcls);
-  /* the renames, once every ask is answered: the name as written stays
-     (qc_orig_name), which the record's histories and the path lookups read */
-  for (int i = 0; i < nq; i++) {
-    const char *was = lr_written_name(nt, q[i].node);
-    if (was && !nt_str(nt, q[i].node, "qc_orig_name")) nt_node_set_str((NodeTable *)nt, q[i].node, "qc_orig_name", was);
-    nt_node_set_str((NodeTable *)nt, q[i].node, "name", q[i].key);
-    free(q[i].key);
+  /* the entities and the node map, kept for the slots and the readers
+     that ask by node (elab_const_node_key) */
+  for (int i = 0; i < r->nckey; i++) free(r->ckey[i]);
+  free(r->ckey); free(r->cent);
+  r->ckey = calloc((size_t)ne + 1, sizeof *r->ckey);
+  r->cent = calloc((size_t)nt->count + 1, sizeof *r->cent);
+  if (!r->ckey || !r->cent) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  r->nckey = ne; r->ncent = nt->count; r->ckey_gen++;
+  for (int i = 0; i < ne; i++) r->ckey[i] = !es[i].cls_ent && es[i].key ? strdup(es[i].key) : NULL;
+  for (int id = 0; id < nt->count; id++) {
+    int ei = ent[id] - 1;
+    if (ei < 0) ei = rent[id] - 1;
+    if (ei < 0 || !r->ckey[ei]) continue;
+    r->cent[id] = ei + 1;
+    /* (and the node that carries a write's name: a path write's target) */
+    int kn = ent[id] ? lr_key_node(nt, id) : -1;
+    if (kn >= 0 && kn < nt->count && kn != id && !r->cent[kn]) r->cent[kn] = ei + 1;
   }
+
+  free(rent);
+  /* No node is renamed: each keeps the name the program wrote, and carries
+     its slot's key beside it ("ckey", const_key_at), which a copy a later
+     pass makes of the node (a method body copied into another class)
+     carries too. The entities' writes and resolved reads first, then the
+     ones the queue names (a candidate's read, a write of an owner the
+     record does not know keeping qualify's qc_value_key). */
+  for (int id = 0; id < nt->count; id++)
+    if (r->cent[id]) lr_set_ckey((NodeTable *)nt, id, r->ckey[r->cent[id] - 1]);
+  for (int i = 0; i < nq; i++) { lr_set_ckey((NodeTable *)nt, q[i].node, q[i].key); free(q[i].key); }
   free(q);
   free(ent); free(skip);
   for (int i = 0; i < ne; i++) { free(es[i].path); free(es[i].key); }
   free(es);
+}
+
+/* The key of the value constant entity node is a write of or a read
+   names, as elab_const_keys found it; NULL for none (a class's, one the
+   record does not bind, a node made since) */
+int elab_const_keys_gen(Compiler *c) { return c->lrec ? c->lrec->ckey_gen : 0; }
+const char *elab_const_node_key(Compiler *c, int node) {
+  return nt_const_key(c->nt, node);
 }
 
 /* The statements of the i-th opening of class cls the record holds, in

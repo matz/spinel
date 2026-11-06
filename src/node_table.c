@@ -559,12 +559,21 @@ void nt_node_reset(NodeTable *nt, int id, const char *type) {
   nki_retyped(nt, id, was);
 }
 
+/* A constant's key (elab_const_keys' "ckey") is of the name it had: a
+   rename after it, even to the same text, leaves the key behind */
+static void nt_stale_ckey(NodeTable *nt, SpNode *nd) {
+  for (int j = 0; j < nd->ns; j++)
+    if (sp_streq(nd->s[j].key, "ckey_at") && nd->s[j].val_len) {
+      nt_retire(nt, nd->s[j].val); nd->s[j].val = dup_n("", 0); nd->s[j].val_len = 0;
+    }
+}
 void nt_node_set_str(NodeTable *nt, int id, const char *key, const char *val) {
   SpNode *nd = (SpNode *)node_at(nt, id);
   if (!nd) return;
   nt->version++; nt->edits++;
   size_t klen = strlen(key), vlen = strlen(val);
   if (vlen == 16 && !strcmp(val, "__cext_extension") && !strcmp(key, "name")) nt->has_cext_decls = 1;
+  if (!strcmp(key, "name")) nt_stale_ckey(nt, nd);
   for (int j = 0; j < nd->ns; j++)
     if (sp_streq(nd->s[j].key, key)) {
       nt_retire(nt, nd->s[j].val); nd->s[j].val = dup_n(val, vlen); nd->s[j].val_len = vlen; return;
@@ -1040,6 +1049,7 @@ int nt_set_str(NodeTable *nt, int id, const char *key, const char *val) {
   SpNode *nd = (SpNode *)node_at(nt, id);
   if (!nd) return 0;
   nt->version++; nt->edits++;
+  if (!strcmp(key, "name")) nt_stale_ckey(nt, nd);
   size_t vlen = strlen(val);
   for (int j = 0; j < nd->ns; j++) {
     if (sp_streq(nd->s[j].key, key)) {

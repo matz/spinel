@@ -914,7 +914,7 @@ static int me_body_defines(const NodeTable *nt, const char *leaf, const char *m,
 static const char *me_const_leaf(const NodeTable *nt, int n) {
   if (n < 0) return NULL;
   NodeKind k = nt_kind(nt, n);
-  return k == NK_ConstantReadNode || k == NK_ConstantPathNode ? nt_str(nt, n, "name") : NULL;
+  return k == NK_ConstantReadNode || k == NK_ConstantPathNode ? nt_const_key_or_name(nt, n) : NULL;
 }
 /* every segment of a constant path names a class or module the program defines */
 static int me_path_defined(const NodeTable *nt, int n) {

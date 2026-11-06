@@ -1309,7 +1309,7 @@ static int cf_is_class_const(CF *f, int n) {
   if (n < 0) return -1;
   NodeKind k = nt_kind(f->nt, n);
   if (k != NK_ConstantReadNode && k != NK_ConstantPathNode) return -1;
-  return comp_class_index(f->c, nt_str(f->nt, n, "name"));
+  return comp_class_index(f->c, const_key_at(f->c, n));
 }
 /* the methods named `name`, memoized: the class structure does not move
    during the pass */
@@ -3823,7 +3823,7 @@ static void cf_call(CF *f, int v) {
   }
   NodeKind rk = nt_kind(nt, r);
   if (rk == NK_ConstantReadNode || rk == NK_ConstantPathNode) {
-    const char *cn = nt_str(nt, r, "name");
+    const char *cn = const_key_at(c, r);
     const char *key = cf_const_key(cn);
     if (cf_poison_class_call(f, v, key, nm, argv, argc, blk)) return;
     /* a constant holding a value of the program's own (`REG = Registry.new`)
@@ -4354,7 +4354,7 @@ static void cf_node(CF *f, int v) {
   case NK_ConstantOrWriteNode: case NK_ConstantAndWriteNode: case NK_ConstantOperatorWriteNode: {
     int key = (k == NK_ClassVariableWriteNode || k == NK_ClassVariableOrWriteNode || k == NK_ClassVariableAndWriteNode || k == NK_ClassVariableOperatorWriteNode) ? CF_K_CVAR
             : (k == NK_ConstantWriteNode || k == NK_ConstantOrWriteNode || k == NK_ConstantAndWriteNode || k == NK_ConstantOperatorWriteNode) ? CF_K_CONST : CF_K_GVAR;
-    const char *nm = nt_str(nt, v, "name");
+    const char *nm = key == CF_K_CONST ? const_key_at(c, v) : nt_str(nt, v, "name");
     if (key == CF_K_GVAR && nm && nm[0] == '$') nm = comp_resolve_gvar(c, nm + 1);
     int el = cf_entry(f, key, key == CF_K_CONST ? cf_const_key(nm) : nm);
     int val = nt_ref(nt, v, "value");
@@ -4367,7 +4367,7 @@ static void cf_node(CF *f, int v) {
   case NK_ConstantPathWriteNode: case NK_ConstantPathOrWriteNode: case NK_ConstantPathAndWriteNode:
   case NK_ConstantPathOperatorWriteNode: {
     int t = nt_ref(nt, v, "target");
-    const char *nm = t >= 0 ? nt_str(nt, t, "name") : nt_str(nt, v, "name");
+    const char *nm = t >= 0 ? const_key_at(c, t) : nt_str(nt, v, "name");
     int val = nt_ref(nt, v, "value");
     if (k == NK_ConstantPathOperatorWriteNode) cf_all(f, v); else cf_flow(f, val, v);
     if (!nm) { cf_all(f, v); return; }
@@ -4377,7 +4377,7 @@ static void cf_node(CF *f, int v) {
   }
   case NK_ClassVariableTargetNode: cf_all(f, cf_entry(f, CF_K_CVAR, nt_str(nt, v, "name"))); return;
   case NK_GlobalVariableTargetNode: { const char *nm = nt_str(nt, v, "name"); if (nm && nm[0] == '$') nm = comp_resolve_gvar(c, nm + 1); cf_all(f, cf_entry(f, CF_K_GVAR, nm)); return; }
-  case NK_ConstantTargetNode: case NK_ConstantPathTargetNode: cf_all(f, cf_entry(f, CF_K_CONST, cf_const_key(nt_str(nt, v, "name")))); return;
+  case NK_ConstantTargetNode: case NK_ConstantPathTargetNode: cf_all(f, cf_entry(f, CF_K_CONST, cf_const_key(const_key_at(c, v)))); return;
   case NK_ClassVariableReadNode: cf_flow(f, cf_entry(f, CF_K_CVAR, nt_str(nt, v, "name")), v); return;
   case NK_GlobalVariableReadNode: {
     const char *nm = nt_str(nt, v, "name");
@@ -4389,7 +4389,7 @@ static void cf_node(CF *f, int v) {
     return;
   }
   case NK_ConstantReadNode: case NK_ConstantPathNode: {
-    const char *nm = nt_str(nt, v, "name");
+    const char *nm = const_key_at(c, v);
     if (!nm) { cf_all(f, v); return; }
     /* a class body's `m` / `self.m`, which the body desugar sends to the
        class: in a block run under another self it is that self
@@ -4596,13 +4596,13 @@ static void cf_collect_dyn(CF *f) {
   static const NodeKind cw[] = { NK_ConstantWriteNode, NK_ConstantOrWriteNode, NK_ConstantAndWriteNode,
     NK_ConstantOperatorWriteNode, NK_ConstantTargetNode };
   for (int q = 0; q < 5; q++)
-    NT_FOREACH_KIND(nt, cw[q], id) { (void)cf_entry(f, CF_K_CONSTW, cf_const_key(nt_str(nt, id, "name"))); }
+    NT_FOREACH_KIND(nt, cw[q], id) { (void)cf_entry(f, CF_K_CONSTW, cf_const_key(const_key_at(f->c, id))); }
   static const NodeKind cpw[] = { NK_ConstantPathWriteNode, NK_ConstantPathOrWriteNode, NK_ConstantPathAndWriteNode,
     NK_ConstantPathOperatorWriteNode, NK_ConstantPathTargetNode };
   for (int q = 0; q < 5; q++)
     NT_FOREACH_KIND(nt, cpw[q], id) {
       int t = nt_ref(nt, id, "target");
-      const char *nm = t >= 0 ? nt_str(nt, t, "name") : nt_str(nt, id, "name");
+      const char *nm = t >= 0 ? const_key_at(f->c, t) : const_key_at(f->c, id);
       if (nm) (void)cf_entry(f, CF_K_CONSTW, cf_const_key(nm)); else { f->dyn_all = 1; f->kdyn_other = 1; }
     }
   NT_FOREACH_KIND(nt, NK_CallNode, id) {

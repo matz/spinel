@@ -270,6 +270,31 @@ typedef enum { ELAB_GVAR, ELAB_MAIN_IVAR, ELAB_CONST } ElabVar;
 struct HostStep;
 void elab_program(Compiler *c, struct HostStep *h);
 void elab_const_keys(Compiler *c);   /* each constant write and resolved read takes its entity's key (#10787); SPINEL_CONST_KEY_CHECK reports the changes */
+/* (the same from the node table alone: a key whose node a later pass
+   renamed is stale) */
+static inline const char *nt_const_key(const NodeTable *nt, int node) {
+  const char *k = node >= 0 ? nt_str(nt, node, "ckey") : NULL;
+  if (!k) return NULL;
+  const char *at = nt_str(nt, node, "ckey_at"), *n = nt_str(nt, node, "name");
+  return at && n && sp_streq(at, n) ? k : NULL;
+}
+static inline const char *nt_const_key_or_name(const NodeTable *nt, int node) {
+  const char *k = nt_const_key(nt, node);
+  return k ? k : nt_str(nt, node, "name");
+}
+const char *elab_const_node_key(Compiler *c, int node);   /* the key of the value constant entity a write is of or a read names; NULL for none */
+int elab_const_keys_gen(Compiler *c);   /* bumped each time elab_const_keys keys the entities: a cache by key is of one */
+/* Did the keys give the node a slot other than the name it carries (what a
+   rename to the key did, which qc_orig_name then recorded)? */
+static inline int const_key_differs(Compiler *c, int node) {
+  const char *k = elab_const_node_key(c, node), *n = nt_str(c->nt, node, "name");
+  return k && n && !sp_streq(k, n);
+}
+/* the name a constant node's slot goes by: its entity's key, else the name it carries */
+static inline const char *const_key_at(Compiler *c, int node) {
+  const char *k = elab_const_node_key(c, node);
+  return k ? k : nt_str(c->nt, node, "name");
+}
 /* the version of cls's method `name` (singleton when sg) live at p, through
    its ancestors as they stood at p; *out (when asked) the version found. A
    hook (`inherited`, `included`, `method_added`, ...) is asked as the

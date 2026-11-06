@@ -2547,7 +2547,7 @@ int comp_sg_reader_const(Compiler *c, int call_id) {
   if (recv < 0) return -1;
   NodeKind rk = nt_kind(nt, recv);
   if (rk != NK_ConstantReadNode && rk != NK_ConstantPathNode) return -1;
-  const char *rn = nt_str(nt, recv, "name");
+  const char *rn = const_key_at(c, recv);
   int ci = rn ? comp_class_index(c, rn) : -1;
   if (ci < 0 || !comp_is_sg_reader(&c->classes[ci], nm)) return -1;
   return comp_sg_const_binding(c, ci, nm);
@@ -2647,7 +2647,7 @@ static int const_name_resolves(Compiler *c, const char *cn) {
    class, module or builtin class's constant (Encoding::UTF_8), or as a
    program class the path names (A::B, renamed apart from an X::B) */
 int const_seg_resolves(Compiler *c, int seg) {
-  return const_name_resolves(c, nt_str(c->nt, seg, "name")) || const_seg_builtin(c, seg) ||
+  return const_name_resolves(c, const_key_at(c, seg)) || const_seg_builtin(c, seg) ||
          const_path_class(c, seg) >= 0;
 }
 
@@ -2731,7 +2731,7 @@ static int defined_path_keys(Compiler *c, int pred, const char **early, int cap,
      by its own name somewhere in the program */
   if (vk == NK_ConstantPathNode && !elab_autoload_read(c, v) && const_path_misses_member(c, v)) return -1;
   for (int seg = v; ; ) {
-    const char *nm = nt_str(nt, seg, "name");
+    const char *nm = const_key_at(c, seg);
     ConstReadEffect ce = an_const_read_effect(c, seg);
     /* (a registered segment may name a constant though no write defines it) */
     if (!const_seg_resolves(c, seg) && !ce.autoload) return -1;
@@ -2750,7 +2750,7 @@ static int defined_path_keys(Compiler *c, int pred, const char **early, int cap,
     if (par < 0) return const_name_resolves_top_level(c, nm) || const_seg_builtin(c, seg) || ce.autoload ? ne : -1;
     if (nt_kind(nt, par) == NK_ConstantPathNode) { seg = par; continue; }
     if (nt_kind(nt, par) == NK_ConstantReadNode) {
-      const char *pn = nt_str(nt, par, "name");
+      const char *pn = const_key_at(c, par);
       ConstReadEffect pe = an_const_read_effect(c, par);
       if (!const_seg_resolves(c, par) && !pe.autoload) return -1;
       LocalVar *plv = comp_const(c, pn);
@@ -4601,7 +4601,7 @@ static int vsite_key(Compiler *c, int v, NodeKind *kind, const char **name, int 
       return *name != NULL;
     /* a constant by its name alone, as comp_const keys it */
     case NK_ConstantReadNode: case NK_ConstantWriteNode: case NK_ConstantOrWriteNode: case NK_ConstantAndWriteNode:
-      *kind = NK_ConstantReadNode; *name = nm; *key = -1;
+      *kind = NK_ConstantReadNode; *name = const_key_at(c, v); *key = -1;
       return 1;
     /* a class variable by its name alone, as the share facts key it */
     case NK_ClassVariableReadNode: case NK_ClassVariableWriteNode:

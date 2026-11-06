@@ -6,15 +6,15 @@ r0 #3 f0 ConstantWriteNode Point line 13
   r0 #4 f0 DefNode twice line 14
 r0 #5 f0 ClassNode Fault line 17
   r0 #6 f0 DefNode ring line 18
-  r0 #7 f0 ConstantWriteNode Fault__FIRST line 19
+  r0 #7 f0 ConstantWriteNode FIRST line 19
   r0 #8 f0 CallNode include line 20
 r0 #9 f0 ClassNode Raised line 23
   r0 #10 f0 DefNode ring line 24
-  r0 #11 f0 ConstantWriteNode Raised__FIRST line 25
+  r0 #11 f0 ConstantWriteNode FIRST line 25
   r0 #12 f0 CallNode include line 30
 r0 #13 f0 ClassNode Called line 33
   r0 #14 f0 DefNode ring line 34
-  r0 #15 f0 ConstantWriteNode Called__FIRST line 35
+  r0 #15 f0 ConstantWriteNode FIRST line 35
   r0 #16 f0 CallNode include line 36
 r0 #17 f0 ClassNode Point line 39
   r0 #18 f0 DefNode ring line 40

@@ -525,7 +525,7 @@ static void cplan_resolve(Compiler *c, int id, CallPlan *p) {
 const CallPlan *cplan_const_user(Compiler *c, int id, int recv, int fresh) {
   const NodeTable *nt = c->nt;
   NodeKind rk = recv >= 0 ? nt_kind(nt, recv) : NK_NONE;
-  const char *cn = rk == NK_ConstantReadNode || rk == NK_ConstantPathNode ? nt_str(nt, recv, "name") : NULL;
+  const char *cn = rk == NK_ConstantReadNode || rk == NK_ConstantPathNode ? const_key_at(c, recv) : NULL;
   if (!cn || c->nclasses == 0) return NULL;
   int ci = comp_class_index(c, cn);
   if (ci < 0) return NULL;
@@ -2303,7 +2303,7 @@ static int ct_new_initializers(Compiler *c, int id, int *out) {
   /* (an untabled builtin runs no program initialize only while reopening,
      subclassing, prepend, class_eval and define_method on it are refused:
      revisit when they are lifted) */
-  if ((k == NK_ConstantReadNode || k == NK_ConstantPathNode) && !comp_const(c, nt_str(nt, r, "name")) &&
+  if ((k == NK_ConstantReadNode || k == NK_ConstantPathNode) && !comp_const(c, const_key_at(c, r)) &&
       (const_seg_builtin(c, r) || (k == NK_ConstantReadNode && is_untabled_native_class_name(nt_str(nt, r, "name")))))
     return 0;
   TyKind rt = comp_ntype(c, r);

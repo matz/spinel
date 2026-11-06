@@ -7754,7 +7754,7 @@ static int pm_value_const(Compiler *c, int pat, const char *cn);
    (`in LIMIT` is LIMIT === v, a value test the recursive matcher emits) */
 static int pm_class_const_read(Compiler *c, int n) {
   if (n < 0 || nt_kind(c->nt, n) != NK_ConstantReadNode) return 0;
-  const char *cn = nt_str(c->nt, n, "name");
+  const char *cn = const_key_at(c, n);
   return cn && !pm_value_const(c, n, cn);
 }
 /* the class name a class pattern tests: the class an alias constant
@@ -8290,8 +8290,8 @@ static int emit_pm_cond_value(Compiler *c, int pat, int t, TyKind pt, int subj, 
      every subject. A constant that holds a value is `value === subject`. */
   if (pk == NK_ConstantReadNode || pk == NK_ConstantPathNode) {
     char cq[192];
-    const char *cn2 = pk == NK_ConstantReadNode ? nt_str(nt, pat, "name")
-                                                : isa_match_name(nt, pat, cq, sizeof cq);
+    const char *cn2 = pk == NK_ConstantReadNode ? const_key_at(c, pat)
+                                                : isa_match_key(c, pat, cq, sizeof cq);
     if (!cn2) unsupported(c, pat, "constant pattern with a computed scope");
     if (pm_value_const(c, pat, cn2)) {
       emit_pm_value_const(c, pat, t, pt, b);
@@ -11299,7 +11299,7 @@ void emit_case(Compiler *c, int id, Buf *b, int indent) {
              exception carries), the leaf otherwise */
           char cq2[192];
           const char *cn2 = (cty2_k == NK_ConstantReadNode || cty2_k == NK_ConstantPathNode)
-                           ? isa_match_name(nt, conds[j], cq2, sizeof cq2) : NULL;
+                           ? isa_match_key(c, conds[j], cq2, sizeof cq2) : NULL;
           /* a VALUE constant (`STATE_TITLE = :title`; registered in
              comp_const with a real type) in `when` is an equality test,
              not Module#=== -- treating it as a class name folded every
@@ -17140,7 +17140,7 @@ static TyKind masgn_slot_type(Compiler *c, int id, int tgt) {
     return cx >= 0 ? c->classes[cid].cvar_types[cx] : TY_UNKNOWN;
   }
   if (k == NK_ConstantTargetNode || k == NK_ConstantPathTargetNode) {
-    LocalVar *cv = comp_const(c, nm);
+    LocalVar *cv = comp_const(c, const_key_at(c, tgt));
     return cv ? cv->type : TY_UNKNOWN;
   }
   return TY_UNKNOWN;
@@ -17350,6 +17350,7 @@ static int masgn_store(Compiler *c, int id, const MasgnTmps *mt, int tgt, const 
     return 1;
   }
   if ((ty_k == NK_ConstantTargetNode || ty_k == NK_ConstantPathTargetNode) && nm) {
+    nm = const_key_at(c, tgt);
     LocalVar *cv = comp_const(c, nm);
     if (!cv) { unsupported(c, id, "multiple assignment constant target"); return 1; }
     emit_indent(b, indent);
@@ -18159,7 +18160,7 @@ static int emit_multi_write_scalar(Compiler *c, int id, Buf *b, int indent, cons
         buf_puts(b, ";\n");
       }
       else if (lk == NK_ConstantTargetNode || lk == NK_ConstantPathTargetNode) {
-        const char *cnm_rt = nt_str(nt, lefts[i], "name");
+        const char *cnm_rt = const_key_at(c, lefts[i]);
         LocalVar *cv_rt = cnm_rt ? comp_const(c, cnm_rt) : NULL;
         if (!cv_rt) continue;
         emit_indent(b, indent);
@@ -19203,8 +19204,8 @@ static int emit_multi_write_stmt(Compiler *c, int id, Buf *b, int indent, const 
       buf_puts(b, ";\n");
     }
     else if ((lk == NK_ConstantPathTargetNode || lk == NK_ConstantTargetNode) &&
-             nt_str(nt, lefts[i], "name") && comp_const(c, nt_str(nt, lefts[i], "name"))) {
-      const char *cnm_l = nt_str(nt, lefts[i], "name");
+             const_key_at(c, lefts[i]) && comp_const(c, const_key_at(c, lefts[i]))) {
+      const char *cnm_l = const_key_at(c, lefts[i]);
       TyKind valt = tmpts ? tmpts[i] : repr_of(c, els[i]).as_ty;
       emit_indent(b, indent);
       buf_printf(b, "cst_%s = ", cnm_l);
@@ -20868,7 +20869,7 @@ static void emit_const_target_class_name(Compiler *c, int tgt, const char *nm, B
   int owner;
   if (!const_name_owner(c, tgt, &owner)) return;
   const char *wn = nt_str(c->nt, tgt, "qc_orig_name");
-  emit_class_const_name(c, nm, wn ? wn : nm, owner, b, indent);
+  emit_class_const_name(c, nm, wn ? wn : nt_str(c->nt, tgt, "name"), owner, b, indent);
 }
 
 /* After the value is evaluated, before it is stored: a receiver that is not a
@@ -21305,7 +21306,7 @@ static int emit_attr_global_const_write_stmt(Compiler *c, int id, Buf *b, int in
     const char *nm = nt_str(nt, id, "name");
     int isg = ty[0] == 'G';
     const char *pfx = isg ? "gv" : "cst";
-    const char *raw_key = isg ? nm + 1 : nm;
+    const char *raw_key = isg ? nm + 1 : const_key_at(c, id);
     const char *key = isg ? comp_resolve_gvar(c, raw_key) : raw_key;
     LocalVar *lv = isg ? comp_gvar(c, key) : comp_const(c, key);
     int v = nt_ref(nt, id, "value");
@@ -21507,7 +21508,7 @@ static int emit_attr_global_const_write_stmt(Compiler *c, int id, Buf *b, int in
        constant must already be typed (registered by analysis), like the
        operator/or/and path-write forms. */
     int tgt = nt_ref(nt, id, "target");
-    const char *nm = tgt >= 0 ? nt_str(nt, tgt, "name") : NULL;
+    const char *nm = tgt >= 0 ? const_key_at(c, tgt) : NULL;
     /* `A::B = Class.new do ... end`: the class the record holds for the
        write, made there (emit_builder_write) */
     if (elab_builder_class(c, id) >= 0) {
@@ -21580,7 +21581,7 @@ static int emit_attr_global_const_write_stmt(Compiler *c, int id, Buf *b, int in
   if (sp_streq(ty, "ConstantPathOperatorWriteNode") || sp_streq(ty, "ConstantOperatorWriteNode")) {
     int path = sp_streq(ty, "ConstantPathOperatorWriteNode");
     int tgt = path ? nt_ref(nt, id, "target") : id;
-    const char *nm = tgt >= 0 ? nt_str(nt, tgt, "name") : NULL;
+    const char *nm = tgt >= 0 ? const_key_at(c, tgt) : NULL;
     LocalVar *cv = nm ? comp_const(c, nm) : NULL;
     if (!cv) { if (path) unsupported(c, id, "constant path operator write"); return 1; }
     const char *op = nt_str(nt, id, "binary_operator");
@@ -21620,7 +21621,7 @@ static int emit_attr_global_const_write_stmt(Compiler *c, int id, Buf *b, int in
   if (nt_kind(nt, id) == NK_ConstantPathOrWriteNode || nt_kind(nt, id) == NK_ConstantPathAndWriteNode) {
     int is_or = nt_kind(nt, id) == NK_ConstantPathOrWriteNode;
     int tgt = nt_ref(nt, id, "target");
-    const char *nm = tgt >= 0 ? nt_str(nt, tgt, "name") : NULL;
+    const char *nm = tgt >= 0 ? const_key_at(c, tgt) : NULL;
     LocalVar *cv = nm ? comp_const(c, nm) : NULL;
     if (!cv) { unsupported(c, id, "constant path or/and write"); return 1; }
     int v = nt_ref(nt, id, "value");
@@ -21653,7 +21654,7 @@ static int emit_attr_global_const_write_stmt(Compiler *c, int id, Buf *b, int in
   }
   if (sp_streq(ty, "ConstantOrWriteNode") || sp_streq(ty, "ConstantAndWriteNode")) {
     int is_or = sp_streq(ty, "ConstantOrWriteNode");
-    const char *nm = nt_str(nt, id, "name");
+    const char *nm = const_key_at(c, id);
     LocalVar *cv = nm ? comp_const(c, nm) : NULL;
     if (!cv) return 1;
     int v = nt_ref(nt, id, "value");
@@ -23140,7 +23141,7 @@ void emit_stmt_tail_inner(Compiler *c, int id, Buf *b, int indent) {
   /* A tail CONSTANT write (a block's `{ A = v }`) answers the constant
      after the write, where the value form does (comp_const_write_valued) */
   if (k == NK_ConstantWriteNode) {
-    const char *cn9 = nt_str(nt, id, "name");
+    const char *cn9 = const_key_at(c, id);
     LocalVar *cv9 = cn9 ? comp_const(c, cn9) : NULL;
     if (comp_const_write_valued(c, cv9) && tail_slot_reaches_ret(c, cv9->type)) {
       emit_stmt(c, id, b, indent);

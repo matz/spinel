@@ -2591,6 +2591,14 @@ static int path_header_class(Compiler *c, int stmt) {
   return ci >= 0 ? ci : -1;
 }
 
+/* A value constant's slot key and, when it differs, the leaf it was
+   written with (the name a listing shows) */
+static void listed_value_const(Compiler *c, int node, const char **nm, const char **sh) {
+  const char *wn = nt_str(c->nt, node, "name");
+  *nm = const_key_at(c, node);
+  *sh = nt_str(c->nt, node, "qc_orig_name");
+  if (!*sh && *nm && wn && !sp_streq(*nm, wn)) *sh = wn;
+}
 /* The constant names a class/module defines in its OWN body, in declaration
    order, appended to `out` (deduplicated). Scans every ClassNode/ModuleNode
    that opens `ci`, so reopenings contribute too. #2674 `shown` gets the
@@ -2609,10 +2617,7 @@ static int class_body_constants(Compiler *c, int ci, const char **out, const cha
     for (int k = 0; k < bn && n < max; k++) {
       NodeKind sk = nt_kind(nt, stmts[k]);
       const char *nm = NULL, *sh = NULL;
-      if (sk == NK_ConstantWriteNode) {
-        nm = nt_str(nt, stmts[k], "name");
-        sh = nt_str(nt, stmts[k], "qc_orig_name");
-      }
+      if (sk == NK_ConstantWriteNode) listed_value_const(c, stmts[k], &nm, &sh);
       /* A nested class or module IS a constant of the enclosing one, and the
          only kind this collected was the value-assigning form -- so a module
          holding both reported the value and not the nested module (#4040).
@@ -2655,8 +2660,9 @@ static int class_path_constants(Compiler *c, int ci, const char **out, const cha
       if (nt_kind(nt, st[k]) != NK_ConstantPathWriteNode) continue;
       int t = nt_ref(nt, st[k], "target");
       const char *own = t >= 0 ? nt_str(nt, t, "qc_owner") : NULL;
-      const char *nm = own && sp_streq(own, rn) ? nt_str(nt, t, "name") : NULL;
-      if (nm) n = add_listed_const(out, shown, n, nm, nt_str(nt, t, "qc_orig_name"));
+      const char *nm = NULL, *sh = NULL;
+      if (own && sp_streq(own, rn)) listed_value_const(c, t, &nm, &sh);
+      if (nm) n = add_listed_const(out, shown, n, nm, sh);
     }
   }
   return n;
@@ -24644,7 +24650,7 @@ int subtree_is_pure_read(Compiler *c, int id) {
        class value, an engine constant, an undefined name) is left out, as is
        one that raises while it is unset */
     case NK_ConstantReadNode: {
-      const char *cn = nt_str(nt, id, "name");
+      const char *cn = const_key_at(c, id);
       LocalVar *cv = cn ? comp_const(c, cn) : NULL;
       return cv && cv->type != TY_UNKNOWN && !cv->init_guarded && !const_has_flag(cv);
     }

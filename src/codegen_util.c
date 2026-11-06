@@ -1779,7 +1779,7 @@ int re_lit_node(Compiler *c, int nid) {
   int want_const = nt_kind_is_constant(ty_k);
   int want_local = ty_k == NK_LocalVariableReadNode && comp_ntype(c, nid) == TY_REGEX;
   if (!want_const && !want_local) return -1;
-  const char *nm = nt_str(nt, nid, "name");
+  const char *nm = want_const ? const_key_at(c, nid) : nt_str(nt, nid, "name");
   if (!nm) return -1;
   /* a constant's answer is fixed by its name, a local's by its scope and
      name: one scan per key, not per use */
@@ -1795,7 +1795,7 @@ int re_lit_node(Compiler *c, int nid) {
     NodeKind kk = nt_kind(nt, k);
     if (!kt) continue;
     if (kk != NK_ConstantWriteNode && kk != NK_ConstantPathWriteNode) continue;
-    const char *kn = nt_str(nt, k, "name");
+    const char *kn = const_key_at(c, k);
     if (!kn || !sp_streq(kn, nm)) continue;
     int v = nt_ref(nt, k, "value");
     if (v >= 0 && nt_kind(nt, v) == NK_CallNode &&

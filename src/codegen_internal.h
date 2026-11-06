@@ -1856,6 +1856,11 @@ static inline const char *isa_match_name(const NodeTable *nt, int arg, char *buf
       (is_builtin_exception_name(q) || builtin_class_id(q) != 0)) return q;
   return l;
 }
+/* ...the same by the slot a value constant's entity keys (const_key_at) */
+static inline const char *isa_match_key(Compiler *c, int arg, char *buf, size_t bufsz) {
+  const char *k = elab_const_node_key(c, arg);
+  return k ? k : isa_match_name(c->nt, arg, buf, bufsz);
+}
 /* The name an exception's is_a? compares with for constant argument `arg`
    (codegen_call_exception.c), or NULL for no constant */
 const char *isa_exc_class_name(Compiler *c, int arg, char *buf, size_t bufsz);

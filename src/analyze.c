@@ -3361,7 +3361,7 @@ static void alias_renames_apply(Compiler *c, AliasRenames *q) {
    before any edit, while the node still carries the written name. */
 static int alias_read_held(Compiler *c, int node) {
   if (const_path_misses_member(c, node)) return 0;
-  return nt_kind(c->nt, node) != NK_ConstantPathNode || an_const_read_finds(c, node, nt_str(c->nt, node, "name"));
+  return nt_kind(c->nt, node) != NK_ConstantPathNode || an_const_read_finds(c, node, const_key_at(c, node));
 }
 
 /* Asks the class a constant node names when it names a class alias, and
@@ -3374,7 +3374,7 @@ static void ask_const_alias_name(Compiler *c, int node, AliasRenames *q) {
      `OC = Util`) resolves the same way: constants register by leaf name,
      and a path receiver with a real class leaf already dispatches. */
   if (k != NK_ConstantReadNode && k != NK_ConstantPathNode) return;
-  const char *rn = nt_str(nt, node, "name");
+  const char *rn = const_key_at(c, node);
   if (!rn || comp_class_index(c, rn) >= 0) return;  /* already a class name */
   const char *real = resolve_class_alias(c, rn);
   if (real && !sp_streq(real, rn)) alias_rename_add(q, node, real, alias_read_held(c, node));
@@ -3796,7 +3796,7 @@ static void desugar_dyn_parent_class_leaf(Compiler *c) {
 static void ask_raise_target(Compiler *c, int t, AliasRenames *q) {
   const NodeTable *nt = c->nt;
   if (nt_kind(nt, t) != NK_ConstantReadNode && nt_kind(nt, t) != NK_ConstantPathNode) return;
-  const char *rn = nt_str(nt, t, "name");
+  const char *rn = const_key_at(c, t);
   if (!rn || comp_class_index(c, rn) >= 0) return;
   /* a read that can run before the alias is assigned is CRuby's
      NameError, which the constant's presence flag raises: keep it */
@@ -17504,7 +17504,7 @@ static LocalVar **oa_written_locals(Compiler *c, int *nout) {
    answers that slot with *dyn set: a use nothing vets. */
 static int oa_const_slot(Compiler *c, OAS *sl, int n, int id, int *dyn) {
   const NodeTable *nt = c->nt;
-  const char *nm = nt_str(nt, id, "name");
+  const char *nm = const_key_at(c, id);
   *dyn = 0;
   if (!nm || comp_class_index(c, nm) >= 0) return -1;
   if (nt_kind(nt, id) == NK_ConstantPathNode) {
@@ -18365,10 +18365,10 @@ static int narrow_object_arrays(Compiler *c) {
     NodeKind ty_k = nt_kind(nt, id);
     int tgt = ty_k == NK_ConstantPathWriteNode || ty_k == NK_ConstantPathOrWriteNode ||
               ty_k == NK_ConstantPathOperatorWriteNode || ty_k == NK_ConstantPathAndWriteNode ? nt_ref(nt, id, "target") : -1;
-    const char *nm = tgt >= 0 ? nt_str(nt, tgt, "name") :
+    const char *nm = tgt >= 0 ? const_key_at(c, tgt) :
                      ty_k == NK_ConstantWriteNode || ty_k == NK_ConstantOrWriteNode || ty_k == NK_ConstantOperatorWriteNode ||
                      ty_k == NK_ConstantAndWriteNode || ty_k == NK_ConstantTargetNode || ty_k == NK_ConstantPathTargetNode
-                     ? nt_str(nt, id, "name") : NULL;
+                     ? const_key_at(c, id) : NULL;
     LocalVar *cv = nm ? comp_const(c, nm) : NULL;
     int S = cv ? oa_find(sl, n, OA_CONST, cv) : -1;
     if (S < 0) continue;
@@ -24962,7 +24962,7 @@ static int gvar_site_is(Compiler *c, int e, const char *grn) {
 static int static_site_is(Compiler *c, NodeKind kind, int e, const char *name) {
   if (kind == NK_GlobalVariableReadNode) return gvar_site_is(c, e, name);
   int v = comp_vsite_var(c, e);
-  const char *vn = v >= 0 ? nt_str(c->nt, v, "name") : NULL;
+  const char *vn = v < 0 ? NULL : kind == NK_ConstantReadNode ? const_key_at(c, v) : nt_str(c->nt, v, "name");
   return vn && sp_streq(vn, name);
 }
 static int strbuf_static_store_walk(Compiler *c, NodeKind kind, const char *grn, int depth) {
@@ -25229,7 +25229,7 @@ int cext_demand_string(Compiler *c, int value) {
     }
   }
   if (nt_kind(c->nt, value) == NK_ConstantReadNode) {
-    const char *name = nt_str(c->nt, value, "name");
+    const char *name = const_key_at(c, value);
     LocalVar *slot = name ? comp_const(c, name) : NULL;
     if (slot && (slot->type == TY_STRING || slot->type == TY_STRBUF)) {
       int changed = slot->type != TY_STRBUF || !slot->str_shared || !c->strbuf_box[value];
@@ -25863,7 +25863,7 @@ static int share_lift_poly_static_stores(Compiler *c, int kind, const char *name
   if (!want) return 0;
   for (int e = comp_vsite_first(c, VS_STORE, rk, want, -1); e >= 0; e = comp_vsite_next(c, e)) {
     int w = comp_vsite_node(c, e);
-    const char *wn = nt_str(nt, w, "name");
+    const char *wn = kind == SHK_CONST ? const_key_at(c, w) : nt_str(nt, w, "name");
     const char *rn = kind == SHK_GVAR && wn && wn[0] == '$' ? comp_resolve_gvar(c, wn + 1) : wn;
     NodeKind wk = nt_kind(nt, w);
     int wkind = wk == NK_GlobalVariableWriteNode || wk == NK_GlobalVariableOrWriteNode ||
@@ -39717,11 +39717,11 @@ int nullable_int_value(Compiler *c, int v) {
      parameter it is the default of, or a method answering it, would keep
      a plain Integer slot */
   if (nt_kind(nt, v) == NK_ConstantReadNode) {
-    const char *cn = nt_str(nt, v, "name");
+    const char *cn = const_key_at(c, v);
     LocalVar *k = cn ? comp_const(c, cn) : NULL;
     if (!k || (k->type != TY_INT && k->type != TY_FLOAT && k->type != TY_POLY)) return 0;
     NT_FOREACH_KIND(nt, NK_ConstantWriteNode, w)
-      if (sp_streq(nt_str(nt, w, "name"), cn) && nullable_int_value(c, nt_ref(nt, w, "value"))) return 1;
+      if (sp_streq(const_key_at(c, w), cn) && nullable_int_value(c, nt_ref(nt, w, "value"))) return 1;
     return 0;
   }
   /* `(e)` is e, and a parenthesized sequence `(y = a[i]; y)` is its last
@@ -40368,7 +40368,7 @@ static int ps_pure(Compiler *c, Scope *m, int n) {
   switch (nt_kind(nt, n)) {
     case NK_IntegerNode: case NK_FloatNode: case NK_LocalVariableReadNode: case NK_SelfNode:
     case NK_TrueNode: case NK_FalseNode: case NK_NilNode: return 1;
-    case NK_ConstantReadNode: { LocalVar *cv = comp_const(c, nt_str(nt, n, "name")); return cv != NULL; }
+    case NK_ConstantReadNode: { LocalVar *cv = comp_const(c, const_key_at(c, n)); return cv != NULL; }
     default: (void)m; return 0;
   }
 }
@@ -41614,7 +41614,7 @@ static void widen_nullable_keyed_hash_literals(Compiler *c) {
      anywhere, re-infer against the box. */
   int const_widened = 0;
   NT_FOREACH_KIND(nt, NK_ConstantWriteNode, id) {
-    const char *cn = nt_str(nt, id, "name");
+    const char *cn = const_key_at(c, id);
     int v = nt_ref(nt, id, "value");
     LocalVar *cv = cn ? comp_const(c, cn) : NULL;
     if (!cv || v < 0 || (cv->type != TY_INT && cv->type != TY_FLOAT)) continue;
@@ -41628,13 +41628,13 @@ static void widen_nullable_keyed_hash_literals(Compiler *c) {
   for (int again = const_widened; again; ) {
     again = 0;
     NT_FOREACH_KIND(nt, NK_ConstantWriteNode, id) {
-      const char *cn = nt_str(nt, id, "name");
+      const char *cn = const_key_at(c, id);
       int v = nt_paren_single(nt, nt_ref(nt, id, "value"));
       LocalVar *cv = cn ? comp_const(c, cn) : NULL;
       if (!cv || v < 0 || (cv->type != TY_INT && cv->type != TY_FLOAT)) continue;
       NodeKind vk = nt_kind(nt, v);
       if (vk != NK_ConstantReadNode && vk != NK_ConstantPathNode) continue;
-      LocalVar *src = nt_str(nt, v, "name") ? comp_const(c, nt_str(nt, v, "name")) : NULL;
+      LocalVar *src = const_key_at(c, v) ? comp_const(c, const_key_at(c, v)) : NULL;
       if (!src || src->type != TY_POLY) continue;
       lv_set_type(cv, TY_POLY); comp_set_ntype(c, id, TY_POLY); comp_set_ntype(c, v, TY_POLY);
       again = 1;
@@ -45125,7 +45125,7 @@ static void psb_collect(Compiler *c, int node, int elems, PsbSyms *s, int depth)
   case NK_ConstantReadNode: {
     const char *cn = nt_str(nt, node, "name");
     NT_FOREACH_KIND(nt, NK_ConstantWriteNode, w) {
-      const char *wn = nt_str(nt, w, "name");
+      const char *wn = const_key_at(c, w);
       if (cn && wn && sp_streq(wn, cn)) psb_collect(c, nt_ref(nt, w, "value"), elems, s, depth + 1);
     }
     return;
@@ -52308,7 +52308,7 @@ static void an_phase_post_fixpoint(Compiler *c) {
      runs after the fixpoint, so any real element evidence still wins. */
   for (int id = 0; id < c->nt->count; id++) {
     if (nt_kind(c->nt, id) != NK_ConstantWriteNode) continue;
-    const char *cwn = nt_str(c->nt, id, "name");
+    const char *cwn = const_key_at(c, id);
     LocalVar *cwv = cwn ? comp_const(c, cwn) : NULL;
     if (!cwv || cwv->type != TY_UNKNOWN) continue;
     int cwval = nt_ref(c->nt, id, "value");
@@ -54057,7 +54057,7 @@ static void an_phase_proc_returns(Compiler *c) {
       for (int id = 0; id < nt->count; id++) {
         NodeKind ty_k = nt_kind(nt, id);
         if (ty_k != NK_ConstantWriteNode) continue;
-        const char *nm = nt_str(nt, id, "name");
+        const char *nm = const_key_at(c, id);
         LocalVar *cv = nm ? comp_const(c, nm) : NULL;
         if (!cv || cv->type != TY_INT) continue;
         int vnode = nt_ref(nt, id, "value");
@@ -54202,7 +54202,7 @@ static void an_phase_proc_returns(Compiler *c) {
           NodeKind k = nt_kind(nt, id);
           if (k != NK_ConstantWriteNode && k != NK_ConstantOrWriteNode) continue;
           int vnode = nt_ref(nt, id, "value");
-          const char *nm = nt_str(nt, id, "name");
+          const char *nm = const_key_at(c, id);
           LocalVar *cv = vnode >= 0 && nm ? comp_const(c, nm) : NULL;
           if (!cv || !PW_TYPED_ARR(cv->type)) continue;
           TyKind nw = PW_JOIN(cv->type, infer_type(c, vnode));

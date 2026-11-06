@@ -1454,7 +1454,7 @@ static int an_settled_int_const(Compiler *c, const char *name, int depth) {
   const NodeTable *nt = c->nt;
   int seen = 0;
   NT_FOREACH_KIND(nt, NK_ConstantWriteNode, w) {
-    const char *wn = nt_str(nt, w, "name");
+    const char *wn = const_key_at(c, w);
     if (!wn || !sp_streq(wn, name)) continue;
     if (!an_settled_int(c, nt_ref(nt, w, "value"), depth + 1)) return 0;
     seen = 1;
@@ -1821,7 +1821,7 @@ static int const_poly_index_int_array(Compiler *c, int id) {
   if (ak == NK_RangeNode) return 0;
   int recv = nt_ref(nt, id, "receiver");
   if (recv < 0 || nt_kind(nt, recv) != NK_ConstantReadNode) return 0;
-  const char *cname = nt_str(nt, recv, "name");
+  const char *cname = const_key_at(c, recv);
   LocalVar *cv = cname ? comp_const(c, cname) : NULL;
   if (!cv || cv->type != TY_POLY_ARRAY) return 0;
   return const_array_elems_all_int_array(c, cname);
@@ -4413,7 +4413,7 @@ static int infer_new_call(Compiler *c, int id, const NodeTable *nt, const char *
     NodeKind rk = nt_kind(nt, recv);
     /* a namespaced class (M::Sub) or root-qualified builtin (::Array etc) */
     if (rk == NK_ConstantPathNode) {
-      const char *cn = nt_str(nt, recv, "name");
+      const char *cn = const_key_at(c, recv);
       int ci = cn ? comp_class_index(c, cn) : -1;
       if (ci >= 0) {
         /* an exception-subclass instance keeps its concrete class (its custom
@@ -4470,7 +4470,7 @@ static int infer_new_call(Compiler *c, int id, const NodeTable *nt, const char *
     }
     if (rk == NK_ConstantReadNode || rk == NK_LocalVariableReadNode ||
         (rk == NK_CallNode && class_def_is_record_call(nt, recv))) {  /* inline Data.define(...).new (#2682) */
-      const char *cn = rk == NK_ConstantReadNode ? nt_str(nt, recv, "name") : NULL;
+      const char *cn = rk == NK_ConstantReadNode ? const_key_at(c, recv) : NULL;
       int ci = cn ? comp_class_index(c, cn) : class_var_static_ci(c, recv);
       if (ci >= 0) {
         /* an exception-subclass instance keeps its concrete class (its custom
@@ -6354,7 +6354,7 @@ static int infer_class_module_call(Compiler *c, int id, const NodeTable *nt, con
   if (recv >= 0 && nt_type(nt, recv) &&
       (nt_kind(nt, recv) == NK_ConstantReadNode ||
        nt_kind(nt, recv) == NK_ConstantPathNode)) {
-    const char *cn = nt_str(nt, recv, "name");
+    const char *cn = const_key_at(c, recv);
     int ci = cn ? comp_class_index(c, cn) : -1;
     TyKind sgt;
     if (ci >= 0 && sg_accessor_type(c, id, ci, name, &sgt)) { *out = sgt; return 1; }
@@ -6375,9 +6375,9 @@ static int infer_class_module_call(Compiler *c, int id, const NodeTable *nt, con
     NodeKind rty_ffi_k = nt_kind(nt, recv);
     const char *rcmod = NULL;
     if (rty_ffi_k == NK_ConstantReadNode)
-      rcmod = nt_str(nt, recv, "name");
+      rcmod = const_key_at(c, recv);
     else if (rty_ffi_k == NK_ConstantPathNode)
-      rcmod = nt_str(nt, recv, "name");
+      rcmod = const_key_at(c, recv);
     if (rcmod) {
       /* native binding (Path B): a native_func returns its declared type,
          gated by the module's strict-require feature. */
@@ -6454,7 +6454,7 @@ static int infer_class_module_call(Compiler *c, int id, const NodeTable *nt, con
          allocator. A user class method of their own still takes precedence. */
       if (ci >= 0 && (!class_is_exc_subclass(c, ci) ||
           comp_cmethod_in_chain(c, ci, "allocate", NULL) < 0)) { *out = ty_object(ci); return 1; }
-      const char *bcn = nt_str(nt, recv, "name");
+      const char *bcn = const_key_at(c, recv);
       if (bcn && sp_streq(bcn, "String")) { *out = TY_STRING; return 1; }
       if (bcn && sp_streq(bcn, "Array"))  { *out = TY_POLY_ARRAY; return 1; }
       if (bcn && sp_streq(bcn, "Hash"))   { *out = TY_POLY_POLY_HASH; return 1; }
@@ -10429,7 +10429,7 @@ static int infer_constant_path(Compiler *c, int id, const NodeTable *nt, NodeKin
   if (!(nk == NK_ConstantPathNode)) return 0;
   /* M::CONST -> resolve by the final path component (constants register
      under their unqualified name) */
-  const char *nm = nt_str(nt, id, "name");
+  const char *nm = const_key_at(c, id);
   /* An ffi_const is parent-qualified; resolve it BEFORE the leaf-keyed
      plain-constant table, or a same-leaf plain constant in another module
      silently claims the reference (and its type). */
@@ -10460,7 +10460,7 @@ static int infer_constant_path(Compiler *c, int id, const NodeTable *nt, NodeKin
     /* ...and a constant that HOLDS a class rather than naming one is a
        dynamic receiver too (#4259) */
     if (!dyn && dpar >= 0 && dpk == NK_ConstantReadNode) {
-      const char *pn = nt_str(nt, dpar, "name");
+      const char *pn = const_key_at(c, dpar);
       if (pn && comp_class_index(c, pn) < 0 && !is_builtin_class_name(pn) &&
           comp_const(c, pn)) dyn = 1;
     }
@@ -11642,12 +11642,12 @@ TyKind infer_uncached(Compiler *c, int id) {
   if (nk == NK_ConstantWriteNode) {
     /* `A = v` as a value: the constant, read back after the write. Not for a
        constant the value form leaves out (comp_const_write_valued) */
-    const char *nm = nt_str(nt, id, "name");
+    const char *nm = const_key_at(c, id);
     LocalVar *lv = nm ? comp_const(c, nm) : NULL;
     if (comp_const_write_valued(c, lv)) return lv->type;
   }
   if (nk == NK_ConstantReadNode) {
-    const char *nm = nt_str(nt, id, "name");
+    const char *nm = const_key_at(c, id);
     LocalVar *lv = nm ? comp_const(c, nm) : NULL;
     /* a registered constant whose type never settled (e.g. an anonymous
        Struct class assignment) must not shadow the class-table fallbacks

@@ -3247,7 +3247,7 @@ static int emit_ivar_cvar_gvar_expr(Compiler *c, int id, Buf *b, const NodeTable
   if (sp_streq(ty, "ConstantWriteNode")) {
     /* `m(A = v)` / `(A = v) + 1`: ({ <the write>; cst_A; }) -- the statement
        form sets the constant, and the constant is the expression's value */
-    const char *nm = nt_str(nt, id, "name");
+    const char *nm = const_key_at(c, id);
     LocalVar *cv = nm ? comp_const(c, nm) : NULL;
     /* a class builder's write (`K = Class.new do ... end`, one the record
        opens its class at: elab_header_class) is emitted where it stands,
@@ -3478,7 +3478,7 @@ static void emit_const_undefined_raise(Buf *b, const char *checks, const char *n
    them to the caller. */
 static int emit_constant_value(Compiler *c, int id, Buf *b, Buf *checks, const NodeTable *nt, const char *ty, int slot) {
   if (sp_streq(ty, "ConstantReadNode")) {
-    const char *nm = nt_str(nt, id, "name");
+    const char *nm = const_key_at(c, id);
     LocalVar *cv = nm ? comp_const(c, nm) : NULL;
     /* --share-strings: a constant holding the shared handle (#6765) */
     if (cv && !slot && repr_of_slot(c, cv).kind == RK_STRBUF && !cv->init_guarded) {
@@ -3575,7 +3575,7 @@ static int emit_constant_value(Compiler *c, int id, Buf *b, Buf *checks, const N
   }
   if (sp_streq(ty, "ConstantPathNode")) {
     /* M::CONST -> the flat constant named by the final path component */
-    const char *nm = nt_str(nt, id, "name");
+    const char *nm = const_key_at(c, id);
     int par_idc = nt_ref(nt, id, "parent");
     NodeKind par_tyc_k = nt_kind(nt, par_idc);
     /* the parent's LEAF name also qualifies through a nested path
@@ -4139,7 +4139,7 @@ static int emit_defined_value(Compiler *c, int id, Buf *b, const NodeTable *nt, 
       return 1;
     }
     else if (vk == NK_ConstantReadNode) {
-      const char *cn = nt_str(nt, v, "name");
+      const char *cn = const_key_at(c, v);
       /* a constant not assigned yet is not defined: asked at run time */
       if (cn && const_has_flag(comp_const(c, cn))) {
         buf_printf(b, "(cst_%s__set ? SPL(\"constant\") : NULL)", cn);

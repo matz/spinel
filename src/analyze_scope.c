@@ -859,7 +859,7 @@ static const char *resolve_alias_value(Compiler *c, int v) {
 const char *resolve_class_alias(Compiler *c, const char *cname) {
   const NodeTable *nt = c->nt;
   NT_FOREACH_KIND(nt, NK_ConstantWriteNode, id) {
-    const char *n = nt_str(nt, id, "name");
+    const char *n = const_key_at(c, id);
     if (n && sp_streq(n, cname)) return resolve_alias_value(c, nt_ref(nt, id, "value"));
   }
   return NULL;
@@ -872,11 +872,11 @@ const char *resolve_class_alias(Compiler *c, const char *cname) {
 const char *const_alias_source(Compiler *c, const char *cname) {
   const NodeTable *nt = c->nt;
   NT_FOREACH_KIND(nt, NK_ConstantWriteNode, id) {
-    const char *n = nt_str(nt, id, "name");
+    const char *n = const_key_at(c, id);
     if (!n || !sp_streq(n, cname)) continue;
     int v = nt_ref(nt, id, "value");
     NodeKind vk = v >= 0 ? nt_kind(nt, v) : NK_NONE;
-    return vk == NK_ConstantReadNode || vk == NK_ConstantPathNode ? nt_str(nt, v, "name") : NULL;
+    return vk == NK_ConstantReadNode || vk == NK_ConstantPathNode ? const_key_at(c, v) : NULL;
   }
   return NULL;
 }
@@ -4685,7 +4685,7 @@ void register_globals_consts(Compiler *c) {
       /* target in a multi-write: A, B = expr (a definite write); a path
          target (`Mod::A, ::B = ...`) interns its leaf name flat, as the
          path write does */
-      const char *nm = nt_str(nt, id, "name");
+      const char *nm = const_key_at(c, id);
       if (nm && is_c_ident(nm) && comp_class_index(c, nm) < 0)
         comp_const_intern(c, nm)->const_def_write = 1;
     }
@@ -4695,7 +4695,7 @@ void register_globals_consts(Compiler *c) {
          gets a runtime slot. The module path is not modeled as a namespace; the
          leaf name is interned flat like a top-level constant. */
       int tgt = nt_ref(nt, id, "target");
-      const char *nm = tgt >= 0 ? nt_str(nt, tgt, "name") : NULL;
+      const char *nm = tgt >= 0 ? const_key_at(c, tgt) : NULL;
       if (nm && is_c_ident(nm) && comp_class_index(c, nm) < 0 && class_def_builder(nt, id) < 0) {
         LocalVar *cv = comp_const_intern(c, nm);
         if (k == NK_ConstantPathWriteNode) cv->const_def_write = 1;
@@ -4704,12 +4704,12 @@ void register_globals_consts(Compiler *c) {
     else if (k == NK_ConstantOrWriteNode || k == NK_ConstantAndWriteNode ||
              k == NK_ConstantOperatorWriteNode) {
       /* `CONST ||= v` (and friends) may be the constant's only definition */
-      const char *nm = nt_str(nt, id, "name");
+      const char *nm = const_key_at(c, id);
       if (nm && is_c_ident(nm) && comp_class_index(c, nm) < 0)
         comp_const_intern(c, nm);
     }
     else if (k == NK_ConstantWriteNode) {
-      const char *nm = nt_str(nt, id, "name");
+      const char *nm = const_key_at(c, id);
       /* a constant bound to a regex literal is resolved at compile time to a
          precompiled pattern, not stored as a runtime value */
       int rv = nt_ref(nt, id, "value");
@@ -4794,7 +4794,7 @@ static int ffi_type_array_node(Compiler *c, int nid, int *out_repeat, int depth)
     const char *cn = nt_str(nt, nid, "name");
     if (!cn) return -1;
     NT_FOREACH_KIND(nt, NK_ConstantWriteNode, w) {
-      const char *wn = nt_str(nt, w, "name");
+      const char *wn = const_key_at(c, w);
       if (!wn || !sp_streq(wn, cn)) continue;
       return ffi_type_array_node(c, nt_ref(nt, w, "value"), out_repeat, depth + 1);
     }
@@ -6047,7 +6047,7 @@ int infer_global_const_types(Compiler *c) {
       }
     }
     else if (ty_k == NK_ConstantWriteNode) {
-      const char *nm = nt_str(nt, id, "name");
+      const char *nm = const_key_at(c, id);
       if (nm) lv = comp_const(c, nm);
       int vnode = nt_ref(nt, id, "value");
       vt = infer_type(c, vnode);
@@ -6062,7 +6062,7 @@ int infer_global_const_types(Compiler *c) {
     }
     else if (ty_k == NK_ConstantOrWriteNode || ty_k == NK_ConstantAndWriteNode ||
              ty_k == NK_ConstantOperatorWriteNode) {
-      const char *nm = nt_str(nt, id, "name");
+      const char *nm = const_key_at(c, id);
       if (nm) lv = comp_const(c, nm);
       int is_orand = ty_k != NK_ConstantOperatorWriteNode;
       /* An or/and-write-only constant has no definite value before its first
@@ -6076,7 +6076,7 @@ int infer_global_const_types(Compiler *c) {
     else if (ty_k == NK_ConstantPathWriteNode || ty_k == NK_ConstantPathOrWriteNode ||
              ty_k == NK_ConstantPathAndWriteNode || ty_k == NK_ConstantPathOperatorWriteNode) {
       int tgt = nt_ref(nt, id, "target");
-      const char *nm = tgt >= 0 ? nt_str(nt, tgt, "name") : NULL;
+      const char *nm = tgt >= 0 ? const_key_at(c, tgt) : NULL;
       if (nm) lv = comp_const(c, nm);
       int is_orand = ty_k == NK_ConstantPathOrWriteNode || ty_k == NK_ConstantPathAndWriteNode;
       /* An or/and-write-only constant has no definite value before its first
@@ -6148,7 +6148,7 @@ int infer_global_const_types(Compiler *c) {
       if (crecv < 0) continue;
       NodeKind rk = nt_kind(nt, crecv);
       if (rk != NK_ConstantReadNode) continue;
-      const char *cnm2 = nt_str(nt, crecv, "name");
+      const char *cnm2 = const_key_at(c, crecv);
       if (!cnm2) continue;
       lv = comp_const(c, cnm2);
       if (!lv || lv->type != TY_UNKNOWN) continue;
@@ -6220,7 +6220,7 @@ int infer_multiwrite_const_types(Compiler *c) {
     for (int i = 0; i < ln; i++) {
       const char *lty = nt_type(nt, lefts[i]) ? nt_type(nt, lefts[i]) : "";
       if (!sp_streq(lty, "ConstantTargetNode") && !sp_streq(lty, "ConstantPathTargetNode")) continue;
-      const char *nm = nt_str(nt, lefts[i], "name");
+      const char *nm = const_key_at(c, lefts[i]);
       LocalVar *cv = nm ? comp_const(c, nm) : NULL;
       if (!cv || cv->type == elem) continue;
       lv_set_type(cv, elem); changed = 1;
@@ -6230,7 +6230,7 @@ int infer_multiwrite_const_types(Compiler *c) {
     for (int j = 0; j < rn; j++) {
       const char *rty2 = nt_type(nt, rights[j]) ? nt_type(nt, rights[j]) : "";
       if (!sp_streq(rty2, "ConstantTargetNode") && !sp_streq(rty2, "ConstantPathTargetNode")) continue;
-      const char *nm = nt_str(nt, rights[j], "name");
+      const char *nm = const_key_at(c, rights[j]);
       LocalVar *cv = nm ? comp_const(c, nm) : NULL;
       if (!cv || cv->type == elem) continue;
       lv_set_type(cv, elem); changed = 1;
@@ -6715,7 +6715,7 @@ static int superclass_alias_target(Compiler *c, const char *name, int depth, int
   if (!name || depth > 8) return -1;
   int w = -1, nw = 0;
   NT_FOREACH_KIND(nt, NK_ConstantWriteNode, id) {
-    const char *n = nt_str(nt, id, "name");
+    const char *n = const_key_at(c, id);
     if (n && sp_streq(n, name)) { w = id; nw++; }
   }
   if (nw != 1) return -1;

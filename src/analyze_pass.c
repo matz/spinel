@@ -1798,13 +1798,13 @@ static TyRef named_array_slot(Compiler *c, int recv) {
       return lv ? &lv->type : NULL;
     }
     case NK_ConstantReadNode: {
-      LocalVar *lv = comp_const(c, nm);
+      LocalVar *lv = comp_const(c, const_key_at(c, recv));
       return lv ? &lv->type : NULL;
     }
     /* `H::L` names the constant its read resolves to (infer_constant_path) */
     case NK_ConstantPathNode: {
       if (const_path_in_closed_builtin(c, recv) || const_path_misses_toplevel(c, recv)) return NULL;
-      LocalVar *lv = comp_const(c, nm);
+      LocalVar *lv = comp_const(c, const_key_at(c, recv));
       return lv ? &lv->type : NULL;
     }
     case NK_ClassVariableReadNode: {
@@ -19281,7 +19281,7 @@ static int arr_box_other_form(Compiler *c, int v, TyKind seed, int depth) {
     if (!nm) return 1;
     int saw = 0;
     NT_FOREACH_KIND(nt, NK_ConstantWriteNode, w) {
-      const char *wn = nt_str(nt, w, "name");
+      const char *wn = const_key_at(c, w);
       if (!wn || !sp_streq(wn, nm)) continue;
       saw = 1;
       if (arr_box_other_form(c, nt_ref(nt, w, "value"), seed, depth + 1)) return 1;

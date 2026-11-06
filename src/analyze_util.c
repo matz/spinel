@@ -344,7 +344,7 @@ int const_visibility_call_is_builtin(Compiler *c, int call, int k) {
    is its name's. */
 int const_node_class_index(Compiler *c, int id) {
   const NodeTable *nt = c->nt;
-  int k = comp_class_index(c, nt_str(nt, id, "name"));
+  int k = comp_class_index(c, const_key_at(c, id));
   /* (a class named under another by a compact header carries that name,
      ruby_name_cache, P::Foo for `class AliasP::Foo`: no top-level one; nor
      is a native struct, whose module the walk does not list it in) */
@@ -353,12 +353,12 @@ int const_node_class_index(Compiler *c, int id) {
   /* (nor a path whose leaf the qualifying pass found a member for and
      renamed, qc_orig_name: module M; A = Foo; end makes M::A Foo, renamed
      to the alias's class afterwards) */
-  if (nt_str(nt, id, "qc_orig_name")) return builtin_scope_lacks_member(c, id) ? -1 : k;
+  if (nt_str(nt, id, "qc_orig_name") || const_key_differs(c, id)) return builtin_scope_lacks_member(c, id) ? -1 : k;
   /* (a parent that is a class's own name, not a constant holding one:
      AliasP = P; AliasP::Foo is P::Foo, which the walk does not follow) */
   int par = nt_ref(nt, id, "parent");
   NodeKind pk = par >= 0 ? nt_kind(nt, par) : NK_NilNode;
-  const char *pn = pk == NK_ConstantReadNode || pk == NK_ConstantPathNode ? nt_str(nt, par, "name") : NULL;
+  const char *pn = pk == NK_ConstantReadNode || pk == NK_ConstantPathNode ? const_key_at(c, par) : NULL;
   int pk2 = pn ? comp_class_index(c, pn) : -1;
   if (!pn || is_object_class_name(pn) || comp_const(c, pn)) return k;
   /* (a builtin scope the program never reopened has no class entry,
@@ -366,7 +366,7 @@ int const_node_class_index(Compiler *c, int id) {
   if (pk2 < 0) return builtin_scope_lacks_member(c, id) ? -1 : k;
   /* (nor a constant the parent holds by that name, a value constant the
      walk does not list: module Rhs; Leaf = Lhs::Leaf; end) */
-  const char *nm = nt_str(nt, id, "name");
+  const char *nm = const_key_at(c, id);
   int *cands, ncands = comp_const_tail_cands(c, nm, &cands);
   int owned = comp_class_owned_const(c, pk2, nm, cands, ncands);
   free(cands);
@@ -501,7 +501,7 @@ static int const_path_write_reaches(Compiler *c, int t, int k) {
    tree as it is: per name, the constant writes (list 0) and the targets of
    the path writes (list 1), chained through next. */
 static struct {
-  const NodeTable *nt; unsigned ver; int count;
+  const NodeTable *nt; unsigned ver; int count, gen;
   ANameHash names;
   int *head[2], cap, *next;
 } g_cw;
@@ -524,26 +524,27 @@ static void cw_add(int list, const char *nm, int node) {
 }
 /* The name's index in g_cw, rebuilt when the tree changed, or -1 for a
    name the program never writes */
-static int cw_name(const NodeTable *nt, const char *nm) {
-  if (g_cw.nt != nt || g_cw.ver != nt->version || g_cw.count != nt->count) {
+static int cw_name(Compiler *c, const char *nm) {
+  const NodeTable *nt = c->nt;
+  if (g_cw.nt != nt || g_cw.ver != nt->version || g_cw.count != nt->count || g_cw.gen != elab_const_keys_gen(c)) {
     anh_free(&g_cw.names); memset(&g_cw.names, 0, sizeof g_cw.names);
     free(g_cw.next);
     g_cw.next = malloc(sizeof(int) * (size_t)(nt->count > 0 ? nt->count : 1));
     if (!g_cw.next) { fprintf(stderr, "out of memory\n"); exit(1); }
     for (int n = 0; n < nt->count; n++) g_cw.next[n] = -2;   /* not listed */
-    g_cw.nt = nt; g_cw.ver = nt->version; g_cw.count = nt->count;
+    g_cw.nt = nt; g_cw.ver = nt->version; g_cw.count = nt->count; g_cw.gen = elab_const_keys_gen(c);
     static const NodeKind writes[] = { NK_ConstantWriteNode, NK_ConstantOrWriteNode, NK_ConstantAndWriteNode,
                                        NK_ConstantOperatorWriteNode, NK_ConstantTargetNode };
     for (int i = 0; i < 5; i++)
-      NT_FOREACH_KIND(nt, writes[i], w) cw_add(0, nt_str(nt, w, "name"), w);
+      NT_FOREACH_KIND(nt, writes[i], w) cw_add(0, const_key_at(c, w), w);
     static const NodeKind paths[] = { NK_ConstantPathWriteNode, NK_ConstantPathOrWriteNode,
                                       NK_ConstantPathAndWriteNode, NK_ConstantPathOperatorWriteNode };
     for (int i = 0; i < 4; i++)
       NT_FOREACH_KIND(nt, paths[i], w) {
         int t = nt_ref(nt, w, "target");
-        if (t >= 0) cw_add(1, nt_str(nt, t, "name"), t);
+        if (t >= 0) cw_add(1, const_key_at(c, t), t);
       }
-    NT_FOREACH_KIND(nt, NK_ConstantPathTargetNode, t) cw_add(1, nt_str(nt, t, "name"), t);
+    NT_FOREACH_KIND(nt, NK_ConstantPathTargetNode, t) cw_add(1, const_key_at(c, t), t);
     /* a self-alias write the desugaring dropped keeps its target */
     NT_FOREACH_KIND(nt, NK_NilNode, d) {
       int t = (int)nt_int(nt, d, "dropped_target", -1);
@@ -622,13 +623,13 @@ static void builtin_given_build(Compiler *c, struct BuiltinGiven *g) {
     int o = comp_class_index(c, ob);
     if (o >= 0 && held[o]) anh_add(&g->names, sep + 2);
   }
-  (void)cw_name(nt, "");
+  (void)cw_name(c, "");
   for (int i = 0; i < g_cw.names.n; i++) {
     /* a constant written in such a body, by the name the program wrote (a
        class alias, `SA = Foo`, included) */
     for (int w = g_cw.head[0][i]; w >= 0 && c->node_cbody; w = g_cw.next[w]) {
       int o = w < c->node_cap ? c->node_cbody[w] : -1;
-      if (o >= 0 && held[o]) anh_add(&g->names, nt_str(nt, w, "qc_orig_name") ? nt_str(nt, w, "qc_orig_name") : g_cw.names.key[i]);
+      if (o >= 0 && held[o]) anh_add(&g->names, nt_str(nt, w, "qc_orig_name") ? nt_str(nt, w, "qc_orig_name") : nt_str(nt, w, "name"));
     }
     for (int t = g_cw.head[1][i]; t >= 0; t = g_cw.next[t]) {
       int q = nt_ref(nt, t, "parent");
@@ -678,7 +679,7 @@ static int builtin_scope_lacks_member(Compiler *c, int seg) {
   /* a top-level class: a constant aliasing one (`SA = Foo`) is asked once its
      path is renamed, with the name written (the alias pass runs before the
      mixins are recorded, so it cannot tell yet) */
-  int k = comp_class_index(c, nt_str(nt, seg, "name"));
+  int k = comp_class_index(c, const_key_at(c, seg));
   if (!is_constless_builtin_name(pn)) return 0;
   /* a top-level builtin class or module (Array::String) is no member
      either, unless the program reopens it or gives it its own entry */
@@ -699,11 +700,11 @@ int const_path_misses_toplevel(Compiler *c, int id) {
   if (par < 0) return 0;
   NodeKind pk = nt_kind(nt, par);
   if (pk != NK_ConstantReadNode && pk != NK_ConstantPathNode) return 0;
-  const char *pn = nt_str(nt, par, "name"), *nm = nt_str(nt, id, "name");
+  const char *pn = nt_str(nt, par, "name"), *nm = const_key_at(c, id);
   if (!pn || !nm || sp_streq(pn, "Object") || comp_class_index(c, pn) < 0 || comp_const(c, pn)) return 0;
   /* the writes of NAME alone: walking every write of the program for each
      path was a tenth of a large program's analysis */
-  int ni = cw_name(nt, nm);
+  int ni = cw_name(c, nm);
   if (ni < 0) return 0;
   int top = 0;
   for (int w = g_cw.head[0][ni]; w >= 0; w = g_cw.next[w]) {
@@ -1311,7 +1312,7 @@ int record_recv_class(Compiler *c, int node) {
 int const_class_value_only(Compiler *c, int node) {
   const NodeTable *nt = c->nt;
   NodeKind k = nt_kind(nt, node);
-  const char *nm = k == NK_ConstantReadNode || k == NK_ConstantPathNode ? nt_str(nt, node, "name") : NULL;
+  const char *nm = k == NK_ConstantReadNode || k == NK_ConstantPathNode ? const_key_at(c, node) : NULL;
   if (!nm || class_recv_static_ci(c, node) >= 0 || is_builtin_class_name(nm)) return 0;
   LocalVar *lv = comp_const(c, nm);
   if (!lv || (lv->type != TY_CLASS && lv->type != TY_POLY) || resolve_class_alias_chain(c, nm)) return 0;
@@ -1787,7 +1788,8 @@ static const char *cn_body_const_key(const NodeTable *nt, int root, const char *
   if (ty) {
     if (!top && (ty_k == NK_ClassNode || ty_k == NK_ModuleNode)) return NULL;
     if (ty_k == NK_ConstantWriteNode) {
-      const char *n = nt_str(nt, root, "name");
+      /* (the slot's key: const_key_at) */
+      const char *n = nt_const_key_or_name(nt, root);
       size_t nl = n ? strlen(n) : 0, cl = strlen(constname);
       if (n && (sp_streq(n, constname) ||
                 (nl > cl + 2 && !strncmp(n + nl - cl - 2, "__", 2) && sp_streq(n + nl - cl, constname) &&
@@ -1903,7 +1905,7 @@ static const char *const_value_owned_key(Compiler *c, int rk, const char *constn
       const char *on = t >= 0 ? nt_str(nt, t, "qc_orig_name") : NULL;
       if (!on) on = t >= 0 ? nt_str(nt, t, "name") : NULL;
       const char *own = t >= 0 ? nt_str(nt, t, "qc_owner") : NULL;
-      if (on && own && sp_streq(on, constname) && sp_streq(own, rn)) return nt_str(nt, t, "name");
+      if (on && own && sp_streq(on, constname) && sp_streq(own, rn)) return const_key_at(c, t);
     }
   return NULL;
 }

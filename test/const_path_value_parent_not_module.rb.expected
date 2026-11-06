@@ -1,0 +1,10 @@
+ext
+nested
+TypeError: 7 is not a class/module
+TypeError: "s" is not a class/module
+TypeError: nil is not a class/module
+TypeError: :sym is not a class/module
+TypeError: [1] is not a class/module
+NameError: uninitialized constant Foo
+NameError: uninitialized constant Comparable::Foo
+TypeError: 5 is not a class/module

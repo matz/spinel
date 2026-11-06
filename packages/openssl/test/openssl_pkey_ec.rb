@@ -1,3 +1,4 @@
+# spinel: not-cruby -- exercises package-only EC.from_private_bytes and raw public-point APIs
 require "openssl"
 
 def hx(s) = [s].pack("H*")
@@ -105,4 +106,5 @@ rescue OpenSSL::OpenSSLError => e
   puts "#{e.class}: #{e.message}"
 end
 
+# ECError is an alias of PKeyError in CRuby 4.0.7.
 p OpenSSL::PKey::ECError.ancestors.take(4).map(&:to_s)

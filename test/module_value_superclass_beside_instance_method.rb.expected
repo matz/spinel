@@ -1,0 +1,4 @@
+"undefined method 'superclass' for module M"
+"undefined method 'superclass' for module Comparable"
+"node"
+Numeric

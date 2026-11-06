@@ -53,6 +53,10 @@ int ic_core_callback(const char *name, int class_side);
    program's. Before inference, or when the types do not settle it, yes. */
 int ic_operand_may_hold(Compiler *c, const IcCall *k);
 
+/* The node of the value a block answers: the last statement of its body, -1
+   for an empty one */
+int ic_block_value(const NodeTable *nt, int blk);
+
 /* Does call node `id` run a method of the program's (typed runs only), so that
    no builtin of its name runs? */
 int ic_runs_program_method(Compiler *c, int id);
@@ -71,6 +75,7 @@ struct IcState {
   ANameHash defined;   /* the names some scope or alias defines */
   ANameHash cext;      /* the names of the methods a C extension defines: a call of one hands its values to C code */
   int has_cext;        /* the program loads a C extension */
+  int obj_range;       /* some value is a Range of objects (TY_OBJ_RANGE), typed run only */
   unsigned char *plain;/* per class: 0 not asked, 1 not plain, 2 plain (comp_plain_class) */
   /* --dump-implicit alone: what each scope's nodes call, and the calls of
      the reachable scopes, one per name */

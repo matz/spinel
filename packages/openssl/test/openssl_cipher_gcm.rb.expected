@@ -8,8 +8,8 @@ true
 true
 [0, 16]
 true
-CipherError: AES-GCM decrypt failed: auth tag did not verify
-CipherError: AES-GCM decrypt failed: auth tag did not verify
+CipherError: AEAD authentication tag verification failed
+CipherError: AEAD authentication tag verification failed
 CipherError: unsupported cipher: aes-256-cbc (this package has aes-128-gcm, aes-256-gcm)
 ArgumentError: key must be 16 bytes
 ArgumentError: iv must be 12 bytes
@@ -17,4 +17,4 @@ CipherError: auth tag must be 16 bytes
 CipherError: auth_tag is not available until final
 [32, 12]
 true
-["OpenSSL::CipherError", "OpenSSL::OpenSSLError", "StandardError"]
+["OpenSSL::Cipher::CipherError", "OpenSSL::OpenSSLError", "StandardError"]

@@ -206,6 +206,7 @@ const char *sp_exc_cur_cls(void);
 const char *sp_exc_cur_msg(void);
 void *sp_exc_cur_obj(void);
 void sp_fiber_reraise(const char *cls, const char *msg, void *obj);
+int sp_exc_cls_matches(const char *raised, const char *target);   /* lib/sp_exc.c */
 
 static inline sp_RbVal sp_box_nil(void) { sp_RbVal r; r.tag = SP_TAG_NIL; r.cls_id = 0; r.v.i = 0; return r; }
 static void sp_raise(const char *msg) {SP_GC_ROOT_STR(msg); sp_raise_cls("RuntimeError", msg); }
@@ -887,6 +888,14 @@ static void sp_fiber_consume_inject(sp_Fiber*f){SP_GC_ROOT(f);int kind=sp_fiber_
    the thread's next suspension point (sp_sched_block / sleep / Thread.pass /
    yield) delivers it inside the body, where its rescue/ensure can see it. */
 void sp_fiber_set_raise_inject(sp_Fiber*f,const char*cls,const char*msg,void*obj){SP_GC_ROOT(f);SP_GC_ROOT_STR(msg);sp_fiber_inject_publish(f,3,cls,msg,obj);}
+/* A raise, unless an exit waits in f's slot. Read under the slot's lock, which
+   the consumer takes too, so an exit it has just taken leaves room for this. */
+void sp_fiber_set_raise_inject_behind_exit(sp_Fiber*f,const char*cls,const char*msg,void*obj){SP_GC_ROOT(f);SP_GC_ROOT_STR(msg);
+  int kind=sp_fiber_inject_lock(f);
+  if(f->inj_cls&&sp_exc_cls_matches(f->inj_cls,"SystemExit")){sp_fiber_inject_unlock(f,kind);return;}
+  f->inj_cls=cls;f->inj_msg=msg;f->inj_obj=obj;
+  sp_fiber_inject_unlock(f,3);
+}
 /* (#8702) The slot held across a step of the scheduler's own. A thread that
    parks under a lock other than the scheduler's checks for a pending inject
    and publishes itself BLOCKED with its slot held. sp_thread_deliver publishes
@@ -1041,10 +1050,17 @@ static void sp_fiber_check_transfer(sp_Fiber*f){
     else g=g->return_to;
   }
 }
+extern SP_TLS void *_sp_ret_strbuf;   /* sp_alloc.h */
 /* The switch itself, past CRuby's checks: save prev's (the current fiber's)
    context and run f. Inlined, so a transfer costs what it did before the
    scheduler's switch shared it. The caller roots f. */
 static SP_INLINE sp_RbVal sp_fiber_switch(sp_Fiber*f,sp_Fiber*prev,sp_RbVal val){f->resumed_value=val;
+  /* The deep-return channel (_sp_ret_strbuf) is per worker, and a call site
+     clears it, makes the call and reads it: a call that parks in between
+     lets another fiber on this worker publish its own String there, which
+     the site would take for its answer. It travels with the fiber, on its
+     stack, like the handler stacks below. */
+  void*ret_strbuf=_sp_ret_strbuf;
   sp_fiber_save_roots(prev);sp_fiber_restore_roots(f);if(!prev->exc_ctx)prev->exc_ctx=sp_exc_ctx_new();sp_exc_ctx_save(prev->exc_ctx);sp_exc_ctx_load(f->exc_ctx);sp_fiber_current=f;SP_TSAN_SWITCH(f);if(f->state==0&&f!=&sp_fiber_root){f->state=1;f->transferred=1;sp_ctx_make(&f->ctx,f->stack+sp_fiber_guard(),f->stack_size,sp_fiber_trampoline);sp_ctx_swap(&prev->ctx,&f->ctx);}
 else{/* the root fiber is the implicit running coroutine: it has no mmap'd
    stack/body, so it must never be ctx_make'd. Its context was already
@@ -1055,7 +1071,7 @@ else{/* the root fiber is the implicit running coroutine: it has no mmap'd
    saved state with prev's -- losing a blocked/sleeping thread's roots/handlers
    and freeing its live locals on the next collection -- and, since f may already
    be running on another worker (woken between its switch-out and here), that
-   write races that worker's load of f's context. We only restore prev's. */sp_exc_ctx_load(prev->exc_ctx);sp_fiber_restore_roots(prev);sp_fiber_current=prev;return prev->resumed_value;}
+   write races that worker's load of f's context. We only restore prev's. */sp_exc_ctx_load(prev->exc_ctx);sp_fiber_restore_roots(prev);sp_fiber_current=prev;_sp_ret_strbuf=ret_strbuf;return prev->resumed_value;}
 static sp_RbVal sp_Fiber_transfer_core(sp_Fiber*f,sp_RbVal val){SP_GC_ROOT(f);sp_fiber_check_thread(f);sp_fiber_check_transfer(f);sp_Fiber*prev=sp_fiber_current;
   /* it returns where its transferrer would: to that fiber if it was resumed */
   if(f!=&sp_fiber_root&&f!=prev)f->return_to=prev->resumer?prev:prev->return_to;

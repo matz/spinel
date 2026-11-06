@@ -117,6 +117,8 @@ static const Lowering lowerings[LW__COUNT] = {
     refuse_superclass_exprs_at, NULL, "a superclass that is not a constant" },
   [LW_RESCUE_BLOCK_BODIES] = { "desugar_rescue_block_bodies", 0, { NK_BlockNode },
     desugar_rescue_block_bodies_at, desugar_rescue_block_bodies_left, "a block whose body is not a StatementsNode" },
+  [LW_BIND_MEMBER_HELPERS] = { "desugar_bind_member_helpers", 0, { NK_ConstantWriteNode, NK_LocalVariableWriteNode, NK_ConstantPathWriteNode, NK_ClassNode },
+    desugar_bind_member_helpers_at, desugar_bind_member_helpers_left, "a Struct.new member an `instance_method(:x)` names", desugar_bind_attr_helpers_gate },
   [LW_MARK_SYM_PROC_BLOCKS] = { "mark_sym_proc_blocks", LF_MARKS, { NK_BlockNode },
     mark_sym_proc_blocks_at, NULL, NULL },
   [LW_BUILDER_BLOCK_PARAM] = { "desugar_builder_block_param", 0, { NK_ConstantWriteNode, NK_ConstantPathWriteNode },

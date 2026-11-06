@@ -1,0 +1,7 @@
+[:start, nil]
+[:after_nested, #<E: boom>]
+raised again: boom
+[:after_outer, nil]
+[:cause, nil]
+[:hook, #<E: boom>]
+[:next_hook, #<E: boom>]

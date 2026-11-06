@@ -1,0 +1,10 @@
+gets: 10 ASCII-8BIT
+readpartial: 120 ASCII-8BIT
+read: 50 ASCII-8BIT
+the rest: 2973 true
+chunked: 200 true true
+정상적으로 처리되었습니다
+chunked, a cut inside a character: 200 true true
+정상적으로 처리되었습니다
+sized: 200 true true
+정상적으로 처리되었습니다

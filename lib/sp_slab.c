@@ -941,9 +941,45 @@ void sp_slab_set_fin(void *h) {
   bm_or(&l.bm->fin[l.w], l.bit);
   if (sp_slab_verify_on) sp_slab_note(h, 4);
 }
+/* sp_slab_pin's promise (below) for a frozen heap String in a block the
+   slab does not own: one past the largest class, or any with the slab off
+   (SPINEL_GC_SLAB=0, a reservation that failed). No bitmap pins such a
+   block. The String is the GC object it was born in (sp_str_alloc_born), on
+   the collector's lists, whose sweep frees what the mark did not reach, and
+   the holders that count on the promise are no roots: the intern table of
+   String#-@ and #dedup, and Module#name's cache through it, answered a
+   freed String, or the mutable one allocated in its place. So the object
+   is recorded here and marked with the roots of every collection
+   (sp_slab_mark_pinned), which keeps it as the pin bit keeps a slot. It is
+   recorded under the heap lock, as the intern table is, and read by the
+   collector under the barrier, where no mutator is inside that lock. */
+static void **sp_slab_pinned = NULL;
+static size_t sp_slab_npinned = 0, sp_slab_pinned_cap = 0;
+static void sp_slab_pin_outside(const void *p) {
+#ifdef SP_ONE_STRING
+  sp_str_hdr *h = ((sp_str_hdr *)(void *)((char *)p - 1)) - 1;
+  char *o = (char *)SP_STR_BORN_LINK(h);
+  /* not born in a handle: on the string lists, whose sweep keeps a frozen one */
+  if (!o || o + sizeof(struct sp_String_s) != (char *)h) return;
+  SP_HEAP_LOCK();
+  if (sp_slab_npinned == sp_slab_pinned_cap) {
+    size_t nc = sp_slab_pinned_cap ? sp_slab_pinned_cap * 2 : 64;
+    void **nt = (void **)realloc(sp_slab_pinned, nc * sizeof(void *));
+    if (!nt) sp_oom_die();
+    sp_slab_pinned = nt; sp_slab_pinned_cap = nc;
+  }
+  sp_slab_pinned[sp_slab_npinned++] = o;
+  SP_HEAP_UNLOCK();
+#else
+  (void)p;
+#endif
+}
+void sp_slab_mark_pinned(void) {
+  for (size_t i = 0; i < sp_slab_npinned; i++) sp_gc_mark(sp_slab_pinned[i]);
+}
 /* a frozen heap string: kept until the program ends, as a static literal is */
 void sp_slab_pin(const void *p) {
-  if (sp_slab_on <= 0 || !sp_slab_owns(p)) return;
+  if (sp_slab_on <= 0 || !sp_slab_owns(p)) { sp_slab_pin_outside(p); return; }
   sp_slab_loc l; sp_slab_locate(p, &l);
   bm_or(&l.bm->pin[l.w], l.bit);
   if (sp_slab_verify_on) sp_slab_note(p, 9);

@@ -10,6 +10,9 @@
 #define SP_IO_H
 
 #include <stdio.h>
+#if !defined(__APPLE__) && !defined(__GLIBC__)
+#include <stdio_ext.h>  /* musl __freadahead: pending stdio read-buffer bytes */
+#endif
 #include "sp_types.h"   /* sp_int, sp_bool */
 #include "sp_array.h"   /* sp_IntArray (for #winsize) */
 
@@ -42,8 +45,10 @@ typedef struct {
   unsigned char frozen;        /* Object#freeze; kept here, not in the GC header,
                                   because the standard streams are static storage
                                   with no header to flip (sp_io_stdout) */
-  unsigned char wnonblock;     /* write side of this handle is O_NONBLOCK:
-                                  0 not asked, 1 yes, 2 could not (#4307) */
+  unsigned char wnonblock;     /* the descriptor is O_NONBLOCK: a pipe's write
+                                  end, as the runtime set it; with own_buf, as
+                                  last found (sp_io_own_nb). 0 not asked,
+                                  1 yes, 2 no or could not (#4307) */
   unsigned char wstream;       /* SOCK_STREAM, asked once: 0 not yet, 1 yes,
                                   2 no. Only a byte stream may have a write
                                   split at the send buffer's free space; on a
@@ -52,6 +57,19 @@ typedef struct {
                                   read: 0 not yet asked, 1 never (a regular
                                   file is always ready), 2 park before a read
                                   that could block (#4307) */
+  unsigned char own_buf;       /* reads take rbuf below, never stdio: the
+                                  descriptor is non-blocking and a read that
+                                  finds nothing parks in the runtime.
+                                  SP_OWN_SOCK a connected stream socket,
+                                  SP_OWN_PIPE a pipe's read end */
+  unsigned char park_first;    /* own_buf: the last read found nothing, so a
+                                  fill on an empty rbuf parks before it reads */
+  unsigned char park_first_run; /* own_buf: fills in a row that parked first */
+  unsigned char rlock;         /* own_buf: held while a reader changes rbuf
+                                  (sp_io_rlock, sp_io.c) */
+  char *rbuf;                  /* own_buf: the bytes read and not yet taken
+                                  are rbuf[rpos, rlen), in rcap bytes */
+  size_t rpos, rlen, rcap;
   unsigned char closed;        /* #close ran. Once no thread is inside a read
                                   or write of it (uses below), the FILE the
                                   handle carries is the shared /dev/null
@@ -113,10 +131,21 @@ sp_File *sp_io_fdopen(int fd, const char *mode);
 sp_File *sp_io_fdopen_ex(int fd, const char *mode, int owns_fd);
 sp_File *sp_File_open_perm(const char *path, const char *mode, sp_oint perm);   /* a nil perm is CRuby's default, 0666 */
 /* Wrap a connected/listening socket fd. Reads stay on the buffered FILE* so
-   #gets and friends work; writes bypass stdio straight to write(2), matching
-   CRuby sockets' sync = true. `kind` labels the handle ("tcp", "tcpserver",
-   ...) for #class rendering. (#2922) */
+   #gets and friends work, except a connected stream socket's, which take a
+   buffer of the handle's own (own_buf); writes bypass stdio straight to
+   write(2), matching CRuby sockets' sync = true. `kind` labels the handle
+   ("tcp", "tcpserver", ...) for #class rendering. (#2922) */
 sp_File *sp_io_fdopen_sock(int fd, const char *kind);
+#define SP_OWN_SOCK 1
+#define SP_OWN_PIPE 2
+/* IO.for_fd / IO.new over a connected stream socket, or over a pipe's read
+   end that is non-blocking: the handle takes own_buf. */
+void sp_io_take_own_buf(sp_File *f);
+/* IO.pipe's read end over fd: a non-blocking descriptor read through
+   own_buf. */
+sp_File *sp_io_pipe_reader(int fd);
+/* IO#putc's byte: through stdio, or straight to the descriptor (own_buf). */
+void sp_File_put_byte(sp_File *f, int c);
 /* Access-mode checks retain closed-stream error precedence. */
 void sp_io_check_readable(sp_File *f);
 void sp_io_check_writable(sp_File *f);
@@ -128,8 +157,68 @@ void sp_fork_exec_lock(void);
 void sp_fork_exec_unlock(void);
 /* Park until the handle can take bytes (a socket, or an IO.pipe write end). */
 void sp_io_wait_writable(sp_File *f);
-/* Bytes stdio already holds for this stream (readable without a read(2)). */
-size_t sp_io_stdio_buffered(FILE *fp);
+/* The reads of a handle with own_buf set (lib/sp_io.c). */
+int sp_io_rbuf_fill(sp_File *f);
+int sp_io_rbuf_getc(sp_File *f);
+void sp_io_rbuf_ungetc(sp_File *f, int c);
+size_t sp_io_rbuf_read(sp_File *f, void *buf, size_t n);
+ssize_t sp_io_rbuf_getline(sp_File *f, char **buf, size_t *cap);
+char *sp_io_rbuf_fgets(sp_File *f, char *buf, int size);
+size_t sp_io_rbuf_read_into(sp_File *f, char *buf, size_t n);
+size_t sp_io_rbuf_read_some(sp_File *f, char *buf, size_t n);
+size_t sp_io_rbuf_take(sp_File *f, void *buf, size_t n);
+/* Readers of an IO handle's stream call these instead of stdio: each is the
+   stdio call of the same name on the handle's FILE, or, for a handle with
+   own_buf, the same answer from rbuf. A read of more bytes than
+   sp_io_pending answers can park on such a handle, so a caller that reads
+   into a String holds it rooted (SP_GC_ROOT_STR) across the read. */
+static inline int sp_io_getc(sp_File *f) {
+  if (f->own_buf) return sp_io_rbuf_getc(f);
+  return SP_SIG_BLOCKING(fgetc(f->fp));
+}
+static inline void sp_io_ungetc(sp_File *f, int c) {
+  if (f->own_buf) sp_io_rbuf_ungetc(f, c);
+  else ungetc(c, f->fp);
+}
+static inline size_t sp_io_fread(sp_File *f, void *buf, size_t n) {
+  if (f->own_buf) return sp_io_rbuf_read(f, buf, n);
+  return SP_SIG_BLOCKING(fread(buf, 1, n, f->fp));
+}
+static inline ssize_t sp_io_getline(sp_File *f, char **buf, size_t *cap) {
+  if (f->own_buf) return sp_io_rbuf_getline(f, buf, cap);
+  return SP_SIG_BLOCKING(getline(buf, cap, f->fp));
+}
+/* Up to n of the bytes the handle already holds (sp_io_pending), never a
+   read: another thread may have taken some of them since they were
+   counted, so the answer can be smaller, even 0. */
+static inline size_t sp_io_take(sp_File *f, void *buf, size_t n) {
+  if (f->own_buf) return sp_io_rbuf_take(f, buf, n);
+  return SP_SIG_BLOCKING(fread(buf, 1, n, f->fp));
+}
+static inline char *sp_io_fgets(sp_File *f, char *buf, int size) {
+  if (f->own_buf) return sp_io_rbuf_fgets(f, buf, size);
+  return SP_SIG_BLOCKING(fgets(buf, size, f->fp));
+}
+/* Bytes stdio has already buffered for this stream. They are readable without
+   a read(2), so a drain of exactly this many cannot block -- which is what
+   lets a slurp fill from a pipe without ever sitting in the kernel. For a
+   handle with own_buf, the bytes rbuf holds: read without its lock, so a
+   hint another reader can make stale, never a count to copy. */
+static inline size_t sp_io_pending(sp_File *f) {
+  if (f->own_buf) {
+    size_t len = SP_ATOMIC_LOAD(&f->rlen, __ATOMIC_RELAXED), pos = SP_ATOMIC_LOAD(&f->rpos, __ATOMIC_RELAXED);
+    return len > pos ? len - pos : 0;
+  }
+  FILE *fp = f->fp;
+  if (!fp) return 0;
+#if defined(__GLIBC__)
+  return fp->_IO_read_end > fp->_IO_read_ptr ? (size_t)(fp->_IO_read_end - fp->_IO_read_ptr) : 0;
+#elif defined(__APPLE__)
+  return fp->_r > 0 ? (size_t)fp->_r : 0;
+#else
+  return __freadahead(fp);   /* musl */
+#endif
+}
 /* IO#read with no count on a handle whose read can block: fill to EOF,
    parking between refills instead of sitting in the kernel (#4307). */
 const char *sp_slurp_stream_parked(sp_File *f);

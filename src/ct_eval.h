@@ -74,6 +74,11 @@ typedef struct { char *name; CtVal v; int wr, nw; } CtLocal;
 
 typedef struct {
   CtFxKind k; int site; char *name; int cls, names, block, frame, sg;
+  int lam;     /* a define_method whose body is a lambda argument (block: the LambdaNode) */
+  int vcode;   /* a macro's const_set whose value the run does not know: the value's node + 1 (0: val holds it) */
+  /* ...and in that code, the name argument of each send on self the run
+     knows (fold[i], a node of the macro's body), spelled foldv[i] */
+  int *fold; char **foldv; int nfold;
   char **attrs; int nattrs;
   CtVal recv, key, val;
   /* a residual or a local write: the frame's locals as they stood when
@@ -110,6 +115,13 @@ typedef struct {
   void *host;
   CtFrame *frames; int nframes, cframes;
   int frame, depth;   /* the frame running, and how many run */
+  /* macro mode: self's instance variables, as the class body left them
+     before the call (ct_env_ivar_set) and as the run writes them; a value
+     of MV_UNDEF is one not known. One not listed is unset (nil), or not
+     known when ivar_open. */
+  CtLocal *ivar; int nivar, civar, ivar_open;
+  /* a `return` ran in the frame running (returning), with this value */
+  CtVal ret; int returning;
 } CtEnv;
 
 /* the value of expression `node`, 1 when it is known */
@@ -126,6 +138,9 @@ const CtLocal *ct_frame_local(const CtEnv *e, int frame, const char *name);
    its own, the def self_macro names with its parameters bound to the call's
    values; 1 when every statement was followed or left as written */
 int ct_macro_call(const NodeTable *nt, CtEnv *e, int call);
+/* macro mode: self's instance variable `name` holds v before the call
+   (an MV_UNDEF value: not known) */
+void ct_env_ivar_set(CtEnv *e, const char *name, CtVal v);
 /* forget the locals (a new block call), keeping the classes and effects */
 void ct_env_new_call(CtEnv *e);
 /* do a and b hold one String object? A copy of a value (a local's read,

@@ -152,6 +152,8 @@ const char *sp_exc_message(volatile sp_Exception *ve);
 const char *sp_exc_msg_text(volatile sp_Exception *ve);
 /* e with the String handle h as its message (sp_Exception.msg_h); answers e */
 void *sp_exc_attach_msg(void *e, void *h);
+/* e's message in place of the one before; NULL clears it */
+void sp_exc_set_msg(sp_Exception *e, const char *msg);
 /* #to_s as #inspect renders it: a user override (the generated program's
    sp_user_exc_to_s, installed in the hook) else the stored message */
 extern const char *(*sp_user_exc_to_s_fn)(sp_Exception *);
@@ -162,6 +164,7 @@ const char *sp_exc_to_s_text(sp_Exception *e);
 const char *sp_exc_inspect(void *p);   /* #<Cls: msg>, for the inspect dispatch */
 sp_Exception *sp_exc_cause(volatile sp_Exception *ve);
 sp_RbVal sp_exc_result(volatile sp_Exception *ve);
+sp_RbVal sp_exc_result_acc(sp_Exception *e);   /* StopIteration#result, gated on the class */
 const char *sp_errno_class_name(int e);   /* "Errno::ENOENT" for ENOENT; the parent for an unlisted one */
 sp_RbVal sp_exc_errno_acc(sp_Exception *e);   /* SystemCallError#errno */
 sp_RbVal sp_exc_error_code_acc(sp_Exception *e);   /* Socket::ResolutionError#error_code */

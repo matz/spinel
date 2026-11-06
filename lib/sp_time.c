@@ -340,8 +340,17 @@ sp_Time sp_timev_with_usec_f(sp_Time t, double usec) {
 /* Time.new(String): the fixed CRuby form "YYYY-MM-DD HH:MM:SS[.frac]" with
    an optional " +HH:MM" / " -HH:MM" / " UTC" zone suffix. A date without a
    time and any other shape raise CRuby's ArgumentError messages; anything
-   the grammar does not cover must be loud, never a guessed instant. */
-sp_Time sp_timev_parse(const char *s) {SP_GC_ROOT_STR(s);
+   the grammar does not cover must be loud, never a guessed instant. A string
+   without a zone reads its fields in the default zone `dz`: 0 host-local,
+   1 UTC, 2 the fixed offset `doff` (Time.new(str, in: zone)). */
+static sp_Time sp_timev_civil_dz(int64_t y, int64_t mo, int64_t d, int64_t h, int64_t mi, int64_t sec,
+                                 int dz, int64_t doff) {
+  if (dz == 1) return sp_timev_new_utc(y, mo, d, h, mi, sec);
+  if (dz == 2) return sp_timev_new_off(y, mo, d, h, mi, sec, doff);
+  return sp_timev_new(y, mo, d, h, mi, sec);
+}
+
+static sp_Time sp_timev_parse_dz(const char *s, int dz, int64_t doff) {SP_GC_ROOT_STR(s);
   const char *sp_sprintf(const char *fmt, ...);  /* generated TU */
   int y, mo, d, h, mi, sec, n = 0;
   /* a year alone ("2021", "-44", "+12345") is Time.new(year), as CRuby
@@ -354,7 +363,7 @@ sp_Time sp_timev_parse(const char *s) {SP_GC_ROOT_STR(s);
       int64_t yy = 0;
       for (size_t i = 0; i < nd && i < 18; i++) yy = yy * 10 + (q[i] - '0');
       if (*s == '-') yy = -yy;
-      return sp_timev_new(yy, 1, 1, 0, 0, 0);
+      return sp_timev_civil_dz(yy, 1, 1, 0, 0, 0, dz, doff);
     }
   }
   if (sscanf(s, "%4d-%2d-%2d%n", &y, &mo, &d, &n) != 3 || n == 0)
@@ -380,8 +389,8 @@ sp_Time sp_timev_parse(const char *s) {SP_GC_ROOT_STR(s);
   }
   while (*p == ' ') p++;
   if (*p == 0) {
-    /* no zone: host-local, like the civil Time.new */
-    sp_Time t = sp_timev_new(y, mo, d, h, mi, sec);
+    /* no zone: the default one, host-local unless `in:` names another */
+    sp_Time t = sp_timev_civil_dz(y, mo, d, h, mi, sec, dz, doff);
     t.tv_nsec = nsec;
     return t;
   }
@@ -402,6 +411,22 @@ sp_Time sp_timev_parse(const char *s) {SP_GC_ROOT_STR(s);
   }
   sp_raise_cls("ArgumentError", sp_sprintf("can't parse: \"%s\"", s));
 }
+
+sp_Time sp_timev_parse(const char *s) { return sp_timev_parse_dz(s, 0, 0); }
+/* Does the string form write its own zone? Then Time.new's `in:` is never
+   converted. A string the grammar refuses answers 0: the parse raises. */
+int sp_time_str_has_zone(const char *s) {
+  int y, mo, d, h, mi, sec, n = 0;
+  if (!s || sscanf(s, "%4d-%2d-%2d%n", &y, &mo, &d, &n) != 3 || n == 0) return 0;
+  const char *p = s + n;
+  n = 0;
+  if (sscanf(p, " %2d:%2d:%2d%n", &h, &mi, &sec, &n) != 3 || n == 0) return 0;
+  p += n;
+  if (*p == '.') { p++; while (*p >= '0' && *p <= '9') p++; }
+  while (*p == ' ') p++;
+  return *p != 0;
+}
+sp_Time sp_timev_parse_in(const char *s, int dz, int64_t doff) { return sp_timev_parse_dz(s, dz, doff); }
 
 sp_Time sp_timev_utc(sp_Time t) {
   t.is_utc = 1;
@@ -1256,6 +1281,7 @@ sp_Time *sp_time_in_zone_s(const sp_Time *t, const char *z) { return sp_time_ref
 sp_Time *sp_time_at_float(double epoch) { return sp_time_ref(sp_timev_at_float(epoch)); }
 sp_Time *sp_time_at_div(int64_t num, int64_t den) { return sp_time_ref(sp_timev_at_div(num, den)); }
 sp_Time *sp_time_parse(const char *s) { return sp_time_ref(sp_timev_parse(s)); }
+sp_Time *sp_time_parse_in(const char *s, int dz, int64_t doff) { return sp_time_ref(sp_timev_parse_in(s, dz, doff)); }
 sp_Time *sp_time_s_httpdate(const char *s) { return sp_time_ref(sp_timev_s_httpdate(s)); }
 sp_Time *sp_time_s_rfc2822(const char *s) { return sp_time_ref(sp_timev_s_rfc2822(s)); }
 sp_Time *sp_time_s_xmlschema(const char *s) { return sp_time_ref(sp_timev_s_xmlschema(s)); }

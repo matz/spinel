@@ -261,6 +261,16 @@ int sp_net_sock_ip(int fd, int peer, char *ipbuf, int cap) {
     return -1;
 }
 
+/* The peer's IP of a connected socket fd as text ("" when it has none: a
+   UNIX socket, or a closed one), for an FFI caller that reads a string back
+   (a server's `REMOTE_ADDR`). Per thread, as sp_net_recv_some's buffer. */
+static SP_TLS char sp_net_peer_ip_buf[64];
+const char *sp_net_peer_ip(int fd) {
+    if (sp_net_sock_ip(fd, 1, sp_net_peer_ip_buf, (int)sizeof sp_net_peer_ip_buf) < 0)
+        sp_net_peer_ip_buf[0] = '\0';
+    return sp_net_peer_ip_buf;
+}
+
 /* The local/peer address of a socket fd as the packed sockaddr bytes, into
    out: their length, or -1 with errno set. peer != 0 reads the remote end. */
 int sp_net_sock_name(int fd, int peer, void *out, int cap) {

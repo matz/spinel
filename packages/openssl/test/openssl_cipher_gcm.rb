@@ -1,4 +1,4 @@
-# spinel: not-cruby -- OpenSSL::PKey::EC.from_private_bytes is this package's; the .expected is the package's own answers
+# spinel: not-cruby -- checks the package's cipher/tag subset and legacy CipherError alias
 require "openssl"
 
 def hx(s) = [s].pack("H*")

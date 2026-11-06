@@ -70,10 +70,10 @@ static void method_param_add(Compiler *c, MethodParam **v, int *n, int *cap, con
 }
 
 /* The #parameters entries of the parameters node pn4 (-1: none), in CRuby's
-   order: req, opt, rest, post-req, key(req), keyrest, block, each by the
-   name the program wrote (method_param_add); a destructuring group has
-   none, and neither has a C extension's method. Returns the count; *out is
-   malloc'd. */
+   order: req, opt, rest, post-req, keyreq, key, keyrest (nokey for
+   `**nil`), block, each by the name the program wrote (method_param_add);
+   a destructuring group has none, and neither has a C extension's method.
+   Returns the count; *out is malloc'd. */
 static int method_params_of(Compiler *c, int pn4, MethodParam **out) {
   const NodeTable *nt = c->nt;
   MethodParam *v = NULL;
@@ -87,10 +87,12 @@ static int method_params_of(Compiler *c, int pn4, MethodParam **out) {
     *out = v;
     return n;
   }
-  static const struct { const char *arr; const char *kind; const char *optkind; } PKINDS[] = {
-    { "requireds", "req", NULL }, { "optionals", "opt", NULL },
-    { "rest", NULL, NULL },   /* placeholder: rest emitted in this slot */
-    { "posts", "req", NULL }, { "keywords", "keyreq", "key" },
+  /* (the keywords twice: the required ones first, as CRuby lists them) */
+  static const struct { const char *arr; const char *kind; NodeKind only; } PKINDS[] = {
+    { "requireds", "req", NK_NONE }, { "optionals", "opt", NK_NONE },
+    { "rest", NULL, NK_NONE },   /* placeholder: rest emitted in this slot */
+    { "posts", "req", NK_NONE }, { "keywords", "keyreq", NK_RequiredKeywordParameterNode },
+    { "keywords", "key", NK_OptionalKeywordParameterNode },
   };
   for (size_t pk = 0; pk < sizeof PKINDS / sizeof PKINDS[0]; pk++) {
     if (!PKINDS[pk].kind) {   /* the rest param, in CRuby's slot */
@@ -103,13 +105,13 @@ static int method_params_of(Compiler *c, int pn4, MethodParam **out) {
       const char *pnm4 = nt_str(nt, av4[e4], "name");
       /* a destructuring group (`def d((x, y), z)`) has no name of its own */
       if (!pnm4 && nt_kind(nt, av4[e4]) != NK_MultiTargetNode) continue;
-      const char *kind4 = PKINDS[pk].kind;
-      if (PKINDS[pk].optkind && nt_kind(nt, av4[e4]) == NK_OptionalKeywordParameterNode) kind4 = PKINDS[pk].optkind;
-      method_param_add(c, &v, &n, &cap, kind4, av4[e4]);
+      if (PKINDS[pk].only != NK_NONE && nt_kind(nt, av4[e4]) != PKINDS[pk].only) continue;
+      method_param_add(c, &v, &n, &cap, PKINDS[pk].kind, av4[e4]);
     }
   }
   int kwr4 = nt_ref(nt, pn4, "keyword_rest");
-  if (kwr4 >= 0 && nt_str(nt, kwr4, "name")) method_param_add(c, &v, &n, &cap, "keyrest", kwr4);
+  if (kwr4 >= 0 && nt_kind(nt, kwr4) == NK_NoKeywordsParameterNode) method_param_add_n(&v, &n, &cap, "nokey", NULL, 0);
+  else if (kwr4 >= 0 && nt_str(nt, kwr4, "name")) method_param_add(c, &v, &n, &cap, "keyrest", kwr4);
   int blk4 = nt_ref(nt, pn4, "block");
   if (blk4 >= 0 && nt_str(nt, blk4, "name")) method_param_add(c, &v, &n, &cap, "block", blk4);
   *out = v;
@@ -126,19 +128,96 @@ static int scope_params_node(Compiler *c, int mi) {
   return pn >= 0 && nt_kind(nt, pn) == NK_BlockParametersNode ? nt_ref(nt, pn, "parameters") : pn;
 }
 
+/* The entries of a list as sp_BoundMethod.params carries it, "kind[:name]"
+   separated by spaces (builtin_method_params), onto v */
+static void method_params_parse(const char *p, MethodParam **v, int *n, int *cap) {
+  static const char *const KINDS[] = { "req", "opt", "rest", "keyreq", "key", "keyrest", "nokey", "block", NULL };
+  while (*p) {
+    size_t len = strcspn(p, " "), kl = strcspn(p, ": ");
+    for (int k = 0; KINDS[k]; k++)
+      if (strlen(KINDS[k]) == kl && strncmp(KINDS[k], p, kl) == 0)
+        method_param_add_n(v, n, cap, KINDS[k], kl < len ? p + kl + 1 : NULL, kl < len ? len - kl - 1 : 0);
+    p += len + (p[len] == ' ');
+  }
+}
+
 /* The #parameters entries of method mi. A method made of an accessor
-   (Scope.attr_version) answers CRuby's accessor list, not its synthesized
-   def's: a writer's one parameter has no name ([[:req]]), a reader has
-   none ([]). */
+   (Scope.attr_version), or an accessor's wrapper (bam_accessor), answers
+   CRuby's accessor list, not its synthesized def's: a writer's one
+   parameter has no name ([[:req]]; a Struct member's is `_`,
+   bam_struct_member), a reader has none ([]). A builtin's wrapper answers
+   the list of the program's def it reaches instead of the builtin (a
+   reopen's, cplan_bam_reopen_target), else CRuby's list for the method it
+   stands for (builtin_method_params, by its owner), where the facts have
+   one. Where the record cannot tell which of the two the Method stands for
+   (a conditional reopen, a maker run before and after the def), it keeps
+   the wrapper's own list, until a run-time version of the method tells. A
+   method_missing Method (cplan_missing_guard) answers one anonymous rest,
+   [[:rest]]. */
 static int scope_method_params(Compiler *c, int mi, MethodParam **out) {
+  MethodParam *v = NULL;
+  int n = 0, cap = 0, dn = mi >= 0 ? c->scopes[mi].def_node : -1, rd = cplan_bam_reopen_target(c, mi);
+  const char *sym = mi >= 0 ? bam_builtin_sym(c, mi, NULL) : NULL, *own = NULL, *bp = NULL;
+  if (mi >= 0 && cplan_missing_guard(c, mi) >= 0) {
+    method_param_add_n(&v, &n, &cap, "rest", NULL, 0);
+    *out = v;
+    return n;
+  }
+  if (rd >= 0) return scope_method_params(c, rd, out);
+  if (rd == -2) return method_params_of(c, scope_params_node(c, mi), out);
+  if (sym && nt_int(c->nt, dn, "bam_accessor", 0)) {
+    if (name_is_plain_setter(sym)) method_param_add_n(&v, &n, &cap, "req", bam_struct_member(c, mi) ? "_" : NULL, 1);
+    *out = v;
+    return n;
+  }
+  if (sym && (bam_owner(c, mi, &own), bp = builtin_method_params(own, sym, NULL))) {
+    method_params_parse(bp, &v, &n, &cap);
+    *out = v;
+    return n;
+  }
   if (mi >= 0 && c->scopes[mi].attr_version) {
-    MethodParam *v = NULL;
-    int n = 0, cap = 0;
     for (int i = 0; i < c->scopes[mi].nparams; i++) method_param_add_n(&v, &n, &cap, "req", NULL, 0);
     *out = v;
     return n;
   }
   return method_params_of(c, scope_params_node(c, mi), out);
+}
+
+/* The rules a Method's proc's #parameters follow, as the run time's
+   SP_BM_PROC_PARAMS_* name them (proc_params_arg) */
+enum { PROC_PARAMS_LIST, PROC_PARAMS_ARITY, PROC_PARAMS_PLAIN };
+/* Which rule the #parameters of method mi's proc follow
+   (sp_BoundMethod.proc_params): PROC_PARAMS_LIST for a Ruby body, the
+   Method's own list; PROC_PARAMS_ARITY for none, the unnamed list of its
+   arity; PROC_PARAMS_PLAIN where the bind site cannot tell which method
+   the Method stands for, a plain proc's answer. A def or a define_method
+   block has a Ruby body, and so has a builtin's wrapper that reaches one
+   instead (cplan_bam_reopen_target). An accessor's wrapper (bam_accessor)
+   and a method made of an accessor (attr_version) have none, nor a C
+   extension's method (cext_arity), nor a method_missing Method
+   (cplan_missing_guard: CRuby's calls method_missing, no body of its own),
+   nor a builtin CRuby writes in C (builtin_method_params's C column; one
+   the facts do not list is taken as C, as all but a few are). The record cannot tell for a wrapper that
+   may reach a reopen's def or the builtin, until a run-time version of the
+   method tells. */
+static int method_proc_params(Compiler *c, int mi) {
+  const char *own = NULL, *sym = mi >= 0 ? bam_builtin_sym(c, mi, NULL) : NULL;
+  int in_c = 1, pn = mi >= 0 ? scope_params_node(c, mi) : -1, rd = cplan_bam_reopen_target(c, mi);
+  if (mi < 0) return PROC_PARAMS_LIST;
+  if (cplan_missing_guard(c, mi) >= 0) return PROC_PARAMS_ARITY;
+  if (rd >= 0) return method_proc_params(c, rd);
+  if (rd == -2) return PROC_PARAMS_PLAIN;
+  if (c->scopes[mi].attr_version || (pn >= 0 && nt_int(c->nt, pn, "cext_arity", -99) != -99)) return PROC_PARAMS_ARITY;
+  if (!sym) return PROC_PARAMS_LIST;
+  if (nt_int(c->nt, c->scopes[mi].def_node, "bam_accessor", 0)) return PROC_PARAMS_ARITY;
+  bam_owner(c, mi, &own);
+  builtin_method_params(own, sym, &in_c);
+  return in_c ? PROC_PARAMS_ARITY : PROC_PARAMS_LIST;
+}
+/* The run time's name of rule pp, the argument of sp_bm_set_proc_params,
+   or NULL for PROC_PARAMS_LIST, which a new Method has already */
+static const char *proc_params_arg(int pp) {
+  return pp == PROC_PARAMS_ARITY ? "SP_BM_PROC_PARAMS_ARITY" : pp == PROC_PARAMS_PLAIN ? "SP_BM_PROC_PARAMS_PLAIN" : NULL;
 }
 
 /* Push the entries v[0..n) onto the PolyArray _t<tr4>, as [kind, name], or
@@ -169,24 +248,67 @@ void emit_scope_parameters_pushes(Compiler *c, int mi, int tr4, Buf *b) {
   free(v);
 }
 
+/* The name method mi's def gives it, CRuby's #original_name; NULL where no
+   def of the program names it: a define_method block, or a builtin's
+   wrapper (desugar_builtin_method_obj), which stands for the builtin */
+static const char *method_def_name(Compiler *c, int mi) {
+  const NodeTable *nt = c->nt;
+  int dn = c->scopes[mi].def_node;
+  if (dn < 0 || nt_kind(nt, dn) != NK_DefNode || bam_builtin_sym(c, mi, NULL)) return NULL;
+  return nt_str(nt, dn, "name");
+}
+
+/* A class's name as a Method's rendering writes it */
+static const char *method_desc_class_name(Compiler *c, int ci) {
+  const char *rn = class_ruby_name(c, ci);
+  return rn ? rn : c->classes[ci].name;
+}
+
 /* "#<Method: Owner#name(a, b=..., *r, k:, o: ..., **kw, &blk)>" -- CRuby's
    Method#inspect rendering, built at compile time from the target scope and
    emitted as a C string literal; " file:line" is appended when positions
    were stamped (--line-map). The text grows with the parameter names, so it
    is built in a Buf: a fixed array cut it off, and wrote past its end once
-   the names filled it. */
-static void emit_method_desc_literal(Compiler *c, int mi, const char *sym, int unbound, Buf *b) {
+   the names filled it.
+   A bound Method of a module's copy names the receiver's class ahead of
+   the module, as CRuby does: `C(V)#v` for an include's, `#<Class:C>(V)#v`
+   for an extend's, the receiver's class being `from` (the class the maker
+   searched, method_obj_from_class), else the class the copy is in. An
+   alias node mn's Method made in a `class << self` is the singleton's,
+   whatever it aliases: `C.vv(v)`, or `E(D).vv(v)` taken on a class below. */
+static void emit_method_desc_literal(Compiler *c, int mn, int mi, int from, const char *sym, int unbound, Buf *b) {
   Scope *m = &c->scopes[mi];
+  /* a method_missing Method's: its receiver's class, `(*)`, no position */
+  if (cplan_missing_guard(c, mi) >= 0) {
+    Buf d; memset(&d, 0, sizeof d);
+    buf_printf(&d, "#<%s: %s#%s(*)>", unbound ? "UnboundMethod" : "Method", method_desc_class_name(c, m->class_id), sym);
+    emit_str_literal(b, d.p);
+    free(d.p);
+    return;
+  }
   const char *ow = "Object"; char sep = '#';
-  int owci = m->origin_module_ci ? m->origin_module_ci - 1 : m->class_id;
+  int om = m->origin_module_ci - 1, owci = om >= 0 ? om : m->class_id, rc = from >= 0 ? from : m->class_id;
+  int asg = 0, ah = mn >= 0 && !unbound ? method_obj_alias_owner(c, mn, &asg) : -1;
   if (owci >= 0) {
-    const char *rn = class_ruby_name(c, owci);
-    ow = rn ? rn : c->classes[owci].name;
-    if (m->is_cmethod) sep = '.';
+    ow = method_desc_class_name(c, owci);
+    if (m->is_cmethod && om < 0) sep = '.';
   }
   Buf d; memset(&d, 0, sizeof d);
-  buf_printf(&d, "#<%s: %s%c%s(", unbound ? "UnboundMethod" : "Method", ow, sep,
-             sym ? sym : (m->name ? m->name : "?"));
+  const char *nm = sym ? sym : (m->name ? m->name : "?"), *orig = method_def_name(c, mi);
+  buf_printf(&d, "#<%s: ", unbound ? "UnboundMethod" : "Method");
+  if (ah >= 0 && asg) {
+    sep = '.';
+    buf_puts(&d, method_desc_class_name(c, rc >= 0 ? rc : ah));
+    if (rc >= 0 && rc != ah) buf_printf(&d, "(%s)", method_desc_class_name(c, ah));
+  }
+  else if (om >= 0 && !unbound && rc >= 0)
+    buf_printf(&d, m->is_cmethod ? "#<Class:%s>(%s)" : "%s(%s)", method_desc_class_name(c, rc), ow);
+  else buf_puts(&d, ow);
+  buf_printf(&d, "%c%s", sep, nm);
+  /* a Method named apart from its def (an alias's) writes the def's name
+     after its own, `C#bar(foo)(...)`, as CRuby does */
+  if (orig && strcmp(orig, nm) != 0) buf_printf(&d, "(%s)", orig);
+  buf_puts(&d, "(");
   for (int i = 0; i < m->nparams; i++) {
     if (!m->pnames[i]) continue;
     if (i) buf_puts(&d, ", ");
@@ -225,12 +347,98 @@ static void emit_method_params_literal(Compiler *c, int mi, Buf *b) {
   free(v);
 }
 
-/* The descriptor arguments of sp_bound_method_new_d for method mi: its
-   rendering, then its parameter list */
-static void emit_method_desc_args(Compiler *c, int mi, const char *sym, int unbound, Buf *b) {
-  emit_method_desc_literal(c, mi, sym, unbound, b);
+/* Is method mi a method of its class's singleton, as a Method of it names
+   its owner: a class method of the class's own, not a copy (a module's, an
+   inherited one specialized for the class, an extend's), unless taken as an
+   instance method (unbound; a module function is both) */
+static int method_owner_singleton(Compiler *c, int mi, int unbound) {
+  const Scope *m = &c->scopes[mi];
+  return m->is_cmethod && !m->origin_module_ci && !m->is_cmethod_copy && m->class_id >= 0 && !unbound;
+}
+
+/* Method#owner of method mi as node mn makes the Method (-1: none): the
+   class an alias was made in (method_obj_alias_owner), else what a
+   builtin's or an accessor's wrapper stands for (bam_owner: the builtin's
+   class or module by name in *bname), else the module a copy came from or
+   mi's class; *sg 1 for that class's singleton */
+static int method_owner_ci(Compiler *c, int mn, int mi, int unbound, int *sg, const char **bname) {
+  int h = mn >= 0 ? method_obj_alias_owner(c, mn, sg) : -1;
+  *bname = NULL;
+  if (h >= 0) { *sg = *sg && !unbound; return h; }
+  const Scope *m = &c->scopes[mi];
+  *sg = 0;
+  if ((h = bam_owner(c, mi, bname)) >= 0 || *bname) return h;
+  *sg = method_owner_singleton(c, mi, unbound);
+  return m->origin_module_ci ? m->origin_module_ci - 1 : m->class_id;
+}
+
+/* Method#owner of method mi as node mn makes the Method, the class value
+   (method_owner_ci); Object at the top level. A builtin's wrapper whose
+   defining class or module no fact names stamps none, which a read of a
+   local refuses (method_recv_owner_unknown). */
+static void emit_method_owner_class(Compiler *c, int mn, int mi, int unbound, Buf *b) {
+  const char *bn;
+  int sg, ci = method_owner_ci(c, mn, mi, unbound, &sg, &bn);
+  if (ci < 0 && !bn && bam_builtin_sym(c, mi, NULL)) buf_puts(b, "SP_CLASS_NIL");
+  else if (bn || ci < 0) buf_printf(b, "((sp_Class){(sp_int)-1, SPL(\"%s\")})", bn ? bn : "Object");
+  else if (sg) buf_printf(b, "((sp_Class){sp_sclass_id(%d), NULL})", ci);
+  else buf_printf(b, "((sp_Class){%d, NULL})", ci);
+}
+
+/* Where method mi stands, for #source_location: 1 and its def's file and
+   line, 0 for none (nil: a C extension's method has none), or -1 where no
+   fact tells: a builtin's wrapper (desugar_builtin_method_obj, bam_sym)
+   stands for a method CRuby writes in C (nil) or in Ruby (an
+   `<internal:...>` pair), which nothing records, and *file and *line are
+   then the wrapper's own def's, line 0, as #source_location answered it
+   before. An accessor's wrapper (bam_accessor) stands at the attr_* call
+   its bind site meets (bam_src), a Struct member's or an alias's of a
+   module's accessor at none. A boxed receiver's wrapper (bam_poly)
+   answers by its receiver's class at run time, which its readers emit. */
+static int method_source_pos(Compiler *c, int mi, const char **file, int *line) {
+  const NodeTable *nt = c->nt;
+  int dn = mi >= 0 ? c->scopes[mi].def_node : -1, known = 1;
+  if (bam_builtin_sym(c, mi, NULL)) {
+    int src = (int)nt_int(nt, dn, "bam_src", -1);
+    /* (a method_missing Method's is nil, as CRuby's) */
+    if (src >= 0 || nt_int(nt, dn, "bam_accessor", 0) || cplan_missing_guard(c, mi) >= 0) dn = src;
+    else known = -1;
+  }
+  if (dn < 0 || nt_int(nt, dn, "cext_extension", 0)) return 0;
+  const char *f = nt_file_path(nt, (int)nt_int(nt, dn, "node_file", 0));
+  *file = f && *f ? f : nt->source_file ? nt->source_file : "";
+  *line = (int)nt_int(nt, dn, "node_line", 0);
+  return known;
+}
+/* A #source_location's path: frozen, as CRuby's is */
+static void emit_source_path_literal(Buf *b, const char *file) {
+  emit_str_literal_n(b, file, strlen(file), 1);
+}
+
+/* The descriptor arguments of sp_bound_method_new_d for method mi, which
+   node mn (-1: none) makes the Method of, the class the maker searched
+   being from (-1: none, method_obj_from_class): its rendering, its parameter
+   list, its owner as the static #owner answers it (emit_method_owner_class),
+   and the file and line of its def (NULL, 0 for none, as source_location's
+   nil). The bind site knows each; the run time reads them from the fields,
+   never from the rendering. */
+static void emit_method_desc_args(Compiler *c, int mn, int mi, int from, const char *sym, int unbound, Buf *b) {
+  emit_method_desc_literal(c, mn, mi, from, sym, unbound, b);
   buf_puts(b, ", ");
   emit_method_params_literal(c, mi, b);
+  buf_puts(b, ", ");
+  emit_method_owner_class(c, mn, mi, unbound, b);
+  int dn = c->scopes[mi].def_node, line = 0;
+  const char *file = NULL;
+  /* (a boxed receiver's wrapper stamps none, nor a builtin's no fact
+     places: a read refuses them, method_recv_stamped) */
+  if ((dn >= 0 && nt_int(c->nt, dn, "bam_poly", 0)) || method_source_pos(c, mi, &file, &line) <= 0) {
+    buf_puts(b, ", NULL, (sp_int)0");
+    return;
+  }
+  buf_puts(b, ", ");
+  emit_source_path_literal(b, file);
+  buf_printf(b, ", (sp_int)%d", line);
 }
 
 /* Proc#parameters. parameters() follows the receiver's own nature; an explicit
@@ -263,7 +471,7 @@ int emit_op_proc_parameters(Compiler *c, const BopCtx *x, Buf *b) {
     }
   }
   if (pmode_ok) {
-    buf_printf(b, "sp_proc_parameters_ids("); emit_expr(c, recv, b);
+    buf_printf(b, "sp_proc_parameters_of("); emit_expr(c, recv, b);
     buf_printf(b, ", %d, (sp_sym)%d, (sp_sym)%d)",
                pmode, comp_sym_intern(c, "req"), comp_sym_intern(c, "opt"));
     return 1;
@@ -320,10 +528,17 @@ int emit_op_method_unbind(Compiler *c, const BopCtx *x, Buf *b) {
   int tvu = ++g_tmp;
   buf_printf(b, "({ sp_BoundMethod *_t%d = ", tvu);
   emit_expr(c, recv, b);
-  buf_printf(b, "; sp_bm_set_unbound(sp_bm_set_abi(sp_bound_method_new_d(NULL, SP_BM_SELF_NONE, _t%d->fn, _t%d->name, _t%d->arity, ", tvu, tvu, tvu);
-  if (tmu >= 0) emit_method_desc_args(c, tmu, method_sym_arg(c, mnu), 1, b);
-  else buf_printf(b, "NULL, _t%d->params", tvu);
-  buf_printf(b, "), 0, _t%d->legacy_int_abi, _t%d->legacy_sig, _t%d->legacy_fixed, _t%d->legacy_rest, _t%d->legacy_ret, _t%d->poly_abi, _t%d->poly_fixed)); })", tvu, tvu, tvu, tvu, tvu, tvu, tvu);
+  /* (an unknown target's fact is the source Method's) */
+  char ppv[32];
+  const char *pp = tmu >= 0 ? proc_params_arg(method_proc_params(c, tmu)) : (snprintf(ppv, sizeof ppv, "_t%d->proc_params", tvu), ppv);
+  buf_puts(b, "; ");
+  if (pp) buf_puts(b, "sp_bm_set_proc_params(");
+  buf_printf(b, "sp_bm_set_unbound(sp_bm_set_abi(sp_bound_method_new_d(NULL, SP_BM_SELF_NONE, _t%d->fn, _t%d->name, _t%d->arity, ", tvu, tvu, tvu);
+  if (tmu >= 0) emit_method_desc_args(c, mnu, tmu, -1, method_sym_arg(c, mnu), 1, b);
+  else buf_printf(b, "NULL, _t%d->params, _t%d->owner, _t%d->src_file, _t%d->src_line", tvu, tvu, tvu, tvu);
+  buf_printf(b, "), 0, _t%d->legacy_int_abi, _t%d->legacy_sig, _t%d->legacy_fixed, _t%d->legacy_rest, _t%d->legacy_ret, _t%d->poly_abi, _t%d->poly_fixed))", tvu, tvu, tvu, tvu, tvu, tvu, tvu);
+  if (pp) buf_printf(b, ", %s)", pp);
+  buf_puts(b, "; })");
   return 1;
   return 0;
 }
@@ -334,14 +549,7 @@ int emit_op_method_super_method(Compiler *c, const BopCtx *x, Buf *b) {
   int recv = x->recv;
   int mnp = method_recv_node(c, recv);
   int imip = mnp >= 0 ? method_obj_target_mi(c, mnp) : -1;
-  int pmip = -1;
-  if (imip >= 0 && c->scopes[imip].class_id >= 0 &&
-      c->classes[c->scopes[imip].class_id].parent >= 0) {
-    int parp = c->classes[c->scopes[imip].class_id].parent;
-    pmip = c->scopes[imip].is_cmethod
-             ? comp_cmethod_in_chain(c, parp, c->scopes[imip].name, NULL)
-             : comp_method_in_chain(c, parp, c->scopes[imip].name, NULL);
-  }
+  int pmip = method_super_target(c, imip);
   if (pmip >= 0) {
     int tvp = ++g_tmp;
     buf_printf(b, "({ sp_BoundMethod *_t%d = ", tvp);
@@ -350,13 +558,15 @@ int emit_op_method_super_method(Compiler *c, const BopCtx *x, Buf *b) {
        (loaded as the new self below) cannot be swept mid-call. */
     buf_printf(b, "; SP_GC_ROOT(_t%d); ", tvp);
     int sup_unb = method_expr_is_unbound(c, recv);
+    const char *pp = proc_params_arg(method_proc_params(c, pmip));
+    if (pp) buf_puts(b, "sp_bm_set_proc_params(");
     buf_printf(b, "%ssp_bm_set_thunk(sp_bm_set_abi(sp_bound_method_new_d(_t%d->self, _t%d->self_kind, (sp_int)(uintptr_t)&", sup_unb ? "sp_bm_set_unbound(" : "", tvp, tvp);
     buf_puts(b, mc_method(c, &c->scopes[pmip]));
     buf_puts(b, ", ");
     emit_str_literal(b, c->scopes[pmip].name ? c->scopes[pmip].name : "?");
     { int ar; if (method_scope_arity(c, pmip, &ar)) buf_printf(b, ", (sp_int)%d", ar); else buf_puts(b, ", (sp_int)-1"); }
     buf_puts(b, ", ");
-    emit_method_desc_args(c, pmip, c->scopes[pmip].name, sup_unb, b);
+    emit_method_desc_args(c, -1, pmip, -1, c->scopes[pmip].name, sup_unb, b);
     buf_puts(b, ")");
     { char _s[8 * 64 + 1]; int _fx = 0, _rs = 0, _rt = 0, _pf = 0, _prt = 0;
       int _ab = method_legacy_int_abi(c, pmip, !sup_unb, _s, sizeof _s, &_fx, &_rs, &_rt);
@@ -369,6 +579,7 @@ int emit_op_method_super_method(Compiler *c, const BopCtx *x, Buf *b) {
       const char *_th = sup_unb ? NULL : emit_method_thunk(c, pmip, _prb, &_tmin, &_tmax);
       emit_bm_abi_args(b, _rbb, _ab, _s, _fx, _rs, _ab ? _rt : _prt, _pa, _pf, _th, _tmin, _tmax); }
     if (sup_unb) buf_puts(b, ")");
+    if (pp) buf_printf(b, ", %s)", pp);
     buf_puts(b, "; })");
   }
   else {
@@ -404,13 +615,16 @@ static int emit_method_bind_target(Compiler *c, const BopCtx *x, Buf *b, int t2)
     int bt = ++g_tmp;
     buf_printf(b, "({ void *_t%d = (void *)(", bt);
     emit_expr(c, argv[0], b);
-    buf_printf(b, "); SP_GC_ROOT(_t%d); sp_bm_set_thunk(sp_bm_set_abi(sp_bound_method_new_d(_t%d, SP_BM_SELF_OBJ, (sp_int)(uintptr_t)&", bt, bt);
+    const char *pp = proc_params_arg(method_proc_params(c, t2));
+    buf_printf(b, "); SP_GC_ROOT(_t%d); ", bt);
+    if (pp) buf_puts(b, "sp_bm_set_proc_params(");
+    buf_printf(b, "sp_bm_set_thunk(sp_bm_set_abi(sp_bound_method_new_d(_t%d, SP_BM_SELF_OBJ, (sp_int)(uintptr_t)&", bt);
     buf_puts(b, mc_method(c, &c->scopes[t2]));
     buf_puts(b, ", ");
     emit_str_literal(b, method_sym_arg(c, mn2));
     { int ar; if (method_scope_arity(c, t2, &ar)) buf_printf(b, ", (sp_int)%d", ar); else buf_puts(b, ", (sp_int)-1"); }
     buf_puts(b, ", ");
-    emit_method_desc_args(c, t2, method_sym_arg(c, mn2), 0, b);
+    emit_method_desc_args(c, mn2, t2, -1, method_sym_arg(c, mn2), 0, b);
     buf_puts(b, ")");
     { char _s[8 * 64 + 1]; int _fx = 0, _rs = 0, _rt = 0, _pf = 0, _prt = 0;
       int _ab = method_legacy_int_abi(c, t2, 1, _s, sizeof _s, &_fx, &_rs, &_rt);
@@ -418,6 +632,7 @@ static int emit_method_bind_target(Compiler *c, const BopCtx *x, Buf *b, int t2)
       int _tmin = 0, _tmax = 0;
       const char *_th = emit_method_thunk(c, t2, 1, &_tmin, &_tmax);
       emit_bm_abi_args(b, "1", _ab, _s, _fx, _rs, _ab ? _rt : _prt, _pa, _pf, _th, _tmin, _tmax); }
+    if (pp) buf_printf(b, ", %s)", pp);
     buf_puts(b, "; })");
     return 1;
   }
@@ -479,14 +694,16 @@ int emit_op_method_to_proc(Compiler *c, const BopCtx *x, Buf *b) {
        optionals/rest into nparams > nrequired). */
     int m_arity = (np != tm->nrequired) ? -(tm->nrequired - shift + 1)
                                         : tm->nrequired - shift;
-    /* The capture is built before sp_proc_new_meta allocates the proc it
-       goes into, and until the proc holds it the C argument slot is the only
-       thing that does, so the proc's own allocation could collect it. */
+    /* The capture, the Method, which answers the proc's #parameters too
+       (sp_method_proc_scan, sp_proc_parameters_of), is built before
+       sp_proc_new_meta allocates the proc it goes into, and until the proc
+       holds it the C argument slot is the only thing that does, so the
+       proc's own allocation could collect it. */
     { int tcap = ++g_tmp;
       buf_printf(b, "({ void *_t%d = (void *)(", tcap);
       emit_expr(c, recv, b);
       buf_printf(b, "); SP_GC_ROOT(_t%d);", tcap);
-      buf_printf(b, " sp_proc_new_meta((void *)_mtp_%s, _t%d, sp_bm_cap_scan, %d, TRUE, 0, NULL, NULL); })",
+      buf_printf(b, " sp_proc_new_meta((void *)_mtp_%s, _t%d, sp_method_proc_scan, %d, TRUE, 0, NULL, NULL); })",
                  tid, tcap, m_arity); }
     return 1;
   }
@@ -513,7 +730,7 @@ int emit_op_method_original_name(Compiler *c, const BopCtx *x, Buf *b) {
   if (tg4 >= 0 && c->scopes[tg4].name) {
     buf_puts(b, "((void)("); emit_expr_for_effect(c, recv, b);
     buf_puts(b, "), sp_sym_intern(");
-    emit_str_literal(b, comp_scope_user_name(&c->scopes[tg4]));
+    emit_str_literal(b, bam_builtin_sym(c, tg4, comp_scope_user_name(&c->scopes[tg4])));
     buf_puts(b, "))");
   }
   else {
@@ -524,15 +741,13 @@ int emit_op_method_original_name(Compiler *c, const BopCtx *x, Buf *b) {
 }
 
 /* Method#source_location: [file, line] of the target's def, from the same
-   node position the #line machinery uses (#3247). */
-static int emit_method_source_target(Compiler *c, const BopCtx *x, Buf *b, int tg4) {
+   node position the #line machinery uses (#3247); mn is the node that
+   makes the Method (-1: none). */
+static int emit_method_source_target(Compiler *c, const BopCtx *x, Buf *b, int tg4, int mn) {
   const NodeTable *nt = c->nt;
   int recv = x->recv;
   int dn4 = tg4 >= 0 ? c->scopes[tg4].def_node : -1;
-  int ln4 = dn4 >= 0 ? (int)nt_int(nt, dn4, "node_line", 0) : 0;
-  if (dn4 >= 0 && nt_int(nt, dn4, "cext_extension", 0)) {
-    buf_puts(b, "((void)("); emit_expr_for_effect(c, recv, b); buf_puts(b, "), 0)"); return 1;
-  }
+  if (dn4 < 0) return 0;
   /* a boxed receiver's wrapper (bam_poly) has no position of its own: the
      method is the one the receiver's run-time class answers by the name,
      whose def gives the pair */
@@ -546,20 +761,20 @@ static int emit_method_source_target(Compiler *c, const BopCtx *x, Buf *b, int t
       if (comp_class_is_module(c, &c->classes[k])) continue;
       int mk = comp_method_in_chain(c, k, sym4, NULL);
       int dk = mk >= 0 ? c->scopes[mk].def_node : -1;
+      /* an attr method stands where the accessor the bind site meets
+         answers (cplan_accessor_met): its attr_* call, or none (a Struct's
+         member, an alias of a module's accessor) */
       if (comp_resolve_member(c, k, sym4, 0, NULL, NULL) == SP_MEMBER_ATTR) {
-        /* an attr method keeps the unlined pair the plain path answers */
-        buf_printf(b, "if (_t%d.tag == SP_TAG_OBJ && _t%d.cls_id == %d) { _t%d = sp_PolyArray_new();"
-                      " sp_PolyArray_push(_t%d, sp_box_str(", tv4, tv4, k, tr4, tr4);
-        emit_str_literal(b, nt->source_file ? nt->source_file : "");
-        buf_printf(b, ")); sp_PolyArray_push(_t%d, sp_box_int(0LL)); } else ", tr4);
-        continue;
+        CplanAccessor acc;
+        cplan_accessor_met(c, mn, k, sym4, &acc);
+        dk = acc.pos == 1 ? acc.node : -1;
       }
-      if (dk < 0 || nt_int(nt, dk, "bam_poly", 0)) continue;
+      else if (dk < 0 || nt_int(nt, dk, "bam_poly", 0)) continue;
+      buf_printf(b, "if (_t%d.tag == SP_TAG_OBJ && _t%d.cls_id == %d) { ", tv4, tv4, k);
+      if (dk < 0) { buf_printf(b, "_t%d = NULL; } else ", tr4); continue; }
       const char *fk = nt_file_path(nt, (int)nt_int(nt, dk, "node_file", 0));
-      if (!fk || !*fk) fk = nt->source_file;
-      buf_printf(b, "if (_t%d.tag == SP_TAG_OBJ && _t%d.cls_id == %d) { _t%d = sp_PolyArray_new();"
-                    " sp_PolyArray_push(_t%d, sp_box_str(", tv4, tv4, k, tr4, tr4);
-      emit_str_literal(b, fk ? fk : "");
+      buf_printf(b, "_t%d = sp_PolyArray_new(); sp_PolyArray_push(_t%d, sp_box_str(", tr4, tr4);
+      emit_source_path_literal(b, fk && *fk ? fk : nt->source_file ? nt->source_file : "");
       buf_printf(b, ")); sp_PolyArray_push(_t%d, sp_box_int(%dLL)); } else ", tr4, (int)nt_int(nt, dk, "node_line", 0));
     }
     /* a receiver no arm took answers by a native method, whose location is
@@ -576,7 +791,7 @@ static int emit_method_source_target(Compiler *c, const BopCtx *x, Buf *b, int t
     }
     if (own4) {
       buf_printf(b, "{ _t%d = sp_PolyArray_new(); sp_PolyArray_push(_t%d, sp_box_str(", tr4, tr4);
-      emit_str_literal(b, nt->source_file ? nt->source_file : "");
+      emit_source_path_literal(b, nt->source_file ? nt->source_file : "");
       buf_printf(b, ")); sp_PolyArray_push(_t%d, sp_box_int(0LL)); } _t%d; })", tr4, tr4);
     }
     else buf_printf(b, "_t%d = NULL; _t%d; })", tr4, tr4);
@@ -584,24 +799,35 @@ static int emit_method_source_target(Compiler *c, const BopCtx *x, Buf *b, int t
   }
   /* under --no-line-map node_line is unstamped (0): still emit the pair so
      the program compiles; the line is 0 there */
-  if (dn4 >= 0) {
-    const char *file4 = nt_file_path(nt, (int)nt_int(nt, dn4, "node_file", 0));
-    if (!file4 || !*file4) file4 = nt->source_file;
-    int tr4 = ++g_tmp;
-    buf_printf(b, "({ (void)("); emit_expr_for_effect(c, recv, b);
-    buf_printf(b, "); sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d);"
-                  " sp_PolyArray_push(_t%d, sp_box_str(", tr4, tr4, tr4);
-    emit_str_literal(b, file4 ? file4 : "");
-    buf_printf(b, ")); sp_PolyArray_push(_t%d, sp_box_int(%dLL)); _t%d; })", tr4, ln4, tr4);
+  const char *file4 = NULL;
+  int ln4 = 0;
+  if (!method_source_pos(c, tg4, &file4, &ln4)) {
+    buf_puts(b, "((void)("); emit_expr_for_effect(c, recv, b); buf_puts(b, "), (sp_PolyArray *)NULL)");
     return 1;
   }
-  return 0;
+  int tr4 = ++g_tmp;
+  buf_printf(b, "({ (void)("); emit_expr_for_effect(c, recv, b);
+  buf_printf(b, "); sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d);"
+                " sp_PolyArray_push(_t%d, sp_box_str(", tr4, tr4, tr4);
+  emit_source_path_literal(b, file4);
+  buf_printf(b, ")); sp_PolyArray_push(_t%d, sp_box_int(%dLL)); _t%d; })", tr4, ln4, tr4);
+  return 1;
 }
 
 int emit_op_method_source_location(Compiler *c, const BopCtx *x, Buf *b) {
   CallPlan plan = cplan_method_call(c, x->id);
   int mi = plan.mi;
-  if (plan.dispatch != CP_SWITCH) return emit_method_source_target(c, x, b, mi);
+  /* A Method no one node names (a local written two Methods): the position
+     its bind site stamped, as #owner reads its owner (#3692), where each
+     bind site stamps one */
+  if (plan.dispatch != CP_SWITCH && plan.method_node < 0 && mi < 0) {
+    if (!method_recv_stamped(c, x->recv)) return 0;
+    buf_puts(b, "sp_bm_source_location(");
+    emit_expr(c, x->recv, b);
+    buf_puts(b, ")");
+    return 1;
+  }
+  if (plan.dispatch != CP_SWITCH) return emit_method_source_target(c, x, b, mi, plan.method_node);
   size_t start = b->len;
   int to[VER_MAX_ARMS + 1], n = ver_entry_targets(c, mi, to, NULL), tr = ++g_tmp;
   buf_printf(b, "({ sp_BoundMethod *_t%d = ", tr); emit_expr(c, x->recv, b);
@@ -609,7 +835,7 @@ int emit_op_method_source_location(Compiler *c, const BopCtx *x, Buf *b) {
   int vr = view_bind(x->recv, "_t%d", tr);
   for (int i = 0; i < n; i++) {
     if (i < n - 1) buf_printf(b, "_t%d->fn == (sp_int)(uintptr_t)&%s ? ", tr, mc_method(c, &c->scopes[to[i]]));
-    if (!emit_method_source_target(c, x, b, to[i])) {
+    if (!emit_method_source_target(c, x, b, to[i], plan.method_node)) {
       if (vr >= 0) view_unbind(vr);
       buf_erase(b, start, b->len - start);
       return 0;
@@ -652,23 +878,6 @@ int emit_op_method_parameters(Compiler *c, const BopCtx *x, Buf *b) {
   return 0;
 }
 
-/* Is method mi a method of its class's singleton, as a Method of it names
-   its owner: a class method of the class's own, not a copy (a module's, an
-   inherited one specialized for the class, an extend's), unless taken as an
-   instance method (unbound; a module function is both) */
-static int method_owner_singleton(Compiler *c, int mi, int unbound) {
-  const Scope *m = &c->scopes[mi];
-  return m->is_cmethod && !m->origin_module_ci && !m->is_cmethod_copy && m->class_id >= 0 && !unbound;
-}
-
-static void emit_method_owner_class(Compiler *c, int mi, int unbound, Buf *b) {
-  const Scope *m = &c->scopes[mi];
-  int ci = m->origin_module_ci ? m->origin_module_ci - 1 : m->class_id;
-  if (ci < 0) buf_puts(b, "((sp_Class){(sp_int)-1, SPL(\"Object\")})");
-  else if (method_owner_singleton(c, mi, unbound)) buf_printf(b, "((sp_Class){sp_sclass_id(%d), NULL})", ci);
-  else buf_printf(b, "((sp_Class){%d, NULL})", ci);
-}
-
 /* Method#owner (#2701). The creation site knows it: a user target's owner is its
    defining class; a builtin target's owner is the receiver's class. */
 int emit_op_method_owner(Compiler *c, const BopCtx *x, Buf *b) {
@@ -683,7 +892,7 @@ int emit_op_method_owner(Compiler *c, const BopCtx *x, Buf *b) {
     buf_printf(b, "; SP_GC_ROOT(_t%d); ", tr);
     for (int i = 0; i < n; i++) {
       if (i < n - 1) buf_printf(b, "_t%d->fn == (sp_int)(uintptr_t)&%s ? ", tr, mc_method(c, &c->scopes[to[i]]));
-      emit_method_owner_class(c, to[i], unbound, b);
+      emit_method_owner_class(c, mn, to[i], unbound, b);
       if (i < n - 1) buf_puts(b, " : ");
     }
     buf_puts(b, "; })");
@@ -692,17 +901,18 @@ int emit_op_method_owner(Compiler *c, const BopCtx *x, Buf *b) {
   int is_bam = target >= 0 && c->scopes[target].name &&
                strncmp(c->scopes[target].name, "__bam_", 6) == 0;
   int mrecv = mn >= 0 ? nt_ref(nt, mn, "receiver") : -1;
-  if (target >= 0 && !is_bam) {
+  const char *bown = NULL;
+  if (target >= 0 && (!is_bam || bam_owner(c, target, &bown) >= 0 || bown)) {
     /* a method a module provides is owned by that module, however many
-       classes include it (#3662); a class method by its class's singleton */
-    int ocid = c->scopes[target].origin_module_ci
-                 ? c->scopes[target].origin_module_ci - 1
-                 : c->scopes[target].class_id;
-    const char *ocn = ocid >= 0 ? (class_ruby_name(c, ocid) ? class_ruby_name(c, ocid)
-                                                            : c->classes[ocid].name) : "Object";
+       classes include it (#3662); a class method by its class's singleton;
+       an alias by the class it was made in; an accessor's or a builtin's
+       wrapper by what it stands for */
+    int osg, ocid = method_owner_ci(c, mn, target, unbound, &osg, &bown);
+    const char *ocn = bown ? bown : ocid >= 0 ? (class_ruby_name(c, ocid) ? class_ruby_name(c, ocid)
+                                                                     : c->classes[ocid].name) : "Object";
     buf_printf(b, "((void)("); emit_expr_for_effect(c, recv, b);
     buf_puts(b, "), ");
-    if (method_owner_singleton(c, target, unbound)) emit_method_owner_class(c, target, unbound, b);
+    if (osg) emit_method_owner_class(c, mn, target, unbound, b);
     else buf_printf(b, "((sp_Class){(sp_int)-1, SPL(\"%s\")})", ocn);
     buf_puts(b, ")");
     return 1;
@@ -714,25 +924,25 @@ int emit_op_method_owner(Compiler *c, const BopCtx *x, Buf *b) {
                      : ty_is_array(mrt) ? "Array" : ty_is_hash(mrt) ? "Hash"
                      : mrt == TY_RANGE ? "Range" : mrt == TY_TIME ? "Time" : NULL;
     if (mcls) {
-      /* a Comparable method the class does not define itself is the
-         module's: String#between?, Integer#clamp */
+      /* the class or module that defines the method: Comparable's
+         String#between?, Numeric's Integer#abs2, Kernel's String#frozen?;
+         the receiver's class where the facts name none */
       const char *osym = is_bam ? bam_builtin_sym(c, target, NULL) : method_sym_arg(c, mn);
-      if (osym && builtin_comparable_owns(mcls, osym) && !builtin_method_known(mcls, osym))
-        mcls = "Comparable";
-      /* and Numeric's that Integer and Float inherit: Integer#abs2 */
-      else if (osym && builtin_numeric_owns(mcls, osym) && !builtin_method_known(mcls, osym))
-        mcls = "Numeric";
+      const char *own = builtin_method_owner(mcls, osym);
+      if (own) mcls = own;
       buf_printf(b, "((void)("); emit_expr_for_effect(c, recv, b);
       buf_printf(b, "), ((sp_Class){(sp_int)-1, SPL(\"%s\")}))", mcls);
       return 1;
     }
   }
   /* A Method no one node names (a local re-written to another Method):
-     the owner its rendering carries, as a poly one reads it (#3692) */
+     the owner its bind site stamped, as a poly one reads it (#3692);
+     none where a write's builtin stamps none */
   if (mn < 0) {
-    buf_puts(b, "({ const char *_o = sp_bm_owner_name(");
+    if (method_recv_owner_unknown(c, recv)) return 0;
+    buf_puts(b, "({ sp_Class _o = sp_bm_owner(");
     emit_expr(c, recv, b);
-    buf_puts(b, "); (sp_Class){(sp_int)-1, _o ? _o : SPL(\"Object\")}; })");
+    buf_puts(b, "); sp_class_nil_p(_o) ? (sp_Class){(sp_int)-1, SPL(\"Object\")} : _o; })");
     return 1;
   }
   return 0;
@@ -798,6 +1008,10 @@ int emit_op_method_arity(Compiler *c, const BopCtx *x, Buf *b) {
      name from the wrapper body's tail call. */
   int is_bam = target >= 0 && c->scopes[target].name &&
                strncmp(c->scopes[target].name, "__bam_", 6) == 0;
+  /* ...unless it reaches the program's def of the name instead (a reopen's,
+     cplan_bam_reopen_target), whose arity it has */
+  int rd = is_bam ? cplan_bam_reopen_target(c, target) : -1;
+  if (rd >= 0) { target = rd; is_bam = 0; }
   /* a boxed receiver's wrapper: the Method carries the arity its receiver's
      run-time class gave it */
   if (is_bam && c->scopes[target].def_node >= 0 &&
@@ -1656,6 +1870,19 @@ int emit_call_callable_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, co
 
 /* Method and UnboundMethod objects: instance_method, method(:sym), bind / bind_call, owner,
    original_name, arity, parameters, receiver, unbind, super_method, source_location, to_proc */
+/* The test a method_missing Method mi's capture id runs first, the
+   respond_to_missing? method q of mi's class (cplan_missing_guard) on the
+   receiver held in _t<tmp> (-1: self), with include_private false for a
+   public_method, as the head of a comma expression the caller closes:
+   CRuby's NameError when it answers false */
+static void emit_missing_guard(Compiler *c, int id, int mi, int q, int tmp, Buf *b) {
+  buf_printf(b, "((void)(%s(", mc_method(c, &c->scopes[q]));
+  if (tmp >= 0) buf_printf(b, "_t%d", tmp);
+  else buf_puts(b, g_self);
+  buf_printf(b, ", %d) || (sp_raise_cls(\"NameError\", (&(\"\\xff\" \"undefined method '%s' for class '%s'\")[1])), 0)), ",
+             !nt_int(c->nt, id, "public_capture", 0), method_sym_arg(c, id), method_desc_class_name(c, c->scopes[mi].class_id));
+}
+
 static int emit_method_obj_target(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc, const int *argv, int capture) {
   /* Klass.instance_method(:sym) -> the unbound object: the same
      sp_BoundMethod with a NULL self, so name/arity/owner ride the Method
@@ -1663,13 +1890,15 @@ static int emit_method_obj_target(Compiler *c, int id, Buf *b, const NodeTable *
   if (sp_streq(name, "instance_method") && method_sym_arg(c, id) != NULL) {
     int umi = capture;
     if (umi >= 0) {
+      const char *pp = proc_params_arg(method_proc_params(c, umi));
+      if (pp) buf_puts(b, "sp_bm_set_proc_params(");
       buf_puts(b, "sp_bm_set_unbound(sp_bm_set_thunk(sp_bm_set_abi(sp_bound_method_new_d(NULL, SP_BM_SELF_NONE, (sp_int)(uintptr_t)&");
       buf_puts(b, mc_method(c, &c->scopes[umi]));
       buf_puts(b, ", ");
       emit_str_literal(b, method_sym_arg(c, id));
       { int ar; if (method_scope_arity(c, umi, &ar)) buf_printf(b, ", (sp_int)%d", ar); else buf_puts(b, ", (sp_int)-1"); }
       buf_puts(b, ", ");
-      emit_method_desc_args(c, umi, method_sym_arg(c, id), 1, b);
+      emit_method_desc_args(c, id, umi, -1, method_sym_arg(c, id), 1, b);
       buf_puts(b, ")");
       { char _s[8 * 64 + 1]; int _fx = 0, _rs = 0, _rt = 0, _pf = 0, _prt = 0;
         int _ab = method_legacy_int_abi(c, umi, 0, _s, sizeof _s, &_fx, &_rs, &_rt);
@@ -1679,6 +1908,7 @@ static int emit_method_obj_target(Compiler *c, int id, Buf *b, const NodeTable *
         const char *_th = c->scopes[umi].is_cmethod ? emit_method_thunk(c, umi, 0, &_tmin, &_tmax) : NULL;
         emit_bm_abi_args(b, "0", _ab, _s, _fx, _rs, _ab ? _rt : _prt, _pa, _pf, _th, _tmin, _tmax); }
       buf_puts(b, ")");
+      if (pp) buf_printf(b, ", %s)", pp);
       return 1;
     }
   }
@@ -1775,6 +2005,9 @@ static int emit_method_obj_target(Compiler *c, int id, Buf *b, const NodeTable *
       return 1;
     }
     /* bare method(:sym) on an instance method binds the current self */
+    /* a method_missing Method (cplan_capture_missing) binds its receiver
+       after its respond_to_missing? test */
+    int mmq = cplan_missing_guard(c, mi);
     int self_bound = (recv < 0 && mi >= 0 && c->scopes[mi].class_id >= 0 &&
                       !c->scopes[mi].is_cmethod);
     /* Whether this Method's target can ride the legacy sp_int poly-call ABI.
@@ -1848,6 +2081,9 @@ static int emit_method_obj_target(Compiler *c, int id, Buf *b, const NodeTable *
          reference the collector can follow. */
       if (rt2 == TY_STRING || rt2 == TY_STRBUF) { self_kind = "SP_BM_SELF_STR"; self_is_str = 1; self_rooted = 1; }
       else if (needs_root(rt2) && rr2.kind != RK_BOXED && rr2.kind != RK_VOBJ) { self_kind = "SP_BM_SELF_OBJ"; self_rooted = 1; }
+      /* (a true or a false is its value, which a #receiver read back out of a
+         container answers by this kind) */
+      else if (rt2 == TY_BOOL && rr2.kind != RK_BOXED) self_kind = "SP_BM_SELF_BOOL";
       /* The constructor allocates and may collect: a fresh receiver
          (`M.new.method(:v)`) is otherwise unreachable and would be swept, so
          hold it in a rooted C temporary across the call -- the same shape as
@@ -1864,7 +2100,19 @@ static int emit_method_obj_target(Compiler *c, int id, Buf *b, const NodeTable *
           buf_printf(b, "if (!_t%d) sp_raise_cls(\"NameError\", \"undefined method '%s' for class 'NilClass'\"); ", self_tmp, sym);
       }
     }
-    buf_puts(b, mi >= 0 ? "sp_bm_set_thunk(sp_bm_set_abi(sp_bound_method_new_d(" : "sp_bm_set_thunk(sp_bm_set_abi(sp_bound_method_new(");
+    /* `<typed_array>.method(:op)` with no method scope: a per-(type, op)
+       adapter (below), which takes the descriptor constructor for its
+       owner, Array's */
+    Repr br = repr_of(c, recv);
+    const char *bk = ty_is_array(br.as_ty) ? array_kind(br.as_ty) : NULL;
+    const char *bop = mi < 0 && bk && (br.elem == TY_INT || br.elem == TY_STRING) ? typed_array_adapter_op(sym) : NULL;
+    /* (an adapter stands for Array's op, which CRuby writes in C) */
+    int in_c = 1;
+    if (bop) builtin_method_params("Array", sym, &in_c);
+    const char *pp = proc_params_arg(mi >= 0 ? method_proc_params(c, mi) : bop && in_c ? PROC_PARAMS_ARITY : PROC_PARAMS_LIST);
+    if (mmq >= 0 && (self_rooted || recv < 0)) emit_missing_guard(c, id, mi, mmq, self_rooted ? self_tmp : -1, b);
+    if (pp) buf_puts(b, "sp_bm_set_proc_params(");
+    buf_puts(b, mi >= 0 || bop ? "sp_bm_set_thunk(sp_bm_set_abi(sp_bound_method_new_d(" : "sp_bm_set_thunk(sp_bm_set_abi(sp_bound_method_new(");
     if (self_rooted) buf_printf(b, "_t%d", self_tmp);
     else if (recv >= 0 && repr_of(c, recv).as_ty == TY_CLASS) buf_puts(b, "NULL");
     else if (recv >= 0) { buf_puts(b, "(void *)("); emit_expr(c, recv, b); buf_puts(b, ")"); }
@@ -1877,15 +2125,7 @@ static int emit_method_obj_target(Compiler *c, int id, Buf *b, const NodeTable *
       /* `<typed_array>.method(:op)`: lower through a per-(type, op) adapter
          matching the Method dispatch ABI (optcarrot's
          `add_mappings(.., @ram, @ram.method(:[]=))` shape). */
-      Repr br = repr_of(c, recv);
       TyKind brt = br.as_ty;
-      const char *bk = ty_is_array(brt) ? array_kind(brt) : NULL;
-      const char *bop = NULL;
-      if (bk && (br.elem == TY_INT || br.elem == TY_STRING)) {
-        if (sp_streq(sym, "[]")) bop = "get";
-        else if (sp_streq(sym, "[]=")) bop = "set";
-        else if (sp_streq(sym, "push")) bop = "push";
-      }
       if (bop) {
         /* Under promote the adapter is emitted poly-signatured (sp_RbVal
            self/arg/return), so it claims the POLY stamp there -- its C
@@ -2065,7 +2305,15 @@ static int emit_method_obj_target(Compiler *c, int id, Buf *b, const NodeTable *
       else buf_puts(b, ", (sp_int)-1"); }
     if (mi >= 0) {
       buf_puts(b, ", ");
-      emit_method_desc_args(c, mi, disp, 0, b);
+      emit_method_desc_args(c, id, mi, method_obj_from_class(c, id), disp, 0, b);
+    }
+    else if (bop) {
+      /* (the facts name Array for each of the ops; none answered is nil) */
+      const char *aown = builtin_method_owner("Array", sym);
+      buf_puts(b, ", NULL, NULL, ");
+      if (aown) buf_printf(b, "((sp_Class){(sp_int)-1, SPL(\"%s\")})", aown);
+      else buf_puts(b, "SP_CLASS_NIL");
+      buf_puts(b, ", NULL, (sp_int)0");
     }
     buf_puts(b, ")");
     { char _rbb[16]; snprintf(_rbb, sizeof _rbb, "%d", recv_bound);
@@ -2074,6 +2322,8 @@ static int emit_method_obj_target(Compiler *c, int id, Buf *b, const NodeTable *
       emit_bm_abi_args(b, _rbb, mi_legacy, mi >= 0 ? mi_sig : bop_sig,
                        mi >= 0 ? mi_fixed : bop_argc, mi >= 0 ? mi_rest : bop_rest,
                        mi >= 0 ? (mi_legacy ? mi_ret : mi_pret) : bop_ret, mi_poly, mi_pfixed, _th, _tmin, _tmax); }
+    if (pp) buf_printf(b, ", %s)", pp);
+    if (mmq >= 0 && (self_rooted || recv < 0)) buf_puts(b, ")");
     if (self_rooted) buf_puts(b, "; })");
     return 1;
   }
@@ -2111,8 +2361,34 @@ static int emit_method_obj_target(Compiler *c, int id, Buf *b, const NodeTable *
   return 0;
 }
 
+/* CRuby's NameError for capture id, whose plan finds no method (CallPlan.absent), as a statement. A
+   Class.new class is named as it prints at run time: by the constant written with it, once written
+   (obj_default_name's display). A module whose singleton class is not made yet is named 'Module'.
+   The method name is an argument of that format, not part of it: an operator's name may hold a `%`. */
+static void emit_capture_absent_raise(Compiler *c, int id, const CallPlan *plan, Buf *b) {
+  int module = plan->absent == CP_ABSENT_MODULE;
+  const char *cn = module ? "Module" : class_ruby_name(c, plan->owner_ci), *open = plan->absent == CP_ABSENT_SG ? "#<Class:" : "", *close = plan->absent == CP_ABSENT_SG ? ">" : "";
+  if (!module && comp_class_anonymous(c, plan->owner_ci)) {
+    buf_printf(b, "sp_raise_cls(\"NameError\", sp_sprintf(\"undefined method '%%s' for class '%s%%s%s'\", \"%s\", sp_class_display((sp_Class){%d})));",
+               open, close, method_sym_arg(c, id), plan->owner_ci);
+    return;
+  }
+  buf_printf(b, "sp_raise_cls(\"NameError\", (&(\"\\xff\" \"undefined method '%s' for class '%s%s%s'\")[1]));",
+             method_sym_arg(c, id), open, cn ? cn : c->classes[plan->owner_ci].name, close);
+}
+
 int emit_call_method_obj_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc, const int *argv) {
+  refuse_from_plan(c, id, CRF_CAPTURE, "refuse-capture");
   CallPlan plan = cplan_method_call(c, id);
+  /* no method of the name where it runs: CRuby's NameError, its receiver
+     evaluated first */
+  if (plan.absent && plan.mi < 0) {
+    buf_puts(b, "({ ");
+    if (recv >= 0) { buf_puts(b, "(void)("); emit_expr(c, recv, b); buf_puts(b, "); "); }
+    emit_capture_absent_raise(c, id, &plan, b);
+    buf_printf(b, " %s; })", default_value_from_compiler(c, repr_of(c, id).as_ty));
+    return 1;
+  }
   int mi = is_method_object_maker(name) ? plan.mi : -1;
   if (mi < 0 || plan.dispatch != CP_SWITCH)
     return emit_method_obj_target(c, id, b, nt, name, recv, argc, argv, mi);
@@ -2129,8 +2405,16 @@ int emit_call_method_obj_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
   for (int i = 0; i < n; i++) {
     if (i) buf_puts(b, "else ");
     if (tests[i] >= 0) { buf_puts(b, "if ("); emit_expr(c, tests[i], b); buf_puts(b, ") "); }
+    /* no version live, where the entry's else arm finds no method: CRuby's
+       NameError (CallPlan.absent) */
+    if (tests[i] < 0 && plan.absent) {
+      buf_puts(b, "{ ");
+      emit_capture_absent_raise(c, id, &plan, b);
+      buf_printf(b, " _t%d = NULL; }\n", tr);
+      continue;
+    }
     buf_printf(b, "{ _t%d = ", tr);
-    if (!emit_method_obj_target(c, id, b, nt, name, recv, argc, argv, to[i])) {
+    if (!emit_method_obj_target(c, id, b, nt, name, recv, argc, argv, cplan_capture_arm(c, id, to[i]))) {
       if (vr >= 0) view_unbind(vr);
       buf_erase(b, start, b->len - start);
       return 0;
@@ -2191,34 +2475,53 @@ int emit_call_poly_callable_arms(Compiler *c, int id, Buf *b, const NodeTable *n
     int has_user = user_defines_or_reads(c, name) ||
                    (!g_poly_builtin_arm && cplan_boxed_cmethod(c, id, name));
     if (!has_user) {
+      /* a builtin's Method no fact names the owner of stamps none
+         (emit_method_owner_class): an owner read it may reach refuses, as a
+         local's does (method_recv_owner_unknown) */
+      if (is_method_owner_query(name) && method_recv_owner_unknown(c, recv))
+        unsupported_feature(c, id, "Method#owner of a Method that may be a builtin's whose class or module "
+                                   "no compile-time fact names (a true's or false's own method, a method of a "
+                                   "value whose class is known only at run time) is not supported");
       int t = ++g_tmp;
       buf_printf(b, "({ sp_RbVal _t%d = ", t); emit_expr(c, recv, b);
       buf_printf(b, "; _t%d.cls_id == SP_BUILTIN_METHOD ? ", t);
       /* a Class.new class has no name until a constant names it: nil */
-      char cls_arm[120];
-      snprintf(cls_arm, sizeof cls_arm, c->has_anonymous_classes || comp_has_sclass_values(c)
-               ? "sp_box_nullable_str(sp_class_name_or_nil(sp_unbox_class(_t%d)))"
-               : "sp_box_str(sp_class_val_name(_t%d))", t);
-      if (sp_streq(name, "name"))
+      char cls_arm[220];
+      if (c->has_anonymous_classes || comp_has_sclass_values(c))
+        snprintf(cls_arm, sizeof cls_arm, "({ const char *_cn%d = sp_class_name_or_nil(sp_unbox_class(_t%d));"
+                 " _cn%d ? sp_box_str(sp_str_uminus_val(_cn%d)) : sp_box_nil(); })", t, t, t, t);
+      else snprintf(cls_arm, sizeof cls_arm, "sp_box_str(sp_str_uminus_val(sp_class_val_name(_t%d)))", t);
+      if (sp_streq(name, "name")) {
+        g_uses_symbols = 1;   /* a NameError's name is a Symbol */
         buf_printf(b, "sp_box_sym(sp_sym_intern(((sp_BoundMethod *)_t%d.v.p)->name))"
                       " : _t%d.tag == SP_TAG_CLASS ? %s"
-                      " : _t%d.tag == SP_TAG_ENCODING ? sp_box_str(_t%d.v.s)", t, t, cls_arm, t, t);
+                      " : _t%d.tag == SP_TAG_ENCODING ? sp_box_str(sp_str_uminus_val(_t%d.v.s))"
+                      " : _t%d.tag == SP_TAG_SYM ? sp_box_str(sp_str_uminus_val(sp_sym_to_s((sp_sym)_t%d.v.i)))"
+                      " : (_t%d.tag == SP_TAG_OBJ && _t%d.v.p && (_t%d.cls_id == SP_BUILTIN_EXCEPTION || sp_is_exc_subclass_cls(_t%d.cls_id)))"
+                      " ? sp_exc_name_acc((sp_Exception *)_t%d.v.p)",
+                   t, t, cls_arm, t, t, t, t, t, t, t, t, t);
+      }
       else if (sp_streq(name, "owner"))
-        buf_printf(b, "({ const char *_o = sp_bm_owner_name((sp_BoundMethod *)_t%d.v.p);"
-                      " _o ? sp_box_class_name(_o) : sp_box_nil(); })", t);
+        buf_printf(b, "sp_box_class(sp_bm_owner((sp_BoundMethod *)_t%d.v.p))", t);
 
 
       else if (sp_streq(name, "unbind"))
         buf_printf(b, "sp_box_obj(sp_bm_unbind((sp_BoundMethod *)_t%d.v.p), SP_BUILTIN_METHOD)", t);
       else if (sp_streq(name, "receiver"))
         /* the object the Method bound: a reference self carries its own class
-           id in its first field, which is how any boxed object names its class */
+           id in its first field, which is how any boxed object names its
+           class; a true or a false is the value its kind says it is */
         buf_printf(b, "({ sp_BoundMethod *_m = (sp_BoundMethod *)_t%d.v.p;"
-                      " (_m->self && _m->self_kind == SP_BM_SELF_OBJ)"
+                      " _m->self_kind == SP_BM_SELF_BOOL ? sp_box_bool(_m->self != NULL)"
+                      " : (_m->self && _m->self_kind == SP_BM_SELF_OBJ)"
                       " ? sp_box_nullable_obj_dyn(_m->self, 0) : sp_box_nil(); })", t);
       else
         buf_printf(b, "sp_box_obj(sp_method_to_proc((sp_BoundMethod *)_t%d.v.p), SP_BUILTIN_PROC)", t);
-      buf_printf(b, " : (sp_raise_nomethod(sp_nomethod_msg(\"%s\", _t%d)), sp_box_nil()); })", name, t);
+      /* a bare identifier (`x.instance_eval { name }`) is a NameError, as CRuby's is */
+      if (nt_vcall(nt, id))
+        buf_printf(b, " : (sp_raise_cls(\"NameError\", sp_stage_recv_msg(sp_sprintf(\"undefined local variable or method '%%s' for %%s\", "
+                      "\"%s\", sp_nomethod_recv_desc(_t%d)), _t%d)), sp_box_nil()); })", name, t, t);
+      else buf_printf(b, " : (sp_raise_nomethod(sp_nomethod_msg(\"%s\", _t%d)), sp_box_nil()); })", name, t);
       return 1;
     }
   }

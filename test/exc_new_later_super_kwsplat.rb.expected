@@ -1,0 +1,53 @@
+later name: [false, nil, :a, "m"]
+later message: [false, nil, nil, "m"]
+later none: [false, nil, nil, "Later"]
+later args: [false, [2], :b, "m"]
+later false_flag: [false, [2], :b, "m"]
+later nil_flag: [false, [2], :b, "m"]
+later true_flag: [true, [2], :b, "m"]
+kept: true
+too many: ArgumentError: wrong number of arguments (given 2, expected 0..1)
+boxed RuntimeError: [NoMethodError, "undefined method 'name' for an instance of RuntimeError", :name, [], RuntimeError, true]
+boxed Own: [NoMethodError, "undefined method 'name' for an instance of Own", :name, [], Own, true]
+boxed OwnBelow: [NoMethodError, "undefined method 'name' for an instance of OwnBelow", :name, [], OwnBelow, true]
+boxed StopIteration: [NoMethodError, "undefined method 'name' for an instance of StopIteration", :name, [], StopIteration, true]
+boxed KeyError: [NoMethodError, "undefined method 'name' for an instance of KeyError", :name, [], KeyError, true]
+boxed SystemExit: [NoMethodError, "undefined method 'name' for an instance of SystemExit", :name, [], SystemExit, true]
+boxed NameError: :a
+boxed beside: [NoMethodError, "undefined method 'name' for an instance of RuntimeError", :name, [], RuntimeError, true]
+typed: ["undefined method 'name' for an instance of RuntimeError", :name, [], RuntimeError]
+typed below: ["undefined method 'name' for an instance of Own", :name, [], Own]
+rescued: true
+empty: "a"
+full: ArgumentError: wrong number of arguments (given 2, expected 0..1)
+empty alone: "Mine"
+full alone: "{k: 1}"
+string key alone: "{\"s\" => 1}"
+nil message: "Mine"
+empty message: ""
+below: "a"
+ivar empty: ["a", 1]
+ivar full: ArgumentError: wrong number of arguments (given 2, expected 0..1)
+two: ArgumentError: wrong number of arguments (given 2, expected 0..1)
+two full: ArgumentError: wrong number of arguments (given 3, expected 0..1)
+both empty: "a"
+empty and full: ArgumentError: wrong number of arguments (given 2, expected 0..1)
+literal beside: ArgumentError: wrong number of arguments (given 2, expected 0..1)
+splat: "a"
+splat none: "Mine"
+splat two: ArgumentError: wrong number of arguments (given 2, expected 0..1)
+splat full: ArgumentError: wrong number of arguments (given 2, expected 0..1)
+splat none full: "{k: 1}"
+first
+second
+order: "a"
+first
+second
+order raises: ArgumentError: wrong number of arguments (given 2, expected 0..1)
+class method: "a"
+class method full: ArgumentError: wrong number of arguments (given 2, expected 0..1)
+forwarded: "a"
+forwarded full: ArgumentError: wrong number of arguments (given 2, expected 0..1)
+held: ["abcd", true]
+raised: "a"
+collected

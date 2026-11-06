@@ -53,6 +53,8 @@ static CtFx *ct_fx(CtEnv *e, CtFxKind k, int site) {
 }
 
 static void ct_fx_clear(CtFx *f) {
+  for (int i = 0; i < f->nfold; i++) free(f->foldv[i]);
+  free(f->fold); free(f->foldv);
   free(f->name);
   for (int i = 0; i < f->nattrs; i++) free(f->attrs[i]);
   free(f->attrs);
@@ -106,7 +108,27 @@ void ct_env_new_call(CtEnv *e) {
   e->nloc = 0;
 }
 
+static CtLocal *ct_ivar(CtEnv *e, const char *name) {
+  for (int i = 0; name && i < e->nivar; i++) if (strcmp(e->ivar[i].name, name) == 0) return &e->ivar[i];
+  return NULL;
+}
+
+void ct_env_ivar_set(CtEnv *e, const char *name, CtVal v) {
+  CtLocal *l = ct_ivar(e, name);
+  if (!l) {
+    e->ivar = ct_grow(e->ivar, &e->civar, e->nivar + 1, sizeof *e->ivar);
+    l = &e->ivar[e->nivar++];
+    memset(l, 0, sizeof *l);
+    l->name = ct_strdup(name);
+    l->wr = -1;
+  }
+  l->v = v;
+  l->nw++;
+}
+
 void ct_env_free(CtEnv *e) {
+  for (int i = 0; i < e->nivar; i++) free(e->ivar[i].name);
+  free(e->ivar);
   ct_env_new_call(e);
   for (int i = 0; i < e->ncls; i++) free(e->cls[i].name);
   for (int i = 0; i < e->nfx; i++) ct_fx_clear(&e->fx[i]);
@@ -241,10 +263,29 @@ static int ct_self_core(const NodeTable *nt, CtEnv *e, int call, const char *nam
   return 1;
 }
 
+static int ct_run_macro_as(const NodeTable *nt, CtEnv *e, int call, int def, CtVal *value);
+
+/* A macro on self called for its value (`kind` reading what `kind :box`
+   kept): its frame runs, and must have no effect but its own locals'
+   writes, which no statement of the call carries */
+static int ct_macro_value(const NodeTable *nt, CtEnv *e, int call, int def, CtVal *out) {
+  int nfx = e->nfx, ok = ct_run_macro_as(nt, e, call, def, out);
+  for (int i = nfx; ok && i < e->nfx; i++) ok = e->fx[i].k == CT_FX_LOCAL;
+  while (e->nfx > nfx) ct_fx_clear(&e->fx[--e->nfx]);
+  return ok;
+}
+
 static int ct_eval_call(const NodeTable *nt, CtEnv *e, int call, CtVal *out) {
   const char *name = nt_str(nt, call, "name");
   int rv = nt_ref(nt, call, "receiver"), argc = 0;
   const int *av = ct_args(nt, call, &argc);
+  if (e->self_macro && name && nt_ref(nt, call, "block") < 0 && (rv < 0 || nt_kind(nt, rv) == NK_SelfNode)) {
+    int def = e->self_macro(e->host, name);
+    if (def >= 0) {
+      ct_env_relied(e, name);
+      return ct_macro_value(nt, e, call, def, out);
+    }
+  }
   /* the frame's class's name, which Module#name answers frozen */
   if (name && argc == 0 && nt_ref(nt, call, "block") < 0 && is_name_reader(name) && ct_self_core(nt, e, call, name)) {
     memset(out, 0, sizeof *out);
@@ -348,6 +389,25 @@ int ct_eval(const NodeTable *nt, CtEnv *e, int node, CtVal *out) {
     return one >= 0 && ct_eval(nt, e, one, out);
   }
   case NK_CallNode: return ct_eval_call(nt, e, node, out);
+  case NK_InstanceVariableReadNode: {
+    /* self's, in a macro's frame: as the class body and the run left it */
+    if (!e->self_name) return 0;
+    const CtLocal *l = ct_ivar(e, nt_str(nt, node, "name"));
+    if (l ? l->v.k == CT_VALUE && l->v.mv.k == MV_UNDEF : e->ivar_open) return 0;
+    if (l) *out = l->v;
+    else out->mv = mv_nil();
+    return 1;
+  }
+  case NK_DefinedNode: {
+    /* defined?(@x) of self's, in a macro's frame */
+    int v = nt_ref(nt, node, "value");
+    if (!e->self_name || v < 0 || nt_kind(nt, v) != NK_InstanceVariableReadNode) return 0;
+    const CtLocal *l = ct_ivar(e, nt_str(nt, v, "name"));
+    if (!l && e->ivar_open) return 0;
+    out->mv = l ? mv_str("instance-variable", 17, MV_STR) : mv_nil();
+    if (l) out->mv.frozen = 1;
+    return 1;
+  }
   default: return 0;
   }
 }
@@ -473,7 +533,13 @@ static int ct_bind_params(const NodeTable *nt, CtEnv *e, int def, const CtVal *p
 /* Run macro def `def` for call `call` in a frame of its own; the caller's
    locals wait meanwhile, and the frame keeps its locals as its body left
    them, which the blocks it hands out read */
-static int ct_run_macro(const NodeTable *nt, CtEnv *e, int call, int def) {
+static int ct_run_macro_as(const NodeTable *nt, CtEnv *e, int call, int def, CtVal *value);
+static int ct_run_macro(const NodeTable *nt, CtEnv *e, int call, int def) { return ct_run_macro_as(nt, e, call, def, NULL); }
+
+/* run the macro def for call in a frame of its own; with value, its value
+   too: what a `return` gave, or its last statement's, which the frame's
+   locals answer (0 when neither is known) */
+static int ct_run_macro_as(const NodeTable *nt, CtEnv *e, int call, int def, CtVal *value) {
   int body = nt_ref(nt, def, "body"), np = 0, nk = 0;
   CtVal pv[CT_ARGS], kv[CT_ARGS];
   const char *kn[CT_ARGS];
@@ -493,7 +559,19 @@ static int ct_run_macro(const NodeTable *nt, CtEnv *e, int call, int def) {
   e->frames[f].nloc = 0;
   e->frame = f;
   e->depth++;
+  int returning = e->returning;
+  CtVal ret = e->ret;
+  e->returning = 0;
   int ok = ct_bind_params(nt, e, def, pv, np, kn, kv, nk) && ct_exec(nt, e, body);
+  if (ok && value) {
+    int sn = 0;
+    const int *ss = body >= 0 ? nt_arr(nt, body, "body", &sn) : NULL;
+    if (e->returning) *value = e->ret;
+    else if (!sn) { memset(value, 0, sizeof *value); value->mv = mv_nil(); }
+    else ok = ct_eval(nt, e, ss[sn - 1], value);
+  }
+  e->returning = returning;
+  e->ret = ret;
   e->depth--;
   e->frame = caller;
   e->frames[f].loc = malloc(sizeof(CtLocal) * (size_t)(e->nloc + 1));
@@ -513,6 +591,34 @@ int ct_macro_call(const NodeTable *nt, CtEnv *e, int call) {
       (rv >= 0 && nt_kind(nt, rv) != NK_SelfNode && !nt_int(nt, call, "self_call", 0))) return 0;
   int def = e->self_macro(e->host, name);
   return def >= 0 && ct_run_macro(nt, e, call, def);
+}
+
+/* The sends on self in code `id` whose method name the run knows: each
+   name argument is noted (f->fold), to be written as the Symbol where the
+   code runs, which the send then names at compile time */
+static void ct_fold_sends(const NodeTable *nt, CtEnv *e, CtFx *f, int id) {
+  if (id < 0) return;
+  NodeKind k = nt_kind(nt, id);
+  if (k == NK_BlockNode || k == NK_LambdaNode || k == NK_DefNode) return;
+  if (k == NK_CallNode && is_send_family(nt_str(nt, id, "name")) && nt_ref(nt, id, "block") < 0) {
+    int rv = nt_ref(nt, id, "receiver"), argc = 0;
+    const int *av = ct_args(nt, id, &argc);
+    Mv mn;
+    if ((rv < 0 || nt_kind(nt, rv) == NK_SelfNode) && argc >= 1 && nt_kind(nt, av[0]) != NK_SymbolNode &&
+        ct_value(nt, e, av[0], &mn) && (mn.k == MV_SYM || mn.k == MV_STR) && mn.s[0] && mv_sym_plain(mn.s)) {
+      f->fold = realloc(f->fold, sizeof *f->fold * (size_t)(f->nfold + 1));
+      f->foldv = realloc(f->foldv, sizeof *f->foldv * (size_t)(f->nfold + 1));
+      if (!f->fold || !f->foldv) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+      f->fold[f->nfold] = av[0];
+      f->foldv[f->nfold++] = ct_strdup(mn.s);
+    }
+  }
+  for (int i = 0, nr = nt_num_refs(nt, id); i < nr; i++) ct_fold_sends(nt, e, f, nt_ref_at(nt, id, i));
+  for (int i = 0, na = nt_num_arrs(nt, id); i < na; i++) {
+    int n = 0;
+    const int *v = nt_arr_at(nt, id, i, &n);
+    for (int j = 0; j < n; j++) ct_fold_sends(nt, e, f, v[j]);
+  }
 }
 
 /* a constant name const_set accepts and the program could have written */
@@ -539,7 +645,10 @@ static int ct_exec_call(const NodeTable *nt, CtEnv *e, int call) {
     blk = (int)nt_int(nt, call, "dm_block", -1);
   }
   int sg = is_define_singleton_method_name(name);
-  if (name && argc == 1 && blk >= 0 && nt_kind(nt, blk) == NK_BlockNode && (is_define_method_name(name) || sg) &&
+  /* `define_method(name, -> { })`: the lambda is the body, as a block is */
+  int lam = name && argc == 2 && blk < 0 && nt_kind(nt, av[1]) == NK_LambdaNode;
+  if (lam) { blk = av[1]; argc = 1; }
+  if (name && argc == 1 && blk >= 0 && (nt_kind(nt, blk) == NK_BlockNode || lam) && (is_define_method_name(name) || sg) &&
       ct_self_core(nt, e, call, name)) {
     Mv mn;
     if (!ct_value(nt, e, av[0], &mn) || (mn.k != MV_SYM && mn.k != MV_STR) || !mn.s[0]) return 0;
@@ -547,8 +656,10 @@ static int ct_exec_call(const NodeTable *nt, CtEnv *e, int call) {
     f->name = ct_strdup(mn.s);
     f->block = blk;
     f->sg = sg;
+    f->lam = lam;
     return 1;
   }
+  if (lam) { blk = -1; argc = 2; }
   /* another macro on self: what its frame does, this one does */
   if (e->self_macro && name && blk < 0 && (rv < 0 || nt_kind(nt, rv) == NK_SelfNode)) {
     int def = e->self_macro(e->host, name);
@@ -595,10 +706,16 @@ static int ct_exec_call(const NodeTable *nt, CtEnv *e, int call) {
   int self_recv = rv < 0 || nt_kind(nt, rv) == NK_SelfNode;
   if (self_recv && argc == 2 && is_const_set_name(name)) {
     Mv cn; CtVal v;
-    if (!ct_value(nt, e, av[0], &cn) || !ct_const_name(cn) || !ct_eval(nt, e, av[1], &v)) return 0;
+    if (!ct_value(nt, e, av[0], &cn) || !ct_const_name(cn)) return 0;
+    /* a macro's value the evaluator does not know is its code, run where
+       the call stands (vcode) */
+    int known = ct_eval(nt, e, av[1], &v);
+    if (!known && !e->self_name) return 0;
     ct_env_ran(e, "Class", name);
     CtFx *f = ct_fx(e, CT_FX_CONST_SET, call);
-    f->name = ct_strdup(cn.s); f->val = v;
+    f->name = ct_strdup(cn.s);
+    if (!known) { f->vcode = av[1] + 1; ct_fx_snap(e, f); ct_fold_sends(nt, e, f, av[1]); return 1; }
+    f->val = v;
     /* an anonymous class takes the first name it is given */
     if (v.k == CT_CLASS && !e->cls[v.cls].name) { e->cls[v.cls].name = ct_strdup(cn.s); f->names = 1; }
     return 1;
@@ -640,6 +757,28 @@ static int ct_exec_call(const NodeTable *nt, CtEnv *e, int call) {
 
 static int ct_exec_one(const NodeTable *nt, CtEnv *e, int n) {
   switch (nt_kind(nt, n)) {
+  case NK_InstanceVariableWriteNode: {
+    /* self's, in a macro's frame: the run follows the value, and the
+       statement runs as written where the call stands (a residual) */
+    CtVal v;
+    if (!e->self_name || !nt_str(nt, n, "name")) return 0;
+    if (!ct_eval(nt, e, nt_ref(nt, n, "value"), &v)) { memset(&v, 0, sizeof v); v.mv.k = MV_UNDEF; }
+    ct_env_ivar_set(e, nt_str(nt, n, "name"), v);
+    return 0;
+  }
+  case NK_ReturnNode: {   /* a macro's frame's: it answers the frame's value */
+    if (!e->self_macro) return 0;
+    int args = nt_ref(nt, n, "arguments"), an = 0;
+    const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &an) : NULL;
+    if (an > 1 || (an == 1 && nt_kind(nt, av[0]) == NK_SplatNode)) return 0;
+    CtVal v;
+    memset(&v, 0, sizeof v);
+    v.mv = mv_nil();
+    if (an == 1 && !ct_eval(nt, e, av[0], &v)) return 0;
+    e->ret = v;
+    e->returning = 1;
+    return 1;
+  }
   case NK_LocalVariableWriteNode: {
     const char *nm = nt_str(nt, n, "name");
     CtVal v;
@@ -681,7 +820,21 @@ static int ct_exec_one(const NodeTable *nt, CtEnv *e, int n) {
     int el = nt_ref(nt, n, "else_clause");
     return el >= 0 ? ct_exec(nt, e, nt_ref(nt, el, "statements")) : 1;
   }
-  case NK_CallNode: return ct_exec_call(nt, e, n);
+  case NK_CallNode: {
+    if (ct_exec_call(nt, e, n)) return 1;
+    /* a core method's answer on a value (`[..].join("_")`, a body's value
+       read by its caller): followed when the evaluator knows it */
+    int rv = nt_ref(nt, n, "receiver");
+    CtVal v;
+    return e->self_macro && rv >= 0 && nt_kind(nt, rv) != NK_SelfNode && ct_eval(nt, e, n, &v) && v.k == CT_VALUE;
+  }
+  /* an expression that does nothing but answer (a body's value, read by
+     the caller), followed when the evaluator knows it */
+  case NK_InstanceVariableReadNode: case NK_LocalVariableReadNode: case NK_DefinedNode:
+  case NK_NilNode: case NK_TrueNode: case NK_FalseNode: case NK_IntegerNode: case NK_StringNode: case NK_SymbolNode: {
+    CtVal v;
+    return e->self_macro && ct_eval(nt, e, n, &v);
+  }
   default: return 0;
   }
 }
@@ -691,10 +844,10 @@ int ct_exec(const NodeTable *nt, CtEnv *e, int stmts) {
   if (nt_kind(nt, stmts) != NK_StatementsNode) return 0;
   int n = 0;
   const int *b = nt_arr(nt, stmts, "body", &n);
-  for (int i = 0; i < n; i++) {
+  for (int i = 0; i < n && !e->returning; i++) {
     int nfx = e->nfx;
     if (ct_exec_one(nt, e, b[i])) continue;
-    if (!e->self_macro) return 0;
+    if (!e->self_macro || nt_kind(nt, b[i]) == NK_ReturnNode) return 0;   /* (a return is the frame's, not the class body's) */
     /* in a macro's frame, a statement not followed runs as written where
        the call stands, if the caller can let it: what it did here is undone */
     while (e->nfx > nfx) ct_fx_clear(&e->fx[--e->nfx]);

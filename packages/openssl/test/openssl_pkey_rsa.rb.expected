@@ -19,3 +19,16 @@ true
 "private key is needed"
 OpenSSL::Digest::DigestError
 "no implicit conversion of Symbol into Integer"
+OpenSSL::PKey::PKeyError
+OpenSSL::PKey::PKeyError
+OpenSSL::PKey::PKeyError
+true
+OpenSSL::PKey::PKeyError
+OpenSSL::PKey::PKeyError
+true
+OpenSSL::PKey::PKeyError
+OpenSSL::PKey::PKeyError
+true
+OpenSSL::PKey::EC::Group::Error
+OpenSSL::PKey::PKeyError
+true

@@ -139,3 +139,36 @@ begin
 rescue TypeError => e
   p e.message
 end
+
+# Earlier EC failures must not contaminate an unrelated RSA failure. Compare
+# its message with itself in this process, so no library-specific text is
+# printed or recorded in the expected output.
+def oversized_salt_error(key)
+  key.sign_pss("SHA256", "data", salt_length: 10000, mgf1_hash: "SHA256")
+  ""
+rescue OpenSSL::PKey::PKeyError => error
+  puts error.class
+  error.message
+end
+
+expected_error = oversized_salt_error(key)
+# Scalar 1 gives Q = G; r = s = 1 with digest n - 1 makes verification reach
+# the point at infinity. This negative return queues an EC error even on
+# libraries whose DER decoder does not queue errors for malformed input.
+ec = OpenSSL::PKey.read(["30310201010420" + "0" * 63 + "1" + "a00a06082a8648ce3d030107"].pack("H*"))
+digest = ["ffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632550"].pack("H*")
+signature = ["3006020101020101"].pack("H*")
+[signature, "broken", signature + "\0"].each do |invalid|
+  begin
+    ec.dsa_verify_asn1(digest, invalid)
+  rescue OpenSSL::PKey::PKeyError => error
+    puts error.class
+  end
+  p oversized_salt_error(key) == expected_error
+end
+begin
+  OpenSSL::PKey::EC::Group.new("unknown-curve")
+rescue OpenSSL::PKey::EC::Group::Error => error
+  puts error.class
+end
+p oversized_salt_error(key) == expected_error

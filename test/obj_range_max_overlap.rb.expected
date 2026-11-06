@@ -1,0 +1,20 @@
+V3
+V4
+nil
+nil
+true
+false
+false
+true
+true
+false
+false
+true
+false
+true
+"wrong argument type V (expected Range)"
+"can't iterate from W"
+"cannot get the maximum of beginless range with custom comparison method"
+[V3, true]
+[3, true]
+[V1, false]

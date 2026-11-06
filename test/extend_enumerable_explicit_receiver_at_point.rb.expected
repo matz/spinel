@@ -1,0 +1,7 @@
+[[1, :a], [2, :b]]
+["a1", "b2"]
+:own_min
+2
+:firsts
+:own_max
+true

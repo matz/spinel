@@ -480,6 +480,9 @@ static char *emit_hash_block_eval(Compiler *c, int block, Repr hr, const char *h
   else { emit_ctype(c, bret, g_pre); buf_printf(g_pre, " _t%d = %s;\n", tvv, default_value_from_compiler(c, bret)); }
   int sv_bvo = g_bv_dest_oint;
   if (vo) g_bv_dest_oint = 1;
+  /* (one representation: the slot is the bytes face, bret above; a `next` or
+     a tail that reads as the handle is stored as its bytes) */
+  if (!want_poly && !vo && bret == TY_STRING) g_bv_dest_ty = TY_STRING;
   emit_block_value_into(c, block, tvvb, want_poly, g_indent + 1);
   g_bv_dest_oint = sv_bvo;
   if (ns0 && p0_lv) lv_set_type(p0_lv, p0_decl);
@@ -3922,6 +3925,15 @@ int emit_reduce_block_expr(Compiler *c, int id, Buf *b) {
     if (hacc) acc_ty = TY_STRBUF;
     else if (bacc) acc_ty = TY_POLY;
   }
+  /* Not the seed's own kind for an accumulator a nested block captures boxed:
+     its cell is declared at the frame's top with the parameter's own type
+     (emit_cell_decl), and the fresh cell each turn and every read through it
+     have to agree with that, so it accumulates boxed */
+  {
+    Scope *csc = comp_scope_of(c, block);
+    LocalVar *cl0 = (csc && p0_orig) ? scope_local(csc, p0_orig) : NULL;
+    if (cl0 && cl0->is_cell && cl0->type == TY_POLY) acc_ty = TY_POLY;
+  }
   int ta = ++g_tmp, tacc = ++g_tmp, ti = ++g_tmp;
   buf_puts(b, "({ ");
   emit_ctype(c, rt, b); buf_printf(b, " _t%d = ", ta); emit_expr(c, recv, b); buf_puts(b, "; ");
@@ -5432,8 +5444,9 @@ static void emit_block_value_into_inner(Compiler *c, int block, const char *dest
   if (!want_poly && bn > 0) {
     TyKind dt = dest_ty != TY_UNKNOWN ? dest_ty : repr_of(c, bb[bn - 1]).as_ty;
     if (ty_is_array(dt) || ty_is_hash(dt)) g_ie_next_ty = dt;
-    /* (one representation: a `next` into a handle slot adopts its value) */
-    else if (dt == TY_STRBUF) g_ie_next_ty = dt;
+    /* (one representation: a `next` into a handle slot adopts its value, and
+       one into a slot its caller declared as the bytes face stores the bytes) */
+    else if (dt == TY_STRBUF || dt == TY_STRING) g_ie_next_ty = dt;
     /* an Integer or Float slot: a `next v` stores its plain value, or its
        oint where the caller declared the slot as one (dest_oint) */
     else if (dt == TY_INT || dt == TY_FLOAT) { g_ie_next_ty = dt; g_ie_next_oint = dest_oint; }
@@ -5481,6 +5494,8 @@ static void emit_block_value_into_inner(Compiler *c, int block, const char *dest
         buf_puts(&vb, ")");
       }
       else if (dest_ty == TY_STRBUF) emit_strbuf_handle_of(c, tail, &vb);
+      /* (one representation: a bytes slot takes the tail's String of either face as its bytes) */
+      else if (g_ie_next_ty == TY_STRING) { buf_puts(&vb, "SP_STR_B("); emit_expr(c, tail, &vb); buf_puts(&vb, ")"); }
       else if (apf) { buf_printf(&vb, "%s(", apf); emit_expr(c, tail, &vb); buf_puts(&vb, ")"); }
       else if (dest_oint && oint_kind(g_ie_next_ty)) emit_oint_expr(c, tail, g_ie_next_ty, &vb);
       else emit_expr(c, tail, &vb);
@@ -6102,6 +6117,9 @@ int emit_collect_expr(Compiler *c, int id, Buf *b) {
       emit_indent(g_pre, g_indent);
       if (res_poly2) buf_printf(g_pre, "sp_RbVal _t%d = sp_box_nil(); SP_GC_ROOT_RBVAL(_t%d);\n", tv4, tv4);
       else { emit_ctype(c, res_r2.elem, g_pre); buf_printf(g_pre, " _t%d = %s;\n", tv4, default_value_from_compiler(c, res_r2.elem)); }
+      /* (one representation: the slot is the bytes face, as emit_ctype declares a
+         String; a `next` or a tail that reads as the handle is stored as its bytes) */
+      if (!res_poly2 && res_r2.elem == TY_STRING) g_bv_dest_ty = TY_STRING;
       emit_block_value_into(c, block, tvbuf4, res_poly2, g_indent);
       buf_puts(&vb2, tvbuf4);
     }
@@ -8828,8 +8846,16 @@ static void emit_arg_rooted(Compiler *c, Scope *m, int idx, int provided, int he
   /* a byref out-param arg is a slot address, not a heap value: it hoists its
      own rooted temp when one is needed (see emit_arg_or_default) */
   if (p && p->byref_out) { emit_arg_or_default(c, m, idx, provided, out); return; }
-  if (!arg_wants_root(c, pt, provided)) {
-    if (!arg_read_converts(c, pt, provided)) { emit_arg_or_default(c, m, idx, provided, out); return; }
+  /* a default is judged by its own node, as a passed argument is: a nil or a
+     plain read builds nothing and is held where it lives, and a String read
+     or literal a handle parameter takes is converted into a rooted temp
+     (arg_read_converts). One with no node (the `**kw` that nothing fills) is
+     a fresh allocation. Held where it lives, a read default is spelled in the
+     call, so a call that fills another default after it which runs code
+     binds them in order instead (call_defaults_ordered). */
+  int dn = provided < 0 && m->pdefault ? m->pdefault[idx] : provided;
+  if (!arg_wants_root(c, pt, dn)) {
+    if (!arg_read_converts(c, pt, dn)) { emit_arg_or_default(c, m, idx, provided, out); return; }
     Buf cb; memset(&cb, 0, sizeof cb);
     emit_arg_or_default(c, m, idx, provided, &cb);
     /* a String a handle parameter takes made here (a handle around the
@@ -12205,6 +12231,31 @@ static int fwd_slot_base(Compiler *c, Scope *encl) {
   return 0;   /* no __fwd_ slot and no `...` of its own: forward all */
 }
 
+/* Does a call fill two or more defaults, one of which runs code? Then the
+   call binds every value in order to a rooted local, as an argument list
+   does once two of its arguments can observe each other
+   (emit_args_filled_argv, n_se): a default is spelled in the call, or
+   hoisted into the prelude when it builds a value (emit_arg_rooted), so
+   without the binding the hoist reorders them. A default that logs runs
+   after one that allocates, and a read that a later default rebinds sees it
+   rebound (`def m(a = X, b = swap)`, `def <=>(o, a = $v, b = bump)`). The
+   defaults a call fills are the layout's ARG_DEFAULT ones and the keywords
+   with a default that its keyword hash does not name (a dispatch arm passes
+   none, so every keyword with a default is filled); the `**kwrest` is not
+   one. The direct call (emit_args_filled_argv) and the dispatch arm
+   (emit_arm_args_text) both ask it. */
+static int call_defaults_ordered(Compiler *c, Scope *m, const ArgLayout *L) {
+  int filled = 0, effect = 0;
+  for (int i = 0; i < m->nparams; i++) {
+    int kwd = L->from[i] == ARG_BY_NAME && i != m->kwrest_idx && m->pdefault && m->pdefault[i] >= 0 &&
+              !(L->kwh >= 0 && m->pnames[i] && kwh_lookup(c->nt, L->kwh, m->pnames[i]) >= 0);
+    if (L->from[i] != ARG_DEFAULT && !kwd) continue;
+    filled++;
+    if (m->pdefault && m->pdefault[i] >= 0 && subtree_has_side_effect(c, m->pdefault[i])) effect = 1;
+  }
+  return filled >= 2 && effect;
+}
+
 /* See codegen_internal.h. */
 void emit_args_filled_argv(Compiler *c, int callee_idx, const int *argv, int argc, int argsNode,
                            const char *lead, Buf *out) {
@@ -12327,9 +12378,11 @@ void emit_args_filled_argv(Compiler *c, int callee_idx, const int *argv, int arg
      default against a parameter nothing at the call site declared. A keyword
      a `**h` may supply is read out of h, its default under the same renames.
      A gather binds each positional from the gathered array, its default under
-     the renames too. */
+     the renames too. A call that fills two or more defaults, one of which
+     runs code, takes the same path for the order alone
+     (call_defaults_ordered). */
   if ((splat_idx < 0 || splat_all) &&
-      m->nparams <= 64 && default_refs_earlier_param(c, m)) {
+      m->nparams <= 64 && (default_refs_earlier_param(c, m) || call_defaults_ordered(c, m, &L))) {
     int uid = ++g_tmp;
     int ren_base = g_nren;
     char tmpnames[64][64];
@@ -12862,6 +12915,8 @@ static void emit_disp_arm_assign(Compiler *c, const Scope *s, const char *call, 
   }
   else if (g_disp_ro && !arm_o) buf_printf(b, "%s(%s)", oint_of(disp_ret), call);
   else if (!g_disp_ro && arm_o) buf_printf(b, "%s(%s)", oint_arg(arm_ret), call);
+  /* ty_unify widens an Integer arm beside a Bignum one: the slot is a pointer */
+  else if (disp_ret == TY_BIGINT && arm_ret == TY_INT) buf_printf(b, "sp_bigint_new_int(%s)", call);
   else buf_puts(b, call);
   if (one_s) buf_puts(b, ")");
   buf_puts(b, "; ");
@@ -12938,7 +12993,7 @@ int emit_arm_args_text(Compiler *c, int mi, const char *armself, const char *con
     snprintf(what, sizeof what, "a dispatch arm cannot bind its arguments to `%s`", m->name ? m->name : "?");
     unsupported(c, m->def_node, what);
   }
-  int pd_uid = default_refs_earlier_param(c, m) ? ++g_tmp : 0, pd_base = g_nren;
+  int pd_uid = default_refs_earlier_param(c, m) || call_defaults_ordered(c, m, &L) ? ++g_tmp : 0, pd_base = g_nren;
   Buf *sv_pre = g_pre; int sv_ind = g_indent;
   const char *sv_arm_self = g_arm_self; const Scope *sv_arm_scope = g_arm_scope;
   int sv_arm_depth = g_arm_depth;
@@ -12957,6 +13012,13 @@ int emit_arm_args_text(Compiler *c, int mi, const char *armself, const char *con
     if (L.from[i] != ARG_NODE) built = 1;
     if (L.from[i] == ARG_REST) emit_ctor_arm_param(c, m, i, &L, atmp, pre, &vb);
     else if (L.from[i] == ARG_NODE) buf_puts(&vb, argv[L.arg[i]]);
+    /* a default that builds a value is held in a temp rooted in `pre`, as a
+       direct call holds it (emit_arg_rooted): spelled inside the call, the
+       value is held by nothing while a later default allocates, and C runs
+       the arguments in no fixed order (`def <=>(o, x = {}, y = {})`). With
+       pd_uid (call_defaults_ordered), ctor_arm_arg binds every value to a
+       rooted local already. */
+    else if (!pd_uid) emit_arg_rooted(c, m, i, -1, 0, &vb);
     else emit_arg_or_default(c, m, i, -1, &vb);
     buf_puts(out, ", ");
     ctor_arm_arg(c, m, i, vb.p ? vb.p : "", pd_uid, pre, out);

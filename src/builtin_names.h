@@ -10,6 +10,7 @@
 #ifndef SPINEL_BUILTIN_NAMES_H
 #define SPINEL_BUILTIN_NAMES_H
 
+#include <stddef.h>
 #include "types.h"
 
 int is_zip_name(const char *n);       /* zip: tuple-yielding iteration */
@@ -22,6 +23,7 @@ int is_instance_of_query(const char *n);   /* instance_of? */
 int is_case_eq(const char *n);        /* === */
 int is_round_family(const char *n);   /* round ceil floor truncate */
 int is_push_alias(const char *n);     /* push << append */
+int fresh_array_builtin_name(const char *nm);   /* map sort split divmod ...: a new Array where it answers one */
 int is_bit_op(const char *n);         /* & | ^ */
 int is_basic_arith(const char *n);    /* + - * / (is_arith_op adds % and **) */
 int is_int_arith_op(const char *n);   /* + - * / %: an Integer's arithmetic that answers an Integer */
@@ -152,6 +154,10 @@ int is_indexed_each(const char *n); /* each_index each_with_index */
 int is_to_array_alias(const char *n); /* entries to_a */
 int is_match_p_name(const char *n);   /* match? */
 int is_record_class_builder(const char *recv, const char *meth); /* Struct.new, Data.define */
+int is_data_class_builder(const char *recv, const char *meth);   /* Data.define */
+int is_record_class_cmethod(const char *n, int data); /* new [] members inspect keyword_init? (not on a Data class) */
+int is_record_class_cmethod_with_args(const char *n); /* new [] */
+int is_record_block_self_cmethod(const char *n); /* members keyword_init? */
 int is_class_new(const char *recv, const char *meth); /* Class.new */
 int is_module_new(const char *recv, const char *meth); /* Module.new */
 int is_class_builder(const char *recv, const char *meth); /* Struct.new, Data.define, Class.new, Module.new */
@@ -234,6 +240,7 @@ int is_push_operator(const char *n); /* << push */
 int is_eq_or_eql(const char *n); /* == eql? */
 int is_element_access(const char *n); /* [] []= */
 int is_index_assign(const char *n); /* []= */
+const char *typed_array_adapter_op(const char *n); /* [] get, []= set, push: a typed array's Method adapter */
 int is_fill_name(const char *n);        /* fill */
 
 int is_current_method(const char *n); /* __callee__ __method__ */
@@ -290,6 +297,8 @@ int is_class_query(const char *n); /* class */
 int is_method_owner_query(const char *n); /* owner */
 int is_instance_method_name(const char *n); /* instance_method public_instance_method */
 int is_method_object_maker(const char *n); /* method public_method singleton_method instance_method public_instance_method */
+int is_bound_method_maker(const char *n);  /* method public_method: a Method of the receiver's own method */
+int is_super_method_name(const char *n);   /* super_method: the Method one step up its owner's chain */
 /* const_get const_source_location nesting attached_object each_object eval binding */
 int is_constant_or_object_reflection(const char *n);
 int is_const_set_name(const char *n); /* const_set */
@@ -304,6 +313,7 @@ int is_basic_object_hook_name(const char *n); /* ...BasicObject's: singleton_met
 int is_const_added_name(const char *n); /* const_added */
 int is_method_missing_name(const char *n); /* method_missing respond_to_missing?: what a call of a name an object has no method by runs */
 extern const char METHOD_MISSING_NAME[];   /* "method_missing", the name a lookup of that method asks */
+extern const char RESPOND_TO_MISSING_NAME[];   /* "respond_to_missing?", what a Method capture asks of a name it finds no method by */
 int definition_form_hooks(const char *form, int sg, const char **out); /* the hooks a definition form fires: included and append_features for include, method_added for attr_accessor, ... (up to 2) */
 int is_const_missing_name(const char *n); /* const_missing */
 int is_const_table_def_name(const char *n); /* __const_get__ __const_defined__ */
@@ -337,7 +347,7 @@ int is_object_base_name(const char *n); /* BasicObject Object */
   X(OBJECT, "Object", -116, BC_CLASS | BC_PLAIN) \
   X(BASIC_OBJECT, "BasicObject", -117, BC_CLASS | BC_PLAIN) \
   X(PROC, "Proc", -118, BC_CLASS) \
-  X(KERNEL, "Kernel", -119, BC_CLASS | BC_MODULE) \
+  X(KERNEL, "Kernel", -119, BC_CLASS | BC_MODULE | BC_SG_BOOT) \
   X(IO, "IO", -120, BC_CLASS) \
   X(FILE, "File", -121, BC_CLASS) \
   X(EXCEPTION, "Exception", -122, BC_CLASS | BC_EXCEPTION) \
@@ -348,7 +358,7 @@ int is_object_base_name(const char *n); /* BasicObject Object */
   X(NAMEERROR, "NameError", -127, BC_CLASS | BC_EXCEPTION) \
   X(NOMETHODERROR, "NoMethodError", -128, BC_CLASS | BC_EXCEPTION) \
   X(STOPITERATION, "StopIteration", -129, BC_CLASS | BC_EXCEPTION) \
-  X(MATH, "Math", -130, BC_CLASS | BC_MODULE) \
+  X(MATH, "Math", -130, BC_CLASS | BC_MODULE | BC_SG_BOOT) \
   X(COMPLEX, "Complex", -131, BC_CLASS) \
   X(INDEXERROR, "IndexError", -132, BC_CLASS | BC_EXCEPTION) \
   X(KEYERROR, "KeyError", -133, BC_CLASS | BC_EXCEPTION) \
@@ -380,7 +390,7 @@ int is_object_base_name(const char *n); /* BasicObject Object */
   X(EOFERROR, "EOFError", -159, BC_CLASS | BC_EXCEPTION) \
   X(MATH_DOMAINERROR, "Math::DomainError", -160, BC_EXCEPTION) \
   X(SYSTEMEXIT, "SystemExit", -161, BC_CLASS | BC_EXCEPTION) \
-  X(SIGNAL, "Signal", -162, BC_CLASS | BC_MODULE) \
+  X(SIGNAL, "Signal", -162, BC_CLASS | BC_MODULE | BC_SG_BOOT) \
   X(PROCESS_STATUS, "Process::Status", -163, BC_CLASS) \
   X(PROCESS_TMS, "Process::Tms", -164, 0) \
   X(DIR, "Dir", -165, BC_CLASS) \
@@ -418,7 +428,7 @@ int is_object_base_name(const char *n); /* BasicObject Object */
   X(ENCODING_INVALIDBYTESEQUENCEERROR, "Encoding::InvalidByteSequenceError", 0, BC_EXCEPTION) \
   X(ENCODING_UNDEFINEDCONVERSIONERROR, "Encoding::UndefinedConversionError", 0, BC_EXCEPTION) \
   X(ERRNO_ENOENT, "Errno::ENOENT", 0, BC_EXCEPTION) \
-  X(GC, "GC", 0, BC_CLASS | BC_MODULE) \
+  X(GC, "GC", 0, BC_CLASS | BC_MODULE | BC_SG_BOOT) \
   X(IO_EAGAINWAITREADABLE, "IO::EAGAINWaitReadable", 0, BC_EXCEPTION) \
   X(IO_TIMEOUTERROR, "IO::TimeoutError", 0, BC_EXCEPTION) \
   /* the socket library's: lib/sp_exc.c gives them their parents, so \
@@ -433,11 +443,11 @@ int is_object_base_name(const char *n); /* BasicObject Object */
   X(IO_WAITREADABLE, "IO::WaitReadable", 0, BC_EXCEPTION) \
   X(IO_WAITWRITABLE, "IO::WaitWritable", 0, BC_EXCEPTION) \
   X(LOADERROR, "LoadError", 0, BC_EXCEPTION) \
-  X(MARSHAL, "Marshal", 0, BC_CLASS | BC_MODULE) \
+  X(MARSHAL, "Marshal", 0, BC_CLASS | BC_MODULE | BC_SG_BOOT) \
   X(METHOD, "Method", 0, BC_CLASS) \
   X(NOMEMORYERROR, "NoMemoryError", 0, BC_EXCEPTION) \
-  X(OBJECTSPACE, "ObjectSpace", 0, BC_CLASS | BC_MODULE) \
-  X(PROCESS, "Process", 0, BC_CLASS | BC_MODULE) \
+  X(OBJECTSPACE, "ObjectSpace", 0, BC_CLASS | BC_MODULE | BC_SG_BOOT) \
+  X(PROCESS, "Process", 0, BC_CLASS | BC_MODULE | BC_SG_BOOT) \
   X(RANDOM, "Random", 0, BC_CLASS) \
   X(STRINGSCANNER_ERROR, "StringScanner::Error", 0, BC_EXCEPTION) \
   X(SYSTEMCALLERROR, "SystemCallError", 0, BC_EXCEPTION) \
@@ -517,6 +527,7 @@ int is_load_how_native(const char *how);
 int is_native_lib_at_boot(const char *path);
 int is_comparable_module_name(const char *n);
 int is_enumerable_module_name(const char *n);
+int builtin_class_mixes_module(int bid, const char *mod); /* Time: Comparable; IO, Dir: Enumerable; ... */
 /* the index of n among the methods `extend Enumerable` sends to an
    instance-side twin (desugar_extend_enumerable), or -1 */
 enum { EXTEND_ENUMERABLE_NNAMES = 63 };
@@ -585,6 +596,10 @@ int is_dir_blockless_iter(const char *n);  /* foreach each_child: an Enumerator 
 int is_kernel_module_name(const char *n);
 int is_kernel_module_function(const char *n);
 int builtin_object_method_known(const char *m);   /* one of Object's own methods every object answers */
+const char *builtin_method_owner(const char *cls, const char *m);   /* the class or module defining builtin cls's m */
+const char *builtin_bool_method_owner(const char *m);   /* ...a true's or false's m, where both answer the same; NULL otherwise */
+const char *builtin_function_owner(const char *m);   /* the module defining the function a receiverless method(:m) binds */
+int is_respond_to_name(const char *n); /* respond_to?: does the receiver itself answer a name */
 int is_method_presence_query(const char *n); /* 1: respond_to? *method_defined? (public_)instance_method (public_)method; 2: (public_)instance_methods (public_)methods, answered for the whole program; 3: private_/protected_instance_methods, private_/protected_methods, singleton_methods, answered by the receiver's chain */
 int is_instance_method_list(const char *n); /* (public_|private_|protected_)instance_methods */
 int is_instance_method_table_read(const char *n); /* is_instance_method_list names, instance_method */
@@ -611,6 +626,7 @@ int is_remove_method_name(const char *n); /* remove_method */
 int is_check_funcall_name(const char *n);   /* respond_to? respond_to_missing? method_missing: what rb_check_funcall asks */
 int is_implicitly_private_name(const char *n); /* initialize initialize_copy/_clone/_dup respond_to_missing? */
 int is_alias_method_name(const char *n);  /* alias_method */
+int is_class_declaration_call(const char *n);  /* visibility, attr_*, include/extend/prepend, alias_method, undef/remove_method */
 /* The operations a String Array (whose elements are handles) answers
    itself, by name, argument count and block (0 none, 1 a literal block, 2
    a block argument). */
@@ -646,6 +662,7 @@ int is_clone_name(const char *n); /* clone */
 int is_cover_name(const char *n); /* cover? */
 int is_flatten_name(const char *n); /* flatten */
 int is_hash_name(const char *n); /* hash */
+int is_spaceship_name(const char *n); /* <=> */
 int is_puts_name(const char *n); /* puts */
 int is_to_f_name(const char *n); /* to_f */
 int is_to_i_name(const char *n); /* to_i */
@@ -726,16 +743,21 @@ typedef struct {
   const char *rides;     /* the require that makes the add-on available ("time"), or NULL */
 } PackageFact;
 const PackageFact *package_fact_at(int i);   /* the i-th row, NULL past the last */
+int boot_package_rank(const char *feature);          /* a require of a package CRuby has at boot: its place in their load order, else -1 */
+int boot_package_rank_of_path(const char *path, size_t len);   /* the same for such a package's file (`len` bytes of its path) */
 
 /* ---- Spinel's native classes, modules and exceptions (BUILTIN_CLASSES) ----
    One row per name: which predicate accepts it (BC_*) and its negative
    cls_id (0 when codegen has none). BC_PLAIN marks Object, BasicObject and
-   Data, below which a program's class is an object of its own. */
-enum { BC_CLASS = 1, BC_MODULE = 2, BC_EXCEPTION = 4, BC_SOCKET = 8, BC_PLAIN = 16 };
+   Data, below which a program's class is an object of its own; BC_SG_BOOT
+   a module CRuby 4.0 boots with its singleton class made (its module
+   functions'), as Comparable and Enumerable are not. */
+enum { BC_CLASS = 1, BC_MODULE = 2, BC_EXCEPTION = 4, BC_SOCKET = 8, BC_PLAIN = 16, BC_SG_BOOT = 32 };
 typedef struct { const char *name; int id; unsigned flags; } BuiltinClass;
 const BuiltinClass *builtin_class_at(int i);   /* the i-th row, NULL past the last */
 int is_native_class_name(const char *n);       /* any row: a class Spinel has without a library */
 int is_plain_builtin_superclass(int id);       /* BC_PLAIN or an exception: gives a program's subclass no method of an Enumerable walk */
+int builtin_singleton_at_boot(int slot);      /* BC_SG_BOOT of row slot (CORE_*): the module's singleton class exists before the program runs */
 /* names the compile-time evaluation and its questions ask about (ct_eval.c,
    analyze_ct.c) */
 int is_class_const_name(const char *n);    /* Class: the constant Class.new is called on */
@@ -748,6 +770,7 @@ int is_to_a_name(const char *n);           /* to_a: the receiver's own Array, fo
 int is_hash_self_answer(const char *n);    /* each each_pair each_key each_value freeze to_h: answer the Hash itself */
 int is_core_change_call(const char *n);    /* class_eval .. module_exec include prepend define_method send family alias_method remove_method undef_method: may change a class's methods */
 int is_singleton_reach_call(const char *n);/* define_singleton_method extend singleton_class instance_eval instance_exec: give an object methods of its own */
+int is_singleton_class_maker(const char *n, int argc); /* singleton_class extend define_singleton_method instance_variable_set class_variable_set private_class_method public_class_method refine, module_function with names: make a module's singleton class */
 int is_method_naming_call(const char *n);  /* define_method define_singleton_method alias_method remove_method undef_method attr*: give or take a method its argument names */
 int is_attr_decl_reader(const char *n);    /* attr attr_reader attr_accessor, and Spinel's class-body attribute attributes: declare a reader of each name */
 int is_attr_decl_writer(const char *n);    /* attr_writer attr_accessor attribute attributes: declare a writer of each name */

@@ -34,7 +34,7 @@ static int ic_builtin_callbacks(IcSink *s, const char *name, const char *recv_cl
   const BopCallback *cbs = NULL;
   int n = recv_class ? bop_class_callbacks(recv_class, name, &cbs) : bop_name_callbacks(name, &cbs);
   for (int i = 0; i < n; i++)
-    for (unsigned bit = 1; bit <= BCR_HOOK; bit <<= 1)
+    for (unsigned bit = 1; bit <= BCR_HOOK; bit <<= 1)   /* (BCR_KEY qualifies the BLOCK call; it is none of its own) */
       if (bit != BCR_GVAR /* the assignment's row, not a call's */ && (cbs[i].roles & bit) && (roles_wanted & bit)) ic_push(s, cbs[i].name, operand, bit, recv);
   return n;
 }
@@ -284,11 +284,13 @@ static int ic_type_holds(Compiler *c, TyKind t, const char *name, int depth) {
 
 static int ic_may_hold_elems(Compiler *c, int node, const char *name) {
   if (node < 0) return 1;
-  return ic_type_holds(c, comp_ntype(c, node), name, 0) && !ic_boxed_builtin(c, node, name);
+  /* a boxed Range of objects is a builtin to the class facts, but its
+     members, which the walk hands succ and <=>, are the program's */
+  return ic_type_holds(c, comp_ntype(c, node), name, 0) && (!ic_boxed_builtin(c, node, name) || c->ic->obj_range);
 }
 
 /* the last statement's node of a block's body, -1 when it has none */
-static int ic_block_value(const NodeTable *nt, int blk) {
+int ic_block_value(const NodeTable *nt, int blk) {
   int body = nt_ref(nt, blk, "body"), n = 0;
   const int *stmts;
   if (body < 0) return -1;
@@ -392,6 +394,8 @@ void ic_begin(Compiler *c, int typed) {
       if (an && !anh_has(&c->ic->defined, an)) anh_add(&c->ic->defined, an);
     }
   cr_class_only_names(c, &c->ic->class_only);   /* also the untyped passes' (g_cr_untyped) */
+  for (int id = 0; typed && !c->ic->obj_range && id < c->nt->count; id++)
+    c->ic->obj_range = comp_ntype(c, id) == TY_OBJ_RANGE;
 }
 
 void ic_scope(Compiler *c, int scope) {

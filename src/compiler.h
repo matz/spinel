@@ -106,7 +106,7 @@ static inline void comp_touch_key(int key) {
    which a call dispatches to class methods. `bv`: the value may also be a
    builtin (a container, a Proc), whose own methods then answer too; `os`
    an OpenStruct; `pr` (with bv) a Proc, whose `[]` is its call. Read with cls_set_has and cls_set_next. */
-typedef struct { unsigned char all, bv, os, pr; int n, nw; unsigned long long *w; int *wi; } ClsSet;
+typedef struct { unsigned char all, bv, os, pr, bc; int n, nw; unsigned long long *w; int *wi; } ClsSet;
 /* the position of the first word at word index q or past it */
 static inline int cls_set_word_from(const ClsSet *s, int q) {
   int lo = 0, hi = s->nw;
@@ -425,8 +425,20 @@ typedef struct {
   TyKind body_write; /* (parameter) the join of what its own body assigns it, as
                         infer_write_types last folded the writes; TY_UNKNOWN when
                         nothing does */
+  unsigned char key_operand; /* (parameter) the operand of a `<=>` that a builtin calls on the
+                       values a block answers, left untyped by widen_block_key_cmp_params:
+                       the runtime hands it any class, so the body-usage inferences leave
+                       it alone and the method backstop boxes it after the fixpoint */
   int owner;        /* the scope that holds the slot (Scope.idx), -1 for a global
                        or a constant: the owner its writes move (comp_touch_scope) */
+  int *ctr_sites, nctr_sites;  /* (#10930) the allocation sites (indices
+                       into Compiler.ctr_site_node) of the containers this
+                       slot may hold that another slot may hold too (the
+                       directed class walk's per-site objects): slots of
+                       containers that share a site take one kind */
+  TyKind ctr_join;  /* (#10930) the kind the group's join gave the slot last
+                       round: a round that re-derives the slot and joins it
+                       to the same kind again is no change */
 } LocalVar;
 
 static inline TyKind lv_set_type(LocalVar *lv, TyKind t) {
@@ -535,8 +547,9 @@ typedef struct {
   int is_cmethod_copy;        /* a class method specialize_cmethod_for copied
                                  into class_id from another class or module (an
                                  inherited class method, an extend's method):
-                                 no method of class_id's own singleton, though
-                                 it carries no origin (Method#owner) */
+                                 no method of class_id's own singleton. An
+                                 extend's copy carries its module as
+                                 origin_module_ci; an inherited one no origin */
   int is_proc_form;  /* a clone of a yielding method whose `yield` is a call on
                         a real &blk parameter, for the poly dispatch. Its body
                         is typed independently of the inlined original: the
@@ -1127,7 +1140,9 @@ typedef struct {
   int nargs;
   int blocking;    /* `blocking: true`: the call may block for a while and touches
                       no Ruby object, so the worker leaves the world for it
-                      (sp_native_enter/leave): a collection does not wait for it */
+                      (sp_native_enter/leave): a collection does not wait for it.
+                      An ffi_callback from inside it comes back in for the method
+                      (sp_native_callback_enter/leave) */
 } FfiFunc;
 
 typedef struct { char *mod; char *name; int val; } FfiConst;     /* ffi_const */
@@ -1337,6 +1352,12 @@ typedef struct {
                           widens the ivar to the general Array, after the
                           fixpoint, as it does one passed directly */
   SP_TY_FIELD TyKind *hash_want; /* [node_cap] variant a hash literal should take from its use context (#3040) */
+  /* (#10930) the allocation sites (an Array or Hash literal, Array.new,
+     Hash.new) whose containers two slots may hold, by index: the node, and
+     the kind the join of its slots gave it (UNKNOWN for none); and the
+     kind of a site by node ([ctr_site_cap]) */
+  int *ctr_site_node; TyKind *ctr_site_kind; int nctr_site;
+  TyKind *ctr_site_kind_of; int ctr_site_cap;
   SP_TY_FIELD TyKind *arr_want;  /* [node_cap] array kind a node takes from its use context
                         rather than from its own contents: an empty `[]`
                         literal, or a `map` that narrow_object_arrays decided
@@ -1361,6 +1382,13 @@ typedef struct {
 
   Scope *scopes;    /* scope[0] = top level */
   int nscopes, cscopes;
+  /* the scopes of each def node (a method's body and its copies), in
+     scope order: def_oldest[d] and def_newest[d] end the chain of def node
+     d, def_older[s] and def_newer[s] are scope s's neighbours on it, -1 at
+     either end. A scope's def node is fixed at comp_scope_new, which links
+     it, so the chains hold however scopes are renamed or moved */
+  int *def_oldest, *def_newest, ndef_nodes;
+  int *def_older, *def_newer;
   /* the top-level scope of each file root (nt_root), by graph id: 0 for the
      entry (analyze_program.c) */
   int *file_scope;
@@ -1584,6 +1612,7 @@ typedef struct {
   /* the methods CRuby calls that the program does not name, as the last
      reachability run found them (implicit_calls.h); freed with the Compiler */
   struct IcState *ic;
+  struct YvtIndex *yvt;   /* yield_value_type's call-site index (analyze_internal.h), built on first use */
   int uses_exc_text_handle;  /* emitted shared exception text routes, to_s/message bits */
   char *exc_text_late;  /* the plain exception text dispatchers, defined after the globals (emit_exc_text_dispatch) */
   int exc_text_super;        /* exc_text_override_calls_super's memo: 0 unasked, 1 no, 2 yes */
@@ -1754,14 +1783,19 @@ typedef struct {
      calls pinned to the method it runs. absent: asked for a call that may
      meet no version of the chain yet, 2 when the entry's else arm answers
      for none, 1 when it keeps the last version (ver_entries_demand);
-     cells: its histories' cells are written (ver_cells_write) */
-  struct VerEntry { const char *name; int guard, cls, sg, ar, scope, absent, cells; } *ver_entries;
+     cells: its histories' cells are written (ver_cells_write); finds:
+     what its else arm finds while no version is live, one of
+     VER_FINDS_* (call_plan.c, ver_else_finds). Each name is the entry's
+     own copy (ver_entry_add), as in ver_late, ver_memo and the chain
+     counts: a caller may ask with a name it frees itself
+     (desugar_call_op_write's setter name) */
+  struct VerEntry { char *name; int guard, cls, sg, ar, scope, absent, cells, finds; } *ver_entries;
   int nver_entries;
   /* the chains a typed call may meet with no version made yet, whose
      entry is not asked for that yet (call_plan.c, ver_absent_note); mm:
      where the call runs, method_missing is on the chain (1), is not (2),
      or both (ver_mm_at) */
-  struct VerLate { const char *name; int cls, sg, mi, ar, mm; } *ver_late;
+  struct VerLate { char *name; int cls, sg, mi, ar, mm, span; } *ver_late;   /* span: a call past the build that spans versions */
   int nver_late;
   int nver_refl;   /* the named entries whose name reflection does not answer (call_plan.c, ver_refl_named) */
   int ncond_disp;  /* the dispatchers defs under a run-time condition are lowered to (analyze_desugar.c; call_plan.c, ver_list_held) */
@@ -1795,9 +1829,9 @@ typedef struct {
      comp_name_is_shadow_copy reads */
   int *shadow_copies, nshadow_copies, cshadow_copies;
   /* the version each call asked on a class runs, once the entries are
-     made (call_plan.c, ct_version): open addressing, name NULL for a free
-     slot; dc the class it answers, -2 for the table's */
-  struct VerMemo { const char *name; int id, cls; unsigned flags; int vi, dc; } *ver_memo;
+     made (call_plan.c, ct_version): open addressing, name (the memo's own
+     copy) NULL for a free slot; dc the class it answers, -2 for the table's */
+  struct VerMemo { char *name; int id, cls; unsigned flags; int vi, dc; } *ver_memo;
   int ver_memo_cap, ver_memo_n;
   /* the operand-local reads splat_dispatch_on_length marked splat_view,
      which desugar_splat_view_scalars rewrites once typed (-1 once seen) */
@@ -1834,6 +1868,7 @@ AutoloadRegistration *comp_autoloads(const Compiler *c, int node, int *count);
 Compiler *comp_new(const NodeTable *nt);
 void comp_free(Compiler *c);
 void ic_free(Compiler *c);   /* implicit_calls.c */
+void yvt_free(Compiler *c);  /* analyze_util.c */
 /* Is `name` one of the n strings in `list`? (0 for a NULL name) */
 int name_list_has(char **list, int n, const char *name);
 void comp_def_asked_add(Compiler *c, const char *name);   /* a fold answered a definition query of name (def_asked) */
@@ -1857,6 +1892,12 @@ int comp_scalar_literal_chain_bottom(const NodeTable *nt, int v);
 
 /* Scopes. */
 Scope *comp_scope_new(Compiler *c, const char *name, int def_node);
+/* the scopes of def node d (Compiler.def_oldest): the newest and each
+   older one, or the oldest and each newer one; -1 past the end */
+int comp_def_newest(const Compiler *c, int d);
+int comp_def_older(const Compiler *c, int s);
+int comp_def_oldest(const Compiler *c, int d);
+int comp_def_newer(const Compiler *c, int s);
 Scope *comp_scope_of(Compiler *c, int node_id);        /* owning scope */
 
 /* Walk the local-variable writes that bind `name`, newest id first: plain
@@ -2051,6 +2092,8 @@ int comp_gvar_is_interp_flag(const char *name);
 LocalVar *comp_const(Compiler *c, const char *name);
 int comp_const_tail_cands(Compiler *c, const char *nm, int **out);
 int comp_class_owned_const(Compiler *c, int k, const char *nm, const int *cands, int ncands);
+/* a class's enclosing class changed: the class path table is old */
+void comp_class_path_moved(void);
 int comp_const_write_valued(const Compiler *c, const LocalVar *cv);
 LocalVar *comp_const_intern(Compiler *c, const char *name);
 /* 1 when `pred` is a statically-false `defined?(Const)` if-guard (optionally
@@ -2116,6 +2159,10 @@ int cls_user_display_mi(Compiler *c, int k, const char *nm);
 int prog_has_cls_user_display(Compiler *c, const char *nm);
 int        class_var_static_ci(Compiler *c, int node);  /* local holding one class const */
 int        class_recv_static_ci(Compiler *c, int node); /* constant or local naming one class */
+/* The Struct or Data class a class method call's receiver names at compile
+   time: as class_recv_static_ci reads it, or `self` in a class method of
+   the class (a version entry's else arm); -1 for none */
+int        record_recv_class(Compiler *c, int node);
 int        const_class_value_only(Compiler *c, int node); /* constant slot that may hold a class known only at run time */
 int        class_recv_user_cmethod(Compiler *c, int call, int node, const char *name); /* call's user class method of the name on it */
 int        dynamic_new_may_reach(Compiler *c, int call_id, int cid);  /* k.new can build cid */
@@ -2257,6 +2304,11 @@ int        comp_self_method_in_chain(Compiler *c, int class_id, const char *name
    renamed its scope; *def_class (when asked) the class that holds it. -1
    when no scope there has that def node. */
 int        comp_method_version(Compiler *c, int class_id, const char *name, int is_cm, int def_node, int *def_class);
+/* ...the class's own body at def node def_node that a later prepend's copy
+   shadows (`__prep <n> m`, SHADOW_PREP), which comp_method_version leaves
+   out (a call of the name reaches it through the copy), on class_id's
+   superclass chain; -1 for none */
+int        comp_shadowed_body(Compiler *c, int class_id, int is_cm, int def_node, int *def_class);
 /* The classes whose chain answers (name, is_cm) -- comp_method_in_chain's
    or comp_cmethod_in_chain's -- ascending, two ints per class (the class,
    the scope its chain finds), *n their count. NULL with *n -1 while the
@@ -2325,6 +2377,7 @@ int        comp_array_method_name(const char *n);
 int        comp_ary_is_hash(Compiler *c, int cid);
 int        comp_ary_is_str(Compiler *c, int cid);
 int        comp_ary_is_time(Compiler *c, int cid);
+int        comp_ty_is_timesub(Compiler *c, TyKind t);
 int        comp_timesub_copy_name(Compiler *c, const char *n);
 int        comp_arysub_emb(Compiler *c, int cid);
 int        comp_arysub_str_boxed(const char *n);
@@ -2486,11 +2539,23 @@ void comp_shadow_name(Compiler *c, int ci, const char *name, char *out, size_t s
 void comp_scope_set_shadow(Compiler *c, int si, int kind, const char *user);
 void comp_scope_copy_shadow(Compiler *c, int dst, int src, const char *suffix);
 const char *comp_scope_user_name(const Scope *s);
+int comp_scope_copied_away(Compiler *c, int s);
+int comp_scope_may_run(Compiler *c, int s);
 int comp_name_is_shadow_copy(Compiler *c, const char *name, int kind);
 const char *comp_super_name(Compiler *c, int parent, const char *name, int is_cmethod);
 const char *comp_scope_def_name(Compiler *c, const Scope *s);
 int comp_super_is_class_new(Compiler *c, int id);
+int comp_super_class_new_boxed(Compiler *c, int id);
+int comp_new_receiver(Compiler *c, int k);
+int comp_new_receivers(Compiler *c, int own);
+int method_answers_receiver(Compiler *c, int mi);
 int comp_super_parent(Compiler *c, int class_id, int is_cmethod); /* super in `self.new` is Class#new */
+enum { SUPER_OBJ_SAME = 1, SUPER_OBJ_FALSE, SUPER_OBJ_FROZEN, SUPER_OBJ_SELF };
+/* a super (node id) no program ancestor answers that reaches BasicObject's
+   or Kernel's ==, equal?, eql?, !, nil?, frozen?, itself or
+   respond_to_missing?: SUPER_OBJ_*,
+   else 0 */
+int comp_super_object_builtin(Compiler *c, const Scope *s, const char *uname, int id);
 /* Resolve `name` through the class's (chain-aware) alias table to the
    underlying method/attr name. Returns `name` unchanged if not aliased. */
 /* What a name means on a class: nothing, an attribute (attr_reader/writer,
@@ -2623,6 +2688,7 @@ static inline int comp_ty_value_obj(const Compiler *c, TyKind t) {
 /* 1 for a call that hands out one ELEMENT of a container (see compiler.c). */
 int container_elem_read_p(const NodeTable *nt, int id);
 const char *poly_enum_op_for(const char *name);
+int poly_blk_prearm_name(const char *name);
 int poly_container_read_p(const char *name);
 /* 1 for a numeric read a builtin receiver answers differently (see compiler.c). */
 int poly_numeric_read_p(const char *name);

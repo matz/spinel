@@ -9,7 +9,7 @@
 # is its DER, read from PEM or DER and written back, and its fields are not
 # read (openssl/x509.rb). PKey::EC and Cipher are subsets of
 # CRuby's in a second sense, each spelled out in its own file: EC keeps
-# CRuby's method names but trades BN, EC::Group and EC::Point for the raw
+# CRuby's method names but trades BN and EC::Point for the raw
 # bytes every protocol that names an EC key means by them, and Cipher keeps
 # CRuby's object while buffering rather than streaming, over aes-128-gcm and
 # aes-256-gcm only.
@@ -36,9 +36,38 @@ require "openssl/x509"
 require "openssl/random"
 
 module OpenSSL
+  def self.fixed_length_secure_compare(a, b)
+    a = comparison_string(a)
+    b = comparison_string(b)
+    Native.fixed_length_secure_compare(a, b) == 0
+  end
+
+  def self.secure_compare(a, b)
+    hashed_a = Digest.digest("SHA256", comparison_string(a))
+    hashed_b = Digest.digest("SHA256", comparison_string(b))
+    fixed_length_secure_compare(hashed_a, hashed_b) && a == b
+  end
+
+  def self.comparison_string(value)
+    case value
+    when String then return value
+    when nil, true, false then raise TypeError, "no implicit conversion of #{value.inspect} into String"
+    end
+    if value.respond_to?(:to_str, true)
+      converted = value.__send__(:to_str)
+      return converted if String === converted
+      raise TypeError, "can't convert #{value.class} to String (#{value.class}#to_str gives #{converted.class})"
+    end
+    raise TypeError, "no implicit conversion of #{value.class} into String"
+  end
+  private_class_method :comparison_string
+
   module Native
     native_lib "openssl"
     native_obj "packages/openssl/sp_openssl.o"
+    native_func :digest_bytes, [:string, :string], :cbinstr, "sp_openssl_digest"
+    native_func :hmac_bytes, [:string, :string, :string], :cbinstr, "sp_openssl_hmac"
+    native_func :fixed_length_secure_compare, [:string, :string], :int, "sp_openssl_fixed_length_secure_compare"
     native_func :pending,      [:int],                :int,    "sp_ssl_pending"
     native_func :close,        [:int],                :int,    "sp_ssl_close"
     native_func :discard,      [:int],                :int,    "sp_ssl_discard"
@@ -46,7 +75,7 @@ module OpenSSL
     native_func :peer_subject, [:int],                :string, "sp_ssl_peer_subject"
     native_func :version,      [:int],                :string, "sp_ssl_version"
     native_func :cipher,       [:int],                :string, "sp_ssl_cipher"
-    native_func :connect_nb,   [:int, :string, :int, :any, :string, :string, :string], :int, "sp_ssl_connect_nb"
+    native_func :connect_nb,   [:int, :string, :int, :int, :any, :string, :string, :string], :int, "sp_ssl_connect_nb"
     native_func :handshake_cont, [:int],              :int,    "sp_ssl_handshake_cont"
     native_func :read_nb,      [:int, :int],          :string, "sp_ssl_read_nb"
     native_func :want,         [],                    :int,    "sp_ssl_want"
@@ -69,19 +98,20 @@ module OpenSSL
 
     # AES-GCM, one shot. The whole operation in one call, because the Ruby
     # Cipher over it holds the state -- see openssl/cipher.rb. Encrypt answers
-    # ciphertext || tag; both answer "" with the reason in last_error, since an
-    # empty result is legitimate here (the plaintext of an empty message).
+    # ciphertext || tag. Decrypt answers 0x01 || plaintext, 0x00 for a tag
+    # failure, or "" for other errors; empty plaintext remains a success.
     native_func :aes_gcm_encrypt, [:string, :string, :string, :string, :string],
                 :string, "sp_aes_gcm_encrypt"
     native_func :aes_gcm_decrypt, [:string, :string, :string, :string, :string, :string],
                 :string, "sp_aes_gcm_decrypt"
 
-    # ECDSA over the same curves, with signatures as raw r || s rather than
-    # DER -- the conversion is in the C because a DER signature is a
-    # well-formed String that every JWT verifier rejects.
-    native_func :ecdsa_sign,    [:string, :string, :string],          :cbinstr, "sp_ecdsa_sign"
-    native_func :ecdsa_verify,  [:string, :string, :string, :string], :int,     "sp_ecdsa_verify"
+    # ECDSA's last argument selects raw r || s (0) or ASN.1 DER (1).
+    native_func :ecdsa_sign,    [:string, :string, :string, :int],          :cbinstr, "sp_ecdsa_sign"
+    native_func :ecdsa_verify,  [:string, :string, :string, :string, :int], :int,     "sp_ecdsa_verify"
     native_func :ec_check_point, [:string, :string],                  :int,     "sp_ec_check_point"
+    native_func :ec_curve_name, [:string, :int], :string, "sp_ec_curve_name"
+    native_func :ec_export, [:string, :string, :string, :int, :int, :int], :cbinstr, "sp_ec_export"
+    native_func :ed25519_sign, [:string, :string], :cbinstr, "sp_ed25519_sign"
 
     # RSA verify over a public key given as its modulus and exponent bytes:
     # n, e, digest, data, signature, then PSS (1) or PKCS#1 v1.5 (0), and for
@@ -515,6 +545,7 @@ module OpenSSL
         key = own_key
         h = Native.connect_nb(@io.fileno, @hostname,
                               @context.verify_mode == VERIFY_NONE ? 0 : 1,
+                              @context.verify_hostname ? 1 : 0,
                               @context.cert_store, @context.own_chain,
                               key ? SSLContext.key_curve(key) : "", key ? SSLContext.key_bytes(key) : "")
         if h < 0

@@ -1210,26 +1210,31 @@ const char *sp_slurp_stream(FILE *fp) {
 const char *sp_slurp_stream_parked(sp_File *f) {SP_GC_ROOT(f);
   if (!f || !f->fp) return &("\xff" "")[1];
   size_t cap = 8192, len = 0;
-  char *buf = (char *)malloc(cap);
-  if (!buf) return &("\xff" "")[1];
+  /* the collector's memory, not malloc's: a park below can raise (a close,
+     IO#timeout, a reset on a socket), or a Thread#raise or #kill can land
+     in it, and neither comes back to free the buffer */
+  char *buf = sp_str_alloc(cap);
+  SP_GC_ROOT_STR(buf);
   for (;;) {
     sp_io_wait_readable(f);
-    int ch = SP_SIG_BLOCKING(fgetc(f->fp));
+    int ch = sp_io_getc(f);
     if (ch == EOF) break;
     if (len + 2 >= cap) {
-      char *nb = (char *)realloc(buf, cap * 2);
-      if (!nb) { free(buf); return &("\xff" "")[1]; }
+      char *nb = sp_str_alloc(cap * 2);
+      memcpy(nb, buf, len);
       buf = nb; cap *= 2;
     }
     buf[len++] = (char)ch;
     /* whatever the same read(2) already delivered: no kernel wait for these */
-    for (size_t avail; (avail = sp_io_stdio_buffered(f->fp)) > 0; ) {
-      while (len + avail + 1 >= cap) {
-        char *nb = (char *)realloc(buf, cap * 2);
-        if (!nb) { free(buf); return &("\xff" "")[1]; }
-        buf = nb; cap *= 2;
+    for (size_t avail; (avail = sp_io_pending(f)) > 0; ) {
+      if (len + avail + 1 >= cap) {
+        size_t nc = cap * 2;
+        while (len + avail + 1 >= nc) nc *= 2;
+        char *nb = sp_str_alloc(nc);
+        memcpy(nb, buf, len);
+        buf = nb; cap = nc;
       }
-      size_t got = SP_SIG_BLOCKING(fread(buf + len, 1, avail, f->fp));
+      size_t got = sp_io_fread(f, buf + len, avail);
       len += got;
       if (got == 0) break;
     }
@@ -1238,7 +1243,6 @@ const char *sp_slurp_stream_parked(sp_File *f) {SP_GC_ROOT(f);
   if (len) memcpy(r, buf, len);
   r[len] = 0;
   sp_str_set_len(r, len);
-  free(buf);
   return r;
 }
 
@@ -2475,7 +2479,7 @@ const char *sp_File_gets_sep(sp_File *f, const char *sep, sp_int limit, sp_bool 
   if (sl == 1 && sep[0] == '\n' && limit <= 0) {
     char *buf = NULL;
     size_t bcap = 0;
-    ssize_t got = SP_SIG_BLOCKING(getline(&buf, &bcap, f->fp));
+    ssize_t got = sp_io_getline(f, &buf, &bcap);
     if (got < 0) { free(buf); return NULL; }
     size_t n = (size_t)got;
     /* chomp takes the "\r\n" of a line as well as its "\n" */
@@ -2488,18 +2492,21 @@ const char *sp_File_gets_sep(sp_File *f, const char *sep, sp_int limit, sp_bool 
     return r;
   }
   size_t cap = 256, len = 0;
-  char *buf = (char *)malloc(cap);
-  if (!buf) return NULL;
+  /* the collector's memory: a read below can raise or park (a handle with
+     its own buffer, sp_io_rbuf_fill), and a raise would not come back to
+     free a malloc'd one */
+  char *buf = sp_str_alloc(cap);
+  SP_GC_ROOT_STR(buf);
   int ch;
   /* a paragraph does not start with blank lines */
   if (para) {
-    while ((ch = SP_SIG_BLOCKING(fgetc(f->fp))) == '\n') { }
-    if (ch != EOF) ungetc(ch, f->fp);
+    while ((ch = sp_io_getc(f)) == '\n') { }
+    if (ch != EOF) sp_io_ungetc(f, ch);
   }
   int ended = 0, extra = 16;
   sp_int lim = limit;
-  while ((ch = SP_SIG_BLOCKING(fgetc(f->fp))) != EOF) {
-    if (len + 2 > cap) { cap *= 2; char *nb = (char *)realloc(buf, cap); if (!nb) { free(buf); return NULL; } buf = nb; }
+  while ((ch = sp_io_getc(f)) != EOF) {
+    if (len + 2 > cap) { char *nb = sp_str_alloc(cap * 2); memcpy(nb, buf, len); buf = nb; cap *= 2; }
     buf[len++] = (char)ch;
     /* the separator ends the line where it is matched whole, and not where
        it would start inside a character (on a continuation byte) */
@@ -2518,10 +2525,10 @@ const char *sp_File_gets_sep(sp_File *f, const char *sep, sp_int limit, sp_bool 
   }
   /* and the blank lines after one are not part of the next */
   if (para && ended) {
-    while ((ch = SP_SIG_BLOCKING(fgetc(f->fp))) == '\n') { }
-    if (ch != EOF) ungetc(ch, f->fp);
+    while ((ch = sp_io_getc(f)) == '\n') { }
+    if (ch != EOF) sp_io_ungetc(f, ch);
   }
-  if (len == 0) { free(buf); return NULL; }
+  if (len == 0) return NULL;
   if (chomp && ended && sl && len >= sl && memcmp(buf + len - sl, sep, sl) == 0) {
     len -= sl;
     if (sl == 1 && sep[0] == '\n' && len && buf[len - 1] == '\r') len--;
@@ -2529,7 +2536,6 @@ const char *sp_File_gets_sep(sp_File *f, const char *sep, sp_int limit, sp_bool 
   char *r = sp_str_alloc(len);
   memcpy(r, buf, len); r[len] = 0;
   sp_str_set_len(r, len);
-  free(buf);
   f->lineno++;
   return r;
 }
@@ -2555,7 +2561,7 @@ const char *sp_File_readline_sep(sp_File *f, const char *sep, sp_int limit, sp_b
 const char *sp_File_getc(sp_File *f) {SP_GC_ROOT(f);
   SP_IO_OPEN(f);
   sp_io_wait_readable(f);
-  int ch = SP_SIG_BLOCKING(fgetc(f->fp));
+  int ch = sp_io_getc(f);
   if (ch == EOF) return NULL;
   /* A binary handle (a socket, a File opened "rb", one put in binmode or
      given ASCII-8BIT by set_encoding) has one-byte characters: reading on after a byte that looks like a UTF-8
@@ -2564,10 +2570,11 @@ const char *sp_File_getc(sp_File *f) {SP_GC_ROOT(f);
   int bin = sp_File_reads_binary(f);
   int extra = bin ? 0 : ((ch & 0xE0) == 0xC0) ? 1 : ((ch & 0xF0) == 0xE0) ? 2 : ((ch & 0xF8) == 0xF0) ? 3 : 0;
   char *r = sp_str_alloc((size_t)(1 + extra));
+  SP_GC_ROOT_STR(r);   /* the next bytes' read can park (own_buf) */
   size_t n = 0;
   r[n++] = (char)ch;
   for (int i = 0; i < extra; i++) {
-    int c2 = SP_SIG_BLOCKING(fgetc(f->fp));
+    int c2 = sp_io_getc(f);
     if (c2 == EOF) break;
     r[n++] = (char)c2;
   }
@@ -2584,7 +2591,7 @@ const char *sp_File_readchar(sp_File *f) {SP_GC_ROOT(f);
 sp_oint sp_File_getbyte(sp_File *f) {
   SP_IO_OPEN(f);
   sp_io_wait_readable(f);
-  int ch = SP_SIG_BLOCKING(fgetc(f->fp));
+  int ch = sp_io_getc(f);
   return ch == EOF ? sp_oint_nil() : sp_oint_of((sp_int)ch);
 }
 sp_RbVal sp_File_ungetc(sp_File *f, sp_RbVal v) {
@@ -2592,9 +2599,9 @@ sp_RbVal sp_File_ungetc(sp_File *f, sp_RbVal v) {
   SP_IO_OPEN(f);
   if (v.tag == SP_TAG_STR && v.v.s && v.v.s[0]) {
     size_t n = sp_str_byte_len(v.v.s);
-    for (size_t i = n; i > 0; i--) ungetc((unsigned char)v.v.s[i - 1], f->fp);
+    for (size_t i = n; i > 0; i--) sp_io_ungetc(f, (unsigned char)v.v.s[i - 1]);
   }
-  else if (v.tag == SP_TAG_INT) ungetc((int)v.v.i, f->fp);
+  else if (v.tag == SP_TAG_INT) sp_io_ungetc(f, (int)v.v.i);
   return sp_box_nil();
 }
 sp_int sp_File_sysseek(sp_File *f, sp_int off, sp_int whence) {
@@ -2636,12 +2643,12 @@ sp_RbVal sp_File_putc(sp_File *f, sp_RbVal v) {
      as its bytes for the write only */
   sp_RbVal w = sp_rbval_str(v);
   SP_IO_OPEN(f);
-  if (v.tag == SP_TAG_INT) fputc((int)(v.v.i & 0xff), f->fp);
-  else if (w.tag == SP_TAG_STR) { if (w.v.s && w.v.s[0]) fputc(w.v.s[0], f->fp); }
+  if (v.tag == SP_TAG_INT) sp_File_put_byte(f, (int)(v.v.i & 0xff));
+  else if (w.tag == SP_TAG_STR) { if (w.v.s && w.v.s[0]) sp_File_put_byte(f, w.v.s[0]); }
   /* anything else is no character: CRuby converts it as an Integer and
      raises for nil (the boxed nil wrote nothing and answered nil) */
   else if (v.tag == SP_TAG_NIL) sp_raise_nil_to_int(0);
-  else if (v.tag == SP_TAG_FLT && v.v.f > -9.0e18 && v.v.f < 9.0e18) fputc((int)((sp_int)v.v.f & 0xff), f->fp);
+  else if (v.tag == SP_TAG_FLT && v.v.f > -9.0e18 && v.v.f < 9.0e18) sp_File_put_byte(f, (int)((sp_int)v.v.f & 0xff));
   else if (v.tag == SP_TAG_BOOL)
     sp_raise_cls("TypeError", v.v.b ? "no implicit conversion of true into Integer" : "no implicit conversion of false into Integer");
   return v;
@@ -4156,7 +4163,7 @@ sp_PolyArray *sp_Enumerator_to_a(sp_Enumerator *e) {
    stays blocked in a read or a sleep. Nothing here but the two
    atomics and the write(2) is called from the handler. */
 static int sp_sig_pending[SP_SIG_MAX];
-volatile int sp_sig_pending_flag;
+extern volatile int sp_sig_pending_flag;   /* (lib/sp_alloc.c: sp_gc_alloc_nogc sets it too) */
 /* #9222: the default SIGINT / SIGTERM's handler records a signal that
    arrives outside a blocking call (sp_sig_async_ok, sp_types.h) in
    sp_sig_default_pending, and the raise it makes is the generated program's
@@ -4166,10 +4173,26 @@ volatile int sp_sig_default_pending;
 void (*sp_sig_default_raiser)(int);
 /* A safe point of a program that sets no trap: the recorded default signal
    is raised. Never returns. */
+/* A collection sp_gc_alloc_nogc could not run, asked of the next safe
+   point: the safe points' flag is set, and the safe point collects
+   (sp_gc_poll_collect) before it looks for a signal */
+extern volatile int sp_gc_poll_due;   /* (lib/sp_alloc.c) */
+void sp_gc_poll_collect(void);
+static void sp_gc_poll_run(void) {
+  if (!sp_gc_poll_due) return;
+  sp_gc_poll_due = 0;
+  sp_gc_poll_collect();
+}
+/* A safe point of a program that sets no trap: a collection asked of it
+   runs, and the recorded default signal is raised. Returns only when it
+   had a collection and no signal to run. */
 void sp_sig_poll_raise(void) {
-  int no = sp_sig_default_pending;
-  sp_sig_default_pending = 0;
   SP_ATOMIC_STORE(&sp_sig_pending_flag, 0, __ATOMIC_RELAXED);
+  int gc = sp_gc_poll_due;
+  sp_gc_poll_run();
+  int no = sp_sig_default_pending;
+  if (gc && !no) return;
+  sp_sig_default_pending = 0;
   if (no && sp_sig_default_raiser) sp_sig_default_raiser(no);
   abort();
 }
@@ -4197,6 +4220,7 @@ void sp_sig_c_handler(int no) {
    leaves by a raise or a throw. */
 void sp_sig_run_pending(void) {
   SP_ATOMIC_STORE(&sp_sig_pending_flag, 0, __ATOMIC_RELAXED);
+  sp_gc_poll_run();   /* (a collection sp_gc_alloc_nogc asked of this safe point) */
   /* a recorded default SIGINT / SIGTERM first: its raise leaves */
   if (sp_sig_default_pending && sp_sig_default_raiser) {
     int no = sp_sig_default_pending;
@@ -5522,6 +5546,257 @@ sp_RbVal sp_box_timev(sp_Time v) {
   return sp_box_obj(p, SP_BUILTIN_TIME);
 }
 sp_RbVal sp_box_time(sp_Time *p) { return sp_box_obj(p, SP_BUILTIN_TIME); }
+
+static void sp_trange_scan(void *p) {
+  sp_TimeRange *r = (sp_TimeRange *)p;
+  if (r->first) sp_gc_mark(r->first);
+  if (r->last) sp_gc_mark(r->last);
+}
+sp_TimeRange *sp_trange_new(sp_Time *first, sp_Time *last, sp_int excl) {
+  SP_GC_ROOT(first); SP_GC_ROOT(last);
+  sp_TimeRange *r = (sp_TimeRange *)sp_gc_alloc(sizeof(sp_TimeRange), NULL, sp_trange_scan);
+  r->first = first; r->last = last; r->excl = excl ? 1 : 0;
+  return r;
+}
+sp_RbVal sp_box_trange(sp_TimeRange *r) { return r ? sp_box_obj(r, SP_BUILTIN_TIME_RANGE) : sp_box_nil(); }
+sp_RbVal sp_trange_begin_v(const sp_TimeRange *r) { return r->first ? sp_box_time(r->first) : sp_box_nil(); }
+sp_RbVal sp_trange_end_v(const sp_TimeRange *r) { return r->last ? sp_box_time(r->last) : sp_box_nil(); }
+/* first / last read an end CRuby's way: an open one is its RangeError, where begin / end answer nil */
+sp_RbVal sp_trange_first_v(const sp_TimeRange *r) {
+  if (!r->first) sp_raise_cls("RangeError", "cannot get the first element of beginless range");
+  return sp_box_time(r->first);
+}
+sp_RbVal sp_trange_last_v(const sp_TimeRange *r) {
+  if (!r->last) sp_raise_cls("RangeError", "cannot get the last element of endless range");
+  return sp_box_time(r->last);
+}
+/* dup answers an unfrozen copy and clone one as frozen as the receiver, each a new object */
+sp_TimeRange *sp_trange_copy(const sp_TimeRange *r, int keep_frozen) {
+  SP_GC_ROOT(r);
+  sp_TimeRange *n = sp_trange_new(r->first, r->last, r->excl);
+  n->unfrozen = keep_frozen ? r->unfrozen : 1;
+  return n;
+}
+/* to_a and count answer an endless Range CRuby's way before the iteration's TypeError */
+sp_RbVal sp_trange_to_a(const sp_TimeRange *r) {
+  if (!r->last) sp_raise_cls("RangeError", "cannot convert endless range to an array");
+  sp_trange_iterate_raise();
+  return sp_box_nil();
+}
+sp_RbVal sp_trange_count(const sp_TimeRange *r) {
+  if (!r->first || !r->last) return sp_box_float(HUGE_VAL);
+  sp_trange_iterate_raise();
+  return sp_box_nil();
+}
+void sp_trange_iterate_raise(void) { sp_raise_cls("TypeError", "can't iterate from Time"); }
+void sp_trange_step_check_blk(const sp_TimeRange *r) {
+  if (!r->first) sp_raise_cls("ArgumentError", "#step iteration for beginless ranges is meaningless");
+}
+void sp_trange_step_check(const sp_TimeRange *r) {
+  if (!r->first) sp_raise_cls("ArgumentError", "#step for non-numeric beginless ranges is meaningless");
+}
+sp_bool sp_trange_step_more(const sp_TimeRange *r, const sp_Time *t) {
+  if (!r->last) return 1;
+  int c = sp_time_cmp(t, r->last);
+  return r->excl ? c < 0 : c <= 0;
+}
+/* Whether the walk is still inside: up to the end for a positive step, down
+   to it for a negative one (a descending Range), as CRuby walks both */
+sp_bool sp_trange_step_on(const sp_TimeRange *r, const sp_Time *t, double secs) {
+  if (!t) return 0;
+  /* a step that cannot move still yields the begin of (t..t) once, as CRuby does */
+  if (secs == 0 || secs != secs) return r->last && !r->excl && sp_time_cmp(t, r->last) == 0;
+  if (!r->last) return 1;
+  int c = sp_time_cmp(t, r->last);
+  if (secs > 0) return r->excl ? c < 0 : c <= 0;
+  return r->excl ? c > 0 : c >= 0;
+}
+/* The next Time, or NULL when it does not move: a step below a nanosecond
+   lands on the same sp_Time, which CRuby's Rational subseconds would not */
+sp_Time *sp_trange_step_next(const sp_TimeRange *r, const sp_Time *t, double secs) {
+  /* the inclusive end is the last one: stepping past it could overflow (Infinity) */
+  if (secs == 0 || secs != secs || (r->last && sp_time_cmp(t, r->last) == 0)) return NULL;
+  sp_Time *n = sp_time_add_f(t, secs);
+  return sp_time_cmp(n, t) == 0 ? NULL : n;
+}
+sp_PolyArray *sp_trange_step_ary(const sp_TimeRange *r, double secs) {
+  SP_GC_ROOT(r);
+  sp_trange_step_check(r);
+  sp_PolyArray *a = sp_PolyArray_new(); SP_GC_ROOT(a);
+  if (!r->last) sp_raise_cls("NotImplementedError", "Range#step without a block over an endless Range of Times");
+  sp_Time *t = r->first; SP_GC_ROOT(t);
+  while (sp_trange_step_on(r, t, secs)) { sp_PolyArray_push(a, sp_box_time(t)); t = sp_trange_step_next(r, t, secs); }
+  return a;
+}
+/* Range#min without iterating: the begin, nil for an empty Range */
+sp_RbVal sp_trange_min_v(const sp_TimeRange *r) {
+  if (!r->first) sp_raise_cls("RangeError", "cannot get the minimum of beginless range");
+  if (r->last && sp_time_cmp(r->first, r->last) > (r->excl ? -1 : 0)) return sp_box_nil();
+  return sp_box_time(r->first);
+}
+/* Range#max without iterating: the end of an inclusive Range, CRuby's
+   TypeError for an exclusive one, which only iteration could answer */
+sp_RbVal sp_trange_max_v(const sp_TimeRange *r) {
+  if (r->excl) sp_raise_cls("TypeError", "can't iterate from Time");
+  if (!r->last) sp_raise_cls("RangeError", "cannot get the maximum of endless range");
+  if (r->first && sp_time_cmp(r->first, r->last) > 0) return sp_box_nil();
+  return sp_box_time(r->last);
+}
+sp_bool sp_trange_cover(const sp_TimeRange *r, const sp_Time *t) {
+  if (!r || !t) return 0;
+  if (r->first && sp_time_cmp(r->first, t) > 0) return 0;
+  if (!r->last) return 1;
+  int c = sp_time_cmp(t, r->last);
+  return r->excl ? c < 0 : c <= 0;
+}
+/* a value that is no Time is never covered: Time#<=> answers nil for it */
+sp_bool sp_trange_cover_poly(const sp_TimeRange *r, sp_RbVal v) {
+  if (!r) return 0;
+  if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_TIME && v.v.p) return sp_trange_cover(r, (sp_Time *)v.v.p);
+  return 0;
+}
+/* cover? alone also takes a Range: include?, member? and === answer false for one */
+sp_bool sp_trange_cover_any(const sp_TimeRange *r, sp_RbVal v) {
+  if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_TIME_RANGE && v.v.p) return sp_trange_cover_range(r, (sp_TimeRange *)v.v.p);
+  return sp_trange_cover_poly(r, v);
+}
+/* Range#cover?(range), as CRuby's r_cover_range_p; the other's max, which
+   it falls back on for an exclusive end, raises for Times and so answers no */
+sp_bool sp_trange_cover_range(const sp_TimeRange *r, const sp_TimeRange *o) {
+  if (r->first && !o->first) return 0;
+  if (r->last && !o->last) return 0;
+  if (o->first && o->last && sp_time_cmp(o->first, o->last) > (o->excl ? -1 : 0)) return 0;
+  if (o->first && !sp_trange_cover(r, o->first)) return 0;
+  if (!r->last) return 1;
+  int cmp_end = sp_time_cmp(r->last, o->last);
+  if (r->excl == o->excl) return cmp_end >= 0;
+  if (r->excl) return cmp_end > 0;
+  return cmp_end >= 0;
+}
+/* CRuby's empty_region_p: a begin past the end, or at an excluded end */
+static int sp_trange_empty_region(const sp_Time *beg, const sp_Time *end, int excl) {
+  if (!beg || !end) return 0;
+  int less = sp_time_cmp(beg, end);
+  return less > 0 || (excl && less == 0);
+}
+/* Range#overlap?, as CRuby's range_overlap */
+sp_bool sp_trange_overlap(const sp_TimeRange *a, const sp_TimeRange *b) {
+  if (sp_trange_empty_region(a->first, b->last, (int)b->excl)) return 0;
+  if (sp_trange_empty_region(b->first, a->last, (int)a->excl)) return 0;
+  if (a->first && b->first) { if (sp_time_cmp(a->first, b->first) == 0) return 1; }
+  else if (!a->first && !b->first) return 1;
+  if (sp_trange_empty_region(a->first, a->last, (int)a->excl)) return 0;
+  if (sp_trange_empty_region(b->first, b->last, (int)b->excl)) return 0;
+  return 1;
+}
+/* overlap? of a value known at run time: another Range of Times, any other
+   Range overlaps nothing of Times (its ends do not compare), anything else
+   is CRuby's TypeError */
+sp_bool sp_trange_overlap_poly(const sp_TimeRange *a, sp_RbVal b) {
+  if (b.tag == SP_TAG_OBJ && b.cls_id == SP_BUILTIN_TIME_RANGE && b.v.p) return sp_trange_overlap(a, (sp_TimeRange *)b.v.p);
+  if (b.tag == SP_TAG_OBJ && (b.cls_id == SP_BUILTIN_RANGE || b.cls_id == SP_BUILTIN_FLOAT_RANGE || b.cls_id == SP_BUILTIN_STR_RANGE)) return 0;
+  sp_raise_cls("TypeError", "wrong argument type (expected Range)");
+  return 0;
+}
+static int sp_trange_end_eq(const sp_Time *a, const sp_Time *b) {
+  if (!a || !b) return a == b;
+  return a->tv_sec == b->tv_sec && a->tv_nsec == b->tv_nsec;
+}
+sp_bool sp_trange_eq(const sp_TimeRange *a, const sp_TimeRange *b) {
+  if (!a || !b) return a == b;
+  return a->excl == b->excl && sp_trange_end_eq(a->first, b->first) && sp_trange_end_eq(a->last, b->last);
+}
+sp_int sp_trange_hash(const sp_TimeRange *r) {
+  sp_int h = r->excl ? 0x5bd1e995 : 0x1b873593;
+  if (r->first) h = h * 31 + sp_time_hash(r->first);
+  if (r->last) h = h * 31 + sp_time_hash(r->last);
+  return h;
+}
+static const char *sp_trange_join(const sp_TimeRange *r, int inspect) {
+  SP_GC_ROOT(r);
+  const char *f = r->first ? (inspect ? sp_time_inspect_v(r->first) : sp_time_to_s_v(r->first)) : "";
+  SP_GC_ROOT_STR(f);
+  const char *l = r->last ? (inspect ? sp_time_inspect_v(r->last) : sp_time_to_s_v(r->last)) : "";
+  SP_GC_ROOT_STR(l);
+  /* CRuby's inspect writes the open ends as nil only when both are open */
+  if (inspect && !r->first && !r->last) f = l = "nil";
+  return sp_sprintf("%s%s%s", f, r->excl ? "..." : "..", l);
+}
+static void sp_orange_scan(void *p) {
+  sp_ObjRange *r = (sp_ObjRange *)p;
+  sp_mark_rbval(r->first);
+  sp_mark_rbval(r->last);
+  if (r->wbuf) sp_gc_mark(r->wbuf);
+  sp_mark_rbval(r->wcur);
+}
+sp_ObjRange *sp_orange_new(sp_RbVal first, sp_RbVal last, sp_int excl) {
+  SP_GC_ROOT_RBVAL(first); SP_GC_ROOT_RBVAL(last);
+  sp_ObjRange *r = (sp_ObjRange *)sp_gc_alloc(sizeof(sp_ObjRange), NULL, sp_orange_scan);
+  r->first = first; r->last = last; r->excl = excl ? 1 : 0;
+  return r;
+}
+sp_RbVal sp_box_orange(sp_ObjRange *r) { return r ? sp_box_obj(r, SP_BUILTIN_OBJ_RANGE) : sp_box_nil(); }
+sp_RbVal sp_orange_first(const sp_ObjRange *r) {
+  if (r->first.tag == SP_TAG_NIL) sp_raise_cls("RangeError", "cannot get the first element of beginless range");
+  return r->first;
+}
+sp_RbVal sp_orange_last(const sp_ObjRange *r) {
+  if (r->last.tag == SP_TAG_NIL) sp_raise_cls("RangeError", "cannot get the last element of endless range");
+  return r->last;
+}
+sp_ObjRange *sp_orange_copy(const sp_ObjRange *r, int keep_frozen) {
+  SP_GC_ROOT(r);
+  sp_ObjRange *n = sp_orange_new(r->first, r->last, r->excl);
+  n->unfrozen = keep_frozen ? r->unfrozen : 1;
+  return n;
+}
+const char *sp_poly_to_s(sp_RbVal v);
+const char *sp_poly_inspect(sp_RbVal v);
+static const char *sp_orange_join(const sp_ObjRange *r, int inspect) {
+  SP_GC_ROOT(r);
+  int fo = r->first.tag == SP_TAG_NIL, lo = r->last.tag == SP_TAG_NIL;
+  const char *f = fo ? "" : inspect ? sp_poly_inspect(r->first) : sp_poly_to_s(r->first);
+  SP_GC_ROOT_STR(f);
+  const char *l = lo ? "" : inspect ? sp_poly_inspect(r->last) : sp_poly_to_s(r->last);
+  SP_GC_ROOT_STR(l);
+  if (inspect && fo && lo) f = l = "nil";
+  return sp_sprintf("%s%s%s", f, r->excl ? "..." : "..", l);
+}
+const char *sp_orange_to_s(const sp_ObjRange *r) { return sp_orange_join(r, 0); }
+const char *sp_orange_inspect(const sp_ObjRange *r) { return sp_orange_join(r, 1); }
+const char *sp_trange_to_s(const sp_TimeRange *r) { return sp_trange_join(r, 0); }
+const char *sp_trange_inspect(const sp_TimeRange *r) { return sp_trange_join(r, 1); }
+sp_RbVal sp_trange_send(sp_TimeRange *r, const char *n, int argc, sp_RbVal a0) {
+  SP_GC_ROOT(r);
+  if (argc == 0) {
+    if (!strcmp(n, "begin")) return sp_trange_begin_v(r);
+    if (!strcmp(n, "first")) return sp_trange_first_v(r);
+    if (!strcmp(n, "end")) return sp_trange_end_v(r);
+    if (!strcmp(n, "last")) return sp_trange_last_v(r);
+    if (!strcmp(n, "min")) return sp_trange_min_v(r);
+    if (!strcmp(n, "max")) return sp_trange_max_v(r);
+    if (!strcmp(n, "exclude_end?")) return sp_box_bool(r->excl != 0);
+    if (!strcmp(n, "to_s")) return sp_box_str(sp_trange_to_s(r));
+    if (!strcmp(n, "inspect")) return sp_box_str(sp_trange_inspect(r));
+    if (!strcmp(n, "hash")) return sp_box_int(sp_trange_hash(r));
+    if (!strcmp(n, "frozen?")) return sp_box_bool(!r->unfrozen);
+    if (!strcmp(n, "to_a") || !strcmp(n, "entries")) return sp_trange_to_a(r);
+    if (!strcmp(n, "count")) return sp_trange_count(r);
+    if (!strcmp(n, "size") || !strcmp(n, "each") || !strcmp(n, "sum")) { sp_trange_iterate_raise(); return sp_box_nil(); }
+  }
+  if (argc == 1) {
+    /* min(n) / max(n) take elements, which iterates */
+    if (!strcmp(n, "min") || !strcmp(n, "max")) { sp_trange_iterate_raise(); return sp_box_nil(); }
+    if (!strcmp(n, "cover?")) return sp_box_bool(sp_trange_cover_any(r, a0));
+    if (!strcmp(n, "include?") || !strcmp(n, "member?") || !strcmp(n, "==="))
+      return sp_box_bool(sp_trange_cover_poly(r, a0));
+    if (!strcmp(n, "overlap?")) return sp_box_bool(sp_trange_overlap_poly(r, a0));
+    if (!strcmp(n, "==") || !strcmp(n, "eql?"))
+      return sp_box_bool(a0.tag == SP_TAG_OBJ && a0.cls_id == SP_BUILTIN_TIME_RANGE && sp_trange_eq(r, (sp_TimeRange *)a0.v.p));
+  }
+  sp_raise_cls("NoMethodError", sp_sprintf("undefined method '%s' for an instance of Range", n));
+  return sp_box_nil();
+}
 sp_Time *sp_file_mtime(const char *path) { return sp_time_ref(sp_filev_mtime(path)); }
 sp_Time *sp_file_atime(const char *path) { return sp_time_ref(sp_filev_atime(path)); }
 sp_Time *sp_file_ctime(const char *path) { return sp_time_ref(sp_filev_ctime(path)); }
@@ -5737,7 +6012,7 @@ sp_PolyArray *sp_io_pipe(void) {
   if (sp_io_make_pipe(fds) != 0) sp_raise_cls("IOError", "pipe failed");
   sp_PolyArray *a = sp_PolyArray_new();
   SP_GC_ROOT(a);
-  sp_PolyArray_push(a, sp_box_obj(sp_io_fdopen(fds[0], SPL("r")), SP_BUILTIN_IO));
+  sp_PolyArray_push(a, sp_box_obj(sp_io_pipe_reader(fds[0]), SP_BUILTIN_IO));
   { sp_File *wf = sp_io_fdopen(fds[1], SPL("w"));
     /* CRuby documents the write end as sync: a write reaches the descriptor
        at once, so a reader on the other end (or an IO.select on it) sees the
@@ -5769,10 +6044,11 @@ sp_File *sp_io_for_fd(sp_int fd, const char *mode, sp_bool autoclose) {SP_GC_ROO
     int d = dup((int)fd);
     if (d < 0) sp_raise_cls("SystemCallError", sp_sprintf("dup(2) failed for fd %d", (int)fd));
     sp_File *f = sp_io_fdopen_ex(d, mode && *mode ? mode : SPL("r"), 0);
-    if (f) { f->no_autoclose = 1; f->fno_plus1 = (int)fd + 1; }
+    if (f) { f->no_autoclose = 1; f->fno_plus1 = (int)fd + 1; sp_io_take_own_buf(f); }
     return f;
   }
   sp_File *f = sp_io_fdopen_ex((int)fd, mode && *mode ? mode : SPL("r"), 0);
+  if (f) sp_io_take_own_buf(f);
   return f;
 }
 
@@ -5874,7 +6150,7 @@ static sp_File *sp_select_io_of(sp_RbVal v) {
    whatever else is ready right now (rb_io_read_pending). */
 static int sp_select_pending(sp_RbVal v) {
   sp_File *f = sp_select_io_of(v);
-  return f && f->fp && !f->closed && sp_io_stdio_buffered(f->fp) > 0;
+  return f && f->fp && !f->closed && sp_io_pending(f) > 0;
 }
 sp_RbVal sp_io_select(sp_PolyArray *rd, sp_PolyArray *wr, sp_PolyArray *er, double timeout) {
   sp_PolyArray *src[3] = { rd, wr, er };

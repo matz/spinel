@@ -1234,7 +1234,36 @@ static int yield_builtin_method_site_type(const Compiler *c, int id, TyKind *out
   return an_yield_site_builtin_answer((Compiler *)c, id, rt, out);
 }
 
+/* Is `id` an untyped call to a method that yields? Such a method has no
+   function of its own; it is spliced where it is called, and the splice
+   holds the result of an untyped call boxed (emit_inline_expr, #3716): the
+   block that would answer it leaves by throw or exit instead. Asked once
+   for a node, as comp_ntype asks on every read. */
+static int untyped_call_held_boxed(const Compiler *c, int id) {
+  static unsigned char *memo;   /* 0 not asked, 1 held, 2 not, 3 being asked */
+  static const NodeTable *memo_nt;
+  static int cap;
+  if (c->ntype[id] != TY_UNKNOWN || nt_kind(c->nt, id) != NK_CallNode) return 0;
+  if (memo_nt != c->nt) { if (cap) memset(memo, 0, (size_t)cap); memo_nt = c->nt; }
+  if (id >= cap) {
+    int n = c->nt->count > id ? c->nt->count : id + 1;
+    unsigned char *m = realloc(memo, (size_t)n);
+    if (!m) return 0;
+    memset(m + cap, 0, (size_t)(n - cap));
+    memo = m; cap = n;
+  }
+  if (!memo[id]) {
+    memo[id] = 3;   /* the lookup reads types itself */
+    memo[id] = call_targets_yielding_method((Compiler *)c, id) ? 1 : 2;
+  }
+  return memo[id] == 1;
+}
+
 int sp_yield_site_type(const Compiler *c, int id, TyKind *out) {
+  /* an untyped call that is held boxed reads as the box: the emitters around
+     it took an untyped value as it is, and the box went raw into a String
+     element or an Integer operand (`out << t { throw :x, "v" }`) */
+  if (id >= 0 && id < c->nt->count && untyped_call_held_boxed(c, id)) { *out = TY_POLY; return 1; }
   if (g_block_id < 0 || id < 0) return 0;
   /* A parenthesized yield answers its value at this inline site too. The
      cached union can still be nil when another copy yields another kind. */
@@ -1779,7 +1808,7 @@ int re_lit_node(Compiler *c, int nid) {
   int want_const = nt_kind_is_constant(ty_k);
   int want_local = ty_k == NK_LocalVariableReadNode && comp_ntype(c, nid) == TY_REGEX;
   if (!want_const && !want_local) return -1;
-  const char *nm = nt_str(nt, nid, "name");
+  const char *nm = want_const ? const_key_at(c, nid) : nt_str(nt, nid, "name");
   if (!nm) return -1;
   /* a constant's answer is fixed by its name, a local's by its scope and
      name: one scan per key, not per use */
@@ -1795,7 +1824,7 @@ int re_lit_node(Compiler *c, int nid) {
     NodeKind kk = nt_kind(nt, k);
     if (!kt) continue;
     if (kk != NK_ConstantWriteNode && kk != NK_ConstantPathWriteNode) continue;
-    const char *kn = nt_str(nt, k, "name");
+    const char *kn = const_key_at(c, k);
     if (!kn || !sp_streq(kn, nm)) continue;
     int v = nt_ref(nt, k, "value");
     if (v >= 0 && nt_kind(nt, v) == NK_CallNode &&
@@ -4174,6 +4203,22 @@ int one_tail_fresh(Compiler *c, int n) {
   }
   return 0;
 }
+/* One representation: is String answer `n` a conditional (`c ? s : "Z"`, a
+   case), seen through its parentheses and their leading statements? Its arms
+   differ, a read of a handle beside a new String, and the read in its test
+   published another handle: its return publishes the handle of the bytes it
+   answers (sp_strface_pub_b), which a caller's pickup takes. */
+int one_tail_cond(Compiler *c, int n) {
+  const NodeTable *nt = c->nt;
+  while (n >= 0 && nt_kind(nt, n) == NK_ParenthesesNode) {
+    int body = nt_ref(nt, n, "body"), k = 0;
+    const int *st = body >= 0 && nt_kind(nt, body) == NK_StatementsNode ? nt_arr(nt, body, "body", &k) : NULL;
+    n = k > 0 ? st[k - 1] : -1;
+  }
+  if (n < 0) return 0;
+  NodeKind k = nt_kind(nt, n);
+  return k == NK_IfNode || k == NK_UnlessNode || k == NK_CaseNode || k == NK_CaseMatchNode;
+}
 /* One representation: a write `dst = v` into a String slot, where the
    emitter writes v in the type's face (bytes) and the slot is the handle
    (every String holder is, repr_str_class_shares): v goes in through
@@ -4537,7 +4582,7 @@ int unsup_message(Compiler *c, int id, const char *what, int self_ci, char *msg,
         const char *bcn = rvt == TY_STRING || rvt == TY_STRBUF ? "String"
                         : rvt == TY_INT ? "Integer" : rvt == TY_FLOAT ? "Float"
                         : rvt == TY_SYMBOL ? "Symbol"
-                        : rvt == TY_RANGE || rvt == TY_FLOAT_RANGE || rvt == TY_STR_RANGE ? "Range"
+                        : rvt == TY_RANGE || rvt == TY_FLOAT_RANGE || rvt == TY_STR_RANGE || rvt == TY_TIME_RANGE || rvt == TY_OBJ_RANGE ? "Range"
                         : rvt == TY_TIME ? "Time"
                         : ty_is_array(rvt) ? "Array" : ty_is_hash(rvt) ? "Hash" : NULL;
         if (bcn && !builtin_method_known(bcn, mname) &&
@@ -7092,25 +7137,35 @@ void mc_number_versions(Compiler *c) {
 static int mc_same_method(const Scope *a, const Scope *b) {
   return a->class_id == b->class_id && a->is_cmethod == b->is_cmethod && (a->entry == ENTRY_DISPATCH) == (b->entry == ENTRY_DISPATCH) && sp_streq(a->name, b->name);
 }
-static const char *const mc_class_helpers[] = { "_alloc", "_dup", "_gc_scan", NULL };
+/* (`_struct_inspect` is a Struct's default text where both inspect and to_s
+   are the program's: struct_default_text_fn) */
+static const char *const mc_class_helpers[] = { "_alloc", "_dup", "_gc_scan", "_struct_inspect", NULL };
+enum { MC_NHELPERS = 4 };
 /* A method whose name another has, as *first and *later; *first is -1 when
-   the name is a class's helper. */
+   the name is a class's helper or typedef. A class helper's name that is
+   another class's typedef (`class Y__gc_scan` beside Y's sp_Y__gc_scan) is
+   *first -2 and *later that class, whose C name is to change. */
 static int mc_find_clash(Compiler *c, int *first, int *later) {
-  int cap = 64;
-  while (cap < (c->nscopes + 3 * c->nclasses) * 2) cap *= 2;
+  int cap = 64, nh = MC_NHELPERS * c->nclasses;
+  while (cap < (c->nscopes + nh + c->nclasses) * 2) cap *= 2;
   char **key = calloc((size_t)cap, sizeof *key);
   int *who = malloc(sizeof(int) * (size_t)cap);
   int found = 0;
-  for (int i = -3 * c->nclasses; i < c->nscopes && !found; i++) {
+  /* each class's typedef, then its helpers, then the methods */
+  for (int i = -nh - c->nclasses; i < c->nscopes && !found; i++) {
     const Scope *s = i >= 0 ? &c->scopes[i] : NULL;
     const char *nm;
     if (s) {
       if (!s->name || s->c_name) continue;
       nm = mc_method(c, s);
-    } else {
-      const ClassInfo *ci = &c->classes[(-i - 1) / 3];
+    } else if (i < -nh) {
+      const ClassInfo *ci = &c->classes[-i - 1 - nh];
       if (ci->is_builtin_const || !ci->c_name) continue;
-      nm = mc_ring_setf(c, "sp_%s_%s", ci->c_name, mc_class_helpers[(-i - 1) % 3]);
+      nm = mc_ring_setf(c, "sp_%s", ci->c_name);
+    } else {
+      const ClassInfo *ci = &c->classes[(-i - 1) / MC_NHELPERS];
+      if (ci->is_builtin_const || !ci->c_name) continue;
+      nm = mc_ring_setf(c, "sp_%s_%s", ci->c_name, mc_class_helpers[(-i - 1) % MC_NHELPERS]);
     }
     unsigned h = 2166136261u;
     for (const char *q = nm; *q; q++) h = (h ^ (unsigned char)*q) * 16777619u;
@@ -7118,6 +7173,7 @@ static int mc_find_clash(Compiler *c, int *first, int *later) {
     while (key[j] && strcmp(key[j], nm)) j = (j + 1) & (cap - 1);
     if (!key[j]) { key[j] = strdup(nm); who[j] = i; }
     else if (s && (who[j] < 0 || !mc_same_method(&c->scopes[who[j]], s))) { *first = who[j] < 0 ? -1 : who[j]; *later = i; found = 1; }
+    else if (!s && who[j] < -nh) { *first = -2; *later = -who[j] - 1 - nh; found = 1; }
   }
   for (int j = 0; j < cap; j++) free(key[j]);
   free(key); free(who);
@@ -7146,6 +7202,14 @@ void mc_resolve_clashes(Compiler *c) {
   int a, b;
   /* each round renames one method or class; the bound only guards a loop */
   for (int round = 0, n = 2; round < 4096 && mc_find_clash(c, &a, &b); round++, n++) {
+    if (a == -2) {
+      /* the class whose typedef a helper's name is takes a C name of its own */
+      char cn[300];
+      snprintf(cn, sizeof cn, "%s__%d", c->classes[b].c_name, n);
+      free(c->classes[b].c_name);
+      c->classes[b].c_name = strdup(cn);
+      continue;
+    }
     /* the name each is spelled from, a replaced version's with its number
        (`f#redef1` meets a method `f_redef1`): renaming `f` would not move it */
     char *nb = mc_version_name(&c->scopes[b]), *na = NULL;
@@ -7557,21 +7621,10 @@ int scope_uses_ivars(Compiler *c, int mi) {
   return 0;
 }
 
-int scope_toplevel_included(Compiler *c, int s) {
-  if (s < 0 || s >= c->nscopes) return 0;
-  Scope *sc = &c->scopes[s];
-  if (sc->is_cmethod || sc->class_id < 0) return 0;
-  for (int i = 0; i < c->ntoplevel_includes; i++)
-    if (c->toplevel_includes[i] == sc->class_id) return 1;
-  return 0;
-}
-
 int scope_has_callable_symbol(Compiler *c, int s) {
   if (s < 0 || s >= c->nscopes) return 0;
   Scope *sc = &c->scopes[s];
-  return sc->reachable && !sc->yields &&
-         (!sc->is_transplanted_source || scope_toplevel_included(c, s)) &&
-         !scope_is_shadowed(c, s);
+  return comp_scope_may_run(c, s) && !sc->yields && !scope_is_shadowed(c, s);
 }
 /* What a keyword flag's value says at compile time: 1 for a literal Ruby
    treats as true (true, a number, a String, a Symbol, a container -- any
@@ -7619,6 +7672,8 @@ int eq_family(TyKind t) {
   if (t == TY_RANGE) return 5;
   if (t == TY_FLOAT_RANGE) return 6;
   if (t == TY_STR_RANGE) return 7;
+  if (t == TY_TIME_RANGE) return 8;
+  if (t == TY_OBJ_RANGE) return 9;
   return 0;
 }
 /* Does class index k include program module `mod`, directly or through a
@@ -7702,6 +7757,17 @@ int builtin_reopen_includes_module(Compiler *c, int mod) {
   }
   return 0;
 }
+/* Is class entry `cid` the program's reopening of a builtin module
+   (`module Comparable; def m; end`)? A builtin value (an Integer, a
+   String, an Array) carries no program class id, so an is_a? or a `when`
+   on that entry must also ask the runtime, which knows the builtin
+   classes that include the module. A program's own module of the same
+   leaf name in another module (`Ns::Comparable`) is not one. */
+int class_is_builtin_module_reopen(Compiler *c, int cid) {
+  if (cid < 0 || cid >= c->nclasses || !comp_class_is_module(c, &c->classes[cid])) return 0;
+  const char *qn = class_ruby_name(c, cid);
+  return qn && is_builtin_module_name(qn) && builtin_class_id(qn) != 0;
+}
 int ty_matches_class(Compiler *c, TyKind t, const char *cn, int exact) {
   const char *self_cls = NULL;
   switch (t) {
@@ -7709,7 +7775,7 @@ int ty_matches_class(Compiler *c, TyKind t, const char *cn, int exact) {
   case TY_INT: case TY_BIGINT: self_cls = "Integer"; break;
   case TY_FLOAT: self_cls = "Float"; break;
   case TY_SYMBOL: self_cls = "Symbol"; break;
-  case TY_RANGE: case TY_FLOAT_RANGE: case TY_STR_RANGE: self_cls = "Range"; break;
+  case TY_RANGE: case TY_FLOAT_RANGE: case TY_STR_RANGE: case TY_TIME_RANGE: case TY_OBJ_RANGE: self_cls = "Range"; break;
   case TY_NIL: self_cls = "NilClass"; break;
   case TY_BOOL: self_cls = "Boolean"; break; /* true/false split handled at call site */
   case TY_FIBER: self_cls = "Fiber"; break;
@@ -7741,7 +7807,7 @@ int ty_matches_class(Compiler *c, TyKind t, const char *cn, int exact) {
                                      t == TY_COMPLEX || t == TY_RATIONAL)) return 1;
   if (sp_streq(cn, "Numeric") && (t == TY_INT || t == TY_BIGINT || t == TY_FLOAT ||
                                   t == TY_COMPLEX || t == TY_RATIONAL)) return 1;
-  if (sp_streq(cn, "Enumerable") && (ty_is_array(t) || ty_is_hash(t) || t == TY_RANGE ||
+  if (sp_streq(cn, "Enumerable") && (ty_is_array(t) || ty_is_hash(t) || t == TY_RANGE || t == TY_TIME_RANGE || t == TY_OBJ_RANGE ||
                                      t == TY_ENUMERATOR)) return 1;
   /* a program module the program mixed into this builtin by reopening it */
   if (tmc_prog_module_in_builtin(c, self_cls, cn)) return 1;
@@ -7999,8 +8065,11 @@ void emit_rooted_key_call(Compiler *c, const char *fn, const char *recv,
 }
 
 void emit_main_exit(Buf *b) {
+  /* the helpers stay up through the hooks: a thread a hook starts needs one */
+  if (g_uses_threads) buf_puts(b, "sp_sched_drain_runnable(); ");
+  buf_puts(b, "_sp_main_rc = sp_at_exit_run(0); ");
   if (g_uses_threads) buf_puts(b, "sp_sched_drain(); ");
-  buf_puts(b, "_sp_main_rc = sp_at_exit_run(0); return; }\n");
+  buf_puts(b, "return; }\n");
 }
 
 void emit_retf_return(int eid, int has_retval, Buf *b) {
@@ -8010,6 +8079,9 @@ void emit_retf_return(int eid, int has_retval, Buf *b) {
      go anyway -- a void function's caller cannot read it. Drop it and
      return, which is what the generated code already did in practice. */
   else if (has_retval && g_c_ret_void) buf_printf(b, "if (_retf%d) return;\n", eid);
+  /* (a handle slot's answer is published as it returns: the ensure's reads
+     published others) */
+  else if (has_retval && g_ret_type == TY_STRBUF) buf_printf(b, "if (_retf%d) return sp_strface_pub_h(_retv%d);\n", eid, eid);
   else if (has_retval) buf_printf(b, "if (_retf%d) return _retv%d;\n", eid, eid);
   else if (g_in_proc_body && g_result_var && g_result_poly)
     buf_printf(b, "if (_retf%d) { %s = sp_box_nil(); return 0; }\n", eid, g_result_var);

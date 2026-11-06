@@ -1,0 +1,3 @@
+class DeadCallerCounter
+  def bump: (Integer n) -> Integer
+end

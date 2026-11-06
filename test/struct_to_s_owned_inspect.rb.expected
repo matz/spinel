@@ -1,0 +1,21 @@
+"shown"
+#<struct Shown inspect="shown", n=2>
+#<struct Shown inspect="shown", n=2>
+<#<struct Own a=1>>
+#<struct Own a=1>
+#<struct Own a=<#<struct Own a=5>>>
+dee
+#<data D x=3>
+#<struct Shown inspect="shown", n=2>
+#<struct Shown inspect="shown", n=2>
+#<struct Own a=1>
+#<struct Own a=1>
+#<data D x=3>
+#<data D x=3>
+7
+7
+str
+str
+[shown, <#<struct Own a=1>>, dee, 7, "str"]
+#<struct Self me=self>
+self

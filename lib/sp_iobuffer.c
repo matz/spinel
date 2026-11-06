@@ -1000,10 +1000,19 @@ sp_int sp_IOBuffer_read_io(sp_IOBuffer *b, sp_RbVal io, sp_int length, sp_int of
   if (length == 0) return 0;
   /* what stdio already holds is data the stream has delivered: take it
      first, or a raw read would step over it */
-  size_t pend = sp_io_stdio_buffered(f->fp);
+  if (f->own_buf) {   /* the handle reads into its own buffer: what it holds, or one fill */
+    for (;;) {
+      if (!sp_io_pending(f) && !sp_io_rbuf_fill(f)) return 0;
+      at = iob_io_span(b, &length, offset, 1);   /* the fill can park and raise, as below */
+      size_t pend = sp_io_pending(f), want = (size_t)length < pend ? (size_t)length : pend;
+      size_t got = sp_io_rbuf_take(f, at, want);
+      if (got) return (sp_int)got;   /* else another reader took them first */
+    }
+  }
+  size_t pend = sp_io_pending(f);
   if (pend > 0) {
     size_t want = (size_t)length < pend ? (size_t)length : pend;
-    return (sp_int)SP_SIG_BLOCKING(fread(at, 1, want, f->fp));
+    return (sp_int)sp_io_fread(f, at, want);
   }
   sp_io_wait_readable(f);
   at = iob_io_span(b, &length, offset, 1);   /* the park can raise, never move a locked buffer */

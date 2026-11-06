@@ -1,0 +1,15 @@
+ok
+to stdout
+ends in a newline
+raw to stdout
+a
+b
+ab
+"to a StringIO\nrawc\nd\ncd\n"
+"to its own puts\nrawe\nf\nef\n"
+grown!
+grown!
+narrowed
+narrowed
+NoMethodError
+NoMethodError

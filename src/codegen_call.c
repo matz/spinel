@@ -16024,8 +16024,9 @@ static int emit_new_call_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
     /* File.new is File.open: handled by the File class-method block in the
        later dispatch (#2779). Dir.new likewise (#2821). */
     if (cn && (sp_streq(cn, "File") || sp_streq(cn, "Dir"))) { *out = 0; return 1; }
-    /* TCPServer.new(host, port) / (port); TCPSocket.new(host, port). The
-       handle IS an sp_File with a socket-kind mode label (#2922). */
+    /* TCPServer.new(host, port) / (port); TCPSocket.new(host, port), which
+       connect_timeout: bounds. The handle IS an sp_File with a socket-kind
+       mode label (#2922). */
     if (cn && sp_streq(cn, "TCPServer") && sp_feature_required("socket") && argc >= 1) {
       buf_puts(b, "sp_io_fdopen_sock(sp_net_listen_host(");
       if (argc >= 2) { emit_str_expr(c, argv[0], b); buf_puts(b, ", "); emit_int_expr(c, argv[1], b); }
@@ -16034,6 +16035,7 @@ static int emit_new_call_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
       { *out = 1; return 1; }
     }
     if (cn && sp_streq(cn, "TCPSocket") && sp_feature_required("socket") && argc >= 2) {
+      if (emit_tcp_connect_timeout(c, argc, argv, b)) { *out = 1; return 1; }
       buf_puts(b, "sp_io_fdopen_sock(sp_net_connect(");
       emit_str_expr(c, argv[0], b); buf_puts(b, ", ");
       emit_int_expr(c, argv[1], b);

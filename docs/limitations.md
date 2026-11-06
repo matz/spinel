@@ -521,6 +521,10 @@ still missing, so `ancestors` diverges past `IO`.)
 **Constructors.** `TCPServer.new(port)` / `TCPServer.new(host, port)`,
 `TCPSocket.new(host, port)`, `UDPSocket.new`, `UNIXServer.new(path)`,
 `UNIXSocket.new(path)`. Each class's `.open` without a block is its `.new`.
+`TCPSocket.new(host, port, connect_timeout: seconds)` gives up on a connect
+nothing answers after that long and raises `IO::TimeoutError`, as CRuby does;
+`nil` is no limit. The seconds are one deadline for every address the name
+resolves to, and do not cover the name lookup.
 
 **Methods.** `#accept`, `#addr`, `#peeraddr`, `#local_address`,
 `#remote_address`, `#bind`, `#connect`, `#send`, `#recv`, `#recvfrom`,
@@ -550,8 +554,9 @@ legacy `wait(nil)` raises `TypeError`. An explicit duration overrides the
 handle's duration. Buffered input makes `wait_readable`,
 `wait_priority` and `wait` return `true`. Other readers and buffered stdio writes
 do not use this duration. `readpartial` stays untimed, matching CRuby 4.0.7.
-Socket construction is untimed: setting the duration on a connected handle
-cannot bound its earlier connection attempt.
+Socket construction does not use this duration: setting it on a connected
+handle cannot bound its earlier connection attempt, which `TCPSocket.new`'s
+`connect_timeout:` bounds.
 
 `Socket::` constants (`SOL_SOCKET`, `SO_REUSEADDR`, `AF_INET`, `SOCK_DGRAM`,
 `SHUT_RDWR`, `TCP_NODELAY`, ...) resolve at run time from the system headers,

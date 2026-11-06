@@ -1707,6 +1707,25 @@ void emit_sock_family_arg(Compiler *c, int arg, int is_family, Buf *b) {
   buf_printf(b, ", %d)", is_family);
 }
 
+/* TCPSocket.new(host, port, connect_timeout: t): the connect that gives up
+   after t seconds. Host, port and t are evaluated once each, in the order
+   CRuby evaluates the arguments. t goes through its box: nil is no limit,
+   and anything else converts as a time interval does (a negative number,
+   or a value that is not a number, raises as CRuby's does). Returns 0 for
+   a call without the keyword, which emits nothing. */
+int emit_tcp_connect_timeout(Compiler *c, int argc, const int *argv, Buf *b) {
+  int kwh = argc >= 3 ? nt_argv_kwh(c->nt, argv, argc) : -1;
+  int tv = kwh >= 0 ? struct_kwarg_value(c, kwh, "connect_timeout") : -1;
+  if (tv < 0) return 0;
+  int th = ++g_tmp, tp = ++g_tmp, tt = ++g_tmp;
+  buf_printf(b, "({ const char *_t%d = ", th); emit_str_expr(c, argv[0], b);
+  buf_printf(b, "; SP_GC_ROOT_STR(_t%d); sp_int _t%d = ", th, tp); emit_int_expr(c, argv[1], b);
+  buf_printf(b, "; sp_RbVal _t%d = ", tt); emit_boxed(c, tv, b);
+  buf_printf(b, "; sp_sock_tcp_connect_timeout(_t%d, _t%d, _t%d.tag == SP_TAG_NIL ? -1.0 : sp_io_wait_interval(_t%d)); })",
+             th, tp, tt, tt);
+  return 1;
+}
+
 int emit_call_builtin_cmethod_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc, const int *argv) {
   /* Thread class methods: Thread.current / Thread.pass (recv is the Thread
      constant). Handled before the Class.new dispatch since they are not `new`. */

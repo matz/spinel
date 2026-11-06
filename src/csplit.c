@@ -291,6 +291,9 @@ static size_t trim_trailing_attrs(const char *t, size_t st, size_t en) {
   for (size_t i = st; i < en; ) {
     char ch = t[i];
     if (ch == '"' || ch == '\'') { i = skip_lit(t, en, i); keep = i; continue; }
+    /* a directive line inside the declaration (a #pragma that a _Pragma in
+       a macro left between `}` and `;`, SLIST_HEAD in the macOS 27 SDK) */
+    if (ch == '#') { while (i < en && t[i] != '\n') i++; continue; }
     if (!is_idch(ch)) {
       i++;
       if (ch != ' ' && ch != '\n' && ch != '\t' && ch != '\r') keep = i;
@@ -528,6 +531,9 @@ static int cs_lex(const char *t, size_t n, Item **items, int *nitems, UnitPragma
   while (i < n && ok) {
     while (i < n && (t[i] == ' ' || t[i] == '\n' || t[i] == '\t' || t[i] == '\r')) i++;
     if (i >= n) break;
+    /* an empty declaration declares nothing (a macro that expands to
+       nothing before its `;`, sys/socket.h in the macOS 27 SDK) */
+    if (t[i] == ';') { i++; continue; }
     if (nit == cap) { cap = cap ? cap * 2 : 4096; it = realloc(it, sizeof *it * (size_t)cap); }
     Item *x = &it[nit];
     memset(x, 0, sizeof *x);

@@ -15160,14 +15160,16 @@ static int bi_def_visibility(const NodeTable *nt, int st) {
 /* the receiverless calls a body copied for a method of the class or
    module cls may make that are NOT methods of the receiver: Kernel's
    functions that the receiver does not answer itself (bi_receiver_answers),
-   and the public methods of Object. In a copy of the program's own method
-   (own; not a builtins/ body), a private Kernel name the program defines on
-   the receiver's chain is its method, which CRuby's lookup finds through
-   self ahead of Kernel's function. */
+   and, in a builtins/ body, the public methods of Object. In a copy of the
+   program's own method (own), a public method of Object is the receiver's
+   (`to_s + "!"` in `module Comparable` answers "3!" for 3, not main's
+   to_s), and a private Kernel name the program defines on the receiver's
+   chain is its method, which CRuby's lookup finds through self ahead of
+   Kernel's function. */
 static int bi_keeps_receiverless(const NodeTable *nt, const char *cls, int own, const char *nm) {
   if (is_enum_helper_name(nm)) return 1;
   if (!object_instance_method_name(nm)) return 0;
-  if (object_public_method_name(nm)) return 1;
+  if (object_public_method_name(nm)) return !own;
   if (own && own_chain_defines(nt, cls, nm)) return 0;
   return !bi_receiver_answers(cls, nm);
 }
@@ -17834,8 +17836,8 @@ static int bx_recv_concrete(int bx, TyKind rt) {
 
 /* Does the copy read its receiver only as `__self`? An instance variable
    in it is one slot for every receiver, where CRuby keeps one per String,
-   and a call with no receiver goes to main, where CRuby sends it to the
-   String (`to_s + "!"`). A call to another of the container's methods
+   and a call left with no receiver (bi_keeps_receiverless) goes to main,
+   where CRuby sends it to the String. A call to another of the container's methods
    (bx_copy) or a Kernel function that ignores self is fine. Kept on the
    copy (bx_self_free: 1 yes, 2 no). */
 static int bx_copy_self_free(Compiler *c, int copy) {

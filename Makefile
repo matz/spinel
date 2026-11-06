@@ -5053,6 +5053,10 @@ infer-test: $(SPINEL) $(SP_RT_LIB)
 	grep -q 'sp_PolyArray \* lv_ia = ' "$$tmp/iow.c" || { echo "infer-test: FAIL (an Integer Array written a[i] /= <Float> must widen)"; ok=0; }; \
 	$(SPINEL) test/infer/float_elem_fast_paths.rb -c --no-line-map -o "$$tmp/fefp.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (float_elem_fast_paths: -c)"; ok=0; }; \
 	grep -q '__typeof__(4LL) _t[0-9]* = 4LL; if (SP_LIKELY(_hcw' "$$tmp/fefp.c" || { echo "infer-test: FAIL (a[i] += <constant> on a Float array missed the in-place fold)"; ok=0; }; \
+	$(SPINEL) test/const_literal_read.rb -c --no-line-map -o "$$tmp/clr.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (const_literal_read: -c)"; ok=0; }; \
+	grep -q 'sp_int_mul(lv_k, 8LL)' "$$tmp/clr.c" || { echo "infer-test: FAIL (a loop's read of a constant bound to a literal loaded its global)"; ok=0; }; \
+	! grep -wE 'cst_(W|SCALE|NEG)' "$$tmp/clr.c" | grep -qvE '^static |^ *cst_(W|SCALE|NEG) = ' || { echo "infer-test: FAIL (an arithmetic read of a constant bound to a literal loaded its global)"; ok=0; }; \
+	grep -q 'cst_SIZE__set ? (void)0 : sp_raise_cls([^)]*)), 16LL' "$$tmp/clr.c" || { echo "infer-test: FAIL (a flagged read of a literal constant lost its presence test)"; ok=0; }; \
 	grep -q 'sp_ofloat_val(({ sp_int _t[0-9]* = lv_i; .*sp_FloatArray_oget(lv_a, ' "$$tmp/fefp.c" && ! grep -q 'SP_FLOAT_NIL_CK(' "$$tmp/fefp.c" || { echo "infer-test: FAIL (a Float array element in a binary + - * / took the up-front nil check instead of the nil-free read)"; ok=0; }; \
 	grep -q 'sp_ofloat_cmp_opnd(sp_FloatArray_oget(lv_a, ' "$$tmp/fefp.c" && ! grep -q 'SP_FLOAT_NIL_CMP_CK(' "$$tmp/fefp.c" || { echo "infer-test: FAIL (a Float array element in a comparison took the up-front nil check of both operands instead of the nil-free read)"; ok=0; }; \
 	$(SPINEL) test/infer/object_array_map.rb -c --no-line-map -o "$$tmp/oam.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (object_array_map: -c)"; ok=0; }; \

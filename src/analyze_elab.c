@@ -4753,7 +4753,10 @@ static void lr_rta_node(LrRta *t, int id) {
       else lr_rta_call(t, nt_str(nt, d, "name"), RQ_INST | RQ_CLASS);
       return;
     case NK_DefNode:
-      if (t->r->urun[id] == 0) lr_rta_unit(t, id);   /* a def the record did not record: from here */
+      /* a def the record did not record: from here; and a C extension's
+         dispatch stub, the way its C code calls the program (a method's,
+         an allocator's), which it may from the extension's load on */
+      if (t->r->urun[id] == 0 || nt_int(nt, id, "cext_stub", 0)) lr_rta_unit(t, id);
       /* fallthrough */
     case NK_AliasMethodNode:
       lr_rta_call(t, "method_added", RQ_INST | RQ_CLASS);

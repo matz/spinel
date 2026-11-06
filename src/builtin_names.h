@@ -60,7 +60,7 @@ int is_each_name(const char *n); /* each */
 int is_each_entry(const char *n); /* each_entry */
 int is_find_index(const char *n); /* find_index */
 int is_range_member_walk(const char *n); /* each each_entry step: a Range's block walks of its members */
-int is_stop_walk(const char *n); /* find detect take_while find_index each_with_index: walks that stop at the block's answer */
+int is_stop_walk(const char *n); /* find detect take_while find_index each_with_index any? all? none? one?: walks that stop at the block's answer */
 int is_each_walk(const char *n);      /* each each_entry reverse_each */
 int is_index_query(const char *n);    /* find_index index rindex */
 int is_itself_name(const char *n);    /* itself */

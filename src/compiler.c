@@ -3565,8 +3565,16 @@ int comp_enum_answers_first(Compiler *c, int cid, const char *name) {
 int comp_comparable_answers_first(Compiler *c, int cid, const char *name) {
   return mixin_answers_first(c, cid, name, 1);
 }
+/* Enumerable reaches class cid through it or a superclass: a subclass of a
+   class that includes it (Journey's Cat < Binary < Node) answers its
+   methods as the includer does. */
 int comp_enum_reaches(Compiler *c, int cid) {
-  return cid >= 0 && cid < c->nclasses && mixin_reaches(c, cid, 0);
+  int n = 0;
+  for (int k = cid; k >= 0 && k < c->nclasses && n < c->nclasses; k = c->classes[k].parent, n++) {
+    if (mixin_reaches(c, k, 0)) return 1;
+    if (k == c->classes[k].parent) break;
+  }
+  return 0;
 }
 /* Enumerable's methods are behind class `cid`: Enumerable is among its
    ancestors (itself or a superclass includes or prepends it), or an ancestor

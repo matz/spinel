@@ -14136,6 +14136,18 @@ static void emit_obj_cls_name_rt(Buf *b) {
   buf_puts(b, "static const char *sp_obj_cls_name_rt(int cls_id) {\n"
               "  sp_Class _c = {cls_id}; return sp_class_to_s(_c);\n}\n");
 }
+/* A #to_s or #inspect that yields has no function of its own, only its
+   proc-form clone: its arm calls that with no block, and renders the box it
+   answers. Answers 1 when the method yields, whether or not an arm was
+   written (a dead clone leaves the object default). */
+static int emit_display_yield_arm(Compiler *c, int cid, int mi, int def, int by_value, Buf *b) {
+  if (mi < 0 || !c->scopes[mi].yields) return 0;
+  int pf = scope_proc_form_of(c, mi);
+  if (pf >= 0 && proc_form_live(c, pf) && c->scopes[mi].nparams == 0)
+    buf_printf(b, "    case %d: return sp_poly_to_s(%s(%s(sp_%s %s)p, NULL));\n", cid, mc_method(c, &c->scopes[pf]),
+               by_value ? "*" : "", c->classes[def].c_name, by_value ? "*" : "*");
+  return 1;
+}
 static void emit_obj_inspect_dispatch(Compiler *c, Buf *b) {
   /* Forward-declare the user to_s/inspect methods the switches dispatch to --
      the switch bodies are emitted ahead of the method definitions. */
@@ -14153,14 +14165,15 @@ static void emit_obj_inspect_dispatch(Compiler *c, Buf *b) {
       TyKind fret = fmi >= 0 ? (TyKind)c->scopes[fmi].ret : TY_UNKNOWN;
       int fstrsub = m == 0 && !is_val && obj_str_ret_strsub(c, i, 0);
       if (fmi < 0 || !c->scopes[fmi].reachable || (fret != TY_STRING && !fstrsub) ||
-          c->scopes[fmi].nparams != 0 || fdef != i) continue;
+          c->scopes[fmi].nparams != 0 || fdef != i || c->scopes[fmi].yields) continue;
       /* a debug (-g) build gives user methods external linkage (see
          emit_method_signature); this forward decl must match it */
       if (fstrsub) buf_printf(b, "%ssp_%s *", g_debug ? "" : "static ", c->classes[ty_object_class(fret)].c_name);
       else buf_printf(b, "%sconst char *", g_debug ? "" : "static ");
-      buf_printf(b, "%s(sp_%s %sself);\n",
+      /* (with the &blk the definition takes, which the arms pass as NULL) */
+      buf_printf(b, "%s(sp_%s %sself%s);\n",
                  mc_method(c, &c->scopes[fmi]), c->classes[fdef].c_name,
-                 is_val ? "" : "*");
+                 is_val ? "" : "*", bridge_has_blk(c, fmi) ? ", sp_Proc *const" : "");
     }
   }
   /* user #to_s dispatcher: only classes defining one get an arm; NULL means
@@ -14197,12 +14210,14 @@ static void emit_obj_inspect_dispatch(Compiler *c, Buf *b) {
        Skipping value types sent `puts obj` / "#{obj}" to the #<A:0x...>
        default past the user's #to_s. */
     if (comp_ty_value_obj(c, ty_object(i))) {
+      if (tdef == i && emit_display_yield_arm(c, i, tmi, tdef, 1, b)) continue;
       if (tsok && tdef == i)
         buf_printf(b, "    case %d: return %s%s(*(sp_%s *)p%s)%s;\n",
                    i, tspoly ? "sp_poly_to_s(" : "", mc_method(c, &c->scopes[tmi]), tci->c_name,
                    bridge_blk_arg(c, tmi), tspoly ? ")" : "");
       continue;
     }
+    if (tmi >= 0 && c->scopes[tmi].reachable && emit_display_yield_arm(c, i, tmi, tdef, 0, b)) continue;
     if (tsok) {
       buf_printf(b, "    case %d: return %s%s((sp_%s *)p%s)%s;\n",
                  i, tspoly ? "sp_poly_to_s(" : "", mc_method(c, &c->scopes[tmi]),
@@ -14305,6 +14320,7 @@ static void emit_obj_inspect_dispatch(Compiler *c, Buf *b) {
       int vdef = -1;
       int vmi = display_method_scope(c, i, 1, &vdef);
       int vpoly = vmi >= 0 && c->scopes[vmi].ret == TY_POLY;
+      if (vdef == i && emit_display_yield_arm(c, i, vmi, vdef, 1, b)) continue;
       if (vmi >= 0 && vdef == i && c->scopes[vmi].reachable &&
           (c->scopes[vmi].ret == TY_STRING || vpoly) && c->scopes[vmi].nparams == 0)
         buf_printf(b, "    case %d: return %s%s(*(sp_%s *)p%s)%s;\n",
@@ -14321,6 +14337,7 @@ static void emit_obj_inspect_dispatch(Compiler *c, Buf *b) {
     int uimi = comp_class_is_module(c, ci) ? -1 : display_method_scope(c, i, 1, &uidef);
     /* ...also when it answers the String through a boxed value */
     int uipoly = uimi >= 0 && c->scopes[uimi].ret == TY_POLY;
+    if (uimi >= 0 && c->scopes[uimi].reachable && emit_display_yield_arm(c, i, uimi, uidef, 0, b)) continue;
     if (uimi >= 0 && c->scopes[uimi].reachable && (c->scopes[uimi].ret == TY_STRING || uipoly) &&
         c->scopes[uimi].nparams == 0) {
       buf_printf(b, "    case %d: return %s%s((sp_%s *)p%s)%s;\n",

@@ -35834,8 +35834,12 @@ int make_yield_proc_forms(Compiler *c) {
     /* (a method_missing Method's target is wanted by its captures' name,
        desugar_missing_method_obj) */
     const char *bsym = src->def_node >= 0 ? nt_str(nt, src->def_node, "bam_sym") : NULL;
-    if (src->class_id >= 0 && !shadow_clone && !exc_init && !pf_wanted(c, bsym ? bsym : comp_scope_user_name(src)) && !pf_in_class_dispatch(c, src) &&
-        !(src->ctor_cycle && ctor_graph_init(c, s)))
+    /* a #to_s or #inspect the runtime's display dispatch reaches for a boxed
+       object (string interpolation, puts, p of a container) */
+    int display = src->class_id >= 0 && !src->is_cmethod && src->nparams == 0 &&
+                  (sp_streq(src->name, "to_s") || sp_streq(src->name, "inspect"));
+    if (src->class_id >= 0 && !shadow_clone && !exc_init && !display && !pf_wanted(c, bsym ? bsym : comp_scope_user_name(src)) &&
+        !pf_in_class_dispatch(c, src) && !(src->ctor_cycle && ctor_graph_init(c, s)))
       continue;
     /* A method the program reopens has two definitions in the scope table
        and the last one wins (comp_method_in_class): only that one gets the

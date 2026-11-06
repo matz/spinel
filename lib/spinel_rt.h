@@ -10087,7 +10087,8 @@ static int _sp_poly_cmp_rec(const void *pa, const void *pb) {
   sp_bool ok = FALSE;
   sp_int r = sp_poly_order_cmp(*(const sp_RbVal *)pa, *(const sp_RbVal *)pb, &ok);
   if (!ok) { _sp_sort_incomparable = 1; _sp_sort_inc_a = *(const sp_RbVal *)pa; _sp_sort_inc_b = *(const sp_RbVal *)pb; return 0; }
-  return (int)r;
+  /* the sign only: a <=> answer of 2**32 must not turn into 0 as an int */
+  return (r > 0) - (r < 0);
 }
 /* Bottom-up merge sort over boxed elements. libc qsort visits pairs in an
    implementation-defined order, so which pair gets recorded as incomparable

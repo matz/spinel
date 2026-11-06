@@ -1,0 +1,4 @@
+[{"host" => "x", "accept" => "ab"}, "accept", 3, String]
+[{"cookie" => "c=1"}, "cookie", 1, Buf]
+["q\n", "r\n"]
+:plain

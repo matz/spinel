@@ -298,7 +298,8 @@ const char *sp_sock_unpack_sockaddr_un(const char *sa);
 sp_File *sp_sock_new(sp_int domain, sp_int type, sp_int proto);
 sp_PolyArray *sp_sock_tcp_server_sockets(const char *host, sp_int port);
 sp_File *sp_sock_for_fd(sp_int fd, sp_int kind);
-sp_File *sp_sock_pair_end(sp_int domain, sp_int type, sp_int proto, sp_int which);
+void sp_sock_socketpair(sp_int domain, sp_int type, sp_int proto, int fds[2]);
+sp_File *sp_sock_pair_handle(int fd, sp_int is_unix);
 sp_File *sp_sock_unix_server(const char *path);
 sp_File *sp_sock_unix_connect(const char *path);
 /* Socket.unix(path) / Socket.tcp(host, port): the connection as a Socket */

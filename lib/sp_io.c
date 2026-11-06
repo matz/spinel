@@ -1623,18 +1623,19 @@ sp_File *sp_sock_for_fd(sp_int fd, sp_int kind) {
                   kind == 5 ? SPL("unix") : SPL("socket");
   return sp_io_fdopen_sock(d, k);
 }
-/* Socket.pair / Socket.socketpair -> the two connected ends. */
-sp_File *sp_sock_pair_end(sp_int domain, sp_int type, sp_int proto, sp_int which) {
+/* The two connected descriptors of a socket pair, into the caller's fds:
+   each call keeps its own, so two threads making pairs at once cannot
+   hand each other an end. */
+void sp_sock_socketpair(sp_int domain, sp_int type, sp_int proto, int fds[2]) {
   extern int sp_net_socketpair(int domain, int type, int protocol, int fds[2]);
-  static int cached[2] = { -1, -1 };
-  if (which == 0) {
-    if (sp_net_socketpair((int)domain, (int)type, (int)proto, cached) != 0)
-      sp_file_raise_errno("socketpair", "");
-  }
-  int fd = cached[which == 0 ? 0 : 1];
-  if (fd < 0) sp_raise_cls("IOError", "socketpair");
-  (void)domain; (void)type;
-  return sp_io_fdopen_sock(fd, SPL("socket"));
+  if (sp_net_socketpair((int)domain, (int)type, (int)proto, fds) != 0)
+    sp_file_raise_errno("socketpair", "");
+}
+
+/* One end of a socket pair as a handle: a UNIXSocket for UNIXSocket.pair
+   (is_unix set), a Socket for Socket.pair. */
+sp_File *sp_sock_pair_handle(int fd, sp_int is_unix) {
+  return sp_io_fdopen_sock(fd, is_unix ? SPL("unix") : SPL("socket"));
 }
 
 /* A family or socket type named by a String or Symbol, with or without its

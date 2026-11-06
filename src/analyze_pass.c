@@ -4673,10 +4673,8 @@ static int infer_write_multi_assign(Compiler *c, const NodeTable *nt) {
                         ? nt_str(nt, vrecv, "name") : NULL;
       int is_io_pair = vnm && vcn &&
         ((sp_streq(vcn, "IO") && sp_streq(vnm, "pipe")) ||
-         (sp_streq(vcn, "Socket") &&
+         ((sp_streq(vcn, "Socket") || sp_streq(vcn, "UNIXSocket")) &&
           (is_socket_pair_alias(vnm))));
-      /* UNIXSocket.pair is deliberately absent: the call itself has no arm, so
-         naming it here would claim a typing for something that cannot compile. */
       if (is_io_pair) {
         for (int i = 0; i < 2; i++) {
           const char *lty_io = nt_type(nt, lefts[i]) ? nt_type(nt, lefts[i]) : "";

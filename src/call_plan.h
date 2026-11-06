@@ -93,6 +93,10 @@ int cplan_super_chain_mi(Compiler *c, int id, Scope *s, int par, const char *nam
 /* ...and the method `super` in s reaches (its prepend chain's next, else
    that), *at the class it is found from */
 int cplan_super_target(Compiler *c, int id, Scope *s, int *at);
+/* ...and the methods a super in s that no call stands for may run, into
+   to[VER_MAX_ARMS]: that one, or each version a layer of a mixin's copies
+   holds below a later one. How many, 0 for none */
+int cplan_super_runs(Compiler *c, Scope *s, int *to);
 /* A conversion performed by a helper, separately from the enclosing call. */
 CallPlan cplan_conversion(Compiler *c, int ci, const char *name);
 CallPlan cplan_method_call(Compiler *c, int id);

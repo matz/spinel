@@ -2270,10 +2270,12 @@ int a_block_is_lifted(Compiler *c, int id) {
      parent's clone (a constructor cycle's subclass, mark_ctor_cycles) --
      hands it the block as a proc (emit_super_block_arg) */
   if (nt_kind(nt, id) == NK_SuperNode || nt_kind(nt, id) == NK_ForwardingSuperNode) {
-    int blk = nt_ref(nt, id, "block"), s = c->nscope[id], at;
+    int blk = nt_ref(nt, id, "block"), s = c->nscope[id], to[VER_MAX_ARMS], lifted = 0;
     if (nt_kind(nt, blk) != NK_BlockNode || s < 0 || s >= c->nscopes || c->scopes[s].class_id < 0) return 0;
-    int t = cplan_super_target(c, -1, &c->scopes[s], &at);
-    return t >= 0 && c->scopes[t].blk_param && c->scopes[t].blk_param[0] && !c->scopes[t].yields;
+    /* (any method the super may run: cplan_super_runs) */
+    for (int k = 0, n = cplan_super_runs(c, &c->scopes[s], to); k < n; k++)
+      lifted |= c->scopes[to[k]].blk_param && c->scopes[to[k]].blk_param[0] && !c->scopes[to[k]].yields;
+    return lifted;
   }
   if (ty_k != NK_CallNode) return 0;
   int blk = nt_ref(nt, id, "block");
@@ -45774,7 +45776,7 @@ static int ctor_graph_target(Compiler *c, int id) {
       if (ty_is_object(rt)) t = call_target(c, id, ty_object_class(rt), name, 0, NULL);
     }
   }
-  else t = cplan_super_target(c, -1, &c->scopes[c->nscope[id]], &at);
+  else t = cplan_super_target(c, id, &c->scopes[c->nscope[id]], &at);
   return ctor_graph_node(c, t) ? t : -1;
 }
 
@@ -50239,8 +50241,10 @@ static void an_phase_class_structure(Compiler *c) {
         for (int i = 0; i < ns; i++) {
           Scope *s = &c->scopes[i];
           if (s->yields || !has_super[i] || s->class_id < 0 || !s->name) continue;
-          int at, mi = cplan_super_target(c, -1, s, &at);
-          if (mi >= 0 && mi < ns && c->scopes[mi].yields) { s->yields = 1; changed = 1; }
+          /* (any method the super may run: cplan_super_runs) */
+          int to[VER_MAX_ARMS], y = 0;
+          for (int k = 0, n = cplan_super_runs(c, s, to); k < n; k++) y |= to[k] < ns && c->scopes[to[k]].yields;
+          if (y) { s->yields = 1; changed = 1; }
         }
         if (!changed) break;
       }
@@ -50265,9 +50269,12 @@ static void an_phase_class_structure(Compiler *c) {
           for (int i = 0; i < ns; i++) {
             Scope *s = &c->scopes[i];
             if (s->yields || s->blk_param || !bare_super[i] || s->class_id < 0 || !s->name) continue;
-            int at, mi = cplan_super_target(c, -1, s, &at);
-            Scope *pm = mi >= 0 && mi < ns ? &c->scopes[mi] : NULL;
-            if (!(pm ? pm->blk_param && pm->blk_param[0] && !pm->yields : super_new_init_keeps_block(c, s))) continue;
+            int to[VER_MAX_ARMS], n = cplan_super_runs(c, s, to), keeps = 0;
+            for (int k = 0; k < n; k++) {
+              const Scope *pm = to[k] < ns ? &c->scopes[to[k]] : NULL;
+              keeps |= pm && pm->blk_param && pm->blk_param[0] && !pm->yields;
+            }
+            if (!(n ? keeps : super_new_init_keeps_block(c, s))) continue;
             s->blk_param = strdup("__sblk__");
             LocalVar *sblk = scope_local_intern(s, s->blk_param);
             if (sblk) { lv_set_type(sblk, TY_PROC); sblk->is_param = 1; }

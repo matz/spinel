@@ -20428,13 +20428,15 @@ static int cr_call_argc(const NodeTable *nt, int id) {
    (cplan_emitted_targets), whatever its arity: its code is what the call
    runs, or what its dispatch arms name, and a call that passes the wrong
    count raises ArgumentError there at run time. A replaced version or an
-   entry is reached by the calls bound to it (cr_collect_versions). Answers
-   the number of targets, or CPT_UNKNOWN where the plan cannot list them. */
-static int cr_add_targets(Compiler *c, int id, char ***out, int *n, int *cap) {
+   entry is reached by the calls bound to it (cr_collect_versions), but a
+   super's entry (sup) by the super: the entry over a layer of versions the
+   call plan binds it to (super_layer_entry). Answers the number of
+   targets, or CPT_UNKNOWN where the plan cannot list them. */
+static int cr_add_targets(Compiler *c, int id, int sup, char ***out, int *n, int *cap) {
   int tg[CPT_MAX], ntg = cplan_emitted_targets(c, id, tg, CPT_MAX);
   for (int i = 0; i < ntg; i++) {
     char m[24];
-    if (c->scopes[tg[i]].replaced || c->scopes[tg[i]].entry != ENTRY_NONE) continue;
+    if (c->scopes[tg[i]].replaced || (c->scopes[tg[i]].entry != ENTRY_NONE && !(sup && c->scopes[tg[i]].entry == ENTRY_DISPATCH))) continue;
     snprintf(m, sizeof m, "\x01%d", tg[i]);
     cr_add_name(out, n, cap, m);
   }
@@ -20448,7 +20450,7 @@ static int cr_add_targets(Compiler *c, int id, char ***out, int *n, int *cap) {
 static const char *cr_count_name(Compiler *c, const NodeTable *nt, int id, const char *mark,
                                  char *buf, size_t cap, char ***out, int *n, int *ncap) {
   int argc = cr_call_argc(nt, id);
-  if (argc < 0 || cr_add_targets(c, id, out, n, ncap) == CPT_UNKNOWN ||
+  if (argc < 0 || cr_add_targets(c, id, 0, out, n, ncap) == CPT_UNKNOWN ||
       snprintf(buf, cap, "\x04%d %s", argc, mark) >= (int)cap) return NULL;
   return buf;
 }
@@ -20664,7 +20666,7 @@ void cr_collect_calls(Compiler *c, const NodeTable *nt, int id,
      name, whatever its arity, is a target */
   if (g_cr_typed && k0 == NK_CallNode && nm && names[0] == nm && !nt_int(nt, id, "dyn_arm", 0) &&
       cplan_cbody_direct(c, id)) {
-    cr_add_targets(c, id, out, n, cap);
+    cr_add_targets(c, id, 0, out, n, cap);
     names[0] = NULL;
   }
   char argc_name[300];
@@ -20675,7 +20677,7 @@ void cr_collect_calls(Compiler *c, const NodeTable *nt, int id,
   for (int j = 0; j < 3; j++) cr_add_name(out, n, cap, names[j]);
   if (!builtin_recv) cr_collect_versions(c, nt, id, out, n, cap);
   /* the method a super reaches is what the plan says (cplan_resolve_super), for the instance and the class side, a module and a prepend alike */
-  if (g_cr_typed && (ty_k == NK_SuperNode || ty_k == NK_ForwardingSuperNode)) cr_add_targets(c, id, out, n, cap);
+  if (g_cr_typed && (ty_k == NK_SuperNode || ty_k == NK_ForwardingSuperNode)) cr_add_targets(c, id, 1, out, n, cap);
   if (k0 == NK_CallNode || nt_implied_possible(nt, id)) cr_collect_implied(c, nt, id, out, n, cap);
   int inner_self = instance_self && k0 != NK_BlockNode && k0 != NK_LambdaNode;
   int nr = nt_num_refs(nt, id);

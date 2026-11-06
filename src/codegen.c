@@ -15258,7 +15258,7 @@ int emit_super_inline(Compiler *c, int id, Buf *b, int indent, int as_expr) {
         fprintf(stderr, "plan-check: cplan-fallback: super-inline node %d %s\n", id, s->name);
       mi = omi; defcls = odef;
     }
-    else if (omi != mi || (!shadow && odef != defcls))
+    else if ((omi != mi && !(shadow && cplan_target_runs(c, mi, omi))) || (!shadow && odef != defcls))
       fprintf(stderr, "plan-check: cplan-conflict: super-inline node %d %s: plan %d/%d, lookup %d/%d\n",
               id, s->name, mi, defcls, omi, odef);
   }
@@ -15905,10 +15905,13 @@ void emit_super(Compiler *c, int id, Buf *b) {
      method's chain is taken below, in the class-method form). */
   const char *shadow = s->is_cmethod ? NULL : comp_super_shadow(c, s);
   if (shadow) {
-    /* The plan's target for the generated shadow in this class. */
+    /* The plan's target for the generated shadow in this class: it, or the
+       entry over a layer of versions under its name (the call plan's
+       super_layer_entry), whose arms run it */
     int smi = super_plan_mi(c, id, s->class_id);
-    if (smi >= 0 && !(c->scopes[smi].class_id == s->class_id && c->scopes[smi].name &&
-                      sp_streq(c->scopes[smi].name, shadow)))
+    if (smi >= 0 && !(c->scopes[smi].class_id == s->class_id &&
+                      (c->scopes[smi].entry == ENTRY_DISPATCH ||
+                       (c->scopes[smi].name && sp_streq(c->scopes[smi].name, shadow)))))
       smi = -1;
     int served = smi >= 0;
     if (g_plan_check && served) cplan_served("super");

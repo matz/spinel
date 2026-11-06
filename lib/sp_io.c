@@ -2135,7 +2135,7 @@ static ssize_t sp_io_read_chunk_timed(sp_File *f, char *buf, size_t count) {
 
 const char *sp_File_read_timed(sp_File *f, sp_int n) {
   SP_GC_ROOT(f);
-  SP_IO_OPEN(f);
+  sp_io_check_readable(f);
   if (n == 0) return sp_str_empty_binary();
   size_t cap = n < 0 ? 8192 : (size_t)n;
   size_t len = 0;
@@ -2212,7 +2212,7 @@ sp_File *sp_sock_accept_nb(sp_File *f, sp_bool exc) {SP_GC_ROOT(f);
    collection waited on it forever and one green thread idle in readpartial
    on a quiet socket froze every other thread's allocation (#4528). */
 const char *sp_File_readpartial_or_nil(sp_File *f, sp_int n) {SP_GC_ROOT(f);
-  SP_IO_OPEN(f);
+  sp_io_check_readable(f);
   if (n < 0) sp_raise_cls("EOFError", "end of file reached");
   if (n == 0) return sp_str_empty_binary();
   sp_io_wait_readable(f);
@@ -2266,7 +2266,7 @@ const char *sp_sock_read_nb(sp_File *f, sp_int len, sp_bool exc, sp_bool is_recv
                                           : sp_sprintf("negative length %lld given", (long long)len));
   if (eof) *eof = 0;
   if (is_recv) sp_sock_nb_prepare(f, "recv_nonblock");
-  else SP_IO_OPEN(f);
+  else sp_io_check_readable(f);
   /* the bytes read are BINARY, as CRuby's read_nonblock and recv answer them */
   if (len <= 0) { char *e = (char *)sp_str_from_bytes("", 0); sp_str_mark_binary(e); return e; }
   char *buf = (char *)malloc((size_t)len);

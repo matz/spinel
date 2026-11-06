@@ -46437,6 +46437,25 @@ static void rewrite_array_subclass_self_call(Compiler *c, int id) {
   if (self >= 0) nt_node_set_ref((NodeTable *)c->nt, id, "receiver", self);
 }
 
+/* Is id inside a block an instance_exec (or the like) runs with a self of
+   its own, within the def that holds it? */
+static int self_rebound_at(Compiler *c, int id) {
+  static const char *const rebinders[] = { "instance_eval", "instance_exec", "class_eval", "class_exec",
+    "module_eval", "module_exec", "define_singleton_method", NULL };
+  const NodeTable *nt = c->nt;
+  int *par = an_parent_map(nt);
+  if (!par) return 1;
+  int hit = 0;
+  for (int n = id, d = 0; n >= 0 && d < 4096 && nt_kind(nt, n) != NK_DefNode; n = par[n], d++) {
+    int p = par[n];
+    if (nt_kind(nt, n) != NK_BlockNode || p < 0 || nt_kind(nt, p) != NK_CallNode || nt_ref(nt, p, "block") != n) continue;
+    const char *nm = nt_str(nt, p, "name");
+    if (nm && str_in(nm, rebinders)) { hit = 1; break; }
+  }
+  free(par);
+  return hit;
+}
+
 /* `X.new(args) { blk }` for an Array subclass none of whose classes defines
    initialize or self.new is Array.new's construction on an instance of X:
    `X.allocate.replace(Array.new(args) { blk })`, and `X.new` is
@@ -46468,8 +46487,11 @@ static void rewrite_array_subclass_new(Compiler *c, int id) {
     int sr = nt_ref(nt, recv, "receiver");
     Scope *s = comp_scope_of(c, id);
     int nd = 0;
+    /* (a `class` the program defines answers what it says, not self's
+       class; ie_class_of is not built yet, as this runs before the fixpoint) */
     if (time_maker && (sr < 0 || nt_kind(nt, sr) == NK_SelfNode) && s && !s->is_cmethod && s->class_id >= 0 &&
-        comp_ary_is_time(c, s->class_id) && (comp_descendants(c, s->class_id, &nd), nd == 0)) {
+        comp_ary_is_time(c, s->class_id) && (comp_descendants(c, s->class_id, &nd), nd == 0) &&
+        comp_method_in_chain(c, s->class_id, "class", NULL) < 0 && !self_rebound_at(c, id)) {
       int kc = arysub_node(c, "ConstantReadNode", id);
       if (kc >= 0) {
         nt_node_set_str((NodeTable *)nt, kc, "name", c->classes[s->class_id].name);
@@ -46756,11 +46778,25 @@ static int rewrite_time_maker_class_value(Compiler *c) {
     if (!(sp_streq(nm, "at") || sp_streq(nm, "now") || sp_streq(nm, "utc") || sp_streq(nm, "gm") ||
           sp_streq(nm, "local") || sp_streq(nm, "mktime"))) continue;
     NodeKind rk = nt_kind(nt, recv);
-    if (rk != NK_LocalVariableReadNode && rk != NK_InstanceVariableReadNode) continue;
+    if (rk != NK_LocalVariableReadNode && rk != NK_InstanceVariableReadNode && rk != NK_CallNode) continue;
     if (infer_type(c, recv) != TY_CLASS || nt_int(nt, id, "tmcv_else", 0)) continue;
     int args = nt_ref(nt, id, "arguments");
     int ncc = tmcv_cands_taking(c, nm, args);
     int base = nt->count;
+    /* a call's Class value (`self.class`, `klass`) is read once, into a
+       local each arm reads: the arms test and use it more than once */
+    int hoist = -1;
+    if (rk == NK_CallNode) {
+      char tname[48]; snprintf(tname, sizeof tname, "__tmcv_%d", id);
+      hoist = tmcv_node(c, "LocalVariableWriteNode", id);
+      int rd = tmcv_node(c, "LocalVariableReadNode", id);
+      if (hoist < 0 || rd < 0) continue;
+      nt_node_set_str(nt, hoist, "name", tname); nt_node_set_int(nt, hoist, "depth", 0);
+      nt_node_set_ref(nt, hoist, "value", recv);
+      nt_node_set_str(nt, rd, "name", tname); nt_node_set_int(nt, rd, "depth", 0);
+      scope_local_intern(comp_scope_of(c, id), tname);
+      recv = rd;
+    }
     int tail;
     if (ncc > 0) {
       /* Not skipped when another class has the class method (a parser
@@ -46806,7 +46842,8 @@ static int rewrite_time_maker_class_value(Compiler *c) {
     }
     long long line = nt_int(nt, id, "node_line", 0), file = nt_int(nt, id, "node_file", 0);
     int body = tmcv_node(c, "StatementsNode", id);
-    nt_node_set_arr(nt, body, "body", &tail, 1);
+    int stmts[2] = { hoist, tail };
+    nt_node_set_arr(nt, body, "body", hoist >= 0 ? stmts : &tail, hoist >= 0 ? 2 : 1);
     nt_node_reset(nt, id, "ParenthesesNode");
     nt_node_set_ref(nt, id, "body", body);
     nt_node_set_int(nt, id, "node_line", line);

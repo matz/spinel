@@ -3222,14 +3222,15 @@ TyKind yield_value_type(Compiler *c, int mi) {
 /* With yield_block_tails_next set, a literal block's `next v` (and a bare
    `next`) is one of its values too: the NextNode ids follow its tail (the
    nested blocks', lambdas', defs' and loops' own `next` excluded). Only the
-   nil question asks for them (nullable_int_value). */
+   nil question asks for them (nullable_int_value). Set to 2, its `break`s
+   too, for a block spliced where the break leaves with the value (instance_exec). */
 int yield_block_tails_next = 0;
 static int ybt_cut;   /* the walk below stopped at its depth cap */
 static int ybt_collect_next(const NodeTable *nt, int id, int *out, int max, int depth) {
   if (depth > 200) ybt_cut = 1;
   if (id < 0 || max <= 0 || depth > 200) return 0;
   NodeKind k = nt_kind(nt, id);
-  if (k == NK_NextNode) { out[0] = id; return 1; }
+  if (k == NK_NextNode || (k == NK_BreakNode && yield_block_tails_next > 1)) { out[0] = id; return 1; }
   if (k == NK_DefNode || k == NK_ClassNode || k == NK_ModuleNode || k == NK_WhileNode ||
       k == NK_UntilNode || k == NK_LambdaNode || k == NK_ForNode || k == NK_BlockNode) return 0;
   int n = 0;

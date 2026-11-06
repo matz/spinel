@@ -37452,6 +37452,27 @@ static int block_jumps_d(const NodeTable *nt, int id, NodeKind k, int **out, int
   }
   return 0;
 }
+/* A `next` or `break` hands on nil: a bare one, or one whose value can be */
+static int jump_value_nil(Compiler *c, int j) {
+  const NodeTable *nt = c->nt;
+  int ja = nt_ref(nt, j, "arguments"), jn = 0;
+  const int *jav = ja >= 0 ? nt_arr(nt, ja, "arguments", &jn) : NULL;
+  return jn == 0 || (jn == 1 && (nt_kind(nt, jav[0]) == NK_NilNode || nullable_int_value(c, jav[0])));
+}
+/* Can a `next` or `break` that leaves block blk hand on nil: a bare one, or
+   one whose value can be nil (a body too deep to walk: it may) */
+static int block_jumps_nil(Compiler *c, int blk) {
+  const NodeTable *nt = c->nt;
+  static const NodeKind ks[2] = { NK_NextNode, NK_BreakNode };
+  int r = 0;
+  for (int i = 0; i < 2 && !r; i++) {
+    int *jv = NULL, n = 0, cap = 0;
+    if (block_jumps_d(nt, nt_ref(nt, blk, "body"), ks[i], &jv, &n, &cap, 0) < 0) r = 1;
+    for (int j = 0; j < n && !r; j++) r = jump_value_nil(c, jv[j]);
+    free(jv);
+  }
+  return r;
+}
 /* Each value a jump of kind k out of block blk hands on is the array's */
 static int elem_slots_jumps(Compiler *c, int blk, NodeKind k, int depth, ElemSlotFn fn, void *ud) {
   const NodeTable *nt = c->nt;
@@ -40014,16 +40035,22 @@ int nullable_int_value(Compiler *c, int v) {
     if (cn && (is_then_alias(cn) || is_instance_eval_family(cn))) {
       int ft = call_block_tail(c, v);
       if (ft >= 0 && (nt_kind(nt, ft) == NK_NilNode || nullable_int_value(c, ft))) return 1;
+      /* or a `next` or `break` that leaves its block */
+      int lb = nt_ref(nt, v, "block");
+      if (lb >= 0 && nt_kind(nt, lb) == NK_BlockNode && block_jumps_nil(c, lb)) return 1;
       /* the method's own block passed on (`&b`): the blocks its callers wrote */
       Scope *fs = ft < 0 && call_forwards_own_block(c, v) ? comp_scope_of(c, v) : NULL;
       if (fs) {
         int tails[64];
-        int sv_ybn = yield_block_tails_next; yield_block_tails_next = 1;
+        /* (their `break`s too: the splice is left with the value) */
+        int sv_ybn = yield_block_tails_next; yield_block_tails_next = is_instance_eval_family(cn) ? 2 : 1;
         int n = yield_block_tails(c, (int)(fs - c->scopes), tails, (int)(sizeof tails / sizeof tails[0]));
         yield_block_tails_next = sv_ybn;
         /* (a full buffer may have left a caller's block out: its nil is kept) */
         if (n >= (int)(sizeof tails / sizeof tails[0])) return 1;
-        for (int i = 0; i < n; i++) if (nt_kind(nt, tails[i]) == NK_NilNode || nullable_int_value(c, tails[i])) return 1;
+        for (int i = 0; i < n; i++)
+          if (nt_kind(nt, tails[i]) == NK_BreakNode ? jump_value_nil(c, tails[i])
+                : nt_kind(nt, tails[i]) == NK_NilNode || nullable_int_value(c, tails[i])) return 1;
       }
     }
     if (rcv0 >= 0 && cn && (is_find_alias(cn)) &&

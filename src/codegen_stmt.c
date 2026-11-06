@@ -22403,15 +22403,23 @@ static void emit_stmt_node(Compiler *c, int id, Buf *b, int indent) {
     if (g_loop_break_var) {
       int bargs = nt_ref(nt, id, "arguments");
       int bvargc = 0; const int *bvargs = bargs >= 0 ? nt_arr(nt, bargs, "arguments", &bvargc) : NULL;
+      /* the instance_exec splice's own slot (emit_call_instance_eval_arms)
+         held as its oint: the value with its nil, a bare `break` the nil */
+      int bo = !g_ie_res_poly && g_ie_next_oint && oint_kind(g_ie_next_ty) && g_loop_break_var == g_ie_next_var;
       if (bvargc > 0) {
         emit_indent(b, indent); buf_printf(b, "%s = ", g_loop_break_var);
         /* a break that leaves a loop read as the handle (emit_strbuf_route) */
         if (c->strbuf_handle_demand[id]) emit_strbuf_handle_of(c, bvargs[0], b);
-        else if (g_ie_res_poly) emit_boxed(c, bvargs[0], b); else emit_expr(c, bvargs[0], b);
+        else if (g_ie_res_poly) emit_boxed(c, bvargs[0], b);
+        else if (bo) emit_oint_expr(c, bvargs[0], g_ie_next_ty, b);
+        else emit_expr(c, bvargs[0], b);
         buf_puts(b, ";\n");
       }
       else if (g_ie_res_poly) {
         emit_indent(b, indent); buf_printf(b, "%s = sp_box_nil();\n", g_loop_break_var);
+      }
+      else if (bo) {
+        emit_indent(b, indent); buf_printf(b, "%s = %s;\n", g_loop_break_var, oint_nil(g_ie_next_ty));
       }
     }
     else {

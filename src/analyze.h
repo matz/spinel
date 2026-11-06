@@ -684,6 +684,11 @@ int elab_body_visibility_at(Compiler *c, int node);
 /* method `name`'s visibility on cls (singleton when sg) at p: SP_VIS_*,
    -1 when not known or not defined */
 int elab_method_vis_at(Compiler *c, int cls, const char *name, int sg, LoadPoint p);
+/* the visibility bit (1 public, 2 protected, 4 private) of main's own
+   method `name` where node runs: a top-level def or alias, a method of
+   Object's own; 0 where main has none there; -1 where the record cannot
+   tell (node in a method body, a def under a condition, an undef) */
+int elab_main_method_vis_at(Compiler *c, int node, const char *name);
 /* ... when no change of it follows: elab_method_vis_at's answer at p, or -1
    where an entry of the name's histories along cls's superclass chain at or
    after p (one in another region too, whose order is not known, and an

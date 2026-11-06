@@ -7715,6 +7715,20 @@ int elab_method_vis_at(Compiler *c, int cls, const char *name, int sg, LoadPoint
   return lr_ready(c, p) ? lr_vis_at(c, cls, name, sg, p) : -1;
 }
 
+/* See analyze.h. */
+int elab_main_method_vis_at(Compiler *c, int node, const char *name) {
+  LoadPoint p = elab_point_of(c, node);
+  const LrDef *d = NULL;
+  if (p.region < 0 || !name) return -1;
+  int at = elab_method_at(c, LR_MAIN, name, 0, p, &d);
+  if (at == ELAB_NO) return d ? -1 : 0;   /* (an undef or a removal: not read here) */
+  if (at != ELAB_YES || !d || (d->kind != LR_DEF && d->kind != LR_ALIAS) ||
+      elab_own_method_at(c, LR_MAIN, name, p) != ELAB_YES)
+    return -1;
+  int v = elab_method_vis_at(c, LR_MAIN, name, 0, p);
+  return v == SP_VIS_PUBLIC ? 1 : v == SP_VIS_PROTECTED ? 2 : v == SP_VIS_PRIVATE ? 4 : -1;
+}
+
 int elab_method_vis_held_from(Compiler *c, int cls, const char *name, int sg, LoadPoint p) {
   int vis = elab_method_vis_at(c, cls, name, sg, p);
   for (int k = cls, n = 0; vis >= 0 && k >= LR_MAIN && n < lr_chain_bound(c); k = lr_super(c, k), n++) {

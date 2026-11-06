@@ -2253,6 +2253,15 @@ static int cplan_capture_gap(Compiler *c, int id) {
   return n < 0;
 }
 /* See call_plan.h. */
+int cplan_builtin_method_vis(Compiler *c, int node, int ci, const char *cls, const char *m, int inherit) {
+  const ClassInfo *ki = ci >= 0 ? &c->classes[ci] : NULL;
+  int bv = ki ? refl_builtin_vis(c, ci, m, inherit) : core_method_vis(cls, m, inherit);
+  /* main's defs are Object's own methods, ahead of its and Kernel's rows */
+  const char *on = ki ? (ki->is_builtin_const && ki->enclosing_class < 0 ? ki->name : NULL) : cls;
+  int mv = bv >= 0 && on && is_object_class_name(on) ? elab_main_method_vis_at(c, node, m) : -1;
+  return mv > 0 ? mv : bv;
+}
+/* See call_plan.h. */
 CplanMissing cplan_dispatch_miss(Compiler *c, int id, int cid) {
   const NodeTable *nt = c->nt;
   const char *name = id >= 0 && nt_kind(nt, id) == NK_CallNode ? nt_str(nt, id, "name") : NULL;

@@ -678,6 +678,16 @@ int cplan_nil_written(int why);
    otherwise; anon may be NULL). Pure. */
 typedef enum { CM_NONE, CM_NAMEERROR, CM_NOMETHOD } CplanMissing;
 int cplan_missing(Compiler *c, int id, char *self_text, size_t cap, int *anon);
+/* The visibility bit (1 public, 2 protected, 4 private) CRuby gives
+   instance method m of a builtin class where reflection call node runs,
+   for a name the program's own methods of the class leave open: of class
+   cls by name when ci < 0 (core_method_vis), of program class ci from the
+   builtin classes and modules in its chain otherwise (refl_builtin_vis);
+   with inherit 0 its own only. For Object itself, main's own method of
+   the name where node runs counts first (elab_main_method_vis_at): a
+   top-level def is Object's. 0 for none; -1 where the rows do not hold
+   the class. */
+int cplan_builtin_method_vis(Compiler *c, int node, int ci, const char *cls, const char *m, int inherit);
 /* The raise of call id's dispatch on self from class cid when cid's chain
    holds no method of its name and only descendants do: the switch's arms
    are theirs, and self of any other class (cid's own instance, a

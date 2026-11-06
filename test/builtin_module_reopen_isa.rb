@@ -34,3 +34,11 @@ module Ns
   def self.check(xs) = xs.map { |x| [x.is_a?(Ns::Comparable), (case x when Ns::Comparable then 1 else 0 end)] }
 end
 p Ns.check([3, "s", Ns::R.new, nil])
+
+# a class value that extends a module matches `when` on it, as is_a? does
+module Mx; end
+class Ex; extend Comparable; end
+class Ey; extend Mx; end
+class Ez; end
+p [Ex, Ey, Ez, 3].map { |x| case x when Comparable then 1 when Mx then 2 else 0 end }
+p [Ex, Ey, Ez, 3].map { |x| [x.is_a?(Comparable), x.is_a?(Mx)] }

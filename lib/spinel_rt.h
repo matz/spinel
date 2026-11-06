@@ -23344,4 +23344,39 @@ static sp_StrPolyHash *sp_StrPolyHash_from_poly_hash(sp_PolyPolyHash *src) {
   return h;
 }
 
+#define SP_LIT_INT(v) { SP_TAG_INT, 0, { .i = (v) } }
+#define SP_LIT_FLT(v) { SP_TAG_FLT, 0, { .f = (v) } }
+#define SP_LIT_BOOL(v) { SP_TAG_BOOL, 0, { .i = (v) } }
+#define SP_LIT_SYM(v) { SP_TAG_SYM, 0, { .i = (sp_int)(v) } }
+#define SP_LIT_NIL { SP_TAG_NIL, 0, { .i = 0 } }
+#define SP_LIT_STR(p) { SP_TAG_STR, 0, { .s = (p) } }
+#define SP_LIT_ARRAY(n) { SP_TAG_OBJ, SP_BUILTIN_POLY_ARRAY, { .i = (n) } }
+#define SP_LIT_HASH(n) { SP_TAG_OBJ, 0, { .i = (n) } }
+static sp_PolyArray *sp_lit_build_array(const sp_RbVal *t, sp_int *at, sp_int n);
+static sp_RbVal sp_lit_build(const sp_RbVal *t, sp_int *at) {
+  sp_RbVal v = t[(*at)++];
+  if (v.tag == SP_TAG_STR) return SP_STR_BOX((char *)v.v.s);
+  if (v.tag == SP_TAG_OBJ) return sp_box_nullable_obj((void *)sp_lit_build_array(t, at, v.v.i), SP_BUILTIN_POLY_ARRAY);
+  return v;
+}
+static sp_PolyArray *sp_lit_build_array(const sp_RbVal *t, sp_int *at, sp_int n) {
+  sp_PolyArray *a = sp_PolyArray_new(); SP_GC_ROOT(a);
+  for (sp_int i = 0; i < n; i++) { sp_RbVal e = sp_lit_build(t, at); sp_PolyArray_push(a, e); }
+  return a;
+}
+static SP_UNUSED sp_PolyArray *sp_lit_poly_array(const sp_RbVal *t) {
+  sp_int at = 1;
+  return sp_lit_build_array(t, &at, t[0].v.i);
+}
+static SP_UNUSED sp_PolyPolyHash *sp_lit_poly_hash(const sp_RbVal *t) {
+  sp_PolyPolyHash *h = sp_PolyPolyHash_new(); SP_GC_ROOT(h);
+  sp_int at = 1;
+  for (sp_int i = 0; i < t[0].v.i; i++) {
+    sp_RbVal k = sp_lit_build(t, &at); SP_GC_ROOT_RBVAL(k);
+    sp_RbVal v = sp_lit_build(t, &at);
+    sp_PolyPolyHash_set(h, k, v);
+  }
+  return h;
+}
+
 #endif /* SP_RUNTIME_H */

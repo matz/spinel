@@ -1570,6 +1570,12 @@ void bp_elem_read(Compiler *c, int block, const char *orig, const char *k, int t
     buf_printf(b, "sp_String_new_shared(sp_StrArray_get(_t%d, _t%d))", ta, ti);
   else if (!str && lv && lv->type == TY_POLY)
     buf_printf(b, "%s(sp_%sArray_oget(_t%d, _t%d))", oint_box(sp_streq(k, "Int") ? TY_INT : TY_FLOAT), k, ta, ti);
+  /* a parameter held boxed (another block widened it) takes the String boxed */
+  else if (str && lv && lv->type == TY_POLY) {
+    char src[64];
+    snprintf(src, sizeof src, "sp_StrArray_get(_t%d, _t%d)", ta, ti);
+    emit_boxed_text(c, TY_STRING, src, b);
+  }
   else buf_printf(b, "sp_%sArray_%s(_t%d, _t%d)", k, bp_slot_oint(c, block, orig, k) ? "oget" : "get", ta, ti);
 }
 #define BP0(c, block) block_param_name((c), (block), 0)

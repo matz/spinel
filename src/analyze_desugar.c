@@ -4550,6 +4550,25 @@ int desugar_env_enum(Compiler *c) {
   return changed;
 }
 
+/* find/detect/take_while/find_index/each_with_index with a block literal and
+   no argument: a walk that stops at the block's answer. Over a Range of
+   objects it rides builtins/enumerable.rb over the Range's own each, so succ
+   runs only up to the member that stops it, and an endless Range works. */
+static int enum_sym_proc_block(const NodeTable *nt, int blk);
+static unsigned char *find_calls_in_param_defaults(const NodeTable *nt, int n0);
+static int obj_range_stop_walk(const NodeTable *nt, int id, const unsigned char *in_default) {
+  const char *nm = nt_str(nt, id, "name");
+  int args = nt_ref(nt, id, "arguments"), an = 0;
+  if (args >= 0) nt_arr(nt, args, "arguments", &an);
+  int blk = nt_ref(nt, id, "block");
+  if (!nm || !is_stop_walk(nm) || an != 0 || blk < 0 || nt_kind(nt, blk) != NK_BlockNode) return 0;
+  /* a find in a parameter default keeps its own emitter (desugar_builtin_enum_calls),
+     and after the fixpoint a `&:m` block takes no copy: both keep the to_a path */
+  if (in_default && in_default[id] && (sp_streq(nm, "find") || sp_streq(nm, "detect"))) return 0;
+  extern int g_enum_late;
+  return !(g_enum_late && enum_sym_proc_block(nt, blk));
+}
+
 /* r.each { } / r.map { } / ... over a Range of the program's objects walk
    the members its to_a lists (sp_orange_to_a, by succ): the Enumerable
    surface is the Array's. The Range's own names (cover?, first, min, ...)
@@ -4564,6 +4583,7 @@ int desugar_obj_range_via_a(Compiler *c) {
     "partition", "chunk_while", "slice_when", "zip", "take", "take_while", "drop",
     "drop_while", "tally", "uniq", "to_set", "sum", "reverse_each", "each_entry", NULL };
   int changed = 0, n0 = nt->count;
+  unsigned char *in_default = NULL; int in_default_done = 0;
   for (int id = 0; id < n0; id++) {
     if (nt_kind(nt, id) != NK_CallNode) continue;
     const char *nm = nt_str(nt, id, "name");
@@ -4571,7 +4591,7 @@ int desugar_obj_range_via_a(Compiler *c) {
     if (!nm || recv < 0 || nt_int(nt, recv, "made_to_a", 0)) continue;
     int hit = 0;
     for (int q = 0; VIA_A[q]; q++) if (sp_streq(nm, VIA_A[q])) { hit = 1; break; }
-    /* count, last(n) and min/max with a block walk it; include? stays cover? */
+    /* count, last(n) and min/max with a block walk it */
     int args = nt_ref(nt, id, "arguments"), an = 0;
     if (args >= 0) nt_arr(nt, args, "arguments", &an);
     int blk = nt_ref(nt, id, "block") >= 0;
@@ -4587,6 +4607,19 @@ int desugar_obj_range_via_a(Compiler *c) {
        Range has none of, is the call's target (as desugar_enumerable_via_to_a) */
     if (an_reopen_owner(c, id, CORE_RANGE) >= 0) continue;
     if (an_enum_prog_method(c, nm) && !builtin_method_known("Range", nm)) continue;
+    /* the walks that stop at the block's answer ride builtins/enumerable.rb
+       over that each (desugar_builtin_enum_calls), so succ runs only up to
+       the member that stops them. detect is find there, as the pre-pass
+       renames it for a receiver it could type */
+    if (!in_default_done) { in_default = find_calls_in_param_defaults(nt, n0); in_default_done = 1; }
+    if (obj_range_stop_walk(nt, id, in_default)) {
+      if (sp_streq(nm, "detect")) {
+        nt_node_set_str(nt, id, "orig_name", "detect");
+        nt_node_set_str(nt, id, "name", "find");
+        changed = 1;
+      }
+      continue;
+    }
     int toa = nt_new_node(nt, "CallNode");
     if (toa < 0) continue;
     nt_node_set_str(nt, toa, "name", "to_a");
@@ -4599,6 +4632,7 @@ int desugar_obj_range_via_a(Compiler *c) {
     nt_node_set_ref(nt, id, "receiver", toa);
     changed = 1;
   }
+  free(in_default);
   return changed;
 }
 
@@ -16953,7 +16987,9 @@ int desugar_builtin_enum_calls(Compiler *c) {
        written with, the one a top-level method a send reaches answers
        (`42.send(:detect)`), or a reopening of the receiver's class; so does
        one an outer each is chained on (`42.send(:detect).each { }`) */
-    if (recv_lacks_enumerable(c, recv) && enum_unrename(nt, id)) {
+    /* (a Range of objects walks its stop walks here: detect stays find) */
+    if (recv_lacks_enumerable(c, recv) && !(rt == TY_OBJ_RANGE && obj_range_stop_walk(nt, id, in_default)) &&
+        enum_unrename(nt, id)) {
       nt_node_set_int(nt, id, "enum_scalar_unrenamed", 1);
       changed = 1;
       continue;
@@ -17098,11 +17134,14 @@ int desugar_builtin_enum_calls(Compiler *c) {
     /* an Array, Hash, Range or Enumerator reopen's own method of the name is
        the call's target, as the call plan takes it (for an Integer Range: a
        Float or String one has no route to the reopen yet) */
-    int reopen_cn = ty_is_array(rt) ? CORE_ARRAY : ty_is_hash(rt) ? CORE_HASH : rt == TY_RANGE ? CORE_RANGE :
+    int reopen_cn = ty_is_array(rt) ? CORE_ARRAY : ty_is_hash(rt) ? CORE_HASH : (rt == TY_RANGE || rt == TY_OBJ_RANGE) ? CORE_RANGE :
                     rt == TY_ENUMERATOR ? CORE_ENUMERATOR : -1;
     if (reopen_cn >= 0 && an_reopen_owner(c, id, reopen_cn) >= 0) continue;
     if (ty_is_array(rt) || ty_is_hash(rt) || rt == TY_RANGE || rt == TY_FLOAT_RANGE ||
         rt == TY_STR_RANGE || (rt == TY_ENUMERATOR && !lazy_driven)) ok = 1;
+    /* a Range of objects: the walks that stop at the block's answer walk its
+       each by succ (desugar_obj_range_via_a leaves them off the member Array) */
+    else if (rt == TY_OBJ_RANGE && obj_range_stop_walk(nt, id, in_default)) ok = 1;
     /* an empty `[]` / `{}` receiver has no type until its use decides one,
        and this is that use */
     else if (rt == TY_UNKNOWN && (nt_kind(nt, recv) == NK_ArrayNode || nt_kind(nt, recv) == NK_HashNode)) ok = 1;

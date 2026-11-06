@@ -21412,6 +21412,12 @@ static int emit_bivar_copy_wrap(Compiler *c, int id, Buf *b) {
   const char *nm = nt_str(nt, id, "name");
   int recv = nt_ref(nt, id, "receiver"), argc = 0;
   if (!c->bivar_table || recv < 0 || !nm || nt_ref(nt, id, "block") >= 0) return 0;
+  /* `x&.dup` whose nil guard is still to come: the guard reads the receiver
+     into a temp it puts ahead of the statement, and held here first, the
+     receiver it read was this wrap's `_tN`, assigned later in the expression
+     (`acronyms[s]&.dup || s.capitalize` copied what the slot held before,
+     the method's own `s`). The guard's re-entry on its temp wraps instead. */
+  if (nt_safe_nav(nt, id) && g_sn_skip != id) return 0;
   call_args(nt, id, &argc);
   Repr rr = repr_of(c, recv), ret_repr = repr_of(c, id);
   TyKind rt = rr.as_ty, ret = ret_repr.as_ty;

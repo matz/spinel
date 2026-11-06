@@ -1551,8 +1551,25 @@ int emit_call_poly_io_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
       }
       /* the same (len, outbuf) rebind the typed arm makes (#3336) */
       else if (sp_streq(name, "readpartial") && argc >= 1) {
+        Buf sh; memset(&sh, 0, sizeof sh);
         if (argc == 2 && emit_io_read_outbuf(c, id, name, "sp_File_readpartial_or_nil", tio, argv, 1, argv[1], 0, b))
           buf_puts(b, "; })");
+        /* a buffer held in a String handle slot -- a local or an instance
+           variable -- is checked for a freeze and read into in place: the
+           handle took sp_str_check_mutable's const char * and the C did not
+           build, and only a local was rebound to the bytes */
+        else if (argc == 2 && strbuf_slot_text(c, argv[1], &sh)) {
+          int tn = ++g_tmp, th = ++g_tmp, tsp = ++g_tmp;
+          buf_printf(b, "sp_int _t%d = ", tn);
+          emit_int_expr(c, argv[0], b);
+          buf_printf(b, "; sp_String *_t%d = %s; SP_GC_ROOT(_t%d); ", th, sh.p, th);
+          /* a frozen literal's handle carries the freeze in its bytes */
+          buf_printf(b, "if (_t%d) { if (sp_String_is_frozen(_t%d)) sp_raise_frozen_str(_t%d->data); "
+                        "sp_str_check_mutable(_t%d->data); } ", th, th, th, th);
+          buf_printf(b, "const char *_t%d = _t%d ? sp_File_readpartial_into(_t%d, _t%d, _t%d)"
+                        " : sp_File_readpartial_or_nil(_t%d, _t%d); ", tsp, th, tio2, tn, th, tio2, tn);
+          buf_printf(b, "if (!_t%d) sp_raise_cls(\"EOFError\", \"end of file reached\"); _t%d; })", tsp, tsp);
+        }
         else {
           const char *sbp = NULL;
           if (argc >= 2 &&
@@ -1567,17 +1584,12 @@ int emit_call_poly_io_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
           emit_int_expr(c, argv[0], b);
           buf_puts(b, ")");
           if (argc >= 2) {
-            { Buf hr; memset(&hr, 0, sizeof hr);
-            /* a buffer that is also appended to is a mutable String handle:
-               replace its contents, where assigning the bytes to the handle
-               did not compile (#7314) */
-            if (sbp && strbuf_slot_text(c, argv[1], &hr)) buf_printf(b, "; sp_String_set_read_bytes(%s, _t%d ? _t%d : sp_str_empty)", hr.p, tsp, tsp);
-            else if (sbp) { buf_puts(b, "; "); emit_local_ref(c, argv[1], sbp, b); buf_printf(b, " = _t%d ? _t%d : sp_str_empty", tsp, tsp); }
-            free(hr.p); }
+            if (sbp) { buf_puts(b, "; "); emit_local_ref(c, argv[1], sbp, b); buf_printf(b, " = _t%d ? _t%d : sp_str_empty", tsp, tsp); }
             buf_printf(b, "; if (!_t%d) sp_raise_cls(\"EOFError\", \"end of file reached\"); _t%d", tsp, tsp);
           }
           buf_puts(b, "; })");
         }
+        free(sh.p);
       }
       else if (is_io_wait(name)) {
         char tr[32]; snprintf(tr, sizeof tr, "_t%d", tio2);

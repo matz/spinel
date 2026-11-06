@@ -80,3 +80,30 @@ pr = proc { @flag }
 p u.fire(&pr)
 p TT.new.fire { @flag = nil }
 p TT.new.fire { 5 }
+
+# a nil caller after more callers than the analysis lists one by one
+class M
+  def many(t, &b) = t.instance_exec(&b)
+end
+t.flag = 3
+m.many(t) { 1 }; m.many(t) { 2 }; m.many(t) { 3 }; m.many(t) { 4 }; m.many(t) { 5 }; m.many(t) { 6 }; m.many(t) { 7 }; m.many(t) { 8 }; m.many(t) { 9 }; m.many(t) { 10 };
+m.many(t) { 11 }; m.many(t) { 12 }; m.many(t) { 13 }; m.many(t) { 14 }; m.many(t) { 15 }; m.many(t) { 16 }; m.many(t) { 17 }; m.many(t) { 18 }; m.many(t) { 19 }; m.many(t) { 20 };
+m.many(t) { 21 }; m.many(t) { 22 }; m.many(t) { 23 }; m.many(t) { 24 }; m.many(t) { 25 }; m.many(t) { 26 }; m.many(t) { 27 }; m.many(t) { 28 }; m.many(t) { 29 }; m.many(t) { 30 };
+m.many(t) { 31 }; m.many(t) { 32 }; m.many(t) { 33 }; m.many(t) { 34 }; m.many(t) { 35 }; m.many(t) { 36 }; m.many(t) { 37 }; m.many(t) { 38 }; m.many(t) { 39 }; m.many(t) { 40 };
+m.many(t) { 41 }; m.many(t) { 42 }; m.many(t) { 43 }; m.many(t) { 44 }; m.many(t) { 45 }; m.many(t) { 46 }; m.many(t) { 47 }; m.many(t) { 48 }; m.many(t) { 49 }; m.many(t) { 50 };
+m.many(t) { 51 }; m.many(t) { 52 }; m.many(t) { 53 }; m.many(t) { 54 }; m.many(t) { 55 }; m.many(t) { 56 }; m.many(t) { 57 }; m.many(t) { 58 }; m.many(t) { 59 }; m.many(t) { 60 };
+m.many(t) { 61 }; m.many(t) { 62 }; m.many(t) { 63 }; m.many(t) { 64 }; m.many(t) { 65 }; m.many(t) { 66 }; m.many(t) { 67 }; m.many(t) { 68 }; m.many(t) { 69 }; m.many(t) { 70 };
+p m.many(t) { @flag = nil }
+
+# a String splice nested in one whose slot holds an Integer's nil
+class U
+  def initialize = (@s = "a")
+end
+uu = U.new
+t.flag = 4
+p(t.instance_exec do
+  x = uu.instance_exec { next nil if @s == "a"; "s" }
+  p x
+  next nil if @flag == 4
+  1
+end)

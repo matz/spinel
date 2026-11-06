@@ -12508,6 +12508,13 @@ void hc_read_len(const char *hd, char *out, size_t cap) {
   if (!strncmp(out, "_hcd", 4)) out[3] = 'r';
 }
 
+/* The write length below the guarded nil-free length (_hcwn) of the Float
+   cache entry whose element pointer is `hd` (_hcdR_E -> _hcwnR_E): 0 while
+   the array is frozen, else _hcn (hc_array_nilfree). */
+static void hc_write_len_nilfree(const char *hd, char *out, size_t cap) {
+  snprintf(out, cap, "_hcwn%s", strncmp(hd, "_hcd", 4) ? hd : hd + 4);
+}
+
 /* The same cache, with a length that is 0 when the array may hold nil
    (_hcn): an index below it reads an element that is no nil. `guard`, when
    it is a Float local the loop does not assign, zeroes that length while
@@ -12861,17 +12868,21 @@ static void hc_close(HcRegion *r, const char *loop, Buf *b, int indent) {
                        r->e[i].kind == HC_IOB ? "uint8_t" : "const char";
       emit_indent(b, indent + 1);
       buf_printf(b, "%s *_hcd%d_%d; sp_int _hcl%d_%d;", et, r->id, i, r->id, i);
-      /* _hcw: a store may write the cached element -- not into a frozen
-         array. _hcr: the nil-free length, below the array's lowest possible
-         nil (SP_*_NILFREE_LEN, its nil_lo): a read below it meets no nil and
+      /* _hcr: the nil-free length, below the array's lowest possible nil
+         (SP_*_NILFREE_LEN, its nil_lo): a read below it meets no nil and
          needs no test of its own, and a store below it has no bit to clear;
          anything at or past it takes the slow path. An array with a nil far
-         out (a gap past its end) keeps the fast path below the gap */
+         out (a gap past its end) keeps the fast path below the gap. _hcw:
+         how many elements a store may write in place, _hcr unless the array
+         is frozen (0), as a buffer's _hcw is: a store tests its index
+         against it alone, where a flag beside the bound was a value the C
+         compiler carried and tested at every store */
       if (r->e[i].kind == HC_INT || r->e[i].kind == HC_FLOAT)
-        buf_printf(b, " int _hcw%d_%d; sp_int _hcr%d_%d;", r->id, i, r->id, i);
+        buf_printf(b, " sp_int _hcw%d_%d; sp_int _hcr%d_%d;", r->id, i, r->id, i);
       /* _hcw of a buffer: how many of its bytes a write may store into */
       if (r->e[i].kind == HC_IOB) buf_printf(b, " sp_int _hcw%d_%d;", r->id, i);
-      if (r->e[i].nf) buf_printf(b, " sp_int _hcn%d_%d;", r->id, i);
+      /* _hcwn: _hcn, unless the array is frozen (0) */
+      if (r->e[i].nf) buf_printf(b, " sp_int _hcn%d_%d; sp_int _hcwn%d_%d;", r->id, i, r->id, i);
       buf_puts(b, "\n");
     }
     buf_printf(b, "#define _SP_HCR%d() ({ ", r->id);
@@ -12884,13 +12895,14 @@ static void hc_close(HcRegion *r, const char *loop, Buf *b, int indent) {
         buf_printf(b, "{ sp_IOBuffer *_b = %s; _hcd%d_%d = sp_iob_view(_b, &_hcl%d_%d); _hcw%d_%d = sp_iob_view_wlen(_b, _hcl%d_%d); } ",
                    rv, r->id, i, r->id, i, r->id, i, r->id, i);
       else {
-        buf_printf(b, "{ sp_%sArray *_a = %s; _hcd%d_%d = _a ? _a->data%s : NULL; _hcl%d_%d = _a ? _a->len : 0; _hcw%d_%d = _a && !_a->frozen; _hcr%d_%d = _a ? SP_%s_NILFREE_LEN(_a) : 0; ",
+        buf_printf(b, "{ sp_%sArray *_a = %s; _hcd%d_%d = _a ? _a->data%s : NULL; _hcl%d_%d = _a ? _a->len : 0; _hcr%d_%d = _a ? SP_%s_NILFREE_LEN(_a) : 0; _hcw%d_%d = _a && !_a->frozen ? _hcr%d_%d : 0; ",
                    r->e[i].kind == HC_INT ? "Int" : "Float", rv, r->id, i,
-                   r->e[i].kind == HC_INT ? " + _a->start" : "", r->id, i, r->id, i, r->id, i,
-                   r->e[i].kind == HC_INT ? "INT" : "FLOAT");
+                   r->e[i].kind == HC_INT ? " + _a->start" : "", r->id, i, r->id, i,
+                   r->e[i].kind == HC_INT ? "INT" : "FLOAT", r->id, i, r->id, i);
         if (r->e[i].nf)
-          buf_printf(b, "_hcn%d_%d = _a%s ? SP_%s_NILFREE_LEN(_a) : 0; ", r->id, i, r->e[i].guard.p ? r->e[i].guard.p : "",
-                     r->e[i].kind == HC_INT ? "INT" : "FLOAT");
+          buf_printf(b, "_hcn%d_%d = _a%s ? SP_%s_NILFREE_LEN(_a) : 0; _hcwn%d_%d = _a && !_a->frozen ? _hcn%d_%d : 0; ",
+                     r->id, i, r->e[i].guard.p ? r->e[i].guard.p : "",
+                     r->e[i].kind == HC_INT ? "INT" : "FLOAT", r->id, i, r->id, i);
         buf_puts(b, "} ");
       }
     }
@@ -25546,11 +25558,11 @@ static int emit_array_mutate_stmt_body(Compiler *c, int id, Buf *b, int indent) 
         (comp_ntype(c, argv[0]) == TY_INT || hc_promoted_int(c, argv[0])) &&
         hc_array(c, recv, 0, hd, hl, hw, sizeof hd)) {
       int tk = ++g_tmp, tv = ++g_tmp;
-      char hr[48], redo[160]; hc_read_len(hd, hr, sizeof hr);
+      char redo[160];
       buf_puts(b, "{ "); emit_store_index(c, argv[0], argv[1], tk, redo, sizeof redo, b);
       buf_printf(b, "; sp_oint _t%d = sp_poly_elem_i(", tv); emit_expr(c, argv[1], b);
-      buf_printf(b, "); if (SP_LIKELY(%s && !_t%d.nil && (unsigned long long)_t%d < (unsigned long long)%s)) %s[_t%d] = _t%d.v;",
-                 hw, tv, tk, hr, hd, tk, tv);
+      buf_printf(b, "); if (SP_LIKELY(!_t%d.nil && (unsigned long long)_t%d < (unsigned long long)%s)) %s[_t%d] = _t%d.v;",
+                 tv, tk, hw, hd, tk, tv);
       buf_printf(b, " else %ssp_IntArray_set_nilable(", redo); emit_expr(c, recv, b);
       buf_printf(b, ", _t%d, _t%d)%s%s; }\n", tk, tv, hc_mark(), *redo ? ")" : "");
       return 1;
@@ -25563,11 +25575,11 @@ static int emit_array_mutate_stmt_body(Compiler *c, int id, Buf *b, int indent) 
         (comp_ntype(c, argv[0]) == TY_INT || hc_promoted_int(c, argv[0])) &&
         hc_array(c, recv, rt == TY_FLOAT_ARRAY, hd, hl, hw, sizeof hd)) {
       int tk = ++g_tmp, tv = ++g_tmp;
-      char hr[48], redo[160]; hc_read_len(hd, hr, sizeof hr);
+      char redo[160];
       buf_puts(b, "{ "); emit_store_index(c, argv[0], argv[1], tk, redo, sizeof redo, b);
       buf_printf(b, "; %s _t%d = ", oint_ctype(et), tv); emit_elem_store_value(c, k, argv[1], b);
-      buf_printf(b, "; if (SP_LIKELY(%s && !_t%d.nil && (unsigned long long)_t%d < (unsigned long long)%s)) %s[_t%d] = _t%d.v;",
-                 hw, tv, tk, hr, hd, tk, tv);
+      buf_printf(b, "; if (SP_LIKELY(!_t%d.nil && (unsigned long long)_t%d < (unsigned long long)%s)) %s[_t%d] = _t%d.v;",
+                 tv, tk, hw, hd, tk, tv);
       buf_printf(b, " else %ssp_%sArray_set_nilable(", redo, k); emit_expr(c, recv, b);
       buf_printf(b, ", _t%d, _t%d)%s%s; }\n", tk, tv, hc_mark(), *redo ? ")" : "");
       return 1;
@@ -25581,9 +25593,8 @@ static int emit_array_mutate_stmt_body(Compiler *c, int id, Buf *b, int indent) 
       char redo[160];
       buf_puts(b, "{ "); emit_store_index(c, argv[0], argv[1], tk, redo, sizeof redo, b);
       buf_printf(b, "; %s _t%d = ", c_type_name(et), tv); emit_expr(c, argv[1], b);
-      /* below the nil-free length: no nil bit to clear */
-      char hr[48]; hc_read_len(hd, hr, sizeof hr);
-      buf_printf(b, "; if (SP_LIKELY(%s && (unsigned long long)_t%d < (unsigned long long)%s)) ", hw, tk, hr);
+      /* below the write length, the nil-free one: no nil bit to clear */
+      buf_printf(b, "; if (SP_LIKELY((unsigned long long)_t%d < (unsigned long long)%s)) ", tk, hw);
       buf_printf(b, "%s[_t%d] = _t%d;", hd, tk, tv);
       buf_printf(b, " else %s", redo);
       buf_printf(b, "sp_%sArray_set(", k);
@@ -26225,9 +26236,8 @@ void emit_index_op_write(Compiler *c, int id, Buf *b, int indent) {
         /* a right-hand side that is a Float local the loop does not
            assign zeroes the nil-free length while it is nil: the fold
            below it then needs no test of its own */
-        if (fnil) hc_array_nilfree(c, recv, -1, hd, hn, sizeof hd);
-        char hr[48]; hc_read_len(hd, hr, sizeof hr);
-        buf_printf(b, "if (SP_LIKELY(%s && (unsigned long long)_t%d < (unsigned long long)%s)) { ", hw, tb, fnil ? hn : hr);
+        if (fnil) { hc_array_nilfree(c, recv, -1, hd, hn, sizeof hd); hc_write_len_nilfree(hd, hn, sizeof hn); }
+        buf_printf(b, "if (SP_LIKELY((unsigned long long)_t%d < (unsigned long long)%s)) { ", tb, fnil ? hn : hw);
         buf_printf(b, "%s *_t%d = &%s[_t%d]; *_t%d = ", c_type_name(et), tp, hd, tb, tp);
       }
       else {

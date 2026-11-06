@@ -1591,6 +1591,17 @@ static void walk_scope_in(Compiler *c, int id, WalkCtx w) {
     NodeKind exk = nt_kind(c->nt, sexpr);
     if (exk == NK_SelfNode) {
       supported = 1;
+      /* inside an instance method, self is whichever instance runs it, and
+         the body's defs are that one object's, which stand here as class
+         methods no call on the object reaches: marked, and a call that
+         would reach one is refused (refuse_self_singleton_calls, #11157) */
+      Scope *es = scope_idx >= 0 ? &c->scopes[scope_idx] : NULL;
+      if (es && es->def_node >= 0 && nt_kind(c->nt, es->def_node) == NK_DefNode && !es->is_cmethod && class_id >= 0) {
+        int sb = nt_ref(c->nt, id, "body"), nsb = 0;
+        const int *sbs = sb >= 0 && nt_kind(c->nt, sb) == NK_StatementsNode ? nt_arr(c->nt, sb, "body", &nsb) : NULL;
+        for (int i = 0; i < nsb; i++)
+          if (nt_kind(c->nt, sbs[i]) == NK_DefNode) nt_node_set_int((NodeTable *)c->nt, sbs[i], "sg_self_in_method", 1);
+      }
     }
     else if (nt_kind(c->nt, sexpr) == NK_ConstantReadNode || nt_kind(c->nt, sexpr) == NK_ConstantPathNode) {
       int ci = singleton_const_class(c, sexpr, class_id);
@@ -3522,9 +3533,11 @@ void register_singleton_defs(Compiler *c) {
           rk != NK_ConstantPathNode && !self_class)
         nt_node_set_int(nt, id, "sg_untraced_refused", 1);
       /* `def self.m` in an instance method of a reopened builtin (String,
-         Array) is the one object's: the walk filed it as a class method, which
-         no call on the object reaches. A user class's instance answers
-         NoMethodError there instead, a known gap. */
+         Array) is the one object's: the walk filed it as a class method,
+         which no call on the object reaches. In a user class's instance
+         method it is marked, and a call that would reach it is refused
+         (refuse_self_singleton_calls, #11157); the def itself compiles,
+         as a method nobody calls does. */
       if (idk == NK_DefNode && rk == NK_SelfNode) {
         int ed = sg_enclosing_def(c, id), es = -1;
         for (int k = 0; ed >= 0 && k < c->nscopes && es < 0; k++) if (c->scopes[k].def_node == ed) es = k;
@@ -3532,6 +3545,8 @@ void register_singleton_defs(Compiler *c) {
         if (eci >= 0 && !c->scopes[es].is_cmethod && c->classes[eci].name &&
             is_builtin_class_name(c->classes[eci].name))
           nt_node_set_int(nt, id, "sg_untraced_refused", 1);
+        else if (eci >= 0 && !c->scopes[es].is_cmethod)
+          nt_node_set_int(nt, id, "sg_self_in_method", 1);
       }
       continue;
     }
@@ -12955,4 +12970,21 @@ void refuse_unreachable_bare_constants(Compiler *c) {
   for (int i = 0; i < b->nstrs; i++) free(b->strs[i]);
   free(b->strs);
   free(b);
+}
+
+/* See analyze_internal.h. */
+void refuse_self_singleton_calls(Compiler *c) {
+  const NodeTable *nt = c->nt;
+  for (int id = comp_kind_first(c, NK_CallNode); id >= 0; id = comp_kind_next(c, id)) {
+    const char *nm = nt_str(nt, id, "name");
+    int recv = nt_ref(nt, id, "receiver"), sc = c->nscope[id], k = -1;
+    if (!nm) continue;
+    if (recv >= 0) { TyKind rt = comp_ntype(c, recv); if (ty_is_object(rt)) k = ty_object_class(rt); }
+    else if (sc >= 0 && c->scopes[sc].class_id >= 0 && !c->scopes[sc].is_cmethod) k = c->scopes[sc].class_id;
+    if (k < 0 || comp_method_in_chain(c, k, nm, NULL) >= 0) continue;
+    int cm = comp_cmethod_in_chain(c, k, nm, NULL);
+    if (cm < 0 || c->scopes[cm].def_node < 0 || !nt_int(nt, c->scopes[cm].def_node, "sg_self_in_method", 0)) continue;
+    unsupported_feature(c, id, "singleton method on self inside an instance method: self is whichever instance runs it, "
+                               "and a compiled class cannot give one object a method of its own");
+  }
 }

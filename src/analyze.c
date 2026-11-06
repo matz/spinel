@@ -56239,6 +56239,7 @@ void analyze_program(Compiler *c) {
   AN_PHASE("cls_facts", an_cls_facts(c));
   double tm_fp = sp_timing_now();
   AN_STEP_V("an_phase_infer_fixpoint", an_phase_infer_fixpoint(c));
+  refuse_self_singleton_calls(c);   /* (on the settled receiver types, #11157) */
   { char ex[64]; snprintf(ex, sizeof ex, " rounds=%d%s", g_fixpoint_rounds, g_fixpoint_capped ? " capped=1" : ""); sp_timing_end(tm_fp, "analysis_fixpoint", ex); }
   an_pass_report();
   an_shadow_report();

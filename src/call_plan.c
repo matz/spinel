@@ -1041,7 +1041,7 @@ static int ct_guard(Compiler *c, int id, int mi, unsigned flags) {
       }
   }
   if (!c->ver_built) return mi;
-  int e = ct_entry_of(c, 1, m->class_id, m->is_cmethod, name, ver_arity(c, id, to, n));
+  int e = ct_entry_of(c, VER_ENTRY_GUARD, m->class_id, m->is_cmethod, name, ver_arity(c, id, to, n));
   return e >= 0 ? e : mi;   /* a later synthesized call uses the general table entry */
 }
 /* The version an entry's arm (or else arm) call is pinned to, -1 for any
@@ -1580,7 +1580,7 @@ static int ct_version_at(Compiler *c, int id, int cls, const char *name, unsigne
     return mi;
   }
   if ((flags & CT_CAPTURE) && p.region < 0 &&
-      (vi = ct_entry_of(c, 0, rcls, sg, name, ver_call_arity(c, id, rcls, sg, name, mi))) >= 0) {
+      (vi = ct_entry_of(c, VER_ENTRY_CHAIN, rcls, sg, name, ver_call_arity(c, id, rcls, sg, name, mi))) >= 0) {
     if (def_class && !(flags & CT_TOP)) *def_class = rcls;
     if (span) *span = (VerSpan){ 2, 0 };
     return vi;
@@ -1604,7 +1604,7 @@ static int ct_version_at(Compiler *c, int id, int cls, const char *name, unsigne
   int cto[VER_MAX_ARMS], cn = 0;
   if (vi < 0 && at == ELAB_UNKNOWN && m.win == ELAB_YES && n != 0 && n != 1 &&
       (n == -1 || !elab_chain_settled(c, rcls, sg, name, w.from)) && mixin_copies_module(c, mi, cto, cvs, &cn) >= 0) {
-    int ix = ver_entry_ix(c, 0, c->scopes[mi].origin_module_ci, rcls, sg, name, ver_call_arity(c, id, rcls, sg, name, mi));
+    int ix = ver_entry_ix(c, VER_ENTRY_CHAIN, c->scopes[mi].origin_module_ci, rcls, sg, name, ver_call_arity(c, id, rcls, sg, name, mi));
     if (span) *span = (VerSpan){ 2, 1 };
     if (ix < 0) return mi;
     if (def_class && !(flags & CT_TOP)) *def_class = rcls;
@@ -1614,7 +1614,7 @@ static int ct_version_at(Compiler *c, int id, int cls, const char *name, unsigne
     /* the entry, where the chain holds still over the window: asked of
        an entry that was made, or by the entries' build (span); for a
        call that only meets no version, one that answers for none */
-    int many = n >= 2 || n == ELAB_SPAN_ANY, ar = ver_call_arity(c, id, rcls, sg, name, mi), ix = ver_entry_ix(c, 0, 0, rcls, sg, name, ar);
+    int many = n >= 2 || n == ELAB_SPAN_ANY, ar = ver_call_arity(c, id, rcls, sg, name, mi), ix = ver_entry_ix(c, VER_ENTRY_CHAIN, 0, rcls, sg, name, ar);
     int settled = at == ELAB_NO || elab_chain_settled(c, rcls, sg, name, w.from);
     const Scope *in = comp_scope_of(c, id);
     /* (an entry only where the call takes it, in a body that may run) */
@@ -2176,7 +2176,7 @@ void ct_version_classes(Compiler *c, int id, const char *nm, CtClassFn fn, void 
     for (int i = c->ver_ix_nb ? c->ver_names[sp_strhash(nm) % c->ver_ix_nb] : -1;
          i >= 0; i = c->ver_names_next[i]) {   /* and the class of each later prepend's copy */
       const struct VerEntry *e = &c->ver_entries[i];
-      if (e->guard && sp_streq(e->name, nm)) fn(c, id, nm, e->cls, e->sg ? CT_CMETHOD : 0, arg);
+      if (e->guard != VER_ENTRY_CHAIN && sp_streq(e->name, nm)) fn(c, id, nm, e->cls, e->sg ? CT_CMETHOD : 0, arg);
     }
   }
   if (oc >= 0) fn(c, id, nm, oc, 0, arg);
@@ -3318,7 +3318,7 @@ static int ver_refl_named(Compiler *c, int id) {
   const char *q = an ? method_sym_arg(c, id) : NULL;
   for (int i = 0; an && q && i < c->nver_entries; i++) {
     const struct VerEntry *e = &c->ver_entries[i];
-    if (e->guard == 2 && e->scope >= 0 && nt_int(c->nt, c->scopes[e->scope].def_node, "cond_def_refl", 0) && sp_streq(e->name, q))
+    if (e->guard == VER_ENTRY_HISTORY && e->scope >= 0 && nt_int(c->nt, c->scopes[e->scope].def_node, "cond_def_refl", 0) && sp_streq(e->name, q))
       return 1;
   }
   return an && !q;
@@ -5748,7 +5748,7 @@ static int super_layer_entry(Compiler *c, int id, int t) {
   int to[VER_MAX_ARMS], n = super_layer_versions(c, comp_scope_of(c, id), t, to);
   if (!n) return -1;
   const Scope *m = &c->scopes[t];
-  int i = ver_entry_ix(c, 3, m->origin_module_ci, m->class_id, m->is_cmethod, comp_scope_user_name(m), ver_arity(c, id, to, n));
+  int i = ver_entry_ix(c, VER_ENTRY_LAYER, m->origin_module_ci, m->class_id, m->is_cmethod, comp_scope_user_name(m), ver_arity(c, id, to, n));
   return i >= 0 ? c->ver_entries[i].scope : -1;
 }
 static int ver_other_answers(Compiler *c, int cls, int sg, const char *name);
@@ -5881,7 +5881,7 @@ static void ver_named_make(Compiler *c, const VerNamed *w) {
   }
   for (int i = 0; i < nv; i++) { c->scopes[to[i]].replaced = 1; comp_touch_scope(c->scopes[to[i]].idx); }
   /* (an includer's: under the module's instance side) */
-  ver_entry_add(c, comp_scope_user_name(&c->scopes[e]), (struct VerEntry){ NULL, 2, w->hcls, w->hcls == w->cls ? w->sg : 0, w->ar, e,
+  ver_entry_add(c, comp_scope_user_name(&c->scopes[e]), (struct VerEntry){ NULL, VER_ENTRY_HISTORY, w->hcls, w->hcls == w->cls ? w->sg : 0, w->ar, e,
                                       .finds = ver_else_finds(c, w->refuse ? VK_NOMETHOD : w->els, w->cls, w->sg, w->name, w->vs[0].v->vis, to[nv - 1]) });
 }
 /* ...its else arm, as ver_named_kind decided: NoMethodError's message
@@ -6477,7 +6477,7 @@ static void ver_need(Compiler *c, int id, const char *nm, int k, unsigned flags,
   ct_version(c, id, k, nm, flags, mi, NULL, &n);
   /* (the copies' entry over the module's versions: mixin_copies_module) */
   int to[VER_MAX_ARMS], nc = 0;
-  VerNeed w = { 0, rcls, sg, mi, ar, nm, n.copies ? mixin_copies_module(c, mi, to, vs, &nc) + 1 : 0 };
+  VerNeed w = { VER_ENTRY_CHAIN, rcls, sg, mi, ar, nm, n.copies ? mixin_copies_module(c, mi, to, vs, &nc) + 1 : 0 };
   if (n.n >= 2 && !ver_need_has(c, arg, w)) ver_need_add(arg, w);
 }
 /* The entries the calls need, made once the passes after the record have
@@ -6508,11 +6508,11 @@ static void ver_entries_index(Compiler *c) {
     c->ver_ix_next[i] = c->ver_ix[b];
     c->ver_ix[b] = i;
     c->ver_names_next[i] = -1;
-    if (e->scope < 0 || e->guard >= 2) continue;   /* (an open history's entry is the table's answer; a super's layer entry none) */
+    if (e->scope < 0 || e->guard == VER_ENTRY_HISTORY || e->guard == VER_ENTRY_LAYER) continue;   /* (an open history's entry is the table's answer; a super's layer entry none) */
     int dup = 0;
     for (int j = c->ver_names[m]; j >= 0 && !dup; j = c->ver_names_next[j]) {
       const struct VerEntry *v = &c->ver_entries[j];
-      dup = sp_streq(v->name, e->name) && (!e->guard || (v->guard && v->cls == e->cls && v->sg == e->sg));
+      dup = sp_streq(v->name, e->name) && (e->guard == VER_ENTRY_CHAIN || (v->guard != VER_ENTRY_CHAIN && v->cls == e->cls && v->sg == e->sg));
     }
     if (!dup) { c->ver_names_next[i] = c->ver_names[m]; c->ver_names[m] = i; }
   }
@@ -6594,7 +6594,7 @@ void ver_entries_build(Compiler *c) {
     if (!(ngc & (ngc - 1)) && !(gc = realloc(gc, sizeof *gc * (size_t)(ngc ? 2 * ngc : 1)))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
     gc[ngc++] = s;
     int to[VER_MAX_ARMS + 1];
-    VerNeed w = { 1, c->scopes[s].class_id, c->scopes[s].is_cmethod, s,
+    VerNeed w = { VER_ENTRY_GUARD, c->scopes[s].class_id, c->scopes[s].is_cmethod, s,
                   ver_arity(c, -1, to, guard_chain(c, s, to, NULL, NULL)), name };
     if (!ver_need_has(c, &o, w)) ver_need_add(&o, w);
   }
@@ -6616,7 +6616,7 @@ void ver_entries_build(Compiler *c) {
         const Scope *m = &c->scopes[gc[j]];
         int to[VER_MAX_ARMS + 1];
         if (!sp_streq(comp_scope_user_name(m), names[i]) && !is_send_family(names[i])) continue;
-        VerNeed w = { 1, m->class_id, m->is_cmethod, gc[j], ver_arity(c, id, to, guard_chain(c, gc[j], to, NULL, NULL)), comp_scope_user_name(m) };
+        VerNeed w = { VER_ENTRY_GUARD, m->class_id, m->is_cmethod, gc[j], ver_arity(c, id, to, guard_chain(c, gc[j], to, NULL, NULL)), comp_scope_user_name(m) };
         if (!ver_need_has(c, &o, w)) ver_need_add(&o, w);
       }
     }
@@ -6629,7 +6629,7 @@ void ver_entries_build(Compiler *c) {
       int at, to[VER_MAX_ARMS], t = s && s->class_id >= 0 && s->name ? cplan_super_target(c, id, s, &at) : -1;
       int n = t >= 0 ? super_layer_versions(c, s, t, to) : 0;
       const Scope *m = n ? &c->scopes[t] : NULL;
-      VerNeed w = { 3, m ? m->class_id : -1, m ? m->is_cmethod : 0, t, n ? ver_arity(c, id, to, n) : 0, m ? comp_scope_user_name(m) : NULL,
+      VerNeed w = { VER_ENTRY_LAYER, m ? m->class_id : -1, m ? m->is_cmethod : 0, t, n ? ver_arity(c, id, to, n) : 0, m ? comp_scope_user_name(m) : NULL,
                     m ? m->origin_module_ci : 0 };
       if (n && !ver_need_has(c, &o, w)) ver_need_add(&o, w);
     }
@@ -6638,13 +6638,13 @@ void ver_entries_build(Compiler *c) {
   for (int i = 0; i < o.n; i++) {
     /* (a guard entry's else arm runs the method behind the mixins: for a
        later include's behind, what its super reaches, if anything) */
-    int to[VER_MAX_ARMS + 1], n = o.v[i].guard ? guard_chain(c, o.v[i].mi, to, NULL, NULL) : 0;
+    int to[VER_MAX_ARMS + 1], n = o.v[i].guard != VER_ENTRY_CHAIN ? guard_chain(c, o.v[i].mi, to, NULL, NULL) : 0;
     int finds = n && guard_else_bare(c, to[n - 1], o.v[i].cls, o.v[i].sg, o.v[i].name, &hooks) ? VER_FINDS_NONE : ver_else_finds(c, VK_KEEP, o.v[i].cls, o.v[i].sg, o.v[i].name, SP_VIS_PUBLIC, -1);
     const Scope *lm = &c->scopes[o.v[i].mi];   /* (a guarded layer's versions are its class's: super_layer_versions) */
-    int behind = -1, e = o.v[i].guard == 3 ? guard_layer_versions(c, o.v[i].mi, lm->mixin_guarded ? lm->class_id : o.v[i].from - 1, o.v[i].ar)
-          : o.v[i].guard ? guard_entry_make(c, o.v[i].mi, o.v[i].ar, &behind)
+    int behind = -1, e = o.v[i].guard == VER_ENTRY_LAYER ? guard_layer_versions(c, o.v[i].mi, lm->mixin_guarded ? lm->class_id : o.v[i].from - 1, o.v[i].ar)
+          : o.v[i].guard != VER_ENTRY_CHAIN ? guard_entry_make(c, o.v[i].mi, o.v[i].ar, &behind)
                          : ver_entry_make(c, NULL, o.v[i].from ? o.v[i].from - 1 : o.v[i].cls, o.v[i].cls, o.v[i].sg, o.v[i].name, o.v[i].mi, o.v[i].ar, 1, NULL, &finds);
-    ver_entry_add(c, e >= 0 && o.v[i].guard != 3 ? c->scopes[e].name : o.v[i].name, (struct VerEntry){ NULL, o.v[i].guard, o.v[i].cls, o.v[i].sg, o.v[i].ar, e, .finds = finds, .from = o.v[i].from, .behind = behind + 1 });
+    ver_entry_add(c, e >= 0 && o.v[i].guard != VER_ENTRY_LAYER ? c->scopes[e].name : o.v[i].name, (struct VerEntry){ NULL, o.v[i].guard, o.v[i].cls, o.v[i].sg, o.v[i].ar, e, .finds = finds, .from = o.v[i].from, .behind = behind + 1 });
   }
   free(o.v); free(o.ix);
   free(ver_pre_tab); ver_pre_tab = NULL; ver_pre_n = 0; ver_pre_nb = 0;   /* (the asks' memo lives for one build) */
@@ -6655,7 +6655,7 @@ void ver_entries_build(Compiler *c) {
     int mi = gc[j], to[VER_MAX_ARMS + 1];
     Scope *m = &c->scopes[mi];
     int ar = ver_arity(c, -1, to, guard_chain(c, mi, to, NULL, NULL));
-    int e = ct_entry_of(c, 1, m->class_id, m->is_cmethod, comp_scope_user_name(m), ar);
+    int e = ct_entry_of(c, VER_ENTRY_GUARD, m->class_id, m->is_cmethod, comp_scope_user_name(m), ar);
     if (e < 0) continue;
     c->scopes[e].entry = ENTRY_TABLE;
     c->scopes[e].mixin_guarded = m->mixin_guarded;
@@ -6787,7 +6787,7 @@ void ver_cells_write(Compiler *c) {
     if (e->scope < 0 || e->cells == pass) continue;
     e->cells = 1;
     int arms[VER_MAX_ARMS + 1], tests[2 * (VER_MAX_ARMS + 1)];
-    int na = e->guard == 1 || e->guard == 3 ? ver_entry_targets(c, e->scope, arms, tests) : 0;
+    int na = e->guard == VER_ENTRY_GUARD || e->guard == VER_ENTRY_LAYER ? ver_entry_targets(c, e->scope, arms, tests) : 0;
     /* (and an arm's own, of the entry over a mixin's versions:
        guard_layer_versions) */
     for (int k = 0, n0 = na; k < n0; k++)
@@ -6796,11 +6796,11 @@ void ver_cells_write(Compiler *c) {
         for (int j = 0, ns = ver_entry_targets(c, arms[k], sub, st); j < ns && na < 2 * (VER_MAX_ARMS + 1); j++) tests[na++] = st[j];
       }
     /* (a guarded layer's copies: versions on cls's chain, super_layer_versions) */
-    int lg = e->guard == 3 && na && arms[0] >= 0 && c->scopes[arms[0]].mixin_guarded, mod = e->from && !lg;
-    int nv = e->guard == 2 ? elab_history_versions(c, e->cls, e->sg, e->name, vs, VER_MAX_ARMS)
+    int lg = e->guard == VER_ENTRY_LAYER && na && arms[0] >= 0 && c->scopes[arms[0]].mixin_guarded, mod = e->from && !lg;
+    int nv = e->guard == VER_ENTRY_HISTORY ? elab_history_versions(c, e->cls, e->sg, e->name, vs, VER_MAX_ARMS)
                            : elab_chain_versions(c, mod ? e->from - 1 : e->cls, mod ? 0 : e->sg, e->name, vs, VER_MAX_ARMS);
     for (int j = 0; j < nv; j++) {
-      if (e->guard == 1 || e->guard == 3) {
+      if (e->guard == VER_ENTRY_GUARD || e->guard == VER_ENTRY_LAYER) {
         int reads = 0;
         for (int k = 0; k < na; k++)
           reads |= nt_int(nt, tests[k], "ver_hist", 0) == vs[j].hist + 1;
@@ -6905,18 +6905,18 @@ static int ver_late_make(Compiler *c) {
   qsort(c->ver_late, (size_t)c->nver_late, sizeof *c->ver_late, ver_late_cmp);
   for (int i = 0; i < c->nver_late; i++) {
     const struct VerLate *l = &c->ver_late[i];
-    int ix = ver_entry_ix(c, 0, 0, l->cls, l->sg, l->name, l->ar), absent = 0, e, mm = 0, finds = VER_FINDS_NONE;
+    int ix = ver_entry_ix(c, VER_ENTRY_CHAIN, 0, l->cls, l->sg, l->name, l->ar), absent = 0, e, mm = 0, finds = VER_FINDS_NONE;
     if ((i && !ver_late_cmp(l - 1, l)) || (ix >= 0 && c->ver_entries[ix].absent)) continue;
     if (l->span) {   /* (the build's entry for a call that spans versions, unless the key's others made one) */
       if (ix < 0 && !(i && !ver_late_key_cmp(l - 1, l)) && (e = ver_entry_make(c, NULL, l->cls, l->cls, l->sg, l->name, l->mi, l->ar, 1, NULL, &finds)) >= 0) {
-        ver_entry_add(c, c->scopes[e].name, (struct VerEntry){ NULL, 0, l->cls, l->sg, l->ar, e, .finds = finds });
+        ver_entry_add(c, c->scopes[e].name, (struct VerEntry){ NULL, VER_ENTRY_CHAIN, l->cls, l->sg, l->ar, e, .finds = finds });
         made = 1;
       }
       continue;
     }
     for (int j = i; j < c->nver_late && !ver_late_cmp(l, &c->ver_late[j]); j++) mm |= c->ver_late[j].mm;   /* (over every call of the key) */
     e = ver_entry_make(c, &q, l->cls, l->cls, l->sg, l->name, l->mi, l->ar, mm, &absent, &finds);
-    if (ix < 0) ver_entry_add(c, e >= 0 ? c->scopes[e].name : l->name, (struct VerEntry){ NULL, 0, l->cls, l->sg, l->ar, absent ? e : -1, absent ? 2 : 1, .finds = finds });
+    if (ix < 0) ver_entry_add(c, e >= 0 ? c->scopes[e].name : l->name, (struct VerEntry){ NULL, VER_ENTRY_CHAIN, l->cls, l->sg, l->ar, absent ? e : -1, absent ? 2 : 1, .finds = finds });
     else {
       c->ver_entries[ix].absent = absent ? 2 : 1;
       if (absent) {   /* (its cells are written where the other was made) */

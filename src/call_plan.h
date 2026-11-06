@@ -847,6 +847,12 @@ int cplan_cmethod_presence(Compiler *c, int id, int cls, const char *name, int i
    (VerEntry.finds): a public method, a private or protected one, or none
    (NoMethodError, method_missing); -1 for a scope that is no entry */
 enum { VER_FINDS_NONE, VER_FINDS_HIDDEN, VER_FINDS_PUBLIC };
+/* What a version entry tells apart (Compiler.ver_entries, VerEntry.guard):
+   the versions a chain holds for a call whose version is known only at
+   run time; a later mixin's guarded copies (Scope.mixin_guarded); an open
+   history's versions, for a call that may meet none yet; the versions of
+   a layer of a mixin's copies that a super reaches (super_layer_entry) */
+enum { VER_ENTRY_CHAIN, VER_ENTRY_GUARD, VER_ENTRY_HISTORY, VER_ENTRY_LAYER };
 int cplan_entry_finds(const Compiler *c, int e);
 /* The program's `self.new` a `new` call id on class ci runs, -1 for
    none: for an arm of a version entry, its pin (call_target); for a

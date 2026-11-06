@@ -37450,8 +37450,6 @@ static int block_jumps_d(const NodeTable *nt, int id, NodeKind k, int **out, int
   }
   return 0;
 }
-/* Can a `next` or `break` that leaves block blk hand on nil: a bare one, or
-   one whose value can be nil (a body too deep to walk: it may) */
 /* A `next` or `break` hands on nil: a bare one, or one whose value can be */
 static int jump_value_nil(Compiler *c, int j) {
   const NodeTable *nt = c->nt;
@@ -37459,6 +37457,8 @@ static int jump_value_nil(Compiler *c, int j) {
   const int *jav = ja >= 0 ? nt_arr(nt, ja, "arguments", &jn) : NULL;
   return jn == 0 || (jn == 1 && (nt_kind(nt, jav[0]) == NK_NilNode || nullable_int_value(c, jav[0])));
 }
+/* Can a `next` or `break` that leaves block blk hand on nil: a bare one, or
+   one whose value can be nil (a body too deep to walk: it may) */
 static int block_jumps_nil(Compiler *c, int blk) {
   const NodeTable *nt = c->nt;
   static const NodeKind ks[2] = { NK_NextNode, NK_BreakNode };

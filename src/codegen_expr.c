@@ -4533,8 +4533,14 @@ static int emit_array_hash_literal_expr(Compiler *c, int id, Buf *b, const NodeT
                (CRuby splat semantics). A Hash, a Range and an Enumerator go
                through sp_splat_to_array for their pairs, members or items, and
                so does a program object when a class defines #to_a. */
-            buf_printf(g_pre, "{ sp_RbVal _sv = %s; if (_sv.tag == SP_TAG_OBJ && (sp_poly_is_hash_kind(_sv.cls_id) || _sv.cls_id == SP_BUILTIN_RANGE || _sv.cls_id == SP_BUILTIN_STR_RANGE || _sv.cls_id == SP_BUILTIN_ENUMERATOR%s || ((_sv.cls_id == SP_BUILTIN_OBJECT || _sv.cls_id == SP_BUILTIN_BASIC_OBJECT) && _sv.v.p && ((sp_Object *)_sv.v.p)->singleton_to_a))) _sv = sp_splat_to_array(_sv); if (!sp_poly_nil_p(_sv)) sp_PolyArray_flatten_into_n(_t%d, _sv, 1); }\n",
+            buf_printf(g_pre, "{ sp_RbVal _sv = %s; if (_sv.tag == SP_TAG_OBJ && (sp_poly_is_hash_kind(_sv.cls_id) || _sv.cls_id == SP_BUILTIN_RANGE || _sv.cls_id == SP_BUILTIN_STR_RANGE || _sv.cls_id == SP_BUILTIN_ENUMERATOR || _sv.cls_id == SP_BUILTIN_MATCHDATA%s || ((_sv.cls_id == SP_BUILTIN_OBJECT || _sv.cls_id == SP_BUILTIN_BASIC_OBJECT) && _sv.v.p && ((sp_Object *)_sv.v.p)->singleton_to_a))) _sv = sp_splat_to_array(_sv); if (!sp_poly_nil_p(_sv)) sp_PolyArray_flatten_into_n(_t%d, _sv, 1); }\n",
                        ep, obj_to_a_any(c) ? " || _sv.cls_id >= 0" : "", t);
+          /* (not pushed whole: `*md` is md.to_a, its match and its groups) */
+          else if (it == TY_MATCHDATA) {
+            Buf bx; memset(&bx, 0, sizeof bx); emit_boxed(c, inner, &bx);
+            buf_printf(g_pre, "sp_PolyArray_flatten_into_n(_t%d, sp_splat_to_array(%s), 1);\n", t, bx.p ? bx.p : "sp_box_nil()");
+            free(bx.p);
+          }
           else if (it == TY_ENUMERATOR) {
             /* an Enumerator spreads the items it yields */
             Buf bx; memset(&bx, 0, sizeof bx); emit_boxed(c, inner, &bx);

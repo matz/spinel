@@ -8324,6 +8324,7 @@ static sp_PolyArray *sp_enum_items_from(sp_RbVal v);
 static sp_RbVal sp_splat_to_array(sp_RbVal v) {
   if (v.tag == SP_TAG_NIL) return sp_box_poly_array(sp_PolyArray_new());
   if (v.tag == SP_TAG_OBJ && sp_poly_is_array_kind(v.cls_id)) return v;
+  if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_MATCHDATA && v.v.p) return sp_box_poly_array(sp_MatchData_to_a((sp_MatchData *)v.v.p));
   if (v.tag == SP_TAG_OBJ && sp_poly_is_hash_kind(v.cls_id)) return sp_box_poly_array(sp_poly_to_a_arr(v));
   if (v.tag == SP_TAG_OBJ && (v.cls_id == SP_BUILTIN_RANGE || v.cls_id == SP_BUILTIN_STR_RANGE || v.cls_id == SP_BUILTIN_OBJ_RANGE ||
                               (v.cls_id == SP_BUILTIN_ENUMERATOR && v.v.p)))

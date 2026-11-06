@@ -1,0 +1,10 @@
+1
+:none
+[7, 2, 7, 3, 3, 7, 7, :none]
+[5, "uninitialized constant Z::Top", "uninitialized constant Mx::Top"]
+["base", "base", "sub2"]
+[1, 2]
+[2, 2]
+["sh", "none"]
+[4, "uninitialized constant Z::Ob"]
+[:m, :n]

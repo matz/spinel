@@ -11126,10 +11126,45 @@ static int range_indexes_seq(Compiler *c, int id) {
 /* A boxed end that the class facts show holds objects of the program's
    alone (`Date.new` answers one boxed): no Integer, so under promote too
    the Range is boxed and sp_range_new_box picks a Range of objects. */
+/* (a value position of the end that is a String, Symbol, Array, Hash or
+   Regexp literal: the end may be no number, so the Range is boxed and
+   sp_range_new_box picks its kind at run time; the integer representation
+   read `lo = "a"; lo = 1 if c; (lo..hi)` as an Integer Range in promote
+   mode and raised "bad value for range") */
+typedef struct { const NodeTable *nt; int hit; } RangeEndLeaves;
+static int range_end_nonnum_leaf(const VpLeaf *lf, void *ud) {
+  RangeEndLeaves *r = ud;
+  if (lf->kind != VPK_EXPR) return 0;
+  switch (nt_kind(r->nt, lf->node)) {
+  case NK_StringNode: case NK_InterpolatedStringNode: case NK_XStringNode: case NK_SymbolNode:
+  case NK_ArrayNode: case NK_HashNode: case NK_RegularExpressionNode:
+    r->hit = 1; return 1;
+  default: return 0;
+  }
+}
+static int range_end_nonnum_value(Compiler *c, int n) {
+  RangeEndLeaves r = { c->nt, 0 };
+  for_each_value_position(c->nt, n, VP_AND_LEFT | VPS_ALL, range_end_nonnum_leaf, &r);
+  return r.hit;
+}
 static int range_end_no_number(Compiler *c, int node) {
   if (node < 0) return 0;
   const ClsSet *s = cls_fact_node(c, node);
-  return s && !s->all && !s->bv && s->n > 0;
+  if (s && !s->all && !s->bv && s->n > 0) return 1;
+  if (range_end_nonnum_value(c, node)) return 1;
+  /* a local: the values its writes in this scope bind (`lo = "a"; lo = 1 if c`) */
+  const NodeTable *nt = c->nt;
+  if (nt_kind(nt, node) != NK_LocalVariableReadNode) return 0;
+  const char *vn = nt_str(nt, node, "name");
+  Scope *sc = comp_scope_of(c, node);
+  if (!vn || !sc) return 0;
+  for (int w = comp_lvw_first_sc(c, (int)(sc - c->scopes), vn); w >= 0; w = comp_lvw_next_sc(c, w)) {
+    const char *wn = nt_str(nt, w, "name");
+    if (!wn || !sp_streq(wn, vn) || comp_scope_of(c, w) != sc) continue;
+    int val = nt_ref(nt, w, "value");
+    if (val >= 0 && range_end_nonnum_value(c, val)) return 1;
+  }
+  return 0;
 }
 static int range_end_reads_poly_elem(Compiler *c, int n) {
   const NodeTable *nt = c->nt;

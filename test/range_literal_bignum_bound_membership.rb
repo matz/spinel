@@ -44,9 +44,11 @@ p lowest_above("bücher".unpack("U*"), 128)
 p lowest_above([1, 2], 128)
 
 # Boxed String ends: === and cover? compare, include? still walks.
-# (a Range of two boxed String ends asked about a String is left out here: under
-# --int-overflow=promote master builds it as an Integer Range and raises "bad
-# value for range", a gap of its own)
+lo = "a"
+lo = 1 if ARGV.size > 5
+hi = "z"
+hi = 2 if ARGV.size > 5
+p [(lo..hi) === "bb", (lo..hi).cover?("bb"), (lo..hi).include?("bb"), (lo..hi) === 3]
 # A Range is no value a numeric Range holds, under ===.
 a = 1
 a = "x" if ARGV.size > 5
@@ -68,4 +70,4 @@ begin
 rescue ArgumentError => e
   p [e.message, seen]
 end
-# (`(nil..bad) === "c"` with a boxed String end is left out for the same promote gap)
+p((nil..bad) === "c")

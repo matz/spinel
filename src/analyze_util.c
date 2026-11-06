@@ -4505,6 +4505,10 @@ int send_blind_recv_owns(Compiler *c, int call, int recv, TyKind srt, const char
     int nr;
     comp_name_responders(c, name, 0, &nr);
     if (nr > 0) return 1;
+    /* a builtin value's own method (`v.send(:to_s)` on an Integer) comes
+       before Object's private top-level def too: the call dispatches at
+       run time, the def its fallback (send_fallback) */
+    if (builtin_name_below_object(name)) return 1;
     if (nr == 0) return comp_name_reader_any(c, name);
     for (int k = 0; k < c->nclasses; k++)
       if (call_target(c, call, k, name, 0, NULL) >= 0 || comp_reader_in_chain(c, k, name, NULL)) return 1;

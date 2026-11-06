@@ -2478,6 +2478,33 @@ int builtin_instance_name_known(const char *m) {
     if (sp_streq(sp_builtin_names_tbl[i].m, m)) return 1;
   return 0;
 }
+/* the classes below Object that answer m, as a C list literal of their
+   names ended by NULL, into out; 0 when there is none */
+int builtin_classes_below_object_list(const char *m, Buf *out) {
+  int n = 0;
+  for (int i = 0; m && sp_builtin_names_tbl[i].cls; i++) {
+    const char *k = sp_builtin_names_tbl[i].cls;
+    if (!sp_streq(sp_builtin_names_tbl[i].m, m) || sp_streq(k, "Object") || sp_streq(k, "Kernel") ||
+        sp_streq(k, "BasicObject")) continue;
+    int seen = 0;
+    for (int j = 0; j < i && !seen; j++)
+      seen = sp_streq(sp_builtin_names_tbl[j].cls, k) && sp_streq(sp_builtin_names_tbl[j].m, m);
+    if (seen) continue;
+    buf_printf(out, "%s\"%s\"", n++ ? ", " : "(const char *const[]){", k);
+  }
+  if (n) buf_puts(out, ", NULL}");
+  return n;
+}
+/* does a builtin class below Object (Integer, String, Array, ...) answer m?
+   A lookup reaches its method before a top-level def, which is Object's */
+int builtin_name_below_object(const char *m) {
+  for (int i = 0; m && sp_builtin_names_tbl[i].cls; i++) {
+    const char *k = sp_builtin_names_tbl[i].cls;
+    if (sp_streq(sp_builtin_names_tbl[i].m, m) && !sp_streq(k, "Object") && !sp_streq(k, "Kernel") &&
+        !sp_streq(k, "BasicObject")) return 1;
+  }
+  return 0;
+}
 /* Exported probes for the analyze-side method() desugar (#2752): whether the
    builtin table knows (cls, m), and whether m is universal Object surface. */
 int builtin_method_known(const char *cls, const char *m);

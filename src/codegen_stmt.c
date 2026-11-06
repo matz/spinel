@@ -22835,6 +22835,16 @@ static int yield_block_value_boxed(Compiler *c) {
   int bn = 0; const int *bd = bb >= 0 ? nt_arr(c->nt, bb, "body", &bn) : NULL;
   return bn > 0 && repr_of(c, bd[bn - 1]).kind == RK_BOXED && block_next_value_ty(c, bb) == TY_UNKNOWN;
 }
+/* ...or one that hands back no value: its tail a call answering nothing or nil (a puts), with
+   no `next` handing back a value of its own? */
+static int yield_block_value_void(Compiler *c) {
+  if (g_block_id < 0 || g_yield_proc_ref) return 0;
+  int bb = nt_ref(c->nt, g_block_id, "body");
+  int bn = 0; const int *bd = bb >= 0 ? nt_arr(c->nt, bb, "body", &bn) : NULL;
+  return bn > 0 && nt_kind(c->nt, bd[bn - 1]) == NK_CallNode &&
+         (comp_ntype(c, bd[bn - 1]) == TY_VOID || comp_ntype(c, bd[bn - 1]) == TY_NIL) &&
+         block_next_value_ty(c, bb) == TY_UNKNOWN;
+}
 
 
 /* A tail write's slot, handed back as the method's value: boxed for a poly
@@ -23458,9 +23468,21 @@ void emit_stmt_tail_inner(Compiler *c, int id, Buf *b, int indent) {
     buf_puts(b, ";\n");
     return;
   }
+  /* A yield whose literal block ends in a void call (a puts) hands back nil:
+     the inline of `return c if ok; yield` given `{ puts "x" }` has a String
+     slot for the return, and the block's void was assigned to it. Run the
+     yield, then answer the slot's nil. */
+  if (g_result_var && !want_poly && k == NK_YieldNode && yield_block_value_void(c)) {
+    buf_puts(b, "("); emit_tail_value(c, id, b);
+    if (g_result_ty != TY_UNKNOWN && comp_ty_value_obj(c, g_result_ty))
+      buf_printf(b, ", %s)", raise_tail_value_c(c, g_result_ty));
+    else if (g_result_ty == TY_INT || g_result_ty == TY_FLOAT)
+      buf_printf(b, ", %s)", g_result_oint ? oint_nil(g_result_ty) : default_value_from_compiler(c, g_result_ty));
+    else buf_printf(b, ", (__typeof__(%s))0)", g_result_var);
+  }
   /* --share-strings: a begin read as the handle (emit_strbuf_route) holds
      its arms' values as handles */
-  if (g_result_var && g_result_ty == TY_STRBUF && !want_poly)
+  else if (g_result_var && g_result_ty == TY_STRBUF && !want_poly)
     emit_strbuf_handle_of(c, id, b);
   else if (want_poly && vtyr.kind != RK_BOXED) emit_boxed(c, is_subst ? g_dm_subst_node : id, b);
   else if (!g_result_var && emit_ret_hash_widen_conv(c, g_ret_type, vty, is_subst ? g_dm_subst_node : id, b)) { }

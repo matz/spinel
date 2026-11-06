@@ -3842,11 +3842,15 @@ TyKind dispatch_ret_over(Compiler *c, int cid, const char *name, int cmeth, int 
 }
 
 /* A tail yield specializes to its block, but an earlier return still leaves
-   the same call. Keep both values in the inline result's type. */
+   the same call. Keep both values in the inline result's type. A block that
+   hands back no value (it raises, or ends in a puts) leaves the call through
+   that return or with nil, so the void joins as nil: taken as the whole
+   answer, `return c.to_s if ok?; yield` given `{ raise ... }` dropped the
+   String the return gave and the call read nil. */
 static TyKind method_yield_ret(Compiler *c, int mi, TyKind ret) {
   TyKind own = (TyKind)c->scopes[mi].ret;
-  if (own != TY_UNKNOWN && own != TY_VOID && ret != TY_UNKNOWN && ret != TY_VOID &&
-      scope_has_return(c, mi)) return ty_unify(own, ret);
+  if (own != TY_UNKNOWN && own != TY_VOID && ret != TY_UNKNOWN &&
+      scope_has_return(c, mi)) return ty_unify(own, ret == TY_VOID ? TY_NIL : ret);
   return ret;
 }
 

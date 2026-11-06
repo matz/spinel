@@ -7,6 +7,9 @@ module Comparable
   def lohi(o) = (self < o ? :lo : :hi)
   def size = :cmp_size
   def mine = :cmp_mine
+  def k = self.to_s + "?"
+  def pr = (puts "pr"; 1)
+  def tw = cx + cx
 end
 
 class String
@@ -23,3 +26,6 @@ p s.tag
 h = {"k" => 1}
 h.each_key { |k| p k.tag }
 p(([1].cx rescue $!.class))
+p "s".k, :s.k
+p "s".pr
+p "s".tw, :s.tw

@@ -2803,6 +2803,7 @@ sp_File *sp_File_dup(sp_File *f, int keep_frozen) {SP_GC_ROOT(f);
   g->bin_flag = f->bin_flag;
   g->ext_enc = f->ext_enc;
   g->is_sock = f->is_sock;
+  g->shut = f->shut;            /* a side shut down stays shut in the copy */
   if (f->own_buf) {   /* the dup shares the open file, and its flag */
     g->own_buf = f->own_buf; g->wstream = f->wstream;
     g->wnonblock = f->wnonblock; g->wgen = f->wgen;

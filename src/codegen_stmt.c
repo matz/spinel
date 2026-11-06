@@ -7418,6 +7418,11 @@ static int emit_poly_class_when_value(Compiler *c, int cond_id, const char *tmp,
     buf_printf(b, "(%s.tag == SP_TAG_OBJ && ((%s.cls_id <= -13 && %s.cls_id >= -20) || %s.cls_id == -34))", tmp, tmp, tmp, tmp);
   else {
     int cid = comp_class_index(c, cn);
+    /* a reopened builtin's entry (`class Dir; include M; end`) is not the
+       class a boxed Dir carries: the runtime answers, as emit_poly_isa_test
+       does */
+    if (cid >= 0 && is_builtin_reopen(cn) && builtin_class_id(cn) != 0 &&
+        !comp_class_is_module(c, &c->classes[cid])) cid = -1;
     if (cid >= 0) {
       buf_printf(b, "(%s.tag == SP_TAG_OBJ && (", tmp);
       int first = 1;
@@ -8012,9 +8017,14 @@ static int const_toplevel_alias(Compiler *c, const char *name) {
 }
 /* `when Enumerable` (or `in`) on an IO subject: the handle answers, since a
    nil one (NULL) or a File.stat result is none, where a live IO, File or
-   socket is */
+   socket is. A Dir subject is a Dir and an Enumerable when it is not nil. */
 static int emit_io_enumerable_when(TyKind pt, const char *cn, int t, Buf *b) {
-  if (pt != TY_IO || !cn || !sp_streq(cn, "Enumerable")) return 0;
+  if (!cn) return 0;
+  if (pt == TY_DIR && (sp_streq(cn, "Enumerable") || sp_streq(cn, "Dir"))) {
+    buf_printf(b, "(_t%d != NULL)", t);
+    return 1;
+  }
+  if (pt != TY_IO || !sp_streq(cn, "Enumerable")) return 0;
   buf_printf(b, "sp_io_is_a(_t%d, \"Enumerable\")", t);
   return 1;
 }

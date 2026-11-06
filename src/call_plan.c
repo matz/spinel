@@ -5643,25 +5643,25 @@ static int mixin_copy_versions(Compiler *c, int mi, int from, int *to, ElabVersi
   const Scope *m = &c->scopes[mi];
   ElabVersion cv[VER_MAX_ARMS];
   int side = m->is_extend_copy && from == m->origin_module_ci - 1 ? 0 : m->is_cmethod;
-  int n = 0, ns = 0, nv = elab_chain_versions(c, from, side, comp_scope_user_name(m), cv, VER_MAX_ARMS);
+  int n = 0, ns = 0, nv = elab_chain_versions(c, from, side, comp_scope_user_name(m), cv, VER_MAX_ARMS), at[VER_MAX_ARMS];
+  for (int i = 0; i < nv; i++) at[i] = -1;
+  /* (one walk: the copies under mi's name, and each version's first one) */
   for (int s = 0; s < c->nscopes; s++) {
     const Scope *k = &c->scopes[s];
-    ns += k->class_id == m->class_id && k->is_cmethod == m->is_cmethod && k->mixin_guarded == m->mixin_guarded &&
-          k->guard_behind == m->guard_behind && k->name && sp_streq(k->name, m->name) && !k->entry;
+    if (k->class_id != m->class_id || k->is_cmethod != m->is_cmethod || k->mixin_guarded != m->mixin_guarded ||
+        k->guard_behind != m->guard_behind || !k->name || !sp_streq(k->name, m->name)) continue;
+    ns += !k->entry;
+    for (int i = 0; i < nv; i++)
+      if (at[i] < 0 && cv[i].v->kind == LR_DEF && k->def_node == cv[i].v->node) at[i] = s;
   }
-  for (int i = 0; i < nv && n < VER_MAX_ARMS; i++)
-    for (int s = 0; cv[i].v->kind == LR_DEF && s < c->nscopes; s++) {
-      const Scope *k = &c->scopes[s];
-      if (k->class_id != m->class_id || k->is_cmethod != m->is_cmethod || k->mixin_guarded != m->mixin_guarded ||
-          k->guard_behind != m->guard_behind || !k->name || !sp_streq(k->name, m->name) || k->def_node != cv[i].v->node) continue;
-      /* (a module included again lists its versions again: one copy each) */
-      int dup = 0;
-      for (int j = 0; j < n && !dup; j++) dup = to[j] == s;
-      if (dup) break;
-      vs[n] = cv[i];
-      to[n++] = s;
-      break;
-    }
+  for (int i = 0; i < nv; i++) {
+    /* (a module included again lists its versions again: one copy each) */
+    int dup = at[i] < 0;
+    for (int j = 0; j < n && !dup; j++) dup = to[j] == at[i];
+    if (dup) continue;
+    vs[n] = cv[i];
+    to[n++] = at[i];
+  }
   return ns > 1 && n == ns ? n : 0;
 }
 /* The module whose versions mi, the table's answer in its class, is one of

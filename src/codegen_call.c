@@ -24451,6 +24451,11 @@ int emit_poly_isa_test(Compiler *c, const char *cn, const char *v, int exact, Bu
          ancestor walk, which reads those reopenings */
       if (!exact && builtin_reopen_includes_module(c, cid))
         buf_printf(b, " || sp_poly_is_a(%s, (sp_Class){%d})", v, cid);
+      /* the program reopens a builtin module (`module Comparable; def m;
+         end`): a builtin value that includes it (3, "s", [1]) has no
+         program class id, so the runtime answers for it as with no entry */
+      if (!exact && class_is_builtin_module_reopen(c, cid))
+        buf_printf(b, " || sp_poly_kind_of_builtin(%s, \"%s\")", v, cn);
     }
     /* a builtin ancestor not covered above (Object/BasicObject/Kernel hold
        for every value but a BasicObject.new, which is only a BasicObject;

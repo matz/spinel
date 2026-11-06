@@ -50522,6 +50522,17 @@ static void desugar_struct_builtin_self_recv(Compiler *c) {
   for (int k = 0; k < npend; k++) c->nscope[self_ids[k]] = self_scopes[k];
   free(self_ids); free(self_scopes);
 }
+/* (a growing list, not a fixed 64: a forward past the cap went unrecorded, and its forwarder was inlined with no block to hand on) */
+static void fwd_edge_add(int **from, int **to, int *n, int *cap, int f, int t) {
+  if (*n == *cap) {
+    *cap *= 2;
+    *from = (int *)realloc(*from, sizeof(int) * (size_t)*cap);
+    *to = (int *)realloc(*to, sizeof(int) * (size_t)*cap);
+    if (!*from || !*to) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  }
+  (*from)[*n] = f; (*to)[*n] = t; (*n)++;
+}
+
 static void an_phase_block_inline(Compiler *c) {
   AN_STEP_V("desugar_begin_args", desugar_begin_args(c));
   AN_STEP_V("desugar_diverging_args", desugar_diverging_args(c));
@@ -50742,8 +50753,8 @@ static void an_phase_block_inline(Compiler *c) {
         int callee = blk_fwd_callee[id];
         if (callee >= 0 && callee < c->nscopes) {
           Scope *cs2 = &c->scopes[callee];
-          if (cs2->blk_param && cs2->blk_param[0] && nfwd < cfwd) {
-            fwd_from[nfwd] = mi; fwd_to[nfwd] = callee; nfwd++;
+          if (cs2->blk_param && cs2->blk_param[0]) {
+            fwd_edge_add(&fwd_from, &fwd_to, &nfwd, &cfwd, mi, callee);
           }
         }
       }
@@ -50751,11 +50762,11 @@ static void an_phase_block_inline(Compiler *c) {
     free(inproc_m);
     /* `super`, bare or with `&blk`, hands this method's block to the parent
        method, which may keep it: an edge like a forward into a user method. */
-    if (!escapes && uses > 0 && m->class_id >= 0 && m->name && nfwd < cfwd) {
+    if (!escapes && uses > 0 && m->class_id >= 0 && m->name) {
       int sm = a_super_target(c, m);
       Scope *ss = sm >= 0 ? &c->scopes[sm] : NULL;
       if (ss && ss->blk_param && ss->blk_param[0] && a_scope_super_passes_block(c, m)) {
-        fwd_from[nfwd] = mi; fwd_to[nfwd] = sm; nfwd++;
+        fwd_edge_add(&fwd_from, &fwd_to, &nfwd, &cfwd, mi, sm);
       }
     }
     /* Recorded for the lowering pass further down: a method that wants its

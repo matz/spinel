@@ -19,3 +19,6 @@
 [nil, nil]
 "comparison of A with 3 failed"
 "comparison of Integer with A failed"
+2
+true
+2

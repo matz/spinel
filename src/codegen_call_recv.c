@@ -6447,6 +6447,16 @@ static void emit_merge_arg_boxed(Compiler *c, int arg, Buf *b) {
   emit_boxed(c, arg, b);
 }
 
+/* The boxed merge argument held in _t<t>, converted as CRuby converts it:
+   a program object through its #to_hash, found at run time
+   (Compiler.uses_kw_to_hash), and any other value than a Hash a TypeError. */
+static void emit_merge_arg_hash_check(Compiler *c, int t, Buf *b) {
+  if (c->uses_kw_to_hash) buf_printf(b, " if (sp_poly_is_user_obj(_t%d)) _t%d = sp_kw_splat_conv(_t%d, 0);", t, t, t);
+  buf_printf(b, " if (_t%d.tag != SP_TAG_OBJ || !sp_poly_is_hash_kind(_t%d.cls_id))"
+                " sp_raise_cls(\"TypeError\", sp_sprintf(\"no implicit conversion of %%s into Hash\", sp_convert_src_name(_t%d)));",
+             t, t, t);
+}
+
 /* A merge block's rest parameter takes the values the positional ones
    leave: `|*a|` is [key, old, new], `|k, *a|` is [old, new] (#8506). The
    three boxed values are given as C text. */
@@ -6507,6 +6517,7 @@ static int emit_merge_block_boxed(Compiler *c, int id, int recv, int arg, int mb
     buf_puts(b, "({ "); ta = hold_operand(c, recv, TY_POLY, 1, ta, 1, " ", b);
     buf_printf(b, "sp_RbVal _t%d = ", tb); emit_merge_arg_boxed(c, arg, b);
     buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d);", tb);
+    emit_merge_arg_hash_check(c, tb, b);
     buf_printf(b, " sp_PolyPolyHash *_t%d = sp_poly_hash_merge(_t%d, sp_box_nil()); SP_GC_ROOT(_t%d);",
                tr, ta, tr);
     buf_printf(b, " sp_PolyArray *_t%d = sp_poly_to_a_arr(_t%d); SP_GC_ROOT(_t%d);", tp, tb, tp);
@@ -6847,10 +6858,7 @@ static int emit_merge_bang_boxed_block(Compiler *c, int id, int recv, const int 
   buf_printf(b, "({ sp_PolyPolyHash *_t%d = ", tr); emit_expr(c, recv, b); buf_printf(b, "; SP_GC_ROOT(_t%d);", tr);
   buf_printf(b, " sp_RbVal _t%d = ", to); emit_boxed(c, arg, b); buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d);", to);
   buf_printf(b, " if (sp_gc_is_frozen(_t%d)) sp_raise_frozen_hash_at(_t%d, %s);", tr, tr, hash_box_cls(rt));
-  if (c->uses_kw_to_hash) buf_printf(b, " if (sp_poly_is_user_obj(_t%d)) _t%d = sp_kw_splat_conv(_t%d, 0);", to, to, to);
-  buf_printf(b, " if (_t%d.tag != SP_TAG_OBJ || !sp_poly_is_hash_kind(_t%d.cls_id))"
-                " sp_raise_cls(\"TypeError\", sp_sprintf(\"no implicit conversion of %%s into Hash\", sp_convert_src_name(_t%d)));",
-             to, to, to);
+  emit_merge_arg_hash_check(c, to, b);
   buf_printf(b, " sp_int _t%d = sp_poly_arr_len_ex(_t%d);"
                 " for (sp_int _t%d = 0; _t%d < _t%d; _t%d++) {"
                 " sp_RbVal _t%d = sp_poly_each_elem(_t%d, _t%d); SP_GC_ROOT_RBVAL(_t%d);"
@@ -7792,7 +7800,12 @@ else {
                         " SP_GC_ROOT(_t%d);", toh, toh, toh);
           buf_printf(b, " sp_RbVal _t%d = ", to); emit_boxed_text(c, oht, oh, b); buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d);", to);
         }
-        else { buf_printf(b, " sp_RbVal _t%d = ", to); emit_boxed(c, argv[0], b); buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d);", to); }
+        else {
+          buf_printf(b, " sp_RbVal _t%d = ", to); emit_boxed(c, argv[0], b); buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d);", to);
+          /* a boxed object (one read out of an Array) merges its #to_hash
+             too, as merge! does */
+          emit_merge_arg_hash_check(c, to, b);
+        }
         if (bp0) buf_printf(b, " sp_RbVal lv_%s;", rename_local(bp0));
         if (bp1) buf_printf(b, " sp_RbVal lv_%s;", rename_local(bp1));
         if (bp2) buf_printf(b, " sp_RbVal lv_%s;", rename_local(bp2));

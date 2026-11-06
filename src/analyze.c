@@ -15884,9 +15884,12 @@ static int *g_oa_empt_slot, *g_oa_empt_node, g_oa_empt_n, g_oa_empt_cap;
    stamps again only the rows of a component that still narrows. Only its own
    -- other producers stamp empty `[]` literals too. */
 static unsigned char *g_oa_empt_mine; static int g_oa_empt_mine_cap;
-/* its bits: this pass stamped the row; a seed built it (oa_mark_seed_row) */
+/* its bits: this pass stamped the row; a seed built it (oa_mark_seed_row);
+   the node is a literal table of rows handed to a parameter, which this pass
+   stamped a table's kind on (oa_mark_table_literal) */
 #define OA_MINE 1
 #define OA_SEED_ROW 2
+#define OA_TABLE_LIT 4
 static void oa_mark_empty_mine(int lit) {
   if (lit >= g_oa_empt_mine_cap) {
     int nc = g_oa_empt_mine_cap ? g_oa_empt_mine_cap : 256;
@@ -15903,6 +15906,14 @@ static void oa_mark_empty_mine(int lit) {
    the seed's kind as it leaves the rows of `Array.new(n) { [] }`, and the
    push into it converts its value or is refused, as a push into those does */
 static void oa_mark_seed_row(int lit) { oa_mark_empty_mine(lit); g_oa_empt_mine[lit] |= OA_SEED_ROW; }
+/* A literal of rows passed to a parameter (`f([[5, 6], [7, 8]])`) is built
+   at the table's kind only while the parameter narrows: other producers
+   stamp table kinds on literals too, so the round's clearing knows this
+   pass's own by the mark, as it knows its empty rows. Left in place, a
+   stamp from a round in which the parameter narrowed outlived it: the
+   literal was built as a table while another call kept the parameter the
+   general Array, and the two met as two Array kinds (a boxed value). */
+static void oa_mark_table_literal(int lit) { oa_mark_empty_mine(lit); g_oa_empt_mine[lit] |= OA_TABLE_LIT; }
 int oa_seed_row_literal(int lit) { return lit >= 0 && lit < g_oa_empt_mine_cap && (g_oa_empt_mine[lit] & OA_SEED_ROW); }
 /* Nodes whose own emitted type has to follow the slot they feed: a
    `idx.map { |k| cols[k] }` builds the table in place, so narrowing the slot
@@ -16019,16 +16030,16 @@ static int oa_elem_evidence(Compiler *c, OAS *sl, int S, int node, const int *re
   return ec;
 }
 /* `[A.new, A.new]` or `[[5, 6], [7, 8]]` passed straight to a method: a
-   literal of objects, or of Integer or Float rows, only, built at the
-   parameter's kind when that narrows (oa_note_src). Which of them it holds,
-   and whether they agree, is the evidence oa_classify_value reads. */
-static int oa_obj_literal(Compiler *c, int node) {
+   literal of objects, or with `rows` of Integer or Float rows, only, built
+   at the parameter's kind when that narrows (oa_note_src). Which of them it
+   holds, and whether they agree, is the evidence oa_classify_value reads. */
+static int oa_vetted_literal(Compiler *c, int node, int rows) {
   const NodeTable *nt = c->nt;
   if (node < 0 || nt_kind(nt, node) != NK_ArrayNode) return 0;
   int en = 0; const int *el = nt_arr(nt, node, "elements", &en);
   for (int e = 0; e < en; e++) {
     TyKind et = nt_kind(nt, el[e]) == NK_SplatNode ? TY_UNKNOWN : infer_type(c, el[e]);
-    if (!ty_is_object(et) && et != TY_INT_ARRAY && et != TY_FLOAT_ARRAY) return 0;
+    if (!ty_is_object(et) && !(rows && (et == TY_INT_ARRAY || et == TY_FLOAT_ARRAY))) return 0;
   }
   return en > 0;
 }
@@ -17644,7 +17655,10 @@ static void oa_call_edges(Compiler *c, OAS *sl, int n, int id, int oa_tmi, const
         claimed[a] = 1;
         oa_uf_union(sl, read_slot[a], T);
       }
-      else if (oa_obj_literal(c, a)) {
+      /* (not the rows for an Enumerable copy's receiver: the round start
+         puts a table there back on the poly array, and narrowed again
+         from its literal it traded the parameter every round) */
+      else if (oa_vetted_literal(c, a, !(M->name && strncmp(M->name, "__enum_", 7) == 0))) {
         oa_classify_value(c, sl, n, read_slot, call_ret, claimed, T, a);
         oa_note_src(T, a);
       }
@@ -18037,8 +18051,9 @@ static int narrow_object_arrays(Compiler *c) {
   if (c->arr_want) {
     for (int id = 0; id < c->nt->count && id < c->node_cap; id++) {
       if (id < g_oa_empt_mine_cap && g_oa_empt_mine[id]) {
+        int table_lit = g_oa_empt_mine[id] & OA_TABLE_LIT;
         g_oa_empt_mine[id] = 0;
-        if (c->arr_want[id] != TY_INT_ARRAY && c->arr_want[id] != TY_FLOAT_ARRAY) continue;
+        if (!table_lit && c->arr_want[id] != TY_INT_ARRAY && c->arr_want[id] != TY_FLOAT_ARRAY) continue;
       }
       else {
         if (!ty_is_ptr_array(c->arr_want[id])) continue;
@@ -18945,7 +18960,10 @@ static int narrow_object_arrays(Compiler *c) {
          re-reads arr_want on each pass, which is exactly how the empty-row
          literal of an `Array.new(n) { [] }` table keeps the kind this pass
          gives it (#4484). */
-      if (c->arr_want && src >= 0 && src < c->node_cap) comp_set_arr_want(c, src, nty);
+      if (c->arr_want && src >= 0 && src < c->node_cap) {
+        comp_set_arr_want(c, src, nty);
+        if (OA_CLS_IS_NESTED(sl[r].cls) && nt_kind(nt, src) == NK_ArrayNode) oa_mark_table_literal(src);
+      }
     }
   }
   /* the round changed something exactly when some slot's decision differs from

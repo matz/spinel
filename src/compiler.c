@@ -5667,6 +5667,13 @@ const char *poly_enum_op_for(const char *name) {
   for (int i = 0; PEN[i].nm; i++) if (sp_streq(name, PEN[i].nm)) return PEN[i].op;
   return NULL;
 }
+/* Does a poly dispatch's builtin pre-arm (emit_poly_prearms0_blk) drive a
+   zero-argument call's block of this name as a proc: an Enumerable walk,
+   each_index, times, a Mutex's synchronize? */
+int poly_blk_prearm_name(const char *name) {
+  return poly_enum_op_for(name) ||
+         (name && (sp_streq(name, "each_index") || sp_streq(name, "times") || sp_streq(name, "synchronize")));
+}
 
 
 /* Reads whose answer a builtin Array or Hash gives differently from any user

@@ -2483,6 +2483,28 @@ int emit_poly_prearms0_blk(Compiler *c, int id, const char *name, const PolySpec
       buf_puts(b, "; }\nelse ");
     }
   }
+  /* times with a block on a boxed Integer, in a dispatch that exists
+     because a user class also defines it (an options object's `times`
+     reader): the shared proc is driven over 0...n, and the Integer
+     answers itself */
+  if (sp_streq(name, "times") && argc == 0 && nt_ref(nt, id, "block") >= 0) {
+    if (blk_tmp0 < 0) {
+      int cblk4 = resolve_forwarded_block(c, nt_ref(nt, id, "block"));
+      if (cblk4 >= 0) blk_tmp0 = hoist_block_proc(c, cblk4);
+    }
+    if (blk_tmp0 >= 0) {
+      if (g_plan_check) pa_observe(PA_BUILTIN, PA_KEY_BUILTIN + PB_ENUM_PROC, -1, TY_UNKNOWN, PC_SAME);
+      int ti = ++g_tmp;
+      char tcall[256];
+      snprintf(tcall, sizeof tcall, "({ for (sp_int _t%d = 0; _t%d < _t%d.v.i; _t%d++)"
+                                    " sp_penum_call1(_t%d, sp_box_int(_t%d)); _t%d; })",
+               ti, ti, tv, ti, blk_tmp0, ti, tv);
+      buf_printf(b, "if (_t%d.tag == SP_TAG_INT) { _t%d = ", tv, tr);
+      if (ret == TY_POLY) buf_puts(b, tcall);
+      else emit_unbox_text(c, ret, tcall, b);
+      buf_puts(b, "; }\nelse ");
+    }
+  }
   /* a boxed Proc/Curry/Method in a slot a user `call`/`[]` shadows (#4395) */
   if (emit_poly_callable_prearm(c, name, 0, NULL, NULL, NULL, tv, tr, ret, 0,
                                 callable_prearm_blk(c, id, name, blk_tmp0), b) && g_plan_check)

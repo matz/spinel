@@ -2687,6 +2687,7 @@ static inline int comp_ty_value_obj(const Compiler *c, TyKind t) {
 /* 1 for a call that hands out one ELEMENT of a container (see compiler.c). */
 int container_elem_read_p(const NodeTable *nt, int id);
 const char *poly_enum_op_for(const char *name);
+int poly_blk_prearm_name(const char *name);
 int poly_container_read_p(const char *name);
 /* 1 for a numeric read a builtin receiver answers differently (see compiler.c). */
 int poly_numeric_read_p(const char *name);

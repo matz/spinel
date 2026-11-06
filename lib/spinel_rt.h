@@ -6638,8 +6638,17 @@ static int sp_poly_coerce_binop(const char *op, sp_RbVal a, sp_RbVal b, sp_RbVal
 #define SP_POLY_COERCE_NUM(OP) do { sp_RbVal _u; if (sp_poly_coerce_binop(OP, a, b, &_u)) return _u; } while (0)
 /* A user's or a coerce's `<=>` answer as an Integer or nil: out of line, so
    sp_poly_spaceship keeps the size that lets a sort's comparator inline it
-   (the unbox's error arm in its body did not) */
-static SP_NOINLINE SP_COLD sp_oint sp_spaceship_answer(sp_RbVal u) { return sp_unbox_oint(u); }
+   (the unbox's error arm in its body did not). A Float, Bignum or Rational
+   answer counts by its sign, as rb_cmpint reads it: 0.25 is not cut to 0,
+   and 2**70 does not raise RangeError. */
+static SP_NOINLINE SP_COLD sp_oint sp_spaceship_answer(sp_RbVal u) {
+  if (u.tag == SP_TAG_FLT || u.tag == SP_TAG_BIGINT || sp_poly_is_rational(u) || sp_poly_is_brat(u)) {
+    sp_bool ok = FALSE;
+    sp_int c = sp_poly_cmp(u, sp_box_int(0), &ok);
+    return sp_oint_of(ok ? (c > 0) - (c < 0) : 0);   /* NaN is neither > 0 nor < 0 */
+  }
+  return sp_unbox_oint(u);
+}
 /* The body, inlined where a hot loop compares (a sort's comparator); the
    function below is the one every other caller shares */
 static SP_INLINE sp_oint sp_poly_spaceship_rest(sp_RbVal a, sp_RbVal b);
@@ -6668,12 +6677,12 @@ static SP_INLINE sp_oint sp_poly_spaceship_rest(sp_RbVal a, sp_RbVal b) {
   return sp_oint_nil();
 }
 static sp_oint sp_poly_spaceship(sp_RbVal a, sp_RbVal b) { return sp_poly_spaceship_body(a, b); }
-/* `a <=> b` read as a value: a program's <=> answering a Bignum is that
-   Bignum, which the sp_oint answer above cannot carry */
+/* `a <=> b` read as a value: a program's <=> answering a Bignum, a Float or
+   a Rational is that value, which the sp_oint answer above cannot carry */
 static SP_UNUSED sp_RbVal sp_poly_spaceship_v(sp_RbVal a, sp_RbVal b) {
   sp_RbVal u;
   if (sp_poly_user_cmp("<=>", a, b, &u) || sp_poly_coerce_binop("<=>", a, b, &u))
-    return u.tag == SP_TAG_BIGINT || u.tag == SP_TAG_FLT ? u : sp_box_oint(sp_spaceship_answer(u));
+    return u.tag == SP_TAG_BIGINT || u.tag == SP_TAG_FLT || sp_poly_is_rational(u) || sp_poly_is_brat(u) ? u : sp_box_oint(sp_spaceship_answer(u));
   /* neither answered: the rest, without asking #coerce a second time */
   return sp_box_oint(sp_poly_spaceship_rest(a, b));
 }

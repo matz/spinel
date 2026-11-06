@@ -16642,7 +16642,8 @@ static void emit_obj_cmp_dispatch(Compiler *c, Buf *b) {
     if (m->nparams < 1) continue;
     /* a `<=>` that answers no number (always nil) still runs: Comparable's
        == and the sorts call it and read its answer as not-comparable */
-    int non_numeric = m->ret != TY_INT && m->ret != TY_POLY && m->ret != TY_FLOAT && m->ret != TY_BIGINT;
+    int rat_ret = m->ret == TY_RATIONAL && !method_ret_is_oint(m);
+    int non_numeric = m->ret != TY_INT && m->ret != TY_POLY && m->ret != TY_FLOAT && m->ret != TY_BIGINT && !rat_ret;
     /* the operand's parameter, the one the argument layout binds it to: not
        the first when an optional comes ahead of it (`def <=>(s = 1, o)`);
        none when a rest takes it (`def <=>(*r)`): the boxed operand, which
@@ -16779,13 +16780,22 @@ static void emit_obj_cmp_dispatch(Compiler *c, Buf *b) {
       buf_puts(b, "      if (!_rb) { *comparable = FALSE; return 0; }\n"
                   "      *comparable = TRUE; return sp_bigint_sign(_rb);\n");
     }
+    else if (rat_ret) {
+      /* a Rational answer orders the pair by its sign, as rb_cmpint reads
+         it; the denominator is positive */
+      buf_printf(b, "      sp_Rational _rq = %s(%s%s);\n", callee, selfarg, args.p ? args.p : "");
+      buf_puts(b, "      *comparable = TRUE; return (_rq.num > 0) - (_rq.num < 0);\n");
+    }
     else {
-      /* poly `<=>`: an Integer or Float result is comparable (use its sign);
-         nil or any other type (String, ...) is incomparable -> ArgumentError */
+      /* poly `<=>`: an Integer, Float, Bignum or Rational result is
+         comparable (use its sign); nil or any other type (String, ...) is
+         incomparable -> ArgumentError */
       buf_printf(b, "      sp_RbVal _r = %s(%s%s);\n", callee, selfarg, args.p ? args.p : "");
       buf_puts(b, "      if (_r.tag == SP_TAG_INT) { *comparable = TRUE; return _r.v.i; }\n");
       buf_puts(b, "      if (_r.tag == SP_TAG_FLT) { *comparable = TRUE; return (_r.v.f > 0) - (_r.v.f < 0); }\n");
       buf_puts(b, "      if (_r.tag == SP_TAG_BIGINT) { *comparable = TRUE; return sp_bigint_sign((sp_Bigint *)_r.v.p); }\n");
+      buf_puts(b, "      if (sp_poly_is_rational(_r) || sp_poly_is_brat(_r)) {"
+                  " sp_int _c = sp_poly_cmp(_r, sp_box_int(0), comparable); return (_c > 0) - (_c < 0); }\n");
       buf_puts(b, "      *comparable = FALSE; return 0;\n");
     }
     buf_puts(b, "    }\n");

@@ -1,0 +1,4 @@
+syswrite on a read-only file: IOError: not opened for writing
+the file is unchanged: "abc"
+syswrite after close_write: IOError: not opened for writing
+the peer reads to the end: ""

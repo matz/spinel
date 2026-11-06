@@ -10819,6 +10819,29 @@ static void bam_wrapper_params(NodeTable *nt, const char *recv_param, int nfwd, 
   }
 }
 
+/* The class of a true-or-false value whose every value position is a
+   `true` literal (TrueClass) or every one a `false` literal (FalseClass),
+   leaving out a position that is never the value (the left of `x || y`
+   when it is false); NULL where it may be either */
+typedef struct { const NodeTable *nt; int t, f, other; } BoolLeaves;
+static int bool_class_leaf(const VpLeaf *lf, void *ud) {
+  BoolLeaves *b = ud;
+  NodeKind k = lf->kind == VPK_EXPR ? nt_kind(b->nt, lf->node) : NK_NilNode;
+  int lit = k == NK_TrueNode ? 1 : k == NK_FalseNode ? 0 : -1;
+  unsigned own = lit == 1 ? VPR_TRUTHY : VPR_FALSY;
+  if (lit >= 0 && lf->reach && lf->reach != own) return 0;   /* never the value */
+  if (lit == 1) b->t = 1;
+  else if (lit == 0) b->f = 1;
+  else b->other = 1;
+  return b->other;
+}
+static const char *bool_value_class(const NodeTable *nt, int n) {
+  BoolLeaves b = { nt, 0, 0, 0 };
+  for_each_value_position(nt, n, VP_AND_LEFT | VP_WRITES | VPS_ALL, bool_class_leaf, &b);
+  if (b.other || b.t == b.f) return NULL;
+  return b.t ? "TrueClass" : "FalseClass";
+}
+
 /* `recv.method(:sym)` over a BUILTIN receiver (string/int/array/...) has no
    compiled function to bind, so calling the Method crashed. Synthesize a
    top-level wrapper `def __bam_<id>(__bam_r) = __bam_r.sym` -- the wrapper's
@@ -11001,7 +11024,10 @@ static int desugar_builtin_method_obj(Compiler *c) {
                        : ty_is_array(rt) ? "Array" : ty_is_hash(rt) ? "Hash"
                        : rt == TY_RANGE ? "Range" : rt == TY_TIME ? "Time"
                        : rt == TY_BOOL ? "Object" : NULL;
-      bclasses = rt == TY_BOOL ? "TrueClass FalseClass" : bcls;
+      /* (a true's or false's own method is TrueClass's or FalseClass's: a
+         receiver of either class, where nothing tells which, has both) */
+      const char *bool_cls = rt == TY_BOOL ? bool_value_class(nt, recv) : NULL;
+      bclasses = rt == TY_BOOL ? (bool_cls ? bool_cls : "TrueClass FalseClass") : bcls;
       /* TrueClass/FalseClass define the logical operators (#2835) */
       int bool_op = rt == TY_BOOL &&
                     is_bit_op(sym);
@@ -11014,9 +11040,7 @@ static int desugar_builtin_method_obj(Compiler *c) {
         continue;
       cmp_only = bcls && !builtin_method_known(bcls, sym) && builtin_comparable_owns(bcls, sym);
       num_only = bcls && !builtin_method_known(bcls, sym) && builtin_numeric_owns(bcls, sym);
-      /* (a true's or false's own method is TrueClass's or FalseClass's,
-         which no single name answers: only one both answer the same) */
-      owner_name = rt == TY_BOOL ? builtin_bool_method_owner(sym) : builtin_method_owner(bcls, sym);
+      owner_name = rt == TY_BOOL ? builtin_bool_method_owner(bool_cls, sym) : builtin_method_owner(bcls, sym);
       if (bcls && builtin_method_arity(bcls, sym, &sym_arity)) have_arity = 1;
       else if (cmp_only) { sym_arity = builtin_comparable_arity(sym); have_arity = 1; }
       else if (num_only && builtin_numeric_arity(sym, &sym_arity)) have_arity = 1;

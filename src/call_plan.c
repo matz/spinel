@@ -1175,11 +1175,13 @@ static int bam_reopen_walk(Compiler *c, int site, const char *cls, const char *s
   if (!anc) return -2;
   int na = 0, nk = 0, r = -1, last = 0;
   char *names = bam_names_split(anc, &na);
+  const char *lastn = NULL;   /* the last class walked: the builtin's */
   int *ks = malloc(sizeof(int) * (size_t)(na > 0 ? na : 1));
   if (!ks) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   /* (the ancestors' classes the program reopens, -1 for the others) */
   for (const char *p = names; nk < na && !last; p += strlen(p) + 1) {
     last = !own || sp_streq(p, own);
+    lastn = p;
     ks[nk++] = comp_builtin_class_named(c, p);
   }
   for (int i = 0; i < nk && r == -1; i++) {
@@ -1191,9 +1193,16 @@ static int bam_reopen_walk(Compiler *c, int site, const char *cls, const char *s
     for (int j = i; j < nk && k >= 0; j++) in |= ks[j] == k;
     /* (or a module the program prepends to it, which shadows the class's
        own method as a reopen does) */
-    if (!in && k >= 0) in = elab_own_method_at(c, ks[i], sym, elab_point_of(c, site)) == ELAB_YES;
-    /* (a version the record gives that is no def of these, or no
-       method the program has, cannot be told either) */
+    int own_at = !in && k >= 0 ? elab_own_method_at(c, ks[i], sym, elab_point_of(c, site)) : ELAB_UNKNOWN;
+    in = in || own_at == ELAB_YES;
+    /* (a def the last class surely gives no def of its own nor a
+       prepend's is an included module's or an ancestor's, which the
+       class's builtin shadows where the class defines the method itself
+       (its instance facts list it); where the builtin comes from a module
+       behind the include, the include's def wins, and like any other
+       version the record gives that is no def of these, or no method the
+       program has, it cannot be told) */
+    if (!in && own_at == ELAB_NO && i == nk - 1 && builtin_instance_method_known(lastn, sym)) continue;
     int v = in ? comp_method_version(c, k, sym, 0, d->node, &dc) : -1;
     r = v >= 0 ? v : -2;
   }

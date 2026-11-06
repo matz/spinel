@@ -357,14 +357,18 @@ static int method_owner_singleton(Compiler *c, int mi, int unbound) {
 }
 
 /* Method#owner of method mi as node mn makes the Method (-1: none): the
-   class an alias was made in (method_obj_alias_owner), else what a
-   builtin's or an accessor's wrapper stands for (bam_owner: the builtin's
-   class or module by name in *bname), else the module a copy came from or
-   mi's class; *sg 1 for that class's singleton */
+   class an alias was made in (method_obj_alias_owner), else for a
+   builtin's wrapper that reaches the program's def of the name instead (a
+   reopen's or a prepended module's, cplan_bam_reopen_target) that def's,
+   else what a builtin's or an accessor's wrapper stands for (bam_owner:
+   the builtin's class or module by name in *bname), else the module a
+   copy came from or mi's class; *sg 1 for that class's singleton */
 static int method_owner_ci(Compiler *c, int mn, int mi, int unbound, int *sg, const char **bname) {
   int h = mn >= 0 ? method_obj_alias_owner(c, mn, sg) : -1;
   *bname = NULL;
   if (h >= 0) { *sg = *sg && !unbound; return h; }
+  int rd = cplan_bam_reopen_target(c, mi);
+  if (rd >= 0) return method_owner_ci(c, -1, rd, unbound, sg, bname);
   const Scope *m = &c->scopes[mi];
   *sg = 0;
   if ((h = bam_owner(c, mi, bname)) >= 0 || *bname) return h;
@@ -902,7 +906,7 @@ int emit_op_method_owner(Compiler *c, const BopCtx *x, Buf *b) {
                strncmp(c->scopes[target].name, "__bam_", 6) == 0;
   int mrecv = mn >= 0 ? nt_ref(nt, mn, "receiver") : -1;
   const char *bown = NULL;
-  if (target >= 0 && (!is_bam || bam_owner(c, target, &bown) >= 0 || bown)) {
+  if (target >= 0 && (!is_bam || cplan_bam_reopen_target(c, target) >= 0 || bam_owner(c, target, &bown) >= 0 || bown)) {
     /* a method a module provides is owned by that module, however many
        classes include it (#3662); a class method by its class's singleton;
        an alias by the class it was made in; an accessor's or a builtin's

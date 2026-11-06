@@ -16,7 +16,7 @@ class Server
   def each_line(xs)
     xs.each do |x|
       p x
-      "a".unicode_normalize(:nfc) if x == 2
+      proc { "a" }.ruby2_keywords if x == 2
     end
     :done
   end
@@ -36,5 +36,5 @@ rescue NotImplementedError => e
   puts e.class
 end
 puts "done"
-"a".unicode_normalize(:nfd)
+proc { "a" }.ruby2_keywords
 puts "not reached"

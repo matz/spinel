@@ -6,4 +6,5 @@
 #define SP_PACKAGE_FACTS(X) \
   X("io", "io/buffer", 1, NULL) \
   X("set", "set", 1, NULL) \
-  X("time", "time", 0, "time")
+  X("time", "time", 0, "time") \
+  X("unicode_normalize", "unicode_normalize", 1, NULL)

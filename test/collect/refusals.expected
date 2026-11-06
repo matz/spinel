@@ -755,10 +755,10 @@ spinel: 1 refusal, nothing written
 spinel: test/reject/defined_super_builtin_singleton.rb:6: unsupported defined?(super) where the method super reaches is not known at compile time: node N (DefinedNode)
 spinel: 1 refusal, nothing written
 == test/reject/dynamic_send_then_refusal.rb [default] rc=1
-spinel: test/reject/dynamic_send_then_refusal.rb:15: String#unicode_normalize is not supported: Unicode normalization requires shipping the Unicode decomposition/composition tables, which spinel deliberately does not carry -- the same limit as String#grapheme_clusters (see docs/limitations.md)
+spinel: test/reject/dynamic_send_then_refusal.rb:15: Proc#ruby2_keywords is not supported: it is a shim for the Ruby 2.x-to-3.0 keyword-argument transition, and spinel targets modern keyword semantics, so it has nothing to toggle (see docs/limitations.md)
 spinel: 1 refusal, nothing written
 == test/reject/dynamic_send_then_refusal.rb [promote] rc=1
-spinel: test/reject/dynamic_send_then_refusal.rb:15: String#unicode_normalize is not supported: Unicode normalization requires shipping the Unicode decomposition/composition tables, which spinel deliberately does not carry -- the same limit as String#grapheme_clusters (see docs/limitations.md)
+spinel: test/reject/dynamic_send_then_refusal.rb:15: Proc#ruby2_keywords is not supported: it is a shim for the Ruby 2.x-to-3.0 keyword-argument transition, and spinel targets modern keyword semantics, so it has nothing to toggle (see docs/limitations.md)
 spinel: 1 refusal, nothing written
 == test/reject/enumerator_own_with_object.rb [default] rc=1
 spinel: test/reject/enumerator_own_with_object.rb:17: Enumerator#with_object of the program's own (an Enumerator reopening, or a module it prepends or includes) is not supported
@@ -1285,10 +1285,10 @@ spinel: test/reject/method_called_reaches_its_target.rb:5: Class.new with a non-
 spinel: test/reject/method_called_reaches_its_target.rb:5: Class.new with a non-constant superclass is not supported; use a constant superclass (see docs/limitations.md)
 spinel: 2 refusals, nothing written
 == test/reject/method_defined_polyfill_unimplemented_builtin.rb [default] rc=1
-spinel: test/reject/method_defined_polyfill_unimplemented_builtin.rb:10: String#unicode_normalize is not supported: Unicode normalization requires shipping the Unicode decomposition/composition tables, which spinel deliberately does not carry -- the same limit as String#grapheme_clusters (see docs/limitations.md)
+spinel: test/reject/method_defined_polyfill_unimplemented_builtin.rb:10: Proc#ruby2_keywords is not supported: it is a shim for the Ruby 2.x-to-3.0 keyword-argument transition, and spinel targets modern keyword semantics, so it has nothing to toggle (see docs/limitations.md)
 spinel: 1 refusal, nothing written
 == test/reject/method_defined_polyfill_unimplemented_builtin.rb [promote] rc=1
-spinel: test/reject/method_defined_polyfill_unimplemented_builtin.rb:10: String#unicode_normalize is not supported: Unicode normalization requires shipping the Unicode decomposition/composition tables, which spinel deliberately does not carry -- the same limit as String#grapheme_clusters (see docs/limitations.md)
+spinel: test/reject/method_defined_polyfill_unimplemented_builtin.rb:10: Proc#ruby2_keywords is not supported: it is a shim for the Ruby 2.x-to-3.0 keyword-argument transition, and spinel targets modern keyword semantics, so it has nothing to toggle (see docs/limitations.md)
 spinel: 1 refusal, nothing written
 == test/reject/method_defined_unlisted_builtin_superclass.rb [default] rc=1
 spinel: test/reject/method_defined_unlisted_builtin_superclass.rb:6: unsupported method_defined? (needs a compile-time-known class and literal method name): node N (CallNode `method_defined?`) recv=ConstantReadNode/ty49 argc=1 arg0ty8

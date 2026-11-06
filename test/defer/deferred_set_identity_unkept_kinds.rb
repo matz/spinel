@@ -25,5 +25,5 @@ list = [1e300, Item.new, 2**62 - 1, 2**62, Rational(1, 3), :name.to_s, /re/, Reg
 list.size.times { |i| puts try(seen, pick(list, i)) }
 puts seen.size
 puts seen.include?(pick([Item.new, 2.5], 0))
-"a".unicode_normalize(:nfd)
+proc { "a" }.ruby2_keywords
 puts "not reached"

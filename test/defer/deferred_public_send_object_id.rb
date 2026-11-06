@@ -44,5 +44,5 @@ end
 Point.new.with(x: 10) { |o| p o.x }
 Label.new.with(text: "b") { |o| p o.text }
 puts "done"
-"a".unicode_normalize(:nfd)
+proc { "a" }.ruby2_keywords
 puts "not reached"

@@ -42,5 +42,5 @@ class Unrelated
 end
 p Unrelated.new.instance_eval("x")
 puts "after"
-"a".unicode_normalize(:nfd)
+proc { "a" }.ruby2_keywords
 puts "not reached"

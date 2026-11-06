@@ -1802,7 +1802,7 @@ defer-refusals-test: $(SPINEL)
 	    { echo "defer-refusals-test: FAIL ($$t: deferred refusals not counted)"; sed -n 1,5p "$$tmp/d.out"; ok=0; }; \
 	  "$$tmp/d" >"$$tmp/r.out" 2>"$$tmp/r.err"; st=$$?; out=$$(tr '\n' ' ' <"$$tmp/r.out"); \
 	  [ "$$out" = "$$want" ] || { echo "defer-refusals-test: FAIL ($$t ran wrong: $$out)"; ok=0; }; \
-	  [ $$st -ne 0 ] && grep -q "unicode_normalize is not supported.*(NotImplementedError)" "$$tmp/r.err" || \
+	  [ $$st -ne 0 ] && grep -q "ruby2_keywords is not supported.*(NotImplementedError)" "$$tmp/r.err" || \
 	    { echo "defer-refusals-test: FAIL ($$t: a refused line did not raise NotImplementedError, exit $$st)"; sed -n 1,3p "$$tmp/r.err"; ok=0; }; \
 	done; \
 	rm -rf "$$tmp"; \

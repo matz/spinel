@@ -20,5 +20,5 @@ rescue NotImplementedError => e
   puts e.message.include?("singleton method that needs a self")
 end
 puts "after"
-"a".unicode_normalize(:nfd)
+proc { "a" }.ruby2_keywords
 puts "not reached"

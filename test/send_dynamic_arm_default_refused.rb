@@ -6,7 +6,7 @@
 # not compile.
 class Zone
   def initialize(n) = @n = n
-  def parse(s, at = "#{@n}".unicode_normalize(:nfc)) = "#{s}@#{at}"
+  def parse(s, at = proc { "#{@n}" }.ruby2_keywords) = "#{s}@#{at}"
   def zname(x) = "#{@n}#{x}"
 end
 

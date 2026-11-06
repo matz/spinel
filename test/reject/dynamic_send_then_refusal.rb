@@ -12,7 +12,7 @@ end
 
 def run(o, name, arg)
   r = o.public_send(name, arg)
-  x = "a".unicode_normalize(:nfc)
+  x = proc { "a" }.ruby2_keywords
   [r, x]
 end
 

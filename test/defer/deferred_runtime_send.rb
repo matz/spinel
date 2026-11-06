@@ -22,5 +22,5 @@ rescue NotImplementedError => e
   puts e.message.include?("runtime method name")
 end
 puts "after"
-"a".unicode_normalize(:nfd)
+proc { "a" }.ruby2_keywords
 puts "not reached"

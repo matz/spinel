@@ -25,5 +25,5 @@ rescue NotImplementedError
 end
 p C.new.r
 puts "after"
-"a".unicode_normalize(:nfd)
+proc { "a" }.ruby2_keywords
 puts "not reached"

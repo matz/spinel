@@ -4,7 +4,7 @@
 # spinel: defer-refusals: 1:before
 class Thing
   puts "before"
-  "a".unicode_normalize(:nfc)
+  proc { "a" }.ruby2_keywords
   puts "not reached"
 end
 puts "not reached"

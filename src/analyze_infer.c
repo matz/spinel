@@ -10469,7 +10469,7 @@ static int infer_constant_path(Compiler *c, int id, const NodeTable *nt, NodeKin
       TyKind ct = TY_UNKNOWN; int nc = 0, uniform = 1;
       int *cands, ncands = comp_const_tail_cands(c, nm, &cands);
       /* (each class's own chain, and Object's top-level one) */
-      int obj_k = comp_class_index(c, "Object");
+      int obj_k = comp_core_class(c, CORE_OBJECT);
       for (int k = 0; k < c->nclasses; k++) {
         if (k == obj_k) continue;
         int ci2 = const_path_value_const(c, k, nm, cands, ncands);
@@ -10479,8 +10479,8 @@ static int infer_constant_path(Compiler *c, int id, const NodeTable *nt, NodeKin
         nc++;
       }
       free(cands);
-      LocalVar *topc = const_name_resolves_top_level(c, nm) ? comp_const(c, nm) : NULL;
-      if (topc && !comp_is_wellknown_const(nm)) {
+      const LocalVar *topc = const_value_path_top(c, nm);
+      if (topc) {
         if (nc == 0) ct = topc->type;
         else if (topc->type != ct) uniform = 0;
         nc++;

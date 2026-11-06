@@ -2132,11 +2132,13 @@ int const_seen_by_class(Compiler *c, int k, const char *cgn) {
 }
 /* The constant `m::NM` reads when m holds class or module K at run time,
    as an index into c->consts, or -1 when CRuby raises NameError. CRuby
-   looks in K's own constants first, then in each module K prepends or
-   includes (the last one first, with the modules that one includes), then
-   in K's superclass the same way. It stops at Object: a top-level constant
-   is not found through another class or module. (Object itself, the
-   caller asks: const_name_resolves_top_level.) */
+   looks in K's own constants first, then in the modules K prepends, then
+   in those it includes (the last one first, each with the modules it
+   includes itself), then in K's superclass, whose prepended modules come
+   ahead of its own constants. A module a superclass already has is not
+   included again. The walk stops at Object: a top-level constant is not
+   found through another class or module (Object itself reads it:
+   const_value_path_top). */
 static int cpv_own(Compiler *c, int k, const char *nm, const int *cands, int ncands) {
   int ci = comp_class_owned_const(c, k, nm, cands, ncands);
   if (ci >= 0) return ci;
@@ -2144,21 +2146,38 @@ static int cpv_own(Compiler *c, int k, const char *nm, const int *cands, int nca
   LocalVar *lv = key ? comp_const(c, key) : NULL;
   return lv ? (int)(lv - c->consts) : -1;
 }
-static int cpv_walk(Compiler *c, int k, const char *nm, const int *cands, int ncands, int depth) {
-  if (depth > 16) return -1;
+/* Does class or module k, or a class above it, include or prepend module
+   m (also through another module)? */
+static int cpv_has_mod(Compiler *c, int k, int m, int depth) {
+  if (depth > 16) return 0;
   for (int n = 0; k >= 0 && k < c->nclasses && n < 64; k = c->classes[k].parent, n++) {
     const ClassInfo *ci = &c->classes[k];
-    if (ci->name && is_object_base_name(ci->name)) break;
+    for (int i = 0; i < ci->nincluded_mods; i++)
+      if (ci->included_mods[i] == m || (ci->included_mods[i] != k && cpv_has_mod(c, ci->included_mods[i], m, depth + 1))) return 1;
+    for (int i = 0; i < ci->nprepended_mods; i++)
+      if (ci->prepended_mods[i] == m || (ci->prepended_mods[i] != k && cpv_has_mod(c, ci->prepended_mods[i], m, depth + 1))) return 1;
+  }
+  return 0;
+}
+static int cpv_walk(Compiler *c, int k, const char *nm, const int *cands, int ncands, int depth) {
+  if (depth > 16) return -1;
+  int obj = comp_core_class(c, CORE_OBJECT), bo = comp_core_class(c, CORE_BASIC_OBJECT);
+  for (int n = 0; k >= 0 && k < c->nclasses && n < 64; k = c->classes[k].parent, n++) {
+    if (k == obj || k == bo) break;
+    const ClassInfo *ci = &c->classes[k];
+    int own = n == 0 && depth == 0 ? cpv_own(c, k, nm, cands, ncands) : -1;
+    if (own >= 0) return own;
     for (int i = ci->nprepended_mods - 1; i >= 0; i--) {
       int m = ci->prepended_mods[i];
-      int r = m != k ? cpv_walk(c, m, nm, cands, ncands, depth + 1) : -1;
+      if (m == k || cpv_has_mod(c, ci->parent, m, 0)) continue;
+      int r = cpv_walk(c, m, nm, cands, ncands, depth + 1);
       if (r >= 0) return r;
     }
-    int own = cpv_own(c, k, nm, cands, ncands);
-    if (own >= 0) return own;
+    if (!(n == 0 && depth == 0) && (own = cpv_own(c, k, nm, cands, ncands)) >= 0) return own;
     for (int i = ci->nincluded_mods - 1; i >= 0; i--) {
       int m = ci->included_mods[i];
-      int r = m != k ? cpv_walk(c, m, nm, cands, ncands, depth + 1) : -1;
+      if (m == k || cpv_has_mod(c, ci->parent, m, 0)) continue;
+      int r = cpv_walk(c, m, nm, cands, ncands, depth + 1);
       if (r >= 0) return r;
     }
   }
@@ -2167,6 +2186,40 @@ static int cpv_walk(Compiler *c, int k, const char *nm, const int *cands, int nc
 int const_path_value_const(Compiler *c, int k, const char *nm, const int *cands, int ncands) {
   if (k < 0 || k >= c->nclasses || !nm) return -1;
   return cpv_walk(c, k, nm, cands, ncands, 0);
+}
+/* The top-level constant NM that `Object::NM` reads through a value, or
+   NULL (none, or a well-known one the compiler reads by itself). The tree
+   walk is kept per name while the node table stays the same. */
+static ANameHash g_cvt_memo;
+static const LocalVar **g_cvt_ans;
+static const NodeTable *g_cvt_nt;
+static unsigned g_cvt_ver;
+static unsigned long g_cvt_edits;
+static int g_cvt_cnt = -1, g_cvt_nconsts = -1;
+const LocalVar *const_value_path_top(Compiler *c, const char *nm) {
+  if (!nm || comp_is_wellknown_const(nm)) return NULL;
+  const NodeTable *nt = c->nt;
+  if (g_cvt_nt != nt || g_cvt_ver != nt->version || g_cvt_edits != nt->edits || g_cvt_cnt != nt->count ||
+      g_cvt_nconsts != c->nconsts) {
+    for (int i = 0; i < g_cvt_memo.n; i++) free((char *)g_cvt_memo.key[i]);
+    anh_free(&g_cvt_memo); memset(&g_cvt_memo, 0, sizeof g_cvt_memo);
+    free(g_cvt_ans); g_cvt_ans = NULL;
+    g_cvt_nt = nt; g_cvt_ver = nt->version; g_cvt_edits = nt->edits; g_cvt_cnt = nt->count; g_cvt_nconsts = c->nconsts;
+  }
+  int m = anh_find(&g_cvt_memo, nm);
+  if (m >= 0) return g_cvt_ans[m];
+  const LocalVar *lv = const_name_resolves_top_level(c, nm) ? comp_const(c, nm) : NULL;
+  /* (or one a `class Object` body writes, which is top-level too) */
+  int ob = comp_core_class(c, CORE_OBJECT);
+  const char *ok = !lv && ob >= 0 ? const_value_owned_key(c, ob, nm) : NULL;
+  if (ok) lv = comp_const(c, ok);
+  char *key = strdup(nm);
+  if (!key) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  anh_add(&g_cvt_memo, key);
+  g_cvt_ans = realloc(g_cvt_ans, sizeof(*g_cvt_ans) * (size_t)g_cvt_memo.cap);
+  if (!g_cvt_ans) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  g_cvt_ans[g_cvt_memo.n - 1] = lv;
+  return lv;
 }
 /* `R.const_defined?(:N)` with R's class: N known to the program and seen
    from R. The table is flat, keyed by the leaf, so a constant another class

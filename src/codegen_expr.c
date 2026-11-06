@@ -3657,7 +3657,7 @@ static int emit_constant_value(Compiler *c, int id, Buf *b, Buf *checks, const N
       int nc = 0;
       TyKind ct = TY_UNKNOWN; int uniform = 1;
       int *cands, ncands = comp_const_tail_cands(c, nm, &cands);
-      int obj_k = comp_class_index(c, "Object");
+      int obj_k = comp_core_class(c, CORE_OBJECT);
       for (int k = 0; k < c->nclasses; k++) {
         if (k == obj_k) continue;
         int ci2 = const_path_value_const(c, k, nm, cands, ncands);
@@ -3668,12 +3668,21 @@ static int emit_constant_value(Compiler *c, int id, Buf *b, Buf *checks, const N
         ccls[nc] = k; ckey[nc] = found; nc++;
       }
       free(cands);
-      LocalVar *topc = const_name_resolves_top_level(c, nm) ? comp_const(c, nm) : NULL;
-      if (topc && !comp_is_wellknown_const(nm)) {
+      const LocalVar *topc = const_value_path_top(c, nm);
+      if (topc) {
         if (nc == 0) ct = topc->type;
         else if (topc->type != ct) uniform = 0;
+        /* (Object's class value: the builtin's, or the program's reopening) */
         ccls[nc] = builtin_class_id("Object"); ckey[nc] = topc->name; nc++;
         if (obj_k >= 0) { ccls[nc] = obj_k; ckey[nc] = topc->name; nc++; }
+      }
+      /* String slots that hold the handle (one String mode) are read through
+         it after the switch, as a plain read of one is (emit_strbuf_slot_read) */
+      int strbuf = 0;
+      for (int i = 0; i < nc; i++) {
+        int sb = repr_of_slot(c, comp_const(c, ckey[i])).kind == RK_STRBUF;
+        if (i == 0) strbuf = sb;
+        else if (sb != strbuf) uniform = 0;
       }
       if (nc > 0 && uniform && ct != TY_UNKNOWN) {
         int tk = ++g_tmp, tr = ++g_tmp;
@@ -3682,12 +3691,17 @@ static int emit_constant_value(Compiler *c, int id, Buf *b, Buf *checks, const N
         if (prtr.kind == RK_BOXED) { buf_puts(b, "sp_unbox_class("); emit_boxed(c, par_idc, b); buf_puts(b, ")"); }
         else emit_expr(c, par_idc, b);
         buf_puts(b, "; ");
-        emit_ctype(c, ct, b);
-        buf_printf(b, " %s_t%d = %s; switch (_t%d.cls_id) {", slot ? "*" : "", tr,
-                   slot ? "NULL" : default_value_from_compiler(c, ct), tk);
+        if (strbuf) buf_puts(b, "sp_String");
+        else emit_ctype(c, ct, b);
+        buf_printf(b, " %s%s_t%d = %s; switch (_t%d.cls_id) {", strbuf ? "*" : "", slot ? "*" : "", tr,
+                   slot || strbuf ? "NULL" : default_value_from_compiler(c, ct), tk);
         for (int i = 0; i < nc; i++) {
           /* a constant not assigned yet is as missing as one the class lacks */
-          if (const_has_flag(comp_const(c, ckey[i])))
+          if (const_has_flag(comp_const(c, ckey[i])) && topc && i >= nc - (obj_k >= 0 ? 2 : 1))
+            /* (Object's own: CRuby's message names the constant alone) */
+            buf_printf(b, " case %d: if (!cst_%s__set) sp_raise_cls(\"NameError\", \"uninitialized constant %s\");"
+                          " _t%d = %scst_%s; break;", ccls[i], ckey[i], nm, tr, slot ? "&" : "", ckey[i]);
+          else if (const_has_flag(comp_const(c, ckey[i])))
             buf_printf(b, " case %d: if (!cst_%s__set) sp_raise_cls(\"NameError\", sp_sprintf("
                           "\"uninitialized constant %%s::%s\", %s(_t%d)));"
                           " _t%d = %scst_%s; break;", ccls[i], ckey[i], nm, comp_class_display_fn(c), tk, tr, slot ? "&" : "", ckey[i]);
@@ -3696,10 +3710,17 @@ static int emit_constant_value(Compiler *c, int id, Buf *b, Buf *checks, const N
         }
         /* A class with no such constant is CRuby's NameError, not the
            leaf-named constant of some unrelated scope. */
-        buf_printf(b, " default: sp_raise_cls(\"NameError\", sp_sprintf("
+        /* (Object's names the constant alone) */
+        buf_printf(b, " default: sp_raise_cls(\"NameError\", _t%d.cls_id == %d || _t%d.cls_id == %d ? \"uninitialized constant %s\" : sp_sprintf("
                       "\"uninitialized constant %%s::%s\", sp_class_to_s(_t%d))); break;",
-                   nm, tk);
-        buf_printf(b, " } _t%d; })", tr);
+                   tk, builtin_class_id("Object"), tk, obj_k >= 0 ? obj_k : builtin_class_id("Object"), nm, nm, tk);
+        if (strbuf && !slot) {
+          char sref[40]; snprintf(sref, sizeof sref, "_t%d", tr);
+          buf_puts(b, " } ");
+          emit_strbuf_slot_read(c, id, repr_of(c, id), sref, b);
+          buf_puts(b, "; })");
+        }
+        else buf_printf(b, " } _t%d; })", tr);
         free(ccls); free(ckey);
         return 1;
       }

@@ -31,3 +31,28 @@ end
 class Sub < Base; end
 class Sub2 < Base; Name = "sub2"; end
 p [Base.new, Sub.new, Sub2.new].map(&:name)
+
+# A class's own constant comes ahead of a module it prepends; a subclass
+# reads the prepended module first. A module a superclass already includes
+# is not included again.
+module Pp; Pc = 2; end
+class Ap; Pc = 1; prepend Pp; end
+class Bp < Ap; end
+def pc(m) = (m::Pc rescue :none)
+p [Ap, Bp].map { |m| pc(m) }
+module M1; Rc = 1; end
+module M2; Rc = 2; end
+class Ar; include M1; include M2; end
+class Cr < Ar; include M1; end
+def rc(m) = (m::Rc rescue :none)
+p [Ar, Cr].map { |m| rc(m) }
+
+# a String constant of one holder, read under a rescue modifier
+class Sh; Str = "sh"; end
+def str(m) = (m::Str rescue "none")
+p [Sh, Z].map { |m| str(m) }
+
+# a constant a `class Object` body writes is top-level: only Object reads it
+class Object; Ob = 4; end
+def ob(m) = (m::Ob rescue $!.message)
+p [Object, Z].map { |m| ob(m) }

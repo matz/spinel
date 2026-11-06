@@ -18809,25 +18809,32 @@ static SP_UNUSED sp_RbVal sp_orange_walk_at(sp_ObjRange *w, sp_int i) {
   if (i + 1 > w->wnext) w->wnext = i + 1;
   return i >= 0 && i < w->wbuf->len ? w->wbuf->data[i] : sp_box_nil();
 }
-/* first(n): n members walked, so an endless Range answers too */
-static SP_UNUSED sp_PolyArray *sp_orange_first_n(const sp_ObjRange *r, sp_int n) {
+/* n members walked, so an endless Range answers too. Range#first(n) stops
+   when the walk yields one member more (range.c first_i), so the nth member's
+   succ runs, unless it is the inclusive end; Enumerable#take stops right
+   after the nth member (take_i) */
+static SP_UNUSED sp_PolyArray *sp_orange_walk_n(const sp_ObjRange *r, sp_int n, int one_more) {
   SP_GC_ROOT(r);
-  if (n < 0) sp_raise_cls("ArgumentError", "negative array size (or size too big)");
   sp_PolyArray *a = sp_PolyArray_new(); SP_GC_ROOT(a);
   if (n == 0) return a;
   sp_RbVal v = sp_orange_walk_start(r); SP_GC_ROOT_RBVAL(v);
-  int st;
+  int st = 0;
   while (a->len < n && (st = sp_orange_walk_on(r, v)) != 0) {
     sp_PolyArray_push(a, v);
     if (st == 2) break;
-    if (a->len < n) v = sp_orange_walk_succ(v);
+    if (a->len < n || one_more) v = sp_orange_walk_succ(v);
   }
+  if (one_more && a->len == n && st == 1) (void)sp_orange_walk_on(r, v);
   return a;
 }
-/* Enumerable#take: first(n) but for the negative count's message */
+static SP_UNUSED sp_PolyArray *sp_orange_first_n(const sp_ObjRange *r, sp_int n) {
+  if (n < 0) sp_raise_cls("ArgumentError", "negative array size (or size too big)");
+  return sp_orange_walk_n(r, n, 1);
+}
+/* Enumerable#take: the negative count's own message */
 static SP_UNUSED sp_PolyArray *sp_orange_take(const sp_ObjRange *r, sp_int n) {
   if (n < 0) sp_raise_cls("ArgumentError", "attempt to take negative size");
-  return sp_orange_first_n(r, n);
+  return sp_orange_walk_n(r, n, 0);
 }
 /* the ends must compare, as the boxed constructor (sp_range_new_box) checks */
 static SP_UNUSED sp_ObjRange *sp_orange_new_typed(sp_RbVal f, sp_RbVal l, sp_int x) {

@@ -1,0 +1,54 @@
+succ 1
+"V2"
+succ 1
+succ 2
+succ 3
+succ 4
+nil
+succ 1
+succ 2
+["V1", "V2"]
+succ 1
+succ 2
+2
+V1 0
+succ 1
+V2 1
+succ 1
+succ 2
+"V3"
+succ 1
+succ 2
+2
+succ 1
+1
+succ 1
+succ 2
+nil
+succ 1
+succ 2
+["V1", "V2"]
+["V1"]
+succ 1
+succ 2
+["V1", "V2", "V3"]
+succ 1
+succ 2
+succ 1
+["V1", "V2"]
+["V1", "V2"]
+succ 1
+"V2"
+succ 1
+succ 2
+"V3"
+succ 1
+succ 2
+succ 3
+succ 4
+"V1..V5"
+succ 1
+"V2"
+succ 1
+[]
+nil

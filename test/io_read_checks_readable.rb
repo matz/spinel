@@ -1,6 +1,7 @@
 # Every read on a handle that does not read raises "not opened for
 # reading", as gets already did: a file opened for appending, and a socket
-# after close_read. recv answers nil there, and handles that read still do.
+# after close_read. read_nonblock and recv still hand over what arrived
+# before the read side was shut, as CRuby does, and handles that read still do.
 require "socket"
 require "tmpdir"
 

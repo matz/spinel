@@ -2303,6 +2303,9 @@ const char *sp_sock_read_nb(sp_File *f, sp_int len, sp_bool exc, sp_bool is_recv
                                           : sp_sprintf("negative length %lld given", (long long)len));
   if (eof) *eof = 0;
   if (is_recv) sp_sock_nb_prepare(f, "recv_nonblock");
+  /* a socket whose read side is shut still hands over what arrived before,
+     as CRuby's read_nonblock and recv do (read and readpartial raise) */
+  else if (f->is_sock) SP_IO_OPEN(f);
   else sp_io_check_readable(f);
   /* the bytes read are BINARY, as CRuby's read_nonblock and recv answer them */
   if (len <= 0) { char *e = (char *)sp_str_from_bytes("", 0); sp_str_mark_binary(e); return e; }

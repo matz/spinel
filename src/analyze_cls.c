@@ -2334,6 +2334,13 @@ static void cf_builtin_rule(CF *f, int v, int recv_el, const int *argv, int argc
     else if (blk >= 0 && nt_kind(nt, blk) == NK_BlockArgumentNode && nt_ref(nt, blk, "expression") >= 0)
       cf_edge(f, nt_ref(nt, blk, "expression"), f->rvis);
   }
+  /* (the kinds' walk) `raise` and `fail` on self never answer: what they
+     are handed is the exception's (rescue takes every exception class,
+     cf_rescue), not the call's value, which a `case` arm of them carried
+     into the case's */
+  if (f->kon && recv_el < 0 && nm && (sp_streq(nm, "raise") || sp_streq(nm, "fail")) && v >= 0 && v < f->nnodes &&
+      nt_kind(nt, v) == NK_CallNode && nt_ref(nt, v, "receiver") < 0)
+    return;
   /* Exception#cause is the exception being handled when this one was
      raised: one of any class, not its receiver's */
   if (nm && sp_streq(nm, "cause") && argc == 0) cf_add_set(f, v, f->exc_set);
@@ -3101,7 +3108,23 @@ static void cf_call_known(CF *f, int v, int pidx, int recv_el, const char *nm, c
      makes nothing, so `new` and `allocate` on such a receiver are left to
      the program's Class objects it lists, #11154) */
   int ctor = sp_streq(nm, "new") || sp_streq(nm, "allocate");
-  if (pidx == CF_EMPTY || (s->bv && (s->bc || !ctor)) || s->os) builtin = 1;
+  /* (the kinds' walk: and a receiver typed an object of the program's is
+     that object or nil: on its nil, a name no builtin answers, which no
+     runtime class the program reopens defines, raises NoMethodError and
+     answers nothing, and before its class comes it holds nothing yet --
+     `xs[0].left`, whose builtin answer tied the reader's value to the
+     receiver's contents) */
+  int nil_raises = 0;
+  if (f->kon && !builtin && (pidx == CF_EMPTY || (s->bv && !s->os)) && v >= 0 && v < f->nnodes &&
+      nt_kind(f->nt, v) == NK_CallNode && !nt_safe_nav(f->nt, v)) {
+    int r0 = nt_ref(f->nt, v, "receiver");
+    if (r0 >= 0 && ty_is_object(comp_ntype(c, r0)) && !cf_kbuiltin_name_of(f, nm)) {
+      nil_raises = 1;
+      for (int i = 0; i < f->nopen && nil_raises; i++)
+        if (call_target(c, v, f->open[i], nm, 0, NULL) >= 0) nil_raises = 0;
+    }
+  }
+  if (!nil_raises && (pidx == CF_EMPTY || (s->bv && (s->bc || !ctor)) || s->os)) builtin = 1;
   if (builtin) {
     /* Deferred until the classes have settled: the builtin answer unifies
        the receiver with the call's value and arguments, which a receiver

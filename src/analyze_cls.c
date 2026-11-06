@@ -2311,6 +2311,18 @@ static int cf_plain_builtin_call(CF *f, const int *argv, int argc, int blk) {
   }
   return 1;
 }
+/* `&blk` handed to a builtin, where blk is the block parameter of a method
+   that only calls it (cf_collect_blk_local, which can't tell an Array's
+   `map(&blk)` from a program's): the literal blocks its callers give bind to
+   its yields (cf_bind_block), and no program method makes those, so what the
+   builtin yields is anything, as for a parameter that isn't only called */
+static void cf_blk_local_to_builtin(CF *f, int e) {
+  if (!f->blk_local || e < 0 || nt_kind(f->nt, e) != NK_LocalVariableReadNode) return;
+  int om = cf_owner_def(f, e, 1, NULL);
+  const char *en = nt_str(f->nt, e, "name");
+  if (om < 0 || !f->blk_local[om] || !en || !sp_streq(en, f->c->scopes[om].blk_param)) return;
+  for (int y = 0; y < CF_YARGS; y++) cf_all(f, f->yarg_el[om][y]);
+}
 /* (directed) a proc handed to a builtin as its block (`a.map(&pr)`,
    `Hash.new(&pr)`): the builtin calls it with its receiver or the
    receiver's elements, its arguments, or a value the runtime holds */
@@ -2674,7 +2686,7 @@ static void cf_builtin_rule(CF *f, int v, int recv_el, const int *argv, int argc
       if (!sym || sp_streq(sym, "new") || sp_streq(sym, "allocate") || cf_opaque_name(sym)) cf_all(f, v);
       else { CFByName *b = cf_byname(f, sym); for (int q = 0; q < b->n; q++) { cf_flow(f, f->ret_el[b->mi[q]], v); cf_store(f, v, f->ret_el[b->mi[q]]); } }
     }
-    else { cf_proc_value_ready(f, e); cf_unite(f, v, e); cf_builtin_proc_args(f, recv_el, argv, argc); }
+    else { cf_proc_value_ready(f, e); cf_unite(f, v, e); cf_builtin_proc_args(f, recv_el, argv, argc); cf_blk_local_to_builtin(f, e); }
   }
   (void)nm;
 }
@@ -3218,6 +3230,8 @@ static void cf_call_known(CF *f, int v, int pidx, int recv_el, const char *nm, c
 static void cf_call_any_at(CF *f, int v, const char *nm, const int *argv, int argc, int blk, int line) {
   Compiler *c = f->c;
   cf_add_set_at(f, v, CF_ALL, line);
+  /* (anything includes a builtin, which yields where no method of the name does) */
+  if (blk >= 0 && nt_kind(f->nt, blk) == NK_BlockArgumentNode) cf_blk_local_to_builtin(f, nt_ref(f->nt, blk, "expression"));
   /* a reader of the name answers its ivar's object: the call's value holds
      each such object, so what is stored into it (`x.items << y`) reaches the
      containers the readers answer, as on a known receiver. Without it the

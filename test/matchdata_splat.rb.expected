@@ -1,0 +1,6 @@
+[nil, "uri"]
+["{uri}", nil, "uri"]
+[:head, "{uri}", nil, "uri", :tail]
+[]
+["{uri}", nil, "uri"]
+["k", "v"]

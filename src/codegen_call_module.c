@@ -1707,6 +1707,26 @@ void emit_sock_family_arg(Compiler *c, int arg, int is_family, Buf *b) {
   buf_printf(b, ", %d)", is_family);
 }
 
+/* [end0, end1] of a socket pair: Socket.pair(domain, type[, protocol]), or
+   UNIXSocket.pair([type[, protocol]]) with AF_UNIX and SOCK_STREAM for an
+   argument it leaves out (`dom` / `type` -1). The two descriptors stay in
+   the call's own array until both handles exist. */
+static void emit_sock_pair(Compiler *c, int dom, int type, int proto, int is_unix, Buf *b) {
+  int tf = ++g_tmp, ta = ++g_tmp, tb = ++g_tmp, tp = ++g_tmp;
+  buf_printf(b, "({ int _t%d[2]; sp_sock_socketpair(", tf);
+  if (dom >= 0) emit_sock_family_arg(c, dom, 1, b); else buf_puts(b, "sp_sock_const(\"AF_UNIX\")");
+  buf_puts(b, ", ");
+  if (type >= 0) emit_sock_family_arg(c, type, 0, b); else buf_puts(b, "sp_sock_const(\"SOCK_STREAM\")");
+  buf_puts(b, ", ");
+  if (proto >= 0) emit_int_expr(c, proto, b); else buf_puts(b, "0");
+  buf_printf(b, ", _t%d); sp_File *_t%d = sp_sock_pair_handle(_t%d[0], %d); SP_GC_ROOT(_t%d);"
+                " sp_File *_t%d = sp_sock_pair_handle(_t%d[1], %d); SP_GC_ROOT(_t%d);"
+                " sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d);"
+                " sp_PolyArray_push(_t%d, sp_box_obj(_t%d, SP_BUILTIN_IO));"
+                " sp_PolyArray_push(_t%d, sp_box_obj(_t%d, SP_BUILTIN_IO)); _t%d; })",
+             tf, ta, tf, is_unix, ta, tb, tf, is_unix, tb, tp, tp, tp, ta, tp, tb, tp);
+}
+
 /* TCPSocket.new(host, port, connect_timeout: t): the connect that gives up
    after t seconds. Host, port and t are evaluated once each, in the order
    CRuby evaluates the arguments. t goes through its box: nil is no limit,
@@ -1873,19 +1893,9 @@ int emit_call_builtin_cmethod_arms(Compiler *c, int id, Buf *b, const NodeTable 
         buf_puts(b, ")");
         return 1;
       }
-      /* Socket.pair / .socketpair -> [end0, end1]; the runtime creates both on
-         the first call and hands back the second on the next. */
+      /* Socket.pair / .socketpair -> [end0, end1] */
       if ((is_socket_pair_alias(name)) && argc >= 2) {
-        int tp0 = ++g_tmp, tp1 = ++g_tmp, tpa = ++g_tmp;
-        buf_printf(b, "({ sp_File *_t%d = sp_sock_pair_end(", tp0);
-        emit_sock_family_arg(c, argv[0], 1, b); buf_puts(b, ", ");
-        emit_sock_family_arg(c, argv[1], 0, b); buf_puts(b, ", ");
-        if (argc >= 3) emit_int_expr(c, argv[2], b); else buf_puts(b, "0");
-        buf_printf(b, ", 0); SP_GC_ROOT(_t%d); sp_File *_t%d = sp_sock_pair_end(0, 0, 0, 1);"
-                      " SP_GC_ROOT(_t%d); sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d);"
-                      " sp_PolyArray_push(_t%d, sp_box_obj(_t%d, SP_BUILTIN_IO));"
-                      " sp_PolyArray_push(_t%d, sp_box_obj(_t%d, SP_BUILTIN_IO)); _t%d; })",
-                   tp0, tp1, tp1, tpa, tpa, tpa, tp0, tpa, tp1, tpa);
+        emit_sock_pair(c, argv[0], argv[1], argc >= 3 ? argv[2] : -1, 0, b);
         return 1;
       }
       /* Socket.getaddrinfo(host, port) ->

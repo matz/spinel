@@ -19417,6 +19417,7 @@ static TyKind sg_override_ret(Compiler *c, const Scope *sc, TyKind r) {
   return TY_POLY;
 }
 
+int g_late_hash_return_widened;   /* an_phase_late_widen reads it */
 static int irt_scope(Compiler *c, int s, IrtCtx *x) {
   const NodeTable *nt = c->nt;
   TyKind *ret_acc = x->ret_acc; char *has_ret = x->has_ret; char *ret_empty = x->ret_empty;
@@ -19618,6 +19619,8 @@ static int irt_scope(Compiler *c, int s, IrtCtx *x) {
       !(r == TY_POLY && sc->ret != TY_POLY && sc->ret != TY_UNKNOWN && sc->ret != TY_VOID && sc->ret != TY_NIL) &&
       !(r == TY_BIGINT && sc->ret == TY_INT) &&
       !(ty_is_hash(r) && ty_hash_val(r) == TY_POLY && ty_is_hash(sc->ret) && ty_hash_val(sc->ret) != TY_POLY)) return ch;
+  if (g_ret_no_new_poly == 2 && ty_is_hash(r) && ty_hash_val(r) == TY_POLY && ty_is_hash(sc->ret) && ty_hash_val(sc->ret) != TY_POLY)
+    g_late_hash_return_widened = 1;
   /* An element-less-hash body (`{}` / Hash.new) infers TY_UNKNOWN every pass
      (no witnessed element). Once a caller has pinned it to a concrete hash
      (backprop_hash_return_types), don't collapse it back to UNKNOWN -- that

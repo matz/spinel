@@ -1,0 +1,25 @@
+"3!"
+"2.5!"
+"x!"
+"y!"
+"<3>"
+"<2.5>"
+"<\"x\">"
+[Integer, false, true, true]
+[Float, false, false, true]
+[Symbol, false, false, false]
+[3, true]
+[2.5, true]
+"[1, 2]#"
+"{a: 1}#"
+"1..2#"
+[Array, true, true]
+[Hash, false, true]
+[Range, false, true]
+4
+6
+"7"
+"7"
+"{b: 2}"
+:main
+:main

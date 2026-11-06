@@ -15160,14 +15160,58 @@ static int bi_def_visibility(const NodeTable *nt, int st) {
 /* the receiverless calls a body copied for a method of the class or
    module cls may make that are NOT methods of the receiver: Kernel's
    functions that the receiver does not answer itself (bi_receiver_answers),
-   and the public methods of Object. In a copy of the program's own method
-   (own; not a builtins/ body), a private Kernel name the program defines on
-   the receiver's chain is its method, which CRuby's lookup finds through
-   self ahead of Kernel's function. */
+   and, in a builtins/ body, the public methods of Object. In a copy of the
+   program's own method (own), a public method of Object is the receiver's
+   (`to_s + "!"` in `module Comparable` answers "3!" for 3, not main's
+   to_s), and a private Kernel name the program defines on the receiver's
+   chain is its method, which CRuby's lookup finds through self ahead of
+   Kernel's function. */
+/* does every builtin class a copy of cls serves answer nm itself? A
+   Comparable copy of the program's own method serves a String and a
+   Symbol too (bx_cmp_own_class) */
+static int bi_receivers_all_answer(const char *cls, const char *nm) {
+  int any = 0;
+  for (int i = 0; bi_copy_receiver(cls, i); i++, any = 1)
+    if (!builtin_instance_method_known(bi_copy_receiver(cls, i), nm)) return 0;
+  if (sp_streq(cls, "Comparable") &&
+      (!builtin_instance_method_known("String", nm) || !builtin_instance_method_known("Symbol", nm))) return 0;
+  return any;
+}
+/* does the program define nm at the top level, or in a body of Object or
+   Kernel? CRuby's lookup reaches such a def after the receiver's class and
+   the mixed-in module, ahead of Object's and Kernel's builtin method */
+static int def_at_top_level(const NodeTable *nt, int n0, int def);
+static int bi_root_defines(const NodeTable *nt, const char *nm) {
+  /* one answer per name for the node table (the program's defs are all
+     there before the copies are made) */
+  static const NodeTable *cache_nt = NULL;
+  static char *cache_name[64]; static int cache_ans[64], cache_n = 0;
+  if (cache_nt != nt) {
+    for (int i = 0; i < cache_n; i++) free(cache_name[i]);
+    cache_n = 0; cache_nt = nt;
+  }
+  for (int i = 0; i < cache_n; i++) if (sp_streq(cache_name[i], nm)) return cache_ans[i];
+  int o = 0;
+  for (int id = 0; id < nt->count && !o; id++)
+    if (nt_kind(nt, id) == NK_DefNode && nt_ref(nt, id, "receiver") < 0 && nt_str(nt, id, "name") &&
+        sp_streq(nt_str(nt, id, "name"), nm) && def_at_top_level(nt, nt->count, id)) o = 1;
+  if (!o) {
+    BiSeen seen = { NULL, 0 };
+    o = bi_body_defines(nt, "", "Object", nm, &seen) || bi_body_defines(nt, "", "Kernel", nm, &seen);
+    bi_seen_free(&seen);
+  }
+  if (cache_n < 64 && (cache_name[cache_n] = strdup(nm))) cache_ans[cache_n++] = o;
+  return o;
+}
 static int bi_keeps_receiverless(const NodeTable *nt, const char *cls, int own, const char *nm) {
   if (is_enum_helper_name(nm)) return 1;
   if (!object_instance_method_name(nm)) return 0;
-  if (object_public_method_name(nm)) return 1;
+  /* in a copy of the program's own method, a public method of Object is
+     the receiver's, unless a top-level def of the name may answer first
+     (a receiver class with no builtin method of the name): such a call
+     stays as it was */
+  if (object_public_method_name(nm))
+    return !own || (!bi_receivers_all_answer(cls, nm) && bi_root_defines(nt, nm) && !own_chain_defines(nt, cls, nm));
   if (own && own_chain_defines(nt, cls, nm)) return 0;
   return !bi_receiver_answers(cls, nm);
 }
@@ -15232,6 +15276,26 @@ static int program_defines_name_off_class(const NodeTable *nt, int n0, const cha
    receiverless calls there (Kernel's aside) take it as their receiver; cls
    and own as bi_keeps_receiverless takes them */
 static void bi_self_to_local(NodeTable *nt, int lo, int hi, const char *cls, int own) {
+  /* the block of a call that runs it with another self (`7.instance_exec
+     { inspect }`): a public Object method there stays as it was. The nodes
+     are pre-order, so a block's subtree is one range; a block passed as a
+     value (`instance_exec(&pr)`) may be any proc of the body, so then every
+     such call stays. */
+  static const char *const rebinds[] = { "instance_eval", "instance_exec", "class_eval", "class_exec",
+                                         "module_eval", "module_exec", "define_method", NULL };
+  unsigned char *rebound = own && hi >= lo ? (unsigned char *)calloc((size_t)(hi - lo + 1), 1) : NULL;
+  int keep_all = 0;
+  for (int id = lo; rebound && id <= hi; id++) {
+    if (nt_kind(nt, id) != NK_CallNode || nt_ref(nt, id, "block") < 0 || !nt_str(nt, id, "name")) continue;
+    const char *cn = nt_str(nt, id, "name");
+    int k = 0;
+    while (rebinds[k] && !sp_streq(cn, rebinds[k])) k++;
+    if (!rebinds[k]) continue;
+    int blk = nt_ref(nt, id, "block");
+    if (nt_kind(nt, blk) != NK_BlockNode) { keep_all = 1; break; }
+    int bhi = fwd_subtree_max(nt, blk);
+    for (int j = blk; j <= bhi && j <= hi; j++) if (j >= lo) rebound[j - lo] = 1;
+  }
   for (int id = lo; id <= hi; id++) {
     NodeKind kind = nt_kind(nt, id);
     if (kind == NK_SelfNode) {
@@ -15242,12 +15306,14 @@ static void bi_self_to_local(NodeTable *nt, int lo, int hi, const char *cls, int
     else if (kind == NK_CallNode && nt_ref(nt, id, "receiver") < 0) {
       const char *nm = nt_str(nt, id, "name");
       if (!nm || bi_keeps_receiverless(nt, cls, own, nm)) continue;
-      int rd = nt_new_node(nt, "LocalVariableReadNode"); if (rd < 0) return;
+      if ((keep_all || (rebound && rebound[id - lo])) && object_public_method_name(nm)) continue;
+      int rd = nt_new_node(nt, "LocalVariableReadNode"); if (rd < 0) break;
       nt_node_set_str(nt, rd, "name", "__self");
       nt_node_set_int(nt, rd, "depth", 0);
       nt_set_self_receiver(nt, id, rd);
     }
   }
+  free(rebound);
 }
 
 /* A method a program's own `module Enumerable` reopening adds is CRuby's
@@ -17834,8 +17900,8 @@ static int bx_recv_concrete(int bx, TyKind rt) {
 
 /* Does the copy read its receiver only as `__self`? An instance variable
    in it is one slot for every receiver, where CRuby keeps one per String,
-   and a call with no receiver goes to main, where CRuby sends it to the
-   String (`to_s + "!"`). A call to another of the container's methods
+   and a call left with no receiver (bi_keeps_receiverless) goes to main,
+   where CRuby sends it to the String. A call to another of the container's methods
    (bx_copy) or a Kernel function that ignores self is fine. Kept on the
    copy (bx_self_free: 1 yes, 2 no). */
 static int bx_copy_self_free(Compiler *c, int copy) {

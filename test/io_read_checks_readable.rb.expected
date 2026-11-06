@@ -1,0 +1,22 @@
+read: IOError: not opened for reading
+read(2): IOError: not opened for reading
+readpartial: IOError: not opened for reading
+sysread: IOError: not opened for reading
+read_nonblock: IOError: not opened for reading
+getc: IOError: not opened for reading
+readchar: IOError: not opened for reading
+getbyte: IOError: not opened for reading
+readbyte: IOError: not opened for reading
+each_char: IOError: not opened for reading
+ungetc: IOError: not opened for reading
+ungetbyte: IOError: not opened for reading
+eof?: IOError: not opened for reading
+gets, as before: IOError: not opened for reading
+r+ reads: ["abc", "\n", false]
+w+ reads: [120, "yz"]
+an open socket reads: "more"
+socket read: IOError: not opened for reading
+socket readpartial: IOError: not opened for reading
+socket read_nonblock: IOError: not opened for reading
+socket getc: IOError: not opened for reading
+socket recv: nil

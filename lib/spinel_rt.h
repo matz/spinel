@@ -1325,7 +1325,7 @@ sp_int sp_io_copy_stream(const char *src, const char *dst);
 const char *sp_slurp_stream(FILE *fp);
 sp_File *sp_File_set_encoding(sp_File *f, sp_RbVal ext, sp_RbVal in);
 static inline const char *sp_File_read(sp_File *f) {
-  SP_IO_OPEN(f);
+  sp_io_check_readable(f);
   if (SP_ATOMIC_LOAD(&f->timeout, __ATOMIC_ACQUIRE)) return sp_File_read_timed(f, -1);
   sp_io_wait_readable(f);
   /* A handle whose read can block fills to EOF through the parking slurp: the
@@ -1354,7 +1354,7 @@ static inline const char *sp_File_read(sp_File *f) {
 static inline const char *sp_File_read_n(sp_File *f, sp_int n) {
   /* a negative length is CRuby's ArgumentError, checked before the stream */
   if (n < 0) sp_raise_cls("ArgumentError", sp_sprintf("negative length %lld given", (long long)n));
-  SP_IO_OPEN(f);
+  sp_io_check_readable(f);
   if (SP_ATOMIC_LOAD(&f->timeout, __ATOMIC_ACQUIRE)) return sp_File_read_timed(f, n);
   sp_io_wait_readable(f);
   if (n == 0) return sp_str_empty_binary();

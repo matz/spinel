@@ -50,3 +50,22 @@ end
 w = (W.new(1)..W.new(5))
 p w.take_while { |v| v.n < 3 }.map { |v| v.s }.sum { |y| y.size }
 p w.take_while { |v| v.n < 4 }.map(&:s).sum(&:size)
+# a boxed Range: take(n) does not run the nth member's succ, first(n) does
+def pick(i) = i == 0 ? (V.new(1)..V.new(5)) : [V.new(7)]
+bx = pick(0)
+p bx.take(1).map(&:to_s)
+p bx.first(1).map(&:to_s)
+p bx.send(:take, 2).map(&:to_s)
+p pick(1).take(1).map(&:to_s)
+# a find in a parameter default compiles (it still walks by to_a)
+class Q
+  attr_reader :n
+  def initialize(n) = @n = n
+  def <=>(o) = n <=> o.n
+  def succ = Q.new(n + 1)
+end
+def dflt(r, k = r.find(&:n)) = k.n
+p dflt(Q.new(1)..Q.new(3))
+def dflt2(r, k = r.find { |q| q.n > 1 }) = k.n
+p dflt2(Q.new(1)..Q.new(3))
+p (V.new(1)..V.new(3)).find(&:n).to_s

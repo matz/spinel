@@ -3238,6 +3238,7 @@ static SP_UNUSED int sp_orange_walk_on(const sp_ObjRange *r, sp_RbVal v);
 static SP_UNUSED sp_RbVal sp_orange_walker(const sp_ObjRange *r);
 static SP_UNUSED sp_int sp_orange_walk_len(sp_ObjRange *w);
 static SP_UNUSED sp_PolyArray *sp_orange_first_n(const sp_ObjRange *r, sp_int n);
+static SP_UNUSED sp_PolyArray *sp_orange_take(const sp_ObjRange *r, sp_int n);
 static SP_UNUSED sp_RbVal sp_orange_walk_at(sp_ObjRange *w, sp_int i);
 static sp_bool sp_orange_eq(const sp_ObjRange *a, const sp_ObjRange *b);   /* defined with the Range helpers below */
 static sp_int sp_orange_hash(const sp_ObjRange *r);
@@ -15605,6 +15606,8 @@ static sp_RbVal sp_poly_arr_take_n(sp_RbVal v, sp_int n) {
   if (n < 0) sp_raise_cls("ArgumentError", "attempt to take negative size");
   /* Enumerable#take(0) answers [] without iterating; first(0) iterates */
   if (n == 0) return sp_box_poly_array(sp_PolyArray_new());
+  /* take(n) stops after the nth member: first(n) runs that member's succ */
+  if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_OBJ_RANGE && v.v.p) return sp_box_poly_array(sp_orange_take((sp_ObjRange *)v.v.p, n));
   return sp_poly_arr_take(v, n);
 }
 static sp_RbVal sp_poly_arr_last_n(sp_RbVal v, sp_int n) {

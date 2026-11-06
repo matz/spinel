@@ -1,8 +1,9 @@
-# spinel: not-cruby -- CRuby builds the Range; Spinel's Range holds sp_int bounds, so a Bignum one is refused
 # A Range bound read out of a box that holds a Bignum: sp_Range has nowhere
 # to keep it, as the compile-time refusal says of one known statically.
 # Converted, it was cut to its low bits and `(128...m) === 252` answered
-# false; it raises NotImplementedError instead. A boxed Integer bound still
+# false. A membership question asked of the literal compares the ends and
+# the value in place, as CRuby answers (no Range is built); a Range that
+# must be built raises NotImplementedError. A boxed Integer bound still
 # builds the Range.
 m = 1 << 64
 m = "a" if ARGV.size > 5

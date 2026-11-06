@@ -16018,14 +16018,18 @@ static int oa_elem_evidence(Compiler *c, OAS *sl, int S, int node, const int *re
   if (ec == -1 && !is_empty_array_literal(c->nt, node, c->node_cap)) sl[S].odd_elem = 1;
   return ec;
 }
-/* `[A.new, A.new]` passed straight to a method: a literal of objects only,
-   built at the parameter's kind when that narrows (oa_note_src) */
+/* `[A.new, A.new]` or `[[5, 6], [7, 8]]` passed straight to a method: a
+   literal of objects, or of Integer or Float rows, only, built at the
+   parameter's kind when that narrows (oa_note_src). Which of them it holds,
+   and whether they agree, is the evidence oa_classify_value reads. */
 static int oa_obj_literal(Compiler *c, int node) {
   const NodeTable *nt = c->nt;
   if (node < 0 || nt_kind(nt, node) != NK_ArrayNode) return 0;
   int en = 0; const int *el = nt_arr(nt, node, "elements", &en);
-  for (int e = 0; e < en; e++)
-    if (nt_kind(nt, el[e]) == NK_SplatNode || !ty_is_object(infer_type(c, el[e]))) return 0;
+  for (int e = 0; e < en; e++) {
+    TyKind et = nt_kind(nt, el[e]) == NK_SplatNode ? TY_UNKNOWN : infer_type(c, el[e]);
+    if (!ty_is_object(et) && et != TY_INT_ARRAY && et != TY_FLOAT_ARRAY) return 0;
+  }
   return en > 0;
 }
 /* The filters: 1 for reject!, select! and filter!, which answer the array

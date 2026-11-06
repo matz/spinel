@@ -1954,8 +1954,8 @@ static int join_container_alias_groups(Compiler *c) {
   /* per group root: 0 none seen, 1 arrays, 2 hashes, 3 give up; the joined parts */
   unsigned char *fam = calloc((size_t)n, 1);
   TyKind *ea = malloc(sizeof(TyKind) * (size_t)n), *ka = malloc(sizeof(TyKind) * (size_t)n),
-         *va = malloc(sizeof(TyKind) * (size_t)n);
-  if (!par || !fam || !ea || !ka || !va) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+         *va = malloc(sizeof(TyKind) * (size_t)n), *aa = malloc(sizeof(TyKind) * (size_t)n);
+  if (!par || !fam || !ea || !ka || !va || !aa) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   for (int i = 0; i < n; i++) par[i] = i;
 /* (a local an --rbs seed types keeps the seed's kind, and the call
    converts into it, as the seed asks: it joins no group, and a site it may
@@ -1995,7 +1995,15 @@ static int join_container_alias_groups(Compiler *c) {
       TyKind t = lv->type;
       int f = ty_is_array(t) ? 1 : 2;
       if (fam[g] && fam[g] != f) { fam[g] = 3; continue; }
-      if (f == 1) { TyKind e = ty_array_elem(t); ea[g] = fam[g] ? ctr_join_kind(ea[g], e) : e; }
+      /* (and the Array kind itself, where they all hold one: an element
+         kind names no Array of its own for a table's rows or an object,
+         and ty_array_of took a table of Integer rows the group agreed on
+         for the general Array) */
+      if (f == 1) {
+        TyKind e = ty_array_elem(t);
+        ea[g] = fam[g] ? ctr_join_kind(ea[g], e) : e;
+        aa[g] = fam[g] ? ctr_join_kind(aa[g], t) : t;
+      }
       else {
         TyKind k = ty_hash_key(t), v = ty_hash_val(t);
         if (fam[g]) { ka[g] = ctr_join_kind(ka[g], k); va[g] = ctr_join_kind(va[g], v); }
@@ -2008,7 +2016,10 @@ static int join_container_alias_groups(Compiler *c) {
   for (int g = 0; g < n; g++) {
     if (par[g] != g) continue;
     TyKind want = TY_UNKNOWN;
-    if (fam[g] == 1) { want = ty_array_of(ea[g]); if (want == TY_UNKNOWN) want = TY_POLY_ARRAY; }
+    if (fam[g] == 1) {
+      want = aa[g] != TY_POLY ? aa[g] : ty_array_of(ea[g]);
+      if (want == TY_UNKNOWN) want = TY_POLY_ARRAY;
+    }
     else if (fam[g] == 2) {
       want = ty_hash_of(ka[g], va[g]);
       if (want == TY_UNKNOWN) want = ty_hash_of(ka[g], TY_POLY);
@@ -2058,7 +2069,7 @@ static int join_container_alias_groups(Compiler *c) {
   }
 #undef CTR_JOINS_LV
 #undef CTR_FIRST
-  free(par); free(fam); free(ea); free(ka); free(va); free(excl);
+  free(par); free(fam); free(ea); free(ka); free(va); free(aa); free(excl);
   return changed;
 }
 

@@ -11,7 +11,8 @@
      - nothing that runs before it, in program order and entering the bodies,
        can run code of the program's: only definitions (def, class, module,
        alias, attr_*, include, extend, prepend, a visibility call, a native
-       binding's declarations: native_lib, native_method ...) and the
+       binding's declarations: native_lib, native_method ..., unless the
+       program defines a method by such a name or method_missing) and the
        settled assignments of other constants, whose values are built of
        literals, settled constants, class constructors and the builtin
        operators on those, Math's functions (unless the program defines on
@@ -65,6 +66,7 @@ typedef struct {
   int cmissing;      /* the program defines const_missing, which spinel does not call */
   int reopened;      /* a builtin class is reopened: its operators may be the program's */
   int math_own;      /* the program defines on Math or reaches its singleton: its functions may be the program's */
+  int native_own;    /* the program defines a method named as a native declaration, or method_missing: such a call may run it */
 } ConstWalk;
 
 static int cw_index(const ConstWalk *w, const LocalVar *lv) { return (int)(lv - w->c->consts); }
@@ -147,7 +149,7 @@ static int cw_value_walk(ConstWalk *w, int id, int depth) {
         if (is_attr_reader_family(nm) || is_attr_writer_family(nm) || visibility_of_name(nm))
           return 1;
         /* a native binding's declarations, which make methods */
-        if (is_native_decl_name(nm)) return w->hooks ? 0 : 1;
+        if (is_native_decl_name(nm) && !w->native_own) return w->hooks ? 0 : 1;
         return is_mixin_call(nm) && !w->hooks ? 1 : 0;
       }
       int rv = cw_value(w, r, depth + 1);
@@ -360,6 +362,7 @@ void an_const_presence(Compiler *c) {
       const char *dn = nt_str(nt, id, "name");
       if (dn && is_definition_hook_name(dn)) w.hooks = 1;
       if (dn && is_const_missing_name(dn)) w.cmissing = 1;
+      if (dn && (is_native_decl_name(dn) || is_method_missing_name(dn))) w.native_own = 1;
     }
     else if (k == NK_ClassNode || k == NK_ModuleNode) {
       const char *cn = class_def_name(nt, id);

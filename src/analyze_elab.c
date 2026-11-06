@@ -5105,7 +5105,9 @@ int elab_call_window(Compiler *c, int id, ElabWindow *w) {
     w->to = end;
     w->closed = 1;
   }
-  w->never = nt_kind(c->nt, a) == NK_DefNode && r->urun[a] == LR_NEVER;   /* (the collapse below keeps a window, not a proof) */
+  /* (the collapse below keeps a window, not a proof; lr_rta walks the load
+     only, and under --ext-entry the host calls into the program after it) */
+  w->never = !g_ext_entries && nt_kind(c->nt, a) == NK_DefNode && r->urun[a] == LR_NEVER;
   if (nt_kind(c->nt, a) == NK_DefNode && r->urun[a] > w->from.seq)   /* nor before the body may first run (lr_rta) */
     w->from.seq = r->urun[a] < w->to.seq ? r->urun[a] : w->to.seq - 1;
   if (nt_kind(c->nt, a) == NK_DefNode && !lr_runs_in(r, w->from.seq, w->from.seq + 1)) {

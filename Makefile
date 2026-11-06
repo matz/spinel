@@ -1694,7 +1694,8 @@ test-corpus-summary: test-corpus-results
 # pure-C host drives it through the emitted header alone -- init, typed
 # entries, and a raise caught through the exported try helper -- and a kernel
 # whose entries start and join threads after an init that started some, and
-# one whose at_exit hooks run when the host exits, not as its init returns.
+# one whose at_exit hooks run when the host exits, not as its init returns,
+# and one whose entry calls a Struct's `new` the load redefined.
 ext-test: $(SPINEL) $(SP_RT_LIB) $(SP_RT_MT_LIB) $(SPINEL_TIMEOUT)
 	@tmp=$$(mktemp -d /tmp/spinel-ext.XXXXXX); ok=1; \
 	$(SPINEL) test/ext/kernel.rb -c --no-line-map \
@@ -1733,6 +1734,15 @@ ext-test: $(SPINEL) $(SP_RT_LIB) $(SP_RT_MT_LIB) $(SPINEL_TIMEOUT)
 	    printf 'init returned\nentry 41\n42\nmain returns\nentry hook 41\ntoplevel hook\n' | cmp -s - "$$tmp/out" && [ $$rc -eq 3 ] || \
 	      { echo "ext-test: FAIL (at_exit hooks not run at host exit, or status $$rc is not the host's 3)"; cat "$$tmp/out"; ok=0; }; \
 	  else echo "ext-test: FAIL (at_exit host C did not compile)"; sed -n 1,6p "$$tmp/cc.err"; ok=0; fi; \
+	fi; \
+	if [ $$ok -eq 1 ]; then \
+	  if ! $(SPINEL) test/ext/late_new.rb -c --no-line-map --ext-init Init_ext_late_new \
+	      --ext-entry ExtLateNew.e -o "$$tmp/l.c" >/dev/null 2>&1; then \
+	    echo "ext-test: FAIL (late_new emission)"; ok=0; \
+	  elif $(CC) -O1 -w -Ilib -I"$$tmp" test/ext/late_new_host.c "$$tmp/l.c" $(SP_RT_LIB) $(LDFLAGS) -lm -o "$$tmp/lhost" 2>"$$tmp/cc.err"; then \
+	    "$$tmp/lhost" > "$$tmp/out" 2>&1; \
+	    printf '2\n3\n' | cmp -s - "$$tmp/out" || { echo "ext-test: FAIL (late_new host output mismatch)"; cat "$$tmp/out"; ok=0; }; \
+	  else echo "ext-test: FAIL (late_new host C did not compile)"; sed -n 1,6p "$$tmp/cc.err"; ok=0; fi; \
 	fi; \
 	rm -rf "$$tmp"; \
 	if [ $$ok -eq 1 ]; then echo "ext-test: pass"; else exit 1; fi

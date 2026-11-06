@@ -1825,6 +1825,10 @@ typedef struct {
      are kept, and a call that reaches a later prepend's copy binds its
      guard entry */
   int ver_built;
+  /* the entries' build asks its calls (ver_entries_build), which make and
+     rename no scope: scope_is_shadowed answers from its table, as where
+     the scope index is frozen, not by a scan per ask */
+  int ver_asking;
   /* the scopes that are hidden copies (Scope.shadow), which
      comp_name_is_shadow_copy reads */
   int *shadow_copies, nshadow_copies, cshadow_copies;

@@ -6273,6 +6273,8 @@ void ver_entries_build(Compiler *c) {
      of their names asks an entry of the chain behind them */
   ver_named_asks(c, 0);
   if (c->nver_defer) qsort(c->ver_defer, (size_t)c->nver_defer, sizeof *c->ver_defer, ver_name_cmp);
+  /* (the asks below make and rename no scope: Compiler.ver_asking) */
+  c->ver_asking = 1;
   for (int id = 0, n0 = nt->count; id < n0; id++) {
     /* a respond_to? of a class's own class method reads the cells of the
        entry a call of the name would take there (cplan_cmethod_presence) */
@@ -6290,6 +6292,7 @@ void ver_entries_build(Compiler *c) {
       }
     }
   }
+  c->ver_asking = 0;
   for (int i = 0; i < o.n; i++) {
     /* (a guard entry's else arm runs the method behind the prepends) */
     int finds = ver_else_finds(c, VK_KEEP, o.v[i].cls, o.v[i].sg, o.v[i].name, SP_VIS_PUBLIC, -1);

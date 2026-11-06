@@ -1,0 +1,7 @@
+a: String
+b: Edge
+unknown symbol: Integer
+unknown symbol: Symbol
+unknown symbol: Edge
+[Integer ]
+Integer!

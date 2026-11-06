@@ -855,9 +855,11 @@ no_gsub_enum:
     if (at == TY_UNKNOWN && emit_str_format_untyped_array(c, recv, argv[0], fck, b)) return 1;
     /* a single non-array scalar argument formats as a one-element array
        (nil renders empty for %s; Rational/Complex coerce inside the
-       formatter's numeric directives; a Bignum is boxed as one) */
+       formatter's numeric directives; a Bignum is boxed as one; a Class,
+       `"unknown: %s" % x.class`, is its name) */
     if (at == TY_INT || at == TY_FLOAT || at == TY_STRING || at == TY_SYMBOL ||
-        at == TY_NIL || at == TY_BOOL || at == TY_RATIONAL || at == TY_COMPLEX || at == TY_BIGINT) {
+        at == TY_NIL || at == TY_BOOL || at == TY_RATIONAL || at == TY_COMPLEX || at == TY_BIGINT ||
+        at == TY_CLASS) {
       const char *fend = emit_str_format_held(c, recv, argv[0], -1, b);
       if (!fend) { buf_puts(b, "sp_str_format_polyarr("); emit_expr(c, recv, b); }
       /* the one-element list is held by `_fa` alone while an argument that

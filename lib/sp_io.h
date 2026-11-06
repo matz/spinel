@@ -302,6 +302,8 @@ sp_File *sp_sock_unix_connect(const char *path);
 /* Socket.unix(path) / Socket.tcp(host, port): the connection as a Socket */
 sp_File *sp_sock_unix_socket(const char *path);
 sp_File *sp_sock_tcp_socket(const char *host, sp_int port);
+/* TCPSocket.new(host, port, connect_timeout: seconds); negative is no limit */
+sp_File *sp_sock_tcp_connect_timeout(const char *host, sp_int port, double timeout_s);
 sp_int sp_sock_bind(sp_File *f, const char *host, sp_int port);
 sp_int sp_sock_connect(sp_File *f, const char *host, sp_int port);
 /* Socket#bind / #connect with a packed sockaddr */

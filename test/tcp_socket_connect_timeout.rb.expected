@@ -1,0 +1,8 @@
+connect_timeout: 5
+connect_timeout: 2.5
+connect_timeout: nil
+nil: TCPSocket
+open: TCPSocket
+host, port, connect_timeout
+refused: Errno::ECONNREFUSED
+unresolved: Socket::ResolutionError

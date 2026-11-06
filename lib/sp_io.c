@@ -1520,6 +1520,24 @@ sp_File *sp_sock_tcp_socket(const char *host, sp_int port) {SP_GC_ROOT_STR(host)
   f->mode = SPL("socket");
   return f;
 }
+/* TCPSocket.new(host, port, connect_timeout: seconds): a connect nothing
+   answers within the seconds raises CRuby's IO::TimeoutError, which names
+   the address it was waiting on. A refusal or a failed lookup raises what
+   TCPSocket.new(host, port) raises for it. A negative timeout_s is
+   connect_timeout: nil, no limit. */
+sp_File *sp_sock_tcp_connect_timeout(const char *host, sp_int port, double timeout_s) {SP_GC_ROOT_STR(host);
+  extern int sp_net_connect_timeout(const char *host, int port, double timeout_s);
+  extern int sp_net_take_connect_timeout(void);
+  extern int sp_net_connect_timeout_ip(char *ipbuf, int cap);
+  int fd = sp_net_connect_timeout(host, (int)port, timeout_s);
+  if (fd < 0 && sp_net_take_connect_timeout()) {
+    char ip[64] = "";
+    int p = sp_net_connect_timeout_ip(ip, (int)sizeof ip);
+    sp_raise_cls("IO::TimeoutError", sp_sprintf(strchr(ip, ':') ? "user specified timeout for [%s]:%d"
+                                                               : "user specified timeout for %s:%d", ip, p));
+  }
+  return sp_io_fdopen_sock(fd, SPL("tcp"));
+}
 
 /* BasicSocket#do_not_reverse_lookup and its writer: a socket's own, so a
    File or a pipe answers NoMethodError, as CRuby does */

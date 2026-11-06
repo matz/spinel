@@ -1,0 +1,6 @@
+queue full: true
+unanswered: IO::TimeoutError
+names the address: true
+is an IOError: true
+waited the timeout: true
+open: IO::TimeoutError

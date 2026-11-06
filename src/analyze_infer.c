@@ -1655,11 +1655,11 @@ static int ivar_array_elems_all_int_array_impl(Compiler *c, int cid, const char 
         }
         /* (a row the table moves, read out of it or out of a table whose
            check is running, says nothing of the rows either way) */
-        if (!an_own_row_read(c, av[a], ivname, 0) && !an_scanned_row_read(c, cid, av[a]) &&
-            an_row_from_untyped_slot(c, av[a])) return 0;
+        int own = an_own_row_read(c, av[a], ivname, 0);
+        if (!own && !an_scanned_row_read(c, cid, av[a]) && an_row_from_untyped_slot(c, av[a])) return 0;
         TyKind vt = comp_ntype(c, av[a]);
         if (vt == TY_INT_ARRAY) { saw = 1; continue; }
-        if (an_own_row_read(c, av[a], ivname, 0)) continue;
+        if (own) continue;
         if (an_row_open_empty(c, av[a])) return 0;
         /* a value with no type yet this pass: in the passes after the
            fixpoint a boxed one (`@rows[0] = @other[i]`, @other holding a

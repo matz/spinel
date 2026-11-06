@@ -18,3 +18,5 @@ p a.map { |x, | x.n }
 def y3 = yield([1, A.new, C.new])
 y3 { |a, *r| puts r.map(&:foo).join(",") }
 y3 { |a, b = nil, c| puts c.foo }
+[[A.new, C.new]].each { puts _2.foo }
+y2 { puts _2.foo }

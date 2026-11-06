@@ -1607,11 +1607,13 @@ static int cf_block_params(CF *f, int blk, const char **out, int max, int *plain
   return n;
 }
 /* does a block of blk's parameters spread one yielded Array over them
-   (`|a, b|`, `|a, *r|`, `|a, |`), as CRuby does? Then each parameter may
+   (`|a, b|`, `|a, *r|`, `|a, |`, `_2`), as CRuby does? Then each parameter may
    also take an element of the one value handed to it. */
 static int cf_block_autosplats(CF *f, int blk) {
   const NodeTable *nt = f->nt;
   int bp = nt_ref(nt, blk, "parameters");
+  /* `{ _2.m }` takes two numbered parameters: the same spread */
+  if (bp >= 0 && nt_kind(nt, bp) == NK_NumberedParametersNode) return block_param_name(f->c, blk, 1) != NULL;
   if (bp < 0 || nt_kind(nt, bp) != NK_BlockParametersNode) return 0;
   int pn = nt_ref(nt, bp, "parameters");
   if (pn < 0 || nt_kind(nt, pn) != NK_ParametersNode) return 0;

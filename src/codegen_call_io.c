@@ -144,8 +144,15 @@ static void emit_io_read_buffer(Compiler *c, const char *name, const char *fn, c
   if (boxed)
     buf_printf(b, "if (_t%d && sp_poly_is_strbuf(_t%d) && sp_String_is_frozen((sp_String *)_t%d.v.p))"
                   " sp_raise_frozen_str(_t%d); ", ts, ta + nint, ta + nint, ts);
+  /* readpartial into a buffer that is a shared handle reads straight into
+     it (sp_File_readpartial_into), with no String between to copy from */
+  int into = boxed && !handle && !rest && sp_streq(fn, "sp_File_readpartial_or_nil");
+  int tq = into ? ++g_tmp : 0;
+  if (into) buf_printf(b, "sp_bool _t%d = sp_poly_is_strbuf(_t%d); ", tq, ta + nint);
   buf_printf(b, "if (_t%d) sp_str_check_mutable(_t%d); const char *_t%d = ", ts, ts, tr);
   if (rest) buf_printf(b, "sp_poly_nil_p(_t%d) ? sp_File_read(_t%d) : ", ta, tf);
+  if (into)
+    buf_printf(b, "_t%d ? sp_File_readpartial_into(_t%d, _t%d, (sp_String *)_t%d.v.p) : ", tq, tf, ti, ta + nint);
   buf_printf(b, "%s(_t%d", fn, tf);
   for (int k = 0; k < nint; k++) buf_printf(b, ", _t%d", ti + k);
   buf_puts(b, "); ");
@@ -155,8 +162,10 @@ static void emit_io_read_buffer(Compiler *c, const char *name, const char *fn, c
                ts, ta + nint, tr, tr);
   else if (boxed) {
     int tn = ++g_tmp;
-    buf_printf(b, "if (_t%d) { sp_RbVal _t%d = sp_poly_str_become(_t%d, _t%d ? _t%d : sp_str_empty); ",
-               ts, tn, ta + nint, tr, tr);
+    buf_printf(b, "if (_t%d", ts);
+    if (into) buf_printf(b, " && !_t%d", tq);   /* the read already filled it */
+    buf_printf(b, ") { sp_RbVal _t%d = sp_poly_str_become(_t%d, _t%d ? _t%d : sp_str_empty); ",
+               tn, ta + nint, tr, tr);
     if (nt_kind(c->nt, ob) == NK_LocalVariableReadNode) { emit_expr(c, ob, b); buf_printf(b, " = _t%d; } ", tn); }
     else buf_printf(b, "(void)_t%d; } ", tn);
   }

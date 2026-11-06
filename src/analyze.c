@@ -46437,6 +46437,25 @@ static void rewrite_array_subclass_self_call(Compiler *c, int id) {
   if (self >= 0) nt_node_set_ref((NodeTable *)c->nt, id, "receiver", self);
 }
 
+/* Is id inside a block an instance_exec (or the like) runs with a self of
+   its own, within the def that holds it? */
+static int self_rebound_at(Compiler *c, int id) {
+  static const char *const rebinders[] = { "instance_eval", "instance_exec", "class_eval", "class_exec",
+    "module_eval", "module_exec", "define_singleton_method", NULL };
+  const NodeTable *nt = c->nt;
+  int *par = an_parent_map(nt);
+  if (!par) return 1;
+  int hit = 0;
+  for (int n = id, d = 0; n >= 0 && d < 4096 && nt_kind(nt, n) != NK_DefNode; n = par[n], d++) {
+    int p = par[n];
+    if (nt_kind(nt, n) != NK_BlockNode || p < 0 || nt_kind(nt, p) != NK_CallNode || nt_ref(nt, p, "block") != n) continue;
+    const char *nm = nt_str(nt, p, "name");
+    if (nm && str_in(nm, rebinders)) { hit = 1; break; }
+  }
+  free(par);
+  return hit;
+}
+
 /* `X.new(args) { blk }` for an Array subclass none of whose classes defines
    initialize or self.new is Array.new's construction on an instance of X:
    `X.allocate.replace(Array.new(args) { blk })`, and `X.new` is
@@ -46468,8 +46487,11 @@ static void rewrite_array_subclass_new(Compiler *c, int id) {
     int sr = nt_ref(nt, recv, "receiver");
     Scope *s = comp_scope_of(c, id);
     int nd = 0;
+    /* (a `class` the program defines answers what it says, not self's
+       class; ie_class_of is not built yet, as this runs before the fixpoint) */
     if (time_maker && (sr < 0 || nt_kind(nt, sr) == NK_SelfNode) && s && !s->is_cmethod && s->class_id >= 0 &&
-        comp_ary_is_time(c, s->class_id) && (comp_descendants(c, s->class_id, &nd), nd == 0)) {
+        comp_ary_is_time(c, s->class_id) && (comp_descendants(c, s->class_id, &nd), nd == 0) &&
+        comp_method_in_chain(c, s->class_id, "class", NULL) < 0 && !self_rebound_at(c, id)) {
       int kc = arysub_node(c, "ConstantReadNode", id);
       if (kc >= 0) {
         nt_node_set_str((NodeTable *)nt, kc, "name", c->classes[s->class_id].name);

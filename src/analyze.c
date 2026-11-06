@@ -2414,11 +2414,12 @@ else {
              the block as a proc and drives it over the elements. That proc
              escapes like any other, and without cells the block's writes to
              enclosing locals went to a copy -- `a.map { |x| n = n + 1 }` on a
-             real Array ran the block and left n at 0 (#3459). */
+             real Array ran the block and left n at 0 (#3459). So do the
+             pre-arms of each_index, times and synchronize. */
           { int bargs = nt_ref(nt, id, "arguments");
             int bn2 = 0;
             if (bargs >= 0) nt_arr(nt, bargs, "arguments", &bn2);
-            if (bn2 == 0 && poly_enum_op_for(name)) return 1; }
+            if (bn2 == 0 && poly_blk_prearm_name(name)) return 1; }
         }
       }
     }

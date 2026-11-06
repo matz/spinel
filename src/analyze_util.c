@@ -4558,6 +4558,9 @@ const char *method_sym_arg(Compiler *c, int node) {
 int method_user_override_recv(Compiler *c, int node) {
   const NodeTable *nt = c->nt;
   int recv = nt_ref(nt, node, "receiver"), k;
+  /* the arm a boxed receiver's split gives the program's method
+     (bam_split_user_method) */
+  if (nt_int(nt, node, "user_method_call", 0)) return 1;
   if (recv < 0) {
     int s = c->nscope ? c->nscope[node] : -1, cm = 0;
     if (s <= 0 || s >= c->nscopes) return 0;

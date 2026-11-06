@@ -10876,6 +10876,87 @@ static const char *bool_value_class(const NodeTable *nt, int n) {
   return b.t ? "TrueClass" : "FalseClass";
 }
 
+/* `o.method(:sym)` on a boxed receiver that may be an instance of a class
+   with a `method` of the program's own (#10719): such a class's instances
+   call that method, any other value builds the builtin Method. A local or
+   self receiver splits on the classes that have one:
+
+     (if o.is_a?(W) then o.method(:sym)       # user_method_call
+      else o.method(:sym) end)                # builtin_only
+
+   1 when it split. Another receiver is left as it was. */
+static int bam_split_user_method(Compiler *c, int id, int recv, const char *sym) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  if (nt_int(nt, id, "builtin_only", 0) || nt_int(nt, id, "user_method_call", 0)) return 0;
+  NodeKind rk = nt_kind(nt, recv);
+  if (rk != NK_LocalVariableReadNode && rk != NK_SelfNode) return 0;
+  if (infer_type(c, recv) != TY_POLY) return 0;
+  int args = nt_ref(nt, id, "arguments"), an = 0;
+  nt_arr(nt, args, "arguments", &an);
+  if (an != 1 || nt_ref(nt, id, "block") >= 0) return 0;
+  int nk = 0;
+  const int *ks = poly_recv_classes(c, id, &nk);
+  int n = ks ? nk : c->nclasses, own[64], nown = 0;
+  for (int i = 0; i < n && nown < 64; i++) {
+    int k = ks ? ks[i] : i;
+    /* (instantiated is not known yet while the types settle: a class the
+       value cannot be fails its is_a? at run time) */
+    if (k < 0 || k >= c->nclasses || !c->classes[k].name) continue;
+    int mi = comp_method_in_chain(c, k, "method", NULL);
+    if (mi < 0 || mi >= c->nscopes || c->scopes[mi].def_node < 0 || nt_int(nt, c->scopes[mi].def_node, "node_bi", 0)) continue;
+    own[nown++] = k;
+  }
+  if (!nown) return 0;
+  int base = nt->count;
+#define BSU_RECV() (rk == NK_SelfNode ? nt_new_node(nt, "SelfNode") : \
+                    (bsu_t = nt_new_node(nt, "LocalVariableReadNode"), nt_node_set_str(nt, bsu_t, "name", nt_str(nt, recv, "name")), \
+                     nt_node_set_int(nt, bsu_t, "depth", nt_int(nt, recv, "depth", 0)), bsu_t))
+  int bsu_t, cond = -1;
+  for (int i = 0; i < nown; i++) {
+    int kc = nt_new_node(nt, "ConstantReadNode");
+    nt_node_set_str(nt, kc, "name", c->classes[own[i]].name);
+    int ka = nt_new_node(nt, "ArgumentsNode");
+    nt_node_set_arr(nt, ka, "arguments", &kc, 1);
+    int isa = nt_new_node(nt, "CallNode");
+    nt_node_set_str(nt, isa, "name", "is_a?");
+    nt_node_set_ref(nt, isa, "receiver", BSU_RECV());
+    nt_node_set_ref(nt, isa, "arguments", ka);
+    if (cond < 0) cond = isa;
+    else { int o = nt_new_node(nt, "OrNode"); nt_node_set_ref(nt, o, "left", cond); nt_node_set_ref(nt, o, "right", isa); cond = o; }
+  }
+  int arm[2];
+  for (int j = 0; j < 2; j++) {
+    int sy = nt_new_node(nt, "SymbolNode");
+    nt_node_set_str(nt, sy, "value", sym);
+    nt_node_set_str(nt, sy, "unescaped", sym);
+    int sa = nt_new_node(nt, "ArgumentsNode");
+    nt_node_set_arr(nt, sa, "arguments", &sy, 1);
+    int call = nt_new_node(nt, "CallNode");
+    nt_node_set_str(nt, call, "name", "method");
+    nt_node_set_ref(nt, call, "receiver", BSU_RECV());
+    nt_node_set_ref(nt, call, "arguments", sa);
+    nt_node_set_int(nt, call, j == 0 ? "user_method_call" : "builtin_only", 1);
+    int st = nt_new_node(nt, "StatementsNode");
+    nt_node_set_arr(nt, st, "body", &call, 1);
+    arm[j] = st;
+  }
+#undef BSU_RECV
+  int els = nt_new_node(nt, "ElseNode");
+  nt_node_set_ref(nt, els, "statements", arm[1]);
+  int ifn = nt_new_node(nt, "IfNode");
+  nt_node_set_ref(nt, ifn, "predicate", cond);
+  nt_node_set_ref(nt, ifn, "statements", arm[0]);
+  nt_node_set_ref(nt, ifn, "subsequent", els);
+  int body = nt_new_node(nt, "StatementsNode");
+  nt_node_set_arr(nt, body, "body", &ifn, 1);
+  nt_node_reset(nt, id, "ParenthesesNode");
+  nt_node_set_ref(nt, id, "body", body);
+  comp_grow_node_arrays(c);
+  int encl = c->nscope[id];
+  for (int j = base; j < nt->count; j++) c->nscope[j] = encl;
+  return 1;
+}
+
 /* `recv.method(:sym)` over a BUILTIN receiver (string/int/array/...) has no
    compiled function to bind, so calling the Method crashed. Synthesize a
    top-level wrapper `def __bam_<id>(__bam_r) = __bam_r.sym` -- the wrapper's
@@ -10981,6 +11062,8 @@ static int desugar_builtin_method_obj(Compiler *c) {
     }
     const char *sym = method_sym_arg(c, id);
     if (!sym || !sym[0] || sym[0] == '_') continue;   /* already rewritten / internal */
+    if (nt_int(nt, id, "user_method_call", 0)) continue;   /* the program's own method: no wrapper */
+    if (bam_split_user_method(c, id, recv, sym)) { changed = 1; continue; }
     /* a binary operator method (5.method(:+)) gets a 2-param wrapper below,
        a unary one (5.method(:-@)) the 1-param wrapper of a method that takes
        no argument; other non-letter syms have no wrapper shape */
@@ -11110,6 +11193,15 @@ static int desugar_builtin_method_obj(Compiler *c) {
        each_with_index's hands it, where the operand wrapper dropped the
        second. A Hash's takes its one key. */
     if (passed && binop && sp_streq(sym, "[]") && !poly_self && (ty_is_array(rt) || rt == TY_STRING))
+      nfwd = BAM_VARIADIC;
+    /* A boxed receiver's Method that no site above calls (held in an
+       ivar, or merged with another value as the arm a split on the
+       program's `method` leaves it, #10719) is called through the thunk a
+       boxed Method carries, which binds only a wrapper taking a rest: a
+       wrapper of no argument raised NoMethodError for the call. It takes
+       any count, and the builtin takes the rest by its length. (A runtime
+       name's arm, dyn_of, is sized as before.) */
+    if (poly_self && !binop && !passed && sites == -1 && nt_int(nt, id, "dyn_of", -1) < 0)
       nfwd = BAM_VARIADIC;
     if (nfwd > 8) nfwd = BAM_VARIADIC;
     if (nfwd != BAM_VARIADIC && nfwd < 0) nfwd = 0;

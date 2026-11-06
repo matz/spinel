@@ -15302,8 +15302,18 @@ static int desugar_multi_yield_map_param(Compiler *c) {
     int cid = ty_object_class(rt);
     if (cid < 0 || cid >= c->nclasses ||
         (c->classes[cid].enum_yield_arity <= 1 && !c->classes[cid].enum_yield_packed)) continue;
-    /* a map the program defines takes what it yields, not what #each does */
-    if (call_target(c, id, cid, nm, 0, NULL) >= 0) continue;
+    /* a map the program defines takes what it yields, not what #each does --
+       unless a class below the one defining it includes Enumerable, whose map
+       comes first in the ancestors */
+    int dcls = -1;
+    if (call_target(c, id, cid, nm, 0, &dcls) >= 0) {
+      int enum_first = 0;
+      for (int cur = cid; cur >= 0 && cur < c->nclasses && cur != dcls; cur = c->classes[cur].parent) {
+        if (an_class_includes_enumerable(c, cur)) { enum_first = 1; break; }
+        if (c->classes[cur].parent == cur) break;
+      }
+      if (!enum_first) continue;
+    }
     int packed = c->classes[cid].enum_yield_packed;
     if (packed && comp_method_in_chain(c, cid, "__enum_to_a_raw", NULL) < 0) continue;
     int bp = nt_ref(nt, blk, "parameters");

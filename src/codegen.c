@@ -20347,17 +20347,20 @@ static int program_reopens_builtin_class(Compiler *c) {
 }
 
 /* Whether builtin module `mod` is already on builtin class `bid`'s own
-   chain, as the ancestors walk's builtin arm emits it (Numeric, String and
-   Symbol include Comparable; Array, Hash, Range, Enumerator and Struct
-   include Enumerable; Object includes Kernel): a reopening's `include` of it
-   adds nothing, as in CRuby. */
+   chain, as the ancestors walk's builtin arm emits it (Numeric, String,
+   Symbol and Time include Comparable; Array, Hash, Range, Enumerator,
+   Struct, IO and Dir include Enumerable, File and the sockets through IO;
+   Object includes Kernel): a reopening's `include` of it adds nothing, as
+   in CRuby. */
 static int builtin_chain_has_module(int bid, int mod) {
   switch (mod) {
   case -119: return bid != -117;                                  /* Kernel */
   case -114: return bid == -100 || bid == -101 || bid == -113 || bid == -131 ||
-                    bid == -142 || bid == -102 || bid == -103;    /* Comparable */
+                    bid == -142 || bid == -102 || bid == -103 ||
+                    bid == -107;                                  /* Comparable */
   case -115: return bid == -104 || bid == -105 || bid == -106 || bid == -144 ||
-                    bid == -145;                                  /* Enumerable */
+                    bid == -145 || bid == -120 || bid == -121 || bid == -165 ||
+                    (bid <= -166 && bid >= -173);                 /* Enumerable */
   default: return 0;
   }
 }

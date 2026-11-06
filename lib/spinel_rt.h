@@ -14006,8 +14006,14 @@ static sp_bool sp_poly_kind_of_builtin(sp_RbVal v, const char *cn) {
   if (!cn) return FALSE;
   if (strcmp(cn, "BasicObject") == 0) return TRUE;
   /* a BasicObject.new is no Object and no Kernel */
-  if (strcmp(cn, "Object") == 0 || strcmp(cn, "Kernel") == 0)
-    return !(v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_BASIC_OBJECT);
+  if (strcmp(cn, "Object") == 0 || strcmp(cn, "Kernel") == 0) {
+    if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_BASIC_OBJECT) return FALSE;
+    /* a program class under BasicObject (`class B < BasicObject`) is no
+       Object either: the program's class table answers */
+    if (v.tag == SP_TAG_OBJ && v.cls_id >= 0 && sp_poly_is_a_hook)
+      return (sp_bool)(sp_poly_is_a_hook(v, (sp_Class){cn[0] == 'O' ? -116 : -119, NULL}) != 0);
+    return TRUE;
+  }
   /* a boxed class or module value: every one is a Module, and only the
      generated class table knows which of them are modules rather than
      classes */
@@ -14038,7 +14044,8 @@ static sp_bool sp_poly_kind_of_builtin(sp_RbVal v, const char *cn) {
   }
   int is_int = (v.tag == SP_TAG_INT || v.tag == SP_TAG_BIGINT);
   int is_flt = (v.tag == SP_TAG_FLT);
-  int is_rat = (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_RATIONAL);
+  /* a Rational past 64 bits boxes as its own kind */
+  int is_rat = (v.tag == SP_TAG_OBJ && (v.cls_id == SP_BUILTIN_RATIONAL || v.cls_id == SP_BUILTIN_BIG_RATIONAL));
   int is_cpx = (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_COMPLEX);
   int is_arr = (v.tag == SP_TAG_OBJ && sp_poly_is_array_kind(v.cls_id));
   int is_range = (v.tag == SP_TAG_OBJ && (v.cls_id == SP_BUILTIN_RANGE ||

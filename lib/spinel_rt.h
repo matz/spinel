@@ -1275,6 +1275,9 @@ const char *sp_File_sysread_checked(sp_File *f, sp_int n);
 /* The same read answering NULL at EOF instead of raising: a boxed output
    buffer is emptied before the EOFError (the codegen's output-buffer path). */
 const char *sp_File_readpartial_or_nil(sp_File *f, sp_int n);
+/* The same read into a shared String handle's own room: NULL at EOF, with
+   the handle emptied; else the handle's bytes. */
+const char *sp_File_readpartial_into(sp_File *f, sp_int n, sp_String *buf);
 /* IO#pread(len, offset): read without moving the file position. Inline
    because it allocates from this TU's string heap (#3038). */
 static inline const char *sp_File_pread(sp_File *f, sp_int len, sp_int off) {

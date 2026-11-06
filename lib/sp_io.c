@@ -11,6 +11,7 @@
 #endif
 #include "sp_io.h"
 #include "sp_gc.h"   /* sp_mark_string */
+#include "sp_string.h" /* sp_String, for readpartial into a buffer */
 #include <stdlib.h>
 #include <stddef.h>   /* offsetof, for the static-stream layout assertion */
 #include <string.h>
@@ -2236,6 +2237,42 @@ const char *sp_File_readpartial_or_nil(sp_File *f, sp_int n) {SP_GC_ROOT(f);
   sp_str_set_len(r, (size_t)got);
   sp_str_mark_binary(r);   /* readpartial / sysread answer ASCII-8BIT, as CRuby */
   return r;
+}
+
+/* readpartial(n, buf) with buf a shared String handle: buf's bytes become
+   the bytes read, and keep buf's encoding. On a handle with own_buf they go
+   from rbuf straight into buf's room, with no String between: the wait and
+   the fill park before buf is touched, and the copy (sp_io_rbuf_take) holds
+   rlock and never parks, so buf is not written across a park. A read
+   longer than rbuf with nothing held, or a handle without own_buf, reads a
+   String as before and copies it into buf. NULL at the end of the stream,
+   with buf emptied; else buf's bytes. The caller has checked that buf can
+   change. */
+const char *sp_File_readpartial_into(sp_File *f, sp_int n, sp_String *buf) {SP_GC_ROOT(f); SP_GC_ROOT(buf);
+  SP_IO_OPEN(f);
+  if (n < 0) sp_raise_cls("EOFError", "end of file reached");
+  if (n > 0 && f->own_buf && ((size_t)n <= SP_IO_RBUF_MIN || sp_io_pending(f))) {
+    sp_io_wait_readable(f);
+    for (;;) {
+      if (!sp_io_pending(f) && !sp_io_rbuf_fill(f)) break;
+      size_t pend = sp_io_pending(f), want = (size_t)n < pend ? (size_t)n : pend;
+      if (!sp_fd_grow(buf, (int64_t)want)) sp_raise_cls("NoMemoryError", "failed to allocate memory");
+      size_t got = sp_io_rbuf_take(f, buf->data, want);
+      if (!got) continue;   /* another reader took them first */
+      buf->len = (int64_t)got;
+      buf->data[got] = 0;
+      sp_fd_publish(buf);
+      return buf->data;
+    }
+    buf->len = 0;
+    buf->data[0] = 0;
+    sp_fd_publish(buf);
+    return NULL;
+  }
+  const char *r = n == 0 ? sp_str_empty_binary() : sp_File_readpartial_or_nil(f, n);
+  SP_GC_ROOT_STR(r);
+  sp_String_set_bin(buf, r ? r : sp_str_empty_binary());
+  return r ? buf->data : NULL;
 }
 
 /* readpartial / sysread: EOFError at the end of the stream. */

@@ -10577,6 +10577,9 @@ static const char *sp_PolyArray_join(sp_PolyArray *a, const char *sep) {
       part = sp_poly_check_str(e);
       if (!part) {
         void *obj = e.v.p;
+        /* the guard reads the object by its address: a #to_ary that drops it
+           from the receiver must not let it go while its answer joins */
+        SP_GC_ROOT(obj);
         e = sp_poly_ary_operand(e);
         if (e.tag == SP_TAG_OBJ && sp_poly_is_array_kind(e.cls_id)) {
           /* CRuby's guard holds the object itself: a #to_ary that answers a

@@ -10925,6 +10925,12 @@ static int bind_zsuper_params(Compiler *c, int id, Scope *s, Scope *pm) {
     LocalVar *src = scope_local(s, s->pnames[s->kwrest_idx]);
     LocalVar *dst = scope_local(pm, pm->pnames[pm->kwrest_idx]);
     if (src && dst && !dst->rbs_seeded && src->type != TY_UNKNOWN) {
+      /* A hash of any key widens the parent's Symbol-keyed `**` to one of
+         any key, as a call's `**h` does (widen_kwrest_any_key), and its
+         proc-form clone with it. Joining the two hash types made a boxed
+         value, which the clone, typed from its origin, did not take. */
+      if (src->type == TY_POLY_POLY_HASH && dst->type == TY_SYM_POLY_HASH)
+        changed |= widen_kwrest_any_key(c, pm, id);
       if (lv_widen(dst, src->type)) changed = 1;
     }
   }

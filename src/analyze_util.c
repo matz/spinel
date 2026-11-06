@@ -2161,26 +2161,26 @@ static int cpv_has_mod(Compiler *c, int k, int m, int depth) {
 }
 /* (above: the superclass of the class the walk is in; a module it reaches
    through an include is skipped when a class there already has it) */
-static int cpv_walk(Compiler *c, int k, const char *nm, const int *cands, int ncands, int depth, int above) {
+static int cpv_walk(Compiler *c, int k, const char *nm, const int *cands, int ncands, int depth, int above, int cls) {
   if (depth > 16) return -1;
   int obj = comp_core_class(c, CORE_OBJECT), bo = comp_core_class(c, CORE_BASIC_OBJECT);
   for (int n = 0; k >= 0 && k < c->nclasses && n < 64; k = c->classes[k].parent, n++) {
     if (k == obj || k == bo) break;
     const ClassInfo *ci = &c->classes[k];
     int ab = depth == 0 ? ci->parent : above;
-    int own = n == 0 && depth == 0 ? cpv_own(c, k, nm, cands, ncands) : -1;
+    int own = n == 0 && depth == 0 ? (cls ? class_nested_leaf(c, k, nm) : cpv_own(c, k, nm, cands, ncands)) : -1;
     if (own >= 0) return own;
     for (int i = ci->nprepended_mods - 1; i >= 0; i--) {
       int m = ci->prepended_mods[i];
       if (m == k) continue;
-      int r = cpv_walk(c, m, nm, cands, ncands, depth + 1, ab);
+      int r = cpv_walk(c, m, nm, cands, ncands, depth + 1, ab, cls);
       if (r >= 0) return r;
     }
-    if (!(n == 0 && depth == 0) && (own = cpv_own(c, k, nm, cands, ncands)) >= 0) return own;
+    if (!(n == 0 && depth == 0) && (own = cls ? class_nested_leaf(c, k, nm) : cpv_own(c, k, nm, cands, ncands)) >= 0) return own;
     for (int i = ci->nincluded_mods - 1; i >= 0; i--) {
       int m = ci->included_mods[i];
       if (m == k || cpv_has_mod(c, ab, m, 0)) continue;
-      int r = cpv_walk(c, m, nm, cands, ncands, depth + 1, ab);
+      int r = cpv_walk(c, m, nm, cands, ncands, depth + 1, ab, cls);
       if (r >= 0) return r;
     }
   }
@@ -2244,7 +2244,13 @@ int const_written_through_value(Compiler *c, const char *nm) {
 }
 int const_path_value_const(Compiler *c, int k, const char *nm, const int *cands, int ncands) {
   if (k < 0 || k >= c->nclasses || !nm) return -1;
-  return cpv_walk(c, k, nm, cands, ncands, 0, -1);
+  return cpv_walk(c, k, nm, cands, ncands, 0, -1, 0);
+}
+/* The class or module `m::NM` names when m holds K: one nested under NM in
+   K's chain, walked as const_path_value_const walks it (-1 for none) */
+int const_path_value_class(Compiler *c, int k, const char *nm) {
+  if (k < 0 || k >= c->nclasses || !nm) return -1;
+  return cpv_walk(c, k, nm, NULL, 0, 0, -1, 1);
 }
 /* The top-level constant NM that `Object::NM` reads through a value, or
    NULL (none, or a well-known one the compiler reads by itself). The tree

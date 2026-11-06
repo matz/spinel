@@ -1,0 +1,15 @@
+[Mx, ["constant", nil, nil, nil, nil, nil, nil]]
+[Pp, [nil, "constant", nil, nil, nil, nil, nil]]
+[Base, [nil, nil, "constant", "constant", nil, nil, nil]]
+[Kid, ["constant", "constant", "constant", "constant", nil, nil, nil]]
+[Lone, [nil, nil, nil, nil, nil, nil, nil]]
+[Object, [nil, nil, nil, nil, "constant", "constant", "constant"]]
+"constant"
+nil
+nil
+"constant"
+nil
+nil
+"constant"
+"constant"
+[nil, "constant"]

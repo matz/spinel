@@ -4059,6 +4059,96 @@ static void emit_defined_seg_test(Compiler *c, int seg, Buf *b) {
 
 /* A defined?(...) expression (emit_expr_node's arms, in their order) */
 static int emit_defined_value(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *ty);
+/* Whether the program makes NM private anywhere (`private_constant :NM`):
+   defined? is nil for such a name read through a path */
+static int defined_path_privatized(Compiler *c, const char *nm) {
+  const NodeTable *nt = c->nt;
+  NT_FOREACH_KIND(nt, NK_CallNode, id) {
+    const char *cn = nt_str(nt, id, "name");
+    if (!cn || !sp_streq(cn, "private_constant")) continue;
+    int a = nt_ref(nt, id, "arguments"), an = 0;
+    const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &an) : NULL;
+    for (int i = 0; i < an; i++) {
+      NodeKind ak = nt_kind(nt, av[i]);
+      const char *s = ak == NK_SymbolNode ? nt_str(nt, av[i], "value") : ak == NK_StringNode ? nt_str(nt, av[i], "content") : NULL;
+      if (!s || sp_streq(s, nm)) return 1;   /* (a computed name may be NM) */
+    }
+  }
+  return 0;
+}
+/* A parent the switch may run as it is: a local, an instance variable,
+   self, or a call with no arguments on one of them (or on no receiver).
+   Any other one (a constant, a call on a constant that may be missing)
+   is defined? only if it is itself, which the path below asks. */
+static int defined_value_parent(const NodeTable *nt, int par) {
+  for (int n = 0; par >= 0 && n < 16; n++) {
+    switch (nt_kind(nt, par)) {
+      case NK_LocalVariableReadNode: case NK_InstanceVariableReadNode: case NK_SelfNode:
+        return 1;
+      case NK_CallNode: {
+        int r = nt_ref(nt, par, "receiver");
+        if (nt_ref(nt, par, "arguments") >= 0 || nt_ref(nt, par, "block") >= 0) return 0;
+        if (r < 0) return 1;
+        par = r;
+        break;
+      }
+      default:
+        return 0;
+    }
+  }
+  return 0;
+}
+/* (see the ConstantPathNode arm of emit_defined_expr) */
+static int defined_value_path(Compiler *c, int v, Buf *b) {
+  const NodeTable *nt = c->nt;
+  int par = nt_ref(nt, v, "parent");
+  const char *nm = nt_str(nt, v, "name");
+  if (par < 0 || !nm) return 0;
+  if (!defined_value_parent(nt, par)) return 0;
+  Repr pr = repr_of(c, par);
+  if (pr.as_ty != TY_CLASS && pr.as_ty != TY_POLY) return 0;
+  if (const_written_through_value(c, nm) || defined_path_privatized(c, nm)) return 0;
+  int *cands, ncands = comp_const_tail_cands(c, nm, &cands);
+  int obj_k = comp_core_class(c, CORE_OBJECT), tk = ++g_tmp;
+  /* (a constant without a presence flag whose assignment can come after
+     this point: when it is set is not known here, so the name is left to
+     the path below, as before) */
+  const LocalVar *topc = const_value_path_top(c, nm);
+  for (int k = 0; k < c->nclasses; k++) {
+    if (k == obj_k) continue;
+    int ci2 = const_path_value_const(c, k, nm, cands, ncands);
+    if (ci2 >= 0 && !const_has_flag(&c->consts[ci2]) && !an_const_read_finds(c, v, c->consts[ci2].name)) {
+      free(cands);
+      return 0;
+    }
+  }
+  if (topc && !const_has_flag(topc) && !an_const_read_finds(c, v, topc->name)) { free(cands); return 0; }
+  buf_printf(b, "({ sp_Class _t%d = ", tk);
+  /* (a poly slot carries the class boxed, as the read unwraps it) */
+  if (pr.kind == RK_BOXED) { buf_puts(b, "sp_unbox_class("); emit_boxed(c, par, b); buf_puts(b, ")"); }
+  else emit_expr(c, par, b);
+  buf_printf(b, "; const char *_t%d_r = NULL; switch (_t%d.cls_id) {", tk, tk);
+  for (int k = 0; k < c->nclasses; k++) {
+    if (k == obj_k) continue;
+    int ci2 = const_path_value_const(c, k, nm, cands, ncands);
+    if (ci2 >= 0 && const_has_flag(&c->consts[ci2]))
+      buf_printf(b, " case %d: if (cst_%s__set) _t%d_r = SPL(\"constant\"); break;", k, c->consts[ci2].name, tk);
+    else if (ci2 >= 0 || const_path_value_class(c, k, nm) >= 0)
+      buf_printf(b, " case %d: _t%d_r = SPL(\"constant\"); break;", k, tk);
+  }
+  free(cands);
+  /* (Object: a top-level constant or class) */
+  int tck = comp_class_index(c, nm), topcls = tck >= 0 && c->classes[tck].enclosing_class < 0;
+  if (topc || topcls || comp_is_wellknown_const(nm)) {
+    int ob = builtin_class_id("Object");
+    buf_printf(b, " case %d:", ob);
+    if (obj_k >= 0 && obj_k != ob) buf_printf(b, " case %d:", obj_k);
+    if (topc && const_has_flag(topc)) buf_printf(b, " if (cst_%s__set) _t%d_r = SPL(\"constant\"); break;", topc->name, tk);
+    else buf_printf(b, " _t%d_r = SPL(\"constant\"); break;", tk);
+  }
+  buf_printf(b, " default: break; } _t%d_r; })", tk);
+  return 1;
+}
 static int emit_defined_expr(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *ty) {
   int v = nt_kind(nt, id) == NK_DefinedNode ? nt_ref(nt, id, "value") : -1;
   int par = c->nautoloads && v >= 0 && nt_kind(nt, v) == NK_ConstantPathNode ? nt_ref(nt, v, "parent") : -1;
@@ -4205,6 +4295,11 @@ static int emit_defined_value(Compiler *c, int id, Buf *b, const NodeTable *nt, 
       buf_printf(b, "(sp_sock_const(\"%s\") >= 0 ? SPL(\"constant\") : NULL)", nt_str(nt, v, "name"));
       return 1;
     }
+    /* `defined?(m::Foo)` with m a class value: "constant" when m's own
+       chain holds Foo (a value constant or a nested class), as the read
+       finds it (const_path_value_const), Object's top-level ones only
+       for Object itself; nil for any other class */
+    else if (vk == NK_ConstantPathNode && defined_value_path(c, v, b)) return 1;
     else if (vk == NK_ConstantPathNode) {
       /* a fully-resolved qualified path answers "constant"; any unresolved
          segment leaves nil (the segment walk lives in the guard helpers). A

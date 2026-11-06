@@ -1,0 +1,9 @@
+a stand-in: "abc!"
+an IO: "xyz!"
+text keeps its encoding: ["é!", #<Encoding:UTF-8>]
+the end of the stream: EOFError: end of file reached
+a local buffer: ["hey", #<Encoding:UTF-8>]
+a local at the end: EOFError: end of file reached
+the local after the end: ""
+a frozen buffer: FrozenError: can't modify frozen String: "abc"
+the bytes stay unread: "left"

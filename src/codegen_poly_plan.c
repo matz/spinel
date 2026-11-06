@@ -4331,6 +4331,23 @@ void emit_poly_cases_n(Compiler *c, int id, const char *name, const PolySpecials
       }
     }
   }
+  /* read(*args) on a poly value (WEBrick's `io.__send__(method, *arg)`):
+     the File arm reads the gathered list the dispatch holds in its temp, a
+     length, nil or none, as read(n) and read() do. Left out, a File beside a
+     class of the program's own with `read` raised NoMethodError for the
+     File. The outbuf form is no arm of this one. */
+  if (sp_streq(name, "read") && argc == 1 && splat_a == 0 && kwh < 0 && (ret == TY_POLY || ret == TY_STRING) &&
+      atmp_ty[0] == TY_POLY_ARRAY) {
+    if (g_plan_check) pa_observe(PA_BUILTIN, PA_KEY_BUILTIN + PB_IO_SEEK_READ, -1, TY_UNKNOWN, PC_SAME);
+    int ta = atmp[0];
+    buf_printf(b, " case SP_BUILTIN_IO: { sp_File *_f%d = (sp_File *)_t%d.v.p; const char *_s%d; "
+                  "if (_t%d->len > 1) sp_raise_cls(\"NotImplementedError\", \"IO#read with a buffer, through a splat\"); "
+                  "if (_t%d->len == 0 || _t%d->data[0].tag == SP_TAG_NIL) _s%d = sp_File_read(_f%d); "
+                  "else _s%d = sp_File_read_n(_f%d, sp_poly_arg_i(_t%d->data[0])); ",
+               tr, tv, tr, ta, ta, ta, tr, tr, tr, tr, ta);
+    if (ret == TY_POLY) buf_printf(b, "_t%d = sp_box_nullable_str(_s%d); } break;", tr, tr);
+    else buf_printf(b, "_t%d = _s%d; } break;", tr, tr);
+  }
   if (is_unshift) {
     if (g_plan_check) pa_observe(PA_BUILTIN, PA_KEY_BUILTIN + PB_UNSHIFT, -1, TY_UNKNOWN, PC_SAME);
     /* sp_poly_insert is the kind dispatch for a positional splice, so

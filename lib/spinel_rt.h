@@ -4568,7 +4568,16 @@ static SP_UNUSED sp_PolyArray *sp_range_minmax_poly(sp_Range r) {
 /* A Range built from a boxed end (`lo..x`): nil is the absent end, a Float
    is kept as written (sp_range_new_fend), anything else converts as an
    Integer bound does. */
+/* A Bignum bound read out of a box: sp_Range holds sp_int bounds, so it has
+   nowhere to live, as codegen says of one known at compile time (#3058).
+   Converted, it was cut to its low bits and the Range answered as if its
+   end were 0 (`(128...m) === 252` with m = 1 << 64 was false). */
+static SP_UNUSED void sp_range_bigint_bound_check(sp_RbVal v) {
+  if (SP_UNLIKELY(v.tag == SP_TAG_BIGINT))
+    sp_raise_cls("NotImplementedError", "a Range with a Bignum bound decided at run time is not supported by spinel");
+}
 static SP_UNUSED sp_Range sp_range_new_pend_w(sp_oint f, sp_RbVal e, sp_int x, int walk) {
+  sp_range_bigint_bound_check(e);
   e = sp_range_int_bound(sp_range_num_end(e), walk && sp_poly_is_rational(e));
   /* the walk stops at the last Integer <= the end: floor, not truncation
      ((-3..-5r/2) walks only -3) */
@@ -4582,6 +4591,7 @@ static SP_UNUSED sp_Range sp_range_new_pend_walk(sp_oint f, sp_RbVal e, sp_int x
    a Float range, which this representation cannot hold. Say so; nil is the
    absent begin. */
 static SP_UNUSED sp_oint sp_range_lo_bound(sp_RbVal v) {
+  sp_range_bigint_bound_check(v);
   v = sp_range_int_bound(sp_range_num_end(v), 0);
   if (SP_UNLIKELY(v.tag == SP_TAG_FLT))
     sp_raise_cls("NotImplementedError", "a Range with a Float begin decided at run time is not supported by spinel");

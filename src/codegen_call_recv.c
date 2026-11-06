@@ -18911,9 +18911,21 @@ static int cbi_key_ok(Compiler *c, int k) {
     int oc = ty_object_class(t);
     return oc >= 0 && !c->classes[oc].is_value_type;
   }
-  return ty_is_array(t) || ty_is_hash(t) || t == TY_SYMBOL || t == TY_NIL || t == TY_BOOL ||
-         t == TY_PROC || t == TY_METHOD || t == TY_IO || t == TY_THREAD || t == TY_MUTEX ||
-         t == TY_QUEUE || t == TY_EXCEPTION || t == TY_DIR || t == TY_CLASS;
+  if (ty_is_array(t) || ty_is_hash(t) || t == TY_SYMBOL || t == TY_NIL || t == TY_BOOL ||
+      t == TY_PROC || t == TY_METHOD || t == TY_IO || t == TY_THREAD || t == TY_MUTEX ||
+      t == TY_QUEUE || t == TY_EXCEPTION || t == TY_DIR || t == TY_CLASS) return 1;
+  /* a boxed key: whatever the walk follows into it (cls_fact_kinds) is an
+     object of a class of the program's, a Symbol, nil, true, false or a
+     container, none a number or a String, and each class it names is one
+     compared by pointer */
+  if (t != TY_POLY) return 0;
+  an_cls_kinds(c);   /* (the walk runs once, at the first ask) */
+  if (cls_fact_kinds(c, k) != 0) return 0;
+  const ClsSet *s = cls_fact_node(c, k);
+  if (!s || s->all || s->os) return 0;
+  for (int oc = cls_set_next(s, -1); oc >= 0; oc = cls_set_next(s, oc))
+    if (oc >= c->nclasses || c->classes[oc].is_value_type) return 0;
+  return 1;
 }
 static const char *cbi_use_ok(Compiler *c, int use, const int *par) {
   const NodeTable *nt = c->nt;

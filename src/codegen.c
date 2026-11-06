@@ -1882,7 +1882,19 @@ int text_diverges(const char *txt) {
   /* a statement expression whose first statement raises: `({ sp_raise_..` */
   for (int k = 0; k < 8; k++) {
     if (strncmp(p, "void)", 5) == 0) { p = past_open_parens(p + 5); continue; }
-    if (*p == '{') { p++; while (*p == ' ') p++; p = past_open_parens(p); continue; }
+    if (*p == '{') {
+      p++;
+      /* past the spaces, newlines and `#line` directives the line map puts
+         before the first statement: the answer is the same with and without
+         it (line-map-check) */
+      for (;;) {
+        while (*p == ' ' || *p == '\n') p++;
+        if (strncmp(p, "#line", 5) == 0) { while (*p && *p != '\n') p++; continue; }
+        break;
+      }
+      p = past_open_parens(p);
+      continue;
+    }
     break;
   }
   return strncmp(p, "sp_raise_", 9) == 0 || strncmp(p, "sp_raise(", 9) == 0 ||   /* Kernel#raise with a message */

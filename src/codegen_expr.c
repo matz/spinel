@@ -2979,7 +2979,7 @@ void emit_strbuf_node_read(Compiler *c, int id, const char *sref, Buf *b) {
    name the variable's, or RuntimeError at main's top level, where every
    class variable access raises (emit_cvar_name_error). Valued as the
    read's dead tail. */
-static void emit_cvar_undeclared_raise(Compiler *c, int id, const HolderRef *h, Buf *b) {
+void emit_cvar_undeclared_raise(Compiler *c, int id, const HolderRef *h, Buf *b) {
   if (h->cid == c->toplevel_class)
     buf_puts(b, "(sp_raise_cls(\"RuntimeError\", \"class variable access from toplevel\"), ");
   else {
@@ -3247,7 +3247,7 @@ static int emit_ivar_cvar_gvar_expr(Compiler *c, int id, Buf *b, const NodeTable
   if (sp_streq(ty, "ConstantWriteNode")) {
     /* `m(A = v)` / `(A = v) + 1`: ({ <the write>; cst_A; }) -- the statement
        form sets the constant, and the constant is the expression's value */
-    const char *nm = nt_str(nt, id, "name");
+    const char *nm = const_key_at(c, id);
     LocalVar *cv = nm ? comp_const(c, nm) : NULL;
     /* a class builder's write (`K = Class.new do ... end`, one the record
        opens its class at: elab_header_class) is emitted where it stands,
@@ -3296,6 +3296,8 @@ static int emit_ivar_cvar_gvar_expr(Compiler *c, int id, Buf *b, const NodeTable
     int v = nt_ref(nt, id, "value");
     HolderRef h;
     if (!holder_of_node_in(c, id, g_class_body_id, &h)) { unsupported(c, id, "class variable op-write (no class scope)"); return 1; }
+    /* (the read an op-write starts with, of a variable no write declares) */
+    if (h.idx < 0 && !c->cvar_set_unplaced) { emit_cvar_undeclared_raise(c, id, &h, b); return 1; }
     int cid = h.cid, idx = h.idx;
     TyKind ct = idx >= 0 ? c->classes[cid].cvar_types[idx] : TY_INT;
     Buf ref; memset(&ref, 0, sizeof ref);
@@ -3354,6 +3356,7 @@ static int emit_ivar_cvar_gvar_expr(Compiler *c, int id, Buf *b, const NodeTable
     const char *nm = nt_str(nt, id, "name");
     HolderRef h;
     if (!holder_of_node_in(c, id, g_class_body_id, &h)) { unsupported(c, id, "class variable and-write (no class scope)"); return 1; }
+    if (h.idx < 0 && !c->cvar_set_unplaced) { emit_cvar_undeclared_raise(c, id, &h, b); return 1; }
     Buf ref; memset(&ref, 0, sizeof ref);
     holder_slot_buf(c, &h, &ref);
     TyKind at = h.idx >= 0 ? c->classes[h.cid].cvar_types[h.idx] : TY_UNKNOWN;
@@ -3475,7 +3478,7 @@ static void emit_const_undefined_raise(Buf *b, const char *checks, const char *n
    them to the caller. */
 static int emit_constant_value(Compiler *c, int id, Buf *b, Buf *checks, const NodeTable *nt, const char *ty, int slot) {
   if (sp_streq(ty, "ConstantReadNode")) {
-    const char *nm = nt_str(nt, id, "name");
+    const char *nm = const_key_at(c, id);
     LocalVar *cv = nm ? comp_const(c, nm) : NULL;
     /* --share-strings: a constant holding the shared handle (#6765) */
     if (cv && !slot && repr_of_slot(c, cv).kind == RK_STRBUF && !cv->init_guarded) {
@@ -3572,7 +3575,7 @@ static int emit_constant_value(Compiler *c, int id, Buf *b, Buf *checks, const N
   }
   if (sp_streq(ty, "ConstantPathNode")) {
     /* M::CONST -> the flat constant named by the final path component */
-    const char *nm = nt_str(nt, id, "name");
+    const char *nm = const_key_at(c, id);
     int par_idc = nt_ref(nt, id, "parent");
     NodeKind par_tyc_k = nt_kind(nt, par_idc);
     /* the parent's LEAF name also qualifies through a nested path
@@ -4136,7 +4139,7 @@ static int emit_defined_value(Compiler *c, int id, Buf *b, const NodeTable *nt, 
       return 1;
     }
     else if (vk == NK_ConstantReadNode) {
-      const char *cn = nt_str(nt, v, "name");
+      const char *cn = const_key_at(c, v);
       /* a constant not assigned yet is not defined: asked at run time */
       if (cn && const_has_flag(comp_const(c, cn))) {
         buf_printf(b, "(cst_%s__set ? SPL(\"constant\") : NULL)", cn);
@@ -5590,6 +5593,30 @@ static int emit_range_literal(Compiler *c, int id, Buf *b, const NodeTable *nt) 
                ta);
     return 1;
   }
+  /* (t1..t2): a Range of Times; the begin is rooted while the end is made */
+  if (comp_ntype(c, id) == TY_TIME_RANGE) {
+    int tl = ++g_tmp, tr = ++g_tmp;
+    buf_printf(b, "({ sp_Time *_t%d = ", tl);
+    if (left >= 0 && comp_ntype(c, left) == TY_TIME) emit_expr(c, left, b);
+    else if (left >= 0) { buf_puts(b, "((void)("); emit_expr_for_effect(c, left, b); buf_puts(b, "), (sp_Time *)NULL)"); }
+    else buf_puts(b, "NULL");
+    buf_printf(b, "; SP_GC_ROOT(_t%d); sp_Time *_t%d = ", tl, tr);
+    if (right >= 0 && comp_ntype(c, right) == TY_TIME) emit_expr(c, right, b);
+    else if (right >= 0) { buf_puts(b, "((void)("); emit_expr_for_effect(c, right, b); buf_puts(b, "), (sp_Time *)NULL)"); }
+    else buf_puts(b, "NULL");
+    buf_printf(b, "; SP_GC_ROOT(_t%d); sp_trange_new(_t%d, _t%d, %d); })", tr, tl, tr, excl);
+    return 1;
+  }
+  /* (d1..d2): a Range of objects, its ends boxed; the begin is rooted while the end is made */
+  if (comp_ntype(c, id) == TY_OBJ_RANGE) {
+    int tl = ++g_tmp, tr = ++g_tmp;
+    buf_printf(b, "({ sp_RbVal _t%d = ", tl);
+    if (left >= 0) emit_boxed(c, left, b); else buf_puts(b, "sp_box_nil()");
+    buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); sp_RbVal _t%d = ", tl, tr);
+    if (right >= 0) emit_boxed(c, right, b); else buf_puts(b, "sp_box_nil()");
+    buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); sp_orange_new_typed(_t%d, _t%d, %d); })", tr, tl, tr, excl);
+    return 1;
+  }
   /* ends decided at run time (`a[0]..a[1]` over a mixed Array) */
   if (emit_range_boxed_ends(c, id, left, right, excl, b)) return 1;
   /* (1.0..3.0): the distinct float range, endpoints kept as sp_float.
@@ -5736,18 +5763,10 @@ static int emit_range_literal(Compiler *c, int id, Buf *b, const NodeTable *nt) 
         "does work (see docs/limitations.md)");
       return 1;
     }
-    /* A Time bound beside an open end is no Integer either: the one-sided
-       builder below took `(Time.at(0)..)` for an Integer Range and the C did
-       not compile (#8526). (Two Time bounds convert at run time, which
-       raises CRuby's TypeError where the Range is iterated.) */
-    int l_open = left < 0 || nt_kind(nt, left) == NK_NilNode;
-    int r_open = right < 0 || nt_kind(nt, right) == NK_NilNode;
-    if ((lt == TY_TIME && r_open) || (rt2 == TY_TIME && l_open)) {
-      unsupported_feature(c, id,
-        "a Range of Time objects cannot be built: a Range is an unboxed value "
-        "with sp_int bounds, so it has nowhere to hold them. Comparing against "
-        "the bounds directly (`t >= lo && t < hi`) needs no Range and does work "
-        "(see docs/limitations.md)");
+    /* a Time beside an end of another class: CRuby's "bad value for range";
+       the Integer builder below would take the Time as an sp_int */
+    if (lt == TY_TIME || rt2 == TY_TIME) {
+      unsupported_feature(c, id, "a Range of a Time and an end of another class: CRuby raises ArgumentError (bad value for range)");
       return 1;
     }
     if (ty_is_object(lt) || ty_is_object(rt2)) {

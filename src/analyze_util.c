@@ -344,7 +344,7 @@ int const_visibility_call_is_builtin(Compiler *c, int call, int k) {
    is its name's. */
 int const_node_class_index(Compiler *c, int id) {
   const NodeTable *nt = c->nt;
-  int k = comp_class_index(c, nt_str(nt, id, "name"));
+  int k = comp_class_index(c, const_key_at(c, id));
   /* (a class named under another by a compact header carries that name,
      ruby_name_cache, P::Foo for `class AliasP::Foo`: no top-level one; nor
      is a native struct, whose module the walk does not list it in) */
@@ -353,12 +353,12 @@ int const_node_class_index(Compiler *c, int id) {
   /* (nor a path whose leaf the qualifying pass found a member for and
      renamed, qc_orig_name: module M; A = Foo; end makes M::A Foo, renamed
      to the alias's class afterwards) */
-  if (nt_str(nt, id, "qc_orig_name")) return builtin_scope_lacks_member(c, id) ? -1 : k;
+  if (nt_str(nt, id, "qc_orig_name") || const_key_differs(c, id)) return builtin_scope_lacks_member(c, id) ? -1 : k;
   /* (a parent that is a class's own name, not a constant holding one:
      AliasP = P; AliasP::Foo is P::Foo, which the walk does not follow) */
   int par = nt_ref(nt, id, "parent");
   NodeKind pk = par >= 0 ? nt_kind(nt, par) : NK_NilNode;
-  const char *pn = pk == NK_ConstantReadNode || pk == NK_ConstantPathNode ? nt_str(nt, par, "name") : NULL;
+  const char *pn = pk == NK_ConstantReadNode || pk == NK_ConstantPathNode ? const_key_at(c, par) : NULL;
   int pk2 = pn ? comp_class_index(c, pn) : -1;
   if (!pn || is_object_class_name(pn) || comp_const(c, pn)) return k;
   /* (a builtin scope the program never reopened has no class entry,
@@ -366,7 +366,7 @@ int const_node_class_index(Compiler *c, int id) {
   if (pk2 < 0) return builtin_scope_lacks_member(c, id) ? -1 : k;
   /* (nor a constant the parent holds by that name, a value constant the
      walk does not list: module Rhs; Leaf = Lhs::Leaf; end) */
-  const char *nm = nt_str(nt, id, "name");
+  const char *nm = const_key_at(c, id);
   int *cands, ncands = comp_const_tail_cands(c, nm, &cands);
   int owned = comp_class_owned_const(c, pk2, nm, cands, ncands);
   free(cands);
@@ -501,7 +501,7 @@ static int const_path_write_reaches(Compiler *c, int t, int k) {
    tree as it is: per name, the constant writes (list 0) and the targets of
    the path writes (list 1), chained through next. */
 static struct {
-  const NodeTable *nt; unsigned ver; int count;
+  const NodeTable *nt; unsigned ver; int count, gen;
   ANameHash names;
   int *head[2], cap, *next;
 } g_cw;
@@ -524,26 +524,27 @@ static void cw_add(int list, const char *nm, int node) {
 }
 /* The name's index in g_cw, rebuilt when the tree changed, or -1 for a
    name the program never writes */
-static int cw_name(const NodeTable *nt, const char *nm) {
-  if (g_cw.nt != nt || g_cw.ver != nt->version || g_cw.count != nt->count) {
+static int cw_name(Compiler *c, const char *nm) {
+  const NodeTable *nt = c->nt;
+  if (g_cw.nt != nt || g_cw.ver != nt->version || g_cw.count != nt->count || g_cw.gen != elab_const_keys_gen(c)) {
     anh_free(&g_cw.names); memset(&g_cw.names, 0, sizeof g_cw.names);
     free(g_cw.next);
     g_cw.next = malloc(sizeof(int) * (size_t)(nt->count > 0 ? nt->count : 1));
     if (!g_cw.next) { fprintf(stderr, "out of memory\n"); exit(1); }
     for (int n = 0; n < nt->count; n++) g_cw.next[n] = -2;   /* not listed */
-    g_cw.nt = nt; g_cw.ver = nt->version; g_cw.count = nt->count;
+    g_cw.nt = nt; g_cw.ver = nt->version; g_cw.count = nt->count; g_cw.gen = elab_const_keys_gen(c);
     static const NodeKind writes[] = { NK_ConstantWriteNode, NK_ConstantOrWriteNode, NK_ConstantAndWriteNode,
                                        NK_ConstantOperatorWriteNode, NK_ConstantTargetNode };
     for (int i = 0; i < 5; i++)
-      NT_FOREACH_KIND(nt, writes[i], w) cw_add(0, nt_str(nt, w, "name"), w);
+      NT_FOREACH_KIND(nt, writes[i], w) cw_add(0, const_key_at(c, w), w);
     static const NodeKind paths[] = { NK_ConstantPathWriteNode, NK_ConstantPathOrWriteNode,
                                       NK_ConstantPathAndWriteNode, NK_ConstantPathOperatorWriteNode };
     for (int i = 0; i < 4; i++)
       NT_FOREACH_KIND(nt, paths[i], w) {
         int t = nt_ref(nt, w, "target");
-        if (t >= 0) cw_add(1, nt_str(nt, t, "name"), t);
+        if (t >= 0) cw_add(1, const_key_at(c, t), t);
       }
-    NT_FOREACH_KIND(nt, NK_ConstantPathTargetNode, t) cw_add(1, nt_str(nt, t, "name"), t);
+    NT_FOREACH_KIND(nt, NK_ConstantPathTargetNode, t) cw_add(1, const_key_at(c, t), t);
     /* a self-alias write the desugaring dropped keeps its target */
     NT_FOREACH_KIND(nt, NK_NilNode, d) {
       int t = (int)nt_int(nt, d, "dropped_target", -1);
@@ -622,13 +623,13 @@ static void builtin_given_build(Compiler *c, struct BuiltinGiven *g) {
     int o = comp_class_index(c, ob);
     if (o >= 0 && held[o]) anh_add(&g->names, sep + 2);
   }
-  (void)cw_name(nt, "");
+  (void)cw_name(c, "");
   for (int i = 0; i < g_cw.names.n; i++) {
     /* a constant written in such a body, by the name the program wrote (a
        class alias, `SA = Foo`, included) */
     for (int w = g_cw.head[0][i]; w >= 0 && c->node_cbody; w = g_cw.next[w]) {
       int o = w < c->node_cap ? c->node_cbody[w] : -1;
-      if (o >= 0 && held[o]) anh_add(&g->names, nt_str(nt, w, "qc_orig_name") ? nt_str(nt, w, "qc_orig_name") : g_cw.names.key[i]);
+      if (o >= 0 && held[o]) anh_add(&g->names, nt_str(nt, w, "qc_orig_name") ? nt_str(nt, w, "qc_orig_name") : nt_str(nt, w, "name"));
     }
     for (int t = g_cw.head[1][i]; t >= 0; t = g_cw.next[t]) {
       int q = nt_ref(nt, t, "parent");
@@ -678,7 +679,7 @@ static int builtin_scope_lacks_member(Compiler *c, int seg) {
   /* a top-level class: a constant aliasing one (`SA = Foo`) is asked once its
      path is renamed, with the name written (the alias pass runs before the
      mixins are recorded, so it cannot tell yet) */
-  int k = comp_class_index(c, nt_str(nt, seg, "name"));
+  int k = comp_class_index(c, const_key_at(c, seg));
   if (!is_constless_builtin_name(pn)) return 0;
   /* a top-level builtin class or module (Array::String) is no member
      either, unless the program reopens it or gives it its own entry */
@@ -699,11 +700,11 @@ int const_path_misses_toplevel(Compiler *c, int id) {
   if (par < 0) return 0;
   NodeKind pk = nt_kind(nt, par);
   if (pk != NK_ConstantReadNode && pk != NK_ConstantPathNode) return 0;
-  const char *pn = nt_str(nt, par, "name"), *nm = nt_str(nt, id, "name");
+  const char *pn = nt_str(nt, par, "name"), *nm = const_key_at(c, id);
   if (!pn || !nm || sp_streq(pn, "Object") || comp_class_index(c, pn) < 0 || comp_const(c, pn)) return 0;
   /* the writes of NAME alone: walking every write of the program for each
      path was a tenth of a large program's analysis */
-  int ni = cw_name(nt, nm);
+  int ni = cw_name(c, nm);
   if (ni < 0) return 0;
   int top = 0;
   for (int w = g_cw.head[0][ni]; w >= 0; w = g_cw.next[w]) {
@@ -1268,8 +1269,8 @@ int class_var_static_ci(Compiler *c, int node) {
        class_recv_static_ci reads a receiver */
     int ci = (vk == NK_ConstantReadNode || vk == NK_ConstantPathNode)
              ? const_node_class_index(c, val) : -1;
-    /* k = Struct.new(:a, :b): resolve to the anonymous struct class that
-       register_structs synthesized for this write (keyed by def_node) */
+    /* k = Struct.new(:a, :b): resolve to the anonymous struct class the walk
+       made at this write (keyed by def_node) */
     if (ci < 0 && class_def_is_record_call(nt, val)) {
       for (int k = comp_class_of_def(c, w); k >= 0; k = comp_class_def_next(c, k))
         if (c->classes[k].is_anon_struct) { ci = k; break; }
@@ -1291,6 +1292,16 @@ int class_recv_static_ci(Compiler *c, int node) {
     return const_node_class_index(c, node);
   return class_var_static_ci(c, node);
 }
+/* See compiler.h. */
+int record_recv_class(Compiler *c, int node) {
+  int ci = -1;
+  if (nt_kind(c->nt, node) == NK_SelfNode) {
+    const Scope *s = comp_scope_of(c, node);
+    if (s && s->is_cmethod) ci = s->class_id;
+  }
+  else ci = class_recv_static_ci(c, node);
+  return ci >= 0 && c->classes[ci].is_struct ? ci : -1;
+}
 
 /* A constant slot whose value may be a class known only at run time.
    A Class slot dispatches on that class, and a poly slot on its tag and
@@ -1301,7 +1312,7 @@ int class_recv_static_ci(Compiler *c, int node) {
 int const_class_value_only(Compiler *c, int node) {
   const NodeTable *nt = c->nt;
   NodeKind k = nt_kind(nt, node);
-  const char *nm = k == NK_ConstantReadNode || k == NK_ConstantPathNode ? nt_str(nt, node, "name") : NULL;
+  const char *nm = k == NK_ConstantReadNode || k == NK_ConstantPathNode ? const_key_at(c, node) : NULL;
   if (!nm || class_recv_static_ci(c, node) >= 0 || is_builtin_class_name(nm)) return 0;
   LocalVar *lv = comp_const(c, nm);
   if (!lv || (lv->type != TY_CLASS && lv->type != TY_POLY) || resolve_class_alias_chain(c, nm)) return 0;
@@ -1777,7 +1788,8 @@ static const char *cn_body_const_key(const NodeTable *nt, int root, const char *
   if (ty) {
     if (!top && (ty_k == NK_ClassNode || ty_k == NK_ModuleNode)) return NULL;
     if (ty_k == NK_ConstantWriteNode) {
-      const char *n = nt_str(nt, root, "name");
+      /* (the slot's key: const_key_at) */
+      const char *n = nt_const_key_or_name(nt, root);
       size_t nl = n ? strlen(n) : 0, cl = strlen(constname);
       if (n && (sp_streq(n, constname) ||
                 (nl > cl + 2 && !strncmp(n + nl - cl - 2, "__", 2) && sp_streq(n + nl - cl, constname) &&
@@ -1893,7 +1905,7 @@ static const char *const_value_owned_key(Compiler *c, int rk, const char *constn
       const char *on = t >= 0 ? nt_str(nt, t, "qc_orig_name") : NULL;
       if (!on) on = t >= 0 ? nt_str(nt, t, "name") : NULL;
       const char *own = t >= 0 ? nt_str(nt, t, "qc_owner") : NULL;
-      if (on && own && sp_streq(on, constname) && sp_streq(own, rn)) return nt_str(nt, t, "name");
+      if (on && own && sp_streq(on, constname) && sp_streq(own, rn)) return const_key_at(c, t);
     }
   return NULL;
 }
@@ -2360,14 +2372,12 @@ TyKind scan_throw_type(Compiler *c, const char *tag) {
    these once per method during the fixpoint; without the index that is
    O(methods * nodes * iterations). The structural shape is stable across the
    pass; the callee resolution below still runs fresh. */
-static const NodeTable *yvt_nt = NULL;
-static int yvt_ntc = -1, yvt_n = 0, yvt_sup_n = 0;
-static int *yvt_ids = NULL, *yvt_sup_ids = NULL;
 static int yvt_call_forwards_block(const NodeTable *nt, int cid) {
   int a = nt_ref(nt, cid, "arguments");
   int an = 0; const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &an) : NULL;
   return nt_argv_only_forwarding(nt, av, an);
 }
+static void yvt_tg_build(Compiler *c);
 /* Could block-passing call site `cid` reach method `mi` at all? A callee is
    found by name: the call's own name, that name through an `alias`, or `new`
    for `initialize` (yvt_callee_index). So a call whose name is none of those
@@ -2375,30 +2385,20 @@ static int yvt_call_forwards_block(const NodeTable *nt, int cid) {
    skipped for it. Every yielding method used to resolve every block call in
    the program, methods x calls per round (#4847). An aliased name, and a
    prepend shadow (named `__prep N m`), are left to the full resolution. */
-static int *yvt_nm_head = NULL, *yvt_nm_next = NULL, *yvt_always = NULL;
-static int yvt_nb = 0, yvt_always_n = 0;
-/* the alias-named entries by the names their alias may stand for: name t's
-   are yvt_tg_ii[yvt_tg_off[t] .. yvt_tg_off[t + 1]), ascending (yvt_tg_build) */
-static ANameHash yvt_tg_names;
-static int *yvt_tg_off = NULL, *yvt_tg_ii = NULL, yvt_tg_nn = 0;
 /* the names are copies of their own: an alias table's string is replaced
    when the alias settles (settle_mixin_aliases), and a node's when a
    desugar renames it, neither of which rebuilds this index */
-static char **yvt_tg_owned = NULL; static int yvt_tg_nowned = 0, yvt_tg_ocap = 0;
-static const char *yvt_tg_own(const char *s) {
-  if (yvt_tg_nowned == yvt_tg_ocap) {
-    yvt_tg_ocap = yvt_tg_ocap ? yvt_tg_ocap * 2 : 64;
-    yvt_tg_owned = realloc(yvt_tg_owned, sizeof(char *) * (size_t)yvt_tg_ocap);
-    if (!yvt_tg_owned) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+static const char *yvt_tg_own(YvtIndex *y, const char *s) {
+  if (y->tg_nowned == y->tg_ocap) {
+    y->tg_ocap = y->tg_ocap ? y->tg_ocap * 2 : 64;
+    y->tg_owned = realloc(y->tg_owned, sizeof(char *) * (size_t)y->tg_ocap);
+    if (!y->tg_owned) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   }
   char *cp = strdup(s);
   if (!cp) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-  yvt_tg_owned[yvt_tg_nowned++] = cp;
+  y->tg_owned[y->tg_nowned++] = cp;
   return cp;
 }
-static void yvt_tg_build(Compiler *c);
-static unsigned char *yvt_alias_name = NULL;   /* per yvt_ids entry: its name is an alias somewhere */
-static unsigned char *yvt_fwd = NULL;          /* per yvt_ids entry: yvt_call_forwards_block */
 static int yvt_name_is_alias(Compiler *c, const char *cn) {
   for (int k = 0; k < c->nclasses; k++)
     for (int i = 0; i < c->classes[k].naliases; i++)
@@ -2406,24 +2406,43 @@ static int yvt_name_is_alias(Compiler *c, const char *cn) {
   return 0;
 }
 static int yvt_may_reach(Compiler *c, int ii, int mi) {
+  const YvtIndex *y = c->yvt;
   const char *mn = c->scopes[mi].name;
-  const char *cn = nt_str(c->nt, yvt_ids[ii], "name");
+  const char *cn = nt_str(c->nt, y->ids[ii], "name");
   if (!mn || !cn) return 1;
   if (sp_streq(cn, mn)) return 1;
   if (sp_streq(cn, "new") && sp_streq(mn, "initialize")) return 1;
   if (c->scopes[mi].shadow == SHADOW_PREP) return 1;
-  return yvt_alias_name && yvt_alias_name[ii];
+  return y->alias_name && y->alias_name[ii];
+}
+/* A method name's key in YvtIndex.sup_key: its hash, a proc-form clone's
+   "#pf" left off (a clone's super asks for the plain name); never 0 */
+static unsigned yvt_name_key(const char *name) {
+  size_t n = strlen(name);
+  if (n > 3 && strcmp(name + n - 3, "#pf") == 0) n -= 3;
+  return sp_strnhash(name, (unsigned)n) | 1;
+}
+/* The key of the name the super in method scope cs asks for, 0 when a
+   method of any other name may be what it reaches: a name some alias
+   stands for, a name other than the one its method is known by, or a
+   method with a prepend chain, whose next method is a hidden copy. */
+static unsigned yvt_sup_name_key(Compiler *c, Scope *cs) {
+  const char *dn = comp_scope_def_name(c, cs);
+  if (!dn || !sp_streq(dn, comp_scope_user_name(cs)) || comp_super_shadow(c, cs) || yvt_name_is_alias(c, dn)) return 0;
+  return yvt_name_key(dn);
 }
 static void yvt_build(Compiler *c) {
+  YvtIndex *y = c->yvt;
   const NodeTable *nt = c->nt;
   int n = nt->count;
-  free(yvt_ids); free(yvt_sup_ids); free(yvt_alias_name); free(yvt_fwd);
-  yvt_alias_name = NULL; yvt_fwd = NULL;
-  yvt_ids = malloc((size_t)(n > 0 ? n : 1) * sizeof(int));
-  yvt_sup_ids = malloc((size_t)(n > 0 ? n : 1) * sizeof(int));
-  yvt_n = 0; yvt_sup_n = 0;
-  yvt_nt = nt; yvt_ntc = n;
-  if (!yvt_ids || !yvt_sup_ids) return;
+  free(y->ids); free(y->sup_ids); free(y->alias_name); free(y->fwd); free(y->sup_key);
+  y->sup_key = NULL;
+  y->alias_name = NULL; y->fwd = NULL;
+  y->ids = malloc((size_t)(n > 0 ? n : 1) * sizeof(int));
+  y->sup_ids = malloc((size_t)(n > 0 ? n : 1) * sizeof(int));
+  y->n = 0; y->sup_n = 0;
+  y->nt = nt; y->ntc = n;
+  if (!y->ids || !y->sup_ids) return;
   for (int cid = 0; cid < n; cid++) {
     const char *cty = nt_type(nt, cid);
     NodeKind ck = nt_kind(nt, cid);
@@ -2431,45 +2450,53 @@ static void yvt_build(Compiler *c) {
     /* a `super` reaching a yielding parent is a call site of that parent: the
        block that arrives is the child's own */
     if (ck == NK_SuperNode || ck == NK_ForwardingSuperNode) {
-      yvt_sup_ids[yvt_sup_n++] = cid;
+      y->sup_ids[y->sup_n++] = cid;
       continue;
     }
     if (ck != NK_CallNode) continue;
     if (nt_ref(nt, cid, "block") < 0 && !yvt_call_forwards_block(nt, cid)) continue;
-    yvt_ids[yvt_n++] = cid;
+    y->ids[y->n++] = cid;
+  }
+  /* the name each super asks for, so that a yielding method resolves the
+     supers that can reach its name, not every super of the program */
+  y->sup_key = calloc((size_t)(y->sup_n > 0 ? y->sup_n : 1), sizeof(unsigned));
+  if (!y->sup_key) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  for (int ii = 0; ii < y->sup_n; ii++) {
+    Scope *cs = comp_scope_of(c, y->sup_ids[ii]);
+    if (cs && cs->class_id >= 0 && cs->name) y->sup_key[ii] = yvt_sup_name_key(c, cs);
   }
   /* the forward test is structural, and was re-run for every entry of this
      list once per yielding method: 7% of a 16K-line analysis (#4847) */
-  yvt_fwd = malloc((size_t)(yvt_n > 0 ? yvt_n : 1));
-  if (yvt_fwd)
-    for (int ii = 0; ii < yvt_n; ii++) yvt_fwd[ii] = (unsigned char)yvt_call_forwards_block(nt, yvt_ids[ii]);
-  yvt_alias_name = malloc((size_t)(yvt_n > 0 ? yvt_n : 1));
-  if (yvt_alias_name)
-    for (int ii = 0; ii < yvt_n; ii++) {
-      const char *cn = nt_str(nt, yvt_ids[ii], "name");
-      yvt_alias_name[ii] = cn ? (unsigned char)yvt_name_is_alias(c, cn) : 1;
+  y->fwd = malloc((size_t)(y->n > 0 ? y->n : 1));
+  if (y->fwd)
+    for (int ii = 0; ii < y->n; ii++) y->fwd[ii] = (unsigned char)yvt_call_forwards_block(nt, y->ids[ii]);
+  y->alias_name = malloc((size_t)(y->n > 0 ? y->n : 1));
+  if (y->alias_name)
+    for (int ii = 0; ii < y->n; ii++) {
+      const char *cn = nt_str(nt, y->ids[ii], "name");
+      y->alias_name[ii] = cn ? (unsigned char)yvt_name_is_alias(c, cn) : 1;
     }
   /* The entries by call name, each chain ascending, and the ones any method
      may be reached by (no name, or an alias). A yielding method walked every
      entry to find those of its own name, per ask: (yielding methods x block
      calls), quadratic in a program of many same-shaped classes. */
-  free(yvt_nm_head); free(yvt_nm_next); free(yvt_always);
-  yvt_nb = yvt_n > 0 ? yvt_n : 1;
-  yvt_nm_head = malloc(sizeof(int) * (size_t)yvt_nb);
-  yvt_nm_next = malloc(sizeof(int) * (size_t)(yvt_n > 0 ? yvt_n : 1));
-  yvt_always = malloc(sizeof(int) * (size_t)(yvt_n > 0 ? yvt_n : 1));
-  yvt_always_n = 0;
-  if (!yvt_nm_head || !yvt_nm_next || !yvt_always) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-  for (int b = 0; b < yvt_nb; b++) yvt_nm_head[b] = -1;
-  for (int ii = yvt_n - 1; ii >= 0; ii--) {
-    const char *cn = nt_str(nt, yvt_ids[ii], "name");
-    yvt_nm_next[ii] = -1;
+  free(y->nm_head); free(y->nm_next); free(y->always);
+  y->nb = y->n > 0 ? y->n : 1;
+  y->nm_head = malloc(sizeof(int) * (size_t)y->nb);
+  y->nm_next = malloc(sizeof(int) * (size_t)(y->n > 0 ? y->n : 1));
+  y->always = malloc(sizeof(int) * (size_t)(y->n > 0 ? y->n : 1));
+  y->always_n = 0;
+  if (!y->nm_head || !y->nm_next || !y->always) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  for (int b = 0; b < y->nb; b++) y->nm_head[b] = -1;
+  for (int ii = y->n - 1; ii >= 0; ii--) {
+    const char *cn = nt_str(nt, y->ids[ii], "name");
+    y->nm_next[ii] = -1;
     if (!cn) continue;
-    int b = (int)(sp_strhash(cn) % (unsigned)yvt_nb);
-    yvt_nm_next[ii] = yvt_nm_head[b]; yvt_nm_head[b] = ii;
+    int b = (int)(sp_strhash(cn) % (unsigned)y->nb);
+    y->nm_next[ii] = y->nm_head[b]; y->nm_head[b] = ii;
   }
-  for (int ii = 0; ii < yvt_n; ii++)
-    if (!nt_str(nt, yvt_ids[ii], "name")) yvt_always[yvt_always_n++] = ii;
+  for (int ii = 0; ii < y->n; ii++)
+    if (!nt_str(nt, y->ids[ii], "name")) y->always[y->always_n++] = ii;
   yvt_tg_build(c);
 }
 /* The alias-named entries, by the names their alias may stand for: the
@@ -2482,10 +2509,11 @@ static void yvt_build(Compiler *c) {
    method's name resolves to that method along no path: the lookup matches
    names, and only an alias edge changes the name it matches. */
 static void yvt_tg_build(Compiler *c) {
-  anh_free(&yvt_tg_names); memset(&yvt_tg_names, 0, sizeof yvt_tg_names);
-  for (int i = 0; i < yvt_tg_nowned; i++) free(yvt_tg_owned[i]);
-  yvt_tg_nowned = 0;
-  free(yvt_tg_off); free(yvt_tg_ii); yvt_tg_off = NULL; yvt_tg_ii = NULL; yvt_tg_nn = 0;
+  YvtIndex *yv = c->yvt;
+  anh_free(&yv->tg_names); memset(&yv->tg_names, 0, sizeof yv->tg_names);
+  for (int i = 0; i < yv->tg_nowned; i++) free(yv->tg_owned[i]);
+  yv->tg_nowned = 0;
+  free(yv->tg_off); free(yv->tg_ii); yv->tg_off = NULL; yv->tg_ii = NULL; yv->tg_nn = 0;
   const NodeTable *nt = c->nt;
   /* the edges, chained by their new name */
   ANameHash en; memset(&en, 0, sizeof en);
@@ -2517,9 +2545,9 @@ static void yvt_tg_build(Compiler *c) {
   ANameHash yn; memset(&yn, 0, sizeof yn);
   int *yoff = NULL, *ylen = NULL, ycap = 0, *tpool = NULL, tn = 0, tcap = 0;
   int *pair_t = NULL, *pair_ii = NULL, np = 0, pcap = 0;
-  for (int ii = 0; ii < yvt_n; ii++) {
-    if (!yvt_alias_name || !yvt_alias_name[ii]) continue;
-    const char *cn = nt_str(nt, yvt_ids[ii], "name");
+  for (int ii = 0; ii < yv->n; ii++) {
+    if (!yv->alias_name || !yv->alias_name[ii]) continue;
+    const char *cn = nt_str(nt, yv->ids[ii], "name");
     if (!cn) continue;
     int y = anh_find(&yn, cn);
     if (y < 0) {
@@ -2544,9 +2572,9 @@ static void yvt_tg_build(Compiler *c) {
           anh_add(&seen, eold[j]);
           if (qn == qcap) { qcap *= 2; q = realloc(q, sizeof(const char *) * (size_t)qcap); if (!q) { fprintf(stderr, "spinel: out of memory\n"); exit(1); } }
           q[qn++] = eold[j];
-          int t = anh_find(&yvt_tg_names, eold[j]);
-          if (t < 0) { const char *own = yvt_tg_own(eold[j]); anh_add(&yvt_tg_names, own); t = anh_find(&yvt_tg_names, own); }
-          if (t >= yvt_tg_nn) yvt_tg_nn = t + 1;
+          int t = anh_find(&yv->tg_names, eold[j]);
+          if (t < 0) { const char *own = yvt_tg_own(yv, eold[j]); anh_add(&yv->tg_names, own); t = anh_find(&yv->tg_names, own); }
+          if (t >= yv->tg_nn) yv->tg_nn = t + 1;
           if (tn == tcap) { tcap = tcap ? tcap * 2 : 64; tpool = realloc(tpool, sizeof(int) * (size_t)tcap); if (!tpool) { fprintf(stderr, "spinel: out of memory\n"); exit(1); } }
           tpool[tn++] = t; ylen[y]++;
         }
@@ -2564,15 +2592,15 @@ static void yvt_tg_build(Compiler *c) {
   }
   /* the pairs by target name, each name's entries ascending (they were
      met ascending): counting sort */
-  yvt_tg_off = calloc((size_t)yvt_tg_nn + 1, sizeof(int));
-  yvt_tg_ii = malloc(sizeof(int) * (size_t)(np > 0 ? np : 1));
-  if (!yvt_tg_off || !yvt_tg_ii) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-  for (int p = 0; p < np; p++) yvt_tg_off[pair_t[p] + 1]++;
-  for (int t = 0; t < yvt_tg_nn; t++) yvt_tg_off[t + 1] += yvt_tg_off[t];
-  int *fill = malloc(sizeof(int) * (size_t)(yvt_tg_nn > 0 ? yvt_tg_nn : 1));
+  yv->tg_off = calloc((size_t)yv->tg_nn + 1, sizeof(int));
+  yv->tg_ii = malloc(sizeof(int) * (size_t)(np > 0 ? np : 1));
+  if (!yv->tg_off || !yv->tg_ii) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  for (int p = 0; p < np; p++) yv->tg_off[pair_t[p] + 1]++;
+  for (int t = 0; t < yv->tg_nn; t++) yv->tg_off[t + 1] += yv->tg_off[t];
+  int *fill = malloc(sizeof(int) * (size_t)(yv->tg_nn > 0 ? yv->tg_nn : 1));
   if (!fill) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-  for (int t = 0; t < yvt_tg_nn; t++) fill[t] = yvt_tg_off[t];
-  for (int p = 0; p < np; p++) yvt_tg_ii[fill[pair_t[p]]++] = pair_ii[p];
+  for (int t = 0; t < yv->tg_nn; t++) fill[t] = yv->tg_off[t];
+  for (int p = 0; p < np; p++) yv->tg_ii[fill[pair_t[p]]++] = pair_ii[p];
   free(fill); free(pair_t); free(pair_ii); free(tpool); free(yoff); free(ylen); anh_free(&yn);
   free(ehead); free(enext); free(eold); anh_free(&en);
 }
@@ -2580,32 +2608,57 @@ static void yvt_tg_build(Compiler *c) {
    an initialize, the alias-named entries whose alias may stand for its
    name, and the always-list, merged. A method with no name, or a prepend
    shadow, takes every entry (see yvt_may_reach). */
-typedef struct { int s[3]; int ai; int tp, te; int all; int next_all; int last; } YvtIt;
+/* The index, built (again) when the node table is not the one it was built
+   from, or has grown since */
+static YvtIndex *yvt_get(Compiler *c) {
+  if (!c->yvt) {
+    c->yvt = calloc(1, sizeof *c->yvt);
+    if (!c->yvt) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    c->yvt->ntc = -1;
+  }
+  const NodeTable *nt = c->nt;
+  if (c->yvt->nt != nt || c->yvt->ntc != nt->count) yvt_build(c);
+  return c->yvt;
+}
+void yvt_free(Compiler *c) {
+  YvtIndex *y = c->yvt;
+  if (!y) return;
+  free(y->ids); free(y->sup_ids); free(y->sup_key); free(y->alias_name); free(y->fwd);
+  free(y->nm_head); free(y->nm_next); free(y->always);
+  anh_free(&y->tg_names);
+  for (int i = 0; i < y->tg_nowned; i++) free(y->tg_owned[i]);
+  free(y->tg_owned); free(y->tg_off); free(y->tg_ii);
+  free(y);
+  c->yvt = NULL;
+}
+typedef struct { const YvtIndex *y; int s[3]; int ai; int tp, te; int all; int next_all; int last; } YvtIt;
 static void yvt_it_init(Compiler *c, YvtIt *it, int mi) {
+  const YvtIndex *y = it->y = c->yvt;
   const char *mn = c->scopes[mi].name;
-  it->all = !mn || c->scopes[mi].shadow == SHADOW_PREP || !yvt_nm_head;
+  it->all = !mn || c->scopes[mi].shadow == SHADOW_PREP || !y->nm_head;
   it->next_all = 0; it->last = -1; it->ai = 0; it->tp = it->te = 0;
   it->s[0] = it->s[1] = -1;
   if (it->all) return;
-  it->s[0] = yvt_nm_head[sp_strhash(mn) % (unsigned)yvt_nb];
-  if (sp_streq(mn, "initialize")) it->s[1] = yvt_nm_head[sp_strhash("new") % (unsigned)yvt_nb];
-  int t = yvt_tg_off ? anh_find(&yvt_tg_names, mn) : -1;
-  if (t >= 0 && t < yvt_tg_nn) { it->tp = yvt_tg_off[t]; it->te = yvt_tg_off[t + 1]; }
+  it->s[0] = y->nm_head[sp_strhash(mn) % (unsigned)y->nb];
+  if (sp_streq(mn, "initialize")) it->s[1] = y->nm_head[sp_strhash("new") % (unsigned)y->nb];
+  int t = y->tg_off ? anh_find(&y->tg_names, mn) : -1;
+  if (t >= 0 && t < y->tg_nn) { it->tp = y->tg_off[t]; it->te = y->tg_off[t + 1]; }
 }
 static int yvt_it_next(YvtIt *it) {
-  if (it->all) return it->next_all < yvt_n ? it->next_all++ : -1;
+  const YvtIndex *y = it->y;
+  if (it->all) return it->next_all < y->n ? it->next_all++ : -1;
   for (;;) {
     int a = it->s[0], b = it->s[1];
-    int c3 = it->ai < yvt_always_n ? yvt_always[it->ai] : -1;
-    int d = it->tp < it->te ? yvt_tg_ii[it->tp] : -1;
+    int c3 = it->ai < y->always_n ? y->always[it->ai] : -1;
+    int d = it->tp < it->te ? y->tg_ii[it->tp] : -1;
     int m = -1;
     if (a >= 0) m = a;
     if (b >= 0 && (m < 0 || b < m)) m = b;
     if (c3 >= 0 && (m < 0 || c3 < m)) m = c3;
     if (d >= 0 && (m < 0 || d < m)) m = d;
     if (m < 0) return -1;
-    if (a == m) it->s[0] = yvt_nm_next[a];
-    if (b == m) it->s[1] = yvt_nm_next[b];
+    if (a == m) it->s[0] = y->nm_next[a];
+    if (b == m) it->s[1] = y->nm_next[b];
     if (c3 == m) it->ai++;
     if (d == m) it->tp++;
     if (m > it->last) { it->last = m; return m; }
@@ -2846,6 +2899,28 @@ static int yvt_proc_arg_body(Compiler *c, int blk) {
   return -1;
 }
 
+/* Does the body hold a `return` or `break` of its own? A `return` in a
+   nested def, lambda, class or module belongs to that body. A `break` also
+   belongs to a nested block or loop. In a lambda, `return v` and `break v`
+   make v the lambda's value. In a proc, `return` leaves the enclosing
+   method. */
+static int yvt_body_has_exit(const NodeTable *nt, int id, int in_loop, int depth) {
+  if (id < 0 || depth > 200) return depth > 200;
+  NodeKind k = nt_kind(nt, id);
+  if (k == NK_ReturnNode) return 1;
+  if (k == NK_BreakNode && !in_loop) return 1;
+  if (k == NK_DefNode || k == NK_LambdaNode || k == NK_ClassNode || k == NK_ModuleNode) return 0;
+  if (k == NK_BlockNode || k == NK_WhileNode || k == NK_UntilNode || k == NK_ForNode) in_loop = 1;
+  int nr = nt_num_refs(nt, id);
+  for (int i = 0; i < nr; i++) if (yvt_body_has_exit(nt, nt_ref_at(nt, id, i), in_loop, depth + 1)) return 1;
+  int na = nt_num_arrs(nt, id);
+  for (int i = 0; i < na; i++) {
+    int an = 0; const int *ids = nt_arr_at(nt, id, i, &an);
+    for (int j = 0; j < an; j++) if (yvt_body_has_exit(nt, ids[j], in_loop, depth + 1)) return 1;
+  }
+  return 0;
+}
+
 /* What a callee yields to when the call passes a proc value of its own
    (call_forwards_own_block is 0): a literal written there types like an
    ordinary literal block, its tail being the value; any other callable is
@@ -2856,8 +2931,16 @@ static TyKind yvt_proc_arg_value(Compiler *c, int blk) {
   if (pbody < 0) return TY_POLY;
   int pn = 0; const int *pd = nt_arr(c->nt, pbody, "body", &pn);
   if (pn == 0) return TY_NIL;
+  /* (a `return v` or `break v` can give a value of any kind: only known
+     at run time) */
+  if (yvt_body_has_exit(c->nt, pbody, 0, 0)) return TY_POLY;
   TyKind pt = infer_type(c, pd[pn - 1]);
-  if (pt == TY_VOID) return TY_NIL;
+  if (pt == TY_VOID) pt = TY_NIL;
+  /* (a `next v` in the body gives v too. The proc's value arrives boxed,
+     so when v and the tail are of different kinds (`next 7 if c; nil`),
+     the value is only known at run time) */
+  TyKind nx = block_next_value_ty(c, pbody);
+  if (nx != TY_UNKNOWN && nx != pt) return TY_POLY;
   return pt == TY_UNKNOWN ? TY_POLY : pt;
 }
 
@@ -2890,7 +2973,7 @@ TyKind yield_value_type(Compiler *c, int mi) {
   const NodeTable *nt = c->nt;
   TyKind result = TY_UNKNOWN;
   int pf_fwd = 0, poly_site = 0;
-  if (yvt_nt != nt || yvt_ntc != nt->count) yvt_build(c);
+  YvtIndex *y = yvt_get(c);
   YvtIt yit; yvt_it_init(c, &yit, mi);
   /* Under --load-model=graph the call sites are taken in the program's
      order (prog_sort): where the first site's block answers (a method
@@ -2908,14 +2991,14 @@ TyKind yield_value_type(Compiler *c, int mi) {
       }
       site[nsite++] = ii;
     }
-    prog_sort(c, site, nsite, yvt_ids);
+    prog_sort(c, site, nsite, y->ids);
   }
   for (int ii; (ii = site ? (si < nsite ? site[si++] : -1) : yvt_it_next(&yit)) >= 0; ) {
-    int cid = yvt_ids[ii];
+    int cid = y->ids[ii];
     /* A `callee(...)` forward carries its block implicitly inside the `...`
        (no explicit block node); treat it as a forwarded block too. */
     if (!yvt_may_reach(c, ii, mi)) continue;
-    int fwd_args = yvt_fwd ? yvt_fwd[ii] : yvt_call_forwards_block(nt, cid);
+    int fwd_args = y->fwd ? y->fwd[ii] : yvt_call_forwards_block(nt, cid);
     /* skip calls that live inside method mi itself (recursive self-calls);
        only external call sites provide a concrete block value type */
     if ((int)(comp_scope_of(c, cid) - c->scopes) == mi) continue;
@@ -3025,13 +3108,13 @@ int yield_block_tails(Compiler *c, int mi, int *out, int max) {
 
   const NodeTable *nt = c->nt;
   int n = 0;
-  if (yvt_nt != nt || yvt_ntc != nt->count) yvt_build(c);
+  YvtIndex *y = yvt_get(c);
   YvtIt yit; yvt_it_init(c, &yit, mi);
   for (int ii; n < max && (ii = yvt_it_next(&yit)) >= 0; ) {
-    int cid = yvt_ids[ii];
+    int cid = y->ids[ii];
     int blk = nt_ref(nt, cid, "block");
     if (!yvt_may_reach(c, ii, mi)) continue;
-    int fwd_args = yvt_fwd ? yvt_fwd[ii] : yvt_call_forwards_block(nt, cid);
+    int fwd_args = y->fwd ? y->fwd[ii] : yvt_call_forwards_block(nt, cid);
     if ((int)(comp_scope_of(c, cid) - c->scopes) == mi) continue;
     if (!yvt_reaches(c, cid, mi)) continue;
     if (fwd_args || nt_call_has_block_arg(nt, cid)) {
@@ -3041,6 +3124,7 @@ int yield_block_tails(Compiler *c, int mi, int *out, int max) {
         int pbody = yvt_proc_arg_body(c, blk);
         int pn = 0; const int *pd = pbody >= 0 ? nt_arr(nt, pbody, "body", &pn) : NULL;
         if (pd && pn > 0) out[n++] = pd[pn - 1];
+        if (yield_block_tails_next && pd && n < max) n += ybt_collect_next(nt, pbody, out + n, max - n, 0);
         continue;
       }
       Scope *encl = comp_scope_of(c, cid);
@@ -3071,12 +3155,12 @@ int yield_block_calls(Compiler *c, int mi, int *out, int max) {
   g_yvt_mi[g_yvt_depth++] = mi;
   const NodeTable *nt = c->nt;
   int n = 0;
-  if (yvt_nt != nt || yvt_ntc != nt->count) yvt_build(c);
+  YvtIndex *y = yvt_get(c);
   YvtIt yit; yvt_it_init(c, &yit, mi);
   for (int ii; n < max && (ii = yvt_it_next(&yit)) >= 0; ) {
-    int cid = yvt_ids[ii];
+    int cid = y->ids[ii];
     if (!yvt_may_reach(c, ii, mi)) continue;
-    int fwd_args = yvt_fwd ? yvt_fwd[ii] : yvt_call_forwards_block(nt, cid);
+    int fwd_args = y->fwd ? y->fwd[ii] : yvt_call_forwards_block(nt, cid);
     if (!yvt_reaches(c, cid, mi)) continue;
     if (fwd_args || nt_call_has_block_arg(nt, cid)) {
       /* (a call in mi itself forwarding mi's own block is mi's caller's) */
@@ -3106,22 +3190,34 @@ TyKind yield_value_type_via_super(Compiler *c, int mi) {
   if (g_yvt_depth >= MAX_YVT_DEPTH) return TY_UNKNOWN;
   g_yvt_mi[g_yvt_depth++] = mi;
   const NodeTable *nt = c->nt;
-  if (yvt_nt != nt || yvt_ntc != nt->count) yvt_build(c);
+  YvtIndex *y = yvt_get(c);
   TyKind result = TY_UNKNOWN;
-  for (int ii = 0; ii < yvt_sup_n; ii++) {
-    Scope *cs = comp_scope_of(c, yvt_sup_ids[ii]);
+  /* (a method with no name, a prepend shadow, or one known by a name other
+     than its def's -- an alias captured it as an earlier version and
+     renamed it -- takes every super, as yvt_it_init does for the calls) */
+  const char *mn = comp_scope_user_name(&c->scopes[mi]);
+  unsigned mkey = mn ? yvt_name_key(mn) : 0;
+  if (c->scopes[mi].shadow == SHADOW_PREP || (mn && !sp_streq(comp_scope_def_name(c, &c->scopes[mi]), mn))) mkey = 0;
+  for (int ii = 0; ii < y->sup_n; ii++) {
+    if (mkey && y->sup_key[ii] && y->sup_key[ii] != mkey) continue;
+    Scope *cs = comp_scope_of(c, y->sup_ids[ii]);
     if (!cs || cs->class_id < 0 || !cs->name) continue;
     int cmi = (int)(cs - c->scopes);
     if (cmi == mi) continue;
-    /* where that super lands: the next shadow in its own class (an earlier
-       include's or extend's copy), or the superclass chain */
-    int rmi = a_super_target(c, cs);
-    if (rmi != mi) continue;
+    /* where the call plan binds that super: the next shadow in its own
+       class (an earlier include's or extend's copy), or the superclass
+       chain's method, or a version entry one of whose arms runs mi */
+    int at;
+    if (!cplan_target_runs(c, cplan_super_target(c, y->sup_ids[ii], cs, &at), mi)) continue;
     /* `super(a) { }` in the child: its own literal block is what mi's
        yield runs, not a block of the child's callers (none reaches it) */
-    int sb = nt_ref(nt, yvt_sup_ids[ii], "block");
+    int sb = nt_ref(nt, y->sup_ids[ii], "block");
     TyKind ft;
     if (sb >= 0 && nt_kind(nt, sb) == NK_BlockNode) ft = yvt_literal_block_value(c, sb);
+    /* `super(a, &pr)` with a proc value of the child's own (not the child's
+       block forwarded on): mi's yield runs that proc, as a call's does */
+    else if (sb >= 0 && nt_kind(nt, sb) == NK_BlockArgumentNode && !call_forwards_own_block(c, y->sup_ids[ii]))
+      ft = yvt_proc_arg_value(c, sb);
     else {
       ft = yield_value_type(c, cmi);
       if (ft == TY_UNKNOWN) ft = yield_value_type_via_super(c, cmi);
@@ -4169,6 +4265,9 @@ int name_is_synth_method(Compiler *c, const char *m) {
   /* `__bind x`: the method a bind_call of an attr accessor's
      instance_method calls (desugar_bind_attr_helpers), spaced as __noarg is */
   if (strncmp(m, "__bind ", 7) == 0) return 1;
+  /* `__mm a` / `__rtm a`: a method_missing Method's target and its
+     respond_to_missing? test (desugar_missing_method_obj), spaced too */
+  if (strncmp(m, "__mm ", 5) == 0 || strncmp(m, "__rtm ", 6) == 0) return 1;
   /* `__inc <n> <name>`: the shadow copy of an included module's method, kept
      so an override can reach it through super (#3738); a name no such copy
      has, as `__inc foo`, is the program's own */
@@ -4293,14 +4392,22 @@ const char *method_sym_arg(Compiler *c, int node) {
 
 /* Does call node's receiver hold an object whose class's chain has a
    program def of `method` (an instance method the program wrote, not the
-   builtin's)? Only a receiver typed as one object class is asked. */
+   builtin's)? Only a receiver typed as one object class is asked, or no
+   receiver in an instance method, whose self is an object of its class. */
 int method_user_override_recv(Compiler *c, int node) {
   const NodeTable *nt = c->nt;
-  int recv = nt_ref(nt, node, "receiver");
-  if (recv < 0) return 0;
-  TyKind rt = comp_ntype(c, recv);
-  if (!ty_is_object(rt)) return 0;
-  int k = ty_object_class(rt);
+  int recv = nt_ref(nt, node, "receiver"), k;
+  if (recv < 0) {
+    int s = c->nscope ? c->nscope[node] : -1, cm = 0;
+    if (s <= 0 || s >= c->nscopes) return 0;
+    k = comp_scope_own_class(c, s, &cm);
+    if (cm || c->scopes[s].is_module_function) return 0;
+  }
+  else {
+    TyKind rt = comp_ntype(c, recv);
+    if (!ty_is_object(rt)) return 0;
+    k = ty_object_class(rt);
+  }
   if (k < 0 || k >= c->nclasses) return 0;
   int mi = comp_method_in_chain(c, k, "method", NULL);
   return mi >= 0 && mi < c->nscopes && c->scopes[mi].def_node >= 0 &&
@@ -4324,22 +4431,34 @@ int is_method_obj_call(Compiler *c, int node) {
   return 1;
 }
 
+/* The method scope <m>.super_method answers for m's scope mi: the method of
+   mi's def's name (comp_scope_def_name, the name its super asks for) one step
+   up mi's class's chain, or -1 (nil). A copy's own name is internal: an alias
+   made before a prepend captures the class's body as `__prep <n> m`. */
+int method_super_target(Compiler *c, int mi) {
+  if (mi < 0 || c->scopes[mi].class_id < 0) return -1;
+  int par = c->classes[c->scopes[mi].class_id].parent;
+  if (par < 0) return -1;
+  const char *nm = comp_scope_def_name(c, &c->scopes[mi]);
+  return c->scopes[mi].is_cmethod ? comp_cmethod_in_chain(c, par, nm, NULL) : comp_method_in_chain(c, par, nm, NULL);
+}
+
 /* The target method scope index bound by a `method(:sym)` node, or -1
-   (e.g. a top-level Kernel method like `puts`, or a builtin-array receiver). */
-static int method_obj_target_mi_raw(Compiler *c, int node) {
+   (e.g. a top-level Kernel method like `puts`, or a builtin-array receiver).
+   *cls and *sg (when given) are where the lookup searched: the class whose
+   chain it took (-1 for main's or none) and its side (1: the class
+   methods), as an alias's owner is asked (method_obj_alias_owner) and a
+   Method of a copy renders the class (method_obj_from_class). */
+static int method_obj_lookup(Compiler *c, int node, int *cls, int *sg) {
   const NodeTable *nt = c->nt;
+  int k = -1, side = 0;
+  if (cls) *cls = -1;
+  if (sg) *sg = 0;
   /* <method>.super_method: the same-named method one step up the defining
      class's ancestor chain, or -1 (nil) when there is none (#3247). */
-  if (node >= 0 && nt_kind(nt, node) == NK_CallNode && nt_str(nt, node, "name") &&
-      sp_streq(nt_str(nt, node, "name"), "super_method")) {
+  if (node >= 0 && nt_kind(nt, node) == NK_CallNode && is_super_method_name(nt_str(nt, node, "name"))) {
     int imn = method_recv_node(c, nt_ref(nt, node, "receiver"));
-    int imi = imn >= 0 ? method_obj_target_mi_raw(c, imn) : -1;
-    if (imi < 0 || c->scopes[imi].class_id < 0) return -1;
-    int par = c->classes[c->scopes[imi].class_id].parent;
-    if (par < 0) return -1;
-    return c->scopes[imi].is_cmethod
-             ? comp_cmethod_in_chain(c, par, c->scopes[imi].name, NULL)
-             : comp_method_in_chain(c, par, c->scopes[imi].name, NULL);
+    return method_super_target(c, imn >= 0 ? method_obj_lookup(c, imn, NULL, NULL) : -1);
   }
   const char *sym = method_sym_arg(c, node);
   if (!sym) return -1;
@@ -4352,8 +4471,8 @@ static int method_obj_target_mi_raw(Compiler *c, int node) {
       const char *rn = (recv >= 0 && (nt_kind(nt, recv) == NK_ConstantReadNode ||
                                       nt_kind(nt, recv) == NK_ConstantPathNode))
                        ? nt_str(nt, recv, "name") : NULL;
-      int ci = rn ? comp_class_index(c, rn) : -1;
-      return ci >= 0 ? call_target(c, node, ci, sym, CT_CAPTURE, NULL) : -1;
+      k = rn ? comp_class_index(c, rn) : -1;
+      goto found;
     }
   }
   /* a bare `method(:m)` names what a bare `m` would call: inside a class
@@ -4361,15 +4480,15 @@ static int method_obj_target_mi_raw(Compiler *c, int node) {
      method lookup, comp_self_call_mi) */
   if (recv < 0) {
     int mi = comp_self_call_mi(c, node, sym);
-    if (mi < 0) return mi;
-    Scope *s = &c->scopes[mi];
-    return call_target(c, node, s->class_id, sym, CT_CAPTURE | (s->class_id < 0 ? CT_TOP : s->is_cmethod ? CT_CMETHOD : 0), NULL);
+    if (mi < 0) return cplan_capture_missing(c, node);
+    k = c->scopes[mi].class_id, side = k >= 0 && c->scopes[mi].is_cmethod;
+    if (k < 0) return call_target(c, node, k, sym, CT_CAPTURE | CT_TOP, NULL);
+    goto found;
   }
   /* `self.method(:m)` in a class method: self is the class */
   if (nt_kind(nt, recv) == NK_SelfNode) {
     Scope *ss = comp_scope_of(c, node);
-    if (ss && ss->is_cmethod && ss->class_id >= 0)
-      return call_target(c, node, ss->class_id, sym, CT_CAPTURE | CT_CMETHOD, NULL);
+    if (ss && ss->is_cmethod && ss->class_id >= 0) { k = ss->class_id, side = 1; goto found; }
   }
   TyKind rt = infer_type(c, recv);
   /* a receiver whose method() was retargeted at a synthesized __bam_* wrapper
@@ -4377,23 +4496,38 @@ static int method_obj_target_mi_raw(Compiler *c, int node) {
      TOP-LEVEL def, not in the object's own class chain, so resolve it there. */
   if (sym[0] == '_' && sym[1] == '_' && sym[2] == 'b' && sym[3] == 'a' && sym[4] == 'm')
     return comp_method_index(c, sym);
-  if (ty_is_object(rt)) return call_target(c, node, ty_object_class(rt), sym, CT_CAPTURE, NULL);
+  if (ty_is_object(rt)) { k = ty_object_class(rt); goto found; }
   /* Klass.method(:cmeth) / Module.method(:mf): the class-side method */
   if (rt == TY_CLASS && (nt_kind(nt, recv) == NK_ConstantReadNode ||
                          nt_kind(nt, recv) == NK_ConstantPathNode)) {
     /* `Outer::Mod.method(:m)` names the class by its last segment, as every
        other constant receiver resolves */
     const char *rn2 = nt_str(nt, recv, "name");
-    int ci2 = rn2 ? comp_class_index(c, rn2) : -1;
-    if (ci2 >= 0) return call_target(c, node, ci2, sym, CT_CAPTURE | CT_CMETHOD, NULL);
+    k = rn2 ? comp_class_index(c, rn2) : -1, side = 1;
+    if (k >= 0) goto found;
   }
   /* `self.class.method(:cmeth)` in an instance method of a class nothing
      inherits from: that class's class-side method */
   if (rt == TY_CLASS) {
-    int ci3 = self_class_static_ci(c, recv);
-    if (ci3 >= 0) return call_target(c, node, ci3, sym, CT_CAPTURE | CT_CMETHOD, NULL);
+    k = self_class_static_ci(c, recv), side = 1;
+    if (k >= 0) goto found;
   }
   return -1;
+found:
+  if (k < 0) return -1;
+  if (cls) *cls = k;
+  if (sg) *sg = side;
+  int mi = call_target(c, node, k, sym, CT_CAPTURE | (side ? CT_CMETHOD : 0), NULL);
+  return mi >= 0 || side ? mi : cplan_capture_missing(c, node);
+}
+
+/* The class or module the alias a `method(:sym)` node names was made in, as
+   the Method's #owner answers (cplan_alias_holder), *sg 1 for its singleton
+   (an alias in a `class << self`); -1 where the name is no alias's there */
+int method_obj_alias_owner(Compiler *c, int node, int *sg) {
+  int k, side, mi = method_obj_lookup(c, node, &k, &side);
+  *sg = 0;
+  return mi >= 0 ? cplan_alias_holder(c, node, k, method_sym_arg(c, node), side, sg) : -1;
 }
 
 /* A yielding method is spliced into each call site and has no function of
@@ -4401,11 +4535,18 @@ static int method_obj_target_mi_raw(Compiler *c, int node) {
    `yield` is a call on the block the Method passes (make_yield_proc_forms
    makes one for every method a `method(:name)` names). */
 int method_obj_target_mi(Compiler *c, int node) {
-  int mi = method_obj_target_mi_raw(c, node);
+  int mi = method_obj_lookup(c, node, NULL, NULL);
   /* a lowering's own helper is no method a Method can name */
   if (comp_scope_is_private_helper(c, mi)) return -1;
   int pf = scope_proc_form_of(c, mi);
   return pf >= 0 ? pf : mi;
+}
+
+/* See analyze.h. */
+int method_obj_from_class(Compiler *c, int node) {
+  int from;
+  (void)method_obj_lookup(c, node, &from, NULL);
+  return from;
 }
 
 /* The method name of `k.instance_method(:m)` that names no one target, or
@@ -4644,6 +4785,104 @@ int method_recv_nodes(Compiler *c, int recv, int **out) {
     if (mn >= 0) mrn_push(out, &n, &cap, mn);
   }
   return n;
+}
+
+/* The #owner a bound builtin's or accessor's wrapper, method mi, stands
+   for (desugar_builtin_method_obj records it on the def): the class
+   declaring the accessor, or -1 and the builtin's class or module by name
+   in *name (NULL where no fact names one) */
+int bam_owner(Compiler *c, int mi, const char **name) {
+  int dn = mi >= 0 ? c->scopes[mi].def_node : -1;
+  *name = dn >= 0 ? nt_str(c->nt, dn, "bam_owner") : NULL;
+  return dn >= 0 ? (int)nt_int(c->nt, dn, "bam_owner_ci", 0) - 1 : -1;
+}
+
+/* Is method mi a Struct member's accessor wrapper: an accessor's wrapper
+   (bam_accessor) that no attr_* call declares (bam_src), named for one of
+   the members of the class it stands for? An attr_* accessor in a
+   Struct's class, over a member's name too, is a plain one. */
+int bam_struct_member(Compiler *c, int mi) {
+  const NodeTable *nt = c->nt;
+  int dn = mi >= 0 ? c->scopes[mi].def_node : -1;
+  const char *sym = dn >= 0 ? nt_str(nt, dn, "bam_sym") : NULL, *own;
+  if (!sym || !nt_int(nt, dn, "bam_accessor", 0) || nt_int(nt, dn, "bam_src", -1) >= 0) return 0;
+  int ci = bam_owner(c, mi, &own);
+  char base[256], ivn[258];
+  if (ci < 0 || !c->classes[ci].is_struct) return 0;
+  if (!setter_base_name(sym, base, sizeof base)) snprintf(base, sizeof base, "%s", sym);
+  snprintf(ivn, sizeof ivn, "@%s", base);
+  return comp_member_index(&c->classes[ci], ivn) >= 0;
+}
+
+/* The method a local's write w makes a Method of: its target, or -1 */
+static int method_write_target(Compiler *c, int w) {
+  int mn = method_recv_node(c, nt_ref(c->nt, w, "value"));
+  return mn >= 0 ? method_obj_target_mi(c, mn) : -1;
+}
+
+/* Does recv, a local written more than one Method, hold only Methods whose
+   bind site stamped the position a read answers from (emit_method_desc_args)?
+   Each of its writes must make one, by a `method(:sym)` node with a
+   target: one with none raises NameError at the bind, where CRuby may
+   find the method (a module function's instance copy, a name
+   respond_to_missing? answers), a boxed receiver's wrapper (bam_poly)
+   names no method until its receiver's class is known, and of a builtin's
+   wrapper (bam_sym) only an accessor's (bam_accessor) and a method_missing
+   Method's (cplan_missing_guard: none) have a known position: whether
+   CRuby writes a builtin in C or in Ruby no fact tells. */
+int method_recv_stamped(Compiler *c, int recv) {
+  const NodeTable *nt = c->nt;
+  if (recv < 0 || nt_kind(nt, recv) != NK_LocalVariableReadNode) return 0;
+  const char *vn = nt_str(nt, recv, "name");
+  Scope *sc = comp_scope_of(c, recv);
+  int n = 0;
+  for (int w = an_local_writes_named_first(c, vn); w >= 0; w = an_local_writes_named_next(w)) {
+    const char *wn = nt_str(nt, w, "name");
+    if (comp_scope_of(c, w) != sc || !wn || !vn || !sp_streq(wn, vn)) continue;
+    int mi = method_write_target(c, w);
+    int dn = mi >= 0 ? c->scopes[mi].def_node : -1;
+    if (dn < 0 || nt_int(nt, dn, "bam_poly", 0) ||
+        (nt_str(nt, dn, "bam_sym") && !nt_int(nt, dn, "bam_accessor", 0) && cplan_missing_guard(c, mi) < 0)) return 0;
+    n++;
+  }
+  return n > 0;
+}
+
+/* Is method mi a builtin's wrapper whose bind site stamps no owner: one
+   (bam_sym) for which no fact names the class or module that defines the
+   builtin (bam_owner)? */
+static int bam_owner_unknown(Compiler *c, int mi) {
+  int dn = mi >= 0 ? c->scopes[mi].def_node : -1;
+  const char *bn;
+  return dn >= 0 && nt_str(c->nt, dn, "bam_sym") && bam_owner(c, mi, &bn) < 0 && !bn;
+}
+
+/* Does the program make a Method of such a wrapper anywhere? */
+static int program_has_bam_owner_unknown(Compiler *c) {
+  for (int i = 0; i < c->nscopes; i++) if (bam_owner_unknown(c, i)) return 1;
+  return 0;
+}
+
+/* May recv, a Method expression no one node names, hold a builtin's Method
+   whose bind site stamps no owner (bam_owner_unknown)? A local answers by
+   its writes, each a `method(:sym)` node of its own; any other expression,
+   a container's element, a parameter, or a local written something else,
+   may hold any Method the program makes. */
+int method_recv_owner_unknown(Compiler *c, int recv) {
+  const NodeTable *nt = c->nt;
+  if (recv < 0 || nt_kind(nt, recv) != NK_LocalVariableReadNode) return program_has_bam_owner_unknown(c);
+  const char *vn = nt_str(nt, recv, "name");
+  Scope *sc = comp_scope_of(c, recv);
+  int n = 0;
+  for (int w = an_local_writes_named_first(c, vn); w >= 0; w = an_local_writes_named_next(w)) {
+    const char *wn = nt_str(nt, w, "name");
+    if (comp_scope_of(c, w) != sc || !wn || !vn || !sp_streq(wn, vn)) continue;
+    int mn = method_recv_node(c, nt_ref(nt, w, "value"));
+    if (mn < 0) return program_has_bam_owner_unknown(c);
+    if (bam_owner_unknown(c, method_obj_target_mi(c, mn))) return 1;
+    n++;
+  }
+  return n ? 0 : program_has_bam_owner_unknown(c);
 }
 
 /* Every `method(:sym)` node behind a Proc-typed expression created by
@@ -5749,3 +5988,26 @@ int loop_may_stop(Compiler *c, int loop_call) {
   if (loop_call < g_si.count) g_si.loop_memo[loop_call] = (signed char)r;
   return r;
 }
+
+/* See analyze_internal.h. */
+int respond_to_cells_shape(const NodeTable *nt, int id) {
+  int ac = 0;
+  const int *av = nt_kind(nt, id) == NK_CallNode && is_respond_to_name(nt_str(nt, id, "name")) &&
+                  nt_ref(nt, id, "block") < 0 ? call_args(nt, id, &ac) : NULL;
+  int recv = av ? nt_ref(nt, id, "receiver") : -1;
+  NodeKind rk = recv >= 0 ? nt_kind(nt, recv) : NK_SelfNode, ak = ac == 2 ? nt_kind(nt, av[1]) : NK_FalseNode;
+  return av && (ac == 1 || ac == 2) && nt_kind(nt, av[0]) == NK_SymbolNode && (ak == NK_TrueNode || ak == NK_FalseNode) &&
+         (rk == NK_SelfNode || rk == NK_ConstantReadNode || rk == NK_ConstantPathNode);
+}
+/* See analyze_internal.h. */
+int capture_cells_shape(const NodeTable *nt, int id) {
+  int ac = 0;
+  const int *av = nt_kind(nt, id) == NK_CallNode && is_bound_method_maker(nt_str(nt, id, "name")) &&
+                  nt_ref(nt, id, "block") < 0 ? call_args(nt, id, &ac) : NULL;
+  int recv = av ? nt_ref(nt, id, "receiver") : -1;
+  NodeKind rk = recv >= 0 ? nt_kind(nt, recv) : NK_SelfNode;
+  return av && ac == 1 && nt_kind(nt, av[0]) == NK_SymbolNode &&
+         (rk == NK_SelfNode || rk == NK_ConstantReadNode || rk == NK_ConstantPathNode);
+}
+/* See analyze_internal.h. */
+int respond_to_missing_defined(Compiler *c) { return !an_name_binder_free(c, "respond_to_missing?"); }

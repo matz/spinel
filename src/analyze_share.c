@@ -81,7 +81,7 @@ int sh_may_hold(const Compiler *c, TyKind t) {
   case TY_STR_INT_HASH: case TY_INT_INT_HASH: case TY_PROC: case TY_CURRY: case TY_FIBER:
   case TY_THREAD: case TY_QUEUE: case TY_MUTEX: case TY_CONDVAR: case TY_RANDOM: case TY_DIR:
   case TY_ADDRINFO: case TY_SOCKOPT: case TY_TMS: case TY_PROCESS_STATUS:
-  case TY_METHOD: case TY_IO: case TY_ARGF: case TY_CLASS:
+  case TY_METHOD: case TY_IO: case TY_ARGF: case TY_CLASS: case TY_TIME_RANGE: case TY_OBJ_RANGE:
     return 0;
   default:
     return 1;
@@ -220,16 +220,16 @@ static int sh_copied_self_targets(Compiler *c, int call, int *out, int cap) {
   const char *name = nt_kind(nt, call) == NK_CallNode ? nt_str(nt, call, "name") : NULL;
   Scope *s = comp_scope_of(c, call);
   int si = (int)(s - c->scopes);
-  if (!name || nt_ref(nt, call, "receiver") >= 0 || nt_int(nt, call, "builtin_only", 0) || !s->is_transplanted_source ||
-      s->is_cmethod || s->def_node < 0 || scope_toplevel_included(c, si))
+  if (!name || nt_ref(nt, call, "receiver") >= 0 || nt_int(nt, call, "builtin_only", 0) || !comp_scope_copied_away(c, si) ||
+      s->is_cmethod || s->def_node < 0)
     return 0;
   /* (a name no class answers, a builtin's, reaches none) */
   int n = 0;
   comp_poly_candidates(c, name, &n);
   if (n == 0) return 0;
   n = 0;
-  /* (the body's copies, by def_node; every scope was read for them) */
-  for (int k = an_scopes_same_def_first(c, si); k >= 0; k = an_scopes_same_def_next(c, k)) {
+  /* (the body's copies: the scopes of its def node) */
+  for (int k = comp_def_oldest(c, s->def_node); k >= 0; k = comp_def_newer(c, k)) {
     const Scope *cp = &c->scopes[k];
     if (k == si || cp->class_id < 0 || cp->is_cmethod) continue;
     int mi = comp_method_in_chain(c, cp->class_id, name, NULL);

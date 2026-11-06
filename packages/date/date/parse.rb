@@ -587,8 +587,9 @@ class Date
         h[:year]   = -h[:year] + 1    if h[:year]
       end
 
-      # comp (century completion)
-      if comp && h.delete(:_comp) != false
+      # comp (century completion); the marker goes either way, as in CRuby
+      century = h.delete(:_comp)
+      if comp && century != false
         [:cwyear, :year].each do |key|
           y = h[key]
           if y && y >= 0 && y <= 99

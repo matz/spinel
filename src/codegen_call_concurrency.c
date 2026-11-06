@@ -486,6 +486,9 @@ int emit_call_synchronize_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
           buf_printf(b, "if (_retf%d) { %s = _retv%d; return 0; } ", eid, proc_ret_slot(), eid);
         /* a fiber body is `static void`: see g_c_ret_void */
         else if (has_retval && g_c_ret_void) buf_printf(b, "if (_retf%d) return; ", eid);
+        /* (a handle slot's answer is published as it returns, as
+           emit_retf_return's is) */
+        else if (has_retval && g_ret_type == TY_STRBUF) buf_printf(b, "if (_retf%d) return sp_strface_pub_h(_retv%d); ", eid, eid);
         else if (has_retval) buf_printf(b, "if (_retf%d) return _retv%d; ", eid, eid);
         else if (g_in_proc_body && g_result_var && g_result_poly)
           buf_printf(b, "if (_retf%d) { %s = sp_box_nil(); return 0; } ", eid, g_result_var);

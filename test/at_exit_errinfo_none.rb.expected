@@ -1,0 +1,4 @@
+in a rescue: #<RuntimeError: handled>
+rescued 3: #<SystemExit: exit>
+end: nil
+hook: nil

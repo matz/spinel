@@ -66,6 +66,26 @@ spinel: 1 refusal, nothing written
 == test/reject/bool_reopen_block_return_in_lambda.rb [promote] rc=1
 spinel: test/reject/bool_reopen_block_return_in_lambda.rb:8: a `return` in a block given to a TrueClass's or FalseClass's yielding method, inside a lambda, is not supported by AOT compilation
 spinel: 1 refusal, nothing written
+== test/reject/builder_after_header_under_rescue.rb [default] rc=1
+spinel: test/reject/builder_after_header_under_rescue.rb:7: a Foo = Class.new or Module.new that may run without a `class Foo` or `module Foo` in the same body, or the header without it, is not supported: spinel cannot tell whether the header reopens the built class; write the two together or rename one of them
+== test/reject/builder_after_header_under_rescue.rb [promote] rc=1
+spinel: test/reject/builder_after_header_under_rescue.rb:7: a Foo = Class.new or Module.new that may run without a `class Foo` or `module Foo` in the same body, or the header without it, is not supported: spinel cannot tell whether the header reopens the built class; write the two together or rename one of them
+== test/reject/builder_beside_conditional_header.rb [default] rc=1
+spinel: test/reject/builder_beside_conditional_header.rb:5: a Foo = Class.new or Module.new that may run without a `class Foo` or `module Foo` in the same body, or the header without it, is not supported: spinel cannot tell whether the header reopens the built class; write the two together or rename one of them
+== test/reject/builder_beside_conditional_header.rb [promote] rc=1
+spinel: test/reject/builder_beside_conditional_header.rb:5: a Foo = Class.new or Module.new that may run without a `class Foo` or `module Foo` in the same body, or the header without it, is not supported: spinel cannot tell whether the header reopens the built class; write the two together or rename one of them
+== test/reject/builder_beside_header_in_rescued_begin.rb [default] rc=1
+spinel: test/reject/builder_beside_header_in_rescued_begin.rb:6: a Foo = Class.new or Module.new that may run without a `class Foo` or `module Foo` in the same body, or the header without it, is not supported: spinel cannot tell whether the header reopens the built class; write the two together or rename one of them
+== test/reject/builder_beside_header_in_rescued_begin.rb [promote] rc=1
+spinel: test/reject/builder_beside_header_in_rescued_begin.rb:6: a Foo = Class.new or Module.new that may run without a `class Foo` or `module Foo` in the same body, or the header without it, is not supported: spinel cannot tell whether the header reopens the built class; write the two together or rename one of them
+== test/reject/builder_conditional_beside_header.rb [default] rc=1
+spinel: test/reject/builder_conditional_beside_header.rb:7: a Bar = Class.new or Module.new that may run without a `class Bar` or `module Bar` in the same body, or the header without it, is not supported: spinel cannot tell whether the header reopens the built class; write the two together or rename one of them
+== test/reject/builder_conditional_beside_header.rb [promote] rc=1
+spinel: test/reject/builder_conditional_beside_header.rb:7: a Bar = Class.new or Module.new that may run without a `class Bar` or `module Bar` in the same body, or the header without it, is not supported: spinel cannot tell whether the header reopens the built class; write the two together or rename one of them
+== test/reject/builder_header_apart_under_rescue.rb [default] rc=1
+spinel: test/reject/builder_header_apart_under_rescue.rb:6: a Foo = Class.new or Module.new that may run without a `class Foo` or `module Foo` in the same body, or the header without it, is not supported: spinel cannot tell whether the header reopens the built class; write the two together or rename one of them
+== test/reject/builder_header_apart_under_rescue.rb [promote] rc=1
+spinel: test/reject/builder_header_apart_under_rescue.rb:6: a Foo = Class.new or Module.new that may run without a `class Foo` or `module Foo` in the same body, or the header without it, is not supported: spinel cannot tell whether the header reopens the built class; write the two together or rename one of them
 == test/reject/builtin_include_in_method.rb [default] rc=1
 spinel: test/reject/builtin_include_in_method.rb:7: String.include(...) is not supported by AOT compilation: the class graph, ancestor chain, and method/ivar layout are baked at compile time, so a class cannot be restructured through an explicit receiver. Move the `include` inside `class String ... end` (see docs/limitations.md)
 spinel: 1 refusal, nothing written
@@ -566,6 +586,14 @@ spinel: 1 refusal, nothing written
 spinel: test/reject/const_get_runtime_name.rb:7: unsupported const_get with a name known only at run time and no class or module receiver (an instance has no const_get; constants are resolved at compile time): node N (CallNode `const_get`) recv=-/ty-1 argc=1 arg0ty6
 == test/reject/const_get_runtime_name.rb [promote] rc=1
 spinel: test/reject/const_get_runtime_name.rb:7: unsupported const_get with a name known only at run time and no class or module receiver (an instance has no const_get; constants are resolved at compile time): node N (CallNode `const_get`) recv=-/ty-1 argc=1 arg0ty6
+== test/reject/const_path_value_parent_middle_collides.rb [default] rc=1
+spinel: test/reject/const_path_value_parent_middle_collides.rb:9: a constant path through a run-time value (`<value>::...::Foo`) is not supported when a middle name of the path and Foo each name classes or modules in more than one scope (see docs/limitations.md)
+== test/reject/const_path_value_parent_middle_collides.rb [promote] rc=1
+spinel: test/reject/const_path_value_parent_middle_collides.rb:9: a constant path through a run-time value (`<value>::...::Foo`) is not supported when a middle name of the path and Foo each name classes or modules in more than one scope (see docs/limitations.md)
+== test/reject/const_path_value_parent_rescue.rb [default] rc=1
+spinel: test/reject/const_path_value_parent_rescue.rb:10: a constant path through a run-time value (`<value>::Err`) in a class or module definition, a rescue list or through a value other than a local, self or its class is not supported when classes or modules in more than one scope are named Err (see docs/limitations.md)
+== test/reject/const_path_value_parent_rescue.rb [promote] rc=1
+spinel: test/reject/const_path_value_parent_rescue.rb:10: a constant path through a run-time value (`<value>::Err`) in a class or module definition, a rescue list or through a value other than a local, self or its class is not supported when classes or modules in more than one scope are named Err (see docs/limitations.md)
 == test/reject/const_set_ambiguous_receiver.rb [default] rc=1
 spinel: test/reject/const_set_ambiguous_receiver.rb:11: const_set(:X, ...) on a receiver whose class or module is known only at run time is not supported when more than one module holds a constant X: constants are compile-time globals, and which module's X this sets is not known at compile time. Write `Mod.const_set(:X, v)` or `Mod::X = v` (see docs/limitations.md)
 spinel: 1 refusal, nothing written
@@ -1286,6 +1314,12 @@ spinel: 1 refusal, nothing written
 == test/reject/method_string_handed_to_appender.rb [promote] rc=1
 spinel: test/reject/method_string_handed_to_appender.rb:15: a String is passed through `g.call`, and a proc or Method it can reach appends to the String it is handed: this call hands it a copy, so the append would not reach the caller's String (a String is not yet shared by reference from an instance variable). Return the String from the proc or Method and assign it, or append to it in the caller.
 spinel: 1 refusal, nothing written
+== test/reject/module_method_capture_singleton_untold.rb [default] rc=1
+spinel: test/reject/module_method_capture_singleton_untold.rb:12: a Method of a module's class method it does not have, made where the program does not tell whether the module's singleton class is made yet (a form that makes it may run before): CRuby's NameError names the class `#<Class:V>` once it is, `Module` before
+spinel: 1 refusal, nothing written
+== test/reject/module_method_capture_singleton_untold.rb [promote] rc=1
+spinel: test/reject/module_method_capture_singleton_untold.rb:12: a Method of a module's class method it does not have, made where the program does not tell whether the module's singleton class is made yet (a form that makes it may run before): CRuby's NameError names the class `#<Class:V>` once it is, `Module` before
+spinel: 1 refusal, nothing written
 == test/reject/module_named_like_monitor.rb [default] rc=1
 spinel: test/reject/module_named_like_monitor.rb:3: Monitor is not a module (TypeError)
 == test/reject/module_named_like_monitor.rb [promote] rc=1
@@ -1388,6 +1422,10 @@ spinel: test/reject/range_rational_walk_own_map.rb:8: a Range with a Rational or
 spinel: test/reject/range_reopen_float_range.rb:8: a method the program defines in Range, called on a Range of Floats: only an Integer Range runs it
 == test/reject/range_reopen_float_range.rb [promote] rc=1
 spinel: test/reject/range_reopen_float_range.rb:8: a method the program defines in Range, called on a Range of Floats: only an Integer Range runs it
+== test/reject/range_reopen_obj_range.rb [default] rc=1
+spinel: test/reject/range_reopen_obj_range.rb:16: a method the program defines in Range, called on a Range of objects: only an Integer Range runs it
+== test/reject/range_reopen_obj_range.rb [promote] rc=1
+spinel: test/reject/range_reopen_obj_range.rb:16: a method the program defines in Range, called on a Range of objects: only an Integer Range runs it
 == test/reject/range_reopen_string_range.rb [default] rc=1
 spinel: test/reject/range_reopen_string_range.rb:12: a method the program defines in Range, called on a Range of Strings: only an Integer Range runs it
 == test/reject/range_reopen_string_range.rb [promote] rc=1
@@ -1406,12 +1444,10 @@ spinel: test/reject/range_reopened_endpoint_write.rb:11: a method the program de
 spinel: test/reject/range_reopened_member_answer.rb:9: a method the program defines in Range, called on a Range of Strings: only an Integer Range runs it
 == test/reject/range_reopened_member_answer.rb [promote] rc=1
 spinel: test/reject/range_reopened_member_answer.rb:9: a method the program defines in Range, called on a Range of Strings: only an Integer Range runs it
-== test/reject/range_time_bound.rb [default] rc=1
-spinel: test/reject/range_time_bound.rb:4: a Range of Time objects cannot be built: a Range is an unboxed value with sp_int bounds, so it has nowhere to hold them. Comparing against the bounds directly (`t >= lo && t < hi`) needs no Range and does work (see docs/limitations.md)
-spinel: 1 refusal, nothing written
-== test/reject/range_time_bound.rb [promote] rc=1
-spinel: test/reject/range_time_bound.rb:4: a Range of Time objects cannot be built: a Range is an unboxed value with sp_int bounds, so it has nowhere to hold them. Comparing against the bounds directly (`t >= lo && t < hi`) needs no Range and does work (see docs/limitations.md)
-spinel: 1 refusal, nothing written
+== test/reject/range_reopened_time_range.rb [default] rc=1
+spinel: test/reject/range_reopened_time_range.rb:9: a method the program defines in Range, called on a Range of Times: only an Integer Range runs it
+== test/reject/range_reopened_time_range.rb [promote] rc=1
+spinel: test/reject/range_reopened_time_range.rb:9: a method the program defines in Range, called on a Range of Times: only an Integer Range runs it
 == test/reject/rational_include_method.rb [default] rc=1
 spinel: test/reject/rational_include_method.rb:9: unsupported a method of a module included or prepended into Rational or Complex (define it in the class body instead): node N (CallNode `desc`) recv=RationalNode/ty15 argc=0
 spinel: 1 refusal, nothing written
@@ -1420,6 +1456,20 @@ spinel: 1 refusal, nothing written
 spinel: test/reject/rational_pow_bignum.rb:7: the receiver of a Float `**` given a Rational, which no conversion keeps in its sp_float slot
 spinel: 1 refusal, nothing written
 == test/reject/rational_pow_bignum.rb [promote] rc=0
+== test/reject/record_capture_in_lambda_before_def.rb [default] rc=1
+spinel: test/reject/record_capture_in_lambda_before_def.rb:5: a Method of a Struct or Data class's class method, made where the method's def may not have run yet: CRuby raises NameError before the def runs
+spinel: 1 refusal, nothing written
+== test/reject/record_capture_in_lambda_before_def.rb [promote] rc=1
+spinel: test/reject/record_capture_in_lambda_before_def.rb:5: a Method of a Struct or Data class's class method, made where the method's def may not have run yet: CRuby raises NameError before the def runs
+spinel: 1 refusal, nothing written
+== test/reject/record_sclass_in_method_body.rb [default] rc=1
+spinel: test/reject/record_sclass_in_method_body.rb:6: `class << K` in a method body, on a class Struct.new or Data.define makes, is not supported: its methods are defined from the start, not when that method runs (see docs/limitations.md)
+== test/reject/record_sclass_in_method_body.rb [promote] rc=1
+spinel: test/reject/record_sclass_in_method_body.rb:6: `class << K` in a method body, on a class Struct.new or Data.define makes, is not supported: its methods are defined from the start, not when that method runs (see docs/limitations.md)
+== test/reject/record_sclass_self_in_class_method.rb [default] rc=1
+spinel: test/reject/record_sclass_self_in_class_method.rb:5: `class << K` in a method body, on a class Struct.new or Data.define makes, is not supported: its methods are defined from the start, not when that method runs (see docs/limitations.md)
+== test/reject/record_sclass_self_in_class_method.rb [promote] rc=1
+spinel: test/reject/record_sclass_self_in_class_method.rb:5: `class << K` in a method body, on a class Struct.new or Data.define makes, is not supported: its methods are defined from the start, not when that method runs (see docs/limitations.md)
 == test/reject/recursive_default_reads_block.rb [default] rc=1
 spinel: test/reject/recursive_default_reads_block.rb:5: unsupported default of `m`'s parameter `y` that calls `m` again with that argument omitted (one reading the caller's block or `super` cannot be moved into a method of its own): node N (ParenthesesNode)
 spinel: 1 refusal, nothing written
@@ -1748,6 +1798,14 @@ spinel: 2 refusals, nothing written
 spinel: test/reject/singleton_class_declaration_in_method.rb:5: Object#singleton_class is not supported by AOT compilation: it is the gateway to a per-object method table, which direct C calls have no room for -- the same limit as define_singleton_method. Define methods in the class body instead (see docs/limitations.md)
 spinel: test/reject/singleton_class_declaration_in_method.rb:8: undefined method 'x=' for a Class: no class in the program defines a class method 'x=' (NoMethodError)
 spinel: 2 refusals, nothing written
+== test/reject/singleton_class_self_in_instance_method.rb [default] rc=1
+spinel: test/reject/singleton_class_self_in_instance_method.rb:19: singleton method on self inside an instance method: self is whichever instance runs it, and a compiled class cannot give one object a method of its own
+== test/reject/singleton_class_self_in_instance_method.rb [promote] rc=1
+spinel: test/reject/singleton_class_self_in_instance_method.rb:19: singleton method on self inside an instance method: self is whichever instance runs it, and a compiled class cannot give one object a method of its own
+== test/reject/singleton_def_self_in_instance_method.rb [default] rc=1
+spinel: test/reject/singleton_def_self_in_instance_method.rb:18: singleton method on self inside an instance method: self is whichever instance runs it, and a compiled class cannot give one object a method of its own
+== test/reject/singleton_def_self_in_instance_method.rb [promote] rc=1
+spinel: test/reject/singleton_def_self_in_instance_method.rb:18: singleton method on self inside an instance method: self is whichever instance runs it, and a compiled class cannot give one object a method of its own
 == test/reject/singleton_extend_extended_hook.rb [default] rc=1
 spinel: test/reject/singleton_extend_extended_hook.rb:8: Object#extend is not supported by AOT compilation: mixing a module into a live object needs a per-object method table. Use `include`/`prepend` in the class body instead (see docs/limitations.md)
 spinel: 1 refusal, nothing written
@@ -2129,12 +2187,6 @@ spinel: test/reject/typed_array_kept_by_struct_into_boxed_param_store.rb:11: an 
 spinel: 1 refusal, nothing written
 == test/reject/typed_array_kept_by_struct_into_boxed_param_store.rb [promote] rc=1
 spinel: test/reject/typed_array_kept_by_struct_into_boxed_param_store.rb:11: an Array[Integer] is passed to `m`'s parameter `arr`, which the method stores elements of other kinds into: the caller's array cannot hold them, and the store would go to a copy it never sees. Build the argument where the call can follow it (an array literal or a new array, through locals and method values), so it is widened with the parameter.
-spinel: 1 refusal, nothing written
-== test/reject/typed_array_kept_by_struct_into_mutated_param.rb [default] rc=1
-spinel: test/reject/typed_array_kept_by_struct_into_mutated_param.rb:10: an Array[Integer] is passed to `add`'s parameter `out`, which the method mutates: the parameter is a general Array and the argument would be copied into it, so the mutation would not reach the caller's array. Give the parameter the argument's kind (an rbs seed, or callers that all pass Array[Integer]), or build the argument as a general Array.
-spinel: 1 refusal, nothing written
-== test/reject/typed_array_kept_by_struct_into_mutated_param.rb [promote] rc=1
-spinel: test/reject/typed_array_kept_by_struct_into_mutated_param.rb:10: an Array[Integer] is passed to `add`'s parameter `out`, which the method mutates: the parameter is a general Array and the argument would be copied into it, so the mutation would not reach the caller's array. Give the parameter the argument's kind (an rbs seed, or callers that all pass Array[Integer]), or build the argument as a general Array.
 spinel: 1 refusal, nothing written
 == test/reject/unresolved_builtin_method.rb [default] rc=1
 spinel: test/reject/unresolved_builtin_method.rb:7: unsupported Hash#transform_values on a value typed as Hash, a call no route of the compiler took (CRuby calls the method; this would raise NoMethodError): node N (CallNode `transform_values`) recv=LocalVariableReadNode/ty28 argc=0

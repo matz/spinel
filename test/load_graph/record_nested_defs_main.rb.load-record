@@ -22,5 +22,5 @@ A#n: def#4 end=yes
 A#o: def#6 private end=yes
 A#all: def#7 end=yes
 const M: write#8
-M#f: def#9 runs=never private end=yes
+M#f: def#9 runs=#10 private end=yes
 M.f: copy#9 end=yes

@@ -24,6 +24,8 @@ ViewSub.subscriber = ViewSub.new
 p ViewSub.attach_to(false), ViewSub.attach_to(true)
 CtlSub.subscriber = CtlSub.new
 p CtlSub.attach_to(false).sort, CtlSub.attach_to(true).sort
+class Boom < StandardError; end
+begin; raise Boom; rescue Boom => e; p e.class; end
 def pick(n) = n.zero? ? ViewSub.new : CtlSub.new
 p pick(0).methods(false).sort, pick(1).methods(false).sort
 p pick(1).public_methods(false).sort, pick(0).singleton_methods

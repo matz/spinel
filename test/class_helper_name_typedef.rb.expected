@@ -1,0 +1,6 @@
+Y
+[1]
+Y__dup
+"Y__gc_scan"
+alloc 3
+["Y", "Y__dup", "Y__gc_scan", "Y__alloc"]

@@ -1,0 +1,30 @@
+false
+nil
+:none
+nil
+true
+"method"
+:ka
+"method"
+:none
+:kb
+[true, false, true, :inst]
+[true, true, true, :inst]
+[true, "D"]
+[true, "named"]
+[false, false]
+[false, true]
+[true, true]
+[false, true]
+false
+nil
+false
+3
+true
+false
+:j
+:none
+true
+:kj
+:no
+:yes

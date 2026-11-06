@@ -1,0 +1,17 @@
+true
+true
+tag retrieval: OpenSSL::Cipher::CipherError
+altered tag: OpenSSL::Cipher::AuthTagError: true
+altered tag: rescued by CipherError: OpenSSL::Cipher::AuthTagError
+altered ciphertext: OpenSSL::Cipher::AuthTagError: true
+altered ciphertext: rescued by CipherError: OpenSSL::Cipher::AuthTagError
+wrong key: OpenSSL::Cipher::AuthTagError: true
+wrong key: rescued by CipherError: OpenSSL::Cipher::AuthTagError
+wrong nonce: OpenSSL::Cipher::AuthTagError: true
+wrong nonce: rescued by CipherError: OpenSSL::Cipher::AuthTagError
+missing tag: OpenSSL::Cipher::AuthTagError: true
+missing tag: rescued by CipherError: OpenSSL::Cipher::AuthTagError
+altered AAD: OpenSSL::Cipher::AuthTagError: true
+altered AAD: rescued by CipherError: OpenSSL::Cipher::AuthTagError
+empty altered tag: OpenSSL::Cipher::AuthTagError: true
+empty altered tag: rescued by CipherError: OpenSSL::Cipher::AuthTagError

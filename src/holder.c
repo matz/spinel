@@ -141,7 +141,7 @@ int holder_of_node_in(const Compiler *c, int node, int body, HolderRef *out) {
     if (nt_kind(c->nt, node) == NK_ConstantPathNode &&
         (const_path_in_closed_builtin(mc, node) || const_path_misses_toplevel(mc, node)))
       return 0;
-    out->lv = comp_const(mc, nm);
+    out->lv = comp_const(mc, const_key_at(mc, node));
     if (!out->lv) return 0;
     break;
   case HK_CVAR:

@@ -1,0 +1,12 @@
+Own "own 2"
+OwnBelow "own 0"
+Extended "ext x"
+Sing "sing q"
+RuntimeError "not an error d"
+RuntimeError "not an error z"
+Plain "still Exception's"
+RuntimeError "and a builtin's"
+Own "own 1"
+OwnBelow "own 1"
+4
+5

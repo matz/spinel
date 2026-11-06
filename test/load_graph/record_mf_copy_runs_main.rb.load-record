@@ -1,0 +1,62 @@
+load record: 27 points, 1 regions
+r0 #0 f0 ProgramNode line 10
+r0 #1 f0 ModuleNode U line 10
+  r0 #2 f0 CallNode module_function line 11
+  r0 #3 f0 DefNode a line 12
+  r0 #4 f0 DefNode b line 13
+r0 #5 f0 CallNode puts line 15
+r0 #6 f0 DefNode a line 16
+r0 #7 f0 CallNode puts line 17
+r0 #8 f0 ModuleNode V line 18
+  r0 #9 f0 DefNode c line 19
+  r0 #10 f0 DefNode d line 20
+  r0 #11 f0 CallNode module_function line 21
+r0 #12 f0 CallNode puts line 23
+r0 #13 f0 DefNode c line 24
+r0 #14 f0 CallNode puts line 25
+r0 #15 f0 ModuleNode W line 26
+  r0 #16 f0 CallNode module_function line 27
+  r0 #17 f0 DefNode e line 28
+  r0 #18 f0 DefNode e line 29
+r0 #19 f0 ModuleNode Y line 31
+  r0 #20 f0 DefNode yb line 32
+  r0 #21 f0 DefNode yc line 33
+  r0 #22 f0 AliasMethodNode line 34
+  r0 #23 f0 CallNode module_function line 35
+r0 #24 f0 CallNode puts line 37
+r0 #25 f0 ModuleNode Y line 38
+  r0 #26 f0 DefNode yb line 39
+class U: body#1
+class V: body#8
+class W: body#15
+class Y: body#19 body#25
+entity U: owner main leaf U
+entity V: owner main leaf V
+entity W: owner main leaf W
+entity Y: owner main leaf Y
+const U: write#1
+visibility in #1: vis#2 module_function
+U#a: def#3 runs=#5 private end=yes
+U.a: copy#3 def#6 runs=#5 end=yes
+U#b: def#4 runs=#5 private end=yes
+U.b: copy#4 end=yes
+const V: write#8
+V#c: def#9 runs=#12 vis#11 private end=yes
+V#d: def#10 runs=#12 vis#11 private end=yes
+V.c: copy#11 def#13 runs=#12 end=yes
+V.d: copy#11 end=yes
+const W: write#15
+visibility in #15: vis#16 module_function
+W#e: def#17 runs=never private def#18 runs=never private end=yes
+W.e: copy#17 copy#18 end=yes
+const Y: write#19
+Y#yb: def#20 runs=#24 def#26 runs=never end=yes
+Y#yc: def#21 runs=#24 vis#23 private end=yes
+Y#ya: alias#22 (yb: def#20) vis#23 private end=yes
+Y.ya: copy#23 end=yes
+Y.yc: copy#23 end=yes
+versions U.a: copy#3..#6 seen=copy#3, def#6..end seen=def#6; 3 of the name
+versions V.c: copy#11..#13 seen=copy#11, def#13..end seen=def#13; 3 of the name, named
+versions W#e: def#17..#18 seen=def#17 idle, def#18..end seen=def#18 idle; 4 of the name
+versions W.e: copy#17..#18 seen=copy#17 idle, copy#18..end seen=copy#18; 4 of the name
+versions Y#yb: def#20..#26 seen=def#20 idle, def#26..end seen=def#26 idle; 2 of the name, named

@@ -52,7 +52,8 @@ enum {
   BCR_LOADED = 128u,/* an object the data builds (Marshal.load, YAML.unsafe_load): any class of the program may receive it */
   BCR_GVAR = 256u,  /* $stdout or $stderr holding the object: the assignment is a write of a port global, whose row keeps it */
   BCR_HOOK = 512u,  /* the receiver, a class or module of the program: a singleton hook it defines that the builtin calls (const_get: const_missing) */
-  BCR_ALL = 1023u
+  BCR_KEY = 1024u,  /* with BLOCK: the answer is compared with another answer of the block (sort_by, min_by), not with a number of the builtin's own (bsearch's 0): a property of the BLOCK call, never a call of its own */
+  BCR_ALL = 2047u
 };
 typedef struct { const char *name; unsigned roles; } BopCallback;
 /* What any core method called `builtin` may call back, the union over its
@@ -208,7 +209,7 @@ typedef enum {
 /* A set of argument kinds, one bit per TyKind: BOP_K(TY_INT) | BOP_K(TY_FLOAT) */
 typedef unsigned long long BopKinds;
 #define BOP_K(k) (1ULL << (k))
-_Static_assert(TY_FLOAT_ARRAY_ARRAY < 64, "a BopKinds set holds a bit per TyKind");
+_Static_assert(TY_OBJ_RANGE < 64, "a BopKinds set holds a bit per TyKind");
 
 typedef struct BuiltinOp {
   TyKind recv;            /* receiver kind the row applies to */

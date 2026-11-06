@@ -2016,7 +2016,7 @@ static int program_defines_builtin_aset(Compiler *c, int cn) {
   return mi >= 0 && mi < c->nscopes && c->scopes[mi].def_node >= 0 &&
          !nt_int(c->nt, c->scopes[mi].def_node, "node_bi", 0);
 }
-static int call_targets_yielding_method(Compiler *c, int id);
+int call_targets_yielding_method(Compiler *c, int id);
 static int block_tail_needs_value_form(Compiler *c, int id) {
   const NodeTable *nt = c->nt;
   /* a tail `yield`: the splice is read for the block's value, and that is
@@ -3391,6 +3391,7 @@ void emit_block_invoke(Compiler *c, int args_node, Buf *b, int indent, int as_ex
   int sv_lexc2 = g_loop_exc_base, sv_lexc2_rb = g_loop_rescue_base;
   int sv_lens2 = g_loop_ensure_base;
   char nxbuf[32]; int nx_tmp = 0;
+  int nx_carried = 0;   /* the splice ends in the `next` carrier, its value */
   int bn3 = 0; const int *bd3 = bbody >= 0 ? nt_arr(nt, bbody, "body", &bn3) : NULL;
   TyKind nx_bt = TY_NIL; int nx_tail_stmt = 0;
   if (nx_own) {
@@ -3424,7 +3425,11 @@ void emit_block_invoke(Compiler *c, int args_node, Buf *b, int indent, int as_ex
       snprintf(nxbuf, sizeof nxbuf, "_t%d", nx_tmp);
       g_ie_next_var = nxbuf;
       /* (a number carrier read where the yield is boxed is boxed too) */
-      g_ie_res_poly = nx_bt != TY_STRBUF && (nx_bt == TY_POLY || (want_poly && (ty_is_object(nx_bt) || oint_kind(nx_bt))));
+      /* (and so is any carrier of a body that diverges: its tail types no
+         site, the boxed slot reads the splice as it is, and the carrier is
+         the splice's value) */
+      g_ie_res_poly = nx_bt != TY_STRBUF && (nx_bt == TY_POLY || (want_poly && (ty_is_object(nx_bt) || oint_kind(nx_bt) ||
+                                                                               stmts_diverge(c, bbody))));
       /* a `next nil` into an Integer or Float slot is the slot's nil, and
          a `next` into the handle carrier adopts its value */
       g_ie_next_ty = (nx_bt == TY_INT || nx_bt == TY_FLOAT || nx_bt == TY_STRBUF) ? nx_bt : TY_UNKNOWN;
@@ -3497,6 +3502,9 @@ void emit_block_invoke(Compiler *c, int args_node, Buf *b, int indent, int as_ex
        is opaque, and an inlined method's own result slot (sp_RbVal when its
        body holds a bare `return`) did not fit the sp_int carrier */
     if (nx_bt == TY_NIL) void_tail = 1;
+    /* nor does a raise: it never returns, and stored, its void went into
+       the carrier (`{ next "n" if c; raise "b" }` did not build) */
+    if (nt_kind(nt, nt_paren_single(nt, tl3)) == NK_CallNode && stmts_diverge(c, bbody)) void_tail = 1;
     { Buf tb; memset(&tb, 0, sizeof tb);
       Buf *svp3 = g_pre; int svi3 = g_indent; g_pre = b; g_indent = 0;
       if (void_tail) emit_expr(c, tl3, &tb);
@@ -3535,9 +3543,13 @@ void emit_block_invoke(Compiler *c, int args_node, Buf *b, int indent, int as_ex
     emit_stmt_tail(c, bd3[bn3 - 1], b, 0);
     g_result_var = sv_rv; g_result_poly = sv_rp; g_result_ty = sv_rty; g_result_oint = sv_ro;
   }
-  else if (as_expr && !nx_own && want_ty == TY_STRBUF && bn3 > 0) {
+  else if (as_expr && !nx_own && want_ty == TY_STRBUF && bn3 > 0 && !stmts_diverge(c, bbody)) {
     /* --share-strings: a yield read as the shared handle (emit_strbuf_route)
        answers its block's String as one */
+    /* (a block that ends in a raise has no String to answer: asked for its
+       handle, `raise "b"` was wrapped as one, a void in SP_STR_HDL, and the
+       C did not build. Its statements run in the arms below, and the slot
+       takes the nil the end of the splice gives a body that diverges.) */
     if (block_of_body(c, bbody) >= 0) emit_block_locals_reset(c, block_of_body(c, bbody), b, 0);
     for (int k3 = 0; k3 < bn3 - 1; k3++) {
       if (rd_lbl && k3 == rd_head) buf_printf(b, "_redo_%d: ; ", rd_lbl);
@@ -3766,7 +3778,7 @@ void emit_block_invoke(Compiler *c, int args_node, Buf *b, int indent, int as_ex
     g_c_loop_depth--;
     g_loop_exc_base = sv_lexc2; g_loop_rescue_base = sv_lexc2_rb;
     g_loop_ensure_base = sv_lens2;
-    if (as_expr) buf_printf(b, "} while(0); %s; ", g_ie_next_var ? nxbuf : "(void)0");
+    if (as_expr) { nx_carried = g_ie_next_var != NULL; buf_printf(b, "} while(0); %s; ", nx_carried ? nxbuf : "(void)0"); }
     else { emit_indent(b, indent); buf_puts(b, "} while(0);\n"); }
     g_ie_next_var = sv_nx2; g_ie_res_poly = sv_poly2; g_ie_next_ty = sv_nty2; g_ie_next_oint = sv_nxo2;
   }
@@ -3801,7 +3813,10 @@ void emit_block_invoke(Compiler *c, int args_node, Buf *b, int indent, int as_ex
     int bn2 = 0; const int *bd2 = bbody >= 0 ? nt_arr(nt, bbody, "body", &bn2) : NULL;
     int tail_ret = bn2 > 0 &&
                    nt_kind(nt, bd2[bn2 - 1]) == NK_ReturnNode;
-    if (tail_ret || stmts_diverge(c, bbody)) {
+    /* (not after a `next` carrier: the splice already ends in it, the value
+       of the block's `next`s, and a filler after it answered the slot's nil
+       for `{ next v if c; raise "x" }` where `next v` was taken) */
+    if (!nx_carried && (tail_ret || stmts_diverge(c, bbody))) {
       /* The filler is read as the value of the statement expression, so the
          type it has to have is the CONSUMER's -- want_ty -- not the type of
          the value the unreachable return carries. Taking the return's own put
@@ -4260,7 +4275,7 @@ int emit_poly_recv_block_value(Compiler *c, int id, Buf *b) {
 /* Does this call target a user method that yields (so it has no standalone C
    function -- it is only ever inlined at its call sites)? A compact echo of
    emit_inline_call_x's own method resolution. (#2948) */
-static int call_targets_yielding_method(Compiler *c, int id) {
+int call_targets_yielding_method(Compiler *c, int id) {
   const NodeTable *nt = c->nt;
   const char *name = nt_str(nt, id, "name");
   if (!name) return 0;
@@ -5042,7 +5057,11 @@ int iter_value_answers_recv(Compiler *c, int id) {
         (sp_streq(name, "step") && nt_ref(nt, id, "block") >= 0 && nt_ref(nt, id, "receiver") >= 0 &&
          (comp_ntype(c, nt_ref(nt, id, "receiver")) == TY_RANGE ||
           comp_ntype(c, nt_ref(nt, id, "receiver")) == TY_FLOAT_RANGE ||
-          comp_ntype(c, nt_ref(nt, id, "receiver")) == TY_STR_RANGE));
+          comp_ntype(c, nt_ref(nt, id, "receiver")) == TY_STR_RANGE ||
+          comp_ntype(c, nt_ref(nt, id, "receiver")) == TY_TIME_RANGE)) ||
+        /* a Range of objects' each answers the Range too */
+        (sp_streq(name, "each") && nt_ref(nt, id, "block") >= 0 && nt_ref(nt, id, "receiver") >= 0 &&
+         comp_ntype(c, nt_ref(nt, id, "receiver")) == TY_OBJ_RANGE);
 }
 
 /* A receiver the value of an iteration answers is read twice, once under the
@@ -8205,6 +8224,74 @@ static int emit_iteration_stmt_body(Compiler *c, int id, Buf *b, int indent) {
     return 1;
   }
 
+  /* (a..b).each { |x| ... } over a Range of objects: walked by succ a member
+     at a time, so an endless one runs until the block breaks */
+  if (is_each_name(name) && rt == TY_OBJ_RANGE) {
+    int args = nt_ref(nt, id, "arguments"); int sargc = 0;
+    if (args >= 0) nt_arr(nt, args, "arguments", &sargc);
+    if (sargc != 0) return 0;
+    int tr = ++g_tmp, tv = ++g_tmp, ts = ++g_tmp;
+    emit_indent(b, indent);
+    buf_printf(b, "sp_ObjRange *_t%d = ", tr); emit_expr(c, recv, b);
+    buf_printf(b, "; SP_GC_ROOT(_t%d);\n", tr);
+    emit_indent(b, indent);
+    buf_printf(b, "sp_RbVal _t%d = sp_orange_walk_start(_t%d); SP_GC_ROOT_RBVAL(_t%d);\n", tv, tr, tv);
+    emit_indent(b, indent);
+    buf_printf(b, "for (int _t%d = sp_orange_walk_on(_t%d, _t%d); _t%d; _t%d = _t%d == 2 ? 0 : (_t%d = sp_orange_walk_succ(_t%d), sp_orange_walk_on(_t%d, _t%d))) {\n",
+               ts, tr, tv, ts, ts, ts, tv, tv, tr, tv);
+    char elem[32]; snprintf(elem, sizeof elem, "_t%d", tv);
+    if (p0) emit_iter_param_assign(c, block, p0_orig, p0, TY_POLY, elem, b, indent + 1);
+    { int rs_np = 0; while (block_param_name(c, block, rs_np)) rs_np++;
+      /* a member is never an Array (one has no succ to walk by), so `|x, *r|`
+         binds r empty -- unless a to_ary of the program's would split it */
+      const char *rn = block_rest_name(c, block);
+      if (rs_np >= 1 && rn && *rn && an_user_defines_method(c, "to_ary")) {
+        unsupported(c, id, "block splat parameter alongside required params over a Range of objects with a to_ary");
+        return 1;
+      }
+      if (rs_np >= 1 && rn && *rn) { emit_indent(b, indent + 1); buf_printf(b, "lv_%s = sp_PolyArray_new();\n", rename_local(rn)); }
+      else emit_iter_bind_rest(c, block, rs_np, TY_POLY, elem, b, indent + 1); }
+    emit_loop_body(c, body, b, indent + 1);
+    emit_indent(b, indent); buf_puts(b, "}\n");
+    return 1;
+  }
+  /* (t1..t2).step(secs) { |t| ... }: walked a step at a time, so an endless
+     one runs until the block breaks */
+  if (sp_streq(name, "step") && rt == TY_TIME_RANGE) {
+    int args = nt_ref(nt, id, "arguments"); int sargc = 0;
+    const int *sargv = args >= 0 ? nt_arr(nt, args, "arguments", &sargc) : NULL;
+    if (sargc != 1) return 0;
+    /* a parameter whose slot holds no Time (the face's arm of a boxed
+       receiver whose block was typed by another owner, an Integer's step):
+       no Range of Times reaches this call, and the arm is left out */
+    if (p0) {
+      Scope *bs = comp_scope_of(c, block);
+      LocalVar *lv = bs ? scope_local(bs, p0_orig) : NULL;
+      if (lv && lv->type != TY_UNKNOWN && lv->type != TY_TIME && lv->type != TY_POLY) return 0;
+    }
+    int tr = ++g_tmp, ts = ++g_tmp, tv = ++g_tmp;
+    emit_indent(b, indent);
+    buf_printf(b, "sp_TimeRange *_t%d = ", tr); emit_expr(c, recv, b);
+    buf_printf(b, "; SP_GC_ROOT(_t%d);\n", tr);
+    emit_indent(b, indent);
+    buf_printf(b, "double _t%d = ", ts); emit_float_expr(c, sargv[0], b);
+    buf_printf(b, "; sp_trange_step_check_blk(_t%d);\n", tr);
+    emit_indent(b, indent);
+    buf_printf(b, "sp_Time *_t%d = _t%d->first; SP_GC_ROOT(_t%d);\n", tv, tr, tv);
+    emit_indent(b, indent);
+    buf_printf(b, "for (; sp_trange_step_on(_t%d, _t%d, _t%d); _t%d = sp_trange_step_next(_t%d, _t%d, _t%d)) {\n",
+               tr, tv, ts, tv, tr, tv, ts);
+    if (p0) {
+      char elem[32]; snprintf(elem, sizeof elem, "_t%d", tv);
+      emit_iter_param_assign(c, block, p0_orig, p0, TY_TIME, elem, b, indent + 1);
+    }
+    { char rs_es[32]; snprintf(rs_es, sizeof rs_es, "_t%d", tv);
+      int rs_np = 0; while (block_param_name(c, block, rs_np)) rs_np++;
+      emit_iter_bind_rest(c, block, rs_np, TY_TIME, rs_es, b, indent + 1); }
+    emit_loop_body(c, body, b, indent + 1);
+    emit_indent(b, indent); buf_puts(b, "}\n");
+    return 1;
+  }
   /* (range).step(k) { |x| ... } -- materialise the stepped values (shared with
      the no-block path so they match exactly) and walk them; the element type
      follows the array, int or float. */
@@ -8495,9 +8582,12 @@ static int emit_iteration_stmt_body(Compiler *c, int id, Buf *b, int indent) {
        one (an Integer local under --int-overflow=promote, the argument of a
        boxed receiver's Float arm) unboxes, a typed Integer widens, and a
        non-Numeric is CRuby's TypeError rather than a C build error (#4774) */
-    emit_indent(b, indent); buf_printf(b, "sp_float _t%d = ", tl); emit_float_expr(c, sargv[0], b); buf_puts(b, ";\n");
     emit_indent(b, indent); buf_printf(b, "sp_float _t%d = ", ts);
     if (sargc >= 2) emit_float_expr(c, sargv[1], b); else buf_puts(b, "1.0");
+    buf_puts(b, ";\n");
+    /* a nil limit is ruby_float_step's infinite end in the step's direction */
+    emit_indent(b, indent); buf_printf(b, "sp_float _t%d = ", tl);
+    if (no_limit) buf_printf(b, "_t%d < 0 ? -HUGE_VAL : HUGE_VAL", ts); else emit_float_expr(c, sargv[0], b);
     buf_puts(b, ";\n");
     /* a zero step never advances, so CRuby rejects it outright (#3648) */
     emit_indent(b, indent);

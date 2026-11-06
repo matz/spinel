@@ -1,0 +1,45 @@
+load record: 19 points, 1 regions
+r0 #0 f0 ProgramNode line 11
+r0 #1 f0 ClassNode N1 line 11
+  r0 #2 f0 DefNode ** line 12
+r0 #3 f0 ClassNode Iv line 14
+  r0 #4 f0 DefNode v line 15
+  r0 #5 f0 InstanceVariableWriteNode @x line 16
+  r0 #6 f0 DefNode bump line 17
+  r0 #7 f0 CallNode bump line 18
+r0 #8 f0 DefNode v line 20
+r0 #9 f0 ClassNode Gv line 22
+  r0 #10 f0 DefNode v line 23
+  r0 #11 f0 DefNode bump line 24
+  r0 #12 f0 CallNode bump line 25
+r0 #13 f0 DefNode v line 27
+r0 #14 f0 ClassNode Pl line 29
+  r0 #15 f0 DefNode v line 30
+  r0 #16 f0 DefNode bump line 31
+  r0 #17 f0 CallNode bump line 32
+r0 #18 f0 DefNode v line 34
+class N1: body#1
+class Iv: body#3
+class Gv: body#9
+class Pl: body#14
+entity N1: owner main leaf N1
+entity Iv: owner main leaf Iv
+entity Gv: owner main leaf Gv
+entity Pl: owner main leaf Pl
+const N1: write#1
+N1#**: def#2 end=yes
+const Iv: write#3
+Iv.v: def#4 runs=never def#8 runs=never end=yes
+Iv.bump: def#6 runs=#7 end=yes
+opaque Iv: opaque#7
+const Gv: write#9
+Gv.v: def#10 runs=never def#13 runs=never end=yes
+Gv.bump: def#11 runs=#12 end=yes
+opaque Gv: opaque#12
+const Pl: write#14
+Pl.v: def#15 runs=never def#18 runs=never end=yes
+Pl.bump: def#16 runs=#17 end=yes
+opaque Pl: opaque#17
+versions Iv.v: def#4..#8 seen=unknown, def#8..end seen=def#8; 6 of the name
+versions Gv.v: def#10..#13 seen=unknown, def#13..end seen=def#13; 6 of the name
+versions Pl.v: def#15..#18 seen=def#15, def#18..end seen=def#18 idle; 6 of the name

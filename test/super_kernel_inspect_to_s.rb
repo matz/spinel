@@ -1,3 +1,4 @@
+# spinel: gc-stress
 # `def inspect = super` and `def to_s = super` in a plain class reach
 # Kernel's: the default rendering of self's class (its ivars for inspect),
 # a new String each call. The super found no method of the program and

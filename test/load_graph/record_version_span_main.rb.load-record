@@ -6,7 +6,7 @@ r0 #3 f0 ClassNode Base line 16
   r0 #4 f0 DefNode to_s line 17
 r0 #5 f0 ClassNode Bell line 20
   r0 #6 f0 DefNode ring line 21
-  r0 #7 f0 ConstantWriteNode Bell__SIZES line 22
+  r0 #7 f0 ConstantWriteNode SIZES line 22
     r0 #8 f0 CallNode * line 22
   r0 #9 f0 CallNode include line 23
 r0 #10 f0 ClassNode Pod line 26
@@ -14,7 +14,7 @@ r0 #10 f0 ClassNode Pod line 26
 r0 #12 f0 CallNode puts line 30
 r0 #13 f0 ClassNode Drum line 32
   r0 #14 f0 DefNode ring line 33
-  r0 #15 f0 ConstantWriteNode Drum__SIZES line 34
+  r0 #15 f0 ConstantWriteNode SIZES line 34
     r0 #16 f0 CallNode * line 34
   r0 #17 f0 CallNode include line 35
 r0 #18 f0 ClassNode Gong line 38

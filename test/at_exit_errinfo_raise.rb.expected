@@ -1,0 +1,20 @@
+body: nil
+Boom < StandardError: true
+message: second
+extra: 42
+cause: #<IOError: first>
+backtrace: Array
+nil? false
+same object: true
+from a method: #<Boom: second>
+before an ensure: #<Boom: second>
+in an ensure: #<Boom: second>
+in a rescue: #<ArgumentError: handled>, cause #<Boom: second>
+after that rescue: nil
+and its cause: nil
+modifier: nil
+registered in a hook: #<Boom: second>
+after a raise in a hook: #<RuntimeError: from a hook>
+its cause: #<Boom: second>
+after an exit in a hook: #<RuntimeError: from a hook>
+last: SystemExit 4 exit

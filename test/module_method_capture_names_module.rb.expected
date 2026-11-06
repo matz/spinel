@@ -1,0 +1,6 @@
+NameError
+"undefined method 'b' for class 'Module'"
+6
+"undefined method 'b' for class '#<Class:V>'"
+"undefined method 'f' for class '#<Class:K2>'"
+"undefined method 'b' for class 'Module'"

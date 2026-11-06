@@ -1,0 +1,46 @@
+KeyError
+KeyError
+true
+false
+false
+IndexError
+true
+false
+true
+
+false
+KeyError "y"
+KeyError "z"
+KeyError
+true
+KeyError "yy"
+KeyError "zz"
+NoMethodError
+RuntimeError "a"
+TypeError "b"
+TypeError "TypeError"
+ZeroDivisionError "c"
+ArgumentError "d"
+IndexError "e"
+NoMethodError "f"
+Errno::ENOENT "No such file or directory - h"
+Errno::ENOENT "No such file or directory - i"
+SystemCallError
+5
+6
+IOError "again"
+Boom "again"
+RangeError "from $!"
+EOFError "from cause"
+Boom "y"
+Boom "z"
+Boom kept
+true
+StandardError
+Below "y"
+Boom inherited
+Boom
+Stat "n=3"
+4
+NilClass
+undefined method 'new' for class NilClass

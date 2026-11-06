@@ -55,7 +55,8 @@ int emit_call_poly_builtin_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
   if (recv >= 0 && rt == TY_POLY && nt_ref(nt, id, "block") < 0 &&
       (argc == 1 || (argc == 0 && (sp_streq(name, "rotate") || sp_streq(name, "shuffle"))))) {
     const char *pn9 = NULL;
-    if (is_first_or_take(name)) pn9 = "sp_poly_arr_take";
+    if (sp_streq(name, "take")) pn9 = "sp_poly_arr_take_n";
+    else if (is_first_or_take(name)) pn9 = "sp_poly_arr_take";
     else if (sp_streq(name, "last")) pn9 = "sp_poly_arr_last_n";
     else if (sp_streq(name, "drop")) pn9 = "sp_poly_arr_drop";
     else if (sp_streq(name, "rotate")) pn9 = "sp_poly_arr_rotate";

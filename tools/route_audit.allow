@@ -122,6 +122,8 @@ src/analyze_infer.c kconv_integer_kind to_int / to_i
 src/call_plan.c cplan_conversion the conversion protocol's names
 src/call_plan.c cplan_mm_method =METHOD_MISSING_NAME method_missing, which a call of a name no method answers runs, not one call's name
 src/call_plan.c cplan_mm_chain =METHOD_MISSING_NAME method_missing, which a call of a name no method answers runs, not one call's name
+src/call_plan.c cplan_dispatch_miss =METHOD_MISSING_NAME method_missing, which a call of a name no method answers runs, not one call's name
+src/call_plan.c cplan_capture_misses a capture's Symbol argument's method, and the method_missing and respond_to_missing? that answer for it, not one call's name
 src/codegen.c codegen_program the operators' and protocol methods' names
 src/codegen.c conv_bridge_callee the conversion protocol's names
 src/codegen.c display_method_scope the display protocol's names
@@ -149,6 +151,8 @@ src/analyze.c a_block_forwarded_to_proc =u super, by its def's name
 src/analyze.c a_super_target super, by its def's name
 src/analyze.c an_presence_observe a scope's own name
 src/analyze.c an_super_object_text super, by its def's name
+src/analyze.c an_super_struct_text super, by its def's name
+src/analyze.c proc_form_origin_kwrest_any the method a proc-form clone was made from, by the clone's name less its #pf
 src/analyze.c check_seed_contradictions =sc->name a scope's own name
 src/analyze.c dyn_site_may_reach a scope's own name
 src/analyze.c dyn_site_misses a scope's own name
@@ -166,6 +170,7 @@ src/analyze_cls.c cf_node a scope's own name
 src/analyze_infer.c infer_uncached a scope's own shadow name
 src/analyze_infer.c super_reaches_exc_text super, by its def's name
 src/analyze_infer.c an_rat_op_own1 whether a reopened Rational, Integer or Object defines the operator itself (then no Rational is counted)
+src/analyze_infer.c an_poly_object_methods_listable whether a class the receiver can hold defines methods (public_methods, singleton_methods) itself
 src/analyze_pass.c infer_param_types_ex =s->name super, by its def's name
 src/analyze_pass.c propagate_prep_params a prepended method's own name
 src/analyze_scope.c cmethod_reaches_class_ivar_walk =c->scopes[mi].name a scope's own name
@@ -184,6 +189,7 @@ src/codegen.c emit_super_inline super, by its def's name
 src/codegen.c sg_delegate_scope a scope's own name
 src/codegen.c sg_parent_answers_as_object a scope's own name
 src/codegen.c range_rat_walk_own_def a name's presence in a Range, Enumerable or Integer reopen
+src/codegen.c struct_display_owned whether the program owns a Struct's inspect or to_s
 src/codegen_call_class.c emit_respond_to_runtime_name =c->scopes[s].name a scope's own name
 src/codegen_expr.c defined_super_reaches super, by its def's name
 src/codegen_util.c ivs_super_method super, by its def's name
@@ -201,7 +207,8 @@ src/analyze_desugar.c dsend_receiver_names_uncached a dynamic send's candidate n
 src/analyze_scope.c pivs_callable_lit a Symbol argument's method
 src/analyze_util.c class_value_bind_call_gap a Symbol argument's method
 src/analyze_util.c class_value_bind_call_target a Symbol argument's method
-src/analyze_util.c method_obj_target_mi_raw a Method object's method
+src/analyze_util.c method_obj_lookup a Method object's method
+src/analyze_util.c method_super_target super_method: the Method's def's own name, a step up its owner
 src/codegen_call.c class_responds_to a Symbol argument's method (respond_to?)
 src/codegen_call.c method_hidden_from_reflection a reflected method's name
 src/codegen_call.c obj_responds_answer a Symbol argument's method (respond_to?)
@@ -217,11 +224,11 @@ src/codegen_call_class.c emit_refl_method_defined a reflected method's name
 src/codegen_call_method.c emit_method_obj_target =disp arity metadata for a boxed receiver's method, not an invocation target
 src/codegen_call_method.c emit_op_method_arity a Symbol argument's method
 src/codegen_call_method.c emit_method_source_target a Symbol argument's method
-src/codegen_call_method.c emit_op_method_super_method super, by the Method object's own name
 src/codegen_call_object.c emit_blank_slate_defined_ask a Symbol argument's method
 src/codegen_stmt.c emit_call_stmt =mn a visibility call's Symbol argument
 
 src/analyze.c desugar_builtin_method_obj a Symbol argument's method, and its wrapper's name
+src/analyze.c desugar_missing_method_obj a Symbol argument's helpers, found by their hidden names
 src/analyze.c desugar_kernel_method_block_arg a Symbol argument's method
 src/analyze.c dyn_method_prints a Symbol argument's method
 src/analyze.c dyn_reach_value a String argument's method
@@ -293,6 +300,7 @@ src/codegen_util.c strbuf_reader_field_boxed the String sharing routes
 
 # Guard construction and callback reach read the table, not an ordinary call.
 src/analyze_pass.c cr_mark_implied the implicit-callback rows' method-table names
+src/call_plan.c cps_key_callbacks_run_code the builtin-callback rows' names a builtin []= calls on its keys, in a key's class
 src/call_plan.c ver_entries_build the current own body of each public name before entries are installed
 src/call_plan.c ver_named_one the method an includer holds of a module's open history's name, its copy's or its own
 src/compiler.c comp_time_reopen_defines whether the program's reopen of Time defines a name, so a Time subclass's call of it is not taken for Time's in-place conversion or copy

@@ -202,7 +202,7 @@ int infer_range_call(Compiler *c, int id, TyKind rt, TyKind *out) {
   /* min(n) / max(n) on an Integer Range answer an Array of its ints, however
      the Range is bounded (#3665) */
   if (rt == TY_RANGE && recv >= 0 && argc == 1 && nt_ref(nt, id, "block") < 0 &&
-      (is_minmax_query(name)))
+      (is_minmax_query(name) || sp_streq(name, "take")))
     { *out = TY_INT_ARRAY; return 1; }
   /* Range#sum(seed): CRuby adds the closed form to an INTEGER seed and answers
      a Float for a seed of any other class (it runs the seed through
@@ -1568,7 +1568,7 @@ int infer_poly_call(Compiler *c, int id, TyKind rt, TyKind *out) {
      all the static result is poly (#3692) */
   if (recv >= 0 && rt == TY_POLY && argc == 0 && sp_streq(name, "name") &&
       !sp_feature_required("ostruct") && !an_user_defines_or_reads(c, name)) {
-    if (an_program_builds_methods(c)) { *out = TY_POLY; return 1; }
+    if (an_program_builds_methods(c) || an_program_names_name_error(c)) { *out = TY_POLY; return 1; }
     { *out = an_class_concrete(c, id, name, TY_STRING); return 1; }
   }
   /* The rest of the Method surface on a BOXED receiver: #unbind answers another

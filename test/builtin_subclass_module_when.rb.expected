@@ -1,0 +1,39 @@
+[:enum, :enum, :cmp, :cmp, :enum]
+:enum
+:enum
+:cmp
+:cmp
+:m
+:kernel
+:enum
+:cmp
+:nil
+:cmp
+true
+true
+true
+true
+true
+:cmp
+true
+true
+true
+true
+:enum
+[false, true, true, true]
+[1, 2, 2, 2]
+true
+true
+true
+true
+true
+true
+[Time, M, Comparable, Object]
+[SubT, Time, M, Comparable, Object]
+[Dir, Enumerable, Object]
+:other
+:other
+:other
+:other
+:other
+:nil

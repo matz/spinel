@@ -681,6 +681,27 @@ else
   fail "decls did not compile"
 fi
 
+# A require of a file in another region that only defines things runs no code
+# of the program's (lr_region_runs): the method a reopening after it
+# redefines keeps its one version, with no version cell or entry function.
+mkdir "$tmp/defsonly"
+printf 'class Foo\n  def w = 7\nend\n' > "$tmp/defsonly/lib.rb"
+printf 'class K; def v = 1; end\ndef probe = K.new.v\nrequire_relative "lib" if ARGV.size == 0\nclass K; def v = 2; end\nputs probe\nputs Foo.new.w\nrequire_relative "lib"\n' > "$tmp/defsonly/main.rb"
+if "$SPINEL" --load-model=graph -S --no-line-map "$tmp/defsonly/main.rb" > "$tmp/defsonly/out.c" 2>/dev/null; then
+  ! grep -qE '__spinel_ver|sp_K_v_entry' "$tmp/defsonly/out.c" ||
+    fail "a require of a file of another region that only defines things made a version cell"
+else
+  fail "defsonly did not compile"
+fi
+# (and the same program with a call in the file does: what the check looks for)
+printf 'class Foo\n  def w = 7\nend\nputs probe\n' > "$tmp/defsonly/lib.rb"
+if "$SPINEL" --load-model=graph -S --no-line-map "$tmp/defsonly/main.rb" > "$tmp/defsonly/out.c" 2>/dev/null; then
+  grep -qE '__spinel_ver' "$tmp/defsonly/out.c" && grep -q 'sp_K_v_entry' "$tmp/defsonly/out.c" ||
+    fail "a require of a file of another region that calls a method made no version cell"
+else
+  fail "defsonly with a call did not compile"
+fi
+
 # g_require_unread (spinel_parse.c): may the program load a file the compiler
 # did not read? The load, autoload and load-path nodes of the trees set it, a
 # require that names no file does, and the word in a comment or a String

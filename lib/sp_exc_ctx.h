@@ -59,6 +59,7 @@ typedef struct {
   sp_proc_home *prhead;  /* this fiber's proc-return chain head (nodes on its C stack) */
   int uk, ut, ue; sp_proc_home *uh;  /* transient unwind state (in flight only while running ensures) */
   void **shand; int rn, rcap;        /* sp_exc_handling prefix [0..sp_rescue_sp) */
+  int hooked;                        /* sp_at_exit_inherited */
   void *pcause;                      /* sp_pending_cause */
   void *icause;                      /* sp_inflight_cause: the exception an ensure body runs for */
   sp_poly_recur_frame *rrf; int rrn, rrcap;  /* sp_poly_recur_stack prefix [0..sp_poly_recur_top) */
@@ -84,6 +85,7 @@ extern SP_TLS volatile int sp_exc_top;
 extern SP_TLS int sp_poly_recur_mark[SP_EXC_STACK_MAX];
 extern SP_TLS void *sp_exc_handling[SP_EXC_STACK_MAX];
 extern SP_TLS int sp_rescue_sp;
+extern SP_TLS int sp_at_exit_inherited;
 #ifdef SP_CEXT
 extern SP_TLS sp_cext_arena_mark sp_exc_cextmark[SP_EXC_STACK_MAX];
 #endif

@@ -1,0 +1,10 @@
+["OpenSSL::Cipher::CipherError", "OpenSSL::OpenSSLError", "StandardError", "Exception", "Object", "Kernel", "BasicObject"]
+["OpenSSL::Cipher::AuthTagError", "OpenSSL::Cipher::CipherError", "OpenSSL::OpenSSLError", "StandardError", "Exception", "Object", "Kernel", "BasicObject"]
+["OpenSSL::HMACError", "OpenSSL::OpenSSLError", "StandardError", "Exception", "Object", "Kernel", "BasicObject"]
+["OpenSSL::PKey::PKeyError", "OpenSSL::OpenSSLError", "StandardError", "Exception", "Object", "Kernel", "BasicObject"]
+["OpenSSL::PKey::PKeyError", "OpenSSL::OpenSSLError", "StandardError", "Exception", "Object", "Kernel", "BasicObject"]
+true
+false
+OpenSSL::HMACError
+OpenSSL::PKey::PKeyError
+OpenSSL::PKey::PKeyError

@@ -277,7 +277,7 @@ SP_COLD static SP_NOINLINE SP_NORETURN void sp_json_too_deep(jbuf *b) {
 }
 /* The deepest container a walk enters: generate's 100, a JSON.dump limit,
    or for a dump with none a guard on the C stack, past which CRuby's own
-   recursion overflows too */
+   recursion overflows too. Parsing with max_nesting disabled shares it. */
 #define SP_JSON_DUMP_GUARD 10000
 static int sp_json_max_depth(const jbuf *b) {
   if (!b->dump) return SP_JSON_MAX_NESTING;
@@ -574,8 +574,6 @@ const char *sp_json_pretty(sp_RbVal v) {
    the installed hash-builder hooks (the generated TU owns the hash type). Each
    in-progress container is GC-rooted so a nested allocation can't collect it. */
 
-#define JP_MAX_DEPTH 200
-
 /* An object's keys repeat across the objects of an array (`[{"x": ..}, {"x": ..}]`):
    a key read inside an array is kept, as the frozen key a Hash stores as is
    (sp_hash_key_from_bytes), and handed out again for the same bytes. It is
@@ -592,6 +590,7 @@ const char *sp_json_pretty(sp_RbVal v) {
 typedef struct { const char *key; size_t len; } jkey;
 typedef struct {
   const char *p, *end;
+  sp_int max_nesting;           /* zero disables the nesting check */
   int in_array;                 /* arrays open around the read */
   int nkeys; jkey keys[JP_KEYS];   /* by length, then bytes */
   sp_RbVal *held;               /* the cached keys, kept alive for the parse */
@@ -608,6 +607,15 @@ static void jp_ws(jrd *j) {
   }
 }
 static sp_RbVal jp_value(jrd *j, int depth);
+
+/* A configured limit answers first; past the guard, whatever the limit, the
+   parse raises as CRuby's recursive parser does rather than run off the C stack. */
+static void jp_check_nesting(jrd *j, int depth) {
+  if (j->max_nesting && depth >= j->max_nesting)
+    sp_raise_cls("JSON::NestingError", sp_sprintf("nesting of %d is too deep", depth + 1));
+  if (depth >= SP_JSON_DUMP_GUARD)
+    sp_raise_cls("SystemStackError", "stack level too deep");
+}
 
 static void jp_hex4(jrd *j, jbuf *b, unsigned *out) {
   if (j->end - j->p < 4) { free(b->p); jp_err("incomplete \\u escape"); }
@@ -827,6 +835,7 @@ static sp_RbVal jp_array(jrd *j, int depth) {
   SP_GC_ROOT_RBVAL(box);
   jp_ws(j);
   if (j->p < j->end && *j->p == ']') { j->p++; return box; }
+  jp_check_nesting(j, depth);
   for (;;) {
     j->in_array++;
     sp_RbVal v = jp_value(j, depth + 1);
@@ -846,6 +855,7 @@ static sp_RbVal jp_object(jrd *j, int depth) {
   SP_GC_ROOT_RBVAL(box);
   jp_ws(j);
   if (j->p < j->end && *j->p == '}') { j->p++; return box; }
+  jp_check_nesting(j, depth);
   for (;;) {
     jp_ws(j);
     const char *key = jp_key(j);
@@ -864,7 +874,6 @@ static sp_RbVal jp_object(jrd *j, int depth) {
   return box;
 }
 static sp_RbVal jp_value(jrd *j, int depth) {
-  if (depth > JP_MAX_DEPTH) jp_err("nesting too deep");
   jp_ws(j);
   if (j->p >= j->end) jp_err("unexpected end of input");
   char c = *j->p;
@@ -878,7 +887,7 @@ static sp_RbVal jp_value(jrd *j, int depth) {
   jp_err("unexpected character");
 }
 
-sp_RbVal sp_json_parse(const char *s) {
+sp_RbVal sp_json_parse_limit(const char *s, sp_int max_nesting) {
   /* The reader walks `s` in place while the parse allocates every container
      and string it builds, so the input has to stay rooted for the whole walk:
      a caller passing it straight in (`JSON.parse File.read path`) holds it in
@@ -889,6 +898,7 @@ sp_RbVal sp_json_parse(const char *s) {
   sp_RbVal held = sp_box_nil();
   SP_GC_ROOT_RBVAL(held);
   jrd j;
+  j.max_nesting = max_nesting;
   j.in_array = 0; j.nkeys = 0; j.held = &held;
   j.p = s ? s : "";
   j.end = j.p + (s ? sp_str_byte_len(s) : 0);
@@ -897,3 +907,5 @@ sp_RbVal sp_json_parse(const char *s) {
   if (j.p != j.end) jp_err("unexpected trailing characters");
   return v;
 }
+
+sp_RbVal sp_json_parse(const char *s) { return sp_json_parse_limit(s, SP_JSON_MAX_NESTING); }

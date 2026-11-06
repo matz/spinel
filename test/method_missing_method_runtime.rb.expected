@@ -1,0 +1,12 @@
+[NameError, :a]
+[:mm, true, [1]]
+[[:a, true], [:a, true], [:a, false]]
+:priv
+:mm
+:mod
+Late
+Inc
+:base
+:sub
+:mm1
+:mm2

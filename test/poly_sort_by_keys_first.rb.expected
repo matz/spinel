@@ -1,0 +1,67 @@
+k 3
+k "a"
+k 1
+ArgumentError: comparison failed
+k 3
+k 1
+k 2
+[1, 2, 3]
+b 3
+b "a"
+b 1
+ArgumentError: comparison failed
+m 3
+m "a"
+m 1
+ArgumentError: comparison failed
+h 3
+h "x"
+h 1
+ArgumentError: comparison failed
+h 3
+h 2
+h 1
+[[:c, 1], [:b, 2], [:a, 3]]
+r 1
+r 2
+r 3
+ArgumentError: comparison failed
+[3, 2, 1]
+d 3
+d "a"
+d 1
+ArgumentError: comparison failed
+[5]
+n 2
+n 5
+n 1
+ArgumentError: comparison failed
+[1, 2, 2.5, 3.5]
+f 1.0
+f 0.0
+f 2.0
+ArgumentError: comparison failed
+[:nils, [0, 1, 2]]
+[:true_true, [0, 1]]
+[:false_false, [0, 1]]
+[:same_obj, [0, 1]]
+[:same_range, [0, 1]]
+[:equal_hashes, [0, 1]]
+[:one_hash_twice, [0, 1]]
+[:num_beside_ints, [2, 1, 0, 3]]
+ArgumentError: comparison failed
+ArgumentError: comparison failed
+ArgumentError: comparison failed
+[:int_float, [3, 1, 2, 0]]
+ArgumentError: comparison failed
+e 3
+e "a"
+e 1
+e 4
+RuntimeError: stop at 4
+["apple", "fig", "kiwi", "pear"]
+["fig", "kiwi", "pear", "apple"]
+["apple", "pear", "kiwi", "fig"]
+[[0, :b], [0, :d], [1, :a], [1, :c], [1, :e]]
+[1, 2, 3000, 3000]
+[1, 2, 400, 400]

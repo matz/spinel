@@ -1,0 +1,4 @@
+module SeedSendCatalog
+  def self.table: () -> Hash[String, String]
+  def self.fetch_in: (Hash[String, String] table, String key) -> String?
+end

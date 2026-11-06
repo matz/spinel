@@ -4,15 +4,15 @@ r0 #1 f0 ModuleNode Chime line 10
   r0 #2 f0 DefNode ring line 11
 r0 #3 f0 ClassNode Sent line 14
   r0 #4 f0 DefNode ring line 15
-  r0 #5 f0 ConstantWriteNode Sent__FIRST line 16
+  r0 #5 f0 ConstantWriteNode FIRST line 16
   r0 #6 f0 CallNode include line 17
 r0 #7 f0 ClassNode Public line 20
   r0 #8 f0 DefNode ring line 21
-  r0 #9 f0 ConstantWriteNode Public__FIRST line 22
+  r0 #9 f0 ConstantWriteNode FIRST line 22
   r0 #10 f0 CallNode include line 23
 r0 #11 f0 ClassNode Bare line 26
   r0 #12 f0 DefNode ring line 27
-  r0 #13 f0 ConstantWriteNode Bare__FIRST line 28
+  r0 #13 f0 ConstantWriteNode FIRST line 28
   r0 #14 f0 CallNode include line 29
 r0 #15 f0 ClassNode Bell line 33
   r0 #16 f0 DefNode ring line 34

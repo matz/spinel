@@ -907,7 +907,7 @@ int emit_call_compare_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
       }
       /* Time <=> non-Time is nil (poly result). A poly operand is checked at
          run time; a concrete non-Time operand is unconditionally nil. */
-      if (a0tr.kind == RK_BOXED || a0t == TY_UNKNOWN) {
+      if (a0tr.kind == RK_BOXED || a0t == TY_UNKNOWN || comp_ty_is_timesub(c, a0t)) {
         int ta = ++g_tmp, tb = ++g_tmp;
         buf_printf(b, "({ SP_TIME_TMP(_t%d) = ", ta); emit_expr(c, recv, b);
         buf_printf(b, "; sp_RbVal _t%d = ", tb); emit_boxed(c, argv[0], b);
@@ -950,9 +950,14 @@ int emit_call_compare_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
          sp_RbVal -- box it, or the raw compare goes out through an sp_RbVal
          signature and the build fails (#3498). */
       int cmp_poly = repr_of(c, id).kind == RK_BOXED;
-      if (cmp_poly) buf_puts(b, "sp_box_oint("); else oint_open(c, id, TY_INT, b);
+      if (cmp_poly) {
+        /* a program <=> answering a Bignum hands it on whole */
+        emit_poly_cmp_ordered(c, "sp_poly_spaceship_v", recv, argv[0], b);
+        return 1;
+      }
+      oint_open(c, id, TY_INT, b);
       emit_poly_cmp_ordered(c, "sp_poly_spaceship", recv, argv[0], b);
-      if (cmp_poly) buf_puts(b, ")"); else oint_close(c, id, b);
+      oint_close(c, id, b);
       return 1;
     }
     /* Statically incomparable concrete operands (1 <=> "a"): Ruby answers
@@ -1177,9 +1182,10 @@ int emit_call_compare_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
         buf_printf(b, "; sp_time_cmp(_t%d, _t%d) %s 0; })", tt, tu, name);
         return 1;
       }
-      /* a poly operand is a Time or not at run time (#4465) */
+      /* a poly operand is a Time or not at run time (#4465); a Time
+         subclass instance boxes as its Time */
       Repr tar = repr_of(c, argv[0]);
-      if (tar.kind == RK_BOXED || tar.untyped) {
+      if (tar.kind == RK_BOXED || tar.untyped || comp_ty_is_timesub(c, tar.as_ty)) {
         int tt = ++g_tmp, tu = ++g_tmp;
         buf_puts(b, "({ SP_TIME_TMP(_t"); buf_printf(b, "%d) = ", tt); emit_expr(c, recv, b);
         buf_printf(b, "; sp_RbVal _t%d = ", tu); emit_boxed(c, argv[0], b);
@@ -1213,6 +1219,10 @@ int emit_call_compare_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
         /* a `<=>` that can return nil: check it -- incomparable raises the
            Comparable ArgumentError instead of comparing a garbage value */
         if (user_cmp_needs_check(c, cid4)) {
+          /* a Time subclass instance boxes as its Time, and the boxed
+             comparison would read it as one, not ask its own <=> */
+          if (comp_ary_is_time(c, cid4))
+            unsupported_feature(c, id, "Comparable operator on a Time subclass whose own #<=> may answer nil or a Bignum");
           int ta = hoist_boxed_rooted(c, recv), tb2 = hoist_boxed_rooted(c, argv[0]);
           buf_printf(b, "(sp_poly_cmp_ck(_t%d, _t%d) %s 0)", ta, tb2, name);
           return 1;
@@ -1557,6 +1567,27 @@ static int emit_poly_reopened_binop(Compiler *c, int id, const char *name, int r
   return 1;
 }
 
+/* A nullable Bigint holds nil or an Integer. Only their overrides matter. */
+static int bigint_not_overridden(Compiler *c) {
+  static const int roots[] = { CORE_NILCLASS, CORE_INTEGER, CORE_NUMERIC, CORE_COMPARABLE,
+                              CORE_OBJECT, CORE_KERNEL, CORE_BASIC_OBJECT, -1 };
+  int top = comp_method_index(c, "!");
+  if (top >= 0 && !c->scopes[top].is_cmethod) return 1;
+  for (int r = 0; roots[r] >= 0; r++) {
+    int k = comp_core_class(c, roots[r]);
+    if (k < 0) continue;
+    if (comp_is_undeffed_in_chain(c, k, "!") || comp_method_in_chain(c, k, "!", NULL) >= 0 ||
+        comp_native_method_find(c, k, "!", 0, 0) >= 0) return 1;
+    /* The load record also holds prepends to builtin modules such as Kernel.
+       With no output slots, any version or an unknown chain returns -1. */
+    if (elab_chain_versions(c, k, 0, "!", NULL, 0) != 0) return 1;
+    ClassInfo *cl = &c->classes[k];
+    for (int i = 0; i < cl->naliases; i++)
+      if ((!cl->alias_sg || !cl->alias_sg[i]) && sp_streq(cl->alias_new[i], "!")) return 1;
+  }
+  return 0;
+}
+
 /* String concatenation, unary -@ +@ ~ !, element stores and the arithmetic on a poly operand */
 int emit_call_operator_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc, const int *argv, TyKind rt, TyKind a0) {
   /* An operator override owns its poly arm before the builtin protocol's
@@ -1894,7 +1925,7 @@ int emit_call_operator_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, co
       buf_puts(b, "(("); emit_expr_for_effect(c, recv, b); buf_puts(b, "), 0)");
     }
     else if (rt == TY_STRING || ty_is_array(rt) || ty_is_hash(rt) || ty_is_object(rt) ||
-             rt == TY_PROC ||
+             (rt == TY_BIGINT && !bigint_not_overridden(c)) || rt == TY_PROC ||
              rt == TY_MATCHDATA || rt == TY_EXCEPTION || rt == TY_FIBER || rt == TY_IO) {
       buf_puts(b, "(("); emit_expr(c, recv, b); buf_puts(b, ") == 0)");  /* NULL pointer is falsy */
     }
@@ -2037,8 +2068,10 @@ int emit_call_operator_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, co
     else if (sp_streq(name, ">=")) cfn = "sp_poly_ge";
     /* a user operator that answers a non-bool goes through the dispatch */
     if (cfn && repr_of(c, id).kind == RK_BOXED && user_defines_or_reads(c, name)) {
-      buf_printf(b, "sp_poly_relop_v(\"%s\", ", name); emit_boxed(c, recv, b); buf_puts(b, ", ");
-      emit_boxed(c, argv[0], b); buf_puts(b, ")");
+      char lead[16]; snprintf(lead, sizeof lead, "\"%s\", ", name);
+      int aic = c->args_in_call;
+      emit_poly_call2_ordered(c, "sp_poly_relop_v", lead, recv, argv[0], b);
+      c->args_in_call = aic;   /* (a program's operator answers, not a raise) */
       return 1;
     }
     if (cfn) {
@@ -2046,8 +2079,9 @@ int emit_call_operator_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, co
          but in a dispatch's builtin arm the builtin comparison answers: its
          bool is boxed for the readers of the call's boxed type */
       int bx = repr_of(c, id).kind == RK_BOXED;
-      buf_printf(b, "%s%s(", bx ? "sp_box_bool(" : "", cfn); emit_boxed(c, recv, b); buf_puts(b, ", "); emit_boxed(c, argv[0], b); buf_puts(b, bx ? "))" : ")");
-      c->args_in_call = recv;
+      if (bx) buf_puts(b, "sp_box_bool(");
+      emit_poly_cmp_ordered(c, cfn, recv, argv[0], b);
+      if (bx) buf_puts(b, ")");
       return 1;
     }
   }

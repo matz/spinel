@@ -1,0 +1,203 @@
+K bare: ["K", "no key is available", "no receiver is available"]
+K nil: "K"
+K two: ArgumentError: wrong number of arguments (given 2, expected 0..1)
+K both: ["m", :a, {b: 1}]
+K key: [:a, "no receiver is available"]
+K receiver: [1, "no key is available"]
+K alone: ["K", :a]
+K nils: [nil, nil]
+K unknown: ArgumentError: unknown keyword: :foo
+K unknowns: ArgumentError: unknown keywords: :foo, :bar
+K string key: ArgumentError: unknown keyword: "key"
+K hash: ["{key: 1}", "no key is available"]
+K spread: 1
+K spread mix: [1, 2]
+K spread none: ["m", "no key is available"]
+K messages: ["sym", "7", "K", ""]
+a
+b
+c
+K order: ["m", 1, 2]
+K splat: ["m", 3]
+K splat none: "K"
+K splat two: ArgumentError: wrong number of arguments (given 2, expected 0..1)
+KK: [KK, 2, 3]
+N: ["N", nil, "no receiver is available"]
+N name: ["m", :f, "no receiver is available"]
+N string: "f"
+N nil: nil
+N three: ArgumentError: wrong number of arguments (given 2, expected 0..1)
+N receiver: [nil, 5]
+N both: [:f, nil]
+N alone: ["N", nil, 5]
+N unknown: ArgumentError: unknown keyword: :key
+N splat: ["m", :x]
+M: ["m", nil, nil, false]
+M name: [:f, nil, false, "no receiver is available"]
+M args: [:f, [1, 2], false]
+M args others: [nil, 3]
+M private: [true, false, true]
+M five: ArgumentError: wrong number of arguments (given 2, expected 0..1)
+M receiver: [9, [1]]
+M unknown: ArgumentError: unknown keyword: :foo
+F: ["F", "no receiver is available"]
+F receiver: ["m", 1]
+F nil: nil
+F alone: ["F", 1]
+F two: ArgumentError: wrong number of arguments (given 2, expected 0..1)
+F unknown: ArgumentError: unknown keyword: :key
+S: ["S", nil, "m", nil]
+S two: ArgumentError: wrong number of arguments (given 2, expected 0..1)
+S keyword: ArgumentError: wrong number of arguments (given 2, expected 0..1)
+Mine: ArgumentError: wrong number of arguments (given 2, expected 0..1)
+Mine three: ArgumentError: wrong number of arguments (given 3, expected 0..1)
+Mine keyword: ArgumentError: wrong number of arguments (given 2, expected 0..1)
+x
+y
+Mine order: ArgumentError: wrong number of arguments (given 2, expected 0..1)
+Mine alone: "{b: 1}"
+Mine result: NoMethodError: undefined method 'result' for an instance of Mine
+result off StopIteration: NoMethodError: undefined method 'result' for an instance of RuntimeError
+ivar: [:n, 4, [1], "m"]
+anonymous: [2, "m"]
+anonymous name: [:z, "hi"]
+dup: [1, 2]
+copy: ["n", 1]
+raise: ["x", "no key is available", "no receiver is available"]
+raise N: ["x", nil, "no receiver is available"]
+raise new: [K, 1]
+rescue parent: [N, :q]
+raise M: [M, "m", :f, [1, 2], true, "r"]
+SK: ["m", :a, [:a], 7]
+SKBare: ["dflt", :dk, nil]
+SKBare given: ["q", 1, 2]
+SKRest: ["q", 1, 2]
+SKSpread: ["q", 1, "no receiver is available"]
+SKNone: ["SKNone", "no key is available"]
+SKMsg: ["six", "no key is available"]
+SKOpt: ["q", 3]
+SKBad: ArgumentError: wrong number of arguments (given 2, expected 0..1)
+SKUnknown: ArgumentError: unknown keyword: :foo
+SN: ["bad z", :z, "no receiver is available"]
+SNBare: ["q", :y]
+SNRecv: ["r", :y, SNRecv]
+SM: ["bad", :y, [:y], true, 3]
+SF: ["frozen o", "o"]
+SG: ["frozen oo", "oo"]
+SFBad: ArgumentError: unknown keyword: :key
+SS: ["m", nil]
+Below: ["b", 1]
+Plain: [Plain, "c", 1]
+OwnKey: [4, "m"]
+Maker: ["made", 1]
+Maker self: ["self", 1]
+NameMaker: ["made", :p]
+value K: ["m", "no key is available"]
+value K keyword: ["m", :v]
+value N: ["m", :v]
+value N keyword: [:v, 1]
+value N splat: ["m", :x]
+value M: [:v, [1], true]
+value F: ["m", 8]
+value S: ["m", nil]
+value raise: [K, "hi"]
+key K: :a
+receiver K: 1
+name K: NoMethodError: undefined method 'name' for an instance of K
+args K: NoMethodError: undefined method 'args' for an instance of K
+private_call? K: NoMethodError: undefined method 'private_call?' for an instance of K
+result K: NoMethodError: undefined method 'result' for an instance of K
+key N: NoMethodError: undefined method 'key' for an instance of N
+receiver N: 2
+name N: :b
+args N: NoMethodError: undefined method 'args' for an instance of N
+private_call? N: NoMethodError: undefined method 'private_call?' for an instance of N
+result N: NoMethodError: undefined method 'result' for an instance of N
+key M: NoMethodError: undefined method 'key' for an instance of M
+receiver M: 3
+name M: :c
+args M: [3]
+private_call? M: true
+result M: NoMethodError: undefined method 'result' for an instance of M
+key F: NoMethodError: undefined method 'key' for an instance of F
+receiver F: 4
+name F: NoMethodError: undefined method 'name' for an instance of F
+args F: NoMethodError: undefined method 'args' for an instance of F
+private_call? F: NoMethodError: undefined method 'private_call?' for an instance of F
+result F: NoMethodError: undefined method 'result' for an instance of F
+key S: NoMethodError: undefined method 'key' for an instance of S
+receiver S: NoMethodError: undefined method 'receiver' for an instance of S
+name S: NoMethodError: undefined method 'name' for an instance of S
+args S: NoMethodError: undefined method 'args' for an instance of S
+private_call? S: NoMethodError: undefined method 'private_call?' for an instance of S
+result S: nil
+key KeyError: :e
+receiver KeyError: ArgumentError: no receiver is available
+name KeyError: NoMethodError: undefined method 'name' for an instance of KeyError
+args KeyError: NoMethodError: undefined method 'args' for an instance of KeyError
+private_call? KeyError: NoMethodError: undefined method 'private_call?' for an instance of KeyError
+result KeyError: NoMethodError: undefined method 'result' for an instance of KeyError
+key NameError: NoMethodError: undefined method 'key' for an instance of NameError
+receiver NameError: ArgumentError: no receiver is available
+name NameError: :f
+args NameError: NoMethodError: undefined method 'args' for an instance of NameError
+private_call? NameError: NoMethodError: undefined method 'private_call?' for an instance of NameError
+result NameError: NoMethodError: undefined method 'result' for an instance of NameError
+key NoMethodError: NoMethodError: undefined method 'key' for an instance of NoMethodError
+receiver NoMethodError: ArgumentError: no receiver is available
+name NoMethodError: :g
+args NoMethodError: [1]
+private_call? NoMethodError: false
+result NoMethodError: NoMethodError: undefined method 'result' for an instance of NoMethodError
+key FrozenError: NoMethodError: undefined method 'key' for an instance of FrozenError
+receiver FrozenError: 5
+name FrozenError: NoMethodError: undefined method 'name' for an instance of FrozenError
+args FrozenError: NoMethodError: undefined method 'args' for an instance of FrozenError
+private_call? FrozenError: NoMethodError: undefined method 'private_call?' for an instance of FrozenError
+result FrozenError: NoMethodError: undefined method 'result' for an instance of FrozenError
+key StopIteration: NoMethodError: undefined method 'key' for an instance of StopIteration
+receiver StopIteration: NoMethodError: undefined method 'receiver' for an instance of StopIteration
+name StopIteration: NoMethodError: undefined method 'name' for an instance of StopIteration
+args StopIteration: NoMethodError: undefined method 'args' for an instance of StopIteration
+private_call? StopIteration: NoMethodError: undefined method 'private_call?' for an instance of StopIteration
+result StopIteration: nil
+key RuntimeError: NoMethodError: undefined method 'key' for an instance of RuntimeError
+receiver RuntimeError: NoMethodError: undefined method 'receiver' for an instance of RuntimeError
+name RuntimeError: NoMethodError: undefined method 'name' for an instance of RuntimeError
+args RuntimeError: NoMethodError: undefined method 'args' for an instance of RuntimeError
+private_call? RuntimeError: NoMethodError: undefined method 'private_call?' for an instance of RuntimeError
+result RuntimeError: NoMethodError: undefined method 'result' for an instance of RuntimeError
+key String: NoMethodError: undefined method 'key' for an instance of String
+receiver String: NoMethodError: undefined method 'receiver' for an instance of String
+name String: NoMethodError: undefined method 'name' for an instance of String
+args String: NoMethodError: undefined method 'args' for an instance of String
+private_call? String: NoMethodError: undefined method 'private_call?' for an instance of String
+result String: NoMethodError: undefined method 'result' for an instance of String
+key Integer: NoMethodError: undefined method 'key' for an instance of Integer
+receiver Integer: NoMethodError: undefined method 'receiver' for an instance of Integer
+name Integer: NoMethodError: undefined method 'name' for an instance of Integer
+args Integer: NoMethodError: undefined method 'args' for an instance of Integer
+private_call? Integer: NoMethodError: undefined method 'private_call?' for an instance of Integer
+result Integer: NoMethodError: undefined method 'result' for an instance of Integer
+name Symbol: ["abc", true]
+name Class: ["String", true]
+name anonymous: "AnonN"
+name Encoding: "UTF-8"
+name nil: NoMethodError: undefined method 'name' for nil
+name raised: [NameError, :zork]
+name raised method: [:foo, nil, []]
+beside a reader: ["n", "k"]
+beside a reader: [:q, "undefined method 'key' for an instance of N"]
+beside a reader: ["undefined method 'name' for an instance of K", :r]
+Twice nil: ["Twice", 2]
+Twice: ["b", 2]
+TwiceKey: ["TwiceKey", 2]
+TwiceName: [:second, 1]
+TwiceBare: ["TwiceBare", nil]
+message held: ["abcd", true]
+message held name: "abcd"
+message held super: "abcd"
+message held plain: ["abcd", true]
+vcall Integer: NameError: undefined local variable or method 'name' for an instance of Integer
+vcall String: NameError: undefined local variable or method 'name' for an instance of String
+collected

@@ -1,0 +1,17 @@
+{"id" => "a1", "title" => "One", "alt" => nil}
+3
+"One"
+false
+true
+nil
+["id", "a1"]
+["title", "One"]
+["alt", nil]
+{"id" => "b2"}
+{"n" => 1, "gone" => nil}
+11
+true
+nil
+{"m" => 3}
+{1 => 2}
+{3 => 4}

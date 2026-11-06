@@ -454,6 +454,7 @@ int emit_call_exception_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, c
       (sp_streq(name, "message") || sp_streq(name, "result") ||
        sp_streq(name, "errno") || sp_streq(name, "error_code") ||
        sp_streq(name, "key") || sp_streq(name, "receiver") ||
+       sp_streq(name, "args") || sp_streq(name, "private_call?") ||
        sp_streq(name, "backtrace") || sp_streq(name, "cause") ||
        is_exception_full_message(name)) &&
       repr_of(c, recv).as_ty == TY_POLY) {
@@ -694,11 +695,6 @@ int emit_call_exception_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, c
       buf_puts(b, "sp_exc_cause("); emit_expr(c, recv, b); buf_puts(b, ")");
       return 1;
     }
-    if (sp_streq(name, "result") && argc == 0) {
-      /* StopIteration#result: the finished iteration's return value. */
-      buf_puts(b, "sp_exc_result("); emit_expr(c, recv, b); buf_puts(b, ")");
-      return 1;
-    }
     if (sp_streq(name, "errno") && argc == 0) {
       /* SystemCallError#errno: the number of the Errno:: class, by name (#4560) */
       buf_puts(b, "sp_exc_errno_acc("); emit_expr(c, recv, b); buf_puts(b, ")");
@@ -728,9 +724,9 @@ int emit_call_exception_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, c
       /* a class of the program carries its own id (sp_user_exc_class), so
          #superclass and #ancestors walk past a user parent */
       if (g_needs_class_machinery)
-        buf_printf(b, "(_t%d ? sp_user_exc_class(sp_exc_class_name(_t%d)) : ((sp_Class){0, SPL(\"NilClass\")}))", t, t);
+        buf_printf(b, "(_t%d ? sp_user_exc_class(sp_exc_class_name(_t%d)) : ((sp_Class){(sp_int)-1, SPL(\"NilClass\")}))", t, t);
       else
-        buf_printf(b, "((sp_Class){0, _t%d ? sp_exc_class_name(_t%d) : SPL(\"NilClass\")})", t, t);
+        buf_printf(b, "((sp_Class){(sp_int)-1, _t%d ? sp_exc_class_name(_t%d) : SPL(\"NilClass\")})", t, t);
       return 1;
     }
     /* object identity: the same raised object compares equal to $! / a `=> e`
@@ -1062,6 +1058,12 @@ int emit_call_raise_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const
           buf_puts(b, "sp_raise_exc(sp_signal_exc_new(");
           emit_boxed(c, av[1], b);
           buf_puts(b, "))");
+        }
+        /* `raise SystemExit, 3` is SystemExit.new(3): a number is the status */
+        else if (xc >= 0 ? class_is_sysexit(c, xc) : (effn && sp_streq(effn, "SystemExit"))) {
+          buf_puts(b, "sp_raise_exc((sp_Exception *)");
+          emit_sysexit_new(c, id, xc, 1, &av[1], b);
+          buf_puts(b, ")");
         }
         /* `raise Errno::ENOENT, "x"` is Errno::ENOENT.new("x"): the errno
            text, " - x" (SystemCallError.new("x") an unknown error) */

@@ -1,0 +1,95 @@
+Plain "Plain"
+Plain "hi"
+Below "below"
+Plain "Plain"
+Two "two"
+Two "two"
+Two "x"
+3
+wrong number of arguments (given 3, expected 0..2)
+Space::Inner "path"
+Space::RuntimeError "shadow"
+Space::RuntimeError "lexical"
+Plain "aliased"
+StandardError "StandardError"
+RuntimeError "r"
+ArgumentError "bad"
+KeyError "k"
+NoMethodError "nm"
+FrozenError "fz"
+Errno::ENOENT "No such file or directory"
+Errno::ENOENT "No such file or directory - path"
+Errno::ENOENT "No such file or directory - sc"
+Interrupt "int"
+SignalException "SIGINT"
+0
+3
+SystemExit
+1
+true
+0
+m
+m
+4
+5
+halt 5
+6
+Bare "x"
+Bare "y"
+BareBelow "x below"
+BareBelow "y below"
+Bare "in the body"
+Hidden "hidden"
+wrong number of arguments (given 2, expected 0..1)
+1
+2
+{k: 2}
+5
+Plain "picked"
+Two "two"
+Plain "x"
+RuntimeError "x"
+Two "two"
+Plain "ivar"
+RuntimeError "ivar too"
+undefined method 'exception' for class String
+undefined method 'exception' for class String
+Plain "Plain"
+Two "two"
+Plain "m"
+RuntimeError "m"
+[Plain, Two, SystemExit]
+[7, 7, 7]
+Plain "from a"
+RuntimeError "from b"
+Plain "either"
+Plain "either"
+Plain "i"
+Plain "k"
+true
+RuntimeError "j"
+RuntimeError "k"
+true
+RuntimeError "once"
+1
+undefined method 'exception' for class String
+undefined method 'exception' for an instance of Integer
+nil
+Plain "safe"
+Plain "sent"
+Plain "public"
+Plain "computed"
+RuntimeError "computed"
+Two "two"
+true
+true
+false
+false
+true
+false
+Plain "other"
+Two
+9
+next
+Plain "raised"
+3

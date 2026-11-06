@@ -202,6 +202,7 @@ sp_bool   sp_Thread_tls_key(sp_thread *t, sp_sym k);             /* Thread#key? 
 
 /* Run any remaining runnable threads to completion. Emitted at the end of
    main() so a fire-and-forget Thread still runs its body. */
+void       sp_sched_drain_runnable(void);
 void       sp_sched_drain(void);
 
 /* Safepoint (design 5.1). codegen emits, at loop back-edges of a threaded
@@ -242,9 +243,15 @@ int sp_cext_native_register(void (*)(void *), void *, int);
 void sp_cext_native_unregister(void);
 #endif
 void sp_native_leave(void);
+/* An ffi_callback's trampoline around the method: back in the world for it, if
+   the callback came from inside a blocking call, and out again after it. */
+int sp_native_callback_enter(void);
+void sp_native_callback_leave(int depth);
 #else
 static inline void sp_native_enter(void) {}
 static inline void sp_native_leave(void) {}
+static inline int sp_native_callback_enter(void) { return 0; }
+static inline void sp_native_callback_leave(int depth) { (void)depth; }
 #endif
 
 /* Optional hook the generated TU installs so a worker parking at a safepoint

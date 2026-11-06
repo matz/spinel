@@ -94,6 +94,7 @@ int ie_body_has_break_next(Compiler *c, int node);
 int ie_body_ivar_write(const NodeTable *nt, int node);
 TyKind ie_splice_value_ty(Compiler *c, int node);
 int basicobject_own_method(const char *n);
+void emit_poly_call2_ordered(Compiler *c, const char *fn, const char *lead, int recv, int arg, Buf *b);
 void emit_poly_cmp_ordered(Compiler *c, const char *fn, int recv, int arg, Buf *b);
 void emit_handle_inspect(Compiler *c, int recv, TyKind rt, Buf *b);
 int bigint_cmp_operand_ok(TyKind t);
@@ -124,10 +125,19 @@ extern int g_rto_nil_obj;
 extern int g_rto_by_cls;
 int emit_respond_to_by_cls(Compiler *c, int recv, const char *qm, int argc, const int *argv, Buf *b);
 extern int g_rto_exc;
+extern int g_rto_force_ia;
 int emit_respond_to_exc_cls(Compiler *c, int recv, const char *qm, int argc, const int *argv, Buf *b);
 int method_hidden_from_reflection(Compiler *c, int cid, const char *m);
 int refl_member_of_struct_superclass(Compiler *c, int ci, const char *m);
 int respond_to_static_answer(Compiler *c, int id, int recv, TyKind rt, const char *qm, int argc, const int *argv);
+/* nil's static answer to respond_to?(qm, ...); *prog: by a method of the program's */
+int nil_responds_static(Compiler *c, const char *qm, int argc, const int *argv, int *prog);
+/* respond_to? call id (its argc arguments argv, asking qm) of a class's own
+   class method whose answer the version cells hold (cplan_cmethod_presence):
+   one of the versions' cells, or what the class answers with none of them,
+   written to b. 0, writing nothing, for a call the plan does not answer
+   so; with b NULL, only asked. */
+int emit_respond_to_cells(Compiler *c, int id, const char *qm, int argc, const int *argv, Buf *b);
 int respond_to_user_defined(Compiler *c, int id, int recv);
 extern const char *const respond_universal[];
 extern const char *const respond_universal_all[]; /* public and private */
@@ -312,6 +322,7 @@ void abi_sig_token(TyKind t, char *out);
 const char *bam_builtin_sym(Compiler *c, int mi, const char *dflt);
 int bind_owner_mismatch(Compiler *c, int target, TyKind ot);
 int builtin_method_arity(const char *cls, const char *m, int *out);
+const char *builtin_method_params(const char *owner, const char *m, int *in_c);
 int builtin_method_known(const char *cls, const char *m);
 int core_method_vis(const char *cls, const char *m, int inherit);   /* codegen_call_class.c */
 int refl_builtin_vis(Compiler *c, int ci, const char *m, int inherit);   /* codegen_call_class.c */

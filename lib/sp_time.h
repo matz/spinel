@@ -49,6 +49,8 @@ sp_Time sp_timev_in_zone_s(sp_Time t, const char *z);
 sp_Time sp_timev_at_float(double epoch);
 sp_Time sp_timev_at_div(int64_t num, int64_t den);
 sp_Time sp_timev_parse(const char *s);
+sp_Time sp_timev_parse_in(const char *s, int dz, int64_t doff);
+int sp_time_str_has_zone(const char *s);
 /* require "time"'s strict class parsers */
 sp_Time sp_timev_s_httpdate(const char *s);
 sp_Time sp_timev_s_rfc2822(const char *s);
@@ -129,6 +131,7 @@ sp_Time *sp_time_in_zone_s(const sp_Time *t, const char *z);
 sp_Time *sp_time_at_float(double epoch);
 sp_Time *sp_time_at_div(int64_t num, int64_t den);
 sp_Time *sp_time_parse(const char *s);
+sp_Time *sp_time_parse_in(const char *s, int dz, int64_t doff);
 sp_Time *sp_time_s_httpdate(const char *s);
 sp_Time *sp_time_s_rfc2822(const char *s);
 sp_Time *sp_time_s_xmlschema(const char *s);

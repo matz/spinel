@@ -1,0 +1,14 @@
+coerce 5
+"comparison of Integer with Nq failed"
+coerce 5
+[3, 5]
+coerce 5
+coerce 2
+false
+true
+coerce 1
+coerce 5
+coerce 1
+coerce 2
+Nq
+2

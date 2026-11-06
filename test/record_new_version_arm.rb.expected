@@ -1,0 +1,12 @@
+:mine
+#<struct S2 a=1>
+:mine
+#<data D2 y=2>
+#<struct S3 a=1>
+#<struct T3 a=2>
+:mine
+:mine
+:mine
+:mine
+43
+[2, 4]

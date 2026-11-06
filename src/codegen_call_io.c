@@ -1257,7 +1257,10 @@ int emit_call_poly_io_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
           Buf ab2; memset(&ab2, 0, sizeof ab2);
           int arr2 = 0;
           if (is_puts2 && (ty_is_array(akt2) || arg_repr.kind == RK_BOXED)) { arr2 = 1; emit_boxed(c, argv[k2], &ab2); }
-          else if (akt2 == TY_STRING) emit_expr(c, argv[k2], &ab2);
+          /* a String the dispatch holds as its handle (a user `puts(*args)`
+             beside this arm takes it so) is read as its bytes, as the write
+             arm reads its payload (emit_to_s_expr) */
+          else if (akt2 == TY_STRING) emit_to_s_expr(c, argv[k2], &ab2);
           else if (arg_repr.kind == RK_BOXED) { arr2 = 1; emit_boxed(c, argv[k2], &ab2); }
           else { buf_puts(&ab2, "sp_poly_to_s("); emit_boxed(c, argv[k2], &ab2); buf_puts(&ab2, ")"); }
           const char *at2 = ab2.p ? ab2.p : "\"\"";

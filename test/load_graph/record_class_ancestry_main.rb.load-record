@@ -1,0 +1,59 @@
+load record: 31 points, 1 regions
+r0 #0 f0 ProgramNode line 10
+r0 #1 f0 ModuleNode M line 10
+  r0 #2 f0 CallNode include line 11
+  r0 #3 f0 DefNode <=> line 12
+r0 #4 f0 ClassNode K line 14
+r0 #5 f0 ModuleNode N line 15
+r0 #6 f0 ClassNode A line 16
+  r0 #7 f0 CallNode include line 17
+  r0 #8 f0 DefNode v line 18
+  r0 #9 f0 DefNode w line 19
+r0 #10 f0 CallNode puts line 21
+r0 #11 f0 ClassNode K line 22
+  r0 #12 f0 CallNode send line 22
+r0 #13 f0 ClassNode A line 23
+  r0 #14 f0 DefNode v line 24
+r0 #15 f0 CallNode puts line 26
+r0 #16 f0 CallNode puts line 27
+r0 #17 f0 ModuleNode N line 28
+  r0 #18 f0 CallNode send line 28
+r0 #19 f0 ClassNode A line 29
+  r0 #20 f0 DefNode w line 30
+r0 #21 f0 CallNode puts line 32
+r0 #22 f0 ClassNode A3 line 34
+  r0 #23 f0 CallNode include line 35
+  r0 #24 f0 DefNode v line 36
+r0 #25 f0 CallNode puts line 38
+r0 #26 f0 ClassNode Object line 39
+  r0 #27 f0 CallNode send line 39
+r0 #28 f0 ClassNode A3 line 40
+  r0 #29 f0 DefNode v line 41
+r0 #30 f0 CallNode puts line 43
+class M: body#1 include ?#2
+class K: body#4 body#11
+class N: body#5 body#17
+class A: body#6 body#13 body#19 include M#7
+class A3: body#22 body#28 include M#23
+class Object: body#26
+entity M: owner main leaf M
+entity K: owner main leaf K
+entity N: owner main leaf N
+entity A: owner main leaf A
+entity A3: owner main leaf A3
+const M: write#1
+opaque M: opaque#2
+M#<=>: def#3 end=yes
+const K: write#4
+const N: write#5
+const A: write#6
+A#v: def#8 runs=#10 def#14 runs=#10 end=yes
+A#w: def#9 runs=#16 def#20 runs=#16 end=yes
+opaque K: opaque#12
+opaque N: opaque#18
+const A3: write#22
+A3#v: def#24 runs=#25 def#29 runs=#25 end=yes
+opaque Object: opaque#27
+versions A#v: def#8..#14 seen=def#8, def#14..end seen=unknown; 4 of the name, named
+versions A#w: def#9..#20 seen=unknown, def#20..end seen=unknown; 2 of the name, named
+versions A3#v: def#24..#29 seen=unknown, def#29..end seen=def#29; 4 of the name, named

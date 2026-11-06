@@ -604,6 +604,7 @@ extern int g_one_arm_bytes_node;   /* the dispatch whose arms answer into a byte
 void one_face_mark(int t, int node);   /* temp t holds node's String by face (__auto_type): its bound reads are SP_STR_B */
 int one_face_is(int t, int node);
 int one_tail_fresh(Compiler *c, int n);   /* a String answer that is a new String: its return clears the published channel */
+int one_tail_cond(Compiler *c, int n);    /* a String answer that is a conditional: its return publishes its bytes' handle */
 int one_str_to_open(Buf *b, TyKind st, const char *fmt, ...);   /* SP_STR_TO(dst, around a String slot write under the mode; close with ")" */
 void one_elem_bind_slot(LocalVar *lv, TyKind bt);
 /* When set, the arms of a boxed `new` (emit_call_new_arms) are only the
@@ -642,6 +643,7 @@ int emit_object_methods_reflection(Compiler *c, int recv, int cid, const char *n
                                    int arg, Buf *b);
 int scope_reads_callee(Compiler *c, int si);
 int sp_yield_site_type(const Compiler *c, int id, TyKind *out);
+int call_targets_yielding_method(Compiler *c, int id);   /* codegen_iter.c */
 TyKind block_next_value_ntype(const Compiler *c, int node);
 /* Argument-hoist overrides (see emit_args_filled): node id -> rooted temp
    name substituted by emit_expr. A site checks for room against
@@ -706,6 +708,9 @@ int subtree_is_plain_value(Compiler *c, int id);
    show (plain_uses_walk, codegen_call.c), asked of the table as the parser
    wrote it: called ahead of analyze_program, whose desugars may rewrite one. */
 void plain_note_parsed(Compiler *c);
+/* ...and asked of the table as it is now (an alias, an undef, a visibility
+   word or a by-name call with a name that is no def's) */
+int program_defines_unseen(Compiler *c);
 int operand_is_held_read(Compiler *c, int id);
 /* Is the call a reader the emitter lowers to a plain field read? *allocates is
    set when the read builds a copy (a shared String slot). codegen_call.c */
@@ -1252,6 +1257,10 @@ int class_has_exc_name(Compiler *c, int ci);
 int any_exc_reopen(Compiler *c);
 char **dsend_candidates(Compiler *c, int *out_n);
 int emit_super_respond_to(Compiler *c, int id, Scope *s, Buf *b);
+/* a super's forwarded parameter pi, boxed (an oint slot through oint_box) */
+void emit_boxed_fwd_param(Compiler *c, Scope *s, int pi, Buf *b);
+/* a super's block argument run for its effect: "(void)(x); " */
+void emit_super_blockarg_effect(Compiler *c, int id, Buf *b);
 int exc_reopen_definers(Compiler *c, const char *mname, int *out, int max);
 int emit_exc_reopen_pick_head(Compiler *c, const int *xr, int xn, const char *cls_expr, Buf *b);
 int class_has_subclass(Compiler *c, int ocid);
@@ -1827,6 +1836,12 @@ const char *superclass_builtin_exc_name(const NodeTable *nt, int sc);   /* analy
 const char *errno_canonical_name(const char *n);   /* analyze_util.c */
 int is_syserr_family_name(const char *n);           /* analyze_util.c */
 int class_is_syserr(Compiler *c, int ci);          /* codegen_call.c */
+int class_is_sysexit(Compiler *c, int ci);         /* codegen_call.c */
+int class_takes_exc_attrs(Compiler *c, int ci);    /* codegen_call.c */
+void emit_exc_attrs_call(Compiler *c, int id, const char *self_text, int argc, const int *argv, Buf *b);
+void emit_exc_attrs_new(Compiler *c, int id, int ci, int argc, const int *argv, Buf *b);
+int emit_exc_extra_args(Compiler *c, int id, int ci, int argc, const int *argv, Buf *b);
+void emit_sysexit_new(Compiler *c, int id, int ci, int argc, const int *argv, Buf *b);
 void emit_syserr_call(Compiler *c, int id, const char *fn, const char *lead,
                       int argc, const int *argv, Buf *b);   /* codegen_call.c */
 int class_inherits_builtin_exception(Compiler *c, int ci);  /* analyze_util.c */
@@ -1841,6 +1856,11 @@ static inline const char *isa_match_name(const NodeTable *nt, int arg, char *buf
   if (q && l && !sp_streq(q, l) &&
       (is_builtin_exception_name(q) || builtin_class_id(q) != 0)) return q;
   return l;
+}
+/* ...the same by the slot a value constant's entity keys (const_key_at) */
+static inline const char *isa_match_key(Compiler *c, int arg, char *buf, size_t bufsz) {
+  const char *k = elab_const_node_key(c, arg);
+  return k ? k : isa_match_name(c->nt, arg, buf, bufsz);
 }
 /* The name an exception's is_a? compares with for constant argument `arg`
    (codegen_call_exception.c), or NULL for no constant */
@@ -1896,6 +1916,7 @@ int cvar_defined_probed(Compiler *c, const char *nm);
 void emit_cvar_set_flag(Compiler *c, int cid, const char *nm, int as_expr, Buf *b);
 void emit_cvar_set_flag_after(Compiler *c, int cid, const char *nm, Buf *b);
 void emit_cvar_name_error(Compiler *c, int cid, const char *nm, Buf *b);
+void emit_cvar_undeclared_raise(Compiler *c, int id, const HolderRef *h, Buf *b);   /* NameError for a read of an undeclared class variable, valued as the read's dead tail */
 extern int g_ivar_nil_guarded_id;
 int ivar_nil_recv_guard(Compiler *c, int id, int *recv_out);
 /* the same for any receiver the call guards: an ivar as above, or a param or
@@ -2048,7 +2069,6 @@ int  proc_form_source(Compiler *c, int s);
 int  ctor_site_on_cycle(Compiler *c, int id, int initm);
 int  ctor_init_proc_form(Compiler *c, int cid);
 int scope_has_callable_symbol(Compiler *c, int s);
-int scope_toplevel_included(Compiler *c, int s);
 int scope_uses_ivars(Compiler *c, int mi);
 int emit_forwarded_proc_arg(Compiler *c, int blk_node, Buf *b);
 const char *forwarded_real_proc(int blk0, int blk);
@@ -2063,6 +2083,7 @@ int eq_family(TyKind t);
    -1 not determinable here. `exact` is instance_of? (no ancestor match). */
 int ty_matches_class(Compiler *c, TyKind t, const char *cn, int exact);
 int builtin_reopen_includes_module(Compiler *c, int mod);
+int class_is_builtin_module_reopen(Compiler *c, int cid);
 void emit_method_call(Compiler *c, int id, Buf *b);
 /* A receiverless call the enclosing class's own chain answers (see
    codegen_call.c): the Kernel arms must stand down for it. */
@@ -2211,6 +2232,7 @@ int kwh_merged(Compiler *c, Scope *m, int kwh);
    as a Data or Struct construction and a `**kwrest` of any key
    (kwrest_any_key) need (TY_POLY_POLY_HASH). */
 int emit_ds_hash_merge(Compiler *c, int kwh, int any_key, TyKind *out_type);
+int emit_super_data_with(Compiler *c, int id, Scope *s, Buf *b);
 /* True when emit_ds_hash_materialize runs keyword code with an effect ahead
    of the call's positionals: a kwh_merged call's merged hash, or a first
    `**` operand with a side effect that it evaluates. */
@@ -2353,6 +2375,7 @@ const struct BuiltinOp *poly_scalar_row(TyKind k, const char *name, int argc, in
 int a_super_target(Compiler *c, Scope *m);
 int an_arg_is_shared_handle(Compiler *c, int node);
 int an_super_object_text(Compiler *c, int n, int mi);
+int an_super_struct_text(Compiler *c, int n, int mi);
 int an_user_defines_method(Compiler *c, const char *name);
 int an_enum_own_find_index(Compiler *c);
 /* Can no method of the program take `name`: no def of it or of method_missing, and no alias, define_method, attr_* or Struct / Data member that names it (or names a method only the run time knows)? */
@@ -3186,6 +3209,8 @@ int node_has_oint_form(Compiler *c, int node);
 /* node as an sp_oint / sp_ofloat: the bare producer, a plain value wrapped
    in sp_oint_of, nil as sp_oint_nil(); a slot read as its slot's own oint */
 void emit_oint_expr(Compiler *c, int node, TyKind t, Buf *b);
+void emit_float_operand_in(Compiler *c, int node, const char *lcls, Buf *b);
+void emit_float_pair_in_order(Compiler *c, const char *r, int r_oint, const char *name, int arg, const char *lcls, int tx, int tn, Buf *b);
 /* set by emit_oint_expr for the one node it is about to emit: emit_expr
    consumes it (leaves the oint producer bare) before any child is emitted */
 extern int g_want_oint;

@@ -293,11 +293,15 @@ module Enumerable
           out.concat(v)
         elsif v.respond_to?(:to_ary)
           # CRuby splices whatever answers to_ary (rb_check_array_type), an ActiveRecord relation among them.
+          # a to_ary that answers nil leaves v as one element; any other
+          # non-Array is CRuby's TypeError
           a = v.to_ary
           if a.is_a?(Array)
             out.concat(a)
-          else
+          elsif a.nil?
             out << v
+          else
+            raise TypeError, "can't convert #{v.class} to Array (#{v.class}#to_ary gives #{a.class})"
           end
         else
           out << v

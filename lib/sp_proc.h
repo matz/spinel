@@ -81,12 +81,18 @@ sp_Curry *sp_curry_apply(sp_Curry *c, sp_RbVal arg);
 #define SP_BM_SELF_NONE 0   /* not a reference: a number, a class value, unbound */
 #define SP_BM_SELF_OBJ  1
 #define SP_BM_SELF_STR  2
+#define SP_BM_SELF_BOOL 3   /* true or false, held as 1 or 0: no reference either, but a value #receiver answers */
 /* How the legacy sp_int C return is boxed back into a Ruby value. Any method
    whose C return fits the register records its kind here: a plain Integer, a
    `const char *` String, a nullable `sp_Bigint *`, a void/nil, a bool, a
    Symbol id, a typed-array or user-object pointer. A synthesized typed-array
    adapter (`<int_array>.method(:push)`) launders the array/string it returns
    through the same register. */
+/* Which rule a Method's proc's #parameters follow (sp_BoundMethod.proc_params,
+   sp_proc_parameters_of), by what the bind site knows of its target. */
+#define SP_BM_PROC_PARAMS_LIST  0   /* a Ruby body: the Method's own list, every required positional optional in the proc view */
+#define SP_BM_PROC_PARAMS_ARITY 1   /* none (a builtin written in C, an attribute accessor, a Struct member): the unnamed list of its arity, in either view */
+#define SP_BM_PROC_PARAMS_PLAIN 2   /* the bind site cannot tell which method it stands for (a builtin or a reopen's def): a plain proc's answer */
 #define SP_BM_RET_INT       0
 #define SP_BM_RET_STR       1
 #define SP_BM_RET_INT_ARRAY 2
@@ -182,8 +188,21 @@ typedef struct sp_BoundMethod { void *self; sp_int fn; const char *name; sp_int 
                            signature); 0 when the bind site had no static target
                            or the target's shape declines (keywords). */
   sp_int thunk_min, thunk_max;   /* the argument counts it binds (max -1 for a rest: any count) */
+  sp_Class owner;         /* compile-time #owner, the class value the static
+                             #owner answers (a singleton's id for
+                             #<Class:C>), or SP_CLASS_NIL where the bind
+                             site knows no target: what sp_bm_owner answers */
+  const char *src_file;   /* compile-time #source_location: the def's file,
+                             a frozen literal (CRuby's path is frozen), and
+                             line; NULL / 0 for none (nil): what
+                             sp_bm_source_location answers */
+  sp_int src_line;
+  sp_int proc_params;     /* the rule its proc's #parameters follow,
+                             SP_BM_PROC_PARAMS_*: stamped at the bind site
+                             (sp_bm_set_proc_params) */
 } sp_BoundMethod;
 void sp_bm_cap_scan(void *p);
+void sp_method_proc_scan(void *p);
 sp_int sp_method_proc_tramp(void *cap, sp_int argc, sp_int *args);
 sp_Proc *sp_method_to_proc(sp_BoundMethod *m);
 void sp_BoundMethod_scan(void *p);
@@ -205,7 +224,7 @@ static inline sp_int sp_bm_fn_opaque(sp_int fn) {
   return fn;
 #endif
 }
-static inline sp_BoundMethod *sp_bound_method_new(void *self, sp_int self_kind, sp_int fn, const char *name, sp_int arity) { sp_BoundMethod *m = (sp_BoundMethod *)sp_gc_alloc(sizeof(sp_BoundMethod), NULL, sp_BoundMethod_scan); m->self = self; m->self_kind = self_kind; m->fn = sp_bm_fn_opaque(fn); m->name = name; m->arity = arity; m->desc = NULL; m->params = NULL; m->unbound = 0; m->recv_bound = 0; m->legacy_int_abi = 0; m->legacy_sig = NULL; m->legacy_fixed = 0; m->legacy_rest = 0; m->legacy_ret = SP_BM_RET_INT; m->poly_abi = 0; m->poly_fixed = 0; m->thunk = 0; m->thunk_min = 0; m->thunk_max = 0; return m; }
+static inline sp_BoundMethod *sp_bound_method_new(void *self, sp_int self_kind, sp_int fn, const char *name, sp_int arity) { sp_BoundMethod *m = (sp_BoundMethod *)sp_gc_alloc(sizeof(sp_BoundMethod), NULL, sp_BoundMethod_scan); m->self = self; m->self_kind = self_kind; m->fn = sp_bm_fn_opaque(fn); m->name = name; m->arity = arity; m->desc = NULL; m->params = NULL; m->unbound = 0; m->recv_bound = 0; m->legacy_int_abi = 0; m->legacy_sig = NULL; m->legacy_fixed = 0; m->legacy_rest = 0; m->legacy_ret = SP_BM_RET_INT; m->poly_abi = 0; m->poly_fixed = 0; m->thunk = 0; m->thunk_min = 0; m->thunk_max = 0; m->owner = SP_CLASS_NIL; m->src_file = NULL; m->src_line = 0; m->proc_params = SP_BM_PROC_PARAMS_LIST; return m; }
 /* Tag a freshly-built Method with whether its target has the legacy sp_int C
    ABI, the per-position type signature, the fixed/rest slot counts, and how
    its sp_int C return boxes. The constructors default to 0 (unsafe), so every
@@ -256,6 +275,8 @@ static inline sp_int sp_bm_norm_ret(sp_BoundMethod *m, sp_int raw) {
    so a later dynamic .call/[] through a container sees m->unbound and raises
    instead of invoking the instance C function with no self (#4395). */
 static inline sp_BoundMethod *sp_bm_set_unbound(sp_BoundMethod *m) { if (m) m->unbound = 1; return m; }
+/* Stamp the rule the Method's proc's #parameters follow (sp_BoundMethod.proc_params). */
+static inline sp_BoundMethod *sp_bm_set_proc_params(sp_BoundMethod *m, sp_int rule) { if (m) m->proc_params = rule; return m; }
 /* The scalar-kind ABI token of a boxed argument (see abi_sig_token in
    codegen_call.c: TY_INT/TY_BOOL/TY_SYMBOL/TY_NIL are 1/2/3/4), or 0 when the
    value has no scalar sp_int slot at all (a pointer, Float, or Bigint). The
@@ -315,7 +336,7 @@ static inline sp_bool sp_bm_legacy_abi_ok(sp_BoundMethod *m, sp_int argc, const 
     if (!sp_bm_sig_pos_match(arg_sig + 8 * k, m->legacy_sig + 8 * k)) return FALSE;
   return TRUE;
 }
-static inline sp_BoundMethod *sp_bound_method_new_d(void *self, sp_int self_kind, sp_int fn, const char *name, sp_int arity, const char *desc, const char *params) { sp_BoundMethod *m = sp_bound_method_new(self, self_kind, fn, name, arity); m->desc = desc; m->params = params; return m; }
+static inline sp_BoundMethod *sp_bound_method_new_d(void *self, sp_int self_kind, sp_int fn, const char *name, sp_int arity, const char *desc, const char *params, sp_Class owner, const char *src_file, sp_int src_line) { sp_BoundMethod *m = sp_bound_method_new(self, self_kind, fn, name, arity); m->desc = desc; m->params = params; m->owner = owner; m->src_file = src_file; m->src_line = src_line; return m; }
 /* Method#unbind on a BOXED method: the same target with the receiver dropped.
    A boxed value carries no syntax for the compile-time unbound rendering, so
    the copy records it (the #class arm reads `unbound`) (#3692). */
@@ -324,6 +345,10 @@ static inline sp_BoundMethod *sp_bm_unbind(sp_BoundMethod *m) {
   sp_BoundMethod *u = sp_bound_method_new(NULL, SP_BM_SELF_NONE, m->fn, m->name, m->arity);
   u->desc = m->desc;
   u->params = m->params;
+  u->owner = m->owner;
+  u->src_file = m->src_file;
+  u->src_line = m->src_line;
+  u->proc_params = m->proc_params;
   u->unbound = 1;
   u->legacy_int_abi = m->legacy_int_abi;
   u->legacy_sig = m->legacy_sig;

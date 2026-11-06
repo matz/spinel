@@ -6,11 +6,11 @@
 # a CRuby program already writes, but a key's halves are Strings --
 # `private_key_bytes` is the scalar, `public_key_bytes` is the X9.62
 # uncompressed point, 0x04 || X || Y -- and dh_compute_key takes the peer's
-# bytes rather than a Point built out of a BN. `OpenSSL::BN`, `EC::Group` and
-# `EC::Point` are not here, and a program that builds one fails at COMPILE
-# time the way the rest of this package's gaps do.
+# bytes rather than a Point built out of a BN. `EC::Group` supplies curve_name;
+# `OpenSSL::BN` and `EC::Point` are not here, and a program that builds one
+# fails at COMPILE time the way the rest of this package's gaps do.
 #
-# That is a real subset, and it is a deliberate one: those three classes exist
+# That is a real subset, and it is a deliberate one: those arithmetic classes exist
 # in CRuby to express things this runtime has no other use for, and every
 # protocol that names raw EC keys -- RFC 8291 Web Push, JWK's x/y halves,
 # WebAuthn, ES256 -- names them as the byte strings above. A program that
@@ -25,10 +25,21 @@ module OpenSSL
     class PKeyError < OpenSSLError
     end
 
-    class ECError < PKeyError
-    end
+    ECError = PKeyError
 
     class EC
+      class Group
+        # Curve metadata only; group arithmetic is outside this subset.
+        class Error < OpenSSLError; end
+        def curve_name = @curve_name.dup
+        def initialize(curve)
+          curve = curve.is_a?(Group) ? curve.curve_name : OpenSSL.send(:comparison_string, curve)
+          raise ArgumentError, "string contains null byte" if curve.include?("\0")
+          @curve_name = Native.ec_curve_name(curve, 0).b
+          raise Error, "unknown curve name" if @curve_name.empty?
+        end
+      end
+
       # The curve is carried, not inferred: the byte lengths of both halves
       # follow from it, and a key whose curve is implicit has to be guessed at
       # from a length the moment two curves are in play.
@@ -62,8 +73,10 @@ module OpenSSL
       # An empty private half means "public only"; the two are never both
       # absent, and the private one wins when both are given, since the public
       # half derives from it.
-      def initialize(curve, private_key_bytes, public_key_bytes = "")
+      def initialize(curve, private_key_bytes, public_key_bytes = "", point_conversion_form = 4, encoding_flags = 0)
         @curve = curve
+        @point_conversion_form = point_conversion_form
+        @encoding_flags = encoding_flags
         @private_key_bytes = private_key_bytes
         if private_key_bytes.empty?
           raise ECError, "a key needs a private scalar or public bytes" if public_key_bytes.empty?
@@ -127,7 +140,7 @@ module OpenSSL
       # hash -- so a caller cannot accidentally sign something unhashed.
       def sign_raw(digest, data)
         need_private!("sign_raw")
-        sig = Native.ecdsa_sign(@curve, @private_key_bytes, hash_of(digest, data))
+        sig = Native.ecdsa_sign(@curve, @private_key_bytes, hash_of(digest, data), 0)
         raise ECError, Native.last_error if sig.empty?
         sig
       end
@@ -137,10 +150,39 @@ module OpenSSL
       # malformed: a caller asking "is this good" must not be able to read
       # "the input was strange" as yes.
       def verify_raw(digest, signature, data)
-        Native.ecdsa_verify(@curve, @public_key_bytes, hash_of(digest, data), signature) == 1
+        Native.ecdsa_verify(@curve, @public_key_bytes, hash_of(digest, data), signature, 0) == 1
+      end
+
+      def group = Group.new(Native.ec_curve_name(@curve, 1))
+      def public_to_der = export_key(0)
+      def private_to_der = export_key(1)
+      def private_to_pem = export_key(2)
+
+      # The caller has already hashed the data; libcrypto owns DER encoding.
+      def dsa_sign_asn1(digest)
+        digest = OpenSSL.send(:comparison_string, digest)
+        need_private!("dsa_sign_asn1")
+        signature = Native.ecdsa_sign(@curve, @private_key_bytes, digest, 1)
+        raise ECError, Native.last_error if signature.empty?
+        signature
+      end
+
+      def dsa_verify_asn1(digest, signature)
+        result = Native.ecdsa_verify(@curve, @public_key_bytes,
+                                    OpenSSL.send(:comparison_string, digest), OpenSSL.send(:comparison_string, signature), 1)
+        raise PKeyError, "invalid DER signature" if result < 0
+        result == 1
       end
 
       private
+
+      def export_key(format)
+        need_private!("private export") if format != 0
+        bytes = Native.ec_export(@curve, @private_key_bytes, @public_key_bytes,
+                                 format, @point_conversion_form, @encoding_flags)
+        raise ECError, Native.last_error if bytes.empty?
+        bytes
+      end
 
       def need_private!(what)
         raise ECError, "#{what} needs a private key; this one is public only" if public_only?
@@ -173,12 +215,45 @@ module OpenSSL
       raise PKeyError, Native.last_error if blob.empty?
       return RSA.from_read(blob) if blob.getbyte(0) >= 2
       curve_len = blob.getbyte(1)
-      curve = blob.byteslice(2, curve_len)
-      bytes = blob.byteslice(2 + curve_len, blob.bytesize - 2 - curve_len)
+      curve = blob.byteslice(4, curve_len)
+      bytes = blob.byteslice(4 + curve_len, blob.bytesize - 4 - curve_len)
       if blob.getbyte(0) == 1
-        EC.from_private_bytes(curve, bytes)
+        EC.new(curve, bytes, "", blob.getbyte(2), blob.getbyte(3))
       else
-        EC.from_public_bytes(curve, bytes)
+        EC.new(curve, "", bytes, blob.getbyte(2), blob.getbyte(3))
+      end
+    end
+
+    # Raw Ed25519 seeds are copied, like keys imported through PKey.read.
+    def self.new_raw_private_key(algorithm, bytes)
+      algorithm = OpenSSL.send(:comparison_string, algorithm)
+      raise ArgumentError, "string contains null byte" if algorithm.include?("\0")
+      bytes = String.new(OpenSSL.send(:comparison_string, bytes))
+      raise PKeyError, "unsupported raw private key algorithm" unless algorithm.upcase == "ED25519"
+      raise PKeyError, "Ed25519 private key must be 32 bytes" unless bytes.bytesize == 32
+      key = PKey.allocate
+      key.instance_variable_set(:@seed, bytes)
+      key
+    end
+
+    # Signing from a raw Ed25519 seed; other PKey algorithms use EC or RSA.
+    class PKey
+      def initialize
+        raise TypeError, "PKey is an abstract class"
+      end
+
+      def sign(digest, data)
+        raise RuntimeError, "PKey is not initialized" if @seed.nil?
+        unless digest.nil? || digest.is_a?(OpenSSL::Digest)
+          name = OpenSSL.send(:comparison_string, digest)
+          raise ArgumentError, "string contains null byte" if name.include?("\0")
+          Native.digest_bytes(name, "")
+        end
+        data = OpenSSL.send(:comparison_string, data)
+        raise PKeyError, "Ed25519 does not accept a digest" unless digest.nil?
+        signature = Native.ed25519_sign(@seed, data)
+        raise PKeyError, Native.last_error if signature.empty?
+        signature
       end
     end
   end

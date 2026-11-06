@@ -1,0 +1,1 @@
+{data_eq: 40, data_ne: 40, data_cmp: 40, data_lt: 40, data_eql: 40, data_case_eq: 20, str_case_eq: 20, struct_eq: 40, object_eq: 40, hash_eq: 40, hash_cmp: 40, sum_eq: 40, and: 40, or: 40, ternary: 40}

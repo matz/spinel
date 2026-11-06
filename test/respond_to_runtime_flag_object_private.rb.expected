@@ -1,0 +1,20 @@
+[false, true, false]
+[false, true]
+[false, true]
+[false, true]
+[false, true]
+[false, true]
+[false, true]
+[false, true]
+[false, true]
+[false, true, true]
+[false, true]
+[false, true]
+[false, true, true]
+[false, true]
+[false, true]
+yes
+no
+[true, 1, "z"]
+{k: true}
+[:r, :f, :r, :t, :f, :t, :f, :t, :f, :t, :f, :t, :f, :t, :f, :t, :f, :t, :f, :t, :f, :t, :t, :f, :t, :f, :t, :f, :t, :t, :f, :t, :f, :t, :t, :f, :t]

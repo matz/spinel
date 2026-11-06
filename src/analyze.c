@@ -43171,6 +43171,25 @@ static void mark_nullable_int_locals(Compiler *c) {
         free(mns);
       }
     }
+    /* ... and a Thread.new block's Integer or Float parameter takes the nil
+       its argument can be (infer_block_params typed it from the argument;
+       the body unboxes a nullable one with its nil, emit_fiber_new_here) */
+    NT_FOREACH_KIND(nt, NK_CallNode, id) {
+      const char *tn = nt_str(nt, id, "name");
+      int tr = nt_ref(nt, id, "receiver"), tb = nt_ref(nt, id, "block");
+      if (!tn || !sp_streq(tn, "new") || !recv_is_const(nt, tr, "Thread") || tb < 0 || nt_kind(nt, tb) != NK_BlockNode) continue;
+      int tp = nt_ref(nt, tb, "parameters"), ti = tp >= 0 ? nt_ref(nt, tp, "parameters") : -1;
+      int ta = nt_ref(nt, id, "arguments"), tac = 0, trn = 0;
+      const int *tav = ta >= 0 ? nt_arr(nt, ta, "arguments", &tac) : NULL;
+      const int *treq = ti >= 0 ? nt_arr(nt, ti, "requireds", &trn) : NULL;
+      Scope *tbs = comp_scope_of(c, tb);
+      for (int k = 0; k < trn && k < tac && tbs; k++) {
+        const char *pn = nt_str(nt, treq[k], "name");
+        LocalVar *p = pn ? scope_local(tbs, pn) : NULL;
+        if (!p || !p->is_block_param || (p->type != TY_INT && p->type != TY_FLOAT) || p->nullable_int) continue;
+        if (nullable_int_value(c, tav[k])) { p->nullable_int = 1; changed = 1; }
+      }
+    }
     /* ... and a `super` with arguments binds the method it reaches */
     NT_FOREACH_KIND(nt, NK_SuperNode, id) {
       Scope *ss = comp_scope_of(c, id);

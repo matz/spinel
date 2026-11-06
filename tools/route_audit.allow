@@ -313,3 +313,4 @@ src/analyze.c rms_builtin_receiver whether a fold's receiver class defines reduc
 src/codegen_call.c class_value_builtin_answers whether a reopened Class or Module defines a Module method's name, so the builtin answers a class value
 src/codegen_call.c root_reopen_defines_own whether a reopening of Object, Kernel or BasicObject defines a name itself, for respond_to?
 src/codegen_call.c bool_side_responds whether true's or false's class defines a name itself, for respond_to?
+src/analyze_pass.c sg_override_ret the parent's method of a singleton override's own name, whose answer the override's return must also hold

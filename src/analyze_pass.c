@@ -18539,6 +18539,46 @@ int infer_block_params(Compiler *c) {
     }
   }
 
+  /* Thread.new(w) { |wid| ... }: the block takes Thread.new's arguments,
+     the first for a lone parameter and one each for several. They cross the
+     runtime boundary boxed, as a Fiber's resume value does, and the body
+     unboxes an Integer or a Float parameter on entry (emit_fiber_new_here);
+     any other kind, an argument missing or spread, or a parameter of
+     another form leaves them all boxed, as --int-overflow=promote, which
+     boxes every Integer, does. A worker loop over its index
+     (`i = wid; while i < n; ...; i += nt`) ran on boxed values. The nil
+     an argument can be is the parameter's too (the nil marking pass). */
+  NT_FOREACH_KIND(nt, NK_CallNode, id) {
+    const char *cname = nt_str(nt, id, "name");
+    if (!cname || !sp_streq(cname, "new")) continue;
+    int recv = nt_ref(nt, id, "receiver"), blk = nt_ref(nt, id, "block");
+    if (!recv_is_const(nt, recv, "Thread") || blk < 0 || nt_kind(nt, blk) != NK_BlockNode) continue;
+    int pn = nt_ref(nt, blk, "parameters");
+    int inner = pn >= 0 ? nt_ref(nt, pn, "parameters") : -1;
+    if (inner < 0) continue;
+    int rnp = 0, other = 0; const int *reqs = nt_arr(nt, inner, "requireds", &rnp);
+    static const char *const more[] = { "optionals", "posts", "keywords", NULL };
+    for (int m = 0; more[m]; m++) { int mn = 0; nt_arr(nt, inner, more[m], &mn); other |= mn > 0; }
+    other |= nt_ref(nt, inner, "rest") >= 0 || nt_ref(nt, inner, "keyword_rest") >= 0 || nt_ref(nt, inner, "block") >= 0;
+    int ca = nt_ref(nt, id, "arguments"), argc = 0;
+    const int *argv = ca >= 0 ? nt_arr(nt, ca, "arguments", &argc) : NULL;
+    for (int a = 0; a < argc; a++)
+      if (nt_kind(nt, argv[a]) == NK_SplatNode || nt_kind(nt, argv[a]) == NK_KeywordHashNode ||
+          nt_kind(nt, argv[a]) == NK_BlockArgumentNode) other = 1;
+    if (rnp == 0 || argc < rnp || g_promote_mode) other = 1;
+    Scope *bs = comp_scope_of(c, blk);
+    for (int k = 0; k < rnp; k++) {
+      const char *p = nt_str(nt, reqs[k], "name");
+      if (!p || nt_kind(nt, reqs[k]) != NK_RequiredParameterNode) continue;
+      TyKind at = other ? TY_POLY : infer_type(c, argv[k]);
+      if (at == TY_UNKNOWN) continue;
+      if (at != TY_INT && at != TY_FLOAT) at = TY_POLY;
+      LocalVar *lv = scope_local_intern(bs, p); lv->is_block_param = 1;
+      TyKind merged = ty_unify(lv->type, at);
+      if (merged != lv->type) { lv_set_type(lv, merged); changed = 1; }
+    }
+  }
+
   /* Proc/lambda call-site param inference: `f.call(:a)` propagates arg types
      to the proc's params (e.g. `t` gets TY_SYMBOL instead of the default TY_INT).
      Proc#yield and Proc#=== are calls too: left out, `pr === "four"` handed

@@ -8788,6 +8788,19 @@ void emit_fiber_new(Compiler *c, int id, Buf *b, int as_gen, int size_node) {
   emit_fiber_new_here(c, id, b, as_gen, size_node);
   sb_shim_drop(c, id);
 }
+/* A Thread block's parameter typed from Thread.new's argument, an Integer or
+   a Float (infer_block_params): the runtime hands the value over boxed, and
+   the body takes it out on entry, checked, into a slot of its type. 0 for
+   any other parameter, which the caller binds boxed. */
+static int emit_thread_param_unbox(Compiler *c, LocalVar *lv, const char *bpn, const char *expr, Buf *pb) {
+  if (!lv || (lv->type != TY_INT && lv->type != TY_FLOAT)) return 0;
+  buf_puts(pb, "    ");
+  emit_slot_ctype(c, lv, pb);
+  buf_printf(pb, " lv_%s = sp_bm_arg_%s%s(%s);\n", bpn, lv->type == TY_INT ? "int" : "float",
+             slot_is_oint(lv) ? "_or_nil" : "", expr);
+  return 1;
+}
+
 static void emit_fiber_new_here(Compiler *c, int id, Buf *b, int as_gen, int size_node) {
   nd_stamp(nt_ref(c->nt, id, "block"), ND_BLOCK_PROC);   /* the body is a function of its own */
   const NodeTable *nt = c->nt;
@@ -8840,6 +8853,8 @@ static void emit_fiber_new_here(Compiler *c, int id, Buf *b, int as_gen, int siz
   int rest_bind = !as_gen && bp_rest != NULL;
   int body = nt_ref(nt, blk, "body");
   Scope *encl = comp_scope_of(c, id);
+  /* a Thread's parameters may be typed from its arguments (emit_thread_param_unbox) */
+  int is_thread = !as_gen && recv_is_const(nt, nt_ref(nt, id, "receiver"), "Thread");
 
   /* Collect locals written inside this fiber body (not in nested blocks). */
   NameSet fib_locals = {0};
@@ -9118,9 +9133,12 @@ static void emit_fiber_new_here(Compiler *c, int id, Buf *b, int as_gen, int siz
     for (int bi = 0; bi < nbp; bi++) {
       const char *bpn = rename_local(bp_names[bi]);
       /* one non-array value binds the first param only, as a proc does */
-      buf_printf(pb, "    sp_RbVal lv_%s = (_fb->resumed_value.tag == SP_TAG_OBJ && sp_poly_is_array_kind(_fb->resumed_value.cls_id))"
-                     " ? sp_poly_index_poly(_fb->resumed_value, sp_box_int(%d)) : %s;\n",
-                 bpn, bi, bi == 0 ? "_fb->resumed_value" : "sp_box_nil()");
+      char ex[256];
+      snprintf(ex, sizeof ex, "(_fb->resumed_value.tag == SP_TAG_OBJ && sp_poly_is_array_kind(_fb->resumed_value.cls_id))"
+                              " ? sp_poly_index_poly(_fb->resumed_value, sp_box_int(%d)) : %s",
+               bi, bi == 0 ? "_fb->resumed_value" : "sp_box_nil()");
+      if (is_thread && emit_thread_param_unbox(c, encl ? scope_local(encl, bp_names[bi]) : NULL, bpn, ex, pb)) continue;
+      buf_printf(pb, "    sp_RbVal lv_%s = %s;\n", bpn, ex);
       buf_printf(pb, "    SP_GC_ROOT_RBVAL(lv_%s);\n", bpn);
     }
   }
@@ -9146,15 +9164,25 @@ static void emit_fiber_new_here(Compiler *c, int id, Buf *b, int as_gen, int siz
        lowered to Fiber.yield directly (g_yielder_name) */
     if (as_gen) buf_printf(pb, "    sp_RbVal lv_%s = sp_box_obj((void *)_fb, SP_BUILTIN_YIELDER);\n", bpn);
     /* |a| takes the first of several values, as a proc does */
-    else buf_printf(pb, "    sp_RbVal lv_%s = _fb->pass_argc > 1 ? sp_poly_index_poly(_fb->resumed_value, sp_box_int(0)) : _fb->resumed_value;\n", bpn);
-    buf_printf(pb, "    SP_GC_ROOT_RBVAL(lv_%s);\n", bpn);
-    /* captured by a lifted proc: it lives in a cell, seeded from the slot */
-    { LocalVar *blv = encl ? scope_local(encl, bp0) : NULL;
-      if (blv && blv->is_cell && !nameset_has(&caps, bp0)) {
-        buf_printf(pb, "    sp_RbVal *_cell_%s = (sp_RbVal *)sp_gc_alloc(sizeof(sp_RbVal), NULL, sp_cell_scan_rbval);\n", bp0);
-        buf_printf(pb, "    SP_GC_ROOT(_cell_%s);\n", bp0);
-        buf_printf(pb, "    *_cell_%s = lv_%s;\n", bp0, bpn);
-      } }
+    LocalVar *blv = encl ? scope_local(encl, bp0) : NULL;
+    const char *first = "_fb->pass_argc > 1 ? sp_poly_index_poly(_fb->resumed_value, sp_box_int(0)) : _fb->resumed_value";
+    int typed = !as_gen && is_thread && emit_thread_param_unbox(c, blv, bpn, first, pb);
+    if (!as_gen && !typed) {
+      buf_printf(pb, "    sp_RbVal lv_%s = %s;\n", bpn, first);
+    }
+    if (!typed) buf_printf(pb, "    SP_GC_ROOT_RBVAL(lv_%s);\n", bpn);
+    /* captured by a lifted proc: it lives in a cell, seeded from the slot,
+       of the slot's own kind where the slot is typed */
+    if (blv && blv->is_cell && !nameset_has(&caps, bp0)) {
+      Buf ct; memset(&ct, 0, sizeof ct);
+      if (typed) emit_slot_ctype(c, blv, &ct);
+      const char *cty = typed ? ct.p : "sp_RbVal";
+      buf_printf(pb, "    %s *_cell_%s = (%s *)sp_gc_alloc(sizeof(%s), NULL, %s);\n", cty, bp0, cty, cty,
+                 typed ? "NULL" : "sp_cell_scan_rbval");
+      buf_printf(pb, "    SP_GC_ROOT(_cell_%s);\n", bp0);
+      buf_printf(pb, "    *_cell_%s = lv_%s;\n", bp0, bpn);
+      free(ct.p);
+    }
   }
 
   /* Declare fiber-body locals (those written in the body, not captured) */

@@ -4059,6 +4059,23 @@ static void emit_defined_seg_test(Compiler *c, int seg, Buf *b) {
 
 /* A defined?(...) expression (emit_expr_node's arms, in their order) */
 static int emit_defined_value(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *ty);
+/* Whether the program makes NM private anywhere (`private_constant :NM`):
+   defined? is nil for such a name read through a path */
+static int defined_path_privatized(Compiler *c, const char *nm) {
+  const NodeTable *nt = c->nt;
+  NT_FOREACH_KIND(nt, NK_CallNode, id) {
+    const char *cn = nt_str(nt, id, "name");
+    if (!cn || !sp_streq(cn, "private_constant")) continue;
+    int a = nt_ref(nt, id, "arguments"), an = 0;
+    const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &an) : NULL;
+    for (int i = 0; i < an; i++) {
+      NodeKind ak = nt_kind(nt, av[i]);
+      const char *s = ak == NK_SymbolNode ? nt_str(nt, av[i], "value") : ak == NK_StringNode ? nt_str(nt, av[i], "content") : NULL;
+      if (!s || sp_streq(s, nm)) return 1;   /* (a computed name may be NM) */
+    }
+  }
+  return 0;
+}
 /* (see the ConstantPathNode arm of emit_defined_expr) */
 static int defined_value_path(Compiler *c, int v, Buf *b) {
   const NodeTable *nt = c->nt;
@@ -4069,9 +4086,22 @@ static int defined_value_path(Compiler *c, int v, Buf *b) {
   if (pk == NK_ConstantReadNode || pk == NK_ConstantPathNode) return 0;
   Repr pr = repr_of(c, par);
   if (pr.as_ty != TY_CLASS && pr.as_ty != TY_POLY) return 0;
-  if (const_written_through_value(c, nm)) return 0;
+  if (const_written_through_value(c, nm) || defined_path_privatized(c, nm)) return 0;
   int *cands, ncands = comp_const_tail_cands(c, nm, &cands);
   int obj_k = comp_core_class(c, CORE_OBJECT), tk = ++g_tmp;
+  /* (a constant without a presence flag whose assignment can come after
+     this point: when it is set is not known here, so the name is left to
+     the path below, as before) */
+  const LocalVar *topc = const_value_path_top(c, nm);
+  for (int k = 0; k < c->nclasses; k++) {
+    if (k == obj_k) continue;
+    int ci2 = const_path_value_const(c, k, nm, cands, ncands);
+    if (ci2 >= 0 && !const_has_flag(&c->consts[ci2]) && !an_const_read_finds(c, v, c->consts[ci2].name)) {
+      free(cands);
+      return 0;
+    }
+  }
+  if (topc && !const_has_flag(topc) && !an_const_read_finds(c, v, topc->name)) { free(cands); return 0; }
   buf_printf(b, "({ sp_Class _t%d = ", tk);
   /* (a poly slot carries the class boxed, as the read unwraps it) */
   if (pr.kind == RK_BOXED) { buf_puts(b, "sp_unbox_class("); emit_boxed(c, par, b); buf_puts(b, ")"); }
@@ -4087,7 +4117,6 @@ static int defined_value_path(Compiler *c, int v, Buf *b) {
   }
   free(cands);
   /* (Object: a top-level constant or class) */
-  const LocalVar *topc = const_value_path_top(c, nm);
   int tck = comp_class_index(c, nm), topcls = tck >= 0 && c->classes[tck].enclosing_class < 0;
   if (topc || topcls || comp_is_wellknown_const(nm)) {
     int ob = builtin_class_id("Object");

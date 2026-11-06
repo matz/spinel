@@ -41,3 +41,9 @@ def q(m) = defined?(m::Q)
 p q(Base)
 Base.const_set(:Q, 1)
 p q(Base), q(Kid)
+
+# a private constant is nil through a path
+module Hid; Sec = 1; private_constant :Sec; Pub = 2; end
+def hid(m) = [defined?(m::Sec), defined?(m::Pub)]
+p hid(Hid)
+

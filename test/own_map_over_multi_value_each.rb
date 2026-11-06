@@ -31,7 +31,38 @@ class Entries
   end
 end
 
+class Base
+  def map
+    [yield(:base)]
+  end
+end
+
+# Enumerable below the class whose map it is comes first in the ancestors.
+class EnumerableSub < Base
+  include Enumerable
+
+  def each
+    yield 1, :one
+    yield 2, :two
+  end
+end
+
+# A class's own map comes before the Enumerable it includes.
+class OwnOverEnumerable
+  include Enumerable
+
+  def map
+    [yield(:own)]
+  end
+
+  def each
+    yield 1, :one
+  end
+end
+
 p Pair.new(1, 2).map { |x| x * 10 }
 p Pair.new(3, 4).flat_map { |x| [x, x] }
 p SubPair.new(5, 6).map { |x| x + 1 }
 p Entries.new.map { |x| x }
+p EnumerableSub.new.map { |x| x }
+p OwnOverEnumerable.new.map { |x| x }

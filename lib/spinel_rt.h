@@ -4569,8 +4569,19 @@ static SP_UNUSED sp_PolyArray *sp_range_minmax_poly(sp_Range r) {
    is kept as written (sp_range_new_fend), anything else converts as an
    Integer bound does. */
 static sp_int sp_poly_cmp(sp_RbVal a, sp_RbVal b, sp_bool *comparable);
+static SP_UNUSED void sp_range_poly_check(sp_RbVal lo, sp_RbVal hi) {
+  sp_bool ok = TRUE;
+  if (lo.tag != SP_TAG_NIL && hi.tag != SP_TAG_NIL) sp_poly_cmp(lo, hi, &ok);
+  if (!ok) sp_raise_cls("ArgumentError", "bad value for range");
+}
 static SP_UNUSED sp_bool sp_range_poly_cover(sp_RbVal lo, sp_RbVal hi, sp_int excl, sp_RbVal x) {
   sp_bool ok = TRUE;
+  /* (not handed to sp_poly_cmp as it is: a Complex reads there as no number, where Ruby compares a real one and refuses the rest) */
+  if (x.tag == SP_TAG_OBJ && x.cls_id == SP_BUILTIN_COMPLEX && x.v.p) {
+    sp_Complex *z = (sp_Complex *)x.v.p;
+    if (z->im != 0) return FALSE;
+    x = sp_box_float(z->re);
+  }
   if (lo.tag != SP_TAG_NIL) { sp_int c = sp_poly_cmp(lo, x, &ok); if (!ok || c > 0) return FALSE; }
   if (hi.tag == SP_TAG_NIL) return TRUE;
   sp_int c = sp_poly_cmp(x, hi, &ok);

@@ -20291,6 +20291,17 @@ static void hla_reset(void) {
   for (int i = 0; i < hla_hcap; i++) free(hla_slot[i].name), hla_slot[i].name = NULL;
   hla_used = 0; hla_pn = 1;
 }
+/* Room in the pool for one more entry. The count slot of a new list takes
+   one too: reserved past a full pool, it sat one past the end, and the
+   pushes after it, testing for a full pool by equality, never grew it --
+   the arguments were written beyond the allocation (AddressSanitizer on a
+   Rails application). */
+static void hla_pool_room(void) {
+  if (hla_pn < hla_pcap) return;
+  hla_pcap *= 2;
+  hla_pool = realloc(hla_pool, sizeof(int) * (size_t)hla_pcap);
+  if (!hla_pool) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+}
 static int hla_args(Compiler *c, const char *name, int pidx) {
   const NodeTable *nt = c->nt;
   if (2 * (hla_used + 1) > hla_hcap) {
@@ -20314,6 +20325,7 @@ static int hla_args(Compiler *c, const char *name, int pidx) {
     hla_pool = malloc(sizeof(int) * (size_t)hla_pcap);
     if (!hla_pool) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   }
+  hla_pool_room();
   int off = hla_pn++, n = 0;
   for (int id = an_calls_named_first(c, name); id >= 0; id = an_calls_named_next(id)) {
     if (nt_kind(nt, id) != NK_CallNode) continue;
@@ -20322,11 +20334,7 @@ static int hla_args(Compiler *c, const char *name, int pidx) {
     int ca = nt_ref(nt, id, "arguments"); int cc = 0;
     const int *cv = ca >= 0 ? nt_arr(nt, ca, "arguments", &cc) : NULL;
     if (!cv || pidx >= cc) continue;
-    if (hla_pn == hla_pcap) {
-      hla_pcap *= 2;
-      hla_pool = realloc(hla_pool, sizeof(int) * (size_t)hla_pcap);
-      if (!hla_pool) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-    }
+    hla_pool_room();
     hla_pool[hla_pn++] = cv[pidx]; n++;
   }
   hla_pool[off] = n;

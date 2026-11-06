@@ -1,8 +1,10 @@
 # A loop that holds a typed Array's header stores in place only while the
 # array is not frozen: a store into a frozen Integer or Float Array raises
-# FrozenError, whether the array was frozen before the loop or by a call in
-# it, through each cached store form -- a plain store, a value that can be
-# nil, and an op-assign of a Float local.
+# FrozenError through each cached store form -- a plain store, a value that
+# can be nil, and an op-assign of a Float local. A loop that freezes the
+# array itself (freeze_midway) holds no header: freeze is a call the cache
+# does not admit (hc_call_ok), so no cached loop sees an array frozen under
+# it; infer-test checks both.
 def store_ints(a, n)
   i = 0
   while i < n

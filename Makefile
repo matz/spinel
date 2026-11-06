@@ -5050,8 +5050,13 @@ infer-test: $(SPINEL) $(SP_RT_LIB)
 	grep -q 'sp_PolyArray \* iv_seed_w;' "$$tmp/and.c" || { echo "infer-test: FAIL (an ivar whose alias was pushed another kind kept its typed Array)"; ok=0; }; \
 	grep -q 'sp_IntArray \* iv_kept_r;' "$$tmp/and.c" && grep -q 'sp_IntArray \* iv_kept_m;' "$$tmp/and.c" && grep -q 'sp_IntArray \* lv_kept_a = NULL;' "$$tmp/and.c" || { echo "infer-test: FAIL (an Array read out of a reader, a Struct member or an element and pushed its own kind stayed boxed)"; ok=0; }; \
 	$(SPINEL) test/hc_frozen_store.rb -c --no-line-map -o "$$tmp/hfs.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (hc_frozen_store: -c)"; ok=0; }; \
-	grep -q '< (unsigned long long)_hcw[0-9]*_[0-9]*)) _hcd' "$$tmp/hfs.c" && grep -q '< (unsigned long long)_hcwn[0-9]*_[0-9]*)) {' "$$tmp/hfs.c" && \
-	  ! grep -qE '_hcwn?[0-9]+_[0-9]+ &&' "$$tmp/hfs.c" || { echo "infer-test: FAIL (a cached array store tested a writable flag beside its bound instead of its write length)"; ok=0; }; \
+	for fn in store_ints store_floats; do \
+	  awk "/^[a-z].* sp_$${fn}\\(.*\\{\$$/,/^}/" "$$tmp/hfs.c" | grep -qE 'SP_LIKELY\(\(unsigned long long\)_t[0-9]+ < \(unsigned long long\)_hcw[0-9_]+\)\) _hcd' || { echo "infer-test: FAIL ($$fn: a cached store did not test its index against the write length)"; ok=0; }; \
+	done; \
+	awk '/^[a-z].* sp_store_maybe\(.*\{$$/,/^}/' "$$tmp/hfs.c" | grep -qE 'SP_LIKELY\(!_t[0-9]+\.nil && \(unsigned long long\)_t[0-9]+ < \(unsigned long long\)_hcw[0-9_]+\)\)' || { echo "infer-test: FAIL (store_maybe: a cached store of a value that can be nil did not test the write length)"; ok=0; }; \
+	awk '/^[a-z].* sp_add_local\(.*\{$$/,/^}/' "$$tmp/hfs.c" | grep -qE 'SP_LIKELY\(\(unsigned long long\)_t[0-9]+ < \(unsigned long long\)_hcwn[0-9_]+\)\) \{' || { echo "infer-test: FAIL (add_local: a guarded op-assign fold did not test _hcwn)"; ok=0; }; \
+	! awk '/^[a-z].* sp_freeze_midway\(.*\{$$/,/^}/' "$$tmp/hfs.c" | grep -q '_SP_HCR' || { echo "infer-test: FAIL (freeze_midway: a loop that calls freeze kept a cached header)"; ok=0; }; \
+	! grep -qE '_hcwn?[0-9]+_[0-9]+ &&' "$$tmp/hfs.c" || { echo "infer-test: FAIL (a cached array store tested a writable flag beside its bound instead of its write length)"; ok=0; }; \
 	$(SPINEL) test/infer/index_op_write_int_operand_float_elem.rb -c --no-line-map -o "$$tmp/iow.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (index_op_write_int_operand_float_elem: -c)"; ok=0; }; \
 	grep -q 'sp_FloatArray \* iv_acc;' "$$tmp/iow.c" && grep -q 'sp_FloatArray \* lv_acc = ' "$$tmp/iow.c" || { echo "infer-test: FAIL (a Float Array written a[i] op= <Integer> widened to a boxed PolyArray)"; ok=0; }; \
 	grep -q 'sp_PolyArray \* lv_ia = ' "$$tmp/iow.c" || { echo "infer-test: FAIL (an Integer Array written a[i] /= <Float> must widen)"; ok=0; }; \

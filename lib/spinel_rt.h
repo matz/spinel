@@ -23345,7 +23345,11 @@ static sp_StrPolyHash *sp_StrPolyHash_from_poly_hash(sp_PolyPolyHash *src) {
 static sp_PolyArray *sp_lit_build_array(const sp_RbVal *t, sp_int *at, sp_int n);
 static sp_RbVal sp_lit_build(const sp_RbVal *t, sp_int *at) {
   sp_RbVal v = t[(*at)++];
+#ifdef SP_ONE_STRING
   if (v.tag == SP_TAG_STR) return SP_STR_BOX((char *)v.v.s);
+#else
+  if (v.tag == SP_TAG_STR) return sp_box_str(v.v.s);
+#endif
   if (v.tag == SP_TAG_OBJ) return sp_box_nullable_obj((void *)sp_lit_build_array(t, at, v.v.i), SP_BUILTIN_POLY_ARRAY);
   return v;
 }

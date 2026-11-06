@@ -15180,13 +15180,27 @@ static int bi_receivers_all_answer(const char *cls, const char *nm) {
 /* does the program define nm at the top level, or in a body of Object or
    Kernel? CRuby's lookup reaches such a def after the receiver's class and
    the mixed-in module, ahead of Object's and Kernel's builtin method */
+static int def_at_top_level(const NodeTable *nt, int n0, int def);
 static int bi_root_defines(const NodeTable *nt, const char *nm) {
-  for (int id = 0; id < nt->count; id++)
+  /* one answer per name for the node table (the program's defs are all
+     there before the copies are made) */
+  static const NodeTable *cache_nt = NULL;
+  static char *cache_name[64]; static int cache_ans[64], cache_n = 0;
+  if (cache_nt != nt) {
+    for (int i = 0; i < cache_n; i++) free(cache_name[i]);
+    cache_n = 0; cache_nt = nt;
+  }
+  for (int i = 0; i < cache_n; i++) if (sp_streq(cache_name[i], nm)) return cache_ans[i];
+  int o = 0;
+  for (int id = 0; id < nt->count && !o; id++)
     if (nt_kind(nt, id) == NK_DefNode && nt_ref(nt, id, "receiver") < 0 && nt_str(nt, id, "name") &&
-        sp_streq(nt_str(nt, id, "name"), nm) && fwd_lex_parent(nt, id) < 0) return 1;
-  BiSeen seen = { NULL, 0 };
-  int o = bi_body_defines(nt, "", "Object", nm, &seen) || bi_body_defines(nt, "", "Kernel", nm, &seen);
-  bi_seen_free(&seen);
+        sp_streq(nt_str(nt, id, "name"), nm) && def_at_top_level(nt, nt->count, id)) o = 1;
+  if (!o) {
+    BiSeen seen = { NULL, 0 };
+    o = bi_body_defines(nt, "", "Object", nm, &seen) || bi_body_defines(nt, "", "Kernel", nm, &seen);
+    bi_seen_free(&seen);
+  }
+  if (cache_n < 64 && (cache_name[cache_n] = strdup(nm))) cache_ans[cache_n++] = o;
   return o;
 }
 static int bi_keeps_receiverless(const NodeTable *nt, const char *cls, int own, const char *nm) {
@@ -15263,22 +15277,27 @@ static int program_defines_name_off_class(const NodeTable *nt, int n0, const cha
    and own as bi_keeps_receiverless takes them */
 static void bi_self_to_local(NodeTable *nt, int lo, int hi, const char *cls, int own) {
   /* the block of a call that runs it with another self (`7.instance_exec
-     { inspect }`) ends at rebind_hi: a public Object method there stays as
-     it was (the nodes are pre-order, so a block's subtree is one range) */
+     { inspect }`): a public Object method there stays as it was. The nodes
+     are pre-order, so a block's subtree is one range; a block passed as a
+     value (`instance_exec(&pr)`) may be any proc of the body, so then every
+     such call stays. */
   static const char *const rebinds[] = { "instance_eval", "instance_exec", "class_eval", "class_exec",
                                          "module_eval", "module_exec", "define_method", NULL };
-  int rebind_hi = -1;
+  unsigned char *rebound = own && hi >= lo ? (unsigned char *)calloc((size_t)(hi - lo + 1), 1) : NULL;
+  int keep_all = 0;
+  for (int id = lo; rebound && id <= hi; id++) {
+    if (nt_kind(nt, id) != NK_CallNode || nt_ref(nt, id, "block") < 0 || !nt_str(nt, id, "name")) continue;
+    const char *cn = nt_str(nt, id, "name");
+    int k = 0;
+    while (rebinds[k] && !sp_streq(cn, rebinds[k])) k++;
+    if (!rebinds[k]) continue;
+    int blk = nt_ref(nt, id, "block");
+    if (nt_kind(nt, blk) != NK_BlockNode) { keep_all = 1; break; }
+    int bhi = fwd_subtree_max(nt, blk);
+    for (int j = blk; j <= bhi && j <= hi; j++) if (j >= lo) rebound[j - lo] = 1;
+  }
   for (int id = lo; id <= hi; id++) {
     NodeKind kind = nt_kind(nt, id);
-    if (kind == NK_CallNode && nt_ref(nt, id, "block") >= 0 && nt_str(nt, id, "name")) {
-      const char *cn = nt_str(nt, id, "name");
-      for (int k = 0; rebinds[k]; k++)
-        if (sp_streq(cn, rebinds[k])) {
-          int bhi = fwd_subtree_max(nt, nt_ref(nt, id, "block"));
-          if (bhi > rebind_hi) rebind_hi = bhi;
-          break;
-        }
-    }
     if (kind == NK_SelfNode) {
       nt_node_set_type(nt, id, "LocalVariableReadNode");
       nt_node_set_str(nt, id, "name", "__self");
@@ -15287,13 +15306,14 @@ static void bi_self_to_local(NodeTable *nt, int lo, int hi, const char *cls, int
     else if (kind == NK_CallNode && nt_ref(nt, id, "receiver") < 0) {
       const char *nm = nt_str(nt, id, "name");
       if (!nm || bi_keeps_receiverless(nt, cls, own, nm)) continue;
-      if (id <= rebind_hi && object_public_method_name(nm)) continue;
-      int rd = nt_new_node(nt, "LocalVariableReadNode"); if (rd < 0) return;
+      if ((keep_all || (rebound && rebound[id - lo])) && object_public_method_name(nm)) continue;
+      int rd = nt_new_node(nt, "LocalVariableReadNode"); if (rd < 0) break;
       nt_node_set_str(nt, rd, "name", "__self");
       nt_node_set_int(nt, rd, "depth", 0);
       nt_set_self_receiver(nt, id, rd);
     }
   }
+  free(rebound);
 }
 
 /* A method a program's own `module Enumerable` reopening adds is CRuby's

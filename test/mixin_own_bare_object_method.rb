@@ -42,3 +42,4 @@ module Comparable
   def it = itself
 end
 p 3.it, 2.5.it
+

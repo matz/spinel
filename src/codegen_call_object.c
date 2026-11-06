@@ -1080,7 +1080,9 @@ int emit_call_instance_eval_arms(Compiler *c, int id, Buf *b, const NodeTable *n
         TyKind sv_iet = g_ie_next_ty;
         g_ie_res_poly = (scalar_res && body_ty == TY_POLY);
         g_ie_next_oint = res_oint;   /* a `next v` stores the slot's form */
-        if (res_oint) g_ie_next_ty = body_ty;   /* (`next nil` too, which it reads to spell its nil) */
+        /* (`next nil` too, which it reads to spell its nil; a splice nested
+           in one whose slot is an oint does not take that slot's type) */
+        g_ie_next_ty = res_oint ? body_ty : TY_UNKNOWN;
         char bvbuf[32];
         int sv_lexc2 = g_loop_exc_base, sv_lexc2_rb = g_loop_rescue_base, sv_lens2 = g_loop_ensure_base;
         if (ie_bn_wrap) {

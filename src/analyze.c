@@ -39894,6 +39894,8 @@ int nullable_int_value(Compiler *c, int v) {
         int sv_ybn = yield_block_tails_next; yield_block_tails_next = 1;
         int n = yield_block_tails(c, (int)(fs - c->scopes), tails, (int)(sizeof tails / sizeof tails[0]));
         yield_block_tails_next = sv_ybn;
+        /* (a full buffer may have left a caller's block out: its nil is kept) */
+        if (n >= (int)(sizeof tails / sizeof tails[0])) return 1;
         for (int i = 0; i < n; i++) if (nt_kind(nt, tails[i]) == NK_NilNode || nullable_int_value(c, tails[i])) return 1;
       }
     }

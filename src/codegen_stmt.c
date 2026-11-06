@@ -6918,6 +6918,12 @@ void emit_cond(Compiler *c, int id, Buf *b) {
       (call_on_builtin_class_missing(c, id) || missing_call_raised(c, id) >= 0)) {
     buf_puts(b, "(("); emit_expr_for_effect(c, id, b); buf_puts(b, "), 0)"); return;
   }
+  /* ...and a call to a method whose every path raises (a stub the program
+     keeps for a call it does not expect to run, Rails' `template_exists?`
+     behind `super ||`): the test is never read either */
+  if ((t == TY_UNKNOWN || t == TY_VOID) && call_never_returns(c, id)) {
+    buf_puts(b, "(("); emit_expr_for_effect(c, id, b); buf_puts(b, "), 0)"); return;
+  }
   if (t != TY_BOOL) unsupported(c, id, "condition (non-bool)");
   emit_expr(c, id, b);
 }

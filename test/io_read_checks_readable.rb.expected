@@ -17,7 +17,7 @@ w+ reads: [120, "yz"]
 an open socket reads: "more"
 socket read: IOError: not opened for reading
 socket readpartial: IOError: not opened for reading
-socket read_nonblock: "peer"
+socket read_nonblock: EOFError: end of file reached
 socket getc: IOError: not opened for reading
-socket recv: " byt"
+socket recv: nil
 socket readpartial into a buffer: IOError: not opened for reading

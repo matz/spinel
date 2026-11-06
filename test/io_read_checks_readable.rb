@@ -1,7 +1,9 @@
 # Every read on a handle that does not read raises "not opened for
 # reading", as gets already did: a file opened for appending, and a socket
-# after close_read. read_nonblock and recv still hand over what arrived
-# before the read side was shut, as CRuby does, and handles that read still do.
+# after close_read. read_nonblock and recv go to the descriptor instead and
+# meet the end of the stream there (the socket is drained first: Linux still
+# hands over bytes that arrived before the read side was shut, macOS drops
+# them), and handles that read still do.
 require "socket"
 require "tmpdir"
 
@@ -52,6 +54,7 @@ server = TCPServer.new("127.0.0.1", 0)
 c = TCPSocket.new("127.0.0.1", server.addr[1])
 s = server.accept
 c.write("peer bytes\n")
+s.readpartial(11)
 c2 = TCPSocket.new("127.0.0.1", server.addr[1])
 s2 = server.accept
 c2.write("more")

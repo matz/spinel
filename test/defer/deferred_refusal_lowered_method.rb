@@ -7,7 +7,7 @@
 # spinel: defer-refusals: 1:3 30 0 1 2
 class Walk
   def step(limit, by = 1)
-    return "é".unicode_normalize unless block_given?
+    return proc { "é" }.ruby2_keywords unless block_given?
     return step(limit) { |i| yield i } if by.nil?
     i = 0
     while i < limit

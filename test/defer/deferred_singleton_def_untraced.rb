@@ -17,5 +17,5 @@ rescue NotImplementedError => e
   puts e.message.include?("cannot trace to one `new`")
 end
 puts "after"
-"a".unicode_normalize(:nfd)
+proc { "a" }.ruby2_keywords
 puts "not reached"

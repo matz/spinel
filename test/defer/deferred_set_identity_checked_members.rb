@@ -24,5 +24,5 @@ puts seen.include?(pick([a, "lit"], 1))
 seen.delete(pick(list, 0))
 puts seen.include?(a)
 puts seen.size
-"a".unicode_normalize(:nfd)
+proc { "a" }.ruby2_keywords
 puts "not reached"

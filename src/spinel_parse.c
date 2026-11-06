@@ -2671,6 +2671,19 @@ static int source_references_io_buffer(const char *src) {
   return sp_src_code_any(src, sp_iob_hit);
 }
 
+/* Whether `src` calls String#unicode_normalize, #unicode_normalize! or
+   #unicode_normalized? in CODE, or names one as a Symbol (`send`,
+   `method`); `unicode_normalize` starts all three (the skipping of
+   sp_src_code_any). Drives the unicode_normalize splice below: CRuby
+   answers them without a require, loading its tables on first use. */
+static int sp_unorm_hit(const char *src, const char *p) {
+  (void)src;
+  return (p[0] == '.' || p[0] == ':') && strncmp(p + 1, "unicode_normalize", 17) == 0;
+}
+static int source_calls_unicode_normalize(const char *src) {
+  return sp_src_code_any(src, sp_unorm_hit);
+}
+
 /* Whether `src` calls Time.parse or Time.strptime in CODE (the skipping of
    sp_src_code_any). `Time` starts a word that no `.` or `::` qualifies, so
    DateTime.parse and Foo::Time.parse do not count, though a top-level
@@ -8618,7 +8631,7 @@ static NodeTable *sp_parse_emit(const char *source_file, const char *argv0) {
   source = sp_splice_system_spawn(source, argv0, &fsl, &fsl_n);
   source = sp_splice_io_popen(source, argv0, &fsl, &fsl_n);
   source = sp_splice_foreach_first(source, argv0, &fsl, &fsl_n);
-  /* CRuby provides Set (3.2+) and IO::Buffer without a require wherever
+  /* CRuby provides Set (3.2+), IO::Buffer and String#unicode_normalize without a require wherever
      they are used, in a required file as well (activesupport's
      notifications/fanout.rb; #6740 for IO::Buffer). Ask over the resolved
      program, the way the builtins splice below does, and splice the binding
@@ -8632,6 +8645,8 @@ static NodeTable *sp_parse_emit(const char *source_file, const char *argv0) {
     source = sp_splice_boot_package(source, argv0, "set", &fsl, &fsl_n);
   if (!sp_feature_required("io/buffer") && source_references_io_buffer(source))
     source = sp_splice_boot_package(source, argv0, "io/buffer", &fsl, &fsl_n);
+  if (!sp_feature_required("unicode_normalize") && source_calls_unicode_normalize(source))
+    source = sp_splice_boot_package(source, argv0, "unicode_normalize", &fsl, &fsl_n);
   /* CRuby's time.rb (packages/time) for a program that requires "time" and
      calls Time.parse or Time.strptime; any other program keeps the
      runtime's C (#9946). */

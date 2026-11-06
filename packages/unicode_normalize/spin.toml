@@ -1,0 +1,5 @@
+[package]
+name = "unicode_normalize"
+boot = "unicode_normalize"   # CRuby's String#unicode_normalize needs no require (tools/gen_package_facts.rb)
+
+# Pre-installed spin package: ships with the compiler, versioned with it.

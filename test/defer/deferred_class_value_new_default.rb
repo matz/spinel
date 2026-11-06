@@ -10,7 +10,7 @@ class Plain
 end
 
 class Wide
-  def initialize(width: "a".unicode_normalize(:nfc)) = @width = width
+  def initialize(width: proc { "a" }.ruby2_keywords) = @width = width
 end
 
 class Holder
@@ -29,5 +29,5 @@ rescue NotImplementedError => e
   puts e.class
 end
 puts "done"
-"a".unicode_normalize(:nfd)
+proc { "a" }.ruby2_keywords
 puts "not reached"

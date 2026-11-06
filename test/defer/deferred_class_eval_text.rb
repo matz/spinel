@@ -27,5 +27,5 @@ rescue NotImplementedError => e
   puts e.message.include?("module_eval")
 end
 puts "after"
-"a".unicode_normalize(:nfd)
+proc { "a" }.ruby2_keywords
 puts "not reached"

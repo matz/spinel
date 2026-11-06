@@ -3346,21 +3346,6 @@ static const char *feature_limit(Compiler *c, int id, int *stop, int *lx, char *
       "Hash.ruby2_keywords_hash? is not supported: it reads the Ruby 2.x-to-3.0 "
       "keyword-transition flag, which spinel's hashes do not carry (see "
       "docs/limitations.md)" },
-    { "unicode_normalize",
-      "String#unicode_normalize is not supported: Unicode normalization requires "
-      "shipping the Unicode decomposition/composition tables, which spinel "
-      "deliberately does not carry -- the same limit as String#grapheme_clusters "
-      "(see docs/limitations.md)" },
-    { "unicode_normalize!",
-      "String#unicode_normalize! is not supported: Unicode normalization requires "
-      "shipping the Unicode decomposition/composition tables, which spinel "
-      "deliberately does not carry -- the same limit as String#grapheme_clusters "
-      "(see docs/limitations.md)" },
-    { "unicode_normalized?",
-      "String#unicode_normalized? is not supported: answering it requires the "
-      "Unicode decomposition/composition tables, which spinel deliberately does "
-      "not carry -- the same limit as String#grapheme_clusters "
-      "(see docs/limitations.md)" },
     { "singleton_class",
       "Object#singleton_class is not supported by AOT compilation: it is the gateway "
       "to a per-object method table, which direct C calls have no room for -- the same "

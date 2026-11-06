@@ -6,7 +6,7 @@
 # spinel: defer-refusals: 2:start a b true a b NotImplementedError after
 class Pool
   def start
-    Thread.new { "a".unicode_normalize(:nfc) }
+    Thread.new { proc { "a" }.ruby2_keywords }
   end
 end
 
@@ -30,5 +30,5 @@ rescue NotImplementedError => err
   puts err.class
 end
 puts "after"
-"a".unicode_normalize(:nfd)
+proc { "a" }.ruby2_keywords
 puts "not reached"

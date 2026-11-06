@@ -1,10 +1,10 @@
-# spinel: reject-subclass: String#unicode_normalize is not supported
-# CRuby's String has unicode_normalize, so method_defined? is true and the
+# spinel: reject-subclass: Proc#ruby2_keywords is not supported
+# CRuby's Proc has ruby2_keywords, so method_defined? is true and the
 # polyfill's def does not run: the call reaches the builtin, which Spinel
 # does not implement, and is refused rather than running the polyfill.
-class String
-  unless method_defined?(:unicode_normalize)
-    def unicode_normalize(_form = :nfc) = self
+class Proc
+  unless method_defined?(:ruby2_keywords)
+    def ruby2_keywords = self
   end
 end
-p "x".unicode_normalize
+p proc {}.ruby2_keywords.class

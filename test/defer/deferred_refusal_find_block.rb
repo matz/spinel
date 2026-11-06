@@ -3,7 +3,7 @@
 # block runs; the C keeps a value of the call's type there, as void is not
 # one.
 # spinel: defer-refusals: 2:a NotImplementedError done
-def pick(xs) = xs.find { |s| s.unicode_normalize(:nfc) == "b" }
+def pick(xs) = xs.find { |s| proc { s }.ruby2_keywords == "b" }
 
 puts "a"
 begin
@@ -12,5 +12,5 @@ rescue NotImplementedError => e
   puts e.class
 end
 puts "done"
-"a".unicode_normalize(:nfd)
+proc { "a" }.ruby2_keywords
 puts "not reached"

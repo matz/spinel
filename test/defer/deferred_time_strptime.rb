@@ -12,5 +12,5 @@ rescue NotImplementedError => e
   puts e.message.include?("Time.strptime is not supported")
 end
 puts "after"
-"a".unicode_normalize(:nfd)
+proc { "a" }.ruby2_keywords
 puts "not reached"

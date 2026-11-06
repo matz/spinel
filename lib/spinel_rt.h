@@ -10569,9 +10569,17 @@ static const char *sp_PolyArray_join(sp_PolyArray *a, const char *sep) {
       sp_String_append_bin(s, sep);   /* byte-exact: a separator may hold a NUL */
     }
     sp_RbVal e = a->data[i];
+    /* A program object converts the way CRuby's join converts it: its #to_str
+       first, then its #to_ary (joined like a nested array; a nil answer falls
+       to #to_s, any other non-Array is the TypeError), and #to_s last. */
+    const char *part = NULL;
+    if (SP_UNLIKELY(sp_poly_is_user_obj(e) && e.v.p)) {
+      part = sp_poly_check_str(e);
+      if (!part) e = sp_poly_ary_operand(e);
+    }
     /* a nested array joins recursively with the same separator (CRuby) */
-    const char *part = (e.tag == SP_TAG_OBJ && sp_poly_is_array_kind(e.cls_id)) ? sp_poly_join(e, sep)
-                                                                                : sp_poly_to_s(e);
+    if (!part) part = (e.tag == SP_TAG_OBJ && sp_poly_is_array_kind(e.cls_id)) ? sp_poly_join(e, sep)
+                                                                              : sp_poly_to_s(e);
     SP_GC_ROOT_STR(part);
     st = sp_str_enc_step(st, s->data, (size_t)s->len, part, sp_str_byte_len(part), sp_str_is_binary(part));
     sp_String_append_bin(s, part);

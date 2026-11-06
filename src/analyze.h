@@ -634,6 +634,9 @@ int elab_const_slot_present_at(Compiler *c, const char *name, LoadPoint p);
 /* The first plain body assignment of flat name, or -1; *early says a
    non-plain write may precede its completion. */
 int elab_const_first_write(Compiler *c, const char *name, int *early);
+/* Whether the constant write node `write` assigns is bound once: the only
+   write of its name, and no remove_const may take it away (lr_const_final). */
+int elab_const_write_final(Compiler *c, int write);
 /* what constant `name` of class owner's own (-1: Object's) was before p,
    as `class X` asks it of its owner: no lexical scope's, no ancestor's;
    *out the write or header found, on ELAB_UNKNOWN the last one that may

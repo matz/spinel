@@ -43,7 +43,14 @@
    method_added ...) has its definitions counted as code of the program's
    too, and one that reopens a builtin class has the builtin operators
    counted so. The pass also names, for each flagged bare read, the class or
-   module it is written in (`const_cref`), as the error shows it. */
+   module it is written in (`const_cref`), as the error shows it.
+
+   A constant bound once to an Integer or Float literal (its only write, no
+   remove_const: elab_const_write_final) reads as that literal
+   (LocalVar.const_lit): a read in a loop that stores through a pointer
+   loads the slot again on every pass otherwise, since the C compiler cannot
+   tell the store from one to the slot. Its presence flag, if any, is still
+   tested. */
 
 #include "analyze_internal.h"
 #include "builtin_names.h"
@@ -330,6 +337,16 @@ int an_const_read_finds(Compiler *c, int id, const char *name) {
 
 static int const_class_presence(Compiler *c, int id, int program);
 
+/* 1 + the Integer or Float literal write node `first` assigns when it is
+   its constant's only write (LocalVar.const_lit), else 0 */
+static int const_literal_write(Compiler *c, int first) {
+  const NodeTable *nt = c->nt;
+  if (first < 0 || nt_kind(nt, first) != NK_ConstantWriteNode) return 0;
+  int v = nt_ref(nt, first, "value");
+  NodeKind vk = v >= 0 ? nt_kind(nt, v) : NK_NONE;
+  return (vk == NK_IntegerNode || vk == NK_FloatNode) && elab_const_write_final(c, first) ? v + 1 : 0;
+}
+
 /* Mark the constants some assignment can follow a read of: LocalVar.const_early
    (see the header comment). */
 void an_const_presence(Compiler *c) {
@@ -363,6 +380,7 @@ void an_const_presence(Compiler *c) {
     int early, first = elab_const_first_write(c, c->consts[i].name, &early);
     first_settled[i] = first >= 0 && w.settled[first];
     if (early) c->consts[i].const_early = 1;
+    c->consts[i].const_lit = const_literal_write(c, first);
   }
   /* Every read and listing asks at its statement's point, including the
      defining statement of a body that may run later. */

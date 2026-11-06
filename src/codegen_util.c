@@ -4990,8 +4990,21 @@ int emit_const_recv_stmt_wrap(Compiler *c, int id, Buf *b, int indent, int tail)
    The text may be emitted again by a caller that repeats it (the holder's), so
    asking it for no receiver (own 0) leaves a variable receiver unevaluated and
    unnamed. */
+/* The literal a constant bound once reads as (LocalVar.const_lit), when it
+   is held as the slot is; -1 for none. */
+static int const_lit_read(Compiler *c, const LocalVar *lv) {
+  int lit = lv ? lv->const_lit - 1 : -1;
+  if (lit < 0) return -1;
+  Repr s = repr_of_slot(c, lv), l = repr_of(c, lit);
+  return s.kind == RK_SCALAR && l.kind == RK_SCALAR && !s.big && !l.big && s.as_ty == l.as_ty ? lit : -1;
+}
 void emit_const_slot_read(Compiler *c, int id, const LocalVar *lv, const char *key, int slot, int own, Buf *b) {
-  if (!const_has_flag(lv) && !an_const_read_effect(c, id).autoload) { buf_printf(b, "%scst_%s", slot ? "&" : "", key); return; }
+  int lit = slot ? -1 : const_lit_read(c, lv);
+  if (!const_has_flag(lv) && !an_const_read_effect(c, id).autoload) {
+    if (lit >= 0) emit_expr(c, lit, b);
+    else buf_printf(b, "%scst_%s", slot ? "&" : "", key);
+    return;
+  }
   int again = !own && const_recv_held(c, id) >= 0;
   if (again) {
     /* the name alone: the receiver is not this text's to run */
@@ -4999,6 +5012,12 @@ void emit_const_slot_read(Compiler *c, int id, const LocalVar *lv, const char *k
     buf_printf(b, "(cst_%s__set ? (void)0 : sp_raise_cls(\"NameError\", \"uninitialized constant %s\")), &cst_%s)",
                lv->name, key, key);
     buf_puts(b, slot ? "" : ")");
+    return;
+  }
+  if (lit >= 0) {
+    emit_const_read_open(c, id, lv, b);
+    emit_expr(c, lit, b);
+    emit_const_read_close(c, id, lv, b);
     return;
   }
   buf_puts(b, slot ? "" : "(*");

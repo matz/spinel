@@ -4577,6 +4577,14 @@ static SP_UNUSED void sp_range_bigint_bound_check(sp_RbVal v) {
   if (SP_UNLIKELY(v.tag == SP_TAG_BIGINT && !sp_bigint_fits_int((sp_Bigint *)v.v.p)))
     sp_raise_cls("NotImplementedError", "a Range with a Bignum bound decided at run time is not supported by spinel");
 }
+static sp_int sp_poly_cmp(sp_RbVal a, sp_RbVal b, sp_bool *comparable);
+static SP_UNUSED sp_bool sp_range_poly_cover(sp_RbVal lo, sp_RbVal hi, sp_int excl, sp_RbVal x) {
+  sp_bool ok = TRUE;
+  if (lo.tag != SP_TAG_NIL) { sp_int c = sp_poly_cmp(lo, x, &ok); if (!ok || c > 0) return FALSE; }
+  if (hi.tag == SP_TAG_NIL) return TRUE;
+  sp_int c = sp_poly_cmp(x, hi, &ok);
+  return ok && (excl ? c < 0 : c <= 0);
+}
 static SP_UNUSED sp_Range sp_range_new_pend_w(sp_oint f, sp_RbVal e, sp_int x, int walk) {
   sp_range_bigint_bound_check(e);
   e = sp_range_int_bound(sp_range_num_end(e), walk && sp_poly_is_rational(e));

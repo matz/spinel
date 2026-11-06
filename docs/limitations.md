@@ -915,7 +915,13 @@ x.clamp(..hi)       # works (one-sided)
 x.clamp(lo..)       # works
 rng = (lo..hi)      # compile error: a Range of Ver objects cannot be built
 rng = (0..2**70)    # compile error: a Bignum bound does not fit sp_int
+(0..2**70) === x    # works -- no Range is built
 ```
+
+A Range literal with a Bignum end, or with a boxed end that may hold one,
+asked `===`, `include?`, `member?` or `cover?` about one number, compares
+the ends and the number in place, as `cover?` does. Under `===` the value
+may be boxed too.
 
 A Range of Times (`t1..t2`, `since..`, `..till`) is a Range of its own: it
 keeps the two Times, and its ends, `cover?` / `include?` / `===` (a Time or

@@ -16306,7 +16306,9 @@ int user_cmp_needs_check(Compiler *c, int cid) {
      raises the Comparable ArgumentError instead of the inline `<op> 0` reading
      a non-int as an int (#2559). A pure Integer/Float `<=>` keeps the inline
      path (Float compares as a double correctly). */
-  return ret == TY_POLY || ret == TY_NIL;
+  /* a Bignum `<=>` (`(a - b) * 2**70`) is an sp_Bigint pointer: the inline
+     `<op> 0` compared the pointer, so its sign is read by the checked path */
+  return ret == TY_POLY || ret == TY_NIL || ret == TY_BIGINT;
 }
 
 /* A user object whose class defines a reader or method named `nm` shadows the

@@ -1222,7 +1222,7 @@ int emit_call_compare_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
           /* a Time subclass instance boxes as its Time, and the boxed
              comparison would read it as one, not ask its own <=> */
           if (comp_ary_is_time(c, cid4))
-            unsupported_feature(c, id, "Comparable operator on a Time subclass whose own #<=> may answer nil");
+            unsupported_feature(c, id, "Comparable operator on a Time subclass whose own #<=> may answer nil or a Bignum");
           int ta = hoist_boxed_rooted(c, recv), tb2 = hoist_boxed_rooted(c, argv[0]);
           buf_printf(b, "(sp_poly_cmp_ck(_t%d, _t%d) %s 0)", ta, tb2, name);
           return 1;

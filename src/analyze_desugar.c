@@ -17855,8 +17855,14 @@ static int bx_copy_self_free(Compiler *c, int copy) {
     case NK_SelfNode:
       ok = 0; break;
     case NK_CallNode: {
-      if (nt_ref(nt, id, "receiver") >= 0 || nt_int(nt, id, "bx_copy", -1) >= 0) break;
+      if (nt_ref(nt, id, "receiver") >= 0) break;
       const char *cn = nt_str(nt, id, "name");
+      /* another container method, unless a String or Symbol method of the
+         name answers first in CRuby (`to_s` in Comparable) */
+      if (nt_int(nt, id, "bx_copy", -1) >= 0) {
+        if (!cn || core_method_vis("String", cn, 0) > 0 || core_method_vis("Symbol", cn, 0) > 0) ok = 0;
+        break;
+      }
       int k = 0;
       while (cn && self_free[k] && !sp_streq(cn, self_free[k])) k++;
       if (!cn || !self_free[k]) ok = 0;

@@ -4059,6 +4059,46 @@ static void emit_defined_seg_test(Compiler *c, int seg, Buf *b) {
 
 /* A defined?(...) expression (emit_expr_node's arms, in their order) */
 static int emit_defined_value(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *ty);
+/* (see the ConstantPathNode arm of emit_defined_expr) */
+static int defined_value_path(Compiler *c, int v, Buf *b) {
+  const NodeTable *nt = c->nt;
+  int par = nt_ref(nt, v, "parent");
+  const char *nm = nt_str(nt, v, "name");
+  if (par < 0 || !nm) return 0;
+  NodeKind pk = nt_kind(nt, par);
+  if (pk == NK_ConstantReadNode || pk == NK_ConstantPathNode) return 0;
+  Repr pr = repr_of(c, par);
+  if (pr.as_ty != TY_CLASS && pr.as_ty != TY_POLY) return 0;
+  if (const_written_through_value(c, nm)) return 0;
+  int *cands, ncands = comp_const_tail_cands(c, nm, &cands);
+  int obj_k = comp_core_class(c, CORE_OBJECT), tk = ++g_tmp;
+  buf_printf(b, "({ sp_Class _t%d = ", tk);
+  /* (a poly slot carries the class boxed, as the read unwraps it) */
+  if (pr.kind == RK_BOXED) { buf_puts(b, "sp_unbox_class("); emit_boxed(c, par, b); buf_puts(b, ")"); }
+  else emit_expr(c, par, b);
+  buf_printf(b, "; const char *_t%d_r = NULL; switch (_t%d.cls_id) {", tk, tk);
+  for (int k = 0; k < c->nclasses; k++) {
+    if (k == obj_k) continue;
+    int ci2 = const_path_value_const(c, k, nm, cands, ncands);
+    if (ci2 >= 0 && const_has_flag(&c->consts[ci2]))
+      buf_printf(b, " case %d: if (cst_%s__set) _t%d_r = SPL(\"constant\"); break;", k, c->consts[ci2].name, tk);
+    else if (ci2 >= 0 || const_path_value_class(c, k, nm) >= 0)
+      buf_printf(b, " case %d: _t%d_r = SPL(\"constant\"); break;", k, tk);
+  }
+  free(cands);
+  /* (Object: a top-level constant or class) */
+  const LocalVar *topc = const_value_path_top(c, nm);
+  int tck = comp_class_index(c, nm), topcls = tck >= 0 && c->classes[tck].enclosing_class < 0;
+  if (topc || topcls || comp_is_wellknown_const(nm)) {
+    int ob = builtin_class_id("Object");
+    buf_printf(b, " case %d:", ob);
+    if (obj_k >= 0 && obj_k != ob) buf_printf(b, " case %d:", obj_k);
+    if (topc && const_has_flag(topc)) buf_printf(b, " if (cst_%s__set) _t%d_r = SPL(\"constant\"); break;", topc->name, tk);
+    else buf_printf(b, " _t%d_r = SPL(\"constant\"); break;", tk);
+  }
+  buf_printf(b, " default: break; } _t%d_r; })", tk);
+  return 1;
+}
 static int emit_defined_expr(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *ty) {
   int v = nt_kind(nt, id) == NK_DefinedNode ? nt_ref(nt, id, "value") : -1;
   int par = c->nautoloads && v >= 0 && nt_kind(nt, v) == NK_ConstantPathNode ? nt_ref(nt, v, "parent") : -1;
@@ -4205,6 +4245,11 @@ static int emit_defined_value(Compiler *c, int id, Buf *b, const NodeTable *nt, 
       buf_printf(b, "(sp_sock_const(\"%s\") >= 0 ? SPL(\"constant\") : NULL)", nt_str(nt, v, "name"));
       return 1;
     }
+    /* `defined?(m::Foo)` with m a class value: "constant" when m's own
+       chain holds Foo (a value constant or a nested class), as the read
+       finds it (const_path_value_const), Object's top-level ones only
+       for Object itself; nil for any other class */
+    else if (vk == NK_ConstantPathNode && defined_value_path(c, v, b)) return 1;
     else if (vk == NK_ConstantPathNode) {
       /* a fully-resolved qualified path answers "constant"; any unresolved
          segment leaves nil (the segment walk lives in the guard helpers). A

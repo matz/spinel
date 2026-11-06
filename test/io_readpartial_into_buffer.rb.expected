@@ -1,0 +1,13 @@
+fills the buffer: ["hello", 5, #<Encoding:BINARY (ASCII-8BIT)>]
+returns the buffer: true
+at most n: "aaaa"
+then the rest: "aaaaaaaaaaaaaaaa"
+a long read gets everything: 40000
+zero empties it: ""
+keeps its encoding: ["abc", #<Encoding:UTF-8>]
+frozen buffer: FrozenError: can't modify frozen String: "abc"
+end of stream: EOFError: end of file reached
+buffer after the end: ""
+a pipe: "pipe bytes"
+pipe end: EOFError: end of file reached
+pipe buffer after the end: ""

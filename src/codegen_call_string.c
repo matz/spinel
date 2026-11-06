@@ -1644,56 +1644,40 @@ int emit_op_poly_case_options(Compiler *c, const BopCtx *x, Buf *b) {
 }
 
 /* Boxed slice! arguments select the same overloads as typed arguments.
-   Keep the argument rooted and evaluate it once before re-entering the arms. */
-static int emit_string_slice_poly(Compiler *c, int id, int arg, Buf *b) {
+   Keep the argument rooted and evaluate it once before re-entering the arms.
+   With a second argument (`slice!(x, n)`, two) only a Regexp and an
+   Integer take one: any other value goes to the Integer arm, which raises
+   TypeError as CRuby does. */
+static int emit_string_slice_poly(Compiler *c, int id, int arg, int two, Buf *b) {
   if (repr_of(c, arg).kind != RK_BOXED) return 0;
   int ta = ++g_tmp, tr = ++g_tmp;
   buf_printf(b, "({ sp_RbVal _t%d = ", ta); emit_boxed(c, arg, b);
-  buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); _t%d = sp_poly_strbuf_deref(_t%d);"
-                " const char *_t%d; if (_t%d.tag == SP_TAG_STR) { _t%d = ",
-             ta, ta, ta, tr, ta, tr);
-  int bind = view_bind(arg, "_t%d.v.s", ta);
-  int v = view_push(c, arg, TY_STRING);
-  emit_array_call(c, id, b);
-  view_pop(c, v);
-  view_unbind(bind);
-  buf_printf(b, "; }\nelse if (_t%d.tag == SP_TAG_OBJ && _t%d.cls_id == SP_BUILTIN_REGEX) { _t%d = ", ta, ta, tr);
+  buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); _t%d = sp_poly_strbuf_deref(_t%d); const char *_t%d; ",
+             ta, ta, ta, tr);
+  int bind, v;
+  if (!two) {
+    buf_printf(b, "if (_t%d.tag == SP_TAG_STR) { _t%d = ", ta, tr);
+    bind = view_bind(arg, "_t%d.v.s", ta);
+    v = view_push(c, arg, TY_STRING);
+    emit_array_call(c, id, b);
+    view_pop(c, v);
+    view_unbind(bind);
+    buf_puts(b, "; }\nelse ");
+  }
+  buf_printf(b, "if (_t%d.tag == SP_TAG_OBJ && _t%d.cls_id == SP_BUILTIN_REGEX) { _t%d = ", ta, ta, tr);
   bind = view_bind(arg, "((mrb_regexp_pattern *)_t%d.v.p)", ta);
   v = view_push(c, arg, TY_REGEX);
   emit_array_call(c, id, b);
   view_pop(c, v);
   view_unbind(bind);
-  buf_printf(b, "; }\nelse if (_t%d.tag == SP_TAG_OBJ && _t%d.cls_id == SP_BUILTIN_RANGE) { _t%d = ", ta, ta, tr);
-  bind = view_bind(arg, "(*(sp_Range *)_t%d.v.p)", ta);
-  v = view_push(c, arg, TY_RANGE);
-  emit_array_call(c, id, b);
-  view_pop(c, v);
-  view_unbind(bind);
-  buf_printf(b, "; }\nelse { _t%d = ", tr);
-  bind = view_bind(arg, "sp_poly_arg_int_chk(_t%d)", ta);
-  v = view_push(c, arg, TY_INT);
-  emit_array_call(c, id, b);
-  view_pop(c, v);
-  view_unbind(bind);
-  buf_printf(b, "; } _t%d; })", tr);
-  return 1;
-}
-
-/* slice!(x, n) with a boxed x: a Regexp takes the capture-group arm, any
-   other value the (start, length) arm, which raises TypeError for a
-   value that is no Integer. x is evaluated once, before the arms. */
-static int emit_string_slice2_poly(Compiler *c, int id, int arg, Buf *b) {
-  if (repr_of(c, arg).kind != RK_BOXED) return 0;
-  int ta = ++g_tmp, tr = ++g_tmp;
-  buf_printf(b, "({ sp_RbVal _t%d = ", ta); emit_boxed(c, arg, b);
-  buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); _t%d = sp_poly_strbuf_deref(_t%d);"
-                " const char *_t%d; if (_t%d.tag == SP_TAG_OBJ && _t%d.cls_id == SP_BUILTIN_REGEX) { _t%d = ",
-             ta, ta, ta, tr, ta, ta, tr);
-  int bind = view_bind(arg, "((mrb_regexp_pattern *)_t%d.v.p)", ta);
-  int v = view_push(c, arg, TY_REGEX);
-  emit_array_call(c, id, b);
-  view_pop(c, v);
-  view_unbind(bind);
+  if (!two) {
+    buf_printf(b, "; }\nelse if (_t%d.tag == SP_TAG_OBJ && _t%d.cls_id == SP_BUILTIN_RANGE) { _t%d = ", ta, ta, tr);
+    bind = view_bind(arg, "(*(sp_Range *)_t%d.v.p)", ta);
+    v = view_push(c, arg, TY_RANGE);
+    emit_array_call(c, id, b);
+    view_pop(c, v);
+    view_unbind(bind);
+  }
   buf_printf(b, "; }\nelse { _t%d = ", tr);
   bind = view_bind(arg, "sp_poly_arg_int_chk(_t%d)", ta);
   v = view_push(c, arg, TY_INT);
@@ -1800,8 +1784,7 @@ int emit_op_string_dedup(Compiler *c, const BopCtx *x, Buf *b) {
 int emit_op_string_slice(Compiler *c, const BopCtx *x, Buf *b) {
   int id = x->id, recv = x->recv, argc;
   const int *argv = call_args(c->nt, id, &argc);
-  if (argc == 1 && emit_string_slice_poly(c, id, argv[0], b)) return 1;
-  if (argc == 2 && emit_string_slice2_poly(c, id, argv[0], b)) return 1;
+  if (argc <= 2 && argc >= 1 && emit_string_slice_poly(c, id, argv[0], argc == 2, b)) return 1;
   int sb_asgn = str_mut_var_recv(c, recv) || sb_shadowed_reader(recv);
   /* `s.insert(0, "<").slice!(0, 2)` cuts s's String: the chain runs, in
      Ruby's order, then the slice! is the variable's own, which every arm

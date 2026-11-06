@@ -7491,9 +7491,13 @@ static int desugar_dynamic_send_inner(Compiler *c) {
        reads as `args[0]` and every arm takes `*args.drop(1)`; the array is
        read more than once, so only a variable's -- a rest parameter, an
        ivar -- not an expression with effects. Interning the whole array as
-       the name answered "undefined method '[:name]'". */
-    int splat_src = -1;
-    if (argc == 1 && nt_kind(nt, argv[0]) == NK_SplatNode) {
+       the name answered "undefined method '[:name]'". Keywords after the
+       rest (`public_send(*args, **kwargs, &block)`, Object#try as Rails
+       writes it) go on to every arm after it; read as two arguments, the
+       Splat was the name. */
+    int splat_src = -1, splat_kwh = -1;
+    if ((argc == 1 || (argc == 2 && nt_kind(nt, argv[1]) == NK_KeywordHashNode)) &&
+        nt_kind(nt, argv[0]) == NK_SplatNode) {
       int se = nt_ref(nt, argv[0], "expression");
       if (se < 0) {
         /* an anonymous `*` (a `...` forwarder's `__send__(*, **, &)`): the
@@ -7508,6 +7512,7 @@ static int desugar_dynamic_send_inner(Compiler *c) {
       NodeKind sk = se >= 0 ? nt_kind(nt, se) : NK_NONE;
       if (sk != NK_LocalVariableReadNode && sk != NK_InstanceVariableReadNode) continue;
       splat_src = se;
+      if (argc == 2) splat_kwh = argv[1];
     }
     int nrest = argc - 1;
     if (nrest > 64) continue;
@@ -7742,6 +7747,7 @@ static int desugar_dynamic_send_inner(Compiler *c) {
       int sp = nt_new_node(nt, "SplatNode"); if (sp < 0) continue;
       nt_node_set_ref(nt, sp, "expression", drop);
       rest[0] = sp; nrest = 1;                                 /* the arms: *args.drop(1) */
+      if (splat_kwh >= 0) rest[nrest++] = splat_kwh;           /* ...and the keywords */
     }
     /* a `*args` or `**kwargs` among the arguments makes the count a run-time
        matter (`send(method, *args, **kwargs, &block)`): the arity filter

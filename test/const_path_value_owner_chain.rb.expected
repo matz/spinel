@@ -7,3 +7,4 @@
 [2, 2]
 ["sh", "none"]
 [4, "uninitialized constant Z::Ob"]
+[:m, :n]

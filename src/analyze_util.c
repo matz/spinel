@@ -2159,33 +2159,92 @@ static int cpv_has_mod(Compiler *c, int k, int m, int depth) {
   }
   return 0;
 }
-static int cpv_walk(Compiler *c, int k, const char *nm, const int *cands, int ncands, int depth) {
+/* (above: the superclass of the class the walk is in; a module it reaches
+   through an include is skipped when a class there already has it) */
+static int cpv_walk(Compiler *c, int k, const char *nm, const int *cands, int ncands, int depth, int above) {
   if (depth > 16) return -1;
   int obj = comp_core_class(c, CORE_OBJECT), bo = comp_core_class(c, CORE_BASIC_OBJECT);
   for (int n = 0; k >= 0 && k < c->nclasses && n < 64; k = c->classes[k].parent, n++) {
     if (k == obj || k == bo) break;
     const ClassInfo *ci = &c->classes[k];
+    int ab = depth == 0 ? ci->parent : above;
     int own = n == 0 && depth == 0 ? cpv_own(c, k, nm, cands, ncands) : -1;
     if (own >= 0) return own;
     for (int i = ci->nprepended_mods - 1; i >= 0; i--) {
       int m = ci->prepended_mods[i];
-      if (m == k || cpv_has_mod(c, ci->parent, m, 0)) continue;
-      int r = cpv_walk(c, m, nm, cands, ncands, depth + 1);
+      if (m == k) continue;
+      int r = cpv_walk(c, m, nm, cands, ncands, depth + 1, ab);
       if (r >= 0) return r;
     }
     if (!(n == 0 && depth == 0) && (own = cpv_own(c, k, nm, cands, ncands)) >= 0) return own;
     for (int i = ci->nincluded_mods - 1; i >= 0; i--) {
       int m = ci->included_mods[i];
-      if (m == k || cpv_has_mod(c, ci->parent, m, 0)) continue;
-      int r = cpv_walk(c, m, nm, cands, ncands, depth + 1);
+      if (m == k || cpv_has_mod(c, ab, m, 0)) continue;
+      int r = cpv_walk(c, m, nm, cands, ncands, depth + 1, ab);
       if (r >= 0) return r;
     }
   }
   return -1;
 }
+/* Is NM written through a value somewhere (`m::NM = v`, `m::NM ||= v`,
+   `m.const_set(:NM, v)` with m not a constant)? Which class then holds NM
+   is known only at run time, so no class's chain can be read for it. */
+static int cwtv_scan(Compiler *c, const char *nm) {
+  const NodeTable *nt = c->nt;
+  static const NodeKind pw[] = { NK_ConstantPathWriteNode, NK_ConstantPathOrWriteNode,
+                                 NK_ConstantPathAndWriteNode, NK_ConstantPathOperatorWriteNode };
+  for (int i = 0; i < 4; i++)
+    NT_FOREACH_KIND(nt, pw[i], w) {
+      int t = nt_ref(nt, w, "target");
+      const char *on = t >= 0 ? nt_str(nt, t, "name") : NULL;
+      int par = t >= 0 ? nt_ref(nt, t, "parent") : -1;
+      if (!on || par < 0 || !sp_streq(on, nm)) continue;
+      NodeKind pk = nt_kind(nt, par);
+      if (pk != NK_ConstantReadNode && pk != NK_ConstantPathNode) return 1;
+    }
+  NT_FOREACH_KIND(nt, NK_CallNode, call) {
+    const char *cn = nt_str(nt, call, "name");
+    if (!cn || !sp_streq(cn, "const_set")) continue;
+    int r = nt_ref(nt, call, "receiver");
+    NodeKind rk = r >= 0 ? nt_kind(nt, r) : NK_NilNode;
+    if (rk == NK_ConstantReadNode || rk == NK_ConstantPathNode) continue;
+    int args = nt_ref(nt, call, "arguments"), an = 0;
+    const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &an) : NULL;
+    const char *sn = an >= 1 && nt_kind(nt, av[0]) == NK_SymbolNode ? nt_str(nt, av[0], "value") : NULL;
+    if (!sn || sp_streq(sn, nm)) return 1;
+  }
+  return 0;
+}
+/* (kept per name while the node table is the same) */
+static ANameHash g_cwtv_memo;
+static unsigned char *g_cwtv_ans;
+static const NodeTable *g_cwtv_nt;
+static unsigned g_cwtv_ver;
+static unsigned long g_cwtv_edits;
+static int g_cwtv_cnt = -1;
+int const_written_through_value(Compiler *c, const char *nm) {
+  if (!nm) return 0;
+  const NodeTable *nt = c->nt;
+  if (g_cwtv_nt != nt || g_cwtv_ver != nt->version || g_cwtv_edits != nt->edits || g_cwtv_cnt != nt->count) {
+    for (int i = 0; i < g_cwtv_memo.n; i++) free((char *)g_cwtv_memo.key[i]);
+    anh_free(&g_cwtv_memo); memset(&g_cwtv_memo, 0, sizeof g_cwtv_memo);
+    free(g_cwtv_ans); g_cwtv_ans = NULL;
+    g_cwtv_nt = nt; g_cwtv_ver = nt->version; g_cwtv_edits = nt->edits; g_cwtv_cnt = nt->count;
+  }
+  int m = anh_find(&g_cwtv_memo, nm);
+  if (m >= 0) return g_cwtv_ans[m];
+  int r = cwtv_scan(c, nm);
+  char *key = strdup(nm);
+  if (!key) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  anh_add(&g_cwtv_memo, key);
+  g_cwtv_ans = realloc(g_cwtv_ans, (size_t)g_cwtv_memo.cap);
+  if (!g_cwtv_ans) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  g_cwtv_ans[g_cwtv_memo.n - 1] = (unsigned char)r;
+  return r;
+}
 int const_path_value_const(Compiler *c, int k, const char *nm, const int *cands, int ncands) {
   if (k < 0 || k >= c->nclasses || !nm) return -1;
-  return cpv_walk(c, k, nm, cands, ncands, 0);
+  return cpv_walk(c, k, nm, cands, ncands, 0, -1);
 }
 /* The top-level constant NM that `Object::NM` reads through a value, or
    NULL (none, or a well-known one the compiler reads by itself). The tree

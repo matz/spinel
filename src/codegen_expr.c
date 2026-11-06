@@ -3658,9 +3658,12 @@ static int emit_constant_value(Compiler *c, int id, Buf *b, Buf *checks, const N
       TyKind ct = TY_UNKNOWN; int uniform = 1;
       int *cands, ncands = comp_const_tail_cands(c, nm, &cands);
       int obj_k = comp_core_class(c, CORE_OBJECT);
+      /* (a constant a value's path writes is read as before: by the classes
+         that hold it themselves, then by its name) */
+      int through = const_written_through_value(c, nm);
       for (int k = 0; k < c->nclasses; k++) {
         if (k == obj_k) continue;
-        int ci2 = const_path_value_const(c, k, nm, cands, ncands);
+        int ci2 = through ? comp_class_owned_const(c, k, nm, cands, ncands) : const_path_value_const(c, k, nm, cands, ncands);
         if (ci2 < 0) continue;
         const char *found = c->consts[ci2].name; TyKind ft = c->consts[ci2].type;
         if (nc == 0) ct = ft;
@@ -3668,7 +3671,7 @@ static int emit_constant_value(Compiler *c, int id, Buf *b, Buf *checks, const N
         ccls[nc] = k; ckey[nc] = found; nc++;
       }
       free(cands);
-      const LocalVar *topc = const_value_path_top(c, nm);
+      const LocalVar *topc = through ? NULL : const_value_path_top(c, nm);
       if (topc) {
         if (nc == 0) ct = topc->type;
         else if (topc->type != ct) uniform = 0;
@@ -3683,6 +3686,13 @@ static int emit_constant_value(Compiler *c, int id, Buf *b, Buf *checks, const N
         int sb = repr_of_slot(c, comp_const(c, ckey[i])).kind == RK_STRBUF;
         if (i == 0) strbuf = sb;
         else if (sb != strbuf) uniform = 0;
+      }
+      /* (a String mutator on the read needs the slot, which the read face
+         is not: such a call is left to the paths below) */
+      if (strbuf && !slot) {
+        int pc = comp_recv_parent(c, id);
+        const char *pm = pc >= 0 && nt_kind(nt, pc) == NK_CallNode ? nt_str(nt, pc, "name") : NULL;
+        if (pm && an_str_mutator_name(pm)) uniform = 0;
       }
       if (nc > 0 && uniform && ct != TY_UNKNOWN) {
         int tk = ++g_tmp, tr = ++g_tmp;

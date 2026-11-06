@@ -56,3 +56,14 @@ p [Sh, Z].map { |m| str(m) }
 class Object; Ob = 4; end
 def ob(m) = (m::Ob rescue $!.message)
 p [Object, Z].map { |m| ob(m) }
+
+# a prepended module the superclass includes is still read first; a module
+# reached through another module is skipped when the superclass has it
+module Mq; Qc = :m; end
+module Nq; Qc = :n; end
+class Aq; include Mq; include Nq; end
+class Dq < Aq; prepend Mq; end
+module Qq; include Mq; end
+class Eq < Aq; include Qq; end
+def qc(m) = m::Qc
+p [Dq, Eq].map { |m| qc(m) }

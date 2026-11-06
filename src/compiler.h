@@ -2223,6 +2223,7 @@ int        const_defined_from(Compiler *c, int rk, const char *cgn);   /* ... an
 int        const_seen_by_class(Compiler *c, int k, const char *cgn);
 int        const_path_value_const(Compiler *c, int k, const char *nm, const int *cands, int ncands); /* what `m::NM` reads for m = class K: K's chain, not Object's (-1: NameError) */
 const LocalVar *const_value_path_top(Compiler *c, const char *nm); /* the top-level NM `Object::NM` reads through a value, or NULL */
+int        const_written_through_value(Compiler *c, const char *nm); /* `m::NM = v` / const_set with m a value: no chain can be read for NM */
 int        qc_const_qualified(const char *qn);
 int        qc_leaf_qualified(const char *leaf);
 const char *time_strict_parser_call(Compiler *c, int id);

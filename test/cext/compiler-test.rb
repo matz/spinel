@@ -124,4 +124,5 @@ cruby_oracle('hidden_ivars')
 cruby_oracle('raise_program_class')
 cruby_oracle('conversions')
 cruby_oracle('spread_sends')
+cruby_oracle('callback_versions')
 puts 'C extension compiler bridge: CRuby oracle and GC modes passed'

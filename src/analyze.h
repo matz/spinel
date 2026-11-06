@@ -474,9 +474,10 @@ int elab_version_on_singleton(Compiler *c, int cls, const char *name, int node);
    later, from the statement that makes it on. ELAB_UNKNOWN when the call
    has no point there (a file the load graph does not place). never: the
    body around the call never runs (lr_rta found no call or load that
-   reaches it), so the call runs at no statement at all; from and to then
-   hold its region's last statement only to stay a window, and prove
-   nothing about which version the call meets. */
+   reaches it, and no --ext-entry lets a host call in after the load), so
+   the call runs at no statement at all; from and to then hold its
+   region's last statement only to stay a window, and prove nothing about
+   which version the call meets. */
 typedef struct { LoadPoint from, to; unsigned char closed, wraps, never; } ElabWindow;
 int elab_call_window(Compiler *c, int id, ElabWindow *w);
 /* The calls that run the closure node id is in, with no def or block

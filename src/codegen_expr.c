@@ -4076,14 +4076,35 @@ static int defined_path_privatized(Compiler *c, const char *nm) {
   }
   return 0;
 }
+/* A parent the switch may run as it is: a local, an instance variable,
+   self, or a call with no arguments on one of them (or on no receiver).
+   Any other one (a constant, a call on a constant that may be missing)
+   is defined? only if it is itself, which the path below asks. */
+static int defined_value_parent(const NodeTable *nt, int par) {
+  for (int n = 0; par >= 0 && n < 16; n++) {
+    switch (nt_kind(nt, par)) {
+      case NK_LocalVariableReadNode: case NK_InstanceVariableReadNode: case NK_SelfNode:
+        return 1;
+      case NK_CallNode: {
+        int r = nt_ref(nt, par, "receiver");
+        if (nt_ref(nt, par, "arguments") >= 0 || nt_ref(nt, par, "block") >= 0) return 0;
+        if (r < 0) return 1;
+        par = r;
+        break;
+      }
+      default:
+        return 0;
+    }
+  }
+  return 0;
+}
 /* (see the ConstantPathNode arm of emit_defined_expr) */
 static int defined_value_path(Compiler *c, int v, Buf *b) {
   const NodeTable *nt = c->nt;
   int par = nt_ref(nt, v, "parent");
   const char *nm = nt_str(nt, v, "name");
   if (par < 0 || !nm) return 0;
-  NodeKind pk = nt_kind(nt, par);
-  if (pk == NK_ConstantReadNode || pk == NK_ConstantPathNode) return 0;
+  if (!defined_value_parent(nt, par)) return 0;
   Repr pr = repr_of(c, par);
   if (pr.as_ty != TY_CLASS && pr.as_ty != TY_POLY) return 0;
   if (const_written_through_value(c, nm) || defined_path_privatized(c, nm)) return 0;

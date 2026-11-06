@@ -12,6 +12,15 @@ rescue => e
   puts "#{label}: #{e.class}: #{e.message}"
 end
 
+class Reader
+  def initialize(io)
+    @io = io
+    @chunk = String.new(capacity: 8)
+  end
+
+  def fill = @io.readpartial(4, @chunk)
+end
+
 path = File.join(Dir.tmpdir, "sp_io_read_checks_readable_#{Process.pid}")
 File.write(path, "abc\ndef\n")
 f = File.open(path, "a")
@@ -55,6 +64,7 @@ try("socket readpartial") { s.readpartial(4) }
 try("socket read_nonblock") { s.read_nonblock(4) }
 try("socket getc") { s.getc }
 try("socket recv") { s.recv(4) }
+try("socket readpartial into a buffer") { Reader.new(s).fill }
 s.close
 c.close
 server.close

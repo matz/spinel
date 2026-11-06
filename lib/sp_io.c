@@ -2250,7 +2250,7 @@ const char *sp_File_readpartial_or_nil(sp_File *f, sp_int n) {SP_GC_ROOT(f);
    with buf emptied; else buf's bytes. The caller has checked that buf can
    change. */
 const char *sp_File_readpartial_into(sp_File *f, sp_int n, sp_String *buf) {SP_GC_ROOT(f); SP_GC_ROOT(buf);
-  SP_IO_OPEN(f);
+  sp_io_check_readable(f);
   if (n < 0) sp_raise_cls("EOFError", "end of file reached");
   if (n > 0 && f->own_buf && ((size_t)n <= SP_IO_RBUF_MIN || sp_io_pending(f))) {
     sp_io_wait_readable(f);

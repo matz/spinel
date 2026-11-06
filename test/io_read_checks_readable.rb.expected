@@ -20,3 +20,4 @@ socket readpartial: IOError: not opened for reading
 socket read_nonblock: "peer"
 socket getc: IOError: not opened for reading
 socket recv: " byt"
+socket readpartial into a buffer: IOError: not opened for reading

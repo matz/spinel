@@ -1,0 +1,28 @@
+80
+[0, 0, nil, "s0", :sym0, true, 0.25, [0, "in0", [nil]]]
+[79, -79, nil, "s79", :sym4, false, 79.25, [79, "in79", [nil]]]
+[-40, -37, -34]
+197
+230
+[nil]
+Symbol
+43.25
+true
+false
+false
+[1, "in1", [nil], 1]
+[197, [79, -79, nil, "s79", :sym4, false, 79.25, [79, "in79", [nil]]]]
+81
+true
+false
+70
+["k0", 0, :a, ""]
+["k69", 69, :a, ""]
+{a: 24, b: 23, c: 23}
+4
+false
+true
+false
+true
+4
+330850

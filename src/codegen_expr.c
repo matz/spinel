@@ -4349,6 +4349,105 @@ static void emit_str_lit_late(Compiler *c, const int *els, int n, int t) {
   free(hnd);
 }
 
+/* (a large literal of literals is a static table, not a push or set per element: cc's time grows with their square in one function) */
+enum { LIT_TABLE_MIN_ROWS = 64 };
+
+static const char *lit_box_arg(const char *t, const char *name, char *out, size_t cap) {
+  size_t nl = strlen(name), tl = strlen(t);
+  if (tl < nl + 1 || strncmp(t, name, nl) != 0 || t[tl - 1] != ')') return NULL;
+  size_t al = tl - nl - 1;
+  if (al >= cap) return NULL;
+  memcpy(out, t + nl, al); out[al] = 0;
+  const char *p = out;
+  if (strncmp(p, "((sp_sym)", 9) == 0) p += 9;
+  for (; *p; p++)
+    if (!strchr("0123456789abcdefABCDEFxXL.+-() ", *p)) return NULL;
+  return out;
+}
+
+/* (read from the emitted box, not the node: a leaf whose box is no constant, a Bignum or a String the program changes, keeps the statement path) */
+static int lit_leaf_row(const char *t, Buf *rows) {
+  char arg[96];
+  if (!t) return 0;
+  if (strcmp(t, "sp_box_nil()") == 0) { buf_puts(rows, "SP_LIT_NIL,"); return 1; }
+  static const struct { const char *box, *lit; } forms[] = {
+    { "sp_box_int(", "SP_LIT_INT" }, { "sp_box_float(", "SP_LIT_FLT" },
+    { "sp_box_bool(", "SP_LIT_BOOL" }, { "sp_box_sym(", "SP_LIT_SYM" },
+  };
+  for (size_t i = 0; i < sizeof forms / sizeof forms[0]; i++)
+    if (lit_box_arg(t, forms[i].box, arg, sizeof arg) && arg[0]) {
+      buf_printf(rows, "%s(%s),", forms[i].lit, arg);
+      return 1;
+    }
+  static const char sb[] = "SP_STR_BOX(";
+  size_t tl = strlen(t);
+  if (tl > sizeof sb && strncmp(t, sb, sizeof sb - 1) == 0 && t[tl - 1] == ')') {
+    char *in = strndup(t + sizeof sb - 1, tl - sizeof sb);
+    int ok = fzl_text_id(in) >= 0;
+    if (ok) buf_printf(rows, "SP_LIT_STR(%s),", in);
+    free(in);
+    return ok;
+  }
+  return 0;
+}
+
+/* (emit_boxed, not emit_boxed_operand: a literal is no call whose handle a later operand could change) */
+static int lit_table_elem(Compiler *c, int id, Buf *rows) {
+  const NodeTable *nt = c->nt;
+  NodeKind k = nt_kind(nt, id);
+  if (k == NK_ArrayNode) {
+    if (repr_of(c, id).as_ty != TY_POLY_ARRAY) return 0;
+    int n = 0;
+    const int *els = nt_arr(nt, id, "elements", &n);
+    buf_printf(rows, "SP_LIT_ARRAY(%d),", n);
+    for (int e = 0; e < n; e++)
+      if (!lit_table_elem(c, els[e], rows)) return 0;
+    return 1;
+  }
+  if (!(k == NK_IntegerNode || k == NK_FloatNode || k == NK_NilNode || k == NK_TrueNode ||
+        k == NK_FalseNode || k == NK_SymbolNode || k == NK_StringNode)) return 0;
+  size_t pre = g_pre ? g_pre->len : 0;
+  Buf lb; memset(&lb, 0, sizeof lb);
+  emit_boxed(c, id, &lb);
+  int ok = (g_pre ? g_pre->len : 0) == pre && lit_leaf_row(lb.p, rows);
+  if (g_pre && g_pre->len != pre) { g_pre->len = pre; if (g_pre->p) g_pre->p[pre] = 0; }
+  free(lb.p);
+  return ok;
+}
+
+static int lit_rows_at_least(const NodeTable *nt, int id, int want) {
+  NodeKind k = id >= 0 ? nt_kind(nt, id) : NK_NilNode;
+  if (k == NK_AssocNode)
+    return lit_rows_at_least(nt, nt_ref(nt, id, "key"), want) + lit_rows_at_least(nt, nt_ref(nt, id, "value"), want);
+  if (k != NK_ArrayNode && k != NK_HashNode) return 1;
+  int n = 0, rows = 1;
+  const int *els = nt_arr(nt, id, "elements", &n);
+  for (int j = 0; j < n && rows < want; j++) rows += lit_rows_at_least(nt, els[j], want);
+  return rows;
+}
+
+static int lit_table(Compiler *c, int id, int is_hash) {
+  const NodeTable *nt = c->nt;
+  int n = 0;
+  const int *els = nt_arr(nt, id, "elements", &n);
+  if (lit_rows_at_least(nt, id, LIT_TABLE_MIN_ROWS) < LIT_TABLE_MIN_ROWS) return -1;
+  Buf rows; memset(&rows, 0, sizeof rows);
+  int ok = 1;
+  buf_printf(&rows, "%s(%d),", is_hash ? "SP_LIT_HASH" : "SP_LIT_ARRAY", n);
+  for (int j = 0; j < n && ok; j++) {
+    if (!is_hash) { ok = lit_table_elem(c, els[j], &rows); continue; }
+    if (nt_kind(nt, els[j]) != NK_AssocNode || kwh_elem_dropped(nt, id, j)) { ok = 0; break; }
+    ok = lit_table_elem(c, nt_ref(nt, els[j], "key"), &rows) &&
+         lit_table_elem(c, nt_ref(nt, els[j], "value"), &rows);
+  }
+  if (!ok) { free(rows.p); return -1; }
+  int lt = ++g_tmp;
+  emit_indent(g_pre, g_indent);
+  buf_printf(g_pre, "static const sp_RbVal _lt%d[] = { %s };\n", lt, rows.p);
+  free(rows.p);
+  return lt;
+}
+
 /* An Array or Hash literal ([...], {...}, a keyword hash) (emit_expr_node's arms, in their order) */
 static int emit_array_hash_literal_expr(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *ty) {
   if (sp_streq(ty, "ArrayNode")) {
@@ -4368,6 +4467,16 @@ static int emit_array_hash_literal_expr(Compiler *c, int id, Buf *b, const NodeT
     if (n == 0 && !k && at != TY_POLY_ARRAY) { buf_puts(b, "sp_IntArray_new()"); return 1; }
     /* poly (mixed-element) array: build an sp_PolyArray of boxed elements */
     if (at == TY_POLY_ARRAY) {
+      int lt = lit_table(c, id, 0);
+      if (lt >= 0) {
+        int t = ++g_tmp;
+        emit_indent(g_pre, g_indent);
+        buf_printf(g_pre, "sp_PolyArray *_t%d = sp_lit_poly_array(_lt%d);\n", t, lt);
+        emit_indent(g_pre, g_indent);
+        buf_printf(g_pre, "SP_GC_ROOT(_t%d);\n", t);
+        buf_printf(b, "_t%d", t);
+        return 1;
+      }
       int t = ++g_tmp;
       emit_indent(g_pre, g_indent);
       buf_printf(g_pre, "sp_PolyArray *_t%d = sp_PolyArray_new();\n", t);
@@ -4560,6 +4669,16 @@ else {
       int ne2 = 0; nt_arr(nt, id, "elements", &ne2);
       if (ne2 == 0) hn = "StrPoly";
       else unsupported(c, id, "hash literal (key/value type)");
+    }
+    int lt = repr_hash_is(hr, TY_POLY, TY_POLY) && sp_streq(ty, "HashNode") ? lit_table(c, id, 1) : -1;
+    if (lt >= 0) {
+      int t = ++g_tmp;
+      emit_indent(g_pre, g_indent);
+      buf_printf(g_pre, "sp_PolyPolyHash *_t%d = sp_lit_poly_hash(_lt%d);\n", t, lt);
+      emit_indent(g_pre, g_indent);
+      buf_printf(g_pre, "SP_GC_ROOT(_t%d);\n", t);
+      buf_printf(b, "_t%d", t);
+      return 1;
     }
     int n = 0;
     const int *els = nt_arr(nt, id, "elements", &n);

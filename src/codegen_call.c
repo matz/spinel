@@ -17847,9 +17847,11 @@ static int emit_array_arith_call(Compiler *c, int id, Buf *b) {
 
   if (recv >= 0 && argc == 1 && sp_streq(name, "*") && (ty_is_array(rt) || rt == TY_POLY_ARRAY) &&
       array_times_type_error(a0)) {
-    buf_puts(b, "({ (void)("); emit_expr_for_effect(c, recv, b); buf_puts(b, "); (void)(");
+    /* the operands are evaluated inside the raise's message argument, so
+       the text leads with the raise (text_diverges) */
+    buf_puts(b, "({ sp_raise_cls(\"TypeError\", ({ (void)("); emit_expr_for_effect(c, recv, b); buf_puts(b, "); (void)(");
     emit_expr_for_effect(c, argv[0], b);
-    buf_printf(b, "); sp_raise_cls(\"TypeError\", \"%s\"); %s; })",
+    buf_printf(b, "); \"%s\"; })); %s; })",
                array_times_type_error(a0), raise_tail_value_c(c, res));
     return 1;
   }

@@ -1799,17 +1799,13 @@ spinel: test/reject/singleton_class_declaration_in_method.rb:5: Object#singleton
 spinel: test/reject/singleton_class_declaration_in_method.rb:8: undefined method 'x=' for a Class: no class in the program defines a class method 'x=' (NoMethodError)
 spinel: 2 refusals, nothing written
 == test/reject/singleton_class_self_in_instance_method.rb [default] rc=1
-spinel: test/reject/singleton_class_self_in_instance_method.rb:10: singleton method on self inside an instance method: self is whichever instance runs it, and a compiled class cannot give one object a method of its own
-spinel: 1 refusal, nothing written
+spinel: test/reject/singleton_class_self_in_instance_method.rb:19: singleton method on self inside an instance method: self is whichever instance runs it, and a compiled class cannot give one object a method of its own
 == test/reject/singleton_class_self_in_instance_method.rb [promote] rc=1
-spinel: test/reject/singleton_class_self_in_instance_method.rb:10: singleton method on self inside an instance method: self is whichever instance runs it, and a compiled class cannot give one object a method of its own
-spinel: 1 refusal, nothing written
+spinel: test/reject/singleton_class_self_in_instance_method.rb:19: singleton method on self inside an instance method: self is whichever instance runs it, and a compiled class cannot give one object a method of its own
 == test/reject/singleton_def_self_in_instance_method.rb [default] rc=1
-spinel: test/reject/singleton_def_self_in_instance_method.rb:11: singleton method on self inside an instance method: self is whichever instance runs it, and a compiled class cannot give one object a method of its own
-spinel: 1 refusal, nothing written
+spinel: test/reject/singleton_def_self_in_instance_method.rb:18: singleton method on self inside an instance method: self is whichever instance runs it, and a compiled class cannot give one object a method of its own
 == test/reject/singleton_def_self_in_instance_method.rb [promote] rc=1
-spinel: test/reject/singleton_def_self_in_instance_method.rb:11: singleton method on self inside an instance method: self is whichever instance runs it, and a compiled class cannot give one object a method of its own
-spinel: 1 refusal, nothing written
+spinel: test/reject/singleton_def_self_in_instance_method.rb:18: singleton method on self inside an instance method: self is whichever instance runs it, and a compiled class cannot give one object a method of its own
 == test/reject/singleton_extend_extended_hook.rb [default] rc=1
 spinel: test/reject/singleton_extend_extended_hook.rb:8: Object#extend is not supported by AOT compilation: mixing a module into a live object needs a per-object method table. Use `include`/`prepend` in the class body instead (see docs/limitations.md)
 spinel: 1 refusal, nothing written
@@ -1839,7 +1835,7 @@ spinel: test/reject/singleton_untraced_no_self.rb:54: singleton method on a rece
 spinel: test/reject/singleton_untraced_no_self.rb:61: singleton method on a receiver spinel cannot trace to one `new` of a user class or Object (a String, an Array, a parameter, a value read out of a collection, a class held in a variable): no call on it would reach the method
 spinel: test/reject/singleton_untraced_no_self.rb:74: singleton method on a receiver spinel cannot trace to one `new` of a user class or Object (a String, an Array, a parameter, a value read out of a collection, a class held in a variable): no call on it would reach the method
 spinel: test/reject/singleton_untraced_no_self.rb:80: singleton method on a receiver spinel cannot trace to one `new` of a user class or Object (a String, an Array, a parameter, a value read out of a collection, a class held in a variable): no call on it would reach the method
-spinel: test/reject/singleton_untraced_no_self.rb:89: singleton method on self inside an instance method: self is whichever instance runs it, and a compiled class cannot give one object a method of its own
+spinel: test/reject/singleton_untraced_no_self.rb:89: singleton method on a receiver spinel cannot trace to one `new` of a user class or Object (a String, an Array, a parameter, a value read out of a collection, a class held in a variable): no call on it would reach the method
 spinel: test/reject/singleton_untraced_no_self.rb:111: singleton method on a receiver spinel cannot trace to one `new` of a user class or Object (a String, an Array, a parameter, a value read out of a collection, a class held in a variable): no call on it would reach the method
 spinel: test/reject/singleton_untraced_no_self.rb:116: singleton method on a receiver spinel cannot trace to one `new` of a user class or Object (a String, an Array, a parameter, a value read out of a collection, a class held in a variable): no call on it would reach the method
 spinel: test/reject/singleton_untraced_no_self.rb:121: singleton method on a receiver spinel cannot trace to one `new` of a user class or Object (a String, an Array, a parameter, a value read out of a collection, a class held in a variable): no call on it would reach the method
@@ -1857,7 +1853,7 @@ spinel: test/reject/singleton_untraced_no_self.rb:54: singleton method on a rece
 spinel: test/reject/singleton_untraced_no_self.rb:61: singleton method on a receiver spinel cannot trace to one `new` of a user class or Object (a String, an Array, a parameter, a value read out of a collection, a class held in a variable): no call on it would reach the method
 spinel: test/reject/singleton_untraced_no_self.rb:74: singleton method on a receiver spinel cannot trace to one `new` of a user class or Object (a String, an Array, a parameter, a value read out of a collection, a class held in a variable): no call on it would reach the method
 spinel: test/reject/singleton_untraced_no_self.rb:80: singleton method on a receiver spinel cannot trace to one `new` of a user class or Object (a String, an Array, a parameter, a value read out of a collection, a class held in a variable): no call on it would reach the method
-spinel: test/reject/singleton_untraced_no_self.rb:89: singleton method on self inside an instance method: self is whichever instance runs it, and a compiled class cannot give one object a method of its own
+spinel: test/reject/singleton_untraced_no_self.rb:89: singleton method on a receiver spinel cannot trace to one `new` of a user class or Object (a String, an Array, a parameter, a value read out of a collection, a class held in a variable): no call on it would reach the method
 spinel: test/reject/singleton_untraced_no_self.rb:111: singleton method on a receiver spinel cannot trace to one `new` of a user class or Object (a String, an Array, a parameter, a value read out of a collection, a class held in a variable): no call on it would reach the method
 spinel: test/reject/singleton_untraced_no_self.rb:116: singleton method on a receiver spinel cannot trace to one `new` of a user class or Object (a String, an Array, a parameter, a value read out of a collection, a class held in a variable): no call on it would reach the method
 spinel: test/reject/singleton_untraced_no_self.rb:121: singleton method on a receiver spinel cannot trace to one `new` of a user class or Object (a String, an Array, a parameter, a value read out of a collection, a class held in a variable): no call on it would reach the method

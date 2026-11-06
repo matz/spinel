@@ -1083,6 +1083,7 @@ sp_int sp_File_write_bin(sp_File *f, const char *s) {SP_GC_ROOT(f);SP_GC_ROOT_ST
    them without a flush. */
 sp_int sp_File_syswrite(sp_File *f, const char *s, size_t n) {SP_GC_ROOT(f);SP_GC_ROOT_STR(s);
   SP_IO_OPEN(f);
+  sp_io_check_writable(f);
   if (!s) return 0;
   if (f->is_sock || f->own_buf == SP_OWN_SOCK) return sp_sock_write(f, s, n);
   if (f->sync_on && sp_io_parkable(f)) return sp_sock_write(f, s, n);

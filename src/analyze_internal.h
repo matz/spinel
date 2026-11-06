@@ -16,6 +16,14 @@
    no analyzer TU calls it undeclared (an implicit `int` prototype, which a
    wasm link reports as a signature mismatch and an LP64 link hides) */
 __attribute__((noreturn)) void unsupported_feature(Compiler *c, int id, const char *msg);
+/* A call that would reach a `def self.m` (or a `class << self` def) made
+   inside an instance method of the receiver's class (sg_self_in_method,
+   analyze_scope.c): in CRuby that def gives the one instance that ran the
+   method a method of its own, which a compiled class cannot hold, and the
+   scope walk filed it as a class method. Refused, instead of raising
+   NoMethodError at run time (#11157). The def itself compiles, as a method
+   nobody calls does. Runs after the type fixpoint, on the receivers' types. */
+void refuse_self_singleton_calls(Compiler *c);
 void unsupported_feature_collect(Compiler *c, int id, const char *msg);
 int defer_refusals(void); /* codegen_util.c: explicit opt-in to runtime refusals */
 int defer_refusals_at(const Compiler *c, int node); /* ...or the node's file's `# spinel: defer-refusals` */

@@ -1618,12 +1618,14 @@ static int erm_body_declares(const NodeTable *nt, const int *parent, int encl, c
    core module, by a constant's name? */
 static int erm_args_modules(const NodeTable *nt, const int *av, int first, int an) {
   if (!av || an - first < 1) return 0;
-  /* (a program that defines a mixin hook keeps the reopening, whose body
-     fires it; nor does one that autoloads: a module an autoload brings may
-     be named before the walk has it. A rewrite adds neither.) */
+  /* (a program that defines a hook which replaces the mixin itself keeps
+     the reopening: the record does not run append_features and its kin;
+     included, prepended and extended fire from the record after the
+     statement, elab_fire_after. Nor does one that autoloads: a module an
+     autoload brings may be named before the walk has it. A rewrite adds
+     neither.) */
   if (erm_d.hooks < 0) {
-    static const char *const hooks[] = { "included", "prepended", "append_features", "prepend_features",
-                                         "extended", "extend_object", NULL };
+    static const char *const hooks[] = { "append_features", "prepend_features", "extend_object", NULL };
     erm_d.hooks = 0;
     NT_FOREACH_KIND(nt, NK_DefNode, d) {
       const char *dn = nt_str(nt, d, "name");

@@ -706,7 +706,9 @@ static void elab_file(ElabWalk *w, int f, const ElabPos *site) {
     if (v < 0) continue;
     if (nt_kind(nt, v) != NK_PreExecutionNode) {
       int seen = w->r->at[v] != -2;   /* a statement two lists share joins once */
-      if (w->reg) walk_scope_stmt(c, v, k, sc, at);
+      /* (a top-level `K.include(M)` the record takes: M's hook fires after
+         it, as after a body's own include, spliced next in the list) */
+      if (w->reg) { walk_scope_stmt(c, v, k, sc, at); if (!seen && st >= 0) elab_fire_after(c, st, k); }
       if (seen) continue;
       if (!w->reg) elab_walk(w, v, at);
     }

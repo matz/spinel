@@ -1,0 +1,10 @@
+before
+included in Console
+late hook for Other
+prepended to Console
+extended Console
+after
+"LOUD hello"
+"HEY"
+:late
+:late

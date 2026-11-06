@@ -4793,6 +4793,23 @@ int bam_owner(Compiler *c, int mi, const char **name) {
   return dn >= 0 ? (int)nt_int(c->nt, dn, "bam_owner_ci", 0) - 1 : -1;
 }
 
+/* Is method mi a Struct member's accessor wrapper: an accessor's wrapper
+   (bam_accessor) that no attr_* call declares (bam_src), named for one of
+   the members of the class it stands for? An attr_* accessor in a
+   Struct's class, over a member's name too, is a plain one. */
+int bam_struct_member(Compiler *c, int mi) {
+  const NodeTable *nt = c->nt;
+  int dn = mi >= 0 ? c->scopes[mi].def_node : -1;
+  const char *sym = dn >= 0 ? nt_str(nt, dn, "bam_sym") : NULL, *own;
+  if (!sym || !nt_int(nt, dn, "bam_accessor", 0) || nt_int(nt, dn, "bam_src", -1) >= 0) return 0;
+  int ci = bam_owner(c, mi, &own);
+  char base[256], ivn[258];
+  if (ci < 0 || !c->classes[ci].is_struct) return 0;
+  if (!setter_base_name(sym, base, sizeof base)) snprintf(base, sizeof base, "%s", sym);
+  snprintf(ivn, sizeof ivn, "@%s", base);
+  return comp_member_index(&c->classes[ci], ivn) >= 0;
+}
+
 /* The method a local's write w makes a Method of: its target, or -1 */
 static int method_write_target(Compiler *c, int w) {
   int mn = method_recv_node(c, nt_ref(c->nt, w, "value"));

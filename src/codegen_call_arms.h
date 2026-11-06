@@ -322,6 +322,7 @@ void abi_sig_token(TyKind t, char *out);
 const char *bam_builtin_sym(Compiler *c, int mi, const char *dflt);
 int bind_owner_mismatch(Compiler *c, int target, TyKind ot);
 int builtin_method_arity(const char *cls, const char *m, int *out);
+const char *builtin_method_params(const char *owner, const char *m);
 int builtin_method_known(const char *cls, const char *m);
 int core_method_vis(const char *cls, const char *m, int inherit);   /* codegen_call_class.c */
 int refl_builtin_vis(Compiler *c, int ci, const char *m, int inherit);   /* codegen_call_class.c */

@@ -1249,6 +1249,7 @@ int method_recv_nodes(Compiler *c, int recv, int **out); /* every one a re-writt
 int method_recv_stamped(Compiler *c, int recv);           /* ...each from a bind site that stamps its position */
 int method_recv_owner_unknown(Compiler *c, int recv);     /* may a Method expr hold a builtin's whose owner no fact names */
 int bam_owner(Compiler *c, int mi, const char **name);     /* the owner a builtin's or accessor's wrapper stands for */
+int bam_struct_member(Compiler *c, int mi);                 /* is it a Struct member's accessor wrapper */
 int method_expr_is_unbound(Compiler *c, int recv);    /* instance_method with no #bind crossed */
 int proc_to_proc_method_nodes(Compiler *c, int recv, int **out); /* the method(:sym) nodes behind <method>.to_proc */
 int method_call_param_shift(Compiler *c, int mn, int mi); /* 1 when self carries param[0] (__bam wrapper) */

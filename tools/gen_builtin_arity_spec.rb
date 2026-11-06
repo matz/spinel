@@ -449,6 +449,12 @@ end
 # functions the receiverless `method(:name)` wrapper binds under "Kernel".
 ARITY_CLASSES = %w[String Integer Float Array Hash Symbol Range Time]
 ARITY_KERNEL = %w[String Integer Float Array Rational Complex puts print p pp]
+# Method#parameters of the same methods, read off instance_method by the
+# class or module that defines each (Method#owner), and whether its
+# source_location is nil (a method CRuby writes in C): the classes' own,
+# the Kernel functions above, and the public methods of the modules a
+# builtin class has its other methods from
+PARAM_MODULES = %w[Numeric Comparable Kernel BasicObject]
 
 # read in a fresh interpreter with no gems: the libraries this probe loads
 # add methods of their own (csv's String#parse_csv, time's Time#httpdate)
@@ -459,10 +465,23 @@ arity_src = <<~RUBY
     k.public_instance_methods(false).sort.each { |m| puts [cls, m, k.instance_method(m).arity].join("\\t") }
   end
   #{ARITY_KERNEL.inspect}.each { |m| puts ["Kernel", m, Kernel.instance_method(m).arity].join("\\t") }
+  enc = ->(k, m) do
+    um = k.instance_method(m)
+    ps = um.parameters.map { |kind, name| name ? "\#{kind}:\#{name}" : kind.to_s }.join(" ")
+    puts ["P", k, m, ps, um.source_location.nil? ? 1 : 0].join("\\t")
+  end
+  #{ARITY_CLASSES.inspect}.each { |cls| k = Object.const_get(cls); k.public_instance_methods(false).sort.each { |m| enc.(k, m) } }
+  #{PARAM_MODULES.inspect}.each do |mod|
+    k = Object.const_get(mod)
+    ms = k.public_instance_methods(false)
+    ms |= #{ARITY_KERNEL.inspect}.map(&:to_sym) if k == Kernel
+    ms.sort.each { |m| enc.(k, m) }
+  end
 RUBY
-arity_all = IO.popen([RbConfig.ruby, "--disable-gems", "-e", arity_src], &:read)
-                .lines.map { |l| c, m, a = l.chomp.split("\t"); [c, m, a.to_i] }
-abort "Method#arity dump failed" unless $?.success? && !arity_all.empty?
+dump = IO.popen([RbConfig.ruby, "--disable-gems", "-e", arity_src], &:read).lines.map { |l| l.chomp.split("\t", -1) }
+abort "Method#arity dump failed" unless $?.success? && !dump.empty?
+params, arity_all = dump.partition { |r| r[0] == "P" }
+arity_all.map! { |c, m, a| [c, m, a.to_i] }
 kernel_arity, arity = arity_all.partition { |r| r[0] == "Kernel" }
 kwpos = inst.select do |cls, m, min, max, _, _, bmin, bmax|
   sides = [[min, max, false], [bmin, bmax, true]].select { |lo, hi, _| lo >= 0 && hi >= 0 }
@@ -480,7 +499,10 @@ out = <<~C
      BAI carries both, BAM only Method#arity, BAS only instance counts,
      and BAC class/module counts. -1 maxima are unbounded; NULL messages
      and unproved -1 minima never reject a call. Block counts are separate.
-     Kernel Method#arity describes receiverless method(:name) wrappers. */
+     Kernel Method#arity describes receiverless method(:name) wrappers.
+     BAP is Method#parameters by the class or module that defines the
+     method, as "kind[:name]" entries separated by spaces, and 1 where its
+     source_location is nil (CRuby writes it in C). */
 C
 render = ->(tag, values) do
   fields = values.map { |v| v.nil? ? "NULL" : v.is_a?(String) ? v.dump : v.to_s }
@@ -493,7 +515,8 @@ end
 inst.each { |r| render.("BAS", r) if counts.key?(r[0, 2]) }
 cm.each { |r| render.("BAC", r) }
 kwpos.each { |r| render.("BAK", r[0, 2]) }
-summary = "#{arity.length + kernel_arity.length} Method#arity + #{inst.length} instance + #{cm.length} class-method entries"
+params.each { |_, k, m, ps, cside| render.("BAP", [k, m, ps, cside.to_i]) }
+summary = "#{arity.length + kernel_arity.length} Method#arity + #{inst.length} instance + #{cm.length} class-method + #{params.length} parameters entries"
 if ARGV.include?("--check")
   if File.read(SOURCE) == out
     $stderr.puts "arity facts match #{ver}: #{summary}"

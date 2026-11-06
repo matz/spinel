@@ -2024,6 +2024,7 @@ int builtin_class_id_answers(int id, const char *m, int cmeth) {
 #define BAS(c,m,...) {c,m},
 #define BAC(...)
 #define BAK(...)
+#define BAP(...)
 static const struct { const char *cls, *m; } self_fact_rows[] = {
 #include "builtin_arity.inc"
 };
@@ -2032,6 +2033,7 @@ static const struct { const char *cls, *m; } self_fact_rows[] = {
 #undef BAS
 #undef BAC
 #undef BAK
+#undef BAP
 static int self_fact_cmp(const void *a, const void *b) { return strcmp(*(const char *const *)a, *(const char *const *)b); }
 /* main's own methods, beside Object's: its singleton's (`to_s`, `inspect`
    answer "main") and the private ones a top-level body calls as a class

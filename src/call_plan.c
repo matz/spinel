@@ -1144,6 +1144,83 @@ int cplan_alias_holder(Compiler *c, int id, int cls, const char *name, int sg, i
   if (framed) elab_plan_leave(c);
   return h;
 }
+/* (a copy of the space-separated names s, each ended by a NUL in place
+   of its space, and their count in *n; the caller frees it) */
+static char *bam_names_split(const char *s, int *n) {
+  char *v = strdup(s);
+  if (!v) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  *n = *v != 0;
+  for (char *p = v; *p; p++)
+    if (*p == ' ') { *p = 0; (*n)++; }
+  return v;
+}
+/* (the version of sym the maker, node site, meets on the ancestors of
+   builtin class cls up to own: the method of a def a reopen gives it
+   there, -1 where none is live, -2 where the record cannot tell) */
+static int bam_reopen_walk(Compiler *c, int site, const char *cls, const char *sym, const char *own) {
+  const char *anc = core_class_ancestors(cls);
+  if (!anc) return -2;
+  int na = 0, nk = 0, r = -1, last = 0;
+  char *names = bam_names_split(anc, &na);
+  int *ks = malloc(sizeof(int) * (size_t)(na > 0 ? na : 1));
+  if (!ks) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  /* (the ancestors' classes the program reopens, -1 for the others) */
+  for (const char *p = names; nk < na && !last; p += strlen(p) + 1) {
+    last = !own || sp_streq(p, own);
+    ks[nk++] = comp_builtin_class_named(c, p);
+  }
+  for (int i = 0; i < nk && r == -1; i++) {
+    int none, dc = -1;
+    if (ks[i] < 0) continue;
+    const LrDef *d = ct_met_version(c, site, ks[i], sym, 0, &none);
+    if (none) continue;
+    int k = d && d->kind == LR_DEF ? c->node_cbody[d->node] : -1, in = 0;
+    for (int j = i; j < nk && k >= 0; j++) in |= ks[j] == k;
+    /* (or a module the program prepends to it, which shadows the class's
+       own method as a reopen does) */
+    if (!in && k >= 0) in = elab_own_method_at(c, ks[i], sym, elab_point_of(c, site)) == ELAB_YES;
+    /* (a version the record gives that is no def of these, or no
+       method the program has, cannot be told either) */
+    int v = in ? comp_method_version(c, k, sym, 0, d->node, &dc) : -1;
+    r = v >= 0 ? v : -2;
+  }
+  free(ks);
+  free(names);
+  return r;
+}
+/* The program's def a builtin's wrapper, method mi
+   (desugar_builtin_method_obj), stands for in place of the builtin: the
+   version of its name (bam_sym) its Method's maker (bam_site) meets
+   (ct_met_version), a def a reopen of the program gives the name on the
+   ancestors (core_class_ancestors) of the builtin class the receiver is
+   of (bam_classes) up to the class or module the builtin is in
+   (bam_owner), a module the class includes too (`module Comparable; def
+   clamp ...`). A true-or-false receiver may be of either class: the walks
+   from TrueClass and from FalseClass must meet the same def. -1 where the
+   wrapper stands for the builtin: no reopen gives the name, or its def is
+   not yet live at the maker. -2 where the record cannot tell (a
+   conditional reopen, a maker that may run before or after it, walks that
+   disagree): the Method may stand for either, which only a run-time
+   version of the method could answer. Asked in the record's frame for the
+   call plan (elab_plan_enter), as cplan_alias_holder asks */
+int cplan_bam_reopen_target(Compiler *c, int mi) {
+  const NodeTable *nt = c->nt;
+  int dn = mi >= 0 ? c->scopes[mi].def_node : -1;
+  const char *sym = dn >= 0 ? nt_str(nt, dn, "bam_sym") : NULL, *own = dn >= 0 ? nt_str(nt, dn, "bam_owner") : NULL;
+  const char *cl = dn >= 0 ? nt_str(nt, dn, "bam_classes") : NULL;
+  int site = dn >= 0 ? (int)nt_int(nt, dn, "bam_site", 0) - 1 : -1, nc = 0, r = -1;
+  if (!sym || !cl || site < 0) return -1;
+  char *cls = bam_names_split(cl, &nc);
+  int framed = elab_plan_enter(c, site);
+  const char *p = cls;
+  for (int i = 0; i < nc; i++, p += strlen(p) + 1) {
+    int ri = bam_reopen_walk(c, site, p, sym, own);
+    r = i == 0 || ri == r ? ri : -2;
+  }
+  if (framed) elab_plan_leave(c);
+  free(cls);
+  return r;
+}
 /* (the class whose accessor lists answer cls's `name` on its chain, a
    writer's as `x=`; -1 for none) */
 static int ct_accessor_class(Compiler *c, int cls, const char *name) {

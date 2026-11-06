@@ -1,0 +1,16 @@
+1
+1
+1
+1
+"cmp:b"
+"cmp:b"
+:lo
+:hi
+3
+3
+:str_mine
+:cmp_mine
+:cmp_mine
+"cmp:xx"
+"cmp:k"
+NoMethodError

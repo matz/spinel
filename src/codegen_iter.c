@@ -3391,6 +3391,7 @@ void emit_block_invoke(Compiler *c, int args_node, Buf *b, int indent, int as_ex
   int sv_lexc2 = g_loop_exc_base, sv_lexc2_rb = g_loop_rescue_base;
   int sv_lens2 = g_loop_ensure_base;
   char nxbuf[32]; int nx_tmp = 0;
+  int nx_carried = 0;   /* the splice ends in the `next` carrier, its value */
   int bn3 = 0; const int *bd3 = bbody >= 0 ? nt_arr(nt, bbody, "body", &bn3) : NULL;
   TyKind nx_bt = TY_NIL; int nx_tail_stmt = 0;
   if (nx_own) {
@@ -3424,7 +3425,11 @@ void emit_block_invoke(Compiler *c, int args_node, Buf *b, int indent, int as_ex
       snprintf(nxbuf, sizeof nxbuf, "_t%d", nx_tmp);
       g_ie_next_var = nxbuf;
       /* (a number carrier read where the yield is boxed is boxed too) */
-      g_ie_res_poly = nx_bt != TY_STRBUF && (nx_bt == TY_POLY || (want_poly && (ty_is_object(nx_bt) || oint_kind(nx_bt))));
+      /* (and so is any carrier of a body that diverges: its tail types no
+         site, the boxed slot reads the splice as it is, and the carrier is
+         the splice's value) */
+      g_ie_res_poly = nx_bt != TY_STRBUF && (nx_bt == TY_POLY || (want_poly && (ty_is_object(nx_bt) || oint_kind(nx_bt) ||
+                                                                               stmts_diverge(c, bbody))));
       /* a `next nil` into an Integer or Float slot is the slot's nil, and
          a `next` into the handle carrier adopts its value */
       g_ie_next_ty = (nx_bt == TY_INT || nx_bt == TY_FLOAT || nx_bt == TY_STRBUF) ? nx_bt : TY_UNKNOWN;
@@ -3497,6 +3502,9 @@ void emit_block_invoke(Compiler *c, int args_node, Buf *b, int indent, int as_ex
        is opaque, and an inlined method's own result slot (sp_RbVal when its
        body holds a bare `return`) did not fit the sp_int carrier */
     if (nx_bt == TY_NIL) void_tail = 1;
+    /* nor does a raise: it never returns, and stored, its void went into
+       the carrier (`{ next "n" if c; raise "b" }` did not build) */
+    if (nt_kind(nt, nt_paren_single(nt, tl3)) == NK_CallNode && stmts_diverge(c, bbody)) void_tail = 1;
     { Buf tb; memset(&tb, 0, sizeof tb);
       Buf *svp3 = g_pre; int svi3 = g_indent; g_pre = b; g_indent = 0;
       if (void_tail) emit_expr(c, tl3, &tb);
@@ -3770,7 +3778,7 @@ void emit_block_invoke(Compiler *c, int args_node, Buf *b, int indent, int as_ex
     g_c_loop_depth--;
     g_loop_exc_base = sv_lexc2; g_loop_rescue_base = sv_lexc2_rb;
     g_loop_ensure_base = sv_lens2;
-    if (as_expr) buf_printf(b, "} while(0); %s; ", g_ie_next_var ? nxbuf : "(void)0");
+    if (as_expr) { nx_carried = g_ie_next_var != NULL; buf_printf(b, "} while(0); %s; ", nx_carried ? nxbuf : "(void)0"); }
     else { emit_indent(b, indent); buf_puts(b, "} while(0);\n"); }
     g_ie_next_var = sv_nx2; g_ie_res_poly = sv_poly2; g_ie_next_ty = sv_nty2; g_ie_next_oint = sv_nxo2;
   }
@@ -3805,7 +3813,10 @@ void emit_block_invoke(Compiler *c, int args_node, Buf *b, int indent, int as_ex
     int bn2 = 0; const int *bd2 = bbody >= 0 ? nt_arr(nt, bbody, "body", &bn2) : NULL;
     int tail_ret = bn2 > 0 &&
                    nt_kind(nt, bd2[bn2 - 1]) == NK_ReturnNode;
-    if (tail_ret || stmts_diverge(c, bbody)) {
+    /* (not after a `next` carrier: the splice already ends in it, the value
+       of the block's `next`s, and a filler after it answered the slot's nil
+       for `{ next v if c; raise "x" }` where `next v` was taken) */
+    if (!nx_carried && (tail_ret || stmts_diverge(c, bbody))) {
       /* The filler is read as the value of the statement expression, so the
          type it has to have is the CONSUMER's -- want_ty -- not the type of
          the value the unreachable return carries. Taking the return's own put

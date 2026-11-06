@@ -1426,6 +1426,31 @@ static int         g_ev_fd  = -1;
 static unsigned long long g_ev_arms = 0, g_ev_adds = 0, g_ev_lost = 0, g_ev_timeouts = 0, g_ev_backstop = 0;
 #endif
 
+/* The handler-stack snapshot a green thread takes around each park (save,
+   switch out, load). Parks are the hot path of a server -- one per wait for
+   a socket -- and each one made a context with calloc, grew each of its
+   handler arrays with realloc and freed them all on resume. A small pool per
+   OS thread keeps them instead: a park takes one and its resume gives it
+   back, on the same OS thread, since a started green thread runs only on
+   its home worker (home_wid); past SP_SNAP_POOL a context is freed. What a
+   pooled context held is never read again: save rewrites every count and
+   the live prefix of every array, and load and the mark go by the counts.
+   A build with C extensions keeps the extension arena in the context,
+   which its free disposes of, so it takes a new context each time as
+   before. */
+#ifdef SP_CEXT
+static void *sp_snap_take(void) { return sp_exc_ctx_new(); }
+static void sp_snap_give(void *p) { sp_exc_ctx_free(p); }
+#else
+#define SP_SNAP_POOL 64
+static SP_TLS void *g_snap_pool[SP_SNAP_POOL];
+static SP_TLS int g_snap_n;
+static void *sp_snap_take(void) { return g_snap_n ? g_snap_pool[--g_snap_n] : sp_exc_ctx_new(); }
+static void sp_snap_give(void *p) {
+  if (g_snap_n < SP_SNAP_POOL) g_snap_pool[g_snap_n++] = p;
+  else sp_exc_ctx_free(p);
+}
+#endif
 static sp_thread *g_all = NULL;          /* registry of live threads, for GC rooting */
 
 #ifdef SP_EV_BACKEND
@@ -4083,11 +4108,11 @@ static int sp_sched_sleep_park(double seconds) {
   else {
     /* Same exception-context snapshot as sp_sched_block: the symmetric transfer
        clobbers our handler stack on resume. */
-    void *exc_snap = sp_exc_ctx_new();
+    void *exc_snap = sp_snap_take();
     sp_exc_ctx_save(exc_snap);
     sp_sched_switch_out();
     sp_exc_ctx_load(exc_snap);
-    sp_exc_ctx_free(exc_snap);
+    sp_snap_give(exc_snap);
     SP_ATOMIC_STORE(&self->wait_timer, 0, __ATOMIC_RELEASE);
     NTIMED_DEC();   /* running again */
     woken = self->woken;
@@ -4278,11 +4303,11 @@ static int sp_sched_wait_io_impl(int fd, short events, struct pollfd *set, int n
     else {
       /* Same exception-context snapshot as sp_sched_block/sleep: the symmetric
          transfer clobbers our handler stack on resume. */
-      void *exc_snap = sp_exc_ctx_new();
+      void *exc_snap = sp_snap_take();
       sp_exc_ctx_save(exc_snap);
       sp_sched_switch_out();
       sp_exc_ctx_load(exc_snap);
-      sp_exc_ctx_free(exc_snap);
+      sp_snap_give(exc_snap);
     }
     SP_ATOMIC_STORE(&self->wait_timer, 0, __ATOMIC_RELEASE);
     int rev = self->io_revents; self->io_revents = 0; self->io_fd = -1;
@@ -4349,12 +4374,12 @@ static int sp_sched_wait_io_impl(int fd, short events, struct pollfd *set, int n
   }
   /* Same exception-context snapshot as sp_sched_block/sleep: the symmetric
      transfer clobbers our handler stack on resume. */
-  void *exc_snap = sp_exc_ctx_new();
+  void *exc_snap = sp_snap_take();
   sp_exc_ctx_save(exc_snap);
   SCHED_UNLOCK();
   sp_sched_switch_out();
   sp_exc_ctx_load(exc_snap);
-  sp_exc_ctx_free(exc_snap);
+  sp_snap_give(exc_snap);
   SP_ATOMIC_STORE(&self->wait_timer, 0, __ATOMIC_RELEASE);
     int rev = self->io_revents; self->io_revents = 0; self->io_fd = -1;
   /* the set entries are off every list (whoever unparked us dropped them);
@@ -4902,13 +4927,13 @@ static void sp_sched_block(sp_thread **waitlist, int defer_inject) {   /* PRE/PO
        handler stack when root resumes from the block, so snapshot it here and
        restore it on wake -- otherwise a #raise/#kill delivered while blocked
        would find an empty handler stack and escape unhandled. */
-    void *exc_snap = sp_exc_ctx_new();
+    void *exc_snap = sp_snap_take();
     sp_exc_ctx_save(exc_snap);
     if (defer_inject) sp_fiber_defer_inject();
     SCHED_UNLOCK();   /* drop the lock across the transfer (we run no metadata while parked) */
     sp_sched_switch_out();
     sp_exc_ctx_load(exc_snap);
-    sp_exc_ctx_free(exc_snap);
+    sp_snap_give(exc_snap);
     /* resumed: a pending #kill/#raise fires here, in this thread's context (lock
        not held), so its ensure/rescue blocks unwind on its own stack. On the
        normal resume we re-take the lock so the caller continues holding it. */
@@ -4971,12 +4996,12 @@ static void sp_sched_block_wl(sp_thread **waitlist, sp_wlock *wl, int defer_inje
     sp_fiber_fire_inject_if_pending();   /* a #raise that woke main */
   }
   else {
-    void *exc_snap = sp_exc_ctx_new();
+    void *exc_snap = sp_snap_take();
     sp_exc_ctx_save(exc_snap);
     if (defer_inject) sp_fiber_defer_inject();
     sp_sched_switch_out();
     sp_exc_ctx_load(exc_snap);
-    sp_exc_ctx_free(exc_snap);
+    sp_snap_give(exc_snap);
     sp_fiber_fire_inject_if_pending();
   }
   wl_lock(wl);
@@ -5073,12 +5098,12 @@ static int sp_sched_block_timeout(sp_thread **waitlist, double deadline, sp_mute
     else sp_fiber_fire_inject_if_pending();
   }
   else {
-    void *exc_snap = sp_exc_ctx_new();
+    void *exc_snap = sp_snap_take();
     sp_exc_ctx_save(exc_snap);
     if (mutex) sp_fiber_defer_inject();
     sp_sched_switch_out();
     sp_exc_ctx_load(exc_snap);
-    sp_exc_ctx_free(exc_snap);
+    sp_snap_give(exc_snap);
     SP_ATOMIC_STORE(&self->wait_timer, 0, __ATOMIC_RELEASE);
     NTIMED_DEC();   /* running again */
     if (!mutex) sp_fiber_fire_inject_if_pending();

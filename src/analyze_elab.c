@@ -5086,7 +5086,7 @@ int elab_call_window(Compiler *c, int id, ElabWindow *w) {
   LoadRecord *r = elab_fresh(c);
   const int *par = comp_parent_map(c);
   int a = id;
-  *w = (ElabWindow){ { -1, -1 }, { -1, -1 }, 0, 0 };
+  *w = (ElabWindow){ { -1, -1 }, { -1, -1 }, 0, 0, 0 };
   while (a >= 0 && a < r->n && elab_point_of(c, a).region < 0) a = lr_climb_up(c, par, a);
   LoadPoint p = elab_point_of(c, a), end;
   if (!r->recorded || p.region < 0) return ELAB_UNKNOWN;
@@ -5110,6 +5110,7 @@ int elab_call_window(Compiler *c, int id, ElabWindow *w) {
     w->to = end;
     w->closed = 1;
   }
+  w->never = nt_kind(c->nt, a) == NK_DefNode && r->urun[a] == LR_NEVER;   /* (the collapse below keeps a window, not a proof) */
   if (nt_kind(c->nt, a) == NK_DefNode && r->urun[a] > w->from.seq)   /* nor before the body may first run (lr_rta) */
     w->from.seq = r->urun[a] < w->to.seq ? r->urun[a] : w->to.seq - 1;
   if (nt_kind(c->nt, a) == NK_DefNode && !lr_runs_in(r, w->from.seq, w->from.seq + 1)) {
@@ -8384,7 +8385,7 @@ void elab_dump(Compiler *c, FILE *out) {
       int e = elab_version_end(c, h->a, h->name, h->b, v->node, &end);
       fprintf(out, "%s %s#%d", k++ ? "," : "", kinds[v->kind], p.seq);
       if (e == ELAB_UNKNOWN || p.region < 0) { fputs("..?", out); continue; }
-      ElabWindow w = { p, e == ELAB_YES ? end : (LoadPoint){ p.region, r->rend[p.region] }, e == ELAB_YES, 0 };
+      ElabWindow w = { p, e == ELAB_YES ? end : (LoadPoint){ p.region, r->rend[p.region] }, e == ELAB_YES, 0, 0 };
       if (e == ELAB_YES) fprintf(out, "..#%d", end.seq);
       else fputs("..end", out);
       const LrDef *d[4];

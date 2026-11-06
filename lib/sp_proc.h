@@ -88,6 +88,11 @@ sp_Curry *sp_curry_apply(sp_Curry *c, sp_RbVal arg);
    Symbol id, a typed-array or user-object pointer. A synthesized typed-array
    adapter (`<int_array>.method(:push)`) launders the array/string it returns
    through the same register. */
+/* Which rule a Method's proc's #parameters follow (sp_BoundMethod.proc_params,
+   sp_proc_parameters_of), by what the bind site knows of its target. */
+#define SP_BM_PROC_PARAMS_LIST  0   /* a Ruby body: the Method's own list, every required positional optional in the proc view */
+#define SP_BM_PROC_PARAMS_ARITY 1   /* none (a builtin written in C, an attribute accessor, a Struct member): the unnamed list of its arity, in either view */
+#define SP_BM_PROC_PARAMS_PLAIN 2   /* the bind site cannot tell which method it stands for (a builtin or a reopen's def): a plain proc's answer */
 #define SP_BM_RET_INT       0
 #define SP_BM_RET_STR       1
 #define SP_BM_RET_INT_ARRAY 2
@@ -192,8 +197,12 @@ typedef struct sp_BoundMethod { void *self; sp_int fn; const char *name; sp_int 
                              line; NULL / 0 for none (nil): what
                              sp_bm_source_location answers */
   sp_int src_line;
+  sp_int proc_params;     /* the rule its proc's #parameters follow,
+                             SP_BM_PROC_PARAMS_*: stamped at the bind site
+                             (sp_bm_set_proc_params) */
 } sp_BoundMethod;
 void sp_bm_cap_scan(void *p);
+void sp_method_proc_scan(void *p);
 sp_int sp_method_proc_tramp(void *cap, sp_int argc, sp_int *args);
 sp_Proc *sp_method_to_proc(sp_BoundMethod *m);
 void sp_BoundMethod_scan(void *p);
@@ -215,7 +224,7 @@ static inline sp_int sp_bm_fn_opaque(sp_int fn) {
   return fn;
 #endif
 }
-static inline sp_BoundMethod *sp_bound_method_new(void *self, sp_int self_kind, sp_int fn, const char *name, sp_int arity) { sp_BoundMethod *m = (sp_BoundMethod *)sp_gc_alloc(sizeof(sp_BoundMethod), NULL, sp_BoundMethod_scan); m->self = self; m->self_kind = self_kind; m->fn = sp_bm_fn_opaque(fn); m->name = name; m->arity = arity; m->desc = NULL; m->params = NULL; m->unbound = 0; m->recv_bound = 0; m->legacy_int_abi = 0; m->legacy_sig = NULL; m->legacy_fixed = 0; m->legacy_rest = 0; m->legacy_ret = SP_BM_RET_INT; m->poly_abi = 0; m->poly_fixed = 0; m->thunk = 0; m->thunk_min = 0; m->thunk_max = 0; m->owner = SP_CLASS_NIL; m->src_file = NULL; m->src_line = 0; return m; }
+static inline sp_BoundMethod *sp_bound_method_new(void *self, sp_int self_kind, sp_int fn, const char *name, sp_int arity) { sp_BoundMethod *m = (sp_BoundMethod *)sp_gc_alloc(sizeof(sp_BoundMethod), NULL, sp_BoundMethod_scan); m->self = self; m->self_kind = self_kind; m->fn = sp_bm_fn_opaque(fn); m->name = name; m->arity = arity; m->desc = NULL; m->params = NULL; m->unbound = 0; m->recv_bound = 0; m->legacy_int_abi = 0; m->legacy_sig = NULL; m->legacy_fixed = 0; m->legacy_rest = 0; m->legacy_ret = SP_BM_RET_INT; m->poly_abi = 0; m->poly_fixed = 0; m->thunk = 0; m->thunk_min = 0; m->thunk_max = 0; m->owner = SP_CLASS_NIL; m->src_file = NULL; m->src_line = 0; m->proc_params = SP_BM_PROC_PARAMS_LIST; return m; }
 /* Tag a freshly-built Method with whether its target has the legacy sp_int C
    ABI, the per-position type signature, the fixed/rest slot counts, and how
    its sp_int C return boxes. The constructors default to 0 (unsafe), so every
@@ -266,6 +275,8 @@ static inline sp_int sp_bm_norm_ret(sp_BoundMethod *m, sp_int raw) {
    so a later dynamic .call/[] through a container sees m->unbound and raises
    instead of invoking the instance C function with no self (#4395). */
 static inline sp_BoundMethod *sp_bm_set_unbound(sp_BoundMethod *m) { if (m) m->unbound = 1; return m; }
+/* Stamp the rule the Method's proc's #parameters follow (sp_BoundMethod.proc_params). */
+static inline sp_BoundMethod *sp_bm_set_proc_params(sp_BoundMethod *m, sp_int rule) { if (m) m->proc_params = rule; return m; }
 /* The scalar-kind ABI token of a boxed argument (see abi_sig_token in
    codegen_call.c: TY_INT/TY_BOOL/TY_SYMBOL/TY_NIL are 1/2/3/4), or 0 when the
    value has no scalar sp_int slot at all (a pointer, Float, or Bigint). The
@@ -337,6 +348,7 @@ static inline sp_BoundMethod *sp_bm_unbind(sp_BoundMethod *m) {
   u->owner = m->owner;
   u->src_file = m->src_file;
   u->src_line = m->src_line;
+  u->proc_params = m->proc_params;
   u->unbound = 1;
   u->legacy_int_abi = m->legacy_int_abi;
   u->legacy_sig = m->legacy_sig;

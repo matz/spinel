@@ -2524,6 +2524,11 @@ int method_scope_arity(Compiler *c, int target, int *out) {
     if (cs && nt_int(nt, c->scopes[target].def_node, "bam_cmp", 0)) { *out = builtin_comparable_arity(cs); return 1; }
     /* ...and a Numeric method's (step takes none to two) */
     if (cs && nt_int(nt, c->scopes[target].def_node, "bam_num", 0) && builtin_numeric_arity(cs, out)) return 1;
+    /* ...and any other builtin's, by the class or module the wrapper
+       stands for (bam_owner), where the record tells it stands for the
+       builtin */
+    const char *own = NULL;
+    if (cs && rd != -2 && (bam_owner(c, target, &own), own) && builtin_method_arity(own, cs, out)) return 1;
   }
   int pn = nt_ref(nt, c->scopes[target].def_node, "parameters");
   int n_req = 0, n_opt = 0, n_post = 0;
@@ -7112,7 +7117,7 @@ static int emit_poly_builtin_method(Compiler *c, int id, Buf *b) {
     /* Both helpers allocate before reading the receiver's desc/fields; root
        the temp so a fresh receiver cannot be swept mid-call. */
     buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); _t%d.tag == SP_TAG_OBJ && _t%d.cls_id == SP_BUILTIN_PROC"
-                  " ? sp_proc_parameters_ids((sp_Proc *)_t%d.v.p, -1, (sp_sym)%d, (sp_sym)%d)"
+                  " ? sp_proc_parameters_of((sp_Proc *)_t%d.v.p, -1, (sp_sym)%d, (sp_sym)%d)"
                   /* a Method read out of a container answers from its own
                      rendering, which carries the parameter list (#3692) */
                   " : _t%d.tag == SP_TAG_OBJ && _t%d.cls_id == SP_BUILTIN_METHOD"
@@ -7133,7 +7138,7 @@ static int emit_poly_builtin_method(Compiler *c, int id, Buf *b) {
       int tv = ++g_tmp;
       buf_puts(b, "({ "); tv = hold_operand(c, recv, TY_POLY, 0, tv, 1, " ", b);
       buf_printf(b, "_t%d.tag == SP_TAG_OBJ && _t%d.cls_id == SP_BUILTIN_PROC"
-                    " ? sp_proc_parameters_ids((sp_Proc *)_t%d.v.p, %d, (sp_sym)%d, (sp_sym)%d)"
+                    " ? sp_proc_parameters_of((sp_Proc *)_t%d.v.p, %d, (sp_sym)%d, (sp_sym)%d)"
                     " : (sp_PolyArray *)(sp_raise_nomethod(sp_nomethod_msg(\"parameters\", _t%d)), (void *)0); })", tv, tv, tv, pmode, comp_sym_intern(c, "req"), comp_sym_intern(c, "opt"), tv);
       return 1;
     }
@@ -20279,10 +20284,10 @@ static int kwh_counts(const char *cls, const char *name) {
 #define BAS(...)
 #define BAC(...)
 #define BAK(...)
-#define BAP(c,m,p,cside) {c,m,p},
-static const struct { const char *owner, *m, *params; } sp_builtin_params_tbl[] = {
+#define BAP(c,m,p,cside) {c,m,p,cside},
+static const struct { const char *owner, *m, *params; int cside; } sp_builtin_params_tbl[] = {
 #include "builtin_arity.inc"
-  {NULL, NULL, NULL}
+  {NULL, NULL, NULL, 0}
 };
 #undef BAI
 #undef BAM
@@ -20292,10 +20297,14 @@ static const struct { const char *owner, *m, *params; } sp_builtin_params_tbl[] 
 #undef BAP
 /* The parameters CRuby lists for owner's instance method m, as
    sp_BoundMethod.params carries them ("kind[:name]" entries separated by
-   spaces); NULL where the facts have none */
-const char *builtin_method_params(const char *owner, const char *m) {
+   spaces); NULL where the facts have none. *in_c (when given) is set to
+   whether CRuby writes the method in C. */
+const char *builtin_method_params(const char *owner, const char *m, int *in_c) {
   for (int i = 0; owner && m && sp_builtin_params_tbl[i].owner; i++)
-    if (sp_streq(sp_builtin_params_tbl[i].owner, owner) && sp_streq(sp_builtin_params_tbl[i].m, m)) return sp_builtin_params_tbl[i].params;
+    if (sp_streq(sp_builtin_params_tbl[i].owner, owner) && sp_streq(sp_builtin_params_tbl[i].m, m)) {
+      if (in_c) *in_c = sp_builtin_params_tbl[i].cside;
+      return sp_builtin_params_tbl[i].params;
+    }
   return NULL;
 }
 /* Does any builtin class or module have a class method `m` (Integer.sqrt)? */

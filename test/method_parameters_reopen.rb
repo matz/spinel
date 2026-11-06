@@ -32,6 +32,13 @@ module Comparable
 end
 p [3.method(:clamp).arity, 3.method(:clamp).parameters]
 
+# its proc is the def's: a Ruby body's list, required positionals optional
+# in the proc view; the builtin's, written in C, lists its arity's
+p [cm.to_proc.parameters, cm.to_proc.parameters(lambda: false)]
+p fm.to_proc.parameters(lambda: false)
+p [mb.to_proc.parameters, mb.to_proc.parameters(lambda: false)]
+p 3.method(:clamp).to_proc.parameters(lambda: false)
+
 # a reopen of Object: a true's or false's own method (TrueClass's &,
 # FalseClass's to_s) stays the builtin's; a Method of one they get from
 # Kernel is the reopen's
@@ -42,3 +49,4 @@ class Object
 end
 p [true.method(:&).arity, false.method(:&).arity, true.method(:to_s).arity]
 p [true.method(:frozen?).parameters, true.method(:frozen?).arity, false.method(:frozen?).arity]
+p true.method(:frozen?).to_proc.parameters(lambda: false)

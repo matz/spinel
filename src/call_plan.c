@@ -2880,7 +2880,7 @@ static int ct_mixed_new_entries(Compiler *c, int id, int *out) {
       }
   } else if (r >= 0) {
     const ClsSet *cs = cls_fact_node(c, r);
-    if (!cs || cs->all || cs->bv) return CPT_UNKNOWN;
+    if (!cs || cs->all || (cs->bv && cs->bc)) return CPT_UNKNOWN;   /* (a builtin part that is no Class object makes nothing, #11154) */
     /* (a member past nclasses is a class value: its class methods answer) */
     for (int m = cls_set_next(cs, -1); m >= 0; m = cls_set_next(cs, m)) {
       if (m < c->nclasses) continue;

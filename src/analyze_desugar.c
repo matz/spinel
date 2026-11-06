@@ -5084,6 +5084,11 @@ static int cvb_split(Compiler *c, int id, const char *nm, const int *bval, int n
   if (nt_kind(nt, recv) != NK_LocalVariableReadNode) return 0;
   /* not a Class-typed one: rewrite_time_maker_class_value gives its Time makers their arms */
   if (infer_type(c, recv) != TY_POLY) return 0;
+  /* nor a value whose class set lists no builtin Class object (`bc`): the
+     builtin part of `[Only].first` is the nil of an empty read, and an arm
+     for `String.new` there refused the program's argument (#11154) */
+  { const ClsSet *s = cls_fact_node(c, recv);
+    if (s && !s->all && !(s->bv && s->bc)) return 0; }
   int args = nt_ref(nt, id, "arguments"), argc = 0;
   const int *argv = args >= 0 ? nt_arr(nt, args, "arguments", &argc) : NULL;
   /* not a keyword hash: its `**h` the boxed dispatch already counts as the run time's arguments */

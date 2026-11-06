@@ -244,7 +244,7 @@ static void cf_load_at(CF *f, int c, int v, int line);
 /* ---- the pool of sets ---- */
 
 static unsigned cf_set_hash(const ClsSet *s) {
-  unsigned h = (((2166136261u ^ (unsigned)s->all) * 16777619u ^ (unsigned)s->bv) * 16777619u ^ (unsigned)s->os) * 16777619u ^ (unsigned)s->pr;
+  unsigned h = ((((2166136261u ^ (unsigned)s->all) * 16777619u ^ (unsigned)s->bv) * 16777619u ^ (unsigned)s->os) * 16777619u ^ (unsigned)s->pr) * 16777619u ^ (unsigned)s->bc;
   for (int i = 0; i < s->nw; i++) {
     unsigned long long x = s->w[i];
     h = (h ^ (unsigned)s->wi[i]) * 16777619u;
@@ -254,7 +254,7 @@ static unsigned cf_set_hash(const ClsSet *s) {
   return h;
 }
 static int cf_set_eq(const ClsSet *a, const ClsSet *b) {
-  if (a->all != b->all || a->n != b->n || a->bv != b->bv || a->os != b->os || a->pr != b->pr || a->nw != b->nw) return 0;
+  if (a->all != b->all || a->n != b->n || a->bv != b->bv || a->os != b->os || a->pr != b->pr || a->bc != b->bc || a->nw != b->nw) return 0;
   return !memcmp(a->wi, b->wi, sizeof *a->wi * (size_t)a->nw) && !memcmp(a->w, b->w, sizeof *a->w * (size_t)a->nw);
 }
 /* s's words, copied into one block of their own (w first, wi after it) */
@@ -355,8 +355,8 @@ static int cf_union_set(CF *f, int a, int b) {
   const ClsSet *x = &f->pool[a], *y = &f->pool[b];
   /* the merge, noting whether it is one of the two (as it is along most
      edges once a set has grown: no lookup then) */
-  int x_has_y = (x->bv | !y->bv) & (x->os | !y->os) & (x->pr | !y->pr),
-      y_has_x = (y->bv | !x->bv) & (y->os | !x->os) & (y->pr | !x->pr);
+  int x_has_y = (x->bv | !y->bv) & (x->os | !y->os) & (x->pr | !y->pr) & (x->bc | !y->bc),
+      y_has_x = (y->bv | !x->bv) & (y->os | !x->os) & (y->pr | !x->pr) & (y->bc | !x->bc);
   int i = 0, j = 0, n = 0;
   while (i < x->nw || j < y->nw) {
     if (j >= y->nw || (i < x->nw && x->wi[i] < y->wi[j])) { f->swi[n] = x->wi[i]; f->sw[n++] = x->w[i++]; y_has_x = 0; }
@@ -372,6 +372,7 @@ static int cf_union_set(CF *f, int a, int b) {
   if (y_has_x) return b;
   ClsSet s; memset(&s, 0, sizeof s);
   s.bv = (unsigned char)(x->bv | y->bv); s.os = (unsigned char)(x->os | y->os); s.pr = (unsigned char)(x->pr | y->pr);
+  s.bc = (unsigned char)(x->bc | y->bc);
   s.nw = n; s.w = f->sw; s.wi = f->swi;
   return cf_pool(f, &s);
 }
@@ -382,11 +383,30 @@ static int cf_single(CF *f, int cls) {
   s.nw = cls >= 0; s.w = &w; s.wi = &wi;
   return cf_pool(f, &s);
 }
-/* the set of a builtin value with no class of the program's */
+/* the set of a builtin value with no class of the program's: one that may
+   be a builtin Class object too (bc), as any builtin's answer may */
 static int cf_bv_set(CF *f) {
+  ClsSet s; memset(&s, 0, sizeof s);
+  s.bv = 1; s.bc = 1;
+  return cf_pool(f, &s);
+}
+/* the same for a builtin value that is no Class object: the nil an element
+   read answers past the end (#11154). A `new` on a receiver whose builtin
+   part is only this does not reach the builtin classes. */
+static int cf_bv_nil_set(CF *f) {
   ClsSet s; memset(&s, 0, sizeof s);
   s.bv = 1;
   return cf_pool(f, &s);
+}
+/* the builtin part an element read adds: the nil past the end, no Class
+   object, where the receiver's contents are the walk's own (a literal, a
+   modeled answer: a builtin part with bc 0); any builtin value where a
+   builtin made the receiver and its contents are unknown (`k.subclasses`) */
+static int cf_set_of(CF *f, int x);
+static int cf_elem_nil_set(CF *f, int recv_el) {
+  int rs = recv_el >= 0 ? cf_set_of(f, recv_el) : CF_ALL;
+  if (rs == CF_ALL || (rs != CF_EMPTY && f->pool[rs].bv && f->pool[rs].bc)) return cf_bv_set(f);
+  return cf_bv_nil_set(f);
 }
 /* the set of a Proc: a builtin whose `[]` is its call */
 static int cf_proc_set(CF *f) {
@@ -2192,13 +2212,13 @@ static void cf_share_kind_rule(CF *f, int sh, int v, int recv_el, const int *pos
     }
     break;
   case BSH_ELEM: case BSH_ITER_FIND:
-    cf_load(f, recv_el, v); cf_add_set(f, v, cf_bv_set(f));
+    cf_load(f, recv_el, v); cf_add_set(f, v, cf_elem_nil_set(f, recv_el));
     break;
   case BSH_ELEM_N:
-    cf_load(f, recv_el, v); cf_add_set(f, v, cf_bv_set(f)); cf_share(f, v, recv_el);
+    cf_load(f, recv_el, v); cf_add_set(f, v, cf_elem_nil_set(f, recv_el)); cf_share(f, v, recv_el);
     break;
   case BSH_FETCH:
-    cf_load(f, recv_el, v); cf_add_set(f, v, cf_bv_set(f));
+    cf_load(f, recv_el, v); cf_add_set(f, v, cf_elem_nil_set(f, recv_el));
     if (npos >= 2) cf_flow(f, pos[npos - 1], v);
     if (has_blk) cf_flow(f, blk, v);
     break;
@@ -2358,7 +2378,7 @@ static void cf_builtin_rule(CF *f, int v, int recv_el, const int *argv, int argc
         if (!sp_streq(nm, "dig") && !sp_streq(nm, "at")) cf_share(f, v, recv_el);
       /* dig reads through the containers it finds, to any depth */
       if (f->directed && sp_streq(nm, "dig")) cf_load(f, v, v);
-      cf_add_set(f, v, cf_bv_set(f));
+      cf_add_set(f, v, cf_elem_nil_set(f, recv_el));
       cf_protocol_returns(f, v, recv_el);
       return;
     }
@@ -2439,6 +2459,10 @@ static void cf_builtin_rule(CF *f, int v, int recv_el, const int *argv, int argc
   }
   int has_blk = blk >= 0 && nt_kind(nt, blk) == NK_BlockNode;
   for (int i = 0; i < nk && known; i++) cf_share_kind_rule(f, kinds[i], v, recv_el, pos, npos, blk, has_blk, &known);
+  /* a fetch answers its default or its block's value for a missing key
+     (`h.fetch(:z, C)`, `a.delete(x) { }`), not only an element */
+  for (int i = 0; i < nk && known; i++)
+    if (kinds[i] == BSH_FETCH) { if (argc >= 2) cf_flow(f, argv[argc - 1], v); if (has_blk) cf_flow(f, blk, v); }
   /* (the kinds' walk) `pairs.to_h` holds the pairs' elements (or a Hash's
      own), `a.product(b)` pairs of a's and b's elements: one level of the
      containers the rows keep flat; a receiver the walk does not follow
@@ -3073,7 +3097,11 @@ static void cf_call_known(CF *f, int v, int pidx, int recv_el, const char *nm, c
   builtin |= f->site[si].builtin;
   f->site[si].builtin = (unsigned char)builtin;
   s = &f->pool[pidx];
-  if (pidx == CF_EMPTY || s->bv || s->os) builtin = 1;
+  /* (a builtin part that is no Class object, bc 0: an element read's nil,
+     makes nothing, so `new` and `allocate` on such a receiver are left to
+     the program's Class objects it lists, #11154) */
+  int ctor = sp_streq(nm, "new") || sp_streq(nm, "allocate");
+  if (pidx == CF_EMPTY || (s->bv && (s->bc || !ctor)) || s->os) builtin = 1;
   if (builtin) {
     /* Deferred until the classes have settled: the builtin answer unifies
        the receiver with the call's value and arguments, which a receiver
@@ -4205,7 +4233,7 @@ static void cf_node(CF *f, int v) {
     return;
   }
   case NK_ArrayNode: {
-    cf_add_set(f, v, cf_bv_set(f));
+    cf_add_set(f, v, cf_bv_nil_set(f));   /* (a container, no Class object: #11154) */
     if (f->directed) cf_el_obj(f, v);
     int n = 0; const int *els = nt_arr(nt, v, "elements", &n);
     for (int i = 0; i < n; i++)
@@ -4214,7 +4242,7 @@ static void cf_node(CF *f, int v) {
     return;
   }
   case NK_HashNode: case NK_KeywordHashNode: {
-    cf_add_set(f, v, cf_bv_set(f));
+    cf_add_set(f, v, cf_bv_nil_set(f));   /* (a container, no Class object: #11154) */
     if (f->directed) cf_el_obj(f, v);
     int n = 0; const int *els = nt_arr(nt, v, "elements", &n);
     for (int i = 0; i < n; i++) {
@@ -4419,7 +4447,14 @@ static void cf_node(CF *f, int v) {
         cf_all(f, v);
         return;
       } }
-    if (!cf_entry_has(f, CF_K_CONSTW, cf_const_key(nm))) return;   /* a builtin's: ARGV, Float::INFINITY */
+    if (!cf_entry_has(f, CF_K_CONSTW, cf_const_key(nm))) {
+      /* a builtin class or module held as a value (`[Time, Stamp]`, `k =
+         String`) is its Class object, which bc marks for the `new` or
+         class method on what holds it (#11154); ARGV, Float::INFINITY are
+         nothing of a class */
+      if (is_builtin_class_name(nm) || is_builtin_module_name(nm) || is_exc_name(nm)) cf_add_set(f, v, cf_bv_set(f));
+      return;
+    }
     cf_flow(f, cf_entry(f, CF_K_CONST, cf_const_key(nm)), v);
     return;
   }
@@ -5881,7 +5916,7 @@ static void cf_meet(Compiler *c, const int *df, const ClsSet *dp, int dn, int **
       const ClsSet *o = u == CF_ALL ? ds : us;
       m.nw = o->nw;
       memcpy(mw, o->w, sizeof *mw * (size_t)o->nw); memcpy(mwi, o->wi, sizeof *mwi * (size_t)o->nw);
-      m.bv = o->bv; m.os = o->os; m.pr = o->pr;
+      m.bv = o->bv; m.os = o->os; m.pr = o->pr; m.bc = o->bc;
     }
     else {
       for (int i = 0, j = 0; i < us->nw && j < ds->nw; ) {
@@ -5892,6 +5927,7 @@ static void cf_meet(Compiler *c, const int *df, const ClsSet *dp, int dn, int **
       m.bv = (unsigned char)(us->bv && ds->bv);
       m.os = (unsigned char)(us->os && ds->os);
       m.pr = (unsigned char)(us->pr && ds->pr);
+      m.bc = (unsigned char)(us->bc && ds->bc);
     }
     for (int i = 0; i < m.nw; i++) m.n += __builtin_popcountll(mw[i]);
     if (m.n == 0 && !m.bv && !m.os) { fact[v] = CF_EMPTY; continue; }

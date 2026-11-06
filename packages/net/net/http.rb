@@ -493,6 +493,7 @@ module Net
       @verify_hostname = nil
       @cert_store = nil
       @wire_buffer = String.new
+      @wire_socket = nil
       @debug_output = nil
       @socket = nil
       @tls = nil
@@ -594,7 +595,6 @@ module Net
     def connect
       debug "opening connection to #{conn_address}:#{@port}..."
       @socket = connect_with_timeout
-      @wire_buffer = String.new
       debug "opened"
       if @use_ssl
         begin
@@ -643,6 +643,8 @@ module Net
     end
 
     def close_socket
+      @wire_buffer = String.new
+      @wire_socket = nil
       @tls.sysclose unless @tls.nil?
       @socket.close unless @socket.nil?
       @tls = nil
@@ -740,6 +742,11 @@ module Net
       res.body
       end_transport(req, res)
       res
+    rescue StandardError
+      socket = @socket
+      close_socket
+      @socket = socket # The next transport hook sees a closed socket, as on CRuby.
+      raise
     ensure
       do_finish unless started
     end
@@ -893,6 +900,11 @@ module Net
     end
 
     def read_response(method, decode_content)
+      # Connection hooks may be overridden; the buffer belongs to its socket.
+      unless @wire_socket.equal?(@socket)
+        @wire_buffer = String.new
+        @wire_socket = @socket
+      end
       version = ""
       code = ""
       message = ""

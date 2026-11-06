@@ -1,0 +1,13 @@
+3
+2
+1
+2
+0
+2
+3
+7
+1
+3
+"no implicit conversion of Integer into Array"
+"no implicit conversion of nil into Array"
+"no implicit conversion of String into Array"

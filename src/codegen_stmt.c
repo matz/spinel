@@ -14532,8 +14532,10 @@ static void emit_tail_value_1(Compiler *c, int node, Buf *b) {
      own C: a raise there is no box to open, and is run as any raising tail */
   int raises = strncmp(txt, "(sp_raise_cls(", 14) == 0 ||
                strncmp(txt, "(sp_exc_stage_key(", 18) == 0 ||
-               /* a call on such a raising receiver, `((void)(<raise>), nil)` (#7164) */
-               (strncmp(txt, "((void)(", 8) == 0 && text_diverges(txt));
+               /* a call on such a raising receiver, `((void)(<raise>), nil)` (#7164),
+                  or a statement expression that raises first (an Array
+                  operator's TypeError arm) */
+               text_diverges(txt);
   if (boxed && !raises) emit_unbox_text(c, g_ret_type, tmp.p ? full : "sp_box_nil()", b);
   else if (sp_streq(txt, "sp_box_nil()")) emit_ret_nil(c, g_ret_type, b);
   /* The unresolved-call gate's sp_raise_nomethod(...) is a side-effecting poly

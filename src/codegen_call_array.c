@@ -345,7 +345,11 @@ static int emit_array_operand_type_error(Compiler *c, const BopCtx *x, Buf *b) {
   /* and a String slot's nil is NULL */
   int str_rt = at == TY_STRING;
   int tb = ++g_tmp;
-  buf_puts(b, "({ ");
+  /* The operands are evaluated inside the raise's message argument, so the
+     emitted text leads with the raise (text_diverges): a sibling arm of a
+     conditional, or a return, then takes it as an expression that never
+     returns, whatever placeholder type closes it. */
+  buf_puts(b, "({ sp_raise_cls(\"TypeError\", ({ ");
   int tr = emit_fold_recv_hold(c, x->id, x->recv, b);
   if (nil_rt) {
     buf_printf(b, "%s _t%d = (", oint_ctype(at), tb);
@@ -363,24 +367,24 @@ static int emit_array_operand_type_error(Compiler *c, const BopCtx *x, Buf *b) {
   else { buf_puts(b, "(void)("); emit_expr_for_effect(c, argv[0], b); buf_puts(b, "); "); }
   emit_fold_recv_test(c, x->id, tr, b);
   if (at == TY_NIL)
-    buf_puts(b, "sp_raise_cls(\"TypeError\", \"no implicit conversion of nil into Array\");");
+    buf_puts(b, "\"no implicit conversion of nil into Array\"; }));");
   else if (at == TY_BOOL)
-    buf_printf(b, "sp_raise_cls(\"TypeError\", _t%d"
+    buf_printf(b, "_t%d"
                   " ? \"no implicit conversion of true into Array\""
-                  " : \"no implicit conversion of false into Array\");", tb);
+                  " : \"no implicit conversion of false into Array\"; }));", tb);
   else if (str_rt)
-    buf_printf(b, "sp_raise_cls(\"TypeError\", _t%d == NULL"
+    buf_printf(b, "_t%d == NULL"
                   " ? \"no implicit conversion of nil into Array\""
-                  " : \"no implicit conversion of String into Array\");", tb);
+                  " : \"no implicit conversion of String into Array\"; }));", tb);
   else if (ty_is_object(at))
-    buf_printf(b, "sp_raise_cls(\"TypeError\", sp_sprintf(\"no implicit conversion of %%s into Array\", sp_convert_src_name(_t%d)));", tb);
+    buf_printf(b, "sp_sprintf(\"no implicit conversion of %%s into Array\", sp_convert_src_name(_t%d)); }));", tb);
   else if (nil_rt)
-    buf_printf(b, "sp_raise_cls(\"TypeError\", _t%d.nil"
+    buf_printf(b, "_t%d.nil"
                   " ? \"no implicit conversion of nil into Array\""
-                  " : \"no implicit conversion of %s into Array\");",
+                  " : \"no implicit conversion of %s into Array\"; }));",
                tb, conv_builtin_class_name(at));
   else
-    buf_printf(b, "sp_raise_cls(\"TypeError\", \"no implicit conversion of %s into Array\");",
+    buf_printf(b, "\"no implicit conversion of %s into Array\"; }));",
                conv_builtin_class_name(at));
   buf_printf(b, " %s; })", raise_tail_value(repr_of(c, x->id).as_ty));
   return 1;

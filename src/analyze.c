@@ -50794,7 +50794,8 @@ static void an_phase_block_inline(Compiler *c) {
   /* A forwarder may only be inlined when every method it hands the block to is
      inlined too: an un-inlined callee keeps the block as a real proc past the
      call, so the forwarder's captures must live in cells (#3772). */
-  for (int round = 0; round < 8; round++) {
+  /* (to a fixpoint, not 8 rounds: a chain defined outside in clears one forwarder a round, and each round clears one or stops) */
+  for (;;) {
     int changed2 = 0;
     for (int e = 0; e < nfwd; e++)
       if (inline_cand[fwd_from[e]] && !inline_cand[fwd_to[e]] &&

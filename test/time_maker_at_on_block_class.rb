@@ -13,3 +13,9 @@ p go([Time, Stamp])
 [[9]].each { |k| p k.at(-1) }
 z = ["ab", [1]]
 z.each { |k| begin; p k.at(0); rescue NoMethodError => e; p e.class; end }
+# a Class that has no `at`: the argument runs before the NoMethodError
+(ARGV.empty? ? Integer : Time).then do |k|
+  begin; k.at((puts "arg"; 0)); rescue NoMethodError => e; p e.message; end
+end
+def mk(k) = k.at((puts "arg2"; 0))
+begin; mk(Integer); rescue NoMethodError => e; p e.message; end

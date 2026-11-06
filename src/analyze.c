@@ -47125,6 +47125,25 @@ static int rewrite_time_maker_class_value(Compiler *c) {
       int rargs[2] = { tmcv_const(c, id, "NoMethodError"), full };
       tail = arysub_new_call(c, id, -1, "raise", arysub_args(c, id, rargs, 2), -1);
       tail = tmcv_arity_arms(c, id, recv, nm, args, tail);
+      /* CRuby evaluates the arguments before it finds no such method (or
+         the wrong count): an argument that can run code runs once ahead of
+         the raise, as the Time arms run it in their own call */
+      int aargc = 0; const int *aargv = args >= 0 ? nt_arr(nt, args, "arguments", &aargc) : NULL;
+      int ev[17], nev = 0;
+      for (int a = 0; a < aargc && nev < 16; a++) {
+        NodeKind ak = nt_kind(nt, aargv[a]);
+        if (ak == NK_SplatNode || ak == NK_BlockArgumentNode || ak == NK_KeywordHashNode ||
+            ak == NK_ForwardingArgumentsNode || !subtree_has_side_effect(c, aargv[a])) continue;
+        ev[nev++] = nt_clone_subtree(nt, aargv[a]);
+      }
+      if (nev > 0) {
+        int st = tmcv_node(c, "StatementsNode", id), pn = tmcv_node(c, "ParenthesesNode", id);
+        if (st < 0 || pn < 0) continue;
+        ev[nev++] = tail;
+        nt_node_set_arr(nt, st, "body", ev, nev);
+        nt_node_set_ref(nt, pn, "body", st);
+        tail = pn;
+      }
     }
     /* Time's own arm */
     {

@@ -4084,17 +4084,38 @@ void emit_poly_cases_n(Compiler *c, int id, const char *name, const PolySpecials
   if ((sp_streq(name, "readpartial") || sp_streq(name, "sysread")) && argc == 2 && kwh < 0 && splat_a < 0) {
     if (g_plan_check) pa_observe(PA_BUILTIN, PA_KEY_BUILTIN + PB_IO_READPARTIAL_BUF, -1, TY_UNKNOWN, PC_SAME);
     int trp = ++g_tmp;
-    /* (readpartial checks its length as the one-argument form does;
-       sysread with a buffer is CRuby's Errno::EFAULT, which this is not) */
-    buf_printf(b, " case SP_BUILTIN_IO: { const char *_t%d = %s((sp_File *)_t%d.v.p, ", trp,
-               sp_streq(name, "readpartial") ? "sp_File_readpartial_checked" : "sp_File_readpartial", tv);
-    if (atmp_ty[0] == TY_POLY) buf_printf(b, "sp_poly_arg_int_chk(_t%d)", atmp[0]);
-    else buf_printf(b, "(sp_int)_t%d", atmp[0]);
-    buf_puts(b, "); ");
     Buf hr; memset(&hr, 0, sizeof hr);
-    if (strbuf_slot_text(c, argv[1], &hr)) buf_printf(b, "sp_String_set_bin(%s, _t%d); ", hr.p, trp);
-    else if (nt_kind(nt, argv[1]) == NK_LocalVariableReadNode)
-      buf_printf(b, "lv_%s = _t%d; ", rename_local(nt_str(nt, argv[1], "name")), trp);
+    /* a String handle slot is checked for a freeze before the read, which
+       then goes straight into it (sp_File_readpartial_into): the bytes were
+       read into a new String and the freeze was found only on the copy,
+       with the bytes gone from the stream */
+    if (strbuf_slot_text(c, argv[1], &hr)) {
+      int tn = ++g_tmp, th = ++g_tmp;
+      buf_printf(b, " case SP_BUILTIN_IO: { sp_int _t%d = ", tn);
+      if (atmp_ty[0] == TY_POLY) buf_printf(b, "sp_poly_arg_int_chk(_t%d)", atmp[0]);
+      else buf_printf(b, "(sp_int)_t%d", atmp[0]);
+      buf_puts(b, "; ");
+      if (sp_streq(name, "readpartial"))
+        buf_printf(b, "if (_t%d < 0) sp_raise_cls(\"ArgumentError\", sp_sprintf(\"negative length %%lld given\", (long long)_t%d)); ",
+                   tn, tn);
+      buf_printf(b, "sp_String *_t%d = %s; SP_GC_ROOT(_t%d); ", th, hr.p, th);
+      buf_printf(b, "if (_t%d) { if (sp_String_is_frozen(_t%d)) sp_raise_frozen_str(_t%d->data); "
+                    "sp_str_check_mutable(_t%d->data); } ", th, th, th, th);
+      buf_printf(b, "const char *_t%d = _t%d ? sp_File_readpartial_into((sp_File *)_t%d.v.p, _t%d, _t%d)"
+                    " : sp_File_readpartial_or_nil((sp_File *)_t%d.v.p, _t%d); ", trp, th, tv, tn, th, tv, tn);
+      buf_printf(b, "if (!_t%d) sp_raise_cls(\"EOFError\", \"end of file reached\"); ", trp);
+    }
+    else {
+      /* (readpartial checks its length as the one-argument form does;
+         sysread with a buffer is CRuby's Errno::EFAULT, which this is not) */
+      buf_printf(b, " case SP_BUILTIN_IO: { const char *_t%d = %s((sp_File *)_t%d.v.p, ", trp,
+                 sp_streq(name, "readpartial") ? "sp_File_readpartial_checked" : "sp_File_readpartial", tv);
+      if (atmp_ty[0] == TY_POLY) buf_printf(b, "sp_poly_arg_int_chk(_t%d)", atmp[0]);
+      else buf_printf(b, "(sp_int)_t%d", atmp[0]);
+      buf_puts(b, "); ");
+      if (nt_kind(nt, argv[1]) == NK_LocalVariableReadNode)
+        buf_printf(b, "lv_%s = _t%d; ", rename_local(nt_str(nt, argv[1], "name")), trp);
+    }
     free(hr.p);
     buf_printf(b, "_t%d = ", tr);
     if (ret == TY_POLY) buf_printf(b, "sp_box_str(_t%d)", trp);

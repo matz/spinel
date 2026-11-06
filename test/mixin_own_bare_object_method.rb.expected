@@ -8,8 +8,8 @@
 [Integer, false, true, true]
 [Float, false, false, true]
 [Symbol, false, false, false]
-[3, "3", true]
-[2.5, "2.5", true]
+["3", true]
+["2.5", true]
 "[1, 2]#"
 "{a: 1}#"
 "1..2#"
@@ -18,3 +18,8 @@
 [Range, false, true]
 4
 6
+"7"
+"7"
+"{b: 2}"
+:main
+:main

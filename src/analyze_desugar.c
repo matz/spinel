@@ -15166,10 +15166,38 @@ static int bi_def_visibility(const NodeTable *nt, int st) {
    to_s), and a private Kernel name the program defines on the receiver's
    chain is its method, which CRuby's lookup finds through self ahead of
    Kernel's function. */
+/* does every builtin class a copy of cls serves answer nm itself? A
+   Comparable copy of the program's own method serves a String and a
+   Symbol too (bx_cmp_own_class) */
+static int bi_receivers_all_answer(const char *cls, const char *nm) {
+  int any = 0;
+  for (int i = 0; bi_copy_receiver(cls, i); i++, any = 1)
+    if (!builtin_instance_method_known(bi_copy_receiver(cls, i), nm)) return 0;
+  if (sp_streq(cls, "Comparable") &&
+      (!builtin_instance_method_known("String", nm) || !builtin_instance_method_known("Symbol", nm))) return 0;
+  return any;
+}
+/* does the program define nm at the top level, or in a body of Object or
+   Kernel? CRuby's lookup reaches such a def after the receiver's class and
+   the mixed-in module, ahead of Object's and Kernel's builtin method */
+static int bi_root_defines(const NodeTable *nt, const char *nm) {
+  for (int id = 0; id < nt->count; id++)
+    if (nt_kind(nt, id) == NK_DefNode && nt_ref(nt, id, "receiver") < 0 && nt_str(nt, id, "name") &&
+        sp_streq(nt_str(nt, id, "name"), nm) && fwd_lex_parent(nt, id) < 0) return 1;
+  BiSeen seen = { NULL, 0 };
+  int o = bi_body_defines(nt, "", "Object", nm, &seen) || bi_body_defines(nt, "", "Kernel", nm, &seen);
+  bi_seen_free(&seen);
+  return o;
+}
 static int bi_keeps_receiverless(const NodeTable *nt, const char *cls, int own, const char *nm) {
   if (is_enum_helper_name(nm)) return 1;
   if (!object_instance_method_name(nm)) return 0;
-  if (object_public_method_name(nm)) return !own;
+  /* in a copy of the program's own method, a public method of Object is
+     the receiver's, unless a top-level def of the name may answer first
+     (a receiver class with no builtin method of the name): such a call
+     stays as it was */
+  if (object_public_method_name(nm))
+    return !own || (!bi_receivers_all_answer(cls, nm) && bi_root_defines(nt, nm) && !own_chain_defines(nt, cls, nm));
   if (own && own_chain_defines(nt, cls, nm)) return 0;
   return !bi_receiver_answers(cls, nm);
 }
@@ -15234,8 +15262,23 @@ static int program_defines_name_off_class(const NodeTable *nt, int n0, const cha
    receiverless calls there (Kernel's aside) take it as their receiver; cls
    and own as bi_keeps_receiverless takes them */
 static void bi_self_to_local(NodeTable *nt, int lo, int hi, const char *cls, int own) {
+  /* the block of a call that runs it with another self (`7.instance_exec
+     { inspect }`) ends at rebind_hi: a public Object method there stays as
+     it was (the nodes are pre-order, so a block's subtree is one range) */
+  static const char *const rebinds[] = { "instance_eval", "instance_exec", "class_eval", "class_exec",
+                                         "module_eval", "module_exec", "define_method", NULL };
+  int rebind_hi = -1;
   for (int id = lo; id <= hi; id++) {
     NodeKind kind = nt_kind(nt, id);
+    if (kind == NK_CallNode && nt_ref(nt, id, "block") >= 0 && nt_str(nt, id, "name")) {
+      const char *cn = nt_str(nt, id, "name");
+      for (int k = 0; rebinds[k]; k++)
+        if (sp_streq(cn, rebinds[k])) {
+          int bhi = fwd_subtree_max(nt, nt_ref(nt, id, "block"));
+          if (bhi > rebind_hi) rebind_hi = bhi;
+          break;
+        }
+    }
     if (kind == NK_SelfNode) {
       nt_node_set_type(nt, id, "LocalVariableReadNode");
       nt_node_set_str(nt, id, "name", "__self");
@@ -15244,6 +15287,7 @@ static void bi_self_to_local(NodeTable *nt, int lo, int hi, const char *cls, int
     else if (kind == NK_CallNode && nt_ref(nt, id, "receiver") < 0) {
       const char *nm = nt_str(nt, id, "name");
       if (!nm || bi_keeps_receiverless(nt, cls, own, nm)) continue;
+      if (id <= rebind_hi && object_public_method_name(nm)) continue;
       int rd = nt_new_node(nt, "LocalVariableReadNode"); if (rd < 0) return;
       nt_node_set_str(nt, rd, "name", "__self");
       nt_node_set_int(nt, rd, "depth", 0);

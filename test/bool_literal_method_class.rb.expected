@@ -1,0 +1,20 @@
+[[:opt, :custom]]
+-1
+"T"
+"T1"
+TrueClass
+FalseClass
+"false"
+"F"
+FalseClass
+"true"
+TrueClass
+FalseClass
+[[:opt, :custom]]
+TrueClass
+FalseClass
+TrueClass
+Kernel
+BasicObject
+TrueClass
+true

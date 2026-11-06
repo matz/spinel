@@ -4786,10 +4786,15 @@ int method_recv_nodes(Compiler *c, int recv, int **out) {
 /* The #owner a bound builtin's or accessor's wrapper, method mi, stands
    for (desugar_builtin_method_obj records it on the def): the class
    declaring the accessor, or -1 and the builtin's class or module by name
-   in *name (NULL where no fact names one) */
+   in *name (NULL where no fact names one). A true's or false's own method
+   is TrueClass's or FalseClass's only where the Method stands for the
+   builtin: where the record cannot tell whether it reaches a program's def
+   of the name instead (cplan_bam_reopen_target), a conditional prepend's,
+   no fact names it */
 int bam_owner(Compiler *c, int mi, const char **name) {
   int dn = mi >= 0 ? c->scopes[mi].def_node : -1;
   *name = dn >= 0 ? nt_str(c->nt, dn, "bam_owner") : NULL;
+  if (*name && is_boolean_class_name(*name) && cplan_bam_reopen_target(c, mi) == -2) *name = NULL;
   return dn >= 0 ? (int)nt_int(c->nt, dn, "bam_owner_ci", 0) - 1 : -1;
 }
 

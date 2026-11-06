@@ -1942,14 +1942,17 @@ const char *builtin_method_owner(const char *cls, const char *m) {
 }
 
 /* The class or module that defines builtin method m of a true or a false,
-   as Method#owner names it, where that is the same for both: one every
-   object answers (builtin_object_method_owner: Kernel's frozen?,
-   BasicObject's ==). NULL for one of the value's own class, TrueClass's
-   for true and FalseClass's for false, which the instance facts list
-   under TrueClass (the rows of the methods outside Object's ancestry; the
-   two classes define the same names), and for one no fact names */
-const char *builtin_bool_method_owner(const char *m) {
-  return m && !builtin_instance_method_known("TrueClass", m) ? builtin_object_method_owner(m) : NULL;
+   as Method#owner names it: one every object answers
+   (builtin_object_method_owner: Kernel's frozen?, BasicObject's ==), or
+   one of the value's own class, which the instance facts list under
+   TrueClass (the rows of the methods outside Object's ancestry; the two
+   classes define the same names): cls, the value's class, TrueClass or
+   FalseClass, where it is known. NULL for that one of a value that may be
+   either (cls NULL), and for one no fact names */
+const char *builtin_bool_method_owner(const char *cls, const char *m) {
+  if (!m) return NULL;
+  if (!builtin_instance_method_known("TrueClass", m)) return builtin_object_method_owner(m);
+  return cls && is_boolean_class_name(cls) ? cls : NULL;
 }
 
 /* The module that defines function m, which a receiverless method(:m)

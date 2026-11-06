@@ -1,0 +1,6 @@
+["gem", true, false]
+["gem_original_require", true, false]
+["puts", true, false]
+["emit", false, false]
+false
+false

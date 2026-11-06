@@ -1795,7 +1795,7 @@ typedef struct {
      entry is not asked for that yet (call_plan.c, ver_absent_note); mm:
      where the call runs, method_missing is on the chain (1), is not (2),
      or both (ver_mm_at) */
-  struct VerLate { char *name; int cls, sg, mi, ar, mm; } *ver_late;
+  struct VerLate { char *name; int cls, sg, mi, ar, mm, span; } *ver_late;   /* span: a call past the build that spans versions */
   int nver_late;
   int nver_refl;   /* the named entries whose name reflection does not answer (call_plan.c, ver_refl_named) */
   int ncond_disp;  /* the dispatchers defs under a run-time condition are lowered to (analyze_desugar.c; call_plan.c, ver_list_held) */
@@ -2552,7 +2552,8 @@ int method_answers_receiver(Compiler *c, int mi);
 int comp_super_parent(Compiler *c, int class_id, int is_cmethod); /* super in `self.new` is Class#new */
 enum { SUPER_OBJ_SAME = 1, SUPER_OBJ_FALSE, SUPER_OBJ_FROZEN, SUPER_OBJ_SELF };
 /* a super (node id) no program ancestor answers that reaches BasicObject's
-   or Kernel's ==, equal?, eql?, !, nil?, frozen? or itself: SUPER_OBJ_*,
+   or Kernel's ==, equal?, eql?, !, nil?, frozen?, itself or
+   respond_to_missing?: SUPER_OBJ_*,
    else 0 */
 int comp_super_object_builtin(Compiler *c, const Scope *s, const char *uname, int id);
 /* Resolve `name` through the class's (chain-aware) alias table to the

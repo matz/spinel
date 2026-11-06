@@ -981,7 +981,7 @@ int emit_call_reflection_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
       if (ik == NK_FalseNode) inherit = 0;
     }
     /* a builtin class the program does not open: CRuby's own table */
-    int bv = qm && ci < 0 ? core_method_vis(nt_str(nt, recv, "name"), qm, inherit) : -1;
+    int bv = qm && ci < 0 ? cplan_builtin_method_vis(c, id, -1, nt_str(nt, recv, "name"), qm, inherit) : -1;
     if (bv >= 0) {
       buf_printf(b, "%d", ((bv & 1) && md_pub) || ((bv & 2) && md_prot) || ((bv & 4) && md_priv));
       return 1;
@@ -1028,7 +1028,7 @@ int emit_call_reflection_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
          methods of the builtin classes and modules above the class, Object
          and Kernel among them (#2673); one the table does not hold is
          refused below */
-      bv = found ? 0 : refl_builtin_vis(c, ci, qm, inherit);
+      bv = found ? 0 : cplan_builtin_method_vis(c, id, ci, NULL, qm, inherit);
       if (bv >= 0) {
         int yes = ((bv & 1) && md_pub) || ((bv & 2) && md_prot) || ((bv & 4) && md_priv);
         if (found) {

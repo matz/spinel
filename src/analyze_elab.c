@@ -5070,6 +5070,9 @@ static int lr_runs_in(const LoadRecord *r, int a, int b) {
    call plan's frame stands it (lr_plan_place) */
 static int lr_climb_up(Compiler *c, const int *par, int a) {
   if (par[a] >= 0) return par[a];
+  /* a method a pass made for a node, which runs no earlier than it */
+  int rf = nt_kind(c->nt, a) == NK_DefNode ? (int)nt_int(c->nt, a, "runs_from", 0) - 1 : -1;
+  if (rf >= 0) return rf;
   char how = 0; int x = 0, k = 0; unsigned pass = 0;
   int o = nt_origin(c->nt, a, &how, &x, &pass, &k);
   return how == 'c' && o >= 0 && o < a ? o : -1;
@@ -7721,6 +7724,20 @@ static int lr_vis_at(Compiler *c, int cls, const char *name, int sg, LoadPoint p
 }
 int elab_method_vis_at(Compiler *c, int cls, const char *name, int sg, LoadPoint p) {
   return lr_ready(c, p) ? lr_vis_at(c, cls, name, sg, p) : -1;
+}
+
+/* See analyze.h. */
+int elab_main_method_vis_at(Compiler *c, int node, const char *name) {
+  LoadPoint p = elab_point_of(c, node);
+  const LrDef *d = NULL;
+  if (p.region < 0 || !name) return -1;
+  int at = elab_method_at(c, LR_MAIN, name, 0, p, &d);
+  if (at == ELAB_NO) return d ? -1 : 0;   /* (an undef or a removal: not read here) */
+  if (at != ELAB_YES || !d || (d->kind != LR_DEF && d->kind != LR_ALIAS) ||
+      elab_own_method_at(c, LR_MAIN, name, p) != ELAB_YES)
+    return -1;
+  int v = elab_method_vis_at(c, LR_MAIN, name, 0, p);
+  return v == SP_VIS_PUBLIC ? 1 : v == SP_VIS_PROTECTED ? 2 : v == SP_VIS_PRIVATE ? 4 : -1;
 }
 
 int elab_method_vis_held_from(Compiler *c, int cls, const char *name, int sg, LoadPoint p) {

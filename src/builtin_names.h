@@ -313,6 +313,7 @@ int is_basic_object_hook_name(const char *n); /* ...BasicObject's: singleton_met
 int is_const_added_name(const char *n); /* const_added */
 int is_method_missing_name(const char *n); /* method_missing respond_to_missing?: what a call of a name an object has no method by runs */
 extern const char METHOD_MISSING_NAME[];   /* "method_missing", the name a lookup of that method asks */
+extern const char RESPOND_TO_MISSING_NAME[];   /* "respond_to_missing?", what a Method capture asks of a name it finds no method by */
 int definition_form_hooks(const char *form, int sg, const char **out); /* the hooks a definition form fires: included and append_features for include, method_added for attr_accessor, ... (up to 2) */
 int is_const_missing_name(const char *n); /* const_missing */
 int is_const_table_def_name(const char *n); /* __const_get__ __const_defined__ */

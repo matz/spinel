@@ -11147,6 +11147,104 @@ static int desugar_builtin_method_obj(Compiler *c) {
   return changed;
 }
 
+/* Class k's instance method `name` that def (disp_def_build, at no line of
+   the program) declares, a helper no call of the program names (the space
+   in its name, name_is_synth_method), reached when run */
+static void mm_helper_reach(Compiler *c, int s) {
+  if (s >= 0) { c->scopes[s].reachable = 1; comp_touch_scope(c->scopes[s].idx); }
+}
+static int mm_helper_def(Compiler *c, int k, const char *name, int def, int run) {
+  Scope *ws = comp_scope_new(c, name, def);
+  int ws_idx = c->nscopes - 1;
+  { ws->class_id = k; comp_touch_scope(ws->idx); }
+  { ws->body = nt_ref(c->nt, def, "body"); comp_touch_scope(ws->idx); }
+  collect_def_params(c, def, ws);
+  comp_grow_node_arrays(c);
+  walk_scope(c, nt_ref(c->nt, def, "body"), ws_idx, k);
+  if (run) mm_helper_reach(c, ws_idx);
+  return ws_idx;
+}
+
+/* `recv.method(:a)` (or public_method, or a bare method(:a) in an instance
+   method) on an object of a program class k whose method_missing and
+   respond_to_missing? are live where the capture runs, and that has no
+   method `a` there, nor a builtin one, nor a class under k one
+   (cplan_capture_misses): CRuby asks respond_to_missing?(:a,
+   include_private) at the capture and, when it is truthy, makes a Method
+   whose call runs method_missing(:a, *args, **kw, &blk), looked up at each
+   call, its owner k. Two methods of k stand for that method entry:
+     def `__mm a`(*__condr, **__condk, &__condb) = method_missing(:a, *__condr, **__condk, &__condb)
+     def `__rtm a`(__rtm_p) = respond_to_missing?(:a, __rtm_p) ? true : false
+   the Method's target, its scope on the capture (mm_target), and the
+   capture's test, its scope on the target (mm_test), not put in its
+   Symbol's place: the call plan binds the capture to the first only where
+   it finds no method of the name (cplan_capture_missing). */
+static int desugar_missing_method_obj(Compiler *c) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  int changed = 0, n0 = nt->count;
+  for (int id = 0; id < n0; id++) {
+    if (nt_kind(nt, id) != NK_CallNode || !is_bound_method_maker(nt_str(nt, id, "name")) ||
+        nt_int(nt, id, "mm_target", 0) || nt_int(nt, id, "builtin_only", 0)) continue;
+    const char *sym = method_sym_arg(c, id);
+    int recv = nt_ref(nt, id, "receiver"), k = -1, sc = c->nscope[id];
+    TyKind rt = TY_UNKNOWN;
+    if (!sym || !sym[0] || strlen(sym) > 200 || strncmp(sym, "__bam_", 6) == 0) continue;
+    if (recv >= 0) rt = infer_type(c, recv);
+    else if (sc >= 0 && c->scopes[sc].class_id >= 0 && !c->scopes[sc].is_cmethod) rt = ty_object(c->scopes[sc].class_id);
+    if (!ty_is_object(rt) || (k = ty_object_class(rt)) < 0 || is_builtin_reopen(c->classes[k].name) ||
+        !cplan_capture_misses(c, id, k, sym)) continue;
+    char wname[256], qname[256];
+    snprintf(wname, sizeof wname, "__mm %s", sym);
+    snprintf(qname, sizeof qname, "__rtm %s", sym);
+    changed = 1;
+    /* (they may run where the capture may: as the reach of the capture
+       marks them, cr_add_missing, for the passes before it runs again) */
+    int run = sc >= 0 && comp_scope_may_run(c, sc), had = comp_method_in_class(c, k, wname);
+    if (had >= 0) {
+      nt_node_set_int(nt, id, "mm_target", had + 1);
+      if (run) mm_helper_reach(c, had), mm_helper_reach(c, cplan_missing_guard(c, had));
+      continue;
+    }
+    /* the capture's test, include_private passed in */
+    int ask = nt_new_node(nt, "CallNode"), qargs = nt_new_node(nt, "ArgumentsNode");
+    int qav[2] = { nt_new_node(nt, "SymbolNode"), nt_new_node(nt, "LocalVariableReadNode") };
+    nt_node_set_str(nt, qav[0], "value", sym);
+    nt_node_set_str(nt, qav[1], "name", "__rtm_p");
+    nt_node_set_arr(nt, qargs, "arguments", qav, 2);
+    nt_node_set_str(nt, ask, "name", RESPOND_TO_MISSING_NAME);
+    nt_node_set_ref(nt, ask, "arguments", qargs);
+    int iff = nt_new_node(nt, "IfNode"), el = nt_new_node(nt, "ElseNode");
+    int yes = nt_new_node(nt, "StatementsNode"), no = nt_new_node(nt, "StatementsNode");
+    int tv = nt_new_node(nt, "TrueNode"), fv = nt_new_node(nt, "FalseNode");
+    nt_node_set_arr(nt, yes, "body", &tv, 1);
+    nt_node_set_arr(nt, no, "body", &fv, 1);
+    nt_node_set_ref(nt, iff, "predicate", ask);
+    nt_node_set_ref(nt, iff, "statements", yes);
+    nt_node_set_ref(nt, el, "statements", no);
+    nt_node_set_ref(nt, iff, "subsequent", el);
+    int qdef = disp_def_build(nt, -1, qname, 0, 0, 0, NULL, 0, iff), qp = nt_new_node(nt, "ParametersNode");
+    int preq = nt_new_node(nt, "RequiredParameterNode");
+    nt_node_set_str(nt, preq, "name", "__rtm_p");
+    nt_node_set_arr(nt, qp, "requireds", &preq, 1);
+    nt_node_set_ref(nt, qdef, "parameters", qp);
+    int qs = mm_helper_def(c, k, qname, qdef, run);
+    LocalVar *plv = scope_local(&c->scopes[qs], "__rtm_p");
+    if (plv) { lv_set_type(plv, TY_BOOL); plv->rbs_seeded = 1; }   /* (no call of the program passes it) */
+    /* the Method's target */
+    int wdef = disp_def_build(nt, -1, wname, 0, -1, 1, NULL, 0, disp_method_missing_call(nt, sym, -1, 1));
+    nt_node_set_int(nt, wdef, "runs_from", id + 1);   /* (its body runs where the Method is called: past the capture) */
+    nt_node_set_str(nt, wdef, "bam_sym", sym);   /* its #name and #original_name */
+    nt_node_set_int(nt, wdef, "mm_test", qs + 1);
+    nt_node_set_int(nt, wdef, "bam_owner_ci", k + 1);   /* its #owner */
+    int ws = mm_helper_def(c, k, wname, wdef, run), mmi = comp_method_in_chain(c, k, METHOD_MISSING_NAME, NULL);
+    nt_node_set_int(nt, id, "mm_target", ws + 1);
+    /* (a forwarder of its block, inlined where what it hands the block to
+       is, as the yield marking before this pass decided for the others) */
+    { c->scopes[ws].yields = c->scopes[mmi].yields; comp_touch_scope(c->scopes[ws].idx); }
+  }
+  return changed;
+}
+
 /* An under-supplied call (`m(1)` against `def m(a, b)`) raises ArgumentError
    at runtime (args_raise), so the missing params never carry a real value --
    but with NO other call site they also never receive a type, the body can't
@@ -35674,7 +35772,10 @@ int make_yield_proc_forms(Compiler *c) {
        re-raise and its own `new` sites alike, none of which splice the body */
     int exc_init = src->class_id >= 0 && sp_streq(src->name, "initialize") && !src->is_cmethod &&
                    class_is_exc_subclass(c, src->class_id);
-    if (src->class_id >= 0 && !shadow_clone && !exc_init && !pf_wanted(c, comp_scope_user_name(src)) && !pf_in_class_dispatch(c, src) &&
+    /* (a method_missing Method's target is wanted by its captures' name,
+       desugar_missing_method_obj) */
+    const char *bsym = src->def_node >= 0 ? nt_str(nt, src->def_node, "bam_sym") : NULL;
+    if (src->class_id >= 0 && !shadow_clone && !exc_init && !pf_wanted(c, bsym ? bsym : comp_scope_user_name(src)) && !pf_in_class_dispatch(c, src) &&
         !(src->ctor_cycle && ctor_graph_init(c, s)))
       continue;
     /* A method the program reopens has two definitions in the scope table
@@ -51794,6 +51895,7 @@ static void an_phase_infer_fixpoint(Compiler *c) {
     ch |= AN_PASS("pin_arg_position_hash_new", pin_arg_position_hash_new(c));        /* f(Hash.new(d)) -> PolyPoly variant */
     ch |= AN_PASS("pad_unsupplied_params", pad_unsupplied_params(c));            /* under-supplied call: placeholder param type */
     ch |= AN_PASS("desugar_builtin_method_obj", desugar_builtin_method_obj(c));       /* builtin recv.method(:sym) -> wrapper def */
+    ch |= AN_PASS("desugar_missing_method_obj", desugar_missing_method_obj(c));       /* respond_to_missing? recv.method(:sym) -> method_missing wrapper */
     ch |= AN_PASS("desugar_class_body_bare_new", desugar_class_body_bare_new(c));      /* class body `new(x)` -> `Klass.new(x)` */
     ch |= AN_PASS("desugar_bare_class_self_calls", desugar_bare_class_self_calls(c));    /* cmethod `const_get(:K)` -> `self.const_get(:K)` */
     ch |= AN_PASS("desugar_ie_bare_object_calls", desugar_ie_bare_object_calls(c));     /* instance_eval { is_a?(K) } -> self.is_a?(K) */

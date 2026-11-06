@@ -7181,6 +7181,7 @@ static int inc_super_behind(Compiler *c, int ci, const char *name, int like) {
   /* (the def keeps the program's name, as a renamed copy's does: its
      super is the superclass's method of that name) */
   int def = disp_def_build(nt, like, name, 0, 0, 0, NULL, 0, sup);
+  nt_node_set_int(nt, def, "behind_super", sup + 1);   /* (cplan_capture_arm) */
   /* (the superclass's method's parameters when the program defines one: a
      module method of another arity makes the entry forward its arguments
      as they came, and `super` passes on what the shadow took, so

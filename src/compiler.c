@@ -5343,8 +5343,9 @@ int comp_super_parent(Compiler *c, int class_id, int is_cmethod) {
 /* What a `super` that no program ancestor answers reaches when the
    method is one of BasicObject's or Kernel's that Spinel answers for any
    object of a program class: SUPER_OBJ_SAME (==, equal?, eql?: the same
-   object), SUPER_OBJ_FALSE (!, nil?), SUPER_OBJ_FROZEN (frozen?) or
-   SUPER_OBJ_SELF (itself); 0 for any other, and for a super `id` that
+   object), SUPER_OBJ_FALSE (!, nil?, respond_to_missing?),
+   SUPER_OBJ_FROZEN (frozen?) or SUPER_OBJ_SELF (itself); 0 for any
+   other, and for a super `id` that
    passes a splat, a keyword, a forwarded list or a count the method does
    not take. Only a plain class qualifies
    (comp_plain_class): a builtin ancestor (Struct, Exception, an Array
@@ -5362,11 +5363,13 @@ static int super_plain_argc(Compiler *c, int id, const Scope *s) {
   if (nt_kind(nt, id) == NK_ForwardingSuperNode) {
     int pn = s->def_node >= 0 ? nt_ref(nt, s->def_node, "parameters") : -1, n = 0, k = 0;
     if (pn < 0) return 0;
-    const char *arrs[] = { "optionals", "posts", "keywords" };
-    for (int i = 0; i < 3; i++) { (void)nt_arr(nt, pn, arrs[i], &k); if (k) return -1; }
+    const char *arrs[] = { "posts", "keywords" };
+    for (int i = 0; i < 2; i++) { (void)nt_arr(nt, pn, arrs[i], &k); if (k) return -1; }
     if (nt_ref(nt, pn, "rest") >= 0 || nt_ref(nt, pn, "keyword_rest") >= 0) return -1;
+    /* (an optional's value as it stands is passed too) */
     (void)nt_arr(nt, pn, "requireds", &n);
-    return n == s->nparams ? n : -1;
+    (void)nt_arr(nt, pn, "optionals", &k);
+    return n + k == s->nparams ? n + k : -1;
   }
   int sa = nt_ref(nt, id, "arguments"), n = 0;
   const int *av = sa >= 0 ? nt_arr(nt, sa, "arguments", &n) : NULL;
@@ -5386,6 +5389,7 @@ int comp_super_object_builtin(Compiler *c, const Scope *s, const char *uname, in
   else if (sp_streq(uname, "nil?")) { kind = SUPER_OBJ_FALSE; kernel = 1; }
   else if (sp_streq(uname, "frozen?")) { kind = SUPER_OBJ_FROZEN; kernel = 1; }
   else if (sp_streq(uname, "itself")) { kind = SUPER_OBJ_SELF; kernel = 1; }
+  else if (sp_streq(uname, RESPOND_TO_MISSING_NAME)) { kind = SUPER_OBJ_FALSE; nargs = 2; kernel = 1; }
   if (!kind || super_plain_argc(c, id, s) != nargs) return 0;
   /* (Comparable reached through Object's own include answers == too) */
   if (!comp_plain_class(c, s->class_id) || class_is_comparable(c, s->class_id)) return 0;

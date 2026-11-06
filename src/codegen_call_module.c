@@ -1870,6 +1870,16 @@ int emit_call_builtin_cmethod_arms(Compiler *c, int id, Buf *b, const NodeTable 
         return 1;
       }
     }
+    /* UNIXSocket.pair / .socketpair([type[, protocol]]) -> two connected
+       UNIXSockets, as Socket.pair makes them with AF_UNIX */
+    if (tcn && sp_streq(tcn, "UNIXSocket") && sp_feature_required("socket") &&
+        is_socket_pair_alias(name) && argc <= 2 && nt_ref(nt, id, "block") < 0) {
+      int skc = comp_core_class(c, builtin_core_class_slot(tcn));
+      if (skc < 0 || call_target(c, id, skc, name, CT_CMETHOD, NULL) < 0) {
+        emit_sock_pair(c, -1, argc >= 1 ? argv[0] : -1, argc >= 2 ? argv[1] : -1, 1, b);
+        return 1;
+      }
+    }
     /* Socket class methods (#2922) */
     if (tcn && sp_streq(tcn, "Socket") && sp_feature_required("socket")) {
       if (sp_streq(name, "gethostname") && argc == 0) {

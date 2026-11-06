@@ -47,3 +47,17 @@ begin
 rescue ArgumentError => e
   p e.message
 end
+
+# A <=> that shrinks the array: the result depends on which pass CRuby runs
+# first, so only its shape is printed.
+class M
+  attr_reader :v
+  def initialize(v); @v = v; end
+  def <=>(o)
+    $arr.pop if $arr.size > 2
+    v <=> o.v
+  end
+end
+$arr = [M.new(5), M.new(1), M.new(4), M.new(2), M.new(3)]
+r = $arr.minmax
+p r.size, r.all? { |m| m.is_a?(M) }, $arr.size

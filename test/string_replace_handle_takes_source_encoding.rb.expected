@@ -1,0 +1,8 @@
+buffer takes text: UTF-8 "São" 4
+text takes binary: ASCII-8BIT "S\xC3\xA3o" 4
+then takes text again: UTF-8 "ok" 2
+ivar: UTF-8 "ção" 5
+value of the call: UTF-8 "ünï" 5
+returns self: true
+boxed receiver: UTF-8 "ïñ" 4
+empty binary: ASCII-8BIT "" 0

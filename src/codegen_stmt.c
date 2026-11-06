@@ -24226,13 +24226,14 @@ static int str_mutate_reassign_arms(Compiler *c, Buf *b, int indent, const NodeT
       return 1;
     }
     if ((sp_streq(name, "replace") || sp_streq(name, "prepend")) && argc == 1) {
-      /* shared-mutable local: swap/prepend the buffer contents in place (#3227) */
+      /* shared-mutable local: swap/prepend the buffer contents in place (#3227);
+         replace takes the argument's encoding with its bytes */
       Buf srefR2; memset(&srefR2, 0, sizeof srefR2);
       if (strbuf_slot_text(c, recv, &srefR2)) {
         int tbR = ++g_tmp;
         emit_indent(b, indent);
-        buf_printf(b, "{ sp_String *_t%d = SP_STR_HDL(%s); sp_String_set_bin(_t%d, ",
-                   tbR, srefR2.p, tbR);
+        buf_printf(b, "{ sp_String *_t%d = SP_STR_HDL(%s); %s(_t%d, ", tbR, srefR2.p,
+                   sp_streq(name, "replace") ? "sp_String_set_bin_enc" : "sp_String_set_bin", tbR);
         free(srefR2.p);
         if (sp_streq(name, "prepend")) {
           buf_puts(b, "sp_str_concat("); emit_str_expr(c, argv[0], b);

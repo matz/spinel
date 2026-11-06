@@ -1,0 +1,15 @@
+write_gets: "A> " before input
+write_gets: "hello\ngot hello\n" after
+print_getc: "C> " before input
+print_getc: "hello\ngot h\n" after
+append_readline: "D> " before input
+append_readline: "hello\ngot hello\n" after
+printf_read: "E> " before input
+printf_read: "hello\ngot hel\n" after
+putc_each_line: "F>" before input
+putc_each_line: "hello\ngot hello\n" after
+sync_off: "false\nG> " before input
+sync_off: "hello\ngot hello\n" after
+reopen_back: "H> " before input
+reopen_back: "hello\ngot hello\nto the pipe\n" after
+print_sleep: "B> " while asleep

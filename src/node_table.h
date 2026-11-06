@@ -305,6 +305,11 @@ int *nt_subtree_ids(NodeTable *nt, const int *roots, int n, int *out);
    yet. comp_node_tag names an appended node from this, so the name is the
    same whenever it is asked and whichever passes ran before. */
 int nt_origin(const NodeTable *nt, int id, char *how, int *a, unsigned *pass, int *k);
+/* The node `id` is a copy of (nt_origin's 'c' link: nt_clone_subtree made
+   it), or -1 for any other node: one parsed, one first linked under a
+   parent, one linked nowhere yet. A clone's own source may be a clone, so
+   a caller that follows the chain bounds its steps. */
+int nt_clone_source(const NodeTable *nt, int id);
 void nt_track_origins(NodeTable *nt);   /* from the nodes appended next on */
 const char *nt_set_pass(NodeTable *nt, const char *pass);   /* the one before */
 void nt_subtree_blank(NodeTable *nt, int id);   /* every node of the subtree a NilNode */

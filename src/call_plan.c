@@ -6740,7 +6740,7 @@ static int ver_cell_once(VerCellsAt *m, int node, int hist) {
    extends it (nt_clone_subtree) holds a copy of a def its body makes
    (LrDef.body), which writes the same cell where the copy runs. Only those:
    a version at a point writes its cell at its own statement. A copy names
-   the node it copies (nt_origin, 'c'), along a chain of up to 64 copies;
+   the node it copies (nt_clone_source), along a chain of up to 64 copies;
    only the writes made now are copied, since a copy made after an earlier
    write carries that write */
 static void ver_copy_writes(Compiler *c, const int *par, VerCellsAt *cells, VerWrite **wp, int *nwp) {
@@ -6752,8 +6752,7 @@ static void ver_copy_writes(Compiler *c, const int *par, VerCellsAt *cells, VerW
   NT_FOREACH_KIND(nt, NK_DefNode, d) {
     int o = d, k = 0, st;
     for (int depth = 0; depth < 64 && !k; depth++) {
-      char how = 0; int a = 0, n = 0; unsigned pass = 0;
-      if ((o = nt_origin(nt, o, &how, &a, &pass, &n)) < 0 || how != 'c' || o >= nt->count) break;
+      if ((o = nt_clone_source(nt, o)) < 0 || o >= nt->count) break;
       k = of[o];
     }
     if (!k || (st = ver_write_stmt(nt, par, d)) < 0 || par[st] < 0 || !ver_cell_once(cells, d, (*wp)[k - 1].hist)) continue;

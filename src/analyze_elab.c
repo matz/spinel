@@ -5072,9 +5072,8 @@ static int lr_climb_up(Compiler *c, const int *par, int a) {
   /* a method a pass made for a node, which runs no earlier than it */
   int rf = nt_kind(c->nt, a) == NK_DefNode ? (int)nt_int(c->nt, a, "runs_from", 0) - 1 : -1;
   if (rf >= 0) return rf;
-  char how = 0; int x = 0, k = 0; unsigned pass = 0;
-  int o = nt_origin(c->nt, a, &how, &x, &pass, &k);
-  return how == 'c' && o >= 0 && o < a ? o : -1;
+  int o = nt_clone_source(c->nt, a);
+  return o >= 0 && o < a ? o : -1;
 }
 
 int elab_call_window(Compiler *c, int id, ElabWindow *w) {
@@ -6323,9 +6322,8 @@ static int lr_cvar_cref_at(Compiler *c, int node) {
   LoadRecord *r = elab_fresh(c);
   LoadPoint p = elab_point_from(c, node);
   for (int depth = 0; p.region < 0 && depth < 64; depth++) {
-    char how = 0; int a = 0, k = 0; unsigned pass = 0;
-    node = nt_origin(c->nt, node, &how, &a, &pass, &k);
-    if (node < 0 || how != 'c') return LR_UNKNOWN_CLASS;
+    node = nt_clone_source(c->nt, node);
+    if (node < 0) return LR_UNKNOWN_CLASS;
     p = elab_point_from(c, node);
   }
   if (p.region < 0) return LR_UNKNOWN_CLASS;
@@ -7389,7 +7387,7 @@ int elab_rec_open(Compiler *c, int node, int cp, const char *cname, int encl) {
    superclass only the run time holds) is noted at its call and at the
    constant write holding it. A copy of such a node (a clone: a module's
    method copied into each class that includes it) answers as the node it
-   copies (nt_origin), along a chain of up to 64 copies. */
+   copies (nt_clone_source), along a chain of up to 64 copies. */
 void elab_builder_note(Compiler *c, int node, int kind) {
   lr_header(lr_get(c), node, 1)->builder = (unsigned char)kind;
 }
@@ -7397,9 +7395,8 @@ int elab_builder_kind(const Compiler *c, int node) {
   for (int depth = 0; c->lrec && node >= 0 && depth < 64; depth++) {
     const LrHeader *h = lr_header(c->lrec, node, 0);
     if (h) return h->builder;
-    char how = 0; int a = 0, k = 0; unsigned pass = 0;
-    int o = nt_origin(c->nt, node, &how, &a, &pass, &k);
-    if (o < 0 || how != 'c') break;
+    int o = nt_clone_source(c->nt, node);
+    if (o < 0) break;
     node = o;
   }
   return EB_NONE;

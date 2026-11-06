@@ -4284,6 +4284,9 @@ static void cpoly_cases_n(Compiler *c, int id, const char *name, int argc, const
       if (atmp_ty[a] != TY_INT && atmp_ty[a] != TY_POLY) int_args = 0;
     if (int_args) cpoly_family(p, cap, PB_IO_SEEK_READ);
   }
+  /* read(*args): the same File arm, reading the gathered list (emit_poly_cases_n) */
+  if (sp_streq(name, "read") && argc == 1 && splat_a == 0 && kwh < 0 && (ret == TY_POLY || ret == TY_STRING))
+    cpoly_family(p, cap, PB_IO_SEEK_READ);
   if (ps->unshift) cpoly_family(p, cap, PB_UNSHIFT);
   if (ps->push) cpoly_family(p, cap, PB_PUSH);
   if (ps->ppack && !sp_streq(name, "unpack1")) cpoly_family(p, cap, PB_PACK);

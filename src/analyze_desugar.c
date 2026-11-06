@@ -17687,6 +17687,9 @@ int desugar_builtin_scalar_defs(Compiler *c) {
         gdef[bx][bi] = clone;
       }
       else {
+        /* a method the program adds, not one builtins/ defines
+           (bx_recv_takes) */
+        nt_node_set_int(nt, clone, "bx_own", 1);
         int j = -1;
         for (int m = 0; m < odef_n[bx]; m++) if (sp_streq(odef_name[bx][m], name)) { j = m; break; }
         if (j >= 0) {
@@ -17829,6 +17832,58 @@ static int bx_recv_concrete(int bx, TyKind rt) {
   return 0;
 }
 
+/* Does the copy read its receiver only as `__self`? An instance variable
+   in it is one slot for every receiver, where CRuby keeps one per String,
+   and a call with no receiver goes to main, where CRuby sends it to the
+   String (`to_s + "!"`). A call to another of the container's methods
+   (bx_copy) or a Kernel function that ignores self is fine. Kept on the
+   copy (bx_self_free: 1 yes, 2 no). */
+static int bx_copy_self_free(Compiler *c, int copy) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  int known = (int)nt_int(nt, copy, "bx_self_free", 0);
+  if (known) return known == 1;
+  static const char *const self_free[] = { "raise", "puts", "p", "print", "format", "sprintf",
+                                           "block_given?", "loop", "lambda", "proc", NULL };
+  int n = 0, ok = 1;
+  int *ids = nt_subtree_ids(nt, &copy, 1, &n);
+  for (int i = 0; ids && i < n && ok; i++) {
+    int id = ids[i];
+    switch (nt_kind(nt, id)) {
+    case NK_InstanceVariableReadNode: case NK_InstanceVariableWriteNode:
+    case NK_InstanceVariableOperatorWriteNode: case NK_InstanceVariableOrWriteNode:
+    case NK_InstanceVariableAndWriteNode: case NK_InstanceVariableTargetNode:
+    case NK_SelfNode:
+      ok = 0; break;
+    case NK_CallNode: {
+      if (nt_ref(nt, id, "receiver") >= 0 || nt_int(nt, id, "bx_copy", -1) >= 0) break;
+      const char *cn = nt_str(nt, id, "name");
+      int k = 0;
+      while (cn && self_free[k] && !sp_streq(cn, self_free[k])) k++;
+      if (!cn || !self_free[k]) ok = 0;
+      break;
+    }
+    default: break;
+    }
+  }
+  free(ids);
+  nt_node_set_int(nt, copy, "bx_self_free", ok ? 1 : 2);
+  return ok;
+}
+
+/* A String or Symbol is Comparable too. A method the program adds to
+   `module Comparable` (bx_own) takes them; the gaps in
+   desugar_builtin_scalar_calls are the builtins/ generic's own body. A
+   builtin String or Symbol method of the name answers before
+   Comparable's, as in CRuby. The receiver's class name, or NULL. */
+static const char *bx_cmp_own_class(Compiler *c, int bx, int copy, TyKind rt, const char *name) {
+  const NodeTable *nt = c->nt;
+  if (bx != SP_BX_COMPARABLE || copy < 0 || !name) return NULL;
+  if (!nt_int(nt, (int)nt_int(nt, copy, "bx_def", -1), "bx_own", 0)) return NULL;
+  const char *cls = rt == TY_STRING || rt == TY_STRBUF ? "String" : rt == TY_SYMBOL ? "Symbol" : NULL;
+  if (!cls || core_method_vis(cls, name, 0) > 0) return NULL;
+  return bx_copy_self_free(c, copy) ? cls : NULL;
+}
+
 /* Call `id`, rewritten in an earlier round while its receiver was
    concrete. A parameter is typed by the calls the rounds have reached so
    far, so it can widen after (`def f(m) = m.bit_length` called with 255,
@@ -17842,7 +17897,9 @@ static int bx_revert_widened(Compiler *c, int id) {
   int bx = (int)nt_int(nt, id, "bx_container", -1);
   int ra = nt_ref(nt, id, "arguments");
   int rn = 0; const int *rv = ra >= 0 ? nt_arr(nt, ra, "arguments", &rn) : NULL;
-  if (!rv || rn < 1 || bx_recv_concrete(bx, infer_type(c, rv[0]))) return 0;
+  if (!rv || rn < 1 || bx_recv_concrete(bx, infer_type(c, rv[0])) ||
+      bx_cmp_own_class(c, bx, (int)nt_int(nt, id, "bx_copy", -1), infer_type(c, rv[0]), nt_str(nt, id, "bx_name")))
+    return 0;
   nt_node_set_ref(nt, id, "receiver", rv[0]);
   nt_node_set_ref(nt, id, "arguments", (int)nt_int(nt, id, "bx_args", -1));
   nt_node_set_str(nt, id, "name", nt_str(nt, id, "bx_name"));
@@ -17905,6 +17962,8 @@ int desugar_builtin_scalar_calls(Compiler *c) {
        the call keeps its `&.` and its typed emitter */
     if (nt_safe_nav(nt, id)) continue;
     int ok = bx_recv_concrete(bx, rt);
+    const char *cmp_cls = ok ? NULL : bx_cmp_own_class(c, bx, copy, rt, name);
+    if (cmp_cls) ok = 1;
     if (bx == SP_BX_COMPARABLE) {
       /* Integer/Bignum/Float only, narrower than builtins/comparable.rb's
          own surface suggests. Two SEPARATE pre-existing gaps rule the
@@ -17954,7 +18013,7 @@ int desugar_builtin_scalar_calls(Compiler *c) {
        concrete class instead, and leave the call on the ordinary
        open-class path when it answers. */
     if (bx == SP_BX_COMPARABLE) {
-      const char *concrete = rt == TY_FLOAT ? "Float" : "Integer";
+      const char *concrete = cmp_cls ? cmp_cls : rt == TY_FLOAT ? "Float" : "Integer";
       int cci = comp_class_index(c, concrete);
       if (cci >= 0 && call_target(c, id, cci, name, 0, NULL) >= 0) continue;
     }

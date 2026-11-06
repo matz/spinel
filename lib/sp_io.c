@@ -2483,7 +2483,7 @@ sp_int sp_File_flush(sp_File *f) {
 }
 
 sp_bool sp_File_eof_p(sp_File *f) {
-  SP_IO_OPEN(f);
+  sp_io_check_readable(f);
   sp_io_wait_readable(f);
   int c = sp_io_getc(f);
   if (c == EOF) return TRUE;
@@ -2664,7 +2664,7 @@ void sp_file_rename(const char *from, const char *to) {SP_GC_ROOT_STR(from);SP_G
 
 /* IO#readbyte: like #getbyte but EOFError at end of file. */
 sp_int sp_File_readbyte(sp_File *f) {
-  SP_IO_OPEN(f);
+  sp_io_check_readable(f);
   sp_io_wait_readable(f);
   int ch = sp_io_getc(f);
   if (ch == EOF) sp_raise_cls("EOFError", "end of file reached");
@@ -2672,7 +2672,7 @@ sp_int sp_File_readbyte(sp_File *f) {
 }
 /* IO#ungetbyte: push one byte back onto the read buffer; returns nil. */
 void sp_File_ungetbyte(sp_File *f, sp_int byte) {
-  SP_IO_OPEN(f);
+  sp_io_check_readable(f);
   sp_io_ungetc(f, (int)(unsigned char)byte);
 }
 /* IO#binmode?: true after #binmode, or for a handle opened in binary mode.

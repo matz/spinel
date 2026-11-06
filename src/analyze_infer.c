@@ -1572,8 +1572,8 @@ static int an_own_row_read(Compiler *c, int n, const char *ivname, int depth) {
    ternary, a `case` or `||`, through parentheses and the value an
    assignment stores, `(x = @m[i])`) has no type yet and is a variable with
    none, a call on self or with no receiver with none (an attribute reader:
-   `m[i]`), or a call on one of those (`@m[i]`, `@m.fetch(i)`, `x.last`,
-   `@m[i][0]`). The loop after the fixpoint clears a boxed ivar or local and
+   `m[i]`), an attribute read on any receiver with none (`@source.value`),
+   or a call on one of those (`@m[i]`, `@m.fetch(i)`, `x.last`, `@m[i][0]`). The loop after the fixpoint clears a boxed ivar or local and
    derives it again, and the tables' stores are checked in between: what the
    value reads may yet be a String. A ternary whose other arm is a row is
    typed as a row meanwhile, so this is asked of a value of any type. */
@@ -1592,11 +1592,17 @@ static int an_untyped_read_leaf(const VpLeaf *leaf, void *ud) {
     if (k != NK_CallNode) return 0;
     if (d == 8) { u->hit = 1; return 1; }   /* a longer chain: not looked at */
     /* a call on self or with no receiver is where the value comes from: an
-       attribute reader of a cleared ivar (`mixed[i]`) has no type either */
+       attribute reader of a cleared ivar (`mixed[i]`) has no type either;
+       so is an attribute read on any receiver (`@source.value[i]`, no
+       arguments and no block) that has none */
     int r = nt_ref(nt, n, "receiver");
     if (r < 0 || nt_kind(nt, r) == NK_SelfNode) {
       u->hit = infer_type(u->c, n) == TY_UNKNOWN;
       return u->hit;
+    }
+    if (nt_ref(nt, n, "arguments") < 0 && nt_ref(nt, n, "block") < 0 && infer_type(u->c, n) == TY_UNKNOWN) {
+      u->hit = 1;
+      return 1;
     }
     n = r;
   }

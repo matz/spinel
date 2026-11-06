@@ -372,6 +372,30 @@ o.fill(1)
 o.take
 p o.first
 
+# an attribute reader of another object
+class Source
+  attr_reader :value
+
+  def initialize(value) = (@value = value)
+end
+
+class OtherReader
+  def initialize(source)
+    @rows = [[1, 2]]
+    @other = [[3, 4]]
+    @source = source
+  end
+
+  def fill(i) = (@other[0] = @source.value[i])
+  def take = (@rows[0] = @other[0])
+  def first = @rows[0]
+end
+
+o = OtherReader.new(Source.new([[7, 8], "row"]))
+o.fill(1)
+o.take
+p o.first
+
 # every row an Integer Array: the tables still read rows
 class AllRows
   def initialize

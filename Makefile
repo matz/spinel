@@ -5056,7 +5056,7 @@ infer-test: $(SPINEL) $(SP_RT_LIB)
 	grep -q 'sp_FloatArray \* iv_acc;' "$$tmp/iow.c" && grep -q 'sp_FloatArray \* lv_acc = ' "$$tmp/iow.c" || { echo "infer-test: FAIL (a Float Array written a[i] op= <Integer> widened to a boxed PolyArray)"; ok=0; }; \
 	grep -q 'sp_PolyArray \* lv_ia = ' "$$tmp/iow.c" || { echo "infer-test: FAIL (an Integer Array written a[i] /= <Float> must widen)"; ok=0; }; \
 	$(SPINEL) test/infer/float_elem_fast_paths.rb -c --no-line-map -o "$$tmp/fefp.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (float_elem_fast_paths: -c)"; ok=0; }; \
-	grep -q '__typeof__(4LL) _t[0-9]* = 4LL; if (SP_LIKELY(_hcw' "$$tmp/fefp.c" || { echo "infer-test: FAIL (a[i] += <constant> on a Float array missed the in-place fold)"; ok=0; }; \
+	grep -qE '__typeof__\(4LL\) _t[0-9]+ = 4LL; if \(SP_LIKELY\(\(unsigned long long\)_t[0-9]+ < \(unsigned long long\)_hcwn?[0-9_]+\)' "$$tmp/fefp.c" || { echo "infer-test: FAIL (a[i] += <constant> on a Float array missed the in-place fold)"; ok=0; }; \
 	$(SPINEL) test/const_literal_read.rb -c --no-line-map -o "$$tmp/clr.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (const_literal_read: -c)"; ok=0; }; \
 	grep -q 'sp_int_mul(lv_k, 8LL)' "$$tmp/clr.c" || { echo "infer-test: FAIL (a loop's read of a constant bound to a literal loaded its global)"; ok=0; }; \
 	! grep -wE 'cst_(W|SCALE|NEG)' "$$tmp/clr.c" | grep -qvE '^static |^ *cst_(W|SCALE|NEG) = ' || { echo "infer-test: FAIL (an arithmetic read of a constant bound to a literal loaded its global)"; ok=0; }; \

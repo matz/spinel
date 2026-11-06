@@ -1553,7 +1553,8 @@ static int ct_capture_keeps_table(Compiler *c, int id, int cls, int sg, const ch
    mixin taken as run, as with one version). *span (when asked): in n,
    how many versions the window reaches (elab_method_span), 0 when no
    window was asked, -1 when the answer is mi for want of a version or an
-   entry; copies set for the copies' entry, whose n is 2. */
+   entry, or because the call is in a body that never runs
+   (ElabWindow.never); copies set for the copies' entry, whose n is 2. */
 typedef struct { int n, copies; } VerSpan;
 static int mixin_copies_module(Compiler *c, int mi, int *to, ElabVersion *vs, int *n);
 static int ct_version_at(Compiler *c, int id, int cls, const char *name, unsigned flags, int mi, int *def_class, VerSpan *span) {
@@ -1598,6 +1599,12 @@ static int ct_version_at(Compiler *c, int id, int cls, const char *name, unsigne
   int kept = ct_after_point(c, id);   /* (it runs at its point only if nothing around it runs later) */
   const Scope *own = comp_scope_of(c, id);
   elab_call_meet(c, id, rcls, name, sg, kept | (own && own->origin_module_ci > 0 ? ELAB_MEET_COPY : 0), &m, ds, VER_MAX_ARMS);
+  /* (a call in a body that never runs meets no version at any time: the
+     table's, the cheapest call, not the window's last) */
+  if (m.at == ELAB_UNKNOWN && m.win == ELAB_YES && m.w.never) {
+    if (span) *span = (VerSpan){ -1, 0 };
+    return mi;
+  }
   int at = m.at;
   ElabWindow w = m.w;
   d = m.d;

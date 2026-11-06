@@ -1,0 +1,19 @@
+{"count" => 0}
+{"label" => "none"}
+{1 => 7}
+{"count" => 0}
+{"count" => 0, "more" => 2}
+{"count" => 5}
+{"label" => "five"}
+{"count" => 5}
+{"label" => "five"}
+{"count" => 5, "more" => 2}
+{"count" => 5, "extra" => 2}
+6
+1
+{"label" => "five", "other" => "six"}
+2
+{1 => 7, 2 => 8}
+[1, 2]
+{"count" => 5, "at" => 3}
+0

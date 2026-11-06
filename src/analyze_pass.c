@@ -19596,9 +19596,12 @@ static int irt_scope(Compiler *c, int s, IrtCtx *x) {
   /* At 2 (the late ivar-widening re-run) a return follows its body only
      where the ivar the body answers widened after the return was derived:
      a concrete type to poly (a String reading over a poly value does not
-     build, #4451), and an Integer to a Bignum (`def get = @v` returned a
-     promoted loop local's Bignum through an sp_int). Everything else is
-     left where the earlier, gated re-runs settled it. */
+     build, #4451), an Integer to a Bignum (`def get = @v` returned a
+     promoted loop local's Bignum through an sp_int), and a Hash of typed
+     values to the boxed-value Hash its literal builds over the widened
+     ivar (`def to_h = { "v" => @v }` returned an sp_StrPolyHash * through
+     an sp_StrIntHash *, which does not build). Everything else is left
+     where the earlier, gated re-runs settled it. */
   /* At 3 (--share-strings' late conversion, an_phase_storage) a return
      follows its body only from a typed String Array to the poly Array the
      rule made of the local it answers. */
@@ -19613,7 +19616,8 @@ static int irt_scope(Compiler *c, int s, IrtCtx *x) {
        (g_promote_mode && ty_is_numeric(sc->ret)))) return ch;
   if (g_ret_no_new_poly == 2 &&
       !(r == TY_POLY && sc->ret != TY_POLY && sc->ret != TY_UNKNOWN && sc->ret != TY_VOID && sc->ret != TY_NIL) &&
-      !(r == TY_BIGINT && sc->ret == TY_INT)) return ch;
+      !(r == TY_BIGINT && sc->ret == TY_INT) &&
+      !(ty_is_hash(r) && ty_hash_val(r) == TY_POLY && ty_is_hash(sc->ret) && ty_hash_val(sc->ret) != TY_POLY)) return ch;
   /* An element-less-hash body (`{}` / Hash.new) infers TY_UNKNOWN every pass
      (no witnessed element). Once a caller has pinned it to a concrete hash
      (backprop_hash_return_types), don't collapse it back to UNKNOWN -- that

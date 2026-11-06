@@ -920,8 +920,8 @@ int emit_op_array_minmax(Compiler *c, const BopCtx *x, Buf *b) {
       int t = ++g_tmp, o = ++g_tmp;
       buf_printf(b, "({ sp_PolyArray *_t%d = ", t); emit_expr(c, recv, b);
       buf_printf(b, "; SP_GC_ROOT(_t%d); sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d);"
-                    " sp_PolyArray_push(_t%d, sp_PolyArray_min(_t%d));"
-                    " sp_PolyArray_push(_t%d, sp_PolyArray_max(_t%d)); _t%d; })",
+                    " sp_PolyArray_push(_t%d, sp_PolyArray_minmax_side(_t%d, 0));"
+                    " sp_PolyArray_push(_t%d, sp_PolyArray_minmax_side(_t%d, 1)); _t%d; })",
                  t, o, o, o, t, o, t, o);
       return 1;
     }

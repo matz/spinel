@@ -32,6 +32,8 @@ typedef struct {
                                   0, the handle's binmode decides */
   unsigned char no_autoclose;  /* #autoclose = false (#3131) */
   unsigned char is_sock;       /* a socket handle: writes bypass stdio (#2922) */
+  unsigned char shut;          /* a socket's sides shut down by #close_read (1)
+                                  and #close_write (2) */
   unsigned char rev_lookup;    /* a socket's #do_not_reverse_lookup is false:
                                   addr / peeraddr report the host name. Taken
                                   from the class setting when it is made */

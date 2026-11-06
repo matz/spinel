@@ -10575,7 +10575,20 @@ static const char *sp_PolyArray_join(sp_PolyArray *a, const char *sep) {
     const char *part = NULL;
     if (SP_UNLIKELY(sp_poly_is_user_obj(e) && e.v.p)) {
       part = sp_poly_check_str(e);
-      if (!part) e = sp_poly_ary_operand(e);
+      if (!part) {
+        void *obj = e.v.p;
+        e = sp_poly_ary_operand(e);
+        if (e.tag == SP_TAG_OBJ && sp_poly_is_array_kind(e.cls_id)) {
+          /* CRuby's guard holds the object itself: a #to_ary that answers a
+             new Array holding the object is the recursive join, not an
+             endless one */
+          if (sp_poly_recur_seen(SP_POLY_RECUR_JOIN, obj, NULL))
+            sp_poly_recur_raise(SP_POLY_RECUR_JOIN, "recursive array join");
+          int omark = sp_poly_recur_push(SP_POLY_RECUR_JOIN, obj, NULL);
+          part = sp_poly_join(e, sep);
+          sp_poly_recur_pop(omark);
+        }
+      }
     }
     /* a nested array joins recursively with the same separator (CRuby) */
     if (!part) part = (e.tag == SP_TAG_OBJ && sp_poly_is_array_kind(e.cls_id)) ? sp_poly_join(e, sep)

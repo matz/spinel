@@ -29,3 +29,10 @@ begin
 rescue TypeError => e
   puts e.message
 end
+class R; def to_ary = [self]; end
+begin
+  [R.new].join(",")
+rescue ArgumentError => e
+  puts e.message
+end
+puts [k, k].join(",")

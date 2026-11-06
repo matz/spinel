@@ -10,3 +10,5 @@ x-y-1-2
 1,2,3
 x,y,x,y
 can't convert T to Array (T#to_ary gives Integer)
+recursive array join
+x,y,x,y

@@ -8149,16 +8149,23 @@ static int infer_block_kernel_call(Compiler *c, int id, const NodeTable *nt, con
 
 /* The last resorts: a safe-navigation call, a reopened Array, Numeric or Object's own methods, a boxed receiver's face (infer_call_inner's rules, in their order) */
 /* A NilClass method on a String, Integer or Float that may be nil and has
-   no method of the name: the call is dispatched boxed
+   no method of the name but maybe Object's: the call is dispatched boxed
    (cplan_nil_scalar_reach), nil's answer a boxed value. Checked before the
    universal rules, which type a `?` name as a bool. */
 static int infer_nil_scalar_call(Compiler *c, int id, const NodeTable *nt, const char *name,
                                  int recv, TyKind rt, TyKind *out) {
   if (recv < 0 || nt_ref(nt, id, "block") >= 0) return 0;
-  if (!(rt == TY_STRING || rt == TY_STRBUF ||
-        ((rt == TY_INT || rt == TY_FLOAT) && nullable_int_value(c, recv)))) return 0;
   if (an_reopen_method(c, CORE_NILCLASS, name) < 0 ||
       comp_method_vis_declared(c, comp_core_class(c, CORE_NILCLASS), name, NULL) != SP_VIS_PUBLIC) return 0;
+  /* beside a public method the program adds to Object, an Integer or a
+     Float answers boxed before the analysis settles whether it may be nil:
+     an Array the answer is pushed into is built boxed from the start, not
+     typed by Object's method alone */
+  int oc = comp_core_class(c, CORE_OBJECT);
+  int beside_obj = (rt == TY_INT || rt == TY_FLOAT) && oc >= 0 && an_reopen_method(c, CORE_OBJECT, name) >= 0 &&
+                   comp_method_vis_declared(c, oc, name, NULL) == SP_VIS_PUBLIC;
+  if (!(rt == TY_STRING || rt == TY_STRBUF || beside_obj ||
+        ((rt == TY_INT || rt == TY_FLOAT) && nullable_int_value(c, recv)))) return 0;
   *out = TY_POLY;
   return 1;
 }

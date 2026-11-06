@@ -29665,9 +29665,10 @@ static int emit_call_on_missing_builtin_path(Compiler *c, int id, Buf *b) {
   return 1;
 }
 void emit_call(Compiler *c, int id, Buf *b) {
-  /* a String, Integer or Float that may be nil, for a name only the
-     program's NilClass has (cplan_nil_scalar_reach): boxed, the poly
-     dispatch runs NilClass's method for nil and raises for the rest */
+  /* a String, Integer or Float that may be nil, for a name the program's
+     NilClass has (cplan_nil_scalar_reach): boxed, the poly dispatch runs
+     NilClass's method for nil, and for the rest Object's public method of
+     the name or the raise */
   int nrv = nt_ref(c->nt, id, "receiver");
   if (nrv >= 0 && g_n_argov < MAX_ARG_OVERRIDE && g_subdispatch_id != id && cplan_nil_scalar_reach(c, id)) {
     emit_call_reboxed(c, id, nrv, b);

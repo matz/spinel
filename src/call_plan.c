@@ -5184,9 +5184,19 @@ PolyPlan *cplan_poly_cls_values(Compiler *c, int id) {
 
 /* Does call id's receiver, a String, Integer or Float that may be nil,
    reach a method only nil has: the program's NilClass defines the name
-   (publicly), and neither the receiver's class nor Object, Kernel,
-   BasicObject or the top level has a method of it? Boxed, the call's dispatch then runs
-   NilClass's method for nil and raises NoMethodError for the rest. */
+   (publicly), and neither the receiver's class nor Kernel, BasicObject or
+   the top level has a method of it? Boxed, the call's dispatch then runs
+   NilClass's method for nil, and for the rest Object's public method of
+   the name where the program adds one, else raises NoMethodError. */
+/* (a splat argument: the boxed dispatch's default arm does not spread it
+   into Object's method) */
+static int cplan_args_have_splat(const NodeTable *nt, int id) {
+  int argc = 0;
+  const int *argv = call_args(nt, id, &argc);
+  for (int i = 0; i < argc; i++)
+    if (nt_kind(nt, argv[i]) == NK_SplatNode) return 1;
+  return 0;
+}
 int cplan_nil_scalar_reach(Compiler *c, int id) {
   const NodeTable *nt = c->nt;
   /* (a call with a block keeps the old path: the boxed dispatch has no
@@ -5202,14 +5212,18 @@ int cplan_nil_scalar_reach(Compiler *c, int id) {
   if (core == CORE_STRING ? !repr_of(c, recv).may_nil : !nullable_int_value(c, recv)) return 0;
   int nilcls = 0, nmi = cplan_nil_program_method(c, id, name, &nilcls);
   if (nmi < 0 || !nilcls) return 0;
-  /* only NilClass has it: a method of the name on Object, Kernel,
-     BasicObject or at the top level types the call as that method's
-     answer, which a boxed one does not fit */
+  /* a method of the name on Kernel, BasicObject or at the top level, or
+     a private one on Object, or one on Object with a splat argument,
+     keeps the old path */
   if (call_target(c, id, -1, name, CT_TOP, NULL) >= 0) return 0;
+  /* a public method the program adds to Object stays the answer for the
+     rest: the boxed dispatch's default arm runs it */
   static const int others[] = { CORE_OBJECT, CORE_KERNEL, CORE_BASIC_OBJECT, -1 };
   for (int i = 0; others[i] >= 0; i++) {
     int ok = comp_core_class(c, others[i]);
-    if (ok >= 0 && call_target(c, id, ok, name, 0, NULL) >= 0) return 0;
+    if (ok >= 0 && call_target(c, id, ok, name, 0, NULL) >= 0 &&
+        !(others[i] == CORE_OBJECT && comp_method_vis_declared(c, ok, name, NULL) == SP_VIS_PUBLIC &&
+          !cplan_args_have_splat(nt, id))) return 0;
   }
   /* (a private or protected one keeps the old path: the boxed dispatch
      does not check visibility) */

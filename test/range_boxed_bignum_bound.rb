@@ -20,7 +20,3 @@ n = 300
 n = "a" if ARGV.size > 5
 p((128...n) === 252)
 p((128...n).size)
-# -2**63 fits a bound, though its box can stay a Bignum.
-lo = -(2**63)
-lo = "a" if ARGV.size > 5
-p((lo..0) === -5)

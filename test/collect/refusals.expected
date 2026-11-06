@@ -66,10 +66,14 @@ spinel: 1 refusal, nothing written
 == test/reject/bool_reopen_block_return_in_lambda.rb [promote] rc=1
 spinel: test/reject/bool_reopen_block_return_in_lambda.rb:8: a `return` in a block given to a TrueClass's or FalseClass's yielding method, inside a lambda, is not supported by AOT compilation
 spinel: 1 refusal, nothing written
+== test/reject/builder_after_header.rb [default] rc=1
+spinel: test/reject/builder_after_header.rb:7: a `class Foo` or `module Foo` ahead of a Foo = Class.new or Module.new in the same body is not supported: the write replaces the header's class with the built one, and spinel would merge the two; rename one of them
+== test/reject/builder_after_header.rb [promote] rc=1
+spinel: test/reject/builder_after_header.rb:7: a `class Foo` or `module Foo` ahead of a Foo = Class.new or Module.new in the same body is not supported: the write replaces the header's class with the built one, and spinel would merge the two; rename one of them
 == test/reject/builder_after_header_under_rescue.rb [default] rc=1
-spinel: test/reject/builder_after_header_under_rescue.rb:7: a Foo = Class.new or Module.new that may run without a `class Foo` or `module Foo` in the same body, or the header without it, is not supported: spinel cannot tell whether the header reopens the built class; write the two together or rename one of them
+spinel: test/reject/builder_after_header_under_rescue.rb:7: a `class Foo` or `module Foo` ahead of a Foo = Class.new or Module.new in the same body is not supported: the write replaces the header's class with the built one, and spinel would merge the two; rename one of them
 == test/reject/builder_after_header_under_rescue.rb [promote] rc=1
-spinel: test/reject/builder_after_header_under_rescue.rb:7: a Foo = Class.new or Module.new that may run without a `class Foo` or `module Foo` in the same body, or the header without it, is not supported: spinel cannot tell whether the header reopens the built class; write the two together or rename one of them
+spinel: test/reject/builder_after_header_under_rescue.rb:7: a `class Foo` or `module Foo` ahead of a Foo = Class.new or Module.new in the same body is not supported: the write replaces the header's class with the built one, and spinel would merge the two; rename one of them
 == test/reject/builder_beside_conditional_header.rb [default] rc=1
 spinel: test/reject/builder_beside_conditional_header.rb:5: a Foo = Class.new or Module.new that may run without a `class Foo` or `module Foo` in the same body, or the header without it, is not supported: spinel cannot tell whether the header reopens the built class; write the two together or rename one of them
 == test/reject/builder_beside_conditional_header.rb [promote] rc=1

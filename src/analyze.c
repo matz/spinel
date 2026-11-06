@@ -6592,6 +6592,17 @@ static void qc_refuse_conditional_builder(Compiler *c) {
         if (cp < 0 || nt_kind(nt, cp) != NK_ConstantReadNode || !nt_str(nt, cp, "name") ||
             !sp_streq(nt_str(nt, cp, "name"), wn) || qc_enclosing_body(nt, par, hd) != body)
           continue;
+        /* A header that runs first makes its own class, and the write then
+           puts the built class in its place: the header's methods are not
+           the built class's. The passes would merge the two. */
+        if (!qc_written_before(nt, w, hd)) {
+          char msg[512];
+          snprintf(msg, sizeof msg, "a `class %s` or `module %s` ahead of a %s = Class.new or Module.new "
+                   "in the same body is not supported: the write replaces the header's class with the "
+                   "built one, and spinel would merge the two; rename one of them", wn, wn, wn);
+          unsupported_feature(c, w, msg);
+          continue;
+        }
         if (st >= 0 && qc_runs_with(nt, par, hd, st, w)) continue;
         int cond = st >= 0 ? par[st] : -1;
         if (cond >= 0 && qc_unless_defined_runs(nt, par, w, cond, hd, body, wn)) continue;

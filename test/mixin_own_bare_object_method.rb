@@ -9,7 +9,7 @@ module Comparable
   def bang = to_s + "!"
   def shown = "<" + inspect + ">"
   def facts = [self.class, nil?, is_a?(Integer), respond_to?(:abs)]
-  def same = [send(:to_s), hash == self.hash]
+  def same = [send(:abs), hash == self.hash]
 end
 
 module Enumerable

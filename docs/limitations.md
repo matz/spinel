@@ -255,6 +255,7 @@ Each row below is a separate program; the blocks shown capture no outer locals.
 | `Foo = Class.new(base)` | refused | no binary |
 | `foo = Class.new(base)` | refused | no binary |
 | `Foo = Class.new {}` that may run without a `class Foo` or `module Foo` in the same body, or the header without it (the write under an `if`, a loop, a `rescue`, a block or a `def` that the header is not in) | refused | the header reopens the built class only when the write ran. A write and a header in one list of statements work, and so does `Foo = Class.new {} unless defined?(Foo)` ahead of the header when nothing else names `Foo` |
+| A `class Foo` or `module Foo` ahead of `Foo = Class.new {}` (or `Module.new`) in the same body | refused | the header makes its own class, and the write then puts the built class in its place, so the header's methods are not the built class's. A header after the write reopens the built class and works |
 
 An instance of an unnamed class inspects as `#<#<Class:0x...>:0x... @a=1>`,
 and as `#<Foo:0x... @a=1>` once a constant assignment names the class.

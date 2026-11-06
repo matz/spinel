@@ -6565,6 +6565,28 @@ static int qc_unless_defined_runs(const NodeTable *nt, const int *par, int w, in
     }
   return 1;
 }
+/* Does header hd come ahead of builder write w in the run? In one file,
+   by source position. Across files (a header in a required file, inlined
+   into the same body), by the place of each in the statements list that
+   holds both: the order of the statements, not of the files. 0 when no
+   such list holds both. */
+static int qc_header_runs_first(Compiler *c, const int *par, int hd, int w) {
+  const NodeTable *nt = c->nt;
+  if (nt_int(nt, hd, "node_file", 0) == nt_int(nt, w, "node_file", 0)) return !qc_written_before(nt, w, hd);
+  for (int cw = w, pw = par[w]; pw >= 0; cw = pw, pw = par[pw]) {
+    if (nt_kind(nt, pw) != NK_StatementsNode) continue;
+    int ch = -1;
+    for (int x = hd, px = par[hd]; px >= 0; x = px, px = par[px]) if (px == pw) { ch = x; break; }
+    if (ch < 0) continue;
+    int n = 0; const int *body = nt_arr(nt, pw, "body", &n);
+    for (int i = 0; i < n; i++) {
+      if (body[i] == ch) return ch != cw;
+      if (body[i] == cw) return 0;
+    }
+    return 0;
+  }
+  return 0;
+}
 /* `Bar = Class.new { }` (or Module.new) and a header `class Bar` in the
    same body, where the write may run without the header or the header
    without the write (the write under an if, a loop, a rescue or a block
@@ -6592,6 +6614,17 @@ static void qc_refuse_conditional_builder(Compiler *c) {
         if (cp < 0 || nt_kind(nt, cp) != NK_ConstantReadNode || !nt_str(nt, cp, "name") ||
             !sp_streq(nt_str(nt, cp, "name"), wn) || qc_enclosing_body(nt, par, hd) != body)
           continue;
+        /* A header that runs first makes its own class, and the write then
+           puts the built class in its place: the header's methods are not
+           the built class's. The passes would merge the two. */
+        if (qc_header_runs_first(c, par, hd, w)) {
+          char msg[512];
+          snprintf(msg, sizeof msg, "a `class %s` or `module %s` ahead of a %s = Class.new or Module.new "
+                   "in the same body is not supported: the write replaces the header's class with the "
+                   "built one, and spinel would merge the two; rename one of them", wn, wn, wn);
+          unsupported_feature(c, w, msg);
+          continue;
+        }
         if (st >= 0 && qc_runs_with(nt, par, hd, st, w)) continue;
         int cond = st >= 0 ? par[st] : -1;
         if (cond >= 0 && qc_unless_defined_runs(nt, par, w, cond, hd, body, wn)) continue;

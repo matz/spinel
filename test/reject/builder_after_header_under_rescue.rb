@@ -1,6 +1,6 @@
-# A header right before its builder, in a begin with a rescue. If the
-# builder raises, the header has run and the write has not, so the header
-# does not reopen the built class. spinel cannot tell, so it refuses.
+# A header right before its builder, in a begin with a rescue. The header
+# runs first and makes its own class, which the write then replaces, so
+# spinel refuses it (see builder_after_header.rb), rescue or not.
 module Outer
   begin
     class Foo; def k = 2; end

@@ -184,6 +184,12 @@ int nt_origin(const NodeTable *nt, int id, char *how, int *a, unsigned *pass, in
   return x->from;
 }
 
+int nt_clone_source(const NodeTable *nt, int id) {
+  char how = 0; int a = 0, k = 0; unsigned pass = 0;
+  int from = nt_origin(nt, id, &how, &a, &pass, &k);
+  return how == 'c' ? from : -1;
+}
+
 /* ---- filling the table (the parser's walk) ---- */
 
 NodeTable *nt_new_table(void) {

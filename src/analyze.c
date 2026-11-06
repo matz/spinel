@@ -39884,9 +39884,18 @@ int nullable_int_value(Compiler *c, int v) {
     }
     /* so is then's, and instance_exec's and instance_eval's, which the
        block's ivar read or write of the receiver's nil-able slot answers */
-    if (cn && (is_then_alias(cn) || sp_streq(cn, "instance_exec") || sp_streq(cn, "instance_eval"))) {
+    if (cn && (is_then_alias(cn) || is_instance_eval_family(cn))) {
       int ft = call_block_tail(c, v);
       if (ft >= 0 && (nt_kind(nt, ft) == NK_NilNode || nullable_int_value(c, ft))) return 1;
+      /* the method's own block passed on (`&b`): the blocks its callers wrote */
+      Scope *fs = ft < 0 && call_forwards_own_block(c, v) ? comp_scope_of(c, v) : NULL;
+      if (fs) {
+        int tails[64];
+        int sv_ybn = yield_block_tails_next; yield_block_tails_next = 1;
+        int n = yield_block_tails(c, (int)(fs - c->scopes), tails, (int)(sizeof tails / sizeof tails[0]));
+        yield_block_tails_next = sv_ybn;
+        for (int i = 0; i < n; i++) if (nt_kind(nt, tails[i]) == NK_NilNode || nullable_int_value(c, tails[i])) return 1;
+      }
     }
     if (rcv0 >= 0 && cn && (is_find_alias(cn)) &&
         nullable_int_elem_expr(c, rcv0, 0)) return 1;

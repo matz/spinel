@@ -1077,8 +1077,10 @@ int emit_call_instance_eval_arms(Compiler *c, int id, Buf *b, const NodeTable *n
            enclosing valued-break scope */
         const char *sv_bser = g_brk_ser_var; g_brk_ser_var = NULL;
         int sv_iep = g_ie_res_poly, sv_ieo = g_ie_next_oint;
+        TyKind sv_iet = g_ie_next_ty;
         g_ie_res_poly = (scalar_res && body_ty == TY_POLY);
         g_ie_next_oint = res_oint;   /* a `next v` stores the slot's form */
+        if (res_oint) g_ie_next_ty = body_ty;   /* (`next nil` too, which it reads to spell its nil) */
         char bvbuf[32];
         int sv_lexc2 = g_loop_exc_base, sv_lexc2_rb = g_loop_rescue_base, sv_lens2 = g_loop_ensure_base;
         if (ie_bn_wrap) {
@@ -1113,7 +1115,7 @@ int emit_call_instance_eval_arms(Compiler *c, int id, Buf *b, const NodeTable *n
           g_indent--; emit_indent(g_pre, g_indent); buf_puts(g_pre, "} while (0);\n");
         }
         g_loop_exc_base = sv_lexc2; g_loop_rescue_base = sv_lexc2_rb; g_loop_ensure_base = sv_lens2;
-        g_ie_res_poly = sv_iep; g_ie_next_oint = sv_ieo;
+        g_ie_res_poly = sv_iep; g_ie_next_oint = sv_ieo; g_ie_next_ty = sv_iet;
         g_brk_ser_var = sv_bser;
         g_ie_discard_value = saved_discard;
         g_one_held = sv_oh;

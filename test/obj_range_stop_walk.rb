@@ -39,3 +39,14 @@ p r.each_with_index { |v, i| next if i.odd? }.to_s
 p r.find { |v| next false if v.n == 1; true }.to_s
 p r.take_while { |v| break [] if v.n == 2; true }
 p (V.new(3)..V.new(1)).find { |v| true }
+# take_while's Array chained into a String map and a sum block
+class W
+  include Comparable
+  attr_reader :n, :s
+  def initialize(n) = (@n = n; @s = "x" * n)
+  def <=>(o) = n <=> o.n
+  def succ = W.new(n + 1)
+end
+w = (W.new(1)..W.new(5))
+p w.take_while { |v| v.n < 3 }.map { |v| v.s }.sum { |y| y.size }
+p w.take_while { |v| v.n < 4 }.map(&:s).sum(&:size)

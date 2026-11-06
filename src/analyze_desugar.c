@@ -3497,6 +3497,85 @@ int desugar_masgn_to_ary(Compiler *c) {
   return changed;
 }
 
+/* A multiple assignment with a setter on a class or module among its
+   targets (`old, I18n.config = I18n.config, I18nProxy.new(...)`, which
+   Rails' ActionView::Rendering#process writes): the emitters store into an
+   object's writer only, and refused the Class receiver. Where the
+   assignment's value is dropped, the setter's element goes to a temp the
+   assignment writes in its place, and the setter runs on the temp right
+   after: `old, t = a, b; I18n.config = t`. Every element is still read
+   before any target is written; the setters run after the other targets,
+   in their order, which a class's setter cannot tell (the targets it could
+   see are the caller's locals). */
+static int masgn_class_setter_target(const NodeTable *nt, int t) {
+  if (nt_kind(nt, t) != NK_CallTargetNode) return 0;
+  int r = nt_ref(nt, t, "receiver");
+  NodeKind rk = r >= 0 ? nt_kind(nt, r) : NK_NONE;
+  return (rk == NK_ConstantReadNode || rk == NK_ConstantPathNode) && name_is_plain_setter(nt_str(nt, t, "name"));
+}
+int desugar_masgn_class_setters(Compiler *c) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  int changed = 0, n0 = nt->count;
+  static const char *const arrs[] = { "lefts", "rights" };
+  for (int id = comp_kind_first(c, NK_MultiWriteNode); id >= 0 && id < n0; id = comp_kind_next(c, id)) {
+    if (nt_kind(nt, id) != NK_MultiWriteNode || nt_ref(nt, id, "value") < 0) continue;
+    int any = 0;
+    for (int a = 0; a < 2 && !any; a++) {
+      int n = 0; const int *t = nt_arr(nt, id, arrs[a], &n);
+      for (int i = 0; i < n && !any; i++) any = masgn_class_setter_target(nt, t[i]);
+    }
+    if (!any || !an_node_dropped(c, id)) continue;
+    int base = nt->count, nset = 0, ok = 1;
+    int *sets = NULL;
+    int mw = nt_new_node(nt, "MultiWriteNode"), stmts = nt_new_node(nt, "StatementsNode");
+    if (mw < 0 || stmts < 0) continue;
+    for (int a = 0; a < 2 && ok; a++) {
+      int n = 0; const int *t0 = nt_arr(nt, id, arrs[a], &n);
+      int *t = malloc(sizeof(int) * (size_t)(n + 1));
+      if (!t) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+      memcpy(t, t0, sizeof(int) * (size_t)n);   /* copy before the table grows */
+      for (int i = 0; i < n && ok; i++) {
+        if (!masgn_class_setter_target(nt, t[i])) continue;
+        char tname[64];
+        snprintf(tname, sizeof tname, "__mwc_%s_%d_%d", comp_node_tag(c, id), a, i);
+        int lt = nt_new_node(nt, "LocalVariableTargetNode"), rd = nt_new_node(nt, "LocalVariableReadNode");
+        int args = nt_new_node(nt, "ArgumentsNode"), call = nt_new_node(nt, "CallNode");
+        if (lt < 0 || rd < 0 || args < 0 || call < 0) { ok = 0; break; }
+        nt_node_set_str(nt, lt, "name", tname);
+        nt_node_set_str(nt, rd, "name", tname);
+        nt_node_set_arr(nt, args, "arguments", &rd, 1);
+        nt_node_set_str(nt, call, "name", nt_str(nt, t[i], "name"));
+        nt_node_set_ref(nt, call, "receiver", nt_ref(nt, t[i], "receiver"));
+        nt_node_set_ref(nt, call, "arguments", args);
+        nt_node_set_int(nt, call, "node_line", nt_int(nt, id, "node_line", 0));
+        scope_local_intern(comp_scope_of(c, id), tname);
+        t[i] = lt;
+        sets = realloc(sets, sizeof(int) * (size_t)(nset + 2));
+        if (!sets) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+        sets[1 + nset++] = call;
+      }
+      nt_node_set_arr(nt, mw, arrs[a], t, n);
+      free(t);
+    }
+    if (!ok) { free(sets); continue; }
+    nt_node_set_ref(nt, mw, "rest", nt_ref(nt, id, "rest"));
+    nt_node_set_ref(nt, mw, "value", nt_ref(nt, id, "value"));
+    nt_node_set_int(nt, mw, "node_line", nt_int(nt, id, "node_line", 0));
+    sets[0] = mw;
+    nt_node_set_arr(nt, stmts, "body", sets, nset + 1);
+    free(sets);
+    for (int a = 0; a < 2; a++) nt_node_set_arr(nt, id, arrs[a], NULL, 0);
+    nt_node_set_type(nt, id, "ParenthesesNode");
+    nt_node_set_ref(nt, id, "body", stmts);
+    nt_node_set_ref(nt, id, "rest", -1);
+    nt_node_set_ref(nt, id, "value", -1);
+    comp_grow_node_arrays(c);
+    for (int j = base; j < nt->count; j++) c->nscope[j] = c->nscope[id];
+    changed = 1;
+  }
+  return changed;
+}
+
 /* A String mutator whose receiver is an expression answering an existing
    String is sent to that String in CRuby: `(c ? s : t) << x`,
    `(@buf ||= +"") << x`, `(s).upcase!`, `s.to_s << x`. The mutator

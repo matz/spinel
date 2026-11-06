@@ -8149,7 +8149,7 @@ static int infer_block_kernel_call(Compiler *c, int id, const NodeTable *nt, con
 
 /* The last resorts: a safe-navigation call, a reopened Array, Numeric or Object's own methods, a boxed receiver's face (infer_call_inner's rules, in their order) */
 /* A NilClass method on a String, Integer or Float that may be nil and has
-   no method of the name: the call is dispatched boxed
+   no method of the name but maybe Object's: the call is dispatched boxed
    (cplan_nil_scalar_reach), nil's answer a boxed value. Checked before the
    universal rules, which type a `?` name as a bool. */
 static int infer_nil_scalar_call(Compiler *c, int id, const NodeTable *nt, const char *name,

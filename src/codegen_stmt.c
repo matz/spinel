@@ -7437,6 +7437,22 @@ static int emit_poly_class_when_value(Compiler *c, int cond_id, const char *tmp,
          ancestor walk, which reads those reopenings */
       if (builtin_reopen_includes_module(c, cid))
         buf_printf(b, " || sp_poly_is_a(%s, (sp_Class){%d})", tmp, cid);
+      /* a class value that extends the module (`class K; extend M; end`):
+         `when M` matches K itself, as is_a?(M) does */
+      if (comp_class_is_module(c, &c->classes[cid])) {
+        int any = 0;
+        for (int k = 0; k < c->nclasses; k++)
+          if (comp_class_singleton_has_module(c, k, cid)) {
+            if (!any) buf_printf(b, " || (%s.tag == SP_TAG_CLASS && (", tmp);
+            buf_printf(b, "%ssp_unbox_class(%s).cls_id == %d", any ? " || " : "", tmp, k);
+            any = 1;
+          }
+        if (any) buf_puts(b, "))");
+      }
+      /* a reopened builtin module (`module Comparable; def m; end`):
+         a builtin value that includes it has no program class id */
+      if (class_is_builtin_module_reopen(c, cid))
+        buf_printf(b, " || sp_poly_kind_of_builtin(%s, \"%s\")", tmp, cn);
     }
     /* A known builtin class with no arm above -- an exception class most of
        all: a boxed exception walks its hierarchy at run time, so `when

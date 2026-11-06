@@ -7757,6 +7757,17 @@ int builtin_reopen_includes_module(Compiler *c, int mod) {
   }
   return 0;
 }
+/* Is class entry `cid` the program's reopening of a builtin module
+   (`module Comparable; def m; end`)? A builtin value (an Integer, a
+   String, an Array) carries no program class id, so an is_a? or a `when`
+   on that entry must also ask the runtime, which knows the builtin
+   classes that include the module. A program's own module of the same
+   leaf name in another module (`Ns::Comparable`) is not one. */
+int class_is_builtin_module_reopen(Compiler *c, int cid) {
+  if (cid < 0 || cid >= c->nclasses || !comp_class_is_module(c, &c->classes[cid])) return 0;
+  const char *qn = class_ruby_name(c, cid);
+  return qn && is_builtin_module_name(qn) && builtin_class_id(qn) != 0;
+}
 int ty_matches_class(Compiler *c, TyKind t, const char *cn, int exact) {
   const char *self_cls = NULL;
   switch (t) {

@@ -61,6 +61,8 @@ int sp_net_sock_name(int fd, int peer, void *out, int cap);
 int sp_net_accept(int sfd);
 int sp_net_accept_unless(int sfd, const unsigned char *cancel);
 int sp_net_accept_nb(int sfd);
+/* The peer IP of a connected fd as text, "" when it has none. */
+const char *sp_net_peer_ip(int fd);
 int sp_net_connect(const char *host, int port);
 /* connect an existing fd to a packed sockaddr, waiting as connect does */
 int sp_net_connect_sa(int fd, const void *sa, int len);

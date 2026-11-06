@@ -304,3 +304,7 @@ src/call_plan.c cps_key_callbacks_run_code the builtin-callback rows' names a bu
 src/call_plan.c ver_entries_build the current own body of each public name before entries are installed
 src/call_plan.c ver_named_one the method an includer holds of a module's open history's name, its copy's or its own
 src/compiler.c comp_time_reopen_defines whether the program's reopen of Time defines a name, so a Time subclass's call of it is not taken for Time's in-place conversion or copy
+src/analyze.c rms_builtin_receiver whether a fold's receiver class defines reduce/inject itself, so the fold is the builtin's
+src/codegen_call.c class_value_builtin_answers whether a reopened Class or Module defines a Module method's name, so the builtin answers a class value
+src/codegen_call.c root_reopen_defines_own whether a reopening of Object, Kernel or BasicObject defines a name itself, for respond_to?
+src/codegen_call.c bool_side_responds whether true's or false's class defines a name itself, for respond_to?

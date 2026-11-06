@@ -251,16 +251,22 @@ static int node_is_oint_asked(Compiler *c, int node) {
        such ivar (nil, a builtin, Object.new) reads it nil: an Integer / Float
        tail can be nil -- so too over a typed receiver that is no object of
        the program's (nil, a number, a String) */
-    if ((sp_streq(nm, "instance_eval") || sp_streq(nm, "instance_exec")) && blk >= 0 && r >= 0 &&
-        (rt == TY_POLY || (rt != TY_UNKNOWN && !ty_is_object(rt))) && nt_kind(nt, blk) == NK_BlockNode) {
-      int bb = nt_ref(nt, blk, "body");
+    /* (a block the method was given and passes on is, spliced, the block
+       its call site wrote: resolve_forwarded_block) */
+    int ieb = blk >= 0 ? resolve_forwarded_block(c, blk) : -1;
+    if (is_instance_eval_family(nm) && ieb >= 0 && r >= 0 &&
+        (rt == TY_POLY || (rt != TY_UNKNOWN && !ty_is_object(rt))) && nt_kind(nt, ieb) == NK_BlockNode) {
+      int bb = nt_ref(nt, ieb, "body");
       int bn = 0; const int *bs = bb >= 0 ? nt_arr(nt, bb, "body", &bn) : NULL;
       return bn > 0 && oint_kind(comp_ntype(c, bs[bn - 1]));
     }
-    if ((sp_streq(nm, "instance_eval") || sp_streq(nm, "instance_exec")) && blk >= 0 &&
-        ty_is_object(iert) && call_target(c, node, ty_object_class(iert), nm, 0, NULL) < 0 &&
-        nt_kind(nt, blk) == NK_BlockNode) {
-      int bb = nt_ref(nt, blk, "body");
+    /* so does a trampoline method's call (`def go(&b) = instance_exec(&b)`)
+       with a block, spliced as that instance_exec (emit_call_instance_eval_arms) */
+    if (ieb >= 0 && ty_is_object(iert) && nt_kind(nt, ieb) == NK_BlockNode &&
+        (is_instance_eval_family(nm)
+           ? call_target(c, node, ty_object_class(iert), nm, 0, NULL) < 0
+           : comp_trampoline_kind(c, ty_object_class(iert), nm, NULL) != 0)) {
+      int bb = nt_ref(nt, ieb, "body");
       int bn = 0; const int *bs = bb >= 0 ? nt_arr(nt, bb, "body", &bn) : NULL;
       return (bn > 0 && node_is_oint(c, bs[bn - 1])) || (bb >= 0 && block_next_may_be_nil(c, bb, 0));
     }

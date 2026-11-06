@@ -1606,6 +1606,23 @@ static int cf_block_params(CF *f, int blk, const char **out, int max, int *plain
   }
   return n;
 }
+/* does a block of blk's parameters spread one yielded Array over them
+   (`|a, b|`, `|a, *r|`, `|a, |`, `_2`), as CRuby does? Then each parameter may
+   also take an element of the one value handed to it. */
+static int cf_block_autosplats(CF *f, int blk) {
+  const NodeTable *nt = f->nt;
+  int bp = nt_ref(nt, blk, "parameters");
+  /* `{ _2.m }` takes two numbered parameters: the same spread */
+  if (bp >= 0 && nt_kind(nt, bp) == NK_NumberedParametersNode) return block_param_name(f->c, blk, 1) != NULL;
+  if (bp < 0 || nt_kind(nt, bp) != NK_BlockParametersNode) return 0;
+  int pn = nt_ref(nt, bp, "parameters");
+  if (pn < 0 || nt_kind(nt, pn) != NK_ParametersNode) return 0;
+  int rn = 0, on = 0, pon = 0;
+  nt_arr(nt, pn, "requireds", &rn); nt_arr(nt, pn, "optionals", &on); nt_arr(nt, pn, "posts", &pon);
+  int rp = nt_ref(nt, pn, "rest");
+  if (rp >= 0 && nt_kind(nt, rp) == NK_ImplicitRestNode) return 1;
+  return rn + on + pon + (rp >= 0) >= 2;
+}
 /* every name a block, a lambda or a def declares as a parameter, into out */
 static int cf_all_param_names(CF *f, int params_owner, const char **out, int max) {
   const NodeTable *nt = f->nt;
@@ -2056,6 +2073,13 @@ static void cf_bind_block(CF *f, int mi, int blk) {
   if (m->is_proc_form) { cf_all_block_params(f, blk); return; }
   if (m->is_lowered_yield) { cf_all_block_params(f, blk); return; }
   for (int i = 0; i < n; i++) if (names[i]) cf_flow(f, f->yarg_el[mi][i], cf_lv(f, body >= 0 ? body : blk, names[i]));
+  /* `yield [a, b]` to `|x, y|`: one yielded Array is spread over the
+     parameters, so each takes an element of the first yield argument too */
+  if (cf_block_autosplats(f, blk)) {
+    for (int i = 0; i < n; i++) if (names[i]) cf_bind_destructured(f, blk, names[i], f->yarg_el[mi][0], 0);
+    int re = rest ? cf_lv(f, body >= 0 ? body : blk, rest) : -1;
+    if (re >= 0) cf_load(f, f->yarg_el[mi][0], f->directed ? f->obj_cont[cf_el_obj(f, re)] : re);
+  }
   const char *dn[64]; int poss[64]; unsigned char splats[64];
   int nd = cf_destructured_params(f, blk, dn, poss, splats, 64);
   for (int i = 0; i < nd; i++)
@@ -2586,8 +2610,20 @@ static void cf_builtin_rule(CF *f, int v, int recv_el, const int *argv, int argc
     int body = nt_ref(nt, blk, "body");
     const char *names[64];
     int n = cf_all_param_names(f, blk, names, 64);
+    /* `[[a, b]].each { |x, y| }`: an element that is an Array is spread
+       over the parameters, so each takes that element's elements too; one
+       element of the block's own holds what a parameter takes whole */
+    int asp = -1;
+    if (cf_block_autosplats(f, blk)) {
+      asp = cf_entry(f, -(blk + 2), "#as");
+      cf_load(f, recv_el, asp);
+      if (kelem) cf_krecv_edge(f, recv_el, asp); else cf_flow(f, recv_el, asp);
+      cf_each_yields(f, recv_el, asp);
+      if (recv_el < 0) cf_kmark(f, asp, CF_KANY);
+    }
     for (int i = 0; i < n; i++) {
       int pe = cf_lv(f, body >= 0 ? body : blk, names[i]);
+      if (asp >= 0 && pe >= 0) cf_load(f, asp, pe);
       /* an element, the receiver, an argument (a memo, an initial value),
          the block's own value (an accumulator); bound from those, not from
          the call's value, which a row may keep apart from the receiver

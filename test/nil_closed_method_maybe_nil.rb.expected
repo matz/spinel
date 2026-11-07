@@ -13,3 +13,6 @@
 NoMethodError
 "private method 'helper' called for nil"
 :nil
+""
+1
+"private method 'only_nil' called for nil"

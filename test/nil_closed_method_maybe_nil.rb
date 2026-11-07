@@ -37,3 +37,17 @@ rescue NoMethodError => e
   p e.message
 end
 p((x.send(:prot) rescue $!.message))
+# NilClass's own builtin to_s answers before the top-level def; a by-value
+# Struct answer from K builds
+def to_s = "top"
+class K; def to_s = "k"; end
+p((x.to_s rescue $!.message))
+Pt = Struct.new(:a, :b)
+def pt = :top
+class K; def pt = Pt.new(1, 2); end
+p y.pt.a
+# K has no method of the name: nil's private one still names nil
+class NilClass; private def only_nil = :n; end
+class L; end
+z = ARGV.size > 5 ? L.new : nil
+p((z.only_nil rescue $!.message))

@@ -27539,8 +27539,17 @@ int cplan_nil_closed_method(Compiler *c, int call, const char *name, int *vis) {
   const NodeTable *nt = c->nt;
   if (nt_ignore_visibility(nt, call) || nt_str(nt, call, "send_blind") ||
       (nt_int(nt, call, "dyn_arm", 0) && !nt_str(nt, call, "vis_enforce"))) return -1;
-  int oc = comp_core_class(c, CORE_OBJECT);
+  /* (a method_missing nil reaches answers the call instead) */
+  if (elab_method_versions(c, "method_missing")) return -1;
+  int oc = comp_core_class(c, CORE_OBJECT), nk = comp_core_class(c, CORE_NILCLASS);
   for (int i = 0; owners[i] != -1; i++) {
+    /* below NilClass: a builtin public method of NilClass's own answers
+       first, and so does a `public :name` NilClass declares */
+    if (i > 0) {
+      int at = -1;
+      if (cplan_nil_own_builtin(name)) return -1;
+      if (nk >= 0 && comp_method_vis_declared(c, nk, name, &at) == SP_VIS_PUBLIC && at == nk) return -1;
+    }
     int k = owners[i] == -2 ? oc : comp_core_class(c, owners[i]);
     int dc = -1, mi;
     if (owners[i] == -2) mi = call_target(c, call, -1, name, CT_TOP, NULL);
@@ -27579,7 +27588,14 @@ int cplan_nil_closed_method(Compiler *c, int call, const char *name, int *vis) {
 int cplan_nil_program_served(Compiler *c, int id) {
   /* (a method closed to the call raises NoMethodError, with the call's
      type's placeholder) */
-  if (cplan_nil_closed_method(c, id, cplan_call_name(c->nt, id), NULL) >= 0) return 1;
+  if (cplan_nil_closed_method(c, id, cplan_call_name(c->nt, id), NULL) >= 0) {
+    /* (a pointer's NULL, a scalar's 0 or a box's nil: not a by-value struct
+       or an Integer that may be nil, whose placeholder is not written here) */
+    Repr w = repr_of(c, id);
+    if (w.kind == RK_BOXED || w.kind == RK_PTR || w.kind == RK_STRBUF || w.as_ty == TY_UNKNOWN ||
+        (w.kind == RK_SCALAR && !(oint_kind(w.as_ty) && node_is_oint(c, id))))
+      return 1;
+  }
   int nilcls = 0;
   int mi = cplan_nil_program_method(c, id, cplan_call_name(c->nt, id), &nilcls);
   if (mi < 0) return 0;
@@ -27640,8 +27656,16 @@ static int emit_nil_program_call(Compiler *c, int id, Buf *b, int stmt) {
   int boxed = want.kind == RK_BOXED || want.as_ty == TY_UNKNOWN;
   if (nil_private) {
     free(nb.p); nb.p = NULL; nb.len = nb.cap = 0;
+    /* (a pointer's NULL is cast to the call's C type: after a comma it is
+       no null pointer constant, and the choice would read as void *) */
+    Buf pv; memset(&pv, 0, sizeof pv);
+    if (boxed) buf_puts(&pv, "sp_box_nil()");
+    else if (want.kind == RK_PTR && c_type_name(want.as_ty) == NULL && !ty_is_object(want.as_ty)) buf_puts(&pv, default_value_from_compiler(c, want.as_ty));
+    else if (want.kind == RK_PTR) { buf_puts(&pv, "(("); emit_ctype(c, want.as_ty, &pv); buf_puts(&pv, ")NULL)"); }
+    else buf_puts(&pv, default_value_from_compiler(c, want.as_ty));
     buf_printf(&nb, "(sp_exc_stage_recv(sp_box_nil()), sp_raise_cls(\"NoMethodError\", \"%s method '%s' called for nil\"), %s)",
-               cvis == SP_VIS_PROTECTED ? "protected" : "private", nt_str(nt, id, "name"), boxed ? "sp_box_nil()" : default_value_from_compiler(c, want.as_ty));
+               cvis == SP_VIS_PROTECTED ? "protected" : "private", nt_str(nt, id, "name"), pv.p);
+    free(pv.p);
   }
   if (stmt) buf_printf(&nv, "(void)(%s)", nb.p ? nb.p : "0");
   else if (nil_private) buf_puts(&nv, nb.p);

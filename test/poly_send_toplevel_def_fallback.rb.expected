@@ -1,0 +1,11 @@
+[42, 42]
+[true, false]
+[:top, :top]
+[:top, 7]
+[[:top, 1], [:top, 1], [:top, 1]]
+[[:top, {b: 2}], {a: 1, b: 2}]
+[:cap, :cap]
+:top
+[nil, :top]
+["x", "3"]
+[false, true]

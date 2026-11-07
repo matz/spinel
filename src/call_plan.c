@@ -2373,6 +2373,22 @@ static int cplan_capture_names(Compiler *c, int id, int cls, int sg, const char 
   int made = elab_singleton_made(c, cls, elab_point_of(c, id));
   return made == ELAB_YES ? CP_ABSENT_SG : made == ELAB_NO ? CP_ABSENT_MODULE : CP_ABSENT_UNTOLD;
 }
+/* Is a class method `name` of cls one that no def, alias or define_method
+   of the program makes (no version of the name), where the record proves
+   none is defined at capture id: no method_missing or respond_to_missing?,
+   nothing it cannot follow? (ct_undefined_at asks only a name with
+   versions.) */
+static int cm_capture_never_made(Compiler *c, int id, int cls, const char *name) {
+  if (!name || elab_method_versions(c, name)) return 0;
+  /* (a Symbol argument: CRuby names another side for a String's) */
+  int ac = 0;
+  const int *av = call_args(c->nt, id, &ac);
+  if (ac < 1 || nt_kind(c->nt, av[0]) != NK_SymbolNode) return 0;
+  int framed = elab_plan_enter(c, id);
+  int none = elab_call_method(c, id, cls, name, 1) == ELAB_NO;
+  if (framed) elab_plan_leave(c);
+  return none;
+}
 /* Where does capture id (`K.method(:k)`, `public_method`; mi its target,
    -1 for none) raise CRuby's NameError: CP_ABSENT_SG (or
    CP_ABSENT_MODULE, a module whose singleton class is not made yet),
@@ -2392,7 +2408,8 @@ static int cplan_capture_absent(Compiler *c, int id, int mi) {
     name = method_sym_arg(c, id);
     if ((m->entry != ENTRY_DISPATCH && m->entry != ENTRY_TABLE) || cplan_entry_finds(c, mi) != VER_FINDS_NONE || is_instance_method_name(nt_str(c->nt, id, "name"))) return 0;
   }
-  else if (cls < 0 || !ct_undefined_at(c, id, cls, name, CT_CMETHOD) || cm_builtin_answers(c, cls, name)) return 0;
+  else if (cls < 0 || !(ct_undefined_at(c, id, cls, name, CT_CMETHOD) || cm_capture_never_made(c, id, cls, name)) ||
+           cm_builtin_answers(c, cls, name)) return 0;
   return cplan_capture_names(c, id, cls, sg, name, m != NULL);
 }
 /* Is ci's class method `name` defined wherever node at runs? */

@@ -7619,6 +7619,7 @@ static int widen_arg_array(Compiler *c, int arg) {
 
 const char *block_param_name(Compiler *c, int block, int idx);
 static int widen_boxed_elem_sources(Compiler *c, int r, TyKind elem, int depth);
+static int widen_boxed_sub_elem_sources(Compiler *c, int r, int k, TyKind elem, int depth);
 
 /* The calls whose literal block names a positional parameter, keyed by the
    name and the block's scope: the calls a block parameter is bound by.
@@ -8162,15 +8163,20 @@ static int widen_iter_param_elems(Compiler *c, Scope *sc, const char *nm, TyKind
     }
     if (r < 0 || !cn) continue;
     TyKind rt = infer_type(c, r), yt[2];
-    int elem_at = -1;
+    int elem_at = -1, ny = 0;
     if (ty_is_hash(rt))
       elem_at = sp_streq(cn, "each_value") ? 0 : is_each_or_pair(cn) ? 1 : -1;
-    else if ((ty_is_array(rt) || rt == TY_POLY) && ty_block_yield(TY_POLY_ARRAY, cn, yt, 2) > 0) {
+    else if ((ty_is_array(rt) || rt == TY_POLY) && (ny = ty_block_yield(TY_POLY_ARRAY, cn, yt, 2)) > 0) {
       /* not each_index, whose block takes an index */
       const IterRow *ir = iter_row(BOP_ANY_ARRAY, cn, -1, IRF_GAP_FWD);
       if (!ir || ir->yield[0] != YS_INDEX) elem_at = 0;
     }
-    if (bi == elem_at) ch |= widen_boxed_elem_sources(c, r, elem, depth + 1);
+    /* one element yielded to a block of several parameters is taken apart
+       over them: parameter bi is the element's bi-th (`t.each { |k, row| }`) */
+    int np = 0;
+    while (block_param_name(c, nt_ref(nt, call, "block"), np)) np++;
+    if (elem_at == 0 && ny == 1 && np > 1) ch |= widen_boxed_sub_elem_sources(c, r, bi, elem, depth + 1);
+    else if (bi == elem_at) ch |= widen_boxed_elem_sources(c, r, elem, depth + 1);
   }
   return ch;
 }
@@ -8365,6 +8371,26 @@ static int widen_boxed_elem_sources_1(Compiler *c, int r, TyKind elem, int depth
       int el = nt_kind(nt, ev[e]) == NK_AssocNode ? nt_ref(nt, ev[e], "value") : ev[e];
       if (el >= 0 && nt_kind(nt, el) != NK_SplatNode && nt_kind(nt, el) != NK_AssocSplatNode)
         ch |= widen_boxed_array_sources(c, el, elem, depth + 1);
+    }
+  }
+  return ch;
+}
+
+/* The arrays at index k of the elements of the container `r`, as far as
+   its literals show them: what a block taking each element apart binds to
+   its k-th parameter (`t.each { |key, row| }`). */
+static int widen_boxed_sub_elem_sources(Compiler *c, int r, int k, TyKind elem, int depth) {
+  if (depth > 6) return 0;
+  const NodeTable *nt = c->nt;
+  int lits[32], ch = 0;
+  int nl = container_literals(c, r, lits, 0, 32, 0);
+  for (int q = 0; q < nl; q++) {
+    int en = 0; const int *ev = nt_arr(nt, lits[q], "elements", &en);
+    for (int e = 0; e < en; e++) {
+      if (nt_kind(nt, ev[e]) != NK_ArrayNode) continue;
+      int sn = 0, splat = 0; const int *sv = nt_arr(nt, ev[e], "elements", &sn);
+      for (int j = 0; j <= k && j < sn; j++) if (nt_kind(nt, sv[j]) == NK_SplatNode) splat = 1;
+      if (!splat && k < sn) ch |= widen_boxed_array_sources(c, sv[k], elem, depth + 1);
     }
   }
   return ch;

@@ -58,6 +58,17 @@ g = Grid.new
 g.mark
 p g.rows
 
+# an element taken apart over several parameters: each binds the
+# element's own entry, a row there among them
+def put11(a) = a << "s"
+t11 = [[0, [1]], [2, [3, 4]]]
+t11.each { |_k, row| put11(row) }
+p t11
+def put12(a) = a << :y
+t12 = [[[5], 0]]
+t12.each { |row, _k| put12(row) }
+p t12
+
 # a store of the rows' own kind prints as before
 def add9(a) = a << 9
 t9 = [[1, 2], [3]]

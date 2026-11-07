@@ -49,6 +49,15 @@ e = [[1], []]
 p e
 puts e
 
+# a row with a gap a write past its end left: puts prints the nil's
+# empty line
+gap = [[1], [2, 3]]
+gap[0][2] = 5
+puts gap
+fgap = [[1.5], [2.5]]
+fgap[0][2] = 3.5
+puts fgap
+
 # p's value used: the table stays boxed, and is the same table
 z = [[8, 9]]
 w = p(z)

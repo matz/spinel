@@ -299,16 +299,21 @@ void sp_poly_puts(sp_RbVal v)
          line (using to_s on each); a non-Array OBJ falls back to
          inspect / class-name. */
       switch (v.cls_id) {
+        /* an element that is nil (a gap a write past the end left, its nil
+           bit) prints puts nil's empty line, as the typed puts does */
         case SP_BUILTIN_INT_ARRAY: {
           sp_IntArray *_a = (sp_IntArray *)v.v.p;
-          for (sp_int _i = 0; _i < _a->len; _i++)
-            printf("%lld\n", (long long)_a->data[_a->start + _i]);
+          for (sp_int _i = 0; _i < _a->len; _i++) {
+            sp_oint _e = sp_IntArray_oget(_a, _i);
+            if (_e.nil) putchar('\n');
+            else printf("%lld\n", (long long)_e.v);
+          }
           break;
         }
         case SP_BUILTIN_FLT_ARRAY: {
           sp_FloatArray *_a = (sp_FloatArray *)v.v.p;
           for (sp_int _i = 0; _i < _a->len; _i++) {
-            fputs(sp_float_to_s(_a->data[_i]), stdout); putchar('\n');
+            fputs(sp_float_opt_to_s(sp_FloatArray_oget(_a, _i)), stdout); putchar('\n');
           }
           break;
         }

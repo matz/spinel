@@ -11108,8 +11108,9 @@ int desugar_raise_own_exception(Compiler *c) {
     int sm = mi, sdc = dc, past = 0;
     for (int step = 0; sm >= 0 && scope_calls_super(c, sm); step++) {
       int up = sdc >= 0 ? c->classes[sdc].parent : -1;
-      sdc = -1;
-      sm = up >= 0 && step < 64 ? call_target(c, -1, up, "exception", CT_CMETHOD, &sdc) : -1;
+      MethodLookup sml = { .def_class = -1 };
+      sm = up >= 0 && step < 64 ? call_target(c, -1, up, "exception", CT_CMETHOD, &sml) : -1;
+      sdc = sml.def_class;
       if (sm < 0) past = 1;
     }
     if (past) continue;

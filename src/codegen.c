@@ -8787,23 +8787,23 @@ static int g_in_fiber_body = 0;
    for the full binding, every name in it. */
 typedef struct { int pn, nreq; NameSet names; } FiberParams;
 /* Does the block's parameter list take a form the requireds-only binding
-   does not: an optional, a post, or a rest beside other parameters
-   (`|a, b = 7|`, `|a, *r, z|`)? Collects every name into f->names. Not with
-   keywords, a parameter taken apart, or a slot that is not boxed (the
-   analysis keeps these boxed: the values come through resumed_value). */
+   does not: an optional, a post, a rest beside other parameters, or keywords
+   (`|a, b = 7|`, `|a, *r, z|`, `|a, k: 0, **kw|`)? Collects every name into
+   f->names. Not with `**nil`, a parameter taken apart, or a slot that is not
+   boxed (the analysis keeps these boxed: the values come through
+   resumed_value). */
 static int fiber_full_params(Compiler *c, FiberParams *f, Scope *encl) {
   const NodeTable *nt = c->nt;
   int pn = f->pn;
   if (pn < 0 || !encl) return 0;
   int rn = 0, on = 0, qn = 0, kn = 0;
   const int *req = nt_arr(nt, pn, "requireds", &rn), *opt = nt_arr(nt, pn, "optionals", &on);
-  const int *post = nt_arr(nt, pn, "posts", &qn);
-  nt_arr(nt, pn, "keywords", &kn);
-  int rst = nt_ref(nt, pn, "rest");
-  if (!(on > 0 || qn > 0 || (rst >= 0 && rn > 0))) return 0;
-  if (kn > 0 || nt_ref(nt, pn, "keyword_rest") >= 0) return 0;
-  const int *lists[3] = { req, opt, post }; int lens[3] = { rn, on, qn };
-  for (int l = 0; l < 3; l++)
+  const int *post = nt_arr(nt, pn, "posts", &qn), *kws = nt_arr(nt, pn, "keywords", &kn);
+  int rst = nt_ref(nt, pn, "rest"), krs = nt_ref(nt, pn, "keyword_rest");
+  if (!(on > 0 || qn > 0 || (rst >= 0 && rn > 0) || kn > 0 || krs >= 0)) return 0;
+  if (krs >= 0 && nt_kind(nt, krs) == NK_NoKeywordsParameterNode) return 0;
+  const int *lists[4] = { req, opt, post, kws }; int lens[4] = { rn, on, qn, kn };
+  for (int l = 0; l < 4; l++)
     for (int i = 0; i < lens[l]; i++) {
       const char *nm = nt_str(nt, lists[l][i], "name");
       LocalVar *lv = nm ? scope_local(encl, nm) : NULL;
@@ -8815,6 +8815,12 @@ static int fiber_full_params(Compiler *c, FiberParams *f, Scope *encl) {
     LocalVar *lv = scope_local(encl, rnm);
     if (!lv || lv->type != TY_POLY_ARRAY || lv->is_cell) return 0;
     nameset_add(&f->names, rnm);
+  }
+  const char *knm = krs >= 0 ? nt_str(nt, krs, "name") : NULL;
+  if (knm) {
+    LocalVar *lv = scope_local(encl, knm);
+    if (!lv || lv->type != TY_POLY) return 0;
+    nameset_add(&f->names, knm);
   }
   return 1;
 }
@@ -8830,51 +8836,80 @@ static void emit_fiber_param_slot(Compiler *c, Scope *encl, const char *nm, cons
     buf_printf(pb, "    *_cell_%s = lv_%s;\n", nm, bpn);
   }
 }
+/* A boxed parameter bound from `val` where `have` holds, else from its
+   default `dflt`, which runs only then, with what its emission puts ahead
+   of it (g_pre) */
+static void emit_fiber_param_or_default(Compiler *c, Scope *encl, const char *nm, int dflt, const char *have,
+                                        const char *val, NameSet *caps, Buf *pb) {
+  emit_fiber_param_slot(c, encl, nm, "sp_box_nil()", caps, pb);
+  LocalVar *lv = scope_local(encl, nm);
+  const char *dst = lv && lv->is_cell && !nameset_has(caps, nm) ? NULL : rename_local(nm);
+  Buf dv, pre; memset(&dv, 0, sizeof dv); memset(&pre, 0, sizeof pre);
+  Buf *sv_pre = g_pre; int sv_ind = g_indent;
+  g_pre = &pre; g_indent = 2;
+  emit_boxed(c, dflt, &dv);
+  g_pre = sv_pre; g_indent = sv_ind;
+  char tgt[160];
+  if (dst) snprintf(tgt, sizeof tgt, "lv_%s", dst); else snprintf(tgt, sizeof tgt, "*_cell_%s", nm);
+  buf_printf(pb, "    if (%s) %s = %s;\n    else {\n", have, tgt, val);
+  if (pre.p) buf_puts(pb, pre.p);
+  buf_printf(pb, "      %s = %s;\n    }\n", tgt, dv.p ? dv.p : "sp_box_nil()");
+  free(dv.p); free(pre.p);
+}
 /* The full binding (fiber_full_params), as a proc call binds: the values a
    first resume hands over, one Array spread over the parameters where there
    is more than one slot; the requireds by position; each optional from what
    is left once the posts are served, else its default; the rest the middle;
-   the posts from the end. */
+   the posts from the end. Keywords the call passed are the last value
+   (pass_kw), and then no Array is spread; they are checked as CRuby checks
+   a block's -- a required one missing, or with no **kwrest a key naming no
+   keyword, is an ArgumentError -- before any default runs, and each keyword
+   takes its own or its default, the **kwrest the others. */
 static void emit_fiber_full_bind(Compiler *c, FiberParams *f, Scope *encl, NameSet *caps, Buf *pb) {
   const NodeTable *nt = c->nt;
-  int pn = f->pn, P = 0, O = 0, Q = 0;
+  int pn = f->pn, P = 0, O = 0, Q = 0, K = 0;
   const int *req = nt_arr(nt, pn, "requireds", &P), *opt = nt_arr(nt, pn, "optionals", &O);
-  const int *post = nt_arr(nt, pn, "posts", &Q);
-  int rst = nt_ref(nt, pn, "rest");
+  const int *post = nt_arr(nt, pn, "posts", &Q), *kws = nt_arr(nt, pn, "keywords", &K);
+  int rst = nt_ref(nt, pn, "rest"), krs = nt_ref(nt, pn, "keyword_rest");
+  int takes_kw = K > 0 || krs >= 0;
   int spread = P + O + Q > 1 || (rst >= 0 && P + O + Q > 0);
   buf_printf(pb, "    sp_PolyArray *_fa = ({ sp_RbVal _rv = _fb->resumed_value; int _pn = _fb->pass_argc;"
                  " _pn > 1 || (%s(_pn == 1 || _pn < 0) && _rv.tag == SP_TAG_OBJ && sp_poly_is_array_kind(_rv.cls_id))"
                  " ? sp_poly_to_poly_array(_rv)"
                  " : _pn == 0 || (_pn < 0 && _rv.tag == SP_TAG_NIL) ? sp_PolyArray_new()"
                  " : ({ sp_PolyArray *_ra = sp_PolyArray_new(); sp_PolyArray_push(_ra, _rv); _ra; }); });\n",
-             spread ? "" : "0 && ");
+             !spread ? "0 && " : takes_kw ? "!_fb->pass_kw && " : "");
   buf_printf(pb, "    SP_GC_ROOT(_fa);\n");
-  buf_printf(pb, "    sp_int _fn = sp_PolyArray_length(_fa), _fo = _fn - %d;\n", P + Q);
+  buf_printf(pb, "    sp_int _fn = sp_PolyArray_length(_fa)%s, _fo = _fn - %d;\n", takes_kw ? " - _fb->pass_kw" : "", P + Q);
   buf_printf(pb, "    if (_fo < 0) _fo = 0;\n    if (_fo > %d) _fo = %d;\n", O, O);
   buf_printf(pb, "    sp_int _fr = %d + _fo, _fq = _fn - %d > _fr ? _fn - %d : _fr;\n", P, Q, Q);
+  if (takes_kw) {
+    buf_puts(pb, "    sp_RbVal _fkh = _fb->pass_kw ? sp_PolyArray_get(_fa, _fn) : sp_box_nil();\n");
+    int chk = ++g_tmp;
+    buf_printf(pb, "    static const char *const _kw%d[] = {", chk);
+    for (int k = 0; k < K; k++) {
+      const char *nm = nt_str(nt, kws[k], "name");
+      buf_printf(pb, "\"%.*s\", ", (int)block_param_written_len(c, nm), nm);
+    }
+    buf_printf(pb, "0}, *const _kr%d[] = {", chk);
+    for (int k = 0; k < K; k++) {
+      const char *nm = nt_str(nt, kws[k], "name");
+      if (nt_kind(nt, kws[k]) == NK_RequiredKeywordParameterNode)
+        buf_printf(pb, "\"%.*s\", ", (int)block_param_written_len(c, nm), nm);
+    }
+    buf_printf(pb, "0}, *const _kl%d[] = {0};\n", chk);
+    buf_printf(pb, "    sp_kwargs_verify(_fkh, _kw%d, _kr%d, _kl%d, %d);\n", chk, chk, chk, krs < 0);
+  }
   char ex[96];
   for (int i = 0; i < P; i++) {
     snprintf(ex, sizeof ex, "_fn > %d ? sp_PolyArray_get(_fa, %d) : sp_box_nil()", i, i);
     emit_fiber_param_slot(c, encl, nt_str(nt, req[i], "name"), ex, caps, pb);
   }
   for (int j = 0; j < O; j++) {
-    const char *nm = nt_str(nt, opt[j], "name");
-    emit_fiber_param_slot(c, encl, nm, "sp_box_nil()", caps, pb);
-    LocalVar *lv = scope_local(encl, nm);
-    const char *dst = lv && lv->is_cell && !nameset_has(caps, nm) ? NULL : rename_local(nm);
-    /* the default runs only when no value reaches it, with what its
-       emission puts ahead of it (g_pre) */
-    Buf dv, pre; memset(&dv, 0, sizeof dv); memset(&pre, 0, sizeof pre);
-    Buf *sv_pre = g_pre; int sv_ind = g_indent;
-    g_pre = &pre; g_indent = 2;
-    emit_boxed(c, nt_ref(nt, opt[j], "value"), &dv);
-    g_pre = sv_pre; g_indent = sv_ind;
-    char tgt[160];
-    if (dst) snprintf(tgt, sizeof tgt, "lv_%s", dst); else snprintf(tgt, sizeof tgt, "*_cell_%s", nm);
-    buf_printf(pb, "    if (_fo > %d) %s = sp_PolyArray_get(_fa, %d);\n    else {\n", j, tgt, P + j);
-    if (pre.p) buf_puts(pb, pre.p);
-    buf_printf(pb, "      %s = %s;\n    }\n", tgt, dv.p ? dv.p : "sp_box_nil()");
-    free(dv.p); free(pre.p);
+    char have[32], val[64];
+    snprintf(have, sizeof have, "_fo > %d", j);
+    snprintf(val, sizeof val, "sp_PolyArray_get(_fa, %d)", P + j);
+    emit_fiber_param_or_default(c, encl, nt_str(nt, opt[j], "name"), nt_ref(nt, opt[j], "value"), have, val, caps, pb);
   }
   const char *rnm = rst >= 0 ? nt_str(nt, rst, "name") : NULL;
   if (rnm) {
@@ -8885,6 +8920,31 @@ static void emit_fiber_full_bind(Compiler *c, FiberParams *f, Scope *encl, NameS
   for (int k = 0; k < Q; k++) {
     snprintf(ex, sizeof ex, "_fq + %d < _fn ? sp_PolyArray_get(_fa, _fq + %d) : sp_box_nil()", k, k);
     emit_fiber_param_slot(c, encl, nt_str(nt, post[k], "name"), ex, caps, pb);
+  }
+  for (int k = 0; k < K; k++) {
+    const char *nm = nt_str(nt, kws[k], "name");
+    int t = ++g_tmp;
+    buf_printf(pb, "    sp_bool _ff%d = 0;\n    sp_RbVal _fv%d = sp_poly_hash_get_pair_val(_fkh, sp_box_sym(sp_sym_intern(\"%.*s\")), &_ff%d);\n",
+               t, t, (int)block_param_written_len(c, nm), nm, t);
+    char have[32], val[32];
+    snprintf(have, sizeof have, "_ff%d", t);
+    snprintf(val, sizeof val, "_fv%d", t);
+    if (nt_kind(nt, kws[k]) == NK_OptionalKeywordParameterNode)
+      emit_fiber_param_or_default(c, encl, nm, nt_ref(nt, kws[k], "value"), have, val, caps, pb);
+    else emit_fiber_param_slot(c, encl, nm, val, caps, pb);   /* sp_kwargs_verify found it */
+  }
+  const char *knm = krs >= 0 ? nt_str(nt, krs, "name") : NULL;
+  if (knm) {
+    int t = ++g_tmp;
+    buf_printf(pb, "    sp_PolyPolyHash *_t%d = _fb->pass_kw ? sp_PolyPolyHash_from_poly(_fkh) : sp_PolyPolyHash_new();\n"
+                   "    SP_GC_ROOT(_t%d);\n", t, t);
+    for (int k = 0; k < K; k++) {
+      const char *nm = nt_str(nt, kws[k], "name");
+      buf_printf(pb, "    sp_PolyPolyHash_delete(_t%d, sp_box_sym(sp_sym_intern(\"%.*s\")));\n",
+                 t, (int)block_param_written_len(c, nm), nm);
+    }
+    char kv[64]; snprintf(kv, sizeof kv, "sp_box_obj(_t%d, SP_BUILTIN_POLY_POLY_HASH)", t);
+    emit_fiber_param_slot(c, encl, knm, kv, caps, pb);
   }
 }
 
@@ -8983,9 +9043,15 @@ static void emit_fiber_new_here(Compiler *c, int id, Buf *b, int as_gen, int siz
      but are NOT defined by the fiber body itself and NOT the block param. */
   NameSet fib_used = {0};
   if (body >= 0) proc_collect_used(c, body, &fib_used);
-  /* an optional's default is evaluated in the body too (emit_fiber_full_bind) */
-  int fdn = 0; const int *fdv = full_bind ? nt_arr(nt, fbp.pn, "optionals", &fdn) : NULL;
-  for (int k = 0; k < fdn; k++) proc_collect_used(c, nt_ref(nt, fdv[k], "value"), &fib_used);
+  /* an optional's or keyword's default is evaluated in the body too
+     (emit_fiber_full_bind) */
+  for (int l = 0; full_bind && l < 2; l++) {
+    int fdn = 0; const int *fdv = nt_arr(nt, fbp.pn, l ? "keywords" : "optionals", &fdn);
+    for (int k = 0; k < fdn; k++) {
+      int dv = nt_ref(nt, fdv[k], "value");
+      if (dv >= 0) proc_collect_used(c, dv, &fib_used);
+    }
+  }
 
   /* caps: outer-scope vars referenced in the body. A var written in the body is
      normally a fiber-body local (not captured) -- EXCEPT a celled one, which is
@@ -9060,7 +9126,13 @@ static void emit_fiber_new_here(Compiler *c, int id, Buf *b, int as_gen, int siz
      sp_RbVal, as emit_method_signature writes it), and is captured so */
   int self_boxed = 0;
   int uses_self = body >= 0 && fiber_body_uses_self(c, body);
-  for (int k = 0; k < fdn && !uses_self; k++) uses_self = fiber_body_uses_self(c, nt_ref(nt, fdv[k], "value"));
+  for (int l = 0; full_bind && l < 2 && !uses_self; l++) {
+    int fdn = 0; const int *fdv = nt_arr(nt, fbp.pn, l ? "keywords" : "optionals", &fdn);
+    for (int k = 0; k < fdn && !uses_self; k++) {
+      int dv = nt_ref(nt, fdv[k], "value");
+      if (dv >= 0) uses_self = fiber_body_uses_self(c, dv);
+    }
+  }
   if (encl && encl->class_id >= 0 && !encl->is_cmethod && uses_self) {
     cap_self = 1;
     cap_self_class = c->classes[encl->class_id].c_name;

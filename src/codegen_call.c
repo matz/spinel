@@ -5302,15 +5302,18 @@ static void emit_fiber_pass_spread(Compiler *c, int argc, const int *argv, int t
 
 /* fn(recv, value, count) for resume/transfer, or fn(value) for Fiber.yield
    (recv NULL). With a splat the values are only known at run time, so they
-   are packed there: none is nil, one is itself, more are an array. */
+   are packed there: none is nil, one is itself, more are an array. Keywords
+   (`resume(1, k: 2)`) are the last value, and the count says so
+   (SP_PASS_KW), for a block that binds them by name. */
 void emit_fiber_pass_call(Compiler *c, const char *fn, const char *recv,
                           int argc, const int *argv, Buf *b) {
   int splat = nt_argv_has_splat(c->nt, argv, argc);
+  const char *kw = nt_argv_kwh(c->nt, argv, argc) >= 0 ? " | SP_PASS_KW" : "";
   if (!splat) {
     buf_printf(b, "%s(", fn);
     if (recv) buf_printf(b, "%s, ", recv);
     emit_fiber_pass_value(c, argc, argv, b);
-    if (recv) buf_printf(b, ", %d", argc);
+    if (recv) buf_printf(b, ", %d%s", argc, kw);
     buf_puts(b, ")");
     return;
   }
@@ -5319,7 +5322,7 @@ void emit_fiber_pass_call(Compiler *c, const char *fn, const char *recv,
   buf_printf(b, " %s(", fn);
   if (recv) buf_printf(b, "%s, ", recv);
   buf_printf(b, "_n%d == 0 ? sp_box_nil() : _n%d == 1 ? sp_PolyArray_get(_t%d, 0) : sp_box_poly_array(_t%d)", ta, ta, ta, ta);
-  if (recv) buf_printf(b, ", (int)_n%d", ta);
+  if (recv) buf_printf(b, ", (int)_n%d%s", ta, kw);
   buf_puts(b, "); })");
 }
 
@@ -15665,7 +15668,9 @@ static int emit_new_call_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
          into a poly array, and pass_argc says how many there were, so that
          |a| takes the first of several and |*r| all of them, and one Array
          spreads over |a, b| (#2976); Thread.new(args, &x) calls x with them.
-         A splat is spread at run time, and the count is known only then. */
+         A splat is spread at run time, and the count is known only then.
+         Keywords are the last value, and pass_kw says so. */
+      if (nt_argv_kwh(nt, argv, argc) >= 0) buf_printf(b, " _t%d->pass_kw = 1;", tfb);
       if (nt_argv_has_splat(nt, argv, argc)) {
         int tpa = ++g_tmp;
         buf_printf(b, " sp_RbVal _t%d = ", targ);

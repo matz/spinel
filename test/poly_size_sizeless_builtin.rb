@@ -1,3 +1,4 @@
+# spinel: int64 -- Integer#size of a fixnum is 8, as on a 64-bit CRuby
 # A boxed builtin whose class has no #size or #length raises NoMethodError.
 # The boxed size/length helpers read any object they had no arm for as 0.
 class C

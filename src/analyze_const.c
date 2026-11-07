@@ -576,7 +576,7 @@ ConstReadEffect an_const_read_effect(Compiler *c, int id) {
   NodeKind k = nt_kind(c->nt, id);
   if (!nt_kind_is_constant(k)) return (ConstReadEffect){0};
   LocalVar *lv = comp_const_at(c, id);
-  return (ConstReadEffect){ const_has_flag(lv) && (k != NK_ConstantPathNode || (!const_path_in_closed_builtin(c, id) && !const_path_misses_toplevel(c, id))) ? lv : NULL,
+  return (ConstReadEffect){ const_has_flag(lv) && (k != NK_ConstantPathNode || const_path_reaches_leaf_const(c, id)) ? lv : NULL,
                            elab_autoload_read(c, id), const_class_presence(c, id, 0) };
 }
 

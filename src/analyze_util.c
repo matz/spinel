@@ -71,8 +71,9 @@ static int body_writes_const(const NodeTable *nt, int n, const char *nm) {
   if (n < 0) return 0;
   NodeKind k = nt_kind(nt, n);
   if (k == NK_ClassNode || k == NK_ModuleNode || k == NK_SingletonClassNode || k == NK_DefNode) return 0;
+  /* (a multiple assignment's target too: `P, Q = ...`) */
   if ((k == NK_ConstantWriteNode || k == NK_ConstantOrWriteNode || k == NK_ConstantAndWriteNode ||
-       k == NK_ConstantOperatorWriteNode) && sp_streq(nt_str(nt, n, "name"), nm)) return 1;
+       k == NK_ConstantOperatorWriteNode || k == NK_ConstantTargetNode) && sp_streq(nt_str(nt, n, "name"), nm)) return 1;
   int nr = nt_num_refs(nt, n);
   for (int i = 0; i < nr; i++) if (body_writes_const(nt, nt_ref_at(nt, n, i), nm)) return 1;
   int na = nt_num_arrs(nt, n);
@@ -113,6 +114,29 @@ int program_writes_const_in(Compiler *c, const char *pn, const char *nm) {
     if (const_path_is(nt, (int)nt_int(nt, d, "dropped_target", -1), pn, nm)) return 1;
   return 0;
 }
+/* Does the program write the constant nm through a path whose parent names
+   class or module k by another name (`Alias::NAME = v`, with `Alias = K`)?
+   (The parent's class is asked of the node, which may ask this again of an
+   outer path: not inside that question.) */
+static int program_writes_const_through(Compiler *c, int k, const char *nm) {
+  static int asking;
+  if (asking) return 0;
+  const NodeTable *nt = c->nt;
+  static const NodeKind writes[] = { NK_ConstantPathWriteNode, NK_ConstantPathOrWriteNode,
+                                     NK_ConstantPathAndWriteNode, NK_ConstantPathOperatorWriteNode };
+  int hit = 0;
+  asking = 1;
+  for (int i = 0; i < 5 && !hit; i++)
+    NT_FOREACH_KIND(nt, i < 4 ? writes[i] : NK_ConstantPathTargetNode, w) {
+      int t = i < 4 ? nt_ref(nt, w, "target") : w;
+      if (t < 0 || !sp_streq(nt_str(nt, t, "name"), nm)) continue;
+      int par = nt_ref(nt, t, "parent");
+      NodeKind pk = par >= 0 ? nt_kind(nt, par) : NK_NONE;
+      if ((pk == NK_ConstantReadNode || pk == NK_ConstantPathNode) && const_node_class_index(c, par) == k) { hit = 1; break; }
+    }
+  asking = 0;
+  return hit;
+}
 /* The Ruby leaf of a class's name: a name qualify_colliding_classes gave
    (`Cache__Coder`) carries its path, and its leaf is the last component. */
 static const char *class_leaf_name(const char *n) {
@@ -121,7 +145,8 @@ static const char *class_leaf_name(const char *n) {
   return l;
 }
 /* May NAME be a constant of program class or module k, by its own
-   definitions or its ancestors' (a superclass, an included module)? A class
+   definitions or its ancestors' (a superclass, an included or prepended
+   module)? A class
    or module the program nests in k, a constant it writes in a body of k or
    through `k::NAME = v`, or one a write the analysis cannot place may
    define (a path written through a dynamic parent, const_set). *sub is the
@@ -145,13 +170,40 @@ static int class_may_have_const(Compiler *c, int k, const char *nm, int *sub, in
     if (rl > nl + 2 && sp_streq(rn + rl - nl, nm) && !strncmp(rn + rl - nl - 2, "::", 2)) { *sub = j; return 1; }
   }
   const char *kl = class_leaf_name(ki->name);
-  if (program_writes_const_in(c, ki->name, nm) || (kl != ki->name && program_writes_const_in(c, kl, nm))) {
+  if (program_writes_const_in(c, ki->name, nm) || (kl != ki->name && program_writes_const_in(c, kl, nm)) ||
+      program_writes_const_through(c, k, nm)) {
     *sub = comp_class_index(c, nm);
     return 1;
   }
   if (class_may_have_const(c, ki->parent, nm, sub, depth + 1)) return 1;
   for (int i = 0; i < ki->nincluded_mods; i++)
     if (class_may_have_const(c, ki->included_mods[i], nm, sub, depth + 1)) return 1;
+  for (int i = 0; i < ki->nprepended_mods; i++)
+    if (class_may_have_const(c, ki->prepended_mods[i], nm, sub, depth + 1)) return 1;
+  /* a class's chain ends at Object, whose modules (a top-level include,
+     Kernel) a scoped read reaches, though not Object's own constants: not a
+     module's, nor a class's below BasicObject (`K::C`, with C in a module
+     the top level includes) */
+  if (depth == 0 && !comp_class_is_module(c, ki) && !class_is_blank_slate(c, k)) {
+    const int roots[] = { comp_core_class(c, CORE_OBJECT), comp_core_class(c, CORE_KERNEL) };
+    for (int r = 0; r < 2; r++) {
+      int o = roots[r];
+      if (r == 0 && o < 0) {
+        for (int i = 0; i < c->ntoplevel_includes; i++)
+          if (class_may_have_const(c, c->toplevel_includes[i], nm, sub, depth + 1)) return 1;
+        continue;
+      }
+      if (o < 0 || o == k) continue;
+      ClassInfo *oi = &c->classes[o];
+      if (r == 1 && class_may_have_const(c, o, nm, sub, depth + 1)) return 1;
+      for (int i = 0; r == 0 && i < oi->nincluded_mods; i++)
+        if (class_may_have_const(c, oi->included_mods[i], nm, sub, depth + 1)) return 1;
+      for (int i = 0; r == 0 && i < c->ntoplevel_includes; i++)
+        if (class_may_have_const(c, c->toplevel_includes[i], nm, sub, depth + 1)) return 1;
+      for (int i = 0; r == 0 && i < oi->nprepended_mods; i++)
+        if (class_may_have_const(c, oi->prepended_mods[i], nm, sub, depth + 1)) return 1;
+    }
+  }
   return 0;
 }
 /* Can the program define constant `nm` where no class body or `P::NAME = v`
@@ -254,6 +306,26 @@ int const_path_misses_member(Compiler *c, int id) {
   int missing = 0;
   const_path_scope(c, id, &missing);
   return missing;
+}
+/* Does the read of path `id` reach the constant the leaf-keyed table holds
+   under its leaf's name? Not through a builtin scope that holds no such
+   member, not to a top-level constant from another scope, and not through
+   a scope of the program that holds no such constant (`Holder::Top2`, with
+   `Top2 = Top` in M only): CRuby's NameError, as a class's name there is.
+   (const_path_misses_member asks the path's segments' types back through
+   the inference of a builtin's constant, which asks this: once at a time.) */
+int const_path_reaches_leaf_const(Compiler *c, int id) {
+  if (nt_kind(c->nt, id) != NK_ConstantPathNode) return 1;
+  if (const_path_in_closed_builtin(c, id) || const_path_misses_toplevel(c, id)) return 0;
+  /* a read the record bound to one member's slot is that member's, though
+     its scope be one only the run makes (a C extension's module) */
+  if (const_leaf_bound(c, id)) return 1;
+  static int asking;
+  if (asking) return 1;
+  asking = 1;
+  int miss = const_path_misses_member(c, id);
+  asking = 0;
+  return !miss;
 }
 /* Is NAME sure to be no constant of program class or module k's own table,
    whatever runs: `private_constant :NAME` there is CRuby's NameError

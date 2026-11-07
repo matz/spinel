@@ -16233,9 +16233,11 @@ static int emit_new_call_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
                    is_builtin_module_name(cn) ? "module" : "class", cn, ndflt);
       else {
         /* a path whose parent holds no such member is named as written
-           (Holder::Target, though a top-level Target exists, #10577) */
+           (Holder::Target, though a top-level Target exists, #10577; and
+           Other::Top2, though M holds a Top2) */
         char wn[512] = "";
-        if (comp_class_index(c, cn) >= 0 && const_node_class_index(c, recv) < 0) const_path_written(nt, recv, wn, sizeof wn);
+        if ((comp_class_index(c, cn) >= 0 || comp_const(c, cn)) && const_node_class_index(c, recv) < 0)
+          const_path_written(nt, recv, wn, sizeof wn);
         buf_printf(b, "(sp_raise_cls(\"NameError\", \"uninitialized constant %s\"), %s)",
                    wn[0] ? wn : cn, ndflt);
       }

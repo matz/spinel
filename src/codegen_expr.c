@@ -3774,7 +3774,8 @@ static int emit_constant_value(Compiler *c, int id, Buf *b, Buf *checks, const N
       }
       free(ccls); free(ckey); free(cty);
     } }
-    LocalVar *cpcv = nm && !const_path_in_closed_builtin(c, id) && !const_path_misses_toplevel(c, id) ? comp_const(c, nm) : NULL;
+    LocalVar *cpcv = nm ? comp_const(c, nm) : NULL;
+    if (cpcv && !const_path_reaches_leaf_const(c, id)) cpcv = NULL;
     /* the slot of a flagged constant already read through its receiver (emit_const_recv_wrap) */
     int cptr = cpcv ? (int)nt_int(nt, id, "const_ptr", 0) : 0;
     if (cptr) {

@@ -10576,7 +10576,8 @@ static int infer_constant_path(Compiler *c, int id, const NodeTable *nt, NodeKin
       if (nc > 1 && !uniform && boxable) { *out = TY_POLY; return 1; }
     }
   }
-  LocalVar *lv = nm && !const_path_in_closed_builtin(c, id) && !const_path_misses_toplevel(c, id) ? comp_const(c, nm) : NULL;
+  LocalVar *lv = nm ? comp_const(c, nm) : NULL;
+  if (lv && !const_path_reaches_leaf_const(c, id)) lv = NULL;
   /* Same guard the bare ConstantReadNode carries: a registered constant
      whose type never settled (Block = Struct.new(:kind), which registers
      the name before the anonymous class exists) must not shadow the

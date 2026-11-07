@@ -2158,6 +2158,7 @@ int comp_defined_reads(Compiler *c, int pred, int *reads, int cap);
 /* a constant path whose leaf is no member of the class or module its parent
    names (analyze_util.c) */
 int const_path_misses_member(Compiler *c, int id);
+int const_path_reaches_leaf_const(Compiler *c, int id);   /* the constant the leaf-keyed table holds */
 int class_lacks_own_const(Compiler *c, int k, const char *nm);   /* private_constant :nm in k is a NameError */
 int const_visibility_call_is_builtin(Compiler *c, int call, int k);   /* ... when the call is Module's own */
 int const_node_class_index(Compiler *c, int id);

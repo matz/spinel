@@ -1,0 +1,22 @@
+5
+uninitialized constant Holder::X
+uninitialized constant Other::S
+1
+1
+2
+8
+6
+1
+2
+3
+4
+uninitialized constant Outer::Inner::W
+uninitialized constant Host::Q
+uninitialized constant Other::S
+uninitialized constant Other::Top2
+Top
+1
+2
+uninitialized constant M0::TI
+uninitialized constant M0::KC
+uninitialized constant Bs::TI

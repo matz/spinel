@@ -607,6 +607,7 @@ int is_class_value_reflection(const char *n); /* a listing, const_defined?, clas
 int is_singleton_method_list(const char *n); /* singleton_methods */
 int builtin_every_object_answers(const char *m, int cmeth); /* Object's own, Kernel's, Object's; with cmeth Module's too */
 int builtin_class_id_answers(int id, const char *m, int cmeth); /* the builtin class of cls_id id, or one above it, has m (cmeth: a class method) */
+int core_class_value_answers(const char *cls, const char *m); /* CRuby's core class or module cls (or "Class#"/"Module#": every one) answers m as a value */
 /* Does a builtin answer `name` on a self of the kind: main (Kernel's,
    Object's and main's own methods), a module (also Module's) or a class
    (also Class's)? */

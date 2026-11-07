@@ -218,7 +218,10 @@ expression of the program has that type (the classes `builtin_class_of_type`
 names; a Proc, Rational, Complex, Exception, Queue, true or false in a boxed slot
 gets no arms of its own, so a builtin method of those raises `NoMethodError`
 there). The builtin arms come after the program's, so a send that
-would exceed the arm cap (1024) keeps the program's arms alone. A computed send
+would exceed 1024 arms with them keeps the program's arms alone. A computed send
+whose candidates number more than 4096 (the arm cap) is refused at compile time:
+each arm costs code, and one send over 4000 names takes about 700 MB and 14
+seconds to compile. A computed send
 that carries a block, splats its arguments or passes keywords takes the program's
 names alone on a boxed receiver, so a builtin's method raises `NoMethodError`
 there. A method's parameter is a computed name when a caller hands it one

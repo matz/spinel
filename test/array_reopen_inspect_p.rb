@@ -14,6 +14,7 @@ p [:s]
 p [1, "a"]
 p [[1], [2, 3]]
 p [], [7], [8, 9]
+p Array.new, Array.new(2, 0)
 
 # a table pushed into, and a local
 x = [[1, 2], [3]]

@@ -486,7 +486,10 @@ void emit_p_one(Compiler *c, int arg, Buf *b, int indent) {
       ({ int _a = nt_ref(c->nt, arg, "arguments"); int _n = 0;
          if (_a >= 0) nt_arr(c->nt, _a, "arguments", &_n); _n == 0; })) {
     emit_indent(b, indent);
-    buf_puts(b, "fputs(\"[]\\n\", stdout);\n");
+    /* (the program's own Array#inspect prints it, as for any Array) */
+    if (array_user_inspect_mi(c) >= 0)
+      buf_puts(b, "{ sp_RbVal _ea = sp_box_poly_array(sp_PolyArray_new()); SP_GC_ROOT_RBVAL(_ea); sp_puts_line(sp_poly_inspect(_ea)); }\n");
+    else buf_puts(b, "fputs(\"[]\\n\", stdout);\n");
     return;
   }
   /* `p x.class` prints the class name bare (it is a Class, not a String) --

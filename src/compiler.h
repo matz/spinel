@@ -2325,6 +2325,7 @@ int        comp_scope_moving(void);   /* a scope is moved for an instance_exec b
 int        comp_cmethod_in_class(Compiler *c, int class_id, const char *name);
 /* Find the class (singleton) method scope, walking the superclass chain. */
 int        comp_cmethod_in_chain(Compiler *c, int class_id, const char *name, int *def_class);
+int        comp_own_allocate(Compiler *c, int ci, int call);   /* a class method allocate of the program's own answers the call */
 int        class_any_cmethod_eqq(Compiler *c, int ci);
 int        class_own_cmethod_eqq(Compiler *c, int ci);
 int        class_eqq_answers_value(Compiler *c);

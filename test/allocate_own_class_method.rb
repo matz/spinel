@@ -28,3 +28,11 @@ module P; end
 p((P.allocate rescue :rescued))
 class Er2 < StandardError; end
 p Er2.allocate.class
+# super in an own allocate reaches Class#allocate (the call keeps it), and
+# Class#new of an Array or Hash subclass does not call a program's allocate.
+class A; def self.allocate = super; end
+p A.allocate.class
+class AS < Array; def self.allocate = :as; end
+p AS.new.class
+class HS < Hash; def self.allocate = :hs; end
+p HS.new.class

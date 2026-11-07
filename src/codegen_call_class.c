@@ -3409,7 +3409,7 @@ int emit_call_new_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const c
       (nt_kind(nt, recv) == NK_ConstantReadNode || nt_kind(nt, recv) == NK_ConstantPathNode)) {
     int acid = const_node_class_index(c, recv);
     /* (a class method `allocate` of the program's own is the user dispatch's) */
-    if (acid >= 0 && comp_cmethod_in_chain(c, acid, "allocate", NULL) >= 0) return 0;
+    if (comp_own_allocate(c, acid, id)) return 0;
     /* allocate is Class's: a module raises NoMethodError (#10751) */
     if (acid >= 0 && comp_class_is_module(c, &c->classes[acid])) {
       const char *mn = class_ruby_name(c, acid); if (!mn) mn = c->classes[acid].name;

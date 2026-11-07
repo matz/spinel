@@ -5769,6 +5769,27 @@ int self_class_static_ci(Compiler *c, int recv) {
   return cid;
 }
 
+/* Does call `call` (-1: any) of `allocate` on class or module ci reach a
+   class method `allocate` of the program's own: on ci, its singleton
+   class, a parent or a module it extends? Not a call the analysis made
+   for Class#new's allocation (cnew_alloc: CRuby's new does not call
+   allocate), and not one whose method calls super: that super reaches
+   Class#allocate, which has no target here, so such a call keeps
+   Class#allocate as before. */
+int comp_own_allocate(Compiler *c, int ci, int call) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  if (ci < 0 || ci >= c->nclasses) return 0;
+  if (call >= 0 && nt_int(nt, call, "cnew_alloc", 0)) return 0;
+  int mi = comp_cmethod_in_chain(c, ci, "allocate", NULL);
+  int d = mi >= 0 ? c->scopes[mi].def_node : -1;
+  if (mi < 0) return 0;
+  if (d < 0) return 1;
+  int n = 0, sup = 0, *ids = nt_subtree_ids(nt, &d, 1, &n);
+  for (int i = 0; i < n && !sup; i++)
+    sup = nt_kind(nt, ids[i]) == NK_SuperNode || nt_kind(nt, ids[i]) == NK_ForwardingSuperNode;
+  free(ids);
+  return !sup;
+}
 /* `allocate` on the class the method runs for: bare or `self.allocate` in a
    class method, `self.class.allocate` in an instance method. Returns that
    class -- the base of what it builds, since a subclass receiving the class
@@ -5785,7 +5806,7 @@ int allocate_on_own_class(Compiler *c, int id) {
   if (cid < 0 || cid >= c->nclasses || comp_class_is_module(c, &c->classes[cid])) return -1;
   int recv = nt_ref(nt, id, "receiver");
   /* (a class method `allocate` of the program's own answers the call) */
-  if (comp_cmethod_in_chain(c, cid, "allocate", NULL) >= 0) return -1;
+  if (comp_own_allocate(c, cid, id)) return -1;
   if (s->is_cmethod) return (recv < 0 || nt_kind(nt, recv) == NK_SelfNode) ? cid : -1;
   return self_class_base_ci(c, recv);
 }

@@ -8377,8 +8377,9 @@ static int widen_boxed_elem_sources_1(Compiler *c, int r, TyKind elem, int depth
 }
 
 /* The arrays at index k of the elements of the container `r`, as far as
-   its literals show them: what a block taking each element apart binds to
-   its k-th parameter (`t.each { |key, row| }`). */
+   the literals show them, the elements' own included (`pair = [0, [1]];
+   t = [pair]`): what a block taking each element apart binds to its k-th
+   parameter (`t.each { |key, row| }`). */
 static int widen_boxed_sub_elem_sources(Compiler *c, int r, int k, TyKind elem, int depth) {
   if (depth > 6) return 0;
   const NodeTable *nt = c->nt;
@@ -8387,10 +8388,14 @@ static int widen_boxed_sub_elem_sources(Compiler *c, int r, int k, TyKind elem, 
   for (int q = 0; q < nl; q++) {
     int en = 0; const int *ev = nt_arr(nt, lits[q], "elements", &en);
     for (int e = 0; e < en; e++) {
-      if (nt_kind(nt, ev[e]) != NK_ArrayNode) continue;
-      int sn = 0, splat = 0; const int *sv = nt_arr(nt, ev[e], "elements", &sn);
-      for (int j = 0; j <= k && j < sn; j++) if (nt_kind(nt, sv[j]) == NK_SplatNode) splat = 1;
-      if (!splat && k < sn) ch |= widen_boxed_array_sources(c, sv[k], elem, depth + 1);
+      int subs[16];
+      int ns = nt_kind(nt, ev[e]) == NK_SplatNode ? 0 : container_literals(c, ev[e], subs, 0, 16, 0);
+      for (int u = 0; u < ns; u++) {
+        if (nt_kind(nt, subs[u]) != NK_ArrayNode) continue;
+        int sn = 0, splat = 0; const int *sv = nt_arr(nt, subs[u], "elements", &sn);
+        for (int j = 0; j <= k && j < sn; j++) if (nt_kind(nt, sv[j]) == NK_SplatNode) splat = 1;
+        if (!splat && k < sn) ch |= widen_boxed_array_sources(c, sv[k], elem, depth + 1);
+      }
     }
   }
   return ch;

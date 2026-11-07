@@ -69,6 +69,13 @@ t12 = [[[5], 0]]
 t12.each { |row, _k| put12(row) }
 p t12
 
+# the same with the element assembled in a local first
+def put13(a) = a << "s"
+pair = [0, [1]]
+t13 = [pair]
+t13.each { |_k, row| put13(row) }
+p t13, pair
+
 # a store of the rows' own kind prints as before
 def add9(a) = a << 9
 t9 = [[1, 2], [3]]

@@ -5402,6 +5402,13 @@ int exc_init_takes_own_args(const char *name) {
   for (int i = 0; name && other[i]; i++) if (sp_streq(name, other[i])) return 1;
   return 0;
 }
+/* Does a `super` from the reopening of the builtin exception `name` reach
+   an initialize that takes keywords (receiver:)? NoMethodError's does: its
+   superclass is NameError. Those of KeyError, NameError and FrozenError
+   reach Exception#initialize, which reads one message. */
+int exc_reopen_super_takes_attrs(const char *name) {
+  return name && sp_streq(name, "NoMethodError");
+}
 static int exc_attrs_family_name(const char *cn) {
   return sp_streq(cn, "KeyError") || sp_streq(cn, "NameError") ||
          sp_streq(cn, "NoMethodError") || sp_streq(cn, "FrozenError");

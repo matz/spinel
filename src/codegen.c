@@ -16175,7 +16175,9 @@ void emit_super(Compiler *c, int id, Buf *b) {
       if (spread || class_takes_exc_attrs(c, sci)) {
         char self_text[80]; snprintf(self_text, sizeof self_text, "(sp_Exception *)%s", g_self);
         if (ty_k == NK_ForwardingSuperNode) emit_exc_attrs_zsuper(c, id, s, self_text, b);
-        else emit_exc_args_super(c, id, self_text, class_takes_exc_attrs(c, sci), argc2, argv2, b);
+        else emit_exc_args_super(c, id, self_text, class_takes_exc_attrs(c, sci) ||
+                                 (class_is_exc_reopen(c, sci) && exc_reopen_super_takes_attrs(c->classes[sci].name)),
+                                 argc2, argv2, b);
         return;
       }
       /* SystemCallError#initialize(msg = nil, func = nil) builds the message

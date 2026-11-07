@@ -364,7 +364,32 @@ LocalVar *comp_const_at(Compiler *c, int node) {
   return k ? comp_const(c, k) : NULL;
 }
 
+static int const_node_class_index_tree(Compiler *c, int id);
+/* The class or module of the program constant node id names, as the load
+   record resolves it: a reference where it stands (elab_class_ref_at), a
+   header's own name by its header, a builder's write by the class it opens.
+   Below 0 when the record does not know (a node a pass made, which it cannot
+   place) or the node names none of the program's: the tree's answer below
+   is then the one. */
+static int const_node_record_class(Compiler *c, int id) {
+  const NodeTable *nt = c->nt;
+  if (id < 0 || id >= nt->count || nt_int(nt, id, "node_line", 0) == 0) return -2;
+  NodeKind ik = nt_kind(nt, id);
+  if (ik == NK_ConstantWriteNode || ik == NK_ConstantPathWriteNode) {
+    int k = elab_builder_class(c, id);
+    return k >= 0 ? k : comp_class_of_def(c, id);
+  }
+  const int *par = comp_parent_map(c);
+  int hp = par ? par[id] : -1;
+  if (hp >= 0 && (nt_kind(nt, hp) == NK_ClassNode || nt_kind(nt, hp) == NK_ModuleNode) && nt_ref(nt, hp, "constant_path") == id)
+    return elab_header_class(c, hp, NULL, NULL);
+  return elab_class_ref_at(c, id, NULL);
+}
 int const_node_class_index(Compiler *c, int id) {
+  int r = const_node_record_class(c, id);
+  return r >= 0 ? r : const_node_class_index_tree(c, id);
+}
+static int const_node_class_index_tree(Compiler *c, int id) {
   const NodeTable *nt = c->nt;
   int k = comp_class_index(c, const_key_at(c, id));
   /* (a class named under another by a compact header carries that name,

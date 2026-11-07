@@ -1766,6 +1766,9 @@ static void walk_scope_in(Compiler *c, int id, WalkCtx w) {
     if (w.slot && class_id >= 0 && !dead) {
       int first = ct_macro_form(c, id, w.pos.list, w.slot - 1);
       if (first >= 0) { walk_scope_in(c, first, w); return; }
+      /* and a table loop that makes no class (#10791) */
+      first = ct_table_loop_form(c, id, w.pos.list, w.slot - 1);
+      if (first >= 0) { walk_scope_in(c, first, w); return; }
     }
     /* `Klass.class_eval/module_eval { defs }` (and the bare/`self.` forms in a
        class body) reopens the class: its block body's `def` and `define_method`

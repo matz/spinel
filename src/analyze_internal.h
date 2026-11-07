@@ -892,6 +892,7 @@ typedef struct HostStep {
 void host_begin(HostStep *h, LowerCtx *lc);
 int host_splice(Compiler *c, HostStep *h, int owner, int body, int at, int n, const char *locals, const char *gone);   /* the n statements at body[at], in a frame of locals but gone (NULL: not known): the count they become */
 void host_end(Compiler *c, HostStep *h);
+int ct_table_loop_form(Compiler *c, int st, int list, int j);   /* analyze_ct.c: a table loop that makes no class, statement j of `list`, run under the walk (#10791): the statement now first in its place, or -1 */
 int ct_macro_form(Compiler *c, int call, int list, int j);   /* analyze_ct.c: class-body macro call `call`, statement j of `list`, run under the walk: the statement now first in its place, or -1 */
 const char *handle_attr_decl(const NodeTable *nt, int call);   /* analyze_desugar.c: Thread or Fiber for a `Thread.attr_accessor :x` declaration, else NULL */
 int handle_attr_form(Compiler *c, int call, int list, int j, int now, int file);   /* analyze_desugar.c: `Thread.attr_accessor :x` reached by the walk (statement j of list, run there when now, in file): the reopening in its place (its first statement), -2 at the file's end, -1 none */

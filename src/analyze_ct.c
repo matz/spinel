@@ -159,43 +159,71 @@ static int ct_defines(const NodeTable *nt, const int *parent, int at, int path, 
    naming a constant the scan can't spell? A const_set then replaces the
    value (with CRuby's warning) where a class definition would reopen it.
    One walk of the table for all of them. */
-static int ct_const_given_elsewhere(const NodeTable *nt, const int *parent, char *const *full, int n, int loop) {
-  for (int id = 0; id < nt->count; id++) {
-    NodeKind k = nt_kind(nt, id);
-    const char *leaf = NULL;
-    int path = -1;   /* the definition's path node, -1 for a plain name */
-    switch (k) {
-    case NK_ClassNode: case NK_ModuleNode:
-      path = nt_ref(nt, id, "constant_path"); leaf = nt_str(nt, path, "name");
-      break;
-    case NK_ConstantWriteNode: case NK_ConstantOrWriteNode: case NK_ConstantAndWriteNode:
-    case NK_ConstantOperatorWriteNode: case NK_ConstantTargetNode:
-      leaf = nt_str(nt, id, "name");
-      break;
-    case NK_ConstantPathWriteNode: case NK_ConstantPathOrWriteNode: case NK_ConstantPathAndWriteNode:
-    case NK_ConstantPathOperatorWriteNode:
-      path = nt_ref(nt, id, "target"); leaf = nt_str(nt, path, "name");
-      break;
-    case NK_ConstantPathTargetNode:
-      path = id; leaf = nt_str(nt, id, "name");
-      break;
-    case NK_CallNode: {
-      if (!nt_str(nt, id, "name") || !is_const_set_name(nt_str(nt, id, "name")) || ct_within(parent, id, loop)) break;
-      int an = 0, args = nt_ref(nt, id, "arguments"), rv = nt_ref(nt, id, "receiver");
-      const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &an) : NULL;
-      leaf = an ? ct_lit_name(nt, av[0]) : NULL;
-      if (!leaf) return 1;
-      /* on another receiver: any constant of that name */
-      if (rv >= 0 && nt_kind(nt, rv) != NK_SelfNode)
-        for (int i = 0; i < n; i++) if (ct_eq(ct_leaf(full[i]), leaf)) return 1;
-      break;
+/* Does node id give one of the constants full[0..n) a value (the test of
+   ct_const_given_elsewhere for one node) */
+static int ct_gives_const(const NodeTable *nt, const int *parent, int id, char *const *full, int n, int loop,
+                          const char *own) {
+  NodeKind k = nt_kind(nt, id);
+  const char *leaf = NULL;
+  int path = -1;   /* the definition's path node, -1 for a plain name */
+  switch (k) {
+  case NK_ClassNode: case NK_ModuleNode:
+    path = nt_ref(nt, id, "constant_path"); leaf = nt_str(nt, path, "name");
+    break;
+  case NK_ConstantWriteNode: case NK_ConstantOrWriteNode: case NK_ConstantAndWriteNode:
+  case NK_ConstantOperatorWriteNode: case NK_ConstantTargetNode:
+    leaf = nt_str(nt, id, "name");
+    break;
+  case NK_ConstantPathWriteNode: case NK_ConstantPathOrWriteNode: case NK_ConstantPathAndWriteNode:
+  case NK_ConstantPathOperatorWriteNode:
+    path = nt_ref(nt, id, "target"); leaf = nt_str(nt, path, "name");
+    break;
+  case NK_ConstantPathTargetNode:
+    path = id; leaf = nt_str(nt, id, "name");
+    break;
+  case NK_CallNode: {
+    if (!nt_str(nt, id, "name") || !is_const_set_name(nt_str(nt, id, "name")) || ct_within(parent, id, loop)) break;
+    int an = 0, args = nt_ref(nt, id, "arguments"), rv = nt_ref(nt, id, "receiver");
+    /* (at the loop's point, in the walk: a const_set on self in another
+       class or module body sets that one's constant, never the loop's) */
+    if (own && (rv < 0 || nt_kind(nt, rv) == NK_SelfNode)) {
+      char at_path[1024];
+      if (ct_lexical_path(nt, parent, id, at_path, sizeof at_path) && !sp_streq(at_path, own)) break;
     }
-    default: break;
-    }
-    if (!leaf) continue;
-    for (int i = 0; i < n; i++)
-      if (ct_eq(ct_leaf(full[i]), leaf) && ct_defines(nt, parent, id, path, leaf, full[i])) return 1;
+    const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &an) : NULL;
+    leaf = an ? ct_lit_name(nt, av[0]) : NULL;
+    if (!leaf) return 1;
+    /* on another receiver: any constant of that name */
+    if (rv >= 0 && nt_kind(nt, rv) != NK_SelfNode)
+      for (int i = 0; i < n; i++) if (ct_eq(ct_leaf(full[i]), leaf)) return 1;
+    break;
   }
+  default: break;
+  }
+  if (!leaf) return 0;
+  for (int i = 0; i < n; i++)
+    if (ct_eq(ct_leaf(full[i]), leaf) && ct_defines(nt, parent, id, path, leaf, full[i])) return 1;
+  return 0;
+}
+/* The constant nodes of the facts' map by their leaf names (CtConstIdx,
+   below), for the loop scans in the walk: one pass for all the loops */
+typedef struct CtConstIdx CtConstIdx;
+static const int *ct_const_idx_ids(CtConstIdx *x, const char *leaf, int *n);
+static const int *ct_const_idx_unspelled(CtConstIdx *x, int *n);
+static int ct_const_given_elsewhere(const NodeTable *nt, const int *parent, int count, char *const *full, int n, int loop,
+                                    const char *own, CtConstIdx *x) {
+  if (x) {
+    /* only the nodes of the constants' leaves, and the const_sets the scan
+       can't spell */
+    for (int i = 0; i < n; i++) {
+      int m = 0; const int *ids = ct_const_idx_ids(x, ct_leaf(full[i]), &m);
+      for (int k = 0; k < m; k++) if (ct_gives_const(nt, parent, ids[k], full, n, loop, own)) return 1;
+    }
+    int m = 0; const int *ids = ct_const_idx_unspelled(x, &m);
+    for (int k = 0; k < m; k++) if (ct_gives_const(nt, parent, ids[k], full, n, loop, own)) return 1;
+    return 0;
+  }
+  for (int id = 0; id < count; id++) if (ct_gives_const(nt, parent, id, full, n, loop, own)) return 1;
   return 0;
 }
 
@@ -343,33 +371,39 @@ int ct_method_defined(const NodeTable *nt, const char *meth) {
    that name, its singleton class, a def on it, a refinement or any other
    use hands it on, and a path write or multiple assignment of that name
    writes it again. */
-static int ct_table_only_read(const NodeTable *nt, const int *parent, const char *name, int loop) {
-  int writes = 0;
-  for (int id = 0; id < nt->count; id++) {
-    NodeKind k = nt_kind(nt, id);
-    switch (k) {
-    case NK_ConstantWriteNode: case NK_ConstantOrWriteNode: case NK_ConstantAndWriteNode:
-    case NK_ConstantOperatorWriteNode:
-      if (ct_eq(nt_str(nt, id, "name"), name)) writes++;
-      break;
-    case NK_ConstantTargetNode: case NK_ConstantPathTargetNode:
-      if (ct_eq(nt_str(nt, id, "name"), name)) return 0;
-      break;
-    case NK_ConstantPathWriteNode: case NK_ConstantPathOrWriteNode: case NK_ConstantPathAndWriteNode:
-    case NK_ConstantPathOperatorWriteNode:
-      if (ct_eq(nt_str(nt, nt_ref(nt, id, "target"), "name"), name)) return 0;
-      break;
-    case NK_ConstantReadNode: case NK_ConstantPathNode: {
-      if (!ct_eq(nt_str(nt, id, "name"), name)) break;
-      int p = parent[id];
-      if (p >= 0 && nt_kind(nt, p) == NK_ConstantPathNode && nt_ref(nt, p, "parent") == id) break;
-      if (p < 0 || nt_kind(nt, p) != NK_CallNode || nt_ref(nt, p, "receiver") != id) return 0;
-      const char *m = nt_str(nt, p, "name");
-      if (!is_hash_read_only(m) || (p != loop && is_hash_self_answer(m))) return 0;
-      break;
-    }
-    default: break;
-    }
+/* The test of ct_table_only_read for one node: 1 a write of the table, 0
+   a use that leaves it as it is (or no use), -1 any other use */
+static int ct_table_use(const NodeTable *nt, const int *parent, int id, const char *name, int loop) {
+  NodeKind k = nt_kind(nt, id);
+  switch (k) {
+  case NK_ConstantWriteNode: case NK_ConstantOrWriteNode: case NK_ConstantAndWriteNode:
+  case NK_ConstantOperatorWriteNode:
+    return ct_eq(nt_str(nt, id, "name"), name) ? 1 : 0;
+  case NK_ConstantTargetNode: case NK_ConstantPathTargetNode:
+    return ct_eq(nt_str(nt, id, "name"), name) ? -1 : 0;
+  case NK_ConstantPathWriteNode: case NK_ConstantPathOrWriteNode: case NK_ConstantPathAndWriteNode:
+  case NK_ConstantPathOperatorWriteNode:
+    return ct_eq(nt_str(nt, nt_ref(nt, id, "target"), "name"), name) ? -1 : 0;
+  case NK_ConstantReadNode: case NK_ConstantPathNode: {
+    if (!ct_eq(nt_str(nt, id, "name"), name)) return 0;
+    int p = parent[id];
+    if (p >= 0 && nt_kind(nt, p) == NK_ConstantPathNode && nt_ref(nt, p, "parent") == id) return 0;
+    if (p < 0 || nt_kind(nt, p) != NK_CallNode || nt_ref(nt, p, "receiver") != id) return -1;
+    const char *m = nt_str(nt, p, "name");
+    if (!is_hash_read_only(m) || (p != loop && is_hash_self_answer(m))) return -1;
+    return 0;
+  }
+  default: return 0;
+  }
+}
+static int ct_table_only_read(const NodeTable *nt, const int *parent, int count, const char *name, int loop,
+                              CtConstIdx *x) {
+  int writes = 0, m = 0;
+  const int *ids = x ? ct_const_idx_ids(x, name, &m) : NULL;
+  for (int k = 0; k < (x ? m : count); k++) {
+    int u = ct_table_use(nt, parent, x ? ids[k] : k, name, loop);
+    if (u < 0) return 0;
+    writes += u;
   }
   return writes == 1;
 }
@@ -503,7 +537,8 @@ static void ct_push(int **v, int *n, int *cap, int id) {
    (its module path): each class named by its first const_set and given
    instance variables only before, every constant set once and given no
    value elsewhere, every value spellable when it is written? */
-static int ct_effects_writable(const NodeTable *nt, const int *parent, const CtEnv *e, const char *outer, int loop) {
+static int ct_effects_writable(const NodeTable *nt, const int *parent, int count, const CtEnv *e, const char *outer, int loop,
+                               int in_walk, CtConstIdx *x) {
   int *named = calloc((size_t)e->ncls + 1, sizeof(int));
   char **full = calloc((size_t)e->nfx + 1, sizeof(char *));
   if (!named || !full) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
@@ -527,7 +562,7 @@ static int ct_effects_writable(const NodeTable *nt, const int *parent, const CtE
   }
   for (int k = 0; k < e->ncls && ok; k++) ok = named[k];   /* a class left anonymous is a run-time value */
   if (ok) ok = ct_objects_written_once(e);
-  if (ok) ok = !ct_const_given_elsewhere(nt, parent, full, nfull, loop);
+  if (ok) ok = !ct_const_given_elsewhere(nt, parent, count, full, nfull, loop, in_walk ? outer : NULL, x);
   for (int i = 0; i < nfull; i++) free(full[i]);
   free(full); free(named);
   return ok;
@@ -586,8 +621,13 @@ static void ct_effects_write(NodeTable *nt, const CtEnv *e, int **out, int *n, i
    it are before[0..i). On success its statements are appended to *out and 1
    is answered. *parent is the table's parent map, made here when a loop
    first gets past its shape (and again after an expansion grew the table). */
+/* The record's answers at a loop the walk runs (ct_table_loop_form): the
+   frame's class and the loop's point; NULL before the walk, where the
+   questions are scans of the program. */
+typedef struct { Compiler *c; int cls; LoadPoint p; CtConstIdx *idx; } CtLoopAt;
+static int ct_loop_core_changed_at(const CtLoopAt *at, const CtRan *ran, int n);
 static int ct_try_loop(NodeTable *nt, int **parent, int *pcount, const int *before, int i,
-                       int **out, int *n, int *cap) {
+                       int **out, int *n, int *cap, const CtLoopAt *at) {
   int st = before[i];
   int recv = nt_ref(nt, st, "receiver"), blk = nt_ref(nt, st, "block");
   const char *meth = nt_str(nt, st, "name"), *tname = nt_str(nt, recv, "name");
@@ -607,14 +647,20 @@ static int ct_try_loop(NodeTable *nt, int **parent, int *pcount, const int *befo
   for (int j = 0; j < i; j++)
     if (nt_kind(nt, before[j]) == NK_ConstantWriteNode && ct_eq(nt_str(nt, before[j], "name"), tname)) def = before[j];
   if (def < 0 || nt_kind(nt, nt_ref(nt, def, "value")) != NK_HashNode) return 0;
-  if (!*parent || *pcount != nt->count) {
+  if (!at && (!*parent || *pcount != nt->count)) {
     free(*parent);
     *parent = an_parent_map(nt); *pcount = nt->count;
     if (!*parent) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   }
+  if (at && st >= *pcount) return 0;   /* (a statement the walk spliced: no parent the map holds) */
   /* the modules the body's constants go in: the class's own path */
   char outer[1024];
-  if (!ct_lexical_path(nt, *parent, st, outer, sizeof outer) || !ct_table_only_read(nt, *parent, tname, st)) return 0;
+  /* (in the walk the map holds the nodes there were when the walk's facts
+     were made: the statements it has spliced since are no table's uses) */
+  if (!ct_lexical_path(nt, *parent, st, outer, sizeof outer)) return 0;
+  /* (before the walk, the table's uses are asked once the loop is known
+     to make a class, the one kind it runs there: below) */
+  if (at && !ct_table_only_read(nt, *parent, *pcount, tname, st, at->idx)) return 0;
   int hv = nt_ref(nt, def, "value"), en = 0;
   Mv *keys = NULL, *vals = NULL;
   CtEnv e; memset(&e, 0, sizeof e);
@@ -634,14 +680,27 @@ static int ct_try_loop(NodeTable *nt, int **parent, int *pcount, const int *befo
          ct_env_set(&e, nt_str(nt, req[0], "name"), kv) && ct_env_set(&e, nt_str(nt, req[1], "name"), vv) &&
          ct_exec(nt, &e, body);
   }
-  /* nothing in the program may make what ran answer otherwise */
-  if (ok) ok = !ct_core_method_changed(nt, *parent, *pcount, e.ran, e.nran);
+  /* A loop that makes a class runs before the walk, and one that makes
+     none in the walk, at its point (#10791): a class it made in the walk
+     would register by qualify's spelling and merge with a later one of
+     the same leaf (the class half of retiring qualify, #10793). */
+  if (ok && (at ? e.ncls > 0 : e.ncls == 0)) ok = 0;
+  if (ok && !at) ok = ct_table_only_read(nt, *parent, *pcount, tname, st, NULL);
+  /* nothing may make what ran answer otherwise: anywhere in the program,
+     before the walk; at the loop's point, in it */
+  if (ok) ok = at ? !ct_loop_core_changed_at(at, e.ran, e.nran) : !ct_core_method_changed(nt, *parent, *pcount, e.ran, e.nran);
   int sets = 0, ivs = 0;
   for (int f = 0; f < e.nfx; f++) { sets |= e.fx[f].k == CT_FX_CONST_SET; ivs |= e.fx[f].k == CT_FX_IVAR_SET; }
   if (ok && e.ncls) ok = !ct_method_defined(nt, "inherited");   /* CRuby calls it while the class has no name */
-  if (ok && sets) ok = !ct_method_defined(nt, "const_set") && !ct_method_defined(nt, "const_added");
-  if (ok && ivs) ok = !ct_method_defined(nt, "instance_variable_set");
-  if (ok) ok = ct_effects_writable(nt, *parent, &e, outer, st);
+  if (ok && sets && !at) ok = !ct_method_defined(nt, "const_set") && !ct_method_defined(nt, "const_added");
+  if (ok && ivs && !at) ok = !ct_method_defined(nt, "instance_variable_set");
+  /* (the frame's own const_set and const_added at the point: a call on
+     self reaches them, whatever another class defines) */
+  if (ok && sets && at)
+    ok = elab_method_at(at->c, at->cls, "const_set", 1, at->p, NULL) == ELAB_NO &&
+         elab_method_at(at->c, at->cls, "const_added", 1, at->p, NULL) == ELAB_NO;
+  if (ok && ivs && at) ok = elab_method_at(at->c, at->cls, "instance_variable_set", 1, at->p, NULL) == ELAB_NO;
+  if (ok) ok = ct_effects_writable(nt, *parent, *pcount, &e, outer, st, at != NULL, at ? at->idx : NULL);
   if (ok) {
     int base = nt->count;
     ct_effects_write(nt, &e, out, n, cap);
@@ -680,7 +739,7 @@ int desugar_table_loops(Compiler *c) {
     int *nb = NULL, nn = 0, ncap = 0, any = 0;
     for (int i = 0; i < bn; i++) {
       int st = bb[i];
-      if (!ct_try_loop(nt, &parent, &pcount, bb, i, &nb, &nn, &ncap)) { ct_push(&nb, &nn, &ncap, st); continue; }
+      if (!ct_try_loop(nt, &parent, &pcount, bb, i, &nb, &nn, &ncap, NULL)) { ct_push(&nb, &nn, &ncap, st); continue; }
       /* the body as it now reads, the statements after the loop still to
          come: a later loop's questions find what this one defined in its
          place, under this class (its parent map is made again) */
@@ -778,7 +837,90 @@ struct CtMacroFacts {
      a call on another receiver reaches its instance variables through a
      method of its singleton the record holds there */
   int s_cls; LoadPoint s_p;
+  /* the constant nodes by leaf name, for the table loops the walk runs
+     (ct_const_idx), made when the first loop asks */
+  CtConstIdx *cidx;
 };
+
+/* The nodes [0, count) of the walk's map that write, target, read or
+   define a constant (a class or module header) or call const_set, by leaf
+   name: a hash of the names, each with its node ids; the const_set calls
+   of a name the scan can't spell kept apart. */
+struct CtConstIdx {
+  const char **name; int **ids; int *nid, *cid; int cap, used;
+  int *unsp; int nunsp, cunsp;
+};
+static unsigned ct_idx_hash(const char *s) { unsigned h = 2166136261u; for (; *s; s++) h = (h ^ (unsigned char)*s) * 16777619u; return h; }
+static int ct_idx_slot(CtConstIdx *x, const char *leaf, int add) {
+  unsigned m = (unsigned)x->cap - 1;
+  for (unsigned i = ct_idx_hash(leaf) & m;; i = (i + 1) & m) {
+    if (!x->name[i]) { if (!add) return -1; x->name[i] = leaf; x->used++; return (int)i; }
+    if (sp_streq(x->name[i], leaf)) return (int)i;
+  }
+}
+static void ct_idx_push(int **v, int *n, int *cap, int id) {
+  if (*n == *cap) { *cap = *cap ? *cap * 2 : 4; *v = realloc(*v, sizeof **v * (size_t)*cap); if (!*v) { fprintf(stderr, "spinel: out of memory\n"); exit(1); } }
+  (*v)[(*n)++] = id;
+}
+static CtConstIdx *ct_const_idx(const NodeTable *nt, int count) {
+  CtConstIdx *x = calloc(1, sizeof *x);
+  if (!x) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  x->cap = 64;
+  while (x->cap < count / 2) x->cap *= 2;
+  x->name = calloc((size_t)x->cap, sizeof *x->name); x->ids = calloc((size_t)x->cap, sizeof *x->ids);
+  x->nid = calloc((size_t)x->cap, sizeof *x->nid); x->cid = calloc((size_t)x->cap, sizeof *x->cid);
+  if (!x->name || !x->ids || !x->nid || !x->cid) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  for (int id = 0; id < count; id++) {
+    const char *leaf = NULL;
+    switch (nt_kind(nt, id)) {
+    case NK_ClassNode: case NK_ModuleNode: leaf = nt_str(nt, nt_ref(nt, id, "constant_path"), "name"); break;
+    case NK_ConstantWriteNode: case NK_ConstantOrWriteNode: case NK_ConstantAndWriteNode:
+    case NK_ConstantOperatorWriteNode: case NK_ConstantTargetNode: case NK_ConstantPathTargetNode:
+    case NK_ConstantReadNode: case NK_ConstantPathNode:
+      leaf = nt_str(nt, id, "name"); break;
+    case NK_ConstantPathWriteNode: case NK_ConstantPathOrWriteNode: case NK_ConstantPathAndWriteNode:
+    case NK_ConstantPathOperatorWriteNode:
+      leaf = nt_str(nt, nt_ref(nt, id, "target"), "name"); break;
+    case NK_CallNode: {
+      const char *cn = nt_str(nt, id, "name");
+      if (!cn || !is_const_set_name(cn)) break;
+      int an = 0, args = nt_ref(nt, id, "arguments");
+      const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &an) : NULL;
+      leaf = an ? ct_lit_name(nt, av[0]) : NULL;
+      if (!leaf) { ct_idx_push(&x->unsp, &x->nunsp, &x->cunsp, id); continue; }
+      break;
+    }
+    default: break;
+    }
+    if (!leaf) continue;
+    if (x->used * 2 >= x->cap) {   /* grow: rehash the names */
+      CtConstIdx y = *x;
+      x->cap *= 2; x->used = 0;
+      x->name = calloc((size_t)x->cap, sizeof *x->name); x->ids = calloc((size_t)x->cap, sizeof *x->ids);
+      x->nid = calloc((size_t)x->cap, sizeof *x->nid); x->cid = calloc((size_t)x->cap, sizeof *x->cid);
+      if (!x->name || !x->ids || !x->nid || !x->cid) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+      for (int i = 0; i < y.cap; i++) if (y.name[i]) {
+        int k = ct_idx_slot(x, y.name[i], 1);
+        x->ids[k] = y.ids[i]; x->nid[k] = y.nid[i]; x->cid[k] = y.cid[i];
+      }
+      free(y.name); free(y.ids); free(y.nid); free(y.cid);
+    }
+    int k = ct_idx_slot(x, leaf, 1);
+    ct_idx_push(&x->ids[k], &x->nid[k], &x->cid[k], id);
+  }
+  return x;
+}
+static const int *ct_const_idx_ids(CtConstIdx *x, const char *leaf, int *n) {
+  int k = leaf ? ct_idx_slot(x, leaf, 0) : -1;
+  *n = k >= 0 ? x->nid[k] : 0;
+  return k >= 0 ? x->ids[k] : NULL;
+}
+static const int *ct_const_idx_unspelled(CtConstIdx *x, int *n) { *n = x->nunsp; return x->unsp; }
+static void ct_const_idx_free(CtConstIdx *x) {
+  if (!x) return;
+  for (int i = 0; i < x->cap; i++) free(x->ids[i]);
+  free(x->name); free(x->ids); free(x->nid); free(x->cid); free(x->unsp); free(x);
+}
 
 static void ct_ivs_free(CtIvs *s) {
   for (int i = 0; i < s->n; i++) free(s->iv[i].name);
@@ -793,6 +935,7 @@ void ct_macro_facts_free(struct CtMacroFacts *f) {
   ct_ivs_free(&f->c_st);
   for (int i = 0; i < f->n; i++) { free((char *)f->ran[i].cls); free((char *)f->ran[i].meth); }
   for (int i = 0; i < f->nmade; i++) free(f->made[i]);
+  ct_const_idx_free(f->cidx);
   free(f->ran); free(f->changed); free(f->parent); free(f->made); free(f);
 }
 
@@ -1660,6 +1803,70 @@ static void ct_state_note(Compiler *c, HostStep *h, int call, CtEnv *e, int seed
   /* such a call leaves the class as the macro form follows it: a later
      macro call asks the record past it (elab_opaque_before_bar_state) */
   if (only && !w->open) nt_node_set_int((NodeTable *)c->nt, call, "ct_state_only", 1);
+}
+
+/* Did the program change a core method a table loop ran, as the record has
+   it at the loop's point: a version of the program's that a call on the
+   core class (or, for one the program does not reopen, on Object) finds
+   there, or a method the walk's macros have defined of that name */
+static int ct_loop_core_changed_at(const CtLoopAt *at, const CtRan *ran, int n) {
+  Compiler *c = at->c;
+  HostStep *h = elab_walk_host(c);
+  struct CtMacroFacts *f = h ? ct_macro_facts(c, h) : NULL;
+  int obj = comp_core_class(c, CORE_OBJECT);
+  for (int i = 0; i < n; i++) {
+    if (f && name_list_has(f->made, f->nmade, ran[i].meth)) return 1;
+    int k = ran[i].cls ? comp_class_index(c, ran[i].cls) : -1;
+    if (k < 0) k = obj;
+    if (k >= 0 && elab_method_at(c, k, ran[i].meth, 0, at->p, NULL) != ELAB_NO) return 1;
+  }
+  return 0;
+}
+
+/* A table loop (ct_try_loop), statement j of class or module body list
+   `list`, run by the walk at its point: a loop that makes no class, its
+   questions answered by the record there (#10791). The first statement now
+   in its place, or -1 where it stays as written. */
+int ct_table_loop_form(Compiler *c, int st, int list, int j) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  HostStep *h = elab_walk_host(c);
+  int bn = 0, frame = -1;
+  const int *bb = nt_arr(nt, list, "body", &bn);
+  if (!h || nt_kind(nt, st) != NK_CallNode || nt_ref(nt, st, "block") < 0 || j >= bn || bb[j] != st ||
+      !ct_loops_in_analysis(nt) || elab_stmt_list(c, st, &frame) != list ||
+      !class_def_opens_frame(nt, frame) || class_def_body(nt, frame) != list)
+    return -1;
+  /* the loop's shape first (`H.each { |k, v| ... }`, H a constant): the
+     walk's facts are made once, when first asked, and a call of another
+     shape must not make them ahead of the macros that read them */
+  int recv = nt_ref(nt, st, "receiver"), blk = nt_ref(nt, st, "block");
+  const char *meth = nt_str(nt, st, "name");
+  if (recv < 0 || nt_kind(nt, recv) != NK_ConstantReadNode || nt_ref(nt, st, "arguments") >= 0 ||
+      nt_kind(nt, blk) != NK_BlockNode || !meth || !is_each_or_pair(meth))
+    return -1;
+  CtLoopAt at = { c, elab_self_at(c, st), elab_point_of(c, st), NULL };
+  if (at.cls < 0) return -1;
+  struct CtMacroFacts *f = ct_macro_facts(c, h);
+  if (!f->cidx) f->cidx = ct_const_idx(nt, f->count);
+  at.idx = f->cidx;
+  int *before = malloc(sizeof(int) * ((size_t)bn + 1));
+  if (!before) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  memcpy(before, bb, sizeof(int) * (size_t)bn);
+  int *out = NULL, n = 0, cap = 0, pcount = f->count, *parent = f->parent;
+  for (int k = 0; k < j; k++) ct_push(&out, &n, &cap, before[k]);
+  int ok = ct_try_loop(nt, &parent, &pcount, before, j, &out, &n, &cap, &at);
+  if (!ok) { free(out); free(before); return -1; }
+  int nout = n - j;
+  for (int k = j + 1; k < bn; k++) ct_push(&out, &n, &cap, before[k]);
+  nt_node_set_arr(nt, list, "body", out, n);
+  free(out); free(before);
+  comp_grow_node_arrays(c);
+  host_splice(c, h, frame, list, j, nout, NULL, NULL);
+  comp_grow_node_arrays(c);
+  bb = nt_arr(nt, list, "body", &bn);
+  int first = bb[j];
+  elab_walk_replace(c, st, first);
+  return first;
 }
 
 /* The macro call `call`, statement j of class body list `list` (or of an

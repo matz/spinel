@@ -17882,6 +17882,8 @@ void emit_regex_section(Compiler *c, Buf *b) {
      literals): the generated TU's startup, installing into the runtime the
      hooks this program needs and compiling its regex literals. Emitted, and
      called from main, only when at least one hook applies. */
+  /* (the hook sp_tu_init installs is emitted with main, below) */
+  if (array_user_inspect_mi(c) >= 0) buf_puts(b, "static const char *sp_array_user_inspect(sp_RbVal v);\n");
   buf_puts(b, "static void sp_tu_init(void) {\n");
   /* SPINEL_ALLOC_REPORT type names: attach human names to the scan-fn keys
      the allocation counters use. Runtime-gated on the same flag, so a normal
@@ -17939,6 +17941,7 @@ void emit_regex_section(Compiler *c, Buf *b) {
   }
   if (prog_has_cls_user_display(c, "to_s")) buf_puts(b, "  sp_class_user_to_s_fn = sp_class_user_to_s;\n");
   if (prog_has_cls_user_display(c, "inspect")) buf_puts(b, "  sp_class_user_inspect_fn = sp_class_user_inspect;\n");
+  if (array_user_inspect_mi(c) >= 0) buf_puts(b, "  sp_array_user_inspect_fn = sp_array_user_inspect;\n");
   /* A C stack that ran out becomes a catchable SystemStackError: the fault
      handler in the runtime archive cannot reach this TU's exception stack,
      so hand it the raise (see sp_raise_stack_overflow). */
@@ -21959,10 +21962,26 @@ static void emit_sym_class_name_rt(Compiler *c, Buf *b) {
   }
 }
 
+/* The program's own Array#inspect (a reopened Array): its method, or -1.
+   Only one that answers a String and takes nothing, as a class's own
+   inspect is taken (cls_user_display_mi): any other prints as before. */
+int array_user_inspect_mi(Compiler *c) {
+  int ac = comp_core_class(c, CORE_ARRAY);
+  if (ac < 0 || !share_builtin_overridden(c, "Array", "inspect")) return -1;
+  int mi = comp_method_in_chain(c, ac, "inspect", NULL);
+  if (mi < 0) return -1;
+  const Scope *s = &c->scopes[mi];
+  if (s->nparams > 0 || s->yields || (s->blk_param && s->blk_param[0]) || (TyKind)s->ret != TY_STRING) return -1;
+  return mi;
+}
 /* sp_class_user_to_s / sp_class_user_inspect: a class's own class method
    to_s or inspect (cls_user_display_mi) for the class printed, NULL for any
    other, which prints by its name */
 static void emit_cls_user_display_hooks(Compiler *c, Buf *b) {
+  /* sp_array_user_inspect: the program's own Array#inspect, for an Array
+     printed boxed (sp_poly_inspect) and by p */
+  int ami = array_user_inspect_mi(c);
+  if (ami >= 0) buf_printf(b, "static const char *sp_array_user_inspect(sp_RbVal v){return SP_STR_B(%s(v));}\n", mc_method(c, &c->scopes[ami]));
   static const char *const nms[] = { "to_s", "inspect" };
   for (int q = 0; q < 2; q++) {
     if (!prog_has_cls_user_display(c, nms[q])) continue;

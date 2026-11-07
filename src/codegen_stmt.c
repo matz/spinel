@@ -452,6 +452,15 @@ void emit_p_one(Compiler *c, int arg, Buf *b, int indent) {
   if (emit_splat_io(c, arg, "sp_splat_p(", b, indent)) return;
   Repr tr = repr_of(c, arg);
   TyKind t = tr.as_ty;
+  /* an Array where the program reopens Array#inspect: printed boxed, which
+     runs that method (sp_array_user_inspect), rooted for the call */
+  if ((ty_is_array(t) || ty_is_ptr_array(t)) && array_user_inspect_mi(c) >= 0) {
+    int tb = ++g_tmp;
+    emit_indent(b, indent);
+    buf_printf(b, "{ sp_RbVal _t%d = ", tb); emit_boxed(c, arg, b);
+    buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); sp_puts_line(sp_poly_inspect(_t%d)); }\n", tb, tb);
+    return;
+  }
   /* an element-less hash construct ({} / Hash.new / Hash.new(default)) that no
      key usage narrowed stays TY_UNKNOWN; box it (emit_boxed carries the
      default) and inspect through the poly path. */
@@ -481,7 +490,10 @@ void emit_p_one(Compiler *c, int arg, Buf *b, int indent) {
       ({ int _a = nt_ref(c->nt, arg, "arguments"); int _n = 0;
          if (_a >= 0) nt_arr(c->nt, _a, "arguments", &_n); _n == 0; })) {
     emit_indent(b, indent);
-    buf_puts(b, "fputs(\"[]\\n\", stdout);\n");
+    /* (the program's own Array#inspect prints it, as for any Array) */
+    if (array_user_inspect_mi(c) >= 0)
+      buf_puts(b, "{ sp_RbVal _ea = sp_box_poly_array(sp_PolyArray_new()); SP_GC_ROOT_RBVAL(_ea); sp_puts_line(sp_poly_inspect(_ea)); }\n");
+    else buf_puts(b, "fputs(\"[]\\n\", stdout);\n");
     return;
   }
   /* `p x.class` prints the class name bare (it is a Class, not a String) --

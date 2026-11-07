@@ -1858,6 +1858,9 @@ static inline const char *sp_class_val_display(sp_RbVal v) {
    which answer NULL for any other class */
 extern const char *(*sp_class_user_to_s_fn)(sp_Class);
 extern const char *(*sp_class_user_inspect_fn)(sp_Class);
+/* the program's own Array#inspect, for an Array printed boxed (sp_poly_inspect),
+   NULL where it has none */
+extern const char *(*sp_array_user_inspect_fn)(sp_RbVal);
 static inline const char *sp_class_val_user(sp_RbVal v, const char *(*fn)(sp_Class)) {
   if (fn && v.cls_id != SP_CLASS_BY_NAME) {
     sp_Class _c = {v.v.i, NULL};

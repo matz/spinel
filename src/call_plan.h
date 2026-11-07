@@ -161,10 +161,31 @@ enum { CT_CMETHOD = 1, CT_OWN = 2, CT_TOP = 4, CT_REACH = 8, CT_CAPTURE = 16 };
    version it runs; a method the language calls for the node keeps the
    last version. Super contributes the enclosing method's original name. */
 int call_node_names(Compiler *c, int id, const char *out[2]);
-/* What call_target answers besides the scope: def_class, the class whose
-   table holds the method, written only where one is found, so a caller that
-   presets it finds it as it was. */
-typedef struct { int def_class; } MethodLookup;
+/* What call_target answers besides the scope. kind: ML_METHOD, a method the
+   record proves (a placed version, or a name with one version that no call
+   runs ahead of); ML_ENTRY, the scope of an entry (or the copies' entry)
+   whose cells tell at run time; ML_NONE, no method, or a call the record
+   proves runs before every version (and the builtin an entry's else arm
+   pins); ML_TABLE, the record gave no proof and the answer is the table's
+   last definition, for the reason in why. n: how many versions the call's
+   window reaches (elab_method_span), 0 when no window was asked, -1 when
+   the answer is the table's for want of a version or an entry, or because
+   the call is in a body that never runs; copies: the answer is the copies'
+   entry. survey: set by the two passes that ask which entries the calls
+   need (ver_need, cplan_sg_version), whose answer is not kept. def_class:
+   the class whose table holds the method, written only where one is found,
+   so a caller that presets it finds it as it was. Nothing reads kind and
+   why yet. */
+typedef enum { ML_METHOD, ML_ENTRY, ML_NONE, ML_TABLE } MlKind;
+/* why the table answers: no window, or an unplaced capture (UNPLACED); the
+   chain moves inside the window (MOVES); two or more versions, or a window
+   with no version, and no entry (MANY); a version the plan cannot map
+   (UNMAPPED); the record says no version while the table answers one
+   (DISAGREE); a body that never runs (NEVER); a versioned name answered
+   without asking the record, as for a call with no node or a name the node
+   does not itself call (UNASKED) */
+typedef enum { MLW_UNPLACED = 1, MLW_MOVES, MLW_MANY, MLW_UNMAPPED, MLW_DISAGREE, MLW_NEVER, MLW_UNASKED } MlWhy;
+typedef struct { MlKind kind; unsigned char why, copies, survey; short n; int def_class; } MethodLookup;
 /* ml (NULL for a caller that wants the scope only) */
 int call_target(Compiler *c, int id, int cls, const char *name, unsigned flags, MethodLookup *ml);
 /* Does the Class row for call id, named name, on the class value recv answer

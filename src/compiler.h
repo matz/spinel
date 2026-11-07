@@ -1872,8 +1872,9 @@ typedef struct {
   int *shadow_copies, nshadow_copies, cshadow_copies;
   /* the version each call asked on a class runs, once the entries are
      made (call_plan.c, ct_version): open addressing, name (the memo's own
-     copy) NULL for a free slot; dc the class it answers, -2 for the table's */
-  struct VerMemo { char *name; int id, cls; unsigned flags; int vi, dc; } *ver_memo;
+     copy) NULL for a free slot; dc the class it answers, -2 for the table's;
+     kind, why, copies and n the rest of its MethodLookup (call_plan.h) */
+  struct VerMemo { char *name; int id, cls; unsigned flags; int vi, dc; unsigned char kind, why, copies; short n; } *ver_memo;
   int ver_memo_cap, ver_memo_n;
   /* the methods a guard entry chooses from for each scope asked once the
      entries are made (call_plan.c, guard_chain): at[mi] - 1 is where in

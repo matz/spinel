@@ -13149,7 +13149,22 @@ static int fwd_target_shape(const NodeTable *nt, int def, int call, int is_super
     if (us != -1) return us;
   }
   if (is_super) {
-    if (nt_ref(nt, def, "receiver") >= 0 || cls < 0) return -1;
+    if (nt_ref(nt, def, "receiver") >= 0) return -1;
+    /* A module's `super` reaches the method of each class including it,
+       which may be any def of the name: every channel one of them takes.
+       Left to the __fwd_N model, a mixin's `def process(...) = super` took
+       one slot per argument a caller passed, and handed `process("index")`
+       on as `process("index", 0, 0)` with keywords as positionals. A name a
+       builtin answers (a mixin's `to_s(...)`, `initialize`) may reach the
+       builtin, which keeps that model. */
+    if (cls < 0) {
+      int holder = fwd_lex_parent(nt, def);
+      if (holder < 0 || nt_kind(nt, holder) != NK_ModuleNode ||
+          builtin_object_method_known(name) || builtin_name_below_object(name) ||
+          sp_streq(name, "initialize") || sp_streq(name, "respond_to_missing?") ||
+          sp_streq(name, "method_missing")) return -1;
+      return def_shape_union_by_name(nt, name);
+    }
     fwd_lex_ctx(nt, cls, ctx, sizeof ctx);
     return fwd_class_method_shape(nt, ctx, class_def_super(nt, cls), NULL, name);
   }

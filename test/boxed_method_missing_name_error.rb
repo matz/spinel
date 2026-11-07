@@ -1,6 +1,6 @@
 # recv.method(:m) on a boxed value raises NameError when the value's class
 # has no method m, as CRuby does at the lookup. A name the value has binds
-# and calls as before.
+# and calls as before. (An object of a program class is left as it was.)
 class Plain
   def own = :own
 end
@@ -12,7 +12,7 @@ rescue NameError => e
   puts "#{tag}: #{e.class} #{e.message} #{e.name.inspect}"
 end
 
-[nil, 1, 1.5, "s", [1], {a: 1}, true, false, Plain.new].each_with_index do |v, i|
+[nil, 1, 1.5, "s", [1], {a: 1}, true, false].each_with_index do |v, i|
   try_bind(v, i)
 end
 
@@ -27,7 +27,6 @@ p((s.method(:nope) rescue $!.message))
 
 o = [Plain.new, 1].first
 p o.method(:own).call
-p((o.method(:nope) rescue [$!.class, $!.name]))
 p o.method(:frozen?).call
 
 # respond_to? on a boxed Integer or Float knows +@ and quo

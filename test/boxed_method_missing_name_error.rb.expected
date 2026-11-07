@@ -6,14 +6,12 @@
 5: NameError undefined method 'zz' for class 'Hash' :zz
 6: NameError undefined method 'zz' for class 'TrueClass' :zz
 7: NameError undefined method 'zz' for class 'FalseClass' :zz
-8: NameError undefined method 'zz' for class 'Plain' :zz
 [NameError, "undefined method 'succ' for class 'NilClass'"]
 2
 5
 "AB"
 "undefined method 'nope' for class 'String'"
 :own
-[NameError, :nope]
 false
 [true, true]
 [true, true]

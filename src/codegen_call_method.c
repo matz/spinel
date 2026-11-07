@@ -1897,60 +1897,6 @@ static void emit_missing_guard(Compiler *c, int id, int mi, int q, int tmp, Buf 
              !nt_int(c->nt, id, "public_capture", 0), method_sym_arg(c, id), method_desc_class_name(c, c->scopes[mi].class_id));
 }
 
-/* May `x.method(:sym)` on a boxed x raise NameError when x is a builtin
-   value whose class lacks sym (sp_poly_lacks_builtin_method)? Not when
-   the program could give a builtin value the method: a def, an accessor
-   or an alias of the name anywhere (a reopening, a mixin, the top level),
-   a define_method of any name, or a respond_to_missing?. A Kernel private
-   name (puts) is every object's. */
-static int bam_poly_may_lack(Compiler *c, const char *sym) {
-  const NodeTable *nt = c->nt;
-  const char *const *priv = object_private_method_names();
-  for (int u = 0; priv[u]; u++) if (sp_streq(priv[u], sym)) return 0;
-  if (any_class_defines(c, sym)) return 0;
-  for (int s = 0; s < c->nscopes; s++) {
-    const char *sn = c->scopes[s].name;
-    if (sn && (sp_streq(sn, sym) || sp_streq(sn, "respond_to_missing?"))) return 0;
-  }
-  for (int k = 0; k < c->nclasses; k++)
-    for (int a = 0; a < c->classes[k].naliases; a++)
-      if (c->classes[k].alias_new[a] && sp_streq(c->classes[k].alias_new[a], sym)) return 0;
-  /* (the call scan once per tree: the answer is the program's) */
-  static const NodeTable *memo_nt = NULL;
-  static int memo_count = -1, memo_defines = 0;
-  static unsigned memo_version = 0;
-  if (memo_nt != nt || memo_count != nt->count || memo_version != nt->version) {
-    memo_nt = nt; memo_count = nt->count; memo_version = nt->version; memo_defines = 0;
-    NT_FOREACH_KIND(nt, NK_CallNode, d) {
-      const char *dn = nt_str(nt, d, "name");
-      if (dn && (sp_streq(dn, "define_method") || sp_streq(dn, "define_singleton_method") ||
-                 sp_streq(dn, "alias_method"))) { memo_defines = 1; break; }
-    }
-  }
-  return !memo_defines;
-}
-
-/* Does an instance of class k answer only Object's and Kernel's builtin
-   methods besides the program's own? Not when a class or module of its
-   chain is a Struct, comes from a builtin class other than Object or from
-   BasicObject alone, or mixes in a builtin module (Comparable, Enumerable,
-   a path such as IO::WaitReadable). */
-static int bam_plain_chain(Compiler *c, int k, int depth) {
-  if (k < 0 || k >= c->nclasses || depth > 16) return 0;
-  for (int p = k; p >= 0; p = c->classes[p].parent) {
-    const ClassInfo *ci = &c->classes[p];
-    if (ci->is_struct || ci->enum_inc_at || ci->cmp_inc_at || ci->cmp_prepended ||
-        ci->enum_prepended || ci->nincluded_mod_names || class_is_blank_slate(c, p)) return 0;
-    for (int i = 0; i < ci->nincluded_mods; i++)
-      if (!bam_plain_chain(c, ci->included_mods[i], depth + 1)) return 0;
-    for (int i = 0; i < ci->nprepended_mods; i++)
-      if (!bam_plain_chain(c, ci->prepended_mods[i], depth + 1)) return 0;
-    if (c->classes[p].parent < 0 && !comp_class_is_module(c, ci) &&
-        class_builtin_parent(c, p) != -116) return 0;
-  }
-  return 1;
-}
-
 static int emit_method_obj_target(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc, const int *argv, int capture) {
   /* Klass.instance_method(:sym) -> the unbound object: the same
      sp_BoundMethod with a NULL self, so name/arity/owner ride the Method
@@ -2129,26 +2075,14 @@ static int emit_method_obj_target(Compiler *c, int id, Buf *b, const NodeTable *
       self_rooted = 1;
       buf_puts(b, "({ "); tbr = hold_operand(c, recv, TY_POLY, 1, tbr, 1, " ", b);
       /* a nil, a String, an Integer ... that has no method sym: CRuby's
-         NameError at the lookup, where the wrapper bound it anyway */
-      const char *bsym = nt_str(nt, c->scopes[mi].def_node, "bam_sym");
-      if (bsym && repr_of(c, recv).kind == RK_BOXED && bam_poly_may_lack(c, bsym)) {
-        buf_printf(b, "if ((sp_poly_lacks_builtin_method(_t%d, ", tbr);
+         NameError at the lookup, where the wrapper bound it anyway
+         (bam_may_lack, desugar_builtin_method_obj) */
+      int bdn = c->scopes[mi].def_node;
+      const char *bsym = nt_str(nt, bdn, "bam_sym");
+      if (bsym && nt_int(nt, bdn, "bam_may_lack", 0) && repr_of(c, recv).kind == RK_BOXED) {
+        buf_printf(b, "if (sp_poly_lacks_builtin_method(_t%d, ", tbr);
         emit_str_literal(b, bsym);
-        buf_puts(b, ")");
-        /* an object of a program class answers Object's names (bam_plain_chain) */
-        int any = 0;
-        for (int k = 0; k < c->nclasses; k++) {
-          if (comp_class_is_module(c, &c->classes[k]) || !bam_plain_chain(c, k, 0)) continue;
-          if (!any) buf_printf(b, " || (_t%d.tag == SP_TAG_OBJ && (", tbr);
-          buf_printf(b, "%s_t%d.cls_id == %d", any ? " || " : "", tbr, k);
-          any = 1;
-        }
-        if (any) {
-          buf_printf(b, ") && !sp_poly_responds_builtin(_t%d, ", tbr);
-          emit_str_literal(b, bsym);
-          buf_puts(b, "))");
-        }
-        buf_printf(b, ")) sp_raise_cls(\"NameError\", sp_nomethod_class_msg(");
+        buf_puts(b, ")) sp_raise_cls(\"NameError\", sp_nomethod_class_msg(");
         emit_str_literal(b, bsym);
         buf_printf(b, ", _t%d)); ", tbr);
       }

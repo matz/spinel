@@ -2428,9 +2428,10 @@ static sp_bool sp_poly_responds_builtin(sp_RbVal v, const char *m) {
 }
 /* Does a boxed value of a builtin class lack the method m? Only for the
    classes whose sp_poly_responds_builtin surface holds all of CRuby's
-   public and private names; any other value answers 0 (not known). A
-   Kernel private name (puts) and a program's own method are the caller's
-   to leave out. recv.method(:m) raises NameError on a 1. */
+   public and private names (a program object, a Time, a Range answer 0:
+   not known). A Kernel private name (puts), a program's own method and a
+   library's are the caller's to leave out. recv.method(:m) raises
+   NameError on a 1. */
 static sp_bool sp_poly_lacks_builtin_method(sp_RbVal v, const char *m) {
   static const char *const known[] = {
     "NilClass", "TrueClass", "FalseClass", "String", "Array", "Hash",

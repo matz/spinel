@@ -10876,6 +10876,23 @@ static int bam_split_user_method(Compiler *c, int id, int recv, const char *sym)
   return 1;
 }
 
+/* May `x.method(:sym)` on a boxed x raise NameError for a builtin value
+   whose class lacks sym (sp_poly_lacks_builtin_method)? Not when the
+   program could give a builtin value the method: a def, alias, accessor
+   or binder call of the name, or a method_missing (an_name_binder_free),
+   a respond_to_missing?, or a required library, which adds methods to
+   builtins the runtime tables do not list (json's to_json). A Kernel
+   private name (puts) is every object's. */
+const char *const *object_private_method_names(void);   /* codegen_call.c */
+static int bam_poly_may_lack(Compiler *c, const char *sym) {
+  const char *const *priv = object_private_method_names();
+  for (int u = 0; priv[u]; u++) if (sp_streq(priv[u], sym)) return 0;
+  if (!an_name_binder_free(c, sym) || !an_name_binder_free(c, "respond_to_missing?")) return 0;
+  /* (any feature: a require the loader resolved, or one it could not read) */
+  if (g_nrequired_features > 0 || g_require_unread) return 0;
+  return 1;
+}
+
 /* `recv.method(:sym)` over a BUILTIN receiver (string/int/array/...) has no
    compiled function to bind, so calling the Method crashed. Synthesize a
    top-level wrapper `def __bam_<id>(__bam_r) = __bam_r.sym` -- the wrapper's
@@ -11161,6 +11178,8 @@ static int desugar_builtin_method_obj(Compiler *c) {
     nt_node_set_ref(nt, def, "parameters", params);
     nt_node_set_ref(nt, def, "body", body);
     if (poly_self) nt_node_set_int(nt, def, "bam_poly", 1);
+    /* a boxed value's class may lack sym: the bind asks it (codegen) */
+    if (poly_self && rt == TY_POLY && bam_poly_may_lack(c, sym)) nt_node_set_int(nt, def, "bam_may_lack", 1);
     /* the builtin's own name, for Method#name, #arity and #inspect: the body
        call is renamed ([] for slice) or rewritten (a splat dispatched on its
        length) */

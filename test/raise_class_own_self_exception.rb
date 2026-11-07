@@ -50,3 +50,7 @@ try { In.go }
 class Sup < StandardError; def self.exception(m = "d") = AppError.new("sup:" + m); end
 class Sub < Sup; def self.exception(m = "d") = super("sub" + m); end
 try { raise Sub, "x" }
+class Top < StandardError; def self.exception(m = "d") = AppError.new("top:" + m); end
+class Mid < Top; def self.exception(m = "d") = super("mid:" + m); end
+class Low < Mid; def self.exception(m = "d") = super("low:" + m); end
+try { raise Low, "x" }

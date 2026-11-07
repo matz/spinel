@@ -52333,6 +52333,7 @@ static void an_phase_infer_fixpoint(Compiler *c) {
     ch |= AN_PASS("desugar_reduce_proc_arg", desugar_reduce_proc_arg(c));          /* reduce(&pr) -> reduce { |a,b| pr.call(a,b) } */
     ch |= AN_PASS("desugar_block_capture_wrap", desugar_block_capture_wrap(c));       /* { |i| ->{i} } -> { |i| (->(i){ ->{i} }).call(i) } */
     ch |= AN_PASS("desugar_user_not_match", desugar_user_not_match(c));            /* a !~ b -> !(a =~ b) for a user =~ (#3019) */
+    ch |= AN_PASS("desugar_exception_super_new", desugar_exception_super_new(c));     /* super in self.exception past the program's -> self.new */
     ch |= AN_PASS("desugar_raise_own_exception", desugar_raise_own_exception(c));     /* raise K, m -> raise K.exception(m) (K's own self.exception) */
     ch |= AN_PASS("desugar_exception_class_ctor", desugar_exception_class_ctor(c));   /* K.exception(a) -> K.new(a) */
     ch |= AN_PASS("desugar_env_enum", desugar_env_enum(c));                 /* ENV.keys/... -> __env_to_h.keys/... */

@@ -13,3 +13,4 @@ AppError
 [AppError, "p:priv"]
 [AppError, "in:self"]
 [AppError, "sup:subx"]
+[AppError, "top:mid:low:x"]

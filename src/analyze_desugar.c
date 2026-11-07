@@ -2678,15 +2678,6 @@ static void cg_cand_add(CgCands *cs, const char *name, int owner, int path) {
   cd->own[cd->nown++] = owner;
 }
 
-/* The class whose Ruby name is RN, or -2 when the program has none. */
-static int cg_class_by_ruby_name(Compiler *c, const char *rn) {
-  for (int k = 0; rn && k < c->nclasses; k++) {
-    const char *qn = class_ruby_name(c, k);
-    if (qn && sp_streq(qn, rn)) return k;
-  }
-  return -2;
-}
-
 static void cg_cands_collect(Compiler *c, int n0, CgCands *cs) {
   const NodeTable *nt = c->nt;
   /* A constant or class whose leaf collided carries a qualified key
@@ -2702,7 +2693,7 @@ static void cg_cands_collect(Compiler *c, int n0, CgCands *cs) {
       v = w >= 0 ? nt_str(nt, w, "qc_orig_name") : NULL;
       if (!v && w >= 0) v = nt_str(nt, w, "name");
       if (k == NK_ConstantWriteNode && c->node_cbody) owner = c->node_cbody[id];
-      else if (w >= 0 && nt_str(nt, w, "qc_owner")) owner = cg_class_by_ruby_name(c, nt_str(nt, w, "qc_owner"));
+      else if (w >= 0) owner = elab_const_write_owner(c, w);
     }
     else if (k == NK_ClassNode || k == NK_ModuleNode) {
       int cp = nt_ref(nt, id, "constant_path");

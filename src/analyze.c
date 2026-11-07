@@ -5657,12 +5657,6 @@ static void qc_note_path_write(Compiler *c, int tgt, QCWrite **ws, int *n, int *
   w->node = tgt; w->depth = md; w->salt = 0; w->head[0] = 0; w->is_class = 0;
   for (int i = 0; i < md; i++) snprintf(w->path[i], 64, "%s", mods[i]);
   snprintf(w->name, sizeof w->name, "%s", chain[cn - 1]);
-  /* the module the write is under, by its Ruby name, for the class's
-     constant lookup (const_value_owned_key) */
-  char own[(QC_MAXDEPTH + 1) * 66] = "";
-  for (int i = 0; i < md; i++) { if (i) strcat(own, "::"); strcat(own, mods[i]); }
-  const char *was = nt_str(c->nt, tgt, "qc_owner");
-  if (!was || !sp_streq(was, own)) nt_node_set_str((NodeTable *)c->nt, tgt, "qc_owner", own);
 }
 void qc_collect_writes(Compiler *c, int node, char (*path)[64], int depth,
                               QCWrite **ws, int *n, int *cap) {

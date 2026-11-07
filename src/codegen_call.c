@@ -2682,7 +2682,7 @@ static int class_body_constants(Compiler *c, int ci, const char **out, const cha
 
 /* The constants of `ci` written through a path from outside its body:
    `class Mod::B` / `module Mod::B` anywhere, and a top-level `Mod::X = v`
-   (qc_owner names the module its path resolved to). */
+   (the record knows the module its path resolved to). */
 static int class_path_constants(Compiler *c, int ci, const char **out, const char **shown, int max, int n) {
   const NodeTable *nt = c->nt;
   int ndk = 0; const NodeKind *dk = class_def_kinds(&ndk);
@@ -2694,16 +2694,14 @@ static int class_path_constants(Compiler *c, int ci, const char **out, const cha
       class_stmt_const_names(nt, id, &nm, &sh);
       if (nm) n = add_listed_const(out, shown, n, nm, sh);
     }
-  const char *rn = class_ruby_name(c, ci);
-  for (int r = 0; rn && r < nt_nroots(nt); r++) {   /* each file's top level */
+  for (int r = 0; r < nt_nroots(nt); r++) {   /* each file's top level */
     int top = prog_root_stmts(c, r);
     int sn = 0; const int *st = top >= 0 ? nt_arr(nt, top, "body", &sn) : NULL;
     for (int k = 0; k < sn && n < max; k++) {
       if (nt_kind(nt, st[k]) != NK_ConstantPathWriteNode) continue;
       int t = nt_ref(nt, st[k], "target");
-      const char *own = t >= 0 ? nt_str(nt, t, "qc_owner") : NULL;
       const char *nm = NULL, *sh = NULL;
-      if (own && sp_streq(own, rn)) listed_value_const(c, t, &nm, &sh);
+      if (t >= 0 && elab_const_write_owner(c, t) == ci) listed_value_const(c, t, &nm, &sh);
       if (nm) n = add_listed_const(out, shown, n, nm, sh);
     }
   }

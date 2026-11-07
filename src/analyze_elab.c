@@ -165,6 +165,7 @@ struct LoadRecord {
      and by node, the entity + 1 a write is of or a read names (0: none, a
      class's, or a node made since) */
   char **ckey; int nckey; int *cent; int ncent; int ckey_gen;
+  int *cwown;   /* by constant write (and its target): its class, as lr_const_owner numbers it */
   LrSlot *slot; int nslot, cslot, *slot_head, slot_builds;
   LrSlotPoint *slotp; int nslotp, cslotp; long slot_entries;
   /* lr_const_seen's and lr_const_final's facts of every written name (lr_final_index), and what they are of */
@@ -9257,11 +9258,19 @@ void elab_const_keys(Compiler *c) {
   /* the entities and the node map, kept for the slots and the readers
      that ask by node (elab_const_node_key) */
   for (int i = 0; i < r->nckey; i++) free(r->ckey[i]);
-  free(r->ckey); free(r->cent);
+  free(r->ckey); free(r->cent); free(r->cwown);
   r->ckey = calloc((size_t)ne + 1, sizeof *r->ckey);
   r->cent = calloc((size_t)nt->count + 1, sizeof *r->cent);
-  if (!r->ckey || !r->cent) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  r->cwown = calloc((size_t)nt->count + 1, sizeof *r->cwown);
+  if (!r->ckey || !r->cent || !r->cwown) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   r->nckey = ne; r->ncent = nt->count; r->ckey_gen++;
+  /* (a class's entity too: `A::B = Class.new` is on A) */
+  for (int id = 0; id < nt->count; id++) {
+    if (!ent[id]) continue;
+    int own = r->hist[es[ent[id] - 1].h].b, kn = lr_key_node(nt, id);
+    r->cwown[id] = own;
+    if (kn >= 0 && kn < nt->count) r->cwown[kn] = own;
+  }
   for (int i = 0; i < ne; i++) r->ckey[i] = !es[i].cls_ent && es[i].key ? strdup(es[i].key) : NULL;
   for (int id = 0; id < nt->count; id++) {
     int ei = ent[id] - 1;
@@ -9325,6 +9334,17 @@ const char *elab_const_owned_key(Compiler *c, int cls, const char *name) {
     if (ei >= 0 && ei < r->nckey && r->ckey[ei]) return r->ckey[ei];
   }
   return NULL;
+}
+/* The class a constant write (its node or its target) puts the constant on,
+   as the record found it: Object's own is the program's reopened Object.
+   -2 for none: a singleton's, an owner the record does not know, Object
+   not reopened. */
+int elab_const_write_owner(Compiler *c, int node) {
+  const LoadRecord *r = c->lrec;
+  if (!r || !r->cwown || node < 0 || node >= r->ncent || r->cwown[node] <= 0) return -2;
+  int cls = r->cwown[node] - 2;
+  if (cls == LR_MAIN) cls = comp_core_class(c, CORE_OBJECT);
+  return cls >= 0 ? cls : -2;
 }
 /* The key of the value constant entity node is a write of or a read
    names, as elab_const_keys found it; NULL for none (a class's, one the

@@ -285,6 +285,7 @@ static inline const char *nt_const_key_or_name(const NodeTable *nt, int node) {
 const char *elab_const_node_key(Compiler *c, int node);   /* the key of the value constant entity a write is of or a read names; NULL for none */
 const char *elab_const_owned_key(Compiler *c, int cls, const char *name);   /* the key of the value constant class cls (LR_MAIN: Object's own) holds under leaf name; NULL for none */
 int elab_const_descendant_writes(Compiler *c, int cls, const char *name);   /* does a descendant of cls write leaf name as its own */
+int elab_const_write_owner(Compiler *c, int node);   /* the class a constant write puts its constant on; -2 for none */
 int elab_const_keys_gen(Compiler *c);   /* bumped each time elab_const_keys keys the entities: a cache by key is of one */
 /* Did the keys give the node a slot other than the name it carries (what a
    rename to the key did, which qc_orig_name then recorded)? */

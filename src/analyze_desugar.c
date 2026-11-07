@@ -5994,8 +5994,18 @@ static const char *engine_body_class(NodeTable *nt, int stmt) {
   return NULL;
 }
 
+static int me_record_defines(const NodeTable *nt, const char *cls, const char *m, int in, int *is_data);
 static int engine_method_absent(NodeTable *nt, const char *cls, const char *m, int in, int depth) {
   if (builtin_method_known(cls, m) || me_body_defines(nt, cls, m, in)) return 0;
+  /* a Struct's or Data's members, the defs in its block, and the methods
+     Struct or Data gives every instance (each, with ...) */
+  int data = 0, rec = me_record_defines(nt, cls, m, in, &data);
+  if (rec) return rec > 0 ? 0 : -1;
+  if (data >= 0) {
+    int v = core_method_vis(data ? "Data" : "Struct", m, 1);
+    if (v < 0) return -1;
+    if (v == 1 || v == 2) return 0;
+  }
   /* a builtin the arity facts leave out (Fiber) answers from CRuby's own
      method list: fiber-annotation's `unless Fiber.method_defined?(:annotation)` */
   if (is_builtin_class_name(cls) || is_builtin_module_name(cls)) {
@@ -6197,12 +6207,48 @@ static int engine_root_plain(NodeTable *nt, const char *x) {
   return any;
 }
 
+/* `C = Struct.new(:a, ...)` / `Data.define(...)`: does a record write of
+   leaf `cls` give it m as its own method, a member's reader (a Struct
+   member's writer too) or a def in its block? 1 yes, 0 no, -1 not known (a
+   member not written as a literal). The skip region `in` is not asked. */
+static int me_record_defines(const NodeTable *nt, const char *cls, const char *m, int in, int *is_data) {
+  int any = 0;
+  if (is_data) *is_data = -1;
+  for (int id = 0; id < nt->count; id++) {
+    if (nt_kind(nt, id) != NK_ConstantWriteNode || subtree_has(nt, in, id)) continue;
+    const char *nm = nt_str(nt, id, "name");
+    int call = nm && sp_streq(nm, cls) ? class_def_record(nt, id) : -1;
+    if (call < 0) continue;
+    int data = class_def_record_is_data(nt, call);
+    if (is_data) *is_data = data;
+    int an = 0; const int *av = nt_arr(nt, nt_ref(nt, call, "arguments"), "arguments", &an);
+    for (int a = 0; a < an; a++) {
+      NodeKind ak = nt_kind(nt, av[a]);
+      /* (keyword_init: and the like) */
+      if (ak == NK_KeywordHashNode) continue;
+      const char *v = ak == NK_SymbolNode ? nt_str(nt, av[a], "value") : ak == NK_StringNode ? nt_str(nt, av[a], "content") : NULL;
+      if (!v) { any = -1; continue; }
+      size_t vl = strlen(v);
+      if (sp_streq(v, m) || (!data && !strncmp(v, m, vl) && sp_streq(m + vl, "="))) return 1;
+    }
+    int body = class_def_body(nt, id);
+    int bn = 0; const int *bb = body >= 0 && nt_kind(nt, body) == NK_StatementsNode ? nt_arr(nt, body, "body", &bn) : NULL;
+    for (int i = 0; i < bn; i++) {
+      int rv = nt_ref(nt, bb[i], "receiver");
+      if ((rv < 0 || nt_kind(nt, rv) == NK_SelfNode) && me_stmt_defines(nt, bb[i], m)) return 1;
+    }
+  }
+  return any;
+}
 /* `C.method_defined?(:m, false)`: is m absent from the own bodies of class
    `cls` outside guard `in`, its ancestors not asked? 0 present, 1 absent, -1
    not known: a class of the runtime's, whose own methods are not listed per
    class here, or one the program does not define. */
 static int engine_method_own_absent(NodeTable *nt, const char *cls, const char *m, int in) {
   if (me_body_defines(nt, cls, m, in)) return 0;
+  /* (a Struct's or Data's members and the defs in its block are its own) */
+  int rec = me_record_defines(nt, cls, m, in, NULL);
+  if (rec) return rec > 0 ? 0 : -1;
   if (is_builtin_class_name(cls) || is_builtin_module_name(cls) || builtin_class_id(cls)) return -1;
   return me_leaf_defined(nt, cls) ? 1 : -1;
 }

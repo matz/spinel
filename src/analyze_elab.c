@@ -2266,6 +2266,7 @@ static int lr_foreign_mixin(ElabRec *x, int node, const LrMixin *m, int cls, int
 
 static int lr_const_root_undefined(const NodeTable *nt, int n);
 static int lr_sg_chain_runs(Compiler *c, int cls, const char *name, LoadPoint p, const LrDef **out);
+static int lr_sg_chain_find(Compiler *c, int cls, const char *name, LoadPoint p, const LrDef **out, int *found);
 static void lr_call(ElabRec *x, int node, int fc, int fs, unsigned char *vs, int fnode, int may, int nested) {
   const NodeTable *nt = x->c->nt;
   const char *nm = nt_str(nt, node, "name");
@@ -2314,11 +2315,27 @@ static void lr_call(ElabRec *x, int node, int fc, int fs, unsigned char *vs, int
      nothing in by itself. The call is the program's, which may do anything
      (codegen reads the mark and emits it as a call) */
   const LrDef *own = NULL;
+  int oc = cls;
   if (mix && !sg && cls >= 0 && !nested && !nt_int(nt, node, "sclass_mixin", 0) &&
-      lr_sg_chain_runs(x->c, cls, nm, elab_point_of(x->c, node), &own) == ELAB_YES) {
+      lr_sg_chain_find(x->c, cls, nm, elab_point_of(x->c, node), &own, &oc) == ELAB_YES) {
+    /* an alias (`alias include ci` in `class << self`) runs the method it
+       took: the version of its target on the class that holds the alias,
+       as it stood at the alias. An alias of the builtin itself (`alias
+       include prepend`) finds no method of the program's there, and is
+       left to the builtin's mixin, as before. */
+    for (int step = 0; own && own->kind == LR_ALIAS && own->target && step < 8; step++) {
+      /* an alias found through an extended module is that module's: its
+         target is the module's instance method, which this search does
+         not walk, so it keeps the builtin mixin as before */
+      int an = own->node;
+      if (an < 0 || an >= x->c->node_cap || x->c->node_cbody[an] != oc) { own = NULL; break; }
+      const LrDef *to = NULL;
+      int tc = oc;
+      if (lr_sg_chain_find(x->c, oc, own->target, elab_point_of(x->c, own->node), &to, &tc) != ELAB_YES) { own = NULL; break; }
+      own = to; oc = tc;
+    }
     /* the definition the call finds there: a def or a define_method, by
-       its node (codegen reads its body). An alias (of the builtin itself,
-       `alias include prepend`) is left to the builtin's mixin, as before. */
+       its node (codegen reads its body) */
     int dn = own && (own->kind == LR_DEF || own->kind == LR_DEFINE_METHOD) ? own->node : -1;
     if (dn >= 0) {
       nt_node_set_int((NodeTable *)nt, node, "mixin_own_call", dn + 1);
@@ -4017,10 +4034,11 @@ static int lr_search(Compiler *c, int cls, int sg, const char *name, int mod, Lo
    program's: the class's own singleton methods or its extends', then its
    superclasses' (not the instance methods of Class, Module, Object and
    Kernel every singleton chain ends in)? *out: the definition it finds. */
-static int lr_sg_chain_runs(Compiler *c, int cls, const char *name, LoadPoint p, const LrDef **out) {
+static int lr_sg_chain_find(Compiler *c, int cls, const char *name, LoadPoint p, const LrDef **out, int *found) {
   for (int d = 0; cls >= 0 && d <= lr_chain_bound(c); d++) {
     int unsure = 0, o = lr_search_one(c, cls, 1, name, -1, p, 0, 0, out, d, &unsure, 0);
     if (o == LR_STOP) return ELAB_NO;
+    if (o == ELAB_YES && found) *found = cls;
     if (o == ELAB_YES) return unsure ? ELAB_UNKNOWN : ELAB_YES;
     if (o == ELAB_UNKNOWN || unsure) return ELAB_UNKNOWN;
     int sup = lr_super(c, cls);
@@ -4028,6 +4046,9 @@ static int lr_sg_chain_runs(Compiler *c, int cls, const char *name, LoadPoint p,
     cls = sup;
   }
   return ELAB_UNKNOWN;
+}
+static int lr_sg_chain_runs(Compiler *c, int cls, const char *name, LoadPoint p, const LrDef **out) {
+  return lr_sg_chain_find(c, cls, name, p, out, NULL);
 }
 /* The versions of `name` along cls's chain (its singleton's when sg), as
    lr_search walks it: on each class, its prepends', its own, its includes'

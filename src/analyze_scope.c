@@ -7131,6 +7131,23 @@ static int module_function_self_dependent(Compiler *c, int scope_idx) {
   return 0;
 }
 
+/* Does module mod have a singleton method named nm other than the
+   module_function copy mf (`def M.a` or `def self.a` after the
+   module_function, a `class << self` def)? Then the module function's
+   singleton is not its instance method any more: a receiverless call in an
+   includer must reach the includer's copy, not the module's singleton
+   (desugar_module_function_call rewrites it onto the module unless the
+   includer holds a copy of its own). */
+static int module_function_singleton_replaced(Compiler *c, int mod, const char *nm, int mf) {
+  for (int si = 0; si < c->nscopes; si++) {
+    const Scope *s = &c->scopes[si];
+    if (si != mf && s->class_id == mod && s->is_cmethod && !s->is_module_function &&
+        s->name && sp_streq(s->name, nm))
+      return 1;
+  }
+  return 0;
+}
+
 /* Give a copied method its own default values: clone each one and walk it
    into the copy. Shared, a default reading an earlier parameter
    (`def m(p1 = 51, p2 = p1)`) was typed against the source method's
@@ -7492,8 +7509,16 @@ static void include_module_methods(Compiler *c, int ci, int mod_id, int guard, i
     /* a module_function method whose body depends on its receiver needs a
        per-includer copy; everything else class-level stays module-side */
     if (src->is_cmethod &&
-        !(src->is_module_function && module_function_self_dependent(c, ms)))
+        !(src->is_module_function && (module_function_self_dependent(c, ms) ||
+                                      module_function_singleton_replaced(c, mod_id, src->name, ms))))
       continue;
+    /* a module function a later instance def of the name replaced (`def a`
+       after `module_function :a`): the includer gets that public def, not
+       a private copy of the module function */
+    if (src->is_cmethod) {
+      int live = comp_self_method_in_chain(c, mod_id, src->name, NULL);
+      if (live >= 0 && live != ms && !c->scopes[live].is_cmethod) continue;
+    }
     /* an instance def a later module function of the name replaced: the
        module function is the module's instance method of the name */
     if (mod_mf && !src->is_cmethod) {

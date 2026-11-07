@@ -1998,7 +1998,8 @@ static int join_container_alias_groups(Compiler *c) {
       /* (and the Array kind itself, where they all hold one: an element
          kind names no Array of its own for a table's rows or an object,
          and ty_array_of took a table of Integer rows the group agreed on
-         for the general Array) */
+         for the general Array. Two kinds that differ join to TY_POLY,
+         which no Array kind is, so it marks a group that disagrees.) */
       if (f == 1) {
         TyKind e = ty_array_elem(t);
         ea[g] = fam[g] ? ctr_join_kind(ea[g], e) : e;

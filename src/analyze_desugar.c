@@ -10958,12 +10958,14 @@ int desugar_exception_class_ctor(Compiler *c) {
    the receiving class as `new` does, through allocate and initialize, with
    the arguments as given. Spell it `self.new(args)`, as
    desugar_exception_class_ctor spells a call of it. A bare super passes
-   the def's required and optional parameters. The super stays where a
-   class method `new` of the program may be the one the receiving class
-   answers (Exception's does not run it), where the super has a block or a
-   splat (`self.new(*a)` in a class method builds the class that defines
-   it, not the receiving one), and where a bare super's def takes other
-   parameters. */
+   the def's required and optional parameters. The super stays:
+   - where a class method `new` of the program may be the one the
+     receiving class answers (Exception's does not run it);
+   - where a call of the program may hand `exception` a block, which the
+     super passes on (exc_super_block_reaches);
+   - where the super has a block or a splat (`self.new(*a)` in a class
+     method builds the class that defines it, not the receiving one);
+   - where a bare super's def takes other parameters. */
 static int exc_super_new_kept(Compiler *c, int id, int cid) {
   if (call_target(c, id, cid, "new", CT_CMETHOD, NULL) >= 0) return 1;
   int nd = 0;
@@ -10972,9 +10974,21 @@ static int exc_super_new_kept(Compiler *c, int id, int cid) {
     if (call_target(c, id, ds[i], "new", CT_CMETHOD, NULL) >= 0) return 1;
   return 0;
 }
+/* Does a call that may reach a class method `exception` hand it a block?
+   A super passes that block on, and an initialize may read it, so
+   `self.new(args)`, which takes none, would lose it */
+static int exc_super_block_reaches(Compiler *c) {
+  const NodeTable *nt = c->nt;
+  static const char *const calls_of[] = { "exception", "send", "public_send", "__send__", NULL };
+  int *calls, ncalls = an_calls_named_any(c, calls_of, nt->count, &calls), any = 0;
+  for (int q = 0; q < ncalls && !any; q++)
+    if (calls[q] < nt->count && nt_kind(nt, calls[q]) == NK_CallNode && nt_ref(nt, calls[q], "block") >= 0) any = 1;
+  free(calls);
+  return any;
+}
 int desugar_exception_super_new(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
-  int changed = 0, n0 = nt->count;
+  int changed = 0, n0 = nt->count, blk = -1;
   for (int sk = 0; sk < 2; sk++) {
     NT_FOREACH_KIND(nt, sk ? NK_ForwardingSuperNode : NK_SuperNode, id) {
       if (id >= n0 || id >= c->node_cap || nt_ref(nt, id, "block") >= 0) continue;
@@ -10986,6 +11000,8 @@ int desugar_exception_super_new(Compiler *c) {
       int p = comp_super_parent(c, cid, 1);
       if (p >= 0 && comp_cmethod_in_chain(c, p, "exception", NULL) >= 0) continue;
       if (exc_super_new_kept(c, id, cid)) continue;
+      if (blk < 0) blk = exc_super_block_reaches(c);
+      if (blk) continue;
       int base = nt->count, args = sk ? -1 : nt_ref(nt, id, "arguments"), an = 0;
       const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &an) : NULL;
       if (an > 0 && nt_argv_has(nt, av, an, NT_ARG_SPLAT | NT_ARG_BLOCK | NT_ARG_FORWARDING)) continue;

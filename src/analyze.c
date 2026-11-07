@@ -40677,7 +40677,7 @@ static int ps_pure(Compiler *c, Scope *m, int n) {
   switch (nt_kind(nt, n)) {
     case NK_IntegerNode: case NK_FloatNode: case NK_LocalVariableReadNode: case NK_SelfNode:
     case NK_TrueNode: case NK_FalseNode: case NK_NilNode: return 1;
-    case NK_ConstantReadNode: { LocalVar *cv = comp_const(c, const_key_at(c, n)); return cv != NULL; }
+    case NK_ConstantReadNode: { LocalVar *cv = comp_const_at(c, n); return cv != NULL; }
     default: (void)m; return 0;
   }
 }
@@ -41943,7 +41943,7 @@ static void widen_nullable_keyed_hash_literals(Compiler *c) {
       if (!cv || v < 0 || (cv->type != TY_INT && cv->type != TY_FLOAT)) continue;
       NodeKind vk = nt_kind(nt, v);
       if (vk != NK_ConstantReadNode && vk != NK_ConstantPathNode) continue;
-      LocalVar *src = const_key_at(c, v) ? comp_const(c, const_key_at(c, v)) : NULL;
+      LocalVar *src = comp_const_at(c, v);
       if (!src || src->type != TY_POLY) continue;
       lv_set_type(cv, TY_POLY); comp_set_ntype(c, id, TY_POLY); comp_set_ntype(c, v, TY_POLY);
       again = 1;
@@ -54516,8 +54516,7 @@ static void an_phase_proc_returns(Compiler *c) {
       for (int id = 0; id < nt->count; id++) {
         NodeKind ty_k = nt_kind(nt, id);
         if (ty_k != NK_ConstantWriteNode) continue;
-        const char *nm = const_key_at(c, id);
-        LocalVar *cv = nm ? comp_const(c, nm) : NULL;
+        LocalVar *cv = comp_const_at(c, id);
         if (!cv || cv->type != TY_INT) continue;
         int vnode = nt_ref(nt, id, "value");
         if (vnode < 0) continue;
@@ -54661,8 +54660,7 @@ static void an_phase_proc_returns(Compiler *c) {
           NodeKind k = nt_kind(nt, id);
           if (k != NK_ConstantWriteNode && k != NK_ConstantOrWriteNode) continue;
           int vnode = nt_ref(nt, id, "value");
-          const char *nm = const_key_at(c, id);
-          LocalVar *cv = vnode >= 0 && nm ? comp_const(c, nm) : NULL;
+          LocalVar *cv = vnode >= 0 ? comp_const_at(c, id) : NULL;
           if (!cv || !PW_TYPED_ARR(cv->type)) continue;
           TyKind nw = PW_JOIN(cv->type, infer_type(c, vnode));
           if (nw != cv->type) { lv_set_type(cv, nw); changed = 1; }

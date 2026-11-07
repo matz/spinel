@@ -1798,13 +1798,13 @@ static TyRef named_array_slot(Compiler *c, int recv) {
       return lv ? &lv->type : NULL;
     }
     case NK_ConstantReadNode: {
-      LocalVar *lv = comp_const(c, const_key_at(c, recv));
+      LocalVar *lv = comp_const_at(c, recv);
       return lv ? &lv->type : NULL;
     }
     /* `H::L` names the constant its read resolves to (infer_constant_path) */
     case NK_ConstantPathNode: {
       if (const_path_in_closed_builtin(c, recv) || const_path_misses_toplevel(c, recv)) return NULL;
-      LocalVar *lv = comp_const(c, const_key_at(c, recv));
+      LocalVar *lv = comp_const_at(c, recv);
       return lv ? &lv->type : NULL;
     }
     case NK_ClassVariableReadNode: {

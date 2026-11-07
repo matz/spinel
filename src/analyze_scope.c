@@ -6080,8 +6080,7 @@ int infer_global_const_types(Compiler *c) {
     }
     else if (ty_k == NK_ConstantOrWriteNode || ty_k == NK_ConstantAndWriteNode ||
              ty_k == NK_ConstantOperatorWriteNode) {
-      const char *nm = const_key_at(c, id);
-      if (nm) lv = comp_const(c, nm);
+      lv = comp_const_at(c, id);
       int is_orand = ty_k != NK_ConstantOperatorWriteNode;
       /* An or/and-write-only constant has no definite value before its first
          use, so it must default to nil (poly) for the truthiness check. */

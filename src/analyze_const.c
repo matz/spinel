@@ -441,7 +441,7 @@ void an_const_presence(Compiler *c) {
   char *own = calloc(nn, 1);             /* per node: a read that asks its own class's flag */
   if (!cref || !own) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   for (int id = 0; id < nt->count; id++) {
-    LocalVar *lv = nt_kind(nt, id) == NK_ConstantReadNode ? comp_const(c, const_key_at(c, id)) : NULL;
+    LocalVar *lv = nt_kind(nt, id) == NK_ConstantReadNode ? comp_const_at(c, id) : NULL;
     if (lv && lv->const_early && cw_placed(&w, id)) cref[id] = 1 + cw_cref_at(&w, id);
   }
   /* Compute consumption once, while the constant pass visits reads. A
@@ -575,8 +575,7 @@ int an_class_presence_write(Compiler *c, int id) {
 ConstReadEffect an_const_read_effect(Compiler *c, int id) {
   NodeKind k = nt_kind(c->nt, id);
   if (!nt_kind_is_constant(k)) return (ConstReadEffect){0};
-  const char *nm = const_key_at(c, id);
-  LocalVar *lv = nm ? comp_const(c, nm) : NULL;
+  LocalVar *lv = comp_const_at(c, id);
   return (ConstReadEffect){ const_has_flag(lv) && (k != NK_ConstantPathNode || (!const_path_in_closed_builtin(c, id) && !const_path_misses_toplevel(c, id))) ? lv : NULL,
                            elab_autoload_read(c, id), const_class_presence(c, id, 0) };
 }

@@ -931,7 +931,7 @@ static int nf_elem_slot_op(NF *f, int v, int bits) {
   }
   case NK_ConstantReadNode: case NK_ConstantWriteNode: case NK_ConstantOrWriteNode:
   case NK_ConstantAndWriteNode: {
-    LocalVar *k = comp_const(c, const_key_at(c, v));
+    LocalVar *k = comp_const_at(c, v);
     fl = k ? &k->obj_elem_may_nil : NULL;
     break;
   }
@@ -1301,7 +1301,7 @@ static int nf_expr_uncached(NF *f, int v) {
   }
   case NK_ConstantReadNode: {
     if (!nf_tracked(f->c, c->ntype[v])) return NFW_NONE;
-    LocalVar *k = comp_const(c, const_key_at(c, v));
+    LocalVar *k = comp_const_at(c, v);
     return k ? nf_slot_why(f, &k->obj_may_nil) : NFW_OPAQUE;
   }
   case NK_CallNode: return nf_call(f, v);
@@ -1440,7 +1440,7 @@ static void nf_writes(NF *f) {
   static const NodeKind kw[] = { NK_ConstantWriteNode, NK_ConstantOrWriteNode, NK_ConstantAndWriteNode };
   for (int q = 0; q < 3; q++)
     NT_FOREACH_KIND(nt, kw[q], w) {
-      LocalVar *k = comp_const(c, const_key_at(c, w));
+      LocalVar *k = comp_const_at(c, w);
       if (k && nf_open(k->obj_may_nil)) nf_set(f, &k->obj_may_nil, nf_expr(f, nt_ref(nt, w, "value")));
     }
 }

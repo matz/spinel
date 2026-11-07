@@ -11759,8 +11759,7 @@ TyKind infer_uncached(Compiler *c, int id) {
   if (nk == NK_ConstantWriteNode) {
     /* `A = v` as a value: the constant, read back after the write. Not for a
        constant the value form leaves out (comp_const_write_valued) */
-    const char *nm = const_key_at(c, id);
-    LocalVar *lv = nm ? comp_const(c, nm) : NULL;
+    LocalVar *lv = comp_const_at(c, id);
     if (comp_const_write_valued(c, lv)) return lv->type;
   }
   if (nk == NK_ConstantReadNode) {

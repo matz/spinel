@@ -295,6 +295,10 @@ static inline const char *const_key_at(Compiler *c, int node) {
   const char *k = elab_const_node_key(c, node);
   return k ? k : nt_str(c->nt, node, "name");
 }
+/* The value constant slot the node names (its entity's key, const_key_at),
+   or NULL for none registered: the analysis readers ask by node (#10787
+   PR 3a), so a slot can later be the entity's instead of a name's */
+LocalVar *comp_const_at(Compiler *c, int node);
 /* the version of cls's method `name` (singleton when sg) live at p, through
    its ancestors as they stood at p; *out (when asked) the version found. A
    hook (`inherited`, `included`, `method_added`, ...) is asked as the

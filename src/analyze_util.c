@@ -342,6 +342,11 @@ int const_visibility_call_is_builtin(Compiler *c, int call, int k) {
    ..., `class Invoice::Line` in a subclass) is a member the walk does not
    list, and so is one a constant holding a module reaches. Any other node
    is its name's. */
+LocalVar *comp_const_at(Compiler *c, int node) {
+  const char *k = node >= 0 ? const_key_at(c, node) : NULL;
+  return k ? comp_const(c, k) : NULL;
+}
+
 int const_node_class_index(Compiler *c, int id) {
   const NodeTable *nt = c->nt;
   int k = comp_class_index(c, const_key_at(c, id));

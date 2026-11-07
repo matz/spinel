@@ -6499,13 +6499,16 @@ static int infer_class_module_call(Compiler *c, int id, const NodeTable *nt, con
     NodeKind rk = nt_kind(nt, recv);
     if (rk == NK_ConstantReadNode || rk == NK_ConstantPathNode) {
       int ci = const_node_class_index(c, recv);
+      /* a class method `allocate` of the program's own (on the class or
+         module, its singleton class, or a module it extends) is the call's
+         target: the user dispatch types it */
+      if (ci >= 0 && comp_cmethod_in_chain(c, ci, "allocate", NULL) >= 0) return 0;
       /* a module's allocate raises (no instance of a module): boxed, as the
          raise's expression is (#10751) */
       if (ci >= 0 && comp_class_is_module(c, &c->classes[ci])) { *out = TY_POLY; return 1; }
-      /* Exception subclasses have a dedicated storage layout in the common
-         allocator. A user class method of their own still takes precedence. */
-      if (ci >= 0 && (!class_is_exc_subclass(c, ci) ||
-          comp_cmethod_in_chain(c, ci, "allocate", NULL) < 0)) { *out = ty_object(ci); return 1; }
+      /* (Exception subclasses have a dedicated storage layout in the common
+         allocator) */
+      if (ci >= 0) { *out = ty_object(ci); return 1; }
       const char *bcn = const_key_at(c, recv);
       if (bcn && sp_streq(bcn, "String")) { *out = TY_STRING; return 1; }
       if (bcn && sp_streq(bcn, "Array"))  { *out = TY_POLY_ARRAY; return 1; }

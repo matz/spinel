@@ -3408,14 +3408,15 @@ int emit_call_new_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const c
       nt_type(nt, recv) &&
       (nt_kind(nt, recv) == NK_ConstantReadNode || nt_kind(nt, recv) == NK_ConstantPathNode)) {
     int acid = const_node_class_index(c, recv);
+    /* (a class method `allocate` of the program's own is the user dispatch's) */
+    if (acid >= 0 && comp_cmethod_in_chain(c, acid, "allocate", NULL) >= 0) return 0;
     /* allocate is Class's: a module raises NoMethodError (#10751) */
     if (acid >= 0 && comp_class_is_module(c, &c->classes[acid])) {
       const char *mn = class_ruby_name(c, acid); if (!mn) mn = c->classes[acid].name;
       buf_printf(b, "(sp_raise_cls(\"NoMethodError\", sp_stage_recv_msg(\"undefined method 'allocate' for module %s\", sp_box_class((sp_Class){%d}))), sp_box_nil())", mn, acid);
       return 1;
     }
-    if (acid >= 0 && (!class_is_exc_subclass(c, acid) ||
-        comp_cmethod_in_chain(c, acid, "allocate", NULL) < 0)) {
+    if (acid >= 0) {
       emit_obj_alloc_expr(c, acid, b);
       return 1;
     }

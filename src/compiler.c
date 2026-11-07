@@ -5784,6 +5784,8 @@ int allocate_on_own_class(Compiler *c, int id) {
   int cid = s ? s->class_id : -1;
   if (cid < 0 || cid >= c->nclasses || comp_class_is_module(c, &c->classes[cid])) return -1;
   int recv = nt_ref(nt, id, "receiver");
+  /* (a class method `allocate` of the program's own answers the call) */
+  if (comp_cmethod_in_chain(c, cid, "allocate", NULL) >= 0) return -1;
   if (s->is_cmethod) return (recv < 0 || nt_kind(nt, recv) == NK_SelfNode) ? cid : -1;
   return self_class_base_ci(c, recv);
 }

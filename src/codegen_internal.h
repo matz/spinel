@@ -1840,6 +1840,10 @@ int class_is_syserr(Compiler *c, int ci);          /* codegen_call.c */
 int class_is_sysexit(Compiler *c, int ci);         /* codegen_call.c */
 int class_takes_exc_attrs(Compiler *c, int ci);    /* codegen_call.c */
 void emit_exc_attrs_call(Compiler *c, int id, const char *self_text, int argc, const int *argv, Buf *b);
+void emit_exc_args_super(Compiler *c, int id, const char *self_text, int attrs, int argc, const int *argv, Buf *b);
+int exc_init_takes_own_args(const char *name);
+int exc_reopen_super_takes_attrs(const char *name);
+void emit_exc_new_runtime_args(Compiler *c, int id, int ci, const char *builtin, int argc, const int *argv, Buf *b);
 void emit_exc_attrs_new(Compiler *c, int id, int ci, int argc, const int *argv, Buf *b);
 int emit_exc_extra_args(Compiler *c, int id, int ci, int argc, const int *argv, Buf *b);
 void emit_sysexit_new(Compiler *c, int id, int ci, int argc, const int *argv, Buf *b);

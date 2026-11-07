@@ -5379,23 +5379,61 @@ static void emit_exc_args_gather(Compiler *c, int id, int argc, const int *argv,
   buf_printf(g_pre, "sp_RbVal _t%d = %s; SP_GC_ROOT_RBVAL(_t%d);\n", *tk, kb.p ? kb.p : "sp_box_nil()", *tk);
   free(kb.p);
 }
-/* sp_exc_attrs_super on the arguments of a `.new` or a `super`. */
-void emit_exc_attrs_call(Compiler *c, int id, const char *self_text, int argc, const int *argv, Buf *b) {
+/* sp_exc_attrs_super on the arguments of a `.new` or a `super`. With attrs
+   the initialize is KeyError's, NameError's or their like, which take key:
+   and receiver:. Without, it is Exception#initialize, which reads keywords
+   as one more argument, their Hash (an empty one as none). */
+void emit_exc_args_super(Compiler *c, int id, const char *self_text, int attrs, int argc, const int *argv, Buf *b) {
   int ta, tk;
   emit_exc_args_gather(c, id, argc, argv, &ta, &tk);
-  buf_printf(b, "sp_exc_attrs_super(%s, _t%d->len, _t%d->data, _t%d)", self_text, ta, ta, tk);
+  if (attrs) { buf_printf(b, "sp_exc_attrs_super(%s, _t%d->len, _t%d->data, _t%d)", self_text, ta, ta, tk); return; }
+  buf_printf(b, "({ if (_t%d.tag == SP_TAG_OBJ && sp_poly_keys(_t%d)->len > 0) sp_PolyArray_push(_t%d, _t%d); "
+                "sp_exc_attrs_super(%s, _t%d->len, _t%d->data, sp_box_nil()); })",
+             tk, tk, ta, tk, self_text, ta, ta);
 }
-/* `Cls.new(...)` on such a class, with no initialize of the program's. */
-void emit_exc_attrs_new(Compiler *c, int id, int ci, int argc, const int *argv, Buf *b) {
-  int te = ++g_tmp;
+void emit_exc_attrs_call(Compiler *c, int id, const char *self_text, int argc, const int *argv, Buf *b) {
+  emit_exc_args_super(c, id, self_text, 1, argc, argv, b);
+}
+/* Is `name` a builtin exception whose initialize takes arguments of its own
+   (SystemExit's status, SignalException's signal, ...), not a message alone? */
+int exc_init_takes_own_args(const char *name) {
+  static const char *const other[] = { "SystemExit", "UncaughtThrowError", "SignalException",
+                                       "Interrupt", "NoMatchingPatternKeyError", NULL };
+  for (int i = 0; name && other[i]; i++) if (sp_streq(name, other[i])) return 1;
+  return 0;
+}
+/* Does a `super` from the reopening of the builtin exception `name` reach
+   an initialize that takes keywords (receiver:)? NoMethodError's does: its
+   superclass is NameError. Those of KeyError, NameError and FrozenError
+   reach Exception#initialize, which reads one message. */
+int exc_reopen_super_takes_attrs(const char *name) {
+  return name && sp_streq(name, "NoMethodError");
+}
+static int exc_attrs_family_name(const char *cn) {
+  return sp_streq(cn, "KeyError") || sp_streq(cn, "NameError") ||
+         sp_streq(cn, "NoMethodError") || sp_streq(cn, "FrozenError");
+}
+/* `Cls.new(...)` whose arguments the runtime reads (sp_exc_attrs_super): on
+   the program's class ci with no initialize of its own, or (ci < 0) on the
+   builtin `builtin`. A builtin of the KeyError family built so recorded no
+   key or receiver unless the keywords give one. */
+void emit_exc_new_runtime_args(Compiler *c, int id, int ci, const char *builtin, int argc, const int *argv, Buf *b) {
+  int te = ++g_tmp, attrs;
   Buf alloc; memset(&alloc, 0, sizeof alloc);
   const char *dim = "sp_Exception";
-  emit_sysexit_alloc(c, ci, &dim, &alloc);
+  if (ci >= 0) { emit_sysexit_alloc(c, ci, &dim, &alloc); attrs = class_takes_exc_attrs(c, ci); }
+  else { buf_printf(&alloc, "sp_exc_new(\"%s\", (&(\"\\xff\")[1]))", builtin); attrs = exc_attrs_family_name(builtin); }
   buf_printf(b, "({ %s *_t%d = %s; SP_GC_ROOT(_t%d); ", dim, te, alloc.p, te);
   free(alloc.p);
+  if (ci < 0 && attrs) buf_printf(b, "_t%d->has_recv = 0; ", te);
+  if (ci < 0 && sp_streq(builtin, "KeyError")) buf_printf(b, "_t%d->has_key = 0; ", te);
   char self_text[64]; snprintf(self_text, sizeof self_text, "(sp_Exception *)_t%d", te);
-  emit_exc_attrs_call(c, id, self_text, argc, argv, b);
+  buf_puts(b, "(void)");
+  emit_exc_args_super(c, id, self_text, attrs, argc, argv, b);
   buf_printf(b, "; _t%d; })", te);
+}
+void emit_exc_attrs_new(Compiler *c, int id, int ci, int argc, const int *argv, Buf *b) {
+  emit_exc_new_runtime_args(c, id, ci, NULL, argc, argv, b);
 }
 /* `Cls.new(a, b)` on a class below an exception whose initialize takes one
    message: the arguments run, and the call raises as CRuby's does. With only
@@ -5407,24 +5445,10 @@ int emit_exc_extra_args(Compiler *c, int id, int ci, int argc, const int *argv, 
   int kwh = nt_argv_kwh(c->nt, argv, argc);
   int spreads = kwh >= 0 && kwh_only_spreads(c->nt, kwh);
   if (class_is_syserr(c, ci) || (!spreads && (argc < 2 || nt_argv_has_splat(c->nt, argv, argc)))) return 0;
-  /* the builtins whose initialize takes other arguments of its own */
-  static const char *const other[] = { "SystemExit", "UncaughtThrowError", "SignalException",
-                                       "Interrupt", "NoMatchingPatternKeyError", NULL };
-  const char *par = exc_builtin_parent(c, ci);
-  for (int i = 0; other[i]; i++) if (sp_streq(par, other[i])) return 0;
+  if (exc_init_takes_own_args(exc_builtin_parent(c, ci))) return 0;
+  if (spreads) { emit_exc_new_runtime_args(c, id, ci, NULL, argc, argv, b); return 1; }
   int ta, tk;
   emit_exc_args_gather(c, id, argc, argv, &ta, &tk);
-  if (spreads) {
-    int te = ++g_tmp;
-    Buf alloc; memset(&alloc, 0, sizeof alloc);
-    const char *dim = "sp_Exception";
-    emit_sysexit_alloc(c, ci, &dim, &alloc);
-    buf_printf(b, "({ %s *_t%d = %s; SP_GC_ROOT(_t%d); if (_t%d.tag == SP_TAG_OBJ && sp_poly_keys(_t%d)->len > 0) sp_PolyArray_push(_t%d, _t%d); "
-                  "sp_exc_attrs_super((sp_Exception *)_t%d, _t%d->len, _t%d->data, sp_box_nil()); _t%d; })",
-               dim, te, alloc.p, te, tk, tk, ta, tk, te, ta, ta, te);
-    free(alloc.p);
-    return 1;
-  }
   buf_printf(b, "({ sp_raise_cls(\"ArgumentError\", \"wrong number of arguments (given %d, expected 0..1)\"); ", argc);
   if (c->classes[ci].nivars > 0) buf_printf(b, "(sp_%s *)NULL; })", c->classes[ci].c_name);
   else buf_puts(b, "(sp_Exception *)NULL; })");
@@ -14957,7 +14981,12 @@ int emit_try_convert_boxed(Compiler *c, const char *cname, int arg, Buf *b) {
    class method both build with it. */
 void emit_exc_new_no_init(Compiler *c, int id, int ci, int argc, const int *argv, Buf *b) {
   if (class_is_sysexit(c, ci)) { emit_sysexit_new(c, id, ci, argc, argv, b); return; }
-  if (class_takes_exc_attrs(c, ci) && (argc > 1 || nt_argv_kwh(c->nt, argv, argc) >= 0 || nt_argv_has_splat(c->nt, argv, argc))) {
+  /* a splat's count is the run time's: sp_exc_attrs_super reads the
+     gathered arguments as the class's initialize does, and a class of none
+     of its families as Exception#initialize alone (one message at most) */
+  int splat = nt_argv_has_splat(c->nt, argv, argc) && !class_is_syserr(c, ci) &&
+              !exc_init_takes_own_args(exc_builtin_parent(c, ci));
+  if (splat || (class_takes_exc_attrs(c, ci) && (argc > 1 || nt_argv_kwh(c->nt, argv, argc) >= 0))) {
     emit_exc_attrs_new(c, id, ci, argc, argv, b);
     return;
   }
@@ -15342,6 +15371,13 @@ static int emit_new_call_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
          Errno::ENOENT.new("x") is "No such file or directory - x", and
          SystemCallError.new("x", 2) an Errno::ENOENT */
       if (emit_syserr_family_new(c, id, cn, argc, argv, b)) { *out = 1; return 1; }
+      /* `.new(*a)`: how many arguments the splat gives is the run time's,
+         which reads them as initialize does. The classes whose initialize
+         takes arguments of its own keep their arms below. */
+      if (nt_argv_has_splat(nt, argv, argc) && !exc_init_takes_own_args(cn)) {
+        emit_exc_new_runtime_args(c, id, -1, cn, argc, argv, b);
+        { *out = 1; return 1; }
+      }
       /* SignalException.new(sig) / Interrupt.new(msg?): the message is the
          SIG-name and #signo is carried (#2762) */
       if (sp_streq(cn, "SignalException")) {

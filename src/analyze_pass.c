@@ -13031,11 +13031,16 @@ static void bs_splat(Compiler *c, int x, int np, TyKind *e, char *flags, int *nm
    elements. */
 static int bs_object_to_ary(Compiler *c, TyKind t) {
   if (!ty_is_object(t)) return 0;
-  int oc = ty_object_class(t);
-  for (int k = 0; oc >= 0 && k < c->nclasses; k++) {
-    if (!is_descendant(c, k, oc)) continue;
-    int mi = comp_implicit_to_ary_mi(c, k);
-    if (mi >= 0 && c->scopes[mi].nparams == 0) return 1;
+  int oc = ty_object_class(t), np = 0;
+  /* the classes codegen converts (cplan_boxed_to_ary_classes): a program
+     to_ary of no parameter on a class that can have instances (the early
+     census; `instantiated` is unset while the fixpoint runs) */
+  const PolyCand *pc = comp_poly_candidates(c, "to_ary", &np);
+  for (int i = 0; i < np; i++) {
+    int k = pc[i].cls, mi = comp_implicit_to_ary_mi(c, k);
+    if (pc[i].native || mi < 0 || mi != pc[i].mi || c->scopes[mi].nparams != 0) continue;
+    if (!(c->classes[k].ctor_reachable || c->classes[k].instantiated)) continue;
+    if (k == oc || is_descendant(c, k, oc)) return 1;
   }
   return 0;
 }

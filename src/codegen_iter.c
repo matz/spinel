@@ -2908,6 +2908,7 @@ void emit_block_binds(Compiler *c, int blk, const int *yargs, int yc,
     /* a lone value converts as the parameters' implied to_ary of it */
     if (boxed_spread) {
       int e0 = ++g_tmp;
+      size_t at = g_pre->len;
       emit_indent(g_pre, g_indent);
       buf_printf(g_pre, "sp_RbVal _t%d = sp_PolyArray_get(_t%d, 0); SP_GC_ROOT_RBVAL(_t%d);\n", e0, splat_tmp, e0);
       int e1 = emit_boxed_to_ary(c, nt_ref(nt, blk, "parameters"), NTI_YIELDED, e0, g_pre, g_indent);
@@ -2915,6 +2916,7 @@ void emit_block_binds(Compiler *c, int blk, const int *yargs, int yc,
         emit_indent(g_pre, g_indent);
         buf_printf(g_pre, "sp_PolyArray_set(_t%d, 0, _t%d);\n", splat_tmp, e1);
       }
+      else buf_erase(g_pre, at, g_pre->len - at);   /* no class converts: take the read back */
     }
     if (autosplat) {
       emit_indent(g_pre, g_indent);

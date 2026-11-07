@@ -1395,10 +1395,10 @@ spinel: 1 refusal, nothing written
 spinel: test/reject/object_receiver_include_alias.rb:8: Object.include(...) is not supported by AOT compilation: the class graph, ancestor chain, and method/ivar layout are baked at compile time, so a class cannot be restructured through an explicit receiver. Move the `include` inside `class Object ... end` (see docs/limitations.md)
 spinel: 1 refusal, nothing written
 == test/reject/own_include_class_method_super.rb [default] rc=1
-spinel: test/reject/own_include_class_method_super.rb:15: a class method `include` of the program that calls `super` is not supported by AOT compilation: the builtin `include` would mix the module in as the program runs, and a class's ancestors are fixed at compile time. Mix the module in with the builtin form, or define the method without it (see docs/limitations.md)
+spinel: test/reject/own_include_class_method_super.rb:15: a class method `include` of the program that may call super or a builtin mixin is not supported by AOT compilation: the builtin mixin would add a module as the program runs, and a class's ancestors are fixed at compile time. Mix the module in with the builtin form, or define the method without it (see docs/limitations.md)
 spinel: 1 refusal, nothing written
 == test/reject/own_include_class_method_super.rb [promote] rc=1
-spinel: test/reject/own_include_class_method_super.rb:15: a class method `include` of the program that calls `super` is not supported by AOT compilation: the builtin `include` would mix the module in as the program runs, and a class's ancestors are fixed at compile time. Mix the module in with the builtin form, or define the method without it (see docs/limitations.md)
+spinel: test/reject/own_include_class_method_super.rb:15: a class method `include` of the program that may call super or a builtin mixin is not supported by AOT compilation: the builtin mixin would add a module as the program runs, and a class's ancestors are fixed at compile time. Mix the module in with the builtin form, or define the method without it (see docs/limitations.md)
 spinel: 1 refusal, nothing written
 == test/reject/pattern_value_const_range.rb [default] rc=1
 spinel: test/reject/pattern_value_const_range.rb:7: unsupported value constant pattern other than an Integer, Float, String or Symbol: node N (ConstantPathNode)

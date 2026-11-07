@@ -19709,24 +19709,68 @@ static int emit_multi_write_stmt(Compiler *c, int id, Buf *b, int indent, const 
   return 0;
 }
 
+/* Does definition dn (a def, or a define_method call with its block) hold
+   something that may reach a builtin mixin: a super, a call of include,
+   prepend, extend or append_features, a bound Module method (instance_method,
+   bind_call), an alias? A nested def or class body is its own. */
+static int own_mixin_body_reaches_builtin(Compiler *c, int n) {
+  const NodeTable *nt = c->nt;
+  if (n < 0) return 0;
+  NodeKind k = nt_kind(nt, n);
+  if (k == NK_SuperNode || k == NK_ForwardingSuperNode || k == NK_AliasMethodNode) return 1;
+  if (k == NK_CallNode) {
+    static const char *const names[] = { "include", "prepend", "extend", "append_features", "prepend_features",
+      "extend_object", "instance_method", "bind_call", "bind", "alias_method", "send", "__send__",
+      "public_send", "method", NULL };
+    const char *nm = nt_str(nt, n, "name");
+    for (int i = 0; nm && names[i]; i++) if (sp_streq(nm, names[i])) return 1;
+    /* a singleton alias of a builtin mixin (`alias orig_include include`
+       in `class << self`), called by its new name */
+    for (int ci = 0; nm && ci < c->nclasses; ci++) {
+      const ClassInfo *ki = &c->classes[ci];
+      for (int a = 0; a < ki->naliases; a++)
+        if (ki->alias_sg && ki->alias_sg[a] && sp_streq(ki->alias_new[a], nm) && is_mixin_call(ki->alias_old[a])) return 1;
+    }
+  }
+  int nr = nt_num_refs(nt, n), na = nt_num_arrs(nt, n);
+  for (int i = 0; i < nr; i++) {
+    int ch = nt_ref_at(nt, n, i);
+    NodeKind ck = ch >= 0 ? nt_kind(nt, ch) : NK_NilNode;
+    if (ck == NK_DefNode || ck == NK_ClassNode || ck == NK_ModuleNode || ck == NK_SingletonClassNode) continue;
+    if (own_mixin_body_reaches_builtin(c, ch)) return 1;
+  }
+  for (int i = 0; i < na; i++) {
+    int an = 0; const int *av = nt_arr_at(nt, n, i, &an);
+    for (int j = 0; j < an; j++) {
+      NodeKind ck = nt_kind(nt, av[j]);
+      if (ck == NK_DefNode || ck == NK_ClassNode || ck == NK_ModuleNode || ck == NK_SingletonClassNode) continue;
+      if (own_mixin_body_reaches_builtin(c, av[j])) return 1;
+    }
+  }
+  return 0;
+}
+
 /* A CallNode statement: the statement-level fast paths ahead of emit_expr (emit_stmt_inner's arms, in their order) */
 static int emit_call_stmt(Compiler *c, int id, Buf *b, int indent, const NodeTable *nt, const char *ty) {
   refuse_prepass_at_emit(c, id);
   if (!(sp_streq(ty, "CallNode"))) return 0;
   /* `include M` that runs the class's own `def self.include` (the load
-     record marks it): a super there would mix the module in as the call
-     runs, and the class's ancestors are fixed at compile time */
-  { int own = nt_int(nt, id, "mixin_own_call", 0) - 1;
-    const char *mnm = own >= 0 ? nt_str(nt, id, "name") : NULL;
-    int si = mnm && own < c->nclasses ? comp_cmethod_in_chain(c, own, mnm, NULL) : -1;
-    int dn = si >= 0 ? c->scopes[si].def_node : -1, cond = dn >= 0 && nt_int(nt, dn, "cond_dispatch", 0);
-    if (si >= 0 && (cond || scope_calls_super(c, si))) {
-      char msg[512];
+     record marks it, with the definition it finds there): a method that
+     may reach a builtin mixin itself (a super, another mixin call, a bound
+     Module method, a condition's untaken branch, an alias of the builtin)
+     would mix a module in as the program runs, and a class's ancestors are
+     fixed at compile time */
+  { int own = (int)nt_int(nt, id, "mixin_own_call", 0);
+    const char *mnm = own > 0 ? nt_str(nt, id, "name") : NULL;
+    int dn = own - 1;
+    const char *why = !mnm ? NULL : nt_int(nt, dn, "cond_dispatch", 0) ? "a condition defines"
+                    : own_mixin_body_reaches_builtin(c, dn) ? "may call super or a builtin mixin" : NULL;
+    if (why) {
+      char msg[600];
       snprintf(msg, sizeof msg, "a class method `%s` of the program that %s is not supported by AOT "
-               "compilation: the builtin `%s` would mix the module in as the program runs, and a class's "
-               "ancestors are fixed at compile time. Mix the module in with the builtin form, or define the "
-               "method without it (see docs/limitations.md)", mnm,
-               cond ? "a condition defines" : "calls `super`", mnm);
+               "compilation: the builtin mixin would add a module as the program runs, and a class's "
+               "ancestors are fixed at compile time. Mix the module in with the builtin form, or define "
+               "the method without it (see docs/limitations.md)", mnm, why);
       unsupported_feature(c, id, msg);
     }
   }

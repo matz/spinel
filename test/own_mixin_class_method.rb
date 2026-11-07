@@ -86,3 +86,24 @@ end
 class P10 < Parent
   include Watched
 end
+
+# a singleton mixin is the singleton's builtin one, not the class's own extend
+module Sg
+  def sg = :sg
+end
+class P11
+  def self.extend(*k) = puts("own extend")
+  singleton_class.include Sg
+end
+p P11.respond_to?(:sg)
+
+# the definition in effect at the statement answers it
+module N
+  def ho = :n
+end
+class P12
+  def self.include(*k) = puts("first #{k.inspect}")
+  include M
+  def self.include(*k) = (puts("second"); super)
+end
+p P12.new.respond_to?(:hi)

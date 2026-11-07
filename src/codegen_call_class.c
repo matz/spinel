@@ -1301,10 +1301,9 @@ int emit_call_reflection_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
         int rcid = rcv_nm ? comp_class_index(c, rcv_nm) : -1;
         const char *qn = rcid >= 0 ? class_ruby_name(c, rcid) : NULL;
         if (rcid >= 0 && !qn) qn = c->classes[rcid].name;
-        /* a builtin class or module (Integer, Comparable) qualifies as well;
-           Object and its kin do not */
+        /* a builtin class or module (Integer, Comparable, Kernel) qualifies
+           as well; Object does not */
         if (rcid < 0 && rcv_nm && builtin_core_class_slot(rcv_nm) != CORE_OBJECT &&
-            !sp_streq(rcv_nm, "Kernel") && !sp_streq(rcv_nm, "BasicObject") &&
             (is_builtin_class_name(rcv_nm) || is_builtin_module_name(rcv_nm))) qn = rcv_nm;
         /* a reopened Object is a class of the program, but its constants are
            the top-level ones, named unqualified (#9468) */

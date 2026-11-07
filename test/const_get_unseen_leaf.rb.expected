@@ -7,3 +7,9 @@
 [NameError, "uninitialized constant Integer::Y"]
 3
 3
+[NameError, "uninitialized constant Kernel::Zz"]
+[NameError, "uninitialized constant BasicObject::Zz"]
+[NameError, "uninitialized constant Zz"]
+5
+5
+5

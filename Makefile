@@ -58,7 +58,7 @@ RBS_SRC      = $(wildcard $(RBS_DIR)/src/*.c) $(wildcard $(RBS_DIR)/src/util/*.c
 RBS_OBJ      = $(patsubst $(RBS_DIR)/src/%.c,build/rbs/%.o,$(RBS_SRC))
 RBS_LIB      = build/librbs.a
 
-.PHONY: ty-setter-check imemo-shadow-test imemo-shadow-corpus int-min-test all hooks share-strings-test line-map-check unit-stability-test incremental-test incremental-bench gate-tool-test regexp wasm-rt wasm-test rbs_extract rbs-test rbs-seed-test inline-rbs-test rbs-seed-extractor cident plan-check-test timing-test shadow-check signal-default-test source-marker-test magic-comment-test repr-check-test run-scale-test gate-costs arm-check-test traits-check-test poly-cold-test bop-arity-check-test bop-callbacks-test bop-share-check-test share-spec-check bop-callbacks-check arity-spec-check value-edges-check value-edges-regen implied-calls-check implied-calls-regen implied-calls-test lower-rows-check node-kinds-check node-kinds-regen package-facts-check package-facts-regen value-pos-test re-lit-test reject-test cli-opts-test link-names-test reach-test defer-refusals-test check-stores-test backtrace-test gc-minor-test thread-puts-test ext-test ext-cruby-test alloc-report-test rubyspec rubyspec-gate spin-check \ repr-diff c-costs alloc-diff \
+.PHONY: ty-setter-check imemo-shadow-test imemo-shadow-corpus int-min-test all hooks share-strings-test line-map-check unit-stability-test incremental-test incremental-bench gate-tool-test regexp wasm-rt wasm-test rbs_extract rbs-test rbs-seed-test inline-rbs-test rbs-seed-extractor cident plan-check-test method-table-check timing-test shadow-check signal-default-test source-marker-test magic-comment-test repr-check-test run-scale-test gate-costs arm-check-test traits-check-test poly-cold-test bop-arity-check-test bop-callbacks-test bop-share-check-test share-spec-check bop-callbacks-check arity-spec-check value-edges-check value-edges-regen implied-calls-check implied-calls-regen implied-calls-test lower-rows-check node-kinds-check node-kinds-regen package-facts-check package-facts-regen value-pos-test re-lit-test reject-test cli-opts-test link-names-test reach-test defer-refusals-test check-stores-test backtrace-test gc-minor-test thread-puts-test ext-test ext-cruby-test alloc-report-test rubyspec rubyspec-gate spin-check \ repr-diff c-costs alloc-diff \
         test test-run clean-test-results regen-rbs-expected \
         regen-expected regen-expected-err bench optcarrot gate gate-full check gate-legs gate-test gate-bench gc-phases-test gc-stress-test gc-str-major-test gc-str-budget-test threaded-render-test gc-locality-test test-corpus test-corpus-summary \
         gate-optcarrot rubyboy gate-rubyboy scale-test clean install uninstall deps tools
@@ -5670,6 +5670,11 @@ shadow-check: $(SPINEL)
 
 plan-check-test: $(SPINEL)
 	@tools/plan_check.sh
+
+# #10866 step 1: the reads of the method tables made outside call_target, over
+# the corpus (not part of `make gate`)
+method-table-check: $(SPINEL)
+	@tools/method_table_check.sh
 
 repr-check-test: $(SPINEL)
 	@tools/repr_check.sh

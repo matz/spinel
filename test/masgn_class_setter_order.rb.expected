@@ -22,3 +22,13 @@ box[:k]=:q
 box[1]=:r
 K.b=1
 {z: 2}
+K.b=1
+o.b=3
+K.b=1
+o.b=3
+K.b=1
+box[:k]=2
+K.b=1
+o.b=2
+K.b=1
+private c=2

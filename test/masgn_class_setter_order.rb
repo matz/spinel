@@ -61,3 +61,24 @@ K.b, box[key], box[1] = :p, :q, :r
 h = {}
 K.b, h[:z] = 1, 2
 p h
+
+# a later target's receiver and key are read before the values, as CRuby
+# reads them, also when another target or a lambda writes them
+o = O.new("o")
+K.b, o, o.b = 1, O.new("p"), 3
+o = O.new("o")
+o, K.b, o.b = O.new("q"), 1, 3
+key = :k
+K.b, key, box[key] = 1, :n, 2
+o = O.new("o")
+f = -> { o = O.new("r"); 1 }
+K.b, o.b = f.(), 2
+
+class O
+  def run
+    K.b, self.c = 1, 2
+    nil
+  end
+  private def c=(v); puts "private c=#{v.inspect}"; end
+end
+O.new("s").run

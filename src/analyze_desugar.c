@@ -10971,13 +10971,14 @@ int desugar_raise_own_exception(Compiler *c) {
   int changed = 0;
   static const char *const calls_of[] = { "raise", "fail", NULL };
   int *calls, ncalls = an_calls_named_any(c, calls_of, nt->count, &calls);
+  int owned[2] = { -1, -1 };   /* does the program define raise / fail */
   for (int q = 0; q < ncalls; q++) {
     int id = calls[q];
     if (id >= c->node_cap || nt_kind(nt, id) != NK_CallNode || nt_ref(nt, id, "receiver") >= 0 ||
         nt_ref(nt, id, "block") >= 0)
       continue;
     const char *nm = nt_str(nt, id, "name");
-    if (!nm || raise_name_program_defined(c, nm)) continue;
+    if (!nm) continue;
     int args = nt_ref(nt, id, "arguments"), ac = 0;
     const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &ac) : NULL;
     if (ac < 1 || nt_argv_has(nt, av, ac, NT_ARG_SPLAT | NT_ARG_BLOCK | NT_ARG_FORWARDING)) continue;
@@ -10985,6 +10986,10 @@ int desugar_raise_own_exception(Compiler *c) {
     if (npos < 1 || npos > 2) continue;
     NodeKind k0 = nt_kind(nt, av[0]);
     if (k0 != NK_ConstantReadNode && k0 != NK_ConstantPathNode) continue;
+    /* (asked once per name and pass: the scan reads every scope) */
+    int fi = nm[0] == 'f';
+    if (owned[fi] < 0) owned[fi] = raise_name_program_defined(c, nm);
+    if (owned[fi]) continue;
     int ci = class_recv_static_ci(c, av[0]), dc = -1;
     int mi = ci >= 0 ? call_target(c, -1, ci, "exception", CT_CMETHOD, &dc) : -1;
     /* the method must be there wherever the raise runs: a raise that may

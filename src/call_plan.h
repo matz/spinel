@@ -172,7 +172,8 @@ int call_node_names(Compiler *c, int id, const char *out[2]);
    the class whose table holds the method, written only where one is found,
    so a caller that presets it finds it as it was (not so for
    cplan_super_target and cplan_super_chain_mi, which set *ml whole). from:
-   the class a super's lookup started from, written by those two only. Nothing reads kind and why yet. */
+   the class a super's lookup started from, written by those two only. Only
+   cplan_resolve_super reads kind, and nothing reads why yet. */
 typedef enum { ML_METHOD, ML_ENTRY, ML_NONE, ML_TABLE } MlKind;
 /* why the table answers: no window, or an unplaced capture (UNPLACED); the
    chain moves inside the window (MOVES); two or more versions, or a window

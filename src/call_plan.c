@@ -179,11 +179,21 @@ static int cplan_root_under_builtin(Compiler *c, int top) {
   return !(nm && sp_streq(nm, "Object"));
 }
 /* A super's parent-chain target, past inherited copies of the same
-   extended definition. Shared by resolution, inference, inline splicing and the miss check. */
+   extended definition. Shared by resolution, inference, inline splicing and
+   the miss check. Every step is call_target's, with CT_REACH: it skips the
+   ask of the calls' names (ct_calls), so call_node_names, which runs
+   comp_super_name for this very name, is not entered again, and it asks the
+   record, a shadow's name too. ml->from is the par asked, though the
+   extend-copy skip and the Object start look further; ml->def_class is the
+   class that answered, -1 on a miss. */
 int cplan_super_chain_mi(Compiler *c, int id, const Scope *s, int par, const char *name, MethodLookup *ml) {
+  MethodLookup own = { .def_class = -1 };
+  if (!ml) ml = &own;
   const int start = par;
-  int mi = par < 0 ? -1 : s->is_cmethod ? comp_cmethod_in_chain(c, par, name, NULL)
-                                       : comp_method_in_chain(c, par, name, NULL);
+  unsigned side = CT_REACH | (s->is_cmethod ? CT_CMETHOD : 0);
+  int mi = -1;
+  *ml = (MethodLookup){ .kind = ML_NONE, .def_class = -1 };
+  if (par >= 0) mi = call_target(c, id, par, name, side, ml);
   /* An extended module's method is one entry in the class's ancestry, and
      `super` inside it goes past the module. Copied into each class that
      inherits the extend, the parent's copy is that same definition, not a
@@ -191,7 +201,8 @@ int cplan_super_chain_mi(Compiler *c, int id, const Scope *s, int par, const cha
      called on a Thor subclass reaches Module#method_added). */
   while (s->is_cmethod && mi >= 0 && c->scopes[mi].def_node == s->def_node && s->def_node >= 0) {
     par = c->classes[c->scopes[mi].class_id].parent;
-    mi = par >= 0 ? comp_cmethod_in_chain(c, par, name, NULL) : -1;
+    mi = par >= 0 ? call_target(c, id, par, name, side, ml) : -1;
+    if (par < 0) *ml = (MethodLookup){ .kind = ML_NONE, .def_class = -1 };
   }
   /* (a superclass chain ends in Object: a reopening of it is the last
      class the super looks in) */
@@ -201,38 +212,42 @@ int cplan_super_chain_mi(Compiler *c, int id, const Scope *s, int par, const cha
     int obj = comp_super_parent(c, top, 0);
     /* (not under BasicObject: Object is not in that chain; not under another
        builtin: its methods come first, cplan_root_under_builtin) */
-    if (obj >= 0 && obj != top && !class_is_blank_slate(c, top) && !cplan_root_under_builtin(c, top) &&
-        comp_method_in_chain(c, obj, name, NULL) >= 0) { par = obj; mi = 1; }
+    if (obj >= 0 && obj != top && !class_is_blank_slate(c, top) && !cplan_root_under_builtin(c, top))
+      mi = call_target(c, id, obj, name, CT_REACH, ml);
   }
-  mi = mi >= 0 ? call_target(c, id, par, name, CT_REACH | (s->is_cmethod ? CT_CMETHOD : 0), ml) : -1;
-  if (ml) ml->from = start;
+  if (mi < 0) ml->def_class = -1;
+  ml->from = start;
   return mi;
 }
 
 /* The method `super` in method scope s reaches, for call id (-1: a super
-   no call stands for, an open history's entry's else arm), and in ml->from the
-   class it is found from: the next method of s's prepend chain
+   no call stands for, an open history's entry's else arm), and in ml->from
+   the class it is found from: the next method of s's prepend chain
    (comp_super_shadow), else the parent chain's (cplan_super_chain_mi); -1
    for none; ml->from is s's class when the shadow is found, -1 when not.
    A super of a call whose next method is one of a mixin's copies of a
    module's versions, a layer below a later one, reaches the entry over
-   them once the entries are made (super_layer_entry). */
+   them once the entries are made (super_layer_entry). ml is call_target's
+   answer for the lookup (NULL: the scope only). */
 static int super_layer_entry(Compiler *c, int id, int t);
 int cplan_super_target(Compiler *c, int id, Scope *s0, MethodLookup *ml) {
-  MethodLookup own = { .def_class = -1 };
-  if (!ml) ml = &own;
   const Scope *s = comp_super_site(c, s0);
   const char *shadow = comp_super_shadow(c, s);
+  MethodLookup own = { .def_class = -1 };
+  if (!ml) ml = &own;
   if (shadow) {
-    ml->from = -1;
-    int mi = s->is_cmethod ? comp_cmethod_in_class(c, s->class_id, shadow) : comp_method_in_class(c, s->class_id, shadow);
-    if (mi >= 0) ml->from = s->class_id;
+    int mi = call_target(c, id, s->class_id, shadow, CT_OWN | CT_REACH | (s->is_cmethod ? CT_CMETHOD : 0), ml);
+    ml->from = mi >= 0 ? s->class_id : -1;
     int e = mi >= 0 && id >= 0 && c->ver_built ? super_layer_entry(c, id, mi) : -1;
+    if (e >= 0) { ml->kind = ML_ENTRY; ml->why = 0; }
     return e >= 0 ? e : mi;
   }
   int par = comp_super_parent(c, s->class_id, s->is_cmethod);
   const char *uname = comp_super_name(c, par, comp_scope_def_name(c, s), s->is_cmethod);
-  if (!uname) { ml->from = par; return -1; }
+  if (!uname) {
+    *ml = (MethodLookup){ .kind = ML_NONE, .def_class = -1, .from = par };
+    return -1;
+  }
   return cplan_super_chain_mi(c, id, s, par, uname, ml);
 }
 
@@ -240,14 +255,13 @@ static void cplan_resolve_super(Compiler *c, int id, CallPlan *p) {
   Scope *s = comp_scope_of(c, id);
   if (!s || s->class_id < 0 || !s->name) return;
   MethodLookup ml = { .def_class = -1 };
-  int par, mi = cplan_super_target(c, id, s, &ml);
-  par = ml.from;
-  if (mi >= 0) { cplan_set(p, mi, par, UC_SUPER, CP_DIRECT); return; }
+  int mi = cplan_super_target(c, id, s, &ml);
+  if (mi >= 0) { cplan_set(p, mi, ml.from, UC_SUPER, CP_DIRECT); return; }
   const Scope *st = comp_super_site(c, s);
-  const char *uname = comp_super_shadow(c, st) ? NULL : comp_super_name(c, par, comp_scope_def_name(c, st), st->is_cmethod);
+  const char *uname = comp_super_shadow(c, st) ? NULL : comp_super_name(c, ml.from, comp_scope_def_name(c, st), st->is_cmethod);
   if (uname && s->is_cmethod &&
            builtin_super_cmethod_known(c->classes[s->class_id].name, uname) &&
-           (par < 0 || comp_cmethod_in_chain(c, par, uname, NULL) < 0)) {
+           ml.kind == ML_NONE) {
     cplan_set(p, -1, s->class_id, UC_SUPER, CP_REFUSE);
     p->rkind = CR_FEATURE; p->rfrom = CRF_LIMIT;
     p->msg = "super to an inherited builtin singleton method is not supported; see docs/limitations.md";

@@ -2930,6 +2930,24 @@ static void cf_construct(CF *f, int v, int x, const int *argv, int argc, int blk
   if (blk >= 0 && nt_kind(nt, blk) == NK_BlockNode) cf_all_block_params(f, blk);
 }
 
+/* `self.new` (or `allocate`) at v in a class method of class cid: an
+   instance of cid or of a class below it, the one the method runs for, each
+   built as `X.new` builds it. A bare super that builds so (zsuper_of, its
+   method) hands initialize that method's parameters, by position */
+static void cf_self_new(CF *f, int v, int cid, const int *argv, int argc, int blk, const char *nm, int zsuper_of) {
+  Compiler *c = f->c;
+  int dsi = f->desc[cid];   /* (by index: a construction adds sets, and the pool moves) */
+  cf_add_set(f, v, dsi);
+  if (f->pool[dsi].all) { for (int i = 0; i < argc; i++) cf_all(f, argv[i]); return; }
+  for (int i = cls_set_next(&f->pool[dsi], -1); i >= 0; i = cls_set_next(&f->pool[dsi], i)) {
+    cf_construct(f, -1, i, argv, argc, blk, nm);
+    int init = zsuper_of >= 0 ? comp_method_in_chain(c, i, "initialize", NULL) : -1;
+    if (init < 0) continue;
+    const Scope *s = &c->scopes[zsuper_of], *ts = &c->scopes[init];
+    for (int p = 0; p < s->nparams && p < ts->nparams; p++) cf_flow(f, cf_param_el(f, zsuper_of, p), cf_param_el(f, init, p));
+  }
+}
+
 /* `d.with(k: v)` on a Data x: a new instance, initialized as `new`
    initializes one from the given keywords and the receiver's other
    members, which x's own initialize takes as keywords */
@@ -4089,10 +4107,7 @@ static void cf_call(CF *f, int v) {
     int si = cf_scope_of(f, v);
     Scope *s = &c->scopes[si];
     if (s->def_node >= 0 && s->is_cmethod && s->class_id >= 0 && call_target(c, v, s->class_id, nm, CT_CMETHOD, NULL) < 0) {
-      int dsi = f->desc[s->class_id];   /* (by index: a construction adds sets, and the pool moves) */
-      cf_add_set(f, v, dsi);
-      if (f->pool[dsi].all) { for (int i = 0; i < argc; i++) cf_all(f, argv[i]); return; }
-      for (int i = cls_set_next(&f->pool[dsi], -1); i >= 0; i = cls_set_next(&f->pool[dsi], i)) cf_construct(f, -1, i, argv, argc, blk, nm);
+      cf_self_new(f, v, s->class_id, argv, argc, blk, nm, -1);
       return;
     }
   }
@@ -4811,6 +4826,13 @@ static void cf_node(CF *f, int v) {
         int md = ci->included_mods[m];
         if (md >= 0 && md < c->nclasses && comp_method_in_chain(c, md, s->name, NULL) >= 0) anc_user = 1;
       }
+    }
+    /* a super in a class's own `exception` that reaches Exception's builds
+       the receiving class as `new` does (desugar_exception_super_new, which
+       runs after these facts, spells it `self.new`) */
+    if (!anc_user && s->is_cmethod && s->class_id >= 0 && exc_super_in_exception_cmethod(c, v)) {
+      cf_self_new(f, v, s->class_id, argv2, argc2, blk, "new", k == NK_ForwardingSuperNode ? mi : -1);
+      return;
     }
     if (!anc_user && !(s->is_cmethod && sp_streq(s->name, "new"))) {
       int ik = s->is_cmethod ? -1 : cf_inst_class(f, mi);

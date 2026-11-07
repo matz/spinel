@@ -1682,6 +1682,8 @@ int emit_interp_append(Compiler *c, int id, const char *open, const char *open_n
 int interp_is_literal_fold(const NodeTable *nt, int id);
 int emit_regex_pat_to_buf(Compiler *c, int nid, Buf *b);
 int nameset_has(NameSet *s, const char *nm);
+/* the program's own Array#inspect (a reopened Array), or -1 (codegen.c) */
+int array_user_inspect_mi(Compiler *c);
 void emit_param_cell_publish(Compiler *c, int blk, const char *pname, Buf *b, int indent);
 void nameset_add(NameSet *s, const char *nm);
 /* Emit the C lvalue for local `name` in the current emission context: a

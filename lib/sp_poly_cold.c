@@ -231,6 +231,7 @@ const char *(*sp_class_name_fn)(sp_Class);
 const char *(*sp_class_display_fn)(sp_Class);
 const char *(*sp_class_user_to_s_fn)(sp_Class);
 const char *(*sp_class_user_inspect_fn)(sp_Class);
+const char *(*sp_array_user_inspect_fn)(sp_RbVal);
 /* A boxed Time's to_s (inspect 0) or inspect (1): a Time subclass
    instance's goes through its class's own dispatcher, which runs an
    override of the class's and falls back to Time's. */
@@ -678,6 +679,11 @@ const char *sp_poly_inspect(sp_RbVal v)
     case SP_TAG_CLASS: return sp_class_val_user(v, sp_class_user_inspect_fn);
     case SP_TAG_BIGINT: return sp_bigint_to_s((sp_Bigint *)v.v.p);
     case SP_TAG_OBJ:
+      /* an Array of any kind, where the program reopens Array#inspect */
+      if (sp_array_user_inspect_fn && sp_poly_is_array_kind(v.cls_id)) {
+        const char *r = sp_array_user_inspect_fn(v);
+        if (r) return r;
+      }
  /* Built-in container / value-type tags get their typed inspect
     helper. Matches the dispatch shape in sp_poly_to_s above and the
     `puts` poly arm earlier in this file; without it, a Range / Time

@@ -448,6 +448,15 @@ void emit_p_one(Compiler *c, int arg, Buf *b, int indent) {
   if (emit_splat_io(c, arg, "sp_splat_p(", b, indent)) return;
   Repr tr = repr_of(c, arg);
   TyKind t = tr.as_ty;
+  /* an Array where the program reopens Array#inspect: printed boxed, which
+     runs that method (sp_array_user_inspect), rooted for the call */
+  if ((ty_is_array(t) || ty_is_ptr_array(t)) && array_user_inspect_mi(c) >= 0) {
+    int tb = ++g_tmp;
+    emit_indent(b, indent);
+    buf_printf(b, "{ sp_RbVal _t%d = ", tb); emit_boxed(c, arg, b);
+    buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); sp_puts_line(sp_poly_inspect(_t%d)); }\n", tb, tb);
+    return;
+  }
   /* an element-less hash construct ({} / Hash.new / Hash.new(default)) that no
      key usage narrowed stays TY_UNKNOWN; box it (emit_boxed carries the
      default) and inspect through the poly path. */

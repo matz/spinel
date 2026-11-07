@@ -3460,6 +3460,18 @@ static int emit_ivar_cvar_gvar_expr(Compiler *c, int id, Buf *b, const NodeTable
   return 0;
 }
 
+/* The name CRuby's NameError gives constant nm a bare read at node id does not
+   find: under the class whose body is the read's lexical scope, a method's
+   being its def's (elab_cvar_cref_at: a builder's or an eval form's block
+   pushes none), and nm alone at the top level or for Object. */
+static const char *const_missing_name(Compiler *c, int id, const char *nm, char *buf, size_t cap) {
+  int k = elab_cvar_cref_at(c, id);
+  const char *rn = k >= 0 && k < c->nclasses ? class_ruby_name(c, k) : NULL;
+  if (!rn || is_object_root(rn)) return nm;
+  snprintf(buf, cap, "%s::%s", rn, nm);
+  return buf;
+}
+
 /* The NameError raise of a constant defined nowhere, valued as a Class
    placeholder. `checks` is the text of the parents' presence checks (it opens
    a comma expression and ends with ", "), or empty: they go into the message
@@ -3565,7 +3577,8 @@ static int emit_constant_value(Compiler *c, int id, Buf *b, Buf *checks, const N
              NameError is legal Ruby, and ruby/spec does exactly that. */
           if (!const_ref_is_rescued(c, id) && !const_ref_is_guarded(c, id))
             warn_undefined_constant(c, id, nm);
-          emit_const_undefined_raise(b, NULL, nm);
+          char mname[512];
+          emit_const_undefined_raise(b, NULL, const_missing_name(c, id, nm, mname, sizeof mname));
         }
       }
       emit_const_read_close(c, id, NULL, b);
@@ -3952,6 +3965,21 @@ static int emit_constant_value(Compiler *c, int id, Buf *b, Buf *checks, const N
       }
       if (!const_ref_is_rescued(c, id) && !const_ref_is_guarded(c, id))
         warn_undefined_constant(c, id, fullname);
+      /* `klass::NM` on a Class value no class's NM answers: the value's class
+         names it, Object's the constant alone, as the switch's default does */
+      if (nm && par_idc >= 0 && !par_nmc && !nt_kind_is_constant(par_tyc_k)) {
+        Repr dr = repr_of(c, par_idc);
+        if (dr.as_ty == TY_CLASS || dr.as_ty == TY_POLY) {
+          int tk = ++g_tmp, obj_k = comp_core_class(c, CORE_OBJECT), oid = builtin_class_id("Object");
+          buf_printf(b, "({ sp_Class _t%d = ", tk);
+          if (dr.kind == RK_BOXED) { buf_puts(b, "sp_unbox_class("); emit_boxed(c, par_idc, b); buf_puts(b, ")"); }
+          else emit_expr(c, par_idc, b);
+          buf_printf(b, "; sp_raise_cls(\"NameError\", _t%d.cls_id == %d || _t%d.cls_id == %d ? \"uninitialized constant %s\" : sp_sprintf("
+                        "\"uninitialized constant %%s::%s\", sp_class_to_s(_t%d))); ((sp_Class){-1}); })",
+                     tk, oid, tk, obj_k >= 0 ? obj_k : oid, nm, nm, tk);
+          return 1;
+        }
+      }
       /* CRuby resolves the path left to right and names the first segment
          it does not find: `Mylib::VERSION` with no Mylib raises
          "uninitialized constant Mylib" */
@@ -3964,7 +3992,10 @@ static int emit_constant_value(Compiler *c, int id, Buf *b, Buf *checks, const N
           if (!const_seg_resolves(c, segs[i])) {
             char miss[512];
             const_path_written(nt, segs[i], miss, sizeof miss);
-            if (miss[0]) snprintf(fullname, sizeof fullname, "%s", miss);
+            /* (the path's head is a bare read, under its lexical scope) */
+            char mname[600];
+            if (miss[0]) snprintf(fullname, sizeof fullname, "%s",
+                                  nt_kind(nt, segs[i]) == NK_ConstantReadNode ? const_missing_name(c, segs[i], miss, mname, sizeof mname) : miss);
             break;
           } }
       /* a class scope reaches Object's constants: a registration there runs

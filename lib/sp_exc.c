@@ -1701,7 +1701,11 @@ static void *sp_exc_recover_named(const char *cls, const char *msg) {
     if (strncmp(msg, pfx, 23) != 0) return NULL;
     const char *p = msg + 23;
     size_t n = 0;
-    while (p[n] && (isalnum((unsigned char)p[n]) || p[n] == '_' || p[n] == ':') && n < 127) n++;
+    while (p[n] && (isalnum((unsigned char)p[n]) || p[n] == '_' || p[n] == ':')) n++;
+    /* (of `Q::NAME` the last segment: the message names the scope too) */
+    for (size_t i = n; i > 0; i--)
+      if (p[i - 1] == ':') { p += i; n -= i; break; }
+    if (n > 127) n = 127;
     if (n == 0) return NULL;
     memcpy(nb, p, n); nb[n] = 0;
   }

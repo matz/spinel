@@ -28,6 +28,23 @@ int is_builtin_module_name(const char *n) {
   const BuiltinClass *r = builtin_row(n);
   return r && (r->flags & BC_MODULE);
 }
+/* Is N a top-level constant CRuby defines before the program runs: a
+   builtin class, module or exception class of one segment (Struct,
+   StandardError, Thread, Process, Encoding), or the Errno module that
+   holds the Errno::E* classes? A socket name counts once "socket" is
+   required (builtin_row), SocketError too. */
+static int builtin_const_name(const char *n);
+int is_builtin_toplevel_const(const char *n) {
+  if (!n || strstr(n, "::")) return 0;
+  if (sp_streq(n, "SocketError") && !sp_feature_required("socket")) return 0;
+  return builtin_const_name(n);
+}
+/* Does `R.const_defined?(N)` see N from every class or module, as a
+   top-level constant: one the program writes at the top level, a
+   well-known one or a builtin's (is_builtin_toplevel_const)? */
+int const_defined_top_level(Compiler *c, const char *n) {
+  return const_name_resolves_top_level(c, n) || is_builtin_toplevel_const(n);
+}
 /* The i-th builtin MODULE (Comparable, Enumerable, Kernel, Math, Signal,
    GC, ObjectSpace, Process): its name and runtime class id, 0 for one that
    is a class value by name only. Answers 0 past the last. */
@@ -2008,7 +2025,9 @@ const char *const_get_resolve(Compiler *c, int rk, const char *cgn, int *cls) {
    class R's const_get finds under a qualified key. A named receiver the
    class table lacks still reaches that lookup. */
 int const_defined_known(Compiler *c, int rk, const char *cgn) {
-  if (comp_const(c, cgn) || comp_class_index(c, cgn) >= 0 || comp_is_wellknown_const(cgn)) return 1;
+  if (comp_const(c, cgn) || comp_class_index(c, cgn) >= 0 || comp_is_wellknown_const(cgn) ||
+      is_builtin_toplevel_const(cgn))
+    return 1;
   int cls = -1;
   if (rk != CG_NONE) const_get_resolve(c, rk, cgn, &cls);
   return cls >= 0;
@@ -2193,7 +2212,12 @@ const LocalVar *const_value_path_top(Compiler *c, const char *nm) {
    answer the flat table gives. */
 int const_defined_from(Compiler *c, int rk, const char *cgn) {
   if (!const_defined_known(c, rk, cgn)) return 0;
-  if (rk < 0 || !cgn || strstr(cgn, "::") || const_name_resolves_top_level(c, cgn)) return 1;
+  /* a class below BasicObject reaches no Object, so no builtin's name
+     (well-known names keep master's answer) */
+  if (rk >= 0 && rk < c->nclasses && cgn && is_builtin_toplevel_const(cgn) &&
+      !const_name_resolves_top_level(c, cgn) && class_is_blank_slate(c, rk))
+    return const_seen_by_class(c, rk, cgn);
+  if (rk < 0 || !cgn || strstr(cgn, "::") || const_defined_top_level(c, cgn)) return 1;
   return const_seen_by_class(c, rk, cgn);
 }
 

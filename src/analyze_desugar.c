@@ -2862,6 +2862,21 @@ int desugar_dynamic_const_get_arms(Compiler *c) {
         for (int k = 0; k < ncand && !dup; k++) dup = sp_streq(cand[k], wn);
         if (!dup) cand[ncand++] = (char *)wn;
       }
+      /* ...and the builtin classes and modules CRuby defines at boot
+         (Struct, StandardError, Thread, Errno: is_builtin_toplevel_const) */
+      const BuiltinClass *br;
+      int nb = 0;
+      while (builtin_class_at(nb)) nb++;
+      g = (char **)realloc(cand, sizeof(char *) * (size_t)(ncand + nb + 2));
+      if (!g) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+      cand = g;
+      for (int w = 0; w <= nb; w++) {
+        const char *wn = w < nb ? ((br = builtin_class_at(w)) ? br->name : NULL) : "Errno";
+        if (!wn || !is_builtin_toplevel_const(wn)) continue;
+        int dup = 0;
+        for (int k = 0; k < ncand && !dup; k++) dup = sp_streq(cand[k], wn);
+        if (!dup) cand[ncand++] = (char *)wn;
+      }
     }
     if (ncand == 0) continue;
     int base = nt->count;

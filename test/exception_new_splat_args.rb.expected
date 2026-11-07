@@ -39,3 +39,9 @@ A
 Rx
 "rx"
 true
+"wrong number of arguments (given 2, expected 0..1)"
+"wrong number of arguments (given 2, expected 0..1)"
+"{x: 1}"
+"{x: 1}"
+"{k: 1}"
+"wrong number of arguments (given 2, expected 0..1)"

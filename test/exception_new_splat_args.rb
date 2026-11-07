@@ -44,3 +44,13 @@ p IOError.new(*[]).message, ZeroDivisionError.new(*[:sym]).message
 p StandardError.exception(*args).message
 class Rx < RuntimeError; end
 x = Rx.new(*["rx"]); p x.class, x.message, x.is_a?(RuntimeError)
+
+# keywords beside a splat: Exception#initialize reads them as one more
+# argument, their Hash; KeyError's family takes key: and receiver:
+begin; A.new(*["m"], x: 1); rescue ArgumentError => e; p e.message; end
+begin; A.new(*["m"], receiver: 1); rescue ArgumentError => e; p e.message; end
+p A.new(*[], x: 1).message, RuntimeError.new(*[], x: 1).message
+full = {k: 1}
+p A.new(*[], **full).message
+class Kw < StandardError; def initialize(*a, **k) = super(*a, **k); end
+begin; Kw.new("m", receiver: 1); rescue ArgumentError => e; p e.message; end

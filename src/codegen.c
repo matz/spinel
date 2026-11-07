@@ -16168,12 +16168,14 @@ void emit_super(Compiler *c, int id, Buf *b) {
       /* KeyError's key:, NameError's name and their like: more than a message.
          A splat's count is the run time's: the runtime reads the gathered
          arguments as Exception#initialize does for any other class. */
+      int sci = s->class_id;
+      const char *spar = class_is_exc_reopen(c, sci) ? c->classes[sci].name : exc_builtin_parent(c, sci);
       int spread = ty_k != NK_ForwardingSuperNode && argv2 && nt_argv_has_splat(c->nt, argv2, argc2) &&
-                   !class_is_syserr(c, s->class_id) && !class_is_sysexit(c, s->class_id);
-      if (spread || class_takes_exc_attrs(c, s->class_id)) {
+                   !class_is_syserr(c, sci) && !exc_init_takes_own_args(spar);
+      if (spread || class_takes_exc_attrs(c, sci)) {
         char self_text[80]; snprintf(self_text, sizeof self_text, "(sp_Exception *)%s", g_self);
         if (ty_k == NK_ForwardingSuperNode) emit_exc_attrs_zsuper(c, id, s, self_text, b);
-        else emit_exc_attrs_call(c, id, self_text, argc2, argv2, b);
+        else emit_exc_args_super(c, id, self_text, class_takes_exc_attrs(c, sci), argc2, argv2, b);
         return;
       }
       /* SystemCallError#initialize(msg = nil, func = nil) builds the message

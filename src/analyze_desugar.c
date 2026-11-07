@@ -6211,34 +6211,68 @@ static int engine_root_plain(NodeTable *nt, const char *x) {
    leaf `cls` give it m as its own method, a member's reader (a Struct
    member's writer too) or a def in its block? 1 yes, 0 no, -1 not known (a
    member not written as a literal). The skip region `in` is not asked. */
+/* a statement list that can change a method's visibility or remove it
+   (private, `private :m`, undef_method ...), which the record fold does not
+   follow */
+static int me_stmts_vis(const NodeTable *nt, int body) {
+  int bn = 0; const int *bb = body >= 0 && nt_kind(nt, body) == NK_StatementsNode ? nt_arr(nt, body, "body", &bn) : NULL;
+  static const char *const vis[] = { "private", "protected", "public", "module_function", "undef_method", "remove_method", NULL };
+  for (int i = 0; i < bn; i++) {
+    if (nt_kind(nt, bb[i]) == NK_UndefNode) return 1;
+    const char *cn = nt_kind(nt, bb[i]) == NK_CallNode && nt_ref(nt, bb[i], "receiver") < 0 ? nt_str(nt, bb[i], "name") : NULL;
+    for (int v = 0; cn && vis[v]; v++) if (sp_streq(cn, vis[v])) return 1;
+  }
+  return 0;
+}
+/* is node id a statement at the top of a file the program loads? */
+static int me_top_stmt(const NodeTable *nt, int id) {
+  int nr = nt->nfile_roots ? nt->nfile_roots : 1;
+  for (int r = 0; r < nr; r++) {
+    int root = nt_root(nt, r), st = root >= 0 ? nt_ref(nt, root, "statements") : -1;
+    int bn = 0; const int *bb = st >= 0 ? nt_arr(nt, st, "body", &bn) : NULL;
+    for (int i = 0; i < bn; i++) if (bb[i] == id) return 1;
+  }
+  return 0;
+}
 static int me_record_defines(const NodeTable *nt, const char *cls, const char *m, int in, int *is_data) {
-  int any = 0;
-  if (is_data) *is_data = -1;
+  int found = 0, unknown = 0, rec = 0, data = -1;
   for (int id = 0; id < nt->count; id++) {
     if (nt_kind(nt, id) != NK_ConstantWriteNode || subtree_has(nt, in, id)) continue;
     const char *nm = nt_str(nt, id, "name");
     int call = nm && sp_streq(nm, cls) ? class_def_record(nt, id) : -1;
     if (call < 0) continue;
-    int data = class_def_record_is_data(nt, call);
-    if (is_data) *is_data = data;
+    rec = 1;
+    /* (the fold names a class by its last segment: a record written in a
+       class body or a branch, `module M; S = Struct.new(:a); end`, can be
+       another S) */
+    if (!me_top_stmt(nt, id) || me_stmts_vis(nt, class_def_body(nt, id))) unknown = 1;
+    data = class_def_record_is_data(nt, call);
     int an = 0; const int *av = nt_arr(nt, nt_ref(nt, call, "arguments"), "arguments", &an);
     for (int a = 0; a < an; a++) {
       NodeKind ak = nt_kind(nt, av[a]);
       /* (keyword_init: and the like) */
       if (ak == NK_KeywordHashNode) continue;
       const char *v = ak == NK_SymbolNode ? nt_str(nt, av[a], "value") : ak == NK_StringNode ? nt_str(nt, av[a], "content") : NULL;
-      if (!v) { any = -1; continue; }
+      if (!v) { unknown = 1; continue; }
       size_t vl = strlen(v);
-      if (sp_streq(v, m) || (!data && !strncmp(v, m, vl) && sp_streq(m + vl, "="))) return 1;
+      if (sp_streq(v, m) || (!data && !strncmp(v, m, vl) && sp_streq(m + vl, "="))) found = 1;
     }
     int body = class_def_body(nt, id);
     int bn = 0; const int *bb = body >= 0 && nt_kind(nt, body) == NK_StatementsNode ? nt_arr(nt, body, "body", &bn) : NULL;
     for (int i = 0; i < bn; i++) {
       int rv = nt_ref(nt, bb[i], "receiver");
-      if ((rv < 0 || nt_kind(nt, rv) == NK_SelfNode) && me_stmt_defines(nt, bb[i], m)) return 1;
+      if ((rv < 0 || nt_kind(nt, rv) == NK_SelfNode) && me_stmt_defines(nt, bb[i], m)) found = 1;
     }
   }
-  return any;
+  /* (a reopen's `private :mem` or undef_method) */
+  for (int id = 0; rec && !unknown && id < nt->count; id++) {
+    if (!class_def_is_class(nt, id) || subtree_has(nt, in, id)) continue;
+    const char *nm = class_def_name(nt, id);
+    if (nm && sp_streq(nm, cls) && me_stmts_vis(nt, class_def_body(nt, id))) unknown = 1;
+  }
+  if (is_data) *is_data = rec && !unknown ? data : -1;
+  if (!rec) return 0;
+  return unknown ? -1 : found;
 }
 /* `C.method_defined?(:m, false)`: is m absent from the own bodies of class
    `cls` outside guard `in`, its ancestors not asked? 0 present, 1 absent, -1

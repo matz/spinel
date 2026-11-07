@@ -72,3 +72,23 @@ unless D9.method_defined?(:with)
   class D9; def with = :over; end
 end
 p D9.new(1).with(a: 2).a
+
+# a private def in the block is not counted (method_defined? is false)
+S10 = Struct.new(:a) do
+  private
+  def hid = 1
+end
+unless S10.method_defined?(:hid, false)
+  class S10; def marker = :reopened; end
+end
+p S10.new(1).respond_to?(:marker)
+S11 = Struct.new(:a) do
+  def helper = 1
+  private :helper
+end
+p(S11.method_defined?(:helper) ? :bad : :good)
+
+# a record in a module is another class
+module M12; S12 = Struct.new(:a); end
+class S12; end
+p(S12.method_defined?(:a, false) ? :bad : :good)

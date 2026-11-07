@@ -1,0 +1,18 @@
+"private method 'helper' called for nil"
+"private method 'kpriv' called for nil"
+"private method 'bpriv' called for nil"
+"protected method 'prot' called for nil"
+:obj
+:k
+:k
+:k
+:k
+:k
+"private method 'helper' called for nil"
+:nil
+NoMethodError
+"private method 'helper' called for nil"
+:nil
+""
+1
+"private method 'only_nil' called for nil"

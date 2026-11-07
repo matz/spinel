@@ -5352,6 +5352,13 @@ int cplan_nil_program_method(Compiler *c, int call, const char *name, int *nilcl
    Kernel and BasicObject that defines it answers, true when that method is
    public or include_all is set (a literal `true` 2nd argument); -1 when
    none of them defines it. */
+int cplan_nil_own_builtin(const char *name) {
+  static const char *const nil_own[] = {
+    "&", "===", "=~", "^", "|", "inspect", "nil?", "rationalize", "to_a", "to_c",
+    "to_f", "to_h", "to_i", "to_r", "to_s", NULL };
+  for (int j = 0; name && nil_own[j]; j++) if (sp_streq(name, nil_own[j])) return 1;
+  return 0;
+}
 int cplan_nil_program_responds(Compiler *c, const char *name, int include_all) {
   static const int owners[] = { CORE_NILCLASS, CORE_OBJECT, CORE_KERNEL, CORE_BASIC_OBJECT, -1 };
   /* an undef on NilClass or Object (above the first definer) hides the
@@ -5362,12 +5369,8 @@ int cplan_nil_program_responds(Compiler *c, const char *name, int include_all) {
   /* NilClass's own public methods (CRuby's NilClass.public_instance_methods
      false): one sits below every program method of Object, Kernel and
      BasicObject, so a top-level `def to_a` leaves nil's answer true */
-  static const char *const nil_own[] = {
-    "&", "===", "=~", "^", "|", "inspect", "nil?", "rationalize", "to_a", "to_c",
-    "to_f", "to_h", "to_i", "to_r", "to_s", NULL };
   for (int i = 0; owners[i] >= 0; i++) {
-    if (owners[i] == CORE_OBJECT)
-      for (int j = 0; nil_own[j]; j++) if (sp_streq(name, nil_own[j])) return 1;
+    if (owners[i] == CORE_OBJECT && cplan_nil_own_builtin(name)) return 1;
     int k = comp_core_class(c, owners[i]);
     if (k < 0 || call_target(c, -1, k, name, 0, NULL) < 0) {
       if (owners[i] == CORE_OBJECT && call_target(c, -1, -1, name, CT_TOP, NULL) >= 0)
@@ -5383,7 +5386,11 @@ int cplan_nil_program_responds(Compiler *c, const char *name, int include_all) {
    nil does, or none: a reopened String's, Array's or Hash's, or the
    object's class's own, where nil runs NilClass's or Object's? */
 static int cplan_nil_runs_other(Compiler *c, int call, TyKind rt, const char *name) {
-  int nilcls = 0, nmi = cplan_nil_program_method(c, call, name, &nilcls);
+  /* (a method closed to the call raises for nil, where the receiver's
+     class may run its own) */
+  int nilcls = 0, pmi = cplan_nil_program_method(c, call, name, &nilcls);
+  int nmi = cplan_nil_closed_method(c, call, name, NULL);
+  if (nmi < 0) nmi = pmi;
   if (nmi < 0) return 0;
   int k = rt == TY_STRING ? comp_core_class(c, CORE_STRING)
         : ty_is_array(rt) ? comp_core_class(c, CORE_ARRAY)
@@ -5521,7 +5528,12 @@ int cplan_nil(Compiler *c, int id) {
     const char *rn = nt_kind(nt, r) == NK_LocalVariableReadNode ? nt_str(nt, r, "name") : NULL;
     if (!rn || !sp_streq(rn, "__self")) return CN_NONE;
   }
-  if (cplan_nil_user_method(c, id, nm))
+  /* (a builtin method NilClass has of its own answers for nil ahead of a
+     top-level def or a Kernel or BasicObject method of the name: nil's
+     answer, where neither NilClass nor Object has one of the program's) */
+  int pnil = 0;
+  int nil_own = cplan_nil_own_builtin(nm) && cplan_nil_program_method(c, id, nm, &pnil) < 0;
+  if (!nil_own && cplan_nil_user_method(c, id, nm))
     return (rr.kind == RK_PTR || rr.kind == RK_STRBUF) && cplan_nil_runs_other(c, id, rt, nm) &&
            cplan_nil_program_served(c, id)
            ? CN_PROGRAM : CN_NONE;

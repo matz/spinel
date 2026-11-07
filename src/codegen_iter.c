@@ -1064,8 +1064,9 @@ static void inline_target_lookup(Compiler *c, int id, const char *name, int recv
       t->cm_self_id = builtin_class_id(cname);
     }
     else if (ci >= 0) {
-      /* Cls.method with a yield block: look up as a class method */
-      t->mi = call_target(c, id, ci, name, CT_CMETHOD, NULL);
+      /* Cls.method with a yield block: look up as a class method (a
+         `new`: the one the call reaches, cplan_user_new) */
+      t->mi = is_new_name(name) ? cplan_user_new(c, id, ci) : call_target(c, id, ci, name, CT_CMETHOD, NULL);
       t->cm_class = ci;
     }
     else if (ty_is_object(rt)) {

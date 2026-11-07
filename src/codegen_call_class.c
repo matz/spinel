@@ -2797,7 +2797,10 @@ int emit_call_const_cmethod_arms(Compiler *c, int id, Buf *b, const NodeTable *n
       if (g_plan_check || mi < 0) {
         int oci = const_node_class_index(c, recv);
         int odef = -1;
-        int omi = oci >= 0 ? call_target(c, id, oci, name, CT_CMETHOD, &odef) : -1;
+        /* (a `new`: the one the call reaches, cplan_user_new, which may be
+           the builtin constructor ahead of a later `def self.new`) */
+        int omi = oci < 0 ? -1 : is_new_name(name) ? cplan_user_new(c, id, oci) : call_target(c, id, oci, name, CT_CMETHOD, &odef);
+        if (omi >= 0 && is_new_name(name)) odef = c->scopes[omi].class_id;
         if (omi < 0 && (omi = class_reopen_cmethod(c, id, recv, name)) >= 0) {
           odef = c->scopes[omi].class_id;
           oci = builtin_class_id(nt_str(nt, recv, "name"));
@@ -3516,7 +3519,9 @@ int emit_call_new_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const c
         }
         return 1;
       }
-      int ucnew = comp_cmethod_in_chain(c, ci, "new", NULL);
+      /* (the one the call reaches: a call that runs before the def takes
+         the builtin constructor) */
+      int ucnew = cplan_user_new(c, id, ci);
       if (ucnew >= 0) {
         /* user-defined def self.new: call it as a regular class method */
         buf_puts(b, mc_method(c, &c->scopes[ucnew]));

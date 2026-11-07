@@ -1,0 +1,5 @@
+Base
+to_int
+Array: TypeError: can't convert Req to Integer (Req#to_int gives String)
+to_str
+String: TypeError: can't convert Req to String (Req#to_str gives Integer)

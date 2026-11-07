@@ -1341,7 +1341,7 @@ static int emit_obj_conv(Compiler *c, int node, const char *conv, TyKind want,
      left to the old path, where the raw object pointer landed in the scalar
      slot and the C build stopped with a message about a generated symbol.
      CRuby names the offending kind, so this does as well. */
-  { int wmi = comp_method_in_chain(c, cid, conv, NULL);
+  { int wdef = -1, wmi = comp_method_in_chain(c, cid, conv, &wdef);
     if (wmi >= 0 && c->scopes[wmi].nparams == 0) {
       /* CRuby names the answer's CLASS, so the diagnostic does too rather
          than printing the analysis's own lowercase tag */
@@ -1354,6 +1354,16 @@ static int emit_obj_conv(Compiler *c, int node, const char *conv, TyKind want,
                      : ty_name(wr);
       snprintf(msg, sizeof msg, "can't convert %s to %s (%s#%s gives %s)",
                cn ? cn : "Object", into, cn ? cn : "the class", conv, wn);
+      /* in a builtin class's arm of a split call (conv_arg_of_cvb_arm, below)
+         the method runs and CRuby's TypeError follows, where the arm runs */
+      if (conv_arg_of_cvb_arm(c, node)) {
+        buf_puts(b, "((void)(");
+        emit_obj_conv_call_inline(c, node, t, wdef, wmi, conv, b);
+        buf_puts(b, "), sp_raise_cls(\"TypeError\", ");
+        emit_str_literal(b, msg);
+        buf_printf(b, "), (%s)0)", c_type_name(want));
+        return 1;
+      }
       unsupported_feature(c, node, msg);
     }
     if (wmi >= 0) return 0;  /* another shape entirely (parameters): old path */

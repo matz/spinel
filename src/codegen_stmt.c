@@ -7441,6 +7441,7 @@ static int emit_poly_class_when_value(Compiler *c, int cond_id, const char *tmp,
           first = 0;
         }
       }
+      emit_exc_box_isa_arms(c, cid, tmp, 0, &first, b);
       if (first) buf_puts(b, "0");
       buf_puts(b, "))");
       /* a module a builtin's reopening includes (`class Hash; include M;

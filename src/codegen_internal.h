@@ -2443,6 +2443,7 @@ const char *class_builtin_superclass_name(Compiler *c, int i);   /* codegen.c */
 int class_builtin_parent(Compiler *c, int cid);      /* codegen.c */
 int class_includes_module(Compiler *c, int cid, int mod);
 int class_isa_user(Compiler *c, int k, int cid);  /* codegen_call.c */
+void emit_exc_box_isa_arms(Compiler *c, int cid, const char *v, int exact, int *first, Buf *b);  /* codegen_call.c */
 int dispatch_impl_count(Compiler *c, int call, int cid, const char *name);
 /* do a dispatch switch's arms bind the call's arguments differently (each
    arm then lays them out itself)? the plan's CP_PER_ARM */

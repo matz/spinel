@@ -1,0 +1,23 @@
+[ArgumentError, false, false, false, false, false]
+not tagged ArgumentError
+argument
+[SubError, true, false, true, true, true]
+tagged sub
+app family
+[PlainError, false, false, false, false, false]
+not tagged PlainError
+plain
+[AppError, true, false, true, true, true]
+tagged app
+app family
+[IndexError, false, false, false, false, false]
+not tagged IndexError
+else IndexError
+[ArgumentError, SubError, PlainError, AppError, IndexError]
+[SubError, AppError, Tagged, StandardError]
+AppError
+true
+true
+true
+[false, false, true, false]
+[:rescued_by_module, SubError]

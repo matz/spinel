@@ -16852,6 +16852,57 @@ static BuiltinDefaultCmp class_default_cmp(Compiler *c, int cid) {
   return builtin_default_cmp(family);
 }
 
+/* Comparable's methods that sp_poly_lacks_cmp answers for */
+static const char *const cmp_lack_ops[] = { "<", "<=", ">", ">=", "between?", "clamp", NULL };
+
+/* Does program class k mix in Comparable, define one of its methods, or
+   define method_missing? */
+static int class_opens_cmp(Compiler *c, int k) {
+  if (class_is_comparable(c, k)) return 1;
+  if (comp_method_in_chain(c, k, "method_missing", NULL) >= 0) return 1;
+  for (int u = 0; cmp_lack_ops[u]; u++) if (comp_method_in_chain(c, k, cmp_lack_ops[u], NULL) >= 0) return 1;
+  return 0;
+}
+
+/* May the program give a builtin value a comparison its class lacks
+   (sp_poly_lacks_cmp)? A class or module that is a builtin, Object, Kernel
+   or BasicObject opens one (class_opens_cmp), a module the top level
+   includes does, or the top level defines one. */
+static int program_opens_builtin_cmp(Compiler *c) {
+  for (int i = 0; i < c->ntoplevel_includes; i++)
+    if (c->toplevel_includes[i] >= 0 && class_opens_cmp(c, c->toplevel_includes[i])) return 1;
+  for (int k = 0; k < c->nclasses; k++) {
+    const char *kn = c->classes[k].name;
+    if (!kn || !(is_builtin_reopen(kn) || is_object_root(kn) || is_builtin_module_const_name(kn))) continue;
+    if (class_opens_cmp(c, k)) return 1;
+  }
+  for (int s = 0; s < c->nscopes; s++) {
+    const Scope *sc = &c->scopes[s];
+    if (!sc->name || sc->is_cmethod || sc->class_id >= 0) continue;
+    if (sp_streq(sc->name, "method_missing")) return 1;
+    for (int u = 0; cmp_lack_ops[u]; u++) if (sp_streq(sc->name, cmp_lack_ops[u])) return 1;
+  }
+  return 0;
+}
+
+/* The program's classes under a builtin class (exception classes) that
+   open a comparison, as sp_cmp_exc_open's list; 0 when there is none */
+static int emit_cmp_exc_open(Compiler *c, Buf *b) {
+  int n = 0;
+  for (int k = 0; k < c->nclasses; k++) {
+    const char *kn = c->classes[k].name;
+    if (!kn || comp_class_is_module(c, &c->classes[k]) || c->classes[k].is_struct) continue;
+    /* (-116: Object, the class has no builtin parent) */
+    if (class_builtin_parent(c, k) == -116 || !class_opens_cmp(c, k)) continue;
+    if (!n++) buf_puts(b, "  { static const char *const sp_cmp_exc_names[] = { ");
+    const char *rn = class_ruby_name(c, k);
+    emit_str_literal(b, rn ? rn : kn);
+    buf_puts(b, ", ");
+  }
+  if (n) buf_puts(b, "NULL };\n    sp_cmp_exc_open = sp_cmp_exc_names; }\n");
+  return n;
+}
+
 /* Only classes that include Comparable need a runtime fact: the missing
    callback already answers false for every other program object. */
 static void emit_obj_comparable_dispatch(Compiler *c, Buf *b) {
@@ -18023,6 +18074,9 @@ void emit_regex_section(Compiler *c, Buf *b) {
     buf_puts(b, "  sp_obj_cmp_hook = sp_obj_cmp_dispatch;\n  sp_orange_walk_lib = sp_orange_to_a;\n");
   if (c->gen_comparable)
     buf_puts(b, "  sp_obj_comparable_hook = sp_obj_comparable_dispatch;\n");
+  if (program_opens_builtin_cmp(c))
+    buf_puts(b, "  sp_cmp_builtin_open = 1;\n");
+  emit_cmp_exc_open(c, b);
   if (g_has_user_binop)
     buf_puts(b, "  SP_INSTALL_HOOK(sp_user_binop_hook, sp_user_binop_dispatch);\n");
   if (program_has_user_eql(c))

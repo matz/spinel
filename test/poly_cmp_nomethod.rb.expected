@@ -1,0 +1,64 @@
+[NoMethodError, "undefined method '>=' for nil"]
+[NoMethodError, "undefined method '<' for nil"]
+[NoMethodError, "undefined method 'between?' for nil"]
+[NoMethodError, "undefined method 'clamp' for nil"]
+true
+false
+true
+1
+[NoMethodError, "undefined method '>=' for an instance of Array"]
+[NoMethodError, "undefined method '<' for an instance of Array"]
+[NoMethodError, "undefined method 'between?' for an instance of Array"]
+[NoMethodError, "undefined method 'clamp' for an instance of Array"]
+[NoMethodError, "undefined method '>=' for true"]
+[NoMethodError, "undefined method '<' for true"]
+[NoMethodError, "undefined method 'between?' for true"]
+[NoMethodError, "undefined method 'clamp' for true"]
+[NoMethodError, "undefined method '>=' for false"]
+[NoMethodError, "undefined method '<' for false"]
+[NoMethodError, "undefined method 'between?' for false"]
+[NoMethodError, "undefined method 'clamp' for false"]
+[ArgumentError, "comparison of Symbol with 0 failed"]
+[ArgumentError, "comparison of Symbol with 0 failed"]
+[ArgumentError, "comparison of Symbol with 0 failed"]
+[ArgumentError, "comparison of Symbol with 0 failed"]
+[NoMethodError, "undefined method '>=' for an instance of Range"]
+[NoMethodError, "undefined method '<' for an instance of Range"]
+[NoMethodError, "undefined method 'between?' for an instance of Range"]
+[NoMethodError, "undefined method 'clamp' for an instance of Range"]
+[NoMethodError, "undefined method '>=' for an instance of Proc"]
+[NoMethodError, "undefined method '<' for an instance of Proc"]
+[NoMethodError, "undefined method 'between?' for an instance of Proc"]
+[NoMethodError, "undefined method 'clamp' for an instance of Proc"]
+[NoMethodError, "undefined method '>=' for an instance of Regexp"]
+[NoMethodError, "undefined method '<' for an instance of Regexp"]
+[NoMethodError, "undefined method 'between?' for an instance of Regexp"]
+[NoMethodError, "undefined method 'clamp' for an instance of Regexp"]
+[NoMethodError, "undefined method '>=' for an instance of RuntimeError"]
+[NoMethodError, "undefined method '<' for an instance of RuntimeError"]
+[NoMethodError, "undefined method 'between?' for an instance of RuntimeError"]
+[NoMethodError, "undefined method 'clamp' for an instance of RuntimeError"]
+[ArgumentError, "comparison of String with 0 failed"]
+[ArgumentError, "comparison of String with 0 failed"]
+[ArgumentError, "comparison of String with 0 failed"]
+[ArgumentError, "comparison of String with 0 failed"]
+true
+false
+false
+1
+[NoMethodError, "undefined method '>=' for an instance of Object"]
+[NoMethodError, "undefined method '<' for an instance of Object"]
+[NoMethodError, "undefined method 'between?' for an instance of Object"]
+[NoMethodError, "undefined method 'clamp' for an instance of Object"]
+true
+true
+true
+true
+false
+false
+[NoMethodError, "undefined method '>=' for an instance of H"]
+NoMethodError
+:k
+NoMethodError
+[NoMethodError, "undefined method '>=' for an instance of RuntimeError"]
+NoMethodError

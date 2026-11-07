@@ -6789,11 +6789,44 @@ SP_NORETURN SP_COLD static void sp_poly_nil_nomethod(const char *op) {
    `between?` renders as two sp_poly_cmp_ck calls, and only the call site
    knows which method was written. A program object without Comparable
    raises NoMethodError here too, before the spaceship comparison. */
+/* Set at start-up (main) when the program may give a builtin value a
+   comparison it lacks: it mixes Comparable into, or defines <, <=, >, >=,
+   between? or clamp in, a builtin class, Object or Kernel, or at the top
+   level. */
+static sp_bool sp_cmp_builtin_open = 0;
+/* The program's exception classes that do so (an exception of one shares
+   the builtin exception id): a NULL-ended list, or NULL */
+static const char *const *sp_cmp_exc_open = NULL;
+/* Is v a builtin value whose class has none of <, <=, >, >=, between? and
+   clamp (no Comparable): true, false, an Array, a Range, a Proc, a Method,
+   a Regexp, a MatchData, an exception, a bare Object.new? */
+static int sp_poly_lacks_cmp(sp_RbVal v) {
+  if (sp_cmp_builtin_open) return 0;
+  if (v.tag == SP_TAG_BOOL) return 1;
+  if (v.tag != SP_TAG_OBJ || v.cls_id >= 0) return 0;
+  switch (v.cls_id) {
+    case SP_BUILTIN_PROC: case SP_BUILTIN_RANGE: case SP_BUILTIN_FLOAT_RANGE:
+    case SP_BUILTIN_STR_RANGE: case SP_BUILTIN_TIME_RANGE: case SP_BUILTIN_OBJ_RANGE:
+    case SP_BUILTIN_OBJECT: case SP_BUILTIN_METHOD:
+    case SP_BUILTIN_REGEX: case SP_BUILTIN_MATCHDATA:
+      return 1;
+    case SP_BUILTIN_EXCEPTION:
+      for (int i = 0; sp_cmp_exc_open && sp_cmp_exc_open[i]; i++)
+        if (sp_exc_is_a((volatile sp_Exception *)v.v.p, sp_cmp_exc_open[i])) return 0;
+      return 1;
+    default: break;
+  }
+  /* (an instance of a program's Array subclass is its class's to answer) */
+  if (sp_poly_is_array_kind(v.cls_id)) return !(sp_bsub_cls_fn && sp_bsub_cls_fn(v) >= 0);
+  return 0;
+}
 static void sp_poly_recv_ck(sp_RbVal v, const char *op) {
   if (SP_UNLIKELY(sp_poly_recv_nil(v))) sp_poly_nil_nomethod(op);
   if (sp_poly_is_user_obj(v)) {
     if (!sp_obj_comparable_hook || !sp_obj_comparable_hook(v.cls_id)) sp_raise_nomethod(sp_nomethod_msg(op, v));
   }
+  /* CRuby's NoMethodError, not Comparable's ArgumentError */
+  else if (SP_UNLIKELY(sp_poly_lacks_cmp(v))) sp_raise_nomethod(sp_nomethod_msg(op, v));
 }
 /* Module#< / <= / > / >= on a boxed class: ordered by the class graph, and a
    non-class operand raises as CRuby does. Two unrelated classes answer nil

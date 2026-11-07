@@ -4464,7 +4464,7 @@ static int infer_new_call(Compiler *c, int id, const NodeTable *nt, const char *
     /* a namespaced class (M::Sub) or root-qualified builtin (::Array etc) */
     if (rk == NK_ConstantPathNode) {
       const char *cn = const_key_at(c, recv);
-      int ci = cn ? comp_class_index(c, cn) : -1;
+      int ci = cn ? const_node_class_index(c, recv) : -1;
       if (ci >= 0) {
         /* an exception-subclass instance keeps its concrete class (its custom
            methods must dispatch); the exception-shaped queries route through
@@ -4521,7 +4521,7 @@ static int infer_new_call(Compiler *c, int id, const NodeTable *nt, const char *
     if (rk == NK_ConstantReadNode || rk == NK_LocalVariableReadNode ||
         (rk == NK_CallNode && class_def_is_record_call(nt, recv))) {  /* inline Data.define(...).new (#2682) */
       const char *cn = rk == NK_ConstantReadNode ? const_key_at(c, recv) : NULL;
-      int ci = cn ? comp_class_index(c, cn) : class_var_static_ci(c, recv);
+      int ci = cn ? const_node_class_index(c, recv) : class_var_static_ci(c, recv);
       if (ci >= 0) {
         /* an exception-subclass instance keeps its concrete class (its custom
            methods must dispatch); the exception-shaped queries route through
@@ -6407,7 +6407,7 @@ static int infer_class_module_call(Compiler *c, int id, const NodeTable *nt, con
       (nt_kind(nt, recv) == NK_ConstantReadNode ||
        nt_kind(nt, recv) == NK_ConstantPathNode)) {
     const char *cn = const_key_at(c, recv);
-    int ci = cn ? comp_class_index(c, cn) : -1;
+    int ci = cn ? const_node_class_index(c, recv) : -1;
     TyKind sgt;
     if (ci >= 0 && sg_accessor_type(c, id, ci, name, &sgt)) { *out = sgt; return 1; }
   }
@@ -10153,7 +10153,7 @@ static int call_may_reach_user_method(Compiler *c, int w, const char *wn) {
   NodeKind rk = nt_kind(nt, r);
   if (rk == NK_ConstantReadNode || rk == NK_ConstantPathNode) {
     const char *cn = nt_str(nt, r, "name");
-    int ci = cn ? comp_class_index(c, cn) : -1;
+    int ci = cn ? const_node_class_index(c, r) : -1;
     if (ci >= 0) return call_target(c, w, ci, wn, CT_CMETHOD, NULL) >= 0;
   }
   TyKind rt = comp_ntype(c, r);
@@ -11097,7 +11097,7 @@ static int ssv_value(Compiler *c, int v, char *set, int depth) {
       int r = nt_ref(nt, v, "receiver");
       if (!un || r < 0 || nt_kind(nt, r) != NK_ConstantReadNode) return 0;
       const char *rn = nt_str(nt, r, "name");
-      int ci = rn ? comp_class_index(c, rn) : -1;
+      int ci = rn ? const_node_class_index(c, r) : -1;
       if (sp_streq(un, "new") && ci >= 0) {
         if (comp_cmethod_in_chain(c, ci, "new", NULL) >= 0) return 0;
         set[ci] = 1;
@@ -12484,7 +12484,7 @@ static int why_node_origin(Compiler *c, int id, TyKind t) {
       if (recv >= 0 && recv < c->node_cap && ty_is_object(c->ntype[recv])) cid = ty_object_class(c->ntype[recv]);
       else if (recv >= 0 && (nt_kind(nt, recv) == NK_ConstantReadNode || nt_kind(nt, recv) == NK_ConstantPathNode)) {
         const char *cn = nt_str(nt, recv, "name");
-        cid = cn ? comp_class_index(c, cn) : -1; want_cm = 1;
+        cid = cn ? const_node_class_index(c, recv) : -1; want_cm = 1;
       }
       else if (recv < 0) { Scope *cs = comp_scope_of(c, id); cid = cs ? cs->class_id : -1; want_cm = cs ? cs->is_cmethod : 0; }
       for (int si = 1; si < c->nscopes; si++) {

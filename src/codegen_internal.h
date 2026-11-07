@@ -1863,6 +1863,17 @@ static inline const char *isa_match_name(const NodeTable *nt, int arg, char *buf
       (is_builtin_exception_name(q) || builtin_class_id(q) != 0)) return q;
   return l;
 }
+/* ...the same for a constant naming a class of the program: that class's
+   name, as the load record resolves the reference (const_node_class_index),
+   so an alias (`Money = Support::Money`) tests the class it holds */
+static inline const char *isa_match_class_name(Compiler *c, int arg, char *buf, size_t bufsz) {
+  NodeKind k = arg >= 0 ? nt_kind(c->nt, arg) : NK_NONE;
+  if (k == NK_ConstantReadNode || k == NK_ConstantPathNode) {
+    int ci = const_node_class_index(c, arg);
+    if (ci >= 0 && c->classes[ci].name) return c->classes[ci].name;
+  }
+  return isa_match_name(c->nt, arg, buf, bufsz);
+}
 /* ...the same by the slot a value constant's entity keys (const_key_at) */
 static inline const char *isa_match_key(Compiler *c, int arg, char *buf, size_t bufsz) {
   const char *k = elab_const_node_key(c, arg);

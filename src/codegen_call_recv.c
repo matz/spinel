@@ -14666,7 +14666,7 @@ int emit_range_call(Compiler *c, int id, Buf *b) {
     if (argc == 1 && is_kind_query(name)) {
       int is_iof = sp_streq(name, "instance_of?");
       char cnq[192];
-      const char *cn = isa_match_name(nt, argv[0], cnq, sizeof cnq);
+      const char *cn = isa_match_class_name(c, argv[0], cnq, sizeof cnq);
       buf_printf(b, "({ sp_RbVal _t%d = ", tr); emit_boxed(c, recv, b); buf_puts(b, "; ");
       if (cn && is_iof) buf_printf(b, "(sp_bool)(strcmp(sp_poly_class_name(_t%d), \"%s\") == 0); })", tr, cn);
       else if (cn)      buf_printf(b, "sp_poly_kind_of_builtin(_t%d, \"%s\"); })", tr, cn);

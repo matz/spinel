@@ -7369,7 +7369,7 @@ static int emit_poly_class_when_value(Compiler *c, int cond_id, const char *tmp,
   /* a qualified path naming a known builtin (exception) class matches by its
      FULL name -- raised exceptions carry "Errno::ENOENT", not "ENOENT" */
   char qbuf[160];
-  { const char *q = isa_match_name(nt, cond_id, qbuf, sizeof qbuf); if (q) cn = q; }
+  { const char *q = isa_match_class_name(c, cond_id, qbuf, sizeof qbuf); if (q) cn = q; }
   /* a class-aliasing constant (Alias = SomeClass) tests the aliased class */
   { const char *_ra = resolve_class_alias(c, cn); if (_ra) cn = _ra; }
   /* a Bignum is an Integer too */
@@ -7917,7 +7917,7 @@ static int g_pm_sentinel_t = -1;
    skipped (#3373). Resolve through the class table and use the name the
    exception actually has. */
 static const char *exc_when_cls_name(Compiler *c, int pat, char *buf, size_t bufsz) {
-  const char *cn = isa_match_name(c->nt, pat, buf, bufsz);
+  const char *cn = isa_match_class_name(c, pat, buf, bufsz);
   int ci = cn ? comp_class_index(c, cn) : -1;
   const char *q = ci >= 0 ? class_ruby_name(c, ci) : NULL;
   return q ? q : cn;
@@ -11807,7 +11807,7 @@ static void emit_case_expr_in(Compiler *c, int id, Buf *b) {
         NodeKind cty2_k = nt_kind(nt, conds[j]);
         char cq2[192];
         const char *cn2 = (cty2_k == NK_ConstantReadNode || cty2_k == NK_ConstantPathNode)
-                         ? isa_match_name(nt, conds[j], cq2, sizeof cq2) : NULL;
+                         ? isa_match_class_name(c, conds[j], cq2, sizeof cq2) : NULL;
         /* value constant in `when`: equality, not a class test (see above) */
         if (cn2 && pm_value_const(c, conds[j], cn2)) cn2 = NULL;
         /* a class whose own class method `===` (or an ancestor's) answers

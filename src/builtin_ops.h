@@ -61,6 +61,9 @@ typedef struct { const char *name; unsigned roles; } BopCallback;
    is no core method, -1 for a core name the table does not cover (nothing
    was probed for it: it may call anything). For a pass that runs before
    types exist. */
+/* Is name a core method name the callback table holds a row for (a
+   class's singleton methods, File.lutime, too)? */
+int bop_core_name(const char *name);
 int bop_name_callbacks(const char *builtin, const BopCallback **out);
 /* Every callback name with the roles in which some builtin calls it, sorted;
    their number */

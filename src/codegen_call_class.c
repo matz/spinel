@@ -367,6 +367,14 @@ void core_own_methods_each(const char *cls, size_t cl, void (*f)(void *, const c
       f(ud, core_cls_methods[i].m, core_cls_methods[i].vis);
 }
 
+/* Is `m` an instance method, of any visibility, of some core class or
+   module in CRuby? */
+int core_method_name_any(const char *m) {
+  for (int i = 0; m && core_cls_methods[i].cls; i++)
+    if (sp_streq(core_cls_methods[i].m, m)) return 1;
+  return 0;
+}
+
 /* The visibility (1 public, 2 protected, 4 private) of instance method `m`
    of core class or module `cls` in CRuby, through its ancestors with
    `inherit` (only those above `cls` with 2, where its `super` looks); 0

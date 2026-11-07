@@ -169,6 +169,10 @@ static const BopCbRow *bop_cb_find(const char *builtin, const char *recv) {
   return NULL;
 }
 
+int bop_core_name(const char *name) {
+  return name && bop_cb_find(name, "*") != NULL;
+}
+
 int bop_name_callbacks(const char *builtin, const BopCallback **out) {
   if (out) *out = NULL;
   const BopCbRow *r = builtin ? bop_cb_find(builtin, "*") : NULL;

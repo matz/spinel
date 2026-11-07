@@ -2390,7 +2390,11 @@ int emit_call_method_obj_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
     buf_puts(b, "({ ");
     if (recv >= 0) { buf_puts(b, "(void)("); emit_expr(c, recv, b); buf_puts(b, "); "); }
     emit_capture_absent_raise(c, id, &plan, b);
-    buf_printf(b, " %s; })", default_value_from_compiler(c, repr_of(c, id).as_ty));
+    /* (a pointer's NULL is cast to the call's C type: a Method's fields
+       are read off the value, `.name`) */
+    TyKind at = repr_of(c, id).as_ty;
+    if (repr_of(c, id).kind == RK_PTR && c_type_name(at)) buf_printf(b, " (%s)NULL; })", c_type_name(at));
+    else buf_printf(b, " %s; })", default_value_from_compiler(c, at));
     return 1;
   }
   int mi = is_method_object_maker(name) ? plan.mi : -1;

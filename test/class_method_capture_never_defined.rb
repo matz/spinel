@@ -18,3 +18,10 @@ p P.respond_to?(:zz)
 p Q.method(:k).call, S.method(:members).name
 p((P.method(:i) rescue $!.message))
 p((P.new.method(:zz) rescue $!.message))
+# builtin class methods of any visibility still make a Method; a Method
+# read for its name raises the same NameError
+p(((P.method(:attr_accessor); :ok) rescue $!.message))
+p(((P.method(:private_class_method); :ok) rescue $!.message))
+p(((P.method(:included); :ok) rescue $!.message))
+p(((P.method(:instance_variable_names); :ok) rescue $!.message))
+p((P.method(:zz).name rescue $!.message))

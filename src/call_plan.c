@@ -5,6 +5,7 @@
 #include "codegen_internal.h"
 #include "codegen_poly.h"
 #include "analyze_internal.h"
+#include "builtin_ops.h"
 #include "call_plan.h"
 #include "repr.h"
 #include "codegen_call_arms.h"
@@ -2380,6 +2381,10 @@ static int cplan_capture_names(Compiler *c, int id, int cls, int sg, const char 
    versions.) */
 static int cm_capture_never_made(Compiler *c, int id, int cls, const char *name) {
   if (!name || elab_method_versions(c, name)) return 0;
+  /* (a name any core class or module has, of any visibility, or a core
+     class's singleton method: the builtin lists cm_builtin_answers asks do
+     not hold them all) */
+  if (core_method_name_any(name) || bop_core_name(name)) return 0;
   /* (a Symbol argument: CRuby names another side for a String's) */
   int ac = 0;
   const int *av = call_args(c->nt, id, &ac);

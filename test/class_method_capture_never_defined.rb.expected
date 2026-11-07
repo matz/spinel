@@ -10,3 +10,8 @@ false
 :members
 "undefined method 'i' for class '#<Class:P>'"
 "undefined method 'zz' for class 'P'"
+:ok
+:ok
+:ok
+"undefined method 'instance_variable_names' for class '#<Class:P>'"
+"undefined method 'zz' for class '#<Class:P>'"

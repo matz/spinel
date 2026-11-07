@@ -2052,6 +2052,29 @@ void a_collect_used(Compiler *c, int id, ANameSet *out) {
   int na = nt_num_arrs(c->nt, id);
   for (int i = 0; i < na; i++) { int n = 0; const int *ids = nt_arr_at(c->nt, id, i, &n); for (int k = 0; k < n; k++) if (ids[k] >= 0) a_collect_used(c, ids[k], out); }
 }
+/* The names parameter list `pn` binds as slots of its own: its requireds,
+   and with `all` its optionals, rest, posts, keywords and keyword rest too
+   (not those of a parameter taken apart), at most `max` of them into `out`. */
+static int a_param_slot_names(const NodeTable *nt, int pn, int all, const char **out, int max) {
+  int n = 0;
+  if (pn < 0) return 0;
+  const char *lists[4] = { "requireds", "optionals", "posts", "keywords" };
+  for (int l = 0; l < (all ? 4 : 1); l++) {
+    int ln = 0; const int *ids = nt_arr(nt, pn, lists[l], &ln);
+    for (int k = 0; k < ln && n < max; k++) {
+      const char *nm = nt_str(nt, ids[k], "name");
+      if (nm) out[n++] = nm;
+    }
+  }
+  const char *refs[2] = { "rest", "keyword_rest" };
+  for (int r = 0; all && r < 2 && n < max; r++) {
+    int id = nt_ref(nt, pn, refs[r]);
+    const char *nm = id >= 0 ? nt_str(nt, id, "name") : NULL;
+    if (nm) out[n++] = nm;
+  }
+  return n;
+}
+
 /* The names a closure's body reads through a lazy chain held in a local it
    reads (lazy_alias_chain): a force there fuses the chain into the body,
    which then reads what the chain reads, its blocks' own parameters aside
@@ -2484,6 +2507,19 @@ int a_is_fiber_or_gen_create(Compiler *c, int id) {
   return rn && (sp_streq(rn, "Fiber") || sp_streq(rn, "Enumerator") || sp_streq(rn, "Thread"));
 }
 
+/* Does frame `q` (a proc, or a call with a block) make a cell for each of
+   its parameters that a proc inside it captures, as it binds them? A proc
+   literal's prologue does (emit_proc_param_cell), and so does a Fiber or
+   Thread body; a block a call inlines binds its requireds into their cells
+   but its other parameters into plain slots, so only its requireds are
+   celled for a capture (the capture is refused otherwise). */
+static int a_frame_cells_params(Compiler *c, int q, int is_proc) {
+  if (is_proc) return 1;
+  if (!a_is_fiber_or_gen_create(c, q)) return 0;
+  const char *rn = nt_str(c->nt, nt_ref(c->nt, q, "receiver"), "name");
+  return rn && !sp_streq(rn, "Enumerator");
+}
+
 /* every arm counts: the dispatch makes one proc for all of them, so the resolved method ignoring the block proves nothing */
 static int a_dispatch_arm_takes_block(Compiler *c, int cls, const char *name) {
   if (dispatch_impl_count(c, -1, cls, name) < 2) return 0;
@@ -2857,12 +2893,9 @@ void mark_proc_captures(Compiler *c) {
   }
   for (int qi = 0; qi < nql; qi++) {
     int q = ql[qi];
-    int qpn = a_proc_params_node(c, q);
-    int qrn = 0; const int *qreqs = qpn >= 0 ? nt_arr(nt, qpn, "requireds", &qrn) : NULL;
-    for (int k = 0; k < qrn; k++) {
-      const char *qn = nt_str(nt, qreqs[k], "name");
-      if (qn) mp_add(&qix, qn, -1, q);
-    }
+    const char *qnames[64];
+    int qnn = a_param_slot_names(nt, a_proc_params_node(c, q), a_frame_cells_params(c, q, qproc[q]), qnames, 64);
+    for (int k = 0; k < qnn; k++) mp_add(&qix, qnames[k], -1, q);
   }
 
   for (int id = 0; id < nt->count; id++) {
@@ -3022,13 +3055,10 @@ void mark_proc_captures(Compiler *c) {
              outlives its iteration shares it too: kept by value, its writes
              to the parameter were lost. */
           if (!q_is_proc && !q_is_block) continue;
-          int qpn = a_proc_params_node(c, q);
-          int qrn = 0; const int *qreqs = qpn >= 0 ? nt_arr(nt, qpn, "requireds", &qrn) : NULL;
+          const char *qnames[64];
+          int qnn = a_param_slot_names(nt, a_proc_params_node(c, q), a_frame_cells_params(c, q, q_is_proc), qnames, 64);
           int has = 0;
-          for (int k = 0; k < qrn && !has; k++) {
-            const char *qn = nt_str(nt, qreqs[k], "name");
-            if (qn && sp_streq(qn, nm)) has = 1;
-          }
+          for (int k = 0; k < qnn && !has; k++) if (sp_streq(qnames[k], nm)) has = 1;
           if (!has) continue;
           int qb = a_proc_body(c, q);
           if (qb >= 0 && a_subtree_contains(nt, qb, id, 0)) { owned_q = 1; shadow = !q_is_proc; }

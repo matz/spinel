@@ -334,7 +334,7 @@ static void emit_method_desc_literal(Compiler *c, int mn, int mi, int from, cons
 
 /* Method#parameters of method mi as sp_BoundMethod.params carries it: a C
    string literal of "kind[:name]" entries separated by spaces */
-static void emit_method_params_literal(Compiler *c, int mi, Buf *b) {
+static char *method_params_str(Compiler *c, int mi) {
   MethodParam *v;
   int n = scope_method_params(c, mi, &v);
   Buf d; memset(&d, 0, sizeof d);
@@ -342,9 +342,60 @@ static void emit_method_params_literal(Compiler *c, int mi, Buf *b) {
     buf_printf(&d, "%s%s", i ? " " : "", v[i].kind);
     if (v[i].name) buf_printf(&d, ":%.*s", (int)v[i].len, v[i].name);
   }
-  emit_str_literal(b, d.p ? d.p : "");
-  free(d.p);
   free(v);
+  return d.p;
+}
+static void emit_method_params_literal(Compiler *c, int mi, Buf *b) {
+  char *p = method_params_str(c, mi);
+  emit_str_literal(b, p ? p : "");
+  free(p);
+}
+
+/* The builtin classes a boxed receiver's Method reads its arity and
+   parameters by, and the test of each on the receiver _t<n> (twice) */
+static const char *const BAM_RECV_CLS[] = { "String", "Array", "Hash", "Integer", "Float", "Symbol", "Range", NULL };
+static const char *const BAM_RECV_TST[] = {
+  "_t%d.tag == SP_TAG_STR || sp_poly_is_strbuf(_t%d)",
+  "_t%d.tag == SP_TAG_OBJ && sp_poly_is_array_kind(_t%d.cls_id)",
+  "_t%d.tag == SP_TAG_OBJ && sp_poly_is_hash_kind(_t%d.cls_id)",
+  "_t%d.tag == SP_TAG_INT && _t%d.tag == SP_TAG_INT",
+  "_t%d.tag == SP_TAG_FLT && _t%d.tag == SP_TAG_FLT",
+  "_t%d.tag == SP_TAG_SYM && _t%d.tag == SP_TAG_SYM",
+  "_t%d.tag == SP_TAG_OBJ && _t%d.cls_id == SP_BUILTIN_RANGE" };
+
+/* Method#parameters of a boxed receiver's wrapper mi (bam_poly) for method
+   sym, by the class the receiver _t<tbr> has at run time, as its arity is
+   read: a program class's def of sym, its accessor's list (a reader's
+   none, a writer's one unnamed), or a builtin's list the facts have. The
+   wrapper's own list, its receiver and a rest, is the call's plumbing; it
+   answers only for a class none of these tells. */
+static void emit_method_params_by_recv(Compiler *c, int mi, const char *sym, int tbr, Buf *b) {
+  char *fallback = method_params_str(c, mi);
+  const char *fb = fallback ? fallback : "";
+  buf_puts(b, "(");
+  for (int q = 0; BAM_RECV_CLS[q]; q++) {
+    const char *own = builtin_method_owner(BAM_RECV_CLS[q], sym);
+    const char *bp = builtin_method_params(own ? own : BAM_RECV_CLS[q], sym, NULL);
+    if (!bp || sp_streq(bp, fb)) continue;
+    buf_puts(b, "("); buf_printf(b, BAM_RECV_TST[q], tbr, tbr); buf_puts(b, ") ? ");
+    emit_str_literal(b, bp);
+    buf_puts(b, " : ");
+  }
+  for (int k = 0; k < c->nclasses; k++) {
+    int mk = comp_method_in_chain(c, k, sym, NULL);
+    char *kp = mk >= 0 ? method_params_str(c, mk) : NULL;
+    const char *p = mk >= 0 ? (kp ? kp : "") : comp_reader_in_chain(c, k, sym, NULL) ? ""
+                  : attr_writer_named(c, k, sym) ? "req" : NULL;
+    if (p && !sp_streq(p, fb)) {
+      buf_printf(b, "(_t%d.tag == SP_TAG_OBJ && _t%d.cls_id == %d) ? ", tbr, tbr, k);
+      emit_str_literal(b, p);
+      buf_puts(b, " : ");
+    }
+    free(kp);
+  }
+  emit_str_literal(b, fb);
+  buf_puts(b, ")");
+  free(fallback);
 }
 
 /* Is method mi a method of its class's singleton, as a Method of it names
@@ -431,10 +482,11 @@ static void emit_source_path_literal(Buf *b, const char *file) {
    and the file and line of its def (NULL, 0 for none, as source_location's
    nil). The bind site knows each; the run time reads them from the fields,
    never from the rendering. */
-static void emit_method_desc_args(Compiler *c, int mn, int mi, int from, const char *sym, int unbound, Buf *b) {
+static void emit_method_desc_args(Compiler *c, int mn, int mi, int from, const char *sym, int unbound, int tbr, Buf *b) {
   emit_method_desc_literal(c, mn, mi, from, sym, unbound, b);
   buf_puts(b, ", ");
-  emit_method_params_literal(c, mi, b);
+  if (tbr > 0) emit_method_params_by_recv(c, mi, sym, tbr, b);
+  else emit_method_params_literal(c, mi, b);
   buf_puts(b, ", ");
   emit_method_owner_class(c, mn, mi, unbound, b);
   int dn = c->scopes[mi].def_node, line = 0;
@@ -543,7 +595,7 @@ int emit_op_method_unbind(Compiler *c, const BopCtx *x, Buf *b) {
   buf_puts(b, "; ");
   if (pp) buf_puts(b, "sp_bm_set_proc_params(");
   buf_printf(b, "sp_bm_set_unbound(sp_bm_set_abi(sp_bound_method_new_d(NULL, SP_BM_SELF_NONE, _t%d->fn, _t%d->name, _t%d->arity, ", tvu, tvu, tvu);
-  if (tmu >= 0) emit_method_desc_args(c, mnu, tmu, -1, method_sym_arg(c, mnu), 1, b);
+  if (tmu >= 0) emit_method_desc_args(c, mnu, tmu, -1, method_sym_arg(c, mnu), 1, 0, b);
   else buf_printf(b, "NULL, _t%d->params, _t%d->owner, _t%d->src_file, _t%d->src_line", tvu, tvu, tvu, tvu);
   buf_printf(b, "), 0, _t%d->legacy_int_abi, _t%d->legacy_sig, _t%d->legacy_fixed, _t%d->legacy_rest, _t%d->legacy_ret, _t%d->poly_abi, _t%d->poly_fixed))", tvu, tvu, tvu, tvu, tvu, tvu, tvu);
   if (pp) buf_printf(b, ", %s)", pp);
@@ -575,7 +627,7 @@ int emit_op_method_super_method(Compiler *c, const BopCtx *x, Buf *b) {
     emit_str_literal(b, c->scopes[pmip].name ? c->scopes[pmip].name : "?");
     { int ar; if (method_scope_arity(c, pmip, &ar)) buf_printf(b, ", (sp_int)%d", ar); else buf_puts(b, ", (sp_int)-1"); }
     buf_puts(b, ", ");
-    emit_method_desc_args(c, -1, pmip, -1, c->scopes[pmip].name, sup_unb, b);
+    emit_method_desc_args(c, -1, pmip, -1, c->scopes[pmip].name, sup_unb, 0, b);
     buf_puts(b, ")");
     { char _s[8 * 64 + 1]; int _fx = 0, _rs = 0, _rt = 0, _pf = 0, _prt = 0;
       int _ab = method_legacy_int_abi(c, pmip, !sup_unb, _s, sizeof _s, &_fx, &_rs, &_rt);
@@ -633,7 +685,7 @@ static int emit_method_bind_target(Compiler *c, const BopCtx *x, Buf *b, int t2)
     emit_str_literal(b, method_sym_arg(c, mn2));
     { int ar; if (method_scope_arity(c, t2, &ar)) buf_printf(b, ", (sp_int)%d", ar); else buf_puts(b, ", (sp_int)-1"); }
     buf_puts(b, ", ");
-    emit_method_desc_args(c, mn2, t2, -1, method_sym_arg(c, mn2), 0, b);
+    emit_method_desc_args(c, mn2, t2, -1, method_sym_arg(c, mn2), 0, 0, b);
     buf_puts(b, ")");
     { char _s[8 * 64 + 1]; int _fx = 0, _rs = 0, _rt = 0, _pf = 0, _prt = 0;
       int _ab = method_legacy_int_abi(c, t2, 1, _s, sizeof _s, &_fx, &_rs, &_rt);
@@ -1912,7 +1964,7 @@ static int emit_method_obj_target(Compiler *c, int id, Buf *b, const NodeTable *
       emit_str_literal(b, method_sym_arg(c, id));
       { int ar; if (method_scope_arity(c, umi, &ar)) buf_printf(b, ", (sp_int)%d", ar); else buf_puts(b, ", (sp_int)-1"); }
       buf_puts(b, ", ");
-      emit_method_desc_args(c, id, umi, -1, method_sym_arg(c, id), 1, b);
+      emit_method_desc_args(c, id, umi, -1, method_sym_arg(c, id), 1, 0, b);
       buf_puts(b, ")");
       { char _s[8 * 64 + 1]; int _fx = 0, _rs = 0, _rt = 0, _pf = 0, _prt = 0;
         int _ab = method_legacy_int_abi(c, umi, 0, _s, sizeof _s, &_fx, &_rs, &_rt);
@@ -2296,21 +2348,12 @@ static int emit_method_obj_target(Compiler *c, int id, Buf *b, const NodeTable *
       if (tbr > 0) {
         /* the builtin's own arity, by the class the receiver has at run
            time; the wrapper's parameters are the call sites' plumbing */
-        static const char *const PCLS[] = { "String", "Array", "Hash", "Integer", "Float", "Symbol", "Range", NULL };
-        static const char *const PTST[] = {
-          "_t%d.tag == SP_TAG_STR || sp_poly_is_strbuf(_t%d)",
-          "_t%d.tag == SP_TAG_OBJ && sp_poly_is_array_kind(_t%d.cls_id)",
-          "_t%d.tag == SP_TAG_OBJ && sp_poly_is_hash_kind(_t%d.cls_id)",
-          "_t%d.tag == SP_TAG_INT && _t%d.tag == SP_TAG_INT",
-          "_t%d.tag == SP_TAG_FLT && _t%d.tag == SP_TAG_FLT",
-          "_t%d.tag == SP_TAG_SYM && _t%d.tag == SP_TAG_SYM",
-          "_t%d.tag == SP_TAG_OBJ && _t%d.cls_id == SP_BUILTIN_RANGE" };
         int fallback = method_scope_arity(c, mi, &ar) ? ar : -1;
         buf_puts(b, ", (sp_int)(");
-        for (int q = 0; PCLS[q]; q++) {
+        for (int q = 0; BAM_RECV_CLS[q]; q++) {
           int ba;
-          if (!builtin_method_arity(PCLS[q], disp, &ba)) continue;
-          buf_puts(b, "("); buf_printf(b, PTST[q], tbr, tbr); buf_printf(b, ") ? %d : ", ba);
+          if (!builtin_method_arity(BAM_RECV_CLS[q], disp, &ba)) continue;
+          buf_puts(b, "("); buf_printf(b, BAM_RECV_TST[q], tbr, tbr); buf_printf(b, ") ? %d : ", ba);
         }
         for (int k = 0; k < c->nclasses; k++) {
           int ka = method_scope_arity(c, comp_method_in_chain(c, k, disp, NULL), &ar) ? ar
@@ -2331,7 +2374,7 @@ static int emit_method_obj_target(Compiler *c, int id, Buf *b, const NodeTable *
       else buf_puts(b, ", (sp_int)-1"); }
     if (mi >= 0) {
       buf_puts(b, ", ");
-      emit_method_desc_args(c, id, mi, method_obj_from_class(c, id), disp, 0, b);
+      emit_method_desc_args(c, id, mi, method_obj_from_class(c, id), disp, 0, tbr, b);
     }
     else if (bop) {
       /* (the facts name Array for each of the ops; none answered is nil) */

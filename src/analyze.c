@@ -18958,9 +18958,17 @@ static int narrow_object_arrays(Compiler *c) {
       ClassInfo *cl = &c->classes[sl[i].ici];
       ivar_set_type(cl, sl[i].iiv, nty); cl->ivar_oa_type[sl[i].iiv] = nty; cl->ivar_int_table[sl[i].iiv] = 1;
       /* a subclass's struct begins with its ancestors' fields, and inherited
-         methods read them through a cast: every copy takes the one type */
+         methods read them through a cast: every copy takes the one type.
+         The chain is walked here, not through is_descendant: a subclass
+         nothing names (unreferenced, #10592) is laid out and compared by
+         check_class_layout_prefix all the same, and its copy of the slot,
+         reset to the poly array above, would stay there. */
       for (int k = 0; k < c->nclasses; k++) {
-        if (k == sl[i].ici || !is_descendant(c, k, sl[i].ici)) continue;
+        if (k == sl[i].ici) continue;
+        int under = 0;
+        for (int x = c->classes[k].parent; x >= 0; x = c->classes[x].parent)
+          if (x == sl[i].ici) { under = 1; break; }
+        if (!under) continue;
         ClassInfo *kc = &c->classes[k];
         int kiv = comp_ivar_index(kc, cl->ivars[sl[i].iiv]);
         if (kiv < 0) continue;

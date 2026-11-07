@@ -570,7 +570,9 @@ static void usage(void) {
     "              the program, and exit (debug)\n"
     "  --check-value-pos  Check the value-position iterator's limits and exit (debug)\n"
     "  --dump-implied-calls  Print the methods CRuby calls for each node of the program\n"
-    "              that its text does not name, and exit (debug)\n");
+    "              that its text does not name, and exit (debug)\n"
+    "  --method-table-check  Print the reads of the static method tables made outside\n"
+    "              call_target, and the answers that are the table's last definition (debug)\n");
 }
 
 /* --dump-ast (1), --dump-value-positions (2), --check-value-pos (3),

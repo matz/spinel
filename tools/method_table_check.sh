@@ -46,8 +46,9 @@ while [ $# -gt 0 ]; do
   esac
 done
 SP=$ROOT/bin/spinel
+if [ -n "$LIST" ] && [ ! -r "$LIST" ]; then echo "method-table-check: cannot read $LIST" >&2; exit 2; fi
 [ -x "$SP" ] || { echo "method-table-check: build bin/spinel first" >&2; exit 2; }
-JOBS=${METHOD_TABLE_CHECK_JOBS:-$(nproc)}
+JOBS=${METHOD_TABLE_CHECK_JOBS:-$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)}
 # optcarrot, packed as the gate packs it (make optcarrot); without its
 # checkout there is nothing to pack, and a run without it would pass falsely
 if [ -z "$LIST" ] && [ ! -f build/optcarrot-single.rb ]; then
@@ -61,21 +62,32 @@ if [ -z "$LIST" ] && [ ! -f build/optcarrot-single.rb ]; then
 fi
 OUT=$(mktemp "${TMPDIR:-/tmp}/spinel-method-table-check.XXXXXX")
 PARTS=$(mktemp -d "${TMPDIR:-/tmp}/spinel-method-table-check-parts.XXXXXX")
-# one file per program: the parallel jobs' lines must not interleave
+# one file per program: the parallel jobs' lines must not interleave. The
+# paths go NUL-delimited, so a quote or a space in one stays in it.
 { if [ -n "$LIST" ]; then cat "$LIST"
   else
-    ls test/*.rb benchmark/*.rb packages/*/test/*.rb 2>/dev/null
-    echo build/optcarrot-single.rb
+    for p in test/*.rb benchmark/*.rb packages/*/test/*.rb build/optcarrot-single.rb; do
+      if [ -f "$p" ]; then echo "$p"; fi
+    done
   fi; } |
-  xargs -P "$JOBS" -I{} sh -c '
+  while IFS= read -r path || [ -n "$path" ]; do
+    if [ -n "$path" ]; then printf '%s\0' "$path"; fi
+  done |
+  xargs -0 -P "$JOBS" -I{} sh -c '
     out=$("$2" -c --no-line-map --method-table-check "$1" -o /dev/null 2>&1); rc=$?
-    { printf "%s\n" "$out" | grep "^method-table-check:" | sed "s|^|$1: |"
+    { printf "%s\n" "$out" | grep "^method-table-check:" | P=$1 awk "{ print ENVIRON[\"P\"] \": \" \$0 }"
       # a program that fails under the flag but not without it is a failure
       if [ "$rc" -ne 0 ]; then
         if "$2" -c --no-line-map "$1" -o /dev/null >/dev/null 2>&1; then echo "$1: method-table-check-flag-exit: $rc"
         else echo "$1: method-table-check-exit: $rc"; fi
-      fi; } > "$3/$(printf %s "$1" | tr / _)"
+      fi; } > "$(mktemp "$3/part.XXXXXX")"
   ' _ {} "$SP" "$PARTS"
+if [ $? -ne 0 ]; then
+  echo "method-table-check: a compile job could not run" >&2
+  rm -rf "${PARTS:?}"
+  rm -f "$OUT"
+  exit 2
+fi
 find "$PARTS" -type f -exec cat {} + > "$OUT"
 rm -rf "${PARTS:?}"
 # a read line: <program>: method-table-check: read <family> <pass|-> <file>:<line> <side>:<Class>#<name> <prim> [versioned]

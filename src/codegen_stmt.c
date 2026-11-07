@@ -13593,6 +13593,9 @@ int hv_emit(Compiler *c, int id, const char *count, Buf *b, int indent, char *st
 }
 
 static void emit_for_poly_lefts(Compiler *c, int idx, int tv, int indent, Buf *b) {
+  /* the element converts as the targets' implied to_ary of it (its row):
+     an object of the program's takes apart the Array its to_ary answers */
+  tv = emit_boxed_to_ary(c, idx, NTI_YIELDED, tv, b, indent);
   int ln = 0;
   const int *lefts = nt_arr(c->nt, idx, "lefts", &ln);
   for (int i = 0; i < ln; i++) {

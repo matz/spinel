@@ -25,3 +25,8 @@ p(((P.method(:private_class_method); :ok) rescue $!.message))
 p(((P.method(:included); :ok) rescue $!.message))
 p(((P.method(:instance_variable_names); :ok) rescue $!.message))
 p((P.method(:zz).name rescue $!.message))
+# a name that needs escaping in C
+p((P.method(:"a\"b\\c") rescue $!.message))
+p((P.method(:"x\ny%sz") rescue $!.message))
+Q9 = Class.new { def self.k = 1 }
+p((Q9.method(:"q\"%d") rescue $!.message))

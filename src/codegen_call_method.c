@@ -2372,13 +2372,17 @@ static int emit_method_obj_target(Compiler *c, int id, Buf *b, const NodeTable *
 static void emit_capture_absent_raise(Compiler *c, int id, const CallPlan *plan, Buf *b) {
   int module = plan->absent == CP_ABSENT_MODULE;
   const char *cn = module ? "Module" : class_ruby_name(c, plan->owner_ci), *open = plan->absent == CP_ABSENT_SG ? "#<Class:" : "", *close = plan->absent == CP_ABSENT_SG ? ">" : "";
+  /* (the name is escaped for the C literal: :"a\"b") */
+  const char *mn = method_sym_arg(c, id);
   if (!module && comp_class_anonymous(c, plan->owner_ci)) {
-    buf_printf(b, "sp_raise_cls(\"NameError\", sp_sprintf(\"undefined method '%%s' for class '%s%%s%s'\", \"%s\", sp_class_display((sp_Class){%d})));",
-               open, close, method_sym_arg(c, id), plan->owner_ci);
+    buf_printf(b, "sp_raise_cls(\"NameError\", sp_sprintf(\"undefined method '%%s' for class '%s%%s%s'\", \"", open, close);
+    emit_c_escaped(b, mn ? mn : "");
+    buf_printf(b, "\", sp_class_display((sp_Class){%d})));", plan->owner_ci);
     return;
   }
-  buf_printf(b, "sp_raise_cls(\"NameError\", (&(\"\\xff\" \"undefined method '%s' for class '%s%s%s'\")[1]));",
-             method_sym_arg(c, id), open, cn ? cn : c->classes[plan->owner_ci].name, close);
+  buf_puts(b, "sp_raise_cls(\"NameError\", (&(\"\\xff\" \"undefined method '\" \"");
+  emit_c_escaped(b, mn ? mn : "");
+  buf_printf(b, "\" \"' for class '%s%s%s'\")[1]));", open, cn ? cn : c->classes[plan->owner_ci].name, close);
 }
 
 int emit_call_method_obj_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc, const int *argv) {

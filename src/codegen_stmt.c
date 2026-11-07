@@ -19709,10 +19709,90 @@ static int emit_multi_write_stmt(Compiler *c, int id, Buf *b, int indent, const 
   return 0;
 }
 
+/* Does definition n (a def, or a define_method call with its block) hold
+   something that may reach a builtin mixin: a super, a call of include,
+   prepend, extend or append_features, a bound Module method (instance_method,
+   bind_call), send, an alias? A bare or self call of a singleton alias of a
+   mixin counts, and a bare or self call of a class method of the program is
+   followed into that method's body (seen: the scopes already followed). A
+   nested def or class body is its own. */
+static int own_mixin_reach(Compiler *c, int n, unsigned char *seen, int depth) {
+  const NodeTable *nt = c->nt;
+  if (n < 0 || depth > 64) return n >= 0;
+  NodeKind k = nt_kind(nt, n);
+  if (k == NK_SuperNode || k == NK_ForwardingSuperNode || k == NK_AliasMethodNode) return 1;
+  if (k == NK_CallNode) {
+    static const char *const names[] = { "include", "prepend", "extend", "append_features", "prepend_features",
+      "extend_object", "instance_method", "bind_call", "bind", "alias_method", "send", "__send__",
+      "public_send", "method", NULL };
+    const char *nm = nt_str(nt, n, "name");
+    for (int i = 0; nm && names[i]; i++) if (sp_streq(nm, names[i])) return 1;
+    int recv = nt_ref(nt, n, "receiver");
+    if (nm && (recv < 0 || nt_kind(nt, recv) == NK_SelfNode)) {
+      /* `alias orig_include include` in `class << self`, called by its new name */
+      for (int ci = 0; ci < c->nclasses; ci++) {
+        const ClassInfo *ki = &c->classes[ci];
+        for (int a = 0; a < ki->naliases; a++)
+          if (ki->alias_sg && ki->alias_sg[a] && sp_streq(ki->alias_new[a], nm) && is_mixin_call(ki->alias_old[a])) return 1;
+      }
+      /* a class method of the program's by that name: its body runs too */
+      for (int si = 0; si < c->nscopes; si++) {
+        const Scope *sc = &c->scopes[si];
+        if (seen[si] || !sc->is_cmethod || !sc->name || !sp_streq(sc->name, nm) || sc->def_node < 0) continue;
+        seen[si] = 1;
+        if (own_mixin_reach(c, sc->def_node, seen, depth + 1)) return 1;
+      }
+    }
+  }
+  int nr = nt_num_refs(nt, n), na = nt_num_arrs(nt, n);
+  for (int i = 0; i < nr; i++) {
+    int ch = nt_ref_at(nt, n, i);
+    NodeKind ck = ch >= 0 ? nt_kind(nt, ch) : NK_NilNode;
+    if (ck == NK_DefNode || ck == NK_ClassNode || ck == NK_ModuleNode || ck == NK_SingletonClassNode) continue;
+    if (own_mixin_reach(c, ch, seen, depth)) return 1;
+  }
+  for (int i = 0; i < na; i++) {
+    int an = 0; const int *av = nt_arr_at(nt, n, i, &an);
+    for (int j = 0; j < an; j++) {
+      NodeKind ck = nt_kind(nt, av[j]);
+      if (ck == NK_DefNode || ck == NK_ClassNode || ck == NK_ModuleNode || ck == NK_SingletonClassNode) continue;
+      if (own_mixin_reach(c, av[j], seen, depth)) return 1;
+    }
+  }
+  return 0;
+}
+static int own_mixin_body_reaches_builtin(Compiler *c, int dn) {
+  unsigned char *seen = calloc((size_t)c->nscopes + 1, 1);
+  if (!seen) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  int r = own_mixin_reach(c, dn, seen, 0);
+  free(seen);
+  return r;
+}
+
 /* A CallNode statement: the statement-level fast paths ahead of emit_expr (emit_stmt_inner's arms, in their order) */
 static int emit_call_stmt(Compiler *c, int id, Buf *b, int indent, const NodeTable *nt, const char *ty) {
   refuse_prepass_at_emit(c, id);
   if (!(sp_streq(ty, "CallNode"))) return 0;
+  /* `include M` that runs the class's own `def self.include` (the load
+     record marks it, with the definition it finds there): a method that
+     may reach a builtin mixin itself (a super, another mixin call, a bound
+     Module method, a condition's untaken branch, an alias of the builtin)
+     would mix a module in as the program runs, and a class's ancestors are
+     fixed at compile time */
+  { int own = (int)nt_int(nt, id, "mixin_own_call", 0);
+    const char *mnm = own > 0 ? nt_str(nt, id, "name") : NULL;
+    int dn = own - 1;
+    const char *why = !mnm ? NULL : nt_int(nt, dn, "cond_dispatch", 0) ? "a condition defines"
+                    : own_mixin_body_reaches_builtin(c, dn) ? "may call super or a builtin mixin" : NULL;
+    if (why) {
+      char msg[600];
+      snprintf(msg, sizeof msg, "a class method `%s` of the program that %s is not supported by AOT "
+               "compilation: the builtin mixin would add a module as the program runs, and a class's "
+               "ancestors are fixed at compile time. Mix the module in with the builtin form, or define "
+               "the method without it (see docs/limitations.md)", mnm, why);
+      unsupported_feature(c, id, msg);
+    }
+  }
   if (emit_arysub_call_stmt(c, id, b, indent)) return 1;   /* #7449 */
   /* --share-strings: a safe-navigation bang on an attribute assignment's
      handle changes that handle: its route, run for its effect (the bang's
@@ -19744,7 +19824,7 @@ static int emit_call_stmt(Compiler *c, int id, Buf *b, int indent, const NodeTab
     /* `singleton_class.attr_reader :x`: an attr of the body's singleton,
        registered from the load record as `class << self`'s are */
     int sc_attr = recv >= 0 && (nt_int(nt, id, "sg_attr_decl", 0) || nt_int(nt, id, "mixin_by_record", 0));
-    if ((recv < 0 || sc_attr) && nm && (sp_streq(nm, "include") || sp_streq(nm, "extend") ||
+    if ((recv < 0 || sc_attr) && nm && !nt_int(nt, id, "mixin_own_call", 0) && (sp_streq(nm, "include") || sp_streq(nm, "extend") ||
                            sp_streq(nm, "prepend") || sp_streq(nm, "module_function") ||
                            sp_streq(nm, "private") || sp_streq(nm, "protected") ||
                            sp_streq(nm, "public") || sp_streq(nm, "attr_reader") ||

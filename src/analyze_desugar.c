@@ -2490,6 +2490,7 @@ static int scm_hoist_sclass_mixins(NodeTable *nt, int body) {
       for (int j = 0; j < sn; j++) {
         if (!mask[j]) { ss[keep++] = ss[j]; continue; }
         if (sp_streq(nt_str(nt, ss[j], "name"), "prepend")) nt_node_set_int(nt, ss[j], "sclass_prepend", 1);
+        nt_node_set_int(nt, ss[j], "sclass_mixin", 1);   /* (the singleton's builtin mixin, not the class's own `extend`) */
         nt_node_set_str(nt, ss[j], "name", "extend");
         out[no++] = ss[j];
       }
@@ -2529,6 +2530,7 @@ int desugar_singleton_class_mixin(Compiler *c) {
         if (nt_kind(nt, av[a]) != NK_ConstantReadNode && nt_kind(nt, av[a]) != NK_ConstantPathNode) ok = 0;
       if (!ok) continue;
       if (sp_streq(nm, "prepend")) nt_node_set_int(nt, st, "sclass_prepend", 1);
+      nt_node_set_int(nt, st, "sclass_mixin", 1);
       nt_node_set_str(nt, st, "name", "extend");
       nt_node_set_ref(nt, st, "receiver", -1);
       nt_node_reset(nt, recv, "NilNode");
@@ -14822,6 +14824,7 @@ int disp_def_build(NodeTable *nt, int like, const char *name, int sg, int ar, in
   nt_node_set_ref(nt, def, "receiver", sg ? nt_new_node(nt, "SelfNode") : -1);
   nt_node_set_ref(nt, def, "parameters", params);
   nt_node_set_ref(nt, def, "body", cdef_stmts(nt, chain));
+  nt_node_set_int(nt, def, "cond_dispatch", 1);   /* (its no-method arm raises: a builtin of the name is not reached) */
   return def;
 }
 

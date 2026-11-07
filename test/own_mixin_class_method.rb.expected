@@ -1,0 +1,25 @@
+hook include [M]
+false
+hook extend M
+false
+hook prepend Base
+false
+self form [M, Comparable]
+:done
+false
+parent hook Child
+false
+hooky [M]
+false
+module hook [M]
+false
+private hook [M]
+false
+from outside [M]
+false
+true
+included in P9
+parent hook P10
+true
+first [M]
+false

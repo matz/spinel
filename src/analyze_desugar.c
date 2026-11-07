@@ -10997,9 +10997,16 @@ int desugar_raise_own_exception(Compiler *c) {
     if (mi < 0 || elab_method_at(c, ci, "exception", 1, elab_point_of(c, id), NULL) != ELAB_YES) continue;
     /* a `super` past the program's methods reaches Exception.exception,
        which Spinel's class methods cannot call: such a method keeps the
-       raise of K, whose result it gives where it only supers */
-    int up = dc >= 0 ? c->classes[dc].parent : -1;
-    if (scope_calls_super(c, mi) && (up < 0 || call_target(c, -1, up, "exception", CT_CMETHOD, NULL) < 0)) continue;
+       raise of K, whose result it gives where it only supers.  Each
+       method on the super chain is asked, not only the first one */
+    int sm = mi, sdc = dc, past = 0;
+    for (int step = 0; sm >= 0 && scope_calls_super(c, sm); step++) {
+      int up = sdc >= 0 ? c->classes[sdc].parent : -1;
+      sdc = -1;
+      sm = up >= 0 && step < 64 ? call_target(c, -1, up, "exception", CT_CMETHOD, &sdc) : -1;
+      if (sm < 0) past = 1;
+    }
+    if (past) continue;
     int base = nt->count;
     int ex = fwd_new_call(nt, av[0], "exception", npos == 2 ? av[1] : -1);
     fwd_copy_loc(nt, ex, id);

@@ -6093,8 +6093,7 @@ int infer_global_const_types(Compiler *c) {
     else if (ty_k == NK_ConstantPathWriteNode || ty_k == NK_ConstantPathOrWriteNode ||
              ty_k == NK_ConstantPathAndWriteNode || ty_k == NK_ConstantPathOperatorWriteNode) {
       int tgt = nt_ref(nt, id, "target");
-      const char *nm = tgt >= 0 ? const_key_at(c, tgt) : NULL;
-      if (nm) lv = comp_const(c, nm);
+      lv = tgt >= 0 ? comp_const_at(c, tgt) : NULL;
       int is_orand = ty_k == NK_ConstantPathOrWriteNode || ty_k == NK_ConstantPathAndWriteNode;
       /* An or/and-write-only constant has no definite value before its first
          use, so it must default to nil (poly) for the truthiness check. */
@@ -6165,9 +6164,7 @@ int infer_global_const_types(Compiler *c) {
       if (crecv < 0) continue;
       NodeKind rk = nt_kind(nt, crecv);
       if (rk != NK_ConstantReadNode) continue;
-      const char *cnm2 = const_key_at(c, crecv);
-      if (!cnm2) continue;
-      lv = comp_const(c, cnm2);
+      lv = comp_const_at(c, crecv);
       if (!lv || lv->type != TY_UNKNOWN) continue;
       int cargs = nt_ref(nt, id, "arguments");
       int cac = 0;
@@ -6237,8 +6234,7 @@ int infer_multiwrite_const_types(Compiler *c) {
     for (int i = 0; i < ln; i++) {
       const char *lty = nt_type(nt, lefts[i]) ? nt_type(nt, lefts[i]) : "";
       if (!sp_streq(lty, "ConstantTargetNode") && !sp_streq(lty, "ConstantPathTargetNode")) continue;
-      const char *nm = const_key_at(c, lefts[i]);
-      LocalVar *cv = nm ? comp_const(c, nm) : NULL;
+      LocalVar *cv = comp_const_at(c, lefts[i]);
       if (!cv || cv->type == elem) continue;
       lv_set_type(cv, elem); changed = 1;
     }
@@ -6247,8 +6243,7 @@ int infer_multiwrite_const_types(Compiler *c) {
     for (int j = 0; j < rn; j++) {
       const char *rty2 = nt_type(nt, rights[j]) ? nt_type(nt, rights[j]) : "";
       if (!sp_streq(rty2, "ConstantTargetNode") && !sp_streq(rty2, "ConstantPathTargetNode")) continue;
-      const char *nm = const_key_at(c, rights[j]);
-      LocalVar *cv = nm ? comp_const(c, nm) : NULL;
+      LocalVar *cv = comp_const_at(c, rights[j]);
       if (!cv || cv->type == elem) continue;
       lv_set_type(cv, elem); changed = 1;
     }

@@ -1052,6 +1052,15 @@ int desugar_body_module_eval(Compiler *c) {
         else is_own = me_is_own(nt, recv, own, 0);
       }
       int bbody = is_own ? nt_ref(nt, blk, "body") : -1;
+      /* a block of defs alone needs no splice: the walk records them on the
+         class (the class_eval frame) and the scope pass places them there,
+         and codegen emits the statement as nothing (class_eval_reopen_class);
+         only a block with other statements is spliced in still (#10785) */
+      if (bbody >= 0 && nt_kind(nt, bbody) == NK_StatementsNode) {
+        int dn = 0, only = 1; const int *ds = nt_arr(nt, bbody, "body", &dn);
+        for (int j = 0; j < dn; j++) if (nt_kind(nt, ds[j]) != NK_DefNode) only = 0;
+        if (only && dn > 0) { xc_push(&nb, &nbn, st); continue; }
+      }
       if (bbody >= 0 && nt_kind(nt, bbody) == NK_StatementsNode) {
         int en = 0; const int *es = nt_arr(nt, bbody, "body", &en);
         for (int j = 0; j < en; j++) xc_push(&nb, &nbn, es[j]);

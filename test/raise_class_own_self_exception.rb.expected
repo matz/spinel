@@ -10,3 +10,6 @@
 [:app, "app:r2"]
 [AppError, "app:inmeth"]
 AppError
+[AppError, "p:priv"]
+[AppError, "in:self"]
+[AppError, "sup:subx"]

@@ -37,3 +37,16 @@ def m2 = raise(W, "inmeth")
 try { m2 }
 x = begin; raise W, "val"; rescue => e; e; end
 p x.class
+class P < StandardError
+  def self.exception(m = "d") = AppError.new("p:" + m)
+  private_class_method :exception
+end
+try { raise P, "priv" }
+class In < StandardError
+  def self.exception(m = "d") = AppError.new("in:" + m)
+  def self.go = raise(In, "self")
+end
+try { In.go }
+class Sup < StandardError; def self.exception(m = "d") = AppError.new("sup:" + m); end
+class Sub < Sup; def self.exception(m = "d") = super("sub" + m); end
+try { raise Sub, "x" }

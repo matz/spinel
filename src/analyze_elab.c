@@ -2264,6 +2264,7 @@ static int lr_foreign_mixin(ElabRec *x, int node, const LrMixin *m, int cls, int
 }
 
 static int lr_const_root_undefined(const NodeTable *nt, int n);
+static int lr_sg_chain_runs(Compiler *c, int cls, const char *name, LoadPoint p);
 static void lr_call(ElabRec *x, int node, int fc, int fs, unsigned char *vs, int fnode, int may, int nested) {
   const NodeTable *nt = x->c->nt;
   const char *nm = nt_str(nt, node, "name");
@@ -2307,6 +2308,14 @@ static void lr_call(ElabRec *x, int node, int fc, int fs, unsigned char *vs, int
      `include B` then `include A` would, and so do prepend and extend: the
      arguments of a mixin are recorded last first */
   int mix = is_mixin_call(nm);
+  /* `include M` where the class's own `def self.include` (or a
+     superclass's) is what the call finds: that method runs, and it mixes
+     nothing in by itself. The call is the program's, which may do anything
+     (codegen reads the mark and emits it as a call) */
+  if (mix && !sg && cls >= 0 && !nested && lr_sg_chain_runs(x->c, cls, nm, elab_point_of(x->c, node)) == ELAB_YES) {
+    nt_node_set_int((NodeTable *)nt, node, "mixin_own_call", cls + 1);
+    mix = 0; naming = 0;
+  }
   for (int j = 0; j < ac; j++) {
     int i = mix ? ac - 1 - j : j;
     const char *an_ = vis_arg_name(nt, av[i]);
@@ -3995,6 +4004,22 @@ static int lr_search(Compiler *c, int cls, int sg, const char *name, int mod, Lo
   return unsure ? ELAB_UNKNOWN : o;
 }
 
+/* Does a call of `name` on class cls at p find a class method of the
+   program's: the class's own singleton methods or its extends', then its
+   superclasses' (not the instance methods of Class, Module, Object and
+   Kernel every singleton chain ends in)? */
+static int lr_sg_chain_runs(Compiler *c, int cls, const char *name, LoadPoint p) {
+  for (int d = 0; cls >= 0 && d <= lr_chain_bound(c); d++) {
+    int unsure = 0, o = lr_search_one(c, cls, 1, name, -1, p, 0, 0, NULL, d, &unsure, 0);
+    if (o == LR_STOP) return ELAB_NO;
+    if (o == ELAB_YES) return unsure ? ELAB_UNKNOWN : ELAB_YES;
+    if (o == ELAB_UNKNOWN || unsure) return ELAB_UNKNOWN;
+    int sup = lr_super(c, cls);
+    if (sup < 0) return ELAB_NO;
+    cls = sup;
+  }
+  return ELAB_UNKNOWN;
+}
 /* The versions of `name` along cls's chain (its singleton's when sg), as
    lr_search walks it: on each class, its prepends', its own, its includes'
    or extends'; then its superclass's, and where a singleton's chain ends

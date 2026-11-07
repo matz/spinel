@@ -19713,6 +19713,23 @@ static int emit_multi_write_stmt(Compiler *c, int id, Buf *b, int indent, const 
 static int emit_call_stmt(Compiler *c, int id, Buf *b, int indent, const NodeTable *nt, const char *ty) {
   refuse_prepass_at_emit(c, id);
   if (!(sp_streq(ty, "CallNode"))) return 0;
+  /* `include M` that runs the class's own `def self.include` (the load
+     record marks it): a super there would mix the module in as the call
+     runs, and the class's ancestors are fixed at compile time */
+  { int own = nt_int(nt, id, "mixin_own_call", 0) - 1;
+    const char *mnm = own >= 0 ? nt_str(nt, id, "name") : NULL;
+    int si = mnm && own < c->nclasses ? comp_cmethod_in_chain(c, own, mnm, NULL) : -1;
+    int dn = si >= 0 ? c->scopes[si].def_node : -1, cond = dn >= 0 && nt_int(nt, dn, "cond_dispatch", 0);
+    if (si >= 0 && (cond || scope_calls_super(c, si))) {
+      char msg[512];
+      snprintf(msg, sizeof msg, "a class method `%s` of the program that %s is not supported by AOT "
+               "compilation: the builtin `%s` would mix the module in as the program runs, and a class's "
+               "ancestors are fixed at compile time. Mix the module in with the builtin form, or define the "
+               "method without it (see docs/limitations.md)", mnm,
+               cond ? "a condition defines" : "calls `super`", mnm);
+      unsupported_feature(c, id, msg);
+    }
+  }
   if (emit_arysub_call_stmt(c, id, b, indent)) return 1;   /* #7449 */
   /* --share-strings: a safe-navigation bang on an attribute assignment's
      handle changes that handle: its route, run for its effect (the bang's
@@ -19744,7 +19761,7 @@ static int emit_call_stmt(Compiler *c, int id, Buf *b, int indent, const NodeTab
     /* `singleton_class.attr_reader :x`: an attr of the body's singleton,
        registered from the load record as `class << self`'s are */
     int sc_attr = recv >= 0 && (nt_int(nt, id, "sg_attr_decl", 0) || nt_int(nt, id, "mixin_by_record", 0));
-    if ((recv < 0 || sc_attr) && nm && (sp_streq(nm, "include") || sp_streq(nm, "extend") ||
+    if ((recv < 0 || sc_attr) && nm && !nt_int(nt, id, "mixin_own_call", 0) && (sp_streq(nm, "include") || sp_streq(nm, "extend") ||
                            sp_streq(nm, "prepend") || sp_streq(nm, "module_function") ||
                            sp_streq(nm, "private") || sp_streq(nm, "protected") ||
                            sp_streq(nm, "public") || sp_streq(nm, "attr_reader") ||

@@ -14822,6 +14822,7 @@ int disp_def_build(NodeTable *nt, int like, const char *name, int sg, int ar, in
   nt_node_set_ref(nt, def, "receiver", sg ? nt_new_node(nt, "SelfNode") : -1);
   nt_node_set_ref(nt, def, "parameters", params);
   nt_node_set_ref(nt, def, "body", cdef_stmts(nt, chain));
+  nt_node_set_int(nt, def, "cond_dispatch", 1);   /* (its no-method arm raises: a builtin of the name is not reached) */
   return def;
 }
 

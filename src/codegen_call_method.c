@@ -2947,9 +2947,22 @@ int emit_send_blind(Compiler *c, int id, Buf *b) {
         /* a builtin value whose class below Object answers the name
            (Integer#to_s) takes the dispatch too: its method comes before
            the top-level def */
+        /* ...and so does a class of the program under such a class
+           (`class MyH < Hash` for `default`), by its name as the value's
+           class name reads */
         { Buf lb; memset(&lb, 0, sizeof lb);
-          if (builtin_classes_below_object_list(nt_str(c->nt, id, "name"), &lb))
+          const char *snm = nt_str(c->nt, id, "name");
+          int nl = builtin_classes_below_object_list(snm, &lb);
+          for (int k = 0; k < c->nclasses; k++) {
+            const char *rn = class_ruby_name(c, k);
+            if (rn && !comp_class_is_module(c, &c->classes[k]) &&
+                builtin_id_below_object_answers(class_builtin_parent(c, k), snm))
+              buf_printf(&lb, "%s\"%s\"", nl++ ? ", " : "(const char *const[]){", rn);
+          }
+          if (nl) {
+            buf_puts(&lb, ", NULL}");
             buf_printf(b, " || sp_str_in_list(sp_poly_class_name(_t%d), %s)", tv, lb.p);
+          }
           free(lb.p); }
         /* (a builtin's emitter may write its answer unboxed, sp_poly_to_s's
            String: boxed by its C type, as the other arm is) */

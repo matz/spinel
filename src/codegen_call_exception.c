@@ -581,7 +581,12 @@ int emit_call_exception_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, c
         int xt = ++g_tmp;
         buf_printf(b, "({ sp_Exception *_t%d = (sp_Exception *)(", xt);
         emit_expr(c, recv, b);
+        /* rooted for the call where the receiver may be a fresh one
+           (`RuntimeError.new("x").tag`, operand_may_allocate): nothing else
+           holds it, and the definer it reaches may allocate before it reads
+           self (`"RT:" + super`) */
         buf_puts(b, "); ");
+        if (operand_may_allocate(c, recv)) buf_printf(b, "SP_GC_ROOT(_t%d); ", xt);
         char xcls[48]; snprintf(xcls, sizeof xcls, "_t%d->cls_name", xt);
         int pk = emit_exc_reopen_pick_head(c, xr, xn, xcls, b);
         /* a runtime class none of them is above has no such method */

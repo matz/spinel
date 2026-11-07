@@ -1,0 +1,15 @@
+[NameError, "uninitialized constant Integer::X"]
+[NameError, "uninitialized constant String::X"]
+[NameError, "uninitialized constant Comparable::X"]
+[NameError, "uninitialized constant Integer::Zz"]
+1
+:m
+[NameError, "uninitialized constant Integer::Y"]
+3
+3
+[NameError, "uninitialized constant Kernel::Zz"]
+[NameError, "uninitialized constant BasicObject::Zz"]
+[NameError, "uninitialized constant Zz"]
+5
+5
+5

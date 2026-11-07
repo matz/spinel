@@ -7563,6 +7563,7 @@ static int widen_array_sources(Compiler *c, int v) {
    local assigned a method's value, the value of a method, a chain of them.
    Returns 1 on a change. */
 /* The callee parameter a reverse binding widens on behalf of (-1: none). */
+static int widen_iter_param_elems(Compiler *c, Scope *sc, const char *nm, TyKind elem, int depth);
 static int g_wcause_scope = -1;
 static const char *g_wcause_name = NULL;
 static int widen_arg_array(Compiler *c, int arg) {
@@ -7578,7 +7579,18 @@ static int widen_arg_array(Compiler *c, int arg) {
     const char *an = nt_str(nt, arg, "name");
     Scope *asc = an ? comp_scope_of(c, arg) : NULL;
     LocalVar *al = asc ? scope_local(asc, an) : NULL;
-    if (!al || !ty_is_array(al->type) || al->type == TY_POLY_ARRAY || al->is_block_param) return 0;
+    if (!al || !ty_is_array(al->type) || al->type == TY_POLY_ARRAY) return 0;
+    /* a row an element iterator binds (`t.each { |r| shl(r) }`): the arrays
+       it can be are the receiver's elements, built as the general Array
+       where they are made, so that the receiver is no typed table and the
+       row goes in by reference -- copied into a general parameter, the
+       callee's store was lost, which the binding refuses (#4480) */
+    if (al->is_block_param) {
+      if (!wbas_shared) wbas_touch();
+      int ch = widen_iter_param_elems(c, asc, an, TY_POLY, 0);
+      if (!wbas_shared) wbas_touch();
+      return ch;
+    }
     if (al->is_param) {
       if (al->rbs_seeded) return 0;
       if (g_wcause_name && al->widen_blocked) return 0;
@@ -8130,6 +8142,38 @@ static int widen_boxed_array_sources(Compiler *c, int v, TyKind elem, int depth)
   if (depth == 0 && !wbas_shared) wbas_touch();
   return ch;
 }
+/* What an element iterator hands block parameter `nm` of scope `sc`: an
+   element of the receiver, or a Hash's value. Widens the arrays among the
+   receiver's elements where they are built (widen_boxed_elem_sources). */
+static int widen_iter_param_elems(Compiler *c, Scope *sc, const char *nm, TyKind elem, int depth) {
+  const NodeTable *nt = c->nt;
+  int si = (int)(sc - c->scopes), ch = 0;
+  for (int e = bp_ix_first(c, nm, si); e >= 0; e = bp_ix.next[e]) {
+    if (bp_ix.scope[e] != si || !sp_streq(bp_ix.name[e], nm)) continue;
+    int call = bp_ix.call[e], bi = bp_ix.idx[e];
+    int r = nt_ref(nt, call, "receiver");
+    const char *cn = nt_str(nt, call, "name");
+    /* an iterator moved onto its copy iterates its first argument */
+    char ibuf[64];
+    if (r < 0 && cn && pivs_enum_iter(cn, ibuf, sizeof ibuf)) {
+      int a = nt_ref(nt, call, "arguments"), an = 0;
+      const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &an) : NULL;
+      if (an >= 1) { r = av[0]; cn = ibuf; }
+    }
+    if (r < 0 || !cn) continue;
+    TyKind rt = infer_type(c, r), yt[2];
+    int elem_at = -1;
+    if (ty_is_hash(rt))
+      elem_at = sp_streq(cn, "each_value") ? 0 : is_each_or_pair(cn) ? 1 : -1;
+    else if ((ty_is_array(rt) || rt == TY_POLY) && ty_block_yield(TY_POLY_ARRAY, cn, yt, 2) > 0) {
+      /* not each_index, whose block takes an index */
+      const IterRow *ir = iter_row(BOP_ANY_ARRAY, cn, -1, IRF_GAP_FWD);
+      if (!ir || ir->yield[0] != YS_INDEX) elem_at = 0;
+    }
+    if (bi == elem_at) ch |= widen_boxed_elem_sources(c, r, elem, depth + 1);
+  }
+  return ch;
+}
 /* The read of boxed local `nm` of scope `sc` (widen_boxed_array_sources):
    what it is written, bound or handed. The same for every read of it. */
 static int widen_boxed_local_sources(Compiler *c, Scope *sc, const char *nm, LocalVar *lv,
@@ -8137,26 +8181,7 @@ static int widen_boxed_local_sources(Compiler *c, Scope *sc, const char *nm, Loc
   const NodeTable *nt = c->nt;
   int ch = 0;
   if (lv->is_block_param) {
-    /* what an element iterator hands its block: an element of the
-       receiver, or a Hash's value */
-    int si = (int)(sc - c->scopes);
-    for (int e = bp_ix_first(c, nm, si); e >= 0; e = bp_ix.next[e]) {
-      if (bp_ix.scope[e] != si || !sp_streq(bp_ix.name[e], nm)) continue;
-      int call = bp_ix.call[e], bi = bp_ix.idx[e];
-      int r = nt_ref(nt, call, "receiver");
-      const char *cn = nt_str(nt, call, "name");
-      if (r < 0 || !cn) continue;
-      TyKind rt = infer_type(c, r), yt[2];
-      int elem_at = -1;
-      if (ty_is_hash(rt))
-        elem_at = sp_streq(cn, "each_value") ? 0 : is_each_or_pair(cn) ? 1 : -1;
-      else if ((ty_is_array(rt) || rt == TY_POLY) && ty_block_yield(TY_POLY_ARRAY, cn, yt, 2) > 0) {
-        /* not each_index, whose block takes an index */
-        const IterRow *ir = iter_row(BOP_ANY_ARRAY, cn, -1, IRF_GAP_FWD);
-        if (!ir || ir->yield[0] != YS_INDEX) elem_at = 0;
-      }
-      if (bi == elem_at) ch |= widen_boxed_elem_sources(c, r, elem, depth + 1);
-    }
+    ch |= widen_iter_param_elems(c, sc, nm, elem, depth);
     /* a proc or lambda literal's parameter: what its calls pass there */
     int lit = local_proc_literal_param_of(c, sc, nm);
     if (lit >= 0) ch |= widen_proc_call_args(c, lit, nm, elem, depth + 1);

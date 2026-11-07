@@ -43668,6 +43668,22 @@ static int splat_recv_is_builtin_literal(NodeTable *nt, int id) {
   k == NK_IntegerNode || k == NK_FloatNode ||
   k == NK_SymbolNode || k == NK_RangeNode;
 }
+/* So is an instance of a Hash, Array or String subclass whose chain leaves
+   the name to the builtin: another class's `def to_h(&block)` is not the
+   one a Hash subclass's alias of to_h reaches. */
+static int splat_recv_is_builtin_subclass(Compiler *c, int id, const char *name) {
+  int r = nt_ref(c->nt, id, "receiver");
+  if (r < 0 || r >= c->node_cap) return 0;
+  /* self in an instance method is its class's; another receiver's type is
+     the one inferred so far (inferring here would fix types early) */
+  int k = -1;
+  if (nt_kind(c->nt, r) == NK_SelfNode) {
+    Scope *s = comp_scope_of(c, id);
+    if (s && !s->is_cmethod) k = s->class_id;
+  }
+  else if (ty_is_object(c->ntype[r])) k = ty_object_class(c->ntype[r]);
+  return k >= 0 && comp_arysub_name_is_array(c, k, name);
+}
 /* The argument counts a builtin takes, over every builtin receiver that has
    the method: `fetch` is Hash's and Array's (key, default), `[]` is Hash's
    one argument and Array's or String's two. A variadic method (String#count,
@@ -43729,8 +43745,10 @@ static int splat_builtin_spec_range(Compiler *c, int id, const char *name, int *
   const NodeTable *nt = c->nt;
   int l, h;
   /* nor is a method of the program's own (a class's `add`) a builtin's:
-     its splat call reaches it as before */
-  for (int si = 0; si < c->nscopes; si++)
+     its splat call reaches it as before (not on a builtin subclass's
+     instance that leaves the name to the builtin) */
+  int sub = splat_recv_is_builtin_subclass(c, id, name);
+  for (int si = 0; !sub && si < c->nscopes; si++)
     if (c->scopes[si].name && sp_streq(c->scopes[si].name, name)) return 0;
   /* ...nor a reader it declares of the name */
   for (int k = 0; k < c->nclasses; k++)
@@ -44357,7 +44375,8 @@ static int splat_dispatch_on_length(Compiler *c, int id, const int *argv, int ar
      splat call, which reaches the user method as any splat call does. */
   /* a call marked as the builtin's (a super into Array or Hash) is never a
      user method's */
-  if (variadic != 2 && !splat_recv_is_builtin_literal(nt, id) && !nt_int(nt, id, "builtin_only", 0)) {
+  if (variadic != 2 && !splat_recv_is_builtin_literal(nt, id) && !nt_int(nt, id, "builtin_only", 0) &&
+      !splat_recv_is_builtin_subclass(c, id, cnm)) {
     for (int si = 0; si < c->nscopes; si++) {
       Scope *s = &c->scopes[si];
       if (!s->name || !sp_streq(s->name, cnm)) continue;
@@ -47460,7 +47479,14 @@ static void rewrite_array_subclass_calls(Compiler *c) {
     }
     else if (k == NK_CallNode && nt_ref(nt, id, "receiver") < 0) {
       rewrite_array_subclass_new(c, id);
-      if (nt_ref(nt, id, "receiver") < 0) rewrite_array_subclass_self_call(c, id);
+      if (nt_ref(nt, id, "receiver") < 0) {
+        rewrite_array_subclass_self_call(c, id);
+        /* the builtin's call on self spreads a splat by its length, as the
+           `self.` spelling's does: expand_static_splat_args passed it over
+           while it had no receiver, and left without the length dispatch
+           `to_a(*r)` in a Hash subclass found no method */
+        if (nt_ref(nt, id, "receiver") >= 0) expand_static_splat_args(c, id, id + 1);
+      }
     }
     else if (k == NK_CallNode) {
       rewrite_array_subclass_new(c, id);

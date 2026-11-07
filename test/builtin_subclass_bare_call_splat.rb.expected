@@ -1,0 +1,10 @@
+{"k" => 1}
+[["k", 1]]
+["k"]
+ArgumentError
+[1, 2]
+1
+[1]
+{"w" => 0}
+{"b" => 2}
+NoMethodError

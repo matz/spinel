@@ -8151,6 +8151,7 @@ static int desugar_dynamic_method_inner(Compiler *c) {
       int sym = nt_new_node(nt, "SymbolNode"), na = nt_new_node(nt, "ArgumentsNode");
       arms[k] = nt_new_node(nt, "CallNode");
       nt_node_set_str(nt, sym, "value", own[k]);
+      nt_node_set_int(nt, sym, "dyn_sym", 1);   /* a candidate's name, not one the program spells */
       nt_node_set_arr(nt, na, "arguments", &sym, 1);
       nt_node_set_ref(nt, arms[k], "receiver", recv);
       nt_node_set_str(nt, arms[k], "name", "method");

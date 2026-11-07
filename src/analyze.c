@@ -10854,8 +10854,9 @@ static int bam_split_user_method(Compiler *c, int id, int recv, const char *sym)
   if (rk != NK_LocalVariableReadNode && rk != NK_SelfNode) return 0;
   if (infer_type(c, recv) != TY_POLY) return 0;
   int args = nt_ref(nt, id, "arguments"), an = 0;
-  nt_arr(nt, args, "arguments", &an);
+  const int *av = nt_arr(nt, args, "arguments", &an);
   if (an != 1 || nt_ref(nt, id, "block") >= 0) return 0;
+  int dyn_sym = nt_int(nt, av[0], "dyn_sym", 0);
   int nk = 0;
   const int *ks = poly_recv_classes(c, id, &nk);
   int n = ks ? nk : c->nclasses, own[64], nown = 0;
@@ -10891,6 +10892,7 @@ static int bam_split_user_method(Compiler *c, int id, int recv, const char *sym)
     int sy = nt_new_node(nt, "SymbolNode");
     nt_node_set_str(nt, sy, "value", sym);
     nt_node_set_str(nt, sy, "unescaped", sym);
+    if (dyn_sym) nt_node_set_int(nt, sy, "dyn_sym", 1);
     int sa = nt_new_node(nt, "ArgumentsNode");
     nt_node_set_arr(nt, sa, "arguments", &sy, 1);
     int call = nt_new_node(nt, "CallNode");
@@ -48537,6 +48539,8 @@ static void refuse_set_identity_members(Compiler *c) {
     NT_FOREACH_KIND(nt, k ? NK_StringNode : NK_SymbolNode, lit) {
       const char *v = nt_str(nt, lit, k ? "content" : "value");
       if (!is_compare_by_identity_name(v)) continue;
+      /* (a computed `method(name)`'s arm for a name the program defines) */
+      if (nt_int(nt, lit, "dyn_sym", 0)) continue;
       if (!lit_parent) lit_parent = an_parent_map(nt);
       if (!lit_parent) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
       if (!sid_name_only_member(nt, lit_parent, lit) && !sid_name_only_hooked(c, lit_parent, lit)) { spelled = 1; break; }

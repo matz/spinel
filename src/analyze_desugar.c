@@ -10953,6 +10953,93 @@ int desugar_exception_class_ctor(Compiler *c) {
   return changed;
 }
 
+/* A `super` in a class's own `def self.exception` that no class method of
+   the program above it answers reaches Exception.exception, which builds
+   the receiving class as `new` does, through allocate and initialize, with
+   the arguments as given. Spell it `self.new(args)`, as
+   desugar_exception_class_ctor spells a call of it. A bare super passes
+   the def's required and optional parameters. The super stays where a
+   class method `new` of the program may be the one the receiving class
+   answers (Exception's does not run it), where the super has a block or a
+   splat (`self.new(*a)` in a class method builds the class that defines
+   it, not the receiving one), and where a bare super's def takes other
+   parameters. */
+static int exc_super_new_kept(Compiler *c, int id, int cid) {
+  if (call_target(c, id, cid, "new", CT_CMETHOD, NULL) >= 0) return 1;
+  int nd = 0;
+  const int *ds = comp_descendants(c, cid, &nd);
+  for (int i = 0; i < nd; i++)
+    if (call_target(c, id, ds[i], "new", CT_CMETHOD, NULL) >= 0) return 1;
+  return 0;
+}
+int desugar_exception_super_new(Compiler *c) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  int changed = 0, n0 = nt->count;
+  for (int sk = 0; sk < 2; sk++) {
+    NT_FOREACH_KIND(nt, sk ? NK_ForwardingSuperNode : NK_SuperNode, id) {
+      if (id >= n0 || id >= c->node_cap || nt_ref(nt, id, "block") >= 0) continue;
+      Scope *s = comp_scope_of(c, id);
+      if (!s || !s->is_cmethod || s->class_id < 0 || !s->name || s->def_node < 0) continue;
+      if (!sp_streq(comp_scope_user_name(s), "exception") || comp_super_shadow(c, s)) continue;
+      int cid = s->class_id;
+      if (comp_class_is_module(c, &c->classes[cid]) || !class_is_exc_subclass(c, cid)) continue;
+      int p = comp_super_parent(c, cid, 1);
+      if (p >= 0 && comp_cmethod_in_chain(c, p, "exception", NULL) >= 0) continue;
+      if (exc_super_new_kept(c, id, cid)) continue;
+      int base = nt->count, args = sk ? -1 : nt_ref(nt, id, "arguments"), an = 0;
+      const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &an) : NULL;
+      if (an > 0 && nt_argv_has(nt, av, an, NT_ARG_SPLAT | NT_ARG_BLOCK | NT_ARG_FORWARDING)) continue;
+      if (sk) {
+        int ps = nt_ref(nt, s->def_node, "parameters"), nq = 0, no = 0;
+        const int *pq = NULL, *po = NULL;
+        if (ps >= 0) {
+          int nk = 0, npo = 0;
+          nt_arr(nt, ps, "keywords", &nk); nt_arr(nt, ps, "posts", &npo);
+          if (nt_ref(nt, ps, "rest") >= 0 || nt_ref(nt, ps, "keyword_rest") >= 0 ||
+              nt_ref(nt, ps, "block") >= 0 || nk || npo) continue;
+          pq = nt_arr(nt, ps, "requireds", &nq);
+          po = nt_arr(nt, ps, "optionals", &no);
+        }
+        int ok = 1;
+        for (int i = 0; i < nq && ok; i++) ok = nt_kind(nt, pq[i]) == NK_RequiredParameterNode && nt_str(nt, pq[i], "name");
+        for (int i = 0; i < no && ok; i++) ok = nt_str(nt, po[i], "name") != NULL;
+        if (!ok) continue;
+        int na = nq + no;
+        if (na > 0) {
+          int *el = malloc(sizeof(int) * (size_t)na);
+          if (!el) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+          for (int i = 0; i < na; i++) {
+            el[i] = fwd_new_node_like(nt, id, "LocalVariableReadNode");
+            nt_node_set_str(nt, el[i], "name", nt_str(nt, i < nq ? pq[i] : po[i - nq], "name"));
+            nt_node_set_int(nt, el[i], "depth", 0);
+          }
+          args = fwd_new_node_like(nt, id, "ArgumentsNode");
+          nt_node_set_arr(nt, args, "arguments", el, na);
+          free(el);
+        }
+      }
+      int self = fwd_new_node_like(nt, id, "SelfNode");
+      long long line = nt_int(nt, id, "node_line", 0), file = nt_int(nt, id, "node_file", 0), col = nt_int(nt, id, "node_col", -1);
+      nt_node_reset(nt, id, "CallNode");
+      if (line) nt_node_set_int(nt, id, "node_line", line);
+      if (file) nt_node_set_int(nt, id, "node_file", file);
+      if (col >= 0) nt_node_set_int(nt, id, "node_col", col);
+      nt_node_set_str(nt, id, "name", "new");
+      nt_node_set_ref(nt, id, "receiver", self);
+      nt_node_set_ref(nt, id, "arguments", args);
+      nt_node_set_ref(nt, id, "block", -1);
+      comp_grow_node_arrays(c);
+      for (int j = base; j < nt->count; j++) {
+        c->nscope[j] = c->nscope[id];
+        c->node_cbody[j] = c->node_cbody[id];
+      }
+      exc_ctor_spell_new(c, id);
+      changed = 1;
+    }
+  }
+  return changed;
+}
+
 /* `raise K, m` and `raise K` on a class K with a class method `exception`
    of the program's (its own `def self.exception`, or one of a class above
    it): CRuby raises what `K.exception(m)` answers, which need not be a K.
@@ -10996,10 +11083,11 @@ int desugar_raise_own_exception(Compiler *c) {
     /* the method must be there wherever the raise runs: a raise that may
        run before a later `def self.exception` keeps the raise of K */
     if (mi < 0 || elab_method_at(c, ci, "exception", 1, elab_point_of(c, id), NULL) != ELAB_YES) continue;
-    /* a `super` past the program's methods reaches Exception.exception,
-       which Spinel's class methods cannot call: such a method keeps the
-       raise of K, whose result it gives where it only supers.  Each
-       method on the super chain is asked, not only the first one */
+    /* a `super` past the program's methods reaches Exception.exception.
+       desugar_exception_super_new spells most of them `self.new`; one it
+       left (beside a `new` of the program's, or with a splat) Spinel's
+       class methods cannot call, so such a method keeps the raise of K.
+       Each method on the super chain is asked, not only the first one */
     int sm = mi, sdc = dc, past = 0;
     for (int step = 0; sm >= 0 && scope_calls_super(c, sm); step++) {
       int up = sdc >= 0 ? c->classes[sdc].parent : -1;

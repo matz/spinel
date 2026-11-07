@@ -5815,6 +5815,16 @@ static int engine_lexically_nested(NodeTable *nt, int id) {
   return 0;
 }
 
+/* Does class definition def open the builtin class itself: `Range` at the
+   top level, or `::Range`? A class of that name inside a module
+   (`module Geo; class Range`, `class Geo::Range`) is another class. */
+static int mo_def_is_toplevel(NodeTable *nt, int def) {
+  int cp = class_def_path(nt, def);
+  NodeKind k = cp >= 0 ? nt_kind(nt, cp) : NK_NONE;
+  if (k == NK_ConstantPathNode) return nt_ref(nt, cp, "parent") < 0;
+  return k == NK_ConstantReadNode && !engine_lexically_nested(nt, def);
+}
+
 /* The namespace a constant path's parent names is Object itself (`::X`,
    `Object::X`, `::Object::X`), or anything else. */
 static int engine_parent_is_object(NodeTable *nt, int path) {
@@ -25232,7 +25242,7 @@ static int mo_program_owns(const NodeTable *nt, int n0, const char *cn) {
     if (nt_kind(nt, m) != NK_ClassNode) continue;
     int cp = nt_ref(nt, m, "constant_path");
     const char *mn = cp >= 0 && nt_kind(nt, cp) == NK_ConstantReadNode ? nt_str(nt, cp, "name") : NULL;
-    if (!mn || !sp_streq(mn, cn)) continue;
+    if (!mn || !sp_streq(mn, cn) || !mo_def_is_toplevel((NodeTable *)nt, m)) continue;
     if (nt_ref(nt, m, "superclass") >= 0) return 1;
     int b = nt_ref(nt, m, "body");
     int bn = 0; const int *bs = b >= 0 ? nt_arr(nt, b, "body", &bn) : NULL;
@@ -25306,7 +25316,7 @@ static int mo_vis_changed(const NodeTable *nt, int n0, const char *cn, const cha
   for (int m = 0; m < n0; m++) {
     if (!class_def_is_class(nt, m)) continue;
     const char *dn = class_def_name(nt, m);
-    if (!dn || !sp_streq(dn, cn)) continue;
+    if (!dn || !sp_streq(dn, cn) || !mo_def_is_toplevel((NodeTable *)nt, m)) continue;
     int b = class_def_body(nt, m), bn = 0;
     const int *bs = b >= 0 ? nt_arr(nt, b, "body", &bn) : NULL;
     int section = 0;   /* (a bare `private` or `protected` seen in this body) */
@@ -26965,7 +26975,7 @@ int desugar_object_method_builtin_overrides(Compiler *c) {
   for (int om = 0; om < n0; om++) {
     if (!class_def_is_class(nt, om)) continue;
     const char *ocn = class_def_name(nt, om);
-    if (!ocn || !sp_streq(ocn, "Object")) continue;
+    if (!ocn || !sp_streq(ocn, "Object") || !mo_def_is_toplevel(nt, om)) continue;
     int ob = class_def_body(nt, om);
     int obn = 0; const int *obs = ob >= 0 ? nt_arr(nt, ob, "body", &obn) : NULL;
     for (int oi = 0; oi < obn; oi++) {
@@ -26981,7 +26991,7 @@ int desugar_object_method_builtin_overrides(Compiler *c) {
         if (!class_def_is_class(nt, m)) continue;
         const char *cn = class_def_name(nt, m);
         const char *g = cn ? mo_override_class(cn) : NULL;
-        if (!g || mo_program_owns(nt, n0, cn) || (mo_dispatch_arm(g) && !mo_vis_changed(nt, n0, cn, mname))) continue;
+        if (!g || !mo_def_is_toplevel(nt, m) || mo_program_owns(nt, n0, cn) || (mo_dispatch_arm(g) && !mo_vis_changed(nt, n0, cn, mname))) continue;
         int b = class_def_body(nt, m);
         int bn = 0; const int *bs = b >= 0 ? nt_arr(nt, b, "body", &bn) : NULL;
         for (int k = 0; k < bn; k++) {

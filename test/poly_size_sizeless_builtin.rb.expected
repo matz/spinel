@@ -28,3 +28,7 @@ NoMethodError NoMethodError
 [false, 2, 2]
 [true, 0, 0]
 [true, 0, 0]
+[[TypeError, "can't iterate from NilClass"], NoMethodError]
+[[TypeError, "can't iterate from Time"], NoMethodError]
+[[TypeError, "can't iterate from Time"], NoMethodError]
+[2, 2]

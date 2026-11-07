@@ -37,3 +37,10 @@ def pick3(i) = [Time.at(0), /re/, Object.new, Process.times, 1..3, "a".."c",
   v = pick3(i)
   p [(v.empty? rescue $!.class), (v.size rescue $!.class), (v.length rescue $!.class)]
 end
+
+# A Range of Times without a begin names NilClass in the TypeError.
+def pick4(i) = [(..Time.at(5)), (Time.at(0)..), (Time.at(0)..Time.at(5)), "ab"][i]
+4.times do |i|
+  v = pick4(i)
+  p [(v.size rescue [$!.class, $!.message]), (v.length rescue $!.class)]
+end

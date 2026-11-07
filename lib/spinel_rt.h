@@ -5309,7 +5309,8 @@ static sp_int sp_poly_size_n(sp_RbVal v, sp_bool *none) {
   if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_FLOAT_RANGE && v.v.p) { sp_frange_iter_raise((*(sp_FloatRange *)v.v.p), 0); return 0; }  /* a Float range has no size (TypeError) */
   if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_QUEUE && v.v.p) return sp_Queue_size((sp_queue *)v.v.p);
   /* a Range of Times has no size: Time has no #succ */
-  if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_TIME_RANGE) sp_raise_cls("TypeError", "can't iterate from Time");
+  if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_TIME_RANGE)
+    sp_raise_cls("TypeError", v.v.p && !((sp_TimeRange *)v.v.p)->first ? "can't iterate from NilClass" : "can't iterate from Time");
   { sp_int n = sp_poly_struct_size(v); if (n >= 0) return n; }
   if (v.tag == SP_TAG_NIL || v.tag == SP_TAG_BOOL || v.tag == SP_TAG_FLT ||
       sp_poly_is_user_obj(v) || sp_poly_sizeless_builtin(v))

@@ -996,8 +996,9 @@ int desugar_user_not_match(Compiler *c);
 int desugar_exception_class_ctor(Compiler *c);
 /* Is node id a super (bare or not) in a class method `exception` of an
    Exception class (not a module)? desugar_exception_super_new spells the
-   ones that reach Exception.exception `self.new`; the early census
-   (compute_instantiated) counts each as building its class. */
+   ones that reach Exception.exception `self.new`. The class facts
+   (an_cls_facts) and the early census (compute_instantiated), which run
+   before it, count each as building its class. */
 int exc_super_in_exception_cmethod(Compiler *c, int id);
 int desugar_exception_super_new(Compiler *c);
 int desugar_raise_own_exception(Compiler *c);

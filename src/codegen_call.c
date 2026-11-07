@@ -14957,7 +14957,11 @@ int emit_try_convert_boxed(Compiler *c, const char *cname, int arg, Buf *b) {
    class method both build with it. */
 void emit_exc_new_no_init(Compiler *c, int id, int ci, int argc, const int *argv, Buf *b) {
   if (class_is_sysexit(c, ci)) { emit_sysexit_new(c, id, ci, argc, argv, b); return; }
-  if (class_takes_exc_attrs(c, ci) && (argc > 1 || nt_argv_kwh(c->nt, argv, argc) >= 0 || nt_argv_has_splat(c->nt, argv, argc))) {
+  /* a splat's count is the run time's: sp_exc_attrs_super reads the
+     gathered arguments as the class's initialize does, and a class of none
+     of its families as Exception#initialize alone (one message at most) */
+  int splat = nt_argv_has_splat(c->nt, argv, argc) && !class_is_syserr(c, ci);
+  if (splat || (class_takes_exc_attrs(c, ci) && (argc > 1 || nt_argv_kwh(c->nt, argv, argc) >= 0))) {
     emit_exc_attrs_new(c, id, ci, argc, argv, b);
     return;
   }
@@ -15342,6 +15346,26 @@ static int emit_new_call_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
          Errno::ENOENT.new("x") is "No such file or directory - x", and
          SystemCallError.new("x", 2) an Errno::ENOENT */
       if (emit_syserr_family_new(c, id, cn, argc, argv, b)) { *out = 1; return 1; }
+      /* `.new(*a)`: how many arguments the splat gives is the run time's.
+         The runtime reads the gathered arguments as initialize does: one
+         message at most, and KeyError's key:, NameError's name and their
+         like. The classes whose initialize takes other arguments keep
+         their own arms below. */
+      if (nt_argv_has_splat(nt, argv, argc) && !sp_streq(cn, "SignalException") &&
+          !sp_streq(cn, "Interrupt") && !sp_streq(cn, "SystemExit") &&
+          !sp_streq(cn, "UncaughtThrowError") && !sp_streq(cn, "NoMatchingPatternKeyError")) {
+        int te = ++g_tmp;
+        buf_printf(b, "({ sp_Exception *_t%d = sp_exc_new(\"%s\", (&(\"\\xff\")[1])); SP_GC_ROOT(_t%d);", te, cn, te);
+        if (sp_streq(cn, "KeyError") || sp_streq(cn, "NameError") ||
+            sp_streq(cn, "NoMethodError") || sp_streq(cn, "FrozenError"))
+          buf_printf(b, " _t%d->has_recv = 0;", te);
+        if (sp_streq(cn, "KeyError")) buf_printf(b, " _t%d->has_key = 0;", te);
+        char self_text[48]; snprintf(self_text, sizeof self_text, "_t%d", te);
+        buf_puts(b, " (void)");
+        emit_exc_attrs_call(c, id, self_text, argc, argv, b);
+        buf_printf(b, "; _t%d; })", te);
+        { *out = 1; return 1; }
+      }
       /* SignalException.new(sig) / Interrupt.new(msg?): the message is the
          SIG-name and #signo is carried (#2762) */
       if (sp_streq(cn, "SignalException")) {

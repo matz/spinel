@@ -16165,8 +16165,12 @@ void emit_super(Compiler *c, int id, Buf *b) {
       int argc2 = 0;
       const int *argv2 = NULL;
       if (args_id >= 0) argv2 = nt_arr(c->nt, args_id, "arguments", &argc2);
-      /* KeyError's key:, NameError's name and their like: more than a message */
-      if (class_takes_exc_attrs(c, s->class_id)) {
+      /* KeyError's key:, NameError's name and their like: more than a message.
+         A splat's count is the run time's: the runtime reads the gathered
+         arguments as Exception#initialize does for any other class. */
+      int spread = ty_k != NK_ForwardingSuperNode && argv2 && nt_argv_has_splat(c->nt, argv2, argc2) &&
+                   !class_is_syserr(c, s->class_id) && !class_is_sysexit(c, s->class_id);
+      if (spread || class_takes_exc_attrs(c, s->class_id)) {
         char self_text[80]; snprintf(self_text, sizeof self_text, "(sp_Exception *)%s", g_self);
         if (ty_k == NK_ForwardingSuperNode) emit_exc_attrs_zsuper(c, id, s, self_text, b);
         else emit_exc_attrs_call(c, id, self_text, argc2, argv2, b);

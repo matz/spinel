@@ -353,7 +353,8 @@ static const struct { const char *cls, *m; } core_singleton_methods[] = {
 };
 #undef CSM
 /* Does the core class or module cls answer m as a value (File.join,
-   Kernel.trap) with a public method of CRuby's? */
+   Kernel.trap) with a public method of CRuby's? cls "Class#" or "Module#"
+   asks about every class or module (class_eval, attr_reader). */
 int core_class_value_answers(const char *cls, const char *m) {
   for (int i = 0; cls && m && core_singleton_methods[i].cls; i++)
     if (sp_streq(core_singleton_methods[i].cls, cls) && sp_streq(core_singleton_methods[i].m, m)) return 1;

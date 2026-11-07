@@ -18620,11 +18620,10 @@ static int narrow_object_arrays(Compiler *c) {
     NodeKind ty_k = nt_kind(nt, id);
     int tgt = ty_k == NK_ConstantPathWriteNode || ty_k == NK_ConstantPathOrWriteNode ||
               ty_k == NK_ConstantPathOperatorWriteNode || ty_k == NK_ConstantPathAndWriteNode ? nt_ref(nt, id, "target") : -1;
-    const char *nm = tgt >= 0 ? const_key_at(c, tgt) :
-                     ty_k == NK_ConstantWriteNode || ty_k == NK_ConstantOrWriteNode || ty_k == NK_ConstantOperatorWriteNode ||
-                     ty_k == NK_ConstantAndWriteNode || ty_k == NK_ConstantTargetNode || ty_k == NK_ConstantPathTargetNode
-                     ? const_key_at(c, id) : NULL;
-    LocalVar *cv = nm ? comp_const(c, nm) : NULL;
+    LocalVar *cv = tgt >= 0 ? comp_const_at(c, tgt) :
+                   ty_k == NK_ConstantWriteNode || ty_k == NK_ConstantOrWriteNode || ty_k == NK_ConstantOperatorWriteNode ||
+                   ty_k == NK_ConstantAndWriteNode || ty_k == NK_ConstantTargetNode || ty_k == NK_ConstantPathTargetNode
+                   ? comp_const_at(c, id) : NULL;
     int S = cv ? oa_find(sl, n, OA_CONST, cv) : -1;
     if (S < 0) continue;
     int v = nt_ref(nt, id, "value");
@@ -25493,7 +25492,7 @@ int cext_demand_string(Compiler *c, int value) {
   }
   if (nt_kind(c->nt, value) == NK_ConstantReadNode) {
     const char *name = const_key_at(c, value);
-    LocalVar *slot = name ? comp_const(c, name) : NULL;
+    LocalVar *slot = comp_const_at(c, value);
     if (slot && (slot->type == TY_STRING || slot->type == TY_STRBUF)) {
       int changed = slot->type != TY_STRBUF || !slot->str_shared || !c->strbuf_box[value];
       lv_set_type(slot, TY_STRBUF); { slot->str_shared = 1; comp_touch_scope(slot->owner); } comp_set_strbuf_box(c, value, 1);
@@ -52753,8 +52752,7 @@ static void an_phase_post_fixpoint(Compiler *c) {
      runs after the fixpoint, so any real element evidence still wins. */
   for (int id = 0; id < c->nt->count; id++) {
     if (nt_kind(c->nt, id) != NK_ConstantWriteNode) continue;
-    const char *cwn = const_key_at(c, id);
-    LocalVar *cwv = cwn ? comp_const(c, cwn) : NULL;
+    LocalVar *cwv = comp_const_at(c, id);
     if (!cwv || cwv->type != TY_UNKNOWN) continue;
     int cwval = nt_ref(c->nt, id, "value");
     if (cwval < 0 || nt_kind(c->nt, cwval) != NK_ArrayNode) continue;

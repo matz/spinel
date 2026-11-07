@@ -228,6 +228,11 @@ void emit_puts_one(Compiler *c, int arg, Buf *b, int indent) {
                ti, ti, ta, ti, ta, ti);
     free(ab.p);
   }
+  else if (t == TY_INT_ARRAY_ARRAY || t == TY_FLOAT_ARRAY_ARRAY) {
+    /* a table of rows, boxed by reference with what its rows are, which
+       sp_poly_puts prints one per line (#4486) */
+    buf_puts(b, "sp_poly_puts("); emit_boxed(c, arg, b); buf_puts(b, ");\n");
+  }
   else if (ty_is_hash(t) &&
            !(nt_kind(c->nt, arg) == NK_KeywordHashNode &&
              ({ int _n = 0, _s = 0; const int *_e = nt_arr(c->nt, arg, "elements", &_n);

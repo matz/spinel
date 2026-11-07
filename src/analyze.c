@@ -15763,8 +15763,9 @@ static int desugar_to_enum(Compiler *c) {
    @ivar of one class (ici/iiv, sidx -1; #4444), or a constant (lv its
    entry, sidx OA_CONST).
    row_cls / row_escape / odd_elem: the evidence the rows a slot's element
-   reads answer give (oa_row_use), for a table whose rows are empty literals */
-typedef struct { int sidx; LocalVar *lv; int cls; int alive; int uf; int needs_cmp; int removes; int poly_elem; int row_iter; int saw_call; TyKind old_pin; int ici, iiv; int row_cls, row_escape, odd_elem; } OAS;
+   reads answer give (oa_row_use), for a table whose rows are empty literals.
+   printed: a printer is handed the slot (oa_printer_takes_args). */
+typedef struct { int sidx; LocalVar *lv; int cls; int alive; int uf; int needs_cmp; int removes; int poly_elem; int row_iter; int saw_call; TyKind old_pin; int ici, iiv; int row_cls, row_escape, odd_elem, printed; } OAS;
 #define OA_CONST (-2)
 
 /* The (sidx, lv) -> first slot index map, so a lookup is not a scan of every
@@ -16090,6 +16091,30 @@ static int oa_filter_arm(Compiler *c, int id, int recv, OAS *sl, int S, char *cl
   if (fk == 1 && !disc) sl[S].alive = 0;
   if (fk == 2 && id < nc) { call_ret[id] = S; value_ok[id] &= disc; }
   return 1;
+}
+/* Is call id one of Kernel's printers (`p t`, `puts t`, `print t`, `pp t`)
+   that takes its arguments as they are? It only reads them, boxed: a table
+   of Integer or Float rows goes in by reference with what its rows are
+   (sp_box_ptr_array_k), which the boxed inspect and puts render, so a
+   local or ivar read of it, or a method's value, handed to one does not
+   escape (an Array of objects does: an exception among them would render
+   as an Object). `p` and `pp` answer their argument, so only where that
+   value is thrown away (walk_disc). Not where the program defines a method
+   of the printer's name, or an Array#inspect or #to_s the boxed rendering
+   would not call. */
+static int oa_printer_takes_args(Compiler *c, int id, const char *walk_disc, int nc) {
+  const NodeTable *nt = c->nt;
+  if (nt_kind(nt, id) != NK_CallNode || nt_ref(nt, id, "receiver") >= 0 || nt_ref(nt, id, "block") >= 0) return 0;
+  const char *nm = nt_str(nt, id, "name");
+  if (!nm) return 0;
+  int answers_arg = sp_streq(nm, "p") || sp_streq(nm, "pp");
+  if (!answers_arg && !sp_streq(nm, "puts") && !sp_streq(nm, "print")) return 0;
+  if (answers_arg && !(id < nc && walk_disc[id])) return 0;
+  if (comp_method_index(c, nm) >= 0) return 0;
+  if (share_builtin_overridden(c, "Array", "inspect") || share_builtin_overridden(c, "Array", "to_s")) return 0;
+  int args = nt_ref(nt, id, "arguments"), argc = 0;
+  const int *argv = args >= 0 ? nt_arr(nt, args, "arguments", &argc) : NULL;
+  return argc > 0 && !nt_argv_has_splat(nt, argv, argc) && !nt_argv_has_keywords(nt, argv, argc);
 }
 /* narrow_object_arrays' arm for a walk on slot S that yields the row: each,
    each_with_index, zip, map and reduce (nested_row_iter_call). Admitted so
@@ -17644,7 +17669,7 @@ static int oa_elem_from_undo(Compiler *c, OAS *sl) {
    free functions made edges, so an instance method's param narrowed with
    its callers' locals left poly. */
 static void oa_call_edges(Compiler *c, OAS *sl, int n, int id, int oa_tmi, const int *argv, int argc,
-                          const int *read_slot, char *claimed, int *call_ret, int nc) {
+                          const int *read_slot, char *claimed, int *call_ret, const char *walk_disc, int nc) {
   const char *name = nt_str(c->nt, id, "name");
   ArgLayout L;
   memset(&L, 0, sizeof L);
@@ -17697,6 +17722,11 @@ static void oa_call_edges(Compiler *c, OAS *sl, int n, int id, int oa_tmi, const
       if (k == 0 && name && sp_streq(name, "zip") && nested_row_iter_call(c, id)) {
         claimed[a] = 1;
         sl[S].row_iter |= 2;   /* a zip's argument: numeric rows only (#4846) */
+        continue;
+      }
+      if (oa_printer_takes_args(c, id, walk_disc, nc) &&
+          (nt_kind(c->nt, a) == NK_LocalVariableReadNode || nt_kind(c->nt, a) == NK_InstanceVariableReadNode)) {
+        claimed[a] = 1; sl[S].printed = 1;
         continue;
       }
       sl[S].alive = 0;
@@ -17996,6 +18026,18 @@ static int oa_untyped_walk_tail(Compiler *c, int s) {
   return b >= 0 && nt_kind(nt, b) == NK_BlockNode;
 }
 
+/* narrow_object_arrays step 5e: a method's value handed to a printer is
+   read there and kept nowhere, as a local or ivar read is (oa_call_edges) */
+static void oa_printer_claims(Compiler *c, OAS *sl, const int *call_ret, char *claimed, const char *walk_disc, int nc) {
+  const NodeTable *nt = c->nt;
+  for (int id = 0; id < nt->count && id < nc; id++) {
+    if (!oa_printer_takes_args(c, id, walk_disc, nc)) continue;
+    int argc = 0; const int *argv = nt_arr(nt, nt_ref(nt, id, "arguments"), "arguments", &argc);
+    for (int k = 0; k < argc; k++)
+      if (argv[k] >= 0 && argv[k] < nc && call_ret[argv[k]] >= 0) { claimed[argv[k]] = 1; sl[call_ret[argv[k]]].printed = 1; }
+  }
+}
+
 /* The empty rows that flowed into component r, a table of rows of class
    cls (OA_CLS_IA or the Float one): 0 when there are none, 1 when every
    one can be built at the row kind, -1 when one cannot. A row whose want
@@ -18109,7 +18151,7 @@ static int narrow_object_arrays(Compiler *c) {
       LocalVar *lv = &sc->locals[li];
       if (lv->type != TY_POLY_ARRAY || lv->is_block_param || lv->rbs_seeded || cext_scope(c, s)) continue;
       if (n >= cap) { cap *= 2; sl = (OAS *)realloc(sl, sizeof(OAS) * cap); if (!sl) { fprintf(stderr, "oom\n"); exit(1); } }
-      sl[n].sidx = s; sl[n].lv = lv; sl[n].cls = -1; sl[n].alive = 1; sl[n].uf = n; sl[n].needs_cmp = 0; sl[n].removes = 0; sl[n].poly_elem = 0; sl[n].row_iter = 0; sl[n].saw_call = 0; sl[n].ici = -1; sl[n].iiv = -1; sl[n].row_cls = -1; sl[n].row_escape = 0; sl[n].odd_elem = 0;
+      sl[n].sidx = s; sl[n].lv = lv; sl[n].cls = -1; sl[n].alive = 1; sl[n].uf = n; sl[n].needs_cmp = 0; sl[n].removes = 0; sl[n].poly_elem = 0; sl[n].row_iter = 0; sl[n].saw_call = 0; sl[n].ici = -1; sl[n].iiv = -1; sl[n].row_cls = -1; sl[n].row_escape = 0; sl[n].odd_elem = 0; sl[n].printed = 0;
       sl[n].old_pin = lv->oa_pin; lv->oa_pin = TY_UNKNOWN; n++;
     }
   }
@@ -18139,7 +18181,7 @@ static int narrow_object_arrays(Compiler *c) {
        Money#coerce for a pair) */
     if (method_name_implicitly_invoked(sc->name)) continue;
     if (n >= cap) { cap *= 2; sl = (OAS *)realloc(sl, sizeof(OAS) * cap); if (!sl) { fprintf(stderr, "oom\n"); exit(1); } }
-    sl[n].sidx = s; sl[n].lv = NULL; sl[n].cls = -1; sl[n].alive = 1; sl[n].uf = n; sl[n].needs_cmp = 0; sl[n].removes = 0; sl[n].poly_elem = 0; sl[n].row_iter = 0; sl[n].saw_call = 0; sl[n].ici = -1; sl[n].iiv = -1; sl[n].row_cls = -1; sl[n].row_escape = 0; sl[n].odd_elem = 0;
+    sl[n].sidx = s; sl[n].lv = NULL; sl[n].cls = -1; sl[n].alive = 1; sl[n].uf = n; sl[n].needs_cmp = 0; sl[n].removes = 0; sl[n].poly_elem = 0; sl[n].row_iter = 0; sl[n].saw_call = 0; sl[n].ici = -1; sl[n].iiv = -1; sl[n].row_cls = -1; sl[n].row_escape = 0; sl[n].odd_elem = 0; sl[n].printed = 0;
     sl[n].old_pin = sc->ret_oa_pin; sc->ret_oa_pin = TY_UNKNOWN; n++;
   }
   /* 1c. one slot per @ivar holding a poly array (#4444). An ivar's references
@@ -18177,7 +18219,7 @@ static int narrow_object_arrays(Compiler *c) {
          decision is applied to every copy, and reset with it above */
       if (inherited) { cl->ivar_oa_type[iv] = TY_UNKNOWN; continue; }
       if (n >= cap) { cap *= 2; sl = (OAS *)realloc(sl, sizeof(OAS) * cap); if (!sl) { fprintf(stderr, "oom\n"); exit(1); } }
-      sl[n].sidx = -1; sl[n].lv = NULL; sl[n].cls = -1; sl[n].alive = 1; sl[n].uf = n; sl[n].needs_cmp = 0; sl[n].removes = 0; sl[n].poly_elem = 0; sl[n].row_iter = 0; sl[n].saw_call = 0; sl[n].ici = ci; sl[n].iiv = iv; sl[n].row_cls = -1; sl[n].row_escape = 0; sl[n].odd_elem = 0;
+      sl[n].sidx = -1; sl[n].lv = NULL; sl[n].cls = -1; sl[n].alive = 1; sl[n].uf = n; sl[n].needs_cmp = 0; sl[n].removes = 0; sl[n].poly_elem = 0; sl[n].row_iter = 0; sl[n].saw_call = 0; sl[n].ici = ci; sl[n].iiv = iv; sl[n].row_cls = -1; sl[n].row_escape = 0; sl[n].odd_elem = 0; sl[n].printed = 0;
       /* An `Array[Array[Integer]]` / `Array[Array[Float]]` seed is element
          evidence, the same evidence a pushed row gives: it decides the kind
          when the program's own rows are silent (`Array.new(n) { [] }`), and
@@ -18201,7 +18243,7 @@ static int narrow_object_arrays(Compiler *c) {
     LocalVar *cv = &c->consts[i];
     if (cv->type != TY_POLY_ARRAY || cv->rbs_seeded) continue;
     if (n >= cap) { cap *= 2; sl = (OAS *)realloc(sl, sizeof(OAS) * cap); if (!sl) { fprintf(stderr, "oom\n"); exit(1); } }
-    sl[n].sidx = OA_CONST; sl[n].lv = cv; sl[n].cls = -1; sl[n].alive = 1; sl[n].uf = n; sl[n].needs_cmp = 0; sl[n].removes = 0; sl[n].poly_elem = 0; sl[n].row_iter = 0; sl[n].saw_call = 0; sl[n].ici = -1; sl[n].iiv = -1; sl[n].row_cls = -1; sl[n].row_escape = 0; sl[n].odd_elem = 0;
+    sl[n].sidx = OA_CONST; sl[n].lv = cv; sl[n].cls = -1; sl[n].alive = 1; sl[n].uf = n; sl[n].needs_cmp = 0; sl[n].removes = 0; sl[n].poly_elem = 0; sl[n].row_iter = 0; sl[n].saw_call = 0; sl[n].ici = -1; sl[n].iiv = -1; sl[n].row_cls = -1; sl[n].row_escape = 0; sl[n].odd_elem = 0; sl[n].printed = 0;
     sl[n].old_pin = cv->oa_pin; cv->oa_pin = TY_UNKNOWN; n++;
   }
   /* the drop still has to be reported (and `cleared` freed) on the way out:
@@ -18599,7 +18641,7 @@ static int narrow_object_arrays(Compiler *c) {
         }
       }
     }
-    oa_call_edges(c, sl, n, id, oa_tmi, argv, argc, read_slot, claimed, call_ret, nc);
+    oa_call_edges(c, sl, n, id, oa_tmi, argv, argc, read_slot, claimed, call_ret, walk_disc, nc);
   }
 
   /* 5. LocalVariableWriteNode sources: object literal -> evidence; alias to
@@ -18830,11 +18872,13 @@ static int narrow_object_arrays(Compiler *c) {
       if (tmis[p] < 0) {
         OA_DYN_KILL(nt_ref(nt, id, "receiver"), nt_str(nt, id, "name"));
       }
-      oa_call_edges(c, sl, n, id, tmis[p], argv, argc, read_slot, claimed, call_ret, nc);
+      oa_call_edges(c, sl, n, id, tmis[p], argv, argc, read_slot, claimed, call_ret, walk_disc, nc);
     }
     free(reads);
     free(tmis); free(rcls); free(rdead);
   }
+
+  oa_printer_claims(c, sl, call_ret, claimed, walk_disc, nc);   /* 5e. */
 
   /* 6. a slot read left unclaimed escaped into an unmodeled context -> kill.
         A call whose value is a return slot is the same story: unless a slot
@@ -18861,6 +18905,7 @@ static int narrow_object_arrays(Compiler *c) {
     sl[r].row_cls = oa_cls_join(sl[r].row_cls, sl[i].row_cls);
     sl[r].row_escape |= sl[i].row_escape;
     sl[r].odd_elem |= sl[i].odd_elem;
+    sl[r].printed |= sl[i].printed;
   }
   /* A table whose every element is an empty row (`Array.new(n) { [] }`) has
      no element evidence of its own. When every row it hands out is pushed
@@ -18876,10 +18921,12 @@ static int narrow_object_arrays(Compiler *c) {
   }
   /* The same holds for a table with rows of its own (`x = [[1, 2], [], [3, 4]]`).
      A seeded one is left to oa_seeded_literal_rows, which builds such a row
-     at the seed's kind. */
+     at the seed's kind. And only a table renders boxed as a printer reads
+     it (oa_printer_takes_args). */
   for (int i = 0; i < n; i++)
-    if (oa_uf_find(sl, i) == i && OA_CLS_IS_NESTED(sl[i].cls) && oa_empty_rows(c, sl, i, sl[i].cls) < 0 &&
-        !oa_component_seeded(c, sl, n, i))
+    if (oa_uf_find(sl, i) == i &&
+        (OA_CLS_IS_NESTED(sl[i].cls) ? oa_empty_rows(c, sl, i, sl[i].cls) < 0 && !oa_component_seeded(c, sl, n, i)
+                                     : sl[i].printed))
       sl[i].alive = 0;
   oa_seeded_literal_rows(c, sl, n);
   /* A call step 5d decided on the class of a slot's element holds only if

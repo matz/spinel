@@ -60,3 +60,15 @@ class Kw < StandardError
   def self.exception(m = "d") = super(m, code: 7)
 end
 try { raise Kw, "x" }
+# a class built only through its own exception has its methods
+class Only < StandardError
+  def self.exception(m = "d") = super("only:" + m)
+  def code = "str"
+end
+class Other
+  def code = 1
+end
+def pick(i) = i == 0 ? Only.exception("x") : Other.new
+p pick(0).code
+p pick(1).code
+p pick(0).message

@@ -793,8 +793,9 @@ static void cr_live_collect(CrLive *lv, int s, int id, int cls, int persist) {
 
 /* Does the code at `id`, run with self a class, build an instance of it or
    hand `self` out? `new` or `allocate` on self, `super` in a `new` or
-   `allocate` of its own, or self as a value. Not entering a nested def or
-   class. */
+   `allocate` of its own, or in an `exception` of its own (Exception's
+   builds as `new` does, desugar_exception_super_new), or self as a value.
+   Not entering a nested def or class. */
 static int cr_live_builds(Compiler *c, int id, const char *mname) {
   const NodeTable *nt = c->nt;
   if (id < 0) return 0;
@@ -802,7 +803,7 @@ static int cr_live_builds(Compiler *c, int id, const char *mname) {
   if (nk == NK_DefNode || nk == NK_ClassNode || nk == NK_ModuleNode) return 0;
   if (nk == NK_SelfNode) return 1;
   if ((nk == NK_SuperNode || nk == NK_ForwardingSuperNode) && mname &&
-      (sp_streq(mname, "new") || sp_streq(mname, "allocate"))) return 1;
+      (sp_streq(mname, "new") || sp_streq(mname, "allocate") || sp_streq(mname, "exception"))) return 1;
   int skip = -1;
   if (nk == NK_SingletonClassNode) skip = nt_ref(nt, id, "expression");
   if (nk == NK_CallNode) {
@@ -1772,7 +1773,11 @@ void compute_instantiated(Compiler *c, int early) {
   for (int id = 0; id < nt->count && !disable; id++) {
     /* super in a reachable `self.new` constructs the receiving class: this
        one, or a descendant inheriting the method */
-    if (comp_super_is_class_new(c, id)) {
+    /* and so does a super in a reachable `self.exception` of an Exception
+       class, which desugar_exception_super_new spells `self.new` after
+       this early pass (a super it keeps raises, building nothing: marked
+       all the same, as the early pass may over-mark) */
+    if (comp_super_is_class_new(c, id) || (early && exc_super_in_exception_cmethod(c, id))) {
       Scope *encl = comp_scope_of(c, id);
       if (encl && encl->reachable)
         for (int k = 0; k < c->nclasses; k++)

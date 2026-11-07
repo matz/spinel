@@ -10986,17 +10986,25 @@ static int exc_super_block_reaches(Compiler *c) {
   free(calls);
   return any;
 }
+/* See analyze_internal.h. */
+int exc_super_in_exception_cmethod(Compiler *c, int id) {
+  NodeKind k = nt_kind(c->nt, id);
+  if (k != NK_SuperNode && k != NK_ForwardingSuperNode) return 0;
+  Scope *s = comp_scope_of(c, id);
+  if (!s || !s->is_cmethod || s->class_id < 0 || !s->name) return 0;
+  if (!sp_streq(comp_scope_user_name(s), "exception")) return 0;
+  return !comp_class_is_module(c, &c->classes[s->class_id]) && class_is_exc_subclass(c, s->class_id);
+}
 int desugar_exception_super_new(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int changed = 0, n0 = nt->count, blk = -1;
   for (int sk = 0; sk < 2; sk++) {
     NT_FOREACH_KIND(nt, sk ? NK_ForwardingSuperNode : NK_SuperNode, id) {
       if (id >= n0 || id >= c->node_cap || nt_ref(nt, id, "block") >= 0) continue;
+      if (!exc_super_in_exception_cmethod(c, id)) continue;
       Scope *s = comp_scope_of(c, id);
-      if (!s || !s->is_cmethod || s->class_id < 0 || !s->name || s->def_node < 0) continue;
-      if (!sp_streq(comp_scope_user_name(s), "exception") || comp_super_shadow(c, s)) continue;
+      if (s->def_node < 0 || comp_super_shadow(c, s)) continue;
       int cid = s->class_id;
-      if (comp_class_is_module(c, &c->classes[cid]) || !class_is_exc_subclass(c, cid)) continue;
       int p = comp_super_parent(c, cid, 1);
       if (p >= 0 && comp_cmethod_in_chain(c, p, "exception", NULL) >= 0) continue;
       if (exc_super_new_kept(c, id, cid)) continue;

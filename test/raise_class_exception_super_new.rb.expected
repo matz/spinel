@@ -9,3 +9,6 @@
 [:arg, Arg, "arg:z"]
 [TwoSub, "tx/q"]
 [ArgumentError, "wrong number of arguments (given 2, expected 0..1)"]
+"str"
+1
+"only:x"

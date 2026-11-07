@@ -4812,6 +4812,23 @@ static void cf_node(CF *f, int v) {
         if (md >= 0 && md < c->nclasses && comp_method_in_chain(c, md, s->name, NULL) >= 0) anc_user = 1;
       }
     }
+    /* a super in a class's own `exception` that reaches Exception's builds
+       the receiving class as `new` does (desugar_exception_super_new, which
+       runs after these facts, spells it `self.new`) */
+    if (!anc_user && s->is_cmethod && s->class_id >= 0 && exc_super_in_exception_cmethod(c, v)) {
+      int dsi = f->desc[s->class_id];   /* (by index: a construction adds sets, and the pool moves) */
+      cf_add_set(f, v, dsi);
+      if (f->pool[dsi].all) { for (int i = 0; i < argc2; i++) cf_all(f, argv2[i]); return; }
+      for (int i = cls_set_next(&f->pool[dsi], -1); i >= 0; i = cls_set_next(&f->pool[dsi], i)) {
+        cf_construct(f, -1, i, argv2, argc2, blk, "new");
+        /* a bare super hands initialize this method's parameters, by position */
+        int init = k == NK_ForwardingSuperNode ? comp_method_in_chain(c, i, "initialize", NULL) : -1;
+        if (init < 0) continue;
+        Scope *ts = &c->scopes[init];
+        for (int p = 0; p < s->nparams && p < ts->nparams; p++) cf_flow(f, cf_param_el(f, mi, p), cf_param_el(f, init, p));
+      }
+      return;
+    }
     if (!anc_user && !(s->is_cmethod && sp_streq(s->name, "new"))) {
       int ik = s->is_cmethod ? -1 : cf_inst_class(f, mi);
       int recv_el = ik >= 0 && !cf_selfless_fn(s->name) ? f->self_el[ik] : -1;

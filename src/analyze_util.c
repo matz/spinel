@@ -2038,11 +2038,25 @@ int const_defined_known(Compiler *c, int rk, const char *cgn) {
 int const_seen_by_class(Compiler *c, int k, const char *cgn) {
   static int depth = 0;
   if (depth > 8) return 0;
+  int k0 = k;
   for (int n = 0; k >= 0 && k < c->nclasses && n < 64; k = c->classes[k].parent, n++) {
     if (const_owned_by_class(c, k, cgn)) return 1;
     for (int i = 0; i < c->classes[k].nincluded_mods; i++) {
       depth++;
       int seen = const_seen_by_class(c, c->classes[k].included_mods[i], cgn);
+      depth--;
+      if (seen) return 1;
+    }
+  }
+  /* Object's ancestors, which the program's reopenings make: a class's chain
+     ends at Object, and a module's lookup goes on to it, unless the class is
+     below BasicObject. Each is asked once, by the outermost walk. */
+  if (depth == 0 && k0 >= 0 && k0 < c->nclasses && !class_is_blank_slate(c, k0)) {
+    const int roots[] = { comp_core_class(c, CORE_OBJECT), comp_core_class(c, CORE_KERNEL) };
+    for (size_t i = 0; i < sizeof roots / sizeof roots[0]; i++) {
+      if (roots[i] < 0 || roots[i] == k0) continue;
+      depth++;
+      int seen = const_seen_by_class(c, roots[i], cgn);
       depth--;
       if (seen) return 1;
     }

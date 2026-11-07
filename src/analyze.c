@@ -44226,9 +44226,11 @@ static int splat_dispatch_on_length(Compiler *c, int id, const int *argv, int ar
      the key fixed ahead of the splat: each arm takes the block a missing
      key calls, and a nil one leaves the default or the KeyError, where the
      kept splat call handed the whole Array over as the default. A name a
-     block changes (`index { }`) keeps its splat. */
+     block changes (`index { }`) keeps its splat. A reader that takes none
+     (`size`, `keys`) ignores a block, so its one arm takes it too. */
+  int none = !odyn && !spec && ctor < 0 && hi == 0;
   if (blk >= 0 && !subst && nt_kind(nt, blk) == NK_BlockArgumentNode &&
-      (sp_streq(cnm, "[]") || sp_streq(cnm, "slice") || (sp_streq(cnm, "fetch") && sp_at == 1))) {
+      (sp_streq(cnm, "[]") || sp_streq(cnm, "slice") || (sp_streq(cnm, "fetch") && sp_at == 1) || none)) {
     int bx = nt_ref(nt, blk, "expression");
     if (bx >= 0 && nt_kind(nt, bx) == NK_LocalVariableReadNode) fwd_blk = 1;
   }

@@ -1,0 +1,13 @@
+NoMethodError: private method 'top' called for class Integer
+NoMethodError: private method 'top' called for class String
+NoMethodError: private method 'top' called for module Kernel
+NoMethodError: private method 'top' called for module Comparable
+NoMethodError: private method 'top' called for class Foo
+NoMethodError: private method 'top' called for an instance of Integer
+p
+p
+t
+t
+4
+2.0
+NoMethodError: private method 'top' called for class Integer

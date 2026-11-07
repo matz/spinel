@@ -1,0 +1,7 @@
+loaded
+true
+:extra
+["a=1", "b=2"]
+:cmp
+true
+"undefined method 'nothing' for class 'Jar'"

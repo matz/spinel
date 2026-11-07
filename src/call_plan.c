@@ -6147,7 +6147,10 @@ static int other_mixins_answer(Compiler *c, int k, int sg, const char *name, int
     NodeKind rk = r >= 0 ? nt_kind(c->nt, r) : NK_NilNode;
     if (!(sg ? mx[j].kind == LR_EXTEND : mx[j].kind == LR_INCLUDE || mx[j].kind == LR_PREPEND)) continue;
     if (mx[j].mod >= 0 && depth < 16 && other_mixins_answer(c, mx[j].mod, 0, name, certain, depth + 1)) return 1;
-    const char *mn = mx[j].mod < 0 && (rk == NK_ConstantReadNode || rk == NK_ConstantPathNode) ? nt_str(c->nt, r, "name") : NULL;
+    /* a module of the program by a builtin's name reopens it (a library's
+       `module Enumerable`): the builtin's methods are still there */
+    const char *mn = mx[j].mod >= 0 ? c->classes[mx[j].mod].name :
+      (rk == NK_ConstantReadNode || rk == NK_ConstantPathNode) ? nt_str(c->nt, r, "name") : NULL;
     if (mn && builtin_method_answers(mn, name, 0, certain)) return 1;
   }
   return 0;

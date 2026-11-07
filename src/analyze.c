@@ -46477,6 +46477,9 @@ static void arysub_set_call(Compiler *c, int id, int recv, const char *name, int
   nt_node_set_str(nt, id, "name", nm);
   nt_node_set_ref(nt, id, "arguments", args);
   nt_node_set_ref(nt, id, "block", blk);
+  /* (an allocation Class#new makes: CRuby's new does not call a program's
+     own allocate) */
+  if (sp_streq(nm, "allocate")) nt_node_set_int(nt, id, "cnew_alloc", 1);
   free(nm);
 }
 static int arysub_new_call(Compiler *c, int at, int recv, const char *name, int args, int blk) {

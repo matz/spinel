@@ -1,0 +1,5 @@
+[:early1, NameError, "uninitialized constant XE"]
+[:early2, NameError, "uninitialized constant XE"]
+[:early1, :argument_error, "early"]
+[ArgumentError, "late"]
+[:late2, ArgumentError]

@@ -799,6 +799,16 @@ int emit_call_exception_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, c
 /* The name `raise K, ...` raises a constant K by: the class it names
    (const_node_match_class_name), so an alias raises the class it holds;
    else the name written */
+/* Is `raise K`'s constant one a read can reach before its assignment
+   (LocalVar.const_early)? It is no class's name there: the operand is
+   evaluated as a value is, and that read raises CRuby's NameError where K
+   is not yet assigned. */
+static int raise_const_read_early(Compiler *c, int node) {
+  NodeKind k = nt_kind(c->nt, node);
+  if (k != NK_ConstantReadNode && k != NK_ConstantPathNode) return 0;
+  LocalVar *lv = comp_const_at(c, node);
+  return lv && lv->const_early;
+}
 static const char *exc_const_class_name(Compiler *c, int node) {
   const char *n = const_node_match_class_name(c, node);
   return n ? n : nt_str(c->nt, node, "name");
@@ -870,7 +880,8 @@ int emit_call_raise_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const
                       repr_of(c, cause_node).exc));
       int first_const = ac > 0 && nt_type(nt, av[0]) &&
                         comp_ntype(c, av[0]) != TY_STRING && comp_ntype(c, av[0]) != TY_STRBUF &&
-                        (nt_kind(nt, av[0]) == NK_ConstantReadNode || nt_kind(nt, av[0]) == NK_ConstantPathNode);
+                        (nt_kind(nt, av[0]) == NK_ConstantReadNode || nt_kind(nt, av[0]) == NK_ConstantPathNode) &&
+                        !raise_const_read_early(c, av[0]);
       const char *first_cn = first_const ? exc_const_class_name(c, av[0]) : NULL;
       int first_xc = first_cn ? comp_class_index(c, first_cn) : -1;
       TyKind first_ty = ac > 0 && !first_const ? comp_ntype(c, av[0]) : TY_UNKNOWN;
@@ -937,6 +948,7 @@ int emit_call_raise_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const
     }
     else if (ac == 1 && nt_type(nt, av[0]) &&
              (nt_kind(nt, av[0]) == NK_ConstantReadNode || nt_kind(nt, av[0]) == NK_ConstantPathNode) &&
+             !raise_const_read_early(c, av[0]) &&
              /* A String constant is the message, as a String variable is. */
              comp_ntype(c, av[0]) != TY_STRING && comp_ntype(c, av[0]) != TY_STRBUF &&
              /* a constant holding an exception INSTANCE (`ERR = RuntimeError.new(..)`;
@@ -1003,7 +1015,8 @@ int emit_call_raise_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const
     }
     else if (ac >= 2 && nt_type(nt, av[0]) &&
              comp_ntype(c, av[0]) != TY_STRING && comp_ntype(c, av[0]) != TY_STRBUF &&
-             (nt_kind(nt, av[0]) == NK_ConstantReadNode || nt_kind(nt, av[0]) == NK_ConstantPathNode)) {
+             (nt_kind(nt, av[0]) == NK_ConstantReadNode || nt_kind(nt, av[0]) == NK_ConstantPathNode) &&
+             !raise_const_read_early(c, av[0])) {
       /* `raise Cls, arg` on a user exception subclass with an initialize is
          `raise Cls.new(arg)`: construct the object so its ivars are set and
          the message comes from the class's initialize/super, then carry it.

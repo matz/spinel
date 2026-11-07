@@ -461,6 +461,33 @@ int const_node_class_index(Compiler *c, int id) {
   int r = const_node_record_class(c, id);
   return r >= 0 ? r : const_node_class_index_tree(c, id);
 }
+/* The class a constant node names where a raise or a rescue arm matches
+   by the class (`raise K`, `rescue K => e`): the one it names, a class
+   alias's among them, except a constant some read can run before an
+   assignment of (LocalVar.const_early), whose read is CRuby's NameError
+   there and is evaluated in its place. -1 for none. */
+int const_node_match_class(Compiler *c, int node) {
+  NodeKind k = nt_kind(c->nt, node);
+  if (k != NK_ConstantReadNode && k != NK_ConstantPathNode) return -1;
+  LocalVar *lv = comp_const_at(c, node);
+  if (lv && lv->const_early) return -1;
+  return const_node_class_index(c, node);
+}
+/* The name of the class a raise or a rescue arm matches a constant node by:
+   the class it names (const_node_match_class), else the builtin class a
+   class alias of the program holds (`XA = ArgumentError`), which the class
+   table does not list; NULL for none. */
+const char *const_node_match_class_name(Compiler *c, int node) {
+  int k = const_node_match_class(c, node);
+  if (k >= 0) return c->classes[k].name;
+  NodeKind nk = nt_kind(c->nt, node);
+  if (nk != NK_ConstantReadNode && nk != NK_ConstantPathNode) return NULL;
+  LocalVar *lv = comp_const_at(c, node);
+  if (!lv || lv->const_early || !const_path_reaches_leaf_const(c, node)) return NULL;
+  const char *key = const_key_at(c, node), *real = key ? resolve_class_alias(c, key) : NULL;
+  if (!real || sp_streq(real, key)) return NULL;
+  return is_builtin_class_name(real) || is_builtin_exception_name(real) ? real : NULL;
+}
 static int const_node_class_index_tree(Compiler *c, int id) {
   const NodeTable *nt = c->nt;
   int k = comp_class_index(c, const_key_at(c, id));

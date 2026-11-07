@@ -15008,8 +15008,9 @@ static int rescue_operand_is_class_name(Compiler *c, int op) {
   if (k != NK_ConstantReadNode && k != NK_ConstantPathNode) return 0;
   const char *n = nt_str(c->nt, op, "name");
   if (!n || !comp_const(c, n)) return 1;
+  /* (a class alias no read reaches before its assignment names its class) */
   return comp_class_index(c, n) >= 0 || is_builtin_class_name(n) || is_builtin_module_name(n) ||
-         is_builtin_exception_name(n);
+         is_builtin_exception_name(n) || const_node_match_class_name(c, op);
 }
 /* A rescue operand that names a constant defined nowhere (`rescue
    Missing::Thing`): CRuby evaluates it when an exception reaches the
@@ -15185,6 +15186,11 @@ void emit_rescue(Compiler *c, int id, Buf *b, int indent, int fr, const char *re
       int effect = emit_const_read_prefix(c, exc[i], b);
       first = 0;
       const char *ename = nt_str(nt, exc[i], "name");
+      /* a class alias matches as the class it names */
+      if (ename && comp_class_index(c, ename) < 0 && comp_const(c, ename)) {
+        const char *an = const_node_match_class_name(c, exc[i]);
+        if (an) ename = an;
+      }
       /* A builtin namespaced exception (e.g. StringScanner::Error) is raised
          under its qualified name. Map the path to that form only when it
          names a known builtin exception, so user classes like M::Err keep

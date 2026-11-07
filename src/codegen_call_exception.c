@@ -795,13 +795,12 @@ int emit_call_exception_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, c
 }
 
 /* raise / fail as an expression */
-/* The name `raise K, ...` raises a constant K by: the class the load record
-   resolves the reference to (const_node_class_index), so an alias raises the
-   class it holds, as the renaming of alias reads did; else the name written */
+/* The name `raise K, ...` raises a constant K by: the class it names
+   (const_node_match_class_name), so an alias raises the class it holds;
+   else the name written */
 static const char *exc_const_class_name(Compiler *c, int node) {
-  int k = const_node_class_index(c, node);
-  if (k >= 0 && c->classes[k].name) return c->classes[k].name;
-  return nt_str(c->nt, node, "name");
+  const char *n = const_node_match_class_name(c, node);
+  return n ? n : nt_str(c->nt, node, "name");
 }
 int emit_call_raise_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv) {
   /* raise */

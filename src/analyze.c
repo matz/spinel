@@ -78,7 +78,8 @@ static int rescue_arm_spec_cid(Compiler *c, int rescue_id) {
   NodeKind en_k = nt_kind(c->nt, exc[0]);
   if (en_k != NK_ConstantReadNode && en_k != NK_ConstantPathNode) return -1;
   const char *enm = nt_str(c->nt, exc[0], "name");
-  int xc = enm ? comp_class_index(c, enm) : -1;
+  int xc = const_node_match_class(c, exc[0]);
+  if (xc < 0) xc = enm ? comp_class_index(c, enm) : -1;
   if (xc >= 0 && class_is_exc_subclass(c, xc) &&
       (c->classes[xc].nivars > 0 || class_defines_own_method(c, xc))) return xc;
   return -1;
@@ -100,17 +101,19 @@ static void scan_raise_classes(Compiler *c, int id, int *cid, int *bad) {
       int a = nt_ref(nt, id, "arguments");
       int an = 0; const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &an) : NULL;
       const char *cn = NULL;
+      int cnode = -1;
       if (an >= 1) {
         NodeKind ak = nt_kind(nt, av[0]);
-        if (ak == NK_ConstantReadNode) cn = nt_str(nt, av[0], "name");
+        if (ak == NK_ConstantReadNode) cnode = av[0];
         else if (ak == NK_CallNode && nt_str(nt, av[0], "name") &&
                  sp_streq(nt_str(nt, av[0], "name"), "new")) {
           int rr = nt_ref(nt, av[0], "receiver");
-          if (rr >= 0 && nt_kind(nt, rr) == NK_ConstantReadNode)
-            cn = nt_str(nt, rr, "name");
+          if (rr >= 0 && nt_kind(nt, rr) == NK_ConstantReadNode) cnode = rr;
         }
+        if (cnode >= 0) cn = nt_str(nt, cnode, "name");
       }
-      int rcid = cn ? comp_class_index(c, cn) : -1;
+      int rcid = cnode >= 0 ? const_node_match_class(c, cnode) : -1;
+      if (rcid < 0) rcid = cn ? comp_class_index(c, cn) : -1;
       if (rcid < 0 || !class_is_exc_subclass(c, rcid) || c->classes[rcid].nivars <= 0) { *bad = 1; return; }
       if (*cid >= 0 && *cid != rcid) { *bad = 1; return; }
       *cid = rcid;
@@ -19228,7 +19231,8 @@ static void narrow_rescue_arm_reads(Compiler *c) {
     if (en_k != NK_ConstantReadNode && en_k != NK_ConstantPathNode)
       continue;
     const char *enm = nt_str(nt, exc[0], "name");
-    int cid = enm ? comp_class_index(c, enm) : -1;
+    int cid = const_node_match_class(c, exc[0]);
+    if (cid < 0) cid = enm ? comp_class_index(c, enm) : -1;
     if (cid < 0 || !class_is_exc_subclass(c, cid)) continue;
     Scope *vsc = comp_scope_of(c, ref);
     LocalVar *lv = vsc ? scope_local(vsc, nm) : NULL;

@@ -5193,16 +5193,35 @@ static sp_int sp_poly_arr_len(sp_RbVal a);           /* defined below */
 /* A Struct's size and length are its member count; a program object of any
    other class has neither. -1 when v is no Struct. */
 static sp_int sp_poly_struct_size(sp_RbVal v) {
+  /* Process::Tms is a Struct of four members (utime stime cutime cstime) */
+  if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_TMS) return 4;
   if (!sp_poly_is_user_obj(v)) return -1;
   sp_RbVal sv = sp_poly_struct_values(v);
   return (sv.tag == SP_TAG_OBJ && sv.v.p && sp_poly_is_array_kind(sv.cls_id)) ? sp_poly_arr_len(sv) : -1;
+}
+/* A boxed builtin whose class has neither #size nor #length (Time, Regexp,
+   Proc, Method, Exception, Thread, Mutex, Random, Rational, Complex, ...).
+   sp_poly_length reads any object it has no arm for as 0, so `v.size` on a
+   boxed Time answered 0 where CRuby raises NoMethodError. */
+static SP_INLINE int sp_poly_sizeless_builtin(sp_RbVal v) {
+  if (v.tag != SP_TAG_OBJ) return 0;
+  switch (v.cls_id) {
+    case SP_BUILTIN_PROC: case SP_BUILTIN_CURRY: case SP_BUILTIN_METHOD: case SP_BUILTIN_TIME:
+    case SP_BUILTIN_REGEX: case SP_BUILTIN_EXCEPTION: case SP_BUILTIN_THREAD: case SP_BUILTIN_MUTEX:
+    case SP_BUILTIN_CONDVAR: case SP_BUILTIN_FIBER: case SP_BUILTIN_RANDOM: case SP_BUILTIN_COMPLEX:
+    case SP_BUILTIN_RATIONAL: case SP_BUILTIN_BIG_RATIONAL: case SP_BUILTIN_DIR: case SP_BUILTIN_YIELDER:
+    case SP_BUILTIN_PROCESS_STATUS: case SP_BUILTIN_ADDRINFO: case SP_BUILTIN_SOCKOPT:
+    case SP_BUILTIN_OBJECT: case SP_BUILTIN_BASIC_OBJECT:
+      return 1;
+    default: return 0;
+  }
 }
 static sp_int sp_poly_length_m(sp_RbVal v) {
   if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_MATCHDATA && v.v.p) return sp_MatchData_length((sp_MatchData *)v.v.p);
   if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_QUEUE && v.v.p) return sp_Queue_size((sp_queue *)v.v.p);
   { sp_int n = sp_poly_struct_size(v); if (n >= 0) return n; }
   if (v.tag == SP_TAG_NIL || v.tag == SP_TAG_INT || v.tag == SP_TAG_FLT ||
-      v.tag == SP_TAG_BIGINT || v.tag == SP_TAG_BOOL || sp_poly_is_user_obj(v) ||
+      v.tag == SP_TAG_BIGINT || v.tag == SP_TAG_BOOL || sp_poly_is_user_obj(v) || sp_poly_sizeless_builtin(v) ||
       (v.tag == SP_TAG_OBJ && (v.cls_id == SP_BUILTIN_RANGE || v.cls_id == SP_BUILTIN_STR_RANGE ||
                                v.cls_id == SP_BUILTIN_FLOAT_RANGE)))
     sp_raise_poly_nomethod("length", v);
@@ -5281,7 +5300,7 @@ static sp_int sp_poly_size_n(sp_RbVal v, sp_bool *none) {
   if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_QUEUE && v.v.p) return sp_Queue_size((sp_queue *)v.v.p);
   { sp_int n = sp_poly_struct_size(v); if (n >= 0) return n; }
   if (v.tag == SP_TAG_NIL || v.tag == SP_TAG_BOOL || v.tag == SP_TAG_FLT ||
-      sp_poly_is_user_obj(v))
+      sp_poly_is_user_obj(v) || sp_poly_sizeless_builtin(v))
     sp_raise_poly_nomethod("size", v);
   if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_IO) {
     /* a File::Stat rides the handle: its size is the stat's */

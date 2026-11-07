@@ -1,0 +1,31 @@
+# A boxed builtin whose class has no #size or #length raises NoMethodError.
+# The boxed size/length helpers read any object they had no arm for as 0.
+class C
+  def send(d) = "C #{d}"
+end
+
+def pick(i) = [C.new, Time.at(0).utc, 7, "ab", /re/, ->(a) { a }, method(:puts),
+               Mutex.new, Random.new(1), Rational(1, 2), Complex(1, 2),
+               StandardError.new("m"), Object.new, Thread.current, Process.times][i]
+
+15.times do |i|
+  v = pick(i)
+  a = (v.size rescue $!.class)
+  b = (v.length rescue $!.class)
+  s = (v.send(:size) rescue $!.class)
+  puts "#{i} #{a.inspect} #{b.inspect} #{s.inspect}"
+end
+
+# A reopened builtin's own size still runs.
+class Fiber
+  def size = 33
+end
+class MyErr < StandardError
+  def size = 5
+  def length = 6
+end
+def pick2(i) = [Fiber.new { 1 }, MyErr.new("x"), [1, 2], { a: 1 }, nil][i]
+5.times do |i|
+  v = pick2(i)
+  puts "#{(v.size rescue $!.class).inspect} #{(v.length rescue $!.class).inspect}"
+end

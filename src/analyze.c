@@ -50408,6 +50408,7 @@ static void an_phase_desugar_register(Compiler *c) {
   AN_STEP_V("desugar_block_arg_order", desugar_block_arg_order(c));   /* recv.m(a, &expr): receiver, args, then the block (#4992) */
   register_attr_versions(c);
   register_attrs(c);
+  elab_absent_aliases(c);   /* the aliases of a method nothing answers: no method, and a NameError where they run */
   register_method_visibility(c);
   register_aliases(c);
   AN_STEP_V("rewrite_builtin_alias_self_calls", rewrite_builtin_alias_self_calls(c, 0));  /* plus_without(o) -> self.+(o), the builtin's */

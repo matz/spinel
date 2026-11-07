@@ -839,6 +839,11 @@ int cplan_cmethod_later(Compiler *c, int id, int cls, const char *name);
    none or not known. It asks for the versions ct_version_at does
    (elab_call_meet) and answers only where that meets one. */
 int cplan_alias_holder(Compiler *c, int id, int cls, const char *name, int sg, int *own_sg);
+/* Does a method no version of the program's gives answer `name` on cls's side
+   sg (LR_MAIN's, -1, is Object's): a builtin's, a Struct or Data member, a
+   builtin mixin's? may (certain 0) or must (certain 1) an answer exist: see the
+   definition. Once the accessors are registered. */
+int cplan_other_answers(Compiler *c, int cls, int sg, const char *name, int certain);
 /* What node id, a Method's maker, meets as an instance of cls's accessor
    `name` (a writer's as `x=`), as its Method answers #owner and
    #source_location: node, the attr_* call it meets (-1: none); owner,

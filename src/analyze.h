@@ -250,6 +250,10 @@ typedef struct {
                            module_function copy's of one, that one's; a
                            class-side accessor's that a def replaces, the
                            method made of it (elab_attr_scope) */
+  unsigned char absent; /* an alias whose original the class has no method of
+                           where it runs: it raises there and makes no
+                           method, so it is no version and no entry
+                           (elab_absent_aliases) */
 } LrDef;
 typedef struct { int node, body; } LrOpen;
 typedef enum { LR_INCLUDE, LR_EXTEND, LR_PREPEND, LR_SG_PREPEND } LrMixKind;   /* LR_SG_PREPEND: a prepend of the singleton class, ahead of its own methods */
@@ -348,7 +352,10 @@ void elab_open_histories(Compiler *c, void (*fn)(void *arg, int cls, int sg, con
    reopening's class side, its instance side is searched too. Only the
    program's methods: a builtin one that answers (a record class's own,
    elab_record_cmethod) is the caller's to ask. */
-int elab_call_method(Compiler *c, int id, int cls, const char *name, int sg);
+/* With mm 0, a method_missing or respond_to_missing? of the program does not
+   make a none unknown (an alias's original is looked up in the method tables
+   alone, so a method that only they answer is none); a call passes 1. */
+int elab_call_method(Compiler *c, int id, int cls, const char *name, int sg, int mm);
 /* the class a record builder made (`Foo = Struct.new(:a)`), or one whose
    header's superclass is the class a builder makes (`class Foo <
    Struct.new(:a)`), that cls is or inherits from; -1 for none. Past it
@@ -789,6 +796,10 @@ typedef struct { int cls, sg, kind, node; const char *name, *target; int scope; 
    time (lr_stmt_applied: 2) */
 enum { ELAB_ENTRY_MAY = 1 << 30 };
 ElabEntry *elab_entries(Compiler *c, unsigned mask, int *n);
+/* Drop the aliases whose original no method answers where they run (see
+   LrDef.absent), once the accessors are registered; each statement carries
+   its NameError message ("alias_absent") for the emitter. */
+void elab_absent_aliases(Compiler *c);
 /* The class-side accessor versions of each history that ends in a def
    (`class << self; attr_writer :cfg; end`, then `def self.cfg=`): a call
    that runs while one is live runs the accessor, any other the def, so

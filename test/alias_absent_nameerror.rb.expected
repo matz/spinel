@@ -1,0 +1,58 @@
+undefined method 'm' for class 'Later'
+undefined method 'nope' for class 'Later'
+false
+true
+1
+[:m, :o, :ok]
+undefined method 'r' for class 'AccessorLater'
+undefined method 'w2=' for class 'AccessorLater'
+false
+[:r, :w=]
+undefined method 'nope' for module 'Mixin'
+undefined method 'nope2' for class 'Includer'
+false
+true
+false
+[:m, :ok]
+undefined method 'm' for class 'Child'
+undefined method 'only_here' for class 'Parent'
+false
+1
+false
+undefined method 'nope' for class '#<Class:Single>'
+undefined method 'inst_only' for class '#<Class:Single>'
+1
+false
+[:m, :n]
+undefined method 'nope' for class 'Chain'
+undefined method 'a' for class 'Chain'
+[]
+undefined method 'ghost' for class 'Ghost'
+false
+[:method_missing]
+1
+undefined method 'zz' for class 'Order'
+3
+5
+4
+false
+undefined method 'nope' for module 'Section'
+false
+1
+undefined method 'nope' for class 'Array'
+2
+false
+undefined method 'nope' for class 'Object'
+1
+true
+7
+[:a]
+1
+undefined method 'c' for class 'FineStruct'
+2
+false
+:p
+4
+3.0
+undefined method 'nope' for class 'Class'
+false

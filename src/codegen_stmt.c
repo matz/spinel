@@ -17903,7 +17903,12 @@ static void emit_class_body_stmts(Compiler *c, int ci, int body, Buf *b, int ind
         emit_stmt_or_defer(c, stmts[k], b, indent);
       continue;
     }
-    if (sk == NK_AliasMethodNode) continue;
+    /* (an alias of a method nothing answers is skipped for what it makes, not
+       for what it does: it raises where it runs) */
+    if (sk == NK_AliasMethodNode) {
+      if (nt_str(nt, stmts[k], "alias_absent")) emit_stmt_or_defer(c, stmts[k], b, indent);
+      continue;
+    }
     /* `class << self`: its defs are the class's own, but the constants it
        assigns are assigned where it stands (#5996); so are the statements of
        a `class << Const` naming a class or module, as at the top level */
@@ -17951,6 +17956,8 @@ static void emit_class_body_stmts(Compiler *c, int ci, int body, Buf *b, int ind
       /* a mixin naming a class (`include K`, the load record's mark):
          CRuby's TypeError where the statement runs, not a declaration */
       if (nt_int(nt, stmts[k], "mixin_class_arg", 0)) { emit_stmt_or_defer(c, stmts[k], b, indent); continue; }
+      /* an alias_method of a method nothing answers: NameError where it runs */
+      if (nt_str(nt, stmts[k], "alias_absent")) { emit_stmt_or_defer(c, stmts[k], b, indent); continue; }
       int executable = prog_stmt_call_executable(c, stmts[k], ci);
       /* A name nothing defines -- no method of any class or module in the
          program, no Module or Object method, no declaration the analysis
@@ -19789,6 +19796,19 @@ static int own_mixin_body_reaches_builtin(Compiler *c, int dn) {
   return r;
 }
 
+/* An alias or alias_method of a method nothing answers where it runs
+   (elab_absent_aliases) makes no method and raises NameError there, with the
+   message the record made for the statement. Is id one? Then emit the raise. */
+static int emit_alias_absent(Compiler *c, int id, Buf *b, int indent) {
+  const char *msg = nt_str(c->nt, id, "alias_absent");
+  if (!msg) return 0;
+  emit_indent(b, indent);
+  buf_puts(b, "sp_raise_cls(\"NameError\", \"");
+  emit_c_escaped(b, msg);
+  buf_puts(b, "\");\n");
+  return 1;
+}
+
 /* A CallNode statement: the statement-level fast paths ahead of emit_expr (emit_stmt_inner's arms, in their order) */
 static int emit_call_stmt(Compiler *c, int id, Buf *b, int indent, const NodeTable *nt, const char *ty) {
   refuse_prepass_at_emit(c, id);
@@ -19813,6 +19833,9 @@ static int emit_call_stmt(Compiler *c, int id, Buf *b, int indent, const NodeTab
       unsupported_feature(c, id, msg);
     }
   }
+  /* an alias_method of a method nothing answers (elab_absent_aliases): it makes
+     no method and raises NameError where it runs */
+  if (emit_alias_absent(c, id, b, indent)) return 1;
   if (emit_arysub_call_stmt(c, id, b, indent)) return 1;   /* #7449 */
   /* --share-strings: a safe-navigation bang on an attribute assignment's
      handle changes that handle: its route, run for its effect (the bang's
@@ -22079,7 +22102,10 @@ static void emit_stmt_node(Compiler *c, int id, Buf *b, int indent) {
      satisfied, so a constant-false guard creates nothing here and a non-constant
      guard leaves the name unresolved (it rejects loudly at the use site). The
      node itself emits no runtime code. */
-  if (ty_k == NK_AliasMethodNode) return;
+  if (ty_k == NK_AliasMethodNode) {
+    emit_alias_absent(c, id, b, indent);
+    return;
+  }
 
   if (ty_k == NK_YieldNode) {
     if (g_current_scope_is_lowered) {
@@ -22378,11 +22404,12 @@ static void emit_stmt_node(Compiler *c, int id, Buf *b, int indent) {
       const int *stmts = body >= 0 ? nt_arr(nt, body, "body", &n) : NULL;
       for (int k = 0; k < n; k++) {
         NodeKind sk = nt_kind(nt, stmts[k]);
-        if (sk == NK_DefNode || sk == NK_AliasMethodNode || sk == NK_InstanceVariableWriteNode ||
+        if (sk == NK_DefNode || (sk == NK_AliasMethodNode && !nt_str(nt, stmts[k], "alias_absent")) ||
+            sk == NK_InstanceVariableWriteNode ||
             sk == NK_InstanceVariableOrWriteNode || sk == NK_InstanceVariableAndWriteNode ||
             sk == NK_InstanceVariableOperatorWriteNode)
           continue;
-        if (sk == NK_CallNode && nt_ref(nt, stmts[k], "receiver") < 0 &&
+        if (sk == NK_CallNode && nt_ref(nt, stmts[k], "receiver") < 0 && !nt_str(nt, stmts[k], "alias_absent") &&
             !prog_sclass_call_executable(c, stmts[k])) continue;
         emit_stmt(c, stmts[k], b, indent);
       }

@@ -1835,7 +1835,7 @@ static int ct_undefined_at(Compiler *c, int id, int cls, const char *name, unsig
   if (ct_capture_keeps_table(c, id, rcls, sg, name, flags, 0) && (ver_chain_count(c, rcls, sg, name, &first_def, &body, &cl), body))
     return 0;
   int framed = elab_plan_enter(c, id);
-  int none = elab_call_method(c, id, flags & CT_TOP ? -1 : cls, name, (flags & CT_CMETHOD) != 0) == ELAB_NO;
+  int none = elab_call_method(c, id, flags & CT_TOP ? -1 : cls, name, (flags & CT_CMETHOD) != 0, 1) == ELAB_NO;
   if (framed) elab_plan_leave(c);
   return none && !(nt_ref(c->nt, id, "receiver") >= 0 && !nt_int(c->nt, id, "self_call", 0) &&
                    builtin_self_method_known(name, cm_self_kind(c, flags & CT_TOP ? -1 : cls)) &&
@@ -1953,11 +1953,11 @@ static int user_new_at(Compiler *c, int id, int ci, int *unplaced) {
   if (!c->classes[ci].is_struct) {
     int dn = c->scopes[t].def_node;
     if (c->scopes[t].class_id != ci || nt_kind(c->nt, dn) != NK_DefNode || elab_point_of(c, dn).region < 0) return t;
-    int framed = elab_plan_enter(c, id), at = elab_call_method(c, id, ci, nm, 1);
+    int framed = elab_plan_enter(c, id), at = elab_call_method(c, id, ci, nm, 1, 1);
     if (framed) elab_plan_leave(c);
     return at == ELAB_NO ? -1 : t;
   }
-  int framed = elab_plan_enter(c, id), at = elab_call_method(c, id, ci, nm, 1), absent = at == ELAB_NO;
+  int framed = elab_plan_enter(c, id), at = elab_call_method(c, id, ci, nm, 1, 1), absent = at == ELAB_NO;
   /* (a call in a method or a block: the def in force over its window, or
      none over all of it) */
   int made = at == ELAB_YES || ct_window_version(c, id, ci, nm, 1) == t;
@@ -2475,7 +2475,7 @@ static int cm_capture_never_made(Compiler *c, int id, int cls, const char *name)
   const int *av = call_args(c->nt, id, &ac);
   if (ac < 1 || nt_kind(c->nt, av[0]) != NK_SymbolNode) return 0;
   int framed = elab_plan_enter(c, id);
-  int none = elab_call_method(c, id, cls, name, 1) == ELAB_NO;
+  int none = elab_call_method(c, id, cls, name, 1, 1) == ELAB_NO;
   if (framed) elab_plan_leave(c);
   return none;
 }
@@ -2506,7 +2506,7 @@ static int cplan_capture_absent(Compiler *c, int id, int mi) {
 static int capture_live_at(Compiler *c, int at, int ci, const char *name) {
   const LrDef *ds[VER_MAX_ARMS];
   int framed = elab_plan_enter(c, at), n;
-  int live = elab_call_method(c, at, ci, name, 1) == ELAB_YES;
+  int live = elab_call_method(c, at, ci, name, 1, 1) == ELAB_YES;
   if (!live && (n = elab_call_span(c, at, ci, name, 1, 0, NULL, ds, VER_MAX_ARMS)) >= 1) {
     live = 1;
     for (int k = 0; k < n && k < VER_MAX_ARMS; k++) live &= ds[k] != NULL;
@@ -5958,11 +5958,10 @@ static int super_layer_entry(Compiler *c, int id, int t) {
   int i = ver_entry_ix(c, VER_ENTRY_LAYER, m->origin_module_ci, m->class_id, m->is_cmethod, comp_scope_user_name(m), ver_arity(c, id, to, n));
   return i >= 0 ? c->ver_entries[i].scope : -1;
 }
-static int ver_other_answers(Compiler *c, int cls, int sg, const char *name);
 /* Does the method a guard entry's else arm runs, behind (the hidden method
    behind a later include's copy, Scope.super_behind), find no method of
    `name` on cls's side sg: its super reaches no method of the program, and
-   no builtin, reader or builtin mixin answers (ver_other_answers)? Then the
+   no builtin, reader or builtin mixin answers (cplan_other_answers)? Then the
    chain's method_missing is what CRuby calls there (guard_entry_make), and
    where none may answer, the arm finds nothing (guard_else_bare). A
    module function of a module cls's chain includes answers on the instance
@@ -5971,7 +5970,7 @@ static int ver_other_answers(Compiler *c, int cls, int sg, const char *name);
 static int guard_behind_finds_none(Compiler *c, int behind, int cls, int sg, const char *name) {
   int at;
   if (!c->scopes[behind].super_behind || cplan_super_target(c, -1, &c->scopes[behind], &at) >= 0 ||
-      ver_other_answers(c, cls, sg, name))
+      cplan_other_answers(c, cls, sg, name, 1))
     return 0;
   for (int s = 0; !sg && s < c->nscopes; s++) {
     const Scope *m = &c->scopes[s];
@@ -6133,33 +6132,90 @@ static int ver_named_else(Compiler *c, const VerNamed *w) {
   else snprintf(msg, sizeof msg, "undefined method '%s' for an instance of %s", name, class_ruby_name(c, cls));
   return disp_raise_no_method(c, name, msg, w->ar);
 }
-/* Does a method the entry's else arm cannot run answer `name` on cls's
+/* Does a builtin module that class k mixes in on the side sg, or a module
+   of the program it mixes in, and so on, have a method `name` in CRuby's
+   tables? */
+static int other_mixins_answer(Compiler *c, int k, int sg, const char *name, int certain, int depth) {
+  int nmx = 0;
+  const LrMixin *mx = elab_class_mixins(c, k, &nmx);
+  for (int j = 0; j < nmx; j++) {
+    int r = mx[j].ref;
+    NodeKind rk = r >= 0 ? nt_kind(c->nt, r) : NK_NilNode;
+    if (!(sg ? mx[j].kind == LR_EXTEND : mx[j].kind == LR_INCLUDE || mx[j].kind == LR_PREPEND)) continue;
+    if (mx[j].mod >= 0 && depth < 16 && other_mixins_answer(c, mx[j].mod, 0, name, certain, depth + 1)) return 1;
+    const char *mn = mx[j].mod < 0 && (rk == NK_ConstantReadNode || rk == NK_ConstantPathNode) ? nt_str(c->nt, r, "name") : NULL;
+    if (mn && builtin_method_answers(mn, name, 0, certain)) return 1;
+  }
+  return 0;
+}
+/* The superclass step of a chain the parents are not resolved for yet
+   (resolve_parents runs after the aliases are registered): the record's */
+static int other_super(Compiler *c, int k) {
+  int p = c->classes[k].parent;
+  return p >= 0 ? p : elab_class_super(c, k);
+}
+/* The builtin class the chain of cls ends in, by its row's name in CRuby's
+   tables (Object for one with no row); *root is the last class of the
+   program on it */
+static const char *other_builtin_root(Compiler *c, int cls, int *root) {
+  int k = cls;
+  for (int d = 0; other_super(c, k) >= 0 && d < c->nclasses; d++) k = other_super(c, k);
+  *root = k;
+  int id = class_builtin_parent(c, k);
+  const BuiltinClass *r;
+  for (int i = 0; (r = builtin_class_at(i)); i++) if (r->id == id) return r->name;
+  return "Object";
+}
+/* Does a method the program's versions do not give answer `name` on cls's
    side sg: a builtin's that every object (class, module) answers, cls's
-   builtin superclass's or an included builtin module's (Comparable's and
-   Enumerable's own among them), cls's own reader, a Struct or Data member
-   in its chain, or on the class side a record class's own builtin
-   (elab_record_cmethod)? */
-static int ver_other_answers(Compiler *c, int cls, int sg, const char *name) {
-  int dc = -1, mod = cls >= 0 && comp_class_is_module(c, &c->classes[cls]);
+   builtin superclass's (a reopened builtin is its own) or a builtin module's
+   that is mixed in (Comparable's and Enumerable's own among them; through a
+   module of the program too, by include, prepend or, on the class side,
+   extend), a Struct or Data member in its chain (writer too), or on the
+   class side a record class's own builtin (elab_record_cmethod)? The
+   question has two askers. MAY an answer exist (certain 0: an alias's
+   original, where a miss is a NameError the alias would raise, and a missed
+   one is master's answer): CRuby's tables of every listed library at every
+   version, no reader of cls's own (an accessor made later is no method yet,
+   its accessors being the record's versions). MUST one (certain 1: the else
+   arm and every reader that drops a method_missing or a NoMethodError
+   because something answers): only a method CRuby has with no library or
+   with one the program requires, at both versions, cls's own reader too,
+   and no definition hook (a conditional hook def replaces the no-op the load
+   fires without). */
+int cplan_other_answers(Compiler *c, int cls, int sg, const char *name, int certain) {
+  int root = cls, mod = cls >= 0 && comp_class_is_module(c, &c->classes[cls]);
   if (builtin_every_object_answers(name, sg) || is_object_receiver_handoff(name) || is_method_missing_name(name) ||
       is_implicitly_private_name(name) || (sg && is_class_plain_query(name)) ||
       builtin_self_method_known(name, !sg ? BSELF_MAIN : mod ? BSELF_MODULE : BSELF_CLASS)) return 1;
-  if (cls < 0) return 0;
-  if (builtin_class_id_answers(class_builtin_parent(c, cls), name, sg)) return 1;
+  /* CRuby's own tables: the chain's root (a module's is Object's, and Module's
+     on its class side), then each class on it where it reopens a builtin */
+  /* (a definition hook a program defines under a condition replaces the
+     builtin no-op, which the load fires the hooks without: the else arm
+     does not count it as another method. A compromise that keeps master's
+     answer: an explicit `send(:inherited, k)` while no version is live still
+     raises NoMethodError, where CRuby runs the builtin no-op and answers nil.
+     Its home is an else kind that runs the builtin no-op.) */
+  int tab = !(certain && is_definition_hook_name(name));
+  if (cls < 0) return tab && builtin_method_answers("Object", name, 0, certain);
+  if (mod) {
+    if (tab && builtin_method_answers(sg ? "Module" : "Object", name, 0, certain)) return 1;
+  }
+  else {
+    const char *rn = other_builtin_root(c, cls, &root);
+    if ((tab && builtin_method_answers(rn, name, sg, certain)) || builtin_class_id_answers(class_builtin_parent(c, root), name, sg)) return 1;
+  }
+  for (int k = cls; k >= 0; k = other_super(c, k)) {
+    /* (a `class Class` reopening is registered as the module Class__reopen) */
+    if ((tab && builtin_method_answers(k == comp_core_class(c, CORE_CLASS_REOPEN) ? "Class" : c->classes[k].name, name, sg, certain)) ||
+        (tab && other_mixins_answer(c, k, sg, name, certain, 0))) return 1;
+  }
   if (sg) return elab_record_cmethod(c, cls, name);
-  if (comp_reader_in_chain(c, cls, name, &dc) && dc >= 0 && (dc == cls || c->classes[dc].is_struct || c->classes[dc].is_data)) return 1;
-  for (int k = cls; k >= 0; k = c->classes[k].parent) {
-    int nmx = 0;
-    const LrMixin *mx = elab_class_mixins(c, k, &nmx);
-    for (int j = 0; j < nmx; j++) {
-      int r = mx[j].ref;
-      NodeKind rk = r >= 0 ? nt_kind(c->nt, r) : NK_NilNode;
-      const char *mn = mx[j].kind == LR_INCLUDE && mx[j].mod < 0 && (rk == NK_ConstantReadNode || rk == NK_ConstantPathNode) ? nt_str(c->nt, r, "name") : NULL;
-      if (mn && is_builtin_module_name(mn) &&
-          (builtin_instance_method_known(mn, name) || (is_comparable_module_name(mn) && is_comparable_module_method(name)) ||
-           (is_enumerable_module_name(mn) && name_is_enumerable_module_method(name))))
-        return 1;
-    }
+  char wb[256];
+  int w = setter_base_name(name, wb, sizeof wb);
+  for (int k = cls; k >= 0; k = other_super(c, k)) {
+    int has = w ? comp_is_writer(&c->classes[k], wb) : comp_is_reader(&c->classes[k], comp_resolve_alias(c, k, name));
+    if (has && ((certain && !w && k == cls) || c->classes[k].is_struct || c->classes[k].is_data)) return 1;
   }
   return 0;
 }
@@ -6167,7 +6223,7 @@ static int ver_other_answers(Compiler *c, int cls, int sg, const char *name) {
    to[0..nv), taking ar arguments and a block when blk): VK_KEEP when a
    super of the program reaches a version (its NoMethodError would read
    as a call's, not super's), or another method answers the name
-   (ver_other_answers), or the record's chain holds a version behind the
+   (cplan_other_answers), or the record's chain holds a version behind the
    history that super does not reach (an earlier include's, which the
    include path chains only behind what reaches super); else, in that
    order, what super reaches (cplan_super_target) and an inherited
@@ -6198,7 +6254,7 @@ static int ver_named_kind(const VerNamedAsks *q, int cls, int sg, const char *na
   if (!sg && cls >= 0 && !ar && !blk && (is_inspect_name(name) || is_to_s_name(name)) && builtin_every_object_answers(name, 0)) return VK_TEXT;
   /* (a record class's own builtin takes `*r, **k` passed on too: ar -1) */
   if (sg && cls >= 0 && ((ar >= 0 && bop_class_answers(name, ar, blk)) || elab_record_cmethod(c, cls, name))) return VK_BUILTIN;
-  if (ver_other_answers(c, cls, sg, name)) return VK_KEEP;
+  if (cplan_other_answers(c, cls, sg, name, 1)) return VK_KEEP;
   if (par >= 0 && !sg && !ar && !blk && comp_reader_in_chain(c, par, name, NULL)) return comp_method_vis_in_chain(c, par, name) == vis ? VK_IVAR : VK_KEEP;
   nc = elab_chain_versions(c, cls, sg, name, cv, VER_MAX_ARMS);
   for (int j = 0; j < nc; j++) if (cv[j].hist == hist) last = j;

@@ -48,6 +48,7 @@
 #include "analyze_internal.h"
 #include "builtin_names.h"
 #include "builtin_ops.h"
+#include "call_plan.h"
 #include "implicit_calls.h"
 #include "timing.h"
 #include <limits.h>
@@ -1104,14 +1105,20 @@ static LrHist *lr_hist(LoadRecord *r, int a, int b, const char *name, int make) 
   return x;
 }
 
+/* The entries changed (one made, one dropped): the by-name index, the late and
+   open bits and elab_class_surface's are of the entries before */
+static void lr_entries_changed(LoadRecord *r) {
+  r->nentries++; r->hgen++;
+  free(r->surf); free(r->surf_at); r->surf = NULL; r->surf_at = NULL;
+}
+
 static void lr_version(LoadRecord *r, int a, int b, const char *name, LrDef d) {
   LrHist *x = lr_hist(r, a, b, name, 1);
   if (!x) return;
   if (d.target && !(d.target = strdup(d.target))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   x->v = lr_grow(x->v, &x->cap, x->n, sizeof *x->v);
   x->v[x->n++] = d;
-  r->nentries++; r->hgen++;
-  free(r->surf); free(r->surf_at); r->surf = NULL; r->surf_at = NULL;   /* elab_class_surface's are of fewer entries */
+  lr_entries_changed(r);
 }
 
 /* cls's history (LR_MAIN: main's, Object's), NULL for a class the record
@@ -3110,7 +3117,7 @@ static void lr_settle_regions(Compiler *c) {
    they stand, again once more entries have been recorded. */
 typedef struct LrVers { const char *name; int first, nver, next, pend, alias; unsigned char captured, replaced, late; } LrVers;   /* captured: elab_version_captured's memo, 1 no, 2 yes; replaced: one history holds two versions, or an alias; late: lr_late_make's, 1 no history late, 2 one is, 3 none asked; pend: the histories asked that are not late yet; alias: the first alias of the name, in LoadRecord.valias, -1 for none */
 
-static int lr_is_version(const LrDef *v) { return v->kind <= LR_REMOVE && !v->unplaced; }
+static int lr_is_version(const LrDef *v) { return v->kind <= LR_REMOVE && !v->unplaced && !v->absent; }
 
 static void lr_vers_index(LoadRecord *r) {
   if (r->vers_head && r->indexed == r->nentries) return;
@@ -3145,7 +3152,7 @@ static void lr_vers_index(LoadRecord *r) {
   for (int i = 0; i < r->nhist; i++)
     for (int j = 0; r->hist[i].a >= LR_MAIN && j < r->hist[i].n; j++) {
       const LrDef *v = &r->hist[i].v[j];
-      if (v->kind != LR_ALIAS || !v->target || v->unplaced) continue;
+      if (v->kind != LR_ALIAS || !v->target || v->unplaced || v->absent) continue;
       int k = r->vers_head[lr_hash(0, 0, v->target)];
       while (k >= 0 && !sp_streq(r->vers[k].name, v->target)) k = r->vers[k].next;
       if (k < 0) continue;
@@ -3825,7 +3832,7 @@ static int lr_last_before(Compiler *c, const LrHist *h, LoadPoint p, int late, i
   for (int i = h ? h->n - 1 : -1; i >= 0; i--) {
     const LrDef *v = &h->v[i];
     if (take && v->unplaced) r->cand_bad = 1;
-    if ((skip_vis && v->kind == LR_VIS) || v->unplaced) continue;
+    if ((skip_vis && v->kind == LR_VIS) || v->unplaced || v->absent) continue;
     int in = at && !v->body && v->node >= 0 && v->node < r->n && r->at[v->node] == p.seq;
     int o = in ? lr_run_order(c, v->node, p.node) : PROG_UNKNOWN;
     if (o == PROG_UNKNOWN) o = lr_version_order(c, v, p, late);
@@ -5900,14 +5907,16 @@ int elab_version_met(Compiler *c, int cls, int sg, const char *name, int def) {
    load or autoload the parse left in the tree (one it resolved it spliced
    away). A require or a load is Kernel's on no receiver or on Object or
    Kernel (`YAML.load` reads no file); an autoload on any receiver is one
-   (`Mod.autoload(:X, path)`, which the parse leaves). The files of a closed
+   (`Mod.autoload(:X, path)`, which the parse leaves); and a require the
+   inline model ignored, which no node stands for (the root's
+   dropped_require). The files of a closed
    set a computed path may name are seen: each is a region of its own.
    Read from the tree, once. */
 int elab_runs_unseen(Compiler *c) {
   LoadRecord *r = lr_get(c);
   if (!r->unseen) {
     const NodeTable *nt = c->nt;
-    int hit = 0, n = 0;
+    int hit = nt_int(nt, nt->root_id, "dropped_require", 0), n = 0;   /* (a require the inline model ignored, whose library CRuby would load) */
     const int *v = nt_nodes_of_kind(nt, NK_CallNode, &n);
     for (int i = 0; !hit && i < n; i++) {
       int recv = nt_ref(nt, v[i], "receiver");
@@ -6094,7 +6103,7 @@ int elab_record_cmethod(Compiler *c, int cls, const char *name) {
   return is_record_class_cmethod(name, class_def_record_is_data(c->nt, call >= 0 ? call : class_def_super(c->nt, d)));
 }
 
-int elab_call_method(Compiler *c, int id, int cls, const char *name, int sg) {
+int elab_call_method(Compiler *c, int id, int cls, const char *name, int sg, int mm) {
   LoadRecord *r = elab_fresh(c);
   LoadPoint p = elab_point_of(c, id);
   if (p.region < 0 || !r->recorded || r->st[p.seq].kept || lr_unplaced(c, id) || lr_chain_open(c, cls)) return ELAB_UNKNOWN;
@@ -6115,8 +6124,11 @@ int elab_call_method(Compiler *c, int id, int cls, const char *name, int sg) {
     int k = lr_core(r, i ? CORE_BASIC_OBJECT : CORE_OBJECT);
     if (k >= 0 && k != cls) o = elab_method_at(c, k, name, 1, p, NULL);
   }
+  /* an instance's chain passes Object's reopenings: a module they include */
+  int ob = o == ELAB_NO && !sg ? lr_core(r, CORE_OBJECT) : -1;
+  if (ob >= 0 && ob != cls) o = elab_method_at(c, ob, name, 0, p, NULL);
   /* a method_missing may answer the call */
-  if (o == ELAB_NO && (elab_method_versions(c, "method_missing") || elab_method_versions(c, "respond_to_missing?"))) return ELAB_UNKNOWN;
+  if (mm && o == ELAB_NO && (elab_method_versions(c, "method_missing") || elab_method_versions(c, "respond_to_missing?"))) return ELAB_UNKNOWN;
   if (o == ELAB_NO && (elab_runs_unseen(c) || lr_unordered_supply(c, cls < 0 ? LR_MAIN : cls, sg, name, p))) return ELAB_UNKNOWN;
   return o;
 }
@@ -7922,6 +7934,7 @@ int elab_method_vis_held_from(Compiler *c, int cls, const char *name, int sg, Lo
    (lr_stmt_applied, at v's point now) */
 static int lr_applied(Compiler *c, const LrDef *v) {
   LoadRecord *r = elab_fresh(c);
+  if (v->absent) return 0;
   return lr_stmt_applied(lr_stmt_of(r, v->node), v->unplaced, v->may);
 }
 
@@ -8076,6 +8089,47 @@ ElabEntry *elab_entries(Compiler *c, unsigned mask, int *n) {
   free(v);
   *n = k;
   return out;
+}
+
+/* An alias or alias_method whose original the class has no method of where
+   it runs raises NameError there, and makes no method (`undefined method 'm'
+   for class 'K'`, 'module' for a module's, `class '#<Class:K>'` for a
+   singleton's): the record answers none at the alias's point as it does for
+   a call (elab_call_method: a def after it, a name nothing defines; not an
+   undef, a name that code the record cannot follow or a version it does not
+   place may supply), and no builtin on the chain answers the name
+   (cplan_other_answers, which reads the registered accessors: asked after
+   them). Such a version is dropped from the
+   histories (LrDef.absent) and the statement carries its message, which
+   codegen raises where the statement runs. An alias made in a method body
+   runs when the body does, and one in a class that has no name, or in one the
+   record cannot follow, is not asked. */
+void elab_absent_aliases(Compiler *c) {
+  LoadRecord *r = c->lrec;
+  NodeTable *nt = (NodeTable *)c->nt;
+  int dropped = 0;
+  for (int i = 0; r && r->recorded && i < r->nhist; i++) {
+    const LrHist *h = &r->hist[i];
+    if (h->a < LR_MAIN || h->a >= c->nclasses || !lr_class(r, h->a)) continue;
+    for (int j = 0; j < h->n; j++) {
+      LrDef *v = &h->v[j];
+      if (v->kind != LR_ALIAS || !v->target || v->unplaced || v->body || v->absent) continue;
+      if (elab_call_method(c, v->node, h->a, v->target, h->b, 0) != ELAB_NO || cplan_other_answers(c, h->a, h->b, v->target, 0)) continue;
+      /* (a `class Class` reopening is registered as the module Class__reopen) */
+      int reopen = h->a != LR_MAIN && h->a == comp_core_class(c, CORE_CLASS_REOPEN);
+      const char *cn = h->a == LR_MAIN ? "Object" : reopen ? "Class" : comp_class_anonymous(c, h->a) ? NULL : class_ruby_name(c, h->a);
+      if (!cn) continue;
+      char msg[512];
+      int mod = h->a != LR_MAIN && !reopen && comp_class_is_module(c, &c->classes[h->a]);
+      if (h->b) snprintf(msg, sizeof msg, "undefined method '%s' for class '#<Class:%s>'", v->target, cn);
+      else snprintf(msg, sizeof msg, "undefined method '%s' for %s '%s'", v->target, mod ? "module" : "class", cn);
+      nt_node_set_str(nt, v->node, "alias_absent", msg);
+      v->absent = 1;
+      dropped = 1;
+    }
+  }
+  if (!dropped) return;
+  lr_entries_changed(r);
 }
 
 /* Does a class side's history hold an accessor version and end in a def? */
@@ -8485,7 +8539,7 @@ void elab_dump(Compiler *c, FILE *out) {
     for (int j = 0; j < h->n; j++) {
       const LrDef *v = &h->v[j];
       fprintf(out, " %s#%d%s%s%s", kinds[v->kind], elab_point_of(c, v->node).seq, v->may ? " may" : "", v->nil ? " nil" : "",
-              v->unplaced ? " unplaced" : "");
+              v->unplaced ? " unplaced" : v->absent ? " absent" : "");
       if (v->body) {   /* a method body's (LrDef.body): its extent, from that body's first statement on */
         lr_run_points(c);
         fprintf(out, " in def#%d", elab_point_of(c, v->body).seq);

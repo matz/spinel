@@ -608,6 +608,22 @@ int is_singleton_method_list(const char *n); /* singleton_methods */
 int builtin_every_object_answers(const char *m, int cmeth); /* Object's own, Kernel's, Object's; with cmeth Module's too */
 int builtin_class_id_answers(int id, const char *m, int cmeth); /* the builtin class of cls_id id, or one above it, has m (cmeth: a class method) */
 int core_class_value_answers(const char *cls, const char *m); /* CRuby's core class or module cls (or "Class#"/"Module#": every one) answers m as a value */
+/* One builtin class or module's row of CRuby's own method tables
+   (builtin_method_tables.inc, generated): its own instance method names
+   (public, private, protected), its own singleton method names and its
+   ancestors, sorted, with their lengths. */
+typedef struct { const char *name; int module; unsigned flags; const char *const *inst; const unsigned short *iflags; int ninst;
+                 const char *const *sing; const unsigned short *sflags; int nsing; const char *const *ancestors; const unsigned short *aflags; int nanc; } BuiltinMethodTable;
+/* Does CRuby's builtin class or module cls, or an ancestor of it, have a
+   method `name` (sg: on its class side: its singleton methods and its
+   ancestors', then Class's or Module's instance methods)? A builtin the tables
+   do not hold (a builtin class row, a reopened builtin) answers 1, unknown, so
+   it never raises; 0 for any other name. With certain, only a method CRuby
+   has with no library required, or with one the program requires, at both
+   its shipped and its newest version: a reader that drops a method_missing
+   or a NoMethodError because of the answer needs it sure, and an unknown
+   builtin is none. */
+int builtin_method_answers(const char *cls, const char *name, int sg, int certain);
 /* Does a builtin answer `name` on a self of the kind: main (Kernel's,
    Object's and main's own methods), a module (also Module's) or a class
    (also Class's)? */

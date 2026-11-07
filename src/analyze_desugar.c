@@ -3512,14 +3512,107 @@ int desugar_masgn_to_ary(Compiler *c) {
    assignment's value is dropped, the setter's element goes to a temp the
    assignment writes in its place, and the setter runs on the temp right
    after: `old, t = a, b; I18n.config = t`. Every element is still read
-   before any target is written; the setters run after the other targets,
-   in their order, which a class's setter cannot tell (the targets it could
-   see are the caller's locals). */
+   before any target is written. CRuby writes the targets left to right,
+   and a class's setter can see a global, an ivar or another setter's
+   effect (`K.a, $g = 1, :new`: the setter reads the old $g). So each
+   target after the first class setter goes to a temp too, and is written
+   after, in its place in the order. When one of them cannot move so (a
+   nested group, a setter on a computed receiver or on a local the values
+   write), only the class setters move, as before. */
 static int masgn_class_setter_target(const NodeTable *nt, int t) {
   if (nt_kind(nt, t) != NK_CallTargetNode) return 0;
   int r = nt_ref(nt, t, "receiver");
   NodeKind rk = r >= 0 ? nt_kind(nt, r) : NK_NONE;
   return (rk == NK_ConstantReadNode || rk == NK_ConstantPathNode) && name_is_plain_setter(nt_str(nt, t, "name"));
+}
+/* A receiver or index argument that reads the same before and after the
+   values: self, a constant, a literal, or a local the values do not write
+   (CRuby reads it before the values) */
+static int masgn_late_operand(Compiler *c, int mwid, int r) {
+  const NodeTable *nt = c->nt;
+  switch (r >= 0 ? nt_kind(nt, r) : NK_NONE) {
+  case NK_SelfNode: case NK_ConstantReadNode: case NK_IntegerNode: case NK_SymbolNode:
+  case NK_StringNode: case NK_NilNode: case NK_TrueNode: case NK_FalseNode:
+    return 1;
+  case NK_LocalVariableReadNode: {
+    const char *rn = nt_str(nt, r, "name");
+    return rn && !subtree_writes_local(c, nt_ref(nt, mwid, "value"), rn);
+  }
+  default: return 0;
+  }
+}
+/* A target after the first class setter that can be written from a temp
+   after the assignment, with the same result: a variable, a plain setter
+   on a constant or on an operand above, or an index on such operands */
+static int masgn_late_target(Compiler *c, int mwid, int t) {
+  const NodeTable *nt = c->nt;
+  switch (nt_kind(nt, t)) {
+  case NK_LocalVariableTargetNode: case NK_InstanceVariableTargetNode:
+  case NK_GlobalVariableTargetNode: case NK_ClassVariableTargetNode:
+    return 1;
+  case NK_CallTargetNode: {
+    if (masgn_class_setter_target(nt, t)) return 1;
+    return name_is_plain_setter(nt_str(nt, t, "name")) && masgn_late_operand(c, mwid, nt_ref(nt, t, "receiver"));
+  }
+  case NK_IndexTargetNode: {
+    if (!masgn_late_operand(c, mwid, nt_ref(nt, t, "receiver"))) return 0;
+    int args = nt_ref(nt, t, "arguments"), n = 0;
+    const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &n) : NULL;
+    for (int i = 0; i < n; i++) if (!masgn_late_operand(c, mwid, av[i])) return 0;
+    return n > 0;
+  }
+  default: return 0;
+  }
+}
+/* The statement that writes target `t` from the temp read `rd`: the
+   setter call, or the variable target turned into its write */
+static int masgn_late_write(NodeTable *nt, int id, int t, int rd) {
+  NodeKind k = nt_kind(nt, t);
+  if (k == NK_CallTargetNode || k == NK_IndexTargetNode) {
+    int args = nt_new_node(nt, "ArgumentsNode"), call = nt_new_node(nt, "CallNode");
+    if (args < 0 || call < 0) return -1;
+    int ia = k == NK_IndexTargetNode ? nt_ref(nt, t, "arguments") : -1, n = 0;
+    const int *iv = ia >= 0 ? nt_arr(nt, ia, "arguments", &n) : NULL;
+    int *av = malloc(sizeof(int) * (size_t)(n + 1));
+    if (!av) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    for (int i = 0; i < n; i++) av[i] = iv[i];
+    av[n] = rd;
+    nt_node_set_arr(nt, args, "arguments", av, n + 1);
+    free(av);
+    nt_node_set_str(nt, call, "name", k == NK_IndexTargetNode ? "[]=" : nt_str(nt, t, "name"));
+    nt_node_set_ref(nt, call, "receiver", nt_ref(nt, t, "receiver"));
+    nt_node_set_ref(nt, call, "arguments", args);
+    nt_node_set_int(nt, call, "node_line", nt_int(nt, id, "node_line", 0));
+    return call;
+  }
+  nt_node_set_type(nt, t, k == NK_LocalVariableTargetNode ? "LocalVariableWriteNode"
+                        : k == NK_InstanceVariableTargetNode ? "InstanceVariableWriteNode"
+                        : k == NK_GlobalVariableTargetNode ? "GlobalVariableWriteNode" : "ClassVariableWriteNode");
+  nt_node_set_ref(nt, t, "value", rd);
+  return t;
+}
+/* 0 when the assignment has no class setter; 2 when every target from the
+   first one on can move after it (masgn_late_target); 1 otherwise, where
+   only the class setters move */
+static int masgn_class_setters_movable(Compiler *c, int id) {
+  const NodeTable *nt = c->nt;
+  int n = 0, m = 0, seen = 0;
+  const int *l = nt_arr(nt, id, "lefts", &n), *r = nt_arr(nt, id, "rights", &m);
+  int rest = nt_ref(nt, id, "rest");
+  for (int i = 0; i < n + 1 + m; i++) {
+    int t = i < n ? l[i] : i == n ? rest : r[i - n - 1];
+    if (t < 0) continue;
+    if (i == n) {   /* `*r`: its target moves; a bare `*` or `a, =` has none */
+      if (!seen) continue;
+      if (nt_kind(nt, t) != NK_SplatNode) continue;
+      int e = nt_ref(nt, t, "expression");
+      if (e >= 0 && !masgn_late_target(c, id, e)) return 0;
+      continue;
+    }
+    if (!seen && masgn_class_setter_target(nt, t)) seen = 1;
+    if (seen && !masgn_late_target(c, id, t)) return 1;
+  }
+  return seen ? 2 : 0;
 }
 int desugar_masgn_class_setters(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
@@ -3527,46 +3620,46 @@ int desugar_masgn_class_setters(Compiler *c) {
   static const char *const arrs[] = { "lefts", "rights" };
   for (int id = comp_kind_first(c, NK_MultiWriteNode); id >= 0 && id < n0; id = comp_kind_next(c, id)) {
     if (nt_kind(nt, id) != NK_MultiWriteNode || nt_ref(nt, id, "value") < 0) continue;
-    int any = 0;
-    for (int a = 0; a < 2 && !any; a++) {
-      int n = 0; const int *t = nt_arr(nt, id, arrs[a], &n);
-      for (int i = 0; i < n && !any; i++) any = masgn_class_setter_target(nt, t[i]);
-    }
-    if (!any || !an_node_dropped(c, id)) continue;
-    int base = nt->count, nset = 0, ok = 1;
+    int mv = masgn_class_setters_movable(c, id), full = mv == 2;
+    if (!mv || !an_node_dropped(c, id)) continue;
+    int base = nt->count, nset = 0, ok = 1, seen = 0;
     int *sets = NULL;
     int mw = nt_new_node(nt, "MultiWriteNode"), stmts = nt_new_node(nt, "StatementsNode");
     if (mw < 0 || stmts < 0) continue;
+    int rest = nt_ref(nt, id, "rest");
     for (int a = 0; a < 2 && ok; a++) {
       int n = 0; const int *t0 = nt_arr(nt, id, arrs[a], &n);
       int *t = malloc(sizeof(int) * (size_t)(n + 1));
       if (!t) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
       memcpy(t, t0, sizeof(int) * (size_t)n);   /* copy before the table grows */
-      for (int i = 0; i < n && ok; i++) {
-        if (!masgn_class_setter_target(nt, t[i])) continue;
+      /* the rest sits between the lefts and the rights */
+      int nslot = a == 0 ? n + 1 : n;
+      for (int i = 0; i < nslot && ok; i++) {
+        int slot = a == 0 && i == n ? -2 : i;
+        int tg = slot == -2 ? (rest >= 0 && nt_kind(nt, rest) == NK_SplatNode ? nt_ref(nt, rest, "expression") : -1) : t[i];
+        if (tg < 0) continue;
+        if (!seen && slot != -2 && masgn_class_setter_target(nt, tg)) seen = 1;
+        if (!seen || (!full && (slot == -2 || !masgn_class_setter_target(nt, tg)))) continue;
         char tname[64];
-        snprintf(tname, sizeof tname, "__mwc_%s_%d_%d", comp_node_tag(c, id), a, i);
+        snprintf(tname, sizeof tname, "__mwc_%s_%d_%d", comp_node_tag(c, id), a, slot == -2 ? n : i);
         int lt = nt_new_node(nt, "LocalVariableTargetNode"), rd = nt_new_node(nt, "LocalVariableReadNode");
-        int args = nt_new_node(nt, "ArgumentsNode"), call = nt_new_node(nt, "CallNode");
-        if (lt < 0 || rd < 0 || args < 0 || call < 0) { ok = 0; break; }
+        if (lt < 0 || rd < 0) { ok = 0; break; }
         nt_node_set_str(nt, lt, "name", tname);
         nt_node_set_str(nt, rd, "name", tname);
-        nt_node_set_arr(nt, args, "arguments", &rd, 1);
-        nt_node_set_str(nt, call, "name", nt_str(nt, t[i], "name"));
-        nt_node_set_ref(nt, call, "receiver", nt_ref(nt, t[i], "receiver"));
-        nt_node_set_ref(nt, call, "arguments", args);
-        nt_node_set_int(nt, call, "node_line", nt_int(nt, id, "node_line", 0));
+        int w = masgn_late_write(nt, id, tg, rd);
+        if (w < 0) { ok = 0; break; }
         scope_local_intern(comp_scope_of(c, id), tname);
-        t[i] = lt;
+        if (slot == -2) nt_node_set_ref(nt, rest, "expression", lt);
+        else t[i] = lt;
         sets = realloc(sets, sizeof(int) * (size_t)(nset + 2));
         if (!sets) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-        sets[1 + nset++] = call;
+        sets[1 + nset++] = w;
       }
       nt_node_set_arr(nt, mw, arrs[a], t, n);
       free(t);
     }
     if (!ok) { free(sets); continue; }
-    nt_node_set_ref(nt, mw, "rest", nt_ref(nt, id, "rest"));
+    nt_node_set_ref(nt, mw, "rest", rest);
     nt_node_set_ref(nt, mw, "value", nt_ref(nt, id, "value"));
     nt_node_set_int(nt, mw, "node_line", nt_int(nt, id, "node_line", 0));
     sets[0] = mw;

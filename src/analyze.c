@@ -1819,7 +1819,9 @@ void compute_instantiated(Compiler *c, int early) {
       NodeKind rk = nt_kind(nt, recv);
       if (rk == NK_ConstantReadNode || rk == NK_ConstantPathNode) {
         const char *cn = nt_str(nt, recv, "name");
-        int ci = cn ? comp_class_index(c, cn) : -1;
+        /* (the class the node names: an alias's, `M::Top2.new`) */
+        int ci = const_node_class_index(c, recv);
+        if (ci < 0) ci = cn ? comp_class_index(c, cn) : -1;
         /* A construction inside a method nothing reaches mints nothing:
            compute_reachable has run, and its answer is conservative (every
            method whose name is mentioned anywhere is reachable), so a site

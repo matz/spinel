@@ -5493,6 +5493,14 @@ static int lr_live_from(Compiler *c, int cls, int sg, int region) {
   const LrClass *kc = cls >= 0 && !c->classes[cls].is_builtin_const ? lr_class(r, cls) : NULL;
   if (r->nregion > 1) return region != 0 || sg || !kc || !kc->nopen ? -1 : r->rinst[cls + 1];
   LoadPoint b = kc && kc->nopen ? elab_point_of(c, kc->open[0].node) : (LoadPoint){ -1, -1 };
+  /* (a builder's write with no block opens no body, but makes the class
+     there: a header that reopens it later is not where it opens) */
+  int d = kc ? c->classes[cls].def_node : -1;
+  NodeKind dk = d >= 0 ? nt_kind(c->nt, d) : NK_NilNode;
+  if (b.region >= 0 && (dk == NK_ConstantWriteNode || dk == NK_LocalVariableWriteNode || dk == NK_ConstantPathWriteNode)) {
+    LoadPoint wp = elab_point_of(c, d);
+    if (wp.region == b.region && wp.seq < b.seq) b = wp;
+  }
   return b.region != region ? -1 : sg || r->rinst[cls + 1] < b.seq ? b.seq : r->rinst[cls + 1];
 }
 int elab_class_live_at(Compiler *c, int cls, int sg, LoadPoint p) {

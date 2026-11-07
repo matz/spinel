@@ -1,0 +1,20 @@
+#<struct V z=1>
+:custom
+#<data D z=1>
+:custom
+[:z]
+[:late]
+false
+:no_method
+:made
+true
+C
+[C, C]
+:custom
+5
+10
+:hi
+:late
+#<struct N::S z=1>
+:custom
+:late

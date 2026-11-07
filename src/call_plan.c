@@ -424,7 +424,9 @@ static void cplan_resolve_call(Compiler *c, int id, CallPlan *p) {
   int sci = self_class_static_ci(c, recv);   /* `self.class` naming one class */
   if (sci >= 0 || (rk == NK_ConstantReadNode || rk == NK_ConstantPathNode)) {
     int ci = sci >= 0 ? sci : const_node_class_index(c, recv);
-    int mi = ci >= 0 ? call_target(c, id, ci, name, CT_CMETHOD, NULL) : -1;
+    /* (a `new`: the one the call reaches, as inference and the static
+       emitter take it: cplan_user_new) */
+    int mi = ci < 0 ? -1 : is_new_name(name) ? cplan_user_new(c, id, ci) : call_target(c, id, ci, name, CT_CMETHOD, NULL);
     /* a package's native_func, which the constant calls in C directly; its
        def is for the module reached as a value */
     if (sci < 0 && comp_scope_native_twin(c, mi)) return;
@@ -1907,9 +1909,21 @@ static int user_new_at(Compiler *c, int id, int ci, int *unplaced) {
      class's own `[]`: a program's `new` is not what it calls) */
   const char *nm = nt_int(c->nt, id, "index_ctor", 0) ? "[]" : "new";
   /* (index_ctor marks a record's only: any other class's name is `new`) */
-  if (ct_pin_of(c, id) != -1 || !c->classes[ci].is_struct) return call_target(c, id, ci, nm, CT_CMETHOD, NULL);
+  if (ct_pin_of(c, id) != -1) return call_target(c, id, ci, nm, CT_CMETHOD, NULL);
   int t = call_target(c, id, ci, nm, CT_CMETHOD, NULL);
   if (t < 0 || c->scopes[t].entry != ENTRY_NONE) return t;
+  /* Any other class: the builtin constructor where the record proves the
+     call runs before the class's own `def self.new` is made. Not one a
+     superclass defines (the class then has no constructor of its own to
+     call), nor one no def makes (define_singleton_method), which the
+     record does not see. */
+  if (!c->classes[ci].is_struct) {
+    int dn = c->scopes[t].def_node;
+    if (c->scopes[t].class_id != ci || nt_kind(c->nt, dn) != NK_DefNode || elab_point_of(c, dn).region < 0) return t;
+    int framed = elab_plan_enter(c, id), at = elab_call_method(c, id, ci, nm, 1);
+    if (framed) elab_plan_leave(c);
+    return at == ELAB_NO ? -1 : t;
+  }
   int framed = elab_plan_enter(c, id), at = elab_call_method(c, id, ci, nm, 1), absent = at == ELAB_NO;
   /* (a call in a method or a block: the def in force over its window, or
      none over all of it) */

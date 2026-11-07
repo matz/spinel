@@ -756,6 +756,11 @@ static void cr_live_collect(CrLive *lv, int s, int id, int cls, int persist) {
     const Scope *sc = &c->scopes[s];
     const char *call = cr_live_call_name(nt, id);
     if (rk == NK_ConstantReadNode || rk == NK_ConstantPathNode) {
+      /* a `new` the call plan answers with the builtin constructor (one
+         that runs before the class's own `def self.new` is made) builds
+         an instance: the call names the class as a value */
+      int nc = call && sp_streq(call, "new") ? const_node_class_index(c, r) : -1;
+      if (nc >= 0 && !c->classes[nc].is_struct && comp_cmethod_in_chain(c, nc, "new", NULL) >= 0 && cplan_user_new(c, id, nc) < 0) call = "";
       cr_live_add(lv, s, CR_CONST_CALL, nt_str(nt, r, "name"), call, -1, persist);
       int p = rk == NK_ConstantPathNode ? nt_ref(nt, r, "parent") : -1;
       if (p >= 0 && nt_kind(nt, p) != NK_ConstantReadNode && nt_kind(nt, p) != NK_ConstantPathNode)

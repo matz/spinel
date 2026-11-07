@@ -5052,6 +5052,15 @@ static int sus_class_const(Compiler *c, int ci) {
     int n = nt_new_node(nt, k < 0 ? "ConstantReadNode" : "ConstantPathNode");
     if (n < 0) return -1;
     nt_node_set_str(nt, n, "name", seg);
+    /* the leaf of a name that qualify_colliding_consts renamed (`NS::Q`
+       beside a top-level Q is read as NS::NS__Q): name the slot ci has, as
+       that pass names the program's own reads, so a lookup does not find
+       the other class of the same leaf name */
+    const char *own = c->classes[ci].name;
+    if (!q && k >= 0 && own && !sp_streq(own, seg)) {
+      nt_node_set_str(nt, n, "qc_orig_name", seg);
+      nt_node_set_str(nt, n, "name", own);
+    }
     if (k >= 0) nt_node_set_ref(nt, n, "parent", k);
     k = n;
     p = q ? q + 2 : NULL;
@@ -10768,8 +10777,13 @@ static void exc_ctor_spell_new(Compiler *c, int id) {
 
 /* `x.exception(a)` on a boxed x, which may hold a class or an instance, is
    `(t = x).is_a?(Class) ? __exc_class(t).new(a) : t.exception(a)`, with x
-   itself for t where it is a variable. The instance's call keeps its name. */
-static void exc_ctor_branch_boxed(Compiler *c, int id, int recv) {
+   itself for t where it is a variable. The instance's call keeps its name.
+   With classes of the program whose own (or inherited) class method
+   `exception` answers (own, nown), a class value of one of them calls that
+   method: the test is `t.is_a?(Class) && !(t == C1 || ...)`, and the other
+   arm is `t == C1 ? C1.exception(a) : ... : t.exception(a)`. Every other
+   class still builds through new. */
+static void exc_ctor_branch_boxed(Compiler *c, int id, int recv, const PolyCand *own, int nown) {
   NodeTable *nt = (NodeTable *)c->nt;
   int base = nt->count;
   NodeKind rk = nt_kind(nt, recv);
@@ -10803,12 +10817,51 @@ static void exc_ctor_branch_boxed(Compiler *c, int id, int recv) {
   nt_node_set_ref(nt, pred, "block", -1);
   nt_node_set_ref(nt, inst, "receiver", t2);
   nt_node_set_int(nt, inst, "exc_instance", 1);
+  if (nown > 0) {
+    int any = -1;
+    for (int q = 0; q < nown; q++) {
+      int k = sus_class_const(c, own[q].cls);
+      if (k < 0) continue;
+      int rd = nt_clone_subtree(nt, t1);
+      int eq = fwd_new_call(nt, rd, "==", k);
+      if (any < 0) any = eq;
+      else { int o = nt_new_node(nt, "OrNode"); nt_node_set_ref(nt, o, "left", any); nt_node_set_ref(nt, o, "right", eq); any = o; }
+    }
+    if (any >= 0) {
+      int par = nt_new_node(nt, "ParenthesesNode"), pst = nt_new_node(nt, "StatementsNode");
+      nt_node_set_arr(nt, pst, "body", &any, 1);
+      nt_node_set_ref(nt, par, "body", pst);
+      int both = nt_new_node(nt, "AndNode");
+      nt_node_set_ref(nt, both, "left", pred);
+      nt_node_set_ref(nt, both, "right", fwd_new_call(nt, par, "!", -1));
+      pred = both;
+    }
+  }
   /* the call moves to a number of its own, the conditional takes `id`'s */
   fwd_move_call(c, id, call, "IfNode");
   nt_node_set_ref(nt, call, "receiver", exc_ctor_guard(c, id, t1));
   exc_ctor_spell_new(c, call);
   nt_node_set_arr(nt, then, "body", &call, 1);
-  nt_node_set_arr(nt, other, "body", &inst, 1);
+  /* a class value with its own class method `exception`: call it on the
+     class's constant, nearest arm last so the chain reads C1 first */
+  int tail = inst;
+  for (int q = nown - 1; q >= 0; q--) {
+    int k = sus_class_const(c, own[q].cls);
+    if (k < 0) continue;
+    int kc = nt_clone_subtree(nt, inst);
+    nt_node_set_ref(nt, kc, "receiver", k);
+    nt_node_set_int(nt, kc, "exc_instance", 0);   /* a class call: the static path below decides it */
+    int iff = nt_new_node(nt, "IfNode"), st = nt_new_node(nt, "StatementsNode");
+    int el = nt_new_node(nt, "ElseNode"), est = nt_new_node(nt, "StatementsNode");
+    nt_node_set_arr(nt, st, "body", &kc, 1);
+    nt_node_set_arr(nt, est, "body", &tail, 1);
+    nt_node_set_ref(nt, el, "statements", est);
+    nt_node_set_ref(nt, iff, "predicate", fwd_new_call(nt, nt_clone_subtree(nt, t1), "==", sus_class_const(c, own[q].cls)));
+    nt_node_set_ref(nt, iff, "statements", st);
+    nt_node_set_ref(nt, iff, "subsequent", el);
+    tail = iff;
+  }
+  nt_node_set_arr(nt, other, "body", &tail, 1);
   nt_node_set_ref(nt, els, "statements", other);
   nt_node_set_ref(nt, id, "predicate", pred);
   nt_node_set_ref(nt, id, "statements", then);
@@ -10875,14 +10928,22 @@ int desugar_exception_class_ctor(Compiler *c) {
     else {
       if (g_infer_optimistic || (rt != TY_CLASS && rt != TY_POLY)) continue;
       int ncand = 0;
-      comp_cmethod_candidates(c, "exception", &ncand);
-      if (ncand > 0) continue;
-      if (rt == TY_CLASS) {
+      const PolyCand *cands = comp_cmethod_candidates(c, "exception", &ncand);
+      /* a class with its own class method `exception` keeps the call; any
+         other class builds through new (exc_ctor_branch_boxed) */
+      if (ncand > 0) {
+        PolyCand *own = malloc(sizeof *own * (size_t)ncand);
+        if (!own) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+        memcpy(own, cands, sizeof *own * (size_t)ncand);
+        exc_ctor_branch_boxed(c, id, recv, own, ncand);
+        free(own);
+      }
+      else if (rt == TY_CLASS) {
         int g = exc_ctor_guard(c, id, recv);
         nt_node_set_ref(nt, id, "receiver", g);
         exc_ctor_spell_new(c, id);
       }
-      else exc_ctor_branch_boxed(c, id, recv);
+      else exc_ctor_branch_boxed(c, id, recv, NULL, 0);
     }
     changed = 1;
   }

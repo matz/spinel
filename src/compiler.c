@@ -1,3 +1,4 @@
+#include <assert.h>
 #include "compiler.h"
 #include "share.h"
 #include "repr.h"
@@ -5431,7 +5432,11 @@ int comp_super_parent(Compiler *c, int class_id, int is_cmethod) {
 
 const Scope *comp_super_site(Compiler *c, const Scope *s) {
   int pf = s->is_proc_form;
-  while (s->super_of) s = &c->scopes[s->super_of - 1];
+  /* (a link never reaches its own chain again: a cycle is a bug at the link) */
+  for (int steps = 0; s->super_of; steps++) {
+    assert(steps <= c->nscopes);
+    s = &c->scopes[s->super_of - 1];
+  }
   /* a proc-form clone of a copy supers as the owner's proc-form clone does */
   if (pf && !s->is_proc_form && s->name) {
     char nm[320];
@@ -5660,6 +5665,8 @@ int comp_name_is_shadow_copy(Compiler *c, const char *name, int kind) {
    still carries its def's name answers its own name, however it is spelled. */
 const char *comp_scope_def_name(Compiler *c, const Scope *s) {
   const char *u = comp_scope_user_name(s);
+  /* (a define_method's copy an alias made keeps the name of the method it copies) */
+  if (s->name && s->def_node >= 0 && nt_kind(c->nt, s->def_node) != NK_DefNode && s->alias_of) return s->alias_of;
   if (!s->name || s->def_node < 0 || nt_kind(c->nt, s->def_node) != NK_DefNode) return u;
   const char *dn = nt_str(c->nt, s->def_node, "name");
   if (!dn) return u;

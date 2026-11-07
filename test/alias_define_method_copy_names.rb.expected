@@ -1,0 +1,5 @@
+[:d, :e]
+#<UnboundMethod: A#e(d)()>
+#<Method: B(A)#e(d)()>
+[:s, :t]
+#<Method: B(A).t(s)()>

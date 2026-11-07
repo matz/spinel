@@ -515,7 +515,8 @@ typedef struct {
   int super_of;
   /* the copy of an ancestor's method an alias is (register_alias_methods): a
      method of its class, not an inherited copy, and the name of the method
-     it is the copy of; NULL for any other scope */
+     it is the copy of (Method#original_name of a define_method's, which no
+     def names) */
   char *alias_of;
   enum { ENTRY_NONE, ENTRY_DISPATCH, ENTRY_TABLE, ENTRY_NAMED } entry;
   int version_n, main_n;

@@ -16318,12 +16318,12 @@ void emit_super(Compiler *c, int id, Buf *b) {
        this class under its shadow name */
     const char *cshadow = comp_super_shadow(c, st);
     /* the plan's class method when it was looked up where this form looks */
-    cmi = super_plan_mi(c, id, cshadow ? s->class_id : p);
+    cmi = super_plan_mi(c, id, cshadow ? st->class_id : p);
     if (cmi >= 0 && !c->scopes[cmi].is_cmethod) cmi = -1;
     int served = cmi >= 0;
-    if (served) cdef = cshadow ? s->class_id : c->scopes[cmi].class_id;
+    if (served) cdef = cshadow ? st->class_id : c->scopes[cmi].class_id;
     if (g_plan_check && served) cplan_served("super");
-    cplan_check_missing(c, id, cmi, cshadow ? s->class_id : p, cshadow ? cshadow : uname, 1, "super");
+    cplan_check_missing(c, id, cmi, cshadow ? st->class_id : p, cshadow ? cshadow : uname, 1, "super");
     if (cshadow) uname = cshadow;
     /* Module's and Class's own hooks are no-ops answering nil: `super` from a
        program's method_added (Thor's), inherited, included, ... reaches them

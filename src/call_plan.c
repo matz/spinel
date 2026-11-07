@@ -220,15 +220,15 @@ int cplan_super_target(Compiler *c, int id, Scope *s0, int *at) {
   const Scope *s = comp_super_site(c, s0);
   const char *shadow = comp_super_shadow(c, s);
   if (shadow) {
-    *at = -1;
+    if (at) *at = -1;
     int mi = s->is_cmethod ? comp_cmethod_in_class(c, s->class_id, shadow) : comp_method_in_class(c, s->class_id, shadow);
-    if (mi >= 0) *at = s->class_id;
+    if (mi >= 0 && at) *at = s->class_id;
     int e = mi >= 0 && id >= 0 && c->ver_built ? super_layer_entry(c, id, mi) : -1;
     return e >= 0 ? e : mi;
   }
   int par = comp_super_parent(c, s->class_id, s->is_cmethod);
   const char *uname = comp_super_name(c, par, comp_scope_def_name(c, s), s->is_cmethod);
-  *at = par;
+  if (at) *at = par;
   return uname ? cplan_super_chain_mi(c, id, s, par, uname) : -1;
 }
 

@@ -20927,67 +20927,6 @@ int desugar_builtin_alias_calls(Compiler *c) {
   return changed;
 }
 
-/* ---- an alias of an attribute reader the body later redefines ----
- *
- * `attr_reader :v; alias v1 v; def v = 40`: v1 is the reader, but a name
- * mapping resolves to the later `def`. The alias becomes `def v1 = @v`. */
-static int ra_body_declares_reader(const NodeTable *nt, const int *st, int upto, const char *meth) {
-  int in_effect = 0;
-  for (int k = 0; k < upto; k++) {
-    if (nt_kind(nt, st[k]) == NK_DefNode && nt_ref(nt, st[k], "receiver") < 0 &&
-        nt_str(nt, st[k], "name") && sp_streq(nt_str(nt, st[k], "name"), meth)) {
-      in_effect = 0;
-      continue;
-    }
-    if (nt_kind(nt, st[k]) != NK_CallNode || nt_ref(nt, st[k], "receiver") >= 0) continue;
-    const char *cn = nt_str(nt, st[k], "name");
-    if (!cn || !(is_attr_reader_family(cn))) continue;
-    int an = nt_ref(nt, st[k], "arguments");
-    int ac = 0; const int *av = an >= 0 ? nt_arr(nt, an, "arguments", &ac) : NULL;
-    for (int i = 0; i < ac; i++) {
-      const char *a = sym_or_str_literal(nt, av[i]);
-      if (a && sp_streq(a, meth)) in_effect = 1;
-    }
-  }
-  return in_effect;
-}
-
-int desugar_reader_aliases_before_redef(Compiler *c) {
-  NodeTable *nt = (NodeTable *)c->nt;
-  int n0 = nt->count, changed = 0;
-  for (int m = 0; m < n0; m++) {
-    if (!class_def_opens_frame(nt, m)) continue;
-    int body = class_def_body(nt, m);
-    int n = 0; const int *st = body >= 0 && nt_kind(nt, body) == NK_StatementsNode ? nt_arr(nt, body, "body", &n) : NULL;
-    for (int k = 0; k < n; k++) {
-      int s = st[k];
-      const char *nw = NULL, *od = NULL;
-      alias_pair_names(nt, s, &nw, &od);
-      if (!nw || !od || !ra_body_declares_reader(nt, st, k, od)) continue;
-      int later = 0;
-      for (int j = k + 1; j < n && !later; j++)
-        if (nt_kind(nt, st[j]) == NK_DefNode && nt_ref(nt, st[j], "receiver") < 0 &&
-            nt_str(nt, st[j], "name") && sp_streq(nt_str(nt, st[j], "name"), od)) later = 1;
-      if (!later) continue;
-      char *nwc = strdup(nw), *ivc = malloc(strlen(od) + 2);
-      ivc[0] = '@'; strcpy(ivc + 1, od);
-      nt_node_reset(nt, s, "DefNode");
-      int rd = fwd_new_node_like(nt, s, "InstanceVariableReadNode");
-      nt_node_set_str(nt, rd, "name", ivc);
-      int bd = fwd_new_node_like(nt, s, "StatementsNode");
-      nt_node_set_arr(nt, bd, "body", &rd, 1);
-      nt_node_set_str(nt, s, "name", nwc);
-      nt_node_set_ref(nt, s, "parameters", -1);
-      nt_node_set_ref(nt, s, "body", bd);
-      nt_node_set_ref(nt, s, "receiver", -1);
-      free(nwc); free(ivc);
-      changed = 1;
-    }
-  }
-  if (changed) comp_grow_node_arrays(c);
-  return changed;
-}
-
 /* ---- a reader over a method an ancestor defines ----
  *
  * `class Node; def receiver = nil; end; class Send < Node; attr_reader

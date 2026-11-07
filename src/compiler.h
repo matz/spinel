@@ -501,6 +501,10 @@ typedef struct {
      (register_attr_versions), whose calls the slot stands in for
      (cplan_sg_accessor) */
   unsigned char versioned, replaced, attr_version;
+  /* the method made of an accessor an alias names
+     (alias_accessor_method): 1 + the node of the attr_* call that declares
+     it, 0 for none */
+  int accessor_of;
   enum { ENTRY_NONE, ENTRY_DISPATCH, ENTRY_TABLE, ENTRY_NAMED } entry;
   int version_n, main_n;
   unsigned char cand_bound; /* a call on a poly receiver bound its arguments
@@ -774,6 +778,13 @@ static inline int scope_on_side(const Scope *s, int cm) {
    it reach it. */
 static inline int scope_by_name_hidden(const Scope *s) {
   return s->entry == ENTRY_DISPATCH || s->attr_version;
+}
+
+/* Is s a method made of an accessor, one an alias names or one a later def
+   replaces: CRuby's Method of it has the accessor's parameter list (`_`
+   for a writer's one), not the synthesized def's */
+static inline int scope_of_accessor(const Scope *s) {
+  return s->attr_version || s->accessor_of;
 }
 
 static inline TyKind scope_set_ret(Scope *s, TyKind t) {

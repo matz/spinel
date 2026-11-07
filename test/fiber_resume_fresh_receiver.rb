@@ -1,3 +1,4 @@
+# spinel: gc-stress
 # A fiber nothing else holds, resumed or transferred to with several values in
 # one expression: the values are packed after it is made, which allocates, and
 # a collection there freed it (SPINEL_GC_STRESS=2 raised "fiber called across

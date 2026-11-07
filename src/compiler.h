@@ -2285,6 +2285,7 @@ int        const_get_recv_class_for(Compiler *c, int call, int recv, const char 
 enum { CS_NONE, CS_SLOT, CS_AMBIG };            /* const_set_slot's answers */
 int        const_set_slot(Compiler *c, int call, const char *n, const char **key);
 const char *const_get_resolve(Compiler *c, int rk, const char *cgn, int *cls);
+int cg_flat_seen(Compiler *c, int rk, const char *cgn);
 void       const_get_leaves_begin(Compiler *c);  /* index the class leaves while the class table holds still */
 void       const_get_leaves_end(void);
 int        const_defined_known(Compiler *c, int rk, const char *cgn);

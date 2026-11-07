@@ -2101,6 +2101,26 @@ int const_set_slot(Compiler *c, int call, const char *n, const char **key) {
   }
   return *key ? CS_SLOT : CS_NONE;
 }
+/* May `R.const_get(:N)` read the constant or class keyed N in the flat
+   namespace, R's class rk? Always when R is known only at run time
+   (CG_NONE). Else only when R sees N: N is a top-level constant (Object's,
+   which every class and module reaches), or R's class, an ancestor or a
+   module they include holds N. A builtin class R (Integer, CG_UNTABLED)
+   sees what a program's reopening of a builtin class or module, or of
+   Object or Kernel, holds or includes. `class A; X = 1; end;
+   Integer.const_get(:X)` is CRuby's NameError: X is A's alone. */
+int const_seen_by_class(Compiler *c, int k, const char *cgn);
+int cg_flat_seen(Compiler *c, int rk, const char *cgn) {
+  if (rk == CG_NONE || const_name_resolves_top_level(c, cgn)) return 1;
+  if (rk >= 0) return const_seen_by_class(c, rk, cgn);
+  for (int k = 0; k < c->nclasses; k++) {
+    const char *kn = c->classes[k].name;
+    if (!kn || !(is_builtin_reopen(kn) || is_object_root(kn) || is_builtin_module_const_name(kn))) continue;
+    if (const_seen_by_class(c, k, cgn)) return 1;
+  }
+  return 0;
+}
+
 /* What `R.const_get(:N)` reads. Like Ruby, R first and then each superclass,
    taking at each the value constant or the class it holds under N; past them
    the top-level constant or the class keyed N. Constants live in one flat
@@ -2133,7 +2153,8 @@ const char *const_get_resolve(Compiler *c, int rk, const char *cgn, int *cls) {
   }
   LocalVar *cv = comp_const(c, cgn);
   /* the common case, one constant of that leaf and no class: no body scan */
-  if (cv && cv->type != TY_UNKNOWN && !qc_leaf_qualified(cgn) && !class_leaf_any(c, cgn)) return cgn;
+  if (cv && cv->type != TY_UNKNOWN && !qc_leaf_qualified(cgn) && !class_leaf_any(c, cgn) &&
+      cg_flat_seen(c, rk, cgn)) return cgn;
   for (int k = rk, n = 0; k >= 0 && n < 64; k = c->classes[k].parent, n++) {
     const char *own = const_value_owned_key(c, k, cgn);
     if (own) {
@@ -2149,6 +2170,7 @@ const char *const_get_resolve(Compiler *c, int rk, const char *cgn, int *cls) {
     LocalVar *ov = own ? comp_const(c, own) : NULL;
     if (ov && ov->type != TY_UNKNOWN) return own;
   }
+  if (!cg_flat_seen(c, rk, cgn)) return NULL;
   *cls = comp_class_index(c, cgn);
   if (!cv || cv->type == TY_UNKNOWN) return NULL;
   return *cls < 0 ? cgn : NULL;

@@ -6062,16 +6062,16 @@ STR_CHAIN_LIMIT ?= 4.6
 # ask reads 2.00x.
 ENGINE_FOLDS_LIMIT ?= 2.2
 # N receiver uses of a constant that aliases a class, among N classes of other
-# code (test/scale/alias_receivers.sh), compiled at 400 and 800 uses.
-# rewrite_const_alias_receivers asked the load record for each use after the
-# previous use's rename, which rebuilt its point map over the whole program
+# code (test/scale/alias_receivers.sh), compiled at 400 and 800 uses. Each use
+# asks the load record for the class its node names (const_node_class_index).
+# A pass that renamed each use to the class once asked after the previous
+# use's rename, which rebuilt the record's point map over the whole program
 # each time (799 rebuilds at 800 uses): 2.35x here, against 2.07x for the same
-# program with the class named directly. The pass asks for every use before it
-# renames any one.
+# program with the class named directly.
 ALIAS_RECEIVERS_LIMIT ?= 2.2
 # N `rescue Alias` sites, each with a `raise Alias`, among N classes of other
 # code (test/scale/alias_raise_targets.sh), at 400 and 800 sites: the same
-# ask-then-rename loop in rewrite_const_alias_raise_targets.
+# question, asked by the raise and the rescue arm (const_node_match_class).
 ALIAS_RAISE_LIMIT ?= 2.2
 # Open method histories (test/scale/cond_defs.sh), compiled to C at K=200 and
 # K=400: K define_methods under a run-time condition and K defs in one
@@ -6339,10 +6339,10 @@ scale-test: $(SPINEL_WORK)
 	  { echo "scale-test: FAIL (the instance_eval forwarding walk grew superlinearly in the wrapper classes, see build_ie_map)"; exit 1; }; \
 	awk -v a="$$ra" -v b="$$rb" -v lim="$(ALIAS_RECEIVERS_LIMIT)" 'BEGIN { r = b / a; \
 	  printf "scale-test: alias receiver work at 2x the uses is %.2fx (limit %.2f)\n", r, lim; exit (r > lim) }' || \
-	  { echo "scale-test: FAIL (renaming one alias receiver made the next ask rebuild the load record, see rewrite_const_alias_receivers)"; exit 1; }; \
+	  { echo "scale-test: FAIL (an alias receiver's ask rebuilt the load record, see const_node_class_index)"; exit 1; }; \
 	awk -v a="$$ta" -v b="$$tb" -v lim="$(ALIAS_RAISE_LIMIT)" 'BEGIN { r = b / a; \
 	  printf "scale-test: alias raise and rescue work at 2x the sites is %.2fx (limit %.2f)\n", r, lim; exit (r > lim) }' || \
-	  { echo "scale-test: FAIL (renaming one raised or rescued alias made the next ask rebuild the load record, see rewrite_const_alias_raise_targets)"; exit 1; }; \
+	  { echo "scale-test: FAIL (a raised or rescued alias's ask rebuilt the load record, see const_node_match_class)"; exit 1; }; \
 	awk -v a="$$wa" -v b="$$wb" -v lim="$(SCALE_LIMIT)" 'BEGIN { r = b / a; \
 	  printf "scale-test: work at 4x the program is %.2fx (linear 4.00, limit %.2f)\n", r, lim; exit (r > lim) }' || \
 	  { echo "scale-test: FAIL (the front end grew superlinearly: some pass rescans per node; profile per pass, see rubys/roundhouse#72)"; exit 1; }; \

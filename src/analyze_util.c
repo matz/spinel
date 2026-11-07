@@ -491,6 +491,16 @@ const char *const_node_match_class_name(Compiler *c, int node) {
 static int const_node_class_index_tree(Compiler *c, int id) {
   const NodeTable *nt = c->nt;
   int k = comp_class_index(c, const_key_at(c, id));
+  /* a class alias the alias table resolves (`K = k`, k holding a Class.new);
+     a path's only where its scope holds the alias (a builtin's, `class
+     Exception; EA = Al2; end` read as ArgumentError::EA, among them) */
+  if (k < 0) {
+    const char *key = const_key_at(c, id), *real = key ? resolve_class_alias(c, key) : NULL;
+    int ak = real && !sp_streq(real, key) ? comp_class_index(c, real) : -1;
+    if (ak < 0) return k;
+    if (nt_kind(nt, id) != NK_ConstantPathNode) return ak;
+    return const_path_misses_member(c, id) || builtin_scope_lacks_member(c, id) ? -1 : ak;
+  }
   /* (a class named under another by a compact header carries that name,
      ruby_name_cache, P::Foo for `class AliasP::Foo`: no top-level one; nor
      is a native struct, whose module the walk does not list it in) */
@@ -822,10 +832,14 @@ static int builtin_scope_lacks_member(Compiler *c, int seg) {
   /* the name the program wrote, a collision key (Holds__Qux) by its leaf */
   const char *wn = nt_str(nt, seg, "qc_orig_name");
   nm = class_leaf_name(wn ? wn : nm);
-  /* a top-level class: a constant aliasing one (`SA = Foo`) is asked once its
-     path is renamed, with the name written (the alias pass runs before the
-     mixins are recorded, so it cannot tell yet) */
-  int k = comp_class_index(c, const_key_at(c, seg));
+  /* a top-level class, a constant aliasing one (`SA = Foo`) among them; the
+     name it is given by is the one written */
+  const char *key = const_key_at(c, seg);
+  int k = comp_class_index(c, key);
+  if (k < 0 && key) {
+    const char *real = resolve_class_alias(c, key);
+    if (real && !sp_streq(real, key)) k = comp_class_index(c, real);
+  }
   if (!is_constless_builtin_name(pn)) return 0;
   /* a top-level builtin class or module (Array::String) is no member
      either, unless the program reopens it or gives it its own entry */

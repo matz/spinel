@@ -1,9 +1,9 @@
 #!/bin/sh
 # N `rescue Alias` sites (and a `raise Alias` in each) of a constant that
-# aliases a class, among N classes of other code. rewrite_const_alias_raise_targets
-# renames each to the class; the rename must not make the load record's next
-# answer rebuild its point map over the whole program, as it did for each of
-# the N uses.
+# aliases a class, among N classes of other code. Each site asks the load
+# record for the class its node names (const_node_match_class); an answer
+# must not rebuild the record's point map over the whole program, as the
+# pass that once renamed each site did for each of the N uses.
 n=${1:-100}
 cat <<'RUBY'
 class Err < StandardError; end

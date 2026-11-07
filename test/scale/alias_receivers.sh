@@ -1,9 +1,9 @@
 #!/bin/sh
 # N receiver uses of a constant that aliases a class (`A = Foo; A.bar(i)`),
-# which rewrite_const_alias_receivers renames to the class, among N classes
-# of other code. The rename must not make the load record's next answer
-# rebuild its point map over the whole program: each use asked after the
-# previous one's edit did, N uses and N rebuilds.
+# among N classes of other code. Each use asks the load record for the class
+# its node names (const_node_class_index); an answer must not rebuild the
+# record's point map over the whole program, as the pass that once renamed
+# each use did after the previous one's edit: N uses and N rebuilds.
 n=${1:-100}
 cat <<'RUBY'
 class Foo

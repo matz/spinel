@@ -3321,7 +3321,8 @@ static void reject_dynamic_mixin_args(Compiler *c) {
   }
 }
 
-/* The renames rewrite_const_alias_receivers has decided and not yet made: a
+static void qc_keep_orig_name(const NodeTable *nt, int node);
+/* The renames rewrite_builtin_alias_receivers has decided and not yet made: a
    constant node and the class name it takes (an owned copy), and whether
    its scope holds the name the program wrote (held: the rename keeps it). */
 typedef struct AliasRename { int node; char *name; int held; } AliasRename;
@@ -3337,17 +3338,6 @@ static void alias_rename_add(AliasRenames *q, int node, const char *name, int he
   q->v[q->n].name = strdup(name);
   q->v[q->n].held = held;
   q->n++;
-}
-
-/* The name a read had before a rename (`X8::S` read as `X8::X8__S`). The
-   path lookups take a kept name as proof that the scope holds the constant
-   (const_node_class_index): the class pass renames a path only after it
-   finds the member, and an alias rename keeps the name only for a path
-   whose scope holds the name and finds it assigned (alias_read_held, asked
-   before the edit). */
-static void qc_keep_orig_name(const NodeTable *nt, int node) {
-  const char *nm = nt_str(nt, node, "name");
-  if (nm && !nt_str(nt, node, "qc_orig_name")) nt_node_set_str((NodeTable *)nt, node, "qc_orig_name", nm);
 }
 
 /* Makes the queued renames and frees the queue. */
@@ -3377,8 +3367,10 @@ static int alias_read_held(Compiler *c, int node) {
   return nt_kind(c->nt, node) != NK_ConstantPathNode || an_const_read_finds(c, node, const_key_at(c, node));
 }
 
-/* Asks the class a constant node names when it names a class alias, and
-   queues its rename to the underlying class. */
+/* Asks the class a constant node names when it names an alias of a builtin
+   class (one the program reopens included), and queues its rename to that
+   class's name. An alias of a class of the program is not renamed: its
+   readers ask the node (const_node_class_index). */
 static void ask_const_alias_name(Compiler *c, int node, AliasRenames *q) {
   const NodeTable *nt = c->nt;
   if (node < 0 || !nt_type(nt, node)) return;
@@ -3390,37 +3382,19 @@ static void ask_const_alias_name(Compiler *c, int node, AliasRenames *q) {
   const char *rn = const_key_at(c, node);
   if (!rn || comp_class_index(c, rn) >= 0) return;  /* already a class name */
   const char *real = resolve_class_alias(c, rn);
-  if (real && !sp_streq(real, rn)) alias_rename_add(q, node, real, alias_read_held(c, node));
+  /* (a builtin the program reopens, IO::Buffer in packages/io, is still
+     dispatched as the builtin, by its name) */
+  if (!real || sp_streq(real, rn) || (comp_class_index(c, real) >= 0 && !is_builtin_class_name(real))) return;
+  alias_rename_add(q, node, real, alias_read_held(c, node));
 }
 
-/* `extend Alias` / `include Alias` / `prepend Alias` with `Alias = Mod`
-   (also through a chain of aliases): queue naming the module itself, since the
-   extend pass and the singleton prepend it carries match a module's own
-   name only, and dropped an alias silently. */
-static void ask_mixin_alias_args(Compiler *c, int call, AliasRenames *q) {
-  const NodeTable *nt = c->nt;
-  const char *nm = nt_str(nt, call, "name");
-  if (!nm || nt_ref(nt, call, "receiver") >= 0 || !is_mixin_call(nm)) return;
-  int anode = nt_ref(nt, call, "arguments"), an = 0;
-  const int *av = anode >= 0 ? nt_arr(nt, anode, "arguments", &an) : NULL;
-  for (int j = 0; j < an; j++) {
-    NodeKind ak = nt_kind(nt, av[j]);
-    if (ak != NK_ConstantReadNode && ak != NK_ConstantPathNode) continue;
-    const char *rn = nt_str(nt, av[j], "name");
-    if (!rn || comp_class_index(c, rn) >= 0) continue;
-    const char *real = resolve_class_alias_chain(c, rn);
-    if (!real || sp_streq(real, rn) || comp_class_index(c, real) < 0) continue;
-    alias_rename_add(q, av[j], real, alias_read_held(c, av[j]));
-  }
-}
-
-/* `A = SomeClass` (a constant aliasing a class) then `A.foo`: rewrite the
-   ConstantRead receiver's name to the underlying class so class-method dispatch
-   resolves it exactly like the direct `SomeClass.foo`. The class argument of
-   is_a?/kind_of?/instance_of? (`x.is_a?(A)`) and each `when` condition
-   (`when A`) resolve the same way. Mirrors the `class CONST` reopening rewrite
-   in walk_scope. Runs once after classes are registered. */
-void rewrite_const_alias_receivers(Compiler *c) {
+/* `B = IO::Buffer` (a constant aliasing a builtin class) then `B.for`:
+   rewrite the receiver's name to the builtin class's, so the builtin's
+   class-method dispatch, which goes by the receiver's name, resolves it
+   like the direct `IO::Buffer.for`. The class argument of
+   is_a?/kind_of?/instance_of? (`x.is_a?(B)`) and each `when` condition
+   (`when B`) resolve the same way. Runs once after classes are registered. */
+static void rewrite_builtin_alias_receivers(Compiler *c) {
   const NodeTable *nt = c->nt;
   AliasRenames q = {0};
   for (int id = 0; id < nt->count; id++) {
@@ -3432,7 +3406,6 @@ void rewrite_const_alias_receivers(Compiler *c) {
     }
     if (k != NK_CallNode) continue;
     ask_const_alias_name(c, nt_ref(nt, id, "receiver"), &q);
-    ask_mixin_alias_args(c, id, &q);
     const char *nm = nt_str(nt, id, "name");
     if (nm && is_kind_query(nm)) {
       int args = nt_ref(nt, id, "arguments"), an = 0;
@@ -3802,46 +3775,6 @@ static void desugar_dyn_parent_class_leaf(Compiler *c) {
     for (int j = base; j < nt->count; j++) c->nscope[j] = encl;
   }
   free(keep); free(todo);
-}
-
-/* Asks the class a `raise` argument or a `rescue` exception names when it is
-   a class alias, and queues its rename (rewrite_const_alias_raise_targets). */
-static void ask_raise_target(Compiler *c, int t, AliasRenames *q) {
-  const NodeTable *nt = c->nt;
-  if (nt_kind(nt, t) != NK_ConstantReadNode && nt_kind(nt, t) != NK_ConstantPathNode) return;
-  const char *rn = const_key_at(c, t);
-  if (!rn || comp_class_index(c, rn) >= 0) return;
-  /* a read that can run before the alias is assigned is CRuby's
-     NameError, which the constant's presence flag raises: keep it */
-  LocalVar *lv = comp_const(c, rn);
-  if (lv && lv->const_early) return;
-  const char *real = resolve_class_alias(c, rn);
-  if (real && !sp_streq(real, rn)) alias_rename_add(q, t, real, alias_read_held(c, t));
-}
-
-/* The exception classes named by `raise Alias, msg` and by `rescue Alias`
-   resolve as an `Alias.foo` receiver does (rewrite_const_alias_receivers):
-   raising the alias raises the class it names, which a `rescue` of that
-   class's ancestor catches (Thor's AmbiguousTaskError = AmbiguousCommandError,
-   rescued as Thor::Error). Runs after an_const_presence, so an alias some
-   read can reach before its assignment (LocalVar.const_early) is left alone. */
-static void rewrite_const_alias_raise_targets(Compiler *c) {
-  const NodeTable *nt = c->nt;
-  AliasRenames q = {0};
-  for (int id = 0; id < nt->count; id++) {
-    NodeKind k = nt_kind(nt, id);
-    if (k == NK_CallNode && nt_ref(nt, id, "receiver") < 0 && nt_str(nt, id, "name") &&
-        is_raise_alias(nt_str(nt, id, "name"))) {
-      int args = nt_ref(nt, id, "arguments"), an = 0;
-      const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &an) : NULL;
-      if (an >= 1 && av) ask_raise_target(c, av[0], &q);
-    }
-    else if (k == NK_RescueNode) {
-      int en = 0; const int *ev = nt_arr(nt, id, "exceptions", &en);
-      for (int i = 0; i < en; i++) ask_raise_target(c, ev[i], &q);
-    }
-  }
-  alias_renames_apply(c, &q);
 }
 
 /* For a receiverless instance_eval/exec CallNode with a literal block inside
@@ -5964,6 +5897,14 @@ static int qc_expand_read_alias(char (*path)[64], int depth, char (*chain)[64], 
   for (int i = 0; i < n; i++) snprintf(chain[i], 64, "%s", out[i]);
   *abs_anchor = 1;
   return n;
+}
+/* The name a read had before a rename (`X8::S` read as `X8::X8__S`). The
+   path lookups take a kept name as proof that the scope holds the constant
+   (const_node_class_index): the class pass renames a path only after it
+   finds the member. */
+static void qc_keep_orig_name(const NodeTable *nt, int node) {
+  const char *nm = nt_str(nt, node, "name");
+  if (nm && !nt_str(nt, node, "qc_orig_name")) nt_node_set_str((NodeTable *)nt, node, "qc_orig_name", nm);
 }
 static void qc_rename_read(const NodeTable *nt, int node, int w, const char *qn, int keep) {
   (void)w;
@@ -50473,7 +50414,7 @@ static void an_phase_desugar_register(Compiler *c) {
   register_undefs(c);
   if (elab_check_on(c)) elab_check_surface(c);
   register_globals_consts(c);
-  AN_STEP_V("rewrite_const_alias_receivers", rewrite_const_alias_receivers(c));
+  AN_STEP_V("rewrite_builtin_alias_receivers", rewrite_builtin_alias_receivers(c));
   AN_STEP_V("desugar_dyn_parent_class_leaf", desugar_dyn_parent_class_leaf(c));
   AN_STEP_V("rewrite_builtin_cm_alias_calls", rewrite_builtin_cm_alias_calls(c));   /* Time.stamp -> Time.now, the builtin's */
   AN_STEP_V("route_self_builtin_calls", route_self_builtin_calls(c));   /* U.rand(2) before U's def self.rand -> rand(2), Kernel's */
@@ -50481,7 +50422,6 @@ static void an_phase_desugar_register(Compiler *c) {
   AN_STEP_V("register_ffi_decls", register_ffi_decls(c));
   AN_STEP_V("register_cext_layouts", register_cext_layouts(c));
   an_const_presence(c);
-  AN_STEP_V("rewrite_const_alias_raise_targets", rewrite_const_alias_raise_targets(c));
 }
 
 /* Rescue-variable typing: each `rescue X => e` binding's slot. */

@@ -1,9 +1,8 @@
 # A class alias a module or a class holds is a receiver again: `M::Top2.v`
 # names the class `Top2` is bound to, though M holds no constant named Top.
-# The alias rename leaves the parent `M` and renames the leaf to the class, so
-# the lookup of a scoped path must still see the name the program wrote (the
-# #10577 answer stays: a scope that holds no such constant does not fall back
-# to the top level).
+# The lookup of a scoped path sees the name the program wrote (the #10577
+# answer stays: a scope that holds no such constant does not fall back to the
+# top level).
 class Top
   def self.v = 1
   def hi = "hi"

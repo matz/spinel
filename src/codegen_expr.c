@@ -1368,7 +1368,7 @@ void const_path_written(const NodeTable *nt, int id, char *out, size_t cap) {
     const char *t = nt_type(nt, cur);
     NodeKind k = nt_kind(nt, cur);
     const char *nm = t ? nt_str(nt, cur, "name") : NULL;
-    /* a leaf the alias pass renamed to its class is shown as written */
+    /* a leaf renamed to the builtin class it aliases is shown as written */
     if (nm && nt_str(nt, cur, "written_name")) nm = nt_str(nt, cur, "written_name");
     if (!nm || !*nm) break;
     if (k == NK_ConstantPathNode) { parts[n++] = nm; cur = nt_ref(nt, cur, "parent"); }

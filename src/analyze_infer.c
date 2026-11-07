@@ -12896,7 +12896,6 @@ TyKind infer_type(Compiler *c, int id) {
   g_infer_depth++;
   MtabMark mt_was = mtab_push(c, id);
   TyKind t = infer_uncached(c, id);
-  mtab_pop(c, mt_was);
   g_infer_depth--;
   ImemoRec rec = { -1, {0} };
   if (rec_i >= 0) {
@@ -12926,6 +12925,7 @@ TyKind infer_type(Compiler *c, int id) {
       an_ary_viewed_mark(c, id);
     }
   }
+  mtab_pop(c, mt_was);
   /* The builtin-only re-derivation (see an_builtin_only) asks what this call
      would be if no user class owned the name. That answer is not the node's
      real type, and neither are the child types derived under it, so the cache

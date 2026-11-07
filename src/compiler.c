@@ -5368,6 +5368,11 @@ int comp_super_parent(Compiler *c, int class_id, int is_cmethod) {
   return obj;
 }
 
+const Scope *comp_super_site(Compiler *c, const Scope *s) {
+  (void)c;
+  return s;
+}
+
 /* What a `super` that no program ancestor answers reaches when the
    method is one of BasicObject's or Kernel's that Spinel answers for any
    object of a program class: SUPER_OBJ_SAME (==, equal?, eql?: the same

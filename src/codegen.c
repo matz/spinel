@@ -15297,13 +15297,14 @@ int emit_super_inline(Compiler *c, int id, Buf *b, int indent, int as_expr) {
   Scope *s = comp_scope_of(c, id);
   if (s->class_id < 0 || !s->name) return 0;
   refuse_super_splat(c, id, a_super_target(c, s));
-  int p = comp_super_parent(c, s->class_id, s->is_cmethod);
+  const Scope *st = comp_super_site(c, s);
+  int p = comp_super_parent(c, st->class_id, st->is_cmethod);
   int defcls = -1;
   /* `super` inside a class method resolves through the parent's CLASS-method
      chain; the instance chain would miss `def self.x` entirely. */
   /* the next shadow in this class -- an earlier include's, prepend's or
      extend's copy -- is the parent here, as in emit_super's call form */
-  const char *shadow = comp_super_shadow(c, s);
+  const char *shadow = comp_super_shadow(c, st);
   /* the target is the super's plan (call_plan.c) when it was looked up where
      this splice looks: the shadow's class, or the parent's chain under this
      method's own name. The plan asks the chain for the user name
@@ -15316,9 +15317,9 @@ int emit_super_inline(Compiler *c, int id, Buf *b, int indent, int as_expr) {
      (`super { |v| yield v + 1 }` in a class that prepends). Those, and
      under --plan-check as the assertion, take the lookup. */
   const CallPlan *spl = cplan_user(c, id);
-  const char *own = comp_scope_def_name(c, s);
+  const char *own = comp_scope_def_name(c, st);
   int mi = -1;
-  if (spl->via == UC_SUPER && spl->mi >= 0 && spl->owner_ci == (shadow ? s->class_id : p) &&
+  if (spl->via == UC_SUPER && spl->mi >= 0 && spl->owner_ci == (shadow ? st->class_id : p) &&
       (shadow || (c->scopes[spl->mi].name && sp_streq(c->scopes[spl->mi].name, own)))) {
     mi = spl->mi;
     if (!shadow) defcls = c->scopes[mi].class_id;
@@ -15326,10 +15327,10 @@ int emit_super_inline(Compiler *c, int id, Buf *b, int indent, int as_expr) {
   if (g_plan_check && mi >= 0) cplan_served("super-inline");
   if (g_plan_check || mi < 0) {
     int odef = -1;
-    int omi = shadow ? (s->is_cmethod ? comp_cmethod_in_class(c, s->class_id, shadow)
-                                      : comp_method_in_class(c, s->class_id, shadow))
+    int omi = shadow ? (st->is_cmethod ? comp_cmethod_in_class(c, st->class_id, shadow)
+                                       : comp_method_in_class(c, st->class_id, shadow))
             : p < 0 ? -1
-            : cplan_super_chain_mi(c, id, s, p, own);
+            : cplan_super_chain_mi(c, id, st, p, own);
     if (!shadow && omi >= 0) odef = c->scopes[omi].class_id;
     if (mi < 0) {
       if (g_plan_check && omi >= 0)
@@ -15981,23 +15982,24 @@ void emit_super(Compiler *c, int id, Buf *b) {
   NodeKind ty_k = nt_kind(c->nt, id);
   /* Prepend chain: super goes to the next shadow in the same class (a class
      method's chain is taken below, in the class-method form). */
-  const char *shadow = s->is_cmethod ? NULL : comp_super_shadow(c, s);
+  const Scope *st = comp_super_site(c, s);
+  const char *shadow = s->is_cmethod ? NULL : comp_super_shadow(c, st);
   if (shadow) {
     /* The plan's target for the generated shadow in this class: it, or the
        entry over a layer of versions under its name (the call plan's
        super_layer_entry), whose arms run it */
-    int smi = super_plan_mi(c, id, s->class_id);
-    if (smi >= 0 && !(c->scopes[smi].class_id == s->class_id &&
+    int smi = super_plan_mi(c, id, st->class_id);
+    if (smi >= 0 && !(c->scopes[smi].class_id == st->class_id &&
                       (c->scopes[smi].entry == ENTRY_DISPATCH ||
                        (c->scopes[smi].name && sp_streq(c->scopes[smi].name, shadow)))))
       smi = -1;
     int served = smi >= 0;
     if (g_plan_check && served) cplan_served("super");
-    cplan_check_missing(c, id, smi, s->class_id, shadow, 0, "super");
-    if (g_plan_check && smi >= 0) ucall_observe(c, id, smi, s->class_id, 0);
+    cplan_check_missing(c, id, smi, st->class_id, shadow, 0, "super");
+    if (g_plan_check && smi >= 0) ucall_observe(c, id, smi, st->class_id, 0);
     /* A replaced shadow has its own versioned C name, as the entry's arms do. */
     if (smi >= 0) buf_puts(b, mc_method(c, &c->scopes[smi]));
-    else buf_printf(b, "sp_%s_%s", c->classes[s->class_id].c_name, mc(shadow));
+    else buf_printf(b, "sp_%s_%s", c->classes[st->class_id].c_name, mc(shadow));
     /* the shadow is a method of this same class, so it takes self as this
        method holds it: a program class's struct pointer, a reopened
        builtin's own value (an Integer, an Object's boxed value), or the
@@ -16020,8 +16022,8 @@ void emit_super(Compiler *c, int id, Buf *b) {
     return;
   }
   /* Strip __prep N prefix to get the user method name for parent chain lookup. */
-  int p = comp_super_parent(c, s->class_id, s->is_cmethod);
-  const char *uname = comp_super_name(c, p, comp_scope_def_name(c, s), s->is_cmethod);
+  int p = comp_super_parent(c, st->class_id, st->is_cmethod);
+  const char *uname = comp_super_name(c, p, comp_scope_def_name(c, st), st->is_cmethod);
   /* super inside a class method: resolve through the parent's CLASS-method
      chain and call the sp_<Cls>_s_ form (class methods take no instance
      self). The instance path below would miss `def self.x` entirely. */
@@ -16031,7 +16033,7 @@ void emit_super(Compiler *c, int id, Buf *b) {
     int cmi = -1;
     /* a later extend's copy: super reaches the earlier module's copy, kept in
        this class under its shadow name */
-    const char *cshadow = comp_super_shadow(c, s);
+    const char *cshadow = comp_super_shadow(c, st);
     /* the plan's class method when it was looked up where this form looks */
     cmi = super_plan_mi(c, id, cshadow ? s->class_id : p);
     if (cmi >= 0 && !c->scopes[cmi].is_cmethod) cmi = -1;

@@ -2609,11 +2609,12 @@ static int a_block_forwarded_to_proc(Compiler *c, int id) {
     if (sblk < 0 || nt_kind(nt, sblk) != NK_BlockNode) return 0;
     Scope *s = comp_scope_of(c, id);
     if (!s || !s->is_proc_form || s->class_id < 0 || !s->name) return 0;
-    int p = comp_super_parent(c, s->class_id, s->is_cmethod);
+    const Scope *st = comp_super_site(c, s);
+    int p = comp_super_parent(c, st->class_id, st->is_cmethod);
     if (p < 0) return 0;
-    const char *u = comp_super_name(c, p, comp_scope_def_name(c, s), s->is_cmethod);
-    int tmi = s->is_cmethod ? comp_cmethod_in_chain(c, p, u, NULL)
-                            : comp_method_in_chain(c, p, u, NULL);
+    const char *u = comp_super_name(c, p, comp_scope_def_name(c, st), st->is_cmethod);
+    int tmi = st->is_cmethod ? comp_cmethod_in_chain(c, p, u, NULL)
+                             : comp_method_in_chain(c, p, u, NULL);
     return tmi >= 0 && c->scopes[tmi].is_proc_form;
   }
   if (k != NK_CallNode) return 0;
@@ -27336,7 +27337,7 @@ static int an_ret_handle(Compiler *c, RetHandles *R, int mi);
    which build a new String each call. */
 int an_super_object_text(Compiler *c, int n, int mi) {
   if (mi <= 0 || mi >= c->nscopes) return 0;
-  const Scope *s = &c->scopes[mi];
+  const Scope *s = comp_super_site(c, &c->scopes[mi]);
   /* (an included module's method under the class's own is a shadow of the
      class: `__inc_0_inspect`) */
   const char *nm = s->name ? comp_scope_def_name(c, s) : NULL;
@@ -27365,7 +27366,7 @@ int an_super_object_text(Compiler *c, int n, int mi) {
    (emit_super; struct_default_text_fn names the function that builds it). */
 int an_super_struct_text(Compiler *c, int n, int mi) {
   if (mi <= 0 || mi >= c->nscopes) return 0;
-  const Scope *s = &c->scopes[mi];
+  const Scope *s = comp_super_site(c, &c->scopes[mi]);
   const char *nm = s->name ? comp_scope_def_name(c, s) : NULL;
   if (!nm || s->is_cmethod || s->class_id < 0 || s->nparams != 0 ||
       (!sp_streq(nm, "inspect") && !sp_streq(nm, "to_s")))
@@ -35034,8 +35035,19 @@ static int promote_spread_string_args(Compiler *c) {
   return changed;
 }
 
+/* The method a `super` with arguments in scope s reaches in the parent
+   chain, under the name its def gives, or -1. */
+static int super_parent_method(Compiler *c, Scope *s) {
+  const Scope *st = comp_super_site(c, s);
+  int sp = comp_super_parent(c, st->class_id, st->is_cmethod);
+  const char *sn = sp >= 0 ? comp_super_name(c, sp, comp_scope_def_name(c, st), st->is_cmethod) : NULL;
+  if (!sn) return -1;
+  return st->is_cmethod ? comp_cmethod_in_chain(c, sp, sn, NULL) : comp_method_in_chain(c, sp, sn, NULL);
+}
+
 /* The method a `super` in scope `m` calls, or -1. */
-int a_super_target(Compiler *c, Scope *m) {
+int a_super_target(Compiler *c, Scope *m0) {
+  const Scope *m = comp_super_site(c, m0);
   const char *shadow = comp_super_shadow(c, m);
   if (shadow) return m->is_cmethod ? comp_cmethod_in_class(c, m->class_id, shadow)
                                    : comp_method_in_class(c, m->class_id, shadow);
@@ -35897,9 +35909,10 @@ int make_yield_proc_forms(Compiler *c) {
        in either definition order, without rescanning the scope table. */
     int shadow_clone = src->is_proc_form;
     if (shadow_clone) {
-      const char *shadow = comp_super_shadow(c, src);
+      const Scope *st = comp_super_site(c, src);
+      const char *shadow = comp_super_shadow(c, st);
       if (!shadow || !cr_scope_has_super(c, s)) continue;
-      s = pf_scope_named(c, src, shadow);
+      s = pf_scope_named(c, st, shadow);
       if (s < 0) continue;
       src = &c->scopes[s];
     }
@@ -43198,10 +43211,7 @@ static void mark_nullable_int_locals(Compiler *c) {
     NT_FOREACH_KIND(nt, NK_SuperNode, id) {
       Scope *ss = comp_scope_of(c, id);
       if (!ss || ss->class_id < 0 || !ss->name || comp_super_is_class_new(c, id)) continue;
-      int sp = comp_super_parent(c, ss->class_id, ss->is_cmethod);
-      const char *sn = sp >= 0 ? comp_super_name(c, sp, comp_scope_def_name(c, ss), ss->is_cmethod) : NULL;
-      if (!sn) continue;
-      int smi = ss->is_cmethod ? comp_cmethod_in_chain(c, sp, sn, NULL) : comp_method_in_chain(c, sp, sn, NULL);
+      int smi = super_parent_method(c, ss);
       if (smi >= 0) changed |= mark_nullable_params_of_call(c, id, smi);
     }
     NT_FOREACH_KIND(nt, NK_ForwardingSuperNode, id) {
@@ -46646,9 +46656,11 @@ static int arysub_new_gets_block(Compiler *c, int k) {
 static void rewrite_array_subclass_super(Compiler *c, int id) {
   const NodeTable *nt = c->nt;
   Scope *s = comp_scope_of(c, id);
-  if (!s || !s->name || comp_ary_root(c, s->class_id) < 0) return;
+  if (!s || !s->name) return;
+  const Scope *st = comp_super_site(c, s);
+  if (comp_ary_root(c, st->class_id) < 0) return;
   int init;
-  const char *mname = comp_scope_user_name(s);
+  const char *mname = comp_scope_user_name(st);
   if (s->is_cmethod) {
     /* (only the class's own: not a copy a module's extend, include or
        prepend in its singleton made) */
@@ -46657,8 +46669,8 @@ static void rewrite_array_subclass_super(Compiler *c, int id) {
     init = 2;
   }
   else {
-    if (comp_super_shadow(c, s)) return;
-    int p = c->classes[s->class_id].parent;
+    if (comp_super_shadow(c, st)) return;
+    int p = c->classes[st->class_id].parent;
     if (p >= 0 && comp_method_in_chain(c, p, mname, NULL) >= 0) return;
     init = sp_streq(mname, "initialize");
   }
@@ -46670,7 +46682,7 @@ static void rewrite_array_subclass_super(Compiler *c, int id) {
     if (self >= 0) { arysub_set_call(c, id, self, "itself", -1, -1); nt_set_ignore_visibility((NodeTable *)c->nt, id, 1); }
     return;
   }
-  if (!init && !comp_arysub_builtin_name(c, s->class_id, mname)) return;
+  if (!init && !comp_arysub_builtin_name(c, st->class_id, mname)) return;
   int args = nt_ref(nt, id, "arguments"), blk = nt_ref(nt, id, "block");
   if (nt_kind(nt, id) == NK_ForwardingSuperNode) {
     args = arysub_zsuper_args(c, id, s);
@@ -55668,8 +55680,9 @@ static void an_presence_observe(Compiler *c, int id) {
   /* Object#inspect, through `super` in an inspect of the program's */
   if (k == NK_SuperNode || k == NK_ForwardingSuperNode) {
     /* only where no inspect of the program's sits above: that one runs */
-    int up = own >= 0 ? comp_super_parent(c, own, 0) : -1;
-    if (own >= 0 && s->name && is_inspect_name(s->name) && (up < 0 || comp_method_in_chain(c, up, s->name, NULL) < 0))
+    const Scope *st = s ? comp_super_site(c, s) : NULL;
+    int up = own >= 0 ? comp_super_parent(c, st->class_id, 0) : -1;
+    if (own >= 0 && s->name && is_inspect_name(st->name) && (up < 0 || comp_method_in_chain(c, up, st->name, NULL) < 0))
       an_presence_class(c, own, OBS_INSPECT, -1);
     return;
   }

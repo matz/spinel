@@ -159,7 +159,7 @@ src/analyze.c dyn_site_may_reach a scope's own name
 src/analyze.c dyn_site_misses a scope's own name
 src/analyze.c inline_replacing_def a scope's own name
 src/analyze.c iter_disc_self_targets =cur->name a scope's own name
-src/analyze.c mark_nullable_int_locals =sn super, by its def's name
+src/analyze.c super_parent_method =sn super, by its def's name
 src/analyze.c pf_in_class_dispatch a scope's own name
 src/analyze.c pf_scope_named a scope's own name
 src/analyze.c pf_wanted a scope's own name
@@ -175,7 +175,7 @@ src/analyze_infer.c an_poly_object_methods_listable whether a class the receiver
 src/analyze_pass.c infer_param_types_ex =s->name super, by its def's name
 src/analyze_pass.c propagate_prep_params a prepended method's own name
 src/analyze_scope.c cmethod_reaches_class_ivar_walk =c->scopes[mi].name a scope's own name
-src/analyze_scope.c forwarding_target_scan =s->name a scope's own name
+src/analyze_scope.c forwarding_target_scan =st->name the super site scope's own name
 src/analyze_scope.c mixin_presence_unguarded =m->name a scope's own name
 src/analyze_scope.c mixin_rebrought_behind =m->name a scope's own name
 src/analyze_scope.c mixin_meets_plain_late =m->name a scope's own name

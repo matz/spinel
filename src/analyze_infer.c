@@ -12160,10 +12160,10 @@ TyKind infer_uncached(Compiler *c, int id) {
        method's through the parent's CLASS-method chain, which the instance
        chain would miss `def self.x` entirely) */
     int at, mi = cplan_super_target(c, id, s, &at);
-    if (comp_super_shadow(c, s)) {
+    if (comp_super_shadow(c, comp_super_site(c, s))) {
       if (mi < 0) return TY_UNKNOWN;
       /* a yielding shadow is spliced as a parent is */
-      an_user_call_record(c, id, mi, UC_SUPER, s->class_id);
+      an_user_call_record(c, id, mi, UC_SUPER, at);
       return super_target_ret(c, s, mi, id);
     }
     /* Class#new: an instance of the receiving class, which is this one or,
@@ -12172,7 +12172,7 @@ TyKind infer_uncached(Compiler *c, int id) {
     if (comp_super_is_class_new(c, id))
       return comp_super_class_new_boxed(c, id) ? TY_POLY : ty_object(s->class_id);
     int p = at;
-    const char *uname = comp_super_name(c, p, comp_scope_def_name(c, s), s->is_cmethod);
+    const char *uname = comp_super_name(c, p, comp_scope_def_name(c, comp_super_site(c, s)), s->is_cmethod);
     /* `super` in a respond_to? override no ancestor defines is Object's
        respond_to?: a boolean (see emit_super_respond_to) */
     int rto_super = !s->is_cmethod && uname &&
@@ -13068,7 +13068,8 @@ void scope_add_param(Scope *s, const char *name, int defnode) {
    name is picked at run time from the builtin ancestry; `reopen` asks that
    none does. */
 int super_reaches_exc_text(Compiler *c, int id, int reopen) {
-  Scope *s = comp_scope_of(c, id);
+  Scope *s0 = comp_scope_of(c, id);
+  const Scope *s = s0 ? comp_super_site(c, s0) : NULL;
   if (!s || s->class_id < 0 || !s->name || s->is_cmethod || comp_super_shadow(c, s) ||
       !class_is_exc_subclass(c, s->class_id))
     return 0;

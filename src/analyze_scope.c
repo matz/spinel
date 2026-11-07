@@ -216,9 +216,10 @@ static int forwarding_target_scan(Compiler *c, Scope *s, int *sole) {
     }
     int mi = -1;
     if (is_super) {
-      if (s->class_id >= 0 && !s->is_cmethod && s->name) {
-        int par = comp_super_parent(c, s->class_id, 0);
-        mi = par >= 0 ? comp_method_in_chain(c, par, s->name, NULL) : -1;
+      const Scope *st = comp_super_site(c, s);
+      if (st->class_id >= 0 && !st->is_cmethod && st->name) {
+        int par = comp_super_parent(c, st->class_id, 0);
+        mi = par >= 0 ? comp_method_in_chain(c, par, st->name, NULL) : -1;
       }
     }
     else {
@@ -465,7 +466,8 @@ void refuse_super_init_value(Compiler *c) {
     const int *ids = nt_nodes_of_kind(nt, kinds[k], &cnt);
     for (int i = 0; i < cnt; i++) {
       int v = ids[i];
-      Scope *s = comp_scope_of(c, v);
+      Scope *s0 = comp_scope_of(c, v);
+      const Scope *s = s0 ? comp_super_site(c, s0) : NULL;
       if (!s || s->is_cmethod || s->class_id < 0 || !s->name || !sp_streq(s->name, "initialize")) continue;
       int pc = comp_super_parent(c, s->class_id, 0);
       if (pc < 0 || comp_method_in_chain(c, pc, "initialize", NULL) < 0) continue;
@@ -8328,7 +8330,8 @@ void rewrite_attr_supers(Compiler *c) {
     int asked = 0;
     NT_FOREACH_KIND(nt, NK_DefinedNode, d) if (nt_ref(nt, d, "value") == id) asked = 1;
     if (asked) continue;
-    Scope *s = comp_scope_of(c, id);
+    Scope *s0 = comp_scope_of(c, id);
+    const Scope *s = s0 ? comp_super_site(c, s0) : NULL;
     if (!s || !s->name || s->class_id < 0 || s->is_cmethod) continue;
     ClassInfo *cls = &c->classes[s->class_id];
     if (comp_class_is_module(c, cls)) continue;

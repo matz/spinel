@@ -89,7 +89,7 @@ typedef struct {
 } CallPlan;
 
 int cplan_accessor_classes(Compiler *c, int id, int *out, int cap);
-int cplan_super_chain_mi(Compiler *c, int id, Scope *s, int par, const char *name);
+int cplan_super_chain_mi(Compiler *c, int id, const Scope *s, int par, const char *name);
 /* ...and the method `super` in s reaches (its prepend chain's next, else
    that), *at the class it is found from */
 int cplan_super_target(Compiler *c, int id, Scope *s, int *at);

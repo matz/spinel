@@ -170,7 +170,7 @@ static int cplan_root_under_builtin(Compiler *c, int top) {
 }
 /* A super's parent-chain target, past inherited copies of the same
    extended definition. Shared by resolution, inference, inline splicing and the miss check. */
-int cplan_super_chain_mi(Compiler *c, int id, Scope *s, int par, const char *name) {
+int cplan_super_chain_mi(Compiler *c, int id, const Scope *s, int par, const char *name) {
   int mi = par < 0 ? -1 : s->is_cmethod ? comp_cmethod_in_chain(c, par, name, NULL)
                                        : comp_method_in_chain(c, par, name, NULL);
   /* An extended module's method is one entry in the class's ancestry, and
@@ -206,7 +206,8 @@ int cplan_super_chain_mi(Compiler *c, int id, Scope *s, int par, const char *nam
    below a later one, reaches the entry over them once the entries are
    made (super_layer_entry). */
 static int super_layer_entry(Compiler *c, int id, int t);
-int cplan_super_target(Compiler *c, int id, Scope *s, int *at) {
+int cplan_super_target(Compiler *c, int id, Scope *s0, int *at) {
+  const Scope *s = comp_super_site(c, s0);
   const char *shadow = comp_super_shadow(c, s);
   if (shadow) {
     *at = -1;
@@ -226,7 +227,8 @@ static void cplan_resolve_super(Compiler *c, int id, CallPlan *p) {
   if (!s || s->class_id < 0 || !s->name) return;
   int par, mi = cplan_super_target(c, id, s, &par);
   if (mi >= 0) { cplan_set(p, mi, par, UC_SUPER, CP_DIRECT); return; }
-  const char *uname = comp_super_shadow(c, s) ? NULL : comp_super_name(c, par, comp_scope_def_name(c, s), s->is_cmethod);
+  const Scope *st = comp_super_site(c, s);
+  const char *uname = comp_super_shadow(c, st) ? NULL : comp_super_name(c, par, comp_scope_def_name(c, st), st->is_cmethod);
   if (uname && s->is_cmethod &&
            builtin_super_cmethod_known(c->classes[s->class_id].name, uname) &&
            (par < 0 || comp_cmethod_in_chain(c, par, uname, NULL) < 0)) {
@@ -727,7 +729,7 @@ void cplan_check_missing(Compiler *c, int id, int mi, int ci, const char *name, 
   NodeKind k = nt_kind(c->nt, id);
   if (cmeth && (k == NK_SuperNode || k == NK_ForwardingSuperNode)) {
     Scope *sc = comp_scope_of(c, id);
-    if (sc && !comp_super_shadow(c, sc)) own = cplan_super_chain_mi(c, id, sc, ci, name);
+    if (sc && !comp_super_shadow(c, comp_super_site(c, sc))) own = cplan_super_chain_mi(c, id, sc, ci, name);
   }
   if (own >= 0)
     fprintf(stderr, "plan-check: cplan-missing: %s node %d %s: chain %d\n", site, id, name, own);
@@ -852,7 +854,8 @@ int call_node_names(Compiler *c, int id, const char *out[2]) {
     out[n++] = nt_str(nt, id, "write_name");
   }
   else if (k == NK_SuperNode || k == NK_ForwardingSuperNode) {
-    Scope *s = comp_scope_of(c, id);
+    Scope *s0 = comp_scope_of(c, id);
+    const Scope *s = s0 ? comp_super_site(c, s0) : NULL;
     if (s && s->name && !comp_super_shadow(c, s))
       out[n++] = comp_super_name(c, comp_super_parent(c, s->class_id, s->is_cmethod), comp_scope_def_name(c, s), s->is_cmethod);
   }
@@ -2203,7 +2206,8 @@ void ct_version_classes(Compiler *c, int id, const char *nm, CtClassFn fn, void 
   const NodeTable *nt = c->nt;
   NodeKind kind = nt_kind(nt, id);
   if (kind == NK_SuperNode || kind == NK_ForwardingSuperNode) {
-    Scope *s = comp_scope_of(c, id);
+    Scope *s0 = comp_scope_of(c, id);
+    const Scope *s = s0 ? comp_super_site(c, s0) : NULL;
     if (s && !comp_super_shadow(c, s)) {
       int par = comp_super_parent(c, s->class_id, s->is_cmethod);
       if (par >= 0) fn(c, id, nm, par, CT_REACH | (s->is_cmethod ? CT_CMETHOD : 0), arg);
@@ -3042,7 +3046,7 @@ static int ct_super_new_initializers(Compiler *c, int id, int *out) {
   int at;
   if (cplan_super_target(c, id, s, &at) >= 0) return -2;
   int mod = comp_class_is_module(c, &c->classes[s->class_id]);
-  if (mod ? !s->is_cmethod : comp_super_shadow(c, s) != NULL) return CPT_UNKNOWN;
+  if (mod ? !s->is_cmethod : comp_super_shadow(c, comp_super_site(c, s)) != NULL) return CPT_UNKNOWN;
   return !mod && s->is_cmethod ? ct_class_initializers(c, s->class_id, 1, out) : -2;
 }
 /* A `new` call id that a program `new` answers for some class its

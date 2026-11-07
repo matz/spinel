@@ -2536,7 +2536,7 @@ static unsigned yvt_name_key(const char *name) {
    method with a prepend chain, whose next method is a hidden copy. */
 static unsigned yvt_sup_name_key(Compiler *c, Scope *cs) {
   const char *dn = comp_scope_def_name(c, cs);
-  if (!dn || !sp_streq(dn, comp_scope_user_name(cs)) || comp_super_shadow(c, cs) || yvt_name_is_alias(c, dn)) return 0;
+  if (!dn || !sp_streq(dn, comp_scope_user_name(cs)) || comp_super_shadow(c, comp_super_site(c, cs)) || yvt_name_is_alias(c, dn)) return 0;
   return yvt_name_key(dn);
 }
 static void yvt_build(Compiler *c) {

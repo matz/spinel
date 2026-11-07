@@ -4067,9 +4067,10 @@ static int defined_super_reaches(Compiler *c, int sup) {
   const ClassInfo *ci = &c->classes[s->class_id];
   int mod = comp_class_is_module(c, (ClassInfo *)ci);
   if (mod && !s->is_cmethod) return -1;   /* its includer's chain decides */
-  if (comp_super_shadow(c, s)) return 1;
-  int p = comp_super_parent(c, s->class_id, s->is_cmethod);
-  const char *u = comp_super_name(c, p, comp_scope_def_name(c, s), s->is_cmethod);
+  const Scope *st = comp_super_site(c, s);
+  if (comp_super_shadow(c, st)) return 1;
+  int p = comp_super_parent(c, st->class_id, st->is_cmethod);
+  const char *u = comp_super_name(c, p, comp_scope_def_name(c, st), st->is_cmethod);
   if (!u) return -1;
   if (s->is_cmethod) {
     if (p >= 0 && comp_cmethod_in_chain(c, p, u, NULL) >= 0) return 1;

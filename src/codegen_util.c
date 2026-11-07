@@ -2479,9 +2479,10 @@ static int ivs_init_sets(Compiler *c, int cid, const char *ivn, int depth, int s
 static int ivs_super_method(Compiler *c, int node, int cid, const char *name) {
   Scope *s = comp_scope_of(c, node);
   if (!s || s->is_cmethod) return -2;
-  const char *shadow = comp_super_shadow(c, s);
-  if (shadow) { int mi = comp_method_in_class(c, s->class_id, shadow); return mi < 0 ? -2 : mi; }
-  int pc = comp_super_parent(c, cid, 0);
+  const Scope *st = comp_super_site(c, s);
+  const char *shadow = comp_super_shadow(c, st);
+  if (shadow) { int mi = comp_method_in_class(c, st->class_id, shadow); return mi < 0 ? -2 : mi; }
+  int pc = comp_super_parent(c, st == s ? cid : st->class_id, 0);
   return pc < 0 ? -1 : comp_method_in_chain(c, pc, name, NULL);
 }
 /* May code under `n`, run in a method of class cid, see the object's ivars:

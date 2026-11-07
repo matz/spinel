@@ -2690,8 +2690,7 @@ static void cg_cands_collect(Compiler *c, int n0, CgCands *cs) {
     int owner = -2;
     if (k == NK_ConstantWriteNode || k == NK_ConstantPathWriteNode) {
       int w = k == NK_ConstantWriteNode ? id : nt_ref(nt, id, "target");
-      v = w >= 0 ? nt_str(nt, w, "qc_orig_name") : NULL;
-      if (!v && w >= 0) v = nt_str(nt, w, "name");
+      v = w >= 0 ? nt_str(nt, w, "name") : NULL;
       if (k == NK_ConstantWriteNode && c->node_cbody) owner = c->node_cbody[id];
       else if (w >= 0) owner = elab_const_write_owner(c, w);
     }

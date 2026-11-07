@@ -21020,8 +21020,7 @@ static int const_name_owner(Compiler *c, int tgt, int *owner) {
 static void emit_const_target_class_name(Compiler *c, int tgt, const char *nm, Buf *b, int indent) {
   int owner;
   if (!const_name_owner(c, tgt, &owner)) return;
-  const char *wn = nt_str(c->nt, tgt, "qc_orig_name");
-  emit_class_const_name(c, nm, wn ? wn : nt_str(c->nt, tgt, "name"), owner, b, indent);
+  emit_class_const_name(c, nm, nt_str(c->nt, tgt, "name"), owner, b, indent);
 }
 
 /* After the value is evaluated, before it is stored: a receiver that is not a

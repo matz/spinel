@@ -2638,8 +2638,7 @@ static int path_header_class(Compiler *c, int stmt) {
 static void listed_value_const(Compiler *c, int node, const char **nm, const char **sh) {
   const char *wn = nt_str(c->nt, node, "name");
   *nm = const_key_at(c, node);
-  *sh = nt_str(c->nt, node, "qc_orig_name");
-  if (!*sh && *nm && wn && !sp_streq(*nm, wn)) *sh = wn;
+  *sh = *nm && wn && !sp_streq(*nm, wn) ? wn : NULL;
 }
 /* The constant names a class/module defines in its OWN body, in declaration
    order, appended to `out` (deduplicated). Scans every ClassNode/ModuleNode

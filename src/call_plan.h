@@ -718,6 +718,9 @@ int cplan_nil_program_method(Compiler *c, int call, const char *name, int *nilcl
    hides it). include_all is 1 or 0 when known, -1 when only the run time
    knows it: a private method then gives 2 (the include_all decides). */
 int cplan_nil_program_responds(Compiler *c, const char *name, int include_all);
+/* codegen_call.c: nil's method for the call when it is closed to it
+   (private, or protected to this caller), -1 otherwise */
+int cplan_nil_closed_method(Compiler *c, int call, const char *name, int *vis);
 int cplan_nil_program_served(Compiler *c, int id);  /* codegen_call.c: nil's method's answer has the call's type */
 /* Is a nil fact's source `why` (nil_fact_why) a nil the program writes --
    a literal, a missing else, a safe navigation, a slot read before its

@@ -5383,7 +5383,10 @@ int cplan_nil_program_responds(Compiler *c, const char *name, int include_all) {
    nil does, or none: a reopened String's, Array's or Hash's, or the
    object's class's own, where nil runs NilClass's or Object's? */
 static int cplan_nil_runs_other(Compiler *c, int call, TyKind rt, const char *name) {
-  int nilcls = 0, nmi = cplan_nil_program_method(c, call, name, &nilcls);
+  int nilcls = 0, nmi = cplan_nil_closed_method(c, call, name, NULL);
+  /* (a method closed to the call raises for nil, where the receiver's
+     class may run its own) */
+  if (nmi < 0) nmi = cplan_nil_program_method(c, call, name, &nilcls);
   if (nmi < 0) return 0;
   int k = rt == TY_STRING ? comp_core_class(c, CORE_STRING)
         : ty_is_array(rt) ? comp_core_class(c, CORE_ARRAY)

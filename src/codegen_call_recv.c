@@ -13022,7 +13022,9 @@ int emit_object_call(Compiler *c, int id, Buf *b) {
     const char *cn = isa_const_name(nt, argv[0]);
     if (cn) {
       int cid = ty_object_class(rt);
-      int target = comp_class_index(c, cn);
+      /* (the class the constant names: an alias's is the class it holds) */
+      int target = const_node_class_index(c, argv[0]);
+      if (target < 0) target = comp_class_index(c, cn);
       /* an exception-subclass instance walks its carried cls_name chain --
          the class-index fold below answers 0 for builtin targets like
          StandardError, which have no user class index. Exception class names

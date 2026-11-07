@@ -92,3 +92,13 @@ p(S11.method_defined?(:helper) ? :bad : :good)
 module M12; S12 = Struct.new(:a); end
 class S12; end
 p(S12.method_defined?(:a, false) ? :bad : :good)
+
+# a record the fold cannot read keeps the guard as before
+S13 = Struct.new(:a)
+class S13
+  private :a
+end
+class S13
+  def label = :s unless method_defined?(:label, false)
+end
+p S13.new(1).label

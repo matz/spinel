@@ -6000,7 +6000,8 @@ static int engine_method_absent(NodeTable *nt, const char *cls, const char *m, i
   /* a Struct's or Data's members, the defs in its block, and the methods
      Struct or Data gives every instance (each, with ...) */
   int data = 0, rec = me_record_defines(nt, cls, m, in, &data);
-  if (rec) return rec > 0 ? 0 : -1;
+  /* (a record the fold cannot read leaves the question to the steps below) */
+  if (rec > 0) return 0;
   if (data >= 0) {
     int v = core_method_vis(data ? "Data" : "Struct", m, 1);
     if (v < 0) return -1;
@@ -6241,11 +6242,10 @@ static int me_record_defines(const NodeTable *nt, const char *cls, const char *m
     const char *nm = nt_str(nt, id, "name");
     int call = nm && sp_streq(nm, cls) ? class_def_record(nt, id) : -1;
     if (call < 0) continue;
-    rec = 1;
     /* (the fold names a class by its last segment: a record written in a
        class body or a branch, `module M; S = Struct.new(:a); end`, can be
-       another S) */
-    if (!me_top_stmt(nt, id) || me_stmts_vis(nt, class_def_body(nt, id))) unknown = 1;
+       another S; a second write makes another class) */
+    if (rec++ || !me_top_stmt(nt, id) || me_stmts_vis(nt, class_def_body(nt, id))) unknown = 1;
     data = class_def_record_is_data(nt, call);
     int an = 0; const int *av = nt_arr(nt, nt_ref(nt, call, "arguments"), "arguments", &an);
     for (int a = 0; a < an; a++) {
@@ -6281,8 +6281,7 @@ static int me_record_defines(const NodeTable *nt, const char *cls, const char *m
 static int engine_method_own_absent(NodeTable *nt, const char *cls, const char *m, int in) {
   if (me_body_defines(nt, cls, m, in)) return 0;
   /* (a Struct's or Data's members and the defs in its block are its own) */
-  int rec = me_record_defines(nt, cls, m, in, NULL);
-  if (rec) return rec > 0 ? 0 : -1;
+  if (me_record_defines(nt, cls, m, in, NULL) > 0) return 0;
   if (is_builtin_class_name(cls) || is_builtin_module_name(cls) || builtin_class_id(cls)) return -1;
   return me_leaf_defined(nt, cls) ? 1 : -1;
 }

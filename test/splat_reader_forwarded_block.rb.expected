@@ -1,0 +1,7 @@
+3
+2
+3
+2
+false
+[:a, :b]
+ArgumentError

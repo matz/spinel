@@ -3640,7 +3640,10 @@ static int emit_constant_value(Compiler *c, int id, Buf *b, Buf *checks, const N
       TyKind prt = par_idc >= 0 ? prtr.as_ty : TY_UNKNOWN;
     /* (a slot emit_const_recv_wrap already holds is read below: the switch
        ran there, and the receiver runs once) */
-    if (nm && par_idc >= 0 && !par_nmc && (prt == TY_CLASS || prt == TY_POLY) && !nt_int(nt, id, "const_ptr", 0)) {
+    /* (nor is a leaf bound to one member's slot, const_leaf_bound: that
+       constant is read below) */
+    if (nm && par_idc >= 0 && !par_nmc && (prt == TY_CLASS || prt == TY_POLY) && !nt_int(nt, id, "const_ptr", 0) &&
+        !const_leaf_bound(c, id)) {
       /* A constant is stored under its OWNER's qualified spelling
          (Probe__Block__CODE) while the class's c_name is its leaf (Block), so
          the owner is found by asking each class whether a constant keyed
@@ -3653,9 +3656,10 @@ static int emit_constant_value(Compiler *c, int id, Buf *b, Buf *checks, const N
          is CRuby's NameError. Object alone reads a top-level one. */
       int *ccls = malloc(sizeof(int) * (size_t)(c->nclasses + 2));
       const char **ckey = malloc(sizeof(char *) * (size_t)(c->nclasses + 2));
-      if (!ccls || !ckey) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+      TyKind *cty = malloc(sizeof(TyKind) * (size_t)(c->nclasses + 2));
+      if (!ccls || !ckey || !cty) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
       int nc = 0;
-      TyKind ct = TY_UNKNOWN; int uniform = 1;
+      TyKind ct = TY_UNKNOWN; int uniform = 1, mixed = 0, boxable = 1;
       int *cands, ncands = comp_const_tail_cands(c, nm, &cands);
       int obj_k = comp_core_class(c, CORE_OBJECT);
       /* (a constant a value's path writes is read as before: by the classes
@@ -3667,22 +3671,34 @@ static int emit_constant_value(Compiler *c, int id, Buf *b, Buf *checks, const N
         if (ci2 < 0) continue;
         const char *found = c->consts[ci2].name; TyKind ft = c->consts[ci2].type;
         if (nc == 0) ct = ft;
-        else if (ft != ct) uniform = 0;
-        ccls[nc] = k; ckey[nc] = found; nc++;
+        else if (ft != ct) uniform = 0, mixed = 1;
+        if (!ty_boxable(ft)) boxable = 0;
+        ccls[nc] = k; ckey[nc] = found; cty[nc] = ft; nc++;
       }
       free(cands);
+      /* `self::NM` in the body of the one class that holds NM, no descendant
+         writing it as its own: self is that class, and the read is the plain
+         one below, not a switch of one arm (#10787) */
+      if (nc == 1 && par_idc >= 0 && nt_kind(nt, par_idc) == NK_SelfNode && self_class_body(c, par_idc) == ccls[0] &&
+          !elab_const_descendant_writes(c, ccls[0], nm)) nc = 0;
       const LocalVar *topc = through ? NULL : const_value_path_top(c, nm);
       if (topc) {
         if (nc == 0) ct = topc->type;
-        else if (topc->type != ct) uniform = 0;
+        else if (topc->type != ct) uniform = 0, mixed = 1;
+        if (!ty_boxable(topc->type)) boxable = 0;
         /* (Object's class value: the builtin's, or the program's reopening) */
-        ccls[nc] = builtin_class_id("Object"); ckey[nc] = topc->name; nc++;
-        if (obj_k >= 0) { ccls[nc] = obj_k; ckey[nc] = topc->name; nc++; }
+        ccls[nc] = builtin_class_id("Object"); ckey[nc] = topc->name; cty[nc] = topc->type; nc++;
+        if (obj_k >= 0) { ccls[nc] = obj_k; ckey[nc] = topc->name; cty[nc] = topc->type; nc++; }
       }
+      /* Constants of different kinds (a holder's Float LIMIT beside a
+         subclass's Integer one) are read as their box, each arm boxing its
+         own, as the inference typed the read (TY_POLY, analyze_infer.c).
+         (A read of the slot itself has no box to give.) */
+      int boxed = mixed && boxable && !slot;
       /* String slots that hold the handle (one String mode) are read through
          it after the switch, as a plain read of one is (emit_strbuf_slot_read) */
       int strbuf = 0;
-      for (int i = 0; i < nc; i++) {
+      for (int i = 0; i < nc && !boxed; i++) {
         int sb = repr_of_slot(c, comp_const(c, ckey[i])).kind == RK_STRBUF;
         if (i == 0) strbuf = sb;
         else if (sb != strbuf) uniform = 0;
@@ -3694,29 +3710,38 @@ static int emit_constant_value(Compiler *c, int id, Buf *b, Buf *checks, const N
         const char *pm = pc >= 0 && nt_kind(nt, pc) == NK_CallNode ? nt_str(nt, pc, "name") : NULL;
         if (pm && an_str_mutator_name(pm)) uniform = 0;
       }
-      if (nc > 0 && uniform && ct != TY_UNKNOWN) {
+      if (nc > 0 && ((uniform && ct != TY_UNKNOWN) || boxed)) {
         int tk = ++g_tmp, tr = ++g_tmp;
         buf_printf(b, "({ sp_Class _t%d = ", tk);
         /* a poly slot carries the class boxed; unwrap it to the same key */
         if (prtr.kind == RK_BOXED) { buf_puts(b, "sp_unbox_class("); emit_boxed(c, par_idc, b); buf_puts(b, ")"); }
         else emit_expr(c, par_idc, b);
         buf_puts(b, "; ");
-        if (strbuf) buf_puts(b, "sp_String");
+        if (boxed) buf_puts(b, "sp_RbVal");
+        else if (strbuf) buf_puts(b, "sp_String");
         else emit_ctype(c, ct, b);
         buf_printf(b, " %s%s_t%d = %s; switch (_t%d.cls_id) {", strbuf ? "*" : "", slot ? "*" : "", tr,
-                   slot || strbuf ? "NULL" : default_value_from_compiler(c, ct), tk);
+                   boxed ? default_value_from_compiler(c, TY_POLY) : slot || strbuf ? "NULL" : default_value_from_compiler(c, ct), tk);
         for (int i = 0; i < nc; i++) {
+          /* the arm's value: the slot, its address, or its box */
+          Buf rhs; memset(&rhs, 0, sizeof rhs);
+          if (boxed) {
+            char ex[256]; snprintf(ex, sizeof ex, "cst_%s", ckey[i]);
+            emit_boxed_text(c, cty[i], ex, &rhs);
+          }
+          else buf_printf(&rhs, "%scst_%s", slot ? "&" : "", ckey[i]);
           /* a constant not assigned yet is as missing as one the class lacks */
           if (const_has_flag(comp_const(c, ckey[i])) && topc && i >= nc - (obj_k >= 0 ? 2 : 1))
             /* (Object's own: CRuby's message names the constant alone) */
             buf_printf(b, " case %d: if (!cst_%s__set) sp_raise_cls(\"NameError\", \"uninitialized constant %s\");"
-                          " _t%d = %scst_%s; break;", ccls[i], ckey[i], nm, tr, slot ? "&" : "", ckey[i]);
+                          " _t%d = %s; break;", ccls[i], ckey[i], nm, tr, rhs.p);
           else if (const_has_flag(comp_const(c, ckey[i])))
             buf_printf(b, " case %d: if (!cst_%s__set) sp_raise_cls(\"NameError\", sp_sprintf("
                           "\"uninitialized constant %%s::%s\", %s(_t%d)));"
-                          " _t%d = %scst_%s; break;", ccls[i], ckey[i], nm, comp_class_display_fn(c), tk, tr, slot ? "&" : "", ckey[i]);
+                          " _t%d = %s; break;", ccls[i], ckey[i], nm, comp_class_display_fn(c), tk, tr, rhs.p);
           else
-            buf_printf(b, " case %d: _t%d = %scst_%s; break;", ccls[i], tr, slot ? "&" : "", ckey[i]);
+            buf_printf(b, " case %d: _t%d = %s; break;", ccls[i], tr, rhs.p);
+          free(rhs.p);
         }
         /* A class with no such constant is CRuby's NameError, not the
            leaf-named constant of some unrelated scope. */
@@ -3731,10 +3756,10 @@ static int emit_constant_value(Compiler *c, int id, Buf *b, Buf *checks, const N
           buf_puts(b, "; })");
         }
         else buf_printf(b, " } _t%d; })", tr);
-        free(ccls); free(ckey);
+        free(ccls); free(ckey); free(cty);
         return 1;
       }
-      free(ccls); free(ckey);
+      free(ccls); free(ckey); free(cty);
     } }
     LocalVar *cpcv = nm && !const_path_in_closed_builtin(c, id) && !const_path_misses_toplevel(c, id) ? comp_const(c, nm) : NULL;
     /* the slot of a flagged constant already read through its receiver (emit_const_recv_wrap) */

@@ -66,7 +66,8 @@ p Color.new(0.0, 0.0, 0.0, 0.0).white.red
 p Color.base.red
 p Pair.new(0).size
 
-# a subclass of the holder that writes the same name: its own value wins
+# a subclass of the holder that writes the same name: its own value wins,
+# and the holder's own (a Float beside the subclass's Integer) is still its
 Rim = Struct.new(:size) do
   def self.limit = self::LIMIT
 end
@@ -81,4 +82,5 @@ class BigRim < Rim
 end
 
 p BigRim.limit
+p Rim.limit
 p Cap::LIMIT

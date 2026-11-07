@@ -453,6 +453,16 @@ static inline const TyTraits *ty_traits_of(TyKind t) {
   return (int)t >= 0 && (int)t < TY_TRAITS_N ? &ty_traits[t] : (const TyTraits *)0;
 }
 
+/* A kind a value of which can be boxed into a poly value (emit_boxed_text):
+   a builtin kind whose row has a box, a String of either face, a user
+   object or an object array. An unsettled kind (TY_UNKNOWN) cannot. */
+static inline int ty_boxable(TyKind t) {
+  if (t == TY_STRING || t == TY_STRBUF) return 1;
+  const TyTraits *tr = ty_traits_of(t);
+  if (tr) return tr->box_text != 0;
+  return ty_is_object(t) || ty_is_obj_array(t);
+}
+
 /* A builtin kind held by a C pointer (a String handle, a Proc, a Regexp, an
    Array or Hash variant, an Exception, ...): its ctype ends in `*`. Against
    a different kind it is another C struct, a scalar, or an `sp_PtrArray *`

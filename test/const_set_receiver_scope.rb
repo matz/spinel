@@ -33,6 +33,7 @@ p Box.const_set(:G, 24), Box::G, G
 # Object's is the top-level constant
 Object.const_set(:H, 5)
 p H, Object::H
+p Object.present(:H)
 Object.const_set(:G, 2)
 p G, Values::G
 

@@ -283,12 +283,21 @@ static inline const char *nt_const_key_or_name(const NodeTable *nt, int node) {
   return k ? k : nt_str(nt, node, "name");
 }
 const char *elab_const_node_key(Compiler *c, int node);   /* the key of the value constant entity a write is of or a read names; NULL for none */
+const char *elab_const_owned_key(Compiler *c, int cls, const char *name);   /* the key of the value constant class cls (LR_MAIN: Object's own) holds under leaf name; NULL for none */
+int elab_const_descendant_writes(Compiler *c, int cls, const char *name);   /* does a descendant of cls write leaf name as its own */
 int elab_const_keys_gen(Compiler *c);   /* bumped each time elab_const_keys keys the entities: a cache by key is of one */
 /* Did the keys give the node a slot other than the name it carries (what a
    rename to the key did, which qc_orig_name then recorded)? */
 static inline int const_key_differs(Compiler *c, int node) {
   const char *k = elab_const_node_key(c, node), *n = nt_str(c->nt, node, "name");
   return k && n && !sp_streq(k, n);
+}
+/* Was the leaf of a constant path bound to one member's slot (the record
+   keyed it, const_key_differs, or the qualifying pass renamed it,
+   qc_orig_name)? Such a read is that member's: no run-time question of
+   which class the path's receiver holds (analyze_infer.c, codegen_expr.c). */
+static inline int const_leaf_bound(Compiler *c, int node) {
+  return nt_str(c->nt, node, "qc_orig_name") != 0 || const_key_differs(c, node);
 }
 /* the name a constant node's slot goes by: its entity's key, else the name it carries */
 static inline const char *const_key_at(Compiler *c, int node) {

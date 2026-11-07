@@ -9289,6 +9289,43 @@ void elab_const_keys(Compiler *c) {
   free(es);
 }
 
+/* Does a descendant of class cls write leaf `name` as its own value
+   constant? A read of `self::NAME` from cls's class method then goes by
+   the run-time class (const_get_recv_class_for, the switch of
+   codegen_expr.c). A class entity it writes (`class NAME`) is not one. */
+int elab_const_descendant_writes(Compiler *c, int cls, const char *name) {
+  LoadRecord *r = c->lrec;
+  if (!r || !name || cls < 0) return 0;
+  for (int k = 0; k < c->nclasses; k++) {
+    if (k == cls) continue;
+    int anc = 0;
+    for (int x = c->classes[k].parent, d = 0; x >= 0 && d < 64 && !anc; x = c->classes[x].parent, d++) anc = x == cls;
+    const LrHist *h = anc ? lr_hist(r, LR_KEY_CONST, lr_const_owner(k), name, 0) : NULL;
+    /* (a value's write: one elab_const_keys keyed as a value entity) */
+    for (int j = 0; h && j < h->n; j++) {
+      int n = h->v[j].node, ei = n >= 0 && n < r->ncent ? r->cent[n] - 1 : -1;
+      if (ei >= 0 && ei < r->nckey && r->ckey[ei]) return 1;
+    }
+  }
+  return 0;
+}
+/* The key of the value constant class cls (LR_MAIN for Object's own) holds
+   under leaf `name`: the entity of the record's constant history of (cls,
+   name), through the key elab_const_keys gave its writes; NULL for none
+   (no write of it, or an entity it keyed as a class) */
+const char *elab_const_owned_key(Compiler *c, int cls, const char *name) {
+  LoadRecord *r = c->lrec;
+  if (!r || !r->ckey || !name) return NULL;
+  /* (the program's Object, reopened, writes main's constants) */
+  if (cls >= 0 && cls == comp_core_class(c, CORE_OBJECT)) cls = LR_MAIN;
+  const LrHist *h = lr_hist(r, LR_KEY_CONST, lr_const_owner(cls), name, 0);
+  for (int j = 0; h && j < h->n; j++) {
+    int n = h->v[j].node;
+    int ei = n >= 0 && n < r->ncent ? r->cent[n] - 1 : -1;
+    if (ei >= 0 && ei < r->nckey && r->ckey[ei]) return r->ckey[ei];
+  }
+  return NULL;
+}
 /* The key of the value constant entity node is a write of or a read
    names, as elab_const_keys found it; NULL for none (a class's, one the
    record does not bind, a node made since) */

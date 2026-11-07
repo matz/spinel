@@ -1780,139 +1780,22 @@ TyKind hash_default_value_ty(Compiler *c, int dn) {
   return TY_UNKNOWN;
 }
 
-/* Is CONSTNAME written directly in the body of `class CLSNAME`? Constants live
-   in one flat namespace, so the AST is what says which class owns one -- what
-   const_defined?/const_get need for an `inherit: false` search (#3762).
-   Answers the name the write carries: CONSTNAME itself, or the qualified
-   `Mod__..__CONSTNAME` qualify_colliding_consts gave a constant whose leaf
-   another constant or class shares. */
-static const char *cn_body_const_key(const NodeTable *nt, int root, const char *constname, int top) {
-  if (root < 0) return NULL;
-  const char *ty = nt_type(nt, root);
-  NodeKind ty_k = nt_kind(nt, root);
-  if (ty) {
-    if (!top && (ty_k == NK_ClassNode || ty_k == NK_ModuleNode)) return NULL;
-    if (ty_k == NK_ConstantWriteNode) {
-      /* (the slot's key: const_key_at) */
-      const char *n = nt_const_key_or_name(nt, root);
-      size_t nl = n ? strlen(n) : 0, cl = strlen(constname);
-      if (n && (sp_streq(n, constname) ||
-                (nl > cl + 2 && !strncmp(n + nl - cl - 2, "__", 2) && sp_streq(n + nl - cl, constname) &&
-                 qc_const_qualified(n))))
-        return n;
-    }
-  }
-  int nr = nt_num_refs(nt, root);
-  for (int i = 0; i < nr; i++) {
-    const char *k = cn_body_const_key(nt, nt_ref_at(nt, root, i), constname, 0);
-    if (k) return k;
-  }
-  int na = nt_num_arrs(nt, root);
-  for (int i = 0; i < na; i++) {
-    int n = 0; const int *el = nt_arr_at(nt, root, i, &n);
-    for (int j = 0; j < n; j++) {
-      const char *k = cn_body_const_key(nt, el[j], constname, 0);
-      if (k) return k;
-    }
-  }
-  return NULL;
-}
-/* The ClassNodes and ModuleNodes of each name, ascending, and the body
-   answers const_value_owned_key gave per (class, constant) pair, kept while
-   the node table is unchanged (no node added, no field rewritten). A
-   runtime-name const_get is one literal arm per constant, and an arm on a
-   receiver known only at run time asks every class and each of its
-   ancestors: each ask walked the whole table. */
-static ANameHash g_cvo_names;          /* class or module name -> chain */
-static int *g_cvo_first, *g_cvo_next, *g_cvo_ids;
-static ANameHash g_cvo_memo;           /* "class\001constant" -> answer */
-static const char **g_cvo_ans;
-static const NodeTable *g_cvo_nt;
-static unsigned g_cvo_ver;
-static unsigned long g_cvo_edits;
-static int g_cvo_cnt = -1;
-static void cvo_reset(void) {
-  anh_free(&g_cvo_names); memset(&g_cvo_names, 0, sizeof g_cvo_names);
-  for (int i = 0; i < g_cvo_memo.n; i++) free((char *)g_cvo_memo.key[i]);
-  anh_free(&g_cvo_memo); memset(&g_cvo_memo, 0, sizeof g_cvo_memo);
-  free(g_cvo_first); free(g_cvo_next); free(g_cvo_ids); free(g_cvo_ans);
-  g_cvo_first = g_cvo_next = g_cvo_ids = NULL; g_cvo_ans = NULL;
-}
-static void cvo_build(const NodeTable *nt) {
-  cvo_reset();
-  int ncl = 0, nmo = 0;
-  const int *cl = nt_nodes_of_kind(nt, NK_ClassNode, &ncl);
-  const int *mo = nt_nodes_of_kind(nt, NK_ModuleNode, &nmo);
-  size_t n = (size_t)(ncl + nmo > 0 ? ncl + nmo : 1);
-  g_cvo_ids = malloc(sizeof(int) * n);
-  g_cvo_next = malloc(sizeof(int) * n);
-  g_cvo_first = malloc(sizeof(int) * n);
-  int *last = malloc(sizeof(int) * n);
-  if (!g_cvo_ids || !g_cvo_next || !g_cvo_first || !last) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-  /* both kinds merged in id order, the order a walk of the table meets them */
-  for (int i = 0, j = 0, p = 0; p < ncl + nmo; p++) {
-    int id = j >= nmo || (i < ncl && cl[i] < mo[j]) ? cl[i++] : mo[j++];
-    g_cvo_ids[p] = id; g_cvo_next[p] = -1;
-    /* a ClassNode carries its name through constant_path, not a name field */
-    int cp = nt_ref(nt, id, "constant_path");
-    const char *nm = cp >= 0 ? nt_str(nt, cp, "name") : nt_str(nt, id, "name");
-    if (!nm) continue;
-    int k = anh_find(&g_cvo_names, nm);
-    if (k < 0) { anh_add(&g_cvo_names, nm); k = g_cvo_names.n - 1; g_cvo_first[k] = p; }
-    else g_cvo_next[last[k]] = p;
-    last[k] = p;
-  }
-  free(last);
-  g_cvo_nt = nt; g_cvo_ver = nt->version; g_cvo_edits = nt->edits; g_cvo_cnt = nt->count;
-}
-/* The key of the first value constant CONSTNAME written directly in the body
-   of a `class`/`module CLSNAME`, or NULL. */
-static const char *cvo_body_key(const NodeTable *nt, const char *clsname, const char *constname) {
-  if (g_cvo_nt != nt || g_cvo_ver != nt->version || g_cvo_edits != nt->edits || g_cvo_cnt != nt->count)
-    cvo_build(nt);
-  size_t cl = strlen(clsname), kl = strlen(constname);
-  char *mk = malloc(cl + kl + 2);
-  if (!mk) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-  memcpy(mk, clsname, cl); mk[cl] = '\001'; memcpy(mk + cl + 1, constname, kl + 1);
-  int m = anh_find(&g_cvo_memo, mk);
-  if (m >= 0) { free(mk); return g_cvo_ans[m]; }
-  const char *key = NULL;
-  int k = anh_find(&g_cvo_names, clsname);
-  for (int p = k >= 0 ? g_cvo_first[k] : -1; p >= 0 && !key; p = g_cvo_next[p]) {
-    int body = nt_ref(nt, g_cvo_ids[p], "body");
-    key = body >= 0 ? cn_body_const_key(nt, body, constname, 1) : NULL;
-  }
-  anh_add(&g_cvo_memo, mk);
-  g_cvo_ans = realloc(g_cvo_ans, sizeof(char *) * (size_t)g_cvo_memo.cap);
-  if (!g_cvo_ans) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-  g_cvo_ans[g_cvo_memo.n - 1] = key;
-  return key;
-}
-/* The key of value constant CONSTNAME written directly in the body of class
-   or module RK (CG_OBJECT: Object, not reopened), or NULL when it holds none. */
+/* The key of the value constant class or module RK (CG_OBJECT: Object, not
+   reopened) holds under leaf CONSTNAME, by the load record: the entity its
+   writes in RK's bodies and through its path (`RK::CONSTNAME = v`, through
+   an alias of RK too) made, elab_const_owned_key. NULL when it holds none.
+   (A descendant writing the leaf as its own does not take it from RK: a
+   read whose receiver may be that descendant at run time, `self` in RK's
+   class method, is the caller's question, const_get_recv_class_for.) */
 static const char *const_value_owned_key(Compiler *c, int rk, const char *constname) {
-  const NodeTable *nt = c->nt;
-  const char *clsname = rk >= 0 ? c->classes[rk].name : rk == CG_OBJECT ? "Object" : NULL;
-  if (!clsname) return NULL;
-  const char *key = cvo_body_key(nt, clsname, constname);
-  if (key) return key;
-  /* ... or a path write through it (`Base::N = v`, or through an alias of
-     it), under the key the constant qualifier gave it. The qualifier
-     resolved the whole path (qc_owner): `Left::Base` is not a top-level
-     Base. */
-  const char *rn = class_ruby_name(c, rk);
-  if (!rn) return NULL;
-  static const NodeKind pw[] = { NK_ConstantPathWriteNode, NK_ConstantPathOrWriteNode,
-                                 NK_ConstantPathAndWriteNode, NK_ConstantPathOperatorWriteNode };
-  for (int i = 0; i < 4; i++)
-    NT_FOREACH_KIND(nt, pw[i], w) {
-      int t = nt_ref(nt, w, "target");
-      const char *on = t >= 0 ? nt_str(nt, t, "qc_orig_name") : NULL;
-      if (!on) on = t >= 0 ? nt_str(nt, t, "name") : NULL;
-      const char *own = t >= 0 ? nt_str(nt, t, "qc_owner") : NULL;
-      if (on && own && sp_streq(on, constname) && sp_streq(own, rn)) return const_key_at(c, t);
-    }
-  return NULL;
+  if (!constname) return NULL;
+  /* a qualified key (A__B__NM) passed as the name names the entity itself:
+     it is RK's when the record keys RK's NM so */
+  const char *leaf = constname, *q;
+  for (q = constname; (q = strstr(q, "__")); q += 2) leaf = q + 2;
+  const char *rec = elab_const_owned_key(c, rk, leaf);
+  if (!rec || (leaf != constname && !sp_streq(rec, constname))) return NULL;
+  return rec;
 }
 static int const_value_owned(Compiler *c, int rk, const char *constname) {
   return const_value_owned_key(c, rk, constname) != NULL;
@@ -1995,6 +1878,18 @@ int const_owned_by_class(Compiler *c, int rk, const char *constname) {
    for `self` the class or module whose method or body the call is in.
    Object, when no class of the program reopens it, is CG_OBJECT; a name
    the class table lacks, CG_UNTABLED; no receiver the call names, CG_NONE. */
+/* ...for a read of leaf NAME: `self` in a class method whose class a
+   descendant writes NAME as its own is the run-time class, not the method's
+   (CG_NONE: dynamic), as `self::NAME` and `self.const_get(:NAME)` find the
+   descendant's (#10787) */
+int const_get_recv_class_for(Compiler *c, int call, int recv, const char *name) {
+  int k = const_get_recv_class(c, call, recv);
+  if (k >= 0 && name && recv >= 0 && nt_kind(c->nt, recv) == NK_SelfNode) {
+    Scope *s = comp_scope_of(c, call);
+    if (s && s->is_cmethod && elab_const_descendant_writes(c, k, name)) return CG_NONE;
+  }
+  return k;
+}
 int const_get_recv_class(Compiler *c, int call, int recv) {
   const NodeTable *nt = c->nt;
   NodeKind rk = nt_kind(nt, recv);

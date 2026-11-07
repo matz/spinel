@@ -7284,7 +7284,7 @@ static int infer_universal_call(Compiler *c, int id, const NodeTable *nt, const 
     else if (cgt_k == NK_StringNode) cgn = nt_str(nt, argv[0], "content");
     /* const_get(name, false) searches only the receiver's own constants, so an
        inherited one is a NameError, not that constant's type (#3762) */
-    int cg_rk = cgn ? const_get_recv_class(c, id, recv) : CG_NONE;
+    int cg_rk = cgn ? const_get_recv_class_for(c, id, recv, cgn) : CG_NONE;
     if (cgn && argc >= 2 && nt_kind(nt, argv[1]) == NK_FalseNode) {
       if (cg_rk != CG_NONE && !const_owned_by_class(c, cg_rk, cgn)) { *out = TY_POLY; return 1; }
     }
@@ -10535,30 +10535,42 @@ static int infer_constant_path(Compiler *c, int id, const NodeTable *nt, NodeKin
           comp_const(c, pn)) dyn = 1;
     }
     TyKind prt = dyn ? infer_type(c, dpar) : TY_UNKNOWN;
-    if (nm && dyn && (prt == TY_CLASS || prt == TY_POLY)) {
-      TyKind ct = TY_UNKNOWN; int nc = 0, uniform = 1;
+    /* (a leaf bound to one member's slot, const_leaf_bound, is that
+       constant's: no run-time question) */
+    if (nm && dyn && (prt == TY_CLASS || prt == TY_POLY) && !const_leaf_bound(c, id)) {
+      TyKind ct = TY_UNKNOWN; int nc = 0, uniform = 1, boxable = 1;
       int *cands, ncands = comp_const_tail_cands(c, nm, &cands);
       /* (each class's own chain, and Object's top-level one) */
       int obj_k = comp_core_class(c, CORE_OBJECT);
       /* (a constant a value's path writes is read as before: by the classes
          that hold it themselves, then by its name) */
-      int through = const_written_through_value(c, nm);
+      int through = const_written_through_value(c, nm), dyn_cls1 = -1;
       for (int k = 0; k < c->nclasses; k++) {
         if (k == obj_k) continue;
         int ci2 = through ? comp_class_owned_const(c, k, nm, cands, ncands) : const_path_value_const(c, k, nm, cands, ncands);
         if (ci2 < 0) continue;
-        if (nc == 0) ct = c->consts[ci2].type;
+        if (nc == 0) { ct = c->consts[ci2].type; dyn_cls1 = k; }
         else if (c->consts[ci2].type != ct) uniform = 0;
+        if (!ty_boxable(c->consts[ci2].type)) boxable = 0;
         nc++;
       }
       free(cands);
+      /* (`self::NM` in the body of the one class holding NM, as the emitter
+         reads it plainly, codegen_expr.c) */
+      if (nc == 1 && dpar >= 0 && dpk == NK_SelfNode && self_class_body(c, dpar) == dyn_cls1 &&
+          !elab_const_descendant_writes(c, dyn_cls1, nm)) nc = 0;
       const LocalVar *topc = through ? NULL : const_value_path_top(c, nm);
       if (topc) {
         if (nc == 0) ct = topc->type;
         else if (topc->type != ct) uniform = 0;
+        if (!ty_boxable(topc->type)) boxable = 0;
         nc++;
       }
       if (nc > 0 && uniform && ct != TY_UNKNOWN) { *out = ct; return 1; }
+      /* constants of different kinds (a holder's Float LIMIT beside a
+         subclass's Integer one): the read is their box, whichever the class
+         owns (#10787) */
+      if (nc > 1 && !uniform && boxable) { *out = TY_POLY; return 1; }
     }
   }
   LocalVar *lv = nm && !const_path_in_closed_builtin(c, id) && !const_path_misses_toplevel(c, id) ? comp_const(c, nm) : NULL;

@@ -2260,6 +2260,7 @@ int        hash_new_blockless(Compiler *c, int recv);  /* blockless Hash.new / {
 enum { CG_OBJECT = -1, CG_NONE = -2, CG_UNTABLED = -3 };
 int        const_owned_by_class(Compiler *c, int rk, const char *constname);
 int        const_get_recv_class(Compiler *c, int call, int recv);
+int        const_get_recv_class_for(Compiler *c, int call, int recv, const char *name);   /* ...for a read of leaf name: self in a class method a descendant overrides the leaf in is dynamic (CG_NONE) */
 enum { CS_NONE, CS_SLOT, CS_AMBIG };            /* const_set_slot's answers */
 int        const_set_slot(Compiler *c, int call, const char *n, const char **key);
 const char *const_get_resolve(Compiler *c, int rk, const char *cgn, int *cls);

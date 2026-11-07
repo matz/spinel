@@ -1165,7 +1165,7 @@ int emit_call_reflection_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
     else if (cg_ak == NK_StringNode) cg_qm = nt_str(nt, argv[0], "content");
     /* const_get(name, false) searches only the receiver's own constants */
     int cg_own = 0;
-    int cg_rk = cg_qm ? const_get_recv_class(c, id, recv) : CG_NONE;
+    int cg_rk = cg_qm ? const_get_recv_class_for(c, id, recv, cg_qm) : CG_NONE;
     if (cg_qm && argc >= 2 && nt_kind(nt, argv[1]) == NK_FalseNode) {
       if (cg_rk != CG_NONE && !const_owned_by_class(c, cg_rk, cg_qm)) cg_own = 1;
     }

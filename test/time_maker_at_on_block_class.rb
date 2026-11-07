@@ -19,3 +19,9 @@ z.each { |k| begin; p k.at(0); rescue NoMethodError => e; p e.class; end }
 end
 def mk(k) = k.at((puts "arg2"; 0))
 begin; mk(Integer); rescue NoMethodError => e; p e.message; end
+# keyword values and a double splat run too, in order
+def mkw(k) = k.at((puts "a1"; 0), in: (puts "kw"; "+00:00"), **(puts "dsplat"; {}))
+begin; mkw(Integer); rescue NoMethodError => e; p e.message; end
+# more than 16 arguments that run code
+def m17(k) = k.at((print 1;0),(print 2;0),(print 3;0),(print 4;0),(print 5;0),(print 6;0),(print 7;0),(print 8;0),(print 9;0),(print 10;0),(print 11;0),(print 12;0),(print 13;0),(print 14;0),(print 15;0),(print 16;0),(puts 17;0))
+begin; m17(Integer); rescue NoMethodError => e; p e.message; end

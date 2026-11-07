@@ -16,3 +16,9 @@ arg
 "undefined method 'at' for class Integer"
 arg2
 "undefined method 'at' for class Integer"
+a1
+kw
+dsplat
+"undefined method 'at' for class Integer"
+1234567891011121314151617
+"undefined method 'at' for class Integer"

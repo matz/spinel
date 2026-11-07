@@ -47159,21 +47159,42 @@ static int rewrite_time_maker_class_value(Compiler *c) {
          the wrong count): an argument that can run code runs once ahead of
          the raise, as the Time arms run it in their own call */
       int aargc = 0; const int *aargv = args >= 0 ? nt_arr(nt, args, "arguments", &aargc) : NULL;
-      int ev[17], nev = 0;
-      for (int a = 0; a < aargc && nev < 16; a++) {
+      /* A keyword hash runs its keys and values in order, and a double
+         splat its operand */
+      size_t evcap = (size_t)aargc + 1;
+      for (int a = 0; a < aargc; a++)
+        if (nt_kind(nt, aargv[a]) == NK_KeywordHashNode) {
+          int en = 0; nt_arr(nt, aargv[a], "elements", &en);
+          evcap += 2 * (size_t)en;
+        }
+      int *ev = malloc(sizeof(int) * evcap), nev = 0;
+      if (!ev) continue;
+      for (int a = 0; a < aargc; a++) {
         NodeKind ak = nt_kind(nt, aargv[a]);
-        if (ak == NK_SplatNode || ak == NK_BlockArgumentNode || ak == NK_KeywordHashNode ||
+        if (ak == NK_KeywordHashNode) {
+          int en = 0; const int *els = nt_arr(nt, aargv[a], "elements", &en);
+          for (int e = 0; e < en; e++) {
+            int parts[2] = { -1, -1 };
+            if (nt_kind(nt, els[e]) == NK_AssocNode) { parts[0] = nt_ref(nt, els[e], "key"); parts[1] = nt_ref(nt, els[e], "value"); }
+            else if (nt_kind(nt, els[e]) == NK_AssocSplatNode) parts[0] = nt_ref(nt, els[e], "value");
+            for (int q = 0; q < 2; q++)
+              if (parts[q] >= 0 && subtree_has_side_effect(c, parts[q])) ev[nev++] = nt_clone_subtree(nt, parts[q]);
+          }
+          continue;
+        }
+        if (ak == NK_SplatNode || ak == NK_BlockArgumentNode ||
             ak == NK_ForwardingArgumentsNode || !subtree_has_side_effect(c, aargv[a])) continue;
         ev[nev++] = nt_clone_subtree(nt, aargv[a]);
       }
       if (nev > 0) {
         int st = tmcv_node(c, "StatementsNode", id), pn = tmcv_node(c, "ParenthesesNode", id);
-        if (st < 0 || pn < 0) continue;
+        if (st < 0 || pn < 0) { free(ev); continue; }
         ev[nev++] = tail;
         nt_node_set_arr(nt, st, "body", ev, nev);
         nt_node_set_ref(nt, pn, "body", st);
         tail = pn;
       }
+      free(ev);
     }
     /* Time's own arm */
     {

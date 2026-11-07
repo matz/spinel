@@ -2210,6 +2210,20 @@ const LocalVar *const_value_path_top(Compiler *c, const char *nm) {
    holds answered for every receiver (#9876). A receiver the class table
    lacks (a builtin module), a qualified N and a top-level N keep the
    answer the flat table gives. */
+/* `BasicObject.const_defined?(:N)`: BasicObject holds only its own name,
+   so a builtin's name (Struct, Thread) is not defined there. The receiver
+   is no class of the table (CG_UNTABLED) unless the program reopens it,
+   so const_defined_from cannot tell it from another builtin. */
+int const_defined_basic_object_misses(Compiler *c, int recv, const char *cgn) {
+  const NodeTable *nt = c->nt;
+  NodeKind k = recv >= 0 ? nt_kind(nt, recv) : NK_NONE;
+  if (k != NK_ConstantReadNode && !(k == NK_ConstantPathNode && nt_ref(nt, recv, "parent") < 0)) return 0;
+  const char *rn = nt_str(nt, recv, "name");
+  if (!rn || !sp_streq(rn, "BasicObject") || !cgn || sp_streq(cgn, "BasicObject")) return 0;
+  if (!is_builtin_toplevel_const(cgn) || const_name_resolves_top_level(c, cgn)) return 0;
+  int bk = comp_class_index(c, "BasicObject");
+  return bk < 0 || !const_seen_by_class(c, bk, cgn);
+}
 int const_defined_from(Compiler *c, int rk, const char *cgn) {
   if (!const_defined_known(c, rk, cgn)) return 0;
   /* a class below BasicObject reaches no Object, so no builtin's name

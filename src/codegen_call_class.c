@@ -1359,7 +1359,7 @@ int emit_call_reflection_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
         return 1;
       }
       int cd_rk = const_get_recv_class(c, id, recv);
-      int yes = const_defined_from(c, cd_rk, qm);
+      int yes = const_defined_from(c, cd_rk, qm) && !const_defined_basic_object_misses(c, recv, qm);
       /* const_defined?(name, false) restricts the search to the receiver's own
          constants, so an inherited one does not count (#3762) */
       if (yes && argc >= 2 && nt_kind(nt, argv[1]) == NK_FalseNode) {
@@ -4494,7 +4494,8 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
         }
         int vci = view_class_is(c, recv, ELAB_GAIN_CONSTS);   /* a class-tag arm's: as its class's literal */
         int lit0 = vci >= 0 || rk0 == NK_ConstantReadNode || rk0 == NK_ConstantPathNode;
-        int yes = lit0 ? const_defined_from(c, vci >= 0 ? vci : const_get_recv_class(c, id, recv), cn0)
+        int yes = lit0 ? const_defined_from(c, vci >= 0 ? vci : const_get_recv_class(c, id, recv), cn0) &&
+                         !(vci < 0 && const_defined_basic_object_misses(c, recv, cn0))
                        : const_defined_known(c, CG_NONE, cn0);
         /* a Class known only at run time: the classes that see the constant,
            as its literal form decides for one (#9876); a top-level one, or
@@ -4502,12 +4503,14 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
         /* a builtin's name: every class but those below BasicObject */
         if (!lit0 && yes && !strstr(cn0, "::") && !const_name_resolves_top_level(c, cn0) &&
             is_builtin_toplevel_const(cn0)) {
-          int nb = 0;
+          int nb = 0, bo = !sp_streq(cn0, "BasicObject") && comp_class_index(c, "BasicObject") < 0;
           for (int k = 0; k < c->nclasses; k++) nb += class_is_blank_slate(c, k) && !const_seen_by_class(c, k, cn0);
-          if (nb > 0) {
+          if (nb > 0 || bo) {
             int tc = ++g_tmp;
             buf_printf(b, "({ sp_Class _t%d = ", tc); emit_expr(c, recv, b);
             buf_puts(b, "; !(0");
+            /* BasicObject itself (no class of the table: its builtin id) */
+            if (bo) buf_printf(b, " || _t%d.cls_id == %d", tc, builtin_class_id("BasicObject"));
             for (int k = 0; k < c->nclasses; k++)
               if (class_is_blank_slate(c, k) && !const_seen_by_class(c, k, cn0)) buf_printf(b, " || _t%d.cls_id == %d", tc, k);
             buf_puts(b, "); })");

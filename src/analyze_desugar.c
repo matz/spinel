@@ -2825,7 +2825,7 @@ int desugar_dynamic_const_get_arms(Compiler *c) {
   CgCands cs = {0};
   cg_cands_collect(c, n0, &cs);
   char **cand = NULL;
-  for (int id = 0; id < n0 && cs.n > 0; id++) {
+  for (int id = 0; id < n0; id++) {
     if (nt_kind(nt, id) != NK_CallNode) continue;
     const char *nm = nt_str(nt, id, "name");
     const char *stash = nm ? dyn_const_arms_stash(nm, user_get, user_def) : NULL;

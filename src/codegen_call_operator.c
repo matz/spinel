@@ -1528,8 +1528,9 @@ static int emit_poly_reopened_binop(Compiler *c, int id, const char *name, int r
   for (int i = 0; i < 2; i++) {
     int k = comp_core_class(c, cn[i]);
     if (k < 0 || !class_is_prim_reopen(c, k)) continue;
-    int def = -1, mi = call_target(c, id, k, name, 0, &def);
-    if (mi < 0 || def != k || c->scopes[mi].nparams != 1 || c->scopes[mi].rest_idx >= 0) continue;
+    MethodLookup ml = { .def_class = -1 };
+    int mi = call_target(c, id, k, name, 0, &ml);
+    if (mi < 0 || ml.def_class != k || c->scopes[mi].nparams != 1 || c->scopes[mi].rest_idx >= 0) continue;
     mis[i] = mi;
   }
   if (mis[0] < 0 && mis[1] < 0) return 0;
@@ -2026,9 +2027,9 @@ int emit_call_operator_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, co
           /* (resolved as the dispatch resolves it, an alias of the name
              included: activesupport's `alias_method :+, :plus_with_duration`
              in Date dispatches to plus_with_duration) */
-          int dc = -1;
-          int kmi = call_target(c, id, k, name, 0, &dc);
-          if (kmi >= 0 && dc == k) ucall_observe(c, id, kmi, k, 1);
+          MethodLookup ml = { .def_class = -1 };
+          int kmi = call_target(c, id, k, name, 0, &ml);
+          if (kmi >= 0 && ml.def_class == k) ucall_observe(c, id, kmi, k, 1);
         }
       Buf pcall; memset(&pcall, 0, sizeof pcall);
       if (subtree_may_allocate(nt, argv[0])) {

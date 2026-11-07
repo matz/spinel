@@ -139,8 +139,9 @@ int cplan_bam_reopen_target(Compiler *c, int mi);
 /* The method scope call `id` runs when it asks for `name`: on cls's
    instance side through its chain, CT_CMETHOD on its class side, CT_OWN
    in cls's own table only, CT_TOP among the top-level functions (cls not
-   read; main's singleton methods first for a call on main); *def_class
-   (when asked) the class whose table holds it; -1 for none. The one place a site asks "what does this call run": it answers
+   read; main's singleton methods first for a call on main); ml->def_class
+   (when asked) the class whose table holds it, left as it was where none is
+   found; -1 for none. The one place a site asks "what does this call run": it answers
    from the tables by name (a redefined method's entry is its last
    definition), and binding a call to one of a method's versions (#9898)
    is decided here. `id` is -1 where a helper that serves calls is asked
@@ -160,7 +161,12 @@ enum { CT_CMETHOD = 1, CT_OWN = 2, CT_TOP = 4, CT_REACH = 8, CT_CAPTURE = 16 };
    version it runs; a method the language calls for the node keeps the
    last version. Super contributes the enclosing method's original name. */
 int call_node_names(Compiler *c, int id, const char *out[2]);
-int call_target(Compiler *c, int id, int cls, const char *name, unsigned flags, int *def_class);
+/* What call_target answers besides the scope: def_class, the class whose
+   table holds the method, written only where one is found, so a caller that
+   presets it finds it as it was. */
+typedef struct { int def_class; } MethodLookup;
+/* ml (NULL for a caller that wants the scope only) */
+int call_target(Compiler *c, int id, int cls, const char *name, unsigned flags, MethodLookup *ml);
 /* Does the Class row for call id, named name, on the class value recv answer
    the call? Not where a class method of the program's does (the plan binds
    it a target), nor where the row is a private method's and the call names
@@ -627,7 +633,7 @@ const PolyPlan *cplan_each_split(Compiler *c, int id);
 /* The arms of the class-method tag switch of a call on a poly receiver
    that may hold a Class (emit_unresolved_call): each class's class method
    of the name, or its proc form. Computed afresh. */
-int cplan_cmethod_arm(Compiler *c, int call, int k, const char *nm, int *dc, int *pfk);
+int cplan_cmethod_arm(Compiler *c, int call, int k, const char *nm, MethodLookup *ml, int *pfk);
 const PolyPlan *cplan_poly_cmeth(Compiler *c, int id);
 /* cplan_poly_cmeth's class-value trial arms alone (pa_class_value_trial),
    without the cost of asking every class for a class method of the name.

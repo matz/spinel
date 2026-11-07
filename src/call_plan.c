@@ -1537,8 +1537,8 @@ unsigned cplan_target_store_effect(Compiler *c, int tgt) {
   int open = rt == TY_POLY || rt == TY_UNKNOWN, cls = ty_is_object(rt) ? ty_object_class(rt) : -1;
   if (k == NK_CallTargetNode) {
     const char *nm = nt_str(nt, tgt, "name");
-    int dc = -1;
-    return open || (nm && cls >= 0 && call_target(c, tgt, cls, nm, 0, &dc) >= 0 && dc >= 0) ? CPS_CODE : 0;
+    MethodLookup ml = { .def_class = -1 };
+    return open || (nm && cls >= 0 && call_target(c, tgt, cls, nm, 0, &ml) >= 0 && ml.def_class >= 0) ? CPS_CODE : 0;
   }
   int args = nt_ref(nt, tgt, "arguments"), n = 0;
   const int *keys = args >= 0 ? nt_arr(nt, args, "arguments", &n) : NULL;
@@ -2021,7 +2021,8 @@ static int ct_lookup(Compiler *c, int id, int cls, const char *name, unsigned *f
   if ((*flags & CT_TOP) && mi >= 0 && c->scopes[mi].is_cmethod) *flags |= CT_CMETHOD;
   return mi;
 }
-int call_target(Compiler *c, int id, int cls, const char *name, unsigned flags, int *def_class) {
+int call_target(Compiler *c, int id, int cls, const char *name, unsigned flags, MethodLookup *ml) {
+  int *def_class = ml ? &ml->def_class : NULL;
   if (ct_send_shadow(c, id, name)) return -1;
   int dc0 = def_class ? *def_class : -1, mi = ct_lookup(c, id, cls, name, &flags, def_class), pin;
   if (mi < 0 || id < 0 || (!(flags & (CT_REACH | CT_CAPTURE)) && !ct_calls(c, id, name))) return mi;
@@ -2063,7 +2064,8 @@ int cplan_own_class_reflection(Compiler *c, int id, int recv, const char *name) 
   int r = 0;
   for (int i = 0; name && R[i]; i++) if (sp_streq(name, R[i])) { r = 1; break; }
   int ci = r && recv >= 0 ? class_recv_static_ci(c, recv) : -1;
-  int dc = -1, mi = ci >= 0 ? call_target(c, id, ci, name, CT_CMETHOD, &dc) : -1;
+  MethodLookup ml = { .def_class = -1 };
+  int mi = ci >= 0 ? call_target(c, id, ci, name, CT_CMETHOD, &ml) : -1, dc = ml.def_class;
   if (mi < 0) return 0;
   if (!scope_calls_super(c, mi)) return 1;
   /* (emit_super answers a bare super of these three) */
@@ -4167,8 +4169,8 @@ static void cpoly_user_arms0(Compiler *c, int id, const char *name, TyKind ret, 
         cpoly_add(p, &cap, PA_ARITY, k, -1, TY_UNKNOWN, PC_VOID);
       continue;
     }
-    int defcls = -1;
-    int mi = call_target(c, id, k, name, 0, &defcls);
+    MethodLookup ml = { .def_class = -1 };
+    int mi = call_target(c, id, k, name, 0, &ml), defcls = ml.def_class;
     /* an exception class with no method of its own for the name takes
        the builtin reopening's (`class Exception; def brief`) */
     if (mi < 0 && any_exc_reopen(c) && (class_has_exc_name(c, k) || class_is_exc_subclass(c, k))) {
@@ -4380,10 +4382,11 @@ static void cpoly_cases_n(Compiler *c, int id, const char *name, int argc, const
 static int cpoly_obj_default_n(Compiler *c, int id, const char *name, int kwh, int pos_argc, int splat_a,
                                PolyPlan *p, int *cap) {
   if (builtin_object_method_known(name) || builtin_instance_name_known(name)) return 0;
-  int obj_cls = comp_core_class(c, CORE_OBJECT), obj_def = -1;
-  int obj_mi = obj_cls >= 0 ? call_target(c, id, obj_cls, name, 0, &obj_def) : -1;
+  MethodLookup ml = { .def_class = -1 };
+  int obj_cls = comp_core_class(c, CORE_OBJECT);
+  int obj_mi = obj_cls >= 0 ? call_target(c, id, obj_cls, name, 0, &ml) : -1;
   char exp[600];
-  if (obj_mi < 0 || obj_def != obj_cls ||
+  if (obj_mi < 0 || ml.def_class != obj_cls ||
       poly_arm_count(c, &c->scopes[obj_mi], kwh, pos_argc, splat_a, exp, sizeof exp) >= 0)
     return 0;
   /* send reaches a private one; an explicit receiver does not, and every
@@ -4570,8 +4573,8 @@ static void cpoly_user_arms_n(Compiler *c, int id, const char *name, int argc, c
       if (fit) cpoly_add(p, &cap, PA_NATIVE, k, -1, TY_UNKNOWN, PC_SAME);
       continue;
     }
-    int defcls = -1;
-    int mi = call_target(c, id, k, name, 0, &defcls);
+    MethodLookup ml = { .def_class = -1 };
+    int mi = call_target(c, id, k, name, 0, &ml), defcls = ml.def_class;
     if (mi < 0 && any_exc_reopen(c) && (class_has_exc_name(c, k) || class_is_exc_subclass(c, k))) {
       int xd = exc_arm_definer(c, k, name);
       if (xd >= 0) { defcls = xd; mi = call_target(c, id, xd, name, 0, NULL); }
@@ -4606,10 +4609,10 @@ static void cpoly_user_arms_n(Compiler *c, int id, const char *name, int argc, c
 static void cpoly_obj_default0(Compiler *c, int id, const char *name, TyKind ret, PolyPlan *p, int *cap) {
   int obj_cls = comp_core_class(c, CORE_OBJECT);
   if (obj_cls < 0) return;
-  int obj_def = -1;
-  int obj_mi = call_target(c, id, obj_cls, name, 0, &obj_def);
+  MethodLookup ml = { .def_class = -1 };
+  int obj_mi = call_target(c, id, obj_cls, name, 0, &ml);
   int blk = nt_ref(c->nt, id, "block");
-  int obj_pf = obj_mi >= 0 && obj_def == obj_cls && c->scopes[obj_mi].yields && blk >= 0
+  int obj_pf = obj_mi >= 0 && ml.def_class == obj_cls && c->scopes[obj_mi].yields && blk >= 0
                ? scope_proc_form_of(c, obj_mi) : -1;
   if (obj_pf >= 0 && (c->scopes[obj_pf].nparams != 0 || c->scopes[obj_pf].rest_idx >= 0)) obj_pf = -1;
   if (obj_pf >= 0 && resolve_forwarded_block(c, blk) < 0) obj_pf = -1;
@@ -4619,13 +4622,13 @@ static void cpoly_obj_default0(Compiler *c, int id, const char *name, TyKind ret
     cpoly_add(p, cap, PA_PROC_FORM, PA_KEY_DEFAULT, obj_mi, ps->ret,
               method_is_void(ps) ? PC_VOID : cpoly_conv(ret, ps->ret));
   }
-  else if (obj_mi >= 0 && obj_def == obj_cls && c->scopes[obj_mi].nrequired == 0 &&
+  else if (obj_mi >= 0 && ml.def_class == obj_cls && c->scopes[obj_mi].nrequired == 0 &&
            scope_has_callable_symbol(c, obj_mi)) {
     Scope *ms = &c->scopes[obj_mi];
     cpoly_add(p, cap, PA_USER, PA_KEY_DEFAULT, obj_mi, ms->ret,
               method_is_void(ms) ? PC_VOID : cpoly_conv(ret, ms->ret));
   }
-  else if (obj_def == obj_cls && poly_arm_refuses_none(c, obj_mi, oexp, sizeof oexp))
+  else if (ml.def_class == obj_cls && poly_arm_refuses_none(c, obj_mi, oexp, sizeof oexp))
     cpoly_add(p, cap, PA_ARITY, PA_KEY_DEFAULT, obj_mi, TY_UNKNOWN, PC_VOID);
 }
 
@@ -5153,8 +5156,8 @@ int cplan_cmethod_visible(Compiler *c, int id, int ci, const char *name) {
    emit_unresolved_call's), or -1 when it has no arm there. A yielding class
    method has no symbol of its own; its proc-form clone is the arm, taking
    the block as a proc (#3399), through *pfk. */
-int cplan_cmethod_arm(Compiler *c, int call, int k, const char *nm, int *dc, int *pfk) {
-  int mi = call_target(c, call, k, nm, CT_CMETHOD, dc);
+int cplan_cmethod_arm(Compiler *c, int call, int k, const char *nm, MethodLookup *ml, int *pfk) {
+  int mi = call_target(c, call, k, nm, CT_CMETHOD, ml);
   if (mi < 0) return -1;
   int pf = scope_proc_form_of(c, mi);
   if (pf >= 0 && !proc_form_live(c, pf)) pf = -1;

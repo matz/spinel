@@ -1556,12 +1556,12 @@ static void ffi_arg_hold(Buf *call, size_t at, Buf *pre, int tb, int ai) {
    or -1 for the receiver's own. CRuby: attr_accessor defines an ordinary
    writer method. */
 static int attr_writer_field(Compiler *c, int call, int arc, const char *base, const char *name, int *defc) {
-  int awmdc = -1;
+  MethodLookup ml = { .def_class = -1 };
   *defc = -1;
   int awins = comp_writer_in_chain(c, arc, base, defc);
-  if (awins && call_target(c, call, arc, name, 0, &awmdc) >= 0) {
+  if (awins && call_target(c, call, arc, name, 0, &ml) >= 0) {
     for (int k = arc; k >= 0; k = c->classes[k].parent) {
-      if (k == awmdc) { awins = 0; break; }
+      if (k == ml.def_class) { awins = 0; break; }
       if (k == *defc) { awins = 1; break; }
     }
   }
@@ -2665,10 +2665,10 @@ int emit_call_cmethod_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
   if (recv >= 0) {
     int fold_ci = comp_sg_reader_const(c, recv);
     if (fold_ci >= 0) {
-      int defcls = -1;
-      int mi = call_target(c, id, fold_ci, name, CT_CMETHOD, &defcls);
+      MethodLookup ml = { .def_class = -1 };
+      int mi = call_target(c, id, fold_ci, name, CT_CMETHOD, &ml);
       if (mi >= 0) {
-        nd_callee(c, id, mi, defcls, 0);
+        nd_callee(c, id, mi, ml.def_class, 0);
         int w0 = node_is_oint(c, id);
         cm_ret_open(&c->scopes[mi], w0, b);
         buf_printf(b, "%s(", mc_method(c, &c->scopes[mi]));
@@ -2717,14 +2717,14 @@ int emit_call_cmethod_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
         buf_printf(b, "({ int _t%d = (", tcid); emit_expr(c, recv, b); buf_puts(b, ").cls_id; ");
         nd_stamp(id, ND_SWITCH);
         for (int k = 0; k < ncand; k++) {
-          int defcls = -1;
-          int mi = call_target(c, id, cand[k], name, CT_CMETHOD, &defcls);
-          if (mi >= 0) nd_callee(c, id, mi, defcls, 1);
+          MethodLookup ml = { .def_class = -1 };
+          int mi = call_target(c, id, cand[k], name, CT_CMETHOD, &ml);
+          if (mi >= 0) nd_callee(c, id, mi, ml.def_class, 1);
         }
         if (void_res) {
           for (int k = 0; k < ncand; k++) {
-            int defcls = -1;
-            int mi = call_target(c, id, cand[k], name, CT_CMETHOD, &defcls);
+            MethodLookup ml = { .def_class = -1 };
+            int mi = call_target(c, id, cand[k], name, CT_CMETHOD, &ml);
             if (mi < 0) continue;
             buf_printf(b, "if (_t%d == %d) %s(", tcid, cand[k], mc_method(c, &c->scopes[mi]));
             { const char *leadv = emit_cmethod_self_cls_arg(c, mi, cand[k], b);
@@ -2740,8 +2740,8 @@ int emit_call_cmethod_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
         if (wr) buf_printf(b, "%s _t%d_r = %s; ", oint_ctype(res), tcid, oint_nil(res));
         else { emit_ctype(c, res, b); buf_printf(b, " _t%d_r = %s; ", tcid, default_value_from_compiler(c, res)); }
         for (int k = 0; k < ncand; k++) {
-          int defcls = -1;
-          int mi = call_target(c, id, cand[k], name, CT_CMETHOD, &defcls);
+          MethodLookup ml = { .def_class = -1 };
+          int mi = call_target(c, id, cand[k], name, CT_CMETHOD, &ml);
           if (mi < 0) continue;
           buf_printf(b, "if (_t%d == %d) _t%d_r = ", tcid, cand[k], tcid);
           if (rr.kind == RK_BOXED && c->scopes[mi].ret != TY_POLY) {
@@ -2796,10 +2796,11 @@ int emit_call_const_cmethod_arms(Compiler *c, int id, Buf *b, const NodeTable *n
          plan it is the arm's answer */
       if (g_plan_check || mi < 0) {
         int oci = const_node_class_index(c, recv);
-        int odef = -1;
+        MethodLookup ml = { .def_class = -1 };
         /* (a `new`: the one the call reaches, cplan_user_new, which may be
            the builtin constructor ahead of a later `def self.new`) */
-        int omi = oci < 0 ? -1 : is_new_name(name) ? cplan_user_new(c, id, oci) : call_target(c, id, oci, name, CT_CMETHOD, &odef);
+        int omi = oci < 0 ? -1 : is_new_name(name) ? cplan_user_new(c, id, oci) : call_target(c, id, oci, name, CT_CMETHOD, &ml);
+        int odef = ml.def_class;
         if (omi >= 0 && is_new_name(name)) odef = c->scopes[omi].class_id;
         if (omi < 0 && (omi = class_reopen_cmethod(c, id, recv, name)) >= 0) {
           odef = c->scopes[omi].class_id;
@@ -4023,9 +4024,10 @@ static int exc_cls_pick_class(Compiler *c, int k) {
 static int exc_cls_name_definers(Compiler *c, int id, const char *name, int str_only) {
   int n = 0;
   for (int k = 0; k < c->nclasses; k++) {
-    int dc = -1, kmi = call_target(c, id, k, name, CT_CMETHOD, &dc);
+    MethodLookup ml = { .def_class = -1 };
+    int kmi = call_target(c, id, k, name, CT_CMETHOD, &ml);
     if (!exc_cls_pick_class(c, k)) continue;
-    if (kmi < 0 || dc != k || comp_scope_copied_away(c, kmi) || c->scopes[kmi].nparams > 0) continue;
+    if (kmi < 0 || ml.def_class != k || comp_scope_copied_away(c, kmi) || c->scopes[kmi].nparams > 0) continue;
     if (str_only && c->scopes[kmi].ret != TY_STRING) return 0;
     n++;
   }
@@ -4045,8 +4047,9 @@ static void emit_exc_cls_name_pick(Compiler *c, int id, const char *name, int tk
   int xk[32], xm[32], xn = 0;
   for (int k = 0; k < c->nclasses && xn < 32; k++) {
     if (!exc_cls_pick_class(c, k)) continue;
-    int dc = -1, kmi = call_target(c, id, k, name, CT_CMETHOD, &dc);
-    if (kmi < 0 || dc != k || comp_scope_copied_away(c, kmi) || c->scopes[kmi].nparams > 0) continue;
+    MethodLookup ml = { .def_class = -1 };
+    int kmi = call_target(c, id, k, name, CT_CMETHOD, &ml);
+    if (kmi < 0 || ml.def_class != k || comp_scope_copied_away(c, kmi) || c->scopes[kmi].nparams > 0) continue;
     xk[xn] = k; xm[xn] = kmi; xn++;
   }
   if (!xn) return;
@@ -5047,8 +5050,7 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
                from, is no class value: its singleton copy is not compiled
                (#10592), so an arm calling it would dangle */
             if (!class_value_possible(c, k)) continue;
-            int defcls9 = -1;
-            int kmi = call_target(c, id, k, name, CT_CMETHOD, &defcls9);
+            int kmi = call_target(c, id, k, name, CT_CMETHOD, NULL);
             if (kmi < 0) continue;
             /* a method copied into each class a value can hold is not emitted
                itself: no value holds a class that answers by it */
@@ -5495,9 +5497,9 @@ int emit_call_class_method_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
            alias fetch_entry lookup; end`, names no method of its own) */
         int nimpl = 0;
         for (int k = 0; k < c->nclasses; k++) {
-          int kdef = -1;
+          MethodLookup ml = { .def_class = -1 };
           if (!is_descendant(c, k, cid)) continue;
-          if (call_target(c, id, k, name, CT_CMETHOD, &kdef) >= 0 && kdef == k) nimpl++;
+          if (call_target(c, id, k, name, CT_CMETHOD, &ml) >= 0 && ml.def_class == k) nimpl++;
         }
         TyKind cret = (TyKind)c->scopes[defmi].ret;
         /* Stash the receiver object in a temp (referenced in every switch case) */

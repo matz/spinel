@@ -19806,10 +19806,11 @@ static void reject_range_reopen_nonint(Compiler *c) {
     if (!name || nt_int(nt, id, "builtin_only", 0)) continue;
     Scope *sc = comp_scope_of(c, id);
     if (sc && !sc->reachable) continue;
-    int dc = -1, mi = call_target(c, id, rci, name, 0, &dc);
+    MethodLookup ml = { .def_class = -1 };
+    int mi = call_target(c, id, rci, name, 0, &ml);
     if (mi < 0) continue;
     /* (the builtin's own method stays in front of an included module's) */
-    if (!c->scopes[mi].is_prepend_copy && dc != rci && builtin_method_known("Range", name)) continue;
+    if (!c->scopes[mi].is_prepend_copy && ml.def_class != rci && builtin_method_known("Range", name)) continue;
     if (c->scopes[mi].is_include_copy && !c->scopes[mi].is_prepend_copy && builtin_method_known("Range", name)) continue;
     unsupported_feature(c, id, rk == TY_STR_RANGE
       ? "a method the program defines in Range, called on a Range of Strings: only an Integer Range runs it"

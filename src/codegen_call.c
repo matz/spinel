@@ -17963,9 +17963,10 @@ static int emit_array_arith_call(Compiler *c, int id, Buf *b) {
       (rt == TY_INT || rt == TY_FLOAT || rt == TY_RATIONAL || rt == TY_BIGINT) &&
       ty_is_object(a0) && is_arith_op(name)) {
     int acls = ty_object_class(a0);
-    int coerce_def = -1, op_def = -1;
+    MethodLookup ml = { .def_class = -1 };
+    int coerce_def = -1;
     int coerce_mi = comp_method_in_chain(c, acls, "coerce", &coerce_def);
-    int op_mi = call_target(c, id, acls, name, 0, &op_def);
+    int op_mi = call_target(c, id, acls, name, 0, &ml);
     if (coerce_mi >= 0 && op_mi >= 0) {
       int tp = ++g_tmp;
       buf_printf(b, "({ sp_PolyArray *_t%d = %s(", tp, mc_method(c, &c->scopes[coerce_mi]));
@@ -17975,7 +17976,7 @@ static int emit_array_arith_call(Compiler *c, int id, Buf *b) {
       buf_printf(b, "); SP_GC_ROOT(_t%d); ", tp);
       /* a = pair[0] (the coercing class); dispatch a.<op>(b). */
       buf_printf(b, "%s((sp_%s *)_t%d->data[0].v.p, ",
-                 mc_method(c, &c->scopes[op_mi]), c->classes[op_def].c_name, tp);
+                 mc_method(c, &c->scopes[op_mi]), c->classes[ml.def_class].c_name, tp);
       /* b = pair[1], coerced to the op method's first parameter type. */
       TyKind pt = TY_POLY;
       if (c->scopes[op_mi].nparams > 0) {
@@ -21695,8 +21696,9 @@ int emit_hash_new_arg_guard(Compiler *c, int id, Buf *b) {
 static int range_redefines(Compiler *c, int id, const char *name) {
   int rci = comp_core_class(c, CORE_RANGE);
   if (rci < 0) return 0;
-  int dc = -1, mi = call_target(c, id, rci, name, 0, &dc);
-  return mi >= 0 && (c->scopes[mi].is_prepend_copy || dc == rci);
+  MethodLookup ml = { .def_class = -1 };
+  int mi = call_target(c, id, rci, name, 0, &ml);
+  return mi >= 0 && (c->scopes[mi].is_prepend_copy || ml.def_class == rci);
 }
 
 static int emit_range_literal_cover(Compiler *c, int id, Buf *b) {
@@ -24063,8 +24065,9 @@ int emit_unresolved_call(Compiler *c, int id, Buf *b) {
         int nsg = 0;
         for (int k = 0; k < c->nclasses; k++) {
           if (cls_sg_accessor_first(c, id, k, nm, argc)) { nsg++; continue; }
-          int dc = -1, pfk = -1;
-          int mi = cplan_cmethod_arm(c, id, k, nm, &dc, &pfk);
+          MethodLookup ml = { .def_class = -1 };
+          int pfk = -1;
+          int mi = cplan_cmethod_arm(c, id, k, nm, &ml, &pfk);
           if (mi < 0) continue;
           /* A class method that cannot take this call's arguments is still
              the one a value of its class calls: CRuby raises its
@@ -24073,7 +24076,7 @@ int emit_unresolved_call(Compiler *c, int id, Buf *b) {
              prelude and fired before the tag was tested) sent that class to
              the default's NoMethodError; each arm now keeps its prelude to
              itself (below). */
-          ccls[nc] = k; cmi[nc] = mi; cdef[nc] = dc; cpf[nc] = pfk; nc++;
+          ccls[nc] = k; cmi[nc] = mi; cdef[nc] = ml.def_class; cpf[nc] = pfk; nc++;
         }
         if (nc > 0) {
           /* The receiver first, into a rooted temp of its own: Ruby evaluates
@@ -26414,8 +26417,9 @@ int reopen_override_block_ok(Compiler *c, int id) {
     TyKind rt = r >= 0 ? comp_ntype(c, r) : TY_UNKNOWN;
     if (nm && (ty_is_array(rt) || ty_is_obj_array(rt) || ty_is_hash(rt) || rt == TY_RANGE)) {
       int aci = comp_core_class(c, ty_is_hash(rt) ? CORE_HASH : rt == TY_RANGE ? CORE_RANGE : CORE_ARRAY);
-      int adc = -1, ami = aci >= 0 ? call_target(c, id, aci, nm, 0, &adc) : -1;
-      if (ami >= 0 && adc == aci && c->scopes[ami].name && sp_streq(c->scopes[ami].name, nm))
+      MethodLookup ml = { .def_class = -1 };
+      int ami = aci >= 0 ? call_target(c, id, aci, nm, 0, &ml) : -1;
+      if (ami >= 0 && ml.def_class == aci && c->scopes[ami].name && sp_streq(c->scopes[ami].name, nm))
         return !c->scopes[ami].yields || ((ty_is_array(rt) || ty_is_obj_array(rt)) && sp_streq(nm, "concat"));
     } }
   if (nt_kind(c->nt, blk) != NK_BlockNode) return 0;
@@ -27623,9 +27627,11 @@ int cplan_nil_closed_method(Compiler *c, int call, const char *name, int *vis) {
       if (nk >= 0 && comp_method_vis_declared(c, nk, name, &at) == SP_VIS_PUBLIC && at == nk) return -1;
     }
     int k = owners[i] == -2 ? oc : comp_core_class(c, owners[i]);
-    int dc = -1, mi;
+    MethodLookup ml = { .def_class = -1 };
+    int mi;
     if (owners[i] == -2) mi = call_target(c, call, -1, name, CT_TOP, NULL);
-    else mi = k >= 0 ? call_target(c, call, k, name, 0, &dc) : -1;
+    else mi = k >= 0 ? call_target(c, call, k, name, 0, &ml) : -1;
+    int dc = ml.def_class;
     if (mi < 0) continue;
     /* (a top-level def is Object's private method until `public :name`;
        a program that never reopens Object has no table for it) */
@@ -30569,12 +30575,13 @@ int implicit_self_reader_cid(Compiler *c, int id) {
   int dispatch_cid = (g_ie_class_id >= 0) ? g_ie_class_id
                    : (g_emitting_class_id >= 0) ? g_emitting_class_id : self->class_id;
   if (dispatch_cid < 0) return -1;
-  int rd_cls = -1, m_cls = -1;
+  MethodLookup ml = { .def_class = -1 };
+  int rd_cls = -1;
   if (!comp_reader_in_chain(c, dispatch_cid, name, &rd_cls)) return -1;
   /* a def in the reader's class or below it overrides the reader: `def start`
      in a class that includes a module's `attr_reader :start` */
-  if (call_target(c, id, dispatch_cid, name, 0, &m_cls) >= 0 &&
-      (m_cls == rd_cls || is_descendant(c, m_cls, rd_cls)))
+  if (call_target(c, id, dispatch_cid, name, 0, &ml) >= 0 &&
+      (ml.def_class == rd_cls || is_descendant(c, ml.def_class, rd_cls)))
     return -1;
   return dispatch_cid;
 }
@@ -34140,8 +34147,9 @@ static int emit_array_hash_reopen_call(Compiler *c, int id, int recv, TyKind rt,
   if (!ty_is_array(rt) && !ty_is_obj_array(rt) && !ty_is_hash(rt)) return 0;
   const char *acn = ty_is_hash(rt) ? "Hash" : "Array";
   int aci = comp_class_index(c, acn);
-  int adc = -1, ami = aci >= 0 ? call_target(c, id, aci, nm, 0, &adc) : -1;
-  if (ami < 0 || adc != aci || !c->scopes[ami].name || !sp_streq(c->scopes[ami].name, nm)) return 0;
+  MethodLookup ml = { .def_class = -1 };
+  int ami = aci >= 0 ? call_target(c, id, aci, nm, 0, &ml) : -1;
+  if (ami < 0 || ml.def_class != aci || !c->scopes[ami].name || !sp_streq(c->scopes[ami].name, nm)) return 0;
   if (cplan_reopen_runs_builtin(c, id, ami)) return 0;
   if (c->scopes[ami].yields && emit_reopen_block_call(c, id, recv, ami, NULL, b)) return 1;
   if (g_plan_check) ucall_observe(c, id, ami, aci, 0);

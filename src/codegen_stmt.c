@@ -6650,9 +6650,9 @@ static void emit_op_assign_lv(Compiler *c, int id, Buf *b, int indent,
       return;
   }
   if (ty_is_object(t)) {
-    int defcls2 = -1;
+    MethodLookup ml = { .def_class = -1 };
     int cid2 = ty_object_class(t);
-    int mi2 = call_target(c, id, cid2, op, 0, &defcls2);
+    int mi2 = call_target(c, id, cid2, op, 0, &ml);
     if (mi2 >= 0) {
       Scope *ms2 = &c->scopes[mi2];
       LocalVar *p2 = ms2->nparams >= 1 ? scope_local(ms2, ms2->pnames[0]) : NULL;
@@ -6668,7 +6668,7 @@ static void emit_op_assign_lv(Compiler *c, int id, Buf *b, int indent,
       buf_puts(g_pre, ";\n");
       buf_printf(b, "%s = %s((sp_%s *)%s, _t%d);\n",
                  lval, mc_method(c, ms2),
-                 c->classes[defcls2].c_name, rd, atmp2);
+                 c->classes[ml.def_class].c_name, rd, atmp2);
       return;
     }
   }
@@ -16975,8 +16975,9 @@ static int masgn_writer_takes_nil(Compiler *c, int tgt) {
   int recv = nm ? nt_ref(nt, tgt, "receiver") : -1;
   TyKind rt = recv >= 0 ? comp_ntype(c, recv) : TY_UNKNOWN;
   if (!ty_is_object(rt)) return 1;
-  int crc = ty_object_class(rt), cdef = -1;
-  int wmi = call_target(c, tgt, crc, nm, 0, &cdef);
+  MethodLookup ml = { .def_class = -1 };
+  int crc = ty_object_class(rt);
+  int wmi = call_target(c, tgt, crc, nm, 0, &ml);
   if (wmi >= 0) {
     const LocalVar *wp = c->scopes[wmi].nparams >= 1 ? scope_local(&c->scopes[wmi], c->scopes[wmi].pnames[0]) : NULL;
     return !wp || slot_is_oint(wp) || wp->type == TY_POLY;
@@ -17578,8 +17579,8 @@ static int masgn_store(Compiler *c, int id, const MasgnTmps *mt, int tgt, const 
     }
     if (!ty_is_object(crt)) { unsupported(c, id, "multiple assignment call target non-object"); return 1; }
     int crc = ty_object_class(crt);
-    int cdef = -1;
-    int wmi = call_target(c, tgt, crc, nm, 0, &cdef);
+    MethodLookup ml = { .def_class = -1 };
+    int wmi = call_target(c, tgt, crc, nm, 0, &ml);
     masgn_recv_guard(c, crecv, recv_tmp, nm, indent, b);
     emit_indent(b, indent);
     /* a writer a native class binds (`native_method :x=, [:float], ...`):
@@ -17597,9 +17598,9 @@ static int masgn_store(Compiler *c, int id, const MasgnTmps *mt, int tgt, const 
       buf_puts(b, ");\n");
       return 1;
     }
-    if (wmi >= 0 && cdef >= 0) {
+    if (wmi >= 0 && ml.def_class >= 0) {
       LocalVar *wp = c->scopes[wmi].nparams >= 1 ? scope_local(&c->scopes[wmi], c->scopes[wmi].pnames[0]) : NULL;
-      buf_printf(b, "%s((sp_%s *)", mc_method(c, &c->scopes[wmi]), c->classes[cdef].c_name);
+      buf_printf(b, "%s((sp_%s *)", mc_method(c, &c->scopes[wmi]), c->classes[ml.def_class].c_name);
       emit_node_or_tmp(c, crecv, recv_tmp, b); buf_puts(b, ", ");
       masgn_conv_param(c, id, wp, vt, val, b);
       buf_puts(b, ");\n");
@@ -20741,9 +20742,9 @@ static int emit_ivar_cvar_write_stmt(Compiler *c, int id, Buf *b, int indent, co
     }
     else if (emit_array_op_assign(c, ref, vt, op, nt_ref(nt, id, "value"), b)) { }
     else if (op && ty_is_object(vt)) {
-      int idefcls = -1;
+      MethodLookup ml = { .def_class = -1 };
       int icid = ty_object_class(vt);
-      int imi = call_target(c, id, icid, op, 0, &idefcls);
+      int imi = call_target(c, id, icid, op, 0, &ml);
       if (imi >= 0) {
         Scope *ims = &c->scopes[imi];
         LocalVar *ip = ims->nparams >= 1 ? scope_local(ims, ims->pnames[0]) : NULL;
@@ -20764,7 +20765,7 @@ static int emit_ivar_cvar_write_stmt(Compiler *c, int id, Buf *b, int indent, co
         free(irv.p);
         buf_printf(b, "%s = %s((sp_%s *)%s, _t%d);\n",
                    ref, mc_method(c, ims),
-                   c->classes[idefcls].c_name, ref, iatmp);
+                   c->classes[ml.def_class].c_name, ref, iatmp);
       }
       else {
         buf_printf(b, "%s %s= ", ref, op);
@@ -20781,9 +20782,9 @@ static int emit_ivar_cvar_write_stmt(Compiler *c, int id, Buf *b, int indent, co
            defined (#10902). The other arm's sp_poly_add still reaches a
            user operator through the binop hook. */
         if (!c->classes[_ci].instantiated) continue;
-        int _di = -1;
-        int _mi2 = call_target(c, id, _ci, op, 0, &_di);
-        if (_mi2 >= 0) { poly_mi = _mi2; poly_defcls = _di; break; }
+        MethodLookup ml = { .def_class = -1 };
+        int _mi2 = call_target(c, id, _ci, op, 0, &ml);
+        if (_mi2 >= 0) { poly_mi = _mi2; poly_defcls = ml.def_class; break; }
       }
       if (poly_mi >= 0 && poly_defcls >= 0) {
         int ival = nt_ref(nt, id, "value");

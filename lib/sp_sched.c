@@ -1967,6 +1967,11 @@ static void runq_requeue(sp_thread *t) {
    worker that keeps refilling its own queue (e.g. a thread spawning in a loop)
    cannot starve globally-requeued (preempted / woken) work. */
 static SP_TLS unsigned g_pick_tick = 0;
+/* Set when the thread this worker just ran was switched out at the end of
+   its quantum (sp_safepoint_preempt). Such a run took a whole quantum, so
+   picking from the local queue again would leave the global queue's
+   unstarted threads a 61-pick wait of one quantum each. */
+static SP_TLS int g_run_preempted = 0;
 #ifdef SP_THREADS
 /* An unstarted thread popped from the global queue is about to be pinned to
    whichever worker runs it first, for life. Under a helper pool that grows on
@@ -3109,8 +3114,9 @@ static void run_thread_once(sp_thread *t) { sp_gc_wb((void*)t);   /* PRE/POST: s
   else {
     /* Thread.pass / preempt: requeue. A started thread is pinned to its home
        worker (TLS affinity), so it lands on our own local queue TAIL -- other
-       queued work still runs first, and the 61-tick global check keeps the
-       global queue from starving. */
+       queued work still runs first, and the 61-tick global check, with the
+       turn a preempted run takes (g_run_preempted), keeps the global queue
+       from starving. */
     runq_requeue(t);
     sched_wake_home(t->home_wid);   /* pinned to us: our own loop re-picks it */
   }
@@ -3155,6 +3161,7 @@ static void sp_safepoint_preempt(void) {
      would park that fiber, and the thread is resumed at its own. Skip this
      slice; the monitor asks again on the next one. */
   if (sp_fiber_current != self->fiber) return;
+  g_run_preempted = 1;
   SCHED_UNLOCK();
   sp_sched_switch_out();
   sp_fiber_fire_inject_if_pending();   /* a #kill/#raise delivered while we were off-cpu */
@@ -4429,21 +4436,23 @@ int sp_sched_wait_io_set(struct pollfd *set, int n, double timeout_s) {
    lock, for as long as there is some (PRE/POST: the scheduler lock NOT held).
    A thread taken off the queue stays counted runnable until run_thread_once
    counts it running, in one change (runq_take): main's pump reads both to
-   decide that nothing can wake it. Every 61st pick, and when a
-   descriptor of a thread pinned here is ready, it returns for one turn of the
-   locked loop, which drains this worker's readiness set and gives the global
-   queue its turn. Answers SP_LOCAL_TURN then, and otherwise whether it ran
-   anything. */
+   decide that nothing can wake it. Every 61st pick, after a thread that
+   ran out its quantum, and when a descriptor of a thread pinned here is
+   ready, it returns for one turn of the locked loop, which drains this
+   worker's readiness set and gives the global queue its turn. Answers
+   SP_LOCAL_TURN then, and otherwise whether it ran anything. */
 #define SP_LOCAL_TURN 2
 static int sp_worker_run_local(int wid) {
   RQ_LOCK(wid); sp_thread *ft = runq_take(&g_lrq[wid]); RQ_UNLOCK(wid);
   int ran = ft != NULL;
   while (ft) {
     g_run_taken = 1;
+    g_run_preempted = 0;
     run_thread_once(ft);
     ft = NULL;
     if (SP_ATOMIC_LOAD(&g_stw_active, __ATOMIC_SEQ_CST) || SP_ATOMIC_LOAD(&g_shutdown, __ATOMIC_RELAXED)) break;
     if ((++g_pick_tick % 61u) == 0) { ran = SP_LOCAL_TURN; break; }
+    if (g_run_preempted) { ran = SP_LOCAL_TURN; break; }
 #ifdef SP_EV_BACKEND
     /* the I/O of threads pinned here waits in this worker's own set; readying
        it takes only the worker's own lock (sp_ev_drain), so it is done here,

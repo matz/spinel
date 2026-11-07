@@ -3563,6 +3563,22 @@ int emit_call_new_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const c
 }
 
 /* superclass, class, the comparison of two classes, and the methods of a Class value (TY_CLASS) */
+/* The program classes call id's Class-typed receiver (a local, a
+   parameter, a method's answer: not a constant or self, which name their
+   class) can hold, as the class-value walk bounds them, or NULL. */
+static const char *cls_value_recv_classes(Compiler *c, int id, int recv) {
+  if (recv < 0 || comp_ntype(c, recv) != TY_CLASS) return NULL;
+  NodeKind rk = nt_kind(c->nt, recv);
+  if (rk == NK_SelfNode || rk == NK_ConstantReadNode || rk == NK_ConstantPathNode) return NULL;
+  return poly_recv_class_values(c, id);
+}
+/* The default arm of a switch on a Class value's class id over the
+   classes the walk bounds it to: a builtin class's methods are not
+   listed, so it raises rather than answer short. */
+static void cls_value_unlisted_default(const char *name, int tc, Buf *b) {
+  buf_printf(b, " default: sp_raise_cls(\"NotImplementedError\", sp_sprintf(\"%s of %%s: a builtin class's methods are not listed\", "
+                "sp_class_val_name(sp_box_class(_cl%d)))); }", name, tc);
+}
 /* Klass.instance_methods / public_instance_methods with the inherited ones
    (no argument, or `true`): the list an instance answers #methods or
    #public_methods with, which the class chain fixes at compile time. On a
@@ -3585,6 +3601,33 @@ static int emit_class_instance_methods_all(Compiler *c, int id, Buf *b, const No
       ci = s->class_id;
       si = (int)(s - c->scopes);
     }
+  }
+  /* a class held in a value: a switch on its class id over the classes the
+     walk bounds it to, each listing what its instances answer */
+  const char *cv = ci < 0 ? cls_value_recv_classes(c, id, recv) : NULL;
+  if (cv) {
+    int any = 0;
+    for (int k = 0; k < c->nclasses; k++) {
+      if (!cv[k]) continue;
+      if (comp_class_is_module(c, &c->classes[k]) || !an_object_methods_listable(c, k, name)) return 0;
+      any = 1;
+    }
+    if (!any) return 0;
+    int tc = ++g_tmp, rt = ++g_tmp;
+    buf_printf(b, "({ sp_Class _cl%d = ", tc); emit_expr(c, recv, b);
+    buf_printf(b, "; sp_PolyArray *_t%d = NULL; switch (_cl%d.cls_id) {", rt, tc);
+    for (int k = 0; k < c->nclasses; k++) {
+      if (!cv[k]) continue;
+      ReflNames r = {0};
+      refl_class_instance_methods(c, k, 1, prot, &r);
+      buf_printf(b, " case %d: _t%d = ", k, rt);
+      refl_emit_sym_array(c, k, &r, b);
+      buf_puts(b, "; break;");
+      refl_free(&r);
+    }
+    cls_value_unlisted_default(name, tc, b);
+    buf_printf(b, " sp_box_poly_array(_t%d ? _t%d : sp_PolyArray_new()); })", rt, rt);
+    return 1;
   }
   if (ci < 0) return 0;
   if (si >= 0) {
@@ -4589,6 +4632,31 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
           refl_emit_sym_array(c, ci2, &r, b);
           buf_puts(b, ")");
           refl_free(&r);
+          return 1;
+        }
+        /* a class held in a value: a switch on its class id over the
+           classes the walk bounds it to, each listing its own */
+        const char *cv = ci2 < 0 ? cls_value_recv_classes(c, id, recv) : NULL;
+        int any = 0;
+        for (int k = 0; cv && k < c->nclasses; k++) any |= cv[k];
+        if (any) {
+          int tc = ++g_tmp, rt = ++g_tmp;
+          buf_printf(b, "({ sp_Class _cl%d = ", tc); emit_expr(c, recv, b);
+          buf_printf(b, "; sp_PolyArray *_t%d = NULL; switch (_cl%d.cls_id) {", rt, tc);
+          for (int k = 0; k < c->nclasses; k++) {
+            if (!cv[k]) continue;
+            ReflNames r = {0};
+            if (comp_class_is_module(c, &c->classes[k]) && an_module_methods_listable(c, k, name))
+              refl_module_own_methods(c, k, im_pub, im_prot, im_priv, &r);
+            else
+              refl_own_instance_methods(c, k, im_pub, im_prot, im_priv, 0, &r);
+            buf_printf(b, " case %d: _t%d = ", k, rt);
+            refl_emit_sym_array(c, k, &r, b);
+            buf_puts(b, "; break;");
+            refl_free(&r);
+          }
+          cls_value_unlisted_default(name, tc, b);
+          buf_printf(b, " sp_box_poly_array(_t%d ? _t%d : sp_PolyArray_new()); })", rt, rt);
           return 1;
         }
       }

@@ -10725,6 +10725,52 @@ static int pivs_note_class_value(Compiler *c, int v) {
   if (ci >= 0) f->memo[f->active].cvals[ci] = 1;
   return 1;
 }
+/* A class method's self, read as a value: the class, or a subclass the
+   method was called on, each recorded beside the instance set as
+   pivs_note_class_value records a constant (a module's is left out). */
+static int pivs_note_cmethod_self(Compiler *c, Scope *s) {
+  PivsFacts *f = c->pivs;
+  if (f->hash_mode != 0 || f->active < 0 || s->class_id < 0) return 0;
+  if (comp_class_is_module(c, &c->classes[s->class_id]) || is_builtin_reopen(c->classes[s->class_id].name)) return 0;
+  f->memo[f->active].has_class = 1;
+  for (int k = 0; k < c->nclasses; k++)
+    if (k == s->class_id || is_descendant(c, k, s->class_id)) f->memo[f->active].cvals[k] = 1;
+  return 1;
+}
+/* `r.superclass` (call v) read as a value: any ancestor of a program
+   class r holds, as a loop that climbs the chain answers in turn. The
+   loop's local reads back this call through its own write; that read
+   adds nothing the closure does not already hold, so it is not walked
+   again. A class whose parent is not the program's leaves a builtin
+   class value, which the record holds no class for. */
+static int pivs_superclass(Compiler *c, int v, int r, int depth) {
+  PivsFacts *f = c->pivs;
+  if (f->hash_mode != 0 || f->active < 0) return 0;
+  static int open[32];
+  static int nopen;
+  for (int i = 0; i < nopen; i++)
+    if (open[i] == v) return 1;
+  if (nopen == 32) return 0;
+  size_t n = (size_t)(c->nclasses > 0 ? c->nclasses : 1);
+  char *was = malloc(n), *scratch = calloc(n, 1);
+  if (!was || !scratch) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  int m = f->active;
+  memcpy(was, f->memo[m].cvals, n);
+  memset(f->memo[m].cvals, 0, n);
+  open[nopen++] = v;
+  int ok = pivs_value(c, r, scratch, depth + 1);
+  nopen--;
+  /* r held a value of an instance: not a class's superclass */
+  for (size_t k = 0; ok && k < n; k++) if (scratch[k]) ok = 0;
+  for (int k = 0; ok && k < c->nclasses; k++) {
+    if (!f->memo[m].cvals[k]) continue;
+    for (int x = c->classes[k].parent; x >= 0; x = c->classes[x].parent) was[x] = 1;
+  }
+  for (size_t k = 0; k < n; k++) f->memo[m].cvals[k] |= was[k];
+  if (ok) f->memo[m].has_class = 1;
+  free(was); free(scratch);
+  return ok;
+}
 /* Does local `vn` of scope `si` take only plain writes in its own scope, so
    its writes' values are all it can hold? */
 static int pivs_local_writes_ok(Compiler *c, int si, const char *vn) {
@@ -11285,7 +11331,8 @@ static int pivs_value_uncached(Compiler *c, int v, char *set, int depth) {
     case NK_SelfNode: {
       Scope *s = comp_scope_of(c, v);
       if (s && s->def_node < 0 && s->class_id < 0) return pivs_note_class_value(c, v);
-      if (!s || s->is_cmethod || s->class_id < 0) return 0;
+          if (s && s->is_cmethod && s->def_node >= 0) return pivs_note_cmethod_self(c, s);
+if (!s || s->is_cmethod || s->class_id < 0) return 0;
       /* Object's boxed self is not bounded by the recorded class parents. */
       if (is_object_root(c->classes[s->class_id].name))
         return !s->reachable || pivs_param(c, s, NULL, set, depth);
@@ -11311,7 +11358,8 @@ static int pivs_value_uncached(Compiler *c, int v, char *set, int depth) {
         set[ci] = 1;
         return 1;
       }
-      /* an element read below answers nil past the end (fetch raises, and
+            if (sp_streq(un, "superclass") && ac == 0 && nt_ref(nt, v, "block") < 0) return pivs_superclass(c, v, r, depth);
+/* an element read below answers nil past the end (fetch raises, and
          itself or dup answers its receiver, but neither is told apart) */
       pivs_note_builtin(c);
       if ((sp_streq(un, "[]") && ac == 1) || ((sp_streq(un, "first") || sp_streq(un, "last") ||

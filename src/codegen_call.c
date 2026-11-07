@@ -5259,6 +5259,26 @@ static void emit_fiber_pass_value(Compiler *c, int argc, const int *argv, Buf *b
   buf_printf(b, " _t%d; }))", tp);
 }
 
+/* The values of argv with a splat among them, spread at run time into the
+   poly array _t<ta> (rooted), whose length is then in _n<ta>: the opening of
+   a statement expression, which the caller goes on to close. */
+static void emit_fiber_pass_spread(Compiler *c, int argc, const int *argv, int ta, Buf *b) {
+  buf_printf(b, "({ sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d);", ta, ta);
+  for (int k = 0; k < argc; k++) {
+    NodeKind ty_k = nt_kind(c->nt, argv[k]);
+    int inner = (ty_k == NK_SplatNode) ? nt_ref(c->nt, argv[k], "expression") : -1;
+    if (inner >= 0) {
+      int ts = ++g_tmp;
+      buf_printf(b, " { sp_RbVal _t%d = sp_splat_to_array(", ts); emit_boxed(c, inner, b);
+      buf_printf(b, "); SP_GC_ROOT_RBVAL(_t%d); sp_int _l%d = sp_poly_length(_t%d);"
+                    " for (sp_int _i%d = 0; _i%d < _l%d; _i%d++) sp_PolyArray_push(_t%d, sp_poly_arr_get(_t%d, _i%d)); }",
+                 ts, ts, ts, ts, ts, ts, ts, ta, ts, ts);
+    }
+    else { buf_printf(b, " sp_PolyArray_push(_t%d, ", ta); emit_boxed(c, argv[k], b); buf_puts(b, ");"); }
+  }
+  buf_printf(b, " sp_int _n%d = _t%d->len;", ta, ta);
+}
+
 /* fn(recv, value, count) for resume/transfer, or fn(value) for Fiber.yield
    (recv NULL). With a splat the values are only known at run time, so they
    are packed there: none is nil, one is itself, more are an array. */
@@ -5274,20 +5294,8 @@ void emit_fiber_pass_call(Compiler *c, const char *fn, const char *recv,
     return;
   }
   int ta = ++g_tmp;
-  buf_printf(b, "({ sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d);", ta, ta);
-  for (int k = 0; k < argc; k++) {
-    NodeKind ty_k = nt_kind(c->nt, argv[k]);
-    int inner = (ty_k == NK_SplatNode) ? nt_ref(c->nt, argv[k], "expression") : -1;
-    if (inner >= 0) {
-      int ts = ++g_tmp;
-      buf_printf(b, " { sp_RbVal _t%d = sp_splat_to_array(", ts); emit_boxed(c, inner, b);
-      buf_printf(b, "); SP_GC_ROOT_RBVAL(_t%d); sp_int _l%d = sp_poly_length(_t%d);"
-                    " for (sp_int _i%d = 0; _i%d < _l%d; _i%d++) sp_PolyArray_push(_t%d, sp_poly_arr_get(_t%d, _i%d)); }",
-                 ts, ts, ts, ts, ts, ts, ts, ta, ts, ts);
-    }
-    else { buf_printf(b, " sp_PolyArray_push(_t%d, ", ta); emit_boxed(c, argv[k], b); buf_puts(b, ");"); }
-  }
-  buf_printf(b, " sp_int _n%d = _t%d->len; %s(", ta, ta, fn);
+  emit_fiber_pass_spread(c, argc, argv, ta, b);
+  buf_printf(b, " %s(", fn);
   if (recv) buf_printf(b, "%s, ", recv);
   buf_printf(b, "_n%d == 0 ? sp_box_nil() : _n%d == 1 ? sp_PolyArray_get(_t%d, 0) : sp_box_poly_array(_t%d)", ta, ta, ta, ta);
   if (recv) buf_printf(b, ", (int)_n%d", ta);
@@ -15616,8 +15624,8 @@ static int emit_new_call_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
     if (cn && sp_streq(cn, "Thread") && nt_ref(nt, id, "block") >= 0) {
       /* Thread.new(arg): an eager green thread wrapping a fiber built exactly
          like a Fiber.new block (the block result lands in fiber->yielded_value,
-         read back by #value). Thread.new's first argument becomes the block's
-         first param on entry; it is handed to the scheduler as the thread arg. */
+         read back by #value). Thread.new's arguments become the block's
+         params on entry; they are handed to the scheduler as the thread arg. */
       /* __FILE__/__LINE__ resolve through the emitted #line directives to
          the Ruby creation site, which #inspect carries (#3126) */
       /* The fiber and the argument are both allocations, and each is the
@@ -15628,30 +15636,27 @@ static int emit_new_call_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
          the next Thread.new was handed the same array, and two threads ran
          with one's arguments. Both go into temps rooted for the whole call. */
       int tfb = ++g_tmp, targ = ++g_tmp;
-      int tblk = nt_ref(nt, id, "block");
-      /* Thread.new(args, &x): the body calls x with exactly these args */
-      int tcallable = tblk >= 0 && nt_kind(nt, tblk) == NK_BlockArgumentNode;
       buf_printf(b, "({ sp_Fiber *_t%d = ", tfb);
       emit_fiber_new(c, id, b, 0, -1);
       buf_printf(b, "; SP_GC_ROOT(_t%d);", tfb);
-      if (tcallable) buf_printf(b, " _t%d->pass_argc = %d;", tfb, argc);
-      buf_printf(b, " sp_RbVal _t%d = ", targ);
-      /* a block with >1 param takes the args positionally: pack them into a
-         poly array the fiber body binds element-by-element (#2976) */
-      int tbp = tblk >= 0 ? nt_ref(nt, tblk, "parameters") : -1;
-      int tinner = tbp >= 0 ? nt_ref(nt, tbp, "parameters") : -1;
-      int tpn = tinner >= 0 ? tinner : tbp;
-      int treq = 0; if (tpn >= 0) nt_arr(nt, tpn, "requireds", &treq);
-      if (treq > 1 || (tcallable && argc > 1)) {
+      /* The block takes the arguments as a first resume hands them over
+         (emit_fiber_pass_call): none is nil, one is itself, more are packed
+         into a poly array, and pass_argc says how many there were, so that
+         |a| takes the first of several and |*r| all of them, and one Array
+         spreads over |a, b| (#2976); Thread.new(args, &x) calls x with them.
+         A splat is spread at run time, and the count is known only then. */
+      if (nt_argv_has_splat(nt, argv, argc)) {
         int tpa = ++g_tmp;
-        buf_printf(b, "({ sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d);", tpa, tpa);
-        for (int a = 0; a < argc; a++) {
-          buf_printf(b, " sp_PolyArray_push(_t%d, ", tpa); emit_boxed(c, argv[a], b); buf_puts(b, ");");
-        }
-        buf_printf(b, " sp_box_poly_array(_t%d); })", tpa);
+        buf_printf(b, " sp_RbVal _t%d = ", targ);
+        emit_fiber_pass_spread(c, argc, argv, tpa, b);
+        buf_printf(b, " _t%d->pass_argc = (int)_n%d;"
+                      " _n%d == 0 ? sp_box_nil() : _n%d == 1 ? sp_PolyArray_get(_t%d, 0) : sp_box_poly_array(_t%d); })",
+                   tfb, tpa, tpa, tpa, tpa, tpa);
       }
-      else if (argc >= 1) emit_boxed(c, argv[0], b);
-      else buf_puts(b, "sp_box_nil()");
+      else {
+        buf_printf(b, " _t%d->pass_argc = %d; sp_RbVal _t%d = ", tfb, argc, targ);
+        emit_fiber_pass_value(c, argc, argv, b);
+      }
       buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); sp_Thread_spawn_fiber_at(_t%d, _t%d", targ, tfb, targ);
       /* the Ruby creation site, straight from the node -- the C __FILE__
          macro would name the generated C under --no-line-map (#3126) */

@@ -35869,8 +35869,7 @@ static int scope_yields_inside_lifted_body(Compiler *c, int mi) {
    a yielding initialize the way a constant `X.new` site does, so the class
    needs the clone for its constructor to run the body at all. */
 static int super_new_init_yields(Compiler *c, Scope *s) {
-  int at;
-  if (!s->is_cmethod || !is_new_name(comp_scope_user_name(s)) || cplan_super_target(c, -1, s, &at) >= 0) return 0;
+  if (!s->is_cmethod || !is_new_name(comp_scope_user_name(s)) || cplan_super_target(c, -1, s, NULL) >= 0) return 0;
   for (int k = 0; k < c->nclasses; k++) {
     int mi = k == s->class_id || is_descendant(c, k, s->class_id) ? comp_method_in_chain(c, k, "initialize", NULL) : -1;
     if (mi >= 0 && c->scopes[mi].yields) return 1;
@@ -46106,9 +46105,8 @@ static void an_method_holders_build(Compiler *c, AnMethodHolders *mh) {
 }
 
 static int super_new_init_keeps_block(Compiler *c, Scope *s) {
-  int at;
   if (super_new_init_yields(c, s)) return 1;
-  if (!s->is_cmethod || !is_new_name(comp_scope_user_name(s)) || cplan_super_target(c, -1, s, &at) >= 0) return 0;
+  if (!s->is_cmethod || !is_new_name(comp_scope_user_name(s)) || cplan_super_target(c, -1, s, NULL) >= 0) return 0;
   for (int k = 0; k < c->nclasses; k++) {
     int mi = k == s->class_id || is_descendant(c, k, s->class_id) ? comp_method_in_chain(c, k, "initialize", NULL) : -1;
     if (mi >= 0 && c->scopes[mi].blk_param && c->scopes[mi].blk_param[0] && !c->scopes[mi].yields) return 1;
@@ -46139,7 +46137,7 @@ static int ctor_graph_init(Compiler *c, int s) {
    splices none. */
 static int ctor_graph_target(Compiler *c, int id) {
   const NodeTable *nt = c->nt;
-  int t = -1, at;
+  int t = -1;
   if (nt_kind(nt, id) == NK_CallNode) {
     const char *name = nt_str(nt, id, "name");
     int recv = nt_ref(nt, id, "receiver");
@@ -46163,7 +46161,7 @@ static int ctor_graph_target(Compiler *c, int id) {
       if (ty_is_object(rt)) t = call_target(c, id, ty_object_class(rt), name, 0, NULL);
     }
   }
-  else t = cplan_super_target(c, id, &c->scopes[c->nscope[id]], &at);
+  else t = cplan_super_target(c, id, &c->scopes[c->nscope[id]], NULL);
   return ctor_graph_node(c, t) ? t : -1;
 }
 
@@ -46320,9 +46318,8 @@ static void rewrite_prepended_builtin_supers(Compiler *c) {
     Scope *s = &c->scopes[si];
     if (!s->is_prepend_copy || s->is_cmethod || !s->name || s->class_id < 0) continue;
     const char *cn = c->classes[s->class_id].name;
-    int at;
     if (!cn || !is_builtin_reopen_name(cn) || sp_streq(cn, "Object") || s->class_id == c->toplevel_class) continue;
-    if (cplan_super_target(c, -1, s, &at) >= 0) continue;
+    if (cplan_super_target(c, -1, s, NULL) >= 0) continue;
     int args = k == NK_SuperNode ? nt_ref(nt, id, "arguments") : -1;
     if (k == NK_ForwardingSuperNode) {
       int kw = 0;
@@ -46376,8 +46373,7 @@ static void rewrite_ivar_reflection_supers(Compiler *c) {
     if (s->is_cmethod || !s->name || s->class_id < 0 || !is_ivar_reflection_name(s->name) ||
         c->classes[s->class_id].is_native_class ||
         (is_builtin_reopen_name(c->classes[s->class_id].name) && s->class_id != comp_core_class(c, CORE_OBJECT))) continue;
-    int at;
-    if (cplan_super_target(c, -1, s, &at) >= 0) continue;
+    if (cplan_super_target(c, -1, s, NULL) >= 0) continue;
     int args = k == NK_SuperNode ? nt_ref(nt, id, "arguments") : -1;
     if (k == NK_ForwardingSuperNode) {
       int kw = 0;

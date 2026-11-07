@@ -15597,7 +15597,7 @@ int emit_super_inline(Compiler *c, int id, Buf *b, int indent, int as_expr) {
     int omi = shadow ? (st->is_cmethod ? comp_cmethod_in_class(c, st->class_id, shadow)
                                        : comp_method_in_class(c, st->class_id, shadow))
             : p < 0 ? -1
-            : cplan_super_chain_mi(c, id, st, p, own);
+            : cplan_super_chain_mi(c, id, st, p, own, NULL);
     if (!shadow && omi >= 0) odef = c->scopes[omi].class_id;
     if (mi < 0) {
       if (g_plan_check && omi >= 0)

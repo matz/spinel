@@ -604,9 +604,25 @@ static int lexically_sees_nested(Compiler *c, int id, const char *leaf) {
 /* `P::NAME` where P is a builtin class or module: NAME is P's own constant,
    never a program constant that shares the leaf name (the leaf-keyed table
    answered M::Flags::BINARY for Encoding::BINARY), unless the program writes
-   NAME into P. Object is not one: its constants are the top-level ones. Nor
-   is a P the path names lexically: one nested in a namespace the path is
-   written in. */
+   NAME into P, or P is a class and NAME a constant of a module Object has
+   (a top-level include, Kernel). Object is not one: its constants are the
+   top-level ones. Nor is a P the path names lexically: one nested in a
+   namespace the path is written in. */
+/* Does the builtin class P (not a module, not BasicObject) reach NAME as
+   every class does, through the modules Object has: one the top level
+   includes, one `class Object` includes or prepends, or Kernel? */
+static int builtin_class_sees_object_const(Compiler *c, const char *pn, const char *nm) {
+  if (is_builtin_module_name(pn) || sp_streq(pn, "BasicObject")) return 0;
+  int sub = -1;
+  for (int i = 0; i < c->ntoplevel_includes; i++)
+    if (class_may_have_const(c, c->toplevel_includes[i], nm, &sub, 1)) return 1;
+  int obj = comp_core_class(c, CORE_OBJECT), ker = comp_core_class(c, CORE_KERNEL);
+  for (int i = 0; obj >= 0 && i < c->classes[obj].nincluded_mods; i++)
+    if (class_may_have_const(c, c->classes[obj].included_mods[i], nm, &sub, 1)) return 1;
+  for (int i = 0; obj >= 0 && i < c->classes[obj].nprepended_mods; i++)
+    if (class_may_have_const(c, c->classes[obj].prepended_mods[i], nm, &sub, 1)) return 1;
+  return ker >= 0 && class_may_have_const(c, ker, nm, &sub, 1);
+}
 int const_path_in_closed_builtin(Compiler *c, int id) {
   const NodeTable *nt = c->nt;
   if (nt_kind(nt, id) != NK_ConstantPathNode) return 0;
@@ -634,7 +650,8 @@ int const_path_in_closed_builtin(Compiler *c, int id) {
     memo_ver = nt->version; memo_ncls = c->nclasses;
   }
   if (memo[id] < 0)
-    memo[id] = (signed char)(!lexically_sees_nested(c, id, pn) && !program_writes_const_in(c, pn, nm));
+    memo[id] = (signed char)(!lexically_sees_nested(c, id, pn) && !program_writes_const_in(c, pn, nm) &&
+                             !builtin_class_sees_object_const(c, pn, nm));
   return memo[id];
 }
 /* Can the path write `t` (`Q::NAME = v`) define NAME where a lookup

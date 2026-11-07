@@ -120,3 +120,12 @@ class Bs < BasicObject; end
     puts e.message
   end
 end
+
+# a builtin class reaches them too; a builtin module does not
+[-> { String::TI }, -> { Integer::KC }, -> { Comparable::TI }, -> { Kernel::KC }].each do |f|
+  begin
+    p f.call
+  rescue NameError => e
+    puts e.message
+  end
+end

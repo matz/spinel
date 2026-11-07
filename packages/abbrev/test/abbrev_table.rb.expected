@@ -1,0 +1,75 @@
+["rub", "ruby"]
+["ruby", "ruby"]
+["rul", "rules"]
+["rule", "rules"]
+["rules", "rules"]
+["s", "summer"]
+["su", "summer"]
+["sum", "summer"]
+["summ", "summer"]
+["summe", "summer"]
+["summer", "summer"]
+["win", "win"]
+["wint", "winter"]
+["winte", "winter"]
+["winter", "winter"]
+--
+["rub", "ruby"]
+["ruby", "ruby"]
+["rul", "rules"]
+["rule", "rules"]
+["rules", "rules"]
+["s", "summer"]
+["su", "summer"]
+["sum", "summer"]
+["summ", "summer"]
+["summe", "summer"]
+["summer", "summer"]
+["win", "win"]
+["wint", "winter"]
+["winte", "winter"]
+["winter", "winter"]
+--
+true
+["abc", "abc"]
+["abc\n", "abc\nd"]
+["abc\nd", "abc\nd"]
+["d", "de"]
+["de", "de"]
+--
+["ca", "car"]
+["car", "car"]
+["co", "cone"]
+["con", "cone"]
+["cone", "cone"]
+--
+{"cone" => "cone", "con" => "cone", "co" => "cone", "cart" => "cart", "car" => "car", "same" => "same"}
+["a", "a"]
+["ab", "ab"]
+["abc", "abc"]
+--
+["o", "other"]
+["ot", "other"]
+["oth", "other"]
+["othe", "other"]
+["other", "other"]
+["same", "same"]
+--
+["", ""]
+["x", "x"]
+--
+{}
+["a", "ação"]
+["aç", "ação"]
+["açã", "ação"]
+["ação", "ação"]
+["á", "água"]
+["ág", "água"]
+["águ", "água"]
+["água", "água"]
+--
+"status"
+nil
+"stash"
+"start"
+"0.1.2"

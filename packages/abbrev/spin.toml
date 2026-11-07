@@ -1,0 +1,4 @@
+[package]
+name = "abbrev"
+
+# Pre-installed spin package: ships with the compiler, versioned with it.

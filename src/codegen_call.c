@@ -24492,6 +24492,31 @@ int class_isa_user(Compiler *c, int k, int cid) {
          class_includes_module(c, k, cid);
 }
 
+/* The arms of a poly is_a? test that match a rescued exception. Such an
+   exception boxes under SP_BUILTIN_EXCEPTION, not its class's index (see
+   emit_user_exc_dispatch), so the class-index arms never match it: ask the
+   exception's own class name. For an exception class cid, the name is cid's
+   own (exact) or one of its descendants (sp_exc_is_a). For a module that
+   some exception class of the program includes, sp_exc_is_a walks the
+   class's modules level by level, as `rescue M` does. Sets *first to 0
+   when it emits an arm. */
+void emit_exc_box_isa_arms(Compiler *c, int cid, const char *v, int exact, int *first, Buf *b) {
+  int mod = !exact && !class_is_exc_subclass(c, cid) && comp_class_is_module(c, &c->classes[cid]);
+  if (mod) {
+    int nx = 0, hit = 0;
+    const int *xs = comp_exc_subclasses(c, &nx);
+    for (int i = 0; xs && i < nx && !hit; i++)
+      if (xs[i] >= 0 && xs[i] < c->nclasses && class_isa_user(c, xs[i], cid)) hit = 1;
+    if (!hit) return;
+  }
+  else if (!class_is_exc_subclass(c, cid)) return;
+  const char *qn = class_ruby_name(c, cid);
+  buf_printf(b, "%s(%s.cls_id == SP_BUILTIN_EXCEPTION && %s.v.p && ", *first ? "" : " || ", v, v);
+  if (exact) buf_printf(b, "strcmp(((sp_Exception *)%s.v.p)->cls_name, \"%s\") == 0)", v, qn);
+  else buf_printf(b, "sp_exc_is_a((volatile sp_Exception *)%s.v.p, \"%s\"))", v, qn);
+  *first = 0;
+}
+
 /* The runtime test for `<poly value v> is_a? <class named cn>` (exact: the
    instance_of? form, no ancestry). Shared by is_a?/kind_of?/instance_of? and by
    `Klass === poly`, which used to carry its own shorter copy of the table and
@@ -24559,16 +24584,8 @@ int emit_poly_isa_test(Compiler *c, const char *cn, const char *v, int exact, Bu
           else buf_printf(b, "%s%s.cls_id == %d", first ? "" : " || ", v, k);
           first = 0;
         }
-      /* a rescued exception boxes under SP_BUILTIN_EXCEPTION, not its
-         class's index (see emit_user_exc_dispatch), so the index tests above
-         never match it: ask the exception's own class name */
-      if (class_is_exc_subclass(c, cid)) {
-        const char *qn = class_ruby_name(c, cid);
-        buf_printf(b, "%s(%s.cls_id == SP_BUILTIN_EXCEPTION && %s.v.p && ", first ? "" : " || ", v, v);
-        if (exact) buf_printf(b, "strcmp(((sp_Exception *)%s.v.p)->cls_name, \"%s\") == 0)", v, qn);
-        else buf_printf(b, "sp_exc_is_a((volatile sp_Exception *)%s.v.p, \"%s\"))", v, qn);
-        first = 0;
-      }
+      /* a rescued exception: the index tests above never match it */
+      emit_exc_box_isa_arms(c, cid, v, exact, &first, b);
       if (first) buf_puts(b, "0");
       buf_puts(b, "))");
       if (ext) {

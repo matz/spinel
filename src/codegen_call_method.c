@@ -1915,12 +1915,19 @@ static int bam_poly_may_lack(Compiler *c, const char *sym) {
   for (int k = 0; k < c->nclasses; k++)
     for (int a = 0; a < c->classes[k].naliases; a++)
       if (c->classes[k].alias_new[a] && sp_streq(c->classes[k].alias_new[a], sym)) return 0;
-  NT_FOREACH_KIND(nt, NK_CallNode, d) {
-    const char *dn = nt_str(nt, d, "name");
-    if (dn && (sp_streq(dn, "define_method") || sp_streq(dn, "define_singleton_method") ||
-               sp_streq(dn, "alias_method"))) return 0;
+  /* (the call scan once per tree: the answer is the program's) */
+  static const NodeTable *memo_nt = NULL;
+  static int memo_count = -1, memo_defines = 0;
+  static unsigned memo_version = 0;
+  if (memo_nt != nt || memo_count != nt->count || memo_version != nt->version) {
+    memo_nt = nt; memo_count = nt->count; memo_version = nt->version; memo_defines = 0;
+    NT_FOREACH_KIND(nt, NK_CallNode, d) {
+      const char *dn = nt_str(nt, d, "name");
+      if (dn && (sp_streq(dn, "define_method") || sp_streq(dn, "define_singleton_method") ||
+                 sp_streq(dn, "alias_method"))) { memo_defines = 1; break; }
+    }
   }
-  return 1;
+  return !memo_defines;
 }
 
 /* Does an instance of class k answer only Object's and Kernel's builtin

@@ -29,3 +29,11 @@ def pick2(i) = [Fiber.new { 1 }, MyErr.new("x"), [1, 2], { a: 1 }, nil][i]
   v = pick2(i)
   puts "#{(v.size rescue $!.class).inspect} #{(v.length rescue $!.class).inspect}"
 end
+
+# empty? on the same builtins, a Process::Tms and any Range raises too.
+def pick3(i) = [Time.at(0), /re/, Object.new, Process.times, 1..3, "a".."c",
+                Time.at(0)..Time.at(9), "ab", [], {}][i]
+10.times do |i|
+  v = pick3(i)
+  p [(v.empty? rescue $!.class), (v.size rescue $!.class), (v.length rescue $!.class)]
+end

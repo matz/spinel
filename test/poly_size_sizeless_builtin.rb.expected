@@ -18,3 +18,13 @@
 2 2
 1 1
 NoMethodError NoMethodError
+[NoMethodError, NoMethodError, NoMethodError]
+[NoMethodError, NoMethodError, NoMethodError]
+[NoMethodError, NoMethodError, NoMethodError]
+[NoMethodError, 4, 4]
+[NoMethodError, 3, NoMethodError]
+[NoMethodError, nil, NoMethodError]
+[NoMethodError, TypeError, NoMethodError]
+[false, 2, 2]
+[true, 0, 0]
+[true, 0, 0]

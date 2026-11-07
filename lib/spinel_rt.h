@@ -5211,10 +5211,19 @@ static SP_INLINE int sp_poly_sizeless_builtin(sp_RbVal v) {
     case SP_BUILTIN_CONDVAR: case SP_BUILTIN_FIBER: case SP_BUILTIN_RANDOM: case SP_BUILTIN_COMPLEX:
     case SP_BUILTIN_RATIONAL: case SP_BUILTIN_BIG_RATIONAL: case SP_BUILTIN_DIR: case SP_BUILTIN_YIELDER:
     case SP_BUILTIN_PROCESS_STATUS: case SP_BUILTIN_ADDRINFO: case SP_BUILTIN_SOCKOPT:
-    case SP_BUILTIN_OBJECT: case SP_BUILTIN_BASIC_OBJECT:
+    case SP_BUILTIN_OBJECT: case SP_BUILTIN_BASIC_OBJECT: case SP_BUILTIN_ARGF:
       return 1;
     default: return 0;
   }
+}
+/* A boxed value with no #empty?: a program object (its own empty? is
+   dispatched before this), a builtin with no length, a Process::Tms (a
+   Struct) or a Range of any kind. */
+static SP_INLINE SP_UNUSED int sp_poly_no_empty(sp_RbVal v) {
+  return sp_poly_is_user_obj(v) || sp_poly_sizeless_builtin(v) ||
+         (v.tag == SP_TAG_OBJ && (v.cls_id == SP_BUILTIN_TMS || v.cls_id == SP_BUILTIN_RANGE ||
+                                  v.cls_id == SP_BUILTIN_STR_RANGE || v.cls_id == SP_BUILTIN_FLOAT_RANGE ||
+                                  v.cls_id == SP_BUILTIN_TIME_RANGE || v.cls_id == SP_BUILTIN_OBJ_RANGE));
 }
 static sp_int sp_poly_length_m(sp_RbVal v) {
   if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_MATCHDATA && v.v.p) return sp_MatchData_length((sp_MatchData *)v.v.p);
@@ -5223,7 +5232,8 @@ static sp_int sp_poly_length_m(sp_RbVal v) {
   if (v.tag == SP_TAG_NIL || v.tag == SP_TAG_INT || v.tag == SP_TAG_FLT ||
       v.tag == SP_TAG_BIGINT || v.tag == SP_TAG_BOOL || sp_poly_is_user_obj(v) || sp_poly_sizeless_builtin(v) ||
       (v.tag == SP_TAG_OBJ && (v.cls_id == SP_BUILTIN_RANGE || v.cls_id == SP_BUILTIN_STR_RANGE ||
-                               v.cls_id == SP_BUILTIN_FLOAT_RANGE)))
+                               v.cls_id == SP_BUILTIN_FLOAT_RANGE || v.cls_id == SP_BUILTIN_TIME_RANGE ||
+                               v.cls_id == SP_BUILTIN_OBJ_RANGE)))
     sp_raise_poly_nomethod("length", v);
   /* String#length is CHARACTERS. sp_poly_length answers the byte count, which
      is what its container and iteration callers want and what a boxed string
@@ -5298,6 +5308,8 @@ static sp_int sp_poly_size_n(sp_RbVal v, sp_bool *none) {
   if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_MATCHDATA && v.v.p) return sp_MatchData_length((sp_MatchData *)v.v.p);
   if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_FLOAT_RANGE && v.v.p) { sp_frange_iter_raise((*(sp_FloatRange *)v.v.p), 0); return 0; }  /* a Float range has no size (TypeError) */
   if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_QUEUE && v.v.p) return sp_Queue_size((sp_queue *)v.v.p);
+  /* a Range of Times has no size: Time has no #succ */
+  if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_TIME_RANGE) sp_raise_cls("TypeError", "can't iterate from Time");
   { sp_int n = sp_poly_struct_size(v); if (n >= 0) return n; }
   if (v.tag == SP_TAG_NIL || v.tag == SP_TAG_BOOL || v.tag == SP_TAG_FLT ||
       sp_poly_is_user_obj(v) || sp_poly_sizeless_builtin(v))

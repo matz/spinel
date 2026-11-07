@@ -26,3 +26,18 @@ p Box::Proc.new.o
 p (1..2).o
 p 7.o
 p [Geo::Range.new, 1..2, 7, Box::Proc.new, proc {}].map { |v| v.o }
+# A class written in a body of Object is Object's constant: the builtin.
+class Object
+  class Rational
+    def o(x = 6) = [:rational, x]
+  end
+end
+p 3r.o
+# A Date inside a module with its own initialize stays its own class.
+module Geo
+  class Date
+    def initialize = @d = 1
+    def o(x = 7) = [:geodate, x, @d]
+  end
+end
+p Geo::Date.new.o

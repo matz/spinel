@@ -5816,13 +5816,40 @@ static int engine_lexically_nested(NodeTable *nt, int id) {
 }
 
 /* Does class definition def open the builtin class itself: `Range` at the
-   top level, or `::Range`? A class of that name inside a module
-   (`module Geo; class Range`, `class Geo::Range`) is another class. */
+   top level, in a body of Object (`class Object; class Range`), or as
+   `::Range` / `Object::Range`? A class of that name inside a module
+   (`module Geo; class Range`, `class Geo::Range`) is another class. Every
+   class or module body around def must be Object's at the top level.
+   The answers are kept per node until the table changes, since the fold
+   asks once per Object method and class definition. */
+static int engine_parent_is_object(NodeTable *nt, int path);
 static int mo_def_is_toplevel(NodeTable *nt, int def) {
-  int cp = class_def_path(nt, def);
+  static const NodeTable *cnt; static int cver = -1, ccount = -1; static signed char *memo; static int mcap;
+  if (cnt != nt || cver != (int)nt->version || ccount != nt->count) {
+    if (mcap < nt->count) {
+      signed char *m = realloc(memo, (size_t)nt->count);
+      if (!m) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+      memo = m; mcap = nt->count;
+    }
+    memset(memo, -1, (size_t)nt->count);
+    cnt = nt; cver = (int)nt->version; ccount = nt->count;
+  }
+  if (def < 0 || def >= nt->count) return 0;
+  if (memo[def] >= 0) return memo[def];
+  int ans = 0, cp = class_def_path(nt, def);
   NodeKind k = cp >= 0 ? nt_kind(nt, cp) : NK_NONE;
-  if (k == NK_ConstantPathNode) return nt_ref(nt, cp, "parent") < 0;
-  return k == NK_ConstantReadNode && !engine_lexically_nested(nt, def);
+  if (k == NK_ConstantPathNode) ans = engine_parent_is_object(nt, cp);
+  else if (k == NK_ConstantReadNode) {
+    ans = 1;
+    for (int n = 0; ans && n < nt->count; n++) {
+      if (n == def || (!class_def_opens_cref(nt, n) && nt_kind(nt, n) != NK_SingletonClassNode)) continue;
+      if (!subtree_has(nt, class_def_body(nt, n), def)) continue;
+      const char *hn = nt_kind(nt, n) == NK_ClassNode ? class_def_name(nt, n) : NULL;
+      if (!hn || !sp_streq(hn, "Object") || !mo_def_is_toplevel(nt, n)) ans = 0;
+    }
+  }
+  memo[def] = (signed char)ans;
+  return ans;
 }
 
 /* The namespace a constant path's parent names is Object itself (`::X`,
@@ -25242,7 +25269,7 @@ static int mo_program_owns(const NodeTable *nt, int n0, const char *cn) {
     if (nt_kind(nt, m) != NK_ClassNode) continue;
     int cp = nt_ref(nt, m, "constant_path");
     const char *mn = cp >= 0 && nt_kind(nt, cp) == NK_ConstantReadNode ? nt_str(nt, cp, "name") : NULL;
-    if (!mn || !sp_streq(mn, cn) || !mo_def_is_toplevel((NodeTable *)nt, m)) continue;
+    if (!mn || !sp_streq(mn, cn)) continue;
     if (nt_ref(nt, m, "superclass") >= 0) return 1;
     int b = nt_ref(nt, m, "body");
     int bn = 0; const int *bs = b >= 0 ? nt_arr(nt, b, "body", &bn) : NULL;

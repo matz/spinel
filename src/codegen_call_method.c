@@ -2074,6 +2074,18 @@ static int emit_method_obj_target(Compiler *c, int id, Buf *b, const NodeTable *
       self_kind = "SP_BM_SELF_OBJ";
       self_rooted = 1;
       buf_puts(b, "({ "); tbr = hold_operand(c, recv, TY_POLY, 1, tbr, 1, " ", b);
+      /* a nil, a String, an Integer ... that has no method sym: CRuby's
+         NameError at the lookup, where the wrapper bound it anyway
+         (bam_may_lack, desugar_builtin_method_obj) */
+      int bdn = c->scopes[mi].def_node;
+      const char *bsym = nt_str(nt, bdn, "bam_sym");
+      if (bsym && nt_int(nt, bdn, "bam_may_lack", 0) && repr_of(c, recv).kind == RK_BOXED) {
+        buf_printf(b, "if (sp_poly_lacks_builtin_method(_t%d, ", tbr);
+        emit_str_literal(b, bsym);
+        buf_puts(b, ")) sp_raise_cls(\"NameError\", sp_nomethod_class_msg(");
+        emit_str_literal(b, bsym);
+        buf_printf(b, ", _t%d)); ", tbr);
+      }
       buf_printf(b, "void *_t%d = (void *)sp_PolyArray_new(); SP_GC_ROOT(_t%d);"
                     " sp_PolyArray_push((sp_PolyArray *)_t%d, _t%d); ", self_tmp, self_tmp, self_tmp, tbr);
     }

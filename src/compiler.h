@@ -25,6 +25,9 @@ extern int g_strict_require;
 extern int g_require_unread;
 extern const char **g_required_features;   /* spinel_parse.c */
 extern int g_nrequired_features;
+/* a feature in it that is not a library the program's start loads (a core
+   library CRuby has loaded before it starts): a require the program makes */
+int sp_requires_non_boot_feature(void);
 /* SPINEL_SHARE_STRINGS is on: set, not empty and not "0" (spinel_parse.c) */
 int sp_share_strings_env(void);
 void sp_feature_mark(const char *name);

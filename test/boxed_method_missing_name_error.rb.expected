@@ -1,0 +1,18 @@
+0: NameError undefined method 'zz' for class 'NilClass' :zz
+1: NameError undefined method 'zz' for class 'Integer' :zz
+2: NameError undefined method 'zz' for class 'Float' :zz
+3: NameError undefined method 'zz' for class 'String' :zz
+4: NameError undefined method 'zz' for class 'Array' :zz
+5: NameError undefined method 'zz' for class 'Hash' :zz
+6: NameError undefined method 'zz' for class 'TrueClass' :zz
+7: NameError undefined method 'zz' for class 'FalseClass' :zz
+[NameError, "undefined method 'succ' for class 'NilClass'"]
+2
+5
+"AB"
+"undefined method 'nope' for class 'String'"
+:own
+false
+[true, true]
+[true, true]
+[false, false]

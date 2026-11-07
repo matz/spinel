@@ -3787,6 +3787,8 @@ int g_require_unread = 0;
    other (sp_require_computed). */
 const char **g_required_features = NULL;
 int g_nrequired_features = 0;
+static const char **sp_boot_features = NULL;
+static int sp_nboot_features = 0;
 static void sp_note_required_feature(const char *name) {
   if (!name || !*name) return;
   for (int i = 0; i < g_nrequired_features; i++)
@@ -3797,6 +3799,18 @@ static void sp_note_required_feature(const char *name) {
   g_required_features[g_nrequired_features++] = strdup(name);
 }
 static int sp_req_written = 0, sp_req_resolved = 0;
+/* Does the program require a feature that is not a core library its start
+   loads? A core library is read like the program, so its defs are in the
+   node table; another feature can be native and define methods none sees. */
+int sp_requires_non_boot_feature(void) {
+  for (int i = 0; i < g_nrequired_features; i++) {
+    /* (builtins/: the core methods written in Ruby, read like the program) */
+    int boot = strncmp(g_required_features[i], "builtins/", 9) == 0;
+    for (int k = 0; k < sp_nboot_features && !boot; k++) boot = strcmp(sp_boot_features[k], g_required_features[i]) == 0;
+    if (!boot) return 1;
+  }
+  return 0;
+}
 
 /* The names of one file's tree that bear on g_require_unread: a call named
    load or autoload, a variable that is the load path or the loaded features
@@ -8184,6 +8198,8 @@ static int sp_graph_flatten(SpLoadGraph *g, int f, const char *source_file) {
 static int sp_graph_boot_load(SpLoadGraph *g, const SpBootLib *b) {
   sp_feature_mark(b->lib);
   sp_note_required_feature(b->lib);
+  const char **bf = realloc(sp_boot_features, sizeof(char *) * (size_t)(sp_nboot_features + 1));
+  if (bf) { sp_boot_features = bf; sp_boot_features[sp_nboot_features++] = strdup(b->lib); }
   int to = sp_load_file(g, b->path);
   if (b->tier == SP_LIB_BUILTIN) *sp_load_flags(g, to) |= SP_FILE_BUILTIN;
   sp_load_set_tier(g, to, b->tier);

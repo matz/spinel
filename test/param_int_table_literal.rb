@@ -73,3 +73,10 @@ def bump(t)
   t
 end
 p bump([[1, 2], [3, 4]])
+
+# a literal that spreads its rows from elsewhere, and one a level deeper:
+# neither is a literal of rows, and both stay boxed
+def flat_size(t) = t.sum { |r| r.size }
+extra = [[7, 8]]
+p flat_size([[1], *extra])
+p flat_size([[[1, 2]], [[3]]])

@@ -1289,6 +1289,26 @@ static void emit_obj_conv_call_inline(Compiler *c, int node, TyKind t, int def, 
   if (unbox) buf_puts(b, nil_string ? "))" : ")");
 }
 
+/* Is `node` an argument of a builtin class's arm that
+   desugar_class_value_builtin_cmethod split a call on a boxed class value
+   into (`k.new(x)` -> `k.equal?(Array) ? Array.new(x) : k.new(x)`)? The
+   arm runs only when the value is that class, which it may never be
+   (`Object.const_get(name)` may answer any constant). */
+static int conv_arg_of_cvb_arm(Compiler *c, int node) {
+  const NodeTable *nt = c->nt;
+  const int *par = codegen_node_parents(c, node);
+  int args = par ? par[node] : -1;
+  if (args < 0 || nt_kind(nt, args) != NK_ArgumentsNode) return 0;
+  int call = par[args];
+  if (call < 0 || nt_kind(nt, call) != NK_CallNode || !nt_int(nt, call, "cvb_split", 0) ||
+      nt_ref(nt, call, "arguments") != args) return 0;
+  int recv = nt_ref(nt, call, "receiver");
+  if (recv < 0 || nt_kind(nt, recv) != NK_ConstantReadNode) return 0;
+  int argc = 0; const int *argv = nt_arr(nt, args, "arguments", &argc);
+  for (int k = 0; k < argc; k++) if (argv[k] == node) return 1;
+  return 0;
+}
+
 static int emit_obj_conv(Compiler *c, int node, const char *conv, TyKind want,
                          const char *into, Buf *b) {
   TyKind t = comp_ntype(c, node);
@@ -1341,10 +1361,12 @@ static int emit_obj_conv(Compiler *c, int node, const char *conv, TyKind want,
   /* In a method a call on a poly receiver bound its arguments to, as one of
      the methods it may reach, the class may be only what that call would
      hand: the receiver may never be of this method's class (an Array's `<<`
-     beside a Digest's). CRuby raises if it ever is, so the raise is left to
-     run time rather than refusing the program. */
+     beside a Digest's). Likewise a builtin class's arm of a call split on a
+     boxed class value: the value may never be that class. CRuby raises if
+     it ever is, so the raise is left to run time rather than refusing the
+     program. */
   { Scope *es = comp_scope_of(c, node);
-    if (es && es->cand_bound) {
+    if ((es && es->cand_bound) || conv_arg_of_cvb_arm(c, node)) {
       snprintf(msg, sizeof msg, "no implicit conversion of %s into %s", cn ? cn : "Object", into);
       buf_puts(b, "((void)(");
       emit_expr_for_effect(c, node, b);

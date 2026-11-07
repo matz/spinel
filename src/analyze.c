@@ -16100,8 +16100,8 @@ static int oa_filter_arm(Compiler *c, int id, int recv, OAS *sl, int S, char *cl
    escape (an Array of objects does: an exception among them would render
    as an Object). `p` and `pp` answer their argument, so only where that
    value is thrown away (walk_disc). Not where the program defines a method
-   of the printer's name, or an Array#inspect or #to_s the boxed rendering
-   would not call. */
+   of the printer's name, at the top or one the call reaches in a class, or
+   an Array#inspect or #to_s the boxed rendering would not call. */
 static int oa_printer_takes_args(Compiler *c, int id, const char *walk_disc, int nc) {
   const NodeTable *nt = c->nt;
   if (nt_kind(nt, id) != NK_CallNode || nt_ref(nt, id, "receiver") >= 0 || nt_ref(nt, id, "block") >= 0) return 0;
@@ -16110,7 +16110,7 @@ static int oa_printer_takes_args(Compiler *c, int id, const char *walk_disc, int
   int answers_arg = sp_streq(nm, "p") || sp_streq(nm, "pp");
   if (!answers_arg && !sp_streq(nm, "puts") && !sp_streq(nm, "print")) return 0;
   if (answers_arg && !(id < nc && walk_disc[id])) return 0;
-  if (comp_method_index(c, nm) >= 0) return 0;
+  if (comp_method_index(c, nm) >= 0 || comp_self_call_mi(c, id, nm) >= 0) return 0;
   if (share_builtin_overridden(c, "Array", "inspect") || share_builtin_overridden(c, "Array", "to_s")) return 0;
   int args = nt_ref(nt, id, "arguments"), argc = 0;
   const int *argv = args >= 0 ? nt_arr(nt, args, "arguments", &argc) : NULL;

@@ -230,8 +230,12 @@ void emit_puts_one(Compiler *c, int arg, Buf *b, int indent) {
   }
   else if (t == TY_INT_ARRAY_ARRAY || t == TY_FLOAT_ARRAY_ARRAY) {
     /* a table of rows, boxed by reference with what its rows are, which
-       sp_poly_puts prints one per line (#4486) */
-    buf_puts(b, "sp_poly_puts("); emit_boxed(c, arg, b); buf_puts(b, ");\n");
+       sp_poly_puts prints one per line (#4486). Rooted for the call: a
+       method's fresh table is held nowhere else, and a Float row's render
+       allocates. */
+    int tb = ++g_tmp;
+    buf_printf(b, "{ sp_RbVal _t%d = ", tb); emit_boxed(c, arg, b);
+    buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); sp_poly_puts(_t%d); }\n", tb, tb);
   }
   else if (ty_is_hash(t) &&
            !(nt_kind(c->nt, arg) == NK_KeywordHashNode &&

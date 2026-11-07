@@ -58,6 +58,11 @@ fgap = [[1.5], [2.5]]
 fgap[0][2] = 3.5
 puts fgap
 
+# a method's fresh table of Float rows, held nowhere but by puts while
+# each row renders (SPINEL_GC_STRESS)
+def fresh = Array.new(30) { |i| [i * 1.5, i / 4.0] }
+puts fresh
+
 # p's value used: the table stays boxed, and is the same table
 z = [[8, 9]]
 w = p(z)

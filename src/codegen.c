@@ -16780,19 +16780,25 @@ static BuiltinDefaultCmp class_default_cmp(Compiler *c, int cid) {
   return builtin_default_cmp(family);
 }
 
-/* Does program class k mix in Comparable or define one of its methods? */
+/* Comparable's methods that sp_poly_lacks_cmp answers for */
+static const char *const cmp_lack_ops[] = { "<", "<=", ">", ">=", "between?", "clamp", NULL };
+
+/* Does program class k mix in Comparable, define one of its methods, or
+   define method_missing? */
 static int class_opens_cmp(Compiler *c, int k) {
-  static const char *const ops[] = { "<", "<=", ">", ">=", "between?", "clamp", NULL };
   if (class_is_comparable(c, k)) return 1;
-  for (int u = 0; ops[u]; u++) if (comp_method_in_chain(c, k, ops[u], NULL) >= 0) return 1;
+  if (comp_method_in_chain(c, k, "method_missing", NULL) >= 0) return 1;
+  for (int u = 0; cmp_lack_ops[u]; u++) if (comp_method_in_chain(c, k, cmp_lack_ops[u], NULL) >= 0) return 1;
   return 0;
 }
 
 /* May the program give a builtin value a comparison its class lacks
    (sp_poly_lacks_cmp)? A class or module that is a builtin, Object, Kernel
-   or BasicObject opens one (class_opens_cmp), or the top level defines one. */
+   or BasicObject opens one (class_opens_cmp), a module the top level
+   includes does, or the top level defines one. */
 static int program_opens_builtin_cmp(Compiler *c) {
-  static const char *const ops[] = { "<", "<=", ">", ">=", "between?", "clamp", NULL };
+  for (int i = 0; i < c->ntoplevel_includes; i++)
+    if (c->toplevel_includes[i] >= 0 && class_opens_cmp(c, c->toplevel_includes[i])) return 1;
   for (int k = 0; k < c->nclasses; k++) {
     const char *kn = c->classes[k].name;
     if (!kn || !(is_builtin_reopen(kn) || is_object_root(kn) || is_builtin_module_const_name(kn))) continue;
@@ -16801,7 +16807,8 @@ static int program_opens_builtin_cmp(Compiler *c) {
   for (int s = 0; s < c->nscopes; s++) {
     const Scope *sc = &c->scopes[s];
     if (!sc->name || sc->is_cmethod || sc->class_id >= 0) continue;
-    for (int u = 0; ops[u]; u++) if (sp_streq(sc->name, ops[u])) return 1;
+    if (sp_streq(sc->name, "method_missing")) return 1;
+    for (int u = 0; cmp_lack_ops[u]; u++) if (sp_streq(sc->name, cmp_lack_ops[u])) return 1;
   }
   return 0;
 }
@@ -16813,6 +16820,7 @@ static int emit_cmp_exc_open(Compiler *c, Buf *b) {
   for (int k = 0; k < c->nclasses; k++) {
     const char *kn = c->classes[k].name;
     if (!kn || comp_class_is_module(c, &c->classes[k]) || c->classes[k].is_struct) continue;
+    /* (-116: Object, the class has no builtin parent) */
     if (class_builtin_parent(c, k) == -116 || !class_opens_cmp(c, k)) continue;
     if (!n++) buf_puts(b, "  { static const char *const sp_cmp_exc_names[] = { ");
     const char *rn = class_ruby_name(c, k);

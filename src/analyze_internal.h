@@ -1191,7 +1191,6 @@ void qc_collect_writes(Compiler *c, int node, char (*path)[64], int depth, QCWri
 int qc_read_chain(const NodeTable *nt, int node, char (*chain)[64], int *abs_anchor);
 void qc_qualified_name(char *out, size_t cap, const QCWrite *w);
 void qc_rewrite_reads(Compiler *c, int node, char (*mods)[64], int mdepth, QCWrite *ws, int wn);
-void qualify_colliding_consts(Compiler *c);
 void qc_collect_class_writes(Compiler *c, int node, char (*path)[64], int depth, QCWrite **ws, int *n, int *cap);
 void qualify_colliding_classes(Compiler *c);
 void topup_forwarding_arity(Compiler *c);

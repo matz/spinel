@@ -3326,14 +3326,12 @@ static void alias_rename_add(AliasRenames *q, int node, const char *name, int he
   q->n++;
 }
 
-/* The name a read or write had before qualify_colliding_consts renamed it
-   (`X8::S` read as `X8::X8__S`), kept for the classes pass, which resolves
-   the module path a constant alias names in the names the program wrote.
-   The path lookups take a kept name as proof that the scope holds the
-   constant (const_node_class_index): qualify_colliding_consts renames a
-   path only after it finds the member, and an alias rename keeps the name
-   only for a path whose scope holds the name and finds it assigned
-   (alias_read_held, asked before the edit). */
+/* The name a read had before a rename (`X8::S` read as `X8::X8__S`). The
+   path lookups take a kept name as proof that the scope holds the constant
+   (const_node_class_index): the class pass renames a path only after it
+   finds the member, and an alias rename keeps the name only for a path
+   whose scope holds the name and finds it assigned (alias_read_held, asked
+   before the edit). */
 static void qc_keep_orig_name(const NodeTable *nt, int node) {
   const char *nm = nt_str(nt, node, "name");
   if (nm && !nt_str(nt, node, "qc_orig_name")) nt_node_set_str((NodeTable *)nt, node, "qc_orig_name", nm);
@@ -6125,14 +6123,16 @@ void qc_rewrite_reads(Compiler *c, int node, char (*mods)[64], int mdepth,
   qc_pop_header(own, qc_lex);
 }
 
-/* The qualified names qualify_colliding_consts gave a constant written under
-   a module path, for qualify_colliding_classes. */
+/* The qualified names qc_value_collisions gives a constant written under a
+   module path, for qualify_colliding_classes; and by write node, for its
+   list of the constants beside the classes. */
 static char **qc_const_quals; static int qc_nconst_quals;
+static const char **qc_value_keys; static int qc_nvalue_keys;
 static int qc_const_qualified(const char *qn) {
   for (int i = 0; i < qc_nconst_quals; i++) if (sp_streq(qc_const_quals[i], qn)) return 1;
   return 0;
 }
-/* Did that pass qualify some constant of this leaf name? */
+/* Was some constant of this leaf name given one? */
 int qc_leaf_qualified(const char *leaf) {
   size_t ll = strlen(leaf);
   for (int i = 0; i < qc_nconst_quals; i++) {
@@ -6214,7 +6214,12 @@ static void qc_value_reads(Compiler *c, const QCWrite *ws, int wn) {
   free(names);
 }
 
-void qualify_colliding_consts(Compiler *c) {
+/* The value constants the class pass must keep apart from its classes: those
+   of a leaf written under 2+ module paths, or named like a builtin or a class
+   defined elsewhere. Their slots' keys are the load record's (elab_const_keys);
+   the class pass, which runs before the record exists, asks the same rule here
+   and renames no constant. */
+static void qc_value_collisions(Compiler *c) {
   const NodeTable *nt = c->nt;
   QCWrite *ws = NULL; int wn = 0, wcap = 0;
   char path[QC_MAXDEPTH][64];
@@ -6258,19 +6263,17 @@ void qualify_colliding_consts(Compiler *c) {
   }
   free(two);
   free(cws);
+  qc_nvalue_keys = nt->count;
+  qc_value_keys = calloc((size_t)qc_nvalue_keys + 1, sizeof *qc_value_keys);
+  if (!qc_value_keys) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   if (any) {
-    /* A value constant's write and the reads that match it keep their
-       names: the load record keys them after the walk (elab_const_keys),
-       which takes qualify's name as the key of a write of an owner it does
-       not know. A write that makes a class (a builder's, a record's) is the
-       class pass's. */
     qc_value_reads(c, ws, wn);
     for (int i = 0; i < wn; i++) {
       if (ws[i].depth == 0) continue;
       char qn[512]; qc_qualified_name(qn, sizeof qn, &ws[i]);
-      nt_node_set_str((NodeTable *)nt, ws[i].node, "qc_value_key", qn);
       qc_const_quals = realloc(qc_const_quals, sizeof(char *) * (size_t)(qc_nconst_quals + 1));
       qc_const_quals[qc_nconst_quals++] = strdup(qn);
+      if (ws[i].node >= 0 && ws[i].node < qc_nvalue_keys) qc_value_keys[ws[i].node] = qc_const_quals[qc_nconst_quals - 1];
     }
   }
   qc_free_headers();
@@ -6600,6 +6603,7 @@ void qualify_colliding_classes(Compiler *c) {
   const NodeTable *nt = c->nt;
   QCWrite *ws = NULL; int wn = 0, wcap = 0;
   char path[QC_MAXDEPTH][64];
+  qc_value_collisions(c);
   qc_refuse_conditional_builder(c);
   qc_resolve_headers(c);
   /* Headers ask only about native_struct declarations: collected once here,
@@ -6643,17 +6647,17 @@ void qualify_colliding_classes(Compiler *c) {
       unsupported_feature(c, ws[i].node, msg);
     }
   }
-  /* the plain constant writes left under a bare leaf (the constant pass
-     qualified the nested ones that collide), for a nested class named like a
-     top-level constant: `Config = {...}` beside `module Rack; class Config` */
+  /* the plain constant writes under a bare leaf (the nested ones that collide
+     by the key qc_value_collisions gave them), for a nested class named like
+     a top-level constant: `Config = {...}` beside `module Rack; class Config` */
   QCWrite *kws = NULL; int kwn = 0, kwcap = 0;
   for (int r = 0; r < nt_nroots(nt); r++)
     qc_collect_writes(c, nt_root(nt, r), path, 0, &kws, &kwn, &kwcap);
   for (int i = 0; i < kwn; i++)
     if (qc_is_class_write(&kws[i], ws, wn)) { kws[i] = kws[--kwn]; i--; }
-    /* (a value constant the constant pass qualified keeps its name until the
-       walk: here it is the name that pass gave it) */
-    else if (nt_str(nt, kws[i].node, "qc_value_key")) snprintf(kws[i].name, sizeof kws[i].name, "%s", nt_str(nt, kws[i].node, "qc_value_key"));
+    else if (kws[i].node >= 0 && kws[i].node < qc_nvalue_keys && qc_value_keys[kws[i].node])
+      snprintf(kws[i].name, sizeof kws[i].name, "%s", qc_value_keys[kws[i].node]);
+  free(qc_value_keys); qc_value_keys = NULL; qc_nvalue_keys = 0;
   /* keep only leaf names defined under 2+ distinct module paths */
   unsigned char *leaf_collides = qc_colliding_leaves(ws, wn);   /* moves with its write */
   int any = 0;
@@ -50301,7 +50305,6 @@ static void an_phase_desugar_register(Compiler *c) {
   lower_run(c, &lc, LW_ENUMERATOR_PRODUCE);         /* Enumerator.produce -> fiber generator */
   lower_run(c, &lc, LW_PARAM_DEFAULT_ASSIGNS_LOCAL); /* def m(p = (x = e)) reading x -> sentinel + callee guard */
   lower_run(c, &lc, LW_RECURSIVE_PARAM_DEFAULTS);   /* def m(x, y = m(..)) -> default helper method */
-  qualify_colliding_consts(c);
   qualify_colliding_classes(c);
   /* the walk is a step of its own: a form it runs splices through the host,
      which lowers each splice as it is made; the rows a splice leaves to the

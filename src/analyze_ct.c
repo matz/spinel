@@ -1280,7 +1280,7 @@ static int ct_fx_stmt(CtBind *b, Compiler *c, int list, int call, const CtFx *f)
    Enumerable` routes (desugar_extend_enumerable reads those), nor one
    singleton_method_added would see. In their bodies: no class, module,
    singleton class, nested def, alias or undef; no constant
-   (qualify_colliding_consts and refuse_unreachable_bare_constants read
+   (qualify_colliding_classes and refuse_unreachable_bare_constants read
    every reference, the steps before them its other shapes); no operator
    write (desugar_reopened_op_write); no call that loads, defines, reflects
    or opens a singleton class; and none of the other shapes a step before

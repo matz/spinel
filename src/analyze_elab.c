@@ -8713,7 +8713,7 @@ static int host_id_cmp(const void *a, const void *b) {
    desugar_explicit_receiver_mixin, desugar_extend_enumerable), a class builder (desugar_class_new_blocks,
    desugar_inline_struct_blocks), const_get (desugar_literal_const_get,
    desugar_self_const_get, desugar_dynamic_const_get), a write through a
-   constant path (desugar_constant_path_self_alias, qualify_colliding_consts),
+   constant path (desugar_constant_path_self_alias, qualify_colliding_classes),
    instance_eval (desugar_instance_eval_defs), a method_defined? guard
    (desugar_def_unless_method_defined), an alias (desugar_inherited_aliases,
    desugar_reader_aliases_before_redef).
@@ -8931,8 +8931,8 @@ int elab_autoload_file_defines(Compiler *c, int slot, int file) {
    takes one key: the leaf, or, for a nested entity whose leaf another
    entity writes under another owner path (or a builtin class's leaf),
    the owner's Ruby path joined by `__`, then `__` and the leaf. This is
-   qualify_colliding_consts' rule, run over the record's entities instead
-   of the lexical writes. */
+   qc_value_collisions' rule, run over the record's entities instead of the
+   lexical writes. */
 typedef struct { int h, cls_ent; char *path, *key; } LrKeyEnt;
 
 /* The Ruby path of a constant owner (lr_const_owner's numbering), its
@@ -9146,7 +9146,6 @@ void elab_const_keys(Compiler *c) {
   lr_key_hists = r->hist;
   qsort(es, (size_t)ne, sizeof *es, lr_key_ent_cmp);
   long same = 0, differ = 0;
-  unsigned char *keyed = calloc((size_t)nt->count + 1, 1);   /* the writes an entity keys */
   for (int i = 0, g0 = 0, g1 = 0; i < ne; i++) {
     const LrHist *h = &r->hist[es[i].h];
     /* the entities of the leaf, [g0, g1): es is sorted by leaf, then path */
@@ -9175,7 +9174,6 @@ void elab_const_keys(Compiler *c) {
       if (kn < 0) continue;
       const char *qn = nt_str(nt, kn, "name");
       if (!qn) continue;
-      if (kn < nt->count) keyed[kn] = 1;
       if (sp_streq(qn, key)) { same++; continue; }
       differ++;
       lr_key_queue(&q, &nq, &cq, kn, key);
@@ -9183,13 +9181,6 @@ void elab_const_keys(Compiler *c) {
                          (long long)nt_int(nt, h->v[v].node, "node_line", 0), es[i].path[0] ? es[i].path : "main", qn, key);
     }
   }
-  /* a write of an owner the record does not know keeps qualify's name
-     for it (qc_value_key, qualify_colliding_consts) */
-  for (int id = 0; id < nt->count; id++) {
-    const char *qv = keyed[id] ? NULL : nt_str(nt, id, "qc_value_key");
-    if (qv && !sp_streq(qv, nt_str(nt, id, "name") ? nt_str(nt, id, "name") : "")) lr_key_queue(&q, &nq, &cq, id, qv);
-  }
-  free(keyed);
   if (check) fprintf(stderr, "constkey: same=%ld differ=%ld\n", same, differ);
   /* the reads: the write each resolves to, by the record, and that write's key */
   int *ent = calloc((size_t)nt->count + 1, sizeof *ent);
@@ -9282,8 +9273,7 @@ void elab_const_keys(Compiler *c) {
      its slot's key beside it ("ckey", const_key_at), which a copy a later
      pass makes of the node (a method body copied into another class)
      carries too. The entities' writes and resolved reads first, then the
-     ones the queue names (a candidate's read, a write of an owner the
-     record does not know keeping qualify's qc_value_key). */
+     ones the queue names (a candidate's read). */
   for (int id = 0; id < nt->count; id++)
     if (r->cent[id]) lr_set_ckey((NodeTable *)nt, id, r->ckey[r->cent[id] - 1]);
   for (int i = 0; i < nq; i++) { lr_set_ckey((NodeTable *)nt, q[i].node, q[i].key); free(q[i].key); }

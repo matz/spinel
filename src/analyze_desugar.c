@@ -22981,7 +22981,7 @@ static int incl_declined_node(const NodeTable *nt, int node, const char *param) 
   case NK_InstanceVariableOrWriteNode: case NK_InstanceVariableAndWriteNode: case NK_InstanceVariableTargetNode:
   case NK_ClassVariableReadNode: case NK_ClassVariableWriteNode: case NK_ClassVariableOperatorWriteNode:
   case NK_ClassVariableOrWriteNode: case NK_ClassVariableAndWriteNode: case NK_ClassVariableTargetNode:
-  /* a constant write (desugar_constant_path_self_alias, qualify_colliding_consts) */
+  /* a constant write (desugar_constant_path_self_alias, qualify_colliding_classes) */
   case NK_ConstantWriteNode: case NK_ConstantOperatorWriteNode: case NK_ConstantOrWriteNode:
   case NK_ConstantAndWriteNode: case NK_ConstantTargetNode:
   /* `class << x` (desugar_sclass_readers_through_class and the singleton mixins) */

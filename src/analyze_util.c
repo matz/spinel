@@ -832,14 +832,9 @@ static int builtin_scope_lacks_member(Compiler *c, int seg) {
   /* the name the program wrote, a collision key (Holds__Qux) by its leaf */
   const char *wn = nt_str(nt, seg, "qc_orig_name");
   nm = class_leaf_name(wn ? wn : nm);
-  /* a top-level class, a constant aliasing one (`SA = Foo`) among them; the
-     name it is given by is the one written */
-  const char *key = const_key_at(c, seg);
-  int k = comp_class_index(c, key);
-  if (k < 0 && key) {
-    const char *real = resolve_class_alias(c, key);
-    if (real && !sp_streq(real, key)) k = comp_class_index(c, real);
-  }
+  /* a top-level class, by the key the node reads (an alias receiver is
+     renamed to its class, rewrite_builtin_alias_receivers) */
+  int k = comp_class_index(c, const_key_at(c, seg));
   if (!is_constless_builtin_name(pn)) return 0;
   /* a top-level builtin class or module (Array::String) is no member
      either, unless the program reopens it or gives it its own entry */

@@ -1,0 +1,27 @@
+true
+false
+"Mod::Err"
+"Mod::Err"
+"Mod::Err"
+[:X]
+true
+:hi
+true
+"m"
+Mod::Err
+StandardError
+[:hi]
+true
+true
+true
+true
+true
+true
+true
+true
+:when_e
+Mod::Err
+true
+1
+Mod::Err
+[Mod::Err, "r"]

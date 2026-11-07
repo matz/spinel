@@ -3373,11 +3373,14 @@ static int alias_read_held(Compiler *c, int node) {
   return nt_kind(c->nt, node) != NK_ConstantPathNode || an_const_read_finds(c, node, const_key_at(c, node));
 }
 
-/* Asks the class a constant node names when it names an alias of a builtin
-   class (one the program reopens included), and queues its rename to that
-   class's name. An alias of a class of the program is not renamed: its
-   readers ask the node (const_node_class_index). */
-static void ask_const_alias_name(Compiler *c, int node, AliasRenames *q) {
+/* Asks the class a constant node names when it names a class alias, and
+   queues its rename to that class's name: an alias of a builtin class (one
+   the program reopens included) in every position, an alias of a class of
+   the program (any_class) as a call's receiver only, whose readers in
+   codegen still go by the name (a class value's reflection: constants,
+   instance_method, ...). A `when` or a kind query's argument asks the node
+   (const_node_class_index). */
+static void ask_const_alias_name(Compiler *c, int node, AliasRenames *q, int any_class) {
   const NodeTable *nt = c->nt;
   if (node < 0 || !nt_type(nt, node)) return;
   NodeKind k = nt_kind(nt, node);
@@ -3390,16 +3393,18 @@ static void ask_const_alias_name(Compiler *c, int node, AliasRenames *q) {
   const char *real = resolve_class_alias(c, rn);
   /* (a builtin the program reopens, IO::Buffer in packages/io, is still
      dispatched as the builtin, by its name) */
-  if (!real || sp_streq(real, rn) || (comp_class_index(c, real) >= 0 && !is_builtin_class_name(real))) return;
+  if (!real || sp_streq(real, rn) || (!any_class && comp_class_index(c, real) >= 0 && !is_builtin_class_name(real))) return;
   alias_rename_add(q, node, real, alias_read_held(c, node));
 }
 
 /* `B = IO::Buffer` (a constant aliasing a builtin class) then `B.for`:
    rewrite the receiver's name to the builtin class's, so the builtin's
    class-method dispatch, which goes by the receiver's name, resolves it
-   like the direct `IO::Buffer.for`. The class argument of
-   is_a?/kind_of?/instance_of? (`x.is_a?(B)`) and each `when` condition
-   (`when B`) resolve the same way. Runs once after classes are registered. */
+   like the direct `IO::Buffer.for`; and `E = Mod::Err` then `E.constants`
+   the same, for the class value's methods codegen answers by the
+   receiver's name. The class argument of is_a?/kind_of?/instance_of?
+   (`x.is_a?(B)`) and each `when` condition (`when B`) of a builtin's alias
+   resolve the same way. Runs once after classes are registered. */
 static void rewrite_builtin_alias_receivers(Compiler *c) {
   const NodeTable *nt = c->nt;
   AliasRenames q = {0};
@@ -3407,16 +3412,16 @@ static void rewrite_builtin_alias_receivers(Compiler *c) {
     NodeKind k = nt_kind(nt, id);
     if (k == NK_WhenNode) {
       int wn = 0; const int *wc = nt_arr(nt, id, "conditions", &wn);
-      for (int i = 0; i < wn; i++) ask_const_alias_name(c, wc[i], &q);
+      for (int i = 0; i < wn; i++) ask_const_alias_name(c, wc[i], &q, 0);
       continue;
     }
     if (k != NK_CallNode) continue;
-    ask_const_alias_name(c, nt_ref(nt, id, "receiver"), &q);
+    ask_const_alias_name(c, nt_ref(nt, id, "receiver"), &q, 1);
     const char *nm = nt_str(nt, id, "name");
     if (nm && is_kind_query(nm)) {
       int args = nt_ref(nt, id, "arguments"), an = 0;
       const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &an) : NULL;
-      if (an == 1 && av) ask_const_alias_name(c, av[0], &q);
+      if (an == 1 && av) ask_const_alias_name(c, av[0], &q, 0);
     }
   }
   /* The asks above are the load record's, which rebuilds its point map after

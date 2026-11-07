@@ -440,6 +440,9 @@ int elab_blocks_run_now(Compiler *c, int node);
 /* the scope walk made method scope `scope` of def or define_method node
    `node`: the record's version of it holds it (LrDef.scope) */
 void elab_def_scope(Compiler *c, int node, int scope);
+/* the class a receiver-less def in an instance_eval frame defines on (in *sg, on its singleton), -1 for none */
+int elab_def_definee(Compiler *c, int node, int *sg);
+int elab_def_scope_of(Compiler *c, int node);   /* the scope elab_def_scope filed for the def, 0 for none */
 /* the def node whose body holds node, with no class body or other def
    between; -1 for none */
 int elab_body_def(Compiler *c, int node);

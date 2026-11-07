@@ -1355,18 +1355,9 @@ int desugar_instance_eval_defs(Compiler *c) {
                                          "supported: name the receiver (`def Klass.m`) instead");
       continue;
     }
-    for (int k = 0; k < n; k++) {
-      int r = nt_clone_subtree(nt, cls);
-      if (r < 0) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-      nt_node_set_ref(nt, stmts[k], "receiver", r);
-    }
-    if (recv < 0 || rk == NK_SelfNode) {
-      int r = nt_clone_subtree(nt, cls);
-      if (r < 0) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-      nt_node_set_ref(nt, id, "receiver", r);
-    }
-    nt_node_set_str(nt, id, "name", "class_eval");
-    changed = 1;
+    /* (the defs stay where they are: the walk records them on the class's
+       singleton, elab_def_definee, and the scope pass places them there) */
+    (void)stmts;
   }
   free(body_of);
   ied_paths_free(&ip);

@@ -186,6 +186,7 @@ struct LoadRecord {
   struct LrHeader *hdr; int nhdr, chdr, *hdr_head;   /* the class and module headers, in the order the walk reaches them (elab_header_class), and the class builders' calls and writes noted ahead of the walk (elab_builder_note) */
   ElabSurface *surf; int *surf_at;   /* elab_class_surface's, by class side: [2 * (cls + 1) + sg] .. [+ 1] */
   int *dscope, ndscope;      /* [ndscope] by node: the method scope the scope walk made of a def or define_method (elab_def_scope), 0 for none */
+  int *ddef, nddef;          /* [nddef] by def node: a receiver-less def in an instance_eval frame, the class it defines on + 2 (LR_MAIN is -1) with bit 0 for its singleton; 0 for none (elab_def_definee) */
   int core[CORE_N];          /* every header with a core name as it registers (elab_header_opened), its index + 1; 0 before one; only Object, BasicObject, Module and Kernel are read (lr_core) */
 };
 
@@ -1468,6 +1469,7 @@ void elab_def_scope(Compiler *c, int node, int scope) {
 static int lr_def_scope(const LoadRecord *r, int node) {
   return node >= 0 && node < r->ndscope ? r->dscope[node] : 0;
 }
+int elab_def_scope_of(Compiler *c, int node) { return lr_def_scope(lr_get(c), node); }
 
 /* Does module_function copy a version of this kind to the singleton: a
    def, a define_method and a `module_function :n` of a name do; an alias
@@ -1519,10 +1521,31 @@ static int lr_definee(int fc, int fs, int *sg) {
    alias of an inherited method (`def nw(*a, &b) = nw#inherited(*a, &b)`)
    is that alias: it takes the visibility of the method it names, not its
    section's, so it names it as an alias does. */
+/* A receiver-less def in a `K.instance_eval { }` frame defines on K's
+   singleton: kept by def node for the scope pass, which placed the def's
+   scope before the record saw the def (elab_def_definee reads it) */
+static void lr_def_definee_set(LoadRecord *r, int def, int cls, int sg) {
+  if (def < 0) return;
+  if (def >= r->nddef) {
+    int n = def + 1 > 2 * r->nddef ? def + 1 : 2 * r->nddef;
+    r->ddef = realloc(r->ddef, sizeof *r->ddef * (size_t)n);
+    if (!r->ddef) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    memset(r->ddef + r->nddef, 0, sizeof *r->ddef * (size_t)(n - r->nddef));
+    r->nddef = n;
+  }
+  r->ddef[def] = ((cls + 2) << 1) | (sg ? 1 : 0);
+}
+int elab_def_definee(Compiler *c, int node, int *sg) {
+  LoadRecord *r = lr_get(c);
+  if (node < 0 || node >= r->nddef || !r->ddef[node]) { if (sg) *sg = 0; return -1; }
+  if (sg) *sg = r->ddef[node] & 1;
+  return (r->ddef[node] >> 1) - 2;
+}
 static void lr_def(ElabRec *x, int def, int fc, int fs, int bvis, int may) {
   const NodeTable *nt = x->c->nt;
   int recv = nt_ref(nt, def, "receiver"), sg, cls = lr_definee(fc, fs, &sg);
   if (recv >= 0) { cls = lr_receiver(x, nt_def_receiver(nt, recv), fc, LR_FS_SCLASS, &sg, LR_LATE | LR_BODY); sg = 1; bvis = BVIS_PUBLIC; }
+  else if (fs == LR_FS_IEVAL && cls >= 0) lr_def_definee_set(x->r, def, cls, sg);
   int body = nt_int(nt, def, "alias_forwarder", 0) ? nt_ref(nt, def, "body") : -1, n = 0;
   const int *st = body >= 0 ? nt_arr(nt, body, "body", &n) : NULL;
   const char *fwd = n == 1 && nt_kind(nt, st[0]) == NK_CallNode ? nt_str(nt, st[0], "name") : NULL;
@@ -8628,7 +8651,7 @@ void elab_free(Compiler *c) {
   free(r->hist); free(r->mixed); free(r->rclass); free(r->sgm); free(r->sgchain); free(r->unset.key); free(r->unset.un); free(r->clsmod); free(r->hhead); free(r->cls); free(r->vers); free(r->vers_head); free(r->valias); free(r->rdr); free(r->rdr_head); free(r->set);
   for (int i = 0; i < r->nhdr; i++) free(r->hdr[i].leaf);
   free(r->hdr); free(r->hdr_head);
-  free(r->st); free(r->at); free(r->bits); free(r->dscope); free(r->rend); free(r->rinst); free(r->urun); free(r->rentry); free(r);
+  free(r->st); free(r->at); free(r->bits); free(r->dscope); free(r->ddef); free(r->rend); free(r->rinst); free(r->urun); free(r->rentry); free(r);
   c->lrec = NULL;
 }
 

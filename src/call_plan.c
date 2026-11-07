@@ -6797,7 +6797,8 @@ static int ver_write_stmt(const NodeTable *nt, const int *par, int node) {
     int blk = st >= 0 && par[st] >= 0 ? par[par[st]] : -1, call = blk >= 0 ? par[blk] : -1;
     const char *nm = call >= 0 && nt_kind(nt, blk) == NK_BlockNode && nt_kind(nt, call) == NK_CallNode &&
                      nt_ref(nt, call, "block") == blk ? nt_str(nt, call, "name") : NULL;
-    if (!nm || !is_class_eval_family(nm)) return st;
+    /* (a defs-only `K.instance_eval { }` is the same reopening, #10785) */
+    if (!nm || !(is_class_eval_family(nm) || (is_instance_eval_family(nm) && nt_ref(nt, call, "arguments") < 0))) return st;
     st = call;
   }
 }

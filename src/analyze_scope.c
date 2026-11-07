@@ -1027,7 +1027,10 @@ int class_eval_reopen_class(Compiler *c, int id, int enclosing_class) {
   NodeKind ty_k = nt_kind(nt, id);
   if (ty_k != NK_CallNode) return -1;
   const char *nm = nt_str(nt, id, "name");
-  if (!nm || !is_class_eval_family(nm)) return -1;
+  /* (`K.instance_eval { defs }` too, #10785: its defs are K's class methods,
+     which the walk records on K's singleton and the scope pass places there
+     after the walk, elab_def_definee; the statement runs nothing either) */
+  if (!nm || !(is_class_eval_family(nm) || (is_instance_eval_family(nm) && nt_ref(nt, id, "arguments") < 0))) return -1;
   /* a literal block: a `&blk` argument has no body to register, and is a
      call that runs it */
   int blk = nt_ref(nt, id, "block");

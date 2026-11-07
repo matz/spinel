@@ -12,7 +12,7 @@ r0 #9 f0 CallNode instance_eval line 25
   r0 #10 f0 CallNode include line 26
   r0 #11 f0 CallNode prepend line 27
   r0 #12 f0 CallNode attr_accessor line 28
-r0 #13 f0 CallNode class_eval line 31
+r0 #13 f0 CallNode instance_eval line 31
   r0 #14 f0 DefNode made line 32
 r0 #15 f0 ClassNode C line 35
   r0 #16 f0 CallNode extend line 36
@@ -21,7 +21,7 @@ r0 #18 f0 LocalVariableWriteNode c line 39
 r0 #19 f0 CallNode x= line 40
 r0 #20 f0 CallNode p line 41
 block instance_eval line 25: assumed
-block class_eval line 31: assumed
+block instance_eval line 31: assumed
 class M: body#1
 class P: body#3
 class N: body#5

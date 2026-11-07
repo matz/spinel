@@ -50306,6 +50306,19 @@ static void an_phase_desugar_register(Compiler *c) {
      program run once, at the walk's end */
   host_begin(&hs, &lc);
   AN_STEP_V("elab_program", elab_program(c, &hs));   /* walk_scope of each file's top level, and the load record */
+  /* a def in a `K.instance_eval { }` block defines K's class method (the
+     record's frame): the scope walk filed its scope before the record saw the
+     def, so it is moved here, as `def self.m` in K's body is placed */
+  { const NodeTable *nt = c->nt;
+    NT_FOREACH_KIND(nt, NK_DefNode, d) {
+      int sg = 0, cls = elab_def_definee(c, d, &sg), si = elab_def_scope_of(c, d);
+      if (nt_ref(nt, d, "receiver") >= 0 || cls < 0 || cls >= c->nclasses || !sg || si <= 0 || si >= c->nscopes) continue;
+      Scope *s = &c->scopes[si];
+      if (s->class_id == cls && s->is_cmethod) continue;
+      { s->class_id = cls; comp_touch_scope(s->idx); }
+      { s->is_cmethod = 1; comp_touch_scope(s->idx); }
+    }
+  }
   host_end(c, &hs);
   lower_finish(c, &lc);   /* SPINEL_LOWER_CHECK: the report, and no C */
   prog_refuse_loads(c);

@@ -1,0 +1,13 @@
+0: rescued t0 []
+1: thrown 1 [1]
+2: rescued t2 [1, 2]
+3: thrown 3 [1, 2, 3]
+4: rescued t4 [1, 2, 3, 4]
+5: thrown 5 []
+6: rescued t6 [1]
+7: thrown 7 [1, 2]
+8: rescued t8 [1, 2, 3]
+9: thrown 9 [1, 2, 3, 4]
+10: rescued t10 []
+11: thrown 11 [1]
+joined raises: 4

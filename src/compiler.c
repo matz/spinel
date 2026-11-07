@@ -5281,12 +5281,37 @@ static char *nested_class_body_marks(NodeTable *nt, const int *ids, int n) {
    parent, and past the top of an explicit chain, Object -- where a method the
    program defines on Object is every class's superclass method. A module's
    super is its includer's, and a class method's chain has no such end. */
+/* Does the program use Kernel as a value: `include Kernel` in any body,
+   `BasicObject.include(Kernel)`, `send(:include, ::Kernel)`, `K = Kernel`?
+   Every read of the constant counts but a call's receiver (`Kernel.puts`)
+   and a `module Kernel` header. A class under the program's own
+   BasicObject may then reach Kernel's methods through Object's chain, so
+   that BasicObject keeps the lookup it had. Kept until the table changes. */
+static int kernel_const_node(const NodeTable *nt, int id) {
+  if (id < 0) return 0;
+  NodeKind k = nt_kind(nt, id);
+  return (k == NK_ConstantReadNode || k == NK_ConstantPathNode) && sp_streq(nt_str(nt, id, "name"), "Kernel");
+}
+static int program_names_kernel(Compiler *c) {
+  static const NodeTable *knt; static unsigned kver; static int kcount = -1, kans;
+  const NodeTable *nt = c->nt;
+  if (knt == nt && kver == nt->version && kcount == nt->count) return kans;
+  int reads = 0, held = 0;
+  NT_FOREACH_KIND(nt, NK_ConstantReadNode, id) reads += kernel_const_node(nt, id);
+  NT_FOREACH_KIND(nt, NK_ConstantPathNode, id) reads += kernel_const_node(nt, id);
+  NT_FOREACH_KIND(nt, NK_CallNode, id) held += kernel_const_node(nt, nt_ref(nt, id, "receiver"));
+  NT_FOREACH_KIND(nt, NK_ModuleNode, id) held += kernel_const_node(nt, nt_ref(nt, id, "constant_path"));
+  kans = reads > held;
+  knt = nt; kver = nt->version; kcount = nt->count;
+  return kans;
+}
 /* Is class ci under BasicObject with no Kernel among its ancestors? The
    includes registration recorded are asked first (an `include` through a
    constant alias, in a block or a class method of the body), then the
    bodies' text (class_lacks_kernel), which runs for such a class alone.
    The program's own BasicObject (`class BasicObject; end`) is such a
-   class too: Object is not past it. */
+   class too, when the program passes Kernel to no call
+   (program_names_kernel): Object is not past it. */
 static int blank_slate_without_kernel(Compiler *c, int ci) {
   int bo = ci >= 0 && ci == comp_core_class(c, CORE_BASIC_OBJECT);
   int ans = bo || class_is_blank_slate(c, ci);
@@ -5302,13 +5327,7 @@ static int blank_slate_without_kernel(Compiler *c, int ci) {
       if (m == ke || (m >= 0 && comp_module_includes(c, m, ke, 0))) ans = 0;
     }
   }
-  if (!ans || (bo ? def_body_includes_kernel(c, c->classes[ci].name, 0) : !class_lacks_kernel(c, ci))) return 0;
-  /* a class under it that includes Kernel (class B < BasicObject; include
-     Kernel) reaches Kernel's methods through Object's chain: its super walk
-     passes here, so the program's BasicObject keeps that lookup too */
-  for (int k = 0; bo && k < c->nclasses; k++)
-    if (k != ci && !comp_class_is_module(c, &c->classes[k]) && class_is_blank_slate(c, k) &&
-        !blank_slate_without_kernel(c, k)) return 0;
+  if (!ans || (bo ? program_names_kernel(c) : !class_lacks_kernel(c, ci))) return 0;
   /* an `include` the body makes another way (through a constant alias, in
      a block, in a class method it calls) may bring Kernel in: such a chain
      keeps the lookup it had */

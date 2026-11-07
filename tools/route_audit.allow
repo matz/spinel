@@ -236,6 +236,7 @@ src/analyze.c desugar_builtin_method_obj a Symbol argument's method, and its wra
 src/analyze.c desugar_missing_method_obj a Symbol argument's helpers, found by their hidden names
 src/analyze.c desugar_kernel_method_block_arg a Symbol argument's method
 src/analyze.c dyn_method_prints a Symbol argument's method
+src/analyze.c oa_printer_takes_args whether the program defines a method of a printer's name
 src/analyze.c dyn_reach_value a String argument's method
 
 # a method, alias, member or mixin being registered, by its own name (an

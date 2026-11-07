@@ -1730,13 +1730,33 @@ static int sp_ev_handle(int w, sp_ev_ready *evs, int en) {
    is ready is readied now. The worker's fast path takes it between threads
    it runs, which is what lets a busy worker deliver I/O without the scheduler
    lock. */
+/* When this worker last looked at its set, and how many threads it has run
+   since; read by sp_ev_drain_due. */
+static SP_TLS unsigned g_ev_runs_since;
+static SP_TLS double g_ev_drained_at;
 static int sp_ev_drain(int wid) {
   if (g_wslot[wid].evfd <= 0) return 0;
+  g_ev_runs_since = 0;
+  g_ev_drained_at = sp_monotonic_now();
   sp_ev_ready evs[64];
   int en = sp_ev_backend_wait(g_wslot[wid].evfd, evs, 64, 0);
   if (en <= 0) return 0;
   SP_STAT_ADD(g_mon_polls, 1); SP_STAT_ADD(g_mon_pollfds, en);
   return sp_ev_handle(wid, evs, en);
+}
+
+/* Whether a worker that is about to run another thread looks at its set
+   first. With its own queue empty it always does, as before. With threads
+   queued, it does every SP_EV_DRAIN_RUNS threads, or once SP_EV_DRAIN_GAP
+   seconds have passed since the last look, so a parked thread whose
+   descriptor is ready waits a bounded time instead of a look being paid
+   on every thread switch. */
+#define SP_EV_DRAIN_RUNS 16u
+#define SP_EV_DRAIN_GAP  0.001
+static int sp_ev_drain_due(int wid) {
+  if (!SP_ATOMIC_LOAD(&g_lrq[wid].head, __ATOMIC_ACQUIRE)) return 1;
+  if (++g_ev_runs_since >= SP_EV_DRAIN_RUNS) return 1;
+  return sp_monotonic_now() - g_ev_drained_at >= SP_EV_DRAIN_GAP;
 }
 
 /* Wait on this worker's own readiness set for up to `tmo_ms`, then ready what
@@ -4427,8 +4447,9 @@ static int sp_worker_run_local(int wid) {
 #ifdef SP_EV_BACKEND
     /* the I/O of threads pinned here waits in this worker's own set; readying
        it takes only the worker's own lock (sp_ev_drain), so it is done here,
-       between threads, and what it readies lands on this worker's queue */
-    if (g_wslot[wid].evfd > 0) (void)sp_ev_drain(wid);
+       between threads, when it is due (sp_ev_drain_due), and what it readies
+       lands on this worker's queue */
+    if (g_wslot[wid].evfd > 0 && sp_ev_drain_due(wid)) (void)sp_ev_drain(wid);
 #endif
     RQ_LOCK(wid); ft = runq_take(&g_lrq[wid]); RQ_UNLOCK(wid);
   }
@@ -4607,14 +4628,14 @@ static void *sp_worker_main(void *arg) {
     }
     locked_turn = 0;
 #ifdef SP_EV_BACKEND
-    /* Drain what is ready before picking, every turn. A worker with runnable
-       work never reaches the blocking wait below, and its OWN set is the only
-       place its parked threads are delivered from -- so without this a busy
-       worker starves them until it happens to idle. That showed as a
-       ping-pong that ran at full speed on one worker and fell to a fifth of it
-       on four, run to run. One zero-timeout wait per scheduling turn is what
-       every netpoll scheduler pays for the same reason. */
-    if (g_wslot[wid].evfd > 0) sp_ev_worker_wait(wid, 0);
+    /* Drain what is ready before picking, when it is due (sp_ev_drain_due:
+       with nothing queued here, and otherwise every few threads or a
+       millisecond). A worker with runnable work never reaches the blocking
+       wait below, and its OWN set is the only place its parked threads are
+       delivered from -- so without this a busy worker starves them until it
+       happens to idle. That showed as a ping-pong that ran at full speed on
+       one worker and fell to a fifth of it on four, run to run. */
+    if (g_wslot[wid].evfd > 0 && sp_ev_drain_due(wid)) sp_ev_worker_wait(wid, 0);
 #endif
     sp_thread *t = sched_pick(wid);   /* own queue, then global, then steal */
     if (t) { run_thread_once(t); continue; }  /* run_thread_once signals quiescence on the last one */

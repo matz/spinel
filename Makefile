@@ -1712,8 +1712,9 @@ ext-test: $(SPINEL) $(SP_RT_LIB) $(SP_RT_MT_LIB) $(SPINEL_TIMEOUT)
 	fi; \
 	if [ $$ok -eq 1 ]; then \
 	  if $(CC) -O1 -w -Ilib -I"$$tmp" test/ext/host.c "$$tmp/k.c" $(SP_RT_LIB) $(LDFLAGS) -lm -o "$$tmp/host" 2>"$$tmp/cc.err"; then \
-	    "$$tmp/host" > "$$tmp/out" 2>&1; \
-	    cmp -s "$$tmp/out" test/ext/expected || { echo "ext-test: FAIL (host output mismatch)"; diff -u test/ext/expected "$$tmp/out" || true; ok=0; }; \
+	    "$$tmp/host" > "$$tmp/out" 2>&1; rc=$$?; \
+	    cmp -s "$$tmp/out" test/ext/expected && [ $$rc -eq 0 ] || \
+	      { echo "ext-test: FAIL (host output mismatch, or status $$rc)"; diff -u test/ext/expected "$$tmp/out" || true; ok=0; }; \
 	  else echo "ext-test: FAIL (host C did not compile)"; sed -n 1,6p "$$tmp/cc.err"; ok=0; fi; \
 	fi; \
 	if [ $$ok -eq 1 ]; then \
@@ -1721,8 +1722,9 @@ ext-test: $(SPINEL) $(SP_RT_LIB) $(SP_RT_MT_LIB) $(SPINEL_TIMEOUT)
 	      --ext-entry ExtThreads.par,ExtThreads.bg -o "$$tmp/t.c" >/dev/null 2>&1; then \
 	    echo "ext-test: FAIL (threads emission)"; ok=0; \
 	  elif $(CC) -O1 -w $(MT_DEF) -Ilib -I"$$tmp" test/ext/threads_host.c "$$tmp/t.c" $(SP_RT_MT_LIB) $(LDFLAGS) -lm -lpthread -o "$$tmp/thost" 2>"$$tmp/cc.err"; then \
-	    $(TIMEOUT10) "$$tmp/thost" > "$$tmp/out" 2>&1; \
-	    printf '60\n150\n1\n' | cmp -s - "$$tmp/out" || { echo "ext-test: FAIL (threads host output mismatch, or it hung)"; cat "$$tmp/out"; ok=0; }; \
+	    $(TIMEOUT10) "$$tmp/thost" > "$$tmp/out" 2>&1; rc=$$?; \
+	    printf '60\n150\n1\n' | cmp -s - "$$tmp/out" && [ $$rc -eq 0 ] || \
+	      { echo "ext-test: FAIL (threads host output mismatch, or it hung, or status $$rc)"; cat "$$tmp/out"; ok=0; }; \
 	  else echo "ext-test: FAIL (threads host C did not compile)"; sed -n 1,6p "$$tmp/cc.err"; ok=0; fi; \
 	fi; \
 	if [ $$ok -eq 1 ]; then \
@@ -1740,8 +1742,9 @@ ext-test: $(SPINEL) $(SP_RT_LIB) $(SP_RT_MT_LIB) $(SPINEL_TIMEOUT)
 	      --ext-entry ExtLateNew.e -o "$$tmp/l.c" >/dev/null 2>&1; then \
 	    echo "ext-test: FAIL (late_new emission)"; ok=0; \
 	  elif $(CC) -O1 -w -Ilib -I"$$tmp" test/ext/late_new_host.c "$$tmp/l.c" $(SP_RT_LIB) $(LDFLAGS) -lm -o "$$tmp/lhost" 2>"$$tmp/cc.err"; then \
-	    "$$tmp/lhost" > "$$tmp/out" 2>&1; \
-	    printf '2\n3\n' | cmp -s - "$$tmp/out" || { echo "ext-test: FAIL (late_new host output mismatch)"; cat "$$tmp/out"; ok=0; }; \
+	    "$$tmp/lhost" > "$$tmp/out" 2>&1; rc=$$?; \
+	    printf '2\n3\n' | cmp -s - "$$tmp/out" && [ $$rc -eq 0 ] || \
+	      { echo "ext-test: FAIL (late_new host output mismatch, or status $$rc)"; cat "$$tmp/out"; ok=0; }; \
 	  else echo "ext-test: FAIL (late_new host C did not compile)"; sed -n 1,6p "$$tmp/cc.err"; ok=0; fi; \
 	fi; \
 	rm -rf "$$tmp"; \
@@ -1768,8 +1771,9 @@ ext-cruby-test: $(SPINEL) $(SP_RT_LIB)
 	  if $(CC) $$SOFLAGS -fPIC -O1 -w $(filter -DSP_ONE_STRING,$(COPT)) -I"$$RH" -I"$$RA" -Ilib -Ilib/regexp -Ilib/regexp/shim -I"$$tmp" \
 	       "$$tmp/extk_ext.c" "$$tmp/extk.c" $$(ls lib/*.c lib/regexp/*.c | sed 's/^/ /') \
 	       $(LDFLAGS) -lm -o "$$tmp/extk.$$DLEXT" 2>"$$tmp/cc.err"; then \
-	    ( cd "$$tmp" && cp $(CURDIR)/test/ext/driver.rb . && ruby driver.rb > out 2>&1 ); \
-	    cmp -s "$$tmp/out" test/ext/expected_cruby || { echo "ext-cruby-test: FAIL (driver output mismatch)"; diff -u test/ext/expected_cruby "$$tmp/out" || true; ok=0; }; \
+	    ( cd "$$tmp" && cp $(CURDIR)/test/ext/driver.rb . && ruby driver.rb > out 2>&1 ); rc=$$?; \
+	    cmp -s "$$tmp/out" test/ext/expected_cruby && [ $$rc -eq 0 ] || \
+	      { echo "ext-cruby-test: FAIL (driver output mismatch, or status $$rc)"; diff -u test/ext/expected_cruby "$$tmp/out" || true; ok=0; }; \
 	  else echo "ext-cruby-test: FAIL (.so did not compile)"; sed -n 1,6p "$$tmp/cc.err"; ok=0; fi; \
 	fi; \
 	rm -rf "$$tmp"; \

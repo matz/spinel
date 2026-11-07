@@ -13024,6 +13024,21 @@ static void bs_splat(Compiler *c, int x, int np, TyKind *e, char *flags, int *nm
    value takes its default. A keyword takes the value its key names, the
    values of every `**` operand and of a computed key (either may name it),
    and its default when it may be absent -- never a positional's. */
+/* Can an object of type t answer a to_ary of the program's that takes no
+   argument: its class, or a subclass of it, defines one? Such a value
+   yielded alone to a block that auto-splats is taken apart through it
+   (CRuby's rb_check_array_type), so the parameters may take its
+   elements. */
+static int bs_object_to_ary(Compiler *c, TyKind t) {
+  if (!ty_is_object(t)) return 0;
+  int oc = ty_object_class(t);
+  for (int k = 0; oc >= 0 && k < c->nclasses; k++) {
+    if (!is_descendant(c, k, oc)) continue;
+    int mi = comp_implicit_to_ary_mi(c, k);
+    if (mi >= 0 && c->scopes[mi].nparams == 0) return 1;
+  }
+  return 0;
+}
 void block_site_types(Compiler *c, const BlockSig *s, const int *av, int ac,
                       TyKind *pos, char *absent, TyKind *kws) {
   const NodeTable *nt = c->nt;
@@ -13069,7 +13084,7 @@ void block_site_types(Compiler *c, const BlockSig *s, const int *av, int ac,
   int kw_spreads = kwh >= 0 && kwh_only_spreads(nt, kwh);
   if (!s->lambda && (kwh < 0 || kw_spreads) && block_auto_splats(P, O, Q, s->R) &&
       (gather ? nmin <= 1 : ac == 1) &&
-      (ty_is_array(e) || e == TY_POLY || e == TY_POLY_ARRAY)) {
+      (ty_is_array(e) || e == TY_POLY || e == TY_POLY_ARRAY || (!gather && bs_object_to_ary(c, e)))) {
     /* spread across the parameters: an element, or (gathered, or boxed)
        possibly the value itself */
     TyKind et = ty_is_array(e) ? ty_array_elem(e) : TY_POLY;

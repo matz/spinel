@@ -2824,8 +2824,24 @@ void emit_block_binds(Compiler *c, int blk, const int *yargs, int yc,
      by index, `yield(x)` with x = [1, 2, 3] into `|a, b = 5, c|` answered
      [1, 5, nil]. Leading requireds alone keep the lighter per-index read
      below. */
+  /* An object of the program's yielded alone converts through its own
+     to_ary, as a boxed one does (its parameters' row): it is boxed, and
+     the Array its to_ary answers splats */
+  int yobj_to_ary = 0;
+  if (autosplat && yc == 1 && yargs && nt_kind(nt, yargs[0]) != NK_SplatNode) {
+    Repr yr = repr_of(c, yargs[0]);
+    if (yr.kind != RK_BOXED && ty_is_object(yr.as_ty)) {
+      int oc = ty_object_class(yr.as_ty);
+      int *ks = malloc(sizeof(int) * (size_t)(c->nclasses + 1));
+      if (!ks) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+      int nk = cplan_boxed_to_ary_classes(c, nt_ref(nt, blk, "parameters"), NTI_YIELDED, ks, c->nclasses + 1);
+      for (int q = 0; q < nk; q++) yobj_to_ary |= is_descendant(c, ks[q], oc);
+      free(ks);
+    }
+  }
   int boxed_spread = autosplat && yc == 1 && yargs && nt_kind(nt, yargs[0]) != NK_SplatNode &&
-                     repr_of(c, yargs[0]).kind == RK_BOXED && (O > 0 || Q > 0 || block_rest_name(c, blk));
+                     (repr_of(c, yargs[0]).kind == RK_BOXED || yobj_to_ary) &&
+                     (O > 0 || Q > 0 || block_rest_name(c, blk));
   int poly_splat_tmp = -1;   /* a boxed yielded value splatted at run time */
   TyKind self_ty = TY_UNKNOWN;
   /* One step of a boxed or Enumerator receiver, which a builtins/ method
@@ -2889,6 +2905,17 @@ void emit_block_binds(Compiler *c, int blk, const int *yargs, int yc,
   else if (yargs && (ie_kw || (call_args_need_spread(nt, yargs, yc) && !lone_splat_typed) || boxed_spread)) {
     splat_at = TY_POLY_ARRAY;
     splat_tmp = emit_spread_args(c, yargs, yc);
+    /* a lone value converts as the parameters' implied to_ary of it */
+    if (boxed_spread) {
+      int e0 = ++g_tmp;
+      emit_indent(g_pre, g_indent);
+      buf_printf(g_pre, "sp_RbVal _t%d = sp_PolyArray_get(_t%d, 0); SP_GC_ROOT_RBVAL(_t%d);\n", e0, splat_tmp, e0);
+      int e1 = emit_boxed_to_ary(c, nt_ref(nt, blk, "parameters"), NTI_YIELDED, e0, g_pre, g_indent);
+      if (e1 != e0) {
+        emit_indent(g_pre, g_indent);
+        buf_printf(g_pre, "sp_PolyArray_set(_t%d, 0, _t%d);\n", splat_tmp, e1);
+      }
+    }
     if (autosplat) {
       emit_indent(g_pre, g_indent);
       buf_printf(g_pre, "if (_t%d->len == 1", splat_tmp);
@@ -2916,14 +2943,16 @@ void emit_block_binds(Compiler *c, int blk, const int *yargs, int yc,
       inner = yargs[0];
     Repr ar = repr_of(c, inner);
     TyKind at = ar.as_ty;
+    int obj_to_ary = yobj_to_ary && inner >= 0 && inner == yargs[0];
     /* A BOXED yielded value can be an array too, and CRuby splats it just the
        same. Only a statically typed array was splatted, so a method yielding
        what it read out of a boxed container -- Set#each over its element array
        -- bound the whole element to the first parameter and nil to the rest
        (#3944). Decide it at run time. */
-    if (ar.kind == RK_BOXED && inner >= 0) {
+    if ((ar.kind == RK_BOXED || obj_to_ary) && inner >= 0) {
       poly_splat_tmp = ++g_tmp;
-      Buf pb2; memset(&pb2, 0, sizeof pb2); emit_expr(c, inner, &pb2);
+      Buf pb2; memset(&pb2, 0, sizeof pb2);
+      if (obj_to_ary) emit_boxed(c, inner, &pb2); else emit_expr(c, inner, &pb2);
       emit_indent(g_pre, g_indent);
       buf_printf(g_pre, "sp_RbVal _t%d = %s; SP_GC_ROOT_RBVAL(_t%d);\n",
                  poly_splat_tmp, pb2.p ? pb2.p : "sp_box_nil()", poly_splat_tmp);

@@ -2,6 +2,7 @@
 #include <ctype.h>
 #include "codegen_internal.h"
 #include "call_plan.h"
+#include "implied_calls.h"
 #include "codegen_call_arms.h"
 #include "timing.h"
 
@@ -10759,6 +10760,23 @@ else if (orecv >= 0 && onm) {
      side-channel) from the array's elements before binding. */
   if (!is_lambda && block_auto_splats(arity, nopts, nposts, has_rest_marker)) {
     g_needs_proc_poly_argslot = 1;
+    /* a lone object of the program's converts through its own to_ary
+       first, as a yield's does (the parameters' implied to_ary, its row):
+       the Array it answers splats, a nil answer keeps the object */
+    { int bpn = -1;
+      NodeKind ck = nt_kind(nt, create);
+      if (ck == NK_BlockNode) bpn = nt_ref(nt, create, "parameters");
+      else if (ck != NK_LambdaNode && nt_ref(nt, create, "block") >= 0) bpn = nt_ref(nt, nt_ref(nt, create, "block"), "parameters");
+      int *ks = bpn >= 0 ? malloc(sizeof(int) * (size_t)(c->nclasses + 1)) : NULL;
+      int nk = ks ? cplan_boxed_to_ary_classes(c, bpn, NTI_YIELDED, ks, c->nclasses + 1) : 0;
+      if (nk > 0) {
+        buf_printf(pb, "    if (argc == 1%s%s && _sp_proc_poly_args[0].tag == SP_TAG_OBJ && (",
+                   has_kwp ? " && !_sp_haskw" : "", as_gate ? " && _sp_kwpos != 3" : "");
+        for (int q = 0; q < nk; q++) buf_printf(pb, "%s_sp_proc_poly_args[0].cls_id == %d", q ? " || " : "", ks[q]);
+        buf_puts(pb, ")) { sp_RbVal _sp_ta = sp_poly_ary_operand(_sp_proc_poly_args[0]); SP_GC_ROOT_RBVAL(_sp_ta); "
+                     "_sp_proc_poly_args[0] = _sp_ta; }\n");
+      }
+      free(ks); }
     buf_puts(pb, "    sp_int _sp_as_buf[16];\n");
     buf_printf(pb, "    if (argc == 1%s%s && _sp_proc_poly_args[0].tag == SP_TAG_OBJ && sp_poly_is_array_kind(_sp_proc_poly_args[0].cls_id)) {\n",
                has_kwp ? " && !_sp_haskw" : "", as_gate ? " && _sp_kwpos != 3" : "");

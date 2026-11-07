@@ -1,0 +1,20 @@
+"undefined method 'zz' for class '#<Class:Q>'"
+"undefined method 'zz' for class '#<Class:P>'"
+"undefined method 'zz' for class '#<Class:P>'"
+"undefined method 'zz' for class '#<Class:S>'"
+"undefined method 'zz' for class '#<Class:D>'"
+"undefined method 'zz' for class '#<Class:C>'"
+NameError
+false
+1
+:members
+"undefined method 'i' for class '#<Class:P>'"
+"undefined method 'zz' for class 'P'"
+:ok
+:ok
+:ok
+"undefined method 'instance_variable_names' for class '#<Class:P>'"
+"undefined method 'zz' for class '#<Class:P>'"
+"undefined method 'a\"b\\c' for class '#<Class:P>'"
+"undefined method 'x\ny%sz' for class '#<Class:P>'"
+"undefined method 'q\"%d' for class '#<Class:Q9>'"

@@ -2,6 +2,7 @@
 #include <ctype.h>
 #include "codegen_internal.h"
 #include "call_plan.h"
+#include "method_table_check.h"
 #include "implied_calls.h"
 #include "codegen_call_arms.h"
 #include "timing.h"
@@ -19488,9 +19489,11 @@ typedef struct EmitUnitState {
   TyKind ie_next_ty;
   int move_depth;   /* instance_exec scope moves (comp_scope_move_unwind) */
   int view_depth;   /* codegen views (view_unwind) */
+  MtabMark mt;      /* --method-table-check's frame and brackets (mtab_unwind) */
 } EmitUnitState;
 
-void emit_unit_state_save(EmitUnitState *s) {
+void emit_unit_state_save(Compiler *c, EmitUnitState *s) {
+  s->mt = mtab_mark(c);
   s->move_depth = comp_scope_move_depth();
   s->view_depth = view_mark();
   s->ret_type = g_ret_type; s->fn_ret_type = g_fn_ret_type; s->fn_ret_oint = g_fn_ret_oint; s->result_ty = g_result_ty;
@@ -19546,7 +19549,8 @@ void emit_unit_state_save(EmitUnitState *s) {
   s->iow_key_ref = g_iow_key_ref;
 }
 
-void emit_unit_state_restore(const EmitUnitState *s) {
+void emit_unit_state_restore(Compiler *c, const EmitUnitState *s) {
+  mtab_unwind(c, s->mt);
   comp_scope_move_unwind(s->move_depth);
   view_unwind(s->view_depth);
   g_ret_type = s->ret_type; g_fn_ret_type = s->fn_ret_type; g_fn_ret_oint = s->fn_ret_oint; g_result_ty = s->result_ty;
@@ -19603,13 +19607,13 @@ void emit_unit_state_restore(const EmitUnitState *s) {
 }
 /* A probe's snapshot of the emitter state, for a probe that may be
    abandoned by a longjmp partway through a loop or a nested body. */
-EmitUnitState *emit_state_snapshot(void) {
+EmitUnitState *emit_state_snapshot(Compiler *c) {
   EmitUnitState *s = malloc(sizeof *s);
-  emit_unit_state_save(s);
+  emit_unit_state_save(c, s);
   return s;
 }
-void emit_state_release(EmitUnitState *s, int rollback) {
-  if (rollback) emit_unit_state_restore(s);
+void emit_state_release(Compiler *c, EmitUnitState *s, int rollback) {
+  if (rollback) emit_unit_state_restore(c, s);
   free(s);
 }
 
@@ -19634,13 +19638,13 @@ void emit_state_release(EmitUnitState *s, int rollback) {
       size_t _saved_len = body->len;                          \
       ConvHold *_saved_hold = g_conv_hold;                    \
       EmitUnitState _saved_state;                             \
-      emit_unit_state_save(&_saved_state);                    \
+      emit_unit_state_save(c, &_saved_state);                 \
       if (setjmp(g_unsup_recover) == 0) {                     \
         g_unsup_armed = 1; emit_call; g_unsup_armed = 0;      \
       } \
       else {                                                \
         g_unsup_armed = 0; g_conv_hold = _saved_hold;         \
-        emit_unit_state_restore(&_saved_state);               \
+        emit_unit_state_restore(c, &_saved_state);            \
         body->len = _saved_len;                               \
         if (body->p) body->p[_saved_len] = '\0';              \
       }                                                       \

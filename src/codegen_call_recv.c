@@ -15982,10 +15982,10 @@ static int face_probe_arm(Compiler *c, int id, unsigned kind, unsigned flags, in
      and break state an arm abandoned partway through left set: a `times`
      arm dropped inside its loop left the loop depth raised, and the next
      method's ensure emitted a `continue` with no loop round it) */
-  ArmProbe ap; arm_probe_begin(&ap, pre);
+  ArmProbe ap; arm_probe_begin(c, &ap, pre);
   if (setjmp(g_unsup_recover) == 0) *nat = emit_face_arm(c, id, kind, flags, box, val);
   else { ok = 0; arm_probe_dropped(&ap); }
-  arm_probe_end(&ap, ok);
+  arm_probe_end(c, &ap, ok);
   view_unbind(sv_argov);
   return ok;
 }

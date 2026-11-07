@@ -1874,6 +1874,9 @@ typedef struct {
      are kept, and a call that reaches a later prepend's copy binds its
      guard entry */
   int ver_built;
+  /* --method-table-check: the reads of the method tables made outside
+     call_target (method_table_check.h); NULL without the flag */
+  struct MethodTableCheck *mtab;
   /* the entries' build asks its calls (ver_entries_build), which make and
      rename no scope: scope_is_shadowed answers from its table, as where
      the scope index is frozen, not by a scan per ask */

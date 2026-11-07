@@ -1,4 +1,5 @@
 #include "cext_bridge.h"
+#include "method_table_check.h"
 #include <stdint.h>
 #include <limits.h>
 #include <ctype.h>
@@ -1229,6 +1230,7 @@ static int cr_class_side_scope(Compiler *c, int t) {
 }
 
 void compute_reachable(Compiler *c, int typed) {
+  mtab_enter(c);   /* (a scan of every call's name) */
   /* Build per-scope call sets (CallNode names, not entering nested DefNodes). */
   char ***scope_calls = calloc((size_t)c->nscopes, sizeof(char **));
   int   *sc_n        = calloc((size_t)c->nscopes, sizeof(int));
@@ -1710,6 +1712,7 @@ void compute_reachable(Compiler *c, int typed) {
     refuse_native_singleton_reopen(c, &c->scopes[s]);
   }
   free(scope_calls); free(sc_n); free(sc_cap); free(queue);
+  mtab_leave(c);
 }
 
 /* Mark each user class whose exact cls_id can appear at runtime. A poly value
@@ -39897,8 +39900,10 @@ static void nn_facts(Compiler *c) {
 static void nn_compute_now(Compiler *c, int reuse) {
   nn_busy = 1;
   nn_done_epoch = nn_epoch;
+  mtab_enter(c);   /* (whole-program facts) */
   if (!reuse || nn_struct_count != c->nt->count) nn_structure(c);
   nn_facts(c);
+  mtab_leave(c);
   nn_busy = 0;
   nn_ready = 1;
 }

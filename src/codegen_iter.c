@@ -4234,7 +4234,7 @@ static int emit_poly_recv_block_dispatch_x(Compiler *c, int id, Buf *b, int inde
     ConvHold *sv_hold = g_conv_hold;
     jmp_buf sv_jb; memcpy(sv_jb, g_unsup_recover, sizeof(jmp_buf));
     volatile int ok = 1;
-    EmitUnitState *sv_state = emit_state_snapshot();
+    EmitUnitState *sv_state = emit_state_snapshot(c);
     g_unsup_probe = 1;
     if (setjmp(g_unsup_recover) == 0) {
       /* where the call's value is used, the builtin's own answer is it */
@@ -4247,7 +4247,7 @@ static int emit_poly_recv_block_dispatch_x(Compiler *c, int id, Buf *b, int inde
       else emit_stmt(c, id, ab, indent + 1);
     }
     else ok = 0;
-    emit_state_release(sv_state, !ok);
+    emit_state_release(c, sv_state, !ok);
     memcpy(g_unsup_recover, sv_jb, sizeof(jmp_buf));
     g_conv_hold = sv_hold; g_open_defaults = sv_open_defaults;
     g_nren = sv_nren; g_block_id = sv_block;

@@ -29,6 +29,7 @@
 #include "csplit.h"
 #include "unit_cache.h"
 #include "decide.h"
+#include "method_table_check.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -1054,6 +1055,7 @@ int main(int argc, char **argv) {
     else if (sp_streq(a, "--emit-rbs"))    { emit_rbs = 1; i++; }
     else if (sp_streq(a, "--emit-types"))  { emit_types = 1; i++; }
     else if (sp_streq(a, "--plan-check"))  { g_plan_check = 1; i++; }
+    else if (sp_streq(a, "--method-table-check")) { g_method_table_check = 1; i++; }
     else if (sp_streq(a, "--arm-check"))   { g_arm_check = 1; i++; }
     else if (sp_streq(a, "--repr-check"))  { g_repr_check = 1; i++; }
     else if (analysis_dump_flag(a))        { i++; }

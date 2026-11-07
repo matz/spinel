@@ -807,8 +807,8 @@ extern const char *g_ie_next_var;
    (#3978). TY_UNKNOWN when unknown or not a container. */
 extern TyKind g_ie_next_ty;
 typedef struct EmitUnitState EmitUnitState;
-EmitUnitState *emit_state_snapshot(void);
-void emit_state_release(EmitUnitState *s, int rollback);
+EmitUnitState *emit_state_snapshot(Compiler *c);
+void emit_state_release(Compiler *c, EmitUnitState *s, int rollback);
 extern TyKind g_bv_dest_ty;
 extern int g_c_loop_depth;   /* C-loop nesting inside the current fn body */
 extern int g_in_proc_body;   /* emitting a _proc_N function body */
@@ -3034,14 +3034,14 @@ extern ConvHold *g_conv_hold;
    written since defer_mark, g_pre's, the conversion hold, the unit state.
    The caller arms g_unsup_recover with its own setjmp in between. */
 typedef struct { jmp_buf outer; Buf *b; size_t len; Buf *pre; size_t pre_len; ConvHold *hold; EmitUnitState *state; int ndiag0; } DeferMark;
-void defer_mark(DeferMark *m, Buf *b);
-void defer_rollback(DeferMark *m, char *msg, size_t msz);
-void defer_done(DeferMark *m);
+void defer_mark(Compiler *c, DeferMark *m, Buf *b);
+void defer_rollback(Compiler *c, DeferMark *m, char *msg, size_t msz);
+void defer_done(Compiler *c, DeferMark *m);
 /* an arm emitted under a silent probe (codegen_call.c) */
 typedef struct { jmp_buf jb; Buf *pre; int probe, open_defaults, moves, views; ConvHold *hold; EmitUnitState *state; } ArmProbe;
-void arm_probe_begin(ArmProbe *p, Buf *pre);
+void arm_probe_begin(Compiler *c, ArmProbe *p, Buf *pre);
 void arm_probe_dropped(ArmProbe *p);
-void arm_probe_end(ArmProbe *p, int ok);
+void arm_probe_end(Compiler *c, ArmProbe *p, int ok);
 extern unsigned g_conv_emitted;  /* implicit conversions emitted so far; read as a delta */
 Buf *conv_hold_begin(Buf *b, int *tmp);
 void conv_hold_end(int tmp);

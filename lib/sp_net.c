@@ -525,6 +525,9 @@ int sp_net_unix_connect(const char *path) {SP_GC_ROOT_STR(path);
     int fd = sp_net_socket_cloexec(AF_UNIX, SOCK_STREAM, 0);
     if (fd < 0) return -1;
     if (SP_SIG_BLOCKING(connect(fd, (struct sockaddr *)&sa, sizeof sa)) != 0) { close(fd); return -1; }
+#ifdef SP_THREADS
+    sp_net_set_nonblock(fd);
+#endif
     return fd;
 }
 /* The bound path of a UNIX socket (empty for an unnamed peer). */

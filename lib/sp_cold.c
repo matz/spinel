@@ -6087,6 +6087,10 @@ sp_File *sp_io_wait_events(sp_File *f, double timeout, sp_int kind) {SP_GC_ROOT(
 #ifdef SP_THREADS
   if (sp_io_park_events(kind) && timeout != 0.0) {
     extern int sp_sched_wait_io_timeout_unless(int, short, double, const unsigned char *);
+    unsigned int g0 = sp_sched_ev_gen(fd);
+    struct pollfd p = { .fd = fd, .events = sp_io_park_events(kind), .revents = 0 };
+    if (SP_SIG_BLOCKING(poll(&p, 1, 0)) > 0) return f;
+    sp_sched_ev_drained(fd, p.events, g0);
     int ready = sp_sched_wait_io_timeout_unless(fd, sp_io_park_events(kind), timeout, &f->closed);
     if (SP_ATOMIC_LOAD(&f->closed, __ATOMIC_RELAXED))
       sp_raise_cls("IOError", "stream closed in another thread");

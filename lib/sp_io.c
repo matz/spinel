@@ -446,8 +446,10 @@ static void sp_io_wait_deadline(sp_File *f, short events, double deadline) {
   int fd = fileno(sp_io_use(f));
   sp_io_unuse(f);
   for (;;) {
+    unsigned int g0 = sp_sched_ev_gen(fd);
     struct pollfd p = { .fd = fd, .events = events, .revents = 0 };
     int ready = SP_SIG_BLOCKING(poll(&p, 1, 0));
+    if (ready == 0) sp_sched_ev_drained(fd, events, g0);
     if (SP_ATOMIC_LOAD(&f->closed, __ATOMIC_RELAXED))
       sp_raise_cls("IOError", "stream closed in another thread");
     if (ready > 0) return;
@@ -489,8 +491,10 @@ void sp_io_wait_writable(sp_File *f) {SP_GC_ROOT(f);
   int wfd = fileno(sp_io_use(f));
   sp_io_unuse(f);
   if (wfd < 0) return;
-  { struct pollfd wp; wp.fd = wfd; wp.events = POLLOUT; wp.revents = 0;
-    if (SP_SIG_BLOCKING(poll(&wp, 1, 0)) > 0) return; }   /* room already: no park */
+  { unsigned int g0 = sp_sched_ev_gen(wfd);
+    struct pollfd wp; wp.fd = wfd; wp.events = POLLOUT; wp.revents = 0;
+    if (SP_SIG_BLOCKING(poll(&wp, 1, 0)) > 0) return;   /* room already: no park */
+    sp_sched_ev_drained(wfd, POLLOUT, g0); }
 #ifdef SP_THREADS
   {
     extern int sp_sched_wait_io_unless(int fd, short events, const unsigned char *cancel);
@@ -524,8 +528,10 @@ static void sp_io_park_fd_readable(int fd, const unsigned char *closed) {
      the monitor out of ITS poll, wait to be requeued and rescheduled -- and
      paying that when the bytes are already there is most of the cost in the
      shape that reads right after an IO.select says the fd is ready. */
-  { struct pollfd rp; rp.fd = fd; rp.events = POLLIN; rp.revents = 0;
-    if (SP_SIG_BLOCKING(poll(&rp, 1, 0)) > 0) return; }
+  { unsigned int g0 = sp_sched_ev_gen(fd);
+    struct pollfd rp; rp.fd = fd; rp.events = POLLIN; rp.revents = 0;
+    if (SP_SIG_BLOCKING(poll(&rp, 1, 0)) > 0) return;
+    sp_sched_ev_drained(fd, POLLIN, g0); }
 #ifdef SP_THREADS
   {
     extern int sp_sched_wait_io_unless(int fd, short events, const unsigned char *cancel);
@@ -611,18 +617,23 @@ static void sp_io_rbuf_park(sp_File *f, int fd) {
    while it gives it to a child can still sleep, if the spawn lands between
    the question and the read(2) or the child takes the bytes between the
    poll and the read: the pipe then has two readers, and stdio's read slept
-   the same way. */
+   the same way. A read that comes back short or answers EAGAIN is the proof
+   that the descriptor has drained (sp_sched_ev_drained). */
 static ssize_t sp_io_own_read(sp_File *f, int fd, void *buf, size_t n) {
-  if (f->own_buf == SP_OWN_SOCK) return recv(fd, buf, n, SP_MSG_DONTWAIT);
-  if (!sp_io_own_nb(f, fd)) {
+  unsigned int g0 = sp_sched_ev_gen(fd);
+  ssize_t r;
+  if (f->own_buf == SP_OWN_SOCK) r = recv(fd, buf, n, SP_MSG_DONTWAIT);
+  else {
     struct pollfd p = { .fd = fd, .events = POLLIN, .revents = 0 };
-    int ready = poll(&p, 1, 0);
-    if (ready == 0) { errno = EAGAIN; return -1; }
-    if (ready < 0) return -1;
+    int ready = sp_io_own_nb(f, fd) ? 1 : poll(&p, 1, 0);
+    if (ready == 0) { errno = EAGAIN; r = -1; }
+    else r = ready < 0 ? -1 : read(fd, buf, n);
   }
-  return read(fd, buf, n);
+  if (r < 0 ? (errno == EAGAIN || errno == EWOULDBLOCK) : (r > 0 && (size_t)r < n)) {
+    int e = errno; sp_sched_ev_drained(fd, POLLIN, g0); errno = e;
+  }
+  return r;
 }
-
 /* Bytes in rbuf: 1, or 0 at the end of the stream. When rbuf is empty, one
    read (sp_io_own_read) fills it; one that answers EAGAIN parks and tries
    again. The handle is held across the read only, never across the park.

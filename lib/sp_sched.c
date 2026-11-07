@@ -594,6 +594,9 @@ static int g_preempt_sig = SIGURG; /* the signal the monitor sends; SPINEL_PREEM
    it. Off by default: where wakes are frequent it costs the CPU-bound threads
    throughput. */
 static int g_wake_preempt = 0;
+/* What a descriptor registered for good has seen: events counted, and the
+   readiness they left that no proof of not-ready has cleared (SP_EVF_*). */
+typedef struct { unsigned int gen; unsigned char flags; } sp_ev_mark;
 typedef struct { pthread_t tid; sp_thread *cur; unsigned long long since_bits; int active;
                  /* A STARTED green thread is pinned to its home worker, so the wake
                     that readies it has exactly one worker to reach. Waiting on one
@@ -631,6 +634,7 @@ typedef struct { pthread_t tid; sp_thread *cur; unsigned long long since_bits; i
                  /* (#8702) the I/O of the threads pinned here, under io_wl: the
                     threads parked on it, and their entries by descriptor */
                  sp_wlock io_wl; sp_thread *io_waiters; sp_ev_waiter **ev_tab; int ev_cap;
+                 sp_ev_mark *ev_mark;
                } __attribute__((aligned(64))) sp_wslot;
 static sp_wslot   g_wslot[SP_MAX_WORKERS];   /* per-worker: the green thread it runs + when it started */
 /* The worker writes its slot's cur and since without the scheduler lock
@@ -1458,7 +1462,7 @@ static sp_thread *g_all = NULL;          /* registry of live threads, for GC roo
    for it, and a kernel without epoll leaves g_ev_fd -1 and the poll path in
    place. */
 typedef struct { int fd; short rev; } sp_ev_ready;
-static int  sp_ev_backend_arm(int set, int fd, short want);
+static int  sp_ev_backend_arm(int set, int fd, short want, int edge);
 static void sp_ev_backend_del(int set, int fd);
 static int  sp_ev_backend_wait(int set, sp_ev_ready *out, int max, int tmo_ms);
 
@@ -1505,7 +1509,7 @@ static int sp_ev_worker_up(int wid) {   /* PRE: sched lock held */
 /* Re-arm the kick pipe. One-shot like everything else in the set. */
 static void sp_ev_arm_kick(int wid) {   /* by worker wid itself: kick_armed is read and written by it alone */
   if (g_wslot[wid].evfd <= 0 || g_wslot[wid].kick_armed) return;
-  sp_ev_backend_arm(g_wslot[wid].evfd, g_wslot[wid].kick[0], POLLIN);
+  sp_ev_backend_arm(g_wslot[wid].evfd, g_wslot[wid].kick[0], POLLIN, 0);
   g_wslot[wid].kick_armed = 1;
 }
 /* Break a worker out of its readiness wait. A byte is enough; the reader
@@ -1516,19 +1520,23 @@ static void sp_ev_kick(int wid) {   /* PRE: sched lock held */
 }
 
 /* Arm one descriptor for `want` (POLLIN / POLLOUT), one-shot. 0 on success.
+   With `edge`, epoll registers it for good instead, edge-triggered for both
+   directions, and answers 1; kqueue arms it one-shot as before.
    The three functions below are the whole platform surface; everything above
    and below them is shared. */
-static int sp_ev_backend_arm(int set, int fd, short want) {
+static int sp_ev_backend_arm(int set, int fd, short want, int edge) {
 #ifdef SP_EV_EPOLL
   struct epoll_event e;
-  e.events = (uint32_t)((want & POLLIN ? EPOLLIN : 0) | (want & POLLOUT ? EPOLLOUT : 0)) | EPOLLONESHOT;
+  e.events = edge ? (uint32_t)(EPOLLIN | EPOLLOUT | EPOLLRDHUP | EPOLLET)
+                  : (uint32_t)((want & POLLIN ? EPOLLIN : 0) | (want & POLLOUT ? EPOLLOUT : 0)) | EPOLLONESHOT;
   e.data.fd = fd;
-  if (epoll_ctl(set, EPOLL_CTL_MOD, fd, &e) == 0) return 0;
+  if (epoll_ctl(set, EPOLL_CTL_MOD, fd, &e) == 0) return edge;
   /* Not in the set: epoll's one-shot only DISABLES, so MOD is the usual arm
      and ADD is the first one. */
-  if (errno == ENOENT) { SP_STAT_ADD(g_ev_adds, 1); return epoll_ctl(set, EPOLL_CTL_ADD, fd, &e); }
+  if (errno == ENOENT) { SP_STAT_ADD(g_ev_adds, 1); return epoll_ctl(set, EPOLL_CTL_ADD, fd, &e) == 0 ? edge : -1; }
   return -1;
 #else
+  (void)edge;
   /* kqueue's one-shot DELETES the entry when it fires, so every arm is an
      EV_ADD -- and a filter the waiters no longer want stays armed until it
      fires once into nobody, which is the discarded wake the design allows. */
@@ -1563,8 +1571,9 @@ static int sp_ev_backend_wait(int set, sp_ev_ready *out, int max, int tmo_ms) {
   int n = epoll_wait(set, evs, max, tmo_ms);
   for (int i = 0; i < n; i++) {
     out[i].fd = evs[i].data.fd;
-    out[i].rev = (short)(((evs[i].events & (EPOLLIN | EPOLLHUP | EPOLLERR)) ? POLLIN : 0) |
-                         ((evs[i].events & (EPOLLOUT | EPOLLHUP | EPOLLERR)) ? POLLOUT : 0));
+    out[i].rev = (short)(((evs[i].events & (EPOLLIN | EPOLLRDHUP | EPOLLHUP | EPOLLERR)) ? POLLIN : 0) |
+                         ((evs[i].events & (EPOLLOUT | EPOLLHUP | EPOLLERR)) ? POLLOUT : 0) |
+                         ((evs[i].events & (EPOLLRDHUP | EPOLLHUP | EPOLLERR)) ? POLLHUP : 0));
   }
   return n;
 #else
@@ -1624,12 +1633,17 @@ static void wio_unlink(int w, sp_thread *t) {   /* PRE: w's io_wl held */
   SP_ATOMIC_STORE(&t->wait_lock, NULL, __ATOMIC_RELEASE);
   NIO_DEC();
 }
+#define SP_EVF_IN      1   /* ev_mark flags */
+#define SP_EVF_OUT     2
+#define SP_EVF_HUP     4
+#define SP_EVF_PERSIST 8
 /* Arm `fd` in worker w's set for the union of what its waiters there want.
    Attempted on every park -- see the note above: never skipped on the belief
    that an earlier arm stands. PRE: w's io_wl held. */
-static void sp_ev_arm_fd_w(int w, int fd) {
+static void sp_ev_arm_fd_w(int w, int fd, int edge) {
   sp_wslot *s = &g_wslot[w];
   if (fd < 0 || fd >= s->ev_cap || s->evfd <= 0) return;
+  if (edge && (s->ev_mark[fd].flags & SP_EVF_PERSIST)) return;
   short want = 0;
   for (sp_ev_waiter *x = s->ev_tab[fd]; x; x = x->next) want |= sp_evw_events(x);
   if (!want) return;
@@ -1638,13 +1652,15 @@ static void sp_ev_arm_fd_w(int w, int fd) {
      file): the waiter falls back on its deadline, which is the same answer
      poll gave for an always-ready file. Counted, so SPINEL_SCHED_STATS shows
      it rather than leaving a silent gap. */
-  if (sp_ev_backend_arm(s->evfd, fd, want) != 0) SP_STAT_ADD(g_ev_lost, 1);
+  int r = sp_ev_backend_arm(s->evfd, fd, want, edge);
+  if (r < 0) SP_STAT_ADD(g_ev_lost, 1);
+  else s->ev_mark[fd].flags = (unsigned char)(r ? s->ev_mark[fd].flags | SP_EVF_PERSIST : s->ev_mark[fd].flags & ~SP_EVF_PERSIST);
 }
 /* Put entry e on descriptor fd in worker w's table and arm it. Returns 0 when
    the table could not grow: the waiter is then on its deadline alone, the
    same degradation the poll path has when its own array cannot grow.
    PRE: w's io_wl held. */
-static int sp_ev_park_entry_w(int w, sp_ev_waiter *e, int fd) {
+static int sp_ev_park_entry_w(int w, sp_ev_waiter *e, int fd, int edge) {
   sp_wslot *s = &g_wslot[w];
   if (fd < 0) return 0;
   if (fd >= s->ev_cap) {
@@ -1653,11 +1669,15 @@ static int sp_ev_park_entry_w(int w, sp_ev_waiter *e, int fd) {
     sp_ev_waiter **nt = (sp_ev_waiter **)realloc(s->ev_tab, sizeof(sp_ev_waiter *) * (size_t)nc);
     if (!nt) return 0;
     memset(nt + s->ev_cap, 0, sizeof(sp_ev_waiter *) * (size_t)(nc - s->ev_cap));
-    s->ev_tab = nt; s->ev_cap = nc;
+    s->ev_tab = nt;
+    sp_ev_mark *nm = (sp_ev_mark *)realloc(s->ev_mark, sizeof(sp_ev_mark) * (size_t)nc);
+    if (!nm) return 0;
+    memset(nm + s->ev_cap, 0, sizeof(sp_ev_mark) * (size_t)(nc - s->ev_cap));
+    s->ev_mark = nm; s->ev_cap = nc;
   }
   e->next = s->ev_tab[fd];
   s->ev_tab[fd] = e;
-  sp_ev_arm_fd_w(w, fd);
+  sp_ev_arm_fd_w(w, fd, edge);
   return 1;
 }
 static void sp_ev_unlink_w(int w, sp_ev_waiter *e, int fd) {   /* PRE: w's io_wl held */
@@ -1698,7 +1718,12 @@ static int sp_ev_dispatch_w(int w, int fd, short rev, sp_thread **out, int n) {
     t->io_revents = rev; t->io_fd = -1;
     out[n++] = t;
   }
-  sp_ev_arm_fd_w(w, fd);
+  if (s->ev_mark[fd].flags & SP_EVF_PERSIST) {
+    SP_ATOMIC_FETCH_ADD(&s->ev_mark[fd].gen, 1, __ATOMIC_RELEASE);
+    SP_ATOMIC_STORE(&s->ev_mark[fd].flags, (unsigned char)(s->ev_mark[fd].flags | ((rev & POLLIN) ? SP_EVF_IN : 0) |
+                    ((rev & POLLOUT) ? SP_EVF_OUT : 0) | ((rev & POLLHUP) ? SP_EVF_HUP : 0)), __ATOMIC_RELEASE);
+  }
+  else sp_ev_arm_fd_w(w, fd, 0);
   return n;
 }
 static void sp_ev_wake_out(sp_thread **out, int n) {   /* no io_wl held */
@@ -1718,11 +1743,13 @@ static int sp_ev_handle(int w, sp_ev_ready *evs, int en) {
       g_wslot[w].kick_armed = 0;
       continue;
     }
-    wl_lock(&g_wslot[w].io_wl);
-    n = sp_ev_dispatch_w(w, evs[i].fd, evs[i].rev, out, 0);
-    wl_unlock(&g_wslot[w].io_wl);
-    sp_ev_wake_out(out, n);
-    total += n;
+    do {
+      wl_lock(&g_wslot[w].io_wl);
+      n = sp_ev_dispatch_w(w, evs[i].fd, evs[i].rev, out, 0);
+      wl_unlock(&g_wslot[w].io_wl);
+      sp_ev_wake_out(out, n);
+      total += n;
+    } while (n == SP_EV_OUT);
   }
   return total;
 }
@@ -1824,6 +1851,8 @@ void sp_sched_ev_forget(int fd) {
         if (fd < g_wslot[w].ev_cap) {
           for (sp_ev_waiter *e = g_wslot[w].ev_tab[fd]; e; ) { sp_ev_waiter *nx = e->next; e->next = NULL; e = nx; }
           g_wslot[w].ev_tab[fd] = NULL;
+          SP_ATOMIC_STORE(&g_wslot[w].ev_mark[fd].flags, (unsigned char)0, __ATOMIC_RELEASE);
+          SP_ATOMIC_FETCH_ADD(&g_wslot[w].ev_mark[fd].gen, 1, __ATOMIC_RELEASE);
         }
       }
       wl_unlock(&g_wslot[w].io_wl);
@@ -4272,6 +4301,11 @@ static int sp_sched_wait_io_impl(int fd, short events, struct pollfd *set, int n
        just brought its worker's set up must see the flag, or the forget must
        see the set (see sp_sched_ev_forget). */
     if (cancel && SP_ATOMIC_LOAD(cancel, __ATOMIC_SEQ_CST)) { wl_unlock(wl); return 1; }
+    if (!set && cancel && fd >= 0 && fd < g_wslot[home].ev_cap) {
+      unsigned char f = g_wslot[home].ev_mark[fd].flags;
+      unsigned char want = (unsigned char)(((events & POLLIN) ? SP_EVF_IN : 0) | ((events & POLLOUT) ? SP_EVF_OUT : 0) | SP_EVF_HUP);
+      if ((f & SP_EVF_PERSIST) && (f & want)) { wl_unlock(wl); return 1; }
+    }
     sp_ev_waiter *es = NULL;
     if (set) {
       es = (sp_ev_waiter *)malloc(sizeof(sp_ev_waiter) * (size_t)n);
@@ -4315,8 +4349,8 @@ static int sp_sched_wait_io_impl(int fd, short events, struct pollfd *set, int n
       SP_ATOMIC_STORE(&self->wait_timer, tm, __ATOMIC_RELEASE);
     }
     SP_STAT_ADD(g_mon_regs, 1);
-    if (set) { for (int i = 0; i < n; i++) (void)sp_ev_park_entry_w(home, &self->ev_set[i], set[i].fd); }
-    else { self->ev0.t = self; self->ev0.idx = -1; (void)sp_ev_park_entry_w(home, &self->ev0, fd); }
+    if (set) { for (int i = 0; i < n; i++) (void)sp_ev_park_entry_w(home, &self->ev_set[i], set[i].fd, 0); }
+    else { self->ev0.t = self; self->ev0.idx = -1; (void)sp_ev_park_entry_w(home, &self->ev0, fd, cancel != NULL); }
     wl_unlock(wl);
     /* The kernel holds the interest set, so the monitor needs a word only
        about the deadline, when it is earlier than the one it waits for (an
@@ -4420,6 +4454,34 @@ int sp_sched_wait_io_timeout(int fd, short events, double timeout_s) {
 }
 int sp_sched_wait_io_unless(int fd, short events, const unsigned char *cancel) {
   return sp_sched_wait_io_impl(fd, events, NULL, 0, -1.0, cancel);
+}
+/* The readiness generation of fd in the calling thread's set, read before a
+   proof that fd is not ready; 0 when fd is not registered for good there. */
+unsigned int sp_sched_ev_gen(int fd) {
+#ifdef SP_EV_BACKEND
+  if (fd < 0 || !g_current) return 0;
+  sp_wslot *w = &g_wslot[sp_ev_home_of(g_current)];
+  if (fd >= w->ev_cap || !(SP_ATOMIC_LOAD(&w->ev_mark[fd].flags, __ATOMIC_ACQUIRE) & SP_EVF_PERSIST)) return 0;
+  return SP_ATOMIC_LOAD(&w->ev_mark[fd].gen, __ATOMIC_ACQUIRE);
+#else
+  (void)fd; return 0;
+#endif
+}
+/* fd was proven not ready for `events` after generation g0 was read: its
+   mark goes, unless an event came since. */
+void sp_sched_ev_drained(int fd, short events, unsigned int g0) {
+#ifdef SP_EV_BACKEND
+  if (fd < 0 || !g_current) return;
+  sp_wslot *w = &g_wslot[sp_ev_home_of(g_current)];
+  unsigned char bits = (unsigned char)(((events & POLLIN) ? SP_EVF_IN : 0) | ((events & POLLOUT) ? SP_EVF_OUT : 0));
+  if (fd >= w->ev_cap || !(SP_ATOMIC_LOAD(&w->ev_mark[fd].flags, __ATOMIC_ACQUIRE) & bits)) return;
+  wl_lock(&w->io_wl);
+  if (fd < w->ev_cap && w->ev_mark[fd].gen == g0)
+    SP_ATOMIC_STORE(&w->ev_mark[fd].flags, (unsigned char)(w->ev_mark[fd].flags & ~bits), __ATOMIC_RELEASE);
+  wl_unlock(&w->io_wl);
+#else
+  (void)fd; (void)events; (void)g0;
+#endif
 }
 int sp_sched_wait_io_timeout_unless(int fd, short events, double timeout_s, const unsigned char *cancel) {
   return sp_sched_wait_io_impl(fd, events, NULL, 0, timeout_s, cancel);

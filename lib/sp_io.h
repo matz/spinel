@@ -152,6 +152,14 @@ void sp_File_put_byte(sp_File *f, int c);
 void sp_io_check_readable(sp_File *f);
 void sp_io_check_writable(sp_File *f);
 void sp_io_wait_readable(sp_File *f);
+/* lib/sp_sched.c: a descriptor's readiness generation, and its proof of not-ready */
+#ifdef SP_THREADS
+unsigned int sp_sched_ev_gen(int fd);
+void sp_sched_ev_drained(int fd, short events, unsigned int g0);
+#else
+static inline unsigned int sp_sched_ev_gen(int fd) { (void)fd; return 0; }
+static inline void sp_sched_ev_drained(int fd, short events, unsigned int g0) { (void)fd; (void)events; (void)g0; }
+#endif
 void sp_io_wait_fd_readable(int fd);
 /* Held around a fork that execs, and around a pipe whose close-on-exec flag
    is set after it is made (no pipe2): no child inherits a half-made pipe */

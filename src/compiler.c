@@ -5284,9 +5284,12 @@ static char *nested_class_body_marks(NodeTable *nt, const int *ids, int n) {
 /* Is class ci under BasicObject with no Kernel among its ancestors? The
    includes registration recorded are asked first (an `include` through a
    constant alias, in a block or a class method of the body), then the
-   bodies' text (class_lacks_kernel), which runs for such a class alone. */
+   bodies' text (class_lacks_kernel), which runs for such a class alone.
+   The program's own BasicObject (`class BasicObject; end`) is such a
+   class too: Object is not past it. */
 static int blank_slate_without_kernel(Compiler *c, int ci) {
-  int ans = class_is_blank_slate(c, ci);
+  int bo = ci >= 0 && ci == comp_core_class(c, CORE_BASIC_OBJECT);
+  int ans = bo || class_is_blank_slate(c, ci);
   int ke = comp_core_class(c, CORE_KERNEL);
   for (int k = ci, d = 0; ans && k >= 0 && k < c->nclasses && d < 64; k = c->classes[k].parent, d++) {
     const ClassInfo *ki = &c->classes[k];
@@ -5299,7 +5302,13 @@ static int blank_slate_without_kernel(Compiler *c, int ci) {
       if (m == ke || (m >= 0 && comp_module_includes(c, m, ke, 0))) ans = 0;
     }
   }
-  if (!ans || !class_lacks_kernel(c, ci)) return 0;
+  if (!ans || (bo ? def_body_includes_kernel(c, c->classes[ci].name, 0) : !class_lacks_kernel(c, ci))) return 0;
+  /* a class under it that includes Kernel (class B < BasicObject; include
+     Kernel) reaches Kernel's methods through Object's chain: its super walk
+     passes here, so the program's BasicObject keeps that lookup too */
+  for (int k = 0; bo && k < c->nclasses; k++)
+    if (k != ci && !comp_class_is_module(c, &c->classes[k]) && class_is_blank_slate(c, k) &&
+        !blank_slate_without_kernel(c, k)) return 0;
   /* an `include` the body makes another way (through a constant alias, in
      a block, in a class method it calls) may bring Kernel in: such a chain
      keeps the lookup it had */

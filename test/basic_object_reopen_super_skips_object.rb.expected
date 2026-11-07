@@ -1,0 +1,5 @@
+object_method: NoMethodError
+kernel_method: NoMethodError
+basic_object_method: bz!
+own_super_on_string: NoMethodError
+object_method_on_string: oz

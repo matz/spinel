@@ -16109,6 +16109,11 @@ static int oa_filter_arm(Compiler *c, int id, int recv, OAS *sl, int S, char *cl
    would not call. */
 static int oa_printer_takes_args(Compiler *c, int id, const char *walk_disc, int nc) {
   const NodeTable *nt = c->nt;
+  /* (--int-overflow=promote: a row's Integer may widen to a boxed one after
+     this pass, `[x, i]` with i a promoted counter, and the row is then built
+     boxed, which a table of unboxed rows cannot hold: the printer keeps
+     reading the table as an escape there) */
+  if (g_promote_mode) return 0;
   if (nt_kind(nt, id) != NK_CallNode || nt_ref(nt, id, "receiver") >= 0 || nt_ref(nt, id, "block") >= 0) return 0;
   const char *nm = nt_str(nt, id, "name");
   if (!nm) return 0;

@@ -1,0 +1,25 @@
+true
+true
+true
+true
+true
+true
+false
+false
+false
+true
+true
+false
+["Struct", true]
+["StandardError", true]
+["Thread", true]
+["Errno", true]
+["Encoding", true]
+["Process", true]
+["KeyError", true]
+["Data", true]
+["Fiber", true]
+["NoSuchThing", false]
+true
+false
+true

@@ -2266,6 +2266,7 @@ const char *const_get_resolve(Compiler *c, int rk, const char *cgn, int *cls);
 void       const_get_leaves_begin(Compiler *c);  /* index the class leaves while the class table holds still */
 void       const_get_leaves_end(void);
 int        const_defined_known(Compiler *c, int rk, const char *cgn);
+int        const_defined_top_level(Compiler *c, const char *n);   /* every class sees N: top-level, well-known or builtin */
 int        const_defined_from(Compiler *c, int rk, const char *cgn);   /* ... and seen from R: R, its ancestors, their modules, or top level (#9876) */
 int        const_seen_by_class(Compiler *c, int k, const char *cgn);
 int        const_path_value_const(Compiler *c, int k, const char *nm, const int *cands, int ncands); /* what `m::NM` reads for m = class K: K's chain, not Object's (-1: NameError) */

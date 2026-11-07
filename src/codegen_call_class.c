@@ -4443,7 +4443,7 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
         /* a Class known only at run time: the classes that see the constant,
            as its literal form decides for one (#9876); a top-level one, or
            a qualified name, every class sees */
-        if (!lit0 && yes && !strstr(cn0, "::") && !const_name_resolves_top_level(c, cn0)) {
+        if (!lit0 && yes && !strstr(cn0, "::") && !const_defined_top_level(c, cn0)) {
           int tc = ++g_tmp;
           buf_printf(b, "({ sp_Class _t%d = ", tc); emit_expr(c, recv, b);
           buf_printf(b, "; (0");

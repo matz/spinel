@@ -23,5 +23,5 @@ begin; mk(Integer); rescue NoMethodError => e; p e.message; end
 def mkw(k) = k.at((puts "a1"; 0), in: (puts "kw"; "+00:00"), **(puts "dsplat"; {}))
 begin; mkw(Integer); rescue NoMethodError => e; p e.message; end
 # more than 16 arguments that run code
-def m17(k) = k.at((print 1;0),(print 2;0),(print 3;0),(print 4;0),(print 5;0),(print 6;0),(print 7;0),(print 8;0),(print 9;0),(print 10;0),(print 11;0),(print 12;0),(print 13;0),(print 14;0),(print 15;0),(print 16;0),(puts 17;0))
+def m17(k) = k.at((print "a";0),(print "b";0),(print "c";0),(print "d";0),(print "e";0),(print "f";0),(print "g";0),(print "h";0),(print "i";0),(print "j";0),(print "k";0),(print "l";0),(print "m";0),(print "n";0),(print "o";0),(print "p";0),(puts "q";0))
 begin; m17(Integer); rescue NoMethodError => e; p e.message; end

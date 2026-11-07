@@ -5,6 +5,8 @@ class Object
   def pub = "p"
 end
 class Foo; end
+# an unrelated class method of the same name does not answer for Integer
+class Bar; def self.top = "bar"; end
 
 def try
   yield
@@ -17,6 +19,7 @@ puts try { ::String.top }
 puts try { Kernel.top }
 puts try { Comparable.top }
 puts try { Foo.top }
+puts try { Bar.top }
 puts try { 3.top }
 # these still run
 puts try { Integer.pub }

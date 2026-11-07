@@ -22730,7 +22730,7 @@ static int emit_object_reopen_vis_refusal(Compiler *c, int id, int vrecv, TyKind
     if (bid && comp_class_index(c, bn) < 0) {
       int mod = is_builtin_module_name(bn);
       if (core_class_value_answers(bn, vnm) || core_class_value_answers(mod ? "Module#" : "Class#", vnm) || builtin_class_id_answers(bid, vnm, 1) || class_value_builtin_answers(c, vnm, !mod) ||
-          object_reopen_class_value_owns(c, id, oci, vnm, 1, -1)) return 0;
+          object_reopen_class_value_owns(c, id, oci, vnm, 0, -1)) return 0;
       snprintf(cvname, sizeof cvname, "%s %s", mod ? "module" : "class", bn);
       cname = cvname; named = 1;
     }

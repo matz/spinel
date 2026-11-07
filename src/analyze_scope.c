@@ -11331,8 +11331,8 @@ static int pivs_value_uncached(Compiler *c, int v, char *set, int depth) {
     case NK_SelfNode: {
       Scope *s = comp_scope_of(c, v);
       if (s && s->def_node < 0 && s->class_id < 0) return pivs_note_class_value(c, v);
-          if (s && s->is_cmethod && s->def_node >= 0) return pivs_note_cmethod_self(c, s);
-if (!s || s->is_cmethod || s->class_id < 0) return 0;
+      if (s && s->is_cmethod && s->def_node >= 0) return pivs_note_cmethod_self(c, s);
+      if (!s || s->is_cmethod || s->class_id < 0) return 0;
       /* Object's boxed self is not bounded by the recorded class parents. */
       if (is_object_root(c->classes[s->class_id].name))
         return !s->reachable || pivs_param(c, s, NULL, set, depth);
@@ -11358,8 +11358,8 @@ if (!s || s->is_cmethod || s->class_id < 0) return 0;
         set[ci] = 1;
         return 1;
       }
-            if (sp_streq(un, "superclass") && ac == 0 && nt_ref(nt, v, "block") < 0) return pivs_superclass(c, v, r, depth);
-/* an element read below answers nil past the end (fetch raises, and
+      if (sp_streq(un, "superclass") && ac == 0 && nt_ref(nt, v, "block") < 0) return pivs_superclass(c, v, r, depth);
+      /* an element read below answers nil past the end (fetch raises, and
          itself or dup answers its receiver, but neither is told apart) */
       pivs_note_builtin(c);
       if ((sp_streq(un, "[]") && ac == 1) || ((sp_streq(un, "first") || sp_streq(un, "last") ||

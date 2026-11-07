@@ -4505,7 +4505,7 @@ void emit_poly_cases_n(Compiler *c, int id, const char *name, const PolySpecials
       /* nil, a number and a boolean have no include?/key?/member? at
          all: they are not user Enumerables either, so the -1 read as
          false (#4485). A String took the tag arm ahead of the switch. */
-      buf_printf(b, " default: { sp_poly_coll_chk(_t%d, \"%s\");"
+      buf_printf(b, " default: { sp_poly_enum_name_chk(_t%d, \"%s\");"
                     " int _ui%d = sp_poly_user_include(_t%d, %s);"
                     " _t%d = %s_ui%d > 0%s; break; }",
                  tv, name, tv, tv, ab5.p ? ab5.p : "sp_box_nil()", tr, ibo, tv, ibc);

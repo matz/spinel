@@ -5174,9 +5174,37 @@ SP_NORETURN SP_COLD static void sp_raise_poly_nomethod(const char *m, sp_RbVal v
    CRuby stops at with NoMethodError (#4485). A String or Symbol is let
    through: the helper's own arms decide for those. Answers the receiver so a
    call site can wrap its receiver expression in place. */
+/* A boxed builtin whose class has neither #size nor #length (Time, Regexp,
+   Proc, Method, Exception, Thread, Mutex, Random, Rational, Complex, ...).
+   sp_poly_length reads any object it has no arm for as 0, so `v.size` on a
+   boxed Time answered 0 where CRuby raises NoMethodError. */
+static SP_INLINE int sp_poly_sizeless_builtin(sp_RbVal v) {
+  if (v.tag != SP_TAG_OBJ) return 0;
+  switch (v.cls_id) {
+    case SP_BUILTIN_PROC: case SP_BUILTIN_CURRY: case SP_BUILTIN_METHOD: case SP_BUILTIN_TIME:
+    case SP_BUILTIN_REGEX: case SP_BUILTIN_EXCEPTION: case SP_BUILTIN_THREAD: case SP_BUILTIN_MUTEX:
+    case SP_BUILTIN_CONDVAR: case SP_BUILTIN_FIBER: case SP_BUILTIN_RANDOM: case SP_BUILTIN_COMPLEX:
+    case SP_BUILTIN_RATIONAL: case SP_BUILTIN_BIG_RATIONAL: case SP_BUILTIN_DIR: case SP_BUILTIN_YIELDER:
+    case SP_BUILTIN_PROCESS_STATUS: case SP_BUILTIN_ADDRINFO: case SP_BUILTIN_SOCKOPT:
+    case SP_BUILTIN_OBJECT: case SP_BUILTIN_BASIC_OBJECT: case SP_BUILTIN_ARGF:
+      return 1;
+    default: return 0;
+  }
+}
 static SP_INLINE sp_RbVal sp_poly_coll_chk(sp_RbVal v, const char *m) {
   if (v.tag == SP_TAG_NIL || v.tag == SP_TAG_INT || v.tag == SP_TAG_FLT ||
       v.tag == SP_TAG_BIGINT || v.tag == SP_TAG_BOOL)
+    sp_raise_poly_nomethod(m, v);
+  return v;
+}
+/* An Enumerable name (count, first, include?, member?) on a boxed value:
+   nil, a number, a boolean, and a builtin with no #size that has no #each
+   either (all of sp_poly_sizeless_builtin but a Dir and ARGF, which include
+   Enumerable) raise NoMethodError. Before, a boxed Time answered its count
+   as 0 and include? as false. */
+static SP_INLINE sp_RbVal sp_poly_enum_name_chk(sp_RbVal v, const char *m) {
+  sp_poly_coll_chk(v, m);
+  if (sp_poly_sizeless_builtin(v) && v.cls_id != SP_BUILTIN_DIR && v.cls_id != SP_BUILTIN_ARGF)
     sp_raise_poly_nomethod(m, v);
   return v;
 }
@@ -5194,6 +5222,9 @@ static SP_INLINE SP_UNUSED int sp_poly_no_enum(sp_RbVal v) {
    Enumerator is left to the helper. */
 static SP_INLINE sp_RbVal sp_poly_ary_chk(sp_RbVal v, const char *m, int range_ok) {
   sp_poly_coll_chk(v, m);
+  /* a builtin with no #size has none of these (Thread#join is its own) */
+  if (sp_poly_sizeless_builtin(v) && !(v.cls_id == SP_BUILTIN_THREAD && strcmp(m, "join") == 0))
+    sp_raise_poly_nomethod(m, v);
   if (v.tag == SP_TAG_STR || v.tag == SP_TAG_SYM || sp_poly_is_strbuf(v) ||
       (v.tag == SP_TAG_OBJ && sp_poly_is_hash_kind(v.cls_id)) ||
       (!range_ok && v.tag == SP_TAG_OBJ &&
@@ -5215,23 +5246,6 @@ static sp_int sp_poly_struct_size(sp_RbVal v) {
   if (!sp_poly_is_user_obj(v)) return -1;
   sp_RbVal sv = sp_poly_struct_values(v);
   return (sv.tag == SP_TAG_OBJ && sv.v.p && sp_poly_is_array_kind(sv.cls_id)) ? sp_poly_arr_len(sv) : -1;
-}
-/* A boxed builtin whose class has neither #size nor #length (Time, Regexp,
-   Proc, Method, Exception, Thread, Mutex, Random, Rational, Complex, ...).
-   sp_poly_length reads any object it has no arm for as 0, so `v.size` on a
-   boxed Time answered 0 where CRuby raises NoMethodError. */
-static SP_INLINE int sp_poly_sizeless_builtin(sp_RbVal v) {
-  if (v.tag != SP_TAG_OBJ) return 0;
-  switch (v.cls_id) {
-    case SP_BUILTIN_PROC: case SP_BUILTIN_CURRY: case SP_BUILTIN_METHOD: case SP_BUILTIN_TIME:
-    case SP_BUILTIN_REGEX: case SP_BUILTIN_EXCEPTION: case SP_BUILTIN_THREAD: case SP_BUILTIN_MUTEX:
-    case SP_BUILTIN_CONDVAR: case SP_BUILTIN_FIBER: case SP_BUILTIN_RANDOM: case SP_BUILTIN_COMPLEX:
-    case SP_BUILTIN_RATIONAL: case SP_BUILTIN_BIG_RATIONAL: case SP_BUILTIN_DIR: case SP_BUILTIN_YIELDER:
-    case SP_BUILTIN_PROCESS_STATUS: case SP_BUILTIN_ADDRINFO: case SP_BUILTIN_SOCKOPT:
-    case SP_BUILTIN_OBJECT: case SP_BUILTIN_BASIC_OBJECT: case SP_BUILTIN_ARGF:
-      return 1;
-    default: return 0;
-  }
 }
 /* A boxed value with no #empty?: a program object (its own empty? is
    dispatched before this), a builtin with no length, a Process::Tms (a
@@ -15809,7 +15823,7 @@ static sp_int sp_poly_count(sp_RbVal v) {
   if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_DIR) return sp_poly_dir_count(v);
   if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_FLOAT_RANGE && v.v.p) return sp_frange_poly_count((*(sp_FloatRange *)v.v.p));
   if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_OBJ_RANGE && v.v.p) return SP_ORANGE_WALK((sp_ObjRange *)v.v.p)->len;
-  sp_poly_coll_chk(v, "count");
+  sp_poly_enum_name_chk(v, "count");
   /* String#count needs the character set to count */
   if (v.tag == SP_TAG_STR || sp_poly_is_strbuf(v))
     sp_raise_cls("ArgumentError", "wrong number of arguments (given 0, expected 1+)");
@@ -16012,7 +16026,7 @@ static sp_SymPolyHash *sp_time_deconstruct_all(const sp_Time *t) { return sp_tim
 static sp_RbVal sp_enum_first_boxed(sp_RbVal v);   /* fwd: an Enumerator's first item */
 static sp_RbVal sp_poly_first(sp_RbVal v) {
   if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_FLOAT_RANGE && v.v.p) return sp_box_float(sp_frange_first_v((*(sp_FloatRange *)v.v.p)));
-  sp_poly_coll_chk(v, "first");
+  sp_poly_enum_name_chk(v, "first");
   if (v.tag == SP_TAG_STR || v.tag == SP_TAG_SYM || sp_poly_is_strbuf(v))
     sp_raise_poly_nomethod("first", v);
   if (v.tag != SP_TAG_OBJ) return sp_box_nil();

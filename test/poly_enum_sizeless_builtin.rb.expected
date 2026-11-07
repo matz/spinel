@@ -1,0 +1,15 @@
+[NoMethodError, NoMethodError, NoMethodError, NoMethodError, NoMethodError, NoMethodError]
+[NoMethodError, NoMethodError, NoMethodError, NoMethodError, NoMethodError, NoMethodError]
+[NoMethodError, NoMethodError, NoMethodError, NoMethodError, NoMethodError, NoMethodError]
+[NoMethodError, NoMethodError, NoMethodError, NoMethodError, NoMethodError, NoMethodError]
+[NoMethodError, NoMethodError, NoMethodError, NoMethodError, NoMethodError, NoMethodError]
+[NoMethodError, NoMethodError, NoMethodError, NoMethodError, NoMethodError, NoMethodError]
+[NoMethodError, NoMethodError, NoMethodError, NoMethodError, NoMethodError, NoMethodError]
+[NoMethodError, NoMethodError, NoMethodError, NoMethodError, NoMethodError, NoMethodError]
+[2, 1, 2, true, "12", Integer]
+[ArgumentError, NoMethodError, NoMethodError, TypeError, NoMethodError, NoMethodError]
+[3, 1, 3, true, NoMethodError, NoMethodError]
+8
+Thread
+true
+3

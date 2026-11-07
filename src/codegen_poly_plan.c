@@ -514,7 +514,10 @@ static void emit_poly_user_arm0(Compiler *c, int id, const char *name, TyKind re
        nil, force_new_line = (message.to_s !~ ...))`) reads it through a local
        each argument binds to first, as the other arms do (ctor_arm_arg) */
     Buf pdpre; memset(&pdpre, 0, sizeof pdpre);
-    if (c->scopes[mi].nparams > 0) {
+    /* the parameters are the called symbol's: a proc form's clone has
+       them where a dispatcher's own def, which nothing calls, has none */
+    Scope *cs9 = &c->scopes[pfi9 >= 0 ? pfi9 : mi];
+    if (cs9->nparams > 0) {
       const char *saved_self = g_self;
       const char *saved_deref = g_self_deref;
       char selfpbuf[320];  /* stack-local: nested inlines each need their own receiver buffer */
@@ -577,7 +580,7 @@ static void emit_poly_user_arm0(Compiler *c, int id, const char *name, TyKind re
     /* self is always the first argument here, so a zero-param method
        still needs the separator the helper only adds after a real
        parameter list. */
-    if (c->scopes[mi].nparams == 0 && c->scopes[mi].blk_param &&
+    if (cs9->nparams == 0 && c->scopes[mi].blk_param &&
         c->scopes[mi].blk_param[0] && !c->scopes[mi].yields)
       buf_puts(&cb, ", ");
     if (scope_needs_proc_form(c, mi)) {

@@ -8958,10 +8958,31 @@ static const char *ef_rest_param(const NodeTable *nt, int def) {
   return rest >= 0 ? nt_str(nt, rest, "name") : NULL;
 }
 
+/* Can a write of `nm` in `node` run after the method's `return enum_for(...)`
+   has been evaluated? The method's own statements cannot: the return leaves
+   the frame, so a write before it is the value enum_for is given and a write
+   after it never runs (QueryParser.each_pair's `s ||= ""`). A block or lambda
+   may be called later, and an ensure runs after the return's value. */
+static int ef_name_written_later(Compiler *c, int node, const char *nm) {
+  if (node < 0) return 0;
+  const NodeTable *nt = c->nt;
+  NodeKind ty_k = nt_kind(nt, node);
+  if (!nt_type(nt, node)) return 0;
+  if (ty_k == NK_DefNode || ty_k == NK_ClassNode || ty_k == NK_ModuleNode) return 0;
+  if (ty_k == NK_BlockNode || ty_k == NK_LambdaNode || ty_k == NK_EnsureNode)
+    return blkp_name_written(c, node, nm);
+  int nr = nt_num_refs(nt, node);
+  for (int i = 0; i < nr; i++) if (ef_name_written_later(c, nt_ref_at(nt, node, i), nm)) return 1;
+  int na = nt_num_arrs(nt, node);
+  for (int i = 0; i < na; i++) { int m = 0; const int *ids = nt_arr_at(nt, node, i, &m); for (int k = 0; k < m; k++) if (ef_name_written_later(c, ids[k], nm)) return 1; }
+  return 0;
+}
+
 /* An argument of an enum_for whose value the Enumerator can read again when
-   it runs: a literal, a positional parameter of the def that nothing in its
-   body writes, or a splat of its rest parameter likewise (`*rest`, which the
-   rewrite copies first, as CRuby's enum_for keeps its own array). */
+   it runs: a literal, a positional parameter of the def that nothing writes
+   after the return (ef_name_written_later), or a splat of its rest parameter
+   likewise (`*rest`, which the rewrite copies first, as CRuby's enum_for
+   keeps its own array). */
 static int ef_stable_arg(Compiler *c, int def, int arg) {
   const NodeTable *nt = c->nt;
   const char *ty = nt_type(nt, arg);
@@ -8974,7 +8995,7 @@ static int ef_stable_arg(Compiler *c, int def, int arg) {
     int e = nt_ref(nt, arg, "expression");
     const char *rn = ef_rest_param(nt, def);
     return e >= 0 && nt_kind(nt, e) == NK_LocalVariableReadNode && rn &&
-      nt_str(nt, e, "name") && sp_streq(nt_str(nt, e, "name"), rn) && !blkp_name_written(c, body, rn);
+      nt_str(nt, e, "name") && sp_streq(nt_str(nt, e, "name"), rn) && !ef_name_written_later(c, body, rn);
   }
   /* `include_self: include_self`: keywords whose values can each be read
      again, a keyword parameter's included */
@@ -8989,7 +9010,7 @@ static int ef_stable_arg(Compiler *c, int def, int arg) {
   }
   if (ty_k != NK_LocalVariableReadNode) return 0;
   const char *nm = nt_str(nt, arg, "name");
-  return ef_named_param(nt, nt_ref(nt, def, "parameters"), nm) && !blkp_name_written(c, body, nm);
+  return ef_named_param(nt, nt_ref(nt, def, "parameters"), nm) && !ef_name_written_later(c, body, nm);
 }
 
 /* Is `node` an enum_for / to_enum call on self naming the method being

@@ -1,0 +1,8 @@
+{"a" => "1", "b" => "2"}
+{"c" => "3", "d" => nil}
+[]
+["x", "9"]
+["quick", "brown", "jumps", "over", "lazy"]
+["QUICK", "BROWN", "JUMPS", "OVER", "LAZY", "DOG"]
+"quick"
+"brown"

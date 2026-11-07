@@ -2324,6 +2324,11 @@ static void lr_call(ElabRec *x, int node, int fc, int fs, unsigned char *vs, int
        include prepend`) finds no method of the program's there, and is
        left to the builtin's mixin, as before. */
     for (int step = 0; own && own->kind == LR_ALIAS && own->target && step < 8; step++) {
+      /* an alias found through an extended module is that module's: its
+         target is the module's instance method, which this search does
+         not walk, so it keeps the builtin mixin as before */
+      int an = own->node;
+      if (an < 0 || an >= x->c->node_cap || x->c->node_cbody[an] != oc) { own = NULL; break; }
       const LrDef *to = NULL;
       int tc = oc;
       if (lr_sg_chain_find(x->c, oc, own->target, elab_point_of(x->c, own->node), &to, &tc) != ELAB_YES) { own = NULL; break; }

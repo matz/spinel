@@ -343,6 +343,22 @@ static const struct { const char *cls, *anc; } core_cls_ancestors[] = {
 };
 #undef CCM
 #undef CCA
+/* CRuby's public methods of each core class or module as a value, beyond
+   Class's or Module's (core_singleton_methods.inc, written by
+   tools/gen_method_names.rb) */
+#define CSM(k, m) { k, m },
+static const struct { const char *cls, *m; } core_singleton_methods[] = {
+#include "core_singleton_methods.inc"
+  { NULL, NULL }
+};
+#undef CSM
+/* Does the core class or module cls answer m as a value (File.join,
+   Kernel.trap) with a public method of CRuby's? */
+int core_class_value_answers(const char *cls, const char *m) {
+  for (int i = 0; cls && m && core_singleton_methods[i].cls; i++)
+    if (sp_streq(core_singleton_methods[i].cls, cls) && sp_streq(core_singleton_methods[i].m, m)) return 1;
+  return 0;
+}
 
 static int core_own_vis(const char *cls, size_t cl, const char *m) {
   for (int i = 0; core_cls_methods[i].cls; i++)

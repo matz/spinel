@@ -22721,14 +22721,15 @@ static int emit_object_reopen_vis_refusal(Compiler *c, int id, int vrecv, TyKind
         if (k != ci && is_descendant(c, k, ci) && call_target(c, id, k, vnm, CT_CMETHOD, NULL) >= 0) return 0;
     }
     /* a builtin class or module the program does not reopen, named by a
-       constant (`Integer.top`): refused unless the builtin, its class
-       chain, or a class value of any class answers the name */
+       constant (`Integer.top`): refused unless CRuby's class or module
+       answers the name as a value (File.join), the builtin tables or its
+       class chain have it, or a class value of the program answers it */
     NodeKind vk = nt_kind(c->nt, vrecv);
     const char *bn = ci < 0 && (vk == NK_ConstantReadNode || (vk == NK_ConstantPathNode && nt_ref(c->nt, vrecv, "parent") < 0)) ? nt_str(c->nt, vrecv, "name") : NULL;
     int bid = bn ? builtin_class_id(bn) : 0;
     if (bid && comp_class_index(c, bn) < 0) {
       int mod = is_builtin_module_name(bn);
-      if (builtin_class_id_answers(bid, vnm, 1) || class_value_builtin_answers(c, vnm, !mod) ||
+      if (core_class_value_answers(bn, vnm) || builtin_class_id_answers(bid, vnm, 1) || class_value_builtin_answers(c, vnm, !mod) ||
           object_reopen_class_value_owns(c, id, oci, vnm, 1, -1)) return 0;
       snprintf(cvname, sizeof cvname, "%s %s", mod ? "module" : "class", bn);
       cname = cvname; named = 1;

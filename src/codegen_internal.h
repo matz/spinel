@@ -630,6 +630,7 @@ void ren_unhide(RenHide *h);
 extern int  g_block_id;
 int builtin_method_known(const char *cls, const char *m);
 int builtin_cmethod_known(const char *cls, const char *name);
+int core_class_value_answers(const char *cls, const char *m); /* codegen_call_class.c: CRuby's core class or module cls answers m as a value */
 int builtin_super_cmethod_known(const char *cls, const char *name);
 int builtin_instance_name_known(const char *m);
 int builtin_classes_below_object_list(const char *m, Buf *out);

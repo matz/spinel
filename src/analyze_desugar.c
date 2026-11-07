@@ -7614,6 +7614,11 @@ static int dsend_poly_builtin_classes(Compiler *c, const char **out, int cap) {
   return n;
 }
 
+/* The most arms a computed send dispatches over, and the most it keeps
+   with a boxed receiver's builtin names among them. */
+#define DSEND_ARM_CAP 4096
+#define DSEND_BUILTIN_ARM_CAP 1024
+
 static int desugar_dynamic_send_inner(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int n0 = nt->count;
@@ -7910,11 +7915,15 @@ static int desugar_dynamic_send_inner(Compiler *c) {
           if (comp_cmethod_in_chain(c, class_recv, own[k], NULL) < 0) shaped = 0;
         if (!shaped) { for (int j = 0; j < nown; j++) free(own[j]); nown = 0; }
       }
-      /* A boxed receiver's builtin names come after the program's: past the
-         cap they go, and the send dispatches over what it did before they
-         were arms rather than not at all. */
-      if (nown > 1024 && nprog >= 0) { for (int k = nprog; k < nown; k++) free(own[k]); nown = nprog; }
-      if (nown == 0 || nown > 1024) { for (int k = 0; k < nown; k++) free(own[k]); free(own); continue; }
+      /* A boxed receiver's builtin names come after the program's: past
+         their cap they go, and the send dispatches over what it did before
+         they were arms rather than not at all. */
+      if (nown > DSEND_BUILTIN_ARM_CAP && nprog >= 0) { for (int k = nprog; k < nown; k++) free(own[k]); nown = nprog; }
+      /* The program's own names are refused only past a far larger cap: a
+         program with more than 1024 method names (an app's classes and its
+         tests built as one) is not one whose send can't be served. Each arm
+         costs code, so the cap still bounds what one send can grow to. */
+      if (nown == 0 || nown > DSEND_ARM_CAP) { for (int k = 0; k < nown; k++) free(own[k]); free(own); continue; }
       use = own; nuse = nown;
     }
     if (sock_name) { use = &sock_name; nuse = 1; }

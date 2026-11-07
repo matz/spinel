@@ -5052,7 +5052,7 @@ static int sus_class_const(Compiler *c, int ci) {
     int n = nt_new_node(nt, k < 0 ? "ConstantReadNode" : "ConstantPathNode");
     if (n < 0) return -1;
     nt_node_set_str(nt, n, "name", seg);
-    /* the leaf of a name that qualify_colliding_consts renamed (`NS::Q`
+    /* the leaf of a class that qualify_colliding_classes renamed (`NS::Q`
        beside a top-level Q is read as NS::NS__Q): name the slot ci has, as
        that pass names the program's own reads, so a lookup does not find
        the other class of the same leaf name */

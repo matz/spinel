@@ -2005,6 +2005,23 @@ int builtin_every_object_answers(const char *m, int cmeth) {
   return builtin_object_method_known(m) || builtin_method_known("Kernel", m) || builtin_method_known("Object", m) ||
          (cmeth && builtin_method_known("Module", m));
 }
+/* CRuby's public methods of each core class or module as a value, beyond
+   Class's or Module's (core_singleton_methods.inc, written by
+   tools/gen_method_names.rb) */
+#define CSM(k, m) { k, m },
+static const struct { const char *cls, *m; } core_singleton_methods[] = {
+#include "core_singleton_methods.inc"
+  { NULL, NULL }
+};
+#undef CSM
+/* Does the core class or module cls answer m as a value (File.join,
+   Kernel.trap) with a public method of CRuby's? cls "Class#" or "Module#"
+   asks about every class or module (class_eval, attr_reader). */
+int core_class_value_answers(const char *cls, const char *m) {
+  for (int i = 0; cls && m && core_singleton_methods[i].cls; i++)
+    if (!strcmp(core_singleton_methods[i].cls, cls) && !strcmp(core_singleton_methods[i].m, m)) return 1;
+  return 0;
+}
 /* Does the builtin class of cls_id id (class_builtin_parent's answer), or
    a builtin class above it, answer m with a method of its own (with
    cmeth, a class method)? Every name the facts carry counts, the

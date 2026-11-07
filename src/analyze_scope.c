@@ -7510,6 +7510,13 @@ static void include_module_methods(Compiler *c, int ci, int mod_id, int guard, i
         !(src->is_module_function && (module_function_self_dependent(c, ms) ||
                                       module_function_singleton_replaced(c, mod_id, src->name, ms))))
       continue;
+    /* a module function a later instance def of the name replaced (`def a`
+       after `module_function :a`): the includer gets that public def, not
+       a private copy of the module function */
+    if (src->is_cmethod) {
+      int live = comp_self_method_in_chain(c, mod_id, src->name, NULL);
+      if (live >= 0 && live != ms && !c->scopes[live].is_cmethod) continue;
+    }
     /* an instance def a later module function of the name replaced: the
        module function is the module's instance method of the name */
     if (mod_mf && !src->is_cmethod) {

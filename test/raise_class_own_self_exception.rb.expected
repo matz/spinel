@@ -1,0 +1,12 @@
+[AppError, "app:r"]
+[AppError, "app:dflt"]
+[AppError, "app:sub"]
+[AppError, "app:f"]
+[Plain, "p"]
+[Plain, "Plain"]
+[V, "v"]
+[RuntimeError, "nx q"]
+[AppError, "app:c"]
+[:app, "app:r2"]
+[AppError, "app:inmeth"]
+AppError

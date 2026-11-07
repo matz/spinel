@@ -10951,6 +10951,57 @@ int desugar_exception_class_ctor(Compiler *c) {
   return changed;
 }
 
+/* `raise K, m` and `raise K` on a class K with a class method `exception`
+   of the program's (its own `def self.exception`, or one of a class above
+   it): CRuby raises what `K.exception(m)` answers, which need not be a K.
+   Spell the call so; a class without one keeps the raise of K, whose
+   `exception` is `new`. A backtrace argument, a splat and a program's own
+   `raise` keep the old path. */
+int desugar_raise_own_exception(Compiler *c) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  int changed = 0;
+  static const char *const calls_of[] = { "raise", "fail", NULL };
+  int *calls, ncalls = an_calls_named_any(c, calls_of, nt->count, &calls);
+  for (int q = 0; q < ncalls; q++) {
+    int id = calls[q];
+    if (id >= c->node_cap || nt_kind(nt, id) != NK_CallNode || nt_ref(nt, id, "receiver") >= 0 ||
+        nt_ref(nt, id, "block") >= 0)
+      continue;
+    const char *nm = nt_str(nt, id, "name");
+    if (!nm || an_user_defines_method(c, nm)) continue;
+    int args = nt_ref(nt, id, "arguments"), ac = 0;
+    const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &ac) : NULL;
+    if (ac < 1 || nt_argv_has(nt, av, ac, NT_ARG_SPLAT | NT_ARG_BLOCK | NT_ARG_FORWARDING)) continue;
+    int kw = nt_kind(nt, av[ac - 1]) == NK_KeywordHashNode, npos = ac - kw;
+    if (npos < 1 || npos > 2) continue;
+    NodeKind k0 = nt_kind(nt, av[0]);
+    if (k0 != NK_ConstantReadNode && k0 != NK_ConstantPathNode) continue;
+    int ci = class_recv_static_ci(c, av[0]), dc = -1;
+    int mi = ci >= 0 ? call_target(c, -1, ci, "exception", CT_CMETHOD, &dc) : -1;
+    if (mi < 0) continue;
+    /* a `super` past the program's methods reaches Exception.exception,
+       which Spinel's class methods cannot call: such a method keeps the
+       raise of K, whose result it gives where it only supers */
+    int up = dc >= 0 ? c->classes[dc].parent : -1;
+    if (scope_calls_super(c, mi) && (up < 0 || call_target(c, -1, up, "exception", CT_CMETHOD, NULL) < 0)) continue;
+    int base = nt->count;
+    int ex = fwd_new_call(nt, av[0], "exception", npos == 2 ? av[1] : -1);
+    nt_node_set_int(nt, ex, "node_line", nt_int(nt, id, "node_line", 0));
+    nt_node_set_int(nt, ex, "node_file", nt_int(nt, id, "node_file", 0));
+    nt_node_set_int(nt, ex, "node_col", nt_int(nt, id, "node_col", 0));
+    int moved[2] = { ex, kw ? av[ac - 1] : -1 };
+    nt_node_set_arr(nt, args, "arguments", moved, kw ? 2 : 1);
+    comp_grow_node_arrays(c);
+    for (int j = base; j < nt->count; j++) {
+      c->nscope[j] = c->nscope[id];
+      c->node_cbody[j] = c->node_cbody[id];
+    }
+    changed = 1;
+  }
+  free(calls);
+  return changed;
+}
+
 /* Does e write the variable `name`, at any depth (closures = 0), or only
    inside a block or a lambda (closures = 1)? */
 static int fwd_subtree_writes(const NodeTable *nt, int e, const char *name, int closures, int inside) {

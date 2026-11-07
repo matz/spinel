@@ -16795,8 +16795,10 @@ static int emit_poly_call0_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
         buf_puts(b, "({ sp_RbVal _ep = "); emit_boxed(c, recv, b);
         /* nil, a number and a boolean have none either, and read as empty
            through the same 0 (#4485) */
+        /* a builtin with no length (Time, Regexp, Proc, Object.new, ...), a
+           Process::Tms or a Range has no #empty? either (sp_poly_no_empty) */
         buf_puts(b, "; sp_poly_coll_chk(_ep, \"empty?\");"
-                    " sp_poly_is_user_obj(_ep) ? (sp_raise_poly_nomethod(\"empty?\", _ep), 0)"
+                    " sp_poly_no_empty(_ep) ? (sp_raise_poly_nomethod(\"empty?\", _ep), 0)"
                     " : (sp_poly_length(_ep) == 0); })");
       }
       else if (sp_streq(name, "size")) {

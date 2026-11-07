@@ -2,6 +2,7 @@
 #include "value_pos.h"
 #include "builtin_ops.h"
 #include "call_plan.h"
+#include "method_table_check.h"
 #include "repr.h"
 #include "holder.h"
 #include "share.h"
@@ -530,6 +531,7 @@ int an_user_defines_or_reads(Compiler *c, const char *name) {
     else memo = 0;
   }
   int ans = 0;
+  mtab_enter(c);   /* (a scan of every class, as the candidates are) */
   for (int k = 0; k < c->nclasses && !ans; k++) {
     /* comp_poly_arm_defines: a native class counts only through its
        declared bindings (#4504) -- counting its Ruby-side defs here made
@@ -538,6 +540,7 @@ int an_user_defines_or_reads(Compiler *c, const char *name) {
     if (comp_poly_arm_defines(c, k, name)) ans = 1;
     else if (!c->classes[k].is_native_class && comp_reader_in_chain(c, k, name, NULL)) ans = 1;
   }
+  mtab_leave(c);
   /* A CLASS method of the same name is deliberately not consulted: it is only
      reachable through a Class-valued receiver, so it cannot be the answer to
      an instance call. Counting it made `k.downcase` on a String bind to a
@@ -12890,7 +12893,9 @@ TyKind infer_type(Compiler *c, int id) {
     imemo_rec_add(&g_imemo_rec[rec_i], id < c->node_cap && c->nscope ? c->nscope[id] : -1);
   }
   g_infer_depth++;
+  MtabMark mt_was = mtab_push(c, id);
   TyKind t = infer_uncached(c, id);
+  mtab_pop(c, mt_was);
   g_infer_depth--;
   ImemoRec rec = { -1, {0} };
   if (rec_i >= 0) {

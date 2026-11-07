@@ -11,6 +11,7 @@
 #include "codegen_call_arms.h"
 #include "implicit_calls.h"
 #include "implied_calls.h"
+#include "method_table_check.h"
 
 static CallPlan *g_cp_memo = NULL;
 static unsigned char *g_cp_have = NULL;
@@ -1858,11 +1859,16 @@ int cplan_sg_accessor(Compiler *c, int id, int ci, const char *name, char *slot,
 /* See call_plan.h. */
 int cplan_sg_version(Compiler *c, int id, int ci, const char *name) {
   if (id < 0 || !elab_attr_replaced(c, ci, name)) return CP_SG_NONE;
-  int m = call_target(c, id, ci, name, CT_CMETHOD, NULL);
+  mtab_enter(c);
+  int m = call_target(c, id, ci, name, CT_CMETHOD, NULL), r;
   MethodLookup told = { .survey = 1, .def_class = -1 };
-  if (m < 0 || c->scopes[m].attr_version) return CP_SG_SLOT;
-  if (!c->scopes[m].entry) ct_version(c, id, ci, name, CT_CMETHOD, m, &told);
-  return told.n < 0 ? CP_SG_UNTOLD : CP_SG_METHOD;
+  if (m < 0 || c->scopes[m].attr_version) r = CP_SG_SLOT;
+  else {
+    if (!c->scopes[m].entry) ct_version(c, id, ci, name, CT_CMETHOD, m, &told);
+    r = told.n < 0 ? CP_SG_UNTOLD : CP_SG_METHOD;
+  }
+  mtab_leave(c);
+  return r;
 }
 /* See call_plan.h. */
 int cplan_sg_slot_call(Compiler *c, int id, int ci, const char *name) {
@@ -2051,6 +2057,7 @@ static int ct_lookup(Compiler *c, int id, int cls, const char *name, unsigned *f
 int call_target(Compiler *c, int id, int cls, const char *name, unsigned flags, MethodLookup *out) {
   MethodLookup own = { .def_class = -1 }, *ml = out ? out : &own;
   int dc0 = ml->def_class, mi = -1, pin, r;
+  mtab_enter(c);
   *ml = (MethodLookup){ .def_class = dc0 };
   if (ct_send_shadow(c, id, name)) {
     ml->kind = ML_NONE;
@@ -2105,6 +2112,8 @@ int call_target(Compiler *c, int id, int cls, const char *name, unsigned flags, 
     ml->kind = ML_ENTRY;
     ml->why = 0;
   }
+  mtab_leave(c);
+  if (g_method_table_check && ml->kind == ML_TABLE) mtab_table(c, id, cls, flags, name, ml->why);
   return r;
 }
 
@@ -6657,26 +6666,31 @@ static void ver_need(Compiler *c, int id, const char *nm, int k, unsigned flags,
   ElabVersion vs[VER_MAX_ARMS];
   int mi, ar, rcls = flags & CT_TOP ? -1 : k, sg;
   MethodLookup ml = { .survey = 1, .def_class = -1 };
+  int asked = 1;
+  mtab_enter(c);
   /* (an entry arms two or more versions of the chain: with fewer, or a
      chain the record does not hold, no call is asked. A call on main may
      ask main's chain, which ends in Object's: ct_lookup. A later prepend's
      copy has its guard entries: ver_entries_build) */
   if (!(flags & CT_TOP)) {
     const VerPre *p = ver_pre(c, id, nm, k, flags);
-    if (!p->ok) return;
+    asked = p->ok;
     mi = p->mi; sg = p->sg; ar = p->ar;
   }
+  else if (elab_chain_versions(c, rcls, 1, nm, vs, VER_MAX_ARMS) < 2 ||
+           (mi = ct_lookup(c, id, k, nm, &flags, NULL)) < 0 || c->scopes[mi].mixin_guarded || !c->scopes[mi].versioned) asked = 0;
   else {
-    if (elab_chain_versions(c, rcls, 1, nm, vs, VER_MAX_ARMS) < 2) return;
-    if ((mi = ct_lookup(c, id, k, nm, &flags, NULL)) < 0 || c->scopes[mi].mixin_guarded || !c->scopes[mi].versioned) return;
     sg = (flags & CT_CMETHOD) != 0;
     ar = ver_call_arity(c, id, rcls, sg, nm, mi);
   }
-  ct_version(c, id, k, nm, flags, mi, &ml);
-  /* (the copies' entry over the module's versions: mixin_copies_module) */
-  int to[VER_MAX_ARMS], nc = 0;
-  VerNeed w = { VER_ENTRY_CHAIN, rcls, sg, mi, ar, nm, ml.copies ? mixin_copies_module(c, mi, to, vs, &nc) + 1 : 0 };
-  if (ml.n >= 2 && !ver_need_has(c, arg, w)) ver_need_add(arg, w);
+  if (asked) {
+    ct_version(c, id, k, nm, flags, mi, &ml);
+    /* (the copies' entry over the module's versions: mixin_copies_module) */
+    int to[VER_MAX_ARMS], nc = 0;
+    VerNeed w = { VER_ENTRY_CHAIN, rcls, sg, mi, ar, nm, ml.copies ? mixin_copies_module(c, mi, to, vs, &nc) + 1 : 0 };
+    if (ml.n >= 2 && !ver_need_has(c, arg, w)) ver_need_add(arg, w);
+  }
+  mtab_leave(c);
 }
 /* The entries the calls need, made once the passes after the record have
    made their methods (an_phase_pre_fixpoint, before the scope index

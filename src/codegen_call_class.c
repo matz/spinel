@@ -2878,14 +2878,14 @@ static int ctor_defaults_or_defer(Compiler *c, int initm, Buf *out, char *msg, s
     emit_args_filled(c, initm, -1, "", out);
     return 1;
   }
-  DeferMark dm; defer_mark(&dm, out);
+  DeferMark dm; defer_mark(c, &dm, out);
   volatile int ok = 0;
   if (setjmp(g_unsup_recover) == 0) {
     emit_args_filled(c, initm, -1, "", out);
     ok = 1;
   }
-  else defer_rollback(&dm, msg, msz);
-  defer_done(&dm);
+  else defer_rollback(c, &dm, msg, msz);
+  defer_done(c, &dm);
   return ok;
 }
 /* `case ci:` raising the refusal ctor_defaults_or_defer kept */

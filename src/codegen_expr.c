@@ -3,6 +3,7 @@
 #include "share.h"
 #include "holder.h"
 #include "call_plan.h"
+#include "method_table_check.h"
 #include "value_pos.h"
 #include "codegen_call_arms.h"
 
@@ -2147,14 +2148,18 @@ void emit_expr(Compiler *c, int id, Buf *b) {
      Array it starts with (#7449) */
   if (an_ary_viewed(c, id) && (array_new_copies(comp_ntype(c, id)) || ty_is_hash(comp_ntype(c, id)))) {
     buf_printf(ob, "((%s)(", c_type_name(comp_ntype(c, id)));
+    MtabMark mt_was = mtab_push(c, id);
     emit_expr_node(c, id, ob);
+    mtab_pop(c, mt_was);
     buf_puts(ob, "))");
   }
   else {
     /* a plain consumer of an element read: the read may unwrap itself */
     int sv_n = g_ck_node, sv_d = g_ck_done; const char *sv_o = g_ck_op;
     if (wrap_arg) { g_ck_node = id; g_ck_op = NULL; g_ck_done = 0; }
+    MtabMark mt_was = mtab_push(c, id);
     emit_expr_node(c, id, ob);
+    mtab_pop(c, mt_was);
     if (wrap_arg && g_ck_done && ob == &side) {
       buf_puts(b, side.p ? side.p : "0"); free(side.p);
       g_ck_node = sv_n; g_ck_op = sv_o; g_ck_done = sv_d;

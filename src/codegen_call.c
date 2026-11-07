@@ -1,4 +1,5 @@
 #include "codegen_internal.h"
+#include "method_table_check.h"
 #include "share.h"
 #include "repr.h"
 #include "codegen_poly.h"
@@ -1471,11 +1472,11 @@ static char *emit_io_builtin_call(Compiler *c, int id, int recv, int tv, int wan
   int sv_probe = g_unsup_probe;
   jmp_buf sv_jb; memcpy(sv_jb, g_unsup_recover, sizeof(jmp_buf));
   volatile int ok = 1;
-  EmitUnitState *sv_state = emit_state_snapshot();
+  EmitUnitState *sv_state = emit_state_snapshot(c);
   g_pre = pb; g_unsup_probe = 1;
   if (setjmp(g_unsup_recover) == 0) { if (want_o) emit_oint_expr(c, id, ct, nb); else emit_expr(c, id, nb); }
   else ok = 0;
-  emit_state_release(sv_state, !ok);
+  emit_state_release(c, sv_state, !ok);
   memcpy(g_unsup_recover, sv_jb, sizeof(jmp_buf));
   g_unsup_probe = sv_probe; g_pre = sv_gpre;
   view_pop(c, vw);
@@ -3023,14 +3024,17 @@ static int user_defines_or_reads_walk(Compiler *c, const char *name) {
      through a Class-valued receiver and can never answer an instance call, so
      counting it made a String receiver decline the String method and bind to
      `def self.<name>` instead (#3520). */
-  for (int uk = 0; uk < c->nclasses; uk++)
-    if (comp_method_in_chain(c, uk, name, NULL) >= 0 && uk_class_can_be_reached(c, uk)) return 1;
+  int ans = 0;
+  mtab_enter(c);   /* (a scan of every class, as the candidates are) */
+  for (int uk = 0; uk < c->nclasses && !ans; uk++)
+    ans = comp_method_in_chain(c, uk, name, NULL) >= 0 && uk_class_can_be_reached(c, uk);
   /* A top-level method is private on Object, so no explicit receiver can reach
      it and it never owns a name here -- the twin in analyze_infer.c carries the
      reasoning. */
-  for (int uk = 0; uk < c->nclasses; uk++)
-    if (comp_reader_in_chain(c, uk, name, NULL) && uk_class_can_be_reached(c, uk)) return 1;
-  return 0;
+  for (int uk = 0; uk < c->nclasses && !ans; uk++)
+    ans = comp_reader_in_chain(c, uk, name, NULL) && uk_class_can_be_reached(c, uk);
+  mtab_leave(c);
+  return ans;
 }
 /* The answer per name, kept while the scope index is frozen and neither the
    class shape nor the counts move: each ask walked every class of the
@@ -4826,19 +4830,19 @@ static int emit_lazy_pipeline_expr_1(Compiler *c, int id, Buf *b) {
    had the next arm's self read through them, and the enclosing recovery
    point, which left pointing into the probe's frame had a later refusal in
    the same unit jump back into it after it had returned. */
-void arm_probe_begin(ArmProbe *p, Buf *pre) {
+void arm_probe_begin(Compiler *c, ArmProbe *p, Buf *pre) {
   p->pre = g_pre; p->probe = g_unsup_probe;
   p->hold = g_conv_hold; p->open_defaults = g_open_defaults;
   memcpy(p->jb, g_unsup_recover, sizeof p->jb);
   p->moves = comp_scope_move_depth(); p->views = view_mark();
-  p->state = emit_state_snapshot();
+  p->state = emit_state_snapshot(c);
   g_pre = pre; g_unsup_probe = 1;
 }
 void arm_probe_dropped(ArmProbe *p) {
   comp_scope_move_unwind(p->moves); view_unwind(p->views);
 }
-void arm_probe_end(ArmProbe *p, int ok) {
-  emit_state_release(p->state, !ok);
+void arm_probe_end(Compiler *c, ArmProbe *p, int ok) {
+  emit_state_release(c, p->state, !ok);
   memcpy(g_unsup_recover, p->jb, sizeof p->jb);
   g_open_defaults = p->open_defaults;
   g_conv_hold = p->hold;
@@ -5035,7 +5039,7 @@ static int emit_dynamic_send(Compiler *c, int id, Buf *b) {
        only when this arm is taken. */
     Buf pre = {0, 0, 0}, body = {0, 0, 0};
     int sv_arm_argov = g_n_argov;
-    ArmProbe ap; arm_probe_begin(&ap, &pre);
+    ArmProbe ap; arm_probe_begin(c, &ap, &pre);
     volatile int ok;
     int mi = cplan_user(c, arm)->mi;
     int self_ret = repr_self_handle(c, mi) && repr_call_returns_handle(c, arm);
@@ -5059,7 +5063,7 @@ static int emit_dynamic_send(Compiler *c, int id, Buf *b) {
       ok = 1;
     }
     else { ok = 0; arm_probe_dropped(&ap); }
-    arm_probe_end(&ap, ok);
+    arm_probe_end(c, &ap, ok);
     view_unbind(sv_arm_argov);
     /* the receiver's bytes an arm that does not answer its String reads
        are a read, not a copy: one node stands for the receiver of every arm,
@@ -5140,11 +5144,11 @@ static int emit_dynamic_respond_to(Compiler *c, int id, Buf *b) {
       for (int q = 0; q < nseen && !dup; q++) dup = seen[q] == sid;
       if (dup) continue; }
     Buf pre = {0, 0, 0}, body = {0, 0, 0};
-    ArmProbe ap; arm_probe_begin(&ap, &pre);
+    ArmProbe ap; arm_probe_begin(c, &ap, &pre);
     volatile int ok;
     if (setjmp(g_unsup_recover) == 0) { emit_expr(c, arm, &body); ok = 1; }
     else { ok = 0; arm_probe_dropped(&ap); }
-    arm_probe_end(&ap, ok);
+    arm_probe_end(c, &ap, ok);
     if (ok) {
       buf_printf(b, "case %d: { ", comp_sym_intern(c, nm));
       if (pre.p && pre.len) buf_puts(b, pre.p);
@@ -5209,11 +5213,11 @@ static int emit_dynamic_const_get(Compiler *c, int id, Buf *b) {
        that resolves by type but not by codegen longjmps out and is dropped;
        its preludes replay inside its own branch. */
     Buf pre = {0, 0, 0}, body = {0, 0, 0};
-    ArmProbe ap; arm_probe_begin(&ap, &pre);
+    ArmProbe ap; arm_probe_begin(c, &ap, &pre);
     volatile int ok;
     if (setjmp(g_unsup_recover) == 0) { emit_expr(c, arm, &body); ok = 1; }
     else { ok = 0; arm_probe_dropped(&ap); }
-    arm_probe_end(&ap, ok);
+    arm_probe_end(c, &ap, ok);
     if (ok) {
       buf_printf(b, "if (strcmp(_n%d, \"", t); emit_c_escaped(b, nm); buf_puts(b, "\") == 0) { ");
       if (pre.p && pre.len) buf_puts(b, pre.p);
@@ -8609,13 +8613,13 @@ static int poly_arm_probe(Compiler *c, int id, PolyProbeFn fn, void *ctx, Buf *n
   ConvHold *sv_hold = g_conv_hold;
   jmp_buf sv_jb; memcpy(sv_jb, g_unsup_recover, sizeof(jmp_buf));
   volatile int ok = 1;
-  EmitUnitState *sv_state = emit_state_snapshot();
+  EmitUnitState *sv_state = emit_state_snapshot(c);
   g_pre = pb; g_unsup_probe = 1;
   int sv_pin = an_pin_node(id);
   if (setjmp(g_unsup_recover) == 0) fn(c, id, ctx, nb);
   else ok = 0;
   an_pin_node(sv_pin);
-  emit_state_release(sv_state, !ok);
+  emit_state_release(c, sv_state, !ok);
   memcpy(g_unsup_recover, sv_jb, sizeof(jmp_buf));
   g_conv_hold = sv_hold; g_open_defaults = sv_open_defaults;
   g_unsup_probe = sv_probe; g_pre = sv_gpre;

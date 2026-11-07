@@ -46,6 +46,7 @@
 #include <limits.h>
 #include "builtin_names.h"
 #include "call_plan.h"
+#include "method_table_check.h"
 
 int class_has_exc_name(Compiler *c, int ci);   /* codegen.c */
 
@@ -5615,6 +5616,7 @@ static void cf_alias_groups(CF *f) {
 static void cf_solve(Compiler *c, int directed, int dump_facts) {
   const NodeTable *nt = c->nt;
   CF f;
+  mtab_enter(c);   /* (the class facts ask every class, as the candidates do) */
   memset(&f, 0, sizeof f);
   f.rt_obj = f.rtc = f.rvis = f.dynarg = f.every = -1;   /* (made below, in directed mode: none until then) */
   /* directed 2: the walk of the kinds alone (cf_kinds), whose classes are
@@ -6008,6 +6010,7 @@ static void cf_solve(Compiler *c, int directed, int dump_facts) {
     free(f.kseed); free(f.kdone); free(f.kld); free(f.kst); free(f.kown); free(f.krest); free(f.kval); free(f.kx); free(f.kstr); free(f.kcu); free(f.kesc); free(f.kqs); free(f.kk); free(f.knarrow); free(f.kskp); free(f.kdefs); free(f.kpair); free(f.ksend); free(f.kskiparm);
   }
   free(f.exc_kw);
+  mtab_leave(c);
 }
 
 /* SPINEL_CLS_FLOW: the directed sets beside the unified ones, per call

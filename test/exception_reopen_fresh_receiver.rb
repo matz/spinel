@@ -1,3 +1,4 @@
+# spinel: gc-stress
 # A reopened exception method reached by the runtime class of a fresh
 # exception (`RuntimeError.new("x").tag`), where another call made the
 # method's dispatch pick among the reopenings: the exception was held by

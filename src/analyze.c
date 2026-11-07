@@ -5255,7 +5255,6 @@ static int qc_alias_chain(const QCScope *sc, int nsc, char (*in)[64], int n,
      that a QCAlias target or a header's segments can hold */
   return len <= QC_MAXDEPTH ? len : 0;
 }
-static int qc_read_chain_as(const NodeTable *nt, int node, char (*chain)[64], int *abs_anchor, int orig);
 static QCAlias *qc_alias_new(void) {
   if (qc_naliases == qc_caliases) {
     qc_caliases = qc_caliases ? qc_caliases * 2 : 16;
@@ -5281,7 +5280,7 @@ static void qc_note_alias(const NodeTable *nt, int w, char (*path)[64], int dept
   NodeKind vk = nt_kind(nt, val);
   char vchain[QC_MAXDEPTH + 1][64];
   int vabs = 0;
-  int vl = vk == NK_ConstantReadNode || vk == NK_ConstantPathNode ? qc_read_chain_as(nt, val, vchain, &vabs, 1) : 0;
+  int vl = vk == NK_ConstantReadNode || vk == NK_ConstantPathNode ? qc_read_chain(nt, val, vchain, &vabs) : 0;
   char out[QC_MAXDEPTH + 1][64];
   int n = 0, via;
   if (vl >= 1 && vl <= QC_MAXDEPTH) {
@@ -5687,10 +5686,6 @@ void qc_collect_writes(Compiler *c, int node, char (*path)[64], int depth,
 /* Reconstruct a path read's chain (["RootNS","Mid","LEAF"]) and whether it is
    root-anchored. Returns the chain length, or 0 if unsupported. */
 int qc_read_chain(const NodeTable *nt, int node, char (*chain)[64], int *abs_anchor) {
-  return qc_read_chain_as(nt, node, chain, abs_anchor, 0);
-}
-/* ... with orig set, in the names written before that pass renamed them */
-static int qc_read_chain_as(const NodeTable *nt, int node, char (*chain)[64], int *abs_anchor, int orig) {
   char rev[QC_MAXDEPTH + 1][64];
   int n = 0;
   int cur = node;
@@ -5699,9 +5694,8 @@ static int qc_read_chain_as(const NodeTable *nt, int node, char (*chain)[64], in
     const char *ty = nt_type(nt, cur);
     NodeKind k = nt_kind(nt, cur);
     const char *nm = nt_str(nt, cur, "name");
-    const char *on = orig ? nt_str(nt, cur, "qc_orig_name") : NULL;
     if (!ty || !nm) return 0;
-    snprintf(rev[n++], 64, "%s", on ? on : nm);
+    snprintf(rev[n++], 64, "%s", nm);
     if (k == NK_ConstantReadNode) break;
     if (k != NK_ConstantPathNode) return 0;
     int par = nt_ref(nt, cur, "parent");

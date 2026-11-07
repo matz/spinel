@@ -7407,11 +7407,6 @@ int elab_rec_open(Compiler *c, int node, int cp, const char *cname, int encl) {
     int par = path ? nt_ref(c->nt, cp, "parent") : -1;
     if (par >= 0 && (nt_kind(c->nt, par) == NK_ConstantReadNode || nt_kind(c->nt, par) == NK_ConstantPathNode)) {
       header_parent_encloses(c, par, ci, cname, qrn != NULL);
-      /* a path builder's leaf the constant pass qualified (`A::B` made
-         `A__B`) is found by its Ruby path, as a header's the class pass
-         qualified is (qc_ruby_name) */
-      if (!qrn && nt_str(c->nt, cp, "qc_orig_name") && class_def_builder(c->nt, node) >= 0)
-        c->classes[ci].ruby_name_cache = strdup(class_ruby_name(c, ci));
     }
     /* `class ::B` (`::B = Class.new do ... end`) names B at the top level
        wherever it is written: no module encloses it, and its name is B */

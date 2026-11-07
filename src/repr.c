@@ -43,8 +43,9 @@ static int dispatch_answers_nil(Compiler *c, int call, int cid, const char *nm, 
   int any_nil = mi >= 0 && (c->scopes[mi].ret == TY_NIL || c->scopes[mi].ret == TY_VOID), overridden = 0;
   int nd = 0; const int *ds = comp_descendants(c, cid, &nd);
   for (int k = 0; k < nd; k++) {
-    int odef = -1, omi = call_target(c, call, ds[k], nm, 0, &odef);
-    if (omi < 0 || omi == mi || odef != ds[k]) continue;
+    MethodLookup ml = { .def_class = -1 };
+    int omi = call_target(c, call, ds[k], nm, 0, &ml);
+    if (omi < 0 || omi == mi || ml.def_class != ds[k]) continue;
     overridden = 1;
     if (method_ret_is_oint(&c->scopes[omi])) return 1;
     if (c->scopes[omi].ret == TY_NIL || c->scopes[omi].ret == TY_VOID) any_nil = 1;
@@ -294,15 +295,16 @@ static int node_is_oint_asked(Compiler *c, int node) {
     else if (r < 0) mi = comp_self_call_mi(c, node, nm);
     else if (ty_is_object(rt)) {
       int cid = ty_object_class(rt);
-      int mdef = -1, rdef = -1;
-      mi = call_target(c, node, cid, nm, 0, &mdef);
+      MethodLookup ml = { .def_class = -1 };
+      int rdef = -1;
+      mi = call_target(c, node, cid, nm, 0, &ml);
       /* an attr reader is its ivar's read: the ivar's oint when the ivar
          carries a nil bit, the plain field otherwise (whatever the reader's
          own return mark says: the field has no other form) -- unless a
          method written out nearer in the chain overrides the reader */
       if (an2 == 0 && blk < 0 && comp_reader_in_chain(c, cid, nm, &rdef) &&
-          (mi < 0 || (mdef != cid &&
-                      class_chain_depth(c, cid, rdef < 0 ? cid : rdef) <= class_chain_depth(c, cid, mdef < 0 ? cid : mdef))))
+          (mi < 0 || (ml.def_class != cid &&
+                      class_chain_depth(c, cid, rdef < 0 ? cid : rdef) <= class_chain_depth(c, cid, ml.def_class < 0 ? cid : ml.def_class))))
         return reader_ivar_has_nilbit(c, cid, nm) || dispatch_answers_nil(c, node, cid, nm, -1);
     }
     else if (nt_kind(nt, r) == NK_ConstantReadNode || nt_kind(nt, r) == NK_ConstantPathNode) {

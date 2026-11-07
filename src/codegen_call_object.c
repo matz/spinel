@@ -2678,8 +2678,9 @@ int emit_call_object_override_arms(Compiler *c, int id, Buf *b, const NodeTable 
     int nc2 = 0; const int *nv2 = na2 >= 0 ? nt_arr(nt, na2, "arguments", &nc2) : NULL;
     if (nr2 >= 0 && nn2 && (sp_streq(nn2, "!") || sp_streq(nn2, "!=")) &&
         ty_is_object(comp_ntype(c, nr2))) {
-      int nd = ty_object_class(comp_ntype(c, nr2)), ndef = nd;
-      int nmi2 = call_target(c, id, nd, nn2, 0, &ndef);
+      int nd = ty_object_class(comp_ntype(c, nr2));
+      MethodLookup ml = { .def_class = nd };
+      int nmi2 = call_target(c, id, nd, nn2, 0, &ml);
       /* The arguments go straight into the parameters only when there is
          one plain parameter per argument; any other layout (a rest, an
          optional, a keyword) or count binds them as every call does
@@ -2698,12 +2699,12 @@ int emit_call_object_override_arms(Compiler *c, int id, Buf *b, const NodeTable 
            root it first */
         int nht = !plain && !nval && !expr_is_held_ref(c, nr2) ? ++g_tmp : 0;
         if (nht) {
-          buf_printf(b, "({ sp_%s *_t%d = (sp_%s *)(", c->classes[ndef].c_name, nht, c->classes[ndef].c_name);
+          buf_printf(b, "({ sp_%s *_t%d = (sp_%s *)(", c->classes[ml.def_class].c_name, nht, c->classes[ml.def_class].c_name);
           emit_expr(c, nr2, b);
           buf_printf(b, "); SP_GC_ROOT(_t%d); ", nht);
         }
         buf_printf(b, "%s(", mc_method(c, nm2));
-        if (!nval) buf_printf(b, "(sp_%s *)", c->classes[ndef].c_name);
+        if (!nval) buf_printf(b, "(sp_%s *)", c->classes[ml.def_class].c_name);
         buf_puts(b, "(");
         if (nht) buf_printf(b, "_t%d", nht); else emit_expr(c, nr2, b);
         buf_puts(b, ")");

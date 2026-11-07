@@ -8952,14 +8952,14 @@ static int cmethod_reaches_override_walk(Compiler *c, int mi, int ci, int def_cl
     if (!cm_call_on_self(nt, id)) continue;
     const char *nm = nt_str(nt, id, "name");
     if (!nm || sp_streq(nm, "new")) continue;          /* direct `new` is the caller's has_new path */
-    int sub_def = -1;
+    MethodLookup ml = { .def_class = -1 };
     int mci = call_target(c, id, ci, nm, CT_CMETHOD, NULL);
-    int mdef = call_target(c, id, def_cls, nm, CT_CMETHOD, &sub_def);
+    int mdef = call_target(c, id, def_cls, nm, CT_CMETHOD, &ml);
     if (mci >= 0 && mci != mdef) return 1;            /* ci overrides nm directly */
     /* nm is inherited unchanged by ci -- but its own body may still reach an
        override; descend into the def-chain version. */
-    if (mdef >= 0 && sub_def >= 0 &&
-        cmethod_reaches_override_walk(c, mdef, ci, sub_def, seen)) return 1;
+    if (mdef >= 0 && ml.def_class >= 0 &&
+        cmethod_reaches_override_walk(c, mdef, ci, ml.def_class, seen)) return 1;
   }
   return 0;
 }
@@ -9012,10 +9012,10 @@ static int cmethod_reaches_class_ivar_walk(Compiler *c, int mi, int def_cls, uns
         if (comp_is_sg_reader(dc, base) || comp_is_sg_writer(dc, base)) return 1;   /* sg_ or civ_, per class */
       }
     }
-    int sub_def = -1;
-    int mdef = call_target(c, id, def_cls, nm, CT_CMETHOD, &sub_def);
-    if (mdef >= 0 && mdef != mi && sub_def >= 0 &&
-        cmethod_reaches_class_ivar_walk(c, mdef, sub_def, seen)) return 1;
+    MethodLookup ml = { .def_class = -1 };
+    int mdef = call_target(c, id, def_cls, nm, CT_CMETHOD, &ml);
+    if (mdef >= 0 && mdef != mi && ml.def_class >= 0 &&
+        cmethod_reaches_class_ivar_walk(c, mdef, ml.def_class, seen)) return 1;
   }
   return 0;
 }
@@ -9055,12 +9055,12 @@ static int cmethod_calls_specialized_sibling(Compiler *c, int mi, int ci, int de
     if (!cm_call_on_self(nt, id)) continue;
     const char *nm = nt_str(nt, id, "name");
     if (!nm || sp_streq(nm, "new")) continue;
-    int sdef = -1;
-    int smi = call_target(c, id, def_cls, nm, CT_CMETHOD, &sdef);
-    if (smi < 0 || smi == mi || sdef < 0) continue;
+    MethodLookup ml = { .def_class = -1 };
+    int smi = call_target(c, id, def_cls, nm, CT_CMETHOD, &ml);
+    if (smi < 0 || smi == mi || ml.def_class < 0) continue;
     if (call_target(c, id, ci, nm, CT_OWN | CT_CMETHOD, NULL) >= 0) continue;   /* ci owns it already */
     int hn = 0;
-    if (cmethod_needs_specialization_d(c, smi, ci, sdef, &hn, depth + 1)) return 1;
+    if (cmethod_needs_specialization_d(c, smi, ci, ml.def_class, &hn, depth + 1)) return 1;
   }
   return 0;
 }
@@ -9168,8 +9168,8 @@ static void cmethod_copy_into(Compiler *c, int mi, const char *as, int def_cls, 
     if (!cm_call_on_self(nt, id)) continue;
     const char *nm = nt_str(nt, id, "name");
     if (!nm || sp_streq(nm, "new")) continue;
-    int sub_def = -1;
-    int sub_mi = call_target(c, id, ci, nm, CT_CMETHOD, &sub_def);
+    MethodLookup ml = { .def_class = -1 };
+    int sub_mi = call_target(c, id, ci, nm, CT_CMETHOD, &ml), sub_def = ml.def_class;
     if (sub_mi < 0 || sub_def == ci) continue;   /* unresolved, or ci-native */
     /* The nearest one may be a copy just made for an intermediate class (Test
        between Runnable and AddTest): copied from it, ci's version would call
@@ -9388,8 +9388,8 @@ void specialize_inherited_cls_new(Compiler *c) {
         for (int k = 0; k < c->nclasses; k++) {
           if (k != base && !is_descendant(c, k, base)) continue;
           if (call_target(c, id, k, mname, CT_OWN | CT_CMETHOD, NULL) >= 0) continue;
-          int def_cls = -1;
-          int mi = call_target(c, id, k, mname, CT_CMETHOD, &def_cls);
+          MethodLookup ml = { .def_class = -1 };
+          int mi = call_target(c, id, k, mname, CT_CMETHOD, &ml), def_cls = ml.def_class;
           if (mi < 0 || def_cls == k) continue;
           if (mi >= snap) {
             int orig = -1;
@@ -9428,8 +9428,8 @@ void specialize_inherited_cls_new(Compiler *c) {
     const char *mname = cls_call_name(c, id);
     if (!mname || sp_streq(mname, "new")) continue;
     if (call_target(c, id, ci, mname, CT_OWN | CT_CMETHOD, NULL) >= 0) continue;  /* defined on ci */
-    int def_cls = -1;
-    int mi = call_target(c, id, ci, mname, CT_CMETHOD, &def_cls);
+    MethodLookup ml = { .def_class = -1 };
+    int mi = call_target(c, id, ci, mname, CT_CMETHOD, &ml), def_cls = ml.def_class;
     if (mi < 0 || def_cls == ci) continue;                   /* not inherited */
     /* The nearest inherited copy may itself be a fresh specialization built
        this pass for an INTERMEDIATE subclass (index >= snap); specializing

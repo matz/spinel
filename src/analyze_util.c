@@ -4444,9 +4444,9 @@ else {
    for call `call` (call_target). */
 int comp_class_self_inst_mi(Compiler *c, int call, int class_id, const char *name) {
   static const char *const OBJ_SIDE[] = { "Object", "BasicObject", "Kernel", "Module", "Class", NULL };
-  int dc = -1;
-  int mi = call_target(c, call, class_id, name, 0, &dc);
-  return mi >= 0 && dc >= 0 && c->classes[dc].name && str_in(c->classes[dc].name, OBJ_SIDE) ? mi : -1;
+  MethodLookup ml = { .def_class = -1 };
+  int mi = call_target(c, call, class_id, name, 0, &ml);
+  return mi >= 0 && ml.def_class >= 0 && c->classes[ml.def_class].name && str_in(c->classes[ml.def_class].name, OBJ_SIDE) ? mi : -1;
 }
 /* See compiler.h. A builtins/ file's helper is known by its def's stamp
    (node_bi) and its name, a desugar's copy by the mark the desugar sets on

@@ -8799,10 +8799,11 @@ static int reopen_owner_of(Compiler *c, int id, int cn, const char *name) {
     if (!ahr_any) return -1;
   }
   int aci = comp_core_class(c, cn);
-  int adc = -1, ami = aci >= 0 ? call_target(c, id, aci, name, 0, &adc) : -1;
+  MethodLookup ml = { .def_class = -1 };
+  int ami = aci >= 0 ? call_target(c, id, aci, name, 0, &ml) : -1;
   /* the reopen's own method under this very name: an alias taken before the
      reopen (`alias orig_first first`) still names the builtin */
-  if (ami < 0 || adc != aci || !c->scopes[ami].name || !sp_streq(c->scopes[ami].name, name)) return -1;
+  if (ami < 0 || ml.def_class != aci || !c->scopes[ami].name || !sp_streq(c->scopes[ami].name, name)) return -1;
   if (cplan_reopen_runs_builtin(c, id, ami)) return -1;
   if (nt_ref(c->nt, id, "block") >= 0 && builtin_method_known(core_class_name(cn), name) && c->scopes[ami].yields &&
       !(cn == CORE_ARRAY && sp_streq(name, "concat"))) return -1;

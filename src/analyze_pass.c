@@ -2504,24 +2504,27 @@ static int getter_ivar_targets(Compiler *c, int call, int cid, int cside, const 
       int mi = -1;
       defcls = -1;
       if (cside) {
-        mi = call_target(c, call, from, mname, CT_CMETHOD, &defcls);
+        MethodLookup ml = { .def_class = -1 };
+        mi = call_target(c, call, from, mname, CT_CMETHOD, &ml);
+        defcls = ml.def_class;
         if (mi < 0) break;
         niv = getter_exit_ivars(c, mi, ivs, 8);
       }
       else {
-        int mdef = -1, rdef = -1;
-        mi = call_target(c, call, from, mname, 0, &mdef);
+        MethodLookup ml = { .def_class = -1 };
+        int rdef = -1;
+        mi = call_target(c, call, from, mname, 0, &ml);
         int rd = comp_reader_in_chain(c, from, mname, &rdef);
         /* a class carries its parent's readers as its own, so a method there
            over an inherited reader is the override, not a tie */
-        int pdef = mdef >= 0 ? c->classes[mdef].parent : -1;
-        int over = mi >= 0 && rd && mdef == rdef && pdef >= 0 &&
+        int pdef = ml.def_class >= 0 ? c->classes[ml.def_class].parent : -1;
+        int over = mi >= 0 && rd && ml.def_class == rdef && pdef >= 0 &&
                    comp_reader_in_chain(c, pdef, mname, NULL);
-        if (mi >= 0 && (!rd || over || (mdef != rdef && is_descendant(c, mdef, rdef)))) {
-          defcls = mdef;
+        if (mi >= 0 && (!rd || over || (ml.def_class != rdef && is_descendant(c, ml.def_class, rdef)))) {
+          defcls = ml.def_class;
           niv = getter_exit_ivars(c, mi, ivs, 8);
         }
-        else if (rd && (mi < 0 || (mdef != rdef && is_descendant(c, rdef, mdef)))) {
+        else if (rd && (mi < 0 || (ml.def_class != rdef && is_descendant(c, rdef, ml.def_class)))) {
           snprintf(rbuf, sizeof rbuf, "@%s", comp_resolve_alias(c, from, mname));
           defcls = rdef;
           ivs[0] = rbuf;
@@ -3059,8 +3062,8 @@ static int masgn_attr_take(Compiler *c, int tgt, TyKind elem) {
   if (rt != TY_POLY && only < 0) return 0;
   for (int k = 0; k < c->nclasses; k++) {
     if (only >= 0 && k != only && !is_descendant(c, k, only)) continue;
-    int wdc = -1, mdc = -1;
-    int wmi = call_target(c, tgt, k, nm, 0, &mdc);
+    int wdc = -1;
+    int wmi = call_target(c, tgt, k, nm, 0, NULL);
     if (wmi >= 0) {
       Scope *ws = &c->scopes[wmi];
       LocalVar *wp = ws->nparams >= 1 ? scope_local(ws, ws->pnames[0]) : NULL;
@@ -4355,10 +4358,10 @@ static int infer_write_container_usage(Compiler *c, const NodeTable *nt, int nfb
             TyKind pvt = (vt == TY_STRBUF) ? TY_STRING : vt;
             if (pvt == TY_UNKNOWN) continue;
             for (int k = 0; k < c->nclasses; k++) {
-              int kd = k;
+              MethodLookup ml = { .def_class = k };
               const char *ivn = NULL;
               char rbuf[300];
-              int gm = call_target(c, recv, k, mname, 0, &kd);
+              int gm = call_target(c, recv, k, mname, 0, &ml), kd = ml.def_class;
               if (gm >= 0) {
                 int last = scope_body_last(c, gm);
                 if (last < 0 || nt_kind(nt, last) != NK_InstanceVariableReadNode) continue;
@@ -11787,9 +11790,9 @@ static int infer_param_types_ex(Compiler *c, int settle, const NodeTypes *before
          receiver's class so its params get the call-site arg types. */
       int iec = ie_class_of(c, id);
       if (iec >= 0) {
-        int def_cid = -1;
-        mi = call_target(c, id, iec, name, 0, &def_cid);
-        if (mi >= 0) caller_cid = def_cid >= 0 ? def_cid : iec;
+        MethodLookup ml = { .def_class = -1 };
+        mi = call_target(c, id, iec, name, 0, &ml);
+        if (mi >= 0) caller_cid = ml.def_class >= 0 ? ml.def_class : iec;
       }
       { int pk[64], npk = ie_poly_classes_at(c, id, pk, 64);
         for (int i = 0; i < npk; i++) changed |= bind_call_params(c, id, call_target(c, id, pk[i], name, 0, NULL)); }
@@ -11804,15 +11807,15 @@ static int infer_param_types_ex(Compiler *c, int settle, const NodeTypes *before
         Scope *self = comp_scope_of(c, id);
         if (self->class_id >= 0) {
           caller_cid = self->class_id;
-          int def_cid = -1;
+          MethodLookup ml = { .def_class = -1 };
           if (self->is_cmethod) {
-            mi = call_target(c, id, self->class_id, name, CT_CMETHOD, &def_cid);
-            if (mi >= 0 && def_cid >= 0) caller_cid = def_cid;
+            mi = call_target(c, id, self->class_id, name, CT_CMETHOD, &ml);
+            if (mi >= 0 && ml.def_class >= 0) caller_cid = ml.def_class;
           }
           if (mi < 0) {
-            def_cid = -1;
-            mi = call_target(c, id, self->class_id, name, 0, &def_cid);
-            if (mi >= 0 && def_cid >= 0) caller_cid = def_cid;
+            ml.def_class = -1;
+            mi = call_target(c, id, self->class_id, name, 0, &ml);
+            if (mi >= 0 && ml.def_class >= 0) caller_cid = ml.def_class;
           }
         }
         else mi = comp_cbody_call_mi(c, id, name);

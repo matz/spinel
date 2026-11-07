@@ -568,12 +568,13 @@ int emit_call_exception_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, c
   }
   if (recv >= 0 && !sp_streq(name, "message") && !sp_streq(name, "to_s")) {
     TyKind xrt = comp_ntype(c, recv);
-    int xdef = -1, xob = ty_is_object(xrt) ? ty_object_class(xrt) : -1;
+    MethodLookup ml = { .def_class = -1 };
+    int xob = ty_is_object(xrt) ? ty_object_class(xrt) : -1;
     int xhit = xob >= 0 && class_is_exc_subclass(c, xob)
-                 ? call_target(c, id, xob, name, 0, &xdef) : -1;
+                 ? call_target(c, id, xob, name, 0, &ml) : -1;
     if (xrt == TY_EXCEPTION ||
         (xob >= 0 && class_is_exc_subclass(c, xob) &&
-         (xhit < 0 || (xdef >= 0 && is_builtin_reopen(c->classes[xdef].name))))) {
+         (xhit < 0 || (ml.def_class >= 0 && is_builtin_reopen(c->classes[ml.def_class].name))))) {
       int xr[8];
       int xn = exc_reopen_definers(c, name, xr, 8);
       if (xn > 0) {

@@ -12723,11 +12723,11 @@ int dispatch_impl_count(Compiler *c, int call, int cid, const char *name) {
   for (int di = -1; di < nd; di++) {
     int k = di < 0 ? cid : ds[di];
     if (di >= 0 && c->classes[k].unreferenced) continue;
-    int def = -1;
-    if (call_target(c, call, k, name, 0, &def) < 0) continue;
+    MethodLookup ml = { .def_class = -1 };
+    if (call_target(c, call, k, name, 0, &ml) < 0) continue;
     int seen = 0;
-    for (int j = 0; j < n; j++) if (impls[j] == def) seen = 1;
-    if (!seen && n < 256) impls[n++] = def;
+    for (int j = 0; j < n; j++) if (impls[j] == ml.def_class) seen = 1;
+    if (!seen && n < 256) impls[n++] = ml.def_class;
   }
   return n;
 }
@@ -12796,8 +12796,8 @@ int dispatch_arms_disagree(Compiler *c, int call, int cid, const char *name) {
   Scope *first = NULL;
   for (int k = 0; k < c->nclasses; k++) {
     if (!is_descendant(c, k, cid)) continue;
-    int kd = -1;
-    int kmi = dispatch_arm_scope(c, call_target(c, call, k, name, 0, &kd));
+    MethodLookup ml = { .def_class = -1 };
+    int kmi = dispatch_arm_scope(c, call_target(c, call, k, name, 0, &ml));
     if (kmi < 0) continue;
     Scope *s = &c->scopes[kmi];
     /* a clone always takes the block, which the shared path never passes; nor
@@ -13135,8 +13135,8 @@ static void emit_dispatch_per_arm(Compiler *c, int cid, int miss_id, const char 
   int want_blk = 0;
   for (int k = 0; k < c->nclasses && !want_blk; k++) {
     if (!is_descendant(c, k, cid)) continue;
-    int kd = -1;
-    int kmi = dispatch_arm_scope(c, call_target(c, g_nd_call_id, k, name, 0, &kd));
+    MethodLookup ml = { .def_class = -1 };
+    int kmi = dispatch_arm_scope(c, call_target(c, g_nd_call_id, k, name, 0, &ml));
     if (kmi >= 0 && arm_takes_blk(&c->scopes[kmi])) want_blk = 1;
   }
   int blk_tmp = -1;
@@ -13152,15 +13152,15 @@ static void emit_dispatch_per_arm(Compiler *c, int cid, int miss_id, const char 
   int nat = 0, cat = 0;
   for (int k = 0; k < c->nclasses; k++) {
     if (!is_descendant(c, k, cid)) continue;
-    int kd = -1;
-    int kmi0 = call_target(c, g_nd_call_id, k, name, 0, &kd);
+    MethodLookup ml = { .def_class = -1 };
+    int kmi0 = call_target(c, g_nd_call_id, k, name, 0, &ml);
     int kmi = dispatch_arm_scope(c, kmi0);
     if (kmi < 0) continue;
-    nd_callee(c, g_nd_call_id, kmi0, kd, 1);
+    nd_callee(c, g_nd_call_id, kmi0, ml.def_class, 1);
     at = arm_text_next(at, &nat, &cat, k);
     Buf *ab = &at[nat - 1].t;
     buf_printf(ab, " case %d: ", k);
-    emit_dispatch_arm_call(c, kd, kmi, selfptr, argsNode, blk_tmp, ret, disp_ret, rtmp, ab);
+    emit_dispatch_arm_call(c, ml.def_class, kmi, selfptr, argsNode, blk_tmp, ret, disp_ret, rtmp, ab);
   }
   arm_texts_flush(at, nat, b);
   free(at);
@@ -13333,14 +13333,14 @@ int emit_reader_override_handle(Compiler *c, int id, int cid, const char *name, 
     buf_puts(b, ") {");
     for (int k = 0; k < c->nclasses; k++) {
       if (k == cid || !is_descendant(c, k, cid)) continue;
-      int kd = -1;
-      int kmi0 = call_target(c, id, k, name, 0, &kd);
+      MethodLookup ml = { .def_class = -1 };
+      int kmi0 = call_target(c, id, k, name, 0, &ml);
       if (kmi0 < 0 || kmi0 == base_mi) continue;
       int arm = dispatch_arm_scope(c, kmi0);
-      nd_callee(c, g_nd_call_id, kmi0, kd, 1);
+      nd_callee(c, g_nd_call_id, kmi0, ml.def_class, 1);
       Buf apre; memset(&apre, 0, sizeof apre);
       Buf call; memset(&call, 0, sizeof call);
-      emit_dispatch_arm_text(c, kd, arm, selfptr, -1, -1, &apre, &call);
+      emit_dispatch_arm_text(c, ml.def_class, arm, selfptr, -1, -1, &apre, &call);
       buf_printf(b, " case %d: { %s_t%d = ", k, apre.p ? apre.p : "", rtmp);
       emit_poly_user_box(c, id, &c->scopes[arm], call.p, b);
       buf_puts(b, "; break; }");
@@ -13356,14 +13356,14 @@ int emit_reader_override_handle(Compiler *c, int id, int cid, const char *name, 
   buf_puts(b, ") {");
   for (int k = 0; k < c->nclasses; k++) {
     if (k == cid || !is_descendant(c, k, cid)) continue;
-    int kd = -1;
-    int kmi0 = call_target(c, id, k, name, 0, &kd);
+    MethodLookup ml = { .def_class = -1 };
+    int kmi0 = call_target(c, id, k, name, 0, &ml);
     if (kmi0 < 0 || kmi0 == base_mi) continue;
     int arm = dispatch_arm_scope(c, kmi0), pub = c->scopes[arm].ret_handle, tv = ++g_tmp;
-    nd_callee(c, g_nd_call_id, kmi0, kd, 1);
+    nd_callee(c, g_nd_call_id, kmi0, ml.def_class, 1);
     Buf apre; memset(&apre, 0, sizeof apre);
     Buf call; memset(&call, 0, sizeof call);
-    emit_dispatch_arm_text(c, kd, arm, selfptr, -1, -1, &apre, &call);
+    emit_dispatch_arm_text(c, ml.def_class, arm, selfptr, -1, -1, &apre, &call);
     buf_printf(b, " case %d: { %s%sconst char *_v%d = %s; _t%d = !_v%d ? NULL : ", k, apre.p ? apre.p : "",
                pub ? "_sp_ret_strbuf = NULL; " : "", tv, call.p, rtmp, tv);
     if (pub) buf_puts(b, "_sp_ret_strbuf ? (sp_String *)_sp_ret_strbuf : ");
@@ -13514,20 +13514,20 @@ static void emit_dispatch_in(Compiler *c, int cid, const char *name,
     }
   }
   if (g_plan_check || !served) {
-    int odef = cid;
-    int omi = call_target(c, g_nd_call_id, cid, name, 0, &odef);
+    MethodLookup ml = { .def_class = cid };
+    int omi = call_target(c, g_nd_call_id, cid, name, 0, &ml);
     if (!served) {
       if (g_plan_check && omi >= 0)
         fprintf(stderr, "plan-check: cplan-fallback: dispatch node %d %s\n", g_nd_call_id, name);
-      mi = omi; defcls = odef;
+      mi = omi; defcls = ml.def_class;
     }
     /* a default arm the chain of cid does not hold: the rule's own answer
        (cplan_self_root_override) */
     else if (omi < 0 && mi >= 0 && (c->scopes[mi].class_id < 0 || c->scopes[mi].class_id == comp_core_class(c, CORE_OBJECT)) &&
              cplan_self_root_override(c, g_nd_call_id, cid, mi) && defcls == c->scopes[mi].class_id) {}
-    else if (omi != mi || odef != defcls)
+    else if (omi != mi || ml.def_class != defcls)
       fprintf(stderr, "plan-check: cplan-conflict: dispatch node %d %s: plan %d/%d, lookup %d/%d\n",
-              g_nd_call_id, name, mi, defcls, omi, odef);
+              g_nd_call_id, name, mi, defcls, omi, ml.def_class);
   }
   Scope *m = mi >= 0 ? &c->scopes[mi] : NULL;
   /* the default arm's method is a top-level def or Object's, which the
@@ -14090,17 +14090,17 @@ else {
   int nat = 0, cat = 0;
   for (int k = 0; k < c->nclasses; k++) {
     if (!is_descendant(c, k, cid)) continue;
-    int kd = -1;
-    int kmi = call_target(c, g_nd_call_id, k, name, 0, &kd);
+    MethodLookup ml = { .def_class = -1 };
+    int kmi = call_target(c, g_nd_call_id, k, name, 0, &ml);
     if (kmi < 0) continue;
     /* A `case` arm calling an override with no standalone definition (DCE-pruned
        or yield-inlined) would reference an absent symbol and dangle at link; the
        class can't be the receiver here anyway. Same guard as the poly-dispatch
        loops in codegen_call.c (issue #1583). */
     if (!scope_has_callable_symbol(c, kmi)) continue;
-    nd_callee(c, g_nd_call_id, kmi, kd, 1);
+    nd_callee(c, g_nd_call_id, kmi, ml.def_class, 1);
     Buf _ac; memset(&_ac, 0, sizeof _ac);
-    buf_printf(&_ac, "%s((sp_%s *)%s", mc_method(c, &c->scopes[kmi]), c->classes[kd].c_name, selfptr);
+    buf_printf(&_ac, "%s((sp_%s *)%s", mc_method(c, &c->scopes[kmi]), c->classes[ml.def_class].c_name, selfptr);
     for (int a = 0; a < np; a++) emit_arm_arg(c, &c->scopes[kmi], a, atmp[a], atmp_ty[a], atmp_o[a], &_ac);
     buf_puts(&_ac, ")");
     at = arm_text_next(at, &nat, &cat, k);

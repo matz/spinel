@@ -6017,10 +6017,11 @@ int call_never_returns(Compiler *c, int id) {
          given the call that builtin's type, not void) */
       int any = 0;
       for (int ci = 0; ci < c->nclasses; ci++) {
-        int dc = -1, m = call_target(c, id, ci, nm, 0, &dc);
+        MethodLookup ml = { .def_class = -1 };
+        int m = call_target(c, id, ci, nm, 0, &ml);
         /* a method nothing reaches is no arm of the dispatch: the call's
            type left it out too (#10636) */
-        if (m < 0 || dc != ci || !c->scopes[m].reachable) continue;
+        if (m < 0 || ml.def_class != ci || !c->scopes[m].reachable) continue;
         if (c->scopes[m].ret != TY_VOID) return 0;
         any = 1;
       }

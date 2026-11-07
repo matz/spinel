@@ -1099,7 +1099,7 @@ static int mixin_copy_versions(Compiler *c, int mi, int from, int *to, ElabVersi
    until then: the guard entry of mi's class for the call's arguments
    (guard_entry_make), which the entries' build makes for every call of
    the name; mi when asked before the build */
-static int ct_guard(Compiler *c, int id, int mi, unsigned flags) {
+static int ct_guard(Compiler *c, int id, int mi, unsigned flags, MethodLookup *ml) {
   int to[VER_MAX_ARMS + 1], n = guard_chain(c, mi, to, NULL, NULL);
   const Scope *m = &c->scopes[mi];
   const char *name = c->ver_built ? m->name : comp_scope_user_name(m);
@@ -1113,11 +1113,15 @@ static int ct_guard(Compiler *c, int id, int mi, unsigned flags) {
         ElabVersion vs[VER_MAX_ARMS];
         int vt[VER_MAX_ARMS], nv = c->scopes[to[i]].mixin_guarded ? mixin_copy_versions(c, to[i], m->class_id, vt, vs) : 0;
         if (!nv) vt[nv++] = to[i];
-        for (int k = 0; k < nv; k++) if (c->scopes[vt[k]].def_node == d->node) return vt[k];
+        for (int k = 0; k < nv; k++)
+          if (c->scopes[vt[k]].def_node == d->node) {
+            *ml = (MethodLookup){ .kind = ML_METHOD, .n = 1, .def_class = ml->def_class };
+            return vt[k];
+          }
       }
   }
-  if (!c->ver_built) return mi;
-  int e = ct_entry_of(c, VER_ENTRY_GUARD, m->class_id, m->is_cmethod, name, ver_arity(c, id, to, n));
+  int e = c->ver_built ? ct_entry_of(c, VER_ENTRY_GUARD, m->class_id, m->is_cmethod, name, ver_arity(c, id, to, n)) : -1;
+  *ml = (MethodLookup){ .kind = e >= 0 ? ML_ENTRY : ML_TABLE, .why = e >= 0 ? 0 : MLW_MANY, .n = (short)n, .def_class = ml->def_class };
   return e >= 0 ? e : mi;   /* a later synthesized call uses the general table entry */
 }
 /* The version an entry's arm (or else arm) call is pinned to, -1 for any
@@ -1537,8 +1541,8 @@ unsigned cplan_target_store_effect(Compiler *c, int tgt) {
   int open = rt == TY_POLY || rt == TY_UNKNOWN, cls = ty_is_object(rt) ? ty_object_class(rt) : -1;
   if (k == NK_CallTargetNode) {
     const char *nm = nt_str(nt, tgt, "name");
-    int dc = -1;
-    return open || (nm && cls >= 0 && call_target(c, tgt, cls, nm, 0, &dc) >= 0 && dc >= 0) ? CPS_CODE : 0;
+    MethodLookup ml = { .def_class = -1 };
+    return open || (nm && cls >= 0 && call_target(c, tgt, cls, nm, 0, &ml) >= 0 && ml.def_class >= 0) ? CPS_CODE : 0;
   }
   int args = nt_ref(nt, tgt, "arguments"), n = 0;
   const int *keys = args >= 0 ? nt_arr(nt, args, "arguments", &n) : NULL;
@@ -1623,14 +1627,13 @@ static int ct_capture_keeps_table(Compiler *c, int id, int cls, int sg, const ch
    a conditional include, one in a block), and mi is one of the copies a
    class holds of a module's versions (mixin_copies_module), the entry
    over the copies, whose cells tell which version the module holds (the
-   mixin taken as run, as with one version). *span (when asked): in n,
-   how many versions the window reaches (elab_method_span), 0 when no
-   window was asked, -1 when the answer is mi for want of a version or an
-   entry, or because the call is in a body that never runs
-   (ElabWindow.never); copies set for the copies' entry, whose n is 2. */
-typedef struct { int n, copies; } VerSpan;
+   mixin taken as run, as with one version). *ml: n, how many versions the
+   window reaches (elab_method_span), 0 when no window was asked, -1 when
+   the answer is mi for want of a version or an entry, or because the call
+   is in a body that never runs (ElabWindow.never); copies set for the
+   copies' entry, whose n is 2; kind and why (MethodLookup). */
 static int mixin_copies_module(Compiler *c, int mi, int *to, ElabVersion *vs, int *n);
-static int ct_version_at(Compiler *c, int id, int cls, const char *name, unsigned flags, int mi, int *def_class, VerSpan *span) {
+static int ct_version_at(Compiler *c, int id, int cls, const char *name, unsigned flags, int mi, MethodLookup *ml) {
   int sg = (flags & CT_CMETHOD) != 0, rcls = flags & CT_TOP ? -1 : cls, vi = -1, dc = -1, n = 0, first_def = 0, none = 0, body = 0, cl = 0;
   const LrDef *d = NULL, *ds[VER_MAX_ARMS];
   /* a call may meet the chain with no version made yet: the late bit of
@@ -1644,7 +1647,7 @@ static int ct_version_at(Compiler *c, int id, int cls, const char *name, unsigne
   /* one def on rcls's whole chain, which no call runs ahead of: the
      table's (a name with versions on other chains only) */
   if (nc == 1 && first_def && !late) {
-    if (span) *span = (VerSpan){ 0, 0 };
+    ml->n = 0;
     return mi;
   }
   LoadPoint p = elab_point_of(c, id);
@@ -1659,13 +1662,16 @@ static int ct_version_at(Compiler *c, int id, int cls, const char *name, unsigne
      hold, and an instance-side reader leaves a class-side capture on the
      entry. */
   if ((flags & CT_CAPTURE) && p.region < 0 && elab_method_reflected(c, name, sg)) {
-    if (span) *span = (VerSpan){ 0, 0 };
+    ml->kind = ML_TABLE;
+    ml->why = MLW_UNPLACED;
+    ml->n = 0;
     return mi;
   }
   if ((flags & CT_CAPTURE) && p.region < 0 &&
       (vi = ct_entry_of(c, VER_ENTRY_CHAIN, rcls, sg, name, ver_call_arity(c, id, rcls, sg, name, mi))) >= 0) {
-    if (def_class && !(flags & CT_TOP)) *def_class = rcls;
-    if (span) *span = (VerSpan){ 2, 0 };
+    if (!(flags & CT_TOP)) ml->def_class = rcls;
+    ml->kind = ML_ENTRY;
+    ml->n = 2;
     return vi;
   }
   ElabMeet m;
@@ -1675,7 +1681,9 @@ static int ct_version_at(Compiler *c, int id, int cls, const char *name, unsigne
   /* (a call in a body that never runs meets no version at any time: the
      table's, the cheapest call, not the window's last) */
   if (m.at == ELAB_UNKNOWN && m.win == ELAB_YES && m.w.never) {
-    if (span) *span = (VerSpan){ -1, 0 };
+    ml->kind = ML_TABLE;
+    ml->why = MLW_NEVER;
+    ml->n = -1;
     return mi;
   }
   int at = m.at;
@@ -1694,44 +1702,58 @@ static int ct_version_at(Compiler *c, int id, int cls, const char *name, unsigne
   if (vi < 0 && at == ELAB_UNKNOWN && m.win == ELAB_YES && n != 0 && n != 1 &&
       (n == -1 || !elab_chain_settled(c, rcls, sg, name, w.from)) && mixin_copies_module(c, mi, cto, cvs, &cn) >= 0) {
     int ix = ver_entry_ix(c, VER_ENTRY_CHAIN, c->scopes[mi].origin_module_ci, rcls, sg, name, ver_call_arity(c, id, rcls, sg, name, mi));
-    if (span) *span = (VerSpan){ 2, 1 };
-    if (ix < 0) return mi;
-    if (def_class && !(flags & CT_TOP)) *def_class = rcls;
+    ml->n = 2;
+    ml->copies = 1;
+    if (ix < 0) {
+      ml->kind = ML_TABLE;
+      ml->why = m.n == -1 ? MLW_MOVES : MLW_MANY;
+      return mi;
+    }
+    if (!(flags & CT_TOP)) ml->def_class = rcls;
+    ml->kind = ML_ENTRY;
     return c->ver_entries[ix].scope;
   }
   if (vi < 0 && (n >= 2 || n == ELAB_SPAN_ANY || none)) {
     /* the entry, where the chain holds still over the window: asked of
        an entry that was made, or by the entries' build (span); for a
        call that only meets no version, one that answers for none */
-    int many = n >= 2 || n == ELAB_SPAN_ANY, ar = ver_call_arity(c, id, rcls, sg, name, mi), ix = ver_entry_ix(c, VER_ENTRY_CHAIN, 0, rcls, sg, name, ar);
+    int ar = ver_call_arity(c, id, rcls, sg, name, mi), ix = ver_entry_ix(c, VER_ENTRY_CHAIN, 0, rcls, sg, name, ar);
+    int many = n >= 2 || n == ELAB_SPAN_ANY;
     int settled = at == ELAB_NO || elab_chain_settled(c, rcls, sg, name, w.from);
     const Scope *in = comp_scope_of(c, id);
     /* (an entry only where the call takes it, in a body that may run) */
-    if (none && settled && in && comp_scope_may_run(c, (int)(in - c->scopes)) && c->ver_built && !span && (ix < 0 || !c->ver_entries[ix].absent))
+    if (none && settled && in && comp_scope_may_run(c, (int)(in - c->scopes)) && c->ver_built && !ml->survey && (ix < 0 || !c->ver_entries[ix].absent))
       ver_absent_note(c, rcls, sg, name, mi, ar, ver_mm_at(c, rcls, sg, p, at, &w), 0);
     /* a call the build did not ask (one in a method made after it) whose
        window spans versions asks the entry the build makes for such a call */
-    else if (many && ix < 0 && settled && in && comp_scope_may_run(c, (int)(in - c->scopes)) && c->ver_built && !span)
+    else if (many && ix < 0 && settled && in && comp_scope_may_run(c, (int)(in - c->scopes)) && c->ver_built && !ml->survey)
       ver_absent_note(c, rcls, sg, name, mi, ar, 0, 1);
     vi = ix >= 0 && (many || c->ver_entries[ix].absent == 2) ? c->ver_entries[ix].scope : -1;
-    n = ((span && many) || vi >= 0) && settled ? 2 : 0;
+    n = ((ml->survey && many) || vi >= 0) && settled ? 2 : 0;
     if (!n) vi = -1;
     dc = rcls;
   }
   else if (vi < 0) n = 0;
   if (vi < 0 && !kept && elab_method_at(c, rcls, name, sg, p, &d) == ELAB_YES && d && d->kind == LR_ALIAS)
     vi = ct_def_version(c, rcls, name, sg, d, &dc);
-  if (span) *span = (VerSpan){ n, 0 };
+  ml->n = n;
   /* only a version that is a function of its own: a replaced one
      (lr_mark_versions), an entry, or one no later scope of its name
      shadows; not one a scope no def made (a define_method's) passes over.
-     (span n -1: no version told and no entry asked, the table's answer) */
+     (n -1: no version told and no entry asked, the table's answer) */
   if (vi < 0 || (!c->scopes[vi].replaced && !c->scopes[vi].entry && scope_is_shadowed(c, vi))) {
-    if (span && !n) span->n = -1;
+    ml->kind = ML_TABLE;
+    ml->why = vi >= 0 || at == ELAB_YES ? MLW_UNMAPPED : at == ELAB_NO ? MLW_DISAGREE : m.win != ELAB_YES ? MLW_UNPLACED
+            : m.n == -1 ? MLW_MOVES : m.n == 1 && ds[0] ? MLW_UNMAPPED : MLW_MANY;
+    if (!n) ml->n = -1;
     return mi;
   }
-  if (ct_top_version(c, vi, flags)) return -1;
-  if (def_class && !(flags & CT_TOP)) *def_class = dc;
+  if (ct_top_version(c, vi, flags)) {
+    ml->kind = ML_NONE;
+    return -1;
+  }
+  if (!(flags & CT_TOP)) ml->def_class = dc;
+  ml->kind = c->scopes[vi].entry ? ML_ENTRY : ML_METHOD;
   return vi;
 }
 /* The version ct_version answered for call id asked on cls, kept once the
@@ -1764,24 +1786,29 @@ static struct VerMemo *ver_memo_slot(Compiler *c, int id, int cls, const char *n
 /* ...asked in the record's frame for the call plan (elab_plan_enter): the
    version is decided from the facts the record had for the call when the
    plan first asked, not from a map rebuilt per ask */
-static int ct_version(Compiler *c, int id, int cls, const char *name, unsigned flags, int mi, int *def_class, VerSpan *span) {
-  int memo = !span && c->ver_built && !elab_check_on(c);
+static int ct_version(Compiler *c, int id, int cls, const char *name, unsigned flags, int mi, MethodLookup *ml) {
+  int memo = !ml->survey && c->ver_built && !elab_check_on(c);
   const struct VerMemo *m = memo ? ver_memo_slot(c, id, cls, name, flags) : NULL;
   if (m && m->name) {
-    if (def_class && m->dc != -2) *def_class = m->dc;
+    if (m->dc != -2) ml->def_class = m->dc;
+    ml->kind = m->kind; ml->why = m->why; ml->copies = m->copies; ml->n = m->n;
     return m->vi;
   }
-  int framed = elab_plan_enter(c, id), dc = def_class ? *def_class : -1, now = dc, kept = -2;
-  int vi = ct_version_at(c, id, cls, name, flags, mi, memo ? &kept : def_class ? &dc : NULL, span);
-  if (memo) {   /* (the class it answers, -2 for the table's) */
-    *ver_memo_slot(c, id, cls, name, flags) = (struct VerMemo){ name_dup(name), id, cls, flags, vi, kept };
+  int framed = elab_plan_enter(c, id), dc = ml->def_class;
+  MethodLookup at = *ml;
+  if (memo) at.def_class = -2;   /* (the class it answers, -2 for the table's) */
+  int vi = ct_version_at(c, id, cls, name, flags, mi, &at);
+  if (memo) {
+    *ver_memo_slot(c, id, cls, name, flags) = (struct VerMemo){ name_dup(name), id, cls, flags, vi, at.def_class, at.kind, at.why, at.copies, at.n };
     c->ver_memo_n++;
-    if (kept != -2) dc = kept;
   }
+  *ml = at;
+  if (ml->def_class == -2) ml->def_class = dc;
   if (framed) elab_plan_leave(c);
-  if (framed && elab_check_on(c))   /* the map as it is, for check mode */
-    elab_check_version(c, id, vi, dc, ct_version_at(c, id, cls, name, flags, mi, def_class ? &now : NULL, NULL), now);
-  if (def_class) *def_class = dc;
+  if (framed && elab_check_on(c)) {   /* the map as it is, for check mode */
+    MethodLookup now = { .def_class = dc };
+    elab_check_version(c, id, vi, ml->def_class, ct_version_at(c, id, cls, name, flags, mi, &now), now.def_class);
+  }
   return vi;
 }
 /* The builtin self kind (BSELF_*) of program class self, main for -1 */
@@ -1832,9 +1859,9 @@ int cplan_sg_accessor(Compiler *c, int id, int ci, const char *name, char *slot,
 int cplan_sg_version(Compiler *c, int id, int ci, const char *name) {
   if (id < 0 || !elab_attr_replaced(c, ci, name)) return CP_SG_NONE;
   int m = call_target(c, id, ci, name, CT_CMETHOD, NULL);
-  VerSpan told = { 0, 0 };
+  MethodLookup told = { .survey = 1, .def_class = -1 };
   if (m < 0 || c->scopes[m].attr_version) return CP_SG_SLOT;
-  if (!c->scopes[m].entry) ct_version(c, id, ci, name, CT_CMETHOD, m, NULL, &told);
+  if (!c->scopes[m].entry) ct_version(c, id, ci, name, CT_CMETHOD, m, &told);
   return told.n < 0 ? CP_SG_UNTOLD : CP_SG_METHOD;
 }
 /* See call_plan.h. */
@@ -2015,36 +2042,70 @@ int cplan_cand_arm(Compiler *c, int id, const char *name, int mi, int inst) {
    (ct_table), but main's own method ahead of Object's for a call on main
    (ct_on_main), as CRuby's lookup there; its versions are then main's
    chain's, which ends in Object's (*flags gains CT_CMETHOD) */
-static int ct_lookup(Compiler *c, int id, int cls, const char *name, unsigned *flags, int *def_class) {
+static int ct_lookup(Compiler *c, int id, int cls, const char *name, unsigned *flags, MethodLookup *ml) {
   int si = (*flags & CT_TOP) && id >= 0 ? comp_main_method(c, name) : -1;
-  int mi = si >= 0 && ct_on_main(c, id, name) ? si : ct_table(c, cls, name, *flags, def_class);
+  int mi = si >= 0 && ct_on_main(c, id, name) ? si : ct_table(c, cls, name, *flags, ml ? &ml->def_class : NULL);
   if ((*flags & CT_TOP) && mi >= 0 && c->scopes[mi].is_cmethod) *flags |= CT_CMETHOD;
   return mi;
 }
-int call_target(Compiler *c, int id, int cls, const char *name, unsigned flags, int *def_class) {
-  if (ct_send_shadow(c, id, name)) return -1;
-  int dc0 = def_class ? *def_class : -1, mi = ct_lookup(c, id, cls, name, &flags, def_class), pin;
-  if (mi < 0 || id < 0 || (!(flags & (CT_REACH | CT_CAPTURE)) && !ct_calls(c, id, name))) return mi;
-  if ((c->scopes[mi].versioned || c->scopes[mi].mixin_guarded || c->scopes[mi].entry) && (pin = ct_pin_of(c, id)) != -1) {   /* (an entry's arm: its method's own class) */
-    if (pin == CT_PIN_BUILTIN || ct_top_version(c, pin, flags)) return -1;
-    if (def_class) *def_class = c->scopes[pin].class_id;
-    return pin;
+int call_target(Compiler *c, int id, int cls, const char *name, unsigned flags, MethodLookup *out) {
+  MethodLookup own = { .def_class = -1 }, *ml = out ? out : &own;
+  int dc0 = ml->def_class, mi = -1, pin, r;
+  *ml = (MethodLookup){ .def_class = dc0 };
+  if (ct_send_shadow(c, id, name)) {
+    ml->kind = ML_NONE;
+    r = -1;
   }
-  /* a call the record proves runs before any version of a class method or
-     a top-level function is defined raises, whatever versions follow; the
-     entry's else arm answers only a call that may run before them. One at
-     a point that may run any time after it (ct_after_point) takes the
-     entry, whose cells tell at run time; with no entry, it raises too:
-     nothing proves it runs after a def */
-  if (ct_undefined_at(c, id, cls, name, flags)) {
-    int vi = c->scopes[mi].versioned && ct_after_point(c, id) ? ct_version(c, id, cls, name, flags, mi, def_class, NULL) : -1;
-    if (vi >= 0 && c->scopes[vi].entry) return vi;
-    if (def_class) *def_class = dc0;
-    return -1;
+  else if ((mi = ct_lookup(c, id, cls, name, &flags, ml)) < 0 || id < 0 || (!(flags & (CT_REACH | CT_CAPTURE)) && !ct_calls(c, id, name))) {
+    if (mi < 0) ml->kind = ML_NONE;
+    else if (c->scopes[mi].versioned || c->scopes[mi].mixin_guarded) {   /* (the record was not asked) */
+      ml->kind = ML_TABLE;
+      ml->why = MLW_UNASKED;
+    }
+    r = mi;
   }
-  if (c->scopes[mi].versioned || (flags & CT_CAPTURE)) mi = ct_version(c, id, cls, name, flags, mi, def_class, NULL);
-  /* An alias's record already selected its captured definition. */
-  return mi >= 0 && c->scopes[mi].mixin_guarded && sp_streq(name, c->scopes[mi].name) ? ct_guard(c, id, mi, flags) : mi;
+  else if ((c->scopes[mi].versioned || c->scopes[mi].mixin_guarded || c->scopes[mi].entry) && (pin = ct_pin_of(c, id)) != -1) {   /* (an entry's arm: its method's own class) */
+    if (pin == CT_PIN_BUILTIN || ct_top_version(c, pin, flags)) {
+      ml->kind = ML_NONE;
+      r = -1;
+    }
+    else {
+      ml->def_class = c->scopes[pin].class_id;
+      r = pin;
+    }
+  }
+  else if (ct_undefined_at(c, id, cls, name, flags)) {
+    /* a call the record proves runs before any version of a class method or
+       a top-level function is defined raises, whatever versions follow; the
+       entry's else arm answers only a call that may run before them. One at
+       a point that may run any time after it (ct_after_point) takes the
+       entry, whose cells tell at run time; with no entry, it raises too:
+       nothing proves it runs after a def */
+    int vi = c->scopes[mi].versioned && ct_after_point(c, id) ? ct_version(c, id, cls, name, flags, mi, ml) : -1;
+    if (vi >= 0 && c->scopes[vi].entry) r = vi;
+    else {
+      *ml = (MethodLookup){ .kind = ML_NONE, .def_class = dc0 };
+      r = -1;
+    }
+  }
+  else {
+    int asked = c->scopes[mi].versioned || (flags & CT_CAPTURE);
+    if (asked) mi = ct_version(c, id, cls, name, flags, mi, ml);
+    /* An alias's record already selected its captured definition. */
+    if (mi >= 0 && c->scopes[mi].mixin_guarded && sp_streq(name, c->scopes[mi].name)) r = ct_guard(c, id, mi, flags, ml);
+    else {
+      if (mi >= 0 && c->scopes[mi].mixin_guarded && !asked) {   /* (neither the record nor the guard was asked) */
+        ml->kind = ML_TABLE;
+        ml->why = MLW_UNASKED;
+      }
+      r = mi;
+    }
+  }
+  if (r >= 0 && c->scopes[r].entry && ml->kind != ML_ENTRY) {   /* (an entry answered by name too) */
+    ml->kind = ML_ENTRY;
+    ml->why = 0;
+  }
+  return r;
 }
 
 int cplan_class_row(Compiler *c, int id, int recv, const char *name) {
@@ -2063,7 +2124,8 @@ int cplan_own_class_reflection(Compiler *c, int id, int recv, const char *name) 
   int r = 0;
   for (int i = 0; name && R[i]; i++) if (sp_streq(name, R[i])) { r = 1; break; }
   int ci = r && recv >= 0 ? class_recv_static_ci(c, recv) : -1;
-  int dc = -1, mi = ci >= 0 ? call_target(c, id, ci, name, CT_CMETHOD, &dc) : -1;
+  MethodLookup ml = { .def_class = -1 };
+  int mi = ci >= 0 ? call_target(c, id, ci, name, CT_CMETHOD, &ml) : -1, dc = ml.def_class;
   if (mi < 0) return 0;
   if (!scope_calls_super(c, mi)) return 1;
   /* (emit_super answers a bare super of these three) */
@@ -4167,8 +4229,8 @@ static void cpoly_user_arms0(Compiler *c, int id, const char *name, TyKind ret, 
         cpoly_add(p, &cap, PA_ARITY, k, -1, TY_UNKNOWN, PC_VOID);
       continue;
     }
-    int defcls = -1;
-    int mi = call_target(c, id, k, name, 0, &defcls);
+    MethodLookup ml = { .def_class = -1 };
+    int mi = call_target(c, id, k, name, 0, &ml), defcls = ml.def_class;
     /* an exception class with no method of its own for the name takes
        the builtin reopening's (`class Exception; def brief`) */
     if (mi < 0 && any_exc_reopen(c) && (class_has_exc_name(c, k) || class_is_exc_subclass(c, k))) {
@@ -4380,10 +4442,11 @@ static void cpoly_cases_n(Compiler *c, int id, const char *name, int argc, const
 static int cpoly_obj_default_n(Compiler *c, int id, const char *name, int kwh, int pos_argc, int splat_a,
                                PolyPlan *p, int *cap) {
   if (builtin_object_method_known(name) || builtin_instance_name_known(name)) return 0;
-  int obj_cls = comp_core_class(c, CORE_OBJECT), obj_def = -1;
-  int obj_mi = obj_cls >= 0 ? call_target(c, id, obj_cls, name, 0, &obj_def) : -1;
+  MethodLookup ml = { .def_class = -1 };
+  int obj_cls = comp_core_class(c, CORE_OBJECT);
+  int obj_mi = obj_cls >= 0 ? call_target(c, id, obj_cls, name, 0, &ml) : -1;
   char exp[600];
-  if (obj_mi < 0 || obj_def != obj_cls ||
+  if (obj_mi < 0 || ml.def_class != obj_cls ||
       poly_arm_count(c, &c->scopes[obj_mi], kwh, pos_argc, splat_a, exp, sizeof exp) >= 0)
     return 0;
   /* send reaches a private one; an explicit receiver does not, and every
@@ -4570,8 +4633,8 @@ static void cpoly_user_arms_n(Compiler *c, int id, const char *name, int argc, c
       if (fit) cpoly_add(p, &cap, PA_NATIVE, k, -1, TY_UNKNOWN, PC_SAME);
       continue;
     }
-    int defcls = -1;
-    int mi = call_target(c, id, k, name, 0, &defcls);
+    MethodLookup ml = { .def_class = -1 };
+    int mi = call_target(c, id, k, name, 0, &ml), defcls = ml.def_class;
     if (mi < 0 && any_exc_reopen(c) && (class_has_exc_name(c, k) || class_is_exc_subclass(c, k))) {
       int xd = exc_arm_definer(c, k, name);
       if (xd >= 0) { defcls = xd; mi = call_target(c, id, xd, name, 0, NULL); }
@@ -4606,10 +4669,10 @@ static void cpoly_user_arms_n(Compiler *c, int id, const char *name, int argc, c
 static void cpoly_obj_default0(Compiler *c, int id, const char *name, TyKind ret, PolyPlan *p, int *cap) {
   int obj_cls = comp_core_class(c, CORE_OBJECT);
   if (obj_cls < 0) return;
-  int obj_def = -1;
-  int obj_mi = call_target(c, id, obj_cls, name, 0, &obj_def);
+  MethodLookup ml = { .def_class = -1 };
+  int obj_mi = call_target(c, id, obj_cls, name, 0, &ml);
   int blk = nt_ref(c->nt, id, "block");
-  int obj_pf = obj_mi >= 0 && obj_def == obj_cls && c->scopes[obj_mi].yields && blk >= 0
+  int obj_pf = obj_mi >= 0 && ml.def_class == obj_cls && c->scopes[obj_mi].yields && blk >= 0
                ? scope_proc_form_of(c, obj_mi) : -1;
   if (obj_pf >= 0 && (c->scopes[obj_pf].nparams != 0 || c->scopes[obj_pf].rest_idx >= 0)) obj_pf = -1;
   if (obj_pf >= 0 && resolve_forwarded_block(c, blk) < 0) obj_pf = -1;
@@ -4619,13 +4682,13 @@ static void cpoly_obj_default0(Compiler *c, int id, const char *name, TyKind ret
     cpoly_add(p, cap, PA_PROC_FORM, PA_KEY_DEFAULT, obj_mi, ps->ret,
               method_is_void(ps) ? PC_VOID : cpoly_conv(ret, ps->ret));
   }
-  else if (obj_mi >= 0 && obj_def == obj_cls && c->scopes[obj_mi].nrequired == 0 &&
+  else if (obj_mi >= 0 && ml.def_class == obj_cls && c->scopes[obj_mi].nrequired == 0 &&
            scope_has_callable_symbol(c, obj_mi)) {
     Scope *ms = &c->scopes[obj_mi];
     cpoly_add(p, cap, PA_USER, PA_KEY_DEFAULT, obj_mi, ms->ret,
               method_is_void(ms) ? PC_VOID : cpoly_conv(ret, ms->ret));
   }
-  else if (obj_def == obj_cls && poly_arm_refuses_none(c, obj_mi, oexp, sizeof oexp))
+  else if (ml.def_class == obj_cls && poly_arm_refuses_none(c, obj_mi, oexp, sizeof oexp))
     cpoly_add(p, cap, PA_ARITY, PA_KEY_DEFAULT, obj_mi, TY_UNKNOWN, PC_VOID);
 }
 
@@ -5153,8 +5216,8 @@ int cplan_cmethod_visible(Compiler *c, int id, int ci, const char *name) {
    emit_unresolved_call's), or -1 when it has no arm there. A yielding class
    method has no symbol of its own; its proc-form clone is the arm, taking
    the block as a proc (#3399), through *pfk. */
-int cplan_cmethod_arm(Compiler *c, int call, int k, const char *nm, int *dc, int *pfk) {
-  int mi = call_target(c, call, k, nm, CT_CMETHOD, dc);
+int cplan_cmethod_arm(Compiler *c, int call, int k, const char *nm, MethodLookup *ml, int *pfk) {
+  int mi = call_target(c, call, k, nm, CT_CMETHOD, ml);
   if (mi < 0) return -1;
   int pf = scope_proc_form_of(c, mi);
   if (pf >= 0 && !proc_form_live(c, pf)) pf = -1;
@@ -6593,7 +6656,7 @@ static const VerPre *ver_pre(Compiler *c, int id, const char *nm, int k, unsigne
 static void ver_need(Compiler *c, int id, const char *nm, int k, unsigned flags, void *arg) {
   ElabVersion vs[VER_MAX_ARMS];
   int mi, ar, rcls = flags & CT_TOP ? -1 : k, sg;
-  VerSpan n = { 0, 0 };
+  MethodLookup ml = { .survey = 1, .def_class = -1 };
   /* (an entry arms two or more versions of the chain: with fewer, or a
      chain the record does not hold, no call is asked. A call on main may
      ask main's chain, which ends in Object's: ct_lookup. A later prepend's
@@ -6609,11 +6672,11 @@ static void ver_need(Compiler *c, int id, const char *nm, int k, unsigned flags,
     sg = (flags & CT_CMETHOD) != 0;
     ar = ver_call_arity(c, id, rcls, sg, nm, mi);
   }
-  ct_version(c, id, k, nm, flags, mi, NULL, &n);
+  ct_version(c, id, k, nm, flags, mi, &ml);
   /* (the copies' entry over the module's versions: mixin_copies_module) */
   int to[VER_MAX_ARMS], nc = 0;
-  VerNeed w = { VER_ENTRY_CHAIN, rcls, sg, mi, ar, nm, n.copies ? mixin_copies_module(c, mi, to, vs, &nc) + 1 : 0 };
-  if (n.n >= 2 && !ver_need_has(c, arg, w)) ver_need_add(arg, w);
+  VerNeed w = { VER_ENTRY_CHAIN, rcls, sg, mi, ar, nm, ml.copies ? mixin_copies_module(c, mi, to, vs, &nc) + 1 : 0 };
+  if (ml.n >= 2 && !ver_need_has(c, arg, w)) ver_need_add(arg, w);
 }
 /* The entries the calls need, made once the passes after the record have
    made their methods (an_phase_pre_fixpoint, before the scope index

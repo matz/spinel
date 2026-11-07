@@ -4889,11 +4889,11 @@ int send_def_just_supers(Compiler *c, int mi) {
    `call`? */
 static int send_own_in_chain(Compiler *c, int call, int cid, const char *name, int cm) {
   while (cid >= 0) {
-    int dc = -1;
-    int mi = call_target(c, call, cid, name, cm ? CT_CMETHOD : 0, &dc);
+    MethodLookup ml = { .def_class = -1 };
+    int mi = call_target(c, call, cid, name, cm ? CT_CMETHOD : 0, &ml);
     if (mi < 0) return 0;
     if (!send_def_just_supers(c, mi)) return 1;
-    cid = dc >= 0 ? c->classes[dc].parent : -1;
+    cid = ml.def_class >= 0 ? c->classes[ml.def_class].parent : -1;
   }
   return 0;
 }
@@ -10991,8 +10991,9 @@ int desugar_raise_own_exception(Compiler *c) {
     int fi = nm[0] == 'f';
     if (owned[fi] < 0) owned[fi] = raise_name_program_defined(c, nm);
     if (owned[fi]) continue;
-    int ci = class_recv_static_ci(c, av[0]), dc = -1;
-    int mi = ci >= 0 ? call_target(c, -1, ci, "exception", CT_CMETHOD, &dc) : -1;
+    int ci = class_recv_static_ci(c, av[0]);
+    MethodLookup ml = { .def_class = -1 };
+    int mi = ci >= 0 ? call_target(c, -1, ci, "exception", CT_CMETHOD, &ml) : -1, dc = ml.def_class;
     /* the method must be there wherever the raise runs: a raise that may
        run before a later `def self.exception` keeps the raise of K */
     if (mi < 0 || elab_method_at(c, ci, "exception", 1, elab_point_of(c, id), NULL) != ELAB_YES) continue;

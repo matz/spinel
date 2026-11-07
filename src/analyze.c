@@ -23177,8 +23177,8 @@ static int an_static_self(Compiler *c, int node) {
 static const char *an_static_reader_ivar(Compiler *c, int call, int sc, int cm, const char *mn,
                                          int *defc, char *buf, size_t cap) {
   if (sc < 0 || !mn) return NULL;
-  int owner = sc;
-  int rmi = cm ? call_target(c, call, sc, mn, CT_CMETHOD, &owner) : call_target(c, call, -1, mn, CT_TOP, NULL);
+  MethodLookup ml = { .def_class = sc };
+  int rmi = cm ? call_target(c, call, sc, mn, CT_CMETHOD, &ml) : call_target(c, call, -1, mn, CT_TOP, NULL);
   if (rmi < 0) return NULL;
   if (!c->scopes[rmi].is_cmethod && c->scopes[rmi].class_id >= 0) return NULL;
   const char *ivn = an_memo_reader_ivar(c, rmi);
@@ -23187,7 +23187,7 @@ static const char *an_static_reader_ivar(Compiler *c, int call, int sc, int cm, 
     ivn = nt_str(c->nt, last, "name");
   if (!ivn) return NULL;
   snprintf(buf, cap, "%s", ivn);
-  *defc = owner;
+  *defc = ml.def_class;
   return buf;
 }
 
@@ -23255,7 +23255,9 @@ static const char *an_reader_ivar_of(Compiler *c, int node, int *defc,
     snprintf(buf, cap, "@%s", comp_resolve_alias(c, rcid, mn));
     return buf;
   }
-  int rmi = call_target(c, node, rcid, mn, 0, defc);
+  MethodLookup ml = { .def_class = *defc };
+  int rmi = call_target(c, node, rcid, mn, 0, &ml);
+  *defc = ml.def_class;
   if (rmi < 0) return NULL;
   int last2 = scope_body_last(c, rmi);
   /* a memoizing `def m = (@iv ||= v)` hands out the slot too */
@@ -38438,10 +38440,10 @@ static int ivs_stmt_writes(Compiler *c, int k, int defcls, int w, const char *iv
       int ca = nt_ref(nt, w, "arguments");
       int an = 0; const int *av = ca >= 0 ? nt_arr(nt, ca, "arguments", &an) : NULL;
       for (int j = 0; av && j < an; j++) if (ivs_subtree_reads(nt, av[j], ivn, 0)) return -1;
-      int mdef = -1;
-      int mi = call_target(c, w, k, nm, 0, &mdef);
+      MethodLookup ml = { .def_class = -1 };
+      int mi = call_target(c, w, k, nm, 0, &ml);
       if (mi >= 0 && !c->scopes[mi].is_cmethod && c->scopes[mi].body >= 0)
-        return ivs_body_writes(c, k, mdef, c->scopes[mi].body, ivn, depth + 1);
+        return ivs_body_writes(c, k, ml.def_class, c->scopes[mi].body, ivn, depth + 1);
     }
   }
   return 0;
@@ -46847,8 +46849,9 @@ static void rewrite_array_subclass_self_call(Compiler *c, int id) {
   if (!s || !s->name || s->is_cmethod || !nm || comp_ary_root(c, s->class_id) < 0) return;
   int k = s->class_id;
   /* a method of the builtin's reopen is the builtin's, called on self boxed */
-  int dc = -1, ro = comp_arysub_reopen(c, k);
-  if ((call_target(c, id, k, nm, 0, &dc) >= 0 && (ro < 0 || dc != ro)) ||
+  MethodLookup ml = { .def_class = -1 };
+  int ro = comp_arysub_reopen(c, k);
+  if ((call_target(c, id, k, nm, 0, &ml) >= 0 && (ro < 0 || ml.def_class != ro)) ||
       comp_reader_in_chain(c, k, nm, NULL)) return;
   if (!comp_arysub_builtin_name(c, k, nm)) return;
   int self = arysub_node(c, "SelfNode", id);
@@ -47018,8 +47021,9 @@ static void arysub_builtin_alias_recv_call(Compiler *c, int id) {
        else than the builtin's: with none (activesupport's `blank?` over
        Hash#empty?, which HashWithIndifferentAccess does not redefine) the
        alias by name is the builtin's */
-    int dc = -1, ro = comp_arysub_reopen(c, k);
-    if (call_target(c, id, k, rn, 0, &dc) < 0 || dc == ro) continue;
+    MethodLookup ml = { .def_class = -1 };
+    int ro = comp_arysub_reopen(c, k);
+    if (call_target(c, id, k, rn, 0, &ml) < 0 || ml.def_class == ro) continue;
     char msg[400];
     snprintf(msg, sizeof msg, "calling `%s`, an alias of %s#%s in %s, on a receiver is not supported "
              "yet (it would run the class's own `%s`); call it without a receiver inside the class",

@@ -268,23 +268,36 @@ int emit_op_queue_pop(Compiler *c, const BopCtx *x, Buf *b) {
   return 0;
 }
 
+/* fn(recv, values, count) for Fiber#resume / #transfer on a typed fiber.
+   A receiver that may be a fresh one (`Fiber.new { }.resume(1, 2)`,
+   operand_may_allocate) is rooted in a temp first, as the poly arm roots
+   its own: the values are packed after it is made, which allocates, and a
+   collection there freed the fiber the call then resumed. A local's or an
+   ivar's fiber is held already. */
+static void emit_fiber_pass_rooted(Compiler *c, const char *fn, int recv, int argc, const int *argv, Buf *b) {
+  Buf rb; memset(&rb, 0, sizeof rb); emit_expr(c, recv, &rb);
+  if (!operand_may_allocate(c, recv)) emit_fiber_pass_call(c, fn, rb.p ? rb.p : "NULL", argc, argv, b);
+  else {
+    int tf = ++g_tmp;
+    char ft[32]; snprintf(ft, sizeof ft, "_t%d", tf);
+    buf_printf(b, "({ sp_Fiber *_t%d = %s; SP_GC_ROOT(_t%d); ", tf, rb.p ? rb.p : "NULL", tf);
+    emit_fiber_pass_call(c, fn, ft, argc, argv, b);
+    buf_puts(b, "; })");
+  }
+  free(rb.p);
+}
+
 int emit_op_fiber_resume(Compiler *c, const BopCtx *x, Buf *b) {
-  int recv = x->recv;
   int argc;
   const int *argv = call_args(c->nt, x->id, &argc);
-  Buf rb; memset(&rb, 0, sizeof rb); emit_expr(c, recv, &rb);
-  emit_fiber_pass_call(c, "sp_Fiber_resume_n", rb.p ? rb.p : "NULL", argc, argv, b);
-  free(rb.p);
+  emit_fiber_pass_rooted(c, "sp_Fiber_resume_n", x->recv, argc, argv, b);
   return 1;
 }
 
 int emit_op_fiber_transfer(Compiler *c, const BopCtx *x, Buf *b) {
-  int recv = x->recv;
   int argc;
   const int *argv = call_args(c->nt, x->id, &argc);
-  Buf rb; memset(&rb, 0, sizeof rb); emit_expr(c, recv, &rb);
-  emit_fiber_pass_call(c, "sp_Fiber_transfer_n", rb.p ? rb.p : "NULL", argc, argv, b);
-  free(rb.p);
+  emit_fiber_pass_rooted(c, "sp_Fiber_transfer_n", x->recv, argc, argv, b);
   return 1;
 }
 

@@ -5806,6 +5806,43 @@ static int engine_lexically_nested(NodeTable *nt, int id) {
   return 0;
 }
 
+/* Does class definition def open the builtin class itself: `Range` at the
+   top level, in a body of Object (`class Object; class Range`), or as
+   `::Range` / `Object::Range`? A class of that name inside a module
+   (`module Geo; class Range`, `class Geo::Range`) is another class. Every
+   class or module body around def must be Object's at the top level.
+   The answers are kept per node until the table changes, since the fold
+   asks once per Object method and class definition. */
+static int engine_parent_is_object(NodeTable *nt, int path);
+static int mo_def_is_toplevel(NodeTable *nt, int def) {
+  static const NodeTable *cnt; static int cver = -1, ccount = -1; static signed char *memo; static int mcap;
+  if (cnt != nt || cver != (int)nt->version || ccount != nt->count) {
+    if (mcap < nt->count) {
+      signed char *m = realloc(memo, (size_t)nt->count);
+      if (!m) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+      memo = m; mcap = nt->count;
+    }
+    memset(memo, -1, (size_t)nt->count);
+    cnt = nt; cver = (int)nt->version; ccount = nt->count;
+  }
+  if (def < 0 || def >= nt->count) return 0;
+  if (memo[def] >= 0) return memo[def];
+  int ans = 0, cp = class_def_path(nt, def);
+  NodeKind k = cp >= 0 ? nt_kind(nt, cp) : NK_NONE;
+  if (k == NK_ConstantPathNode) ans = engine_parent_is_object(nt, cp);
+  else if (k == NK_ConstantReadNode) {
+    ans = 1;
+    for (int n = 0; ans && n < nt->count; n++) {
+      if (n == def || (!class_def_opens_cref(nt, n) && nt_kind(nt, n) != NK_SingletonClassNode)) continue;
+      if (!subtree_has(nt, class_def_body(nt, n), def)) continue;
+      const char *hn = nt_kind(nt, n) == NK_ClassNode ? class_def_name(nt, n) : NULL;
+      if (!hn || !sp_streq(hn, "Object") || !mo_def_is_toplevel(nt, n)) ans = 0;
+    }
+  }
+  memo[def] = (signed char)ans;
+  return ans;
+}
+
 /* The namespace a constant path's parent names is Object itself (`::X`,
    `Object::X`, `::Object::X`), or anything else. */
 static int engine_parent_is_object(NodeTable *nt, int path) {
@@ -25297,7 +25334,7 @@ static int mo_vis_changed(const NodeTable *nt, int n0, const char *cn, const cha
   for (int m = 0; m < n0; m++) {
     if (!class_def_is_class(nt, m)) continue;
     const char *dn = class_def_name(nt, m);
-    if (!dn || !sp_streq(dn, cn)) continue;
+    if (!dn || !sp_streq(dn, cn) || !mo_def_is_toplevel((NodeTable *)nt, m)) continue;
     int b = class_def_body(nt, m), bn = 0;
     const int *bs = b >= 0 ? nt_arr(nt, b, "body", &bn) : NULL;
     int section = 0;   /* (a bare `private` or `protected` seen in this body) */
@@ -26956,7 +26993,7 @@ int desugar_object_method_builtin_overrides(Compiler *c) {
   for (int om = 0; om < n0; om++) {
     if (!class_def_is_class(nt, om)) continue;
     const char *ocn = class_def_name(nt, om);
-    if (!ocn || !sp_streq(ocn, "Object")) continue;
+    if (!ocn || !sp_streq(ocn, "Object") || !mo_def_is_toplevel(nt, om)) continue;
     int ob = class_def_body(nt, om);
     int obn = 0; const int *obs = ob >= 0 ? nt_arr(nt, ob, "body", &obn) : NULL;
     for (int oi = 0; oi < obn; oi++) {
@@ -26972,7 +27009,7 @@ int desugar_object_method_builtin_overrides(Compiler *c) {
         if (!class_def_is_class(nt, m)) continue;
         const char *cn = class_def_name(nt, m);
         const char *g = cn ? mo_override_class(cn) : NULL;
-        if (!g || mo_program_owns(nt, n0, cn) || (mo_dispatch_arm(g) && !mo_vis_changed(nt, n0, cn, mname))) continue;
+        if (!g || !mo_def_is_toplevel(nt, m) || mo_program_owns(nt, n0, cn) || (mo_dispatch_arm(g) && !mo_vis_changed(nt, n0, cn, mname))) continue;
         int b = class_def_body(nt, m);
         int bn = 0; const int *bs = b >= 0 ? nt_arr(nt, b, "body", &bn) : NULL;
         for (int k = 0; k < bn; k++) {

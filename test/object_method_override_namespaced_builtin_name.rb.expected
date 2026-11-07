@@ -1,0 +1,8 @@
+[:georange, 2]
+[:geoobject, 5]
+[:boxproc, 3]
+[:range, 4]
+[:obj, 1]
+[[:georange, 2], [:range, 4], [:obj, 1], [:boxproc, 3], [:obj, 1]]
+[:rational, 6]
+[:geodate, 7, 1]

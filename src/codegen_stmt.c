@@ -19709,13 +19709,16 @@ static int emit_multi_write_stmt(Compiler *c, int id, Buf *b, int indent, const 
   return 0;
 }
 
-/* Does definition dn (a def, or a define_method call with its block) hold
+/* Does definition n (a def, or a define_method call with its block) hold
    something that may reach a builtin mixin: a super, a call of include,
    prepend, extend or append_features, a bound Module method (instance_method,
-   bind_call), an alias? A nested def or class body is its own. */
-static int own_mixin_body_reaches_builtin(Compiler *c, int n) {
+   bind_call), send, an alias? A bare or self call of a singleton alias of a
+   mixin counts, and a bare or self call of a class method of the program is
+   followed into that method's body (seen: the scopes already followed). A
+   nested def or class body is its own. */
+static int own_mixin_reach(Compiler *c, int n, unsigned char *seen, int depth) {
   const NodeTable *nt = c->nt;
-  if (n < 0) return 0;
+  if (n < 0 || depth > 64) return n >= 0;
   NodeKind k = nt_kind(nt, n);
   if (k == NK_SuperNode || k == NK_ForwardingSuperNode || k == NK_AliasMethodNode) return 1;
   if (k == NK_CallNode) {
@@ -19724,12 +19727,21 @@ static int own_mixin_body_reaches_builtin(Compiler *c, int n) {
       "public_send", "method", NULL };
     const char *nm = nt_str(nt, n, "name");
     for (int i = 0; nm && names[i]; i++) if (sp_streq(nm, names[i])) return 1;
-    /* a singleton alias of a builtin mixin (`alias orig_include include`
-       in `class << self`), called by its new name */
-    for (int ci = 0; nm && ci < c->nclasses; ci++) {
-      const ClassInfo *ki = &c->classes[ci];
-      for (int a = 0; a < ki->naliases; a++)
-        if (ki->alias_sg && ki->alias_sg[a] && sp_streq(ki->alias_new[a], nm) && is_mixin_call(ki->alias_old[a])) return 1;
+    int recv = nt_ref(nt, n, "receiver");
+    if (nm && (recv < 0 || nt_kind(nt, recv) == NK_SelfNode)) {
+      /* `alias orig_include include` in `class << self`, called by its new name */
+      for (int ci = 0; ci < c->nclasses; ci++) {
+        const ClassInfo *ki = &c->classes[ci];
+        for (int a = 0; a < ki->naliases; a++)
+          if (ki->alias_sg && ki->alias_sg[a] && sp_streq(ki->alias_new[a], nm) && is_mixin_call(ki->alias_old[a])) return 1;
+      }
+      /* a class method of the program's by that name: its body runs too */
+      for (int si = 0; si < c->nscopes; si++) {
+        const Scope *sc = &c->scopes[si];
+        if (seen[si] || !sc->is_cmethod || !sc->name || !sp_streq(sc->name, nm) || sc->def_node < 0) continue;
+        seen[si] = 1;
+        if (own_mixin_reach(c, sc->def_node, seen, depth + 1)) return 1;
+      }
     }
   }
   int nr = nt_num_refs(nt, n), na = nt_num_arrs(nt, n);
@@ -19737,17 +19749,24 @@ static int own_mixin_body_reaches_builtin(Compiler *c, int n) {
     int ch = nt_ref_at(nt, n, i);
     NodeKind ck = ch >= 0 ? nt_kind(nt, ch) : NK_NilNode;
     if (ck == NK_DefNode || ck == NK_ClassNode || ck == NK_ModuleNode || ck == NK_SingletonClassNode) continue;
-    if (own_mixin_body_reaches_builtin(c, ch)) return 1;
+    if (own_mixin_reach(c, ch, seen, depth)) return 1;
   }
   for (int i = 0; i < na; i++) {
     int an = 0; const int *av = nt_arr_at(nt, n, i, &an);
     for (int j = 0; j < an; j++) {
       NodeKind ck = nt_kind(nt, av[j]);
       if (ck == NK_DefNode || ck == NK_ClassNode || ck == NK_ModuleNode || ck == NK_SingletonClassNode) continue;
-      if (own_mixin_body_reaches_builtin(c, av[j])) return 1;
+      if (own_mixin_reach(c, av[j], seen, depth)) return 1;
     }
   }
   return 0;
+}
+static int own_mixin_body_reaches_builtin(Compiler *c, int dn) {
+  unsigned char *seen = calloc((size_t)c->nscopes + 1, 1);
+  if (!seen) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  int r = own_mixin_reach(c, dn, seen, 0);
+  free(seen);
+  return r;
 }
 
 /* A CallNode statement: the statement-level fast paths ahead of emit_expr (emit_stmt_inner's arms, in their order) */

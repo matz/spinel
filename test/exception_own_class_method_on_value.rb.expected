@@ -22,3 +22,5 @@
 [AppError, "App:wrapped o", false]
 [AppError, "o", false]
 true
+[Eq, "z"]
+[IOError, "z"]

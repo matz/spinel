@@ -46,3 +46,10 @@ inst = AppError.new("i")
   p [r.class, r.message, r.equal?(inst)]
 end
 p build0(inst).equal?(inst)
+
+# an instance whose class defines its own == takes its own exception, and
+# its == does not run against the classes
+class Eq < StandardError
+  def ==(o) = true
+end
+[Eq.new("e"), IOError].each { |v| r = build(v, "z"); p [r.class, r.message] }

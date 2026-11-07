@@ -10780,8 +10780,9 @@ static void exc_ctor_spell_new(Compiler *c, int id) {
    itself for t where it is a variable. The instance's call keeps its name.
    With classes of the program whose own (or inherited) class method
    `exception` answers (own, nown), a class value of one of them calls that
-   method: the test is `t.is_a?(Class) && !(t == C1 || ...)`, and the other
-   arm is `t == C1 ? C1.exception(a) : ... : t.exception(a)`. Every other
+   method: the test is `t.is_a?(Class) && !(t.equal?(C1) || ...)`, and the other
+   arm is `t.equal?(C1) ? C1.exception(a) : ... : t.exception(a)`. The test
+   asks identity, so an instance's own `==` does not run. Every other
    class still builds through new. */
 static void exc_ctor_branch_boxed(Compiler *c, int id, int recv, const PolyCand *own, int nown) {
   NodeTable *nt = (NodeTable *)c->nt;
@@ -10822,8 +10823,7 @@ static void exc_ctor_branch_boxed(Compiler *c, int id, int recv, const PolyCand 
     for (int q = 0; q < nown; q++) {
       int k = sus_class_const(c, own[q].cls);
       if (k < 0) continue;
-      int rd = nt_clone_subtree(nt, t1);
-      int eq = fwd_new_call(nt, rd, "==", k);
+      int eq = fwd_new_call(nt, nt_clone_subtree(nt, t1), "equal?", k);
       if (any < 0) any = eq;
       else { int o = nt_new_node(nt, "OrNode"); nt_node_set_ref(nt, o, "left", any); nt_node_set_ref(nt, o, "right", eq); any = o; }
     }
@@ -10856,7 +10856,7 @@ static void exc_ctor_branch_boxed(Compiler *c, int id, int recv, const PolyCand 
     nt_node_set_arr(nt, st, "body", &kc, 1);
     nt_node_set_arr(nt, est, "body", &tail, 1);
     nt_node_set_ref(nt, el, "statements", est);
-    nt_node_set_ref(nt, iff, "predicate", fwd_new_call(nt, nt_clone_subtree(nt, t1), "==", sus_class_const(c, own[q].cls)));
+    nt_node_set_ref(nt, iff, "predicate", fwd_new_call(nt, nt_clone_subtree(nt, t1), "equal?", sus_class_const(c, own[q].cls)));
     nt_node_set_ref(nt, iff, "statements", st);
     nt_node_set_ref(nt, iff, "subsequent", el);
     tail = iff;

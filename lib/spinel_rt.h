@@ -2256,7 +2256,7 @@ static sp_bool sp_poly_responds_builtin(sp_RbVal v, const char *m) {
     "abs2", "angle", "arg", "conj", "conjugate", "denominator", "div",
     "i", "imag", "imaginary", "magnitude", "modulo", "nonzero?",
     "numerator", "phase", "polar", "rationalize", "real", "real?",
-    "rect", "rectangular", "remainder", NULL };
+    "rect", "rectangular", "remainder", "+@", "quo", NULL };
   /* bop_rows has no TY_INT row at all for these seven -- confirmed by
      direct grep across src/builtin_ops.c and src/builtin_zero_ops.inc,
      and by CRuby agreeing all seven are real Integer methods (2026-10-12).
@@ -2425,6 +2425,19 @@ static sp_bool sp_poly_responds_builtin(sp_RbVal v, const char *m) {
     return 0;
   }
   return 0;
+}
+/* Does a boxed value of a builtin class lack the method m? Only for the
+   classes whose sp_poly_responds_builtin surface holds all of CRuby's
+   public and private names; any other value answers 0 (not known). A
+   Kernel private name (puts) and a program's own method are the caller's
+   to leave out. recv.method(:m) raises NameError on a 1. */
+static sp_bool sp_poly_lacks_builtin_method(sp_RbVal v, const char *m) {
+  static const char *const known[] = {
+    "NilClass", "TrueClass", "FalseClass", "String", "Array", "Hash",
+    "Integer", "Float", NULL };
+  const char *cn = sp_poly_class_name(v);
+  if (!m || !cn || !sp_str_in_list(cn, known)) return 0;
+  return !sp_poly_responds_builtin(v, m);
 }
 /* respond_to? on a typed IO handle: the names its typed emitters call, and
    the universal ones; a name only a boxed handle calls answers false */

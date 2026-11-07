@@ -1134,6 +1134,7 @@ int desugar_body_self_call(Compiler *c) {
 static void fwd_ns_key(const NodeTable *nt, int id, char *key, size_t cap);
 static void fwd_key_add(char *key, size_t cap, const char *seg);
 static int fwd_new_node_like(NodeTable *nt, int like, const char *ty);
+static void fwd_copy_loc(NodeTable *nt, int id, int like);
 static int xs_is_extend_self(const NodeTable *nt, int st) {
   if (nt_kind(nt, st) != NK_CallNode || nt_ref(nt, st, "receiver") >= 0) return 0;
   const char *nm = nt_str(nt, st, "name");
@@ -10952,6 +10953,71 @@ int desugar_exception_class_ctor(Compiler *c) {
   return changed;
 }
 
+/* `raise K, m` and `raise K` on a class K with a class method `exception`
+   of the program's (its own `def self.exception`, or one of a class above
+   it): CRuby raises what `K.exception(m)` answers, which need not be a K.
+   Spell the call so; a class without one keeps the raise of K, whose
+   `exception` is `new`. A backtrace argument, a splat and a program's own
+   `raise` keep the old path. */
+/* Does the program define a method `name` of any kind: an instance method,
+   a class method, a module function or a top-level def? A bare `raise` in
+   its reach is that method, which takes the class and message as given. */
+static int raise_name_program_defined(Compiler *c, const char *name) {
+  for (int i = 1; i < c->nscopes; i++)
+    if (c->scopes[i].name && sp_streq(c->scopes[i].name, name)) return 1;
+  return 0;
+}
+int desugar_raise_own_exception(Compiler *c) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  int changed = 0;
+  static const char *const calls_of[] = { "raise", "fail", NULL };
+  int *calls, ncalls = an_calls_named_any(c, calls_of, nt->count, &calls);
+  int owned[2] = { -1, -1 };   /* does the program define raise / fail */
+  for (int q = 0; q < ncalls; q++) {
+    int id = calls[q];
+    if (id >= c->node_cap || nt_kind(nt, id) != NK_CallNode || nt_ref(nt, id, "receiver") >= 0 ||
+        nt_ref(nt, id, "block") >= 0)
+      continue;
+    const char *nm = nt_str(nt, id, "name");
+    if (!nm) continue;
+    int args = nt_ref(nt, id, "arguments"), ac = 0;
+    const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &ac) : NULL;
+    if (ac < 1 || nt_argv_has(nt, av, ac, NT_ARG_SPLAT | NT_ARG_BLOCK | NT_ARG_FORWARDING)) continue;
+    int kw = nt_kind(nt, av[ac - 1]) == NK_KeywordHashNode, npos = ac - kw;
+    if (npos < 1 || npos > 2) continue;
+    NodeKind k0 = nt_kind(nt, av[0]);
+    if (k0 != NK_ConstantReadNode && k0 != NK_ConstantPathNode) continue;
+    /* (asked once per name and pass: the scan reads every scope) */
+    int fi = nm[0] == 'f';
+    if (owned[fi] < 0) owned[fi] = raise_name_program_defined(c, nm);
+    if (owned[fi]) continue;
+    int ci = class_recv_static_ci(c, av[0]), dc = -1;
+    int mi = ci >= 0 ? call_target(c, -1, ci, "exception", CT_CMETHOD, &dc) : -1;
+    /* the method must be there wherever the raise runs: a raise that may
+       run before a later `def self.exception` keeps the raise of K */
+    if (mi < 0 || elab_method_at(c, ci, "exception", 1, elab_point_of(c, id), NULL) != ELAB_YES) continue;
+    /* a `super` past the program's methods reaches Exception.exception,
+       which Spinel's class methods cannot call: such a method keeps the
+       raise of K, whose result it gives where it only supers */
+    int up = dc >= 0 ? c->classes[dc].parent : -1;
+    if (scope_calls_super(c, mi) && (up < 0 || call_target(c, -1, up, "exception", CT_CMETHOD, NULL) < 0)) continue;
+    int base = nt->count;
+    int ex = fwd_new_call(nt, av[0], "exception", npos == 2 ? av[1] : -1);
+    fwd_copy_loc(nt, ex, id);
+    nt_set_ignore_visibility(nt, ex, 1);   /* raise calls a private one too */
+    int moved[2] = { ex, kw ? av[ac - 1] : -1 };
+    nt_node_set_arr(nt, args, "arguments", moved, kw ? 2 : 1);
+    comp_grow_node_arrays(c);
+    for (int j = base; j < nt->count; j++) {
+      c->nscope[j] = c->nscope[id];
+      c->node_cbody[j] = c->node_cbody[id];
+    }
+    changed = 1;
+  }
+  free(calls);
+  return changed;
+}
+
 /* Does e write the variable `name`, at any depth (closures = 0), or only
    inside a block or a lambda (closures = 1)? */
 static int fwd_subtree_writes(const NodeTable *nt, int e, const char *name, int closures, int inside) {
@@ -13103,12 +13169,15 @@ static int fwd_target_shape(const NodeTable *nt, int def, int call, int is_super
   }
   return fwd_class_value_new_shape(nt);
 }
-static int fwd_new_node_like(NodeTable *nt, int like, const char *ty) {
-  int id = nt_new_node(nt, ty);
-  if (id < 0) return -1;
+static void fwd_copy_loc(NodeTable *nt, int id, int like) {
   nt_node_set_int(nt, id, "node_line", nt_int(nt, like, "node_line", 0));
   nt_node_set_int(nt, id, "node_file", nt_int(nt, like, "node_file", 0));
   nt_node_set_int(nt, id, "node_col", nt_int(nt, like, "node_col", 0));
+}
+static int fwd_new_node_like(NodeTable *nt, int like, const char *ty) {
+  int id = nt_new_node(nt, ty);
+  if (id < 0) return -1;
+  fwd_copy_loc(nt, id, like);
   return id;
 }
 /* is there a def of `name` at all? def_shape_by_name answers -1 both for

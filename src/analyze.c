@@ -5004,7 +5004,7 @@ static void blkp_stamp_subtree(const NodeTable *nt, int node, int *stamp, int ge
    in source order. qc_hdr_alias[cp] is the entry, without a name, that
    holds the full module path of a compact header reached through one, or
    -1. */
-typedef struct { int depth; char scope[QC_MAXDEPTH][64]; char name[64], orig[64];
+typedef struct { int depth; char scope[QC_MAXDEPTH][64]; char name[64];
                  int tl; char target[QC_MAXDEPTH][64]; int sd; } QCAlias;
 static QCAlias *qc_aliases = NULL;
 /* a lookup scope: the body path[0..n) */
@@ -5150,7 +5150,7 @@ static int qc_known_has(char (*path)[64], int n, const char *head) {
 static int qc_alias_find(char (*path)[64], int n, const char *name) {
   for (int a = qc_naliases - 1; a >= 0; a--) {
     if (qc_aliases[a].depth != n) continue;
-    if (!sp_streq(qc_aliases[a].name, name) && !sp_streq(qc_aliases[a].orig, name)) continue;
+    if (!sp_streq(qc_aliases[a].name, name)) continue;
     int ok = 1;
     for (int i = 0; i < n && ok; i++) if (!sp_streq(qc_aliases[a].scope[i], path[i])) ok = 0;
     if (ok) return a;
@@ -5165,7 +5165,7 @@ static int qc_alias_find(char (*path)[64], int n, const char *name) {
 static int qc_alias_unique(const char *head) {
   int found = -1;
   for (int a = 0; a < qc_naliases; a++) {
-    if (!sp_streq(qc_aliases[a].name, head) && !sp_streq(qc_aliases[a].orig, head)) continue;
+    if (!sp_streq(qc_aliases[a].name, head)) continue;
     if (found >= 0) return -1;
     found = a;
   }
@@ -5230,7 +5230,7 @@ static int qc_alias_chain(const QCScope *sc, int nsc, char (*in)[64], int n,
        namespace, where it is written */
     len = 0;
     for (int i = 0; i < qc_aliases[a].depth; i++) snprintf(out[len++], 64, "%s", qc_aliases[a].scope[i]);
-    snprintf(out[len++], 64, "%s", qc_aliases[a].orig);
+    snprintf(out[len++], 64, "%s", qc_aliases[a].name);
     qc_holder = a;
   }
   else if (len < 0) {
@@ -5298,25 +5298,19 @@ static void qc_note_alias(const NodeTable *nt, int w, char (*path)[64], int dept
   QCAlias *al = qc_alias_new();
   al->depth = depth;
   snprintf(al->name, 64, "%s", wn);
-  /* a write qualify_colliding_consts renamed (`Q__A`) is still read as A
-     by a header's head, which that pass leaves alone */
-  const char *on = nt_str(nt, w, "qc_orig_name");
-  snprintf(al->orig, 64, "%s", on ? on : wn);
   for (int i = 0; i < depth; i++) snprintf(al->scope[i], 64, "%s", path[i]);
   al->tl = n;
   al->sd = class_def_is_record_call(nt, val);
   for (int i = 0; i < n; i++) snprintf(al->target[i], 64, "%s", out[i]);
-  for (int k = 0; k < (sp_streq(al->orig, al->name) ? 1 : 2); k++) {
-    if (qc_nalias_ws == qc_calias_ws) {
-      qc_calias_ws = qc_calias_ws ? qc_calias_ws * 2 : 16;
-      qc_alias_ws = realloc(qc_alias_ws, sizeof(QCWrite) * (size_t)qc_calias_ws);
-      if (!qc_alias_ws) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-    }
-    QCWrite *aw = &qc_alias_ws[qc_nalias_ws++];
-    aw->node = qc_naliases - 1; aw->depth = depth; aw->salt = 0; aw->head[0] = 0;
-    for (int i = 0; i < depth; i++) snprintf(aw->path[i], 64, "%s", path[i]);
-    snprintf(aw->name, sizeof aw->name, "%s", k ? al->orig : al->name);
+  if (qc_nalias_ws == qc_calias_ws) {
+    qc_calias_ws = qc_calias_ws ? qc_calias_ws * 2 : 16;
+    qc_alias_ws = realloc(qc_alias_ws, sizeof(QCWrite) * (size_t)qc_calias_ws);
+    if (!qc_alias_ws) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   }
+  QCWrite *aw = &qc_alias_ws[qc_nalias_ws++];
+  aw->node = qc_naliases - 1; aw->depth = depth; aw->salt = 0; aw->head[0] = 0;
+  for (int i = 0; i < depth; i++) snprintf(aw->path[i], 64, "%s", path[i]);
+  snprintf(aw->name, sizeof aw->name, "%s", al->name);
 }
 /* `class Object::Foo` is `class ::Foo`: Object is the top level, so Foo is
    not defined under the body around the header. The passes and walk_scope
@@ -5490,12 +5484,12 @@ static void qc_resolve_walk(const NodeTable *nt, int node, char (*path)[64], int
 static void qc_refuse_holder_headers(Compiler *c) {
   for (int i = 0; i < qc_nholder_hdrs; i++) {
     const QCAlias *al = &qc_aliases[qc_holder_hdrs[i].alias];
-    int reopened = qc_def_find((char (*)[64])al->scope, al->depth, al->orig) >= 0;
+    int reopened = qc_def_find((char (*)[64])al->scope, al->depth, al->name) >= 0;
     if (!qc_holder_hdrs[i].away && !reopened) continue;
     char msg[512];
     snprintf(msg, sizeof msg, "a class or module under %s, a constant that holds a Struct or Data class, "
              "is not supported here; write it in the body that writes %s, after any `class %s` body",
-             al->orig, al->orig, al->orig);
+             al->name, al->name, al->name);
     unsupported_feature(c, qc_holder_hdrs[i].node, msg);
   }
 }
@@ -6140,7 +6134,7 @@ void qc_rewrite_reads(Compiler *c, int node, char (*mods)[64], int mdepth,
 /* The qualified names qualify_colliding_consts gave a constant written under
    a module path, for qualify_colliding_classes. */
 static char **qc_const_quals; static int qc_nconst_quals;
-int qc_const_qualified(const char *qn) {
+static int qc_const_qualified(const char *qn) {
   for (int i = 0; i < qc_nconst_quals; i++) if (sp_streq(qc_const_quals[i], qn)) return 1;
   return 0;
 }
@@ -6403,46 +6397,22 @@ static int qc_native_leaf_declared(const char *const *decls, int ndecls, const Q
   }
   return found;
 }
-/* How header hdr (the constant_path of `class Bar` or `module Bar`)
-   may reopen a builder: 1 a class header with no superclass, 2 a module
-   header, 0 a class header that names a superclass */
-static int qc_header_reopens(const NodeTable *nt, int hdr) {
-  NT_FOREACH_KIND(nt, NK_ClassNode, id)
-    if (nt_ref(nt, id, "constant_path") == hdr) return nt_ref(nt, id, "superclass") < 0;
-  return 2;
-}
 /* Is the program's write a before node b in the source (same file)? */
 static int qc_written_before(const NodeTable *nt, int a, int b) {
   if (nt_int(nt, a, "node_file", 0) != nt_int(nt, b, "node_file", 0)) return 0;
   long long la = nt_int(nt, a, "node_line", 0), lb = nt_int(nt, b, "node_line", 0);
   return la < lb || (la == lb && nt_int(nt, a, "node_col", 0) < nt_int(nt, b, "node_col", 0));
 }
-/* Is nm the name of a class or module the program defines, other than
-   the one header hdr reopens? A builder write the constant pass
-   qualified (`Bar = Class.new` in module Outer, named Outer__Bar there)
-   is the constant a header `class Bar` in Outer names, whose qualified
-   name is the same. The header reopens it when it is the only builder
-   write of that name, it comes before the header, and the header is of
-   the builder's kind and names no superclass (CRuby checks a superclass
-   against the builder's, which the passes do not); otherwise the header
-   stays a class of its own, as before. */
-static int qc_class_name_defined(Compiler *c, const char *nm, int hdr) {
+/* Is nm the name of a class or module the program defines? */
+static int qc_class_name_defined(Compiler *c, const char *nm) {
   const NodeTable *nt = c->nt;
-  int ndk = 0, builders = 0, reopens = 0; const NodeKind *dk = class_def_kinds(&ndk);
+  int ndk = 0; const NodeKind *dk = class_def_kinds(&ndk);
   for (int dh = 0; dh < ndk; dh++)
     NT_FOREACH_KIND(nt, dk[dh], id) {
       const char *mn = class_def_is_class(nt, id) || class_def_is_module(nt, id) ? class_def_name(nt, id) : NULL;
-      if (!mn || !sp_streq(mn, nm)) continue;
-      if (hdr >= 0 && nt_kind(nt, id) == NK_ConstantWriteNode && class_def_builder(nt, id) >= 0 &&
-          nt_str(nt, id, "qc_orig_name") && qc_const_qualified(nm)) {
-        builders++;
-        int how = qc_header_reopens(nt, hdr);
-        reopens += qc_written_before(nt, id, hdr) && (class_def_is_module(nt, id) ? how == 2 : how == 1);
-        continue;
-      }
-      return 1;
+      if (mn && sp_streq(mn, nm)) return 1;
     }
-  return builders && !(builders == 1 && reopens == 1);
+  return 0;
 }
 /* Whether each class write shares its leaf with a write under another path.
    A leaf whose writes have two or more distinct paths collides for every
@@ -6754,7 +6724,7 @@ void qualify_colliding_classes(Compiler *c) {
        leaf is still refused. */
     if (collide && ws[i].depth > 0) {
       char qn[512]; qc_qualified_name(qn, sizeof qn, &ws[i]);
-      if (qc_class_name_defined(c, qn, ws[i].node)) {
+      if (qc_class_name_defined(c, qn)) {
         for (int j = 0; j < wn; j++)
           if (j != i && ws[j].depth == 0 && sp_streq(ws[j].name, ws[i].name)) {
             char msg[768];
@@ -6763,7 +6733,7 @@ void qualify_colliding_classes(Compiler *c) {
                      "top-level %s is defined too; rename one of them", ws[i].name, qn, qn, ws[i].name);
             unsupported_feature(c, ws[i].node, msg);
           }
-        while (qc_class_name_defined(c, qn, -1)) {
+        while (qc_class_name_defined(c, qn)) {
           ws[i].salt++;
           qc_qualified_name(qn, sizeof qn, &ws[i]);
         }

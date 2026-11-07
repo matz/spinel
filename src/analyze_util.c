@@ -264,9 +264,9 @@ int class_lacks_own_const(Compiler *c, int k, const char *nm) {
                                      NK_ConstantOperatorWriteNode, NK_ConstantTargetNode };
   for (int i = 0; i < 5; i++)
     NT_FOREACH_KIND(nt, writes[i], w) {
-      const char *wn = nt_str(nt, w, "name"), *on = nt_str(nt, w, "qc_orig_name");
+      const char *wn = nt_str(nt, w, "name");
       size_t wl = wn ? strlen(wn) : 0;
-      if ((wn && sp_streq(wn, nm)) || (on && sp_streq(on, nm))) return 0;
+      if (wn && sp_streq(wn, nm)) return 0;
       if (wl > nl + 2 && sp_streq(wn + wl - nl, nm) && !strncmp(wn + wl - nl - 2, "__", 2)) return 0;
     }
   if (program_writes_const_in(c, c->classes[k].name, nm)) return 0;
@@ -634,7 +634,7 @@ static void builtin_given_build(Compiler *c, struct BuiltinGiven *g) {
        class alias, `SA = Foo`, included) */
     for (int w = g_cw.head[0][i]; w >= 0 && c->node_cbody; w = g_cw.next[w]) {
       int o = w < c->node_cap ? c->node_cbody[w] : -1;
-      if (o >= 0 && held[o]) anh_add(&g->names, nt_str(nt, w, "qc_orig_name") ? nt_str(nt, w, "qc_orig_name") : nt_str(nt, w, "name"));
+      if (o >= 0 && held[o]) anh_add(&g->names, nt_str(nt, w, "name"));
     }
     for (int t = g_cw.head[1][i]; t >= 0; t = g_cw.next[t]) {
       int q = nt_ref(nt, t, "parent");

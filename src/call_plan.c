@@ -890,7 +890,7 @@ static int ct_def_version(Compiler *c, int rcls, const char *name, int sg, const
   int cls = rcls;
   while (d) {
     if (d->kind == LR_DEF) return comp_method_version(c, rcls, name, sg, d->node, dc);
-    if ((d->kind == LR_READER || d->kind == LR_WRITER) && d->scope > 0)
+    if ((d->kind == LR_READER || d->kind == LR_WRITER || d->kind == LR_ALIAS) && d->scope > 0)
       return comp_method_version(c, rcls, name, sg, c->scopes[d->scope].def_node, dc);
     /* a module_function copy: the module's singleton method made of the def
        it copies (mf_copy_entries), as the load record keeps its scope (the

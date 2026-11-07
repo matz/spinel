@@ -3147,6 +3147,7 @@ static void scope_copy_method_shape(Scope *dst, Scope *src) {
   dst->nrequired = src->nrequired;
   dst->rest_idx = src->rest_idx;
   dst->kwrest_idx = src->kwrest_idx;
+  dst->accessor_of = src->accessor_of;
   /* A copied &block has the same Proc-or-NULL ABI as the original. It is
      outside pnames, so copying the positional/keyword locals does not
      register it. Seed it before inference; otherwise the body walk leaves an
@@ -4611,26 +4612,81 @@ void settle_mixin_aliases(Compiler *c) {
   }
 }
 
+/* The accessor an instance alias e names at its point, an attr_* version
+   the record has there (the class's own, a superclass's or a module's) that
+   surely ran and that no def has replaced; NULL for any other target. A
+   query of the record needs the point map, which a node made since stales
+   and a query rebuilds, so register_aliases asks every alias before any
+   method is made. */
+static const LrDef *alias_accessor_version(Compiler *c, const ElabEntry *e) {
+  LoadPoint p = elab_point_of(c, e->node);
+  const LrDef *d = NULL;
+  if (e->sg || p.region < 0 || elab_method_at(c, e->cls, e->target, 0, p, &d) != ELAB_YES || !d ||
+      (d->kind != LR_READER && d->kind != LR_WRITER) || d->may || d->unplaced || d->scope) return NULL;
+  return d;
+}
+
+/* An alias of an attr_* accessor is the method made of the accessor
+   version the record has at the alias's point (alias_accessor_version),
+   `def w = @v` (`def w=(value) = (@v = value)` for a writer), the way
+   register_attr_versions makes a class-side accessor a def replaces: a name
+   mapping would meet whatever the name means at the end of the load (a def
+   the class gives it later, a subclass's), where CRuby's alias keeps the
+   accessor. The def keeps the accessor's own name, which is the alias's
+   #original_name; its scope is the alias's, linked to the alias's version
+   (elab_attr_scope) for the call plan (ct_def_version). 0 where the walk
+   made no method, which alias_register then binds. */
+static int alias_accessor_method(Compiler *c, const ElabEntry *e, const LrDef *d) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  int w = d->kind == LR_WRITER, s = c->nscopes;
+  char base[256], ivname[260];
+  if (w ? !setter_base_name(e->target, base, sizeof base) : snprintf(base, sizeof base, "%s", e->target) >= (int)sizeof base) return 0;
+  int def = attr_as_def(nt, d->node, base, w);
+  if (def < 0) return 0;
+  comp_grow_node_arrays(c);
+  walk_scope(c, def, c->nscope[e->node], e->cls);
+  if (s >= c->nscopes || c->scopes[s].def_node != def) return 0;
+  free(c->scopes[s].name);
+  { c->scopes[s].name = strdup(e->name); c->scopes[s].accessor_of = d->node + 1; comp_touch_scope(c->scopes[s].idx); }
+  snprintf(ivname, sizeof ivname, "@%s", base);
+  comp_ivar_intern(&c->classes[e->cls], ivname);
+  elab_attr_scope(c, e, s);
+  return 1;
+}
+
+/* Does an entry after a[i] on its class side declare the alias's name again
+   (an attr that does replaces the alias, as a later definition does in
+   CRuby)? */
+static int alias_replaced_later(const ElabEntry *a, int n, int i) {
+  for (int j = i + 1; !a[i].sg && j < n && a[j].cls == a[i].cls && a[j].sg == a[i].sg; j++)
+    if (a[j].kind != LR_ALIAS && sp_streq(a[j].name, a[i].name)) return 1;
+  return 0;
+}
+
 /* Each class side's aliases and the top level's (on the Toplevel
    pseudo-class, made only when there is one), found through the load
    record (elab_entries): `alias`, `alias_method` also wrapped in a
    visibility word, in `class << self` and `class << Const` bodies and in
    the arm a constant condition takes. An attr that declares the alias's
    name later on that class side replaces it, as the later definition does
-   in CRuby. Binding the alias is alias_register's. */
+   in CRuby. An alias of an accessor is a method of its own
+   (alias_accessor_method); binding any other is alias_register's. */
 void register_aliases(Compiler *c) {
   int n = 0, tl = -1;
   ElabEntry *a = elab_entries(c, 1u << LR_ALIAS | 1u << LR_READER | 1u << LR_WRITER, &n);
+  const LrDef **acc = calloc((size_t)(n ? n : 1), sizeof *acc);
+  if (!acc) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  for (int i = 0; i < n; i++)
+    if (a[i].kind == LR_ALIAS && a[i].target && a[i].cls >= 0 && !alias_replaced_later(a, n, i)) acc[i] = alias_accessor_version(c, &a[i]);
+  for (int i = 0; i < n; i++)
+    if (acc[i] && !alias_accessor_method(c, &a[i], acc[i])) acc[i] = NULL;
   for (int top = 0; top < 2; top++)
     for (int i = 0; i < n; i++) {
-      if (a[i].kind != LR_ALIAS || !a[i].target || (a[i].cls < 0) != top) continue;
-      int later = 0;
-      for (int j = i + 1; !a[i].sg && j < n && a[j].cls == a[i].cls && a[j].sg == a[i].sg && !later; j++)
-        later = a[j].kind != LR_ALIAS && sp_streq(a[j].name, a[i].name);
-      if (later) continue;
+      if (a[i].kind != LR_ALIAS || !a[i].target || (a[i].cls < 0) != top || acc[i] || alias_replaced_later(a, n, i)) continue;
       if (top && tl < 0) tl = comp_toplevel_class_make(c);
       alias_register(c, &c->classes[top ? tl : a[i].cls], a[i].name, a[i].target, a[i].node, a[i].sg);
     }
+  free(acc);
   free(a);
 }
 

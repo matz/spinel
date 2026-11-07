@@ -142,8 +142,8 @@ static void method_params_parse(const char *p, MethodParam **v, int *n, int *cap
 }
 
 /* The #parameters entries of method mi. A method made of an accessor
-   (Scope.attr_version), or an accessor's wrapper (bam_accessor), answers
-   CRuby's accessor list, not its synthesized def's: a writer's one
+   (Scope.attr_version, or Scope.accessor_of for an alias's), or an
+   accessor's wrapper (bam_accessor), answers CRuby's accessor list, not its synthesized def's: a writer's one
    parameter has no name ([[:req]]; a Struct member's is `_`,
    bam_struct_member), a reader has none ([]). A builtin's wrapper answers
    the list of the program's def it reaches instead of the builtin (a
@@ -175,7 +175,7 @@ static int scope_method_params(Compiler *c, int mi, MethodParam **out) {
     *out = v;
     return n;
   }
-  if (mi >= 0 && c->scopes[mi].attr_version) {
+  if (mi >= 0 && scope_of_accessor(&c->scopes[mi])) {
     for (int i = 0; i < c->scopes[mi].nparams; i++) method_param_add_n(&v, &n, &cap, "req", NULL, 0);
     *out = v;
     return n;
@@ -207,7 +207,7 @@ static int method_proc_params(Compiler *c, int mi) {
   if (cplan_missing_guard(c, mi) >= 0) return PROC_PARAMS_ARITY;
   if (rd >= 0) return method_proc_params(c, rd);
   if (rd == -2) return PROC_PARAMS_PLAIN;
-  if (c->scopes[mi].attr_version || (pn >= 0 && nt_int(c->nt, pn, "cext_arity", -99) != -99)) return PROC_PARAMS_ARITY;
+  if (scope_of_accessor(&c->scopes[mi]) || (pn >= 0 && nt_int(c->nt, pn, "cext_arity", -99) != -99)) return PROC_PARAMS_ARITY;
   if (!sym) return PROC_PARAMS_LIST;
   if (nt_int(c->nt, c->scopes[mi].def_node, "bam_accessor", 0)) return PROC_PARAMS_ARITY;
   bam_owner(c, mi, &own);
@@ -313,7 +313,7 @@ static void emit_method_desc_literal(Compiler *c, int mn, int mi, int from, cons
     if (!m->pnames[i]) continue;
     if (i) buf_puts(&d, ", ");
     /* a method made of an accessor: its parameter has no name (`x=(_)`) */
-    if (m->attr_version) buf_puts(&d, "_");
+    if (scope_of_accessor(m)) buf_puts(&d, "_");
     else if (i == m->rest_idx) buf_printf(&d, "*%s", m->pnames[i]);
     else if (i == m->kwrest_idx) buf_printf(&d, "**%s", m->pnames[i]);
     else if (callee_param_is_declared_kwarg(c, m, m->pnames[i]))
@@ -409,6 +409,11 @@ static int method_source_pos(Compiler *c, int mi, const char **file, int *line) 
     else known = -1;
   }
   if (dn < 0 || nt_int(nt, dn, "cext_extension", 0)) return 0;
+  /* a method made of an accessor a module declares: CRuby reads an attr's
+     position off the attr's own entry, which an alias of it does not share
+     (cplan_accessor_met), so there is none */
+  int acc = mi >= 0 ? c->scopes[mi].accessor_of - 1 : -1, home = acc >= 0 ? c->node_cbody[acc] : -1;
+  if (home >= 0 && comp_class_is_module(c, &c->classes[home])) return 0;
   const char *f = nt_file_path(nt, (int)nt_int(nt, dn, "node_file", 0));
   *file = f && *f ? f : nt->source_file ? nt->source_file : "";
   *line = (int)nt_int(nt, dn, "node_line", 0);
@@ -724,17 +729,22 @@ int emit_op_method_to_proc(Compiler *c, const BopCtx *x, Buf *b) {
   return 0;
 }
 
-/* Method#original_name: the target scope's own name -- an alias-created
-   method resolves through comp_method_in_chain, so the scope carries the
-   original (#3247). Falls back to #name for an unresolved target. */
+/* Method#original_name: the name the target's def gives it (method_def_name),
+   which an alias keeps whatever name the scope bound to it goes by (#3247);
+   else the scope's own name. Falls back to #name for an unresolved target. */
 int emit_op_method_original_name(Compiler *c, const BopCtx *x, Buf *b) {
   int recv = x->recv;
   int mn4 = method_recv_node(c, recv);
   int tg4 = mn4 >= 0 ? method_obj_target_mi(c, mn4) : -1;
   if (tg4 >= 0 && c->scopes[tg4].name) {
+    /* (a forwarder def of an alias of an inherited method (alias_forwarder)
+       is no def the program wrote: its scope's name stays the answer there,
+       until the pass that makes the forwarder is deleted) */
+    int fwd = c->scopes[tg4].def_node >= 0 && nt_int(c->nt, c->scopes[tg4].def_node, "alias_forwarder", 0);
+    const char *def_name = fwd ? NULL : method_def_name(c, tg4);
     buf_puts(b, "((void)("); emit_expr_for_effect(c, recv, b);
     buf_puts(b, "), sp_sym_intern(");
-    emit_str_literal(b, bam_builtin_sym(c, tg4, comp_scope_user_name(&c->scopes[tg4])));
+    emit_str_literal(b, def_name ? def_name : bam_builtin_sym(c, tg4, comp_scope_user_name(&c->scopes[tg4])));
     buf_puts(b, "))");
   }
   else {

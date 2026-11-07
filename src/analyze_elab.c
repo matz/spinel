@@ -8715,8 +8715,7 @@ static int host_id_cmp(const void *a, const void *b) {
    desugar_self_const_get, desugar_dynamic_const_get), a write through a
    constant path (desugar_constant_path_self_alias, qualify_colliding_classes),
    instance_eval (desugar_instance_eval_defs), a method_defined? guard
-   (desugar_def_unless_method_defined), an alias (desugar_inherited_aliases,
-   desugar_reader_aliases_before_redef).
+   (desugar_def_unless_method_defined), an alias (desugar_inherited_aliases).
    A define_method block is the program's own code, which those steps read
    where it is written: its nodes are not asked. Code spliced in the walk
    carries none. */

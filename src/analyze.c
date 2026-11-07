@@ -17989,6 +17989,26 @@ static int oa_untyped_walk_tail(Compiler *c, int s) {
   return b >= 0 && nt_kind(nt, b) == NK_BlockNode;
 }
 
+/* The empty rows that flowed into component r, a table of rows of class
+   cls (OA_CLS_IA or the Float one): 0 when there are none, 1 when every
+   one can be built at the row kind, -1 when one cannot. A row whose want
+   another producer already gave (the elements of a `[[], []]` literal, or
+   a row pushed into, which widen_nested_literals takes boxed while their
+   kind is still open) would be built at that one, a poly array the table
+   reads back as an sp_IntArray * -- a length of 8 and the poly array's
+   storage as its elements, and a push into it lost. */
+static int oa_empty_rows(Compiler *c, OAS *sl, int r, int cls) {
+  TyKind rk = cls == OA_CLS_IA ? TY_INT_ARRAY : TY_FLOAT_ARRAY;
+  int rows = 0;
+  for (int e = 0; e < g_oa_empt_n; e++) {
+    if (oa_uf_find(sl, g_oa_empt_slot[e]) != r) continue;
+    int lit = g_oa_empt_node[e];
+    rows = 1;
+    if (c->arr_want && lit < c->node_cap && c->arr_want[lit] != TY_UNKNOWN && c->arr_want[lit] != rk) return -1;
+  }
+  return rows;
+}
+
 static int narrow_object_arrays(Compiler *c) {
   const NodeTable *nt = c->nt;
   int changed = 0;
@@ -18844,21 +18864,16 @@ static int narrow_object_arrays(Compiler *c) {
     if (oa_uf_find(sl, i) != i || sl[i].cls != -1 || sl[i].row_escape || sl[i].odd_elem ||
         !OA_CLS_IS_NESTED(sl[i].row_cls))
       continue;
-    /* ... and when every empty row can be built at that kind: a row whose
-       want another producer already gave (the elements of a `[[], []]`
-       literal, which widen_nested_literals takes boxed while their kind is
-       still open) would be built at that one, a poly array the table reads
-       back as an sp_IntArray * */
-    int rows = 0, unbuilt = 0;
-    TyKind rk = sl[i].row_cls == OA_CLS_IA ? TY_INT_ARRAY : TY_FLOAT_ARRAY;
-    for (int e = 0; e < g_oa_empt_n; e++) {
-      if (oa_uf_find(sl, g_oa_empt_slot[e]) != i) continue;
-      int lit = g_oa_empt_node[e];
-      rows = 1;
-      if (c->arr_want && lit < c->node_cap && c->arr_want[lit] != TY_UNKNOWN && c->arr_want[lit] != rk) unbuilt = 1;
-    }
-    if (rows && !unbuilt) sl[i].cls = sl[i].row_cls;
+    /* ... and when every empty row can be built at that kind */
+    if (oa_empty_rows(c, sl, i, sl[i].row_cls) > 0) sl[i].cls = sl[i].row_cls;
   }
+  /* The same holds for a table with rows of its own (`x = [[1, 2], [], [3, 4]]`).
+     A seeded one is left to oa_seeded_literal_rows, which builds such a row
+     at the seed's kind. */
+  for (int i = 0; i < n; i++)
+    if (oa_uf_find(sl, i) == i && OA_CLS_IS_NESTED(sl[i].cls) && oa_empty_rows(c, sl, i, sl[i].cls) < 0 &&
+        !oa_component_seeded(c, sl, n, i))
+      sl[i].alive = 0;
   oa_seeded_literal_rows(c, sl, n);
   /* A call step 5d decided on the class of a slot's element holds only if
      the slot narrows to that class; one whose slot does not was a dynamic

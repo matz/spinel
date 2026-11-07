@@ -9272,6 +9272,12 @@ static TyKind infer_call_inner(Compiler *c, int id) {
   TyKind accessor_ret;
   if (infer_accessor_call(c, id, recv, name, &accessor_ret)) return accessor_ret;
 
+  /* A retargeted `x.send(:m)` that reaches a top-level def is answered here,
+     ahead of the boxed-receiver rows below: they type a builtin's answer
+     (`hash` as an Integer), which the top-level def need not give. */
+  TyKind send_ret;
+  if (infer_send_blind(c, id, recv, name, &send_ret)) return send_ret;
+
   /* The universal predicates and conversions the poly runtime answers as a RAW
      C scalar. The emitters have always known this; the TYPE did not say it, so
      `x&.frozen?` was inferred poly while its value arm rendered an sp_bool, and
@@ -9310,9 +9316,6 @@ static TyKind infer_call_inner(Compiler *c, int id) {
        no type at all */
     if (is_poly_exc_boxed_call(name, argc)) return an_planned_call_ret(c, id, TY_POLY);
   }
-
-  TyKind send_ret;
-  if (infer_send_blind(c, id, recv, name, &send_ret)) return send_ret;
 
   /* A call with NO receiver resolves the way CRuby's ancestry does: the
      enclosing scope's own chain first, then Object -- where a top-level `def`

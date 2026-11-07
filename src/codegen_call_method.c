@@ -2953,17 +2953,23 @@ int emit_send_blind(Compiler *c, int id, Buf *b) {
           free(lb.p); }
         /* (a builtin's emitter may write its answer unboxed, sp_poly_to_s's
            String: boxed by its C type, as the other arm is) */
-        buf_puts(b, ") ? (SP_BI_BOX(");
+        /* Each arm keeps the setup its emitter writes (a hold of the
+           receiver as a Hash for `default`) inside itself: hoisted ahead of
+           the test, it ran, and raised, for a value of the other arm. */
+        buf_puts(b, ") ? ({ ");
         int sv_split = view_push_arm(g_pd_skip, g_prbd_skip, g_poly_builtin_arm);
         g_arm.send_split = id;
-        emit_expr(c, id, b);
+        Buf dp, dv; memset(&dp, 0, sizeof dp); memset(&dv, 0, sizeof dv);
+        emit_split_pre(c, id, emit_expr, &dp, &dv);
         view_pop(c, sv_split);
-        buf_puts(b, ")) : (");
-        Buf mb; memset(&mb, 0, sizeof mb);
-        emit_method_call(c, id, &mb);
+        buf_printf(b, "%sSP_BI_BOX(%s); }) : ({ ", dp.p ? dp.p : "", dv.p ? dv.p : "0");
+        free(dp.p); free(dv.p);
+        Buf mp, mb; memset(&mp, 0, sizeof mp); memset(&mb, 0, sizeof mb);
+        emit_split_pre(c, id, emit_method_call, &mp, &mb);
+        buf_puts(b, mp.p ? mp.p : "");
         emit_boxed_text(c, c->scopes[smi].ret, mb.p ? mb.p : "0", b);
-        free(mb.p);
-        buf_puts(b, "))");
+        free(mp.p); free(mb.p);
+        buf_puts(b, "; }))");
         view_unbind(sv_argov);
         return 1;
       }

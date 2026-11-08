@@ -19,3 +19,9 @@ p h.base64digest
 p h.base64digest == [h.digest].pack("m0")
 p [g].include?(h)
 p OpenSSL::HMAC.new("key", "SHA512") == OpenSSL::HMAC.new("key", "SHA384")
+s = Struct.new(:m).new(OpenSSL::HMAC.new("k\0z", "SHA256"))
+p s
+D = Data.define(:m)
+p D.new(m: OpenSSL::HMAC.new("k", "SHA256"))
+class LoudH < OpenSSL::HMAC; def hexdigest = "LOUD"; end
+l = LoudH.new("key", "SHA256"); l << "a"; p l

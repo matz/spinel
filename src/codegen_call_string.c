@@ -1580,7 +1580,7 @@ int emit_string_handle_append(Compiler *c, int id, Buf *b, const char *name, int
         }
         else {
           for (int j = 0; j < argc; j++) {
-            buf_printf(b, " sp_String_append(_t%d, ", tb2);
+            buf_printf(b, " sp_String_append_bin(_t%d, ", tb2);
             { char rt[48]; snprintf(rt, sizeof rt, "sp_String_cstr(_t%d)", tb2);
               emit_str_append_arg(c, argv[j], rt, b); }
             buf_puts(b, ");");

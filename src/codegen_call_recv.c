@@ -4980,7 +4980,7 @@ static int emit_str_mutator_call(Compiler *c, int id, Buf *b, const NodeTable *n
         buf_puts(b, ";");
         for (int j = nchain; j >= 0; j--) {  /* innermost link first */
           int arg = j > 0 ? chain[j - 1] : argv[0];
-          buf_printf(b, " sp_String_append(_t%d, ", tb9);
+          buf_printf(b, " sp_String_append_bin(_t%d, ", tb9);
           { char rt[48]; snprintf(rt, sizeof rt, "sp_String_cstr(_t%d)", tb9);
             emit_str_append_arg(c, arg, rt, b); }
           buf_puts(b, ");");

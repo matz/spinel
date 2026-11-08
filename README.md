@@ -165,7 +165,8 @@ it can is an assertion, not a hint: it pins the slot. A contradiction
 the compiler can see is a compile error (see
 [Contradictions](docs/rbs-extract.md#contradictions)); a value that only
 turns out wrong at run time, narrowed out of a box into the slot, is
-reinterpreted rather than widened. See
+reinterpreted rather than widened. A file that does not parse stops the
+build, since its signatures would otherwise be lost with it. See
 [docs/rbs-extract.md](docs/rbs-extract.md) for the supported subset.
 
 The same signatures can be written inline, as RBS comments in the Ruby

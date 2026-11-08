@@ -1175,7 +1175,8 @@ int main(int argc, char **argv) {
   /* --rbs: extract advisory seeds via the sibling spinel_rbs_extract binary
      and hand them to the analyzer through g_opt_rbs_seed. An empty result is a
      silent no-op; a missing extractor is warned about, since --rbs was asked for
-     explicitly and the seeds would otherwise vanish without a trace (#1792). */
+     explicitly and the seeds would otherwise vanish without a trace (#1792), and
+     a file the extractor cannot parse stops the build (#11323). */
   char seed_path[4096] = {0};
   if (rbs_dir && *rbs_dir) {
     char dir[4096], extractor[4096];
@@ -1198,7 +1199,16 @@ int main(int argc, char **argv) {
       s_add_arg(&cmd, seed_path);
       int rc = system(cmd.p);
       free(cmd.p);
-      if (rc == 0 && file_exists(seed_path)) {
+      /* a signature file that did not parse (or could not be read) loses
+         every signature in it, the ones that would stop the build among
+         them: the build stops instead of going on without them (#11323) */
+      if (rc != 0) {
+        remove(seed_path);
+        fprintf(stderr, "spinel: --rbs %s: a signature file above did not parse or could not be read, "
+                "so its signatures would be lost; fix it or move it out of %s\n", rbs_dir, rbs_dir);
+        return 1;
+      }
+      if (file_exists(seed_path)) {
         g_opt_rbs_seed = strdup(seed_path);
         atexit(rbs_seed_remove);
       }

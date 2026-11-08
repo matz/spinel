@@ -3766,6 +3766,17 @@ build/rbs-seed-results/%.res: FORCE | rbs-seed-extractor $(SP_RT_LIB) $(SPINEL_T
 	  "$$tmp/sps" > "$$tmp/sps.out" 2>/dev/null && cmp -s "$$tmp/sps.out" test/rbs-seed/seed_partial_signature.expected || { echo "rbs-seed-test: FAIL (a signature with an optional positional, a rest parameter, a self return or keywords out of hash order: a seed went to the wrong slot or the wrong type)"; sed -n 1,5p "$$tmp/sps.err"; ok=0; }; \
 	[ "$$(grep -c 'widened to untyped' "$$tmp/sps.err")" = 1 ] || { echo "rbs-seed-test: FAIL (the rest parameter is the one slot that widens; another did: an optional positional, a self return or a rest parameter dropped the seeds beside it)"; grep 'widened' "$$tmp/sps.err"; ok=0; }; \
 	;; \
+	rbs_parse_failure_stops_build) \
+	if $(SPINEL) test/rbs-seed/rbs_parse_failure_stops_build.rb --rbs test/rbs-seed/broken_sig -o "$$tmp/rpf" >/dev/null 2>"$$tmp/rpf.err"; then \
+	  echo "rbs-seed-test: FAIL (#11323 a signature file that does not parse was dropped and the build went on)"; ok=0; \
+	else \
+	  grep -q 'parse failed in test/rbs-seed/broken_sig/broken_sig_box.rbs' "$$tmp/rpf.err" && \
+	  grep -q 'a signature file above did not parse' "$$tmp/rpf.err" || \
+	  { echo "rbs-seed-test: FAIL (#11323 the error for a signature file that does not parse)"; sed -n 1,4p "$$tmp/rpf.err"; ok=0; }; \
+	fi; \
+	$(SPINEL) test/rbs-seed/rbs_parse_failure_stops_build.rb -o "$$tmp/rpf" >/dev/null 2>&1 && [ "$$("$$tmp/rpf")" = 42 ] || \
+	  { echo "rbs-seed-test: FAIL (#11323 the program without --rbs)"; ok=0; }; \
+	;; \
 	*) echo "rbs-seed-test: FAIL (no check named $*)"; ok=0 ;; \
 	esac; } > "$$tmp/log" 2>&1; \
 	cat "$$tmp/log"; rm -rf "$$tmp"; echo $$ok > $@

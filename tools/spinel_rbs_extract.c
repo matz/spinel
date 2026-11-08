@@ -661,11 +661,20 @@ typedef enum {
     PHASE_EMIT = 2
 } process_phase_t;
 
+/* A file whose signatures were lost (it did not parse, or could not be
+ * read): main exits 2, and spinel stops the build, since the signatures
+ * the file holds, valid ones among them, would otherwise vanish without
+ * failing anything (#11323). */
+static int g_lost;
+
 static void process_file_phase(const char *path, FILE *out, process_phase_t phase) {
     size_t len = 0;
     char *src = slurp(path, &len);
     if (src == NULL) {
-        fprintf(stderr, "spinel_rbs_extract: cannot read %s\n", path);
+        if (phase == PHASE_EMIT) {
+            fprintf(stderr, "spinel_rbs_extract: cannot read %s\n", path);
+            g_lost = 1;
+        }
         return;
     }
     rbs_string_t str = rbs_string_new(src, src + len);
@@ -679,6 +688,7 @@ static void process_file_phase(const char *path, FILE *out, process_phase_t phas
             if (p->error != NULL && p->error->message != NULL) {
                 fprintf(stderr, "  %s\n", p->error->message);
             }
+            g_lost = 1;
         }
         rbs_parser_free(p);
         free(src);
@@ -824,5 +834,5 @@ int main(int argc, char **argv) {
     for (int i = 1; i < argc; i++) {
         walk_phase(argv[i], stdout, PHASE_EMIT);
     }
-    return 0;
+    return g_lost ? 2 : 0;
 }

@@ -1,0 +1,4 @@
+class BrokenSigBox
+  def get: () -> String
+  def initialize: (Integer v -> void
+end

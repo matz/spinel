@@ -1,0 +1,31 @@
+[0, 1]
+[1, 0, 1]
+4
+12
+[4, 24]
+4
+1
+3.5
+8
+true
+3
+true
+true
+"c"
+{1 => 1, 2 => 1, 3 => 1}
+[:b, 0]
+:digits
+:gcd
+:lcm
+:gcdlcm
+:ceildiv
+:remainder
+:fdiv
+:bit_length
+:int_between
+:int_clamp
+:float_between
+:str_between
+:str_clamp
+:tally
+:min_by

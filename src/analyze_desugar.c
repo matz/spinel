@@ -18699,13 +18699,14 @@ int desugar_builtin_scalar_calls(Compiler *c) {
        name" check is needed here. */
     const char *gn = nt_str(nt, copy, "name");
     if (!gn || comp_method_index(c, gn) < 0) continue;
-    /* a method the program's reopening adds, called ahead of its def at
-       the top level: the builtin's method answers it there, as in CRuby
-       (#10719), which the call left as written reaches (call_target finds
-       no reopening there). A name builtins/ defines keeps the rewrite: the
-       reopening replaced the generic, which is the only method of it. */
+    /* a call of a reopening's method ahead of its def at the top level:
+       the builtin's method answers it there, as in CRuby (#10719), which
+       the call left as written reaches (call_target finds no reopening
+       there). That holds for a name builtins/ writes in Ruby too (digits,
+       gcd): the call reaches the runtime's own method of it, the one the
+       generic stands in for. */
     { int od = (int)nt_int(nt, copy, "bx_orig_def", 0) - 1;
-      if (od >= 0 && nt_int(nt, copy, "bx_own", 0) && cplan_runs_before_def_node(c, id, od)) continue; }
+      if (od >= 0 && cplan_runs_before_def_node(c, id, od)) continue; }
     int args = nt_ref(nt, id, "arguments");
     int an = 0; const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &an) : NULL;
     { int cpn = nt_ref(nt, copy, "parameters");

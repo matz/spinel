@@ -281,7 +281,8 @@ int cplan_reopen_runs_builtin(Compiler *c, int id, int mi) {
   int k = mi >= 0 ? c->scopes[mi].class_id : -1;
   const char *kn = k >= 0 && k < c->nclasses && c->classes[k].name && c->classes[k].enclosing_class < 0 &&
                    builtin_class_id(c->classes[k].name) < 0 ? c->classes[k].name : NULL;
-  return kn && builtin_method_known(kn, nt_str(nt, id, "name")) && cplan_called_before_def(c, id, mi);
+  const char *cn = nt_str(nt, id, "name");
+  return kn && (builtin_method_known(kn, cn) || builtin_module_owns(kn, cn)) && cplan_called_before_def(c, id, mi);
 }
 /* The existing boxed dispatch candidates also serve literal-name send arms:
    the method call `call` runs on each candidate's arm. */
@@ -1845,11 +1846,14 @@ static int cm_self_kind(Compiler *c, int self) {
 /* ...and a builtin class's reopening, on its instance side: a call the
    record proves runs before the reopening's method of `name` is defined
    reaches the builtin's method of the name, as in CRuby (#10719: `p
-   a.sum` ahead of `class Array; def sum`), where the builtin has one */
+   a.sum` ahead of `class Array; def sum`), where the builtin has one, of
+   its own or of a module it includes (Comparable's between?, Enumerable's
+   tally) */
 static int ct_builtin_reopen_undefined_at(Compiler *c, int id, int cls, const char *name, unsigned flags) {
   if ((flags & (CT_CMETHOD | CT_TOP | CT_OWN)) || cls < 0 || cls >= c->nclasses || !c->classes[cls].name ||
       c->classes[cls].enclosing_class >= 0 || builtin_class_id(c->classes[cls].name) >= 0 ||
-      !builtin_method_known(c->classes[cls].name, name) || !elab_method_versions(c, name))
+      !(builtin_method_known(c->classes[cls].name, name) || builtin_module_owns(c->classes[cls].name, name)) ||
+      !elab_method_versions(c, name))
     return 0;
   int framed = elab_plan_enter(c, id);
   int none = elab_call_method(c, id, cls, name, 0, 1) == ELAB_NO;

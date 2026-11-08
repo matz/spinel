@@ -1848,6 +1848,10 @@ spinel: test/reject/singleton_class_self_in_instance_method.rb:19: singleton met
 spinel: test/reject/singleton_def_self_in_instance_method.rb:18: singleton method on self inside an instance method: self is whichever instance runs it, and a compiled class cannot give one object a method of its own
 == test/reject/singleton_def_self_in_instance_method.rb [promote] rc=1
 spinel: test/reject/singleton_def_self_in_instance_method.rb:18: singleton method on self inside an instance method: self is whichever instance runs it, and a compiled class cannot give one object a method of its own
+== test/reject/singleton_def_self_in_subclass_bare_call.rb [default] rc=1
+spinel: test/reject/singleton_def_self_in_subclass_bare_call.rb:7: singleton method on self inside an instance method: self is whichever instance runs it, and a compiled class cannot give one object a method of its own
+== test/reject/singleton_def_self_in_subclass_bare_call.rb [promote] rc=1
+spinel: test/reject/singleton_def_self_in_subclass_bare_call.rb:7: singleton method on self inside an instance method: self is whichever instance runs it, and a compiled class cannot give one object a method of its own
 == test/reject/singleton_def_self_shadows_instance_method.rb [default] rc=1
 spinel: test/reject/singleton_def_self_shadows_instance_method.rb:14: singleton method on self inside an instance method: self is whichever instance runs it, and a compiled class cannot give one object a method of its own
 == test/reject/singleton_def_self_shadows_instance_method.rb [promote] rc=1

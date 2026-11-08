@@ -4073,6 +4073,12 @@ static int emit_typed_array_call(Compiler *c, int id, Buf *b, const NodeTable *n
         /* rooted, as the poly each_index above already roots its own hoist:
            the length is the loop bound and the block can allocate */
         emit_gc_root_tmp(c, rt, trecv, g_pre); buf_puts(g_pre, "\n");
+        /* the loop keeps its arrays' headers as a while does: it is written
+           into the region's buffer, which hc_iter_end puts after the
+           receiver's hold with the cache around it */
+        Buf *sv_pre = g_pre, *pb = g_pre;
+        void *hc = hc_iter_begin(c, id, &pb);
+        g_pre = pb;
         emit_indent(g_pre, g_indent);
         buf_printf(g_pre, "for (sp_int _t%d = 0; _t%d < sp_%sArray_length(_t%d); _t%d++) {\n",
                    ti, ti, ek, trecv, ti);
@@ -4091,6 +4097,8 @@ static int emit_typed_array_call(Compiler *c, int id, Buf *b, const NodeTable *n
         }
         emit_iter_loop_stmts(c, body, g_pre, g_indent + 1);
         emit_indent(g_pre, g_indent); buf_puts(g_pre, "}\n");
+        g_pre = sv_pre;
+        hc_iter_end(hc, &pb, g_indent, 1);
         buf_printf(b, "_t%d", trecv); { *out = 1; return 1; }
       }
     }

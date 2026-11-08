@@ -1,0 +1,21 @@
+["ac", "a", nil, "c"]
+["ac", "a", nil, "c"]
+["ac", ["a", nil, "c"]]
+[1, "ac", "a", nil, "c", 2]
+["ac", "a", nil, "c"]
+["ac", "a", nil, "c"]
+["ac", "a", nil, "c"]
+["ac", "a", nil, "c"]
+["ac", "a", nil, "c"]
+["ac", ["a", nil, "c"]]
+["ac", ["a", nil, "c"]]
+[]
+[0, []]
+[]
+ac
+a
+
+c
+["ac", "a", nil, "c"]
+[0, "ac", "a", nil, "c"]
+"ac-a--c"

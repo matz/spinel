@@ -3743,8 +3743,8 @@ static void desugar_dyn_parent_class_leaf(Compiler *c) {
         arms_k[na] = k; na++;
       }
       /* (and Object's own, a top-level `Foo = 5`, or a builtin class or
-         module, `w::String` with an `A::Foo__String`) */
-      if (top < 0 && (comp_const(c, nm) || is_builtin_class_name(nm) || is_builtin_module_name(nm))) top = te_const(nt, nm);
+         module or a well-known constant, `w::String` with an `A::Foo__String`) */
+      if (top < 0 && (comp_const(c, nm) || const_defined_top_level(c, nm) || is_builtin_class_name(nm) || is_builtin_module_name(nm))) top = te_const(nt, nm);
     }
     /* a holder another holder reaches (Kid < Base, a module including
        another) is tested first: CRuby finds the nearest ancestor's Foo */

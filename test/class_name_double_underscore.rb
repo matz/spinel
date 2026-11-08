@@ -71,3 +71,9 @@ class GK; end
 [Object, GA, GB, GK].each do |w|
   begin; p w::String; rescue NameError => e; puts e.message; end
 end
+# a well-known constant of the leaf
+module GA; class Foo__ARGV; end; end
+module GB; class Other__ARGV; end; end
+[Object, GA].each do |w|
+  begin; p w::ARGV; rescue NameError => e; puts e.message; end
+end

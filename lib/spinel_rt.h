@@ -3805,6 +3805,20 @@ static SP_NOINLINE const char *sp_str_cmp_conv(sp_RbVal r, sp_RbVal obj) {
   return NULL;
 }
 
+/* What a user #to_str answered where the analysis could pin its answer no
+   further than poly, converting an argument: CRuby's rb_convert_type takes
+   a String and names anything else, nil included -- "can't convert R to
+   String (R#to_str gives Integer)" -- as sp_obj_to_int_answer does for
+   #to_int. `cn` is the receiver's class name. */
+static SP_NOINLINE SP_UNUSED const char *sp_obj_to_str_answer(sp_RbVal r, const char *cn) {
+  if (r.tag == SP_TAG_STR && r.v.s) return r.v.s;
+  if (sp_poly_is_strbuf(r)) return sp_String_cstr((sp_String *)r.v.p);
+  sp_raise_cls("TypeError",
+               sp_sprintf("can't convert %s to String (%s#to_str gives %s)", cn, cn,
+                          r.tag == SP_TAG_STR ? "NilClass" : sp_poly_class_name(r)));
+  return sp_str_empty;
+}
+
 /* The strict argument forms: nil / true / false in a typed String or Integer
    slot are CRuby's TypeError (File.join("a", nil), [1].take(nil)), where the
    loose forms above read them as "" / 0. Codegen emits these at the slots

@@ -1248,11 +1248,20 @@ static void emit_obj_conv_call_inline(Compiler *c, int node, TyKind t, int def, 
      keep its result check when that representation changes. */
   int nil_string = mi_c >= 0 && c->scopes[mi_c].ret == TY_STRING &&
                    c->scopes[mi_c].ret_obj_may_nil;
+  /* (#to_str's boxed answer is checked as #to_int's is: a String, or
+     CRuby's TypeError naming the class and what it gave, sp_obj_to_str_answer) */
+  char str_tail[300];
+  const char *tail = ")";
   if (mi_c >= 0 && c->scopes[mi_c].ret == TY_POLY)
     unbox = sp_streq(conv, "to_int") ? "sp_poly_arg_int_chk("
-          : sp_streq(conv, "to_str") ? "sp_poly_arg_str("
+          : sp_streq(conv, "to_str") ? "sp_obj_to_str_answer("
           : NULL;  /* #to_path is wrapped by its own site, not here */
-  if (nil_string) unbox = "sp_poly_arg_str_chk(sp_box_str(";
+  if (unbox && sp_streq(conv, "to_str")) {
+    const char *rn = ty_is_object(t) ? class_ruby_name(c, ty_object_class(t)) : NULL;
+    snprintf(str_tail, sizeof str_tail, ", \"%s\")", rn ? rn : "Object");
+    tail = str_tail;
+  }
+  if (nil_string) { unbox = "sp_poly_arg_str_chk(sp_box_str("; tail = "))"; }
   /* a #to_int whose answer can be nil answers its oint: a nil is the
      conversion's TypeError, any other the Integer */
   if (!unbox && mi_c >= 0 && sp_streq(conv, "to_int") && c->scopes[mi_c].ret == TY_INT &&
@@ -1276,7 +1285,7 @@ static void emit_obj_conv_call_inline(Compiler *c, int node, TyKind t, int def, 
     if (mi_c >= 0) emit_conv_dflt_args(c, mi_c, b);
     buf_puts(b, "); })");
     free(pre.p); free(val.p);
-    if (unbox) buf_puts(b, nil_string ? "))" : ")");
+    if (unbox) buf_puts(b, tail);
     return;
   }
   buf_printf(b, "%s(", mc_method(c, &c->scopes[mi_c]));
@@ -1286,7 +1295,7 @@ static void emit_obj_conv_call_inline(Compiler *c, int node, TyKind t, int def, 
   buf_puts(b, ")");
   if (mi_c >= 0) emit_conv_dflt_args(c, mi_c, b);
   buf_puts(b, ")");
-  if (unbox) buf_puts(b, nil_string ? "))" : ")");
+  if (unbox) buf_puts(b, tail);
 }
 
 /* Is `node` an argument of a builtin class's arm that

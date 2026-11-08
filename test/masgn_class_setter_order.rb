@@ -82,3 +82,10 @@ class O
   private def c=(v); puts "private c=#{v.inspect}"; end
 end
 O.new("s").run
+
+# a rest that cannot move (a setter on a computed receiver) stays in the
+# assignment, and the class setters still move
+class Keep; attr_accessor :v; end
+def mk = (@mk ||= Keep.new)
+K.b, *mk.v = 1, 2, 3
+p mk.v

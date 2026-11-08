@@ -3635,7 +3635,7 @@ static int masgn_class_setters_movable(Compiler *c, int id) {
       if (!seen) continue;
       if (nt_kind(nt, t) != NK_SplatNode) continue;
       int e = nt_ref(nt, t, "expression");
-      if (e >= 0 && !masgn_late_target(c, id, e)) return 0;
+      if (e >= 0 && !masgn_late_target(c, id, e)) return 1;   /* it stays; only the class setters move */
       continue;
     }
     if (!seen && masgn_class_setter_target(nt, t)) seen = 1;

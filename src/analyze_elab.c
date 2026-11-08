@@ -7913,6 +7913,22 @@ int elab_main_method_vis_at(Compiler *c, int node, const char *name) {
       elab_own_method_at(c, LR_MAIN, name, p) != ELAB_YES)
     return -1;
   int v = elab_method_vis_at(c, LR_MAIN, name, 0, p);
+  /* A visibility word in a reopened Object (`class Object; private :m;
+     end`) changes main's method too, but the record files it in Object's
+     own history: the later of the two last entries before p counts.
+     Where Object's entries are not sure, main's answer stays. */
+  int oc = comp_core_class(c, CORE_OBJECT);
+  const LrHist *oh = oc >= 0 ? lr_hist(c->lrec, oc, 0, name, 0) : NULL;
+  const LrDef *od = NULL, *md = NULL;
+  int oo = oh ? lr_last_before(c, oh, p, 0, 0, &od) : ELAB_NO;
+  if (oo == ELAB_YES && od->kind != LR_VIS) return -1;
+  /* (a change under a condition: main's own answer, as before) */
+  if (oo == ELAB_YES) {
+    if (lr_last_before(c, lr_hist(c->lrec, LR_MAIN, 0, name, 0), p, 0, 0, &md) != ELAB_YES || !md) return -1;
+    int ord = elab_cmp(elab_point_of(c, md->node), elab_point_of(c, od->node));
+    if (ord != PROG_BEFORE && ord != PROG_AFTER) return -1;
+    if (ord == PROG_BEFORE) v = od->vis;
+  }
   return v == SP_VIS_PUBLIC ? 1 : v == SP_VIS_PROTECTED ? 2 : v == SP_VIS_PRIVATE ? 4 : -1;
 }
 

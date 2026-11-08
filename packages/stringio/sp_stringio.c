@@ -150,15 +150,27 @@ void sp_StringIO_puts(sp_StringIO *s, const char *str) { int64_t l = (int64_t)sp
 void sp_StringIO_puts_empty(sp_StringIO *s) { sio_write(s, "\n", 1); }
 void sp_StringIO_print(sp_StringIO *s, const char *str) { sio_write(s, str, (int64_t)sp_str_byte_len(str)); }
 sp_int sp_StringIO_putc(sp_StringIO *s, sp_int ch) { char c = (char)(ch & 0xFF); sio_write(s, &c, 1); return ch; }
-const char *sp_StringIO_read(sp_StringIO *s) {SP_GC_ROOT(s); sio_check_read(s); sio_sync(s); if (s->pos >= s->len) return sp_str_empty; size_t rem = s->len - s->pos; char *r = sp_str_alloc(rem); memcpy(r, s->buf + s->pos, rem); r[rem] = 0; s->pos = s->len; return r; }
+/* Is the buffer binary: the shared handle's own mark, or a borrowed
+   String's header */
+static int sio_is_binary(sp_StringIO *s) { return s->str ? (int)s->str->binary : s->borrowed && sp_str_is_binary(s->buf); }
+/* A new String of n bytes from p, BINARY when bin (CRuby: read with a
+   length answers ASCII-8BIT, read and gets the buffer's own encoding, #11344) */
+static char *sio_take(const char *p, int64_t n, int bin) {
+  char *r = sp_str_alloc_raw(n + 1); if (n > 0) memcpy(r, p, (size_t)n); r[n] = '\0'; sp_str_set_len(r, (size_t)n);
+  if (bin) sp_str_mark_binary(r);
+  return r;
+}
+const char *sp_StringIO_read(sp_StringIO *s) {SP_GC_ROOT(s); sio_check_read(s); sio_sync(s); int bin = sio_is_binary(s);
+  if (s->pos >= s->len) return bin ? sio_take("", 0, 1) : sp_str_empty;
+  int64_t rem = s->len - s->pos; char *r = sio_take(s->buf + s->pos, rem, bin); s->pos = s->len; return r; }
 /* read(n): nil at the end for a positive n, "" for read(0), and an
    ArgumentError for a negative n (CRuby) */
 const char *sp_StringIO_read_n(sp_StringIO *s, sp_int n) {SP_GC_ROOT(s);
   sio_check_read(s);
   if (n < 0) sp_raise_cls("ArgumentError", sp_sprintf("negative length %lld given", (long long)n));
   sio_sync(s);
-  if (s->pos >= s->len) return n > 0 ? NULL : sp_str_empty; int64_t rem = s->len - s->pos; if (n > rem) n = rem; char *r = sp_str_alloc_raw(n+1); memcpy(r, s->buf + s->pos, n); r[n] = '\0'; sp_str_set_len(r, (size_t)n); s->pos += n; return r; }
-const char *sp_StringIO_gets(sp_StringIO *s) {SP_GC_ROOT(s); sio_check_read(s); sio_sync(s); if (s->pos >= s->len) return NULL; const char *st = s->buf + s->pos; const char *nl = memchr(st, '\n', s->len - s->pos); int64_t ll = nl ? (nl - st) + 1 : s->len - s->pos; char *r = sp_str_alloc_raw(ll+1); memcpy(r, st, ll); r[ll] = '\0'; sp_str_set_len(r, (size_t)ll); s->pos += ll; s->lineno++; return r; }
+  if (s->pos >= s->len) return n > 0 ? NULL : sio_take("", 0, 1); int64_t rem = s->len - s->pos; if (n > rem) n = rem; char *r = sio_take(s->buf + s->pos, n, 1); s->pos += n; return r; }
+const char *sp_StringIO_gets(sp_StringIO *s) {SP_GC_ROOT(s); sio_check_read(s); sio_sync(s); if (s->pos >= s->len) return NULL; const char *st = s->buf + s->pos; const char *nl = memchr(st, '\n', s->len - s->pos); int64_t ll = nl ? (nl - st) + 1 : s->len - s->pos; char *r = sio_take(st, ll, sio_is_binary(s)); s->pos += ll; s->lineno++; return r; }
 /* The byte length of the character at p, n bytes available: a whole UTF-8
    sequence, or one byte where the sequence is malformed or cut short (CRuby
    hands those out a byte at a time). A binary buffer is bytes only. */
@@ -179,7 +191,7 @@ static int64_t sio_char_len(const char *p, int64_t n, int binary) {
 const char *sp_StringIO_getc(sp_StringIO *s) {SP_GC_ROOT(s); sio_check_read(s); sio_sync(s); if (s->pos >= s->len) return NULL;
   /* a binary String is read a byte at a time: the shared handle's own
      mark, or a borrowed String's header */
-  int binary = s->str ? (int)s->str->binary : s->borrowed && sp_str_is_binary(s->buf);
+  int binary = sio_is_binary(s);
   int64_t cl = sio_char_len(s->buf + s->pos, s->len - s->pos, binary);
   char *gc = sp_str_alloc_raw(cl + 1); memcpy(gc, s->buf + s->pos, cl); gc[cl] = '\0'; sp_str_set_len(gc, (size_t)cl); s->pos += cl; return gc; }
 sp_RbVal sp_StringIO_getbyte(sp_StringIO *s) { sio_check_read(s); sio_sync(s); if (s->pos >= s->len) return sp_box_nil(); return sp_box_int((int64_t)(unsigned char)s->buf[s->pos++]); }

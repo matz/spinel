@@ -21,6 +21,7 @@ on:
     branches: [master]
     paths:
       - 'lib/win32/**'
+      - 'lib/sp_alloc.c'
       - 'win32.mk'
       - 'common.mk'
       - 'docs/windows.md'
@@ -75,4 +76,5 @@ jobs:
         run: |
           printf 'a = "x" * 10\nGC.start\n100_000.times { |i| s = "item #{i}" }\nputs "collected"\n' > gc_smoke.rb
           bin/spinel gc_smoke.rb -o gc_smoke.exe
-          test "$(timeout 60 ./gc_smoke.exe)" = "collected"
+          output="$(timeout 60 ./gc_smoke.exe)" &&
+          test "$output" = "collected"

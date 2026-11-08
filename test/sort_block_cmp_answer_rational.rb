@@ -34,3 +34,11 @@ p x < y, x <= y, x > y, x >= y, x == z, x == y
 p y.between?(x, VR.new(3)), y.clamp(x, x)
 p VB.new(1) < VB.new(2), VB.new(2).between?(VB.new(1), VB.new(2))
 p a.sort, b.max
+# a Rational <=> whose operand is a String
+class VS
+  include Comparable
+  def initialize(n) = (@n = n)
+  def <=>(o) = Rational(@n - o.size, 3)
+end
+p VS.new(3) < "ab", VS.new(1) < "ab", VS.new(2) == "ab", VS.new(3).between?("a", "abcd")
+p VS.new(2).clamp("abc", "abcd").size

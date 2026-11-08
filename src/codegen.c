@@ -16924,6 +16924,8 @@ static void emit_obj_comparable_dispatch(Compiler *c, Buf *b) {
    sort/min/max/clamp) can order user objects. Only object- and poly-typed
    operands are handled; an exotic operand type omits its arm and falls through
    to not-comparable, which the callers raise as an ArgumentError. */
+static int user_dispatch_arg(Compiler *c, Scope *m, int pi, const char *v,
+                             char *guard, size_t gsz, char *arg, size_t asz);
 static void emit_obj_cmp_dispatch(Compiler *c, Buf *b) {
   buf_puts(b, "static sp_int sp_obj_cmp_dispatch(sp_RbVal a, sp_RbVal b, sp_bool *comparable) {\n");
   emit_hook_object_root(b, "SP_GC_ROOT_RBVAL", "a");
@@ -16975,6 +16977,7 @@ static void emit_obj_cmp_dispatch(Compiler *c, Buf *b) {
     int pcid = -1;
     const char *scalar_guard = NULL;  /* operand tag a scalar-typed param requires */
     const char *builtin_guard = NULL; /* operand cls_id a boxed-builtin param requires */
+    char str_guard[160] = "";         /* the test a String-typed param requires */
     if (ty_is_object(pt)) {
       int pcls = ty_object_class(pt);
       const char *pcn = c->classes[pcls].c_name;
@@ -17012,6 +17015,11 @@ static void emit_obj_cmp_dispatch(Compiler *c, Buf *b) {
     else if (pt == TY_TIME) {
       builtin_guard = "SP_BUILTIN_TIME";
       snprintf(argbuf, sizeof argbuf, "(sp_Time *)b.v.p");
+    }
+    /* a String operand param (`def <=>(o) = Rational(@n - o.size, 3)`
+       compared with "ab"): the boxed String, as user_dispatch_arg takes it */
+    else if (pt == TY_STRING || pt == TY_STRBUF) {
+      if (!user_dispatch_arg(c, m, api, "b", str_guard, sizeof str_guard, argbuf, sizeof argbuf)) continue;
     }
     else {
       continue;
@@ -17062,6 +17070,8 @@ static void emit_obj_cmp_dispatch(Compiler *c, Buf *b) {
       buf_printf(b, "      if (b.tag != %s) { *comparable = FALSE; return 0; }\n", scalar_guard);
     if (builtin_guard)
       buf_printf(b, "      if (!(b.tag == SP_TAG_OBJ && b.cls_id == %s)) { *comparable = FALSE; return 0; }\n", builtin_guard);
+    if (str_guard[0])
+      buf_printf(b, "      if (!(%s)) { *comparable = FALSE; return 0; }\n", str_guard);
     if (builds) buf_puts(b, "      SP_GC_ROOT_RBVAL(b);\n");
     if (pre.p && pre.p[0]) buf_printf(b, "      %s\n", pre.p);
     if (non_numeric) {

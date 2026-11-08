@@ -1,3 +1,4 @@
+# spinel: gc-stress
 # A further layer of kilau's K-029/K-030/K-033 family: clear/compact/to_a/
 # entries/fetch_values on a Hash site beside Array ones, clear on a String
 # site too, several Array-only names (concat/deconstruct/difference/

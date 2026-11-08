@@ -1,3 +1,4 @@
+# spinel: gc-stress
 # A class that takes a module's method after the class is first defined:
 # the method a dynamic send reaches on it, with a block and no arguments
 class Box

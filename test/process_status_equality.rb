@@ -1,3 +1,4 @@
+# spinel: gc-stress
 # Process::Status#== compares the status word: with another status (`$? ==
 # $?`, `Process.last_status == $?`), an Integer or a Float; any other value
 # is unequal, and nil ($? before any child) equals only nil. Two statuses

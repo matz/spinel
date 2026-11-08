@@ -1,3 +1,4 @@
+# spinel: gc-stress
 # Process.spawn spreads a splat into the command and its arguments at run
 # time, as the literal list is, and runs [program, argv0] with argv0 as the
 # program's argv[0] (#7192).

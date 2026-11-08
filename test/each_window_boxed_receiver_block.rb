@@ -1,3 +1,4 @@
+# spinel: gc-stress
 # each_slice / each_cons on a parameter one caller passes an Integer Array
 # and another an Array of untyped elements: the boxed receiver hands its
 # windows out as Arrays of boxed values, and the block reads them so

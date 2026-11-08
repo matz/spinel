@@ -1,0 +1,11 @@
+"hi 1"
+3
+6
+:secret
+"hi 2"
+"hi 3"
+private method 'secret' called for an instance of Base
+"hey!"
+"hi 4!"
+[:direct, "hi 5"]
+-1

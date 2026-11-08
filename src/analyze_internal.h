@@ -729,7 +729,6 @@ const char *errno_canonical_name(const char *n);   /* analyze_util.c */
 void desugar_class_reopen(Compiler *c);
 int is_class_const(const NodeTable *nt, int id);   /* a `Class` constant read */
 int desugar_def_unless_method_defined(Compiler *c);
-int desugar_class_body_self_calls(Compiler *c);
 int desugar_builtins(Compiler *c);
 int desugar_enum_walk_calls(Compiler *c);
 int desugar_index_op_write_user(Compiler *c);
@@ -770,7 +769,6 @@ int desugar_index_assign_user_recv(Compiler *c);
 int desugar_index_assign_value(Compiler *c);
 int desugar_io_console_modes(Compiler *c);
 int desugar_reader_index_write(Compiler *c);
-int desugar_body_self_call(Compiler *c);
 int desugar_body_module_eval(Compiler *c);
 int desugar_instance_eval_defs(Compiler *c);
 int enumerator_own_with_object(Compiler *c, int id);

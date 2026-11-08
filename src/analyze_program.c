@@ -583,6 +583,14 @@ int prog_stmt_call_executable(Compiler *c, int id, int ci) {
      and nothing said so (#4051). */
   if (!is_user && cn && ci >= 0)
     is_user = call_target(c, id, ci, cn, CT_CMETHOD, NULL) >= 0;
+  /* ...and so is one that finds none of the program's methods of its name
+     where it runs (`zz` before `def self.zz`): CRuby's NameError there
+     (cplan_missing) */
+  if (!is_user && cn && ci >= 0 && !is_class_body_acting_name(cn) && !blk_arg) {
+    char st[160];
+    int an = -1;
+    is_user = cplan_missing(c, id, st, sizeof st, &an) != CM_NONE;
+  }
   return is_class_body_acting_name(cn) || is_user || blk_arg;
 }
 

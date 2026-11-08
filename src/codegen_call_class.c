@@ -2539,6 +2539,9 @@ int emit_call_cmethod_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
   /* Module.field = val  /  Module.field  -> singleton accessor sg_Mod_field */
   if (recv >= 0) {
     NodeKind rk = nt_kind(nt, recv);
+    /* (a class body's self is its class: `self.v = x`) */
+    int sci = rk == NK_SelfNode ? class_body_self_ci(c, recv) : -1;
+    if (sci >= 0 && c->classes[sci].name && emit_sg_accessor(c, id, sci, c->classes[sci].name, name, argc, argv, b)) return 1;
     if (rk == NK_ConstantReadNode || rk == NK_ConstantPathNode) {
       const char *cn = nt_str(nt, recv, "name");
       int ci = cn ? comp_class_index(c, cn) : -1;
@@ -2783,8 +2786,11 @@ int emit_call_cmethod_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
 int emit_call_const_cmethod_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv) {
   if (recv >= 0) {
     NodeKind rk = nt_kind(nt, recv);
-    if (rk == NK_ConstantReadNode || rk == NK_ConstantPathNode) {
-      int ci = const_node_class_index(c, recv);
+    /* (a class body's self is its class, as the constant would be) */
+    int bci = rk == NK_SelfNode ? class_body_self_ci(c, recv) : -1;
+    const char *rname = bci >= 0 ? c->classes[bci].name : nt_str(nt, recv, "name");
+    if (rk == NK_ConstantReadNode || rk == NK_ConstantPathNode || bci >= 0) {
+      int ci = bci >= 0 ? bci : const_node_class_index(c, recv);
       int defcls = -1, mi = -1;
       /* the target is the call's plan (call_plan.c): the constant's class
          method, or a method the program adds to Class (its owner, not the
@@ -2794,12 +2800,12 @@ int emit_call_const_cmethod_arms(Compiler *c, int id, Buf *b, const NodeTable *n
         mi = pl->mi;
         defcls = c->scopes[mi].class_id;
         if (g_plan_check) cplan_served("cmethod-on-constant");
-        if (pl->owner_ci != ci) ci = builtin_class_id(nt_str(nt, recv, "name"));
+        if (pl->owner_ci != ci) ci = builtin_class_id(rname);
       }
       /* --plan-check keeps the arm's own lookup as the assertion; without a
          plan it is the arm's answer */
       if (g_plan_check || mi < 0) {
-        int oci = const_node_class_index(c, recv);
+        int oci = bci >= 0 ? bci : const_node_class_index(c, recv);
         MethodLookup ml = { .def_class = -1 };
         /* (a `new`: the one the call reaches, cplan_user_new, which may be
            the builtin constructor ahead of a later `def self.new`) */
@@ -2808,7 +2814,7 @@ int emit_call_const_cmethod_arms(Compiler *c, int id, Buf *b, const NodeTable *n
         if (omi >= 0 && is_new_name(name)) odef = c->scopes[omi].class_id;
         if (omi < 0 && (omi = class_reopen_cmethod(c, id, recv, name)) >= 0) {
           odef = c->scopes[omi].class_id;
-          oci = builtin_class_id(nt_str(nt, recv, "name"));
+          oci = builtin_class_id(rname);
         }
         if (mi < 0) {
           /* a method the plan did not serve */
@@ -4659,7 +4665,10 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
       if (is_false_arg) {
         const char *cn2 = nt_kind(nt, recv) == NK_ConstantReadNode
                           ? nt_str(nt, recv, "name") : NULL;
-        int ci2 = cn2 ? comp_class_index(c, cn2) : view_class_is(c, recv, ELAB_GAIN_METHODS);   /* or a class-tag arm's */
+        /* (a class body's self names its class, class_recv_static_ci) */
+        int ci2 = nt_kind(nt, recv) == NK_SelfNode ? class_body_self_ci(c, recv)
+                : cn2 ? comp_class_index(c, cn2) : view_class_is(c, recv, ELAB_GAIN_METHODS);   /* or a class-tag arm's */
+        if (ci2 < 0 && nt_kind(nt, recv) == NK_SelfNode) ci2 = view_class_is(c, recv, ELAB_GAIN_METHODS);
         if (ci2 >= 0) {
           ReflNames r = {0};
           /* a module's own: what it answers for itself, not what an
@@ -5164,6 +5173,8 @@ int emit_call_class_method_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
                       ? call_target(c, id, ecls, name, CT_CMETHOD, NULL) >= 0
                       : (call_target(c, id, ecls, name, 0, NULL) >= 0 ||
                          comp_is_reader(&c->classes[ecls], name)));
+    /* (so does a class or module body's own class method, comp_cbody_call_mi) */
+    if (!shadowed && g_ie_class_id < 0 && ecls < 0 && comp_cbody_call_mi(c, id, name) >= 0) shadowed = 1;
     /* a descendant of self's class overrides the def (cplan_self_root_override) */
     if (!shadowed && g_ie_class_id < 0 && (g_emitting_class_id < 0 || g_emitting_class_id == ecls) &&
         cplan_root_switch(c, id, ecls)) shadowed = 1;

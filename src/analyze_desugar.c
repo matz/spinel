@@ -1077,42 +1077,6 @@ int desugar_body_module_eval(Compiler *c) {
   return changed;
 }
 
-/* ---- `self.m(...)` in a class or module body --------------------------------
-   A statement of a class or module body runs with `self` the class object,
-   so `self.m(...)` there is the class's own method: activesupport's
-   IsolatedExecutionState sets `self.isolation_level = :thread` in its body
-   after defining the writer in `class << self`. The call's receiver becomes
-   the class's constant, which the class-method dispatch already serves
-   (`Mod.m`); the bare `m` form was served all along. Runs in the fixpoint,
-   after the scope pass has recorded each node's enclosing body. */
-int desugar_body_self_call(Compiler *c) {
-  NodeTable *nt = (NodeTable *)c->nt;
-  int n0 = nt->count, changed = 0;
-  for (int id = 0; id < n0; id++) {
-    if (nt_kind(nt, id) != NK_CallNode) continue;
-    int recv = nt_ref(nt, id, "receiver");
-    if (recv < 0 || nt_kind(nt, recv) != NK_SelfNode) continue;
-    /* self in a `class << X` body is X's singleton class, not X */
-    if (nt_int(nt, recv, "sclass_value", 0)) continue;
-    /* a rebindable block's self is whatever instance_exec binds, and an
-       instance_eval block's self is its receiver */
-    if (nt_int(nt, recv, "ie_rself", 0) || nt_int(nt, recv, "ie_self", 0)) continue;
-    int cb = self_class_body(c, recv);
-    if (cb < 0 || !c->classes[cb].name) continue;
-    long long line = nt_int(nt, recv, "node_line", 0), file = nt_int(nt, recv, "node_file", 0),
-              col = nt_int(nt, recv, "node_col", 0);
-    nt_node_reset(nt, recv, "ConstantReadNode");
-    nt_node_set_str(nt, recv, "name", c->classes[cb].name);
-    nt_node_set_int(nt, recv, "node_line", line);
-    nt_node_set_int(nt, recv, "node_file", file);
-    nt_node_set_int(nt, recv, "node_col", col);
-    nt_node_set_int(nt, id, "self_call", 1);   /* still a call on self: a private class method answers it */
-    changed = 1;
-  }
-  return changed;
-}
-
-
 /* ---- `extend self` in a module body --------------------------------------
    Every instance method the module defines is also the module's own:
    `Inflector.underscore(name)` beside `include Inflector; underscore(name)`.
@@ -7146,7 +7110,9 @@ static int dsend_in_def_self(Compiler *c, int n) {
 static int dsend_class_recv(Compiler *c, int send, int recv) {
   const NodeTable *nt = c->nt;
   NodeKind rk = nt_kind(nt, recv);
-  if (rk == NK_SelfNode) return dsend_in_def_self(c, send) ? comp_scope_of(c, send)->class_id : -1;
+  if (rk == NK_SelfNode && dsend_in_def_self(c, send)) return comp_scope_of(c, send)->class_id;
+  /* (self in a class or module body is that class, as a constant naming it is) */
+  if (rk == NK_SelfNode) return class_body_self_ci(c, recv);
   if (rk == NK_ConstantReadNode || rk == NK_ConstantPathNode) {
     const char *cn = nt_str(nt, recv, "name");
     return cn ? comp_class_index(c, cn) : -1;
@@ -23612,35 +23578,21 @@ static int cb_body_defs(const NodeTable *nt, int body, const char *nm) {
   }
   return 0;
 }
-/* A definition of `nm` class `cname` answers on itself: its class method
-   (`def self.nm` in a body of it, `def Cname.nm`), one in a `class << self`
-   of its body, or one a reopened Module, Class, Object, Kernel or
-   BasicObject gives every class. Another class's instance method of the
-   name (activesupport's DeprecationProxy delegates instance_methods) is no
+/* A definition of `nm` that class `cname` answers on itself and the plan
+   does not find where the call runs: one a reopened Module, Class, Object,
+   Kernel or BasicObject gives every class. The class's own class methods
+   (`def self.nm`, `def Cname.nm`, a `class << self` def) are left to the
+   plan, which finds the def at the call's point (call_target), as it finds
+   an inherited one. Another class's instance method of the name
+   (activesupport's DeprecationProxy delegates instance_methods) is no
    answer of this class's. Without a class name (a Struct.new block), any
    class method or singleton-class def of the name counts. */
-static int cb_class_side_defs(const NodeTable *nt, int body, const char *nm) {
-  int bn = 0; const int *bb = body >= 0 && nt_kind(nt, body) == NK_StatementsNode ? nt_arr(nt, body, "body", &bn) : NULL;
-  for (int i = 0; i < bn; i++) {
-    int st = bb[i];
-    if (nt_kind(nt, st) == NK_SingletonClassNode && cb_body_defs(nt, nt_ref(nt, st, "body"), nm)) return 1;
-    if (nt_kind(nt, st) == NK_CallNode && nt_ref(nt, st, "receiver") < 0) {
-      int a = nt_ref(nt, st, "arguments"), an = 0;
-      const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &an) : NULL;
-      if (an == 1 && nt_kind(nt, av[0]) == NK_DefNode) st = av[0];
-    }
-    if (nt_kind(nt, st) == NK_DefNode && nt_str(nt, st, "name") && sp_streq(nt_str(nt, st, "name"), nm) &&
-        nt_ref(nt, st, "receiver") >= 0 && nt_kind(nt, nt_ref(nt, st, "receiver")) == NK_SelfNode) return 1;
-  }
-  return 0;
-}
 static int cb_program_defines(const NodeTable *nt, const char *nm, const char *cname) {
-  NT_FOREACH_KIND(nt, NK_DefNode, d) {
-    if (!nt_str(nt, d, "name") || !sp_streq(nt_str(nt, d, "name"), nm)) continue;
-    int r = nt_ref(nt, d, "receiver");
-    if (r < 0) continue;
-    if (!cname) return 1;
-    if (nt_kind(nt, r) == NK_ConstantReadNode && nt_str(nt, r, "name") && sp_streq(nt_str(nt, r, "name"), cname)) return 1;
+  if (!cname) {
+    NT_FOREACH_KIND(nt, NK_DefNode, d) {
+      if (!nt_str(nt, d, "name") || !sp_streq(nt_str(nt, d, "name"), nm)) continue;
+      if (nt_ref(nt, d, "receiver") >= 0) return 1;
+    }
   }
   if (!cname) {
     NT_FOREACH_KIND(nt, NK_SingletonClassNode, sc)
@@ -23655,7 +23607,6 @@ static int cb_program_defines(const NodeTable *nt, const char *nm, const char *c
       int root = 0;
       for (int r = 0; roots[r] && !root; r++) root = sp_streq(cnm, roots[r]);
       if (root && cb_body_defs(nt, class_def_body(nt, cn), nm)) return 1;
-      if (cname && sp_streq(cnm, cname) && cb_class_side_defs(nt, class_def_body(nt, cn), nm)) return 1;
     }
   }
   return 0;
@@ -30415,22 +30366,8 @@ int sce_graft_text(Compiler *c, HostStep *h, int owner, const char *text, int si
   return r;
 }
 
-/* ---- a class body's calls of its own class methods ----
-   In `class Sub < Base; self.v = 1; p v; end` self is Sub, and an inherited
-   class method it calls runs for Sub: a class-level @ivar it touches is
-   Sub's own. The body's code is emitted outside any method, where a
-   `self.` receiver -- or none -- reached the defining class's generic copy,
-   so Sub's `self.v = 1` wrote Base's @v. Such a call takes the class's
-   constant as its receiver, the form `Sub.v = 1` from outside already
-   compiles right: an explicit `self.` one or a bare one, whose name a
-   class method of the class or a superclass defines. Nested defs, classes
-   and singleton classes are not entered, nor blocks whose self is another
-   object (class_eval, instance_eval, define_method, ...). */
-/* A class's name as the program spells it, qualified by the modules and
-   classes it is nested in lexically (`module M; class A::B` is "M::A::B",
-   `class ::C` is "C"): two classes of one leaf name in different namespaces
-   are different classes. A constant path it can't spell is NULL. */
-typedef struct { char **qual; char **outer; int *cls; int ncls, n; } CbsNames;
+/* A constant path's text as the program spells it (`A::B`, `::C` with
+   *rooted set): a path it can't spell is 0. */
 static int cbs_path_text(const NodeTable *nt, int p, char *buf, size_t cap, int *rooted) {
   if (p < 0) return 0;
   NodeKind k = nt_kind(nt, p);
@@ -30449,148 +30386,6 @@ static int cbs_path_text(const NodeTable *nt, int p, char *buf, size_t cap, int 
   if (strlen(buf) + strlen(nm) + 1 > cap) return 0;
   strcat(buf, nm);
   return 1;
-}
-static char *cbs_qualify(const NodeTable *nt, int path, const char *outer) {
-  char t[512]; int rooted = 0;
-  if (!cbs_path_text(nt, path, t, sizeof t, &rooted)) return NULL;
-  if (rooted || !outer || !*outer) return strdup(t);
-  size_t l = strlen(outer) + strlen(t) + 3;
-  char *q = malloc(l);
-  snprintf(q, l, "%s::%s", outer, t);
-  return q;
-}
-static void cbs_name_walk(const NodeTable *nt, CbsNames *q, int n, const char *outer, int depth) {
-  if (n < 0 || n >= q->n || depth > 4096) return;
-  NodeKind k = nt_kind(nt, n);
-  if (k == NK_ClassNode || k == NK_ModuleNode) {
-    char *qn = cbs_qualify(nt, nt_ref(nt, n, "constant_path"), outer);
-    if (!qn) return;   /* a namespace it can't spell: its classes are left alone */
-    if (k == NK_ClassNode) {
-      q->qual[n] = qn; q->outer[n] = outer ? strdup(outer) : NULL;
-      q->cls[q->ncls++] = n;
-    }
-    cbs_name_walk(nt, q, nt_ref(nt, n, "body"), qn, depth + 1);
-    if (k != NK_ClassNode) free(qn);
-    return;
-  }
-  const SpNode *nd = &nt->nodes[n];
-  for (int j = 0; j < nd->nr; j++) cbs_name_walk(nt, q, nd->r[j].ref, outer, depth + 1);
-  for (int j = 0; j < nd->na; j++)
-    for (int i = 0; i < nd->a[j].n; i++) cbs_name_walk(nt, q, nd->a[j].ids[i], outer, depth + 1);
-}
-/* the qualified name of the program class the superclass expression `sc`,
-   written inside `outer`, names: looked up from the innermost namespace out,
-   as a constant is; NULL for a class the program does not define */
-static const char *cbs_resolve_super(const NodeTable *nt, const CbsNames *q, int sc, const char *outer) {
-  char t[512], cand[1024]; int rooted = 0;
-  if (!cbs_path_text(nt, sc, t, sizeof t, &rooted)) return NULL;
-  char pre[512]; snprintf(pre, sizeof pre, "%s", rooted || !outer ? "" : outer);
-  for (;;) {
-    if (*pre) snprintf(cand, sizeof cand, "%s::%s", pre, t);
-    else snprintf(cand, sizeof cand, "%s", t);
-    for (int i = 0; i < q->ncls; i++)
-      if (sp_streq(q->qual[q->cls[i]], cand)) return q->qual[q->cls[i]];
-    if (!*pre) return NULL;
-    char *cut = strrchr(pre, ':');
-    if (cut && cut > pre) cut[-1] = '\0';
-    else pre[0] = '\0';
-  }
-}
-/* does a body of class `cls` (qualified), or of a superclass, define a
-   class method `m` (`def self.m` or in `class << self`)? */
-static int cbs_cmethod_defined(const NodeTable *nt, const CbsNames *q, const char *cls, const char *m, int depth) {
-  if (!cls || depth > 16) return 0;
-  const char *super = NULL;
-  for (int i = 0; i < q->ncls; i++) {
-    int n = q->cls[i];
-    if (!sp_streq(q->qual[n], cls)) continue;
-    if (!super && nt_ref(nt, n, "superclass") >= 0)
-      super = cbs_resolve_super(nt, q, nt_ref(nt, n, "superclass"), q->outer[n]);
-    int b = nt_ref(nt, n, "body");
-    int bn = 0; const int *bs = b >= 0 && nt_kind(nt, b) == NK_StatementsNode ? nt_arr(nt, b, "body", &bn) : NULL;
-    for (int k = 0; k < bn; k++) {
-      int st = bs[k];
-      if (nt_kind(nt, st) == NK_DefNode && nt_ref(nt, st, "receiver") >= 0 &&
-          nt_kind(nt, nt_ref(nt, st, "receiver")) == NK_SelfNode && nt_str(nt, st, "name") &&
-          sp_streq(nt_str(nt, st, "name"), m)) return 1;
-      if (nt_kind(nt, st) == NK_SingletonClassNode) {
-        int sb = nt_ref(nt, st, "body");
-        int sn = 0; const int *ss = sb >= 0 && nt_kind(nt, sb) == NK_StatementsNode ? nt_arr(nt, sb, "body", &sn) : NULL;
-        for (int r = 0; r < sn; r++)
-          if (nt_kind(nt, ss[r]) == NK_DefNode && nt_str(nt, ss[r], "name") && sp_streq(nt_str(nt, ss[r], "name"), m)) return 1;
-      }
-    }
-  }
-  return super ? cbs_cmethod_defined(nt, q, super, m, depth + 1) : 0;
-}
-static int cbs_self_changing_block_call(const NodeTable *nt, int call) {
-  static const char *const names[] = { "class_eval", "module_eval", "class_exec", "module_exec",
-    "instance_eval", "instance_exec", "define_method", "define_singleton_method", "new", NULL };
-  const char *nm = nt_str(nt, call, "name");
-  for (int i = 0; nm && names[i]; i++) if (sp_streq(nm, names[i])) return 1;
-  return 0;
-}
-static int cbs_walk(Compiler *c, const CbsNames *q, int n, int cls_node, const char *cls) {
-  NodeTable *nt = (NodeTable *)c->nt;
-  if (n < 0) return 0;
-  NodeKind k = nt_kind(nt, n);
-  if (k == NK_DefNode || k == NK_ClassNode || k == NK_ModuleNode || k == NK_SingletonClassNode) return 0;
-  int changed = 0;
-  if (k == NK_CallNode) {
-    int recv = nt_ref(nt, n, "receiver");
-    const char *nm = nt_str(nt, n, "name");
-    /* only a class method the program defines: a builtin one (singleton_class,
-       instance_method, attr_accessor, ...) keeps the self or bare form its
-       own desugars look for */
-    int retarget = nm && (recv < 0 || nt_kind(nt, recv) == NK_SelfNode) && cbs_cmethod_defined(nt, q, cls, nm, 0);
-    if (retarget) {
-      int cp = nt_clone_subtree(nt, nt_ref(nt, cls_node, "constant_path"));
-      if (cp >= 0) {
-        comp_grow_node_arrays(c); c->nscope[cp] = c->nscope[n]; nt_node_set_ref(nt, n, "receiver", cp);
-        /* still a call on self: a private class method answers it */
-        nt_node_set_int(nt, n, "self_call", 1);
-        changed = 1;
-      }
-    }
-    if (nt_ref(nt, n, "block") >= 0 && cbs_self_changing_block_call(nt, n)) {
-      /* the block's self is another object: only the receiver and arguments are ours */
-      changed |= cbs_walk(c, q, nt_ref(nt, n, "receiver"), cls_node, cls);
-      changed |= cbs_walk(c, q, nt_ref(nt, n, "arguments"), cls_node, cls);
-      return changed;
-    }
-  }
-  const SpNode *nd = &nt->nodes[n];
-  int nr = nd->nr;
-  int refs[64]; if (nr > 64) nr = 64;
-  for (int j = 0; j < nr; j++) refs[j] = nd->r[j].ref;
-  for (int j = 0; j < nr; j++) changed |= cbs_walk(c, q, refs[j], cls_node, cls);
-  for (int j = 0; j < nt->nodes[n].na; j++) {
-    int an = nt->nodes[n].a[j].n;
-    if (an <= 0) continue;  /* an empty array's ids may be NULL: memcpy from NULL is UB */
-    int *ids = malloc(sizeof(int) * (size_t)(an + 1));
-    memcpy(ids, nt->nodes[n].a[j].ids, sizeof(int) * (size_t)an);
-    for (int r = 0; r < an; r++) changed |= cbs_walk(c, q, ids[r], cls_node, cls);
-    free(ids);
-  }
-  return changed;
-}
-int desugar_class_body_self_calls(Compiler *c) {
-  NodeTable *nt = (NodeTable *)c->nt;
-  int changed = 0, n0 = nt->count;
-  CbsNames q;
-  q.n = n0; q.ncls = 0;
-  q.qual = calloc((size_t)n0 + 1, sizeof(char *));
-  q.outer = calloc((size_t)n0 + 1, sizeof(char *));
-  q.cls = calloc((size_t)n0 + 1, sizeof(int));
-  for (int r = 0; r < nt_nroots(nt); r++) cbs_name_walk(nt, &q, nt_root(nt, r), NULL, 0);   /* each file's tree */
-  int ncls = q.ncls;
-  for (int i = 0; i < ncls; i++) {
-    int cl = q.cls[i];
-    changed |= cbs_walk(c, &q, nt_ref(nt, cl, "body"), cl, q.qual[cl]);
-  }
-  for (int i = 0; i < n0; i++) { free(q.qual[i]); free(q.outer[i]); }
-  free(q.qual); free(q.outer); free(q.cls);
-  return changed;
 }
 
 /* `self.class` in an instance method of a reopened builtin -- a Hash, an

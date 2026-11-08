@@ -6408,9 +6408,11 @@ static int infer_class_module_call(Compiler *c, int id, const NodeTable *nt, con
   /* Module.singleton_writer= / Module.singleton_reader */
   if (recv >= 0 && nt_type(nt, recv) &&
       (nt_kind(nt, recv) == NK_ConstantReadNode ||
-       nt_kind(nt, recv) == NK_ConstantPathNode)) {
-    const char *cn = const_key_at(c, recv);
-    int ci = cn ? const_node_class_index(c, recv) : -1;
+       nt_kind(nt, recv) == NK_ConstantPathNode || class_body_self_ci(c, recv) >= 0)) {
+    /* (a class body's self names its class, as the constant would) */
+    int bci = class_body_self_ci(c, recv);
+    const char *cn = bci >= 0 ? c->classes[bci].name : const_key_at(c, recv);
+    int ci = bci >= 0 ? bci : cn ? const_node_class_index(c, recv) : -1;
     TyKind sgt;
     if (ci >= 0 && sg_accessor_type(c, id, ci, name, &sgt)) { *out = sgt; return 1; }
   }
@@ -6719,6 +6721,13 @@ static int infer_receiverless_call(Compiler *c, int id, const NodeTable *nt, con
 
   /* user-defined free-function call (no receiver) */
   if (recv < 0) {
+    /* in a class or module body, the body's own class method comes first,
+       as the call plan takes it (comp_cbody_call_mi); not where an
+       instance_eval block's receiver answers the name */
+    { int iec = ie_class_of(c, id);
+      int cb = nt_int(nt, id, "builtin_only", 0) || (iec >= 0 && iec < c->nclasses && call_target(c, id, iec, name, 0, NULL) >= 0)
+               ? -1 : comp_cbody_call_mi(c, id, name);
+      if (cb >= 0) { *out = an_user_call(c, id, cb, UC_CMETH, c->node_cbody[id]); return 1; } }
     int mi = nt_int(nt, id, "builtin_only", 0) ? -1 : call_target(c, id, -1, name, CT_TOP, NULL), fvia = UC_TOP;
     /* in a block run by instance_eval, the receiver's own method answers
        before a top-level def of the same name (#7213) */
@@ -6833,6 +6842,7 @@ static int infer_user_method_call(Compiler *c, int id, const NodeTable *nt, cons
   if (recv >= 0) {
     NodeKind rk = nt_kind(nt, recv);
     int sci = self_class_static_ci(c, recv);
+    if (sci < 0 && rk == NK_SelfNode) sci = class_body_self_ci(c, recv);   /* a class body's self */
     if (sci >= 0 || (rk == NK_ConstantReadNode || rk == NK_ConstantPathNode)) {
       int ci = sci >= 0 ? sci : const_node_class_index(c, recv);
       if (ci >= 0) {
@@ -9345,6 +9355,8 @@ static TyKind infer_call_inner(Compiler *c, int id) {
                         ? call_target(c, id, bcls, name, CT_CMETHOD, NULL) >= 0
                         : (call_target(c, id, bcls, name, 0, NULL) >= 0 ||
                            comp_is_reader(&c->classes[bcls], name)));
+      /* (so is a class or module body's own class method, comp_cbody_call_mi) */
+      if (!shadowed && biec < 0 && bcls < 0 && comp_cbody_call_mi(c, id, name) >= 0) shadowed = 1;
       /* A callee that yields carries a block parameter in its C signature,
          which the arm below is what establishes: answering here left the call
          site and the definition disagreeing about the signature. */

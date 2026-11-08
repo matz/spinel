@@ -1462,7 +1462,19 @@ int class_recv_static_ci(Compiler *c, int node) {
   if ((k == NK_ConstantReadNode || k == NK_ConstantPathNode) &&
       nt_str(nt, node, "name"))
     return const_node_class_index(c, node);
+  if (k == NK_SelfNode) return class_body_self_ci(c, node);
   return class_var_static_ci(c, node);
+}
+/* The class or module `self` is at node: the one whose body holds it,
+   outside a method (self_class_body), as `self.m` there reaches it; -1 in a
+   `class << X` body (self is X's singleton class) or a block whose self
+   instance_eval or instance_exec rebinds. */
+int class_body_self_ci(Compiler *c, int node) {
+  const NodeTable *nt = c->nt;
+  if (node < 0 || nt_kind(nt, node) != NK_SelfNode) return -1;
+  if (nt_int(nt, node, "sclass_value", 0) || nt_int(nt, node, "ie_rself", 0) || nt_int(nt, node, "ie_self", 0)) return -1;
+  int k = self_class_body(c, node);
+  return k >= 0 && k < c->nclasses && c->classes[k].name ? k : -1;
 }
 /* See compiler.h. */
 int record_recv_class(Compiler *c, int node) {
@@ -1470,6 +1482,7 @@ int record_recv_class(Compiler *c, int node) {
   if (nt_kind(c->nt, node) == NK_SelfNode) {
     const Scope *s = comp_scope_of(c, node);
     if (s && s->is_cmethod) ci = s->class_id;
+    else ci = class_body_self_ci(c, node);   /* a class body's self, a Struct.new block's among them */
   }
   else ci = class_recv_static_ci(c, node);
   return ci >= 0 && c->classes[ci].is_struct ? ci : -1;
@@ -4612,6 +4625,15 @@ int comp_self_call_mi(Compiler *c, int id, const char *name) {
     }
     else mi = call_target(c, id, self->class_id, name, 0, NULL);
   }
+  /* in a class or module body self is that class object too: its class
+     methods first, as inside one of them */
+  else {
+    int bk = self_class_body(c, id);
+    if (bk >= 0 && bk < c->nclasses && c->classes[bk].name) {
+      mi = call_target(c, id, bk, name, CT_CMETHOD, NULL);
+      if (mi < 0) mi = comp_class_self_inst_mi(c, id, bk, name);
+    }
+  }
   if (mi < 0) mi = call_target(c, id, -1, name, CT_TOP, NULL);
   return mi;
 }
@@ -4777,7 +4799,9 @@ static int method_obj_lookup(Compiler *c, int node, int *cls, int *sg) {
       const char *rn = (recv >= 0 && (nt_kind(nt, recv) == NK_ConstantReadNode ||
                                       nt_kind(nt, recv) == NK_ConstantPathNode))
                        ? nt_str(nt, recv, "name") : NULL;
-      k = rn ? comp_class_index(c, rn) : -1;
+      /* (the class the receiver names: an alias's, a class body's self) */
+      k = recv >= 0 && (rn || nt_kind(nt, recv) == NK_SelfNode) ? class_recv_static_ci(c, recv) : -1;
+      if (k < 0) k = rn ? comp_class_index(c, rn) : -1;
       goto found;
     }
   }
@@ -4809,7 +4833,8 @@ static int method_obj_lookup(Compiler *c, int node, int *cls, int *sg) {
     /* `Outer::Mod.method(:m)` names the class by its last segment, as every
        other constant receiver resolves */
     const char *rn2 = nt_str(nt, recv, "name");
-    k = rn2 ? comp_class_index(c, rn2) : -1, side = 1;
+    k = class_recv_static_ci(c, recv), side = 1;
+    if (k < 0) k = rn2 ? comp_class_index(c, rn2) : -1;
     if (k >= 0) goto found;
   }
   /* `self.class.method(:cmeth)` in an instance method of a class nothing

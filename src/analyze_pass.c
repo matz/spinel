@@ -20729,7 +20729,8 @@ void cr_collect_calls(Compiler *c, const NodeTable *nt, int id,
   if (k0 == NK_CallNode && nm && names[0] == nm && nt_int(nt, id, "dyn_arm", 0) > 0) {
     int r = nt_ref(nt, id, "receiver");
     NodeKind rk = r >= 0 ? nt_kind(nt, r) : NK_NONE;
-    if (rk == NK_SelfNode || r < 0) { Scope *ss = comp_scope_of(c, id); class_arm = ss && ss->is_cmethod; }
+    /* (self in a class or module body is that class too) */
+    if (rk == NK_SelfNode || r < 0) { Scope *ss = comp_scope_of(c, id); class_arm = (ss && ss->is_cmethod) || (rk == NK_SelfNode && class_body_self_ci(c, r) >= 0); }
     else if (rk == NK_ConstantReadNode || rk == NK_ConstantPathNode)
       class_arm = nt_str(nt, r, "name") && const_node_class_index(c, r) >= 0;
   }

@@ -637,7 +637,9 @@ static int format_recv_maybe_string(Compiler *c, int id, int typed) {
    compiled most of the date package into a program that never named Date:
    `<=>`, `new` and `jd` are called somewhere, and every initialize was a
    root. */
-enum { CR_VALUE, CR_CONST_CALL, CR_SELF_CALL, CR_DYN_CALL };
+/* (CR_BODY_CALL: a `self.` call in a class body, self the class there as a
+   constant naming it is, CR_CONST_CALL's on that class) */
+enum { CR_VALUE, CR_CONST_CALL, CR_SELF_CALL, CR_DYN_CALL, CR_BODY_CALL };
 typedef struct { const char *name, *call; int cls; int kind; int persist; } CrRead;
 typedef struct {
   Compiler *c;
@@ -770,6 +772,12 @@ static void cr_live_collect(CrLive *lv, int s, int id, int cls, int persist) {
       if (p >= 0 && nt_kind(nt, p) != NK_ConstantReadNode && nt_kind(nt, p) != NK_ConstantPathNode)
         cr_live_collect(lv, s, p, cls, persist);
       skip = r;
+    }
+    else if (rk == NK_SelfNode && cls >= 0 && !nt_int(nt, r, "sclass_value", 0)) {
+      /* (a `new` the plan answers with the builtin constructor, as on the constant) */
+      if (call && sp_streq(call, "new") && !c->classes[cls].is_struct && comp_cmethod_in_chain(c, cls, "new", NULL) >= 0 &&
+          cplan_user_new(c, id, cls) < 0) call = "";
+      cr_live_add(lv, s, CR_BODY_CALL, NULL, call, cls, persist);
     }
     else if ((r < 0 || rk == NK_SelfNode) && cls >= 0)
       cr_live_add(lv, s, CR_SELF_CALL, NULL, call, cls, 0);
@@ -929,6 +937,11 @@ static void cr_live_weak(CrLive *lv, int k, int cmethod) {
     lv->weak_done[s] = 1;
     for (int i = 0; i < lv->nreads[s] && !lv->all; i++) {
       const CrRead *r = &lv->reads[s][i];
+      if (r->kind == CR_BODY_CALL && r->persist) {
+        int d = r->cls;
+        if ((!r->call[0] || comp_cmethod_in_chain(c, d, r->call, NULL) < 0) && lv->held_i[d]) cr_live_instance(lv, d);
+        continue;
+      }
       if ((r->kind != CR_VALUE && r->kind != CR_CONST_CALL) || !r->persist) continue;
       int j = anh_find(&lv->seg, r->name);
       for (int d = j >= 0 ? lv->seg_first[j] : -1; d >= 0; d = lv->seg_next[d])
@@ -996,6 +1009,12 @@ static void cr_live_event(CrLive *lv, const CrRead *r) {
     /* self is the class or a subclass of it the program names */
     for (int d = 0; d < c->nclasses; d++)
       if (d == r->cls || (!lv->held_c[d] && cr_live_descends(c, d, r->cls))) cr_live_call(lv, d, r->call);
+    return;
+  }
+  if (r->kind == CR_BODY_CALL) {
+    /* as a call on a constant naming the class */
+    if (r->call[0] && comp_cmethod_in_chain(c, r->cls, r->call, NULL) >= 0) cr_live_call(lv, r->cls, r->call);
+    else cr_live_instance(lv, r->cls);
     return;
   }
   if (r->kind == CR_DYN_CALL) {
@@ -50356,7 +50375,6 @@ static void an_phase_desugar_register(Compiler *c) {
   lower_run(c, &lc, LW_PAREN_DEF_BODY);            /* def m = (a; b) -> def m; a; b; end */
   desugar_def_unless_method_defined(c); /* def m .. end unless method_defined?(:m), answered in program order --
                                            ahead of the runtime-condition defs, which it answers statically */
-  AN_STEP_V("desugar_class_body_self_calls", desugar_class_body_self_calls(c));     /* self.v = x / v in a class body -> Cls.v = x / Cls.v */
   AN_STEP_V("desugar_conditional_defs", desugar_conditional_defs(c));
   AN_STEP_V("desugar_concat_builtin_version", desugar_concat_builtin_version(c));
   AN_STEP_V("desugar_method_override_super", desugar_method_override_super(c));   /* super in a program's own def method -> self.method, builtin_only */
@@ -52105,7 +52123,6 @@ static const char *const an_tree_only_passes[] = {
   "desugar_bare_object_reopen_calls",
   "desugar_binding_lvget",
   "desugar_block_capture_wrap",
-  "desugar_body_self_call",
   "desugar_builtin_class_var_recv",
   "desugar_call_op_write",
   "desugar_class_body_bare_new",
@@ -52410,7 +52427,6 @@ static void an_phase_infer_fixpoint(Compiler *c) {
     ch |= AN_PASS("desugar_step_kwargs", desugar_step_kwargs(c));              /* n.step(to: X, by: Y) -> n.step(X, Y) */
     ch |= AN_PASS("desugar_defined_method_call", desugar_defined_method_call(c));      /* defined?(r.m) -> r.respond_to?(:m) */
     ch |= AN_PASS("desugar_respond_to_probe", desugar_respond_to_probe(c));         /* recv.respond_to?(:m) -> probe recv.m type */
-    ch |= AN_PASS("desugar_body_self_call", desugar_body_self_call(c));           /* self.m(..) in a class body -> Klass.m(..) */
     ch |= AN_PASS("desugar_handle_reopen_self_recv", desugar_handle_reopen_self_recv(c));  /* bare m(..) in a Thread/Fiber reopen -> self.m(..) */
     ch |= AN_PASS("desugar_symbol_to_proc_call", desugar_symbol_to_proc_call(c));      /* :sym.to_proc.call(x) -> x.sym */
     ch |= AN_PASS("desugar_call_op_write", desugar_call_op_write(c));            /* r.x += 1 with a def writer -> r.x = r.x + 1 */

@@ -425,8 +425,9 @@ static void cplan_resolve_call(Compiler *c, int id, CallPlan *p) {
     if (kmi >= 0) { cplan_set(p, kmi, kci, UC_REOPEN, CP_DIRECT); return; }
   }
   int sci = self_class_static_ci(c, recv);   /* `self.class` naming one class */
-  if (sci >= 0 || (rk == NK_ConstantReadNode || rk == NK_ConstantPathNode)) {
-    int ci = sci >= 0 ? sci : const_node_class_index(c, recv);
+  int bci = rk == NK_SelfNode ? class_body_self_ci(c, recv) : -1;   /* a class body's self */
+  if (sci >= 0 || bci >= 0 || (rk == NK_ConstantReadNode || rk == NK_ConstantPathNode)) {
+    int ci = sci >= 0 ? sci : bci >= 0 ? bci : const_node_class_index(c, recv);
     /* (a `new`: the one the call reaches, as inference and the static
        emitter take it: cplan_user_new) */
     int mi = ci < 0 ? -1 : is_new_name(name) ? cplan_user_new(c, id, ci) : call_target(c, id, ci, name, CT_CMETHOD, NULL);

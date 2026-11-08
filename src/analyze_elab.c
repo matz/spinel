@@ -4793,6 +4793,23 @@ static int lr_rta_const(LrRta *t, int node) {
   return t->ncname >= 0 && (is_builtin_class_name(nm) || is_builtin_module_const_name(nm)) ? LR_CORE : LR_UNKNOWN_CLASS;
 }
 
+/* The class self is at call id, when id is a statement's of a class or
+   module body (or a builder's block) itself, as elab_self_value_at reads
+   it: a bare or `self.` call there is a call on that class.
+   LR_UNKNOWN_CLASS elsewhere (a method body, a block run later, the top
+   level, a `class << X` body). */
+static int lr_rta_self(const LrRta *t, int id) {
+  const NodeTable *nt = t->c->nt;
+  int recv = nt_ref(nt, id, "receiver");
+  if (recv >= 0 && (nt_kind(nt, recv) != NK_SelfNode || nt_int(nt, recv, "sclass_value", 0))) return LR_UNKNOWN_CLASS;
+  const LrStmt *s = lr_stmt_of(t->r, id);
+  if (!s || s->region < 0 || s->frame < 0 || s->up != s->frame) return LR_UNKNOWN_CLASS;
+  int f = t->r->st[s->frame].node;
+  if (nt_kind(nt, f) == NK_SingletonClassNode || !class_def_opens_frame(nt, f)) return LR_UNKNOWN_CLASS;
+  int cls = elab_header_class(t->c, f, NULL, NULL);
+  return cls >= 0 ? cls : LR_UNKNOWN_CLASS;
+}
+
 /* Does a call of name make an object of its receiver's class: new,
    allocate, exception, a builder's [] */
 static int lr_rta_ctor(const LrRta *t, const char *name) {
@@ -4877,7 +4894,8 @@ static void lr_rta_node(LrRta *t, int id) {
   an = nt_ref(nt, id, "arguments");
   av = an >= 0 ? nt_arr(nt, an, "arguments", &ac) : NULL;
   NodeKind rk = recv >= 0 ? nt_kind(nt, recv) : NK_SelfNode, ak;
-  int rc = rk == NK_ConstantReadNode || rk == NK_ConstantPathNode ? lr_rta_const(t, recv) : LR_UNKNOWN_CLASS;
+  int rc = rk == NK_ConstantReadNode || rk == NK_ConstantPathNode ? lr_rta_const(t, recv)
+         : rk == NK_SelfNode ? lr_rta_self(t, id) : LR_UNKNOWN_CLASS;
   by = nm && (is_send_family(nm) || is_method_object_maker(nm) || is_enumerator_maker(nm)) ? (ac ? vis_arg_name(nt, av[0]) : "") : nm;
   if (!by || (ac && is_code_eval_name(nm)) || is_method_bind_name(by) || is_object_loader(rk == NK_ConstantReadNode ? nt_str(nt, recv, "name") : NULL, by, ac)) {
     lr_rta_all(t, 0);

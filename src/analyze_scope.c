@@ -9444,10 +9444,13 @@ void specialize_inherited_cls_new(Compiler *c) {
       int bd = class_def_body(nt, cn);
       int bn = 0;
       const int *bstmts = bd >= 0 ? nt_arr(nt, bd, "body", &bn) : NULL;
-      for (int k = 0; k < bn; k++)
-        if (bstmts[k] >= 0 && bstmts[k] < node_count && nt_kind(nt, bstmts[k]) == NK_CallNode &&
-            nt_ref(nt, bstmts[k], "receiver") < 0)
+      for (int k = 0; k < bn; k++) {
+        int br = bstmts[k] >= 0 && bstmts[k] < node_count && nt_kind(nt, bstmts[k]) == NK_CallNode
+                 ? nt_ref(nt, bstmts[k], "receiver") : -2;
+        /* (bare, or on self: `self.v = 1` is the class's own call too) */
+        if (br == -1 || (br >= 0 && nt_kind(nt, br) == NK_SelfNode && !nt_int(nt, br, "sclass_value", 0)))
           body_cls[bstmts[k]] = bci;
+      }
     }
   }
   for (int id = 0; id < node_count; id++) {
@@ -9503,13 +9506,21 @@ void specialize_inherited_cls_new(Compiler *c) {
       Scope *encl = comp_scope_of(c, id);
       if (encl && encl->is_cmethod && encl->class_id >= 0) ci = encl->class_id;
       else if (body_cls && body_cls[id] >= 0) ci = body_cls[id];
+      /* (a call deeper in the body, `p v` or a block's, has that self too) */
+      else if (recv < 0 || !nt_int(nt, recv, "sclass_value", 0)) {
+        int bk = self_class_body(c, id);
+        if (bk < 0 || bk >= c->nclasses || !c->classes[bk].name) continue;
+        ci = bk;
+      }
       else continue;
     }
     else {
       NodeKind rk = nt_kind(nt, recv);
       if (rk != NK_ConstantReadNode && rk != NK_ConstantPathNode) continue;
       const char *cn = nt_str(nt, recv, "name");
-      ci = cn ? comp_class_index(c, cn) : -1;
+      /* (the class the node names: an alias's too) */
+      ci = const_node_class_index(c, recv);
+      if (ci < 0) ci = cn ? comp_class_index(c, cn) : -1;
       if (ci < 0) continue;
     }
     const char *mname = cls_call_name(c, id);

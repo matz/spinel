@@ -22930,6 +22930,9 @@ static int emit_vis_refusal_x(Compiler *c, int id, Buf *b) {
     if (ty_is_object(vrt)) vcid = ty_object_class(vrt);
     else vcid = builtin_reopen_vis_class(c, vrt, vnm);
     if (plain && nt_kind(nt, vrecv) == NK_SelfNode) {
+      /* a class body's self is that class: its class methods' visibility
+         (literal `self.` is let through there, nt_ignore_visibility) */
+      if (vcid < 0 && class_body_self_ci(c, vrecv) >= 0) return emit_cmethod_vis_refusal(c, id, vrecv, vnm, b);
       if (!self_is_main(c, id)) {
         vcid = cplan_visibility_class(c, id, vcid);
         if (vcid < 0) return 0;
@@ -30546,6 +30549,9 @@ int bare_call_class_owned(Compiler *c, int id) {
   if (!name) return 0;
   Scope *sc = comp_scope_of(c, id);
   if (!sc) return 0;
+  /* in a class or module body self is the class: its class methods */
+  int bk = g_ie_class_id < 0 && !sc->name ? self_class_body(c, id) : -1;
+  if (bk >= 0 && bk < c->nclasses) return call_target(c, id, bk, name, CT_CMETHOD, NULL) >= 0;
   int cid = (g_ie_class_id >= 0) ? g_ie_class_id
           : (g_emitting_class_id >= 0) ? g_emitting_class_id : sc->class_id;
   if (cid < 0 || cid >= c->nclasses) return 0;
@@ -33660,6 +33666,19 @@ int respond_to_static_answer(Compiler *c, int id, int recv, TyKind rt, const cha
       }
       else if (rt_probe_answer(c, id, &yes)) resolved = 1;
     }
+    /* self in a class or module body is that class, as a constant naming
+       it is */
+    else if (rk == NK_SelfNode && class_body_self_ci(c, recv) >= 0) {
+      int ci = class_body_self_ci(c, recv);
+      const char *rcn = c->classes[ci].name;
+      int mod = comp_class_is_module(c, &c->classes[ci]);
+      resolved = 1;
+      yes = class_responds_to(c, ci, qm, id);
+      if (!yes && (is_builtin_class_name(rcn) || is_builtin_module_const_name(rcn)) && !(mod && class_only_method(qm)))
+        rt_probe_answer(c, id, &yes);
+      if (yes && foldable && comp_cmethod_vis_declared(c, ci, qm, NULL) != SP_VIS_PUBLIC) yes = include_all;
+      if (!yes && foldable && include_all && class_object_private_method(qm, mod)) yes = 1;
+    }
     else if (recv >= 0 && ty_is_object(rt)) {
       int cid = ty_object_class(rt);
       /* a heap object slot holds nil as NULL (a defaulted `host = nil`
@@ -34733,6 +34752,8 @@ static void emit_call_body_ordinary(Compiler *c, int id, Buf *b) {
                   ((g_ie_class_id < 0 && esc0->is_cmethod) ? call_target(c, id, ecls0, bn0, CT_CMETHOD, NULL) >= 0
                                     : (call_target(c, id, ecls0, bn0, 0, NULL) >= 0 ||
                                        comp_is_reader(&c->classes[ecls0], bn0)));
+      /* (so does a class or module body's own class method, comp_cbody_call_mi) */
+      if (!shad0 && g_ie_class_id < 0 && ecls0 < 0 && comp_cbody_call_mi(c, id, bn0) >= 0) shad0 = 1;
       /* a descendant of self's class overrides the def: the dispatch on
          self's class below, the def its default (cplan_self_root_override) */
       if (!shad0 && g_ie_class_id < 0 && (g_emitting_class_id < 0 || g_emitting_class_id == ecls0) &&

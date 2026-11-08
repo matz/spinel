@@ -2226,7 +2226,8 @@ const char *comp_class_base_display_fn(Compiler *c);
 int cls_user_display_mi(Compiler *c, int k, const char *nm);
 int prog_has_cls_user_display(Compiler *c, const char *nm);
 int        class_var_static_ci(Compiler *c, int node);  /* local holding one class const */
-int        class_recv_static_ci(Compiler *c, int node); /* constant or local naming one class */
+int        class_recv_static_ci(Compiler *c, int node); /* constant or local naming one class, or self in a class body */
+int        class_body_self_ci(Compiler *c, int node);   /* the class a class body's self is (analyze_util.c) */
 /* The Struct or Data class a class method call's receiver names at compile
    time: as class_recv_static_ci reads it, or `self` in a class method of
    the class (a version entry's else arm); -1 for none */

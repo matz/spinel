@@ -1059,7 +1059,7 @@ static void inline_target_lookup(Compiler *c, int id, const char *name, int recv
                                  rk == NK_ConstantPathNode))
                         ? nt_str(nt, recv, "name") : NULL;
     /* (the class the node names: an alias's too) */
-  int ci = cname ? const_node_class_index(c, recv) : self_class_static_ci(c, recv);
+  int ci = cname ? const_node_class_index(c, recv) : rk == NK_SelfNode && class_body_self_ci(c, recv) >= 0 ? class_body_self_ci(c, recv) : self_class_static_ci(c, recv);
   if (ci < 0 && cname) ci = comp_class_index(c, cname);
     if ((t->mi = class_reopen_cmethod(c, id, recv, name)) >= 0) {
       t->cm_class = c->scopes[t->mi].class_id;
@@ -1164,7 +1164,9 @@ static int inline_target_plan(Compiler *c, int id, const char *name, int recv, i
   const char *cname = ((rk == NK_ConstantReadNode ||
                                rk == NK_ConstantPathNode))
                       ? nt_str(nt, recv, "name") : NULL;
-  if (narrow && !cname) {
+  /* a class body's self is that class, as a constant naming it is */
+  int bci = rk == NK_SelfNode ? class_body_self_ci(c, recv) : -1;
+  if (narrow && !cname && bci < 0) {
     TyKind rt = comp_ntype(c, recv);
     if (p->via == UC_INST && p->chain && ty_is_object(rt) && p->owner_ci == ty_object_class(rt)) {
       t->mi = p->mi; t->recv_class = p->owner_ci;
@@ -1173,7 +1175,7 @@ static int inline_target_plan(Compiler *c, int id, const char *name, int recv, i
     return 0;
   }
   /* (the class the node names: an alias's too) */
-  int ci = cname ? const_node_class_index(c, recv) : self_class_static_ci(c, recv);
+  int ci = cname ? const_node_class_index(c, recv) : bci >= 0 ? bci : self_class_static_ci(c, recv);
   if (ci < 0 && cname) ci = comp_class_index(c, cname);
   if (p->via == UC_CMETH && !p->by_name && (cname || ci >= 0)) {
     if (ci >= 0 && p->owner_ci == ci) { t->mi = p->mi; t->cm_class = ci; return 1; }
@@ -4367,7 +4369,7 @@ int call_targets_yielding_method(Compiler *c, int id) {
     const char *cn = (rk == NK_ConstantReadNode || rk == NK_ConstantPathNode)
                      ? nt_str(nt, recv, "name") : NULL;
     /* (the class the node names, as inline_target_lookup asks) */
-    int ci = cn ? const_node_class_index(c, recv) : -1;
+    int ci = cn ? const_node_class_index(c, recv) : rk == NK_SelfNode ? class_body_self_ci(c, recv) : -1;
     if (ci < 0 && cn) ci = comp_class_index(c, cn);
     if (ci >= 0) mi = call_target(c, id, ci, name, CT_CMETHOD, NULL);
     else if (ty_is_object(rt)) mi = call_target(c, id, ty_object_class(rt), name, 0, NULL);

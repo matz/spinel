@@ -2227,6 +2227,14 @@ int const_defined_known(Compiler *c, int rk, const char *cgn) {
 /* Does class or module K see constant CGN as `K.const_defined?(CGN)` looks:
    K, its ancestors and the modules they include. (A top-level constant,
    Object's, every class sees: the caller asks that first.) */
+/* Is class k one whose constant lookup reaches no Object: a class below
+   BasicObject, or BasicObject itself (a program's reopening of it)? */
+int class_below_object(Compiler *c, int k) {
+  if (k < 0 || k >= c->nclasses) return 0;
+  if (class_is_blank_slate(c, k)) return 1;
+  int bk = comp_builtin_class_named(c, "BasicObject");
+  return bk >= 0 && bk == k;
+}
 int const_seen_by_class(Compiler *c, int k, const char *cgn) {
   static int depth = 0;
   if (depth > 8) return 0;
@@ -2249,7 +2257,7 @@ int const_seen_by_class(Compiler *c, int k, const char *cgn) {
   /* Object's ancestors, which the program's reopenings make: a class's chain
      ends at Object, and a module's lookup goes on to it, unless the class is
      below BasicObject. Each is asked once, by the outermost walk. */
-  if (depth == 0 && k0 >= 0 && k0 < c->nclasses && !class_is_blank_slate(c, k0)) {
+  if (depth == 0 && k0 >= 0 && k0 < c->nclasses && !class_below_object(c, k0)) {
     const int roots[] = { comp_core_class(c, CORE_OBJECT), comp_core_class(c, CORE_KERNEL) };
     for (size_t i = 0; i < sizeof roots / sizeof roots[0]; i++) {
       if (roots[i] < 0 || roots[i] == k0) continue;
@@ -2479,18 +2487,23 @@ int const_defined_basic_object_misses(Compiler *c, int recv, const char *cgn) {
   NodeKind k = recv >= 0 ? nt_kind(nt, recv) : NK_NONE;
   if (k != NK_ConstantReadNode && !(k == NK_ConstantPathNode && nt_ref(nt, recv, "parent") < 0)) return 0;
   const char *rn = nt_str(nt, recv, "name");
-  if (!rn || !sp_streq(rn, "BasicObject") || !cgn || sp_streq(cgn, "BasicObject")) return 0;
-  if (!is_builtin_toplevel_const(cgn) || const_name_resolves_top_level(c, cgn)) return 0;
-  int bk = comp_class_index(c, "BasicObject");
+  if (!rn || !sp_streq(rn, "BasicObject") || !cgn || sp_streq(cgn, "BasicObject") || strstr(cgn, "::")) return 0;
+  int bk = comp_builtin_class_named(c, "BasicObject");
   return bk < 0 || !const_seen_by_class(c, bk, cgn);
+}
+/* `R.const_defined?(N, false)`: is N R's own constant? Object's own are
+   also the builtin top-level names CRuby defines at boot (Struct, Errno). */
+int const_defined_own(Compiler *c, int rk, const char *cgn) {
+  if (const_owned_by_class(c, rk, cgn)) return 1;
+  return (rk == CG_OBJECT || rk == comp_core_class(c, CORE_OBJECT)) && is_builtin_toplevel_const(cgn);
 }
 int const_defined_from(Compiler *c, int rk, const char *cgn) {
   if (!const_defined_known(c, rk, cgn)) return 0;
-  /* a class below BasicObject reaches no Object, so no builtin's name
-     (well-known names keep master's answer) */
-  if (rk >= 0 && rk < c->nclasses && cgn && is_builtin_toplevel_const(cgn) &&
-      !const_name_resolves_top_level(c, cgn) && class_is_blank_slate(c, rk))
-    return const_seen_by_class(c, rk, cgn);
+  /* a class below BasicObject reaches no Object: not a builtin's name, a
+     well-known one or a top-level constant of the program, nor the class's
+     own name. BasicObject holds only its own. */
+  if (rk >= 0 && rk < c->nclasses && cgn && !strstr(cgn, "::") && class_below_object(c, rk))
+    return sp_streq(cgn, "BasicObject") || const_seen_by_class(c, rk, cgn);
   if (rk < 0 || !cgn || strstr(cgn, "::") || const_defined_top_level(c, cgn)) return 1;
   return const_seen_by_class(c, rk, cgn);
 }

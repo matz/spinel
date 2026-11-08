@@ -2817,7 +2817,16 @@ int desugar_dynamic_const_get_arms(Compiler *c) {
     /* const_defined? also knows the builtin top-level names (String,
        Comparable, ARGV), each arm answered at compile time */
     int rci = const_get_recv_class(c, id, recv);
-    if (sp_streq(nm, "const_defined?") && !(rci >= 0 && class_is_blank_slate(c, rci))) {
+    /* a class below BasicObject sees BasicObject's own name alone */
+    if (sp_streq(nm, "const_defined?") && rci >= 0 && class_below_object(c, rci)) {
+      int dup = 0;
+      for (int k = 0; k < ncand && !dup; k++) dup = sp_streq(cand[k], "BasicObject");
+      char **g = dup ? cand : (char **)realloc(cand, sizeof(char *) * (size_t)(ncand + 1));
+      if (!g) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+      cand = g;
+      if (!dup) cand[ncand++] = (char *)"BasicObject";
+    }
+    else if (sp_streq(nm, "const_defined?")) {
       int nw = 0; while (comp_wellknown_const_at(nw)) nw++;
       char **g = (char **)realloc(cand, sizeof(char *) * (size_t)(ncand + nw + 1));
       if (!g) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }

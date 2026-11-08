@@ -18374,12 +18374,13 @@ int desugar_builtin_scalar_defs(Compiler *c) {
       int closed = bi_def_visibility(nt, def) != BVIS_PUBLIC;
       int pn0 = nt_ref(nt, def, "parameters");
       int shape_ok = 1;
-      if (pn0 >= 0 && nt_ref(nt, pn0, "keyword_rest") >= 0)
-        shape_ok = 0;
-      if (shape_ok && pn0 >= 0) { int psn = 0; nt_arr(nt, pn0, "posts", &psn); if (psn > 0) shape_ok = 0; }
-      if (shape_ok && pn0 >= 0) { int kwn = 0; nt_arr(nt, pn0, "keywords", &kwn); if (kwn > 0) shape_ok = 0; }
+      /* keywords and a **rest clone too: a call with a block
+         (`3.times { }`) that the generic does not take stays on the
+         builtin iteration, which ignores the reopen and types the call
+         as the reopen's answer */
+      if (pn0 >= 0) { int psn = 0; nt_arr(nt, pn0, "posts", &psn); if (psn > 0) shape_ok = 0; }
       if (!shape_ok) {
-        /* A reopen this registration cannot clone (keyword or post-splat
+        /* A reopen this registration cannot clone (post-splat
            parameters) still REPLACES the name for the program.
            Skipping it silently was only safe while the name was the
            program's alone; when it is also one a builtins/ file defines,
@@ -18827,7 +18828,11 @@ int desugar_builtin_scalar_calls(Compiler *c) {
       /* a `*arr` argument left after expand_static_splat_args can
          stand for any count of arguments */
       int csplat = av && nt_argv_has_splat(nt, av, an);
-      if ((!csplat && an + 1 < crn) || (!crest && an + 1 > crn + con)) continue; }
+      /* keywords the copy takes are no positional argument */
+      int ckn = 0; if (cpn >= 0) nt_arr(nt, cpn, "keywords", &ckn);
+      int pos = an;
+      if ((ckn > 0 || (cpn >= 0 && nt_ref(nt, cpn, "keyword_rest") >= 0)) && av && nt_argv_kwh(nt, av, an) >= 0) pos--;
+      if ((!csplat && pos + 1 < crn) || (!crest && pos + 1 > crn + con)) continue; }
     int encl = c->nscope[id];
     int base = nt->count;
     int *na = (int *)malloc(sizeof(int) * (size_t)(an + 1));

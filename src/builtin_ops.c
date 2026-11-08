@@ -3116,9 +3116,9 @@ const BuiltinOp *bop_find_arg(TyKind rt, const char *name, int argc, int has_blo
                               BopArgKind arg_of, const void *ud) {
   return bop_find_stage(rt, name, argc, has_block, arg_of, ud, -1);
 }
-const BuiltinOp *bop_find_stage(TyKind rt, const char *name, int argc, int has_block,
-                                BopArgKind arg_of, const void *ud, int stage) {
-  if (!name) return NULL;
+/* the first place in the sorted index of the rows of kind rt for `name`
+   (BOP_NROWS, or a row of another key, when there are none) */
+static int bop_key_first(TyKind rt, const char *name) {
   if (!bop_indexed) bop_build_index();
   int lo = 0, hi = BOP_NROWS;
   while (lo < hi) {
@@ -3126,6 +3126,12 @@ const BuiltinOp *bop_find_stage(TyKind rt, const char *name, int argc, int has_b
     if (bop_cmp_key(rt, name, &bop_rows[bop_index[mid]]) > 0) lo = mid + 1;
     else hi = mid;
   }
+  return lo;
+}
+const BuiltinOp *bop_find_stage(TyKind rt, const char *name, int argc, int has_block,
+                                BopArgKind arg_of, const void *ud, int stage) {
+  if (!name) return NULL;
+  int lo = bop_key_first(rt, name);
   /* rows of one name differ by arity, block form or argument guard: take
      the first that fits */
   TyKind ak[2] = { TY_UNKNOWN, TY_UNKNOWN };
@@ -4209,6 +4215,20 @@ int bop_share_boxed(TyKind fam, const char *name) {
 
 int bop_share_named(TyKind fam, const char *name) {
   return name ? bop_share_find(fam, name) : 0;
+}
+/* Is a receiverless builtin row of `name` the compiler's own (BOPF_INTERNAL),
+   at any arity? */
+static int bop_kernel_internal(const char *name) {
+  for (int i = bop_key_first(BOP_KERNEL, name); i < BOP_NROWS; i++) {
+    const BuiltinOp *r = &bop_rows[bop_index[i]];
+    if (bop_cmp_key(BOP_KERNEL, name, r) != 0) break;
+    if (r->flags & BOPF_INTERNAL) return 1;
+  }
+  return 0;
+}
+int bop_share_kernel(const char *name, int builtin_only) {
+  if (!name || (!builtin_only && bop_kernel_internal(name))) return 0;
+  return bop_share_find(BOP_KERNEL, name);
 }
 int bop_share_kinds(const char *name, int *out, int max) {
   static const TyKind fams[] = { BOP_ANY_RECV, TY_STRING, BOP_ANY_ARRAY, BOP_ANY_HASH };

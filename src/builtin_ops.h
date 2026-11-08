@@ -597,6 +597,12 @@ int bop_share(TyKind fam, const char *name);
 int builtin_ops_share_check(void);
 /* Exact name lookup, including iterator contracts. */
 int bop_share_named(TyKind fam, const char *name);
+/* The share row of a call with no receiver of `name` (BOP_KERNEL's), where
+   builtin_only says the compiler made the call: a name whose lowering row is
+   the compiler's own (BOPF_INTERNAL) answers only such a call, as
+   cplan_kernel_row gives it the row; the program's own call of the name
+   reaches no builtin, 0. */
+int bop_share_kernel(const char *name, int builtin_only);
 /* The distinct share kinds of `name` across Object's row and the String,
    Array and Hash rows, whichever of those the receiver turns out to be:
    written to out[0..max), their count answered, 0 when no row names it. */

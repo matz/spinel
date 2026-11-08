@@ -47945,7 +47945,7 @@ static int iter_disc_call_recv(Compiler *c, int r) {
   /* (no builtin answers it: on self, none of Object's or Kernel's; on a
      receiver, one of a class of the program's) */
   int rr = nt_ref(nt, r, "receiver");
-  if (!nm || (rr < 0 ? object_public_method_name(nm) || bop_share_named(BOP_KERNEL, nm)
+  if (!nm || (rr < 0 ? object_public_method_name(nm) || bop_share_kernel(nm, nt_int(nt, r, "builtin_only", 0))
                      : !ty_is_object(infer_type(c, rr))))
     return -3;
   int *tg = malloc(sizeof(int) * (size_t)(c->nscopes + 1));

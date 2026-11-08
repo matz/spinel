@@ -629,7 +629,7 @@ int share_literal_unkept(Compiler *c, int lit) {
   if (n < 0 || nt_kind(nt, n) != NK_CallNode || nt_ref(nt, n, "arguments") != p) return 0;
   const char *nm = nt_str(nt, n, "name");
   if (!nm || nt_ref(nt, n, "receiver") >= 0 || nt_ref(nt, n, "block") >= 0) return 0;
-  int share = bop_share_named(BOP_KERNEL, nm);
+  int share = bop_share_kernel(nm, nt_int(nt, n, "builtin_only", 0));
   if (share != BSH_PURE && !(share == BSH_ARGS && an_node_dropped(c, n))) return 0;
   return (is_text_print(nm) || is_inspect_print(nm)) && !sh_has_targets(c, n);
 }
@@ -1165,8 +1165,8 @@ static int sh_self_call_targets(Compiler *c, int call, const char *nm, int *out,
   Scope *cur = comp_scope_of(c, call);
   int ci = cur ? (int)(cur - c->scopes) : -1;
   if (ci <= 0 || cur->is_cmethod || cur->class_id < 0 || !cur->name || cur->def_node < 0) return -1;
-  if (core_method_name(nm) || object_public_method_name(nm) || bop_share_named(BOP_KERNEL, nm) ||
-      bop_share_named(BOP_ANY_RECV, nm))
+  if (core_method_name(nm) || object_public_method_name(nm) ||
+      bop_share_kernel(nm, nt_int(nt, call, "builtin_only", 0)) || bop_share_named(BOP_ANY_RECV, nm))
     return -1;
   /* the enclosing method may also run on a class whose chain gives its
      name another method: under an alias, or taken out of its class and
@@ -1605,7 +1605,8 @@ static int sh_builtin_call_pure(Compiler *c, int n) {
   const char *name = nt_str(c->nt, n, "name");
   if (!name || is_receiver_conversion(name) || sh_has_targets(c, n)) return 0;
   int recv = nt_ref(c->nt, n, "receiver");
-  int s = recv >= 0 ? bop_share_named(sh_family(c->ntype[recv]), name) : bop_share_named(BOP_KERNEL, name);
+  int s = recv >= 0 ? bop_share_named(sh_family(c->ntype[recv]), name)
+                     : bop_share_kernel(name, nt_int(c->nt, n, "builtin_only", 0));
   if (!s) s = bop_share_named(BOP_ANY_RECV, name);
   return s == BSH_PURE;
 }

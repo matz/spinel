@@ -250,11 +250,25 @@ void sp_gc_collect_request(void);   /* explicit GC.start: same barrier, forced *
 
 /* SPINEL_ALLOC_REPORT counters (#1336): defined in sp_alloc.c. The `on` flag
    is set once by a constructor from the env var; the hot entry points guard
-   their count call on it (one predictable branch when off). */
+   their count call on it (one predictable branch when off).
+   SP_NO_ALLOC_REPORT compiles the feature out: the flag is the constant 0, so
+   every guarded call folds away, and sp_alloc.c drops the counters, the type
+   name table and the constructor that installs the report signal handler --
+   which, being a constructor, is otherwise linked into every program. For
+   targets that count static RAM and flash (32-bit MCUs); define it for both
+   the runtime build and the generated TU. The tags sp_tu_init registers
+   become no-ops that drop their arguments, so the scan function each one
+   names stops holding that kind's code in the link, with the generated C
+   unchanged. */
+#ifdef SP_NO_ALLOC_REPORT
+#define sp_alloc_report_on 0
+#define sp_alloc_report_tag(scan, name) ((void)0)
+#else
 extern int sp_alloc_report_on;
+void sp_alloc_report_tag(void *scan, const char *name);
+#endif
 void sp_alloc_report_count(void *scan, size_t bytes);
 void sp_alloc_report_str(size_t bytes);
-void sp_alloc_report_tag(void *scan, const char *name);
 
 /* Binary (ASCII-8BIT) strings. spinel keeps no per-string encoding tag:
    String#length counts UTF-8 code points while the bytes stay valid UTF-8 and

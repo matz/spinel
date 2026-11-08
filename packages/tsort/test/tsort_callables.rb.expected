@@ -1,0 +1,12 @@
+["log", "lib", "app", "doc"]
+["log", "lib", "app", "doc"]
+[["log"], ["lib"], ["app"], ["doc"]]
+["log"]
+["lib"]
+["app"]
+["doc"]
+["log"]
+["lib"]
+["app"]
+topological sort failed: ["a", "b"]
+NotImplementedError

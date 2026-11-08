@@ -1,0 +1,29 @@
+[[6.0, 4.0], [44.0, 40.0]]
+a
+b
+[[9.5, 2.0], [22.0, 20.0]]
+[[1, 20], [3, 4]]
+[[4.0, 2.0], [22.0, 40.0]]
+[["a", "z"], ["c", "d"]]
+[[5, 2.0], [6.5, "y"]]
+[["str", 2], [3, 4]]
+FrozenError
+{a: [7.5, 2.0]}
+{a: ["s", 2]}
+["str", 2]
+[["str", 2], [3, 4]]
+["str", 2]
+[["str", 2], [3, 4]]
+true
+false
+FrozenError
+FrozenError
+FrozenError
+FrozenError
+["ab", "zd"]
+[[1, 2], [1.5]]
+NoMethodError
+NoMethodError
+NoMethodError
+[[1.0, 2.0]]
+[[1.0, 2.0], "ab"]

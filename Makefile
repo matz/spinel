@@ -5984,13 +5984,14 @@ package-facts-regen:
 # runs it over the corpus and fails on a disagreement, or when a program
 # printed no summary (it stopped before the check ran). Outside the gate.
 LOWER_ROWS_PROGS ?= $(wildcard test/*.rb test/share/*.rb test/share/*/*.rb benchmark/*.rb packages/*/test/*.rb)
-KWSPLAT_ROWS_PROGS ?= $(shell grep -l '[[:punct:] ]\*\*[a-zA-Z@]' $(LOWER_ROWS_PROGS))
+KWSPLAT_ROWS_PROGS ?= $(shell grep -l -F '**' $(LOWER_ROWS_PROGS))
 lower-rows-check: $(SPINEL)
 	@printf '%s\n' $(LOWER_ROWS_PROGS) | xargs -P $(NPROC) -n 1 sh -c \
 	  'SPINEL_LOWER_ROWS_CHECK=1 $(SPINEL) --load-model=graph --dump-ast "$$0" 2>&1 >/dev/null | grep "^lower-rows-check"' | \
 	  awk -v want=$(words $(LOWER_ROWS_PROGS)) '/ calls, / { n++; c += $$2; d += $$4; next } { print } \
 	       END { printf "lower-rows-check: %d of %d programs, %d calls, %d disagreements\n", n, want, c, d; exit (d > 0 || n != want) }'
-# The second leg compiles the programs that write a `**` operand, which
+# The second leg compiles the programs that write `**` (any operand: a
+# variable, a global, `{}`, `nil`; an exponent only adds a program), which
 # split_kwsplat_calls turns into two calls: the check runs after the split and
 # compares the rows the parse noted for each shape (lr_rows, lr_rows_drop).
 # (-S writes the C to stdout, which is dropped: nothing lands in the tree.)

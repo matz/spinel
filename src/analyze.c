@@ -44989,6 +44989,13 @@ static int kwsplat_gated(NodeTable *nt, KwAliases *al, int id, const int *args, 
   }
   return bop_name_kwless(nm) || kwsplat_alias_gated(nt, al, nm);
 }
+/* SPINEL_LOWER_ROWS_CHECK: the call split_kwsplat_calls leaves without its
+   `**` operands has the rows of its own shape, which the parse noted as
+   lr_rows_drop (none: it matched no row of that shape). A call the parse
+   noted nothing for stays unchecked. */
+static void kwsplat_drop_rows(NodeTable *nt, int id) {
+  if (nt_int(nt, id, "lr_rows", -1) >= 0) nt_node_set_int(nt, id, "lr_rows", nt_int(nt, id, "lr_rows_drop", 0));
+}
 /* A `**`-only call to a builtin that takes no keywords: CRuby passes nothing
    for an empty `**` operand and one new Hash for a non-empty one, whatever
    the callee is, so the call becomes the two calls and a test:
@@ -45065,6 +45072,7 @@ static void split_kwsplat_calls(Compiler *c, int from) {
       if (n > 1) nt_node_set_arr(nt, an, "arguments", args, n - 1);
       else nt_node_set_ref(nt, id, "arguments", -1);
       nt_subtree_blank(nt, kh);
+      kwsplat_drop_rows(nt, id);
       continue;
     }
     /* what runs after each operand decides which reads are held */
@@ -45133,6 +45141,7 @@ static void split_kwsplat_calls(Compiler *c, int from) {
     nt_set_safe_nav(nt, call, 0);
     nt_node_set_int(nt, call, "kwsplit", 1);
     int bare = nt_clone_subtree(nt, call);
+    kwsplat_drop_rows(nt, bare);
     /* each branch runs where the call stood, in its frame, once, and so does
        every node of its copy: node_in_place says so to the load record
        (lr_unplaced), which places them there */
@@ -50666,6 +50675,7 @@ static void an_phase_desugar_register(Compiler *c) {
   /* builtins/enumerable.rb, spliced by the parser: its definitions become
      the receiver-taking top-level functions before any scope is built */
   AN_STEP_V("split_kwsplat_calls", split_kwsplat_calls(c, 0));   /* r.sum(**kw) -> kw.empty? ? r.sum : r.sum(**kw) */
+  if (getenv("SPINEL_LOWER_ROWS_CHECK")) lower_rows_check(c->nt);   /* both shapes of a split call (the table mode sees the parse only) */
   AN_STEP_V("desugar_builtins", desugar_builtins(c));
   lower_run(c, &lc, LW_STORED_ENUM_EACH);
   /* ahead of the per-call-site copies below, which its calls take as a

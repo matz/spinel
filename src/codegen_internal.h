@@ -3199,8 +3199,8 @@ extern int g_value_discarded;
 extern int g_bv_dest_oint;
 /* can a `next` of this block body (not a nested block's) hand the slot a
    nil: a bare `next`, `next nil`, a value that can be nil (codegen_call.c) */
-int block_next_may_be_nil(Compiler *c, int id, int depth);
-int block_break_may_be_nil(Compiler *c, int id, int depth);
+int block_next_may_be_nil(Compiler *c, int id);
+int block_break_may_be_nil(Compiler *c, int id);
 /* Struct.new / Data.new of class ci with call id's arguments: the members,
    and the nil bits of members left nil (codegen_call.c) */
 int emit_struct_new_call(Compiler *c, int id, int ci, int argc, const int *argv, Buf *b);

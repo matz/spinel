@@ -11417,6 +11417,9 @@ int desugar_value_callable_forwards(Compiler *c) {
   int changed = 0;
   int n0 = nt->count;  /* snapshot: synthetic nodes are appended past here */
   int *calls, ncalls = an_calls_with_block_arg(c, n0, &calls);
+  /* a proc literal's `&b` is typed before any forward reads it */
+  for (int id = 0; ncalls > 0 && id < n0; id++)
+    if (is_proc_create(c, id)) a_type_proc_block_param(c, id, a_proc_params_node(c, id));
   for (int q = 0; q < ncalls; q++) {
     int id = calls[q];
     if (nt_kind(nt, id) != NK_CallNode) continue;
@@ -11433,7 +11436,7 @@ int desugar_value_callable_forwards(Compiler *c) {
        `{ |__fwd..| yield __fwd.. }` here, exactly as a named `&blk` becomes
        `{ |__fwd..| blk.call(__fwd..) }` below, and the yield does the rest. */
     int anon = ex < 0;
-    int hoist = 0;
+    int hoist = 0, blk_nilable = 0;
     TyKind ct = TY_UNKNOWN;
     /* A named `&blk` forwarded from the method that declared it is the
        method's own block just as an anonymous `&` is: `blk.call(x)` inside a
@@ -11478,6 +11481,12 @@ int desugar_value_callable_forwards(Compiler *c) {
        re-reads (fwd_hoist_callable) */
     hoist = !simple_ref && !method_obj && !inline_lambda;
     ct = infer_type(c, ex);
+    /* a block's own `&b` is nil where its caller gave none: tested where
+       the call runs, as fill's callable is */
+    if (ct == TY_PROC && exk == NK_LocalVariableReadNode) {
+      LocalVar *xlv = scope_local(comp_scope_of(c, ex), nt_str(nt, ex, "name"));
+      blk_nilable = xlv && xlv->is_block_param;
+    }
     /* A poly local can hold a callable produced by an operation whose static
        type stays poly -- e.g. `procs.reduce(:>>)`, a composed Proc. Forward it
        as a value callable too (its `.call` dispatches at runtime) (#3167). */
@@ -11531,6 +11540,11 @@ int desugar_value_callable_forwards(Compiler *c) {
        call on its Array or Hash */
     { TyKind sk = TY_UNKNOWN;
       if (ty_is_object(rt) && comp_arysub_call(c, id, rt, &sk) && sk != TY_UNKNOWN) rt = sk; }
+    int blockless_form = rt == TY_STRING || rt == TY_IO ||
+                         ((ty_is_array(rt) || ty_is_hash(rt) || rt == TY_RANGE || rt == TY_POLY) &&
+                          builtin_enum_name_index(name) < 0) ||
+                         fwd_array_new_call(nt, id);
+    if (blk_nilable && !blockless_form) continue;
     /* Hash `each`/`each_pair` yields the [k,v] pair, forwarded as a single array
        argument `c.call([k, v])` (built below) -- correct for every arity: a
        1-param callable gets the pair, a 2-param proc auto-splats it, a 2-param
@@ -11687,7 +11701,7 @@ int desugar_value_callable_forwards(Compiler *c) {
     int *ahead = NULL, nahead = 0;
     if (hoist) fwd_hoist_callable(c, id, blk, &ex, ex >= 0 && nt_kind(nt, ex) == NK_CallNode && !bo_may_act(nt, ex), &ahead, &nahead);
     int fill_test = -1;
-    if (fill_nilable) {
+    if (fill_nilable || blk_nilable) {
       /* the callable is read once, into the temp the test assigns */
       char tn[48];
       snprintf(tn, sizeof tn, "__fwdc_%s", comp_node_tag(c, id));
@@ -11799,13 +11813,9 @@ int desugar_value_callable_forwards(Compiler *c) {
     Scope *fms = comp_scope_of(c, id);
     int own = anon || (nt_kind(nt, ex) == NK_LocalVariableReadNode && fms && fms->blk_param &&
                        nt_str(nt, ex, "name") && sp_streq(nt_str(nt, ex, "name"), fms->blk_param));
-    int blockless_form = rt == TY_STRING || rt == TY_IO ||
-                         ((ty_is_array(rt) || ty_is_hash(rt) || rt == TY_RANGE || rt == TY_POLY) &&
-                          builtin_enum_name_index(name) < 0) ||
-                         fwd_array_new_call(nt, id);
     if (own && blockless_form && fwd_method_called_blockless(c, fms))
       fwd_branch_on_block_given(c, id);
-    else if (fill_nilable) fwd_branch_on_callable(c, id, fill_test);
+    else if (fill_nilable || blk_nilable) fwd_branch_on_callable(c, id, fill_test);
     /* a splat beside the forward was kept whole while the block was an
        `&` (a block goes on one arm only); the literal now spreads it */
     else if (anon) expand_static_splat_args(c, id, id + 1);

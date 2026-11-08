@@ -199,8 +199,8 @@ static inline sp_String *sp_exc_one_owner(const char *m) {
     return (sp_String *)(void *)((sp_str_hdr *)((char *)m - sizeof(sp_str_hdr) - 1))->next;
   return NULL;
 }
-/* the owner, read before the message is copied to the heap, and rooted */
-#define SP_EXC_ONE_OWNER(m) sp_String *_one_h = sp_exc_one_owner(m); SP_GC_ROOT(_one_h);
+/* (a constructor reads the message's owner, `_one_h`, before the message is
+   copied to the heap, and roots it) */
 static inline void sp_exc_one_attach(sp_Exception *e, sp_String *h) {
   if (e && h) { sp_gc_wb((void *)e); e->msg_h = h; return; }
   /* a message no one else holds (a new String): the exception's own handle
@@ -271,7 +271,7 @@ sp_Exception *sp_exc_new_for_catch(const char *cls, const char *msg) {
   /* the caller's message may be held by nothing else: rooted before the
      copy allocates (#8323) */
   const char *msg0 = msg; SP_GC_ROOT_STR(msg0);
-  SP_EXC_ONE_OWNER(msg)
+  sp_String *_one_h = sp_exc_one_owner(msg); SP_GC_ROOT(_one_h);
   if (!sp_exc_msg_empty_given(msg)) msg = sp_msg_heapify(msg); SP_GC_ROOT_STR(msg);
   sp_Exception *e = sp_exc_new(cls, msg);
   if (fz && e->msg) {
@@ -311,7 +311,7 @@ void *sp_exc_ensure_obj(void **obj, const char **msg, const char *cls) {
    where a user subclass with ivars was raised without a carried object
    (#1415). The class the name says decides the size, the scan and the
    ivars' unset state (sp_exc_alloc_named). */
-void *sp_exc_new_sub_sized(size_t sz, const char *cls_name, const char *msg) {SP_EXC_ONE_OWNER(msg) if (!sp_exc_msg_empty_given(msg)) msg = sp_msg_heapify(msg); SP_GC_ROOT_STR(msg);
+void *sp_exc_new_sub_sized(size_t sz, const char *cls_name, const char *msg) {sp_String *_one_h = sp_exc_one_owner(msg); SP_GC_ROOT(_one_h); if (!sp_exc_msg_empty_given(msg)) msg = sp_msg_heapify(msg); SP_GC_ROOT_STR(msg);
   sp_Exception *e = sp_exc_alloc_named(sz, cls_name);
   e->cls_name = cls_name ? cls_name : "RuntimeError";
   e->result = sp_box_nil();   /* memset left tag 0 (int 0); StopIteration#result wants nil */
@@ -395,7 +395,7 @@ sp_RbVal sp_Exception_set_backtrace(sp_Exception *e, sp_StrArray *bt) {
    collection in between (sp_msg_heapify), so an unrooted heap message cannot
    be swept out from under it either. The no-message sentinel keeps its
    identity: it is what tells an empty message apart from none at all. */
-sp_Exception *sp_exc_new(const char *cls_name, const char *msg) {SP_EXC_ONE_OWNER(msg) if (!sp_exc_msg_empty_given(msg)) msg = sp_msg_heapify(msg); SP_GC_ROOT_STR(msg);
+sp_Exception *sp_exc_new(const char *cls_name, const char *msg) {sp_String *_one_h = sp_exc_one_owner(msg); SP_GC_ROOT(_one_h); if (!sp_exc_msg_empty_given(msg)) msg = sp_msg_heapify(msg); SP_GC_ROOT_STR(msg);
   sp_Exception *e = sp_exc_alloc_named(sizeof(sp_Exception), cls_name);
   e->cls_name = cls_name ? cls_name : "RuntimeError";
   e->parent_cls_name = NULL;
@@ -450,7 +450,7 @@ sp_bool sp_exc_eq(sp_Exception *a, sp_Exception *b) {
     size_t al = sp_str_byte_len(am), bl = sp_str_byte_len(bm);
     return al == bl && memcmp(am, bm, al) == 0; }
 }
-sp_Exception *sp_exc_new_sub(const char *cls_name, const char *parent_cls, const char *msg) {SP_EXC_ONE_OWNER(msg) if (!sp_exc_msg_empty_given(msg)) msg = sp_msg_heapify(msg); SP_GC_ROOT_STR(msg);
+sp_Exception *sp_exc_new_sub(const char *cls_name, const char *parent_cls, const char *msg) {sp_String *_one_h = sp_exc_one_owner(msg); SP_GC_ROOT(_one_h); if (!sp_exc_msg_empty_given(msg)) msg = sp_msg_heapify(msg); SP_GC_ROOT_STR(msg);
   sp_Exception *e = sp_exc_new(cls_name, msg);   /* empty msg already fell back to cls_name */
   sp_exc_one_attach(e, (sp_String *)_one_h);
   e->parent_cls_name = parent_cls;
@@ -480,7 +480,7 @@ sp_Exception *sp_exc_clone(sp_Exception *e) {
 }
 /* Write the staged introspection values (receiver/key/value) into the carried
    exception, creating one when the raise had none (see sp_raise_cls). */
-void *sp_exc_apply_staged(const char *cls, const char *msg, void *obj) {SP_EXC_ONE_OWNER(msg) if (!sp_exc_msg_empty_given(msg)) msg = sp_msg_heapify(msg); SP_GC_ROOT_STR(msg);
+void *sp_exc_apply_staged(const char *cls, const char *msg, void *obj) {sp_String *_one_h = sp_exc_one_owner(msg); SP_GC_ROOT(_one_h); if (!sp_exc_msg_empty_given(msg)) msg = sp_msg_heapify(msg); SP_GC_ROOT_STR(msg);
   sp_Exception *e = (sp_Exception *)obj;
   if (!e) { e = sp_exc_new(cls, msg); sp_exc_one_attach(e, (sp_String *)_one_h); }
   /* `obj` is a caller-supplied exception that may have been promoted long ago
@@ -504,7 +504,7 @@ int sp_exc_exit_status(void *obj) {
 /* Exception#exception(msg): a copy of the receiver carrying the new message. */
 /* e's message, as sp_exc_new takes it, in place of the one before: a copy on
    the heap, with the String it is a view of as the handle. NULL clears it. */
-void sp_exc_set_msg(sp_Exception *e, const char *msg) {SP_GC_ROOT(e);SP_EXC_ONE_OWNER(msg) if (!sp_exc_msg_empty_given(msg)) msg = sp_msg_heapify(msg); SP_GC_ROOT_STR(msg);
+void sp_exc_set_msg(sp_Exception *e, const char *msg) {SP_GC_ROOT(e);sp_String *_one_h = sp_exc_one_owner(msg); SP_GC_ROOT(_one_h); if (!sp_exc_msg_empty_given(msg)) msg = sp_msg_heapify(msg); SP_GC_ROOT_STR(msg);
   e->msg = NULL;
   e->msg_h = NULL;
   if ((msg && msg[0]) || sp_exc_msg_empty_given(msg)) {
@@ -515,7 +515,7 @@ void sp_exc_set_msg(sp_Exception *e, const char *msg) {SP_GC_ROOT(e);SP_EXC_ONE_
   }
   sp_gc_wb((void *)e);
 }
-sp_Exception *sp_exc_exception(sp_Exception *e, const char *msg) {SP_GC_ROOT(e);SP_EXC_ONE_OWNER(msg) if (!sp_exc_msg_empty_given(msg)) msg = sp_msg_heapify(msg); SP_GC_ROOT_STR(msg);
+sp_Exception *sp_exc_exception(sp_Exception *e, const char *msg) {SP_GC_ROOT(e);sp_String *_one_h = sp_exc_one_owner(msg); SP_GC_ROOT(_one_h); if (!sp_exc_msg_empty_given(msg)) msg = sp_msg_heapify(msg); SP_GC_ROOT_STR(msg);
   sp_Exception *n = sp_exc_dup(e);
   SP_GC_ROOT(n);
   /* an explicitly given empty message stays empty, frozen for a literal's,

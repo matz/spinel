@@ -777,10 +777,10 @@ sp_StrStrHash *sp_StrPolyHash_to_s_values(sp_StrPolyHash *h)
   SP_GC_ROOT(h);
   sp_StrStrHash *r = sp_StrStrHash_new(); SP_GC_ROOT(r);
   /* a missing match reads the default, as its to_s (nil's "" is no default) */
-  if (h && h->default_v.tag != SP_TAG_NIL) r->default_v = SP_SEF(sp_poly_to_s(h->default_v));
+  if (h && h->default_v.tag != SP_TAG_NIL) r->default_v = sp_String_new_shared(sp_poly_to_s(h->default_v));
   if (h) for (sp_int i = 0; i < h->len; i++) {
     const char *k = h->order[i];
-    sp_StrStrHash_set_e(r, k, SP_SEF(sp_poly_to_s(sp_StrPolyHash_get(h, k))));
+    sp_StrStrHash_set_e(r, k, sp_String_new_shared(sp_poly_to_s(sp_StrPolyHash_get(h, k))));
   }
   return r;
 }
@@ -1306,8 +1306,8 @@ sp_PolyPolyHash *sp_poly_hash_merge(sp_RbVal a, sp_RbVal b)
   if (a.tag == SP_TAG_OBJ && a.v.p) {
     switch (a.cls_id) {
       case SP_BUILTIN_STR_INT_HASH: { sp_StrIntHash *h = (sp_StrIntHash *)a.v.p; r->default_v = h->default_nil ? sp_box_nil() : sp_box_int(h->default_v); break; }
-      case SP_BUILTIN_STR_STR_HASH: r->default_v = SP_SEBOXN(((sp_StrStrHash *)a.v.p)->default_v); break;
-      case SP_BUILTIN_INT_STR_HASH: r->default_v = SP_SEBOXN(((sp_IntStrHash *)a.v.p)->default_v); break;
+      case SP_BUILTIN_STR_STR_HASH: r->default_v = SP_SEBOX(((sp_StrStrHash *)a.v.p)->default_v); break;
+      case SP_BUILTIN_INT_STR_HASH: r->default_v = SP_SEBOX(((sp_IntStrHash *)a.v.p)->default_v); break;
       case SP_BUILTIN_INT_INT_HASH: { sp_IntIntHash *h = (sp_IntIntHash *)a.v.p; r->default_v = h->default_nil ? sp_box_nil() : sp_box_int(h->default_v); break; }
       case SP_BUILTIN_STR_POLY_HASH: r->default_v = ((sp_StrPolyHash *)a.v.p)->default_v; break;
       case SP_BUILTIN_SYM_POLY_HASH: r->default_v = ((sp_SymPolyHash *)a.v.p)->default_v; break;
@@ -1411,20 +1411,20 @@ void sp_poly_hash_writeback_ex(sp_RbVal orig, sp_PolyPolyHash *work, int with_de
     case SP_BUILTIN_STR_STR_HASH: {
       sp_StrStrHash *h = (sp_StrStrHash *)orig.v.p;
       sp_StrStrHash_clear(h);
-      if (with_default) h->default_v = SP_SEF(sp_poly_to_s_or_nil(work->default_v));
+      if (with_default) h->default_v = sp_String_new_shared(sp_poly_to_s_or_nil(work->default_v));
       for (sp_int i = 0; i < work->len; i++) {
         sp_int j = work->order[i];
-        sp_StrStrHash_set_e(h, sp_poly_to_s(work->keys[j]), SP_SEF(sp_poly_to_s_or_nil(work->vals[j])));
+        sp_StrStrHash_set_e(h, sp_poly_to_s(work->keys[j]), sp_String_new_shared(sp_poly_to_s_or_nil(work->vals[j])));
       }
       return;
     }
     case SP_BUILTIN_INT_STR_HASH: {
       sp_IntStrHash *h = (sp_IntStrHash *)orig.v.p;
       sp_IntStrHash_clear(h);
-      if (with_default) h->default_v = SP_SEF(sp_poly_to_s_or_nil(work->default_v));
+      if (with_default) h->default_v = sp_String_new_shared(sp_poly_to_s_or_nil(work->default_v));
       for (sp_int i = 0; i < work->len; i++) {
         sp_int j = work->order[i];
-        sp_IntStrHash_set_e(h, sp_poly_to_i(work->keys[j]), SP_SEF(sp_poly_to_s_or_nil(work->vals[j])));
+        sp_IntStrHash_set_e(h, sp_poly_to_i(work->keys[j]), sp_String_new_shared(sp_poly_to_s_or_nil(work->vals[j])));
       }
       return;
     }

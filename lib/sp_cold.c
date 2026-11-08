@@ -691,7 +691,7 @@ static int sp_glob_has_meta(const char *comp) {
 static void sp_glob_push(sp_StrArray *a, const char *path) {
   char *copy = sp_str_alloc(strlen(path));
   strcpy(copy, path);
-  sp_StrArray_push_e(a, SP_SEF(copy));
+  sp_StrArray_push_e(a, sp_String_new_shared(copy));
 }
 
 static int sp_glob_is_dir(const char *path) {
@@ -1093,7 +1093,7 @@ sp_StrArray *sp_file_readlines(const char *path) {SP_GC_ROOT_STR(path);
     char *_r = sp_str_alloc_raw(_l + 1);
     memcpy(_r, _buf, _l); _r[_l] = '\0';
     sp_str_set_len(_r, _l);
-    sp_StrArray_push_e(a, SP_SEF(_r));
+    sp_StrArray_push_e(a, sp_String_new_shared(_r));
   }
   free(_buf);
   fclose(_fp);
@@ -1116,7 +1116,7 @@ sp_StrArray *sp_file_readlines_chomp(const char *path) {SP_GC_ROOT_STR(path);
     char *_r = sp_str_alloc_raw(_l + 1);
     memcpy(_r, _buf, _l); _r[_l] = '\0';
     sp_str_set_len(_r, _l);
-    sp_StrArray_push_e(a, SP_SEF(_r));
+    sp_StrArray_push_e(a, sp_String_new_shared(_r));
   }
   free(_buf);
   fclose(_fp);
@@ -1541,7 +1541,7 @@ static void sp_typed_array_replace_boxed(sp_RbVal recv, sp_RbVal src) {
       sp_StrArray *st = sp_StrArray_new(); SP_GC_ROOT(st);
       for (sp_int i = 0; i < els->len; i++) {
         sp_RbVal e = els->data[i];
-        if (e.tag == SP_TAG_STR) sp_StrArray_push_e(st, SP_SEF(e.v.s));
+        if (e.tag == SP_TAG_STR) sp_StrArray_push_e(st, sp_String_new_shared(e.v.s));
         else if (e.tag == SP_TAG_OBJ && e.cls_id == SP_BUILTIN_STRBUF)
           sp_StrArray_push_e(st, (sp_strelem)e.v.p);   /* the handle itself: one String */
         else if (e.tag == SP_TAG_NIL) sp_StrArray_push(st, NULL);
@@ -1867,7 +1867,7 @@ sp_StrArray *sp_dir_entries_impl(const char *path, int children) {
         (name[1] == 0 || (name[1] == '.' && name[2] == 0))) continue;
     char *copy = sp_str_alloc(strlen(name));
     strcpy(copy, name);
-    sp_StrArray_push_e(a, SP_SEF(copy));
+    sp_StrArray_push_e(a, sp_String_new_shared(copy));
   }
   closedir(d);
   sp_StrArray_sort_bang(a);
@@ -1960,7 +1960,7 @@ else if (kind == SP_BUILTIN_STR_ARRAY) {
       SP_GC_ROOT(col);
       for (sp_int r = 0; r < nrows; r++) {
         sp_RbVal rv = rows->data[r];
-        sp_strelem val = SP_SEF(sp_str_empty);
+        sp_strelem val = sp_String_new_shared(sp_str_empty);
         if (rv.tag == SP_TAG_OBJ && rv.cls_id == SP_BUILTIN_STR_ARRAY) {
           sp_StrArray *row = (sp_StrArray *)rv.v.p;
           if (c < row->len && row->data[c]) val = row->data[c];
@@ -2311,8 +2311,8 @@ sp_StrArray *sp_bt_format(void **buf, int n) {
   }
   for (int i = 0; i < n; i++) {
     if (!names[i]) continue;
-    if (lines && lines[i] > 0) sp_StrArray_push_e(a, SP_SEF(sp_sprintf("%s:%d:in `%s'", files[i], lines[i], names[i])));
-    else sp_StrArray_push_e(a, SP_SEF(sp_sprintf("%s:in `%s'", files[i], names[i])));
+    if (lines && lines[i] > 0) sp_StrArray_push_e(a, sp_String_new_shared(sp_sprintf("%s:%d:in `%s'", files[i], lines[i], names[i])));
+    else sp_StrArray_push_e(a, sp_String_new_shared(sp_sprintf("%s:in `%s'", files[i], names[i])));
     free(names[i]);
   }
   if (lfiles) for (int i = 0; i < n; i++) free(lfiles[i]);
@@ -2533,7 +2533,7 @@ sp_StrArray *sp_File_readlines_sep(sp_File *f, const char *sep, sp_bool chomp) {
   sp_StrArray *a = sp_StrArray_new();
   SP_GC_ROOT(a);
   const char *l;
-  while ((l = sp_File_gets_sep(f, sep, 0, chomp)) != NULL) sp_StrArray_push_e(a, SP_SEF(l));
+  while ((l = sp_File_gets_sep(f, sep, 0, chomp)) != NULL) sp_StrArray_push_e(a, sp_String_new_shared(l));
   return a;
 }
 sp_StrArray *sp_file_readlines_sep(const char *path, const char *sep, sp_bool chomp) {SP_GC_ROOT_STR(path);SP_GC_ROOT_STR(sep);
@@ -3298,8 +3298,8 @@ sp_bool sp_file_fnmatch(const char *pat, const char *path, sp_int flags) {
 sp_StrArray *sp_file_split(const char *path) {SP_GC_ROOT_STR(path);
   sp_StrArray *a = sp_StrArray_new();
   SP_GC_ROOT(a);
-  sp_StrArray_push_e(a, SP_SEF(sp_file_dirname(path)));
-  sp_StrArray_push_e(a, SP_SEF(sp_file_basename(path)));
+  sp_StrArray_push_e(a, sp_String_new_shared(sp_file_dirname(path)));
+  sp_StrArray_push_e(a, sp_String_new_shared(sp_file_basename(path)));
   return a;
 }
 sp_bool sp_file_zero(const char *path) {
@@ -3410,7 +3410,7 @@ sp_StrArray *sp_Dir_entries_h(sp_Dir *d, sp_int children) {SP_GC_ROOT(d);
   struct dirent *e;
   while ((e = readdir(d->dp)) != NULL) {
     if (children && (strcmp(e->d_name, ".") == 0 || strcmp(e->d_name, "..") == 0)) continue;
-    sp_StrArray_push_e(a, SP_SEF(sp_sprintf("%s", e->d_name)));
+    sp_StrArray_push_e(a, sp_String_new_shared(sp_sprintf("%s", e->d_name)));
   }
   rewinddir(d->dp);
   return a;
@@ -4446,7 +4446,7 @@ sp_StrStrHash *sp_env_to_h(void) {
     size_t kl = (size_t)(eq - *e);
     char *k = sp_str_alloc_raw(kl + 1);
     memcpy(k, *e, kl); k[kl] = 0;
-    sp_StrStrHash_set_e(h, k, SP_SEF(v));
+    sp_StrStrHash_set_e(h, k, sp_String_new_shared(v));
   }
   return h;
 }
@@ -4834,7 +4834,7 @@ sp_StrArray *sp_get_ARGV(void) {
       /* frozen, as CRuby's are, and collectible like ENV's copies (sp_env_str) */
       unsigned char *m = (unsigned char *)sp_argv.data[i] - 1;
       if (*m == 0xfe) *m = 0xfa;
-      sp_StrArray_push_e(sp_argv_array_cache, SP_SEF(sp_argv.data[i]));
+      sp_StrArray_push_e(sp_argv_array_cache, sp_String_new_shared(sp_argv.data[i]));
     }
   }
   return sp_argv_array_cache;
@@ -4992,7 +4992,7 @@ const char *sp_argf_read(void) {
 sp_StrArray *sp_argf_readlines(void) {
   sp_StrArray *a = sp_StrArray_new(); SP_GC_ROOT(a);
   const char *line;
-  while ((line = sp_argf_gets())) sp_StrArray_push_e(a, SP_SEF(line));
+  while ((line = sp_argf_gets())) sp_StrArray_push_e(a, sp_String_new_shared(line));
   return a;
 }
 /* CRuby opens the next file to name it, so ARGV loses it here too */
@@ -5117,7 +5117,7 @@ sp_StrArray *sp_srange_to_a(sp_StrRange r) {
 typedef struct { sp_StrArray *a; sp_int n; } sp_srange_take_st;
 static int sp_srange_take_push(const char *m, void *arg) {
   sp_srange_take_st *st = (sp_srange_take_st *)arg;
-  sp_StrArray_push_e(st->a, SP_SEF(m));
+  sp_StrArray_push_e(st->a, sp_String_new_shared(m));
   return st->a->len >= st->n;
 }
 sp_StrArray *sp_srange_first_n(sp_RbVal box, sp_int n, int take) {
@@ -5138,7 +5138,7 @@ sp_StrArray *sp_srange_first_n(sp_RbVal box, sp_int n, int take) {
     sp_str_upto_each(cur, last, r.excl, sp_srange_take_push, &st);
     return a;
   }
-  for (; a->len < n; cur = sp_str_succ(cur)) sp_StrArray_push_e(a, SP_SEF(sp_str_from_bytes(cur, sp_str_byte_len(cur))));
+  for (; a->len < n; cur = sp_str_succ(cur)) sp_StrArray_push_e(a, sp_String_new_shared(sp_str_from_bytes(cur, sp_str_byte_len(cur))));
   return a;
 }
 sp_bool sp_srange_eq(sp_StrRange a, sp_StrRange b) {
@@ -5927,7 +5927,7 @@ const char *sp_StrArray_sum_str(sp_StrArray *a, const char *init) {SP_GC_ROOT(a)
   }
   char *r = sp_str_alloc(n); size_t o = 0;
   if (init) { o = sp_str_byte_len(init); memcpy(r, init, o); }
-  if (a) for (sp_int i = 0; i < a->len; i++) if (a->data[i]) { size_t l = sp_str_byte_len(SP_SEBN(a->data[i])); memcpy(r + o, SP_SEBN(a->data[i]), l); o += l; }
+  if (a) for (sp_int i = 0; i < a->len; i++) if (a->data[i]) { size_t l = sp_str_byte_len((a->data[i]->data)); memcpy(r + o, (a->data[i]->data), l); o += l; }
   r[o] = 0; sp_str_set_len(r, o); return r;
 }
 sp_RbVal sp_StrArray_uniq_bangq(sp_StrArray *a) {SP_GC_ROOT(a);

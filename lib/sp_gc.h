@@ -540,6 +540,8 @@ static inline void sp_gc_mark(void *obj) { (void)obj; }
 #else
 void sp_gc_mark(void *obj);
 #endif
+/* an element of a String container (sp_strelem): nil marks nothing */
+static inline void sp_strelem_mark(sp_strelem e) { if (e) sp_gc_mark((void *)e); }
 void sp_gc_mark_all(void);
 void sp_gc_mark_drain(void);
 extern int sp_gc_minor;

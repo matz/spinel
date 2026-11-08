@@ -425,25 +425,25 @@ sp_StrArray *sp_re_rpartition(mrb_regexp_pattern *pat, const char *str) {
   SP_GC_ROOT(r);
   if (ms < 0) {
     /* new Strings, as CRuby's: not the receiver, nor one shared "" */
-    sp_StrArray_push_e(r, SP_SEF(sp_str_empty_like(str)));
-    sp_StrArray_push_e(r, SP_SEF(sp_str_empty_like(str)));
-    sp_StrArray_push_e(r, SP_SEF(sp_str_dup(str)));
+    sp_StrArray_push_e(r, sp_String_new_shared(sp_str_empty_like(str)));
+    sp_StrArray_push_e(r, sp_String_new_shared(sp_str_empty_like(str)));
+    sp_StrArray_push_e(r, sp_String_new_shared(sp_str_dup(str)));
     return r;
   }
   char *before = sp_str_alloc_raw(ms + 1);
   memcpy(before, str, ms); before[ms] = 0;
   sp_str_set_len(before, (size_t)ms);
-  sp_StrArray_push_e(r, SP_SEF(sp_str_bin_like(str, before)));
+  sp_StrArray_push_e(r, sp_String_new_shared(sp_str_bin_like(str, before)));
   int mlen = (int)(me - ms);
   char *mid = sp_str_alloc_raw(mlen + 1);
   memcpy(mid, str + ms, mlen); mid[mlen] = 0;
   sp_str_set_len(mid, (size_t)mlen);
-  sp_StrArray_push_e(r, SP_SEF(sp_str_bin_like(str, mid)));
+  sp_StrArray_push_e(r, sp_String_new_shared(sp_str_bin_like(str, mid)));
   int alen = (int)(slen - me);
   char *after = sp_str_alloc_raw(alen + 1);
   memcpy(after, str + me, alen); after[alen] = 0;
   sp_str_set_len(after, (size_t)alen);
-  sp_StrArray_push_e(r, SP_SEF(sp_str_bin_like(str, after)));
+  sp_StrArray_push_e(r, sp_String_new_shared(sp_str_bin_like(str, after)));
   return r;
 }
 sp_bool sp_re_match_p(mrb_regexp_pattern *pat, const char *str) {
@@ -819,7 +819,7 @@ sp_StrArray *sp_re_scan(mrb_regexp_pattern *pat, const char *str) {
     int len = caps[1] - caps[0];
     char *m = sp_str_alloc_raw(len+1); memcpy(m, str+caps[0], len); m[len] = 0;
     sp_str_set_len(m, (size_t)len);
-    sp_StrArray_push_e(arr, SP_SEF(sp_str_bin_like(str, m)));
+    sp_StrArray_push_e(arr, sp_String_new_shared(sp_str_bin_like(str, m)));
     pos = caps[1]; if (caps[0] == caps[1]) pos++;
   }
   if (sp_re_track_last) sp_re_set_last_match(pat, str, lastcaps, lastn);
@@ -908,7 +908,7 @@ static void split_push_slice(sp_StrArray *arr, const char *str, int64_t from, in
   char *m = sp_str_alloc_raw(len + 1);
   memcpy(m, str + from, len); m[len] = 0;
   sp_str_set_len(m, (size_t)len);
-  sp_StrArray_push_e(arr, SP_SEF(sp_str_bin_like(str, m)));
+  sp_StrArray_push_e(arr, sp_String_new_shared(sp_str_bin_like(str, m)));
 }
 
 sp_StrArray *sp_re_split_limit(mrb_regexp_pattern *pat, const char *str, sp_int limit) {SP_GC_ROOT_STR(str);if(!str)sp_nil_recv("split");
@@ -1108,7 +1108,7 @@ else {
     }
   }
   if (out_len == in_len) {
-    return SP_ONE_ANSWER(src);
+    return sp_str_one_answer(src);
   }
   char *buf = sp_str_alloc(out_len);
   size_t j = 0;
@@ -1417,7 +1417,7 @@ sp_StrArray *sp_Regexp_names(const mrb_regexp_pattern *pat) {
        whose length sp_str_dup and the comparison take from the byte before
        it -- the allocator's, past the start of the block. */
     nm = sp_str_dup_external(nm);
-    sp_strelem el = SP_SEF(nm);
+    sp_strelem el = sp_String_new_shared(nm);
     /* a name reused across alternatives is one name, however many groups
        carry it (#3682) */
     if (!sp_StrArray_include_e(a, el)) sp_StrArray_push_e(a, el);
@@ -1439,7 +1439,7 @@ sp_StrArray *sp_MatchData_names(sp_MatchData *m) {SP_GC_ROOT(m);
     const char *nm = re_named_name(m->pat, i, NULL);
     if (!nm) continue;
     nm = sp_str_dup_external(nm);   /* as in sp_Regexp_names */
-    sp_strelem el = SP_SEF(nm);
+    sp_strelem el = sp_String_new_shared(nm);
     if (!sp_StrArray_include_e(a, el)) sp_StrArray_push_e(a, el);
   }
   return a;

@@ -17,7 +17,7 @@
 #include <stdint.h>
 #include <math.h>      /* isnan / isinf / signbit / NAN / fabs for sp_float_sum_step */
 #include "sp_gc.h"      /* sp_gc_hdr, sp_gc_bytes, SP_GC_ROOT, sp_oom_die */
-/* SP_SEFX's fast cases, where a bytes-form wrapper takes a String in: a
+/* sp_strelem_fx's fast cases, where a bytes-form wrapper takes a String in: a
    payload view's owner (0xfd, the header's link) and a frozen literal
    whose handle exists already (0xf1, the header's tagged link to its slot,
    whose first word is the handle: sp_StringLiteral). Anything else, a new
@@ -675,14 +675,14 @@ void *sp_PtrArray_sample(sp_PtrArray *a);
    inside the struct so empty/short StrArrays skip the data malloc.
    data == inline_data is the discriminator for "still on inline storage". */
 static void sp_StrArray_fin(void*p){sp_StrArray*a=(sp_StrArray*)p;if(SP_ARR_BUF(a)!=a->inline_data){sp_gc_hdr*h=(sp_gc_hdr*)((char*)a-sizeof(sp_gc_hdr));sp_gc_bytes_sub(sizeof(sp_strelem)*SP_ARR_BUF_CAP(a));h->size-=sizeof(sp_strelem)*SP_ARR_BUF_CAP(a);sp_pl_free(SP_ARR_BUF(a));}}
-static void sp_StrArray_scan(void*p){sp_StrArray*a=(sp_StrArray*)p;for(sp_int i=0;i<a->len;i++)SP_SEM(a->data[i]);}
+static void sp_StrArray_scan(void*p){sp_StrArray*a=(sp_StrArray*)p;for(sp_int i=0;i<a->len;i++)sp_strelem_mark(a->data[i]);}
 static sp_StrArray*sp_StrArray_new(void){sp_StrArray*a=(sp_StrArray*)sp_gc_alloc(sizeof(sp_StrArray),sp_StrArray_fin,sp_StrArray_scan);a->cap=SP_STRARR_INLINE;a->data=a->inline_data;a->len=0;return a;}
 static void sp_StrArray_init_embedded(sp_StrArray*a){a->cap=SP_STRARR_INLINE;a->data=a->inline_data;a->len=0;}  /* see sp_IntArray_init_embedded */
 /* sp_PtrArray_take_back */
 static SP_NOINLINE int sp_StrArray_take_back(sp_StrArray*a){int room=a->head>=a->len;SP_ARR_REBASE(a);return room;}
 static inline void sp_StrArray_push_e(sp_StrArray*a,sp_strelem v){sp_gc_wb((void*)a); if(a->frozen){sp_raise_frozen_array_at(a, SP_BUILTIN_STR_ARRAY);return;}if(a->len>=a->cap){if(SP_UNLIKELY(a->head>0)&&sp_StrArray_take_back(a))goto put;sp_gc_hdr*h=(sp_gc_hdr*)((char*)a-sizeof(sp_gc_hdr));sp_int nc=((((((a->cap*2))))))+1;if(a->data==a->inline_data){sp_strelem*nd=(sp_strelem*)sp_pl_alloc(sizeof(sp_strelem)*nc);if(!nd)sp_oom_die();memcpy(nd,a->data,sizeof(sp_strelem)*a->len);a->data=nd;}
 else{sp_gc_bytes_sub(sizeof(sp_strelem)*a->cap);h->size-=sizeof(sp_strelem)*a->cap;void*nd=sp_pl_realloc(a->data,sizeof(sp_strelem)*nc);if(!nd)sp_oom_die();a->data=(sp_strelem*)nd;}a->cap=nc;h->size+=sizeof(sp_strelem)*a->cap;sp_gc_bytes_add(sizeof(sp_strelem)*a->cap);}put:a->data[a->len++]=v;}
-static inline void sp_StrArray_push(sp_StrArray*a,const char*v){sp_StrArray_push_e(a,SP_SEFX(v));}
+static inline void sp_StrArray_push(sp_StrArray*a,const char*v){sp_StrArray_push_e(a,sp_strelem_fx(v));}
 static inline sp_int sp_StrArray_length(sp_StrArray*a){return a ? a->len : 0;}
 static inline sp_int sp_StrArray_length_m(sp_StrArray*a){if (SP_UNLIKELY(!a)) sp_nil_recv("length");return a->len;}
 static inline sp_bool sp_StrArray_empty(sp_StrArray*a){sp_gc_wb((void*)a); return a->len==0;}
@@ -692,7 +692,7 @@ static inline sp_strelem sp_StrArray_get_m_e(sp_StrArray*a,sp_int i){if (SP_UNLI
 static inline const char *sp_StrArray_get(sp_StrArray*a,sp_int i){sp_strelem e=sp_StrArray_get_e(a,i);return SP_SEB(e);}
 static inline const char *sp_StrArray_get_m(sp_StrArray*a,sp_int i){sp_strelem e=sp_StrArray_get_m_e(a,i);return SP_SEB(e);}
 static inline void sp_StrArray_set_e(sp_StrArray*a,sp_int i,sp_strelem v){sp_gc_wb((void*)a); if (SP_UNLIKELY(!a)) sp_nil_recv("[]=");if(a->frozen){sp_raise_frozen_array_at(a, SP_BUILTIN_STR_ARRAY);return;}sp_int orig=i;if(i<0)i+=a->len;if(i<0)sp_raise_cls("IndexError",sp_sprintf("index %lld too small for array; minimum: %lld",(long long)orig,(long long)-a->len));while(i>=a->len)sp_StrArray_push(a,NULL);a->data[i]=v;}  /* the gap is nil, not "" (#3836) */
-static inline void sp_StrArray_set(sp_StrArray*a,sp_int i,const char*v){sp_StrArray_set_e(a,i,SP_SEFX(v));}
+static inline void sp_StrArray_set(sp_StrArray*a,sp_int i,const char*v){sp_StrArray_set_e(a,i,sp_strelem_fx(v));}
 
 /* ---- sp_StrArray cold ops (compiled in lib/sp_array.c) ---- */
 void sp_StrArray_replace(sp_StrArray *dst, sp_StrArray *src);
@@ -717,9 +717,9 @@ sp_bool sp_StrArray_intersect_p(sp_StrArray *a, sp_StrArray *b);
 sp_StrArray *sp_StrArray_union(sp_StrArray *a, sp_StrArray *b);
 sp_StrArray *sp_StrArray_difference(sp_StrArray *a, sp_StrArray *b);
 sp_int sp_StrArray_index_e(sp_StrArray *a, sp_strelem v);
-static inline sp_int sp_StrArray_index(sp_StrArray *a, const char *v){return sp_StrArray_index_e(a,SP_SEFX(v));}
+static inline sp_int sp_StrArray_index(sp_StrArray *a, const char *v){return sp_StrArray_index_e(a,sp_strelem_fx(v));}
 sp_int sp_StrArray_rindex_e(sp_StrArray *a, sp_strelem v);
-static inline sp_int sp_StrArray_rindex(sp_StrArray *a, const char *v){return sp_StrArray_rindex_e(a,SP_SEFX(v));}
+static inline sp_int sp_StrArray_rindex(sp_StrArray *a, const char *v){return sp_StrArray_rindex_e(a,sp_strelem_fx(v));}
 sp_StrArray *sp_StrArray_compact(sp_StrArray *a);
 sp_IntArray *sp_IntArray_compact(sp_IntArray *a);
 sp_FloatArray *sp_FloatArray_compact(sp_FloatArray *a);
@@ -758,9 +758,9 @@ static inline sp_int sp_StrArray_truthy_count(sp_StrArray*a,sp_int limit){sp_int
 sp_strelem sp_StrArray_delete_at_e(sp_StrArray *a, sp_int i);
 sp_strelem sp_StrArray_delete_e(sp_StrArray *a, sp_strelem v);
 static inline const char *sp_StrArray_delete_at(sp_StrArray *a, sp_int i){sp_strelem e=sp_StrArray_delete_at_e(a,i);return SP_SEB(e);}
-static inline const char *sp_StrArray_delete(sp_StrArray *a, const char *v){sp_strelem e=sp_StrArray_delete_e(a,SP_SEFX(v));return SP_SEB(e);}
+static inline const char *sp_StrArray_delete(sp_StrArray *a, const char *v){sp_strelem e=sp_StrArray_delete_e(a,sp_strelem_fx(v));return SP_SEB(e);}
 void sp_StrArray_insert_e(sp_StrArray *a, sp_int i, sp_strelem v);
-static inline void sp_StrArray_insert(sp_StrArray *a, sp_int i, const char *v){sp_StrArray_insert_e(a,i,SP_SEFX(v));}
+static inline void sp_StrArray_insert(sp_StrArray *a, sp_int i, const char *v){sp_StrArray_insert_e(a,i,sp_strelem_fx(v));}
 void sp_StrArray_shuffle_bang(sp_StrArray *a);
 sp_StrArray *sp_StrArray_dup(sp_StrArray *a);
 static inline sp_StrArray *sp_StrArray_to_a(sp_StrArray *a) { return a ? a : sp_StrArray_new(); }
@@ -803,9 +803,9 @@ const char*sp_PtrArray_str_join(sp_PtrArray*a,const char*sep);
 sp_RbVal sp_IntArray_index_poly(sp_IntArray *a, sp_int v);
 sp_RbVal sp_IntArray_rindex_poly(sp_IntArray *a, sp_int v);
 sp_RbVal sp_StrArray_index_poly_e(sp_StrArray *a, sp_strelem v);
-static inline sp_RbVal sp_StrArray_index_poly(sp_StrArray *a, const char *v){return sp_StrArray_index_poly_e(a,SP_SEFX(v));}
+static inline sp_RbVal sp_StrArray_index_poly(sp_StrArray *a, const char *v){return sp_StrArray_index_poly_e(a,sp_strelem_fx(v));}
 sp_RbVal sp_StrArray_rindex_poly_e(sp_StrArray *a, sp_strelem v);
-static inline sp_RbVal sp_StrArray_rindex_poly(sp_StrArray *a, const char *v){return sp_StrArray_rindex_poly_e(a,SP_SEFX(v));}
+static inline sp_RbVal sp_StrArray_rindex_poly(sp_StrArray *a, const char *v){return sp_StrArray_rindex_poly_e(a,sp_strelem_fx(v));}
 sp_oint sp_IntArray_index_opt(sp_IntArray *a, sp_int v);
 sp_oint sp_IntArray_rindex_opt(sp_IntArray *a, sp_int v);
 /* index(nil) / rindex(nil) / include?(nil) / count(nil): the bitmap's view */

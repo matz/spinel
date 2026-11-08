@@ -13,7 +13,7 @@
  * sp_sprintf / sp_raise_cls are provided by the generated TU and resolved
  * at the final link (same as lib/sp_core.c). */
 #include "sp_array.h"   /* sp_StrArray, sp_IntArray + sp_alloc.h / sp_gc.h / sp_types.h */
-#include "sp_string.h"   /* sp_String_new_shared, behind SP_SEF (sp_str_split_push) */
+#include "sp_string.h"   /* sp_String_new_shared, for the elements (sp_str_split_push) */
 
 const char *sp_sprintf(const char *fmt, ...) SP_PRINTF_FORMAT(1, 2);  /* defined in the generated TU */
 
@@ -63,7 +63,7 @@ static inline void sp_str_split_push(sp_StrArray*a,const char*p,size_t n){
   /* record the real length: alloc_raw leaves it unset, so a piece holding an
      embedded NUL would answer strlen and read short */
   sp_str_set_len(r,n);
-  sp_StrArray_push_e(a,SP_SEF(r));
+  sp_StrArray_push_e(a,sp_String_new_shared(r));
 }
 
 const char *sp_bytestr(const char *hay, size_t hn, const char *need, size_t nn);   /* byte-wise substring search; lib/sp_str.c, also used by lib/sp_str_cold.c */
@@ -158,7 +158,6 @@ const char*sp_str_dup(const char*s);
    payload (marker 0xfd), which a sink would take as that handle, so the
    answer is a copy of it; any other bytes are the fresh String they were. */
 static inline const char*sp_str_one_answer(const char*s){return s&&((const unsigned char*)s)[-1]==0xfd?sp_str_dup(s):s;}
-#define SP_ONE_ANSWER(s) sp_str_one_answer(s)
 const char *sp_plain_char(unsigned char c);
 const char *sp_bin_char(unsigned char c);
 const char*sp_str_b(const char*s);

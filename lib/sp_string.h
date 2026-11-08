@@ -328,7 +328,7 @@ static SP_NOINLINE sp_String*sp_String_new_shared_make(const char*s){
   if(frozen){sp_gc_hdr*h=(sp_gc_hdr*)((char*)r-sizeof(sp_gc_hdr));h->frozen=1;}
   return r;
 }
-/* The handle a Hash key stands for (SP_SEK): a frozen handle's payload, which
+/* The handle a Hash key stands for (sp_String_key_handle): a frozen handle's payload, which
    sp_hash_key_str keeps as the key, answers that handle through the owner
    link; any other key (a frozen copy, a static) a new frozen handle over it. */
 static inline sp_String*sp_String_key_handle(const char*k){

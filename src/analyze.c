@@ -12608,10 +12608,13 @@ static int desugar_std_stream_bare_output(Compiler *c) {
       if (argc < 1 || argc > 16 || nt_argv_has(nt, argv, argc, NT_ARG_SPLAT | NT_ARG_BLOCK)) continue;
     }
     if (id >= c->node_cap) continue;
-    if (std_stream_bare_call_own(c, id, nm)) continue;
+    /* `Kernel.puts x` (desugar_kernel_recv left it bare) is Kernel's even
+       beside a puts of the program's, so it writes to $stdout too */
+    int kern = nt_int(nt, id, "kernel_recv", 0);
+    if (!kern && std_stream_bare_call_own(c, id, nm)) continue;
     /* printf's text comes from Kernel#format: not when the program has a
        format of its own anywhere (a class's would shadow it there) */
-    if (is_printf) {
+    if (is_printf && !kern) {
       int own_format = 0;
       for (int k = 0; k < c->nscopes && !own_format; k++)
         own_format = c->scopes[k].name && sp_streq(c->scopes[k].name, "format");
@@ -12630,6 +12633,9 @@ static int desugar_std_stream_bare_output(Compiler *c) {
       if (gv < 0) continue;
       nt_node_set_ref(nt, id, "receiver", gv);
       nt_set_vcall(nt, id, 0);
+      /* $stdout's puts now, not the builtin Kernel one */
+      nt_node_set_int(nt, id, "builtin_only", 0);
+      nt_node_set_int(nt, id, "kernel_recv", 0);
     }
     else {
       /* the text to write, and what the call answers */
@@ -12702,6 +12708,7 @@ static int desugar_std_stream_bare_output(Compiler *c) {
       }
       else {
         int fmt = sbo_call(nt, -1, "format", argv, argc, id);
+        if (fmt >= 0 && kern) { nt_node_set_int(nt, fmt, "kernel_recv", 1); nt_node_set_int(nt, fmt, "builtin_only", 1); }
         int wr = fmt >= 0 ? sbo_call(nt, sbo_stdout_read(c, id), "write", &fmt, 1, id) : -1;
         int nil = nt_new_node(nt, "NilNode");
         if (wr < 0 || nil < 0) continue;

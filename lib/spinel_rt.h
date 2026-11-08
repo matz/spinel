@@ -14871,16 +14871,37 @@ static sp_RbVal sp_poly_slot_inner(sp_RbVal outer, sp_int oidx) {
     return sp_poly_index_poly(outer, sp_box_int(oidx));
   return sp_poly_arr_get(outer, oidx);
 }
+/* Store `res`, what a change through outer[oidx] made of the element
+   `inner`, back into outer's slot. An element changed in place (the same
+   value) needs no store, and the outer container is not changed at all, so
+   a frozen outer Array of rows is fine (`TABLE = [[1, 2]].freeze;
+   TABLE[0][0] = 5`). A new value for the same element (a typed row promoted
+   to a PolyArray, a String's fresh buffer) is only a new representation of
+   it: a frozen outer Array takes it too, as CRuby changes the element in
+   place. */
+static void sp_poly_slot_store_back(sp_RbVal outer, sp_int oidx, sp_RbVal inner, sp_RbVal res) {
+  if (res.tag == inner.tag && res.cls_id == inner.cls_id && res.v.p == inner.v.p) return;
+  if (outer.tag == SP_TAG_OBJ && outer.cls_id == SP_BUILTIN_POLY_ARRAY && outer.v.p) {
+    sp_PolyArray *pa = (sp_PolyArray *)outer.v.p;
+    sp_int i = oidx < 0 ? oidx + pa->len : oidx;
+    if (pa->frozen && i >= 0 && i < pa->len) { sp_gc_wb((void *)pa); pa->data[i] = res; return; }
+  }
+  sp_poly_set_poly(outer, sp_box_int(oidx), res);
+}
 static sp_RbVal sp_poly_slot_splice(sp_RbVal outer, sp_int oidx, sp_int start, sp_int len, sp_RbVal src) {
   sp_RbVal inner = sp_poly_slot_inner(outer, oidx);
+  /* a missing row is nil, which has no []= (CRuby's NoMethodError) */
+  if (inner.tag == SP_TAG_NIL) { sp_raise_nomethod(sp_nomethod_msg("[]=", inner)); return inner; }
   sp_RbVal res = sp_poly_splice(inner, start, len, src);
-  sp_poly_set_poly(outer, sp_box_int(oidx), res);
+  sp_poly_slot_store_back(outer, oidx, inner, res);
   return res;
 }
 static sp_RbVal sp_poly_slot_splice_range(sp_RbVal outer, sp_int oidx, sp_Range r, sp_RbVal src) {
   sp_RbVal inner = sp_poly_slot_inner(outer, oidx);
+  /* a missing row is nil, which has no []= (CRuby's NoMethodError) */
+  if (inner.tag == SP_TAG_NIL) { sp_raise_nomethod(sp_nomethod_msg("[]=", inner)); return inner; }
   sp_RbVal res = sp_poly_splice_range(inner, r, src);
-  sp_poly_set_poly(outer, sp_box_int(oidx), res);
+  sp_poly_slot_store_back(outer, oidx, inner, res);
   return res;
 }
 /* `outer[oidx][ikey] = val` single-index assign through an index-expression
@@ -14895,11 +14916,11 @@ static sp_RbVal sp_poly_slot_set(sp_RbVal outer, sp_int oidx, sp_int ikey, sp_Rb
      back; widen_and_set has no string arm and dropped the write (#4067). */
   if (inner.tag == SP_TAG_STR || sp_poly_is_strbuf(inner)) {
     sp_RbVal sres = sp_poly_splice(inner, ikey, 1, val);
-    sp_poly_set_poly(outer, sp_box_int(oidx), sres);
+    sp_poly_slot_store_back(outer, oidx, inner, sres);
     return val;
   }
   sp_RbVal res = sp_poly_arr_widen_and_set(inner, ikey, val);
-  sp_poly_set_poly(outer, sp_box_int(oidx), res);
+  sp_poly_slot_store_back(outer, oidx, inner, res);
   return val;
 }
 /* `outer[oidx][key] = val` where the KEY is boxed: the same store-back as
@@ -14922,7 +14943,7 @@ static sp_RbVal sp_poly_slot_set_key(sp_RbVal outer, sp_int oidx, sp_RbVal key, 
                    : sp_sprintf("no implicit conversion of %s into Integer",
                                 sp_poly_class_name(key)));
     sp_RbVal sres = sp_poly_splice(inner, key.v.i, 1, val);
-    sp_poly_set_poly(outer, sp_box_int(oidx), sres);
+    sp_poly_slot_store_back(outer, oidx, inner, sres);
     return val;
   }
   return sp_poly_set_poly(inner, key, val);

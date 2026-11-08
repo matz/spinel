@@ -21521,7 +21521,8 @@ static void emit_ffi_decls(Compiler *c, Buf *b) {
       for (const char *s = cf->ffi_libs[li].names; ; ) {
         const char *semi = strchr(s, ';');
         int len = semi ? (int)(semi - s) : (int)strlen(s);
-        if (len > 0) buf_printf(b, "/* SPINEL_LINK: -l%.*s */\n", len, s);
+        /* (a flag or a path as ffi_lib_flag made it; a bare name otherwise) */
+        if (len > 0) buf_printf(b, "/* SPINEL_LINK: %s%.*s */\n", s[0] == '-' || s[0] == '/' ? "" : "-l", len, s);
         if (!semi) break;
         s = semi + 1;
       }

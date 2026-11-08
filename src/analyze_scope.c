@@ -7,6 +7,7 @@
 #include <stdint.h>
 #include <ctype.h>
 #include <stdio.h>
+#include <unistd.h>   /* access: ffi_lib_flag */
 #include <stdlib.h>
 
 /* `...` forwards the caller's args verbatim, so rather than a rest array we
@@ -4917,6 +4918,66 @@ void register_globals_consts(Compiler *c) {
 }
 
 /* Extract a symbol or string literal text from a node, or NULL. */
+/* The link flag for an ffi_lib name, into out (#11363): a path (one with a
+   '/') goes to the linker as it is; a library file name ("libz.so.1",
+   "libz.1.dylib") is `-l:<file>` for GNU ld and lld, and on macOS, whose
+   system libraries link from the SDK's stubs, `-l<name>` of its base name;
+   a bare name ("z") is `-l<name>`. With `found` set, 1 only for a name this
+   machine has a library file for (an Array's candidates are tried in order,
+   as the ffi gem tries them), else 1 for any name. */
+static int ffi_lib_exists_in_dirs(const char *file) {
+  static const char *const dirs[] = { "/usr/lib", "/usr/local/lib", "/lib", "/usr/lib64", "/lib64",
+    "/usr/lib/x86_64-linux-gnu", "/lib/x86_64-linux-gnu", "/usr/lib/aarch64-linux-gnu", "/lib/aarch64-linux-gnu",
+    "/opt/homebrew/lib", "/opt/local/lib", NULL };
+  char p[1024];
+  for (int i = 0; dirs[i]; i++) {
+    snprintf(p, sizeof p, "%s/%s", dirs[i], file);
+    if (access(p, F_OK) == 0) return 1;
+  }
+  return 0;
+}
+static int ffi_lib_flag(const char *name, char *out, size_t cap, int found) {
+  if (!name || !*name) return 0;
+  size_t n = strlen(name);
+  if (strchr(name, '/')) {
+    if (found && access(name, F_OK) != 0) return 0;
+    snprintf(out, cap, "%s", name);
+    return 1;
+  }
+  int file = n > 3 && strncmp(name, "lib", 3) == 0 &&
+             (strstr(name, ".so") || strstr(name, ".dylib") || strstr(name, ".a") || strstr(name, ".tbd"));
+  if (file) {
+#ifdef __APPLE__
+    /* libz.1.dylib -> z */
+    const char *dot = strchr(name + 3, '.');
+    size_t bl = dot ? (size_t)(dot - (name + 3)) : n - 3;
+    if (bl == 0) return 0;
+    if (found) {
+      char f[512];
+      snprintf(f, sizeof f, "lib%.*s.dylib", (int)bl, name + 3);
+      char sdk[640]; snprintf(sdk, sizeof sdk, "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/lib/lib%.*s.tbd", (int)bl, name + 3);
+      if (!ffi_lib_exists_in_dirs(name) && !ffi_lib_exists_in_dirs(f) && access(sdk, F_OK) != 0) return 0;
+    }
+    snprintf(out, cap, "-l%.*s", (int)bl, name + 3);
+#else
+    if (found && !ffi_lib_exists_in_dirs(name)) return 0;
+    snprintf(out, cap, "-l:%s", name);
+#endif
+    return 1;
+  }
+  if (found) {
+    char f[512]; int any = 0;
+    static const char *const ext[] = { ".so", ".a", ".dylib", ".tbd", NULL };
+    for (int i = 0; ext[i] && !any; i++) { snprintf(f, sizeof f, "lib%s%s", name, ext[i]); any = ffi_lib_exists_in_dirs(f); }
+#ifdef __APPLE__
+    if (!any) { char sdk[640]; snprintf(sdk, sizeof sdk, "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/lib/lib%s.tbd", name); any = access(sdk, F_OK) == 0; }
+#endif
+    if (!any) return 0;
+  }
+  snprintf(out, cap, "-l%s", name);
+  return 1;
+}
+
 const char *ffi_arg_str(const NodeTable *nt, int nid) {
   if (nid < 0) return NULL;
   const char *ty = nt_type(nt, nid);
@@ -5472,7 +5533,26 @@ void register_ffi_decls(Compiler *c) {
 
       if (sp_streq(dname, "ffi_lib")) {
         if (an < 1) ffi_decl_error(c, s, "`ffi_lib` needs a library name");
-        const char *libname = ffi_arg_str(nt, args[0]);
+        /* the link flag of a name, a file name or a path, or of the first
+           of an Array's candidates found here (ffi_lib_flag, #11363) */
+        const char *libname = NULL;
+        char flag[1024];
+        if (nt_kind(nt, args[0]) == NK_ArrayNode) {
+          int en = 0; const int *els = nt_arr(nt, args[0], "elements", &en);
+          const char *first = NULL;
+          for (int e = 0; e < en && !libname; e++) {
+            const char *nm = ffi_arg_str(nt, els[e]);
+            if (!nm) continue;
+            if (!first) first = nm;
+            if (ffi_lib_flag(nm, flag, sizeof flag, 1)) libname = flag;
+          }
+          if (!libname && first && ffi_lib_flag(first, flag, sizeof flag, 0)) libname = flag;
+          if (!libname) ffi_decl_error(c, s, "`ffi_lib` with an Array needs String library names");
+        }
+        else {
+          const char *nm = ffi_arg_str(nt, args[0]);
+          if (nm && ffi_lib_flag(nm, flag, sizeof flag, 0)) libname = flag;
+        }
         if (!libname) continue;  /* non-literal (e.g. a compile-time fold): tolerate */
         /* find or create the per-module lib entry, then semicolon-merge */
         int mi = -1;

@@ -680,6 +680,9 @@ int infer_changed_store_types(Compiler *c, const NodeTypes *before);
 int infer_for_index(Compiler *c);
 int infer_catch_block_params(Compiler *c);
 void infer_bigint_loop_locals(Compiler *c);
+/* --no-bigint: refuse each place a Bignum value starts (a node typed Bignum
+   none of whose operands is); see analyze.h g_no_bigint. */
+void refuse_bigint_values(Compiler *c);
 void block_sites_index(Compiler *c);
 int block_sites(Compiler *c, int si, const int **sites);
 int block_site_args(Compiler *c, int si, int site, int call);

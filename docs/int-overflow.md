@@ -116,6 +116,31 @@ header): the tests that pin a raise-mode RangeError stay out of both, the
 `promote_*` tests run only in promote, and a test whose answer is the Bignum
 the default mode's growth-pattern promotion produced stays out of wrap.
 
+## No Bignum at all: `--no-bigint`
+
+Even under `raise`, a few places produce a Bignum by design: a `while` loop's
+growth pattern (fibonacci-shaped `c = a + b`, self-referential `x *= y`)
+widens its locals, an integer literal past `sp_int` is a Bignum constant, and
+a constant power that overflows folds to one. Each of these links the bigint
+runtime, and on a 32-bit microcontroller that is tens of KB of flash (the
+bigint arithmetic plus the float formatting and libm it reaches).
+
+```sh
+spinel app.rb --no-bigint
+```
+
+- the loop-growth detectors are off: the accumulator stays an `Integer`, and
+  its overflow raises `RangeError` (`integer overflow in +`) like any other
+  raise-mode arithmetic;
+- a value that can only be a Bignum is a compile error at its line, naming the
+  reason: on a 32-bit target, a literal such as `0xdeadbeef` (write it as a
+  negative number, or build it from shifts) or `2**40`;
+- `--no-bigint --int-overflow=promote` is refused (exit 2): promote is
+  overflow into Bignum.
+
+It combines with `raise` (default) and `wrap`. `make no-bigint-test` checks
+the loop, the refusal and that no `sp_bigint_*` symbol is in the binary.
+
 ## Using it when you compile the C yourself
 
 In the normal `spinel app.rb` flow the driver compiles and links in one step and

@@ -560,6 +560,10 @@ static void usage(void) {
     "  --no-inline-rbs  Ignore inline RBS comments (`#: ...`, `# @rbs ...`)\n"
     "              in the program (default: apply them; docs/inline-rbs.md)\n"
     "  --int-overflow=MODE  Int +/-/* overflow handling (default: raise)\n"
+    "  --no-bigint No value may be a Bignum: loop accumulators stay Integer and\n"
+    "              raise on overflow, a value that could only be a Bignum is a\n"
+    "              compile error; the bigint runtime leaves the link (small\n"
+    "              targets; docs/int-overflow.md)\n"
     "  --dump-ast  Print the text AST and exit (debug)\n"
     "  --dump-load-graph  Print the files the program loads and what each require\n"
     "              resolves to, and exit (debug)\n"
@@ -937,6 +941,7 @@ int main(int argc, char **argv) {
      constructs that need a frame to catch it are refused (see lib/sp_setjmp.h). */
   int exc_abort = 0;
   const char *int_overflow = "raise";
+  int no_bigint = 0;
   const char *rbs_dir = NULL;
   extern int sp_inline_rbs_enabled, sp_inline_rbs_failed;
   int c_only = 0, stdout_mode = 0, run_mode = 0, dump_ast = 0;
@@ -992,6 +997,7 @@ int main(int argc, char **argv) {
       i++;   /* the default; accepted for CRuby command-line compatibility */
     }
     else if (!strncmp(a, "--int-overflow=", 15)) { int_overflow = a + 15; i++; }
+    else if (sp_streq(a, "--no-bigint"))   { no_bigint = 1; i++; }
     else if (sp_streq(a, "--int-overflow")) { if (++i < argc) int_overflow = argv[i]; i++; }
     else if (sp_streq(a, "-o"))            { if (++i < argc) output = argv[i]; i++; }
     else if (sp_streq(a, "--link"))        { if (++i < argc) link_extra[n_link_extra++] = argv[i]; i++; }
@@ -1150,6 +1156,11 @@ int main(int argc, char **argv) {
      promote mode (block-iteration loops, not just `while`). See analyze.h. */
   g_promote_mode = sp_streq(int_overflow, "promote");
   g_wrap_mode = sp_streq(int_overflow, "wrap");
+  if (no_bigint && g_promote_mode) {
+    fprintf(stderr, "spinel: --no-bigint contradicts --int-overflow=promote (which overflows into Bignum)\n");
+    return 2;
+  }
+  g_no_bigint = no_bigint;
   g_traits_promote = g_promote_mode;
   if (exc_abort && !target_wasi) {
     fprintf(stderr, "spinel: --exceptions=abort is for --target=wasm32-wasi\n");

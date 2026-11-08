@@ -32,3 +32,19 @@ p Object.const_defined?(:X, false), Object.const_defined?(:NoSuch, false)
 class Foo; end
 p Foo.const_defined?(:Struct, false), Foo.const_defined?(:Struct)
 p Kernel.const_defined?(:Struct, false)
+
+# BasicObject itself, also reopened, holds only its own constants
+class BasicObject; BB = 1; end
+def pass(x) = x
+p BasicObject.const_defined?(:X), BasicObject.const_defined?(:String), BasicObject.const_defined?(:BB)
+p pass(BasicObject).const_defined?(:X), pass(BasicObject).const_defined?(:Thread)
+p Bare.q(:BasicObject)
+
+# a class's own constant counts before a top-level one of the name runs
+class Own; LATE = 3; end
+class Bare3 < BasicObject; LATE = 2; end
+class Plain; end
+p Own.const_defined?(:LATE), Bare3.const_defined?(:LATE), pass(Own).const_defined?(:LATE), pass(Bare3).const_defined?(:LATE)
+p pass(Plain).const_defined?(:LATE)
+LATE = 1
+p pass(Plain).const_defined?(:LATE)

@@ -18600,14 +18600,57 @@ static int bx_owner_in_string_chain(Compiler *c, int k) {
     if (bx_mixes_in(c, c->toplevel_includes[i], k, 0)) return 1;
   return 0;
 }
+/* Is program class k surely a class of its own, which no String reaches?
+   Not when the program writes a constant of k's last name (`Other =
+   String.itself; class Other`: the class table opens a new class where
+   CRuby reopens String), calls const_set, or calls define_method, which
+   may copy a method object (`define_method(:p, &Other.new.method(:p))`). */
+static int bx_class_surely_own(Compiler *c, int k) {
+  const NodeTable *nt = c->nt;
+  const char *full = k >= 0 && k < c->nclasses ? c->classes[k].name : NULL;
+  if (!full) return 0;
+  const char *leaf = strrchr(full, ':');
+  leaf = leaf ? leaf + 1 : full;
+  for (int id = 0; id < nt->count; id++) {
+    const char *wn = NULL;
+    switch (nt_kind(nt, id)) {
+    case NK_ConstantWriteNode: case NK_ConstantOrWriteNode: case NK_ConstantAndWriteNode:
+    case NK_ConstantOperatorWriteNode:
+      wn = nt_str(nt, id, "name"); break;
+    case NK_ConstantPathWriteNode: case NK_ConstantPathOrWriteNode: case NK_ConstantPathAndWriteNode:
+    case NK_ConstantPathOperatorWriteNode: {
+      int t = nt_ref(nt, id, "target");
+      wn = t >= 0 ? nt_str(nt, t, "name") : NULL;
+      if (!wn) return 0;
+      break;
+    }
+    case NK_CallNode: {
+      const char *cn = nt_str(nt, id, "name");
+      int ac = 0;
+      call_args(nt, id, &ac);
+      if (cn && (sp_streq(cn, "const_set") || sp_streq(cn, "define_method") ||
+                 sp_streq(cn, "send") || sp_streq(cn, "__send__") || sp_streq(cn, "public_send"))) {
+        if (!sp_streq(cn, "send") && !sp_streq(cn, "__send__") && !sp_streq(cn, "public_send")) return 0;
+        const char *m = ac > 0 ? vis_arg_name(nt, call_args(nt, id, &ac)[0]) : NULL;
+        if (!m || sp_streq(m, "const_set") || sp_streq(m, "define_method")) return 0;
+      }
+      break;
+    }
+    default: break;
+    }
+    if (wn && sp_streq(wn, leaf)) return 0;
+  }
+  return 1;
+}
 /* May an alias on class side k answer an instance method for a String or
    a Symbol? A module may: the program can mix it in where the class table
    does not show it (`send(:include, Foo.ancestors[1])`), or copy its
    method by define_method. A class is never mixed in, so only the chain
-   classes themselves answer. */
+   classes themselves answer, and a class whose identity the table may
+   have wrong (bx_class_surely_own). */
 static int bx_owner_reaches_string(Compiler *c, int k) {
   if (k >= 0 && k < c->nclasses && comp_class_is_module(c, &c->classes[k])) return 1;
-  return bx_owner_in_string_chain(c, k);
+  return bx_owner_in_string_chain(c, k) || !bx_class_surely_own(c, k);
 }
 /* Does an alias or alias_method of the program name a method nm that a
    String or a Symbol may answer? (It may capture a builtin method, which no

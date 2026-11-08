@@ -538,6 +538,12 @@ spinel: 1 refusal, nothing written
 == test/reject/comparable_copy_alias_kernel_name.rb [promote] rc=1
 spinel: test/reject/comparable_copy_alias_kernel_name.rb:15: unsupported puts argument: node N (CallNode `qa`) recv=StringNode/ty6 argc=0
 spinel: 1 refusal, nothing written
+== test/reject/comparable_copy_const_class_alias_kernel_name.rb [default] rc=1
+spinel: test/reject/comparable_copy_const_class_alias_kernel_name.rb:13: unsupported puts argument: node N (CallNode `qa`) recv=StringNode/ty6 argc=0
+spinel: 1 refusal, nothing written
+== test/reject/comparable_copy_const_class_alias_kernel_name.rb [promote] rc=1
+spinel: test/reject/comparable_copy_const_class_alias_kernel_name.rb:13: unsupported puts argument: node N (CallNode `qa`) recv=StringNode/ty6 argc=0
+spinel: 1 refusal, nothing written
 == test/reject/comparable_copy_own_kernel_name.rb [default] rc=1
 spinel: test/reject/comparable_copy_own_kernel_name.rb:12: unsupported puts argument: node N (CallNode `qa`) recv=StringNode/ty6 argc=0
 spinel: 1 refusal, nothing written

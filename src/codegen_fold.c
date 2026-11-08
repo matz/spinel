@@ -2249,8 +2249,8 @@ static int emit_sum_block_over(Compiler *c, int id, int recv, int block, Buf *b)
     if (argc == 1) emit_boxed(c, argv[0], b); else buf_puts(b, "sp_box_int(0)");
     /* folded a value at a time (sp_sum_step) */
     buf_printf(b, "; sp_SumState _t%dS; sp_sum_init(&_t%dS, _t%d); SP_GC_ROOT_RBVAL(_t%dS.acc); "
-                  "for (sp_int _t%d = 0; _t%d < _t%d; _t%d++) { ",
-               tacc, tacc, tacc, tacc, ti, ti, tn, ti);
+                  "for (sp_int _t%d = 0; _t%d < sp_%sArray_length(_t%d); _t%d++) { ",
+               tacc, tacc, tacc, tacc, ti, ti, k, ta, ti);
     /* A 2+-param block over an array of sub-arrays auto-splats each element
        into the params (`sum { |v, i| v }` over [v, i] pairs); a single param
        binds the whole element. Each param is gated on liveness. */
@@ -2352,7 +2352,11 @@ static int emit_sum_block_over(Compiler *c, int id, int recv, int block, Buf *b)
   }
   if (acct == TY_FLOAT) buf_printf(b, "; sp_float _t%d = 0.0", tc);
   if (acct == TY_STRING) buf_printf(b, "; SP_GC_ROOT(_t%d)", tacc);
-  buf_printf(b, "; for (sp_int _t%d = 0; _t%d < _t%d; _t%d++) { ", ti, ti, tn, ti);
+  /* the length read at each step, as CRuby's each reads it: a block that
+     pushes onto the receiver is summed over what it added, one that pops
+     stops sooner. _t<tn>, the length it started at, says whether the block
+     ran at all */
+  buf_printf(b, "; for (sp_int _t%d = 0; _t%d < sp_%sArray_length(_t%d); _t%d++) { ", ti, ti, k, ta, ti);
   /* A 2+-param block over an array of sub-arrays auto-splats each element into
      the params -- `sum { |v, i| a[i] }` over the [value, index] pairs an
      each_with_index enumerator answers. The poly-accumulator branch above does

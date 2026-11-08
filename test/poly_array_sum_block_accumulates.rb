@@ -64,3 +64,17 @@ p it2.sum { |r| r.sum }, it2.sum { |a, b| a * b }, [[1.5, 2.0], [3.0, 0.5]].sum 
 p [[1, 2, 3], [4, 5, 6]].sum { |a, *r| a + r.size }, [[1, 2, 3], [4, 5, 6]].sum { |(a, b)| a + b }
 ns = [P.new(1, 0.5), P.new(2, 1.5)]
 p ns.sum { |q| q.b }, ns.sum { |q| q = P.new(q.a * 10, 0) if q.a > 1; q.a }
+
+# a block that grows or shrinks the receiver: each step reads its length,
+# as CRuby's does (boxed, of one class, and typed receivers alike)
+g = [1, "a"]
+p g.sum { |x| g << 1 if g.size < 3; x.is_a?(Integer) ? x : 1 }
+h = [1, "a"]
+p h.sum { |x| h.pop if h.size > 1 && x == 1; x.is_a?(Integer) ? x : 1 }
+gs = [P.new(1, 0), P.new(2, 0)]
+p gs.sum { |q| gs << P.new(5, 0) if gs.size < 3; q.a }
+gi = [1, 2]
+p gi.sum { |x| gi << 10 if gi.size < 3; x }
+gf = [1.5]
+p gf.sum { |x| gf << 2.5 if gf.size < 2; x }
+p [1, "x"].sum { |*v| v.length }, [1, "x"].sum { |a, *r| r.size + 1 }

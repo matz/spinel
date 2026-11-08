@@ -1,0 +1,12 @@
+429 1 slow: direct Slow - / 429 1 / 429 1
+500 Bad: direct / 500 direct / 500
+closed closed
+leaf 7 6 leaf
+other Base
+429 3 slow: built Slow - / 429 3 / 429 3 / other Slow
+429 2 slow: named Slow - / 429 2 / 429 2 / other Slow
+429 4 slow: wrapped Slow inner / 429 4 / 429 4 / other Slow
+500 Bad: bad / 500 bad / 500 / other Bad
+500 KeyError: key / 500 key / 500 / other KeyError
+500 Closed: named closed / 500 named closed / 500 / closed named closed
+500 Leaf: named leaf / 500 named leaf / 500 / leaf 7 6 named leaf

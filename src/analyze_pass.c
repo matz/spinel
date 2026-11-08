@@ -8216,19 +8216,34 @@ static int widen_boxed_local_sources(Compiler *c, Scope *sc, const char *nm, Loc
   /* every value it is written, each followed on its own; where one the
      store cannot fit can only be converted at the slot, and all of them
      are arrays, the local is pinned to the general Array */
-  int wl[32], nl = 0, all = !local_has_target_write(c, sc, nm);
+  int wl[32], nl = 0, all = 1;
+  /* (one value a write or a multiple assignment's target takes) */
+#define WBLS_TAKE(val) do { \
+    ch |= widen_boxed_array_sources(c, (val), elem, depth + 1); \
+    int got = all ? value_leaves(c, (val), wl, nl, 32) : -1; \
+    if (got < 0) { all = 0; break; } \
+    for (int i = nl; i < got; i++) \
+      if (!(nt_kind(nt, wl[i]) == NK_LocalVariableReadNode && comp_scope_of(c, wl[i]) == sc && \
+            sp_streq(nt_str(nt, wl[i], "name"), nm))) wl[nl++] = wl[i]; \
+  } while (0)
   for (int r = lw_shared_first(c, nm, (int)(sc - c->scopes)); r >= 0; r = lw_shared_next(r)) {
     int w = lw_shared_node(r);
     NodeKind wk = nt_kind(nt, w);
     if (comp_scope_of(c, w) != sc || !sp_streq(nt_str(nt, w, "name"), nm)) continue;
     if (wk != NK_LocalVariableWriteNode && wk != NK_LocalVariableOrWriteNode) { all = 0; continue; }
-    ch |= widen_boxed_array_sources(c, nt_ref(nt, w, "value"), elem, depth + 1);
-    int got = all ? value_leaves(c, nt_ref(nt, w, "value"), wl, nl, 32) : -1;
-    if (got < 0) { all = 0; continue; }
-    for (int i = nl; i < got; i++)
-      if (!(nt_kind(nt, wl[i]) == NK_LocalVariableReadNode && comp_scope_of(c, wl[i]) == sc &&
-            sp_streq(nt_str(nt, wl[i], "name"), nm))) wl[nl++] = wl[i];
+    WBLS_TAKE(nt_ref(nt, w, "value"));
   }
+  /* a target of a multiple assignment (`g, f = 1, [3, 4]`) takes its
+     element of the literal right side, as a plain write takes its value;
+     a target bound any other way (a splat, a nested list, a right side
+     that is not a literal) keeps the local off the pin */
+  NT_FOREACH_KIND(nt, NK_LocalVariableTargetNode, t) {
+    if (comp_scope_of(c, t) != sc || !sp_streq(nt_str(nt, t, "name"), nm)) continue;
+    int tv = masgn_target_value(c, t);
+    if (tv < 0) { all = 0; continue; }
+    WBLS_TAKE(tv);
+  }
+#undef WBLS_TAKE
   /* The pin is re-asserted at the end of every round's write pass, where
      the local re-derives from its writes: a change is only a new pin. */
   if (all && leaves_need_pin(c, wl, nl, elem) && leaves_widen_to_poly_array(c, wl, nl, 0)) {

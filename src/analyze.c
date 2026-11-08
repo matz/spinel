@@ -10296,22 +10296,20 @@ static int hash_brackets_desugar(Compiler *c, int id, int late) {
   return 0;
 }
 
+/* Is the blockless call id's value no enclosing call's receiver? The climb
+   sees through parentheses and the last statement of a list; the receiver
+   must be id in parentheses that hold it alone. A call with a block
+   answers 0. */
 static int enum_chain_kept(Compiler *c, LowerCtx *lc, int id) {
   const NodeTable *nt = c->nt;
   if (nt_ref(nt, id, "block") >= 0) return 0;
-  /* (the parent map, made at the first such call of the run) */
-  const int *par = lower_parents(c, lc);
-  int p = par[id];
-  while (p >= 0 && nt_kind(nt, p) == NK_ParenthesesNode) p = par[p];
-  if (p >= 0 && nt_kind(nt, p) == NK_StatementsNode) {
-    /* a parenthesized sequence ending in id */
-    int q = par[p];
-    int bn = 0; const int *bb = nt_arr(nt, p, "body", &bn);
-    if (q >= 0 && nt_kind(nt, q) == NK_ParenthesesNode && bn > 0 && bb[bn - 1] == id) {
-      for (p = par[q]; p >= 0 && nt_kind(nt, p) == NK_ParenthesesNode; p = par[p]) {}
-    }
-  }
-  return !(p >= 0 && nt_kind(nt, p) == NK_CallNode && nt_paren_single(nt, nt_ref(nt, p, "receiver")) == id);
+  VpUp up;
+  /* (lower_parents: the parent map, made at the first such call of the run) */
+  if (vp_climb(nt, lower_parents(c, lc), id, VPS_NONE | VP_PARENS_ONLY, &up) != VPU_ENDED ||
+      nt_kind(nt, up.parent) != NK_CallNode)
+    return 1;
+  int recv = nt_ref(nt, up.parent, "receiver");
+  return !(recv == up.node && nt_paren_single(nt, recv) == id);
 }
 /* The shapes of an iterator chain at the call id, lowered to the forms the
    Enumerable and Enumerator routes read: each_char.with_index, the

@@ -1,11 +1,17 @@
-# A module with its own p, mixed into Kernel by a call that Spinel's
-# class table does not hold (`Kernel.prepend(M)`): CRuby prints M1 from
-# the Comparable method. Spinel can not tell which classes M reaches, so
-# the copy is refused.
+# An alias of p in a module that the program mixes into String by a
+# computed argument (`send(:include, Foo.ancestors[1])`): CRuby prints M1
+# from the Comparable method. The class table does not show where such a
+# module goes, so an alias in any module counts, and the copy is refused.
 module M
-  def p(x) = "M#{x}"
+  def original(x) = "M#{x}"
+  alias p original
 end
-Kernel.prepend(M)
+class Foo
+  include M
+end
+class String
+  send(:include, Foo.ancestors[1])
+end
 module Comparable
   def qa = p(1)
 end

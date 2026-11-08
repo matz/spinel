@@ -8185,6 +8185,21 @@ static int widen_iter_param_elems(Compiler *c, Scope *sc, const char *nm, TyKind
 }
 /* The read of boxed local `nm` of scope `sc` (widen_boxed_array_sources):
    what it is written, bound or handed. The same for every read of it. */
+/* One value a write of local nm or a multiple assignment's target of it
+   takes (widen_boxed_local_sources): its array sources widened, and its
+   leaves other than a read of nm itself added to wl (*nl of them, up to
+   32); a value whose leaves cannot be listed clears *all */
+static int wbls_take(Compiler *c, Scope *sc, const char *nm, int val, TyKind elem, int depth,
+                     int *wl, int *nl, int *all) {
+  const NodeTable *nt = c->nt;
+  int ch = widen_boxed_array_sources(c, val, elem, depth + 1);
+  int got = *all ? value_leaves(c, val, wl, *nl, 32) : -1;
+  if (got < 0) { *all = 0; return ch; }
+  for (int i = *nl; i < got; i++)
+    if (!(nt_kind(nt, wl[i]) == NK_LocalVariableReadNode && comp_scope_of(c, wl[i]) == sc &&
+          sp_streq(nt_str(nt, wl[i], "name"), nm))) wl[(*nl)++] = wl[i];
+  return ch;
+}
 static int widen_boxed_local_sources(Compiler *c, Scope *sc, const char *nm, LocalVar *lv,
                                      TyKind elem, int depth) {
   const NodeTable *nt = c->nt;
@@ -8217,21 +8232,12 @@ static int widen_boxed_local_sources(Compiler *c, Scope *sc, const char *nm, Loc
      store cannot fit can only be converted at the slot, and all of them
      are arrays, the local is pinned to the general Array */
   int wl[32], nl = 0, all = 1;
-  /* (one value a write or a multiple assignment's target takes) */
-#define WBLS_TAKE(val) do { \
-    ch |= widen_boxed_array_sources(c, (val), elem, depth + 1); \
-    int got = all ? value_leaves(c, (val), wl, nl, 32) : -1; \
-    if (got < 0) { all = 0; break; } \
-    for (int i = nl; i < got; i++) \
-      if (!(nt_kind(nt, wl[i]) == NK_LocalVariableReadNode && comp_scope_of(c, wl[i]) == sc && \
-            sp_streq(nt_str(nt, wl[i], "name"), nm))) wl[nl++] = wl[i]; \
-  } while (0)
   for (int r = lw_shared_first(c, nm, (int)(sc - c->scopes)); r >= 0; r = lw_shared_next(r)) {
     int w = lw_shared_node(r);
     NodeKind wk = nt_kind(nt, w);
     if (comp_scope_of(c, w) != sc || !sp_streq(nt_str(nt, w, "name"), nm)) continue;
     if (wk != NK_LocalVariableWriteNode && wk != NK_LocalVariableOrWriteNode) { all = 0; continue; }
-    WBLS_TAKE(nt_ref(nt, w, "value"));
+    ch |= wbls_take(c, sc, nm, nt_ref(nt, w, "value"), elem, depth, wl, &nl, &all);
   }
   /* a target of a multiple assignment (`g, f = 1, [3, 4]`) takes its
      element of the literal right side, as a plain write takes its value;
@@ -8241,9 +8247,8 @@ static int widen_boxed_local_sources(Compiler *c, Scope *sc, const char *nm, Loc
     if (comp_scope_of(c, t) != sc || !sp_streq(nt_str(nt, t, "name"), nm)) continue;
     int tv = masgn_target_value(c, t);
     if (tv < 0) { all = 0; continue; }
-    WBLS_TAKE(tv);
+    ch |= wbls_take(c, sc, nm, tv, elem, depth, wl, &nl, &all);
   }
-#undef WBLS_TAKE
   /* The pin is re-asserted at the end of every round's write pass, where
      the local re-derives from its writes: a change is only a new pin. */
   if (all && leaves_need_pin(c, wl, nl, elem) && leaves_widen_to_poly_array(c, wl, nl, 0)) {

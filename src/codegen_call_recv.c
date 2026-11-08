@@ -7567,7 +7567,9 @@ else {
           if (!ty_is_hash(at) && at != TY_POLY && !hash_lit_empty(nt, argv[ai])) return 0;
         }
         int tr = ++g_tmp, tb = -1;
-        buf_printf(b, "({ sp_PolyPolyHash *_t%d = ", tr); emit_expr(c, recv, b); buf_puts(b, ";");
+        /* (held: a receiver the call made, `Hash.new(k).update(h)`, was
+           freed by the pair each walk step makes) */
+        buf_printf(b, "({ sp_PolyPolyHash *_t%d = ", tr); emit_expr(c, recv, b); buf_printf(b, "; SP_GC_ROOT(_t%d);", tr);
         buf_printf(b, " if (sp_gc_is_frozen(_t%d)) sp_raise_frozen_hash_at(_t%d, %s);", tr, tr, hash_box_cls(rt));   /* (#3001) */
         if (mb_proc >= 0) {
           Buf pp; memset(&pp, 0, sizeof pp);
@@ -14609,8 +14611,11 @@ int emit_range_call(Compiler *c, int id, Buf *b) {
     }
     /* overlap?: CRuby's range_overlap at run time, as for an Integer Range */
     if (argc == 1 && sp_streq(name, "overlap?")) {
-      buf_puts(b, "sp_range_overlap_v(sp_box_frange("); emit_expr(c, recv, b);
-      buf_puts(b, "), "); emit_boxed(c, argv[0], b); buf_puts(b, ")");
+      /* (the receiver's box is held: boxing the argument allocates too) */
+      int to = ++g_tmp;
+      buf_printf(b, "({ sp_RbVal _t%d = sp_box_frange(", to); emit_expr(c, recv, b);
+      buf_printf(b, "); SP_GC_ROOT_RBVAL(_t%d); sp_range_overlap_v(_t%d, ", to, to);
+      emit_boxed(c, argv[0], b); buf_puts(b, "); })");
       return 1;
     }
     if (argc == 0 && (is_range_end_reader(name))) {
@@ -15312,8 +15317,11 @@ int emit_range_call(Compiler *c, int id, Buf *b) {
       else if (sp_streq(name, "overlap?")) {
         /* CRuby's range_overlap at run time: an empty Range overlaps
            nothing, and the argument may be a Float Range */
-        buf_printf(b, "sp_range_overlap_v(sp_box_range(_t%d), ", t); emit_boxed(c, argv[0], b);
-        buf_puts(b, ")");
+        /* (the receiver's box is held: boxing the argument allocates too) */
+        int to = ++g_tmp;
+        buf_printf(b, "({ sp_RbVal _t%d = sp_box_range(_t%d); SP_GC_ROOT_RBVAL(_t%d); sp_range_overlap_v(_t%d, ",
+                   to, t, to, to);
+        emit_boxed(c, argv[0], b); buf_puts(b, "); })");
       }
       else if (sp_streq(name, "minmax")) {
         /* a poly pair off the endpoints, max first: an empty (backwards)
@@ -19299,8 +19307,10 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
       sp_streq(name, "overlap?") && !user_defines_or_reads(c, name)) {
     int res_boxed = repr_of(c, id).kind == RK_BOXED;
     if (res_boxed) buf_puts(b, "sp_box_bool(");
-    buf_puts(b, "sp_range_overlap_v("); emit_boxed(c, recv, b);
-    buf_puts(b, ", "); emit_boxed(c, argv[0], b); buf_puts(b, ")");
+    int to = ++g_tmp;
+    buf_printf(b, "({ sp_RbVal _t%d = ", to); emit_boxed(c, recv, b);
+    buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); sp_range_overlap_v(_t%d, ", to, to);
+    emit_boxed(c, argv[0], b); buf_puts(b, "); })");
     if (res_boxed) buf_puts(b, ")");
     return 1;
   }

@@ -1,3 +1,4 @@
+# spinel: gc-stress
 # An Integer or Float array holds nil as its slot's sentinel (SP_INT_NIL, or
 # the Float NaN payload) once a nilable value is stored in it, and inspect and
 # compact already read it as nil. The searches folded a nil needle to a miss,

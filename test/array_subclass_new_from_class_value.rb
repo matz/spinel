@@ -1,3 +1,4 @@
+# spinel: gc-stress
 # A class held as a value (a Hash value, an Array element, a class variable)
 # whose `.new` makes an Array subclass instance: the instance is boxed as its
 # Array, so Array's own methods (<<, push, join) reach it through the boxed

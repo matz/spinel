@@ -1155,7 +1155,7 @@ static const BuiltinOp bop_rows[] = {
   { TY_STR_RANGE, "min",          0,   0, BF_NONE,     TY_STRING,      BOPE_TEMPLATE, "sp_srange_min_v($r)" },
   { TY_STR_RANGE, "max",          0,   0, BF_NONE,     TY_STRING,      BOPE_TEMPLATE, "sp_srange_max_v($r)" },
   /* [min, max] off the endpoints, max first as CRuby's range_minmax evaluates them */
-  { TY_STR_RANGE, "minmax",       0,   0, BF_NONE,     TY_STR_ARRAY,   BOPE_TEMPLATE, "({ sp_StrRange _t$T = $r; SP_GC_ROOT_STR(_t$T.first); SP_GC_ROOT_STR(_t$T.last); const char *_t$t = sp_srange_max_v(_t$T); SP_GC_ROOT_STR(_t$t); const char *_t$u = sp_srange_min_v(_t$T); SP_GC_ROOT_STR(_t$u); sp_StrArray *_r$T = sp_StrArray_new(); sp_StrArray_push(_r$T, _t$u); sp_StrArray_push(_r$T, _t$t); _r$T; })" },
+  { TY_STR_RANGE, "minmax",       0,   0, BF_NONE,     TY_STR_ARRAY,   BOPE_TEMPLATE, "({ sp_StrRange _t$T = $r; SP_GC_ROOT_STR(_t$T.first); SP_GC_ROOT_STR(_t$T.last); const char *_t$t = sp_srange_max_v(_t$T); SP_GC_ROOT_STR(_t$t); const char *_t$u = sp_srange_min_v(_t$T); SP_GC_ROOT_STR(_t$u); sp_StrArray *_r$T = sp_StrArray_new(); SP_GC_ROOT(_r$T); sp_StrArray_push(_r$T, _t$u); sp_StrArray_push(_r$T, _t$t); _r$T; })" },
   { TY_STR_RANGE, "to_s",         0,   0, BF_ANY,      TY_STRING,      BOPE_TEMPLATE, "({ sp_StrRange _t$T = $r; sp_srange_to_s(_t$T); })" },
   { TY_STR_RANGE, "inspect",      0,   0, BF_ANY,      TY_STRING,      BOPE_TEMPLATE, "({ sp_StrRange _t$T = $r; sp_srange_inspect(_t$T); })" },
   { TY_STR_RANGE, "first",        0,   0, BF_ANY,      TY_STRING,      BOPE_TEMPLATE, "({ sp_StrRange _t$T = $r; $B; })" },

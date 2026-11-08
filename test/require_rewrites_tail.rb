@@ -1,3 +1,4 @@
+# spinel: gc-stress
 # A `%w(...).each` loop of computed requires is unrolled into the lines it
 # stands on (#9898, #10155). One that is the receiver of a call with
 # arguments or a block, or has other code after it on its last line (a

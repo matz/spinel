@@ -1,0 +1,13 @@
+[:a, :e]
+["b", "d"]
+[:a, :e]
+["uv", "p", "xy", "q"]
+2
+true
+{"a" => 1, "b" => 2}
+0
+true
+true
+false
+"4.5|nil"
+"[1, nil] \"s\""

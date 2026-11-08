@@ -2565,6 +2565,23 @@ static const char *resolve_member_symbol(Compiler *c, int node) {
    order-preserving/deterministic array transforms whose result is still a
    fixed symbol list -- so `%i[a b].reverse` and `keys = %i[a b]; keys.reverse`
    register their members in the right order (#3135). */
+/* (while set, a list of String literals counts too: the receiver of a
+   `.map(&:to_sym)`, below) */
+static int rsl_strings;
+/* The name a block `{ |x| x.m }` sends to its one parameter, or NULL */
+static const char *rsl_block_sends_to_self(const NodeTable *nt, int bk) {
+  int params = nt_ref(nt, bk, "parameters");
+  int inner = params >= 0 && nt_kind(nt, params) == NK_BlockParametersNode ? nt_ref(nt, params, "parameters") : -1;
+  int rn = 0; const int *rq = inner >= 0 ? nt_arr(nt, inner, "requireds", &rn) : NULL;
+  if (rn != 1) return NULL;
+  const char *pn = nt_str(nt, rq[0], "name");
+  int body = nt_ref(nt, bk, "body");
+  int sn = 0; const int *st = body >= 0 && nt_kind(nt, body) == NK_StatementsNode ? nt_arr(nt, body, "body", &sn) : NULL;
+  if (sn != 1 || nt_kind(nt, st[0]) != NK_CallNode || nt_ref(nt, st[0], "arguments") >= 0 || nt_ref(nt, st[0], "block") >= 0) return NULL;
+  int r = nt_ref(nt, st[0], "receiver");
+  const char *rv = r >= 0 && nt_kind(nt, r) == NK_LocalVariableReadNode ? nt_str(nt, r, "name") : NULL;
+  return pn && rv && sp_streq(pn, rv) ? nt_str(nt, st[0], "name") : NULL;
+}
 static int resolve_symbol_list(Compiler *c, int node, const char **out, int cap, int depth) {
   const NodeTable *nt = c->nt;
   if (node < 0 || depth > 8) return -1;
@@ -2575,6 +2592,12 @@ static int resolve_symbol_list(Compiler *c, int node, const char **out, int cap,
     int en = 0; const int *els = nt_arr(nt, node, "elements", &en);
     if (en > cap) return -1;
     for (int e = 0; e < en; e++) {
+      if (rsl_strings && nt_kind(nt, els[e]) == NK_StringNode) {
+        out[e] = nt_str(nt, els[e], "unescaped");
+        if (!out[e]) out[e] = nt_str(nt, els[e], "content");
+        if (!out[e]) return -1;
+        continue;
+      }
       if (nt_kind(nt, els[e]) != NK_SymbolNode) return -1;
       out[e] = nt_str(nt, els[e], "value");
       if (!out[e]) return -1;
@@ -2627,6 +2650,21 @@ static int resolve_symbol_list(Compiler *c, int node, const char **out, int cap,
     if (!mn) return -1;
     int args = nt_ref(nt, node, "arguments");
     int an = 0; if (args >= 0) nt_arr(nt, args, "arguments", &an);
+    /* `%w[a b].map(&:to_sym)` (or `&:intern`): a fixed list of String
+       literals turned into the same names (#11342) */
+    if ((sp_streq(mn, "map") || sp_streq(mn, "collect")) && an == 0) {
+      int bk = nt_ref(nt, node, "block");
+      int bx = bk >= 0 && nt_kind(nt, bk) == NK_BlockArgumentNode ? nt_ref(nt, bk, "expression") : -1;
+      const char *bs = bx >= 0 && nt_kind(nt, bx) == NK_SymbolNode ? nt_str(nt, bx, "value") : NULL;
+      /* (the `&:to_sym` is a block `{ |x| x.to_sym }` by now) */
+      if (!bs && bk >= 0 && nt_kind(nt, bk) == NK_BlockNode) bs = rsl_block_sends_to_self(nt, bk);
+      if (!bs || !(sp_streq(bs, "to_sym") || sp_streq(bs, "intern"))) return -1;
+      int was = rsl_strings;
+      rsl_strings = 1;
+      int n = resolve_symbol_list(c, recv, out, cap, depth + 1);
+      rsl_strings = was;
+      return n;
+    }
     int n = resolve_symbol_list(c, recv, out, cap, depth + 1);
     if (n < 0) return -1;
     if (sp_streq(mn, "freeze") && an == 0) return n;
@@ -2699,6 +2737,12 @@ void register_struct_members(Compiler *c, ClassInfo *cls, int val) {
       int se = nt_ref(nt, argv[a], "expression");
       const char *syms[128];
       int en = se >= 0 ? resolve_symbol_list(c, se, syms, 128, 0) : -1;
+      /* names only the run time knows: the class would have no members,
+         and `new` reject every one, so refuse it here (#11342) */
+      if (en < 0)
+        unsupported_feature(c, val, cls->is_data
+          ? "Data.define with member names known only at run time (a splat of a list the compiler cannot read): write the names, or a constant of literal symbols"
+          : "Struct.new with member names known only at run time (a splat of a list the compiler cannot read): write the names, or a constant of literal symbols");
       for (int e = 0; e < en; e++) {
         const char *sm = syms[e];
         if (!sm) continue;

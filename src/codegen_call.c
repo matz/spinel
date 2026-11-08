@@ -16848,6 +16848,15 @@ static int program_timesub_defines_eq(Compiler *c) {
   }
   return 0;
 }
+/* `a != b` on a Time-typed receiver when a Time subclass of the program
+   defines ==: box both sides (receiver first) and negate the == that the
+   boxed value's class answers (sp_poly_eq_value). */
+static void emit_timesub_ne(Compiler *c, int recv, int arg, Buf *b) {
+  int tr = ++g_tmp, ta = ++g_tmp;
+  buf_printf(b, "({ sp_RbVal _t%d = ", tr); emit_boxed(c, recv, b);
+  buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); sp_RbVal _t%d = ", tr, ta); emit_boxed(c, arg, b);
+  buf_printf(b, "; sp_poly_truthy(sp_poly_eq_value(_t%d, _t%d, 1)); })", tr, ta);
+}
 static int emit_case_eq_call(Compiler *c, int id, Buf *b) {
   const NodeTable *nt = c->nt;
   const char *name = view_call_name(c, id);
@@ -17009,6 +17018,11 @@ static int emit_case_eq_call(Compiler *c, int id, Buf *b) {
     int a_niltyped = !a_nil && a0 == TY_NIL && rt != TY_NIL;
     int r_niltyped = !r_nil && rt == TY_NIL && a0 != TY_NIL;
     /* `x == nil` / `x != nil` for any receiver */
+    /* (`t != nil` on a Time subclass with its own ==: that == decides) */
+    if (!eq && (a_nil || a_niltyped) && rt == TY_TIME && recv >= 0 && program_timesub_defines_eq(c)) {
+      emit_timesub_ne(c, recv, argv[0], b);
+      return 1;
+    }
     if (a_nil || r_nil || a_niltyped || r_niltyped) {
       int other = (a_nil || a_niltyped) ? recv : argv[0];
       Repr otr = repr_of(c, other);
@@ -17432,10 +17446,7 @@ static int emit_case_eq_call(Compiler *c, int id, Buf *b) {
        so the boxed value's class (sp_poly_bsub_obj) picks the method at run
        time. */
     if (!eq && rt == TY_TIME && recv >= 0 && program_timesub_defines_eq(c)) {
-      int tr = ++g_tmp, ta = ++g_tmp;
-      buf_printf(b, "({ sp_RbVal _t%d = ", tr); emit_boxed(c, recv, b);
-      buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); sp_RbVal _t%d = ", tr, ta); emit_boxed(c, argv[0], b);
-      buf_printf(b, "; sp_poly_truthy(sp_poly_eq_value(_t%d, _t%d, 1)); })", tr, ta);
+      emit_timesub_ne(c, recv, argv[0], b);
       return 1;
     }
     /* Time == / != via sp_time_cmp. A non-Time operand is never equal (CRuby

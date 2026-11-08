@@ -47,3 +47,24 @@ p x == b
 p x <=> b
 p [a, b, Rows.new([1,2,3])].sort.map(&:size)
 p [a, b].max.size
+
+# an own <=> that gives nil: sort and max raise, as CRuby does
+class NoOrder < Array
+  def <=>(o) = nil
+end
+begin
+  [NoOrder.new([1, 2]), NoOrder.new([3])].sort
+rescue ArgumentError => e
+  puts e.class
+end
+begin
+  [NoOrder.new([1, 2]), NoOrder.new([3])].max
+rescue ArgumentError => e
+  puts e.class
+end
+
+# `!= nil` asks the subclass's own ==
+def ne_nil(x) = x != nil
+p ne_nil(Stamp.at(0)), ne_nil(Time.at(0))
+st = Stamp.at(5)
+p st != nil

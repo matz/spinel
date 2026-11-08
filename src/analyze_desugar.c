@@ -18598,7 +18598,7 @@ static int bx_program_aliases(Compiler *c, const char *nm) {
 /* The Comparable builtins (other than the numbers) whose call to a method
    the program adds to `module Comparable` takes the method's copy
    (bx_cmp_own_class). NULL ends the list. */
-static const char *const bx_cmp_recv_cls[] = { "String", "Symbol", "Time", "Rational", "Complex", NULL };
+static const char *const bx_cmp_recv_cls[] = { "String", "Symbol", "Time", "Rational", NULL };
 static int bx_kernel_name_own(Compiler *c, const char *nm) {
   if (program_defines_object_method_named(c, nm) || bx_program_aliases(c, nm)) return 1;
   for (int i = 0; bx_cmp_recv_cls[i]; i++) {
@@ -18659,7 +18659,7 @@ static int bx_copy_self_free(Compiler *c, int copy) {
   return ok;
 }
 
-/* A String, Symbol, Time, Rational or Complex is Comparable too. A
+/* A String, Symbol, Time or Rational is Comparable too. A
    method the program adds to `module Comparable` (bx_own) takes them; the
    gaps in desugar_builtin_scalar_calls are the builtins/ generic's own
    body. A builtin method of the receiver's class with the name answers
@@ -18669,8 +18669,18 @@ static const char *bx_cmp_own_class(Compiler *c, int bx, int copy, TyKind rt, co
   if (bx != SP_BX_COMPARABLE || copy < 0 || !name) return NULL;
   if (!nt_int(nt, (int)nt_int(nt, copy, "bx_def", -1), "bx_own", 0)) return NULL;
   const char *cls = rt == TY_STRING || rt == TY_STRBUF ? "String" : rt == TY_SYMBOL ? "Symbol"
-                  : rt == TY_TIME ? "Time" : rt == TY_RATIONAL ? "Rational" : rt == TY_COMPLEX ? "Complex" : NULL;
+                  : rt == TY_TIME ? "Time" : rt == TY_RATIONAL ? "Rational" : NULL;
   if (!cls || core_method_vis(cls, name, 0) > 0) return NULL;
+  /* Numeric comes before Comparable in a Rational's ancestors: a builtin
+     Numeric method of the name (`integer?`) or the program's own one
+     answers first. */
+  if (rt == TY_RATIONAL) {
+    if (core_method_vis("Numeric", name, 0) > 0) return NULL;
+    int k = comp_builtin_class_named(c, "Numeric");
+    int mi = k >= 0 ? comp_method_in_chain(c, k, name, NULL) : -1;
+    if (mi >= 0 && mi < c->nscopes && c->scopes[mi].def_node >= 0 &&
+        !nt_int(nt, c->scopes[mi].def_node, "node_bi", 0)) return NULL;
+  }
   return bx_copy_self_free(c, copy) ? cls : NULL;
 }
 

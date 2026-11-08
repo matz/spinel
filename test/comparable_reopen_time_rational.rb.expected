@@ -4,16 +4,15 @@ cmp
 cmp
 cmp
 cmp
-cmp
-c4
 c4
 c4
 "ta"
 "t2"
-"tz"
 ["c4", "t1"]
 ["c4", "t1"]
 4
 0
+false
+"cmp integer?"
 true
 1

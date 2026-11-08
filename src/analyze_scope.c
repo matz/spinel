@@ -13559,18 +13559,49 @@ void refuse_unreachable_bare_constants(Compiler *c) {
   free(b);
 }
 
+/* Is class or module `cls` in class k's chain: k, a superclass, or a
+   module one of them includes? */
+static int ssc_in_chain(Compiler *c, int k, int cls) {
+  for (int d = 0; k >= 0 && k < c->nclasses && d < 64; k = c->classes[k].parent, d++)
+    if (comp_module_includes(c, k, cls, 0)) return 1;
+  return 0;
+}
+/* Can the receiver of a call on class k run a `def self.nm` that an
+   instance method makes (sg_self_in_method)? Its class is in k's chain.
+   For a bare or self call, self can also be an instance of a subclass of
+   k, so a def in a subclass counts too. An explicit receiver typed k holds
+   only k's instances (a value that can hold a subclass is typed poly). */
+static int ssc_def_reaches(Compiler *c, int k, const char *nm, int self_call) {
+  for (int s = 0; s < c->nscopes; s++) {
+    const Scope *sp = &c->scopes[s];
+    if (!sp->is_cmethod || !sp->name || !sp_streq(sp->name, nm) || sp->def_node < 0 ||
+        !nt_int(c->nt, sp->def_node, "sg_self_in_method", 0)) continue;
+    if (sp->class_id >= 0 && (ssc_in_chain(c, k, sp->class_id) || (self_call && ssc_in_chain(c, sp->class_id, k)))) return 1;
+  }
+  return 0;
+}
 /* See analyze_internal.h. */
 void refuse_self_singleton_calls(Compiler *c) {
   const NodeTable *nt = c->nt;
+  int any = 0;
+  for (int s = 0; s < c->nscopes && !any; s++)
+    any = c->scopes[s].is_cmethod && c->scopes[s].def_node >= 0 && nt_int(nt, c->scopes[s].def_node, "sg_self_in_method", 0);
+  if (!any) return;
   for (int id = comp_kind_first(c, NK_CallNode); id >= 0; id = comp_kind_next(c, id)) {
     const char *nm = nt_str(nt, id, "name");
     int recv = nt_ref(nt, id, "receiver"), sc = c->nscope[id], k = -1;
     if (!nm) continue;
+    int self_call = recv < 0 || nt_kind(nt, recv) == NK_SelfNode;
     if (recv >= 0) { TyKind rt = comp_ntype(c, recv); if (ty_is_object(rt)) k = ty_object_class(rt); }
     else if (sc >= 0 && c->scopes[sc].class_id >= 0 && !c->scopes[sc].is_cmethod) k = c->scopes[sc].class_id;
-    if (k < 0 || comp_method_in_chain(c, k, nm, NULL) >= 0) continue;
-    int cm = comp_cmethod_in_chain(c, k, nm, NULL);
-    if (cm < 0 || c->scopes[cm].def_node < 0 || !nt_int(nt, c->scopes[cm].def_node, "sg_self_in_method", 0)) continue;
+    if (k < 0) continue;
+    /* Refused also with an instance method of the name: the compiled call
+       runs it, but an instance that ran the def runs its own method. */
+    if (!ssc_def_reaches(c, k, nm, self_call)) {
+      if (comp_method_in_chain(c, k, nm, NULL) >= 0) continue;
+      int cm = comp_cmethod_in_chain(c, k, nm, NULL);
+      if (cm < 0 || c->scopes[cm].def_node < 0 || !nt_int(nt, c->scopes[cm].def_node, "sg_self_in_method", 0)) continue;
+    }
     unsupported_feature(c, id, "singleton method on self inside an instance method: self is whichever instance runs it, "
                                "and a compiled class cannot give one object a method of its own");
   }

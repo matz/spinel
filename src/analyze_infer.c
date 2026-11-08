@@ -6824,6 +6824,14 @@ static int infer_receiverless_call(Compiler *c, int id, const NodeTable *nt, con
 }
 
 /* A method the program defines on the receiver (a class method, a Struct's member, a reopened builtin's method) and instance-variable reflection (infer_call_inner's rules, in their order) */
+/* Does an Integer or Float reopening's method answer call id, as
+   infer_user_method_call's reopen lookup finds it? */
+static int an_scalar_reopen_answers(Compiler *c, int id, const char *name, int recv, TyKind rt, int bonly) {
+  if (recv < 0 || bonly || !name || (rt != TY_INT && rt != TY_FLOAT) || nt_int(c->nt, id, "builtin_only", 0)) return 0;
+  int ci = comp_core_class(c, core_of_type(rt));
+  int mi = ci >= 0 ? call_target(c, id, ci, name, 0, NULL) : -1;
+  return mi >= 0 && !cplan_reopen_runs_builtin(c, id, mi);
+}
 static int infer_user_method_call(Compiler *c, int id, const NodeTable *nt, const char *name, int recv, int argc, const int *argv, TyKind rt, int bonly, TyKind *out) {
   /* The plan keeps an operator override's value alongside the builtin's
      Boolean answer, independently for every receiver arm. */
@@ -9711,7 +9719,11 @@ static TyKind infer_call_inner(Compiler *c, int id) {
         (sp_streq(name, "polar") || sp_streq(name, "rect") || sp_streq(name, "rectangular")))
       return TY_COMPLEX;
   }
-  /* Numeric receivers: the Complex and Rational faces, the mixed Integer/Float x Complex operators, and the curried-Proc accumulator (analyze_infer_recv.c). */
+  /* Numeric receivers: the Complex and Rational faces, the mixed Integer/Float x Complex operators, and the curried-Proc accumulator (analyze_infer_recv.c).
+     Not for a call an Integer or Float reopening's method answers, which
+     infer_user_method_call types below and the emitter calls
+     (`class Float; def clamp(a, b) = :c` is no boxed bound) */
+  if (!an_scalar_reopen_answers(c, id, name, recv, rt, bonly))
   { TyKind rr; if (infer_numeric_call(c, id, rt, &rr)) return rr; }
   /* nil's to_a, to_h, =~ and !~ (and a Float's &, | and ^), which the
      receiver's class lacks: typed as nil's answer, boxed, whether or not the

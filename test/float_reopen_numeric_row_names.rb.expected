@@ -1,0 +1,7 @@
+[:clamp, 2]
+[:clamp, 2]
+[:clamp, 1]
+[:round, [:half]]
+2
+2
+[:clamp, 2]

@@ -725,6 +725,17 @@ static void sp_str_retune(size_t before, size_t promoted) {
    variants, -DSP_GC_NONE) names the collector nowhere: this definition
    agrees with the program's, which is the strong one. */
 SP_WEAK void (*sp_gc_collect_fn)(void) = NULL;
+#elif defined(_WIN32)
+/* Not weak on Windows. A COFF weak definition is a weak external whose
+   default lives in its own section, and MinGW ld's --gc-sections drops that
+   section (the references name the weak external, not the section): the
+   pointer was left undefined, its 0 relocated by the ASLR delta into a
+   non-NULL garbage address, and the first collection faulted on it -- under
+   the runtime's SIGSEGV emulation, the same fault over and over, a hang.
+   Nothing needs it weak here: a --gc=none program links the _nogc archive
+   (the branch above), and the C extension archives that a --gc=none
+   program would share are not built for Windows. */
+void (*sp_gc_collect_fn)(void) = sp_gc_collect;
 #else
 SP_WEAK void (*sp_gc_collect_fn)(void) = sp_gc_collect;
 #endif

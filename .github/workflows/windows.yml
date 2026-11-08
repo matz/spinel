@@ -70,3 +70,9 @@ jobs:
           printf 'puts [1, 2, 3].map { |x| x * 2 }.sum\nputs "%%s-%%d" %% ["ok", 42]\nh = {a: 1}; h[:b] = 2; p h\n' > smoke.rb
           bin/spinel smoke.rb -o smoke.exe
           test "$(./smoke.exe)" = "$(printf '12\nok-42\n{a: 1, b: 2}')"
+
+      - name: Compile and run a program that collects
+        run: |
+          printf 'a = "x" * 10\nGC.start\n100_000.times { |i| s = "item #{i}" }\nputs "collected"\n' > gc_smoke.rb
+          bin/spinel gc_smoke.rb -o gc_smoke.exe
+          test "$(timeout 60 ./gc_smoke.exe)" = "collected"

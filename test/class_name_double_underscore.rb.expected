@@ -45,3 +45,5 @@ String
 uninitialized constant GA::String
 uninitialized constant GB::String
 uninitialized constant GK::String
+[]
+uninitialized constant GA::ARGV

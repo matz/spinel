@@ -21326,6 +21326,11 @@ static void emit_class_machinery(const NodeTable *nt, Compiler *c, Buf *b, char 
       "    if(v.cls_id>=-20||v.cls_id==-34)return ((sp_Class){-105});\n"  /* hashes */
       /* a BasicObject.new is a BasicObject, not an Object or a Kernel */
       "    if(v.cls_id==SP_BUILTIN_BASIC_OBJECT)return ((sp_Class){-117});\n"
+      /* any other builtin box (an IO, File, Dir, socket, Mutex...) is the
+         builtin class its name gives, as #class answers, so is_a?(k) and
+         k === v with k a class value walk that class's chain (Dir and IO
+         are Enumerable), not Object's */
+      "    { sp_int _bid=sp_builtin_id_of_name(sp_poly_class_name(v)); if(_bid!=SP_CLASS_NIL_ID)return ((sp_Class){_bid}); }\n"
       "    return ((sp_Class){-116});\n"
       "  default: return ((sp_Class){-116});\n"
       "  }\n}\n"

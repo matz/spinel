@@ -1,0 +1,34 @@
+[false, false, false, false, true, true, false, false, false, false, false, true, true]
+[false, false, true, true, false, true, false, false, false, false, false, true, true]
+[true, false, false, true, false, true, false, false, false, false, false, true, true]
+[true, true, false, true, false, true, false, false, false, false, false, true, true]
+[false, false, false, false, true, true, false, false, false, false, false, true, true]
+[false, false, false, false, false, true, true, false, false, false, false, true, true]
+[false, false, false, false, false, true, false, true, false, false, false, true, true]
+[false, false, false, false, false, true, false, false, true, false, false, true, true]
+[false, false, false, true, false, true, false, false, false, true, false, true, true]
+[false, false, false, false, true, true, false, false, false, false, true, true, true]
+[false, false, false, false, true, true, false, false, false, false, false, true, true]
+[false, false, true, true, false, true, false, false, false, false, false, true, true]
+[true, false, false, true, false, true, false, false, false, false, false, true, true]
+[true, true, false, true, false, true, false, false, false, false, false, true, true]
+[false, false, false, false, true, true, false, false, false, false, false, true, true]
+[false, false, false, false, false, true, true, false, false, false, false, true, true]
+[false, false, false, false, false, true, false, true, false, false, false, true, true]
+[false, false, false, false, false, true, false, false, true, false, false, true, true]
+[false, false, false, true, false, true, false, false, false, true, false, true, true]
+[false, false, false, false, true, true, false, false, false, false, true, true, true]
+4
+Integer false false false
+Dir true true true
+IO true true true
+File true true true
+String false false false
+Thread::Mutex false false false
+Thread::Queue false false false
+Thread false false false
+Range true true true
+Time false false false
+[0, 1, 1, 1, 0, 0, 0, 0, 1, 0]
+[false, false, true, true, false, false, false, false, false, false]
+[false, true, false, false, false, false, false, false, false, false]

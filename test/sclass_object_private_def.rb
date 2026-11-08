@@ -50,3 +50,29 @@ class << u
 end
 p [1] + u
 p W.new.respond_to?(:to_ary, true)
+
+# a later plain def of the name makes it public again, as CRuby's last
+# definition does: in the same body, a later body, def obj.m and
+# define_singleton_method
+a = W.new
+class << a
+  private def m = :priv
+  def m = :redef
+end
+p a.m
+b = W.new
+class << b; private def m = :priv; end
+class << b; def m = :pub; end
+p b.m
+d = W.new
+class << d; private def m = :priv; end
+def d.m = :pub
+p d.m
+e = W.new
+class << e; private def m = :priv; end
+e.define_singleton_method(:m) { :dsm }
+p e.m
+f = W.new
+def f.m = :pub
+class << f; private def m = :priv; end
+p((f.m rescue "NoMethodError"))

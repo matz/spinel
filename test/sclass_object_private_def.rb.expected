@@ -18,3 +18,8 @@ false
 :top
 [1, :s]
 false
+:redef
+:pub
+:pub
+:dsm
+"NoMethodError"

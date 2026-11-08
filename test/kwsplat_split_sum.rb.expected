@@ -1,0 +1,9 @@
+[:e, 3]
+[:n, NoMethodError, "undefined method '+' for an instance of Hash"]
+[:empty_recv_n, {a: 1}]
+[:init_e, 13]
+[:float_e, 3.5]
+[:nil, 3]
+[:lit, 3]
+8
+Integer

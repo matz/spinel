@@ -1,0 +1,8 @@
+[:empty, [], NameError]
+[:nonempty, {z: 1}, NameError]
+[:blk, :early]
+[:after_split, :early]
+[:blk2, :late]
+[:top, :w1]
+[:top2, :w2]
+[:undef, NameError]

@@ -1654,6 +1654,8 @@ typedef struct {
   /* the program has a `**` operand and defines #to_hash: the bridge carries
      the #to_hash row a boxed operand converts through (sp_kw_splat_conv). */
   int uses_kw_to_hash;
+  /* the program converts a `&` operand ahead of its call (__blk_conv): the bridge carries the #to_proc row. */
+  int uses_blk_conv;
   /* the methods CRuby calls that the program does not name, as the last
      reachability run found them (implicit_calls.h); freed with the Compiler */
   struct IcState *ic;

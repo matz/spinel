@@ -1340,6 +1340,14 @@ int is_line_read(const char *n) {
   return sp_streq(n, "gets") || sp_streq(n, "readline");
 }
 
+/* Does the builtin of this name take keywords in CRuby? The rows say so for
+   the names that have one (BOPF_KEYWORDS); readlines, readline and the
+   Kernel conversion functions have none. */
+int builtin_name_takes_keywords(const char *n) {
+  return bop_name_keywords(n) || sp_streq(n, "readlines") || sp_streq(n, "readline") || sp_streq(n, "Integer") ||
+         sp_streq(n, "Float") || sp_streq(n, "Rational") || sp_streq(n, "Complex");
+}
+
 int is_string_position_mutator(const char *n) {
   return sp_streq(n, "slice!") || sp_streq(n, "setbyte") || sp_streq(n, "insert") || sp_streq(n, "clear") || sp_streq(n, "[]=");
 }

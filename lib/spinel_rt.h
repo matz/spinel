@@ -17089,6 +17089,35 @@ static sp_Proc *sp_poly_to_block(sp_RbVal v) {
   return sp_poly_to_proc(v);
 }
 
+/* A `&` operand converted ahead of its call (__blk_conv), as CRuby converts
+   a block operand: nil, a Proc, a curried Proc and a Method as they are (the
+   call turns them into its block, sp_poly_to_block); a Symbol and a Hash as
+   they are too, for the call to convert; a program object through its
+   #to_proc, found at run time (the generated bridge's row 6,
+   Compiler.uses_blk_conv), whatever the method's visibility, and an answer
+   that is no Proc is CRuby's TypeError naming both classes. A program
+   object with no #to_proc passes as it is only when `user_ok` (some class
+   defines method_missing, which may answer it); any other value is the
+   TypeError sp_poly_to_block raises (asked here, ahead of the call). */
+static sp_RbVal sp_poly_blk_conv(sp_RbVal v, int user_ok) {
+  if (v.tag == SP_TAG_NIL || v.tag == SP_TAG_SYM ||
+      (v.tag == SP_TAG_OBJ && (v.cls_id == SP_BUILTIN_PROC || v.cls_id == SP_BUILTIN_CURRY ||
+                               v.cls_id == SP_BUILTIN_METHOD || sp_poly_is_hash_kind(v.cls_id))))
+    return v;
+  if (sp_poly_is_user_obj(v)) {
+    sp_RbVal a = sp_box_nil();
+    SP_GC_ROOT_RBVAL(v);
+    if (sp_obj_conv_fn && sp_obj_conv_fn((int)v.cls_id, v.v.p, 6, &a)) {
+      if (a.tag == SP_TAG_OBJ && a.cls_id == SP_BUILTIN_PROC) return a;
+      const char *cn = sp_poly_class_name(v);
+      sp_raise_cls("TypeError", sp_sprintf("can't convert %s to Proc (%s#to_proc gives %s)", cn, cn, sp_poly_class_name(a)));
+    }
+    if (user_ok) return v;
+  }
+  (void)sp_poly_to_block(v);   /* a value with no conversion: its TypeError */
+  return v;
+}
+
 /* A Method read back out of a container has only its sp_BoundMethod: #owner
    and #source_location come from the facts its bind site stamped, and
    #receiver from the object's own class id (#3692). */

@@ -860,7 +860,7 @@ const char*sp_StrArray_join(sp_StrArray*a,const char*sep){SP_GC_ROOT(a);SP_GC_RO
    insert made for a new String was freed while the Array grew. */
 sp_bool sp_StrArray_include_e(sp_StrArray*a,sp_strelem v){SP_GC_ROOT(a);SP_GC_ROOT(v);if (SP_UNLIKELY(!a)) sp_nil_recv("include?");for(sp_int i=0;i<a->len;i++)if(sp_str_eq(SP_SEB(a->data[i]),SP_SEB(v)))return TRUE;return FALSE;}
 /* the same asked with bytes, which is not an element */
-sp_bool sp_StrArray_include_s(sp_StrArray*a,const char*v){SP_GC_ROOT(a);SP_GC_ROOT_STR(v);if (SP_UNLIKELY(!a)) sp_nil_recv("include?");for(sp_int i=0;i<a->len;i++)if(sp_str_eq(SP_SEB(a->data[i]),v))return TRUE;return FALSE;}
+sp_bool sp_StrArray_include(sp_StrArray*a,const char*v){SP_GC_ROOT(a);SP_GC_ROOT_STR(v);if (SP_UNLIKELY(!a)) sp_nil_recv("include?");for(sp_int i=0;i<a->len;i++)if(sp_str_eq(SP_SEB(a->data[i]),v))return TRUE;return FALSE;}
 sp_StrArray*sp_StrArray_intersect(sp_StrArray*a,sp_StrArray*b){SP_GC_ROOT(a);SP_GC_ROOT(b);sp_StrArray*r=sp_StrArray_new();if(!a||!b)return r;
   if (sp_setop_hashes(b->len, a->len)) {
     sp_sset in_b, seen; sp_sset_init(&in_b, b->len, 1); sp_sset_init(&seen, a->len, 1);

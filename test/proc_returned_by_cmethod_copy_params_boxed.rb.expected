@@ -1,0 +1,8 @@
+true
+false
+true
+"ac: {a: 1} \"s\""
+"av: [1, 2] 3.5"
+["ac", "x"]
+["av", :y]
+true

@@ -16461,6 +16461,18 @@ static void ple_build(Compiler *c) {
        (#4035). The block-tail rule below has always tested both. */
     if (bn > 0) ple_mark_tail_literals(c, bb[bn - 1]);
   }
+  /* ...and of a method's copy, whose body is a clone no DefNode holds (a
+     class method specialized for a subclass, cmethod_copy_into): its
+     returned literal took the Integer default, and a Hash its caller
+     passed was read through an int slot */
+  for (int s = 0; s < c->nscopes; s++) {
+    const Scope *sc = &c->scopes[s];
+    int body = sc->body;
+    if (body < 0 || body >= n || sc->def_node < 0 || nt_ref(nt, sc->def_node, "body") == body ||
+        nt_kind(nt, body) != NK_StatementsNode) continue;
+    int bn = 0; const int *bb = nt_arr(nt, body, "body", &bn);
+    if (bn > 0) ple_mark_tail_literals(c, bb[bn - 1]);
+  }
   /* And a proc literal that is a LAMBDA's tail value: `->(step) { ->(acc) {
      step.call(acc) } }` answers the inner lambda, and the caller has only the
      type-erased proc, exactly as for a method return. Only the def and the

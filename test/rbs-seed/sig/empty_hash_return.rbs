@@ -1,0 +1,17 @@
+module EmptyHashReturn
+  def self.size: (Hash[String, String]) -> Integer
+  def self.generic_size: (Hash[String, untyped]) -> Integer
+  def self.empty: () -> Hash[String, String]
+  def self.constructed: () -> Hash[String, String]
+  def self.nonempty: () -> Hash[String, String]
+  def self.explicit: () -> Hash[String, String]
+  def self.branch: (bool) -> Hash[String, String]
+  def self.early: (bool) -> Hash[String, String]
+  def self.return_branch: (bool) -> Hash[String, String]
+  def self.nullable: (bool) -> Hash[String, String]?
+  def self.ensured: () -> Hash[String, String]
+  def self.rescued: (bool) -> Hash[String, String]
+  def self.counts: (bool) -> Hash[String, Integer]
+  def self.mixed: (bool) -> Hash[String, String]
+  def self.aliased: () -> Hash[String, String]
+end

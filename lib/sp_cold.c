@@ -1501,18 +1501,6 @@ SP_NORETURN static void sp_typed_replace_elem_error(sp_RbVal v, const char *kind
   abort();
 }
 
-/* the contents of a shared String buffer as a String of their own, embedded
-   NULs and a binary encoding included */
-static SP_UNUSED const char *sp_strbuf_copy(sp_String *b) {
-  size_t n = (size_t)b->len;
-  char *c = sp_str_alloc(n);
-  memcpy(c, b->data, n);
-  c[n] = '\0';
-  sp_str_set_len(c, n);
-  if (b->binary) sp_str_mark_binary(c);
-  return c;
-}
-
 /* A typed array replaced from an array of another kind takes each element as
    the boxed []= stores one: its own kind, nil as its nil, an Integer into a
    Float array; any other element raises before the receiver changes. */
@@ -1553,15 +1541,9 @@ static void sp_typed_array_replace_boxed(sp_RbVal recv, sp_RbVal src) {
       sp_StrArray *st = sp_StrArray_new(); SP_GC_ROOT(st);
       for (sp_int i = 0; i < els->len; i++) {
         sp_RbVal e = els->data[i];
-#ifdef SP_ONE_STRING
         if (e.tag == SP_TAG_STR) sp_StrArray_push_e(st, SP_SEF(e.v.s));
         else if (e.tag == SP_TAG_OBJ && e.cls_id == SP_BUILTIN_STRBUF)
           sp_StrArray_push_e(st, (sp_strelem)e.v.p);   /* the handle itself: one String */
-#else
-        if (e.tag == SP_TAG_STR) sp_StrArray_push(st, e.v.s);
-        else if (e.tag == SP_TAG_OBJ && e.cls_id == SP_BUILTIN_STRBUF)
-          sp_StrArray_push(st, sp_strbuf_copy((sp_String *)e.v.p));
-#endif
         else if (e.tag == SP_TAG_NIL) sp_StrArray_push(st, NULL);
         else sp_typed_replace_elem_error(e, "String");
       }
@@ -3511,11 +3493,7 @@ sp_StrArray *sp_dir_entries_enc(const char *path, int children, sp_RbVal enc) {S
   }
   sp_StrArray *a = sp_dir_entries_impl(path, children);
   if (binary)
-#ifdef SP_ONE_STRING
     for (sp_int i = 0; i < a->len; i++) if (a->data[i]) { a->data[i]->binary = 1; sp_fd_publish(a->data[i]); }
-#else
-    for (sp_int i = 0; i < a->len; i++) sp_str_as_binary(a->data[i]);
-#endif
   return a;
 }
 
@@ -4472,7 +4450,6 @@ sp_StrStrHash *sp_env_to_h(void) {
   }
   return h;
 }
-#ifdef SP_ONE_STRING
 /* ENV itself as a value (a parameter defaulting to ENV, a local holding
    it): the snapshot a store into which keeps a frozen copy of the String,
    as ENV does (sp_StrStrHash_set_e reads the snapshot's finalizer), where
@@ -4482,7 +4459,6 @@ sp_StrStrHash *sp_env_value(void) {
   sp_StrStrHash_mark_env(h);
   return h;
 }
-#endif
 sp_StrStrHash *sp_env_clear(void) {
   extern char **environ;
   for (;;) {   /* environ shifts under unsetenv: restart until empty */
@@ -4527,7 +4503,6 @@ static void sp_gc_stat_str_cb(void *hdr, void *arg) {
   struct sp_gc_stat_str_acc *a = (struct sp_gc_stat_str_acc *)arg;
   *a->b += ((sp_str_hdr *)hdr)->size & SP_STR_SIZE_MASK; (*a->c)++;
 }
-#ifdef SP_ONE_STRING
 void sp_slab_each_object(int young, int old, void (*fn)(void *hdr, void *arg), void *arg);
 static void sp_gc_stat_one_str_cb(void *hdr, void *arg) {
   struct sp_gc_stat_str_acc *a = (struct sp_gc_stat_str_acc *)arg;
@@ -4538,7 +4513,6 @@ static void sp_gc_stat_one_str_cb(void *hdr, void *arg) {
   if (m != 0xfe && m != 0xfa && m != 0xf1 && m != 0xfd) return;
   *a->b += ((sp_gc_hdr *)hdr)->size; (*a->c)++;
 }
-#endif
 sp_StrIntHash*sp_gc_stat(void){
   /* The string heap (sp_str_heap) is malloc'd separately and deliberately
      excluded from sp_gc_bytes (see sp_str_alloc). Surface its footprint so
@@ -4554,11 +4528,9 @@ sp_StrIntHash*sp_gc_stat(void){
      introspection stat), then the lists of the strings too large for it */
   { struct sp_gc_stat_str_acc acc = { &str_bytes, &str_count };
     sp_slab_each_string(1, 1, sp_gc_stat_str_cb, &acc);
-#ifdef SP_ONE_STRING
     /* one representation: a String lives in its handle's GC object, the
        bytes inside it (sp_str_alloc_born, sp_String_new_inline_len) */
     sp_slab_each_object(1, 1, sp_gc_stat_one_str_cb, &acc);
-#endif
   }
 #ifdef SP_THREADS
   /* Per-worker lists (see sp_alloc.h): each has a single pusher, and only the
@@ -4982,9 +4954,7 @@ int sp_argf_ensure(void) {
     return 1;
   }
   sp_strelem fne = sp_StrArray_shift_e(av);
-#ifdef SP_ONE_STRING
   SP_GC_ROOT(fne);   /* off the Array now: its bytes live as long as the handle */
-#endif
   const char *fn = SP_SEB(fne);
   sp_argf_obj.started = 1;
   if (!fn) sp_raise_cls("TypeError", "no implicit conversion of nil into String");
@@ -5122,18 +5092,11 @@ sp_StrRange sp_srange_live(sp_StrRange r) {
 static sp_StrRange sp_srange_held(sp_StrRange r) {
   sp_String *hf = (sp_String *)r.hf, *hl = (sp_String *)r.hl;
   SP_GC_ROOT(hf); SP_GC_ROOT(hl);
-#ifdef SP_ONE_STRING
   /* one representation: the endpoint's bytes are the handle's own (a sink
      finds the handle through them), as CRuby's #min answers the begin
      object itself */
   if (hf) r.first = sp_String_cstr(hf);
   if (hl) r.last = sp_String_cstr(hl);
-#else
-  if (hf) r.first = sp_str_from_bytes(sp_String_cstr(hf), (size_t)sp_String_length(hf));
-  const char *f = r.first;
-  SP_GC_ROOT_STR(f);
-  if (hl) r.last = sp_str_from_bytes(sp_String_cstr(hl), (size_t)sp_String_length(hl));
-#endif
   return r;
 }
 sp_StrRange sp_srange_new(const char *f, const char *l, sp_int e) {

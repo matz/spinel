@@ -17,7 +17,6 @@
 #include <stdint.h>
 #include <math.h>      /* isnan / isinf / signbit / NAN / fabs for sp_float_sum_step */
 #include "sp_gc.h"      /* sp_gc_hdr, sp_gc_bytes, SP_GC_ROOT, sp_oom_die */
-#ifdef SP_ONE_STRING
 /* SP_SEFX's fast cases, where a bytes-form wrapper takes a String in: a
    payload view's owner (0xfd, the header's link) and a frozen literal
    whose handle exists already (0xf1, the header's tagged link to its slot,
@@ -38,7 +37,6 @@ static inline struct sp_String_s *sp_strelem_fx(const char *b) {
   }
   return sp_strelem_of(b);
 }
-#endif
 #include "sp_alloc.h"   /* sp_gc_alloc, sp_str_alloc, sp_raise_cls, sp_raise_frozen_array */
 
 const char *sp_sprintf(const char *fmt, ...);  /* defined in the generated TU */
@@ -690,7 +688,7 @@ static inline sp_int sp_StrArray_length_m(sp_StrArray*a){if (SP_UNLIKELY(!a)) sp
 static inline sp_bool sp_StrArray_empty(sp_StrArray*a){sp_gc_wb((void*)a); return a->len==0;}
 static inline sp_strelem sp_StrArray_get_e(sp_StrArray*a,sp_int i){if(!a)return NULL;if(i<0)i+=a->len;if(i<0||i>=a->len)return NULL;return a->data[i];}
 static inline sp_strelem sp_StrArray_get_m_e(sp_StrArray*a,sp_int i){if (SP_UNLIKELY(!a)) sp_nil_recv("[]"); return sp_StrArray_get_e(a,i); }
-/* the element's bytes (SP_SEB): what a reader of the String takes; the element as the container keeps it is the _e form, the handle under SP_ONE_STRING */
+/* the element's bytes (SP_SEB): what a reader of the String takes; the element as the container keeps it is the _e form, the handle */
 static inline const char *sp_StrArray_get(sp_StrArray*a,sp_int i){sp_strelem e=sp_StrArray_get_e(a,i);return SP_SEB(e);}
 static inline const char *sp_StrArray_get_m(sp_StrArray*a,sp_int i){sp_strelem e=sp_StrArray_get_m_e(a,i);return SP_SEB(e);}
 static inline void sp_StrArray_set_e(sp_StrArray*a,sp_int i,sp_strelem v){sp_gc_wb((void*)a); if (SP_UNLIKELY(!a)) sp_nil_recv("[]=");if(a->frozen){sp_raise_frozen_array_at(a, SP_BUILTIN_STR_ARRAY);return;}sp_int orig=i;if(i<0)i+=a->len;if(i<0)sp_raise_cls("IndexError",sp_sprintf("index %lld too small for array; minimum: %lld",(long long)orig,(long long)-a->len));while(i>=a->len)sp_StrArray_push(a,NULL);a->data[i]=v;}  /* the gap is nil, not "" (#3836) */
@@ -711,13 +709,9 @@ void sp_StrArray_uniq_bang(sp_StrArray *a);
 sp_StrArray *sp_StrArray_uniq(sp_StrArray *a);
 const char *sp_StrArray_join(sp_StrArray *a, const char *sep);
 sp_bool sp_StrArray_include_e(sp_StrArray *a, sp_strelem v);
-#ifdef SP_ONE_STRING
 sp_bool sp_StrArray_include_s(sp_StrArray *a, const char *v);
 /* (the bytes compare: a needle is no element to adopt) */
 static inline sp_bool sp_StrArray_include(sp_StrArray *a, const char *v){return sp_StrArray_include_s(a,v);}
-#else
-static inline sp_bool sp_StrArray_include(sp_StrArray *a, const char *v){return sp_StrArray_include_e(a,v);}
-#endif
 sp_StrArray *sp_StrArray_intersect(sp_StrArray *a, sp_StrArray *b);
 sp_bool sp_StrArray_intersect_p(sp_StrArray *a, sp_StrArray *b);
 sp_StrArray *sp_StrArray_union(sp_StrArray *a, sp_StrArray *b);

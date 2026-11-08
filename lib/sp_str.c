@@ -417,13 +417,9 @@ sp_StrArray *sp_str_partition(const char *s, const char *sep) {
   if (!f) { sp_StrArray_push_e(r, SP_SEF(sp_str_dup(s))); sp_StrArray_push_e(r, SP_SEF(sp_str_dup(sp_str_empty))); sp_StrArray_push_e(r, SP_SEF(sp_str_dup(sp_str_empty))); return r; }
   sp_int pre = (sp_int)(f - s);
   sp_StrArray_push_e(r, SP_SEF(sp_str_byteslice(s, 0, pre)));
-#ifdef SP_ONE_STRING
   /* (one representation: the separator found is the argument itself, as
      CRuby answers it; its handle is the one the argument is, SP_SEF) */
   sp_StrArray_push_e(r, SP_SEF(sep));
-#else
-  sp_StrArray_push_e(r, SP_SEF(sp_str_byteslice(s, pre, sl)));
-#endif
   sp_StrArray_push_e(r, SP_SEF(sp_str_byteslice(s, pre + sl, bl - pre - sl)));
   return r;
 }
@@ -442,13 +438,9 @@ sp_StrArray *sp_str_rpartition(const char *s, const char *sep) {
   if (!last) { sp_StrArray_push_e(r, SP_SEF(sp_str_dup(sp_str_empty))); sp_StrArray_push_e(r, SP_SEF(sp_str_dup(sp_str_empty))); sp_StrArray_push_e(r, SP_SEF(sp_str_dup(s))); return r; }
   sp_int pre = (sp_int)(last - s);
   sp_StrArray_push_e(r, SP_SEF(sp_str_byteslice(s, 0, pre)));
-#ifdef SP_ONE_STRING
   /* (one representation: the separator found is the argument itself, as
      CRuby answers it; its handle is the one the argument is, SP_SEF) */
   sp_StrArray_push_e(r, SP_SEF(sep));
-#else
-  sp_StrArray_push_e(r, SP_SEF(sp_str_byteslice(s, pre, sl)));
-#endif
   sp_StrArray_push_e(r, SP_SEF(sp_str_byteslice(s, pre + sl, bl - pre - sl)));
   return r;
 }
@@ -825,13 +817,9 @@ static uint32_t*sp_str_charset(const char*s,const char*cs,int*neg,size_t*n){cons
 uint32_t*sp_utf8_decode_charset(const char*s,size_t*out_n){SP_GC_ROOT_STR(s);return sp_utf8_decode_charset_n(s,s?strlen(s):0,out_n);}
 /* Reuse an existing StrArray for split, avoiding GC alloc.
    Clears a->len and refills.  Substring strings are still malloc'd. */
-#ifdef SP_ONE_STRING
 /* the piece's bytes take the subject's encoding before the handle is made over
    them, so the handle carries it (sp_String_new_shared reads the mark) */
 static void sp_str_piece(sp_StrArray*a,const char*s,const char*p,size_t n){char*r=sp_str_alloc_raw(n+1);memcpy(r,p,n);r[n]=0;sp_str_set_len(r,n);sp_StrArray_push_e(a,SP_SEF(sp_str_bin_like(s,r)));}
-#else
-static void sp_str_piece(sp_StrArray*a,const char*s,const char*p,size_t n){sp_str_split_push(a,p,n);sp_str_bin_like(s,(char*)a->data[a->len-1]);}
-#endif
 /* CRuby refuses to split a UTF-8 String whose bytes are invalid (ArgumentError),
    as a regexp search refuses it (sp_re_check_subject). Fewer characters than
    bytes is valid text: the length cache answers for the same String again.

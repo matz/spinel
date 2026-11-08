@@ -73,7 +73,6 @@ void sp_StrStrHash_grow(sp_StrStrHash*h){SP_GC_ROOT(h); sp_gc_wb((void*)h);sp_in
 /* Hashing and comparing String bytes allocate nothing, so a lookup needs
    no temporary GC roots, including while value? scans the table. */
 sp_strelem sp_StrStrHash_get_e(sp_StrStrHash*h,const char*k){if (SP_UNLIKELY(!h)) sp_nil_recv("[]");sp_int idx=(sp_int)(sp_str_hash(k)&h->mask);while(h->keys[idx]){if(sp_str_probe_eq(h->keys[idx],k))return h->vals[idx];idx=(idx+1)&h->mask;}return h->default_v;}
-#ifdef SP_ONE_STRING
 /* ENV's snapshot as a value (sp_env_value) is told by its finalizer: a
    String stored into it is a frozen copy, as ENV keeps */
 static void sp_StrStrHash_env_fin(void*p){sp_StrStrHash_fin(p);}
@@ -83,11 +82,8 @@ static sp_strelem sp_StrStrHash_env_copy(sp_strelem v){
   if(v->binary){c->binary=1;sp_fd_publish(c);}
   return sp_String_freeze(c);
 }
-#endif
 void sp_StrStrHash_set_e(sp_StrStrHash*h,const char*k,sp_strelem v){SP_GC_ROOT(h);SP_GC_ROOT_STR(k);SP_SER(v); if(!k){sp_raise_cls("TypeError","no implicit conversion of nil into String");return;} 
-#ifdef SP_ONE_STRING
 if(v&&SP_UNLIKELY(((sp_gc_hdr*)((char*)h-sizeof(sp_gc_hdr)))->finalize==sp_StrStrHash_env_fin))v=sp_StrStrHash_env_copy(v);
-#endif
 sp_gc_wb((void*)h);if(h->len*2>=h->cap)sp_StrStrHash_grow(h);sp_int idx=(sp_int)(sp_str_hash(k)&h->mask);while(h->keys[idx]){if(sp_str_probe_eq(h->keys[idx],k)){h->vals[idx]=v;return;}idx=(idx+1)&h->mask;}k=sp_hash_key_str(k);sp_gc_wb((void*)h);h->keys[idx]=k;h->vals[idx]=v;h->order[h->len]=k;h->len++;}
 sp_bool sp_StrStrHash_has_key(sp_StrStrHash*h,const char*k){SP_GC_ROOT(h);SP_GC_ROOT_STR(k);sp_int idx=(sp_int)(sp_str_hash(k)&h->mask);while(h->keys[idx]){if(sp_str_probe_eq(h->keys[idx],k))return TRUE;idx=(idx+1)&h->mask;}return FALSE;}
 const char *sp_StrStrHash_fetch_or(sp_StrStrHash*h,const char*k,const char*d){if (SP_UNLIKELY(!h)) sp_nil_recv("fetch");sp_int idx=(sp_int)(sp_str_hash(k)&h->mask);while(h->keys[idx]){if(sp_str_probe_eq(h->keys[idx],k))return SP_SEB(h->vals[idx]);idx=(idx+1)&h->mask;}return d;}

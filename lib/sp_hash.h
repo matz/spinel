@@ -98,12 +98,10 @@ sp_StrStrHash*sp_StrStrHash_new_with_default_e(sp_strelem d);
 static inline sp_StrStrHash*sp_StrStrHash_new_with_default(const char*d){return sp_StrStrHash_new_with_default_e(SP_SEFX(d));}
 void sp_StrStrHash_grow(sp_StrStrHash*h);
 sp_strelem sp_StrStrHash_get_e(sp_StrStrHash*h,const char*k);
-/* the element's bytes (SP_SEB): what a reader of the String takes; the element as the container keeps it is the _e form, the handle under SP_ONE_STRING */
+/* the element's bytes (SP_SEB): what a reader of the String takes; the element as the container keeps it is the _e form, the handle */
 static inline const char *sp_StrStrHash_get(sp_StrStrHash*h,const char*k){sp_strelem e=sp_StrStrHash_get_e(h,k);return SP_SEB(e);}
 void sp_StrStrHash_set_e(sp_StrStrHash*h,const char*k,sp_strelem v);
-#ifdef SP_ONE_STRING
 void sp_StrStrHash_mark_env(sp_StrStrHash*h);
-#endif
 static inline void sp_StrStrHash_set(sp_StrStrHash*h,const char*k,const char*v){sp_StrStrHash_set_e(h,k,SP_SEFX(v));}
 sp_bool sp_StrStrHash_has_key(sp_StrStrHash*h,const char*k);
 /* h.fetch(k, d) in one probe: the value's bytes, or d when k is absent */

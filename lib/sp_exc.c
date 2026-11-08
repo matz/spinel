@@ -194,7 +194,6 @@ sp_bool sp_exc_cls_unnamed(const char *shown) {
    which #message and #to_s answer themselves, as CRuby's do: the exception
    keeps the handle (msg_h), the payload's owner, beside the copy in msg that
    the text readers take. */
-#ifdef SP_ONE_STRING
 static inline sp_String *sp_exc_one_owner(const char *m) {
   if (m && ((const unsigned char *)m)[-1] == 0xfd)
     return (sp_String *)(void *)((sp_str_hdr *)((char *)m - sizeof(sp_str_hdr) - 1))->next;
@@ -213,10 +212,6 @@ static inline void sp_exc_one_attach(sp_Exception *e, sp_String *h) {
     sp_gc_wb((void *)e); e->msg_h = nh;
   }
 }
-#else
-#define SP_EXC_ONE_OWNER(m) void *_one_h = NULL; (void)_one_h;
-#define sp_exc_one_attach(e, h) ((void)0)
-#endif
 static const char *sp_exc_msg_copy(const char *m) {
   if (sp_cmsg_p(m)) {   /* the counted message decodes to its payload, a NUL kept */
     size_t cn = sp_cmsg_len(m);
@@ -281,11 +276,9 @@ sp_Exception *sp_exc_new_for_catch(const char *cls, const char *msg) {
   sp_Exception *e = sp_exc_new(cls, msg);
   if (fz && e->msg) {
     ((unsigned char *)e->msg)[-1] = 0xfa;
-#ifdef SP_ONE_STRING
     /* sp_exc_new gave the copy, unmarked then, a handle of its own; a
        frozen message keeps none, and #message makes it frozen */
     if (!_one_h) e->msg_h = NULL;
-#endif
   }
   sp_exc_one_attach(e, (sp_String *)_one_h);
   if (sp_user_exc_parent_fn) {
@@ -614,18 +607,6 @@ const char *sp_exc_class_name(volatile sp_Exception *ve) {
 #undef SP_KEPT_SLOT
   return r ? r : sp_str_dup_external(e->cls_name);   /* out of memory */
 }
-/* A copy of a message handle's String as it is now: #message answers a
-   String a caller keeps, and the handle's buffer moves as it grows. Sized
-   by the handle's length, so a NUL inside stays. */
-static const char *sp_exc_msg_handle_copy(sp_String *h) {
-  /* rooted: the exception holding h may be a temporary nothing else holds
-     (`E.new.message`), and the copy's allocation can collect */
-  SP_GC_ROOT(h);
-  int64_t n = sp_String_length(h);
-  char *r = sp_str_alloc((size_t)n);
-  memcpy(r, sp_String_cstr(h), (size_t)n);
-  return r;
-}
 const char *sp_exc_msg_text(volatile sp_Exception *ve) {
   sp_Exception *e = (sp_Exception *)ve;
   if (!e) return NULL;
@@ -641,12 +622,8 @@ const char *sp_exc_message(volatile sp_Exception *ve) {
   /* a message never set (super(nil), Exception.new) defaults to the class
      name, as CRuby's Exception#message does */
   if (!e) return sp_str_empty;
-#ifdef SP_ONE_STRING
   /* (one representation: the message String itself, its bytes face) */
   if (e->msg_h) return sp_String_cstr((sp_String *)e->msg_h);
-#else
-  if (e->msg_h) return sp_exc_msg_handle_copy((sp_String *)e->msg_h);
-#endif
   if (e->msg) return e->msg;
   /* none given: the class name as it shows now, read when it is asked, so a
      class named after the exception was built answers its new name */

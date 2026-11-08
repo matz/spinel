@@ -855,14 +855,12 @@ sp_StrArray*sp_StrArray_uniq(sp_StrArray*a){SP_GC_ROOT(a);sp_StrArray*b=sp_StrAr
    Array is rooted: the joined String's allocation can collect, and the
    encoding pass reads the elements again after it. */
 const char*sp_StrArray_join(sp_StrArray*a,const char*sep){SP_GC_ROOT(a);SP_GC_ROOT_STR(sep);if(!sep)sep="";if(!a)return sp_str_empty;size_t sl=sp_str_byte_len(sep),cap=256;char*buf=(char*)sp_pl_alloc(cap);size_t len=0;for(sp_int i=0;i<a->len;i++){if(i>0){if(len+sl>=cap){cap*=2;buf=(char*)sp_pl_realloc(buf,cap);}memcpy(buf+len,sep,sl);len+=sl;}const char*_e=SP_SEB(a->data[i])?SP_SEB(a->data[i]):"";size_t el=sp_str_byte_len(_e);if(len+el>=cap){cap=((len+el)*2)+1;buf=(char*)sp_pl_realloc(buf,cap);}memcpy(buf+len,_e,el);len+=el;}buf[len]=0;char*r=sp_str_alloc(len);memcpy(r,buf,len);sp_str_set_len(r,len);sp_pl_free(buf);/* the joined encoding, part by part as CRuby picks it (sp_str_enc_step) */{int st=-1;size_t off=0;int sb=sp_str_is_binary(sep);for(sp_int i=0;i<a->len;i++){if(i>0){st=sp_str_enc_step(st,r,off,sep,sl,sb);off+=sl;}const char*_e=SP_SEB(a->data[i])?SP_SEB(a->data[i]):"";size_t el=sp_str_byte_len(_e);st=sp_str_enc_step(st,r,off,_e,el,a->data[i]&&sp_str_is_binary(_e));off+=el;}if(st==1)sp_str_mark_binary(r);}return r;}
-/* An element is rooted as one (SP_SER): under one String it is the handle,
+/* An element is rooted as one (SP_SER): it is the handle,
    which SP_GC_ROOT_STR read as bytes and kept nothing of, so the handle
    insert made for a new String was freed while the Array grew. */
 sp_bool sp_StrArray_include_e(sp_StrArray*a,sp_strelem v){SP_GC_ROOT(a);SP_SER(v);if (SP_UNLIKELY(!a)) sp_nil_recv("include?");for(sp_int i=0;i<a->len;i++)if(sp_str_eq(SP_SEB(a->data[i]),SP_SEB(v)))return TRUE;return FALSE;}
-#ifdef SP_ONE_STRING
-/* the same asked with bytes, which under the mode is not an element */
+/* the same asked with bytes, which is not an element */
 sp_bool sp_StrArray_include_s(sp_StrArray*a,const char*v){SP_GC_ROOT(a);SP_GC_ROOT_STR(v);if (SP_UNLIKELY(!a)) sp_nil_recv("include?");for(sp_int i=0;i<a->len;i++)if(sp_str_eq(SP_SEB(a->data[i]),v))return TRUE;return FALSE;}
-#endif
 sp_StrArray*sp_StrArray_intersect(sp_StrArray*a,sp_StrArray*b){SP_GC_ROOT(a);SP_GC_ROOT(b);sp_StrArray*r=sp_StrArray_new();if(!a||!b)return r;
   if (sp_setop_hashes(b->len, a->len)) {
     sp_sset in_b, seen; sp_sset_init(&in_b, b->len, 1); sp_sset_init(&seen, a->len, 1);

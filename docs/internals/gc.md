@@ -270,8 +270,7 @@ than a chance:
   ```
 
   A swept object keeps its `sp_gc_hdr` so that this can name its scan hook
-  and size, and a swept string its header, marker byte and length; a block
-  freed explicitly is poison throughout;
+  and size; a block freed explicitly is poison throughout;
 - the program reads a pointer out of it and faults on an address of `0xdb`
   bytes (the reporter says `phase = ?`: the fault is the program's, not the
   mark's), or copies that pointer into a live object, where the next mark
@@ -279,7 +278,7 @@ than a chance:
 - the program reads a number or a string out of it and prints `0xdb` bytes
   where the answer was, which a test's expected output catches.
 
-A block the allocator hands out unzeroed (a string, a raw payload) holds
+A block the allocator hands out unzeroed (a raw payload) holds
 `0xdb` too where it used to hold a dead block's bytes, so a read of memory
 nobody wrote shows the same way.
 

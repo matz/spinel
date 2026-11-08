@@ -825,7 +825,6 @@ sp_StrArray *sp_re_scan(mrb_regexp_pattern *pat, const char *str) {
   if (sp_re_track_last) sp_re_set_last_match(pat, str, lastcaps, lastn);
   return arr;
 }
-#ifdef SP_ONE_STRING
 const char *sp_re_scan_next(mrb_regexp_pattern *pat, sp_re_scan_it *it) {
   sp_String *h = it->h;
   if (!h) sp_nil_recv("scan");
@@ -893,7 +892,6 @@ sp_PolyArray *sp_re_scan_next_row(mrb_regexp_pattern *pat, sp_re_scan_it *it) {
   it->data = h->data; it->len = h->len;
   return row;
 }
-#endif
 /* Forward decl from the regexp engine (lib/regexp/re_utf8.c). */
 int re_utf8_charlen(const char *s, const char *end);
 

@@ -74,6 +74,12 @@ static const EVP_MD *sp_openssl_md(const char *name) {
 
 static SP_TLS unsigned char sp_openssl_digest_bytes[EVP_MAX_MD_SIZE];
 
+sp_int sp_openssl_digest_check(const char *name) {
+  const EVP_MD *md = sp_openssl_md(name);
+  SP_MD_FREE(md);
+  return 1;
+}
+
 const char *sp_openssl_digest(const char *name, const char *data) {
   if (!data) sp_raise_cls("TypeError", "no implicit conversion of nil into String");
   const EVP_MD *md = sp_openssl_md(name);
@@ -1286,6 +1292,45 @@ const char *sp_ed25519_sign(const char *seed, const char *data) {
   return (const char *)signature;
 #else
   return sp_ec_fail("Ed25519 is unavailable in the linked OpenSSL");
+#endif
+}
+
+sp_int sp_ed25519_verify(const char *seed, const char *signature, const char *data, const char *digest) {
+#if defined(EVP_PKEY_ED25519)
+  sp_ssl_errbuf[0] = 0;
+  const EVP_MD *md = *digest ? sp_openssl_md(digest) : NULL;
+  EVP_PKEY *key = EVP_PKEY_new_raw_private_key(EVP_PKEY_ED25519, NULL,
+                                            (const unsigned char *)seed, sp_str_byte_len(seed));
+  EVP_MD_CTX *ctx = EVP_MD_CTX_new();
+  int result = -1;
+  int initialized = key && ctx && EVP_DigestVerifyInit(ctx, NULL, md, NULL, key) == 1;
+  if (initialized)
+    result = EVP_DigestVerify(ctx, (const unsigned char *)signature, sp_str_byte_len(signature),
+                              (const unsigned char *)data, sp_str_byte_len(data));
+  else {
+    const char *reason, *detail = NULL;
+    int flags = 0;
+#if !defined(LIBRESSL_VERSION_NUMBER) && OPENSSL_VERSION_NUMBER >= 0x30000000L
+    unsigned long error = ERR_get_error_all(NULL, NULL, NULL, &detail, &flags);
+#else
+    unsigned long error = ERR_get_error_line_data(NULL, NULL, &detail, &flags);
+#endif
+    reason = ERR_reason_error_string(error);
+    snprintf(sp_ssl_errbuf, sizeof sp_ssl_errbuf, "EVP_DigestVerifyInit: %s%s%s%s",
+             reason ? reason : "verification failed",
+             detail && (flags & ERR_TXT_STRING) ? " (" : "",
+             detail && (flags & ERR_TXT_STRING) ? detail : "",
+             detail && (flags & ERR_TXT_STRING) ? ")" : "");
+  }
+  EVP_MD_CTX_free(ctx);
+  EVP_PKEY_free(key);
+  SP_MD_FREE(md);
+  ERR_clear_error();
+  if (result < 0 && initialized) sp_ssl_note("Ed25519 verification failed");
+  return result;
+#else
+  sp_ssl_note("Ed25519 is unavailable in the linked OpenSSL");
+  return -1;
 #endif
 }
 

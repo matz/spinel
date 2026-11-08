@@ -1,0 +1,4 @@
+OpenSSL::PKey::PKeyError
+true
+TypeError
+true

@@ -3487,8 +3487,8 @@ static int class_leaf_count(Compiler *c, const char *nm, int *nested) {
        class of the leaf then does not name the class for any module, and
        the read stays a run-time lookup, which finds no Foo__Bar for it) */
     const char *kl = ci->name;
-    if (!l && kl && ci->enclosing_class >= 0) for (const char *p = kl; (p = strstr(p, "__")) != NULL; p += 2) kl = p + 2;
-    if (!(leaf && sp_streq(leaf, nm)) && !(!l && kl && sp_streq(kl, nm))) continue;
+    if (kl && ci->enclosing_class >= 0) for (const char *p = kl; (p = strstr(p, "__")) != NULL; p += 2) kl = p + 2;
+    if (!(leaf && sp_streq(leaf, nm)) && !(kl && ci->enclosing_class >= 0 && sp_streq(kl, nm))) continue;
     n++;
     if (l || ci->enclosing_class >= 0) *nested = 1;
   }
@@ -3742,8 +3742,9 @@ static void desugar_dyn_parent_class_leaf(Compiler *c) {
         nt_node_set_str(nt, arms_c[na], "const_cref", hn);
         arms_k[na] = k; na++;
       }
-      /* (and Object's own, a top-level `Foo = 5`) */
-      if (top < 0 && comp_const(c, nm)) top = te_const(nt, nm);
+      /* (and Object's own, a top-level `Foo = 5`, or a builtin class or
+         module, `w::String` with an `A::Foo__String`) */
+      if (top < 0 && (comp_const(c, nm) || is_builtin_class_name(nm) || is_builtin_module_name(nm))) top = te_const(nt, nm);
     }
     /* a holder another holder reaches (Kid < Base, a module including
        another) is tested first: CRuby finds the nearest ancestor's Foo */
@@ -3822,6 +3823,8 @@ static void desugar_dyn_parent_class_leaf(Compiler *c) {
       nt_node_set_ref(nt, ifn, "subsequent", tail_arm);
       tail_arm = ifn;
     }
+    /* (no arm at all: only a key's last "__" part has the leaf) */
+    if (tail_arm == els) tail_arm = mif;
     int body = te_stmts1(nt, tail_arm);
     nt_node_reset(nt, id, "ParenthesesNode");
     nt_node_set_ref(nt, id, "body", body);

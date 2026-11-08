@@ -38,3 +38,10 @@ uninitialized constant EX::Bar
 uninitialized constant EZ::Bar
 PA::Foo__Q
 "PA::Foo__Q"
+FY::Bar
+uninitialized constant FX::Bar
+uninitialized constant FZ::Bar
+String
+uninitialized constant GA::String
+uninitialized constant GB::String
+uninitialized constant GK::String

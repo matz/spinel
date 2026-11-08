@@ -57,3 +57,17 @@ end
 module PA; end
 PA::Foo__Q = Class.new do; end
 p PA::Foo__Q, PA::Foo__Q.name
+# two modules each with a Foo__Bar, beside one other Bar
+module FX; class Foo__Bar; end; end
+module FZ; class Foo__Bar; end; end
+module FY; class Bar; end; end
+[FY, FX, FZ].each do |w|
+  begin; p w::Bar; rescue NameError => e; puts e.message; end
+end
+# only keys end in the leaf: no class arm; Object gives the builtin
+module GA; class Foo__String; end; end
+module GB; class Other__String; end; end
+class GK; end
+[Object, GA, GB, GK].each do |w|
+  begin; p w::String; rescue NameError => e; puts e.message; end
+end

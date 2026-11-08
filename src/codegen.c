@@ -4202,7 +4202,7 @@ void emit_scope_decls_ends(Compiler *c, Scope *s, Buf *b, size_t *ends) {
    answers is discarded: typed by its last expression instead, a copy whose
    `return super unless $flag` guard (mixin_guard_body) or trailing
    `super(...)` reached a void initialize came out as `return <void call>`. */
-static int scope_is_initialize(const Scope *s) {
+int scope_is_initialize(const Scope *s) {
   if (s->class_id < 0 || !s->name) return 0;
   const char *u = comp_scope_user_name(s);
   size_t n = strlen(u);
@@ -16285,6 +16285,9 @@ void emit_super(Compiler *c, int id, Buf *b) {
        builtin's own value (an Integer, an Object's boxed value), or the
        String handle where either side holds one */
     buf_puts(b, "(");
+    /* (the shadow is a method of an ancestor of the receiver's class when the
+       super is a copy of an alias's) */
+    if (smi >= 0 && st->class_id != s->class_id && !repr_self_handle(c, smi)) buf_printf(b, "(sp_%s *)", c->classes[st->class_id].c_name);
     emit_reopen_self_arg(c, id, smi, b);
     if (ty_k == NK_ForwardingSuperNode && smi >= 0) {
       /* laid out over the shadow's parameters as any bare super is: passed
@@ -20306,8 +20309,32 @@ static void reject_io_gets_last_line(Compiler *c) {
   }
 }
 
+/* initialize is compiled to answer nothing (scope_is_initialize), so a call of
+   it under another name (an alias of it) whose value is used has no value to
+   give, where CRuby answers its last one: refused, like the value of a super
+   into it (refuse_super_init_value). */
+static void reject_initialize_call_value(Compiler *c) {
+  NT_FOREACH_KIND(c->nt, NK_CallNode, id) {
+    const char *nm = nt_str(c->nt, id, "name");
+    if (!nm || is_new_name(nm) || is_initialize_name(nm)) continue;
+    const CallPlan *p = cplan_user(c, id);
+    Scope *sc = comp_scope_of(c, id);
+    if (p->mi < 0 || !scope_is_initialize(&c->scopes[p->mi]) || (sc && !sc->reachable) || !node_value_used_in_body(c->nt, comp_parent_map(c), id)) continue;
+    unsupported_feature(c, id, "unsupported value of a call of an alias of initialize: initialize is compiled to "
+                               "return nothing, so its last value is not there to answer (see docs/limitations.md)");
+  }
+}
+
 static void reject_runtime_send(Compiler *c) {
   NT_FOREACH_KIND(c->nt, NK_CallNode, id) if (!defer_refusals_at(c, id)) refuse_from_plan(c, id, CRF_SEND, "refuse-send");
+}
+
+/* The refusals a call's plan settles before any emission, so the diagnostic
+   fires however the call's result is later consumed: a runtime-name send,
+   then the value of a call of an alias of initialize. */
+static void reject_calls_before_emission(Compiler *c) {
+  reject_runtime_send(c);
+  reject_initialize_call_value(c);
 }
 
 /* Time.parse / Time.strptime (docs/limitations.md, K-001): the `require
@@ -23024,7 +23051,7 @@ char *codegen_program(const NodeTable *nt) {
 
   /* Reject runtime-name send before any emission so the diagnostic fires
      regardless of how the call's result is later consumed. */
-  reject_runtime_send(c);
+  reject_calls_before_emission(c);
   reject_runtime_const_get(c);
   reject_binding(c);
   reject_top_self(c);

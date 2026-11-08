@@ -508,6 +508,15 @@ typedef struct {
      (alias_accessor_method): 1 + the node of the attr_* call that declares
      it, 0 for none */
   int accessor_of;
+  /* the copy of an ancestor's def an alias is (register_alias_methods): 1 +
+     the scope that def's method is in the alias's class's ancestry (the
+     owner's own, a mixin's copy or a prepend's), whose super the copy's is
+     (cplan_super_target); 0 for none */
+  int super_of;
+  /* the copy of an ancestor's method an alias is (register_alias_methods): a
+     method of its class, not an inherited copy, and the name of the method
+     it is the copy of; NULL for any other scope */
+  char *alias_of;
   enum { ENTRY_NONE, ENTRY_DISPATCH, ENTRY_TABLE, ENTRY_NAMED } entry;
   int version_n, main_n;
   unsigned char cand_bound; /* a call on a poly receiver bound its arguments
@@ -2620,6 +2629,7 @@ void comp_shadow_name(Compiler *c, int ci, const char *name, char *out, size_t s
 void comp_scope_set_shadow(Compiler *c, int si, int kind, const char *user);
 void comp_scope_copy_shadow(Compiler *c, int dst, int src, const char *suffix);
 const char *comp_scope_user_name(const Scope *s);
+int scope_is_initialize(const Scope *s);   /* is s compiled as a void initialize (codegen.c) */
 int comp_scope_copied_away(Compiler *c, int s);
 int comp_scope_may_run(Compiler *c, int s);
 int comp_name_is_shadow_copy(Compiler *c, const char *name, int kind);
@@ -2631,7 +2641,7 @@ int comp_new_receiver(Compiler *c, int k);
 int comp_new_receivers(Compiler *c, int own);
 int method_answers_receiver(Compiler *c, int mi);
 int comp_super_parent(Compiler *c, int class_id, int is_cmethod); /* super in `self.new` is Class#new */
-const Scope *comp_super_site(Compiler *c, const Scope *s);   /* the method scope a super in s resolves as: its class starts the parent chain, its def names the method asked for */
+const Scope *comp_super_site(Compiler *c, const Scope *s);   /* the method scope a super in s resolves as: its class starts the parent chain, its def names the method asked for; a copy of an alias (Scope.super_of) is the owner's */
 enum { SUPER_OBJ_SAME = 1, SUPER_OBJ_FALSE, SUPER_OBJ_FROZEN, SUPER_OBJ_SELF };
 /* a super (node id) no program ancestor answers that reaches BasicObject's
    or Kernel's ==, equal?, eql?, !, nil?, frozen?, itself or

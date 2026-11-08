@@ -317,3 +317,4 @@ src/codegen_call.c class_value_builtin_answers whether a reopened Class or Modul
 src/codegen_call.c root_reopen_defines_own whether a reopening of Object, Kernel or BasicObject defines a name itself, for respond_to?
 src/codegen_call.c bool_side_responds whether true's or false's class defines a name itself, for respond_to?
 src/analyze_pass.c sg_override_ret the parent's method of a singleton override's own name, whose answer the override's return must also hold
+src/compiler.c comp_super_site =nm a proc-form clone supers as its owner's proc-form clone, by its name

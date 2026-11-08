@@ -5430,7 +5430,15 @@ int comp_super_parent(Compiler *c, int class_id, int is_cmethod) {
 }
 
 const Scope *comp_super_site(Compiler *c, const Scope *s) {
-  (void)c;
+  int pf = s->is_proc_form;
+  while (s->super_of) s = &c->scopes[s->super_of - 1];
+  /* a proc-form clone of a copy supers as the owner's proc-form clone does */
+  if (pf && !s->is_proc_form && s->name) {
+    char nm[320];
+    snprintf(nm, sizeof nm, "%s#pf", s->name);
+    int k = s->is_cmethod ? comp_cmethod_in_class(c, s->class_id, nm) : comp_method_in_class(c, s->class_id, nm);
+    if (k >= 0) s = &c->scopes[k];
+  }
   return s;
 }
 

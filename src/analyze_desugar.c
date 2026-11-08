@@ -21161,7 +21161,9 @@ static int alias_forwarder_like(NodeTable *nt, int like, const char *nw, const c
    the mapping, which keeps the ancestor's body in effect where the alias
    appears (resolve_inherited_aliases) -- and `def nw(*a, &b) =
    nw#inherited(*a, &b)` right after it. A call through it reaches that body
-   whatever a subclass overrides od with. */
+   whatever a subclass overrides od with. Only a chain rooted at a builtin
+   (alias_builtin_rooted) is made so now; any other alias is bound at
+   registration (register_alias_methods). */
 /* Does class cls's superclass chain, through the program's own classes,
    end at Hash, Array or String with none of them defining meth: is meth
    the builtin's own method? */
@@ -21272,7 +21274,8 @@ int desugar_inherited_aliases(Compiler *c) {
       out[no++] = s;
       const char *nw = NULL, *od = NULL;
       alias_pair_names(nt, s, &nw, &od);
-      if (!nw || !od || alias_class_defines(nt, cls, od, n0)) continue;
+      /* (an alias of a def of the program is bound at registration, register_alias_methods: only a chain rooted at a builtin keeps its forwarder) */
+      if (!nw || !od || alias_class_defines(nt, cls, od, n0) || !alias_builtin_rooted(nt, cls, od, n0)) continue;
       char nwc[256], odc[256], hid[300];
       snprintf(nwc, sizeof nwc, "%s", nw); snprintf(odc, sizeof odc, "%s", od);
       snprintf(hid, sizeof hid, "%s#inherited", nwc);

@@ -1,0 +1,10 @@
+dir io to stdout: Errno::EISDIR: Is a directory - read
+dir io to stringio: Errno::EISDIR: Is a directory - read
+dir io to file: Errno::EISDIR: Is a directory - read
+dir path to path: Errno::EISDIR: Is a directory - read
+boxed dir io: Errno::EISDIR: Is a directory - read
+boxed stringio: 3
+file io to stringio: 5
+"hello"
+file path to path: 5
+"hello"

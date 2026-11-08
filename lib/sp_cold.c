@@ -1165,8 +1165,10 @@ sp_PolyArray *sp_math_lgamma(double x) {
    stopping there answered "" for the whole of /proc -- silently, since a short
    read is indistinguishable from an empty file (#3411). The hint only picks
    the initial capacity, so the common case is still one allocation and one
-   fread. */
-const char *sp_slurp_stream(FILE *fp) {
+   fread. A failed read stops there and leaves its errno in *err (0 when the
+   stream reached EOF), so the caller raises it under its own name. */
+const char *sp_slurp_stream_err(FILE *fp, int *err) {
+  if (err) *err = 0;
   if (!fp) return &("\xff" "")[1];
   size_t cap = 8192;
   long pos = ftell(fp);
@@ -1187,7 +1189,7 @@ const char *sp_slurp_stream(FILE *fp) {
     }
     size_t got = SP_SIG_BLOCKING(fread(buf + len, 1, cap - len - 1, fp));
     len += got;
-    if (got == 0) break;
+    if (got == 0) { if (err && ferror(fp)) *err = errno; break; }
   }
   char *r = sp_str_alloc(len);
   if (len) memcpy(r, buf, len);
@@ -1196,6 +1198,7 @@ const char *sp_slurp_stream(FILE *fp) {
   free(buf);
   return r;
 }
+const char *sp_slurp_stream(FILE *fp) { return sp_slurp_stream_err(fp, NULL); }
 
 /* IO#read with no count on a handle whose read can BLOCK -- a pipe, a socket,
    a tty. sp_slurp_stream asks fread for a whole buffer at a time, and fread
@@ -3972,6 +3975,21 @@ sp_RbVal sp_dir_each_enumerator(sp_Dir *dir) {SP_GC_ROOT(dir);
   return sp_box_obj(e, SP_BUILTIN_ENUMERATOR);
 }
 
+/* IO.copy_stream's read error: the Errno for e, named after the read alone. */
+static SP_NORETURN void sp_io_copy_stream_raise(int e) {
+  sp_raise_cls(sp_errno_class_name(e), sp_sprintf("%s - read", strerror(e)));
+}
+/* IO.copy_stream(io, dst): the source IO's bytes to EOF. */
+const char *sp_io_copy_stream_read(sp_File *f) {SP_GC_ROOT(f);
+  SP_IO_OPEN(f);
+  sp_io_wait_readable(f);
+  if (f->own_buf || f->park == 2) return sp_slurp_stream_parked(f);
+  int e;
+  const char *r = sp_slurp_stream_err(f->fp, &e);
+  if (e) sp_io_copy_stream_raise(e);
+  return r;
+}
+
 /* IO.copy_stream(src_path, dst_path): stream one file to another, byte count. */
 sp_int sp_io_copy_stream(const char *src, const char *dst) {SP_GC_ROOT_STR(src);SP_GC_ROOT_STR(dst);
   FILE *in = fopen(src ? src : "", "rb");
@@ -3983,6 +4001,7 @@ sp_int sp_io_copy_stream(const char *src, const char *dst) {SP_GC_ROOT_STR(src);
                  sp_sprintf("No such file or directory @ rb_sysopen - %s", dst ? dst : "")); }
   char buf[8192]; size_t got; sp_int total = 0;
   while ((got = SP_SIG_BLOCKING(fread(buf, 1, sizeof buf, in))) > 0) { fwrite(buf, 1, got, out); total += (sp_int)got; }
+  if (ferror(in)) { int e = errno; fclose(in); fclose(out); sp_io_copy_stream_raise(e); }
   fclose(in); fclose(out);
   return total;
 }

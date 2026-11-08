@@ -2032,11 +2032,11 @@ int emit_call_builtin_cmethod_arms(Compiler *c, int id, Buf *b, const NodeTable 
               buf_printf(b, "_t%d.tag == SP_TAG_OBJ && _t%d.cls_id == %d"
                             " ? sp_StringIO_read((sp_StringIO *)_t%d.v.p) : ", ts, ts, sio_cid, ts);
             buf_printf(b, "_t%d.tag == SP_TAG_OBJ && _t%d.cls_id == SP_BUILTIN_IO"
-                          " ? sp_File_read((sp_File *)_t%d.v.p)"
+                          " ? sp_io_copy_stream_read((sp_File *)_t%d.v.p)"
                           " : (sp_raise_nomethod(sp_nomethod_msg(\"read\", _t%d)), (const char *)0); })", ts, ts, ts, ts);
           }
           else if (a0_sio) { buf_puts(b, "sp_StringIO_read("); emit_expr(c, argv[0], b); buf_puts(b, ")"); }
-          else if (a0_io) { buf_puts(b, "sp_File_read("); emit_expr(c, argv[0], b); buf_puts(b, ")"); }
+          else if (a0_io) { buf_puts(b, "sp_io_copy_stream_read("); emit_expr(c, argv[0], b); buf_puts(b, ")"); }
           else { buf_puts(b, "sp_file_read("); emit_path_expr(c, argv[0], b); buf_puts(b, ")"); }
           buf_printf(b, "; SP_GC_ROOT(_t%d); ", td);
           if (a1_poly) {
@@ -2059,7 +2059,7 @@ int emit_call_builtin_cmethod_arms(Compiler *c, int id, Buf *b, const NodeTable 
         if ((a0_sio || a0_io) && (a1_sio || a1_io)) {
           buf_puts(b, a1_sio ? "sp_StringIO_write(" : "sp_File_write_bin(");
           emit_expr(c, argv[1], b);
-          buf_puts(b, a0_sio ? ", sp_StringIO_read(" : ", sp_File_read(");
+          buf_puts(b, a0_sio ? ", sp_StringIO_read(" : ", sp_io_copy_stream_read(");
           emit_expr(c, argv[0], b);
           buf_puts(b, "))"); return 1;
         }

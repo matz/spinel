@@ -1322,7 +1322,9 @@ sp_RbVal sp_File_putc(sp_File *f, sp_RbVal v);
 /* IO.copy_stream(src, dst): both path strings (#2815); returns bytes copied */
 /* IO.copy_stream(src_path, dst_path): defined out-of-line in sp_cold.c. */
 sp_int sp_io_copy_stream(const char *src, const char *dst);
+const char *sp_io_copy_stream_read(sp_File *f);
 const char *sp_slurp_stream(FILE *fp);
+const char *sp_slurp_stream_err(FILE *fp, int *err);
 sp_File *sp_File_set_encoding(sp_File *f, sp_RbVal ext, sp_RbVal in);
 static inline const char *sp_File_read(sp_File *f) {
   sp_io_check_readable(f);
@@ -1335,7 +1337,9 @@ static inline const char *sp_File_read(sp_File *f) {
      handle answers ASCII-8BIT (CRuby); a text one stays on the text side.
      This is the one read whose answer depends on the mode -- read(n), pread
      and readpartial are BINARY whatever the handle was opened as. */
-  const char *r = (f->own_buf || f->park == 2) ? sp_slurp_stream_parked(f) : sp_slurp_stream(f->fp);
+  int e = 0;
+  const char *r = (f->own_buf || f->park == 2) ? sp_slurp_stream_parked(f) : sp_slurp_stream_err(f->fp, &e);
+  if (e) { errno = e; sp_file_raise_errno("io_fread", f->path); }
   if (r && sp_File_reads_binary(f)) sp_str_mark_binary((char *)r);
   return r;
 }

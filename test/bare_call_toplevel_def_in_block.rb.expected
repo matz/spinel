@@ -1,0 +1,27 @@
+sub1 sub2 
+["sub", "sub"]
+[["sub"]]
+"sub"
+"sub5"
+["subg"]
+["subg"]
+"other"
+["other"]
+"sub"
+["sub"]
+"sub"
+["sub3"]
+"sub"
+"sub"
+["top"]
+["top"]
+["top", "top"]
+"top"
+"top5"
+["obj"]
+["top3"]
+"top"
+["top", "top"]
+"top"
+["sub", "top"]
+["top"]

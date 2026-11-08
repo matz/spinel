@@ -47,12 +47,6 @@ int cplan_self_root_override(Compiler *c, int id, int scls, int root_mi) {
   if (comp_class_is_module(c, ci) || ci->is_native_class) return 0;
   /* (a call in a block or a lambda keeps the old path: the body may be a
      function of its own, where no self is at hand) */
-  const int *par = comp_parent_map(c);
-  for (int a = par[id]; a >= 0; a = par[a]) {
-    NodeKind k = nt_kind(nt, a);
-    if (k == NK_DefNode) break;
-    if (k == NK_BlockNode || k == NK_LambdaNode) return 0;
-  }
   Scope *rm = &c->scopes[root_mi];
   int oci = comp_core_class(c, CORE_OBJECT);
   if (rm->yields || rm->is_cmethod || (rm->class_id >= 0 && rm->class_id != oci) || scls == oci) return 0;

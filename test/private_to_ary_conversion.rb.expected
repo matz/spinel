@@ -1,0 +1,20 @@
+[1, :p, :q]
+[1]
+[1, :p, :q]
+[:p]
+0
+[1, :p, :q]
+[1]
+[:q]
+[:p, :q]
+[1, :r]
+[:r]
+[#<PNil>]
+can't convert PBad to Array (PBad#to_ary gives Integer)
+[1, :p, :q]
+[:p, :q]
+[:r]
+[:p, :q, #<PNil>, 3, 4]
+[:p, :q, :p, :q]
+false
+private method 'to_ary' called for an instance of Priv

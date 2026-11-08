@@ -291,11 +291,11 @@ module Enumerable
         v = yield x
         if v.is_a?(Array)
           out.concat(v)
-        elsif v.respond_to?(:to_ary)
+        elsif v.respond_to?(:to_ary, true)
           # CRuby splices whatever answers to_ary (rb_check_array_type), an ActiveRecord relation among them.
-          # a to_ary that answers nil leaves v as one element; any other
-          # non-Array is CRuby's TypeError
-          a = v.to_ary
+          # a private to_ary counts too. A to_ary that answers nil leaves v
+          # as one element; any other non-Array is CRuby's TypeError
+          a = v.__send__(:to_ary)
           if a.is_a?(Array)
             out.concat(a)
           elsif a.nil?

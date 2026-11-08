@@ -13487,7 +13487,8 @@ static int desugar_enum_named_call(Compiler *c, int id, NodeTable *nt, const cha
     }
   }
   /* poly-array sum { blk } == map { blk }.sum (the typed-array redispatch
-     serves int/float receivers natively) */
+     serves int/float receivers natively): typed and narrowed as the map,
+     emitted as one walk (sum_map) */
   if (nm && sp_streq(nm, "sum") && nt_ref(nt, id, "block") >= 0) {
     int srecv = nt_ref(nt, id, "receiver");
     int sa = nt_ref(nt, id, "arguments");
@@ -13503,6 +13504,8 @@ static int desugar_enum_named_call(Compiler *c, int id, NodeTable *nt, const cha
       nt_node_set_str(nt, mapc, "name", "map");
       nt_node_set_ref(nt, mapc, "receiver", srecv);
       nt_node_set_ref(nt, mapc, "block", nt_ref(nt, id, "block"));
+      /* emitted as the one walk it stands for (emit_sum_of_map_expr) */
+      nt_node_set_int(nt, mapc, "sum_map", 1);
       nt_node_set_str(nt, id, "name", "sum");
       nt_node_set_ref(nt, id, "receiver", mapc);
       nt_node_set_ref(nt, id, "block", -1);

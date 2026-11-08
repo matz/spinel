@@ -4332,9 +4332,12 @@ static SP_UNUSED sp_int sp_poly_arg_i_of(sp_RbVal v) { if (SP_UNLIKELY(v.tag == 
 static SP_UNUSED sp_int sp_poly_cmp_ans(sp_RbVal r, sp_RbVal a, sp_RbVal b) {
   if (SP_UNLIKELY(r.tag == SP_TAG_NIL))
     sp_raise_cls("ArgumentError", sp_sprintf("comparison of %s with %s failed", sp_poly_class_name(a), sp_cmperr_desc(b)));
-  /* a Bignum or a Float answer counts by its sign, as rb_cmpint reads it */
+  /* a Bignum, a Float or a Rational answer counts by its sign, as
+     rb_cmpint reads it (a Rational's denominator is positive) */
   if (SP_UNLIKELY(r.tag == SP_TAG_BIGINT && r.v.p)) { int s = sp_bigint_sign((sp_Bigint *)r.v.p); return (s > 0) - (s < 0); }
   if (SP_UNLIKELY(r.tag == SP_TAG_FLT)) return (r.v.f > 0) - (r.v.f < 0);
+  if (SP_UNLIKELY(sp_poly_is_rational(r) && r.v.p)) { sp_int n = ((sp_Rational *)r.v.p)->num; return (n > 0) - (n < 0); }
+  if (SP_UNLIKELY(sp_poly_is_brat(r) && r.v.p)) { int s = sp_bigint_sign(((sp_BigRational *)r.v.p)->num); return (s > 0) - (s < 0); }
   return sp_poly_to_i(r);
 }
 /* A method nil does not have, called on a boxed receiver that is nil:

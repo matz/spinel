@@ -1520,8 +1520,8 @@ static void sp_ev_kick(int wid) {   /* PRE: sched lock held */
 }
 
 /* Arm one descriptor for `want` (POLLIN / POLLOUT), one-shot. 0 on success.
-   With `edge`, epoll registers it for good instead, edge-triggered for both
-   directions, and answers 1; kqueue arms it one-shot as before.
+   With `edge`, it is registered for good instead, edge-triggered, and the
+   answer is the directions that stay: both on epoll, reading on kqueue.
    The three functions below are the whole platform surface; everything above
    and below them is shared. */
 static int sp_ev_backend_arm(int set, int fd, short want, int edge) {
@@ -1530,18 +1530,32 @@ static int sp_ev_backend_arm(int set, int fd, short want, int edge) {
   e.events = edge ? (uint32_t)(EPOLLIN | EPOLLOUT | EPOLLRDHUP | EPOLLET)
                   : (uint32_t)((want & POLLIN ? EPOLLIN : 0) | (want & POLLOUT ? EPOLLOUT : 0)) | EPOLLONESHOT;
   e.data.fd = fd;
-  if (epoll_ctl(set, EPOLL_CTL_MOD, fd, &e) == 0) return edge;
+  if (epoll_ctl(set, EPOLL_CTL_MOD, fd, &e) == 0) return edge ? POLLIN | POLLOUT : 0;
   /* Not in the set: epoll's one-shot only DISABLES, so MOD is the usual arm
      and ADD is the first one. */
-  if (errno == ENOENT) { SP_STAT_ADD(g_ev_adds, 1); return epoll_ctl(set, EPOLL_CTL_ADD, fd, &e) == 0 ? edge : -1; }
+  if (errno == ENOENT) { SP_STAT_ADD(g_ev_adds, 1); return epoll_ctl(set, EPOLL_CTL_ADD, fd, &e) == 0 ? (edge ? POLLIN | POLLOUT : 0) : -1; }
   return -1;
 #else
-  (void)edge;
   /* kqueue's one-shot DELETES the entry when it fires, so every arm is an
      EV_ADD -- and a filter the waiters no longer want stays armed until it
-     fires once into nobody, which is the discarded wake the design allows. */
-  struct kevent ch[2];
+     fires once into nobody, which is the discarded wake the design allows.
+     With `edge` the read filter stays, EV_CLEAR, and the write filter is
+     armed one-shot when wanted: under EV_CLEAR it fires on every change of
+     the send buffer, which is every answer written. An EV_ADD keeps a
+     pending entry's EV_ONESHOT, so the read filter is deleted first, in the
+     same call; where that fails, the arm is one-shot. */
+  struct kevent ch[3], res[3];
   int n = 0;
+  if (edge) {
+    EV_SET(&ch[n++], (uintptr_t)fd, EVFILT_READ, EV_DELETE | EV_RECEIPT, 0, 0, NULL);
+    EV_SET(&ch[n++], (uintptr_t)fd, EVFILT_READ, EV_ADD | EV_CLEAR | EV_RECEIPT, 0, 0, NULL);
+    if (want & POLLOUT) EV_SET(&ch[n++], (uintptr_t)fd, EVFILT_WRITE, EV_ADD | EV_ONESHOT | EV_RECEIPT, 0, 0, NULL);
+    SP_STAT_ADD(g_ev_adds, 1);
+    int ok = kevent(set, ch, n, res, n, NULL) == n;
+    for (int i = 0; ok && i < n; i++) if (res[i].data && res[i].data != ENOENT) ok = 0;
+    if (ok) return POLLIN;
+    n = 0;
+  }
   if (want & POLLIN)  EV_SET(&ch[n++], (uintptr_t)fd, EVFILT_READ,  EV_ADD | EV_ONESHOT, 0, 0, NULL);
   if (want & POLLOUT) EV_SET(&ch[n++], (uintptr_t)fd, EVFILT_WRITE, EV_ADD | EV_ONESHOT, 0, 0, NULL);
   if (!n) return 0;
@@ -1585,11 +1599,13 @@ static int sp_ev_backend_wait(int set, sp_ev_ready *out, int max, int tmo_ms) {
   int n = kevent(set, NULL, 0, evs, max, &ts);
   for (int i = 0; i < n; i++) {
     out[i].fd = (int)evs[i].ident;
-    /* EV_EOF is a peer that closed: readable (and writable, for a socket whose
-       other end is gone) exactly as POLLHUP is. EV_ERROR answers both so the
-       waiter's own read or write reports the error, which is what poll did. */
+    /* EV_EOF is a peer that closed its side of this filter's direction,
+       which is POLLHUP for it, as epoll's EPOLLRDHUP is for reading. EV_ERROR
+       answers both so the waiter's own read or write reports the error,
+       which is what poll did. */
     short r = (evs[i].filter == EVFILT_WRITE) ? POLLOUT : POLLIN;
-    if (evs[i].flags & (EV_EOF | EV_ERROR)) r = POLLIN | POLLOUT;
+    if (evs[i].flags & EV_EOF) r |= POLLHUP;
+    if (evs[i].flags & EV_ERROR) r = POLLIN | POLLOUT | POLLHUP;
     out[i].rev = r;
   }
   return n;
@@ -1636,17 +1652,19 @@ static void wio_unlink(int w, sp_thread *t) {   /* PRE: w's io_wl held */
 #define SP_EVF_IN      1   /* ev_mark flags */
 #define SP_EVF_OUT     2
 #define SP_EVF_HUP     4
-#define SP_EVF_PERSIST 8
+#define SP_EVF_PERSIST 8   /* registered for good, for reading at least */
+#define SP_EVF_PERSIST_OUT 16   /* and for writing */
 /* Arm `fd` in worker w's set for the union of what its waiters there want.
    Attempted on every park -- see the note above: never skipped on the belief
    that an earlier arm stands. PRE: w's io_wl held. */
 static void sp_ev_arm_fd_w(int w, int fd, int edge) {
   sp_wslot *s = &g_wslot[w];
   if (fd < 0 || fd >= s->ev_cap || s->evfd <= 0) return;
-  if (edge && (s->ev_mark[fd].flags & SP_EVF_PERSIST)) return;
   short want = 0;
   for (sp_ev_waiter *x = s->ev_tab[fd]; x; x = x->next) want |= sp_evw_events(x);
   if (!want) return;
+  unsigned char f = s->ev_mark[fd].flags;
+  if (edge && (f & SP_EVF_PERSIST) && (!(want & POLLOUT) || (f & SP_EVF_PERSIST_OUT))) return;
   SP_STAT_ADD(g_ev_arms, 1);
   /* EBADF, or a descriptor the kernel will not watch (epoll refuses a regular
      file): the waiter falls back on its deadline, which is the same answer
@@ -1654,7 +1672,8 @@ static void sp_ev_arm_fd_w(int w, int fd, int edge) {
      it rather than leaving a silent gap. */
   int r = sp_ev_backend_arm(s->evfd, fd, want, edge);
   if (r < 0) SP_STAT_ADD(g_ev_lost, 1);
-  else s->ev_mark[fd].flags = (unsigned char)(r ? s->ev_mark[fd].flags | SP_EVF_PERSIST : s->ev_mark[fd].flags & ~SP_EVF_PERSIST);
+  else s->ev_mark[fd].flags = (unsigned char)((f & ~(SP_EVF_PERSIST | SP_EVF_PERSIST_OUT)) | (r ? SP_EVF_PERSIST : 0) |
+                                               ((r & POLLOUT) ? SP_EVF_PERSIST_OUT : 0));
 }
 /* Put entry e on descriptor fd in worker w's table and arm it. Returns 0 when
    the table could not grow: the waiter is then on its deadline alone, the
@@ -1722,6 +1741,7 @@ static int sp_ev_dispatch_w(int w, int fd, short rev, sp_thread **out, int n) {
     SP_ATOMIC_FETCH_ADD(&s->ev_mark[fd].gen, 1, __ATOMIC_RELEASE);
     SP_ATOMIC_STORE(&s->ev_mark[fd].flags, (unsigned char)(s->ev_mark[fd].flags | ((rev & POLLIN) ? SP_EVF_IN : 0) |
                     ((rev & POLLOUT) ? SP_EVF_OUT : 0) | ((rev & POLLHUP) ? SP_EVF_HUP : 0)), __ATOMIC_RELEASE);
+    sp_ev_arm_fd_w(w, fd, 1);
   }
   else sp_ev_arm_fd_w(w, fd, 0);
   return n;

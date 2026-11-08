@@ -15662,7 +15662,25 @@ static int face_fill_in_place(Compiler *c, int id) {
   return 1;
 }
 
-static TyKind emit_face_arm(Compiler *c, int id, unsigned kind, unsigned flags, int box, Buf *val) {
+/* The zero-argument accept test of an unboxing face: `rs`, held first in a
+   rooted temp (named in `bx`) when `hold`, is asked of the runtime's own
+   predicate `ok`, and a refusal raises the NoMethodError with the empty args.
+   Answers the receiver text the unboxing then reads. */
+static const char *emit_face_accept(const char *ok, const char *name, const char *rs, char *bx, size_t n, int hold) {
+  if (hold) {
+    int th = ++g_tmp;
+    emit_indent(g_pre, g_indent);
+    buf_printf(g_pre, "sp_RbVal _t%d = %s; SP_GC_ROOT_RBVAL(_t%d);\n", th, rs, th);
+    snprintf(bx, n, "_t%d", th);
+    rs = bx;
+  }
+  emit_indent(g_pre, g_indent);
+  buf_printf(g_pre, "if (!%s(%s)) sp_raise_nomethod(sp_nomethod_msg_args(\"%s\", %s, 0, (sp_RbVal[]){sp_box_nil()}));\n",
+             ok, rs, name, rs);
+  return rs;
+}
+
+static TyKind emit_face_arm(Compiler *c, int id, unsigned kind, unsigned flags, int box, int in_switch, Buf *val) {
   const NodeTable *nt = c->nt;
   /* The re-entered emitter may rename the node for its own re-entry (a
      String bang takes its plain form) and restore it into fresh storage, so
@@ -15716,6 +15734,27 @@ static TyKind emit_face_arm(Compiler *c, int id, unsigned kind, unsigned flags, 
     free(rb.p);
     return TY_POLY;
   }
+  /* A call with no argument on a receiver the face's kind does not accept
+     raises the NoMethodError an unresolved call raises, whose args are the
+     empty list (the unboxing below has no argument list to name). The
+     runtime's own accept test is asked, so the two cannot drift. A switch
+     arm is entered by that same test, so only a face that is the call's one
+     owner asks it here. A receiver that is a variable, or an expression
+     already evaluated into a temp, is rooted and read once already; any other
+     expression is held first. */
+  const char *zok = NULL;   /* the accept test to ask ahead of the unboxing, or NULL */
+  int zhold = 0;            /* whether the receiver expression must be held for it */
+  { int zargc = 0;
+    call_args(nt, id, &zargc);
+    if (zargc == 0 && !in_switch) {
+      zok = kind == PF_STRING ? "sp_poly_face_str_ok" : kind == PF_ARRAY ? "sp_poly_face_array_ok" :
+            kind == PF_HASH ? "sp_poly_face_hash_ok" : kind == PF_ENUM ? "sp_poly_face_enum_ok" : NULL;
+      NodeKind rk = nt_kind(nt, recv);
+      zhold = !box && !arg_ran_first(recv, 0) &&
+              !((rk == NK_LocalVariableReadNode || rk == NK_InstanceVariableReadNode) && repr_of(c, recv).kind == RK_BOXED);
+    } }
+  /* (an Enumerable face asks it after its own receiver hold, below) */
+  if (zok && kind != PF_ENUM) rs = emit_face_accept(zok, name, rs, bx, sizeof bx, zhold);
   emit_indent(g_pre, g_indent);
   switch (kind) {
     /* A String mutator's receiver checks a shared handle's frozen flag
@@ -15770,6 +15809,12 @@ static TyKind emit_face_arm(Compiler *c, int id, unsigned kind, unsigned flags, 
          class with no Enumerable raises it first, naming its own class */
       { Buf eb; memset(&eb, 0, sizeof eb); buf_puts(&eb, rs);
         emit_poly_iter_recv_reject(c, id, name, &eb, g_pre, g_indent);
+        /* the reject's hold is the one the accept test reads; with none, the
+           expression is held here */
+        if (zok) {
+          const char *ez = emit_face_accept(zok, name, eb.p, bx, sizeof bx, zhold && sp_streq(eb.p, rs));
+          if (ez == bx) { free(eb.p); memset(&eb, 0, sizeof eb); buf_puts(&eb, bx); }
+        }
         buf_printf(g_pre, "sp_PolyArray *_t%d = sp_poly_enum_recv(%s, \"%s\"); SP_GC_ROOT(_t%d);\n", t, eb.p, name, t);
         free(eb.p); }
       break;
@@ -15982,7 +16027,7 @@ static void emit_face_value(Compiler *c, TyKind slot, TyKind nat, const char *va
    unit, and the emitter's loop and ensure state. The arm's prelude is
    captured to `pre` and its value to `val`;
    answers 0 when the arm was dropped. */
-static int face_probe_arm(Compiler *c, int id, unsigned kind, unsigned flags, int box,
+static int face_probe_arm(Compiler *c, int id, unsigned kind, unsigned flags, int box, int in_switch,
                           Buf *pre, Buf *val, TyKind *nat) {
   int sv_argov = g_n_argov;
   volatile int ok = 1;
@@ -15991,7 +16036,7 @@ static int face_probe_arm(Compiler *c, int id, unsigned kind, unsigned flags, in
      arm dropped inside its loop left the loop depth raised, and the next
      method's ensure emitted a `continue` with no loop round it) */
   ArmProbe ap; arm_probe_begin(c, &ap, pre);
-  if (setjmp(g_unsup_recover) == 0) *nat = emit_face_arm(c, id, kind, flags, box, val);
+  if (setjmp(g_unsup_recover) == 0) *nat = emit_face_arm(c, id, kind, flags, box, in_switch, val);
   else { ok = 0; arm_probe_dropped(&ap); }
   arm_probe_end(c, &ap, ok);
   view_unbind(sv_argov);
@@ -16124,7 +16169,7 @@ static int emit_face_reentry(Compiler *c, int id, unsigned kind, unsigned flags,
      that NoMethodError for the handle as well. */
   if ((flags & PF_MUT) && (kind == PF_ARRAY || kind == PF_STRING || kind == PF_HASH)) box = ++g_tmp;
   int pa_frame = g_plan_check ? pa_begin(id) : -1;
-  int kept = face_probe_arm(c, id, kind, flags, box, &pre, &val, &nat);
+  int kept = face_probe_arm(c, id, kind, flags, box, 0, &pre, &val, &nat);
   if (g_plan_check) {
     pa_resume(pa_frame);
     pa_observe(PA_TRIAL, PA_KEY_FACE + face_kind_index(kind), -1, TY_UNKNOWN, kept);
@@ -16151,7 +16196,7 @@ static int emit_face_reentry(Compiler *c, int id, unsigned kind, unsigned flags,
 /* The run-time test that the boxed value in temp `t` is of an owner's kind. */
 static void emit_face_kind_test(unsigned kind, int t, Buf *b) {
   switch (kind) {
-    case PF_STRING: buf_printf(b, "(_t%d.tag == SP_TAG_STR || sp_poly_is_strbuf(_t%d))", t, t); break;
+    case PF_STRING: buf_printf(b, "(sp_poly_face_str_ok(_t%d))", t); break;
     case PF_INT:    buf_printf(b, "(_t%d.tag == SP_TAG_INT)", t); break;
     case PF_RANDOM: buf_printf(b, "(_t%d.tag == SP_TAG_OBJ && _t%d.cls_id == SP_BUILTIN_RANDOM)", t, t); break;
     case PF_FLOAT:  buf_printf(b, "(_t%d.tag == SP_TAG_FLT)", t); break;
@@ -16159,9 +16204,9 @@ static void emit_face_kind_test(unsigned kind, int t, Buf *b) {
     case PF_FRANGE: buf_printf(b, "(_t%d.tag == SP_TAG_OBJ && _t%d.cls_id == SP_BUILTIN_FLOAT_RANGE)", t, t); break;
     case PF_SRANGE: buf_printf(b, "(_t%d.tag == SP_TAG_OBJ && _t%d.cls_id == SP_BUILTIN_STR_RANGE)", t, t); break;
     case PF_TRANGE: buf_printf(b, "(_t%d.tag == SP_TAG_OBJ && _t%d.cls_id == SP_BUILTIN_TIME_RANGE)", t, t); break;
-    case PF_ARRAY:  buf_printf(b, "(_t%d.tag == SP_TAG_OBJ && sp_poly_is_array_kind(_t%d.cls_id))", t, t); break;
-    case PF_HASH:   buf_printf(b, "(_t%d.tag == SP_TAG_OBJ && sp_poly_is_hash_kind(_t%d.cls_id))", t, t); break;
-    case PF_ENUM:   buf_printf(b, "(_t%d.tag == SP_TAG_OBJ && (sp_poly_is_array_kind(_t%d.cls_id) || sp_poly_is_hash_kind(_t%d.cls_id)))", t, t, t); break;
+    case PF_ARRAY:  buf_printf(b, "(sp_poly_face_array_ok(_t%d))", t); break;
+    case PF_HASH:   buf_printf(b, "(sp_poly_face_hash_ok(_t%d))", t); break;
+    case PF_ENUM:   buf_printf(b, "(sp_poly_face_enum_arm_ok(_t%d))", t); break;
     default:        buf_puts(b, "(0)"); break;
   }
 }
@@ -16254,7 +16299,7 @@ static int emit_face_switch(Compiler *c, int id, unsigned own, Buf *b) {
                  kind == PF_STRING ? "String" : kind == PF_HASH ? "Hash" : "Array", tm);
       g_pre = sv_pre;
     }
-    else ok = face_probe_arm(c, id, kind, fl, box, &pre, &val, &nat);
+    else ok = face_probe_arm(c, id, kind, fl, box, 1, &pre, &val, &nat);
     if (g_plan_check) {
       pa_resume(pa_frame);
       pa_observe(misfit >= 0 ? PA_BUILTIN : PA_TRIAL, PA_KEY_FACE + face_kind_index(kind), -1, TY_UNKNOWN,
@@ -16286,7 +16331,11 @@ static int emit_face_switch(Compiler *c, int id, unsigned own, Buf *b) {
   free(rb.p);
   buf_printf(b, "({ %s _t%d = %s; ", c_type_name(slot), tr, default_value_from_compiler(c, slot));
   buf_puts(b, arms.p);
-  buf_printf(b, "}\nelse sp_raise_nomethod(sp_nomethod_msg(\"%s\", _t%d)); _t%d; })", name, box, tr);
+  /* (a call with no argument raises with the empty args an unresolved call's NoMethodError reports) */
+  if (argc == 0)
+    buf_printf(b, "}\nelse sp_raise_nomethod(sp_nomethod_msg_args(\"%s\", _t%d, 0, (sp_RbVal[]){sp_box_nil()})); _t%d; })", name, box, tr);
+  else
+    buf_printf(b, "}\nelse sp_raise_nomethod(sp_nomethod_msg(\"%s\", _t%d)); _t%d; })", name, box, tr);
   free(arms.p);
   return 1;
 }

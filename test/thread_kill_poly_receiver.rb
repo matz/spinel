@@ -9,13 +9,13 @@ $stdout.sync = true
 threads = Array.new(3) { Thread.new { sleep 30 } }
 sleep 0.2
 threads.each(&:kill)
-sleep 0.2
+threads.each(&:join)   # (waits for the kill: a sleep did not on a loaded runner)
 puts "after each(&:kill): #{threads.count(&:alive?)} alive"
 
 more = Array.new(3) { Thread.new { sleep 30 } }
 sleep 0.2
 more.each { |t| t.kill }
-sleep 0.2
+more.each { |t| t.join }
 puts "after each { t.kill }: #{more.count(&:alive?)} alive"
 
 # The ivar shape: the handle lives in another object, as a connection's
@@ -30,16 +30,17 @@ class Holder
   end
 
   def running? = @thread.alive?
+  def wait = @thread.join
 end
 
 holder = Holder.new(Thread.new { sleep 30 })
 sleep 0.2
 holder.stop
-sleep 0.2
+holder.wait
 puts "after ivar kill: #{holder.running?}"
 
 local = Thread.new { sleep 30 }
 sleep 0.2
 local.kill
-sleep 0.2
+local.join
 puts "after local kill: #{local.alive?}"

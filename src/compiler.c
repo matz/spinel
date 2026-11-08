@@ -798,11 +798,13 @@ const char *comp_class_ruby_leaf(const Compiler *c, int k) {
   if (!nm || c->classes[k].enclosing_class < 0) return nm;
   const NodeTable *nt = c->nt;
   int dn = c->classes[k].def_node;
-  int nn = -1;   /* the node that carries the name */
-  if (dn >= 0 && (nt_kind(nt, dn) == NK_ClassNode || nt_kind(nt, dn) == NK_ModuleNode)) {
-    int cp = nt_ref(nt, dn, "constant_path");
-    if (cp >= 0 && (nt_kind(nt, cp) == NK_ConstantReadNode || nt_kind(nt, cp) == NK_ConstantPathNode)) nn = cp;
-  } else if (dn >= 0 && nt_kind(nt, dn) == NK_ConstantWriteNode) nn = dn;
+  /* the node that carries the name: a header's path, a builder write, or
+     the target of a path write (`A::Foo__Bar = Class.new`) */
+  int nn = dn >= 0 ? class_def_path(nt, dn) : -1;
+  if (nn >= 0 && !nt_kind_is_constant(nt_kind(nt, nn)) && nt_kind(nt, nn) != NK_ConstantWriteNode) nn = -1;
+  /* (a Struct.new or Data.define write is no builder there) */
+  if (nn < 0 && dn >= 0 && nt_kind(nt, dn) == NK_ConstantWriteNode) nn = dn;
+  if (nn < 0 && dn >= 0 && nt_kind(nt, dn) == NK_ConstantPathWriteNode) nn = nt_ref(nt, dn, "target");
   /* (a name qualify_colliding_classes rewrote keeps its Ruby path in
      qc_ruby_name: the leaf is its last segment) */
   const char *src = nn >= 0 ? nt_str(nt, nn, "qc_ruby_name") : NULL;

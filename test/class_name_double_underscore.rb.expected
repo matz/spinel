@@ -33,3 +33,8 @@ uninitialized constant DM::Bar
 DN::Bar
 DO::Bar
 uninitialized constant DM::Bar
+EY::Bar
+uninitialized constant EX::Bar
+uninitialized constant EZ::Bar
+PA::Foo__Q
+"PA::Foo__Q"

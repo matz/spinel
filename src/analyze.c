@@ -3483,7 +3483,12 @@ static int class_leaf_count(Compiler *c, const char *nm, int *nested) {
     const char *leaf = ci->name, *rn = ci->ruby_name_cache, *l = rn ? strrchr(rn, ':') : NULL;
     if (l) leaf = l + 1;
     else leaf = comp_class_ruby_leaf(c, k);
-    if (!leaf || !sp_streq(leaf, nm)) continue;
+    /* (a key's last "__" part counts too, `X::Foo__Bar` for Bar: one other
+       class of the leaf then does not name the class for any module, and
+       the read stays a run-time lookup, which finds no Foo__Bar for it) */
+    const char *kl = ci->name;
+    if (!l && kl && ci->enclosing_class >= 0) for (const char *p = kl; (p = strstr(p, "__")) != NULL; p += 2) kl = p + 2;
+    if (!(leaf && sp_streq(leaf, nm)) && !(!l && kl && sp_streq(kl, nm))) continue;
     n++;
     if (l || ci->enclosing_class >= 0) *nested = 1;
   }

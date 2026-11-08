@@ -1,3 +1,4 @@
+# spinel: gc-stress
 # Range#overlap? on two numeric ranges, plus Array#flatten(n)
 # with a depth-bounded variant.
 

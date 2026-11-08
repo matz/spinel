@@ -1,3 +1,4 @@
+# spinel: gc-stress
 # A Range of Symbols built from ends only known at run time read their ids
 # as numbers (`0..1`), as did an endless or mixed literal (`:a..`). It walks
 # and compares as a String Range of the Symbols' names does, and answers

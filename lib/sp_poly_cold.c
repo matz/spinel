@@ -1542,6 +1542,9 @@ const char *sp_pm_len_msg(sp_RbVal arr, sp_int want, int at_least) {
 
 /* format(*args) with boxed arguments (spinel_rt.h) */
 const char *sp_str_format_polyarr(const char *fmt, sp_PolyArray *a) {
+  /* a %p or %s formats by inspect / to_s, which allocate: a list the call
+     made for this (an Array of Floats boxed for it) was freed partway */
+  SP_GC_ROOT_STR(fmt); SP_GC_ROOT(a);
   size_t cap = strlen(fmt) + 64;
   char *buf = (char *)malloc(cap);
   if (!buf) { perror("malloc"); exit(1); }

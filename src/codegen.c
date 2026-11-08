@@ -21452,13 +21452,27 @@ static void emit_class_machinery(const NodeTable *nt, Compiler *c, Buf *b, char 
         if (!cn0) continue;
         char *cn = strdup(cn0);
         buf_printf(b, "  { static const char *const _m%d[] = {", i);
+        /* the modules the class includes and, level by level, the modules
+           those include (`module Deep; include Retryable; end`), each once */
+        int *seen = calloc((size_t)c->nclasses, sizeof(int));
+        int *todo = malloc(sizeof(int) * (size_t)c->nclasses);
+        int nt = 0;
         for (int m = 0; m < c->classes[i].nincluded_mods; m++) {
           int mi = c->classes[i].included_mods[m];
-          if (mi < 0 || mi >= c->nclasses) continue;
+          if (mi >= 0 && mi < c->nclasses && !seen[mi]) { seen[mi] = 1; todo[nt++] = mi; }
+        }
+        for (int t = 0; t < nt; t++) {
+          int mi = todo[t];
           const char *mn = class_ruby_name(c, mi);
           if (!mn) mn = c->classes[mi].name;
           if (mn) buf_printf(b, "\"%s\", ", mn);
+          for (int m = 0; m < c->classes[mi].nincluded_mods; m++) {
+            int mj = c->classes[mi].included_mods[m];
+            if (mj >= 0 && mj < c->nclasses && !seen[mj]) { seen[mj] = 1; todo[nt++] = mj; }
+          }
         }
+        free(seen);
+        free(todo);
         /* Builtin modules named by path carry no class index; their qualified
            string is what the match compares. */
         for (int m = 0; m < c->classes[i].nincluded_mod_names; m++)

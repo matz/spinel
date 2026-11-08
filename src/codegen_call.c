@@ -24586,13 +24586,13 @@ if (recv >= 0 && nm && (grt == TY_RATIONAL || grt == TY_COMPLEX)) {
 
 
 /* Whether an instance of user class k is_a? user class or module `cid`:
-   cid is k, a superclass of it, or a module k or a
-   superclass includes. The runtime class tests of a boxed value list the
-   classes this answers yes for. */
+   cid is k, a superclass of it, or a module k or a superclass includes,
+   directly or through another module. The runtime class tests of a boxed
+   value list the classes this answers yes for. */
 int class_isa_user(Compiler *c, int k, int cid) {
   if (k == cid || is_descendant(c, k, cid)) return 1;
   return comp_class_is_module(c, &c->classes[cid]) && !comp_class_is_module(c, &c->classes[k]) &&
-         class_includes_module(c, k, cid);
+         class_mixes_in(c, k, cid, 0);
 }
 
 /* The arms of a poly is_a? test that match a rescued exception. Such an

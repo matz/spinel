@@ -15308,6 +15308,8 @@ void emit_rescue(Compiler *c, int id, Buf *b, int indent, int fr, const char *re
             for (int a = k; a >= 0 && !inc; a = c->classes[a].parent)
               for (int m = 0; m < c->classes[a].nincluded_mods; m++)
                 if (c->classes[a].included_mods[m] == uci) { inc = 1; break; }
+            /* or through a module it includes (`module Deep; include M; end`) */
+            if (!inc) inc = class_mixes_in(c, k, uci, 0);
             if (!inc) continue;
             const char *kq = class_ruby_name(c, k);
             buf_printf(b, " || sp_exc_cls_matches(_rcls_%d, \"%s\")",

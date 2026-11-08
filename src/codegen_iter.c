@@ -2044,6 +2044,11 @@ static int block_tail_needs_value_form(Compiler *c, int id) {
      if-modifier) left the outer splice void (`{ |__fwd| yield __fwd }`, the
      forward of a named &block, handed on to a builtin). */
   if (nt_kind(nt, id) == NK_YieldNode) return 1;
+  /* a definition as the tail (`{ def m = 1 }`, `{ attr_reader :a }`,
+     `{ private def m = 1 }`): the definition emits with its class and its
+     statement form is nothing, while the expression is the name as a
+     Symbol, or the Array of names, which the block answers */
+  if (nt_kind(nt, id) == NK_DefNode || attr_decl_call(c, id) || vis_decl_call(c, id)) return 1;
   /* a variable's `||=`, `&&=` or `op=` (a local's, an instance, global or
      class variable's, a constant's) or a multiple write: the statement form is
      an if over the write, whose value is void, and the block answers the

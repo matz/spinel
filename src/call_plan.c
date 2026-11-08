@@ -7064,6 +7064,18 @@ static int ver_cell_once(VerCellsAt *m, int node, int hist) {
   m->at[node] = ++m->n;
   return 1;
 }
+/* Whether the statement runs no program code of its own: a def, an alias, an
+   undef, or a visibility call of a def (`private def m`), whose cell write
+   then goes ahead of it, not after (it would be a block's value otherwise) */
+static int ver_stmt_runs_no_code(const NodeTable *nt, int st) {
+  NodeKind k = nt_kind(nt, st);
+  if (k == NK_DefNode || k == NK_AliasMethodNode || k == NK_UndefNode) return 1;
+  if (k != NK_CallNode || nt_ref(nt, st, "receiver") >= 0 || nt_ref(nt, st, "block") >= 0) return 0;
+  const char *nm = nt_str(nt, st, "name");
+  int an = 0, args = nt_ref(nt, st, "arguments");
+  const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &an) : NULL;
+  return nm && an == 1 && nt_kind(nt, av[0]) == NK_DefNode && visibility_of_name(nm) > BVIS_MODULE_FUNCTION;
+}
 /* ...and beside each copy of a method body's version (VerWrite.body): a
    module's method cloned into each class that includes, prepends or
    extends it (nt_clone_subtree) holds a copy of a def its body makes
@@ -7088,7 +7100,7 @@ static void ver_copy_writes(Compiler *c, const int *par, VerCellsAt *cells, VerW
     if (!(*nwp & (*nwp - 1)) && !(*wp = realloc(*wp, sizeof **wp * (size_t)(*nwp ? 2 * *nwp : 1)))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
     VerWrite x = (*wp)[k - 1];
     x.list = par[st]; x.stmt = st; x.node = d;
-    x.after = nt_kind(nt, st) != NK_DefNode && nt_kind(nt, st) != NK_AliasMethodNode && nt_kind(nt, st) != NK_UndefNode;
+    x.after = !ver_stmt_runs_no_code(nt, st);
     (*wp)[(*nwp)++] = x;
   }
   free(of);
@@ -7135,10 +7147,9 @@ void ver_cells_write(Compiler *c) {
       if (st < 0 || par[st] < 0 || !ver_cell_once(&cells, node, vs[j].hist)) continue;
       if (!pass) continue;
       if (!(nw & (nw - 1)) && !(w = realloc(w, sizeof *w * (size_t)(nw ? 2 * nw : 1)))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-      NodeKind sk = nt_kind(nt, st);
-      /* (ahead of a def, an alias or an undef, which runs no program code: after one that ends a branch, the write would be the branch's value) */
+      /* (ahead of a statement that runs no program code: after one that ends a branch, the write would be the branch's value) */
       w[nw++] = (VerWrite){ par[st], st, node, vs[j].v->kind == LR_REMOVE ? 0 : vs[j].n, vs[j].hist,
-                            sk != NK_DefNode && sk != NK_AliasMethodNode && sk != NK_UndefNode, 0, -1, vs[j].v->body != 0 };
+                            !ver_stmt_runs_no_code(nt, st), 0, -1, vs[j].v->body != 0 };
       if (vs[j].hist >= nh) nh = vs[j].hist + 1;
       /* Not the lone conditional def's dispatcher alone: it stands after the condition, and the
          method is there as soon as one of its arms (`name#__condN`, cond_disp) runs in its branch */

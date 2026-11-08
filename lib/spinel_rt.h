@@ -5365,11 +5365,17 @@ static sp_bool sp_poly_hash_subset(sp_RbVal a, sp_RbVal b, int strict) {
    String slot and never rescues a receiver (CRuby raises for `Pathname#upcase`
    even though Pathname defines #to_str). A shared-mutable string is a builtin
    OBJ box, not SP_TAG_STR, and is a string. */
+/* The receivers a boxed String face accepts (sp_poly_recv_s's own test): the
+   generated code asks it ahead of a zero-argument face call, so a receiver it
+   rejects raises with the call's empty argument list. */
+static inline int sp_poly_face_str_ok(sp_RbVal v) { return v.tag == SP_TAG_STR || sp_poly_is_strbuf(v); }
 static const char *sp_poly_recv_s(sp_RbVal v, const char *meth) {
+  if (!sp_poly_face_str_ok(v)) {
+    sp_raise_nomethod(sp_nomethod_msg(meth, v));
+    return sp_str_empty;
+  }
   if (v.tag == SP_TAG_STR) return v.v.s ? v.v.s : sp_str_empty;
-  if (sp_poly_is_strbuf(v)) return sp_poly_to_s(v);
-  sp_raise_nomethod(sp_nomethod_msg(meth, v));
-  return sp_str_empty;
+  return sp_poly_to_s(v);
 }
 /* casecmp / casecmp? (`q`) on a boxed receiver. A Symbol compares with a
    Symbol and a String with a String (or an operand answering #to_str), as the
@@ -8714,8 +8720,10 @@ static sp_bool sp_poly_array_frozen(sp_RbVal v) {
    about frozenness here, before any work: the typed emitter it re-enters
    works on the poly copy, so only the write-back would notice, after a
    block had already run over every element. */
+/* The receivers a boxed Array face accepts, asked by the generated code ahead of a zero-argument face call (see sp_poly_face_str_ok). */
+static inline int sp_poly_face_array_ok(sp_RbVal v) { return v.tag == SP_TAG_OBJ && sp_poly_is_array_kind(v.cls_id); }
 static sp_PolyArray *sp_poly_array_recv(sp_RbVal v, const char *m, int mut) {
-  if (v.tag == SP_TAG_OBJ && sp_poly_is_array_kind(v.cls_id)) {
+  if (sp_poly_face_array_ok(v)) {
     if (mut && sp_poly_array_frozen(v)) sp_raise_frozen_array_at(v.v.p, v.cls_id);
     return sp_poly_to_poly_array(v);
   }
@@ -8818,8 +8826,10 @@ static void sp_poly_arr_live_truncate(sp_RbVal a, sp_int n) {
    value that is no collection at all -- an Integer, a String, nil --
    CRuby's NoMethodError, where the bare materialization answered an empty
    list and the call went on as if over nothing. */
+/* The receivers a boxed Enumerable face accepts (an object at all: sp_enum_items_from answers for the collections), see sp_poly_face_str_ok. */
+static inline int sp_poly_face_enum_ok(sp_RbVal v) { return v.tag == SP_TAG_OBJ; }
 static sp_PolyArray *sp_poly_enum_recv(sp_RbVal v, const char *m) {
-  if (v.tag != SP_TAG_OBJ) sp_raise_nomethod(sp_nomethod_msg(m, v));
+  if (!sp_poly_face_enum_ok(v)) sp_raise_nomethod(sp_nomethod_msg(m, v));
   return sp_enum_items_from(v);
 }
 
@@ -19345,10 +19355,19 @@ static sp_RbVal sp_poly_kept_result(sp_RbVal orig, sp_PolyArray *kept) {
    as-is; every other variant materializes, so this must stay read-only. A
    receiver that is not a hash at all raises the NoMethodError the call site
    would otherwise have raised. */
+/* The receivers a boxed Hash face accepts (sp_poly_as_pp_hash's own test), see sp_poly_face_str_ok. */
+static inline int sp_poly_face_hash_ok(sp_RbVal v) { return v.tag == SP_TAG_OBJ && sp_poly_is_hash_kind(v.cls_id); }
+/* Which receivers a switch over several owners hands to its Enumerable arm: an
+   Array or a Hash, the collections whose elements materialize. The Ranges and
+   the rest have arms of their own in that switch. This is not
+   sp_poly_face_enum_ok, which is what sp_poly_enum_recv accepts when the
+   Enumerable face is the call's only owner (any object: sp_enum_items_from
+   answers for the collections and raises for the others). */
+static inline int sp_poly_face_enum_arm_ok(sp_RbVal v) { return sp_poly_face_array_ok(v) || sp_poly_face_hash_ok(v); }
 static sp_PolyPolyHash *sp_poly_as_pp_hash(sp_RbVal v, const char *nm) {
   if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_POLY_POLY_HASH)
     return (sp_PolyPolyHash *)v.v.p;
-  if (v.tag != SP_TAG_OBJ || !sp_poly_is_hash_kind(v.cls_id)) {
+  if (!sp_poly_face_hash_ok(v)) {
     sp_raise_nomethod(sp_nomethod_msg(nm, v));
     return NULL;
   }

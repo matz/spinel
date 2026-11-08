@@ -335,6 +335,12 @@ typedef struct BuiltinOp {
    Object's methods, so a top-level def of the name is the one a send
    reaches (send_blind_recv_owns does not count the row). */
 #define BOPF_BASIC_OBJECT 2048
+/* The method takes keywords in CRuby (clone(freeze:), round(half:),
+   step(by:, to:), sample(random:), pack(buffer:), lines(chomp:) ...): a `**`
+   operand of its call is the method's own. A name with a row that lacks the
+   flag takes none (bop_name_kwless), and builtin_name_takes_keywords answers
+   for the names a splat dispatch keeps the `**` of. */
+#define BOPF_KEYWORDS 4096
 /* A row of a function the compiler makes calls to and the program cannot
    write (a BOP_KERNEL row such as __env_to_h): it answers a call node the
    compiler made (builtin_only) whatever the program defines, and a call
@@ -423,6 +429,12 @@ const BuiltinOp *bop_row(int i);
 const BuiltinOp *bop_find(TyKind rt, const char *name, int argc, int has_block);
 /* The flags (BOPF_*) of the row of kind rt for `name`, 0 for none */
 int bop_flags(TyKind rt, const char *name);
+/* Is there a row of `name` whose method takes no keywords in CRuby (a row
+   without BOPF_KEYWORDS, of any kind)? Its call gets a non-empty `**` operand
+   as one positional Hash, and an empty one as nothing. */
+int bop_name_kwless(const char *name);
+/* Is there a row of `name` that takes keywords (BOPF_KEYWORDS)? */
+int bop_name_keywords(const char *name);
 /* Does the builtin answer `name` on a class (or module) itself, taking argc
    arguments and a block when has_block, where no method of the program's
    of the name runs yet: Module's own, as its builtin-op rows (TY_CLASS)

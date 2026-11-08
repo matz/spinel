@@ -43732,13 +43732,6 @@ static int splat_builtin_spec_range(Compiler *c, int id, const char *name, int *
 static int splat_value_or_block_name(const char *name) {
   return sp_streq(name, "index") || sp_streq(name, "rindex") || sp_streq(name, "find_index");
 }
-static int splat_builtin_keeps_kwsplat(const char *name) {
-  static const char *const kw[] = { "round", "encode", "encode!", "each_line", "lines", "readlines", "readline",
-                                    "gets", "unpack", "unpack1", "clone", "Integer", "Float", "Rational", "Complex",
-                                    "update", "merge!", "sample", "shuffle", "shuffle!", "step", NULL };
-  for (int i = 0; kw[i]; i++) if (sp_streq(name, kw[i])) return 1;
-  return 0;
-}
 /* An arm of a dynamic send (`public_send(*args)`) on a receiver whose class
    only the run time knows takes the rest of the list into whatever builtin
    its name is: the counts come from CRuby's arity tables, over every class
@@ -44445,7 +44438,7 @@ static int splat_dispatch_on_length(Compiler *c, int id, const int *argv, int ar
     nt_node_set_int(nt, fargs[k], "depth", 0);
   }
   char knm[64];
-  if (!ukw && (nuser > 0 || (ctor != 1 && !splat_builtin_keeps_kwsplat(cnm))) && argc > 1 &&
+  if (!ukw && (nuser > 0 || (ctor != 1 && !builtin_name_takes_keywords(cnm))) && argc > 1 &&
       nt_argv_kwh(nt, argv, argc) >= 0) {
     snprintf(knm, sizeof knm, "__splk%s", comp_node_tag(c, id));
     scope_local_intern(comp_scope_of(c, id), knm);

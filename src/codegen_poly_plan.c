@@ -257,10 +257,14 @@ static int later_default_runs(Compiler *c, Scope *ds) {
    Each is made in the C argument list, so a new object one makes (an empty
    rest's Array, an empty **kwrest's Hash) was freed by a later default's
    allocation: such a default, with a later one that allocates, is made into
-   a rooted temp in `pre`, ahead of the call, and the call reads the temp. */
+   a rooted temp in `pre`, ahead of the call, and the call reads the temp.
+   So is every one when the callee makes a captured local's cell as it
+   enters, which it does before it roots the parameters (emit_rest_held). */
 static void emit_zero_arg_defaults(Compiler *c, Scope *ds, Buf *cb, Buf *pre) {
-  int later = 0;
+  int later = 0, cells = 0;
   for (int ai = 0; ai < ds->nparams; ai++) later += zero_arg_default_allocates(c, ds, ai);
+  for (int i = 0; i < ds->nlocals && !cells; i++) cells = ds->locals[i].is_cell;
+  if (cells) later++;
   for (int ai = 0; ai < ds->nparams; ai++) {
     int allocates = zero_arg_default_allocates(c, ds, ai);
     later -= allocates;
@@ -1884,8 +1888,10 @@ int emit_poly_obj_default0(Compiler *c, int id, const char *name, int argc, TyKi
           int sibling = om->nparams <= 64 && default_refs_earlier_param(c, om);
           int uid = sibling ? ++g_tmp : 0, ren_base = g_nren;
           char tn[64][64];
-          for (int a = 0; a < om->nparams; a++) {
-            if (!sibling) { buf_puts(&ob, ", "); emit_arg_or_default(c, om, a, -1, &ob); continue; }
+          /* (an empty rest's Array and an empty **kwrest's Hash are held
+             in the arm's temps as a class arm's are) */
+          if (!sibling) emit_zero_arg_defaults(c, om, &ob, &apre);
+          for (int a = 0; sibling && a < om->nparams; a++) {
             Buf vb; memset(&vb, 0, sizeof vb);
             emit_arg_or_default(c, om, a, -1, &vb);
             emit_pd_param_bind(c, om, a, uid, vb.p, tn[a], sizeof tn[a]);

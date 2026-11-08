@@ -6246,6 +6246,11 @@ static int iter_tap_slice_string_arms(Compiler *c, int id, Buf *b, int indent, c
       emit_indent(b, bodyIndent); buf_puts(b, "{\n"); bodyIndent++;
       emit_indent(b, bodyIndent); emit_ctype(c, rt, b);
       buf_printf(b, " lv_%s = sp_%sArray_slice(_t%d, _t%d, _t%d);\n", p0, k, ta, ti, ts);
+      /* the window is a new Array only this slot holds, and the loop's
+         poll (sp_sig_poll_raise) can run a collection before the body
+         reads it */
+      { char vn[300]; snprintf(vn, sizeof vn, "lv_%s", p0);
+        emit_indent(b, bodyIndent); emit_gc_root_var(c, rt, vn, b); buf_puts(b, "\n"); }
       emit_loop_body(c, body, b, bodyIndent);
       bodyIndent--;
       emit_indent(b, bodyIndent); buf_puts(b, "}\n");
@@ -6824,6 +6829,9 @@ static int iter_combination_cons_arms(Compiler *c, int id, Buf *b, int indent, c
         emit_indent(b, indent + 1); buf_puts(b, "{\n");
         emit_indent(b, indent + 2); emit_ctype(c, rt, b);
         buf_printf(b, " lv_%s = sp_%sArray_slice(_t%d, _t%d, _t%d);\n", rpn, k, ta, ti, tnn);
+        /* (held, as each_slice's window is) */
+        { char vn[300]; snprintf(vn, sizeof vn, "lv_%s", rpn);
+          emit_indent(b, indent + 2); emit_gc_root_var(c, rt, vn, b); buf_puts(b, "\n"); }
         emit_loop_body(c, body, b, indent + 2);
         emit_indent(b, indent + 1); buf_puts(b, "}\n");
         lv_set_type(clv_ec, csaved_ec);

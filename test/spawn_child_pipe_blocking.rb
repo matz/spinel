@@ -1,3 +1,4 @@
+# spinel: gc-stress
 # A child gets its redirected descriptors blocking. Writing to a pipe made its
 # write end O_NONBLOCK, the flag lives on the description the child shares,
 # and a child that filled the pipe failed with EAGAIN ("Resource temporarily

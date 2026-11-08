@@ -1,3 +1,4 @@
+# spinel: gc-stress
 # More builtins answered per yield-receiver site, closing part of K-029's
 # "other names likely follow the same pattern" leftover (kilau K-033):
 # clear/flatten/first/shift answer a Hash site too, now that their bop_rows

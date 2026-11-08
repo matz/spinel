@@ -2170,16 +2170,19 @@ int emit_call_builtin_cmethod_arms(Compiler *c, int id, Buf *b, const NodeTable 
           }
         }
         buf_printf(b, " if (_t%d->len == 0) sp_raise_cls(\"ArgumentError\", \"wrong number of arguments (given 0, expected 1+)\");", tall);
-        buf_printf(b, " sp_RbVal _t%d = _t%d->data[0];", tcmd, tall);
+        buf_printf(b, " sp_RbVal _t%d = _t%d->data[0]; SP_GC_ROOT_RBVAL(_t%d);", tcmd, tall, tcmd);
         buf_printf(b, " sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d);", targs, targs);
         buf_printf(b, " for (sp_int _i = 1; _i < _t%d->len; _i++) sp_PolyArray_push(_t%d, _t%d->data[_i]);",
                    tall, targs, tall);
       }
       else {
         /* cmd = argv[0] (boxed, so it can be String or Array) */
+        /* (held: a String made for it, `"cmd #{x}"`, is freed by the
+           arguments' Array made next, and the env shift below takes the
+           command out of the Array that held it) */
         buf_printf(b, "({ sp_RbVal _t%d = ", tcmd);
         emit_boxed(c, argv[0], b);
-        buf_puts(b, ";");
+        buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d);", tcmd);
         /* args: collect argv[1..argc-2] (or empty if argc==1) into a
            PolyArray. Skip the last arg if it's a Hash (the opts). */
         buf_printf(b, " sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d);", targs, targs);

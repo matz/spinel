@@ -2339,18 +2339,15 @@ int a_block_is_lifted(Compiler *c, int id) {
       nt_str(nt, recv, "name") && sp_streq(nt_str(nt, recv, "name"), "Fiber")) return 1;
   int mi = -1;
   if (recv < 0) {
-    mi = call_target(c, id, -1, name, CT_TOP, NULL);
+    /* an implicit-self call inside a class method resolves to a CLASS
+       method, ahead of a same-named instance method or top-level def; its
+       literal block is lifted all the same (#2444) */
+    mi = comp_self_call_mi(c, id, name);
     if (mi < 0) {
       Scope *self = comp_scope_of(c, id);
-      if (self && self->class_id >= 0) {
-        mi = call_target(c, id, self->class_id, name, 0, NULL);
-        /* an implicit-self call inside a class method resolves to a CLASS
-           method; its literal block is lifted all the same (#2444) */
-        if (mi < 0) mi = call_target(c, id, self->class_id, name, CT_CMETHOD, NULL);
-        /* and a bare `new` there runs the class's initialize */
-        if (mi < 0 && self->is_cmethod && sp_streq(name, "new"))
-          mi = comp_method_in_chain(c, self->class_id, "initialize", NULL);
-      }
+      /* and a bare `new` there runs the class's initialize */
+      if (self && self->class_id >= 0 && self->is_cmethod && sp_streq(name, "new"))
+        mi = comp_method_in_chain(c, self->class_id, "initialize", NULL);
     }
     /* self may be an instance of a subclass whose override of the method
        takes the block (a Phlex component's view_template): the call then

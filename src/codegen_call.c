@@ -8698,6 +8698,13 @@ static int arm_raises_nomethod_for(const char *text, const char *name) {
    bound to _t<tv> (emit_poly_builtin_default_at): the arm's text into nb,
    what it hoists into *arm_pre. 0 when the probe declined. */
 static int poly_default_obj_spreads(Compiler *c, int id, const char *name);
+/* The index of call id's last splat argument, or -1 */
+static int poly_last_splat(const NodeTable *nt, int argc, const int *argv) {
+  int last = -1;
+  for (int a = 0; a < argc; a++)
+    if (nt_kind(nt, argv[a]) == NK_SplatNode) last = a;
+  return last;
+}
 static int bi_default_probe(Compiler *c, int id, int recv, const char *name, int argc, const int *argv,
                             const int *atmp, const TyKind *atmp_ty, TyKind ret, TyKind bt, int slot_o,
                             int nil_fwd, int tv, Buf *nb, char **arm_pre, int *box_o) {
@@ -8708,6 +8715,7 @@ static int bi_default_probe(Compiler *c, int id, int recv, const char *name, int
      operand is not read a second time */
   int sviews[POLY_OBJ_SPREAD_MAX], nsv = 0;
   int obj_spread = poly_default_obj_spreads(c, id, name);
+  int last_splat = obj_spread ? poly_last_splat(nt, argc, argv) : -1;
   for (int a = 0; a < argc; a++) {
     if (nt_kind(nt, argv[a]) == NK_SplatNode && obj_spread && nsv < POLY_OBJ_SPREAD_MAX) {
       int ex = nt_ref(nt, argv[a], "expression");
@@ -8715,6 +8723,14 @@ static int bi_default_probe(Compiler *c, int id, int recv, const char *name, int
         view_bind(ex, "_t%d", atmp[a]);
         sviews[nsv++] = view_push(c, ex, TY_POLY_ARRAY);
       }
+      continue;
+    }
+    /* an argument ahead of such a splat is the value the dispatch read
+       before the splat's operand ran, held in its temp: a splat operand
+       that writes what the argument reads (`w(@x, *side)`) does not
+       change it (poly_default_arg_held) */
+    if (a < last_splat && nt_kind(nt, argv[a]) != NK_KeywordHashNode) {
+      bind_poly_arg_temp(c, argv[a], atmp_ty[a], atmp[a]);
       continue;
     }
     /* (a held handle is the argument's value, which a writer arm takes:
@@ -8843,6 +8859,11 @@ static int emit_poly_builtin_default_at(Compiler *c, int id, int recv, const cha
        would be read again, and declines) */
     if (is_splat && obj_spread) continue;
     if (obj_spread && ns_obj > 0 && subtree_has_side_effect(c, argv[a])) return 0;
+    /* (one ahead of the last splat is read from its temp, bi_default_probe:
+       a temp of another type than the argument is no value it can read) */
+    if (obj_spread && a < poly_last_splat(nt, argc, argv) && nt_kind(nt, argv[a]) != NK_KeywordHashNode &&
+        repr_of(c, argv[a]).as_ty != atmp_ty[a] && !poly_arg_held_oint(c, argv[a], atmp_ty[a]))
+      return 0;
     if (subtree_has_side_effect(c, argv[a]) &&
         (rereads || (repr_of(c, argv[a]).as_ty != atmp_ty[a] && !held_h &&
                      !poly_arg_held_oint(c, argv[a], atmp_ty[a]))))

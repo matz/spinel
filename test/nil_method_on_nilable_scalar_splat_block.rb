@@ -59,6 +59,15 @@ h = { a: 1 }
 p mk(false).q(*[1], **h)
 p mk(false).w(*arr) { :blk }
 
+# an argument ahead of a splat keeps the value it had before the splat's
+# operand ran
+class Object; def ah(a, *r) = [:o, a, r]; end
+class NilClass; def ah(a, *r) = [:n, a, r]; end
+def bump; $g = 99; @iv = 50; [2]; end
+[false, true].each { |f| $g = 1; p mk(f).ah($g, *bump) }
+[nil, 4, "s"].each { |x| $g = 1; p x.ah($g, *bump) }
+[nil, 4].each { |x| @iv = 1; p x.ah(@iv, *bump) }
+
 # a keyword beside a splat or a block
 # for the non-nil value
 class Object; def kw(*r, **k, &b) = [:o, r, k, b ? b.call : 0]; end

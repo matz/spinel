@@ -229,30 +229,85 @@ const char *sp_str_plus_lit(const char *a, const char *lit, size_t ll) {
    "can't modify frozen String: \"abc\"" message shape. */
 void sp_exc_stage_recv(sp_RbVal v);   /* generated TU: stages FrozenError#receiver */
 void sp_raise_frozen_str(const char*s){SP_GC_ROOT_STR(s);const char*ins=sp_str_inspect(s);SP_GC_ROOT_STR(ins);const char*msg=sp_str_concat(&("\xff" "can't modify frozen String: ")[1],ins);SP_GC_ROOT_STR(msg);sp_exc_stage_recv(sp_box_str(s));sp_raise_cls("FrozenError",msg);}
-/* Simple Unicode case mapping for ASCII + Latin-1 Supplement (U+00C0-00FF)
-   + Latin Extended-A (U+0100-017F), the ranges the ruby/spec string case
-   specs exercise. Full Unicode is out of scope (one internal UTF-8 rep). */
+/* Unicode case mapping, CRuby's (#11345): the tables are generated from CRuby
+   by tools/gen_unicase_map.rb. A one-codepoint mapping is a range lookup, a
+   run of codepoints that map by one delta (every one of them, or every other
+   one); a mapping to more codepoints ("ß".upcase is "SS") is a special.
+   Static const data only these functions read, so a program that maps no
+   case links none of it (--gc-sections / -dead_strip). */
+typedef struct { uint32_t lo, hi; int32_t d; uint8_t step; } sp_uc_range;
+typedef struct { uint32_t cp; uint32_t to[3]; } sp_uc_special;
+#include "sp_unicase_map.inc"
+/* cp's mapping by table t into *out: 1 when the table maps cp (perhaps to
+   itself, a titlecase that is the letter), 0 when it does not */
+static int sp_uc_range_find(const sp_uc_range *t, int n, uint32_t cp, uint32_t *out) {
+  int lo = 0, hi = n - 1;
+  while (lo <= hi) {
+    int mid = (lo + hi) / 2;
+    if (t[mid].hi < cp) lo = mid + 1;
+    else if (t[mid].lo > cp) hi = mid - 1;
+    else if (t[mid].step == 1 || ((cp - t[mid].lo) & 1) == 0) { *out = (uint32_t)((int64_t)cp + t[mid].d); return 1; }
+    else return 0;
+  }
+  return 0;
+}
+static uint32_t sp_uc_range_map(const sp_uc_range *t, int n, uint32_t cp) {
+  uint32_t m;
+  return sp_uc_range_find(t, n, cp, &m) ? m : cp;
+}
+static const sp_uc_special *sp_uc_special_find(const sp_uc_special *t, int n, uint32_t cp) {
+  int lo = 0, hi = n - 1;
+  while (lo <= hi) {
+    int mid = (lo + hi) / 2;
+    if (t[mid].cp < cp) lo = mid + 1;
+    else if (t[mid].cp > cp) hi = mid - 1;
+    else return &t[mid];
+  }
+  return NULL;
+}
 uint32_t sp_uc_toupper(uint32_t cp){
   if(cp<0x80)return (uint32_t)toupper((int)cp);
-  if(cp==0x131)return 0x49;
-  if(cp>=0xE0&&cp<=0xFE&&cp!=0xF7)return cp-0x20; /* Latin-1 lower -> upper */
-  if(cp==0xFF)return 0x178;                       /* ÿ -> Ÿ */
-  if(cp>=0x100&&cp<=0x137){ if(cp&1)return cp-1; return cp; } /* Latin-Ext-A pairs */
-  if(cp>=0x139&&cp<=0x148){ if((cp&1)==0)return cp-1; return cp; }
-  if(cp>=0x14A&&cp<=0x177){ if(cp&1)return cp-1; return cp; }
-  if(cp>=0x179&&cp<=0x17E){ if((cp&1)==0)return cp-1; return cp; }
-  return cp;
+  return sp_uc_range_map(sp_uc_upper_ranges, SP_UC_UPPER_NR, cp);
 }
 uint32_t sp_uc_tolower(uint32_t cp){
   if(cp<0x80)return (uint32_t)tolower((int)cp);
-  if(cp==0x130)return cp;
-  if(cp>=0xC0&&cp<=0xDE&&cp!=0xD7)return cp+0x20; /* Latin-1 upper -> lower */
-  if(cp==0x178)return 0xFF;                        /* Ÿ -> ÿ */
-  if(cp>=0x100&&cp<=0x137){ if((cp&1)==0)return cp+1; return cp; }
-  if(cp>=0x139&&cp<=0x148){ if(cp&1)return cp+1; return cp; }
-  if(cp>=0x14A&&cp<=0x177){ if((cp&1)==0)return cp+1; return cp; }
-  if(cp>=0x179&&cp<=0x17E){ if(cp&1)return cp+1; return cp; }
-  return cp;
+  return sp_uc_range_map(sp_uc_lower_ranges, SP_UC_LOWER_NR, cp);
+}
+/* The codepoints a mapping of kind k (SP_UC_UPPER .. SP_UC_TITLE) gives cp
+   when it gives more than one ("ß" upcases to "SS"), into to[]: their
+   number, 0 when cp maps to one codepoint (sp_uc_toupper and the rest). */
+int sp_uc_special_of(int k, uint32_t cp, uint32_t to[3]) {
+  if (cp < 0x80) return 0;
+  const sp_uc_special *e = k == SP_UC_UPPER ? sp_uc_special_find(sp_uc_upper_special, SP_UC_UPPER_NS, cp)
+                         : k == SP_UC_LOWER ? sp_uc_special_find(sp_uc_lower_special, SP_UC_LOWER_NS, cp)
+                         : k == SP_UC_FOLD  ? sp_uc_special_find(sp_uc_fold_special, SP_UC_FOLD_NS, cp)
+                         : k == SP_UC_SWAP  ? sp_uc_special_find(sp_uc_swap_special, SP_UC_SWAP_NS, cp)
+                         : sp_uc_special_find(sp_uc_title_special, SP_UC_TITLE_NS, cp);
+  if (!e) return 0;
+  int n = 0;
+  while (n < 3 && e->to[n]) { to[n] = e->to[n]; n++; }
+  return n;
+}
+/* cp's case folding (casecmp?, downcase(:fold)), as UTF-8 into o: its
+   byte length */
+size_t sp_uc_fold_utf8(uint32_t cp, char *o) {
+  uint32_t to[3];
+  int n = sp_uc_special_of(SP_UC_FOLD, cp, to);
+  if (n) { size_t w = 0; for (int i = 0; i < n; i++) w += (size_t)sp_utf8_encode(to[i], o + w); return w; }
+  uint32_t f = cp < 0x80 ? (uint32_t)tolower((int)cp) : sp_uc_range_map(sp_uc_fold_ranges, SP_UC_FOLD_NR, cp);
+  return (size_t)sp_utf8_encode(f, o);
+}
+/* cp's titlecase (capitalize's first character), as UTF-8 into o: the
+   titlecase mapping where it differs from the uppercase one, else that */
+size_t sp_uc_title_utf8(uint32_t cp, char *o) {
+  uint32_t to[3], t;
+  /* the titlecase tables first (a special, then a range: "ᾀ" titlecases to
+     the one letter "ᾈ" where it upcases to two), then the uppercase ones */
+  int n = sp_uc_special_of(SP_UC_TITLE, cp, to);
+  if (!n && cp >= 0x80 && sp_uc_range_find(sp_uc_title_ranges, SP_UC_TITLE_NR, cp, &t)) return (size_t)sp_utf8_encode(t, o);
+  if (!n) n = sp_uc_special_of(SP_UC_UPPER, cp, to);
+  if (n) { size_t w = 0; for (int i = 0; i < n; i++) w += (size_t)sp_utf8_encode(to[i], o + w); return w; }
+  return (size_t)sp_utf8_encode(sp_uc_toupper(cp), o);
 }
 /* The encoding `s << t` gives s, for the first lb bytes of t: the rule of
    sp_str_cat_binary, read before the bytes go in. */

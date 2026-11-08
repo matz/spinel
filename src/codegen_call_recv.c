@@ -8148,6 +8148,9 @@ const char *case_map_suffix(Compiler *c, int argc, const int *argv) {
   for (int i = 0; i < argc && i < 2; i++)
     if (nt_kind(c->nt, argv[i]) != NK_SymbolNode || !(a[i] = nt_str(c->nt, argv[i], "value"))) return "";
   if (argc == 1 && sp_streq(a[0], "ascii")) return "_ascii";
+  /* (downcase's full case folding; the other three raise ArgumentError for
+     it, as CRuby does, #11345) */
+  if (argc == 1 && sp_streq(a[0], "fold")) return "_fold";
   if ((argc == 1 && sp_streq(a[0], "turkic")) ||
       (argc == 2 && sp_streq(a[0], "turkic") && sp_streq(a[1], "lithuanian")) ||
       (argc == 2 && sp_streq(a[0], "lithuanian") && sp_streq(a[1], "turkic")))

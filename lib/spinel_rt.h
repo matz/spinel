@@ -5516,6 +5516,11 @@ SP_COLD static void sp_case_opts_unmapped(sp_RbVal recv, int turkic, const char 
     }
   }
 }
+/* the one option is :fold (downcase's full case folding) */
+static SP_UNUSED int sp_case_opts_is_fold(sp_RbVal o) {
+  const char *a = sp_case_opt_name(o);
+  return a && strcmp(a, "fold") == 0;
+}
 static int sp_case_opts_is_turkic(sp_int argc, const sp_RbVal *o) {
   if (argc < 1 || argc > 2) return 0;
   const char *a = sp_case_opt_name(o[0]);

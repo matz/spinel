@@ -594,7 +594,7 @@ build/regexp/%.o: lib/regexp/%.c $(RE_HDRS)
 # directory"). A plain filename here is looked up as a real prerequisite
 # with its own rule, not a wildcard scan, so it is immune to the caching
 # above and make schedules its generation before any of these rules runs.
-RT_HDRS = $(wildcard lib/*.h lib/regexp/*.h lib/regexp/*.inc lib/regexp/shim/*.h lib/regexp/shim/mruby/*.h) $(PLATFORM_HDRS) lib/spinel_rt_responds_generated.h
+RT_HDRS = $(wildcard lib/*.h lib/*.inc lib/regexp/*.h lib/regexp/*.inc lib/regexp/shim/*.h lib/regexp/shim/mruby/*.h) $(PLATFORM_HDRS) lib/spinel_rt_responds_generated.h
 
 # One rule for every lib/*.c object. The per-object header lists here used to be
 # written by hand and had drifted: build/sp_array.o never named lib/sp_str.h,

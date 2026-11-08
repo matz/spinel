@@ -21514,7 +21514,10 @@ static int emit_case_opts_guard(Compiler *c, int id, Buf *b) {
     }
     buf_printf(b, "sp_case_opts_is_turkic(%d, (sp_RbVal[]){", argc);
     for (int i = 0; i < argc; i++) { if (i) buf_puts(b, ", "); buf_printf(b, "_t%d", ta[i]); }
-    buf_printf(b, "}) ? sp_str_%s_turkic(_t%d) : ({ ", base, tv);
+    buf_printf(b, "}) ? sp_str_%s_turkic(_t%d) : ", base, tv);
+    /* downcase's :fold, read at run time: the full case folding (#11345) */
+    if (down && argc == 1) buf_printf(b, "sp_case_opts_is_fold(_t%d) ? sp_str_downcase_fold(_t%d) : ", ta[0], tv);
+    buf_puts(b, "({ ");
   }
   buf_printf(b, "sp_case_opts_check(%d, (sp_RbVal[]){", argc);
   for (int i = 0; i < argc; i++) {

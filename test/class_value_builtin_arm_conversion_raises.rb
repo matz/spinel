@@ -13,7 +13,6 @@ end
 
 class Pair
   def initialize(a, b) = @a = a
-  def index = "pair"
 end
 
 def build(klass)
@@ -24,7 +23,7 @@ rescue TypeError => e
 end
 
 def build2(klass)
-  klass.new(Req.new, Req.new).public_send("index".to_sym)
+  klass.new(Req.new, Req.new).class.name
 rescue TypeError => e
   "#{klass}: #{e.class}: #{e.message}"
 end

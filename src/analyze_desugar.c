@@ -25793,8 +25793,43 @@ static int brc_new_path(NodeTable *nt, int like, const char *cn, const char *nm)
    (t): an X from a `class Object` body, an included module or an alias
    of Object keeps its lexical read, as does a read where the node itself
    has meaning (fixed, nonzero: the operand of defined?, a pattern). */
+/* The builtin classes and modules above the builtin cn that a program's
+   bodies write constants in, in CRuby's ancestors order, Object left out
+   (its constants are the top-level ones): Numeric and Comparable for an
+   Integer, IO and Enumerable for a File. Each with the names its bodies
+   may write (brc_any_writes, brc_path_writes). */
+typedef struct { const char *name; BrcNames u; } BrcAnc;
+static const char *brc_builtin_class_name(int bid) {
+  const BuiltinClass *r = NULL;
+  for (int i = 0; (r = builtin_class_at(i)); i++)
+    if (r->id == bid && (r->flags & BC_CLASS)) return r->name;
+  return NULL;
+}
+/* the `if defined?(a::nm) then a::nm else <other> end` node, made at
+   node like; into `into` when it is not -1 (its line kept), else new */
+static int brc_new_probe_if(NodeTable *nt, int like, int into, const char *a, const char *nm, int other_expr) {
+  int probe = brc_new_path(nt, like, a, nm), own = brc_new_path(nt, like, a, nm);
+  int def = fwd_new_node_like(nt, like, "DefinedNode");
+  int then = fwd_new_node_like(nt, like, "StatementsNode"), other = fwd_new_node_like(nt, like, "StatementsNode");
+  int els = fwd_new_node_like(nt, like, "ElseNode");
+  int n = into >= 0 ? into : fwd_new_node_like(nt, like, "IfNode");
+  if (probe < 0 || own < 0 || def < 0 || then < 0 || other < 0 || els < 0 || n < 0) return -1;
+  nt_node_set_ref(nt, def, "value", probe);
+  nt_node_set_arr(nt, then, "body", &own, 1);
+  nt_node_set_arr(nt, other, "body", &other_expr, 1);
+  nt_node_set_ref(nt, els, "statements", other);
+  long long line = nt_int(nt, like, "node_line", 0), file = nt_int(nt, like, "node_file", 0), col = nt_int(nt, like, "node_col", 0);
+  nt_node_reset(nt, n, "IfNode");
+  nt_node_set_int(nt, n, "node_line", line);
+  nt_node_set_int(nt, n, "node_file", file);
+  nt_node_set_int(nt, n, "node_col", col);
+  nt_node_set_ref(nt, n, "predicate", def);
+  nt_node_set_ref(nt, n, "statements", then);
+  nt_node_set_ref(nt, n, "subsequent", els);
+  return n;
+}
 static void brc_rewrite_reads(NodeTable *nt, int n, const char *cn, const BrcNames *w, const BrcNames *u,
-                              const BrcNames *t, int fixed, int *changed) {
+                              const BrcNames *t, const BrcAnc *anc, int nanc, int fixed, int *changed) {
   if (n < 0) return;
   NodeKind k = nt_kind(nt, n);
   if (k == NK_ClassNode || k == NK_ModuleNode || k == NK_SingletonClassNode) return;
@@ -25811,26 +25846,21 @@ static void brc_rewrite_reads(NodeTable *nt, int n, const char *cn, const BrcNam
       *changed = 1;
       return;
     }
-    if (fixed || !brc_has(u, nm) || !brc_has(t, nm)) return;
-    int lex = fwd_new_node_like(nt, n, "ConstantPathNode");
-    int probe = brc_new_path(nt, n, cn, nm), own = brc_new_path(nt, n, cn, nm);
-    int def = fwd_new_node_like(nt, n, "DefinedNode");
-    int then = fwd_new_node_like(nt, n, "StatementsNode"), other = fwd_new_node_like(nt, n, "StatementsNode");
-    int els = fwd_new_node_like(nt, n, "ElseNode");
-    if (lex < 0 || probe < 0 || own < 0 || def < 0 || then < 0 || other < 0 || els < 0) return;
-    nt_node_set_str(nt, lex, "name", nm);
-    nt_node_set_ref(nt, def, "value", probe);
-    nt_node_set_arr(nt, then, "body", &own, 1);
-    nt_node_set_arr(nt, other, "body", &lex, 1);
-    nt_node_set_ref(nt, els, "statements", other);
-    long long line = nt_int(nt, n, "node_line", 0), file = nt_int(nt, n, "node_file", 0), col = nt_int(nt, n, "node_col", 0);
-    nt_node_reset(nt, n, "IfNode");
-    nt_node_set_int(nt, n, "node_line", line);
-    nt_node_set_int(nt, n, "node_file", file);
-    nt_node_set_int(nt, n, "node_col", col);
-    nt_node_set_ref(nt, n, "predicate", def);
-    nt_node_set_ref(nt, n, "statements", then);
-    nt_node_set_ref(nt, n, "subsequent", els);
+    if (fixed || !brc_has(t, nm)) return;
+    /* the holders that may have the name at the time of the read: the
+       builtin itself, then the builtins above it (`class Numeric; LIM = 6;
+       end` for an Integer method), as CRuby looks in the ancestors before
+       the top level */
+    const char *hold[16]; int nh = 0;
+    if (brc_has(u, nm)) hold[nh++] = cn;
+    for (int a = 0; a < nanc && nh < 16; a++)
+      if (brc_has(&anc[a].u, nm)) hold[nh++] = anc[a].name;
+    if (nh == 0) return;
+    int expr = fwd_new_node_like(nt, n, "ConstantPathNode");
+    if (expr < 0) return;
+    nt_node_set_str(nt, expr, "name", nm);
+    for (int h = nh - 1; h >= 1 && expr >= 0; h--) expr = brc_new_probe_if(nt, n, -1, hold[h], nm, expr);
+    if (expr < 0 || brc_new_probe_if(nt, n, n, hold[0], nm, expr) < 0) return;
     *changed = 1;
     return;
   }
@@ -25839,28 +25869,28 @@ static void brc_rewrite_reads(NodeTable *nt, int n, const char *cn, const BrcNam
   int nr = nt_num_refs(nt, n);
   for (int i = 0; i < nr; i++) {
     int ch = nt_ref_at(nt, n, i);
-    brc_rewrite_reads(nt, ch, cn, w, u, t, fixed || (ch >= 0 && ch == pat), changed);
+    brc_rewrite_reads(nt, ch, cn, w, u, t, anc, nanc, fixed || (ch >= 0 && ch == pat), changed);
   }
   int na = nt_num_arrs(nt, n);
   for (int i = 0; i < na; i++) {
     int m = 0; const int *ids = nt_arr_at(nt, n, i, &m);
-    for (int q = 0; q < m; q++) brc_rewrite_reads(nt, ids[q], cn, w, u, t, fixed, changed);
+    for (int q = 0; q < m; q++) brc_rewrite_reads(nt, ids[q], cn, w, u, t, anc, nanc, fixed, changed);
   }
 }
 /* the methods a body statement defines, in it and the blocks and
    conditions around them, not in a nested body */
 static void brc_body_defs(NodeTable *nt, int n, const char *cn, const BrcNames *w, const BrcNames *u,
-                          const BrcNames *t, int *changed) {
+                          const BrcNames *t, const BrcAnc *anc, int nanc, int *changed) {
   if (n < 0) return;
   NodeKind k = nt_kind(nt, n);
   if (k == NK_ClassNode || k == NK_ModuleNode || k == NK_SingletonClassNode) return;
-  if (k == NK_DefNode) { brc_rewrite_reads(nt, n, cn, w, u, t, 0, changed); return; }
+  if (k == NK_DefNode) { brc_rewrite_reads(nt, n, cn, w, u, t, anc, nanc, 0, changed); return; }
   int nr = nt_num_refs(nt, n);
-  for (int i = 0; i < nr; i++) brc_body_defs(nt, nt_ref_at(nt, n, i), cn, w, u, t, changed);
+  for (int i = 0; i < nr; i++) brc_body_defs(nt, nt_ref_at(nt, n, i), cn, w, u, t, anc, nanc, changed);
   int na = nt_num_arrs(nt, n);
   for (int i = 0; i < na; i++) {
     int m = 0; const int *ids = nt_arr_at(nt, n, i, &m);
-    for (int q = 0; q < m; q++) brc_body_defs(nt, ids[q], cn, w, u, t, changed);
+    for (int q = 0; q < m; q++) brc_body_defs(nt, ids[q], cn, w, u, t, anc, nanc, changed);
   }
 }
 /* the name a top-level statement opens a builtin's body by, or NULL */
@@ -25869,6 +25899,38 @@ static const char *brc_builtin_header(const NodeTable *nt, int st) {
   int cp = nt_ref(nt, st, "constant_path");
   const char *cn = cp >= 0 && nt_kind(nt, cp) == NK_ConstantReadNode ? nt_str(nt, cp, "name") : NULL;
   return cn && (is_builtin_class_name(cn) || is_builtin_module_name(cn)) ? cn : NULL;
+}
+/* fill anc (at most 8) with the builtins above cn whose bodies, or a path
+   write `Numeric::X = v`, may write a constant */
+static void brc_ancestors(const NodeTable *nt, const int *tb, int tn, const char *cn, BrcAnc *anc, int *nanc) {
+  const char *names[8]; int nn = 0;
+  int bid = builtin_class_id(cn);
+  if (bid < 0) {
+    for (int p = builtin_class_parent_id(bid), g = 0; p < 0 && p != -116 && g < 6 && nn < 6;
+         p = builtin_class_parent_id(p), g++) {
+      const char *pn = brc_builtin_class_name(p);
+      if (pn) names[nn++] = pn;
+    }
+    static const char *const mods[] = { "Comparable", "Enumerable", NULL };
+    for (int m = 0; mods[m] && nn < 8; m++)
+      if (!sp_streq(cn, mods[m]) && builtin_class_mixes_module(bid, mods[m])) names[nn++] = mods[m];
+  }
+  *nanc = 0;
+  for (int a = 0; a < nn; a++) {
+    BrcNames u = { NULL, 0, 0 };
+    for (int j = 0; j < tn; j++) {
+      const char *hn = brc_builtin_header(nt, tb[j]);
+      if (!hn || !sp_streq(hn, names[a])) continue;
+      int b = class_def_body(nt, tb[j]), bn = 0;
+      const int *bs = b >= 0 ? nt_arr(nt, b, "body", &bn) : NULL;
+      for (int q = 0; q < bn; q++) brc_any_writes(nt, bs[q], names[a], &u);
+    }
+    brc_path_writes(nt, names[a], &u);
+    if (u.n == 0) { free(u.v); continue; }
+    anc[*nanc].name = names[a];
+    anc[*nanc].u = u;
+    (*nanc)++;
+  }
 }
 int desugar_builtin_reopen_const_reads(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
@@ -25894,15 +25956,18 @@ int desugar_builtin_reopen_const_reads(Compiler *c) {
       }
     }
     brc_path_writes(nt, cn, &u);
+    BrcAnc anc[8]; int nanc = 0;
+    brc_ancestors(nt, tb, tn, cn, anc, &nanc);
     int b = class_def_body(nt, tb[i]), bn = 0;
     const int *bs = b >= 0 ? nt_arr(nt, b, "body", &bn) : NULL;
     for (int q = 0; q < bn; q++) {
       int st = bs[q];
-      brc_body_defs(nt, st, cn, &w, &u, &top, &changed);
+      brc_body_defs(nt, st, cn, &w, &u, &top, anc, nanc, &changed);
       brc_add(&w, brc_stmt_writes(nt, st, cn));
       bs = nt_arr(nt, b, "body", &bn);   /* (nodes added: the list may move) */
     }
     free(w.v); free(u.v);
+    for (int a = 0; a < nanc; a++) free(anc[a].u.v);
   }
   free(top.v); free(tb); free(tfile);
   if (changed) comp_grow_node_arrays(c);

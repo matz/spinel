@@ -8697,12 +8697,42 @@ static int arm_raises_nomethod_for(const char *text, const char *name) {
 /* The builtin default's re-entered emission of call id with its receiver
    bound to _t<tv> (emit_poly_builtin_default_at): the arm's text into nb,
    what it hoists into *arm_pre. 0 when the probe declined. */
+static int poly_default_obj_spreads(Compiler *c, int id, const char *name);
+/* The index of call id's last splat argument, or -1 */
+static int poly_last_splat(const NodeTable *nt, int argc, const int *argv) {
+  int last = -1;
+  for (int a = 0; a < argc; a++)
+    if (nt_kind(nt, argv[a]) == NK_SplatNode) last = a;
+  return last;
+}
 static int bi_default_probe(Compiler *c, int id, int recv, const char *name, int argc, const int *argv,
                             const int *atmp, const TyKind *atmp_ty, TyKind ret, TyKind bt, int slot_o,
                             int nil_fwd, int tv, Buf *nb, char **arm_pre, int *box_o) {
   const NodeTable *nt = c->nt;
   int slot = view_bind(recv, "_t%d", tv);
+  /* a splat into Object's own method (poly_default_obj_spreads) spreads the
+     list the dispatch already flattened into its temp, a boxed Array: its
+     operand is not read a second time */
+  int sviews[POLY_OBJ_SPREAD_MAX], nsv = 0;
+  int obj_spread = poly_default_obj_spreads(c, id, name);
+  int last_splat = obj_spread ? poly_last_splat(nt, argc, argv) : -1;
   for (int a = 0; a < argc; a++) {
+    if (nt_kind(nt, argv[a]) == NK_SplatNode && obj_spread && nsv < POLY_OBJ_SPREAD_MAX) {
+      int ex = nt_ref(nt, argv[a], "expression");
+      if (ex >= 0) {
+        view_bind(ex, "_t%d", atmp[a]);
+        sviews[nsv++] = view_push(c, ex, TY_POLY_ARRAY);
+      }
+      continue;
+    }
+    /* an argument ahead of such a splat is the value the dispatch read
+       before the splat's operand ran, held in its temp: a splat operand
+       that writes what the argument reads (`w(@x, *side)`) does not
+       change it (poly_default_arg_held) */
+    if (a < last_splat && nt_kind(nt, argv[a]) != NK_KeywordHashNode) {
+      bind_poly_arg_temp(c, argv[a], atmp_ty[a], atmp[a]);
+      continue;
+    }
     /* (a held handle is the argument's value, which a writer arm takes:
        ran_first_handle) */
     if (argc == 1 && call_is_setter_assign(nt, id) && atmp_ty[a] == TY_STRBUF &&
@@ -8747,8 +8777,20 @@ static int bi_default_probe(Compiler *c, int id, int recv, const char *name, int
   *box_o = pr.box_o;
   view_pop(c, vw);
   view_pop(c, va);
+  while (nsv > 0) view_pop(c, sviews[--nsv]);
   view_unbind(slot);
   return ok;
+}
+/* Does the re-entered emission of call id land on a method the program
+   adds to Object itself, of a name no builtin has? That method's binder
+   spreads a splat operand as the ordinary call does, so the default arm
+   of a boxed receiver spreads it again. */
+static int poly_default_obj_spreads(Compiler *c, int id, const char *name) {
+  int oc = comp_core_class(c, CORE_OBJECT);
+  MethodLookup ml = { .def_class = -1 };
+  int omi = oc >= 0 ? call_target(c, id, oc, name, 0, &ml) : -1;
+  return omi >= 0 && ml.def_class == oc && !builtin_object_method_known(name) &&
+         !builtin_instance_name_known(name);
 }
 static int emit_poly_builtin_default_at(Compiler *c, int id, int recv, const char *name,
                                      int argc, const int *argv, const int *atmp,
@@ -8785,7 +8827,13 @@ static int emit_poly_builtin_default_at(Compiler *c, int id, int recv, const cha
      same value -- a constant, a local -- so one with a side effect still
      declines. Any other emitter takes a splat as one boxed argument
      (`pop(*a)` handed the whole PolyArray), and declines too. */
-  int splat_ok = poly_splat_keyed(name);
+  int obj_spread = poly_default_obj_spreads(c, id, name);
+  int ns_obj = 0;
+  if (obj_spread) {
+    for (int a = 0; a < argc; a++) ns_obj += nt_kind(nt, argv[a]) == NK_SplatNode;
+    if (ns_obj > POLY_OBJ_SPREAD_MAX) obj_spread = 0;
+  }
+  int splat_ok = poly_splat_keyed(name) || obj_spread;
   for (int a = 0; a < argc; a++) {
     int is_splat = nt_kind(nt, argv[a]) == NK_SplatNode;
     if (is_splat && !splat_ok) return 0;
@@ -8806,6 +8854,16 @@ static int emit_poly_builtin_default_at(Compiler *c, int id, int recv, const cha
     int rereads = is_splat || (splat_ok && is_line_read(name) && nt_kind(nt, argv[a]) == NK_KeywordHashNode);
     /* (one held boxed for its nil alone is read as its oint:
        bind_poly_arg_temp) */
+    /* (a splat into Object's own method reads the list its temp holds:
+       bi_default_probe; another argument with a side effect beside it
+       would be read again, and declines) */
+    if (is_splat && obj_spread) continue;
+    if (obj_spread && ns_obj > 0 && subtree_has_side_effect(c, argv[a])) return 0;
+    /* (one ahead of the last splat is read from its temp, bi_default_probe:
+       a temp of another type than the argument is no value it can read) */
+    if (obj_spread && a < poly_last_splat(nt, argc, argv) && nt_kind(nt, argv[a]) != NK_KeywordHashNode &&
+        repr_of(c, argv[a]).as_ty != atmp_ty[a] && !poly_arg_held_oint(c, argv[a], atmp_ty[a]))
+      return 0;
     if (subtree_has_side_effect(c, argv[a]) &&
         (rereads || (repr_of(c, argv[a]).as_ty != atmp_ty[a] && !held_h &&
                      !poly_arg_held_oint(c, argv[a], atmp_ty[a]))))

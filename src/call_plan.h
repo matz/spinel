@@ -672,6 +672,9 @@ const PolyPlan *cplan_poly_sub(Compiler *c, int id);
    NilClass answers, and for the other values nothing or Object's public
    method: dispatched boxed (PB_SUBDISPATCH) */
 int cplan_nil_scalar_reach(Compiler *c, int id);
+/* the most splats the boxed default arm spreads into Object's method */
+#define POLY_OBJ_SPREAD_MAX 8
+int cplan_nil_scalar_form_ok(Compiler *c, int id, const char *name);
 /* How a receiverless call id in a builtin class's reopening hands its
    block to mi, the reopening's own method it reaches (emit_reopen_own_call):
    ROB_NONE, it has none; ROB_PASS, as mi's `&blk` argument, as the

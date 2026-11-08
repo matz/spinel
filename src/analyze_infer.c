@@ -8182,7 +8182,13 @@ static int infer_block_kernel_call(Compiler *c, int id, const NodeTable *nt, con
    universal rules, which type a `?` name as a bool. */
 static int infer_nil_scalar_call(Compiler *c, int id, const NodeTable *nt, const char *name,
                                  int recv, TyKind rt, TyKind *out) {
-  if (recv < 0 || nt_ref(nt, id, "block") >= 0) return 0;
+  if (recv < 0 || !cplan_nil_scalar_form_ok(c, id, name)) return 0;
+  /* (a block into Object's method of the name that yields keeps the old
+     path, as cplan_nil_scalar_reach) */
+  if (nt_ref(nt, id, "block") >= 0) {
+    int om = an_reopen_method(c, CORE_OBJECT, name);
+    if (om >= 0 && c->scopes[om].yields) return 0;
+  }
   if (an_reopen_method(c, CORE_NILCLASS, name) < 0 ||
       comp_method_vis_declared(c, comp_core_class(c, CORE_NILCLASS), name, NULL) != SP_VIS_PUBLIC) return 0;
   /* beside a public method the program adds to Object, an Integer or a

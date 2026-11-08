@@ -26,12 +26,6 @@ COPT += -DSP_PORTABLE
 endif
 # Machine-local overrides (gitignored config.mk is a common dev pattern).
 -include config.mk
-# One representation of String: every String slot holds the handle
-# (docs/internals/string-one-repr-design.md), so the runtime and the native
-# objects of the packages are compiled with -DSP_ONE_STRING, as the generated
-# C defines it. `override` keeps it under a command-line COPT.
-override COPT += -DSP_ONE_STRING
-
 # Shared toolchain configuration (CC wrapping, CFLAGS, stamps, …).
 include common.mk
 
@@ -1738,7 +1732,7 @@ ext-cruby-test: $(SPINEL) $(SP_RT_LIB)
 	  --ext-entry ExtKernel.triple,ExtKernel.shout,ExtKernel.total,ExtKernel.pair_sum,ExtKernel.must_pos,ExtKernel.pause_total \
 	  -o "$$tmp/extk.c" >/dev/null 2>&1 || { echo "ext-cruby-test: FAIL (emission)"; ok=0; }; \
 	if [ $$ok -eq 1 ]; then \
-	  if $(CC) $$SOFLAGS -fPIC -O1 -w $(filter -DSP_ONE_STRING,$(COPT)) -I"$$RH" -I"$$RA" -Ilib -Ilib/regexp -Ilib/regexp/shim -I"$$tmp" \
+	  if $(CC) $$SOFLAGS -fPIC -O1 -w -I"$$RH" -I"$$RA" -Ilib -Ilib/regexp -Ilib/regexp/shim -I"$$tmp" \
 	       "$$tmp/extk_ext.c" "$$tmp/extk.c" $$(ls lib/*.c lib/regexp/*.c | sed 's/^/ /') \
 	       $(LDFLAGS) -lm -o "$$tmp/extk.$$DLEXT" 2>"$$tmp/cc.err"; then \
 	    ( cd "$$tmp" && cp $(CURDIR)/test/ext/driver.rb . && ruby driver.rb > out 2>&1 ); rc=$$?; \
@@ -5256,7 +5250,7 @@ alloc-report-test: $(SPINEL) $(SP_RT_LIB)
 	grep -q '^960$$' "$$tmp/sa.out" || { echo "alloc-report-test: FAIL (straight_append wrong length)"; ok=0; }; \
 	awk '/^# bytes .*String /{n=$$NF} END{ if (n == "" || n+0 > 5000) exit 1 }' "$$tmp/sa.folded" || { echo "alloc-report-test: FAIL (straight-line appends allocate a multiple of the result: quadratic is back)"; grep String "$$tmp/sa.folded"; ok=0; }; \
 	grep -q '^alloc;(unattributed) ' "$$tmp/s.folded" && { echo "alloc-report-test: FAIL (the stats table saturated on a normal run)"; ok=0; }; \
-	$(CC) $(CFLAGS) $(filter -DSP_ONE_STRING,$(COPT)) -DSP_ALLOC_STATS=2 -Ilib -c lib/sp_alloc.c -o "$$tmp/sm.o" 2>/dev/null || { echo "alloc-report-test: FAIL (compile small-table sp_alloc)"; exit 1; }; \
+	$(CC) $(CFLAGS) -DSP_ALLOC_STATS=2 -Ilib -c lib/sp_alloc.c -o "$$tmp/sm.o" 2>/dev/null || { echo "alloc-report-test: FAIL (compile small-table sp_alloc)"; exit 1; }; \
 	cp $(SP_RT_LIB) "$$tmp/sm.a" && ar d "$$tmp/sm.a" sp_alloc.o 2>/dev/null && ar r "$$tmp/sm.a" "$$tmp/sm.o" 2>/dev/null; \
 	$(SPINEL) test/alloc-report/sites.rb -c --no-line-map -o "$$tmp/sm.c" >/dev/null 2>&1; \
 	$(CC) $(CFLAGS) -Ilib "$$tmp/sm.c" "$$tmp/sm.a" $(LDFLAGS) -lm $(GC_FLAGS) -o "$$tmp/sm" 2>/dev/null || { echo "alloc-report-test: FAIL (link small-table binary)"; exit 1; }; \

@@ -5280,8 +5280,7 @@ static void cf_dump_facts(Compiler *c) {
       for (int e = singleton_visible_ci(c, k); e >= 0 && d < 16; e = c->classes[e].enclosing_class) chain[d++] = e;
       for (int q = d - 1; q >= 0; q--) {
         const char *seg = c->classes[chain[q]].name ? c->classes[chain[q]].name : "?";
-        const char *t = q < d - 1 ? strstr(seg, "__") : NULL;
-        while (t) { seg = t + 2; t = strstr(seg, "__"); }
+        if (q < d - 1 && c->classes[chain[q]].name) seg = comp_class_ruby_leaf(c, chain[q]);
         size_t l = strlen(cn);
         snprintf(cn + l, sizeof cn - l, "%s%s", q < d - 1 ? "::" : "", seg);
       }

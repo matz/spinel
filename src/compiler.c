@@ -789,6 +789,34 @@ int comp_const_tail_cands(Compiler *c, const char *nm, int **out) {
   }
   return n;
 }
+/* Class k's Ruby leaf name, for a name it prints: the leaf its header or
+   constant write spells (`class Foo__Bar` inside `module M` is Foo__Bar,
+   not Bar), when its key ends in that leaf; else the last part of its key
+   ("M" for A__M). A top-level class's name is its leaf. */
+const char *comp_class_ruby_leaf(const Compiler *c, int k) {
+  const char *nm = c->classes[k].name;
+  if (!nm || c->classes[k].enclosing_class < 0) return nm;
+  const NodeTable *nt = c->nt;
+  int dn = c->classes[k].def_node;
+  int nn = -1;   /* the node that carries the name */
+  if (dn >= 0 && (nt_kind(nt, dn) == NK_ClassNode || nt_kind(nt, dn) == NK_ModuleNode)) {
+    int cp = nt_ref(nt, dn, "constant_path");
+    if (cp >= 0 && (nt_kind(nt, cp) == NK_ConstantReadNode || nt_kind(nt, cp) == NK_ConstantPathNode)) nn = cp;
+  } else if (dn >= 0 && nt_kind(nt, dn) == NK_ConstantWriteNode) nn = dn;
+  /* (a name qualify_colliding_classes rewrote keeps its Ruby path in
+     qc_ruby_name: the leaf is its last segment) */
+  const char *src = nn >= 0 ? nt_str(nt, nn, "qc_ruby_name") : NULL;
+  if (src) { const char *q = src; while ((q = strstr(q, "::")) != NULL) src = q += 2; }
+  else if (nn >= 0) src = nt_str(nt, nn, "name");
+  if (src && strstr(src, "__")) {
+    size_t l = strlen(nm), sl = strlen(src);
+    if (l == sl && sp_streq(nm, src)) return nm;
+    if (l > sl + 1 && sp_streq(nm + l - sl, src) && strncmp(nm + l - sl - 2, "__", 2) == 0) return nm + l - sl;
+  }
+  const char *leaf = nm;
+  for (const char *q = leaf; (q = strstr(q, "__")) != NULL; q += 2) leaf = q + 2;
+  return leaf;
+}
 /* Class k's leaf name, the last part of its key ("M" for A__M) */
 static const char *class_key_leaf(const Compiler *c, int k) {
   const char *leaf = c->classes[k].name;

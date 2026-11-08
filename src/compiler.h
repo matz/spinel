@@ -2157,6 +2157,7 @@ int comp_gvar_is_interp_flag(const char *name);
 LocalVar *comp_const(Compiler *c, const char *name);
 int comp_const_tail_cands(Compiler *c, const char *nm, int **out);
 int comp_class_owned_const(Compiler *c, int k, const char *nm, const int *cands, int ncands);
+const char *comp_class_ruby_leaf(const Compiler *c, int k);
 /* a class's enclosing class changed: the class path table is old */
 void comp_class_path_moved(void);
 int comp_const_write_valued(const Compiler *c, const LocalVar *cv);

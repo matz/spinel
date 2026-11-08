@@ -3482,8 +3482,7 @@ static int class_leaf_count(Compiler *c, const char *nm, int *nested) {
     const ClassInfo *ci = &c->classes[k];
     const char *leaf = ci->name, *rn = ci->ruby_name_cache, *l = rn ? strrchr(rn, ':') : NULL;
     if (l) leaf = l + 1;
-    else if (ci->enclosing_class >= 0 && leaf)
-      for (const char *p = leaf; (p = strstr(p, "__")) != NULL; p += 2) leaf = p + 2;
+    else leaf = comp_class_ruby_leaf(c, k);
     if (!leaf || !sp_streq(leaf, nm)) continue;
     n++;
     if (l || ci->enclosing_class >= 0) *nested = 1;
@@ -3597,9 +3596,8 @@ static int dyn_holder_parent(Compiler *c, int k) {
 static int dyn_holder_named(Compiler *c, const char *nm) {
   int found = -1;
   for (int q = 0; q < c->nclasses; q++) {
-    const char *leaf = c->classes[q].name;
+    const char *leaf = comp_class_ruby_leaf(c, q);
     if (!leaf) continue;
-    if (c->classes[q].enclosing_class >= 0) for (const char *p = leaf; (p = strstr(p, "__")) != NULL; p += 2) leaf = p + 2;
     if (!sp_streq(leaf, nm)) continue;
     if (found >= 0) return -1;
     found = q;
@@ -3696,8 +3694,7 @@ static void desugar_dyn_parent_class_leaf(Compiler *c) {
         const ClassInfo *ci = &c->classes[k];
         const char *leaf = ci->name, *rn = ci->ruby_name_cache, *l = rn ? strrchr(rn, ':') : NULL;
         if (l) leaf = l + 1;
-        else if (ci->enclosing_class >= 0 && leaf)
-          for (const char *p = leaf; (p = strstr(p, "__")) != NULL; p += 2) leaf = p + 2;
+        else leaf = comp_class_ruby_leaf(c, k);
         if (!leaf || !sp_streq(leaf, nm)) continue;
         nst = l || ci->enclosing_class >= 0;
         if ((pass == 0) != nst) continue;
@@ -3714,11 +3711,12 @@ static void desugar_dyn_parent_class_leaf(Compiler *c) {
         /* the holder's leaves, outermost last (its own name and those of
            the classes it is written in, as class_ruby_name would give them,
            which this early pass must not ask) */
-        const char *lv[16]; int nl = 0, deep = 0;
+        const char *lv[16], *rv[16]; int nl = 0, deep = 0;
         for (int e = k; e >= 0 && e < c->nclasses; e = c->classes[e].enclosing_class) {
           const char *leaf = c->classes[e].name;
           if (!leaf || nl == 16) { deep = 1; break; }
           if (c->classes[e].enclosing_class >= 0) for (const char *q = leaf; (q = strstr(q, "__")) != NULL; q += 2) leaf = q + 2;
+          rv[nl] = comp_class_ruby_leaf(c, e);   /* (the name a NameError prints: `Q__R`, not `R`) */
           lv[nl++] = leaf;
         }
         if (deep || nl == 0) continue;
@@ -3727,7 +3725,7 @@ static void desugar_dyn_parent_class_leaf(Compiler *c) {
         char key[600] = "", hn[600] = "";
         for (int i = nl - 1; i >= 0; i--) {
           size_t l = strlen(key); snprintf(key + l, sizeof key - l, "%s__", lv[i]);
-          l = strlen(hn); snprintf(hn + l, sizeof hn - l, "%s%s", lv[i], i ? "::" : "");
+          l = strlen(hn); snprintf(hn + l, sizeof hn - l, "%s%s", rv[i], i ? "::" : "");
         }
         { size_t l = strlen(key); snprintf(key + l, sizeof key - l, "%s", nm); }
         if (!comp_const(c, key)) continue;

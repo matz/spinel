@@ -18389,12 +18389,13 @@ int desugar_builtin_scalar_defs(Compiler *c) {
       int closed = bi_def_visibility(nt, def) != BVIS_PUBLIC;
       int pn0 = nt_ref(nt, def, "parameters");
       int shape_ok = 1;
-      if (pn0 >= 0 && nt_ref(nt, pn0, "keyword_rest") >= 0)
-        shape_ok = 0;
-      if (shape_ok && pn0 >= 0) { int psn = 0; nt_arr(nt, pn0, "posts", &psn); if (psn > 0) shape_ok = 0; }
-      if (shape_ok && pn0 >= 0) { int kwn = 0; nt_arr(nt, pn0, "keywords", &kwn); if (kwn > 0) shape_ok = 0; }
+      /* keywords and a **rest clone too: a call with a block
+         (`3.times { }`) that the generic does not take stays on the
+         builtin iteration, which ignores the reopen and types the call
+         as the reopen's answer */
+      if (pn0 >= 0) { int psn = 0; nt_arr(nt, pn0, "posts", &psn); if (psn > 0) shape_ok = 0; }
       if (!shape_ok) {
-        /* A reopen this registration cannot clone (keyword or post-splat
+        /* A reopen this registration cannot clone (post-splat
            parameters) still REPLACES the name for the program.
            Skipping it silently was only safe while the name was the
            program's alone; when it is also one a builtins/ file defines,
@@ -18624,6 +18625,36 @@ static int bx_kernel_name_own(Compiler *c, const char *nm) {
   return 0;
 }
 
+/* Does the keyword hash kwh (-1 for none) of a call fit the keywords of
+   parameters pn: every required keyword given by a literal key, and no
+   literal key the parameters lack unless they take a **rest? A `**h` in
+   the call is not read: it does not fit. */
+static int bx_call_keywords_fit(const NodeTable *nt, int pn, int kwh) {
+  int kn = 0; const int *kv = nt_arr(nt, pn, "keywords", &kn);
+  int krest = nt_ref(nt, pn, "keyword_rest") >= 0;
+  int en = 0; const int *ev = kwh >= 0 ? nt_arr(nt, kwh, "elements", &en) : NULL;
+  for (int e = 0; e < en; e++) {
+    if (nt_kind(nt, ev[e]) != NK_AssocNode) return 0;
+    int key = nt_ref(nt, ev[e], "key");
+    const char *ks = key >= 0 && nt_kind(nt, key) == NK_SymbolNode ? nt_str(nt, key, "value") : NULL;
+    if (!ks) return 0;
+    int known = 0;
+    for (int k = 0; k < kn && !known; k++) known = nt_str(nt, kv[k], "name") && sp_streq(nt_str(nt, kv[k], "name"), ks);
+    if (!known && !krest) return 0;
+  }
+  for (int k = 0; k < kn; k++) {
+    if (nt_kind(nt, kv[k]) != NK_RequiredKeywordParameterNode) continue;
+    const char *kn_ = nt_str(nt, kv[k], "name");
+    int given = 0;
+    for (int e = 0; e < en && !given; e++) {
+      int key = nt_ref(nt, ev[e], "key");
+      given = kn_ && sp_streq(nt_str(nt, key, "value"), kn_);
+    }
+    if (!given) return 0;
+  }
+  return 1;
+}
+
 /* Does the copy read its receiver only as `__self`? An instance variable
    in it is one slot for every receiver, where CRuby keeps one per String,
    and a call left with no receiver (bi_keeps_receiverless) goes to main,
@@ -18842,7 +18873,14 @@ int desugar_builtin_scalar_calls(Compiler *c) {
       /* a `*arr` argument left after expand_static_splat_args can
          stand for any count of arguments */
       int csplat = av && nt_argv_has_splat(nt, av, an);
-      if ((!csplat && an + 1 < crn) || (!crest && an + 1 > crn + con)) continue; }
+      /* keywords the copy takes are no positional argument */
+      int ckn = 0; if (cpn >= 0) nt_arr(nt, cpn, "keywords", &ckn);
+      int pos = an;
+      if ((ckn > 0 || (cpn >= 0 && nt_ref(nt, cpn, "keyword_rest") >= 0)) && av && nt_argv_kwh(nt, av, an) >= 0) pos--;
+      if ((!csplat && pos + 1 < crn) || (!crest && pos + 1 > crn + con)) continue;
+      /* ...and a call that may miss a required keyword or pass an unknown
+         one keeps the ordinary path, which raises CRuby's ArgumentError */
+      if (ckn > 0 && !bx_call_keywords_fit(nt, cpn, av ? nt_argv_kwh(nt, av, an) : -1)) continue; }
     int encl = c->nscope[id];
     int base = nt->count;
     int *na = (int *)malloc(sizeof(int) * (size_t)(an + 1));

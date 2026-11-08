@@ -2263,11 +2263,11 @@ int const_seen_by_class(Compiler *c, int k, const char *cgn) {
 }
 /* The constant `m::NM` reads when m holds class or module K at run time,
    as an index into c->consts, or -1 when CRuby raises NameError. CRuby
-   looks in K's own constants first, then in the modules K prepends, then
-   in those it includes (the last one first, each with the modules it
-   includes itself), then in K's superclass, whose prepended modules come
-   ahead of its own constants. A module a superclass already has is not
-   included again. The walk stops at Object: a top-level constant is not
+   looks in K's own constants first, then along K's ancestors in their
+   order (cpv_order): the modules K prepends, those it includes, then its
+   superclass's prepends, the superclass's own constants, and so on. A
+   module's own constants come after the modules it prepends. The walk
+   stops at Object: a top-level constant is not
    found through another class or module (Object itself reads it:
    const_value_path_top). */
 static int cpv_own(Compiler *c, int k, const char *nm, const int *cands, int ncands) {
@@ -2277,45 +2277,93 @@ static int cpv_own(Compiler *c, int k, const char *nm, const int *cands, int nca
   LocalVar *lv = key ? comp_const(c, key) : NULL;
   return lv ? (int)(lv - c->consts) : -1;
 }
-/* Does class or module k, or a class above it, include or prepend module
-   m (also through another module)? */
-static int cpv_has_mod(Compiler *c, int k, int m, int depth) {
-  if (depth > 16) return 0;
-  for (int n = 0; k >= 0 && k < c->nclasses && n < 64; k = c->classes[k].parent, n++) {
-    const ClassInfo *ci = &c->classes[k];
-    for (int i = 0; i < ci->nincluded_mods; i++)
-      if (ci->included_mods[i] == m || (ci->included_mods[i] != k && cpv_has_mod(c, ci->included_mods[i], m, depth + 1))) return 1;
-    for (int i = 0; i < ci->nprepended_mods; i++)
-      if (ci->prepended_mods[i] == m || (ci->prepended_mods[i] != k && cpv_has_mod(c, ci->prepended_mods[i], m, depth + 1))) return 1;
+/* The lookup order CRuby builds for class or module k, as class-table
+   entries in `out` (Object and the classes above it left out). The walk
+   follows each include and prepend in the order the class declares them:
+   - `include M` puts M and the modules in M's own order right after the
+     class. A module that is already anywhere in the class's order is not
+     put in again. When it sits after the insertion point and before the
+     superclass, the next module goes in after it.
+   - `prepend M` puts them ahead of the class's own constants. A module
+     that the class already prepends is not put in again. A module only
+     the superclass or an include has is put in again.
+   The prepends of a class are taken before its includes. A class has two
+   entries, as in CRuby: its head (CPV_HEAD, which a superclass's
+   prepends come after) and its own constants (CPV_OWN). Answers the
+   length, or -1 when the order does not fit in `cap` entries. */
+enum { CPV_MOD, CPV_HEAD, CPV_OWN };
+typedef struct { int m; char kind; } CpvEnt;
+/* Put the modules of `seq` in `L` (length *n), after the entry at `at`.
+   `own` is the index of the class's CPV_OWN entry, and its head is at 0.
+   Prepend mode (pre) looks only at the entries between the two for a
+   module it already has. Answers the new index of the CPV_OWN entry. */
+static int cpv_insert(CpvEnt *L, int *n, int cap, int own, int at, const CpvEnt *seq, int nseq, int pre) {
+  for (int s = 0; s < nseq; s++) {
+    int m = seq[s].m, found = -1, c_seen = 0, super_seen = 0;
+    for (int p = 1; p < (pre ? own : *n); p++) {
+      if (p == at) c_seen = 1;
+      if (L[p].kind == CPV_MOD && L[p].m == m) { found = p; break; }
+      if (L[p].kind == CPV_HEAD) super_seen = 1;
+    }
+    if (pre && at == 0) c_seen = 1;
+    if (found >= 0) { if (!super_seen && c_seen) at = found; continue; }
+    if (*n >= cap) return -1;
+    int pos = at + 1;
+    memmove(&L[pos + 1], &L[pos], (size_t)(*n - pos) * sizeof *L);
+    L[pos].m = m; L[pos].kind = CPV_MOD;
+    (*n)++;
+    if (pos <= own) own++;
+    at = pos;
   }
-  return 0;
+  return own;
 }
-/* (above: the superclass of the class the walk is in; a module it reaches
-   through an include is skipped when a class there already has it) */
-static int cpv_walk(Compiler *c, int k, const char *nm, const int *cands, int ncands, int depth, int above, int cls) {
-  if (depth > 16) return -1;
+/* (depth: the modules nested in modules; steps: the superclasses) */
+static int cpv_order(Compiler *c, int k, CpvEnt *out, int cap, int depth, int steps) {
+  if (depth > 16 || steps > 64 || k < 0 || k >= c->nclasses || cap < 2) return -1;
   int obj = comp_core_class(c, CORE_OBJECT), bo = comp_core_class(c, CORE_BASIC_OBJECT);
-  for (int n = 0; k >= 0 && k < c->nclasses && n < 64; k = c->classes[k].parent, n++) {
-    if (k == obj || k == bo) break;
-    const ClassInfo *ci = &c->classes[k];
-    int ab = depth == 0 ? ci->parent : above;
-    int own = n == 0 && depth == 0 ? (cls ? class_nested_leaf(c, k, nm) : cpv_own(c, k, nm, cands, ncands)) : -1;
-    if (own >= 0) return own;
-    for (int i = ci->nprepended_mods - 1; i >= 0; i--) {
-      int m = ci->prepended_mods[i];
-      if (m == k) continue;
-      int r = cpv_walk(c, m, nm, cands, ncands, depth + 1, ab, cls);
-      if (r >= 0) return r;
-    }
-    if (!(n == 0 && depth == 0) && (own = cls ? class_nested_leaf(c, k, nm) : cpv_own(c, k, nm, cands, ncands)) >= 0) return own;
-    for (int i = ci->nincluded_mods - 1; i >= 0; i--) {
-      int m = ci->included_mods[i];
-      if (m == k || cpv_has_mod(c, ab, m, 0)) continue;
-      int r = cpv_walk(c, m, nm, cands, ncands, depth + 1, ab, cls);
-      if (r >= 0) return r;
+  if (k == obj || k == bo) return 0;
+  const ClassInfo *ci = &c->classes[k];
+  int is_class = !comp_class_is_module(c, ci);
+  int n = 0, own = 1;
+  out[n].m = k; out[n].kind = CPV_HEAD; n++;
+  out[n].m = k; out[n].kind = CPV_OWN; n++;
+  if (is_class && ci->parent >= 0) {
+    int pn = cpv_order(c, ci->parent, out + n, cap - n, depth, steps + 1);
+    if (pn < 0) return -1;
+    n += pn;
+  }
+  CpvEnt *seq = malloc(sizeof *seq * (size_t)cap);
+  if (!seq) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  for (int pass = 0; pass < 2 && own >= 0; pass++) {
+    int nm = pass == 0 ? ci->nprepended_mods : ci->nincluded_mods;
+    const int *mods = pass == 0 ? ci->prepended_mods : ci->included_mods;
+    for (int i = 0; i < nm && own >= 0; i++) {
+      if (mods[i] == k) continue;
+      int ns = cpv_order(c, mods[i], seq, cap, depth + 1, 0), nj = 0;
+      if (ns < 0) { own = -1; break; }
+      /* (a module's order as an include or a prepend reads it: its
+         prepends, the module, its includes) */
+      for (int j = 0; j < ns; j++)
+        if (seq[j].kind != CPV_HEAD) seq[nj].m = seq[j].m, seq[nj++].kind = CPV_MOD;
+      own = cpv_insert(out, &n, cap, own, pass == 0 ? 0 : own, seq, nj, pass == 0);
     }
   }
-  return -1;
+  free(seq);
+  return own < 0 ? -1 : n;
+}
+static int cpv_walk(Compiler *c, int k, const char *nm, const int *cands, int ncands, int cls) {
+  int own = cls ? class_nested_leaf(c, k, nm) : cpv_own(c, k, nm, cands, ncands);
+  if (own >= 0) return own;
+  enum { CAP = 1024 };
+  CpvEnt *L = malloc(sizeof *L * CAP);
+  if (!L) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  int n = cpv_order(c, k, L, CAP, 0, 0), r = -1;
+  for (int i = 0; i < n && r < 0; i++) {
+    if (L[i].kind == CPV_HEAD || L[i].m == k) continue;
+    r = cls ? class_nested_leaf(c, L[i].m, nm) : cpv_own(c, L[i].m, nm, cands, ncands);
+  }
+  free(L);
+  return r;
 }
 /* Is NM written through a value somewhere (`m::NM = v`, `m::NM ||= v`,
    `m.const_set(:NM, v)` with m not a constant)? Which class then holds NM
@@ -2375,13 +2423,13 @@ int const_written_through_value(Compiler *c, const char *nm) {
 }
 int const_path_value_const(Compiler *c, int k, const char *nm, const int *cands, int ncands) {
   if (k < 0 || k >= c->nclasses || !nm) return -1;
-  return cpv_walk(c, k, nm, cands, ncands, 0, -1, 0);
+  return cpv_walk(c, k, nm, cands, ncands, 0);
 }
 /* The class or module `m::NM` names when m holds K: one nested under NM in
    K's chain, walked as const_path_value_const walks it (-1 for none) */
 int const_path_value_class(Compiler *c, int k, const char *nm) {
   if (k < 0 || k >= c->nclasses || !nm) return -1;
-  return cpv_walk(c, k, nm, NULL, 0, 0, -1, 1);
+  return cpv_walk(c, k, nm, NULL, 0, 1);
 }
 /* The top-level constant NM that `Object::NM` reads through a value, or
    NULL (none, or a well-known one the compiler reads by itself). The tree

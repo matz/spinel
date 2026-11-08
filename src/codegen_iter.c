@@ -7067,8 +7067,17 @@ static int iter_enum_poly_walk_arms(Compiler *c, int id, Buf *b, int indent, con
       ts = emit_shadow_save(c, outer, p0, b, indent);
     }
     if (rev) { emit_indent(b, indent); buf_printf(b, "sp_int _t%d = sp_%sArray_length(%s);\n", tn, k, rb.p); }
+    /* an Integer or Float array the loop's region caches (hc_iter_begin)
+       is walked through that header, as a while loop's reads are: its
+       length and its elements below the nil-free length, the rest by the
+       accessor as before */
+    char hd[48] = "", hl[48], hw[48], hr[48];
+    if (!rev && (rt == TY_INT_ARRAY || rt == TY_FLOAT_ARRAY) &&
+        hc_array(c, recv, rt == TY_FLOAT_ARRAY, hd, hl, hw, sizeof hd))
+      hc_read_len(hd, hr, sizeof hr);
     emit_indent(b, indent);
     if (rev) buf_printf(b, "for (sp_int _t%d = _t%d - 1; _t%d >= 0; _t%d--) {\n", t, tn, t, t);
+    else if (hd[0]) buf_printf(b, "for (sp_int _t%d = 0; _t%d < %s; _t%d++) {\n", t, t, hl, t);
     else {
       buf_printf(b, "for (sp_int _t%d = 0; _t%d < sp_%sArray_length(", t, t, k);
       buf_puts(b, rb.p); buf_printf(b, "); _t%d++) {\n", t);
@@ -7159,6 +7168,9 @@ static int iter_enum_poly_walk_arms(Compiler *c, int id, Buf *b, int indent, con
           buf_printf(b, "lv_%s = SP_STR_TO(lv_%s, sp_StrArray_get(", p0, p0);
           buf_puts(b, rb.p); buf_printf(b, ", _t%d));\n", t);
         }
+        else if (hd[0] && !o0)
+          buf_printf(b, "lv_%s = SP_LIKELY((unsigned long long)_t%d < (unsigned long long)%s) ? %s[_t%d] : sp_%sArray_get(%s, _t%d);\n",
+                     p0, t, hr, hd, t, k, rb.p, t);
         else {
         buf_printf(b, "lv_%s = sp_%sArray_%s(", p0, k, o0 ? "oget" : "get");
         buf_puts(b, rb.p); buf_printf(b, ", _t%d);\n", t);

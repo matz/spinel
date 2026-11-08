@@ -12036,7 +12036,8 @@ enum { HC_INT, HC_FLOAT, HC_STR, HC_IOB };
 typedef struct { char *recv; int kind; int nf; Buf guard; } HcEntry;   /* nf: hc_array_nilfree asked;
                                                        guard: Float locals whose nil zeroes _hcn */
 typedef struct { int id; int n; HcEntry e[16]; NameSet wl, wi; char mark[32];
-                 const char *bi, *ba; } HcRegion;  /* bi/ba: see hc_bounded_index */
+                 const char *bi, *ba; int inl; } HcRegion;  /* bi/ba: see hc_bounded_index;
+                                                   inl: see hc_close */
 static HcRegion *g_hc = NULL;
 static void hc_region_free(HcRegion *r) {
   for (int i = 0; i < r->n; i++) { free(r->e[i].recv); free(r->e[i].guard.p); }
@@ -12357,7 +12358,10 @@ static int hc_call_ok(Compiler *c, int id, int stmt) {
 static int hc_node_ok(Compiler *c, int id, int stmt, HcRegion *r);
 /* An Integer block loop the header cache covers as it does a while:
    `n.times { }`, `a.upto(b) { }` / downto, `n.step(...) { }`, an Integer
-   Range's `each { }` -- each a plain C `for` around the block's body */
+   Range's `each { }` -- each a plain C `for` around the block's body --
+   an Integer or Float Array's `each { }`, which walks its own receiver
+   through the cache too (emit_iteration_stmt_body), and an Array's
+   `each_index { }` (emit_typed_array_call) */
 static int hc_block_loop(Compiler *c, int id) {
   const NodeTable *nt = c->nt;
   if (id < 0 || nt_kind(nt, id) != NK_CallNode) return 0;
@@ -12367,6 +12371,8 @@ static int hc_block_loop(Compiler *c, int id) {
   TyKind rt = comp_ntype(c, recv);
   if (rt == TY_INT && (sp_streq(nm, "times") || sp_streq(nm, "upto") || sp_streq(nm, "downto") || sp_streq(nm, "step")))
     return 1;
+  if ((rt == TY_INT_ARRAY || rt == TY_FLOAT_ARRAY) && sp_streq(nm, "each")) return 1;
+  if (ty_is_array(rt) && sp_streq(nm, "each_index")) return 1;
   return rt == TY_RANGE && sp_streq(nm, "each");
 }
 /* ...and can its region keep the headers: the receiver and arguments as
@@ -12401,9 +12407,36 @@ static int hc_node_ok(Compiler *c, int id, int stmt, HcRegion *r) {
       return 1;
     case NK_StatementsNode: kids_stmt = 1; break;
     case NK_ParenthesesNode: kids_stmt = stmt; break;
+    case NK_YieldNode: {
+      /* a yield a splice expands into its caller's literal block
+         (g_block_id: `a.each_with_index { }` is enumerable.rb's loop over
+         `each` with the block's body where it yields): that body runs in
+         the loop and must qualify too, its parameters being locals the loop
+         writes; where the yield's value is used (`if yield(x)`, count's and
+         select's), the body's last statement is that value. Not a yield
+         within that body, which is its own caller's */
+      static int in_yield = 0;
+      int blk = g_block_id;
+      if (in_yield || blk < 0 || nt_kind(nt, blk) != NK_BlockNode || block_param_is_multi(c, blk, 0))
+        return 0;
+      for (int k = 0; ; k++) {
+        const char *pn = block_param_name(c, blk, k);
+        if (!pn) break;
+        nameset_add(&r->wl, pn);
+      }
+      int bb = nt_ref(nt, blk, "body"), bn = 0;
+      const int *bs = bb >= 0 && nt_kind(nt, bb) == NK_StatementsNode ? nt_arr(nt, bb, "body", &bn) : NULL;
+      in_yield = 1;
+      int ok = 1;
+      if (bs) for (int j = 0; j < bn && ok; j++) ok = hc_node_ok(c, bs[j], stmt || j < bn - 1, r);
+      else ok = hc_node_ok(c, bb, stmt, r);
+      in_yield = 0;
+      if (!ok) return 0;
+      break;
+    }
     case NK_CallNode:
-      /* a nested Integer block loop runs inside this region, as a nested
-         while does */
+      /* a nested block loop (hc_block_loop) runs inside this region, as a
+         nested while does */
       if (stmt && hc_block_loop(c, id)) return hc_block_loop_ok(c, id, r);
       if (!hc_call_ok(c, id, stmt)) return 0;
       break;
@@ -12885,10 +12918,19 @@ int hc_index_in_range(Compiler *c, int recv, int idx) {
          nt_str(nt, idx, "name") && sp_streq(nt_str(nt, idx, "name"), g_hc->bi);
 }
 
+/* inl for a region opened here (hc_close) */
+static int hc_in_splice_or_expr(void) { return g_expr_depth > 0 || g_block_id >= 0; }
+
 /* The loop's text, with the declarations and the refresh ahead of it when
    anything was cached, and each slow path's mark turned into a refresh (or
-   dropped: a loop that cached nothing is emitted as it always was). */
+   dropped: a loop that cached nothing is emitted as it always was). The
+   refresh is _SP_HCR<id>(), defined around the loop. A region opened inside
+   an expression or in a spliced body (inl) may sit in a macro's argument
+   (`SP_STR_B(({ ... }))`, an Enumerable method of enumerable.rb
+   interpolated), where no directive is seen: its refresh is written out at
+   each place instead. */
 static void hc_close(HcRegion *r, const char *loop, Buf *b, int indent) {
+  Buf rd; memset(&rd, 0, sizeof rd);
   char call[32]; snprintf(call, sizeof call, ", _SP_HCR%d()", r->id);
   if (r->n > 0) {
     emit_indent(b, indent); buf_puts(b, "{\n");
@@ -12914,42 +12956,47 @@ static void hc_close(HcRegion *r, const char *loop, Buf *b, int indent) {
       if (r->e[i].nf) buf_printf(b, " sp_int _hcn%d_%d; sp_int _hcwn%d_%d;", r->id, i, r->id, i);
       buf_puts(b, "\n");
     }
-    buf_printf(b, "#define _SP_HCR%d() ({ ", r->id);
+    buf_puts(&rd, "({ ");
     for (int i = 0; i < r->n; i++) {
       const char *rv = r->e[i].recv;
       if (r->e[i].kind == HC_STR)
-        buf_printf(b, "{ const char *_s = %s; _hcd%d_%d = _s; _hcl%d_%d = _s ? (sp_int)sp_str_byte_len(_s) : 0; } ",
+        buf_printf(&rd, "{ const char *_s = %s; _hcd%d_%d = _s; _hcl%d_%d = _s ? (sp_int)sp_str_byte_len(_s) : 0; } ",
                    rv, r->id, i, r->id, i);
       else if (r->e[i].kind == HC_IOB)
-        buf_printf(b, "{ sp_IOBuffer *_b = %s; _hcd%d_%d = sp_iob_view(_b, &_hcl%d_%d); _hcw%d_%d = sp_iob_view_wlen(_b, _hcl%d_%d); } ",
+        buf_printf(&rd, "{ sp_IOBuffer *_b = %s; _hcd%d_%d = sp_iob_view(_b, &_hcl%d_%d); _hcw%d_%d = sp_iob_view_wlen(_b, _hcl%d_%d); } ",
                    rv, r->id, i, r->id, i, r->id, i, r->id, i);
       else {
-        buf_printf(b, "{ sp_%sArray *_a = %s; _hcd%d_%d = _a ? _a->data%s : NULL; _hcl%d_%d = _a ? _a->len : 0; _hcr%d_%d = _a ? SP_%s_NILFREE_LEN(_a) : 0; _hcw%d_%d = _a && !_a->frozen ? _hcr%d_%d : 0; ",
+        buf_printf(&rd, "{ sp_%sArray *_a = %s; _hcd%d_%d = _a ? _a->data%s : NULL; _hcl%d_%d = _a ? _a->len : 0; _hcr%d_%d = _a ? SP_%s_NILFREE_LEN(_a) : 0; _hcw%d_%d = _a && !_a->frozen ? _hcr%d_%d : 0; ",
                    r->e[i].kind == HC_INT ? "Int" : "Float", rv, r->id, i,
                    r->e[i].kind == HC_INT ? " + _a->start" : "", r->id, i, r->id, i,
                    r->e[i].kind == HC_INT ? "INT" : "FLOAT", r->id, i, r->id, i);
         if (r->e[i].nf)
-          buf_printf(b, "_hcn%d_%d = _a%s ? SP_%s_NILFREE_LEN(_a) : 0; _hcwn%d_%d = _a && !_a->frozen ? _hcn%d_%d : 0; ",
+          buf_printf(&rd, "_hcn%d_%d = _a%s ? SP_%s_NILFREE_LEN(_a) : 0; _hcwn%d_%d = _a && !_a->frozen ? _hcn%d_%d : 0; ",
                      r->id, i, r->e[i].guard.p ? r->e[i].guard.p : "",
                      r->e[i].kind == HC_INT ? "INT" : "FLOAT", r->id, i, r->id, i);
-        buf_puts(b, "} ");
+        buf_puts(&rd, "} ");
       }
     }
-    buf_puts(b, "(void)0; })\n");
-    emit_indent(b, indent + 1); buf_printf(b, "_SP_HCR%d();\n", r->id);
+    buf_puts(&rd, "(void)0; })");
+    if (!r->inl) buf_printf(b, "#define _SP_HCR%d() %s\n", r->id, rd.p);
+    emit_indent(b, indent + 1);
+    if (r->inl) buf_printf(b, "%s;\n", rd.p);
+    else buf_printf(b, "_SP_HCR%d();\n", r->id);
   }
   /* the marks, replaced */
   const char *p = loop;
   size_t ml = strlen(r->mark);
   for (const char *q; (q = strstr(p, r->mark)); p = q + ml) {
     buf_putn(b, p, (size_t)(q - p));
-    if (r->n > 0) buf_puts(b, call);
+    if (r->n > 0 && r->inl) buf_printf(b, ", %s", rd.p);
+    else if (r->n > 0) buf_puts(b, call);
   }
   buf_puts(b, p);
   if (r->n > 0) {
-    buf_printf(b, "#undef _SP_HCR%d\n", r->id);
+    if (!r->inl) buf_printf(b, "#undef _SP_HCR%d\n", r->id);
     emit_indent(b, indent); buf_puts(b, "}\n");
   }
+  free(rd.p);
 }
 
 static void emit_while_loop(Compiler *c, int id, Buf *b, int indent, int is_until);
@@ -13184,6 +13231,7 @@ static void emit_while_loop(Compiler *c, int id, Buf *b, int indent, int is_unti
      its own buffer so the declarations can go ahead of it once the body
      has said which arrays it reads. */
   HcRegion hcr; memset(&hcr, 0, sizeof hcr);
+  hcr.inl = hc_in_splice_or_expr();
   HcRegion *sv_hc = g_hc;
   Buf hlb; memset(&hlb, 0, sizeof hlb);
   Buf *hob = b;
@@ -13289,9 +13337,11 @@ static void emit_while_loop(Compiler *c, int id, Buf *b, int indent, int is_unti
   g_hoist_len_var = sv_hvar; g_hoist_len_recv = sv_hrecv;
 }
 
-/* An Integer block loop in statement position (emit_iteration_stmt) keeps
-   its arrays' headers as a while loop does: the loop is emitted into the
-   region's own buffer, and hc_iter_end puts the cache in front of it. NULL
+/* A block loop hc_block_loop names keeps its arrays' headers as a while
+   loop does, in statement position (emit_iteration_stmt) or, for
+   each_index, as an expression (emit_typed_array_call): the loop is emitted
+   into the region's own buffer, and hc_iter_end puts the cache in front of
+   it. NULL
    when there is no region (one is open already, or the loop cannot keep
    them); *bp then stays the caller's buffer. */
 typedef struct { HcRegion r; Buf buf; Buf *out; } HcIter;
@@ -13301,6 +13351,7 @@ void *hc_iter_begin(Compiler *c, int id, Buf **bp) {
   if (!h) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   if (!hc_block_loop_ok(c, id, &h->r)) { hc_region_free(&h->r); free(h); return NULL; }
   h->r.id = ++g_hc_seq;
+  h->r.inl = hc_in_splice_or_expr();
   snprintf(h->r.mark, sizeof h->r.mark, "/*@HCR%d@*/", h->r.id);
   h->out = *bp;
   g_hc = &h->r; *bp = &h->buf;

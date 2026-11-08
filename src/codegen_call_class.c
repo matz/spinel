@@ -3020,11 +3020,11 @@ int emit_call_new_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const c
       /* a default reading the instance: allocate first, then run initialize
          on the object with self bound to it, as emit_ctor_alloc_init does */
       const char *sv_cs = g_ctor_self, *sv_csd = g_ctor_self_deref;
-      char selftxt[24];
+      char *selftxt = NULL;
       int self_t = -1;
       if (ctor_needs_self_defaults(c, initm, argc)) {
         self_t = ctor_alloc_decl(c, ci, &pdpre);
-        snprintf(selftxt, sizeof selftxt, "_t%d", self_t);
+        selftxt = ctor_self_text(c, ci, self_t);
         g_ctor_self = selftxt;
         g_ctor_self_deref = comp_ty_value_obj(c, ty_object(ci)) ? "." : "->";
       }
@@ -3071,6 +3071,7 @@ int emit_call_new_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const c
       g_nren = pd_base;
       g_pre = sv_pre;
       g_ctor_self = sv_cs; g_ctor_self_deref = sv_csd;
+      free(selftxt);
       emit_ctor_block_slot(c, id, initm, np > 0 ? ", " : "", &ab);
       emit_ctor_arm_case(c, ci, rt2, self_t, pdpre.p, ab.p ? ab.p : "", is2 || kw_ctor ? -1 : argc, b);
       free(pdpre.p); free(ab.p);
@@ -3351,11 +3352,11 @@ int emit_call_new_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const c
       /* a default reading the instance: allocate first, then run initialize
          on the object with self bound to it, as emit_ctor_alloc_init does */
       const char *sv_cs = g_ctor_self, *sv_csd = g_ctor_self_deref;
-      char selftxt[24];
+      char *selftxt = NULL;
       int self_t = -1;
       if (ctor_needs_self_defaults(c, initm, argc)) {
         self_t = ctor_alloc_decl(c, ci, &pdpre);
-        snprintf(selftxt, sizeof selftxt, "_t%d", self_t);
+        selftxt = ctor_self_text(c, ci, self_t);
         g_ctor_self = selftxt;
         g_ctor_self_deref = comp_ty_value_obj(c, ty_object(ci)) ? "." : "->";
       }
@@ -3397,6 +3398,7 @@ int emit_call_new_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const c
       g_nren = pd_base;
       g_pre = sv_pre;
       g_ctor_self = sv_cs; g_ctor_self_deref = sv_csd;
+      free(selftxt);
       emit_ctor_block_slot(c, id, initm, np > 0 ? ", " : "", &ab);
       g_arm_member_fills = afill.p;
       emit_ctor_arm_case(c, ci, rt2, self_t, pdpre.p, ab.p ? ab.p : "", is ? -1 : argc, b);

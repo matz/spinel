@@ -18600,11 +18600,22 @@ static int bx_owner_in_string_chain(Compiler *c, int k) {
     if (bx_mixes_in(c, c->toplevel_includes[i], k, 0)) return 1;
   return 0;
 }
+/* A Module method that can put a method of one class onto another, or
+   make a `class X` body reopen a builtin: const_set, define_method, the
+   evals, instance_method */
+static int bx_reflective_name(const char *n) {
+  static const char *const names[] = { "const_set", "define_method", "instance_method", "class_eval",
+    "module_eval", "class_exec", "module_exec", "instance_eval", "instance_exec", "eval", NULL };
+  for (int i = 0; names[i]; i++) if (sp_streq(n, names[i])) return 1;
+  return 0;
+}
 /* Is program class k surely a class of its own, which no String reaches?
    Not when the program writes a constant of k's last name (`Other =
    String.itself; class Other`: the class table opens a new class where
-   CRuby reopens String), calls const_set, or calls define_method, which
-   may copy a method object (`define_method(:p, &Other.new.method(:p))`). */
+   CRuby reopens String), or names a Module method that can move a method
+   or a class body (bx_reflective_name: `define_method(:p,
+   &Other.new.method(:p))`, `alias dm define_method`), or sends a name the
+   walk can not read. */
 static int bx_class_surely_own(Compiler *c, int k) {
   const NodeTable *nt = c->nt;
   const char *full = k >= 0 && k < c->nclasses ? c->classes[k].name : NULL;
@@ -18626,14 +18637,19 @@ static int bx_class_surely_own(Compiler *c, int k) {
     }
     case NK_CallNode: {
       const char *cn = nt_str(nt, id, "name");
+      if (!cn || bx_reflective_name(cn)) return 0;
+      /* a send of a name the walk can not read */
       int ac = 0;
-      call_args(nt, id, &ac);
-      if (cn && (sp_streq(cn, "const_set") || sp_streq(cn, "define_method") ||
-                 sp_streq(cn, "send") || sp_streq(cn, "__send__") || sp_streq(cn, "public_send"))) {
-        if (!sp_streq(cn, "send") && !sp_streq(cn, "__send__") && !sp_streq(cn, "public_send")) return 0;
-        const char *m = ac > 0 ? vis_arg_name(nt, call_args(nt, id, &ac)[0]) : NULL;
-        if (!m || sp_streq(m, "const_set") || sp_streq(m, "define_method")) return 0;
-      }
+      const int *av = call_args(nt, id, &ac);
+      if ((sp_streq(cn, "send") || sp_streq(cn, "__send__") || sp_streq(cn, "public_send")) &&
+          !(ac > 0 && vis_arg_name(nt, av[0]))) return 0;
+      break;
+    }
+    /* the name as a symbol or a string: an alias of it, a send of it,
+       instance_method(:define_method) */
+    case NK_SymbolNode: case NK_StringNode: {
+      const char *v = vis_arg_name(nt, id);
+      if (v && bx_reflective_name(v)) return 0;
       break;
     }
     default: break;

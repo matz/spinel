@@ -1289,6 +1289,26 @@ static void emit_obj_conv_call_inline(Compiler *c, int node, TyKind t, int def, 
   if (unbox) buf_puts(b, nil_string ? "))" : ")");
 }
 
+/* Is `node` an argument of a builtin class's arm that
+   desugar_class_value_builtin_cmethod split a call on a boxed class value
+   into (`k.new(x)` -> `k.equal?(Array) ? Array.new(x) : k.new(x)`)? The
+   arm runs only when the value is that class, which it may never be
+   (`Object.const_get(name)` may answer any constant). */
+static int conv_arg_of_cvb_arm(Compiler *c, int node) {
+  const NodeTable *nt = c->nt;
+  const int *par = codegen_node_parents(c, node);
+  int args = par ? par[node] : -1;
+  if (args < 0 || nt_kind(nt, args) != NK_ArgumentsNode) return 0;
+  int call = par[args];
+  if (call < 0 || nt_kind(nt, call) != NK_CallNode || !nt_int(nt, call, "cvb_split", 0) ||
+      nt_ref(nt, call, "arguments") != args) return 0;
+  int recv = nt_ref(nt, call, "receiver");
+  if (recv < 0 || nt_kind(nt, recv) != NK_ConstantReadNode) return 0;
+  int argc = 0; const int *argv = nt_arr(nt, args, "arguments", &argc);
+  for (int k = 0; k < argc; k++) if (argv[k] == node) return 1;
+  return 0;
+}
+
 static int emit_obj_conv(Compiler *c, int node, const char *conv, TyKind want,
                          const char *into, Buf *b) {
   TyKind t = comp_ntype(c, node);
@@ -1321,7 +1341,7 @@ static int emit_obj_conv(Compiler *c, int node, const char *conv, TyKind want,
      left to the old path, where the raw object pointer landed in the scalar
      slot and the C build stopped with a message about a generated symbol.
      CRuby names the offending kind, so this does as well. */
-  { int wmi = comp_method_in_chain(c, cid, conv, NULL);
+  { int wdef = -1, wmi = comp_method_in_chain(c, cid, conv, &wdef);
     if (wmi >= 0 && c->scopes[wmi].nparams == 0) {
       /* CRuby names the answer's CLASS, so the diagnostic does too rather
          than printing the analysis's own lowercase tag */
@@ -1334,6 +1354,19 @@ static int emit_obj_conv(Compiler *c, int node, const char *conv, TyKind want,
                      : ty_name(wr);
       snprintf(msg, sizeof msg, "can't convert %s to %s (%s#%s gives %s)",
                cn ? cn : "Object", into, cn ? cn : "the class", conv, wn);
+      /* in a builtin class's arm of a split call (conv_arg_of_cvb_arm, below)
+         the method runs and CRuby's TypeError follows, where the arm runs */
+      if (conv_arg_of_cvb_arm(c, node)) {
+        /* a conversion for the operand-order gate: the arguments after this
+           one run first, as CRuby evaluates them before converting */
+        g_conv_emitted++;
+        buf_puts(b, "((void)(");
+        emit_obj_conv_call_inline(c, node, t, wdef, wmi, conv, b);
+        buf_puts(b, "), sp_raise_cls(\"TypeError\", ");
+        emit_str_literal(b, msg);
+        buf_printf(b, "), (%s)0)", c_type_name(want));
+        return 1;
+      }
       unsupported_feature(c, node, msg);
     }
     if (wmi >= 0) return 0;  /* another shape entirely (parameters): old path */
@@ -1341,10 +1374,14 @@ static int emit_obj_conv(Compiler *c, int node, const char *conv, TyKind want,
   /* In a method a call on a poly receiver bound its arguments to, as one of
      the methods it may reach, the class may be only what that call would
      hand: the receiver may never be of this method's class (an Array's `<<`
-     beside a Digest's). CRuby raises if it ever is, so the raise is left to
-     run time rather than refusing the program. */
+     beside a Digest's). Likewise a builtin class's arm of a call split on a
+     boxed class value: the value may never be that class. CRuby raises if
+     it ever is, so the raise is left to run time rather than refusing the
+     program. */
   { Scope *es = comp_scope_of(c, node);
-    if (es && es->cand_bound) {
+    if ((es && es->cand_bound) || conv_arg_of_cvb_arm(c, node)) {
+      /* (a conversion for the operand-order gate, as above) */
+      g_conv_emitted++;
       snprintf(msg, sizeof msg, "no implicit conversion of %s into %s", cn ? cn : "Object", into);
       buf_puts(b, "((void)(");
       emit_expr_for_effect(c, node, b);

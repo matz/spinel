@@ -27,3 +27,9 @@ CB::Leaf__X
 #<struct CB::Two__S y=2>
 CC::Array
 CC::Monitor__M
+2
+3
+uninitialized constant DM::Bar
+DN::Bar
+DO::Bar
+uninitialized constant DM::Bar

@@ -34,3 +34,14 @@ module CB; class Leaf__X; end; Two__S = Struct.new(:y); end
 p CA::Leaf__X, CB::Leaf__X, CA::Two__S.new(1), CB::Two__S.new(2)
 module CC; class Array; end; class Monitor__M; end; end
 p CC::Array, CC::Monitor__M
+
+# `w::Bar` through a module value does not find M::Foo__Bar
+module DM; class Foo__Bar; def hi = 1; end; end
+module DN; class Bar; def hi = 2; end; end
+module DO; class Bar; def hi = 3; end; end
+def dyn_hi(w) = w::Bar.new.hi
+p dyn_hi(DN), dyn_hi(DO)
+begin; p dyn_hi(DM); rescue NameError => e; puts e.message; end
+[DN, DO, DM].each do |w|
+  begin; p w::Bar; rescue NameError => e; puts e.message; end
+end

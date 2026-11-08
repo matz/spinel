@@ -3482,8 +3482,7 @@ static int class_leaf_count(Compiler *c, const char *nm, int *nested) {
     const ClassInfo *ci = &c->classes[k];
     const char *leaf = ci->name, *rn = ci->ruby_name_cache, *l = rn ? strrchr(rn, ':') : NULL;
     if (l) leaf = l + 1;
-    else if (ci->enclosing_class >= 0 && leaf)
-      for (const char *p = leaf; (p = strstr(p, "__")) != NULL; p += 2) leaf = p + 2;
+    else leaf = comp_class_ruby_leaf(c, k);
     if (!leaf || !sp_streq(leaf, nm)) continue;
     n++;
     if (l || ci->enclosing_class >= 0) *nested = 1;
@@ -3597,9 +3596,8 @@ static int dyn_holder_parent(Compiler *c, int k) {
 static int dyn_holder_named(Compiler *c, const char *nm) {
   int found = -1;
   for (int q = 0; q < c->nclasses; q++) {
-    const char *leaf = c->classes[q].name;
+    const char *leaf = comp_class_ruby_leaf(c, q);
     if (!leaf) continue;
-    if (c->classes[q].enclosing_class >= 0) for (const char *p = leaf; (p = strstr(p, "__")) != NULL; p += 2) leaf = p + 2;
     if (!sp_streq(leaf, nm)) continue;
     if (found >= 0) return -1;
     found = q;
@@ -3696,8 +3694,7 @@ static void desugar_dyn_parent_class_leaf(Compiler *c) {
         const ClassInfo *ci = &c->classes[k];
         const char *leaf = ci->name, *rn = ci->ruby_name_cache, *l = rn ? strrchr(rn, ':') : NULL;
         if (l) leaf = l + 1;
-        else if (ci->enclosing_class >= 0 && leaf)
-          for (const char *p = leaf; (p = strstr(p, "__")) != NULL; p += 2) leaf = p + 2;
+        else leaf = comp_class_ruby_leaf(c, k);
         if (!leaf || !sp_streq(leaf, nm)) continue;
         nst = l || ci->enclosing_class >= 0;
         if ((pass == 0) != nst) continue;

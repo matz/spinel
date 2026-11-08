@@ -2352,9 +2352,9 @@ else {
   case PM_IT_LOCAL_VARIABLE_READ_NODE:
     /* `it` inside the block body. Lowered to a regular
        LocalVariableReadNode named "_1" so it pairs with the
-       lowered NumberedParametersNode { maximum: 1 } above. */
-    N("LocalVariableReadNode");
-    S("name", "_1");
+       lowered NumberedParametersNode { maximum: 1 } above; implicit_it keeps it
+       apart from a written `_1` (blockarg_plain_read). */
+    N("LocalVariableReadNode"); S("name", "_1"); I("implicit_it", 1);
     break;
   case PM_INTERPOLATED_SYMBOL_NODE: {
     /* `:"foo_#{x}"`. Carries `parts` like InterpolatedStringNode;
@@ -7011,6 +7011,7 @@ typedef struct {
   const pm_parser_t *p;
   int nested;                 /* inside a class or module body */
   pm_constant_id_t def;       /* the def the walk is in, 0 outside one */
+  const pm_node_t *defined;   /* the operand of the defined? the walk is at: it does not run */
 } SpNamesWalk;
 
 static void sp_names_const(SpNamesWalk *w, const char *tag, pm_constant_id_t id) {
@@ -7062,9 +7063,9 @@ static int sp_pm_block_breaks(const pm_node_t *body) {
 /* Whether call `c` passes lo..hi arguments of the kinds `flags` allows and
    has the block and the receiver they ask for (lower_row_nt's test, of a
    parsed call) */
-static int sp_pm_args_fit(const pm_call_node_t *c, int lo, int hi, unsigned flags) {
+static int sp_pm_args_fit(const pm_call_node_t *c, int lo, int hi, unsigned flags, int drop) {
   const pm_node_list_t *args = c->arguments ? &c->arguments->arguments : NULL;
-  int an = args ? (int)args->size : 0;
+  int an = (args ? (int)args->size : 0) - drop;
   if (an < lo || (hi >= 0 && an > hi)) return 0;
   const pm_node_t *blk = c->block;
   if ((flags & LR_NO_BLOCK) && blk) return 0;
@@ -7075,7 +7076,7 @@ static int sp_pm_args_fit(const pm_call_node_t *c, int lo, int hi, unsigned flag
   if ((flags & LR_BLOCK_LITERAL) && !made && (!blk || PM_NODE_TYPE(blk) != PM_BLOCK_NODE)) return 0;
   if ((flags & LR_BREAKS) && (!blk || PM_NODE_TYPE(blk) != PM_BLOCK_NODE)) return 0;
   if ((flags & LR_HAS_RECV) && !c->receiver) return 0;
-  if ((flags & LR_NO_ARGS) && c->arguments) return 0;
+  if ((flags & LR_NO_ARGS) && an > 0) return 0;
   int kwh = 0;
   for (int i = 0; i < an; i++) {
     pm_node_type_t k = PM_NODE_TYPE(args->nodes[i]);
@@ -7098,7 +7099,7 @@ static int sp_pm_const_is(const pm_parser_t *p, const pm_node_t *n, const char *
    `r`? lower_row_nt's question, of a parsed call: the graph decides its
    libraries before flattening. SPINEL_LOWER_ROWS_CHECK holds the two to
    one answer (sp_lower_rows_note, lower_rows_check). */
-static int sp_pm_row_fits(const pm_parser_t *p, const pm_call_node_t *c, const char *name, const LowerRow *r) {
+static int sp_pm_row_fits(const pm_parser_t *p, const pm_call_node_t *c, const char *name, const LowerRow *r, int drop) {
   if (strcmp(name, r->name) != 0) return 0;
   const pm_node_t *recv = c->receiver;
   if (r->recv == LR_RECV_NONE && recv) return 0;
@@ -7109,22 +7110,49 @@ static int sp_pm_row_fits(const pm_parser_t *p, const pm_call_node_t *c, const c
     const pm_call_node_t *rc = (const pm_call_node_t *)recv;
     if (!sp_pm_name_is(p, rc->name, r->recv_name)) return 0;
     if (r->recv_const && !sp_pm_const_is(p, rc->receiver, r->recv_const)) return 0;
-    if (!sp_pm_args_fit(rc, r->rargc_min, r->rargc_max, r->rflags)) return 0;
+    if (!sp_pm_args_fit(rc, r->rargc_min, r->rargc_max, r->rflags, 0)) return 0;
   }
   if (r->recv_calls && recv && PM_NODE_TYPE(recv) == PM_CALL_NODE && !((const pm_call_node_t *)recv)->block) {
     int k = 0;
     while (r->recv_calls[k] && !sp_pm_name_is(p, ((const pm_call_node_t *)recv)->name, r->recv_calls[k])) k++;
     if (!r->recv_calls[k]) return 0;
   }
-  return sp_pm_args_fit(c, r->argc_min, r->argc_max, r->flags);
+  return sp_pm_args_fit(c, r->argc_min, r->argc_max, r->flags, drop);
 }
 
 /* The lowerings call `c` has the shape of (builtin_names.c's rows): each
    names the method or constant it lowers to */
 static void sp_names_lowerings(SpNamesWalk *w, const pm_call_node_t *c, const char *name) {
   const LowerRow *r;
+  /* a call whose last argument is only `**` operands may pass nothing (an
+     empty operand): the analysis splits it into the call with and the call
+     without them (split_kwsplat_calls in analyze.c, whose rule this one
+     repeats: not under defined?, no splat beside the `**`, no pair-only
+     hash literal among the operands, which is never empty), and the one
+     without takes the rows of its own shape */
+  int drop = 0;
+  const pm_node_list_t *args = c->arguments ? &c->arguments->arguments : NULL;
+  if (args && args->size && PM_NODE_TYPE(args->nodes[args->size - 1]) == PM_KEYWORD_HASH_NODE &&
+      (const pm_node_t *)c != w->defined) {
+    const pm_node_list_t *el = &((const pm_keyword_hash_node_t *)args->nodes[args->size - 1])->elements;
+    drop = 1;
+    for (size_t k = 0; k < args->size - 1; k++) {
+      pm_node_type_t t = PM_NODE_TYPE(args->nodes[k]);
+      if (t == PM_SPLAT_NODE || t == PM_FORWARDING_ARGUMENTS_NODE) drop = 0;
+    }
+    for (size_t k = 0; k < el->size; k++) {
+      if (PM_NODE_TYPE(el->nodes[k]) != PM_ASSOC_SPLAT_NODE) { drop = 0; continue; }
+      const pm_node_t *v = ((const pm_assoc_splat_node_t *)el->nodes[k])->value;
+      if (!v) { drop = 0; continue; }
+      if (PM_NODE_TYPE(v) != PM_HASH_NODE) continue;
+      const pm_node_list_t *he = &((const pm_hash_node_t *)v)->elements;
+      int has_splat = 0;
+      for (size_t q = 0; q < he->size; q++) if (PM_NODE_TYPE(he->nodes[q]) == PM_ASSOC_SPLAT_NODE) has_splat = 1;
+      if (he->size && !has_splat) drop = 0;
+    }
+  }
   for (int i = 0; (r = lower_row_at(i)) != NULL; i++)
-    if (sp_pm_row_fits(w->p, c, name, r))
+    if (sp_pm_row_fits(w->p, c, name, r, 0) || (drop && sp_pm_row_fits(w->p, c, name, r, 1)))
       sp_names_add(w->s, sp_names_target_tag(r->target), r->target, strlen(r->target));
 }
 
@@ -7143,7 +7171,7 @@ static void sp_lower_rows_note(const pm_node_t *node, int id) {
   long long mask = 0;
   const LowerRow *r;
   for (int i = 0; i < LOWER_ROWS_MASK_BITS && (r = lower_row_at(i)) != NULL; i++)
-    if (sp_pm_row_fits(g_parser, c, name, r)) mask |= 1LL << i;
+    if (sp_pm_row_fits(g_parser, c, name, r, 0)) mask |= 1LL << i;
   emit_int(id, "lr_rows", mask);
 }
 
@@ -7234,6 +7262,7 @@ static bool sp_names_visit(const pm_node_t *n, void *data) {
   SpNamesWalk *w = data;
   switch (PM_NODE_TYPE(n)) {
     case PM_CALL_NODE: sp_names_call(w, (const pm_call_node_t *)n); break;
+    case PM_DEFINED_NODE: w->defined = ((const pm_defined_node_t *)n)->value; break;
     case PM_SYMBOL_NODE: {
       /* `:name` or a `%i[]` word (a hash key's `name:` names no method) */
       const pm_symbol_node_t *sy = (const pm_symbol_node_t *)n;

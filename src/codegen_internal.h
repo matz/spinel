@@ -2352,6 +2352,7 @@ void emit_kw_splat_conv_temp(Compiler *c, const char *tmp);
    some class of the program defines one? Its answer is a new Hash, which
    the temp holding the operand roots. */
 int kw_splat_user_to_hash(Compiler *c);
+int kw_splat_user_may_convert(Compiler *c);   /* a class defines method_missing: a boxed object with no #to_hash may answer one anyway */
 /* A `**` operand of a kind that is no Hash but can still be nil at run time
    -- a nilable Integer or Float slot's nil, a pointer-backed kind's
    NULL -- or that is true or false, which CRuby's TypeError names by value:

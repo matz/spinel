@@ -1581,7 +1581,8 @@ void compute_reachable(Compiler *c, int typed) {
     if (has_kint) { MARK_NAME("to_int"); MARK_NAME("to_str"); MARK_NAME("to_i"); }
     if (has_kflt || has_unum) MARK_NAME("to_f");
     if (c->uses_kw_to_hash) MARK_NAME("to_hash");
-    if (has_kint || has_kflt || has_unum || c->uses_kw_to_hash)
+    if (c->uses_blk_conv) MARK_NAME("to_proc");
+    if (has_kint || has_kflt || has_unum || c->uses_kw_to_hash || c->uses_blk_conv)
       while (qhead < qtail) { int s = queue[qhead++]; for (int ni = 0; ni < sc_n[s]; ni++) MARK_NAME(scope_calls[s][ni]); cr_live_scope(&lv, s, scope_calls[s], sc_n[s]); }
   }
 
@@ -43765,6 +43766,32 @@ static int splat_leaf_node(NodeTable *nt, int id) {
       return 0;
   }
 }
+/* Is `e`, the operand of a `&`, a read CRuby leaves to the send: a local,
+   instance, global or class variable (a block or method parameter, a
+   block-local and `_1` among the locals), a constant, a constant path
+   whose parent is such a read too (or absent, `::T`) or `self`? Beside
+   exactly one `**` operand, CRuby passes the Hash itself and reads it
+   after converting such a block operand, so a key its to_proc adds is
+   passed; beside a call (`call::T` included), a safe-nav call, the
+   implicit `it` or a second `**`, it builds the Hash first. An
+   observation of CRuby 4.0, not a rule of the language:
+   test/kwsplat_split_block_operand_order has one row for each. */
+static int blockarg_plain_read(const NodeTable *nt, int e) {
+  if (e < 0) return 0;
+  switch (nt_kind(nt, e)) {
+    case NK_LocalVariableReadNode: return !nt_int(nt, e, "implicit_it", 0);
+    case NK_InstanceVariableReadNode: case NK_GlobalVariableReadNode: case NK_ClassVariableReadNode:
+    case NK_ConstantReadNode: case NK_SelfNode:
+      return 1;
+    case NK_ConstantPathNode: {
+      /* `::T` and `A::B::T` are reads all the way up; `call::T` is the call's */
+      int parent = nt_ref(nt, e, "parent");
+      return parent < 0 || blockarg_plain_read(nt, parent);
+    }
+    default:
+      return 0;
+  }
+}
 /* Node builders for the length dispatch's per-class arms below. */
 static int sd_call(NodeTable *nt, const char *name, int recv, const int *args, int n) {
   int an = -1;
@@ -43796,11 +43823,11 @@ static int sd_str(NodeTable *nt, const char *s) {
   nt_node_set_str(nt, n, "content", s);
   return n;
 }
-static int sd_if(NodeTable *nt, int pred, int then_, int else_) {
+static int sd_if_n(NodeTable *nt, int pred, const int *then_, int nthen, const int *else_, int nelse) {
   int ts = nt_new_node(nt, "StatementsNode");
-  nt_node_set_arr(nt, ts, "body", &then_, 1);
+  nt_node_set_arr(nt, ts, "body", then_, nthen);
   int es = nt_new_node(nt, "StatementsNode");
-  nt_node_set_arr(nt, es, "body", &else_, 1);
+  nt_node_set_arr(nt, es, "body", else_, nelse);
   int en = nt_new_node(nt, "ElseNode");
   nt_node_set_ref(nt, en, "statements", es);
   int ifn = nt_new_node(nt, "IfNode");
@@ -43808,6 +43835,9 @@ static int sd_if(NodeTable *nt, int pred, int then_, int else_) {
   nt_node_set_ref(nt, ifn, "statements", ts);
   nt_node_set_ref(nt, ifn, "subsequent", en);
   return ifn;
+}
+static int sd_if(NodeTable *nt, int pred, int then_, int else_) {
+  return sd_if_n(nt, pred, &then_, 1, &else_, 1);
 }
 /* `recv.is_a?(String)`, over a copy of the receiver (a leaf or its temp) */
 static int sd_is_string(NodeTable *nt, int recv) {
@@ -43835,6 +43865,18 @@ static int kwb_lv(NodeTable *nt, Scope *sc, const char *nm, int value) {
   nt_node_set_int(nt, n, "depth", 0);
   if (value >= 0) nt_node_set_ref(nt, n, "value", value);
   return n;
+}
+/* Hold `value` in a local, written into pre[] in its turn, and answer a
+   read of it: the operand a rewritten call evaluates once and in CRuby's
+   order. The local is named for the call and the slot (k < 0: the receiver)
+   and interned in `sc` (NULL before the scopes exist: register_locals finds
+   the write). */
+static int sd_hold(Compiler *c, NodeTable *nt, Scope *sc, int id, const char *pfx, int k, int value, int *pre, int *npre) {
+  char tn[64];
+  if (k < 0) snprintf(tn, sizeof tn, "__%s%s", pfx, comp_node_tag(c, id));
+  else snprintf(tn, sizeof tn, "__%s%s_%d", pfx, comp_node_tag(c, id), k);
+  pre[(*npre)++] = kwb_lv(nt, sc, tn, value);
+  return kwb_lv(nt, NULL, tn, -1);
 }
 static int kwb_const(NodeTable *nt, const char *name) {
   int k = nt_new_node(nt, "ConstantReadNode");
@@ -44381,16 +44423,7 @@ static int splat_dispatch_on_length(Compiler *c, int id, const int *argv, int ar
   NodeKind rk = nt_kind(nt, recv);
   if (!splat_leaf_node(nt, recv) ||
       (last_run >= 0 && (rk == NK_LocalVariableReadNode || rk == NK_InstanceVariableReadNode))) {
-    snprintf(tn, sizeof tn, "__splr%s", comp_node_tag(c, id));
-    scope_local_intern(comp_scope_of(c, id), tn);
-    int w = nt_new_node(nt, "LocalVariableWriteNode");
-    nt_node_set_str(nt, w, "name", tn);
-    nt_node_set_int(nt, w, "depth", 0);
-    nt_node_set_ref(nt, w, "value", recv);
-    pre[npre++] = w;
-    recv = nt_new_node(nt, "LocalVariableReadNode");
-    nt_node_set_str(nt, recv, "name", tn);
-    nt_node_set_int(nt, recv, "depth", 0);
+    recv = sd_hold(c, nt, comp_scope_of(c, id), id, "splr", -1, recv, pre, &npre);
   }
   int fargs[24];
   char snm[64];
@@ -44426,16 +44459,7 @@ static int splat_dispatch_on_length(Compiler *c, int id, const int *argv, int ar
         continue;
       }
     }
-    snprintf(tn, sizeof tn, "__spla%s_%d", comp_node_tag(c, id), k);
-    scope_local_intern(comp_scope_of(c, id), tn);
-    int w = nt_new_node(nt, "LocalVariableWriteNode");
-    nt_node_set_str(nt, w, "name", tn);
-    nt_node_set_int(nt, w, "depth", 0);
-    nt_node_set_ref(nt, w, "value", argv[k]);
-    pre[npre++] = w;
-    fargs[k] = nt_new_node(nt, "LocalVariableReadNode");
-    nt_node_set_str(nt, fargs[k], "name", tn);
-    nt_node_set_int(nt, fargs[k], "depth", 0);
+    fargs[k] = sd_hold(c, nt, comp_scope_of(c, id), id, "spla", k, argv[k], pre, &npre);
   }
   char knm[64];
   if (!ukw && (nuser > 0 || (ctor != 1 && !builtin_name_takes_keywords(cnm))) && argc > 1 &&
@@ -44883,6 +44907,272 @@ void expand_static_splat_args(Compiler *c, int from, int count) {
     comp_grow_node_arrays(c);
     c->nscope[na] = c->nscope[id];
   }
+}
+
+/* The names the program gives a method taking no keywords by an alias, a
+   local of the step built on first use: every `alias new old` and every
+   `alias_method :new, :old` whose operands are literal, followed along the
+   chains, any class (the gate only bounds the cost, so an over-approximation
+   is harmless). An alias spelled any other way is left to the call as it
+   stands. */
+typedef struct { char **new_, **old_; ANameHash gated; int n, built; } KwAliases;
+static char *kwsplat_dup(const char *s) {
+  char *d = strdup(s);
+  if (!d) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  return d;
+}
+static void kwsplat_alias_pair(KwAliases *al, const char *nw, const char *od) {
+  if (!nw || !od) return;
+  char **n2 = realloc(al->new_, sizeof(char *) * (size_t)(al->n + 1));
+  if (n2) al->new_ = n2;
+  char **o2 = realloc(al->old_, sizeof(char *) * (size_t)(al->n + 1));
+  if (o2) al->old_ = o2;
+  if (!n2 || !o2) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  al->new_[al->n] = kwsplat_dup(nw);
+  al->old_[al->n++] = kwsplat_dup(od);
+}
+static const char *kwsplat_lit_name(NodeTable *nt, int id) {
+  NodeKind k = id >= 0 ? nt_kind(nt, id) : NK_NilNode;
+  return k == NK_SymbolNode ? nt_str(nt, id, "value") : k == NK_StringNode ? nt_str(nt, id, "content") : NULL;
+}
+static void kwsplat_aliases_build(NodeTable *nt, KwAliases *al) {
+  al->built = 1;
+  NT_FOREACH_KIND(nt, NK_AliasMethodNode, id)
+    kwsplat_alias_pair(al, kwsplat_lit_name(nt, nt_ref(nt, id, "new_name")), kwsplat_lit_name(nt, nt_ref(nt, id, "old_name")));
+  NT_FOREACH_KIND(nt, NK_CallNode, id) {
+    const char *nm = nt_str(nt, id, "name");
+    int an = nt_ref(nt, id, "arguments"), n = 0;
+    const int *av = an >= 0 ? nt_arr(nt, an, "arguments", &n) : NULL;
+    if (nm && n == 2 && nt_ref(nt, id, "receiver") < 0 && is_alias_method_name(nm))
+      kwsplat_alias_pair(al, kwsplat_lit_name(nt, av[0]), kwsplat_lit_name(nt, av[1]));
+  }
+  /* desugar_inherited_aliases renames the alias node of an alias of a
+     builtin's method in a subclass beyond this scan (`name#inherited`) and
+     sets alias_of_builtin, the builtin's name, on the forwarder def it adds
+     under the alias's name */
+  NT_FOREACH_KIND(nt, NK_DefNode, id)
+    kwsplat_alias_pair(al, nt_str(nt, id, "name"), nt_str(nt, id, "alias_of_builtin"));
+  /* the names reached from a method that takes no keywords, along the
+     chains: a worklist over the pairs, each looked up by its original */
+  ANameHash by_old;
+  memset(&by_old, 0, sizeof by_old);
+  for (int i = 0; i < al->n; i++) anh_add(&by_old, al->old_[i]);
+  int *work = malloc(sizeof(int) * (size_t)(al->n + 1)), nw = 0;
+  if (!work) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  for (int i = 0; i < al->n; i++)
+    if (bop_name_kwless(al->old_[i]) && !anh_has(&al->gated, al->new_[i])) { anh_add(&al->gated, al->new_[i]); work[nw++] = i; }
+  for (int w = 0; w < nw; w++) {
+    const char *nm = al->new_[work[w]];
+    if (!by_old.nb) break;
+    for (int i = by_old.head[sp_strhash(nm) % (unsigned)by_old.nb]; i >= 0; i = by_old.next[i])
+      if (sp_streq(al->old_[i], nm) && !anh_has(&al->gated, al->new_[i])) { anh_add(&al->gated, al->new_[i]); work[nw++] = i; }
+  }
+  free(work);
+  anh_free(&by_old);
+}
+static int kwsplat_alias_gated(NodeTable *nt, KwAliases *al, const char *name) {
+  if (!al->built) kwsplat_aliases_build(nt, al);
+  return anh_has(&al->gated, name);
+}
+/* Is the call bound to a method that takes no keywords, or to one the
+   program's names cannot rule out? The call's own name decides, or for a
+   send the literal Symbol it names; a send of a name known only at run time
+   may reach any method, so it is split too. */
+static int kwsplat_gated(NodeTable *nt, KwAliases *al, int id, const int *args, int n) {
+  const char *nm = nt_str(nt, id, "name");
+  if (!nm) return 0;
+  if (is_send_family(nm)) {
+    if (n < 2) return 0;
+    if (nt_kind(nt, args[0]) != NK_SymbolNode) return 1;
+    nm = nt_str(nt, args[0], "value");
+    if (!nm) return 1;
+  }
+  return bop_name_kwless(nm) || kwsplat_alias_gated(nt, al, nm);
+}
+/* A `**`-only call to a builtin that takes no keywords: CRuby passes nothing
+   for an empty `**` operand and one new Hash for a non-empty one, whatever
+   the callee is, so the call becomes the two calls and a test:
+
+     recv.m(a, **kw)  =>  (r = recv; x = a; k = {**kw};
+                           k.empty? ? r.m(x) : r.m(x, **k))
+
+   The branches are copies of the call, so its flags, its block and its
+   `&.` carry over; the operands are held in CRuby's order (the receiver,
+   the positional operands, the `**` conversions, then the `&` operand), and
+   only the branch that runs reads them. A `&.` call tests its receiver
+   first and runs nothing else when it is nil. The `**nil` and `**{}`
+   operands pass nothing and go at once. A call under `defined?` does not
+   run, and one with a pair-only hash (`**{a: 1}`) is never empty: both keep
+   their call. The name is the gate only to bound the cost: the split is
+   exact for any callee, a program's own method of the name included. It
+   runs ahead of everything that reads a call, so each later step sees the
+   two branches as calls written so, and nodes made here are scanned too (a
+   literal block's copy holds its own calls). The graph model decides which
+   builtins/ files to load from the parse, before this runs, and repeats
+   this rule there (sp_names_lowerings in spinel_parse.c). */
+static void split_kwsplat_calls(Compiler *c, int from) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  KwAliases al;
+  memset(&al, 0, sizeof al);
+  NT_FOREACH_KIND(nt, NK_DefinedNode, d) {
+    int dv = nt_ref(nt, d, "value");
+    if (dv >= 0 && nt_kind(nt, dv) == NK_CallNode) nt_node_set_int(nt, dv, "kwsplit", 1);
+  }
+  /* a call of a list whose value is thrown away (an_value_dropped: the value
+     edges say so, a last statement under a modifier, a begin, a case, a
+     loop body included) becomes statements of that list: spar names it.
+     Asked before the first edit, of the parent map as the table stands. */
+  int n0 = nt->count, *spar = calloc((size_t)n0 + 1, sizeof(int));
+  if (!spar) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  const int *par = comp_parent_map(c);
+  for (int id = from; id < n0; id++) {
+    int an = nt_kind(nt, id) == NK_CallNode ? nt_ref(nt, id, "arguments") : -1, m = 0;
+    const int *av = an >= 0 ? nt_arr(nt, an, "arguments", &m) : NULL;
+    if (m < 1 || nt_kind(nt, av[m - 1]) != NK_KeywordHashNode || par[id] < 0 || nt_kind(nt, par[id]) != NK_StatementsNode) continue;
+    if (an_value_dropped(nt, par, id)) spar[id] = par[id] + 1;
+  }
+  for (int id = from; id < nt->count; id++) {
+    if (nt_kind(nt, id) != NK_CallNode || nt_int(nt, id, "kwsplit", 0)) continue;
+    int an = nt_ref(nt, id, "arguments"), n = 0;
+    const int *av = an >= 0 ? nt_arr(nt, an, "arguments", &n) : NULL;
+    if (!av || n < 1 || n > 24) continue;
+    int args[24], kh = nt_argv_kwh(nt, av, n);
+    for (int i = 0; i < n; i++) args[i] = av[i];
+    if (kh < 0) continue;
+    /* (a spread list is the splat dispatch's) */
+    int ok = 1;
+    for (int i = 0; i < n - 1; i++)
+      if (nt_kind(nt, args[i]) == NK_SplatNode || nt_kind(nt, args[i]) == NK_ForwardingArgumentsNode) ok = 0;
+    int ne = 0, el[16], dyn[16], ndyn = 0, full = 0;
+    const int *ev = nt_arr(nt, kh, "elements", &ne);
+    if (!ev || ne < 1 || ne > 16) continue;
+    for (int i = 0; i < ne; i++) {
+      el[i] = ev[i];
+      if (nt_kind(nt, el[i]) != NK_AssocSplatNode || nt_ref(nt, el[i], "value") < 0) ok = 0;
+    }
+    if (!ok || !kwsplat_gated(nt, &al, id, args, n)) continue;
+    for (int i = 0; i < ne; i++) {
+      int v = nt_ref(nt, el[i], "value"), vn = 0;
+      NodeKind vk = nt_kind(nt, v);
+      if (vk == NK_HashNode) nt_arr(nt, v, "elements", &vn);
+      if (vk == NK_NilNode || (vk == NK_HashNode && vn == 0)) continue;
+      if (vk == NK_HashNode && !nt_hash_has_splat(nt, v)) full = 1;
+      dyn[ndyn++] = el[i];
+    }
+    if (full) continue;
+    if (ndyn == 0) {
+      /* nothing to pass: the keyword hash goes */
+      if (n > 1) nt_node_set_arr(nt, an, "arguments", args, n - 1);
+      else nt_node_set_ref(nt, id, "arguments", -1);
+      nt_subtree_blank(nt, kh);
+      continue;
+    }
+    /* what runs after each operand decides which reads are held */
+    int recv = nt_ref(nt, id, "receiver"), blk = nt_ref(nt, id, "block"), safe = nt_safe_nav(nt, id);
+    int bexp = blk >= 0 && nt_kind(nt, blk) == NK_BlockArgumentNode ? nt_ref(nt, blk, "expression") : -1;
+    /* (the operands are `**` operands that are no `nil` or `{}`, and one may
+       call to_hash, which can run anything: the receiver and the positional
+       operands that are variables are held, whatever else is) */
+    long long line = nt_int(nt, id, "node_line", 0), file = nt_int(nt, id, "node_file", 0), col = nt_int(nt, id, "node_col", -1);
+    int rhold = -1, head[2], nhead = 0, pre[40], npre = 0;
+    /* in a value position the call moves to a new number and `id` becomes
+       the conditional: the nodes around it keep their number for what
+       stands there. A statement stays where it is, and is replaced in its
+       list by the statements that run the branches. */
+    int stmt = id < n0 && spar[id] > 0, call = id;
+    if (!stmt) {
+      call = nt_new_node(nt, "CallNode");
+      if (call < 0) continue;
+      elab_swap_nodes(c, id, call);
+      nt_node_reset(nt, id, "ParenthesesNode");
+    }
+    if (recv >= 0 && (safe || !splat_leaf_node(nt, recv) || nt_kind(nt, recv) == NK_LocalVariableReadNode ||
+                      nt_kind(nt, recv) == NK_InstanceVariableReadNode)) {
+      rhold = sd_hold(c, nt, NULL, id, "kwr", -1, recv, safe ? head : pre, safe ? &nhead : &npre);
+      nt_node_set_ref(nt, call, "receiver", rhold);
+    }
+    int hargs[24];
+    for (int i = 0; i < n - 1; i++) {
+      NodeKind ak = nt_kind(nt, args[i]);
+      int held = !splat_leaf_node(nt, args[i]) || ak == NK_LocalVariableReadNode || ak == NK_InstanceVariableReadNode;
+      hargs[i] = held ? sd_hold(c, nt, NULL, id, "kwa", i, args[i], pre, &npre) : args[i];
+    }
+    /* With one `**` operand and a `&` operand that is a plain read
+       (blockarg_plain_read), CRuby passes the Hash itself (its to_hash
+       conversion, no copy) and reads it after converting the block, so a key
+       its to_proc adds is passed: the conversion runs, then the copy is built
+       and tested. With any other `&` operand, or with two `**`, the Hash is
+       built first. */
+    int simple = ne == 1 && ndyn == 1 && blockarg_plain_read(nt, bexp);
+    if (simple) {
+      int hc = sd_hold(c, nt, NULL, id, "kwh", -1, sd_bcall(nt, "__kw_hash", -1, (int[]){ nt_ref(nt, dyn[0], "value") }, 1), pre, &npre);
+      nt_node_set_ref(nt, dyn[0], "value", hc);
+      nt_node_set_ref(nt, blk, "expression", sd_hold(c, nt, NULL, id, "kwb", -1,
+                      sd_bcall(nt, "__blk_conv", -1, (int[]){ nt_clone_subtree(nt, bexp) }, 1), pre, &npre));
+      nt_subtree_blank(nt, bexp);
+      c->uses_blk_conv = 1;
+    }
+    /* `{**e1, **e2}` converts as the call would (nil, to_hash, TypeError) */
+    int hash = nt_new_node(nt, "HashNode");
+    nt_node_set_arr(nt, hash, "elements", dyn, ndyn);
+    int kread = sd_hold(c, nt, NULL, id, "kwk", -1, hash, pre, &npre);
+    if (!simple && bexp >= 0 && !splat_leaf_node(nt, bexp))
+      nt_node_set_ref(nt, blk, "expression", sd_hold(c, nt, NULL, id, "kwb", -1, bexp, pre, &npre));
+    for (int i = 0; i < ne; i++) {
+      int kept = 0;
+      for (int j = 0; j < ndyn; j++) if (dyn[j] == el[i]) kept = 1;
+      if (!kept) nt_subtree_blank(nt, el[i]);
+    }
+    int as = nt_new_node(nt, "AssocSplatNode");
+    nt_node_set_ref(nt, as, "value", nt_clone_subtree(nt, kread));
+    nt_node_set_arr(nt, kh, "elements", &as, 1);
+    /* the empty branch is the call without the keyword hash, copied before
+       the other one takes it */
+    if (n > 1) nt_node_set_arr(nt, an, "arguments", hargs, n - 1);
+    else nt_node_set_ref(nt, call, "arguments", -1);
+    nt_set_safe_nav(nt, call, 0);
+    nt_node_set_int(nt, call, "kwsplit", 1);
+    int bare = nt_clone_subtree(nt, call);
+    /* each branch runs where the call stood, in its frame, once, and so does
+       every node of its copy: node_in_place says so to the load record
+       (lr_unplaced), which places them there */
+    if (!stmt) nt_node_set_int(nt, call, "node_in_place", 1);
+    for (int j = bare; j < nt->count; j++) nt_node_set_int(nt, j, "node_in_place", 1);
+    hargs[n - 1] = kh;
+    nt_node_set_ref(nt, call, "arguments", an);
+    nt_node_set_arr(nt, an, "arguments", hargs, n);
+    int test = sd_bcall(nt, "empty?", kread, NULL, 0);
+    pre[npre++] = sd_if(nt, test, bare, call);
+    if (safe) {
+      /* a nil receiver answers nil before any operand runs */
+      int nilp = sd_bcall(nt, "nil?", nt_clone_subtree(nt, rhold), NULL, 0), nl = nt_new_node(nt, "NilNode");
+      head[nhead++] = sd_if_n(nt, nilp, &nl, 1, pre, npre);
+      memcpy(pre, head, sizeof(int) * (size_t)nhead);
+      npre = nhead;
+    }
+    if (stmt) {
+      int sl = spar[id] - 1, m = 0, k = 0;
+      const int *st = nt_arr(nt, sl, "body", &m);
+      int *nb = malloc(sizeof(int) * (size_t)(m + npre));
+      if (!nb) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+      for (int i = 0; i < m; i++) {
+        if (st[i] != id) { nb[k++] = st[i]; continue; }
+        for (int j = 0; j < npre; j++) nb[k++] = pre[j];
+      }
+      nt_node_set_arr(nt, sl, "body", nb, k);
+      free(nb);
+      continue;
+    }
+    int stmts = nt_new_node(nt, "StatementsNode");
+    nt_node_set_arr(nt, stmts, "body", pre, npre);
+    nt_node_set_ref(nt, id, "body", stmts);
+    if (line > 0) { nt_node_set_int(nt, id, "node_line", line); nt_node_set_int(nt, id, "node_file", file); }
+    if (col >= 0) nt_node_set_int(nt, id, "node_col", col);
+  }
+  for (int i = 0; i < al.n; i++) { free(al.new_[i]); free(al.old_[i]); }
+  free(al.new_); free(al.old_); anh_free(&al.gated);
+  free(spar);
+  comp_grow_node_arrays(c);
 }
 
 /* Whether a synthesized `__bam_N` wrapper binds a RECEIVER in its first
@@ -50375,6 +50665,7 @@ static void an_phase_desugar_register(Compiler *c) {
   desugar_constant_path_self_alias(c);   /* A::B::C = remove_const(:C) (C a class) -> dropped */
   /* builtins/enumerable.rb, spliced by the parser: its definitions become
      the receiver-taking top-level functions before any scope is built */
+  AN_STEP_V("split_kwsplat_calls", split_kwsplat_calls(c, 0));   /* r.sum(**kw) -> kw.empty? ? r.sum : r.sum(**kw) */
   AN_STEP_V("desugar_builtins", desugar_builtins(c));
   lower_run(c, &lc, LW_STORED_ENUM_EACH);
   /* ahead of the per-call-site copies below, which its calls take as a

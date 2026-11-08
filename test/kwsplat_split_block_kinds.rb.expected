@@ -1,0 +1,13 @@
+[2, 4]
+[2, 3]
+["1", "2"]
+[6, 7]
+[:a, :b]
+true
+false
+["1", "2"]
+"no implicit conversion of NoTp into Proc"
+"no implicit conversion of Integer into Proc"
+[1, 2, {k: 1}]
+[1, 2, {k: 1}]
+[1, 2]

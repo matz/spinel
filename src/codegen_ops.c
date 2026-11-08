@@ -86,6 +86,19 @@ static const char *int_plain_template(const char *name) {
   return NULL;
 }
 
+/* __kw_hash(x), __blk_conv(x): the Hash a `**` operand x stands for, the
+   Proc or nil a `&` operand stands for, converted where it is read (the
+   row's runtime function, over x boxed and whether a program class may
+   answer the conversion by method_missing). */
+static int emit_op_conv_user_ok(Compiler *c, const BopCtx *x, Buf *b) {
+  int argc;
+  const int *argv = call_args(c->nt, x->id, &argc);
+  buf_printf(b, "%s(", x->op->arg);
+  emit_boxed(c, argv[0], b);
+  buf_printf(b, ", %d)", kw_splat_user_may_convert(c));
+  return 1;
+}
+
 static int emit_op_template(Compiler *c, const BopCtx *x, Buf *b) {
   static const char tnames[] = "tuvwxyz";
   const char *tmpl = x->op->arg;
@@ -514,6 +527,7 @@ static int (*const bop_emitters[BOPE__COUNT])(Compiler *, const BopCtx *, Buf *)
   [BOPE_PROC_PARAMETERS] = emit_op_proc_parameters,
   [BOPE_PROC_SOURCE_LOCATION] = emit_op_proc_source_location,
   [BOPE_ARRAY_PRED_CLASS] = emit_op_array_pred_class,
+  [BOPE_CONV_USER_OK] = emit_op_conv_user_ok,
 };
 
 static int emit_builtin_op_ex(Compiler *c, int id, int recv, TyKind rt, const char *name,

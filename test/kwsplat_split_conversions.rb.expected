@@ -1,0 +1,8 @@
+[2, 3]
+[7, 14]
+[5, 10]
+"can't convert Bad to Proc (Bad#to_proc gives Integer)"
+"can't convert Bad to Proc (Bad#to_proc gives Integer)"
+[1, 2]
+"can't convert Bh to Hash (Bh#to_hash gives Integer)"
+"no implicit conversion of Object into Hash"

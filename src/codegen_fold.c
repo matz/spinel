@@ -9011,7 +9011,7 @@ static const char *kw_splat_bad_cls(Compiler *c, TyKind t) {
    anyway? Only when some class of the program defines method_missing;
    otherwise its conversion is a TypeError as surely as a builtin's. A
    class's own #to_hash is called through the bridge (sp_kw_splat_conv). */
-static int kw_splat_user_may_convert(Compiler *c) {
+int kw_splat_user_may_convert(Compiler *c) {
   for (int k = 0; k < c->nclasses; k++)
     if (comp_method_in_chain(c, k, "method_missing", NULL) >= 0) return 1;
   return 0;

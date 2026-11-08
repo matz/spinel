@@ -13958,14 +13958,26 @@ static void emit_conv_bridge(Compiler *c, Buf *b, const char *mname, TyKind want
    method exists, calling nothing. Emitted only for a program that calls
    Kernel#Integer or Kernel#Float somewhere (Compiler.uses_kconv), or that
    converts a boxed `**` operand through its #to_hash (row 5,
-   Compiler.uses_kw_to_hash; sp_kw_splat_conv judges the answer). */
-static const char *const kconv_names[] = { "to_int", "to_i", "to_f", "to_str", NULL, "to_hash" };
+   Compiler.uses_kw_to_hash; sp_kw_splat_conv judges the answer), or a boxed
+   `&` operand through its #to_proc (row 6, Compiler.uses_blk_conv;
+   sp_poly_blk_conv judges the answer). */
+static const char *kconv_name(int w) {
+  switch (w) {
+    case 0: return "to_int";
+    case 1: return "to_i";
+    case 2: return "to_f";
+    case 3: return "to_str";
+    case 5: return "to_hash";
+    case 6: return "to_proc";
+    default: return NULL;
+  }
+}
 static int kconv_row_wanted(Compiler *c, int w) {
-  return w == 5 ? c->uses_kw_to_hash : w < 4 && c->uses_kconv;
+  return w == 5 ? c->uses_kw_to_hash : w == 6 ? c->uses_blk_conv : w < 4 && c->uses_kconv;
 }
 static void emit_kconv_row(Compiler *c, int i, int w, int *rows, Buf *b) {
   int tmi = -1;
-  int callee = conv_bridge_callee(c, i, kconv_names[w], TY_UNKNOWN, 1, &tmi);
+  int callee = conv_bridge_callee(c, i, kconv_name(w), TY_UNKNOWN, 1, &tmi);
   if (callee < 0) return;
   if ((*rows)++ == 0) buf_printf(b, "    case %d: switch (which) {\n", i);
   char call[256];
@@ -13978,10 +13990,10 @@ static void emit_kconv_row(Compiler *c, int i, int w, int *rows, Buf *b) {
 }
 static void emit_kconv_bridge(Compiler *c, Buf *b) {
   for (int i = 0; i < c->nclasses; i++) {
-    for (int w = 0; w < 6; w++) {
+    for (int w = 0; w < 7; w++) {
       if (!kconv_row_wanted(c, w)) continue;
       int tmi = -1;
-      int callee = conv_bridge_callee(c, i, kconv_names[w], TY_UNKNOWN, 1, &tmi);
+      int callee = conv_bridge_callee(c, i, kconv_name(w), TY_UNKNOWN, 1, &tmi);
       if (callee != i) continue;   /* an ancestor's own row declares it */
       buf_puts(b, g_debug ? "" : "static ");
       emit_method_ret_ctype(c, &c->scopes[tmi], b);   /* as the definition (an oint answer included) */
@@ -14021,7 +14033,8 @@ static void emit_kconv_bridge(Compiler *c, Buf *b) {
                    rn ? rn : c->classes[i].name);
       }
     }
-    if (kconv_row_wanted(c, 5)) emit_kconv_row(c, i, 5, &rows, b);
+    for (int w = 5; w < 7; w++)
+      if (kconv_row_wanted(c, w)) emit_kconv_row(c, i, w, &rows, b);
     if (rows) buf_puts(b, "      default: return 0;\n    }\n");
   }
   buf_puts(b, "    default: return 0;\n  }\n}\n");
@@ -14446,7 +14459,7 @@ static void emit_obj_inspect_dispatch(Compiler *c, Buf *b) {
   emit_conv_bridge(c, b, "to_path", TY_STRING,
                    "const char *", "static const char *sp_obj_to_path_sw(int cls_id, void *p)",
                    0, "return NULL;");
-  if (c->uses_kconv || c->uses_kw_to_hash) emit_kconv_bridge(c, b);
+  if (c->uses_kconv || c->uses_kw_to_hash || c->uses_blk_conv) emit_kconv_bridge(c, b);
   emit_obj_cls_name_rt(b);
   /* the switch is built aside: the walk's table, built with it, comes first */
   Buf sw; memset(&sw, 0, sizeof sw);
@@ -18011,7 +18024,7 @@ void emit_regex_section(Compiler *c, Buf *b) {
     buf_puts(b, "  sp_obj_to_int_fn = sp_obj_to_int_sw;\n");
     buf_puts(b, "  sp_obj_to_str_fn = sp_obj_to_str_sw;\n");
     buf_puts(b, "  sp_obj_to_path_fn = sp_obj_to_path_sw;\n");
-    if (c->uses_kconv || c->uses_kw_to_hash) buf_puts(b, "  sp_obj_conv_fn = sp_obj_conv_sw;\n");
+    if (c->uses_kconv || c->uses_kw_to_hash || c->uses_blk_conv) buf_puts(b, "  sp_obj_conv_fn = sp_obj_conv_sw;\n");
   }
   if (c->nclasses > 0) buf_puts(b, "  sp_obj_cls_name_fn = sp_obj_cls_name_rt;\n");
   if (program_has_arysub(c)) buf_puts(b, "  sp_bsub_cls_fn = sp_bsub_cls_of;\n");   /* #7449 */
@@ -22946,7 +22959,7 @@ char *codegen_program(const NodeTable *nt) {
     buf_puts(&b, "static sp_int sp_obj_to_int_sw(int cls_id, void *p, int *ok) SP_COLD SP_NOINLINE;\n");
     buf_puts(&b, "static const char *sp_obj_to_str_sw(int cls_id, void *p) SP_COLD SP_NOINLINE;\n");
     buf_puts(&b, "static const char *sp_obj_to_path_sw(int cls_id, void *p) SP_COLD SP_NOINLINE;\n");
-    if (c->uses_kconv || c->uses_kw_to_hash)
+    if (c->uses_kconv || c->uses_kw_to_hash || c->uses_blk_conv)
       buf_puts(&b, "static int sp_obj_conv_sw(int cls_id, void *p, int which, sp_RbVal *out) SP_COLD SP_NOINLINE;\n");
   }
   if (c->nclasses > 0) buf_puts(&b, "static const char *sp_obj_cls_name_rt(int cls_id) SP_COLD SP_NOINLINE;\n");

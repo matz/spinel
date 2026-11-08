@@ -370,6 +370,13 @@ static const BuiltinOp bop_rows[] = {
   { BOP_KERNEL, "__env_to_h",  0, 0, BF_NONE, TY_STR_STR_HASH, BOPE_TEMPLATE, "sp_env_to_h()", 0, 0, BOPF_INTERNAL },  /* the desugared ENV snapshot (#2742) */
   /* (one representation: a String Hash holds the String it is handed, and ENV a frozen copy; ENV itself as a value is a snapshot that copies what is stored into it) */
   { BOP_KERNEL, "__env_value", 0, 0, BF_NONE, TY_STR_STR_HASH, BOPE_TEMPLATE, "sp_env_value()", 0, 0, BOPF_INTERNAL },
+  /* the implicit conversions of a call's operands, run ahead of the call (split_kwsplat_calls): a `**` operand's to_hash, a `&` operand's whole conversion (a kind that is already what the call converts stays what it is, typed; any other is converted at run time) */
+  { BOP_KERNEL, "__kw_hash",   1, 1, BF_NONE, TY_POLY, BOPE_CONV_USER_OK, "sp_kw_splat_conv", 0, 0, BOPF_INTERNAL },
+  { BOP_KERNEL, "__blk_conv",  1, 1, BF_NONE, BOPR_ARG0, BOPE_TEMPLATE, "$e0",
+    BOP_K(TY_NIL) | BOP_K(TY_SYMBOL) | BOP_K(TY_PROC) | BOP_K(TY_CURRY) | BOP_K(TY_METHOD) |
+    BOP_K(TY_STR_INT_HASH) | BOP_K(TY_STR_STR_HASH) | BOP_K(TY_INT_INT_HASH) | BOP_K(TY_INT_STR_HASH) |
+    BOP_K(TY_SYM_POLY_HASH) | BOP_K(TY_STR_POLY_HASH) | BOP_K(TY_POLY_POLY_HASH), 0, BOPF_INTERNAL },
+  { BOP_KERNEL, "__blk_conv",  1, 1, BF_NONE, TY_POLY, BOPE_CONV_USER_OK, "sp_poly_blk_conv", 0, 0, BOPF_INTERNAL },
 #include "builtin_zero_ops.inc"
   { TY_POLY, "upcase", 0, 0, BF_ANY, TY_POLY, BOPE_TEMPLATE,
     "sp_poly_case_conv($r, sp_str_upcase, \"upcase\")", 0, 0, 0, 1 },

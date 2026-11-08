@@ -141,6 +141,8 @@ static void sp_File_fin(void *p) {
   free(f->rbuf); f->rbuf = NULL;   /* freed here only: a reader takes rbuf without a use (sp_io_use) */
   if (!f->fp || f->closed) return;   /* closed: the FILE is the shared sentinel */
   if (f->no_autoclose && !f->fno_plus1) { fflush(f->fp); f->fp = NULL; return; }
+  extern void sp_sched_ev_forget(int fd);
+  sp_sched_ev_forget(fileno(f->fp));
   fclose(f->fp); f->fp = NULL;
 }
 static void sp_File_scan(void *p) { sp_File *f = (sp_File *)p; if (f->path) sp_mark_string(f->path); if (f->mode) sp_mark_string(f->mode); sp_io_timeout *timeout = SP_ATOMIC_LOAD(&f->timeout, __ATOMIC_ACQUIRE); if (timeout) sp_gc_mark(timeout); }

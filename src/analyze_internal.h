@@ -1174,6 +1174,7 @@ void a_mark_subtree(Compiler *c, int id, char *inproc);
 void a_collect_used(Compiler *c, int id, ANameSet *out);
 int a_proc_params_node(Compiler *c, int create);
 int a_proc_body(Compiler *c, int create);
+const char *a_type_proc_block_param(Compiler *c, int create, int pn);  /* analyze.c */
 int a_block_is_lifted(Compiler *c, int id);
 /* 1 if scope `si` creates a proc whose `return` leaves it (codegen.c): the method needs a proc-return frame. */
 int scope_creates_returning_proc(Compiler *c, int si);

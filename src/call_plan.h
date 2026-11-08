@@ -194,6 +194,8 @@ int call_target(Compiler *c, int id, int cls, const char *name, unsigned flags, 
    an explicit receiver and does not ignore visibility (a send does): that is
    NoMethodError. */
 int cplan_class_row(Compiler *c, int id, int recv, const char *name);
+/* Does call `id`, which has no receiver, take the BOP_KERNEL row of its name: an internal row for a call the compiler made, any other where no method of the program's own (a top-level function or the enclosing class's) answers the name? */
+int cplan_kernel_row(Compiler *c, int id, const char *name);
 /* Does the call id on a known class (recv) run the program's own class
    method of a Class or Module reflection name (superclass, ancestors,
    instance_methods, ...) in place of the builtin? Not when that method's

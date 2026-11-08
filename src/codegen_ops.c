@@ -518,7 +518,7 @@ static int (*const bop_emitters[BOPE__COUNT])(Compiler *, const BopCtx *, Buf *)
 
 static int emit_builtin_op_ex(Compiler *c, int id, int recv, TyKind rt, const char *name,
                               const char *rtext, int t0, int stage, BopArgKind arg_of, int observe, Buf *b) {
-  if (recv < 0) return 0;
+  if (recv < 0 && rt != BOP_KERNEL) return 0;
   /* a Hash or Array receiver of any variant reads its family's rows */
   TyKind lk = bop_family_of(rt);
   if (!bop_covers(lk)) return 0;

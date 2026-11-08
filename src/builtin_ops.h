@@ -335,6 +335,12 @@ typedef struct BuiltinOp {
    Object's methods, so a top-level def of the name is the one a send
    reaches (send_blind_recv_owns does not count the row). */
 #define BOPF_BASIC_OBJECT 2048
+/* A row of a function the compiler makes calls to and the program cannot
+   write (a BOP_KERNEL row such as __env_to_h): it answers a call node the
+   compiler made (builtin_only) whatever the program defines, and a call
+   the program wrote never takes it. It is no CRuby method, so the arity
+   check against CRuby's counts skips it. */
+#define BOPF_INTERNAL 8192
 
 /* A row's recv may name a family of kinds rather than one; a caller looks
    the family up with the family's value. Not a TyKind any value has. */

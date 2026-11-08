@@ -5798,14 +5798,6 @@ static int emit_complex_rational_call(Compiler *c, int id, Buf *b) {
     else { buf_puts(b, "sp_exc_class(sp_unbox_class("); emit_boxed(c, argv[0], b); buf_puts(b, "))"); }
     return 1;
   }
-  /* the desugared ENV snapshot (#2742) */
-  if (recv < 0 && sp_streq(name, "__env_to_h") && argc == 0) {
-    /* (one representation: a String Hash holds the String it is handed,
-       and ENV a frozen copy; ENV itself as a value is a snapshot that
-       copies what is stored into it, sp_env_value) */
-    buf_puts(b, nt_int(nt, id, "env_value", 0) ? "sp_env_value()" : "sp_env_to_h()");
-    return 1;
-  }
   if (recv < 0 && sp_streq(name, "__enum_chain") && argc == 1) {
     buf_puts(b, "sp_enum_chain_new("); emit_boxed(c, argv[0], b); buf_puts(b, ")");
     return 1;
@@ -20669,6 +20661,7 @@ int builtin_ops_arity_check(void) {
   for (int i = 0; i < bop_row_count(); i++) {
     const BuiltinOp *r = bop_row(i);
     if (r->argc_max == BOP_ARGC_ANY) continue;   /* the row leaves the count to the table */
+    if (r->flags & BOPF_INTERNAL) continue;   /* a function of the compiler's, not a CRuby method: no count to check */
     const char *cls = bop_spec_class(r->recv);
     if (!cls) continue;
     const SpAritySpec *sp = NULL;

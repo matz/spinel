@@ -2717,6 +2717,20 @@ int cplan_self_builtin(Compiler *c, int id) {
   return ci >= 0 && call_target(c, -1, ci, name, CT_CMETHOD, NULL) >= 0 &&
          call_target(c, id, ci, name, CT_CMETHOD, NULL) < 0 && is_kernel_module_function(name);
 }
+int cplan_kernel_row(Compiler *c, int id, const char *name) {
+  const NodeTable *nt = c->nt;
+  int argc = 0;
+  call_args(nt, id, &argc);
+  const BuiltinOp *op = name && nt_ref(nt, id, "receiver") < 0 ? bop_find(BOP_KERNEL, name, argc, nt_ref(nt, id, "block") >= 0) : NULL;
+  if (!op) return 0;
+  /* an internal row answers the calls the compiler made (builtin_only: it
+     never reaches a method of the program's), whatever the program defines;
+     the program's own call of its name never takes it */
+  if (op->flags & BOPF_INTERNAL) return nt_int(nt, id, "builtin_only", 0);
+  int self = cplan_self_class(c, id);
+  return call_target(c, id, -1, name, CT_TOP, NULL) < 0 && (self < 0 || call_target(c, id, self, name, 0, NULL) < 0);
+}
+
 const char *cplan_self_text(Compiler *c, int id, int ci, char *buf, size_t cap) {
   int self = id >= 0 ? cplan_self_class(c, id) : -2;
   if (self >= 0 && self < c->nclasses) return cm_self_name(c, self, buf, cap);

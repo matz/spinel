@@ -2177,7 +2177,7 @@ void emit_to_s_expr(Compiler *c, int node, Buf *b) {
      SP_STR_B resolves the face on the expression's C type. Any other
      String is the bytes already.) */
   if (wt == TY_STRING) {
-    int hnd = g_one_string && repr_of(c, node).handle;
+    int hnd = repr_of(c, node).handle;
     if (hnd) buf_puts(b, "SP_STR_B(");
     emit_expr(c, node, b);
     if (hnd) buf_puts(b, ")");

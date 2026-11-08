@@ -2795,11 +2795,6 @@ static int source_calls_time_parser(const char *src) {
    sp_feature_enabled(). Definitions here (spinel_parse.c includes no project
    headers); declared extern in compiler.h. */
 int g_strict_require = 0;
-/* A String is shared by reference, as CRuby shares it (#6765): the one
-   mode, with no switch to copy. The compiler's flag and the parser's read
-   of a package's share declarations ask this one test; `--share-strings`
-   is still accepted and changes nothing. */
-int sp_share_strings_env(void) { return 1; }
 int g_strict_require_cli = 0;   /* --strict-require */
 int g_dump_load_graph = 0;    /* --dump-load-graph */
 int sp_parse_reported = 0;    /* the parse failed and said why (the driver adds nothing) */
@@ -5393,14 +5388,13 @@ static int sp_lib_lookup(const char *lib_dir, const char *lib_name, char *out, s
    `path` is the file as found. First, what a native Windows build
    answers differently for it, lib/win32/overlay/<the same path>
    (sp_win32_driver.c). Then a package's share declarations
-   (`native_share`), in <name>.share.rb beside the file; kept apart so
-   that a build without the flag parses no node of them. */
+   (`native_share`), in <name>.share.rb beside the file. */
 static char *sp_lib_text_appended(char *content, const char *path, int tier) {
   if (!content || tier < SP_LIB_BUILTIN) return content;
 #if defined(_WIN32)
   content = sp_w32_overlay(content, path);
 #endif
-  if (sp_share_strings_env() && strlen(path) > 3) {
+  if (strlen(path) > 3) {
     char sp[1100];
     snprintf(sp, sizeof sp, "%.*s.share.rb", (int)(strlen(path) - 3), path);
     char *side = read_file(sp);

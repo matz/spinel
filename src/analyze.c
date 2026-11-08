@@ -26424,24 +26424,12 @@ static int share_static_container(Compiler *c, int kind, const char *name) {
       int i = comp_cvar_index(ci, grn);
       if (i < 0 || (!ty_is_array(ci->cvar_types[i]) && !ty_is_hash(ci->cvar_types[i]))) continue;
       any = 1;
-      if (!g_one_string &&   /* (the one-String mode: the typed container holds the handle) */
-          (ci->cvar_types[i] == TY_STR_ARRAY || ci->cvar_types[i] == TY_POLY_ARRAY) && !(ci->cvar_elems_shared[i] & ELEMS_POLY)) {
-        cvar_set_type(ci, i, TY_POLY_ARRAY);
-        { ci->cvar_elems_shared[i] |= ELEMS_POLY; comp_touch_class(ci->idx); }
-        changed = 1;
-      }
     }
     if (!any) return 0;
   }
   else {
     LocalVar *gv = kind == SHK_GVAR ? comp_gvar(c, grn) : comp_const(c, grn);
     if (!gv || (!ty_is_array(gv->type) && !ty_is_hash(gv->type))) return 0;
-    if (!g_one_string && (gv->type == TY_STR_ARRAY || gv->type == TY_POLY_ARRAY) && !gv->rbs_seeded &&
-        (gv->type != TY_POLY_ARRAY || !gv->elems_shared)) {
-      lv_set_type(gv, TY_POLY_ARRAY);
-      gv->elems_shared = 1;
-      changed = 1;
-    }
   }
   /* a global's `=` (VS_WRITE), a constant's and a class variable's `=`,
      `||=` and `&&=` (VS_STORE: the index keeps no VS_WRITE for them) */

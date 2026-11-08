@@ -28,8 +28,6 @@ extern int g_nrequired_features;
 /* a feature in it that is not a library the program's start loads (a core
    library CRuby has loaded before it starts): a require the program makes */
 int sp_requires_non_boot_feature(void);
-/* SPINEL_SHARE_STRINGS is on: set, not empty and not "0" (spinel_parse.c) */
-int sp_share_strings_env(void);
 void sp_feature_mark(const char *name);
 int sp_feature_enabled(const char *name);
 int        sp_feature_required(const char *name); /* require was actually written (gate-independent) */
@@ -1688,8 +1686,8 @@ typedef struct {
      (itself, for one of those), or -1 at the top level (comp_node_pbases) */
   int *node_pbase; int node_pbase_n;
   char **pbase_keys; int *pbase_key_cnt; int pbase_key_slots, pbase_key_n;   /* key -> times seen */
-  /* --share-strings (SPINEL_SHARE_STRINGS): every String slot is the
-     shared handle (#6765); the share classes (share.h) are rebuilt as the
+  /* every String slot is the shared handle (#6765, --share-strings is
+     still accepted); the share classes (share.h) are rebuilt as the
      analysis goes for the questions still asked of them. */
   int share_borrows;    /* arguments share_mark_borrows lets borrow the bytes */
   /* the program's parent map, for the emitter's questions about where a node
@@ -1715,7 +1713,6 @@ typedef struct {
      answers for it, + 2 (1: none; 0: not asked yet) */
   int *lazy_hoist;
   int lazy_hoist_n;
-  int share_strings;
   int has_cm_builtin_alias;   /* a singleton alias captured a builtin's class method (alias_builtin 2) */
   /* the scope + 1 whose block a yield under emit_proc_yield hands its
      arguments to (a proc form, or a method with a `&blk` it calls), or 0 */

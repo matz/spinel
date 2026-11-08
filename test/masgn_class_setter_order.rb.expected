@@ -1,0 +1,36 @@
+K.a=1 sees $g=:old @@c=:old
+:new
+K.b=1
+o.b=2
+o.b=3
+K.b=4
+K.a=1 sees $g=:new @@c=:old
+:new
+H.x=5 sees @y=0
+6
+K.a=7 sees $g=:new @@c=:new
+[8, 9]
+K.b=10
+K.a=12 sees $g=:new @@c=:new
+11
+K.b=:m
+[:f, :l]
+K.a=:v sees $g=:in_m @@c=:new
+:w
+K.b=:p
+box[:k]=:q
+box[1]=:r
+K.b=1
+{z: 2}
+K.b=1
+o.b=3
+K.b=1
+o.b=3
+K.b=1
+box[:k]=2
+K.b=1
+o.b=2
+K.b=1
+private c=2
+K.b=1
+[2, 3]

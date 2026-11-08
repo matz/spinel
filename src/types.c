@@ -140,6 +140,21 @@ static const PolyFace ty_poly_face_tbl[] = {
   {"collect_concat", PF_HASH | PF_LAST, 0, -1, -1}, {"none?", PF_HASH | PF_LAST, 0, -1, -1}, {"one?", PF_HASH | PF_LAST, 0, -1, -1},
   /* the readers of a hash's default, and deconstruct_keys */
   {"deconstruct_keys", PF_HASH | PF_LAST, 0, -1, -1}, {"default", PF_HASH | PF_LAST, 0, -1, -1}, {"default_proc", PF_HASH | PF_LAST, 0, -1, -1},
+  /* The zero-argument forms of names whose boxed arms were written for one
+     argument or more: the typed emitter of each owner answers them, so a
+     row sends the box there (a Hash's merge, an Array's values_at / union /
+     difference / intersection / zip, the blockless index family and
+     sort_by, slice, the String's start_with? / end_with? / dedup / encode!). */
+  {"merge", PF_HASH, 0, 0, -1},
+  {"values_at", PF_ARRAY, 0, 0, 0}, {"values_at", PF_HASH, 0, 0, 0},
+  {"union", PF_ARRAY, 0, 0, 0}, {"difference", PF_ARRAY, 0, 0, 0}, {"intersection", PF_ARRAY, 0, 0, 0},
+  {"zip", PF_ARRAY | PF_HASH | PF_RANGE, 0, 0, 0},
+  {"index", PF_ARRAY | PF_STRING, 0, 0, 0}, {"rindex", PF_ARRAY | PF_STRING, 0, 0, 0},
+  {"find_index", PF_ARRAY | PF_HASH, 0, 0, 0}, {"bsearch", PF_ARRAY, 0, 0, 0},
+  {"sort_by", PF_ARRAY | PF_HASH | PF_RANGE, 0, 0, 0},
+  {"slice", PF_ARRAY | PF_STRING | PF_HASH, 0, 0, 0},
+  {"start_with?", PF_STRING, 0, 0, 0}, {"end_with?", PF_STRING, 0, 0, 0},
+  {"dedup", PF_STRING, 0, 0, 0}, {"encode!", PF_STRING | PF_MUT | PF_VAL_SELF, 0, 0, 0},
   {0, 0, 0, 0, 0}
 };
 static int face_row_matches(const PolyFace *r, int argc, int has_blk, int plain) {

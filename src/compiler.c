@@ -2662,13 +2662,16 @@ static void const_top_level_walk(const NodeTable *nt, int node, ANameHash *out, 
 /* The names the walk finds, for the tree as it is: the C generation asks
    again for the same names, and a walk of every file per question was near
    half of a Rails app's C generation */
-static struct { const NodeTable *nt; unsigned ver; int count; ANameHash names; } g_top_names;
+static struct { const NodeTable *nt; unsigned ver; unsigned long edits; int count; ANameHash names; } g_top_names;
 static const ANameHash *const_top_level_names(const NodeTable *nt) {
-  if (g_top_names.nt != nt || g_top_names.ver != nt->version || g_top_names.count != nt->count) {
+  /* (edits too: the walk follows the links, which a ref or array edit moves
+     without a version bump) */
+  if (g_top_names.nt != nt || g_top_names.ver != nt->version || g_top_names.edits != nt->edits ||
+      g_top_names.count != nt->count) {
     anh_free(&g_top_names.names); memset(&g_top_names.names, 0, sizeof g_top_names.names);
     for (int r = 0; r < nt_nroots(nt); r++)   /* each file's tree */
       const_top_level_walk(nt, nt_root(nt, r), &g_top_names.names, 0);
-    g_top_names.nt = nt; g_top_names.ver = nt->version; g_top_names.count = nt->count;
+    g_top_names.nt = nt; g_top_names.ver = nt->version; g_top_names.edits = nt->edits; g_top_names.count = nt->count;
   }
   return &g_top_names.names;
 }

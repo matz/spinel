@@ -8,5 +8,6 @@ true
 0
 true
 true
+false
 "4.5|nil"
 "[1, nil] \"s\""

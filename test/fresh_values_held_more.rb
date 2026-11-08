@@ -23,6 +23,8 @@ p h, h["z"]
 p (1..3).overlap?(2.5..9)
 def rr(x) = x ? (1..5) : 3
 p rr([true][0]).overlap?(4..10)
+# a Float Range's freed box is the argument's slot, which overlaps itself
+p (1.0..2.0).overlap?(3.0..4.0)
 
 # String#% with %p: the list made for it, while inspect allocates
 fl = [4.5]

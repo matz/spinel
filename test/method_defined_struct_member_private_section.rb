@@ -43,3 +43,16 @@ unless W.method_defined?(:mem, false)
   class W; def q = 1; end
 end
 p W.new(5).respond_to?(:q)
+
+# a statement the fold cannot read after the section (an `if` holding a
+# def of the name) leaves the answer not known, as before
+X = Struct.new(:mem) do
+  private
+  if true
+    def mem = :own
+  end
+end
+unless X.method_defined?(:mem, false)
+  class X; def q = 1; end
+end
+p X.new(5).respond_to?(:q)

@@ -6346,6 +6346,23 @@ static int me_vis_arg_names(const NodeTable *nt, int a, const char *m) {
                   ak == NK_DefNode ? nt_str(nt, a, "name") : NULL;
   return !v || sp_streq(v, m);
 }
+/* a statement after a section word whose own definitions the scan reads
+   in full: a def, an alias, an attr or alias_method call of literal names,
+   or another visibility word (read below). Anything else (an `if`, a
+   `begin`, a `send(:define_method, ...)`) may define the name. */
+static int me_stmt_plain(const NodeTable *nt, int s) {
+  NodeKind sk = nt_kind(nt, s);
+  if (sk == NK_DefNode) return nt_ref(nt, s, "receiver") < 0;
+  if (sk == NK_AliasMethodNode) return nt_kind(nt, nt_ref(nt, s, "new_name")) == NK_SymbolNode;
+  const char *cn = sk == NK_CallNode && nt_ref(nt, s, "receiver") < 0 && nt_ref(nt, s, "block") < 0 ? nt_str(nt, s, "name") : NULL;
+  if (!cn) return 0;
+  if (visibility_of_name(cn)) return 1;
+  if (!is_attr_decl_reader(cn) && !is_attr_decl_writer(cn) && !sp_streq(cn, "alias_method")) return 0;
+  int an = 0; const int *av = nt_arr(nt, nt_ref(nt, s, "arguments"), "arguments", &an);
+  for (int a = 0; a < an; a++)
+    if (nt_kind(nt, av[a]) != NK_SymbolNode && nt_kind(nt, av[a]) != NK_StringNode) return 0;
+  return 1;
+}
 static int me_stmts_vis(const NodeTable *nt, int body, const char *m) {
   int bn = 0; const int *bb = body >= 0 && nt_kind(nt, body) == NK_StatementsNode ? nt_arr(nt, body, "body", &bn) : NULL;
   static const char *const vis[] = { "private", "protected", "public", "module_function", "undef_method", "remove_method", NULL };
@@ -6356,7 +6373,7 @@ static int me_stmts_vis(const NodeTable *nt, int body, const char *m) {
       for (int u = 0; u < un; u++) if (me_vis_arg_names(nt, uv[u], m)) return 1;
       continue;
     }
-    if (section && me_stmt_defines(nt, bb[i], m)) return 1;
+    if (section && (me_stmt_defines(nt, bb[i], m) || !me_stmt_plain(nt, bb[i]))) return 1;
     const char *cn = nt_kind(nt, bb[i]) == NK_CallNode && nt_ref(nt, bb[i], "receiver") < 0 ? nt_str(nt, bb[i], "name") : NULL;
     int w = 0;
     while (cn && vis[w] && !sp_streq(cn, vis[w])) w++;
@@ -6424,8 +6441,7 @@ static int me_record_defines(const NodeTable *nt, const char *cls, const char *m
 static int engine_method_own_absent(NodeTable *nt, const char *cls, const char *m, int in) {
   if (me_body_defines(nt, cls, m, in)) return 0;
   /* (a Struct's or Data's members and the defs in its block are its own) */
-  int rd = me_record_defines(nt, cls, m, in, NULL);
-  if (rd != 0) return rd > 0 ? 0 : -1;
+  if (me_record_defines(nt, cls, m, in, NULL) > 0) return 0;
   if (is_builtin_class_name(cls) || is_builtin_module_name(cls) || builtin_class_id(cls)) return -1;
   return me_leaf_defined(nt, cls) ? 1 : -1;
 }

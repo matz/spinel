@@ -5232,7 +5232,7 @@ static int infer_range_lazy_call(Compiler *c, int id, const NodeTable *nt, const
       /* step with a block walks the range and returns self */
       if (nt_ref(nt, id, "block") >= 0) { *out = rt; return 1; }
       /* an endless one is walked as it is read: an Enumerator (sp_range_endless_step) */
-      if (argc == 1 && range_lit_endless(c, recv)) { *out = TY_ENUMERATOR; return 1; }
+      if (argc <= 1 && range_lit_endless(c, recv)) { *out = TY_ENUMERATOR; return 1; }
       /* a Rational step yields boxed Rational/Integer values */
       if (rt == TY_RANGE && an_range_step_rat(c, id, 1)) { *out = TY_POLY_ARRAY; return 1; }
       /* a float step, or a literal range with float bounds, yields floats */

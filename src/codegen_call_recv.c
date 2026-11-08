@@ -14485,15 +14485,24 @@ int emit_value_recv_call(Compiler *c, int id, Buf *b) {
    Integer steps use the faithful int helper (step 0 raises ArgumentError, a
    negative step descends, an exclusive range drops the endpoint). Shared by the
    no-block materialisation and the block walk so both yield identical values. */
+/* The stride of a Range#step: its first operand, or CRuby's 1 for a call
+   written without one (the call stays as written). */
+void emit_range_step_stride(Compiler *c, int argc, const int *argv, int as_float, Buf *b) {
+  if (argc >= 1) { if (as_float) emit_float_expr(c, argv[0], b); else emit_int_expr(c, argv[0], b); }
+  else buf_puts(b, as_float ? "1.0" : "1");
+}
+
 TyKind emit_range_step_array(Compiler *c, int id, Buf *b) {
   const NodeTable *nt = c->nt;
   int recv = nt_ref(nt, id, "receiver");
   int args = nt_ref(nt, id, "arguments");
   int argc = 0;
   const int *argv = args >= 0 ? nt_arr(nt, args, "arguments", &argc) : NULL;
-  if (argc < 1) { buf_puts(b, "sp_IntArray_new()"); return TY_INT_ARRAY; }
+  /* a step written without an argument is CRuby's step of 1: the stride below
+     is then the literal 1, and the call stays as written */
+  int bare = argc < 1;
   /* a Rational step collects the boxed walk's values */
-  if (comp_ntype(c, recv) == TY_RANGE && an_range_step_rat(c, id, 0)) {
+  if (!bare && comp_ntype(c, recv) == TY_RANGE && an_range_step_rat(c, id, 0)) {
     int ta = ++g_tmp;
     buf_printf(b, "({ sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d); ", ta, ta);
     int tc = emit_range_rat_step_for(c, recv, argv[0], 1, b);
@@ -14505,14 +14514,14 @@ TyKind emit_range_step_array(Compiler *c, int id, Buf *b) {
   int lo = is_lit ? nt_ref(nt, rn, "left") : -1;
   int hi = is_lit ? nt_ref(nt, rn, "right") : -1;
   int excl = is_lit && nt_range_excl(nt, rn);
-  int is_float = comp_ntype(c, argv[0]) == TY_FLOAT ||
+  int is_float = (!bare && comp_ntype(c, argv[0]) == TY_FLOAT) ||
                  (lo >= 0 && comp_ntype(c, lo) == TY_FLOAT) ||
                  (hi >= 0 && comp_ntype(c, hi) == TY_FLOAT);
   if (is_float && is_lit && lo >= 0 && hi >= 0) {
     buf_puts(b, "sp_FloatArray_from_step(");
     emit_float_expr(c, lo, b); buf_puts(b, ", ");
     emit_float_expr(c, hi, b); buf_puts(b, ", ");
-    emit_float_expr(c, argv[0], b); buf_printf(b, ", %d)", excl);
+    emit_range_step_stride(c, argc, argv, 1, b); buf_printf(b, ", %d)", excl);
     return TY_FLOAT_ARRAY;
   }
   int t = ++g_tmp;
@@ -14526,7 +14535,7 @@ TyKind emit_range_step_array(Compiler *c, int id, Buf *b) {
   else
     buf_printf(b, "({ sp_Range _t%d = %s; sp_range_int_only(_t%d, \"Range#step\"); sp_IntArray_from_range_step(_t%d.first, _t%d.last, ",
                t, rb.p ? rb.p : "", t, t, t);
-  if (is_float) emit_float_expr(c, argv[0], b); else emit_int_expr(c, argv[0], b);
+  emit_range_step_stride(c, argc, argv, is_float, b);
   if (is_float) buf_printf(b, ", sp_range_excl_end(_t%d)); })", t);
   else buf_printf(b, ", _t%d.excl); })", t);
   free(rb.p);
@@ -14601,10 +14610,11 @@ int emit_range_call(Compiler *c, int id, Buf *b) {
     int a0 = argc >= 1 ? comp_ntype(c, argv[0]) : TY_UNKNOWN;
     int tr = ++g_tmp;
     /* a blockless step over an endless one: an Enumerator walks it */
-    if (argc == 1 && sp_streq(name, "step") && nt_ref(nt, id, "block") < 0 && range_lit_endless(c, recv)) {
+    if (argc <= 1 && is_step_call(name) && nt_ref(nt, id, "block") < 0 && range_lit_endless(c, recv)) {
       buf_printf(b, "({ sp_FloatRange _t%d = ", tr); emit_expr(c, recv, b);
       buf_printf(b, "; sp_range_endless_step(sp_box_float(_t%d.first), ", tr);
-      emit_boxed(c, argv[0], b); buf_puts(b, "); })");
+      if (argc) emit_boxed(c, argv[0], b); else buf_puts(b, "sp_box_int(1)");
+      buf_puts(b, "); })");
       return 1;
     }
     /* overlap?: CRuby's range_overlap at run time, as for an Integer Range */
@@ -14946,13 +14956,14 @@ int emit_range_call(Compiler *c, int id, Buf *b) {
         }
       }
     }
-    if (sp_streq(name, "step") && argc == 1 && block < 0) {
+    if (is_step_call(name) && argc <= 1 && block < 0) {
       /* an endless range cannot materialize: an Enumerator walks it */
       if (range_lit_endless(c, recv)) {
         int te = ++g_tmp;
         buf_printf(b, "({ sp_Range _t%d = ", te); emit_expr(c, recv, b);
         buf_printf(b, "; sp_range_endless_step(sp_box_int(_t%d.first), ", te);
-        emit_boxed(c, argv[0], b); buf_puts(b, "); })");
+        if (argc) emit_boxed(c, argv[0], b); else buf_puts(b, "sp_box_int(1)");
+        buf_puts(b, "); })");
         return 1;
       }
       emit_range_step_array(c, id, b);

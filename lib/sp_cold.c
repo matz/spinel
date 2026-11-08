@@ -5304,8 +5304,10 @@ sp_Enumerator *sp_srange_endless_enum(sp_RbVal box, sp_int step) {
    Enumerator over every n-th member. A bounded range's stepped members are
    materialized; an endless one's follow by succ (sp_srange_endless_enum).
    `label` is the name the Enumerator inspects with ("step" or "%"). The Range
-   is boxed first and held, for the Enumerator to report as its source. */
-sp_Enumerator *sp_srange_stepped_enum(sp_RbVal src, sp_int n, const char *label) {
+   is boxed first and held, for the Enumerator to report as its source.
+   `written` says the step was given: the label then carries it, `step(2)`;
+   a bare step is labeled `step`, as CRuby shows it. */
+sp_Enumerator *sp_srange_stepped_enum(sp_RbVal src, sp_int n, const char *label, int written) {
   SP_GC_ROOT_STR(label);
   SP_GC_ROOT_RBVAL(src);
   sp_StrRange r = sp_srange_held(*(sp_StrRange *)src.v.p);
@@ -5328,7 +5330,8 @@ sp_Enumerator *sp_srange_stepped_enum(sp_RbVal src, sp_int n, const char *label)
     e = sp_srange_endless_enum(src, n);
   }
   SP_GC_ROOT(e);
-  return sp_enum_with_src(e, src, sp_sprintf("%s(%lld)", label, (long long)n));
+  /* a step written without its argument keeps the label as written */
+  return sp_enum_with_src(e, src, written ? sp_sprintf("%s(%lld)", label, (long long)n) : label);
 }
 
 /* ---- Float leaf ops (opt_inspect/opt_to_s/denominator/numerator/

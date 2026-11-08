@@ -19829,7 +19829,7 @@ sp_Enumerator *sp_loop_enum(void);
 /* The Enumerators of a String Range without a block (sp_cold.c): an endless
    one streams by succ, a bounded one's step members are materialized. */
 sp_Enumerator *sp_srange_endless_enum(sp_RbVal box, sp_int step);
-sp_Enumerator *sp_srange_stepped_enum(sp_RbVal src, sp_int n, const char *label);
+sp_Enumerator *sp_srange_stepped_enum(sp_RbVal src, sp_int n, const char *label, int written);
 /* Blockless Dir.foreach, or Dir.each_child when children is set (sp_cold.c). */
 sp_Enumerator *sp_dir_foreach_enum(sp_RbVal path, sp_RbVal encoding,
                                   const char *(*get_path)(sp_RbVal), int children);
@@ -19879,7 +19879,7 @@ static sp_Enumerator *sp_srange_step_enum(sp_RbVal src, sp_RbVal stride, const c
   SP_GC_ROOT_RBVAL(src); SP_GC_ROOT_RBVAL(stride);
   /* an Integer stride: a bounded Range's stepped members are materialized,
      an endless one's follow by succ (sp_cold.c) */
-  if (stride.tag != SP_TAG_FLT) return sp_srange_stepped_enum(src, sp_poly_arg_int_chk(stride), op);
+  if (stride.tag != SP_TAG_FLT) return sp_srange_stepped_enum(src, sp_poly_arg_int_chk(stride), op, 1);
   sp_Enumerator *e = sp_Enumerator_new_gen(sp_srange_float_step_gen, NULL, sp_box_nil());
   SP_GC_ROOT(e);
   const char *arg = sp_float_to_s(stride.v.f); SP_GC_ROOT_STR(arg);

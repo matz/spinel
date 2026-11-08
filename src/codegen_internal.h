@@ -1310,6 +1310,7 @@ void emit_begin(Compiler *c, int id, Buf *b, int indent, const char *resultvar);
 int  emit_array_mutate_stmt(Compiler *c, int id, Buf *b, int indent);
 int  emit_output_call(Compiler *c, int id, Buf *b, int indent);
 TyKind emit_range_step_array(Compiler *c, int id, Buf *b);
+void emit_range_step_stride(Compiler *c, int argc, const int *argv, int as_float, Buf *b);
 int  emit_iteration_stmt(Compiler *c, int id, Buf *b, int indent);
 void emit_loop_body(Compiler *c, int body, Buf *b, int indent);
 void emit_loop_polls(Compiler *c, int body, Buf *b, int indent, int uncounted, int nest);

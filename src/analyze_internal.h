@@ -1078,6 +1078,7 @@ int desugar_body_ivars(Compiler *c);
 int desugar_const_ivar_access(Compiler *c);
 int desugar_class_eval_ivars(Compiler *c);
 int desugar_builtin_ivars(Compiler *c);
+int desugar_send_aliases(Compiler *c);
 int desugar_inherited_aliases(Compiler *c);
 int desugar_builtin_alias_calls(Compiler *c);
 int desugar_readers_over_inherited_defs(Compiler *c);

@@ -21077,6 +21077,70 @@ static int alias_builtin_rooted(const NodeTable *nt, const char *cls, const char
   return 0;
 }
 
+/* `alias nw send` (or __send__, public_send; alias_method too) in a class
+   or module that does not define the name itself: Kernel's method, which
+   nothing defines for the alias to name, so a call of nw raised
+   NoMethodError, and so did a `super` into it from a subclass or a module
+   (actionpack's `alias send_action send` under BasicImplicitRender's
+   send_action). It becomes `def nw(*a, **k, &b) = __send__(*a, **k, &b)`,
+   or public_send for public_send's: the alias keeps naming Kernel's method
+   whatever the class defines of `send` later, as __send__ does, and the
+   keywords pass on as the alias passes them. */
+static int send_forwarder_like(NodeTable *nt, int like, const char *nw, const char *target) {
+  int d = alias_forwarder_like(nt, like, nw, target);
+  if (d < 0) return -1;
+  int ps = nt_ref(nt, d, "parameters"), bd = nt_ref(nt, d, "body"), bn = 0;
+  const int *bb = bd >= 0 ? nt_arr(nt, bd, "body", &bn) : NULL;
+  int call = bn == 1 ? bb[0] : -1, args = call >= 0 ? nt_ref(nt, call, "arguments") : -1;
+  if (ps < 0 || args < 0) return d;
+  int kp = fwd_new_node_like(nt, like, "KeywordRestParameterNode");
+  nt_node_set_str(nt, kp, "name", "spinel_alias_k__");
+  nt_node_set_ref(nt, ps, "keyword_rest", kp);
+  int as = fwd_new_node_like(nt, like, "AssocSplatNode");
+  nt_node_set_ref(nt, as, "value", local_read_like(nt, like, "spinel_alias_k__"));
+  int kh = fwd_new_node_like(nt, like, "KeywordHashNode");
+  nt_node_set_arr(nt, kh, "elements", &as, 1);
+  int an = 0; const int *av = nt_arr(nt, args, "arguments", &an);
+  int two[2] = { an > 0 ? av[0] : -1, kh };
+  nt_node_set_arr(nt, args, "arguments", two, 2);
+  return d;
+}
+int desugar_send_aliases(Compiler *c) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  int n0 = nt->count, changed = 0;
+  for (int m = 0; m < n0; m++) {
+    if (!class_def_opens_cref(nt, m)) continue;
+    const char *cls = class_def_name(nt, m);
+    int body = class_def_body(nt, m);
+    int n = 0; const int *st = cls && body >= 0 && nt_kind(nt, body) == NK_StatementsNode ? nt_arr(nt, body, "body", &n) : NULL;
+    for (int k = 0; k < n; k++) {
+      int s = st[k];
+      const char *nw = NULL, *od = NULL;
+      alias_pair_names(nt, s, &nw, &od);
+      if (!nw || !od || !(sp_streq(od, "send") || sp_streq(od, "__send__") || sp_streq(od, "public_send")) ||
+          alias_class_defines(nt, cls, od, n0))
+        continue;
+      char nwc[256];
+      snprintf(nwc, sizeof nwc, "%s", nw);
+      int fd = send_forwarder_like(nt, s, nwc, sp_streq(od, "public_send") ? "public_send" : "__send__");
+      if (fd < 0) continue;
+      /* the forwarder in the alias's place (st is read again: the new nodes may
+         have moved the table's arrays) */
+      st = nt_arr(nt, body, "body", &n);
+      int *out = malloc(sizeof(int) * (size_t)n);
+      if (!out) { fprintf(stderr, "out of memory\n"); exit(1); }
+      memcpy(out, st, sizeof(int) * (size_t)n);
+      out[k] = fd;
+      nt_node_set_arr(nt, body, "body", out, n);
+      free(out);
+      st = nt_arr(nt, body, "body", &n);
+      changed = 1;
+    }
+  }
+  if (changed) comp_grow_node_arrays(c);
+  return changed;
+}
+
 int desugar_inherited_aliases(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int n0 = nt->count, changed = 0;

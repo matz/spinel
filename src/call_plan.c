@@ -34,6 +34,17 @@ int cplan_dispatch_form(Compiler *c, int call, int cid, const char *name, int ha
          ? CP_PER_ARM : CP_SWITCH;
 }
 
+/* Is call id inside a block or a lambda of its method? */
+static int call_in_block(Compiler *c, int id) {
+  const NodeTable *nt = c->nt;
+  const int *par = comp_parent_map(c);
+  for (int a = par[id]; a >= 0; a = par[a]) {
+    NodeKind k = nt_kind(nt, a);
+    if (k == NK_DefNode) return 0;
+    if (k == NK_BlockNode || k == NK_LambdaNode) return 1;
+  }
+  return 0;
+}
 int cplan_self_root_override(Compiler *c, int id, int scls, int root_mi) {
   const NodeTable *nt = c->nt;
   if (id < 0 || scls < 0 || scls >= c->nclasses || root_mi < 0 || root_mi >= c->nscopes) return 0;
@@ -45,8 +56,8 @@ int cplan_self_root_override(Compiler *c, int id, int scls, int root_mi) {
   if (!self || self->is_cmethod || self->class_id != scls || ie_class_of(c, id) >= 0) return 0;
   ClassInfo *ci = &c->classes[scls];
   if (comp_class_is_module(c, ci) || ci->is_native_class) return 0;
-  /* (a call in a block or a lambda keeps the old path: the body may be a
-     function of its own, where no self is at hand) */
+  /* (a call in a block or a lambda takes the switch too: the block then
+     captures self, proc_body_uses_self) */
   Scope *rm = &c->scopes[root_mi];
   int oci = comp_core_class(c, CORE_OBJECT);
   if (rm->yields || rm->is_cmethod || (rm->class_id >= 0 && rm->class_id != oci) || scls == oci) return 0;
@@ -62,6 +73,10 @@ int cplan_self_root_override(Compiler *c, int id, int scls, int root_mi) {
     int kmi = call_target(c, id, k, name, 0, NULL);
     if (kmi < 0 || kmi == root_mi) continue;
     if (c->scopes[kmi].yields) return 0;
+    /* (an arm whose super reaches a top-level def keeps the old path in a
+       block: that super is not resolved yet, and the plain call raises
+       NoMethodError for it already) */
+    if (rm->class_id < 0 && scope_calls_super(c, kmi) && call_in_block(c, id)) return 0;
     found = 1;
   }
   return found;

@@ -21326,11 +21326,32 @@ static void emit_class_machinery(const NodeTable *nt, Compiler *c, Buf *b, char 
       "    if(v.cls_id>=-20||v.cls_id==-34)return ((sp_Class){-105});\n"  /* hashes */
       /* a BasicObject.new is a BasicObject, not an Object or a Kernel */
       "    if(v.cls_id==SP_BUILTIN_BASIC_OBJECT)return ((sp_Class){-117});\n"
-      /* any other builtin box (an IO, File, Dir, socket, Mutex...) is the
-         builtin class its name gives, as #class answers, so is_a?(k) and
-         k === v with k a class value walk that class's chain (Dir and IO
-         are Enumerable), not Object's */
-      "    { sp_int _bid=sp_builtin_id_of_name(sp_poly_class_name(v)); if(_bid!=SP_CLASS_NIL_ID)return ((sp_Class){_bid}); }\n"
+      /* a builtin handle (a Dir, IO, File, socket, Mutex, Queue, Thread,
+         Fiber, Regexp...) is its own builtin class, as #class answers, so
+         is_a?(k) and k === v with k a class value walk that class's chain
+         (Dir and IO are Enumerable), not Object's. One cls_id holds
+         several classes for an IO and a Queue: the handle's class name
+         tells them apart. A name with no builtin id (Monitor, File::Stat)
+         stays an Object, as before. */
+      "    switch(v.cls_id){\n"
+      "    case SP_BUILTIN_DIR: return ((sp_Class){-165});\n"
+      "    case SP_BUILTIN_THREAD: return ((sp_Class){-174});\n"
+      "    case SP_BUILTIN_CONDVAR: return ((sp_Class){-178});\n"
+      "    case SP_BUILTIN_FIBER: return ((sp_Class){-179});\n"
+      "    case SP_BUILTIN_REGEX: return ((sp_Class){-143});\n"
+      "    case SP_BUILTIN_IO: case SP_BUILTIN_MUTEX: case SP_BUILTIN_QUEUE: {\n"
+      "      const char *_n=sp_poly_class_name(v);\n"
+      "      if(!strcmp(_n,\"IO\"))return ((sp_Class){-120});\n"
+      "      if(!strcmp(_n,\"File\"))return ((sp_Class){-121});\n"
+      "      if(!strcmp(_n,\"Thread::Mutex\"))return ((sp_Class){-175});\n"
+      "      if(!strcmp(_n,\"Thread::Queue\"))return ((sp_Class){-176});\n"
+      "      if(!strcmp(_n,\"Thread::SizedQueue\"))return ((sp_Class){-177});\n"
+      "      sp_int _bid=sp_builtin_id_of_name(_n);\n"   /* a socket */
+      "      if(_bid!=SP_CLASS_NIL_ID)return ((sp_Class){_bid});\n"
+      "      break;\n"
+      "    }\n"
+      "    default: break;\n"
+      "    }\n"
       "    return ((sp_Class){-116});\n"
       "  default: return ((sp_Class){-116});\n"
       "  }\n}\n"

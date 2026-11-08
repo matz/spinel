@@ -8867,7 +8867,7 @@ static int fiber_full_params(Compiler *c, FiberParams *f, Scope *encl) {
   const char *rnm = rst >= 0 ? nt_str(nt, rst, "name") : NULL;
   if (rnm) {
     LocalVar *lv = scope_local(encl, rnm);
-    if (!lv || lv->type != TY_POLY_ARRAY || lv->is_cell) return 0;
+    if (!lv || lv->type != TY_POLY_ARRAY) return 0;
     nameset_add(&f->names, rnm);
   }
   const char *knm = krs >= 0 ? nt_str(nt, krs, "name") : NULL;
@@ -8878,17 +8878,26 @@ static int fiber_full_params(Compiler *c, FiberParams *f, Scope *encl) {
   }
   return 1;
 }
-/* A boxed parameter bound from `expr`, and its cell where a lambda in the
-   body captures it (as the lone parameter's is) */
+/* A boxed parameter bound from `expr`, and its cell, seeded from the slot,
+   where a lambda in the body captures it (as the lone parameter's is) */
 static void emit_fiber_param_slot(Compiler *c, Scope *encl, const char *nm, const char *expr, NameSet *caps, Buf *pb) {
+  (void)c;
   const char *bpn = rename_local(nm);
   buf_printf(pb, "    sp_RbVal lv_%s = %s;\n", bpn, expr);
   buf_printf(pb, "    SP_GC_ROOT_RBVAL(lv_%s);\n", bpn);
   LocalVar *lv = scope_local(encl, nm);
-  if (lv && lv->is_cell && !nameset_has(caps, nm)) {
-    emit_cell_decl(c, encl, lv, pb);
-    buf_printf(pb, "    *_cell_%s = lv_%s;\n", nm, bpn);
-  }
+  if (lv && lv->is_cell && !nameset_has(caps, nm))
+    buf_printf(pb, "    sp_RbVal *_cell_%s = (sp_RbVal *)sp_gc_alloc(sizeof(sp_RbVal), NULL, sp_cell_scan_rbval);\n"
+                   "    SP_GC_ROOT(_cell_%s);\n    *_cell_%s = lv_%s;\n", nm, nm, nm, bpn);
+}
+/* A rest parameter's cell, where a lambda in the body captures it: the
+   slot's array, seeded from it */
+static void emit_fiber_rest_cell(Scope *encl, const char *nm, NameSet *caps, Buf *pb) {
+  LocalVar *lv = scope_local(encl, nm);
+  if (!lv || !lv->is_cell || nameset_has(caps, nm)) return;
+  buf_printf(pb, "    sp_PolyArray **_cell_%s = (sp_PolyArray **)sp_gc_alloc(sizeof(void *), NULL, %s);\n"
+                 "    SP_GC_ROOT(_cell_%s);\n    *_cell_%s = lv_%s;\n",
+             nm, cell_scan_fn(TY_POLY_ARRAY), nm, nm, rename_local(nm));
 }
 /* A boxed parameter bound from `val` where `have` holds, else from its
    default `dflt`, which runs only then, with what its emission puts ahead
@@ -8970,6 +8979,7 @@ static void emit_fiber_full_bind(Compiler *c, FiberParams *f, Scope *encl, NameS
     const char *bpn = rename_local(rnm);
     buf_printf(pb, "    sp_PolyArray *lv_%s = sp_PolyArray_new();\n    SP_GC_ROOT(lv_%s);\n", bpn, bpn);
     buf_printf(pb, "    for (sp_int _fi = _fr; _fi < _fq; _fi++) sp_PolyArray_push(lv_%s, sp_PolyArray_get(_fa, _fi));\n", bpn);
+    emit_fiber_rest_cell(encl, rnm, caps, pb);
   }
   for (int k = 0; k < Q; k++) {
     snprintf(ex, sizeof ex, "_fq + %d < _fn ? sp_PolyArray_get(_fa, _fq + %d) : sp_box_nil()", k, k);
@@ -9401,6 +9411,7 @@ static void emit_fiber_new_here(Compiler *c, int id, Buf *b, int as_gen, int siz
                    " ? sp_poly_to_poly_array(_rv)"
                    " : ({ sp_PolyArray *_ra = sp_PolyArray_new(); sp_PolyArray_push(_ra, _rv); _ra; }); });\n", bpn);
     buf_printf(pb, "    SP_GC_ROOT(lv_%s);\n", bpn);
+    emit_fiber_rest_cell(encl, bp_rest, &caps, pb);
   }
   else if (bp0) {
     const char *bpn = rename_local(bp0);
@@ -10080,6 +10091,56 @@ static void emit_proc_literal_here(Compiler *c, int create, Buf *b);
    that turns the same block into a proc has to as well. Otherwise the proc
    captured the inlined callee's receiver as its self, and the block's ivar
    writes landed in that object instead of the one that wrote the block. */
+/* A celled parameter: this proc's frame OWNS a variable an inner proc
+   captures, so materialize its heap cell here and copy the bound value in --
+   reads and writes below go through the (*_cell_x) forms, and the inner
+   proc's capture fill takes the cell pointer (#2648). Mirrors the
+   method-prologue shapes. Made as each parameter is bound, so a later
+   default that reads an earlier one finds its cell. */
+static void emit_proc_param_cell(Compiler *c, Scope *bs, const char *p, Buf *pb) {
+  LocalVar *lv = p ? scope_local(bs, p) : NULL;
+  if (!lv || !lv->is_cell) return;
+  if (lv->type == TY_PROC) {
+    /* the int slot holds a collectable Proc: it needs a scan, like the
+       method prologue's (#4077 -- this third copy of the shape was missed) */
+    buf_printf(pb, "    sp_int *_cell_%s = (sp_int *)sp_gc_alloc(sizeof(sp_int), NULL, sp_cell_scan_procint);"
+                   " SP_GC_ROOT(_cell_%s); *_cell_%s = (sp_int)(uintptr_t)lv_%s;%c", p, p, p, p, 10);
+  }
+  else if (slot_is_oint(lv)) {
+    const char *ot = oint_ctype(lv->type);
+    buf_printf(pb, "    %s *_cell_%s = (%s *)sp_gc_alloc(sizeof(%s), NULL, NULL);"
+                   " SP_GC_ROOT(_cell_%s); *_cell_%s = lv_%s;%c", ot, p, ot, ot, p, p, p, 10);
+  }
+  else if (lv->type == TY_FLOAT) {
+    buf_printf(pb, "    sp_float *_cell_%s = (sp_float *)sp_gc_alloc(sizeof(sp_float), NULL, NULL);"
+                   " SP_GC_ROOT(_cell_%s); *_cell_%s = lv_%s;%c", p, p, p, p, 10);
+  }
+  else if (lv->type == TY_POLY) {
+    buf_printf(pb, "    sp_RbVal *_cell_%s = (sp_RbVal *)sp_gc_alloc(sizeof(sp_RbVal), NULL, sp_cell_scan_rbval);"
+                   " SP_GC_ROOT(_cell_%s); *_cell_%s = lv_%s;%c", p, p, p, p, 10);
+  }
+  else if (cell_value_struct(lv->type)) {
+    const char *vs = cell_value_struct(lv->type);
+    buf_printf(pb, "    %s *_cell_%s = (%s *)sp_gc_alloc(sizeof(%s), NULL, %s);"
+                   " SP_GC_ROOT(_cell_%s); *_cell_%s = lv_%s;%c", vs, p, vs, vs,
+                   cell_value_struct_scan(lv->type), p, p, p, 10);
+  }
+  else if (proc_slot_is_ptr(lv->type) && !comp_ty_value_obj(c, lv->type)) {
+    buf_puts(pb, "    ");
+    emit_ctype(c, lv->type, pb);
+    buf_printf(pb, " *_cell_%s = (", p);
+    emit_ctype(c, lv->type, pb);
+    buf_printf(pb, " *)sp_gc_alloc(sizeof(void *), NULL, %s);",
+               cell_scan_fn(lv->type));
+    buf_printf(pb, ""
+                   " SP_GC_ROOT(_cell_%s); *_cell_%s = lv_%s;%c", p, p, p, 10);
+  }
+  else {
+    buf_printf(pb, "    sp_int *_cell_%s = (sp_int *)sp_gc_alloc(sizeof(sp_int), NULL, NULL);"
+                   " SP_GC_ROOT(_cell_%s); *_cell_%s = lv_%s;%c", p, p, p, p, 10);
+  }
+}
+
 void emit_proc_literal(Compiler *c, int create, Buf *b) {
   sb_shim_lift(c, create);
   if (create < 0 || create != g_block_id || !g_yield_self_fallback) {
@@ -11090,54 +11151,8 @@ else if (orecv >= 0 && onm) {
     }
     else emit_proc_scalar_param_bind(pb, pt, k, slot_is_oint(lv));
   }
-  /* A celled param: this proc's frame OWNS a variable an inner proc captures,
-     so materialize its heap cell here and copy the bound value in -- reads and
-     writes below go through the (*_cell_x) forms, and the inner proc's capture
-     fill takes the cell pointer (#2648). Mirrors the method-prologue shapes. */
-  for (int k = 0; k < arity; k++) {
-    const char *p = proc_param_name(c, create, k);
-    LocalVar *lv = p ? scope_local(bs, p) : NULL;
-    if (!lv || !lv->is_cell) continue;
-    if (lv->type == TY_PROC) {
-      /* the int slot holds a collectable Proc: it needs a scan, like the
-         method prologue's (#4077 -- this third copy of the shape was missed) */
-      buf_printf(pb, "    sp_int *_cell_%s = (sp_int *)sp_gc_alloc(sizeof(sp_int), NULL, sp_cell_scan_procint);"
-                     " SP_GC_ROOT(_cell_%s); *_cell_%s = (sp_int)(uintptr_t)lv_%s;%c", p, p, p, p, 10);
-    }
-    else if (slot_is_oint(lv)) {
-      const char *ot = oint_ctype(lv->type);
-      buf_printf(pb, "    %s *_cell_%s = (%s *)sp_gc_alloc(sizeof(%s), NULL, NULL);"
-                     " SP_GC_ROOT(_cell_%s); *_cell_%s = lv_%s;%c", ot, p, ot, ot, p, p, p, 10);
-    }
-    else if (lv->type == TY_FLOAT) {
-      buf_printf(pb, "    sp_float *_cell_%s = (sp_float *)sp_gc_alloc(sizeof(sp_float), NULL, NULL);"
-                     " SP_GC_ROOT(_cell_%s); *_cell_%s = lv_%s;%c", p, p, p, p, 10);
-    }
-    else if (lv->type == TY_POLY) {
-      buf_printf(pb, "    sp_RbVal *_cell_%s = (sp_RbVal *)sp_gc_alloc(sizeof(sp_RbVal), NULL, sp_cell_scan_rbval);"
-                     " SP_GC_ROOT(_cell_%s); *_cell_%s = lv_%s;%c", p, p, p, p, 10);
-    }
-    else if (cell_value_struct(lv->type)) {
-      const char *vs = cell_value_struct(lv->type);
-      buf_printf(pb, "    %s *_cell_%s = (%s *)sp_gc_alloc(sizeof(%s), NULL, %s);"
-                     " SP_GC_ROOT(_cell_%s); *_cell_%s = lv_%s;%c", vs, p, vs, vs,
-                     cell_value_struct_scan(lv->type), p, p, p, 10);
-    }
-    else if (proc_slot_is_ptr(lv->type) && !comp_ty_value_obj(c, lv->type)) {
-      buf_puts(pb, "    ");
-      emit_ctype(c, lv->type, pb);
-      buf_printf(pb, " *_cell_%s = (", p);
-      emit_ctype(c, lv->type, pb);
-      buf_printf(pb, " *)sp_gc_alloc(sizeof(void *), NULL, %s);",
-                 cell_scan_fn(lv->type));
-      buf_printf(pb, ""
-                     " SP_GC_ROOT(_cell_%s); *_cell_%s = lv_%s;%c", p, p, p, 10);
-    }
-    else {
-      buf_printf(pb, "    sp_int *_cell_%s = (sp_int *)sp_gc_alloc(sizeof(sp_int), NULL, NULL);"
-                     " SP_GC_ROOT(_cell_%s); *_cell_%s = lv_%s;%c", p, p, p, p, 10);
-    }
-  }
+  /* each celled param gets its cell (emit_proc_param_cell) */
+  for (int k = 0; k < arity; k++) emit_proc_param_cell(c, bs, proc_param_name(c, create, k), pb);
   /* A celled BODY-local: the block declares the name and an inner proc
      captures it, so this frame owns the cell. Declare it here and let the
      block-local reset at the top of the body allocate a fresh one per
@@ -11222,8 +11237,12 @@ else if (orecv >= 0 && onm) {
       { LocalVar *olv = scope_local(bs, on);
         emit_proc_param_slot(c, bs, olv, pb, on, cond, arg, proc_opt_value(c, create, j), "sp_box_nil()",
                              olv ? olv->type : TY_POLY, olv && olv->nullable_int); }
+      emit_proc_param_cell(c, bs, on, pb);
     }
-    if (restn && restn[0]) emit_proc_rest_bind(c, bs, restn, arity, pb);
+    if (restn && restn[0]) {
+      emit_proc_rest_bind(c, bs, restn, arity, pb);
+      emit_proc_param_cell(c, bs, restn, pb);
+    }
     /* A post binds as an optional does: the boxed value, unboxed into the
        type the analysis gave the parameter. Declared boxed whatever that
        type, a post a lowered block's yields typed a String or an Integer
@@ -11237,6 +11256,7 @@ else if (orecv >= 0 && onm) {
       TyKind lt = plv ? plv->type : TY_POLY;
       if (lt == TY_POLY || lt == TY_UNKNOWN) {
         emit_proc_poly_post(c, bs, create, plv, pp, j, pb);
+        emit_proc_param_cell(c, bs, pp, pb);
         continue;
       }
       buf_printf(pb, "    sp_RbVal _pv_%s = _sp_ps + %d < argc ? sp_proc_arg(_sp_ps + %d)"
@@ -11254,6 +11274,7 @@ else if (orecv >= 0 && onm) {
       if (proc_slot_is_ptr(lt) && ty_gc_rootable(c, lt)) buf_printf(pb, " SP_GC_ROOT(lv_%s);", pp);
       buf_printf(pb, " (void)lv_%s;\n", pp);
       free(ub.p);
+      emit_proc_param_cell(c, bs, pp, pb);
     }
   }
   /* Keyword params (`proc { |a:, b: 5| }`): the caller's kwargs arrive as a
@@ -11331,6 +11352,7 @@ else if (orecv >= 0 && onm) {
       snprintf(missing, sizeof missing, "(sp_raise_cls(\"ArgumentError\", \"missing keyword: :%s\"), sp_box_nil())", key);
       LocalVar *klv = scope_local(bs, kn);
       emit_proc_param_slot(c, bs, klv, pb, kn, cond, arg, dv, missing, klv ? klv->type : TY_POLY, 0);
+      emit_proc_param_cell(c, bs, kn, pb);
     }
   }
   /* `**kw`: the whole trailing kwargs hash, or an empty hash when the caller
@@ -11371,6 +11393,7 @@ else if (orecv >= 0 && onm) {
         free(ub.p);
       }
       else { buf_puts(pb, "    "); emit_local_ctype(c, TY_POLY, proc_local_needs_volatile(c, create, klv), pb); buf_printf(pb, " lv_%s = _kwr_%s; (void)lv_%s;%c", krn, krn, krn, 10); }
+      emit_proc_param_cell(c, bs, krn, pb);
     }
   }
   /* The boxed-argument and result channels are GC roots, and nothing cleared

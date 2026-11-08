@@ -2,6 +2,7 @@
 #include "share.h"
 #include "repr.h"
 #include "analyze.h"
+#include "analyze_internal.h"
 #include "builtin_names.h"
 #include "codegen_poly.h"
 #include "value_pos.h"
@@ -2631,12 +2632,11 @@ int comp_sg_reader_candidates(Compiler *c, int call_id, int *out, int max) {
    inside `module Underscore::Rails` must not resolve through the nested
    entry. Walks the AST: a Class/Module/ConstantWrite of that name counts
    only when not enclosed by another class/module body. Builtins count. */
-static int const_top_level_walk(Compiler *c, int node, const char *cn, int depth) {
-  const NodeTable *nt = c->nt;
-  if (node < 0 || !nt_type(nt, node)) return 0;
+static void const_top_level_walk(const NodeTable *nt, int node, ANameHash *out, int depth) {
+  if (node < 0 || !nt_type(nt, node)) return;
   NodeKind ty_k = nt_kind(nt, node);
   int is_mod = ty_k == NK_ClassNode || ty_k == NK_ModuleNode;
-  if (is_mod || ty_k == NK_ConstantWriteNode) {
+  if (depth == 0 && (is_mod || ty_k == NK_ConstantWriteNode)) {
     const char *nm = NULL;
     if (is_mod) {
       int cp = nt_ref(nt, node, "constant_path");
@@ -2646,19 +2646,31 @@ static int const_top_level_walk(Compiler *c, int node, const char *cn, int depth
         nm = nt_str(nt, cp, "name");
     }
     else nm = nt_str(nt, node, "name");
-    if (nm && depth == 0 && sp_streq(nm, cn)) return 1;
+    if (nm && !anh_has(out, nm)) anh_add(out, nm);
   }
   int ndepth = depth + (is_mod ? 1 : 0);
   int nr = nt_num_refs(nt, node);
   for (int i = 0; i < nr; i++)
-    if (const_top_level_walk(c, nt_ref_at(nt, node, i), cn, ndepth)) return 1;
+    const_top_level_walk(nt, nt_ref_at(nt, node, i), out, ndepth);
   int na = nt_num_arrs(nt, node);
   for (int i = 0; i < na; i++) {
     int n = 0; const int *ids = nt_arr_at(nt, node, i, &n);
     for (int k = 0; k < n; k++)
-      if (const_top_level_walk(c, ids[k], cn, ndepth)) return 1;
+      const_top_level_walk(nt, ids[k], out, ndepth);
   }
-  return 0;
+}
+/* The names the walk finds, for the tree as it is: the C generation asks
+   again for the same names, and a walk of every file per question was near
+   half of a Rails app's C generation */
+static struct { const NodeTable *nt; unsigned ver; int count; ANameHash names; } g_top_names;
+static const ANameHash *const_top_level_names(const NodeTable *nt) {
+  if (g_top_names.nt != nt || g_top_names.ver != nt->version || g_top_names.count != nt->count) {
+    anh_free(&g_top_names.names); memset(&g_top_names.names, 0, sizeof g_top_names.names);
+    for (int r = 0; r < nt_nroots(nt); r++)   /* each file's tree */
+      const_top_level_walk(nt, nt_root(nt, r), &g_top_names.names, 0);
+    g_top_names.nt = nt; g_top_names.ver = nt->version; g_top_names.count = nt->count;
+  }
+  return &g_top_names.names;
 }
 static const char *const wellknown[] = {
     "Object", "BasicObject", "Kernel", "Module", "Class", "Array", "Hash",
@@ -2679,9 +2691,7 @@ const char *comp_wellknown_const_at(int i) {
 int const_name_resolves_top_level(Compiler *c, const char *cn) {
   if (!cn) return 0;
   if (comp_is_wellknown_const(cn)) return 1;
-  for (int r = 0; r < nt_nroots(c->nt); r++)   /* each file's tree */
-    if (const_top_level_walk(c, nt_root(c->nt, r), cn, 0)) return 1;
-  return 0;
+  return anh_has(const_top_level_names(c->nt), cn);
 }
 static int const_name_resolves(Compiler *c, const char *cn) {
   if (!cn) return 0;

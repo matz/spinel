@@ -1,0 +1,20 @@
+[:h, :p, :p, :h2]
+:h
+"NoMethodError"
+"NoMethodError"
+"NameError"
+"NoMethodError"
+"NoMethodError"
+false
+true
+false
+false
+false
+false
+false
+[42, "NoMethodError"]
+"NoMethodError"
+:own
+:top
+[1, :s]
+false

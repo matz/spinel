@@ -3434,13 +3434,36 @@ static void sg_reattach_scope(Compiler *c, int node, int ci) {
   }
 }
 
-/* ...and each def the body of a `class << obj` makes, wherever in it the def
+/* `private def m` / `protected def m` / `public def m` as a statement of a
+   `class << obj` body: the def is the visibility call's argument. It moves
+   onto the traced singleton class with the visibility the call gives it, so
+   the method stays the object's own. Inside a method of the body the call
+   runs only when that method runs, so the def stays where the walk filed it. */
+static void sg_reattach_vis_def(Compiler *c, int node, int ci, int self_obj) {
+  const NodeTable *nt = c->nt;
+  if (self_obj || nt_ref(nt, node, "receiver") >= 0 || nt_ref(nt, node, "block") >= 0) return;
+  const char *vn = nt_str(nt, node, "name");
+  int bv = vn ? visibility_of_name(vn) : 0;
+  if (bv <= BVIS_MODULE_FUNCTION) return;
+  int va = nt_ref(nt, node, "arguments");
+  int vc = 0; const int *vv = va >= 0 ? nt_arr(nt, va, "arguments", &vc) : NULL;
+  if (vc != 1 || nt_kind(nt, vv[0]) != NK_DefNode || nt_ref(nt, vv[0], "receiver") >= 0) return;
+  const char *dn = nt_str(nt, vv[0], "name");
+  if (!dn) return;
+  sg_reattach_scope(c, vv[0], ci);
+  comp_method_vis_set(&c->classes[ci], dn,
+                      bv == BVIS_PRIVATE ? SP_VIS_PRIVATE : bv == BVIS_PROTECTED ? SP_VIS_PROTECTED : SP_VIS_PUBLIC);
+  comp_class_shape_changed();
+}
+
+/* Move each def the body of a `class << obj` makes, wherever in it the def
    stands (under an `if`); a class or module body in it has its own. A def
-   that is a call's argument (`private def m`) moves only onto the parked
-   class: on a traced singleton class it would lose the visibility the call
-   gives it, so it stays where the walk filed it. A def with a receiver
-   (`def Foo.m` in a method of the body, which defines Foo's own class method
-   when the method runs) moves only onto the parked class too: on a traced
+   that is a visibility call's argument (`private def m`) moves with the
+   visibility the call gives it (sg_reattach_vis_def); a def in any other
+   call stays where the walk filed it, except on the parked class. A def
+   with a receiver (`def Foo.m` in a method of the body, which defines
+   Foo's own class method when the method runs) moves only onto the parked
+   class too: on a traced
    singleton class it is no instance method of the object and would lose
    Foo.m. Nothing of a parked body runs, so there all of it goes. But a
    `def self.m` in a method that moved (`self_obj`: the innermost def around
@@ -3452,7 +3475,10 @@ static void sg_reattach_body_defs(Compiler *c, int node, int ci, int top, int se
   if (node < 0) return;
   NodeKind k = nt_kind(nt, node);
   if (!top && (k == NK_ClassNode || k == NK_ModuleNode || k == NK_SingletonClassNode)) return;
-  if (k == NK_CallNode && ci != c->sg_parked - 1) return;
+  if (k == NK_CallNode && ci != c->sg_parked - 1) {
+    sg_reattach_vis_def(c, node, ci, self_obj);
+    return;
+  }
   if (k == NK_DefNode) {
     int recv = nt_ref(nt, node, "receiver");
     self_obj = recv < 0 || ci == c->sg_parked - 1 ||

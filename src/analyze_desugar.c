@@ -18573,23 +18573,63 @@ static int bx_recv_concrete(int bx, TyKind rt) {
   return 0;
 }
 
-/* Does an alias or alias_method of the program name a method nm? (It may
-   capture a builtin method, which no scope holds.) */
+/* May class or module k answer an instance method for a String or a
+   Symbol: String, Symbol, Comparable, Object, Kernel, BasicObject or the
+   top level, or a module one of them or the top level includes or
+   prepends? (k < 0: a class the caller does not know, so yes.) */
+static int bx_owner_reaches_string(Compiler *c, int k) {
+  if (k < 0 || k >= c->nclasses || k == c->toplevel_class) return 1;
+  static const char *const roots[] = { "String", "Symbol", "Comparable", "Object", "Kernel", "BasicObject" };
+  for (int i = 0; i < (int)(sizeof roots / sizeof roots[0]); i++) {
+    int r = comp_builtin_class_named(c, roots[i]);
+    const char *kn = c->classes[k].name;
+    if (r == k || (kn && sp_streq(kn, roots[i]))) return 1;
+    for (int a = r, d = 0; a >= 0 && a < c->nclasses && d < 64; a = c->classes[a].parent, d++) {
+      if (a == k) return 1;
+      const ClassInfo *ci = &c->classes[a];
+      for (int m = 0; m < ci->nincluded_mods; m++) if (comp_module_includes(c, ci->included_mods[m], k, 0)) return 1;
+      for (int m = 0; m < ci->nprepended_mods; m++) if (comp_module_includes(c, ci->prepended_mods[m], k, 0)) return 1;
+    }
+  }
+  for (int i = 0; i < c->ntoplevel_includes; i++)
+    if (comp_module_includes(c, c->toplevel_includes[i], k, 0)) return 1;
+  return 0;
+}
+/* Does an alias or alias_method of the program name a method nm that a
+   String or a Symbol may answer? (It may capture a builtin method, which no
+   scope holds.) The load record gives the class side each alias it can
+   follow binds on: an instance alias in a class no String reaches
+   (bx_owner_reaches_string), or a singleton alias, does not count. An alias
+   the record does not place (class_eval, a computed receiver) counts. */
 static int bx_program_aliases(Compiler *c, const char *nm) {
   const NodeTable *nt = c->nt;
-  for (int id = 0; id < nt->count; id++) {
+  int ne = 0, hit = 0;
+  ElabEntry *ents = NULL;
+  for (int id = 0; id < nt->count && !hit; id++) {
     NodeKind k = nt_kind(nt, id);
+    int names = 0;
     if (k == NK_AliasMethodNode) {
       int nn = nt_ref(nt, id, "new_name");
-      if (nn >= 0 && nt_str(nt, nn, "value") && sp_streq(nt_str(nt, nn, "value"), nm)) return 1;
+      names = nn >= 0 && nt_str(nt, nn, "value") && sp_streq(nt_str(nt, nn, "value"), nm);
     }
     else if (k == NK_CallNode && nt_str(nt, id, "name") && is_alias_method_name(nt_str(nt, id, "name"))) {
       int ac = 0; const int *av = call_args(nt, id, &ac);
       const char *an = ac > 0 ? vis_arg_name(nt, av[0]) : NULL;
-      if (!an || sp_streq(an, nm)) return 1;
+      names = !an || sp_streq(an, nm);
     }
+    if (!names) continue;
+    if (!ents) ents = elab_entries(c, 1u << LR_ALIAS | ELAB_ENTRY_MAY, &ne);
+    int placed = 0, reaches = 0;
+    for (int e = 0; e < ne; e++) {
+      if (ents[e].node != id) continue;
+      placed = 1;
+      /* (cls -1 is main's: the top level) */
+      if (!ents[e].sg && (ents[e].cls < 0 || bx_owner_reaches_string(c, ents[e].cls))) reaches = 1;
+    }
+    if (!placed || reaches) hit = 1;
   }
-  return 0;
+  free(ents);
+  return hit;
 }
 /* Does the program have its own instance method nm that a String or a
    Symbol answers before Kernel's: on String or Symbol or a module either

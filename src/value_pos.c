@@ -24,7 +24,6 @@
 #include <string.h>
 #include "value_pos.h"
 #include "analyze.h"
-#include "builtin_names.h"
 
 typedef struct {
   int node;     /* the node to visit, or -1: nil by absence */

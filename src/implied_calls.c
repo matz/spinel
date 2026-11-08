@@ -10,6 +10,7 @@
 #include <string.h>
 #include "implied_calls.h"
 #include "analyze.h"
+#include "value_pos.h"
 #include "builtin_names.h"
 
 enum { NTC_NONE, NTC_NONLITERAL, NTC_NO_ELSE, NTC_MULTI_TARGET, NTC_GVAR_PORT };
@@ -69,20 +70,10 @@ int nt_implied_super(const NodeTable *nt, int id) {
 /* Is node n the value of a scalar literal? A sequence or parentheses stand
    for their last statement, nothing at all for nil. */
 static int nti_literal(const NodeTable *nt, int n) {
-  for (int hops = 0; hops < 16; hops++) {
-    NodeKind k = nt_kind(nt, n);
-    int cnt = 0;
-    const int *body;
-    if (k == NK_ParenthesesNode) {
-      n = nt_ref(nt, n, "body");
-      if (n < 0) return 1;
-    }
-    else if (k == NK_StatementsNode) {
-      body = nt_arr(nt, n, "body", &cnt);
-      if (cnt == 0) return 1;
-      n = body[cnt - 1];
-    }
-    else return nti_literal_kind(k);
+  switch (vp_one(nt, n, VPS_NONE | VP_PARENS_ONLY, &n)) {
+  case VP1_NODE: return nti_literal_kind(nt_kind(nt, n));
+  case VP1_NIL: return 1;
+  case VP1_MANY: return 0;
   }
   return 0;
 }

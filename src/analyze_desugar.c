@@ -7597,7 +7597,13 @@ static int dsend_recv_local_ok(Compiler *c, const NodeTable *nt, int n, int *run
   case NK_CallNode: {
     const char *nm = nt_str(nt, n, "name");
     *runs = 1;
-    return nm && call_target(c, n, -1, nm, CT_TOP, NULL) >= 0;
+    /* (`klass.new` on a class value only the run time knows has no
+       target: its arms then each held their own `klass.new`, and a String
+       mutator arm's handle step for it ran ahead of the dispatch. A `new`
+       answers an object; a program's own `new` that answers a typed
+       container's miss puts a nil in the local, whose arms answer for nil,
+       as test/dsend_class_value_new_recv.rb checks) */
+    return nm && (call_target(c, n, -1, nm, CT_TOP, NULL) >= 0 || sp_streq(nm, "new"));
   }
   case NK_ParenthesesNode: case NK_StatementsNode: {
     int body = nt_kind(nt, n) == NK_ParenthesesNode ? nt_ref(nt, n, "body") : n;

@@ -37,7 +37,7 @@ while cp <= 0x1FFFF
     { u: s.upcase, d: s.downcase, c: s.capitalize, w: s.swapcase, f: s.downcase(:fold) }.each do |k, r|
       next if r == s
       cnt[k] += 1
-      r.unpack("U*").each_with_index { |x, i| sums[k] = (sums[k] * 31 + x * (i + 1) + cp) % 1_000_000_007 }
+      r.unpack("U*").each_with_index { |x, i| sums[k] = (sums[k] * 31 + x * (i + 1) + cp) % 1_000_003 }
     end
   end
   cp += 1

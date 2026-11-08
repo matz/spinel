@@ -16423,8 +16423,9 @@ int user_cmp_needs_check(Compiler *c, int cid) {
      a non-int as an int (#2559). A pure Integer/Float `<=>` keeps the inline
      path (Float compares as a double correctly). */
   /* a Bignum `<=>` (`(a - b) * 2**70`) is an sp_Bigint pointer: the inline
-     `<op> 0` compared the pointer, so its sign is read by the checked path */
-  return ret == TY_POLY || ret == TY_NIL || ret == TY_BIGINT;
+     `<op> 0` compared the pointer, so its sign is read by the checked path;
+     a Rational `<=>` is an sp_Rational struct, which `<op> 0` cannot read */
+  return ret == TY_POLY || ret == TY_NIL || ret == TY_BIGINT || ret == TY_RATIONAL;
 }
 
 /* A user object whose class defines a reader or method named `nm` shadows the

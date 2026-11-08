@@ -1,0 +1,22 @@
+[VR1, VR2, VR3]
+[VR3, VR2, VR1]
+VR1
+VR3
+[VR1, VR3]
+[VR3, VR2]
+[VR1, VR2]
+[VB1, VB2, VB3]
+VB1
+[VB3, VB2]
+true
+true
+false
+false
+true
+false
+true
+VR1
+true
+true
+[VR1, VR2, VR3]
+VB3

@@ -2235,29 +2235,6 @@ int class_below_object(Compiler *c, int k) {
   int bk = comp_builtin_class_named(c, "BasicObject");
   return bk >= 0 && bk == k;
 }
-/* Does class or module k see CGN as a constant of its own chain: k, its
-   superclasses and the modules they mix in, not Object, Kernel or the top
-   level? */
-int const_seen_by_class_own(Compiler *c, int k, const char *cgn) {
-  static int depth = 0;
-  if (depth > 8) return 0;
-  int ob = comp_core_class(c, CORE_OBJECT), kn = comp_core_class(c, CORE_KERNEL);
-  for (int n = 0; k >= 0 && k < c->nclasses && n < 64; k = c->classes[k].parent, n++) {
-    if (k == ob || k == kn) return 0;
-    if (const_owned_by_class(c, k, cgn)) return 1;
-    for (int pass = 0; pass < 2; pass++) {
-      int nm = pass ? c->classes[k].nprepended_mods : c->classes[k].nincluded_mods;
-      const int *mv = pass ? c->classes[k].prepended_mods : c->classes[k].included_mods;
-      for (int i = 0; i < nm; i++) {
-        depth++;
-        int seen = const_seen_by_class_own(c, mv[i], cgn);
-        depth--;
-        if (seen) return 1;
-      }
-    }
-  }
-  return 0;
-}
 int const_seen_by_class(Compiler *c, int k, const char *cgn) {
   static int depth = 0;
   if (depth > 8) return 0;

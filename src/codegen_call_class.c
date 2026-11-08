@@ -1370,8 +1370,7 @@ int emit_call_reflection_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
         if (cd_rk != CG_NONE && !const_defined_own(c, cd_rk, qm)) yes = 0;
       }
       /* a constant not assigned yet is not defined: asked at run time */
-      if (yes && const_has_flag(comp_const(c, qm)) && !const_seen_by_class_own(c, cd_rk, qm))
-        buf_printf(b, "cst_%s__set", qm);
+      if (yes && const_has_flag(comp_const(c, qm))) buf_printf(b, "cst_%s__set", qm);
       else buf_printf(b, "%d", yes);
       return 1;
     }
@@ -4536,15 +4535,8 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
             for (int k = 0; k < c->nclasses; k++)
               if (class_below_object(c, k) && !const_defined_from(c, k, cn0)) buf_printf(b, " || _t%d.cls_id == %d", tc, k);
             buf_puts(b, ")");
-            /* a top-level constant not assigned yet is not defined, but a
-               class's own constant of the name is */
-            if (const_has_flag(comp_const(c, cn0))) {
-              int ok = comp_core_class(c, CORE_OBJECT);
-              buf_printf(b, " && (cst_%s__set", cn0);
-              for (int k = 0; k < c->nclasses; k++)
-                if (k != ok && const_seen_by_class_own(c, k, cn0)) buf_printf(b, " || _t%d.cls_id == %d", tc, k);
-              buf_puts(b, ")");
-            }
+            /* a constant not assigned yet is not defined: asked at run time */
+            if (const_has_flag(comp_const(c, cn0))) buf_printf(b, " && cst_%s__set", cn0);
             buf_puts(b, "; })");
             return 1;
           }
@@ -4562,10 +4554,7 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
         }
         buf_printf(b, "((void)("); emit_expr_for_effect(c, recv, b);
         /* a constant not assigned yet is not defined: asked at run time */
-        /* (a class's own constant of the name is defined all the same) */
-        int own_rk = lit0 ? (vci >= 0 ? vci : const_get_recv_class(c, id, recv)) : -1;
-        if (yes && const_has_flag(comp_const(c, cn0)) && !const_seen_by_class_own(c, own_rk, cn0))
-          buf_printf(b, "), cst_%s__set)", cn0);
+        if (yes && const_has_flag(comp_const(c, cn0))) buf_printf(b, "), cst_%s__set)", cn0);
         else buf_printf(b, "), %d)", yes);
         return 1;
       }

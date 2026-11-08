@@ -10149,7 +10149,12 @@ int desugar_splat_to_a(Compiler *c) {
        parameters were bound to the one value, `f(*(3..4))` to [3..4]. Left
        to the settled rounds, where the operand's kind is no longer a guess.
        The builtins and the array literal spread these in their own arms. */
-    if ((t == TY_RANGE || t == TY_STR_RANGE || t == TY_ENUMERATOR) && !g_infer_optimistic &&
+    /* A MatchData spreads its to_a, the whole match and then each group,
+       into any call, proc, yield or `new`; one that is nil (no match)
+       spreads nothing, so the call is `md&.to_a` */
+    int md = t == TY_MATCHDATA && !g_infer_optimistic;
+    if (md) ;
+    else if ((t == TY_RANGE || t == TY_STR_RANGE || t == TY_ENUMERATOR) && !g_infer_optimistic &&
         splat_feeds_user_method(c, id)) ;
     else if (!ty_is_hash(t) && vk != NK_HashNode) {
       if (!ty_is_object(t)) continue;
@@ -10168,6 +10173,7 @@ int desugar_splat_to_a(Compiler *c) {
     nt_node_set_int(nt, call, "splat_to_a", 1);   /* its answer must be an Array (emit_splat_to_a_check_wrap) */
     nt_node_set_ref(nt, call, "arguments", -1);
     nt_node_set_ref(nt, call, "block", -1);
+    if (md) nt_set_safe_nav(nt, call, 1);
     nt_node_set_ref(nt, id, "expression", call);
     comp_grow_node_arrays(c);
     int encl = c->nscope[id];

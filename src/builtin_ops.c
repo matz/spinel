@@ -2746,6 +2746,8 @@ static const BuiltinOp bop_rows[] = {
   { BOP_ANY_ARRAY, "rotate!",               0, 127, BF_ANY,      BOPR_SELF,     BOPE_NONE, NULL, 0, 0, BOPF_SELF },
   { BOP_ANY_ARRAY, "rotate",                0, 127, BF_ANY,      BOPR_SELF,     BOPE_NONE },
   { BOP_ANY_ARRAY, "insert",                0, 127, BF_ANY,      BOPR_SELF,     BOPE_NONE, NULL, 0, 0, BOPF_SELF },
+  { BOP_ANY_ARRAY, "push",                  0,   0, BF_ANY,      BOPR_SELF,     BOPE_TEMPLATE, "({ sp_$AArray *_t$t = $r; if (_t$t && _t$t->frozen) sp_raise_frozen_array_at(_t$t, $Y); _t$t; })", 0, 0, BOPF_SELF | BOPF_ARGS_BUILTIN },  /* no values (a block operand is never called): self, or FrozenError */
+  { BOP_ANY_ARRAY, "concat",                0,   0, BF_ANY,      BOPR_SELF,     BOPE_TEMPLATE, "({ sp_$AArray *_t$t = $r; if (_t$t && _t$t->frozen) sp_raise_frozen_array_at(_t$t, $Y); _t$t; })", 0, 0, BOPF_SELF | BOPF_ARGS_BUILTIN },  /* no values (a block operand is never called): self, or FrozenError */
   { BOP_ANY_ARRAY, "concat",                0, 127, BF_ANY,      BOPR_SELF,     BOPE_NONE, NULL, 0, 0, BOPF_SELF | BOPF_ARGS_BUILTIN },
   { BOP_ANY_ARRAY, "freeze",                0, 127, BF_ANY,      BOPR_SELF,     BOPE_NONE, NULL, 0, 0, BOPF_SELF },
   { BOP_ANY_ARRAY, "replace",               0, 127, BF_ANY,      BOPR_SELF,     BOPE_NONE, NULL, 0, 0, BOPF_SELF | BOPF_ARGS_BUILTIN },
@@ -2892,10 +2894,13 @@ static const BuiltinOp bop_rows[] = {
   { BOP_ANY_ARRAY, "member?",               1,   1, BF_ANY,      TY_UNKNOWN,    BOPE_NONE },
   { BOP_ANY_ARRAY, "sample",                1,   1, BF_ANY,      BOPR_SELF,     BOPE_NONE, NULL, BOP_K(TY_INT) },  /* sample(n): n elements; sample(random: r) is told by its syntax, not its kind */
   { BOP_ANY_ARRAY, "sample",                0,   1, BF_ANY,      TY_UNKNOWN,    BOPE_NONE },
+  { BOP_ANY_ARRAY, "push",                  0,   0, BF_ANY,      BOPR_SELF,     BOPE_TEMPLATE, "({ sp_$AArray *_t$t = $r; if (_t$t && _t$t->frozen) sp_raise_frozen_array_at(_t$t, $Y); _t$t; })", 0, 0, BOPF_SELF },  /* no values (a block operand is never called): self, or FrozenError */
   { BOP_ANY_ARRAY, "push",                  0, 127, BF_ANY,      TY_UNKNOWN,    BOPE_NONE, NULL, 0, 0, BOPF_SELF },
+  { BOP_ANY_ARRAY, "append",                0,   0, BF_ANY,      BOPR_SELF,     BOPE_TEMPLATE, "({ sp_$AArray *_t$t = $r; if (_t$t && _t$t->frozen) sp_raise_frozen_array_at(_t$t, $Y); _t$t; })", 0, 0, BOPF_SELF },  /* no values (a block operand is never called): self, or FrozenError */
   { BOP_ANY_ARRAY, "append",                0, 127, BF_ANY,      TY_UNKNOWN,    BOPE_NONE, NULL, 0, 0, BOPF_SELF },
+  { BOP_ANY_ARRAY, "unshift",               0,   0, BF_ANY,      BOPR_SELF,     BOPE_TEMPLATE, "({ sp_$AArray *_t$t = $r; if (_t$t && _t$t->frozen) sp_raise_frozen_array_at(_t$t, $Y); _t$t; })", 0, 0, BOPF_SELF },  /* no values (a block operand is never called): self, or FrozenError */
   { BOP_ANY_ARRAY, "unshift",               0, 127, BF_ANY,      TY_UNKNOWN,    BOPE_NONE, NULL, 0, 0, BOPF_SELF },
-  { BOP_ANY_ARRAY, "prepend",               0,   0, BF_ANY,      BOPR_SELF,     BOPE_TEMPLATE, "({ sp_$AArray *_t$t = $r; SP_GC_ROOT(_t$t); if (_t$t && _t$t->frozen) sp_raise_frozen_array_at(_t$t, $Y); _t$t; })", 0, 0, BOPF_SELF },  /* no values: self, or FrozenError (K-035, mirrors insert's identical argc-0 row) */
+  { BOP_ANY_ARRAY, "prepend",               0,   0, BF_ANY,      BOPR_SELF,     BOPE_TEMPLATE, "({ sp_$AArray *_t$t = $r; if (_t$t && _t$t->frozen) sp_raise_frozen_array_at(_t$t, $Y); _t$t; })", 0, 0, BOPF_SELF },  /* no values: self, or FrozenError (K-035, mirrors insert's identical argc-0 row) */
   { BOP_ANY_ARRAY, "prepend",               1, 127, BF_ANY,      TY_UNKNOWN,    BOPE_NONE, NULL, 0, 0, BOPF_SELF },
   { BOP_ANY_ARRAY, "fill",                  0,   3, BF_ANY,      TY_UNKNOWN,    BOPE_NONE, NULL, 0, 0, BOPF_SELF },  /* fill(v, ...) or fill(...) { } */
   { BOP_ANY_ARRAY, "map!",                  0,   0, BF_REQUIRED, TY_UNKNOWN,    BOPE_NONE, NULL, 0, 0, BOPF_SELF },

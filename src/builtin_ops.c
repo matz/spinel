@@ -366,6 +366,10 @@ const BuiltinZeroOp *bop_zero_find(TyKind recv, const char *name) {
 /* Rows grouped by receiver kind. Within a kind the order does not matter:
    lookups go through the sorted index below. */
 static const BuiltinOp bop_rows[] = {
+  /* receiverless builtins (BOP_KERNEL): a call with no receiver that cplan_kernel_row hands to its row; the result is the row's, the text is over the arguments. BOPF_INTERNAL: the compiler's own calls, which the program neither writes nor shadows. */
+  { BOP_KERNEL, "__env_to_h",  0, 0, BF_NONE, TY_STR_STR_HASH, BOPE_TEMPLATE, "sp_env_to_h()", 0, 0, BOPF_INTERNAL },  /* the desugared ENV snapshot (#2742) */
+  /* (one representation: a String Hash holds the String it is handed, and ENV a frozen copy; ENV itself as a value is a snapshot that copies what is stored into it) */
+  { BOP_KERNEL, "__env_value", 0, 0, BF_NONE, TY_STR_STR_HASH, BOPE_TEMPLATE, "sp_env_value()", 0, 0, BOPF_INTERNAL },
 #include "builtin_zero_ops.inc"
   { TY_POLY, "upcase", 0, 0, BF_ANY, TY_POLY, BOPE_TEMPLATE,
     "sp_poly_case_conv($r, sp_str_upcase, \"upcase\")", 0, 0, 0, 1 },
@@ -3539,6 +3543,7 @@ static const BopShareRow bop_share_rows[] = {
   /* Kernel's functions. A name with no row (raise, throw, define_method,
      lambda, ...) is not followed. throw now has an argument-answer row. */
   { BOP_KERNEL, "__env_to_h", BSH_PURE },
+  { BOP_KERNEL, "__env_value", BSH_PURE },
   { BOP_KERNEL, "puts",     BSH_PURE },
   { BOP_KERNEL, "print",    BSH_PURE },
   { BOP_KERNEL, "printf",   BSH_PURE },

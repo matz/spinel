@@ -520,7 +520,8 @@ static void emit_missing_cext_send(Compiler *c, Buf *b) {
   char **names = NULL; int count = 0;
   for (int i = 0; i < c->nscopes; i++) if (c->scopes[i].class_id >= 0)
     known_name(&names, &count, c->scopes[i].name);
-  for (int i = 0; i < bop_row_count(); i++) known_name(&names, &count, bop_row(i)->name);
+  for (int i = 0; i < bop_row_count(); i++)   /* an internal row is the compiler's, not a method */
+    if (!(bop_row(i)->flags & BOPF_INTERNAL)) known_name(&names, &count, bop_row(i)->name);
   for (int k = 0; k < c->nclasses; k++) {
     ClassInfo *ci = &c->classes[k];
     for (int j = 0; j < ci->naliases; j++) known_name(&names, &count, ci->alias_new[j]);

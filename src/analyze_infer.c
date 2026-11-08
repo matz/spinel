@@ -9098,6 +9098,15 @@ static int infer_accessor_call(Compiler *c, int id, int recv, const char *name, 
   return 0;
 }
 
+/* A receiverless builtin the rows name (BOP_KERNEL), where the call plan gives it the call: the row's result. */
+static int infer_kernel_row(Compiler *c, int id, const char *name, int argc, const int *argv, TyKind *out) {
+  if (!cplan_kernel_row(c, id, name)) return 0;
+  const BuiltinOp *kop = an_bop_find_arg(c, id, BOP_KERNEL, name, argc, argv, nt_ref(c->nt, id, "block") >= 0);
+  if (!kop || kop->result == TY_UNKNOWN) return 0;
+  AnBopArgs a = { c, argv };
+  *out = bop_result_args(kop, BOP_KERNEL, argc, an_bop_arg_type, &a, 0);
+  return *out != TY_UNKNOWN;
+}
 static TyKind infer_call_inner(Compiler *c, int id) {
   TyKind prelude = infer_call_prelude(c, id);
   if (prelude != TY_UNKNOWN) return prelude;
@@ -9148,6 +9157,7 @@ static TyKind infer_call_inner(Compiler *c, int id) {
     if (op && op->result != TY_UNKNOWN)
       return !g_infer_ignore_brk && call_breaks(c, id) ? an_planned_call_ret(c, id, TY_POLY) : op->result;
   }
+  { TyKind kr; if (recv < 0 && infer_kernel_row(c, id, name, argc, argv, &kr)) return kr; }
   { TyKind ar; if (infer_arysub_call(c, id, &ar)) return ar; }   /* Array's, on an Array subclass (#7449) */
 
   /* Array#to_a and #to_ary answer the receiver itself, and a boxed typed
@@ -9662,8 +9672,6 @@ static TyKind infer_call_inner(Compiler *c, int id) {
     if (sp_streq(name, "for_fd") && argc == 1) return TY_DIR;
     if (sp_streq(name, "fchdir") && argc == 1) return TY_INT;
   }
-  /* the desugared ENV snapshot (#2742) */
-  if (recv < 0 && sp_streq(name, "__env_to_h") && argc == 0) return TY_STR_STR_HASH;
   /* the class value a desugared `exception` is sent to */
   if (recv < 0 && sp_streq(name, "__exc_class") && argc == 1) return TY_CLASS;
   /* Exception-suppressed String or nullable conversion can answer nil, so it

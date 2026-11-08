@@ -3274,13 +3274,13 @@ static void desugar_env_values(Compiler *c) {
     const char *nm = nt_str(nt, id, "name");
     if (!nm || !sp_streq(nm, "ENV")) continue;
     nt_node_set_type(nt, id, "CallNode");
-    nt_node_set_str(nt, id, "name", "__env_to_h");
+    /* (ENV itself as a value, a store into which copies as ENV's does:
+       the row of its own, __env_value) */
+    nt_node_set_str(nt, id, "name", "__env_value");
+    nt_node_set_int(nt, id, "builtin_only", 1);
     nt_node_set_ref(nt, id, "receiver", -1);
     nt_node_set_ref(nt, id, "arguments", -1);
     nt_node_set_ref(nt, id, "block", -1);
-    /* (ENV itself as a value, a store into which copies as ENV's does;
-       the one representation's emitter reads it) */
-    nt_node_set_int(nt, id, "env_value", 1);
   }
   free(ok);
 }

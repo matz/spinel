@@ -367,7 +367,8 @@ int desugar_bare_object_reopen_calls(Compiler *c) {
   NT_FOREACH_KIND(nt, NK_CallNode, id) {
     if (nt_ref(nt, id, "receiver") >= 0 || id >= c->node_cap) continue;
     const char *nm = nt_str(nt, id, "name");
-    if (!nm || call_target(c, id, obj, nm, CT_OWN, NULL) < 0) continue;
+    /* (a builtin_only call is the builtin's, whatever Object defines) */
+    if (!nm || nt_int(nt, id, "builtin_only", 0) || call_target(c, id, obj, nm, CT_OWN, NULL) < 0) continue;
     /* in a class body self is the class, and in an instance_eval block
        the receiver */
     Scope *sc = comp_scope_of(c, id);
@@ -4581,6 +4582,7 @@ int desugar_env_enum(Compiler *c) {
     int snap = nt_new_node(nt, "CallNode");
     if (snap < 0) continue;
     nt_node_set_str(nt, snap, "name", "__env_to_h");
+    nt_node_set_int(nt, snap, "builtin_only", 1);
     nt_node_set_ref(nt, snap, "receiver", -1);
     nt_node_set_ref(nt, snap, "arguments", -1);
     nt_node_set_ref(nt, snap, "block", -1);

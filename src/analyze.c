@@ -2805,6 +2805,21 @@ static void mp_free(MpIx *ix) {
   free(ix->tab);
 }
 
+/* A proc literal's named &block param binds an sp_Proc* from the block
+   side-channel: typed so `b.call(...)` rides the TY_PROC dispatch (#2648),
+   and so a builtin handed `&b` takes the forward
+   (desugar_value_callable_forwards). The parameter's name, or NULL. */
+const char *a_type_proc_block_param(Compiler *c, int create, int pn) {
+  const NodeTable *nt = c->nt;
+  int bpar = pn >= 0 ? nt_ref(nt, pn, "block") : -1;
+  if (nt_kind(nt, bpar) != NK_BlockParameterNode) return NULL;
+  const char *bpn = nt_str(nt, bpar, "name");
+  Scope *pbs = comp_scope_of(c, create);
+  LocalVar *blv = (bpn && pbs) ? scope_local_intern(pbs, bpn) : NULL;
+  if (blv && blv->type == TY_UNKNOWN) { lv_set_type(blv, TY_PROC); blv->is_block_param = 1; }
+  return bpn;
+}
+
 void mark_proc_captures(Compiler *c) {
   const NodeTable *nt = c->nt;
   char *inproc = (char *)calloc((size_t)nt->count, 1);
@@ -2958,19 +2973,7 @@ void mark_proc_captures(Compiler *c) {
         if (flv && flv->type == TY_UNKNOWN) { lv_set_type(flv, TY_FIBER); flv->rbs_seeded = 1; }
       }
     }
-    /* a named &block param binds an sp_Proc* from the block side-channel:
-       type it so `b.call(...)` rides the TY_PROC dispatch (#2648) */
-    {
-      int bpar = pn >= 0 ? nt_ref(nt, pn, "block") : -1;
-      NodeKind bpk = nt_kind(nt, bpar);
-      if (bpk == NK_BlockParameterNode) {
-        const char *bpn = nt_str(nt, bpar, "name");
-        Scope *pbs = comp_scope_of(c, id);
-        LocalVar *blv = (bpn && pbs) ? scope_local_intern(pbs, bpn) : NULL;
-        if (blv && blv->type == TY_UNKNOWN) { lv_set_type(blv, TY_PROC); blv->is_block_param = 1; }
-        if (bpn) aname_add(&params, bpn);
-      }
-    }
+    { const char *bpn = a_type_proc_block_param(c, id, pn); if (bpn) aname_add(&params, bpn); }
     if (pn >= 0) { int rn = 0; const int *reqs = nt_arr(nt, pn, "requireds", &rn); for (int k = 0; k < rn; k++) aname_add(&params, nt_str(nt, reqs[k], "name")); }
     /* an optional is the proc's own too: a later default that writes it
        (`|a = 1, b = (a = 4)|`) is no capture of an enclosing local */

@@ -7921,12 +7921,15 @@ int elab_main_method_vis_at(Compiler *c, int node, const char *name) {
   const LrHist *oh = oc >= 0 ? lr_hist(c->lrec, oc, 0, name, 0) : NULL;
   const LrDef *od = NULL, *md = NULL;
   int oo = oh ? lr_last_before(c, oh, p, 0, 0, &od) : ELAB_NO;
-  if (oo == ELAB_YES && od->kind != LR_VIS) return -1;
   /* (a change under a condition: main's own answer, as before) */
   if (oo == ELAB_YES) {
     if (lr_last_before(c, lr_hist(c->lrec, LR_MAIN, 0, name, 0), p, 0, 0, &md) != ELAB_YES || !md) return -1;
     int ord = elab_cmp(elab_point_of(c, md->node), elab_point_of(c, od->node));
     if (ord != PROG_BEFORE && ord != PROG_AFTER) return -1;
+    /* an Object entry ahead of main's def (an alias, a def of Object's
+       own) leaves main's def the answer; one after it that is no
+       visibility word is not read here */
+    if (ord == PROG_BEFORE && od->kind != LR_VIS) return -1;
     if (ord == PROG_BEFORE) v = od->vis;
   }
   return v == SP_VIS_PUBLIC ? 1 : v == SP_VIS_PROTECTED ? 2 : v == SP_VIS_PRIVATE ? 4 : -1;

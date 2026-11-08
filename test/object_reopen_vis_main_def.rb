@@ -18,3 +18,9 @@ p Object.protected_method_defined?(:a2), Object.method_defined?(:a2), Object.pub
 def a4; end
 class Object; public :a4; end
 p Object.public_method_defined?(:a4, false), Object.private_method_defined?(:a4, false)
+
+# an alias in a reopened Object ahead of a top-level def of the name: the
+# def is the method, private at the top level
+class Object; alias_method :a5, :to_s; end
+def a5; end
+p Object.method_defined?(:a5), Object.private_method_defined?(:a5)

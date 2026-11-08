@@ -1,0 +1,21 @@
+[Params, true, false, true, true, false, false, true, true, true]
+[true, true, false, false, true]
+[DeepParams, true, true, true, true, false, false, true, true, false]
+[true, true, false, false, true]
+[Row, false, false, false, false, true, true, true, true, false]
+[false, false, true, true, false]
+[Headers, false, false, true, false, false, false, false, true, false]
+[false, true, false, false, false]
+[Hash, false, false, true, false, false, false, true, true, false]
+[false, true, false, false, false]
+[Array, false, false, false, false, false, true, true, true, false]
+[false, false, false, true, false]
+[String, false, false, false, false, false, false, false, true, false]
+[false, false, false, false, false]
+[NilClass, false, false, false, false, false, false, false, true, false]
+[false, false, false, false, false]
+:params
+:params
+:hash
+:hash
+:other

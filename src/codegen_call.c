@@ -6798,26 +6798,33 @@ int emit_poly_pred_value(Compiler *c, int id, const char *tvref,
         buf_printf(b, "sp_poly_is_a(%s, (sp_Class){%d})", tvref, target);
         return 1;
       }
-      /* a reopened builtin (`class Array` with a method added) is a class of
+      /* a reopened builtin (`class Module` with a method added) is a class of
          the program too, but its values are the builtin's */
-      if (target >= 0 && (is_builtin_reopen(c->classes[target].name) ||
-                          builtin_class_id(c->classes[target].name))) target = -1;
-      if (target >= 0) {   /* user-class target: chain check on the object cls_id */
-        buf_printf(b, "(%s.tag == SP_TAG_OBJ && %s.cls_id >= 0 && "
-                      "sp_class_le((sp_Class){%s.cls_id}, (sp_Class){%d}))",
-                   tvref, tvref, tvref, target);
+      if (target >= 0 && !sp_streq(cn, "Hash") && !sp_streq(cn, "Array") &&
+          (is_builtin_reopen(c->classes[target].name) || builtin_class_id(c->classes[target].name))) {
+        buf_printf(b, "sp_poly_kind_of_builtin(%s, \"%s\")", tvref, cn);
         return 1;
       }
-      buf_printf(b, "sp_poly_kind_of_builtin(%s, \"%s\")", tvref, cn);   /* builtin target */
-      return 1;
+      /* any other class: the test a poly value takes outside a dispatch
+         (emit_poly_isa_test). A Hash or Array subclass's instance is boxed as
+         its builtin, so its cls_id is the builtin's: the class test reads
+         sp_bsub_cls_of, and Hash and Array test the builtin's ids, where
+         a chain check on cls_id and sp_poly_kind_of_builtin both answered
+         false for it beside a class's own is_a? */
+      return emit_poly_isa_test(c, cn, tvref, 0, b);
     }
     /* Runtime class value (a method param, a non-literal): resolve by the
        class's name at runtime. `argref` is the boxed class; when absent (the
-       standalone caller), box the arg node here. */
-    buf_printf(b, "sp_poly_is_a_dyn(%s, ", tvref);
+       standalone caller), box the arg node here. A class value takes
+       sp_poly_is_a, as outside a dispatch: the name misses a Hash or Array
+       subclass's instance, which is boxed as its builtin. */
+    int tk = ++g_tmp;
+    buf_printf(b, "({ sp_RbVal _t%d = ", tk);
     if (argref) buf_puts(b, argref);
     else emit_boxed(c, arg, b);
-    buf_printf(b, ", %d)", is_iof ? 1 : 0);
+    if (is_iof) buf_printf(b, "; sp_poly_is_a_dyn(%s, _t%d, 1); })", tvref, tk);
+    else buf_printf(b, "; _t%d.tag == SP_TAG_CLASS ? sp_poly_is_a(%s, sp_unbox_class(_t%d)) : sp_poly_is_a_dyn(%s, _t%d, 0); })",
+                    tk, tvref, tk, tvref, tk);
     return 1;
   }
   return 0;

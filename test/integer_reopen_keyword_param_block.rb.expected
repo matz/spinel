@@ -10,3 +10,7 @@
 [9, 1, nil]
 {w: 1}
 {a: 2}
+"missing keyword: :k"
+[2, 3]
+"unknown keyword: :z"
+[2, 5]

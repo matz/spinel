@@ -22,3 +22,14 @@ x = [3, 4].sample(1).first
 p x.times(w: 1)
 def f(n) = n.times(a: n)
 p f(2)
+
+# a call that misses a required keyword or passes an unknown one raises
+# CRuby's ArgumentError
+class Integer
+  def gcd(x, k:) = [x, k]
+  def lcm(x, k: 1) = [x, k]
+end
+begin; p 4.gcd(2); rescue ArgumentError => e; p e.message; end
+p 4.gcd(2, k: 3)
+begin; p 4.lcm(2, z: 1); rescue ArgumentError => e; p e.message; end
+p 4.lcm(2, k: 5)

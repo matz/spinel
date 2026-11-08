@@ -132,6 +132,7 @@ class StringIO
   alias sysread readpartial
 
   def read_nonblock(maxlen, outbuf = nil, exception: true)
+    raise FrozenError, "can't modify frozen StringIO" if frozen?
     raise ArgumentError, "negative length #{maxlen} given" if maxlen < 0
     s = maxlen == 0 ? "" : read(maxlen)
     if s.nil?

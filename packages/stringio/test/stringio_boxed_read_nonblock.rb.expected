@@ -11,6 +11,9 @@ EOFError
 EOFError
 ArgumentError
 FrozenError
+FrozenError
+FrozenError
+FrozenError
 "copy"
 "left"
 NoMethodError

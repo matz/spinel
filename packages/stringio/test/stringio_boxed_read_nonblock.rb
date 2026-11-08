@@ -34,6 +34,15 @@ rescue FrozenError => error
   puts error.class.name
 end
 
+[-1, 0, 1].each do |length|
+  frozen_stream = { "io" => StringIO.new("x").freeze }["io"]
+  begin
+    frozen_stream.read_nonblock(length, +"", exception: false)
+  rescue FrozenError => error
+    puts error.class.name
+  end
+end
+
 copy = { "io" => StringIO.new("copy") }["io"]
 other = copy
 p other.read_nonblock(4, +"")

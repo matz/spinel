@@ -74,6 +74,32 @@ static const EVP_MD *sp_openssl_md(const char *name) {
 
 static SP_TLS unsigned char sp_openssl_digest_bytes[EVP_MAX_MD_SIZE];
 
+typedef struct { const EVP_MD *md; int owned; } sp_verify_digest;
+
+sp_int sp_openssl_verify_digest(const char *name) {
+  if (!name) return 0;
+  ERR_clear_error();
+  const EVP_MD *md = EVP_get_digestbyname(name);
+  if (!md) {
+    ASN1_OBJECT *oid = OBJ_txt2obj(name, 0);
+    md = EVP_get_digestbyobj(oid);
+    ASN1_OBJECT_free(oid);
+  }
+  int owned = !md;
+  if (!md) md = sp_openssl_md(name);
+  sp_verify_digest *handle = malloc(sizeof *handle);
+  if (!handle) { if (owned) SP_MD_FREE(md); sp_oom_die(); }
+  *handle = (sp_verify_digest){md, owned};
+  return (sp_int)(intptr_t)handle;
+}
+
+void sp_openssl_verify_digest_free(sp_int ref) {
+  sp_verify_digest *handle = (sp_verify_digest *)(intptr_t)ref;
+  if (!handle) return;
+  if (handle->owned) SP_MD_FREE(handle->md);
+  free(handle);
+}
+
 const char *sp_openssl_digest(const char *name, const char *data) {
   if (!data) sp_raise_cls("TypeError", "no implicit conversion of nil into String");
   const EVP_MD *md = sp_openssl_md(name);
@@ -1286,6 +1312,44 @@ const char *sp_ed25519_sign(const char *seed, const char *data) {
   return (const char *)signature;
 #else
   return sp_ec_fail("Ed25519 is unavailable in the linked OpenSSL");
+#endif
+}
+
+sp_int sp_ed25519_verify(const char *seed, const char *signature, const char *data, sp_int digest) {
+#if defined(EVP_PKEY_ED25519)
+  sp_ssl_errbuf[0] = 0;
+  const EVP_MD *md = digest ? ((sp_verify_digest *)(intptr_t)digest)->md : NULL;
+  EVP_PKEY *key = EVP_PKEY_new_raw_private_key(EVP_PKEY_ED25519, NULL,
+                                            (const unsigned char *)seed, sp_str_byte_len(seed));
+  EVP_MD_CTX *ctx = EVP_MD_CTX_new();
+  int result = -1;
+  int initialized = key && ctx && EVP_DigestVerifyInit(ctx, NULL, md, NULL, key) == 1;
+  if (initialized)
+    result = EVP_DigestVerify(ctx, (const unsigned char *)signature, sp_str_byte_len(signature),
+                              (const unsigned char *)data, sp_str_byte_len(data));
+  else {
+    const char *reason, *detail = NULL;
+    int flags = 0;
+#if !defined(LIBRESSL_VERSION_NUMBER) && OPENSSL_VERSION_NUMBER >= 0x30000000L
+    unsigned long error = ERR_get_error_all(NULL, NULL, NULL, &detail, &flags);
+#else
+    unsigned long error = ERR_get_error_line_data(NULL, NULL, &detail, &flags);
+#endif
+    reason = ERR_reason_error_string(error);
+    snprintf(sp_ssl_errbuf, sizeof sp_ssl_errbuf, "EVP_DigestVerifyInit: %s%s%s%s",
+             reason ? reason : "verification failed",
+             detail && (flags & ERR_TXT_STRING) ? " (" : "",
+             detail && (flags & ERR_TXT_STRING) ? detail : "",
+             detail && (flags & ERR_TXT_STRING) ? ")" : "");
+  }
+  EVP_MD_CTX_free(ctx);
+  EVP_PKEY_free(key);
+  ERR_clear_error();
+  if (result < 0 && initialized) sp_ssl_note("Ed25519 verification failed");
+  return result;
+#else
+  sp_ssl_note("Ed25519 is unavailable in the linked OpenSSL");
+  return -1;
 #endif
 }
 

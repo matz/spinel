@@ -325,7 +325,14 @@ sp_File *sp_io_fdopen_sock(int fd, const char *kind) {SP_GC_ROOT_STR(kind);
   if (fd < 0) {
     /* TCPSocket.new names the call by its man page section; TCPServer.new
        does not */
+    int e = errno;
     sp_sock_raise_if_unresolved(strcmp(kind, "tcp") == 0 ? "getaddrinfo(3)" : "getaddrinfo");
+    /* a server's bind that failed, by the errno sp_net_listen_host left: a
+       port in use is EADDRINUSE, not a refused connection (#11351). (Only
+       bind's own errors: a client's failed connect can leave EINPROGRESS
+       or the like behind its refusal.) */
+    if (e == EADDRINUSE || e == EADDRNOTAVAIL || e == EACCES)
+      sp_raise_cls(sp_errno_class_name(e), strerror(e));
     sp_raise_cls("Errno::ECONNREFUSED", "Connection refused");
   }
   /* The scheduler-aware accept/connect helpers may hand us a non-blocking

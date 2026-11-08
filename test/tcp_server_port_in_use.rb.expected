@@ -1,0 +1,3 @@
+Errno::EADDRINUSE
+Address already in use
+Errno::ECONNREFUSED

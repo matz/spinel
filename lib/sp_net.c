@@ -167,18 +167,22 @@ int sp_net_listen_host(const char *host, int port, int backlog) {
     char portbuf[16];
     snprintf(portbuf, sizeof(portbuf), "%d", port);
     if (sp_net_resolve((host && *host) ? host : NULL, portbuf, &hints, &res) != 0) return -1;
-    int fd = -1;
+    int fd = -1, err = 0;
     for (struct addrinfo *ai = res; ai; ai = ai->ai_next) {
         fd = sp_net_socket_cloexec(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
-        if (fd < 0) continue;
+        if (fd < 0) { err = errno; continue; }
         int one = 1;
         setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
         if (bind(fd, ai->ai_addr, ai->ai_addrlen) == 0 &&
             listen(fd, backlog > 0 ? backlog : 1024) == 0) break;
+        err = errno;
         close(fd);
         fd = -1;
     }
     freeaddrinfo(res);
+    /* errno is what the last bind or listen failed with (EADDRINUSE for a
+       port in use), which the caller raises (#11351) */
+    if (fd < 0 && err) errno = err;
     return fd;
 }
 

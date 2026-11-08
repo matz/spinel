@@ -17229,8 +17229,12 @@ static int user_dispatch_arg(Compiler *c, Scope *m, int pi, const char *v,
   guard[0] = 0;
   if (ty_is_object(pt)) {
     int pcls = ty_object_class(pt);
-    snprintf(guard, gsz, "%s.tag == SP_TAG_OBJ && %s.cls_id == %d",
-             v, v, pcls);
+    /* (an object of a Time or Array subclass is boxed with its builtin's
+       id: the class its allocation names, sp_poly_bsub_obj) */
+    if (comp_ty_is_timesub(c, pt) || c->classes[pcls].ary_root > 0)
+      snprintf(guard, gsz, "%s.tag == SP_TAG_OBJ && sp_poly_bsub_obj(%s).cls_id == %d", v, v, pcls);
+    else
+      snprintf(guard, gsz, "%s.tag == SP_TAG_OBJ && %s.cls_id == %d", v, v, pcls);
     snprintf(arg, asz, "%s(sp_%s *)%s.v.p",
              c->classes[pcls].is_value_type ? "*" : "", c->classes[pcls].c_name, v);
   }

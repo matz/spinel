@@ -12362,21 +12362,36 @@ int ctor_alloc_decl(Compiler *c, int cid, Buf *b) {
   return t;
 }
 
-/* The initialize half: runs it on the object in `_tN`, `args` each led by
-   ", ". An INHERITED #initialize takes the defining class's pointer: without
-   the cast the C compiler is handed a subclass pointer, which clang rejects
-   outright (#3890). The struct layouts share their prefix, as every other
-   inherited-call site here assumes. */
+/* The object in `_tN` as the pointer its #initialize takes, a string the
+   caller frees. An INHERITED #initialize takes the defining class's pointer:
+   without the cast the C compiler is handed a subclass pointer, which clang
+   rejects outright (#3890). The struct layouts share their prefix, as every
+   other inherited-call site here assumes. The defaults a construction leaves
+   out read the object as that pointer too (g_ctor_self): they are typed in
+   the defining class, and `kind: self.class` declared a temporary of its
+   pointer type for the subclass's object. */
+char *ctor_self_text(Compiler *c, int cid, int t) {
+  int initcls = cid;
+  comp_method_in_chain(c, cid, "initialize", &initcls);
+  Buf s; memset(&s, 0, sizeof s);
+  if (initcls != cid && !comp_ty_value_obj(c, ty_object(cid)))
+    buf_printf(&s, "((sp_%s *)_t%d)", c->classes[initcls].c_name, t);
+  else
+    buf_printf(&s, "_t%d", t);
+  return s.p;
+}
+
+/* The initialize half: runs it on the object in `_tN` (ctor_self_text),
+   `args` each led by ", ". */
 static void ctor_init_call(Compiler *c, int cid, int t, const char *args, Buf *b) {
   int is_val = comp_ty_value_obj(c, ty_object(cid));
   int initcls = cid;
   comp_method_in_chain(c, cid, "initialize", &initcls);
-  if (initcls != cid && !is_val)
-    buf_printf(b, "sp_%s_initialize((sp_%s *)_t%d%s); ", c->classes[initcls].c_name,
-               c->classes[initcls].c_name, t, args);
-  else
-    buf_printf(b, "sp_%s_initialize(%s_t%d%s); ", c->classes[initcls].c_name,
-               is_val ? "&" : "", t, args);
+  char *self = ctor_self_text(c, cid, t);
+  buf_printf(b, "sp_%s_initialize(%s%s%s); ", c->classes[initcls].c_name, is_val ? "&" : "", self, args);
+  free(self);
+  /* These paths bypass the constructor wrapper, which freezes a Data. */
+  if (c->classes[cid].is_data) buf_printf(b, "sp_gc_freeze(_t%d); ", t);
 }
 
 /* The `case` of a `k.new(...)` dispatch arm for class `ci`: construct with
@@ -12448,8 +12463,7 @@ static void ctor_alloc_init(Compiler *c, int cid, int initm, int argsNode, const
   int is_val = comp_ty_value_obj(c, ty_object(cid));
   buf_puts(b, "({ ");
   int t = ctor_alloc_decl(c, cid, b);
-  char selftxt[24];
-  snprintf(selftxt, sizeof selftxt, "_t%d", t);
+  char *selftxt = ctor_self_text(c, cid, t);
   const char *sv_cs = g_ctor_self, *sv_csd = g_ctor_self_deref;
   g_ctor_self = selftxt;
   g_ctor_self_deref = is_val ? "." : "->";
@@ -12471,6 +12485,7 @@ static void ctor_alloc_init(Compiler *c, int cid, int initm, int argsNode, const
   ctor_init_call(c, cid, t, args.p ? args.p : "", b);
   free(apre.p); free(args.p);
   g_ctor_self = sv_cs; g_ctor_self_deref = sv_csd;
+  free(selftxt);
   buf_printf(b, "_t%d; })", t);
 }
 
@@ -14720,6 +14735,12 @@ static int emit_struct_new_call_members(Compiler *c, int id, int ci, int argc, c
       unsupported(c, id, "yielding Struct/Data initialize with a non-inlinable body");
     }
     if (scust >= 0 && c->scopes[scust].reachable && !c->scopes[scust].yields) {
+      /* a default reading the instance runs on the allocated object, as a
+         class's does: in the call it read the caller's self */
+      if (ctor_needs_self_defaults_argv(c, scust, argv, argc)) {
+        emit_ctor_alloc_init(c, ci, scust, nt_ref(nt, id, "arguments"), id, b);
+        return 1;
+      }
       buf_printf(b, "sp_%s_new(", cls->c_name);
       emit_args_filled(c, scust, nt_ref(nt, id, "arguments"), "", b);
       emit_ctor_block_slot(c, id, scust, ctor_blk_lead(b), b);

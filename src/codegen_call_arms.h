@@ -174,6 +174,7 @@ void ffi_check_buffer_bounds(Compiler *c, int id, int arg, const char *kind, int
 extern int g_setter_value_inner;
 int emit_cmethod_setter_assign(Compiler *c, int id, Buf *b);
 int ctor_alloc_decl(Compiler *c, int cid, Buf *b);
+char *ctor_self_text(Compiler *c, int cid, int t);
 void ctor_arity_add(CtorArityArms *g, int ci, const char *msg);
 void ctor_arity_emit(CtorArityArms *g, Buf *b);
 int ctor_arity_error(Compiler *c, int ci, int initm, int argc, char *msg, size_t n);

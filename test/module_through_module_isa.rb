@@ -52,3 +52,9 @@ p xs.map { |x| x.is_a?(Retryable) }
 p xs.map { |x| Retryable === x }
 p xs.map { |x| kind(x) }
 p xs.grep(Retryable).size
+
+# a receiver typed as the class: the folded is_a? and a when arm
+t = Plain.new
+if t.is_a?(Retryable) then puts "typed is_a? yes" else puts "typed is_a? no" end
+p(case t when Retryable then :ret else :none end)
+p(case t when Other then :other else :none end)

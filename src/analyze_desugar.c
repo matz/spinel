@@ -25799,12 +25799,6 @@ static int brc_new_path(NodeTable *nt, int like, const char *cn, const char *nm)
    Integer, IO and Enumerable for a File. Each with the names its bodies
    may write (brc_any_writes, brc_path_writes). */
 typedef struct { const char *name; BrcNames u; } BrcAnc;
-static const char *brc_builtin_class_name(int bid) {
-  const BuiltinClass *r = NULL;
-  for (int i = 0; (r = builtin_class_at(i)); i++)
-    if (r->id == bid && (r->flags & BC_CLASS)) return r->name;
-  return NULL;
-}
 /* the `if defined?(a::nm) then a::nm else <other> end` node, made at
    node like; into `into` when it is not -1 (its line kept), else new */
 static int brc_new_probe_if(NodeTable *nt, int like, int into, const char *a, const char *nm, int other_expr) {
@@ -25900,6 +25894,23 @@ static const char *brc_builtin_header(const NodeTable *nt, int st) {
   const char *cn = cp >= 0 && nt_kind(nt, cp) == NK_ConstantReadNode ? nt_str(nt, cp, "name") : NULL;
   return cn && (is_builtin_class_name(cn) || is_builtin_module_name(cn)) ? cn : NULL;
 }
+/* the constants the bodies of the builtin cn (`class cn` at the top
+   level) and a path write `cn::X = v` may write (u), and, when w is not
+   NULL, those the bodies ahead of top-level statement i write for certain */
+static void brc_builtin_writes(const NodeTable *nt, const int *tb, int tn, const char *cn, int i,
+                               BrcNames *w, BrcNames *u) {
+  for (int j = 0; j < tn; j++) {
+    const char *hn = brc_builtin_header(nt, tb[j]);
+    if (!hn || !sp_streq(hn, cn)) continue;
+    int b = class_def_body(nt, tb[j]), bn = 0;
+    const int *bs = b >= 0 ? nt_arr(nt, b, "body", &bn) : NULL;
+    for (int q = 0; q < bn; q++) {
+      if (w && j < i) brc_add(w, brc_stmt_writes(nt, bs[q], cn));
+      brc_any_writes(nt, bs[q], cn, u);
+    }
+  }
+  brc_path_writes(nt, cn, u);
+}
 /* fill anc (at most 8) with the builtins above cn whose bodies, or a path
    write `Numeric::X = v`, may write a constant */
 static void brc_ancestors(const NodeTable *nt, const int *tb, int tn, const char *cn, BrcAnc *anc, int *nanc) {
@@ -25908,7 +25919,7 @@ static void brc_ancestors(const NodeTable *nt, const int *tb, int tn, const char
   if (bid < 0) {
     for (int p = builtin_class_parent_id(bid), g = 0; p < 0 && p != -116 && g < 6 && nn < 6;
          p = builtin_class_parent_id(p), g++) {
-      const char *pn = brc_builtin_class_name(p);
+      const char *pn = cvb_builtin_name(p);
       if (pn) names[nn++] = pn;
     }
     static const char *const mods[] = { "Comparable", "Enumerable", NULL };
@@ -25918,14 +25929,7 @@ static void brc_ancestors(const NodeTable *nt, const int *tb, int tn, const char
   *nanc = 0;
   for (int a = 0; a < nn; a++) {
     BrcNames u = { NULL, 0, 0 };
-    for (int j = 0; j < tn; j++) {
-      const char *hn = brc_builtin_header(nt, tb[j]);
-      if (!hn || !sp_streq(hn, names[a])) continue;
-      int b = class_def_body(nt, tb[j]), bn = 0;
-      const int *bs = b >= 0 ? nt_arr(nt, b, "body", &bn) : NULL;
-      for (int q = 0; q < bn; q++) brc_any_writes(nt, bs[q], names[a], &u);
-    }
-    brc_path_writes(nt, names[a], &u);
+    brc_builtin_writes(nt, tb, tn, names[a], -1, NULL, &u);
     if (u.n == 0) { free(u.v); continue; }
     anc[*nanc].name = names[a];
     anc[*nanc].u = u;
@@ -25945,17 +25949,7 @@ int desugar_builtin_reopen_const_reads(Compiler *c) {
     BrcNames w = { NULL, 0, 0 }, u = { NULL, 0, 0 };
     /* the constants earlier bodies of the builtin wrote, and those any
        body of it may write (u) */
-    for (int j = 0; j < tn; j++) {
-      const char *hn = brc_builtin_header(nt, tb[j]);
-      if (!hn || !sp_streq(hn, cn)) continue;
-      int b = class_def_body(nt, tb[j]), bn = 0;
-      const int *bs = b >= 0 ? nt_arr(nt, b, "body", &bn) : NULL;
-      for (int q = 0; q < bn; q++) {
-        if (j < i) brc_add(&w, brc_stmt_writes(nt, bs[q], cn));
-        brc_any_writes(nt, bs[q], cn, &u);
-      }
-    }
-    brc_path_writes(nt, cn, &u);
+    brc_builtin_writes(nt, tb, tn, cn, i, &w, &u);
     BrcAnc anc[8]; int nanc = 0;
     brc_ancestors(nt, tb, tn, cn, anc, &nanc);
     int b = class_def_body(nt, tb[i]), bn = 0;

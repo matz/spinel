@@ -18589,28 +18589,142 @@ static int bx_recv_concrete(int bx, TyKind rt) {
   return 0;
 }
 
-/* Does an alias or alias_method of the program name a method nm? (It may
-   capture a builtin method, which no scope holds.) */
+/* Is module k module m, or does m mix it in, by include or by prepend
+   (through m's own mixins)? */
+static int bx_mixes_in(Compiler *c, int m, int k, int depth) {
+  if (m == k) return 1;
+  if (m < 0 || m >= c->nclasses || depth > 16) return 0;
+  const ClassInfo *mi = &c->classes[m];
+  for (int i = 0; i < mi->nincluded_mods; i++) if (bx_mixes_in(c, mi->included_mods[i], k, depth + 1)) return 1;
+  for (int i = 0; i < mi->nprepended_mods; i++) if (bx_mixes_in(c, mi->prepended_mods[i], k, depth + 1)) return 1;
+  return 0;
+}
+/* Is class or module k String, Symbol, Comparable, Object, Kernel,
+   BasicObject or the top level, or a module one of them or the top level
+   mixes in, as the class table holds them? (k < 0: a class the caller does
+   not know, so yes.) */
+static int bx_owner_in_string_chain(Compiler *c, int k) {
+  if (k < 0 || k >= c->nclasses || k == c->toplevel_class) return 1;
+  static const char *const roots[] = { "String", "Symbol", "Comparable", "Object", "Kernel", "BasicObject" };
+  for (int i = 0; i < (int)(sizeof roots / sizeof roots[0]); i++) {
+    int r = comp_builtin_class_named(c, roots[i]);
+    if (r == k) return 1;
+    for (int a = r, d = 0; a >= 0 && a < c->nclasses && d < 64; a = c->classes[a].parent, d++)
+      if (bx_mixes_in(c, a, k, 0)) return 1;
+  }
+  for (int i = 0; i < c->ntoplevel_includes; i++)
+    if (bx_mixes_in(c, c->toplevel_includes[i], k, 0)) return 1;
+  return 0;
+}
+/* A Module method that can put a method of one class onto another, or
+   make a `class X` body reopen a builtin: const_set, define_method, the
+   evals, instance_method */
+static int bx_reflective_name(const char *n) {
+  static const char *const names[] = { "const_set", "define_method", "instance_method", "class_eval",
+    "module_eval", "class_exec", "module_exec", "instance_eval", "instance_exec", "eval", NULL };
+  for (int i = 0; names[i]; i++) if (sp_streq(n, names[i])) return 1;
+  return 0;
+}
+/* Is program class k surely a class of its own, which no String reaches?
+   Not when the program writes a constant of k's last name (`Other =
+   String.itself; class Other`: the class table opens a new class where
+   CRuby reopens String), or names a Module method that can move a method
+   or a class body (bx_reflective_name: `define_method(:p,
+   &Other.new.method(:p))`, `alias dm define_method`), or sends a name the
+   walk can not read. */
+static int bx_class_surely_own(Compiler *c, int k) {
+  const NodeTable *nt = c->nt;
+  const char *full = k >= 0 && k < c->nclasses ? c->classes[k].name : NULL;
+  if (!full) return 0;
+  const char *leaf = strrchr(full, ':');
+  leaf = leaf ? leaf + 1 : full;
+  for (int id = 0; id < nt->count; id++) {
+    const char *wn = NULL;
+    switch (nt_kind(nt, id)) {
+    case NK_ConstantWriteNode: case NK_ConstantOrWriteNode: case NK_ConstantAndWriteNode:
+    case NK_ConstantOperatorWriteNode:
+      wn = nt_str(nt, id, "name"); break;
+    case NK_ConstantPathWriteNode: case NK_ConstantPathOrWriteNode: case NK_ConstantPathAndWriteNode:
+    case NK_ConstantPathOperatorWriteNode: {
+      int t = nt_ref(nt, id, "target");
+      wn = t >= 0 ? nt_str(nt, t, "name") : NULL;
+      if (!wn) return 0;
+      break;
+    }
+    case NK_CallNode: {
+      const char *cn = nt_str(nt, id, "name");
+      if (!cn || bx_reflective_name(cn)) return 0;
+      /* a send of a name the walk can not read */
+      int ac = 0;
+      const int *av = call_args(nt, id, &ac);
+      if ((sp_streq(cn, "send") || sp_streq(cn, "__send__") || sp_streq(cn, "public_send")) &&
+          !(ac > 0 && vis_arg_name(nt, av[0]))) return 0;
+      break;
+    }
+    /* the name as a symbol or a string: an alias of it, a send of it,
+       instance_method(:define_method) */
+    case NK_SymbolNode: case NK_StringNode: {
+      const char *v = vis_arg_name(nt, id);
+      if (v && bx_reflective_name(v)) return 0;
+      break;
+    }
+    default: break;
+    }
+    if (wn && sp_streq(wn, leaf)) return 0;
+  }
+  return 1;
+}
+/* May an alias on class side k answer an instance method for a String or
+   a Symbol? A module may: the program can mix it in where the class table
+   does not show it (`send(:include, Foo.ancestors[1])`), or copy its
+   method by define_method. A class is never mixed in, so only the chain
+   classes themselves answer, and a class whose identity the table may
+   have wrong (bx_class_surely_own). */
+static int bx_owner_reaches_string(Compiler *c, int k) {
+  if (k >= 0 && k < c->nclasses && comp_class_is_module(c, &c->classes[k])) return 1;
+  return bx_owner_in_string_chain(c, k) || !bx_class_surely_own(c, k);
+}
+/* Does an alias or alias_method of the program name a method nm that a
+   String or a Symbol may answer? (It may capture a builtin method, which no
+   scope holds.) The load record gives the class side each alias it can
+   follow binds on: an instance alias in a class no String reaches
+   (bx_owner_reaches_string), or a singleton alias, does not count. An alias
+   the record does not place (class_eval, a computed receiver) counts. */
 static int bx_program_aliases(Compiler *c, const char *nm) {
   const NodeTable *nt = c->nt;
-  for (int id = 0; id < nt->count; id++) {
+  int ne = 0, hit = 0;
+  ElabEntry *ents = NULL;
+  for (int id = 0; id < nt->count && !hit; id++) {
     NodeKind k = nt_kind(nt, id);
+    int names = 0;
     if (k == NK_AliasMethodNode) {
       int nn = nt_ref(nt, id, "new_name");
-      if (nn >= 0 && nt_str(nt, nn, "value") && sp_streq(nt_str(nt, nn, "value"), nm)) return 1;
+      names = nn >= 0 && nt_str(nt, nn, "value") && sp_streq(nt_str(nt, nn, "value"), nm);
     }
     else if (k == NK_CallNode && nt_str(nt, id, "name") && is_alias_method_name(nt_str(nt, id, "name"))) {
       int ac = 0; const int *av = call_args(nt, id, &ac);
       const char *an = ac > 0 ? vis_arg_name(nt, av[0]) : NULL;
-      if (!an || sp_streq(an, nm)) return 1;
+      names = !an || sp_streq(an, nm);
     }
+    if (!names) continue;
+    if (!ents) ents = elab_entries(c, 1u << LR_ALIAS | ELAB_ENTRY_MAY, &ne);
+    int placed = 0, reaches = 0;
+    for (int e = 0; e < ne; e++) {
+      if (ents[e].node != id) continue;
+      placed = 1;
+      /* (cls -1 is main's: the top level) */
+      if (!ents[e].sg && (ents[e].cls < 0 || bx_owner_reaches_string(c, ents[e].cls))) reaches = 1;
+    }
+    if (!placed || reaches) hit = 1;
   }
-  return 0;
+  free(ents);
+  return hit;
 }
 /* Does the program have its own instance method nm that a String or a
    Symbol answers before Kernel's: on String or Symbol or a module either
    mixes in, on Object, Kernel or BasicObject, at the top level or in a
-   module the top level includes, or by an alias? */
+   module the top level includes (bx_owner_in_string_chain), or by an
+   alias? */
 static int bx_kernel_name_own(Compiler *c, const char *nm) {
   if (program_defines_object_method_named(c, nm) || bx_program_aliases(c, nm)) return 1;
   static const char *const recv_cls[] = { "String", "Symbol" };
@@ -18622,6 +18736,14 @@ static int bx_kernel_name_own(Compiler *c, const char *nm) {
   }
   for (int i = 0; i < c->ntoplevel_includes; i++)
     if (comp_method_in_chain(c, c->toplevel_includes[i], nm, NULL) >= 0) return 1;
+  /* a def in a module the chains above do not walk: one a mixed-in module
+     prepends */
+  for (int si = 1; si < c->nscopes; si++) {
+    const Scope *sc = &c->scopes[si];
+    if (sc->is_cmethod || !sc->name || !sp_streq(sc->name, nm) || sc->def_node < 0 ||
+        nt_int(c->nt, sc->def_node, "node_bi", 0)) continue;
+    if (sc->class_id >= 0 && bx_owner_in_string_chain(c, sc->class_id)) return 1;
+  }
   return 0;
 }
 

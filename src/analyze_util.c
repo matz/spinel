@@ -3562,8 +3562,7 @@ TyKind yield_value_type_via_super(Compiler *c, int mi) {
     /* where the call plan binds that super: the next shadow in its own
        class (an earlier include's or extend's copy), or the superclass
        chain's method, or a version entry one of whose arms runs mi */
-    int at;
-    if (!cplan_target_runs(c, cplan_super_target(c, y->sup_ids[ii], cs, &at), mi)) continue;
+    if (!cplan_target_runs(c, cplan_super_target(c, y->sup_ids[ii], cs, NULL), mi)) continue;
     /* `super(a) { }` in the child: its own literal block is what mi's
        yield runs, not a block of the child's callers (none reaches it) */
     int sb = nt_ref(nt, y->sup_ids[ii], "block");
@@ -3975,12 +3974,12 @@ static int bp_calls(Compiler *c, int mi, int *cut) {
       /* (a program `new`'s super into the builtin Class#new enters the
          initialize it runs: cplan_entries; one it cannot list, each method
          of the names it bounds them by) */
-      int at, tg[CPT_MAX], nt_ = cplan_entries(c, id, tg, CPT_MAX), hit = 0;
+      int tg[CPT_MAX], nt_ = cplan_entries(c, id, tg, CPT_MAX), hit = 0;
       const char *bn[2];
       for (int j = 0, nb = nt_ == CPT_UNKNOWN ? cplan_entries_bound_names(c, id, bn) : 0; j < nb && !hit; j++)
         hit = sp_streq(bn[j], mn);
       for (int j = 0; j < nt_ && !hit; j++) hit = tg[j] == mi;
-      if (hit || (s && s->class_id >= 0 && s->name && cplan_target_runs(c, cplan_super_target(c, id, s, &at), mi)))
+      if (hit || (s && s->class_id >= 0 && s->name && cplan_target_runs(c, cplan_super_target(c, id, s, NULL), mi)))
         bits |= bp_site(c, id, nt_ref(nt, id, "block"), 1, mi, cut);
     }
   ids = NULL;

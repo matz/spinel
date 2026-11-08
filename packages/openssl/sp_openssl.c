@@ -74,10 +74,30 @@ static const EVP_MD *sp_openssl_md(const char *name) {
 
 static SP_TLS unsigned char sp_openssl_digest_bytes[EVP_MAX_MD_SIZE];
 
-sp_int sp_openssl_digest_check(const char *name) {
-  const EVP_MD *md = sp_openssl_md(name);
-  SP_MD_FREE(md);
-  return 1;
+typedef struct { const EVP_MD *md; int owned; } sp_verify_digest;
+
+sp_int sp_openssl_verify_digest(const char *name) {
+  if (!name) return 0;
+  ERR_clear_error();
+  const EVP_MD *md = EVP_get_digestbyname(name);
+  if (!md) {
+    ASN1_OBJECT *oid = OBJ_txt2obj(name, 0);
+    md = EVP_get_digestbyobj(oid);
+    ASN1_OBJECT_free(oid);
+  }
+  int owned = !md;
+  if (!md) md = sp_openssl_md(name);
+  sp_verify_digest *handle = malloc(sizeof *handle);
+  if (!handle) { if (owned) SP_MD_FREE(md); sp_oom_die(); }
+  *handle = (sp_verify_digest){md, owned};
+  return (sp_int)(intptr_t)handle;
+}
+
+void sp_openssl_verify_digest_free(sp_int ref) {
+  sp_verify_digest *handle = (sp_verify_digest *)(intptr_t)ref;
+  if (!handle) return;
+  if (handle->owned) SP_MD_FREE(handle->md);
+  free(handle);
 }
 
 const char *sp_openssl_digest(const char *name, const char *data) {
@@ -1295,10 +1315,10 @@ const char *sp_ed25519_sign(const char *seed, const char *data) {
 #endif
 }
 
-sp_int sp_ed25519_verify(const char *seed, const char *signature, const char *data, const char *digest) {
+sp_int sp_ed25519_verify(const char *seed, const char *signature, const char *data, sp_int digest) {
 #if defined(EVP_PKEY_ED25519)
   sp_ssl_errbuf[0] = 0;
-  const EVP_MD *md = *digest ? sp_openssl_md(digest) : NULL;
+  const EVP_MD *md = digest ? ((sp_verify_digest *)(intptr_t)digest)->md : NULL;
   EVP_PKEY *key = EVP_PKEY_new_raw_private_key(EVP_PKEY_ED25519, NULL,
                                             (const unsigned char *)seed, sp_str_byte_len(seed));
   EVP_MD_CTX *ctx = EVP_MD_CTX_new();
@@ -1324,7 +1344,6 @@ sp_int sp_ed25519_verify(const char *seed, const char *signature, const char *da
   }
   EVP_MD_CTX_free(ctx);
   EVP_PKEY_free(key);
-  SP_MD_FREE(md);
   ERR_clear_error();
   if (result < 0 && initialized) sp_ssl_note("Ed25519 verification failed");
   return result;

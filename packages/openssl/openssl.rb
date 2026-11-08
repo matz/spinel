@@ -66,7 +66,8 @@ module OpenSSL
     native_lib "openssl"
     native_obj "packages/openssl/sp_openssl.o"
     native_func :digest_bytes, [:string, :string], :cbinstr, "sp_openssl_digest"
-    native_func :digest_check, [:string], :int, "sp_openssl_digest_check"
+    native_func :verify_digest, [:string], :int, "sp_openssl_verify_digest"
+    native_func :verify_digest_free, [:int], :void, "sp_openssl_verify_digest_free"
     native_func :hmac_bytes, [:string, :string, :string], :cbinstr, "sp_openssl_hmac"
     native_func :fixed_length_secure_compare, [:string, :string], :int, "sp_openssl_fixed_length_secure_compare"
     native_func :pending,      [:int],                :int,    "sp_ssl_pending"
@@ -113,7 +114,7 @@ module OpenSSL
     native_func :ec_curve_name, [:string, :int], :string, "sp_ec_curve_name"
     native_func :ec_export, [:string, :string, :string, :int, :int, :int], :cbinstr, "sp_ec_export"
     native_func :ed25519_sign, [:string, :string], :cbinstr, "sp_ed25519_sign"
-    native_func :ed25519_verify, [:string, :string, :string, :string], :int, "sp_ed25519_verify"
+    native_func :ed25519_verify, [:string, :string, :string, :int], :int, "sp_ed25519_verify"
 
     # RSA verify over a public key given as its modulus and exponent bytes:
     # n, e, digest, data, signature, then PSS (1) or PKCS#1 v1.5 (0), and for

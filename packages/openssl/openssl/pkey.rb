@@ -257,8 +257,8 @@ module OpenSSL
       end
 
       def verify(digest, signature, data)
-        raise RuntimeError, "PKey is not initialized" if @seed.nil?
-        name = ""
+        raise RuntimeError, "PKEY wasn't initialized!" if @seed.nil?
+        md = 0
         unless nil.equal?(digest)
           if OpenSSL::Digest === digest
             raise RuntimeError, "Digest CTX wasn't initialized!" if nil.equal?(digest.instance_variable_get(:@state))
@@ -267,13 +267,17 @@ module OpenSSL
             name = String.new(OpenSSL.send(:comparison_string, digest))
           end
           raise ArgumentError, "string contains null byte" if name.include?("\0")
-          Native.digest_check(name)
+          md = Native.verify_digest(name)
         end
-        signature = OpenSSL.send(:comparison_string, signature)
-        data = OpenSSL.send(:comparison_string, data)
-        result = Native.ed25519_verify(@seed, signature, data, name)
-        raise PKeyError, Native.last_error if result < 0
-        result == 1
+        begin
+          signature = OpenSSL.send(:comparison_string, signature)
+          data = OpenSSL.send(:comparison_string, data)
+          result = Native.ed25519_verify(@seed, signature, data, md)
+          raise PKeyError, Native.last_error if result < 0
+          result == 1
+        ensure
+          Native.verify_digest_free(md)
+        end
       end
     end
   end

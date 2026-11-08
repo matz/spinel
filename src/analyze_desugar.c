@@ -18541,6 +18541,21 @@ static int bx_recv_concrete(int bx, TyKind rt) {
    where CRuby sends it to the String. A call to another of the container's methods
    (bx_copy) or a Kernel function that ignores self is fine. Kept on the
    copy (bx_self_free: 1 yes, 2 no). */
+/* Does the program define its own instance method nm that a String or a
+   Symbol answers before Kernel's: on String or Symbol, a module either
+   includes, or Object, Kernel, BasicObject or the top level? */
+static int bx_kernel_name_own(Compiler *c, const char *nm) {
+  if (program_defines_object_method_named(c, nm)) return 1;
+  for (int k = 0; k < c->nclasses; k++) {
+    const char *kn = c->classes[k].name;
+    if (!kn || !(sp_streq(kn, "String") || sp_streq(kn, "Symbol"))) continue;
+    int mi = comp_method_in_chain(c, k, nm, NULL);
+    if (mi >= 0 && mi < c->nscopes && c->scopes[mi].def_node >= 0 &&
+        !nt_int(c->nt, c->scopes[mi].def_node, "node_bi", 0)) return 1;
+  }
+  return 0;
+}
+
 static int bx_copy_self_free(Compiler *c, int copy) {
   NodeTable *nt = (NodeTable *)c->nt;
   int known = (int)nt_int(nt, copy, "bx_self_free", 0);
@@ -18568,7 +18583,9 @@ static int bx_copy_self_free(Compiler *c, int copy) {
       }
       int k = 0;
       while (cn && self_free[k] && !sp_streq(cn, self_free[k])) k++;
-      if (!cn || !self_free[k]) ok = 0;
+      /* the program's own String#p (or Object#format) answers in CRuby,
+         not Kernel's */
+      if (!cn || !self_free[k] || bx_kernel_name_own(c, cn)) ok = 0;
       break;
     }
     default: break;

@@ -1,0 +1,6 @@
+claude 1 {"q" => 1}
+claude 2 allow {}
+approvals {request_id: 3, input: {"q" => 1}}
+NoMethodError
+ArgumentError: missing keyword: :input
+approvals {request_id: 5}

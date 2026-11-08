@@ -1,0 +1,43 @@
+[:nil, 1, [2], 20]
+[:nil, 1, [2], 20]
+[:nil, 1, [2], 20]
+[:nil, 3, [], 20]
+[:nil, 0, [1, 2], 9]
+[:nil, 10, [], 20]
+[:nil, 4, [], 20]
+[:nq, [1], :b]
+[:nq, [], :c]
+-10
+-4
+-1
+-1
+-1
+[:obj, 1, [2], 2]
+[:obj, 1, [2], 2]
+[:obj, 1, [2], 2]
+[:obj, 3, [], 2]
+[:obj, 0, [1, 2], 9]
+[:obj, 1, [], 2]
+[:obj, 4, [], 2]
+[:oq, [1], :b]
+[:oq, [], :c]
+3
+4
+0
+1
+1
+2
+[:nz, [1, 2]]
+NoMethodError
+NoMethodError
+[-3, 3, 3, [:foo, 1, 2]]
+[:nil, 3, [], 20]
+[:obj, 3, [], 2]
+[:obj, 3, [], 2]
+5
+-1
+3
+"wrong number of arguments (given 3, expected 1..2)"
+"wrong number of arguments (given 0, expected 1..2)"
+[:nq, [1, {a: 1}], :nob]
+[:nil, 1, [2], 20]

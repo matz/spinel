@@ -8697,12 +8697,27 @@ static int arm_raises_nomethod_for(const char *text, const char *name) {
 /* The builtin default's re-entered emission of call id with its receiver
    bound to _t<tv> (emit_poly_builtin_default_at): the arm's text into nb,
    what it hoists into *arm_pre. 0 when the probe declined. */
+static int poly_default_obj_spreads(Compiler *c, int id, const char *name);
+#define POLY_OBJ_SPREAD_MAX 8
 static int bi_default_probe(Compiler *c, int id, int recv, const char *name, int argc, const int *argv,
                             const int *atmp, const TyKind *atmp_ty, TyKind ret, TyKind bt, int slot_o,
                             int nil_fwd, int tv, Buf *nb, char **arm_pre, int *box_o) {
   const NodeTable *nt = c->nt;
   int slot = view_bind(recv, "_t%d", tv);
+  /* a splat into Object's own method (poly_default_obj_spreads) spreads the
+     list the dispatch already flattened into its temp, a boxed Array: its
+     operand is not read a second time */
+  int sviews[POLY_OBJ_SPREAD_MAX], nsv = 0;
+  int obj_spread = poly_default_obj_spreads(c, id, name);
   for (int a = 0; a < argc; a++) {
+    if (nt_kind(nt, argv[a]) == NK_SplatNode && obj_spread && nsv < POLY_OBJ_SPREAD_MAX) {
+      int ex = nt_ref(nt, argv[a], "expression");
+      if (ex >= 0) {
+        view_bind(ex, "_t%d", atmp[a]);
+        sviews[nsv++] = view_push(c, ex, TY_POLY_ARRAY);
+      }
+      continue;
+    }
     /* (a held handle is the argument's value, which a writer arm takes:
        ran_first_handle) */
     if (argc == 1 && call_is_setter_assign(nt, id) && atmp_ty[a] == TY_STRBUF &&
@@ -8747,8 +8762,20 @@ static int bi_default_probe(Compiler *c, int id, int recv, const char *name, int
   *box_o = pr.box_o;
   view_pop(c, vw);
   view_pop(c, va);
+  while (nsv > 0) view_pop(c, sviews[--nsv]);
   view_unbind(slot);
   return ok;
+}
+/* Does the re-entered emission of call id land on a method the program
+   adds to Object itself, of a name no builtin has? That method's binder
+   spreads a splat operand as the ordinary call does, so the default arm
+   of a boxed receiver spreads it again. */
+static int poly_default_obj_spreads(Compiler *c, int id, const char *name) {
+  int oc = comp_core_class(c, CORE_OBJECT);
+  MethodLookup ml = { .def_class = -1 };
+  int omi = oc >= 0 ? call_target(c, id, oc, name, 0, &ml) : -1;
+  return omi >= 0 && ml.def_class == oc && !builtin_object_method_known(name) &&
+         !builtin_instance_name_known(name);
 }
 static int emit_poly_builtin_default_at(Compiler *c, int id, int recv, const char *name,
                                      int argc, const int *argv, const int *atmp,
@@ -8785,7 +8812,13 @@ static int emit_poly_builtin_default_at(Compiler *c, int id, int recv, const cha
      same value -- a constant, a local -- so one with a side effect still
      declines. Any other emitter takes a splat as one boxed argument
      (`pop(*a)` handed the whole PolyArray), and declines too. */
-  int splat_ok = poly_splat_keyed(name);
+  int obj_spread = poly_default_obj_spreads(c, id, name);
+  if (obj_spread) {
+    int ns = 0;
+    for (int a = 0; a < argc; a++) ns += nt_kind(nt, argv[a]) == NK_SplatNode;
+    if (ns > POLY_OBJ_SPREAD_MAX) obj_spread = 0;
+  }
+  int splat_ok = poly_splat_keyed(name) || obj_spread;
   for (int a = 0; a < argc; a++) {
     int is_splat = nt_kind(nt, argv[a]) == NK_SplatNode;
     if (is_splat && !splat_ok) return 0;
@@ -8806,6 +8839,9 @@ static int emit_poly_builtin_default_at(Compiler *c, int id, int recv, const cha
     int rereads = is_splat || (splat_ok && is_line_read(name) && nt_kind(nt, argv[a]) == NK_KeywordHashNode);
     /* (one held boxed for its nil alone is read as its oint:
        bind_poly_arg_temp) */
+    /* (a splat into Object's own method reads the list its temp holds:
+       bi_default_probe) */
+    if (is_splat && obj_spread) continue;
     if (subtree_has_side_effect(c, argv[a]) &&
         (rereads || (repr_of(c, argv[a]).as_ty != atmp_ty[a] && !held_h &&
                      !poly_arg_held_oint(c, argv[a], atmp_ty[a]))))

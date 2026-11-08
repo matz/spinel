@@ -223,6 +223,9 @@ static VpStep vp_step(VpWalk *w, VpItem *cur) {
   if ((w->flags & VP_PARENS_ONLY) &&
       (nt_kind(nt, cur->node) == NK_ElseNode || nt_kind(nt, cur->node) == NK_InNode))
     return VPSTEP_LEAF;
+  if ((w->flags & VP_PAREN_ONE) && nt_kind(nt, cur->node) == NK_ParenthesesNode &&
+      nt_paren_single(nt, cur->node) == cur->node)
+    return VPSTEP_LEAF;
   switch (nt_kind(nt, cur->node)) {
 #include "value_pos_arms.inc"
   /* ---- hand-written arms, one per `role: hand` entry of value_edges.yml ---- */
@@ -385,6 +388,8 @@ static int vp_up_hand(const NodeTable *nt, int p, int child, unsigned flags, uns
 static int vp_up_edge(const NodeTable *nt, int p, int child, unsigned flags, unsigned shapes) {
   if ((flags & VP_PARENS_ONLY) &&
       (nt_kind(nt, p) == NK_ElseNode || nt_kind(nt, p) == NK_InNode)) return VPE_NONE;
+  if ((flags & VP_PAREN_ONE) && nt_kind(nt, p) == NK_ParenthesesNode && nt_paren_single(nt, p) == p)
+    return VPE_NONE;
   switch (nt_kind(nt, p)) {
 #include "value_pos_edges.inc"
   default:
@@ -715,6 +720,9 @@ static int vp_check_one(void) {
   ok &= vp_one(nt, ps, VPS_NONE | VP_PARENS_ONLY, &n) == VP1_NODE && n == b;
   ok &= vp_one(nt, empty, VPS_NONE | VP_PARENS_ONLY, &n) == VP1_NIL;
   ok &= vp_one(nt, clause, VPS_NONE | VP_PARENS_ONLY, &n) == VP1_NODE && n == clause;
+  ok &= vp_one(nt, ps, VPS_NONE | VP_PAREN_ONE, &n) == VP1_NODE && n == ps;
+  ok &= vp_one(nt, empty, VPS_NONE | VP_PAREN_ONE, &n) == VP1_NODE && n == empty;
+  ok &= vp_one(nt, outer, VPS_NONE | VP_PAREN_ONE, &n) == VP1_NODE && n == b;
   ok &= vp_one(nt, clause, VPS_NONE, &n) == VP1_NODE && n == b;
   ok &= !vp_is_value_edge(nt, clause, ss, VPS_NONE | VP_PARENS_ONLY);
   ok &= vp_is_value_edge(nt, clause, ss, VPS_NONE);

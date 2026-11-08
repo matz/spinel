@@ -6334,16 +6334,37 @@ static int engine_root_plain(NodeTable *nt, const char *x) {
    leaf `cls` give it m as its own method, a member's reader (a Struct
    member's writer too) or a def in its block? 1 yes, 0 no, -1 not known (a
    member not written as a literal). The skip region `in` is not asked. */
-/* a statement list that can change a method's visibility or remove it
-   (private, `private :m`, undef_method ...), which the record fold does not
-   follow */
-static int me_stmts_vis(const NodeTable *nt, int body) {
+/* a statement list that can change method m's visibility or remove it,
+   which the record fold does not follow: a visibility word or a removal
+   that names m (`private :m`, `private def m`, undef_method :m), or a
+   name it cannot read; a bare section word (`private`) ahead of a
+   statement that defines m. A member's reader comes from the record's
+   call, ahead of the block, so a section in the block leaves it public. */
+static int me_vis_arg_names(const NodeTable *nt, int a, const char *m) {
+  NodeKind ak = nt_kind(nt, a);
+  const char *v = ak == NK_SymbolNode ? nt_str(nt, a, "value") : ak == NK_StringNode ? nt_str(nt, a, "content") :
+                  ak == NK_DefNode ? nt_str(nt, a, "name") : NULL;
+  return !v || sp_streq(v, m);
+}
+static int me_stmts_vis(const NodeTable *nt, int body, const char *m) {
   int bn = 0; const int *bb = body >= 0 && nt_kind(nt, body) == NK_StatementsNode ? nt_arr(nt, body, "body", &bn) : NULL;
   static const char *const vis[] = { "private", "protected", "public", "module_function", "undef_method", "remove_method", NULL };
+  int section = 0;
   for (int i = 0; i < bn; i++) {
-    if (nt_kind(nt, bb[i]) == NK_UndefNode) return 1;
+    if (nt_kind(nt, bb[i]) == NK_UndefNode) {
+      int un = 0; const int *uv = nt_arr(nt, bb[i], "names", &un);
+      for (int u = 0; u < un; u++) if (me_vis_arg_names(nt, uv[u], m)) return 1;
+      continue;
+    }
+    if (section && me_stmt_defines(nt, bb[i], m)) return 1;
     const char *cn = nt_kind(nt, bb[i]) == NK_CallNode && nt_ref(nt, bb[i], "receiver") < 0 ? nt_str(nt, bb[i], "name") : NULL;
-    for (int v = 0; cn && vis[v]; v++) if (sp_streq(cn, vis[v])) return 1;
+    int w = 0;
+    while (cn && vis[w] && !sp_streq(cn, vis[w])) w++;
+    if (!cn || !vis[w]) continue;
+    int an = 0; const int *av = nt_arr(nt, nt_ref(nt, bb[i], "arguments"), "arguments", &an);
+    if (nt_ref(nt, bb[i], "block") >= 0) return 1;
+    if (an == 0) { section = 1; continue; }
+    for (int a = 0; a < an; a++) if (me_vis_arg_names(nt, av[a], m)) return 1;
   }
   return 0;
 }
@@ -6367,7 +6388,7 @@ static int me_record_defines(const NodeTable *nt, const char *cls, const char *m
     /* (the fold names a class by its last segment: a record written in a
        class body or a branch, `module M; S = Struct.new(:a); end`, can be
        another S; a second write makes another class) */
-    if (rec++ || !me_top_stmt(nt, id) || me_stmts_vis(nt, class_def_body(nt, id))) unknown = 1;
+    if (rec++ || !me_top_stmt(nt, id) || me_stmts_vis(nt, class_def_body(nt, id), m)) unknown = 1;
     data = class_def_record_is_data(nt, call);
     int an = 0; const int *av = nt_arr(nt, nt_ref(nt, call, "arguments"), "arguments", &an);
     for (int a = 0; a < an; a++) {
@@ -6390,7 +6411,7 @@ static int me_record_defines(const NodeTable *nt, const char *cls, const char *m
   for (int id = 0; rec && !unknown && id < nt->count; id++) {
     if (!class_def_is_class(nt, id) || subtree_has(nt, in, id)) continue;
     const char *nm = class_def_name(nt, id);
-    if (nm && sp_streq(nm, cls) && me_stmts_vis(nt, class_def_body(nt, id))) unknown = 1;
+    if (nm && sp_streq(nm, cls) && me_stmts_vis(nt, class_def_body(nt, id), m)) unknown = 1;
   }
   if (is_data) *is_data = rec && !unknown ? data : -1;
   if (!rec) return 0;
@@ -6403,7 +6424,8 @@ static int me_record_defines(const NodeTable *nt, const char *cls, const char *m
 static int engine_method_own_absent(NodeTable *nt, const char *cls, const char *m, int in) {
   if (me_body_defines(nt, cls, m, in)) return 0;
   /* (a Struct's or Data's members and the defs in its block are its own) */
-  if (me_record_defines(nt, cls, m, in, NULL) > 0) return 0;
+  int rd = me_record_defines(nt, cls, m, in, NULL);
+  if (rd != 0) return rd > 0 ? 0 : -1;
   if (is_builtin_class_name(cls) || is_builtin_module_name(cls) || builtin_class_id(cls)) return -1;
   return me_leaf_defined(nt, cls) ? 1 : -1;
 }

@@ -5327,12 +5327,31 @@ PolyPlan *cplan_poly_cls_values(Compiler *c, int id) {
    the top level has a method of it? Boxed, the call's dispatch then runs
    NilClass's method for nil, and for the rest Object's public method of
    the name where the program adds one, else raises NoMethodError. */
+/* Can the boxed dispatch's default arm run call id, one with a splat
+   argument or a block, as Object's method of the name? Not for a name a
+   builtin has (its builtin answer comes first, and its arm is no
+   spreading one), more than POLY_OBJ_SPREAD_MAX splats, or another
+   argument with a side effect: the arm reads such an argument again, or
+   declines (emit_poly_builtin_default_at). A call with neither a splat
+   nor a block: 1. */
+int cplan_nil_scalar_form_ok(Compiler *c, int id, const char *name) {
+  const NodeTable *nt = c->nt;
+  int argc = 0, nsplat = 0;
+  const int *argv = call_args(nt, id, &argc);
+  for (int i = 0; i < argc; i++) nsplat += nt_kind(nt, argv[i]) == NK_SplatNode;
+  if (!nsplat && nt_ref(nt, id, "block") < 0) return 1;
+  if (builtin_object_method_known(name) || builtin_instance_name_known(name)) return 0;
+  if (nsplat > POLY_OBJ_SPREAD_MAX) return 0;
+  for (int i = 0; i < argc; i++)
+    if (nt_kind(nt, argv[i]) != NK_SplatNode && subtree_has_side_effect(c, argv[i])) return 0;
+  return 1;
+}
 int cplan_nil_scalar_reach(Compiler *c, int id) {
   const NodeTable *nt = c->nt;
   if (id < 0 || nt_kind(nt, id) != NK_CallNode || nt_safe_nav(nt, id)) return 0;
   const char *name = cplan_call_name(nt, id);
   int recv = nt_ref(nt, id, "receiver");
-  if (!name || recv < 0) return 0;
+  if (!name || recv < 0 || !cplan_nil_scalar_form_ok(c, id, name)) return 0;
   TyKind rt = comp_ntype(c, recv);
   int core = rt == TY_STRING || rt == TY_STRBUF ? CORE_STRING
            : rt == TY_INT ? CORE_INTEGER : rt == TY_FLOAT ? CORE_FLOAT : -1;

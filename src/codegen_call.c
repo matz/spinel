@@ -8698,7 +8698,6 @@ static int arm_raises_nomethod_for(const char *text, const char *name) {
    bound to _t<tv> (emit_poly_builtin_default_at): the arm's text into nb,
    what it hoists into *arm_pre. 0 when the probe declined. */
 static int poly_default_obj_spreads(Compiler *c, int id, const char *name);
-#define POLY_OBJ_SPREAD_MAX 8
 static int bi_default_probe(Compiler *c, int id, int recv, const char *name, int argc, const int *argv,
                             const int *atmp, const TyKind *atmp_ty, TyKind ret, TyKind bt, int slot_o,
                             int nil_fwd, int tv, Buf *nb, char **arm_pre, int *box_o) {
@@ -8813,10 +8812,10 @@ static int emit_poly_builtin_default_at(Compiler *c, int id, int recv, const cha
      declines. Any other emitter takes a splat as one boxed argument
      (`pop(*a)` handed the whole PolyArray), and declines too. */
   int obj_spread = poly_default_obj_spreads(c, id, name);
+  int ns_obj = 0;
   if (obj_spread) {
-    int ns = 0;
-    for (int a = 0; a < argc; a++) ns += nt_kind(nt, argv[a]) == NK_SplatNode;
-    if (ns > POLY_OBJ_SPREAD_MAX) obj_spread = 0;
+    for (int a = 0; a < argc; a++) ns_obj += nt_kind(nt, argv[a]) == NK_SplatNode;
+    if (ns_obj > POLY_OBJ_SPREAD_MAX) obj_spread = 0;
   }
   int splat_ok = poly_splat_keyed(name) || obj_spread;
   for (int a = 0; a < argc; a++) {
@@ -8840,8 +8839,10 @@ static int emit_poly_builtin_default_at(Compiler *c, int id, int recv, const cha
     /* (one held boxed for its nil alone is read as its oint:
        bind_poly_arg_temp) */
     /* (a splat into Object's own method reads the list its temp holds:
-       bi_default_probe) */
+       bi_default_probe; another argument with a side effect beside it
+       would be read again, and declines) */
     if (is_splat && obj_spread) continue;
+    if (obj_spread && ns_obj > 0 && subtree_has_side_effect(c, argv[a])) return 0;
     if (subtree_has_side_effect(c, argv[a]) &&
         (rereads || (repr_of(c, argv[a]).as_ty != atmp_ty[a] && !held_h &&
                      !poly_arg_held_oint(c, argv[a], atmp_ty[a]))))

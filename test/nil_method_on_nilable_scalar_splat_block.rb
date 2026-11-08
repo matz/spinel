@@ -58,3 +58,19 @@ begin; mk(false).s(*[]); rescue ArgumentError => e; p e.message; end
 h = { a: 1 }
 p mk(false).q(*[1], **h)
 p mk(false).w(*arr) { :blk }
+
+# shapes the boxed default arm does not take keep the old path, which
+# is right for the non-nil value
+class Object; def kw(*r, **k, &b) = [:o, r, k, b ? b.call : 0]; end
+class NilClass; def kw(*r, **k, &b) = [:n, r, k, b ? b.call : 0]; end
+$c = 0
+def si; $c += 1; $c; end
+def sh; $c += 1; { k: $c }; end
+p mk(true).kw(*arr, k: si)
+p mk(true).kw(k: si) { 1 }
+p mk(true).kw(*arr, **sh)
+p $c
+p mk(true).kw(*arr, *arr, *arr, *arr, *arr, *arr, *arr, *arr, *arr).size
+class Object; def inspect(*r) = "O#{r.size}"; end
+class NilClass; def inspect(*r) = "N#{r.size}"; end
+puts mk(true).inspect { 1 }

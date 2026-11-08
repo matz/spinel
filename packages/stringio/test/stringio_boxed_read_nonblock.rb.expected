@@ -1,0 +1,16 @@
+"ab"
+"ab"
+"c"
+nil
+""
+""
+""
+EOFError
+""
+"abc"
+EOFError
+ArgumentError
+FrozenError
+"copy"
+"left"
+NoMethodError

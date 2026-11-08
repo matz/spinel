@@ -1357,6 +1357,9 @@ static int emit_obj_conv(Compiler *c, int node, const char *conv, TyKind want,
       /* in a builtin class's arm of a split call (conv_arg_of_cvb_arm, below)
          the method runs and CRuby's TypeError follows, where the arm runs */
       if (conv_arg_of_cvb_arm(c, node)) {
+        /* a conversion for the operand-order gate: the arguments after this
+           one run first, as CRuby evaluates them before converting */
+        g_conv_emitted++;
         buf_puts(b, "((void)(");
         emit_obj_conv_call_inline(c, node, t, wdef, wmi, conv, b);
         buf_puts(b, "), sp_raise_cls(\"TypeError\", ");
@@ -1377,6 +1380,8 @@ static int emit_obj_conv(Compiler *c, int node, const char *conv, TyKind want,
      program. */
   { Scope *es = comp_scope_of(c, node);
     if ((es && es->cand_bound) || conv_arg_of_cvb_arm(c, node)) {
+      /* (a conversion for the operand-order gate, as above) */
+      g_conv_emitted++;
       snprintf(msg, sizeof msg, "no implicit conversion of %s into %s", cn ? cn : "Object", into);
       buf_puts(b, "((void)(");
       emit_expr_for_effect(c, node, b);

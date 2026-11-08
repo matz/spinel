@@ -1,0 +1,9 @@
+marker
+Base
+marker
+to_str
+TCPServer: can't convert Wrong to String (Wrong#to_str gives Integer)
+marker
+Base
+marker
+TCPServer: no implicit conversion of Missing into String

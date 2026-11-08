@@ -1,0 +1,11 @@
+[[], {}]
+[[1], {k: 2}]
+"object"
+"object"
+:own
+:kernel
+2
+10
+NoMethodError
+["own", :blank]
+["tag", NoMethodError]

@@ -25,3 +25,10 @@ p "hello word"[/(or)(l)?/, -1]
 n = -2
 p s[re, n]
 p "abc"[/(x)?b/, -1]
+
+# a String in a boxed value
+re3 = /(o)(r)(l)/
+w = ["hello world", 5][0]
+p w[re3, -1], w.slice(re3, -2), w[re3, -4]
+x = [1, "hello world"].last
+p x[/(o)(r)(l)/, -2]

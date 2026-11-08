@@ -18573,26 +18573,69 @@ static int bx_recv_concrete(int bx, TyKind rt) {
   return 0;
 }
 
+/* Is module k module m, or does m mix it in, by include or by prepend
+   (through m's own mixins)? */
+static int bx_mixes_in(Compiler *c, int m, int k, int depth) {
+  if (m == k) return 1;
+  if (m < 0 || m >= c->nclasses || depth > 16) return 0;
+  const ClassInfo *mi = &c->classes[m];
+  for (int i = 0; i < mi->nincluded_mods; i++) if (bx_mixes_in(c, mi->included_mods[i], k, depth + 1)) return 1;
+  for (int i = 0; i < mi->nprepended_mods; i++) if (bx_mixes_in(c, mi->prepended_mods[i], k, depth + 1)) return 1;
+  return 0;
+}
+/* Does every reference to module k's constant (by its last segment) name it
+   in a plain `include` or `prepend` statement of a class body, a module body
+   or the top level, which the class table holds? Any other use
+   (`Kernel.prepend(M)`, `String.class_eval { include M }`, `m = M`) may mix
+   k into a String's ancestors where the table does not show it. */
+static int bx_module_mixed_plainly(Compiler *c, int k) {
+  const NodeTable *nt = c->nt;
+  const char *full = c->classes[k].name;
+  if (!full) return 0;
+  const char *leaf = strrchr(full, ':');
+  leaf = leaf ? leaf + 1 : full;
+  const int *par = comp_parent_map(c);
+  for (int id = 0; id < nt->count; id++) {
+    NodeKind nk = nt_kind(nt, id);
+    if (nk != NK_ConstantReadNode && nk != NK_ConstantPathNode) continue;
+    const char *cn = nt_str(nt, id, "name");
+    if (!cn || !sp_streq(cn, leaf)) continue;
+    int up = par[id];
+    if (up < 0) return 0;
+    NodeKind uk = nt_kind(nt, up);
+    if ((uk == NK_ModuleNode || uk == NK_ClassNode) && nt_ref(nt, up, "constant_path") == id) continue;
+    if (uk == NK_ConstantPathNode) return 0;
+    /* the argument of a receiverless include or prepend ... */
+    int call = uk == NK_ArgumentsNode ? par[up] : -1;
+    const char *mn = call >= 0 && nt_kind(nt, call) == NK_CallNode ? nt_str(nt, call, "name") : NULL;
+    if (!mn || (!sp_streq(mn, "include") && !sp_streq(mn, "prepend")) || nt_ref(nt, call, "receiver") >= 0) return 0;
+    /* ... that is a statement of a class body, a module body or the top level */
+    int st = par[call], body = st >= 0 && nt_kind(nt, st) == NK_StatementsNode ? par[st] : -1;
+    NodeKind bk = body >= 0 ? nt_kind(nt, body) : NK_ProgramNode;
+    if (body >= 0 && bk != NK_ClassNode && bk != NK_ModuleNode && bk != NK_ProgramNode) return 0;
+    if (st < 0 || nt_kind(nt, st) != NK_StatementsNode) return 0;
+  }
+  return 1;
+}
 /* May class or module k answer an instance method for a String or a
    Symbol: String, Symbol, Comparable, Object, Kernel, BasicObject or the
-   top level, or a module one of them or the top level includes or
-   prepends? (k < 0: a class the caller does not know, so yes.) */
+   top level, or a module one of them or the top level mixes in? A module
+   that the program mixes in by any other form than a plain include or
+   prepend statement (bx_module_mixed_plainly) may, too. (k < 0: a class
+   the caller does not know, so yes.) */
 static int bx_owner_reaches_string(Compiler *c, int k) {
   if (k < 0 || k >= c->nclasses || k == c->toplevel_class) return 1;
+  if (comp_class_is_module(c, &c->classes[k]) && !bx_module_mixed_plainly(c, k)) return 1;
   static const char *const roots[] = { "String", "Symbol", "Comparable", "Object", "Kernel", "BasicObject" };
   for (int i = 0; i < (int)(sizeof roots / sizeof roots[0]); i++) {
     int r = comp_builtin_class_named(c, roots[i]);
     const char *kn = c->classes[k].name;
     if (r == k || (kn && sp_streq(kn, roots[i]))) return 1;
-    for (int a = r, d = 0; a >= 0 && a < c->nclasses && d < 64; a = c->classes[a].parent, d++) {
-      if (a == k) return 1;
-      const ClassInfo *ci = &c->classes[a];
-      for (int m = 0; m < ci->nincluded_mods; m++) if (comp_module_includes(c, ci->included_mods[m], k, 0)) return 1;
-      for (int m = 0; m < ci->nprepended_mods; m++) if (comp_module_includes(c, ci->prepended_mods[m], k, 0)) return 1;
-    }
+    for (int a = r, d = 0; a >= 0 && a < c->nclasses && d < 64; a = c->classes[a].parent, d++)
+      if (bx_mixes_in(c, a, k, 0)) return 1;
   }
   for (int i = 0; i < c->ntoplevel_includes; i++)
-    if (comp_module_includes(c, c->toplevel_includes[i], k, 0)) return 1;
+    if (bx_mixes_in(c, c->toplevel_includes[i], k, 0)) return 1;
   return 0;
 }
 /* Does an alias or alias_method of the program name a method nm that a
@@ -18634,7 +18677,8 @@ static int bx_program_aliases(Compiler *c, const char *nm) {
 /* Does the program have its own instance method nm that a String or a
    Symbol answers before Kernel's: on String or Symbol or a module either
    mixes in, on Object, Kernel or BasicObject, at the top level or in a
-   module the top level includes, or by an alias? */
+   module the top level includes (bx_owner_reaches_string), or by an
+   alias? */
 static int bx_kernel_name_own(Compiler *c, const char *nm) {
   if (program_defines_object_method_named(c, nm) || bx_program_aliases(c, nm)) return 1;
   static const char *const recv_cls[] = { "String", "Symbol" };
@@ -18646,6 +18690,14 @@ static int bx_kernel_name_own(Compiler *c, const char *nm) {
   }
   for (int i = 0; i < c->ntoplevel_includes; i++)
     if (comp_method_in_chain(c, c->toplevel_includes[i], nm, NULL) >= 0) return 1;
+  /* a def in a module the chains above do not walk: one a mixed-in module
+     prepends, or one mixed in by a form the class table does not hold */
+  for (int si = 1; si < c->nscopes; si++) {
+    const Scope *sc = &c->scopes[si];
+    if (sc->is_cmethod || !sc->name || !sp_streq(sc->name, nm) || sc->def_node < 0 ||
+        nt_int(c->nt, sc->def_node, "node_bi", 0)) continue;
+    if (sc->class_id >= 0 && bx_owner_reaches_string(c, sc->class_id)) return 1;
+  }
   return 0;
 }
 

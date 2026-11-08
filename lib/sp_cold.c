@@ -1170,6 +1170,11 @@ sp_PolyArray *sp_math_lgamma(double x) {
 const char *sp_slurp_stream_err(FILE *fp, int *err) {
   if (err) *err = 0;
   if (!fp) return &("\xff" "")[1];
+  /* a directory reads as EISDIR, as read(2) answers it. Asked first: the
+     end a seek reports for one is no size (ext4 answers its hash order's
+     end, near LONG_MAX), and the hint below would ask malloc for that */
+  { struct stat st;
+    if (err && fstat(fileno(fp), &st) == 0 && S_ISDIR(st.st_mode)) { *err = EISDIR; return &("\xff" "")[1]; } }
   size_t cap = 8192;
   long pos = ftell(fp);
   if (pos >= 0 && fseek(fp, 0, SEEK_END) == 0) {

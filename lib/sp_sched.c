@@ -4303,7 +4303,7 @@ static int sp_sched_wait_io_impl(int fd, short events, struct pollfd *set, int n
     if (cancel && SP_ATOMIC_LOAD(cancel, __ATOMIC_SEQ_CST)) { wl_unlock(wl); return 1; }
     if (!set && cancel && fd >= 0 && fd < g_wslot[home].ev_cap) {
       unsigned char f = g_wslot[home].ev_mark[fd].flags;
-      unsigned char want = (unsigned char)(((events & POLLIN) ? SP_EVF_IN : 0) | ((events & POLLOUT) ? SP_EVF_OUT : 0) | SP_EVF_HUP);
+      unsigned char want = (unsigned char)(((events & POLLIN) ? SP_EVF_IN | SP_EVF_HUP : 0) | ((events & POLLOUT) ? SP_EVF_OUT : 0));
       if ((f & SP_EVF_PERSIST) && (f & want)) { wl_unlock(wl); return 1; }
     }
     sp_ev_waiter *es = NULL;

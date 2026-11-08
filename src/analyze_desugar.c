@@ -18573,6 +18573,42 @@ static int bx_recv_concrete(int bx, TyKind rt) {
   return 0;
 }
 
+/* Does an alias or alias_method of the program name a method nm? (It may
+   capture a builtin method, which no scope holds.) */
+static int bx_program_aliases(Compiler *c, const char *nm) {
+  const NodeTable *nt = c->nt;
+  for (int id = 0; id < nt->count; id++) {
+    NodeKind k = nt_kind(nt, id);
+    if (k == NK_AliasMethodNode) {
+      int nn = nt_ref(nt, id, "new_name");
+      if (nn >= 0 && nt_str(nt, nn, "value") && sp_streq(nt_str(nt, nn, "value"), nm)) return 1;
+    }
+    else if (k == NK_CallNode && nt_str(nt, id, "name") && is_alias_method_name(nt_str(nt, id, "name"))) {
+      int ac = 0; const int *av = call_args(nt, id, &ac);
+      const char *an = ac > 0 ? vis_arg_name(nt, av[0]) : NULL;
+      if (!an || sp_streq(an, nm)) return 1;
+    }
+  }
+  return 0;
+}
+/* Does the program have its own instance method nm that a String or a
+   Symbol answers before Kernel's: on String or Symbol or a module either
+   mixes in, on Object, Kernel or BasicObject, at the top level or in a
+   module the top level includes, or by an alias? */
+static int bx_kernel_name_own(Compiler *c, const char *nm) {
+  if (program_defines_object_method_named(c, nm) || bx_program_aliases(c, nm)) return 1;
+  static const char *const recv_cls[] = { "String", "Symbol" };
+  for (int i = 0; i < 2; i++) {
+    int k = comp_builtin_class_named(c, recv_cls[i]);
+    int mi = k >= 0 ? comp_method_in_chain(c, k, nm, NULL) : -1;
+    if (mi >= 0 && mi < c->nscopes && c->scopes[mi].def_node >= 0 &&
+        !nt_int(c->nt, c->scopes[mi].def_node, "node_bi", 0)) return 1;
+  }
+  for (int i = 0; i < c->ntoplevel_includes; i++)
+    if (comp_method_in_chain(c, c->toplevel_includes[i], nm, NULL) >= 0) return 1;
+  return 0;
+}
+
 /* Does the copy read its receiver only as `__self`? An instance variable
    in it is one slot for every receiver, where CRuby keeps one per String,
    and a call left with no receiver (bi_keeps_receiverless) goes to main,
@@ -18606,7 +18642,9 @@ static int bx_copy_self_free(Compiler *c, int copy) {
       }
       int k = 0;
       while (cn && self_free[k] && !sp_streq(cn, self_free[k])) k++;
-      if (!cn || !self_free[k]) ok = 0;
+      /* the program's own String#p (or Object#format) answers in CRuby,
+         not Kernel's */
+      if (!cn || !self_free[k] || bx_kernel_name_own(c, cn)) ok = 0;
       break;
     }
     default: break;

@@ -423,6 +423,12 @@ int is_quantifier_or_count(const char *n) {
          sp_streq(n, "one?") || sp_streq(n, "count");
 }
 
+/* A zero-argument Array mutator that answers its receiver: push, append and
+   unshift with nothing to add. */
+int is_array_self_mutator0(const char *n) {
+  return sp_streq(n, "push") || sp_streq(n, "append") || sp_streq(n, "unshift");
+}
+
 int is_push_unshift(const char *n) {
   return sp_streq(n, "<<") || sp_streq(n, "push") || sp_streq(n, "append") ||
          sp_streq(n, "unshift");

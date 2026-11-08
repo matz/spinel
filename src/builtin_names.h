@@ -88,6 +88,7 @@ int is_each_walk_or_with_index(const char *n); /* each each_entry reverse_each e
 int is_call_or_yield(const char *n);  /* call () [] yield: is_call_alias's names and yield */
 int is_proc_invoke(const char *n);    /* call () [] yield ===: every name that invokes a Proc */
 int is_quantifier_or_count(const char *n);  /* all? any? none? one? count: is_quantifier's names and count */
+int is_array_self_mutator0(const char *n);   /* push append unshift: a bare call answering the Array itself */
 int is_push_unshift(const char *n);   /* << push append unshift: is_push_alias's names and unshift */
 int is_load_path_write(const char *n); /* << push append unshift prepend concat: the calls that add to $LOAD_PATH */
 int is_identity_query(const char *n); /* equal? object_id __id__ frozen?: tells an object from its copy */

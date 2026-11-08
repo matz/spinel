@@ -1,0 +1,28 @@
+[1, 2]
+[1, 2]
+[1, 2]
+[:upush, []]
+[:uappend, []]
+[:uunshift, []]
+[1, 2, 3]
+[:upush, [3]]
+[1, 2, 3]
+true
+[1, 2, 3]
+3
+push: can't modify frozen Array: [1, 2]
+append: can't modify frozen Array: [1, 2]
+unshift: can't modify frozen Array: [1, 2]
+[1, 2]
+[:upush, []]
+nil
+[1, 2]
+[1, 2]
+[:w, 1]
+wrong number of arguments (given 0, expected 1)
+[1, 2]
+undefined method 'push' for an instance of Hash
+wrong number of arguments (given 0, expected 1)
+[:upush, []]
+[1, 2]
+:field

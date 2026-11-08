@@ -3032,7 +3032,9 @@ int emit_send_blind(Compiler *c, int id, Buf *b) {
            class name reads */
         { Buf lb; memset(&lb, 0, sizeof lb);
           const char *snm = nt_str(c->nt, id, "name");
-          int nl = builtin_classes_below_object_list(snm, &lb);
+          int nl = 0, ri = 0;
+          for (const char *bn; (bn = builtin_next_class_answering(&ri, snm)); )
+            buf_printf(&lb, "%s\"%s\"", nl++ ? ", " : "(const char *const[]){", bn);
           for (int k = 0; k < c->nclasses; k++) {
             const char *rn = class_ruby_name(c, k);
             if (rn && !comp_class_is_module(c, &c->classes[k]) &&

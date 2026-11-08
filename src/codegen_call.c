@@ -2484,40 +2484,6 @@ int builtin_instance_name_known(const char *m) {
     if (sp_streq(sp_builtin_names_tbl[i].m, m)) return 1;
   return 0;
 }
-/* the classes below Object that answer m, as the head of a C list literal
-   of their names, into out (the caller adds more and ends it); their count */
-int builtin_classes_below_object_list(const char *m, Buf *out) {
-  int n = 0;
-  for (int i = 0; m && sp_builtin_names_tbl[i].cls; i++) {
-    const char *k = sp_builtin_names_tbl[i].cls;
-    if (!sp_streq(sp_builtin_names_tbl[i].m, m) || sp_streq(k, "Object") || sp_streq(k, "Kernel") ||
-        sp_streq(k, "BasicObject")) continue;
-    int seen = 0;
-    for (int j = 0; j < i && !seen; j++)
-      seen = sp_streq(sp_builtin_names_tbl[j].cls, k) && sp_streq(sp_builtin_names_tbl[j].m, m);
-    if (seen) continue;
-    buf_printf(out, "%s\"%s\"", n++ ? ", " : "(const char *const[]){", k);
-  }
-  return n;
-}
-/* does the builtin class with run-time id `id` (-105 for Hash), or a builtin
-   class above it and below Object, answer m? A program's class under it
-   (`class MyH < Hash`) answers m by that method before a top-level def */
-int builtin_id_below_object_answers(int id, const char *m) {
-  for (int depth = 0; id && m && depth < 16; depth++) {
-    const BuiltinClass *r = NULL;
-    for (int i = 0; (r = builtin_class_at(i)) && r->id != id; i++) {}
-    if (!r || sp_streq(r->name, "Object") || sp_streq(r->name, "BasicObject")) return 0;
-    const char *nm[2] = { r->name, (r->flags & BC_EXCEPTION) ? "Exception" : NULL };
-    for (int j = 0; j < 2; j++)
-      for (int i = 0; nm[j] && sp_builtin_names_tbl[i].cls; i++)
-        if (sp_streq(sp_builtin_names_tbl[i].cls, nm[j]) && sp_streq(sp_builtin_names_tbl[i].m, m)) return 1;
-    int p = builtin_class_parent_id(id);
-    if (p == id) break;
-    id = p;
-  }
-  return 0;
-}
 /* does a builtin class below Object (Integer, String, Array, ...) answer m?
    A lookup reaches its method before a top-level def, which is Object's */
 int builtin_name_below_object(const char *m) {
@@ -27749,7 +27715,7 @@ int cplan_nil_closed_method(Compiler *c, int call, const char *name, int *vis) {
        first, and so does a `public :name` NilClass declares */
     if (i > 0) {
       int at = -1;
-      if (cplan_nil_own_builtin(name)) return -1;
+      if (builtin_answers_ahead_of("NilClass", name, "Object")) return -1;
       if (nk >= 0 && comp_method_vis_declared(c, nk, name, &at) == SP_VIS_PUBLIC && at == nk) return -1;
     }
     int k = owners[i] == -2 ? oc : comp_core_class(c, owners[i]);

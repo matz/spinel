@@ -1,0 +1,9 @@
+3
+4
+4
+6
+:abs
+:succ
+:abs
+:pred
+[:abs, :succ]

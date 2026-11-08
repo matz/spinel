@@ -253,7 +253,10 @@ static int cplan_in_closure(Compiler *c, int id) {
    the statement that defines method mi, in the order the load phase runs
    (the load record)? There the name is still the builtin's. */
 static int cplan_called_before_def(Compiler *c, int id, int mi) {
-  int dn = c->scopes[mi].def_node;
+  return cplan_runs_before_def_node(c, id, c->scopes[mi].def_node);
+}
+/* See call_plan.h. */
+int cplan_runs_before_def_node(Compiler *c, int id, int dn) {
   return dn >= 0 && !cplan_in_closure(c, id) && elab_cmp(elab_point_of(c, id), elab_point_of(c, dn)) == PROG_BEFORE;
 }
 /* --share-strings: does call `id`, with a literal block, still reach the

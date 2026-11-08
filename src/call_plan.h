@@ -927,5 +927,9 @@ int cplan_user_new(Compiler *c, int id, int ci);
 const char *cplan_self_text(Compiler *c, int id, int ci, char *buf, size_t cap);
 
 int cplan_reopen_runs_builtin(Compiler *c, int id, int mi);
+/* Does call id run, as the load record proves it, ahead of the def node dn
+   at the program's top level (not in a method body, a block or a lambda
+   run later)? */
+int cplan_runs_before_def_node(Compiler *c, int id, int dn);
 
 #endif

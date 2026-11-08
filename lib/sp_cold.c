@@ -5572,7 +5572,8 @@ sp_RbVal sp_box_timev(sp_Time v) {
   *p = v;
   return sp_box_obj(p, SP_BUILTIN_TIME);
 }
-sp_RbVal sp_box_time(sp_Time *p) { return sp_box_obj(p, SP_BUILTIN_TIME); }
+/* a NULL Time is nil (an optional parameter defaulting to nil, #11343) */
+sp_RbVal sp_box_time(sp_Time *p) { return p ? sp_box_obj(p, SP_BUILTIN_TIME) : sp_box_nil(); }
 
 static void sp_trange_scan(void *p) {
   sp_TimeRange *r = (sp_TimeRange *)p;

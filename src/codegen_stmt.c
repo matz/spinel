@@ -6905,7 +6905,10 @@ void emit_cond(Compiler *c, int id, Buf *b) {
   if (t == TY_STRING || t == TY_STRBUF || ty_is_array(t) || ty_is_hash(t) || ty_is_object(t) ||
       t == TY_PROC || t == TY_MATCHDATA || t == TY_EXCEPTION ||
       t == TY_BIGINT || t == TY_REGEX || t == TY_CURRY || t == TY_FIBER || t == TY_THREAD || t == TY_QUEUE || t == TY_MUTEX || t == TY_CONDVAR || t == TY_RANDOM || t == TY_DIR || t == TY_ADDRINFO || t == TY_SOCKOPT ||
-      t == TY_METHOD || t == TY_IO || t == TY_ARGF || t == TY_ENUMERATOR || t == TY_OPENSTRUCT || t == TY_TIME_RANGE || t == TY_OBJ_RANGE) {
+      t == TY_METHOD || t == TY_IO || t == TY_ARGF || t == TY_ENUMERATOR || t == TY_OPENSTRUCT || t == TY_TIME_RANGE || t == TY_OBJ_RANGE ||
+      /* a Time is an sp_Time pointer, NULL for nil (an optional parameter
+         defaulting to nil that another call passes a Time, #11343) */
+      t == TY_TIME) {
     buf_puts(b, "(("); emit_expr(c, id, b); buf_puts(b, ") != 0)"); return;
   }
   if (oint_kind(t)) { emit_oint_truthy(c, id, t, b); return; }
@@ -6916,10 +6919,10 @@ void emit_cond(Compiler *c, int id, Buf *b) {
   if (t == TY_SYMBOL) { buf_puts(b, "(("); emit_expr(c, id, b); buf_puts(b, ") != (sp_sym)-1)"); return; }
   if (t == TY_CLASS) { buf_puts(b, "(!sp_class_nil_p("); emit_expr(c, id, b); buf_puts(b, "))"); return; }
   /* Always-truthy concrete value types: a Range (of Integers, Floats or
-     Strings) / Complex / Rational / Time value is never nil or false, so it
-     is truthy in condition position. Evaluate it for side effects and yield 1. */
+     Strings) / Complex / Rational value is never nil or false, so it is
+     truthy in condition position. Evaluate it for side effects and yield 1. */
   if (t == TY_RANGE || t == TY_FLOAT_RANGE || t == TY_STR_RANGE || t == TY_COMPLEX ||
-      t == TY_RATIONAL || t == TY_TIME) {
+      t == TY_RATIONAL) {
     buf_puts(b, "(("); emit_expr_for_effect(c, id, b); buf_puts(b, "), 1)"); return;
   }
   /* a yield no call site gives a block has no value type: reached, it

@@ -436,7 +436,7 @@ int emit_call_identity_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, co
   /* nil? on a pointer-backed concrete type: nil is the NULL pointer. */
   if (recv >= 0 && argc == 0 && sp_streq(name, "nil?") &&
       (rt == TY_FIBER || rt == TY_PROC || rt == TY_CURRY || rt == TY_RANDOM ||
-       rt == TY_METHOD || rt == TY_IO ||
+       rt == TY_METHOD || rt == TY_IO || rt == TY_TIME ||   /* an sp_Time pointer, NULL for nil (#11343) */
        rt == TY_MATCHDATA || rt == TY_REGEX || rt == TY_EXCEPTION || rt == TY_BIGINT)) {
     buf_puts(b, "(("); emit_expr(c, recv, b); buf_puts(b, ") == NULL)");
     return 1;
@@ -451,7 +451,7 @@ int emit_call_identity_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, co
   }
   /* nil? on a value-typed concrete receiver is always false. */
   if (recv >= 0 && argc == 0 && sp_streq(name, "nil?") &&
-      (rt == TY_RANGE || rt == TY_TIME || rt == TY_COMPLEX || rt == TY_RATIONAL ||
+      (rt == TY_RANGE || rt == TY_COMPLEX || rt == TY_RATIONAL ||
        rt == TY_BOOL || rt == TY_CLASS)) {
     buf_puts(b, "((void)("); emit_expr_for_effect(c, recv, b); buf_puts(b, "), 0)");
     return 1;

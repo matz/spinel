@@ -363,6 +363,17 @@ static const char *const BAM_RECV_TST[] = {
   "_t%d.tag == SP_TAG_SYM && _t%d.tag == SP_TAG_SYM",
   "_t%d.tag == SP_TAG_OBJ && _t%d.cls_id == SP_BUILTIN_RANGE" };
 
+/* Does a program's reopening that builtin class cls reaches define sym:
+   cls itself, Comparable (String, Integer, Float), Kernel or Object? */
+static int bam_recv_reopen_answers(Compiler *c, const char *cls, const char *sym) {
+  const char *chain[4] = { cls, NULL, "Kernel", "Object" };
+  if (sp_streq(cls, "String") || sp_streq(cls, "Integer") || sp_streq(cls, "Float")) chain[1] = "Comparable";
+  for (int i = 0; i < 4; i++) {
+    int k = chain[i] ? comp_builtin_class_named(c, chain[i]) : -1;
+    if (k >= 0 && comp_method_in_class(c, k, sym) >= 0) return 1;
+  }
+  return 0;
+}
 /* Method#parameters of a boxed receiver's wrapper mi (bam_poly) for method
    sym, by the class the receiver _t<tbr> has at run time, as its arity is
    read: a program class's def of sym, its accessor's list (a reader's
@@ -374,6 +385,10 @@ static void emit_method_params_by_recv(Compiler *c, int mi, const char *sym, int
   const char *fb = fallback ? fallback : "";
   buf_puts(b, "(");
   for (int q = 0; BAM_RECV_CLS[q]; q++) {
+    /* (a program's reopening the class reaches answers for it: the
+       class's own, Comparable's for the comparable ones, Kernel's or
+       Object's; its list is the wrapper's, fb) */
+    if (bam_recv_reopen_answers(c, BAM_RECV_CLS[q], sym)) continue;
     const char *own = builtin_method_owner(BAM_RECV_CLS[q], sym);
     const char *bp = builtin_method_params(own ? own : BAM_RECV_CLS[q], sym, NULL);
     if (!bp || sp_streq(bp, fb)) continue;

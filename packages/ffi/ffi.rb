@@ -532,7 +532,9 @@ module FFI
     def write_bool(v) = put_bool(0, v)
 
     def get_bytes(off, len)
-      return "" if len == 0
+      # a new, mutable binary String, as for every other length (#11341):
+      # a literal is frozen
+      return "".b if len == 0
       Native.read_bytes(__addr(off, len), len)
     end
     def put_bytes(off, str, index = 0, length = nil)

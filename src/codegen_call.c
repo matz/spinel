@@ -16837,6 +16837,17 @@ int emit_delegated_equality(Compiler *c, int id, int negate, Buf *b) {
   return 1;
 }
 
+/* Does a Time subclass of the program's define its own == (not a reopened
+   Time's, which the Time arms below take)? */
+static int program_timesub_defines_eq(Compiler *c) {
+  for (int k = 0; k < c->nclasses; k++) {
+    int defcls = -1;
+    if (comp_ary_is_time(c, k) && !is_builtin_reopen(c->classes[k].name) &&
+        comp_method_in_chain(c, k, "==", &defcls) >= 0 && defcls >= 0 &&
+        !is_builtin_reopen(c->classes[defcls].name)) return 1;
+  }
+  return 0;
+}
 static int emit_case_eq_call(Compiler *c, int id, Buf *b) {
   const NodeTable *nt = c->nt;
   const char *name = view_call_name(c, id);
@@ -17417,25 +17428,15 @@ static int emit_case_eq_call(Compiler *c, int id, Buf *b) {
     }
     /* A Time subclass of the program's with its own == (`class Stamp < Time;
        def ==(o)`): `a != b` is the negation of that method's answer, as
-       CRuby's BasicObject#!= calls ==. Its receiver reads as a Time here. */
-    if (!eq && rt == TY_TIME && recv >= 0) {
-      TyKind ot = repr_of(c, recv).ty;
-      /* (a local's read of one is typed as its Time: its slot holds the class) */
-      if (!ty_is_object(ot) && nt_kind(nt, recv) == NK_LocalVariableReadNode && c->nscope[recv] >= 0) {
-        LocalVar *lv = scope_local(&c->scopes[c->nscope[recv]], nt_str(nt, recv, "name"));
-        if (lv) ot = lv->type;
-      }
-      int ecid = ty_is_object(ot) && comp_ty_is_timesub(c, ot) ? ty_object_class(ot) : -1;
-      int emi = ecid >= 0 ? comp_method_in_chain(c, ecid, "==", NULL) : -1;
-      if (emi >= 0) {
-        Buf selfb = emit_cmp_self(c, recv, ot), call = {0};
-        emit_dispatch(c, ecid, "==", selfb.p, nt_ref(nt, id, "arguments"), -1, &call);
-        TyKind er = c->scopes[emi].ret;
-        if (er == TY_BOOL) buf_printf(b, "(!(%s))", call.p);
-        else { buf_puts(b, "(!sp_poly_truthy("); emit_boxed_text(c, er, call.p, b); buf_puts(b, "))"); }
-        free(selfb.p); free(call.p);
-        return 1;
-      }
+       CRuby's BasicObject#!= calls ==. The receiver reads as its Time here,
+       so the boxed value's class (sp_poly_bsub_obj) picks the method at run
+       time. */
+    if (!eq && rt == TY_TIME && recv >= 0 && program_timesub_defines_eq(c)) {
+      int tr = ++g_tmp, ta = ++g_tmp;
+      buf_printf(b, "({ sp_RbVal _t%d = ", tr); emit_boxed(c, recv, b);
+      buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); sp_RbVal _t%d = ", tr, ta); emit_boxed(c, argv[0], b);
+      buf_printf(b, "; sp_poly_truthy(sp_poly_eq_value(_t%d, _t%d, 1)); })", tr, ta);
+      return 1;
     }
     /* Time == / != via sp_time_cmp. A non-Time operand is never equal (CRuby
        compares Time only to Time); a poly operand is checked at runtime. */

@@ -5173,9 +5173,10 @@ static SP_INLINE sp_bool sp_poly_rb_equal(sp_RbVal a, sp_RbVal b) {
    negation; anything else the runtime equality. */
 static sp_RbVal sp_poly_eq_value(sp_RbVal a, sp_RbVal b, int ne) {
   /* (a Time or Array subclass's object asks its class: sp_poly_bsub_obj) */
-  if (a.tag == SP_TAG_OBJ && sp_user_binop_hook && (a.cls_id >= 0 || (a = sp_poly_bsub_obj(a)).cls_id >= 0)) {
+  sp_RbVal ua = a.tag == SP_TAG_OBJ && a.cls_id < 0 ? sp_poly_bsub_obj(a) : a;
+  if (ua.tag == SP_TAG_OBJ && ua.cls_id >= 0 && sp_user_binop_hook) {
     sp_bool h = FALSE;
-    sp_RbVal r = sp_user_binop_hook("==", a, b, &h);
+    sp_RbVal r = sp_user_binop_hook("==", ua, b, &h);
     if (h) return ne ? sp_box_bool(!sp_poly_truthy(r)) : r;
   }
   return sp_box_bool(sp_poly_eq(a, b) != (ne != 0));

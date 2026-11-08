@@ -1,0 +1,29 @@
+M::Foo__Bar
+"M::Foo__Bar"
+"M::Foo__Bar"
+"M::Foo__Bar"
+M::A__B__C
+M::A__B__C::D__E
+"M::A__B__C::D__E"
+M::Built__X
+M::Str__Y
+#<struct M::Str__Y a=1>
+M::Mod__Z
+M::Path__P
+N::Foo
+O::Foo
+O::Two__Foo
+#<M::Foo__Bar:X>
+M::Foo__Bar
+[M::Sub__S, M::Foo__Bar]
+M::Err__Q
+#<M::Err__Q: boom>
+M::Foo__Bar
+undefined method 'nope' for an instance of M::Foo__Bar
+uninitialized constant Late::Q__R::Foo
+CA::Leaf__X
+CB::Leaf__X
+#<struct CA::Two__S x=1>
+#<struct CB::Two__S y=2>
+CC::Array
+CC::Monitor__M

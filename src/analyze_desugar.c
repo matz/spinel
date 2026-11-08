@@ -7019,9 +7019,9 @@ static void dsn_memo_free(void) {
   g_dsn.inames = NULL; g_dsn.ninames = 0;
 }
 /* The distinct names of the program's instance methods -- a named scope in
-   a class that is not a class method -- in the order the scopes first bear
-   them, less initialize and initialize_copy: the names
-   dsend_receiver_names_uncached asks of a class's chain. It asked them
+   a class, or a top-level def, that is not a class method -- in the order
+   the scopes first bear them, less initialize and initialize_copy: the
+   names dsend_receiver_names_uncached asks of a class's chain. It asked them
    walking every scope once per class, and anew for every class of the set
    (a Rails application: 118,000 scopes, over its modules or a class's
    descendants, for every send on an untyped receiver -- most of the pass);
@@ -7031,7 +7031,7 @@ static char **dsn_inames_build(Compiler *c, int *n) {
   ANameHash seen; memset(&seen, 0, sizeof seen);
   for (int s = 0; s < c->nscopes; s++) {
     const Scope *sc = &c->scopes[s];
-    if (!sc->name || sc->is_cmethod || sc->class_id < 0) continue;
+    if (!sc->name || sc->is_cmethod) continue;
     if (sp_streq(sc->name, "initialize") || sp_streq(sc->name, "initialize_copy")) continue;
     if (anh_has(&seen, sc->name)) continue;
     if (cnt == cap) {
@@ -7102,6 +7102,19 @@ static int dsend_receiver_names_uncached(Compiler *c, int cls, int subclasses, c
       }
       for (int a = 0; a < cl->naliases; a++) dsend_add_name(&names, &n, &cap, &seen, cl->alias_new[a]);
     }
+  }
+  /* and what the program defines for every object, in Object or Kernel or
+     at the top level, which a class's own chain does not reach: a known
+     class's send(name) raised NoMethodError for the `try` an Object
+     reopening gives every object. Not a blank slate's (`< BasicObject`),
+     which has none of them */
+  int every = cls >= 0 && !class_is_blank_slate(c, cls);
+  int oc = every ? comp_class_index(c, "Object") : -1;
+  for (int i = 0; every && i < nin; i++) {
+    int tm = comp_method_index(c, in[i]);   /* a top-level def, not main's own (`def self.k`) */
+    if ((oc >= 0 && oc != cls && comp_method_in_chain(c, oc, in[i], NULL) >= 0) ||
+        (tm >= 0 && !c->scopes[tm].is_cmethod))
+      dsend_add_name(&names, &n, &cap, &seen, in[i]);
   }
   for (int k = 0; object_methods[k]; k++) dsend_add_name(&names, &n, &cap, &seen, object_methods[k]);
   anh_free(&seen);

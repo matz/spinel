@@ -2295,6 +2295,7 @@ int        const_defined_top_level(Compiler *c, const char *n);   /* every class
 int        const_defined_basic_object_misses(Compiler *c, int recv, const char *cgn);   /* BasicObject.const_defined?(builtin name): false */
 int        is_builtin_toplevel_const(const char *n);   /* Struct, StandardError, Thread, Errno: CRuby defines it at boot */
 int        const_defined_from(Compiler *c, int rk, const char *cgn);   /* ... and seen from R: R, its ancestors, their modules, or top level (#9876) */
+int        const_defined_own(Compiler *c, int rk, const char *cgn);    /* R.const_defined?(N, false): R's own, Object's builtin names too */
 int        const_seen_by_class(Compiler *c, int k, const char *cgn);
 int        const_path_value_const(Compiler *c, int k, const char *nm, const int *cands, int ncands); /* what `m::NM` reads for m = class K: K's chain, not Object's (-1: NameError) */
 const LocalVar *const_value_path_top(Compiler *c, const char *nm); /* the top-level NM `Object::NM` reads through a value, or NULL */

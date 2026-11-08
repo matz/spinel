@@ -2484,13 +2484,19 @@ int const_defined_basic_object_misses(Compiler *c, int recv, const char *cgn) {
   int bk = comp_class_index(c, "BasicObject");
   return bk < 0 || !const_seen_by_class(c, bk, cgn);
 }
+/* `R.const_defined?(N, false)`: is N R's own constant? Object's own are
+   also the builtin top-level names CRuby defines at boot (Struct, Errno). */
+int const_defined_own(Compiler *c, int rk, const char *cgn) {
+  if (const_owned_by_class(c, rk, cgn)) return 1;
+  return (rk == CG_OBJECT || rk == comp_core_class(c, CORE_OBJECT)) && is_builtin_toplevel_const(cgn);
+}
 int const_defined_from(Compiler *c, int rk, const char *cgn) {
   if (!const_defined_known(c, rk, cgn)) return 0;
-  /* a class below BasicObject reaches no Object, so no builtin's name
-     (well-known names keep master's answer) */
-  if (rk >= 0 && rk < c->nclasses && cgn && is_builtin_toplevel_const(cgn) &&
-      !const_name_resolves_top_level(c, cgn) && class_is_blank_slate(c, rk))
-    return const_seen_by_class(c, rk, cgn);
+  /* a class below BasicObject reaches no Object: not a builtin's name, a
+     well-known one or a top-level constant of the program, nor the class's
+     own name. BasicObject holds only its own. */
+  if (rk >= 0 && rk < c->nclasses && cgn && !strstr(cgn, "::") && class_is_blank_slate(c, rk))
+    return sp_streq(cgn, "BasicObject") || const_seen_by_class(c, rk, cgn);
   if (rk < 0 || !cgn || strstr(cgn, "::") || const_defined_top_level(c, cgn)) return 1;
   return const_seen_by_class(c, rk, cgn);
 }

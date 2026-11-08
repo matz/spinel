@@ -13,6 +13,7 @@
  * whose bytes live in a GC string so the collector frees them).
  */
 #include "spinel/runtime.h"
+#include "sp_sched.h"   /* sp_native_enter / sp_native_leave: no-ops without threads */
 #include <dlfcn.h>
 #include <errno.h>
 #include <limits.h>
@@ -251,6 +252,20 @@ void sp_ffi_call(sp_int cif, sp_int fn, sp_int avalues, sp_int rvalue) {
   ffi_call((ffi_cif *)(intptr_t)cif, FFI_FN((void *)(intptr_t)fn),
            (void *)(intptr_t)rvalue, (void **)(intptr_t)avalues);
   sp_ffi_errno_v = errno;
+}
+
+/* The same call out of the world (`attach_function ..., blocking: true`): a
+   collection another thread starts does not wait for it, as for an ffi_func
+   declared blocking (#11350). The arguments are already marshaled into C
+   memory; the call touches no Ruby object. */
+void sp_ffi_call_blocking(sp_int cif, sp_int fn, sp_int avalues, sp_int rvalue) {
+  errno = sp_ffi_errno_v;
+  sp_native_enter();
+  ffi_call((ffi_cif *)(intptr_t)cif, FFI_FN((void *)(intptr_t)fn),
+           (void *)(intptr_t)rvalue, (void **)(intptr_t)avalues);
+  int e = errno;
+  sp_native_leave();
+  sp_ffi_errno_v = e;
 }
 
 /* A small integer return comes back widened to a full ffi_arg register. */

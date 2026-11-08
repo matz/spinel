@@ -894,6 +894,7 @@ sp_RbVal sp_poly_slice_or_call(sp_RbVal v, sp_RbVal a, sp_RbVal b)
       b.tag == SP_TAG_INT) {
     sp_int n = b.v.i;
     if (sp_re_match((mrb_regexp_pattern *)a.v.p, v.v.s ? v.v.s : "") < 0) return sp_box_nil();
+    n = sp_re_group_nth(n);   /* a negative n counts back from the last group */
     if (n == 0) return sp_box_nullable_str(sp_re_match_str);
     if (n >= 1 && n <= 9) return sp_box_nullable_str(sp_re_captures[n]);
     return sp_box_nil();

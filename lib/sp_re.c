@@ -59,6 +59,11 @@ const char *sp_re_last_paren_match(void) {
 void sp_MatchData_scan(void *p);   /* defined below */
 static sp_MatchData *sp_md_alloc(int pairs);   /* defined below */
 SP_TLS int sp_re_last_ncap = 0;
+sp_int sp_re_group_nth(sp_int n) {
+  if (n >= 0) return n;
+  n += sp_re_last_ncap;
+  return n > 0 ? n : -1;
+}
 SP_TLS const mrb_regexp_pattern *sp_re_last_pat = NULL;
 /* Set when the last match was a String pattern's (gsub / sub / scan with a
    String). CRuby's `$~.regexp` for one is the String escaped into a Regexp,

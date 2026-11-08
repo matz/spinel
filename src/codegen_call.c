@@ -35104,7 +35104,7 @@ static void emit_call_body_ordinary(Compiler *c, int id, Buf *b) {
     }
     if (recv_is_tilde && sp_streq(name, "[]") && argc == 1) {
       buf_puts(b, "({ sp_int _mi = "); emit_int_expr(c, argv[0], b);
-      buf_puts(b, "; _mi == 0 ? sp_re_match_str : (_mi >= 1 && _mi <= 9 ? sp_re_captures[_mi] : (const char *)0); })");
+      buf_puts(b, "; _mi = sp_re_group_nth(_mi); _mi == 0 ? sp_re_match_str : (_mi >= 1 && _mi <= 9 ? sp_re_captures[_mi] : (const char *)0); })");
       return;
     }
     /* $~'s MatchData face over the match registers: pre/post_match and to_s

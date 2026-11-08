@@ -74,6 +74,11 @@ void sp_re_push_match_roots(void);
 
 /* ---- wrappers (lib/sp_re.c) ---- */
 const char *sp_re_last_paren_match(void);
+/* The group a match index `n` names after the last match: a negative n
+   counts back from the last group (`s[re, -1]`), and one past the first
+   group (-ncap or less) names none, so it answers -1 (nil), as CRuby's
+   rb_reg_nth_match. A non-negative n is itself. */
+sp_int sp_re_group_nth(sp_int n);
 void sp_re_set_captures(const char *str, int *caps, int ncaps);
 extern int sp_re_track_last;   /* gsub / sub / scan record `$~` (sp_re.c) */
 void sp_re_clear_last_match(void);

@@ -937,6 +937,13 @@ int emit_call_regexp_class_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
       long long idx = nt_int(nt, argv[0], "value", 0);
       if (idx == 0) { buf_puts(b, "sp_re_match_str"); return 1; }
       if (idx >= 1 && idx <= 9) { buf_printf(b, "sp_re_captures[%d]", (int)idx); return 1; }
+      /* a negative group counts back from the last match's last group */
+      if (idx < 0) {
+        int tg = ++g_tmp;
+        buf_printf(b, "({ sp_int _t%d = sp_re_group_nth(%lldLL); _t%d >= 1 && _t%d <= 9 ? sp_re_captures[_t%d] : NULL; })",
+                   tg, idx, tg, tg, tg);
+        return 1;
+      }
       buf_puts(b, "NULL");
       return 1;
     }
@@ -961,8 +968,8 @@ int emit_call_regexp_class_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
     int tv = ++g_tmp;
     emit_indent(g_pre, g_indent);
     { Buf ib_; memset(&ib_, 0, sizeof ib_); emit_int_expr(c, argv[0], &ib_); buf_printf(g_pre, "sp_int _t%d = %s;\n", tv, ib_.p ? ib_.p : "0"); free(ib_.p); }
-    buf_printf(b, "(_t%d == 0 ? sp_re_match_str : (_t%d >= 1 && _t%d <= 9 ? sp_re_captures[_t%d] : NULL))",
-               tv, tv, tv, tv);
+    buf_printf(b, "((_t%d = sp_re_group_nth(_t%d)) == 0 ? sp_re_match_str : (_t%d >= 1 && _t%d <= 9 ? sp_re_captures[_t%d] : NULL))",
+               tv, tv, tv, tv, tv);
     return 1;
   }
   /* Regexp.escape / Regexp.quote -> escape special regex characters */
@@ -1968,9 +1975,9 @@ int emit_op_string_slice(Compiler *c, const BopCtx *x, Buf *b) {
     }
     buf_printf(b, " sp_int _t%d = ", tn); emit_int_expr(c, argv[1], b);
     buf_printf(b, "; const char *_t%d = sp_re_match(%s, _t%d) >= 0"
-                  " ? (_t%d == 0 ? sp_re_match_str"
+                  " ? ((_t%d = sp_re_group_nth(_t%d)) == 0 ? sp_re_match_str"
                   "    : (_t%d >= 1 && _t%d <= 9 ? sp_re_captures[_t%d] : NULL)) : NULL;",
-               th, pat, ts, tn, tn, tn, tn);
+               th, pat, ts, tn, tn, tn, tn, tn);
     if (sb_asgn) {
       buf_printf(b, " if (_t%d && _t%d >= 0 && _t%d <= 9) {"
                     " sp_int _b = sp_re_caps[2 * _t%d], _e = sp_re_caps[2 * _t%d + 1];"

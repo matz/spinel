@@ -45,3 +45,15 @@ begin; p dyn_hi(DM); rescue NameError => e; puts e.message; end
 [DN, DO, DM].each do |w|
   begin; p w::Bar; rescue NameError => e; puts e.message; end
 end
+
+# one other class of the leaf: a module without it raises NameError
+module EX; class Foo__Bar; end; end
+module EY; class Bar; end; end
+module EZ; end
+[EY, EX, EZ].each do |w|
+  begin; p w::Bar; rescue NameError => e; puts e.message; end
+end
+# a builder written through a path
+module PA; end
+PA::Foo__Q = Class.new do; end
+p PA::Foo__Q, PA::Foo__Q.name

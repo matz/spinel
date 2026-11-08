@@ -5287,23 +5287,12 @@ int emit_array_call(Compiler *c, int id, Buf *b) {
       }
     }
   }
-  /* The variadic Array mutators accept zero elements and return the receiver
-     unchanged; every arm below is written for argc >= 1, so a no-argument call
-     fell through to the unsupported-call refusal (#3340). */
   {
     const NodeTable *ntZ = c->nt;
     const char *nmZ = nt_str(ntZ, id, "name");
     int recvZ = nt_ref(ntZ, id, "receiver");
     int aZ = nt_ref(ntZ, id, "arguments"); int acZ = 0;
     if (aZ >= 0) nt_arr(ntZ, aZ, "arguments", &acZ);
-    if (nmZ && recvZ >= 0 && acZ == 0 && nt_ref(ntZ, id, "block") < 0 &&
-        ty_is_array(comp_ntype(c, recvZ)) &&
-        (sp_streq(nmZ, "push") || sp_streq(nmZ, "append") ||
-         sp_streq(nmZ, "concat") || sp_streq(nmZ, "unshift") ||
-         sp_streq(nmZ, "prepend"))) {
-      emit_array_frozen_checked(c, recvZ, comp_ntype(c, recvZ), b);
-      return 1;
-    }
     /* `zip(*xs)` / `product(*xs)`: the splat spreads across the ARGUMENT LIST,
        one operand per element, and its length is only known at run time. Every
        arm below reads a splat as a SINGLE operand, so zip handed an array where

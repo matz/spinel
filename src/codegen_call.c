@@ -20867,7 +20867,7 @@ static int arity_violation(Compiler *c, int id, char *exp, size_t n, int *eval_r
        beneath, or the readers a class Struct.new or Data.define answered
        carries */
     const char *surface = NULL;   /* the instance rows a class object answers with */
-    int uc = comp_class_index(c, cn);
+    int uc = const_node_class_index(c, recv);
     if (uc >= 0 && !c->classes[uc].is_native_class) {
       int mod = comp_class_is_module(c, &c->classes[uc]);
       /* a `class << self` reader is the class object's own and sits in no
@@ -22682,7 +22682,7 @@ static int class_value_builtin_answers(Compiler *c, const char *vnm, int is_clas
       !sp_streq(vnm, "allocate") && !sp_streq(vnm, "new")) return 0;
   if (!builtin_instance_method_known("Class", vnm) && !builtin_instance_method_known("Module", vnm)) return 0;
   /* a `class Class` reopening is registered as the module Class__reopen */
-  int cm[] = { comp_core_class(c, CORE_CLASS_REOPEN), comp_class_index(c, "Module") };
+  int cm[] = { comp_core_class(c, CORE_CLASS_REOPEN), comp_builtin_class_named(c, "Module") };
   for (int i = 0; i < 2; i++) {
     int k = cm[i];
     if (k < 0) continue;
@@ -23265,7 +23265,7 @@ int call_on_builtin_class_missing(Compiler *c, int id) {
       nt_kind(nt, recv) != NK_ConstantReadNode) return 0;
   const char *rcn = nt_str(nt, recv, "name");
   if (!rcn || builtin_class_id(rcn) == 0) return 0;
-  int rci = comp_class_index(c, rcn);
+  int rci = const_node_class_index(c, recv);
   return rci < 0 || call_target(c, id, rci, name, CT_CMETHOD, NULL) < 0;
 }
 
@@ -24391,11 +24391,11 @@ if (recv >= 0 && nm && (grt == TY_RATIONAL || grt == TY_COMPLEX)) {
         if (recv >= 0 && nt_kind(nt, recv) == NK_ConstantReadNode) {
           const char *rcn = nt_str(nt, recv, "name");
           /* and a module as a module ("for module Math") */
-          int rci = rcn ? comp_class_index(c, rcn) : -1;
+          int rci = rcn ? const_node_class_index(c, recv) : -1;
           if (rcn && (rci >= 0 || builtin_class_id(rcn) != 0))
             { snprintf(rdesc, sizeof rdesc, "%s %s",
                      (rci >= 0 ? comp_class_is_module(c, &c->classes[rci]) : is_builtin_module_name(rcn))
-                       ? "module" : "class", rcn);
+                       ? "module" : "class", rci >= 0 && class_ruby_name(c, rci) ? class_ruby_name(c, rci) : rcn);
               anon_ci = -1; }
         }
         if (grt == TY_POLY || grt == TY_BOOL) {
@@ -32609,7 +32609,7 @@ int method_node_recv_class(Compiler *c, int recv, int dflt) {
   if (mr < 0 || (nt_kind(nt, mr) != NK_ConstantReadNode && nt_kind(nt, mr) != NK_ConstantPathNode))
     return dflt;
   const char *rn = nt_str(nt, mr, "name");
-  int ci = rn ? comp_class_index(c, rn) : -1;
+  int ci = rn ? const_node_class_index(c, mr) : -1;
   return ci >= 0 ? ci : dflt;
 }
 
@@ -33623,7 +33623,7 @@ int respond_to_static_answer(Compiler *c, int id, int recv, TyKind rt, const cha
                builtin_class_id(nt_str(nt, recv, "name")) == 0;
     if (rk == NK_ConstantReadNode && !cobj) {
       const char *rcn = nt_str(nt, recv, "name");
-      int ci = comp_class_index(c, rcn);
+      int ci = const_node_class_index(c, recv);
       /* `Struct` and `Data` are core class objects with no user entry, and
          the synthesized probe cannot type a bare `Struct.new` (it is the
          class-building call, not a value), so both answered false for the
@@ -33949,7 +33949,7 @@ int emit_method_obj_on_constant(Compiler *c, int id, int recv, const char *sym, 
                    nt_kind(nt, recv) != NK_ConstantPathNode)) return 0;
   const char *rcn = nt_str(nt, recv, "name");
   if (!rcn) return 0;
-  int rci = comp_class_index(c, rcn);
+  int rci = const_node_class_index(c, recv);
   if (method_obj_of_native_func(c, recv, sym)) {
     char msg[512];
     snprintf(msg, sizeof msg,
@@ -34204,7 +34204,7 @@ int emit_reopen_block_call(Compiler *c, int id, int recv, int mi, const char *bo
 static int emit_array_hash_reopen_call(Compiler *c, int id, int recv, TyKind rt, const char *nm, Buf *b) {
   if (!ty_is_array(rt) && !ty_is_obj_array(rt) && !ty_is_hash(rt)) return 0;
   const char *acn = ty_is_hash(rt) ? "Hash" : "Array";
-  int aci = comp_class_index(c, acn);
+  int aci = comp_builtin_class_named(c, acn);
   MethodLookup ml = { .def_class = -1 };
   int ami = aci >= 0 ? call_target(c, id, aci, nm, 0, &ml) : -1;
   if (ami < 0 || ml.def_class != aci || !c->scopes[ami].name || !sp_streq(c->scopes[ami].name, nm)) return 0;
@@ -34309,7 +34309,7 @@ int strbuf_call_picks_up(Compiler *c, int id) {
   const char *nm = nt_str(c->nt, id, "name");
   if (k < 0) {
     const char *cn = nt_kind(c->nt, r) == NK_ConstantReadNode ? nt_str(c->nt, r, "name") : NULL;
-    return !cn || comp_class_index(c, cn) >= 0;
+    return !cn || const_node_class_index(c, r) >= 0;
   }
   return !nm || comp_cmethod_in_chain(c, k, nm, NULL) >= 0;
 }

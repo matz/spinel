@@ -5338,6 +5338,9 @@ static int cvb_split(Compiler *c, int id, const char *nm, const int *bval, int n
   for (int i = na - 1; i >= 0; i--) {
     int kc = nt_new_node(nt, "ConstantReadNode");
     nt_node_set_str(nt, kc, "name", arms[i]);
+    /* (a builtin's arm names the builtin, not a class of that leaf the
+       call's scope holds: `File` in module URI is not URI::File here) */
+    if (builtin_class_id(arms[i])) nt_node_set_int(nt, kc, "builtin_ref", 1);
     int kc2 = nt_clone_subtree(nt, kc);
     int arm = nt_clone_subtree(nt, id);
     nt_node_set_ref(nt, arm, "receiver", kc2);
@@ -7243,7 +7246,7 @@ static int dsend_class_recv(Compiler *c, int send, int recv) {
   if (rk == NK_SelfNode) return class_body_self_ci(c, recv);
   if (rk == NK_ConstantReadNode || rk == NK_ConstantPathNode) {
     const char *cn = nt_str(nt, recv, "name");
-    return cn ? comp_class_index(c, cn) : -1;
+    return cn ? const_node_class_index(c, recv) : -1;
   }
   return -1;
 }
@@ -8927,7 +8930,7 @@ int desugar_unused_block_arg(Compiler *c) {
     TyKind rt = infer_type(c, recv);
     if (!unused_block_read(rt, nm)) continue;
     const char *cn = ty_is_array(rt) ? "Array" : ty_is_hash(rt) ? "Hash" : "String";
-    int ci = comp_class_index(c, cn);
+    int ci = comp_builtin_class_named(c, cn);
     int mi = ci >= 0 ? call_target(c, id, ci, nm, 0, NULL) : -1;
     if (mi >= 0 && mi < c->nscopes && c->scopes[mi].def_node >= 0 &&
         !nt_int(nt, c->scopes[mi].def_node, "node_bi", 0)) continue;
@@ -10211,7 +10214,7 @@ static int splat_feeds_user_method(Compiler *c, int sp) {
          class has a class method `new` of its own */
       int r = nt_ref(nt, id, "receiver");
       const char *rn = r >= 0 && nt_kind(nt, r) == NK_ConstantReadNode ? nt_str(nt, r, "name") : NULL;
-      int ci = rn ? comp_class_index(c, rn) : -1;
+      int ci = rn ? const_node_class_index(c, r) : -1;
       return ci >= 0 && comp_cmethod_in_chain(c, ci, "new", NULL) >= 0;
     }
     for (int si = 0; nm && si < c->nscopes; si++)
@@ -11371,7 +11374,7 @@ static int recv_may_reach_program_method(Compiler *c, int call, TyKind rt, const
     const char *bn = builtin_class_of_type(rt);
     if (own) k = comp_core_class(c, core);
     else if (!bn) return program_defines_method_named(c, name);
-    else k = comp_class_index(c, bn);
+    else k = comp_builtin_class_named(c, bn);
   }
   if (k >= 0 && call_target(c, call, k, name, 0, NULL) >= 0) return 1;
   return !own && program_defines_object_method_named(c, name);
@@ -18666,7 +18669,7 @@ int desugar_builtin_scalar_calls(Compiler *c) {
        open-class path when it answers. */
     if (bx == SP_BX_COMPARABLE) {
       const char *concrete = cmp_cls ? cmp_cls : rt == TY_FLOAT ? "Float" : "Integer";
-      int cci = comp_class_index(c, concrete);
+      int cci = comp_builtin_class_named(c, concrete);
       if (cci >= 0 && call_target(c, id, cci, name, 0, NULL) >= 0) continue;
     }
     /* Which def `copy` clones -- the spliced generic, or a program's own
@@ -27862,7 +27865,7 @@ int desugar_index_assign_user_recv(Compiler *c) {
          class-level methods (activesupport's IsolatedExecutionState store):
          the same rewrite, calling the constant's methods */
       const char *cn = nt_str(nt, recv, "name");
-      int cid = cn ? comp_class_index(c, cn) : -1;
+      int cid = cn ? const_node_class_index(c, recv) : -1;
       if (cid < 0 || cid >= c->nclasses) continue;
       if (comp_cmethod_in_chain(c, cid, "[]", NULL) < 0 || comp_cmethod_in_chain(c, cid, "[]=", NULL) < 0) continue;
     }

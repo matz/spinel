@@ -458,6 +458,8 @@ static int const_node_record_class(Compiler *c, int id) {
   return elab_class_ref_at(c, id, NULL);
 }
 int const_node_class_index(Compiler *c, int id) {
+  /* a constant a pass made to name a builtin class (cvb_split's arms) */
+  if (id >= 0 && id < c->nt->count && nt_int(c->nt, id, "builtin_ref", 0)) return comp_builtin_class_named(c, nt_str(c->nt, id, "name"));
   int r = const_node_record_class(c, id);
   return r >= 0 ? r : const_node_class_index_tree(c, id);
 }

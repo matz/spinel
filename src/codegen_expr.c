@@ -4345,7 +4345,7 @@ static int emit_defined_value(Compiler *c, int id, Buf *b, const NodeTable *nt, 
         return 1;
       }
       if (cn) {
-        if (comp_const(c, cn) || comp_class_index(c, cn) >= 0) res = "constant";
+        if (comp_const(c, cn) || const_node_class_index(c, v) >= 0) res = "constant";
         if (!res && comp_is_wellknown_const(cn)) res = "constant";
         /* exception classes are constants too (#2767) */
         if (!res && (is_builtin_exception_name(cn) || is_builtin_class_name(cn)))

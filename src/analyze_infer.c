@@ -2493,7 +2493,7 @@ int an_class_singleton_methods_listable(Compiler *c, int cid) {
 
 int an_singleton_methods_foldable(Compiler *c, int recv) {
   const char *cn = nt_str(c->nt, recv, "name");
-  int ci = comp_class_index(c, cn);
+  int ci = const_node_class_index(c, recv);
   if (builtin_class_id(cn)) return ci < 0 || comp_cmethod_in_chain(c, ci, "singleton_methods", NULL) < 0;
   return an_class_singleton_methods_listable(c, ci);
 }
@@ -9188,7 +9188,7 @@ static TyKind infer_call_inner(Compiler *c, int id) {
     int aci = -1;
     if (recv >= 0) {
       const char *bcn = builtin_class_of_type(infer_type(c, recv));
-      if (bcn) aci = comp_class_index(c, bcn);
+      if (bcn) aci = comp_builtin_class_named(c, bcn);
     }
     else {
       int si = id < c->nt->count ? c->nscope[id] : -1;

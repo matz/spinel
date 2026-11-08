@@ -78,12 +78,13 @@ void emit_puts_one(Compiler *c, int arg, Buf *b, int indent) {
   NodeKind arg_k = nt_kind(c->nt, arg);
   if (arg_k == NK_ConstantReadNode) {
     const char *arg_nm = nt_str(c->nt, arg, "name");
-    if (arg_nm && comp_class_index(c, arg_nm) >= 0 && !comp_const(c, arg_nm)) {
+    int arg_ci = arg_nm && !comp_const(c, arg_nm) ? const_node_class_index(c, arg) : -1;
+    if (arg_ci >= 0) {
       emit_indent(b, indent);
       emit_const_read_stmt(c, arg, b, 0);
       /* (a class method to_s of the class's own prints it) */
-      if (cls_user_display_mi(c, comp_class_index(c, arg_nm), "to_s") >= 0)
-        buf_printf(b, "sp_puts_line(sp_class_to_s_disp((sp_Class){%d, NULL}));\n", comp_class_index(c, arg_nm));
+      if (cls_user_display_mi(c, arg_ci, "to_s") >= 0)
+        buf_printf(b, "sp_puts_line(sp_class_to_s_disp((sp_Class){%d, NULL}));\n", arg_ci);
       else buf_printf(b, "puts(\"%s\");\n", arg_nm);
       return;
     }
@@ -9889,7 +9890,7 @@ static void emit_case_match_in(Compiler *c, int id, Buf *b, int indent, int tail
           (nt_kind(nt, cnode) == NK_ConstantReadNode ||
            nt_kind(nt, cnode) == NK_ConstantPathNode)) {
         const char *ccn = nt_str(nt, cnode, "name");
-        if (ccn) { const char *ra = resolve_class_alias(c, ccn); if (ra) ccn = ra; ccid = comp_class_index(c, ccn); }
+        if (ccn) ccid = const_node_class_index(c, cnode);   /* (an alias's class too) */
       }
       if (ccid >= 0 && c->classes[ccid].is_struct) {
         ClassInfo *sc = &c->classes[ccid];
@@ -19900,7 +19901,7 @@ static int emit_call_stmt(Compiler *c, int id, Buf *b, int indent, const NodeTab
           int x = av[q];
           while (x >= 0 && nt_kind(nt, x) == NK_ConstantPathNode && nt_ref(nt, x, "parent") >= 0) x = nt_ref(nt, x, "parent");
           const char *xn = x >= 0 ? nt_str(nt, x, "name") : NULL;
-          if (xn && comp_class_index(c, xn) < 0 && !comp_const(c, xn)) { r = x; break; }
+          if (xn && const_node_class_index(c, x) < 0 && !comp_const(c, xn)) { r = x; break; }
         }
         while (r >= 0 && nt_kind(nt, r) == NK_ConstantPathNode && nt_ref(nt, r, "parent") >= 0) r = nt_ref(nt, r, "parent");
         const char *rn = r >= 0 ? nt_str(nt, r, "name") : NULL;
@@ -22400,7 +22401,7 @@ static void emit_stmt_node(Compiler *c, int id, Buf *b, int indent) {
     int class_self = exk == NK_SelfNode;
     if (!class_self && exk == NK_ConstantReadNode) {
       const char *cn = nt_str(nt, sexpr, "name");
-      class_self = cn && comp_class_index(c, cn) >= 0;
+      class_self = cn && const_node_class_index(c, sexpr) >= 0;
     }
     if (class_self || nt_int(nt, nt_ref(nt, id, "body"), "singleton_body", 0)) {
       if (emit_const_read_stmt(c, sexpr, b, indent)) buf_puts(b, "\n");

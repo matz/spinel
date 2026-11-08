@@ -1298,7 +1298,7 @@ int emit_call_reflection_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
         NodeKind rcv_k = nt_kind(nt, recv);
         const char *rcv_nm = ((rcv_k == NK_ConstantReadNode ||
                                          rcv_k == NK_ConstantPathNode)) ? nt_str(nt, recv, "name") : NULL;
-        int rcid = rcv_nm ? comp_class_index(c, rcv_nm) : -1;
+        int rcid = rcv_nm ? const_node_class_index(c, recv) : -1;
         const char *qn = rcid >= 0 ? class_ruby_name(c, rcid) : NULL;
         if (rcid >= 0 && !qn) qn = c->classes[rcid].name;
         /* a builtin class or module (Integer, Comparable, Kernel) qualifies
@@ -2543,9 +2543,9 @@ int emit_call_cmethod_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
     int sci = rk == NK_SelfNode ? class_body_self_ci(c, recv) : -1;
     if (sci >= 0 && c->classes[sci].name && emit_sg_accessor(c, id, sci, c->classes[sci].name, name, argc, argv, b)) return 1;
     if (rk == NK_ConstantReadNode || rk == NK_ConstantPathNode) {
-      const char *cn = nt_str(nt, recv, "name");
-      int ci = cn ? comp_class_index(c, cn) : -1;
-      if (ci >= 0 && emit_sg_accessor(c, id, ci, cn, name, argc, argv, b)) return 1;
+      /* (the class the node names, an alias's too: its own name spells its symbols) */
+      int ci = const_node_class_index(c, recv);
+      if (ci >= 0 && c->classes[ci].name && emit_sg_accessor(c, id, ci, c->classes[ci].name, name, argc, argv, b)) return 1;
     }
   }
 
@@ -3483,7 +3483,7 @@ int emit_call_new_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const c
   if (recv >= 0 && sp_streq(name, "new") &&
       nt_kind(nt, recv) == NK_ConstantPathNode) {
     const char *cn = nt_str(nt, recv, "name");
-    int ci = cn ? comp_class_index(c, cn) : -1;
+    int ci = const_node_class_index(c, recv);
     /* native (C-backed) class reached as ::Name (root-qualified) */
     if (emit_native_ctor(c, id, ci, argc, argv, b)) return 1;
     if (ci >= 0) {
@@ -3937,7 +3937,7 @@ static int emit_class_value_singleton_methods(Compiler *c, int id, Buf *b, const
   if (!sp_streq(name, "singleton_methods") || argc > 1) return 0;
   const char *cn2 = nt_kind(nt, recv) == NK_ConstantReadNode
                     ? nt_str(nt, recv, "name") : NULL;
-  int ci2 = cn2 ? comp_class_index(c, cn2) : -1;
+  int ci2 = cn2 ? const_node_class_index(c, recv) : -1;
   int all = argc == 0 || nt_kind(nt, argv[0]) == NK_TrueNode;
   if (!cn2 || (argc == 1 && !all && nt_kind(nt, argv[0]) != NK_FalseNode) || !an_singleton_methods_foldable(c, recv)) return 0;
   ReflNames r = {0};
@@ -4521,7 +4521,7 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
         /* a builtin's name: every class but those below BasicObject */
         if (!lit0 && yes && !strstr(cn0, "::") && !const_name_resolves_top_level(c, cn0) &&
             is_builtin_toplevel_const(cn0)) {
-          int nb = 0, bo = !sp_streq(cn0, "BasicObject") && comp_class_index(c, "BasicObject") < 0;
+          int nb = 0, bo = !sp_streq(cn0, "BasicObject") && comp_builtin_class_named(c, "BasicObject") < 0;
           for (int k = 0; k < c->nclasses; k++) nb += class_is_blank_slate(c, k) && !const_seen_by_class(c, k, cn0);
           if (nb > 0 || bo) {
             int tc = ++g_tmp;
@@ -4595,7 +4595,7 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
                         (nt_kind(nt, recv) == NK_ConstantReadNode ||
                          nt_kind(nt, recv) == NK_ConstantPathNode)
                         ? nt_str(nt, recv, "name") : NULL;
-      int rci = rcn ? comp_class_index(c, rcn) : -1;
+      int rci = rcn ? const_node_class_index(c, recv) : -1;
       /* `self.constants` (a bare `constants` is given self by desugar): in a
          class body self is that class; in a class method it is the class or
          a subclass the method was called on, answered by a switch on its
@@ -4667,7 +4667,7 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
                           ? nt_str(nt, recv, "name") : NULL;
         /* (a class body's self names its class, class_recv_static_ci) */
         int ci2 = nt_kind(nt, recv) == NK_SelfNode ? class_body_self_ci(c, recv)
-                : cn2 ? comp_class_index(c, cn2) : view_class_is(c, recv, ELAB_GAIN_METHODS);   /* or a class-tag arm's */
+                : cn2 ? const_node_class_index(c, recv) : view_class_is(c, recv, ELAB_GAIN_METHODS);   /* or a class-tag arm's */
         if (ci2 < 0 && nt_kind(nt, recv) == NK_SelfNode) ci2 = view_class_is(c, recv, ELAB_GAIN_METHODS);
         if (ci2 >= 0) {
           ReflNames r = {0};
@@ -4793,7 +4793,7 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
     if (sp_streq(name, "class_variables") && argc == 0) {
       const char *rcn9 = nt_kind(nt, recv) == NK_ConstantReadNode
                          ? nt_str(nt, recv, "name") : NULL;
-      int rci9 = rcn9 ? comp_class_index(c, rcn9) : -1;
+      int rci9 = rcn9 ? const_node_class_index(c, recv) : -1;
       if (rci9 >= 0) {
         int ta = ++g_tmp;
         buf_printf(b, "({ sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d);", ta, ta);

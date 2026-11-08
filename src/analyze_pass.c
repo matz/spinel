@@ -2599,7 +2599,7 @@ static int local_hash_alias_source(Compiler *c, const LWIndex *lw, int recv) {
   int gr = nt_ref(nt, src, "receiver"), gcid = -1, cside = 0;
   if (gr >= 0 && nt_kind(nt, gr) == NK_ConstantReadNode) {
     const char *cnm = nt_str(nt, gr, "name");
-    gcid = cnm ? comp_class_index(c, cnm) : -1;
+    gcid = cnm ? const_node_class_index(c, gr) : -1;
     cside = 1;
   }
   else if (gr >= 0 && nt_kind(nt, gr) != NK_SelfNode) {
@@ -2913,7 +2913,7 @@ static int local_is_kept_block_param(Compiler *c, Scope *sc, const char *nm) {
     int recv = nt_ref(nt, call, "receiver");
     if (sp_streq(mn, "new")) {
       const char *cn = recv >= 0 && nt_kind(nt, recv) == NK_ConstantReadNode ? nt_str(nt, recv, "name") : NULL;
-      int ci = cn ? comp_class_index(c, cn) : -1;
+      int ci = cn ? const_node_class_index(c, recv) : -1;
       int si = ci >= 0 ? comp_method_in_chain(c, ci, "initialize", NULL) : -1;
       if (si < 0) return 0;
       Scope *d = &c->scopes[si];
@@ -4313,7 +4313,7 @@ static int infer_write_container_usage(Compiler *c, const NodeTable *nt, int nfb
       if (grecv >= 0 && nt_kind(nt, grecv) == NK_ConstantReadNode) {
         /* `Tbl.cache[k] = v`: the class-side getter */
         const char *cnm = nt_str(nt, grecv, "name");
-        gcid = cnm ? comp_class_index(c, cnm) : -1;
+        gcid = cnm ? const_node_class_index(c, grecv) : -1;
         if (gcid < 0) continue;
         cside = 1;
       }
@@ -9719,7 +9719,7 @@ static int psa_call_supplies(Compiler *c, Scope *sc, int pi, int is_init, int is
     NodeKind rk = recv >= 0 ? nt_kind(nt, recv) : NK_CallNode;
     if (recv >= 0 && (rk == NK_ConstantReadNode || rk == NK_ConstantPathNode)) {
       const char *rn = nt_str(nt, recv, "name");
-      int rci = rn ? comp_class_index(c, rn) : -1;
+      int rci = rn ? const_node_class_index(c, recv) : -1;
       if (rci >= 0 && sc->class_id >= 0) {
         int under = 0;
         for (int k = rci; k >= 0; k = c->classes[k].parent) if (k == sc->class_id) { under = 1; break; }
@@ -9850,7 +9850,7 @@ static int nil_param_recv_class(Compiler *c, int call) {
   NodeKind rk = recv >= 0 ? nt_kind(c->nt, recv) : NK_NONE;
   if (rk != NK_ConstantReadNode && rk != NK_ConstantPathNode) return -1;
   const char *rn = nt_str(c->nt, recv, "name");
-  return rn ? comp_class_index(c, rn) : -1;
+  return rn ? const_node_class_index(c, recv) : -1;
 }
 static int nil_param_never_supplied(Compiler *c, int s, int i) {
   Scope *sc = &c->scopes[s];
@@ -11606,7 +11606,7 @@ static int infer_param_types_ex(Compiler *c, int settle, const NodeTypes *before
       if (ran >= 2 && nt_type(nt, rav[0]) &&
           (nt_kind(nt, rav[0]) == NK_ConstantReadNode || nt_kind(nt, rav[0]) == NK_ConstantPathNode)) {
         const char *rcn = nt_str(nt, rav[0], "name");
-        int rci = rcn ? comp_class_index(c, rcn) : -1;
+        int rci = rcn ? const_node_class_index(c, rav[0]) : -1;
         if (rci >= 0 && class_is_exc_subclass(c, rci)) {
           int imi = comp_method_in_chain(c, rci, "initialize", NULL);
           /* the message is `Cls.new(arg)`'s one argument, into the
@@ -11940,7 +11940,7 @@ static int infer_param_types_ex(Compiler *c, int settle, const NodeTypes *before
       /* M::Sub.new(...) -- resolve by the final path component */
       if (rty_k == NK_ConstantPathNode) {
         const char *cn = nt_str(nt, recv, "name");
-        int ci = cn ? comp_class_index(c, cn) : -1;
+        int ci = cn ? const_node_class_index(c, recv) : -1;
         /* A Struct or Data is constructed, not called: its arguments type the
            MEMBERS, and that is done once for every receiver spelling by the
            branch below. Binding ctor params here instead left every member of
@@ -13639,7 +13639,7 @@ int desugar_class_eval_value(Compiler *c) {
     int recv = nt_ref(nt, id, "receiver");
     if (recv < 0 || nt_kind(nt, recv) != NK_ConstantReadNode) continue;
     const char *cname = nt_str(nt, recv, "name");
-    if (!cname || comp_class_index(c, cname) < 0) continue;
+    if (!cname || const_node_class_index(c, recv) < 0) continue;
     int blk = nt_ref(nt, id, "block");
     if (blk < 0 || nt_kind(nt, blk) != NK_BlockNode) continue;
     int body = nt_ref(nt, blk, "body");
@@ -18071,7 +18071,7 @@ static int infer_block_params_call_arms(Compiler *c, const NodeTable *nt, int id
                            nt_kind(nt, recv) == NK_ConstantPathNode);
       if (mi < 0 && sp_streq(name, "new") && recv_is_const) {
         const char *cname = nt_str(nt, recv, "name");
-        int cid = cname ? comp_class_index(c, cname) : -1;
+        int cid = const_node_class_index(c, recv);
         if (cid >= 0) mi = comp_method_in_chain(c, cid, "initialize", NULL);
       }
       /* Class.method { ... }: look up the class method. This is where the
@@ -18084,6 +18084,9 @@ static int infer_block_params_call_arms(Compiler *c, const NodeTable *nt, int id
          the "calls itself recursively" diagnostic on #4416 is this, three
          steps downstream. */
       if (mi < 0 && recv_is_const) {
+        /* (by the name, not the node: this asks for every such call of
+           each inline round, and a program of many splices pays the
+           record's answer per round -- scale-test's splices read 2.29x) */
         const char *cname = nt_str(nt, recv, "name");
         int cid = cname ? comp_class_index(c, cname) : -1;
         if (cid >= 0) mi = call_target(c, id, cid, name, CT_CMETHOD, NULL);
@@ -19252,7 +19255,7 @@ int backprop_call_target(Compiler *c, int call_id) {
   NodeKind rk = nt_kind(nt, recv);
   if (rk == NK_ConstantReadNode || rk == NK_ConstantPathNode) {
     const char *cn = nt_str(nt, recv, "name");   /* NULL for a non-flat path */
-    int ci = cn ? comp_class_index(c, cn) : -1;
+    int ci = const_node_class_index(c, recv);
     return ci >= 0 ? call_target(c, call_id, ci, name, CT_CMETHOD, NULL) : -1;
   }
   TyKind rt = infer_type(c, recv);
@@ -19991,7 +19994,7 @@ int infer_return_types(Compiler *c) {
       const char *kn = ((ak == NK_ConstantReadNode ||
                                 ak == NK_ConstantPathNode))
                          ? nt_str(nt, pav[0], "name") : NULL;
-      int kcid = kn ? comp_class_index(c, kn) : -1;
+      int kcid = kn ? const_node_class_index(c, pav[0]) : -1;
       if (kcid < 0) continue;
       /* single-statement then-arm returning the SAME variable */
       int stm = nt_ref(nt, id, "statements");
@@ -20548,7 +20551,7 @@ static int cr_recv_builtin_class(Compiler *c, const NodeTable *nt, int id, const
   NodeKind rk = r >= 0 ? nt_kind(nt, r) : NK_NONE;
   if (rk != NK_ConstantReadNode && !(rk == NK_ConstantPathNode && nt_ref(nt, r, "parent") < 0)) return 0;
   const char *cn = nt_str(nt, r, "name");
-  return cn && comp_class_index(c, cn) < 0 && is_builtin_class_name(cn);
+  return cn && const_node_class_index(c, r) < 0 && is_builtin_class_name(cn);
 }
 
 /* How many positional arguments the call at `id` passes, or -1 when the
@@ -20708,7 +20711,7 @@ void cr_collect_calls(Compiler *c, const NodeTable *nt, int id,
     int r = nt_ref(nt, id, "receiver");
     NodeKind rk = r >= 0 ? nt_kind(nt, r) : NK_NONE;
     const char *cn = (rk == NK_ConstantReadNode || rk == NK_ConstantPathNode) ? nt_str(nt, r, "name") : NULL;
-    int k = cn ? comp_class_index(c, cn) : -1;
+    int k = cn ? const_node_class_index(c, r) : -1;
     int mi = k >= 0 ? call_target(c, id, k, nm, CT_CMETHOD, NULL) : -1;
     /* (a call the plan compiles to the accessor's slot reaches nothing) */
     if (mi >= 0 && c->scopes[mi].attr_version && cplan_sg_slot_call(c, id, k, nm)) names[0] = NULL;
@@ -20753,7 +20756,7 @@ void cr_collect_calls(Compiler *c, const NodeTable *nt, int id,
       int rr = nt_ref(nt, r, "receiver");
       NodeKind rrk = rr >= 0 ? nt_kind(nt, rr) : NK_NONE;
       const char *kn = (rrk == NK_ConstantReadNode || rrk == NK_ConstantPathNode) ? nt_str(nt, rr, "name") : NULL;
-      int k = kn ? comp_class_index(c, kn) : -1;
+      int k = kn ? const_node_class_index(c, rr) : -1;
       /* Class.new / Module.new / Struct.new / Data answer a new CLASS, whose
          class methods include the ones it inherits */
       if (k >= 0 && !comp_class_is_module(c, &c->classes[k]) &&

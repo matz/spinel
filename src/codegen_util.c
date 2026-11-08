@@ -5722,7 +5722,7 @@ static int plain_expr(Compiler *c, int n, int depth) {
       TyKind rk = comp_ntype(c, recv);
       const char *cn = rk == TY_STRING ? "String" : ty_is_array(rk) ? "Array" : ty_is_hash(rk) ? "Hash" : NULL;
       if (!cn) return 0;
-      int ci = comp_class_index(c, cn);
+      int ci = comp_builtin_class_named(c, cn);
       return ci < 0 || call_target(c, n, ci, nm, 0, NULL) < 0;
     }
     /* under promote the receiver of an Integer ~ is boxed, and ~ still

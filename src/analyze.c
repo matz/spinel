@@ -78,9 +78,7 @@ static int rescue_arm_spec_cid(Compiler *c, int rescue_id) {
   if (nexc != 1) return -1;
   NodeKind en_k = nt_kind(c->nt, exc[0]);
   if (en_k != NK_ConstantReadNode && en_k != NK_ConstantPathNode) return -1;
-  const char *enm = nt_str(c->nt, exc[0], "name");
   int xc = const_node_match_class(c, exc[0]);
-  if (xc < 0) xc = enm ? comp_class_index(c, enm) : -1;
   if (xc >= 0 && class_is_exc_subclass(c, xc) &&
       (c->classes[xc].nivars > 0 || class_defines_own_method(c, xc))) return xc;
   return -1;
@@ -101,7 +99,6 @@ static void scan_raise_classes(Compiler *c, int id, int *cid, int *bad) {
     if (nm && sp_streq(nm, "raise") && nt_ref(nt, id, "receiver") < 0) {
       int a = nt_ref(nt, id, "arguments");
       int an = 0; const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &an) : NULL;
-      const char *cn = NULL;
       int cnode = -1;
       if (an >= 1) {
         NodeKind ak = nt_kind(nt, av[0]);
@@ -111,10 +108,8 @@ static void scan_raise_classes(Compiler *c, int id, int *cid, int *bad) {
           int rr = nt_ref(nt, av[0], "receiver");
           if (rr >= 0 && nt_kind(nt, rr) == NK_ConstantReadNode) cnode = rr;
         }
-        if (cnode >= 0) cn = nt_str(nt, cnode, "name");
       }
       int rcid = cnode >= 0 ? const_node_match_class(c, cnode) : -1;
-      if (rcid < 0) rcid = cn ? comp_class_index(c, cn) : -1;
       if (rcid < 0 || !class_is_exc_subclass(c, rcid) || c->classes[rcid].nivars <= 0) { *bad = 1; return; }
       if (*cid >= 0 && *cid != rcid) { *bad = 1; return; }
       *cid = rcid;
@@ -726,7 +721,7 @@ static int cr_live_slot_read(CrLive *lv, int r) {
   if (k == NK_InstanceVariableReadNode || k == NK_ClassVariableReadNode || k == NK_GlobalVariableReadNode) return 1;
   if (k != NK_ConstantReadNode && k != NK_ConstantPathNode) return 0;
   const char *nm = nt_str(nt, r, "name");
-  return nm && anh_find(&lv->seg, nm) < 0 && comp_class_index(lv->c, nm) < 0;
+  return nm && anh_find(&lv->seg, nm) < 0 && const_node_class_index(lv->c, r) < 0;
 }
 
 /* The classes the code at `id` names in scope s, and the calls it makes that
@@ -1848,10 +1843,8 @@ void compute_instantiated(Compiler *c, int early) {
     if (recv >= 0 && (sp_streq(name, "new") || sp_streq(name, "allocate"))) {
       NodeKind rk = nt_kind(nt, recv);
       if (rk == NK_ConstantReadNode || rk == NK_ConstantPathNode) {
-        const char *cn = nt_str(nt, recv, "name");
         /* (the class the node names: an alias's, `M::Top2.new`) */
         int ci = const_node_class_index(c, recv);
-        if (ci < 0) ci = cn ? comp_class_index(c, cn) : -1;
         /* A construction inside a method nothing reaches mints nothing:
            compute_reachable has run, and its answer is conservative (every
            method whose name is mentioned anywhere is reachable), so a site
@@ -1903,8 +1896,7 @@ void compute_instantiated(Compiler *c, int early) {
       if (ran >= 1 && rav) {
         NodeKind ak = nt_kind(nt, rav[0]);
         if (ak == NK_ConstantReadNode || ak == NK_ConstantPathNode) {
-          const char *cn = nt_str(nt, rav[0], "name");
-          int ci = cn ? comp_class_index(c, cn) : -1;
+          int ci = const_node_class_index(c, rav[0]);
           if (ci >= 0) c->classes[ci].instantiated = 1;
         }
         /* `raise k, msg` on a Class value (`k = WidgetError`): the runtime
@@ -9453,7 +9445,7 @@ static int an_enum_reaches_v(Compiler *c, int ci, unsigned char *seen) {
           const char *mn = nt_str(nt, aa[j], "name");
           if (!mn) continue;
           if (sp_streq(mn, "Enumerable")) return 1;
-          int mi = comp_class_index(c, mn);
+          int mi = const_node_class_index(c, aa[j]);
           if (mi >= 0 && an_enum_reaches_v(c, mi, seen)) return 1;
         }
       }
@@ -12879,7 +12871,7 @@ static int desugar_class_literal_ctors(Compiler *c) {
     int ca = nt_ref(nt, id, "arguments");
     int argc = 0; const int *argv = ca >= 0 ? nt_arr(nt, ca, "arguments", &argc) : NULL;
     if (nt_argv_has_splat(nt, argv, argc)) continue;
-    int ci = comp_class_index(c, rn);
+    int ci = const_node_class_index(c, recv);
     if (sp_streq(rn, "Array") && sp_streq(mn, "[]")) {
       if (ci >= 0 && comp_cmethod_in_chain(c, ci, "[]", NULL) >= 0) continue;
       int els[64];
@@ -19301,9 +19293,7 @@ static void narrow_rescue_arm_reads(Compiler *c) {
     NodeKind en_k = nt_kind(nt, exc[0]);
     if (en_k != NK_ConstantReadNode && en_k != NK_ConstantPathNode)
       continue;
-    const char *enm = nt_str(nt, exc[0], "name");
     int cid = const_node_match_class(c, exc[0]);
-    if (cid < 0) cid = enm ? comp_class_index(c, enm) : -1;
     if (cid < 0 || !class_is_exc_subclass(c, cid)) continue;
     Scope *vsc = comp_scope_of(c, ref);
     LocalVar *lv = vsc ? scope_local(vsc, nm) : NULL;
@@ -19328,7 +19318,7 @@ static int value_is_new_exception(Compiler *c, int v) {
   if (r < 0 || (nt_kind(nt, r) != NK_ConstantReadNode && nt_kind(nt, r) != NK_ConstantPathNode)) return 0;
   const char *cn = nt_str(nt, r, "name");
   if (!cn) return 0;
-  int cid = comp_class_index(c, cn);
+  int cid = const_node_class_index(c, r);
   return cid >= 0 ? class_is_exc_subclass(c, cid) : is_builtin_exception_name(cn);
 }
 
@@ -28707,8 +28697,7 @@ static void an_call_targets_nonunique(Compiler *c, int u, const char *un, ACallT
   int n0 = t->n;
   int cci = -1;
   if (rk == NK_ConstantReadNode || rk == NK_ConstantPathNode) {
-    const char *cn = nt_str(nt, rc, "name");
-    cci = cn ? comp_class_index(c, cn) : -1;
+    cci = const_node_class_index(c, rc);
   }
   if (cci >= 0) { act_add(t, call_target(c, u, cci, un, CT_CMETHOD, NULL)); return; }
   /* (a constant that is not a class holds a value: typed below like any
@@ -28795,8 +28784,7 @@ static void an_call_targets_of(Compiler *c, int u, ACallTargets *t) {
   }
   int rc = nt_ref(nt, u, "receiver");
   if (rc < 0 || nt_kind(nt, rc) != NK_ConstantReadNode) return;
-  const char *cn = nt_str(nt, rc, "name");
-  int cid = cn ? comp_class_index(c, cn) : -1;
+  int cid = const_node_class_index(c, rc);
   if (cid < 0) return;
   /* asked of THIS class, not the whole program: a dynamic `new` elsewhere only
      matters where its shape could construct this one */
@@ -29497,8 +29485,7 @@ static int an_call_targets_scope(Compiler *c, int u, int mi2, Scope *m2) {
   if (m2->class_id < 0 || m2->is_cmethod) return 0;
   int rc = nt_ref(nt, u, "receiver");
   if (rc < 0 || nt_kind(nt, rc) != NK_ConstantReadNode) return 0;
-  const char *cn = nt_str(nt, rc, "name");
-  int cid = cn ? comp_class_index(c, cn) : -1;
+  int cid = const_node_class_index(c, rc);
   if (cid < 0) return 0;
   /* the same per-class question an_call_targets_of asks, at the same point:
      the two answer for the same set or the index and the predicate diverge */
@@ -29892,7 +29879,7 @@ static int param_borrow_builtin_new(Compiler *c, int n) {
   if (blk >= 0 && nt_kind(nt, blk) == NK_BlockArgumentNode) return 0;
   const char *cn = nt_str(nt, recv, "name");
   if (!cn || (!sp_streq(cn, "Array") && !sp_streq(cn, "Hash"))) return 0;
-  int cid = comp_class_index(c, cn);
+  int cid = comp_builtin_class_named(c, cn);
   return cid < 0 || comp_method_in_class(c, cid, "initialize") < 0;
 }
 
@@ -33451,8 +33438,7 @@ int ctor_call_targets(Compiler *c, int u, int *first, int *boxed, int *out, int 
     NodeKind rk = recv >= 0 ? nt_kind(nt, recv) : NK_SelfNode;
     Scope *es = comp_scope_of(c, u);
     if (rk == NK_ConstantReadNode || rk == NK_ConstantPathNode) {
-      const char *cn = nt_str(nt, recv, "name");
-      cls = cn ? comp_class_index(c, cn) : -1;
+      cls = const_node_class_index(c, recv);
       if (cls < 0) return 0;
     }
     else if (rk == NK_SelfNode) {
@@ -33472,8 +33458,7 @@ int ctor_call_targets(Compiler *c, int u, int *first, int *boxed, int *out, int 
     *first = 1;
     NodeKind rk = nt_kind(nt, av[0]);
     if (rk == NK_ConstantReadNode || rk == NK_ConstantPathNode) {
-      const char *cn = nt_str(nt, av[0], "name");
-      cls = cn ? comp_class_index(c, cn) : -1;
+      cls = const_node_class_index(c, av[0]);
       if (cls < 0) return 0;
     }
     else { any = 1; *boxed = 1; }
@@ -35916,7 +35901,7 @@ static int pf_wanted(Compiler *c, const char *name) {
       const char *rcn = ty_is_array(rt) ? "Array" : ty_is_hash(rt) ? "Hash"
                       : rt == TY_NIL ? "NilClass"
                       : (rt == TY_INT || rt == TY_FLOAT || rt == TY_BIGINT) ? "Numeric" : NULL;
-      int rci = rcn ? comp_class_index(c, rcn) : -1;
+      int rci = rcn ? comp_builtin_class_named(c, rcn) : -1;
       if (rci >= 0 && comp_method_in_class(c, rci, name) >= 0) return 1;
       /* a receiver not typed yet (an ivar an empty literal seeds, `@arr =
          []`) may settle as one of them: the clone is made, a static
@@ -35924,7 +35909,7 @@ static int pf_wanted(Compiler *c, const char *name) {
       if (rt == TY_UNKNOWN) {
         static const char *const reopens[] = { "Array", "Hash", "Numeric", "String", "NilClass" };
         for (int q = 0; q < 5; q++) {
-          int qci = comp_class_index(c, reopens[q]);
+          int qci = comp_builtin_class_named(c, reopens[q]);
           if (qci >= 0 && comp_method_in_class(c, qci, name) >= 0) return 1;
         }
       }
@@ -36435,8 +36420,7 @@ static int seed_call_target(Compiler *c, int id, const char *name) {
   int mi = -1;
   if (recv < 0) mi = comp_self_call_mi(c, id, name);
   else if (nt_kind(nt, recv) == NK_ConstantReadNode) {
-    const char *cn = nt_str(nt, recv, "name");
-    int rc = cn ? comp_class_index(c, cn) : -1;
+    int rc = const_node_class_index(c, recv);
     /* `Mod.m` is a class (singleton) method, which is not in the instance
        chain; fall back to it before giving up. */
     if (rc >= 0) mi = call_target(c, id, rc, name, CT_CMETHOD, NULL);
@@ -39994,8 +39978,7 @@ static int sg_civ_reader_call(Compiler *c, int v) {
   int ci = -1;
   NodeKind rk = nt_kind(nt, r);
   if (rk == NK_ConstantReadNode || rk == NK_ConstantPathNode) {
-    const char *cn = nt_str(nt, r, "name");
-    ci = cn ? comp_class_index(c, cn) : -1;
+    ci = const_node_class_index(c, r);
   }
   else {
     Scope *s = comp_scope_of(c, v);
@@ -46762,7 +46745,7 @@ static int arysub_new_gets_block(Compiler *c, int k) {
     int recv = nt_ref(nt, id, "receiver"), kc = -1;
     if (recv >= 0 && (nt_kind(nt, recv) == NK_ConstantReadNode || nt_kind(nt, recv) == NK_ConstantPathNode)) {
       const char *cn = nt_str(nt, recv, "name");
-      kc = cn ? comp_class_index(c, cn) : -1;
+      kc = cn ? const_node_class_index(c, recv) : -1;
       if (kc < 0) {
         int builtin = 0;
         for (int i = 0; cn && other[i]; i++) builtin |= sp_streq(cn, other[i]);

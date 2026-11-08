@@ -11622,7 +11622,7 @@ int class_is_exc_subclass(Compiler *c, int ci) {
     /* The parent links are not resolved yet when the rescue-arm specialization
        asks, so a two-level chain (`class B < A; class A < StandardError`) ended
        the walk at B. Follow the superclass by name instead (#3707). */
-    if (next < 0 && sn) next = comp_class_index(c, sn);
+    if (next < 0 && sn) next = const_node_class_index(c, sc);
     if (next == k) break;
     k = next;
   }
@@ -20726,7 +20726,7 @@ static void refuse_syserr_errno_const(Compiler *c) {
     int par = tg >= 0 ? nt_ref(c->nt, tg, "parent") : -1;
     const char *pn = par >= 0 ? nt_str(c->nt, par, "name") : NULL;
     if (tg >= 0 && sp_streq(nt_str(c->nt, tg, "name"), "Errno") && pn &&
-        class_is_syserr(c, comp_class_index(c, pn)))
+        class_is_syserr(c, const_node_class_index(c, par)))
       unsupported_feature(c, ks[i], "an Errno constant defined in a subclass of SystemCallError "
                                     "(its errno is read from the Errno class above it)");
   }

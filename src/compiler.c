@@ -2586,7 +2586,7 @@ int comp_sg_reader_candidates(Compiler *c, int call_id, int *out, int max) {
   NodeKind rk = nt_kind(nt, recv);
   if (rk != NK_ConstantReadNode && rk != NK_ConstantPathNode) return 0;
   const char *rn = nt_str(nt, recv, "name");
-  int ci = rn ? comp_class_index(c, rn) : -1;
+  int ci = const_node_class_index(c, recv);
   if (ci < 0 || !comp_is_sg_reader(&c->classes[ci], nm)) return 0;
   return comp_sg_const_candidates(c, ci, nm, out, max);
 }
@@ -3890,7 +3890,7 @@ static int cv_compare_keeps_nothing(Compiler *c, int recv, const char *nm) {
   NodeKind rk = recv >= 0 ? nt_kind(nt, recv) : NK_NONE;
   if (rk == NK_ConstantReadNode || rk == NK_ConstantPathNode) {
     const char *cn = nt_str(nt, recv, "name");
-    if (!cn || (comp_class_index(c, cn) < 0 && !is_builtin_class_name(cn) && !is_builtin_module_const_name(cn)))
+    if (!cn || (const_node_class_index(c, recv) < 0 && !is_builtin_class_name(cn) && !is_builtin_module_const_name(cn)))
       return 0;
   }
   else if (rk != NK_CallNode || !is_class_query(nt_str(nt, recv, "name")) || cv_argc(nt, recv) != 0) return 0;

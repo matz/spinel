@@ -939,7 +939,15 @@ void emit_unbox_text(Compiler *c, TyKind t, const char *expr, Buf *b) {
       buf_puts(b, ")");
       return;
     }
-    buf_printf(b, "%s(%s *)sp_poly_unbox_cls(%s, %d, ", vobj ? "(*" : "", class_ctype(c, oc), expr, oc);
+    /* a user exception class: a rescued exception is boxed under
+       SP_BUILTIN_EXCEPTION, not its class's id, so the unbox also takes
+       such a box whose runtime class is the class or under it (a narrowed
+       `e.is_a?(K)` read, #10587). A user subclass is allocated at its own
+       struct size even when raised by name (sp_user_exc_layout); a
+       reopened builtin's runtime-made instance is not, so it keeps the
+       plain check. */
+    const char *ufn = !vobj && class_is_exc_subclass(c, oc) ? "sp_poly_unbox_exc_cls" : "sp_poly_unbox_cls";
+    buf_printf(b, "%s(%s *)%s(%s, %d, ", vobj ? "(*" : "", class_ctype(c, oc), ufn, expr, oc);
     emit_str_literal(b, rn ? rn : c->classes[oc].name);
     buf_puts(b, vobj ? "))" : ")");
     return;
@@ -17974,6 +17982,7 @@ void emit_regex_section(Compiler *c, Buf *b) {
   if (program_has_own_cmethod_eqq(c))
     buf_puts(b, "static int sp_cmeth_eqq_dispatch(sp_RbVal e, sp_Class cl, sp_RbVal *out);\n");
   buf_puts(b, "static inline void *sp_poly_unbox_cls(sp_RbVal v, int cls, const char *want);\n");
+  buf_puts(b, "SP_UNUSED static inline void *sp_poly_unbox_exc_cls(sp_RbVal v, int cls, const char *want);\n");
   if (program_has_arysub(c)) {
     buf_puts(b, "static int sp_bsub_cls_of(sp_RbVal v);\n");
     buf_puts(b, "static void *sp_bsub_unbox(sp_RbVal v, int cls, const char *want);\n");
@@ -20963,6 +20972,10 @@ static void emit_class_machinery(const NodeTable *nt, Compiler *c, Buf *b, char 
   buf_puts(b, "static inline void *sp_poly_unbox_cls(sp_RbVal v, int cls, const char *want){\n"
                "  if(SP_LIKELY(v.tag==SP_TAG_OBJ&&v.cls_id==cls))return v.v.p;\n"
                "  return sp_poly_unbox_cls_slow(v, cls, want);\n}\n");
+  buf_puts(b, "SP_UNUSED static inline void *sp_poly_unbox_exc_cls(sp_RbVal v, int cls, const char *want){\n"
+               "  if(SP_LIKELY(v.tag==SP_TAG_OBJ&&v.cls_id==cls))return v.v.p;\n"
+               "  if(v.tag==SP_TAG_OBJ&&v.cls_id==SP_BUILTIN_EXCEPTION&&v.v.p&&sp_exc_is_a((volatile sp_Exception *)v.v.p, want))return v.v.p;\n"
+               "  return sp_poly_unbox_cls(v, cls, want);\n}\n");
   emit_arysub_machinery(c, b);
   emit_cls_visible_fn(c, b);
   /* Tri-state class ordering: CRuby's Class#< / <= / > / >= / <=> answer nil

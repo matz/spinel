@@ -1175,6 +1175,8 @@ int loop_may_stop(Compiler *c, int loop_call);
 const char *numbered_param_name(Compiler *c, int params_node, int idx);
 /* Name of a block's trailing rest parameter (`|*a|`), or NULL. */
 const char *block_rest_name(Compiler *c, int block);
+/* A literal block that takes no values: no parameters, or locals only. */
+int block_takes_no_values(Compiler *c, int block);
 const char *block_opt_name(Compiler *c, int block, int idx);
 const char *block_param_at(Compiler *c, int block, int idx, int n);
 int call_plain_argc(Compiler *c, int call);

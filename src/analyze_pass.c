@@ -12446,6 +12446,26 @@ const char *block_param_name(Compiler *c, int block, int idx) {
   return NULL;
 }
 
+/* Does a literal block take no values at all: no parameters list, or one
+   with locals only (`|;y|`)? Any parameter of any kind (required, optional,
+   rest, post, keyword, keyword rest, block, a destructuring one, a numbered
+   one or `it`) makes it take them. */
+int block_takes_no_values(Compiler *c, int block) {
+  const NodeTable *nt = c->nt;
+  int bp = nt_ref(nt, block, "parameters");
+  if (bp < 0) return 1;
+  if (nt_kind(nt, bp) != NK_BlockParametersNode) return 0;
+  int pn = nt_ref(nt, bp, "parameters");
+  if (pn < 0) return 1;
+  int n = 0;
+  static const char *const lists[] = { "requireds", "optionals", "posts", "keywords", NULL };
+  for (int i = 0; lists[i]; i++) {
+    nt_arr(nt, pn, lists[i], &n);
+    if (n) return 0;
+  }
+  return nt_ref(nt, pn, "rest") < 0 && nt_ref(nt, pn, "keyword_rest") < 0 && nt_ref(nt, pn, "block") < 0;
+}
+
 static const char *block_rest_kind_name(Compiler *c, int block, const char *field, const char *kind) {
   int bp = nt_ref(c->nt, block, "parameters");      /* BlockParametersNode */
   if (bp < 0) return NULL;

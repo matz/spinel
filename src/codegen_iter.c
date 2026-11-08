@@ -8356,7 +8356,7 @@ static int emit_iteration_stmt_body(Compiler *c, int id, Buf *b, int indent) {
   if (sp_streq(name, "step") && (rt == TY_RANGE || rt == TY_FLOAT_RANGE)) {
     int args = nt_ref(nt, id, "arguments"); int sargc = 0;
     const int *sargv = args >= 0 ? nt_arr(nt, args, "arguments", &sargc) : NULL;
-    if (sargc < 1) return 0;
+    /* no argument is CRuby's step of 1 (emit_range_step_stride) */
     /* a Rational step walks the boxed sequence from the begin */
     if (rt == TY_RANGE && an_range_step_rat(c, id, 0)) {
       emit_indent(b, indent); buf_puts(b, "{ ");
@@ -8373,21 +8373,23 @@ static int emit_iteration_stmt_body(Compiler *c, int id, Buf *b, int indent) {
     /* An INTEGER-stepped Range walks its span directly instead of
        materializing it: an endless range would never finish building the
        array, so the block (and its break) was never reached (#3673). */
-    if (rt == TY_RANGE && comp_ntype(c, sargv[0]) != TY_FLOAT && sargc == 1) {
+    if (rt == TY_RANGE && sargc <= 1 && (sargc < 1 || comp_ntype(c, sargv[0]) != TY_FLOAT)) {
       int tr = ++g_tmp, ts2 = ++g_tmp, tl2 = ++g_tmp, tv2 = ++g_tmp;
       emit_indent(b, indent);
       buf_printf(b, "sp_Range _t%d = ", tr); emit_expr(c, recv, b); buf_puts(b, ";\n");
       /* over a Float end CRuby yields Floats: the walk's values are those
          Floats exactly, so a Float parameter (a literal the inference saw)
-         takes them as they are; any other says it cannot */
+         takes them as they are; any other says it cannot. A block that
+         takes no value (block_takes_no_values) never sees
+         them, and counts the walk as CRuby does */
       { Scope *bsc = comp_scope_of(c, block);
         LocalVar *plv = (bsc && p0_orig) ? scope_local(bsc, p0_orig) : NULL;
-        if (!plv || plv->type != TY_FLOAT) {
+        if (!block_takes_no_values(c, block) && (!plv || plv->type != TY_FLOAT)) {
           emit_indent(b, indent);
           buf_printf(b, "sp_range_int_only(_t%d, \"Range#step\");\n", tr);
         } }
       emit_indent(b, indent);
-      buf_printf(b, "sp_int _t%d = ", ts2); emit_int_expr(c, sargv[0], b); buf_puts(b, ";\n");
+      buf_printf(b, "sp_int _t%d = ", ts2); emit_range_step_stride(c, sargc, sargv, 0, b); buf_puts(b, ";\n");
       emit_indent(b, indent);
       /* a zero step never advances; a negative one walks DOWN from the
          begin to the end, as CRuby 4.0 does ((5..1).step(-1) is 5,4,3,2,1;
@@ -8422,12 +8424,12 @@ static int emit_iteration_stmt_body(Compiler *c, int id, Buf *b, int indent) {
        (sp_float_step_at, the count from sp_float_step_size), one at a time:
        an endless one (1.5..) never finishes, so materializing it first never
        reached the block (or its break). A beginless one has no first step. */
-    if (rt == TY_FLOAT_RANGE && sargc == 1) {
+    if (rt == TY_FLOAT_RANGE && sargc <= 1) {
       int tr = ++g_tmp, ts2 = ++g_tmp, tn2 = ++g_tmp, ti2 = ++g_tmp;
       emit_indent(b, indent);
       buf_printf(b, "sp_FloatRange _t%d = ", tr); emit_expr(c, recv, b); buf_puts(b, ";\n");
       emit_indent(b, indent);
-      buf_printf(b, "sp_float _t%d = ", ts2); emit_float_expr(c, sargv[0], b); buf_puts(b, ";\n");
+      buf_printf(b, "sp_float _t%d = ", ts2); emit_range_step_stride(c, sargc, sargv, 1, b); buf_puts(b, ";\n");
       emit_indent(b, indent);
       buf_printf(b, "sp_float _t%d = sp_frange_step_count(_t%d, _t%d);\n", tn2, tr, ts2);
       emit_indent(b, indent);
@@ -8575,7 +8577,7 @@ static int emit_iteration_stmt_body(Compiler *c, int id, Buf *b, int indent) {
       emit_indent(b, indent); buf_puts(b, "}\n");
       return 1;
     }
-    if (sargc < 1) return 0;
+    /* (only a Float receiver reaches here with none: the endless walk by 1.0) */
     int is_float = (rt == TY_FLOAT) || comp_ntype(c, sargv[0]) == TY_FLOAT ||
                    (sargc >= 2 && comp_ntype(c, sargv[1]) == TY_FLOAT);
     if (!is_float) {

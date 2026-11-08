@@ -8815,7 +8815,8 @@ static int emit_poly_builtin_default_at(Compiler *c, int id, int recv, const cha
      hand the block the receiver (iter_hands_recv: tap, then) answer it or
      the block's value, the type the analysis records, checked below. */
   if (nt_ref(nt, id, "block") >= 0 && argc == 0 && !nil_fwd && !iter_hands_recv(name) &&
-      !(poly_block_mutator_name(name) && (ret == TY_POLY || comp_value_dropped(c, id)))) return 0;
+      !(poly_block_mutator_name(name) && (ret == TY_POLY || comp_value_dropped(c, id))) &&
+      !(is_step_call(name) && ret == TY_POLY)) return 0;
   if (g_pd_skip == id || g_n_argov + argc + 1 > MAX_ARG_OVERRIDE) return 0;
   if (argc > 0 && (!atmp || !atmp_ty)) return 0;
   /* a splat's temp is the flattened list, which no builtin emitter reads

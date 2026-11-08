@@ -1209,6 +1209,7 @@ static const BuiltinOp bop_rows[] = {
   { TY_STR_RANGE, "each_cons",    1,   1, BF_NONE,     TY_ENUMERATOR,  BOPE_TEMPLATE, "({ sp_RbVal _t$y = sp_box_srange($r); SP_GC_ROOT_RBVAL(_t$y); sp_int _t$u = $i0; sp_srange_regroup(_t$y, _t$u, 1); })" },
   { TY_STR_RANGE, "find_index",   1,   1, BF_ANY,      TY_POLY,        BOPE_TEMPLATE, "({ sp_RbVal _t$y = sp_box_srange($r); SP_GC_ROOT_RBVAL(_t$y); sp_RbVal _t$u = $b0; SP_GC_ROOT_RBVAL(_t$u); sp_box_oint(sp_srange_find_index(_t$y, _t$u)); })" },
   { TY_STR_RANGE, "step",         1,   1, BF_NONE,     TY_ENUMERATOR,  BOPE_TEMPLATE, "({ sp_RbVal _t$y = sp_box_srange($r); SP_GC_ROOT_RBVAL(_t$y); sp_srange_step_enum(_t$y, $b0, SPL(\"step\")); })" },
+  { TY_STR_RANGE, "step",         0,   0, BF_NONE,     TY_ENUMERATOR,  BOPE_TEMPLATE, "({ sp_RbVal _t$y = sp_box_srange($r); SP_GC_ROOT_RBVAL(_t$y); sp_srange_stepped_enum(_t$y, 1, SPL(\"step\"), 0); })" },  /* no argument: a step of 1, labeled as written */
   { TY_STR_RANGE, "%",            1,   1, BF_NONE,     TY_ENUMERATOR,  BOPE_TEMPLATE, "({ sp_RbVal _t$y = sp_box_srange($r); SP_GC_ROOT_RBVAL(_t$y); sp_srange_step_enum(_t$y, $b0, SPL(\"%\")); })" },
   { TY_STR_RANGE, "class",        0, 127, BF_ANY,      TY_CLASS,       BOPE_NONE },
   { TY_STR_RANGE, "hash",         0, 127, BF_ANY,      TY_INT,         BOPE_NONE },
@@ -1255,6 +1256,7 @@ static const BuiltinOp bop_rows[] = {
   { TY_FLOAT_RANGE, "to_s",         0,   0, BF_ANY,  TY_STRING,      BOPE_TEMPLATE, "({ sp_FloatRange _t$T = $r; sp_frange_inspect(_t$T); })", 0 },
   { TY_FLOAT_RANGE, "inspect",      0,   0, BF_ANY,  TY_STRING,      BOPE_TEMPLATE, "({ sp_FloatRange _t$T = $r; sp_frange_inspect(_t$T); })", 0 },
   { TY_FLOAT_RANGE, "step",         1,   1, BF_NONE, TY_FLOAT_ARRAY, BOPE_TEMPLATE, "({ sp_FloatRange _t$T = $r; sp_FloatArray_from_step(_t$T.first, _t$T.last, $f0, _t$T.excl); })", 0 },
+  { TY_FLOAT_RANGE, "step",         0,   0, BF_NONE, TY_FLOAT_ARRAY, BOPE_TEMPLATE, "({ sp_FloatRange _t$T = $r; sp_FloatArray_from_step(_t$T.first, _t$T.last, 1.0, _t$T.excl); })", 0 },  /* no argument: a step of 1 */
   { TY_FLOAT_RANGE, "class",        0,   0, BF_ANY,  TY_CLASS,       BOPE_TEMPLATE, "((void)($r), ((sp_Class){0, SPL(\"Range\")}))", 0 },
   { TY_FLOAT_RANGE, "frozen?",      0,   0, BF_ANY,  TY_BOOL,        BOPE_TEMPLATE, "!($r).unfrozen", 0, 0, 0, 1 },
   { TY_FLOAT_RANGE, "freeze",       0,   0, BF_ANY,  TY_FLOAT_RANGE, BOPE_RANGE_FREEZE, NULL, 0, 0, 0, 1 },
@@ -4031,8 +4033,8 @@ static const IterRow iter_rows[] = {
   { TY_RANGE, "reduce",           1, 1, 2, { YS_MEMO, YS_ELEM }, IA_MEMO, IRF_GAP_FWD },
   { TY_RANGE, "reduce",           0, 0, 2, { YS_MEMO, YS_ELEM }, IA_MEMO, IRF_GAP_SHAPE | IRF_GAP_FWD },
   { TY_RANGE, "each_with_object", 1, 1, 2, { YS_ELEM, YS_MEMO }, IA_MEMO, IRF_GAP_FWD },
-  { TY_RANGE, "step",             1, 1, 1, { YS_NUM }, IA_RECV, IRF_GAP_FWD },
-  { TY_FLOAT_RANGE, "step",       1, 1, 1, { YS_NUM }, IA_RECV, 0 },
+  { TY_RANGE, "step",             0, 1, 1, { YS_NUM }, IA_RECV, IRF_GAP_FWD },
+  { TY_FLOAT_RANGE, "step",       0, 1, 1, { YS_NUM }, IA_RECV, 0 },
   { TY_TIME_RANGE, "step",        1, 1, 1, { YS_NUM }, IA_RECV, 0 },
   { TY_OBJ_RANGE, "each",         0, 0, 1, { YS_ELEM }, IA_RECV, 0 },
 

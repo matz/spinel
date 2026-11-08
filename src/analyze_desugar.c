@@ -3261,6 +3261,7 @@ int desugar_array_op_to_ary(Compiler *c) {
     nt_node_set_ref(nt, tp, "receiver", av[0]);
     nt_node_set_str(nt, tp, "name", "to_ary");
     nt_node_set_str(nt, tp, "ary_conv", "1");   /* a nil operand: TypeError, not NoMethodError */
+    nt_set_ignore_visibility(nt, tp, 1);        /* CRuby converts through a private to_ary too */
     nt_node_set_ref(nt, tp, "arguments", -1);
     nt_node_set_ref(nt, tp, "block", -1);
     nt_node_set_arr(nt, na, "arguments", &tp, 1);

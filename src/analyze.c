@@ -4708,7 +4708,7 @@ int self_class_body(Compiler *c, int node) {
 }
 
 /* A receiver-less private / protected / public / module_function in a class
-   or module body, bare or naming its methods by Symbol literals, `def`s or
+   or module body (private and public also at top level), bare or naming its methods by Symbol literals, `def`s or
    one Array of Symbols. Its value is nil bare (VIS_DECL_NIL), the name for
    one Symbol or def (VIS_DECL_SYM), and the Array of names otherwise
    (VIS_DECL_ARRAY). private_class_method / public_class_method naming
@@ -4720,11 +4720,16 @@ int vis_decl_call(Compiler *c, int id) {
   if (nt_ref(nt, id, "block") >= 0) return 0;
   const char *nm = nt_str(nt, id, "name");
   if (!nm) return 0;
-  int cm = sp_streq(nm, "private_class_method") || sp_streq(nm, "public_class_method");
-  if (!cm && !sp_streq(nm, "private") && !sp_streq(nm, "protected") && !sp_streq(nm, "public") &&
-      !sp_streq(nm, "module_function"))
-    return 0;
-  if (self_class_body(c, id) < 0) return 0;
+  int cm = class_method_vis_of_name(nm) != 0, vis = visibility_of_name(nm);
+  if (!cm && !vis) return 0;
+  /* (top-level code, and blocks outside any def, where self is lexically
+     main, answers private and public alone: the other three are
+     NoMethodError on main. In a top-level def self is the receiver, which
+     self_is_main does not tell apart.) */
+  if (self_class_body(c, id) < 0) {
+    Scope *ms = comp_scope_of(c, id);
+    if (!(ms && ms->def_node < 0 && self_is_main(c, id) && (vis == BVIS_PRIVATE || vis == BVIS_PUBLIC))) return 0;
+  }
   int args = nt_ref(nt, id, "arguments");
   int an = 0; const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &an) : NULL;
   if (an == 0) return cm ? 0 : VIS_DECL_NIL;

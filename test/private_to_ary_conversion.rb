@@ -26,3 +26,14 @@ p r
 p [1, 2].each_slice(1).flat_map { v }
 p v.respond_to?(:to_ary)
 begin; v.to_ary; rescue NoMethodError => e; puts e.message; end
+
+# a program respond_to? with one parameter, or two required ones
+class R1
+  def respond_to?(n) = n == :to_ary || super
+  def to_ary = [:r1]
+end
+p [1].flat_map { R1.new }
+class R2; def respond_to?(n) = super(n); def inspect = "#<R2>"; end
+p [1].flat_map { R2.new }
+class R3; def respond_to?(n, p) = super; private def to_ary = [:r3]; end
+p [1].flat_map { R3.new }

@@ -18,3 +18,6 @@ can't convert PBad to Array (PBad#to_ary gives Integer)
 [:p, :q, :p, :q]
 false
 private method 'to_ary' called for an instance of Priv
+[:r1]
+[#<R2>]
+[:r3]

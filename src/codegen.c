@@ -21452,9 +21452,11 @@ static void emit_class_machinery(const NodeTable *nt, Compiler *c, Buf *b, char 
         if (!cn0) continue;
         char *cn = strdup(cn0);
         buf_printf(b, "  { static const char *const _m%d[] = {", i);
-        for (int m = 0; m < c->classes[i].nincluded_mods; m++) {
-          int mi = c->classes[i].included_mods[m];
-          if (mi < 0 || mi >= c->nclasses) continue;
+        /* every module the class includes, directly or through another
+           module (`module Deep; include Retryable; end`), by the rule
+           is_a? reads (class_isa_user) */
+        for (int mi = 0; mi < c->nclasses; mi++) {
+          if (mi == i || !comp_class_is_module(c, &c->classes[mi]) || !class_isa_user(c, i, mi)) continue;
           const char *mn = class_ruby_name(c, mi);
           if (!mn) mn = c->classes[mi].name;
           if (mn) buf_printf(b, "\"%s\", ", mn);

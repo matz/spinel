@@ -18902,18 +18902,28 @@ int any_class_defines(Compiler *c, const char *qm) {
    the parent chain; the user modules a class includes are followed through
    the table, since a bare `include Enumerable` inside a module is recorded
    on the module alone. */
-int class_mixes_in(Compiler *c, int cid, int mod, int depth) {
-  /* every level of the include chain is a distinct class, so the class count
-     bounds a chain without a cycle, and cuts one that has one; a fixed depth
-     of eight missed a module reached through a ninth (from the #5090 review) */
-  if (cid < 0 || depth > c->nclasses) return 0;
+/* Each class or module is asked once (seen): modules that share included
+   modules (a diamond, or a cycle) would otherwise be walked once per path,
+   a cost that doubles with each level of the shared chain. */
+static int class_mixes_in_seen(Compiler *c, int cid, int mod, unsigned char *seen) {
+  if (cid < 0 || cid >= c->nclasses || seen[cid]) return 0;
+  seen[cid] = 1;
   if (class_includes_module(c, cid, mod)) return 1;
   for (int cur = cid; cur >= 0; cur = c->classes[cur].parent) {
     for (int m = 0; m < c->classes[cur].nincluded_mods; m++)
-      if (class_mixes_in(c, c->classes[cur].included_mods[m], mod, depth + 1)) return 1;
+      if (class_mixes_in_seen(c, c->classes[cur].included_mods[m], mod, seen)) return 1;
     if (c->classes[cur].parent == cur) break;
   }
   return 0;
+}
+int class_mixes_in(Compiler *c, int cid, int mod, int depth) {
+  (void)depth;
+  if (cid < 0 || cid >= c->nclasses) return 0;
+  unsigned char *seen = calloc((size_t)c->nclasses, 1);
+  if (!seen) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  int r = class_mixes_in_seen(c, cid, mod, seen);
+  free(seen);
+  return r;
 }
 /* Does an instance of the class answer Comparable's methods (<, <=, >, >=,
    ==, between?, clamp) through its `<=>`? Only with Comparable among its
@@ -24607,13 +24617,13 @@ if (recv >= 0 && nm && (grt == TY_RATIONAL || grt == TY_COMPLEX)) {
 
 
 /* Whether an instance of user class k is_a? user class or module `cid`:
-   cid is k, a superclass of it, or a module k or a
-   superclass includes. The runtime class tests of a boxed value list the
-   classes this answers yes for. */
+   cid is k, a superclass of it, or a module k or a superclass includes,
+   directly or through another module. The runtime class tests of a boxed
+   value list the classes this answers yes for. */
 int class_isa_user(Compiler *c, int k, int cid) {
   if (k == cid || is_descendant(c, k, cid)) return 1;
   return comp_class_is_module(c, &c->classes[cid]) && !comp_class_is_module(c, &c->classes[k]) &&
-         class_includes_module(c, k, cid);
+         class_mixes_in(c, k, cid, 0);
 }
 
 /* The arms of a poly is_a? test that match a rescued exception. Such an

@@ -1,0 +1,20 @@
+true
+true
+false
+true
+:ret
+[SubError, AppError, Deep, Mid, Retryable]
+rescued AppError
+rescued SubError
+escaped ArgumentError
+true
+true
+false
+:ret
+[true, true, false, false, false]
+[true, true, false, false, false]
+[:ret, :ret, :none, :none, :none]
+2
+typed is_a? yes
+:ret
+:none

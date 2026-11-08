@@ -1064,7 +1064,7 @@ sp_int sp_str_count_n(const char*s,const char**chars,sp_int n){SP_GC_ROOT_STR(s)
    a BINARY String's are its bytes, and a NUL is a character like any other.
    String#codepoints with a block yields these. */
 sp_IntArray*sp_str_codepoints_all(const char*s){SP_GC_ROOT_STR(s);sp_IntArray*a=sp_IntArray_new();if(!s)sp_nil_recv("codepoints");SP_GC_ROOT(a);int bin=sp_str_is_binary(s);const char*end=s+sp_str_byte_len(s);const char*p=s;while(p<end){uint32_t cp;int n=1;if(bin)cp=(unsigned char)*p;else n=sp_utf8_decode(p,&cp);if(p+n>end)n=(int)(end-p);sp_IntArray_push(a,(sp_int)cp);p+=n;}return a;}
-sp_IntArray*sp_str_codepoints(const char*s){SP_GC_ROOT_STR(s);sp_IntArray*a=sp_IntArray_new();if(!s)sp_nil_recv("codepoints");const char*p=s;while(*p){uint32_t cp;int n=sp_utf8_decode(p,&cp);sp_IntArray_push(a,(sp_int)cp);p+=n;}return a;}
+sp_IntArray*sp_str_codepoints(const char*s){return sp_str_codepoints_all(s);}
 /* walk to the recorded byte length rather than to the first NUL: a NUL is an
    ordinary one-byte character and the characters after it are real (#3473) */
 sp_StrArray*sp_str_chars(const char*s){SP_GC_ROOT_STR(s);sp_StrArray*a=sp_StrArray_new();if(!s)sp_nil_recv("chars");SP_GC_ROOT(a);int bin=sp_str_is_binary(s);const char*end=s+sp_str_byte_len(s);const char*p=s;while(p<end){int n=bin?1:sp_utf8_advance(p);if(p+n>end)n=(int)(end-p);char*c=sp_str_alloc(n);memcpy(c,p,n);c[n]=0;sp_StrArray_push_e(a,SP_SEF(sp_str_bin_like(s,c)));p+=n;}return a;}

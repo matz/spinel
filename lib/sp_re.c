@@ -966,9 +966,9 @@ sp_StrArray *sp_re_split_limit(mrb_regexp_pattern *pat, const char *str, sp_int 
     split_push_slice(arr, str, field_start, slen);
   }
 
-  /* Default limit strips trailing empty fields. */
+  /* Default limit strips empty fields, not fields that start with a NUL. */
   if (limit == 0) {
-    while (arr->len > 0 && SP_SEB(arr->data[arr->len - 1])[0] == '\0') arr->len--;
+    while (arr->len > 0 && sp_str_byte_len(SP_SEB(arr->data[arr->len - 1])) == 0) arr->len--;
   }
   return arr;
 }

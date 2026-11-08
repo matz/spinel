@@ -546,7 +546,9 @@ const char *sp_timev_strftime(sp_Time t, const char *fmt) {SP_GC_ROOT_STR(fmt);
      resolves all three kinds. */
   struct tm tmv;
   sp_timev_vtm(t, &tmv, NULL, NULL);
-  static char out[8192];
+  /* one buffer per thread: threads run in parallel, and a shared one
+     handed a thread another thread's result (#11352) */
+  static SP_TLS char out[8192];
   size_t oi = 0;
   for (const char *p = fmt; *p && oi < sizeof(out) - 128; p++) {
     if (*p != '%') { out[oi++] = *p; continue; }

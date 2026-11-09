@@ -5140,6 +5140,75 @@ static const PolyPlan *cplan_poly_level(Compiler *c, int id, int full);
 const PolyPlan *cplan_poly(Compiler *c, int id) { return cplan_poly_level(c, id, 1); }
 const PolyPlan *cplan_poly_arms(Compiler *c, int id) { return cplan_poly_level(c, id, 0); }
 
+/* The builtin classes the tables give as answering `name` ahead of Object
+   (builtin_next_class_answering), with their core slots, asked of the tables
+   once per name: the walk over every table is what a send's split costs, and
+   the analysis asks it at each round */
+struct SendOwners { char *name; int n; const char **cls; int *slot; };
+static int cplan_send_owners(Compiler *c, const char *name) {
+  for (int i = 0; i < c->nsend_owners; i++) if (!strcmp(c->send_owners[i].name, name)) return i;
+  if (c->nsend_owners == c->csend_owners) {
+    c->csend_owners = c->csend_owners ? c->csend_owners * 2 : 16;
+    c->send_owners = realloc(c->send_owners, sizeof *c->send_owners * (size_t)c->csend_owners);
+    if (!c->send_owners) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  }
+  struct SendOwners *e = &c->send_owners[c->nsend_owners];
+  memset(e, 0, sizeof *e);
+  e->name = strdup(name);
+  int ri = 0, cap = 0;
+  for (const char *bn; (bn = builtin_next_class_answering(&ri, name)); ) {
+    if (e->n == cap) {
+      cap = cap ? cap * 2 : 16;
+      e->cls = realloc(e->cls, sizeof *e->cls * (size_t)cap);
+      e->slot = realloc(e->slot, sizeof *e->slot * (size_t)cap);
+    }
+    if (!e->name || !e->cls || !e->slot) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    e->cls[e->n] = bn; e->slot[e->n++] = builtin_core_class_slot(bn);
+  }
+  if (!e->name) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  return c->nsend_owners++;
+}
+void cplan_send_owners_free(Compiler *c) {
+  for (int i = 0; i < c->nsend_owners; i++) { free(c->send_owners[i].name); free(c->send_owners[i].cls); free(c->send_owners[i].slot); }
+  free(c->send_owners); c->send_owners = NULL; c->nsend_owners = c->csend_owners = 0;
+}
+
+/* The classes a boxed `recv.send(:name)` split tests the receiver's class
+   name against, ahead of the top-level def Object holds: each builtin class
+   the tables give as answering the name ahead of Object that the receiver
+   may be an instance of (cls_fact_may_hold_builtin), then each class of the
+   program under such a builtin class that its fact does not rule out
+   (cls_fact_excludes). out takes the first max names (NULL, 0 to count);
+   the count of all is returned. None means no class that answers the name
+   can reach the receiver: the send calls the def, as for a name no builtin
+   answers. */
+int cplan_send_split_owners(Compiler *c, int recv, const char *name, const char **out, int max) {
+  int n = 0, oi = cplan_send_owners(c, name);
+  for (int i = 0; i < c->send_owners[oi].n; i++)
+    if (cls_fact_may_hold_builtin(c, recv, c->send_owners[oi].slot[i])) {
+      if (n < max) out[n] = c->send_owners[oi].cls[i];
+      n++;
+    }
+  for (int k = 0; k < c->nclasses; k++) {
+    if (comp_class_is_module(c, &c->classes[k])) continue;
+    int bp = class_builtin_parent(c, k), ex = cls_fact_excludes(c, recv, k);
+    if (!builtin_id_below_object_answers(bp, name)) continue;
+    /* An instance of a builtin class includes the instances of the program's subclasses of it, which a builtin call
+       the facts do not model hands back (`MyA.new.rotate!`): the class part excludes such a class only where the
+       receiver cannot be the builtin class it descends from either */
+    if (ex) {
+      const BuiltinClass *r = NULL;
+      for (int i = 0; (r = builtin_class_at(i)) && r->id != bp; i++) {}
+      if (r && !cls_fact_may_hold_builtin(c, recv, builtin_core_class_slot(r->name))) continue;
+    }
+    const char *rn = class_ruby_name(c, k);
+    if (!rn) continue;
+    if (n < max) out[n] = rn;
+    n++;
+  }
+  return n;
+}
+
 static const PolyPlan *cplan_poly_level(Compiler *c, int id, int full) {
   static PolyPlan fresh;
   if (id < 0 || id >= c->node_cap) { free(fresh.arm); fresh.arm = NULL; fresh.n = 0; return &fresh; }

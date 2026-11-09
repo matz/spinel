@@ -5495,6 +5495,30 @@ const ClsSet *cls_fact_node(Compiler *c, int node) {
   return &c->cls_pool[p];
 }
 
+/* See compiler.h. */
+int cls_fact_may_hold_builtin(Compiler *c, int node, int core) {
+  const ClsSet *s = cls_fact_node(c, node);
+  if (!s || core == CORE_NILCLASS) return 1;
+  /* a node no value reaches (code nothing runs, or a flow the pass lacks)
+     rules nothing out, as cls_fact_excludes does */
+  if (s->n == 0 && !s->bv && !s->os && !cf_bk_any_p(s)) return 1;
+  /* a builtin class the core table lacks may be anything below Object */
+  if (cls_bk_has(s, CLS_BK_OTHER) || s->os) return 1;
+  /* a member that is a builtin class the program reopens stands for that class and its builtin subclasses
+     (an exception or IO it makes or rescues), and is below any class that class is below */
+  for (int k = cls_set_next(s, -1); k >= 0 && k < c->nclasses; k = cls_set_next(s, k)) {
+    int rk = builtin_core_class_slot(c->classes[k].name);
+    if (rk >= 0 && (core < 0 || core >= CORE_N || builtin_core_is_a(core, rk) || builtin_core_is_a(rk, core))) return 1;
+  }
+  if (core < 0 || core >= CORE_N) return 0;
+  const unsigned long long *sub = cls_bk_subtree(c, core);
+  /* a Class object, of a class of the program's or a module's, is a Class's or a Module's */
+  if (cls_set_next(s, c->nclasses - 1) >= 0 && ((sub[CORE_CLASS >> 6] >> (CORE_CLASS & 63) & 1) || (sub[CORE_MODULE >> 6] >> (CORE_MODULE & 63) & 1))) return 1;
+  for (int i = 0; i < CLS_BK_WORDS; i++)
+    if (s->bk[i] & sub[i]) return 1;
+  return 0;
+}
+
 /* See compiler.h. The answer is the class's alone: kept per class (a
    consumer asks it of every class for each poly receiver) */
 static int cls_fact_bounded_raw(Compiler *c, int k);

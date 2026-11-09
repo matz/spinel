@@ -4825,7 +4825,7 @@ int send_blind_recv_owns(Compiler *c, int call, int recv, TyKind srt, const char
        is typed a bool, so it has no boxed split for the fallback: it stays
        as it was */
     size_t nl = strlen(name);
-    if (nl && name[nl - 1] != '?' && builtin_name_below_object(name)) return 1;
+    if (nl && name[nl - 1] != '?' && builtin_name_below_object(name) && cplan_send_split_owners(c, recv, name, NULL, 0) > 0) return 1;
     if (nr == 0) return comp_name_reader_any(c, name);
     for (int k = 0; k < c->nclasses; k++)
       if (call_target(c, call, k, name, 0, NULL) >= 0 || comp_reader_in_chain(c, k, name, NULL)) return 1;

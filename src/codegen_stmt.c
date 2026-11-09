@@ -7429,9 +7429,10 @@ static int emit_poly_class_when_value(Compiler *c, int cond_id, const char *tmp,
   /* a qualified path naming a known builtin (exception) class matches by its
      FULL name -- raised exceptions carry "Errno::ENOENT", not "ENOENT" */
   char qbuf[160];
-  { const char *q = isa_match_class_name(c, cond_id, qbuf, sizeof qbuf); if (q) cn = q; }
+  int ncid = -1;   /* the class the node names, while cn is its name */
+  { const char *q = isa_match_class(c, cond_id, qbuf, sizeof qbuf, &ncid); if (q) cn = q; }
   /* a class-aliasing constant (Alias = SomeClass) tests the aliased class */
-  { const char *_ra = resolve_class_alias(c, cn); if (_ra) cn = _ra; }
+  { const char *_ra = resolve_class_alias(c, cn); if (_ra) { cn = _ra; ncid = -1; } }
   /* a Bignum is an Integer too */
   if (is_integer_class_name(cn))
     buf_printf(b, "(%s.tag == SP_TAG_INT || %s.tag == SP_TAG_BIGINT)", tmp, tmp);
@@ -7483,7 +7484,7 @@ static int emit_poly_class_when_value(Compiler *c, int cond_id, const char *tmp,
   else if (sp_streq(cn, "Hash"))
     buf_printf(b, "(%s.tag == SP_TAG_OBJ && ((%s.cls_id <= -13 && %s.cls_id >= -20) || %s.cls_id == -34))", tmp, tmp, tmp, tmp);
   else {
-    int cid = comp_class_index(c, cn);
+    int cid = ncid >= 0 ? ncid : comp_class_index(c, cn);
     /* a reopened builtin's entry (`class Dir; include M; end`) is not the
        class a boxed Dir carries: the runtime answers, as emit_poly_isa_test
        does */

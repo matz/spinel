@@ -77,4 +77,57 @@ gi = [1, 2]
 p gi.sum { |x| gi << 10 if gi.size < 3; x }
 gf = [1.5]
 p gf.sum { |x| gf << 2.5 if gf.size < 2; x }
+# a receiver held boxed, an Array or a String
+def ab(i) = i.even? ? [1, 2] : "s"
+bx = ab(0)
+p bx.sum { |v| bx << 10 if bx.size < 3; v }
+by = ab(0)
+p by.sum { |v| by.pop if v == 1; v }
+bz = ab(0)
+p bz.sum(0.5) { |v| bz << 2.5 if bz.size < 3; v }, ab(1).sum { |v| v }
+# ... and one held boxed that is an Array of Integers or Floats, walked as
+# itself rather than a copy; rows, Symbols, Strings, objects and a Hash
+ti = [1, 2]
+tb = ti.size > 5 ? "s" : ti
+p tb.sum { |v| tb << 10 if tb.size < 3; v }
+tf = [1.5]
+tg = tf.size > 5 ? :q : tf
+p tg.sum { |v| tg << 2.5 if tg.size < 2; v }
+tp = [1, 2, 3]
+tq = tp.size > 5 ? "s" : tp
+p tq.sum { |v| tq.pop if v == 1; v }
+tt = [[1, 2], [3, 4]]
+tx = tt.size > 5 ? "s" : tt
+p tx.sum { |a, b| a * b }, tx.sum { |r| r.sum }, tx.sum { |(a, b)| a - b }
+sy = [:ab, :c]
+sx = sy.size > 5 ? 1 : sy
+st = ["ab", "cde"]
+sz = st.size > 5 ? 1 : st
+p sx.sum { |s| s.size }, sz.sum { |s| s.size }, sz.sum("") { |s| s * 2 }
+os = [P.new(1, 1.5), P.new(2, 2)]
+ox = os.size > 5 ? 1 : os
+ni = [1, nil, 3]
+nx = ni.size > 5 ? "s" : ni
+hh = {a: 1, b: 2}
+hx = hh.size > 5 ? "s" : hh
+p ox.sum { |o| o.b }, ox.sum(&:b), nx.sum { |v| v || 10 }, hx.sum { |k, v| v }
+# a seed that pushes onto an empty receiver runs before the walk reads its
+# length, so what it pushed is summed
+es = []
+es << P.new(0, 0) if es.size > 3
+p es.sum((es << P.new(5, 0); 0)) { |q| q.a > 2 ? q.a : 1.5 }
+ei = []
+ei << 1 if ei.size > 3
+ef = []
+ef << 1.0 if ef.size > 3
+p ei.sum((ei << 7; 0)) { |v| v * 2 }, ef.sum((ef << 2.5; 0.0)) { |v| v * 2 }
+# ... and the Float sum keeps its compensation, and an Integer seed over
+# Floats answers the sum rather than the seed
+fz = []
+fz << 1.0 if fz.size > 3
+fw = []
+fw << 1.0 if fw.size > 3
+fr = fw.sum((fw << 2.5; 0)) { |v| v * 2 }
+fr = "x" if fr == 99
+p fz.sum((10.times { fz << 0.1 }; 0.0)) { |v| v }, fr
 p [1, "x"].sum { |*v| v.length }, [1, "x"].sum { |a, *r| r.size + 1 }

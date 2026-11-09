@@ -2095,7 +2095,7 @@ int emit_sum_block_poly_expr(Compiler *c, int id, Buf *b) {
   if (blv) lv_set_type(blv, TY_POLY);
   arm_body_infer(c, ARM_SITE_FOLD_POLY, block, TY_POLY, bb, bn);
 
-  int ta = ++g_tmp, tacc = ++g_tmp, ti = ++g_tmp, tn = ++g_tmp, tr = ++g_tmp;
+  int ta = ++g_tmp, tacc = ++g_tmp, ti = ++g_tmp, tr = ++g_tmp;
   /* the receiver, then the initial value, then the receiver's check: nil, a
      number, a boolean or a Symbol has no sum (it answered the initial
      value), raised as CRuby does once the operands ran */
@@ -2112,22 +2112,26 @@ int emit_sum_block_poly_expr(Compiler *c, int id, Buf *b) {
                 " sp_raise_nomethod(sp_nomethod_msg_args(\"sum\", _t%d, %d, &_t%d));"
                 " int _s%d = _t%d.tag == SP_TAG_STR || sp_poly_is_strbuf(_t%d);"
                 " if (_s%d) _t%d = sp_box_int(sp_str_sum_bits(sp_poly_strbuf_deref(_t%d).v.s, %s));"
-                " sp_PolyArray *_t%d = _s%d ? sp_PolyArray_new() : sp_poly_to_a_arr(_t%d);"
-                " SP_GC_ROOT(_t%d); sp_int _t%d = _t%d->len",
+                " sp_RbVal _t%d = _s%d ? sp_box_poly_array(sp_PolyArray_new())"
+                " : _t%d.tag == SP_TAG_OBJ && sp_poly_is_array_kind(_t%d.cls_id) ? _t%d"
+                " : sp_box_poly_array(sp_poly_to_a_arr(_t%d)); SP_GC_ROOT_RBVAL(_t%d)",
              tacc, tr, tr, argc, tacc, tr, tr, tr, tr, tacc, tr,
-             bits, ta, tr, tr, ta, tn, ta);
-  /* folded a value at a time (sp_sum_step) */
+             bits, ta, tr, tr, tr, tr, tr, ta);
+  /* folded a value at a time (sp_sum_step) over the receiver itself when it
+     is an Array of any kind (to_a would copy a typed one), its length and
+     elements read at each step as the typed walks read them: a block that
+     pushes onto it or pops it changes what is summed */
   buf_printf(b, "; sp_SumState _t%dS; sp_sum_init(&_t%dS, _t%d); SP_GC_ROOT_RBVAL(_t%dS.acc); "
-                "for (sp_int _t%d = 0; _t%d < _t%d; _t%d++) { ",
-             tacc, tacc, tacc, tacc, ti, ti, tn, ti);
+                "for (sp_int _t%d = 0; _t%d < sp_poly_arr_len(_t%d); _t%d++) { ",
+             tacc, tacc, tacc, tacc, ti, ti, ta, ti);
   /* a block of any other shape than plain requireds binds the element by
      the proc distribution */
   if (block_binds_gathered(c, block)) {
     if (p0r) buf_printf(b, "sp_RbVal lv_%s; ", p0r);
-    char vals[96]; snprintf(vals, sizeof vals, "sp_yielded_args(0, _t%d->data[_t%d])", ta, ti);
+    char vals[96]; snprintf(vals, sizeof vals, "sp_yielded_args(0, sp_poly_arr_get(_t%d, _t%d))", ta, ti);
     emit_boxed_step_binds(c, block, vals, b, 0, 1);
   }
-  else if (p0r) buf_printf(b, "sp_RbVal lv_%s = _t%d->data[_t%d]; ", p0r, ta, ti);
+  else if (p0r) buf_printf(b, "sp_RbVal lv_%s = sp_poly_arr_get(_t%d, _t%d); ", p0r, ta, ti);
   /* A two-param block over a boxed HASH walks [key, value] pairs, so the
      element auto-splats across the params -- binding only the first left the
      second nil, and `h.sum { |k, v| v }` added nil to the accumulator. */
@@ -2244,10 +2248,12 @@ static int emit_sum_block_over(Compiler *c, int id, int recv, int block, Buf *b)
   if (acct == TY_POLY) {
     int ta = ++g_tmp, tacc = ++g_tmp, ti = ++g_tmp, tn = ++g_tmp;
     buf_printf(b, "({ sp_%sArray *_t%d = ", k, ta); emit_expr(c, recv, b);
-    buf_printf(b, "; SP_GC_ROOT(_t%d); sp_int _t%d = sp_%sArray_length(_t%d); sp_RbVal _t%d = ",
-               ta, tn, k, ta, tacc);
+    buf_printf(b, "; SP_GC_ROOT(_t%d); sp_RbVal _t%d = ", ta, tacc);
     if (argc == 1) emit_boxed(c, argv[0], b); else buf_puts(b, "sp_box_int(0)");
-    /* folded a value at a time (sp_sum_step) */
+    /* the length the walk starts at, read after the seed ran (it may push
+       onto the receiver), says whether the block ran; folded a value at a
+       time (sp_sum_step) */
+    buf_printf(b, "; sp_int _t%d = sp_%sArray_length(_t%d)", tn, k, ta);
     buf_printf(b, "; sp_SumState _t%dS; sp_sum_init(&_t%dS, _t%d); SP_GC_ROOT_RBVAL(_t%dS.acc); "
                   "for (sp_int _t%d = 0; _t%d < sp_%sArray_length(_t%d); _t%d++) { ",
                tacc, tacc, tacc, tacc, ti, ti, k, ta, ti);
@@ -2323,7 +2329,7 @@ static int emit_sum_block_over(Compiler *c, int id, int recv, int block, Buf *b)
   /* rooted the way the poly-accumulator arm above roots its receiver: the
      element is taken out of this temp on every turn and the block allocates
      in between */
-  buf_printf(b, "; SP_GC_ROOT(_t%d); sp_int _t%d = sp_%sArray_length(_t%d); ", ta, tn, k, ta);
+  buf_printf(b, "; SP_GC_ROOT(_t%d); ", ta);
   int tseed = -1;
   if (float_int_seed && argc == 1) {
     tseed = ++g_tmp;
@@ -2355,7 +2361,8 @@ static int emit_sum_block_over(Compiler *c, int id, int recv, int block, Buf *b)
   /* the length read at each step, as CRuby's each reads it: a block that
      pushes onto the receiver is summed over what it added, one that pops
      stops sooner. _t<tn>, the length it started at, says whether the block
-     ran at all */
+     ran at all: read after the seed ran, as the arm above reads it */
+  buf_printf(b, "; sp_int _t%d = sp_%sArray_length(_t%d)", tn, k, ta);
   buf_printf(b, "; for (sp_int _t%d = 0; _t%d < sp_%sArray_length(_t%d); _t%d++) { ", ti, ti, k, ta, ti);
   /* A 2+-param block over an array of sub-arrays auto-splats each element into
      the params -- `sum { |v, i| a[i] }` over the [value, index] pairs an

@@ -22827,10 +22827,26 @@ static int class_value_builtin_answers(Compiler *c, const char *vnm, int is_clas
   }
   return 1;
 }
+/* Is m a reopened Class or Module, or does one include or prepend module
+   m (also through another module)? A module value (only_module) is not a Class:
+   only Module's mixins count for it. */
+static int class_or_module_reopen_mixes(Compiler *c, int m, int only_module) {
+  int cm[] = { comp_builtin_class_named(c, "Module"), comp_core_class(c, CORE_CLASS_REOPEN) };
+  for (int i = 0; i < (only_module ? 1 : 2); i++) {
+    int k = cm[i];
+    if (k < 0 || k >= c->nclasses) continue;
+    if (k == m) return 1;   /* (the reopening's own method) */
+    const ClassInfo *ki = &c->classes[k];
+    for (int j = 0; j < ki->nincluded_mods; j++) if (comp_module_includes(c, ki->included_mods[j], m, 0)) return 1;
+    for (int j = 0; j < ki->nprepended_mods; j++) if (comp_module_includes(c, ki->prepended_mods[j], m, 0)) return 1;
+  }
+  return 0;
+}
 /* Can a class or module value answer vnm below Object: a class method of
    that name (any_class: of any class), a module's instance method (an
    `extend` gives it; for one known class cls, a module cls extends), or a
-   reopened Class or Module's? */
+   reopened Class or Module's? (cls: -1 for none; -2 for a builtin class,
+   -3 for a builtin module, the program does not reopen) */
 static int object_reopen_class_value_owns(Compiler *c, int id, int oci, const char *vnm, int any_class, int cls) {
   for (int k = 0; k < c->nclasses; k++) {
     if (k == oci) continue;
@@ -22841,6 +22857,12 @@ static int object_reopen_class_value_owns(Compiler *c, int id, int oci, const ch
         call_target(c, id, k, vnm, CT_OWN, NULL) >= 0) {
       /* for one known class, a module counts when that class extends it */
       if (!any_class && !class_reopen && cls >= 0 && !comp_class_singleton_has_module(c, cls, k)) continue;
+      /* for a builtin class or module the program does not reopen (cls -2
+         or -3), which nothing can extend: a module counts when a reopened
+         Class or Module mixes it in (only Module for a module), or, for a
+         class, when Object extends it */
+      if (!any_class && !class_reopen && cls <= -2 && !class_or_module_reopen_mixes(c, k, cls == -3) &&
+          !(cls == -2 && oci >= 0 && comp_class_singleton_has_module(c, oci, k))) continue;
       return 1;
     }
   }
@@ -22889,7 +22911,7 @@ static int emit_object_reopen_vis_refusal(Compiler *c, int id, int vrecv, TyKind
     if (bid && comp_class_index(c, bn) < 0) {
       int mod = is_builtin_module_name(bn);
       if (core_class_value_answers(bn, vnm) || core_class_value_answers(mod ? "Module#" : "Class#", vnm) || builtin_class_id_answers(bid, vnm, 1) || class_value_builtin_answers(c, vnm, !mod) ||
-          object_reopen_class_value_owns(c, id, oci, vnm, 0, -1)) return 0;
+          object_reopen_class_value_owns(c, id, oci, vnm, 0, mod ? -3 : -2)) return 0;
       snprintf(cvname, sizeof cvname, "%s %s", mod ? "module" : "class", bn);
       cname = cvname; named = 1;
     }

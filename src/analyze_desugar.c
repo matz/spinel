@@ -11835,6 +11835,18 @@ int desugar_value_callable_forwards(Compiler *c) {
     else if (ty_is_hash(rt)) wrap_pair = 0;   /* each_key/each_value: the bare key/value */
 
     int base = nt->count;
+    /* The hoist and the nil test below rewrite the `&` node in place, and
+       the arms of a send share their send's (dyn_send_arms): this arm takes
+       a copy of its own, or every other arm read the temp only this arm
+       sets -- `send(m, &blk)` reached `any(&blk)` with no block. */
+    if ((hoist || fill_nilable || blk_nilable) && nt_str(nt, id, "dyn_name") &&
+        nt_ref(nt, id, "block") == blk) {
+      int cl = nt_clone_subtree(nt, blk);
+      if (cl < 0) continue;
+      nt_node_set_ref(nt, id, "block", cl);
+      blk = cl;
+      ex = nt_ref(nt, blk, "expression");
+    }
     /* (the temps ahead of the call, wrapped round it at the end of the
        round: the exits below that skip the wrap are node-table exhaustion,
        where nt_new_node aborts, so none is taken with temps pending) */

@@ -863,13 +863,35 @@ static const char *resolve_alias_value(Compiler *c, int v) {
 /* If `cname` is a constant assigned a class value (resolve_alias_value),
    return the underlying class name so `class CONST` reopens that class.
    Returns NULL if `cname` is a plain new class name. */
-const char *resolve_class_alias(Compiler *c, const char *cname) {
+/* The first constant write of each key, for the tree as it is: a class
+   constant's read asks for its key's write, and a scan of every write per
+   question was a tenth of a Rails app's analysis */
+static struct { const NodeTable *nt; unsigned ver; unsigned long edits; int count; ANameHash keys; int *write, cap; } g_cw_first;
+static int const_first_write(Compiler *c, const char *cname) {
   const NodeTable *nt = c->nt;
-  NT_FOREACH_KIND(nt, NK_ConstantWriteNode, id) {
-    const char *n = const_key_at(c, id);
-    if (n && sp_streq(n, cname)) return resolve_alias_value(c, nt_ref(nt, id, "value"));
+  if (g_cw_first.nt != nt || g_cw_first.ver != nt->version || g_cw_first.edits != nt->edits ||
+      g_cw_first.count != nt->count) {
+    anh_free(&g_cw_first.keys); memset(&g_cw_first.keys, 0, sizeof g_cw_first.keys);
+    NT_FOREACH_KIND(nt, NK_ConstantWriteNode, id) {
+      const char *n = const_key_at(c, id);
+      if (!n || anh_has(&g_cw_first.keys, n)) continue;
+      if (g_cw_first.keys.n == g_cw_first.cap) {
+        g_cw_first.cap = g_cw_first.cap ? g_cw_first.cap * 2 : 64;
+        g_cw_first.write = realloc(g_cw_first.write, sizeof(int) * (size_t)g_cw_first.cap);
+        if (!g_cw_first.write) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+      }
+      g_cw_first.write[g_cw_first.keys.n] = id;
+      anh_add(&g_cw_first.keys, n);
+    }
+    g_cw_first.nt = nt; g_cw_first.ver = nt->version; g_cw_first.edits = nt->edits; g_cw_first.count = nt->count;
   }
-  return NULL;
+  int i = cname ? anh_find(&g_cw_first.keys, cname) : -1;
+  return i >= 0 ? g_cw_first.write[i] : -1;
+}
+
+const char *resolve_class_alias(Compiler *c, const char *cname) {
+  int id = const_first_write(c, cname);
+  return id >= 0 ? resolve_alias_value(c, nt_ref(c->nt, id, "value")) : NULL;
 }
 
 /* The constant `cname` is assigned from, when its write's value is a
@@ -878,14 +900,11 @@ const char *resolve_class_alias(Compiler *c, const char *cname) {
    knows, does not follow. NULL otherwise. */
 const char *const_alias_source(Compiler *c, const char *cname) {
   const NodeTable *nt = c->nt;
-  NT_FOREACH_KIND(nt, NK_ConstantWriteNode, id) {
-    const char *n = const_key_at(c, id);
-    if (!n || !sp_streq(n, cname)) continue;
-    int v = nt_ref(nt, id, "value");
-    NodeKind vk = v >= 0 ? nt_kind(nt, v) : NK_NONE;
-    return vk == NK_ConstantReadNode || vk == NK_ConstantPathNode ? const_key_at(c, v) : NULL;
-  }
-  return NULL;
+  int id = const_first_write(c, cname);
+  if (id < 0) return NULL;
+  int v = nt_ref(nt, id, "value");
+  NodeKind vk = v >= 0 ? nt_kind(nt, v) : NK_NONE;
+  return vk == NK_ConstantReadNode || vk == NK_ConstantPathNode ? const_key_at(c, v) : NULL;
 }
 
 /* resolve_class_alias through a chain of aliases (`B = A`, `A = Shout`):

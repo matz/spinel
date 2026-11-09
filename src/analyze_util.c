@@ -93,7 +93,34 @@ static int const_path_is(const NodeTable *nt, int node, const char *pn, const ch
 }
 /* Does the program write the constant nm into the class or module named pn:
    in a body of it, or through the path `pn::nm = v`? */
+static int program_writes_const_in_tree(Compiler *c, const char *pn, const char *nm);
+/* The answers for the tree as it is: a scoped constant read asks again for
+   the same pair, and each question walked every class body and every nil */
+static struct { const NodeTable *nt; unsigned ver; unsigned long edits; int count; ANameHash keys; signed char *ans; int cap; } g_pwc;
 int program_writes_const_in(Compiler *c, const char *pn, const char *nm) {
+  const NodeTable *nt = c->nt;
+  if (!pn || !nm) return program_writes_const_in_tree(c, pn, nm);
+  if (g_pwc.nt != nt || g_pwc.ver != nt->version || g_pwc.edits != nt->edits || g_pwc.count != nt->count) {
+    for (int i = 0; i < g_pwc.keys.n; i++) free((char *)g_pwc.keys.key[i]);
+    anh_free(&g_pwc.keys); memset(&g_pwc.keys, 0, sizeof g_pwc.keys);
+    g_pwc.nt = nt; g_pwc.ver = nt->version; g_pwc.edits = nt->edits; g_pwc.count = nt->count;
+  }
+  size_t pl = strlen(pn), nl = strlen(nm);
+  char kb[256], *key = pl + nl + 2 <= sizeof kb ? kb : malloc(pl + nl + 2);
+  memcpy(key, pn, pl); key[pl] = '\001'; memcpy(key + pl + 1, nm, nl + 1);
+  int i = anh_find(&g_pwc.keys, key);
+  if (i >= 0) { int r = g_pwc.ans[i]; if (key != kb) free(key); return r; }
+  int r = program_writes_const_in_tree(c, pn, nm);
+  if (g_pwc.keys.n == g_pwc.cap) {
+    g_pwc.cap = g_pwc.cap ? g_pwc.cap * 2 : 64;
+    g_pwc.ans = realloc(g_pwc.ans, (size_t)g_pwc.cap);
+    if (!g_pwc.ans) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  }
+  g_pwc.ans[g_pwc.keys.n] = (signed char)r;
+  anh_add(&g_pwc.keys, key == kb ? strdup(kb) : key);
+  return r;
+}
+static int program_writes_const_in_tree(Compiler *c, const char *pn, const char *nm) {
   const NodeTable *nt = c->nt;
   int ndk = 0; const NodeKind *dk = class_def_kinds(&ndk);
   for (int dh = 0; dh < ndk; dh++)

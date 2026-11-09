@@ -303,6 +303,16 @@ typedef struct{sp_int*data;sp_int start;sp_int len;sp_int cap;int32_t frozen;uin
 typedef struct{sp_float*data;sp_int len;sp_int cap;int32_t frozen;uint32_t nil_lo;uint64_t*nilbits;int32_t head;}sp_FloatArray;
 _Static_assert(sizeof(void *) != 8 || (sizeof(sp_IntArray) == 48 && sizeof(sp_FloatArray) == 48),
                "the Int / Float array blocks keep their slab class");
+/* A push reads `len` once, as one load of that field alone, and stores
+   l + 1 without reading it back (sp_IntArray_push, sp_FloatArray_push,
+   sp_PolyArray_push). A compiler otherwise loads len together with the
+   field beside it in one wide load -- clang on arm64 len and cap, gcc on
+   x86 start and len -- right after the previous push stored len alone, and
+   a load wider than a store still in flight to the same bytes waits for it
+   to reach the cache: a loop that pushes ran about twice as long. The grow
+   calls never change len, so l stays right across them. The volatile only
+   keeps that one load narrow; it is not there for threads. */
+#define SP_ARR_LEN_ONCE(a) (*(volatile sp_int *)&(a)->len)
 /* the array may hold a nil (the fast whole-array test; exact bits are read
    per element through sp_IntArray_elem_nil / sp_FloatArray_elem_nil) */
 #define SP_MAY_NIL(a) ((a)->nilbits != NULL)

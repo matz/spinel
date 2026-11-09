@@ -999,7 +999,7 @@ static inline sp_PolyArray *sp_PolyArray_new_cap(sp_int n) {
   if (n > a->cap) sp_PolyArray_grow_to(a, n);
   return a;
 }
-static inline void sp_PolyArray_push(sp_PolyArray *a, sp_RbVal v) { if (!a) return; sp_gc_wb((void*)a); if (a->frozen) { sp_raise_frozen_array_at(a, SP_BUILTIN_POLY_ARRAY); return; } if (a->len >= a->cap) sp_PolyArray_grow(a); a->data[a->len++] = v; }
+static inline void sp_PolyArray_push(sp_PolyArray *a, sp_RbVal v) { if (!a) return; sp_gc_wb((void*)a); if (a->frozen) { sp_raise_frozen_array_at(a, SP_BUILTIN_POLY_ARRAY); return; } sp_int l = SP_ARR_LEN_ONCE(a); if (l >= a->cap) sp_PolyArray_grow(a); a->data[l] = v; a->len = l + 1; }
 static inline sp_RbVal sp_PolyArray_get(sp_PolyArray *a, sp_int i) { if (!a) return sp_box_nil(); if ((unsigned long long)i < (unsigned long long)a->len) return a->data[i]; if (i < 0) i += a->len; if (i < 0 || i >= a->len) return sp_box_nil(); return a->data[i]; }
 static inline sp_RbVal sp_PolyArray_get_m(sp_PolyArray *a, sp_int i) { if (SP_UNLIKELY(!a)) sp_nil_recv("[]"); return sp_PolyArray_get(a, i); }
 /* ---- relocated from spinel_rt.h: frozen-string check primitives used

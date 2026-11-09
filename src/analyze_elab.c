@@ -8224,6 +8224,20 @@ int elab_attr_replaced(Compiler *c, int cls, const char *name) {
   return 0;
 }
 
+/* See analyze.h. */
+int elab_inst_attr_replaced(Compiler *c, int cls, const char *name) {
+  LoadRecord *r = c->lrec;
+  const LrHist *h = r && r->recorded && cls >= 0 ? lr_hist(r, cls, 0, name, 0) : NULL;
+  int attr = 0, last = -1;
+  for (int j = 0; h && j < h->n; j++) {
+    const LrDef *v = &h->v[j];
+    if (!lr_is_version(v) || v->kind == LR_UNDEF || v->kind == LR_REMOVE || lr_applied(c, v) != 1) continue;
+    attr |= v->kind == LR_READER || v->kind == LR_WRITER;
+    last = v->kind;
+  }
+  return attr && last != LR_READER && last != LR_WRITER;
+}
+
 /* The node of the last attr_* entry for name on cls's instance side, or of
    a module's it prepends or includes, the way a lookup meets them; -1 */
 static int lr_accessor_in(Compiler *c, int cls, const char *name, int depth) {

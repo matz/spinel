@@ -30,3 +30,10 @@ def always(t = nil) = (t - Time.at(0)).to_i
 p always(Time.at(42))
 def rsp(t = nil) = [t.respond_to?(:year), t.respond_to?(:each)]
 p rsp(Time.at(0)), rsp
+# (nil..nil) covers every value, but not an empty Range given to cover?
+def rng3(a = nil, b = nil) = (a..b)
+x = rng3
+p x.cover?("z".."a"), x.cover?(1..0), x.cover?(5), rng3(Time.at(1), Time.at(9)).cover?(Time.at(5))
+# a parenthesized end is still the boxed parameter (not an Integer under promote)
+def pend(t = nil) = ((t)..nil).begin
+p pend(Time.at(0)).class, pend

@@ -11418,6 +11418,7 @@ static int range_end_no_number(Compiler *c, int node) {
   if (range_end_nonnum_value(c, node)) return 1;
   /* a local: the values its writes in this scope bind (`lo = "a"; lo = 1 if c`) */
   const NodeTable *nt = c->nt;
+  if (vp_one(nt, node, VPS_NONE | VP_PARENS_ONLY, &node) != VP1_NODE) return 0;   /* `((t)..x)` */
   if (nt_kind(nt, node) != NK_LocalVariableReadNode) return 0;
   const char *vn = nt_str(nt, node, "name");
   Scope *sc = comp_scope_of(c, node);

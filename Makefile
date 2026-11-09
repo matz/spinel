@@ -1948,6 +1948,9 @@ cli-opts-test: $(SPINEL) $(SPINEL_TIMEOUT)
 	$(SPINEL) -g test/debug/ivar_nil_before_setup.rb -o "$$tmp/dbg" >"$$tmp/dbg.out" 2>&1 && \
 	  "$$tmp/dbg" 2>&1 | cmp -s - test/debug/ivar_nil_before_setup.rb.expected || \
 	  { echo "cli-opts-test: FAIL (a -g build did not raise NoMethodError for an unset ivar, #5960)"; ok=0; }; \
+	$(SPINEL) -g test/debug/ivar_hash_merge_poly_key.rb -o "$$tmp/dbgm" >"$$tmp/dbgm.out" 2>&1 && \
+	  "$$tmp/dbgm" 2>&1 | cmp -s - test/debug/ivar_hash_merge_poly_key.rb.expected || \
+	  { echo "cli-opts-test: FAIL (a -g build's ivar nil test went ahead of the merge receiver's hold)"; sed -n 1,3p "$$tmp/dbgm.out"; ok=0; }; \
 	$(SPINEL) -I test/require_load_path test/require_load_path/main.rb -o "$$tmp/lp" >"$$tmp/lp.out" 2>&1 && \
 	  "$$tmp/lp" 2>&1 | cmp -s - test/require_load_path/main.rb.expected || \
 	  { echo "cli-opts-test: FAIL (a file reached by -I require and by require_relative loaded twice, or a require naming the .rb found nothing)"; ok=0; }; \

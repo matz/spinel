@@ -21667,9 +21667,19 @@ static int emit_bivar_copy_wrap(Compiler *c, int id, Buf *b) {
   snprintf(rn, sizeof rn, "_t%d", t); snprintf(dn, sizeof dn, "_d%d", t);
   buf_puts(b, "({ "); emit_ctype(c, rr.kind == RK_BOXED ? TY_POLY : rt, b); buf_printf(b, " %s = ", rn); emit_expr(c, recv, b);
   buf_printf(b, rr.kind == RK_BOXED ? "; SP_GC_ROOT_RBVAL(%s); " : "; SP_GC_ROOT(%s); ", rn);
+  /* The ivar receiver's nil test reads the hold, inside the expression: the
+     call's own guard, under the view below, names `_tN` too, and when an
+     argument hoists its work into g_pre (`@h.merge(k => v)`'s Hash) it
+     went ahead of the statement, before `_tN` was declared. */
+  int sv_ng = g_ivar_nil_guarded_id;
+  if (rr.kind != RK_BOXED && emit_held_nil_guard(c, id, t, b)) {
+    buf_puts(b, " ");
+    g_ivar_nil_guarded_id = id;
+  }
   int slot = view_bind(recv, "%s", rn);
   emit_ctype(c, ret, b); buf_printf(b, " %s = ", dn); emit_call_unwrapped(c, id, b);
   view_unbind(slot);
+  g_ivar_nil_guarded_id = sv_ng;
   buf_printf(b, ret_repr.kind == RK_BOXED ? "; SP_GC_ROOT_RBVAL(%s); sp_bivar_copy(" : "; SP_GC_ROOT(%s); sp_bivar_copy(", dn);
   emit_boxed_text(c, rr.kind == RK_BOXED ? TY_POLY : rt, rn, b); buf_puts(b, ", "); emit_boxed_text(c, ret, dn, b);
   buf_printf(b, "); %s; })", dn);

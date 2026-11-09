@@ -890,6 +890,20 @@ static const CallPlan *cplan_dep(const CallPlan *p) {
   if (p->owner_ci >= 0) IMEMO_DEP_CLASS(p->owner_ci);
   return p;
 }
+/* The name call node id finally calls: its own, or for a send-family call
+   the literal Symbol or String its first argument gives, a send of a send
+   unwound (each send takes one argument). *used is how many arguments the
+   sends took. NULL for a send whose name is computed or missing. */
+const char *call_sent_name(const NodeTable *nt, int id, int *used) {
+  const char *nm = nt_str(nt, id, "name");
+  int ac = 0, a = 0;
+  if (used) *used = 0;
+  if (!nm || !is_send_family(nm)) return nm;
+  const int *av = call_args(nt, id, &ac);
+  while (nm && is_send_family(nm)) nm = a < ac ? vis_arg_name(nt, av[a++]) : NULL;
+  if (used) *used = a;
+  return nm;
+}
 int call_node_names(Compiler *c, int id, const char *out[2]) {
   const NodeTable *nt = c->nt;
   NodeKind k = nt_kind(nt, id);
@@ -908,6 +922,11 @@ int call_node_names(Compiler *c, int id, const char *out[2]) {
   if (k == NK_CallNode && out[0] && is_method_object_maker(out[0])) {
     const char *sym = method_sym_arg(c, id);
     if (sym) out[n++] = sym;
+  }
+  /* a send of a literal name calls that name too, at the same point */
+  if (k == NK_CallNode && out[0] && is_send_family(out[0])) {
+    const char *sent = call_sent_name(nt, id, NULL);
+    if (sent) out[n++] = sent;
   }
   return n;
 }

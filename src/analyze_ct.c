@@ -65,6 +65,7 @@
 
 #include "analyze_internal.h"
 #include "builtin_names.h"
+#include "call_plan.h"
 #include "ct_eval.h"
 
 /* two names, either of which may be missing (NULL), are the same */
@@ -313,10 +314,9 @@ static int ct_owned_by(const NodeTable *nt, int o, const char *names) {
    names; a send whose target is computed reaches only the program's own
    methods, and like any call that names no method answers 0. */
 static int ct_call_names(const NodeTable *nt, int call, const char *meth) {
-  const char *namer = nt_str(nt, call, "name");
-  int an = 0, args = nt_ref(nt, call, "arguments"), from = 0;
-  const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &an) : NULL;
-  if (namer && is_send_family(namer)) { namer = an ? ct_lit_name(nt, av[0]) : NULL; from = 1; }
+  int an = 0, from = 0;
+  const int *av = call_args(nt, call, &an);
+  const char *namer = call_sent_name(nt, call, &from);
   if (!namer || !is_method_naming_call(namer)) return 0;
   if (an <= from) return 1;
   for (int i = from; i < an; i++) {
@@ -379,13 +379,8 @@ static int ct_core_method_changed(const NodeTable *nt, const int *parent, int co
          methods the program defines */
       if (!mine && !self_recv && nt_kind(nt, r) != NK_ConstantReadNode && nt_kind(nt, r) != NK_ConstantPathNode &&
           !(nt_kind(nt, r) == NK_CallNode && is_new_name(nt_str(nt, r, "name")))) {
-        const char *sent = nm;
-        if (nm && is_send_family(nm)) {
-          int an = 0, args = nt_ref(nt, id, "arguments");
-          const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &an) : NULL;
-          sent = an ? ct_lit_name(nt, av[0]) : NULL;
-        }
-        if (sent && is_core_change_call(sent) && !is_send_family(sent)) return 1;
+        const char *sent = call_sent_name(nt, id, NULL);
+        if (sent && is_core_change_call(sent)) return 1;
       }
     }
   }
@@ -1605,12 +1600,7 @@ static int ct_def_touches_self(const NodeTable *nt, int id);
    as it is? A send's literal name is the method's. */
 static int ct_ivs_quiet_def(Compiler *c, struct CtMacroFacts *f, int call) {
   const NodeTable *nt = c->nt;
-  const char *nm = nt_str(nt, call, "name");
-  if (nm && is_send_family(nm)) {
-    int an = 0, args = nt_ref(nt, call, "arguments");
-    const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &an) : NULL;
-    nm = an >= 1 && nt_kind(nt, av[0]) == NK_SymbolNode ? nt_str(nt, av[0], "value") : NULL;
-  }
+  const char *nm = call_sent_name(nt, call, NULL);
   const LrDef *d = NULL;
   if (!nm || !f || f->s_cls < 0 || elab_method_at(c, f->s_cls, nm, 1, f->s_p, &d) != ELAB_YES || !d || d->kind != LR_DEF ||
       d->may || nt_kind(nt, d->node) != NK_DefNode)

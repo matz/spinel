@@ -155,8 +155,14 @@ enum { CT_CMETHOD = 1, CT_OWN = 2, CT_TOP = 4, CT_REACH = 8, CT_CAPTURE = 16 };
    target's name, a `recv.m op= v`'s reader and writer; how many (0 for any
    other node). call_target binds a call of one of them to the method
    version it runs; a method the language calls for the node keeps the
-   last version. Super contributes the enclosing method's original name. */
+   last version. Super contributes the enclosing method's original name.
+   A send of a literal name (`send`, `__send__`, `public_send`) calls that
+   name too, a second one. */
 int call_node_names(Compiler *c, int id, const char *out[2]);
+/* The name call node id finally calls: its own, or a send-family call's
+   literal first argument (a send of a send unwound); *used is the number
+   of arguments the sends took. NULL when that name is computed or absent. */
+const char *call_sent_name(const NodeTable *nt, int id, int *used);
 /* What call_target answers besides the scope. kind: ML_METHOD, a method the
    record proves (a placed version, or a name with one version that no call
    runs ahead of); ML_ENTRY, the scope of an entry (or the copies' entry)

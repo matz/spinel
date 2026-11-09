@@ -1,0 +1,4 @@
+["NoMethodError: undefined method 'am' for an instance of A", "NoMethodError: undefined method 'am' for an instance of A", "NoMethodError: undefined method 'am' for an instance of A", "NoMethodError: undefined method 'am' for an instance of A", "NoMethodError: undefined method 'am' for an instance of A"]
+[:late, :late, :late, :late, :late]
+["NoMethodError: undefined method 'cm' for class B", "NoMethodError: undefined method 'cm' for class B", "NoMethodError: undefined method 'cm' for class B"]
+[:cm, :cm, :cm]

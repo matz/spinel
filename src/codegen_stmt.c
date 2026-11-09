@@ -1383,7 +1383,7 @@ static const char *nil_for_local(Compiler *c, int node, const LocalVar *lv, TyKi
   if (oint_kind(t) && !slot_is_oint(lv)) refuse_nil_store(c, node, t, where);
   return nil_sentinel(t);
 }
-static int emit_proc_cell_lvalue(Compiler *c, int scope_node, const char *nm, Buf *b) {
+int emit_proc_cell_lvalue(Compiler *c, int scope_node, const char *nm, Buf *b) {
   LocalVar *lv = nm ? scope_local(comp_scope_of(c, scope_node), nm) : NULL;
   if (!lv || lv->type != TY_PROC) return 0;
   int captured = g_cap_struct && g_cap_names && nameset_has(g_cap_names, nm);

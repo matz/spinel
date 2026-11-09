@@ -2525,6 +2525,12 @@ static int emit_local_ivar_write_expr(Compiler *c, int id, Buf *b, const NodeTab
       if (ncb >= 0) {
         buf_puts(b, "({ ");
         emit_stmt_inner(c, v, b, 0);
+        /* a Proc in a cell or a capture field: the raw slot (the read form
+           is a cast, not an lvalue), as the statement form writes it */
+        if (emit_proc_cell_lvalue(c, id, nm, b)) {
+          buf_puts(b, "NULL); "); emit_local_ref(c, id, nm, b); buf_puts(b, "; })");
+          return 1;
+        }
         emit_local_ref(c, id, nm, b); buf_puts(b, " = ");
         if (lv && lv->type == TY_RANGE) buf_puts(b, "(sp_Range){0}");
         else if (lv) buf_puts(b, default_value_from_compiler(c, lv->type));
@@ -2559,6 +2565,19 @@ static int emit_local_ivar_write_expr(Compiler *c, int id, Buf *b, const NodeTab
       return 1;
     }
     buf_puts(b, "({ ");
+    /* A Proc local in a cell or a capture field holds the pointer as an
+       sp_int; emit_local_ref's read form casts it back and is not an lvalue,
+       so the target is the raw slot with the value re-encoded, as the
+       statement form (emit_assign) writes it: `if (blk = b)` inside a lambda
+       whose blk the enclosing method owns, and the `__fwdc` temp a nilable
+       `&b` forward tests through (`x.send(m, &b)` in a lambda). */
+    if (emit_proc_cell_lvalue(c, id, nm, b)) {
+      if (nt_kind(nt, v) == NK_NilNode) buf_puts(b, "NULL");
+      else if (repr_of(c, v).kind == RK_BOXED) { buf_puts(b, "("); emit_expr(c, v, b); buf_puts(b, ").v.p"); }
+      else emit_expr(c, v, b);
+      buf_puts(b, "); "); emit_local_ref(c, id, nm, b); buf_puts(b, "; })");
+      return 1;
+    }
     emit_local_ref(c, id, nm, b); buf_puts(b, " = ");
     int sk = splice_store_open(c, id, b);   /* an open splice alias of the variable */
     int ven = 0;

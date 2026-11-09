@@ -196,6 +196,7 @@ sp_IntArray *sp_MatchData_offset(sp_MatchData *m, sp_int i);
 sp_oint sp_MatchData_bytebegin(sp_MatchData *m, sp_int i);
 sp_oint sp_MatchData_byteend(sp_MatchData *m, sp_int i);
 sp_IntArray *sp_MatchData_byteoffset(sp_MatchData *m, sp_int i);
+const char *sp_MatchData_match(sp_MatchData *m, sp_int i);
 sp_oint sp_MatchData_begin_name(sp_MatchData *m, const char *name);
 sp_oint sp_MatchData_end_name(sp_MatchData *m, const char *name);
 sp_IntArray *sp_MatchData_offset_name(sp_MatchData *m, const char *name);

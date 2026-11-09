@@ -11055,8 +11055,10 @@ static sp_StrPolyHash *sp_md_named_captures(sp_MatchData *m) {
    the group did not participate (#2501). */
 static sp_RbVal sp_MatchData_match_length(sp_MatchData *m, sp_int i) {
   if (!m) return sp_box_nil();
-  if (i < 0) i += m->ncap;
-  if (i < 0 || i >= m->ncap || m->caps[i * 2] < 0) return sp_box_nil();
+  /* a negative n or one past the groups is CRuby's IndexError */
+  if (i < 0 || i >= m->ncap)
+    sp_raise_cls("IndexError", sp_sprintf("index %lld out of matches", (long long)i));
+  if (m->caps[i * 2] < 0) return sp_box_nil();
   return sp_box_int(m->caps[i * 2 + 1] - m->caps[i * 2]);
 }
 /* #match / #match_length given a group NAME: resolve it through the pattern

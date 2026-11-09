@@ -1478,6 +1478,14 @@ sp_PolyArray *sp_MatchData_aref_len(sp_MatchData *m, sp_int start, sp_int len) {
   }
   return a;
 }
+/* MatchData#match(n): group n's String, or nil when the group did not
+   take part. Unlike m[n], a negative n or one past the groups is CRuby's
+   IndexError. */
+const char *sp_MatchData_match(sp_MatchData *m, sp_int i) {SP_GC_ROOT(m);
+  if (m && (i < 0 || i >= m->ncap))
+    sp_raise_cls("IndexError", sp_sprintf("index %lld out of matches", (long long)i));
+  return sp_MatchData_aref(m, i);
+}
 /* char offset of a byte position within source */
 sp_oint sp_md_char_off(sp_MatchData *m, int byteoff) {SP_GC_ROOT(m);
   if (byteoff < 0) return sp_oint_nil();
@@ -1518,6 +1526,7 @@ sp_oint sp_MatchData_byteend(sp_MatchData *m, sp_int i) {
   return sp_oint_of(m->caps[(i * 2) + 1]);
 }
 sp_IntArray *sp_MatchData_byteoffset(sp_MatchData *m, sp_int i) {SP_GC_ROOT(m);
+  sp_md_check_index(m, i);
   sp_IntArray *a = sp_IntArray_new();
   if (!m || i < 0 || i >= m->ncap || m->caps[i * 2] < 0) { sp_IntArray_push_nil(a); sp_IntArray_push_nil(a); return a; }
   sp_IntArray_push(a, m->caps[i * 2]);

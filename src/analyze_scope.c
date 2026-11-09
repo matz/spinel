@@ -863,13 +863,44 @@ static const char *resolve_alias_value(Compiler *c, int v) {
 /* If `cname` is a constant assigned a class value (resolve_alias_value),
    return the underlying class name so `class CONST` reopens that class.
    Returns NULL if `cname` is a plain new class name. */
-const char *resolve_class_alias(Compiler *c, const char *cname) {
+/* The first constant write of each key, in node order (cw_first): the two
+   readers below asked every write of the program at each question, a
+   rescan per constant read that made a program of many constants quadratic
+   (scale-test's splices, a constant per block: #11387). A write's key is
+   its string fields' (ckey, ckey_at, name: const_key_at), so the index
+   stands while the table's count and version do, which count every node
+   added and every string rewritten. */
+static struct { const NodeTable *nt; int cnt; unsigned ver; int cap; const char **key; int *id; } g_cwk;
+static unsigned cwk_slot(const char *k, int cap) { return sp_strhash(k) & (unsigned)(cap - 1); }
+static int cw_first(Compiler *c, const char *cname) {
   const NodeTable *nt = c->nt;
-  NT_FOREACH_KIND(nt, NK_ConstantWriteNode, id) {
-    const char *n = const_key_at(c, id);
-    if (n && sp_streq(n, cname)) return resolve_alias_value(c, nt_ref(nt, id, "value"));
+  if (!cname) return -1;
+  if (g_cwk.nt != nt || g_cwk.cnt != nt->count || g_cwk.ver != nt->version) {
+    int nw = 0;
+    NT_FOREACH_KIND(nt, NK_ConstantWriteNode, id) { (void)id; nw++; }
+    int cap = 16;
+    while (cap < 2 * nw + 2) cap *= 2;
+    free(g_cwk.key); free(g_cwk.id);
+    g_cwk.key = calloc((size_t)cap, sizeof *g_cwk.key);
+    g_cwk.id = malloc(sizeof *g_cwk.id * (size_t)cap);
+    if (!g_cwk.key || !g_cwk.id) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    g_cwk.cap = cap;
+    NT_FOREACH_KIND(nt, NK_ConstantWriteNode, id) {
+      const char *k = const_key_at(c, id);
+      if (!k) continue;
+      unsigned h = cwk_slot(k, cap);
+      while (g_cwk.key[h] && !sp_streq(g_cwk.key[h], k)) h = (h + 1) & (unsigned)(cap - 1);
+      if (!g_cwk.key[h]) { g_cwk.key[h] = k; g_cwk.id[h] = id; }   /* (the first in node order) */
+    }
+    g_cwk.nt = nt; g_cwk.cnt = nt->count; g_cwk.ver = nt->version;
   }
-  return NULL;
+  for (unsigned h = cwk_slot(cname, g_cwk.cap); g_cwk.key[h]; h = (h + 1) & (unsigned)(g_cwk.cap - 1))
+    if (sp_streq(g_cwk.key[h], cname)) return g_cwk.id[h];
+  return -1;
+}
+const char *resolve_class_alias(Compiler *c, const char *cname) {
+  int id = cw_first(c, cname);
+  return id >= 0 ? resolve_alias_value(c, nt_ref(c->nt, id, "value")) : NULL;
 }
 
 /* The constant `cname` is assigned from, when its write's value is a
@@ -878,14 +909,11 @@ const char *resolve_class_alias(Compiler *c, const char *cname) {
    knows, does not follow. NULL otherwise. */
 const char *const_alias_source(Compiler *c, const char *cname) {
   const NodeTable *nt = c->nt;
-  NT_FOREACH_KIND(nt, NK_ConstantWriteNode, id) {
-    const char *n = const_key_at(c, id);
-    if (!n || !sp_streq(n, cname)) continue;
-    int v = nt_ref(nt, id, "value");
-    NodeKind vk = v >= 0 ? nt_kind(nt, v) : NK_NONE;
-    return vk == NK_ConstantReadNode || vk == NK_ConstantPathNode ? const_key_at(c, v) : NULL;
-  }
-  return NULL;
+  int id = cw_first(c, cname);
+  if (id < 0) return NULL;
+  int v = nt_ref(nt, id, "value");
+  NodeKind vk = v >= 0 ? nt_kind(nt, v) : NK_NONE;
+  return vk == NK_ConstantReadNode || vk == NK_ConstantPathNode ? const_key_at(c, v) : NULL;
 }
 
 /* resolve_class_alias through a chain of aliases (`B = A`, `A = Shout`):

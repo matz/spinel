@@ -22492,7 +22492,11 @@ static void emit_user_exc_dispatch(Compiler *c, Buf *b) {
       int want_message = pass;
       buf_printf(b, "SP_UNUSED static sp_RbVal %s(sp_Exception *e){\n",
                  want_message ? "sp_user_exc_message_v" : "sp_user_exc_to_s_v");
-      buf_puts(b, "  if(!e)return sp_box_str((&(\"\\xff\")[1]));\n  const char *cls=e->cls_name;\n");
+      /* e is rooted for the whole dispatch: an arm reads the message's bytes,
+         which e owns, and boxes them (a fresh String's handle, an
+         allocation), and e may be a temp nothing else holds
+         (`E.new("j").message`) */
+      buf_puts(b, "  if(!e)return sp_box_str((&(\"\\xff\")[1]));\n  SP_GC_ROOT(e);\n  const char *cls=e->cls_name;\n");
       for (int i = 0; i < c->nclasses; i++) {
         if (!class_is_exc_subclass(c, i)) continue;
         int dcls = -1;
@@ -22517,7 +22521,7 @@ static void emit_user_exc_dispatch(Compiler *c, Buf *b) {
           Buf bx; memset(&bx, 0, sizeof bx);
           if (mret == TY_POLY) buf_puts(&bx, callx.p);
           else emit_boxed_text(c, mret, callx.p, &bx);
-          if (builds) buf_printf(&arm, "{ SP_GC_ROOT(e); %sreturn %s; }", pre.p ? pre.p : "", bx.p ? bx.p : "sp_box_nil()");
+          if (builds) buf_printf(&arm, "{ %sreturn %s; }", pre.p ? pre.p : "", bx.p ? bx.p : "sp_box_nil()");
           else buf_printf(&arm, "return %s;", bx.p ? bx.p : "sp_box_nil()");
           free(bx.p);
         }

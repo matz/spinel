@@ -20702,6 +20702,8 @@ static sp_Enumerator *sp_poly_cycle(sp_RbVal v) {
    Rational compares exactly against each bound, and a non-numeric value is
    never covered. */
 static sp_bool sp_range_cover_poly(sp_Range *r, sp_RbVal x) {
+  /* (nil..nil) covers every value */
+  if (r->nobeg && r->noend && !r->fe) return 1;
   if (x.tag == SP_TAG_INT) return sp_range_include(r, x.v.i);
   if (x.tag == SP_TAG_FLT) return sp_range_cover_f(r, x.v.f);
   if (x.tag == SP_TAG_BIGINT) return sp_bigint_sign((sp_Bigint *)x.v.p) > 0 ? (r->fe ? r->fend == HUGE_VAL : r->noend) : r->nobeg;

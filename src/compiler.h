@@ -189,6 +189,9 @@ typedef struct {
                        a copy that goes stale on the first reallocation. */
   int init_guarded; /* (consts) initialized via `CONST = Class.new(...)`: reads
                        during the init raise NameError (uninitialized constant) */
+  int nil_default_boxed; /* (params) a Time, Complex, Rational or Tms
+                       parameter boxed for its `= nil` default: it holds no
+                       Integer, so a Range of it stays boxed in promote mode */
   int rbs_seeded;   /* param type pinned from an --rbs advisory seed: the
                        fixpoint must not widen it (see apply_rbs_seeds) */
   int rbs_box_held; /* (params) a box reached the container seed while the

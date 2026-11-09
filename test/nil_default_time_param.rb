@@ -22,3 +22,9 @@ class K; def self.m(t = nil) = t.nil? ? "nil" : t.utc.to_s; end
 p K.m, K.m(Time.at(0))
 pr = proc { |t = nil| t.class }
 p pr.call, pr.call(Time.at(0))
+def rng(t = nil) = (t..Time.at(9)).cover?(Time.at(5))
+p rng(Time.at(3)), rng
+def rng2(a = nil, b = nil) = (a..b).cover?(Time.at(5))
+p rng2(Time.at(1), Time.at(9)), rng2(Time.at(6), Time.at(9)), rng2, rng2(nil, Time.at(9))
+def always(t = nil) = (t - Time.at(0)).to_i
+p always(Time.at(42))

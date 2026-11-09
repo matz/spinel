@@ -1791,11 +1791,39 @@ int repr_static_read_kind(NodeKind k) {
   return k == NK_GlobalVariableReadNode || k == NK_ConstantReadNode || k == NK_ConstantPathNode ||
          k == NK_ClassVariableReadNode;
 }
+/* The repr_static_share of a path read off a Class value
+   (const_path_on_class_value): the slots the class value can name all hold
+   the shared handle, so the read is the handle of whichever class it
+   carries. The slots are the constants keyed "<...>__NM" and a top-level
+   NM, as emit_constant_value's switch lists them. (Each ask lists the
+   constants and allocates; the shape is rare.) */
+static int const_class_value_share(const Compiler *c, int id) {
+  Compiler *mc = (Compiler *)c;
+  const char *nm = const_key_at(mc, id);
+  int *cands, n = comp_const_tail_cands(mc, nm, &cands), all = 1, seen = 0;
+  for (int i = 0; i < n && all; i++, seen++) {
+    Repr r = repr_of_slot(c, &c->consts[cands[i]]);
+    all = r.share || (c->n_cext_extensions && r.handle);
+  }
+  free(cands);
+  LocalVar *top = comp_const(mc, nm);
+  if (top && all) {
+    Repr r = repr_of_slot(c, top);
+    all = r.share || (c->n_cext_extensions && r.handle);
+    seen++;
+  }
+  return all && seen > 0;
+}
 /* repr_of's `share` for a read or write node of a global, a constant or a
    class variable: its slot's (only the rule makes one the handle) */
 int repr_static_share(const Compiler *c, int node) {
   HolderRef h;
   if (node < 0 || !holder_static_node(nt_kind(c->nt, node))) return 0;
+  /* `k::BUF` off a Class value has no one holder: it is the handle when
+     every slot its class can name is */
+  if (nt_kind(c->nt, node) == NK_ConstantPathNode &&
+      const_path_on_class_value(c, node, repr_of(c, nt_ref(c->nt, node, "parent")).as_ty))
+    return const_class_value_share(c, node);
   return holder_of_node(c, node, &h) && (h.r.share || (c->n_cext_extensions && h.r.handle));
 }
 

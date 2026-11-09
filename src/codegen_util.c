@@ -4396,6 +4396,22 @@ static int strbuf_slot_into(Compiler *c, int recv, Buf *b) {
     free(rb2.p);
     return fit;
   }
+  /* a constant read off a Class value (`k::BUF`) holding the handle: the
+     slot of whichever class the value carries (emit_constant_value's
+     switch), read through its address */
+  if (recv >= 0 && nt_kind(c->nt, recv) == NK_ConstantPathNode &&
+      const_path_on_class_value(c, recv, repr_of(c, nt_ref(c->nt, recv, "parent")).as_ty) &&
+      repr_of(c, recv).kind == RK_STRBUF) {
+    /* inside the shim over it, the read is its plain shadow */
+    if (sb_shadowed_reader(recv)) return 0;
+    if (!b) return 1;
+    Buf sb; memset(&sb, 0, sizeof sb);
+    emit_constant_slot(c, recv, &sb);
+    int fit = sb.p != NULL;
+    if (fit) buf_printf(b, "(*%s)", sb.p);
+    free(sb.p);
+    return fit;
+  }
   /* a global or a constant holding the handle (--share-strings, #6765) */
   if ((1) && recv >= 0 && repr_static_read_kind(nt_kind(c->nt, recv))) {
     /* inside the shim over it, the read is its plain shadow */

@@ -13,9 +13,8 @@
 # bin/spinel, the plain compiler, and its C is compiled with the same
 # flags, since most of the runtime is spinel_rt.h's inline code in the
 # program's own translation unit, then linked against those objects and
-# run three times: the default build; --share-strings; and --share-strings
-# with SPINEL_GC_STRESS=2, which collects at every allocation and poisons
-# what dies.
+# run twice: as it is; and with SPINEL_GC_STRESS=2, which collects at every
+# allocation and poisons what dies.
 #
 # A run is made as `make test` makes it (RUN_ONE_TEST in the Makefile): from
 # the repository root, with the program's .args on its command line and its
@@ -115,29 +114,20 @@ if [ "${1-}" = "--one" ]; then
     fi
     rm -f "$d.$r.out" "$d.$r.err"
   }
-  for b in d s; do
-    flag=""
-    [ "$b" = s ] && flag=--share-strings
-    if ! "$RT_SAN_SPINEL" $flag -c --no-line-map "$f" -o "$d.$b.c" > "$d.$b.cerr" 2>&1; then
-      echo "$b $f: $(tail -n 1 "$d.$b.cerr")" > "$d.$b.left"
-      rm -f "$d.$b.c" "$d.$b.cerr"
-      continue
-    fi
-    rm -f "$d.$b.cerr"
-    if ! build "$d.$b.c" "$d.$b.bin"; then
-      { echo "$b $f"; cat "$d.$b.bin.log"; } > "$d.$b.nobuild"
-      rm -f "$d.$b.bin.log"
-      continue
-    fi
-    rm -f "$d.$b.bin.log"
-    if [ "$b" = d ]; then
-      run "$d.d.bin" d ""
+  if ! "$RT_SAN_SPINEL" -c --no-line-map "$f" -o "$d.d.c" > "$d.d.cerr" 2>&1; then
+    echo "d $f: $(tail -n 1 "$d.d.cerr")" > "$d.d.left"
+    rm -f "$d.d.cerr"
+  else
+    rm -f "$d.d.cerr"
+    if ! build "$d.d.c" "$d.d.bin"; then
+      { echo "d $f"; cat "$d.d.bin.log"; } > "$d.d.nobuild"
     else
-      run "$d.s.bin" s0 0
-      run "$d.s.bin" s2 2
+      run "$d.d.bin" d ""
+      run "$d.d.bin" g2 2
     fi
-  done
-  rm -f "$d.d.c" "$d.s.c" "$d.d.bin" "$d.s.bin" "$d.d.bin.o" "$d.s.bin.o"
+    rm -f "$d.d.bin.log"
+  fi
+  rm -f "$d.d.c" "$d.d.bin" "$d.d.bin.o"
   : > "$d.ran"
   exit 0
 fi
@@ -210,8 +200,7 @@ ran=$(find "$LOGS" -name '*.ran' | wc -l | tr -d ' ')
 runname() {
   case $1 in
     d) echo default ;;
-    s0) echo "--share-strings" ;;
-    s2) echo "--share-strings, SPINEL_GC_STRESS=2" ;;
+    g2) echo "SPINEL_GC_STRESS=2" ;;
   esac
 }
 count() { find "$LOGS" -name "$1" | wc -l | tr -d ' '; }
@@ -288,7 +277,7 @@ i=0
 while IFS= read -r f; do
   i=$((i + 1))
   key=$(printf %06d "$i")
-  for r in d s0 s2; do
+  for r in d g2; do
     log=$LOGS/$key.$r.report
     [ -f "$log" ] || continue
     sites_of "$log" | while IFS="$TAB" read -r site what tag; do

@@ -35,7 +35,7 @@ workers = [jobs, files.size].min.times.map do
     loop do
       file = queue.pop(true)
       Dir.mktmpdir("spinel-share-verify-") do |tmp|
-        env = { "SPINEL_SHARE_STRINGS" => "1", "TMPDIR" => tmp, "SPINEL_GC_STRESS" => "0" }
+        env = { "TMPDIR" => tmp, "SPINEL_GC_STRESS" => "0" }
         checked = File.join(tmp, "checked.c")
         plain = File.join(tmp, "plain.c")
         args = ["-c", "--no-line-map", file, "-o"]

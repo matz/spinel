@@ -343,7 +343,7 @@ void topup_forwarding_arity(Compiler *c) {
   }
 }
 
-/* The edges super_value_used climbs: the conditionals, a rescue modifier,
+/* The edges node_value_used_in_body climbs: the conditionals, a rescue modifier,
    a begin and its rescue clauses, and the one value of a `return`. A
    begin's body is a value only when no else follows it. Not `||` or `&&`:
    the C of an operator whose operand is the void call of initialize does
@@ -370,8 +370,10 @@ static int super_modifier_in_expression(const NodeTable *nt, const int *par, int
 /* Is node v's value used? A statement list, a branch, a begin and a rescue
    pass it on to whatever holds them (vp_climb). A statement before a list's
    last, a loop body, an ensure clause, a method body and the block of an
-   iterator that ignores its block's value throw it away. */
-static int super_value_used(const NodeTable *nt, const int *par, int v) {
+   iterator that ignores its block's value throw it away, and so does a
+   defined? or a respond_to? probe that asks about it without running it: a method's own last
+   value is not followed to its callers. */
+int node_value_used_in_body(const NodeTable *nt, const int *par, int v) {
   VpUp up;
   VpUpKind ended = vp_climb(nt, par, v, SUPER_CLIMB, &up);
   if (super_modifier_in_expression(nt, par, v, up.node, ended)) return 1;
@@ -398,7 +400,15 @@ static int super_value_used(const NodeTable *nt, const int *par, int v) {
   int p = up.parent;
   switch (nt_kind(nt, p)) {
   case NK_DefNode:
+  case NK_DefinedNode:   /* defined?(x) asks about x and never runs it */
     return 0;
+  case NK_CallNode: {   /* ...nor does respond_to? run the probes it keeps (desugar_respond_to_probe) */
+    int pn = 0;
+    const int *pr = nt_arr(nt, p, "rt_probes", &pn);
+    for (int i = 0; pr && i < pn; i++)
+      if (pr[i] == v) return 0;
+    return 1;
+  }
   case NK_BlockNode: {
     int call = vp_up_block_call(nt, par, &up);
     const char *cn = call >= 0 ? nt_str(nt, call, "name") : NULL;
@@ -485,7 +495,7 @@ void refuse_super_init_value(Compiler *c) {
           }
         }
       }
-      if (!super_value_used(nt, par, v)) continue;
+      if (!node_value_used_in_body(nt, par, v)) continue;
       unsupported_feature(c, v, "unsupported value of `super` in initialize: initialize is compiled to "
                                 "return nothing, so the parent's last value is not there to answer "
                                 "(see docs/limitations.md)");
@@ -3184,20 +3194,23 @@ static void class_note_prepended_mod(Compiler *c, int ci, int mod_ci) {
 
 /* Copy the method shape of src into the clone dst: its yield flag, its
    parameter layout (names, defaults, required count, rest/post/kwrest slots),
-   its &block, and the define_method loop substitution. Runs after the cloned
-   body is walked; the parameters are interned as param locals so
+   its &block, and the define_method loop substitution. Runs once the clone
+   exists, before its body is walked (a proc-form clone's) or after (an
+   include's); the parameters are interned as param locals so
    infer_param_types can update their types. The copies an include, a
-   prepend, an extend, a class-method specialization and an alias make take
-   the whole shape from here: listing the fields by hand, they dropped the
-   loop substitution, and the body read the loop variable as an unset local
-   (nil) instead of the literal. (A yielding method's proc-form clone,
-   make_yield_proc_forms, still lists its own.) */
-static void scope_copy_method_shape(Scope *dst, Scope *src) {
+   prepend, an extend, a class-method specialization, an alias and a
+   yielding method's proc-form clone make take the whole shape from here:
+   listing the fields by hand, they dropped the loop substitution, and the
+   body read the loop variable as an unset local (nil) instead of the
+   literal. */
+void scope_copy_method_shape(Scope *dst, Scope *src) {
   dst->yields = src->yields;
   dst->nrequired = src->nrequired;
   dst->rest_idx = src->rest_idx;
   dst->kwrest_idx = src->kwrest_idx;
   dst->accessor_of = src->accessor_of;
+  dst->super_of = src->super_of;
+  dst->alias_of = src->alias_of ? strdup(src->alias_of) : NULL;
   /* A copied &block has the same Proc-or-NULL ABI as the original. It is
      outside pnames, so copying the positional/keyword locals does not
      register it. Seed it before inference; otherwise the body walk leaves an
@@ -3252,9 +3265,49 @@ static void scope_copy_method_shape(Scope *dst, Scope *src) {
   }
 }
 
+/* A copy of instance method scope ms in class newci under the name nm: its
+   body cloned and walked under newci, so implicit-self calls (and ivar
+   reads) re-attribute to it, not to the class the method is in (a shared
+   body would resolve `name` against that one), with the original's shape
+   and defaults. The new scope's index. */
+static int scope_copy_to_class(Compiler *c, int ms, int newci, const char *nm) {
+  const NodeTable *nt = c->nt;
+  Scope *src = &c->scopes[ms];
+  Scope *dst = comp_scope_new(c, nm, src->def_node);
+  int dst_idx = (int)(dst - c->scopes);
+  src = &c->scopes[ms];   /* comp_scope_new may realloc */
+  comp_scope_copy_shadow(c, dst_idx, ms, NULL);
+  if (src->body >= 0) {
+    int nb = nt_clone_subtree((NodeTable *)nt, src->body);
+    if (nb >= 0) {
+      comp_grow_node_arrays(c);
+      src = &c->scopes[ms]; dst = &c->scopes[dst_idx];
+      { dst->body = nb; comp_touch_scope(dst->idx); }
+      walk_scope(c, nb, dst_idx, newci);
+    }
+    else { dst->body = src->body; comp_touch_scope(dst->idx); }
+  }
+  { dst->class_id = newci; comp_touch_scope(dst->idx); }
+  { dst->is_cmethod = 0; comp_touch_scope(dst->idx); }
+  { dst->reachable = src->reachable; comp_touch_scope(dst->idx); }
+  scope_copy_method_shape(dst, src);
+  /* The copy's parameter locals carry the original's types. A method
+     that just hands its parameter to `super` reads none of them
+     (`def render(text) = "[#{super}]"`), so nothing in the cloned body
+     types them; the caller then passed the argument's own type, which the
+     emitted signature, typed poly, did not accept (#3951). */
+  for (int p = 0; p < dst->nparams; p++) {
+    if (!dst->pnames[p]) continue;
+    LocalVar *sp_lv = scope_local(src, dst->pnames[p]);
+    LocalVar *dp = scope_local(dst, dst->pnames[p]);
+    if (sp_lv && dp && dp->type == TY_UNKNOWN) lv_set_type(dp, sp_lv->type);
+  }
+  scope_own_defaults(c, dst_idx);
+  return dst_idx;
+}
+
 /* Copy module `mod_ci`'s instance methods onto subclass `newci` (obj.extend). */
 static void sg_transplant_module(Compiler *c, int mod_ci, int newci) {
-  const NodeTable *nt = c->nt;
   /* Record the membership the way `include` does, so the extended object
      answers is_a?(Mod) -- it reported false, because only the methods were
      transplanted and nothing said the synthesized subclass was a member
@@ -3265,42 +3318,12 @@ static void sg_transplant_module(Compiler *c, int mod_ci, int newci) {
     Scope *src = &c->scopes[ms];
     if (src->class_id != mod_ci || src->is_cmethod || !src->name) continue;
     if (comp_method_in_class(c, newci, src->name) >= 0) continue;
-    Scope *dst = comp_scope_new(c, src->name, src->def_node);
-    int dst_idx = (int)(dst - c->scopes);
-    src = &c->scopes[ms];   /* comp_scope_new may realloc */
-    comp_scope_copy_shadow(c, dst_idx, ms, NULL);
-    /* Clone + re-walk the module body under the subclass so implicit-self
-       calls (and ivar reads) re-attribute to it, not the module -- exactly
-       what `include` does (a shared body would resolve `name` against the
-       module). */
-    if (src->body >= 0) {
-      int nb = nt_clone_subtree((NodeTable *)nt, src->body);
-      if (nb >= 0) {
-        comp_grow_node_arrays(c);
-        src = &c->scopes[ms]; dst = &c->scopes[dst_idx];
-        { dst->body = nb; comp_touch_scope(dst->idx); }
-        walk_scope(c, nb, dst_idx, newci);
-      }
-      else { dst->body = src->body; comp_touch_scope(dst->idx); }
-    }
-    { dst->class_id = newci; comp_touch_scope(dst->idx); }
-    { dst->is_cmethod = 0; comp_touch_scope(dst->idx); }    /* an instance method of the singleton subclass */
-    { dst->reachable = src->reachable; comp_touch_scope(dst->idx); }
+    char *nm = strdup(src->name);
+    int dst_idx = scope_copy_to_class(c, ms, newci, nm);
+    free(nm);
+    src = &c->scopes[ms];
     src->is_transplanted_source = 1;   /* the module original is copied away */
-    { dst->origin_module_ci = mod_ci + 1; comp_touch_scope(dst->idx); }  /* #owner names the module (#3662) */
-    scope_copy_method_shape(dst, src);
-    /* The copy's parameter locals carry the original's types. A method
-       that just hands its parameter to `super` reads none of them
-       (`def render(text) = "[#{super}]"`), so nothing in the cloned body
-       types them; the caller then passed the argument's own type, which the
-       emitted signature, typed poly, did not accept (#3951). */
-    for (int p = 0; p < dst->nparams; p++) {
-      if (!dst->pnames[p]) continue;
-      LocalVar *sp_lv = scope_local(src, dst->pnames[p]);
-      LocalVar *dp = scope_local(dst, dst->pnames[p]);
-      if (sp_lv && dp && dp->type == TY_UNKNOWN) lv_set_type(dp, sp_lv->type);
-    }
-    scope_own_defaults(c, dst_idx);
+    { c->scopes[dst_idx].origin_module_ci = mod_ci + 1; comp_touch_scope(c->scopes[dst_idx].idx); }  /* #owner names the module (#3662) */
   }
 }
 
@@ -4732,24 +4755,61 @@ static const LrDef *alias_accessor_version(Compiler *c, const ElabEntry *e) {
    accessor. The def keeps the accessor's own name, which is the alias's
    #original_name; its scope is the alias's, linked to the alias's version
    (elab_attr_scope) for the call plan (ct_def_version). 0 where the walk
-   made no method, which alias_register then binds. */
-static int alias_accessor_method(Compiler *c, const ElabEntry *e, const LrDef *d) {
+   made no method, which alias_register then binds. A Struct or Data member
+   is the class's own writer, no attr_* call of the program's: at is the
+   alias statement and the method has no accessor_of (the member's store is
+   `@a = value` there as well). */
+static int alias_accessor_method(Compiler *c, const ElabEntry *e, int w, int at, int accessor) {
   NodeTable *nt = (NodeTable *)c->nt;
-  int w = d->kind == LR_WRITER, s = c->nscopes;
+  int s = c->nscopes;
   char base[256], ivname[260];
   if (w ? !setter_base_name(e->target, base, sizeof base) : snprintf(base, sizeof base, "%s", e->target) >= (int)sizeof base) return 0;
-  int def = attr_as_def(nt, d->node, base, w);
+  int def = attr_as_def(nt, at, base, w);
   if (def < 0) return 0;
   comp_grow_node_arrays(c);
   walk_scope(c, def, c->nscope[e->node], e->cls);
   if (s >= c->nscopes || c->scopes[s].def_node != def) return 0;
   free(c->scopes[s].name);
-  { c->scopes[s].name = strdup(e->name); c->scopes[s].accessor_of = d->node + 1; comp_touch_scope(c->scopes[s].idx); }
+  { c->scopes[s].name = strdup(e->name); c->scopes[s].accessor_of = accessor; comp_touch_scope(c->scopes[s].idx); }
   snprintf(ivname, sizeof ivname, "@%s", base);
   comp_ivar_intern(&c->classes[e->cls], ivname);
   elab_attr_scope(c, e, s);
   return 1;
 }
+/* The scope of the ancestor class's def an instance alias e names at its
+   point, found through the record the way ct_def_version follows it (past
+   the aliases made on the way, each at its own point); -1 for any other
+   target: the class's own def, a module's, a builtin's, a version that
+   may not have run, or an initialize, which is compiled to answer nothing
+   (scope_is_initialize): a copy of it would answer nothing too, where CRuby
+   answers its last value, so its alias is bound by name, as it was. Asked before any method is made, as
+   alias_accessor_version is. */
+static int alias_inherited_def(Compiler *c, const ElabEntry *e) {
+  LoadPoint p = elab_point_of(c, e->node);
+  const LrDef *d = NULL;
+  const char *t = e->target;
+  int cls = e->cls;
+  /* (a def of the alias's name later in the class stands newest by name where
+     the copy made now would: the alias is bound by name there, until that def) */
+  if (alias_def_after(c, e->cls, e->name, e->node, 0) >= 0) return -1;
+  for (int hop = 0; !e->sg && p.region >= 0 && hop < 32; hop++) {
+    if (elab_method_at(c, cls, t, 0, p, &d) != ELAB_YES || !d || d->may || d->unplaced) return -1;
+    if (d->kind != LR_ALIAS) break;
+    if (!d->target) return -1;
+    p = elab_point_of(c, d->node);
+    cls = c->node_cbody[d->node];
+    t = d->target;
+    if (cls < 0) return -1;
+  }
+  if (!d || d->kind != LR_DEF) return -1;
+  int q = c->node_cbody[d->node], si = elab_def_scope_of(c, d->node);
+  if (q < 0 || q == e->cls || si <= 0 ||
+      c->scopes[si].class_id != q || c->scopes[si].is_cmethod || c->scopes[si].def_node != d->node ||
+      scope_is_initialize(&c->scopes[si])) return -1;
+  return si;
+}
+
+static int alias_writer_unresolved(Compiler *c, const ElabEntry *e);
 
 /* Does an entry after a[i] on its class side declare the alias's name again
    (an attr that does replaces the alias, as a later definition does in
@@ -4767,23 +4827,107 @@ static int alias_replaced_later(const ElabEntry *a, int n, int i) {
    the arm a constant condition takes. An attr that declares the alias's
    name later on that class side replaces it, as the later definition does
    in CRuby. An alias of an accessor is a method of its own
-   (alias_accessor_method); binding any other is alias_register's. */
+   (alias_accessor_method), and so is an alias of an ancestor class's def
+   (register_alias_methods, once the classes have their parents); binding
+   any other is alias_register's. */
 void register_aliases(Compiler *c) {
   int n = 0, tl = -1;
   ElabEntry *a = elab_entries(c, 1u << LR_ALIAS | 1u << LR_READER | 1u << LR_WRITER, &n);
   const LrDef **acc = calloc((size_t)(n ? n : 1), sizeof *acc);
-  if (!acc) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  unsigned char *inh = calloc((size_t)(n ? n : 1), 1);
+  if (!acc || !inh) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  for (int i = 0; i < n; i++) {
+    if (a[i].kind != LR_ALIAS || !a[i].target || a[i].cls < 0 || alias_replaced_later(a, n, i)) continue;
+    acc[i] = alias_accessor_version(c, &a[i]);
+    inh[i] = !acc[i] && (alias_inherited_def(c, &a[i]) >= 0 || alias_writer_unresolved(c, &a[i]));
+  }
   for (int i = 0; i < n; i++)
-    if (a[i].kind == LR_ALIAS && a[i].target && a[i].cls >= 0 && !alias_replaced_later(a, n, i)) acc[i] = alias_accessor_version(c, &a[i]);
-  for (int i = 0; i < n; i++)
-    if (acc[i] && !alias_accessor_method(c, &a[i], acc[i])) acc[i] = NULL;
+    if (acc[i] && !alias_accessor_method(c, &a[i], acc[i]->kind == LR_WRITER, acc[i]->node, acc[i]->node + 1)) acc[i] = NULL;
   for (int top = 0; top < 2; top++)
     for (int i = 0; i < n; i++) {
-      if (a[i].kind != LR_ALIAS || !a[i].target || (a[i].cls < 0) != top || acc[i] || alias_replaced_later(a, n, i)) continue;
+      if (a[i].kind != LR_ALIAS || !a[i].target || (a[i].cls < 0) != top || acc[i] || inh[i] || alias_replaced_later(a, n, i)) continue;
       if (top && tl < 0) tl = comp_toplevel_class_make(c);
       alias_register(c, &c->classes[top ? tl : a[i].cls], a[i].name, a[i].target, a[i].node, a[i].sg);
     }
   free(acc);
+  free(inh);
+  free(a);
+}
+
+/* Does instance alias e name a writer that the record has no version of at
+   the alias's point: the writer of a Struct or Data member, which the
+   classes' parents may say (alias_of_member_writer), or a builtin's? The
+   alias is bound once the classes have their parents
+   (register_alias_methods). */
+static int alias_writer_unresolved(Compiler *c, const ElabEntry *e) {
+  char base[256];
+  const LrDef *d = NULL;
+  LoadPoint p;
+  if (e->kind != LR_ALIAS || !e->target || e->sg || e->cls < 0 || !setter_base_name(e->target, base, sizeof base)) return 0;
+  p = elab_point_of(c, e->node);
+  return p.region < 0 || (elab_method_at(c, e->cls, e->target, 0, p, &d) != ELAB_YES && !d);
+}
+
+/* ...and does the class's chain give it a Struct or Data member's writer? */
+static int alias_of_member_writer(Compiler *c, const ElabEntry *e) {
+  char base[256];
+  int dc = -1;
+  return setter_base_name(e->target, base, sizeof base) && comp_writer_in_chain(c, e->cls, base, &dc) && dc >= 0 &&
+         (c->classes[dc].is_struct || c->classes[dc].is_data);
+}
+
+/* An alias of an ancestor class's def (alias_inherited_def) is a method of
+   the alias's class made of that def: a copy of its scope under the
+   alias's name, the way an include puts a module's methods in its
+   includer, so the class has the method the alias is, which a call through
+   self from an inherited method reaches by dispatch where a name mapping
+   met the ancestor's own. The scope keeps the def, whose name is the
+   alias's #original_name, and is linked to the alias's version for the call
+   plan (ct_def_version). Run once the classes have their parents, which the
+   copy's body is walked under (an ivar it names is the ancestor's). A body
+   that calls super keeps its owner's: the copy's super is that of the
+   method the def is in the alias's class's ancestry (Scope.super_of). An
+   alias in a module is a method of the module's table, which an include
+   copies, so the modules' go first (modules), before the includes; the
+   copy of a module's method has no ancestry yet for a super to start from,
+   and its alias is bound by name. */
+void register_alias_methods(Compiler *c, int modules) {
+  int n = 0;
+  ElabEntry *a = elab_entries(c, 1u << LR_ALIAS | 1u << LR_READER | 1u << LR_WRITER, &n);
+  int *src = malloc(sizeof *src * (size_t)(n ? n : 1));
+  if (!src) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  for (int i = 0; i < n; i++)
+    src[i] = a[i].kind == LR_ALIAS && a[i].target && a[i].cls >= 0 && !alias_replaced_later(a, n, i) &&
+             !comp_class_is_module(c, &c->classes[a[i].cls]) == !modules ? alias_inherited_def(c, &a[i]) : -1;
+  int copied = 0;
+  for (int i = 0; i < n; i++) {
+    if (src[i] < 0 && a[i].kind == LR_ALIAS && a[i].target && a[i].cls >= 0 && !alias_replaced_later(a, n, i) &&
+        !comp_class_is_module(c, &c->classes[a[i].cls]) == !modules && alias_writer_unresolved(c, &a[i])) {
+      /* a member's store is the method; any other writer, or a failure to make it, is bound by name as it was */
+      if (!modules && alias_of_member_writer(c, &a[i]) && alias_accessor_method(c, &a[i], 1, a[i].node, 0)) copied = 1;
+      else alias_register(c, &c->classes[a[i].cls], a[i].name, a[i].target, a[i].node, a[i].sg);
+      continue;
+    }
+    if (src[i] < 0) continue;
+    if (modules && scope_calls_super(c, src[i])) {
+      alias_register(c, &c->classes[a[i].cls], a[i].name, a[i].target, a[i].node, a[i].sg);
+      continue;
+    }
+    int di = scope_copy_to_class(c, src[i], a[i].cls, a[i].name);
+    c->scopes[di].alias_of = strdup(comp_scope_user_name(&c->scopes[src[i]]));
+    if (scope_calls_super(c, src[i])) {
+      /* the def's method in the class's ancestry: a prepend's copy of it,
+         else a mixin's or the owner's own */
+      int dn = c->scopes[src[i]].def_node, hold = comp_shadowed_body(c, a[i].cls, 0, dn, NULL);
+      if (hold < 0) hold = comp_method_version(c, a[i].cls, c->scopes[src[i]].name, 0, dn, NULL);
+      c->scopes[di].super_of = (hold >= 0 ? hold : src[i]) + 1;
+    }
+    elab_attr_scope(c, &a[i], di);
+    copied = 1;
+  }
+  /* the copies' locals and ivars (register_locals ran before them) */
+  if (copied) register_locals(c);
+  free(src);
   free(a);
 }
 
@@ -7163,13 +7307,9 @@ static void inherited_alias_refuse_later_def(Compiler *c, int ci, int a, int p) 
       Scope *sc = &c->scopes[si];
       if (sc->class_id != q || !sc->is_cmethod != !sg || !sc->name || !sp_streq(sc->name, cls->alias_old[a]) ||
           sc->def_node < 0 || prog_cmp_run(c, sc->def_node, at, at, "the alias reading") <= 0) continue;
-      /* the hidden alias of a forwarder (desugar_inherited_aliases) by
-         the name the program wrote */
-      const char *nw = cls->alias_new[a], *hash = strchr(nw, '#');
-      int nl = hash ? (int)(hash - nw) : (int)strlen(nw);
       char msg[512];
-      snprintf(msg, sizeof msg, "%s%s%.*s: alias of an inherited method that %s defines again after it is not supported; "
-               "see docs/limitations.md", cls->name, sg ? "." : "#", nl, nw, c->classes[q].name);
+      snprintf(msg, sizeof msg, "%s%s%s: alias of an inherited method that %s defines again after it is not supported; "
+               "see docs/limitations.md", cls->name, sg ? "." : "#", cls->alias_new[a], c->classes[q].name);
       unsupported_feature(c, at, msg);
       return;
     }

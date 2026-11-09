@@ -1,10 +1,9 @@
 # Compiled with --defer-refusals: a BasicObject subclass aliasing object_id
-# to a method the compiler cannot read (`alias_method :object_id, :__id__`)
-# is refused where the alias stands, and types every poly receiver's
-# `object_id` as a box. A `public_send(key)` on a poly self then lists an
-# object_id arm among its methods, whose builtin id is boxed for the slot
-# the send answers into.
-# spinel: defer-refusals: 2:10 "b" done
+# to __id__ types every poly receiver's `object_id` as a box. A
+# `public_send(key)` on a poly self then lists an object_id arm among its
+# methods, whose builtin id is boxed for the slot the send answers into.
+# The one refusal left is the ruby2_keywords one further down.
+# spinel: defer-refusals: 1:10 "b" done
 class Proxy < BasicObject
   def initialize(target)
     @target = target

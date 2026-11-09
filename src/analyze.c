@@ -36101,28 +36101,16 @@ int make_yield_proc_forms(Compiler *c) {
     { dst->is_cmethod = src->is_cmethod; comp_touch_scope(dst->idx); }
     { dst->body = nb; comp_touch_scope(dst->idx); }
     { dst->reachable = 1; comp_touch_scope(dst->idx); }
+    /* the method's shape, the posts after a rest and the rest of it included
+       (scope_copy_method_shape), but for the yield: the clone takes a proc */
+    scope_copy_method_shape(dst, src);
     dst->yields = 0;
-    { dst->nparams = src->nparams; comp_touch_scope(dst->idx); }
-    dst->nrequired = src->nrequired;
-    dst->rest_idx = src->rest_idx;
-    /* the posts too: without them the clone's layout took a rest's post for
-       a keyword, bound by name */
-    dst->npost_rest = src->npost_rest;
-    dst->kwrest_idx = src->kwrest_idx;
-    if (src->nparams > 0) {
-      dst->pnames = (char **)calloc((size_t)src->nparams, sizeof(char *));
-      dst->pdefault = (int *)malloc(sizeof(int) * (size_t)src->nparams);
-      if (!dst->pnames || !dst->pdefault) { { dst->nparams = 0; comp_touch_scope(dst->idx); } }
-      else for (int p = 0; p < src->nparams; p++) {
-        dst->pnames[p] = src->pnames[p] ? strdup(src->pnames[p]) : NULL;
-        dst->pdefault[p] = src->pdefault[p];
-      }
-    }
     /* A method that already declares `&blk` binds its block under THAT name,
        and the cloned body reads it under that name. Renaming the parameter to
        the synthetic one left the body reading a `blk` that nothing assigns --
        a nil proc call, silently answering the slot default. Only a method with
        no declared block param needs a name invented for it. */
+    free(dst->blk_param);
     dst->blk_param = (src->blk_param && src->blk_param[0]) ? strdup(src->blk_param)
                                                            : strdup("__pf_blk");
     dst->is_proc_form = 1;
@@ -50704,7 +50692,7 @@ static void an_phase_desugar_register(Compiler *c) {
   lower_run(c, &lc, LW_ALIAS_METHOD_STRING_NAMES); /* alias_method "k", "y" -> alias_method :k, :y */
   lower_run(c, &lc, LW_ALIAS_METHOD_VALUES);       /* r = alias_method :a, :b -> alias_method :a, :b; r = :a */
   AN_STEP_V("desugar_send_aliases", desugar_send_aliases(c));                   /* alias send_action send -> def send_action(*a, **k, &b) = __send__(*a, **k, &b) */
-  AN_STEP_V("desugar_inherited_aliases", desugar_inherited_aliases(c));         /* alias_method :next, :inherited_m -> a forwarding def */
+  AN_STEP_V("desugar_inherited_aliases", desugar_inherited_aliases(c));         /* alias_method :next, :builtin_m on a chain rooted at Array, Hash or String -> a forwarding def, until such an alias binds from the record */
   AN_STEP_V("desugar_readers_over_inherited_defs", desugar_readers_over_inherited_defs(c)); /* def r in Base; attr_reader :r in Sub < Base -> Sub: def r = @r */
   lower_run(c, &lc, LW_REASSIGNED_BLOCK_PARAMS);   /* |p| p = other -> |p__bpin| p = p__bpin; p = other */
   AN_STEP_V("desugar_instance_eval_defs", desugar_instance_eval_defs(c));         /* K.instance_eval { def m } -> K.class_eval { def K.m } */
@@ -50920,6 +50908,7 @@ static void an_phase_class_structure(Compiler *c) {
   inherit_members(c);
   reject_dynamic_mixin_args(c);
   AN_STEP_V("desugar_module_prepends", desugar_module_prepends(c));
+  register_alias_methods(c, 1);   /* ...a module's, before the includes copy its methods */
   AN_STEP_V("register_includes", register_includes(c));
   register_include_attrs(c);
   AN_STEP_V("register_extends", register_extends(c));
@@ -50932,6 +50921,7 @@ static void an_phase_class_structure(Compiler *c) {
   AN_STEP_V("desugar_reader_index_write", desugar_reader_index_write(c));  /* all[k] = v through a reader of @all -> (all; @all[k] = v) */
   /* again, now that modules have put their methods in: an alias can take an
      inherited method an ancestor got from one */
+  register_alias_methods(c, 0);   /* alias nw od, od an ancestor class's def -> the class's own method nw */
   resolve_inherited_aliases(c);
   settle_object_builtin_aliases(c);   /* alias original_dup dup: the builtin's, or an ancestor's */
   AN_STEP_V("settle_mixin_aliases", settle_mixin_aliases(c));            /* include A; alias_method :b, :a; include B: A's a */

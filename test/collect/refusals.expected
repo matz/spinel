@@ -4,6 +4,10 @@ spinel: 1 refusal, nothing written
 == test/collect/gap_inside_capturing_proc.rb [promote] rc=1
 spinel: test/collect/gap_inside_capturing_proc.rb:19: unsupported class variable read (no class scope): node N (ClassVariableReadNode)
 spinel: 1 refusal, nothing written
+== test/reject/alias_of_initialize_value.rb [default] rc=1
+spinel: test/reject/alias_of_initialize_value.rb:13: unsupported value of a call of an alias of initialize: initialize is compiled to return nothing, so its last value is not there to answer (see docs/limitations.md)
+== test/reject/alias_of_initialize_value.rb [promote] rc=1
+spinel: test/reject/alias_of_initialize_value.rb:13: unsupported value of a call of an alias of initialize: initialize is compiled to return nothing, so its last value is not there to answer (see docs/limitations.md)
 == test/reject/alias_rebinds_after_class_body_call.rb [default] rc=1
 spinel: test/reject/alias_rebinds_after_class_body_call.rb:8: `a` is called in the class body before an alias rebinds it: an alias binds for the whole program here, so the call would run the aliased body, not the `def a` Ruby runs at that point. Call it after the alias, or give the alias another name
 == test/reject/alias_rebinds_after_class_body_call.rb [promote] rc=1
@@ -952,10 +956,6 @@ spinel: test/reject/include_module_from_expression.rb:9: `include` of a module n
 spinel: test/reject/included_hook_return_in_define_method_args.rb:9: Module#define_method in a method body is supported only for a method the class does not answer yet: it is defined from the start, not when that method runs (see docs/limitations.md)
 == test/reject/included_hook_return_in_define_method_args.rb [promote] rc=1
 spinel: test/reject/included_hook_return_in_define_method_args.rb:9: Module#define_method in a method body is supported only for a method the class does not answer yet: it is defined from the start, not when that method runs (see docs/limitations.md)
-== test/reject/inherited_alias_later_redefined.rb [default] rc=1
-spinel: test/reject/inherited_alias_later_redefined.rb:9: D#o: alias of an inherited method that P defines again after it is not supported; see docs/limitations.md
-== test/reject/inherited_alias_later_redefined.rb [promote] rc=1
-spinel: test/reject/inherited_alias_later_redefined.rb:9: D#o: alias of an inherited method that P defines again after it is not supported; see docs/limitations.md
 == test/reject/inherited_singleton_alias_later_redefined.rb [default] rc=1
 spinel: test/reject/inherited_singleton_alias_later_redefined.rb:10: D.o: alias of an inherited method that P defines again after it is not supported; see docs/limitations.md
 == test/reject/inherited_singleton_alias_later_redefined.rb [promote] rc=1

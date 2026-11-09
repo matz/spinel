@@ -198,8 +198,10 @@ int emit_call_kernel_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, cons
     /* (and one an alias captured ahead of a redefinition runs under the
        alias, alias_capture_earlier_def: the name its def has) */
     const char *mn = s ? comp_scope_def_name(c, s) : NULL;
+    /* (a method an alias of an inherited def made runs under the alias's
+       own name, which no call site writes: the scope's) */
     if (mn && mn[0] && sp_streq(name, "__callee__"))
-      buf_printf(b, "(_sp_cal ? sp_sym_intern(_sp_cal) : (sp_sym)%d)", comp_sym_intern(c, mn));
+      buf_printf(b, "(_sp_cal ? sp_sym_intern(_sp_cal) : (sp_sym)%d)", comp_sym_intern(c, comp_scope_user_name(s)));
     else if (mn && mn[0]) buf_printf(b, "(sp_sym)%d", comp_sym_intern(c, mn));
     else buf_puts(b, "sp_box_nil()");
     return 1;

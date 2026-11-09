@@ -19331,6 +19331,7 @@ void refl_module_instance_methods(Compiler *c, int m, int prot, ReflNames *r) {
 static int refl_scope_is_copy(Compiler *c, int si) {
   Scope *s = &c->scopes[si];
   if (s->origin_module_ci > 0) return 1;
+  if (s->alias_of) return 0;
   if (s->def_node < 0) return 0;
   for (int j = 0; j < si; j++)
     if (c->scopes[j].def_node == s->def_node && c->scopes[j].class_id != s->class_id) return 1;

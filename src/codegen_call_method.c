@@ -288,6 +288,13 @@ static void emit_method_desc_literal(Compiler *c, int mn, int mi, int from, cons
   }
   const char *ow = "Object"; char sep = '#';
   int om = m->origin_module_ci - 1, owci = om >= 0 ? om : m->class_id, rc = from >= 0 ? from : m->class_id;
+  /* an alias of an inherited def is a method of its own class made of the
+     def, whose owner (as CRuby renders it) is the def's class */
+  int ali = 0;
+  if (om < 0 && m->alias_of) {
+    int os = comp_def_oldest(c, m->def_node);
+    if (os >= 0 && c->scopes[os].class_id >= 0) { owci = c->scopes[os].class_id; ali = 1; }
+  }
   int asg = 0, ah = mn >= 0 && !unbound ? method_obj_alias_owner(c, mn, &asg) : -1;
   if (owci >= 0) {
     ow = method_desc_class_name(c, owci);
@@ -303,6 +310,8 @@ static void emit_method_desc_literal(Compiler *c, int mn, int mi, int from, cons
   }
   else if (om >= 0 && !unbound && rc >= 0)
     buf_printf(&d, m->is_cmethod ? "#<Class:%s>(%s)" : "%s(%s)", method_desc_class_name(c, rc), ow);
+  /* ...and a bound Method of an alias's copy names the receiver's class ahead of the def's */
+  else if (ali && !unbound && rc >= 0 && rc != owci) buf_printf(&d, "%s(%s)", method_desc_class_name(c, rc), ow);
   else buf_puts(&d, ow);
   buf_printf(&d, "%c%s", sep, nm);
   /* a Method named apart from its def (an alias's) writes the def's name

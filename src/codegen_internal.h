@@ -1868,6 +1868,18 @@ static inline const char *isa_match_class_name(Compiler *c, int arg, char *buf, 
   }
   return isa_match_name(c->nt, arg, buf, bufsz);
 }
+/* ...and the class it names, -1 for none of the program's: the node's,
+   or the name's for an argument that is no constant read or path */
+static inline const char *isa_match_class(Compiler *c, int arg, char *buf, size_t bufsz, int *ci) {
+  NodeKind k = arg >= 0 ? nt_kind(c->nt, arg) : NK_NONE;
+  if (k == NK_ConstantReadNode || k == NK_ConstantPathNode) {
+    int n = const_node_class_index(c, arg);
+    if (n >= 0 && c->classes[n].name) { *ci = n; return c->classes[n].name; }
+  }
+  const char *cn = isa_match_name(c->nt, arg, buf, bufsz);
+  *ci = cn ? comp_class_index(c, cn) : -1;
+  return cn;
+}
 /* ...the same by the slot a value constant's entity keys (const_key_at) */
 static inline const char *isa_match_key(Compiler *c, int arg, char *buf, size_t bufsz) {
   const char *k = elab_const_node_key(c, arg);

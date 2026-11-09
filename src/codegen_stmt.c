@@ -8000,8 +8000,8 @@ static int g_pm_sentinel_t = -1;
    skipped (#3373). Resolve through the class table and use the name the
    exception actually has. */
 static const char *exc_when_cls_name(Compiler *c, int pat, char *buf, size_t bufsz) {
-  const char *cn = isa_match_class_name(c, pat, buf, bufsz);
-  int ci = cn ? comp_class_index(c, cn) : -1;
+  int ci;
+  const char *cn = isa_match_class(c, pat, buf, bufsz, &ci);
   const char *q = ci >= 0 ? class_ruby_name(c, ci) : NULL;
   return q ? q : cn;
 }

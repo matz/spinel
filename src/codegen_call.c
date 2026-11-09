@@ -6774,13 +6774,13 @@ int emit_poly_pred_value(Compiler *c, int id, const char *tvref,
   if (is_isa || is_iof) {
     int arg = argv[0];
     char qbuf[192];
-    const char *cn = isa_match_class_name(c, arg, qbuf, sizeof qbuf);
+    int target;   /* a user class in this program? */
+    const char *cn = isa_match_class(c, arg, qbuf, sizeof qbuf, &target);
     if (cn) {
       if (is_iof) {   /* exact class match by name (builtin or user class) */
         buf_printf(b, "(strcmp(sp_poly_class_name(%s), \"%s\") == 0)", tvref, cn);
         return 1;
       }
-      int target = comp_class_index(c, cn);   /* a user class in this program? */
       /* a program module may be mixed into a builtin by reopening it, so a
          builtin value answers it too: the ancestor walk, which reads those */
       if (target >= 0 && comp_class_is_module(c, &c->classes[target])) {

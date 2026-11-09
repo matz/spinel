@@ -17504,29 +17504,13 @@ SP_NORETURN SP_COLD SP_NOINLINE static void sp_raise_nomethod_call_rest(const ch
   if (sp_poly_length(kw) > 0) sp_PolyArray_push(a, kw);
   sp_raise_nomethod_obj(msg, name, recv, a);
 }
-/* e.message as the String handle it holds (sp_Exception.msg_h), for a
-   change through it (--share-strings). A message held as bytes becomes the
-   exception's handle here, frozen when the message is (a literal's), so a
-   change through it shows in the next #message, as CRuby's message is one
-   object. The class name a message-less exception answers is a new String
-   each time in CRuby, so it is not kept (a message given equal to the
-   class name is taken for it, and keeps the old answer). */
-static inline sp_String *sp_exc_message_handle(sp_Exception *e) {
-  if (!e) return sp_String_new_fresh(sp_str_empty);
-  if (e->msg_h) return (sp_String *)e->msg_h;
-  SP_GC_ROOT(e);
-  const char *m = sp_exc_message(e);
-  int fz = sp_str_is_frozen_val(m);
-  sp_String *h = sp_String_new_fresh(m);
-  if (fz) sp_String_freeze(h);
-  if (!e->cls_name || strcmp(sp_String_cstr(h), e->cls_name) != 0) sp_exc_attach_msg((void *)e, (void *)h);
-  return h;
-}
-
-/* The same for the shared dispatch's stored message, which tells a message
-   given from one never given (sp_exc_msg_absent). A message given is kept as
-   the exception's handle, even one that spells the class name; the class name
-   answered for none is a new String each time, as in CRuby, and is not kept. */
+/* e.message as the String handle it holds (sp_Exception.msg_h), from the
+   shared dispatch's stored message, which tells a message given from one
+   never given (sp_exc_msg_absent). A message given is kept as the
+   exception's handle, even one that spells the class name, frozen when the
+   message is, so a change through it shows in the next #message; the class
+   name answered for none is a new String each time, as in CRuby, and is not
+   kept. */
 static inline sp_String *sp_exc_kept_message_handle(sp_Exception *e) {
   if (!e) return sp_String_new_fresh(sp_str_empty);
   if (e->msg_h) return (sp_String *)e->msg_h;
@@ -17977,7 +17961,6 @@ static const char *sp_catch_tag_of(sp_RbVal v, unsigned char *kind) {
      equal copy met the original, where CRuby raises UncaughtThrowError. */
   if (v.tag == SP_TAG_STR) { *kind = 2; return v.v.p ? (const char *)v.v.p : ""; }
   if (sp_poly_is_strbuf(v)) { *kind = 3; return (const char *)v.v.p; }
-  if (v.tag == SP_TAG_STR) { *kind = 0; return v.v.p ? (const char *)v.v.p : ""; }
   if (v.tag == SP_TAG_INT) { *kind = 1; return (const char *)(intptr_t)v.v.i; }
   if (v.tag == SP_TAG_NIL) { *kind = 1; return (const char *)&sp_catch_nil_tag; }
   if (v.tag == SP_TAG_BOOL) { *kind = 1; return (const char *)(v.v.b ? &sp_catch_true_tag : &sp_catch_false_tag); }

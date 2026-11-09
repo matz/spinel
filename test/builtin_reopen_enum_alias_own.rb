@@ -41,3 +41,10 @@ def m(a) = a.find_all
 p m([3])
 p [[1]].flat_map { |a| a }
 p [1, 2].select { |x| x > 1 }
+# with a block too
+module M2; def find_all = "m2-fa"; end
+class Mx < Array; include M2; end
+p Mx.new([1, 2]).find_all { |x| x > 1 }
+p [1, 2].find_all { |x| x > 1 }
+def mb(a) = a.find_all(&:odd?)
+p mb([1, 2])

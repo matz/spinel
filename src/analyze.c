@@ -14143,7 +14143,8 @@ int desugar_enum_method_recv(Compiler *c) {
        reaches here as the redispatched pair array, so the result is the
        Enumerable pair list, not a hash) */
     if (sp_streq(nm, "find_all") && nt_ref(nt, id, "block") >= 0 && !an_enum_prog_method(c, nm) &&
-        (ty_is_array(comp_ntype(c, recv)) || ty_is_array(infer_type(c, recv)))) {
+        (ty_is_array(comp_ntype(c, recv)) || ty_is_array(infer_type(c, recv))) &&
+        an_reopen_owner(c, id, CORE_ARRAY) < 0) {   /* an Array reopening's own find_all runs */
       nt_node_set_str(nt, id, "name", "select");
       changed = 1;
       continue;

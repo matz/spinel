@@ -2323,14 +2323,10 @@ static int an_module_tree(Compiler *c, int m, int *mods, int *n, int cap) {
     int sn = 0;
     const int *stmts = ob[b].body >= 0 ? nt_arr(nt, ob[b].body, "body", &sn) : NULL;
     for (int k = 0; k < sn; k++) {
-      if (nt_kind(nt, stmts[k]) != NK_CallNode || nt_ref(nt, stmts[k], "receiver") >= 0) continue;
-      const char *nm = nt_str(nt, stmts[k], "name");
-      if (!nm) continue;
-      if (is_prepend_name(nm)) return 0;
-      if (!is_include_name(nm)) continue;
-      int an = 0, anode = nt_ref(nt, stmts[k], "arguments");
-      const int *aa = anode >= 0 ? nt_arr(nt, anode, "arguments", &an) : NULL;
-      if (an == 0) return 0;
+      int prep = 0; const int *aa;
+      int an = mixin_stmt_args(nt, stmts[k], &prep, &aa);
+      if (an < 0) continue;
+      if (prep || an == 0) return 0;
       for (int j = 0; j < an; j++) {
         NodeKind ak = nt_kind(nt, aa[j]);
         int im = ak == NK_ConstantReadNode || ak == NK_ConstantPathNode ? class_recv_static_ci(c, aa[j]) : -1;

@@ -2062,7 +2062,6 @@ void emit_expr(Compiler *c, int id, Buf *b) {
     return;
   }
   /* --defer-refusals: an identity Set's value checked where it arrives */
-  if (g_idset_marks && emit_idset_checked(c, id, b, 0)) return;
   /* an argument of a call re-emitted as its builtin sees the reopenings */
   if (g_io_skip_reopen && id != g_io_skip_node) {
     g_io_skip_reopen = 0;

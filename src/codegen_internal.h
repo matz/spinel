@@ -1763,11 +1763,6 @@ int defer_refusals(void);
 /* ...for one node: the switch, or its file's `# spinel: defer-refusals` */
 int defer_refusals_at(const Compiler *c, int node);
 extern int g_deferred_diags;   /* the refusals a deferral took (codegen_util.c) */
-/* --defer-refusals: an identity Set's value checked where it arrives
-   (refuse_set_identity_members marks it, codegen_util.c renders it) */
-extern int g_idset_marks;
-extern const char *const g_sid_refusal_msg;
-int emit_idset_checked(Compiler *c, int id, Buf *b, int boxed);
 int time_parse_refusal(Compiler *c, int id, char *msg, size_t cap);
 int emit_stmt_or_defer(Compiler *c, int st, Buf *b, int indent);
 extern int g_stmt_deferrals;       /* refusals emit_stmt_or_defer turned into a raise in place */

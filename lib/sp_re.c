@@ -510,25 +510,6 @@ sp_bool sp_re_case_eq(mrb_regexp_pattern *pat, sp_RbVal v) {SP_GC_ROOT_RBVAL(v);
 /* The pattern behind a boxed value: a Regexp box is one already, and a String
    is compiled the way `str.match?("b")` compiles its argument. Answers NULL for
    anything else. Used by the poly-receiver match forms below (#3961). */
-/* Noted once each at startup, before any thread runs, and only read after:
-   a handful, so a list does. A note that cannot grow the list is out of
-   memory, as an allocation is. */
-static const mrb_regexp_pattern **sp_re_literals = NULL;
-static size_t sp_re_nliterals = 0, sp_re_cliterals = 0;
-void sp_re_note_literal(const mrb_regexp_pattern *pat) {
-  if (!pat) return;
-  if (sp_re_nliterals == sp_re_cliterals) {
-    size_t nc = sp_re_cliterals ? sp_re_cliterals * 2 : 16;
-    const mrb_regexp_pattern **nl = (const mrb_regexp_pattern **)realloc((void *)sp_re_literals, nc * sizeof *nl);
-    if (!nl) { fputs("spinel: out of memory\n", stderr); exit(1); }
-    sp_re_literals = nl; sp_re_cliterals = nc;
-  }
-  sp_re_literals[sp_re_nliterals++] = pat;
-}
-int sp_re_noted_literal_p(const void *pat) {
-  for (size_t i = 0; i < sp_re_nliterals; i++) if ((const void *)sp_re_literals[i] == pat) return 1;
-  return 0;
-}
 mrb_regexp_pattern *sp_poly_as_pattern(sp_RbVal v) {SP_GC_ROOT_RBVAL(v);
   if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_REGEX) return (mrb_regexp_pattern *)v.v.p;
   const char *s = NULL;

@@ -3353,7 +3353,6 @@ static void emit_boxed_string(Compiler *c, int node, Buf *b);
 void emit_boxed(Compiler *c, int node, Buf *b) {
   if (b == g_pre) { emit_into_pre_line(c, emit_boxed, node); return; }
   if (emit_const_class_call_wrap(c, node, b, emit_boxed)) return;
-  if (g_idset_marks && emit_idset_checked(c, node, b, 1)) return;
   int frame = g_repr_check ? repr_channel_begin(c, node) : -1;
   if (c->n_cext_extensions && ran_first_handle(node) >= 0) {
     str_box_handle_tmp(b, ran_first_handle(node));
@@ -18245,9 +18244,6 @@ void emit_regex_section(Compiler *c, Buf *b) {
       emit_str_literal(b, g_re_src[i]);
       buf_printf(b, ", %d, %d);\n", (int)strlen(g_re_src[i]), g_re_flg[i]);
       buf_printf(b, "  }\nelse {\n    (void)sp_re_pat_%d;\n    sp_re_startup_fail();\n  }\n", i);
-      /* --defer-refusals: an identity Set's check tells a literal from a
-         pattern made at run time (sp_idset_check) */
-      if (g_idset_marks) buf_printf(b, "  sp_re_note_literal(sp_re_pat_%d);\n", i);
     }
   }
   /* From here on (runtime Regexp.new / dynamic patterns), a compile error

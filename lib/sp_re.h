@@ -97,11 +97,6 @@ sp_bool sp_re_match_p_at(mrb_regexp_pattern *pat, const char *str, sp_int pos);
 sp_bool sp_re_case_eq(mrb_regexp_pattern *pat, sp_RbVal v);
 /* poly-operand match forms: either side may carry the pattern (#3961) */
 mrb_regexp_pattern *sp_poly_as_pattern(sp_RbVal v);
-/* The literals the program compiled at startup, noted there when an
-   identity Set's value is checked where it arrives (sp_idset_check): a
-   literal is one object per text here, one per literal in CRuby */
-void sp_re_note_literal(const mrb_regexp_pattern *pat);
-int sp_re_noted_literal_p(const void *pat);
 sp_bool sp_poly_match_p(sp_RbVal a, sp_RbVal b);
 sp_bool sp_poly_match_p_at(sp_RbVal a, sp_RbVal b, sp_int pos);
 sp_MatchData *sp_poly_match_data(sp_RbVal a, sp_RbVal b);

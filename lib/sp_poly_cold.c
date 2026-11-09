@@ -449,6 +449,11 @@ const char *sp_poly_to_s(sp_RbVal v)
         case SP_BUILTIN_THREAD: return sp_Thread_inspect((sp_thread *)v.v.p);
         /* OpenStruct#to_s is its inspect, as sp_poly_inspect renders it */
         case SP_BUILTIN_OPENSTRUCT: return sp_OpenStruct_inspect((struct sp_OpenStruct_s *)v.v.p);
+        /* as the typed to_s renders each: an Enumerator and a Random by
+           their inspect, ARGF by its name; a boxed one fell through to "" */
+        case SP_BUILTIN_ENUMERATOR: return sp_enum_inspect_boxed(v);
+        case SP_BUILTIN_RANDOM: if (v.v.p) return sp_Random_inspect((sp_Random *)v.v.p); return SPL("#<Object>");
+        case SP_BUILTIN_ARGF: return SPL("ARGF");
         default:
           if ((v.cls_id >= 0 || v.cls_id == SP_BUILTIN_OBJECT) && v.v.p) {
             /* a class with a user #to_s renders through the generated

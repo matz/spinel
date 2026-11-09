@@ -239,7 +239,7 @@ void emit_struct_kw_member(Compiler *c, ClassInfo *cls, int a, int ht, Buf *b);
 int emit_struct_new_early(Compiler *c, int ci, int argc, const int *argv, int kwh, int *nunk_out, int *late_out, Buf *b);
 void emit_io_reopen_call(Compiler *c, int id, int recv, const char *name, Buf *b);
 int emit_reopen_block_call(Compiler *c, int id, int recv, int mi, const char *box_fn, Buf *b);
-void emit_reopen_pf_call(Compiler *c, int id, int pf, int cblk, const char *recv_text, Buf *b);
+void emit_reopen_pf_call(Compiler *c, int id, int pf, int cblk, const char *recv_text, const char *box_fn, Buf *b);
 /* `fmt % args` where the format is a String made where it is written (an
    interpolation, a call's result) and the arguments allocate: nothing holds
    the format while they are built, and C does not say which of the two is

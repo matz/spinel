@@ -1072,7 +1072,7 @@ int an_elem_read_in_bounds(Compiler *c, int id);
 /* is position pos of a multiple assignment's value, read from a constant Array of a proven length, within it and no nil (a position from the end is not asked)? */
 int masgn_const_elem_in_range(Compiler *c, int value, long long pos);
 int scalar_nil_only_call(Compiler *c, int id, TyKind rt);
-int an_scalar_reopen_answers(Compiler *c, int id, const char *name, int recv, TyKind rt, int bonly);   /* analyze_infer.c */
+int an_builtin_reopen_answers(Compiler *c, int id, const char *name, int recv, TyKind rt, int bonly);   /* analyze_infer.c */
 int nullable_scalar_nil_only_call(Compiler *c, int id);
 int nullable_int_elem_array(Compiler *c, int node);
 /* an Array literal with an element and no splat: it is never empty */

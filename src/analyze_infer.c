@@ -6426,9 +6426,15 @@ static int infer_class_module_call(Compiler *c, int id, const NodeTable *nt, con
   int self_tmi, self_fmi;
   if (recv >= 0 &&
       (argc == 0 ||
-       (argc == 1 && sp_streq(name, "clone") && argv &&
+       (argc == 1 && is_clone_name(name) && argv &&
         nt_kind(nt, argv[0]) == NK_KeywordHashNode)) &&
       is_self_copy(name) &&
+      /* nor where the program reopens the receiver's builtin class with a
+         method of the name (`class String; def freeze = :mine`): that
+         method's value is the call's, as infer_user_method_call types it
+         and the emitter calls it (a String kind answered the call instead,
+         and its `.class` or chained mutator was emitted on a Symbol) */
+      !an_builtin_reopen_answers(c, id, name, recv, rt, 0) &&
       /* a generated READER of the name owns it on a concrete object, as any
          reader does in CRuby: fall through to the member-read rule (#4190);
          so does a method the class defines itself, whose value is what its
@@ -6952,10 +6958,10 @@ static int infer_receiverless_call(Compiler *c, int id, const NodeTable *nt, con
 }
 
 /* A method the program defines on the receiver (a class method, a Struct's member, a reopened builtin's method) and instance-variable reflection (infer_call_inner's rules, in their order) */
-/* Does an Integer or Float reopening's method answer call id, as
-   infer_user_method_call's reopen lookup finds it? */
-int an_scalar_reopen_answers(Compiler *c, int id, const char *name, int recv, TyKind rt, int bonly) {
-  if (recv < 0 || bonly || !name || (rt != TY_INT && rt != TY_FLOAT) || nt_int(c->nt, id, "builtin_only", 0)) return 0;
+/* Does a reopening of the receiver's builtin class answer call id with a
+   method of its own, as infer_user_method_call's reopen lookup finds it? */
+int an_builtin_reopen_answers(Compiler *c, int id, const char *name, int recv, TyKind rt, int bonly) {
+  if (recv < 0 || bonly || !name || core_of_type(rt) < 0 || nt_int(c->nt, id, "builtin_only", 0)) return 0;
   int ci = comp_core_class(c, core_of_type(rt));
   int mi = ci >= 0 ? call_target(c, id, ci, name, 0, NULL) : -1;
   return mi >= 0 && !cplan_reopen_runs_builtin(c, id, mi);
@@ -9865,7 +9871,7 @@ static TyKind infer_call_inner(Compiler *c, int id) {
      Not for a call an Integer or Float reopening's method answers, which
      infer_user_method_call types below and the emitter calls
      (`class Float; def clamp(a, b) = :c` is no boxed bound) */
-  if (!an_scalar_reopen_answers(c, id, name, recv, rt, bonly))
+  if (!an_builtin_reopen_answers(c, id, name, recv, rt, bonly))
   { TyKind rr; if (infer_numeric_call(c, id, rt, &rr)) return rr; }
   /* nil's to_a, to_h, =~ and !~ (and a Float's &, | and ^), which the
      receiver's class lacks: typed as nil's answer, boxed, whether or not the

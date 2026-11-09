@@ -1,6 +1,7 @@
 # spinel: gc-stress
-# A loop whose body runs no code holds an Array of objects' (or a table's)
-# elements and length in C locals, as it does an Integer or Float Array's:
+# A loop whose body runs no code holds an Array of objects' (or a table's,
+# or an Array of Strings') elements and length in C locals, as it does an
+# Integer or Float Array's:
 # `while i < a.size` reading `a[i]`, and `a.each { }`. What is out of the
 # held range -- a negative index, past the end, a nil receiver -- reads
 # through the Array as before.
@@ -85,3 +86,47 @@ p s, g[3]
 # a loop at size: the rows held across a collection
 big = Array.new(2000) { |k| User.new(k % 13) }
 p total(big), total_each(big)
+
+# an Array of Strings: the element's bytes read where the header holds them
+def chars(strs)
+  s = 0
+  i = 0
+  while i < strs.size
+    s += strs[i].size + strs[i].bytesize
+    i += 1
+  end
+  s
+end
+
+def chars_each(strs)
+  s = 0
+  strs.each { |x| s += x.bytesize }
+  s
+end
+
+def str_pairs(strs)
+  s = 0
+  i = 0
+  while i < strs.size
+    n = strs[i + 1]
+    s += n.size if n
+    s += strs[-1].size
+    i += 1
+  end
+  s
+end
+
+words = %w[a bb ccc dddd] + ["\u00e9", "\u65e5\u672c"]
+p chars(words), chars_each(words), str_pairs(words), chars([]), chars_each([])
+begin
+  p chars(["x", nil, "zz"])
+rescue NoMethodError => e
+  p e.message
+end
+begin
+  p chars(nil)
+rescue NoMethodError => e
+  p e.message
+end
+many = Array.new(3000) { |k| "s" * (k % 9) }
+p chars(many), chars_each(many)

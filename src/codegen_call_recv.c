@@ -2620,6 +2620,21 @@ static int emit_kind_array_call(Compiler *c, int id, Buf *b, const NodeTable *nt
       buf_printf(b, ", _t%d)%s; })", tk, rc);
       { *out = 1; return 1; }
     }
+    /* a String array whose header the loop being emitted holds
+       (hc_ptr_array): in range, the element's bytes there; anything else
+       the get */
+    if (rt == TY_STR_ARRAY && comp_ntype(c, argv[0]) == TY_INT && hc_ptr_array(c, recv, hd, hl, sizeof hd)) {
+      if (hc_index_in_range(c, recv, argv[0])) {
+        buf_printf(b, "SP_SEB((sp_strelem)%s[", hd); emit_int_expr(c, argv[0], b); buf_puts(b, "])");
+        { *out = 1; return 1; }
+      }
+      int tk = ++g_tmp;
+      buf_printf(b, "({ sp_int _t%d = ", tk); emit_int_expr(c, argv[0], b);
+      buf_printf(b, "; SP_LIKELY((unsigned long long)_t%d < (unsigned long long)%s) ? SP_SEB((sp_strelem)%s[_t%d]) : sp_StrArray_get(",
+                 tk, hl, hd, tk);
+      emit_expr(c, recv, b); buf_printf(b, ", _t%d); })", tk);
+      { *out = 1; return 1; }
+    }
     int uo = (rt == TY_INT_ARRAY || rt == TY_FLOAT_ARRAY) && node_is_oint(c, id);
     /* an oint unwrapped at once by its consumer (g_ck_node): the checked read */
     int uck = uo && g_ck_node == id;

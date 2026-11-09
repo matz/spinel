@@ -7037,7 +7037,7 @@ static int iter_enum_poly_walk_arms(Compiler *c, int id, Buf *b, int indent, con
       ts = emit_shadow_save(c, outer, p0, b, indent);
     }
     if (rev) { emit_indent(b, indent); buf_printf(b, "sp_int _t%d = sp_%sArray_length(%s);\n", tn, k, rb.p); }
-    /* an Integer, Float or object array (or a table) the loop's region
+    /* an Integer, Float, String or object array (or a table) the loop's region
        caches (hc_iter_begin) is walked through that header, as a while
        loop's reads are: its length and its elements below the nil-free
        length, the rest by the accessor as before */
@@ -7045,7 +7045,7 @@ static int iter_enum_poly_walk_arms(Compiler *c, int id, Buf *b, int indent, con
     if (!rev && (rt == TY_INT_ARRAY || rt == TY_FLOAT_ARRAY) &&
         hc_array(c, recv, rt == TY_FLOAT_ARRAY, hd, hl, hw, sizeof hd))
       hc_read_len(hd, hr, sizeof hr);
-    else if (!rev && ty_is_ptr_array(rt) && hc_ptr_array(c, recv, hd, hl, sizeof hd))
+    else if (!rev && hc_ptr_array(c, recv, hd, hl, sizeof hd))
       hc_read_len(hd, hr, sizeof hr);
     emit_indent(b, indent);
     if (rev) buf_printf(b, "for (sp_int _t%d = _t%d - 1; _t%d >= 0; _t%d--) {\n", t, tn, t, t);
@@ -7136,7 +7136,9 @@ static int iter_enum_poly_walk_arms(Compiler *c, int id, Buf *b, int indent, con
         int o0 = (sp_streq(k, "Int") || sp_streq(k, "Float")) && block_param_slot_is_oint(c, block, 0);
         /* an oint slot reads the element with its nil (oget) */
         /* (one representation: the element into a slot of either face, SP_STR_TO) */
-        if (sp_streq(k, "Str")) {
+        if (sp_streq(k, "Str") && hd[0])
+          buf_printf(b, "lv_%s = SP_STR_TO(lv_%s, SP_SEB((sp_strelem)%s[_t%d]));\n", p0, p0, hd, t);
+        else if (sp_streq(k, "Str")) {
           buf_printf(b, "lv_%s = SP_STR_TO(lv_%s, sp_StrArray_get(", p0, p0);
           buf_puts(b, rb.p); buf_printf(b, ", _t%d));\n", t);
         }

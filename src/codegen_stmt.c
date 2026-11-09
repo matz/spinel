@@ -12367,6 +12367,7 @@ static int hc_call_ok(Compiler *c, int id, int stmt) {
   if (sp_streq(nm, "getbyte") && ac == 1 && rt == TY_STRING && comp_ntype(c, av[0]) == TY_INT) return 1;
   if (is_len_alias(nm) && ac == 0 && (ty_is_array(rt) || ty_is_obj_array(rt) || rt == TY_STRING))
     return 1;
+  if (sp_streq(nm, "bytesize") && ac == 0 && rt == TY_STRING) return 1;
   if (hc_iob_read(c, id) || hc_iob_write(c, id) ||
       (ac == 0 && sp_streq(nm, "size") && hc_iob_binding(c, rt, nm, 0))) return 1;
   int alloc = 0;
@@ -12401,7 +12402,7 @@ static int hc_node_ok(Compiler *c, int id, int stmt, HcRegion *r);
 /* An Integer block loop the header cache covers as it does a while:
    `n.times { }`, `a.upto(b) { }` / downto, `n.step(...) { }`, an Integer
    Range's `each { }` -- each a plain C `for` around the block's body --
-   an Integer, Float or object Array's (or a table's) `each { }`, which walks its own receiver
+   an Integer, Float, String or object Array's (or a table's) `each { }`, which walks its own receiver
    through the cache too (emit_iteration_stmt_body), and an Array's
    `each_index { }` (emit_typed_array_call) */
 static int hc_block_loop(Compiler *c, int id) {
@@ -12413,7 +12414,8 @@ static int hc_block_loop(Compiler *c, int id) {
   TyKind rt = comp_ntype(c, recv);
   if (rt == TY_INT && (sp_streq(nm, "times") || sp_streq(nm, "upto") || sp_streq(nm, "downto") || sp_streq(nm, "step")))
     return 1;
-  if ((rt == TY_INT_ARRAY || rt == TY_FLOAT_ARRAY || ty_is_ptr_array(rt)) && sp_streq(nm, "each")) return 1;
+  if ((rt == TY_INT_ARRAY || rt == TY_FLOAT_ARRAY || rt == TY_STR_ARRAY || ty_is_ptr_array(rt)) &&
+      sp_streq(nm, "each")) return 1;
   if (ty_is_array(rt) && sp_streq(nm, "each_index")) return 1;
   return rt == TY_RANGE && sp_streq(nm, "each");
 }
@@ -12605,9 +12607,12 @@ int hc_array(Compiler *c, int recv, int is_float, char *d, char *l, char *w, siz
   return 1;
 }
 
-/* An Array of objects or a table of rows (ty_is_ptr_array): its elements
-   (_hcd) and length (_hcl); _hcr is the length too */
+/* An Array of objects, a table of rows (ty_is_ptr_array) or an Array of
+   Strings, whose elements are pointers: its elements (_hcd) and length
+   (_hcl); _hcr is the length too */
 int hc_ptr_array(Compiler *c, int recv, char *d, char *l, size_t cap) {
+  TyKind t = recv >= 0 ? comp_ntype(c, recv) : TY_UNKNOWN;
+  if (!ty_is_ptr_array(t) && t != TY_STR_ARRAY) return 0;
   int e = hc_entry(c, recv, HC_PTR);
   if (e < 0) return 0;
   snprintf(d, cap, "_hcd%d_%d", g_hc->id, e);
@@ -12807,7 +12812,8 @@ static void hc_bounded_index(Compiler *c, int prev, int pred, int body, HcRegion
       nt_kind(nt, av) != NK_LocalVariableReadNode) return;
   const char *an = nt_str(nt, av, "name");
   TyKind at = comp_ntype(c, av);
-  if (!an || (at != TY_INT_ARRAY && at != TY_FLOAT_ARRAY && !ty_is_ptr_array(at)) || nameset_has(&r->wl, an)) return;
+  if (!an || (at != TY_INT_ARRAY && at != TY_FLOAT_ARRAY && at != TY_STR_ARRAY && !ty_is_ptr_array(at)) ||
+      nameset_has(&r->wl, an)) return;
   /* i = <literal >= 0>, the statement just ahead of the loop */
   if (nt_kind(nt, prev) != NK_LocalVariableWriteNode || !nt_str(nt, prev, "name") ||
       !sp_streq(nt_str(nt, prev, "name"), in)) return;
@@ -12953,9 +12959,8 @@ static int hc_bounded_cond(Compiler *c, int pred, Buf *out) {
   const int *pav = nt_arr(nt, pa, "arguments", &pac);
   int av = nt_ref(nt, pav[0], "receiver");
   char hd[64], hl[64], hw[64];
-  TyKind at = comp_ntype(c, av);
-  if (ty_is_ptr_array(at) ? !hc_ptr_array(c, av, hd, hl, sizeof hd)
-                          : !hc_array(c, av, at == TY_FLOAT_ARRAY, hd, hl, hw, sizeof hd)) return 0;
+  if (!hc_ptr_array(c, av, hd, hl, sizeof hd) &&
+      !hc_array(c, av, comp_ntype(c, av) == TY_FLOAT_ARRAY, hd, hl, hw, sizeof hd)) return 0;
   buf_puts(out, "(");
   emit_expr(c, nt_ref(nt, pred, "receiver"), out);
   buf_printf(out, " < %s)", hl);
@@ -13003,8 +13008,8 @@ static void hc_close(HcRegion *r, const char *loop, Buf *b, int indent) {
          compiler carried and tested at every store */
       if (r->e[i].kind == HC_INT || r->e[i].kind == HC_FLOAT)
         buf_printf(b, " sp_int _hcw%d_%d; sp_int _hcr%d_%d;", r->id, i, r->id, i);
-      /* _hcr of an Array of objects or a table: its length (a nil element
-         is a NULL, no bit beside it) */
+      /* _hcr of an Array of objects, a table or an Array of Strings: its
+         length (a nil element is a NULL, no bit beside it) */
       if (r->e[i].kind == HC_PTR) buf_printf(b, " sp_int _hcr%d_%d;", r->id, i);
       /* _hcw of a buffer: how many of its bytes a write may store into */
       if (r->e[i].kind == HC_IOB) buf_printf(b, " sp_int _hcw%d_%d;", r->id, i);
@@ -13019,8 +13024,8 @@ static void hc_close(HcRegion *r, const char *loop, Buf *b, int indent) {
         buf_printf(&rd, "{ const char *_s = %s; _hcd%d_%d = _s; _hcl%d_%d = _s ? (sp_int)sp_str_byte_len(_s) : 0; } ",
                    rv, r->id, i, r->id, i);
       else if (r->e[i].kind == HC_PTR)
-        buf_printf(&rd, "{ sp_PtrArray *_a = %s; _hcd%d_%d = _a ? _a->data : NULL; _hcl%d_%d = _hcr%d_%d = _a ? _a->len : 0; } ",
-                   rv, r->id, i, r->id, i, r->id, i);
+        buf_printf(&rd, "{ __typeof__(%s) _a = %s; _hcd%d_%d = _a ? (void **)_a->data : NULL; _hcl%d_%d = _hcr%d_%d = _a ? _a->len : 0; } ",
+                   rv, rv, r->id, i, r->id, i, r->id, i);
       else if (r->e[i].kind == HC_IOB)
         buf_printf(&rd, "{ sp_IOBuffer *_b = %s; _hcd%d_%d = sp_iob_view(_b, &_hcl%d_%d); _hcw%d_%d = sp_iob_view_wlen(_b, _hcl%d_%d); } ",
                    rv, r->id, i, r->id, i, r->id, i, r->id, i);

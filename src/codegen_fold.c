@@ -7644,13 +7644,6 @@ static void emit_arg_or_default_fill(Compiler *c, Scope *m, int idx, int provide
   if (provided >= 0 && (ty_is_array(pt) || ty_is_hash(pt)) &&
       !arg_ran_first(provided, 0) && emit_empty_literal_as(c, provided, pt, out))
     return;
-  /* Byref string out-param: pass the caller's slot (const char**) so the
-     callee's mutation lands in the caller's variable. A plain string local
-     passes its address; an already-celled local (captured, or itself a byref
-     param) passes its cell. Anything else -- literal, expression, ivar,
-     filled default -- materializes a rooted temp and passes that: for a
-     non-lvalue argument CRuby's mutation is equally invisible to the caller,
-     for the rest this keeps the pre-byref behavior. */
   /* shared-handle string parameter (#3227 P5): the argument as the handle,
      in the String plan's form (emit_str_form): a shared slot argument
      passes the handle itself; a plain value wraps a fresh handle (a
@@ -11532,8 +11525,7 @@ static int positional_offset_from_end(Compiler *c, Scope *m, int j) {
    positionals over pm's (as zsuper_begin lays them), and around s's rest,
    where the gather holds them in order, the one at j when pm takes element j
    there, or s's post as far from the gather's end as pm's parameter j takes
-   it. What the byref analysis follows through a bare super, and what the
-   gathered bare super lends. */
+   it. What the analysis follows through a bare super. */
 int zsuper_param_source(Compiler *c, Scope *s, Scope *pm, int j) {
   if (!s || !pm || j < 0 || j >= pm->nparams || !pm->pnames[j] || j == pm->kwrest_idx) return -1;
   if (callee_param_is_declared_kwarg(c, pm, pm->pnames[j])) {
@@ -12571,8 +12563,7 @@ int dispatch_arms_disagree(Compiler *c, int call, int cid, const char *name) {
       if (kw_s && !sp_streq(s->pnames[i], first->pnames[i])) return 1;
       /* a String the arms take in different forms -- the shared handle, the
          value -- is one no single temp can be: a Sub whose parameter became
-         the handle took the base method's copy, and the C build stopped
-         (#6065) */
+         the handle appended to the base method's copy (#6065) */
       if (arm_param_is_handle(c, scope_local(s, s->pnames[i])) !=
           arm_param_is_handle(c, scope_local(first, first->pnames[i]))) return 1;
     }

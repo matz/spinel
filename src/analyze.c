@@ -21656,31 +21656,8 @@ static void mark_empty_hash_receivers(Compiler *c) {
   }
 }
 
-/* --- byref string out-params (see LocalVar.byref_out) ---------------------
-   CRuby strings are shared heap objects: a callee's `s << "x"` mutates the
-   very object the caller passed. Spinel strings are immutable const char*
-   values and `<<` is a local reassignment, so the mutation silently stops at
-   the callee -- the classic pass-an-output-buffer pattern loses every append.
-   Mark the mutated string params of statically-bound methods byref: codegen
-   passes the caller's slot (const char **), the callee reads and reassigns
-   through it (the existing is_cell deref forms), and the mutation lands in
-   the caller's variable like CRuby.
-
-   Eligibility is deliberately narrow -- byref changes the C ABI, so every
-   call site must know the callee statically and no plain rebind may leak:
-   - toplevel / class (singleton) methods only: an instance method can be
-     reached through poly dispatch stubs and same-name subtree dispatch,
-     which keep the plain ABI;
-   - the name is unique program-wide, never aliased, and never appears as a
-     symbol/string literal (send/method(:x)/define_method material);
-   - not an `initialize`: its callers are the sp_X_new wrappers, which the
-     class values, `raise`, `allocate` and the poly `new` dispatch all call
-     with values;
-   - the param is mutated via a receiver-reassigning string mutator (one
-     sp_str_mutator names, or a bang form) or passed on into
-     another method's byref slot (fixpoint), and is never PLAIN-reassigned:
-     CRuby `s = ...` rebinds the local invisibly to the caller, which a
-     write-through cell would wrongly propagate. */
+/* Does method name `nm` mutate its receiver String in place: one sp_str_mutator
+   names, or a bang form? */
 int an_str_mutator_name(const char *nm) {
   size_t l = nm ? strlen(nm) : 0;
   if (!l) return 0;
@@ -21688,12 +21665,11 @@ int an_str_mutator_name(const char *nm) {
   return sp_str_mutator(nm, SP_MUT_LOCAL) || (l > 1 && nm[l - 1] == '!');
 }
 
-/* ANY method scope with this name, or -1. Byref is decided per NAME GROUP --
-   every method of a name gets the ABI or none does -- so a caller asking
-   "is parameter j byref here" may ask any member and get the group's answer.
-   Asking for the UNIQUE one instead made a second same-named method anywhere
-   in the program silently answer -1, which reads as "not byref" and is how an
-   unused class dropped a callee's appends (#4390). */
+/* ANY method scope with this name, or -1. A name's methods are one group,
+   so a caller asking about parameter j may ask any member and get the
+   group's answer. Asking for the UNIQUE one instead made a second
+   same-named method anywhere in the program silently answer -1, which is how
+   an unused class dropped a callee's appends (#4390). */
 static int an_any_scope_by_name(Compiler *c, const char *nm) {
   if (!nm) return -1;
   /* frozen (scope names fixed): the first scope of each name from a table
@@ -21830,9 +21806,10 @@ static int an_param_idx(Scope *s, const char *vn) {
 }
 
 /* Is local `vn` of scope `vs` handed by a call in that scope to a method
-   parameter the method appends to in place (the handle it is lent)? The callee's append is one to `vn`'s String, so
-   `vn` is mutated in place there as by `<<`. Asked by the parameter's
-   mutation, not its ABI, which is settled after the fixpoint. */
+   parameter the method appends to in place (the handle it is lent)? The
+   callee's append is one to `vn`'s String, so `vn` is mutated in place there
+   as by `<<`. Asked by the parameter's mutation, not its representation,
+   which is settled after the fixpoint. */
 static int an_any_scope_by_name(Compiler *c, const char *nm);
 static int an_param_mutated_in_place(Compiler *c, int mi, int pi);
 static int an_call_target_mi(Compiler *c, int id);
@@ -21841,7 +21818,7 @@ static int an_call_target_mi(Compiler *c, int id);
    an_call_target_mi already answers: no method of a class of the program's
    own of the same name can take it. The lend tests below fall back to any
    method by that name only for a receiver that may be such an object,
-   as do the byref and block-keeping tests that look a call up by name
+   as do the block-keeping tests that look a call up by name
    (#8144: `target[k] = v` on a Hash lent v to an unrelated class's
    appending `[]=`, and v became a String handle its Hash#each binder could
    not fill). */
@@ -21877,12 +21854,8 @@ static int an_local_lent(Compiler *c, const char *vn, Scope *vs) {
    site nor a poly-dispatch arm. The emitter already knows this shape: it is
    what marks such a method `__attribute__((unused))`.
 
-   Such a method cannot disagree with a name group about an ABI, because
-   nothing can call it to find out. So it neither constrains the group nor
-   joins it -- which is what lets an UNUSED class stop taking the ABI away
-   from a used one (#4390). Unsure answers 1: giving the group one member too
-   many costs an optimisation, and one too few would hand a poly dispatch two
-   arms with different C signatures. */
+   Unsure answers 1: a class wrongly called reachable costs an
+   optimisation, and one wrongly called unreachable drops a dispatch arm. */
 int an_class_can_be_reached(Compiler *c, int ci) {
   if (ci < 0 || ci >= c->nclasses) return 1;
   if (c->classes[ci].instantiated) return 1;
@@ -21898,25 +21871,6 @@ int an_class_can_be_reached(Compiler *c, int ci) {
   return 0;
 }
 
-/* Promote parameter `pi` for EVERY method of this name, or for none of them.
-   A call site resolves by name, so every arm a poly dispatch can reach has to
-   agree on the ABI. The old rule stood in for that by refusing any name
-   defined twice -- right about the danger, wrong about the remedy: it also
-   refused two methods that agree perfectly, so adding an UNUSED class with a
-   same-named method took the ABI away from a method that had it and the
-   caller's buffer came back empty (#4390). Agreeing is the thing to require,
-   so require it of every member a String can reach at that index: it must
-   be eligible, must have it typed String, and must not have blocked it by
-   rebinding. One such member that cannot take it keeps the value ABI for
-   all. A member with no parameter at that index, or one typed as something
-   no String is (an Integer, an Array, a class's object) or boxed, binds no
-   lent slot there and has no say: a `def m = 0` or a `def m(n) = n + 1`
-   in another class took the ABI away from every `m(s)` appending to its
-   String, and the caller's buffer came back as it was (#6179); so did a
-   top-level `def m(p) = yield(p)`. A dispatch
-   that reaches both binds each arm on its own (#6135, #6183). A member
-   whose parameter a proc captures takes it as the shared handle instead,
-   and so does the rest of the group (`handle`, below). */
 /* Will yielding method mi be lowered to call its named block as a proc
    (the post-fixpoint lowering's test: a value use of the block, a call of
    itself, a yield inside a lifted body)? One that only names its block
@@ -22166,7 +22120,7 @@ static int an_yield_lends(Compiler *c, int y, const char *pn, int blk) {
    parameter a literal block at one of its call sites appends to, in place
    (a boxed one through the box) or by handing it to a lent parameter? The
    box then has to hold the caller's handle, as for a boxed parameter the
-   method appends to itself (convert_byref_handle_params). */
+   method appends to itself (pull_args_into_handle_params). */
 /* Does literal block `blk` append to the elements of its rest, and does a
    yield of the n arguments av[] gather position k into it (the positions
    past the leading and the optional parameters the count fills, up to the
@@ -23018,7 +22972,8 @@ static int an_param_mutated_in_place(Compiler *c, int mi, int pi);
 static int an_local_pure_alias_of(Compiler *c, int mi, const char *ln, const char *pn, int depth);
 /* Does scope `bs` hand local `vn` to a user method's parameter that the
    method appends to in place (`grow(t)`)? Asked inside the fixpoint, so the
-   method's body answers, not the byref slots computed after it. */
+   method's body answers, as the handle conversion that follows the fixpoint
+   is not settled yet. */
 static int an_local_handed_to_appender(Compiler *c, Scope *bs, const char *vn) {
   const NodeTable *nt = c->nt;
   int si = (int)(bs - c->scopes);
@@ -23931,7 +23886,7 @@ static int strbuf_demand_store_leaf(Compiler *c, int sn, int depth) {
       return ch;
     }
     /* a method parameter stores the caller's string: the parameter becomes
-       a handle, and the byref/handle pass pulls each caller's argument in */
+       a handle, and the handle pass pulls each caller's argument in */
     if (snv->is_param && !snv->is_cell &&
         an_param_idx(sns, snm) >= 0 &&
         (snv->type == TY_STRING || snv->type == TY_STRBUF)) {
@@ -25526,7 +25481,7 @@ static void an_caller_blocks_free(ACallerBlocks *t) {
    String is the shared handle (slot_holders); this sets the flags repr_of
    reads for them, through each holder kind's own representation: a local or a
    parameter takes STRBUF + str_shared (a lent parameter gives up its slot,
-   and convert_byref_handle_params then pulls its callers), an ivar or a
+   and pull_args_into_handle_params then pulls its callers), an ivar or a
    global the shared slot, and a container whose elements share demands the
    handle at each of its stores. A holder whose kind has no handle yet is left as it
    is; repr_seal refuses it. The route rules after this only carry the
@@ -26275,30 +26230,9 @@ static int share_default_apply(Compiler *c) {
       }
       /* a box holds the handle: each String written into it is boxed as
          its handle, as an ivar's are (share_lift_poly_ivar_stores) */
-      if (lv->type == TY_POLY) {
-        changed |= share_lift_poly_local_stores(c, sh->scope, lv->name);
-        continue;
-      }
-      if (lv->type != TY_STRING && lv->type != TY_STRBUF) continue;
-      if (repr_of_slot(c, lv).share) continue;
-      if (lv->is_param && !lv->is_block_param) {
-        /* an --rbs seed declares the Ruby type, String, and not its C form:
-           a seeded parameter takes the handle as an inferred one does
-           (reassert_rbs_param_seeds keeps it) */
-        if (lv->rbs_seeded && lv->rbs_type != TY_STRING) continue;
-        lv_set_type(lv, TY_STRBUF); { lv->str_shared = 1; comp_touch_scope(lv->owner); }
-        changed = 1;
-      }
-      /* a block's parameter holds the handle as a local does: what binds it
-         (a yield, an iterator) hands over the handle */
-      else if (lv->is_block_param) {
-        lv_set_type(lv, TY_STRBUF); { lv->str_shared = 1; comp_touch_scope(lv->owner); }
-        changed = 1;
-      }
-      else if (strbuf_slot_eligible(c, lv->name, s, lv)) {
-        lv_set_type(lv, TY_STRBUF); { lv->str_shared = 1; comp_touch_scope(lv->owner); }
-        changed = 1;
-      }
+      if (lv->type == TY_POLY) changed |= share_lift_poly_local_stores(c, sh->scope, lv->name);
+      /* (a String local, parameter or block parameter holds the handle
+         already: slot_take_string_handle) */
     }
     else if (sh->kind == SHK_IVAR) {
       int iv = comp_ivar_index(&c->classes[sh->cid], sh->name);
@@ -26463,7 +26397,7 @@ static int share_default_apply(Compiler *c) {
 
 /* Pure-alias pairs, as a pass of its own: promote_shared_stored_strings runs
    it in the fixpoint, and the post-fixpoint handle loop again, since a
-   local convert_byref_handle_params pulls into the handle there (`t = s;
+   local pull_args_into_handle_params pulls into the handle there (`t = s;
    grow(t)`) takes its alias source along only through this rule. */
 static int promote_local_alias_pair(Compiler *c, Scope *ws, const char *srcn, const char *tgtn);
 static int promote_local_alias_pairs(Compiler *c) {
@@ -26529,7 +26463,7 @@ static int promote_local_alias_pair(Compiler *c, Scope *ws, const char *srcn, co
      its callers' too, so the pair was skipped and the append landed in t's
      copy, lost even to the method's own later reads of y. The parameter
      takes the handle instead, as one handed on to a handle parameter does
-     (convert_byref_handle_params), and that pass then pulls its callers. */
+     (pull_args_into_handle_params), and that pass then pulls its callers. */
   int src_param = srcv->is_param && !srcv->is_block_param && !srcv->rbs_seeded &&
                   an_param_idx(ws, srcn) >= 0 &&
                   (srcv->type == TY_STRING || srcv->type == TY_STRBUF);
@@ -26538,9 +26472,9 @@ static int promote_local_alias_pair(Compiler *c, Scope *ws, const char *srcn, co
   int ms = strbuf_mut_kind(c, srcn, ws);
   int mt = strbuf_mut_kind(c, tgtn, ws);
   if (ms < 0 || mt < 0) return 0;         /* a disqualifying mutator */
-  /* Lent to a parameter that appends (a byref slot) is mutated in place
-     too: the callee's append writes the new String back through the slot,
-     and the other name kept the old one (an_local_lent). */
+  /* Handed to a parameter that appends is mutated in place too: the
+     callee's append is one to this String, and the other name kept the old
+     one (an_local_lent). */
   if (ms == 0 && an_local_lent(c, srcn, ws)) ms = 1;
   if (mt == 0 && an_local_lent(c, tgtn, ws)) mt = 1;
   /* An endpoint another rule made the handle counts as mutated: being the
@@ -27838,14 +27772,13 @@ static int desugar_fresh_array_map_bang(Compiler *c) {
 }
 
 /* A parameter RETAINED in a shared-handle ivar (`def initialize(b) @bt = b end`,
-   then `@bt << "x"` somewhere) has to arrive as the handle. The byref machinery
-   above only covers a callee that mutates the parameter ITSELF; a callee that
-   merely stores it and mutates it later, through the ivar, kept the caller's
-   string as a value and the two holders drifted apart -- which
+   then `@bt << "x"` somewhere) has to arrive as the handle. A callee that
+   merely stores the parameter and mutates it later, through the ivar, kept
+   the caller's string as a value and the two holders drifted apart -- which
    docs/limitations.md promises they do not (#4363). Marking the parameter is
-   all this rule does; convert_byref_handle_params then pulls every call site's
-   argument into the shared set, exactly as it does for a byref parameter that
-   has just become a handle. */
+   all this rule does; pull_args_into_handle_params then pulls every call site's
+   argument into the shared set, exactly as it does for any parameter that is
+   a handle. */
 /* Is this argument already a shared handle?
 
    Either by name -- an_arg_is_shared_handle reads the slot -- or through a
@@ -28456,8 +28389,8 @@ static void strbuf_arg_index_build(Compiler *c) {
 /* (scope, parameter) -> "some call site hands that parameter a shared handle".
 
    Evidence from the CALLER, which the rules around it do not have. The
-   propagation runs param -> argument: a parameter that is byref, or already a
-   handle, pulls its call sites' locals into the shared set. Nothing ran the
+   propagation runs param -> argument: a parameter that is already a
+   handle pulls its call sites' locals into the shared set. Nothing ran the
    other way, so a parameter that is only RETAINED -- never mutated, in a class
    that never mutates the slot -- stayed a value while the argument was a
    handle, and the call site handed it sp_str_concat(cstr, "") instead. The
@@ -28484,7 +28417,7 @@ typedef struct HandleArgTab {
   unsigned char *bit;
   int ok;              /* 0 when allocation failed: fall back to no evidence */
   /* scope -> its call sites, as a head/next chain over call node ids. The
-     byref pass below asked `does call u target scope mi2?` for every node and
+     handle pass below asked `does call u target scope mi2?` for every node and
      every handle parameter, which is O(handle params x nodes) -- fine while
      handle parameters were rare, and the dominant cost once a whole program's
      retaining classes became handles. The same walk that fills `bit` records
@@ -28561,7 +28494,7 @@ static void handle_arg_tab_free(HandleArgTab *t) {
   t->enext = NULL; t->enode = NULL; t->ok = 0;
 }
 
-/* Qualifiers flow in the opposite direction to byref inference: from a
+/* Qualifiers flow in the opposite direction to the handle pull: from a
    setjmp-live caller slot into the parameter borrowing it. Codegen seeds
    the slots using its existing selective volatility policy. Reuse the
    resolved call-site chains, including keywords, overrides and splices. */
@@ -28716,8 +28649,8 @@ static int promote_params_stored_in_shared_ivars(Compiler *c,
   return changed;
 }
 
-/* Does CallNode `u` statically call scope `mi2`? The byref machinery resolves
-   a callee by program-unique name, which is exactly what a constructor is not:
+/* Does CallNode `u` statically call scope `mi2`? A callee resolved by
+   program-unique name, which is exactly what a constructor is not:
    every class has an `initialize`, so the reported shape -- a string handed to
    `K.new` and retained in an ivar -- had no call site the propagation could
    find (#4363). `K.new(...)` resolves through the constant receiver instead.
@@ -29998,7 +29931,7 @@ static int poly_store_appended(const PolyStoreApp *t, const char *in, int wp) {
 }
 /* Lift read `a` of a POLY variable that can hold a String (poly_strbuf_lift);
    a method's own parameter read so is appended to as well, and its callers
-   are pulled in on the next round (convert_byref_handle_params). */
+   are pulled in on the next round (pull_args_into_handle_params). */
 static int lift_poly_read(Compiler *c, const HandleArgTab *hat, SbMutTab *lifted, int a) {
   const NodeTable *nt = c->nt;
   if (a < 0 || c->poly_strbuf_lift[a]) return 0;
@@ -30310,21 +30243,18 @@ static int pull_local_into_handle(Compiler *c, LocalVar *alv, const char *vn, Sc
   lv_set_type(alv, TY_STRBUF); { alv->str_shared = 1; comp_touch_scope(alv->owner); }
   return 1;
 }
-static int convert_byref_handle_params(Compiler *c,
-                                       const HandleArgTab *hat) {
+/* An argument handed to a parameter that is the handle, or to a POLY one
+   appended to in place, is lifted or marked to match: a parameter that is the
+   handle pulls every call site's plain-local argument into the shared set (so
+   its own caller still observes the mutation); a POLY one has its boxed
+   arguments lifted into the handle. */
+static int pull_args_into_handle_params(Compiler *c,
+                                        const HandleArgTab *hat) {
   const NodeTable *nt = c->nt;
   int changed = 0;
   /* the call-site chain is what makes this pass affordable; with no table
      there is nothing to walk, and promoting nothing is the safe answer */
   if (!hat->ok) return 0;
-  ALocalAliases aliases;
-  an_local_aliases_build(c, &aliases);
-  /* byref -> handle parameter conversion: a shared handle passed into a
-     string-mutating (byref) parameter converts that parameter to the handle
-     representation -- byref's const char** slot cannot carry the handle, so
-     the mutation silently landed in a discarded copy. Once converted, every
-     other call site's plain-local argument joins the shared set (so its own
-     caller still observes the mutation, as with byref). */
   for (int mi2 = 1; mi2 < c->nscopes; mi2++) {
     Scope *m2 = &c->scopes[mi2];
     if (!m2->name || m2->nparams <= 0) continue;
@@ -30344,71 +30274,7 @@ static int convert_byref_handle_params(Compiler *c,
                        an_poly_param_yielded_lent(c, mi2, pj) ||
                        fwd_poly_param_handed_on(c, mi2, pj, 0)));
       if (poly_mut && !(pp->poly_lift & POLY_LIFT_APPENDED)) { pp->poly_lift |= POLY_LIFT_APPENDED; changed = 1; }
-      /* A String parameter the callee mutates that inference typed from a
-         handle argument (the copy-on-read refinement, not the handle): it
-         never passed through the byref ABI this pass converts, so it is
-         converted the same way here -- read as a copy, the appends to a
-         keyword's handle stayed in the callee's. */
-      int strbuf_mut = (pp->is_param && pp->type == TY_STRBUF && !pp->str_shared &&
-                        an_param_mutated_in_place(c, mi2, pj));
-      /* --share-strings: a by-value String parameter the callee mutates (a
-         name group that could not lend its slot) is a copy, which a handle
-         argument must not be handed: it converts as a lent one does */
-      if (!strbuf_mut && pp->is_param && !pp->is_block_param &&
-          pp->type == TY_STRING && an_param_mutated_in_place(c, mi2, pj))
-        strbuf_mut = 1;
-      if (!is_handle && !poly_mut && !strbuf_mut) continue;
-      /* one pass over this method's call sites: detect a handle arg, and
-         (once converted) pull plain-local args into the shared set */
-      /* A POLY parameter the callee mutates in place boxes whatever it is
-         handed, and a plain String boxed is a copy: every call site's String
-         local has to hand the handle over, whether or not another already
-         does -- `m(v)` into `def m(p) = p << "x"` widened by `m([])`, or by
-         the boxed elements `m(*[], v)` gathers, lost the append. */
-      int saw_handle = is_handle || poly_mut;
-      for (int e = hat->head[mi2]; e >= 0; e = hat->enext[e]) {
-        int u = hat->enode[e];
-        int ua = arg_layout_param_node(c, m2, u, pj, NULL);
-        if (ua < 0) {
-          /* filled from a splat's elements or gathered into the rest: a
-             String there that is the handle makes the parameter one, since
-             a lent slot cannot ride in the Array the call builds */
-          int sr[32], sd[32];
-          int ns = spread_string_reads(c, m2, u, pj, sr, sd, 32);
-          for (int i = 0; i < ns && !saw_handle; i++) if (an_arg_is_shared_handle(c, sr[i])) saw_handle = 1;
-          continue;
-        }
-        if (an_arg_is_shared_handle(c, ua)) saw_handle = 1;
-        /* an ALIASED plain-local argument also demands the handle: the
-           callee's mutation must stay visible through the caller's alias
-           (byref reassigns only the one slot) */
-        else if (nt_kind(nt, ua) == NK_LocalVariableReadNode) {
-          const char *avn = nt_str(nt, ua, "name");
-          Scope *avs = avn ? comp_scope_of(c, ua) : NULL;
-          LocalVar *alv0 = avs ? scope_local(avs, avn) : NULL;
-          /* shape check WITHOUT the byref-arg clause: being this byref
-             param's argument is exactly the situation we are converting */
-          if (alv0 && !alv0->is_param && !alv0->is_cell &&
-              (alv0->type == TY_STRING || alv0->type == TY_UNKNOWN ||
-               alv0->type == TY_STRBUF) &&
-              an_local_has_alias(c, &aliases, avn, avs))
-            saw_handle = 1;
-          /* A growable buffer that is not (yet) the shared handle -- an
-             append accumulator, or a parameter inference typed from a
-             handle argument -- is an sp_String * all the same: it has no
-             const char * slot to lend, so the call lent a temp of its bytes
-             and the callee's append stayed there. */
-          else if (alv0 && !alv0->is_block_param && alv0->type == TY_STRBUF)
-            saw_handle = 1;
-        }
-      }
-      if (!saw_handle) continue;
-      if (strbuf_mut) {
-        { pp->is_cell = 0; comp_touch_scope(pp->owner); }
-        lv_set_type(pp, TY_STRBUF);
-        { pp->str_shared = 1; comp_touch_scope(pp->owner); }
-        changed = 1;
-      }
+      if (!is_handle && !poly_mut) continue;
       /* pull the remaining plain-local args into the shared set */
       for (int e = hat->head[mi2]; e >= 0; e = hat->enext[e]) {
         int u = hat->enode[e];
@@ -30450,9 +30316,8 @@ static int convert_byref_handle_params(Compiler *c,
              apply to them here (#4363). */
           if (alv && alv->is_param && !alv->is_block_param &&
               an_param_idx(vs2, vn2) >= 0 &&
-              (alv->type == TY_UNKNOWN || alv->type == TY_STRING ||
-               alv->type == TY_STRBUF)) {
-            if (alv->type != TY_STRBUF || !alv->str_shared) {
+              (alv->type == TY_UNKNOWN || alv->type == TY_STRBUF)) {
+            if (alv->type == TY_UNKNOWN) {
               lv_set_type(alv, TY_STRBUF); { alv->str_shared = 1; comp_touch_scope(alv->owner); }
               changed = 1;
             }
@@ -30515,11 +30380,9 @@ static int convert_byref_handle_params(Compiler *c,
       }
     }
   }
-  /* A `super` is a call site the table does not list: the parameter it
-     hands on and the parent's parameter it lands in are one String, so a
-     handle on either side makes both handles. Left a lent slot, the parent
-     took the handle's copy, and a bare `super` from a method whose caller
-     passed a handle lost the parent's appends. */
+  /* A `super` is a call site the table does not list: what it hands the
+     parent's parameter is pulled in as a call's argument is (a POLY
+     variable lifted, a plain local joined to the handle). */
   for (int pass = 0; pass < 2; pass++) {
     NodeKind sk = pass ? NK_ForwardingSuperNode : NK_SuperNode;
     for (int q = comp_kind_first(c, sk); q >= 0; q = comp_kind_next(c, q)) {
@@ -30568,20 +30431,9 @@ static int convert_byref_handle_params(Compiler *c,
           LocalVar *v3 = vs3 ? scope_local(vs3, vn3) : NULL;
           if (v3 && !v3->is_param && !v3->is_block_param && pull_local_into_handle(c, v3, vn3, vs3)) changed = 1;
         }
-        if (pi < 0) continue;
-        LocalVar *dst = scope_local(pm, pm->pnames[j]), *src = scope_local(s, s->pnames[pi]);
-        if (!dst || !src || !dst->is_param || !src->is_param || src->is_block_param) continue;
-        int dh = dst->type == TY_STRBUF && dst->str_shared;
-        int sh = src->type == TY_STRBUF && src->str_shared;
-        if (dh == sh) continue;
-        LocalVar *o = dh ? src : dst;
-        if (o->type != TY_STRING && o->type != TY_STRBUF) continue;
-        lv_set_type(o, TY_STRBUF); { o->str_shared = 1; comp_touch_scope(o->owner); }
-        changed = 1;
       }
     }
   }
-  an_local_aliases_free(&aliases);
   return changed;
 }
 
@@ -32413,7 +32265,7 @@ static int dyn_pull_arg(Compiler *c, int a, int mark_read) {
     return 1;
   }
   /* the method's own parameter, handed on (`def via(s, f) = f.call(s)`): it
-     takes the handle, and convert_byref_handle_params pulls via's callers in
+     takes the handle, and pull_args_into_handle_params pulls via's callers in
      on its next run */
   if (lv->is_param) {
     if (lv->is_block_param || an_param_idx(vs, vn) < 0) return 0;
@@ -32439,11 +32291,7 @@ static int dyn_pull_arg(Compiler *c, int a, int mark_read) {
 
 /* The callee side. A proc literal's (or a kept block's) String parameter
    that its body appends to reads the boxed channel as the handle
-   (emit_proc_literal_here), and so does a method a `method(:m)` names:
-   such a name keeps the value ABI (a Method's trampoline has no slot to
-   lend), and a value parameter appends to a copy. The method takes the handle instead, which its
-   trampoline, its thunk and a devirtualized `m.call(s)` all hand over, and
-   its direct callers are pulled in as a handle method's are. */
+   (emit_proc_literal_here). */
 static int dyn_convert_params(Compiler *c) {
   const NodeTable *nt = c->nt;
   int changed = 0;
@@ -32482,48 +32330,6 @@ static int dyn_convert_params(Compiler *c) {
       }
     }
   }
-  for (int n = comp_kind_first(c, NK_CallNode); n >= 0; n = comp_kind_next(c, n)) {
-    if (nt_kind(nt, n) != NK_CallNode) continue;
-    const char *nm = nt_str(nt, n, "name");
-    if (!nm || !(sp_streq(nm, "method") || sp_streq(nm, "public_method") ||
-                 sp_streq(nm, "instance_method") || sp_streq(nm, "public_instance_method"))) continue;
-    for (int mi = dyn_scopes_named(c, method_sym_arg(c, n)); mi >= 0; mi = g_dyn.snext[mi]) {
-      Scope *m = &c->scopes[mi];
-      unsigned app = dyn_meth_bits(c, mi) & 0xffffu;
-      for (int j = 0; app && j < m->nparams && j < DYN_ARGS; j++) {
-        if (!(app & (1u << j))) continue;
-        LocalVar *q = m->pnames[j] ? scope_local(m, m->pnames[j]) : NULL;
-        if (!q || !q->is_param || q->is_block_param || q->type != TY_STRING || q->is_cell) continue;
-        lv_set_type(q, TY_STRBUF); { q->str_shared = 1; comp_touch_scope(q->owner); } q->dyn_handle = 1; changed = 1;
-      }
-      /* its keywords the same way (`method(:m).call(k: s)`): bound by name,
-         and appended to as a copy while they kept the value ABI */
-      for (int j = 0; j < m->nparams; j++) {
-        if (!m->pnames[j] || !callee_param_is_declared_kwarg(c, m, m->pnames[j])) continue;
-        if (!(dyn_meth_kw_bits(c, mi, m->pnames[j], NULL) & 1u)) continue;
-        LocalVar *q = scope_local(m, m->pnames[j]);
-        if (!q || !q->is_param || q->is_block_param || q->type != TY_STRING || q->is_cell) continue;
-        lv_set_type(q, TY_STRBUF); { q->str_shared = 1; comp_touch_scope(q->owner); } q->dyn_handle = 1; changed = 1;
-      }
-    }
-  }
-  /* A method `define_method` defines keeps the value ABI too (its name is a
-     DYN literal), and a direct call reaches it as well as a Method: its
-     appended String parameter takes the handle the same way. */
-  for (int mi = 1; mi < c->nscopes; mi++) {
-    Scope *m = &c->scopes[mi];
-    int dn = m->def_node;
-    if (!m->name || dn < 0 || nt_kind(nt, dn) != NK_CallNode || !nt_str(nt, dn, "name") ||
-        !(sp_streq(nt_str(nt, dn, "name"), "define_method") ||
-          sp_streq(nt_str(nt, dn, "name"), "define_singleton_method"))) continue;
-    unsigned app = dyn_meth_bits(c, mi) & 0xffffu;
-    for (int j = 0; app && j < m->nparams && j < DYN_ARGS; j++) {
-      if (!(app & (1u << j))) continue;
-      LocalVar *q = m->pnames[j] ? scope_local(m, m->pnames[j]) : NULL;
-      if (!q || !q->is_param || q->is_block_param || q->type != TY_STRING || q->is_cell) continue;
-      lv_set_type(q, TY_STRBUF); { q->str_shared = 1; comp_touch_scope(q->owner); } q->dyn_handle = 1; changed = 1;
-    }
-  }
   free(tg);
   return changed;
 }
@@ -32533,9 +32339,8 @@ static int dyn_convert_params(Compiler *c) {
    A constructor is reached through sp_C_new, which about two dozen emitters
    call: a constant's `new`, a class value's, `self.new` in a class method,
    `raise`, a Struct's and a Data's, the poly `new` dispatch. So its
-   parameters kept the value ABI (a slot lent at the `.new` site alone
-   left the others passing values), and an initialize that appended to its String appended
-   to a copy. A String parameter the initialize appends to, or hands on to
+   parameters kept the value ABI, and an initialize that appended to its
+   String appended to a copy. A String parameter the initialize appends to, or hands on to
    a method or a `super` that does, takes the shared handle instead: one C
    type every binder can hand over (emit_arg_or_default's handle arm, and
    the class-value arms through the box). The caller's String variable at
@@ -32826,7 +32631,7 @@ static int ctor_pull_args(Compiler *c) {
   if (!tg) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   /* `super(t)` in an initialize, into the parent's handle parameter: a
      parameter of its own the super hands on is converted with the parent's
-     (convert_byref_handle_params), a local is pulled here */
+     (pull_args_into_handle_params), a local is pulled here */
   for (int q = comp_kind_first(c, NK_SuperNode); q >= 0; q = comp_kind_next(c, q)) {
     if (nt_kind(nt, q) != NK_SuperNode) continue;
     Scope *s = comp_scope_of(c, q);
@@ -32843,7 +32648,7 @@ static int ctor_pull_args(Compiler *c) {
   /* `super` in a class's own `def self.new` is Class#new: it constructs
      through the class's initialize (and a subclass's, when the method is
      inherited), so the String it hands on is pulled as a `new` call's is,
-     and `self.new`'s callers follow its parameter (convert_byref_handle_params) */
+     and `self.new`'s callers follow its parameter (pull_args_into_handle_params) */
   for (int pass = 0; pass < 2; pass++) {
     NodeKind sk = pass ? NK_ForwardingSuperNode : NK_SuperNode;
     for (int q = comp_kind_first(c, sk); q >= 0; q = comp_kind_next(c, q)) {
@@ -32966,7 +32771,7 @@ static int dyn_lift_poly_arg(Compiler *c, int n, int k, int a) {
 
 /* Run in the fixpoint beside promote_shared_stored_strings (so a container
    holding the String widens with it) and again after it beside
-   convert_byref_handle_params (so the byref slots have settled). */
+   pull_args_into_handle_params (so the parameters have settled). */
 /* What the target of dynamic site `n` -- a call, or a yield into a real
    proc -- does with its argument at position k. */
 static void dyn_site_reach(Compiler *c, int n, int k, DynReach *r) {
@@ -33094,7 +32899,7 @@ static int dyn_pull_site_args(Compiler *c, int n) {
     TyKind at = comp_ntype(c, av[k]);
     /* A POLY variable boxes whatever it holds, and a plain String boxed
        is a copy: a target that appends to it gets its read lifted into
-       the handle (convert_byref_handle_params' rule, at a dynamic call) */
+       the handle (pull_args_into_handle_params' rule, at a dynamic call) */
     if (at == TY_POLY) {
       if (nt_kind(nt, n) == NK_CallNode) changed |= dyn_lift_poly_arg(c, n, k, av[k]);
       continue;
@@ -33126,13 +32931,13 @@ static int dyn_pull_site_args(Compiler *c, int n) {
    as an alias of the caller's variable (inline_alias_params). An alias is a
    `const char **` slot, and a String that is the shared handle has none: the
    handle is carried instead. Such a parameter takes the handle, and every
-   variable bound to it is pulled in (convert_byref_handle_params pulls a
+   variable bound to it is pulled in (pull_args_into_handle_params pulls a
    method's callers, dyn_pull_arg a yield's variables). A program that
    yields no handle into an appending block keeps its C. */
 /* A plain String local that another local names too (`z = x; yield z`): the
    lent alias (a `const char **` slot) would grow only the yielded name, so
    such a local counts as a handle here, as an aliased local handed to a lent
-   parameter does (convert_byref_handle_params). The parameter or block
+   parameter does (pull_args_into_handle_params). The parameter or block
    parameter takes the handle, the local is pulled in, and the pure-alias
    rule (promote_local_alias_pairs) then takes its other names along. */
 static int an_local_is_handle_or_aliased(Compiler *c, const ALocalAliases *t, int a) {
@@ -33245,7 +33050,7 @@ static int yield_splice_site(Compiler *c, int y, int pass, ALocalAliases *aliase
     /* A parameter a nil or other argument widened to POLY boxes what it
        is bound to: yielded to a proc a call site passes that appends to
        it, that call site's String variable is pulled in, as for a POLY
-       parameter the method appends to itself (convert_byref_handle_params).
+       parameter the method appends to itself (pull_args_into_handle_params).
        Left as a plain String, the box the proc appended to was a copy. */
     if (at == TY_POLY) {
       /* the parameter yielded, or a local written from it (`z = x;
@@ -33786,7 +33591,7 @@ static int promote_dyncall_string_args(Compiler *c) {
    call form. When either parameter is appended to (or lent, or already the
    handle), both take the shared handle: the omitted default then binds x's
    handle itself (emit_arg_or_default_fill), and the callers are pulled in
-   as a handle method's are (convert_byref_handle_params). A default that
+   as a handle method's are (pull_args_into_handle_params). A default that
    only starts from x (`y = x.dup`, `y = x + ""`) is a String of its own and
    is left alone. Answers 1 when it changed anything. */
 static int default_param_mutated(Compiler *c, int mi, int j) {
@@ -33830,9 +33635,8 @@ static int promote_default_alias_params(Compiler *c) {
    of a plain String, and a method appending to the parameter (or to the
    rest's element) grew the copy, where CRuby grows the caller's String.
    Such a String variable becomes the shared handle, so the Array holds the
-   handle and the method appends through it in place; a parameter lent a
-   slot (byref) takes the handle instead, since a slot cannot ride in an
-   Array (convert_byref_handle_params). Only a call with a splat or a
+   handle and the method appends through it in place
+   (pull_args_into_handle_params). Only a call with a splat or a
    gather into such a parameter is touched. */
 
 /* Does method mi append to the elements of its rest parameter: `r[i] << x`,
@@ -33993,7 +33797,7 @@ static int spread_param_appended(Compiler *c, int mi, int pj) {
 
 /* Run in the fixpoint beside promote_dyncall_string_args, so the container
    rule widens a splatted local Array with the handle it now holds, and
-   after it beside convert_byref_handle_params. The targets are every
+   after it beside pull_args_into_handle_params. The targets are every
    method of the call's name (a splat's positions are the run time's, and a
    group member that only reads pulls nothing), and a class's initialize
    for its `new`: bound by value, that one is refused still
@@ -34450,7 +34254,7 @@ static int a_scope_super_passes_block(Compiler *c, Scope *m) {
    the caller boxed a copy of its String, which the target appended to. A
    POLY parameter handed on this way pulls its callers' Strings into the
    handle as one the method appends to itself does
-   (convert_byref_handle_params), and a rest whose elements are forwarded
+   (pull_args_into_handle_params), and a rest whose elements are forwarded
    pulls the Strings its callers gather into it (promote_forwarded_rest_args),
    so the box carries the handle, which the target appends through. */
 
@@ -52918,7 +52722,7 @@ static void an_phase_post_fixpoint(Compiler *c) {
         if (!p1 || !p2) continue;
         if (p1->type != p2->type && (p1->type == TY_POLY || p2->type == TY_POLY)) {
           /* a handle widened to a box is still appended to: its callers
-             hand over the handle (convert_byref_handle_params) */
+             hand over the handle (pull_args_into_handle_params) */
           LocalVar *ph = p1->type == TY_POLY ? p2 : p1;
           if (ph->type == TY_STRBUF && ph->str_shared) {
             ph->poly_lift |= POLY_LIFT_APPENDED;
@@ -54643,7 +54447,7 @@ static void an_phase_proc_returns(Compiler *c) {
   }
 }
 
-/* The instance_eval re-infer and the storage refinements: byref string out-params, handle params, the reader operand marks, the STRBUF promotion, the shared and aliased strings (analyze_program's steps, in their order) */
+/* The instance_eval re-infer and the storage refinements: handle slots, handle params, the reader operand marks, the STRBUF promotion, the shared and aliased strings (analyze_program's steps, in their order) */
 static void an_phase_storage(Compiler *c) {
   /* Re-infer nodes inside instance_eval block bodies with the receiver's class
      context, so ivar reads get correct types in the final c->ntype cache.
@@ -54684,8 +54488,8 @@ static void an_phase_storage(Compiler *c) {
      only after the fixpoint). */
   AN_STEP_V("all_handle_slots", all_handle_slots(c));
   AN_STEP_V("strbuf_arg_index_build", strbuf_arg_index_build(c));
-  /* handle args cannot ride byref's const char** slot: convert such params
-     to the handle representation, cascading through transitive passes. A
+  /* an argument handed to a handle parameter is pulled into the handle,
+     cascading through transitive passes. A
      parameter RETAINED in a shared-handle ivar demands the handle for the
      same reason and feeds the same propagation, so the two run to a joint
      fixpoint rather than one after the other (#4363). */
@@ -54709,7 +54513,7 @@ static void an_phase_storage(Compiler *c) {
       int ch = all_handle_slots(c);
       handle_arg_tab_init(c, &hat);
       if (promote_params_stored_in_shared_ivars(c, &hat)) ch = 1;
-      if (convert_byref_handle_params(c, &hat)) ch = 1;
+      if (pull_args_into_handle_params(c, &hat)) ch = 1;
       if (lift_poly_alias_reads(c, &hat)) ch = 1;
       if (promote_local_alias_pairs(c)) ch = 1;
       if (promote_dyncall_string_args(c)) ch = 1;

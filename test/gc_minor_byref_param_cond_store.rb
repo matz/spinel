@@ -1,6 +1,6 @@
-# A method that appends to its String parameter takes it by reference
+# A method that appended to its String parameter once took it by reference
 # (`const char **_cell_io`, pointing at the caller's stack local), and such
-# a store takes no barrier. Here a condition that assigns through `||`
+# a store took no barrier. Here a condition that assigns through `||`
 # breaks its C over lines, one of which starts at column 0 and ends with
 # `{`. Taken as the function's header, it hid `_cell_io` from the check,
 # the stores after it took `sp_gc_wb` on the caller's stack slot, and a

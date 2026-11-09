@@ -168,8 +168,7 @@ typedef struct {
   int cell_outlives; /* the cell was made for a proc that can OUTLIVE the call
                        (a proc/lambda, a Fiber/Thread body, a handler, a block
                        forwarded into a poly callee). A cell only lifted
-                       iteration blocks made is consumed while the call runs,
-                       so a byref parameter may still lend its slot (#4568). */
+                       iteration blocks made is consumed while the call runs. */
   int proc_rebinds; /* a proc or block that captures it assigns the cell:
                        any later call may run it and rebind the local, so a
                        read ahead of one is taken first (read_rebound_by) */
@@ -359,7 +358,7 @@ typedef struct {
                        place, by the method itself or by a method it hands
                        the parameter to (its read lifted into the handle,
                        poly_strbuf_lift), so its callers hand over the handle
-                       (convert_byref_handle_params). POLY_LIFT_ZSUPER: a
+                       (pull_args_into_handle_params). POLY_LIFT_ZSUPER: a
                        bare `super` hands it to such a parameter and it can
                        hold a String, so the super lifts it as a marked read
                        is (emit_zsuper_arg). (#6179) */

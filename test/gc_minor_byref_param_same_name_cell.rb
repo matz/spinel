@@ -1,8 +1,8 @@
-# A method that appends to its String parameter takes it by reference: the
-# callee stores through `const char **_cell_io`, which the caller may point
-# at its own stack local (`emit(&lv_io)`). Such a store takes no barrier --
-# the lending site records a heap cell it lends, and the caller's frame roots
-# a stack local.
+# A method that appends to its String parameter appends to the caller's
+# String. The callee once stored through `const char **_cell_io`, which the
+# caller could point at its own stack local (`emit(&lv_io)`); such a store
+# took no barrier -- the lending site recorded a heap cell it lent, and the
+# caller's frame rooted a stack local.
 # spinel: gc-minor
 def emit(io)
   io << "a"

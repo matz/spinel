@@ -1,7 +1,7 @@
 # A method with a rescue declares its locals volatile (they live across the
-# setjmp). Lending such a String local to a method that appends to it passed
-# `const char *volatile *` where the callee takes `const char **`, which the
-# C compiler refused.
+# setjmp). Handing such a String local to a method that appends to it once
+# passed a pointer to the volatile slot where the callee took a pointer to a
+# plain one, which the C compiler refused.
 
 def put(data)
   data << "x"

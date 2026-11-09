@@ -829,8 +829,8 @@ void emit_inline_locals_aliased(Compiler *c, int mi, int tag, unsigned alias_mas
 void emit_inline_alias_arg(Compiler *c, int av, Buf *b) {
   const NodeTable *nt = c->nt;
   if (nt_kind(nt, av) == NK_InstanceVariableReadNode) {
-    /* the slot itself, and the owner pinned as a byref call pins it: the
-       store lands inside this expansion, past any dirty bit (#4378) */
+    /* the slot itself, and the owner pinned: the store lands inside this
+       expansion, past any dirty bit (#4378) */
     const char *ivn = nt_str(nt, av, "name");
     /* a C global is a root every collection marks: no owner to pin */
     Buf gref; memset(&gref, 0, sizeof gref);

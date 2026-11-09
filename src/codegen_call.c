@@ -29216,7 +29216,7 @@ static void refuse_rest_yield_copies(Compiler *c, int id, int t) {
 /* A method that forwards its rest (`def w(*a) = m(*a)`, `*`, `...`) to a
    parameter that appends, or hands a POLY parameter on to one (`def m(p,
    k:) = super`, called with `**h`): the call's String variable is pulled
-   into the handle (promote_forwarded_rest_args, convert_byref_handle_params),
+   into the handle (promote_forwarded_rest_args, pull_args_into_handle_params),
    but for one that cannot be -- a block's parameter, an ivar that is no
    handle, a global or class variable -- which goes over as a copy. */
 static void refuse_forwarded_args(Compiler *c, int id, const char *name) {
@@ -29323,8 +29323,7 @@ static int nonlocal_string_typed(Compiler *c, int a) {
 /* A global or a class variable handed to a method's parameter that takes
    a String's handle or box and appends to it. The binder wraps a fresh
    handle of its bytes, or boxes a copy, where the variable has no handle
-   of its own to give; only a lent slot (the byref ABI) can carry it. One
-   that holds the handle hands it over. A receiver that is boxed reaches
+   of its own to give. One that holds the handle hands it over. A receiver that is boxed reaches
    every class's method of the name. */
 static void refuse_nonlocal_param_args(Compiler *c, int id, const char *name) {
   const NodeTable *nt = c->nt;

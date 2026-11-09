@@ -2540,7 +2540,7 @@ gc-nogc-poll-test: $(SPINEL) $(SP_RT_LIB) $(SPINEL_TIMEOUT)
 	  { echo "gc-nogc-poll-test: FAIL ($${n:-0} collections over 200000 rounds of Bignums: the back-edge ran none)"; rm -rf "$$tmp"; exit 1; }; \
 	rm -rf "$$tmp"; echo "gc-nogc-poll-test: pass ($$n collections)"
 
-# A byref String parameter that a lifted proc also captures: the capture holds
+# A String parameter that a lifted proc also captures: the capture once held
 # the CALLER's slot, which for the stack shape is not a GC object, and marking
 # it read a header off the stack (#4391). Run under GC stress because the fault
 # needs a collection while the proc is live -- with stress that is every
@@ -4502,8 +4502,7 @@ cls-fact-check: $(SPINEL)
 # only -- so without this a fixture whose C names the right types but does not
 # compile, or compiles and then raises, passes the whole leg.
 # The C a String parameter, field or local is declared as, which the checks
-# below read: the handle, and a by-reference String parameter the same (a
-# handle needs no cell)
+# below read: the handle (a handle needs no cell)
 STR_SLOT_C = sp_String \*
 STR_SLOT_RE = sp_String[[:space:]]*\*
 STR_BYREF_S = sp_String \* lv_s

@@ -18530,6 +18530,13 @@ static void oa_call_value_uses(Compiler *c, OAS *sl, const int *read_slot, char 
       if (seen[id] || nt_kind(nt, id) != NK_CallNode || (dead && dead[id])) continue;
       int recv = nt_ref(nt, id, "receiver");
       if (recv < 0 || recv >= nc || call_ret[recv] < 0 || claimed[recv] || read_slot[recv] >= 0) continue;
+      /* (not a push onto a call on self, `details << x` in a method of the
+         class (#11465): narrowed here, the fixpoint traded the reader's
+         return between the typed and the poly Array until it gave up. As
+         before step 4b, such a use kills; `b = details; b << x`, and a
+         read or another write through the call, narrow as they did.) */
+      { int rr = nt_ref(nt, recv, "receiver");
+        if ((rr < 0 || nt_kind(nt, rr) == NK_SelfNode) && is_array_push_family(nt_str(nt, id, "name"))) continue; }
       seen[id] = 1;
       oa_recv_use(c, sl, call_ret[recv], id, recv, read_slot, claimed, call_ret, value_ok, walk_disc, par, nc);
       more = 1;

@@ -7493,6 +7493,7 @@ static void gc_wb_insert_seg(Compiler *c, Buf *b, size_t fn_off) {
       buf_printf(&ins, ") _wb%d = ", wid);
       buf_putn(&ins, b->p + st, i - st);
       buf_printf(&ins, "; _wb%d", wid);
+      size_t at_eq = ins.len + (q - i);   /* where the store's `=` lands */
       buf_putn(&ins, b->p + i, stmt_end - i + 1);
       /* A statement expression's last statement is its value, and this store
          can be one (`({ ...; o->f = v; })`). Keep the assigned value as the
@@ -7504,7 +7505,10 @@ static void gc_wb_insert_seg(Compiler *c, Buf *b, size_t fn_off) {
       memmove(b->p + st + ins.len, b->p + st + (stmt_end + 1 - st), tail2);
       memcpy(b->p + st, ins.p, ins.len);
       b->p[b->len] = '\0';
-      i = st + ins.len;
+      /* rescan inside the value, past the store's `=`: it can hold stores of
+         its own (an inlined constructor's `@a = []` inside `@x = Set.new`),
+         which went unbarriered when the scan went on past the statement */
+      i = st + at_eq;
       free(ins.p);
       continue;
     }

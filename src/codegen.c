@@ -19609,6 +19609,12 @@ static void scan_prologue_features(Compiler *c) {
           (sp_streq(nm, "each") || sp_streq(nm, "each_pair") ||
            sp_streq(nm, "values") || sp_streq(nm, "values_at") ||
            sp_streq(nm, "entries") || sp_streq(nm, "size") || sp_streq(nm, "length"))) reached = 1;
+      /* an Array name a Struct lacks (sp_poly_ary_chk): the dispatch tells
+         a Struct, whose members the user element read takes for elements */
+      if (nm && rv >= 0 && repr_of(c, rv).kind == RK_BOXED &&
+          (sp_streq(nm, "last") || sp_streq(nm, "join") || sp_streq(nm, "sample") ||
+           sp_streq(nm, "shuffle") || sp_streq(nm, "flatten") || sp_streq(nm, "at") ||
+           sp_streq(nm, "pack"))) reached = 1;
       /* any dig: a Struct's, typed or not, can reach the runtime walk, whose
          receiver check asks this dispatch (sp_poly_dig_recv_ok) */
       if (nm && rv >= 0 && sp_streq(nm, "dig")) reached = 1;

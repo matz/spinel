@@ -15585,8 +15585,8 @@ int emit_super_inline(Compiler *c, int id, Buf *b, int indent, int as_expr) {
   /* the next shadow in this class -- an earlier include's, prepend's or
      extend's copy -- is the parent here, as in emit_super's call form */
   const char *shadow = comp_super_shadow(c, st);
-  /* the target is the super's plan (call_plan.c) when it was looked up where
-     this splice looks: the shadow's class, or the parent's chain under this
+  /* the target is the super's plan (call_plan.c) when it was looked up as
+     this splice looks: the shadow, or the parent's chain under this
      method's own name. The plan asks the chain for the user name
      (comp_super_name), which a proc-form clone's does not carry: the splice
      looks that up by the clone's name and leaves it to emit_super. A
@@ -15599,7 +15599,7 @@ int emit_super_inline(Compiler *c, int id, Buf *b, int indent, int as_expr) {
   const CallPlan *spl = cplan_user(c, id);
   const char *own = comp_scope_def_name(c, st);
   int mi = -1;
-  if (spl->via == UC_SUPER && spl->mi >= 0 && spl->owner_ci == (shadow ? st->class_id : p) &&
+  if (spl->via == UC_SUPER && spl->mi >= 0 &&
       (shadow || (c->scopes[spl->mi].name && sp_streq(c->scopes[spl->mi].name, own)))) {
     mi = spl->mi;
     if (!shadow) defcls = c->scopes[mi].class_id;
@@ -15607,10 +15607,9 @@ int emit_super_inline(Compiler *c, int id, Buf *b, int indent, int as_expr) {
   if (g_plan_check && mi >= 0) cplan_served("super-inline");
   if (g_plan_check || mi < 0) {
     int odef = -1;
-    int omi = shadow ? (st->is_cmethod ? comp_cmethod_in_class(c, st->class_id, shadow)
-                                       : comp_method_in_class(c, st->class_id, shadow))
+    int omi = shadow ? call_target(c, id, st->class_id, shadow, CT_OWN | CT_REACH | (st->is_cmethod ? CT_CMETHOD : 0), NULL)
             : p < 0 ? -1
-            : cplan_super_chain_mi(c, id, st, p, own);
+            : cplan_super_chain_mi(c, id, st, p, own, NULL);
     if (!shadow && omi >= 0) odef = c->scopes[omi].class_id;
     if (mi < 0) {
       if (g_plan_check && omi >= 0)
@@ -16031,12 +16030,13 @@ static int struct_super_handle_arg(Compiler *c, int v, Buf *b) {
   return 1;
 }
 
-/* emit_super's target from the super's plan (call_plan.c) when the plan was
-   resolved in owner (the shadow's class, or the parent's chain), or -1.
-   A miss selects the existing builtin or error rendering. */
-static int super_plan_mi(Compiler *c, int id, int owner) {
+/* emit_super's target from the super's plan (call_plan.c), or -1. The plan
+   started its lookup where the super does (cplan_super_target), so there is
+   no start to compare. A miss selects the existing builtin or error
+   rendering. */
+static int super_plan_mi(Compiler *c, int id) {
   const CallPlan *spl = cplan_user(c, id);
-  return spl->via == UC_SUPER && spl->mi >= 0 && owner >= 0 && spl->owner_ci == owner ? spl->mi : -1;
+  return spl->via == UC_SUPER ? spl->mi : -1;
 }
 
 /* self, boxed, in a method of class `cls`: a builtin's reopening holds it
@@ -16268,7 +16268,7 @@ void emit_super(Compiler *c, int id, Buf *b) {
     /* The plan's target for the generated shadow in this class: it, or the
        entry over a layer of versions under its name (the call plan's
        super_layer_entry), whose arms run it */
-    int smi = super_plan_mi(c, id, st->class_id);
+    int smi = super_plan_mi(c, id);
     if (smi >= 0 && !(c->scopes[smi].class_id == st->class_id &&
                       (c->scopes[smi].entry == ENTRY_DISPATCH ||
                        (c->scopes[smi].name && sp_streq(c->scopes[smi].name, shadow)))))
@@ -16314,8 +16314,8 @@ void emit_super(Compiler *c, int id, Buf *b) {
     /* a later extend's copy: super reaches the earlier module's copy, kept in
        this class under its shadow name */
     const char *cshadow = comp_super_shadow(c, st);
-    /* the plan's class method when it was looked up where this form looks */
-    cmi = super_plan_mi(c, id, cshadow ? s->class_id : p);
+    /* the plan's class method (its target, whichever class it starts from) */
+    cmi = super_plan_mi(c, id);
     if (cmi >= 0 && !c->scopes[cmi].is_cmethod) cmi = -1;
     int served = cmi >= 0;
     if (served) cdef = cshadow ? s->class_id : c->scopes[cmi].class_id;
@@ -16422,8 +16422,8 @@ void emit_super(Compiler *c, int id, Buf *b) {
     return;
   }
   int defcls = -1;
-  /* the plan's method when it was looked up in the parent's chain */
-  int mi = super_plan_mi(c, id, p);
+  /* the plan's method (its target, whichever class it starts from) */
+  int mi = super_plan_mi(c, id);
   if (mi >= 0 && c->scopes[mi].is_cmethod) mi = -1;
   int served = mi >= 0;
   if (served) defcls = c->scopes[mi].class_id;
@@ -17229,8 +17229,12 @@ static int user_dispatch_arg(Compiler *c, Scope *m, int pi, const char *v,
   guard[0] = 0;
   if (ty_is_object(pt)) {
     int pcls = ty_object_class(pt);
-    snprintf(guard, gsz, "%s.tag == SP_TAG_OBJ && %s.cls_id == %d",
-             v, v, pcls);
+    /* (an object of a Time or Array subclass is boxed with its builtin's
+       id: the class its allocation names, sp_poly_bsub_obj) */
+    if (comp_ty_is_timesub(c, pt) || c->classes[pcls].ary_root > 0)
+      snprintf(guard, gsz, "%s.tag == SP_TAG_OBJ && sp_poly_bsub_obj(%s).cls_id == %d", v, v, pcls);
+    else
+      snprintf(guard, gsz, "%s.tag == SP_TAG_OBJ && %s.cls_id == %d", v, v, pcls);
     snprintf(arg, asz, "%s(sp_%s *)%s.v.p",
              c->classes[pcls].is_value_type ? "*" : "", c->classes[pcls].c_name, v);
   }
@@ -21339,6 +21343,32 @@ static void emit_class_machinery(const NodeTable *nt, Compiler *c, Buf *b, char 
       "    if(v.cls_id>=-20||v.cls_id==-34)return ((sp_Class){-105});\n"  /* hashes */
       /* a BasicObject.new is a BasicObject, not an Object or a Kernel */
       "    if(v.cls_id==SP_BUILTIN_BASIC_OBJECT)return ((sp_Class){-117});\n"
+      /* a builtin handle (a Dir, IO, File, socket, Mutex, Queue, Thread,
+         Fiber, Regexp...) is its own builtin class, as #class answers, so
+         is_a?(k) and k === v with k a class value walk that class's chain
+         (Dir and IO are Enumerable), not Object's. One cls_id holds
+         several classes for an IO and a Queue: the handle's class name
+         tells them apart. A name with no builtin id (Monitor, File::Stat)
+         stays an Object, as before. */
+      "    switch(v.cls_id){\n"
+      "    case SP_BUILTIN_DIR: return ((sp_Class){-165});\n"
+      "    case SP_BUILTIN_THREAD: return ((sp_Class){-174});\n"
+      "    case SP_BUILTIN_CONDVAR: return ((sp_Class){-178});\n"
+      "    case SP_BUILTIN_FIBER: return ((sp_Class){-179});\n"
+      "    case SP_BUILTIN_REGEX: return ((sp_Class){-143});\n"
+      "    case SP_BUILTIN_IO: case SP_BUILTIN_MUTEX: case SP_BUILTIN_QUEUE: {\n"
+      "      const char *_n=sp_poly_class_name(v);\n"
+      "      if(!strcmp(_n,\"IO\"))return ((sp_Class){-120});\n"
+      "      if(!strcmp(_n,\"File\"))return ((sp_Class){-121});\n"
+      "      if(!strcmp(_n,\"Thread::Mutex\"))return ((sp_Class){-175});\n"
+      "      if(!strcmp(_n,\"Thread::Queue\"))return ((sp_Class){-176});\n"
+      "      if(!strcmp(_n,\"Thread::SizedQueue\"))return ((sp_Class){-177});\n"
+      "      sp_int _bid=sp_builtin_id_of_name(_n);\n"   /* a socket */
+      "      if(_bid!=SP_CLASS_NIL_ID)return ((sp_Class){_bid});\n"
+      "      break;\n"
+      "    }\n"
+      "    default: break;\n"
+      "    }\n"
       "    return ((sp_Class){-116});\n"
       "  default: return ((sp_Class){-116});\n"
       "  }\n}\n"

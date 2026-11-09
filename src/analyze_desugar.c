@@ -2817,7 +2817,16 @@ int desugar_dynamic_const_get_arms(Compiler *c) {
     /* const_defined? also knows the builtin top-level names (String,
        Comparable, ARGV), each arm answered at compile time */
     int rci = const_get_recv_class(c, id, recv);
-    if (sp_streq(nm, "const_defined?") && !(rci >= 0 && class_is_blank_slate(c, rci))) {
+    /* a class below BasicObject sees BasicObject's own name alone */
+    if (sp_streq(nm, "const_defined?") && rci >= 0 && class_below_object(c, rci)) {
+      int dup = 0;
+      for (int k = 0; k < ncand && !dup; k++) dup = sp_streq(cand[k], "BasicObject");
+      char **g = dup ? cand : (char **)realloc(cand, sizeof(char *) * (size_t)(ncand + 1));
+      if (!g) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+      cand = g;
+      if (!dup) cand[ncand++] = (char *)"BasicObject";
+    }
+    else if (sp_streq(nm, "const_defined?")) {
       int nw = 0; while (comp_wellknown_const_at(nw)) nw++;
       char **g = (char **)realloc(cand, sizeof(char *) * (size_t)(ncand + nw + 1));
       if (!g) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
@@ -7597,7 +7606,13 @@ static int dsend_recv_local_ok(Compiler *c, const NodeTable *nt, int n, int *run
   case NK_CallNode: {
     const char *nm = nt_str(nt, n, "name");
     *runs = 1;
-    return nm && call_target(c, n, -1, nm, CT_TOP, NULL) >= 0;
+    /* (`klass.new` on a class value only the run time knows has no
+       target: its arms then each held their own `klass.new`, and a String
+       mutator arm's handle step for it ran ahead of the dispatch. A `new`
+       answers an object; a program's own `new` that answers a typed
+       container's miss puts a nil in the local, whose arms answer for nil,
+       as test/dsend_class_value_new_recv.rb checks) */
+    return nm && (call_target(c, n, -1, nm, CT_TOP, NULL) >= 0 || sp_streq(nm, "new"));
   }
   case NK_ParenthesesNode: case NK_StatementsNode: {
     int body = nt_kind(nt, n) == NK_ParenthesesNode ? nt_ref(nt, n, "body") : n;
@@ -18374,12 +18389,13 @@ int desugar_builtin_scalar_defs(Compiler *c) {
       int closed = bi_def_visibility(nt, def) != BVIS_PUBLIC;
       int pn0 = nt_ref(nt, def, "parameters");
       int shape_ok = 1;
-      if (pn0 >= 0 && nt_ref(nt, pn0, "keyword_rest") >= 0)
-        shape_ok = 0;
-      if (shape_ok && pn0 >= 0) { int psn = 0; nt_arr(nt, pn0, "posts", &psn); if (psn > 0) shape_ok = 0; }
-      if (shape_ok && pn0 >= 0) { int kwn = 0; nt_arr(nt, pn0, "keywords", &kwn); if (kwn > 0) shape_ok = 0; }
+      /* keywords and a **rest clone too: a call with a block
+         (`3.times { }`) that the generic does not take stays on the
+         builtin iteration, which ignores the reopen and types the call
+         as the reopen's answer */
+      if (pn0 >= 0) { int psn = 0; nt_arr(nt, pn0, "posts", &psn); if (psn > 0) shape_ok = 0; }
       if (!shape_ok) {
-        /* A reopen this registration cannot clone (keyword or post-splat
+        /* A reopen this registration cannot clone (post-splat
            parameters) still REPLACES the name for the program.
            Skipping it silently was only safe while the name was the
            program's alone; when it is also one a builtins/ file defines,
@@ -18573,32 +18589,149 @@ static int bx_recv_concrete(int bx, TyKind rt) {
   return 0;
 }
 
-/* Does an alias or alias_method of the program name a method nm? (It may
-   capture a builtin method, which no scope holds.) */
+/* Is module k module m, or does m mix it in, by include or by prepend
+   (through m's own mixins)? */
+static int bx_mixes_in(Compiler *c, int m, int k, int depth) {
+  if (m == k) return 1;
+  if (m < 0 || m >= c->nclasses || depth > 16) return 0;
+  const ClassInfo *mi = &c->classes[m];
+  for (int i = 0; i < mi->nincluded_mods; i++) if (bx_mixes_in(c, mi->included_mods[i], k, depth + 1)) return 1;
+  for (int i = 0; i < mi->nprepended_mods; i++) if (bx_mixes_in(c, mi->prepended_mods[i], k, depth + 1)) return 1;
+  return 0;
+}
+/* The Comparable builtins (other than Integer and Float) whose call to a
+   method the program adds to `module Comparable` takes the method's copy
+   (bx_cmp_own_class). NULL ends the list. */
+static const char *const bx_cmp_recv_cls[] = { "String", "Symbol", "Time", "Rational", NULL };
+/* Is class or module k one of bx_cmp_recv_cls, Numeric, Comparable,
+   Object, Kernel, BasicObject or the top level, or a module one of them or
+   the top level mixes in, as the class table holds them? (k < 0: a class
+   the caller does not know, so yes.) */
+static int bx_owner_in_string_chain(Compiler *c, int k) {
+  if (k < 0 || k >= c->nclasses || k == c->toplevel_class) return 1;
+  static const char *const more[] = { "Numeric", "Comparable", "Object", "Kernel", "BasicObject", NULL };
+  int nr = 0;
+  while (bx_cmp_recv_cls[nr]) nr++;
+  for (int i = 0; i < nr || more[i - nr]; i++) {
+    int r = comp_builtin_class_named(c, i < nr ? bx_cmp_recv_cls[i] : more[i - nr]);
+    if (r == k) return 1;
+    for (int a = r, d = 0; a >= 0 && a < c->nclasses && d < 64; a = c->classes[a].parent, d++)
+      if (bx_mixes_in(c, a, k, 0)) return 1;
+  }
+  for (int i = 0; i < c->ntoplevel_includes; i++)
+    if (bx_mixes_in(c, c->toplevel_includes[i], k, 0)) return 1;
+  return 0;
+}
+/* A Module method that can put a method of one class onto another, or
+   make a `class X` body reopen a builtin: const_set, define_method, the
+   evals, instance_method */
+static int bx_reflective_name(const char *n) {
+  static const char *const names[] = { "const_set", "define_method", "instance_method", "class_eval",
+    "module_eval", "class_exec", "module_exec", "instance_eval", "instance_exec", "eval", NULL };
+  for (int i = 0; names[i]; i++) if (sp_streq(n, names[i])) return 1;
+  return 0;
+}
+/* Is program class k surely a class of its own, which no String reaches?
+   Not when the program writes a constant of k's last name (`Other =
+   String.itself; class Other`: the class table opens a new class where
+   CRuby reopens String), or names a Module method that can move a method
+   or a class body (bx_reflective_name: `define_method(:p,
+   &Other.new.method(:p))`, `alias dm define_method`), or sends a name the
+   walk can not read. */
+static int bx_class_surely_own(Compiler *c, int k) {
+  const NodeTable *nt = c->nt;
+  const char *full = k >= 0 && k < c->nclasses ? c->classes[k].name : NULL;
+  if (!full) return 0;
+  const char *leaf = strrchr(full, ':');
+  leaf = leaf ? leaf + 1 : full;
+  for (int id = 0; id < nt->count; id++) {
+    const char *wn = NULL;
+    switch (nt_kind(nt, id)) {
+    case NK_ConstantWriteNode: case NK_ConstantOrWriteNode: case NK_ConstantAndWriteNode:
+    case NK_ConstantOperatorWriteNode:
+      wn = nt_str(nt, id, "name"); break;
+    case NK_ConstantPathWriteNode: case NK_ConstantPathOrWriteNode: case NK_ConstantPathAndWriteNode:
+    case NK_ConstantPathOperatorWriteNode: {
+      int t = nt_ref(nt, id, "target");
+      wn = t >= 0 ? nt_str(nt, t, "name") : NULL;
+      if (!wn) return 0;
+      break;
+    }
+    case NK_CallNode: {
+      const char *cn = nt_str(nt, id, "name");
+      if (!cn || bx_reflective_name(cn)) return 0;
+      /* a send of a name the walk can not read */
+      int ac = 0;
+      const int *av = call_args(nt, id, &ac);
+      if ((sp_streq(cn, "send") || sp_streq(cn, "__send__") || sp_streq(cn, "public_send")) &&
+          !(ac > 0 && vis_arg_name(nt, av[0]))) return 0;
+      break;
+    }
+    /* the name as a symbol or a string: an alias of it, a send of it,
+       instance_method(:define_method) */
+    case NK_SymbolNode: case NK_StringNode: {
+      const char *v = vis_arg_name(nt, id);
+      if (v && bx_reflective_name(v)) return 0;
+      break;
+    }
+    default: break;
+    }
+    if (wn && sp_streq(wn, leaf)) return 0;
+  }
+  return 1;
+}
+/* May an alias on class side k answer an instance method for a String or
+   a Symbol? A module may: the program can mix it in where the class table
+   does not show it (`send(:include, Foo.ancestors[1])`), or copy its
+   method by define_method. A class is never mixed in, so only the chain
+   classes themselves answer, and a class whose identity the table may
+   have wrong (bx_class_surely_own). */
+static int bx_owner_reaches_string(Compiler *c, int k) {
+  if (k >= 0 && k < c->nclasses && comp_class_is_module(c, &c->classes[k])) return 1;
+  return bx_owner_in_string_chain(c, k) || !bx_class_surely_own(c, k);
+}
+/* Does an alias or alias_method of the program name a method nm that a
+   String or a Symbol may answer? (It may capture a builtin method, which no
+   scope holds.) The load record gives the class side each alias it can
+   follow binds on: an instance alias in a class no String reaches
+   (bx_owner_reaches_string), or a singleton alias, does not count. An alias
+   the record does not place (class_eval, a computed receiver) counts. */
 static int bx_program_aliases(Compiler *c, const char *nm) {
   const NodeTable *nt = c->nt;
-  for (int id = 0; id < nt->count; id++) {
+  int ne = 0, hit = 0;
+  ElabEntry *ents = NULL;
+  for (int id = 0; id < nt->count && !hit; id++) {
     NodeKind k = nt_kind(nt, id);
+    int names = 0;
     if (k == NK_AliasMethodNode) {
       int nn = nt_ref(nt, id, "new_name");
-      if (nn >= 0 && nt_str(nt, nn, "value") && sp_streq(nt_str(nt, nn, "value"), nm)) return 1;
+      names = nn >= 0 && nt_str(nt, nn, "value") && sp_streq(nt_str(nt, nn, "value"), nm);
     }
     else if (k == NK_CallNode && nt_str(nt, id, "name") && is_alias_method_name(nt_str(nt, id, "name"))) {
       int ac = 0; const int *av = call_args(nt, id, &ac);
       const char *an = ac > 0 ? vis_arg_name(nt, av[0]) : NULL;
-      if (!an || sp_streq(an, nm)) return 1;
+      names = !an || sp_streq(an, nm);
     }
+    if (!names) continue;
+    if (!ents) ents = elab_entries(c, 1u << LR_ALIAS | ELAB_ENTRY_MAY, &ne);
+    int placed = 0, reaches = 0;
+    for (int e = 0; e < ne; e++) {
+      if (ents[e].node != id) continue;
+      placed = 1;
+      /* (cls -1 is main's: the top level) */
+      if (!ents[e].sg && (ents[e].cls < 0 || bx_owner_reaches_string(c, ents[e].cls))) reaches = 1;
+    }
+    if (!placed || reaches) hit = 1;
   }
-  return 0;
+  free(ents);
+  return hit;
 }
-/* Does the program have its own instance method nm that a String or a
-   Symbol answers before Kernel's: on String or Symbol or a module either
-   mixes in, on Object, Kernel or BasicObject, at the top level or in a
-   module the top level includes, or by an alias? */
-/* The Comparable builtins (other than the numbers) whose call to a method
-   the program adds to `module Comparable` takes the method's copy
-   (bx_cmp_own_class). NULL ends the list. */
-static const char *const bx_cmp_recv_cls[] = { "String", "Symbol", "Time", "Rational", NULL };
+/* Does the program have its own instance method nm that a String,
+   Symbol, Time or Rational answers before Kernel's: on one of them,
+   Numeric or a module they mix in, on Object, Kernel or BasicObject, at
+   the top level or in a module the top level includes
+   (bx_owner_in_string_chain), or by an
+   alias? */
 static int bx_kernel_name_own(Compiler *c, const char *nm) {
   if (program_defines_object_method_named(c, nm) || bx_program_aliases(c, nm)) return 1;
   for (int i = 0; bx_cmp_recv_cls[i]; i++) {
@@ -18609,7 +18742,45 @@ static int bx_kernel_name_own(Compiler *c, const char *nm) {
   }
   for (int i = 0; i < c->ntoplevel_includes; i++)
     if (comp_method_in_chain(c, c->toplevel_includes[i], nm, NULL) >= 0) return 1;
+  /* a def in a module the chains above do not walk: one a mixed-in module
+     prepends */
+  for (int si = 1; si < c->nscopes; si++) {
+    const Scope *sc = &c->scopes[si];
+    if (sc->is_cmethod || !sc->name || !sp_streq(sc->name, nm) || sc->def_node < 0 ||
+        nt_int(c->nt, sc->def_node, "node_bi", 0)) continue;
+    if (sc->class_id >= 0 && bx_owner_in_string_chain(c, sc->class_id)) return 1;
+  }
   return 0;
+}
+
+/* Does the keyword hash kwh (-1 for none) of a call fit the keywords of
+   parameters pn: every required keyword given by a literal key, and no
+   literal key the parameters lack unless they take a **rest? A `**h` in
+   the call is not read: it does not fit. */
+static int bx_call_keywords_fit(const NodeTable *nt, int pn, int kwh) {
+  int kn = 0; const int *kv = nt_arr(nt, pn, "keywords", &kn);
+  int krest = nt_ref(nt, pn, "keyword_rest") >= 0;
+  int en = 0; const int *ev = kwh >= 0 ? nt_arr(nt, kwh, "elements", &en) : NULL;
+  for (int e = 0; e < en; e++) {
+    if (nt_kind(nt, ev[e]) != NK_AssocNode) return 0;
+    int key = nt_ref(nt, ev[e], "key");
+    const char *ks = key >= 0 && nt_kind(nt, key) == NK_SymbolNode ? nt_str(nt, key, "value") : NULL;
+    if (!ks) return 0;
+    int known = 0;
+    for (int k = 0; k < kn && !known; k++) known = nt_str(nt, kv[k], "name") && sp_streq(nt_str(nt, kv[k], "name"), ks);
+    if (!known && !krest) return 0;
+  }
+  for (int k = 0; k < kn; k++) {
+    if (nt_kind(nt, kv[k]) != NK_RequiredKeywordParameterNode) continue;
+    const char *kn_ = nt_str(nt, kv[k], "name");
+    int given = 0;
+    for (int e = 0; e < en && !given; e++) {
+      int key = nt_ref(nt, ev[e], "key");
+      given = kn_ && sp_streq(nt_str(nt, key, "value"), kn_);
+    }
+    if (!given) return 0;
+  }
+  return 1;
 }
 
 /* Does the copy read its receiver only as `__self`? An instance variable
@@ -18842,7 +19013,14 @@ int desugar_builtin_scalar_calls(Compiler *c) {
       /* a `*arr` argument left after expand_static_splat_args can
          stand for any count of arguments */
       int csplat = av && nt_argv_has_splat(nt, av, an);
-      if ((!csplat && an + 1 < crn) || (!crest && an + 1 > crn + con)) continue; }
+      /* keywords the copy takes are no positional argument */
+      int ckn = 0; if (cpn >= 0) nt_arr(nt, cpn, "keywords", &ckn);
+      int pos = an;
+      if ((ckn > 0 || (cpn >= 0 && nt_ref(nt, cpn, "keyword_rest") >= 0)) && av && nt_argv_kwh(nt, av, an) >= 0) pos--;
+      if ((!csplat && pos + 1 < crn) || (!crest && pos + 1 > crn + con)) continue;
+      /* ...and a call that may miss a required keyword or pass an unknown
+         one keeps the ordinary path, which raises CRuby's ArgumentError */
+      if (ckn > 0 && !bx_call_keywords_fit(nt, cpn, av ? nt_argv_kwh(nt, av, an) : -1)) continue; }
     int encl = c->nscope[id];
     int base = nt->count;
     int *na = (int *)malloc(sizeof(int) * (size_t)(an + 1));
@@ -25808,8 +25986,37 @@ static int brc_new_path(NodeTable *nt, int like, const char *cn, const char *nm)
    (t): an X from a `class Object` body, an included module or an alias
    of Object keeps its lexical read, as does a read where the node itself
    has meaning (fixed, nonzero: the operand of defined?, a pattern). */
+/* The builtin classes and modules above the builtin cn that a program's
+   bodies write constants in, in CRuby's ancestors order, Object left out
+   (its constants are the top-level ones): Numeric and Comparable for an
+   Integer, IO and Enumerable for a File. Each with the names its bodies
+   may write (brc_any_writes, brc_path_writes). */
+typedef struct { const char *name; BrcNames u; } BrcAnc;
+/* the `if defined?(a::nm) then a::nm else <other> end` node, made at
+   node like; into `into` when it is not -1 (its line kept), else new */
+static int brc_new_probe_if(NodeTable *nt, int like, int into, const char *a, const char *nm, int other_expr) {
+  int probe = brc_new_path(nt, like, a, nm), own = brc_new_path(nt, like, a, nm);
+  int def = fwd_new_node_like(nt, like, "DefinedNode");
+  int then = fwd_new_node_like(nt, like, "StatementsNode"), other = fwd_new_node_like(nt, like, "StatementsNode");
+  int els = fwd_new_node_like(nt, like, "ElseNode");
+  int n = into >= 0 ? into : fwd_new_node_like(nt, like, "IfNode");
+  if (probe < 0 || own < 0 || def < 0 || then < 0 || other < 0 || els < 0 || n < 0) return -1;
+  nt_node_set_ref(nt, def, "value", probe);
+  nt_node_set_arr(nt, then, "body", &own, 1);
+  nt_node_set_arr(nt, other, "body", &other_expr, 1);
+  nt_node_set_ref(nt, els, "statements", other);
+  long long line = nt_int(nt, like, "node_line", 0), file = nt_int(nt, like, "node_file", 0), col = nt_int(nt, like, "node_col", 0);
+  nt_node_reset(nt, n, "IfNode");
+  nt_node_set_int(nt, n, "node_line", line);
+  nt_node_set_int(nt, n, "node_file", file);
+  nt_node_set_int(nt, n, "node_col", col);
+  nt_node_set_ref(nt, n, "predicate", def);
+  nt_node_set_ref(nt, n, "statements", then);
+  nt_node_set_ref(nt, n, "subsequent", els);
+  return n;
+}
 static void brc_rewrite_reads(NodeTable *nt, int n, const char *cn, const BrcNames *w, const BrcNames *u,
-                              const BrcNames *t, int fixed, int *changed) {
+                              const BrcNames *t, const BrcAnc *anc, int nanc, int fixed, int *changed) {
   if (n < 0) return;
   NodeKind k = nt_kind(nt, n);
   if (k == NK_ClassNode || k == NK_ModuleNode || k == NK_SingletonClassNode) return;
@@ -25826,26 +26033,21 @@ static void brc_rewrite_reads(NodeTable *nt, int n, const char *cn, const BrcNam
       *changed = 1;
       return;
     }
-    if (fixed || !brc_has(u, nm) || !brc_has(t, nm)) return;
-    int lex = fwd_new_node_like(nt, n, "ConstantPathNode");
-    int probe = brc_new_path(nt, n, cn, nm), own = brc_new_path(nt, n, cn, nm);
-    int def = fwd_new_node_like(nt, n, "DefinedNode");
-    int then = fwd_new_node_like(nt, n, "StatementsNode"), other = fwd_new_node_like(nt, n, "StatementsNode");
-    int els = fwd_new_node_like(nt, n, "ElseNode");
-    if (lex < 0 || probe < 0 || own < 0 || def < 0 || then < 0 || other < 0 || els < 0) return;
-    nt_node_set_str(nt, lex, "name", nm);
-    nt_node_set_ref(nt, def, "value", probe);
-    nt_node_set_arr(nt, then, "body", &own, 1);
-    nt_node_set_arr(nt, other, "body", &lex, 1);
-    nt_node_set_ref(nt, els, "statements", other);
-    long long line = nt_int(nt, n, "node_line", 0), file = nt_int(nt, n, "node_file", 0), col = nt_int(nt, n, "node_col", 0);
-    nt_node_reset(nt, n, "IfNode");
-    nt_node_set_int(nt, n, "node_line", line);
-    nt_node_set_int(nt, n, "node_file", file);
-    nt_node_set_int(nt, n, "node_col", col);
-    nt_node_set_ref(nt, n, "predicate", def);
-    nt_node_set_ref(nt, n, "statements", then);
-    nt_node_set_ref(nt, n, "subsequent", els);
+    if (fixed || !brc_has(t, nm)) return;
+    /* the holders that may have the name at the time of the read: the
+       builtin itself, then the builtins above it (`class Numeric; LIM = 6;
+       end` for an Integer method), as CRuby looks in the ancestors before
+       the top level */
+    const char *hold[16]; int nh = 0;
+    if (brc_has(u, nm)) hold[nh++] = cn;
+    for (int a = 0; a < nanc && nh < 16; a++)
+      if (brc_has(&anc[a].u, nm)) hold[nh++] = anc[a].name;
+    if (nh == 0) return;
+    int expr = fwd_new_node_like(nt, n, "ConstantPathNode");
+    if (expr < 0) return;
+    nt_node_set_str(nt, expr, "name", nm);
+    for (int h = nh - 1; h >= 1 && expr >= 0; h--) expr = brc_new_probe_if(nt, n, -1, hold[h], nm, expr);
+    if (expr < 0 || brc_new_probe_if(nt, n, n, hold[0], nm, expr) < 0) return;
     *changed = 1;
     return;
   }
@@ -25854,28 +26056,28 @@ static void brc_rewrite_reads(NodeTable *nt, int n, const char *cn, const BrcNam
   int nr = nt_num_refs(nt, n);
   for (int i = 0; i < nr; i++) {
     int ch = nt_ref_at(nt, n, i);
-    brc_rewrite_reads(nt, ch, cn, w, u, t, fixed || (ch >= 0 && ch == pat), changed);
+    brc_rewrite_reads(nt, ch, cn, w, u, t, anc, nanc, fixed || (ch >= 0 && ch == pat), changed);
   }
   int na = nt_num_arrs(nt, n);
   for (int i = 0; i < na; i++) {
     int m = 0; const int *ids = nt_arr_at(nt, n, i, &m);
-    for (int q = 0; q < m; q++) brc_rewrite_reads(nt, ids[q], cn, w, u, t, fixed, changed);
+    for (int q = 0; q < m; q++) brc_rewrite_reads(nt, ids[q], cn, w, u, t, anc, nanc, fixed, changed);
   }
 }
 /* the methods a body statement defines, in it and the blocks and
    conditions around them, not in a nested body */
 static void brc_body_defs(NodeTable *nt, int n, const char *cn, const BrcNames *w, const BrcNames *u,
-                          const BrcNames *t, int *changed) {
+                          const BrcNames *t, const BrcAnc *anc, int nanc, int *changed) {
   if (n < 0) return;
   NodeKind k = nt_kind(nt, n);
   if (k == NK_ClassNode || k == NK_ModuleNode || k == NK_SingletonClassNode) return;
-  if (k == NK_DefNode) { brc_rewrite_reads(nt, n, cn, w, u, t, 0, changed); return; }
+  if (k == NK_DefNode) { brc_rewrite_reads(nt, n, cn, w, u, t, anc, nanc, 0, changed); return; }
   int nr = nt_num_refs(nt, n);
-  for (int i = 0; i < nr; i++) brc_body_defs(nt, nt_ref_at(nt, n, i), cn, w, u, t, changed);
+  for (int i = 0; i < nr; i++) brc_body_defs(nt, nt_ref_at(nt, n, i), cn, w, u, t, anc, nanc, changed);
   int na = nt_num_arrs(nt, n);
   for (int i = 0; i < na; i++) {
     int m = 0; const int *ids = nt_arr_at(nt, n, i, &m);
-    for (int q = 0; q < m; q++) brc_body_defs(nt, ids[q], cn, w, u, t, changed);
+    for (int q = 0; q < m; q++) brc_body_defs(nt, ids[q], cn, w, u, t, anc, nanc, changed);
   }
 }
 /* the name a top-level statement opens a builtin's body by, or NULL */
@@ -25884,6 +26086,48 @@ static const char *brc_builtin_header(const NodeTable *nt, int st) {
   int cp = nt_ref(nt, st, "constant_path");
   const char *cn = cp >= 0 && nt_kind(nt, cp) == NK_ConstantReadNode ? nt_str(nt, cp, "name") : NULL;
   return cn && (is_builtin_class_name(cn) || is_builtin_module_name(cn)) ? cn : NULL;
+}
+/* the constants the bodies of the builtin cn (`class cn` at the top
+   level) and a path write `cn::X = v` may write (u), and, when w is not
+   NULL, those the bodies ahead of top-level statement i write for certain */
+static void brc_builtin_writes(const NodeTable *nt, const int *tb, int tn, const char *cn, int i,
+                               BrcNames *w, BrcNames *u) {
+  for (int j = 0; j < tn; j++) {
+    const char *hn = brc_builtin_header(nt, tb[j]);
+    if (!hn || !sp_streq(hn, cn)) continue;
+    int b = class_def_body(nt, tb[j]), bn = 0;
+    const int *bs = b >= 0 ? nt_arr(nt, b, "body", &bn) : NULL;
+    for (int q = 0; q < bn; q++) {
+      if (w && j < i) brc_add(w, brc_stmt_writes(nt, bs[q], cn));
+      brc_any_writes(nt, bs[q], cn, u);
+    }
+  }
+  brc_path_writes(nt, cn, u);
+}
+/* fill anc (at most 8) with the builtins above cn whose bodies, or a path
+   write `Numeric::X = v`, may write a constant */
+static void brc_ancestors(const NodeTable *nt, const int *tb, int tn, const char *cn, BrcAnc *anc, int *nanc) {
+  const char *names[8]; int nn = 0;
+  int bid = builtin_class_id(cn);
+  if (bid < 0) {
+    for (int p = builtin_class_parent_id(bid), g = 0; p < 0 && p != -116 && g < 6 && nn < 6;
+         p = builtin_class_parent_id(p), g++) {
+      const char *pn = cvb_builtin_name(p);
+      if (pn) names[nn++] = pn;
+    }
+    static const char *const mods[] = { "Comparable", "Enumerable", NULL };
+    for (int m = 0; mods[m] && nn < 8; m++)
+      if (!sp_streq(cn, mods[m]) && builtin_class_mixes_module(bid, mods[m])) names[nn++] = mods[m];
+  }
+  *nanc = 0;
+  for (int a = 0; a < nn; a++) {
+    BrcNames u = { NULL, 0, 0 };
+    brc_builtin_writes(nt, tb, tn, names[a], -1, NULL, &u);
+    if (u.n == 0) { free(u.v); continue; }
+    anc[*nanc].name = names[a];
+    anc[*nanc].u = u;
+    (*nanc)++;
+  }
 }
 int desugar_builtin_reopen_const_reads(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
@@ -25898,26 +26142,19 @@ int desugar_builtin_reopen_const_reads(Compiler *c) {
     BrcNames w = { NULL, 0, 0 }, u = { NULL, 0, 0 };
     /* the constants earlier bodies of the builtin wrote, and those any
        body of it may write (u) */
-    for (int j = 0; j < tn; j++) {
-      const char *hn = brc_builtin_header(nt, tb[j]);
-      if (!hn || !sp_streq(hn, cn)) continue;
-      int b = class_def_body(nt, tb[j]), bn = 0;
-      const int *bs = b >= 0 ? nt_arr(nt, b, "body", &bn) : NULL;
-      for (int q = 0; q < bn; q++) {
-        if (j < i) brc_add(&w, brc_stmt_writes(nt, bs[q], cn));
-        brc_any_writes(nt, bs[q], cn, &u);
-      }
-    }
-    brc_path_writes(nt, cn, &u);
+    brc_builtin_writes(nt, tb, tn, cn, i, &w, &u);
+    BrcAnc anc[8]; int nanc = 0;
+    brc_ancestors(nt, tb, tn, cn, anc, &nanc);
     int b = class_def_body(nt, tb[i]), bn = 0;
     const int *bs = b >= 0 ? nt_arr(nt, b, "body", &bn) : NULL;
     for (int q = 0; q < bn; q++) {
       int st = bs[q];
-      brc_body_defs(nt, st, cn, &w, &u, &top, &changed);
+      brc_body_defs(nt, st, cn, &w, &u, &top, anc, nanc, &changed);
       brc_add(&w, brc_stmt_writes(nt, st, cn));
       bs = nt_arr(nt, b, "body", &bn);   /* (nodes added: the list may move) */
     }
     free(w.v); free(u.v);
+    for (int a = 0; a < nanc; a++) free(anc[a].u.v);
   }
   free(top.v); free(tb); free(tfile);
   if (changed) comp_grow_node_arrays(c);

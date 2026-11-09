@@ -179,10 +179,21 @@ static int cplan_root_under_builtin(Compiler *c, int top) {
   return !(nm && sp_streq(nm, "Object"));
 }
 /* A super's parent-chain target, past inherited copies of the same
-   extended definition. Shared by resolution, inference, inline splicing and the miss check. */
-int cplan_super_chain_mi(Compiler *c, int id, const Scope *s, int par, const char *name) {
-  int mi = par < 0 ? -1 : s->is_cmethod ? comp_cmethod_in_chain(c, par, name, NULL)
-                                       : comp_method_in_chain(c, par, name, NULL);
+   extended definition. Shared by resolution, inference, inline splicing and
+   the miss check. Every step is call_target's, with CT_REACH: it skips the
+   ask of the calls' names (ct_calls), so call_node_names, which runs
+   comp_super_name for this very name, is not entered again, and it asks the
+   record, a shadow's name too. ml->from is the par asked, though the
+   extend-copy skip and the Object start look further; ml->def_class is the
+   class that answered, -1 on a miss. */
+int cplan_super_chain_mi(Compiler *c, int id, const Scope *s, int par, const char *name, MethodLookup *ml) {
+  MethodLookup own = { .def_class = -1 };
+  if (!ml) ml = &own;
+  const int start = par;
+  unsigned side = CT_REACH | (s->is_cmethod ? CT_CMETHOD : 0);
+  int mi = -1;
+  *ml = (MethodLookup){ .kind = ML_NONE, .def_class = -1 };
+  if (par >= 0) mi = call_target(c, id, par, name, side, ml);
   /* An extended module's method is one entry in the class's ancestry, and
      `super` inside it goes past the module. Copied into each class that
      inherits the extend, the parent's copy is that same definition, not a
@@ -190,7 +201,8 @@ int cplan_super_chain_mi(Compiler *c, int id, const Scope *s, int par, const cha
      called on a Thor subclass reaches Module#method_added). */
   while (s->is_cmethod && mi >= 0 && c->scopes[mi].def_node == s->def_node && s->def_node >= 0) {
     par = c->classes[c->scopes[mi].class_id].parent;
-    mi = par >= 0 ? comp_cmethod_in_chain(c, par, name, NULL) : -1;
+    mi = par >= 0 ? call_target(c, id, par, name, side, ml) : -1;
+    if (par < 0) *ml = (MethodLookup){ .kind = ML_NONE, .def_class = -1 };
   }
   /* (a superclass chain ends in Object: a reopening of it is the last
      class the super looks in) */
@@ -200,48 +212,56 @@ int cplan_super_chain_mi(Compiler *c, int id, const Scope *s, int par, const cha
     int obj = comp_super_parent(c, top, 0);
     /* (not under BasicObject: Object is not in that chain; not under another
        builtin: its methods come first, cplan_root_under_builtin) */
-    if (obj >= 0 && obj != top && !class_is_blank_slate(c, top) && !cplan_root_under_builtin(c, top) &&
-        comp_method_in_chain(c, obj, name, NULL) >= 0) { par = obj; mi = 1; }
+    if (obj >= 0 && obj != top && !class_is_blank_slate(c, top) && !cplan_root_under_builtin(c, top))
+      mi = call_target(c, id, obj, name, CT_REACH, ml);
   }
-  return mi >= 0 ? call_target(c, id, par, name,
-                               CT_REACH | (s->is_cmethod ? CT_CMETHOD : 0), NULL) : -1;
+  if (mi < 0) ml->def_class = -1;
+  ml->from = start;
+  return mi;
 }
 
 /* The method `super` in method scope s reaches, for call id (-1: a super
-   no call stands for, an open history's entry's else arm), and in *at the
-   class it is found from: the next method of s's prepend chain
+   no call stands for, an open history's entry's else arm), and in ml->from
+   the class it is found from: the next method of s's prepend chain
    (comp_super_shadow), else the parent chain's (cplan_super_chain_mi); -1
-   for none, *at -1 when s has a prepend chain. A super of a call whose
-   next method is one of a mixin's copies of a module's versions, a layer
-   below a later one, reaches the entry over them once the entries are
-   made (super_layer_entry). */
+   for none; ml->from is s's class when the shadow is found, -1 when not.
+   A super of a call whose next method is one of a mixin's copies of a
+   module's versions, a layer below a later one, reaches the entry over
+   them once the entries are made (super_layer_entry). ml is call_target's
+   answer for the lookup (NULL: the scope only). */
 static int super_layer_entry(Compiler *c, int id, int t);
-int cplan_super_target(Compiler *c, int id, Scope *s0, int *at) {
+int cplan_super_target(Compiler *c, int id, Scope *s0, MethodLookup *ml) {
   const Scope *s = comp_super_site(c, s0);
   const char *shadow = comp_super_shadow(c, s);
+  MethodLookup own = { .def_class = -1 };
+  if (!ml) ml = &own;
   if (shadow) {
-    *at = -1;
-    int mi = s->is_cmethod ? comp_cmethod_in_class(c, s->class_id, shadow) : comp_method_in_class(c, s->class_id, shadow);
-    if (mi >= 0) *at = s->class_id;
+    int mi = call_target(c, id, s->class_id, shadow, CT_OWN | CT_REACH | (s->is_cmethod ? CT_CMETHOD : 0), ml);
+    ml->from = mi >= 0 ? s->class_id : -1;
     int e = mi >= 0 && id >= 0 && c->ver_built ? super_layer_entry(c, id, mi) : -1;
+    if (e >= 0) { ml->kind = ML_ENTRY; ml->why = 0; }
     return e >= 0 ? e : mi;
   }
   int par = comp_super_parent(c, s->class_id, s->is_cmethod);
   const char *uname = comp_super_name(c, par, comp_scope_def_name(c, s), s->is_cmethod);
-  *at = par;
-  return uname ? cplan_super_chain_mi(c, id, s, par, uname) : -1;
+  if (!uname) {
+    *ml = (MethodLookup){ .kind = ML_NONE, .def_class = -1, .from = par };
+    return -1;
+  }
+  return cplan_super_chain_mi(c, id, s, par, uname, ml);
 }
 
 static void cplan_resolve_super(Compiler *c, int id, CallPlan *p) {
   Scope *s = comp_scope_of(c, id);
   if (!s || s->class_id < 0 || !s->name) return;
-  int par, mi = cplan_super_target(c, id, s, &par);
-  if (mi >= 0) { cplan_set(p, mi, par, UC_SUPER, CP_DIRECT); return; }
+  MethodLookup ml = { .def_class = -1 };
+  int mi = cplan_super_target(c, id, s, &ml);
+  if (mi >= 0) { cplan_set(p, mi, ml.from, UC_SUPER, CP_DIRECT); return; }
   const Scope *st = comp_super_site(c, s);
-  const char *uname = comp_super_shadow(c, st) ? NULL : comp_super_name(c, par, comp_scope_def_name(c, st), st->is_cmethod);
+  const char *uname = comp_super_shadow(c, st) ? NULL : comp_super_name(c, ml.from, comp_scope_def_name(c, st), st->is_cmethod);
   if (uname && s->is_cmethod &&
            builtin_super_cmethod_known(c->classes[s->class_id].name, uname) &&
-           (par < 0 || comp_cmethod_in_chain(c, par, uname, NULL) < 0)) {
+           ml.kind == ML_NONE) {
     cplan_set(p, -1, s->class_id, UC_SUPER, CP_REFUSE);
     p->rkind = CR_FEATURE; p->rfrom = CRF_LIMIT;
     p->msg = "super to an inherited builtin singleton method is not supported; see docs/limitations.md";
@@ -754,7 +774,7 @@ void cplan_check_missing(Compiler *c, int id, int mi, int ci, const char *name, 
   NodeKind k = nt_kind(c->nt, id);
   if (cmeth && (k == NK_SuperNode || k == NK_ForwardingSuperNode)) {
     Scope *sc = comp_scope_of(c, id);
-    if (sc && !comp_super_shadow(c, comp_super_site(c, sc))) own = cplan_super_chain_mi(c, id, sc, ci, name);
+    if (sc && !comp_super_shadow(c, comp_super_site(c, sc))) own = cplan_super_chain_mi(c, id, sc, ci, name, NULL);
   }
   if (own >= 0)
     fprintf(stderr, "plan-check: cplan-missing: %s node %d %s: chain %d\n", site, id, name, own);
@@ -3182,8 +3202,7 @@ int cplan_targets(Compiler *c, int id, int *out, int cap) {
 static int ct_super_new_initializers(Compiler *c, int id, int *out) {
   Scope *s = comp_scope_of(c, id);
   if (!s || s->class_id < 0 || !is_new_name(comp_scope_def_name(c, s))) return -2;
-  int at;
-  if (cplan_super_target(c, id, s, &at) >= 0) return -2;
+  if (cplan_super_target(c, id, s, NULL) >= 0) return -2;
   int mod = comp_class_is_module(c, &c->classes[s->class_id]);
   if (mod ? !s->is_cmethod : comp_super_shadow(c, comp_super_site(c, s)) != NULL) return CPT_UNKNOWN;
   return !mod && s->is_cmethod ? ct_class_initializers(c, s->class_id, 1, out) : -2;
@@ -6012,7 +6031,7 @@ static int layer_ran_before(Compiler *c, const Scope *s, const Scope *t) {
    (super_layer_versions), every one of them, any of which the entry over
    them may run. How many, 0 for none. */
 int cplan_super_runs(Compiler *c, Scope *s, int *to) {
-  int at, t = cplan_super_target(c, -1, s, &at), n = t >= 0 ? super_layer_versions(c, s, t, to) : 0;
+  int t = cplan_super_target(c, -1, s, NULL), n = t >= 0 ? super_layer_versions(c, s, t, to) : 0;
   if (t >= 0 && !n) to[n++] = t;
   return n;
 }
@@ -6036,8 +6055,7 @@ static int super_layer_entry(Compiler *c, int id, int t) {
    side too, as the private instance method CRuby gives every includer:
    the super does not reach it, as it reaches no module function. */
 static int guard_behind_finds_none(Compiler *c, int behind, int cls, int sg, const char *name) {
-  int at;
-  if (!c->scopes[behind].super_behind || cplan_super_target(c, -1, &c->scopes[behind], &at) >= 0 ||
+  if (!c->scopes[behind].super_behind || cplan_super_target(c, -1, &c->scopes[behind], NULL) >= 0 ||
       cplan_other_answers(c, cls, sg, name, 1))
     return 0;
   for (int s = 0; !sg && s < c->nscopes; s++) {
@@ -6314,9 +6332,9 @@ static void ver_name_add(const char ***v, int *n, const char *name) {
 static int ver_named_kind(const VerNamedAsks *q, int cls, int sg, const char *name, const int *to, int nv, int hist, int vis, int ar, int blk, int mm) {
   Compiler *c = q->c;
   ElabVersion cv[VER_MAX_ARMS];
-  int par = comp_super_parent(c, cls, sg), at, st, last = -1, nc;
+  int par = comp_super_parent(c, cls, sg), st, last = -1, nc;
   for (int i = 0; i < nv; i++) if (to[i] < q->nsup && q->sup[to[i]]) return VK_KEEP;
-  if (cls >= 0 && (st = cplan_super_target(c, -1, &c->scopes[to[nv - 1]], &at)) >= 0) {
+  if (cls >= 0 && (st = cplan_super_target(c, -1, &c->scopes[to[nv - 1]], NULL)) >= 0) {
     /* (a module's copy has the visibility the module's own table gives it) */
     int sc = c->scopes[st].class_id, om = c->scopes[st].origin_module_ci - 1;
     int sv = om >= 0 ? comp_method_vis(&c->classes[om], name) : sg ? comp_cmethod_vis_declared(c, sc, name, NULL) : comp_method_vis_in_chain(c, sc, name);
@@ -6342,8 +6360,8 @@ static int ver_named_kind(const VerNamedAsks *q, int cls, int sg, const char *na
    take a block, which the entry then passes on (1), and is it spliced, a
    block it is given flowing in like a yield (2)? */
 static int ver_else_block(Compiler *c, int cls, int sg, int last, int els) {
-  int at, t = -1;
-  if (els == VK_SUPER) t = cplan_super_target(c, -1, &c->scopes[last], &at);
+  int t = -1;
+  if (els == VK_SUPER) t = cplan_super_target(c, -1, &c->scopes[last], NULL);
   else if (els == VK_MM) t = cplan_mm_method(c, cls, sg);
   return t < 0 || !(c->scopes[t].blk_param || c->scopes[t].yields) ? 0 : c->scopes[t].yields ? 2 : 1;
 }
@@ -6374,7 +6392,6 @@ static int ver_absent_else(Compiler *c, int els, int rcls, int sg, const char *n
    theirs too; a public builtin or Kernel text; no method for
    NoMethodError and method_missing */
 static int ver_else_finds(Compiler *c, int els, int cls, int sg, const char *name, int vis, int last) {
-  int at;
   switch (els) {
   case VK_NOMETHOD: case VK_MM: return VER_FINDS_NONE;
   case VK_BUILTIN: case VK_TEXT: return VER_FINDS_PUBLIC;
@@ -6382,7 +6399,7 @@ static int ver_else_finds(Compiler *c, int els, int cls, int sg, const char *nam
     if (cls >= 0) vis = sg ? comp_cmethod_vis_declared(c, cls, name, NULL) : comp_method_vis_in_chain(c, cls, name);
     break;
   case VK_SUPER:
-    if (last < 0 || cplan_super_target(c, -1, &c->scopes[last], &at) < 0) vis = SP_VIS_PRIVATE;
+    if (last < 0 || cplan_super_target(c, -1, &c->scopes[last], NULL) < 0) vis = SP_VIS_PRIVATE;
     break;
   default: break;
   }
@@ -6690,14 +6707,14 @@ static int capture_else_arm(Compiler *c, int e, int cap) {
 int cplan_method_arms(Compiler *c, int e, int cap, int *out, int *tests) {
   int to[VER_MAX_ARMS + 1], t[VER_MAX_ARMS + 1], n = ver_entry_targets(c, e, to, t), m = 0;
   for (int k = 0; k < n; k++) {
-    int sub[VER_MAX_ARMS + 1], st[VER_MAX_ARMS + 1], ns = 0, at;
+    int sub[VER_MAX_ARMS + 1], st[VER_MAX_ARMS + 1], ns = 0;
     if (to[k] >= 0 && c->scopes[to[k]].entry == ENTRY_DISPATCH) ns = ver_entry_targets(c, to[k], sub, st);
     for (int j = 0; j < ns && m < 2 * (VER_MAX_ARMS + 1); j++, m++) {
       if (tests) tests[2 * m] = t[k], tests[2 * m + 1] = st[j];
       out[m] = sub[j];
     }
     if (ns || m >= 2 * (VER_MAX_ARMS + 1)) continue;
-    int sup = to[k] >= 0 && c->scopes[to[k]].super_behind ? cplan_super_target(c, -1, &c->scopes[to[k]], &at) : -1;
+    int sup = to[k] >= 0 && c->scopes[to[k]].super_behind ? cplan_super_target(c, -1, &c->scopes[to[k]], NULL) : -1;
     if (tests) tests[2 * m] = t[k], tests[2 * m + 1] = -1;
     out[m++] = sup >= 0 ? sup : to[k] >= 0 ? to[k] : capture_else_arm(c, e, cap);
   }
@@ -6862,10 +6879,10 @@ static void ver_named_facts(Compiler *c, VerNamedAsks *q, int demand) {
   const NodeTable *nt = c->nt;
   unsigned char *sup = calloc((size_t)c->nscopes + 1, 1);
   if (!sup) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-  for (int id = 0, n0 = nt->count, at; id < n0; id++) {   /* (the methods a super reaches, asked once a super) */
+  for (int id = 0, n0 = nt->count; id < n0; id++) {   /* (the methods a super reaches, asked once a super) */
     NodeKind k = nt_kind(nt, id);
     Scope *s = (k == NK_SuperNode || k == NK_ForwardingSuperNode) ? comp_scope_of(c, id) : NULL;
-    int t = s && s->class_id >= 0 && s->name ? cplan_super_target(c, id, s, &at) : -1;
+    int t = s && s->class_id >= 0 && s->name ? cplan_super_target(c, id, s, NULL) : -1;
     if (t >= 0 && t < c->nscopes) sup[t] = 1;
   }
   const char **vc = NULL;
@@ -6965,7 +6982,7 @@ void ver_entries_build(Compiler *c) {
   for (int k = 0; k < 2; k++)
     for (int id = comp_kind_first(c, k ? NK_ForwardingSuperNode : NK_SuperNode); id >= 0; id = comp_kind_next(c, id)) {
       Scope *s = comp_scope_of(c, id);
-      int at, to[VER_MAX_ARMS], t = s && s->class_id >= 0 && s->name ? cplan_super_target(c, id, s, &at) : -1;
+      int to[VER_MAX_ARMS], t = s && s->class_id >= 0 && s->name ? cplan_super_target(c, id, s, NULL) : -1;
       int n = t >= 0 ? super_layer_versions(c, s, t, to) : 0;
       const Scope *m = n ? &c->scopes[t] : NULL;
       VerNeed w = { VER_ENTRY_LAYER, m ? m->class_id : -1, m ? m->is_cmethod : 0, t, n ? ver_arity(c, id, to, n) : 0, m ? comp_scope_user_name(m) : NULL,

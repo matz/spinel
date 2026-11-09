@@ -89,10 +89,6 @@ typedef struct {
 } CallPlan;
 
 int cplan_accessor_classes(Compiler *c, int id, int *out, int cap);
-int cplan_super_chain_mi(Compiler *c, int id, const Scope *s, int par, const char *name);
-/* ...and the method `super` in s reaches (its prepend chain's next, else
-   that), *at the class it is found from */
-int cplan_super_target(Compiler *c, int id, Scope *s, int *at);
 /* ...and the methods a super in s that no call stands for may run, into
    to[VER_MAX_ARMS]: that one, or each version a layer of a mixin's copies
    holds below a later one. How many, 0 for none */
@@ -174,8 +170,10 @@ int call_node_names(Compiler *c, int id, const char *out[2]);
    entry. survey: set by the two passes that ask which entries the calls
    need (ver_need, cplan_sg_version), whose answer is not kept. def_class:
    the class whose table holds the method, written only where one is found,
-   so a caller that presets it finds it as it was. Nothing reads kind and
-   why yet. */
+   so a caller that presets it finds it as it was (not so for
+   cplan_super_target and cplan_super_chain_mi, which set *ml whole). from:
+   the class a super's lookup started from, written by those two only. Only
+   cplan_resolve_super reads kind, and nothing reads why yet. */
 typedef enum { ML_METHOD, ML_ENTRY, ML_NONE, ML_TABLE } MlKind;
 /* why the table answers: no window, or an unplaced capture (UNPLACED); the
    chain moves inside the window (MOVES); two or more versions, or a window
@@ -185,9 +183,17 @@ typedef enum { ML_METHOD, ML_ENTRY, ML_NONE, ML_TABLE } MlKind;
    without asking the record, as for a call with no node or a name the node
    does not itself call (UNASKED) */
 typedef enum { MLW_UNPLACED = 1, MLW_MOVES, MLW_MANY, MLW_UNMAPPED, MLW_DISAGREE, MLW_NEVER, MLW_UNASKED } MlWhy;
-typedef struct { MlKind kind; unsigned char why, copies, survey; short n; int def_class; } MethodLookup;
+typedef struct { MlKind kind; unsigned char why, copies, survey; short n; int def_class, from; } MethodLookup;
 /* ml (NULL for a caller that wants the scope only) */
 int call_target(Compiler *c, int id, int cls, const char *name, unsigned flags, MethodLookup *ml);
+/* A super's parent-chain target, asked from class par under name; ml (NULL
+   for the scope only) is call_target's, with from par (the lookup's start,
+   whatever class answered: ml->def_class) */
+int cplan_super_chain_mi(Compiler *c, int id, const Scope *s, int par, const char *name, MethodLookup *ml);
+/* The method `super` in s reaches (its prepend chain's next, else the parent
+   chain's); ml as call_target's, and ml->from the class the lookup started
+   from (-1: a prepend chain with no next) */
+int cplan_super_target(Compiler *c, int id, Scope *s, MethodLookup *ml);
 /* Does the Class row for call id, named name, on the class value recv answer
    the call? Not where a class method of the program's does (the plan binds
    it a target), nor where the row is a private method's and the call names

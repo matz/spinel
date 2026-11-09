@@ -532,17 +532,41 @@ spinel: test/reject/compact_path_struct_parent_in_module.rb:9: a class or module
 spinel: test/reject/compact_path_struct_parent_reopened_later.rb:8: a class or module under Point, a constant that holds a Struct or Data class, is not supported here; write it in the body that writes Point, after any `class Point` body
 == test/reject/compact_path_struct_parent_reopened_later.rb [promote] rc=1
 spinel: test/reject/compact_path_struct_parent_reopened_later.rb:8: a class or module under Point, a constant that holds a Struct or Data class, is not supported here; write it in the body that writes Point, after any `class Point` body
+== test/reject/comparable_copy_alias_kernel_name.rb [default] rc=1
+spinel: test/reject/comparable_copy_alias_kernel_name.rb:15: unsupported puts argument: node N (CallNode `qa`) recv=StringNode/ty6 argc=0
+spinel: 1 refusal, nothing written
+== test/reject/comparable_copy_alias_kernel_name.rb [promote] rc=1
+spinel: test/reject/comparable_copy_alias_kernel_name.rb:15: unsupported puts argument: node N (CallNode `qa`) recv=StringNode/ty6 argc=0
+spinel: 1 refusal, nothing written
+== test/reject/comparable_copy_const_class_alias_kernel_name.rb [default] rc=1
+spinel: test/reject/comparable_copy_const_class_alias_kernel_name.rb:13: unsupported puts argument: node N (CallNode `qa`) recv=StringNode/ty6 argc=0
+spinel: 1 refusal, nothing written
+== test/reject/comparable_copy_const_class_alias_kernel_name.rb [promote] rc=1
+spinel: test/reject/comparable_copy_const_class_alias_kernel_name.rb:13: unsupported puts argument: node N (CallNode `qa`) recv=StringNode/ty6 argc=0
+spinel: 1 refusal, nothing written
 == test/reject/comparable_copy_own_kernel_name.rb [default] rc=1
 spinel: test/reject/comparable_copy_own_kernel_name.rb:12: unsupported puts argument: node N (CallNode `qa`) recv=StringNode/ty6 argc=0
 spinel: 1 refusal, nothing written
 == test/reject/comparable_copy_own_kernel_name.rb [promote] rc=1
 spinel: test/reject/comparable_copy_own_kernel_name.rb:12: unsupported puts argument: node N (CallNode `qa`) recv=StringNode/ty6 argc=0
 spinel: 1 refusal, nothing written
+== test/reject/comparable_copy_prepended_alias_kernel_name.rb [default] rc=1
+spinel: test/reject/comparable_copy_prepended_alias_kernel_name.rb:15: unsupported puts argument: node N (CallNode `qa`) recv=StringNode/ty6 argc=0
+spinel: 1 refusal, nothing written
+== test/reject/comparable_copy_prepended_alias_kernel_name.rb [promote] rc=1
+spinel: test/reject/comparable_copy_prepended_alias_kernel_name.rb:15: unsupported puts argument: node N (CallNode `qa`) recv=StringNode/ty6 argc=0
+spinel: 1 refusal, nothing written
 == test/reject/comparable_copy_toplevel_include_kernel_name.rb [default] rc=1
 spinel: test/reject/comparable_copy_toplevel_include_kernel_name.rb:10: unsupported puts argument: node N (CallNode `qa`) recv=StringNode/ty6 argc=0
 spinel: 1 refusal, nothing written
 == test/reject/comparable_copy_toplevel_include_kernel_name.rb [promote] rc=1
 spinel: test/reject/comparable_copy_toplevel_include_kernel_name.rb:10: unsupported puts argument: node N (CallNode `qa`) recv=StringNode/ty6 argc=0
+spinel: 1 refusal, nothing written
+== test/reject/comparable_copy_unplain_mixin_kernel_name.rb [default] rc=1
+spinel: test/reject/comparable_copy_unplain_mixin_kernel_name.rb:18: unsupported puts argument: node N (CallNode `qa`) recv=StringNode/ty6 argc=0
+spinel: 1 refusal, nothing written
+== test/reject/comparable_copy_unplain_mixin_kernel_name.rb [promote] rc=1
+spinel: test/reject/comparable_copy_unplain_mixin_kernel_name.rb:18: unsupported puts argument: node N (CallNode `qa`) recv=StringNode/ty6 argc=0
 spinel: 1 refusal, nothing written
 == test/reject/compare_by_identity_chained.rb [default] rc=1
 spinel: test/reject/compare_by_identity_chained.rb:8: unsupported Hash#compare_by_identity (identity-keyed hashing): its answer is used as another name for the hash: node N (CallNode `compare_by_identity`) recv=LocalVariableReadNode/ty28 argc=0

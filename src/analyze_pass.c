@@ -1414,14 +1414,9 @@ void intern_block_params(Compiler *c) {
 /* --share-strings: is lv the shared handle a String of type t is held in?
    A pass that types the slot as that String leaves it so; resetting it each
    round, against share_default_apply setting it back, kept the fixpoint
-   from settling. A String Array the rule settled in its poly form, whose
-   boxes hold the handles, is that Array the same way: a block's parameter
-   `tap` hands the Array of `"x y".split(" ")` went back to the typed Array
-   every round and the rule converted it again. */
+   from settling. */
 static int lv_is_handle_of(const Compiler *c, const LocalVar *lv, TyKind t) {
-  if (t != TY_STRING && t != TY_STR_ARRAY) return 0;
-  Repr r = repr_of_slot(c, lv);
-  return t == TY_STRING ? r.share : r.elems_handle;
+  return t == TY_STRING && repr_of_slot(c, lv).share;
 }
 
 static int lv_widen(LocalVar *lv, TyKind t) {
@@ -5304,20 +5299,6 @@ static TyKind local_write_ty(Compiler *c, int id, int stashed) {
    would undo. Inside the recompute frame (`stashed`), a slot the round could
    not derive at all also keeps the type the reset stashed. */
 static void lv_keep_decisions(LocalVar *lv, int stashed) {
-  /* A slot already promoted to the append handle keeps that REPRESENTATION
-     across the recompute frame. The round's reset re-derives `out = +""` as a
-     plain TY_STRING, and promote_append_accumulators -- which fires on a
-     TY_STRING slot -- then re-promotes it, so the two passes trade the slot
-     back and forth and the fixpoint never converges: every compile ran to the
-     128-iteration cap. TY_STRBUF *is* a String; only the storage differs, so
-     re-deriving the Ruby-level type must not clobber the choice. Same reason
-     infer_bigint_loop_locals re-seeds inside this frame. If the re-derived
-     type is neither String nor the handle, the promotion's precondition is
-     genuinely gone and the flag goes with it. */
-  if (lv->str_append) {
-    if (lv->type == TY_STRING) lv_set_type(lv, TY_STRBUF);
-    else if (lv->type != TY_STRBUF) lv->str_append = 0;
-  }
   /* The same contract for a slot narrowed to a pointer array. The reset
      re-derives it from its writes, which still read the poly array, and the
      two array KINDS unify to the plain poly SCALAR -- strictly worse than
@@ -5369,7 +5350,7 @@ static void lv_keep_decisions(LocalVar *lv, int stashed) {
      Neither yielded, so the fixpoint ran to its cap on every program with a
      shared-mutable string (#3227, #4116). Same treatment oa_pin gets just
      above, and for the same reason. */
-  if ((lv->str_shared || lv->str_append) &&
+  if (lv->str_shared &&
       (lv->type == TY_STRING || lv->type == TY_STR_ARRAY)) lv_set_type(lv, TY_STRBUF);
   /* every String local holds the handle (one-string) */
   if (lv->type == TY_STRING && !lv->is_param && !lv->rbs_seeded && !lv->byref_out) {

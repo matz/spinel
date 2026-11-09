@@ -1529,7 +1529,6 @@ int comp_cvar_intern(ClassInfo *ci, const char *name) {
     ci->cvar_types = realloc((TyKind *)ci->cvar_types, sizeof(TyKind) * (size_t)ci->ccvars);
     ci->cvar_nullable_int = realloc(ci->cvar_nullable_int, (size_t)ci->ccvars);
     ci->cvar_str_shared = realloc(ci->cvar_str_shared, (size_t)ci->ccvars);
-    { ci->cvar_elems_shared = realloc(ci->cvar_elems_shared, (size_t)ci->ccvars); comp_touch_class(ci->idx); }
   }
   comp_table_gen++;
   ci->cvars[ci->ncvars] = strdup(name);
@@ -1537,7 +1536,6 @@ int comp_cvar_intern(ClassInfo *ci, const char *name) {
   comp_touch_class(ci->idx);    /* a new cvar is a change of the table */
   ci->cvar_nullable_int[ci->ncvars] = 0;
   ci->cvar_str_shared[ci->ncvars] = 0;
-  { ci->cvar_elems_shared[ci->ncvars] = 0; comp_touch_class(ci->idx); }
   return ci->ncvars++;
 }
 
@@ -5225,7 +5223,6 @@ LocalVar *scope_local_intern(Scope *s, const char *name) {
   lv->or_written = 0;
   lv->maybe_unset = 0;
   { lv->str_shared = 0; comp_touch_scope(lv->owner); }
-  lv->str_append = 0;
   lv->poly_hash_pin = 0;
   lv->poly_array_pin = 0;
   lv->nullable_int = 0;

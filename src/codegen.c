@@ -22524,7 +22524,6 @@ static void emit_user_exc_dispatch(Compiler *c, Buf *b) {
 }
 
 static void emit_runtime_include(Compiler *c, Buf *b, int blank) {
-  buf_puts(b, "#define SP_SHARE_STRING_LITERALS 1\n#define SP_SHARE_BOX_HANDLES 1\n");
   /* sp_feature_required, not strict require: without SPINEL_STRICT_REQUIRE,
      respond_to?'s io/console answer must still follow the program's require,
      as CRuby's does. */

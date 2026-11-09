@@ -1737,7 +1737,7 @@ static void lr_names_take(Compiler *c) {
     const int *av = an >= 0 ? nt_arr(nt, an, "arguments", &ac) : NULL;
     if (!nm || !ac) continue;
     if (is_send_family(nm) || (is_code_eval_name(nm) && nt_ref(nt, n, "block") < 0)) {
-      const char *fn = vis_arg_name(nt, av[0]);
+      const char *fn = call_sent_name(nt, n, NULL);
       if (is_code_eval_name(nm) || !fn || is_method_naming_call(fn)) r->names_any = 1;
     }
     else if (is_attr_decl_reader(nm) || is_attr_decl_writer(nm))
@@ -1839,12 +1839,13 @@ static void lr_refl_take(Compiler *c) {
   const NodeTable *nt = c->nt;
   LoadRecord *r = c->lrec;
   NT_FOREACH_KIND(nt, NK_CallNode, n) {
-    const char *rn = nt_str(nt, n, "name");
     int ac = 0, a = 0, pq;
     const int *av = call_args(nt, n, &ac);
-    /* (each send's first argument names the method it calls: a send in turn) */
-    while (rn && is_send_family(rn)) rn = a < ac ? vis_arg_name(nt, av[a++]) : "";
-    if (!rn) { lr_refl_add(r, NULL, LR_REFL_TABLE, 3); continue; }
+    const char *rn = call_sent_name(nt, n, &a);
+    if (!rn) {
+      if (ac) lr_refl_add(r, NULL, LR_REFL_TABLE, 3);   /* (a send with no argument reads no name) */
+      continue;
+    }
     if ((pq = is_method_presence_query(rn)))
       lr_refl_add(r, pq == 1 && a < ac ? vis_arg_name(nt, av[a]) : NULL,
                   respond_to_cells_shape(nt, n) ? LR_REFL_CELL : capture_cells_shape(nt, n) ? LR_REFL_CAPT :
@@ -2285,10 +2286,9 @@ static void lr_call(ElabRec *x, int node, int fc, int fs, unsigned char *vs, int
   int sg, recv = nt_ref(nt, node, "receiver"), cls = lr_receiver(x, recv, fc, fs, &sg, 0), an = nt_ref(nt, node, "arguments"), ac = 0;
   const int *av = an >= 0 ? nt_arr(nt, an, "arguments", &ac) : NULL;
   /* `K.send(:include, M)`: the mixin `K.include(M)` */
-  if (nm && is_send_family(nm) && ac >= 2 && nt_kind(nt, av[0]) == NK_SymbolNode) {
-    const char *sn = nt_str(nt, av[0], "value");
-    if (sn && is_mixin_call(sn)) { nm = sn; av++; ac--; }
-  }
+  int sent_args = 0;
+  const char *sent = nm && is_send_family(nm) ? call_sent_name(nt, node, &sent_args) : NULL;
+  if (sent && sent_args < ac && is_mixin_call(sent)) { nm = sent; av += sent_args; ac -= sent_args; }
   /* `singleton_class.attr_reader :x` in a class or module body: an attr of
      the body's singleton, as `class << self; attr_reader :x; end` records */
   if (nm && (is_attr_decl_reader(nm) || is_attr_decl_writer(nm)) && fc >= 0 && fs == LR_FS_NONE &&
@@ -3264,16 +3264,21 @@ static void lr_late_make(Compiler *c) {
     }
   }
   NT_FOREACH_KIND(c->nt, NK_CallNode, id) {
-    LrVers *x = lr_vers(r, nt_str(c->nt, id, "name"));
+    const char *nm[2];
+    int nn = call_node_names(c, id, nm);
     ElabWindow w;
-    int open = 0;
-    for (int h = x ? x->first : -1; h >= 0 && x->pend; h = r->hist[h].nlink) {
-      LrHist *y = &r->hist[h];
-      if (y->late != 1) continue;
-      LoadPoint q = elab_point_of(c, lr_first_version(y)->node);
-      if (q.region < 0) continue;
-      if (!open++ && elab_call_window(c, id, &w) != ELAB_YES) break;
-      if (w.from.region == q.region && w.from.seq < q.seq) { y->late = x->late = 2; x->pend--; }
+    int win = -1;   /* the node's window: not opened yet, none, or open */
+    for (int k = 0; k < nn; k++) {
+      LrVers *x = lr_vers(r, nm[k]);
+      for (int h = x ? x->first : -1; h >= 0 && x->pend; h = r->hist[h].nlink) {
+        LrHist *y = &r->hist[h];
+        if (y->late != 1) continue;
+        LoadPoint q = elab_point_of(c, lr_first_version(y)->node);
+        if (q.region < 0) continue;
+        if (win < 0) win = elab_call_window(c, id, &w) == ELAB_YES;
+        if (!win) break;
+        if (w.from.region == q.region && w.from.seq < q.seq) { y->late = x->late = 2; x->pend--; }
+      }
     }
   }
 }
@@ -4484,19 +4489,20 @@ static int lr_node_runs(Compiler *c, int id) {
   const NodeTable *nt = c->nt;
   const LoadRecord *r = c->lrec;
   const int *par = comp_parent_map(c);
-  const char *nm = NULL, *hook[2];
+  const char *nm = NULL, *sent = NULL, *hook[2];
   int recv, an, ac = 0, hooks = r->defs_computed ? LR_DISPATCH : 0;
   const int *av;
   switch (nt_kind(nt, id)) {
     case NK_CallNode:
       nm = nt_str(nt, id, "name");
+      sent = call_sent_name(nt, id, NULL);
       recv = nt_ref(nt, id, "receiver");
       an = nt_ref(nt, id, "arguments");
       av = an >= 0 ? nt_arr(nt, an, "arguments", &ac) : NULL;
       if (!nm || is_new_name(nm) || is_allocate_name(nm) || is_raise_alias(nm) || lr_defines(r, nm) || is_method_object_maker(nm) ||
           (is_mixin_call(nm) && recv >= 0 && nt_kind(nt, recv) != NK_SelfNode && nt_kind(nt, recv) != NK_ConstantReadNode) ||
-          (ac && (is_code_eval_name(nm) || ((is_send_family(nm) || is_method_naming_call(nm)) && !vis_arg_name(nt, av[0])) ||
-                  (is_send_family(nm) && lr_defines(r, vis_arg_name(nt, av[0])))))) return LR_RUN;
+          (ac && (is_code_eval_name(nm) || (is_method_naming_call(nm) && !vis_arg_name(nt, av[0])) ||
+                  (is_send_family(nm) && (!sent || lr_defines(r, sent)))))) return LR_RUN;
       for (int sg = 0; sg < 2; sg++)
         for (int i = definition_form_hooks(nm, sg, hook) - 1; i >= 0; i--)
           if (lr_defines(r, hook[i])) return LR_RUN;
@@ -4901,7 +4907,8 @@ static void lr_rta_node(LrRta *t, int id) {
   NodeKind rk = recv >= 0 ? nt_kind(nt, recv) : NK_SelfNode, ak;
   int rc = rk == NK_ConstantReadNode || rk == NK_ConstantPathNode ? lr_rta_const(t, recv)
          : rk == NK_SelfNode ? lr_rta_self(t, id) : LR_UNKNOWN_CLASS;
-  by = nm && (is_send_family(nm) || is_method_object_maker(nm) || is_enumerator_maker(nm)) ? (ac ? vis_arg_name(nt, av[0]) : "") : nm;
+  by = nm && is_send_family(nm) ? (ac ? call_sent_name(nt, id, NULL) : "")
+     : nm && (is_method_object_maker(nm) || is_enumerator_maker(nm)) ? (ac ? vis_arg_name(nt, av[0]) : "") : nm;
   if (!by || (ac && is_code_eval_name(nm)) || is_method_bind_name(by) || is_object_loader(rk == NK_ConstantReadNode ? nt_str(nt, recv, "name") : NULL, by, ac)) {
     lr_rta_all(t, 0);
     lr_rta_any(t);
@@ -5826,9 +5833,7 @@ static void lr_readers(Compiler *c, LoadRecord *r) {
     if (nt_kind(nt, id) != NK_CallNode) continue;
     const char *nm = nt_str(nt, id, "name");
     if (nm && is_send_family(nm)) {
-      int an = nt_ref(nt, id, "arguments"), ac = 0;
-      const int *av = an >= 0 ? nt_arr(nt, an, "arguments", &ac) : NULL;
-      const char *by = ac ? vis_arg_name(nt, av[0]) : NULL;
+      const char *by = call_sent_name(nt, id, NULL);
       anymaker |= !by || is_method_object_maker(by);
     }
     if (!nm || !is_method_object_maker(nm)) continue;
@@ -7690,10 +7695,9 @@ int elab_consts_by_value(Compiler *c, int unheld) {
   int hit = 0, n = 0;
   const int *v = nt_nodes_of_kind(nt, NK_CallNode, &n);
   for (int i = 0; !hit && i < n; i++) {
-    const char *m = nt_str(nt, v[i], "name");
-    int a = nt_ref(nt, v[i], "arguments"), an = 0;
-    const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &an) : NULL;
-    if (m && is_send_family(m)) m = an > 0 ? vis_arg_name(nt, av[0]) : NULL;
+    const char *m = call_sent_name(nt, v[i], NULL);
+    int an = 0;
+    call_args(nt, v[i], &an);
     hit = !m || is_const_set_name(m) || (unheld && is_autoload_name(m)) || (is_code_eval_name(m) && an > 0);
   }
   v = unheld ? nt_nodes_of_kind(nt, NK_DefNode, &n) : NULL;
@@ -7760,10 +7764,9 @@ static void lr_final_index(Compiler *c) {
   }
   /* a remove_const, and a send of a name the record cannot read */
   NT_FOREACH_KIND(nt, NK_CallNode, n) {
-    const char *m = nt_str(nt, n, "name");
     int ac = 0, a = 0;
     const int *av = call_args(nt, n, &ac);
-    while (m && is_send_family(m)) m = a < ac ? vis_arg_name(nt, av[a++]) : NULL;
+    const char *m = call_sent_name(nt, n, &a);
     if (!m) { r->fin_calls = 1; continue; }
     if (!is_remove_const_name(m)) continue;
     const char *k = a < ac ? vis_arg_name(nt, av[a]) : NULL;

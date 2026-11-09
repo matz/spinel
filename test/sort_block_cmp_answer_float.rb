@@ -32,6 +32,9 @@ p h.sort { |x, y| Rational(x[1] - y[1], 4) }
 p h.max { |x, y| (x[1] - y[1]) * 0.25 }
 p (1..5).max { |x, y| Rational(y - x, 10) }
 p (1..5).sort { |x, y| Rational(y - x, 10) }
+p (1..4).max { |x, y| (y - x) * 0.5 }
+p (1..4).min { |x, y| (y - x) / 2.0 }
+p (1..4).minmax { |x, y| (y - x) * 0.5 }
 
 # the program's objects
 Pt = Struct.new(:f)

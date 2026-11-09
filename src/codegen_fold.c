@@ -5111,9 +5111,13 @@ int emit_sortby_expr(Compiler *c, int id, Buf *b) {
 }
 
 /* A comparator block's typed answer that is not an Integer but still has
-   a sign: CRuby's rb_cmpint reads a Float, a Rational or a Bignum by it. */
-static int cmp_ans_by_sign(TyKind t) {
-  return t == TY_FLOAT || t == TY_RATIONAL || t == TY_BIGINT;
+   a sign: CRuby's rb_cmpint reads a Bignum by it, and asks a Float or a
+   Rational `> 0` and `< 0`. A program with its own `>` or `<` may answer
+   those calls, so the sign is not read for a Float or a Rational then. */
+static int cmp_ans_by_sign(Compiler *c, TyKind t) {
+  if (t == TY_BIGINT) return 1;
+  if (t != TY_FLOAT && t != TY_RATIONAL) return 0;
+  return !an_user_defines_method(c, ">") && !an_user_defines_method(c, "<");
 }
 
 /* The sign a sort, min or max comparator block answers for elements `ea`
@@ -5189,9 +5193,9 @@ int emit_sort_cmp_expr(Compiler *c, int id, Buf *b) {
   /* a Float, Rational or Bignum answer counts by its sign; one whose
      block has a `next` is boxed, as the next's value can be of another
      kind than the tail's */
-  if (!nil_cmp && !cmp_boxed && cmp_ans_by_sign(cmp_ty) && iter_step_needs_frame(c, block)) nil_cmp = 1;
+  if (!nil_cmp && !cmp_boxed && cmp_ans_by_sign(c, cmp_ty) && iter_step_needs_frame(c, block)) nil_cmp = 1;
   if (nil_cmp) cmp_boxed = 1;
-  else if (cmp_ty != TY_INT && !cmp_boxed && !cmp_ans_by_sign(cmp_ty)) return 0;
+  else if (cmp_ty != TY_INT && !cmp_boxed && !cmp_ans_by_sign(c, cmp_ty)) return 0;
   /* an element parameter holding its nil (an Integer array with nils):
      the elements move as oints, and their nil bits with them */
   int ono = 0;
@@ -5277,7 +5281,12 @@ else {
   IterStep st; emit_iter_step_open(c, block, nil_cmp && !ans_o, g_indent, &st);
   Buf cb; memset(&cb, 0, sizeof cb);
   if (ans_o && !emit_iter_step_tail_o(c, &st, TY_INT, &cb)) { ans_o = 0; cmp_boxed = 0; emit_iter_step_tail(c, &st, &cb); }
-  else if (!ans_o) emit_iter_step_tail(c, &st, &cb);
+  else if (!ans_o) {
+    /* the tail as emitted, with the parameters pinned to the element type:
+       a tail read boxed before the pin can come out as a plain value */
+    TyKind at = emit_iter_step_tail(c, &st, &cb);
+    if (cmp_boxed && at != TY_POLY && at != TY_UNKNOWN) { cmp_boxed = 0; cmp_ty = at; }
+  }
   emit_indent(g_pre, g_indent);
   /* take from the left on a tie, so equal elements keep their order */
   char ea[48], eb[48];
@@ -5394,9 +5403,9 @@ int emit_minmax_cmp_expr(Compiler *c, int id, Buf *b) {
   /* a Float, Rational or Bignum answer counts by its sign; one whose
      block has a `next` is boxed, as the next's value can be of another
      kind than the tail's */
-  if (!nil_cmp && !cmp_boxed && cmp_ans_by_sign(cmp_ty) && iter_step_needs_frame(c, block)) nil_cmp = 1;
+  if (!nil_cmp && !cmp_boxed && cmp_ans_by_sign(c, cmp_ty) && iter_step_needs_frame(c, block)) nil_cmp = 1;
   if (nil_cmp) cmp_boxed = 1;
-  else if (cmp_ty != TY_INT && !cmp_boxed && !cmp_ans_by_sign(cmp_ty)) return 0;
+  else if (cmp_ty != TY_INT && !cmp_boxed && !cmp_ans_by_sign(c, cmp_ty)) return 0;
   int trv = ++g_tmp, tn = ++g_tmp, tmin = ++g_tmp, tmax = ++g_tmp, ti = ++g_tmp, te = ++g_tmp;
   Scope *bsc = comp_scope_of(c, block);
   LocalVar *lv_p0 = (bsc && p0) ? scope_local(bsc, p0) : NULL;
@@ -5451,7 +5460,12 @@ int emit_minmax_cmp_expr(Compiler *c, int id, Buf *b) {
   IterStep st; emit_iter_step_open(c, block, nil_cmp && !ans_o, g_indent, &st);
   Buf cm; memset(&cm, 0, sizeof cm);
   if (ans_o && !emit_iter_step_tail_o(c, &st, TY_INT, &cm)) { ans_o = 0; cmp_boxed = 0; emit_iter_step_tail(c, &st, &cm); }
-  else if (!ans_o) emit_iter_step_tail(c, &st, &cm);
+  else if (!ans_o) {
+    /* the tail as emitted, with the parameters pinned to the element type:
+       a tail read boxed before the pin can come out as a plain value */
+    TyKind at = emit_iter_step_tail(c, &st, &cm);
+    if (cmp_boxed && at != TY_POLY && at != TY_UNKNOWN) { cmp_boxed = 0; cmp_ty = at; }
+  }
   g_indent--;
   emit_indent(g_pre, g_indent);
   char ea[48], eb[48];

@@ -8439,7 +8439,22 @@ static sp_int sp_poly_arr_len(sp_RbVal a) {
    keeps `arrs[i]` rooted across this call; `res` and the current `tuple` are
    rooted here so a push-triggered collection cannot reclaim a partial tuple.
    Any empty input yields an empty product. */
+static sp_PolyArray *sp_poly_set_operand(sp_RbVal v);   /* fwd */
 static sp_PolyArray *sp_poly_product(sp_RbVal *arrs, sp_int n) {
+  /* Each operand after the receiver is an Array, or converts through its
+     #to_ary, as CRuby converts every operand before it builds a tuple; a
+     value that is neither raises TypeError. Read as it was, an object
+     operand had length 0 and the product answered []. `conv` keeps the
+     converted Arrays alive, since `arrs` is the caller's and holds the
+     originals' roots only. */
+  sp_PolyArray *conv = NULL; SP_GC_ROOT(conv);
+  for (sp_int i = 1; i < n; i++) {
+    if (arrs[i].tag == SP_TAG_OBJ && arrs[i].v.p && sp_poly_is_array_kind(arrs[i].cls_id)) continue;
+    sp_PolyArray *pa = sp_poly_set_operand(arrs[i]);
+    if (!conv) conv = sp_PolyArray_new();
+    sp_PolyArray_push(conv, sp_box_poly_array(pa));
+    arrs[i] = sp_box_poly_array(pa);
+  }
   sp_PolyArray *res = sp_PolyArray_new(); SP_GC_ROOT(res);
   sp_int total = 1;
   for (sp_int i = 0; i < n; i++) {
@@ -12694,10 +12709,9 @@ static sp_PolyArray *sp_poly_product_n(sp_RbVal a, sp_PolyArray *ops) {
   sp_PolyArray *all = sp_PolyArray_new();
   SP_GC_ROOT(all);
   sp_PolyArray_push(all, a);
-  for (sp_int i = 0; i < ops->len; i++) {
-    (void)sp_poly_set_operand(ops->data[i]);   /* CRuby's TypeError for a non-Array */
+  /* (sp_poly_product converts each operand, or raises CRuby's TypeError) */
+  for (sp_int i = 0; i < ops->len; i++)
     sp_PolyArray_push(all, ops->data[i]);
-  }
   return sp_poly_product(all->data, all->len);
 }
 /* Kernel#warn's per-message rendering: an Array contributes one line per

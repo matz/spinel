@@ -3834,11 +3834,47 @@ const PolyCand *comp_poly_candidates_at(Compiler *c, int id, const char *name, i
        ObjectSpace's each_object, eval, binding, Marshal.load, or a Method's
        owner where it makes Methods): every class is. */
 /* every class whose name's last segment is nm (`A::B` names B) */
-static void cv_mark_name(Compiler *c, unsigned char *v, const char *nm) {
-  for (int k = 0; nm && k < c->nclasses; k++) {
-    const char *cn = c->classes[k].name, *seg = cn ? strrchr(cn, ':') : NULL;
-    if (cn && sp_streq(seg ? seg + 1 : cn, nm)) v[k] = 1;
+/* The classes by the last segment of their name, in class order, while
+   cv_build runs: each constant read and each call on a constant asked every
+   class, which was most of the build */
+static struct { int on, nk; ANameHash leaf; int *first, *next, cap; } g_cvl;
+static const char *cv_leaf_of(const char *kn) {
+  const char *seg = kn ? strrchr(kn, ':') : NULL;
+  return seg ? seg + 1 : kn;
+}
+static void cv_leaf_build(Compiler *c) {
+  anh_free(&g_cvl.leaf); memset(&g_cvl.leaf, 0, sizeof g_cvl.leaf);
+  int nk = c->nclasses;
+  free(g_cvl.first); free(g_cvl.next);
+  g_cvl.first = malloc(sizeof(int) * (size_t)(nk + 1)); g_cvl.next = malloc(sizeof(int) * (size_t)(nk + 1));
+  int *last = malloc(sizeof(int) * (size_t)(nk + 1));
+  if (!g_cvl.first || !g_cvl.next || !last) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  for (int k = 0; k < nk; k++) {
+    g_cvl.next[k] = -1;
+    const char *lf = c->classes[k].name ? cv_leaf_of(c->classes[k].name) : NULL;
+    if (!lf) continue;
+    int i = anh_find(&g_cvl.leaf, lf);
+    if (i < 0) { i = g_cvl.leaf.n; anh_add(&g_cvl.leaf, lf); g_cvl.first[i] = k; }
+    else g_cvl.next[last[i]] = k;
+    last[i] = k;
   }
+  free(last);
+  g_cvl.nk = nk; g_cvl.on = 1;
+}
+/* the first class (from k on, k -1 for the first) whose leaf is nm, -1 past the last */
+static int cv_leaf_next(Compiler *c, const char *nm, int k) {
+  if (!nm) return -1;
+  if (g_cvl.on && g_cvl.nk == c->nclasses) {
+    if (k >= 0) return g_cvl.next[k];
+    int i = anh_find(&g_cvl.leaf, nm);
+    return i >= 0 ? g_cvl.first[i] : -1;
+  }
+  for (k++; k < c->nclasses; k++)
+    if (c->classes[k].name && sp_streq(cv_leaf_of(c->classes[k].name), nm)) return k;
+  return -1;
+}
+static void cv_mark_name(Compiler *c, unsigned char *v, const char *nm) {
+  for (int k = cv_leaf_next(c, nm, -1); k >= 0; k = cv_leaf_next(c, nm, k)) v[k] = 1;
 }
 static void cv_mark_tree(Compiler *c, unsigned char *v, int k) {
   if (k < 0 || k >= c->nclasses) return;
@@ -3853,10 +3889,7 @@ static void cv_mark_tree(Compiler *c, unsigned char *v, int k) {
 }
 /* cv_mark_tree for every class whose name's last segment is nm */
 static void cv_mark_name_tree(Compiler *c, unsigned char *v, const char *nm) {
-  for (int k = 0; nm && k < c->nclasses; k++) {
-    const char *kn = c->classes[k].name, *seg = kn ? strrchr(kn, ':') : NULL;
-    if (kn && sp_streq(seg ? seg + 1 : kn, nm)) cv_mark_tree(c, v, k);
-  }
+  for (int k = cv_leaf_next(c, nm, -1); k >= 0; k = cv_leaf_next(c, nm, k)) cv_mark_tree(c, v, k);
 }
 /* Is there a `self` in subtree n not marked as no value (nonval), outside
    instance methods (`def m`, with module 1 inside them too) and nested
@@ -4001,6 +4034,7 @@ static void cv_build(Compiler *c) {
   unsigned char *v = calloc((size_t)nk + 1, 1), *nonval = calloc((size_t)nn + 1, 1);
   int *par = an_parent_map(nt);
   if (!v || !nonval || !par) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  cv_leaf_build(c);
   int all = 0, rel = 0, cls_call = 0, owner = 0, methods = 0;
   for (int k = 0; k < nk; k++) {
     int named_struct = (c->classes[k].is_struct || c->classes[k].is_data) && !c->classes[k].is_anon_struct &&
@@ -4058,10 +4092,8 @@ static void cv_build(Compiler *c) {
     int plain = blk < 0 && is_class_plain_query(nm);
     if (!plain && blk < 0 && rk != NK_SelfNode) {
       const char *cn = nt_str(nt, recv, "name");
-      for (int k = 0; cn && k < nk && !plain; k++) {
-        const char *kn = c->classes[k].name, *seg = kn ? strrchr(kn, ':') : NULL;
-        plain = kn && sp_streq(seg ? seg + 1 : kn, cn) && call_target(c, n, k, nm, CT_CMETHOD, NULL) >= 0;
-      }
+      for (int k = cv_leaf_next(c, cn, -1); k >= 0 && k < nk && !plain; k = cv_leaf_next(c, cn, k))
+        plain = call_target(c, n, k, nm, CT_CMETHOD, NULL) >= 0;
     }
     if (!plain && blk < 0 && rk == NK_SelfNode) {
       /* (self is the class object in a class method or a class body, where
@@ -4130,6 +4162,7 @@ static void cv_build(Compiler *c) {
     for (int e = 0; rel && e < c->classes[k].nincluded_mods; e++) v[c->classes[k].included_mods[e]] = 1;
     for (int e = 0; rel && e < c->classes[k].nextended_mods; e++) v[c->classes[k].extended_mods[e]] = 1;
   }
+  g_cvl.on = 0;
   free(nonval);
   free(par);
   free(c->cls_value);

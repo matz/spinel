@@ -243,7 +243,7 @@ int cplan_super_target(Compiler *c, int id, Scope *s0, MethodLookup *ml) {
     return e >= 0 ? e : mi;
   }
   int par = comp_super_parent(c, s->class_id, s->is_cmethod);
-  const char *uname = comp_super_name(c, par, comp_scope_def_name(c, s), s->is_cmethod);
+  const char *uname = comp_super_name(c, par, s);
   if (!uname) {
     *ml = (MethodLookup){ .kind = ML_NONE, .def_class = -1, .from = par };
     return -1;
@@ -258,7 +258,7 @@ static void cplan_resolve_super(Compiler *c, int id, CallPlan *p) {
   int mi = cplan_super_target(c, id, s, &ml);
   if (mi >= 0) { cplan_set(p, mi, ml.from, UC_SUPER, CP_DIRECT); return; }
   const Scope *st = comp_super_site(c, s);
-  const char *uname = comp_super_shadow(c, st) ? NULL : comp_super_name(c, ml.from, comp_scope_def_name(c, st), st->is_cmethod);
+  const char *uname = comp_super_shadow(c, st) ? NULL : comp_super_name(c, ml.from, st);
   if (uname && s->is_cmethod &&
            builtin_super_cmethod_known(c->classes[s->class_id].name, uname) &&
            ml.kind == ML_NONE) {
@@ -902,7 +902,7 @@ int call_node_names(Compiler *c, int id, const char *out[2]) {
     Scope *s0 = comp_scope_of(c, id);
     const Scope *s = s0 ? comp_super_site(c, s0) : NULL;
     if (s && s->name && !comp_super_shadow(c, s))
-      out[n++] = comp_super_name(c, comp_super_parent(c, s->class_id, s->is_cmethod), comp_scope_def_name(c, s), s->is_cmethod);
+      out[n++] = comp_super_name(c, comp_super_parent(c, s->class_id, s->is_cmethod), s);
   }
   if (k == NK_CallNode && out[0] && is_method_object_maker(out[0])) {
     const char *sym = method_sym_arg(c, id);

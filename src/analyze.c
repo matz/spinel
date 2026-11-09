@@ -2675,7 +2675,7 @@ static int a_block_forwarded_to_proc(Compiler *c, int id) {
     const Scope *st = comp_super_site(c, s);
     int p = comp_super_parent(c, st->class_id, st->is_cmethod);
     if (p < 0) return 0;
-    const char *u = comp_super_name(c, p, comp_scope_def_name(c, st), st->is_cmethod);
+    const char *u = comp_super_name(c, p, st);
     int tmi = st->is_cmethod ? comp_cmethod_in_chain(c, p, u, NULL)
                              : comp_method_in_chain(c, p, u, NULL);
     return tmi >= 0 && c->scopes[tmi].is_proc_form;
@@ -35179,7 +35179,7 @@ static int promote_spread_string_args(Compiler *c) {
 static int super_parent_method(Compiler *c, Scope *s) {
   const Scope *st = comp_super_site(c, s);
   int sp = comp_super_parent(c, st->class_id, st->is_cmethod);
-  const char *sn = sp >= 0 ? comp_super_name(c, sp, comp_scope_def_name(c, st), st->is_cmethod) : NULL;
+  const char *sn = sp >= 0 ? comp_super_name(c, sp, st) : NULL;
   if (!sn) return -1;
   return st->is_cmethod ? comp_cmethod_in_chain(c, sp, sn, NULL) : comp_method_in_chain(c, sp, sn, NULL);
 }

@@ -5694,7 +5694,9 @@ const char *comp_scope_def_name(Compiler *c, const Scope *s) {
   snprintf(b, sizeof buf[0], "%.*s%s", (int)dl, dn, pf ? "#pf" : "");
   return b;
 }
-const char *comp_super_name(Compiler *c, int parent, const char *name, int is_cmethod) {
+const char *comp_super_name(Compiler *c, int parent, const Scope *s) {
+  const char *name = comp_scope_def_name(c, s);
+  int is_cmethod = s->is_cmethod;
   if (!name) return name;
   size_t n = strlen(name);
   if (n <= 3 || strcmp(name + n - 3, "#pf") != 0) return name;

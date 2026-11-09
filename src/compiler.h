@@ -2636,7 +2636,7 @@ int scope_is_initialize(const Scope *s);   /* is s compiled as a void initialize
 int comp_scope_copied_away(Compiler *c, int s);
 int comp_scope_may_run(Compiler *c, int s);
 int comp_name_is_shadow_copy(Compiler *c, const char *name, int kind);
-const char *comp_super_name(Compiler *c, int parent, const char *name, int is_cmethod);
+const char *comp_super_name(Compiler *c, int parent, const Scope *s);
 const char *comp_scope_def_name(Compiler *c, const Scope *s);
 int comp_super_is_class_new(Compiler *c, int id);
 int comp_super_class_new_boxed(Compiler *c, int id);

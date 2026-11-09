@@ -4240,7 +4240,7 @@ int one_str_elem_call(Compiler *c, int v, TyKind rt) {
   int recv0 = nt_ref(nt, v, "receiver");
   if (rt == TY_UNKNOWN && recv0 >= 0) rt = comp_ntype(c, recv0);
   if (rt == TY_STR_ARRAY) {
-    int op = strh_call_op_in(c, v, TY_STR_ARRAY, 0);
+    int op = strh_call_op(c, v, TY_STR_ARRAY);
     if (op == STRH_ELEM || op == STRH_TAKE) return 1;
     /* (an index known only at run time, the call typed a String: its
        emitter reads the element, sp_StrArray_get) */
@@ -5908,9 +5908,7 @@ void emit_ctype(Compiler *c, TyKind t, Buf *b) {
 /* The element stamp a pointer array is boxed with (#4486): the runtime's one
    cls_id for pointer arrays is type-erased, so the box carries what the
    elements are for the poly paths to read them back. */
-/* The constructor of an empty pointer array of kind t: a String Array of
-   handles is stamped at birth, so what reads it before anything boxes it
-   (inspect) knows what it holds */
+/* The constructor of an empty pointer array of kind t */
 const char *ptr_array_new_c(TyKind t) { return "sp_PtrArray_new()"; }
 const char *ptr_array_stamp(Compiler *c, TyKind t) {
   static char buf[64];

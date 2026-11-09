@@ -2264,25 +2264,10 @@ const char *encoding_const_name(const char *nm) {
 }
 
 int strh_op(const char *n, int argc, int block) {
-  if (!n) return STRH_NONE;
-  if (block == 1) {
-    if (argc == 0 && sp_streq(n, "each")) return STRH_EACH;
-    return STRH_NONE;
-  }
-  if (block) return STRH_NONE;
+  if (!n || block) return STRH_NONE;
   if (argc == 1 && is_element_at_alias(n)) return STRH_ELEM;
   if (argc == 0 && is_endpoint_query(n)) return STRH_ELEM;
-  if (argc == 2 && sp_streq(n, "[]=")) return STRH_STORE;
-  if (argc >= 1 && is_push_alias(n) && (argc == 1 || !sp_streq(n, "<<"))) return STRH_PUSH;
   if (argc == 0 && (sp_streq(n, "pop") || sp_streq(n, "shift"))) return STRH_TAKE;
-  if (argc == 0 && is_len_alias(n)) return STRH_LEN;
-  if (argc == 0 && sp_streq(n, "empty?")) return STRH_EMPTY;
-  if (argc == 0 && sp_streq(n, "dup")) return STRH_DUP;
-  if (argc == 0 && sp_streq(n, "to_a")) return STRH_SELF;
-  if (argc <= 1 && sp_streq(n, "join")) return STRH_JOIN;
-  if (argc == 1 && sp_streq(n, "include?")) return STRH_INCLUDE;
-  if (argc == 1 && sp_streq(n, "==")) return STRH_EQ;
-  if (argc == 0 && (sp_streq(n, "inspect") || sp_streq(n, "to_s"))) return STRH_INSPECT;
   return STRH_NONE;
 }
 

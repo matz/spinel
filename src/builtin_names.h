@@ -652,24 +652,13 @@ int is_check_funcall_name(const char *n);   /* respond_to? respond_to_missing? m
 int is_implicitly_private_name(const char *n); /* initialize initialize_copy/_clone/_dup respond_to_missing? */
 int is_alias_method_name(const char *n);  /* alias_method */
 int is_class_declaration_call(const char *n);  /* visibility, attr_*, include/extend/prepend, alias_method, undef/remove_method */
-/* The operations a String Array (whose elements are handles) answers
-   itself, by name, argument count and block (0 none, 1 a literal block, 2
-   a block argument). */
+/* The operations on a String Array (whose elements are handles) that answer
+   an element's handle, by name, argument count and block (0 none, 1 a
+   literal block, 2 a block argument). */
 typedef enum {
   STRH_NONE,
   STRH_ELEM,     /* [](i), at(i), first, last: the element, a String */
-  STRH_STORE,    /* []=(i, v): stores v's String */
-  STRH_PUSH,     /* <<, push, append: stores each argument's String */
-  STRH_TAKE,     /* pop, shift: removes and answers the element */
-  STRH_LEN,      /* size, length */
-  STRH_EMPTY,    /* empty? */
-  STRH_EACH,     /* each { }: the receiver */
-  STRH_DUP,      /* dup: a new Array of the same Strings */
-  STRH_SELF,     /* to_a: the receiver */
-  STRH_JOIN,     /* join, join(sep) */
-  STRH_INCLUDE,  /* include?(v) */
-  STRH_EQ,       /* ==(other) */
-  STRH_INSPECT   /* inspect, to_s */
+  STRH_TAKE      /* pop, shift: removes and answers the element */
 } StrhOp;
 int strh_op(const char *n, int argc, int block);
 /* the receiver kind a block-taking iterator name belongs to */

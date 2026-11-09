@@ -5868,42 +5868,7 @@ int comp_value_dropped(Compiler *c, int n) {
 }
 
 
-/* Is argument n's type want, or (unknown_ok, for the gate's early rounds)
-   not settled yet? */
-static int strh_arg_ty_ok(const Compiler *c, int n, TyKind want, TyKind want2, int unknown_ok) {
-  TyKind t = comp_ntype(c, n);
-  return t == want || t == want2 || (unknown_ok && t == TY_UNKNOWN);
-}
-/* Does block blk take no parameter or one plain one, which binds the
-   element (not a destructuring `|(x, y)|`, a rest, a default, a keyword, a
-   block parameter or a block-local)? */
-static int strh_plain_block_params(Compiler *c, int blk) {
-  const NodeTable *nt = c->nt;
-  int bp = nt_ref(nt, blk, "parameters");
-  if (bp < 0) return 1;
-  if (nt_kind(nt, bp) != NK_BlockParametersNode) return 0;
-  int lc = 0;
-  nt_arr(nt, bp, "locals", &lc);
-  if (lc > 0) return 0;
-  int pn = nt_ref(nt, bp, "parameters");
-  if (pn < 0) return 1;
-  int n = 0;
-  const int *rq = nt_arr(nt, pn, "requireds", &n);
-  if (n > 1 || (n == 1 && nt_kind(nt, rq[0]) != NK_RequiredParameterNode)) return 0;
-  /* (a destructuring parameter is a hidden parameter and a read of its
-     elements by the time the walk runs) */
-  const char *pnm = n == 1 ? nt_str(nt, rq[0], "name") : NULL;
-  if (pnm && !strncmp(pnm, "__destr", 7)) return 0;
-  int k = 0;
-  nt_arr(nt, pn, "optionals", &k);
-  if (k > 0) return 0;
-  nt_arr(nt, pn, "posts", &k);
-  if (k > 0) return 0;
-  nt_arr(nt, pn, "keywords", &k);
-  if (k > 0) return 0;
-  return nt_ref(nt, pn, "rest") < 0 && nt_ref(nt, pn, "keyword_rest") < 0 && nt_ref(nt, pn, "block") < 0;
-}
-int strh_call_op_in(Compiler *c, int call, TyKind rt, int unknown_ok) {
+int strh_call_op(Compiler *c, int call, TyKind rt) {
   const NodeTable *nt = c->nt;
   if (rt != TY_STR_ARRAY || call < 0 || nt_kind(nt, call) != NK_CallNode) return STRH_NONE;
   const char *nm = nt_str(nt, call, "name");
@@ -5911,27 +5876,10 @@ int strh_call_op_in(Compiler *c, int call, TyKind rt, int unknown_ok) {
   const int *av = ca >= 0 ? nt_arr(nt, ca, "arguments", &argc) : NULL;
   if (nt_argv_has(nt, av, argc, NT_ARG_SPLAT | NT_ARG_KEYWORDS | NT_ARG_BLOCK)) return STRH_NONE;
   int op = strh_op(nm, argc, blk < 0 ? 0 : nt_kind(nt, blk) == NK_BlockNode ? 1 : 2);
-  if (op == STRH_EACH && !strh_plain_block_params(c, blk)) return STRH_NONE;
-  if ((op == STRH_ELEM && argc == 1) || op == STRH_STORE)
-    for (int k = 0; k < (op == STRH_STORE ? 1 : argc); k++)
-      if (!strh_arg_ty_ok(c, av[k], TY_INT, TY_INT, unknown_ok)) return STRH_NONE;
-  /* (what is stored is a String, or a box that may hold one, which
-     sp_StrhArray_unbox opens: any other value is no store of this form, and
-     widens the Array (fold_container_evidence), so the gate sees it) */
-  if (op == STRH_PUSH || (op == STRH_STORE && argc == 2))
-    for (int k = op == STRH_STORE ? 1 : 0; k < argc; k++) {
-      TyKind vt = comp_ntype(c, av[k]);
-      if (vt != TY_STRING && vt != TY_STRBUF && vt != TY_UNKNOWN && vt != TY_POLY) return STRH_NONE;
-    }
-  /* (the other operand of == is another Array of handles) */
-  if (op == STRH_EQ && !strh_arg_ty_ok(c, av[0], TY_STR_ARRAY, TY_STR_ARRAY, unknown_ok)) return STRH_NONE;
-  /* (a separator or a needle that is a String) */
-  if ((op == STRH_JOIN || op == STRH_INCLUDE) && argc == 1 &&
-      !strh_arg_ty_ok(c, av[0], TY_STRING, TY_STRBUF, unknown_ok)) return STRH_NONE;
+  if (op == STRH_ELEM && argc == 1 && comp_ntype(c, av[0]) != TY_INT) return STRH_NONE;
   if (op != STRH_NONE && share_builtin_overridden(c, "Array", nm)) return STRH_NONE;
   return op;
 }
-int strh_call_op(Compiler *c, int call, TyKind rt) { return strh_call_op_in(c, call, rt, 0); }
 /* Is node n a read of a variable (a local, an instance variable, a global, a
    constant or a class variable), which the handle element emitters can read
    again where an element is used as the slot it is? */

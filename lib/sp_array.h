@@ -557,14 +557,10 @@ static inline sp_PtrArray *sp_PtrArray_clear(sp_PtrArray*a){sp_gc_wb((void*)a); 
    never stamped (no emitter boxes one without stamping) reads as opaque
    objects, which is what the erased id always meant. Shared by the runtime
    archive and the generated TU, so only sp_alloc.h/sp_gc.h names appear. */
-/* a String's bytes as an element of a String Array of handles: the
-   literal's own handle for a frozen literal, else a new handle (sp_array.c) */
-void *sp_StrhArray_str_elem(const char *s);
 static inline const char *sp_PtrArray_kind_name(sp_PtrArray *a) {
   switch (a->elem_kind) {
     case SP_PTR_ELEM_INT_ROWS: return "Array[Integer]";
     case SP_PTR_ELEM_FLT_ROWS: return "Array[Float]";
-    case SP_PTR_ELEM_STRBUF: return "String";
     case SP_PTR_ELEM_OBJ: return (a->elem_cls >= 0 && sp_obj_cls_name_fn) ? sp_obj_cls_name_fn(a->elem_cls) : "Object";
     default: return "Object";
   }
@@ -574,7 +570,6 @@ static inline sp_RbVal sp_PtrArray_elem_box(sp_PtrArray *a, void *e) {
   switch (a->elem_kind) {
     case SP_PTR_ELEM_INT_ROWS: return sp_box_obj(e, SP_BUILTIN_INT_ARRAY);
     case SP_PTR_ELEM_FLT_ROWS: return sp_box_obj(e, SP_BUILTIN_FLT_ARRAY);
-    case SP_PTR_ELEM_STRBUF: return sp_box_obj(e, SP_BUILTIN_STRBUF);
     case SP_PTR_ELEM_OBJ: return sp_box_nullable_obj_dyn(e, 0);   /* the object's own class id, a subclass included */
     default: return sp_box_obj(e, SP_BUILTIN_OBJECT);
   }
@@ -606,14 +601,10 @@ static inline const char *sp_PtrArray_val_class(sp_RbVal v) {
 static inline int sp_PtrArray_elem_ok(sp_PtrArray *a, sp_RbVal v, void **out) {
   *out = NULL;
   if (v.tag == SP_TAG_NIL) return 1;
-  /* a String Array of handles takes a String's bytes as a handle of its
-     own, as a handle slot takes a String */
-  if (v.tag == SP_TAG_STR && a->elem_kind == SP_PTR_ELEM_STRBUF) { *out = sp_StrhArray_str_elem(v.v.s); return 1; }
   if (v.tag != SP_TAG_OBJ) return 0;
   switch (a->elem_kind) {
     case SP_PTR_ELEM_INT_ROWS: if (v.cls_id != SP_BUILTIN_INT_ARRAY) return 0; break;
     case SP_PTR_ELEM_FLT_ROWS: if (v.cls_id != SP_BUILTIN_FLT_ARRAY) return 0; break;
-    case SP_PTR_ELEM_STRBUF: if (v.cls_id != SP_BUILTIN_STRBUF) return 0; break;
     case SP_PTR_ELEM_OBJ:
       if (!(a->elem_cls < 0 || v.cls_id == a->elem_cls ||
             (v.cls_id >= 0 && sp_class_le_id_fn && sp_class_le_id_fn(v.cls_id, a->elem_cls)))) return 0;
@@ -836,19 +827,6 @@ sp_IntArray *sp_IntArray_slice_bang(sp_IntArray *a, sp_int from, sp_int n);
 sp_FloatArray *sp_FloatArray_slice_bang(sp_FloatArray *a, sp_int from, sp_int n);
 sp_StrArray *sp_StrArray_slice_bang(sp_StrArray *a, sp_int from, sp_int n);
 sp_PtrArray *sp_PtrArray_slice_bang(sp_PtrArray *a, sp_int from, sp_int n);
-/* --share-strings: a String Array whose Strings are shared holds their
-   sp_String handles in an sp_PtrArray stamped SP_PTR_ELEM_STRBUF from birth
-   (TY_STRH_ARRAY), so an element read is the String itself and the poly paths
-   box it as one. Element order, growth, the write barrier and the GC scan are
-   the pointer array's; these answer what depends on the Strings' bytes. */
-sp_PtrArray *sp_StrhArray_new(void);
-sp_PtrArray *sp_StrhArray_dup(sp_PtrArray *a);
-static inline sp_PtrArray *sp_StrhArray_to_a(sp_PtrArray *a) { return a ? a : sp_StrhArray_new(); }
-static inline sp_PtrArray *sp_StrhArray_entries(sp_PtrArray *a) { if (SP_UNLIKELY(!a)) sp_nil_recv("entries"); return sp_StrhArray_dup(a); }
-sp_PtrArray *sp_StrhArray_from_strs(sp_StrArray *a);
-sp_bool sp_StrhArray_include(sp_PtrArray *a, const char *v);
-sp_bool sp_StrhArray_eq(sp_PtrArray *a, sp_PtrArray *b);
-const char *sp_StrhArray_join(sp_PtrArray *a, const char *sep);
 
 /* ---- more cold StrArray ops relocated from spinel_rt.h (0 optcarrot
    uses). #include here (not near the top): by this point array.h's own

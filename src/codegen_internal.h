@@ -1968,7 +1968,7 @@ int emit_native_count_mismatch(Compiler *c, int id, int cid, const char *name, i
                                int recv, int argc, const int *argv, Buf *b);
 void emit_ctype(Compiler *c, TyKind t, Buf *b);
 const char *ptr_array_stamp(Compiler *c, TyKind t);   /* "SP_PTR_ELEM_x, cls" for sp_box_ptr_array_k (#4486) */
-const char *ptr_array_new_c(TyKind t);   /* the empty pointer array of kind t: sp_StrhArray_new() for a String handle Array */
+const char *ptr_array_new_c(TyKind t);   /* the empty pointer array of kind t */
 /* "Int" / "Str" / "Float" for the sp_<K>Array_* runtime family. */
 const char *array_kind(TyKind t);
 int array_has_new_cap(const char *k);

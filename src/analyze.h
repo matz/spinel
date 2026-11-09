@@ -1423,10 +1423,6 @@ int std_stream_bare_call_own(Compiler *c, int id, const char *nm);   /* bare nm 
    arguments are Integers, no argument is a splat, a keyword Hash or a block
    argument, and no method of the program's own stands in for Array's. */
 int strh_call_op(Compiler *c, int call, TyKind rt);
-/* ...and the same for the gate's rounds, where an argument whose type is
-   not settled yet counts as the type asked (the gate runs again, and
-   refuses for good, once it is) */
-int strh_call_op_in(Compiler *c, int call, TyKind rt, int unknown_ok);
 int strh_var_read(const NodeTable *nt, int n);   /* a variable's read, whatever its kind of variable */
 
 #endif

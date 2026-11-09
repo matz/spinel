@@ -3107,13 +3107,6 @@ static SP_UNUSED sp_RbVal sp_poly_outbuf_handle(sp_RbVal v) {
     return sp_box_nullable_obj(sp_poly_as_strbuf(v), SP_BUILTIN_STRBUF);
   return v;
 }
-/* The String Array of handles (--share-strings, TY_STRH_ARRAY) element a
-   boxed String is: a handle as it is, a plain String as sp_String_new_shared
-   makes it (a frozen literal's own handle), nil as NULL. */
-static inline sp_String *sp_StrhArray_unbox(sp_RbVal v) {
-  if (v.tag == SP_TAG_NIL) return NULL;
-  return v.tag == SP_TAG_STR ? sp_String_new_shared(v.v.s) : (sp_String *)v.v.p;
-}
 /* --share-strings: element i of a String Array boxed as a handle of its
    own, for a row a builtin builds out of a new Array whose Strings the rule
    shares (zip): a change through the row reaches the String; nil past the

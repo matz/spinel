@@ -85,4 +85,30 @@ by = ab(0)
 p by.sum { |v| by.pop if v == 1; v }
 bz = ab(0)
 p bz.sum(0.5) { |v| bz << 2.5 if bz.size < 3; v }, ab(1).sum { |v| v }
+# ... and one held boxed that is an Array of Integers or Floats, walked as
+# itself rather than a copy; rows, Symbols, Strings, objects and a Hash
+ti = [1, 2]
+tb = ti.size > 5 ? "s" : ti
+p tb.sum { |v| tb << 10 if tb.size < 3; v }
+tf = [1.5]
+tg = tf.size > 5 ? :q : tf
+p tg.sum { |v| tg << 2.5 if tg.size < 2; v }
+tp = [1, 2, 3]
+tq = tp.size > 5 ? "s" : tp
+p tq.sum { |v| tq.pop if v == 1; v }
+tt = [[1, 2], [3, 4]]
+tx = tt.size > 5 ? "s" : tt
+p tx.sum { |a, b| a * b }, tx.sum { |r| r.sum }, tx.sum { |(a, b)| a - b }
+sy = [:ab, :c]
+sx = sy.size > 5 ? 1 : sy
+st = ["ab", "cde"]
+sz = st.size > 5 ? 1 : st
+p sx.sum { |s| s.size }, sz.sum { |s| s.size }, sz.sum("") { |s| s * 2 }
+os = [P.new(1, 1.5), P.new(2, 2)]
+ox = os.size > 5 ? 1 : os
+ni = [1, nil, 3]
+nx = ni.size > 5 ? "s" : ni
+hh = {a: 1, b: 2}
+hx = hh.size > 5 ? "s" : hh
+p ox.sum { |o| o.b }, ox.sum(&:b), nx.sum { |v| v || 10 }, hx.sum { |k, v| v }
 p [1, "x"].sum { |*v| v.length }, [1, "x"].sum { |a, *r| r.size + 1 }

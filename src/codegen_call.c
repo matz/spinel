@@ -24372,7 +24372,13 @@ int emit_unresolved_call(Compiler *c, int id, Buf *b) {
             g_cls_tag_skip = sv2;
             view_unbind(g_n_argov - 1);
           }
-          buf_printf(b, "%s) : %s; })", raise,
+          /* a Class value without a method of the name: Module#name, to_s
+             and inspect take no argument, so CRuby raises ArgumentError */
+          char cls_raise[256], am[96];
+          if (is_name_reader(nm) && class_name_reader_arity_msg(nt, argc, argv, am, sizeof am))
+            snprintf(cls_raise, sizeof cls_raise, "(sp_raise_cls(\"ArgumentError\", \"%s\"), sp_box_nil())", am);
+          else snprintf(cls_raise, sizeof cls_raise, "%s", raise);
+          buf_printf(b, "%s) : %s; })", cls_raise,
                      (eb2.p && eb2.p[0]) ? eb2.p : raise);
           if (setter_val) { buf_puts(b, "; "); emit_boxed(c, argv[0], b); buf_puts(b, "; })"); }
           if (g_plan_check) pa_end(c, pa_frame, cplan_poly_cmeth(c, id));

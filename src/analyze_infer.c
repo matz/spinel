@@ -6124,8 +6124,9 @@ static int infer_class_module_call(Compiler *c, int id, const NodeTable *nt, con
     /* Module#name / to_s / inspect, unless the class answers with a class
        method of its own (`def self.name = Thread.current[:name]`), whose
        dispatch below types the call. A class known only at run time may be
-       one with such a method or one without: boxed, either answer. */
-    if (argc == 0 && is_name_reader(name) && class_recv_user_cmethod(c, id, recv, name) < 0) {
+       one with such a method or one without: boxed, either answer. With
+       arguments the builtin raises ArgumentError, so its slot stays a String. */
+    if (is_name_reader(name) && class_recv_user_cmethod(c, id, recv, name) < 0) {
       int ncc = 0, other = 0;
       const PolyCand *pc = NULL;
       if (class_recv_static_ci(c, recv) < 0 && class_recv_is_dynamic(c, recv))

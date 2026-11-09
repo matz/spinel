@@ -6301,7 +6301,12 @@ static void frame_collect(const char *p, size_t beg, size_t end, FrameTemps *ts)
       if (t) {
         size_t q = i;
         while (q > beg && p[q-1] == ' ') q--;
-        if (q > beg && p[q-1] == '&') t->addr = 1;
+        /* (a run of `&` before a temp reads as `&&` tokens, the logical
+           operator, and a last `&` alone when the run is odd: that one is
+           an address) */
+        size_t r = q;
+        while (r > beg && p[r-1] == '&') r--;
+        if ((q - r) & 1) t->addr = 1;
         size_t d = frame_preceded_by(p, i, beg, "sp_RbVal");
         if (d) {
           /* a qualifier in front (volatile, const, static) is a form this

@@ -5013,6 +5013,235 @@ else {
   return 0;
 }
 
+/* The static answer of an arm's predicate in value position: 1 or 0 for a
+   guard the compiler decides (a defined? of a constant, an is_a? or a
+   respond_to? it settles, and, for a `block_given? ? a : b` pair, `paired`,
+   that), -1 for a run-time one. */
+static int if_expr_arm_known(Compiler *c, int pred, int paired) {
+  int df = comp_defined_guard_false(c, pred);
+  int dt = df ? 0 : comp_defined_guard_true(c, pred);
+  int known = df ? 0 : (dt ? 1 : static_isa_cond(c, pred));
+  if (known < 0 && !df && !dt) known = static_respond_to_cond(c, pred);
+  if (known < 0 && !df && !dt && paired) known = static_block_given_cond(c, pred);
+  return known;
+}
+
+/* The next arm of the ladder headed by `head`, when the C can carry it in the
+   same chain: the conditional it holds answers the head's type and form
+   (`res`, `res_o`). A nested conditional of another type was converted to the
+   outer one as a whole, its arms in its own type first (a splat's length
+   dispatch, a Hash beside a boxed nil: the inner raise arm is a boxed nil
+   there, and the outer converts the lot), so it stays its own nested
+   conditional and the chain ends before it. A ladder's suffixes widen toward
+   its head, so a chain breaks at few places however long it is. */
+static int ladder_next_same(Compiler *c, int head, int arm, TyKind res, int res_o) {
+  int nx = nt_ladder_next(c->nt, arm);
+  if (nx < 0) return -1;
+  return repr_of(c, nx).as_ty == repr_of(c, head).as_ty && cond_res_oint(c, nx, res) == res_o ? nx : -1;
+}
+
+/* One branch of a value ladder: its leading statements, then its last
+   statement assigned into the ladder's one result temp `tr`. */
+static void emit_if_branch_value(Compiler *c, const int *stmts, int n, TyKind res, int res_o, int tr) {
+  for (int i = 0; i < n - 1; i++) emit_stmt(c, stmts[i], g_pre, g_indent + 2);
+  if (n > 0) emit_if_arm_tail(c, stmts[n - 1], res, res_o, tr);
+}
+
+/* The `else { ... }` that ends a value ladder: one branch's value. */
+static void emit_if_else_value(Compiler *c, const int *stmts, int n, TyKind res, int res_o, int tr) {
+  emit_indent(g_pre, g_indent); buf_puts(g_pre, "else {\n");
+  emit_if_branch_value(c, stmts, n, res, res_o, tr);
+  emit_indent(g_pre, g_indent); buf_puts(g_pre, "}\n");
+}
+
+/* The arms of a value ladder whose branches are statements, or that has no
+   else, from `id` on: one loop over the arms (nt_ladder_next), every arm's
+   tail assigned into the one result temp `tr` by the conversion the first
+   arm's already uses, so the C is `if ... else if ... else` with one temp
+   however many arms there are. A later arm whose condition hoists setup
+   carries it (emit_ladder_arm_head). A later arm the compiler decides is
+   the last one (always true) or is left out (always false), as when it was
+   an if of its own; the first arm was decided by the caller. */
+static void emit_if_value_arms(Compiler *c, int id, int is_unless, TyKind res, int res_o, int tr) {
+  const NodeTable *nt = c->nt;
+  for (int arm = id; arm >= 0; ) {
+    int sub = nt_ref(nt, arm, is_unless ? "else_clause" : "subsequent");
+    int next = ladder_next_same(c, id, arm, res, res_o);
+    int tn = 0, en = 0;
+    int then_b = nt_ref(nt, arm, "statements");
+    const int *tb = then_b >= 0 ? nt_arr(nt, then_b, "body", &tn) : NULL;
+    int else_stmts = sub >= 0 && nt_kind(nt, sub) == NK_ElseNode ? nt_ref(nt, sub, "statements") : -1;
+    const int *eb = else_stmts >= 0 ? nt_arr(nt, else_stmts, "body", &en) : NULL;
+    /* an `elsif` of another type ends the chain: it is the else arm's value */
+    int cut_elsif = next < 0 && sub >= 0 && nt_kind(nt, sub) == NK_IfNode;
+    if (cut_elsif) { eb = &sub; en = 1; }
+    int pred = nt_ref(nt, arm, "predicate");
+    if (arm != id) {
+      int known = if_expr_arm_known(c, pred, tn == 1 && en == 1);
+      if (known >= 0) {
+        if (is_unless ? !known : known) {
+          emit_if_else_value(c, tb, tn, res, res_o, tr);
+          return;
+        }
+        if (next < 0) {
+          if (en > 0) emit_if_else_value(c, eb, en, res, res_o, tr);
+          return;
+        }
+        is_unless = nt_kind(nt, next) == NK_UnlessNode;
+        arm = next;
+        continue;
+      }
+      emit_ladder_arm_head(c, pred, is_unless, g_pre, g_indent);
+    }
+    else {
+      /* Emit the condition into its own buffer: any prolog it hoists is a
+         statement, and writing it to g_pre after "if (" had been written left
+         the declaration in the middle of the expression. */
+      Buf cnd; memset(&cnd, 0, sizeof cnd);
+      emit_arm_cond(c, pred, is_unless, &cnd);
+      emit_indent(g_pre, g_indent);
+      buf_puts(g_pre, "if (");
+      buf_puts(g_pre, cnd.p ? cnd.p : "0");
+      buf_puts(g_pre, ") {\n");
+      free(cnd.p);
+    }
+    /* Then branch: side-effect stmts, then assign last expr to temp. */
+    emit_if_branch_value(c, tb, tn, res, res_o, tr);
+    emit_indent(g_pre, g_indent);
+    buf_puts(g_pre, "}\n");
+    if (next < 0) {
+      if (cut_elsif || (sub >= 0 && nt_kind(nt, sub) == NK_ElseNode)) emit_if_else_value(c, eb, en, res, res_o, tr);
+      return;
+    }
+    is_unless = nt_kind(nt, next) == NK_UnlessNode;
+    arm = next;
+  }
+}
+
+/* One arm of a ternary ladder (emit_ternary_ladder): its condition and its
+   branch's value, each with the setup it hoisted. */
+typedef struct {
+  int unless, pred, then_node;
+  Buf cond, cond_pre;   /* (the first arm's condition is emitted last, by the caller's buffer) */
+  Buf val, val_pre;
+} TernaryArm;
+
+static int buf_nonempty(const Buf *b) { return b->p && b->p[0]; }
+
+/* Is `arm` a ternary: an if or unless of one value in each branch that no
+   static guard decides? That is the shape emit_if_expr gives the flat C
+   conditional, or the branch form with a result temp. */
+static int ternary_ladder_link(Compiler *c, int head, int arm, TyKind res, int res_o) {
+  const NodeTable *nt = c->nt;
+  int tn = 0, en = 0;
+  int then_b = nt_ref(nt, arm, "statements");
+  if (then_b >= 0) nt_arr(nt, then_b, "body", &tn);
+  int sub = nt_ref(nt, arm, nt_kind(nt, arm) == NK_UnlessNode ? "else_clause" : "subsequent");
+  int else_stmts = sub >= 0 && nt_kind(nt, sub) == NK_ElseNode ? nt_ref(nt, sub, "statements") : -1;
+  if (else_stmts >= 0) nt_arr(nt, else_stmts, "body", &en);
+  return tn == 1 && en == 1 && if_expr_arm_known(c, nt_ref(nt, arm, "predicate"), 1) < 0 &&
+         repr_of(c, arm).as_ty == repr_of(c, head).as_ty && cond_res_oint(c, arm, res) == res_o;
+}
+
+/* A ternary and the ternaries its else arm holds in turn, `a ? x : b ? y : z`,
+   from `id` on, written into `b`. Every arm's value is converted to the
+   ladder's result `res` directly. With no setup hoisted by any arm and no
+   `raise` arm the result is one flat C conditional, `(c1 ? a1 : c2 ? a2 : e)`.
+   Otherwise the arms become real branches, `if ... else if ... else`, with
+   their setup scoped inside (a flat conditional would run the setup of every
+   arm); a later arm's condition that hoists setup carries it inside its
+   `else if (({ ... }))` as emit_ladder_arm_head does for a statement ladder,
+   and the C stays as deep as one arm. */
+static void emit_ternary_ladder(Compiler *c, int id, TyKind res, int res_o, Buf *b) {
+  const NodeTable *nt = c->nt;
+  int n = 1;
+  for (int arm = id, nx; (nx = nt_ladder_next(nt, arm)) >= 0 && ternary_ladder_link(c, id, nx, res, res_o); arm = nx) n++;
+  TernaryArm *a = calloc((size_t)n, sizeof *a);
+  if (!a) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  Buf last_val, last_pre;   /* the final else arm */
+  memset(&last_val, 0, sizeof last_val); memset(&last_pre, 0, sizeof last_pre);
+  int last_node = -1;
+  int hoists = 0;
+  Buf *sv_pre = g_pre;
+  int arm = id;
+  for (int k = 0; k < n; k++) {
+    int tn = 0, en = 0;
+    a[k].unless = nt_kind(nt, arm) == NK_UnlessNode;
+    a[k].pred = nt_ref(nt, arm, "predicate");
+    a[k].then_node = nt_arr(nt, nt_ref(nt, arm, "statements"), "body", &tn)[0];
+    int sub = nt_ref(nt, arm, a[k].unless ? "else_clause" : "subsequent");
+    const int *eb = nt_arr(nt, nt_ref(nt, sub, "statements"), "body", &en);
+    g_pre = &a[k].val_pre; emit_ternary_arm_o(c, a[k].then_node, res, res_o, &a[k].val);
+    if (k) {
+      g_pre = &a[k].cond_pre;
+      emit_arm_cond(c, a[k].pred, a[k].unless, &a[k].cond);
+    }
+    if (k == n - 1) { last_node = eb[0]; g_pre = &last_pre; emit_ternary_arm_o(c, last_node, res, res_o, &last_val); }
+    else arm = nt_ladder_next(nt, arm);
+  }
+  g_pre = sv_pre;
+  /* a `raise`/`fail` arm diverges: it produces no value to assign, so it
+     cannot ride the flat C ternary (which needs both arms to be values of
+     the result type) -- force the branch form and emit it as a statement. */
+  hoists = buf_nonempty(&last_pre) || node_is_raise(c, last_node);
+  for (int k = 0; k < n; k++)
+    hoists = hoists || buf_nonempty(&a[k].val_pre) || buf_nonempty(&a[k].cond_pre) || node_is_raise(c, a[k].then_node);
+  /* (#10021: either face into the handle result) */
+  int hw = res == TY_STRBUF;
+  /* a handle arm into the bytes result as its bytes, which beside a bytes
+     arm (nil's) made the C conditional a void * read through as bytes
+     (`(s ? s : nil) || :done`) */
+  int bw = res == TY_STRING && !res_o;
+  if (!hoists) {
+    buf_puts(b, "(");
+    for (int k = 0; k < n; k++) {
+      int bwt = bw && repr_of(c, a[k].then_node).as_ty == TY_STRBUF;
+      if (k) buf_puts(b, a[k].cond.p ? a[k].cond.p : "0");
+      else emit_arm_cond(c, a[k].pred, a[k].unless, b);
+      buf_puts(b, " ? ");
+      buf_printf(b, hw ? "SP_STR_HDL(%s)" : bwt ? "SP_STR_B(%s)" : "%s", a[k].val.p ? a[k].val.p : "0");
+      buf_puts(b, " : ");
+    }
+    int bwe = bw && repr_of(c, last_node).as_ty == TY_STRBUF;
+    buf_printf(b, hw ? "SP_STR_HDL(%s)" : bwe ? "SP_STR_B(%s)" : "%s", last_val.p ? last_val.p : "0");
+    buf_puts(b, ")");
+  }
+  else {
+    int tr = ++g_tmp;
+    buf_puts(b, "({ ");
+    emit_res_ctype(c, res, res_o, b);
+    /* braced zero: valid for scalars, pointers, AND by-value structs
+       (value-class objects, sp_Range); every branch assigns over it */
+    buf_printf(b, " _t%d = {0}; ", tr);
+    /* (one representation: a String arm of either face lands in the bytes result as its view) */
+    /* ...and a String arm of either face lands in a handle result as its handle (#10021) */
+    const char *fo = res == TY_STRING && !res_o ? "SP_STR_B(" : res == TY_STRBUF ? "SP_STR_HDL(" : "";
+    const char *fc = fo[0] ? ")" : "";
+    for (int k = 0; k < n; k++) {
+      if (k == 0) {
+        buf_puts(b, "if (");
+        emit_arm_cond(c, a[k].pred, a[k].unless, b);
+        buf_puts(b, ") {\n");
+      }
+      else if (buf_nonempty(&a[k].cond_pre))
+        buf_printf(b, "}\nelse if (({ %s%s; })) {\n", a[k].cond_pre.p, a[k].cond.p ? a[k].cond.p : "0");
+      else buf_printf(b, "}\nelse if (%s) {\n", a[k].cond.p ? a[k].cond.p : "0");
+      buf_puts(b, a[k].val_pre.p ? a[k].val_pre.p : "");
+      /* a diverging (raise/fail) arm is emitted as a statement; the result
+         temp keeps its default (never read, since the arm never returns) */
+      if (node_is_raise(c, a[k].then_node)) buf_printf(b, " %s;\n", a[k].val.p ? a[k].val.p : "0");
+      else buf_printf(b, " _t%d = %s%s%s;\n", tr, fo, a[k].val.p ? a[k].val.p : "0", fc);
+    }
+    buf_puts(b, "}\nelse {\n");
+    buf_puts(b, last_pre.p ? last_pre.p : "");
+    if (node_is_raise(c, last_node)) buf_printf(b, " %s;\n", last_val.p ? last_val.p : "0");
+    else buf_printf(b, " _t%d = %s%s%s;\n", tr, fo, last_val.p ? last_val.p : "0", fc);
+    buf_printf(b, "} _t%d; })", tr);
+  }
+  for (int k = 0; k < n; k++) { free(a[k].cond.p); free(a[k].cond_pre.p); free(a[k].val.p); free(a[k].val_pre.p); }
+  free(a); free(last_val.p); free(last_pre.p);
+}
+
 /* An if or unless in value position (and the ternary) (emit_expr_node's arms, in their order) */
 static int emit_if_expr(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *ty) {
   if (!(sp_streq(ty, "IfNode") || sp_streq(ty, "UnlessNode"))) return 0;
@@ -5035,13 +5264,10 @@ static int emit_if_expr(Compiler *c, int id, Buf *b, const NodeTable *nt, const 
      receiver's storage type (a blockless yield has no type of its own).
      Mirrors emit_if's statement-form fold and the inference fold. */
   {
-    int df = comp_defined_guard_false(c, pred);
-    int dt = df ? 0 : comp_defined_guard_true(c, pred);
-    int known = df ? 0 : (dt ? 1 : static_isa_cond(c, pred));
-    if (known < 0 && !df && !dt) known = static_respond_to_cond(c, pred);
+    int known = if_expr_arm_known(c, pred, 0);
     /* a `block_given? ? a : b` pair: the live arm alone, rendered at the
        result type as the unfolded pair renders each arm */
-    if (known < 0 && !df && !dt && tn == 1 && en == 1) {
+    if (known < 0 && tn == 1 && en == 1) {
       int bg = static_block_given_cond(c, pred);
       if (bg >= 0) {
         TyKind res = repr_of(c, id).as_ty;
@@ -5115,71 +5341,14 @@ static int emit_if_expr(Compiler *c, int id, Buf *b, const NodeTable *nt, const 
        declare `void _tN` -- so hold the result boxed; void arms degrade
        to nil. */
     if (res == TY_VOID || res == TY_NIL || res == TY_UNKNOWN) res = TY_POLY;
-    /* Emit each arm with a CAPTURED prelude: an arm whose sub-expressions
+    /* Each arm is emitted with a CAPTURED prelude: an arm whose sub-expressions
        hoist statements (a rooted call argument, a constructed receiver, ...)
        cannot ride a flat C ternary -- a shared prelude would evaluate BOTH
        arms eagerly (`File.exist?(f) ? File.read(f) : x` raised on the
        untaken read). Preludeless arms keep the flat form; otherwise the
-       arms become real branches with their preludes scoped inside. */
-    Buf ta; memset(&ta, 0, sizeof ta);
-    Buf te; memset(&te, 0, sizeof te);
-    Buf pa; memset(&pa, 0, sizeof pa);
-    Buf pe; memset(&pe, 0, sizeof pe);
-    /* a `raise`/`fail` arm diverges: it produces no value to assign, so it
-       cannot ride the flat C ternary (which needs both arms to be values of
-       the result type) -- force the branch form and emit it as a statement. */
-    int then_raise = node_is_raise(c, tb[0]);
-    int else_raise = node_is_raise(c, eb[0]);
-    int res_o = cond_res_oint(c, id, res);
-    Buf *sv_pre = g_pre;
-    g_pre = &pa; emit_ternary_arm_o(c, tb[0], res, res_o, &ta);
-    g_pre = &pe; emit_ternary_arm_o(c, eb[0], res, res_o, &te);
-    g_pre = sv_pre;
-    int hoists = (pa.p && pa.p[0]) || (pe.p && pe.p[0]) || then_raise || else_raise;
-    if (!hoists) {
-      buf_puts(b, "(");
-      if (is_unless) buf_puts(b, "!(");
-      emit_cond(c, pred, b);
-      if (is_unless) buf_puts(b, ")");
-      buf_puts(b, " ? ");
-      int hw = res == TY_STRBUF;   /* (#10021: either face into the handle result) */
-      /* ...and a handle arm into the bytes result as its bytes, which
-         beside a bytes arm (nil's) made the C conditional a void * read
-         through as bytes (`(s ? s : nil) || :done`) */
-      int bw = res == TY_STRING && !res_o;
-      int bwt = bw && repr_of(c, tb[0]).as_ty == TY_STRBUF, bwe = bw && repr_of(c, eb[0]).as_ty == TY_STRBUF;
-      buf_printf(b, hw ? "SP_STR_HDL(%s)" : bwt ? "SP_STR_B(%s)" : "%s", ta.p ? ta.p : "0");
-      buf_puts(b, " : ");
-      buf_printf(b, hw ? "SP_STR_HDL(%s)" : bwe ? "SP_STR_B(%s)" : "%s", te.p ? te.p : "0");
-      buf_puts(b, ")");
-    }
-    else {
-      int tr = ++g_tmp;
-      buf_puts(b, "({ ");
-      emit_res_ctype(c, res, res_o, b);
-      /* braced zero: valid for scalars, pointers, AND by-value structs
-         (value-class objects, sp_Range); both branches assign over it */
-      buf_printf(b, " _t%d = {0}; if (", tr);
-      if (is_unless) buf_puts(b, "!(");
-      emit_cond(c, pred, b);
-      if (is_unless) buf_puts(b, ")");
-      buf_puts(b, ") {\n");
-      buf_puts(b, pa.p ? pa.p : "");
-      /* a diverging (raise/fail) arm is emitted as a statement; the result
-         temp keeps its default (never read, since the arm never returns) */
-      /* (one representation: a String arm of either face lands in the bytes result as its view) */
-      /* ...and a String arm of either face lands in a handle result as its handle (#10021) */
-      const char *fo = res == TY_STRING && !res_o ? "SP_STR_B("
-                     : res == TY_STRBUF ? "SP_STR_HDL(" : "", *fc = fo[0] ? ")" : "";
-      if (then_raise) buf_printf(b, " %s;\n", ta.p ? ta.p : "0");
-      else buf_printf(b, " _t%d = %s%s%s;\n", tr, fo, ta.p ? ta.p : "0", fc);
-      buf_puts(b, "}\nelse {\n");
-      buf_puts(b, pe.p ? pe.p : "");
-      if (else_raise) buf_printf(b, " %s;\n", te.p ? te.p : "0");
-      else buf_printf(b, " _t%d = %s%s%s;\n", tr, fo, te.p ? te.p : "0", fc);
-      buf_printf(b, "} _t%d; })", tr);
-    }
-    free(ta.p); free(te.p); free(pa.p); free(pe.p);
+       arms become real branches with their preludes scoped inside. A
+       ternary in the else arm continues the same conditional. */
+    emit_ternary_ladder(c, id, res, cond_res_oint(c, id, res), b);
     return 1;
   }
   /* Multi-stmt branches or no-else: emit as if/else block with a result temp.
@@ -5205,70 +5374,7 @@ static int emit_if_expr(Compiler *c, int id, Buf *b, const NodeTable *nt, const 
       emit_gc_root_tmp_refs(c, res, tr, g_pre);
       buf_puts(g_pre, "\n");
     }
-    /* Emit the condition into its own buffer: any prolog it hoists is a
-       statement, and writing it to g_pre after "if (" had been written left
-       the declaration in the middle of the expression. */
-    Buf cnd; memset(&cnd, 0, sizeof cnd);
-    emit_cond(c, pred, &cnd);
-    emit_indent(g_pre, g_indent);
-    buf_puts(g_pre, "if (");
-    if (is_unless) buf_puts(g_pre, "!(");
-    buf_puts(g_pre, cnd.p ? cnd.p : "0");
-    if (is_unless) buf_puts(g_pre, ")");
-    buf_puts(g_pre, ") {\n");
-    free(cnd.p);
-    /* Then branch: side-effect stmts, then assign last expr to temp. */
-    for (int i = 0; i < tn - 1; i++) emit_stmt(c, tb[i], g_pre, g_indent + 2);
-    if (tn > 0) emit_if_arm_tail(c, tb[tn - 1], res, res_o, tr);
-    emit_indent(g_pre, g_indent);
-    buf_puts(g_pre, "}\n");
-    /* Else / elsif branch. */
-    if (sub >= 0) {
-      NodeKind sub_k = nt_kind(nt, sub);
-      if (sub_k == NK_ElseNode) {
-        emit_indent(g_pre, g_indent);
-        buf_puts(g_pre, "else {\n");
-        for (int i = 0; i < en - 1; i++) emit_stmt(c, eb[i], g_pre, g_indent + 2);
-        if (en > 0) emit_if_arm_tail(c, eb[en - 1], res, res_o, tr);
-        emit_indent(g_pre, g_indent);
-        buf_puts(g_pre, "}\n");
-      }
-      else {
-        /* elsif (sub is IfNode) or other subsequent: recurse via emit_expr */
-        emit_indent(g_pre, g_indent);
-        buf_puts(g_pre, "else {\n");
-        int saved_gi3 = g_indent; g_indent = g_indent + 2;
-        Buf sub_e; memset(&sub_e, 0, sizeof sub_e);
-        /* The nested elsif chain types on its own arms: a concrete chain
-           (string/string) under a poly outer if (the empty then-arm's nil)
-           boxes into the poly temp, as the arms above do; an Integer or
-           Float chain boxes its oint, nil included. */
-        Repr subtr = repr_of(c, sub);
-        TyKind subt = subtr.as_ty;
-        int boxed3 = !res_o && res == TY_POLY && subtr.kind != RK_BOXED && subt != TY_NIL &&
-                     subt != TY_UNKNOWN && subt != TY_VOID;
-        if (res_o) emit_oint_expr(c, sub, res, &sub_e);
-        else if (boxed3) emit_boxed(c, sub, &sub_e);
-        else emit_expr(c, sub, &sub_e);
-        g_indent = saved_gi3;
-        emit_indent(g_pre, g_indent + 2);
-        buf_printf(g_pre, "_t%d = ", tr);
-        if (res_o) buf_puts(g_pre, sub_e.p ? sub_e.p : oint_nil(res));
-        else if (boxed3) buf_puts(g_pre, sub_e.p ? sub_e.p : "sp_box_nil()");
-        /* a nested chain whose every written arm raises is the implicit
-           nil, held in a boxed temp; into a concrete slot with a nil of
-           its own (a nullable String, #4567) it is that nil, not the box */
-        else if (subt == TY_NIL && res != TY_POLY && nil_value(res))
-          buf_puts(g_pre, nil_value(res));
-        else if (emit_arm_text_as_bigint(res, subt, sub_e.p ? sub_e.p : default_value_from_compiler(c, subt), g_pre)) { }
-        else if (sub_e.p && one_str_to_open(g_pre, res, "_t%d", tr)) { buf_puts(g_pre, sub_e.p); buf_puts(g_pre, ")"); }
-        else buf_puts(g_pre, sub_e.p ? sub_e.p : default_value_from_compiler(c, res));
-        buf_puts(g_pre, ";\n");
-        free(sub_e.p);
-        emit_indent(g_pre, g_indent);
-        buf_puts(g_pre, "}\n");
-      }
-    }
+    emit_if_value_arms(c, id, is_unless, res, res_o, tr);
     buf_printf(b, "_t%d", tr);
     return 1;
   }

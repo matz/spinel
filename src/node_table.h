@@ -656,6 +656,25 @@ static inline int nt_paren_single(const NodeTable *nt, int n) {
   }
   return n;
 }
+/* The arm that continues the ladder `n` (an IfNode or UnlessNode) is an arm
+   of, or -1: its `subsequent` when that is an `elsif`, or an `else` whose
+   statements are exactly one IfNode or UnlessNode (a hand-written `else`
+   holding an `if ... end`, and a nested ternary's else arm). It answers the
+   syntactic question "is the else arm one more conditional?", so a ladder
+   of any length is walked by a loop instead of by recursion. Parentheses
+   around the inner conditional are the program's own nesting and are left
+   alone. It says nothing of a value or a type. */
+static inline int nt_ladder_next(const NodeTable *nt, int n) {
+  int sub = nt_ref(nt, n, nt_kind(nt, n) == NK_UnlessNode ? "else_clause" : "subsequent");
+  if (sub < 0) return -1;
+  if (nt_kind(nt, sub) == NK_IfNode) return sub;
+  if (nt_kind(nt, sub) != NK_ElseNode) return -1;
+  int st = nt_ref(nt, sub, "statements"), cnt = 0;
+  const int *body = st >= 0 ? nt_arr(nt, st, "body", &cnt) : NULL;
+  if (cnt != 1) return -1;
+  NodeKind k = nt_kind(nt, body[0]);
+  return k == NK_IfNode || k == NK_UnlessNode ? body[0] : -1;
+}
 /* nt_paren_single's answer for n, with the parentheses it peels taken out
    of the table: each one and its statements become NilNodes that hold
    nothing, so no walk by id and no parent map (an_parent_map) still finds

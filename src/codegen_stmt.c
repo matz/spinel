@@ -7247,106 +7247,165 @@ int static_block_given_cond(Compiler *c, int pred) {
   return 0;
 }
 
+/* The static answer of one arm's predicate of a statement if: 1 or 0 for
+   a guard the compiler decides, -1 for a run-time one. */
+static int if_arm_static_cond(Compiler *c, int pred) {
+  int sc = static_isa_cond(c, pred);
+  if (sc < 0) sc = static_respond_to_cond(c, pred);
+  if (sc < 0) sc = static_nil_ivar_cond(c, pred);
+  if (sc < 0) sc = static_nil_reader_cond(c, pred);
+  if (sc < 0) sc = static_block_given_cond(c, pred);
+  /* `if defined?(UnknownConst) [&& ...]`: nil guard, the branch is dead.
+     Must be dropped (not just emitted under `if (NULL)`): its body may call
+     methods reachability already skipped for the same reason, or lean on
+     the missing constant in ways that have no C translation. */
+  if (sc < 0 && comp_defined_guard_false(c, pred)) sc = 0;
+  return sc;
+}
+
+/* An arm's condition: an `unless` arm's is negated. */
+void emit_arm_cond(Compiler *c, int pred, int is_unless, Buf *b) {
+  if (is_unless) buf_puts(b, "!(");
+  emit_cond(c, pred, b);
+  if (is_unless) buf_puts(b, ")");
+}
+
+/* The `else if (` line of a ladder's later arm, up to its `{`. An arm's
+   predicate is not a statement of its own, so the setup a call in it hoists
+   (its argument temps: `elsif db.execute("u", update_binds)`) would land in
+   the ambient g_pre, which flushes once before the whole if statement --
+   running update_binds even when an earlier branch is taken. The prelude is
+   captured and carried inside the condition, `else if (({ setup; cond; }))`
+   (the case and ternary arm emitters do the same), so it runs where the arm
+   is reached and no block stays open across the arms. */
+void emit_ladder_arm_head(Compiler *c, int pred, int is_unless, Buf *b, int indent) {
+  Buf pre; memset(&pre, 0, sizeof pre);
+  Buf cond; memset(&cond, 0, sizeof cond);
+  Buf *sv_pre = g_pre; int sv_ind = g_indent;
+  if (g_pre) { g_pre = &pre; g_indent = indent + 1; }
+  emit_arm_cond(c, pred, is_unless, &cond);
+  g_pre = sv_pre; g_indent = sv_ind;
+  emit_indent(b, indent);
+  buf_puts(b, "else if (");
+  if (pre.p && pre.p[0]) {
+    buf_puts(b, "({\n");
+    buf_puts(b, pre.p);
+    emit_indent(b, indent + 1);
+    buf_puts(b, cond.p ? cond.p : "0");
+    buf_puts(b, ";\n");
+    emit_indent(b, indent);
+    buf_puts(b, "})");
+  }
+  else buf_puts(b, cond.p ? cond.p : "0");
+  buf_puts(b, ") {\n");
+  free(pre.p); free(cond.p);
+}
+
+/* A later arm's head, deferred on its own under --defer-refusals: a refused
+   condition raises NotImplementedError where the arm is reached (the ladder
+   ends in that `else`), so an earlier arm taken still runs, as it does under
+   CRuby. Answers whether the head was emitted as written. The `#line` is the
+   arm's own, so a raise or `caller` in its condition reports its line. */
+static int emit_ladder_arm_deferred(Compiler *c, int arm, int pred, int is_unless, Buf *b, int indent) {
+  if (!(defer_refusals_at(c, arm) && g_unsup_armed && !g_unsup_probe && !g_unsup_quiet)) {
+    emit_line_directive(c, arm, b);
+    emit_ladder_arm_head(c, pred, is_unless, b, indent);
+    return 1;
+  }
+  DeferMark dm; defer_mark(c, &dm, b);
+  volatile int ok = 0;
+  if (setjmp(g_unsup_recover) == 0) {
+    emit_line_directive(c, arm, b);
+    emit_ladder_arm_head(c, pred, is_unless, b, indent);
+    ok = 1;
+  }
+  else {
+    char dmsg[2600];
+    defer_rollback(c, &dm, dmsg, sizeof dmsg);
+    emit_indent(b, indent);
+    buf_puts(b, "else {\n");
+    emit_indent(b, indent + 1);
+    buf_puts(b, "sp_raise_cls(\"NotImplementedError\", \"");
+    emit_c_escaped(b, dmsg);
+    buf_puts(b, "\");\n");
+    emit_indent(b, indent);
+    buf_puts(b, "}\n");
+  }
+  defer_done(c, &dm);
+  return ok;
+}
+
+/* A statement if, unless or elsif ladder: one loop over the arms
+   (nt_ladder_next), so the C is `if ... else if ... else` however many
+   arms there are. The static folds are per arm: an always-true arm is the
+   last one (the `else`, or a plain block when it is the first), an
+   always-false one is left out. */
 void emit_if(Compiler *c, int id, Buf *b, int indent, int is_unless, int tail) {
   const NodeTable *nt = c->nt;
-  int pred = nt_ref(nt, id, "predicate");
-  int then_b = nt_ref(nt, id, "statements");
-  int sub = nt_ref(nt, id, is_unless ? "else_clause" : "subsequent");
-
-  /* Statically-decidable guard: drop the dead branch entirely. */
-  {
-    int sc = static_isa_cond(c, pred);
-    if (sc < 0) sc = static_respond_to_cond(c, pred);
-    if (sc < 0) sc = static_nil_ivar_cond(c, pred);
-    if (sc < 0) sc = static_nil_reader_cond(c, pred);
-    if (sc < 0) sc = static_block_given_cond(c, pred);
-    /* `if defined?(UnknownConst) [&& ...]`: nil guard, the branch is dead.
-       Must be dropped (not just emitted under `if (NULL)`): its body may call
-       methods reachability already skipped for the same reason, or lean on
-       the missing constant in ways that have no C translation. */
-    if (sc < 0 && comp_defined_guard_false(c, pred)) sc = 0;
+  int opened = 0;   /* an `if (` has been written */
+  int sv_cur = g_stmt_cur;
+  for (int arm = id; arm >= 0; ) {
+    int pred = nt_ref(nt, arm, "predicate");
+    int then_b = nt_ref(nt, arm, "statements");
+    int sub = nt_ref(nt, arm, is_unless ? "else_clause" : "subsequent");
+    int next = nt_ladder_next(nt, arm);
+    int sc = if_arm_static_cond(c, pred);
     int eff = (sc < 0) ? -1 : (is_unless ? !sc : sc);
     if (eff == 1) {
       /* condition always true: emit only the then-branch */
-      emit_indent(b, indent); buf_puts(b, "{\n");
+      emit_indent(b, indent); buf_puts(b, opened ? "else {\n" : "{\n");
       if (tail) emit_stmts_tail(c, then_b, b, indent + 1);
       else      emit_stmts(c, then_b, b, indent + 1);
       emit_indent(b, indent); buf_puts(b, "}\n");
-      return;
+      break;
     }
     if (eff == 0) {
       /* condition always false: emit only the subsequent (else / elsif) */
-      if (sub >= 0) {
-        NodeKind sk = nt_kind(nt, sub);
-        if (sk == NK_ElseNode) {
-          emit_indent(b, indent); buf_puts(b, "{\n");
+      if (next < 0) {
+        if (sub >= 0 && nt_kind(nt, sub) == NK_ElseNode) {
+          emit_indent(b, indent); buf_puts(b, opened ? "else {\n" : "{\n");
           int s = nt_ref(nt, sub, "statements");
           if (tail) emit_stmts_tail(c, s, b, indent + 1);
           else      emit_stmts(c, s, b, indent + 1);
           emit_indent(b, indent); buf_puts(b, "}\n");
         }
-        else if (sk == NK_IfNode) {
-          emit_if(c, sub, b, indent, 0, tail);
-        }
+        break;
       }
-      return;
-    }
-  }
-
-  emit_indent(b, indent);
-  buf_puts(b, "if (");
-  if (is_unless) buf_puts(b, "!(");
-  emit_cond(c, pred, b);
-  if (is_unless) buf_puts(b, ")");
-  buf_puts(b, ") {\n");
-  if (tail) emit_stmts_tail(c, then_b, b, indent + 1);
-  else      emit_stmts(c, then_b, b, indent + 1);
-  emit_indent(b, indent);
-  buf_puts(b, "}");
-
-  if (sub >= 0) {
-    NodeKind sk = nt_kind(nt, sub);
-    if (sk == NK_ElseNode) {
-      buf_puts(b, "\n");
-      emit_indent(b, indent);
-      buf_puts(b, "else {\n");
-      int s = nt_ref(nt, sub, "statements");
-      if (tail) emit_stmts_tail(c, s, b, indent + 1);
-      else      emit_stmts(c, s, b, indent + 1);
-      emit_indent(b, indent); buf_puts(b, "}\n");
-    }
-    else if (sk == NK_IfNode) {
-      buf_puts(b, "\n");
-      emit_indent(b, indent);
-      buf_puts(b, "else {\n");
-      /* An elsif's predicate is not a statement of its own, so the setup a
-         call in it hoists (its argument temps: `elsif db.execute("u",
-         update_binds)`) would land in the ambient g_pre, which flushes once
-         before the whole if statement -- running update_binds even when an
-         earlier branch is taken. Capture that prelude and emit it here,
-         where the elsif is reached (the case and ternary arm emitters do
-         the same). */
-      if (g_pre) {
-        Buf pre; memset(&pre, 0, sizeof pre);
-        Buf arm; memset(&arm, 0, sizeof arm);
-        Buf *sv_pre = g_pre; int sv_ind = g_indent;
-        g_pre = &pre; g_indent = indent + 1;
-        emit_if(c, sub, &arm, indent + 1, 0, tail);
-        g_pre = sv_pre; g_indent = sv_ind;
-        if (pre.p) buf_puts(b, pre.p);
-        if (arm.p) buf_puts(b, arm.p);
-        free(pre.p); free(arm.p);
-      }
-      else emit_if(c, sub, b, indent + 1, 0, tail);
-      emit_indent(b, indent); buf_puts(b, "}\n");
     }
     else {
-      buf_puts(b, "\n");
+      if (!opened) {
+        emit_indent(b, indent);
+        buf_puts(b, "if (");
+        emit_arm_cond(c, pred, is_unless, b);
+        buf_puts(b, ") {\n");
+      }
+      else if (!emit_ladder_arm_deferred(c, arm, pred, is_unless, b, indent)) break;
+      opened = 1;
+      if (tail) emit_stmts_tail(c, then_b, b, indent + 1);
+      else      emit_stmts(c, then_b, b, indent + 1);
+      emit_indent(b, indent);
+      buf_puts(b, "}\n");
+      if (next < 0) {
+        if (sub >= 0 && nt_kind(nt, sub) == NK_ElseNode) {
+          emit_indent(b, indent);
+          buf_puts(b, "else {\n");
+          int s = nt_ref(nt, sub, "statements");
+          if (tail) emit_stmts_tail(c, s, b, indent + 1);
+          else      emit_stmts(c, s, b, indent + 1);
+          emit_indent(b, indent); buf_puts(b, "}\n");
+        }
+        break;
+      }
     }
+    /* the next arm; one written as `else` + `if` is a statement of its own
+       there (emit_stmts), so it is the current statement here (a `sub!` in
+       its condition takes another C path without it: sub_bang_alone and
+       hoisted_value_is_stmt read g_stmt_cur) */
+    if (nt_kind(nt, sub) == NK_ElseNode) g_stmt_cur = next;
+    is_unless = nt_kind(nt, next) == NK_UnlessNode;
+    arm = next;
   }
-  else {
-    buf_puts(b, "\n");
-  }
+  g_stmt_cur = sv_cur;
 }
 
 /* Emit `when ClassName` test against a poly (sp_RbVal) scrutinee temp.

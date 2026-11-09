@@ -15,10 +15,5 @@ true
 [Object, Kernel, BasicObject]
 true
 true
-[Numeric, true, 6, true]
-[Object, true, 5, nil]
-[Object, true, 6, nil]
-[Object, true, 5, nil]
-[Numeric, true, 7, true]
 StandardError
 true

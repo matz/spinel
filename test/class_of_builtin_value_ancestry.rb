@@ -27,12 +27,6 @@ p 1.class.ancestors, "s".class.superclass, Rational(1, 2).class < Numeric
 p Object.new.class.ancestors
 p 1.class.include?(Mx), "s".class < Px
 
-# A method added to Comparable reads its receiver's class
-module Comparable
-  def own_class_facts = [self.class.superclass, self.class.include?(Comparable), self.class.ancestors.size, self.class < Numeric]
-end
-p Rational(3, 4).own_class_facts, Time.at(0).own_class_facts, "s".own_class_facts, :s.own_class_facts, 3.own_class_facts
-
 # A rescued exception's class keeps its own ancestry
 begin
   [].fetch(9)

@@ -2042,7 +2042,7 @@ int emit_empty_container_for_slot(Compiler *c, int v, TyKind slot, Buf *b);
 void emit_frozen_literal(Buf *b, const char *esc, size_t esc_len, size_t raw_len);
 int fzl_text_id(const char *t);
 const char *fzl_id_name(int id);
-void fzl_emit_defs(const char *t, Buf *out, int handles);
+void fzl_emit_defs(const char *t, Buf *out);
 /* Emit a Ruby string literal. len is the true byte count (may exceed strlen
    when the string contains embedded NUL bytes). */
 /* What a `round`-family call's trailing keyword hash says, as far as it can

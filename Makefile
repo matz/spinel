@@ -2819,8 +2819,8 @@ build/gc-minor-results/byref_param_cond_store.chk: FORCE | $(SPINEL) $(SP_RT_LIB
 	if [ ! -s "$$tmp/bc.into" ] || ! grep -qE '_cell_io|lv_io' "$$tmp/bc.into" || grep -q sp_gc_wb "$$tmp/bc.into"; then \
 	  echo "gc-minor-test: FAIL (a by-reference parameter's store after a multi-line condition took a cell barrier on the caller's stack)"; ok=0; fi; \
 	rm -rf "$$tmp"; echo $$ok > $@
-# (one-String mode: a literal's String is its handle, made on first use
-# and young until a collection ages it, so its store keeps the barrier)
+# (a literal's String is its handle, a static object that is never swept
+# and holds nothing collectable, so its store takes no barrier either)
 build/gc-minor-results/never_young_store.chk: FORCE | $(SPINEL) $(SP_RT_LIB) $(SPINEL_TIMEOUT)
 	@mkdir -p $(@D); tmp=$$(mktemp -d /tmp/spinel-gcminor.XXXXXX); ok=1; \
 	$(SPINEL) test/gc_minor_never_young_store.rb --no-line-map -c -o "$$tmp/ny.c" >/dev/null 2>&1; \
@@ -2828,6 +2828,8 @@ build/gc-minor-results/never_young_store.chk: FORCE | $(SPINEL) $(SP_RT_LIB) $(S
 	sed -n '/^[^ ].* sp_grow(.*) {$$/,/^}$$/p' "$$tmp/ny.c" > "$$tmp/ny.grow"; \
 	if [ ! -s "$$tmp/ny.init" ] || grep -E '= NULL;' "$$tmp/ny.init" | grep -q 'sp_gc_wb\|SP_WBO'; then \
 	  echo "gc-minor-test: FAIL (a store of nil took a barrier: nil is no object)"; ok=0; fi; \
+	if ! grep -q '_o\.s);' "$$tmp/ny.init" || grep '_o\.s);' "$$tmp/ny.init" | grep -q 'sp_gc_wb\|SP_WBO'; then \
+	  echo "gc-minor-test: FAIL (a store of a literal's handle took a barrier: it is a static object)"; ok=0; fi; \
 	if [ "$$(grep -c sp_gc_wb "$$tmp/ny.grow")" != 3 ]; then \
 	  echo "gc-minor-test: FAIL (a store of a fresh object or string lost its barrier)"; ok=0; fi; \
 	rm -rf "$$tmp"; echo $$ok > $@

@@ -190,16 +190,19 @@ int sp_str_stress_checked = 0;
 const char sp_str_empty_data[] = "\xff";
 /* nil.to_s, true.to_s and false.to_s answer FROZEN Strings in CRuby: a
    header-carrying static object marked 0xf1, as a frozen literal is */
-/* ...with the handle slot a generated literal has (sp_StringLiteral: the
-   handle, then the next slot; the header links it, tagged), so each of them
-   is one String object wherever it is boxed or held, as CRuby's is */
-static struct { void *value, *next; } sp_fz_empty_l, sp_fz_true_l, sp_fz_false_l;
-#define SP_FZ_LINK(l) ((sp_str_hdr *)((char *)&(l) + 1))
+/* ...each one String object, as a generated literal is (sp_StringLiteral:
+   the header links to the static handle, tagged), so each of them is one
+   object wherever it is boxed or held, as CRuby's is */
+static sp_StringLiteral sp_fz_empty_l, sp_fz_true_l, sp_fz_false_l;
+#define SP_FZ_LINK(l) ((sp_str_hdr *)((char *)&(l).s + 1))
 /* the link Symbol#to_s's String carries in its header (sp_str_is_sym_name) */
 const sp_str_hdr sp_sym_str_tag = { NULL, 0, 0, 0 };
 static struct { sp_str_hdr h; unsigned char m; char d[1]; } sp_fz_empty_s = { { SP_FZ_LINK(sp_fz_empty_l), 1 | SP_STR_SIZE_ASCII7, 0, 0 }, 0xf1, "" };
 static struct { sp_str_hdr h; unsigned char m; char d[5]; } sp_fz_true_s = { { SP_FZ_LINK(sp_fz_true_l), 5 | SP_STR_SIZE_ASCII7, 4, 0 }, 0xf1, "true" };
 static struct { sp_str_hdr h; unsigned char m; char d[6]; } sp_fz_false_s = { { SP_FZ_LINK(sp_fz_false_l), 6 | SP_STR_SIZE_ASCII7, 5, 0 }, 0xf1, "false" };
+static sp_StringLiteral sp_fz_empty_l = SP_STRING_LITERAL_INIT(sp_fz_empty_l, sp_fz_empty_s.d, 0);
+static sp_StringLiteral sp_fz_true_l = SP_STRING_LITERAL_INIT(sp_fz_true_l, sp_fz_true_s.d, 4);
+static sp_StringLiteral sp_fz_false_l = SP_STRING_LITERAL_INIT(sp_fz_false_l, sp_fz_false_s.d, 5);
 const char *const sp_str_frozen_empty = sp_fz_empty_s.d;
 const char *const sp_str_frozen_true = sp_fz_true_s.d;
 const char *const sp_str_frozen_false = sp_fz_false_s.d;

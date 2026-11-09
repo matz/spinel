@@ -125,9 +125,9 @@ extern const char *const sp_str_frozen_true;
 extern const char *const sp_str_frozen_false;
 /* Symbol#to_s's String (sp_sym_to_s_frozen): frozen static storage with a
    header, 0xf1, whose `next` link names sp_sym_str_tag. The link is free to
-   carry the mark: the String is on no sweep list and has no literal slot
-   (an even link is none). A Hash compared by identity asks it, as CRuby
-   answers a new String at each to_s. */
+   carry the mark: the String is on no sweep list and is no literal (an
+   even link names no literal's handle). A Hash compared by identity asks
+   it, as CRuby answers a new String at each to_s. */
 extern const sp_str_hdr sp_sym_str_tag;
 static inline int sp_str_is_sym_name(const char *s) {
   return s && ((const unsigned char *)s)[-1] == 0xf1 &&
@@ -419,7 +419,15 @@ static inline int sp_str_is_ascii7(const char *s) {
 }
 static inline void sp_str_mark_ascii7(const char *s) {
   if (!s || !sp_str_has_hdr(s)) return;
-  (((sp_str_hdr *)(s - 1)) - 1)->size |= SP_STR_SIZE_ASCII7;
+  sp_str_hdr *h = ((sp_str_hdr *)(s - 1)) - 1;
+  if (h->size & SP_STR_SIZE_ASCII7) return;
+  /* a frozen literal's header is read-only (fzl_emit_defs): a 7-bit one has
+     the bit from the start, and one that only counts as many characters as
+     bytes (invalid UTF-8, sp_str_length) is left unmarked. The test, the
+     marker and the link sp_String_of_literal reads, also passes over a
+     frozen slab String whose stale link is odd: that one is walked again. */
+  if (((const unsigned char *)s)[-1] == 0xf1 && ((uintptr_t)h->next & 1)) return;
+  h->size |= SP_STR_SIZE_ASCII7;
 }
 
 static inline size_t sp_str_byte_len(const char *s) {

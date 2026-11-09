@@ -2312,19 +2312,19 @@ static void emit_if_arm_tail(Compiler *c, int last, TyKind res, int res_o, int t
    is the C source of a string literal (RUBY_PLATFORM's is the runtime's
    macros). `var` is named under sp_str_, a prefix the runtime owns, so a
    user `def ruby_version` (sp_ruby_version) cannot take the same C name.
-   --share-strings: the header links to a literal slot of its own, as a
-   frozen literal's does (fzl_emit_defs), so the handle a shared slot
-   takes for the constant is its own one (sp_String_literal_handle), not
-   a new handle each read. */
+   The header links to a String object of its own, as a frozen literal's
+   does (fzl_emit_defs), so the handle a slot takes for the constant is
+   that one (sp_String_of_literal), not a new handle each read. */
 static void emit_engine_const_str(Compiler *c, const char *var, const char *lit, Buf *b) {
   char key[64];
   snprintf(key, sizeof key, " %s = {", var);
   if (!g_proc_protos.p || !strstr(g_proc_protos.p, key)) {
     buf_printf(&g_proc_protos,
-                 "static sp_StringLiteral %s_slot = { NULL, NULL };\n"
+                 "static sp_StringLiteral %s_o;\n"
                  "static struct { sp_str_hdr h; unsigned char m; char d[sizeof(%s)]; } %s = "
-                 "{ { (sp_str_hdr *)((char *)&%s_slot + 1), sizeof(%s) | SP_STR_SIZE_ASCII7, sizeof(%s) - 1, 0 }, 0xf1, %s };\n",
-                 var, lit, var, var, lit, lit, lit);
+                 "{ { (sp_str_hdr *)((char *)&%s_o.s + 1), sizeof(%s) | SP_STR_SIZE_ASCII7, sizeof(%s) - 1, 0 }, 0xf1, %s };\n"
+                 "static sp_StringLiteral %s_o = SP_STRING_LITERAL_INIT(%s_o, %s.d, sizeof(%s) - 1);\n",
+                 var, lit, var, var, lit, lit, lit, var, var, var, lit);
   }
   buf_printf(b, "((const char *)%s.d)", var);
 }

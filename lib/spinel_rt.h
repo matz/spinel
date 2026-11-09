@@ -1586,7 +1586,6 @@ extern SP_TLS sp_RbVal _sp_proc_poly_ret;
 extern SP_TLS sp_Proc *_sp_proc_blk;
 void sp_mark_rt_roots(void);   /* lib/sp_cold.c */
 static void sp_re_mark_globals(void) {
-  sp_String_mark_literals();
   /* The sub-markers below are static and inline away, so a fault in one of
      them reports as this frame with nothing to distinguish them. Under verify,
      name the group being walked: `phase=globals` alone cannot say whether the
@@ -3233,16 +3232,17 @@ static inline sp_String *sp_srange_extreme_h(sp_StrRange r, int greatest) {
 static inline sp_bool sp_poly_is_strbuf(sp_RbVal v) {
   return v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_STRBUF;
 }
-/* A literal's byte and handle faces name the same static object. A String
-   that owns its bytes (marker 0xfd, whose header names the handle,
-   sp_str_fd_owner) is the handle whether it is frozen or not, so an id taken
-   before `freeze` is the one after it. A frozen handle over bytes it does not
-   own (a literal's, a heap String's) answers those bytes. */
+/* A literal's byte and handle faces name the same static object, whose
+   identity is its bytes' address. A String that owns its bytes (marker
+   0xfd, whose header names the handle, sp_str_fd_owner) is the handle
+   whether it is frozen or not, so an id taken before `freeze` is the one
+   after it. A frozen handle over bytes it does not own (a literal's, a
+   heap String's) answers those bytes. */
 static inline sp_RbVal sp_poly_literal_identity(sp_RbVal v) {
   if (sp_poly_is_strbuf(v) && v.v.p) {
     sp_String *h = (sp_String *)v.v.p;
-    if (sp_String_literal_slot(h->data)) return sp_box_str(h->data);
-    /* (a frozen handle's payload is its read face, sp_strbuf_read) */
+    /* (a frozen handle's payload is its read face, sp_strbuf_read; a
+       literal's static handle is one, over bytes it does not own) */
     if (sp_String_is_frozen(h) && sp_str_fd_owner(h->data) != h) return sp_box_str(h->data);
   }
   /* A handle's own bytes read as a plain String are that handle's object: a
@@ -18007,14 +18007,14 @@ static void sp_throw_boxed(sp_RbVal tagv, sp_RbVal val) {
   sp_throw(tag, kind, val);
 }
 static void sp_throw(const char *tag, int kind, sp_RbVal val) {
-  if (kind == 3 && tag && sp_String_literal_slot(((sp_String *)tag)->data)) {
+  if (kind == 3 && tag && sp_String_of_literal(((sp_String *)tag)->data)) {
     tag = ((sp_String *)tag)->data;
     kind = 2;
   }
   int i = sp_catch_top - 1;
   while (i >= 0) {
     if (sp_catch_tag_kind[i] == 3 && sp_catch_tag[i] &&
-        sp_String_literal_slot(((sp_String *)sp_catch_tag[i])->data)) {
+        sp_String_of_literal(((sp_String *)sp_catch_tag[i])->data)) {
       sp_catch_tag[i] = ((sp_String *)sp_catch_tag[i])->data;
       sp_catch_tag_kind[i] = 2;
     }

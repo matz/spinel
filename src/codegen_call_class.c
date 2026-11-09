@@ -3460,6 +3460,14 @@ int emit_call_new_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const c
     }
   }
 
+  /* Class#allocate on a class value no constant names (`x.class.allocate`):
+     the dispatch a boxed class value gets, sp_cls_allocate, which the program
+     has generated when comp_class_value_allocate asks (g_gen_cls_answers). */
+  if (comp_class_value_allocate(c, id)) {
+    buf_puts(b, "sp_cls_allocate(sp_box_class("); emit_expr(c, recv, b); buf_puts(b, "))");
+    return 1;
+  }
+
   if (recv >= 0 && sp_streq(name, "new") && self_class_static_ci(c, recv) >= 0) {
     int cid = self_class_static_ci(c, recv);
     /* a Struct's `self.class.new(*a)` or keywords: spread and bound as

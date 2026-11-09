@@ -1,0 +1,21 @@
+Float: TypeError allocator undefined for Float
+Integer: TypeError allocator undefined for Integer
+nil: TypeError allocator undefined for NilClass
+true: TypeError allocator undefined for TrueClass
+false: TypeError allocator undefined for FalseClass
+Symbol: TypeError allocator undefined for Symbol
+local Float: TypeError allocator undefined for Float
+Array element: TypeError allocator undefined for Integer
+String: String
+Array: Array
+Hash: Hash
+Object: Object
+initialize 1
+Pt
+nil
+initialize 2
+Sub
+true
+initialize 3
+Pt
+Pt

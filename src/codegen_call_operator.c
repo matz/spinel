@@ -1952,13 +1952,23 @@ int emit_call_operator_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, co
     return 1;
   }
 
-  /* default Object#<=>: 0 when the operands are the same object, nil otherwise
-     (identity). Only for a reference user object with no user `<=>` (#2686). */
+  /* default Object#<=>: 0 when the operands are the same object or ==, nil
+     otherwise. Only for a reference user object with no user `<=>` (#2686). */
   if (sp_streq(name, "<=>") && argc == 1 && recv >= 0 && ty_is_object(rt) &&
       !comp_ty_value_obj(c, rt) && comp_method_in_chain(c, ty_object_class(rt), "<=>", NULL) < 0 &&
       comp_native_method_find(c, ty_object_class(rt), "<=>", 1, 0) < 0) {
-    const char *cn = c->classes[ty_object_class(rt)].c_name;
-    if (comp_ntype(c, argv[0]) == rt) {
+    const ClassInfo *rci = &c->classes[ty_object_class(rt)];
+    const char *cn = rci->c_name;
+    /* a class whose == is not identity (its own, or a Struct's or a Data's
+       field-wise one): CRuby's rb_equal, the same object first, then == */
+    if (rci->is_struct || rci->is_data || comp_method_in_chain(c, ty_object_class(rt), "==", NULL) >= 0) {
+      int ta = ++g_tmp, tb = ++g_tmp;
+      buf_printf(b, "({ sp_RbVal _t%d = ", ta); emit_boxed(c, recv, b);
+      buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); sp_RbVal _t%d = ", ta, tb); emit_boxed(c, argv[0], b);
+      buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); sp_poly_rb_equal(_t%d, _t%d) ? sp_box_int(0) : sp_box_nil(); })",
+                 tb, ta, tb);
+    }
+    else if (comp_ntype(c, argv[0]) == rt) {
       int ta = ++g_tmp, tb = ++g_tmp;
       buf_printf(b, "({ sp_%s *_t%d = ", cn, ta); emit_expr(c, recv, b);
       buf_printf(b, "; sp_%s *_t%d = ", cn, tb); emit_expr(c, argv[0], b);

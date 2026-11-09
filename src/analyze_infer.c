@@ -12219,6 +12219,9 @@ TyKind infer_uncached(Compiler *c, int id) {
        comp_super_class_new_boxed) */
     if (comp_super_is_class_new(c, id))
       return comp_super_class_new_boxed(c, id) ? TY_POLY : ty_object(s->class_id);
+    /* Class#allocate from an own allocate: an empty object of the class
+       the method (or its copy for a subclass) runs for */
+    if (allocate_super_reaches_class(c, id)) return ty_object(s->class_id);
     int p = ml.from;
     const char *uname = comp_super_name(c, p, comp_scope_def_name(c, comp_super_site(c, s)), s->is_cmethod);
     /* `super` in a respond_to? override no ancestor defines is Object's

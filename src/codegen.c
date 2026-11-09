@@ -12988,6 +12988,9 @@ void emit_own_class_alloc(Compiler *c, int id, int base, Buf *b) {
     /* a class method is copied for each subclass it runs for, as one with
        a bare `new` is: the copy allocates its class */
     if (g_emitting_class_id >= 0) base = g_emitting_class_id;
+    /* one that takes the receiving class (a subclass's super reaches it)
+       allocates that class */
+    if (cmethod_takes_self_cls(c, (int)(s - c->scopes))) snprintf(sel, sizeof sel, "_sp_cls.cls_id");
   }
   else if (!comp_ty_value_obj(c, ty_object(base))) {
     int recv = nt_ref(nt, id, "receiver");
@@ -16312,6 +16315,8 @@ void emit_super(Compiler *c, int id, Buf *b) {
      self). The instance path below would miss `def self.x` entirely. */
   if (s->is_cmethod) {
     if (comp_super_is_class_new(c, id)) { emit_super_class_new(c, id, b); return; }
+    /* Class#allocate: an empty object of the class this copy runs for */
+    if (allocate_super_reaches_class(c, id)) { emit_own_class_alloc(c, id, s->class_id, b); return; }
     int cdef = -1;
     int cmi = -1;
     /* a later extend's copy: super reaches the earlier module's copy, kept in

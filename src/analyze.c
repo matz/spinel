@@ -1792,7 +1792,8 @@ void compute_instantiated(Compiler *c, int early) {
        class, which desugar_exception_super_new spells `self.new` after
        this early pass (a super it keeps raises, building nothing: marked
        all the same, as the early pass may over-mark) */
-    if (comp_super_is_class_new(c, id) || (early && exc_super_in_exception_cmethod(c, id))) {
+    if (comp_super_is_class_new(c, id) || allocate_super_reaches_class(c, id) ||
+        (early && exc_super_in_exception_cmethod(c, id))) {
       Scope *encl = comp_scope_of(c, id);
       if (encl && encl->reachable)
         for (int k = 0; k < c->nclasses; k++)

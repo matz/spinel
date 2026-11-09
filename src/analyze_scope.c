@@ -9538,6 +9538,8 @@ static int cmethod_needs_specialization_d(Compiler *c, int mi, int ci, int def_c
   int need = 0;
   if (has_new) *has_new = 0;
   for (int id = sn_next(c, mi, -1); id >= 0; id = sn_next(c, mi, id)) {
+    /* (and so does a super in an own allocate that reaches Class#allocate) */
+    if (allocate_super_reaches_class(c, id)) { if (has_new) *has_new = 1; need = 1; continue; }
     if (nt_kind(nt, id) != NK_CallNode) continue;
     /* `allocate` / `self.allocate` builds the calling class, as a bare `new` does */
     if (allocate_on_own_class(c, id) >= 0) { if (has_new) *has_new = 1; need = 1; continue; }

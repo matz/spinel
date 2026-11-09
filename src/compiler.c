@@ -5863,13 +5863,52 @@ int self_class_static_ci(Compiler *c, int recv) {
   return cid;
 }
 
+/* A `super` in a class's own `def self.allocate` that no class method
+   `allocate` of the program above it answers reaches Class#allocate: an
+   empty object of the receiving class, with no initialize. Codegen builds
+   it as `allocate` on the method's own class (emit_own_class_alloc), and a
+   class method is copied for each subclass it runs for, so the copy builds
+   that subclass. Not a super with arguments, a block or a splat
+   (Class#allocate takes none), nor a bare super whose def takes
+   parameters, nor one in a module, an Exception class or a builtin's
+   subclass: those keep the old path. */
+int allocate_super_reaches_class(Compiler *c, int id) {
+  const NodeTable *nt = c->nt;
+  NodeKind k = id >= 0 ? nt_kind(nt, id) : NK_NONE;
+  if ((k != NK_SuperNode && k != NK_ForwardingSuperNode) || nt_ref(nt, id, "block") >= 0) return 0;
+  Scope *s = comp_scope_of(c, id);
+  if (!s || !s->is_cmethod || s->class_id < 0 || !s->name || s->def_node < 0) return 0;
+  if (!sp_streq(comp_scope_user_name(s), "allocate") || comp_super_shadow(c, s)) return 0;
+  /* the class that defines the method: a copy made for a subclass
+     (is_cmethod_copy) shares its def with the original */
+  int cid = s->class_id;
+  for (int i = 1; s->is_cmethod_copy && i < c->nscopes; i++)
+    if (c->scopes[i].def_node == s->def_node && c->scopes[i].is_cmethod && !c->scopes[i].is_cmethod_copy) {
+      cid = c->scopes[i].class_id;
+      break;
+    }
+  if (cid < 0) return 0;
+  if (comp_class_is_module(c, &c->classes[cid]) || class_is_exc_subclass(c, cid) ||
+      c->classes[cid].is_native_class || class_builtin_parent(c, cid) != -116) return 0;   /* (Object) */
+  int p = comp_super_parent(c, cid, 1);
+  if (p >= 0 && comp_cmethod_in_chain(c, p, "allocate", NULL) >= 0) return 0;
+  if (k == NK_SuperNode) {
+    int args = nt_ref(nt, id, "arguments"), an = 0;
+    if (args >= 0) nt_arr(nt, args, "arguments", &an);
+    return an == 0;
+  }
+  return nt_ref(nt, s->def_node, "parameters") < 0;
+}
+
 /* Does call `call` (-1: any) of `allocate` on class or module ci reach a
    class method `allocate` of the program's own: on ci, its singleton
    class, a parent or a module it extends? Not a call the analysis made
    for Class#new's allocation (cnew_alloc: CRuby's new does not call
-   allocate), and not one whose method calls super: that super reaches
-   Class#allocate, which has no target here, so such a call keeps
-   Class#allocate as before. */
+   allocate), and not one whose method calls a super that reaches neither
+   Class#allocate (allocate_super_reaches_class: not one with arguments,
+   in an Exception class, ...) nor a parent's own allocate that answers:
+   that super has no target here, so such a call keeps Class#allocate as
+   before. */
 int comp_own_allocate(Compiler *c, int ci, int call) {
   NodeTable *nt = (NodeTable *)c->nt;
   if (ci < 0 || ci >= c->nclasses) return 0;
@@ -5878,9 +5917,14 @@ int comp_own_allocate(Compiler *c, int ci, int call) {
   int d = mi >= 0 ? c->scopes[mi].def_node : -1;
   if (mi < 0) return 0;
   if (d < 0) return 1;
+  /* a super that reaches a parent's own allocate has that target, when
+     that method itself answers (its own supers checked the same way) */
+  int pc = c->scopes[mi].class_id >= 0 ? comp_super_parent(c, c->scopes[mi].class_id, 1) : -1;
+  int parent_own = pc >= 0 && comp_cmethod_in_chain(c, pc, "allocate", NULL) >= 0 && comp_own_allocate(c, pc, -1);
   int n = 0, sup = 0, *ids = nt_subtree_ids(nt, &d, 1, &n);
   for (int i = 0; i < n && !sup; i++)
-    sup = nt_kind(nt, ids[i]) == NK_SuperNode || nt_kind(nt, ids[i]) == NK_ForwardingSuperNode;
+    sup = (nt_kind(nt, ids[i]) == NK_SuperNode || nt_kind(nt, ids[i]) == NK_ForwardingSuperNode) &&
+          !allocate_super_reaches_class(c, ids[i]) && !parent_own;
   free(ids);
   return !sup;
 }

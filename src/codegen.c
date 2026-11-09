@@ -22172,8 +22172,10 @@ static void emit_sym_class_name_rt(Compiler *c, Buf *b) {
       buf_puts(b, "default:break;}}\n");
     }
     /* Inverse of the table above, for resolving a class carried by NAME back to
-       its builtin id so the id-keyed hierarchy walks work on it (#3022). Cold
-       path only (superclass/ancestors), so a linear scan is fine. */
+       its builtin id so the id-keyed hierarchy walks work on it (#3022).
+       superclass, ancestors and the module walk of a dynamic is_a?, === or
+       <= call it, only for a class value that carries a name: a linear scan
+       is fine there. */
     buf_puts(b, "static sp_int sp_builtin_id_of_name(const char *n){\n");
     buf_puts(b, "  if(!n||!n[0])return SP_CLASS_NIL_ID;\n");
     buf_puts(b, "  for(sp_int i=-100;i>=-179;i--){const char*s=sp_class_to_s((sp_Class){i,NULL});"

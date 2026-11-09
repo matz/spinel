@@ -2518,11 +2518,15 @@ int emit_poly_prearms0_blk(Compiler *c, int id, const char *name, const PolySpec
       buf_puts(b, "; }\nelse ");
     }
   }
-  /* each_line with a block on a boxed String, in a dispatch that exists
-     because a user class also defines it (a buffer that hands the block
-     on): the shared proc is driven over the lines, each a String of its
-     own, and the String answers itself */
-  if (sp_streq(name, "each_line") && argc == 0 && nt_ref(nt, id, "block") >= 0) {
+  /* each_line, each_char, each_byte or each_codepoint with a block on a
+     boxed String, in a dispatch that exists because a user class also
+     defines it (a buffer that hands the block on): the shared proc is
+     driven over the lines or characters, each a String of its own, or over
+     the bytes or codepoints as Integers, and the String answers itself.
+     Without the arm a String reaching `t.each_byte(&b)` fell to the raise. */
+  int str_walk = sp_streq(name, "each_line") || sp_streq(name, "each_char");
+  int int_walk = sp_streq(name, "each_byte") || sp_streq(name, "each_codepoint");
+  if ((str_walk || int_walk) && argc == 0 && nt_ref(nt, id, "block") >= 0) {
     if (blk_tmp0 < 0) {
       int cblk5 = resolve_forwarded_block(c, nt_ref(nt, id, "block"));
       if (cblk5 >= 0) blk_tmp0 = hoist_block_proc(c, cblk5);
@@ -2531,10 +2535,18 @@ int emit_poly_prearms0_blk(Compiler *c, int id, const char *name, const PolySpec
       if (g_plan_check) pa_observe(PA_BUILTIN, PA_KEY_BUILTIN + PB_ENUM_PROC, -1, TY_UNKNOWN, PC_SAME);
       int ta = ++g_tmp, ti = ++g_tmp;
       char lcall[400];
-      snprintf(lcall, sizeof lcall, "({ sp_StrArray *_t%d = sp_str_lines(sp_poly_recv_s(_t%d, \"each_line\")); SP_GC_ROOT(_t%d);"
-                                    " for (sp_int _t%d = 0; _t%d < sp_StrArray_length(_t%d); _t%d++)"
-                                    " sp_penum_call1(_t%d, SP_SEBOX(sp_StrArray_get_e(_t%d, _t%d))); _t%d; })",
-               ta, tv, ta, ti, ti, ta, ti, blk_tmp0, ta, ti, tv);
+      const char *walk = sp_streq(name, "each_line") ? "sp_str_lines" : sp_streq(name, "each_char") ? "sp_str_chars"
+                       : sp_streq(name, "each_byte") ? "sp_str_bytes" : "sp_str_codepoints";
+      if (str_walk)
+        snprintf(lcall, sizeof lcall, "({ sp_StrArray *_t%d = %s(sp_poly_recv_s(_t%d, \"%s\")); SP_GC_ROOT(_t%d);"
+                                      " for (sp_int _t%d = 0; _t%d < sp_StrArray_length(_t%d); _t%d++)"
+                                      " sp_penum_call1(_t%d, SP_SEBOX(sp_StrArray_get_e(_t%d, _t%d))); _t%d; })",
+                 ta, walk, tv, name, ta, ti, ti, ta, ti, blk_tmp0, ta, ti, tv);
+      else
+        snprintf(lcall, sizeof lcall, "({ sp_IntArray *_t%d = %s(sp_poly_recv_s(_t%d, \"%s\")); SP_GC_ROOT(_t%d);"
+                                      " for (sp_int _t%d = 0; _t%d < sp_IntArray_length(_t%d); _t%d++)"
+                                      " sp_penum_call1(_t%d, sp_box_int(sp_IntArray_get(_t%d, _t%d))); _t%d; })",
+                 ta, walk, tv, name, ta, ti, ti, ta, ti, blk_tmp0, ta, ti, tv);
       buf_printf(b, "if (_t%d.tag == SP_TAG_STR || sp_poly_is_strbuf(_t%d)) { _t%d = ", tv, tv, tr);
       if (ret == TY_POLY) buf_puts(b, lcall);
       else emit_unbox_text(c, ret, lcall, b);

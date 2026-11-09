@@ -4975,7 +4975,9 @@ static void cpoly_prearms0_blk(Compiler *c, int id, const char *name, const Poly
   if (live_blk && poly_enum_op_for(name)) cpoly_family(p, cap, PB_ENUM_PROC);
   if (live_blk && sp_streq(name, "each_index")) cpoly_family(p, cap, PB_ENUM_PROC);
   if (live_blk && sp_streq(name, "times")) cpoly_family(p, cap, PB_ENUM_PROC);
-  if (live_blk && sp_streq(name, "each_line")) cpoly_family(p, cap, PB_ENUM_PROC);
+  if (live_blk && (sp_streq(name, "each_line") || sp_streq(name, "each_char") ||
+                   sp_streq(name, "each_byte") || sp_streq(name, "each_codepoint")))
+    cpoly_family(p, cap, PB_ENUM_PROC);
   if (live_blk && sp_streq(name, "synchronize")) cpoly_family(p, cap, PB_SYNC);
   if (is_call_alias(name)) cpoly_family(p, cap, PB_CALLABLE);
   PolyArgs none = { NULL, 0, NULL, NULL, NULL, NULL };

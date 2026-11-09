@@ -5808,10 +5808,12 @@ const char *poly_enum_op_for(const char *name) {
 }
 /* Does a poly dispatch's builtin pre-arm (emit_poly_prearms0_blk) drive a
    zero-argument call's block of this name as a proc: an Enumerable walk,
-   each_index, times, a String's each_line, a Mutex's synchronize? */
+   each_index, times, a String's each_line, each_char, each_byte or
+   each_codepoint, a Mutex's synchronize? */
 int poly_blk_prearm_name(const char *name) {
   return poly_enum_op_for(name) ||
          (name && (sp_streq(name, "each_index") || sp_streq(name, "times") || sp_streq(name, "each_line") ||
+                 sp_streq(name, "each_char") || sp_streq(name, "each_byte") || sp_streq(name, "each_codepoint") ||
                  sp_streq(name, "synchronize")));
 }
 

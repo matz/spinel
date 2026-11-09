@@ -14527,9 +14527,13 @@ static void emit_tail_value_1(Compiler *c, int node, Buf *b) {
      the NODE's type, which a return-type narrowing never touched, so without
      this the body builds an sp_PolyArray * and hands it back through an
      sp_PtrArray * signature. Any other tail already carries the narrowed type
-     from the slot it reads. */
-  if (ty_is_ptr_array(g_ret_type) && comp_ntype(c, node) != g_ret_type &&
-      emit_ptr_array_build(c, node, g_ret_type, b)) return;
+     from the slot it reads. A tail that fills a result var builds that var's
+     type: an inlined yielding method's value is the call's, not the
+     caller's return (a row literal of the callee was built as the caller's
+     table of Integer rows). */
+  TyKind tail_ty = g_result_var ? g_result_ty : g_ret_type;
+  if (ty_is_ptr_array(tail_ty) && comp_ntype(c, node) != tail_ty &&
+      emit_ptr_array_build(c, node, tail_ty, b)) return;
   {
     const char *vnty = nt_type(c->nt, node);
     NodeKind vnk = nt_kind(c->nt, node);

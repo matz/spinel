@@ -1,0 +1,31 @@
+{b: 1}
+[{b: 1}, {b: 2}]
+[:receiver, :argument]
+{a: 1, b: 2}
+:original
+:original
+{a: 1}
+[:receiver, :argument]
+{a: 1, b: 3}
+:original
+{a: 1}
+{a: 1}
+{a: 1}
+{a: 1}
+{a: 1, b: nil}
+[:a, :b]
+true
+false
+:original
+:original
+:original
+false
+true
+:original
+nil
+nil
+[]
+false
+true
+[]
+[:override, 8]

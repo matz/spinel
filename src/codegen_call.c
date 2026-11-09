@@ -21669,8 +21669,16 @@ static int emit_bivar_copy_wrap(Compiler *c, int id, Buf *b) {
   buf_puts(b, "({ "); emit_ctype(c, rr.kind == RK_BOXED ? TY_POLY : rt, b); buf_printf(b, " %s = ", rn); emit_expr(c, recv, b);
   buf_printf(b, rr.kind == RK_BOXED ? "; SP_GC_ROOT_RBVAL(%s); " : "; SP_GC_ROOT(%s); ", rn);
   int slot = view_bind(recv, "%s", rn);
-  emit_ctype(c, ret, b); buf_printf(b, " %s = ", dn); emit_call_unwrapped(c, id, b);
+  /* The call's nil test and argument temps can read the held receiver.
+     Keep that prelude inside the wrap, after its declaration. */
+  Buf pre = {0, 0, 0}, call = {0, 0, 0};
+  Buf *sv_pre = g_pre; g_pre = &pre;
+  emit_call_unwrapped(c, id, &call);
+  g_pre = sv_pre;
   view_unbind(slot);
+  if (pre.p) buf_puts(b, pre.p);
+  emit_ctype(c, ret, b); buf_printf(b, " %s = %s", dn, call.p ? call.p : "");
+  free(pre.p); free(call.p);
   buf_printf(b, ret_repr.kind == RK_BOXED ? "; SP_GC_ROOT_RBVAL(%s); sp_bivar_copy(" : "; SP_GC_ROOT(%s); sp_bivar_copy(", dn);
   emit_boxed_text(c, rr.kind == RK_BOXED ? TY_POLY : rt, rn, b); buf_puts(b, ", "); emit_boxed_text(c, ret, dn, b);
   buf_printf(b, "); %s; })", dn);

@@ -48323,7 +48323,7 @@ static int sid_value_or_check(Compiler *c, int call, int v) {
   g_idset_marks = 1;
   return 2;
 }
-static void refuse_set_identity_members(Compiler *c) {
+static __attribute__((unused)) void refuse_set_identity_members(Compiler *c) {
   const NodeTable *nt = c->nt;
   int set_cid = comp_core_class(c, CORE_SET);
   if (set_cid < 0 || comp_method_in_class(c, set_cid, "compare_by_identity") < 0) return;
@@ -56115,7 +56115,6 @@ static void an_phase_reconcile_check(Compiler *c) {
 
   /* Refuse lent ivar copies through calls and super only after sharing
      analysis settles (#6998). */
-  AN_STEP_V("refuse_set_identity_members", refuse_set_identity_members(c));
   refuse_mixin_after_calls(c);
   refuse_reinit_mismatch(c);
 

@@ -3643,6 +3643,88 @@ static int dyn_holder_reaches_d(Compiler *c, int a, int b, int depth) {
 static int dyn_holder_reaches(Compiler *c, int a, int b) {
   return a >= 0 && b >= 0 && a != b && dyn_holder_reaches_d(c, a, b, 0);
 }
+/* The modules class or module k includes (pre 0) or prepends (pre 1), as
+   the bodies of its definition and its reopenings write them (this pass
+   runs before the include lists are made), in CRuby's ancestors order: a
+   later one comes first, and of one `include A, B`, A first. A builtin
+   module (Comparable, Kernel) is left out: it holds no program constant.
+   hdr lists the class and module nodes that open each class (hdr[0][k]
+   the first, hdr[1][h] the next after h). -1 when an argument is not one
+   program class or module. */
+static int dyn_holder_mixins(Compiler *c, int k, int pre, int *const *hdr, int *out, int cap) {
+  const NodeTable *nt = c->nt;
+  int n = 0;
+  for (int h = hdr[0][k]; h >= 0; h = hdr[1][h]) {
+    int body = nt_ref(nt, h, "body"), bn = 0;
+    const int *bb = body >= 0 && nt_kind(nt, body) == NK_StatementsNode ? nt_arr(nt, body, "body", &bn) : NULL;
+    for (int j = 0; j < bn; j++) {
+      if (nt_kind(nt, bb[j]) != NK_CallNode || nt_ref(nt, bb[j], "receiver") >= 0 ||
+          !sp_streq(nt_str(nt, bb[j], "name"), pre ? "prepend" : "include")) continue;
+      int an = 0, args = nt_ref(nt, bb[j], "arguments");
+      const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &an) : NULL;
+      for (int x = an - 1; x >= 0; x--) {
+        const char *mn = nt_str(nt, av[x], "name");
+        int m = mn ? dyn_holder_named(c, mn) : -1;
+        if (m < 0 && mn && is_builtin_module_name(mn)) continue;
+        if (m < 0) return -1;
+        int seen = 0;
+        for (int q = 0; q < n; q++) if (out[q] == m) seen = 1;
+        if (seen) continue;
+        if (n >= cap) return -1;
+        memmove(&out[1], &out[0], sizeof(int) * (size_t)n);
+        out[0] = m; n++;
+      }
+    }
+  }
+  return n;
+}
+/* Class or module k's ancestors in CRuby's order, as class-table indexes:
+   the modules it prepends (each with its own ancestors), k, the modules
+   it includes, then its superclass's. A module already in the list is not
+   put in again, and one the superclass already has sits at the
+   superclass's place. -1 when a mixin is not one the walk can read. */
+static int dyn_holder_ancestors(Compiler *c, int k, int *const *hdr, int *out, int cap, int depth) {
+  if (depth > 32 || k < 0 || k >= c->nclasses) return depth > 32 ? -1 : 0;
+  int up = dyn_holder_parent(c, k), sup[256], ns = 0;
+  if (up >= 0 && up != k) { ns = dyn_holder_ancestors(c, up, hdr, sup, 256, depth + 1); if (ns < 0) return -1; }
+  int n = 0;
+  for (int pass = 0; pass < 3; pass++) {
+    if (pass == 1) { if (n >= cap) return -1; out[n++] = k; continue; }
+    int mx[64], nm = dyn_holder_mixins(c, k, pass == 0, hdr, mx, 64);
+    if (nm < 0) return -1;
+    for (int i = 0; i < nm; i++) {
+      int ma[256], na = dyn_holder_ancestors(c, mx[i], hdr, ma, 256, depth + 1);
+      if (na < 0) return -1;
+      for (int j = 0; j < na; j++) {
+        int seen = 0;
+        for (int q = 0; q < n && !seen; q++) if (out[q] == ma[j]) seen = 1;
+        for (int q = 0; pass == 2 && q < ns && !seen; q++) if (sup[q] == ma[j]) seen = 1;
+        if (seen) continue;
+        if (n >= cap) return -1;
+        out[n++] = ma[j];
+      }
+    }
+  }
+  for (int j = 0; j < ns; j++) {
+    int seen = 0;
+    for (int q = 0; q < n && !seen; q++) if (out[q] == sup[j]) seen = 1;
+    if (seen) continue;
+    if (n >= cap) return -1;
+    out[n++] = sup[j];
+  }
+  return n;
+}
+/* A copy of an arm's answer: the constant read, with the holder name a
+   NameError prints */
+static int dyn_arm_copy(NodeTable *nt, int a) {
+  char nm[600], cr[600];
+  snprintf(nm, sizeof nm, "%s", nt_str(nt, a, "name") ? nt_str(nt, a, "name") : "");
+  const char *cr0 = nt_str(nt, a, "const_cref");
+  if (cr0) snprintf(cr, sizeof cr, "%s", cr0);
+  int n = te_const(nt, nm);
+  if (cr0) nt_node_set_str(nt, n, "const_cref", cr);
+  return n;
+}
 static void desugar_dyn_parent_class_leaf(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int n0 = nt->count;
@@ -3673,6 +3755,7 @@ static void desugar_dyn_parent_class_leaf(Compiler *c) {
     if (!nm || class_leaf_count(c, nm, &nested) < 2 || !nested) continue;
     todo[ntodo++] = id;
   }
+  int *hdr[2] = { NULL, NULL };   /* (the headers of each class: dyn_holder_mixins) */
   for (int t = 0; t < ntodo; t++) {
     int id = todo[t];
     int base = nt->count;   /* (this path's new nodes take its scope) */
@@ -3811,6 +3894,73 @@ static void desugar_dyn_parent_class_leaf(Compiler *c) {
       nt_node_set_ref(nt, ifn, "subsequent", tail_arm);
       tail_arm = ifn;
     }
+    /* The holders' arms test, in a fixed order, which holder the value is
+       or reaches. A class or module whose ancestors have two holders (a
+       superclass's Foo and an included module's, or the Foos of two
+       modules), or one the arms do not see (a mixin in a reopening, a
+       prepend), takes the one first in ITS ancestors. That depends on the
+       value's class, so such a class gets its own arm ahead of the
+       holders' (a subclass ahead of the classes it reaches). */
+    int ex_k[64], ex_a[64], nex = 0;
+    { if (!hdr[0]) {
+        hdr[0] = malloc(sizeof(int) * ((size_t)c->nclasses + 1));
+        hdr[1] = malloc(sizeof(int) * ((size_t)n0 + 1));
+        if (!hdr[0] || !hdr[1]) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+        for (int k = 0; k < c->nclasses; k++) hdr[0][k] = -1;
+        for (int h = n0 - 1; h >= 0; h--) {
+          hdr[1][h] = -1;
+          if (nt_kind(nt, h) != NK_ClassNode && nt_kind(nt, h) != NK_ModuleNode) continue;
+          int k = elab_header_class(c, h, NULL, NULL);
+          if (k < 0 || k >= c->nclasses) continue;
+          hdr[1][h] = hdr[0][k]; hdr[0][k] = h;
+        }
+      }
+      int obj = comp_core_class(c, CORE_OBJECT), bo = comp_core_class(c, CORE_BASIC_OBJECT);
+      int *kf = malloc(sizeof(int) * ((size_t)c->nclasses + 1));
+      unsigned char *need = calloc((size_t)c->nclasses + 1, 1);
+      if (!kf || !need) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+      /* (kf: the arm CRuby's lookup takes for k, -1 for none or an order
+         the walk cannot read; need: the holders' chain takes another) */
+      for (int k = 0; k < c->nclasses; k++) {
+        kf[k] = -1;
+        if (!c->classes[k].name || k == obj || k == bo) continue;
+        int anc[256], nanc = dyn_holder_ancestors(c, k, hdr, anc, 256, 0);
+        for (int j = 0; j < nanc && kf[k] < 0; j++)
+          for (int i = 0; i < na && kf[k] < 0; i++) if (arms_k[i] == anc[j]) kf[k] = i;
+        if (kf[k] < 0) continue;
+        int chain = -1;
+        for (int i = 0; i < na && chain < 0; i++)
+          if (arms_k[i] == k || dyn_holder_reaches(c, k, arms_k[i])) chain = i;
+        need[k] = chain != kf[k];
+      }
+      /* (a class below one with its own arm that takes another answer
+         needs its own arm too) */
+      for (int more = 1; more; ) {
+        more = 0;
+        for (int k = 0; k < c->nclasses; k++) {
+          if (need[k] || kf[k] < 0) continue;
+          int anc[256], nanc = dyn_holder_ancestors(c, k, hdr, anc, 256, 0);
+          for (int j = 0; j < nanc && !need[k]; j++)
+            if (anc[j] != k && anc[j] >= 0 && anc[j] < c->nclasses && need[anc[j]] && kf[anc[j]] != kf[k]) need[k] = more = 1;
+        }
+      }
+      for (int k = 0; k < c->nclasses; k++) {
+        if (!need[k]) continue;
+        if (nex >= 64) { nex = 0; break; }   /* (too many: the holders' arms, as before) */
+        ex_k[nex] = k; ex_a[nex] = kf[k]; nex++;
+      }
+      free(kf); free(need);
+      /* (no class after one in its own ancestors) */
+      for (int i = 0; i < nex; i++)
+        for (int j = i + 1; j < nex; j++) {
+          int anc[256], nanc = dyn_holder_ancestors(c, ex_k[j], hdr, anc, 256, 0), r = 0;
+          for (int q = 0; q < nanc; q++) if (anc[q] == ex_k[i]) r = 1;
+          if (!r) continue;
+          int t0 = ex_k[i], t1 = ex_a[i];
+          ex_k[i] = ex_k[j]; ex_a[i] = ex_a[j]; ex_k[j] = t0; ex_a[j] = t1;
+          i = -1; break;
+        }
+    }
     for (int i = na - 1; i >= 0; i--) {
       int ism = te_call(nt, dyn_parent_copy(nt, par), "is_a?", te_args1(nt, te_const(nt, "Module")), -1);
       /* (Holder >= m, not m <= Holder: the same answer, and it builds where
@@ -3825,6 +3975,18 @@ static void desugar_dyn_parent_class_leaf(Compiler *c) {
       nt_node_set_ref(nt, ifn, "subsequent", tail_arm);
       tail_arm = ifn;
     }
+    for (int i = nex - 1; i >= 0; i--) {
+      int ism = te_call(nt, dyn_parent_copy(nt, par), "is_a?", te_args1(nt, te_const(nt, "Module")), -1);
+      int le = te_call(nt, te_const(nt, c->classes[ex_k[i]].name), ">=", te_args1(nt, dyn_parent_copy(nt, par)), -1);
+      int and = nt_new_node(nt, "AndNode");
+      nt_node_set_ref(nt, and, "left", ism);
+      nt_node_set_ref(nt, and, "right", le);
+      int ifn = nt_new_node(nt, "IfNode");
+      nt_node_set_ref(nt, ifn, "predicate", and);
+      nt_node_set_ref(nt, ifn, "statements", te_stmts1(nt, dyn_arm_copy(nt, arms_c[ex_a[i]])));
+      nt_node_set_ref(nt, ifn, "subsequent", tail_arm);
+      tail_arm = ifn;
+    }
     /* (no arm at all: only a key's last "__" part has the leaf) */
     if (tail_arm == els) tail_arm = mif;
     int body = te_stmts1(nt, tail_arm);
@@ -3834,7 +3996,7 @@ static void desugar_dyn_parent_class_leaf(Compiler *c) {
     int encl = c->nscope[id];
     for (int j = base; j < nt->count; j++) c->nscope[j] = encl;
   }
-  free(keep); free(todo);
+  free(keep); free(todo); free(hdr[0]); free(hdr[1]);
 }
 
 /* For a receiverless instance_eval/exec CallNode with a literal block inside

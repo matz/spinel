@@ -38436,7 +38436,11 @@ int scalar_nil_only_call(Compiler *c, int id, TyKind rt) {
           : argc == 1 ? (is_match_operator(nm) ||
                          (rt == TY_FLOAT && is_bit_op(nm)))
           : 0;
-  return hit;
+  /* an Integer or Float reopening's method of the name answers a receiver
+     that cannot be nil instead, as infer_user_method_call types it and the
+     emitter calls it. (A receiver that can be nil keeps this rule: nil's
+     method and the reopening's would need a branch on the value.) */
+  return hit && (nullable_int_value(c, recv) || !an_scalar_reopen_answers(c, id, nm, recv, rt, 0));
 }
 
 /* ... on a receiver that can hold nil: the call answers nil's value */

@@ -6,6 +6,7 @@
 ["random|str", 4, true]
 ["ARGF", "ARGF", "ARGF", "ARGF"]
 ARGF
+ARGF
 ["s", "s", "s", "s"]
 ["7", "7", "7", "7"]
 150

@@ -599,46 +599,46 @@ spinel: 1 refusal, nothing written
 spinel: test/reject/compare_by_identity_chained_boxed.rb:4: unsupported Hash#compare_by_identity (identity-keyed hashing): node N (CallNode `compare_by_identity`) recv=CallNode/ty50 argc=0
 spinel: 1 refusal, nothing written
 == test/reject/compare_by_identity_key_from_hash_each.rb [default] rc=1
-spinel: test/reject/compare_by_identity_key_from_hash_each.rb:4: unsupported Hash#compare_by_identity (identity-keyed hashing): a key may be a String, an Integer, a Float or a boxed value: node N (CallNode `compare_by_identity`) recv=CallNode/ty30 argc=0
+spinel: test/reject/compare_by_identity_key_from_hash_each.rb:4: unsupported Hash#compare_by_identity (identity-keyed hashing): a key may be a String, an Integer, a Float or a boxed value (the key at test/reject/compare_by_identity_key_from_hash_each.rb:5): node N (CallNode `compare_by_identity`) recv=CallNode/ty30 argc=0
 spinel: 1 refusal, nothing written
 == test/reject/compare_by_identity_key_from_hash_each.rb [promote] rc=1
-spinel: test/reject/compare_by_identity_key_from_hash_each.rb:4: unsupported Hash#compare_by_identity (identity-keyed hashing): a key may be a String, an Integer, a Float or a boxed value: node N (CallNode `compare_by_identity`) recv=CallNode/ty30 argc=0
+spinel: test/reject/compare_by_identity_key_from_hash_each.rb:4: unsupported Hash#compare_by_identity (identity-keyed hashing): a key may be a String, an Integer, a Float or a boxed value (the key at test/reject/compare_by_identity_key_from_hash_each.rb:5): node N (CallNode `compare_by_identity`) recv=CallNode/ty30 argc=0
 spinel: 1 refusal, nothing written
 == test/reject/compare_by_identity_key_from_hash_keys.rb [default] rc=1
-spinel: test/reject/compare_by_identity_key_from_hash_keys.rb:4: unsupported Hash#compare_by_identity (identity-keyed hashing): a key may be a String, an Integer, a Float or a boxed value: node N (CallNode `compare_by_identity`) recv=CallNode/ty30 argc=0
+spinel: test/reject/compare_by_identity_key_from_hash_keys.rb:4: unsupported Hash#compare_by_identity (identity-keyed hashing): a key may be a String, an Integer, a Float or a boxed value (the key at test/reject/compare_by_identity_key_from_hash_keys.rb:5): node N (CallNode `compare_by_identity`) recv=CallNode/ty30 argc=0
 spinel: 1 refusal, nothing written
 == test/reject/compare_by_identity_key_from_hash_keys.rb [promote] rc=1
-spinel: test/reject/compare_by_identity_key_from_hash_keys.rb:4: unsupported Hash#compare_by_identity (identity-keyed hashing): a key may be a String, an Integer, a Float or a boxed value: node N (CallNode `compare_by_identity`) recv=CallNode/ty30 argc=0
+spinel: test/reject/compare_by_identity_key_from_hash_keys.rb:4: unsupported Hash#compare_by_identity (identity-keyed hashing): a key may be a String, an Integer, a Float or a boxed value (the key at test/reject/compare_by_identity_key_from_hash_keys.rb:5): node N (CallNode `compare_by_identity`) recv=CallNode/ty30 argc=0
 spinel: 1 refusal, nothing written
 == test/reject/compare_by_identity_key_from_own_deconstruct_keys.rb [default] rc=1
-spinel: test/reject/compare_by_identity_key_from_own_deconstruct_keys.rb:6: unsupported Hash#compare_by_identity (identity-keyed hashing): a key may be a String, an Integer, a Float or a boxed value: node N (CallNode `compare_by_identity`) recv=CallNode/ty30 argc=0
+spinel: test/reject/compare_by_identity_key_from_own_deconstruct_keys.rb:6: unsupported Hash#compare_by_identity (identity-keyed hashing): a key may be a String, an Integer, a Float or a boxed value (the key at test/reject/compare_by_identity_key_from_own_deconstruct_keys.rb:9): node N (CallNode `compare_by_identity`) recv=CallNode/ty30 argc=0
 spinel: 1 refusal, nothing written
 == test/reject/compare_by_identity_key_from_own_deconstruct_keys.rb [promote] rc=1
-spinel: test/reject/compare_by_identity_key_from_own_deconstruct_keys.rb:6: unsupported Hash#compare_by_identity (identity-keyed hashing): a key may be a String, an Integer, a Float or a boxed value: node N (CallNode `compare_by_identity`) recv=CallNode/ty30 argc=0
+spinel: test/reject/compare_by_identity_key_from_own_deconstruct_keys.rb:6: unsupported Hash#compare_by_identity (identity-keyed hashing): a key may be a String, an Integer, a Float or a boxed value (the key at test/reject/compare_by_identity_key_from_own_deconstruct_keys.rb:9): node N (CallNode `compare_by_identity`) recv=CallNode/ty30 argc=0
 spinel: 1 refusal, nothing written
 == test/reject/compare_by_identity_key_from_store_answer.rb [default] rc=1
-spinel: test/reject/compare_by_identity_key_from_store_answer.rb:5: unsupported Hash#compare_by_identity (identity-keyed hashing): a key may be a String, an Integer, a Float or a boxed value: node N (CallNode `compare_by_identity`) recv=CallNode/ty30 argc=0
+spinel: test/reject/compare_by_identity_key_from_store_answer.rb:5: unsupported Hash#compare_by_identity (identity-keyed hashing): a key may be a String, an Integer, a Float or a boxed value (the key at test/reject/compare_by_identity_key_from_store_answer.rb:6): node N (CallNode `compare_by_identity`) recv=CallNode/ty30 argc=0
 spinel: 1 refusal, nothing written
 == test/reject/compare_by_identity_key_from_store_answer.rb [promote] rc=1
-spinel: test/reject/compare_by_identity_key_from_store_answer.rb:5: unsupported Hash#compare_by_identity (identity-keyed hashing): a key may be a String, an Integer, a Float or a boxed value: node N (CallNode `compare_by_identity`) recv=CallNode/ty30 argc=0
+spinel: test/reject/compare_by_identity_key_from_store_answer.rb:5: unsupported Hash#compare_by_identity (identity-keyed hashing): a key may be a String, an Integer, a Float or a boxed value (the key at test/reject/compare_by_identity_key_from_store_answer.rb:6): node N (CallNode `compare_by_identity`) recv=CallNode/ty30 argc=0
 spinel: 1 refusal, nothing written
 == test/reject/compare_by_identity_string_key.rb [default] rc=1
-spinel: test/reject/compare_by_identity_string_key.rb:5: unsupported Hash#compare_by_identity (identity-keyed hashing): a key may be a String, an Integer, a Float or a boxed value: node N (CallNode `compare_by_identity`) recv=CallNode/ty30 argc=0
+spinel: test/reject/compare_by_identity_string_key.rb:5: unsupported Hash#compare_by_identity (identity-keyed hashing): a key may be a String, an Integer, a Float or a boxed value (the key at test/reject/compare_by_identity_string_key.rb:7): node N (CallNode `compare_by_identity`) recv=CallNode/ty30 argc=0
 spinel: 1 refusal, nothing written
 == test/reject/compare_by_identity_string_key.rb [promote] rc=1
-spinel: test/reject/compare_by_identity_string_key.rb:5: unsupported Hash#compare_by_identity (identity-keyed hashing): a key may be a String, an Integer, a Float or a boxed value: node N (CallNode `compare_by_identity`) recv=CallNode/ty30 argc=0
+spinel: test/reject/compare_by_identity_string_key.rb:5: unsupported Hash#compare_by_identity (identity-keyed hashing): a key may be a String, an Integer, a Float or a boxed value (the key at test/reject/compare_by_identity_string_key.rb:7): node N (CallNode `compare_by_identity`) recv=CallNode/ty30 argc=0
 spinel: 1 refusal, nothing written
 == test/reject/compare_by_identity_symbol_key_may_hold_string.rb [default] rc=1
-spinel: test/reject/compare_by_identity_symbol_key_may_hold_string.rb:6: unsupported Hash#compare_by_identity (identity-keyed hashing): a key may be a String, an Integer, a Float or a boxed value: node N (CallNode `compare_by_identity`) recv=CallNode/ty30 argc=0
+spinel: test/reject/compare_by_identity_symbol_key_may_hold_string.rb:6: unsupported Hash#compare_by_identity (identity-keyed hashing): a key may be a String, an Integer, a Float or a boxed value (the key at test/reject/compare_by_identity_symbol_key_may_hold_string.rb:7): node N (CallNode `compare_by_identity`) recv=CallNode/ty30 argc=0
 spinel: 1 refusal, nothing written
 == test/reject/compare_by_identity_symbol_key_may_hold_string.rb [promote] rc=1
-spinel: test/reject/compare_by_identity_symbol_key_may_hold_string.rb:6: unsupported Hash#compare_by_identity (identity-keyed hashing): a key may be a String, an Integer, a Float or a boxed value: node N (CallNode `compare_by_identity`) recv=CallNode/ty30 argc=0
+spinel: test/reject/compare_by_identity_symbol_key_may_hold_string.rb:6: unsupported Hash#compare_by_identity (identity-keyed hashing): a key may be a String, an Integer, a Float or a boxed value (the key at test/reject/compare_by_identity_symbol_key_may_hold_string.rb:7): node N (CallNode `compare_by_identity`) recv=CallNode/ty30 argc=0
 spinel: 1 refusal, nothing written
 == test/reject/compare_by_identity_symbol_key_other_store.rb [default] rc=1
-spinel: test/reject/compare_by_identity_symbol_key_other_store.rb:6: unsupported Hash#compare_by_identity (identity-keyed hashing): a key may be a String, an Integer, a Float or a boxed value: node N (CallNode `compare_by_identity`) recv=CallNode/ty30 argc=0
+spinel: test/reject/compare_by_identity_symbol_key_other_store.rb:6: unsupported Hash#compare_by_identity (identity-keyed hashing): a key may be a String, an Integer, a Float or a boxed value (the key at test/reject/compare_by_identity_symbol_key_other_store.rb:7): node N (CallNode `compare_by_identity`) recv=CallNode/ty30 argc=0
 spinel: 1 refusal, nothing written
 == test/reject/compare_by_identity_symbol_key_other_store.rb [promote] rc=1
-spinel: test/reject/compare_by_identity_symbol_key_other_store.rb:6: unsupported Hash#compare_by_identity (identity-keyed hashing): a key may be a String, an Integer, a Float or a boxed value: node N (CallNode `compare_by_identity`) recv=CallNode/ty30 argc=0
+spinel: test/reject/compare_by_identity_symbol_key_other_store.rb:6: unsupported Hash#compare_by_identity (identity-keyed hashing): a key may be a String, an Integer, a Float or a boxed value (the key at test/reject/compare_by_identity_symbol_key_other_store.rb:7): node N (CallNode `compare_by_identity`) recv=CallNode/ty30 argc=0
 spinel: 1 refusal, nothing written
 == test/reject/complex_bignum_component.rb [default] rc=1
 spinel: test/reject/complex_bignum_component.rb:7: a Complex component given an Integer past 64 bits, which no conversion keeps in its sp_float slot

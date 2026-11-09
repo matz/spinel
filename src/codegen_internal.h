@@ -1292,6 +1292,10 @@ int obj_str_ret_poly(Compiler *c, int cid, int want_inspect);
 int obj_str_ret_strsub(Compiler *c, int cid, int want_inspect);
 const char *exc_builtin_parent(Compiler *c, int ci);
 void emit_stmt(Compiler *c, int id, Buf *b, int indent);
+#ifdef SP_EMIT_TRACE
+/* The trace build's node marker (src/emit_trace.c): 'c' a call, 's' a statement. */
+void emit_trace_node(Compiler *c, int id, int kind);
+#endif
 /* A require under --load-model=graph, as its value (codegen_stmt.c) */
 void emit_load_call(Compiler *c, int id, Buf *b);
 int emit_autoload_register(Compiler *c, int id, Buf *b);

@@ -16458,6 +16458,9 @@ static void emit_const_visibility_missing(Compiler *c, int id, int ci, Buf *b, i
 }
 
 void emit_stmt(Compiler *c, int id, Buf *b, int indent) {
+#ifdef SP_EMIT_TRACE
+  emit_trace_node(c, id, 's');
+#endif
   if (g_repr_check) repr_check_ask(c, id);
   emit_line_directive(c, id, b);
   if (nt_kind(c->nt, id) == NK_LoadNode) { emit_with_prelude(c, id, b, indent, emit_load_stmt); return; }   /* (a computed path's temps) */

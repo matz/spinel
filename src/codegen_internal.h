@@ -3104,6 +3104,9 @@ void emit_scope_decls_ends(Compiler *c, Scope *s, Buf *b, size_t *ends);
 int method_is_void(Scope *s);
 void emit_poly_iter_obj_normalize(Compiler *c, int tv, Buf *b);
 void emit_poly_iter_obj_reject(Compiler *c, int call, int tv, const char *name, Buf *b);
+/* a boxed quantifier's element walk over _t<ta> (codegen_call_operator.c) */
+void emit_poly_quantifier_walk(Compiler *c, int id, int ta, int tp, int tn, int tcnt, int ti,
+                               const char *name, char *ans, size_t cap, Buf *b);
 void emit_poly_iter_obj_reject_as(Compiler *c, int call, int tv, const char *name, const char *shown, Buf *b);
 void emit_poly_iter_recv_reject(Compiler *c, int call, const char *name, Buf *rb, Buf *out, int indent);
 void emit_method_signature(Compiler *c, Scope *s, Buf *b);

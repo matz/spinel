@@ -6280,9 +6280,9 @@ static const char *other_builtin_root(Compiler *c, int cls, int *root) {
    its accessors being the record's versions). MUST one (certain 1: the else
    arm and every reader that drops a method_missing or a NoMethodError
    because something answers): only a method CRuby has with no library or
-   with one the program requires, at both versions, cls's own reader too,
-   and no definition hook (a conditional hook def replaces the no-op the load
-   fires without). */
+   with one the program requires, at the version CRuby ships, cls's own
+   reader too, and no definition hook (a conditional hook def replaces the
+   no-op the load fires without). */
 int cplan_other_answers(Compiler *c, int cls, int sg, const char *name, int certain) {
   int root = cls, mod = cls >= 0 && comp_class_is_module(c, &c->classes[cls]);
   if (builtin_every_object_answers(name, sg) || is_object_receiver_handoff(name) || is_method_missing_name(name) ||

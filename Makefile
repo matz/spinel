@@ -5601,7 +5601,8 @@ arity-spec-check:
 # `make builtin-method-tables-check TABLES_RUBY=/path/to/ruby`. The regen
 # target rewrites the file. Both run with RUBYOPT cleared, as the oracle does,
 # and take each library at the version CRuby shipped and at the newest installed
-# (the tables are the union), so a machine with other gems can drift from the
+# (the tables are the union of the names; the library bits are the shipped
+# version's), so a machine with other gems can drift from the
 # checked-in file: the check is not part of the gate.
 TABLES_RUBY ?= ruby
 builtin-method-tables-check:

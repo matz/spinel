@@ -19,7 +19,7 @@
 #
 # Each name, ancestor and row also carries what must be loaded for it to
 # exist: bit 0 when CRuby has it with no library required, bit 1 + i when
-# library i (LIBRARIES order) alone supplies it at both versions. A reader
+# library i (LIBRARIES order) alone supplies it at the shipped version. A reader
 # that must be sure a builtin answers (it drops a method_missing or a
 # NoMethodError because of the answer) counts a name only when its bits
 # hold for the libraries the program requires; one that only asks whether
@@ -82,10 +82,13 @@ module BuiltinMethodTables
   def self.id(n) = n.gsub("::", "__")
 
   # What must be loaded for `present` (a block on a run's rows) to hold: bit 0
-  # with no library, bit 1 + i when library i alone has it at both versions.
+  # with no library, bit 1 + i when library i alone has it at the version CRuby
+  # ships: the oracle runs that one, and a library that moves a method between
+  # modules from one version to the next (json's to_json) must not lose its
+  # ancestors to the newer pinning. The newest run only adds names, at no bit.
   def self.flag(core, libruns, &present)
     f = present.(core) ? 1 : 0
-    libruns.each_with_index { |(sh, nw), i| f |= 2 << i if present.(sh) && present.(nw) }
+    libruns.each_with_index { |(sh, _), i| f |= 2 << i if present.(sh) }
     f
   end
 
@@ -113,7 +116,7 @@ module BuiltinMethodTables
     out << "   Each builtin class or module, the union of the two: its own instance method names\n"
     out << "   (public, private, protected), its own singleton method names and its ancestors,\n"
     out << "   sorted, with their lengths, and for each the libraries it needs: bit 0 none, bit 1 + i\n"
-    out << "   library i of BMT_LIBS alone at both versions (0: only a union of versions has it).\n"
+    out << "   library i of BMT_LIBS alone at the shipped version (0: only the newest installed has it, or only libraries loaded together).\n"
     out << "   builtin_method_answers (builtin_names.c) reads them. */\n"
     out << "static const char *const BMT_LIBS[] = { #{LIBRARIES.map { c(_1) }.join(', ')} };\n"
     names = rows.keys.sort

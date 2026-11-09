@@ -2045,7 +2045,7 @@ static const BuiltinMethodTable *bmt_find(const char *name) {
 /* The libraries the program requires, in the table's flag bits (bit 0:
    none needed), and whether a name's flags hold for them: a reader that
    must be sure a method exists (must) counts only what CRuby has with no
-   library or with a required one at both versions. */
+   library or with a required one at the version CRuby ships. */
 enum { BMT_PUBLIC = 1 << 14 };   /* public in every run that has the name */
 static unsigned bmt_loaded(void) {
   unsigned m = 1;

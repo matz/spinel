@@ -623,10 +623,10 @@ typedef struct { const char *name; int module; unsigned flags; const char *const
    ancestors', then Class's or Module's instance methods)? A builtin the tables
    do not hold (a builtin class row, a reopened builtin) answers 1, unknown, so
    it never raises; 0 for any other name. With certain, only a method CRuby
-   has with no library required, or with one the program requires, at both
-   its shipped and its newest version: a reader that drops a method_missing
-   or a NoMethodError because of the answer needs it sure, and an unknown
-   builtin is none. */
+   has with no library required, or with one the program requires, at the
+   version CRuby ships: a reader that drops a method_missing or a
+   NoMethodError because of the answer needs it sure, and an unknown builtin
+   is none. */
 int builtin_method_answers(const char *cls, const char *name, int sg, int certain);
 /* Does a builtin answer `name` on a self of the kind: main (Kernel's,
    Object's and main's own methods), a module (also Module's) or a class

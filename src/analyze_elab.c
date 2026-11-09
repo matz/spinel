@@ -6829,6 +6829,7 @@ static int lr_owner_last(Compiler *c, int key, int owner, const char *name, Load
    class's. A scoped read (`A::B`) leaves Object's out, as CRuby does. */
 static int lr_const_in(Compiler *c, int cls, const char *name, LoadPoint p, int late, int top, const LrDef **out, int depth, int key) {
   LoadRecord *r = c->lrec;
+  cls = lr_object_as_main(c, cls);   /* (a read in the reopened Object starts at main's list, as CRuby's one Object) */
   /* the superclass steps are a loop, as lr_search's; an unsure mixin on
      the way makes the answer unknown */
   int unsure = 0, o;
@@ -6842,19 +6843,38 @@ static int lr_const_in(Compiler *c, int cls, const char *name, LoadPoint p, int 
       }
       break;
     }
-    if ((o = lr_owner_last(c, key, lr_const_owner(cls), name, p, late, out)) != ELAB_NO) break;
-    if (cls >= 0 && builtin_mixin_module_id(c->classes[cls].name) &&
-        !is_constless_builtin_name(c->classes[cls].name)) { o = ELAB_UNKNOWN; break; }
-    const LrClass *k = lr_class(r, cls);
-    int found = 0;
-    for (int i = k ? k->nmix - 1 : -1; i >= 0; i--) {
-      LrMixin *m = &k->mix[i];
-      int b = elab_mix_on_singleton(m->kind) ? ELAB_NO : lr_mixed_before(c, m, p, late, elab_point_may(c, m->node));
-      if (b == ELAB_NO) continue;
-      int mo = lr_const_in(c, lr_mixin_class(c, m), name, p, late, top, out, depth + 1, key);
-      if (mo == ELAB_YES && b == ELAB_YES) { found = 1; break; }
-      if (mo != ELAB_NO) unsure = 1;
+    /* a class's ancestors in the method search's order (lr_search_one):
+       its prepends, the last first, its own constants, its includes, the
+       last first, none of them a module already among the ancestors where
+       it runs. main's mixins and the Object reopening's are one class's:
+       CRuby's Object, merged by where each ran */
+    int oc = cls == LR_MAIN ? comp_core_class(c, CORE_OBJECT) : -1, found = 0, own = 0;
+    LrClass *k = lr_class(r, cls), *ok = oc >= 0 ? lr_class(r, oc) : NULL;
+    for (int pass = 0; pass < 2 && !found && !own; pass++) {
+      if (pass == 1) {
+        if ((o = lr_owner_last(c, key, lr_const_owner(cls), name, p, late, out)) != ELAB_NO) { own = 1; break; }
+        if (cls >= 0 && builtin_mixin_module_id(c->classes[cls].name) &&
+            !is_constless_builtin_name(c->classes[cls].name)) { o = ELAB_UNKNOWN; own = 1; break; }
+      }
+      for (int i = k ? k->nmix - 1 : -1, j = ok ? ok->nmix - 1 : -1; i >= 0 || j >= 0; ) {
+        int po = i >= 0 && j >= 0 ? elab_cmp(elab_point_of(c, k->mix[i].node), elab_point_of(c, ok->mix[j].node)) : PROG_AFTER;
+        if (po == PROG_UNKNOWN) unsure = 1;   /* (which one leads is not known) */
+        int fk = i >= 0 && (j < 0 || po != PROG_BEFORE);
+        LrClass *lk = fk ? k : ok;
+        int ix = fk ? i-- : j--;
+        LrMixin *m = &lk->mix[ix];
+        if (m->kind != (pass == 0 ? LR_PREPEND : LR_INCLUDE)) continue;
+        int b = lr_mixed_before(c, m, p, late, elab_point_may(c, m->node));
+        if (b == ELAB_NO) continue;
+        int dup = lr_mixin_dup(c, fk ? cls : oc, 0, lk, ix);
+        if (dup == ELAB_YES) continue;
+        if (dup == ELAB_UNKNOWN) unsure = 1;
+        int mo = lr_const_in(c, lr_mixin_class(c, m), name, p, late, top, out, depth + 1, key);
+        if (mo == ELAB_YES && b == ELAB_YES) { found = 1; break; }
+        if (mo != ELAB_NO) unsure = 1;
+      }
     }
+    if (own) break;
     if (found) { o = ELAB_YES; break; }
     int sup = lr_super(c, cls);
     if (sup == LR_MAIN && !top) sup = LR_UNKNOWN_CLASS;

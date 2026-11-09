@@ -8178,14 +8178,25 @@ void elab_absent_aliases(Compiler *c) {
   lr_entries_changed(r);
 }
 
+/* The kind of a class side's last version, -1 for none, and whether any
+   version is an accessor (*attr). `c` set: only the versions the load
+   applies at their point (lr_applied 1), and no undef or removal. */
+static int lr_attr_last_kind(Compiler *c, const LrHist *h, int *attr) {
+  int last = -1;
+  *attr = 0;
+  for (int j = 0; h && j < h->n; j++) {
+    const LrDef *v = &h->v[j];
+    if (!lr_is_version(v)) continue;
+    if (c && (v->kind == LR_UNDEF || v->kind == LR_REMOVE || lr_applied(c, v) != 1)) continue;
+    *attr |= v->kind == LR_READER || v->kind == LR_WRITER;
+    last = v->kind;
+  }
+  return last;
+}
+
 /* Does a class side's history hold an accessor version and end in a def? */
 static int lr_attr_then_def(const LrHist *h) {
-  int attr = 0, last = -1;
-  for (int j = 0; j < h->n; j++)
-    if (lr_is_version(&h->v[j])) {
-      attr |= h->v[j].kind == LR_READER || h->v[j].kind == LR_WRITER;
-      last = h->v[j].kind;
-    }
+  int attr = 0, last = lr_attr_last_kind(NULL, h, &attr);
   return attr && last == LR_DEF;
 }
 
@@ -8222,6 +8233,14 @@ int elab_attr_replaced(Compiler *c, int cls, const char *name) {
   for (int j = 0; h && j < h->n; j++)
     if ((h->v[j].kind == LR_READER || h->v[j].kind == LR_WRITER) && h->v[j].scope) return 1;
   return 0;
+}
+
+/* See analyze.h. */
+int elab_inst_attr_replaced(Compiler *c, int cls, const char *name) {
+  LoadRecord *r = c->lrec;
+  const LrHist *h = r && r->recorded && cls >= 0 ? lr_hist(r, cls, 0, name, 0) : NULL;
+  int attr = 0, last = lr_attr_last_kind(c, h, &attr);
+  return attr && last != LR_READER && last != LR_WRITER;
 }
 
 /* The node of the last attr_* entry for name on cls's instance side, or of

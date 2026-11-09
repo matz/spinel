@@ -10632,12 +10632,16 @@ void inherit_members(Compiler *c) {
     for (int k = 0; k < pc->nreaders; k++) {
       int undeffed = 0;
       for (int j = 0; j < pc->nundefs && !undeffed; j++) undeffed = sp_streq(pc->undefs[j], pc->readers[k]);
+      /* a reader the parent's own later def (or alias) replaces is not the
+         parent's method any more: the def answers the child too */
+      if (!ci->is_struct && elab_inst_attr_replaced(c, p, pc->readers[k])) continue;
       if (!class_defines_member(c, i, pc->readers[k]) && (!undeffed || ci->is_struct))
         comp_add_reader(ci, pc->readers[k]);
     }
     for (int k = 0; k < pc->nwriters; k++) {
       char wn[300];
       snprintf(wn, sizeof wn, "%s=", pc->writers[k]);
+      if (!ci->is_struct && elab_inst_attr_replaced(c, p, wn)) continue;
       if (!class_defines_member(c, i, wn)) comp_add_writer(ci, pc->writers[k]);
     }
     }

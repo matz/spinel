@@ -811,6 +811,11 @@ ElabEntry *elab_replaced_attrs(Compiler *c, int *n);
 void elab_attr_scope(Compiler *c, const ElabEntry *e, int scope);
 /* does class cls's own side hold such an accessor version of name? */
 int elab_attr_replaced(Compiler *c, int cls, const char *name);
+/* Does a later method of class cls's own instance side replace its
+   attr_* accessor `name` (a writer's as `x=`) as the load phase ends: the
+   class's last version of the name the registration applies is a def, an
+   alias or another method, not the accessor? */
+int elab_inst_attr_replaced(Compiler *c, int cls, const char *name);
 /* The attr_* call that declares the accessor name (a writer's as `x=`)
    class cls's instances answer: its own, or a module's it includes or
    prepends, or a superclass's; -1 for none (a Struct's or a Data's member,

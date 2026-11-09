@@ -1643,6 +1643,9 @@ void emit_main_exit(Buf *b);
    rule that declared it (a cell-promoted one is `(*_cell_x)`). See codegen.c. */
 int emit_inlined_param_target(Compiler *c, Scope *m, const char *pname,
                               const char *rn, Buf *b);
+/* A Proc local held in a cell or a capture field: its raw int slot as the
+   target, opening the `(sp_int)(uintptr_t)(` re-encoding (codegen_stmt.c). */
+int emit_proc_cell_lvalue(Compiler *c, int scope_node, const char *nm, Buf *b);
 const char *cell_scan_fn(TyKind t);
 const char *cell_value_struct(TyKind t);
 const char *cell_value_struct_empty(TyKind t);

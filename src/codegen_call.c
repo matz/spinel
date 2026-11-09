@@ -23808,6 +23808,37 @@ static void emit_call_reboxed(Compiler *c, int id, int recv, Buf *b) {
   view_pop(c, vw);
   view_unbind(g_n_argov - 1);
 }
+/* Is node `id` under `root` (a method's def), with the self of the code
+   around it: 1 when it is, 0 when a block that runs with another self
+   (block_self_call names: instance_eval, class_exec, define_method, a class
+   builder's), or a class_eval body spliced in place, holds it, -1 when `root` does not hold it. Nested defs and
+   class bodies are not walked. */
+static int node_self_kept(Compiler *c, int root, int id, int depth) {
+  const NodeTable *nt = c->nt;
+  if (root < 0 || root >= nt->count || depth > 200) return -1;
+  if (root == id) return 1;
+  NodeKind k = nt_kind(nt, root);
+  if (depth > 0 && (k == NK_DefNode || k == NK_ClassNode || k == NK_ModuleNode || k == NK_SingletonClassNode)) return -1;
+  /* a class_eval body spliced in place (desugar_class_eval_value) */
+  if (k == NK_ParenthesesNode && nt_int(nt, root, "self_rebound", 0)) return node_self_kept(c, nt_ref(nt, root, "body"), id, depth + 1) >= 0 ? 0 : -1;
+  int own = -1;
+  if (k == NK_CallNode) {
+    int rv = nt_ref(nt, root, "receiver"), blk = nt_ref(nt, root, "block");
+    const char *rn = rv >= 0 && nt_kind(nt, rv) == NK_ConstantReadNode ? nt_str(nt, rv, "name") : NULL;
+    if (blk >= 0 && nt_kind(nt, blk) == NK_BlockNode && is_block_self_call(rn, nt_str(nt, root, "name"))) own = blk;
+  }
+  const SpNode *nd = &nt->nodes[root];
+  for (int i = 0; i < nd->nr; i++) {
+    int r = node_self_kept(c, nd->r[i].ref, id, depth + 1);
+    if (r >= 0) return nd->r[i].ref == own ? 0 : r;
+  }
+  for (int i = 0; i < nd->na; i++)
+    for (int j = 0; j < nd->a[i].n; j++) {
+      int r = node_self_kept(c, nd->a[i].ids[j], id, depth + 1);
+      if (r >= 0) return r;
+    }
+  return -1;
+}
 int emit_unresolved_call(Compiler *c, int id, Buf *b) {
   const NodeTable *nt = c->nt;
   const char *name = nt_str(nt, id, "name");
@@ -23873,6 +23904,27 @@ int emit_unresolved_call(Compiler *c, int id, Buf *b) {
       buf_puts(b, "(sp_raise_cls(\"NameError\", ");
       if (!st && anon_class_text(c, g_emitting_class_id, head, b)) buf_puts(b, ")");
       else buf_printf(b, "\"undefined local variable or method '%s' for %s\")", vnm ? vnm : "?", st ? st : "main");
+      emit_raise_placeholder(c, id, b);
+      return 1;
+    }
+  }
+  /* `name(2)`, `to_s(1)` or `inspect(1, 2)` in a class method whose class
+     has no class method of the name: self is the class, and Module's reader
+     takes no argument, so CRuby raises the arity ArgumentError once the
+     arguments have run (not the NoMethodError an instance would get). Not
+     inside a block that runs with another self (instance_eval, class_exec,
+     define_method, a class builder's): there self is not the class. */
+  if (recv < 0 && is_name_reader(name) && nt_ref(nt, id, "block") < 0 &&
+      class_name_reader_argc_raises(c, name, argc, argv)) {
+    Scope *ms = comp_scope_of(c, id);
+    if (ms && ms->is_cmethod && ms->class_id >= 0 && ms->def_node >= 0 &&
+        call_target(c, id, ms->class_id, name, CT_CMETHOD, NULL) < 0 &&
+        node_self_kept(c, ms->def_node, id, 0) == 1) {
+      char am[96];
+      class_name_reader_arity_msg(c, name, argc, argv, am, sizeof am);
+      buf_puts(b, "(");
+      for (int k = 0; k < argc; k++) { buf_puts(b, "(void)("); emit_expr_for_effect(c, argv[k], b); buf_puts(b, "), "); }
+      buf_printf(b, "sp_raise_cls(\"ArgumentError\", \"%s\")", am);
       emit_raise_placeholder(c, id, b);
       return 1;
     }
@@ -24372,7 +24424,13 @@ int emit_unresolved_call(Compiler *c, int id, Buf *b) {
             g_cls_tag_skip = sv2;
             view_unbind(g_n_argov - 1);
           }
-          buf_printf(b, "%s) : %s; })", raise,
+          /* a Class value without a method of the name: Module#name, to_s
+             and inspect take no argument, so CRuby raises ArgumentError */
+          char cls_raise[256], am[96];
+          if (is_name_reader(nm) && class_name_reader_arity_msg(c, nm, argc, argv, am, sizeof am))
+            snprintf(cls_raise, sizeof cls_raise, "(sp_raise_cls(\"ArgumentError\", \"%s\"), sp_box_nil())", am);
+          else snprintf(cls_raise, sizeof cls_raise, "%s", raise);
+          buf_printf(b, "%s) : %s; })", cls_raise,
                      (eb2.p && eb2.p[0]) ? eb2.p : raise);
           if (setter_val) { buf_puts(b, "; "); emit_boxed(c, argv[0], b); buf_puts(b, "; })"); }
           if (g_plan_check) pa_end(c, pa_frame, cplan_poly_cmeth(c, id));

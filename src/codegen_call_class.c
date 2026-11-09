@@ -3603,6 +3603,26 @@ static void cls_value_unlisted_default(const char *name, int tc, Buf *b) {
    constant, or on self in a class method (minitest's
    `public_instance_methods(true).grep(/^test_/)`), where an inherited method
    runs on whichever class received the call. */
+/* `K.name(1)`, `K.to_s(x)`, `K.inspect(a, b)` on a class without its own
+   method of the name: Module#name, to_s and inspect take no argument, and
+   CRuby raises the arity ArgumentError. The message for these arguments,
+   in `am`; 0 when only the run time knows the count (a splat, a `**h`). */
+int class_name_reader_arity_msg(Compiler *c, const char *nm, int argc, const int *argv, char *am, size_t n) {
+  if (!class_name_reader_argc_raises(c, nm, argc, argv)) return 0;
+  arity_message(am, n, argc, 0, 0, NULL);
+  return 1;
+}
+/* ...the raise itself, after the receiver and the arguments are read */
+static int emit_class_name_reader_arity(Compiler *c, const char *nm, int recv, int argc, const int *argv, Buf *b) {
+  char am[96];
+  if (!class_name_reader_arity_msg(c, nm, argc, argv, am, sizeof am)) return 0;
+  buf_puts(b, "({ (void)("); emit_expr_for_effect(c, recv, b); buf_puts(b, "); ");
+  for (int i = 0; i < argc; i++) {
+    buf_puts(b, "(void)("); emit_expr_for_effect(c, argv[i], b); buf_puts(b, "); ");
+  }
+  buf_printf(b, "sp_raise_cls(\"ArgumentError\", \"%s\"); (const char *)NULL; })", am);
+  return 1;
+}
 static int emit_class_instance_methods_all(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc, const int *argv) {
   int prot = sp_streq(name, "instance_methods");
   if (!prot && !sp_streq(name, "public_instance_methods")) return 0;
@@ -4413,7 +4433,8 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
        without one, emit_poly_cls_value_builtin, which faces it a Class) */
     int fnode = -1; TyKind fkind = TY_UNKNOWN;
     int cls_face = view_face_top(&fnode, &fkind) && fnode == recv && fkind == TY_CLASS;
-    if (!cls_shadowed && !cls_face && argc == 0 && is_name_reader(name)) {
+    if (!cls_shadowed && !cls_face && is_name_reader(name) &&
+        (argc == 0 || class_name_reader_argc_raises(c, name, argc, argv))) {
       int ncc = 0;
       if (class_recv_user_cmethod(c, id, recv, name) >= 0) cls_shadowed = 1;
       else if (class_recv_static_ci(c, recv) < 0 && class_recv_is_dynamic(c, recv)) {
@@ -4426,6 +4447,10 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
       /* An anonymous Struct/Data class has no name: CRuby answers nil for
          #name (and an `#<Class:0x...>`-shaped #to_s). The synthetic
          StructAnon_<n> the compiler keys it by is not a Ruby-visible name. */
+      /* Module#name / to_s / inspect take no argument: CRuby raises the
+         arity ArgumentError after it reads the receiver and the arguments
+         (an anonymous Struct class too) */
+      if (argc > 0 && emit_class_name_reader_arity(c, name, recv, argc, argv, b)) return 1;
       if (sp_streq(name, "name")) {
         /* the anon class is registered keyed to the node that produced it
            (analyze_scope), so the receiver node identifies it */
@@ -5133,7 +5158,9 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
              switch left the result slot at its default -- a junk value the
              caller could not tell from a real answer. */
           if (sg9) emit_cls_value_sg_arms(c, id, name, argc, argv, tr9, b);
-          /* Module#name / to_s / inspect for a class without its own */
+          /* Module#name / to_s / inspect for a class without its own, which
+             takes no argument */
+          char nb9am[96];
           if (!rdef9 && argc == 0 && is_name_reader(name)) {
             char nb[128];
             if (is_class_name_name(name)) snprintf(nb, sizeof nb, "sp_str_frozen_name(sp_class_name_or_nil(_t%d))", tk9);
@@ -5143,6 +5170,9 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
             if (slot9 == TY_POLY) buf_printf(b, "_t%d = sp_box_nullable_str(%s); break;", tr9, nb);
             else buf_printf(b, "_t%d = %s; break;", tr9, nb);
           }
+          else if (!rdef9 && is_name_reader(name) &&
+                   class_name_reader_arity_msg(c, name, argc, argv, nb9am, sizeof nb9am))
+            buf_printf(b, " default: sp_raise_cls(\"ArgumentError\", \"%s\"); break;", nb9am);
           else if (!rdef9) buf_printf(b, " default: %s; break;", rraise9);
           buf_printf(b, " } _t%d; })", tr9);
           unhoist_dispatch_args(c, hn9, hsv9, hty9);

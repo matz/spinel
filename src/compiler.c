@@ -521,9 +521,6 @@ void comp_free(Compiler *c) {
   free(c->bsl_gen);
   free(c->bsl_val);
   if (g_repr_check) repr_channel_free(c);
-  free(c->byref_elig);
-  c->byref_elig = NULL;
-  c->nbyref_elig = 0;
   pivs_facts_free(c);
   strbuf_arg_index_free(c);
   free(c->vs_head); free(c->vs_site); free(c->vs_var); free(c->vs_next); free(c->vs_kind);
@@ -5213,7 +5210,6 @@ LocalVar *scope_local_intern(Scope *s, const char *name) {
   { lv->is_cell = 0; comp_touch_scope(lv->owner); }
   lv->cell_shadow = 0;
   lv->cell_outlives = 0;
-  { lv->byref_out = 0; comp_touch_scope(lv->owner); }
   lv->inline_alias = 0;
   lv->init_guarded = 0;
   lv->rbs_seeded = 0;

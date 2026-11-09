@@ -10280,21 +10280,15 @@ void emit_poly_arm_args(Compiler *c, Scope *m, Scope *ms, const ArgLayout *L,
       LocalVar *pv = scope_local(ms, pnm);
       TyKind pt = pv ? pv->type : TY_POLY;
       if (pt == TY_UNKNOWN) pt = TY_POLY;
-      if (pv && pv->byref_out) {
-        buf_printf(pre, "%s *_cell__pd%d_%d = %s; ", borrowed_string_type(pv), pd_uid, a, pa.p ? pa.p : "NULL");
-        buf_printf(cb, "_cell__pd%d_%d", pd_uid, a);
-      }
-      else {
-        /* the parameter's own slot type (an oint slot included) */
-        if (pv && pv->type != TY_UNKNOWN) emit_slot_ctype(c, pv, pre); else emit_ctype(c, pt, pre);
-        buf_printf(pre, " lv__pd%d_%d = %s; ", pd_uid, a, pa.p ? pa.p : default_value_from_compiler(c, pt));
-        if (needs_root(pt))
-          buf_printf(pre, pt == TY_POLY ? "SP_GC_ROOT_RBVAL(lv__pd%d_%d); " : "SP_GC_ROOT(lv__pd%d_%d); ", pd_uid, a);
-        buf_printf(cb, "lv__pd%d_%d", pd_uid, a);
-        /* a captured parameter is read by a later default through its cell */
-        char pdn[48]; snprintf(pdn, sizeof pdn, "_pd%d_%d", pd_uid, a);
-        emit_pd_cell_alias_into(c, pv, pdn, pre, 0);
-      }
+      /* the parameter's own slot type (an oint slot included) */
+      if (pv && pv->type != TY_UNKNOWN) emit_slot_ctype(c, pv, pre); else emit_ctype(c, pt, pre);
+      buf_printf(pre, " lv__pd%d_%d = %s; ", pd_uid, a, pa.p ? pa.p : default_value_from_compiler(c, pt));
+      if (needs_root(pt))
+        buf_printf(pre, pt == TY_POLY ? "SP_GC_ROOT_RBVAL(lv__pd%d_%d); " : "SP_GC_ROOT(lv__pd%d_%d); ", pd_uid, a);
+      buf_printf(cb, "lv__pd%d_%d", pd_uid, a);
+      /* a captured parameter is read by a later default through its cell */
+      char pdn[48]; snprintf(pdn, sizeof pdn, "_pd%d_%d", pd_uid, a);
+      emit_pd_cell_alias_into(c, pv, pdn, pre, 0);
       /* registered AFTER the binding so only a LATER default reads it */
       ren_push(pnm, "_pd%d_%d", pd_uid, a);
     }
@@ -12284,7 +12278,7 @@ void ctor_arm_arg(Compiler *c, Scope *is, int j, const char *val, int pd_uid,
                          Buf *pdpre, Buf *args) {
   const char *pn = is && is->pnames ? is->pnames[j] : NULL;
   LocalVar *pv = pn ? scope_local(is, pn) : NULL;
-  if (!pd_uid || !pn || (pv && pv->byref_out) || g_nren >= MAX_RENAME) {
+  if (!pd_uid || !pn || g_nren >= MAX_RENAME) {
     buf_puts(args, val);
     return;
   }
@@ -28315,7 +28309,7 @@ static void refuse_string_copy_named(Compiler *c, int arg, const char *mname, co
 static int refuse_param_copies(Compiler *c, int mi, int j, int arg) {
   Scope *m = &c->scopes[mi];
   LocalVar *q = j < m->nparams && m->pnames[j] ? scope_local(m, m->pnames[j]) : NULL;
-  if (!q || q->byref_out) return 0;
+  if (!q) return 0;
   if (repr_of_slot(c, q).handle) return 0;
   if (q->type == TY_POLY) {
     int shared;
@@ -28797,16 +28791,15 @@ static int block_param_is_handle(Compiler *c, int blk, int k, int n) {
   LocalVar *t = bs ? scope_local(bs, bp) : NULL;
   return repr_of_slot(c, t).handle;
 }
-/* Is `a` a String variable a splice can alias: a local or a parameter, or
-   one lent to this method (a cell that is the caller's slot), not a
-   block's parameter or a variable a proc captures? */
+/* Is `a` a String variable a splice can alias: a local or a parameter, not
+   a block's parameter or a variable a proc captures? */
 static int ie_arg_aliases(Compiler *c, int a) {
   const NodeTable *nt = c->nt;
   if (nt_kind(nt, a) != NK_LocalVariableReadNode || comp_ntype(c, a) != TY_STRING) return 0;
   const char *vn = nt_str(nt, a, "name");
   Scope *vs = vn ? comp_scope_of(c, a) : NULL;
   LocalVar *lv = vs ? scope_local(vs, vn) : NULL;
-  return lv && lv->type == TY_STRING && !lv->is_block_param && (!lv->is_cell || lv->byref_out);
+  return lv && lv->type == TY_STRING && !lv->is_block_param && !lv->is_cell;
 }
 
 /* A method that yields its parameter to a block that appends to it, where
@@ -28914,7 +28907,7 @@ static void splat_appended_param(Compiler *c, int id, const char *name, int recv
     Scope *m = mi >= 0 ? &c->scopes[mi] : NULL;
     for (int j = p < 0 ? 0 : p; m && j < m->nparams && j < 16 && !pname; j++) {
       LocalVar *q = m->pnames[j] ? scope_local(m, m->pnames[j]) : NULL;
-      if (q && (q->byref_out || repr_of_slot(c, q).handle || dyn_method_appends(c, mi, j))) {
+      if (q && (repr_of_slot(c, q).handle || dyn_method_appends(c, mi, j))) {
         pname = m->pnames[j]; mname = m->name;
       }
     }
@@ -29306,7 +29299,7 @@ static void refuse_unplaced_lead(Compiler *c, int id, const char *name, int recv
       LocalVar *q = scope_local(m, m->pnames[j]);
       if (!q) continue;
       int handle = repr_of_slot(c, q).handle;
-      if (!(q->byref_out || handle || dyn_method_appends(c, mi, j) ||
+      if (!(handle || dyn_method_appends(c, mi, j) ||
             (q->type == TY_POLY && (q->poly_lift & POLY_LIFT_APPENDED)))) continue;
       if (shared && (handle || q->type == TY_POLY)) continue;
       char why[160], mt[96];
@@ -29373,7 +29366,7 @@ static void refuse_nonlocal_param_args(Compiler *c, int id, const char *name) {
     if (!refuse_call_binds(c, refuse_scope_params(c, m), id, 0, 0)) continue;
     for (int j = 0; j < m->nparams && j < 16; j++) {
       LocalVar *q = m->pnames[j] ? scope_local(m, m->pnames[j]) : NULL;
-      if (!q || q->byref_out) continue;
+      if (!q) continue;
       if (!repr_of_slot(c, q).handle && q->type != TY_POLY) continue;
       int kj = -1;
       if (!dyn_method_appends(c, tg[t], j) && !(q->type == TY_POLY && (q->poly_lift & POLY_LIFT_APPENDED)) &&
@@ -31124,7 +31117,7 @@ static void emit_callee_local_decls(Compiler *c, Scope *tm, Buf *b) {
   for (int li = 0; li < tm->nlocals; li++) {
     LocalVar *blv = &tm->locals[li];
     if (!blv->name) continue;
-    if (blv->is_param || blv->byref_out) continue;
+    if (blv->is_param) continue;
     if (tm->blk_param && sp_streq(blv->name, tm->blk_param)) continue;
     /* The method prologue normalizes an untyped block param to a boxed slot;
        this frame may be emitted before that prologue runs, and declare_local
@@ -31255,7 +31248,7 @@ int declare_default_locals(Compiler *c, Scope *m, int dnode) {
   int uid = 0;
   for (int i = 0; i < nn; i++) {
     LocalVar *lv = scope_local(m, names[i]);
-    if (!lv || lv->is_param || lv->byref_out) continue;
+    if (!lv || lv->is_param) continue;
     if (m->blk_param && sp_streq(lv->name, m->blk_param)) continue;
     if (!sp_streq(rename_local(lv->name), lv->name)) continue;
     if (nread < 0) {
@@ -32758,8 +32751,7 @@ void emit_bound_method_call(Compiler *c, int id, int recv, int target, Buf *b) {
   for (int k = 0; k < tm->nparams; k++) {
     if (np++) buf_puts(&cast, ", ");
     LocalVar *pp = tm->pnames[k] ? scope_local(tm, tm->pnames[k]) : NULL;
-    if (pp && pp->byref_out) buf_printf(&cast, "%s *", borrowed_string_type(pp));
-    else if (pp) emit_slot_ctype(c, pp, &cast);   /* a param holding its nil is an oint */
+    if (pp) emit_slot_ctype(c, pp, &cast);   /* a param holding its nil is an oint */
     else emit_ctype(c, TY_POLY, &cast);
   }
   if (tm->blk_param && tm->blk_param[0] && !tm->yields) buf_puts(&cast, np++ ? ", sp_Proc *" : "sp_Proc *");
@@ -34614,7 +34606,7 @@ static int emit_reopen_call_first(Compiler *c, int id, int recv, TyKind rt, cons
   int still = !(rpre.p && rpre.p[0]) && !(pre.p && pre.p[0]) && argc == m->nparams;
   for (int i = 0; still && i < argc; i++) {
     LocalVar *p = scope_local(m, m->pnames[i]);
-    still = p && !p->byref_out && p->type == comp_ntype(c, argv[i]) && subtree_is_pure_read(c, argv[i]);
+    still = p && p->type == comp_ntype(c, argv[i]) && subtree_is_pure_read(c, argv[i]);
   }
   if (rt == TY_STRING && (reread || still)) buf_printf(b, "const char *_t%d = %s; ", t, rx.p ? rx.p : "NULL");
   else if (rt == TY_STRING) buf_printf(b, "const char *_t%d = %s; SP_GC_ROOT_STR(_t%d); ", t, rx.p ? rx.p : "NULL", t);

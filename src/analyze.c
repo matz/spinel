@@ -21829,14 +21829,8 @@ static int an_param_idx(Scope *s, const char *vn) {
   return -1;
 }
 
-int comp_byref_param(Compiler *c, Scope *m, int idx) {
-  if (!m || idx < 0 || idx >= m->nparams || !m->pnames[idx]) return 0;
-  LocalVar *p = scope_local(m, m->pnames[idx]);
-  return p && p->byref_out;
-}
 /* Is local `vn` of scope `vs` handed by a call in that scope to a method
-   parameter the method appends to in place (the byref slot, or the
-   handle, it is lent)? The callee's append is one to `vn`'s String, so
+   parameter the method appends to in place (the handle it is lent)? The callee's append is one to `vn`'s String, so
    `vn` is mutated in place there as by `<<`. Asked by the parameter's
    mutation, not its ABI, which is settled after the fixpoint. */
 static int an_any_scope_by_name(Compiler *c, const char *nm);
@@ -21869,7 +21863,7 @@ static int an_local_lent(Compiler *c, const char *vn, Scope *vs) {
     if (mi < 0 && !an_call_recv_builtin(c, u)) mi = an_any_scope_by_name(c, nt_str(nt, u, "name"));
     if (mi < 0) continue;
     for (int j = 0; j < c->scopes[mi].nparams; j++) {
-      if (!comp_byref_param(c, &c->scopes[mi], j) && !an_param_mutated_in_place(c, mi, j)) continue;
+      if (!an_param_mutated_in_place(c, mi, j)) continue;
       int a = arg_layout_param_node(c, &c->scopes[mi], u, j, NULL);
       if (a >= 0 && nt_kind(nt, a) == NK_LocalVariableReadNode && sp_streq(nt_str(nt, a, "name"), vn)) return 1;
     }
@@ -22004,11 +21998,10 @@ static int an_subtree_lends_local_x(Compiler *c, int node, const char *vn, int d
       Scope *m = mi >= 0 ? &c->scopes[mi] : NULL;
       for (int j = 0; m && j < m->nparams; j++) {
         int spliced = blk >= 0 && m->yields && !m->is_lowered_yield && j < 32 && an_lend_nest < 4;
-        if (!comp_byref_param(c, m, j) && !spliced) continue;
+        if (!spliced) continue;
         int an = arg_layout_param_node(c, m, node, j, NULL);
         if (an < 0 || nt_kind(nt, an) != NK_LocalVariableReadNode || !nt_str(nt, an, "name") ||
             !sp_streq(nt_str(nt, an, "name"), vn)) continue;
-        if (comp_byref_param(c, m, j)) return 1;
         an_lend_nest++;
         int lent = an_inline_param_lent(c, mi, j, blk);
         an_lend_nest--;
@@ -23942,7 +23935,7 @@ static int strbuf_demand_store_leaf(Compiler *c, int sn, int depth) {
     if (snv->is_param && !snv->is_cell &&
         an_param_idx(sns, snm) >= 0 &&
         (snv->type == TY_STRING || snv->type == TY_STRBUF)) {
-      lv_set_type(snv, TY_STRBUF); { snv->str_shared = 1; comp_touch_scope(snv->owner); } { snv->byref_out = 0; comp_touch_scope(snv->owner); }
+      lv_set_type(snv, TY_STRBUF); { snv->str_shared = 1; comp_touch_scope(snv->owner); }
       comp_set_strbuf_box(c, sn, 1);
       return 1;
     }
@@ -25146,8 +25139,8 @@ int cext_demand_container_strings(Compiler *c, int value) {
   return strbuf_container_source_walk(c, value, 0, SB_DEMAND);
 }
 
-/* Slot-shape eligibility for the shared handle: parameters, cells, byref
-   out-params and rbs-pinned slots wait for the cross-method phase. */
+/* Slot-shape eligibility for the shared handle: parameters, cells and
+   rbs-pinned slots wait for the cross-method phase. */
 static int strbuf_slot_eligible_shape(Compiler *c, const char *vn, Scope *vs, LocalVar *lv);
 static int strbuf_slot_eligible(Compiler *c, const char *vn, Scope *vs, LocalVar *lv) {
   if (!lv) return 0;
@@ -25170,11 +25163,10 @@ static int strbuf_slot_eligible_shape(Compiler *c, const char *vn, Scope *vs, Lo
      the local IS; a shared name is only what was done to it. Checked
      syntactically because it has to hold in the fixpoint's first round, before
      any type has settled -- the promotion is sticky once made. */
-  /* both walks below ran over the WHOLE node table once per candidate local
+  /* the walk below ran over the WHOLE node table once per candidate local
      (and this shape check runs per fixpoint round): the (scope, name) write
-     chain and the per-scope call chain make each walk the handful of nodes
-     the scope actually holds. The chains carry hash collisions and every
-     filter stays. */
+     chain makes it the handful of nodes the scope actually holds. The chain
+     carries hash collisions and every filter stays. */
   int vsi = (int)(vs - c->scopes);
   for (int w = comp_lvw_first_sc(c, vsi, vn); w >= 0; w = comp_lvw_next_sc(c, w)) {
     if (nt_kind(nt, w) != NK_LocalVariableWriteNode) continue;
@@ -25185,23 +25177,6 @@ static int strbuf_slot_eligible_shape(Compiler *c, const char *vn, Scope *vs, Lo
     if (wv < 0) continue;
     NodeKind vk = nt_kind(nt, wv);
     if (vk == NK_HashNode || vk == NK_KeywordHashNode || vk == NK_ArrayNode) return 0;
-  }
-  for (int u = comp_scall_first(c, vsi); u >= 0; u = comp_scall_next(c, u)) {
-    NodeKind uk = nt_kind(nt, u);
-    if (uk != NK_CallNode) continue;
-    if (comp_scope_of(c, u) != vs) continue;
-    /* the group's answer, not the unique one: see an_any_scope_by_name --
-       but not a builtin value's call, which none of them takes */
-    if (an_call_recv_builtin(c, u)) continue;
-    int mi = an_any_scope_by_name(c, nt_str(nt, u, "name"));
-    if (mi < 0) continue;
-    for (int j = 0; j < c->scopes[mi].nparams; j++) {
-      if (!comp_byref_param(c, &c->scopes[mi], j)) continue;
-      int a2 = arg_layout_param_node(c, &c->scopes[mi], u, j, NULL);
-      const char *an2 = a2 >= 0 && nt_kind(nt, a2) == NK_LocalVariableReadNode
-                          ? nt_str(nt, a2, "name") : NULL;
-      if (an2 && sp_streq(an2, vn)) return 0;
-    }
   }
   return 1;
 }
@@ -26305,13 +26280,12 @@ static int share_default_apply(Compiler *c) {
         continue;
       }
       if (lv->type != TY_STRING && lv->type != TY_STRBUF) continue;
-      if (repr_of_slot(c, lv).share && !lv->byref_out) continue;
+      if (repr_of_slot(c, lv).share) continue;
       if (lv->is_param && !lv->is_block_param) {
         /* an --rbs seed declares the Ruby type, String, and not its C form:
            a seeded parameter takes the handle as an inferred one does
            (reassert_rbs_param_seeds keeps it) */
         if (lv->rbs_seeded && lv->rbs_type != TY_STRING) continue;
-        if (lv->byref_out) { { lv->byref_out = 0; comp_touch_scope(lv->owner); } { lv->is_cell = 0; comp_touch_scope(lv->owner); } }
         lv_set_type(lv, TY_STRBUF); { lv->str_shared = 1; comp_touch_scope(lv->owner); }
         changed = 1;
       }
@@ -26577,8 +26551,7 @@ static int promote_local_alias_pair(Compiler *c, Scope *ws, const char *srcn, co
   int hs = srcv->type == TY_STRBUF && srcv->str_shared;
   int ht = tgtv->type == TY_STRBUF && tgtv->str_shared;
   if (ms != 1 && mt != 1 && !hs && !ht) return 0;   /* alias set never mutated */
-  if (src_param && (srcv->type != TY_STRBUF || !srcv->str_shared || srcv->byref_out)) {
-    if (srcv->byref_out) { { srcv->byref_out = 0; comp_touch_scope(srcv->owner); } { srcv->is_cell = 0; comp_touch_scope(srcv->owner); } }
+  if (src_param && (srcv->type != TY_STRBUF || !srcv->str_shared)) {
     lv_set_type(srcv, TY_STRBUF); { srcv->str_shared = 1; comp_touch_scope(srcv->owner); }
     changed = 1;
   }
@@ -28617,40 +28590,16 @@ void propagate_borrowed_volatile(Compiler *c) {
         if (!p || p->type != TY_STRING) continue;
         for (int e = sites.head[mi]; e >= 0; e = sites.enext[e]) {
           int u = sites.enode[e], blk = nt_ref(nt, u, "block");
-          if (!p->byref_out && !(m->yields && an_inline_param_lent(c, mi, j, blk))) continue;
+          if (!(m->yields && an_inline_param_lent(c, mi, j, blk))) continue;
           changed |= lend_volatile_slot(c, arg_layout_param_node(c, m, u, j, NULL), p);
         }
-        /* Byref signatures agree per name group, including override arms. */
-        if (p->byref_out && p->borrowed_volatile)
-          for (int k = an_any_scope_by_name(c, m->name); k >= 0; k = an_same_name_next(c, k)) {
-            Scope *other = &c->scopes[k];
-            LocalVar *q = j < other->nparams && other->pnames[j] ? scope_local(other, other->pnames[j]) : NULL;
-            if (q && q->byref_out && !q->borrowed_volatile) { q->borrowed_volatile = 1; changed = 1; }
-          }
       }
     }
     for (int u = 0; u < nt->count; u++) {
       NodeKind kind = nt_kind(nt, u);
       Scope *s = comp_scope_of(c, u);
       if (!s) continue;
-      if (kind == NK_SuperNode || kind == NK_ForwardingSuperNode) {
-        /* a super in no class, a top-level def's or one a rewrite left
-           outside the tree, has no target */
-        int mi = s->class_id >= 0 ? a_super_target(c, s) : -1;
-        if (mi < 0) continue;
-        Scope *m = &c->scopes[mi];
-        for (int j = 0; j < m->nparams; j++) {
-          LocalVar *p = m->pnames[j] ? scope_local(m, m->pnames[j]) : NULL;
-          if (!p || !p->byref_out) continue;
-          if (kind == NK_SuperNode) changed |= lend_volatile_slot(c, arg_layout_param_node(c, m, u, j, NULL), p);
-          else {
-            int k = zsuper_param_source(c, s, m, j);
-            LocalVar *src = k >= 0 ? scope_local(s, s->pnames[k]) : NULL;
-            if (src && src->borrowed_volatile && !p->borrowed_volatile) { p->borrowed_volatile = 1; changed = 1; }
-          }
-        }
-        continue;
-      }
+      if (kind == NK_SuperNode || kind == NK_ForwardingSuperNode) continue;
       int exec = kind == NK_CallNode && nt_str(nt, u, "name") && sp_streq(nt_str(nt, u, "name"), "instance_exec");
       if (kind != NK_YieldNode && !exec && !(kind == NK_CallNode && an_yield_like(c, u, s))) continue;
       int aa = nt_ref(nt, u, "arguments"), ac = 0;
@@ -28762,7 +28711,7 @@ static int promote_params_stored_in_shared_ivars(Compiler *c,
       int iv2 = comp_ivar_index(ci2, ivname);
       if (iv2 < 0 || !ci2->ivar_str_shared[iv2]) continue; }
     if (pp->type != TY_POLY && (pp->type != TY_STRBUF || !pp->str_shared))
-      {  lv_set_type(pp, TY_STRBUF); { pp->str_shared = 1; comp_touch_scope(pp->owner); } { pp->byref_out = 0; comp_touch_scope(pp->owner); } changed = 1;  }
+      {  lv_set_type(pp, TY_STRBUF); { pp->str_shared = 1; comp_touch_scope(pp->owner); } changed = 1;  }
   }
   return changed;
 }
@@ -29511,7 +29460,7 @@ static int an_ruby_runs_unseen(Compiler *c) {
    far as its own slot goes? */
 static int param_borrow_slot_ok(const LocalVar *p) {
   return p->is_param && !p->is_block_param && !p->is_cell && !p->cell_outlives &&
-         !p->byref_out && !p->str_shared && !p->rbs_seeded && p->type == TY_STRING;
+         !p->str_shared && !p->rbs_seeded && p->type == TY_STRING;
 }
 
 /* The parameter of target method m that argument a of call n binds, or NULL
@@ -30349,56 +30298,17 @@ static int lift_poly_alias_reads(Compiler *c, const HandleArgTab *hat) {
 int spread_string_reads(Compiler *c, Scope *m, int call, int pj, int *out, int *direct, int cap);
 static int dyn_pull_arg(Compiler *c, int a, int mark_read);
 static int fwd_poly_param_handed_on(Compiler *c, int mi, int pj, int depth);
-/* Local `vn` of scope `vs` lent to byref slots by calls in that scope: each
-   such parameter, with every method of its name, takes the shared handle
-   instead (a slot cannot carry it). Answers 1 when it changed any. */
-static int an_unlend_local(Compiler *c, const char *vn, Scope *vs) {
-  const NodeTable *nt = c->nt;
-  int changed = 0;
-  if (!vn || !vs) return 0;
-  int vsi = (int)(vs - c->scopes);
-  for (int u = comp_scall_first(c, vsi); u >= 0; u = comp_scall_next(c, u)) {
-    if (nt_kind(nt, u) != NK_CallNode || comp_scope_of(c, u) != vs) continue;
-    if (an_call_recv_builtin(c, u)) continue;   /* lends to no method of the program's */
-    int mi = an_any_scope_by_name(c, nt_str(nt, u, "name"));
-    if (mi < 0) continue;
-    for (int j = 0; j < c->scopes[mi].nparams; j++) {
-      if (!comp_byref_param(c, &c->scopes[mi], j)) continue;
-      int a2 = arg_layout_param_node(c, &c->scopes[mi], u, j, NULL);
-      const char *an2 = a2 >= 0 && nt_kind(nt, a2) == NK_LocalVariableReadNode ? nt_str(nt, a2, "name") : NULL;
-      if (!an2 || !sp_streq(an2, vn)) continue;
-      const char *gname = c->scopes[mi].name;
-      for (int m = 1; m < c->nscopes; m++) {
-        Scope *mk = &c->scopes[m];
-        if (!mk->name || !sp_streq(mk->name, gname) || j >= mk->nparams) continue;
-        LocalVar *q = mk->pnames[j] ? scope_local(mk, mk->pnames[j]) : NULL;
-        if (!q || !q->byref_out) continue;
-        { q->byref_out = 0; comp_touch_scope(q->owner); } { q->is_cell = 0; comp_touch_scope(q->owner); } lv_set_type(q, TY_STRBUF); { q->str_shared = 1; comp_touch_scope(q->owner); } changed = 1;
-      }
-    }
-  }
-  return changed;
-}
 /* Plain local `vn` of scope `vs` handed to a parameter that is the shared
    handle: the local takes the handle too, so the callee's appends are its
    String's. Answers 1 when it changed anything. */
 static int pull_local_into_handle(Compiler *c, LocalVar *alv, const char *vn, Scope *vs) {
-  int changed = 0;
   /* already the handle: nothing below changes, and the shape check
      walks the scope's calls, once per call site and per round */
   if (!alv || (alv->type == TY_STRBUF && alv->str_shared)) return 0;
-  /* Also lent to a byref slot (`app(s)` beside this call): a slot
-     cannot carry the handle, so that parameter takes the handle
-     instead, with its whole name group (an_unlend_local), as at a
-     dynamic call (dyn_pull_arg). Left lent, the local stayed a plain
-     String, which this call took a copy of. */
-  if (!strbuf_slot_eligible_shape(c, vn, vs, alv) && an_unlend_local(c, vn, vs)) changed = 1;
-  if (!strbuf_slot_eligible_shape(c, vn, vs, alv)) return changed;
-  if (alv->type != TY_UNKNOWN && alv->type != TY_STRING &&
-      alv->type != TY_STRBUF && alv->type != TY_POLY) return changed;
-  if (alv->type != TY_POLY && (alv->type != TY_STRBUF || !alv->str_shared))
-    {  lv_set_type(alv, TY_STRBUF); { alv->str_shared = 1; comp_touch_scope(alv->owner); } changed = 1;  }
-  return changed;
+  if (!strbuf_slot_eligible_shape(c, vn, vs, alv)) return 0;
+  if (alv->type != TY_UNKNOWN && alv->type != TY_STRING && alv->type != TY_STRBUF) return 0;
+  lv_set_type(alv, TY_STRBUF); { alv->str_shared = 1; comp_touch_scope(alv->owner); }
+  return 1;
 }
 static int convert_byref_handle_params(Compiler *c,
                                        const HandleArgTab *hat) {
@@ -30444,10 +30354,10 @@ static int convert_byref_handle_params(Compiler *c,
       /* --share-strings: a by-value String parameter the callee mutates (a
          name group that could not lend its slot) is a copy, which a handle
          argument must not be handed: it converts as a lent one does */
-      if (!strbuf_mut && pp->is_param && !pp->is_block_param && !pp->byref_out &&
+      if (!strbuf_mut && pp->is_param && !pp->is_block_param &&
           pp->type == TY_STRING && an_param_mutated_in_place(c, mi2, pj))
         strbuf_mut = 1;
-      if (!pp->byref_out && !is_handle && !poly_mut && !strbuf_mut) continue;
+      if (!is_handle && !poly_mut && !strbuf_mut) continue;
       /* one pass over this method's call sites: detect a handle arg, and
          (once converted) pull plain-local args into the shared set */
       /* A POLY parameter the callee mutates in place boxes whatever it is
@@ -30493,8 +30403,7 @@ static int convert_byref_handle_params(Compiler *c,
         }
       }
       if (!saw_handle) continue;
-      if (pp->byref_out || strbuf_mut) {
-        { pp->byref_out = 0; comp_touch_scope(pp->owner); }
+      if (strbuf_mut) {
         { pp->is_cell = 0; comp_touch_scope(pp->owner); }
         lv_set_type(pp, TY_STRBUF);
         { pp->str_shared = 1; comp_touch_scope(pp->owner); }
@@ -30544,9 +30453,7 @@ static int convert_byref_handle_params(Compiler *c,
               (alv->type == TY_UNKNOWN || alv->type == TY_STRING ||
                alv->type == TY_STRBUF)) {
             if (alv->type != TY_STRBUF || !alv->str_shared) {
-              /* a lent slot's cell goes with it, as above */
-              if (alv->byref_out) { alv->is_cell = 0; comp_touch_scope(alv->owner); }
-              lv_set_type(alv, TY_STRBUF); { alv->str_shared = 1; comp_touch_scope(alv->owner); } { alv->byref_out = 0; comp_touch_scope(alv->owner); }
+              lv_set_type(alv, TY_STRBUF); { alv->str_shared = 1; comp_touch_scope(alv->owner); }
               changed = 1;
             }
             continue;
@@ -30655,8 +30562,7 @@ static int convert_byref_handle_params(Compiler *c,
         }
         /* a plain local `super(v)` hands the parent's handle parameter is
            pulled in as a call's argument is */
-        if (pi < 0 && an >= 0 && pdst && pdst->is_param && pdst->type == TY_STRBUF && pdst->str_shared &&
-            !pdst->byref_out) {
+        if (pi < 0 && an >= 0 && pdst && pdst->is_param && pdst->type == TY_STRBUF && pdst->str_shared) {
           const char *vn3 = nt_str(nt, an, "name");
           Scope *vs3 = comp_scope_of(c, an);
           LocalVar *v3 = vs3 ? scope_local(vs3, vn3) : NULL;
@@ -30670,64 +30576,12 @@ static int convert_byref_handle_params(Compiler *c,
         if (dh == sh) continue;
         LocalVar *o = dh ? src : dst;
         if (o->type != TY_STRING && o->type != TY_STRBUF) continue;
-        if (o->byref_out) { { o->byref_out = 0; comp_touch_scope(o->owner); } { o->is_cell = 0; comp_touch_scope(o->owner); } }
         lv_set_type(o, TY_STRBUF); { o->str_shared = 1; comp_touch_scope(o->owner); }
         changed = 1;
       }
     }
   }
-  /* A name group lends the slot as one, so it leaves the slot as one too. The rules above turn a single method's
-     parameter into the handle -- the one a POLY parameter's pull reaches --
-     and left its same-named siblings lending theirs. A dispatch over the
-     group then hoisted the argument in one ABI for both: a bare
-     `show_into(io)` in Base, overridden by a Sub whose parameter became the
-     handle, handed the Sub the lent `const char **` and the C build
-     stopped. Every lending member at that index takes the handle, and the
-     next round pulls its callers in (#6065). */
-  /* one pass collects, per name, the indices some member takes as the
-     handle; a second converts the lending members at those indices */
-  ANameHash hnames; memset(&hnames, 0, sizeof hnames);
-  unsigned *hbits = NULL; int hcap = 0;
-  for (int k = 1; k < c->nscopes; k++) {
-    Scope *mk = &c->scopes[k];
-    if (!mk->name) continue;
-    unsigned bits = 0;
-    for (int j = 0; j < mk->nparams && j < 32; j++) {
-      LocalVar *q = mk->pnames[j] ? scope_local(mk, mk->pnames[j]) : NULL;
-      if (q && q->is_param && q->type == TY_STRBUF && q->str_shared && !q->byref_out)
-        bits |= 1u << j;
-    }
-    if (!bits) continue;
-    int h = anh_find(&hnames, mk->name);
-    if (h < 0) {
-      if (hnames.n == hcap) {
-        hcap = hcap ? hcap * 2 : 64;
-        unsigned *nb = (unsigned *)realloc(hbits, sizeof(unsigned) * (size_t)hcap);
-        if (!nb) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-        hbits = nb;
-      }
-      anh_add(&hnames, mk->name);
-      h = hnames.n - 1;
-      hbits[h] = 0;
-    }
-    hbits[h] |= bits;
-  }
-  for (int k = 1; hnames.n > 0 && k < c->nscopes; k++) {
-    Scope *mk = &c->scopes[k];
-    if (!mk->name || mk->nparams <= 0) continue;
-    int h = -1;
-    for (int j = 0; j < mk->nparams && j < 32; j++) {
-      LocalVar *q = mk->pnames[j] ? scope_local(mk, mk->pnames[j]) : NULL;
-      if (!q || !q->byref_out) continue;
-      if (h < 0 && (h = anh_find(&hnames, mk->name)) < 0) break;
-      if (!(hbits[h] & (1u << j))) continue;
-      { q->byref_out = 0; comp_touch_scope(q->owner); } { q->is_cell = 0; comp_touch_scope(q->owner); }
-      lv_set_type(q, TY_STRBUF); { q->str_shared = 1; comp_touch_scope(q->owner); }
-      changed = 1;
-    }
-  }
   an_local_aliases_free(&aliases);
-  anh_free(&hnames); free(hbits);
   return changed;
 }
 
@@ -30953,7 +30807,7 @@ static int dyn_param_appended(Compiler *c, int mi, int j) {
   Scope *m = &c->scopes[mi];
   LocalVar *q = j < m->nparams && m->pnames[j] ? scope_local(m, m->pnames[j]) : NULL;
   if (!q) return 0;
-  if (q->byref_out || an_param_mutated_in_place(c, mi, j) ||
+  if (an_param_mutated_in_place(c, mi, j) ||
       (q->type == TY_POLY && (q->poly_lift & POLY_LIFT_APPENDED)))
     return 1;
   if (q->type != TY_STRBUF || !q->str_shared) return 0;
@@ -31374,7 +31228,7 @@ static unsigned dyn_meth_kw_bits(Compiler *c, int mi, const char *key, int *j_ou
     if (j_out) *j_out = j;
     unsigned app = 0, kept = 0;
     LocalVar *q = scope_local(m, m->pnames[j]);
-    if (q && (q->byref_out || (q->type == TY_STRBUF && q->str_shared) || an_param_mutated_in_place(c, mi, j)))
+    if (q && ((q->type == TY_STRBUF && q->str_shared) || an_param_mutated_in_place(c, mi, j)))
       app = 1;
     const char *pn[1] = { m->pnames[j] };
     dyn_body_scan(c, m->body, pn, 1, &app, &kept);
@@ -32564,7 +32418,7 @@ static int dyn_pull_arg(Compiler *c, int a, int mark_read) {
   if (lv->is_param) {
     if (lv->is_block_param || an_param_idx(vs, vn) < 0) return 0;
     if (lv->type != TY_STRBUF || !lv->str_shared) {
-      lv_set_type(lv, TY_STRBUF); { lv->str_shared = 1; comp_touch_scope(lv->owner); } { lv->byref_out = 0; comp_touch_scope(lv->owner); } changed = 1;
+      lv_set_type(lv, TY_STRBUF); { lv->str_shared = 1; comp_touch_scope(lv->owner); } changed = 1;
     }
     if (mark_read && !c->strbuf_box[a]) { comp_set_strbuf_box(c, a, 1); comp_sn_retype(c, a, TY_STRBUF); changed = 1; }
     return changed;
@@ -32577,33 +32431,7 @@ static int dyn_pull_arg(Compiler *c, int a, int mark_read) {
     comp_set_strbuf_box(c, a, 1); comp_sn_retype(c, a, TY_STRBUF);
     return 1;
   }
-  if (!strbuf_slot_eligible_shape(c, vn, vs, lv)) {
-    /* Also lent to a byref slot (`grow(s)` beside `f.call(s)`): a slot
-       cannot carry the handle, so that parameter takes the handle instead,
-       with its whole name group, as a POLY parameter's pull does for its own
-       callers; convert_byref_handle_params then pulls its other callers. */
-    int vsi = (int)(vs - c->scopes);
-    for (int u = comp_scall_first(c, vsi); u >= 0; u = comp_scall_next(c, u)) {
-      if (nt_kind(nt, u) != NK_CallNode || comp_scope_of(c, u) != vs) continue;
-      if (an_call_recv_builtin(c, u)) continue;   /* lends to no method of the program's */
-      int mi = an_any_scope_by_name(c, nt_str(nt, u, "name"));
-      if (mi < 0) continue;
-      for (int j = 0; j < c->scopes[mi].nparams; j++) {
-        if (!comp_byref_param(c, &c->scopes[mi], j)) continue;
-        int a2 = arg_layout_param_node(c, &c->scopes[mi], u, j, NULL);
-        const char *an2 = a2 >= 0 && nt_kind(nt, a2) == NK_LocalVariableReadNode ? nt_str(nt, a2, "name") : NULL;
-        if (!an2 || !sp_streq(an2, vn)) continue;
-        for (int m = dyn_scopes_named(c, c->scopes[mi].name); m >= 0; m = g_dyn.snext[m]) {
-          Scope *mk = &c->scopes[m];
-          if (j >= mk->nparams) continue;
-          LocalVar *q = mk->pnames[j] ? scope_local(mk, mk->pnames[j]) : NULL;
-          if (!q || !q->byref_out) continue;
-          { q->byref_out = 0; comp_touch_scope(q->owner); } { q->is_cell = 0; comp_touch_scope(q->owner); } lv_set_type(q, TY_STRBUF); { q->str_shared = 1; comp_touch_scope(q->owner); } changed = 1;
-        }
-      }
-    }
-    if (!strbuf_slot_eligible_shape(c, vn, vs, lv)) return changed;
-  }
+  if (!strbuf_slot_eligible_shape(c, vn, vs, lv)) return changed;
   if (lv->type != TY_STRBUF || !lv->str_shared) { lv_set_type(lv, TY_STRBUF); { lv->str_shared = 1; comp_touch_scope(lv->owner); } changed = 1; }
   if (mark_read && !c->strbuf_box[a]) { comp_set_strbuf_box(c, a, 1); comp_sn_retype(c, a, TY_STRBUF); changed = 1; }
   return changed;
@@ -32665,7 +32493,7 @@ static int dyn_convert_params(Compiler *c) {
       for (int j = 0; app && j < m->nparams && j < DYN_ARGS; j++) {
         if (!(app & (1u << j))) continue;
         LocalVar *q = m->pnames[j] ? scope_local(m, m->pnames[j]) : NULL;
-        if (!q || !q->is_param || q->is_block_param || q->type != TY_STRING || q->byref_out || q->is_cell) continue;
+        if (!q || !q->is_param || q->is_block_param || q->type != TY_STRING || q->is_cell) continue;
         lv_set_type(q, TY_STRBUF); { q->str_shared = 1; comp_touch_scope(q->owner); } q->dyn_handle = 1; changed = 1;
       }
       /* its keywords the same way (`method(:m).call(k: s)`): bound by name,
@@ -32674,7 +32502,7 @@ static int dyn_convert_params(Compiler *c) {
         if (!m->pnames[j] || !callee_param_is_declared_kwarg(c, m, m->pnames[j])) continue;
         if (!(dyn_meth_kw_bits(c, mi, m->pnames[j], NULL) & 1u)) continue;
         LocalVar *q = scope_local(m, m->pnames[j]);
-        if (!q || !q->is_param || q->is_block_param || q->type != TY_STRING || q->byref_out || q->is_cell) continue;
+        if (!q || !q->is_param || q->is_block_param || q->type != TY_STRING || q->is_cell) continue;
         lv_set_type(q, TY_STRBUF); { q->str_shared = 1; comp_touch_scope(q->owner); } q->dyn_handle = 1; changed = 1;
       }
     }
@@ -32692,7 +32520,7 @@ static int dyn_convert_params(Compiler *c) {
     for (int j = 0; app && j < m->nparams && j < DYN_ARGS; j++) {
       if (!(app & (1u << j))) continue;
       LocalVar *q = m->pnames[j] ? scope_local(m, m->pnames[j]) : NULL;
-      if (!q || !q->is_param || q->is_block_param || q->type != TY_STRING || q->byref_out || q->is_cell) continue;
+      if (!q || !q->is_param || q->is_block_param || q->type != TY_STRING || q->is_cell) continue;
       lv_set_type(q, TY_STRBUF); { q->str_shared = 1; comp_touch_scope(q->owner); } q->dyn_handle = 1; changed = 1;
     }
   }
@@ -32850,7 +32678,7 @@ static int ctor_convert_params(Compiler *c) {
     for (int j = 0; app && j < m->nparams && j < DYN_ARGS; j++) {
       if (!(app & (1u << j))) continue;
       LocalVar *q = m->pnames[j] ? scope_local(m, m->pnames[j]) : NULL;
-      if (!q || !q->is_param || q->is_block_param || q->byref_out || q->is_cell || q->dyn_handle) continue;
+      if (!q || !q->is_param || q->is_block_param || q->is_cell || q->dyn_handle) continue;
       /* TY_STRBUF: retained in a shared ivar (#4363), or typed from a
          handle argument */
       if (q->type != TY_STRING && q->type != TY_STRBUF) continue;
@@ -32967,7 +32795,7 @@ int ctor_arg_in_splat(Compiler *c, int u, int a) {
    block captures it or the initialize yields it (see ctor_convert_params). */
 static int ctor_param_can_share(Compiler *c, int mi, LocalVar *q) {
   Scope *m = &c->scopes[mi];
-  if (!q || !q->is_param || q->is_block_param || q->byref_out || q->is_cell) return 0;
+  if (!q || !q->is_param || q->is_block_param || q->is_cell) return 0;
   if (q->type != TY_STRING && q->type != TY_STRBUF) return 0;
   return !((m->yields || m->is_lowered_yield) && ctor_yields_name(c, mi, q->name));
 }
@@ -33041,7 +32869,7 @@ static int ctor_pull_args(Compiler *c) {
           if (!src || !src->is_param || src->is_block_param || src->is_cell) continue;
           if (src->type != TY_STRING && src->type != TY_STRBUF) continue;
           if (src->type != TY_STRBUF || !src->str_shared) {
-            lv_set_type(src, TY_STRBUF); { src->str_shared = 1; comp_touch_scope(src->owner); } { src->byref_out = 0; comp_touch_scope(src->owner); } changed = 1;
+            lv_set_type(src, TY_STRBUF); { src->str_shared = 1; comp_touch_scope(src->owner); } changed = 1;
           }
         }
       }
@@ -33526,7 +33354,7 @@ static int yield_splice_handles(Compiler *c) {
                      !q->inline_alias && an_subtree_lends_local(c, m->body, m->pnames[j], 0);
       if (!captured && (!an_local_is_handle_or_aliased(c, &aliases, an) || !an_inline_param_lent(c, mi, j, blk)))
         continue;
-      lv_set_type(q, TY_STRBUF); { q->str_shared = 1; comp_touch_scope(q->owner); } { q->byref_out = 0; comp_touch_scope(q->owner); } changed = 1;
+      lv_set_type(q, TY_STRBUF); { q->str_shared = 1; comp_touch_scope(q->owner); } changed = 1;
     }
   }
   /* instance_exec binds its arguments to its block's parameters as a yield
@@ -33963,7 +33791,7 @@ static int promote_dyncall_string_args(Compiler *c) {
    is left alone. Answers 1 when it changed anything. */
 static int default_param_mutated(Compiler *c, int mi, int j) {
   LocalVar *q = c->scopes[mi].pnames[j] ? scope_local(&c->scopes[mi], c->scopes[mi].pnames[j]) : NULL;
-  return q && (q->byref_out || (q->type == TY_STRBUF && q->str_shared) || an_param_mutated_in_place(c, mi, j));
+  return q && ((q->type == TY_STRBUF && q->str_shared) || an_param_mutated_in_place(c, mi, j));
 }
 static int promote_default_alias_params(Compiler *c) {
   const NodeTable *nt = c->nt;
@@ -33984,8 +33812,8 @@ static int promote_default_alias_params(Compiler *c) {
       LocalVar *both[2] = { px, py };
       for (int b = 0; b < 2; b++) {
         LocalVar *q = both[b];
-        if (q->type == TY_STRBUF && q->str_shared && !q->byref_out) continue;
-        lv_set_type(q, TY_STRBUF); { q->str_shared = 1; comp_touch_scope(q->owner); } { q->byref_out = 0; comp_touch_scope(q->owner); } { q->is_cell = 0; comp_touch_scope(q->owner); }
+        if (q->type == TY_STRBUF && q->str_shared) continue;
+        lv_set_type(q, TY_STRBUF); { q->str_shared = 1; comp_touch_scope(q->owner); } { q->is_cell = 0; comp_touch_scope(q->owner); }
         changed = 1;
       }
     }
@@ -34158,7 +33986,7 @@ static int spread_param_appended(Compiler *c, int mi, int pj) {
   Scope *m = &c->scopes[mi];
   if (pj == m->rest_idx) return rest_elems_mutated(c, mi);
   LocalVar *q = m->pnames[pj] ? scope_local(m, m->pnames[pj]) : NULL;
-  if (q && (q->byref_out || (q->type == TY_STRBUF && q->str_shared))) return 1;
+  if (q && q->type == TY_STRBUF && q->str_shared) return 1;
   if (pj < dyn_method_nreq(c, m) && pj < DYN_ARGS) return (dyn_meth_bits(c, mi) >> pj) & 1u;
   return an_param_mutated_in_place(c, mi, pj);
 }
@@ -34745,7 +34573,7 @@ static int fwd_param_appends(Compiler *c, int mi, int j, int depth) {
   if (j >= m->nparams || !m->pnames[j]) return 0;
   LocalVar *q = scope_local(m, m->pnames[j]);
   if (!q || !q->is_param || q->is_block_param) return 0;
-  if (q->byref_out || (q->type == TY_STRBUF && q->str_shared)) return 1;
+  if (q->type == TY_STRBUF && q->str_shared) return 1;
   if (q->type != TY_POLY) return 0;
   int memo = g_fwd_rest_depth == 0;
   FwdMemo *e = memo ? fwd_memo_find(mi, j) : NULL;
@@ -34982,14 +34810,8 @@ static int fwd_super_string_params(Compiler *c) {
         LocalVar *p = src >= 0 && src < m->nparams && m->pnames[src] ? scope_local(m, m->pnames[src]) : NULL;
         if (!p || !p->is_param || p->is_block_param) continue;
         /* a String into a boxed parameter: the child's takes the handle */
-        if (d->type == TY_POLY && p->type == TY_STRING && !p->byref_out && !p->is_cell) {
+        if (d->type == TY_POLY && p->type == TY_STRING && !p->is_cell) {
           lv_set_type(p, TY_STRBUF); { p->str_shared = 1; comp_touch_scope(p->owner); } changed = 1;
-        }
-        /* a box, which carries the caller's handle (fwd_poly_param_handed_on),
-           into a lent slot: the parent's takes the handle, as a handle
-           argument at a call converts one (convert_byref_handle_params) */
-        else if (p->type == TY_POLY && d->byref_out) {
-          { d->byref_out = 0; comp_touch_scope(d->owner); } { d->is_cell = 0; comp_touch_scope(d->owner); } lv_set_type(d, TY_STRBUF); { d->str_shared = 1; comp_touch_scope(d->owner); } changed = 1;
         }
       }
     }
@@ -55089,28 +54911,6 @@ static void an_phase_storage(Compiler *c) {
     }
     if (has_reassign_mutate) continue;
     if (lv->rbs_seeded) continue;
-    /* Exclude vars passed into a byref out-param slot: the call site takes
-       the local's address as const char**, which a promoted sp_String* slot
-       cannot provide. */
-    int passed_byref = 0;
-    for (int u = 0; u < c->nt->count && !passed_byref; u++) {
-      NodeKind uk = nt_kind(c->nt, u);
-      if (uk != NK_CallNode) continue;
-      if (comp_scope_of(c, u) != s) continue;
-      /* the group's answer, not the unique one: see an_any_scope_by_name --
-         but not a builtin value's call, which none of them takes */
-      if (an_call_recv_builtin(c, u)) continue;
-      int mi = an_any_scope_by_name(c, nt_str(c->nt, u, "name"));
-      if (mi < 0) continue;
-      for (int j = 0; j < c->scopes[mi].nparams; j++) {
-        if (!comp_byref_param(c, &c->scopes[mi], j)) continue;
-        int a2 = arg_layout_param_node(c, &c->scopes[mi], u, j, NULL);
-        const char *an2 = a2 >= 0 && nt_kind(c->nt, a2) == NK_LocalVariableReadNode
-                            ? nt_str(c->nt, a2, "name") : NULL;
-        if (an2 && sp_streq(an2, vn)) { passed_byref = 1; break; }
-      }
-    }
-    if (passed_byref) continue;
     lv_set_type(lv, TY_STRBUF);
   }
 

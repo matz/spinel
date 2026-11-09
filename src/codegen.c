@@ -312,13 +312,12 @@ int g_pure_region = 0;   /* inside a marked pure loop being emitted */
 static int poll_pure_node(Compiler *c, int n, int ret_ok, int stores);
 static int poll_has_loop(const NodeTable *nt, int n);
 static int poll_scope_short(Compiler *c, int t);
-/* Is a local written at n one that outlives the frame: a proc's cell, or a
-   caller's slot the method writes through? */
+/* Is a local written at n one that outlives the frame: a proc's cell? */
 static int poll_local_on_heap(Compiler *c, int n) {
   Scope *sc = comp_scope_of(c, n);
   const char *nm = nt_str(c->nt, n, "name");
   LocalVar *lv = sc && nm ? scope_local(sc, nm) : NULL;
-  return !lv || lv->is_cell || lv->byref_out || lv->inline_alias;
+  return !lv || lv->is_cell || lv->inline_alias;
 }
 static int poll_pure_kids(Compiler *c, int n, int ret_ok, int stores) {
   const NodeTable *nt = c->nt;
@@ -433,7 +432,7 @@ static int poll_pure_shape(Compiler *c, int si) {
   }
   for (int i = 0; i < s->nparams; i++) {
     LocalVar *p = scope_local(s, s->pnames[i]);
-    if (!p || p->byref_out || p->is_cell || !poll_scalar_ty(p->type)) return 0;
+    if (!p || p->is_cell || !poll_scalar_ty(p->type)) return 0;
   }
   return 1;
 }
@@ -606,7 +605,7 @@ int poll_pure_iter(Compiler *c, int id) {
       if (nt_kind(nt, rq[i]) != NK_RequiredParameterNode) return 0;
       const char *pnm = nt_str(nt, rq[i], "name");
       LocalVar *lv = sc && pnm ? scope_local(sc, pnm) : NULL;
-      if (!lv || lv->is_cell || lv->byref_out || !poll_scalar_ty(lv->type)) return 0;
+      if (!lv || lv->is_cell || !poll_scalar_ty(lv->type)) return 0;
     }
   }
   int body = nt_ref(nt, blk, "body");
@@ -4133,10 +4132,6 @@ void emit_scope_decls_ends(Compiler *c, Scope *s, Buf *b, size_t *ends) {
     /* Virtual &block slot: skip declaration UNLESS it's a lowered __yblk__ that
        needs a cell (so forwarding procs can capture it). */
     if (s->blk_param && lv->name && sp_streq(lv->name, s->blk_param) && !lv->is_cell) continue;
-    /* Byref string out-param: the C parameter already IS the cell (the
-       caller's rooted slot), so no heap cell, no copy-in, and no root --
-       the pointee lives in the caller's frame, not on the GC heap. */
-    if (lv->byref_out) continue;
     /* Captured-by-closure local: lives in a heap cell so the proc and this
        scope share storage. A param's incoming value is copied into the cell;
        a body local starts at 0. Int and proc cells supported. */
@@ -5489,7 +5484,7 @@ static int sg_object_default(Compiler *c, Scope *s, int par, Buf *out) {
     /* identity, as Object compares */
     LocalVar *a = scope_local(s, s->pnames[0]);
     const char *neg = sp_streq(n, "!=") ? "!" : "";
-    if (!a || a->byref_out) return 0;
+    if (!a) return 0;
     char an[160]; sg_param_cname(c, s, 0, an, sizeof an);
     if (comp_ty_value_obj(c, a->type)) buf_printf(out, "%s0", neg);
     else if (ty_is_object(a->type)) buf_printf(out, "%s((void *)self == (void *)%s)", neg, an);
@@ -5577,7 +5572,7 @@ static int sg_delegate_scope(Compiler *c, Scope *s) {
   for (int i = 0; i < s->nparams; i++) {
     LocalVar *a = scope_local(s, s->pnames[i]);
     LocalVar *bp = scope_local(ps, ps->pnames[i]);
-    if (!a || !bp || a->byref_out || bp->byref_out) return -1;
+    if (!a || !bp) return -1;
     if (!sg_slot_convertible(a->type, bp->type)) return -1;
   }
   return pm;
@@ -5786,12 +5781,6 @@ void emit_method_signature(Compiler *c, Scope *s, Buf *b) {
     if (wrote++) buf_puts(b, ", ");
     LocalVar *p = scope_local(s, s->pnames[i]);
     int pv = pbegin && (pall || name_list_has(pvol, npvol, s->pnames[i])) && p && !p->is_cell;
-    /* byref string out-param: the caller's slot, so body mutation propagates.
-       Named _cell_<name> so the ordinary is_cell deref forms read/write it. */
-    if (p && p->byref_out) {
-      buf_printf(b, "%s *_cell_%s", borrowed_string_type(p), s->pnames[i]);
-      continue;
-    }
     TyKind pt = (p && p->type != TY_UNKNOWN) ? p->type : TY_POLY;
     if (!is_scalar_ret(pt)) {
       fprintf(stderr, "spinel: method '%s' param '%s' has unsupported type %s\n",
@@ -5894,7 +5883,6 @@ static void inherit_transplant_locals(Compiler *c, Scope *s) {
       dl->is_block_param = sl.is_block_param;
       lv_set_proc_ret(dl, sl.proc_ret);
       { dl->is_cell = sl.is_cell; comp_touch_scope(dl->owner); }
-      { dl->byref_out = sl.byref_out; comp_touch_scope(dl->owner); }
       dl->borrowed_volatile = sl.borrowed_volatile;
     }
     break;
@@ -9223,8 +9211,7 @@ static void emit_fiber_new_here(Compiler *c, int id, Buf *b, int as_gen, int siz
         /* a shared cell pointer (see emit_scope_decls): float -> sp_float*,
            poly -> sp_RbVal*, heap object -> its typed pointer, else sp_int*. */
         buf_puts(&g_proc_protos, " ");
-        if (lv->byref_out) buf_puts(&g_proc_protos, borrowed_string_type(lv));
-        else emit_cell_elem_type(c, lv, &g_proc_protos);
+        emit_cell_elem_type(c, lv, &g_proc_protos);
         buf_printf(&g_proc_protos, " *c_%s;", caps.v[i]);
       }
       else {
@@ -9363,8 +9350,7 @@ static void emit_fiber_new_here(Compiler *c, int id, Buf *b, int as_gen, int siz
         /* unpack the shared cell pointer; reads/writes go through (*_cell_<name>)
            (emit_local_ref), so the write reaches the enclosing scope. */
         buf_puts(pb, "    ");
-        if (lv->byref_out) buf_puts(pb, borrowed_string_type(lv));
-        else emit_cell_elem_type(c, lv, pb);
+        emit_cell_elem_type(c, lv, pb);
         buf_printf(pb, " *_cell_%s = _fc->c_%s;\n", caps.v[i], caps.v[i]);
         buf_printf(pb, "    SP_GC_ROOT(_cell_%s);\n", caps.v[i]);
         continue;
@@ -10862,7 +10848,7 @@ else if (orecv >= 0 && onm) {
       /* a float capture rides a native sp_float cell, a poly capture an
          sp_RbVal cell, a heap object its typed pointer (see emit_scope_decls). */
       buf_puts(&g_procs, " ");
-      if (clv && (clv->byref_out || clv->inline_alias)) buf_puts(&g_procs, borrowed_string_type(clv));
+      if (clv && clv->inline_alias) buf_puts(&g_procs, borrowed_string_type(clv));
       else emit_cell_elem_type(c, clv, &g_procs);
       buf_printf(&g_procs, " *c_%s;", caps.v[i]);
     }
@@ -10877,21 +10863,6 @@ else if (orecv >= 0 && onm) {
     buf_printf(&g_procs, "  sp_gc_mark(p);\n");
     buf_printf(&g_procs, "  _proc_cap_%s *_c = (_proc_cap_%s *)p;\n", pid, pid);
     for (int i = 0; i < ncap; i++) {
-      /* A BYREF parameter's cell is the CALLER's slot -- the address of a
-         stack local, or a cell the caller already roots -- and not a GC
-         object at all. Marking it walked a header that is not there: on the
-         stack shape sp_gc_mark reads the byte before a stack address, and on
-         anything that byte does not spell a known marker it dereferences the
-         word as a header and calls through h->scan. That is the SIGSEGV in
-         the fiber root walk (#4391), and it needs a real server to arrive
-         because the capture has to outlive a park.
-         Not marking loses nothing: whatever the slot is, the caller is
-         holding it -- that is the whole premise of lending it. */
-      LocalVar *ccl = scope_local(bs, caps.v[i]);
-      if (ccl && ccl->byref_out) {
-        buf_printf(&g_procs, "  /* c_%s is a byref slot: the caller roots it */\n", caps.v[i]);
-        continue;
-      }
       buf_printf(&g_procs, "  if (_c->c_%s) sp_gc_mark((void *)_c->c_%s);\n", caps.v[i], caps.v[i]);
     }
     if (cap_self && self_is_value) {
@@ -15371,15 +15342,7 @@ static void emit_zsuper_param(Compiler *c, Scope *s, Scope *pm, const ZSuper *z,
     else buf_puts(b, tn);
   }
   else if (z->gather >= 0 && !kw && i != pm->kwrest_idx) {
-    /* a lent parameter ahead of the rest, or among the posts behind it, is
-       this method's own, in place: the gather's copy of it would take the
-       parent's appends */
-    int own = dst && dst->byref_out ? zsuper_param_source(c, s, pm, i) : -1;
-    if (own >= 0) {
-      g_nren = own_nren;
-      emit_zsuper_arg(c, s, dst, dt, s->pnames[own], b);
-    }
-    else if (i == pm->rest_idx) {
+    if (i == pm->rest_idx) {
       /* the parent's rest, sliced fresh out of the gather, is held for the
          call as the call paths hold one (emit_rest_held) */
       g_nren = parent_nren;
@@ -15878,21 +15841,6 @@ static void emit_zsuper_arg(Compiler *c, Scope *s, LocalVar *dst, TyKind dt, con
   TyKind st = src ? src->type : TY_UNKNOWN;
   Buf _bx; memset(&_bx, 0, sizeof _bx);
   emit_scope_local_ref(c, s, pname, &_bx);
-  /* A byref parent parameter takes a slot, lent as a call site lends a
-     local argument (emit_lent_local): a lent parameter forwards the caller's
-     slot, this method's own cell passes pinned, a proc body's capture its
-     cell, a plain String its address, and any other value a temp. */
-  if (dst && dst->byref_out) {
-    if (!emit_lent_local(src, pname, b)) {
-      Buf vb; memset(&vb, 0, sizeof vb);
-      if (st == TY_POLY) emit_unbox_text(c, TY_STRING, _bx.p, &vb);
-      else buf_puts(&vb, _bx.p);
-      emit_lent_temp(vb.p, b);
-      free(vb.p);
-    }
-    free(_bx.p);
-    return;
-  }
   if (dt == TY_POLY && st != TY_POLY && st != TY_UNKNOWN) emit_boxed_text(c, st, _bx.p, b);
   /* a POLY parameter handed to a parent parameter appended to in place: a
      plain String it holds becomes the shared handle first, as a marked read
@@ -17251,14 +17199,6 @@ static int user_dispatch_arg(Compiler *c, Scope *m, int pi, const char *v,
   }
   else if (pt == TY_SYMBOL) { snprintf(guard, gsz, "%s.tag == SP_TAG_SYM", v); snprintf(arg, asz, "(sp_sym)%s.v.i", v); }
   else return 0;
-  /* a parameter the method rebinds in place (comp_byref_param) takes the
-     address of a slot: one of its own here, as the box is not one */
-  if (comp_byref_param(c, m, pi)) {
-    char tmp[200];
-    snprintf(tmp, sizeof tmp, "&(%s){%s}", c_type_name(pt), arg);
-    if (strlen(tmp) >= asz) return 0;
-    snprintf(arg, asz, "%s", tmp);
-  }
   return 1;
 }
 

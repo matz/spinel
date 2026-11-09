@@ -612,8 +612,7 @@ static void repr_layout(Repr *r, TyKind t) {
    proven to hold only a PolyArray or nil. A read of the local says the
    same. */
 static void repr_slot_storage(Repr *r, const LocalVar *lv) {
-  r->cell = (unsigned char)(lv->byref_out ? RC_BYREF : lv->inline_alias ? RC_ALIAS
-                            : lv->is_cell ? RC_HEAP : RC_NONE);
+  r->cell = (unsigned char)(lv->inline_alias ? RC_ALIAS : lv->is_cell ? RC_HEAP : RC_NONE);
   r->volatile_str = lv->borrowed_volatile != 0;
   r->arr_or_nil = lv->arr_or_nil == 1 && lv->type == TY_POLY;
 }
@@ -1928,7 +1927,6 @@ static const char *repr_cell_name(int cell) {
   switch ((ReprCell)cell) {
   case RC_NONE:  return "";
   case RC_HEAP:  return " cell=heap";
-  case RC_BYREF: return " cell=byref";
   case RC_ALIAS: return " cell=alias";
   }
   return " cell=?";

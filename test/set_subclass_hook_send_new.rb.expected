@@ -1,0 +1,7 @@
+1
+true
+2
+true
+true
+true
+[:foo, :compare_by_identity]

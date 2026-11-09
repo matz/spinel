@@ -1122,6 +1122,65 @@ static int is_class_eval_name(const char *nm) {
   return nm && is_class_eval_family(nm);
 }
 
+/* Statement s of the top level, or of an if/unless/else there (`unless
+   $loaded; class Class; ...; end; end`, as a flattened program guards a
+   file it may load twice): a `class Class` or a `Class.class_eval { }`
+   becomes the reopening. Left a class named Class, its methods were taken
+   for a user class's, with a struct self, which a Class value is not. */
+static void class_reopen_stmt(Compiler *c, int s, int depth);
+static void class_reopen_stmts(Compiler *c, int body, int depth) {
+  const NodeTable *nt = c->nt;
+  int n = 0;
+  const int *st = body >= 0 ? nt_arr(nt, body, "body", &n) : NULL;
+  for (int i = 0; i < n; i++) class_reopen_stmt(c, st[i], depth);
+}
+static void class_reopen_stmt(Compiler *c, int s, int depth) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  if (s < 0 || depth > 64) return;
+  NodeKind sk = nt_kind(nt, s);
+  if (sk == NK_IfNode || sk == NK_UnlessNode || sk == NK_ElseNode) {
+    class_reopen_stmts(c, nt_ref(nt, s, "statements"), depth + 1);
+    if (sk == NK_IfNode) class_reopen_stmt(c, nt_ref(nt, s, "subsequent"), depth + 1);
+    if (sk == NK_UnlessNode) class_reopen_stmt(c, nt_ref(nt, s, "else_clause"), depth + 1);
+    return;
+  }
+  if (sk == NK_ClassNode) {
+    int cp = nt_ref(nt, s, "constant_path");
+    if (!is_class_const(nt, cp)) return;
+    if (nt_ref(nt, s, "superclass") >= 0)
+      unsupported_feature(c, s, "`class Class < ...` is not supported: reopen Class without a superclass");
+    nt_node_set_type(nt, s, "ModuleNode");
+    nt_node_set_str(nt, cp, "qc_orig_name", nt_str(nt, cp, "name"));   /* the name the program wrote */
+    nt_node_set_str(nt, cp, "name", CLASS_REOPEN_NAME);
+    return;
+  }
+  if (sk != NK_CallNode || !is_class_eval_name(nt_str(nt, s, "name"))) return;
+  int recv = nt_ref(nt, s, "receiver"), blk = nt_ref(nt, s, "block");
+  if (!is_class_const(nt, recv)) return;
+  /* top-level already: what is not supported is the shape, so say that
+     rather than the placement message below (from the #5078 review) */
+  if (blk < 0 || nt_kind(nt, blk) != NK_BlockNode ||
+      nt_ref(nt, blk, "parameters") >= 0 || nt_ref(nt, s, "arguments") >= 0) {
+    char msg[256];
+    snprintf(msg, sizeof msg, "Class.%s adds methods to Class only with a literal block and "
+                              "no block parameters or arguments", nt_str(nt, s, "name"));
+    unsupported_feature(c, s, msg);
+    return;
+  }
+  int bbody = nt_ref(nt, blk, "body");
+  long long line = nt_int(nt, s, "node_line", 0), file = nt_int(nt, s, "node_file", 0),
+            col = nt_int(nt, s, "node_col", 0);
+  nt_node_set_ref(nt, blk, "body", -1);
+  nt_node_reset(nt, s, "ModuleNode");
+  nt_node_set_int(nt, s, "node_line", line);
+  nt_node_set_int(nt, s, "node_file", file);
+  nt_node_set_int(nt, s, "node_col", col);
+  nt_node_set_ref(nt, s, "constant_path", recv);
+  nt_node_set_ref(nt, s, "body", bbody);
+  nt_node_set_str(nt, recv, "qc_orig_name", nt_str(nt, recv, "name"));
+  nt_node_set_str(nt, recv, "name", CLASS_REOPEN_NAME);
+}
+
 void desugar_class_reopen(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   /* The reopening is carried under a name of its own, which the extension
@@ -1135,47 +1194,7 @@ void desugar_class_reopen(Compiler *c) {
     if (cn && sp_streq(cn, CLASS_REOPEN_NAME))
       unsupported_feature(c, id, "the constant name Class__reopen is reserved by the compiler");
   }
-  int body = nt_ref(nt, nt->root_id, "statements");
-  int n = 0;
-  const int *st = body >= 0 ? nt_arr(nt, body, "body", &n) : NULL;
-  for (int i = 0; i < n; i++) {
-    int s = st[i];
-    if (nt_kind(nt, s) == NK_ClassNode) {
-      int cp = nt_ref(nt, s, "constant_path");
-      if (!is_class_const(nt, cp)) continue;
-      if (nt_ref(nt, s, "superclass") >= 0)
-        unsupported_feature(c, s, "`class Class < ...` is not supported: reopen Class without a superclass");
-      nt_node_set_type(nt, s, "ModuleNode");
-      nt_node_set_str(nt, cp, "qc_orig_name", nt_str(nt, cp, "name"));   /* the name the program wrote */
-      nt_node_set_str(nt, cp, "name", CLASS_REOPEN_NAME);
-      continue;
-    }
-    if (nt_kind(nt, s) != NK_CallNode || !is_class_eval_name(nt_str(nt, s, "name"))) continue;
-    int recv = nt_ref(nt, s, "receiver"), blk = nt_ref(nt, s, "block");
-    if (!is_class_const(nt, recv)) continue;
-    /* top-level already: what is not supported is the shape, so say that
-       rather than the placement message below (from the #5078 review) */
-    if (blk < 0 || nt_kind(nt, blk) != NK_BlockNode ||
-        nt_ref(nt, blk, "parameters") >= 0 || nt_ref(nt, s, "arguments") >= 0) {
-      char msg[256];
-      snprintf(msg, sizeof msg, "Class.%s adds methods to Class only with a literal block and "
-                                "no block parameters or arguments", nt_str(nt, s, "name"));
-      unsupported_feature(c, s, msg);
-      continue;
-    }
-    int bbody = nt_ref(nt, blk, "body");
-    long long line = nt_int(nt, s, "node_line", 0), file = nt_int(nt, s, "node_file", 0),
-              col = nt_int(nt, s, "node_col", 0);
-    nt_node_set_ref(nt, blk, "body", -1);
-    nt_node_reset(nt, s, "ModuleNode");
-    nt_node_set_int(nt, s, "node_line", line);
-    nt_node_set_int(nt, s, "node_file", file);
-    nt_node_set_int(nt, s, "node_col", col);
-    nt_node_set_ref(nt, s, "constant_path", recv);
-    nt_node_set_ref(nt, s, "body", bbody);
-    nt_node_set_str(nt, recv, "qc_orig_name", nt_str(nt, recv, "name"));
-    nt_node_set_str(nt, recv, "name", CLASS_REOPEN_NAME);
-  }
+  class_reopen_stmts(c, nt_ref(nt, nt->root_id, "statements"), 0);
   NT_FOREACH_KIND(nt, NK_CallNode, id) {
     const char *nm = nt_str(nt, id, "name");
     if (!is_class_eval_name(nm) || !is_class_const(nt, nt_ref(nt, id, "receiver"))) continue;

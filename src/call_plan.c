@@ -2356,6 +2356,18 @@ static void ver_hold_mixers(Compiler *c, struct VerHold *m, int mod, const char 
     if (ext && elab_chain_versions(c, j, 1, nm, vs, VER_MAX_ARMS) >= 2) ver_hold_add(m, j, 1);
   }
 }
+/* ...and of a `class Class` reopening's (the module Class__reopen): every
+   class's class side, whose chain ends in it (lr_sg_tail_of), as an
+   extend's would. Two reopenings that define a name alike (a file
+   guarded by `unless $loaded` beside its first load) made an entry for
+   a class's side that no call marked, and the boxed dispatch dropped
+   that class's arm: `k.descendants` raised NoMethodError. */
+static void ver_hold_class_reopen(Compiler *c, struct VerHold *m, const char *nm) {
+  ElabVersion vs[VER_MAX_ARMS];
+  for (int j = 0; j < c->nclasses; j++)
+    if (!comp_class_is_module(c, &c->classes[j]) && elab_chain_versions(c, j, 1, nm, vs, VER_MAX_ARMS) >= 2)
+      ver_hold_add(m, j, 1);
+}
 static const int *ver_holders(Compiler *c, const char *nm, int *n) {
   ElabVersion vs[VER_MAX_ARMS];
   struct VerHold *m = c->ver_hold;
@@ -2371,6 +2383,7 @@ static const int *ver_holders(Compiler *c, const char *nm, int *n) {
       if (k < 0 || elab_chain_versions(c, k, sg, nm, vs, VER_MAX_ARMS) < 2) continue;
       ver_hold_add(m, k, sg);
       if (!sg && comp_class_is_module(c, &c->classes[k])) ver_hold_mixers(c, m, k, nm);
+      if (!sg && k == comp_core_class(c, CORE_CLASS_REOPEN)) ver_hold_class_reopen(c, m, nm);
     }
     ix = m->names.n;
     if (!(m->key = realloc(m->key, sizeof *m->key * (size_t)(ix + 1))) || !(m->lo = realloc(m->lo, sizeof(int) * (size_t)(ix + 1))) ||

@@ -24,3 +24,6 @@ nil
 1.5
 "a"
 ["stamp5", "stamp3"]
+20
+20
+NoMethodError

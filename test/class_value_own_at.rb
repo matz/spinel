@@ -44,3 +44,10 @@ p f.at(0)
 m = [[1, "a"], Stamp][ARGV.size]
 p m.at(1)
 p [Stamp, Sub].map { |k| k.at(k.name.size) }
+# a boxed value that is never a Class (Unused.at is never called on one)
+class Unused; def self.mk(x) = "mk#{x}"; class << self; alias at mk; end; end
+j = [[10, 20], 5][ARGV.size]
+p j.at(1)
+def g(x) = x.at(1)
+p g([10, 20])
+p (g({1 => 2}) rescue $!.class)

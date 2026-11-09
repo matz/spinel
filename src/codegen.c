@@ -15893,7 +15893,8 @@ static void emit_zsuper_arg(Compiler *c, Scope *s, LocalVar *dst, TyKind dt, con
     free(_bx.p);
     return;
   }
-  if (dt == TY_POLY && st != TY_POLY && st != TY_UNKNOWN) emit_boxed_text(c, st, _bx.p, b);
+  /* (an Integer or Float slot that holds a nil boxes with it) */
+  if (dt == TY_POLY && st != TY_POLY && st != TY_UNKNOWN) emit_zsuper_boxed(c, src, st, _bx.p, b);
   /* a POLY parameter handed to a parent parameter appended to in place: a
      plain String it holds becomes the shared handle first, as a marked read
      does at a call (poly_strbuf_lift, #6179) */

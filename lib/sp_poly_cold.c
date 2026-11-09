@@ -299,6 +299,10 @@ void sp_poly_puts(sp_RbVal v)
       /* MRI's `puts arr` iterates an Array, printing one element per
          line (using to_s on each); a non-Array OBJ falls back to
          inspect / class-name. */
+      /* rooted for the walk: a fresh Array that only this call holds (a
+         method's answer of more than one class) is freed partway by a
+         collection an element's render runs, as sp_File_puts_val roots it */
+      SP_GC_ROOT_RBVAL(v);
       switch (v.cls_id) {
         /* an element that is nil (a gap a write past the end left, its nil
            bit) prints puts nil's empty line, as the typed puts does */

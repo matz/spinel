@@ -483,24 +483,28 @@ const char *sp_poly_to_s(sp_RbVal v)
   }
 }
 
-const char *sp_poly_class_name(sp_RbVal v)
+/* The class name of a boxed value, and in *id the builtin class id of that name
+   (the table's, sp_Class.cls_id of the class value) where the arm names it by
+   a literal; -1 for a name the arm computes or the table has no id for. */
+static const char *sp_poly_class_name_arm(sp_RbVal v, int *id)
 {
+  *id = -1;
   switch (v.tag) {
-    case SP_TAG_INT: return SPL("Integer");
-    case SP_TAG_STR: return SPL("String");
-    case SP_TAG_FLT: return SPL("Float");
-    case SP_TAG_BOOL: return v.v.b ? SPL("TrueClass") : SPL("FalseClass");
-    case SP_TAG_NIL: return SPL("NilClass");
-    case SP_TAG_SYM: return SPL("Symbol");
+    case SP_TAG_INT: return (*id = SP_BCLS_INTEGER, SPL("Integer"));
+    case SP_TAG_STR: return (*id = SP_BCLS_STRING, SPL("String"));
+    case SP_TAG_FLT: return (*id = SP_BCLS_FLOAT, SPL("Float"));
+    case SP_TAG_BOOL: return v.v.b ? (*id = SP_BCLS_TRUECLASS, SPL("TrueClass")) : (*id = SP_BCLS_FALSECLASS, SPL("FalseClass"));
+    case SP_TAG_NIL: return (*id = SP_BCLS_NILCLASS, SPL("NilClass"));
+    case SP_TAG_SYM: return (*id = SP_BCLS_SYMBOL, SPL("Symbol"));
     case SP_TAG_ENCODING: return SPL("Encoding");
     case SP_TAG_CLASS: {
       sp_Class c = sp_unbox_class(v);
       int m = sp_class_is_module_fn ? sp_class_is_module_fn(c)
             : (c.cls_id == -114 || c.cls_id == -115 || c.cls_id == -119 || c.cls_id == -130 ||
                c.cls_id == -162);
-      return m ? SPL("Module") : SPL("Class");
+      return m ? (*id = SP_BCLS_MODULE, SPL("Module")) : (*id = SP_BCLS_CLASS, SPL("Class"));
     }
-    case SP_TAG_BIGINT: return SPL("Integer");
+    case SP_TAG_BIGINT: return (*id = SP_BCLS_INTEGER, SPL("Integer"));
     case SP_TAG_OBJ:
       /* an Array subclass instance boxed as its Array (#7449) */
       if (sp_bsub_cls_fn && sp_obj_cls_name_fn) {
@@ -510,26 +514,26 @@ const char *sp_poly_class_name(sp_RbVal v)
       switch (v.cls_id) {
         case SP_BUILTIN_INT_ARRAY: case SP_BUILTIN_FLT_ARRAY:
         case SP_BUILTIN_STR_ARRAY: case SP_BUILTIN_SYM_ARRAY:
-        case SP_BUILTIN_PTR_ARRAY: case SP_BUILTIN_POLY_ARRAY: return SPL("Array");
+        case SP_BUILTIN_PTR_ARRAY: case SP_BUILTIN_POLY_ARRAY: return (*id = SP_BCLS_ARRAY, SPL("Array"));
         case SP_BUILTIN_STR_INT_HASH: case SP_BUILTIN_STR_STR_HASH:
         case SP_BUILTIN_INT_STR_HASH: case SP_BUILTIN_SYM_INT_HASH:
          case SP_BUILTIN_INT_INT_HASH:
         case SP_BUILTIN_SYM_STR_HASH: case SP_BUILTIN_STR_POLY_HASH:
-        case SP_BUILTIN_SYM_POLY_HASH: case SP_BUILTIN_POLY_POLY_HASH: return SPL("Hash");
-        case SP_BUILTIN_RANGE: return SPL("Range");
-        case SP_BUILTIN_FLOAT_RANGE: case SP_BUILTIN_STR_RANGE: return SPL("Range");
-        case SP_BUILTIN_TIME: return SPL("Time");
-    case SP_BUILTIN_STRBUF: return SPL("String");   /* (#3227) */
-        case SP_BUILTIN_COMPLEX: return SPL("Complex");
-        case SP_BUILTIN_RATIONAL: return SPL("Rational");
-        case SP_BUILTIN_BIG_RATIONAL: return SPL("Rational");
-        case SP_BUILTIN_REGEX: return SPL("Regexp");
-        case SP_BUILTIN_MATCHDATA: return SPL("MatchData");   /* (#3641) */
-        case SP_BUILTIN_OBJECT: return SPL("Object");   /* a bare Object.new instance */
-        case SP_BUILTIN_BASIC_OBJECT: return SPL("BasicObject");
-        case SP_BUILTIN_PROC: return SPL("Proc");
+        case SP_BUILTIN_SYM_POLY_HASH: case SP_BUILTIN_POLY_POLY_HASH: return (*id = SP_BCLS_HASH, SPL("Hash"));
+        case SP_BUILTIN_RANGE: return (*id = SP_BCLS_RANGE, SPL("Range"));
+        case SP_BUILTIN_FLOAT_RANGE: case SP_BUILTIN_STR_RANGE: return (*id = SP_BCLS_RANGE, SPL("Range"));
+        case SP_BUILTIN_TIME: return (*id = SP_BCLS_TIME, SPL("Time"));
+    case SP_BUILTIN_STRBUF: return (*id = SP_BCLS_STRING, SPL("String"));   /* (#3227) */
+        case SP_BUILTIN_COMPLEX: return (*id = SP_BCLS_COMPLEX, SPL("Complex"));
+        case SP_BUILTIN_RATIONAL: return (*id = SP_BCLS_RATIONAL, SPL("Rational"));
+        case SP_BUILTIN_BIG_RATIONAL: return (*id = SP_BCLS_RATIONAL, SPL("Rational"));
+        case SP_BUILTIN_REGEX: return (*id = SP_BCLS_REGEXP, SPL("Regexp"));
+        case SP_BUILTIN_MATCHDATA: return (*id = SP_BCLS_MATCHDATA, SPL("MatchData"));   /* (#3641) */
+        case SP_BUILTIN_OBJECT: return (*id = SP_BCLS_OBJECT, SPL("Object"));   /* a bare Object.new instance */
+        case SP_BUILTIN_BASIC_OBJECT: return (*id = SP_BCLS_BASIC_OBJECT, SPL("BasicObject"));
+        case SP_BUILTIN_PROC: return (*id = SP_BCLS_PROC, SPL("Proc"));
         /* a curried proc IS a Proc to Ruby (#3885) */
-        case SP_BUILTIN_CURRY: return SPL("Proc");
+        case SP_BUILTIN_CURRY: return (*id = SP_BCLS_PROC, SPL("Proc"));
         case SP_BUILTIN_METHOD:
           return ((sp_BoundMethod *)v.v.p)->unbound ? SPL("UnboundMethod") : SPL("Method");   /* (#3692) */
         /* a chain and a product report their own class, as the typed
@@ -551,27 +555,40 @@ const char *sp_poly_class_name(sp_RbVal v)
            `.class` emit uses, so a Monitor and a SizedQueue stay distinct. */
         case SP_BUILTIN_MUTEX: return sp_Mutex_class_name((sp_mutex *)v.v.p);
         case SP_BUILTIN_QUEUE: return sp_Queue_class_name((sp_queue *)v.v.p);
-        case SP_BUILTIN_CONDVAR: return SPL("Thread::ConditionVariable");
-        case SP_BUILTIN_FIBER: return SPL("Fiber");
-        case SP_BUILTIN_THREAD: return SPL("Thread");
-        case SP_BUILTIN_DIR: return SPL("Dir");
-        case SP_BUILTIN_TIME_RANGE: case SP_BUILTIN_OBJ_RANGE: return SPL("Range");
-        case SP_BUILTIN_TMS: return SPL("Process::Tms");
+        case SP_BUILTIN_CONDVAR: return (*id = SP_BCLS_THREAD_CONDITIONVARIABLE, SPL("Thread::ConditionVariable"));
+        case SP_BUILTIN_FIBER: return (*id = SP_BCLS_FIBER, SPL("Fiber"));
+        case SP_BUILTIN_THREAD: return (*id = SP_BCLS_THREAD, SPL("Thread"));
+        case SP_BUILTIN_DIR: return (*id = SP_BCLS_DIR, SPL("Dir"));
+        case SP_BUILTIN_TIME_RANGE: case SP_BUILTIN_OBJ_RANGE: return (*id = SP_BCLS_RANGE, SPL("Range"));
+        case SP_BUILTIN_TMS: return (*id = SP_BCLS_PROCESS_TMS, SPL("Process::Tms"));
         case SP_BUILTIN_OPENSTRUCT: return SPL("OpenStruct");
         /* These two had no arm of their own. They went unnoticed because their
            cls_ids collided with STRBUF and OPENSTRUCT, so a boxed one answered
            String / OpenStruct rather than nothing (#4158). */
         case SP_BUILTIN_ADDRINFO: return SPL("Addrinfo");
         case SP_BUILTIN_SOCKOPT: return SPL("Socket::Option");
-        case SP_BUILTIN_PROCESS_STATUS: return SPL("Process::Status");
+        case SP_BUILTIN_PROCESS_STATUS: return (*id = SP_BCLS_PROCESS_STATUS, SPL("Process::Status"));
         case SP_BUILTIN_YIELDER: return SPL("Enumerator::Yielder");
         case SP_BUILTIN_RANDOM: return SPL("Random");
         case SP_BUILTIN_ARGF: return SPL("ARGF.class");
         case SP_BUILTIN_EXCEPTION: return sp_exc_class_name((volatile struct sp_Exception_s *)v.v.p);
         default: { sp_Class c = {v.cls_id}; return sp_class_to_s(c); }
       }
-    default: return SPL("Object");
+    default: return (*id = SP_BCLS_OBJECT, SPL("Object"));
   }
+}
+/* ...and for a name the arm computes (an Enumerator's, an IO's), the id the
+   table has for it */
+const char *sp_poly_class_name_id(sp_RbVal v, int *id)
+{
+  const char *n = sp_poly_class_name_arm(v, id);
+  if (*id == -1 && n) *id = sp_builtin_class_id_of(n);
+  return n;
+}
+const char *sp_poly_class_name(sp_RbVal v)
+{
+  int id;
+  return sp_poly_class_name_id(v, &id);
 }
 
 sp_RbVal sp_poly_slice(sp_RbVal a, sp_int start, sp_int len)

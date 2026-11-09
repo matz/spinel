@@ -6,6 +6,7 @@
    of sp_types.h so every translation unit that includes it defines them before
    the first system header. Must precede <stdio.h>. */
 #include "sp_types.h"
+#include "sp_builtin_classes.h"
 #ifdef SP_CEXT
 #include "sp_cext.h"
 #endif
@@ -2070,6 +2071,7 @@ static sp_RbVal sp_poly_bitop(sp_RbVal a, sp_RbVal b, int op) {  /* 0:& 1:| 2:^ 
 static const char *sp_class_to_s(sp_Class c);
 #endif
 const char *sp_poly_class_name(sp_RbVal v);  /* fwd: user-object to_s default */
+const char *sp_poly_class_name_id(sp_RbVal v, int *id);
 extern const char *(*sp_user_exc_parent_fn)(const char *);  /* fwd: the program's exception parent table (defined ~line 14477) */
 static const char *sp_convert_src_name(sp_RbVal v);  /* fwd: nil/true/false spell themselves */
 static sp_oint sp_poly_Integer_ex(sp_RbVal v, sp_int base, int raise);  /* fwd: Kernel#Integer / #Float on a user object */
@@ -2616,7 +2618,11 @@ static sp_Class sp_poly_class_val(sp_RbVal v) {
   if (sp_bsub_cls_fn && r.cls_id < 0) { int k = sp_bsub_cls_fn(v); if (k >= 0) r.cls_id = k; }
   /* an object with singleton methods answers the class they hide behind */
   if (sp_cls_visible_fn && r.cls_id >= 0) r.cls_id = sp_cls_visible_fn(r.cls_id);
-  r.name = sp_poly_class_name(v);
+  int bid;
+  r.name = sp_poly_class_name_id(v, &bid);
+  /* a builtin's class carries its id, as the constant naming it does: the
+     switches over a class value (a new, a class method) arm on it */
+  if (r.cls_id < 0) r.cls_id = bid;
   return r;
 }
 /* Raise TypeError "no implicit conversion of <class> into String" for a poly

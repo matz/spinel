@@ -3083,7 +3083,7 @@ int emit_call_untyped_array_arms(Compiler *c, Buf *b, const NodeTable *nt, const
         if (is_count_alias(name) && argc == 0) { buf_puts(b, "0"); return 1; }
         if (sp_streq(name, "empty?") && argc == 0) { buf_puts(b, "1"); return 1; }
         if (sp_streq(name, "frozen?") && argc == 0) { buf_puts(b, "0"); return 1; }
-        if (sp_streq(name, "class") && argc == 0) { buf_puts(b, "((sp_Class){(sp_int)-1, SPL(\"Array\")})"); return 1; }
+        if (is_class_query(name) && argc == 0) { buf_puts(b, "((sp_Class){SP_BCLS_ARRAY, SPL(\"Array\")})"); return 1; }
         if (typed) return 0;
         /* first/last type poly (boxed nil, printable as nil); min/max/pop/
            shift answer the Integer slot's nil */

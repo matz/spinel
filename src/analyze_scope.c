@@ -4841,7 +4841,13 @@ void register_aliases(Compiler *c) {
   for (int i = 0; i < n; i++) {
     if (a[i].kind != LR_ALIAS || !a[i].target || a[i].cls < 0 || alias_replaced_later(a, n, i)) continue;
     acc[i] = alias_accessor_version(c, &a[i]);
-    inh[i] = !acc[i] && (alias_inherited_def(c, &a[i]) >= 0 || alias_writer_unresolved(c, &a[i]));
+    int si = acc[i] ? -1 : alias_inherited_def(c, &a[i]);
+    /* (the def is kept on the alias for register_alias_methods, which makes
+       its copy: asked again there, a method made since, an accessor alias's
+       `def foo = @foo` under another name, reads as a later def of the
+       alias's name, and the alias would get neither the copy nor a binding) */
+    if (si >= 0) nt_node_set_int((NodeTable *)c->nt, a[i].node, "alias_copy_src", si + 1);
+    inh[i] = si >= 0 || (!acc[i] && alias_writer_unresolved(c, &a[i]));
   }
   for (int i = 0; i < n; i++)
     if (acc[i] && !alias_accessor_method(c, &a[i], acc[i]->kind == LR_WRITER, acc[i]->node, acc[i]->node + 1)) acc[i] = NULL;
@@ -4910,14 +4916,15 @@ static int alias_extend_copy(Compiler *c, int cls, int dn) {
   return best;
 }
 
-/* An alias of an ancestor class's def (alias_inherited_def) is a method of
-   the alias's class made of that def: a copy of its scope under the
-   alias's name, the way an include puts a module's methods in its
-   includer, so the class has the method the alias is, which a call through
-   self from an inherited method reaches by dispatch where a name mapping
-   met the ancestor's own. The scope keeps the def, whose name is the
-   alias's #original_name, and is linked to the alias's version for the call
-   plan (ct_def_version). Run once the classes have their parents, which the
+/* An alias of an ancestor class's def (alias_inherited_def, which
+   register_aliases asks before any method is made and keeps on the alias as
+   alias_copy_src) is a method of the alias's class made of that def: a copy
+   of its scope under the alias's name, the way an include puts a module's
+   methods in its includer, so the class has the method the alias is, which
+   a call through self from an inherited method reaches by dispatch where a
+   name mapping met the ancestor's own. The scope keeps the def, whose name
+   is the alias's #original_name, and is linked to the alias's version for
+   the call plan (ct_def_version). Run once the classes have their parents, which the
    copy's body is walked under (an ivar it names is the ancestor's). A body
    that calls super keeps its owner's: the copy's super is that of the
    method the def is in the alias's class's ancestry (Scope.super_of). An
@@ -4932,7 +4939,7 @@ void register_alias_methods(Compiler *c, int modules) {
   if (!src) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   for (int i = 0; i < n; i++)
     src[i] = a[i].kind == LR_ALIAS && a[i].target && a[i].cls >= 0 && !alias_replaced_later(a, n, i) &&
-             !comp_class_is_module(c, &c->classes[a[i].cls]) == !modules ? alias_inherited_def(c, &a[i]) : -1;
+             !comp_class_is_module(c, &c->classes[a[i].cls]) == !modules ? (int)nt_int(c->nt, a[i].node, "alias_copy_src", 0) - 1 : -1;
   int copied = 0;
   for (int i = 0; i < n; i++) {
     if (src[i] < 0 && a[i].kind == LR_ALIAS && a[i].target && a[i].cls >= 0 && !alias_replaced_later(a, n, i) &&

@@ -5688,6 +5688,25 @@ static int emit_array_call_arms(Compiler *c, int id, Buf *b) {
     if ((is_element_at_alias(name)) && argc == 1) {
       int t = -1;
       const char *wn = cplan_call_name(nt, id);
+      /* an array whose header the loop being emitted holds (hc_ptr_array):
+         in range by the loop's own test, the element there; else in range
+         of the held length, the element there, and anything else (a
+         negative index, past the end, a nil receiver) the get */
+      char hd[48], hl[48];
+      if ((nil_ok || sp_streq(wn, "[]")) && comp_ntype(c, argv[0]) == TY_INT &&
+          hc_ptr_array(c, recv, hd, hl, sizeof hd)) {
+        if (hc_index_in_range(c, recv, argv[0])) {
+          buf_printf(b, "((%s *)%s[", ecn, hd); emit_int_expr(c, argv[0], b); buf_puts(b, "])");
+          return 1;
+        }
+        int tk = ++g_tmp;
+        buf_printf(b, "({ sp_int _t%d = ", tk); emit_int_expr(c, argv[0], b);
+        buf_printf(b, "; (%s *)(SP_LIKELY((unsigned long long)_t%d < (unsigned long long)%s) ? %s[_t%d] : sp_PtrArray_get%s(",
+                   ecn, tk, hl, hd, tk, nm_sfx);
+        emit_expr(c, recv, b);
+        buf_printf(b, ", _t%d)); })", tk);
+        return 1;
+      }
       if (nil_ok || sp_streq(wn, "[]")) { buf_printf(b, "((%s *)sp_PtrArray_get%s(", ecn, nm_sfx); emit_expr(c, recv, b); }
       else {
         Buf rx = expr_buf(c, recv);

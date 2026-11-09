@@ -3453,8 +3453,8 @@ int emit_call_new_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const c
       if (bcn && sp_streq(bcn, "Array"))  { buf_puts(b, "sp_PolyArray_new()"); return 1; }
       if (bcn && sp_streq(bcn, "Hash"))   { buf_puts(b, "sp_PolyPolyHash_new()"); return 1; }
       if (bcn && sp_streq(bcn, "Object")) { buf_puts(b, "sp_box_obj(sp_Object_new(), SP_BUILTIN_OBJECT)"); return 1; }
-      if (bcn && sp_streq(bcn, "Integer")) {
-        buf_puts(b, "({ sp_raise_cls(\"TypeError\", SPL(\"allocator undefined for Integer\")); sp_box_nil(); })");
+      if (bcn && is_allocator_undefined_class(bcn)) {
+        buf_printf(b, "({ sp_raise_cls(\"TypeError\", SPL(\"allocator undefined for %s\")); sp_box_nil(); })", bcn);
         return 1;
       }
     }

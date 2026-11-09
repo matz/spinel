@@ -13435,8 +13435,11 @@ static void emit_cls_answers_dispatch(Compiler *c, Buf *b) {
               "    if (strcmp(n, \"Array\") == 0) return sp_box_poly_array(sp_PolyArray_new());\n"
               "    if (strcmp(n, \"Hash\") == 0) return sp_box_obj(sp_PolyPolyHash_new(), SP_BUILTIN_POLY_POLY_HASH);\n"
               "    if (strcmp(n, \"Object\") == 0) return sp_box_obj(sp_Object_new(), SP_BUILTIN_OBJECT);\n"
-              "    if (!strcmp(n, \"Integer\")) sp_raise_cls(\"TypeError\", SPL(\"allocator undefined for Integer\"));\n"
-              "  }\n"
+              );
+  for (int i = 0; allocator_undefined_class_at(i); i++)
+    buf_printf(b, "    if (!strcmp(n, \"%s\")) sp_raise_cls(\"TypeError\", SPL(\"allocator undefined for %s\"));\n",
+               allocator_undefined_class_at(i), allocator_undefined_class_at(i));
+  buf_puts(b, "  }\n"
               "  sp_raise_nomethod(sp_nomethod_msg(\"allocate\", v));\n  return sp_box_nil();\n}\n");
   buf_puts(b, "static sp_PolyArray *sp_cls_members(sp_RbVal v) {\n"
               "  sp_PolyArray *a = sp_PolyArray_new(); SP_GC_ROOT(a);\n"

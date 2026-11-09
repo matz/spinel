@@ -2777,3 +2777,21 @@ int is_constless_builtin_name(const char *n) {
   for (int i = 0; names[i]; i++) if (sp_streq(names[i], n)) return 1;
   return is_builtin_exception_name(n) && !strchr(n, ':');
 }
+
+/* The builtin classes whose allocator CRuby leaves undefined: `K.allocate`
+   raises TypeError "allocator undefined for K" (checked against CRuby 4.0 by
+   test/allocate_undefined_allocator_builtins.rb). Rational and Complex undef
+   `allocate` itself (NoMethodError), so they are not here; String, Array,
+   Hash and Object answer an instance. Both the static `K.allocate` and the
+   runtime's dispatch on a class value read this list. */
+static const char *const allocator_undefined_names[] = {
+  "Integer", "Float", "Symbol", "NilClass", "TrueClass", "FalseClass", "Proc", "Thread", "Struct", "Data", NULL
+};
+int is_allocator_undefined_class(const char *n) {
+  if (!n) return 0;
+  for (int i = 0; allocator_undefined_names[i]; i++) if (sp_streq(allocator_undefined_names[i], n)) return 1;
+  return 0;
+}
+const char *allocator_undefined_class_at(int i) {
+  return i >= 0 && i < (int)(sizeof allocator_undefined_names / sizeof *allocator_undefined_names) - 1 ? allocator_undefined_names[i] : NULL;
+}

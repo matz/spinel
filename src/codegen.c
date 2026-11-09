@@ -20922,6 +20922,11 @@ static void emit_class_machinery(const NodeTable *nt, Compiler *c, Buf *b, char 
   buf_puts(b, "  if(c.name){const char*_p=sp_exc_parent_of_name(c.name);"
                "if(_p){sp_int _id=sp_builtin_id_of_name(_p);"
                "return _id!=SP_CLASS_NIL_ID?((sp_Class){_id,NULL}):((sp_Class){-1,_p});}}\n");
+  /* A builtin class carried by NAME (`Rational(3, 4).class` is
+     {-1, "Rational"}) has its builtin's superclass, not the Object
+     default: switch on the builtin's id. */
+  buf_puts(b, "  if(c.name&&c.cls_id<0){sp_int _id=sp_builtin_id_of_name(c.name);"
+               "if(_id!=SP_CLASS_NIL_ID)c=((sp_Class){_id,NULL});}\n");
   buf_puts(b, "  switch(c.cls_id){\n");
   /* Integer, Float, Complex, Rational -> Numeric -> Object */
   buf_puts(b, "  case -100:case -101:case -131:case -142: return ((sp_Class){-113});\n"); /* -> Numeric */
@@ -21158,6 +21163,12 @@ static void emit_class_machinery(const NodeTable *nt, Compiler *c, Buf *b, char 
        includes so e.g. Dog.ancestors == [Dog, Animal, Object, Kernel,
        BasicObject], matching CRuby. */
     buf_puts(b, "    if(cur.cls_id<0){\n");
+    /* a builtin class carried by NAME (`Time.at(0).class`) walks as the
+       builtin's id, so its modules (Time's Comparable) and its superclass
+       chain come from the arms below. An exception class keeps its name:
+       the name arms below give its modules and its parent. */
+    buf_puts(b, "      if(cur.name&&!sp_exc_parent_of_name(cur.name)){sp_int _bid=sp_builtin_id_of_name(cur.name);"
+                 "if(_bid!=SP_CLASS_NIL_ID)cur=((sp_Class){_bid,NULL});}\n");
     /* a builtin Module (Comparable/Enumerable/Kernel/Math) has no superclass
        chain: its ancestors are just itself (#2285). */
     buf_puts(b, "      if(cur.cls_id==-114||cur.cls_id==-115||cur.cls_id==-119||cur.cls_id==-130){\n");

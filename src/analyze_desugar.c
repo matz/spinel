@@ -18758,11 +18758,14 @@ static int bx_program_aliases(Compiler *c, const char *nm) {
    mixes in, on Object, Kernel or BasicObject, at the top level or in a
    module the top level includes (bx_owner_in_string_chain), or by an
    alias? */
+/* The Comparable builtins (other than the numbers) whose call to a method
+   the program adds to `module Comparable` takes the method's copy
+   (bx_cmp_own_class). NULL ends the list. */
+static const char *const bx_cmp_recv_cls[] = { "String", "Symbol", "Time", "Rational", NULL };
 static int bx_kernel_name_own(Compiler *c, const char *nm) {
   if (program_defines_object_method_named(c, nm) || bx_program_aliases(c, nm)) return 1;
-  static const char *const recv_cls[] = { "String", "Symbol" };
-  for (int i = 0; i < 2; i++) {
-    int k = comp_builtin_class_named(c, recv_cls[i]);
+  for (int i = 0; bx_cmp_recv_cls[i]; i++) {
+    int k = comp_builtin_class_named(c, bx_cmp_recv_cls[i]);
     int mi = k >= 0 ? comp_method_in_chain(c, k, nm, NULL) : -1;
     if (mi >= 0 && mi < c->nscopes && c->scopes[mi].def_node >= 0 &&
         !nt_int(c->nt, c->scopes[mi].def_node, "node_bi", 0)) return 1;
@@ -18835,10 +18838,11 @@ static int bx_copy_self_free(Compiler *c, int copy) {
     case NK_CallNode: {
       if (nt_ref(nt, id, "receiver") >= 0) break;
       const char *cn = nt_str(nt, id, "name");
-      /* another container method, unless a String or Symbol method of the
-         name answers first in CRuby (`to_s` in Comparable) */
+      /* another container method, unless a String, Symbol, Time... method
+         of the name answers first in CRuby (`to_s` in Comparable) */
       if (nt_int(nt, id, "bx_copy", -1) >= 0) {
-        if (!cn || core_method_vis("String", cn, 0) > 0 || core_method_vis("Symbol", cn, 0) > 0) ok = 0;
+        for (int r = 0; bx_cmp_recv_cls[r] && ok; r++)
+          if (!cn || core_method_vis(bx_cmp_recv_cls[r], cn, 0) > 0) ok = 0;
         break;
       }
       int k = 0;
@@ -18856,17 +18860,28 @@ static int bx_copy_self_free(Compiler *c, int copy) {
   return ok;
 }
 
-/* A String or Symbol is Comparable too. A method the program adds to
-   `module Comparable` (bx_own) takes them; the gaps in
-   desugar_builtin_scalar_calls are the builtins/ generic's own body. A
-   builtin String or Symbol method of the name answers before
-   Comparable's, as in CRuby. The receiver's class name, or NULL. */
+/* A String, Symbol, Time or Rational is Comparable too. A
+   method the program adds to `module Comparable` (bx_own) takes them; the
+   gaps in desugar_builtin_scalar_calls are the builtins/ generic's own
+   body. A builtin method of the receiver's class with the name answers
+   before Comparable's, as in CRuby. The receiver's class name, or NULL. */
 static const char *bx_cmp_own_class(Compiler *c, int bx, int copy, TyKind rt, const char *name) {
   const NodeTable *nt = c->nt;
   if (bx != SP_BX_COMPARABLE || copy < 0 || !name) return NULL;
   if (!nt_int(nt, (int)nt_int(nt, copy, "bx_def", -1), "bx_own", 0)) return NULL;
-  const char *cls = rt == TY_STRING || rt == TY_STRBUF ? "String" : rt == TY_SYMBOL ? "Symbol" : NULL;
+  const char *cls = rt == TY_STRING || rt == TY_STRBUF ? "String" : rt == TY_SYMBOL ? "Symbol"
+                  : rt == TY_TIME ? "Time" : rt == TY_RATIONAL ? "Rational" : NULL;
   if (!cls || core_method_vis(cls, name, 0) > 0) return NULL;
+  /* Numeric comes before Comparable in a Rational's ancestors: a builtin
+     Numeric method of the name (`integer?`) or the program's own one
+     answers first. */
+  if (rt == TY_RATIONAL) {
+    if (core_method_vis("Numeric", name, 0) > 0) return NULL;
+    int k = comp_builtin_class_named(c, "Numeric");
+    int mi = k >= 0 ? comp_method_in_chain(c, k, name, NULL) : -1;
+    if (mi >= 0 && mi < c->nscopes && c->scopes[mi].def_node >= 0 &&
+        !nt_int(nt, c->scopes[mi].def_node, "node_bi", 0)) return NULL;
+  }
   return bx_copy_self_free(c, copy) ? cls : NULL;
 }
 

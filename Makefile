@@ -1236,7 +1236,11 @@ RAISE_MODE_PINS := test/float_to_r_bounded.rb test/rational_string_overflow.rb t
 # step_boxed_float_bound: under promote every Integer local is boxed, so a
 # boxed limit or step is not known to be a Float or Rational, and an
 # Integer's step walks the Integer loop (an_step_rat_bound).
-PROMOTE_GAPS := test/step_boxed_float_bound.rb
+# comparable_reopen_rational: under promote a Rational is a boxed value, and
+# a boxed receiver's call to a method the program adds to Comparable takes
+# Object's method or raises NoMethodError (desugar_builtin_scalar_calls
+# rewrites a concrete receiver only).
+PROMOTE_GAPS := test/step_boxed_float_bound.rb test/comparable_reopen_rational.rb
 ifeq ($(SPINEL_INT_OVERFLOW),promote)
 TESTS := $(filter-out $(RAISE_MODE_PINS) $(PROMOTE_GAPS),$(TESTS))
 # Drive the spinel front-end and the C compile in promote mode so the test

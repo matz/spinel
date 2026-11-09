@@ -12042,7 +12042,9 @@ static int subtree_changes_local_syn(Compiler *c, int root, const char *name) {
    slow path -- a call the C compiler cannot see into -- so in a loop it reads
    each array's data, start and length again at every access. A split-search
    loop (`counts[b] += 1; sums[b] += vals[i]` over a byte buffer) spent a third
-   of its time on those reloads.
+   of its time on those reloads. An Array of objects', a table's or an Array
+   of Strings' accessors have no slow path, but the loop's poll does, so
+   their data and length are read again at every pass too (HC_PTR).
 
    In a loop whose body runs no code, the headers of the arrays it indexes are
    read into C locals before the loop, and each access tests the index against
@@ -12052,15 +12054,15 @@ static int subtree_changes_local_syn(Compiler *c, int root, const char *name) {
    two names can denote one), and a safepoint, where another thread runs.
 
    A loop qualifies when every node in it is one this can see through: reads,
-   writes to locals and ivars, scalar arithmetic, typed-array reads and element
-   writes, `getbyte`, `length`/`size`, plain field reads, the pure scalar
-   methods and Math functions, class tests and `!` on a scalar, and control
-   flow (a `return` only leaves the loop; through an ensure it is a goto to
-   the ensure, outside the loop), a nested while (which takes this loop's
-   headers). A call to anything else, a block, another kind of loop or a rescue leaves
-   the loop as it was. An array is cached when it is read through a local, an
-   ivar, or a field read of a local, where the loop assigns neither the local
-   nor the ivar.
+   writes to locals and ivars, scalar arithmetic, typed-array reads (an Array
+   of objects' too) and element writes, `getbyte`, `length`/`size`/`bytesize`,
+   plain field reads, the pure scalar methods and Math functions, class tests
+   and `!` on a scalar, and control flow (a `return` only leaves the loop;
+   through an ensure it is a goto to the ensure, outside the loop), a nested
+   while (which takes this loop's headers). A call to anything else, a block,
+   another kind of loop or a rescue leaves the loop as it was. An array is
+   cached when it is read through a local, an ivar, or a field read of a
+   local, where the loop assigns neither the local nor the ivar.
 
    An IO::Buffer is cached the same way: its literal-typed `get_value` reads,
    `set_value` writes and its `size` run no code and move no buffer, so the

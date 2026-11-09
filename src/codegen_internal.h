@@ -439,7 +439,6 @@ int str_mut_var_recv(Compiler *c, int recv);
 void emit_str_frozen_check(Compiler *c, int recv, Buf *b);
 int strbuf_boxed_elem_read(Compiler *c, int v);
 int emit_strbuf_read_ref(Compiler *c, int recv, Buf *b);
-int strbuf_object_ref(Compiler *c, int recv, Buf *b);
 /* A String value rendered for a consumer (codegen_str.c, #8328): its C
    expression, and what the expression needs from where it is used, which
    str_form_settle meets. Two flags are needs of the value itself:

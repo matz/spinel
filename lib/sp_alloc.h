@@ -1014,6 +1014,12 @@ static inline sp_bool sp_str_fd_owner_frozen(const char *s) {
   void *owner = (void *)(((const sp_str_hdr *)(s - 1)) - 1)->next;
   return owner && ((sp_gc_hdr *)((char *)owner - sizeof(sp_gc_hdr)))->frozen;
 }
+/* The handle that owns a String's own bytes (marker 0xfd, whose header
+   names it), or NULL for any other bytes or a payload nothing owns. */
+static inline struct sp_String_s *sp_str_fd_owner(const char *s) {
+  if (!s || ((const unsigned char *)s)[-1] != 0xfd) return NULL;
+  return (struct sp_String_s *)(void *)(((const sp_str_hdr *)(s - 1)) - 1)->next;
+}
 /* 0xf1 = heap string frozen by an explicit .freeze call.
    Unlike 0xff (rodata literal) this marker lives in a malloc'd buffer
    so sp_str_freeze_val can set it.  The frozen? predicate and mutation

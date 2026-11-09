@@ -36013,16 +36013,10 @@ static int pf_in_class_dispatch(Compiler *c, const Scope *src) {
 
 /* The method named `name` beside src: in its class, or a top-level one */
 /* Does the method a proc-form clone was made from take a key of any class in
-   its `**kwrest` (TY_POLY_POLY_HASH, widen_kwrest_any_key)? The clone is
-   "<name>#pf" on the same class. */
+   its `**kwrest` (TY_POLY_POLY_HASH, widen_kwrest_any_key)? */
 static int proc_form_origin_kwrest_any(Compiler *c, const Scope *d) {
   if (!d->name || d->kwrest_idx < 0) return 0;
-  size_t n = strlen(d->name);
-  if (n < 3 || strcmp(d->name + n - 3, "#pf") != 0) return 0;
-  char oname[192];
-  snprintf(oname, sizeof oname, "%.*s", (int)(n - 3), d->name);
-  int oi = d->class_id < 0 ? comp_method_index(c, oname)
-         : (d->is_cmethod ? comp_cmethod_in_class : comp_method_in_class)(c, d->class_id, oname);
+  int oi = proc_form_source(c, d->idx);
   if (oi < 0) return 0;
   Scope *o = &c->scopes[oi];
   if (o->kwrest_idx < 0 || !o->pnames || !o->pnames[o->kwrest_idx]) return 0;
@@ -36086,12 +36080,15 @@ int make_yield_proc_forms(Compiler *c) {
        clone. Cloning the first left the poly dispatch arm running the
        package's transport where every other call site ran the program's
        stub in front of it (#4502). */
-    if (pf_scope_named(c, src, src->name) != s) continue;
+    if (pf_scope_named(c, src, src->name) != s) {
+      src->pf_by_name = 1;
+      continue;
+    }
     /* `#` cannot appear in a Ruby method name, so the clone is invisible to
        the by-name lookups while still mangling to a valid C identifier. */
     char pfname[192];
     snprintf(pfname, sizeof pfname, "%s#pf", src->name);
-    if (pf_scope_named(c, src, pfname) >= 0) continue;
+    if (src->pf_clone) continue;
     int nb = nt_clone_subtree(nt, src->body);
     if (nb < 0) continue;
     comp_scope_new(c, pfname, src->def_node);
@@ -36117,6 +36114,8 @@ int make_yield_proc_forms(Compiler *c) {
     dst->blk_param = (src->blk_param && src->blk_param[0]) ? strdup(src->blk_param)
                                                            : strdup("__pf_blk");
     dst->is_proc_form = 1;
+    dst->pf_source = s + 1;
+    src->pf_clone = di + 1;
     walk_scope(c, nb, di, dst->class_id);
     /* The defaults are the clone's own too: one reading an earlier parameter
        is typed against the clone's, which arrive boxed, where sharing the

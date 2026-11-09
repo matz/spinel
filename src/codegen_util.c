@@ -7568,18 +7568,12 @@ int typed_array_src_held(Compiler *c, int node) {
   return read_is_held(c, node) || nt_kind(c->nt, node) == NK_ArrayNode;
 }
 /* The proc-form clone of scope `s`, or -1. Made in analyze (make_yield_proc_forms):
-   a second scope named "<name>#pf" on the same class, holding an independently
-   typed copy of the body whose yields answer poly. */
+   a second scope on the same class holding an independently typed copy of the
+   body whose yields answer poly, linked from `s` (Scope.pf_clone). */
 int scope_proc_form_of(Compiler *c, int s) {
   if (s < 0 || s >= c->nscopes) return -1;
   Scope *sc = &c->scopes[s];
-  if (!sc->name || !sc->yields) return -1;
-  char pfname[192];
-  snprintf(pfname, sizeof pfname, "%s#pf", sc->name);
-  int pi = sc->class_id < 0 ? comp_method_index(c, pfname)
-         : (sc->is_cmethod ? comp_cmethod_in_class : comp_method_in_class)(c, sc->class_id, pfname);
-  if (pi < 0 || !c->scopes[pi].is_proc_form) return -1;
-  return pi;
+  return sc->yields ? comp_scope_pf_clone(c, sc) : -1;
 }
 /* Is proc form `s` one some call can reach? The poly dispatch that names it
    is emitted after the reachability pass, so the clone's own flag cannot say;
@@ -7595,16 +7589,8 @@ int proc_form_live(Compiler *c, int s) {
 }
 /* The method proc form `s` was cloned from, or -1. */
 int proc_form_source(Compiler *c, int s) {
-  Scope *pf = &c->scopes[s];
-  const char *nm = pf->name;
-  const char *h = nm ? strstr(nm, "#pf") : NULL;
-  if (!pf->is_proc_form || !h) return -1;
-  char src[192];
-  size_t n = (size_t)(h - nm);
-  if (n >= sizeof src) return -1;
-  memcpy(src, nm, n); src[n] = 0;
-  if (pf->class_id < 0) return comp_method_index(c, src);
-  return (pf->is_cmethod ? comp_cmethod_in_class : comp_method_in_class)(c, pf->class_id, src);
+  const Scope *pf = &c->scopes[s];
+  return pf->is_proc_form ? pf->pf_source - 1 : -1;
 }
 /* Is `new` call `id`, which runs yielding initialize `initm`, a step of a
    cycle of constructors (mark_ctor_cycles)? Its own scope, or the method a

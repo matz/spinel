@@ -18136,6 +18136,7 @@ static int infer_block_params_call_arms(Compiler *c, const NodeTable *nt, int id
   /* call to a user yielding method: block params take the yield arg types */
   {
     int mi = -1;
+    TyKind pre_ty = TY_UNKNOWN;   /* what a builtin pre-arm beside mi yields its block */
     if (recv < 0) {
       /* the class body's own class methods, then self's: the class
          methods first in a class method, the instance chain, and a
@@ -18262,6 +18263,14 @@ static int infer_block_params_call_arms(Compiler *c, const NodeTable *nt, int id
           if (rt0 == TY_POLY && !bdflt && (ty_block_yield(TY_POLY_ARRAY, name, byt, 4) > 0 ||
                                            ty_block_yield(TY_POLY_POLY_HASH, name, byt, 4) > 0))
             bdflt = 1; }
+        /* ...and a name a boxed receiver's dispatch drives the block
+           through a builtin pre-arm for (each_index, times, a String's
+           each_line / each_char / each_byte / each_codepoint): the block's
+           first parameter also takes the builtin's element, joined below
+           with the adopted method's yields -- a String's lines reached a
+           block typed from a user method's Symbol yields */
+        if (rt0 == TY_POLY && !poly_enum_op_for(name) && poly_blk_prearm_name(name) && !sp_streq(name, "synchronize"))
+          pre_ty = sp_streq(name, "each_line") || sp_streq(name, "each_char") ? TY_STRING : TY_INT;
         if (ndef > 0 && (poly_enum_op_for(name) || bdflt || (mi < 0 && rt0 == TY_POLY))) {
           Scope *bs2 = comp_scope_of(c, block);
           for (int k = 0; ; k++) {
@@ -18339,6 +18348,12 @@ static int infer_block_params_call_arms(Compiler *c, const NodeTable *nt, int id
         }
       }
       changed |= block_params_widen(c, block, &s, kept, posf, absentf, posf + np);
+      if (pre_ty != TY_UNKNOWN && s.P + s.O > 0) {
+        const char *bp = block_sig_name(c, &s, 0);
+        LocalVar *lv = bp ? scope_local_intern(comp_scope_of(c, block), bp) : NULL;
+        TyKind merged = lv ? ty_unify(lv->type, pre_ty) : TY_UNKNOWN;
+        if (lv && merged != lv->type) { lv_set_type(lv, merged); changed = 1; }
+      }
       free(pos); free(absent); free(posf); free(absentf);
       return changed | 2;
     }

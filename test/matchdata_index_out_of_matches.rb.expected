@@ -1,0 +1,31 @@
+IndexError: index -1 out of matches
+IndexError: index -1 out of matches
+IndexError: index -1 out of matches
+IndexError: index -4 out of matches
+IndexError: index -4 out of matches
+IndexError: index -4 out of matches
+IndexError: index 4 out of matches
+IndexError: index 4 out of matches
+IndexError: index 4 out of matches
+IndexError: index 9 out of matches
+IndexError: index 9 out of matches
+IndexError: index 9 out of matches
+[0, 2]
+"ac"
+2
+[0, 1]
+"a"
+1
+[nil, nil]
+nil
+nil
+[1, 2]
+"c"
+1
+IndexError: index -1 out of matches
+IndexError: index -2 out of matches
+IndexError: index 5 out of matches
+"a"
+nil
+1
+[nil, nil]

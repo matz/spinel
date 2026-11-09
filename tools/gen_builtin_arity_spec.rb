@@ -125,6 +125,11 @@ FORWARDING = {
 }
 PROBE_ARTEFACTS = { "Struct" => %w[a a=], "Data" => %w[a] }
 
+# Private instance methods a class body reaches receiverless, probed like the
+# public surface (the unrouted-call gate asks whether the row admits the
+# call's count): Module#ruby2_keywords.
+PRIVATE_INSTANCE = { "Module" => %w[ruby2_keywords] }
+
 # The surface probed per class: every public instance method (the arity dump
 # alone missed Float#div, Integer#step, ...), minus anything that could act
 # on the probing process or its I/O.
@@ -187,7 +192,8 @@ CLASS_TARGETS = {
   "Random"  => %w[new rand srand],
   "ENV"     => %w[fetch key? has_key? include? member? assoc rassoc values_at],
   "Kernel"  => %w[format sprintf Integer Float String Array Hash Rational Complex
-                  throw catch raise rand srand caller lambda proc binding block_given?],
+                  throw catch raise rand srand caller lambda proc binding block_given?
+                  local_variables global_variables],
   # the class-side surface of the constants a program names bare: GC, Fiber
   # and Thread are not classes the compiler declares; a class Struct.new or
   # Data.define answered is keyed StructClass / DataClass
@@ -289,9 +295,9 @@ end
 # args where the bare call wants 1..; Array#fill drops to 0..2). The block
 # used is inert but really runs, which is why the probe surface excludes
 # anything that could act on the probing process.
-def spec_of(recv, m, block: false)
+def spec_of(recv, m, block: false, private_ok: false)
   sym = m.to_sym
-  return nil unless recv.call.respond_to?(sym)
+  return nil unless recv.call.respond_to?(sym, private_ok)
   low = (0..3).map { |n| probe_counts(recv, sym, n, block: block) }
   min = low.index(:ok)
   return nil if min.nil?  # needs > 3 required args: not on this surface
@@ -364,9 +370,9 @@ end
 # The bare spec plus the with-block spec in one 10-column row; a side the
 # probe could not prove is the -1/NULL sentinel quartet (never fires).
 NO_SPEC = [-1, -1, nil, nil]
-def full_spec_of(recv, m)
-  bare = spec_of(recv, m)
-  blk = spec_of(recv, m, block: true)
+def full_spec_of(recv, m, private_ok: false)
+  bare = spec_of(recv, m, private_ok: private_ok)
+  blk = spec_of(recv, m, block: true, private_ok: private_ok)
   return nil if bare.nil? && blk.nil?
   [*(bare || NO_SPEC), *(blk || NO_SPEC)]
 end
@@ -400,6 +406,10 @@ INSTANCE_RECEIVERS.each do |cls, thunk|
   end
   meths.each do |m|
     s = full_spec_of(thunk, m)
+    inst << [cls, m, *s] if s
+  end
+  PRIVATE_INSTANCE.fetch(cls, []).each do |m|
+    s = full_spec_of(thunk, m, private_ok: true)
     inst << [cls, m, *s] if s
   end
   FORWARDING.fetch(cls, []).each { |m| inst << [cls, m, *NO_SPEC, *NO_SPEC] }

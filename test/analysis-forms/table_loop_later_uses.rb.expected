@@ -1,0 +1,8 @@
+1
+2
+{a: 1, b: 2, c: 3, z: 26}
+"OK"
+"Not Found"
+{200 => "OK"}
+false
+false

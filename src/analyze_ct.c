@@ -28,10 +28,13 @@
    class: nothing of the loop is left for the generated program to run.
 
    The loop runs here only when nothing else can make it answer otherwise.
-   Each condition is one question below. Today each question is answered by
-   a scan of the node table, before classes are registered; these scans are
-   the answers ahead of the load-phase elaborator (#9898), which will answer
-   the same questions from the definitions it has recorded, in load order:
+   Each condition is one question below. Before the walk (a loop that makes
+   a class) each is a scan of the whole node table. In the walk (a loop that
+   makes none, ct_table_loop_form) each is asked at the loop's point: the
+   methods by the load record, and the table's uses by the nodes that may
+   run before the loop, since CRuby has run it by the time a later one
+   runs. (A value given to one of its constants anywhere still declines
+   it: the walk would keep the loop's value over a later one.)
 
      ct_table_only_read        the table's constant is written once and only
                                read, by calls that leave it as it is
@@ -210,17 +213,58 @@ static int ct_gives_const(const NodeTable *nt, const int *parent, int id, char *
 typedef struct CtConstIdx CtConstIdx;
 static const int *ct_const_idx_ids(CtConstIdx *x, const char *leaf, int *n);
 static const int *ct_const_idx_unspelled(CtConstIdx *x, int *n);
+/* The record's answers at a loop the walk runs (ct_table_loop_form): the
+   frame's class and the loop's point; NULL before the walk, where the
+   questions are scans of the program. */
+typedef struct { Compiler *c; int cls; LoadPoint p; CtConstIdx *idx; } CtLoopAt;
+/* In the walk: does node id run after the loop, so that CRuby has run the
+   loop by then? It does when it is in a statement after the loop's own in
+   a body the loop's statement runs in straight on (its class or module
+   body, the bodies around that, a file's top level), and not in a BEGIN
+   block. A method or a block it is in is made there, after the loop, so
+   it runs after too. (By the program's nesting, since the record has
+   points only for the statements the walk has reached.) */
+static int ct_runs_after(const NodeTable *nt, const int *parent, const CtLoopAt *at, int id) {
+  if (!at) return 0;
+  int st = at->p.node;
+  for (int a = id, from = -1; a >= 0; from = a, a = parent[a]) {
+    NodeKind k = nt_kind(nt, a);
+    if (k == NK_PreExecutionNode) return 0;
+    if (k != NK_StatementsNode || from < 0) continue;
+    /* is a list the loop's statement runs in straight on: which of its
+       statements holds the loop */
+    int on = -1;
+    for (int b = st, bf = -1; b >= 0; bf = b, b = parent[b]) {
+      if (b == a) { on = bf; break; }
+      NodeKind bk = nt_kind(nt, b);
+      if (b != st && bk != NK_StatementsNode && bk != NK_ClassNode && bk != NK_ModuleNode && bk != NK_ProgramNode) break;
+    }
+    if (on < 0) continue;
+    if (on == from) return 0;
+    int n = 0;
+    const int *body = nt_arr(nt, a, "body", &n);
+    for (int i = 0; i < n; i++) {
+      if (body[i] == from) return 0;
+      if (body[i] == on) return 1;
+    }
+    return 0;
+  }
+  return 0;
+}
 static int ct_const_given_elsewhere(const NodeTable *nt, const int *parent, int count, char *const *full, int n, int loop,
-                                    const char *own, CtConstIdx *x) {
+                                    const char *own, const CtLoopAt *at) {
+  CtConstIdx *x = at ? at->idx : NULL;
   if (x) {
     /* only the nodes of the constants' leaves, and the const_sets the scan
        can't spell */
     for (int i = 0; i < n; i++) {
       int m = 0; const int *ids = ct_const_idx_ids(x, ct_leaf(full[i]), &m);
-      for (int k = 0; k < m; k++) if (ct_gives_const(nt, parent, ids[k], full, n, loop, own)) return 1;
+      for (int k = 0; k < m; k++)
+        if (ct_gives_const(nt, parent, ids[k], full, n, loop, own)) return 1;
     }
     int m = 0; const int *ids = ct_const_idx_unspelled(x, &m);
-    for (int k = 0; k < m; k++) if (ct_gives_const(nt, parent, ids[k], full, n, loop, own)) return 1;
+    for (int k = 0; k < m; k++)
+      if (ct_gives_const(nt, parent, ids[k], full, n, loop, own)) return 1;
     return 0;
   }
   for (int id = 0; id < count; id++) if (ct_gives_const(nt, parent, id, full, n, loop, own)) return 1;
@@ -396,11 +440,15 @@ static int ct_table_use(const NodeTable *nt, const int *parent, int id, const ch
   default: return 0;
   }
 }
+/* (in the walk, a use that runs after the loop is none of its business:
+   CRuby has run the loop by then) */
 static int ct_table_only_read(const NodeTable *nt, const int *parent, int count, const char *name, int loop,
-                              CtConstIdx *x) {
+                              const CtLoopAt *at) {
+  CtConstIdx *x = at ? at->idx : NULL;
   int writes = 0, m = 0;
   const int *ids = x ? ct_const_idx_ids(x, name, &m) : NULL;
   for (int k = 0; k < (x ? m : count); k++) {
+    if (x && ct_runs_after(nt, parent, at, ids[k])) continue;
     int u = ct_table_use(nt, parent, x ? ids[k] : k, name, loop);
     if (u < 0) return 0;
     writes += u;
@@ -538,7 +586,7 @@ static void ct_push(int **v, int *n, int *cap, int id) {
    instance variables only before, every constant set once and given no
    value elsewhere, every value spellable when it is written? */
 static int ct_effects_writable(const NodeTable *nt, const int *parent, int count, const CtEnv *e, const char *outer, int loop,
-                               int in_walk, CtConstIdx *x) {
+                               const CtLoopAt *at) {
   int *named = calloc((size_t)e->ncls + 1, sizeof(int));
   char **full = calloc((size_t)e->nfx + 1, sizeof(char *));
   if (!named || !full) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
@@ -562,7 +610,7 @@ static int ct_effects_writable(const NodeTable *nt, const int *parent, int count
   }
   for (int k = 0; k < e->ncls && ok; k++) ok = named[k];   /* a class left anonymous is a run-time value */
   if (ok) ok = ct_objects_written_once(e);
-  if (ok) ok = !ct_const_given_elsewhere(nt, parent, count, full, nfull, loop, in_walk ? outer : NULL, x);
+  if (ok) ok = !ct_const_given_elsewhere(nt, parent, count, full, nfull, loop, at ? outer : NULL, at);
   for (int i = 0; i < nfull; i++) free(full[i]);
   free(full); free(named);
   return ok;
@@ -621,10 +669,6 @@ static void ct_effects_write(NodeTable *nt, const CtEnv *e, int **out, int *n, i
    it are before[0..i). On success its statements are appended to *out and 1
    is answered. *parent is the table's parent map, made here when a loop
    first gets past its shape (and again after an expansion grew the table). */
-/* The record's answers at a loop the walk runs (ct_table_loop_form): the
-   frame's class and the loop's point; NULL before the walk, where the
-   questions are scans of the program. */
-typedef struct { Compiler *c; int cls; LoadPoint p; CtConstIdx *idx; } CtLoopAt;
 static int ct_loop_core_changed_at(const CtLoopAt *at, const CtRan *ran, int n);
 static int ct_try_loop(NodeTable *nt, int **parent, int *pcount, const int *before, int i,
                        int **out, int *n, int *cap, const CtLoopAt *at) {
@@ -660,7 +704,7 @@ static int ct_try_loop(NodeTable *nt, int **parent, int *pcount, const int *befo
   if (!ct_lexical_path(nt, *parent, st, outer, sizeof outer)) return 0;
   /* (before the walk, the table's uses are asked once the loop is known
      to make a class, the one kind it runs there: below) */
-  if (at && !ct_table_only_read(nt, *parent, *pcount, tname, st, at->idx)) return 0;
+  if (at && !ct_table_only_read(nt, *parent, *pcount, tname, st, at)) return 0;
   int hv = nt_ref(nt, def, "value"), en = 0;
   Mv *keys = NULL, *vals = NULL;
   CtEnv e; memset(&e, 0, sizeof e);
@@ -700,7 +744,7 @@ static int ct_try_loop(NodeTable *nt, int **parent, int *pcount, const int *befo
     ok = elab_method_at(at->c, at->cls, "const_set", 1, at->p, NULL) == ELAB_NO &&
          elab_method_at(at->c, at->cls, "const_added", 1, at->p, NULL) == ELAB_NO;
   if (ok && ivs && at) ok = elab_method_at(at->c, at->cls, "instance_variable_set", 1, at->p, NULL) == ELAB_NO;
-  if (ok) ok = ct_effects_writable(nt, *parent, *pcount, &e, outer, st, at != NULL, at ? at->idx : NULL);
+  if (ok) ok = ct_effects_writable(nt, *parent, *pcount, &e, outer, st, at);
   if (ok) {
     int base = nt->count;
     ct_effects_write(nt, &e, out, n, cap);

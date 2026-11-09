@@ -1904,8 +1904,25 @@ static int ct_undefined_at(Compiler *c, int id, int cls, const char *name, unsig
                    builtin_self_method_known(name, cm_self_kind(c, flags & CT_TOP ? -1 : cls)) &&
                    !((flags & CT_CMETHOD) && elab_record_cmethod(c, cls, name)));
 }
+/* Does the copy a class-side alias of the name makes (Scope.alias_of) in a
+   class of ci's chain below the one declaring the name's `class << self`
+   accessor stand in front of the accessor ci inherits? The alias is that
+   class's own class method, which a call of the name on ci runs, as CRuby's
+   lookup meets it first (bound by name, it was the alias's target the call
+   took, past the accessor). A def of the name there still leaves the call
+   on the accessor's slot, whose super into the accessor has no method. */
+static int sg_accessor_shadowed(Compiler *c, int id, int ci, const char *name) {
+  for (int k = ci, g = 0; k >= 0 && g < c->nclasses; k = c->classes[k].parent, g++) {
+    if (comp_sg_accessor_own(c, k, name)) return 0;
+    int m = call_target(c, id, k, name, CT_CMETHOD | CT_OWN, NULL);
+    if (m >= 0 && c->scopes[m].alias_of) return 1;
+    if (k == c->classes[k].parent) break;
+  }
+  return 0;
+}
 /* See call_plan.h. */
 int cplan_sg_accessor(Compiler *c, int id, int ci, const char *name, char *slot, size_t cap) {
+  if (sg_accessor_shadowed(c, id, ci, name)) return CP_SG_NONE;
   if (name_is_plain_setter(name)) {
     if (!comp_sg_writer_reached(c, ci, name, slot, cap)) return CP_SG_NONE;
   }

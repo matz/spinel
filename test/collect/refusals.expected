@@ -8,10 +8,6 @@ spinel: 1 refusal, nothing written
 spinel: test/reject/alias_of_extended_super_behind_redef_two_modules.rb:16: B.n: alias of an inherited class method whose `super` reaches a module the class extends, behind a later definition of the name, is not supported; see docs/limitations.md
 == test/reject/alias_of_extended_super_behind_redef_two_modules.rb [promote] rc=1
 spinel: test/reject/alias_of_extended_super_behind_redef_two_modules.rb:16: B.n: alias of an inherited class method whose `super` reaches a module the class extends, behind a later definition of the name, is not supported; see docs/limitations.md
-== test/reject/alias_of_initialize_value.rb [default] rc=1
-spinel: test/reject/alias_of_initialize_value.rb:13: unsupported value of a call of an alias of initialize: initialize is compiled to return nothing, so its last value is not there to answer (see docs/limitations.md)
-== test/reject/alias_of_initialize_value.rb [promote] rc=1
-spinel: test/reject/alias_of_initialize_value.rb:13: unsupported value of a call of an alias of initialize: initialize is compiled to return nothing, so its last value is not there to answer (see docs/limitations.md)
 == test/reject/alias_rebinds_after_class_body_call.rb [default] rc=1
 spinel: test/reject/alias_rebinds_after_class_body_call.rb:8: `a` is called in the class body before an alias rebinds it: an alias binds for the whole program here, so the call would run the aliased body, not the `def a` Ruby runs at that point. Call it after the alias, or give the alias another name
 == test/reject/alias_rebinds_after_class_body_call.rb [promote] rc=1

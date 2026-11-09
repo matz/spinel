@@ -9,3 +9,20 @@ end
 p B.new.m
 puts B.instance_method(:m).inspect.sub(/ \S+:\d+>\z/, ">")
 puts B.new.method(:m).inspect.sub(/ \S+:\d+>\z/, ">")
+
+# ...and one whose body calls super: the copy's super starts where the
+# def's does, above the def's own class, never at the copy itself
+class Base
+  def s = "base"
+end
+class SA < Base
+  def s = "SA+" + super
+end
+class SB < SA
+  alias_method :s, :s
+end
+class SC < SA
+  alias s s
+  def via = s
+end
+puts SB.new.s, SC.new.via

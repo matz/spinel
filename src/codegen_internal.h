@@ -2379,8 +2379,6 @@ void emit_ds_param_extract(Compiler *c, Scope *m, int i, int ds_hash_tmp,
 /* analyze-side helpers also called from codegen (defined in analyze_util.c /
    analyze_scope.c; canonical declarations live in analyze_internal.h) */
 int is_arith_op(const char *op);
-int node_value_used_in_body(const NodeTable *nt, const int *par, int v);
-const int *comp_parent_map(Compiler *c);
 int is_cmp_op(const char *op);
 const char *int_shift_fn(Compiler *c, const char *op, int v);
 int local_all_writes_empty_array(Compiler *c, Scope *sc, const char *name);

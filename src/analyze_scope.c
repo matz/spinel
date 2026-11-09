@@ -4776,15 +4776,17 @@ static int alias_accessor_method(Compiler *c, const ElabEntry *e, int w, int at,
   elab_attr_scope(c, e, s);
   return 1;
 }
-/* The scope of the ancestor class's def an instance alias e names at its
-   point, found through the record the way ct_def_version follows it (past
-   the aliases made on the way, each at its own point); -1 for any other
-   target: the class's own def, a module's, a builtin's, a version that
-   may not have run, or an initialize, which is compiled to answer nothing
-   (scope_is_initialize): a copy of it would answer nothing too, where CRuby
-   answers its last value, so its alias is bound by name, as it was. Asked before any method is made, as
-   alias_accessor_version is. */
-static int alias_inherited_def(Compiler *c, const ElabEntry *e) {
+/* The scope of the def an alias e names at its point, which the alias is
+   a copy of (register_alias_methods), found through the record the way
+   ct_def_version follows it (past the aliases made on the way, each at its
+   own point): an ancestor class's def, or an initialize,
+   the class's own too; -1 for any other target: another def of the
+   class's own, a builtin's, a version that may not have run. initialize is
+   compiled to answer nothing (scope_is_initialize), so its alias bound by
+   name answered nothing where CRuby answers its last value; the copy is a
+   method under the alias's name, compiled with its value. Asked before any
+   method is made, as alias_accessor_version is. */
+static int alias_copy_source(Compiler *c, const ElabEntry *e) {
   LoadPoint p = elab_point_of(c, e->node);
   const LrDef *d = NULL;
   const char *t = e->target;
@@ -4803,8 +4805,8 @@ static int alias_inherited_def(Compiler *c, const ElabEntry *e) {
   }
   if (!d || (d->kind != LR_DEF && d->kind != LR_DEFINE_METHOD)) return -1;
   int q = c->node_cbody[d->node], si = elab_def_scope_of(c, d->node);
-  if (q < 0 || q == e->cls || si <= 0 ||
-      c->scopes[si].class_id != q || c->scopes[si].def_node != d->node || scope_is_initialize(&c->scopes[si])) return -1;
+  if (q < 0 || si <= 0 || (q == e->cls && !scope_is_initialize(&c->scopes[si])) ||
+      c->scopes[si].class_id != q || c->scopes[si].def_node != d->node) return -1;
   /* the side the alias names: a class method of the ancestor's own, or on the class side an instance method of a
      module the ancestry extends (the class's singleton holds a copy of it, as an extend makes) */
   if (!c->scopes[si].is_cmethod != !e->sg && !(e->sg && comp_class_is_module(c, &c->classes[q]))) return -1;
@@ -4841,7 +4843,13 @@ void register_aliases(Compiler *c) {
   for (int i = 0; i < n; i++) {
     if (a[i].kind != LR_ALIAS || !a[i].target || a[i].cls < 0 || alias_replaced_later(a, n, i)) continue;
     acc[i] = alias_accessor_version(c, &a[i]);
-    inh[i] = !acc[i] && (alias_inherited_def(c, &a[i]) >= 0 || alias_writer_unresolved(c, &a[i]));
+    int si = acc[i] ? -1 : alias_copy_source(c, &a[i]);
+    /* (the def is kept on the alias for register_alias_methods, which makes
+       its copy: asked again there, a method made since, an accessor alias's
+       `def foo = @foo` under another name, reads as a later def of the
+       alias's name, and the alias would get neither the copy nor a binding) */
+    if (si >= 0) nt_node_set_int((NodeTable *)c->nt, a[i].node, "alias_copy_src", si + 1);
+    inh[i] = si >= 0 || (!acc[i] && alias_writer_unresolved(c, &a[i]));
   }
   for (int i = 0; i < n; i++)
     if (acc[i] && !alias_accessor_method(c, &a[i], acc[i]->kind == LR_WRITER, acc[i]->node, acc[i]->node + 1)) acc[i] = NULL;
@@ -4910,21 +4918,39 @@ static int alias_extend_copy(Compiler *c, int cls, int dn) {
   return best;
 }
 
-/* An alias of an ancestor class's def (alias_inherited_def) is a method of
-   the alias's class made of that def: a copy of its scope under the
-   alias's name, the way an include puts a module's methods in its
-   includer, so the class has the method the alias is, which a call through
-   self from an inherited method reaches by dispatch where a name mapping
-   met the ancestor's own. The scope keeps the def, whose name is the
-   alias's #original_name, and is linked to the alias's version for the call
-   plan (ct_def_version). Run once the classes have their parents, which the
+/* A copy of an initialize answers its last value, which may be a super
+   into the initialize above it: each initialize a super reaches up the
+   chain from copy di answers its value too (init_value), whether the
+   super is the last value or not. */
+static void alias_init_super_values(Compiler *c, int di) {
+  for (int s = di, g = 0; s >= 0 && g < c->nscopes && scope_calls_super(c, s); g++) {
+    int t = cplan_super_target(c, -1, &c->scopes[s], NULL);
+    if (t < 0 || !scope_is_initialize(&c->scopes[t]) || c->scopes[t].init_value) break;
+    c->scopes[t].init_value = 1;
+    s = t;
+  }
+}
+
+/* An alias of an ancestor class's def, or of an initialize, the class's own
+   too (alias_copy_source, which register_aliases asks before any method is
+   made and keeps on the alias as alias_copy_src), is a method of the
+   alias's class made of that def: a copy of its scope under the alias's
+   name, the way an include puts a module's methods in its includer, so the
+   class has the method the alias is, which a call through self from an
+   inherited method reaches by dispatch where a name mapping met the
+   ancestor's own. The scope keeps the def, whose name is the alias's
+   #original_name, and is linked to the alias's version for the call plan
+   (ct_def_version). Run once the classes have their parents, which the
    copy's body is walked under (an ivar it names is the ancestor's). A body
    that calls super keeps its owner's: the copy's super is that of the
-   method the def is in the alias's class's ancestry (Scope.super_of). An
-   alias in a module is a method of the module's table, which an include
-   copies, so the modules' go first (modules), before the includes; the
-   copy of a module's method has no ancestry yet for a super to start from,
-   and its alias is bound by name. */
+   method the def is in the alias's class's ancestry (Scope.super_of). A
+   copy of an initialize is not named initialize, so it is compiled with
+   its value, and so is each initialize its super reaches
+   (alias_init_super_values). An alias in a module is a method of the
+   module's table, which an include copies, so the modules' go first
+   (modules), before the includes; the copy of a module's method has no
+   ancestry yet for a super to start from, and its alias is bound by
+   name. */
 void register_alias_methods(Compiler *c, int modules) {
   int n = 0;
   ElabEntry *a = elab_entries(c, 1u << LR_ALIAS | 1u << LR_READER | 1u << LR_WRITER, &n);
@@ -4932,7 +4958,7 @@ void register_alias_methods(Compiler *c, int modules) {
   if (!src) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   for (int i = 0; i < n; i++)
     src[i] = a[i].kind == LR_ALIAS && a[i].target && a[i].cls >= 0 && !alias_replaced_later(a, n, i) &&
-             !comp_class_is_module(c, &c->classes[a[i].cls]) == !modules ? alias_inherited_def(c, &a[i]) : -1;
+             !comp_class_is_module(c, &c->classes[a[i].cls]) == !modules ? (int)nt_int(c->nt, a[i].node, "alias_copy_src", 0) - 1 : -1;
   int copied = 0;
   for (int i = 0; i < n; i++) {
     if (src[i] < 0 && a[i].kind == LR_ALIAS && a[i].target && a[i].cls >= 0 && !alias_replaced_later(a, n, i) &&
@@ -4972,6 +4998,7 @@ void register_alias_methods(Compiler *c, int modules) {
         unsupported_feature(c, a[i].node, msg);
       }
       c->scopes[di].super_of = (hold >= 0 ? hold : src[i]) + 1;
+      if (scope_is_initialize(&c->scopes[src[i]])) alias_init_super_values(c, di);
     }
     elab_attr_scope(c, &a[i], di);
     copied = 1;
@@ -7359,8 +7386,7 @@ static int alias_original_placed(Compiler *c, int ci, int a) {
    again after it would take its place here, where CRuby keeps the earlier
    body, so that is refused. This is the alias bound by name whose original
    the record does not place (a define_method whose name is computed; a
-   placed one is a method of its class, or an initialize's, which the name
-   binding answers as CRuby does) */
+   placed one is a method of its class) */
 static void inherited_alias_refuse_later_def(Compiler *c, int ci, int a, int p) {
   ClassInfo *cls = &c->classes[ci];
   int at = cls->alias_node[a];
@@ -10411,6 +10437,17 @@ void register_prepends(Compiler *c) {
   cell_writes_flush(c);
 }
 
+/* Does class ci define instance method `name` of its own: a def, or an
+   alias the record gives the class (elab_class_surface)? */
+static int class_defines_member(Compiler *c, int ci, const char *name) {
+  if (comp_method_in_class(c, ci, name) >= 0) return 1;
+  int n = 0;
+  const ElabSurface *v = elab_class_surface(c, ci, 0, &n);
+  for (int i = 0; i < n; i++)
+    if (v[i].alias && sp_streq(v[i].name, name)) return 1;
+  return 0;
+}
+
 /* Merge inherited ivar/reader/writer NAMES into subclasses so the struct
    layout is [parent ivars..., own ivars...] (cast-compatible). Types are
    propagated later in the fixpoint. Parent-first order. */
@@ -10549,24 +10586,26 @@ void inherit_members(Compiler *c) {
     free(old); free(oldt); free(old_ss); free(old_es); free(old_it); free(old_oa); free(old_os);
     free(old_oc); free(old_ni); free(old_ne); free(old_ae); free(old_aw); free(own_pin);
 
-    /* An inherited attribute the child overrides with a `def` stops there: the
-       def answers the name for the child and everything below it, so copying
-       the flag on let a grandchild read the attribute past the def -- and a
-       grandchild that re-declares the attribute looked like it had only
-       inherited it, so a `super` below it skipped to the def. An attribute
-       the parent undefines stops there too: copied on, it looked declared
-       again in the child, and a boxed `sub.x` read it. A Struct's readers
-       are its positional members, so they stay. */
+    /* An inherited attribute the child overrides with a `def` or an alias
+       stops there: the method answers the name for the child and everything
+       below it, so copying the flag on let a grandchild read the attribute
+       past it -- and a grandchild that re-declares the attribute looked like
+       it had only inherited it, so a `super` below it skipped to the def. An
+       alias's method may not exist yet (an ancestor's def's copy is made
+       once the mixins are in, register_alias_methods), so the record says.
+       An attribute the parent undefines stops there too: copied on, it
+       looked declared again in the child, and a boxed `sub.x` read it. A
+       Struct's readers are its positional members, so they stay. */
     for (int k = 0; k < pc->nreaders; k++) {
       int undeffed = 0;
       for (int j = 0; j < pc->nundefs && !undeffed; j++) undeffed = sp_streq(pc->undefs[j], pc->readers[k]);
-      if (comp_method_in_class(c, i, pc->readers[k]) < 0 && (!undeffed || ci->is_struct))
+      if (!class_defines_member(c, i, pc->readers[k]) && (!undeffed || ci->is_struct))
         comp_add_reader(ci, pc->readers[k]);
     }
     for (int k = 0; k < pc->nwriters; k++) {
       char wn[300];
       snprintf(wn, sizeof wn, "%s=", pc->writers[k]);
-      if (comp_method_in_class(c, i, wn) < 0) comp_add_writer(ci, pc->writers[k]);
+      if (!class_defines_member(c, i, wn)) comp_add_writer(ci, pc->writers[k]);
     }
     }
     if (!progressed) break;   /* the rest are cycles or dangling parents */

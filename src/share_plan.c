@@ -12,13 +12,12 @@
              object itself (SPN_OBJECT);
      supply  whether its producer can hand over the handle, or a box that
              holds it (SPS_HANDLE, share_plan_supplies), or only its bytes
-             (SPS_BYTES), or, for a new String no producer has a handle for,
-             the handle the C hands over all the same (share_plan_fresh_handle);
+             (SPS_BYTES);
      form   what the two give (share_plan_form): the bytes (SPF_BYTES);
              the producer's handle (SPF_HANDLE); the bytes wrapped into a
              new handle, which no other name can tell from the object
-             (SPF_WRAP); or no conversion at all, because the consumer
-             needs the object and the producer has only bytes (SPF_REFUSE).
+             (SPF_WRAP); or the bytes, which the consumer that needs the
+             object makes a handle of (SPF_COPY).
 
    A need is a consumer's. A value has one consumer, the node it sits in,
    whose role says what it does with it (share_plan_role): it takes the
@@ -100,10 +99,11 @@
 #include "share.h"
 #include "value_pos.h"
 
-int share_plan_form(int need, int supply) {
+/* the form a need and a supply give */
+static int share_plan_form(int need, int supply) {
   if (need == SPN_BYTES) return SPF_BYTES;
   if (supply == SPS_HANDLE) return SPF_HANDLE;
-  return need == SPN_NEW ? SPF_WRAP : SPF_REFUSE;
+  return need == SPN_NEW ? SPF_WRAP : SPF_COPY;
 }
 
 
@@ -247,6 +247,7 @@ int share_plan_producer(Compiler *c, int v, int *operand) {
 }
 
 static int share_plan_supplies_d(Compiler *c, int v, int depth);
+static int share_plan_need(Compiler *c, int v);
 
 /* Does leaf a of a value taken arm by arm (a conditional's arm, a block's
    value) give its consumer what it needs: nil, a raise (no value), a
@@ -725,7 +726,8 @@ enum { SPN_ASK = 3, SPM_NEED = 3, SPM_ROLE_SHIFT = 2 };
 static int share_plan_need_of(int need) {
   return need == SHN_NO ? SPN_BYTES : SPN_OBJECT;
 }
-int share_plan_need(Compiler *c, int v) { return share_plan_need_of(share_value_needs_handle(c, v)); }
+/* The value's need (what a taker needs), asked live. */
+static int share_plan_need(Compiler *c, int v) { return share_plan_need_of(share_value_needs_handle(c, v)); }
 
 static int share_plan_box_kept(Compiler *c, int v);
 
@@ -748,68 +750,6 @@ static int share_plan_role_need(Compiler *c, int v, int role, int need) {
   /* the store asks past the literal it splits (never less than the value) */
   if (role == SPR_STORE && need == SPN_BYTES) return share_plan_need_of(share_store_needs_handle(c, v));
   return need;
-}
-
-/* How the emitter takes value v off its consumer, through the parentheses
-   and a statement list's tail around it: as a box (SPT_BOXED: an element
-   of an Array or Hash literal, the value of a write into a boxed slot), as
-   bytes (SPT_RECV: a call's receiver, which a builtin reads or changes in
-   place; also the argument of a spliced yield, which the block's binder
-   takes as the C finds it), or as the handle (any other: a write into a
-   shared slot, an argument, a tail, an arm). */
-enum { SPT_HANDLE, SPT_BOXED, SPT_RECV };
-static int share_plan_taken_as(Compiler *c, int v) {
-  const NodeTable *nt = c->nt;
-  int n = c->share_parent_n, p = c->share_parent && v >= 0 && v < n ? c->share_parent[v] : -1;
-  for (; p >= 0 && p < n && (nt_kind(nt, p) == NK_ParenthesesNode || nt_kind(nt, p) == NK_StatementsNode);
-       v = p, p = c->share_parent[p]) {
-    int bn = 0;
-    const int *bv = nt_kind(nt, p) == NK_StatementsNode ? nt_arr(nt, p, "body", &bn) : NULL;
-    /* (a statement before the last drops its value) */
-    if (bv && (bn <= 0 || bv[bn - 1] != v)) return SPT_HANDLE;
-  }
-  if (p < 0 || p >= n) return SPT_HANDLE;
-  if (nt_kind(nt, p) == NK_CallNode) return nt_ref(nt, p, "receiver") == v ? SPT_RECV : SPT_HANDLE;
-  if (is_arguments_node_type(nt_type(nt, p)) && c->share_parent[p] >= 0 && nt_kind(nt, c->share_parent[p]) == NK_YieldNode)
-    return share_plan_memo_need(c, v) >= 0 ? SPT_HANDLE : SPT_RECV;
-  /* (a Hash keeps a value; a String key is copied and frozen) */
-  if (nt_kind(nt, p) == NK_AssocNode) {
-    if (nt_ref(nt, p, "value") != v) return SPT_HANDLE;
-    p = c->share_parent[p];
-    if (p < 0 || p >= n) return SPT_HANDLE;
-  }
-  if (nt_kind(nt, p) == NK_ArrayNode || nt_kind(nt, p) == NK_HashNode) return SPT_BOXED;
-  HolderRef h;
-  return holder_of_node(c, p, &h) && h.r.kind == RK_BOXED ? SPT_BOXED : SPT_HANDLE;
-}
-
-/* Is value v, a new String (share_value_fresh, which the producer rules
-   answer SPK_NONE before they ask where a handle comes from), handed over
-   as a handle all the same, for a consumer that is not a box's own
-   emitter (SPR_BOX asks the plan whether to wrap)? No other name holds the
-   String, so a handle some path publishes and the new one a fallback wraps
-   are the same, and the plan says handle where the C passes one:
-     - where the emitter takes the value as the handle: a call the caller
-       picks up the handle of (strbuf_call_picks_up), a boxed receiver's
-       to_s (repr_boxed_to_s_operand), or the route the producer rules
-       that follow the freshness test would name (share_node_carry_kind)
-       where the node is read as itself, not under a splice or an arm,
-       whose binder takes the value as it finds it;
-     - where a box takes it, parentheses: the box face makes the handle
-       where it wraps the String (SPR_BOX), and the parentheses only pass
-       the box on.
-   A receiver is read as bytes, whatever its route. */
-static int share_plan_fresh_handle(Compiler *c, int v, int role) {
-  if (role == SPR_BOX) return 0;
-  int taken = share_plan_taken_as(c, v);
-  if (taken == SPT_BOXED)
-    return nt_kind(c->nt, v) == NK_ParenthesesNode && share_plan_role_need(c, v, SPR_BOX, SPN_NEW) == SPN_NEW;
-  if (taken == SPT_RECV) return 0;
-  int u = nt_paren_single(c->nt, v), op, k;
-  if (u >= 0 && nt_kind(c->nt, u) == NK_CallNode && (strbuf_call_picks_up(c, u) || repr_boxed_to_s_operand(c, u) >= 0))
-    return 1;
-  k = share_node_carry_kind(c, v, &op);
-  return k != SPK_NONE && share_plan_supply_kind(c, v, k, &op, 0) == 1;
 }
 
 /* Is value e of a kind whose text emit_expr gives as the handle (a read, a
@@ -884,7 +824,7 @@ int share_plan_multi_renders(Compiler *c, int mw, int e) {
    as a handle (share_plan_multi_renders)? The element of a multiple write
    is found through the parents (the map the plan builds once the seal is
    done: the seal asks share_plan_multi_renders of the write itself). */
-int share_plan_store_renders(Compiler *c, int v) {
+static int share_plan_store_renders(Compiler *c, int v) {
   const NodeTable *nt = c->nt;
   int n = c->share_parent_n, p = c->share_parent && v >= 0 && v < n ? c->share_parent[v] : -1, e = v;
   while (p >= 0 && p < n && (nt_kind(nt, p) == NK_ParenthesesNode || nt_kind(nt, p) == NK_StatementsNode)) {
@@ -903,9 +843,6 @@ SharePlan share_plan_with_need(Compiler *c, int v, int role, int need) {
   SharePlan p = { (unsigned char)need, SPS_BYTES, SPF_BYTES };
   if (need == SPN_BYTES) return p;
   p.supply = share_plan_supplies(c, v) && (role != SPR_STORE || share_plan_store_renders(c, v)) ? SPS_HANDLE : SPS_BYTES;
-  if (p.supply == SPS_BYTES && need == SPN_NEW && (role != SPR_STORE || share_plan_store_renders(c, v)) &&
-      share_plan_fresh_handle(c, v, role))
-    p.supply = SPS_HANDLE;
   /* an exception's message asked its identity is the box the exception
      keeps it in (exc_message_identity_operand), which the identity reads
      where the value is read as bytes: no handle is attached to the read,
@@ -1039,31 +976,14 @@ static int share_plan_freeze_read(Compiler *c, int n) {
   return (c->ntype[recv] == TY_STRING || c->ntype[recv] == TY_STRBUF) && cplan_targets(c, n, tg, CPT_MAX) == 0;
 }
 
-/* Is call n a String builtin that changes its receiver in place, with no
-   method of the program's own, over a receiver that is a new String, one
-   no other name can see (the need SPN_NEW: share_value_fresh, or a String
-   one name holds)? */
-static int share_plan_new_mutated(Compiler *c, int n) {
-  const NodeTable *nt = c->nt;
-  const char *nm = nt_str(nt, n, "name");
-  int recv = nt_ref(nt, n, "receiver"), tg[CPT_MAX];
-  if (!nm || recv < 0 || !bop_name_mutates(nm, 0) || (c->ntype[recv] != TY_STRING && c->ntype[recv] != TY_STRBUF))
-    return 0;
-  return share_plan_need(c, recv) == SPN_NEW && cplan_targets(c, n, tg, CPT_MAX) == 0;
-}
-
 /* The roles of the receivers that a builtin call only reads: a freeze of
    a variable's String (share_plan_freeze_read), and a blockless String
    iterator whose Enumerator is walked where it is made
    (str_each_enum_walked_here): the walk reads the String as it is there,
    and the Enumerator's source box dies with the expression. One that
-   outlives it holds the handle, and its receiver stays a taker. A new
-   String an in-place change is made to (share_plan_new_mutated) is read
-   as well: no other name sees it, so the change to its bytes is all there
-   is to see, and an answer that keeps the String is that call's own
-   consumer's. */
+   outlives it holds the handle, and its receiver stays a taker. */
 static void share_plan_reader_roles(Compiler *c, int n) {
-  if (share_plan_freeze_read(c, n) || str_each_enum_walked_here(c, n) || share_plan_new_mutated(c, n))
+  if (share_plan_freeze_read(c, n) || str_each_enum_walked_here(c, n))
     share_plan_role_mark(c, nt_ref(c->nt, n, "receiver"), SPR_READ);
 }
 
@@ -1231,7 +1151,8 @@ static int share_plan_plain_ctx(void) {
          g_arm.send_split < 0;
 }
 
-int share_plan_memo_need(Compiler *c, int v) {
+/* The memo's need of node v where codegen is, or -1 where it cannot answer. */
+static int share_plan_memo_need(Compiler *c, int v) {
   int m = c->share_plan && v >= 0 && v < c->share_plan_n && (c->share_plan[v] & SPM_NEED) != SPN_ASK &&
           c->nt->version == c->share_plan_ver && c->ntype[v] == c->share_plan_ty[v] && share_plan_plain_ctx();
   return m ? c->share_plan[v] & SPM_NEED : -1;

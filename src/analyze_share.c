@@ -120,23 +120,6 @@ static const char *sh_lit_name(const NodeTable *nt, int a) {
 }
 
 static int sh_plain_operand(Compiler *c, int n);
-/* How lending a parameter argument node a of `call` keeps CRuby's answer:
-   SHL_HOLDS by itself, SHL_READ only while the method's value is taken as
-   read (F->mread), SHL_UNSOUND not at all. A value no variable holds is
-   lent a temporary nothing else names. A variable's C slot is lent by
-   address, so it must be a local (or parameter) nothing can rebind while
-   the callee runs: no proc that captures it assigns it, the call passes no
-   block (the method's yield runs the block, which may assign it), and every
-   argument is a read, a literal or scalar arithmetic over those (*plain,
-   asked once per call). A global's or an ivar's slot is refused where the
-   call can rebind it at the top level or in a class body (#6179), which
-   only the shared class avoids. A block of the call that can assign the
-   argument variable, a local or an instance variable
-   (comp_block_rebinds_arg: `m(s) { s = +"b" }`, `m(@s) { @s = +"b" }`),
-   rebinds the lent slot under the parameter while the method runs: its
-   appends then land on the new String. No lend holds there; the parameter
-   shares its argument's class instead. */
-enum { SHL_UNSOUND = -1, SHL_READ = 0, SHL_HOLDS = 1 };
 
 /* Method from hands the block it was given on to method to (share_value_fresh) */
 static void sh_fwd_edge(ShareFacts *F, int from, int to) {
@@ -193,8 +176,7 @@ int share_target_armed(Compiler *c, int call, int mi) {
 }
 /* The methods call enters (cplan_entries) when `entries`, else those whose
    return is its value (cplan_targets), that the share walk follows. */
-static int sh_targets_in(ShareFacts *F, Compiler *c, int call, int *out, int cap, int entries) {
-  (void)F;
+static int sh_targets_in(Compiler *c, int call, int *out, int cap, int entries) {
   int n = entries ? cplan_entries(c, call, out, cap) : cplan_targets(c, call, out, cap), m = 0;
   if (n == CPT_UNKNOWN) return -1;
   if (n == 0) return sh_copied_self_targets(c, call, out, cap);
@@ -205,7 +187,7 @@ static int sh_targets_in(ShareFacts *F, Compiler *c, int call, int *out, int cap
     if (share_target_reachable(c, call, out[i]) && share_target_armed_plan(c, &p, call, out[i])) out[m++] = out[i];
   return m;
 }
-static int sh_targets(Compiler *c, int call, int *out, int cap) { return sh_targets_in(NULL, c, call, out, cap, 0); }
+static int sh_targets(Compiler *c, int call, int *out, int cap) { return sh_targets_in(c, call, out, cap, 0); }
 /* A module's method an include copied into its includers runs as those
    copies (is_transplanted_source), where self is an includer, so a
    receiverless call in it reaches what each includer's chain answers to
@@ -776,7 +758,7 @@ static void sh_mb_build(ShareFacts *F, Compiler *c) {
     sh_mb_dyn(F, c, n, dead);
     int blk = nt_ref(nt, n, "block");
     if (blk < 0) continue;
-    int tg[64], ntg = sh_targets_in(F, c, n, tg, 64, 1);
+    int tg[64], ntg = sh_targets_in(c, n, tg, 64, 1);
     /* methods the plan cannot list: its block may reach each method of the
        names the plan bounds them by (cplan_entries_bound_names) */
     if (ntg < 0) {
@@ -799,7 +781,7 @@ static void sh_mb_build(ShareFacts *F, Compiler *c) {
       int blk = nt_ref(nt, n, "block");
       /* (the methods it enters: a program `new`'s super into the builtin
          Class#new enters the initialize it runs, which answers no value) */
-      int tg[64], ntg = sh_targets_in(F, c, n, tg, 64, 1), cur = sh_method_index(c, n);
+      int tg[64], ntg = sh_targets_in(c, n, tg, 64, 1), cur = sh_method_index(c, n);
       for (int i = 0; i < ntg; i++) {
         if (sup[k] == NK_ForwardingSuperNode && cur >= 0) {
           F->blk_dyn[tg[i]] |= 3;
@@ -1970,9 +1952,8 @@ static int sh_hash_key_call(Compiler *c, int n) {
   return is_hash_key_lookup(name);
 }
 
-int share_mark_borrows(Compiler *c) {
+void share_mark_borrows(Compiler *c) {
   const NodeTable *nt = c->nt;
-  int marked = 0;
   NT_FOREACH_KIND(nt, NK_CallNode, n) {
     int args = nt_ref(nt, n, "arguments");
     int argc = 0; const int *argv = args >= 0 ? nt_arr(nt, args, "arguments", &argc) : NULL;
@@ -1983,7 +1964,7 @@ int share_mark_borrows(Compiler *c) {
         sh_plain_operand(c, nt_ref(nt, n, "receiver"))) {
       int plain = 1;
       for (int i = 1; i < argc && plain; i++) plain = sh_plain_operand(c, argv[i]);
-      if (plain) { c->strbuf_read_raw[argv[0]] = 1; marked++; }
+      if (plain) c->strbuf_read_raw[argv[0]] = 1;
     }
   }
   /* a String-keyed Hash literal stores each entry as such a call does:
@@ -1995,13 +1976,9 @@ int share_mark_borrows(Compiler *c) {
     for (int i = 0; i < en; i++) {
       if (nt_kind(nt, el[i]) != NK_AssocNode) continue;
       int k = nt_ref(nt, el[i], "key");
-      if (k >= 0 && sh_handle_read(c, k) && sh_plain_operand(c, nt_ref(nt, el[i], "value"))) {
+      if (k >= 0 && sh_handle_read(c, k) && sh_plain_operand(c, nt_ref(nt, el[i], "value")))
         c->strbuf_read_raw[k] = 1;
-        marked++;
-      }
     }
   }
-  c->share_borrows = marked;
-  return marked;
 }
 

@@ -6051,7 +6051,14 @@ int emit_collect_expr(Compiler *c, int id, Buf *b) {
     emit_indent(g_pre, g_indent);
     buf_printf(g_pre, "sp_int _t%d = sp_poly_length(_t%d);\n", tn2, trecv2);
     emit_indent(g_pre, g_indent);
-    buf_printf(g_pre, "sp_%sArray *_t%d = sp_%sArray_new();\n", rk2, tres2, rk2);
+    /* one value per member: the result takes them all at its first size.
+       Only an Array's or a Hash's length counts the members (a File's is
+       its byte size) */
+    if (array_has_new_cap(rk2))
+      buf_printf(g_pre, "sp_%sArray *_t%d = sp_%sArray_new_cap(_t%d.tag == SP_TAG_OBJ && "
+                        "(sp_poly_is_array_kind(_t%d.cls_id) || sp_poly_is_hash_kind(_t%d.cls_id)) ? _t%d : 0);\n",
+                 rk2, tres2, rk2, trecv2, trecv2, trecv2, tn2);
+    else buf_printf(g_pre, "sp_%sArray *_t%d = sp_%sArray_new();\n", rk2, tres2, rk2);
     emit_indent(g_pre, g_indent);
     buf_printf(g_pre, "SP_GC_ROOT(_t%d);\n", tres2);
     emit_indent(g_pre, g_indent);
@@ -6277,7 +6284,11 @@ int emit_collect_expr(Compiler *c, int id, Buf *b) {
   emit_indent(g_pre, g_indent);
   buf_printf(g_pre, "SP_GC_ROOT(_t%d);\n", trecv);
   emit_indent(g_pre, g_indent);
-  buf_printf(g_pre, "sp_%sArray *_t%d = sp_%sArray_new();\n", rk, tres, rk);
+  /* a map answers one value per element: its result takes them all at its
+     first size, where pushes grew it from 16 by doubling */
+  if (is_map && array_has_new_cap(rk))
+    buf_printf(g_pre, "sp_%sArray *_t%d = sp_%sArray_new_cap(sp_%sArray_length(_t%d));\n", rk, tres, rk, k, trecv);
+  else buf_printf(g_pre, "sp_%sArray *_t%d = sp_%sArray_new();\n", rk, tres, rk);
   emit_indent(g_pre, g_indent);
   buf_printf(g_pre, "SP_GC_ROOT(_t%d);\n", tres);
   emit_indent(g_pre, g_indent);

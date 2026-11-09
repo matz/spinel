@@ -967,14 +967,10 @@ static inline sp_PolyArray *sp_PolyArray_new(void) {
 }
 /* past the inline elements: the first growth moves them to a payload and
    gives the object the finalizer that will free it; later growths resize */
-static SP_NOINLINE void sp_PolyArray_grow(sp_PolyArray *a) {
+/* The buffer reallocated to nc slots, past the inline ones on the first */
+static SP_NOINLINE void sp_PolyArray_grow_to(sp_PolyArray *a, sp_int nc) {
   sp_gc_hdr *h = (sp_gc_hdr *)((char *)a - sizeof(sp_gc_hdr));
-  /* a queue's shifts free the room its pushes need. Moving the elements back
-     costs no more than the shifts that freed the room did when they are no
-     more than the freed slots; with fewer freed slots the array grows as
-     well, or each push would move them all again for a slot or two */
-  if (a->head > 0) { int room = a->head >= a->len; SP_ARR_REBASE(a); if (room) return; }
-  sp_int nc = (a->cap * 2) + 1;
+  if ((uintmax_t)nc > SIZE_MAX / sizeof(sp_RbVal)) sp_oom_die();
   if (a->data == a->inl) {
     sp_RbVal *nd = (sp_RbVal *)sp_pl_alloc(sizeof(sp_RbVal) * (size_t)nc);
     memcpy(nd, a->inl, sizeof(sp_RbVal) * (size_t)a->len);
@@ -987,6 +983,21 @@ static SP_NOINLINE void sp_PolyArray_grow(sp_PolyArray *a) {
   }
   a->cap = nc;
   h->size += sizeof(sp_RbVal) * a->cap; sp_gc_bytes_add(sizeof(sp_RbVal) * a->cap);
+}
+static SP_NOINLINE void sp_PolyArray_grow(sp_PolyArray *a) {
+  /* a queue's shifts free the room its pushes need. Moving the elements back
+     costs no more than the shifts that freed the room did when they are no
+     more than the freed slots; with fewer freed slots the array grows as
+     well, or each push would move them all again for a slot or two */
+  if (a->head > 0) { int room = a->head >= a->len; SP_ARR_REBASE(a); if (room) return; }
+  sp_PolyArray_grow_to(a, (a->cap * 2) + 1);
+}
+/* see sp_IntArray_new_cap: a new (or recycled) array, its buffer grown
+   once when n is past what it holds */
+static inline sp_PolyArray *sp_PolyArray_new_cap(sp_int n) {
+  sp_PolyArray *a = sp_PolyArray_new();
+  if (n > a->cap) sp_PolyArray_grow_to(a, n);
+  return a;
 }
 static inline void sp_PolyArray_push(sp_PolyArray *a, sp_RbVal v) { if (!a) return; sp_gc_wb((void*)a); if (a->frozen) { sp_raise_frozen_array_at(a, SP_BUILTIN_POLY_ARRAY); return; } if (a->len >= a->cap) sp_PolyArray_grow(a); a->data[a->len++] = v; }
 static inline sp_RbVal sp_PolyArray_get(sp_PolyArray *a, sp_int i) { if (!a) return sp_box_nil(); if ((unsigned long long)i < (unsigned long long)a->len) return a->data[i]; if (i < 0) i += a->len; if (i < 0 || i >= a->len) return sp_box_nil(); return a->data[i]; }

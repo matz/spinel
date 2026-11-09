@@ -6075,6 +6075,10 @@ const char *array_kind(TyKind t) {
     default:             return NULL;
   }
 }
+/* Does sp_<k>Array have new_cap(n), an empty array its buffer sized for n? */
+int array_has_new_cap(const char *k) {
+  return k && (sp_streq(k, "Int") || sp_streq(k, "Float") || sp_streq(k, "Ptr") || sp_streq(k, "Poly"));
+}
 /* Storage prefix for a loop over the array itself. A nested numeric table is
    an sp_PtrArray of row pointers, so the walk is sp_PtrArray_length / _get
    (void* converts to the row pointer). Object arrays share that storage but

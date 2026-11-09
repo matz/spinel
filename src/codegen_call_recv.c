@@ -19081,6 +19081,23 @@ static int cbi_key_ok(Compiler *c, int k) {
     if (oc < c->nclasses && c->classes[oc].is_value_type) return 0;
   return 1;
 }
+/* The refusal for a key the compiler cannot show to be compared by pointer,
+   with the place of that key: the diagnostic is anchored at the
+   compare_by_identity call, which is often a long way from the store or the
+   read that made the hash refuse (a key read out of another hash, an array
+   another object holds), so the message names the key's own file and line.
+   One buffer: the caller copies it into its message at once. */
+static const char *cbi_key_refusal(Compiler *c, int key) {
+  static char why[192];
+  const NodeTable *nt = c->nt;
+  const char *fp = nt_file_path(nt, (int)nt_int(nt, key, "node_file", 0));
+  int ln = (int)nt_int(nt, key, "node_line", 0);
+  if (fp && *fp && ln > 0)
+    snprintf(why, sizeof why, "a key may be a String, an Integer, a Float or a boxed value (the key at %s:%d)", fp, ln);
+  else
+    snprintf(why, sizeof why, "a key may be a String, an Integer, a Float or a boxed value");
+  return why;
+}
 static const char *cbi_use_ok(Compiler *c, int use, const int *par) {
   const NodeTable *nt = c->nt;
   int call = par[use];
@@ -19089,7 +19106,7 @@ static const char *cbi_use_ok(Compiler *c, int use, const int *par) {
   if ((ck == NK_IndexOperatorWriteNode || ck == NK_IndexOrWriteNode || ck == NK_IndexAndWriteNode) &&
       nt_ref(nt, call, "receiver") == use) {
     int an = 0; const int *av = call_args(nt, call, &an);
-    return an == 1 && cbi_key_ok(c, av[0]) ? NULL : "a key may be a String, an Integer, a Float or a boxed value";
+    return an == 1 && cbi_key_ok(c, av[0]) ? NULL : an == 1 ? cbi_key_refusal(c, av[0]) : "a key may be a String, an Integer, a Float or a boxed value";
   }
   if (ck != NK_CallNode || nt_ref(nt, call, "receiver") != use)
     return "the hash is used other than as a receiver";
@@ -19106,7 +19123,8 @@ static const char *cbi_use_ok(Compiler *c, int use, const int *par) {
   for (int i = 0; keyed[i]; i++) {
     if (!m || !sp_streq(m, keyed[i])) continue;
     int an = 0; const int *av = call_args(nt, call, &an);
-    if (an < 1 || !cbi_key_ok(c, av[0])) return "a key may be a String, an Integer, a Float or a boxed value";
+    if (an < 1) return "a key may be a String, an Integer, a Float or a boxed value";
+    if (!cbi_key_ok(c, av[0])) return cbi_key_refusal(c, av[0]);
     /* `h[k] ||= v` and the like read the key the same way */
     return NULL;
   }
@@ -19170,7 +19188,8 @@ static const char *cbi_identity_refusal(Compiler *c, int id, int recv, TyKind rt
       int en = 0; const int *ev = nt_arr(nt, v, "elements", &en);
       for (int e = 0; e < en && !why; e++) {
         int key = nt_kind(nt, ev[e]) == NK_AssocNode ? nt_ref(nt, ev[e], "key") : -1;
-        if (key < 0 || !cbi_key_ok(c, key)) why = "a key may be a String, an Integer, a Float or a boxed value";
+        if (key < 0) why = "a key may be a String, an Integer, a Float or a boxed value";
+        else if (!cbi_key_ok(c, key)) why = cbi_key_refusal(c, key);
       }
       continue;
     }

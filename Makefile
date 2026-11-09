@@ -1354,7 +1354,8 @@ PKG_TESTS := $(wildcard packages/*/test/*.rb)
 # #9199, psych and yaml #9209, date #9255), and a library vendored unchanged
 # from its upstream release (getoptlong, observer, and net-smtp inside the net
 # package, whose net/http tests stay in the gate).
-# Run them when the package, or the compiler surface it leans on, changes.
+# The gate runs them as a leg of their own (gate-pkg-ondemand), with the
+# corpus's C level; only `make test` leaves them out.
 # Under --share-strings two of rexml's are refused today (#6765: a String of
 # Element#text collected with `.map(&:text)` and changed in place).
 PKG_ONDEMAND := rexml psych yaml date getoptlong observer
@@ -5469,7 +5470,7 @@ gate-full:
 # happens elsewhere at the same commit (the maintainer's merge cycle runs it
 # on a second machine beside the CI lanes). A plain `make gate` runs it.
 GATE_RUBYSPEC ?= 1
-gate-legs: $(if $(filter 0,$(GATE_RUBYSPEC)),,gate-rubyspec) gate-test gate-bench gate-optcarrot gate-rubyboy gate-props
+gate-legs: $(if $(filter 0,$(GATE_RUBYSPEC)),,gate-rubyspec) gate-test gate-bench gate-optcarrot gate-rubyboy gate-pkg-ondemand gate-props
 # The corpus leg's C optimization level: -O1 under gcc, -O0 under clang, as
 # the CI lanes have it (ci.yml's "Run tests"): gcc's -O1 prunes spinel_rt.h's
 # unreferenced statics and compiles faster than its -O0, while clang's -O1
@@ -5481,6 +5482,15 @@ GATE_TEST_OPT ?= $(if $(filter clang,$(CC_KIND)),-O0,-O1)
 gate-pch:
 	+@$(MAKE) --no-print-directory test-pch OPT=$(GATE_TEST_OPT)
 gate-test: gate-pch
+
+# The on-demand packages' tests (PKG_ONDEMAND): what they check is the
+# compiler's answers on large Ruby libraries, so the gate runs them. They
+# ran in a pre-push clang lane before, which is a portability check and
+# not the place for them; rexml was refused on master for a day (#9983)
+# while no check ran it (2026-10-23).
+.PHONY: gate-pkg-ondemand
+gate-pkg-ondemand: gate-pch
+	+@$(MAKE) --no-print-directory pkg-ondemand-test OPT=$(GATE_TEST_OPT)
 
 gate-test:
 	+@$(MAKE) --no-print-directory test OPT=$(GATE_TEST_OPT) TEST_PLAN_CHECK=--plan-check

@@ -37,3 +37,7 @@ module Y
   check { T.name(8) }
 end
 check { X::T.name }
+anon = Struct.new(:a)
+check { anon.name(9) }
+check { Struct.new(:b).name(10) }
+check { anon.name }

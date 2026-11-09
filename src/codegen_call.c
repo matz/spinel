@@ -24375,7 +24375,7 @@ int emit_unresolved_call(Compiler *c, int id, Buf *b) {
           /* a Class value without a method of the name: Module#name, to_s
              and inspect take no argument, so CRuby raises ArgumentError */
           char cls_raise[256], am[96];
-          if (is_name_reader(nm) && class_name_reader_arity_msg(nt, argc, argv, am, sizeof am))
+          if (is_name_reader(nm) && class_name_reader_arity_msg(c, nm, argc, argv, am, sizeof am))
             snprintf(cls_raise, sizeof cls_raise, "(sp_raise_cls(\"ArgumentError\", \"%s\"), sp_box_nil())", am);
           else snprintf(cls_raise, sizeof cls_raise, "%s", raise);
           buf_printf(b, "%s) : %s; })", cls_raise,

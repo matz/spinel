@@ -12,3 +12,6 @@ ArgumentError: wrong number of arguments (given 1, expected 0)
 ArgumentError: wrong number of arguments (given 1, expected 0)
 ArgumentError: wrong number of arguments (given 1, expected 0)
 ok "X::T"
+ArgumentError: wrong number of arguments (given 1, expected 0)
+ArgumentError: wrong number of arguments (given 1, expected 0)
+ok nil

@@ -2215,6 +2215,8 @@ int        class_body_self_ci(Compiler *c, int node);   /* the class a class bod
 int        record_recv_class(Compiler *c, int node);
 int        const_class_value_only(Compiler *c, int node); /* constant slot that may hold a class known only at run time */
 int        class_recv_user_cmethod(Compiler *c, int call, int node, const char *name); /* call's user class method of the name on it */
+int        class_name_reader_argc_raises(Compiler *c, const char *nm, int argc, const int *argv); /* the builtin reader's arity raise applies */
+int        prog_owns_class_name_reader(Compiler *c, const char *nm); /* a Module/Class reopen or an Object class method answers name/to_s/inspect */
 int        dynamic_new_may_reach(Compiler *c, int call_id, int cid);  /* k.new can build cid */
 int        anon_struct_ci_for_value(Compiler *c, int val);  /* k = Struct.new(...) value node */
 const char *struct_call_dup_member(Compiler *c, int callnode);  /* first duplicate member sym name, or NULL */

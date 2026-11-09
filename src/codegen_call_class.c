@@ -3607,21 +3607,15 @@ static void cls_value_unlisted_default(const char *name, int tc, Buf *b) {
    method of the name: Module#name, to_s and inspect take no argument, and
    CRuby raises the arity ArgumentError. The message for these arguments,
    in `am`; 0 when only the run time knows the count (a splat, a `**h`). */
-int class_name_reader_arity_msg(const NodeTable *nt, int argc, const int *argv, char *am, size_t n) {
-  if (argc <= 0 || nt_argv_has_splat(nt, argv, argc)) return 0;
-  for (int i = 0; i < argc; i++) {
-    if (nt_kind(nt, argv[i]) != NK_KeywordHashNode) continue;
-    int en = 0; const int *el = nt_arr(nt, argv[i], "elements", &en);
-    for (int e = 0; e < en; e++) if (nt_kind(nt, el[e]) != NK_AssocNode) return 0;
-  }
+int class_name_reader_arity_msg(Compiler *c, const char *nm, int argc, const int *argv, char *am, size_t n) {
+  if (!class_name_reader_argc_raises(c, nm, argc, argv)) return 0;
   arity_message(am, n, argc, 0, 0, NULL);
   return 1;
 }
 /* ...the raise itself, after the receiver and the arguments are read */
-static int emit_class_name_reader_arity(Compiler *c, int recv, int argc, const int *argv, Buf *b) {
-  const NodeTable *nt = c->nt;
+static int emit_class_name_reader_arity(Compiler *c, const char *nm, int recv, int argc, const int *argv, Buf *b) {
   char am[96];
-  if (!class_name_reader_arity_msg(nt, argc, argv, am, sizeof am)) return 0;
+  if (!class_name_reader_arity_msg(c, nm, argc, argv, am, sizeof am)) return 0;
   buf_puts(b, "({ (void)("); emit_expr_for_effect(c, recv, b); buf_puts(b, "); ");
   for (int i = 0; i < argc; i++) {
     buf_puts(b, "(void)("); emit_expr_for_effect(c, argv[i], b); buf_puts(b, "); ");
@@ -4439,7 +4433,8 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
        without one, emit_poly_cls_value_builtin, which faces it a Class) */
     int fnode = -1; TyKind fkind = TY_UNKNOWN;
     int cls_face = view_face_top(&fnode, &fkind) && fnode == recv && fkind == TY_CLASS;
-    if (!cls_shadowed && !cls_face && is_name_reader(name)) {
+    if (!cls_shadowed && !cls_face && is_name_reader(name) &&
+        (argc == 0 || class_name_reader_argc_raises(c, name, argc, argv))) {
       int ncc = 0;
       if (class_recv_user_cmethod(c, id, recv, name) >= 0) cls_shadowed = 1;
       else if (class_recv_static_ci(c, recv) < 0 && class_recv_is_dynamic(c, recv)) {
@@ -4452,6 +4447,10 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
       /* An anonymous Struct/Data class has no name: CRuby answers nil for
          #name (and an `#<Class:0x...>`-shaped #to_s). The synthetic
          StructAnon_<n> the compiler keys it by is not a Ruby-visible name. */
+      /* Module#name / to_s / inspect take no argument: CRuby raises the
+         arity ArgumentError after it reads the receiver and the arguments
+         (an anonymous Struct class too) */
+      if (argc > 0 && emit_class_name_reader_arity(c, name, recv, argc, argv, b)) return 1;
       if (sp_streq(name, "name")) {
         /* the anon class is registered keyed to the node that produced it
            (analyze_scope), so the receiver node identifies it */
@@ -4469,9 +4468,6 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
           return 1;
         }
       }
-      /* Module#name / to_s / inspect take no argument: CRuby raises the
-         arity ArgumentError after it reads the receiver and the arguments */
-      if (argc > 0 && emit_class_name_reader_arity(c, recv, argc, argv, b)) return 1;
       buf_printf(b, "({ sp_Class _cl%d = ", _clt); emit_expr(c, recv, b);
       buf_printf(b, "; %s(_cl%d); })",
                  comp_class_reader_fn(c, name, 0), _clt);
@@ -5175,7 +5171,7 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
             else buf_printf(b, "_t%d = %s; break;", tr9, nb);
           }
           else if (!rdef9 && is_name_reader(name) &&
-                   class_name_reader_arity_msg(nt, argc, argv, nb9am, sizeof nb9am))
+                   class_name_reader_arity_msg(c, name, argc, argv, nb9am, sizeof nb9am))
             buf_printf(b, " default: sp_raise_cls(\"ArgumentError\", \"%s\"); break;", nb9am);
           else if (!rdef9) buf_printf(b, " default: %s; break;", rraise9);
           buf_printf(b, " } _t%d; })", tr9);

@@ -214,7 +214,7 @@ void emit_class_id_is(Compiler *c, int cname, const char *expr, Buf *b);
 int emit_reopen_arm_test(Compiler *c, int kmi, const char *name, const char *cls, const char *raise, Buf *b);
 /* The ArgumentError text of Module#name / to_s / inspect given these
    arguments; 0 when there are none or only the run time knows the count */
-int class_name_reader_arity_msg(const NodeTable *nt, int argc, const int *argv, char *am, size_t n);
+int class_name_reader_arity_msg(Compiler *c, const char *nm, int argc, const int *argv, char *am, size_t n);
 extern int g_cls_value_recv;
 int hoist_dispatch_args(Compiler *c, int argsN, int **sv, int **vw);
 /* A boxed Integer or Float at a call no target answers: the arms that

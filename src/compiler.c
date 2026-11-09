@@ -4301,6 +4301,17 @@ const int *comp_descendants(Compiler *c, int cid, int *n) {
   }
   *n = desc_counts[cid]; return desc_lists[cid];
 }
+/* Does no class inherit from class cid? A reopened builtin class (Object,
+   Exception, Array ...) never is one: its subclasses' parent links do not
+   name it (a class under Object has parent -1, `E < StandardError` names a
+   builtin, and builtins are not classes of the program), so a scan of the
+   parents cannot show them. */
+int comp_class_is_leaf(Compiler *c, int cid) {
+  const char *nm = c->classes[cid].name;
+  if (is_builtin_class_name(nm) || is_builtin_exception_name(nm)) return 0;
+  for (int j = 0; j < c->nclasses; j++) if (c->classes[j].parent == cid) return 0;
+  return 1;
+}
 void comp_descendants_reset(void) {
   for (int i = 0; i < desc_nclasses; i++) free(desc_lists[i]);
   free(desc_lists); free(desc_counts); desc_lists = NULL; desc_counts = NULL; desc_nclasses = -1;
@@ -5876,8 +5887,7 @@ int self_class_static_ci(Compiler *c, int recv) {
   Scope *s = comp_scope_of(c, recv);
   int cid = s ? s->class_id : -1;
   if (cid < 0 || comp_class_is_module(c, &c->classes[cid])) return -1;
-  for (int j = 0; j < c->nclasses; j++) if (c->classes[j].parent == cid) return -1;
-  return cid;
+  return comp_class_is_leaf(c, cid) ? cid : -1;
 }
 
 /* A `super` in a class's own `def self.allocate` that no class method

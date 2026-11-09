@@ -77,4 +77,12 @@ gi = [1, 2]
 p gi.sum { |x| gi << 10 if gi.size < 3; x }
 gf = [1.5]
 p gf.sum { |x| gf << 2.5 if gf.size < 2; x }
+# a receiver held boxed, an Array or a String
+def ab(i) = i.even? ? [1, 2] : "s"
+bx = ab(0)
+p bx.sum { |v| bx << 10 if bx.size < 3; v }
+by = ab(0)
+p by.sum { |v| by.pop if v == 1; v }
+bz = ab(0)
+p bz.sum(0.5) { |v| bz << 2.5 if bz.size < 3; v }, ab(1).sum { |v| v }
 p [1, "x"].sum { |*v| v.length }, [1, "x"].sum { |a, *r| r.size + 1 }

@@ -2095,7 +2095,7 @@ int emit_sum_block_poly_expr(Compiler *c, int id, Buf *b) {
   if (blv) lv_set_type(blv, TY_POLY);
   arm_body_infer(c, ARM_SITE_FOLD_POLY, block, TY_POLY, bb, bn);
 
-  int ta = ++g_tmp, tacc = ++g_tmp, ti = ++g_tmp, tn = ++g_tmp, tr = ++g_tmp;
+  int ta = ++g_tmp, tacc = ++g_tmp, ti = ++g_tmp, tr = ++g_tmp;
   /* the receiver, then the initial value, then the receiver's check: nil, a
      number, a boolean or a Symbol has no sum (it answered the initial
      value), raised as CRuby does once the operands ran */
@@ -2113,13 +2113,15 @@ int emit_sum_block_poly_expr(Compiler *c, int id, Buf *b) {
                 " int _s%d = _t%d.tag == SP_TAG_STR || sp_poly_is_strbuf(_t%d);"
                 " if (_s%d) _t%d = sp_box_int(sp_str_sum_bits(sp_poly_strbuf_deref(_t%d).v.s, %s));"
                 " sp_PolyArray *_t%d = _s%d ? sp_PolyArray_new() : sp_poly_to_a_arr(_t%d);"
-                " SP_GC_ROOT(_t%d); sp_int _t%d = _t%d->len",
+                " SP_GC_ROOT(_t%d)",
              tacc, tr, tr, argc, tacc, tr, tr, tr, tr, tacc, tr,
-             bits, ta, tr, tr, ta, tn, ta);
-  /* folded a value at a time (sp_sum_step) */
+             bits, ta, tr, tr, ta);
+  /* folded a value at a time (sp_sum_step), the length read at each step as
+     the typed walks read it: an Array receiver is the one walked, and a block
+     that pushes onto it or pops it changes what is summed */
   buf_printf(b, "; sp_SumState _t%dS; sp_sum_init(&_t%dS, _t%d); SP_GC_ROOT_RBVAL(_t%dS.acc); "
-                "for (sp_int _t%d = 0; _t%d < _t%d; _t%d++) { ",
-             tacc, tacc, tacc, tacc, ti, ti, tn, ti);
+                "for (sp_int _t%d = 0; _t%d < _t%d->len; _t%d++) { ",
+             tacc, tacc, tacc, tacc, ti, ti, ta, ti);
   /* a block of any other shape than plain requireds binds the element by
      the proc distribution */
   if (block_binds_gathered(c, block)) {

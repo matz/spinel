@@ -52579,6 +52579,11 @@ static void an_phase_post_fixpoint(Compiler *c) {
       else if (p->type == TY_SYMBOL || p->type == TY_BOOL || p->type == TY_RANGE ||
                p->type == TY_FLOAT_RANGE || p->type == TY_STR_RANGE)
         slot_rule(c, p, TY_POLY, sc->pdefault[i], "a `= nil` default on a Symbol, Bool or Range parameter, which has no nil of its own: boxed, untyped");
+      /* a Time, Complex, Rational or Tms slot has no nil the readers
+         check (its ty_traits row keeps null_is_nil 0): boxed, as a
+         nilable Time ivar is */
+      else if (p->type == TY_TIME || p->type == TY_COMPLEX || p->type == TY_RATIONAL || p->type == TY_TMS)
+        slot_rule(c, p, TY_POLY, sc->pdefault[i], "a `= nil` default on a Time, Complex, Rational or Tms parameter, which has no nil the readers check: boxed, untyped");
     }
   }
 

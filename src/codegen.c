@@ -18221,6 +18221,13 @@ void emit_regex_section(Compiler *c, Buf *b) {
     buf_puts(b, "  sp_obj_to_h_fn = sp_obj_to_h;\n");
   if (g_gen_obj_struct_values)
     buf_puts(b, "  sp_obj_struct_values_fn = sp_obj_struct_values;\n");
+  {
+    static const char *const lacks[] = { "last", "join", "sample", "shuffle", "flatten", "at", "pack",
+                                         "rotate", "values_at", "length", "empty?", "include?", "member?",
+                                         "count", "first", NULL };
+    for (int i = 0; lacks[i]; i++)
+      if (root_reopen_defines(c, lacks[i])) { buf_puts(b, "  sp_poly_root_lacks_names = 1;\n"); break; }
+  }
   if (obj_to_a_any(c))
     buf_puts(b, "  sp_obj_to_a_fn = sp_obj_to_a;\n");
   if (obj_to_ary_any(c))
@@ -19613,8 +19620,8 @@ static void scan_prologue_features(Compiler *c) {
          a Struct, whose members the user element read takes for elements */
       if (nm && rv >= 0 && repr_of(c, rv).kind == RK_BOXED &&
           (sp_streq(nm, "last") || sp_streq(nm, "join") || sp_streq(nm, "sample") ||
-           sp_streq(nm, "shuffle") || sp_streq(nm, "flatten") || sp_streq(nm, "at") ||
-           sp_streq(nm, "pack"))) reached = 1;
+           sp_streq(nm, "shuffle") || sp_streq(nm, "flatten") || sp_streq(nm, "pack") ||
+           nt_int(c->nt, id, "was_at", 0))) reached = 1;   /* (an `at` is `[]` by now) */
       /* any dig: a Struct's, typed or not, can reach the runtime walk, whose
          receiver check asks this dispatch (sp_poly_dig_recv_ok) */
       if (nm && rv >= 0 && sp_streq(nm, "dig")) reached = 1;

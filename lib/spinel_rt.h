@@ -5242,7 +5242,7 @@ static SP_INLINE sp_RbVal sp_poly_enum_name_chk(sp_RbVal v, const char *m) {
   if (sp_poly_sizeless_builtin(v) && v.cls_id != SP_BUILTIN_DIR && v.cls_id != SP_BUILTIN_ARGF)
     sp_raise_poly_nomethod(m, v);
   /* a Symbol is no Enumerable, and has no include? of its own */
-  if (v.tag == SP_TAG_SYM) sp_raise_poly_nomethod(m, v);
+  if (v.tag == SP_TAG_SYM && !sp_poly_root_lacks_names) sp_raise_poly_nomethod(m, v);
   return v;
 }
 /* A boxed value with none of Enumerable's methods (count, sum): nil, a
@@ -5264,8 +5264,9 @@ static SP_INLINE sp_RbVal sp_poly_ary_chk(sp_RbVal v, const char *m, int range_o
     sp_raise_poly_nomethod(m, v);
   /* nor has an IO, or a Struct (values_at is a Struct's own): the user
      element read below took a Struct's members as its elements */
-  if ((v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_IO) ||
-      (strcmp(m, "values_at") != 0 && sp_poly_struct_size(v) >= 0))
+  if (!sp_poly_root_lacks_names &&
+      ((v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_IO) ||
+       (strcmp(m, "values_at") != 0 && sp_poly_struct_size(v) >= 0)))
     sp_raise_poly_nomethod(m, v);
   if (v.tag == SP_TAG_STR || v.tag == SP_TAG_SYM || sp_poly_is_strbuf(v) ||
       (v.tag == SP_TAG_OBJ && sp_poly_is_hash_kind(v.cls_id)) ||
@@ -5294,7 +5295,7 @@ static sp_int sp_poly_struct_size(sp_RbVal v) {
    Struct) or a Range of any kind. */
 static SP_INLINE SP_UNUSED int sp_poly_no_empty(sp_RbVal v) {
   return sp_poly_is_user_obj(v) || sp_poly_sizeless_builtin(v) ||
-         (v.tag == SP_TAG_OBJ && (v.cls_id == SP_BUILTIN_TMS || v.cls_id == SP_BUILTIN_IO || v.cls_id == SP_BUILTIN_RANGE ||
+         (v.tag == SP_TAG_OBJ && (v.cls_id == SP_BUILTIN_TMS || (v.cls_id == SP_BUILTIN_IO && !sp_poly_root_lacks_names) || v.cls_id == SP_BUILTIN_RANGE ||
                                   v.cls_id == SP_BUILTIN_STR_RANGE || v.cls_id == SP_BUILTIN_FLOAT_RANGE ||
                                   v.cls_id == SP_BUILTIN_TIME_RANGE || v.cls_id == SP_BUILTIN_OBJ_RANGE));
 }
@@ -5306,7 +5307,8 @@ static sp_int sp_poly_length_m(sp_RbVal v) {
       v.tag == SP_TAG_BIGINT || v.tag == SP_TAG_BOOL || sp_poly_is_user_obj(v) || sp_poly_sizeless_builtin(v) ||
       (v.tag == SP_TAG_OBJ && (v.cls_id == SP_BUILTIN_RANGE || v.cls_id == SP_BUILTIN_STR_RANGE ||
                                v.cls_id == SP_BUILTIN_FLOAT_RANGE || v.cls_id == SP_BUILTIN_TIME_RANGE ||
-                               v.cls_id == SP_BUILTIN_OBJ_RANGE || v.cls_id == SP_BUILTIN_IO)))
+                               v.cls_id == SP_BUILTIN_OBJ_RANGE ||
+                               (v.cls_id == SP_BUILTIN_IO && !sp_poly_root_lacks_names))))
     sp_raise_poly_nomethod("length", v);
   /* String#length is CHARACTERS. sp_poly_length answers the byte count, which
      is what its container and iteration callers want and what a boxed string

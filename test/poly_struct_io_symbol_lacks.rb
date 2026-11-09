@@ -30,3 +30,6 @@ t = [Process.times, 1].first
 p((t.last rescue $!.class), (t.join rescue $!.class), t.length)
 v = [Struct.new(:a).new(1), 2].first
 p((v.last rescue $!.class), (v.sample rescue $!.class), (v.join(",") rescue $!.class))
+# an `at` alone still reaches the Struct check
+def struct_at(x) = (x.at(0) rescue $!.class)
+p struct_at([Struct.new(:q).new(1), 2].first)

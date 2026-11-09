@@ -2852,6 +2852,8 @@ static void lr_later_settle(Compiler *c) {
   }
 }
 
+static void lr_mixin_dups_settle(Compiler *c);
+
 /* The scope walk of each file's top level, in the order the load phase
    runs them (elab_points_walk), which records what each statement defines
    once the walk has passed it, in that order. Besides the record, a
@@ -2900,10 +2902,7 @@ void elab_program(Compiler *c, struct HostStep *h) {
   lr_autoload_values(c);
   r->rec = NULL;
   free(x.fc); free(x.fs); free(x.vs); free(x.vmain);
-  /* a mixin's duplicate answer asked while the record was made saw only
-     what was recorded by then (lr_mixin_dup) */
-  for (int k = 0; k < r->ncls; k++)
-    for (int i = 0; i < r->cls[k].nmix; i++) r->cls[k].mix[i].dup = 0;
+  lr_mixin_dups_settle(c);
   lr_copy_scopes(c);
   lr_def_owners(c, r->check ? LR_OWNERS_WALK | LR_OWNERS_HELD : 0);
   elab_mark_versions(c);
@@ -3928,9 +3927,10 @@ static int lr_mixin_class(Compiler *c, LrMixin *m) {
    sg) where m runs: ELAB_YES / NO / UNKNOWN. A fact of the mixin, asked
    once and kept: the search it makes reads the earlier mixins' answers in
    turn, so asking again at every search would double the work with each
-   mixin. Answers given while the record is made are dropped at its end
-   (elab_program). The search starts at depth 0, so the kept answer does
-   not depend on where it was first asked; an ask while it runs (modules
+   mixin. Answers given while the record is made are dropped at its end,
+   and every mixin's is asked then (lr_mixin_dups_settle). The search
+   starts at depth 0, so the kept answer does not depend on where it was
+   first asked; an ask while it runs (modules
    that include each other) answers unknown. The modules its own call
    mixed in ahead of it count too, which the search at the call's point
    does not take as run: `extend M1, M2, M1` extends M1, then M2, and its
@@ -3954,6 +3954,19 @@ static int lr_mixin_dup(Compiler *c, int cls, int sg, LrClass *k, int i) {
     m->dup = (unsigned char)(1 + o);
   }
   return m->dup - 1;
+}
+/* Every mixin's duplicate answer, asked once the record is made: an answer
+   given while it was made saw only what was recorded by then, and one left
+   to its first ask reads the point map as the table then is, which a pass
+   that appends nodes between its asks (ver_entries_build's versions
+   readers) has made again for every mixin */
+static void lr_mixin_dups_settle(Compiler *c) {
+  LoadRecord *r = c->lrec;
+  for (int k = 0; k < r->ncls; k++)
+    for (int i = 0; i < r->cls[k].nmix; i++) r->cls[k].mix[i].dup = 0;
+  for (int k = 0; k < r->ncls; k++)
+    for (int i = 0; i < r->cls[k].nmix; i++)
+      lr_mixin_dup(c, k - 1, elab_mix_on_singleton(r->cls[k].mix[i].kind), &r->cls[k], i);
 }
 
 /* One ancestor's part of the search of `name` (or of module `mod`): cls's

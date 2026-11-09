@@ -41,3 +41,22 @@ anon = Struct.new(:a)
 check { anon.name(9) }
 check { Struct.new(:b).name(10) }
 check { anon.name }
+
+# The bare spelling inside a class method: self is the class.
+class F
+  def self.a = (name(2) rescue $!.message)
+  def self.b = (to_s(1, 2) rescue $!.message)
+  class << self
+    def c = (inspect(:x) rescue $!.message)
+  end
+  def self.d = [1].map { name(3) rescue $!.class }
+  def self.e = "#{name}!"
+end
+class G
+  def self.name(x) = "G#{x}"
+  def self.f = name(4)
+end
+class H < G
+  def self.g = name(5)
+end
+p F.a, F.b, F.c, F.d, F.e, G.f, H.g

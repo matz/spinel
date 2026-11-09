@@ -15,3 +15,10 @@ ok "X::T"
 ArgumentError: wrong number of arguments (given 1, expected 0)
 ArgumentError: wrong number of arguments (given 1, expected 0)
 ok nil
+"wrong number of arguments (given 1, expected 0)"
+"wrong number of arguments (given 2, expected 0)"
+"wrong number of arguments (given 1, expected 0)"
+[ArgumentError]
+"F!"
+"G4"
+"G5"

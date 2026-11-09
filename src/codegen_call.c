@@ -23890,6 +23890,25 @@ int emit_unresolved_call(Compiler *c, int id, Buf *b) {
      rather than "the compiler has no arm for this builtin", which must keep
      failing loudly. The zero-argument spelling of the same thing is the vcall
      arm above, and both ride the same gate switch. */
+  /* `name(2)`, `to_s(1)` or `inspect(1, 2)` in a class method whose class
+     has no class method of the name: self is the class, and Module's reader
+     takes no argument, so CRuby raises the arity ArgumentError once the
+     arguments have run (not the NoMethodError an instance would get) */
+  if (recv < 0 && is_name_reader(name) && nt_ref(nt, id, "block") < 0 &&
+      class_name_reader_argc_raises(c, name, argc, argv)) {
+    Scope *ms = comp_scope_of(c, id);
+    if (ms && ms->is_cmethod && ms->class_id >= 0 &&
+        call_target(c, id, ms->class_id, name, CT_CMETHOD, NULL) < 0) {
+      char am[96];
+      TyKind uret = repr_of(c, id).as_ty;
+      arity_message(am, sizeof am, argc, 0, 0, NULL);
+      buf_puts(b, "(");
+      for (int k = 0; k < argc; k++) { buf_puts(b, "(void)("); emit_expr_for_effect(c, argv[k], b); buf_puts(b, "), "); }
+      buf_printf(b, "sp_raise_cls(\"ArgumentError\", \"%s\"), %s)", am,
+                 (is_scalar_ret(uret) && uret != TY_UNKNOWN) ? default_value_from_compiler(c, uret) : "sp_box_nil()");
+      return 1;
+    }
+  }
   if (call_misses_self_method(c, id)) {
     char self[160];
     const char *st = cplan_self_text(c, id, g_emitting_class_id, self, sizeof self);

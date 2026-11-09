@@ -620,19 +620,6 @@ int share_call_stores_block(Compiler *c, int n) {
   }
   return any && (keep || !an_node_dropped(c, n));
 }
-int share_literal_unkept(Compiler *c, int lit) {
-  const NodeTable *nt = c->nt;
-  const int *par = comp_parent_map(c);
-  int p = lit >= 0 ? par[lit] : -1;
-  if (p >= 0 && nt_kind(nt, p) == NK_MultiWriteNode && nt_ref(nt, p, "value") == lit) return share_masgn_plain(nt, p);
-  int n = p >= 0 ? par[p] : -1;
-  if (n < 0 || nt_kind(nt, n) != NK_CallNode || nt_ref(nt, n, "arguments") != p) return 0;
-  const char *nm = nt_str(nt, n, "name");
-  if (!nm || nt_ref(nt, n, "receiver") >= 0 || nt_ref(nt, n, "block") >= 0) return 0;
-  int share = bop_share_kernel(nm, nt_int(nt, n, "builtin_only", 0));
-  if (share != BSH_PURE && !(share == BSH_ARGS && an_node_dropped(c, n))) return 0;
-  return (is_text_print(nm) || is_inspect_print(nm)) && !sh_has_targets(c, n);
-}
 int share_masgn_plain(const NodeTable *nt, int n) {
   int value = nt_ref(nt, n, "value");
   if (value < 0 || nt_kind(nt, value) != NK_ArrayNode || nt_ref(nt, n, "rest") >= 0) return 0;

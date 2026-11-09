@@ -5830,10 +5830,7 @@ void emit_assign(Compiler *c, int id, Buf *b, int indent) {
     if (conv_reads_shared_storage(c, v))
       unsupported(c, v, "widening a typed array READ from an object into a poly slot "
                         "(the conversion copies, so writes would not be shared)");
-    /* --share-strings: a String Array the rule shares the elements of has
-       each element boxed as a handle of its own */
-    if (repr_of_slot(c, lv).elems_handle && comp_ntype(c, v) == TY_STR_ARRAY) emit_str_array_handles(c, v, b);
-    else emit_poly_array_from(c, v, b);
+    emit_poly_array_from(c, v, b);
   }
   else if (lv && lv->type == TY_BIGINT) {
     TyKind vt = comp_ntype(c, v);
@@ -20642,9 +20639,6 @@ static int emit_ivar_cvar_write_stmt(Compiler *c, int id, Buf *b, int indent, co
     else if (oint_kind(ct) && node_may_be_nil(c, v)) refuse_nil_store(c, v, ct, "a class variable write");
     else if (emit_empty_container_for_slot(c, v, ct, b)) { /* emitted at the slot's type */ }
     else if (ct == TY_POLY) emit_boxed(c, v, b);
-    /* --share-strings: a String Array into one whose elements the rule
-       shares, each String as a handle of its own */
-    else if (h.r.elems_handle && comp_ntype(c, v) == TY_STR_ARRAY) emit_str_array_handles(c, v, b);
     else if (emit_array_into_poly_slot(c, ct, v, b)) { }
     /* `@@x = nil` into a slot typed by its later writes is the slot's nil,
        not the numeric 0 a bare NilNode renders as: `@@quiet = nil` then
@@ -20730,8 +20724,6 @@ static int emit_ivar_cvar_write_stmt(Compiler *c, int id, Buf *b, int indent, co
     if (ot == TY_POLY) emit_boxed(c, v, b);
     /* an oint static takes the value with its nil */
     else if (oint_kind(ot) && cvar_is_oint(c, sc, h.idx)) emit_oint_expr(c, v, ot, b);
-    /* --share-strings: as the plain write, each String as a handle */
-    else if (h.r.elems_handle && comp_ntype(c, v) == TY_STR_ARRAY) emit_str_array_handles(c, v, b);
     else emit_coerce(c, v, ot, CO_HOLD, "a class variable's `||=` or `&&=`", b);
     buf_puts(b, "; ");
     emit_cvar_set_flag(c, sc, nm, 0, b);
@@ -21723,10 +21715,7 @@ static int emit_attr_global_const_write_stmt(Compiler *c, int id, Buf *b, int in
          every array built from widened Integers, #4738) */
       if (conv_reads_shared_storage(c, v))
         unsupported(c, v, "widening a typed array READ into a poly global (the conversion copies, so writes would not be shared)");
-      /* --share-strings: one whose elements the rule shares holds each
-         String as a handle of its own, as a local's does */
-      if (repr_of_slot(c, lv).elems_handle && comp_ntype(c, v) == TY_STR_ARRAY) emit_str_array_handles(c, v, b);
-      else emit_poly_array_from(c, v, b);
+      emit_poly_array_from(c, v, b);
     }
     /* `NONE = Array.new(n) { Obj.new }` into a constant narrow_object_arrays
        made an object table: the constructor builds in place at the slot's

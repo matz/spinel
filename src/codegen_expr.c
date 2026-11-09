@@ -3180,8 +3180,6 @@ static int emit_ivar_cvar_gvar_expr(Compiler *c, int id, Buf *b, const NodeTable
     if (oint_kind(ct) && node_may_be_nil(c, v)) refuse_nil_store(c, v, ct, "a class variable write");
     if (emit_empty_container_for_slot(c, v, ct, b)) { /* emitted at the slot's type */ }
     else if (ct == TY_POLY) emit_boxed(c, v, b);
-    /* --share-strings: as the statement form, each String as a handle */
-    else if (h.r.elems_handle && comp_ntype(c, v) == TY_STR_ARRAY) emit_str_array_handles(c, v, b);
     else if (emit_array_into_poly_slot(c, ct, v, b)) { }
     /* the slot's nil, as the statement form writes it: an endless `def
        self.b = (@@x = nil)` stored the numeric 0 a bare NilNode renders as */
@@ -3289,10 +3287,10 @@ static int emit_ivar_cvar_gvar_expr(Compiler *c, int id, Buf *b, const NodeTable
       emit_strbuf_orw_share_value(c, id, gref, nt_ref(nt, id, "value"), is_or, -1, NULL, NULL, b);
     else if (gvar_is_oint(c, lv)) {
       char gnt[300]; snprintf(gnt, sizeof gnt, "%s.nil", gref);
-      emit_slot_orw_value_o(c, lv->type, repr_of_slot(c, lv).elems_handle, gref, nt_ref(nt, id, "value"), is_or, gnt, -1, -1, NULL,
+      emit_slot_orw_value_o(c, lv->type, 0, gref, nt_ref(nt, id, "value"), is_or, gnt, -1, -1, NULL,
                             NULL, b);
     }
-    else emit_slot_orw_value(c, lv->type, repr_of_slot(c, lv).elems_handle, gref, nt_ref(nt, id, "value"), is_or,
+    else emit_slot_orw_value(c, lv->type, 0, gref, nt_ref(nt, id, "value"), is_or,
                              NULL, b);
     return 1;
   }
@@ -3349,7 +3347,6 @@ static int emit_ivar_cvar_gvar_expr(Compiler *c, int id, Buf *b, const NodeTable
     buf_printf(b, " ? %s : (%s = ", ref.p, ref.p);
     if (ot == TY_POLY) emit_boxed(c, v, b);
     else if (oo) emit_oint_expr(c, v, ot, b);
-    else if (h.r.elems_handle && comp_ntype(c, v) == TY_STR_ARRAY) emit_str_array_handles(c, v, b);
     else emit_expr(c, v, b);
     emit_cvar_set_flag_after(c, cid, nm, b);
     buf_puts(b, "))");
@@ -3377,7 +3374,6 @@ static int emit_ivar_cvar_gvar_expr(Compiler *c, int id, Buf *b, const NodeTable
     buf_printf(b, " ? (%s = ", ref.p);
     if (at == TY_POLY) emit_boxed(c, v, b);
     else if (ao) emit_oint_expr(c, v, at, b);
-    else if (h.r.elems_handle && comp_ntype(c, v) == TY_STR_ARRAY) emit_str_array_handles(c, v, b);
     else emit_expr(c, v, b);
     buf_printf(b, ") : %s)", ref.p);
     free(ref.p);

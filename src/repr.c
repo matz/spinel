@@ -1722,7 +1722,6 @@ Repr repr_of_slot(const Compiler *c, const LocalVar *lv) {
   if (lv->type == TY_STRBUF && lv->str_shared) r.handle = 1;
   /* under the rule, that handle is the one it assigned */
   r.share = r.handle;
-  r.elems_handle = lv->elems_shared && lv->type == TY_POLY_ARRAY;
   r.elem_nil_marked = (unsigned)repr_elem_nil(r.elem, lv->nullable_int_elem & NIE_MARKED, lv->obj_elem_may_nil);
   r.elem_nil_reach = (unsigned)repr_elem_nil(r.elem, lv->nullable_int_elem & (NIE_MARKED | NIE_REACH), 0);
   repr_slot_storage(&r, lv);
@@ -1780,33 +1779,6 @@ int repr_local_shares(const Compiler *c, const Scope *s, const LocalVar *lv) {
   if (s->dm_subst_name && lv->name && sp_streq(lv->name, s->dm_subst_name)) return 0;
   return sh_may_hold(c, lv->type);
 }
-
-
-
-
-/* repr.h: a container type whose C form holds its Strings as `const char *`.
-   Under the one-String mode there is none: the typed containers hold the
-   handle (sp_strelem, string-one-repr-design.md). */
-int repr_typed_str_container(TyKind t) {
-  (void)t;
-  return 0;
-}
-
-int repr_str_literal_shares(Compiler *c, int node) {
-  if (node < 0) return 0;
-  NodeKind k = nt_kind(c->nt, node);
-  return (k == NK_ArrayNode || k == NK_HashNode) &&
-         repr_typed_str_container(c->ntype[node]) && comp_scope_of(c, node)->reachable;
-}
-
-
-
-
-
-
-
-
-
 
 /* ---- --dump-repr (#7501) ----
    One line per slot with the representation chosen for it, sorted, so the
@@ -1888,7 +1860,6 @@ Repr repr_of_cvar(const Compiler *c, int cid, int idx) {
   if (repr_may_nil(r.ty, 1)) r.may_nil = 1;
   if (r.ty == TY_STRBUF && ci->cvar_str_shared[idx]) r.handle = 1;
   r.share = r.handle;
-  r.elems_handle = (ci->cvar_elems_shared[idx] & ELEMS_POLY) && r.ty == TY_POLY_ARRAY;
   repr_set_class_facts(c, &r, r.ty);
   return r;
 }

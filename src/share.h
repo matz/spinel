@@ -43,10 +43,6 @@ int share_masgn_plain(const NodeTable *nt, int n);
    of the program's? Not where its value is dropped, but map!'s and a
    fill's, which keep them in the receiver. */
 int share_call_stores_block(Compiler *c, int n);
-/* Is container literal lit an argument Kernel's puts, print, p or pp
-   prints and keeps none of, or the value a plain multiple write splits
-   into its targets (share_masgn_plain)? */
-int share_literal_unkept(Compiler *c, int lit);
 
 /* Can a slot of type t hold a String (a String, a box, a container that may
    hold one, an object whose native class keeps one)? */

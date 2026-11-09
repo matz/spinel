@@ -79,8 +79,8 @@ typedef struct {
   unsigned discarded:1;   /* emitted where its value is thrown away
                              (VR_DISCARDED, a view around the emission) */
   unsigned big:1;         /* an Integer held as an sp_Bigint * */
-  unsigned elems_handle:1; /* a container slot whose String elements are
-                              boxed shared handles (--share-strings) */
+  unsigned elems_handle:1; /* an ivar's container slot whose String elements are
+                              boxed shared handles (set only by repr_of_ivar) */
   unsigned share:1;       /* the shared String handle the --share-strings rule
                              assigned (#6765): a slot that is the handle
                              (repr_of_slot, repr_of_ivar, repr_of_cvar), or a
@@ -215,12 +215,6 @@ int repr_dyn_cls(const Compiler *c, TyKind t);
 /* the flag readers that decide it (old names: box_nullable_arg, the local
    arm of call_returns_nullable_int) */
 int repr_box_nullable_arg(Compiler *c, int v);
-/* Does a container of type t hold its Strings as `const char *` (a typed
-   String Array or a Hash with String values), so none can be the shared
-   handle? */
-int repr_typed_str_container(TyKind t);
-/* A retained typed literal whose String elements need shared handles. */
-int repr_str_literal_shares(Compiler *c, int node);
 
 /* R1 (--repr-check): the form a boxer gave a value, recorded at each of
    emit_boxed's and emit_boxed_text's returns, and the form repr_of predicts

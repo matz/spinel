@@ -23218,7 +23218,7 @@ static int all_handle_static_slots(Compiler *c) {
   }
   for (int g = 0; g < c->ngvars; g++) {
     LocalVar *gv = &c->gvars[g];
-    if (gv->type != TY_STRING || gv->rbs_seeded) continue;
+    if (gv->type != TY_STRING) continue;
     lv_set_type(gv, TY_STRBUF);
     { gv->str_shared = 1; comp_touch_scope(gv->owner); }
     changed = 1;
@@ -24397,24 +24397,10 @@ static int strbuf_demand_store_leaf(Compiler *c, int sn, int depth) {
   NodeKind snk = nt_kind(nt, nt_paren_single(nt, sn));
   if ((snk == NK_ArrayNode || snk == NK_HashNode))
     return strbuf_demand_nested_literal(c, nt_paren_single(nt, sn), depth + 1);
-  /* `a << (s << "y")`, `a << +s`, `a << sb` with `def sb = @s`: the
-     element would be a fresh handle over a copy of s's or @s's String
-     (sa_refuse); `+s` is s itself unless s is frozen. So would `a << id(s)`
-     with `def id(x) = x` (sa_refuse_stored_call; not under --share-strings,
-     where the form with a local between compiles) */
+  /* the node's type is asked once here, which refreshes the cache the
+     cases below read */
   int snu = nt_paren_single(nt, sn);
-  TyKind snt = snu >= 0 && nt_kind(nt, snu) == NK_CallNode ? infer_type(c, snu) : TY_UNKNOWN;
-  if (snt == TY_STRING || snt == TY_STRBUF) {
-    /* `h[k] = s.to_s`: a String's own conversion answers the String, so
-       the element is the local's handle once the local holds one
-       (emit_boxed_strbuf boxes the receiver's handle for the marked call).
-       Refusing the store here, as the copying routes below are, refused
-       one whose local widened past a String only in a later round */
-    char rb[256]; int rdefc = -1;
-    int as = an_strbuf_alias_source(c, snu);
-    int reader = an_reader_ivar_of(c, snu, &rdefc, rb, sizeof rb) != NULL;
-    (void)as; (void)reader;
-  }
+  if (snu >= 0 && nt_kind(nt, snu) == NK_CallNode) infer_type(c, snu);
   if (nt_kind(nt, sn) == NK_LocalVariableReadNode) {
     const char *snm = nt_str(nt, sn, "name");
     Scope *sns = comp_scope_of(c, sn);
@@ -25236,18 +25222,6 @@ static int strbuf_ivar_source_walk(Compiler *c, int cid, const char *ivn, int de
 static int strbuf_ivar_source_walk_body(Compiler *c, int cid, const char *ivn, int depth, int mode) {
   const NodeTable *nt = c->nt;
   int changed = 0;
-  /* An ivar an --rbs seed pins to a typed String container (`@out:
-     Hash[String, String]`) keeps plain Strings in its slots: a demand that
-     its stores become handles cannot be met there, and only left a store's
-     value a handle its slot has no conversion for (#8302). Under
-     --share-strings a String Array or String Hash the seed pins is boxed
-     (share_default_apply), so its stores are demanded; Hash[Integer,
-     String] has no boxed form. */
-  if (SB_KIND(mode) == SB_DEMAND && class_ivar_pinned(&c->classes[cid], ivn)) {
-    int iv = comp_ivar_index(&c->classes[cid], ivn);
-    TyKind it = iv >= 0 ? c->classes[cid].ivar_types[iv] : TY_UNKNOWN;
-    if (repr_typed_str_container(it) && it == TY_INT_STR_HASH) return 0;
-  }
   /* its `=`, `||=` and `&&=` (VS_STORE) */
   for (int e = comp_vsite_first(c, VS_STORE, NK_InstanceVariableReadNode, ivn, cid); e >= 0;
        e = comp_vsite_next(c, e)) {
@@ -26071,33 +26045,6 @@ static void an_caller_blocks_free(ACallerBlocks *t) {
   t->built = 0;
 }
 
-/* A digest of every type the share classes read: inside the fixpoint the
-   rule is applied only once a whole round has left the types as they were,
-   so a guess made before the types settle (an untyped receiver read as a
-   call the walk cannot follow) does not leave a handle behind, which the
-   flags would keep. */
-/* (the slots' types, not the nodes': a node's type is a cache that the
-   passes of one round type and retype, so the same settled program reads
-   differently at each place in the round, and the rule's wait for the types
-   to hold still saw a swing that never ends, #10325) */
-static unsigned share_types_digest(Compiler *c) {
-  unsigned h = 2166136261u;
-  for (int s = 0; s < c->nscopes; s++) {
-    for (int l = 0; l < c->scopes[s].nlocals; l++) {
-      h ^= (unsigned)c->scopes[s].locals[l].type; h *= 16777619u;
-    }
-  }
-  for (int k = 0; k < c->nclasses; k++) {
-    for (int i = 0; i < c->classes[k].nivars; i++) {
-      h ^= (unsigned)c->classes[k].ivar_types[i]; h *= 16777619u;
-    }
-    for (int i = 0; i < c->classes[k].ncvars; i++) {
-      h ^= (unsigned)c->classes[k].cvar_types[i]; h *= 16777619u;
-    }
-  }
-  return h;
-}
-
 /* --share-strings (#6765): apply the one rule. Every slot that can hold a
    String is the shared handle (slot_holders); this sets the flags repr_of
    reads for them, through each holder kind's own representation: a local or a
@@ -26834,23 +26781,7 @@ static ShareHolder *slot_holders(Compiler *c, int *out_n) {
   return hs;
 }
 
-/* share_default_apply's last answer was the wait below: the types moved
-   since the round before, and the rule waits a round for them to hold still */
-static int g_share_waited;
-static int share_default_apply(Compiler *c, int in_fixpoint) {
-  unsigned d_in = 0;
-  g_share_waited = 0;
-  if (in_fixpoint) {
-    /* types that moved since the last round: ask for one more round, which
-       applies the rule if they then hold still. The re-narrow loop clears
-       the slots the rule promoted at the top of each iteration, and its
-       re-derive gives them back as the rule found them: the types it was
-       last applied over, which it applies to again. Waiting there instead
-       skipped every other iteration, so the promoted slots alternated and
-       the loop ran to its round cap. */
-    d_in = share_types_digest(c);
-    if (d_in != c->share_sig && d_in != c->share_in_sig) { c->share_sig = d_in; g_share_waited = 1; return 1; }
-  }
+static int share_default_apply(Compiler *c) {
   share_facts_build(c);
   int changed = one_reflect_widen(c), any = 0;
   sb_share_begin(&changed, &any);   /* (the walks below share their records; sb_share_end folds `any` back) */
@@ -26988,17 +26919,8 @@ static int share_default_apply(Compiler *c, int in_fixpoint) {
     changed |= share_lift_value(c, nt_paren_single(c->nt, bb[bn - 1]));
     changed |= share_lift_jumps(c, body, NK_NextNode);
   }
-  /* A typed String container literal's elements, and the argument an
-     Array.new fill stores, are stored as their handles: what each element
+  /* The argument an Array.new fill stores is stored as its handle: what it
      is built of is demanded into the handle. */
-  static const NodeKind lit_kinds[] = { NK_ArrayNode, NK_HashNode };
-  for (size_t k = 0; k < sizeof lit_kinds / sizeof *lit_kinds; k++)
-    NT_FOREACH_KIND(c->nt, lit_kinds[k], n) {
-      if (!repr_str_literal_shares(c, n) || share_literal_unkept(c, n)) continue;
-      changed |= strbuf_container_source_walk(c, n, 0, SB_DEMAND);
-      /* A known attribute's conditional write need not infer its RHS. */
-      infer_type(c, n);
-    }
   NT_FOREACH_KIND(c->nt, NK_CallNode, n) {
     int recv = nt_ref(c->nt, n, "receiver"), args = nt_ref(c->nt, n, "arguments"), argc = 0;
     const int *argv = args >= 0 ? nt_arr(c->nt, args, "arguments", &argc) : NULL;
@@ -27060,17 +26982,6 @@ static int share_default_apply(Compiler *c, int in_fixpoint) {
   }
   free(rest_read);
   sb_share_end();
-  /* The next round must settle on the types AFTER these promotions.
-     Comparing with the pre-promotion types asks for another inference
-     round even when no dependent type moved. */
-  if (in_fixpoint && changed) {
-    unsigned d_out = share_types_digest(c);
-    /* the same promotions over the same types as last time only re-fill
-       what the re-narrow loop cleared: no change for its exits to wait on */
-    if (d_in == c->share_in_sig && d_out == c->share_sig) changed = 0;
-    c->share_in_sig = d_in;
-    c->share_sig = d_out;
-  }
   return changed;
 }
 
@@ -27108,17 +27019,6 @@ static int promote_local_alias_pairs(Compiler *c) {
       for (int l = 0; l < nl; l++)
         changed |= promote_local_alias_pair(c, comp_scope_of(c, w), nt_str(nt, lv[l], "name"), nt_str(nt, w, "name"));
     }
-  /* A nested target binds out of a boxed Array and would append to a copy. */
-  for (int t = comp_kind_first(c, NK_LocalVariableTargetNode); t >= 0; t = comp_kind_next(c, t)) {
-    const char *tn = nt_str(nt, t, "name");
-    Scope *ts = comp_scope_of(c, t);
-    if (!tn || !ts || strbuf_mut_kind(c, tn, ts) != 1) continue;
-    for (int mw = comp_kind_first(c, NK_MultiWriteNode); mw >= 0; mw = comp_kind_next(c, mw)) {
-      if (comp_scope_of(c, mw) != ts || an_masgn_alias_source(c, mw, t) >= 0) continue;
-      int source = an_masgn_alias_in(c, mw, nt_ref(nt, mw, "value"), t, 0);
-      if (source < 0 || (comp_ntype(c, source) != TY_STRING && comp_ntype(c, source) != TY_STRBUF)) continue;
-    }
-  }
   /* `t, u = s, 1` names s as t, as `t = s` does (an_masgn_alias_source) */
   for (int mw = comp_kind_first(c, NK_MultiWriteNode); mw >= 0; mw = comp_kind_next(c, mw)) {
     if (nt_kind(nt, mw) != NK_MultiWriteNode) continue;
@@ -29301,7 +29201,7 @@ static int promote_params_stored_in_shared_ivars(Compiler *c,
      Array at every call) is no String's mutation (#8500, #8501). */
   struct HandleArgTab *sv_args = c->share_args;
   if (hat && hat->ok) c->share_args = (struct HandleArgTab *)hat;
-  changed |= share_default_apply(c, 0);
+  changed |= share_default_apply(c);
   c->share_args = sv_args;
   for (int w = 0; w < nt->count; w++) {
     if (nt_kind(nt, w) != NK_InstanceVariableWriteNode) continue;
@@ -36896,8 +36796,6 @@ static int reassert_rbs_param_seeds(Compiler *c) {
       /* a String the share rule made the handle (share_default_apply): the
          same Ruby type in its shared C form */
       if (lv->rbs_type == TY_STRING && lv->type == TY_STRBUF && lv->str_shared) continue;
-      /* and a String Array whose Strings it shares, boxed as their handles */
-      if (lv->rbs_type == TY_STR_ARRAY && lv->type == TY_POLY_ARRAY && lv->elems_shared) continue;
       /* and a String Hash whose Strings it shares, boxed as their handles */
       if (lv->rbs_type == TY_STR_STR_HASH && lv->type == TY_STR_POLY_HASH) continue;
       lv_set_type(lv, lv->rbs_type);
@@ -48013,34 +47911,6 @@ static int sa_returned_args_t(Compiler *c, int call, int *out, int cap, int poly
   }
   return got;
 }
-/* A String variable a call adds to an Array without the element store
-   (strbuf_container_store_values) seeing it: through `insert`, `prepend`
-   or a `concat` of a literal on any Array, or through a push or `<<` whose
-   receiver is a push or a global (`a << t << s`, `$a << s`). Answers the
-   k-th stored value's node when it is such a name, -1 when it is not, and
-   -2 past the last value or for another call. */
-/* What the node table says of each call asked about, read once per table
-   (its version, its edits -- an argument array an edit replaces is freed,
-   and version does not count that edit -- and its node count): the name
-   and receiver on the first ask, and, once the receiver is known to be an
-   Array's, the values, their count and whether the call's shape is one of
-   the walk's. The store walk asks this of every store into a container
-   local, once per outermost walk that reaches the local, and the memo of
-   the last call (#9996) answered only the k asks of one call in a row: on a
-   Rails program the reads were still 6-10% of a sampled window of the
-   share pass, the argument scan most of it. The receiver's type is asked
-   each time, as before. */
-static const NodeTable *sau_nt; static unsigned sau_ver; static unsigned long sau_edits; static int sau_cnt = -1, sau_cap;
-static signed char *sau_state;      /* per node: 0 unread, 1 name and receiver read, 2 shape read too */
-static const char **sau_nm; static int *sau_r, *sau_an; static signed char *sau_shape; static const int **sau_av;
-/* refuse_string_alias_copies' answers of sa_array_observed, by the Array
-   variable's first read (0: not asked yet, 1 no, 2 yes), so the reads of an
-   Array many adders fill are climbed once. */
-typedef struct { unsigned char *observed; } SaArrayReads;
-/* refuse_string_alias_copies' order facts, built on the first question:
-   the top-level statements that run once, after every String mutation the
-   program has (a node-indexed mark), or none. */
-typedef struct { unsigned char *after_all; int built; } SaOrder;
 /* ---- Set#compare_by_identity ----
    An identity Set finds its members by equal?. Spinel's identity is CRuby's
    for an object of the program's, an Array, a Hash, a Proc, a class, a
@@ -52257,7 +52127,7 @@ static uint64_t an_loop_state(Compiler *c) {
     /* the two nil tables are sized when they are built, by the ivars then */
     AN_LS_TAB(ivar_obj_may_nil, n_ivar_obj_may_nil); AN_LS_TAB(ivar_elem_may_nil, n_ivar_obj_may_nil);
     AN_LS_TAB(cvar_types, ncvars); AN_LS_TAB(cvar_nullable_int, ncvars);
-    AN_LS_TAB(cvar_str_shared, ncvars); AN_LS_TAB(cvar_elems_shared, ncvars);
+    AN_LS_TAB(cvar_str_shared, ncvars);
 #undef AN_LS_TAB
     AN_LS_RANGE(ci, ClassInfo, enum_yield_arity, c_struct);
     AN_LS_RANGE(ci, ClassInfo, nsub_root, prep_from);
@@ -55435,17 +55305,6 @@ static void an_phase_proc_returns(Compiler *c) {
   }
 }
 
-/* --share-strings: how many locals of scope s share_default_apply has
-   converted to the poly Array (elems_shared); the storage loop compares the
-   counts around itself to tell the scopes with a conversion made after
-   inference. */
-static int share_converted_locals(const Compiler *c, int s) {
-  int n = 0;
-  for (int i = 0; i < c->scopes[s].nlocals; i++)
-    n += c->scopes[s].locals[i].elems_shared && c->scopes[s].locals[i].type == TY_POLY_ARRAY;
-  return n;
-}
-
 /* The instance_eval re-infer and the storage refinements: byref string out-params, handle params, the reader operand marks, the STRBUF promotion, the shared and aliased strings (analyze_program's steps, in their order) */
 static void an_phase_storage(Compiler *c) {
   /* Re-infer nodes inside instance_eval block bodies with the receiver's class
@@ -55493,12 +55352,6 @@ static void an_phase_storage(Compiler *c) {
      same reason and feeds the same propagation, so the two run to a joint
      fixpoint rather than one after the other (#4363). */
   int late_widened = 0;
-  int *conv0 = NULL;
-  {
-    conv0 = malloc(sizeof(int) * (size_t)(c->nscopes > 0 ? c->nscopes : 1));
-    if (!conv0) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-    for (int s = 0; s < c->nscopes; s++) conv0[s] = share_converted_locals(c, s);
-  }
   HandleArgTab hat;
   /* The refresh below moves node types the rule's facts are built from: a
      variable an expression over a widened read joins can only now meet a
@@ -55568,27 +55421,12 @@ static void an_phase_storage(Compiler *c) {
     }
     if (late_widened)
       for (int id = 0; id < c->nt->count; id++) infer_type(c, id);
-    else if (conv0) {
-      int any = 0;
-      for (int s = 0; s < c->nscopes; s++) {
-        int moved = share_converted_locals(c, s) != conv0[s];
-        conv0[s] = moved;
-        any |= moved;
-      }
-      if (any)
-        for (int id = 0; id < c->nt->count; id++) {
-          Scope *sc = comp_scope_of(c, id);
-          if (sc && conv0[sc - c->scopes]) infer_type(c, id);
-        }
-    }
     if (round >= 4 || !memcmp(nt0, c->ntype, sizeof(TyKind) * (size_t)c->nt->count)) break;
     handle_arg_tab_free(&hat);
     late_widened = 0;
-    for (int s = 0; s < c->nscopes; s++) conv0[s] = share_converted_locals(c, s);
   }
   free(nt0);
   free(before_rule.ty);
-  free(conv0);
   /* A read an is_a? or nil guard narrowed to String (`m(x) if
      x.is_a?(String)`) unboxed a copy of the String its POLY variable holds:
      one lifted into the handle for a parameter appended to keeps the box,
@@ -55768,7 +55606,7 @@ static void an_phase_storage(Compiler *c) {
     Scope *sc = &c->scopes[s];
     for (int i = 0; i < sc->nlocals; i++) {
       LocalVar *lv = &sc->locals[i];
-      if ((lv->str_shared || lv->str_append) &&
+      if (lv->str_shared &&
           (lv->type == TY_STRING || lv->type == TY_STR_ARRAY)) lv_set_type(lv, TY_STRBUF);
     }
   }

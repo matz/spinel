@@ -348,10 +348,6 @@ typedef struct {
                        modifier `if`, one branch, a loop body), so the read
                        answers nil, and the slot starts nil as an
                        or-written one does */
-  int elems_shared; /* --share-strings: a String container whose elements
-                       the rule shares settled in its poly form, and its
-                       elements are boxed handles (repr_of_slot's
-                       elems_handle) */
   int str_shared;   /* (TY_STRBUF) a shared-mutable string: it is aliased
                        (`s2 = s1`) AND mutated in place, so the whole alias set
                        holds the one sp_String* handle -- reads hand out the live
@@ -373,12 +369,6 @@ typedef struct {
                        bare `super` hands it to such a parameter and it can
                        hold a String, so the super lifts it as a marked read
                        is (emit_zsuper_arg). (#6179) */
-  int str_append;   /* (TY_STRBUF) an append accumulator: appended to inside a
-                       loop and never read inside one, so the growable handle
-                       makes each `<<` amortized O(1) instead of copying the
-                       whole accumulation. Durable, like str_shared: the type
-                       is re-asserted after the fixpoint, which a later
-                       assign-based pass would otherwise overwrite. */
   int poly_hash_pin; /* an empty-`{}` local handed to a TY_POLY parameter: the
                        callee writes through the reference with the boxed
                        accessors, which only persist to a PolyPoly hash, so the
@@ -691,11 +681,10 @@ typedef struct {
   int ret_rbs_box_held; /* a box reached that container seed while the
                           fixpoint ran and the seed held: the settled types
                           decide (ret_seed_holds, an_settle_seed_boxes) */
-  int ret_elems_shared; /* --share-strings: that seed was Array[String], and the
+  int ret_elems_shared; /* that seed was Array[String], and the
                           Strings the method answers are shared, so the return
                           settled in its poly form, the boxes holding the
-                          handles (share_default_apply), as a local's does
-                          (LocalVar.elems_shared); the same Ruby type in its
+                          handles (share_default_apply); the same Ruby type in its
                           shared C form, not a contradiction of the seed (#9626) */
   int ret_pub_fresh;   /* --share-strings: a deep-return pickup takes this
                           method's value, and a tail of it answers a fresh
@@ -849,9 +838,8 @@ typedef struct {
   unsigned char *ivar_str_shared; /* (#3227) the slot is a shared-mutable
                                      string handle (sp_String *): survives
                                      re-clears; post-fixpoint reasserts it */
-  unsigned char *ivar_elems_shared; /* --share-strings: the TY_POLY_ARRAY slot
-                                       holds its Strings as handles, as a
-                                       LocalVar's elems_shared */
+  unsigned char *ivar_elems_shared; /* the TY_POLY_ARRAY slot
+                                       holds its Strings as handles */
   unsigned char *ivar_nullable_int; /* the slot holds a nilable scalar: some
                                      write to it can leave nil (its nil byte),
                                      so a read of it (or of its attr_reader)
@@ -931,9 +919,6 @@ typedef struct {
                                        ivar_nullable_int for an ivar */
   unsigned char *cvar_str_shared;   /* --share-strings: the TY_STRBUF slot is
                                        the shared handle, as ivar_str_shared */
-  unsigned char *cvar_elems_shared; /* --share-strings: the TY_POLY_ARRAY slot
-                                       holds its Strings as handles, as a
-                                       LocalVar's elems_shared */
   int ncvars, ccvars;
   char **readers;      /* attr reader method names (no '@') */
   int nreaders, creaders;
@@ -1168,7 +1153,7 @@ typedef struct {
   int ncs, ccs;
 } ClassInfo;
 
-/* The bits of ClassInfo.ivar_elems_shared and cvar_elems_shared */
+/* The bits of ClassInfo.ivar_elems_shared */
 enum {
   ELEMS_POLY = 1      /* the TY_POLY_ARRAY slot holds its Strings as handles */
 };
@@ -1765,8 +1750,6 @@ typedef struct {
   unsigned bsl_cur;
   struct HandleArgTab *share_args; /* final callers, while sealing share facts */
   struct SbArgIndex *sb_args; /* settled parameter sources, built once for storage */
-  unsigned share_sig;   /* the types the facts were last applied over */
-  unsigned share_in_sig;   /* the types the last application started from */
   /* the methods compute_byref_out_params let take a lent slot
      (an_byref_eligible_scopes), kept for the share facts built after it
      (nbyref_elig scopes; NULL before it runs) */

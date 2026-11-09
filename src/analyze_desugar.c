@@ -17918,7 +17918,10 @@ int desugar_builtin_enum_calls(Compiler *c) {
        Float or String one has no route to the reopen yet) */
     int reopen_cn = ty_is_array(rt) ? CORE_ARRAY : ty_is_hash(rt) ? CORE_HASH : (rt == TY_RANGE || rt == TY_OBJ_RANGE) ? CORE_RANGE :
                     rt == TY_ENUMERATOR ? CORE_ENUMERATOR : -1;
-    if (reopen_cn >= 0 && an_reopen_owner(c, id, reopen_cn) >= 0) continue;
+    if (reopen_cn >= 0 && an_reopen_owner(c, id, reopen_cn) >= 0) {
+      if (enum_unrename(nt, id)) changed = 1;
+      continue;
+    }
     if (ty_is_array(rt) || ty_is_hash(rt) || rt == TY_RANGE || rt == TY_FLOAT_RANGE ||
         rt == TY_STR_RANGE || (rt == TY_ENUMERATOR && !lazy_driven)) ok = 1;
     /* a Range of objects: the walks that stop at the block's answer walk its

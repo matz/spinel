@@ -13946,7 +13946,10 @@ static int desugar_enum_named_call(Compiler *c, int id, NodeTable *nt, const cha
        find_all machinery keeps that shape */
     int frt_open = frt == TY_UNKNOWN && !fa_user && frc >= 0 &&
                    nt_kind(nt, frc) == NK_ArrayNode;
-    if (ty_is_array(frt) || frt == TY_RANGE || frt_open) {
+    /* an Array or Range reopening's own find_all (or one a module it
+       includes gives it) answers the call, ahead of select */
+    int fa_own = an_reopen_owner(c, id, frt == TY_RANGE ? CORE_RANGE : CORE_ARRAY) >= 0;
+    if ((ty_is_array(frt) || frt == TY_RANGE || frt_open) && !fa_own) {
       nt_node_set_str(nt, id, "name", "select");
       /* a blockless one's Enumerator still says find_all */
       if (nt_ref(nt, id, "block") < 0) nt_node_set_str(nt, id, "enum_label", "find_all");
@@ -14138,7 +14141,8 @@ int desugar_enum_method_recv(Compiler *c) {
        reaches here as the redispatched pair array, so the result is the
        Enumerable pair list, not a hash) */
     if (sp_streq(nm, "find_all") && nt_ref(nt, id, "block") >= 0 && !an_enum_prog_method(c, nm) &&
-        (ty_is_array(comp_ntype(c, recv)) || ty_is_array(infer_type(c, recv)))) {
+        (ty_is_array(comp_ntype(c, recv)) || ty_is_array(infer_type(c, recv))) &&
+        an_reopen_owner(c, id, CORE_ARRAY) < 0) {   /* an Array reopening's own find_all runs */
       nt_node_set_str(nt, id, "name", "select");
       changed = 1;
       continue;

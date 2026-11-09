@@ -6641,6 +6641,9 @@ static int infer_class_module_call(Compiler *c, int id, const NodeTable *nt, con
       if (bcn && sp_streq(bcn, "Object")) { *out = TY_POLY; return 1; }
       if (bcn && sp_streq(bcn, "Integer")) { *out = TY_POLY; return 1; }
     }
+    /* a class value no constant names (`x.class.allocate`): boxed, as the
+       sp_cls_allocate that answers it is (comp_class_value_allocate) */
+    if (comp_class_value_allocate(c, id)) { *out = TY_POLY; return 1; }
   }
   return 0;
 }

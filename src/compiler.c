@@ -5926,6 +5926,28 @@ int allocate_super_reaches_class(Compiler *c, int id) {
    in an Exception class, ...) nor a parent's own allocate that answers:
    that super has no target here, so such a call keeps Class#allocate as
    before. */
+/* `<class value>.allocate` where the class value is no written-out constant
+   (`x.class.allocate`, a local holding a class): a call the generated
+   sp_cls_allocate answers, as it does a boxed class value, and whose value is
+   boxed. A constant has its own static arm; a `self` receiver and a program
+   that gives some class a class method `allocate` of its own keep the paths
+   they had (that method is the user dispatch's). One rule for the analyzer's
+   type of the call, the emitter, and the pass that asks for the sp_cls_*
+   answers (g_gen_cls_answers). */
+int comp_class_value_allocate(Compiler *c, int id) {
+  const NodeTable *nt = c->nt;
+  if (nt_kind(nt, id) != NK_CallNode) return 0;
+  const char *name = nt_str(nt, id, "name");
+  int recv = nt_ref(nt, id, "receiver");
+  if (recv < 0 || !name || !sp_streq(name, "allocate") || nt_ref(nt, id, "arguments") >= 0 ||
+      nt_ref(nt, id, "block") >= 0 || comp_ntype(c, recv) != TY_CLASS)
+    return 0;
+  NodeKind rk = nt_kind(nt, recv);
+  if (rk == NK_ConstantReadNode || rk == NK_ConstantPathNode || rk == NK_SelfNode) return 0;
+  for (int k = 0; k < c->nclasses; k++)
+    if (comp_cmethod_in_chain(c, k, "allocate", NULL) >= 0) return 0;
+  return 1;
+}
 int comp_own_allocate(Compiler *c, int ci, int call) {
   NodeTable *nt = (NodeTable *)c->nt;
   if (ci < 0 || ci >= c->nclasses) return 0;

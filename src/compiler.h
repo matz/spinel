@@ -1629,6 +1629,7 @@ typedef struct {
   int n_cext_stubs;
   CextExtension *cext_extensions;
   int n_cext_extensions;
+  int block_arg_conv;   /* cplan_block_arg: 0 not asked, 1 only the builtins convert a `&` value, 2 the program defines a converter */
   CextClass *cext_classes;
   int n_cext_classes;
 

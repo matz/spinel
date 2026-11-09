@@ -768,6 +768,23 @@ int cplan_nil_program_served(Compiler *c, int id);  /* codegen_call.c: nil's met
    a global, an ivar, an unseen caller) is not. */
 int cplan_nil_written(int why);
 
+/* ---- CB_*: what a call's `&` argument does ----
+   A `&fe` argument is bound as written (a Proc, Method, Symbol, Hash, an
+   object with to_proc, nil), or cannot become a block and raises TypeError
+   after the receiver and the arguments have run (a value whose type is
+   none of those and cannot be nil), or may be either, known where it runs
+   (a boxed value, or a typed one that may be nil). Only the builtins
+   convert: a program that defines to_proc, respond_to? or
+   respond_to_missing? binds every one as written. *cn is the class the
+   TypeError names ("" for a Boolean), set for CB_RAISE and for a typed
+   CB_CHECK; NULL for a boxed one. */
+typedef enum {
+  CB_BINDS,    /* bound as written */
+  CB_RAISE,    /* TypeError: no implicit conversion of *cn into Proc */
+  CB_CHECK     /* decided where it runs */
+} CplanBlockArg;
+int cplan_block_arg(Compiler *c, int id, const char **cn);
+
 /* ---- CM_*: a call that finds no method where it runs ----
    Whether call id -- receiverless, on self, or on a constant naming a
    program class -- runs at a load point where the program's method of its

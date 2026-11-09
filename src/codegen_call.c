@@ -34829,6 +34829,9 @@ static int emit_cext_call(Compiler *c, int id, Buf *b) {
 
 static void emit_call_body_ordinary(Compiler *c, int id, Buf *b);
 void emit_call_body(Compiler *c, int id, Buf *b) {
+#ifdef SP_EMIT_TRACE
+  emit_trace_node(c, id, 'c');
+#endif
   if (emit_cext_call(c, id, b) || emit_missing_call(c, id, b)) return;
   emit_call_body_ordinary(c, id, b);
 }

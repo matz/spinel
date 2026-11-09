@@ -498,6 +498,40 @@ build/csrc-work/codegen_util.o: build/csrc/sp_rt_names.h
 $(SPINEL_WORK): $(SPINEL_WORK_OBJ) build/csrc/sp_parse_lib.o build/csrc/re_lit_check.o $(RE_OBJ) $(PRISM_LIB) $(INLINE_RBS_LIBS)
 	$(CC) $(CFLAGS) $(SPINEL_WORK_OBJ) build/csrc/sp_parse_lib.o build/csrc/re_lit_check.o $(RE_OBJ) $(PRISM_LIB) $(INLINE_RBS_LIBS) -lm $(LDFLAGS) -o $@
 
+# The compiler again with SP_EMIT_TRACE and -finstrument-functions, for
+# tools/emit_trace.rb: the C compiler calls a hook at every function entry and
+# exit of src/, and src/emit_trace.c (compiled only here) writes them to the
+# file SPINEL_EMIT_TRACE names, with a marker for each call and statement the
+# code generator starts. The tool prints which emitters produced a call's C
+# and which arm of emit_call_body's chain took it. The parser's side, prism
+# and the regexp engine are linked as they are. Not built by default: the
+# hooks make it several times slower, so it is for looking at one program.
+SPINEL_TRACE = build/spinel-trace
+SPINEL_TRACE_OBJ = $(patsubst build/csrc/%.o,build/csrc-trace/%.o,$(SPINEL_OBJ)) build/csrc-trace/emit_trace.o
+build/csrc-trace/%.o: src/%.c $(SPINEL_HDRS) | build/csrc
+	@mkdir -p build/csrc-trace
+	$(CC) $(CFLAGS) -O1 -finstrument-functions -DSP_EMIT_TRACE -Isrc -Ibuild/csrc -c $< -o $@
+build/csrc-trace/main.o: build/csrc/spinel_rev.h
+build/csrc-trace/codegen_util.o: build/csrc/sp_rt_names.h
+build/csrc-trace/analyze_desugar.o build/csrc-trace/codegen_call.o: $(wildcard src/*_method_names.inc)
+# dladdr is libdl's before glibc 2.34
+SPINEL_TRACE_LIBS = $(if $(filter Linux,$(shell uname -s)),-ldl)
+$(SPINEL_TRACE): $(SPINEL_TRACE_OBJ) build/csrc/sp_parse_lib.o build/csrc/re_lit_check.o $(RE_OBJ) $(PRISM_LIB) $(INLINE_RBS_LIBS)
+	$(CC) $(CFLAGS) $(SPINEL_TRACE_OBJ) build/csrc/sp_parse_lib.o build/csrc/re_lit_check.o $(RE_OBJ) $(PRISM_LIB) $(INLINE_RBS_LIBS) -lm $(LDFLAGS) $(SPINEL_TRACE_LIBS) -o $@
+
+# Keeps the trace build working: test/emit-trace/calls.rb holds two calls
+# whose arms are not about to move, a typed Array's push and an Integer +,
+# and the tool has to name each. Not a leg of `make test` or the gate.
+.PHONY: emit-trace-test
+emit-trace-test: $(SPINEL_TRACE)
+	@fail=0; \
+	has() { out=$$(ruby tools/emit_trace.rb test/emit-trace/calls.rb $$1) && printf '%s\n' "$$out" | grep -Eq "$$2" || \
+	  { echo "emit-trace-test: FAIL (line $$1: $$3)"; fail=1; }; }; \
+	has 5 "^ +emit_call_append_arms +<- took the call$$" "emit_call_append_arms did not take the call"; \
+	has 7 "^ +emit_array_arith_call +<- took the call$$" "emit_array_arith_call did not take the call"; \
+	has 10 ":10:3  tail ReturnNode " "the method's last statement has no tree"; \
+	[ $$fail = 0 ] && echo "emit-trace-test: OK (3 lines)"
+
 # The compiler again under AddressSanitizer and UndefinedBehaviorSanitizer,
 # for `make san-check` (tools/san_check.sh): every program of the corpus
 # compiled to C by it, and a report from either sanitizer fails. A memo that

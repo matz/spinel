@@ -553,7 +553,7 @@ int share_plan_targets_cover(Compiler *c, int u) {
 /* Is v a call every target of which answers a String literal on every
    path (scope_ret_str_literal)? A frozen literal keeps one identity: its
    bytes are the literal's own, and a handle made over them is the
-   literal's (SP_SHARE_STRING_LITERALS, which the share rule sets), so
+   literal's (sp_String_literal_slot), so
    what the call hands on is the object. See share.h. */
 int share_plan_call_answers_literal(Compiler *c, int v) {
   int u = nt_paren_single(c->nt, v);

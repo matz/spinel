@@ -926,8 +926,8 @@ int scope_ret_fresh(Compiler *c, int mi);
    is dropped and hands its block on only to such an iterator? */
 int an_iter_discards_block(Compiler *c, int call);
 /* Does method mi answer a String literal on every path (no `return`)? A
-   frozen literal keeps one identity, the handle its site has
-   (SP_SHARE_STRING_LITERALS), which a handle made over its bytes finds. */
+   frozen literal keeps one identity, the handle its site has,
+   which a handle made over its bytes finds. */
 int scope_ret_str_literal(Compiler *c, int mi);
 int scope_ret_param(Compiler *c, int mi);
 /* A String `||` or `&&` over a String left operand: a tail whose operands

@@ -1536,9 +1536,7 @@ extern SP_TLS sp_RbVal _sp_proc_poly_ret;
 extern SP_TLS sp_Proc *_sp_proc_blk;
 void sp_mark_rt_roots(void);   /* lib/sp_cold.c */
 static void sp_re_mark_globals(void) {
-#ifdef SP_SHARE_STRING_LITERALS
   sp_String_mark_literals();
-#endif
   /* The sub-markers below are static and inline away, so a fault in one of
      them reports as this frame with nothing to distinguish them. Under verify,
      name the group being walked: `phase=globals` alone cannot say whether the
@@ -3058,9 +3056,7 @@ static SP_UNUSED sp_RbVal sp_poly_outbuf_handle(sp_RbVal v) {
 }
 /* The String Array of handles (--share-strings, TY_STRH_ARRAY) element a
    boxed String is: a handle as it is, a plain String as sp_String_new_shared
-   makes it (a frozen literal's own handle, here where
-   SP_SHARE_STRING_LITERALS is set, which lib/sp_array.c's copy of the
-   constructor never sees), nil as NULL. */
+   makes it (a frozen literal's own handle), nil as NULL. */
 static inline sp_String *sp_StrhArray_unbox(sp_RbVal v) {
   if (v.tag == SP_TAG_NIL) return NULL;
   return v.tag == SP_TAG_STR ? sp_String_new_shared(v.v.s) : (sp_String *)v.v.p;
@@ -3073,44 +3069,25 @@ static inline sp_RbVal sp_StrArray_box_handle(sp_StrArray *a, sp_int i) {
   sp_strelem s = sp_StrArray_get_e(a, i);
   return s ? sp_box_nullable_obj(s, SP_BUILTIN_STRBUF) : sp_box_nil();
 }
-/* The read face of a frozen handle: a copy that is frozen too (0xfa, a
-   frozen heap String that is collected), so the String read through it,
-   and a handle a consumer wraps around it, keep the frozen mark the
-   handle carries (`inject(s)` over a frozen s answered a String `<<`
-   changed). */
-SP_COLD static const char *sp_strbuf_read_frozen(sp_String *h) {
-#ifdef SP_SHARE_STRING_LITERALS
-  if (sp_String_literal_slot(sp_String_cstr(h))) return sp_String_cstr(h);
-  /* --share-strings: a frozen handle's payload, which nothing can change or
-     move any more, is its read face itself: it reads frozen through its
-     handle (sp_str_is_frozen_val), its mark reaches the handle, and the
-     bytes are that String's own, equal? to every name of it */
-  return sp_String_cstr(h);
-#endif
-  char *r = (char *)sp_str_from_bytes(sp_String_cstr(h), (size_t)sp_String_length(h));
-  if (h->binary) sp_str_mark_binary(r);
-  ((unsigned char *)r)[-1] = 0xfa;
-  return r;
-}
-/* A shared String handle's read face (a copy of its bytes, NULL for nil)
-   with the handle published to the deep-return side channel, for a
-   program built --share-strings: the call sequences the write, where two
-   inline `(_sp_ret_strbuf = h, ...)` among one call's arguments were
-   unsequenced writes to the channel. */
-/* Every build reads a handle through it now, and a frozen handle's read
-   face is frozen too (sp_strbuf_read_frozen). */
-/* A handle's read face without the publish: a copy of its bytes, NULL for
-   nil, frozen for a frozen handle (sp_strbuf_read_frozen) */
+/* A shared String handle's read face with the handle published to the
+   deep-return side channel: the call sequences the write, where two inline
+   `(_sp_ret_strbuf = h, ...)` among one call's arguments were unsequenced
+   writes to the channel. */
 /* One representation (string-one-repr-design.md): no slot holds bytes, so a
    read face never outlives a change of the handle, and it is the bytes
-   themselves (the payload is laid out as a byte string, marker 0xfd). */
+   themselves (the payload is laid out as a byte string, marker 0xfd). A
+   frozen handle's payload, which nothing can change or move any more, is
+   its read face too: it reads frozen through its handle
+   (sp_str_is_frozen_val), its mark reaches the handle, and the bytes are
+   that String's own, equal? to every name of it (`inject(s)` over a frozen
+   s answered a String `<<` changed). The runtime objects read it so as well
+   as the generated unit: a boxed Hash#merge! of a frozen String kept a
+   copy. NULL for nil. */
 static inline const char *sp_strbuf_read(sp_String *h) {
-  if (h && SP_UNLIKELY(sp_String_is_frozen(h))) return sp_strbuf_read_frozen(h);
   return h ? sp_String_cstr(h) : NULL;
 }
 static inline const char *sp_strbuf_read_pub(sp_String *h) {
   _sp_ret_strbuf = (void *)h;
-  if (h && SP_UNLIKELY(sp_String_is_frozen(h))) return sp_strbuf_read_frozen(h);
   return h ? sp_String_cstr(h) : NULL;
 }
 /* ...except a read held across a block the program runs (the receiver or
@@ -3118,7 +3095,7 @@ static inline const char *sp_strbuf_read_pub(sp_String *h) {
    the String in place and move its payload, so the C builtin iterates over
    its own copy, as it did when every read was one */
 static inline const char *sp_strbuf_read_own(sp_String *h) {
-  if (h && SP_UNLIKELY(sp_String_is_frozen(h))) return sp_strbuf_read_frozen(h);
+  if (h && SP_UNLIKELY(sp_String_is_frozen(h))) return sp_String_cstr(h);
   return h ? sp_str_concat(sp_String_cstr(h), (&("\xff")[1])) : NULL;
 }
 static inline const char *sp_strbuf_read_pub_own(sp_String *h) {
@@ -3208,21 +3185,17 @@ static inline sp_RbVal sp_poly_literal_identity(sp_RbVal v) {
   if (sp_poly_is_strbuf(v) && v.v.p) {
     sp_String *h = (sp_String *)v.v.p;
     if (sp_String_literal_slot(h->data)) return sp_box_str(h->data);
-#ifdef SP_SHARE_STRING_LITERALS
     /* and so do a frozen handle's: its payload is its read face
-       (sp_strbuf_read_frozen) */
+       (sp_strbuf_read) */
     if (sp_String_is_frozen(h)) return sp_box_str(h->data);
-#endif
   }
-#ifdef SP_SHARE_BOX_HANDLES
-  /* --share-strings: a live handle's own bytes (marker 0xfd, whose header
-     names the owning handle, sp_fd_own) read as a plain String are that
-     handle's object: a box of them is the box of the handle */
+  /* A live handle's own bytes (marker 0xfd, whose header names the owning
+     handle, sp_fd_own) read as a plain String are that handle's object: a
+     box of them is the box of the handle */
   if (v.tag == SP_TAG_STR && v.v.s && ((const unsigned char *)v.v.s)[-1] == 0xfd) {
     sp_String *h = (sp_String *)(void *)(((const sp_str_hdr *)(v.v.s - 1)) - 1)->next;
     if (h && h->data == v.v.s && !sp_String_is_frozen(h)) return sp_box_obj(h, SP_BUILTIN_STRBUF);
   }
-#endif
   return v;
 }
 static inline const void *sp_poly_identity_ptr(sp_RbVal v) {
@@ -14108,10 +14081,8 @@ static SP_NOINLINE sp_bool sp_poly_eql_strict_slow(sp_RbVal a, sp_RbVal b) {
    bits, as a typed Float's equal? compares them: the same NaN is itself,
    and 0.0 is not -0.0. */
 static sp_bool sp_poly_equal(sp_RbVal a, sp_RbVal b) {
-#ifdef SP_SHARE_STRING_LITERALS
   a = sp_poly_literal_identity(a);
   b = sp_poly_literal_identity(b);
-#endif
   if (a.tag != b.tag) return FALSE;
   switch (a.tag) {
     case SP_TAG_INT: return a.v.i == b.v.i;
@@ -18014,21 +17985,17 @@ static void sp_throw_boxed(sp_RbVal tagv, sp_RbVal val) {
   sp_throw(tag, kind, val);
 }
 static void sp_throw(const char *tag, int kind, sp_RbVal val) {
-#ifdef SP_SHARE_STRING_LITERALS
   if (kind == 3 && tag && sp_String_literal_slot(((sp_String *)tag)->data)) {
     tag = ((sp_String *)tag)->data;
     kind = 2;
   }
-#endif
   int i = sp_catch_top - 1;
   while (i >= 0) {
-#ifdef SP_SHARE_STRING_LITERALS
     if (sp_catch_tag_kind[i] == 3 && sp_catch_tag[i] &&
         sp_String_literal_slot(((sp_String *)sp_catch_tag[i])->data)) {
       sp_catch_tag[i] = ((sp_String *)sp_catch_tag[i])->data;
       sp_catch_tag_kind[i] = 2;
     }
-#endif
     if (sp_catch_tag_kind[i] == kind &&
         (kind ? sp_catch_tag[i] == tag : strcmp(sp_catch_tag[i], tag) == 0)) {
       sp_catch_val[i] = val; sp_catch_top = i + 1;

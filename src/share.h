@@ -248,7 +248,7 @@ int share_plan_producer_unlifted(Compiler *c, int v, int *operand);
 int share_plan_targets_cover(Compiler *c, int u);
 /* Is v a call every target of which answers a String literal on every
    path, whose bytes are the literal's own: a handle made over them, or a
-   box of them, is the literal's handle (SP_SHARE_STRING_LITERALS), and
+   box of them, is the literal's handle, and
    its identity is its bytes' pointer, as a frozen String's is? */
 int share_plan_call_answers_literal(Compiler *c, int v);
 /* Is target mi of call v one answering a String literal whose answer the

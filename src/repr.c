@@ -1495,8 +1495,8 @@ int repr_coerce_plan(Compiler *c, int node, TyKind slot, int how, TyKind *from_o
   if (slot == TY_BIGINT && from == TY_INT) return CF_INT2BIG;
   /* a String into the shared handle slot an ivar holds under the share
      rule: the handle the value is, or a fresh one around it, as a plain
-     `@x = v` stores it. A frozen literal is the handle of its own site
-     (SP_SHARE_STRING_LITERALS), so it keeps one identity and stays frozen */
+     `@x = v` stores it. A frozen literal is the handle of its own site,
+     so it keeps one identity and stays frozen */
   if (slot == TY_STRBUF && how == CO_HOLD && from == TY_STRING) return CF_STRBUF_HANDLE;
   if (from == TY_POLY && how == CO_HOLD) {
     if (repr_poly_rhs_ok(slot)) return CF_POLY_RHS;

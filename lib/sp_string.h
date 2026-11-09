@@ -392,8 +392,7 @@ static inline const char*sp_String_cstr_nil(sp_String*s){return s?s->data:NULL;}
 static inline int64_t sp_String_length(sp_String*s){return s->len;}
 
 /* A String no other name holds, boxed for something that keeps the box:
-   --share-strings (SP_SHARE_BOX_HANDLES, which a program built with it
-   defines) boxes a mutable heap String as a new handle over its bytes,
+   boxes a mutable heap String as a new handle over its bytes,
    which sp_String_new_fresh copies before it allocates, so every copy of
    the box names the one String. So is an unfrozen static one (0xff, a
    folded interpolation's bytes): it stands for a new String, which a
@@ -401,7 +400,6 @@ static inline int64_t sp_String_length(sp_String*s){return s->len;}
    frozen String is boxed as itself, as nothing can change it and its
    identity is its bytes'; so is any String otherwise (sp_box_str). */
 static inline sp_RbVal sp_box_str_new(const char *v) {
-#ifdef SP_SHARE_BOX_HANDLES
   if (v) {
     unsigned char m = ((const unsigned char *)v)[-1];
     if (m == 0xfe || m == 0xfc || m == 0xff) return sp_box_obj(sp_String_new_fresh(v), SP_BUILTIN_STRBUF);
@@ -409,18 +407,15 @@ static inline sp_RbVal sp_box_str_new(const char *v) {
        String the call made (`"" * 2`): nil.to_s's frozen one is not this */
     if (v == sp_str_empty) return sp_box_obj(sp_String_new_fresh(v), SP_BUILTIN_STRBUF);
   }
-#endif
   return sp_box_str(v);
 }
 
 /* A new String a call answers in bytes it may share with others (Integer#chr
    answers a one-character table's), boxed for something that keeps the box:
-   with SP_SHARE_BOX_HANDLES a new handle over a copy of them, which an
-   append through any copy of the box changes; else the bytes (sp_box_str). */
+   a new handle over a copy of them, which an append through any copy of the
+   box changes. */
 static inline sp_RbVal sp_box_str_fresh(const char *v) {
-#ifdef SP_SHARE_BOX_HANDLES
   if (v) return sp_box_obj(sp_String_new_fresh(v), SP_BUILTIN_STRBUF);
-#endif
   return sp_box_str(v);
 }
 

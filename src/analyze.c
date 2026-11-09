@@ -11554,6 +11554,18 @@ static int expand_literal_splat_args(Compiler *c) {
    other method rides the materialized element array. Type-driven, so it also
    catches a range held in a variable -- which is why it lives in the
    inference fixpoint rather than the one-shot shape pass (#3064). */
+/* A method Range defines itself (CRuby 4.0 Range.instance_methods(false))
+   and answers for a String Range. to_set is left out: it checks for an
+   endless Range and then calls Enumerable's. */
+static int srange_own_method(const char *nm) {
+  static const char *const own[] = {
+    "%", "==", "===", "begin", "bsearch", "count", "cover?", "each", "end", "entries",
+    "eql?", "exclude_end?", "first", "hash", "include?", "inspect", "last",
+    "max", "member?", "min", "minmax", "overlap?", "reverse_each", "size", "step", "to_a",
+    "to_s", NULL };
+  for (int i = 0; own[i]; i++) if (sp_streq(nm, own[i])) return 1;
+  return 0;
+}
 static int desugar_str_range_methods(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int changed = 0;
@@ -11583,10 +11595,10 @@ static int desugar_str_range_methods(Compiler *c) {
     int recv = nt_ref(nt, id, "receiver");
     if (!nm || recv < 0) continue;
     if (infer_type(c, recv) != TY_STR_RANGE) continue;
-    /* a program's Enumerable method that Range has none of runs with the
-       RANGE as self, as it does for an Integer Range (Range#to_set checks
-       for an endless range and then calls Enumerable's) */
-    if (an_enum_prog_method(c, nm) && (!builtin_method_known("Range", nm) || sp_streq(nm, "to_set"))) continue;
+    /* a program's Enumerable method that Range does not define itself runs
+       with the RANGE as self, as it does for an Integer Range. For a String
+       Range, Range#to_set, #count and #reverse_each call Enumerable's too. */
+    if (an_enum_prog_method(c, nm) && !srange_own_method(nm)) continue;
     /* `range % n { }` is `range.step(n) { }` (#3671): the walk has no row of
        its own under the `%` name, so name it what it is. The blockless form is
        the `%` row's, whose Enumerator inspects as `%(n)`. */

@@ -8,3 +8,5 @@ XYZ
 3
 [Range, "a"]
 [:range, "m".."n"]
+[false, true, true, true]
+[false, true, true, true]

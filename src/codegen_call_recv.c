@@ -14581,7 +14581,13 @@ int emit_range_call(Compiler *c, int id, Buf *b) {
       }
       buf_puts(b, "((void)("); emit_expr_for_effect(c, argv[0], b); buf_puts(b, "), 0)"); return 1;
     }
-    if ((is_eq_or_eql(name)) && argc == 1) {
+    /* nil? is false for every Range */
+    if (sp_streq(name, "nil?") && argc == 0) {
+      buf_puts(b, "((void)("); emit_expr_for_effect(c, recv, b); buf_puts(b, "), 0)"); return 1;
+    }
+    /* (the unboxed sp_StrRange has no object identity: equal? compares
+       the ends, as the Integer Range's arm does) */
+    if ((is_eq_or_eql(name) || sp_streq(name, "equal?")) && argc == 1) {
       if (a0 == TY_STR_RANGE) {
         int tr2 = ++g_tmp;
         buf_printf(b, "({ sp_StrRange _t%d = ", tr); emit_expr(c, recv, b);

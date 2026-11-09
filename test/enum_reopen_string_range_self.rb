@@ -28,3 +28,9 @@ p r.drop_one("b")
 p ("a"...).kind
 def via_param(q) = q.to_set
 p via_param("m".."n")
+# Object's predicates on a String Range self (and on one in a local)
+module Enumerable
+  def preds = [nil?, equal?(self), is_a?(Enumerable), is_a?(Range)]
+end
+p r.preds
+p [r.nil?, r.equal?(r), r.is_a?(Enumerable), (1.0..2.0).is_a?(Enumerable)]

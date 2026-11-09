@@ -9,8 +9,9 @@
      TR_HEAD   v[0],v[1] = offset of emit_trace_node, for the reader to line
                the offsets up with the binary's symbol table
      TR_NODE   v = node id, node_line, node_col; the tag's second byte is the
-               marker's kind ('c' a call, 's' a statement) and its third is 1
-               when the node is in a required file
+               marker's kind ('c' a call, 's' a statement, 'l' the last
+               statement of a method that answers it) and its third is 1 when
+               the node is in a required file
      TR_TEXT   the node's label, the call's method name or the statement's
                node type: up to three records after TR_NODE, NUL-padded
      TR_ENTER  v[0],v[1] = the function's offset from the image base
@@ -83,8 +84,8 @@ static TR_HOOK void tr_open(void) {
   tr_put_fn(TR_HEAD, (void *)emit_trace_node);
 }
 
-/* The marker at the top of emit_call_body and emit_stmt: the functions
-   entered from here until the caller returns emitted this node. The node is
+/* The marker at the top of emit_call_body, emit_stmt and emit_stmt_tail: the
+   functions entered from here until the caller returns emitted this node. The node is
    read before anything is written, so the accessors' own records do not land
    inside the marker. With a line asked for, a marker on it turns the
    recording on: the count starts at 1, the caller's own frame, whose exit

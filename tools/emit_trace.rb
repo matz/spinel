@@ -18,7 +18,11 @@
 #   --all shows every function of src/, at every depth.
 # - A leaf called several times in a row prints once, with (xN).
 # - A call or statement emitted inside another has a tree of its own; the
-#   outer tree shows it as one line, with its position in brackets.
+#   outer tree shows it as one line, with its position in brackets, and its
+#   own head names the arm of the enclosing call it was emitted in. The
+#   compiler emits some nodes more than once (an arm's trial, whose text it
+#   drops when it declines; a method spliced in at several calls): each
+#   emission has a tree.
 # - "took the call" marks the last emitter emit_call_body_ordinary (or
 #   emit_call_body) called: the chain is `if (arm) return;`, so that is the
 #   arm that answered. An arm the chain calls through emit_or_take_back is
@@ -31,7 +35,8 @@ require "tmpdir"
 PREFIXES = %w[emit_ cplan_ repr_ bop_ call_plan call_target].freeze
 EMITTER = "emit_"
 CHAIN = %w[emit_call_body_ordinary emit_or_take_back].freeze # the mark goes to what these called
-SITES = { "c".ord => ["call", "emit_call_body"], "s".ord => ["stmt", "emit_stmt"] }.freeze
+SITES = { "c".ord => ["call", "emit_call_body"], "s".ord => ["stmt", "emit_stmt"],
+          "l".ord => ["tail", "emit_stmt_tail"] }.freeze # tail: the last statement of a method that answers it
 HEAD, NODE, ENTER, EXIT, TEXT = 1, 2, 3, 4, 5
 Tree = Struct.new(:name, :kids, :note) do
   def emits? = name.start_with?(EMITTER) || !note.nil? || kids.any?(&:emits?)
@@ -67,7 +72,9 @@ syms.each do |a, n|
 end
 
 source = File.readlines(prog, chomp: true)
-sections = [] # [position, label, source text, tree], in the order the nodes were emitted
+sections = [] # [position, label, source text, tree, emitted in], in the order the nodes were emitted
+calls = {}.compare_by_identity # a call's tree => its position and label
+ok = false
 Dir.mktmpdir("emit_trace") do |dir|
   trace = File.join(dir, "trace")
   env = { "SPINEL_EMIT_TRACE" => trace, "SPINEL_EMIT_TRACE_LINE" => line&.to_s } # nil unsets it
@@ -109,10 +116,16 @@ Dir.mktmpdir("emit_trace") do |dir|
           end
           frame.tree = nil
           next if tag >> 16 != 0 || (line && b != line) # a required file's lines are not PROG's
+          # the arm of the enclosing call this one is emitted in: the first function below its
+          # chain (a call of this line, so that a line's output is the same with and without LINE)
+          path = stack[0..-2].filter_map(&:tree).chunk_while { |x, y| x.equal?(y) }.map(&:first)
+          i = path.rindex { |t| calls.key?(t) }
+          arm = i && calls[path[i]][2] == b && path[(i + 1)..].find { |t| !CHAIN.include?(t.name) }
           frame.tree = Tree.new(fn, [])
+          calls[frame.tree] = [where, label, b] if kind == "call" # (the label's TEXT records are still to come)
           text = (b > 0 && source[b - 1] || "")[c..].to_s.strip
           text = "#{text[0, 57]}..." if text.size > 60
-          sections << [where, label, text, frame.tree]
+          sections << [where, label, text, frame.tree, arm && [arm.name, "of", *calls[path[i]][0, 2]]]
         end
       end
     end
@@ -141,14 +154,15 @@ render = lambda do |tree, depth, took, out|
 end
 
 last_emitter = ->(tree) { tree.kids.reverse.find { |k| k.name.start_with?(EMITTER) } }
-sections.each_with_index do |(where, label, text, tree), i|
+sections.each_with_index do |(where, label, text, tree, arm), i|
   took = nil
   if tree.name == "emit_call_body"
     took = last_emitter[tree]
     took = last_emitter[took] || took while CHAIN.include?(took&.name) && last_emitter[took]
   end
-  out = ["#{prog}:#{where}  #{label}  `#{text}`", "  #{tree.name}"]
+  out = ["#{prog}:#{where}  #{label}  `#{text}`#{"  (in #{arm.join(' ')})" if arm}", "  #{tree.name}"]
   render.call(tree, 2, took, out)
   puts if i > 0
   puts out
 end
+exit 1 unless ok # a failed compile is no answer, though what it emitted is printed

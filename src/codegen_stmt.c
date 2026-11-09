@@ -16511,6 +16511,9 @@ void emit_stmt(Compiler *c, int id, Buf *b, int indent) {
   }
 }
 void emit_stmt_tail(Compiler *c, int id, Buf *b, int indent) {
+#ifdef SP_EMIT_TRACE
+  emit_trace_node(c, id, 'l');
+#endif
   int frame = g_repr_check ? repr_channel_begin(c, id) : -1;
   emit_line_directive(c, id, b);
   if (emit_const_recv_stmt_wrap(c, id, b, indent, 1)) { if (g_repr_check) repr_channel_end(c, frame); return; }

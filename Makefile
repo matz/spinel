@@ -525,11 +525,12 @@ $(SPINEL_TRACE): $(SPINEL_TRACE_OBJ) build/csrc/sp_parse_lib.o build/csrc/re_lit
 .PHONY: emit-trace-test
 emit-trace-test: $(SPINEL_TRACE)
 	@fail=0; \
-	took() { ruby tools/emit_trace.rb test/emit-trace/calls.rb $$1 | grep -Eq "^ +$$2 +<- took the call$$" || \
-	  { echo "emit-trace-test: FAIL (line $$1: $$2 did not take the call)"; fail=1; }; }; \
-	took 5 emit_call_append_arms; \
-	took 7 emit_array_arith_call; \
-	[ $$fail = 0 ] && echo "emit-trace-test: OK (2 calls)"
+	has() { out=$$(ruby tools/emit_trace.rb test/emit-trace/calls.rb $$1) && printf '%s\n' "$$out" | grep -Eq "$$2" || \
+	  { echo "emit-trace-test: FAIL (line $$1: $$3)"; fail=1; }; }; \
+	has 5 "^ +emit_call_append_arms +<- took the call$$" "emit_call_append_arms did not take the call"; \
+	has 7 "^ +emit_array_arith_call +<- took the call$$" "emit_array_arith_call did not take the call"; \
+	has 10 ":10:3  tail ReturnNode " "the method's last statement has no tree"; \
+	[ $$fail = 0 ] && echo "emit-trace-test: OK (3 lines)"
 
 # The compiler again under AddressSanitizer and UndefinedBehaviorSanitizer,
 # for `make san-check` (tools/san_check.sh): every program of the corpus

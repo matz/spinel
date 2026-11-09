@@ -6,3 +6,7 @@ b = a.push(4)
 n = b.length
 m = n + 2
 puts m
+def twice(x)
+  return x * 2
+end
+puts twice(m)

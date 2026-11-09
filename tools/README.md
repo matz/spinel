@@ -749,10 +749,22 @@ poly.rb:9:7  call speak  `pet.speak`
 The arms above the mark were tried and declined. The word after `call` is
 the name the compiler emits, which a rewrite may have changed (a `send`
 with a literal name shows the method it names); after `stmt` it is the
-node's type. A call in statement position can be written by `emit_stmt`'s
-own chain before it reaches `emit_call_body`: it then has no tree of its
-own, and its statement's tree shows the emitters.
+node's type, and after `tail`, the last statement of a method that answers
+it. A call in statement position can be written by `emit_stmt`'s own chain
+before it reaches `emit_call_body`: it then has no tree of its own, and its
+statement's tree shows the emitters.
 `| grep -E '^[^ ]|took the call'` keeps the heads and the arms.
+
+The compiler emits some nodes more than once: an arm may emit the call as a
+trial and drop the text when it declines (`emit_operands_in_order` emits the
+call again with its operands bound), and a method spliced in at several
+calls is emitted at each. Every emission has a tree. The trace records what
+ran, not which text was kept, so the head of a tree emitted inside a call
+names that call and the arm it was emitted in, as
+`(in emit_operands_in_order of 61:9 call +)`: when that arm is above the
+mark in the enclosing call's tree, it declined, and the emission was its
+trial. The tool exits 1 when the compile fails, after printing what was
+emitted up to there.
 
 The trace build takes about twice the normal compile. With a LINE the tool
 has the hooks record only that line's calls and statements

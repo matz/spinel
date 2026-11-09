@@ -24348,6 +24348,10 @@ static int push_stmt_takes_value_form(Compiler *c, int id) {
   if (rt != TY_POLY_ARRAY && !array_kind(rt)) return 0;
   int args = nt_ref(nt, id, "arguments"), argc = 0;
   const int *argv = args >= 0 ? nt_arr(nt, args, "arguments", &argc) : NULL;
+  /* Array#<< takes one argument: `a.<<(1, 2)` and `a.<<(*xs)` with two
+     elements raise ArgumentError, which the value form judges (the
+     statement arms push every argument) */
+  if (sp_streq(nm, "<<") && (argc != 1 || nt_argv_has_splat(nt, argv, argc))) return 1;
   if (read_rebound_by(c, recv, args)) {
     const char *iv = nt_kind(nt, recv) == NK_InstanceVariableReadNode ? nt_str(nt, recv, "name") : NULL;
     if (!iv || ivar_direct_writes(nt, args, iv, 0)) return 1;

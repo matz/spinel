@@ -1299,7 +1299,7 @@ int emit_call_poly_io_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
           free(ab2.p);
         }
         if (is_puts2 && argc == 0) buf_printf(b, "sp_File_write(_t%d, \"\\n\"); ", tio2);
-        buf_puts(b, "((sp_int)0); })");
+        buf_puts(b, repr_of(c, id).kind == RK_BOXED ? "sp_box_nil(); })" : "((sp_int)0); })");   /* (a boxed answer is nil, not the int a nil statement stands for) */
       }
       else if (sp_streq(name, "putc") && argc == 1) {
         buf_printf(b, "sp_File_putc(_t%d, ", tio2); emit_boxed(c, argv[0], b); buf_puts(b, "); })");
@@ -2450,7 +2450,7 @@ int emit_call_io_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const ch
       free(abs);
       free(aarr);
       free(abin);
-      buf_puts(b, "((sp_int)0)");
+      buf_puts(b, repr_of(c, id).kind == RK_BOXED ? "sp_box_nil()" : "((sp_int)0)");
       free(rb.p); return 1;
     }
     if (sp_streq(name, "sync=") && argc >= 1) {

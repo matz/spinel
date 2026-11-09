@@ -6075,6 +6075,10 @@ const char *array_kind(TyKind t) {
     default:             return NULL;
   }
 }
+/* Does sp_<k>Array have new_cap(n), an empty array its buffer sized for n? */
+int array_has_new_cap(const char *k) {
+  return k && (sp_streq(k, "Int") || sp_streq(k, "Float") || sp_streq(k, "Ptr") || sp_streq(k, "Poly"));
+}
 /* Storage prefix for a loop over the array itself. A nested numeric table is
    an sp_PtrArray of row pointers, so the walk is sp_PtrArray_length / _get
    (void* converts to the row pointer). Object arrays share that storage but
@@ -6278,8 +6282,14 @@ void fzl_emit_defs(const char *t, Buf *out, int handles) {
     if (k >= 0) used[k] = 1;
     p = q;
   }
+  /* a program that dedups a String (-@, dedup, Symbol#name) hands its
+     literals to the runtime's fstring table (sp_fzl_intern): `-x` of a
+     literal's content answers the literal. One that does not pays nothing. */
+  int dedups = handles && (strstr(t, "sp_str_uminus_val(") || strstr(t, "sp_str_dedup("));
+  int nlit = 0;
   for (int k = 0; k < g_fzl_n; k++) {
     FzlLit *f = &g_fzl[k];
+    if (used[k]) nlit++;
     if (used[k] && handles)
       buf_printf(out, "static sp_StringLiteral _fzl_%s_slot = { NULL, NULL };\n"
                       "static struct { sp_str_hdr h; unsigned char m; char d[%zu]; } _fzl_%s = "
@@ -6293,8 +6303,15 @@ void fzl_emit_defs(const char *t, Buf *out, int handles) {
                  f->raw_len + 1, f->name, f->raw_len + 1,
                  fzl_esc_ascii7(f->esc, f->esc_len) ? " | SP_STR_SIZE_ASCII7" : "",
                  f->raw_len, f->esc);
-    free(f->esc);
   }
+  if (dedups && nlit) {
+    buf_puts(out, "static const char *const sp_fzl_all[] = {");
+    for (int k = 0, i = 0; k < g_fzl_n; k++)
+      if (used[k]) buf_printf(out, "%s_fzl_%s.d", i++ ? ", " : " ", g_fzl[k].name);
+    buf_printf(out, " };\nstatic void __attribute__((constructor)) sp_fzl_all_set(void) "
+                    "{ sp_fzl_lits = sp_fzl_all; sp_fzl_nlits = %d; }\n", nlit);
+  }
+  for (int k = 0; k < g_fzl_n; k++) free(g_fzl[k].esc);
   free(used);
   free(g_fzl); g_fzl = NULL; g_fzl_n = g_fzl_cap = 0;
   free(g_fzl_slot); g_fzl_slot = NULL; g_fzl_slots = 0;
@@ -7825,7 +7842,8 @@ int ty_matches_class(Compiler *c, TyKind t, const char *cn, int exact) {
                                      t == TY_COMPLEX || t == TY_RATIONAL)) return 1;
   if (sp_streq(cn, "Numeric") && (t == TY_INT || t == TY_BIGINT || t == TY_FLOAT ||
                                   t == TY_COMPLEX || t == TY_RATIONAL)) return 1;
-  if (sp_streq(cn, "Enumerable") && (ty_is_array(t) || ty_is_hash(t) || t == TY_RANGE || t == TY_TIME_RANGE || t == TY_OBJ_RANGE ||
+  if (sp_streq(cn, "Enumerable") && (ty_is_array(t) || ty_is_hash(t) || t == TY_RANGE || t == TY_FLOAT_RANGE || t == TY_STR_RANGE ||
+                                     t == TY_TIME_RANGE || t == TY_OBJ_RANGE ||
                                      t == TY_ENUMERATOR)) return 1;
   /* a program module the program mixed into this builtin by reopening it */
   if (tmc_prog_module_in_builtin(c, self_cls, cn)) return 1;

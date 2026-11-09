@@ -507,7 +507,9 @@ int is_string_rebind_mutator(const char *n); /* mutators needing argument-rebind
 int is_string_read_only_method(const char *name);
 int str_mutator_str_args(const char *n, int argc, int *int_ok); /* the arguments a String mutator takes as Strings */
 
-int builtin_module_owns(const char *cls, const char *name); /* included ahead of Object */
+int builtin_answers_ahead_of(const char *cls, const char *m, const char *root); /* an ancestor of cls ahead of root (NULL: any) owns instance method m (CRuby's tables) */
+const char *builtin_next_class_answering(int *i, const char *m);   /* the next class of the tables, from table *i, that Spinel has as a value and that answers m ahead of Object */
+int builtin_id_below_object_answers(int id, const char *m);   /* the builtin class with run-time id `id` does */
 int builtin_mixin_module_id(const char *n);   /* Comparable Enumerable Kernel Math: its builtin id */
 int is_include_name(const char *n);
 int is_prepend_name(const char *n);

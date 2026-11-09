@@ -2493,40 +2493,6 @@ int builtin_instance_name_known(const char *m) {
     if (sp_streq(sp_builtin_names_tbl[i].m, m)) return 1;
   return 0;
 }
-/* the classes below Object that answer m, as the head of a C list literal
-   of their names, into out (the caller adds more and ends it); their count */
-int builtin_classes_below_object_list(const char *m, Buf *out) {
-  int n = 0;
-  for (int i = 0; m && sp_builtin_names_tbl[i].cls; i++) {
-    const char *k = sp_builtin_names_tbl[i].cls;
-    if (!sp_streq(sp_builtin_names_tbl[i].m, m) || sp_streq(k, "Object") || sp_streq(k, "Kernel") ||
-        sp_streq(k, "BasicObject")) continue;
-    int seen = 0;
-    for (int j = 0; j < i && !seen; j++)
-      seen = sp_streq(sp_builtin_names_tbl[j].cls, k) && sp_streq(sp_builtin_names_tbl[j].m, m);
-    if (seen) continue;
-    buf_printf(out, "%s\"%s\"", n++ ? ", " : "(const char *const[]){", k);
-  }
-  return n;
-}
-/* does the builtin class with run-time id `id` (-105 for Hash), or a builtin
-   class above it and below Object, answer m? A program's class under it
-   (`class MyH < Hash`) answers m by that method before a top-level def */
-int builtin_id_below_object_answers(int id, const char *m) {
-  for (int depth = 0; id && m && depth < 16; depth++) {
-    const BuiltinClass *r = NULL;
-    for (int i = 0; (r = builtin_class_at(i)) && r->id != id; i++) {}
-    if (!r || sp_streq(r->name, "Object") || sp_streq(r->name, "BasicObject")) return 0;
-    const char *nm[2] = { r->name, (r->flags & BC_EXCEPTION) ? "Exception" : NULL };
-    for (int j = 0; j < 2; j++)
-      for (int i = 0; nm[j] && sp_builtin_names_tbl[i].cls; i++)
-        if (sp_streq(sp_builtin_names_tbl[i].cls, nm[j]) && sp_streq(sp_builtin_names_tbl[i].m, m)) return 1;
-    int p = builtin_class_parent_id(id);
-    if (p == id) break;
-    id = p;
-  }
-  return 0;
-}
 /* does a builtin class below Object (Integer, String, Array, ...) answer m?
    A lookup reaches its method before a top-level def, which is Object's */
 int builtin_name_below_object(const char *m) {
@@ -20980,6 +20946,13 @@ static int arity_call_block(const NodeTable *nt, int id, int *argc, int *kwh) {
 /* The guard's decision: a builtin call whose positional count CRuby rejects.
    exp receives CRuby's wording of the accepted range, eval_recv whether the
    receiver is an expression to evaluate before the raise. */
+/* Does constant read `recv` hold a builtin value -- an Array, a Hash, a
+   String, a number -- rather than a class or module? */
+static int const_reads_builtin_value(Compiler *c, int recv) {
+  TyKind rt = comp_ntype(c, recv);
+  return ty_is_array(rt) || ty_is_hash(rt) || rt == TY_STRING || rt == TY_STRBUF ||
+         rt == TY_INT || rt == TY_FLOAT || rt == TY_SYMBOL;
+}
 static int arity_violation(Compiler *c, int id, char *exp, size_t n, int *eval_recv) {
   const NodeTable *nt = c->nt;
   const char *name = nt_str(nt, id, "name");
@@ -20992,6 +20965,9 @@ static int arity_violation(Compiler *c, int id, char *exp, size_t n, int *eval_r
   const SpAritySpec *itbl = sp_builtin_arity_spec_tbl;
   const SpAritySpec *ctbl = sp_builtin_cmeth_arity_spec_tbl;
   NodeKind rty2_k = nt_kind(nt, recv);
+  /* a constant that holds a value (`C = [1]; C.<<(2, 3)`) is checked by
+     its value's class below, not as a class object */
+  if (rty2_k == NK_ConstantReadNode && const_reads_builtin_value(c, recv)) rty2_k = NK_CallNode;
   if (kwh && (recv < 0 || (rty2_k == NK_ConstantReadNode))) return 0;
   if (recv < 0) {
     /* A bare call resolves to the enclosing class's chain, then to a
@@ -27897,7 +27873,7 @@ int cplan_nil_closed_method(Compiler *c, int call, const char *name, int *vis) {
        first, and so does a `public :name` NilClass declares */
     if (i > 0) {
       int at = -1;
-      if (cplan_nil_own_builtin(name)) return -1;
+      if (builtin_answers_ahead_of("NilClass", name, "Object")) return -1;
       if (nk >= 0 && comp_method_vis_declared(c, nk, name, &at) == SP_VIS_PUBLIC && at == nk) return -1;
     }
     int k = owners[i] == -2 ? oc : comp_core_class(c, owners[i]);

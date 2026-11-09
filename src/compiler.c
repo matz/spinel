@@ -2213,6 +2213,12 @@ int comp_arysub_name_is_array(Compiler *c, int cid, const char *n) {
        comp_reader_in_chain(c, cid, n, NULL)) && !comp_enum_answers_first(c, cid, n)) return 0;
   char base[256];
   if (setter_base_name(n, base, sizeof base) && comp_writer_in_chain(c, cid, base, NULL)) return 0;
+  /* != is BasicObject's, which calls == and negates it: a class with its
+     own == answers != with that == (the call plan's delegate) */
+  if (sp_streq(n, "!=")) {
+    int dq = -1;
+    if (comp_method_in_chain(c, cid, "==", &dq) >= 0 && (ro < 0 || dq != ro)) return 0;
+  }
   /* Time's comparisons come from Comparable, which asks <=>: a Time
      subclass defining its own <=> answers them with it */
   if (c->classes[cid].ary_time && (is_cmp_op(n) || sp_streq(n, "==") || sp_streq(n, "!=") ||

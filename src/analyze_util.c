@@ -4795,7 +4795,7 @@ int send_blind_recv_owns(Compiler *c, int call, int recv, TyKind srt, const char
                  : (srt == TY_STRING || srt == TY_STRBUF) ? "String" : srt == TY_SYMBOL ? "Symbol"
                  : ty_is_array(srt) ? "Array" : ty_is_hash(srt) ? "Hash"
                  : srt == TY_RANGE ? "Range" : srt == TY_PROC ? "Proc" : srt == TY_TIME ? "Time" : NULL;
-  return bc && (builtin_method_known(bc, name) || builtin_module_owns(bc, name));
+  return bc && builtin_answers_ahead_of(bc, name, "Object");
 }
 
 /* A receiverless call directly in a class body is sent to the class. */

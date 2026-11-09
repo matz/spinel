@@ -2870,22 +2870,27 @@ int emit_poly_defaults0(Compiler *c, int id, int recv, const char *name, const P
     buf_puts(b, "; break;");
     obj_default_done = 1;
   }
-  /* Blockless any? / none?: "is there an element", which every builtin
-     container answers. The switch carries an arm per user class owning the
-     name and none for a builtin, so a slot that may hold an Array OR such
-     an object raised NoMethodError on the Array -- naming Array, whose
-     method it is (#4264). In the DEFAULT, like the conversions around it:
-     a class that defines the name has its own case and never arrives. */
+  /* Blockless any? / none?, which every builtin container answers. The
+     switch carries an arm per user class owning the name and none for a
+     builtin, so a slot that may hold an Array OR such an object raised
+     NoMethodError on the Array -- naming Array, whose method it is (#4264).
+     In the DEFAULT, like the conversions around it: a class that defines
+     the name has its own case and never arrives. They ask whether an
+     element is truthy, which the boxed call's element walk answers
+     (emit_poly_quantifier_walk): asking whether there is one answered
+     `[nil].any?` true and an Integer Range's false. */
   if (!obj_default_done && argc == 0 && nt_ref(nt, id, "block") < 0 &&
       (sp_streq(name, "any?") || sp_streq(name, "none?"))) {
         if (g_plan_check) pa_observe(PA_BUILTIN, PA_KEY_BUILTIN + PB_D_ANY_NONE, -1, TY_UNKNOWN, PC_SAME);
-    int neg = sp_streq(name, "none?");
-    char av[96];
-    snprintf(av, sizeof av, "(sp_poly_length(_t%d) %s 0)", tv, neg ? "==" : ">");
-    buf_printf(b, " default: _t%d = ", tr);
+    int tn = ++g_tmp, tcnt = ++g_tmp, ti = ++g_tmp;
+    char av[96], ans[64];
+    buf_printf(b, " default: { SP_GC_ROOT_RBVAL(_t%d); ", tv);
+    emit_poly_quantifier_walk(c, id, tv, -1, tn, tcnt, ti, name, ans, sizeof ans, b);
+    snprintf(av, sizeof av, "(%s)", ans);
+    buf_printf(b, "_t%d = ", tr);
     if (ret == TY_POLY) emit_boxed_text(c, TY_BOOL, av, b);
     else buf_puts(b, av);
-    buf_puts(b, "; break;");
+    buf_puts(b, "; break; }");
     obj_default_done = 1;
   }
   /* to_h, the same shape: the switch carries an arm per class that defines

@@ -3325,7 +3325,7 @@ int sclass_value_call(Compiler *c, int id) {
 
 int object_reopen_answers(Compiler *c, const char *cls, int call_id, TyKind *out) {
   const char *name = nt_str(c->nt, call_id, "name");
-  if (!name || builtin_method_known(cls, name) || builtin_object_method_known(name)) return 0;
+  if (!name || builtin_answers_ahead_of(cls, name, "Object") || builtin_object_method_known(name)) return 0;
   int oci = comp_core_class(c, CORE_OBJECT);
   int omi = oci >= 0 ? call_target(c, call_id, oci, name, 0, NULL) : -1;
   if (omi < 0) return 0;

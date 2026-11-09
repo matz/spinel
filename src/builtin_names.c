@@ -1686,22 +1686,6 @@ int builtin_numeric_owns(const char *cls, const char *m) {
   return is_numeric_class_name(cls) && builtin_name_in(m, num);
 }
 
-int builtin_module_owns(const char *cls, const char *m) {
-  static const char *const enm[] = {
-    "all?", "any?", "chain", "chunk", "chunk_while", "collect", "collect_concat", "compact",
-    "count", "cycle", "detect", "drop", "drop_while", "each_cons", "each_entry", "each_slice",
-    "each_with_index", "each_with_object", "entries", "filter", "filter_map", "find", "find_all",
-    "find_index", "first", "flat_map", "grep", "grep_v", "group_by", "include?", "inject", "lazy",
-    "map", "max", "max_by", "member?", "min", "min_by", "minmax", "minmax_by", "none?", "one?",
-    "partition", "reduce", "reject", "reverse_each", "select", "slice_after", "slice_before",
-    "slice_when", "sort", "sort_by", "sum", "take", "take_while", "tally", "to_a", "to_h", "to_set",
-    "uniq", "zip", NULL };
-  if (builtin_comparable_owns(cls, m)) return 1;
-  if (builtin_numeric_owns(cls, m)) return 1;
-  if ((sp_streq(cls, "Array") || sp_streq(cls, "Hash") || sp_streq(cls, "Range")) && builtin_name_in(m, enm)) return 1;
-  return 0;
-}
-
 int is_gated_exception_accessor(const char *n) {
   static const char *const names[] = {
     "key", "receiver", "args", "private_call?", "reason", "exit_value", "tag",
@@ -2068,21 +2052,23 @@ static unsigned bmt_loaded(void) {
   for (unsigned i = 0; i < sizeof BMT_LIBS / sizeof *BMT_LIBS; i++) if (sp_feature_required(BMT_LIBS[i])) m |= 2u << i;
   return m;
 }
-static int bmt_has(const char *const *names, const unsigned short *flags, int n, const char *m, unsigned must) {
+static int bmt_has(const char *const *names, const unsigned short *flags, int n, const char *m, unsigned must, int pub) {
   int lo = 0, hi = n;
   while (lo < hi) {
     int mid = lo + (hi - lo) / 2, c = strcmp(m, names[mid]);
-    if (!c) return !must || ((flags[mid] & must) && (flags[mid] & BMT_PUBLIC));
+    if (!c) return !must || ((flags[mid] & must) && (!pub || (flags[mid] & BMT_PUBLIC)));
     if (c < 0) hi = mid; else lo = mid + 1;
   }
   return 0;
 }
-/* Does an ancestor of t have m among its own instance methods (sing_side: singleton methods of a class) */
-static int bmt_ancestors_have(const BuiltinMethodTable *t, const char *m, int sing_side, unsigned must) {
+/* Does an ancestor of t ahead of root (NULL: any) have m among its own instance methods (sing_side: singleton
+   methods of a class); pub: only a public one counts */
+static int bmt_ancestors_have(const BuiltinMethodTable *t, const char *m, int sing_side, unsigned must, int pub, const char *root) {
   for (int i = 0; i < t->nanc; i++) {
+    if (root && !strcmp(t->ancestors[i], root)) break;
     const BuiltinMethodTable *a = bmt_find(t->ancestors[i]);
     if (!a || (must && !((t->aflags[i] & must) && (a->flags & must)))) continue;
-    if (sing_side ? !a->module && bmt_has(a->sing, a->sflags, a->nsing, m, must) : bmt_has(a->inst, a->iflags, a->ninst, m, must)) return 1;
+    if (sing_side ? !a->module && bmt_has(a->sing, a->sflags, a->nsing, m, must, pub) : bmt_has(a->inst, a->iflags, a->ninst, m, must, pub)) return 1;
   }
   return 0;
 }
@@ -2095,13 +2081,33 @@ int builtin_method_answers(const char *cls, const char *name, int sg, int certai
      it is no sure answer */
   if (!t) return !certain && cls && (builtin_core_class_slot(cls) >= 0 || is_builtin_reopen_name(cls));
   if (must && !(t->flags & must)) return 0;
-  if (!sg) return bmt_ancestors_have(t, name, 0, must);
+  if (!sg) return bmt_ancestors_have(t, name, 0, must, 1, NULL);
   /* a class's singleton chain: its own and its superclasses' singleton methods,
      then Class's instance methods and its ancestors'; a module's own singleton
      methods, then Module's */
-  if (bmt_has(t->sing, t->sflags, t->nsing, name, must) || (!t->module && bmt_ancestors_have(t, name, 1, must))) return 1;
+  if (bmt_has(t->sing, t->sflags, t->nsing, name, must, 1) || (!t->module && bmt_ancestors_have(t, name, 1, must, 1, NULL))) return 1;
   const BuiltinMethodTable *k = bmt_find(t->module ? "Module" : "Class");
-  return k && bmt_ancestors_have(k, name, 0, must);
+  return k && bmt_ancestors_have(k, name, 0, must, 1, NULL);
+}
+
+/* Does an ancestor of builtin class cls ahead of root (NULL: any ancestor) own instance method m, of any
+   visibility (a lookup finds a private builtin method first too), in a library the program has (none, or one
+   it requires)? A class whose ancestry lacks root (a module, BasicObject) is not below it: 0, as is a class
+   with no table. */
+int builtin_answers_ahead_of(const char *cls, const char *m, const char *root) {
+  const BuiltinMethodTable *t = bmt_find(cls);
+  unsigned must = bmt_loaded();
+  if (!t || !m || !(t->flags & must)) return 0;
+  int below = !root;
+  for (int i = 0; !below && i < t->nanc; i++) below = !strcmp(t->ancestors[i], root);
+  return below && bmt_ancestors_have(t, m, 0, must, 0, root);
+}
+/* does the builtin class with run-time id `id` (-105 for Hash), or a builtin class above it and below Object,
+   answer m? A program's class under it (`class MyH < Hash`) answers m by that method before a top-level def */
+int builtin_id_below_object_answers(int id, const char *m) {
+  const BuiltinClass *r = NULL;
+  for (int i = 0; id && (r = builtin_class_at(i)) && r->id != id; i++) {}
+  return r && builtin_answers_ahead_of(r->name, m, "Object");
 }
 
 /* The names CRuby's own facts give Object, BasicObject, Kernel, Module and
@@ -2122,6 +2128,26 @@ static const struct { const char *cls, *m; } self_fact_rows[] = {
 #undef BAC
 #undef BAK
 #undef BAP
+/* Does Spinel have values of table class k: a builtin class row, a synthetic slot, or a class the arity facts
+   list (StringScanner, Set, StringIO)? */
+static int bmt_held(const char *k) {
+  if (builtin_core_class_slot(k) >= 0) return 1;
+  for (unsigned i = 0; i < sizeof self_fact_rows / sizeof self_fact_rows[0]; i++)
+    if (!strcmp(self_fact_rows[i].cls, k)) return 1;
+  return 0;
+}
+/* The next class of CRuby's tables, from table *i on, that Spinel has as a value and that answers m ahead of
+   Object (Integer#to_s, Exception#message): a lookup reaches its method before a top-level def, which is
+   Object's. The tables give a class a library adds (StringIO, StringScanner) only with the library; Set, which
+   CRuby 4.0 defines with no require, is counted without one. NULL past the last. */
+const char *builtin_next_class_answering(int *i, const char *m) {
+  enum { N = sizeof BUILTIN_METHOD_TABLES / sizeof BUILTIN_METHOD_TABLES[0] };
+  while (*i < N) {
+    const char *k = BUILTIN_METHOD_TABLES[(*i)++].name;
+    if (builtin_answers_ahead_of(k, m, "Object") && bmt_held(k)) return k;   /* (the cheap test first: few classes answer) */
+  }
+  return NULL;
+}
 static int self_fact_cmp(const void *a, const void *b) { return strcmp(*(const char *const *)a, *(const char *const *)b); }
 /* main's own methods, beside Object's: its singleton's (`to_s`, `inspect`
    answer "main") and the private ones a top-level body calls as a class

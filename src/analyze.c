@@ -3643,6 +3643,173 @@ static int dyn_holder_reaches_d(Compiler *c, int a, int b, int depth) {
 static int dyn_holder_reaches(Compiler *c, int a, int b) {
   return a >= 0 && b >= 0 && a != b && dyn_holder_reaches_d(c, a, b, 0);
 }
+/* The ancestors of every class and module, in CRuby's lookup order, for
+   the value-path arms below. Built once per compile from the bodies of
+   each definition and its reopenings (this pass runs before the include
+   lists are made). */
+typedef struct {
+  int **anc;            /* class -> its ancestors, the class itself among them */
+  int *nanc;            /* -2 not built, -3 being built, -1 not readable */
+  int *hfirst, *hnext;  /* the class and module nodes that open each class */
+  int bad;              /* a class whose ancestors are not readable */
+  int built;
+} DynAnc;
+/* The class or module an include or prepend argument names; -2 for a
+   builtin module (Comparable, Kernel: no program constant), -1 for one
+   the walk cannot read */
+static int dyn_mixin_arg(Compiler *c, int a) {
+  const NodeTable *nt = c->nt;
+  NodeKind ak = nt_kind(nt, a);
+  if (ak != NK_ConstantReadNode && ak != NK_ConstantPathNode) return -1;
+  int m = const_node_class_index(c, a);
+  if (m >= 0 && m < c->nclasses && comp_class_is_module(c, &c->classes[m])) return m;
+  const char *mn = nt_str(nt, a, "name");
+  if (m < 0 && mn && ak == NK_ConstantReadNode && is_builtin_module_name(mn) && comp_class_index(c, mn) < 0) return -2;
+  return -1;
+}
+static int dyn_anc_build(Compiler *c, DynAnc *d, int k, int depth);
+/* Put the modules of seq (a module's own ancestors) into L, CRuby's
+   include: each goes in after the insertion point; one L already has
+   after k is not put in again, and moves the insertion point to it when
+   no class lies between. A prepend puts them ahead of k, skipping one L
+   already has there. Answers k's new position, or -1 when L is full. */
+static int dyn_anc_mix(Compiler *c, int *L, int *n, int cap, int kpos, const int *seq, int ns, int pre) {
+  int at = pre ? -1 : kpos;
+  for (int s = 0; s < ns; s++) {
+    int m = seq[s], found = -1, sup_seen = 0;
+    if (pre) {
+      for (int p = 0; p < kpos; p++) if (L[p] == m) { found = p; break; }
+      if (found >= 0) { if (found > at) at = found; continue; }
+    } else {
+      for (int p = kpos + 1; p < *n; p++) {
+        if (L[p] == m) { found = p; break; }
+        if (!comp_class_is_module(c, &c->classes[L[p]])) sup_seen = 1;
+      }
+      /* (the insertion point moves only forward) */
+      if (found >= 0) { if (!sup_seen && found > at) at = found; continue; }
+    }
+    if (*n >= cap) return -1;
+    int pos = at + 1;
+    memmove(&L[pos + 1], &L[pos], sizeof(int) * (size_t)(*n - pos));
+    L[pos] = m; (*n)++;
+    if (pos <= kpos) kpos++;
+    at = pos;
+  }
+  return kpos;
+}
+static int dyn_anc_build(Compiler *c, DynAnc *d, int k, int depth) {
+  if (k < 0 || k >= c->nclasses) return -1;
+  if (d->nanc[k] != -2) return d->nanc[k] == -3 ? -1 : d->nanc[k];
+  if (depth > 64) return -1;
+  d->nanc[k] = -3;
+  const NodeTable *nt = c->nt;
+  int cap = 256, n = 0, kpos = 0;
+  int *L = malloc(sizeof(int) * (size_t)cap);
+  if (!L) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  L[n++] = k;
+  int up = comp_class_is_module(c, &c->classes[k]) ? -1 : dyn_holder_parent(c, k), ok = 1;
+  if (up >= 0 && up != k) {
+    int un = dyn_anc_build(c, d, up, depth + 1);
+    if (un < 0 || n + un > cap) ok = 0;
+    else { memcpy(&L[n], d->anc[up], sizeof(int) * (size_t)un); n += un; }
+  }
+  for (int h = d->hfirst[k]; ok && h >= 0; h = d->hnext[h]) {
+    int body = nt_ref(nt, h, "body"), bn = 0;
+    const int *bb = body >= 0 && nt_kind(nt, body) == NK_StatementsNode ? nt_arr(nt, body, "body", &bn) : NULL;
+    for (int j = 0; ok && j < bn; j++) {
+      if (nt_kind(nt, bb[j]) != NK_CallNode || nt_ref(nt, bb[j], "receiver") >= 0) continue;
+      const char *cn = nt_str(nt, bb[j], "name");
+      int pre = cn && sp_streq(cn, "prepend");
+      if (!pre && !(cn && sp_streq(cn, "include"))) continue;
+      int an = 0, args = nt_ref(nt, bb[j], "arguments");
+      const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &an) : NULL;
+      if (an == 0) ok = 0;
+      /* (`include A, B` mixes B in first, then A) */
+      for (int x = an - 1; ok && x >= 0; x--) {
+        int m = dyn_mixin_arg(c, av[x]);
+        if (m == -2) continue;
+        int mn = m >= 0 ? dyn_anc_build(c, d, m, depth + 1) : -1;
+        if (mn < 0) { ok = 0; break; }
+        if ((kpos = dyn_anc_mix(c, L, &n, cap, kpos, d->anc[m], mn, pre)) < 0) ok = 0;
+      }
+    }
+  }
+  if (!ok) { free(L); d->nanc[k] = -1; d->bad = 1; return -1; }
+  d->anc[k] = L; d->nanc[k] = n;
+  return n;
+}
+/* Can def h be what an `include` in a class body calls: a singleton def,
+   one in a module (it can be extended) or a `class << x` body, or one in
+   a reopened Module or Class? An instance method of another class, or a
+   top-level def (Module's own comes first), cannot. */
+static int dyn_def_reaches_class_bodies(Compiler *c, int h) {
+  const NodeTable *nt = c->nt;
+  if (nt_ref(nt, h, "receiver") >= 0) return 1;
+  const int *par = comp_parent_map(c);
+  if (!par) return 1;
+  for (int p = par[h], g = 0; p >= 0 && g < 4096; p = par[p], g++) {
+    NodeKind pk = nt_kind(nt, p);
+    if (pk == NK_SingletonClassNode || pk == NK_ModuleNode || pk == NK_BlockNode) return 1;
+    if (pk == NK_ClassNode) {
+      int cp = nt_ref(nt, p, "constant_path");
+      const char *cn = cp >= 0 ? nt_str(nt, cp, "name") : NULL;
+      return !cn || sp_streq(cn, "Module") || sp_streq(cn, "Class");
+    }
+    if (pk == NK_DefNode) return 1;
+  }
+  return 0;
+}
+/* Build the ancestors of every class once. A program that gives some
+   class its own include or prepend method leaves them unread (bad). */
+static void dyn_anc_all(Compiler *c, DynAnc *d) {
+  if (d->built) return;
+  d->built = 1;
+  const NodeTable *nt = c->nt;
+  int nk = c->nclasses, nn = nt->count;
+  d->anc = calloc((size_t)nk + 1, sizeof(int *));
+  d->nanc = malloc(sizeof(int) * ((size_t)nk + 1));
+  d->hfirst = malloc(sizeof(int) * ((size_t)nk + 1));
+  d->hnext = malloc(sizeof(int) * ((size_t)nn + 1));
+  if (!d->anc || !d->nanc || !d->hfirst || !d->hnext) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  for (int k = 0; k < nk; k++) { d->nanc[k] = -2; d->hfirst[k] = -1; }
+  for (int h = nn - 1; h >= 0; h--) {
+    d->hnext[h] = -1;
+    NodeKind hk = nt_kind(nt, h);
+    if (hk == NK_DefNode) {
+      const char *dn = nt_str(nt, h, "name");
+      if (dn && (sp_streq(dn, "include") || sp_streq(dn, "prepend") || sp_streq(dn, "append_features") ||
+                 sp_streq(dn, "prepend_features")) && dyn_def_reaches_class_bodies(c, h)) d->bad = 1;
+      continue;
+    }
+    if (hk != NK_ClassNode && hk != NK_ModuleNode) continue;
+    int k = elab_header_class(c, h, NULL, NULL);
+    if (k < 0 || k >= nk) continue;
+    d->hnext[h] = d->hfirst[k]; d->hfirst[k] = h;
+  }
+  int obj = comp_core_class(c, CORE_OBJECT), bo = comp_core_class(c, CORE_BASIC_OBJECT);
+  for (int k = 0; k < nk && !d->bad; k++)
+    if (c->classes[k].name && k != obj && k != bo) dyn_anc_build(c, d, k, 0);
+}
+static void dyn_anc_free(Compiler *c, DynAnc *d) {
+  if (!d->built) return;
+  for (int k = 0; k < c->nclasses; k++) free(d->anc[k]);
+  free(d->anc); free(d->nanc); free(d->hfirst); free(d->hnext);
+}
+static int dyn_anc_has(const DynAnc *d, int k, int a) {
+  for (int j = 0; j < d->nanc[k]; j++) if (d->anc[k][j] == a) return 1;
+  return 0;
+}
+/* A copy of an arm's answer: the constant read, with the holder name a
+   NameError prints */
+static int dyn_arm_copy(NodeTable *nt, int a) {
+  char nm[600], cr[600];
+  snprintf(nm, sizeof nm, "%s", nt_str(nt, a, "name") ? nt_str(nt, a, "name") : "");
+  const char *cr0 = nt_str(nt, a, "const_cref");
+  if (cr0) snprintf(cr, sizeof cr, "%s", cr0);
+  int n = te_const(nt, nm);
+  if (cr0) nt_node_set_str(nt, n, "const_cref", cr);
+  return n;
+}
 static void desugar_dyn_parent_class_leaf(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int n0 = nt->count;
@@ -3673,6 +3840,7 @@ static void desugar_dyn_parent_class_leaf(Compiler *c) {
     if (!nm || class_leaf_count(c, nm, &nested) < 2 || !nested) continue;
     todo[ntodo++] = id;
   }
+  DynAnc danc = {0};   /* (every class's ancestors, built at the first path) */
   for (int t = 0; t < ntodo; t++) {
     int id = todo[t];
     int base = nt->count;   /* (this path's new nodes take its scope) */
@@ -3811,6 +3979,91 @@ static void desugar_dyn_parent_class_leaf(Compiler *c) {
       nt_node_set_ref(nt, ifn, "subsequent", tail_arm);
       tail_arm = ifn;
     }
+    /* The holders' arms test, in a fixed order, whether the value is or
+       has a holder among its ancestors (`Holder >= m`). CRuby reads the
+       value's own constants first, then the Foo first along ITS
+       ancestors, which a fixed order cannot give for every class (a
+       superclass's Foo and an included module's, two included modules',
+       a prepend, an include in a reopening). A class the chain gives
+       another holder gets its own arm ahead of the chain, and so does a
+       class below such a class that takes another answer; a class comes
+       before its ancestors. When some class's ancestors are not readable,
+       the holders' arms stay alone, as before. */
+    int ex_k[64], ex_a[64], nex = 0;
+    dyn_anc_all(c, &danc);
+    if (!danc.bad) {
+      int nk = c->nclasses;
+      int *kf = malloc(sizeof(int) * ((size_t)nk + 1));
+      unsigned char *need = calloc((size_t)nk + 1, 1);
+      if (!kf || !need) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+      for (int k = 0; k < nk; k++) {
+        kf[k] = -1;
+        if (danc.nanc[k] < 0) continue;
+        /* (k's own Foo, then its ancestors in order) */
+        for (int i = 0; i < na && kf[k] < 0; i++) if (arms_k[i] == k) kf[k] = i;
+        for (int j = 0; j < danc.nanc[k] && kf[k] < 0; j++)
+          for (int i = 0; i < na && kf[k] < 0; i++) if (arms_k[i] == danc.anc[k][j]) kf[k] = i;
+      }
+      /* First try an order of the holders' arms that gives every class its
+         answer: the holder a class takes comes before the other holders
+         among its ancestors. */
+      { unsigned char adj[64][64], used[64];
+        int ord[64], no = 0;
+        memset(adj, 0, sizeof adj); memset(used, 0, sizeof used);
+        for (int k = 0; k < nk; k++) {
+          if (kf[k] < 0) continue;
+          for (int j = 0; j < danc.nanc[k]; j++)
+            for (int i = 0; i < na; i++)
+              if (i != kf[k] && arms_k[i] == danc.anc[k][j]) adj[kf[k]][i] = 1;
+        }
+        while (no < na) {
+          int pick = -1;
+          for (int i = 0; i < na && pick < 0; i++) {
+            if (used[i]) continue;
+            int free_ = 1;
+            for (int j = 0; j < na && free_; j++) if (!used[j] && j != i && adj[j][i]) free_ = 0;
+            if (free_) pick = i;
+          }
+          if (pick < 0) break;   /* (a cycle: no one order fits every class) */
+          used[pick] = 1; ord[no++] = pick;
+        }
+        if (no == na) {
+          int oc[64], oh[64], okk[64], inv[64];
+          for (int i = 0; i < na; i++) { oc[i] = arms_c[ord[i]]; oh[i] = arms_h[ord[i]]; okk[i] = arms_k[ord[i]]; inv[ord[i]] = i; }
+          for (int i = 0; i < na; i++) { arms_c[i] = oc[i]; arms_h[i] = oh[i]; arms_k[i] = okk[i]; }
+          for (int k = 0; k < nk; k++) if (kf[k] >= 0) kf[k] = inv[kf[k]];
+        }
+      }
+      for (int k = 0; k < nk; k++) {
+        if (kf[k] < 0) continue;
+        int chain = -1;
+        for (int i = 0; i < na && chain < 0; i++) if (dyn_anc_has(&danc, k, arms_k[i])) chain = i;
+        need[k] = chain != kf[k];
+      }
+      for (int more = 1; more; ) {
+        more = 0;
+        for (int k = 0; k < nk; k++) {
+          if (need[k] || kf[k] < 0) continue;
+          for (int j = 0; j < danc.nanc[k] && !need[k]; j++) {
+            int a = danc.anc[k][j];
+            if (a != k && need[a] && kf[a] != kf[k]) need[k] = more = 1;
+          }
+        }
+      }
+      for (int k = 0; k < nk; k++) {
+        if (!need[k]) continue;
+        if (nex >= 64) { nex = 0; break; }   /* (too many: the holders' arms, as before) */
+        ex_k[nex] = k; ex_a[nex] = kf[k]; nex++;
+      }
+      free(kf); free(need);
+      /* (a class before the classes and modules among its ancestors: a
+         longer ancestor list first, which a descendant always has) */
+      for (int i = 1; i < nex; i++)
+        for (int j = i; j > 0 && danc.nanc[ex_k[j]] > danc.nanc[ex_k[j - 1]]; j--) {
+          int t0 = ex_k[j], t1 = ex_a[j];
+          ex_k[j] = ex_k[j - 1]; ex_a[j] = ex_a[j - 1]; ex_k[j - 1] = t0; ex_a[j - 1] = t1;
+        }
+    }
     for (int i = na - 1; i >= 0; i--) {
       int ism = te_call(nt, dyn_parent_copy(nt, par), "is_a?", te_args1(nt, te_const(nt, "Module")), -1);
       /* (Holder >= m, not m <= Holder: the same answer, and it builds where
@@ -3825,6 +4078,18 @@ static void desugar_dyn_parent_class_leaf(Compiler *c) {
       nt_node_set_ref(nt, ifn, "subsequent", tail_arm);
       tail_arm = ifn;
     }
+    for (int i = nex - 1; i >= 0; i--) {
+      int ism = te_call(nt, dyn_parent_copy(nt, par), "is_a?", te_args1(nt, te_const(nt, "Module")), -1);
+      int le = te_call(nt, te_const(nt, c->classes[ex_k[i]].name), ">=", te_args1(nt, dyn_parent_copy(nt, par)), -1);
+      int and = nt_new_node(nt, "AndNode");
+      nt_node_set_ref(nt, and, "left", ism);
+      nt_node_set_ref(nt, and, "right", le);
+      int ifn = nt_new_node(nt, "IfNode");
+      nt_node_set_ref(nt, ifn, "predicate", and);
+      nt_node_set_ref(nt, ifn, "statements", te_stmts1(nt, dyn_arm_copy(nt, arms_c[ex_a[i]])));
+      nt_node_set_ref(nt, ifn, "subsequent", tail_arm);
+      tail_arm = ifn;
+    }
     /* (no arm at all: only a key's last "__" part has the leaf) */
     if (tail_arm == els) tail_arm = mif;
     int body = te_stmts1(nt, tail_arm);
@@ -3834,6 +4099,7 @@ static void desugar_dyn_parent_class_leaf(Compiler *c) {
     int encl = c->nscope[id];
     for (int j = base; j < nt->count; j++) c->nscope[j] = encl;
   }
+  dyn_anc_free(c, &danc);
   free(keep); free(todo);
 }
 
@@ -11554,6 +11820,77 @@ static int expand_literal_splat_args(Compiler *c) {
    other method rides the materialized element array. Type-driven, so it also
    catches a range held in a variable -- which is why it lives in the
    inference fixpoint rather than the one-shot shape pass (#3064). */
+/* A method Range defines itself (CRuby 4.0 Range.instance_methods(false))
+   and answers for a String Range. to_set is left out: it checks for an
+   endless Range and then calls Enumerable's. */
+static int srange_own_method(const char *nm) {
+  static const char *const own[] = {
+    "%", "==", "===", "begin", "bsearch", "count", "cover?", "each", "end", "entries",
+    "eql?", "exclude_end?", "first", "hash", "include?", "inspect", "last",
+    "max", "member?", "min", "minmax", "overlap?", "reverse_each", "size", "step", "to_a",
+    "to_s", NULL };
+  for (int i = 0; own[i]; i++) if (sp_streq(nm, own[i])) return 1;
+  return 0;
+}
+/* Range#to_set raises RangeError for an endless Range before it calls
+   Enumerable's: put that test in front of the receiver of a to_set the
+   program's Enumerable answers, `(raise RangeError, "..." if r.end.nil?;
+   r)`. A literal Range has its end in the tree; a local, self or a
+   parameter or an ivar is read again for the test. 1 when the call
+   changed, 0 when it needs no change, -1 when the test cannot be put
+   there (a method call receiver): the caller then keeps the member Array
+   path, which raises for an endless Range. */
+static int srange_pure_copy(NodeTable *nt, int n) {
+  n = nt_paren_single(nt, n);
+  if (n < 0) return -1;
+  if (nt_kind(nt, n) == NK_InstanceVariableReadNode) {
+    int m = nt_new_node(nt, "InstanceVariableReadNode");
+    nt_node_set_str(nt, m, "name", nt_str(nt, n, "name"));
+    return m;
+  }
+  if (nt_kind(nt, n) == NK_CallNode) return -1;
+  return dyn_parent_copy(nt, n);
+}
+static int srange_endless_guard(Compiler *c, int id, int recv) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  int was = nt_int(nt, id, "srange_endless_checked", 0);
+  if (was) return was == 2 ? -1 : 0;
+  int base0 = nt->count, r = nt_paren_single(nt, recv), test = -1;
+  if (r >= 0 && nt_kind(nt, r) == NK_RangeNode) {
+    int rt = nt_ref(nt, r, "right");
+    if (rt >= 0 && nt_kind(nt, rt) != NK_NilNode) {
+      if (nt_kind(nt, rt) == NK_StringNode) { nt_node_set_int(nt, id, "srange_endless_checked", 1); return 0; }
+      /* ("a"..x): the end is read again for the test */
+      int ec = srange_pure_copy(nt, rt);
+      if (ec < 0) { nt_node_set_int(nt, id, "srange_endless_checked", 2); return -1; }
+      test = te_call(nt, ec, "nil?", -1, -1);
+    }
+  } else {
+    int rc = srange_pure_copy(nt, recv);
+    if (rc < 0) { nt_node_set_int(nt, id, "srange_endless_checked", 2); return -1; }
+    test = te_call(nt, te_call(nt, rc, "end", -1, -1), "nil?", -1, -1);
+  }
+  nt_node_set_int(nt, id, "srange_endless_checked", 1);
+  int msg = nt_new_node(nt, "StringNode");
+  nt_node_set_str(nt, msg, "content", "cannot convert endless range to a set");
+  nt_node_set_str(nt, msg, "unescaped", "cannot convert endless range to a set");
+  int rargs = nt_new_node(nt, "ArgumentsNode");
+  { int ra[2] = { te_const(nt, "RangeError"), msg }; nt_node_set_arr(nt, rargs, "arguments", ra, 2); }
+  int rz = te_call(nt, -1, "raise", rargs, -1), first = rz;
+  if (test >= 0) {
+    first = nt_new_node(nt, "IfNode");
+    nt_node_set_ref(nt, first, "predicate", test);
+    nt_node_set_ref(nt, first, "statements", te_stmts1(nt, rz));
+  }
+  int body = nt_new_node(nt, "StatementsNode");
+  { int bs[2] = { first, recv }; nt_node_set_arr(nt, body, "body", bs, 2); }
+  int par = nt_new_node(nt, "ParenthesesNode");
+  nt_node_set_ref(nt, par, "body", body);
+  nt_node_set_ref(nt, id, "receiver", par);
+  comp_grow_node_arrays(c);
+  for (int j = base0; j < nt->count; j++) c->nscope[j] = c->nscope[id];
+  return 1;
+}
 static int desugar_str_range_methods(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int changed = 0;
@@ -11583,6 +11920,14 @@ static int desugar_str_range_methods(Compiler *c) {
     int recv = nt_ref(nt, id, "receiver");
     if (!nm || recv < 0) continue;
     if (infer_type(c, recv) != TY_STR_RANGE) continue;
+    /* a program's Enumerable method that Range does not define itself runs
+       with the RANGE as self, as it does for an Integer Range. For a String
+       Range, Range#to_set, #count and #reverse_each call Enumerable's too. */
+    if (an_enum_prog_method(c, nm) && !srange_own_method(nm)) {
+      int g = sp_streq(nm, "to_set") ? srange_endless_guard(c, id, recv) : 0;
+      if (g > 0) changed = 1;
+      if (g >= 0) continue;
+    }
     /* `range % n { }` is `range.step(n) { }` (#3671): the walk has no row of
        its own under the `%` name, so name it what it is. The blockless form is
        the `%` row's, whose Enumerator inspects as `%(n)`. */
@@ -41728,11 +42073,13 @@ static void mark_nullable_int_locals(Compiler *c) {
       }
     }
     changed |= mark_block_param_arrays(c);
-    /* `a.zip(b) { |x, y| }`: x is an element of a, y one of b */
+    /* `a.zip(b) { |x, y| }`: x is an element of a, y one of b; so are a
+       product's `|x, y|` (product_block_binds_elems) */
     NT_FOREACH_KIND(nt, NK_CallNode, id) {
       const char *znm = nt_str(nt, id, "name");
       int blk = nt_ref(nt, id, "block"), recv = nt_ref(nt, id, "receiver");
-      if (!znm || !sp_streq(znm, "zip") || blk < 0 || recv < 0) continue;
+      if (!znm || blk < 0 || recv < 0) continue;
+      if (!sp_streq(znm, "zip") && !(sp_streq(znm, "product") && product_block_binds_elems(c, blk))) continue;
       int za = nt_ref(nt, id, "arguments"), zn = 0;
       const int *zv = za >= 0 ? nt_arr(nt, za, "arguments", &zn) : NULL;
       Scope *bsc = comp_scope_of(c, blk);

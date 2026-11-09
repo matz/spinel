@@ -1,0 +1,28 @@
+Kid3: inc
+Kid4: base
+Kid5: inc
+Two: inc2
+TwoB: inc2
+Kid6: inc2
+Own: own
+MM: inc
+ViaMM: inc
+Base: base
+Inc: inc
+Inc2: inc2
+Object: top
+uninitialized constant Comparable::Foo
+3 is not a class/module
+inc
+Inc::Foo
+Base::Foo
+[KidB, :inc]
+[KidB2, :mix]
+[KidB3, :inc]
+[KidB4, :pre]
+[KidB5, :inc]
+[BaseB, :base]
+[IncB, :inc]
+[PreB, :pre]
+[:a, :own, :pre, :inc2, :base, :base]
+[:b, 3]

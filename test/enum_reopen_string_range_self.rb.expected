@@ -1,0 +1,30 @@
+[:range, "a".."d"]
+[:range, "a".."c"]
+[Range, "a"]
+[Range, 1]
+["aa", "bb", "cc", "dd"]
+8
+XYZ
+3
+[Range, "a"]
+[:range, "m".."n"]
+[false, true, true, true]
+[false, true, true, true]
+[RangeError, "cannot convert endless range to a set"]
+[RangeError, "cannot convert endless range to a set"]
+[RangeError, "cannot convert endless range to a set"]
+[:range, "a".."b"]
+true
+true
+true
+false
+false
+false
+eff a..c
+eff 1
+false
+eff a..c
+eff x
+false
+[RangeError, "cannot convert endless range to a set"]
+[:range, "a".."b"]

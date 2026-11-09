@@ -863,34 +863,43 @@ static const char *resolve_alias_value(Compiler *c, int v) {
 /* If `cname` is a constant assigned a class value (resolve_alias_value),
    return the underlying class name so `class CONST` reopens that class.
    Returns NULL if `cname` is a plain new class name. */
-/* The first constant write of each key, for the tree as it is: a class
-   constant's read asks for its key's write, and a scan of every write per
-   question was a tenth of a Rails app's analysis */
-static struct { const NodeTable *nt; unsigned ver; unsigned long edits; int count; ANameHash keys; int *write, cap; } g_cw_first;
-static int const_first_write(Compiler *c, const char *cname) {
+/* The first constant write of each key, in node order (cw_first): the two
+   readers below asked every write of the program at each question, a
+   rescan per constant read that made a program of many constants quadratic
+   (scale-test's splices, a constant per block: #11387). A write's key is
+   its string fields' (ckey, ckey_at, name: const_key_at), so the index
+   stands while the table's count and version do, which count every node
+   added and every string rewritten. */
+static struct { const NodeTable *nt; int cnt; unsigned ver; int cap; const char **key; int *id; } g_cwk;
+static unsigned cwk_slot(const char *k, int cap) { return sp_strhash(k) & (unsigned)(cap - 1); }
+static int cw_first(Compiler *c, const char *cname) {
   const NodeTable *nt = c->nt;
-  if (g_cw_first.nt != nt || g_cw_first.ver != nt->version || g_cw_first.edits != nt->edits ||
-      g_cw_first.count != nt->count) {
-    anh_free(&g_cw_first.keys); memset(&g_cw_first.keys, 0, sizeof g_cw_first.keys);
+  if (!cname) return -1;
+  if (g_cwk.nt != nt || g_cwk.cnt != nt->count || g_cwk.ver != nt->version) {
+    int nw = 0;
+    NT_FOREACH_KIND(nt, NK_ConstantWriteNode, id) { (void)id; nw++; }
+    int cap = 16;
+    while (cap < 2 * nw + 2) cap *= 2;
+    free(g_cwk.key); free(g_cwk.id);
+    g_cwk.key = calloc((size_t)cap, sizeof *g_cwk.key);
+    g_cwk.id = malloc(sizeof *g_cwk.id * (size_t)cap);
+    if (!g_cwk.key || !g_cwk.id) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    g_cwk.cap = cap;
     NT_FOREACH_KIND(nt, NK_ConstantWriteNode, id) {
-      const char *n = const_key_at(c, id);
-      if (!n || anh_has(&g_cw_first.keys, n)) continue;
-      if (g_cw_first.keys.n == g_cw_first.cap) {
-        g_cw_first.cap = g_cw_first.cap ? g_cw_first.cap * 2 : 64;
-        g_cw_first.write = realloc(g_cw_first.write, sizeof(int) * (size_t)g_cw_first.cap);
-        if (!g_cw_first.write) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-      }
-      g_cw_first.write[g_cw_first.keys.n] = id;
-      anh_add(&g_cw_first.keys, n);
+      const char *k = const_key_at(c, id);
+      if (!k) continue;
+      unsigned h = cwk_slot(k, cap);
+      while (g_cwk.key[h] && !sp_streq(g_cwk.key[h], k)) h = (h + 1) & (unsigned)(cap - 1);
+      if (!g_cwk.key[h]) { g_cwk.key[h] = k; g_cwk.id[h] = id; }   /* (the first in node order) */
     }
-    g_cw_first.nt = nt; g_cw_first.ver = nt->version; g_cw_first.edits = nt->edits; g_cw_first.count = nt->count;
+    g_cwk.nt = nt; g_cwk.cnt = nt->count; g_cwk.ver = nt->version;
   }
-  int i = cname ? anh_find(&g_cw_first.keys, cname) : -1;
-  return i >= 0 ? g_cw_first.write[i] : -1;
+  for (unsigned h = cwk_slot(cname, g_cwk.cap); g_cwk.key[h]; h = (h + 1) & (unsigned)(g_cwk.cap - 1))
+    if (sp_streq(g_cwk.key[h], cname)) return g_cwk.id[h];
+  return -1;
 }
-
 const char *resolve_class_alias(Compiler *c, const char *cname) {
-  int id = const_first_write(c, cname);
+  int id = cw_first(c, cname);
   return id >= 0 ? resolve_alias_value(c, nt_ref(c->nt, id, "value")) : NULL;
 }
 
@@ -900,7 +909,7 @@ const char *resolve_class_alias(Compiler *c, const char *cname) {
    knows, does not follow. NULL otherwise. */
 const char *const_alias_source(Compiler *c, const char *cname) {
   const NodeTable *nt = c->nt;
-  int id = const_first_write(c, cname);
+  int id = cw_first(c, cname);
   if (id < 0) return NULL;
   int v = nt_ref(nt, id, "value");
   NodeKind vk = v >= 0 ? nt_kind(nt, v) : NK_NONE;

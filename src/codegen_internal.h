@@ -632,8 +632,6 @@ int builtin_method_known(const char *cls, const char *m);
 int builtin_cmethod_known(const char *cls, const char *name);
 int builtin_super_cmethod_known(const char *cls, const char *name);
 int builtin_instance_name_known(const char *m);
-int builtin_classes_below_object_list(const char *m, Buf *out);
-int builtin_id_below_object_answers(int id, const char *m);
 int builtin_instance_method_known(const char *cls, const char *m);
 int builtin_arity_violation(Compiler *c, int id);
 int builtin_object_method_known(const char *m);
@@ -1969,6 +1967,7 @@ const char *ptr_array_stamp(Compiler *c, TyKind t);   /* "SP_PTR_ELEM_x, cls" fo
 const char *ptr_array_new_c(TyKind t);   /* the empty pointer array of kind t: sp_StrhArray_new() for a String handle Array */
 /* "Int" / "Str" / "Float" for the sp_<K>Array_* runtime family. */
 const char *array_kind(TyKind t);
+int array_has_new_cap(const char *k);
 /* "Poly" / "Ptr" / array_kind, for a loop that walks the container. "Ptr" is
    a nested numeric table (sp_PtrArray of row pointers). */
 const char *array_iter_kind(TyKind t);
@@ -3103,6 +3102,9 @@ void emit_scope_decls_ends(Compiler *c, Scope *s, Buf *b, size_t *ends);
 int method_is_void(Scope *s);
 void emit_poly_iter_obj_normalize(Compiler *c, int tv, Buf *b);
 void emit_poly_iter_obj_reject(Compiler *c, int call, int tv, const char *name, Buf *b);
+/* a boxed quantifier's element walk over _t<ta> (codegen_call_operator.c) */
+void emit_poly_quantifier_walk(Compiler *c, int id, int ta, int tp, int tn, int tcnt, int ti,
+                               const char *name, char *ans, size_t cap, Buf *b);
 void emit_poly_iter_obj_reject_as(Compiler *c, int call, int tv, const char *name, const char *shown, Buf *b);
 void emit_poly_iter_recv_reject(Compiler *c, int call, const char *name, Buf *rb, Buf *out, int indent);
 void emit_method_signature(Compiler *c, Scope *s, Buf *b);
@@ -3174,6 +3176,8 @@ const char *oint_unbox(TyKind t);   /* "sp_unbox_oint" / "sp_unbox_ofloat" */
 int oint_kind(TyKind t);
 /* a local's / parameter's slot is an sp_oint / sp_ofloat */
 int slot_is_oint(const LocalVar *lv);
+/* one zip (or product) block param from an element read `src` of type src_ty */
+void emit_zip_block_param(Compiler *c, TyKind slot, TyKind src_ty, const char *src, Buf *b);
 /* the C type of a local's slot: the oint type, or emit_ctype's */
 void emit_slot_ctype(Compiler *c, const LocalVar *lv, Buf *b);
 /* instance ivar iv of class cid has a nil byte in iv__nilb; its index;

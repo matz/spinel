@@ -3646,14 +3646,12 @@ void emit_block_invoke(Compiler *c, int args_node, Buf *b, int indent, int as_ex
        argument temp, #4662) */
     { Buf tb; memset(&tb, 0, sizeof tb);
       Buf *svp3 = g_pre; int svi3 = g_indent; g_pre = b; g_indent = 0;
-      TyKind tt3 = comp_ntype(c, bd3[bn3 - 1]);
-      /* into a boxed slot a call's value goes boxed: a String mutator on a
-         String held as the shared handle (`buf << x`) answered its bytes
-         where the box was read (#8399) */
-      if (want_poly && (ty_is_object(tt3) ||
-                        (nt_kind(nt, bd3[bn3 - 1]) == NK_CallNode &&
-                         (tt3 == TY_STRING || tt3 == TY_STRBUF)) ||
-                        (tt3 == TY_STRING && strbuf_srange_arm(c, bd3[bn3 - 1]))))
+      /* into a boxed slot the tail goes boxed unless it already is one: a
+         String mutator on a String held as the shared handle (`buf << x`)
+         answered its bytes where the box was read (#8399), and an if or case
+         over Strings (`b.call` answering `c ? s : t`) handed the bytes to
+         an sp_RbVal slot. The box carries the handle, as `yield`'s does. */
+      if (want_poly && repr_of(c, bd3[bn3 - 1]).kind != RK_BOXED)
         emit_boxed(c, bd3[bn3 - 1], &tb);
       else if (ywo) emit_oint_expr(c, bd3[bn3 - 1], want_ty, &tb);
       else emit_expr(c, bd3[bn3 - 1], &tb);

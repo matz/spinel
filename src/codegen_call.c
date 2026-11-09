@@ -30092,6 +30092,8 @@ static int emit_call_on_missing_builtin_path(Compiler *c, int id, Buf *b) {
   return 1;
 }
 void emit_call(Compiler *c, int id, Buf *b) {
+  if (sp_streq(nt_str(c->nt, id, "name"), "===") &&
+      emit_undefined_const_test(c, nt_ref(c->nt, id, "receiver"), repr_of(c, id).as_ty, b)) return;
   /* a String, Integer or Float that may be nil, for a name the program's
      NilClass has (cplan_nil_scalar_reach): boxed, the poly dispatch runs
      NilClass's method for nil, and for the rest Object's public method of

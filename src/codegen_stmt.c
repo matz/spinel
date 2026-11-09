@@ -11287,6 +11287,7 @@ void emit_case(Compiler *c, int id, Buf *b, int indent) {
     buf_puts(b, w == 0 ? "if (" : "else if (");
     for (int j = 0; j < wc; j++) {
       if (j) buf_puts(b, " || ");
+      if (emit_undefined_const_test(c, conds[j], TY_BOOL, b)) continue;
       if (oint_typed) { case_oint_label(c, conds[j], t, b); continue; }
       if (pred >= 0) {
         /* `when *arr` -- array membership test */
@@ -11825,6 +11826,7 @@ static void emit_case_expr_in(Compiler *c, int id, Buf *b) {
     buf_puts(b, w == 0 ? "if (" : "else if (");
     for (int j = 0; j < wc; j++) {
       if (j) buf_puts(b, " || ");
+      if (emit_undefined_const_test(c, conds[j], TY_BOOL, b)) continue;
       if (oint_typed) { case_oint_label(c, conds[j], t, b); continue; }
       if (pred >= 0) {
         /* when ClassName / Mod::Klass: Module#=== via is_a? semantics */

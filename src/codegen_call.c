@@ -1341,6 +1341,8 @@ const int *comp_exc_subclasses(Compiler *c, int *n) {
 static int class_is_prim_reopen_raw(Compiler *c, int k) {
   const char *n = c->classes[k].name;
   return sp_streq(n, "Integer") || sp_streq(n, "Float") ||
+         /* every Integer and Float is a Numeric's instance */
+         sp_streq(n, "Numeric") ||
          sp_streq(n, "String") || sp_streq(n, "Symbol") ||
          sp_streq(n, "NilClass") ||
          sp_streq(n, "TrueClass") || sp_streq(n, "FalseClass") ||
@@ -1740,8 +1742,15 @@ static void emit_poly_dispatch_key_pick(Compiler *c, int tv, int key_guard, int 
       if (si >= 0) { opened++; buf_printf(b, "((_t%d.tag == SP_TAG_OBJ && _t%d.cls_id == SP_BUILTIN_STRBUF) ? %d : ", tv, tv, si); } }
   }
   buf_printf(b, "(_t%d.tag == SP_TAG_OBJ ? _t%d.cls_id", tv, tv);
+  /* an Integer or Float whose own reopening (if any) lacks the name takes
+     the Numeric reopening's arm */
+  int nmi = comp_class_index(c, "Numeric");
+  if (nmi >= 0 && !(class_is_prim_reopen(c, nmi) &&
+                    (!pick_name || comp_method_in_chain(c, nmi, pick_name, NULL) >= 0))) nmi = -1;
   for (unsigned i = 0; i < sizeof P / sizeof P[0]; i++) {
     int idx = comp_core_class(c, P[i].cls);
+    if (nmi >= 0 && (P[i].cls == CORE_INTEGER || P[i].cls == CORE_FLOAT) &&
+        (idx < 0 || (pick_name && comp_method_in_chain(c, idx, pick_name, NULL) < 0))) idx = nmi;
     if (idx >= 0) buf_printf(b, " : _t%d.tag == %s ? %d", tv, P[i].tag, idx);
   }
   { int ti = comp_core_class(c, CORE_TRUECLASS), fi = comp_core_class(c, CORE_FALSECLASS);

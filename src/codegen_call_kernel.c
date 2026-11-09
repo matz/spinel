@@ -711,6 +711,17 @@ int emit_call_kernel_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, cons
         return 1;
       }
     }
+    /* format() with no format string: CRuby's ArgumentError. `Kernel.format`
+       reaches here bare (desugar_kernel_recv), as does the arm a boxed
+       receiver's `x.format` takes for a Kernel value read in the program
+       (desugar_class_value_builtin_cmethod); it was refused, and the refusal
+       took the whole statement with it */
+    if (is_format_alias(name) && ac == 0) {
+      TyKind ft = comp_ntype(c, id);
+      if (ft == TY_UNKNOWN || ft == TY_VOID) ft = TY_STRING;
+      buf_printf(b, "(sp_raise_cls(\"ArgumentError\", \"too few arguments\"), %s)", default_value_from_compiler(c, ft));
+      return 1;
+    }
     if ((is_format_alias(name)) && ac >= 1) {
       /* format(fmt, *args) -> sp_str_format_polyarr(fmt, poly_arr) */
       int tf = ++g_tmp, ta = ++g_tmp;

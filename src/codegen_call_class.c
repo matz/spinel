@@ -5432,21 +5432,29 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
          names: the constructor below builds it, where this dispatch had arms
          only for the classes with a `self.new` of their own */
       if (sp_streq(name, "new") && anon_struct_recv_ci(c, recv) >= 0) goto skip_cls_cmethod9;
-      TyKind uret9 = TY_UNKNOWN; int uret_set9 = 0, splat9 = nt_argv_splat_count(nt, argv, argc);
+      TyKind uret9 = TY_UNKNOWN, wret9 = TY_UNKNOWN;
+      int uret_set9 = 0, nwrong9 = 0, splat9 = nt_argv_splat_count(nt, argv, argc);
       for (int k = 0; k < c->nclasses; k++) {
         if (!comp_cv_arm_class(c, k) || cls_value_own_sg_answers(c, id, k, name, argc)) continue;
         int kmi = call_target(c, id, k, name, CT_CMETHOD, NULL);
         if (kmi < 0) continue;
+        TyKind kr = (TyKind)c->scopes[kmi].ret;
         /* Only the candidates this call could actually reach set the return
            type. One that cannot take this many arguments is not a possible
-           receiver here, so its return type is not part of the answer. */
-        if (!cplan_cls_arm_takes(c, id, kmi, argc, splat9)) continue;
+           receiver here, so its return type is not part of the answer --
+           unless no candidate can take the call: then every arm raises, and
+           the call is typed as the methods it names, as the inference does
+           (infer_class_module_call). */
+        if (!cplan_cls_arm_takes(c, id, kmi, argc, splat9)) {
+          wret9 = nwrong9++ == 0 || kr == wret9 ? kr : TY_POLY;
+          continue;
+        }
         ncand9++; defmi9 = kmi;
-        TyKind kr = (TyKind)c->scopes[kmi].ret;
         if (!uret_set9) { uret9 = kr; uret_set9 = 1; }
         else if (kr != uret9) uret9 = TY_POLY;
       }
-      if (ncand9 > 0) {
+      if (ncand9 == 0) uret9 = wret9;
+      if (ncand9 > 0 || nwrong9 > 0) {
         /* Every candidate must accept exactly this call's positional args (no
            block/yield). Different candidates may declare different param
            types, so emit_args_filled runs per arm against that method's

@@ -6245,8 +6245,8 @@ static int infer_class_module_call(Compiler *c, int id, const NodeTable *nt, con
        its existing dispatch, so only fire for a variable receiver (#2445). */
     {
       int recv_is_var = class_recv_is_dynamic(c, recv);
-      TyKind uret = TY_UNKNOWN; int nc = recv_is_var ? 0 : -1000, set = 0;
-      int ncc = 0, nblk = 0;
+      TyKind uret = TY_UNKNOWN, wret = TY_UNKNOWN; int nc = recv_is_var ? 0 : -1000, set = 0;
+      int ncc = 0, nblk = 0, nwrong = 0;
       int has_blk = nt_ref(nt, id, "block") >= 0, splat = nt_argv_splat_count(nt, argv, argc);
       const PolyCand *ccs = recv_is_var ? comp_cmethod_candidates(c, name, &ncc) : NULL;
       for (int ki = 0; ki < ncc; ki++) {
@@ -6257,7 +6257,9 @@ static int infer_class_module_call(Compiler *c, int id, const NodeTable *nt, con
            arm the emitter can build, so it kills the whole dispatch. A
            candidate with the WRONG ARITY does not: this call cannot reach it,
            so it neither contributes a return type nor vetoes the others
-           (#4129). Codegen's arms ask the same cplan_cls_arm_takes.
+           (#4129), unless no candidate can take the call: every arm then
+           raises, and the call is typed as the methods it names. Codegen's
+           arms ask the same cplan_cls_arm_takes.
            A candidate taking a block (a yielding one through its
            proc form) is reached by the poly receiver's class-tag dispatch
            instead, which answers poly. */
@@ -6269,10 +6271,13 @@ static int infer_class_module_call(Compiler *c, int id, const NodeTable *nt, con
         /* a *rest the emitter packs is an arm like any other */
         int rest_ok = rest_packable_arm(c, &c->scopes[kmi]);
         if ((c->scopes[kmi].rest_idx >= 0 && !rest_ok) || c->scopes[kmi].yields ||
-            (c->scopes[kmi].blk_param && c->scopes[kmi].blk_param[0])) { nc = 0; nblk = 0; break; }
-        if (!cplan_cls_arm_takes(c, id, kmi, argc, splat)) continue;
-        nc++;
+            (c->scopes[kmi].blk_param && c->scopes[kmi].blk_param[0])) { nc = 0; nblk = 0; nwrong = 0; break; }
         TyKind kr = (TyKind)c->scopes[kmi].ret;
+        if (!cplan_cls_arm_takes(c, id, kmi, argc, splat)) {
+          wret = nwrong++ == 0 || kr == wret ? kr : TY_POLY;
+          continue;
+        }
+        nc++;
         if (!set) { uret = kr; set = 1; }
         else if (kr != uret) uret = TY_POLY;
       }
@@ -6295,6 +6300,8 @@ static int infer_class_module_call(Compiler *c, int id, const NodeTable *nt, con
       }
       if (nc > 0 && !has_blk)
         { *out = uret == TY_UNKNOWN ? TY_POLY : uret; return 1; }
+      if (nc == 0 && nwrong > 0 && !has_blk)
+        { *out = wret == TY_UNKNOWN ? TY_POLY : wret; return 1; }
     }
     if (argc == 1 && is_ivar_access(name) && !is_ivar_set(name)) {
       int ci = class_recv_static_ci(c, recv);

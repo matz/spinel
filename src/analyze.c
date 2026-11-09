@@ -13948,7 +13948,10 @@ static int desugar_enum_named_call(Compiler *c, int id, NodeTable *nt, const cha
        find_all machinery keeps that shape */
     int frt_open = frt == TY_UNKNOWN && !fa_user && frc >= 0 &&
                    nt_kind(nt, frc) == NK_ArrayNode;
-    if (ty_is_array(frt) || frt == TY_RANGE || frt_open) {
+    /* an Array or Range reopening's own find_all (or one a module it
+       includes gives it) answers the call, ahead of select */
+    int fa_own = an_reopen_owner(c, id, frt == TY_RANGE ? CORE_RANGE : CORE_ARRAY) >= 0;
+    if ((ty_is_array(frt) || frt == TY_RANGE || frt_open) && !fa_own) {
       nt_node_set_str(nt, id, "name", "select");
       /* a blockless one's Enumerator still says find_all */
       if (nt_ref(nt, id, "block") < 0) nt_node_set_str(nt, id, "enum_label", "find_all");

@@ -18631,15 +18631,21 @@ static int bx_mixes_in(Compiler *c, int m, int k, int depth) {
   for (int i = 0; i < mi->nprepended_mods; i++) if (bx_mixes_in(c, mi->prepended_mods[i], k, depth + 1)) return 1;
   return 0;
 }
-/* Is class or module k String, Symbol, Comparable, Object, Kernel,
-   BasicObject or the top level, or a module one of them or the top level
-   mixes in, as the class table holds them? (k < 0: a class the caller does
-   not know, so yes.) */
+/* The Comparable builtins (other than Integer and Float) whose call to a
+   method the program adds to `module Comparable` takes the method's copy
+   (bx_cmp_own_class). NULL ends the list. */
+static const char *const bx_cmp_recv_cls[] = { "String", "Symbol", "Time", "Rational", NULL };
+/* Is class or module k one of bx_cmp_recv_cls, Numeric, Comparable,
+   Object, Kernel, BasicObject or the top level, or a module one of them or
+   the top level mixes in, as the class table holds them? (k < 0: a class
+   the caller does not know, so yes.) */
 static int bx_owner_in_string_chain(Compiler *c, int k) {
   if (k < 0 || k >= c->nclasses || k == c->toplevel_class) return 1;
-  static const char *const roots[] = { "String", "Symbol", "Comparable", "Object", "Kernel", "BasicObject" };
-  for (int i = 0; i < (int)(sizeof roots / sizeof roots[0]); i++) {
-    int r = comp_builtin_class_named(c, roots[i]);
+  static const char *const more[] = { "Numeric", "Comparable", "Object", "Kernel", "BasicObject", NULL };
+  int nr = 0;
+  while (bx_cmp_recv_cls[nr]) nr++;
+  for (int i = 0; i < nr || more[i - nr]; i++) {
+    int r = comp_builtin_class_named(c, i < nr ? bx_cmp_recv_cls[i] : more[i - nr]);
     if (r == k) return 1;
     for (int a = r, d = 0; a >= 0 && a < c->nclasses && d < 64; a = c->classes[a].parent, d++)
       if (bx_mixes_in(c, a, k, 0)) return 1;
@@ -18752,15 +18758,11 @@ static int bx_program_aliases(Compiler *c, const char *nm) {
   free(ents);
   return hit;
 }
-/* Does the program have its own instance method nm that a String or a
-   Symbol answers before Kernel's: on String or Symbol or a module either
-   mixes in, on Object, Kernel or BasicObject, at the top level or in a
-   module the top level includes (bx_owner_in_string_chain), or by an
-   alias? */
-/* The Comparable builtins (other than the numbers) whose call to a method
-   the program adds to `module Comparable` takes the method's copy
-   (bx_cmp_own_class). NULL ends the list. */
-static const char *const bx_cmp_recv_cls[] = { "String", "Symbol", "Time", "Rational", NULL };
+/* Does the program have its own instance method nm that a String,
+   Symbol, Time or Rational answers before Kernel's: on one of them,
+   Numeric or a module they mix in, on Object, Kernel or BasicObject, at
+   the top level or in a module the top level includes
+   (bx_owner_in_string_chain), or by an alias? */
 static int bx_kernel_name_own(Compiler *c, const char *nm) {
   if (program_defines_object_method_named(c, nm) || bx_program_aliases(c, nm)) return 1;
   for (int i = 0; bx_cmp_recv_cls[i]; i++) {

@@ -1,6 +1,7 @@
 # A class-side alias of a method of a module the parent extends keeps the body
 # the module has where the alias appears, whatever the module defines later
-# (a def or a define_method original); an alias of initialize is the name's.
+# (a def or a define_method original); an alias of initialize keeps the
+# initialize its point has, too.
 module M
   def m = 1
 end

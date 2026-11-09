@@ -518,6 +518,10 @@ typedef struct {
      it is the copy of (Method#original_name of a define_method's, which no
      def names) */
   char *alias_of;
+  /* an initialize whose value a copy of an initialize reads through its
+     super (register_alias_methods): compiled with its value, not void
+     (method_is_void) */
+  unsigned char init_value;
   enum { ENTRY_NONE, ENTRY_DISPATCH, ENTRY_TABLE, ENTRY_NAMED } entry;
   int version_n, main_n;
   unsigned char cand_bound; /* a call on a poly receiver bound its arguments

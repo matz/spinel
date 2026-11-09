@@ -4776,14 +4776,15 @@ static int alias_accessor_method(Compiler *c, const ElabEntry *e, int w, int at,
   elab_attr_scope(c, e, s);
   return 1;
 }
-/* The scope of the ancestor class's def an instance alias e names at its
-   point, found through the record the way ct_def_version follows it (past
-   the aliases made on the way, each at its own point); -1 for any other
-   target: the class's own def, a module's, a builtin's, a version that
-   may not have run, or an initialize, which is compiled to answer nothing
-   (scope_is_initialize): a copy of it would answer nothing too, where CRuby
-   answers its last value, so its alias is bound by name, as it was. Asked before any method is made, as
-   alias_accessor_version is. */
+/* The scope of the def an alias e names at its point, found through the
+   record the way ct_def_version follows it (past the aliases made on the
+   way, each at its own point): an ancestor class's def, or an initialize,
+   the class's own too; -1 for any other target: another def of the
+   class's own, a builtin's, a version that may not have run. initialize is
+   compiled to answer nothing (scope_is_initialize), so its alias bound by
+   name answered nothing where CRuby answers its last value; the copy is a
+   method under the alias's name, compiled with its value. Asked before any
+   method is made, as alias_accessor_version is. */
 static int alias_inherited_def(Compiler *c, const ElabEntry *e) {
   LoadPoint p = elab_point_of(c, e->node);
   const LrDef *d = NULL;
@@ -4803,8 +4804,8 @@ static int alias_inherited_def(Compiler *c, const ElabEntry *e) {
   }
   if (!d || (d->kind != LR_DEF && d->kind != LR_DEFINE_METHOD)) return -1;
   int q = c->node_cbody[d->node], si = elab_def_scope_of(c, d->node);
-  if (q < 0 || q == e->cls || si <= 0 ||
-      c->scopes[si].class_id != q || c->scopes[si].def_node != d->node || scope_is_initialize(&c->scopes[si])) return -1;
+  if (q < 0 || si <= 0 || (q == e->cls && !scope_is_initialize(&c->scopes[si])) ||
+      c->scopes[si].class_id != q || c->scopes[si].def_node != d->node) return -1;
   /* the side the alias names: a class method of the ancestor's own, or on the class side an instance method of a
      module the ancestry extends (the class's singleton holds a copy of it, as an extend makes) */
   if (!c->scopes[si].is_cmethod != !e->sg && !(e->sg && comp_class_is_module(c, &c->classes[q]))) return -1;
@@ -4916,6 +4917,18 @@ static int alias_extend_copy(Compiler *c, int cls, int dn) {
   return best;
 }
 
+/* A copy of an initialize answers its last value, which may be a super
+   into the initialize above it: each initialize a super reaches up the
+   chain from copy di answers its value too (init_value). */
+static void alias_init_super_values(Compiler *c, int di) {
+  for (int s = di, g = 0; s >= 0 && g < c->nscopes && scope_calls_super(c, s); g++) {
+    int t = cplan_super_target(c, -1, &c->scopes[s], NULL);
+    if (t < 0 || !scope_is_initialize(&c->scopes[t]) || c->scopes[t].init_value) break;
+    c->scopes[t].init_value = 1;
+    s = t;
+  }
+}
+
 /* An alias of an ancestor class's def (alias_inherited_def, which
    register_aliases asks before any method is made and keeps on the alias as
    alias_copy_src) is a method of the alias's class made of that def: a copy
@@ -4979,6 +4992,7 @@ void register_alias_methods(Compiler *c, int modules) {
         unsupported_feature(c, a[i].node, msg);
       }
       c->scopes[di].super_of = (hold >= 0 ? hold : src[i]) + 1;
+      if (scope_is_initialize(&c->scopes[src[i]])) alias_init_super_values(c, di);
     }
     elab_attr_scope(c, &a[i], di);
     copied = 1;
@@ -7366,8 +7380,7 @@ static int alias_original_placed(Compiler *c, int ci, int a) {
    again after it would take its place here, where CRuby keeps the earlier
    body, so that is refused. This is the alias bound by name whose original
    the record does not place (a define_method whose name is computed; a
-   placed one is a method of its class, or an initialize's, which the name
-   binding answers as CRuby does) */
+   placed one is a method of its class) */
 static void inherited_alias_refuse_later_def(Compiler *c, int ci, int a, int p) {
   ClassInfo *cls = &c->classes[ci];
   int at = cls->alias_node[a];

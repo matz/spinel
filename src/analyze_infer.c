@@ -11975,9 +11975,6 @@ TyKind infer_uncached(Compiler *c, int id) {
     /* an exception class with no cls_id of its own (SystemCallError,
        LoadError) is still a first-class Class value, carried by name */
     if (nm && is_builtin_exception_name(nm)) return TY_CLASS;
-    /* `OpenStruct` as a value (o.class == OpenStruct) resolves only under
-       require "ostruct" (#3155). */
-    if (nm && sp_streq(nm, "OpenStruct") && sp_feature_required("ostruct")) return TY_CLASS;
     return TY_UNKNOWN;
   }
   if (nk == NK_DefinedNode) return TY_STRING;  /* a label string, or nil (NULL) */

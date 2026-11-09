@@ -1,4 +1,5 @@
-# A store under a key the compiler does not know may be under :sig.
+# An identity Hash keyed by a read under :sig, beside a store under a key
+# the compiler does not know (#11078; was refused).
 Sig = Struct.new(:name)
 def g(k)
   h = { sig: Sig.new("a") }

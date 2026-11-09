@@ -1301,6 +1301,19 @@ its immediate values -- `1.equal?(1)`, `:s.equal?(:s)`, and (on 64-bit)
 The same applies to `freeze` on these values: they are value-frozen already
 (`frozen?` is `true`), and `freeze` is an identity no-op.
 
+So it is for the numbers CRuby keeps as objects while Spinel holds them by
+value: an Integer outside the fixnum range (from 2**62 up and below
+-2**62), and a Float that is no flonum (`-0.0`, a NaN, an infinity, a
+magnitude past 2**256 or below 2**-254), as for a `Time`. Two equal ones are
+`equal?`, where CRuby answers `false` for two separately made objects and
+`true` for one. A Hash or a Set under `compare_by_identity` finds its keys
+the same way, so two equal such keys made apart are one entry here and two
+in CRuby (`h[2**64] = 1; h[2**64] = 2; h.size` is 1). Every other value's
+identity is CRuby's: an object of the program's, an Array, a Hash, a String
+(a literal is one object per content, as under frozen string literals; one
+made afresh is a new one; `-s` answers the literal of its content), a
+Symbol, an Integer in the fixnum range, a flonum, nil, true and false.
+
 **`/i` folds one codepoint to one.** Case-insensitive matching uses Unicode
 simple case folding, so `/ä/i` matches "Ä" and `/k/i` matches "K" (U+212A).
 A source whose fold is several codepoints has no single counterpart to fold

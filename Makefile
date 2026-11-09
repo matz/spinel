@@ -2330,11 +2330,6 @@ reject-test: string-minus-reject-test $(SPINEL)
 	  else grep -q "unsupported Hash#compare_by_identity" "$$tmp/cbi.out" || \
 	    { echo "reject-test: FAIL ($$t: refused without saying why)"; sed -n 1,5p "$$tmp/cbi.out"; ok=0; }; fi; \
 	done; \
-	t=test/reject/compare_by_identity_string_key.rb; \
-	if $(SPINEL) "$$t" -c --no-line-map -o "$$tmp/cbs.c" >"$$tmp/cbs.out" 2>&1; then \
-	  echo "reject-test: FAIL (compare_by_identity on a hash that may see a String key compiled)"; ok=0; \
-	else grep -q "unsupported Hash#compare_by_identity (identity-keyed hashing): a key may be a String" "$$tmp/cbs.out" || \
-	  { echo "reject-test: FAIL (compare_by_identity with a String key refused without saying why)"; sed -n 1,5p "$$tmp/cbs.out"; ok=0; }; fi; \
 	for mode in 0 1; do \
 	  for spec in "native_slot:instance variable write to a receiver without a writable slot" \
 	              "struct_slot:instance_variable_set to an ivar absent from the fixed object layout"; do \

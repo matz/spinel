@@ -19046,42 +19046,37 @@ static void emit_poly_encoding_mutator(Compiler *c, const char *name, int recv, 
 }
 
 
-/* Hash#compare_by_identity (#9171). CRuby then finds a key by equal?.
-   Spinel can do that only where identity is the same here as there: a key
-   that is an object compared by pointer (a program class's instance that is
-   not laid out by value, an Array, a Hash, an IO, a Proc, ...) or a Symbol,
-   nil, true or false. A String may be one object here where CRuby has two
-   (the frozen literal pool), an Integer or a Float is held by value where a
-   Bignum or a non-flonum is a new object each time in CRuby, so a hash
-   that may see such a key stays refused. The hash has to be held in one
-   local or ivar whose every use the compiler sees: each a call on it of a
-   kind that takes no new hash out of it (those keep identity in CRuby), its
-   keys of the kinds above. The answer is NULL when it is accepted, else the
-   reason. */
+/* Hash#compare_by_identity's keys (#9171, #11078): CRuby finds a key by
+   equal?, and the runtime's identity Hash asks sp_poly_equal, which is
+   CRuby's equal? for every value (Symbol#to_s, -@ and the literals answer
+   CRuby's objects) but for the kinds Spinel holds by value: an Integer
+   past the fixnum range, a Float that is no flonum, a Rational, a
+   Complex, a Range, a Time, whose two equal values are one key here
+   where CRuby may have two objects (docs/limitations.md; matz 2026-11-09:
+   equal values are taken as one object). Refused: an instance of a class
+   laid out by value, which each box copies, so one object would be two
+   keys. A boxed key is refused when a class of that kind may be among
+   its values (the class facts), or when the facts say nothing and the
+   program has such a class. */
+static int cbi_value_type_class(Compiler *c, int oc) {
+  return oc >= 0 && oc < c->nclasses && c->classes[oc].is_value_type;
+}
+static int cbi_program_has_value_type(Compiler *c) {
+  for (int k = 0; k < c->nclasses; k++) if (c->classes[k].is_value_type) return 1;
+  return 0;
+}
 static int cbi_key_ok(Compiler *c, int k) {
   TyKind t = comp_ntype(c, k);
-  if (ty_is_object(t)) {
-    int oc = ty_object_class(t);
-    return oc >= 0 && !c->classes[oc].is_value_type;
-  }
-  if (ty_is_array(t) || ty_is_hash(t) || t == TY_SYMBOL || t == TY_NIL || t == TY_BOOL ||
-      t == TY_PROC || t == TY_METHOD || t == TY_IO || t == TY_THREAD || t == TY_MUTEX ||
-      t == TY_QUEUE || t == TY_EXCEPTION || t == TY_DIR || t == TY_CLASS) return 1;
-  /* a boxed key: whatever the walk follows into it (cls_fact_kinds) is an
-     object of a class of the program's, a Symbol, nil, true, false or a
-     container, none a number or a String, and each class it names is one
-     compared by pointer (an OpenStruct is, and a Class value is one object;
-     the set holds them where it holds a value from anywhere) */
-  if (t != TY_POLY) return 0;
-  an_cls_kinds(c);   /* (the walk runs once, at the first ask) */
-  if (cls_fact_kinds(c, k) != 0) return 0;
+  if (ty_is_object(t)) return !cbi_value_type_class(c, ty_object_class(t)) && ty_object_class(t) >= 0;
+  if (t != TY_POLY) return 1;
+  if (!cbi_program_has_value_type(c)) return 1;
   const ClsSet *s = cls_fact_node(c, k);
   if (!s || s->all) return 0;
   for (int oc = cls_set_next(s, -1); oc >= 0; oc = cls_set_next(s, oc))
-    if (oc < c->nclasses && c->classes[oc].is_value_type) return 0;
+    if (cbi_value_type_class(c, oc)) return 0;
   return 1;
 }
-/* The refusal for a key the compiler cannot show to be compared by pointer,
+/* The refusal for a key that may be an instance of a class laid out by value,
    with the place of that key: the diagnostic is anchored at the
    compare_by_identity call, which is often a long way from the store or the
    read that made the hash refuse (a key read out of another hash, an array
@@ -19093,11 +19088,15 @@ static const char *cbi_key_refusal(Compiler *c, int key) {
   const char *fp = nt_file_path(nt, (int)nt_int(nt, key, "node_file", 0));
   int ln = (int)nt_int(nt, key, "node_line", 0);
   if (fp && *fp && ln > 0)
-    snprintf(why, sizeof why, "a key may be a String, an Integer, a Float or a boxed value (the key at %s:%d)", fp, ln);
+    snprintf(why, sizeof why, "a key may be an instance of a class laid out by value, which each box copies (the key at %s:%d)", fp, ln);
   else
-    snprintf(why, sizeof why, "a key may be a String, an Integer, a Float or a boxed value");
+    snprintf(why, sizeof why, "a key may be an instance of a class laid out by value, which each box copies");
   return why;
 }
+/* The hash has to be held in one local or ivar whose every use the
+   compiler sees: each a call on it of a kind that takes no new hash out of
+   it (those keep identity in CRuby). NULL when the use is accepted, else
+   the reason. */
 static const char *cbi_use_ok(Compiler *c, int use, const int *par) {
   const NodeTable *nt = c->nt;
   int call = par[use];
@@ -19106,7 +19105,7 @@ static const char *cbi_use_ok(Compiler *c, int use, const int *par) {
   if ((ck == NK_IndexOperatorWriteNode || ck == NK_IndexOrWriteNode || ck == NK_IndexAndWriteNode) &&
       nt_ref(nt, call, "receiver") == use) {
     int an = 0; const int *av = call_args(nt, call, &an);
-    return an == 1 && cbi_key_ok(c, av[0]) ? NULL : an == 1 ? cbi_key_refusal(c, av[0]) : "a key may be a String, an Integer, a Float or a boxed value";
+    return an == 1 && cbi_key_ok(c, av[0]) ? NULL : an == 1 ? cbi_key_refusal(c, av[0]) : "a key may be an instance of a class laid out by value, which each box copies";
   }
   if (ck != NK_CallNode || nt_ref(nt, call, "receiver") != use)
     return "the hash is used other than as a receiver";
@@ -19123,7 +19122,7 @@ static const char *cbi_use_ok(Compiler *c, int use, const int *par) {
   for (int i = 0; keyed[i]; i++) {
     if (!m || !sp_streq(m, keyed[i])) continue;
     int an = 0; const int *av = call_args(nt, call, &an);
-    if (an < 1) return "a key may be a String, an Integer, a Float or a boxed value";
+    if (an < 1) return "a key may be an instance of a class laid out by value, which each box copies";
     if (!cbi_key_ok(c, av[0])) return cbi_key_refusal(c, av[0]);
     /* `h[k] ||= v` and the like read the key the same way */
     return NULL;
@@ -19188,7 +19187,7 @@ static const char *cbi_identity_refusal(Compiler *c, int id, int recv, TyKind rt
       int en = 0; const int *ev = nt_arr(nt, v, "elements", &en);
       for (int e = 0; e < en && !why; e++) {
         int key = nt_kind(nt, ev[e]) == NK_AssocNode ? nt_ref(nt, ev[e], "key") : -1;
-        if (key < 0) why = "a key may be a String, an Integer, a Float or a boxed value";
+        if (key < 0) why = "a key may be an instance of a class laid out by value, which each box copies";
         else if (!cbi_key_ok(c, key)) why = cbi_key_refusal(c, key);
       }
       continue;

@@ -1,4 +1,5 @@
-# A Struct's own deconstruct_keys answers what the member does not hold.
+# An identity Hash keyed by what a Struct's own deconstruct_keys answers
+# (#11078; was refused).
 Sig = Struct.new(:name)
 S = Struct.new(:a) do
   def deconstruct_keys(_) = { a: "str" }

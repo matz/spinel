@@ -1,4 +1,5 @@
-# The key is read under :sig, and a String may be stored under :sig.
+# An identity Hash keyed by what is read under :sig, where a String may be
+# stored under :sig (#11078; was refused).
 Sig = Struct.new(:name)
 h = {}
 h[:sig] = Sig.new("a")

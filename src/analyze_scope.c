@@ -67,6 +67,20 @@ static void collect_positional_params(Compiler *c, int pn, Scope *s) {
   }
 }
 
+/* The parameters of each method scope the walk made of a def that took `...`
+   (it left them to the forwarding lowering, which runs after the walk, on the
+   record): collected once that lowering has given the def its shape */
+void scope_forwarding_params(Compiler *c) {
+  const NodeTable *nt = c->nt;
+  for (int s = 1; s < c->nscopes; s++) {
+    Scope *sc = &c->scopes[s];
+    int dn = sc->def_node;
+    if (!sc->params_later || dn < 0 || dn >= nt->count) continue;
+    sc->params_later = 0;
+    collect_def_params(c, dn, sc);
+    comp_touch_scope(sc->idx);
+  }
+}
 void collect_def_params(Compiler *c, int def_id, Scope *s) {
   int pn = nt_ref(c->nt, def_id, "parameters");
   if (pn < 0) return;
@@ -147,9 +161,7 @@ void collect_def_params(Compiler *c, int def_id, Scope *s) {
      sites); their types fall out of the normal call-site param seeding and a
      `bar(...)` body forwards them directly -- no rest/splat machinery (#1288). */
   {
-    int kwr = nt_ref(c->nt, pn, "keyword_rest");
-    if (kwr >= 0 &&
-        nt_kind(c->nt, kwr) == NK_ForwardingParameterNode && s->name) {
+    if (def_takes_forwarding(c->nt, def_id) && s->name) {
       /* Concrete leading params (`def f(a, ...)`) consume the first call args;
          only the remainder is forwarded, so synthesize one __fwd_ slot per
          forwarded arg, not per total arg. The zero-leading case (`def f(...)`)
@@ -182,12 +194,7 @@ void collect_def_params(Compiler *c, int def_id, Scope *s) {
 /* True if `s` is a `def m(...)` forwarding method (keyword_rest is a
    ForwardingParameterNode). */
 static int scope_is_forwarding(Compiler *c, Scope *s) {
-  if (!s || s->def_node < 0) return 0;
-  int pn = nt_ref(c->nt, s->def_node, "parameters");
-  if (pn < 0) return 0;
-  int kwr = nt_ref(c->nt, pn, "keyword_rest");
-  return kwr >= 0 &&
-         nt_kind(c->nt, kwr) == NK_ForwardingParameterNode;
+  return s && def_takes_forwarding(c->nt, s->def_node);
 }
 
 /* The method `s`'s body forwards `...` to (a `callee(...)` call, `super(...)`
@@ -1269,7 +1276,8 @@ static void sclass_walk_stmt(Compiler *c, int s, const WalkCtx *w, int target_cl
     { sc->body = nt_ref(nt, s, "body"); comp_touch_scope(sc->idx); }
     { sc->class_id = target_class; comp_touch_scope(sc->idx); }
     { sc->is_cmethod = 1; comp_touch_scope(sc->idx); }
-    collect_def_params(c, s, sc);
+    if (def_takes_forwarding(nt, s)) sc->params_later = 1;   /* (scope_forwarding_params) */
+    else collect_def_params(c, s, sc);
     /* Assign scope to the def node and its body */
     c->nscope[s] = new_idx;
     c->node_cbody[s] = w->cbody;
@@ -1802,7 +1810,8 @@ static void walk_scope_in(Compiler *c, int id, WalkCtx w) {
         else if (rci == -2) singleton_reopen_mark(c, id, defrecv, class_id);
       }
     }
-    collect_def_params(c, id, s);
+    if (def_takes_forwarding(c->nt, id)) s->params_later = 1;   /* (scope_forwarding_params) */
+    else collect_def_params(c, id, s);
     child = new_idx;
   }
   else if (ty_k == NK_CallNode) {

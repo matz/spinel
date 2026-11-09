@@ -6413,3 +6413,9 @@ int capture_cells_shape(const NodeTable *nt, int id) {
 }
 /* See analyze_internal.h. */
 int respond_to_missing_defined(Compiler *c) { return !an_name_binder_free(c, "respond_to_missing?"); }
+/* Do def's parameters hold `...` (a ForwardingParameterNode as keyword_rest)? */
+int def_takes_forwarding(const NodeTable *nt, int def) {
+  int pn = def >= 0 && nt_kind(nt, def) == NK_DefNode ? nt_ref(nt, def, "parameters") : -1;
+  int kr = pn >= 0 ? nt_ref(nt, pn, "keyword_rest") : -1;
+  return kr >= 0 && nt_kind(nt, kr) == NK_ForwardingParameterNode;
+}

@@ -49236,7 +49236,6 @@ static void an_phase_desugar_register(Compiler *c) {
   lower_run(c, &lc, LW_RIGHTWARD_PATTERN);          /* `x => pat` -> one-arm case/in */
   lower_run(c, &lc, LW_MATCH_PREDICATE);            /* `x in pat` -> case/in true/else false */
   lower_run(c, &lc, LW_SORT_BY_WITH_INDEX);         /* sort_by.with_index -> each_with_index.sort_by */
-  lower_run(c, &lc, LW_FORWARDING_TO_REST_CALLEE);  /* def m(...) = f(*a, **k) -> anon *, ** */
   lower_run(c, &lc, LW_ANON_BLOCK_PARAM);           /* def m(&) = f(&) -> &__anon_block */
   lower_run(c, &lc, LW_BLOCK_IMPLICIT_REST);        /* |x,| -> |x, __implicit_rest| (destructures) */
   lower_run(c, &lc, LW_MULTI_VALUE_JUMP);           /* return *a, b -> return [*a, b] */
@@ -49265,6 +49264,14 @@ static void an_phase_desugar_register(Compiler *c) {
       { s->is_cmethod = 1; comp_touch_scope(s->idx); }
     }
   }
+  /* def m(...) = f(*a, **k) -> anon *, **: after the walk, which made each
+     `...` def's scope and left its parameters to this, so that a forwarder's
+     shape reads the load record (the mixins, the defs at each position); the
+     anonymous `&` it makes is named as the program's own, then the scopes
+     take their parameters */
+  lower_run(c, &lc, LW_FORWARDING_TO_REST_CALLEE);
+  lower_run(c, &lc, LW_ANON_BLOCK_PARAM);
+  scope_forwarding_params(c);
   host_end(c, &hs);
   lower_finish(c, &lc);   /* SPINEL_LOWER_CHECK: the report, and no C */
   prog_refuse_loads(c);

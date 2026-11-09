@@ -523,6 +523,7 @@ typedef struct {
                                (analyze_pass.c): what its parameters hold is
                                what that call hands, should it reach this one */
   int is_cmethod;   /* `def self.foo`: a class (singleton) method, no instance self */
+  unsigned char params_later;   /* a `...` def's: its parameters wait for the forwarding lowering (scope_forwarding_params) */
   int is_module_function; /* `module_function`: ALSO a private instance method of
                              every includer. The body cannot depend on the
                              receiver (its self differs per call form), so the

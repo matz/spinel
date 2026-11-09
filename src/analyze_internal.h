@@ -1234,4 +1234,13 @@ char **dsend_candidates(Compiler *c, int *out_n);
 int exc_reopen_definers(Compiler *c, const char *mname, int *out, int max);
 
 int infer_cext_builtin_constant(Compiler *c, int node);
+/* What a `super` reaches, from the load record (analyze_elab.c): bits 1 << MX_*, *reach the program defs it reaches first
+   (the caller frees it), *reader an attr reader, *opaque a version with no def to read. A module's def asks every position the
+   module has; a class's, one chain, from after its own def (own 0) or from the class (own 1). */
+enum { MX_NONE, MX_PROGRAM, MX_BUILTIN, MX_UNKNOWN };
+int elab_module_super_owners(Compiler *c, int holder, const char *name, int **reach, int *nreach, int *reader, int *opaque);
+int elab_class_super_owner(Compiler *c, int cls, int own, const char *name, int **reach, int *nreach, int *reader, int *opaque);
+/* A `...` def's method scope takes its parameters after the forwarding lowering (analyze_scope.c) */
+int def_takes_forwarding(const NodeTable *nt, int def);   /* analyze_util.c */
+void scope_forwarding_params(Compiler *c);
 #endif

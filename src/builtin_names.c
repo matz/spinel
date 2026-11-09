@@ -2102,6 +2102,26 @@ int builtin_answers_ahead_of(const char *cls, const char *m, const char *root) {
   for (int i = 0; !below && i < t->nanc; i++) below = !strcmp(t->ancestors[i], root);
   return below && bmt_ancestors_have(t, m, 0, must, 0, root);
 }
+/* The i-th ancestor of builtin class or module cls in CRuby's lookup order (0: cls itself), counting only those a
+   library the program has defines; NULL past the last, and for a name with no table. The walk of a mixin's `super`
+   steps through these, asking each for the name it looks up (builtin_owns_instance_method). */
+const char *builtin_ancestor_at(const char *cls, int i) {
+  const BuiltinMethodTable *t = bmt_find(cls);
+  unsigned must = bmt_loaded();
+  if (!t || !(t->flags & must)) return NULL;
+  for (int k = 0; k < t->nanc; k++) {
+    const BuiltinMethodTable *a = bmt_find(t->ancestors[k]);
+    if (!a || !((t->aflags[k] & must) && (a->flags & must))) continue;
+    if (i-- == 0) return t->ancestors[k];
+  }
+  return NULL;
+}
+/* Does builtin class or module cls own instance method m itself, of any visibility, in a library the program has? */
+int builtin_owns_instance_method(const char *cls, const char *m) {
+  const BuiltinMethodTable *t = bmt_find(cls);
+  unsigned must = bmt_loaded();
+  return t && m && (t->flags & must) && bmt_has(t->inst, t->iflags, t->ninst, m, must, 0);
+}
 /* does the builtin class with run-time id `id` (-105 for Hash), or a builtin class above it and below Object,
    answer m? A program's class under it (`class MyH < Hash`) answers m by that method before a top-level def */
 int builtin_id_below_object_answers(int id, const char *m) {

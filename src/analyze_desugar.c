@@ -12590,13 +12590,49 @@ static int def_shape(const NodeTable *nt, int id) {
   if (fwd_subtree_uses_yield_or_block(nt, id)) sh |= 4;
   return sh;
 }
-static int def_shape_by_name(const NodeTable *nt, const char *name) {
-  int shape = -1;
-  for (int id = 0; id < nt->count; id++) {
-    if (!fwd_node_is(nt, id, "DefNode")) continue;
-    const char *nm = nt_str(nt, id, "name");
-    if (!nm || !sp_streq(nm, name)) continue;
-    int sh = def_shape(nt, id);
+/* The forwarding lowering's pass context: every def by name, sorted once (a forwarder's rewrite changes a def's
+   parameters, never the set of defs), and what a module's `super` reaches, asked of the load record once per
+   (module, name). */
+typedef struct { const char *name; int def; } FwdNamed;
+typedef struct { int holder; const char *name; int bits, nreach, reader, opaque; int *reach; } FwdSuper;
+typedef struct FwdCtx { Compiler *c; const NodeTable *nt; FwdNamed *named; int nnamed; FwdSuper *sup; int nsup, csup; } FwdCtx;
+static int fwd_named_cmp(const void *a, const void *b) {
+  const FwdNamed *p = a, *q = b;
+  int d = strcmp(p->name, q->name);
+  return d ? d : (p->def > q->def) - (p->def < q->def);
+}
+static void fwd_ctx_init(FwdCtx *fx, Compiler *c) {
+  const NodeTable *nt = c->nt;
+  int cap = 0;
+  memset(fx, 0, sizeof *fx);
+  fx->c = c; fx->nt = nt;
+  NT_FOREACH_KIND(nt, NK_DefNode, d) {
+    const char *nm = nt_str(nt, d, "name");
+    if (!nm) continue;
+    if (fx->nnamed == cap) {
+      cap = cap ? cap * 2 : 64;
+      if (!(fx->named = realloc(fx->named, sizeof *fx->named * (size_t)cap))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    }
+    fx->named[fx->nnamed++] = (FwdNamed){ nm, d };
+  }
+  if (fx->nnamed) qsort(fx->named, (size_t)fx->nnamed, sizeof *fx->named, fwd_named_cmp);
+}
+static void fwd_ctx_free(FwdCtx *fx) {
+  for (int i = 0; i < fx->nsup; i++) free(fx->sup[i].reach);
+  free(fx->sup); free(fx->named);
+}
+/* the defs named `name`: fx->named[*lo .. *hi) */
+static void fwd_named_range(const FwdCtx *fx, const char *name, int *lo, int *hi) {
+  int a = 0, b = fx->nnamed;
+  while (a < b) { int m = (a + b) / 2; if (strcmp(fx->named[m].name, name) < 0) a = m + 1; else b = m; }
+  for (b = a; b < fx->nnamed && !strcmp(fx->named[b].name, name); b++) {}
+  *lo = a; *hi = b;
+}
+static int def_shape_by_name(const FwdCtx *fx, const char *name) {
+  int lo, hi, shape = -1;
+  fwd_named_range(fx, name, &lo, &hi);
+  for (int k = lo; k < hi; k++) {
+    int sh = def_shape(fx->nt, fx->named[k].def);
     if (sh < 0) continue;
     if (shape >= 0 && shape != sh) return -2;
     shape = sh;
@@ -12607,23 +12643,20 @@ static int def_shape_by_name(const NodeTable *nt, const char *name) {
    receiver whose class is not known here may be any of them, and the
    anonymous `*, **, &` passes each exactly what the call had: an empty
    splat and an empty `**` pass nothing to a def that takes neither. */
-static int def_shape_union_by_name(const NodeTable *nt, const char *name) {
-  int shape = -1;
-  for (int id = 0; id < nt->count; id++) {
-    if (!fwd_node_is(nt, id, "DefNode")) continue;
-    const char *nm = nt_str(nt, id, "name");
-    if (!nm || !sp_streq(nm, name)) continue;
-    int sh = def_shape(nt, id);
+static int def_shape_union_by_name(const FwdCtx *fx, const char *name) {
+  int lo, hi, shape = -1;
+  fwd_named_range(fx, name, &lo, &hi);
+  for (int k = lo; k < hi; k++) {
+    int sh = def_shape(fx->nt, fx->named[k].def);
     if (sh < 0) continue;
     shape = shape < 0 ? sh : (shape | sh);
   }
   return shape;
 }
-static int fwd_any_def_named(const NodeTable *nt, const char *name) {
-  for (int id = 0; id < nt->count; id++)
-    if (fwd_node_is(nt, id, "DefNode") && nt_str(nt, id, "name") &&
-        sp_streq(nt_str(nt, id, "name"), name)) return 1;
-  return 0;
+static int fwd_any_def_named(const FwdCtx *fx, const char *name) {
+  int lo, hi;
+  fwd_named_range(fx, name, &lo, &hi);
+  return hi > lo;
 }
 static void fwd_key_add(char *key, size_t cap, const char *seg) {
   size_t n = strlen(key);
@@ -13317,44 +13350,22 @@ int desugar_extend_enumerable(Compiler *c, HostStep *h) {
   return changed;
 }
 
-/* The shape of instance method `name` as the class `ref` names from
-   namespace `ctx` (or its nearest superclass defining it) has it. Classes
-   are matched by namespace and name, before any scope exists. */
-static int fwd_class_method_shape(const NodeTable *nt, const char *ctx, int ref,
-                                  const char *refname, const char *name) {
-  char at[512], key[512];
-  snprintf(at, sizeof at, "%s", ctx);
-  for (int depth = 0; depth < 16; depth++) {
-    char found[512];
-    if (!fwd_resolve_class(nt, at, ref, refname, found, sizeof found)) return -1;
-    const char *cls = ref >= 0 ? nt_str(nt, ref, "name") : refname;
-    int shape = -1, next = -1, next_cls = -1;
-    for (int id = 0; id < nt->count; id++) {
-      if (!class_def_is_class(nt, id)) continue;
-      const char *cn = class_def_name(nt, id);
-      if (!cn || !sp_streq(cn, cls)) continue;
-      key[0] = '\0';
-      fwd_ns_key(nt, id, key, sizeof key);
-      if (!sp_streq(key, found)) continue;
-      if (next < 0 && class_def_super(nt, id) >= 0) { next = class_def_super(nt, id); next_cls = id; }
-      int bn = 0; const int *bv = nt_arr(nt, class_def_body(nt, id), "body", &bn);
-      for (int k = 0; k < bn; k++) {
-        int dk = fwd_body_def(nt, bv[k]);
-        if (dk < 0 || nt_ref(nt, dk, "receiver") >= 0) continue;
-        const char *dn = nt_str(nt, dk, "name");
-        if (!dn || !sp_streq(dn, name)) continue;
-        int sh = def_shape(nt, dk);
-        if (sh < 0 || (shape >= 0 && sh != shape)) return -2;
-        shape = sh;
-      }
+/* The shape of instance method `name` that class cls (the record's) reaches: its own def when own, else the first
+   owner after cls's own def (the `super` of cls's def). The record's chain is read: cls's prepends, own, includes,
+   then its superclass's, with the modules mixed in; a builtin's method or an owner the record cannot follow is
+   -1. A def that still takes `...` says nothing yet (-2). */
+static int fwd_class_method_shape(FwdCtx *fx, int cls, int own, const char *name) {
+  int *reach, nreach, reader, opaque;
+  int bits = elab_class_super_owner(fx->c, cls, own, name, &reach, &nreach, &reader, &opaque);
+  int shape = -1;
+  if (bits == (1 << MX_PROGRAM) && !opaque && !reader)
+    for (int k = 0; k < nreach; k++) {
+      int sh = def_shape(fx->nt, reach[k]);
+      if (sh < 0 || (shape >= 0 && sh != shape)) { shape = -2; break; }
+      shape = sh;
     }
-    if (shape >= 0) return shape;
-    if (next < 0) return -1;
-    at[0] = '\0';
-    fwd_lex_ctx(nt, next_cls, at, sizeof at);
-    ref = next; refname = NULL;
-  }
-  return -1;
+  free(reach);
+  return shape;
 }
 /* The ClassNode whose body holds `def` directly or under a visibility call,
    or -1. */
@@ -13368,14 +13379,15 @@ static int fwd_enclosing_class(const NodeTable *nt, int def) {
    and a positional rest when no class defines one. A class-value `new`
    passing `**` has no arm for a Struct or Data class, so the keyword
    channel is refused where one could be the receiver. */
-static int fwd_class_value_new_shape(const NodeTable *nt) {
-  int sh = def_shape_by_name(nt, "initialize");
-  if (sh == -1 && !fwd_any_def_named(nt, "initialize")) return 1;
+static int fwd_class_value_new_shape(const FwdCtx *fx) {
+  const NodeTable *nt = fx->nt;
+  int sh = def_shape_by_name(fx, "initialize");
+  if (sh == -1 && !fwd_any_def_named(fx, "initialize")) return 1;
   if (sh != -2) return sh;
-  int shape = 1;
-  for (int id = 0; id < nt->count; id++) {
-    const char *nm = nt_str(nt, id, "name");
-    int dsh = fwd_node_is(nt, id, "DefNode") && nm && sp_streq(nm, "initialize") ? def_shape(nt, id) : -1;
+  int shape = 1, lo, hi;
+  fwd_named_range(fx, "initialize", &lo, &hi);
+  for (int k = lo; k < hi; k++) {
+    int dsh = def_shape(nt, fx->named[k].def);
     if (dsh >= 0) shape |= dsh;
   }
   if (!(shape & 2)) return shape;
@@ -13502,12 +13514,61 @@ static int fwd_record_class_named(const NodeTable *nt, const char *name) {
   }
   return 0;
 }
-static int fwd_target_shape(const NodeTable *nt, int def, int call, int is_super) {
+/* A module's `super`'s memo: what the record says it reaches, asked once per (module, name) */
+static const FwdSuper *fwd_super_owners(FwdCtx *fx, int holder, const char *name) {
+  for (int i = 0; i < fx->nsup; i++)
+    if (fx->sup[i].holder == holder && !strcmp(fx->sup[i].name, name)) return &fx->sup[i];
+  if (fx->nsup == fx->csup) {
+    fx->csup = fx->csup ? fx->csup * 2 : 32;
+    if (!(fx->sup = realloc(fx->sup, sizeof *fx->sup * (size_t)fx->csup))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  }
+  FwdSuper *m = &fx->sup[fx->nsup++];
+  *m = (FwdSuper){ holder, name, 0, 0, 0, 0, NULL };
+  m->bits = elab_module_super_owners(fx->c, holder, name, &m->reach, &m->nreach, &m->reader, &m->opaque);
+  return m;
+}
+/* The shape of the `super` in module `holder`'s method `name`. It reaches the method of whatever follows the module at
+   each position the module has (an includer's, a prepender's, an extender's): the load record says which.
+     - Every position reaches a def of the program's, or none exists: the channels of the defs reached, so the
+       keywords a caller passes stay keywords. Left to the __fwd_N model, a mixin's `def process(...) = super` took
+       one slot per argument a caller passed, and handed `process("index")` on as `process("index", 0, 0)` with
+       keywords as positionals.
+     - Every position reaches a builtin's method: the __fwd_N model, the one shape a super into a builtin is
+       emitted in.
+     - Positions of both kinds, or one the record cannot read (a module mixed onto an object, a superclass it
+       does not know): see below. */
+static int fwd_module_super_shape(FwdCtx *fx, int holder, const char *name) {
+  const FwdSuper *m = fwd_super_owners(fx, holder, name);
+  int bi = m->bits & (1 << MX_BUILTIN), pr = m->bits & (1 << MX_PROGRAM);
+  int other = m->bits & ((1 << MX_NONE) | (1 << MX_UNKNOWN));
+  if (bi && !pr && !other) return -1;
+  if (!bi && !other) {
+    if (!pr || m->opaque) return def_shape_union_by_name(fx, name);
+    /* ...the defs the positions reach first, not every def of the name. A def that still takes `...` says
+       nothing yet, and then the name's defs are the answer */
+    int shape = m->reader ? 0 : -1;
+    for (int k = 0; k < m->nreach; k++) {
+      int sh = def_shape(fx->nt, m->reach[k]);
+      if (sh < 0) return def_shape_union_by_name(fx, name);
+      shape = shape < 0 ? sh : (shape | sh);
+    }
+    return shape >= 0 ? shape : def_shape_union_by_name(fx, name);
+  }
+  /* Neither shape is right for a position that reaches a builtin and another that reaches a def of the program's:
+     the union breaks the builtin position (a super into a builtin with a splat has no arm), the __fwd_N model
+     breaks the program one (keywords become positionals). The name rule below keeps what the lowering answered
+     before the record was read; it goes when a super into a builtin takes the union shape. */
+  if (builtin_object_method_known(name) || builtin_name_below_object(name) ||
+      is_initialize_name(name) || is_method_missing_name(name)) return -1;
+  return def_shape_union_by_name(fx, name);
+}
+static int fwd_target_shape(FwdCtx *fx, int def, int call, int is_super) {
+  const NodeTable *nt = fx->nt;
   const char *name = is_super ? nt_str(nt, def, "name") : nt_str(nt, call, "name");
   if (!name) return -1;
   if (!is_super && !sp_streq(name, "new")) {
-    if (!fwd_any_def_named(nt, name)) return FWD_BUILTIN;
-    int sh = def_shape_union_by_name(nt, name);
+    if (!fwd_any_def_named(fx, name)) return FWD_BUILTIN;
+    int sh = def_shape_union_by_name(fx, name);
     /* every def of the name a `...` forwarder (io-event's Timers::Handle
        `def call(...) = @block.call(...)`, its own name): a name that takes
        anything (a proc's call, a send) is forwarded as the builtin's, the
@@ -13519,7 +13580,6 @@ static int fwd_target_shape(const NodeTable *nt, int def, int call, int is_super
   }
   int recv = is_super ? -1 : nt_ref(nt, call, "receiver");
   int cls = fwd_enclosing_class(nt, def);
-  char ctx[512] = "";
   /* a `new` the class defines itself takes the arguments (#5405, #5410);
      a forwarder in `class << self` belongs to the class around that body */
   if (!is_super && (recv < 0 || fwd_node_is(nt, recv, "SelfNode"))) {
@@ -13536,39 +13596,25 @@ static int fwd_target_shape(const NodeTable *nt, int def, int call, int is_super
   }
   if (is_super) {
     if (nt_ref(nt, def, "receiver") >= 0) return -1;
-    /* A module's `super` reaches the method of each class including it,
-       which may be any def of the name: every channel one of them takes.
-       Left to the __fwd_N model, a mixin's `def process(...) = super` took
-       one slot per argument a caller passed, and handed `process("index")`
-       on as `process("index", 0, 0)` with keywords as positionals. A name a
-       builtin answers (a mixin's `to_s(...)`, `initialize`) may reach the
-       builtin, which keeps that model. */
     if (cls < 0) {
       int holder = fwd_lex_parent(nt, def);
-      if (holder < 0 || nt_kind(nt, holder) != NK_ModuleNode ||
-          builtin_object_method_known(name) || builtin_name_below_object(name) ||
-          sp_streq(name, "initialize") || sp_streq(name, "respond_to_missing?") ||
-          sp_streq(name, "method_missing")) return -1;
-      return def_shape_union_by_name(nt, name);
+      if (holder < 0 || nt_kind(nt, holder) != NK_ModuleNode) return -1;
+      return fwd_module_super_shape(fx, holder, name);
     }
-    fwd_lex_ctx(nt, cls, ctx, sizeof ctx);
-    return fwd_class_method_shape(nt, ctx, class_def_super(nt, cls), NULL, name);
+    return fwd_class_method_shape(fx, elab_header_class(fx->c, cls, NULL, NULL), 0, name);
   }
   if (recv < 0 || fwd_node_is(nt, recv, "SelfNode")) {
     if (nt_ref(nt, def, "receiver") < 0 || cls < 0) return -1;
-    fwd_ns_key(nt, cls, ctx, sizeof ctx);
-    return fwd_class_method_shape(nt, ctx, -1, class_def_name(nt, cls),
-                                  "initialize");
+    return fwd_class_method_shape(fx, elab_header_class(fx->c, cls, NULL, NULL), 1, "initialize");
   }
   if (fwd_node_is(nt, recv, "ConstantReadNode") || fwd_node_is(nt, recv, "ConstantPathNode")) {
-    fwd_lex_ctx(nt, def, ctx, sizeof ctx);
-    int sh = fwd_class_method_shape(nt, ctx, recv, NULL, "initialize");
+    int sh = fwd_class_method_shape(fx, elab_class_ref_at(fx->c, recv, NULL), 1, "initialize");
     /* a Struct or Data class with no initialize of its own takes both
        channels; left to the __fwd_N model, `Pair.new(...)` was refused */
     if (sh == -1 && fwd_record_class_named(nt, nt_str(nt, recv, "name"))) return 3;
     return sh;
   }
-  return fwd_class_value_new_shape(nt);
+  return fwd_class_value_new_shape(fx);
 }
 static void fwd_copy_loc(NodeTable *nt, int id, int like) {
   nt_node_set_int(nt, id, "node_line", nt_int(nt, like, "node_line", 0));
@@ -13625,6 +13671,7 @@ static int anon_fwd_rewrite(Compiler *c, int node, int parent, unsigned anon) {
     nt_node_set_int(nt, rd, "depth", 0);
     nt_node_set_ref(nt, node, field, rd);
     comp_grow_node_arrays(c);
+    c->nscope[rd] = c->nscope[node]; c->node_cbody[rd] = c->node_cbody[node];   /* (where it reads: the walk's, or after it) */
     return 1;
   }
   int changed = 0;
@@ -14539,7 +14586,7 @@ static int fwd_waits_on_forwarder(const NodeTable *nt, int def, int hi) {
 }
 /* One pass over the `...` forwarders, in source order. With `wait`, one
    whose target is still a `...` forwarder is left for a later pass. */
-static int fwd_rest_callee_pass(Compiler *c, int wait) {
+static int fwd_rest_callee_pass(Compiler *c, FwdCtx *fx, int wait) {
   NodeTable *nt = (NodeTable *)c->nt;
   int changed = 0;
   int n0 = nt->count;
@@ -14589,7 +14636,7 @@ static int fwd_rest_callee_pass(Compiler *c, int wait) {
       const char *cn = is_super ? dname : nt_str(nt, id, "name");
       int is_new = cn && sp_streq(cn, "new");
       if (is_new) cn = "initialize";
-      int sh = fwd_target_shape(nt, def, id, is_super);
+      int sh = fwd_target_shape(fx, def, id, is_super);
       if (sh == FWD_BUILTIN) {
         int arity = fwd_fixed_call_arity(nt, dname);
         int via = cn && (sp_streq(cn, "__send__") || sp_streq(cn, "send") ||
@@ -14676,7 +14723,7 @@ static int fwd_rest_callee_pass(Compiler *c, int wait) {
       nt_node_set_ref(nt, pn, "block", bp);
       /* the per-node arrays grow over the new parameters, as below */
       comp_grow_node_arrays(c);
-      for (int j = pbase; j < nt->count; j++) c->nscope[j] = c->nscope[def];
+      for (int j = pbase; j < nt->count; j++) { c->nscope[j] = elab_def_scope_of(c, def); c->node_cbody[j] = c->node_cbody[def]; }
       changed = 1;
       continue;
     }
@@ -14716,9 +14763,12 @@ static int fwd_rest_callee_pass(Compiler *c, int wait) {
       if (bp < 0) continue;
       nt_node_set_ref(nt, pn, "block", bp);
     }
+    /* the parameters stand in the method's scope */
+    comp_grow_node_arrays(c);
+    for (int j = base; j < nt->count; j++) { c->nscope[j] = elab_def_scope_of(c, def); c->node_cbody[j] = c->node_cbody[def]; }
     /* callee(x, ...) -> callee(x, *, **, &) */
     for (int k = 0; k < ncalls; k++) {
-      int call = calls[k];
+      int call = calls[k], cbase = nt->count;
       if (fwd_node_is(nt, call, "ForwardingSuperNode")) {
         int line = (int)nt_int(nt, call, "node_line", 0);
         int file = (int)nt_int(nt, call, "node_file", 0);
@@ -14775,9 +14825,10 @@ static int fwd_rest_callee_pass(Compiler *c, int wait) {
         nt_node_set_ref(nt, ba, "expression", -1);
         nt_node_set_ref(nt, call, "block", ba);
       }
+      /* ...and the call's arguments in the call's */
+      comp_grow_node_arrays(c);
+      for (int j = cbase; j < nt->count; j++) { c->nscope[j] = c->nscope[call]; c->node_cbody[j] = c->node_cbody[call]; }
     }
-    comp_grow_node_arrays(c);
-    for (int j = base; j < nt->count; j++) c->nscope[j] = c->nscope[def];
     changed = 1;
   }
   free(calls);
@@ -14793,8 +14844,11 @@ static int fwd_rest_callee_pass(Compiler *c, int wait) {
    yields), and is read as before, from the defs that do say. */
 int desugar_forwarding_to_rest_callee_at(Compiler *c, LowerCtx *lc, int id) {
   int changed = 0;
-  while (fwd_rest_callee_pass(c, 1)) changed = 1;
-  while (fwd_rest_callee_pass(c, 0)) changed = 1;
+  FwdCtx fx;
+  fwd_ctx_init(&fx, c);
+  while (fwd_rest_callee_pass(c, &fx, 1)) changed = 1;
+  while (fwd_rest_callee_pass(c, &fx, 0)) changed = 1;
+  fwd_ctx_free(&fx);
   return changed;
 }
 

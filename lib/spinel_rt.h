@@ -8442,16 +8442,29 @@ static sp_int sp_poly_arr_len(sp_RbVal a) {
 static sp_PolyArray *sp_poly_set_operand(sp_RbVal v);   /* fwd */
 static sp_PolyArray *sp_poly_product(sp_RbVal *arrs, sp_int n) {
   /* Each operand after the receiver is an Array, or converts through its
-     #to_ary, as CRuby converts every operand before it builds a tuple; a
-     value that is neither raises TypeError. Read as it was, an object
-     operand had length 0 and the product answered []. `conv` keeps the
-     converted Arrays alive, since `arrs` is the caller's and holds the
-     originals' roots only. */
-  sp_PolyArray *conv = NULL; SP_GC_ROOT(conv);
+     #to_ary, as CRuby converts every operand, in order, before it builds a
+     tuple. Anything else raises CRuby's TypeError, and so does a #to_ary
+     that answers a non-Array (nil included: the conversion is strict).
+     Read as it was, an object operand had length 0 and the product
+     answered []. `conv` keeps the converted Arrays alive, since `arrs` is
+     the caller's and roots only the originals; `got` and `pa` hold each
+     fresh value until it is in `conv`. */
+  sp_PolyArray *conv = n > 1 ? sp_PolyArray_new() : NULL; SP_GC_ROOT(conv);
+  sp_RbVal got = sp_box_nil(); SP_GC_ROOT_RBVAL(got);
+  sp_PolyArray *pa = NULL; SP_GC_ROOT(pa);
   for (sp_int i = 1; i < n; i++) {
-    if (arrs[i].tag == SP_TAG_OBJ && arrs[i].v.p && sp_poly_is_array_kind(arrs[i].cls_id)) continue;
-    sp_PolyArray *pa = sp_poly_set_operand(arrs[i]);
-    if (!conv) conv = sp_PolyArray_new();
+    sp_RbVal v = arrs[i];
+    if (v.tag == SP_TAG_OBJ && v.v.p && sp_poly_is_array_kind(v.cls_id)) continue;
+    if (sp_poly_is_user_obj(v) && v.v.p && sp_obj_to_ary_fn &&
+        sp_obj_to_ary_fn((sp_RbVal){ .tag = SP_TAG_OBJ, .cls_id = v.cls_id }).tag == SP_TAG_BOOL) {
+      got = sp_obj_to_ary_fn(v);
+      if (!(got.tag == SP_TAG_OBJ && got.v.p && sp_poly_is_array_kind(got.cls_id))) {
+        const char *cn = sp_poly_class_name(v);
+        sp_raise_cls("TypeError", sp_sprintf("can't convert %s to Array (%s#to_ary gives %s)", cn, cn, sp_poly_class_name(got)));
+      }
+      pa = sp_poly_to_poly_array(got);
+    }
+    else pa = sp_poly_set_operand(v);
     sp_PolyArray_push(conv, sp_box_poly_array(pa));
     arrs[i] = sp_box_poly_array(pa);
   }

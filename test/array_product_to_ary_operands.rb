@@ -41,3 +41,23 @@ z = [b, 1].first
 p z.product([3], Src.new(4, 5))
 p b.product(Src.new(5), [7]).size
 p b.product(Src.new, [7])
+# A #to_ary that builds a fresh Array each time: the converted Arrays stay
+# alive while the product is built
+class Fresh
+  def initialize(k); @k = k; end
+  def to_ary; [@k, @k + 1, @k + 2]; end
+end
+i = 0
+last = nil
+while i < 2000
+  last = b.product(Fresh.new(i), [7], Fresh.new(i * 2))
+  raise "bad #{last.inspect}" unless last.size == 18 && last[0] == [1, i, 7, i * 2]
+  i += 1
+end
+p last[0]
+p [[1, 2], "s"].first.product(Fresh.new(5), [8]).size
+# a #to_ary that answers nil is a TypeError (the conversion is strict)
+class NilAry; def to_ary; nil; end; end
+begin; b.product([9], NilAry.new); rescue TypeError => e; p e.message; end
+class PrivAry; private def to_ary; [5, 6]; end; end
+p b.product(PrivAry.new, [0])

@@ -130,3 +130,43 @@ rescue NoMethodError => e
 end
 many = Array.new(3000) { |k| "s" * (k % 9) }
 p chars(many), chars_each(many)
+
+# held through an ivar and through a field read; after a shift, whose
+# elements start past the slots it stepped over
+class Box
+  attr_reader :items, :names
+  def initialize(n)
+    @items = Array.new(n) { |i| User.new(i) }
+    @names = Array.new(n) { |i| "n" * (i % 4) }
+  end
+
+  def sum
+    s = 0
+    i = 0
+    while i < @items.size
+      s += @items[i].score + @names[i].size
+      i += 1
+    end
+    @items.each { |u| s += u.score }
+    s
+  end
+end
+
+def sum_field(b)
+  s = 0
+  i = 0
+  while i < b.items.size
+    s += b.items[i].score + b.names[i].bytesize
+    i += 1
+  end
+  s
+end
+
+box = Box.new(6)
+p box.sum, sum_field(box)
+sh = Array.new(8) { |k| User.new(k) }
+sh.shift
+sh.shift
+sw = %w[p q r s t]
+sw.shift
+p total(sh), total_each(sh), chars(sw), chars_each(sw)

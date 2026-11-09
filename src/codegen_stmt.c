@@ -12610,8 +12610,8 @@ int hc_array(Compiler *c, int recv, int is_float, char *d, char *l, char *w, siz
 }
 
 /* An Array of objects, a table of rows (ty_is_ptr_array) or an Array of
-   Strings, whose elements are pointers: its elements (_hcd) and length
-   (_hcl); _hcr is the length too */
+   Strings, whose elements are pointers (a nil is a NULL, with no bit beside
+   it, so no nil-free length): its elements (_hcd) and length (_hcl) */
 int hc_ptr_array(Compiler *c, int recv, char *d, char *l, size_t cap) {
   TyKind t = recv >= 0 ? comp_ntype(c, recv) : TY_UNKNOWN;
   if (!ty_is_ptr_array(t) && t != TY_STR_ARRAY) return 0;
@@ -13010,9 +13010,6 @@ static void hc_close(HcRegion *r, const char *loop, Buf *b, int indent) {
          compiler carried and tested at every store */
       if (r->e[i].kind == HC_INT || r->e[i].kind == HC_FLOAT)
         buf_printf(b, " sp_int _hcw%d_%d; sp_int _hcr%d_%d;", r->id, i, r->id, i);
-      /* _hcr of an Array of objects, a table or an Array of Strings: its
-         length (a nil element is a NULL, no bit beside it) */
-      if (r->e[i].kind == HC_PTR) buf_printf(b, " sp_int _hcr%d_%d;", r->id, i);
       /* _hcw of a buffer: how many of its bytes a write may store into */
       if (r->e[i].kind == HC_IOB) buf_printf(b, " sp_int _hcw%d_%d;", r->id, i);
       /* _hcwn: _hcn, unless the array is frozen (0) */
@@ -13026,8 +13023,8 @@ static void hc_close(HcRegion *r, const char *loop, Buf *b, int indent) {
         buf_printf(&rd, "{ const char *_s = %s; _hcd%d_%d = _s; _hcl%d_%d = _s ? (sp_int)sp_str_byte_len(_s) : 0; } ",
                    rv, r->id, i, r->id, i);
       else if (r->e[i].kind == HC_PTR)
-        buf_printf(&rd, "{ __typeof__(%s) _a = %s; _hcd%d_%d = _a ? (void **)_a->data : NULL; _hcl%d_%d = _hcr%d_%d = _a ? _a->len : 0; } ",
-                   rv, rv, r->id, i, r->id, i, r->id, i);
+        buf_printf(&rd, "{ __typeof__(%s) _a = %s; _hcd%d_%d = _a ? (void **)_a->data : NULL; _hcl%d_%d = _a ? _a->len : 0; } ",
+                   rv, rv, r->id, i, r->id, i);
       else if (r->e[i].kind == HC_IOB)
         buf_printf(&rd, "{ sp_IOBuffer *_b = %s; _hcd%d_%d = sp_iob_view(_b, &_hcl%d_%d); _hcw%d_%d = sp_iob_view_wlen(_b, _hcl%d_%d); } ",
                    rv, r->id, i, r->id, i, r->id, i, r->id, i);

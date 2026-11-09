@@ -172,7 +172,7 @@ static SP_NOINLINE void sp_IntArray_set_cap(sp_IntArray*a,sp_int nc){sp_gc_hdr*h
    a queue held at its capacity would otherwise copy every element on every
    push. */
 static SP_NOINLINE void sp_IntArray_push_grow(sp_IntArray*a){if(a->start>0){memmove(a->data,a->data+a->start,sizeof(sp_int)*a->len);if(SP_UNLIKELY(a->nilbits))SP_NILBITS_MOVE_A(a, a->cap, a->start, 0, a->len);a->start=0;if(a->cap-a->len>=a->len)return;}sp_IntArray_set_cap(a,a->cap*2+1);}
-static inline void sp_IntArray_push(sp_IntArray*a,sp_int v){if(a->frozen){sp_raise_frozen_array_at(a, SP_BUILTIN_INT_ARRAY);return;}if(a->start+a->len>=a->cap)sp_IntArray_push_grow(a);a->data[a->start+a->len]=v;a->len++;}
+static inline void sp_IntArray_push(sp_IntArray*a,sp_int v){if(a->frozen){sp_raise_frozen_array_at(a, SP_BUILTIN_INT_ARRAY);return;}sp_int l=SP_ARR_LEN_ONCE(a);if(a->start+l>=a->cap)sp_IntArray_push_grow(a);a->data[a->start+l]=v;a->len=l+1;}
 /* Array.new(n, v): the buffer is allocated at its final size and filled in
    place, where n pushes grew it from 16 by doubling -- a realloc and a copy
    at every step, and a frozen and a capacity test per element. */
@@ -349,7 +349,7 @@ static void sp_FloatArray_init_embedded(sp_FloatArray*a){a->cap=16;a->data=(sp_f
    as well when they are more (nc is twice the room). The bits (made at cap,
    and never there while a shift steps) count from data, so they stay */
 static SP_NOINLINE void sp_FloatArray_set_cap(sp_FloatArray*a,sp_int nc){sp_gc_hdr*h=(sp_gc_hdr*)((char*)a-sizeof(sp_gc_hdr));sp_int bc=a->cap;if(a->head>0){SP_ARR_REBASE(a);if(nc<=a->cap){if(SP_UNLIKELY(a->nilbits))a->nilbits=sp_nilbits_resize(a,a->nilbits,bc,a->cap);return;}}sp_int oc=a->cap;if((uintmax_t)nc>SIZE_MAX/sizeof(sp_float))sp_oom_die();sp_gc_bytes_sub(sizeof(sp_float)*oc);h->size-=sizeof(sp_float)*oc;void*nd=sp_pl_realloc(a->data,sizeof(sp_float)*nc);if(!nd)sp_oom_die();a->data=(sp_float*)nd;a->cap=nc;h->size+=sizeof(sp_float)*nc;sp_gc_bytes_add(sizeof(sp_float)*nc);if(SP_UNLIKELY(a->nilbits))a->nilbits=sp_nilbits_resize(a,a->nilbits,bc,nc);}
-static inline void sp_FloatArray_push(sp_FloatArray*a,sp_float v){if(a->frozen){sp_raise_frozen_array_at(a, SP_BUILTIN_FLT_ARRAY);return;}if(a->len>=a->cap)sp_FloatArray_set_cap(a,a->cap*2+1);a->data[a->len++]=v;}
+static inline void sp_FloatArray_push(sp_FloatArray*a,sp_float v){if(a->frozen){sp_raise_frozen_array_at(a, SP_BUILTIN_FLT_ARRAY);return;}sp_int l=SP_ARR_LEN_ONCE(a);if(l>=a->cap)sp_FloatArray_set_cap(a,a->cap*2+1);a->data[l]=v;a->len=l+1;}
 /* Array.new(n, v): see sp_IntArray_new_fill */
 static sp_FloatArray*sp_FloatArray_new_fill(sp_int n,sp_float v){if((uintmax_t)n>SIZE_MAX/sizeof(sp_float))sp_oom_die();sp_FloatArray*a=sp_FloatArray_new_cap(n);for(sp_int i=0;i<n;i++)a->data[i]=v;a->len=n;return a;}
 static SP_COLD sp_FloatArray*sp_FloatArray_new_nil(sp_int n){sp_FloatArray*a=sp_FloatArray_new_fill(n,0.0);if(n>0){SP_NILBITS_NEW_A(a);SP_NILBITS_SET_RANGE_A(a, 0, n);}return a;}

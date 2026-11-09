@@ -11583,6 +11583,10 @@ static int desugar_str_range_methods(Compiler *c) {
     int recv = nt_ref(nt, id, "receiver");
     if (!nm || recv < 0) continue;
     if (infer_type(c, recv) != TY_STR_RANGE) continue;
+    /* a program's Enumerable method that Range has none of runs with the
+       RANGE as self, as it does for an Integer Range (Range#to_set checks
+       for an endless range and then calls Enumerable's) */
+    if (an_enum_prog_method(c, nm) && (!builtin_method_known("Range", nm) || sp_streq(nm, "to_set"))) continue;
     /* `range % n { }` is `range.step(n) { }` (#3671): the walk has no row of
        its own under the `%` name, so name it what it is. The blockless form is
        the `%` row's, whose Enumerator inspects as `%(n)`. */

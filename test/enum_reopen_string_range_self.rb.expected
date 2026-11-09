@@ -1,0 +1,10 @@
+[:range, "a".."d"]
+[:range, "a".."c"]
+[Range, "a"]
+[Range, 1]
+["aa", "bb", "cc", "dd"]
+8
+XYZ
+3
+[Range, "a"]
+[:range, "m".."n"]

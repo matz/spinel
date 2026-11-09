@@ -4834,6 +4834,12 @@ static void cf_node(CF *f, int v) {
       cf_self_new(f, v, s->class_id, argv2, argc2, blk, "new", k == NK_ForwardingSuperNode ? mi : -1);
       return;
     }
+    /* a super in a class's own `allocate` that reaches Class#allocate
+       builds the receiving class, with no initialize */
+    if (s->is_cmethod && s->class_id >= 0 && allocate_super_reaches_class(c, v)) {
+      cf_self_new(f, v, s->class_id, NULL, 0, -1, "allocate", -1);
+      return;
+    }
     if (!anc_user && !(s->is_cmethod && sp_streq(s->name, "new"))) {
       int ik = s->is_cmethod ? -1 : cf_inst_class(f, mi);
       int recv_el = ik >= 0 && !cf_selfless_fn(s->name) ? f->self_el[ik] : -1;

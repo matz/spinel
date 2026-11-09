@@ -7,3 +7,6 @@ in Foo
 "Foo"
 "Foo.bar"
 Sub
+["Pv.pv", "Pv.sp", "Pv.pt"]
+"Foo.bar"
+NoMethodError

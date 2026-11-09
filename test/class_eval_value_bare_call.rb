@@ -24,3 +24,27 @@ p A.u
 p Foo.class_eval { name }
 p Foo.module_eval { bar }
 p Sub.class_eval { make.class }
+
+# Private and protected class methods: a bare call reaches them.
+class Pv
+  def self.pv = "Pv.pv"
+  private_class_method :pv
+  class << self
+    private def sp = "Pv.sp"
+    protected def pt = "Pv.pt"
+  end
+end
+class SubPv < Foo
+  private_class_method :bar
+end
+class B
+  def self.pv = "B.pv"
+  def self.sp = "B.sp"
+  def self.pt = "B.pt"
+  def self.bar = "B.bar"
+  def self.k = Pv.class_eval { [pv, sp, pt] }
+  def self.m = SubPv.class_eval { bar }
+end
+p B.k
+p B.m
+p((Pv.pv rescue $!.class))

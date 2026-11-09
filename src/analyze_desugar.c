@@ -6127,12 +6127,13 @@ static const char *engine_body_class(NodeTable *nt, int stmt) {
   return NULL;
 }
 
-static int me_record_defines(const NodeTable *nt, const char *cls, const char *m, int in, int *is_data);
-static int engine_method_absent(NodeTable *nt, const char *cls, const char *m, int in, int depth) {
+static int me_record_defines(Compiler *c, const char *cls, const char *m, int in, int *is_data);
+static int engine_method_absent(Compiler *c, const char *cls, const char *m, int in, int depth) {
+  NodeTable *nt = (NodeTable *)c->nt;
   if (builtin_method_known(cls, m) || me_body_defines(nt, cls, m, in)) return 0;
   /* a Struct's or Data's members, the defs in its block, and the methods
      Struct or Data gives every instance (each, with ...) */
-  int data = 0, rec = me_record_defines(nt, cls, m, in, &data);
+  int data = 0, rec = me_record_defines(c, cls, m, in, &data);
   /* (a record the fold cannot read leaves the question to the steps below) */
   if (rec > 0) return 0;
   if (data >= 0) {
@@ -6153,14 +6154,14 @@ static int engine_method_absent(NodeTable *nt, const char *cls, const char *m, i
     const char *nm = class_def_name(nt, id);
     if (!class_def_opens_frame(nt, id) || !nm || !sp_streq(nm, cls)) continue;
     int sc = class_def_super(nt, id), bn = 0;
-    if (sc >= 0) a = nt_kind(nt, sc) == NK_ConstantReadNode ? engine_method_absent(nt, nt_str(nt, sc, "name"), m, in, depth + 1) : -1;
+    if (sc >= 0) a = nt_kind(nt, sc) == NK_ConstantReadNode ? engine_method_absent(c, nt_str(nt, sc, "name"), m, in, depth + 1) : -1;
     const int *b = nt_arr(nt, class_def_body(nt, id), "body", &bn);
     for (int i = 0; i < bn && a > 0; i++) {
       const char *n = nt_kind(nt, b[i]) == NK_CallNode && nt_ref(nt, b[i], "receiver") < 0 ? nt_str(nt, b[i], "name") : NULL;
       if (!n || (!sp_streq(n, "include") && !sp_streq(n, "prepend"))) continue;
       int ac = 0; const int *av = nt_arr(nt, nt_ref(nt, b[i], "arguments"), "arguments", &ac);
       for (int k = 0; k < ac && a > 0; k++)
-        a = nt_kind(nt, av[k]) == NK_ConstantReadNode ? engine_method_absent(nt, nt_str(nt, av[k], "name"), m, in, depth + 1) : -1;
+        a = nt_kind(nt, av[k]) == NK_ConstantReadNode ? engine_method_absent(c, nt_str(nt, av[k], "name"), m, in, depth + 1) : -1;
     }
   }
   return a;
@@ -6406,7 +6407,8 @@ static int me_top_stmt(const NodeTable *nt, int id) {
   }
   return 0;
 }
-static int me_record_defines(const NodeTable *nt, const char *cls, const char *m, int in, int *is_data) {
+static int me_record_defines(Compiler *c, const char *cls, const char *m, int in, int *is_data) {
+  const NodeTable *nt = c->nt;
   int found = 0, unknown = 0, rec = 0, data = -1;
   for (int id = 0; id < nt->count; id++) {
     if (nt_kind(nt, id) != NK_ConstantWriteNode || subtree_has(nt, in, id)) continue;
@@ -6423,6 +6425,21 @@ static int me_record_defines(const NodeTable *nt, const char *cls, const char *m
       NodeKind ak = nt_kind(nt, av[a]);
       /* (keyword_init: and the like) */
       if (ak == NK_KeywordHashNode) continue;
+      /* `Struct.new(*MEMS)`: the names the splat's list resolves to, as
+         register_struct_members reads them (a list it cannot read is
+         refused there) */
+      if (ak == NK_SplatNode) {
+        const char *syms[128];
+        int se = nt_ref(nt, av[a], "expression");
+        int sn = se >= 0 ? resolve_symbol_list(c, se, syms, 128, 0) : -1;
+        if (sn < 0) { unknown = 1; continue; }
+        for (int k = 0; k < sn; k++) {
+          size_t sl = syms[k] ? strlen(syms[k]) : 0;
+          if (syms[k] && (sp_streq(syms[k], m) || (!data && !strncmp(syms[k], m, sl) && sp_streq(m + sl, "="))))
+            found = 1;
+        }
+        continue;
+      }
       const char *v = ak == NK_SymbolNode ? nt_str(nt, av[a], "value") : ak == NK_StringNode ? nt_str(nt, av[a], "content") : NULL;
       if (!v) { unknown = 1; continue; }
       size_t vl = strlen(v);
@@ -6449,10 +6466,11 @@ static int me_record_defines(const NodeTable *nt, const char *cls, const char *m
    `cls` outside guard `in`, its ancestors not asked? 0 present, 1 absent, -1
    not known: a class of the runtime's, whose own methods are not listed per
    class here, or one the program does not define. */
-static int engine_method_own_absent(NodeTable *nt, const char *cls, const char *m, int in) {
+static int engine_method_own_absent(Compiler *c, const char *cls, const char *m, int in) {
+  NodeTable *nt = (NodeTable *)c->nt;
   if (me_body_defines(nt, cls, m, in)) return 0;
   /* (a Struct's or Data's members and the defs in its block are its own) */
-  if (me_record_defines(nt, cls, m, in, NULL) > 0) return 0;
+  if (me_record_defines(c, cls, m, in, NULL) > 0) return 0;
   if (is_builtin_class_name(cls) || is_builtin_module_name(cls) || builtin_class_id(cls)) return -1;
   return me_leaf_defined(nt, cls) ? 1 : -1;
 }
@@ -6472,8 +6490,8 @@ static int engine_absent(Compiler *c, int e, int in) {
     int ok = ac == 1 || own || (ac == 2 && nt_kind(nt, av[1]) == NK_TrueNode);
     const char *m = !ok ? NULL : nt_kind(nt, av[0]) == NK_SymbolNode ? nt_str(nt, av[0], "value") :
                     nt_kind(nt, av[0]) == NK_StringNode ? nt_str(nt, av[0], "content") : NULL;
-    int a = !cls || !m ? -1 : own ? engine_method_own_absent(nt, cls, m, in) :
-            builtin_object_method_known(m) ? 0 : engine_method_absent(nt, cls, m, in, 0);
+    int a = !cls || !m ? -1 : own ? engine_method_own_absent(c, cls, m, in) :
+            builtin_object_method_known(m) ? 0 : engine_method_absent(c, cls, m, in, 0);
     /* (a def elsewhere could reach the class through a mixin; not asked of the own bodies alone) */
     if (a > 0 && !own)
       for (int id = 0; id < nt->count; id++)

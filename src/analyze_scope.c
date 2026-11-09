@@ -2593,7 +2593,7 @@ static const char *rsl_block_sends_to_self(const NodeTable *nt, int bk) {
   const char *rv = r >= 0 && nt_kind(nt, r) == NK_LocalVariableReadNode ? nt_str(nt, r, "name") : NULL;
   return pn && rv && sp_streq(pn, rv) ? nt_str(nt, st[0], "name") : NULL;
 }
-static int resolve_symbol_list(Compiler *c, int node, const char **out, int cap, int depth) {
+int resolve_symbol_list(Compiler *c, int node, const char **out, int cap, int depth) {
   const NodeTable *nt = c->nt;
   if (node < 0 || depth > 8) return -1;
   const char *ty = nt_type(nt, node);

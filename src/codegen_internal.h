@@ -2129,6 +2129,7 @@ int emit_gsub_block_expr(Compiler *c, int id, Buf *b);
 int subtree_reads_match_globals(Compiler *c, int root);
 int emit_sum_block_expr(Compiler *c, int id, Buf *b);
 int emit_sum_block_poly_expr(Compiler *c, int id, Buf *b);
+int emit_sum_of_map_expr(Compiler *c, int id, Buf *b);
 int emit_slice_when_chunk_inspect_expr(Compiler *c, int id, Buf *b);
 int emit_product_inspect_expr(Compiler *c, int id, Buf *b);
 int emit_step_array_expr(Compiler *c, int id, Buf *b);

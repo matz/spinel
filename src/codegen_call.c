@@ -35128,6 +35128,7 @@ static void emit_call_body_ordinary(Compiler *c, int id, Buf *b) {
   if (emit_or_take_back(c, id, b, emit_slice_when_chunk_inspect_expr)) return;
   if (emit_or_take_back(c, id, b, emit_product_inspect_expr)) return;
   if (emit_or_take_back(c, id, b, emit_bsearch_expr)) return;
+  if (emit_or_take_back(c, id, b, emit_sum_of_map_expr)) return;
   if (emit_or_take_back(c, id, b, emit_sum_block_poly_expr)) return;
   if (emit_or_take_back(c, id, b, emit_sum_block_expr)) return;
   if (emit_or_take_back(c, id, b, emit_transform_hash_expr)) return;

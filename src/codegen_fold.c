@@ -2155,6 +2155,7 @@ int emit_sum_block_poly_expr(Compiler *c, int id, Buf *b) {
   if (blv) lv_set_type(blv, saved);
   return 1;
 }
+static int emit_sum_block_over(Compiler *c, int id, int recv, int block, Buf *b);
 /* array.sum([init]) { |x| f(x) } as an expression: sum the block's result
    over every element. Returns 1 if handled. */
 int emit_sum_block_expr(Compiler *c, int id, Buf *b) {
@@ -2165,11 +2166,44 @@ int emit_sum_block_expr(Compiler *c, int id, Buf *b) {
   if (!name || !sp_streq(name, "sum")) return 0;
   int recv = nt_ref(nt, id, "receiver");
   if (recv < 0) return 0;
+  return emit_sum_block_over(c, id, recv, block, b);
+}
+/* `recv.map { blk }.sum`, the map the analysis wrote for a boxed array's
+   `sum { blk }` (sum_map, which types and narrows as a map does): one walk
+   over recv that adds each block value as it comes, as CRuby's sum does,
+   rather than the mapped array built first. */
+int emit_sum_of_map_expr(Compiler *c, int id, Buf *b) {
+  const NodeTable *nt = c->nt;
+  const char *name = nt_str(nt, id, "name");
+  int map = nt_ref(nt, id, "receiver"), args = nt_ref(nt, id, "arguments");
+  if (!name || !sp_streq(name, "sum") || nt_ref(nt, id, "block") >= 0 || args >= 0 ||
+      map < 0 || nt_kind(nt, map) != NK_CallNode || !nt_int(nt, map, "sum_map", 0)) return 0;
+  int recv = nt_ref(nt, map, "receiver");
+  int block = resolve_forwarded_block(c, nt_ref(nt, map, "block"));
+  if (recv < 0 || block < 0) return 0;
+  return emit_sum_block_over(c, id, recv, block, b);
+}
+/* The sum of `block`'s values over the elements of `recv`, the call `id`
+   answering it (its arguments the seed). */
+static int emit_sum_block_over(Compiler *c, int id, int recv, int block, Buf *b) {
+  const NodeTable *nt = c->nt;
   Repr rr = repr_of(c, recv);
   TyKind rt = rr.as_ty;
-  if (!ty_is_array(rt)) return 0;
-  const char *k = rr.elem == TY_POLY ? "Poly" : array_kind(rt);
+  /* an Array of objects, or a table's rows: each element is an sp_X *,
+     bound as the walks bind it, into a block of one plain parameter whose
+     slot holds that pointer. A row a block takes apart, or a parameter
+     held as anything else, keeps its own emitter. */
+  if (!ty_is_array(rt) && !ty_is_ptr_array(rt)) return 0;
+  const char *k = rr.elem == TY_POLY ? "Poly" : array_iter_kind(rt);
   if (!k) return 0;
+  if (sp_streq(k, "Ptr")) {
+    const char *bp = block_param_name(c, block, 0);
+    if (block_param_name(c, block, 1) || block_param_is_multi(c, block, 0) || block_rest_name(c, block))
+      return 0;
+    Scope *bsc = bp ? comp_scope_of(c, block) : NULL;
+    LocalVar *blv = bsc ? scope_local(bsc, bp) : NULL;
+    if (bp && (!blv || blv->type != ty_array_elem(rt))) return 0;
+  }
   const char *p0 = block_param_name(c, block, 0); if (p0) p0 = rename_local(p0);
   int body = nt_ref(nt, block, "body");
   int bn = 0; const int *bb = body >= 0 ? nt_arr(nt, body, "body", &bn) : NULL;

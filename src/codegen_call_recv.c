@@ -4809,6 +4809,9 @@ static int emit_str_mutator_call(Compiler *c, int id, Buf *b, const NodeTable *n
       str_bang_plain(name, sb_plain, sizeof sb_plain);
     }
     int sb_nil_nc = !(sb_fl & PF_STR_SELF);
+    /* a bang that writes only a change (scrub!): a frozen receiver raises
+       when the transform would change it, and is otherwise left alone */
+    int sb_same_ok = (sb_fl & PF_SAME_OK) != 0;
     int sb_sub = sbi >= 0 && (sp_streq(sb_bang, "gsub!") || sp_streq(sb_bang, "sub!"));
     /* gsub!(pattern) with no replacement and no block answers an
        Enumerator, which its own arm builds: the value form below answers
@@ -4894,8 +4897,9 @@ static int emit_str_mutator_call(Compiler *c, int id, Buf *b, const NodeTable *n
              itself and every successful mutation answered nil (#4014). */
           int tchg = ++g_tmp;
           buf_printf(b, "const char *_t%d = %s; ", tnb, nbB.p ? nbB.p : "");
-          if (sb_nil_nc)
+          if (sb_nil_nc || sb_same_ok)
             buf_printf(b, "int _t%d = !sp_str_eq(_t%d, _t%d)%s; ", tchg, tob, tnb, smB);
+          if (sb_same_ok) buf_printf(b, "if (_t%d) ", tchg);
           buf_printf(b, "sp_String_set_bin(_t%d, _t%d); ", tsb, tnb);
           free(nbB.p);
           /* (one representation: a bang answers its receiver, the String the
@@ -4936,7 +4940,7 @@ static int emit_str_mutator_call(Compiler *c, int id, Buf *b, const NodeTable *n
          mutability check reads a NULL as */
       if (!lvw) buf_printf(b, "if (!_t%d) sp_nil_recv(\"%s\"); ", to, sb_bang);
       /* an in-place mutator on a frozen string raises FrozenError (#3003) */
-      buf_printf(b, "if (sp_str_is_frozen_val(_t%d)) sp_raise_frozen_str(_t%d); ", to, to);
+      if (!sb_same_ok) buf_printf(b, "if (sp_str_is_frozen_val(_t%d)) sp_raise_frozen_str(_t%d); ", to, to);
       int subm2 = sb_sub;   /* gsub!/sub!: nil means no substitution, see above */
       if (subm2) buf_puts(g_pre ? g_pre : b, "sp_re_sub_matched = 0; ");
       char *sv_nm = nt_node_swap_str((NodeTable *)nt, id, "name", sb_plain);
@@ -4957,6 +4961,10 @@ static int emit_str_mutator_call(Compiler *c, int id, Buf *b, const NodeTable *n
       nt_node_restore_str((NodeTable *)nt, id, "name", sv_nm);
       buf_printf(b, "const char *_t%d = %s; ", tn2, nb.p ? nb.p : "");
       free(nb.p);
+      /* (an unchanged String stays the receiver's own, which the write-back
+         tests by pointer; a changed one in a frozen receiver raises) */
+      if (sb_same_ok)
+        buf_printf(b, "if (sp_str_eq(_t%d, _t%d)) _t%d = _t%d; else if (sp_str_is_frozen_val(_t%d)) sp_raise_frozen_str(_t%d); ", to, tn2, tn2, to, to, to);
       /* --share-strings: a write into a shared handle changes the
          receiver's bytes where they are that handle's buffer (`($t <<
          x).upcase!`), so "did it change?" is decided ahead of it, as the
@@ -8471,38 +8479,6 @@ int emit_scalar_call(Compiler *c, int id, Buf *b) {
   }
   return done;
 }
-/* scrub! mutates in place, so a frozen receiver raises -- but only when
-   it would actually replace something: CRuby returns a frozen string
-   with no invalid bytes unchanged (#3333, #3338). The scrubbed text goes
-   back into the receiver, a shared String's buffer (a reader call's
-   handle among them) or an assignable one, as the other bang methods'
-   does; it only answered the scrubbed copy. A handle a call can answer as
-   nil raises NoMethodError first (strbuf_pickup_nil_check). */
-static int emit_scrub_bang(Compiler *c, int recv, TyKind rt, int argc, const int *argv, Buf *b) {
-  Buf srefS; memset(&srefS, 0, sizeof srefS);
-  int tsc = ++g_tmp;
-  Buf rpl; memset(&rpl, 0, sizeof rpl);
-  if (argc == 1) emit_str_expr_nilable(c, argv[0], &rpl); else buf_puts(&rpl, "0");
-  const char *rp = rpl.p ? rpl.p : "0";
-  int done = 1;
-  if (strbuf_pickup_nil_check(c, "scrub!", recv, &srefS))
-    buf_printf(b, "({ sp_String *_t%d = SP_STR_HDL(%s); const char *_t%dr = sp_str_scrub_bang(sp_String_cstr(_t%d), %s);"
-                  " if (_t%dr != sp_String_cstr(_t%d)) sp_String_set_bin(_t%d, _t%dr); sp_strbuf_read_pub(_t%d); })",
-               tsc, srefS.p, tsc, tsc, rp, tsc, tsc, tsc, tsc, tsc);
-  else if (rt != TY_STRING) done = 0;
-  else if (str_mut_var_recv(c, recv) || sb_shadowed_reader(recv)) {
-    buf_printf(b, "({ const char *_t%d = sp_str_scrub_bang(", tsc);
-    emit_expr(c, recv, b); buf_printf(b, ", %s); ", rp);
-    emit_expr(c, recv, b); buf_printf(b, " = _t%d; _t%d; })", tsc, tsc);
-  }
-  else {
-    buf_puts(b, "sp_str_scrub_bang("); emit_expr(c, recv, b); buf_printf(b, ", %s)", rp);
-  }
-  free(rpl.p);
-  free(srefS.p);
-  return done;
-}
-
 /* A String receiver's conversions and comparisons: lines with keywords,
    bytes, codepoints, unpack / unpack1, chars, to_i, eql? and equal?
    (emit_scalar_recv_arms's String chain; answers 1 when a branch was taken) */
@@ -11165,9 +11141,6 @@ static int emit_scalar_call_arms(Compiler *c, int id, Buf *b) {
   const int *argv = call_args(nt, id, &argc);
   TyKind rt = comp_recv_type(c, recv);
   TyKind a0 = argc >= 1 ? comp_ntype(c, argv[0]) : TY_UNKNOWN;
-  if (recv >= 0 && (rt == TY_STRING || rt == TY_STRBUF) && name &&
-      sp_streq(name, "scrub!") && argc <= 1 && emit_scrub_bang(c, recv, rt, argc, argv, b))
-    return 1;
   { int r; if (emit_scalar_recv_arms(c, id, b, nt, name, recv, argc, argv, rt, a0, &r)) return r; }
   return 0;
 }

@@ -25100,8 +25100,9 @@ static int str_mutate_append_bang_arms(Compiler *c, int id, Buf *b, int indent, 
        gsub!) keeps its ArgumentError */
     const char *base = NULL;
     char st_plain[64];
-    if (ty_str_typed_bang_flags(name) && !(ty_str_bang_flags(name) & PF_STR_SELF) &&
-        builtin_arity_admits("String", name, 0)) {
+    unsigned typed_fl = ty_str_typed_bang_flags(name);
+    if (typed_fl && !(ty_str_bang_flags(name) & PF_STR_SELF) &&
+        !(typed_fl & PF_SAME_OK) && builtin_arity_admits("String", name, 0)) {
       str_bang_plain(name, st_plain, sizeof st_plain);
       base = st_plain;
     }

@@ -51589,6 +51589,46 @@ static void an_phase_infer_fixpoint(Compiler *c) {
   if (AN_PASS("an_settle_seed_boxes", an_settle_seed_boxes(c))) an_phase_infer_fixpoint(c);
 }
 
+/* Can a call leave out positional optional parameter i of method scope
+   sc, so the parameter takes its default? 1 unless every call of the
+   method's name (an_scope_call_candidates: its aliases too, and `new`
+   for initialize) passes it by position with no splat. A block, a
+   lambda, a keyword parameter and a method with a rest or post
+   parameter answer 1. A call this list does not see (a send) only keeps
+   the parameter unboxed, as it was. */
+static int nil_default_maybe_taken(Compiler *c, Scope *sc, int i) {
+  const NodeTable *nt = c->nt;
+  if (!sc->name || sc->def_node < 0 || nt_kind(nt, sc->def_node) != NK_DefNode ||
+      sc->rest_idx >= 0 || i < 0 || i >= sc->nparams) return 1;
+  int pn = nt_ref(nt, sc->def_node, "parameters");
+  if (pn < 0) return 1;
+  int nr = 0, no = 0, np = 0;
+  nt_arr(nt, pn, "requireds", &nr);
+  const int *opts = nt_arr(nt, pn, "optionals", &no);
+  nt_arr(nt, pn, "posts", &np);
+  if (np > 0) return 1;
+  int pos = -1;
+  for (int k = 0; k < no; k++)
+    if (nt_str(nt, opts[k], "name") && sp_streq(nt_str(nt, opts[k], "name"), sc->pnames[i])) pos = nr + k;
+  if (pos < 0) return 1;
+  int nc = 0, taken = 0;
+  int *cands = an_scope_call_candidates(c, sc, &nc);
+  for (int k = 0; k < nc && !taken; k++) {
+    int u = cands[k];
+    if (nt_kind(nt, u) != NK_CallNode) { taken = 1; break; }
+    int args = nt_ref(nt, u, "arguments"), an = 0, npos = 0;
+    const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &an) : NULL;
+    for (int a = 0; a < an; a++) {
+      NodeKind ak = nt_kind(nt, av[a]);
+      if (ak == NK_SplatNode || ak == NK_ForwardingArgumentsNode) { taken = 1; break; }
+      if (ak != NK_KeywordHashNode && ak != NK_BlockArgumentNode) npos++;
+    }
+    if (npos <= pos) taken = 1;
+  }
+  free(cands);
+  return taken;
+}
+
 /* After the fixpoint: the backstops for slots left without a type (empty literals, nullable params, unknown ivars and hashes), the nil-guard and is_a? narrowing, the return-type re-run, the param and hash-shape reconciliation, the bigint loop variables (analyze_program's steps, in their order) */
 static void an_phase_post_fixpoint(Compiler *c) {
   /* Backstop: a constant bound to an EMPTY array literal has no element type to
@@ -51627,6 +51667,14 @@ static void an_phase_post_fixpoint(Compiler *c) {
       else if (p->type == TY_SYMBOL || p->type == TY_BOOL || p->type == TY_RANGE ||
                p->type == TY_FLOAT_RANGE || p->type == TY_STR_RANGE)
         slot_rule(c, p, TY_POLY, sc->pdefault[i], "a `= nil` default on a Symbol, Bool or Range parameter, which has no nil of its own: boxed, untyped");
+      /* a Time, Complex, Rational or Tms slot has no nil the readers
+         check (its ty_traits row keeps null_is_nil 0): boxed, as a
+         nilable Time ivar is, when a call can leave it out */
+      else if ((p->type == TY_TIME || p->type == TY_COMPLEX || p->type == TY_RATIONAL || p->type == TY_TMS) &&
+               nil_default_maybe_taken(c, sc, i)) {
+        slot_rule(c, p, TY_POLY, sc->pdefault[i], "a `= nil` default on a Time, Complex, Rational or Tms parameter, which has no nil the readers check: boxed, untyped");
+        p->nil_default_boxed = 1;
+      }
     }
   }
 

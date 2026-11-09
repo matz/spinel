@@ -11419,6 +11419,9 @@ static int range_end_no_number(Compiler *c, int node) {
   const char *vn = nt_str(nt, node, "name");
   Scope *sc = comp_scope_of(c, node);
   if (!vn || !sc) return 0;
+  /* a Time (or Complex, ...) parameter boxed for its nil default */
+  LocalVar *pv = scope_local(sc, vn);
+  if (pv && pv->nil_default_boxed) return 1;
   for (int w = comp_lvw_first_sc(c, (int)(sc - c->scopes), vn); w >= 0; w = comp_lvw_next_sc(c, w)) {
     const char *wn = nt_str(nt, w, "name");
     if (!wn || !sp_streq(wn, vn) || comp_scope_of(c, w) != sc) continue;
@@ -11629,6 +11632,11 @@ TyKind infer_uncached(Compiler *c, int id) {
     if (!clamp_arg && (lt == TY_TIME || ht == TY_TIME) &&
         (lo < 0 || lt == TY_TIME || lt == TY_NIL) && (hi < 0 || ht == TY_TIME || ht == TY_NIL))
       return TY_TIME_RANGE;
+    /* a Time beside a boxed end (a parameter with a nil default, boxed):
+       sp_range_new_box makes the Range of Times, or raises CRuby's
+       ArgumentError for an end of another class */
+    if (!clamp_arg && ((lt == TY_TIME && ht == TY_POLY) || (lt == TY_POLY && ht == TY_TIME)))
+      return TY_POLY;
     /* (d1..d2): ends of one class of the program's that defines <=> (a Date)
        make a Range of objects, its ends boxed */
     {

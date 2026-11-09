@@ -2418,6 +2418,20 @@ static sp_bool sp_poly_responds_builtin(sp_RbVal v, const char *m) {
   if (strcmp(cn, "UnboundMethod") == 0) return sp_str_in_list(m, umethm);
   if (strcmp(cn, "Regexp") == 0) return sp_str_in_list(m, regm);
   if (strcmp(cn, "MatchData") == 0) return sp_str_in_list(m, mdm);
+  /* a boxed Time (a parameter with a nil default that a call passes a
+     Time): Time's own public methods and Comparable's */
+  if (strcmp(cn, "Time") == 0) {
+    static const char *const timem[] = {
+      "+", "-", "<", "<=", "<=>", "==", ">", ">=",
+      "asctime", "between?", "ceil", "clamp", "ctime", "day", "deconstruct_keys", "dst?",
+      "eql?", "floor", "friday?", "getgm", "getlocal", "getutc", "gmt?", "gmt_offset",
+      "gmtime", "gmtoff", "hash", "hour", "inspect", "isdst", "iso8601", "localtime",
+      "mday", "min", "mon", "monday?", "month", "nsec", "round", "saturday?",
+      "sec", "strftime", "subsec", "sunday?", "thursday?", "to_a", "to_f", "to_i",
+      "to_r", "to_s", "tuesday?", "tv_nsec", "tv_sec", "tv_usec", "usec", "utc",
+      "utc?", "utc_offset", "wday", "wednesday?", "xmlschema", "yday", "year", "zone", NULL };
+    return sp_str_in_list(m, timem);
+  }
   /* nil answers a small surface of its own; the literal receiver folded it at
      compile time, so only a nil that arrived through a slot came here and got
      a flat false (#3815). */
@@ -20597,6 +20611,8 @@ static sp_Enumerator *sp_poly_cycle(sp_RbVal v) {
    Rational compares exactly against each bound, and a non-numeric value is
    never covered. */
 static sp_bool sp_range_cover_poly(sp_Range *r, sp_RbVal x) {
+  /* (nil..nil) covers every value */
+  if (r->nobeg && r->noend && !r->fe) return 1;
   if (x.tag == SP_TAG_INT) return sp_range_include(r, x.v.i);
   if (x.tag == SP_TAG_FLT) return sp_range_cover_f(r, x.v.f);
   if (x.tag == SP_TAG_BIGINT) return sp_bigint_sign((sp_Bigint *)x.v.p) > 0 ? (r->fe ? r->fend == HUGE_VAL : r->noend) : r->nobeg;

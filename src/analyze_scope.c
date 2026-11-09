@@ -82,10 +82,7 @@ void collect_def_params(Compiler *c, int def_id, Scope *s) {
          anonymous `&` block forward uses). */
       if (!rname) rname = "__anon_rest";
       if (rname) {
-        if (s->nparams % 8 == 0) {
-          s->pnames  = realloc(s->pnames,  sizeof(char *) * (size_t)(s->nparams + 8));
-          s->pdefault = realloc(s->pdefault, sizeof(int)    * (size_t)(s->nparams + 8));
-        }
+        scope_reserve_param(s);
         s->pdefault[s->nparams] = -1;
         s->pnames[s->nparams++] = strdup(rname);
         LocalVar *lv = scope_local_intern(s, rname);
@@ -126,10 +123,7 @@ void collect_def_params(Compiler *c, int def_id, Scope *s) {
         LocalVar *lv = scope_local_intern(s, kwrname);
         lv->is_param = 1;
         lv_set_type(lv, TY_SYM_POLY_HASH);
-        if (s->nparams % 8 == 0) {
-          s->pnames   = realloc(s->pnames,   sizeof(char *) * (size_t)(s->nparams + 8));
-          s->pdefault = realloc(s->pdefault, sizeof(int)    * (size_t)(s->nparams + 8));
-        }
+        scope_reserve_param(s);
         s->pdefault[s->nparams] = -1;
         s->pnames[s->nparams++] = strdup(kwrname);
         s->kwrest_idx = s->nparams - 1;
@@ -3244,6 +3238,8 @@ void scope_copy_method_shape(Scope *dst, Scope *src) {
   if (src->nparams <= 0) return;
   dst->pnames = malloc(sizeof(char *) * (size_t)src->nparams);
   dst->pdefault = malloc(sizeof(int) * (size_t)src->nparams);
+  if (!dst->pnames || !dst->pdefault) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  dst->pcap = src->nparams;
   for (int p = 0; p < src->nparams; p++) {
     dst->pnames[p] = src->pnames[p] ? strdup(src->pnames[p]) : NULL;
     dst->pdefault[p] = src->pdefault ? src->pdefault[p] : -1;

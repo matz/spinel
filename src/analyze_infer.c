@@ -13097,11 +13097,18 @@ void infer_subtree(Compiler *c, int id) {
 
 /* ---- scope assignment ---- */
 
+/* Room for one more entry in s's pnames and pdefault: both arrays are
+   pcap long, however the scope came by them. */
+void scope_reserve_param(Scope *s) {
+  if (s->nparams < s->pcap) return;
+  s->pcap = s->pcap + 8;
+  s->pnames = realloc(s->pnames, sizeof(char *) * (size_t)s->pcap);
+  s->pdefault = realloc(s->pdefault, sizeof(int) * (size_t)s->pcap);
+  if (!s->pnames || !s->pdefault) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+}
+
 void scope_add_param(Scope *s, const char *name, int defnode) {
-  if (s->nparams % 8 == 0) {
-    s->pnames = realloc(s->pnames, sizeof(char *) * (size_t)(s->nparams + 8));
-    s->pdefault = realloc(s->pdefault, sizeof(int) * (size_t)(s->nparams + 8));
-  }
+  scope_reserve_param(s);
   s->pdefault[s->nparams] = defnode;
   s->pnames[s->nparams++] = strdup(name);
   if (defnode < 0) s->nrequired = s->nparams;

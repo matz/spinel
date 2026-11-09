@@ -643,6 +643,7 @@ typedef struct {
   char **pnames;    /* parameter names, in order (requireds then optionals) */
   int *pdefault;    /* per-param default-value node id, or -1 if required */
   int nparams;
+  int pcap;         /* allocated length of pnames and pdefault (scope_reserve_param grows it) */
   int nrequired;    /* index past the LAST required param, not a count:
                        scope_add_param sets it to nparams on every required
                        one, so `def f(x = 1, y)` reports 2. Kept as-is because

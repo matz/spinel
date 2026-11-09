@@ -413,6 +413,7 @@ TyKind proc_ret_of(Compiler *c, int node);
 TyKind proc_call_ret(Compiler *c, int recv);
 TyKind infer_call(Compiler *c, int id);
 TyKind infer_uncached(Compiler *c, int id);
+void scope_reserve_param(Scope *s);
 void scope_add_param(Scope *s, const char *name, int defnode);
 void collect_def_params(Compiler *c, int def_id, Scope *s);
 char *dm_lit_str(Compiler *c, int lit);

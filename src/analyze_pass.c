@@ -13734,6 +13734,8 @@ int desugar_class_eval_value(Compiler *c) {
     if (stmts < 0 || beg < 0) continue;
     nt_node_set_arr(nt, stmts, "body", items, ni);
     nt_node_set_ref(nt, beg, "body", stmts);
+    /* (its body runs with the class as self, not the code around it) */
+    nt_node_set_int(nt, beg, "self_rebound", 1);
     /* the call becomes a transparent alias of the begin's value */
     nt_node_set_str(nt, id, "name", "itself");
     nt_node_set_ref(nt, id, "receiver", beg);

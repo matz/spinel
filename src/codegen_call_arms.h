@@ -207,7 +207,6 @@ int emit_user_new_arm(Compiler *c, int id, int ci, int argc, const int *atmp, in
 extern int g_ctor_blk_tmp;
 int hoist_ctor_block(Compiler *c, int id, Buf *b);
 int struct_nil_fills(const ClassInfo *k);
-int cls_arm_takes_argc(Scope *s, int argc, int splat);
 int collect_class_constants(Compiler *c, int ci, int inherit, const char **out, const char **shown,
                             int max, int n, int depth);
 void emit_class_id_is(Compiler *c, int cname, const char *expr, Buf *b);

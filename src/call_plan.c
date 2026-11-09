@@ -3164,6 +3164,12 @@ int cplan_target_binds(Compiler *c, int id, int mi) {
   return cplan_def_takes(c, mi, kwh, pos_argc);
 }
 
+int cplan_cls_arm_takes(Compiler *c, int id, int mi, int argc, int splat) {
+  const Scope *s = &c->scopes[mi];
+  if (splat) return s->rest_idx >= 0 || argc - splat <= s->nparams;
+  return cplan_target_binds(c, id, mi);
+}
+
 /* See call_plan.h. ct_resolve answers CPT_UNKNOWN only for a member past
    CPT_MAX or for a receiver of type unknown that no plan resolves. */
 int cplan_targets_unknown_why(Compiler *c, int id, int cap) {

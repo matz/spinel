@@ -4995,7 +4995,7 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
         /* Only the candidates this call could actually reach set the return
            type. One that cannot take this many arguments is not a possible
            receiver here, so its return type is not part of the answer. */
-        if (!cls_arm_takes_argc(&c->scopes[kmi], argc, splat9)) continue;
+        if (!cplan_cls_arm_takes(c, id, kmi, argc, splat9)) continue;
         ncand9++; defmi9 = kmi;
         TyKind kr = (TyKind)c->scopes[kmi].ret;
         if (!uret_set9) { uret9 = kr; uret_set9 = 1; }
@@ -5111,12 +5111,20 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
             /* A class whose method cannot take this many arguments gets the
                answer CRuby gives, rather than no arm (which would fall to the
                default's NoMethodError, naming the wrong failure). */
-            if (!cls_arm_takes_argc(&c->scopes[kmi], argc, splat9)) {
-              /* the range the arm judged, which a default widens */
-              char kw[256], am[512];
-              scope_arity_kw_suffix(c, &c->scopes[kmi], kw, sizeof kw);
-              arity_message(am, sizeof am, argc, c->scopes[kmi].nrequired, c->scopes[kmi].nparams, kw);
-              buf_printf(b, "sp_raise_cls(\"ArgumentError\", \"%s\"); break;", am);
+            if (!cplan_cls_arm_takes(c, id, kmi, argc, splat9)) {
+              char am[600];
+              if (splat9) {
+                /* the range the arm judged, which a default widens */
+                char kw[256];
+                scope_arity_kw_suffix(c, &c->scopes[kmi], kw, sizeof kw);
+                arity_message(am, sizeof am, argc, c->scopes[kmi].nrequired, c->scopes[kmi].nparams, kw);
+              }
+              else {
+                int kwh9 = nt_argv_kwh(nt, argv, argc);
+                poly_arm_count(c, &c->scopes[kmi], kwh9, kwh9 >= 0 ? argc - 1 : argc, -1, am, sizeof am);
+              }
+              emit_poly_arity_raise(b, am);
+              buf_puts(b, " break;");
               continue;
             }
             TyKind kr = (TyKind)c->scopes[kmi].ret;

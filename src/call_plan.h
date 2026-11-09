@@ -364,6 +364,19 @@ int cplan_target_binds(Compiler *c, int id, int mi);
    else -- a define_method block, an accessor, a wrapper the compiler made --
    takes every count. */
 int cplan_def_takes_argc(Compiler *c, int mi, int argc);
+/* Can class method mi be the arm of call id, a call with argc arguments
+   (splat of them splats) on a Class value known only at run time? A
+   candidate that cannot is not a possible receiver for THAT call site --
+   CRuby raises ArgumentError there -- so it must not veto the whole dispatch
+   (#4129). Without a splat this is cplan_target_binds' judgement, which
+   takes a trailing keyword hash as the callee's keywords: counted as one
+   more positional argument against parameters that count the keywords,
+   `def self.answer(id:, input:)` refused `k.answer(id: 1, input: {})`. With
+   a splat the count is known only at run time: each may spread to nothing,
+   so a candidate the other arguments leave room in may take it, and its arm
+   binds through the gather, which judges the count there. Codegen's arms
+   and the inference of their answer both ask this. */
+int cplan_cls_arm_takes(Compiler *c, int id, int mi, int argc, int splat);
 /* Is call id a class body's call on self (receiverless or `self.`) that
    the plan binds to one method of the body's class (UC_CMETH, CP_DIRECT)?
    That binding is the one method the call runs, so reachability follows it

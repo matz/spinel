@@ -6345,24 +6345,20 @@ static int infer_class_module_call(Compiler *c, int id, const NodeTable *nt, con
            arm the emitter can build, so it kills the whole dispatch. A
            candidate with the WRONG ARITY does not: this call cannot reach it,
            so it neither contributes a return type nor vetoes the others
-           (#4129). Codegen's cls_arm_takes_argc is the same rule.
+           (#4129). Codegen's arms ask the same cplan_cls_arm_takes.
            A candidate taking a block (a yielding one through its
            proc form) is reached by the poly receiver's class-tag dispatch
            instead, which answers poly. */
         if ((c->scopes[kmi].rest_idx < 0 || rest_packable_arm(c, &c->scopes[kmi])) &&
             (c->scopes[kmi].yields || (c->scopes[kmi].blk_param && c->scopes[kmi].blk_param[0]))) {
-          if (c->scopes[kmi].rest_idx >= 0 || (splat ? argc - splat <= c->scopes[kmi].nparams : argc >= c->scopes[kmi].nrequired && argc <= c->scopes[kmi].nparams)) nblk++;
+          if (cplan_cls_arm_takes(c, id, kmi, argc, splat)) nblk++;
           continue;
         }
         /* a *rest the emitter packs is an arm like any other */
         int rest_ok = rest_packable_arm(c, &c->scopes[kmi]);
         if ((c->scopes[kmi].rest_idx >= 0 && !rest_ok) || c->scopes[kmi].yields ||
             (c->scopes[kmi].blk_param && c->scopes[kmi].blk_param[0])) { nc = 0; nblk = 0; break; }
-        /* with a splat, the count is the gather's to judge at run time: each
-           splat may spread to nothing, so only the other arguments count */
-        if (splat ? c->scopes[kmi].rest_idx < 0 && argc - splat > c->scopes[kmi].nparams
-                  : argc < c->scopes[kmi].nrequired ||
-                    (c->scopes[kmi].rest_idx < 0 && argc > c->scopes[kmi].nparams)) continue;
+        if (!cplan_cls_arm_takes(c, id, kmi, argc, splat)) continue;
         nc++;
         TyKind kr = (TyKind)c->scopes[kmi].ret;
         if (!set) { uret = kr; set = 1; }

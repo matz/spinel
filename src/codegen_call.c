@@ -31048,22 +31048,6 @@ int emit_implicit_self_member(Compiler *c, int id, Buf *b) {
   return 0;
 }
 
-/* Can this class-method arm take a call with `argc` positional arguments?
-   A candidate that cannot is not a possible receiver for THAT call site --
-   CRuby raises ArgumentError there -- so it must not veto the whole dispatch
-   (#4129). Optional parameters make this a range, not an equality: the old
-   `nrequired == argc` test also refused a candidate with a trailing default
-   called with the argument that fills it. With a splat among the
-   arguments (`splat` of them) the count is known only at run time: each
-   may spread to nothing, so a candidate the other arguments leave room in
-   may take it, and its arm binds through the gather, which judges the
-   count there. */
-int cls_arm_takes_argc(Scope *s, int argc, int splat) {
-  if (s->rest_idx >= 0) return 1;   /* a rest param takes any count */
-  if (splat) return argc - splat <= s->nparams;
-  return argc >= s->nrequired && argc <= s->nparams;
-}
-
 /* 1 if this operand is a user object whose class defines a #coerce with a
    usable SHAPE (one parameter, no rest). Deliberately not class_coerce_emittable:
    that asks whether the coerce dispatch will carry an arm for the class, which

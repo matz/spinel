@@ -13507,19 +13507,34 @@ static int block_with_own_self(Compiler *c, int call) {
    PARENT's ref/arr slot is retargeted (a node's type string is immutable).
    Does not descend into nested class/module/def bodies, or a block that
    runs with another self (block_with_own_self), whose self differs. */
+/* Does class `cname` answer a bare call of `nm` in a block run with the
+   class as self: a class method in its chain (any visibility: the call
+   is marked self_call, so a private one stays callable), or Module's
+   name / to_s / inspect (which `Foo.name` reaches as the bare call does)? */
+static int bare_call_on_class(Compiler *c, const char *cname, const char *nm) {
+  int ci = cname && nm ? comp_class_index(c, cname) : -1;
+  if (ci < 0) return 0;
+  return comp_cmethod_in_chain(c, ci, nm, NULL) >= 0 || is_name_reader(nm);
+}
 static void subtree_self_to_const(Compiler *c, int root, const char *cname, int depth) {
   NodeTable *nt = (NodeTable *)c->nt;
   if (root < 0 || root >= nt->count || depth > 200) return;
   NodeKind k = nt_kind(nt, root);
   if (k == NK_ClassNode || k == NK_ModuleNode || k == NK_DefNode) return;
-  /* a bare class_variable_get / _set / _defined? is a call on self too */
-  if (k == NK_CallNode && nt_ref(nt, root, "receiver") < 0 && is_cvar_reflection_name(nt_str(nt, root, "name"))) {
+  /* a bare class_variable_get / _set / _defined? is a call on self too, and
+     so is a bare call the class answers: its own class method (also
+     inherited) or Module's name / to_s / inspect. Left bare, it ran on the
+     self of the code around the block (`A.k = Foo.class_eval { name }`
+     answered "A"). */
+  if (k == NK_CallNode && nt_ref(nt, root, "receiver") < 0 &&
+      (is_cvar_reflection_name(nt_str(nt, root, "name")) || bare_call_on_class(c, cname, nt_str(nt, root, "name")))) {
     int cr = nt_new_node(nt, "ConstantReadNode");
     if (cr < 0) return;
     nt_node_set_str(nt, cr, "name", cname);
     comp_grow_node_arrays(c);
     c->nscope[cr] = c->nscope[root];
     nt_node_set_ref(nt, root, "receiver", cr);
+    nt_node_set_int(nt, root, "self_call", 1);
   }
   int keep = k == NK_CallNode ? block_with_own_self(c, root) : -1;
   SpNode *nd = &nt->nodes[root];

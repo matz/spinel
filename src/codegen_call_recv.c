@@ -14581,7 +14581,13 @@ int emit_range_call(Compiler *c, int id, Buf *b) {
       }
       buf_puts(b, "((void)("); emit_expr_for_effect(c, argv[0], b); buf_puts(b, "), 0)"); return 1;
     }
-    if ((is_eq_or_eql(name)) && argc == 1) {
+    /* nil? is false for every Range */
+    if (sp_streq(name, "nil?") && argc == 0) {
+      buf_puts(b, "((void)("); emit_expr_for_effect(c, recv, b); buf_puts(b, "), 0)"); return 1;
+    }
+    /* (the unboxed sp_StrRange has no object identity: equal? compares
+       the ends, as the Integer Range's arm does) */
+    if ((is_eq_or_eql(name) || sp_streq(name, "equal?")) && argc == 1) {
       if (a0 == TY_STR_RANGE) {
         int tr2 = ++g_tmp;
         buf_printf(b, "({ sp_StrRange _t%d = ", tr); emit_expr(c, recv, b);
@@ -14590,7 +14596,19 @@ int emit_range_call(Compiler *c, int id, Buf *b) {
         buf_printf(b, "sp_StrRange _t%d = ", tr2); emit_expr(c, argv[0], b);
         buf_printf(b, "; sp_srange_eq(_t%d, _t%d); })", tr, tr2); return 1;
       }
-      buf_puts(b, "((void)("); emit_expr_for_effect(c, argv[0], b); buf_puts(b, "), 0)"); return 1;
+      /* a boxed value holding a String Range compares by its ends too */
+      if (a0 == TY_POLY) {
+        buf_printf(b, "({ sp_StrRange _t%d = ", tr); emit_expr(c, recv, b);
+        buf_puts(b, "; ");
+        if (hold) { emit_gc_root_tmp_refs(c, rt, tr, b); buf_puts(b, " "); }
+        buf_printf(b, "sp_RbVal _a%d = ", tr); emit_boxed(c, argv[0], b);
+        buf_printf(b, "; (sp_bool)(_a%d.tag == SP_TAG_OBJ && _a%d.cls_id == SP_BUILTIN_STR_RANGE && _a%d.v.p &&"
+                      " sp_srange_eq(_t%d, *(sp_StrRange *)_a%d.v.p)); })", tr, tr, tr, tr, tr);
+        return 1;
+      }
+      /* (any other argument: false, after the receiver and the argument run) */
+      buf_puts(b, "((void)("); emit_expr_for_effect(c, recv, b); buf_puts(b, "), (void)(");
+      emit_expr_for_effect(c, argv[0], b); buf_puts(b, "), 0)"); return 1;
     }
     if ((is_to_array_alias(name)) && argc == 0) {
       buf_printf(b, "({ sp_StrRange _t%d = ", tr); emit_expr(c, recv, b);

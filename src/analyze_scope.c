@@ -13769,12 +13769,8 @@ static void bc_walk(Bc *b, int id, const char *self, int mode) {
       target = bc_resolve(b, rv); target_known = target != NULL;
     }
     if (target && target[0] == '?') target_known = 0;
-    const char *m2 = nm;
     int a0 = 0;
-    if (nm && is_send_family(nm) && ac >= 1) {
-      m2 = bc_sym_arg(nt, av[0]);
-      a0 = 1;
-    }
+    const char *m2 = call_sent_name(nt, id, &a0);
     if (mode == 0 && m2 && sp_streq(m2, "const_set") && ac > a0) {
       const char *cn = bc_sym_arg(nt, av[a0]);
       if (cn && target_known) {

@@ -1496,7 +1496,7 @@ static int strbuf_chain_links_m(Compiler *c, int v, int base, int *args, int mul
 static int strbuf_append_base(Compiler *c, int v);
 static int strbuf_tail_self_mutator(Compiler *c, int v);
 static int strbuf_chain_user_target(Compiler *c, int v, int base, int splat);
-void emit_strbuf_value(Compiler *c, LocalVar *lv, int v, Buf *b);
+void emit_strbuf_value(Compiler *c, int v, Buf *b);
 /* The operand of a `+s` value (`+@` with no argument), -1 for any other. */
 static int strbuf_uplus_operand(Compiler *c, int v) {
   return v >= 0 && nt_kind(c->nt, v) == NK_CallNode && nt_str(c->nt, v, "name") &&
@@ -1524,28 +1524,15 @@ void emit_strbuf_handle_of(Compiler *c, int v, Buf *b) {
   /* --share-strings: a call without a bang that answers its receiver is
      that receiver's handle; its demand-marked read would wrap a copy. */
   if (strbuf_plain_self_call(c, v) && emit_bang_self_handle(c, v, b)) return;
-  LocalVar slot;
-  memset(&slot, 0, sizeof slot);
-  lv_set_type(&slot, TY_STRBUF);
-  slot.str_shared = 1;
-  emit_strbuf_value(c, &slot, v, b);
+  emit_strbuf_value(c, v, b);
 }
-/* A proven fresh value can keep a small payload inside its new handle.
-   The runtime copies before collection and falls back for larger payloads.
-   A frozen literal is no new String: sp_String_new_shared answers its own
-   handle, which a payload copy must never replace. */
-const char *strbuf_new_func(Compiler *c, int v) {
-  /* (one representation: the operand may be of either face, SP_STR_HDL) */
-  (void)c; (void)v;
-  return "SP_STR_HDL";
-}
-/* The handle strbuf_new_func makes of text t, node v's bytes; in the
-   one-String mode a frozen literal's is its slot's, read where the literal
-   is named (sp_String_literal_of) */
+/* The handle of text t, node v's bytes (SP_STR_HDL, which takes either
+   face of the operand); a frozen literal's is its slot's, read where the
+   literal is named (sp_String_literal_of) */
 void strbuf_new_of_text(Compiler *c, int v, const char *t, Buf *b) {
   int id = fzl_text_id(t);
   if (id >= 0) buf_printf(b, "sp_String_literal_of(&_fzl_%s_slot, (char *)_fzl_%s.d)", fzl_id_name(id), fzl_id_name(id));
-  else buf_printf(b, "%s(%s)", strbuf_new_func(c, v), t ? t : "");
+  else buf_printf(b, "SP_STR_HDL(%s)", t ? t : "");
 }
 /* --share-strings: put the handle demand on each `next` (k NK_NextNode) or
    `break` (NK_BreakNode) with a value under n that leaves what n is the body
@@ -3483,8 +3470,7 @@ int strbuf_var_handle(Compiler *c, int n, Buf *b) {
   NodeKind k = n >= 0 ? nt_kind(c->nt, n) : NK_NONE;
   if (repr_self_shared(c, n)) return strbuf_slot_text(c, n, b);
   /* (an element a String Array of handles reads is a slot of the Array) */
-  return (1) &&
-         (k == NK_LocalVariableReadNode || k == NK_InstanceVariableReadNode || repr_static_read_kind(k) ||
+  return (k == NK_LocalVariableReadNode || k == NK_InstanceVariableReadNode || repr_static_read_kind(k) ||
           strh_elem_slot(c, n)) &&
          strbuf_slot_text(c, n, b);
 }
@@ -3910,11 +3896,10 @@ static int strbuf_real_bang_on_handle(Compiler *c, int v) {
   const char *nm = u >= 0 && nt_kind(c->nt, u) == NK_CallNode ? nt_str(c->nt, u, "name") : NULL;
   return nm && nm[0] && nm[strlen(nm) - 1] == '!' && strbuf_bang_self_local(c, u);
 }
-static void emit_strbuf_cond_value(Compiler *c, LocalVar *lv, int v, const char *dst, Buf *b, int depth);
+static void emit_strbuf_cond_value(Compiler *c, int v, const char *dst, Buf *b, int depth);
 /* The `case` emitted as a conditional value into a shared String slot
-   (emit_strbuf_cond_value), and that slot: its result is the handle. */
+   (emit_strbuf_cond_value): its result is the handle. */
 static int g_strbuf_case_node = -1;
-static LocalVar *g_strbuf_case_lv;
 /* Is a String local that is the shared handle one of the values conditional
    `v` can hand over (an_strbuf_alias_leaves' arms)? */
 /* Is a handle among the values conditional (or begin) v hands on? The arms
@@ -4003,16 +3988,16 @@ void emit_cond_arm(Compiler *c, int node, Buf *b, void (*emit)(Compiler *, int, 
   buf_puts(b, " }");
   free(pre.p); free(body.p);
 }
-typedef struct { LocalVar *lv; const char *dst; int depth; } StrbufCondArm;
+typedef struct { const char *dst; int depth; } StrbufCondArm;
 static void emit_strbuf_cond_body(Compiler *c, int v, Buf *b, void *ctx) {
   StrbufCondArm *a = ctx;
-  emit_strbuf_cond_value(c, a->lv, v, a->dst, b, a->depth);
+  emit_strbuf_cond_value(c, v, a->dst, b, a->depth);
 }
-static void emit_strbuf_cond_arm(Compiler *c, LocalVar *lv, int v, const char *dst, Buf *b, int depth) {
-  StrbufCondArm a = { lv, dst, depth };
+static void emit_strbuf_cond_arm(Compiler *c, int v, const char *dst, Buf *b, int depth) {
+  StrbufCondArm a = { dst, depth };
   emit_cond_arm(c, v, b, emit_strbuf_cond_body, &a);
 }
-static void emit_strbuf_cond_value(Compiler *c, LocalVar *lv, int v, const char *dst, Buf *b, int depth) {
+static void emit_strbuf_cond_value(Compiler *c, int v, const char *dst, Buf *b, int depth) {
   const NodeTable *nt = c->nt;
   NodeKind k = v >= 0 ? nt_kind(nt, v) : NK_NilNode;
   /* depth counts the conditionals the walk is inside (a wrapper adds none).
@@ -4022,30 +4007,30 @@ static void emit_strbuf_cond_value(Compiler *c, LocalVar *lv, int v, const char 
   if (depth > 8 && (k == NK_IfNode || k == NK_UnlessNode || k == NK_OrNode || k == NK_AndNode ||
                     k == NK_CaseNode || k == NK_CaseMatchNode)) {
     buf_printf(b, "%s = ", dst);
-    emit_strbuf_value(c, lv, v, b);
+    emit_strbuf_value(c, v, b);
     buf_puts(b, ";");
     return;
   }
   /* a `next v` where the block's value is: the arm is v's */
   if (k == NK_NextNode && next_is_block_value(c, v)) {
     int na = 0; const int *av = call_args(nt, v, &na);
-    if (na == 1) { emit_strbuf_cond_value(c, lv, av[0], dst, b, depth); return; }
+    if (na == 1) { emit_strbuf_cond_value(c, av[0], dst, b, depth); return; }
   }
   switch (k) {
     case NK_ParenthesesNode:
-      emit_strbuf_cond_value(c, lv, nt_ref(nt, v, "body"), dst, b, depth);
+      emit_strbuf_cond_value(c, nt_ref(nt, v, "body"), dst, b, depth);
       return;
     case NK_StatementsNode: {
       int n = 0; const int *bb = nt_arr(nt, v, "body", &n);
       if (stmts_diverge(c, v)) { emit_stmts(c, v, b, 0); return; }
       /* The tail's setup must follow the arm's earlier statements. */
       for (int i = 0; i < n - 1; i++) emit_stmt(c, bb[i], g_pre, 0);
-      if (n > 0) emit_strbuf_cond_value(c, lv, bb[n - 1], dst, b, depth);
+      if (n > 0) emit_strbuf_cond_value(c, bb[n - 1], dst, b, depth);
       else buf_printf(b, "%s = NULL;\n", dst);
       return;
     }
     case NK_ElseNode:
-      emit_strbuf_cond_value(c, lv, nt_ref(nt, v, "statements"), dst, b, depth);
+      emit_strbuf_cond_value(c, nt_ref(nt, v, "statements"), dst, b, depth);
       return;
     case NK_IfNode: case NK_UnlessNode: {
       int is_unless = k == NK_UnlessNode;
@@ -4054,7 +4039,7 @@ static void emit_strbuf_cond_value(Compiler *c, LocalVar *lv, int v, const char 
          the value form does: the other may call what the class lacks */
       int known = static_respond_to_cond(c, nt_ref(nt, v, "predicate"));
       if (known >= 0) {
-        emit_strbuf_cond_arm(c, lv, known != is_unless ? nt_ref(nt, v, "statements") : sub, dst, b, depth + 1);
+        emit_strbuf_cond_arm(c, known != is_unless ? nt_ref(nt, v, "statements") : sub, dst, b, depth + 1);
         buf_puts(b, "\n");
         return;
       }
@@ -4062,9 +4047,9 @@ static void emit_strbuf_cond_value(Compiler *c, LocalVar *lv, int v, const char 
       emit_cond(c, nt_ref(nt, v, "predicate"), &cnd);
       buf_printf(b, "if (%s%s%s) ", is_unless ? "!(" : "", cnd.p ? cnd.p : "0", is_unless ? ")" : "");
       free(cnd.p);
-      emit_strbuf_cond_arm(c, lv, nt_ref(nt, v, "statements"), dst, b, depth + 1);
+      emit_strbuf_cond_arm(c, nt_ref(nt, v, "statements"), dst, b, depth + 1);
       buf_puts(b, "\nelse ");
-      emit_strbuf_cond_arm(c, lv, sub, dst, b, depth + 1);
+      emit_strbuf_cond_arm(c, sub, dst, b, depth + 1);
       buf_puts(b, "\n");
       return;
     }
@@ -4079,13 +4064,13 @@ static void emit_strbuf_cond_value(Compiler *c, LocalVar *lv, int v, const char 
         emit_cond(c, l, &cnd);
         buf_printf(b, "if (%s) ", cnd.p ? cnd.p : "0");
         free(cnd.p);
-        emit_strbuf_cond_arm(c, lv, nt_ref(nt, v, "right"), dst, b, depth + 1);
+        emit_strbuf_cond_arm(c, nt_ref(nt, v, "right"), dst, b, depth + 1);
         buf_printf(b, "\nelse %s = NULL;\n", dst);
         return;
       }
-      emit_strbuf_cond_value(c, lv, l, dst, b, depth + 1);
+      emit_strbuf_cond_value(c, l, dst, b, depth + 1);
       buf_printf(b, " if (%s%s) ", k == NK_OrNode ? "!" : "", dst);
-      emit_strbuf_cond_arm(c, lv, nt_ref(nt, v, "right"), dst, b, depth + 1);
+      emit_strbuf_cond_arm(c, nt_ref(nt, v, "right"), dst, b, depth + 1);
       buf_puts(b, "\n");
       return;
     }
@@ -4093,12 +4078,11 @@ static void emit_strbuf_cond_value(Compiler *c, LocalVar *lv, int v, const char 
        emit_case_branch_value, typed by the case's result */
     case NK_CaseNode: {
       int svn = g_strbuf_case_node;
-      LocalVar *svl = g_strbuf_case_lv;
-      g_strbuf_case_node = v; g_strbuf_case_lv = lv;
+      g_strbuf_case_node = v;
       buf_printf(b, "%s = ", dst);
       emit_case_expr(c, v, b);
       buf_puts(b, ";");
-      g_strbuf_case_node = svn; g_strbuf_case_lv = svl;
+      g_strbuf_case_node = svn;
       return;
     }
     /* a `case`/`in` keeps its own matcher: each arm assigns the handle it
@@ -4106,15 +4090,14 @@ static void emit_strbuf_cond_value(Compiler *c, LocalVar *lv, int v, const char 
        result as a `case`'s is */
     case NK_CaseMatchNode: {
       int svn = g_strbuf_case_node;
-      LocalVar *svl = g_strbuf_case_lv;
-      g_strbuf_case_node = v; g_strbuf_case_lv = lv;
+      g_strbuf_case_node = v;
       int cr = ++g_tmp;
       buf_printf(b, "{ sp_String *_t%d = NULL; ", cr);
       emit_gc_root_tmp(c, TY_STRBUF, cr, b);
       buf_puts(b, "\n");
       emit_case_match(c, v, b, 0, 0, cr);
       buf_printf(b, "%s = _t%d; }", dst, cr);
-      g_strbuf_case_node = svn; g_strbuf_case_lv = svl;
+      g_strbuf_case_node = svn;
       return;
     }
     case NK_NilNode:
@@ -4130,7 +4113,7 @@ static void emit_strbuf_cond_value(Compiler *c, LocalVar *lv, int v, const char 
         buf_puts(b, ";");
         return;
       }
-      emit_strbuf_value(c, lv, v, b);
+      emit_strbuf_value(c, v, b);
       buf_puts(b, ";");
       return;
   }
@@ -5190,7 +5173,7 @@ void emit_poly_arms_handle(Compiler *c, int base, Buf *b) {
   if (arg_ran_first(base, 0)) {
     int th = ran_first_handle(base);
     if (th >= 0) { buf_printf(b, "_t%d", th); return; }
-    str_new_handle_open_of(c, base, b);
+    buf_puts(b, "SP_STR_HDL(");
     emit_str_expr(c, base, b);
     str_new_handle_close(b);
     return;
@@ -5249,7 +5232,7 @@ static int strbuf_dup_call(Compiler *c, int v) {
   return sp_streq(nm, "dup") ? 1 : 2;
 }
 static void emit_strbuf_seq_nil(Compiler *c, int v, Buf *b);
-void emit_strbuf_value(Compiler *c, LocalVar *lv, int v, Buf *b) {
+void emit_strbuf_value(Compiler *c, int v, Buf *b) {
   /* a parenthesized sequence whose value is nil is the slot's NULL, after
      its statements, as `nil` is: wrapped as a String, its nil was an
      integer handed to the new handle */
@@ -5261,12 +5244,12 @@ void emit_strbuf_value(Compiler *c, LocalVar *lv, int v, Buf *b) {
      into the handle slot, which did not compile. */
   { int vp = nt_paren_single(c->nt, v);
     if (arg_ran_first(v, 0) || (vp >= 0 && arg_ran_first(vp, 0))) { emit_strbuf_handle_of(c, v, b); return; } }
-  /* --share-strings: `x&.itself` is x, nil or not, and so is its handle */
+  /* `x&.itself` is x, nil or not, and so is its handle */
   { int w = nt_paren_single(c->nt, v);
-    if (repr_of_slot(c, lv).handle && w >= 0 && nt_kind(c->nt, w) == NK_CallNode &&
+    if (w >= 0 && nt_kind(c->nt, w) == NK_CallNode &&
         nt_safe_nav(c->nt, w) && is_itself_name(nt_str(c->nt, w, "name")) && call_plain_argc(c, w) == 0 &&
         nt_ref(c->nt, w, "block") < 0 && nt_ref(c->nt, w, "receiver") >= 0 && !user_defines_or_reads(c, "itself")) {
-      emit_strbuf_value(c, lv, nt_ref(c->nt, w, "receiver"), b);
+      emit_strbuf_value(c, nt_ref(c->nt, w, "receiver"), b);
       return;
     }
     /* ...and a bang's to_s or to_str on a boxed receiver is the box's
@@ -5274,12 +5257,12 @@ void emit_strbuf_value(Compiler *c, LocalVar *lv, int v, Buf *b) {
        nil's NoMethodError (to_str) */
     const char *wn = w >= 0 && nt_kind(c->nt, w) == NK_CallNode ? nt_str(c->nt, w, "name") : NULL;
     int wr = wn ? nt_paren_single(c->nt, nt_ref(c->nt, w, "receiver")) : -1;
-    if (repr_of_slot(c, lv).handle && wr >= 0 && (sp_streq(wn, "to_s") || sp_streq(wn, "to_str")) &&
+    if (wr >= 0 && (sp_streq(wn, "to_s") || sp_streq(wn, "to_str")) &&
         !nt_safe_nav(c->nt, w) && call_plain_argc(c, w) == 0 && nt_ref(c->nt, w, "block") < 0 &&
         !user_defines_or_reads(c, wn) && face_str_bang_call(c, wr)) {
       int t = ++g_tmp;
       buf_printf(b, "({ sp_String *_t%d = ", t);
-      emit_strbuf_value(c, lv, wr, b);
+      emit_strbuf_value(c, wr, b);
       if (sp_streq(wn, "to_s")) buf_printf(b, "; _t%d ? _t%d : sp_String_new_shared(sp_str_frozen_empty); })", t, t);
       else buf_printf(b, "; if (!_t%d) sp_nil_recv(\"to_str\"); _t%d; })", t, t);
       return;
@@ -5290,7 +5273,6 @@ void emit_strbuf_value(Compiler *c, LocalVar *lv, int v, Buf *b) {
   Buf srefV; memset(&srefV, 0, sizeof srefV);
   LocalVar *vlv = NULL;
   int vplus = strbuf_uplus_operand(c, v);
-  int shared = repr_of_slot(c, lv).handle;
   Repr rpv = repr_of(c, v);
   /* A demanded fresh String arm still emits bytes (for example 123.to_s),
      which need their own handle; the demand alone is no reader slot. */
@@ -5303,7 +5285,7 @@ void emit_strbuf_value(Compiler *c, LocalVar *lv, int v, Buf *b) {
      that it takes a copy of the receiver's variables, as CRuby's does
      (sp_String_dup_h); wrapped fresh below, the copy had no object to land
      on */
-  int dupk = shared && c->bivar_table ? strbuf_dup_call(c, v) : 0;
+  int dupk = c->bivar_table ? strbuf_dup_call(c, v) : 0;
   if (dupk) {
     buf_puts(b, "sp_String_dup_h(");
     emit_strbuf_handle_of(c, nt_ref(c->nt, v, "receiver"), b);
@@ -5311,41 +5293,41 @@ void emit_strbuf_value(Compiler *c, LocalVar *lv, int v, Buf *b) {
   }
   /* (a bang on a boxed receiver is no reader of a slot, whatever demand marks
      it: its handle is its receiver's box's, below) */
-  else if (shared && !fresh && !(face_str_bang_call(c, v)) && strbuf_slot_text(c, v, &srefV))
+  else if (!fresh && !(face_str_bang_call(c, v)) && strbuf_slot_text(c, v, &srefV))
     buf_puts(b, srefV.p);
-  /* --share-strings: an element a String Array of handles reads or
+  /* an element a String Array of handles reads or
      removes is the String itself (#8328 step 5) */
-  else if (shared && strh_handle_call(c, v))
+  else if (strh_handle_call(c, v))
     strh_elem_handle_text(c, v, b);
   /* `s2 = +s1`: the same handle, or a fresh one when s1 is frozen */
-  /* (--share-strings: through the route, which raises for a nil s) */
-  else if (shared && vplus >= 0 && emit_strbuf_route(c, v, b)) { }
-  else if (shared && emit_strbuf_ivar_write_handle(c, v, b)) { }
-  /* --share-strings: a held chain's value (strbuf_held_chain) is the handle
+  /* (through the route, which raises for a nil s) */
+  else if (vplus >= 0 && emit_strbuf_route(c, v, b)) { }
+  else if (emit_strbuf_ivar_write_handle(c, v, b)) { }
+  /* a held chain's value (strbuf_held_chain) is the handle
      it holds */
-  else if (shared && strbuf_held_chain(c, v) && strbuf_bang_self_local(c, nt_paren_single(c->nt, v)) &&
+  else if (strbuf_held_chain(c, v) && strbuf_bang_self_local(c, nt_paren_single(c->nt, v)) &&
            emit_bang_self_handle(c, nt_paren_single(c->nt, v), b)) { }
-  /* --share-strings: a String bang on a boxed receiver answers that
+  /* a String bang on a boxed receiver answers that
      receiver's own box, or nil (emit_boxed_bang_self); the box of a String
      the rule shares holds its handle, which the slot takes */
-  else if (shared && face_str_bang_call(c, v)) {
+  else if (face_str_bang_call(c, v)) {
     int t = ++g_tmp;
     buf_printf(b, "({ sp_RbVal _t%d = ", t);
     emit_boxed(c, v, b);
     buf_printf(b, "; sp_poly_nil_p(_t%d) ? (sp_String *)NULL : sp_poly_as_strbuf(_t%d); })", t, t);
   }
-  /* --share-strings: a boxed receiver's call whose every arm answers a
+  /* a boxed receiver's call whose every arm answers a
      String, a handle it publishes or a new one (strbuf_poly_user_boxes):
      the dispatch read as a box, each arm boxing its own answer, and the
      slot takes that box's handle (a new one around a fresh String; NULL
      for nil). A conversion over it (`call.to_s`) answers the same String
      (strbuf_poly_user_base). */
-  else if (shared && strbuf_poly_user_base(c, v) >= 0)
+  else if (strbuf_poly_user_base(c, v) >= 0)
     emit_poly_user_handle(c, v, b);
   /* A chained assignment (`u = t = s`) whose inner target is the handle too:
      run the inner write, then alias ITS handle. Wrapping the write's value
      as a fresh String forked u off the object t and s share. */
-  else if (shared && nt_kind(c->nt, v) == NK_LocalVariableWriteNode &&
+  else if (nt_kind(c->nt, v) == NK_LocalVariableWriteNode &&
            nt_str(c->nt, v, "name") &&
            (vlv = scope_local(comp_scope_of(c, v), nt_str(c->nt, v, "name"))) &&
            repr_of_slot(c, vlv).handle) {
@@ -5355,9 +5337,9 @@ void emit_strbuf_value(Compiler *c, LocalVar *lv, int v, Buf *b) {
     emit_local_ref(c, v, nt_str(c->nt, v, "name"), b);
     buf_puts(b, "; })");
   }
-  /* The same for a global holding the handle (--share-strings): `r = ($g =
+  /* The same for a global holding the handle: `r = ($g =
      s)` names $g's String */
-  else if (shared && strbuf_gvar_write_handle(c, v, &srefV)) {
+  else if (strbuf_gvar_write_handle(c, v, &srefV)) {
     buf_puts(b, "({ (void)(");
     emit_expr_for_effect(c, v, b);
     buf_printf(b, "); %s; })", srefV.p);
@@ -5366,13 +5348,13 @@ void emit_strbuf_value(Compiler *c, LocalVar *lv, int v, Buf *b) {
      : g`, paired by an_strbuf_alias_leaves): each arm hands over its own
      object, the handle for such a local and a fresh String for any other
      value. Wrapped whole, the value forked h off the String g names. */
-  else if (shared && strbuf_cond_has_handle_leaf(c, v)) {
+  else if (strbuf_cond_has_handle_leaf(c, v)) {
     char dst[32];
     snprintf(dst, sizeof dst, "_t%d", ++g_tmp);
     buf_printf(b, "({ sp_String *%s = NULL; ", dst);
     /* The leaf walk follows unary + too: consume it before descending,
        or the call's leaf returns here with the same node forever. */
-    emit_strbuf_cond_value(c, lv, vplus >= 0 ? vplus : v, dst, b, 0);
+    emit_strbuf_cond_value(c, vplus >= 0 ? vplus : v, dst, b, 0);
     if (vplus >= 0) {
       buf_printf(b, " if (SP_UNLIKELY(!%s)) sp_raise_nomethod(sp_nomethod_msg(\"+@\", sp_box_nil()));", dst);
       buf_printf(b, " %s = sp_String_uplus(%s);", dst, dst);
@@ -5381,10 +5363,10 @@ void emit_strbuf_value(Compiler *c, LocalVar *lv, int v, Buf *b) {
   }
   /* any other write whose slot holds the rule's handle (a local's `||=`,
      an ivar's `&&=`, a class variable's): that handle */
-  else if (shared && emit_strbuf_write_handle(c, v, b)) { }
+  else if (emit_strbuf_write_handle(c, v, b)) { }
   /* a route that answers the String it is handed (`String(s)`, `s.then {
      |x| x }`): that String's handle */
-  else if (shared && emit_strbuf_route(c, v, b)) { }
+  else if (emit_strbuf_route(c, v, b)) { }
   /* a demand-marked read (a reader call, a container element) already
      yields the handle: alias it directly (#3227 P5). Any other marked call
      -- `+"lit"`, a `dup` the alias leaves demanded -- renders as a fresh
@@ -5414,20 +5396,20 @@ void emit_strbuf_value(Compiler *c, LocalVar *lv, int v, Buf *b) {
     free(e.p);
     view_pop(c, sv);
   }
-  /* --share-strings (#6765): `r = s.strip!` names s's String when the bang
+  /* `r = s.strip!` names s's String when the bang
      changed it, and nil when not; the call changes s's handle in place, so
      r takes that handle. Wrapped fresh, r forked off s. */
-  else if (shared && emit_bang_self_handle(c, v, b)) { }
-  /* --share-strings: an operator write into a handle slot: run it, then
+  else if (emit_bang_self_handle(c, v, b)) { }
+  /* an operator write into a handle slot: run it, then
      that slot's (new) handle */
-  else if (shared && strbuf_opwrite_handle(c, v, &srefV)) {
+  else if (strbuf_opwrite_handle(c, v, &srefV)) {
     buf_puts(b, "({ (void)(");
     emit_expr_for_effect(c, v, b);
     buf_printf(b, "); %s; })", srefV.p);
   }
-  /* --share-strings: a mutator on a narrowed box answers that box: its
+  /* a mutator on a narrowed box answers that box: its
      handle (strbuf_narrowed_box_mutator) */
-  else if (shared && strbuf_narrowed_box_mutator(c, v)) {
+  else if (strbuf_narrowed_box_mutator(c, v)) {
     buf_puts(b, "sp_poly_as_strbuf(");
     emit_narrowed_box_mutator(c, v, b);
     buf_puts(b, ")");
@@ -5439,10 +5421,10 @@ void emit_strbuf_value(Compiler *c, LocalVar *lv, int v, Buf *b) {
     /* (one representation: the read can be of any face) */
     buf_puts(b, "SP_STR_HDL("); emit_expr(c, v, b); buf_puts(b, ")");
   }
-  /* --share-strings: a boxed local's read (one an is_a? guard narrows, too):
+  /* a boxed local's read (one an is_a? guard narrows, too):
      the local's box lifted to its handle's first (sp_poly_strbuf_lift), so
      the slot and the local hold one handle */
-  else if (shared && strbuf_boxed_local(c, v)) {
+  else if (strbuf_boxed_local(c, v)) {
     Buf lvb; memset(&lvb, 0, sizeof lvb);
     emit_local_ref(c, v, nt_str(c->nt, v, "name"), &lvb);
     buf_printf(b, "sp_poly_as_strbuf((%s = sp_poly_strbuf_lift(%s)))", lvb.p, lvb.p);
@@ -5451,7 +5433,7 @@ void emit_strbuf_value(Compiler *c, LocalVar *lv, int v, Buf *b) {
   /* ...and a String's conversion of one an is_a? guard narrows to a String
      (`v.is_a?(String) ? v.to_s : ""`): the conversion answers that String,
      so the slot takes the local's handle the same way */
-  else if (shared && strbuf_narrowed_box_conversion(c, v) >= 0) {
+  else if (strbuf_narrowed_box_conversion(c, v) >= 0) {
     int x = strbuf_narrowed_box_conversion(c, v);
     Buf lvb; memset(&lvb, 0, sizeof lvb);
     emit_local_ref(c, x, nt_str(c->nt, x, "name"), &lvb);
@@ -5465,14 +5447,13 @@ void emit_strbuf_value(Compiler *c, LocalVar *lv, int v, Buf *b) {
     int cb9 = str_alias_chain_base(c, v);
     Buf srefC9; memset(&srefC9, 0, sizeof srefC9);
     Buf srefC9b; memset(&srefC9b, 0, sizeof srefC9b);
-    if (cb9 != v && shared && strbuf_slot_text(c, cb9, &srefC9) && emit_strbuf_chain_in_place(c, v, cb9, srefC9.p, b)) {
-      /* --share-strings: the chain ran on the base's own handle */
+    if (cb9 != v && strbuf_slot_text(c, cb9, &srefC9) && emit_strbuf_chain_in_place(c, v, cb9, srefC9.p, b)) {
+      /* the chain ran on the base's own handle */
     }
-    /* --share-strings: an append chain over a route's handle (`r = s.then {
+    /* an append chain over a route's handle (`r = s.then {
        |z| z } << x`): the route's handle, appended in place */
-    else if (cb9 != v && shared && emit_strbuf_route_chain(c, v, cb9, b)) { }
-    else if (cb9 != v && shared &&
-        strbuf_slot_text(c, cb9, &srefC9b)) {
+    else if (cb9 != v && emit_strbuf_route_chain(c, v, cb9, b)) { }
+    else if (cb9 != v && strbuf_slot_text(c, cb9, &srefC9b)) {
       buf_puts(b, "({ (void)(");
       emit_expr_for_effect(c, v, b);
       buf_printf(b, "); %s; })", srefC9b.p);
@@ -5611,10 +5592,6 @@ static void emit_strbuf_seq_nil(Compiler *c, int v, Buf *b) {
    (promote_ivar_handle_stores pulls the variables it can). */
 void emit_strbuf_ivar_store(Compiler *c, int shared, int v, Buf *b) {
   const NodeTable *nt = c->nt;
-  LocalVar slot;
-  memset(&slot, 0, sizeof slot);
-  lv_set_type(&slot, TY_STRBUF);
-  slot.str_shared = shared ? 1 : 0;
   /* --share-strings: a value that ran ahead with its handle taken
      (emit_arg_temp) is that handle: its statements ran there */
   int held = shared ? ran_first_handle(v) : -1;
@@ -5643,7 +5620,7 @@ void emit_strbuf_ivar_store(Compiler *c, int shared, int v, Buf *b) {
      read of it would be taken as the handle, and the new String the demand
      wraps is a copy. */
   if (shared && strbuf_plain_self_call(c, v) && emit_bang_self_handle(c, v, b)) return;
-  emit_strbuf_value(c, &slot, v, b);
+  emit_strbuf_value(c, v, b);
 }
 void emit_assign(Compiler *c, int id, Buf *b, int indent) {
   const char *nm = nt_str(c->nt, id, "name");
@@ -5774,7 +5751,7 @@ void emit_assign(Compiler *c, int id, Buf *b, int indent) {
     else buf_puts(b, default_value_from_compiler(c, lv->type));
   }
   else if (repr_of_slot(c, lv).kind == RK_STRBUF) {
-    emit_strbuf_value(c, lv, v, b);
+    emit_strbuf_value(c, v, b);
   }
   else if (is_empty_array && lv && array_kind(lv->type)) {
     /* `a = []` -> a new array of the variable's resolved element type */
@@ -8920,7 +8897,7 @@ static void emit_pm_body_value(Compiler *c, int stmts, TyKind rt, int cr,
     char dst[32];
     snprintf(dst, sizeof dst, "_t%d", cr);
     emit_indent(b, indent);
-    emit_strbuf_cond_arm(c, g_strbuf_case_lv, stmts, dst, b, 1);
+    emit_strbuf_cond_arm(c, stmts, dst, b, 1);
     buf_puts(b, "\n");
     return;
   }
@@ -11695,7 +11672,7 @@ void emit_case_branch_value(Compiler *c, int stmts, TyKind rt, int cr, Buf *b) {
   if (rt == TY_STRBUF && g_strbuf_case_node >= 0) {
     char dst[32];
     snprintf(dst, sizeof dst, "_cr%d", cr);
-    emit_strbuf_cond_arm(c, g_strbuf_case_lv, stmts, dst, b, 1);
+    emit_strbuf_cond_arm(c, stmts, dst, b, 1);
     buf_puts(b, " ");
     return;
   }
@@ -12851,8 +12828,7 @@ static int emit_strbuf_boxed_store(Compiler *c, int v, Buf *b) {
   int t = ++g_tmp;
   buf_puts(b, "({ ");
   t = hold_operand(c, v, TY_POLY, 0, t, 1, " ", b);
-  buf_printf(b, "sp_poly_nil_p(_t%d) ? (sp_String *)NULL : %s(sp_poly_arg_str_chk(_t%d)); })",
-             t, strbuf_new_func(c, v), t);
+  buf_printf(b, "sp_poly_nil_p(_t%d) ? (sp_String *)NULL : SP_STR_HDL(sp_poly_arg_str_chk(_t%d)); })", t, t);
   return 1;
 }
 /* An Integer or Float value with its nil (an sp_oint / sp_ofloat text) into
@@ -16577,16 +16553,14 @@ static int slot_takes_subclass(Compiler *c, TyKind slot, TyKind val) {
   return is_descendant(c, vc, sc);
 }
 
-/* --share-strings: does String value v (read as a String, not already the
-   handle), stored through the boxed writer arms of `base`, go into a field
-   that holds the shared handle in some class's attr writer or Struct
-   member? It is then held as its handle, which those arms store and the
-   call answers: the field takes no String's bytes (no arm would be written
-   for it), and a fresh handle would be a copy. -1 when not, else 1 when
-   such a field is shared (ivar_str_shared, which emit_strbuf_ivar_store
-   asks), and 0 when none is. The arm of a class whose field is not shared
-   stores a copy of a shared handle (emit_boxed_writer_arms), as its typed
-   store would. */
+/* Does String value v (read as a String, not already the handle), stored
+   through the boxed writer arms of `base`, go into a field that holds the
+   shared handle in some class's attr writer or Struct member? It is then
+   held as its handle, which those arms store and the call answers: the
+   field takes no String's bytes (no arm would be written for it), and a
+   fresh handle would be a copy. -1 when not, else the field's
+   ivar_str_shared, which emit_strbuf_ivar_store asks (1 for every such
+   field the analysis leaves). */
 int boxed_writer_holds_handle(Compiler *c, const char *base, int v) {
   if (v < 0 || repr_of(c, v).kind == RK_BOXED || repr_of(c, v).as_ty != TY_STRING)
     return -1;
@@ -16737,21 +16711,14 @@ void emit_boxed_writer_arms(Compiler *c, const char *base, const char *nm,
        hold it, through the upcast: with `@left` settled as Node, a Column
        stored through `obj.left = col` lost every arm and raised
        NoMethodError for a writer the receiver has. */
-    /* (a String's handle goes into a field of the String's bytes, which
-       the rule does not share, as its read) */
-    int hread = at == TY_STRBUF && ivt == TY_STRING;
-    /* (and a String into a field that holds a handle, wrapped as a new one) */
+    /* (a String into a field that holds a handle, wrapped as a new one) */
     int hwrap = at == TY_STRING && ivt == TY_STRBUF;
-    /* (a shared handle held for another class's field, into one the rule
-       does not share: a copy, as the typed store makes) */
-    int hcopy = at == TY_STRBUF && ivt == TY_STRBUF && iv >= 0 && !c->classes[k].ivar_str_shared[iv] &&
-                boxed_writer_holds_handle(c, base, vnode) == 1;
-    if (at != ivt && at != TY_POLY && ivt != TY_POLY && !hread && !hwrap && !slot_takes_subclass(c, ivt, at)) continue;
+    if (at != ivt && at != TY_POLY && ivt != TY_POLY && !hwrap && !slot_takes_subclass(c, ivt, at)) continue;
     /* (a value that allocates is stored as a statement of its own, which
        the write barrier follows: wrapped beside the store, the barrier ran
        before the allocation, whose collection dropped its record; a boxed
        String unboxed into a handle field is wrapped in a new handle) */
-    int alloc_store = hread || hwrap || hcopy || (lift && ivt == TY_POLY && at != TY_POLY) ||
+    int alloc_store = hwrap || (lift && ivt == TY_POLY && at != TY_POLY) ||
                       (at == TY_POLY && ivt == TY_STRBUF);
     buf_printf(b, " case %d: %s", k, alloc_store ? "{ " : "");
     if (alloc_store) emit_writer_arm_src_root(at, src, b);
@@ -16776,8 +16743,6 @@ void emit_boxed_writer_arms(Compiler *c, const char *base, const char *nm,
       if (lift) buf_puts(b, ")");
     }
     else if (at == TY_POLY && ivt != TY_POLY) emit_unbox_text(c, ivt, src, b);
-    else if (hread) buf_printf(b, "%s(%s)", "sp_strbuf_read_pub", src);
-    else if (hcopy) buf_printf(b, "(%s ? sp_String_new_shared(sp_String_cstr(%s)) : (sp_String *)NULL)", src, src);
     else if (hwrap) buf_printf(b, "SP_STR_HDL(%s)", src);
     else { emit_obj_upcast_prefix(c, ivt, at, b); buf_puts(b, src); }
     /* and its assigned mark (ivar_set_mark) */
@@ -20589,7 +20554,7 @@ static int emit_ivar_cvar_write_stmt(Compiler *c, int id, Buf *b, int indent, co
          its bytes forked the ivar off the caller's String */
       else if (c->share_plan) emit_str_form_handle(c, v, b);
       else if (!emit_strbuf_boxed_store(c, v, b)) {
-        buf_printf(b, "%s(", strbuf_new_func(c, v));
+        buf_puts(b, "SP_STR_HDL(");
         emit_str_expr(c, v, b);
         buf_puts(b, ")");
       }
@@ -20690,12 +20655,8 @@ static int emit_ivar_cvar_write_stmt(Compiler *c, int id, Buf *b, int indent, co
     /* --share-strings: a class variable holding the shared handle takes an
        alias's handle or a fresh one, as a handle local's write does */
     if (h.r.share) {
-      LocalVar slot;
-      memset(&slot, 0, sizeof slot);
-      lv_set_type(&slot, TY_STRBUF);
-      slot.str_shared = 1;
       if (nt_kind(nt, v) == NK_NilNode) buf_puts(b, "NULL");
-      else emit_strbuf_value(c, &slot, v, b);
+      else emit_strbuf_value(c, v, b);
     }
     /* an Integer or Float class variable some write leaves nil in: its oint */
     else if (cvar_is_oint(c, sc, h.idx)) emit_oint_expr(c, v, ct, b);
@@ -21669,7 +21630,7 @@ static int emit_attr_global_const_write_stmt(Compiler *c, int id, Buf *b, int in
        takes an alias's handle, or a fresh one (#6765) */
     if (repr_of_slot(c, lv).kind == RK_STRBUF) {
       if (nt_kind(nt, v) == NK_NilNode) buf_puts(b, "NULL");
-      else emit_strbuf_value(c, lv, v, b);
+      else emit_strbuf_value(c, v, b);
       buf_puts(b, ";\n");
       if (!isg && lv->init_guarded) {
         emit_indent(b, indent); buf_printf(b, "sp_init_in_progress_%s = 0;\n", key);
@@ -21846,8 +21807,8 @@ static int emit_attr_global_const_write_stmt(Compiler *c, int id, Buf *b, int in
     /* with a receiver to check, the value waits in a temp until it has been */
     int val_t = recv_t >= 0 ? ++g_tmp : -1;
     emit_indent(b, indent);
-    /* (one representation: a String held of either face, read through SP_STR_TO below) */
-    if (val_t >= 0 && (cv->type == TY_STRING || cv->type == TY_STRBUF)) buf_printf(b, "__auto_type _t%d = ", val_t);
+    /* (a String held of either face, read through SP_STR_TO below) */
+    if (val_t >= 0 && cv->type == TY_STRBUF) buf_printf(b, "__auto_type _t%d = ", val_t);
     else if (val_t >= 0) { emit_ctype(c, cv->type, b); buf_printf(b, " _t%d = ", val_t); }
     else buf_printf(b, "cst_%s = ", nm);
     if (vk == NK_NilNode)
@@ -21881,7 +21842,7 @@ static int emit_attr_global_const_write_stmt(Compiler *c, int id, Buf *b, int in
     if (recv_t >= 0) {
       emit_cpath_recv_check(recv_t, b, indent);
       emit_indent(b, indent);
-      if ((cv->type == TY_STRING || cv->type == TY_STRBUF)) buf_printf(b, "cst_%s = SP_STR_TO(cst_%s, _t%d);\n", nm, nm, val_t);
+      if (cv->type == TY_STRBUF) buf_printf(b, "cst_%s = SP_STR_TO(cst_%s, _t%d);\n", nm, nm, val_t);
       else buf_printf(b, "cst_%s = _t%d;\n", nm, val_t);
       if (cv->type == TY_CLASS) emit_cpath_recv_name(c, nm, recv_t, b, indent);
     }
@@ -21904,14 +21865,9 @@ static int emit_attr_global_const_write_stmt(Compiler *c, int id, Buf *b, int in
     }
     emit_indent(b, indent);
     char cslot[256]; snprintf(cslot, sizeof cslot, "cst_%s", nm);
-    if (cv->type == TY_STRING && op && sp_streq(op, "+")) {
-      char cref[256]; snprintf(cref, sizeof cref, "cst_%s", nm);
-      buf_printf(b, "%s = ", cref);
-      emit_str_op_assign_concat(c, cref, v, b); buf_puts(b, ";\n");
-    }
-    /* (one-String mode: a String constant holds the handle; `+=` makes a
-       new String, whose handle it then holds) */
-    else if (cv->type == TY_STRBUF && op && sp_streq(op, "+")) {
+    /* (a String constant holds the handle; `+=` makes a new String, whose
+       handle it then holds) */
+    if (cv->type == TY_STRBUF && op && sp_streq(op, "+")) {
       char cref[300]; snprintf(cref, sizeof cref, "SP_STR_B(cst_%s)", nm);
       buf_printf(b, "cst_%s = SP_STR_HDL(", nm);
       emit_str_op_assign_concat(c, cref, v, b); buf_puts(b, ");\n");
@@ -22004,12 +21960,8 @@ static int emit_attr_global_const_write_stmt(Compiler *c, int id, Buf *b, int in
     int v = nt_ref(nt, id, "value");
     emit_indent(b, indent);
     char gref[256]; snprintf(gref, sizeof gref, "gv_%s", rn);
-    if (lv->type == TY_STRING && op && sp_streq(op, "+")) {
-      buf_printf(b, "gv_%s = sp_str_concat(gv_%s, ", rn, rn);
-      emit_str_expr(c, v, b); buf_puts(b, ");\n");
-    }
     /* a global holding the shared handle: `+=` makes a new String */
-    else if (repr_of_slot(c, lv).kind == RK_STRBUF && op && is_plus_op(op)) {
+    if (repr_of_slot(c, lv).kind == RK_STRBUF && op && is_plus_op(op)) {
       buf_printf(b, "gv_%s = sp_String_new_shared(sp_str_concat(sp_String_cstr(gv_%s), ", rn, rn);
       emit_str_expr(c, v, b); buf_puts(b, "));\n");
     }

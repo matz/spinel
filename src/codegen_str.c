@@ -448,13 +448,6 @@ void str_new_handle_open(Buf *b) {
 void str_new_handle_close(Buf *b) {
   buf_puts(b, ")");
 }
-/* The open of a new handle around the bytes of node v, closed by
-   str_new_handle_close: the fresh handle (sp_String_new_fresh, which keeps
-   a small payload inside the new handle) where v is a String proven new,
-   else the shared one (strbuf_new_func chooses). */
-void str_new_handle_open_of(Compiler *c, int v, Buf *b) {
-  buf_printf(b, "%s(", strbuf_new_func(c, v));
-}
 
 /* The box of a String's bytes (sp_box_str, the String row's box template),
    written in one place beside the box of a handle: `e` is the bytes' text

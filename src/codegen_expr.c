@@ -2621,13 +2621,6 @@ static int emit_local_ivar_write_expr(Compiler *c, int id, Buf *b, const NodeTab
        in a thread). */
     const char *nm = nt_str(nt, id, "name");
     LocalVar *olv = nm ? scope_local(comp_scope_of(c, id), nm) : NULL;
-    /* Without --share-strings, a pure alias pair's handle local takes `+=`
-       as a statement only: the value kept under another name (`x = (s +=
-       y)`) would be a copy the alias rule never joined to s's String */
-    if (olv && olv->type == TY_STRBUF && repr_of_slot(c, olv).handle && !repr_of_slot(c, olv).share) {
-      unsupported(c, id, "operator assignment");
-      return 1;
-    }
     buf_puts(b, "({ ");
     emit_op_assign(c, id, b, 0);
     /* a local holding a shared handle: the handle itself where one is
@@ -2767,7 +2760,7 @@ static int emit_local_ivar_write_expr(Compiler *c, int id, Buf *b, const NodeTab
       /* a route that hands on the handle (`@a = yield`, emit_strbuf_route) */
       else if (emit_strbuf_route(c, v, b)) { }
       else {
-        buf_printf(b, "%s(", strbuf_new_func(c, v));
+        buf_puts(b, "SP_STR_HDL(");
         emit_str_expr(c, v, b);
         buf_puts(b, ")");
       }
@@ -3153,12 +3146,8 @@ static int emit_ivar_cvar_gvar_expr(Compiler *c, int id, Buf *b, const NodeTable
     /* --share-strings: a class variable holding the shared handle; the
        value is its read */
     if (h.r.share) {
-      LocalVar slot;
-      memset(&slot, 0, sizeof slot);
-      lv_set_type(&slot, TY_STRBUF);
-      slot.str_shared = 1;
       if (nt_kind(nt, v) == NK_NilNode) buf_puts(b, "NULL");
-      else emit_strbuf_value(c, &slot, v, b);
+      else emit_strbuf_value(c, v, b);
       emit_cvar_set_flag_after(c, cid, nm, b);
       buf_puts(b, ", ");
       emit_strbuf_slot_read(c, id, repr_of(c, id), sref.p, b);
@@ -3205,13 +3194,9 @@ static int emit_ivar_cvar_gvar_expr(Compiler *c, int id, Buf *b, const NodeTable
     const char *op = nt_str(nt, id, "binary_operator");
     int v = nt_ref(nt, id, "value");
     char gref[256]; snprintf(gref, sizeof gref, "gv_%s", rn);
-    if (lv->type == TY_STRING && op && sp_streq(op, "+")) {
-      buf_printf(b, "(gv_%s = sp_str_concat(gv_%s, ", rn, rn);
-      emit_str_expr(c, v, b); buf_puts(b, "))");
-    }
     /* a global holding the shared handle: `+=` makes a new String, and the
        value is its read */
-    else if (repr_of_slot(c, lv).kind == RK_STRBUF && op && is_plus_op(op)) {
+    if (repr_of_slot(c, lv).kind == RK_STRBUF && op && is_plus_op(op)) {
       buf_printf(b, "({ gv_%s = sp_String_new_shared(sp_str_concat(sp_String_cstr(gv_%s), ", rn, rn);
       emit_str_expr(c, v, b);
       buf_printf(b, ")); sp_String_cstr(gv_%s); })", rn);
@@ -3262,10 +3247,8 @@ static int emit_ivar_cvar_gvar_expr(Compiler *c, int id, Buf *b, const NodeTable
     }
     if (!comp_const_write_valued(c, cv)) {
       char msg[400];
-      snprintf(msg, sizeof msg, "`%s = ...` used as a value is not supported for a constant holding %s; "
-               "assign %s on a line of its own and use %s", nm ? nm : "?",
-               cv && cv->type == TY_STRING ? "a String (the value would be a copy)" : "this kind of value",
-               nm ? nm : "it", nm ? nm : "it");
+      snprintf(msg, sizeof msg, "`%s = ...` used as a value is not supported for a constant holding this kind of "
+               "value; assign %s on a line of its own and use %s", nm ? nm : "?", nm ? nm : "it", nm ? nm : "it");
       unsupported_feature(c, id, msg);
       return 1;
     }

@@ -7775,7 +7775,7 @@ static void emit_arg_or_default_fill(Compiler *c, Scope *m, int idx, int provide
     /* a default that writes a slot holding the --share-strings handle
        (`v = (@s = +"s")`) binds that handle */
     if (dvP >= 0 && emit_strbuf_write_handle(c, dvP, out)) return;
-    buf_printf(out, "%s(", strbuf_new_func(c, dvP));
+    buf_puts(out, "SP_STR_HDL(");
     /* (in the callee's context, as below) */
     const char *svs = g_self, *svd = g_self_deref;
     int sve = g_emitting_class_id;

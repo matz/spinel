@@ -9,11 +9,6 @@
 #include "value_pos.h"
 #include <errno.h>
 
-/* One representation: a block parameter bound to a typed String Array's
-   element (the split, scan and upto forms) holds the handle the Array keeps,
-   so a change through it shows in the Array; its slot is the handle's. */
-static TyKind one_elem_bind_type(TyKind et) { return et == TY_STRING ? TY_STRBUF : et; }
-
 /* Is `s` the C text of an integer literal (`589LL`, `-8LL`, `(-8LL)`)? Its
    value in *v. */
 static int c_int_literal_text(const char *s, long long *v) {
@@ -817,8 +812,8 @@ void emit_inline_locals_aliased(Compiler *c, int mi, int tag, unsigned alias_mas
            both across the same setjmp as ordinary inline locals (#6552).
            Nested inlines must also retain the borrowed slot's qualifier. */
         emit_indent(b, din);
-        buf_printf(b, "%s *%s _cell_%s = NULL;\n",
-                   borrowed_string_type(lv), vol ? " volatile" : "", rn);
+        buf_printf(b, "const char * *%s _cell_%s = NULL;\n",
+                   vol ? " volatile" : "", rn);
         continue;
       }
     }
@@ -2345,7 +2340,7 @@ void emit_block_kw_binds(Compiler *c, int blk, int ykw, Scope *bsc, Buf *b, int 
     if (kw_alias && al->n < (int)(sizeof al->nm / sizeof al->nm[0])) {
       if (!as_expr) emit_indent(b, indent);
       if (!as_expr && !al->open) { buf_puts(b, "{\n"); emit_indent(b, indent); al->open = 1; }
-      buf_printf(b, "%s *_cell_%s = &(", borrowed_string_type(kl), kpr);
+      buf_printf(b, "const char * *_cell_%s = &(", kpr);
       emit_expr(c, vn, b);
       buf_puts(b, ")");
       buf_puts(b, as_expr ? "; " : ";\n");
@@ -2508,7 +2503,7 @@ static int emit_block_post_alias(Compiler *c, int blk, const char *bp, const cha
   refuse_alias_of_snapshot(c, yarg, bp);
   if (!as_expr) emit_indent(b, indent);
   if (!as_expr && !al->open) { buf_puts(b, "{\n"); emit_indent(b, indent); al->open = 1; }
-  buf_printf(b, "%s *_cell_%s = &(", borrowed_string_type(bl), bpr);
+  buf_printf(b, "const char * *_cell_%s = &(", bpr);
   emit_expr(c, yarg, b);
   buf_puts(b, ")");
   buf_puts(b, as_expr ? "; " : ";\n");
@@ -3063,7 +3058,7 @@ void emit_block_binds(Compiler *c, int blk, const int *yargs, int yc,
       gref.p = NULL;
       if (bl && al && al->n < (int)(sizeof al->nm / sizeof al->nm[0])) {
         if (!as_expr && !al->open) { buf_puts(b, "{\n"); emit_indent(b, indent); al->open = 1; }
-        buf_printf(b, "%s *_cell_%s = &(", borrowed_string_type(bl), bpr);
+        buf_printf(b, "const char * *_cell_%s = &(", bpr);
         emit_expr(c, yargs[k], b);
         buf_puts(b, ")");
         buf_puts(b, as_expr ? "; " : ";\n");
@@ -3155,7 +3150,7 @@ void emit_block_binds(Compiler *c, int blk, const int *yargs, int yc,
       refuse_alias_of_snapshot(c, yargs[yi], op);
       if (!as_expr) emit_indent(b, indent);
       if (!as_expr && !al->open) { buf_puts(b, "{\n"); emit_indent(b, indent); al->open = 1; }
-      buf_printf(b, "%s *_cell_%s = &(", borrowed_string_type(ol), opr);
+      buf_printf(b, "const char * *_cell_%s = &(", opr);
       emit_expr(c, yargs[yi], b);
       buf_puts(b, ")");
       buf_puts(b, as_expr ? "; " : ";\n");
@@ -6317,14 +6312,15 @@ static int iter_tap_slice_string_arms(Compiler *c, int id, Buf *b, int indent, c
     int spIndent = indent + 1;
     if (use_shadow_sp) {
       int sb_bn = 0; const int *sb_bb = body >= 0 ? nt_arr(nt, body, "body", &sb_bn) : NULL;
-      /* (one representation: the element is the handle, and so is the
-         parameter that holds it, its body inferred over that slot) */
-      TyKind bt = one_elem_bind_type(et); int ss0 = clv0->str_shared;
-      if (bt == TY_STRBUF) { clv0->str_shared = 1; comp_touch_scope(clv0->owner); }
-      lv_set_type(clv0, bt);
-      arm_body_infer(c, ARM_SITE_SPLIT, block, bt, sb_bb, sb_bn);
+      /* (the element is the handle the Array keeps, so a change through the
+         parameter shows in the Array, and so is the parameter that holds
+         it, its body inferred over that slot) */
+      int ss0 = clv0->str_shared;
+      clv0->str_shared = 1; comp_touch_scope(clv0->owner);
+      lv_set_type(clv0, TY_STRBUF);
+      arm_body_infer(c, ARM_SITE_SPLIT, block, TY_STRBUF, sb_bb, sb_bn);
       emit_indent(b, spIndent); buf_puts(b, "{\n"); spIndent++;
-      emit_indent(b, spIndent); buf_printf(b, bt == TY_STRBUF ? "sp_String *lv_%s = sp_StrArray_get_e(_t%d, _t%d);\n" : "const char *lv_%s = sp_StrArray_get(_t%d, _t%d);\n", p0, tm, ti);
+      emit_indent(b, spIndent); buf_printf(b, "sp_String *lv_%s = sp_StrArray_get_e(_t%d, _t%d);\n", p0, tm, ti);
       emit_loop_body(c, body, b, spIndent);
       spIndent--;
       emit_indent(b, spIndent); buf_puts(b, "}\n");
@@ -6407,12 +6403,12 @@ static int iter_tap_slice_string_arms(Compiler *c, int id, Buf *b, int indent, c
     int bodyIndent = indent + 1;
     if (use_shadow_sc) {
       int scb_bn = 0; const int *scb_bb = body >= 0 ? nt_arr(nt, body, "body", &scb_bn) : NULL;
-      TyKind bt = one_elem_bind_type(et); int ss0 = clv0->str_shared;   /* (one representation: see the split form) */
-      if (bt == TY_STRBUF) { clv0->str_shared = 1; comp_touch_scope(clv0->owner); }
-      lv_set_type(clv0, bt);
-      arm_body_infer(c, ARM_SITE_SCAN, block, bt, scb_bb, scb_bn);
+      int ss0 = clv0->str_shared;   /* (see the split form) */
+      clv0->str_shared = 1; comp_touch_scope(clv0->owner);
+      lv_set_type(clv0, TY_STRBUF);
+      arm_body_infer(c, ARM_SITE_SCAN, block, TY_STRBUF, scb_bb, scb_bn);
       emit_indent(b, bodyIndent); buf_puts(b, "{\n"); bodyIndent++;
-      emit_indent(b, bodyIndent); buf_printf(b, bt == TY_STRBUF ? "sp_String *lv_%s = %s;\n" : "const char *lv_%s = %s;\n", p0, bt == TY_STRBUF ? sc_get_e : sc_get);
+      emit_indent(b, bodyIndent); buf_printf(b, "sp_String *lv_%s = %s;\n", p0, sc_get_e);
       emit_loop_body(c, body, b, bodyIndent);
       bodyIndent--;
       emit_indent(b, bodyIndent); buf_puts(b, "}\n");
@@ -6498,12 +6494,12 @@ static int iter_range_upto_arms(Compiler *c, int id, Buf *b, int indent, const N
         buf_printf(b, "for (sp_int _t%d = 0; _t%d < _t%d->len; _t%d++) {\n", ti, ti, ta, ti);
         if (use_shadow) {
           int sbn = 0; const int *sbb = body >= 0 ? nt_arr(nt, body, "body", &sbn) : NULL;
-          TyKind bt = one_elem_bind_type(TY_STRING); int ss0 = slv->str_shared;   /* (one representation: see the split form) */
-          if (bt == TY_STRBUF) { slv->str_shared = 1; comp_touch_scope(slv->owner); }
-          lv_set_type(slv, bt);
-          arm_body_infer(c, ARM_SITE_STR_UPTO, block, bt, sbb, sbn);
+          int ss0 = slv->str_shared;   /* (see the split form) */
+          slv->str_shared = 1; comp_touch_scope(slv->owner);
+          lv_set_type(slv, TY_STRBUF);
+          arm_body_infer(c, ARM_SITE_STR_UPTO, block, TY_STRBUF, sbb, sbn);
           emit_indent(b, indent + 1);
-          buf_printf(b, bt == TY_STRBUF ? "sp_String *lv_%s = sp_StrArray_get_e(_t%d, _t%d);\n" : "const char *lv_%s = sp_StrArray_get(_t%d, _t%d);\n", p0, ta, ti);
+          buf_printf(b, "sp_String *lv_%s = sp_StrArray_get_e(_t%d, _t%d);\n", p0, ta, ti);
           emit_loop_body(c, body, b, indent + 1);
           lv_set_type(slv, saved); { slv->str_shared = ss0; comp_touch_scope(slv->owner); }
         }

@@ -16698,7 +16698,7 @@ int emit_boxed_class_aref(Compiler *c, int id, Buf *b) {
         /* (a value wrapped where its handle is demanded, a literal, takes
            a new handle around its bytes, as emit_boxed_string wraps one) */
         if (repr_of(c, argv[i]).strbuf_src == RS_FRESH) {
-          buf_printf(b, "%s(", strbuf_new_func(c, argv[i]));
+          buf_puts(b, "SP_STR_HDL(");
           int mk = view_push_repr(c, argv[i], VR_STRBUF_BOX, 0);
           emit_str_expr(c, argv[i], b);
           view_pop(c, mk);

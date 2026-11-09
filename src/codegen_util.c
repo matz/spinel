@@ -3615,18 +3615,15 @@ static int strbuf_box_ref_as(Compiler *c, int recv, const char *fmt, Buf *b) {
 }
 
 /* Emit a shared-mutable string receiver for an operation that only READS its
-   bytes: the live buffer, not the whole-buffer copy an ordinary value read
-   makes (#3227). Answers 0 when the receiver is not such a slot, so the caller
-   falls back to emit_expr. A narrowed box is not a handle slot: its ordinary
+   bytes: the live buffer, as an ordinary value read gives. Answers 0 when
+   the receiver is not such a slot, so the caller falls back to emit_expr. A narrowed box is not a handle slot: its ordinary
    expression reads the bytes without allocating a handle first. A slot that
    can be nil (an ivar no write has set yet, which ivar_nil_recv_guard leaves
    untested) reads as NULL for it, as the copying read does, and the call
    answers as for a nil String receiver. */
 int emit_strbuf_read_ref(Compiler *c, int recv, Buf *b) {
-  Repr rr = repr_of(c, recv);
   /* (one representation: the slot's text may be bound to a temp of either
      face; SP_STR_B reads both and keeps NULL) */
-  (void)rr;
   return strbuf_box_ref_as(c, recv, "SP_STR_B(%s)", b);
 }
 /* The object_id of handle `h`, a String that can be nil: the handle is
@@ -4397,7 +4394,7 @@ static int strbuf_slot_into(Compiler *c, int recv, Buf *b) {
     return fit;
   }
   /* a global or a constant holding the handle (--share-strings, #6765) */
-  if ((1) && recv >= 0 && repr_static_read_kind(nt_kind(c->nt, recv))) {
+  if (recv >= 0 && repr_static_read_kind(nt_kind(c->nt, recv))) {
     /* inside the shim over it, the read is its plain shadow */
     if (sb_shadowed_reader(recv)) return 0;
     return holder_static_handle_buf(c, recv, b);

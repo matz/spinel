@@ -1962,7 +1962,7 @@ static void emit_str_expr_ex(Compiler *c, int node, int strict, Buf *b) {
      String, with the mark lifted, as emit_boxed_strbuf reads it: this slot
      takes its bytes, and the marked form is the handle, which no
      conversion keeps in a const char * slot */
-  if ((1) && node >= 0 && c->strbuf_box[node] && store_value_kind(c, node) == TY_STRBUF) {
+  if (node >= 0 && c->strbuf_box[node] && store_value_kind(c, node) == TY_STRBUF) {
     int sv = view_push_repr(c, node, VR_STRBUF_BOX, 0);
     emit_str_expr_ex(c, node, strict, b);
     view_pop(c, sv);
@@ -2643,7 +2643,7 @@ static void emit_boxed_strbuf(Compiler *c, int node, TyKind t, const Repr *rp, B
      hands a nil back as NULL, and sp_box_obj boxed that NULL as a String.
      One the never-nil list proves is wrapped as it was.
      The handle keeps its bytes in a separate block even when the value is
-     proven fresh (strbuf_new_func would answer sp_String_new_fresh): every
+     proven fresh (sp_String_new_fresh would keep a small payload inside it): every
      mark of the container touches each element's header, a minor included
      once a push has put the container in the remembered set, and a payload
      inside the object spreads those headers out (a 44-byte element takes a
@@ -5883,7 +5883,6 @@ static void inherit_transplant_locals(Compiler *c, Scope *s) {
       dl->is_block_param = sl.is_block_param;
       lv_set_proc_ret(dl, sl.proc_ret);
       { dl->is_cell = sl.is_cell; comp_touch_scope(dl->owner); }
-      dl->borrowed_volatile = sl.borrowed_volatile;
     }
     break;
   }
@@ -8578,12 +8577,6 @@ void emit_cell_elem_type(Compiler *c, LocalVar *lv, Buf *b) {
   buf_puts(b, "sp_int");
 }
 
-/* The element type of a borrowed String slot, not an owned heap cell.
-   Selector volatility is a separate qualifier on the pointer to this. */
-const char *borrowed_string_type(const LocalVar *lv) {
-  return lv->borrowed_volatile ? "const char * volatile" : "const char *";
-}
-
 /* True if the AST subtree at `id` has a YieldNode, not crossing DefNode. */
 int proc_body_has_yield(Compiler *c, int id) {
   if (id < 0) return 0;
@@ -10848,7 +10841,7 @@ else if (orecv >= 0 && onm) {
       /* a float capture rides a native sp_float cell, a poly capture an
          sp_RbVal cell, a heap object its typed pointer (see emit_scope_decls). */
       buf_puts(&g_procs, " ");
-      if (clv && clv->inline_alias) buf_puts(&g_procs, borrowed_string_type(clv));
+      if (clv && clv->inline_alias) buf_puts(&g_procs, "const char *");
       else emit_cell_elem_type(c, clv, &g_procs);
       buf_printf(&g_procs, " *c_%s;", caps.v[i]);
     }
@@ -22914,28 +22907,6 @@ char *codegen_program(const NodeTable *nt) {
   g_scopes_settled = 1;   /* scope_is_shadowed may answer from its table now */
   mc_number_versions(c);
   mc_resolve_clashes(c);   /* two methods spelling one C name get two */
-  /* Only stack String slots selected by the existing setjmp policy seed
-     borrowed volatility; a heap cell itself does not live across setjmp. */
-  int borrowed_vol = 0;
-  for (int si = 0; si < c->nscopes; si++) {
-    if (!scope_has_begin(c, si)) continue;
-    char **names = NULL; int nn = 0, all = 0;
-    begin_volatile_names(c, si, &names, &nn, &all);
-    Scope *s = &c->scopes[si];
-    for (int k = 0; k < s->nlocals; k++) {
-      LocalVar *lv = &s->locals[k];
-      if (lv->type != TY_STRING || lv->is_cell) continue;
-      int hit = all;
-      for (int j = 0; j < nn && !hit; j++)
-        if (names[j] && lv->name && sp_streq(names[j], lv->name)) hit = 1;
-      if (hit) {
-        lv->borrowed_volatile = 1;
-        borrowed_vol = 1;
-      }
-    }
-    free(names);
-  }
-  if (borrowed_vol) propagate_borrowed_volatile(c);
   /* From here on a yield reads the type of the block spliced at THIS site,
      not the union the node cache holds across sites (#3784). Installed after
      analysis so the fixpoint keeps seeing the cache unchanged. */

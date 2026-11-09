@@ -196,10 +196,9 @@ void emit_strbuf_param_bind(Compiler *c, const LocalVar *pv, TyKind want, const 
 /* `REF ||= v` / `REF &&= v` on a shared-handle String slot (codegen_expr.c) */
 void emit_strbuf_orw_guard(Compiler *c, const char *ref, int v, int is_or, Buf *b);
 /* The value a write hands a shared-handle String slot `lv` (codegen_stmt.c) */
-void emit_strbuf_value(Compiler *c, LocalVar *lv, int v, Buf *b);
+void emit_strbuf_value(Compiler *c, int v, Buf *b);
 /* The handle such a slot takes from value v: its own, or a new one */
 void emit_strbuf_handle_of(Compiler *c, int v, Buf *b);
-const char *strbuf_new_func(Compiler *c, int v);
 void strbuf_new_of_text(Compiler *c, int v, const char *t, Buf *b);
 /* --share-strings: the handle a value route that answers the String it is
    handed (`+s`, `String(s)`, `s.then { |x| x }`) hands on: 1, or 0 with
@@ -541,7 +540,6 @@ void str_read_handle_close(Buf *b);
    field `h`, String field `e`), written in one place (codegen_str.c) */
 void str_new_handle_open(Buf *b);
 void str_new_handle_close(Buf *b);
-void str_new_handle_open_of(Compiler *c, int v, Buf *b);
 void str_box_kept(Buf *b, int t, const char *h, const char *e);
 /* The box face's arms for a value boxed by its representation: a String
    the plan wraps as the new handle it is (`wrap`), else its bytes */
@@ -1628,7 +1626,6 @@ const char *cell_value_struct(TyKind t);
 const char *cell_value_struct_empty(TyKind t);
 const char *cell_value_struct_scan(TyKind t);
 void emit_cell_elem_type(Compiler *c, LocalVar *lv, Buf *b);
-const char *borrowed_string_type(const LocalVar *lv);
 int splat_string_var(Compiler *c, const int *av, int ac, int *fs);
 void refuse_super_splat(Compiler *c, int id, int target);
 void refuse_yield_splat(Compiler *c, int blk, int yc, const int *yv);

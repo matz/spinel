@@ -177,8 +177,6 @@ typedef struct {
                        C slot. Keep that slot alongside the cell and copy it in
                        at the top of the body, so a proc lifted out of the block
                        reads this iteration's value through the cell. */
-  int borrowed_volatile; /* codegen: this String slot, or a slot borrowed here,
-                           is live across setjmp; propagate through lending */
   int inline_alias; /* (params of a yielding method, codegen only) how many
                        inline expansions currently in progress bind this
                        parameter as an ALIAS of the caller's variable rather
@@ -2310,8 +2308,6 @@ int        comp_cvar_index(ClassInfo *ci, const char *name);  /* class var; -1 i
 int        comp_cvar_intern(ClassInfo *ci, const char *name); /* find or add; returns index */
 int        comp_cvar_owner(const Compiler *c, int cid, const char *name); /* the class whose slot holds @@name */
 int        cvar_name_ok(const char *n);   /* `@@` and an identifier: a reflection call's literal name that is not one raises NameError */
-/* Propagate codegen's setjmp-slot qualifiers through borrowed String calls. */
-void       propagate_borrowed_volatile(Compiler *c);
 /* Find the instance-method scope index for class_id + method name, or -1. */
 int        comp_method_in_class(Compiler *c, int class_id, const char *name);
 int        comp_method_overridden(Compiler *c, int cid, const char *name, int cmeth);

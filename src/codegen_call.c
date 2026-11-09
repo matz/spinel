@@ -10092,8 +10092,7 @@ static int emit_poly_shared_arg(Compiler *c, const PolyArgs *A, int k, Buf *pa) 
     free(sref.p);
     return 1;
   }
-  if (at == TY_STRBUF) buf_printf(pa, "_t%d", A->atmp[k]);
-  else buf_printf(pa, "sp_String_new_shared(_t%d)", A->atmp[k]);
+  buf_printf(pa, "sp_String_new_shared(_t%d)", A->atmp[k]);
   return 1;
 }
 

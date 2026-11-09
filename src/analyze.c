@@ -25809,35 +25809,6 @@ int cap_wrap_mutates_param(Compiler *c, int blk, const char *bp) {
   return 0;
 }
 
-/* The blocks that calls pass, listed by the method each call names, built
-   once a pass on first need: asked of every call for each block that yields
-   its parameter on, the question grew with the square of the program
-   (scale-test). */
-typedef struct { int *head, *next, *blk, n, ns, built; } ACallerBlocks;
-static void an_caller_blocks_build(Compiler *c, ACallerBlocks *t) {
-  const NodeTable *nt = c->nt;
-  t->ns = c->nscopes > 0 ? c->nscopes : 1;
-  int nc = nt->count > 0 ? nt->count : 1;
-  t->head = malloc(sizeof(int) * (size_t)t->ns);
-  t->next = malloc(sizeof(int) * (size_t)nc);
-  t->blk = malloc(sizeof(int) * (size_t)nc);
-  for (int i = 0; i < t->ns; i++) t->head[i] = -1;
-  t->n = 0; t->built = 1;
-  for (int u = comp_kind_first(c, NK_CallNode); u >= 0; u = comp_kind_next(c, u)) {
-    if (nt_kind(nt, u) != NK_CallNode) continue;
-    int ub = nt_ref(nt, u, "block");
-    if (ub < 0 || nt_kind(nt, ub) != NK_BlockNode) continue;
-    int mi = an_call_target_mi(c, u);
-    if (mi < 0 || mi >= t->ns) continue;
-    t->blk[t->n] = ub; t->next[t->n] = t->head[mi]; t->head[mi] = t->n++;
-  }
-}
-static void an_caller_blocks_free(ACallerBlocks *t) {
-  if (!t->built) return;
-  free(t->head); free(t->next); free(t->blk);
-  t->built = 0;
-}
-
 /* --share-strings (#6765): apply the one rule. Every slot that can hold a
    String is the shared handle (slot_holders); this sets the flags repr_of
    reads for them, through each holder kind's own representation: a local or a
@@ -28852,80 +28823,6 @@ static void handle_arg_tab_free(HandleArgTab *t) {
   free(t->off); free(t->bit); free(t->head); free(t->enext); free(t->enode);
   t->off = NULL; t->bit = NULL; t->head = NULL;
   t->enext = NULL; t->enode = NULL; t->ok = 0;
-}
-
-/* Qualifiers flow in the opposite direction to the handle pull: from a
-   setjmp-live caller slot into the parameter borrowing it. Codegen seeds
-   the slots using its existing selective volatility policy. Reuse the
-   resolved call-site chains, including keywords, overrides and splices. */
-static int lend_volatile_slot(Compiler *c, int arg, LocalVar *dst) {
-  if (!dst || dst->type != TY_STRING || dst->borrowed_volatile ||
-      arg < 0 || nt_kind(c->nt, arg) != NK_LocalVariableReadNode) return 0;
-  Scope *s = comp_scope_of(c, arg);
-  LocalVar *src = s ? scope_local(s, nt_str(c->nt, arg, "name")) : NULL;
-  if (!src || !src->borrowed_volatile) return 0;
-  dst->borrowed_volatile = 1;
-  return 1;
-}
-
-void propagate_borrowed_volatile(Compiler *c) {
-  const NodeTable *nt = c->nt;
-  HandleArgTab sites; handle_arg_tab_init(c, &sites);
-  if (!sites.ok) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-  ACallerBlocks blocks = {0}; an_caller_blocks_build(c, &blocks);
-  int changed = 1;
-  while (changed) {
-    changed = 0;
-    for (int mi = 1; mi < c->nscopes; mi++) {
-      Scope *m = &c->scopes[mi];
-      for (int j = 0; j < m->nparams; j++) {
-        LocalVar *p = m->pnames[j] ? scope_local(m, m->pnames[j]) : NULL;
-        if (!p || p->type != TY_STRING) continue;
-        for (int e = sites.head[mi]; e >= 0; e = sites.enext[e]) {
-          int u = sites.enode[e], blk = nt_ref(nt, u, "block");
-          if (!(m->yields && an_inline_param_lent(c, mi, j, blk))) continue;
-          changed |= lend_volatile_slot(c, arg_layout_param_node(c, m, u, j, NULL), p);
-        }
-      }
-    }
-    for (int u = 0; u < nt->count; u++) {
-      NodeKind kind = nt_kind(nt, u);
-      Scope *s = comp_scope_of(c, u);
-      if (!s) continue;
-      if (kind == NK_SuperNode || kind == NK_ForwardingSuperNode) continue;
-      int exec = kind == NK_CallNode && nt_str(nt, u, "name") && sp_streq(nt_str(nt, u, "name"), "instance_exec");
-      if (kind != NK_YieldNode && !exec && !(kind == NK_CallNode && an_yield_like(c, u, s))) continue;
-      int aa = nt_ref(nt, u, "arguments"), ac = 0;
-      const int *av = aa >= 0 ? nt_arr(nt, aa, "arguments", &ac) : NULL;
-      int si = (int)(s - c->scopes);
-      for (int e = exec ? -1 : blocks.head[si]; exec || e >= 0; e = blocks.next[e]) {
-        int blk = exec ? nt_ref(nt, u, "block") : blocks.blk[e];
-        if (blk >= 0 && nt_kind(nt, blk) == NK_BlockNode) {
-          Scope *bs = comp_scope_of(c, blk);
-          for (int k = 0; k < ac; k++) {
-            if (nt_kind(nt, av[k]) == NK_SplatNode) break;
-            if (nt_kind(nt, av[k]) == NK_KeywordHashNode) {
-              int en = 0; const int *el = nt_arr(nt, av[k], "elements", &en);
-              for (int i = 0; i < en; i++) {
-                int v; const char *key = dyn_kw_elem_key(c, el[i], &v);
-                const char *kp = key ? an_block_kw_param(c, blk, key) : NULL;
-                LocalVar *p = kp && bs ? scope_local(bs, kp) : NULL;
-                if (key && an_block_kw_lent(c, blk, key)) changed |= lend_volatile_slot(c, v, p);
-              }
-            }
-            else {
-              const char *bp = block_param_at(c, blk, k, call_plain_argc(c, u));
-              LocalVar *p = bp && bs ? scope_local(bs, bp) : NULL;
-              if (an_block_param_lent(c, blk, k, call_plain_argc(c, u))) changed |= lend_volatile_slot(c, av[k], p);
-            }
-          }
-        }
-        if (exec) break;
-      }
-    }
-  }
-  an_caller_blocks_free(&blocks);
-  handle_arg_tab_free(&sites);
 }
 
 static int handle_arg_tab_get(const HandleArgTab *t, int mi, int pj) {

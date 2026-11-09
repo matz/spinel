@@ -1,0 +1,19 @@
+[Integer, Numeric, [Integer, Mx, Numeric, Comparable, Object, Kernel, BasicObject], true, false, true, [Mx, Comparable, Kernel]]
+[Float, Numeric, [Float, Numeric, Comparable, Object, Kernel, BasicObject], true, false, true, [Comparable, Kernel]]
+[Rational, Numeric, [Rational, Numeric, Comparable, Object, Kernel, BasicObject], true, false, true, [Comparable, Kernel]]
+[Complex, Numeric, [Complex, Numeric, Comparable, Object, Kernel, BasicObject], true, false, true, [Comparable, Kernel]]
+[String, Object, [Px, String, Comparable, Object, Kernel, BasicObject], true, false, true, [Px, Comparable, Kernel]]
+[Symbol, Object, [Symbol, Comparable, Object, Kernel, BasicObject], true, false, true, [Comparable, Kernel]]
+[Time, Object, [Time, Comparable, Object, Kernel, BasicObject], true, false, true, [Comparable, Kernel]]
+[Array, Object, [Array, Enumerable, Object, Kernel, BasicObject], false, true, nil, [Enumerable, Kernel]]
+[Hash, Object, [Hash, Enumerable, Object, Kernel, BasicObject], false, true, nil, [Enumerable, Kernel]]
+[Range, Object, [Range, Enumerable, Object, Kernel, BasicObject], false, true, nil, [Enumerable, Kernel]]
+[NilClass, Object, [NilClass, Object, Kernel, BasicObject], false, false, nil, [Kernel]]
+[Integer, Mx, Numeric, Comparable, Object, Kernel, BasicObject]
+Object
+true
+[Object, Kernel, BasicObject]
+true
+true
+StandardError
+true

@@ -1233,8 +1233,9 @@ RAISE_MODE_PINS := test/float_to_r_bounded.rb test/rational_string_overflow.rb t
 # comparable_reopen_rational: under promote a Rational is a boxed value, and
 # a boxed receiver's call to a method the program adds to Comparable takes
 # Object's method or raises NoMethodError (desugar_builtin_scalar_calls
-# rewrites a concrete receiver only).
-PROMOTE_GAPS := test/step_boxed_float_bound.rb test/comparable_reopen_rational.rb
+# rewrites a concrete receiver only). comparable_own_method_self_class
+# calls such a method on a Rational too.
+PROMOTE_GAPS := test/step_boxed_float_bound.rb test/comparable_reopen_rational.rb test/comparable_own_method_self_class.rb
 ifeq ($(SPINEL_INT_OVERFLOW),promote)
 TESTS := $(filter-out $(RAISE_MODE_PINS) $(PROMOTE_GAPS),$(TESTS))
 # Drive the spinel front-end and the C compile in promote mode so the test

@@ -613,7 +613,6 @@ static void repr_layout(Repr *r, TyKind t) {
    same. */
 static void repr_slot_storage(Repr *r, const LocalVar *lv) {
   r->cell = (unsigned char)(lv->inline_alias ? RC_ALIAS : lv->is_cell ? RC_HEAP : RC_NONE);
-  r->volatile_str = lv->borrowed_volatile != 0;
   r->arr_or_nil = lv->arr_or_nil == 1 && lv->type == TY_POLY;
 }
 
@@ -1935,10 +1934,10 @@ static const char *repr_cell_name(int cell) {
 static void repr_dump_line(const Compiler *c, ReprLines *ls, const char *where, Repr r) {
   char ty[256], line[1024];
   repr_dump_ty(c, r.ty, ty, sizeof ty);
-  snprintf(line, sizeof line, "%s: %s ty=%s%s%s%s%s%s%s%s", where, repr_kind_name(r.kind), ty,
+  snprintf(line, sizeof line, "%s: %s ty=%s%s%s%s%s%s%s", where, repr_kind_name(r.kind), ty,
            r.handle ? " handle" : "", r.may_nil ? " may_nil" : "", r.dyn_cls ? " dyn_cls" : "",
            r.elem_nil_marked ? " elem_nil" : "", r.arr_or_nil ? " arr_or_nil" : "",
-           repr_cell_name(r.cell), r.volatile_str ? " volatile" : "");
+           repr_cell_name(r.cell));
   if (ls->n == ls->cap) {
     ls->cap = ls->cap ? ls->cap * 2 : 64;
     ls->v = realloc(ls->v, (size_t)ls->cap * sizeof *ls->v);

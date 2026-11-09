@@ -120,9 +120,6 @@ typedef struct {
                              or nil (arr_or_nil), and a read of it: an index
                              read takes the runtime's inline array arm,
                              which neither allocates nor needs a root */
-  unsigned volatile_str:1; /* a String local live across a setjmp
-                             (borrowed_volatile): its C slot, and a slot
-                             that borrows it, is `const char * volatile` */
   unsigned char cell;     /* ReprCell: where a local's value lives, for the
                              slot and for a read of it */
   unsigned char strbuf_src; /* ReprStrSrc: where a shared String's box comes

@@ -88,7 +88,7 @@ static void emit_line_param_decl(Compiler *c, int id, const char *pn, int lt, Bu
     lv = bs && raw ? scope_local(bs, raw) : NULL;
   }
   /* a buffer, or a parameter held as the shared handle (--share-strings) */
-  if (repr_of_slot(c, lv).kind == RK_STRBUF || repr_of_slot(c, lv).handle)
+  if (repr_of_slot(c, lv).kind == RK_STRBUF)
     buf_printf(b, " sp_String *lv_%s = sp_String_new_shared(_t%d); SP_GC_ROOT(lv_%s);", pn, lt, pn);
   else buf_printf(b, " const char *lv_%s = _t%d; SP_GC_ROOT_STR(lv_%s);", pn, lt, pn);
 }

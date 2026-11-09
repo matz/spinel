@@ -642,6 +642,7 @@ void comp_free(Compiler *c) {
   free(c->gvars);
   free(c->gvar_ix);
   gvar_writes_free(c);
+  const_pairs_free(c);
   free(c->mih_head);
   free(c->mih_first);
   free(c->mih_nodes);

@@ -726,6 +726,7 @@ int class_def_is_class(const NodeTable *nt, int def_node);   /* written as `clas
 int class_def_opens_frame(const NodeTable *nt, int def_node);   /* self and definee are the class */
 int class_def_opens_cref(const NodeTable *nt, int def_node);   /* its constants are a scope of their own */
 int program_writes_const_in(Compiler *c, const char *pn, const char *nm);   /* in a body of pn, or `pn::nm = v` */
+void const_pairs_free(Compiler *c);   /* the pairs program_writes_const_in kept (analyze_util.c) */
 /* what a class builder's call (Class.new, Module.new) makes, as the
    builders' lowering noted it ahead of the walk (elab_builder_note); a copy
    answers as the node it copies: EB_NONE for none noted; EB_DYNAMIC_SUPER,

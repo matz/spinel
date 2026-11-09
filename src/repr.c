@@ -225,7 +225,7 @@ static int node_is_oint_asked(Compiler *c, int node) {
       int bb = nt_ref(nt, blk, "body");
       int bn = 0; const int *bs = bb >= 0 ? nt_arr(nt, bb, "body", &bn) : NULL;
       if (bn > 0 && (node_has_oint_form(c, bs[bn - 1]) || nt_kind(nt, bs[bn - 1]) == NK_NilNode)) return 1;
-      return bb >= 0 && block_next_may_be_nil(c, bb, 0);
+      return bb >= 0 && block_next_may_be_nil(c, bb);
     }
     /* `a[i] = v` on an Integer / Float array answers v as it was stored:
        with its nil (a nil, a boxed value, an oint) -- emit_array_call's
@@ -270,7 +270,7 @@ static int node_is_oint_asked(Compiler *c, int node) {
       int bb = nt_ref(nt, ieb, "body");
       int bn = 0; const int *bs = bb >= 0 ? nt_arr(nt, bb, "body", &bn) : NULL;
       return (bn > 0 && node_is_oint(c, bs[bn - 1])) ||
-             (bb >= 0 && (block_next_may_be_nil(c, bb, 0) || block_break_may_be_nil(c, bb, 0)));
+             (bb >= 0 && (block_next_may_be_nil(c, bb) || block_break_may_be_nil(c, bb)));
     }
     /* Array's, Hash's or String's own method on an instance of a subclass
        of one (comp_arysub_call, a `super` into it too): the rows below for

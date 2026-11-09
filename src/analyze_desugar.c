@@ -16204,13 +16204,9 @@ static int enum_own_copy(NodeTable *nt, int bdef, int bi, int id, int in_copy, i
 /* Is `v` a name the program builds rather than spells: an interpolation
    (`"#{q}_by"`, `:"on_#{t}"`), a `to_sym` / `intern` / `+` of anything? */
 static int bi_value_builds_name(const NodeTable *nt, int v) {
+  if (vp_one(nt, v, VPS_NONE | VP_PARENS_ONLY, &v) != VP1_NODE) return 0;
   NodeKind k = nt_kind(nt, v);
   if (k == NK_InterpolatedStringNode || k == NK_InterpolatedSymbolNode) return 1;
-  if (k == NK_ParenthesesNode) {
-    int b = nt_ref(nt, v, "body"), bn = 0;
-    const int *bb = b >= 0 ? nt_arr(nt, b, "body", &bn) : NULL;
-    return bn > 0 && bi_value_builds_name(nt, bb[bn - 1]);
-  }
   if (k != NK_CallNode) return 0;
   const char *nm = nt_str(nt, v, "name");
   return nm && (sp_streq(nm, "to_sym") || sp_streq(nm, "intern") || sp_streq(nm, "+"));

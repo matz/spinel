@@ -10395,29 +10395,24 @@ static TyKind an_branch_ty(Compiler *c, int stmts) {
   return t;
 }
 
-/* 1 when a value (a branch arm, a write's right side, a returned value) is
-   an empty `[]` literal or `Array.new`, 2 for an empty `{}` or `Hash.new`.
-   With seq 0 a `(a; b)` is not looked through. */
-static int an_empty_container_at(Compiler *c, int b, int seq) {
+/* 1 when node b is an empty `[]` literal or `Array.new`, 2 for an empty `{}`
+   or `Hash.new`: what a value ends in once the wrappers are looked through. */
+static int an_empty_container_leaf(Compiler *c, int b) {
   const NodeTable *nt = c->nt;
-  while (b >= 0) {
-    NodeKind k = nt_kind(nt, b);
-    if (k == NK_ParenthesesNode && !seq && nt_paren_single(nt, b) == b) return 0;
-    if (k == NK_ElseNode || k == NK_ParenthesesNode) { b = nt_ref(nt, b, k == NK_ElseNode ? "statements" : "body"); continue; }
-    if (k == NK_StatementsNode) {
-      int n = 0; const int *ids = nt_arr(nt, b, "body", &n);
-      if (n <= 0) return 0;
-      b = ids[n - 1];
-      continue;
-    }
-    int n = 0;
-    if (k == NK_ArrayNode) { nt_arr(nt, b, "elements", &n); return n == 0 ? 1 : 0; }
-    if (k == NK_HashNode) { nt_arr(nt, b, "elements", &n); return n == 0 ? 2 : 0; }
-    return k == NK_CallNode ? an_empty_container_new(c, b) : 0;
-  }
-  return 0;
+  NodeKind k = nt_kind(nt, b);
+  int n = 0;
+  if (k == NK_ArrayNode) { nt_arr(nt, b, "elements", &n); return n == 0 ? 1 : 0; }
+  if (k == NK_HashNode) { nt_arr(nt, b, "elements", &n); return n == 0 ? 2 : 0; }
+  return k == NK_CallNode ? an_empty_container_new(c, b) : 0;
 }
-int an_empty_container_kind(Compiler *c, int b) { return an_empty_container_at(c, b, 1); }
+/* 1 when a value (a branch arm, a write's right side, a returned value) is
+   an empty `[]` literal or `Array.new`, 2 for an empty `{}` or `Hash.new`,
+   seen through parentheses, statement lists, an else and an `in` clause
+   (which no caller passes). */
+int an_empty_container_kind(Compiler *c, int b) {
+  if (vp_one(c->nt, b, VPS_NONE, &b) != VP1_NODE) return 0;
+  return an_empty_container_leaf(c, b);
+}
 /* `(a; b)` is its last statement. An empty `[]` / `{}` there reads UNKNOWN
    for want of an element type, and unlike `([])` a sequence is not looked
    through by the slot that takes it: nothing settled a type, the consumer
@@ -10469,7 +10464,11 @@ int an_empty_container_disagrees(int kind, TyKind other) {
    `c ? [1, 2] : []` (whose ElseNode the tail check does not open) was not.
    A `(a; [])` is a value of its own (an_paren_ty), not an arm's literal. */
 static int an_empty_array_takes(Compiler *c, int b, TyKind other) {
-  return (other == TY_INT_ARRAY || other == TY_FLOAT_ARRAY || other == TY_STR_ARRAY) && an_empty_container_at(c, b, 0) == 1;
+  if (other != TY_INT_ARRAY && other != TY_FLOAT_ARRAY && other != TY_STR_ARRAY) return 0;
+  /* (a `(a; [])` or `()` is a leaf here, at any level: the arm emitter does
+     not build the sequence's literal at the result's kind) */
+  if (vp_one(c->nt, b, VPS_NONE | VP_PAREN_ONE, &b) != VP1_NODE) return 0;
+  return an_empty_container_leaf(c, b) == 1;
 }
 
 /* A conditional's answer where an arm ends in an empty container (its arms

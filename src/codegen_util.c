@@ -4211,12 +4211,7 @@ int one_tail_fresh(Compiler *c, int n) {
    answers (sp_strface_pub_b), which a caller's pickup takes. */
 int one_tail_cond(Compiler *c, int n) {
   const NodeTable *nt = c->nt;
-  while (n >= 0 && nt_kind(nt, n) == NK_ParenthesesNode) {
-    int body = nt_ref(nt, n, "body"), k = 0;
-    const int *st = body >= 0 && nt_kind(nt, body) == NK_StatementsNode ? nt_arr(nt, body, "body", &k) : NULL;
-    n = k > 0 ? st[k - 1] : -1;
-  }
-  if (n < 0) return 0;
+  if (vp_one(nt, n, VPS_NONE | VP_PARENS_ONLY, &n) != VP1_NODE) return 0;
   NodeKind k = nt_kind(nt, n);
   return k == NK_IfNode || k == NK_UnlessNode || k == NK_CaseNode || k == NK_CaseMatchNode;
 }

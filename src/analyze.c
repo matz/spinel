@@ -10297,22 +10297,20 @@ static int hash_brackets_desugar(Compiler *c, int id, int late) {
   return 0;
 }
 
+/* Is the blockless call id's value no enclosing call's receiver? The climb
+   sees through parentheses and the last statement of a list; the receiver
+   must be id in parentheses that hold it alone. A call with a block
+   answers 0. */
 static int enum_chain_kept(Compiler *c, LowerCtx *lc, int id) {
   const NodeTable *nt = c->nt;
   if (nt_ref(nt, id, "block") >= 0) return 0;
-  /* (the parent map, made at the first such call of the run) */
-  const int *par = lower_parents(c, lc);
-  int p = par[id];
-  while (p >= 0 && nt_kind(nt, p) == NK_ParenthesesNode) p = par[p];
-  if (p >= 0 && nt_kind(nt, p) == NK_StatementsNode) {
-    /* a parenthesized sequence ending in id */
-    int q = par[p];
-    int bn = 0; const int *bb = nt_arr(nt, p, "body", &bn);
-    if (q >= 0 && nt_kind(nt, q) == NK_ParenthesesNode && bn > 0 && bb[bn - 1] == id) {
-      for (p = par[q]; p >= 0 && nt_kind(nt, p) == NK_ParenthesesNode; p = par[p]) {}
-    }
-  }
-  return !(p >= 0 && nt_kind(nt, p) == NK_CallNode && nt_paren_single(nt, nt_ref(nt, p, "receiver")) == id);
+  VpUp up;
+  /* (lower_parents: the parent map, made at the first such call of the run) */
+  if (vp_climb(nt, lower_parents(c, lc), id, VPS_NONE | VP_PARENS_ONLY, &up) != VPU_ENDED ||
+      nt_kind(nt, up.parent) != NK_CallNode)
+    return 1;
+  int recv = nt_ref(nt, up.parent, "receiver");
+  return !(recv == up.node && nt_paren_single(nt, recv) == id);
 }
 /* The shapes of an iterator chain at the call id, lowered to the forms the
    Enumerable and Enumerator routes read: each_char.with_index, the
@@ -48493,7 +48491,6 @@ static int sid_alias_use_ok(Compiler *c, SidSources *S, int a) {
   const NodeTable *nt = c->nt;
   for (int d = 0; d < 16; d++) {
     int p = S->parent[a];
-    while (p >= 0 && nt_kind(nt, p) == NK_ParenthesesNode) { a = p; p = S->parent[a]; }
     if (p < 0) return 0;
     if (nt_kind(nt, p) == NK_CallNode && nt_paren_single(nt, nt_ref(nt, p, "receiver")) == nt_paren_single(nt, a)) {
       const char *nm = nt_str(nt, p, "name");
@@ -48576,8 +48573,7 @@ static int sid_is_alias(Compiler *c, SidSources *S, int v) {
    to a place S holds one in, by an assignment or by reflection? */
 static int sid_alloc_is_source(Compiler *c, SidSources *S, int a) {
   const NodeTable *nt = c->nt;
-  int n = a, p = S->parent[n];
-  while (p >= 0 && nt_kind(nt, p) == NK_ParenthesesNode) { n = p; p = S->parent[n]; }
+  int p = S->parent[a];
   if (p < 0) return 0;
   NodeKind pk = nt_kind(nt, p);
   const char *pn = nt_str(nt, p, "name");
@@ -48651,7 +48647,6 @@ static int sid_name_only_key(const NodeTable *nt, const int *parent, int lit) {
   int u = hn;
   for (int d = 0; d < 8; d++) {
     int q = parent[u];
-    while (q >= 0 && nt_kind(nt, q) == NK_ParenthesesNode) { u = q; q = parent[u]; }
     if (q < 0) return 0;
     if (nt_kind(nt, q) == NK_CallNode && nt_paren_single(nt, nt_ref(nt, q, "receiver")) == u) {
       const char *m = nt_str(nt, q, "name");
@@ -48671,10 +48666,9 @@ static int sid_name_only_key(const NodeTable *nt, const int *parent, int lit) {
       NT_FOREACH_KIND(nt, h ? NK_ConstantPathNode : NK_ConstantReadNode, r) {
         const char *rn = nt_str(nt, r, "name");
         if (!rn || !sp_streq(rn, kn)) continue;
-        int w = r, rp = parent[w];
-        while (rp >= 0 && nt_kind(nt, rp) == NK_ParenthesesNode) { w = rp; rp = parent[w]; }
+        int rp = parent[r];
         /* the leaf of a longer path (`K::X`) reads no Hash */
-        if (rp >= 0 && nt_kind(nt, rp) == NK_ConstantPathNode && nt_ref(nt, rp, "parent") == w) return 0;
+        if (rp >= 0 && nt_kind(nt, rp) == NK_ConstantPathNode && nt_ref(nt, rp, "parent") == r) return 0;
         if (rp < 0 || nt_kind(nt, rp) != NK_CallNode || nt_paren_single(nt, nt_ref(nt, rp, "receiver")) != r) return 0;
         const char *m = nt_str(nt, rp, "name");
         if (!m || !(sp_streq(m, "[]") || sp_streq(m, "fetch") || sp_streq(m, "key?") || sp_streq(m, "has_key?") ||
@@ -48741,17 +48735,15 @@ static int sid_sources(Compiler *c, SidSources *S, int set_cid, int spelled) {
     }
     if (!sid_maybe_set(c, r, set_cid)) continue;
     NodeKind rk = nt_kind(nt, r);
-    int w = id;
-    while (S->parent[w] >= 0 && nt_kind(nt, S->parent[w]) == NK_ParenthesesNode) w = S->parent[w];
-    int p = S->parent[w];
+    int p = S->parent[id];
     NodeKind pk = p >= 0 ? nt_kind(nt, p) : NK_NONE;
     const char *place = NULL; int local = 0;
     if (rk == NK_InstanceVariableReadNode) place = nt_str(nt, r, "name");
     else if (rk == NK_LocalVariableReadNode) { place = nt_str(nt, r, "name"); local = 1; }
     else if (sid_fresh_set(nt, r) && (pk == NK_InstanceVariableWriteNode || pk == NK_InstanceVariableOrWriteNode) &&
-             nt_paren_single(nt, nt_ref(nt, p, "value")) == nt_paren_single(nt, w)) place = nt_str(nt, p, "name");
+             nt_paren_single(nt, nt_ref(nt, p, "value")) == nt_paren_single(nt, id)) place = nt_str(nt, p, "name");
     else if (sid_fresh_set(nt, r) && pk == NK_LocalVariableWriteNode &&
-             nt_paren_single(nt, nt_ref(nt, p, "value")) == nt_paren_single(nt, w)) { place = nt_str(nt, p, "name"); local = 1; }
+             nt_paren_single(nt, nt_ref(nt, p, "value")) == nt_paren_single(nt, id)) { place = nt_str(nt, p, "name"); local = 1; }
     else return 0;
     if (!place) return 0;
     if (local) {
@@ -48769,7 +48761,7 @@ static int sid_sources(Compiler *c, SidSources *S, int set_cid, int spelled) {
     /* the value of the call itself, where it is no place's write: kept,
        it is an alias of its own */
     if (rk == NK_InstanceVariableReadNode || rk == NK_LocalVariableReadNode)
-      if (!comp_value_dropped(c, w) && !sid_alias_use_ok(c, S, r)) return 0;
+      if (!comp_value_dropped(c, id) && !sid_alias_use_ok(c, S, r)) return 0;
   }
   /* a reflective read or write reaches an instance variable by a name:
      one of the places', or one no literal names. A read answers the Set
@@ -48917,8 +48909,7 @@ static int sid_name_only_member(const NodeTable *nt, const int *parent, int lit)
         const char *leaf = rn ? strrchr(rn, ':') : NULL;
         leaf = leaf ? leaf + 1 : rn;
         if (!leaf || !sp_streq(leaf, kn)) continue;
-        int w = r, rp = parent[w];
-        while (rp >= 0 && nt_kind(nt, rp) == NK_ParenthesesNode) { w = rp; rp = parent[w]; }
+        int rp = parent[r];
         if (rp < 0 || nt_kind(nt, rp) != NK_CallNode || nt_paren_single(nt, nt_ref(nt, rp, "receiver")) != r) return 0;
         const char *m = nt_str(nt, rp, "name");
         if (!m || !(sp_streq(m, "include?") || sp_streq(m, "member?") || sp_streq(m, "==="))) return 0;

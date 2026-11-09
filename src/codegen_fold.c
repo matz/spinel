@@ -44,7 +44,7 @@ static int bv_value_may_be_nil(Compiler *c, int block, TyKind t) {
   if (!oint_kind(t) || block < 0) return 0;
   int body = nt_ref(c->nt, block, "body");
   int bn = 0; const int *bb = body >= 0 ? nt_arr(c->nt, body, "body", &bn) : NULL;
-  if (body >= 0 && block_next_may_be_nil(c, body, 0)) return 1;
+  if (body >= 0 && block_next_may_be_nil(c, body)) return 1;
   return bn > 0 && node_is_oint(c, bb[bn - 1]);
 }
 /* Does a `next v` of the block (not one of a block nested in it) answer a
@@ -472,7 +472,7 @@ static char *emit_hash_block_eval(Compiler *c, int block, Repr hr, const char *h
   int want_poly = (bret == TY_POLY || bret == TY_NIL || bret == TY_VOID);
   /* an Integer or Float value that can be nil, where the caller asked */
   int vo = g_hbe_want_oint && oint_kind(bret) && bb && bn > 0 &&
-           (node_has_oint_form(c, bb[bn - 1]) || block_next_may_be_nil(c, body, 0));
+           (node_has_oint_form(c, bb[bn - 1]) || block_next_may_be_nil(c, body));
   g_hbe_oint = vo;
   emit_indent(g_pre, g_indent + 1);
   if (want_poly) buf_printf(g_pre, "sp_RbVal _t%d = sp_box_nil();\n", tvv);

@@ -10425,6 +10425,17 @@ void register_prepends(Compiler *c) {
   cell_writes_flush(c);
 }
 
+/* Does class ci define instance method `name` of its own: a def, or an
+   alias the record gives the class (elab_class_surface)? */
+static int class_defines_member(Compiler *c, int ci, const char *name) {
+  if (comp_method_in_class(c, ci, name) >= 0) return 1;
+  int n = 0;
+  const ElabSurface *v = elab_class_surface(c, ci, 0, &n);
+  for (int i = 0; i < n; i++)
+    if (v[i].alias && sp_streq(v[i].name, name)) return 1;
+  return 0;
+}
+
 /* Merge inherited ivar/reader/writer NAMES into subclasses so the struct
    layout is [parent ivars..., own ivars...] (cast-compatible). Types are
    propagated later in the fixpoint. Parent-first order. */
@@ -10563,24 +10574,26 @@ void inherit_members(Compiler *c) {
     free(old); free(oldt); free(old_ss); free(old_es); free(old_it); free(old_oa); free(old_os);
     free(old_oc); free(old_ni); free(old_ne); free(old_ae); free(old_aw); free(own_pin);
 
-    /* An inherited attribute the child overrides with a `def` stops there: the
-       def answers the name for the child and everything below it, so copying
-       the flag on let a grandchild read the attribute past the def -- and a
-       grandchild that re-declares the attribute looked like it had only
-       inherited it, so a `super` below it skipped to the def. An attribute
-       the parent undefines stops there too: copied on, it looked declared
-       again in the child, and a boxed `sub.x` read it. A Struct's readers
-       are its positional members, so they stay. */
+    /* An inherited attribute the child overrides with a `def` or an alias
+       stops there: the method answers the name for the child and everything
+       below it, so copying the flag on let a grandchild read the attribute
+       past it -- and a grandchild that re-declares the attribute looked like
+       it had only inherited it, so a `super` below it skipped to the def. An
+       alias's method may not exist yet (an ancestor's def's copy is made
+       once the mixins are in, register_alias_methods), so the record says.
+       An attribute the parent undefines stops there too: copied on, it
+       looked declared again in the child, and a boxed `sub.x` read it. A
+       Struct's readers are its positional members, so they stay. */
     for (int k = 0; k < pc->nreaders; k++) {
       int undeffed = 0;
       for (int j = 0; j < pc->nundefs && !undeffed; j++) undeffed = sp_streq(pc->undefs[j], pc->readers[k]);
-      if (comp_method_in_class(c, i, pc->readers[k]) < 0 && (!undeffed || ci->is_struct))
+      if (!class_defines_member(c, i, pc->readers[k]) && (!undeffed || ci->is_struct))
         comp_add_reader(ci, pc->readers[k]);
     }
     for (int k = 0; k < pc->nwriters; k++) {
       char wn[300];
       snprintf(wn, sizeof wn, "%s=", pc->writers[k]);
-      if (comp_method_in_class(c, i, wn) < 0) comp_add_writer(ci, pc->writers[k]);
+      if (!class_defines_member(c, i, wn)) comp_add_writer(ci, pc->writers[k]);
     }
     }
     if (!progressed) break;   /* the rest are cycles or dangling parents */

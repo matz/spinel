@@ -270,6 +270,10 @@ int emit_ctor_yield_inline(Compiler *c, int id, int ci, Buf *b) {
   }
 
   int tag = ++g_tmp;
+  /* the call's arguments are the caller's code: `Set.new(yield)` yields to the
+     caller's block, whatever block the spliced initialize runs under */
+  InlineBlockCtx caller_bc;
+  inline_block_ctx_save(&caller_bc);
   int saved_nren = g_nren, saved_block = g_block_id;
   int saved_bnren = g_block_nren, saved_yfbn = g_yield_block_fallback_nren;
   const char *saved_self = g_self;
@@ -311,6 +315,9 @@ int emit_ctor_yield_inline(Compiler *c, int id, int ci, Buf *b) {
   /* a literal block's `return` leaves the method it is written in, which
      may itself be spliced into its caller (its `_yretN` funnel) */
   BlockRetHome saved_brh = block_ret_home_enter(g_block_id, saved_block);
+  InlineBlockCtx callee_bc;
+  inline_block_ctx_save(&callee_bc);
+  inline_block_ctx_restore(&caller_bc);
 
   int st = ++g_tmp;
   buf_puts(b, "({\n");
@@ -495,8 +502,17 @@ int emit_ctor_yield_inline(Compiler *c, int id, int ci, Buf *b) {
     }
     else if (L.from[i] == ARG_REST)
       emit_rest_pack_kwh(c, i, L.rest_argc - m->npost_rest, argv2, L.rest_kwh, b);
-    else if (provided < 0 && ds_tmp >= 0 && callee_has_kwarg(c, m, m->pnames[i]))
+    else if (provided < 0 && ds_tmp >= 0 && callee_has_kwarg(c, m, m->pnames[i])) {
+      inline_block_ctx_restore(&callee_bc);   /* may evaluate the keyword's default */
       emit_ds_param_extract(c, m, i, ds_tmp, ds_type, b);
+      inline_block_ctx_restore(&caller_bc);
+    }
+    else if (provided < 0) {
+      /* a default is the callee's own code, with its own block */
+      inline_block_ctx_restore(&callee_bc);
+      emit_arg_or_default(c, m, i, provided, b);
+      inline_block_ctx_restore(&caller_bc);
+    }
     else emit_arg_or_default(c, m, i, provided, b);
     g_self = svs; g_self_deref = svd;
     ren_unpark(&park);
@@ -505,6 +521,8 @@ int emit_ctor_yield_inline(Compiler *c, int id, int ci, Buf *b) {
   inl_dflt_leave(sv_dflt);
   view_unbind(argov_saved);
   arg_layout_free(&L);
+  /* the call-site code is bound: the body runs under the callee's block context */
+  inline_block_ctx_restore(&callee_bc);
 
   /* The inlined `initialize` body runs in the CONSTRUCTED class's context:
      an implicit-self call inside it (`setup` in `def initialize; setup;

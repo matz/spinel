@@ -783,6 +783,28 @@ int yield_target_cur(void);
    block current, leave with what enter answered when it is done. */
 typedef struct { const char *label, *var; TyKind rt; int ro, exc, ens, set; } BlockRetHome;
 BlockRetHome block_ret_home_enter(int block, int saved_block);
+/* The whole block context an inline runs its callee's body under: the block
+   current and what its splice binds, the one level out, the forwarded proc
+   and the lowered context, and the break scope a block's `break` leaves.
+   An inliner takes a snapshot of the caller's before it switches to the
+   callee's, and puts the caller's back for the call-site code it emits in
+   between: an argument's `yield` is the caller's. */
+typedef struct {
+  int block_id, block_nren, ytgt_cur;
+  const char *block_param_name, *block_owner_param_name;
+  int yfb, yfb_nren; const char *yfb_owner;
+  const char *blk_brk_fb; int blk_brk_efb;
+  const char *self_fb, *self_deref_fb; int emcls_fb;
+  const char *self_fb2, *self_deref_fb2; int emcls_fb2;
+  int lowered; const char *lowered_blk;
+  int lowered_fb; const char *lowered_blk_fb;
+  const char *ypr, *ypr_expr_ref; int ypr_expr; TyKind yslot;
+  const char *ypr_fb, *ypr_fb2; TyKind yslot_fb, yslot_fb2;
+  const char *brk_var, *ser_var; int brk_ebase, brk_exc_base, brk_rescue_base;
+} InlineBlockCtx;
+void inline_block_ctx_save(InlineBlockCtx *s);
+void inline_block_ctx_restore(const InlineBlockCtx *s);
+
 void block_ret_home_leave(int block, BlockRetHome old);
 extern const char *g_yield_self_fallback;        /* see codegen_util.c */
 extern const char *g_yield_self_fallback2;

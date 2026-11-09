@@ -8397,6 +8397,20 @@ static sp_RbVal sp_poly_binop_apply(const char *op, sp_RbVal a, sp_RbVal b) {
 }
 static sp_int sp_PolyArray_length(sp_PolyArray *a) { if (!a) return 0; return a->len; }
 static sp_int sp_PolyArray_length_m(sp_PolyArray *a) { if (SP_UNLIKELY(!a)) sp_nil_recv("length"); return a->len; }
+/* Where a boxed Array of any kind keeps its length, read through at each
+   step by a walk whose block may push onto it or pop it (the header does not
+   move; only its buffer is reallocated), or `other` for any other value. */
+static inline const sp_int *sp_poly_arr_len_ref(sp_RbVal a, const sp_int *other) {
+  if (a.tag != SP_TAG_OBJ || !a.v.p) return other;
+  switch (a.cls_id) {
+    case SP_BUILTIN_INT_ARRAY: case SP_BUILTIN_SYM_ARRAY: return &((sp_IntArray *)a.v.p)->len;
+    case SP_BUILTIN_FLT_ARRAY: return &((sp_FloatArray *)a.v.p)->len;
+    case SP_BUILTIN_STR_ARRAY: return &((sp_StrArray *)a.v.p)->len;
+    case SP_BUILTIN_POLY_ARRAY: return &((sp_PolyArray *)a.v.p)->len;
+    case SP_BUILTIN_PTR_ARRAY: return &((sp_PtrArray *)a.v.p)->len;
+    default: return other;
+  }
+}
 /* Helpers for iterating over a poly value that holds a boxed array. */
 static sp_int sp_poly_arr_len(sp_RbVal a) {
   if (a.tag != SP_TAG_OBJ) return 0;

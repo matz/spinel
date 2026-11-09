@@ -6042,7 +6042,7 @@ int emit_collect_expr(Compiler *c, int id, Buf *b) {
        without it here a poly receiver fell through to the dispatch, which has no
        arm for it, and the call raised NoMethodError (#3905). */
     if (bn2 < 1 && !res_poly2) return 0;
-    int trecv2 = ++g_tmp, tn2 = ++g_tmp, tres2 = ++g_tmp, ti2 = ++g_tmp;
+    int trecv2 = ++g_tmp, tn2 = ++g_tmp, tres2 = ++g_tmp, ti2 = ++g_tmp, tarr2 = ++g_tmp;
     Buf rb2; memset(&rb2, 0, sizeof rb2); emit_expr(c, recv, &rb2);
     emit_indent(g_pre, g_indent);
     buf_printf(g_pre, "sp_RbVal _t%d = ", trecv2);
@@ -6093,9 +6093,15 @@ int emit_collect_expr(Compiler *c, int id, Buf *b) {
     else buf_printf(g_pre, "sp_%sArray *_t%d = sp_%sArray_new();\n", rk2, tres2, rk2);
     emit_indent(g_pre, g_indent);
     buf_printf(g_pre, "SP_GC_ROOT(_t%d);\n", tres2);
+    /* an Array of any kind is walked to its length at each step, read
+       through where it keeps it (one load), as the typed walks read it: a
+       block that pushes onto it or pops it changes what is mapped. Anything
+       else keeps the length it started at (a user Enumerable's is its
+       to_a's) */
     emit_indent(g_pre, g_indent);
-    buf_printf(g_pre, "for (sp_int _t%d = 0; _t%d < _t%d; _t%d++) {\n",
-               ti2, ti2, tn2, ti2);
+    buf_printf(g_pre, "const sp_int *_t%d = sp_poly_arr_len_ref(_t%d, &_t%d);\n", tarr2, trecv2, tn2);
+    emit_indent(g_pre, g_indent);
+    buf_printf(g_pre, "for (sp_int _t%d = 0; _t%d < *_t%d; _t%d++) {\n", ti2, ti2, tarr2, ti2);
     /* pin block param to TY_POLY via shadow declaration */
     Scope *csc2 = p0p ? comp_scope_of(c, block) : NULL;
     LocalVar *clv2 = (csc2 && p0p) ? scope_local(csc2, p0p) : NULL;

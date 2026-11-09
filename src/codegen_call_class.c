@@ -1342,7 +1342,7 @@ int emit_call_reflection_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
   /* Class.const_defined?(:K): compile-time presence check. Constants are
      recorded in a flat namespace, so this consults the global const and class
      tables rather than the receiver's own constants. */
-  if (sp_streq(name, "const_defined?") && recv >= 0 && argc >= 1 &&
+  if (sp_streq(name, "const_defined?") && recv >= 0 && argc >= 1 && class_recv_user_cmethod(c, id, recv, name) < 0 &&
       nt_kind(nt, recv) == NK_ConstantReadNode) {
     NodeKind ak = nt_kind(nt, argv[0]);
     const char *qm = NULL;
@@ -4518,7 +4518,7 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
        the (flat) constant and class tables -- constants carry no class
        qualifier in the registry, so this is the same namespace a read
        resolves against. */
-    if (sp_streq(name, "const_defined?") && argc == 1) {
+    if (sp_streq(name, "const_defined?") && argc == 1 && class_recv_user_cmethod(c, id, recv, name) < 0) {
       NodeKind a0k = nt_kind(nt, argv[0]);
       const char *cn0 = NULL;
       if (a0k == NK_SymbolNode) cn0 = nt_str(nt, argv[0], "value");
@@ -4621,7 +4621,7 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
        included modules, then the superclass chain), stopping before Object,
        whose constants are the top-level ones. `constants(false)` is own-only.
        #2674 */
-    if (sp_streq(name, "constants") && argc <= 1) {
+    if (sp_streq(name, "constants") && argc <= 1 && class_recv_user_cmethod(c, id, recv, name) < 0) {
       const char *rcn = nt_type(nt, recv) &&
                         (nt_kind(nt, recv) == NK_ConstantReadNode ||
                          nt_kind(nt, recv) == NK_ConstantPathNode)
@@ -4821,7 +4821,7 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
     /* the Class rows (Module#include?, a hook's no-op) that answer the call */
     if (cplan_class_row(c, id, recv, name) && emit_builtin_op_tmp(c, id, recv, TY_CLASS, name, _clt, b)) return 1;
     /* Module#class_variables: the registered cvars, own + ancestors (#2719) */
-    if (sp_streq(name, "class_variables") && argc == 0) {
+    if (sp_streq(name, "class_variables") && argc == 0 && class_recv_user_cmethod(c, id, recv, name) < 0) {
       const char *rcn9 = nt_kind(nt, recv) == NK_ConstantReadNode
                          ? nt_str(nt, recv, "name") : NULL;
       int rci9 = rcn9 ? const_node_class_index(c, recv) : -1;

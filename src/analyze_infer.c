@@ -6287,8 +6287,8 @@ static int infer_class_module_call(Compiler *c, int id, const NodeTable *nt, con
       LocalVar *cv = cs_qm ? comp_const(c, cs_qm) : NULL;
       if (cv && cv->type != TY_UNKNOWN) { *out = cv->type; return 1; }
     }
-    if (sp_streq(name, "constants") && argc <= 1) { *out = TY_POLY_ARRAY; return 1; }
-    if (sp_streq(name, "class_variables") && argc == 0) { *out = TY_POLY_ARRAY; return 1; }
+    if (sp_streq(name, "constants") && argc <= 1 && class_recv_user_cmethod(c, id, recv, name) < 0) { *out = TY_POLY_ARRAY; return 1; }
+    if (sp_streq(name, "class_variables") && argc == 0 && class_recv_user_cmethod(c, id, recv, name) < 0) { *out = TY_POLY_ARRAY; return 1; }
     if (sp_streq(name, "included_modules") && argc == 0) { *out = TY_POLY_ARRAY; return 1; }
     if (argc == 0 && sp_streq(name, "class")) { *out = TY_CLASS; return 1; }
     /* #superclass is a (nullable) class value: BasicObject's is the nil-class

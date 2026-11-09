@@ -8707,6 +8707,28 @@ static int arm_raises_nomethod_for(const char *text, const char *name) {
    bound to _t<tv> (emit_poly_builtin_default_at): the arm's text into nb,
    what it hoists into *arm_pre. 0 when the probe declined. */
 static int poly_default_obj_spreads(Compiler *c, int id, const char *name);
+/* Array#at, kept by name where a program class owns it (desugar_array_at:
+   an instance method `at`, or a class method `at` a boxed receiver may be a
+   Class of): for a receiver that is no Class, the index read that checks
+   its receiver is an Array (an index, never a Range, as the rewrite takes
+   it). Renames call id so for the emission between this and
+   at_kept_by_name_restore; answers 0 and changes nothing where the call is
+   not such an `at`. */
+static int at_kept_by_name_swap(Compiler *c, int id, const char *name, int argc, const int *argv, char **sv_nm) {
+  const NodeTable *nt = c->nt;
+  TyKind at_ty = argc == 1 ? comp_ntype(c, argv[0]) : TY_UNKNOWN;
+  if (!name || !sp_streq(name, "at") || argc != 1 || nt_kind(nt, argv[0]) == NK_SplatNode ||
+      nt_ref(nt, id, "block") >= 0 || nt_int(nt, id, "was_at", 0) ||
+      at_ty == TY_RANGE || at_ty == TY_FLOAT_RANGE || at_ty == TY_STR_RANGE) return 0;
+  *sv_nm = nt_node_swap_str((NodeTable *)nt, id, "name", "[]");
+  nt_node_set_int((NodeTable *)nt, id, "was_at", 1);
+  return 1;
+}
+static void at_kept_by_name_restore(Compiler *c, int id, char *sv_nm) {
+  nt_node_restore_str((NodeTable *)c->nt, id, "name", sv_nm);
+  nt_node_set_int((NodeTable *)c->nt, id, "was_at", 0);
+}
+
 /* The index of call id's last splat argument, or -1 */
 static int poly_last_splat(const NodeTable *nt, int argc, const int *argv) {
   int last = -1;
@@ -8771,18 +8793,12 @@ static int bi_default_probe(Compiler *c, int id, int recv, const char *name, int
   int dblk = nt_ref(nt, id, "block");
   int drop_blk = dblk >= 0 && nt_kind(nt, dblk) == NK_BlockArgumentNode && (builtin_read_ignores_block(name) || nil_fwd);
   if (drop_blk) nt_node_set_ref((NodeTable *)nt, id, "block", -1);
-  /* Array#at, kept by name where a program class owns it (desugar_array_at),
-     is the index read that checks its receiver is an Array (an index, never
-     a Range, as the rewrite takes it) */
-  TyKind at_ty = argc == 1 ? comp_ntype(c, argv[0]) : TY_UNKNOWN;
-  int as_at = sp_streq(name, "at") && argc == 1 && nt_kind(nt, argv[0]) != NK_SplatNode &&
-              nt_ref(nt, id, "block") < 0 && !nt_int(nt, id, "was_at", 0) &&
-              at_ty != TY_RANGE && at_ty != TY_FLOAT_RANGE && at_ty != TY_STR_RANGE;
+  /* Array#at, kept by name where a program class owns it */
   char *sv_nm = NULL;
-  if (as_at) { sv_nm = nt_node_swap_str((NodeTable *)nt, id, "name", "[]"); nt_node_set_int((NodeTable *)nt, id, "was_at", 1); }
+  int as_at = at_kept_by_name_swap(c, id, name, argc, argv, &sv_nm);
   int ok = poly_arm_probe(c, id, builtin_default_probe_fn, &pr, nb, arm_pre);
   if (drop_blk) nt_node_set_ref((NodeTable *)nt, id, "block", dblk);
-  if (as_at) { nt_node_restore_str((NodeTable *)nt, id, "name", sv_nm); nt_node_set_int((NodeTable *)nt, id, "was_at", 0); }
+  if (as_at) at_kept_by_name_restore(c, id, sv_nm);
   *box_o = pr.box_o;
   view_pop(c, vw);
   view_pop(c, va);
@@ -24348,7 +24364,11 @@ int emit_unresolved_call(Compiler *c, int id, Buf *b) {
             int slot2 = view_bind(recv, "_t%d", tv);
             int sv2 = g_cls_tag_skip;
             g_cls_tag_skip = id;
+            /* (Array#at kept by name for a class method `at`) */
+            char *sv_nm = NULL;
+            int as_at = at_kept_by_name_swap(c, id, nm, argc, argv, &sv_nm);
             emit_boxed(c, id, &eb2);
+            if (as_at) at_kept_by_name_restore(c, id, sv_nm);
             g_cls_tag_skip = sv2;
             view_unbind(g_n_argov - 1);
           }
@@ -24362,6 +24382,18 @@ int emit_unresolved_call(Compiler *c, int id, Buf *b) {
           return 1;
         }
         free(ccls);
+        /* Array#at kept by name for a class method `at` no arm can reach (a
+           class the program never names as a value, an alias): the index
+           read, as the arms' default above */
+        { char *sv_nm = NULL;
+          if (nsg == 0 && at_kept_by_name_swap(c, id, nm, argc, argv, &sv_nm)) {
+            int sv3 = g_cls_tag_skip;
+            g_cls_tag_skip = id;
+            emit_boxed(c, id, b);
+            g_cls_tag_skip = sv3;
+            at_kept_by_name_restore(c, id, sv_nm);
+            return 1;
+          } }
         /* no class method of the name, but a `class << self` accessor
            (`subclass.features = ...` on a class held boxed): the arms a
            Class-typed value takes, on the class the box holds; any other

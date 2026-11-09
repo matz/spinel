@@ -9044,6 +9044,11 @@ int desugar_array_at(Compiler *c) {
         /* a bare `private :at` reopening with no redefinition (K-028,
            kilau docs/CATALOG.md), same reason as desugar_array_first_last */
         comp_method_vis_declared(c, k, "at", NULL) != SP_VIS_PUBLIC) user_at = 1;
+  /* a class method `at` of the program's own (Stamp.at): a receiver that
+     is boxed, or not typed yet, may hold that Class at run time */
+  int user_cat = 0;
+  for (int k = 0; k < c->nclasses && !user_cat; k++)
+    if (comp_cmethod_in_chain(c, k, "at", NULL) >= 0) user_cat = 1;
   if (!user_at)
   NT_FOREACH_KIND(nt, NK_CallNode, id) {
     const char *nm = nt_str(nt, id, "name");
@@ -9059,6 +9064,7 @@ int desugar_array_at(Compiler *c) {
     TyKind rt = infer_type(c, recv);
     /* Time#at and a Struct's own member reader are different methods */
     if (rt == TY_TIME || rt == TY_CLASS || ty_is_object(rt)) continue;
+    if (user_cat && !ty_is_array(rt)) continue;
     /* a call or a local not typed yet may answer a Class (`klass.at(s)`,
        Time's maker; a block parameter over [Time, Stamp]): a later round,
        with its type, decides */

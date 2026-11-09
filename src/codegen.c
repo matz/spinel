@@ -14187,6 +14187,7 @@ typedef struct {
   Buf pool; int pool_len;
   const char **pnames; int *poffs; int npn, cpn;
   int any_rank;
+  int any_oarr;   /* a row is an Array of objects (obj 3): the walk reads it */
 } MarRows;
 static int marshal_kind_index(MarRows *R, TyKind t) {
   for (int k = 0; k < R->nk; k++) if (R->kinds[k] == t) return k;
@@ -14244,21 +14245,24 @@ int obj_kernel_inspect_used(Compiler *c) {
    run time and adds the names a computed instance_variable_set made. An
    ivar's row is plain numbers, as the Marshal table's: its name's place in
    a string pool, its field's offset, its nil byte, how its presence is
-   read, and how it renders -- an object through its class id, any other
-   kind through one function per kind (sp_insp_fn_<kind>) shared by every
-   class. The walk writes what the arm per class wrote: #<Name:0xADDR
+   read, and how it renders -- an object through its class id, an Array
+   of objects through its element class, any other kind through one
+   function per kind (sp_insp_fn_<kind>) shared by every class. The walk writes what the arm per class wrote: #<Name:0xADDR
    @a=1, @b="x">, an object it is already inside of as #<Name:0xADDR ...>. */
+/* The class an Array of objects of kind t renders its elements by:
+   their own (-1) where a subclass's may be among them. */
+static int obj_array_inspect_cls(Compiler *c, TyKind t) {
+  int eci = ty_obj_array_class(t);
+  return class_has_subclass(c, eci) && !class_is_exc_subclass(c, eci) ? -1 : eci;
+}
 /* The C expression that renders `expr`, an ivar of kind t (its nil byte's
    test `nilt`, for an Integer / Float one), as the walk shows it. */
 static void emit_inspect_ivar_value(Compiler *c, TyKind t, const char *expr, const char *nilt, Buf *b) {
   /* containers have their own typed inspect; scalars box through the
      marshal helper into sp_poly_inspect; an UNKNOWN (never usefully typed)
      ivar occupies an int slot in the layout and renders as its nil default */
-  if (ty_is_obj_array(t)) {
-    int eci = ty_obj_array_class(t);
-    int edyn = class_has_subclass(c, eci) && !class_is_exc_subclass(c, eci);
-    buf_printf(b, "(%s ? sp_ObjPtrArray_inspect(%s, %d) : \"nil\")", expr, expr, edyn ? -1 : eci);
-  }
+  if (ty_is_obj_array(t))
+    buf_printf(b, "(%s ? sp_ObjPtrArray_inspect(%s, %d) : \"nil\")", expr, expr, obj_array_inspect_cls(c, t));
   else if (t == TY_INT_ARRAY_ARRAY) buf_printf(b, "(%s ? sp_IntArrayPtrArray_inspect(%s) : \"nil\")", expr, expr);
   else if (t == TY_FLOAT_ARRAY_ARRAY) buf_printf(b, "(%s ? sp_FloatArrayPtrArray_inspect(%s) : \"nil\")", expr, expr);
   else if (ty_is_array(t) && t != TY_POLY_ARRAY && array_kind(t))
@@ -14321,12 +14325,15 @@ static void emit_inspect_class_row(Compiler *c, int i, MarRows *R, Buf *b) {
       int sk = any1 && !ranked ? marshal_iv_set_kind(c, i, j) : MSET_ALWAYS;
       int ivx = comp_ivar_index(ci, ci->ivars[j]);
       int nbk = (t == TY_INT || t == TY_FLOAT) && ivar_has_nilbit(c, i, j) ? ivar_nilbit_index(c, i, j) : -1;
-      int obj = inspect_ivar_is_obj(t) ? (repr_dyn_cls(c, t) ? 2 : 1) : 0;
+      int obj = inspect_ivar_is_obj(t) ? (repr_dyn_cls(c, t) ? 2 : 1) : ty_is_obj_array(t) ? 3 : 0;
       buf_printf(b, "  { %d, ", marshal_pool_name(R, ci->ivars[j]));
       /* an object: its class id, or the id a subclass's may carry for it;
-         any other kind: its rendering function */
+         an Array of objects: the class it renders its elements by, so
+         every such Array shares the walk's one rendering whatever its
+         class; any other kind: its rendering function */
       if (obj == 1) buf_printf(b, "%d, ", ty_object_class(t));
       else if (obj == 2) { arysub_box_id(c, t, b); buf_puts(b, ", "); }
+      else if (obj == 3) { buf_printf(b, "%d, ", obj_array_inspect_cls(c, t)); R->any_oarr = 1; }
       else buf_printf(b, "%d, ", marshal_kind_index(R, t));
       buf_printf(b, "__builtin_offsetof(sp_%s, iv_%s), ", ci->c_name, iv_c(ci->ivars[j] + 1));
       if (nbk >= 0) buf_printf(b, "__builtin_offsetof(sp_%s, iv__nilb) + %d, ", ci->c_name, nbk);
@@ -14351,7 +14358,7 @@ static void emit_inspect_class_row(Compiler *c, int i, MarRows *R, Buf *b) {
   else buf_puts(b, "NULL };\n");
 }
 /* the walk over the rows, as the arm per class wrote it */
-static void emit_inspect_walk(Compiler *c, int any_anon, int any_obj, int any_computed, Buf *b) {
+static void emit_inspect_walk(Compiler *c, int any_anon, int any_obj, int any_oarr, int any_computed, Buf *b) {
   buf_printf(b,
     "static int sp_insp_set(const sp_insp_iv *v, const char *o) {\n"
     "  switch (v->set) {\n"
@@ -14368,8 +14375,12 @@ static void emit_inspect_walk(Compiler *c, int any_anon, int any_obj, int any_co
   buf_puts(b,
     "static const char *sp_insp_value(const sp_insp_iv *v, char *o) {\n"
     "  void *s = o + v->off;\n");
-  /* an object ivar renders by its class, through sp_poly_inspect; with
-     none, the walk does not link it */
+  /* an Array of objects renders by its element class, an object ivar by
+     its class, through sp_poly_inspect; with none, the walk does not link
+     them */
+  if (any_oarr)
+    buf_puts(b,
+      "  if (v->obj == 3) return *(sp_PtrArray **)s ? sp_ObjPtrArray_inspect(*(sp_PtrArray **)s, v->arg) : \"nil\";\n");
   if (any_obj)
     buf_puts(b,
       "  if (v->obj == 2) return sp_poly_inspect(sp_box_nullable_obj_dyn(*(void **)s, v->arg));\n"
@@ -14736,7 +14747,7 @@ static void emit_obj_inspect_dispatch(Compiler *c, Buf *b) {
         any_obj_walk = inspect_ivar_is_obj(c->classes[i].ivar_types[j]);
   int any_computed_walk = 0;
   for (int i = 0; i < c->nclasses; i++) if (iwalk[i] && c->classes[i].computed_ivar_set) any_computed_walk = 1;
-  emit_inspect_walk(c, any_anon_walk, any_obj_walk, any_computed_walk, b);
+  emit_inspect_walk(c, any_anon_walk, any_obj_walk, IR.any_oarr, any_computed_walk, b);
   if (sw.p) buf_puts(b, sw.p);
   free(sw.p); free(irows.p); free(IR.pool.p); free(IR.kinds); free(IR.pnames); free(IR.poffs); free(iwalk);
 }
@@ -14781,9 +14792,9 @@ static void emit_cext_marshal_check(Compiler *c, Buf *b) {
    singleton that raises), its allocator, and its ivars. An ivar's row is
    plain numbers: its name's place in one string pool, its field's offset,
    its nil byte, how its presence is read and marked, and how its value is
-   boxed and unboxed -- an object by its class id, any other kind through
-   one pair of functions per kind (sp_mar_bx_<kind> / sp_mar_ux_<kind>),
-   shared by every class. The generated C grows with the classes and ivars
+   boxed and unboxed -- an object by its class id, an Array of objects by
+   its element class, any other kind through one pair of functions per kind
+   (sp_mar_bx_<kind> / sp_mar_ux_<kind>), shared by every class. The generated C grows with the classes and ivars
    by table rows, where an arm per class and a branch per ivar in each of
    the two functions grew it by code, and a load finds its class by binary
    search over the sorted names instead of comparing each in turn. */
@@ -14833,15 +14844,18 @@ static int emit_marshal_class_row(Compiler *c, int i, MarRows *R, Buf *b) {
       int snb = sk == MSET_NB ? ivar_nilbit_index(c, i, ivx) : -1;
       int mark = ivar_set_kind(c, i, ci->ivars[j]) == 3 ? (ranked ? 2 : 1) : 0;
       if (mark == 2) R->any_rank = 1;
-      int obj = ty_is_object(t) ? (repr_dyn_cls(c, t) ? 2 : 1) : 0;
+      int obj = ty_is_object(t) ? (repr_dyn_cls(c, t) ? 2 : 1) : ty_is_obj_array(t) ? 3 : 0;
       /* a store of a reference is recorded for the collector, as the
          barrier pass records one through `->iv_` */
       int wb = !(t == TY_INT || t == TY_FLOAT || t == TY_BOOL || t == TY_SYMBOL || t == TY_NIL);
       buf_printf(b, "  { %d, ", marshal_pool_name(R, ci->ivars[j]));
       /* an object: its class id, or the id a subclass's may carry for it;
-         any other kind: its conversion pair */
+         an Array of objects: its element class, the one its box is stamped
+         with (ptr_array_stamp), so every such Array shares the walk's one
+         conversion whatever its class; any other kind: its conversion pair */
       if (obj == 1) buf_printf(b, "%d, ", ty_object_class(t));
       else if (obj == 2) { arysub_box_id(c, t, b); buf_puts(b, ", "); }
+      else if (obj == 3) { buf_printf(b, "%d, ", ty_obj_array_class(t)); R->any_oarr = 1; }
       else buf_printf(b, "%d, ", marshal_kind_index(R, t));
       buf_printf(b, "__builtin_offsetof(sp_%s, iv_%s), ", ci->c_name, iv);
       if (nbk >= 0) buf_printf(b, "__builtin_offsetof(sp_%s, iv__nilb) + %d, ", ci->c_name, nbk);
@@ -14898,11 +14912,19 @@ static int emit_marshal_class_row(Compiler *c, int i, MarRows *R, Buf *b) {
   return 1;
 }
 /* The generic dumper and loader, over the rows */
-static void emit_marshal_generic(Compiler *c, int nn, int nanon, int any_anon, int any_rank, Buf *b) {
+static void emit_marshal_generic(Compiler *c, int nn, int nanon, int any_anon, int any_rank, int any_oarr, Buf *b) {
   const char *anon_load = g_uses_threads ? "SP_ATOMIC_LOAD(d->anon, __ATOMIC_ACQUIRE)" : "(*d->anon)";
+  /* an Array of objects (obj 3) boxes and loads stamped with its element
+     class (ptr_array_stamp); with none, the walk does not link either */
+  const char *oarr_box = any_oarr
+    ? "  if (v->obj == 3) return *(void **)s ? sp_box_ptr_array_k(*(void **)s, SP_PTR_ELEM_OBJ, v->arg) : sp_box_nil();\n" : "";
+  const char *oarr_load = any_oarr
+    ? "        if (v->obj == 3) *(sp_PtrArray **)(o + v->off) = val.tag == SP_TAG_NIL ? NULL : sp_poly_as_ptr_array(val, SP_PTR_ELEM_OBJ, v->arg);\n"
+      "        else\n" : "";
   buf_printf(b,
     "static sp_RbVal sp_mar_iv_box(const sp_mar_iv *v, char *o) {\n"
     "  void *s = o + v->off;\n"
+    "%s"
     "  if (v->obj == 2) return sp_box_nullable_obj_dyn(*(void **)s, v->arg);\n"
     "  if (v->obj) return *(void **)s ? sp_box_obj(*(void **)s, v->arg) : sp_box_nil();\n"
     "  return sp_mar_bx[v->arg](s, v->nb >= 0 ? (const uint8_t *)(o + v->nb) : NULL);\n"
@@ -14918,7 +14940,7 @@ static void emit_marshal_generic(Compiler *c, int nn, int nanon, int any_anon, i
     "    default: return 1;\n"
     "  }\n"
     "}\n",
-    MSET_FLAG, MSET_UMARK, SP_IVAR_UNSET_MARK, MSET_NB, MSET_POLY, MSET_NONNULL, MSET_BOOL);
+    oarr_box, MSET_FLAG, MSET_UMARK, SP_IVAR_UNSET_MARK, MSET_NB, MSET_POLY, MSET_NONNULL, MSET_BOOL);
   /* the allocation emit_obj_alloc_expr writes, from the row: zeroed, the
      class id stamped, each Integer / Float ivar's nil byte set and each
      field whose zero is not nil seeded */
@@ -15008,6 +15030,7 @@ static void emit_marshal_generic(Compiler *c, int nn, int nanon, int any_anon, i
     "      for (int j = 0; j < d->niv; j++) {\n"
     "        const sp_mar_iv *v = &d->ivs[j];\n"
     "        if (strcmp(nm, sp_mar_pool + v->name)) continue;\n"
+    "%s"
     "        if (v->obj) *(void **)(o + v->off) = val.tag == SP_TAG_OBJ ? val.v.p : NULL;\n"
     "        else sp_mar_ux[v->arg](o + v->off, val);\n"
     "        if (v->wb) sp_gc_wb(p);\n"
@@ -15020,7 +15043,7 @@ static void emit_marshal_generic(Compiler *c, int nn, int nanon, int any_anon, i
     "    }\n"
     "  return d->dyn ? sp_box_nullable_obj_dyn(p, d->boxid) : sp_box_nullable_obj(p, d->boxid);\n"
     "}\n",
-    nn, nn, nanon, anon_load,
+    nn, nn, nanon, anon_load, oarr_load,
     any_rank ? "        else if (v->mark == 2) sp_ivar_rank((sp_ivrank *)(o + v->setoff), (sp_ivrank *)(o + d->ordoff), "
                "sp_ivar_renumber, (int)*(sp_int *)(o + d->clsoff), p);\n" : "");
 }
@@ -15081,7 +15104,7 @@ static void emit_marshal_dispatch(Compiler *c, Buf *b) {
   buf_puts(b, nn ? " };\n" : " { NULL, -1 } };\n");
   free(names);
   free(has);
-  emit_marshal_generic(c, nn, nanon, any_anon, R.any_rank, b);
+  emit_marshal_generic(c, nn, nanon, any_anon, R.any_rank, R.any_oarr, b);
 }
 
 /* A parent parameter a bare `super` has no argument for: `*rest` takes an

@@ -1,0 +1,14 @@
+#<H0:X @items=[#<E0:X @v=0>]>
+#<H259:X @items=[#<E259:X @v=259>]>
+#<Board:X @shapes=[#<Shape:X @n=1>, #<Shape:X @n=3>], @maybe=[#<E1:X @v=5>]>
+#<Board:X @shapes=[#<Shape:X @n=1>, #<Shape:X @n=3>], @maybe=nil>
+#<Square:X @n=9>
+#<H259:X @items=[#<E259:X @v=259>]>
+#<Board:X @shapes=[#<Shape:X @n=1>, #<Shape:X @n=3>], @maybe=[#<E1:X @v=5>]>
+1
+#<Board:X @shapes=[#<Shape:X @n=1>, #<Shape:X @n=3>], @maybe=nil>
+0
+#<Late:X @a=1>
+#<Late:X @a=1, @later=[#<E2:X @v=4>]>
+#<Late:X @a=1>
+#<Late:X @a=1, @later=[#<E2:X @v=4>]>

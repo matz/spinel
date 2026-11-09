@@ -7952,8 +7952,12 @@ static void include_module_methods(Compiler *c, int ci, int mod_id, int guard, i
       ClassInfo *cif = &c->classes[ci];
       snprintf(inc_shadow, sizeof inc_shadow, "__inc %d %s",
                cif->prep_shadow_count++, src->name);
+      /* (its chain entry goes by the name it stands under: a guarded
+         copy's is its hidden one, `__prep N name`, which kept the entry
+         when the copy was renamed and left its super reaching nothing) */
+      const char *own_name = c->scopes[own].name;
       for (int kk = 0; kk < cif->nprep_chain; kk++)
-        if (sp_streq(cif->prep_from[kk], src->name)) {
+        if (sp_streq(cif->prep_from[kk], own_name)) {
           free(cif->prep_from[kk]); cif->prep_from[kk] = strdup(inc_shadow);
           break;
         }

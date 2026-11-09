@@ -1372,11 +1372,6 @@ typedef struct {
                        set of user classes its value can hold (analyze_cls.c,
                        #8530); 0 is every class. Read through cls_fact_node. */
   ClsSet *cls_pool; int ncls_pool, cls_fact_n;
-  unsigned char *cls_kind; /* [cls_fact_n] per node, in a program that calls
-                       compare_by_identity: the CK_* kinds its value, and
-                       (shifted by CK_CONTENTS) the elements of the
-                       containers it holds, can be (cls_fact_kinds) */
-  int cls_kind_n;
   int range_unheld; /* while the arguments of a call on a receiver of no known
                        class bind to every method of the name: a Range among
                        them makes no parameter range_held (slot_set) */
@@ -2402,9 +2397,9 @@ const int *comp_name_responders(Compiler *c, const char *name, int is_cm, int *n
 int        comp_name_reader_any(Compiler *c, const char *name);
 /* The classes whose own chain hop defines a reader of `name` (the ones
    comp_reader_in_chain answers with def_class the class itself), ascending,
-   *n of them; kept as comp_name_reader_any's answers are. The kinds walk
-   asked it class by class for every argument-less call on a receiver that
-   can be anything, at every solve. */
+   *n of them; kept as comp_name_reader_any's answers are. The class walk
+   asks it for every argument-less call on a receiver that can be anything,
+   at every solve. */
 const int *comp_name_reader_owners(Compiler *c, const char *name, int *n);
 /* does class_id's chain define the method call id names, and does the call reach it? A call
    marked builtin_only (the super of a program's own reflection, rewritten to
@@ -2517,20 +2512,6 @@ void cls_fact_same(Compiler *c, int node, int as);
 /* Does node's fact say nothing of its classes: every class, or the closed
    world's value from anywhere (every class, Class object and builtin)? */
 int cls_fact_unbounded(Compiler *c, int node);
-/* What else than an object of a class of the program's node's value can be,
-   as the same walk follows it (analyze_cls.c), in a program that calls
-   compare_by_identity: CK_UNSAFE a value whose identity is not CRuby's here
-   or one the walk cannot name (a number, a Range, a builtin's answer, a
-   value from code it does not see), CK_LIT a String literal (one object
-   per text here), CK_STR a String made afresh (an interpolation, a dup, a
-   unary plus, String.new). A Symbol, nil, true, false, a container literal
-   or a Proc adds nothing. cls_fact_kinds answers for the value,
-   cls_fact_contents_kinds for the elements of the containers it holds;
-   CK_UNSAFE for a node the walk has no answer for. */
-enum { CK_UNSAFE = 1, CK_LIT = 2, CK_STR = 4, CK_CONTENTS = 3 };
-void an_cls_kinds(Compiler *c);   /* the walk, once: before the first ask */
-int cls_fact_kinds(Compiler *c, int node);
-int cls_fact_contents_kinds(Compiler *c, int node);
 
 typedef struct { int cls; int mi; int rdcls; int native; } PolyCand;
 const PolyCand *comp_poly_candidates(Compiler *c, const char *name, int *n);

@@ -111,4 +111,23 @@ nx = ni.size > 5 ? "s" : ni
 hh = {a: 1, b: 2}
 hx = hh.size > 5 ? "s" : hh
 p ox.sum { |o| o.b }, ox.sum(&:b), nx.sum { |v| v || 10 }, hx.sum { |k, v| v }
+# a seed that pushes onto an empty receiver runs before the walk reads its
+# length, so what it pushed is summed
+es = []
+es << P.new(0, 0) if es.size > 3
+p es.sum((es << P.new(5, 0); 0)) { |q| q.a > 2 ? q.a : 1.5 }
+ei = []
+ei << 1 if ei.size > 3
+ef = []
+ef << 1.0 if ef.size > 3
+p ei.sum((ei << 7; 0)) { |v| v * 2 }, ef.sum((ef << 2.5; 0.0)) { |v| v * 2 }
+# ... and the Float sum keeps its compensation, and an Integer seed over
+# Floats answers the sum rather than the seed
+fz = []
+fz << 1.0 if fz.size > 3
+fw = []
+fw << 1.0 if fw.size > 3
+fr = fw.sum((fw << 2.5; 0)) { |v| v * 2 }
+fr = "x" if fr == 99
+p fz.sum((10.times { fz << 0.1 }; 0.0)) { |v| v }, fr
 p [1, "x"].sum { |*v| v.length }, [1, "x"].sum { |a, *r| r.size + 1 }

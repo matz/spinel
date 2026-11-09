@@ -2248,10 +2248,12 @@ static int emit_sum_block_over(Compiler *c, int id, int recv, int block, Buf *b)
   if (acct == TY_POLY) {
     int ta = ++g_tmp, tacc = ++g_tmp, ti = ++g_tmp, tn = ++g_tmp;
     buf_printf(b, "({ sp_%sArray *_t%d = ", k, ta); emit_expr(c, recv, b);
-    buf_printf(b, "; SP_GC_ROOT(_t%d); sp_int _t%d = sp_%sArray_length(_t%d); sp_RbVal _t%d = ",
-               ta, tn, k, ta, tacc);
+    buf_printf(b, "; SP_GC_ROOT(_t%d); sp_RbVal _t%d = ", ta, tacc);
     if (argc == 1) emit_boxed(c, argv[0], b); else buf_puts(b, "sp_box_int(0)");
-    /* folded a value at a time (sp_sum_step) */
+    /* the length the walk starts at, read after the seed ran (it may push
+       onto the receiver), says whether the block ran; folded a value at a
+       time (sp_sum_step) */
+    buf_printf(b, "; sp_int _t%d = sp_%sArray_length(_t%d)", tn, k, ta);
     buf_printf(b, "; sp_SumState _t%dS; sp_sum_init(&_t%dS, _t%d); SP_GC_ROOT_RBVAL(_t%dS.acc); "
                   "for (sp_int _t%d = 0; _t%d < sp_%sArray_length(_t%d); _t%d++) { ",
                tacc, tacc, tacc, tacc, ti, ti, k, ta, ti);
@@ -2327,7 +2329,7 @@ static int emit_sum_block_over(Compiler *c, int id, int recv, int block, Buf *b)
   /* rooted the way the poly-accumulator arm above roots its receiver: the
      element is taken out of this temp on every turn and the block allocates
      in between */
-  buf_printf(b, "; SP_GC_ROOT(_t%d); sp_int _t%d = sp_%sArray_length(_t%d); ", ta, tn, k, ta);
+  buf_printf(b, "; SP_GC_ROOT(_t%d); ", ta);
   int tseed = -1;
   if (float_int_seed && argc == 1) {
     tseed = ++g_tmp;
@@ -2359,7 +2361,8 @@ static int emit_sum_block_over(Compiler *c, int id, int recv, int block, Buf *b)
   /* the length read at each step, as CRuby's each reads it: a block that
      pushes onto the receiver is summed over what it added, one that pops
      stops sooner. _t<tn>, the length it started at, says whether the block
-     ran at all */
+     ran at all: read after the seed ran, as the arm above reads it */
+  buf_printf(b, "; sp_int _t%d = sp_%sArray_length(_t%d)", tn, k, ta);
   buf_printf(b, "; for (sp_int _t%d = 0; _t%d < sp_%sArray_length(_t%d); _t%d++) { ", ti, ti, k, ta, ti);
   /* A 2+-param block over an array of sub-arrays auto-splats each element into
      the params -- `sum { |v, i| a[i] }` over the [value, index] pairs an

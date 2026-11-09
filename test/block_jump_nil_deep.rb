@@ -5,6 +5,10 @@
 # refused (about 100 pairs of parentheses). A body that nests as deep and has
 # no next at all keeps its plain slot: only the nil-free answers below are
 # built without room for one.
+#
+# The shapes stay under 256 levels of C nesting, clang's default limit: an
+# elsif arm nests the C one level and a `+` term two. A ladder of 210 arms is
+# past the old limit, and 90 terms still outgrow the scan's first stack.
 
 # an elsif ladder with a bare next in its last arm
 r = [1, 2, 3].map do |x|
@@ -220,33 +224,6 @@ r = [1, 2, 3].map do |x|
   elsif x == 311 then 211
   elsif x == 312 then 212
   elsif x == 313 then 213
-  elsif x == 314 then 214
-  elsif x == 315 then 215
-  elsif x == 316 then 216
-  elsif x == 317 then 217
-  elsif x == 318 then 218
-  elsif x == 319 then 219
-  elsif x == 320 then 220
-  elsif x == 321 then 221
-  elsif x == 322 then 222
-  elsif x == 323 then 223
-  elsif x == 324 then 224
-  elsif x == 325 then 225
-  elsif x == 326 then 226
-  elsif x == 327 then 227
-  elsif x == 328 then 228
-  elsif x == 329 then 229
-  elsif x == 330 then 230
-  elsif x == 331 then 231
-  elsif x == 332 then 232
-  elsif x == 333 then 233
-  elsif x == 334 then 234
-  elsif x == 335 then 235
-  elsif x == 336 then 236
-  elsif x == 337 then 237
-  elsif x == 338 then 238
-  elsif x == 339 then 239
-  elsif x == 340 then 240
   elsif x == 2 then next
   end
   x * 10
@@ -467,33 +444,6 @@ r = [1, 2, 3].map do |x|
   elsif x == 311 then 211
   elsif x == 312 then 212
   elsif x == 313 then 213
-  elsif x == 314 then 214
-  elsif x == 315 then 215
-  elsif x == 316 then 216
-  elsif x == 317 then 217
-  elsif x == 318 then 218
-  elsif x == 319 then 219
-  elsif x == 320 then 220
-  elsif x == 321 then 221
-  elsif x == 322 then 222
-  elsif x == 323 then 223
-  elsif x == 324 then 224
-  elsif x == 325 then 225
-  elsif x == 326 then 226
-  elsif x == 327 then 227
-  elsif x == 328 then 228
-  elsif x == 329 then 229
-  elsif x == 330 then 230
-  elsif x == 331 then 231
-  elsif x == 332 then 232
-  elsif x == 333 then 233
-  elsif x == 334 then 234
-  elsif x == 335 then 235
-  elsif x == 336 then 236
-  elsif x == 337 then 237
-  elsif x == 338 then 238
-  elsif x == 339 then 239
-  elsif x == 340 then 240
   elsif x == 2 then next nil
   end
   x * 10
@@ -722,33 +672,6 @@ r = [1, 2, 3].each do |x|
   elsif x == 311 then 211
   elsif x == 312 then 212
   elsif x == 313 then 213
-  elsif x == 314 then 214
-  elsif x == 315 then 215
-  elsif x == 316 then 216
-  elsif x == 317 then 217
-  elsif x == 318 then 218
-  elsif x == 319 then 219
-  elsif x == 320 then 220
-  elsif x == 321 then 221
-  elsif x == 322 then 222
-  elsif x == 323 then 223
-  elsif x == 324 then 224
-  elsif x == 325 then 225
-  elsif x == 326 then 226
-  elsif x == 327 then 227
-  elsif x == 328 then 228
-  elsif x == 329 then 229
-  elsif x == 330 then 230
-  elsif x == 331 then 231
-  elsif x == 332 then 232
-  elsif x == 333 then 233
-  elsif x == 334 then 234
-  elsif x == 335 then 235
-  elsif x == 336 then 236
-  elsif x == 337 then 237
-  elsif x == 338 then 238
-  elsif x == 339 then 239
-  elsif x == 340 then 240
   elsif x == 2 then break nil
   end
 end
@@ -968,29 +891,10 @@ r = [1, 2, 300].map do |x|
   elsif x == 311 then 211
   elsif x == 312 then 212
   elsif x == 313 then 213
-  elsif x == 314 then 214
-  elsif x == 315 then 215
-  elsif x == 316 then 216
-  elsif x == 317 then 217
-  elsif x == 318 then 218
-  elsif x == 319 then 219
-  elsif x == 320 then 220
-  elsif x == 321 then 221
-  elsif x == 322 then 222
-  elsif x == 323 then 223
-  elsif x == 324 then 224
-  elsif x == 325 then 225
-  elsif x == 326 then 226
-  elsif x == 327 then 227
-  elsif x == 328 then 228
-  elsif x == 329 then 229
-  elsif x == 330 then 230
-  elsif x == 331 then 231
-  elsif x == 332 then 232
   else 7
   end
 end
 p r
-r = [1, 2].map { |x| x + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1  }
+r = [1, 2].map { |x| x + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 }
 p r
 p r.sum

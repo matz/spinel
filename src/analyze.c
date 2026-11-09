@@ -16355,6 +16355,19 @@ static void oa_note_src(int S, int node) {
   }
   g_oa_src_slot[g_oa_src_n] = S; g_oa_src_node[g_oa_src_n] = node; g_oa_src_n++;
 }
+/* A parameter T funded by another call's value, node a: step 4 meets the
+   outer call first, so the slot a answers (call_ret) is settled in step 4b,
+   and T dies there if a answers none. */
+static int *g_oa_carg_slot, *g_oa_carg_node, g_oa_carg_n, g_oa_carg_cap;
+static void oa_note_call_arg(int T, int a) {
+  if (g_oa_carg_n >= g_oa_carg_cap) {
+    g_oa_carg_cap = g_oa_carg_cap ? g_oa_carg_cap * 2 : 16;
+    g_oa_carg_slot = (int *)realloc(g_oa_carg_slot, sizeof(int) * (size_t)g_oa_carg_cap);
+    g_oa_carg_node = (int *)realloc(g_oa_carg_node, sizeof(int) * (size_t)g_oa_carg_cap);
+    if (!g_oa_carg_slot || !g_oa_carg_node) { fprintf(stderr, "oom\n"); exit(1); }
+  }
+  g_oa_carg_slot[g_oa_carg_n] = T; g_oa_carg_node[g_oa_carg_n] = a; g_oa_carg_n++;
+}
 /* The receiver of a bare `RECV.freeze` (no arguments, no block), else -1. */
 static int freeze_receiver(const NodeTable *nt, int v) {
   if (v < 0 || nt_kind(nt, v) != NK_CallNode) return -1;
@@ -18108,6 +18121,12 @@ static void oa_call_edges(Compiler *c, OAS *sl, int n, int id, int oa_tmi, const
         claimed[a] = 1;
         oa_uf_union(sl, read_slot[a], T);
       }
+      /* another call's value (`same(same(a))`): the slot it answers,
+         which step 4 may not have seen yet -- step 4b settles it */
+      else if (a >= 0 && a < nc && nt_kind(c->nt, a) == NK_CallNode) {
+        claimed[a] = 1;
+        oa_note_call_arg(T, a);
+      }
       /* (not the rows for an Enumerable copy's receiver: the round start
          puts a table there back on the poly array, and narrowed again
          from its literal it traded the parameter every round) */
@@ -18485,6 +18504,41 @@ static int oa_empty_rows(Compiler *c, OAS *sl, int r, int cls) {
   return rows;
 }
 
+/* narrow_object_arrays' step 4b: a call on another call's value. Its
+   receiver is the slot that call answers (call_ret: a method's return slot,
+   a filter's result), so `f(a).size` or `a.select { }.each { }` is a
+   receiver use of it as `b = f(a); b.size` is one of b, and a parameter
+   funded by such a call (oa_note_call_arg) shares that slot's C type. Again
+   until nothing new settles: a chain's link answers the slot the next one
+   is called on (`f(a).select { }.size`). Each call is decided once, the
+   first round its receiver answers a slot. */
+static void oa_call_value_uses(Compiler *c, OAS *sl, const int *read_slot, char *claimed, int *call_ret,
+                               char *value_ok, const char *walk_disc, const int *par,
+                               const unsigned char *dead, int nc) {
+  const NodeTable *nt = c->nt;
+  char *seen = (char *)calloc((size_t)nt->count, 1);
+  for (int more = 1; more; ) {
+    more = 0;
+    for (int k = 0; k < g_oa_carg_n; k++) {
+      int a = g_oa_carg_node[k];
+      if (a < 0 || call_ret[a] < 0) continue;
+      oa_uf_union(sl, call_ret[a], g_oa_carg_slot[k]);
+      g_oa_carg_node[k] = -1;
+      more = 1;
+    }
+    for (int id = 0; id < nt->count; id++) {
+      if (seen[id] || nt_kind(nt, id) != NK_CallNode || (dead && dead[id])) continue;
+      int recv = nt_ref(nt, id, "receiver");
+      if (recv < 0 || recv >= nc || call_ret[recv] < 0 || claimed[recv] || read_slot[recv] >= 0) continue;
+      seen[id] = 1;
+      oa_recv_use(c, sl, call_ret[recv], id, recv, read_slot, claimed, call_ret, value_ok, walk_disc, par, nc);
+      more = 1;
+    }
+  }
+  free(seen);
+  for (int k = 0; k < g_oa_carg_n; k++)
+    if (g_oa_carg_node[k] >= 0) sl[g_oa_carg_slot[k]].alive = 0;
+}
 static int narrow_object_arrays(Compiler *c) {
   const NodeTable *nt = c->nt;
   int changed = 0;
@@ -18526,6 +18580,7 @@ static int narrow_object_arrays(Compiler *c) {
   g_oa_empt_n = 0;
   g_oa_src_n = 0;
   g_oa_efrom_n = 0;
+  g_oa_carg_n = 0;
   /* Drop every want this pass stamped on a map source in an earlier round,
      before the round re-derives them. OA_DROP_SRC_STAMP below only reaches the
      sources RECORDED this round, and a node stops being recorded for reasons
@@ -19070,6 +19125,8 @@ static int narrow_object_arrays(Compiler *c) {
     }
     oa_call_edges(c, sl, n, id, oa_tmi, argv, argc, read_slot, claimed, call_ret, walk_disc, nc);
   }
+  /* 4b. a call on another call's value, and a parameter funded by one */
+  oa_call_value_uses(c, sl, read_slot, claimed, call_ret, value_ok, walk_disc, par, dead, nc);
 
   /* 5. LocalVariableWriteNode sources: object literal -> evidence; alias to
         another slot -> edge; empty/nil -> neutral; anything else -> kill. */

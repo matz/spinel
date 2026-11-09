@@ -7511,14 +7511,20 @@ static int iter_ewi_zip_poly_arms(Compiler *c, int id, Buf *b, int indent, const
     emit_indent(b, indent);
     if (sp_streq(name, "reverse_each"))
       buf_printf(b, "for (sp_int _t%d = _t%d - 1; _t%d >= 0; _t%d--) {\n", ti, tn, ti, ti);
-    else
+    else {
       /* the length is read again every turn, as the typed loops read theirs:
          a block that shrinks the receiver (`a.clear`, `a.pop`) stops the
          walk where the array now ends, where the hoisted count walked on
          past it and yielded nils, and one that grows it is followed (every
          Ruby-defined Enumerable method iterates through this loop on a
-         boxed receiver) */
-      buf_printf(b, "for (sp_int _t%d = 0; (void)_t%d, _t%d < sp_poly_arr_len_ex(_t%d); _t%d++) {\n", ti, tn, ti, ta, ti);
+         boxed receiver). An Array's is read where it keeps it
+         (sp_poly_arr_len_ref, found once), anything else's through
+         sp_poly_arr_len_ex as before. */
+      buf_printf(b, "const sp_int *_lr%d = sp_poly_arr_len_ref(_t%d, NULL);\n", ti, ta);
+      emit_indent(b, indent);
+      buf_printf(b, "for (sp_int _t%d = 0; (void)_t%d, _t%d < (_lr%d ? *_lr%d : sp_poly_arr_len_ex(_t%d)); _t%d++) {\n",
+                 ti, tn, ti, ti, ti, ta, ti);
+    }
     /* multi-param: auto-splat each poly element into params. Ruby splats only
        when the element is itself an Array (sp_poly_each_elem already renders a
        hash pair as a 2-element array, so |k, v| over a hash still splats); a

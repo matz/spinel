@@ -22861,14 +22861,15 @@ static int class_value_builtin_answers(Compiler *c, const char *vnm, int is_clas
   }
   return 1;
 }
-/* Does a reopened Class or Module include or prepend module m (also
-   through another module)? A module value (only_module) is not a Class:
+/* Is m a reopened Class or Module, or does one include or prepend module
+   m (also through another module)? A module value (only_module) is not a Class:
    only Module's mixins count for it. */
 static int class_or_module_reopen_mixes(Compiler *c, int m, int only_module) {
   int cm[] = { comp_builtin_class_named(c, "Module"), comp_core_class(c, CORE_CLASS_REOPEN) };
   for (int i = 0; i < (only_module ? 1 : 2); i++) {
     int k = cm[i];
     if (k < 0 || k >= c->nclasses) continue;
+    if (k == m) return 1;   /* (the reopening's own method) */
     const ClassInfo *ki = &c->classes[k];
     for (int j = 0; j < ki->nincluded_mods; j++) if (comp_module_includes(c, ki->included_mods[j], m, 0)) return 1;
     for (int j = 0; j < ki->nprepended_mods; j++) if (comp_module_includes(c, ki->prepended_mods[j], m, 0)) return 1;
@@ -22892,8 +22893,10 @@ static int object_reopen_class_value_owns(Compiler *c, int id, int oci, const ch
       if (!any_class && !class_reopen && cls >= 0 && !comp_class_singleton_has_module(c, cls, k)) continue;
       /* for a builtin class or module the program does not reopen (cls -2
          or -3), which nothing can extend: a module counts when a reopened
-         Class or Module mixes it in (only Module for a module) */
-      if (!any_class && !class_reopen && cls <= -2 && !class_or_module_reopen_mixes(c, k, cls == -3)) continue;
+         Class or Module mixes it in (only Module for a module), or, for a
+         class, when Object extends it */
+      if (!any_class && !class_reopen && cls <= -2 && !class_or_module_reopen_mixes(c, k, cls == -3) &&
+          !(cls == -2 && oci >= 0 && comp_class_singleton_has_module(c, oci, k))) continue;
       return 1;
     }
   }

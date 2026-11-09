@@ -710,6 +710,57 @@ calls): repr_diff reports `ivar Holder @buf: c=const char * -> c=sp_String
 *`, c_costs a new snapshot copy inside the loop of `sp_Holder_run`, and
 alloc_diff the bytes going from 1,000,091 to 202,000,123.
 
+## emit_trace
+
+Which emitters produced a call's C, and which arm of the call chain took
+it. A call goes through `emit_call_body_ordinary`, a chain of over a
+hundred `if (arm) return;` tests, and several arms write near-identical C,
+so the output does not say which one ran. `make build/spinel-trace` builds
+the compiler a second time with `-finstrument-functions` and
+`-DSP_EMIT_TRACE` (as `build/spinel-work` is built with `-DSP_WORK_COUNT`):
+the hooks in `src/emit_trace.c` write every function entered during code
+generation to the file `SPINEL_EMIT_TRACE` names, with a marker at each
+call and statement. The normal compiler has none of it. The tool, a CRuby
+script, runs that build on one program and prints the trees of one line, or
+of every line:
+
+```
+ruby tools/emit_trace.rb [--prefix P] [--all] PROG.rb [LINE]
+```
+
+```
+poly.rb:9:7  call speak  `pet.speak`
+  emit_call_body
+    emit_cext_call
+    emit_missing_call
+      cplan_missing
+    emit_call_body_ordinary
+      ...
+      emit_poly_builtin_method
+        repr_of
+      emit_poly_method_dispatch                 <- took the call
+        emit_or_take_back
+          emit_range_literal_cover
+        repr_of (x2)
+        cplan_poly_arms
+        ...
+```
+
+The arms above the mark were tried and declined. The word after `call` is
+the name the compiler emits, which a rewrite may have changed (a `send`
+with a literal name shows the method it names); after `stmt` it is the
+node's type. A call in statement position can be written by `emit_stmt`'s
+own chain before it reaches `emit_call_body`: it then has no tree of its
+own, and its statement's tree shows the emitters.
+`| grep -E '^[^ ]|took the call'` keeps the heads and the arms.
+
+The trace build takes about twice the normal compile. With a LINE the tool
+has the hooks record only that line's calls and statements
+(`SPINEL_EMIT_TRACE_LINE`), a trace under a megabyte; without one the trace
+is large, 174 MB for the 323 lines of `benchmark/bm_ao_render.rb`. It is
+for one program at a time. `make emit-trace-test` keeps it building,
+outside `make test`.
+
 ## Adding a tool
 
 Drop `tools/<name>.rb` (subset Ruby, `require_relative "tool_common"`

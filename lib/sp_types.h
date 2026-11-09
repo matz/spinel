@@ -305,7 +305,7 @@ _Static_assert(sizeof(void *) != 8 || (sizeof(sp_IntArray) == 48 && sizeof(sp_Fl
                "the Int / Float array blocks keep their slab class");
 /* A push reads `len` once, as one load of that field alone, and stores
    l + 1 without reading it back (sp_IntArray_push, sp_FloatArray_push,
-   sp_PolyArray_push). A compiler otherwise loads len together with the
+   sp_PolyArray_push, sp_PtrArray_push, sp_StrArray_push_e). A compiler otherwise loads len together with the
    field beside it in one wide load -- clang on arm64 len and cap, gcc on
    x86 start and len -- right after the previous push stored len alone, and
    a load wider than a store still in flight to the same bytes waits for it

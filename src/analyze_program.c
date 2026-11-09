@@ -697,9 +697,11 @@ void prog_refuse_loads(Compiler *c) {
        methods reach the record only after the file runs */
     int margc = 0;
     const int *mav = c->nautoloads && nt_ref(nt, id, "receiver") < 0 ? call_args(nt, id, &margc) : NULL;
-    int msend = mav && margc > 1 && is_send_family(name) && nt_kind(nt, mav[0]) == NK_SymbolNode && is_mixin_call(nt_str(nt, mav[0], "value"));
+    int msent = 0;
+    const char *sent = mav ? call_sent_name(nt, id, &msent) : NULL;
+    int msend = mav && margc > msent && is_send_family(name) && sent && is_mixin_call(sent);
     if (!msend && !(mav && is_mixin_call(name) && !prog_mixin_plain_stmt(c, id))) mav = NULL;
-    for (int j = msend; mav && j < margc; j++)
+    for (int j = msend ? msent : 0; mav && j < margc; j++)
       if (elab_autoload_read(c, mav[j]))
         unsupported_feature(c, id, "--load-model=graph loads an autoload's file at its constant's first reference only later, for now");
     if (!is_autoload_name(name)) continue;

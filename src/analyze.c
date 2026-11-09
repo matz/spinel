@@ -26461,10 +26461,9 @@ static void strh_reflect_scan(Compiler *c, StrhReflect *r) {
     int first = 0;
     if (is_send_family(nm)) {
       /* `send(:instance_variable_get, :@l)`: the name asked is the second */
-      const char *m = argc >= 1 ? strh_lit_name(nt, av[0]) : NULL;
+      const char *m = call_sent_name(nt, n, &first);
       if (!m) { strh_reflect_add(r, NULL); continue; }
       nm = m;
-      first = 1;
     }
     if (is_reflective_access(nm)) {
       /* (a constant named by a path, `H::L` or `::L`, is no name this reads:
@@ -44450,8 +44449,7 @@ static int kwsplat_gated(NodeTable *nt, KwAliases *al, int id, const int *args, 
   if (!nm) return 0;
   if (is_send_family(nm)) {
     if (n < 2) return 0;
-    if (nt_kind(nt, args[0]) != NK_SymbolNode) return 1;
-    nm = nt_str(nt, args[0], "value");
+    nm = call_sent_name(nt, id, NULL);
     if (!nm) return 1;
   }
   return bop_name_kwless(nm) || kwsplat_alias_gated(nt, al, nm);
@@ -55369,9 +55367,9 @@ static void an_presence_writes(Compiler *c, int id) {
     if (is_ivar_set(nm) && k0 != NK_SymbolNode && k0 != NK_StringNode) c->pres_any = 1;
     else if (is_ivar_remove_name(nm) && (k0 == NK_SymbolNode || k0 == NK_StringNode))
       comp_pres_note(c, nt_str(nt, av[0], k0 == NK_SymbolNode ? "value" : "content"), PRES_REMOVED);
-    else if ((is_send_family(nm) || is_method_ref_name(nm)) && k0 == NK_SymbolNode) {
-      const char *wn = nt_str(nt, av[0], "value");
-      if (name_is_plain_setter(wn)) an_presence_note_ivar(c, wn, strlen(wn) - 1, PRES_UNMARKED);
+    else if (is_send_family(nm) || is_method_ref_name(nm)) {
+      const char *wn = is_send_family(nm) ? call_sent_name(nt, id, NULL) : k0 == NK_SymbolNode ? nt_str(nt, av[0], "value") : NULL;
+      if (wn && name_is_plain_setter(wn)) an_presence_note_ivar(c, wn, strlen(wn) - 1, PRES_UNMARKED);
     }
   }
   else if (nt_kind(nt, id) == NK_CallOperatorWriteNode) {

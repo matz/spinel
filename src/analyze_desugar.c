@@ -6076,13 +6076,11 @@ static int engine_object_mixes_in_scan(NodeTable *nt) {
     if (nt_kind(nt, id) != NK_CallNode) continue;
     const char *nm = nt_str(nt, id, "name");
     if (!nm) continue;
-    int mix = sp_streq(nm, "include") || sp_streq(nm, "prepend");
+    int mix = is_include_name(nm) || is_prepend_name(nm);
     if (!mix && is_send_family(nm)) {
-      int ac = 0; const int *av = nt_arr(nt, nt_ref(nt, id, "arguments"), "arguments", &ac);
-      const char *s = ac < 1 ? NULL : nt_kind(nt, av[0]) == NK_SymbolNode ? nt_str(nt, av[0], "value") :
-                      nt_kind(nt, av[0]) == NK_StringNode ? nt_str(nt, av[0], "content") : NULL;
+      const char *s = call_sent_name(nt, id, NULL);
       /* a computed method name could be either */
-      mix = ac < 1 || !s || sp_streq(s, "include") || sp_streq(s, "prepend");
+      mix = !s || is_include_name(s) || is_prepend_name(s);
     }
     if (!mix) continue;
     int r = nt_ref(nt, id, "receiver");
@@ -6240,11 +6238,10 @@ static int engine_surely_top_stmt(Compiler *c, int id) {
    or `x` or names no literal; a removal of some other constant
    (`Object.send(:remove_const, :Zork)`) leaves them alone. */
 static int engine_removes_const(NodeTable *nt, int id, const char *h, const char *x) {
-  const char *nm = nt_str(nt, id, "name");
-  if (!nm) return 0;
-  int ac = 0; const int *av = nt_arr(nt, nt_ref(nt, id, "arguments"), "arguments", &ac);
-  int via = is_send_family(nm) && ac >= 1 && is_remove_const_name(vis_arg_name(nt, av[0]));
-  if (!via && !is_remove_const_name(nm)) return 0;
+  int ac = 0, via = 0;
+  const int *av = call_args(nt, id, &ac);
+  const char *nm = call_sent_name(nt, id, &via);
+  if (!nm || !is_remove_const_name(nm)) return 0;
   const char *gone = ac > via ? vis_arg_name(nt, av[via]) : NULL;
   return !gone || sp_streq(gone, h) || sp_streq(gone, x);
 }
@@ -6329,12 +6326,11 @@ static int engine_leaf_unwritten(NodeTable *nt, const char *leaf) {
       if (sp_streq(l ? l + 1 : wn, leaf)) return 0;
       continue;
     }
-    const char *nm = nt_kind(nt, id) == NK_CallNode ? nt_str(nt, id, "name") : NULL;
-    if (!nm) continue;
-    int ac = 0; const int *av = nt_arr(nt, nt_ref(nt, id, "arguments"), "arguments", &ac);
-    const char *a0 = ac >= 1 ? vis_arg_name(nt, av[0]) : NULL;
-    int via = is_send_family(nm) && a0 && is_const_set_name(a0);   /* (a send of a run-time name: not taken for one, as engine_removes_const) */
-    if (!via && !is_const_set_name(nm)) continue;
+    if (nt_kind(nt, id) != NK_CallNode) continue;
+    int ac = 0, via = 0;
+    const int *av = call_args(nt, id, &ac);
+    const char *nm = call_sent_name(nt, id, &via);   /* (a send of a run-time name: not taken for one, as engine_removes_const) */
+    if (!nm || !is_const_set_name(nm)) continue;
     const char *set = ac > via ? vis_arg_name(nt, av[via]) : NULL;
     if (!set || sp_streq(set, leaf)) return 0;
   }
@@ -27533,11 +27529,7 @@ static int biv_frozen_literal(const NodeTable *nt, int r) {
 static int biv_is_reflective_set(const NodeTable *nt, int call) {
   const char *nm = nt_str(nt, call, "name");
   if (!nm) return 0;
-  if (is_ivar_set_name(nm)) return 1;
-  if (!is_send_family(nm)) return 0;
-  int an = nt_ref(nt, call, "arguments"), ac = 0;
-  const int *av = an >= 0 ? nt_arr(nt, an, "arguments", &ac) : NULL;
-  const char *sn = ac > 0 && nt_kind(nt, av[0]) == NK_SymbolNode ? nt_str(nt, av[0], "value") : NULL;
+  const char *sn = call_sent_name(nt, call, NULL);
   return sn && is_ivar_set_name(sn);
 }
 static int biv_is_self_or_implicit(const NodeTable *nt, int call) {

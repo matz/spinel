@@ -78,8 +78,15 @@ int emit_call_poly_builtin_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
         if (late9) buf_printf(&cb9, "({ sp_RbVal _t%d = ", tk9);
         else buf_printf(&cb9, "%s(", pn9);
         buf_puts(&cb9, "sp_poly_enum_chk(");
+        /* last, rotate, sample and shuffle are Array's alone: a Struct or
+           another program object (sp_poly_ary_chk) has none, where the
+           check below hands on its members or its #each as an Array */
+        int aonly9 = sp_streq(name, "last") || sp_streq(name, "rotate") ||
+                     sp_streq(name, "sample") || sp_streq(name, "shuffle");
+        if (aonly9) buf_puts(&cb9, "sp_poly_ary_chk(");
         { Buf rb9; memset(&rb9, 0, sizeof rb9); emit_expr(c, recv, &rb9);
           buf_puts(&cb9, rb9.p ? rb9.p : "sp_box_nil()"); free(rb9.p); }
+        if (aonly9) buf_printf(&cb9, ", \"%s\", 1)", name);
         buf_printf(&cb9, ", \"%s\")", name);
         /* (rooted: for a user Enumerable the check answers a new Array, and
            converting the count may run the program's to_int) */

@@ -5278,11 +5278,14 @@ static SP_INLINE sp_RbVal sp_poly_ary_chk(sp_RbVal v, const char *m, int range_o
   /* a builtin with no #size has none of these (Thread#join is its own) */
   if (sp_poly_sizeless_builtin(v) && !(v.cls_id == SP_BUILTIN_THREAD && strcmp(m, "join") == 0))
     sp_raise_poly_nomethod(m, v);
-  /* nor has an IO, or a Struct (values_at is a Struct's own): the user
-     element read below took a Struct's members as its elements */
+  /* nor has an IO, or a program object whose class does not define m (its
+     own m is dispatched before this): the user element read below took a
+     Struct's members, or any other object's #each, as its elements.
+     values_at is a Struct's own. */
   if (!sp_poly_root_lacks_names &&
       ((v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_IO) ||
-       (strcmp(m, "values_at") != 0 && sp_poly_struct_size(v) >= 0)))
+       (strcmp(m, "values_at") == 0 ? sp_poly_is_user_obj(v) && sp_poly_struct_size(v) < 0
+                                    : sp_poly_is_user_obj(v) || sp_poly_struct_size(v) >= 0)))
     sp_raise_poly_nomethod(m, v);
   if (v.tag == SP_TAG_STR || v.tag == SP_TAG_SYM || sp_poly_is_strbuf(v) ||
       (v.tag == SP_TAG_OBJ && sp_poly_is_hash_kind(v.cls_id)) ||

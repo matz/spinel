@@ -22,15 +22,12 @@ Dir.mktmpdir('spinel-cext-send-') do |tmp|
   command(RbConfig.ruby, '-rmkmf', '-e', 'create_makefile("send_sample")', chdir: native)
   command('make', chdir: native)
   expected = command(RbConfig.ruby, File.join(native, 'program.rb'))
-  ['', '--share-strings'].each do |mode|
-    exe = File.join(tmp, "program#{mode}")
-    flags = mode.empty? ? [] : [mode]
-    command(File.join(ROOT, 'bin/spinel'), File.join(tmp, 'program.rb'), *flags,
-      '--link', File.join(tmp, 'send_sample.a'), '-o', exe)
-    [{}, {'SPINEL_GC_STRESS' => '1'}, {'SPINEL_GC_MINOR' => '1'}, {'SPINEL_GC_SLAB' => '0'}].each do |env|
-      actual = command(exe, env: env.merge('SPINEL_GC_VERIFY_GEN' => '1'))
-      raise "CRuby differs (#{mode} #{env})\nexpected:\n#{expected}\nactual:\n#{actual}" unless actual == expected
-    end
+  exe = File.join(tmp, 'program')
+  command(File.join(ROOT, 'bin/spinel'), File.join(tmp, 'program.rb'),
+    '--link', File.join(tmp, 'send_sample.a'), '-o', exe)
+  [{}, {'SPINEL_GC_STRESS' => '1'}, {'SPINEL_GC_MINOR' => '1'}, {'SPINEL_GC_SLAB' => '0'}].each do |env|
+    actual = command(exe, env: env.merge('SPINEL_GC_VERIFY_GEN' => '1'))
+    raise "CRuby differs (#{env})\nexpected:\n#{expected}\nactual:\n#{actual}" unless actual == expected
   end
   c_file = File.join(tmp, 'program.c')
   command(File.join(ROOT, 'bin/spinel'), '-c', '--no-line-map', File.join(tmp, 'program.rb'), '-o', c_file)

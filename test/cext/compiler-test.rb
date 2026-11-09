@@ -38,9 +38,6 @@ Dir.mktmpdir('spinel-cext-compiler-') do |tmp|
   out, err, status = Open3.capture3(File.join(ROOT, 'bin/spinel'), '-c', missing_reference, '-o', File.join(tmp, 'missing-reference.c'))
   raise "missing external class reference accepted: #{out}#{err}" if status.success? || !err.include?('C extension class was not registered')
   actual = command(exe)
-  command(File.join(ROOT, 'bin/spinel'), File.join(tmp, 'program.rb'), '--share-strings', '--link', File.join(tmp, 'sample.a'), '-o', exe + '-shared')
-  shared = command(exe + '-shared')
-  raise 'shared String mode changed the output' unless shared == actual
   ['SPINEL_GC_STRESS', 'SPINEL_GC_MINOR', 'SPINEL_GC_SLAB'].each do |mode|
     value = mode == 'SPINEL_GC_SLAB' ? '0' : '1'
     stressed = command(exe, env: {mode => value, 'SPINEL_GC_VERIFY_GEN' => '1'})
@@ -91,8 +88,6 @@ def cruby_oracle(name)
     exe = File.join(tmp, 'program')
     command(File.join(ROOT, 'bin/spinel'), File.join(tmp, 'program.rb'), '--link', archive, '-o', exe)
     actual = command(exe)
-    command(File.join(ROOT, 'bin/spinel'), File.join(tmp, 'program.rb'), '--share-strings', '--link', archive, '-o', exe + '-shared')
-    raise "shared String mode changed the #{name} output" unless command(exe + '-shared') == actual
     stressed = command(exe, env: {'SPINEL_GC_STRESS' => '1', 'SPINEL_GC_VERIFY_GEN' => '1'})
     raise "GC stress changed the #{name} output" unless stressed == actual
     native = File.join(tmp, 'cruby')

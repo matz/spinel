@@ -1,7 +1,6 @@
 #!/bin/sh
 # usage: share_strings_one.sh SPINEL TEST
-# One program of `make share-strings-test`: compiled with --share-strings,
-# run, and run again under SPINEL_GC_STRESS=1, each against its .expected
+# One program of `make share-strings-test`: compiled, run, and run again under SPINEL_GC_STRESS=1, each against its .expected
 # (and its .err.expected for stderr, when it has one). A test/rbs-seed program
 # compiles with its signatures (--rbs test/rbs-seed/sig), and its .expected is
 # named without the .rb, as rbs-seed-test has it. The Makefile runs
@@ -24,7 +23,7 @@ check_output() {
 }
 ok=0
 {
-  if "$spinel" --share-strings $rbs "$t" -o "$tmp/b" >"$tmp/out" 2>&1; then
+  if "$spinel" $rbs "$t" -o "$tmp/b" >"$tmp/out" 2>&1; then
     ! grep -q 'did not converge' "$tmp/out" || { echo "share-strings-test: FAIL $t (the inference fixpoint ran to its round cap)"; ok=1; }
     check_output || { echo "share-strings-test: FAIL $t"; ok=1; }
     SPINEL_GC_STRESS=1 check_output || { echo "share-strings-test: FAIL $t (GC stress)"; ok=1; }

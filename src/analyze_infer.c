@@ -693,18 +693,46 @@ static int hv_slot_key(Compiler *c, int node, int *kind, int *owner, const char 
   }
   return 0;
 }
+/* slot + 1 by (kind, owner, name), open addressed: every read of a hash
+   asks, and a scan of the slots per question was quadratic in them */
+static int *g_hv_tab, g_hv_tab_cap, g_hv_tab_n;
+static unsigned hv_hash(int kind, int owner, const char *name) {
+  return (sp_strhash(name) * 31u + (unsigned)owner) * 2u + (unsigned)kind;
+}
+static void hv_tab_put(int i) {
+  unsigned m = (unsigned)g_hv_tab_cap - 1, h = hv_hash(g_hv[i].kind, g_hv[i].owner, g_hv[i].name) & m;
+  while (g_hv_tab[h]) h = (h + 1) & m;
+  g_hv_tab[h] = i + 1;
+}
 static HvSlot *hv_find(int kind, int owner, const char *name, int create) {
-  for (int i = 0; i < g_hv_n; i++)
-    if (g_hv[i].kind == kind && g_hv[i].owner == owner && sp_streq(g_hv[i].name, name)) return &g_hv[i];
+  if (g_hv_tab_n != g_hv_n) {
+    if (g_hv_tab) memset(g_hv_tab, 0, sizeof(int) * (size_t)g_hv_tab_cap);
+    g_hv_tab_n = g_hv_n;
+  }
+  if (g_hv_tab) {
+    unsigned m = (unsigned)g_hv_tab_cap - 1;
+    for (unsigned h = hv_hash(kind, owner, name) & m; g_hv_tab[h]; h = (h + 1) & m) {
+      HvSlot *e = &g_hv[g_hv_tab[h] - 1];
+      if (e->kind == kind && e->owner == owner && sp_streq(e->name, name)) return e;
+    }
+  }
   if (!create) return NULL;
   if (g_hv_n == g_hv_cap) {
     g_hv_cap = g_hv_cap ? g_hv_cap * 2 : 64;
     g_hv = realloc(g_hv, sizeof(HvSlot) * (size_t)g_hv_cap);
     if (!g_hv) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   }
+  if (2 * (g_hv_n + 1) > g_hv_tab_cap) {
+    g_hv_tab_cap = g_hv_tab_cap ? 2 * g_hv_tab_cap : 256;
+    free(g_hv_tab);
+    g_hv_tab = calloc((size_t)g_hv_tab_cap, sizeof(int));
+    if (!g_hv_tab) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    for (int i = 0; i < g_hv_n; i++) hv_tab_put(i);
+  }
   HvSlot *h = &g_hv[g_hv_n++];
   h->kind = kind; h->owner = owner; h->name = strdup(name); h->cls = -1; h->bad = 0; h->writes = 0;
   if (!h->name) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  hv_tab_put(g_hv_n - 1); g_hv_tab_n = g_hv_n;
   return h;
 }
 /* The hash operations a slot may be the receiver of, with their argument and
@@ -734,7 +762,7 @@ static void hv_build(Compiler *c) {
   const NodeTable *nt = c->nt;
   g_hv_building = 1;
   for (int i = 0; i < g_hv_n; i++) free(g_hv[i].name);
-  g_hv_n = 0;
+  g_hv_n = 0; g_hv_tab_n = -1;
   int n = nt->count;
   unsigned char *ok = calloc((size_t)(n > 0 ? n : 1), 1);
   if (!ok) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }

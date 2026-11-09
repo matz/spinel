@@ -508,19 +508,22 @@ typedef struct {
      (alias_accessor_method): 1 + the node of the attr_* call that declares
      it, 0 for none */
   int accessor_of;
-  /* the copy of an ancestor's def an alias is (register_alias_methods): 1 +
-     the scope that def's method is in the alias's class's ancestry (the
-     owner's own, a mixin's copy or a prepend's), whose super the copy's is
+  /* the copy of a def an alias is (register_alias_methods: an ancestor
+     class's def, or an initialize, the class's own too): 1 + the scope
+     that def's method is in the alias's class's ancestry (the owner's own,
+     a mixin's copy or a prepend's), whose super the copy's is
      (cplan_super_target); 0 for none */
   int super_of;
-  /* the copy of an ancestor's method an alias is (register_alias_methods): a
-     method of its class, not an inherited copy, and the name of the method
-     it is the copy of (Method#original_name of a define_method's, which no
-     def names) */
+  /* the copy of a method an alias is (register_alias_methods: an
+     ancestor's, or an initialize, the class's own too): a method of its
+     class, not an inherited copy, and the name of the method it is the
+     copy of (Method#original_name of a define_method's, which no def
+     names) */
   char *alias_of;
-  /* an initialize whose value a copy of an initialize reads through its
-     super (register_alias_methods): compiled with its value, not void
-     (method_is_void) */
+  /* an initialize a super in a copy of an initialize reaches
+     (register_alias_methods): compiled with its value, not void
+     (method_is_void). It is set whether or not the super's value is read,
+     a superset that costs only a returned value nothing reads */
   unsigned char init_value;
   enum { ENTRY_NONE, ENTRY_DISPATCH, ENTRY_TABLE, ENTRY_NAMED } entry;
   int version_n, main_n;

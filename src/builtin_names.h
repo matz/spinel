@@ -812,4 +812,8 @@ int is_port_gvar_name(const char *n);      /* $stdout $stderr $>: assigning an o
    calls nothing), so it answers for each, to_a and deconstruct. */
 int synth_stands_for(const char *name, int i, const char **proto);
 int is_method_list_call(const char *n);    /* attr attr_reader attr_writer attr_accessor remove_method undef_method: every argument names a method */
+/* The builtin classes whose `allocate` raises TypeError "allocator undefined for K" in CRuby: the predicate, and the i-th name (NULL past the end) for a
+   caller that emits one compare each. */
+int is_allocator_undefined_class(const char *n);
+const char *allocator_undefined_class_at(int i);
 #endif

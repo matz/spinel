@@ -32,9 +32,13 @@ static int sp_complex_mag(char *out, size_t sz, sp_float v, int is_f) {
 static int sp_complex_imag(char *buf, int n, size_t sz, sp_float im, int is_f) {   /* buf: a stack buffer, as above */
   if (n < 0 || (size_t)n >= sz) return 0;
   char mag[64];
-  sp_complex_mag(mag, sizeof mag, im < 0 ? -im : im, is_f);
+  /* The sign of a Float part is its sign bit, which is set for -0.0 (that is
+     not < 0): "1-0.0i", not "1+-0.0*i". A NaN is written "+NaN*i" whatever
+     its sign bit, as CRuby does. An Integer-classed part has no -0. */
+  int neg = is_f ? (signbit(im) && !isnan(im)) : im < 0;
+  sp_complex_mag(mag, sizeof mag, neg ? -im : im, is_f);
   const char *sep = (mag[0] >= '0' && mag[0] <= '9') ? "" : "*";
-  return snprintf(buf + n, sz - (size_t)n, "%c%s%si", im < 0 ? '-' : '+', mag, sep);
+  return snprintf(buf + n, sz - (size_t)n, "%c%s%si", neg ? '-' : '+', mag, sep);
 }
 const char *sp_complex_inspect(sp_Complex c) {
   char buf[128], re[64];

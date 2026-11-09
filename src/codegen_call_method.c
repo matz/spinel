@@ -249,11 +249,13 @@ void emit_scope_parameters_pushes(Compiler *c, int mi, int tr4, Buf *b) {
 }
 
 /* The name method mi's def gives it, CRuby's #original_name; NULL where no
-   def of the program names it: a define_method block, or a builtin's
-   wrapper (desugar_builtin_method_obj), which stands for the builtin */
+   def of the program names it: a define_method block (the copy an alias is
+   names the method it copies), or a builtin's wrapper
+   (desugar_builtin_method_obj), which stands for the builtin */
 static const char *method_def_name(Compiler *c, int mi) {
   const NodeTable *nt = c->nt;
   int dn = c->scopes[mi].def_node;
+  if (dn >= 0 && nt_kind(nt, dn) != NK_DefNode && c->scopes[mi].alias_of) return comp_scope_def_name(c, &c->scopes[mi]);
   if (dn < 0 || nt_kind(nt, dn) != NK_DefNode || bam_builtin_sym(c, mi, NULL)) return NULL;
   return nt_str(nt, dn, "name");
 }
@@ -262,6 +264,14 @@ static const char *method_def_name(Compiler *c, int mi) {
 static const char *method_desc_class_name(Compiler *c, int ci) {
   const char *rn = class_ruby_name(c, ci);
   return rn ? rn : c->classes[ci].name;
+}
+
+/* Has the owner class a newer method of the name the copy of an alias is a
+   copy of (CRuby renders a class-side alias of a replaced body with the
+   owner after the receiver's class) */
+static int alias_orig_replaced(Compiler *c, const Scope *m, int owner, const char *orig) {
+  int cur = orig ? call_target(c, -1, owner, orig, m->is_cmethod ? CT_CMETHOD : 0, NULL) : -1;
+  return cur >= 0 && c->scopes[cur].def_node != m->def_node;
 }
 
 /* "#<Method: Owner#name(a, b=..., *r, k:, o: ..., **kw, &blk)>" -- CRuby's
@@ -306,12 +316,15 @@ static void emit_method_desc_literal(Compiler *c, int mn, int mi, int from, cons
   if (ah >= 0 && asg) {
     sep = '.';
     buf_puts(&d, method_desc_class_name(c, rc >= 0 ? rc : ah));
-    if (rc >= 0 && rc != ah) buf_printf(&d, "(%s)", method_desc_class_name(c, ah));
+    /* (an alias of a class method the owner has replaced names the owner after the receiver's class) */
+    if (ali && rc >= 0 && rc != owci && alias_orig_replaced(c, m, owci, orig)) buf_printf(&d, "(%s)", ow);
+    else if (rc >= 0 && rc != ah) buf_printf(&d, "(%s)", method_desc_class_name(c, ah));
   }
   else if (om >= 0 && !unbound && rc >= 0)
     buf_printf(&d, m->is_cmethod ? "#<Class:%s>(%s)" : "%s(%s)", method_desc_class_name(c, rc), ow);
   /* ...and a bound Method of an alias's copy names the receiver's class ahead of the def's */
-  else if (ali && !unbound && rc >= 0 && rc != owci) buf_printf(&d, "%s(%s)", method_desc_class_name(c, rc), ow);
+  else if (ali && !unbound && rc >= 0 && rc != owci && (!m->is_cmethod || alias_orig_replaced(c, m, owci, orig)))
+    buf_printf(&d, "%s(%s)", method_desc_class_name(c, rc), ow);
   else buf_puts(&d, ow);
   buf_printf(&d, "%c%s", sep, nm);
   /* a Method named apart from its def (an alias's) writes the def's name

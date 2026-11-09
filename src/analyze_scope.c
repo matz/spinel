@@ -3270,7 +3270,7 @@ void scope_copy_method_shape(Scope *dst, Scope *src) {
    reads) re-attribute to it, not to the class the method is in (a shared
    body would resolve `name` against that one), with the original's shape
    and defaults. The new scope's index. */
-static int scope_copy_to_class(Compiler *c, int ms, int newci, const char *nm) {
+static int scope_copy_to_class(Compiler *c, int ms, int newci, const char *nm, int sg) {
   const NodeTable *nt = c->nt;
   Scope *src = &c->scopes[ms];
   Scope *dst = comp_scope_new(c, nm, src->def_node);
@@ -3282,13 +3282,13 @@ static int scope_copy_to_class(Compiler *c, int ms, int newci, const char *nm) {
     if (nb >= 0) {
       comp_grow_node_arrays(c);
       src = &c->scopes[ms]; dst = &c->scopes[dst_idx];
-      { dst->body = nb; comp_touch_scope(dst->idx); }
+      { dst->body = nb; dst->is_cmethod = sg; comp_touch_scope(dst->idx); }
       walk_scope(c, nb, dst_idx, newci);
     }
     else { dst->body = src->body; comp_touch_scope(dst->idx); }
   }
   { dst->class_id = newci; comp_touch_scope(dst->idx); }
-  { dst->is_cmethod = 0; comp_touch_scope(dst->idx); }
+  { dst->is_cmethod = sg; comp_touch_scope(dst->idx); }
   { dst->reachable = src->reachable; comp_touch_scope(dst->idx); }
   scope_copy_method_shape(dst, src);
   /* The copy's parameter locals carry the original's types. A method
@@ -3319,7 +3319,7 @@ static void sg_transplant_module(Compiler *c, int mod_ci, int newci) {
     if (src->class_id != mod_ci || src->is_cmethod || !src->name) continue;
     if (comp_method_in_class(c, newci, src->name) >= 0) continue;
     char *nm = strdup(src->name);
-    int dst_idx = scope_copy_to_class(c, ms, newci, nm);
+    int dst_idx = scope_copy_to_class(c, ms, newci, nm, 0);
     free(nm);
     src = &c->scopes[ms];
     src->is_transplanted_source = 1;   /* the module original is copied away */
@@ -4791,9 +4791,9 @@ static int alias_inherited_def(Compiler *c, const ElabEntry *e) {
   int cls = e->cls;
   /* (a def of the alias's name later in the class stands newest by name where
      the copy made now would: the alias is bound by name there, until that def) */
-  if (alias_def_after(c, e->cls, e->name, e->node, 0) >= 0) return -1;
-  for (int hop = 0; !e->sg && p.region >= 0 && hop < 32; hop++) {
-    if (elab_method_at(c, cls, t, 0, p, &d) != ELAB_YES || !d || d->may || d->unplaced) return -1;
+  if (alias_def_after(c, e->cls, e->name, e->node, e->sg) >= 0 || (e->sg && comp_class_is_module(c, &c->classes[e->cls]))) return -1;
+  for (int hop = 0; p.region >= 0 && hop < 32; hop++) {
+    if (elab_method_at(c, cls, t, e->sg, p, &d) != ELAB_YES || !d || d->may || d->unplaced) return -1;
     if (d->kind != LR_ALIAS) break;
     if (!d->target) return -1;
     p = elab_point_of(c, d->node);
@@ -4801,11 +4801,13 @@ static int alias_inherited_def(Compiler *c, const ElabEntry *e) {
     t = d->target;
     if (cls < 0) return -1;
   }
-  if (!d || d->kind != LR_DEF) return -1;
+  if (!d || (d->kind != LR_DEF && d->kind != LR_DEFINE_METHOD)) return -1;
   int q = c->node_cbody[d->node], si = elab_def_scope_of(c, d->node);
   if (q < 0 || q == e->cls || si <= 0 ||
-      c->scopes[si].class_id != q || c->scopes[si].is_cmethod || c->scopes[si].def_node != d->node ||
-      scope_is_initialize(&c->scopes[si])) return -1;
+      c->scopes[si].class_id != q || c->scopes[si].def_node != d->node || scope_is_initialize(&c->scopes[si])) return -1;
+  /* the side the alias names: a class method of the ancestor's own, or on the class side an instance method of a
+     module the ancestry extends (the class's singleton holds a copy of it, as an extend makes) */
+  if (!c->scopes[si].is_cmethod != !e->sg && !(e->sg && comp_class_is_module(c, &c->classes[q]))) return -1;
   return si;
 }
 
@@ -4876,6 +4878,38 @@ static int alias_of_member_writer(Compiler *c, const ElabEntry *e) {
          (c->classes[dc].is_struct || c->classes[dc].is_data);
 }
 
+/* Does a module the chain of the class method hold's class extends define the name hold's super asks for? */
+static int alias_super_in_extended(Compiler *c, int hold) {
+  const Scope *hs = &c->scopes[hold];
+  const char *nm = comp_scope_def_name(c, hs);
+  for (int k = hs->class_id, g = 0; nm && k >= 0 && g < c->nclasses; k = c->classes[k].parent, g++) {
+    for (int e = 0; e < c->classes[k].nextended_mods; e++) {
+      int m = c->classes[k].extended_mods[e];
+      if (m >= 0 && m < c->nclasses && comp_method_in_class(c, m, nm) >= 0) return 1;
+    }
+    if (k == c->classes[k].parent) break;
+  }
+  return 0;
+}
+
+/* The class method an extend put in the singleton ancestry of class cls as
+   the copy of the module's def at node dn (the nearest one up the parents),
+   or -1: where a super in an alias of that module method starts. The def's
+   scopes are the chain of its node (a method's body and its copies). */
+static int alias_extend_copy(Compiler *c, int cls, int dn) {
+  int best = -1, bd = c->nclasses + 1;
+  for (int si = comp_def_oldest(c, dn); si >= 0; si = comp_def_newer(c, si)) {
+    const Scope *sc = &c->scopes[si];
+    if (!sc->is_cmethod || !sc->is_extend_copy) continue;
+    int d = 0;
+    for (int k = cls; k >= 0 && d < bd; k = c->classes[k].parent, d++) {
+      if (k == sc->class_id) { best = si; bd = d; break; }
+      if (k == c->classes[k].parent) break;
+    }
+  }
+  return best;
+}
+
 /* An alias of an ancestor class's def (alias_inherited_def) is a method of
    the alias's class made of that def: a copy of its scope under the
    alias's name, the way an include puts a module's methods in its
@@ -4913,13 +4947,30 @@ void register_alias_methods(Compiler *c, int modules) {
       alias_register(c, &c->classes[a[i].cls], a[i].name, a[i].target, a[i].node, a[i].sg);
       continue;
     }
-    int di = scope_copy_to_class(c, src[i], a[i].cls, a[i].name);
+    /* (the def's method in the class's ancestry is looked up before the copy exists: the copy is a scope of the
+       same def, and a link from it to itself is no ancestry) */
+    int hold = -1, calls_super = scope_calls_super(c, src[i]);
+    if (calls_super) {
+      int dn = c->scopes[src[i]].def_node;
+      hold = comp_shadowed_body(c, a[i].cls, a[i].sg, dn, NULL);
+      if (hold < 0) hold = comp_method_version(c, a[i].cls, c->scopes[src[i]].name, a[i].sg, dn, NULL);
+      if (hold < 0 && a[i].sg) hold = alias_extend_copy(c, a[i].cls, dn);
+    }
+    int di = scope_copy_to_class(c, src[i], a[i].cls, a[i].name, a[i].sg);
     c->scopes[di].alias_of = strdup(comp_scope_user_name(&c->scopes[src[i]]));
-    if (scope_calls_super(c, src[i])) {
+    if (calls_super) {
       /* the def's method in the class's ancestry: a prepend's copy of it,
          else a mixin's or the owner's own */
-      int dn = c->scopes[src[i]].def_node, hold = comp_shadowed_body(c, a[i].cls, 0, dn, NULL);
-      if (hold < 0) hold = comp_method_version(c, a[i].cls, c->scopes[src[i]].name, 0, dn, NULL);
+      /* a class method whose super reaches a module the class extends, behind a later def of its name: the plan finds
+         no method of that body for the copy's super to start from */
+      if (hold >= 0 && a[i].sg && cplan_super_target(c, -1, &c->scopes[hold], NULL) < 0 &&
+          alias_super_in_extended(c, hold)) {
+        char msg[400];
+        snprintf(msg, sizeof msg, "%s.%s: alias of an inherited class method whose `super` reaches a module the class "
+                 "extends, behind a later definition of the name, is not supported; see docs/limitations.md",
+                 c->classes[a[i].cls].name, a[i].name);
+        unsupported_feature(c, a[i].node, msg);
+      }
       c->scopes[di].super_of = (hold >= 0 ? hold : src[i]) + 1;
     }
     elab_attr_scope(c, &a[i], di);
@@ -7292,10 +7343,24 @@ static int inherited_alias_def_before(Compiler *c, int p, const char *od, int at
   return 0;
 }
 
+/* Does the load record place the original an alias names, a version of it at
+   the alias's point? Where it does not (a define_method whose name is
+   computed), nothing says which body the alias took. */
+static int alias_original_placed(Compiler *c, int ci, int a) {
+  ClassInfo *cls = &c->classes[ci];
+  const LrDef *d = NULL;
+  LoadPoint p = elab_point_of(c, cls->alias_node[a]);
+  return p.region >= 0 && elab_method_at(c, ci, cls->alias_old[a], cls->alias_sg && cls->alias_sg[a], p, &d) == ELAB_YES &&
+         d && !d->may && !d->unplaced;
+}
+
 /* An ancestor's method an alias took is the body in effect where the alias
    appears; one of the ancestors up to the owner `p` that defines the name
    again after it would take its place here, where CRuby keeps the earlier
-   body, so that is refused. */
+   body, so that is refused. This is the alias bound by name whose original
+   the record does not place (a define_method whose name is computed; a
+   placed one is a method of its class, or an initialize's, which the name
+   binding answers as CRuby does) */
 static void inherited_alias_refuse_later_def(Compiler *c, int ci, int a, int p) {
   ClassInfo *cls = &c->classes[ci];
   int at = cls->alias_node[a];
@@ -7368,7 +7433,7 @@ void resolve_inherited_aliases(Compiler *c) {
         if (!before && !(later && comp_method_in_class(c, p, od) >= 0) && comp_cmethod_in_class(c, p, od) < 0)
           continue;
         if (cls->alias_cls[a] != p) { cls->alias_cls[a] = p; comp_class_shape_changed(); }
-        if (before) inherited_alias_refuse_later_def(c, ci, a, p);
+        if (before && !alias_original_placed(c, ci, a)) inherited_alias_refuse_later_def(c, ci, a, p);
         break;
       }
     }

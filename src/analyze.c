@@ -13793,7 +13793,11 @@ static int desugar_enum_named_call(Compiler *c, int id, NodeTable *nt, const cha
           nt_node_set_ref(nt, toa, "receiver", recv);
           nt_node_set_int(nt, toa, "to_set", 1);
           nt_node_set_str(nt, cst, "name", tsr->target);
-          nt_node_set_arr(nt, one, "arguments", &toa, 1);
+          /* an Array goes in as it is: CRuby's to_set walks it with each,
+             and a program's own Array#to_a (`def to_a = map(&:to_s)`) is no
+             step of it (the set package walks one so too) */
+          int arg = ty_is_array(rt) ? recv : toa;
+          nt_node_set_arr(nt, one, "arguments", &arg, 1);
           nt_node_set_str(nt, id, "name", "new");
           nt_node_set_ref(nt, id, "receiver", cst);
           nt_node_set_ref(nt, id, "arguments", one);

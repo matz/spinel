@@ -36,3 +36,21 @@ class KidB4 < BaseB; include IncB; prepend PreB; end
 class KidB5 < BaseB; include Comparable; include IncB; end
 def fb(v) = v::Foo.new.w
 [KidB, KidB2, KidB3, KidB4, KidB5, BaseB, IncB, PreB].each { |k| p [k, fb(k)] }
+
+# A diamond: a module two mixins bring sits where the first include put
+# it. A class's own Foo comes before its prepend's; a subclass reads the
+# prepend's. An include in a reopening of the holder comes after its own.
+module DC; class Foo; def w = :c; end; end
+module DA; include DC; class Foo; def w = :a; end; end
+module DB; include DC; end
+class DK; include DA; include DB; end
+module DPre; class Foo; def w = :pre; end; end
+class DOwn < BaseB; prepend DPre; class Foo; def w = :own; end; end
+class DOwn2 < DOwn; end
+module DMM; include IncB; end
+module DInc2; class Foo; def w = :inc2; end; end
+class DDup; include DMM; include DInc2; include IncB; end
+module DIncA; class Foo; def w = :inca; end; end
+class BaseB; include DIncA; end
+class DUnder < BaseB; end
+p [fb(DK), fb(DOwn), fb(DOwn2), fb(DDup), fb(BaseB), fb(DUnder)]

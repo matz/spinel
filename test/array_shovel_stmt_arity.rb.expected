@@ -1,0 +1,27 @@
+"wrong number of arguments (given 2, expected 1)"
+[1]
+"wrong number of arguments (given 2, expected 1)"
+["a"]
+"wrong number of arguments (given 2, expected 1)"
+[1.5]
+"wrong number of arguments (given 2, expected 1)"
+[1, "a"]
+"wrong number of arguments (given 2, expected 1)"
+[[1]]
+"wrong number of arguments (given 2, expected 1)"
+[1]
+"wrong number of arguments (given 0, expected 1)"
+[1]
+[1, 9]
+[1, 9, 10]
+"wrong number of arguments (given 2, expected 1)"
+[]
+[1, 9]
+"wrong number of arguments (given 2, expected 1)"
+"wrong number of arguments (given 0, expected 1)"
+[1, 9]
+"wrong number of arguments (given 2, expected 1)"
+"wrong number of arguments (given 2, expected 1)"
+[1, 4]
+"too many options"
+"wrong number of arguments (given 0, expected 1..2)"

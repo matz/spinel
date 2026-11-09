@@ -20980,6 +20980,13 @@ static int arity_call_block(const NodeTable *nt, int id, int *argc, int *kwh) {
 /* The guard's decision: a builtin call whose positional count CRuby rejects.
    exp receives CRuby's wording of the accepted range, eval_recv whether the
    receiver is an expression to evaluate before the raise. */
+/* Does constant read `recv` hold a builtin value -- an Array, a Hash, a
+   String, a number -- rather than a class or module? */
+static int const_reads_builtin_value(Compiler *c, int recv) {
+  TyKind rt = comp_ntype(c, recv);
+  return ty_is_array(rt) || ty_is_hash(rt) || rt == TY_STRING || rt == TY_STRBUF ||
+         rt == TY_INT || rt == TY_FLOAT || rt == TY_SYMBOL;
+}
 static int arity_violation(Compiler *c, int id, char *exp, size_t n, int *eval_recv) {
   const NodeTable *nt = c->nt;
   const char *name = nt_str(nt, id, "name");
@@ -20992,6 +20999,9 @@ static int arity_violation(Compiler *c, int id, char *exp, size_t n, int *eval_r
   const SpAritySpec *itbl = sp_builtin_arity_spec_tbl;
   const SpAritySpec *ctbl = sp_builtin_cmeth_arity_spec_tbl;
   NodeKind rty2_k = nt_kind(nt, recv);
+  /* a constant that holds a value (`C = [1]; C.<<(2, 3)`) is checked by
+     its value's class below, not as a class object */
+  if (rty2_k == NK_ConstantReadNode && const_reads_builtin_value(c, recv)) rty2_k = NK_CallNode;
   if (kwh && (recv < 0 || (rty2_k == NK_ConstantReadNode))) return 0;
   if (recv < 0) {
     /* A bare call resolves to the enclosing class's chain, then to a

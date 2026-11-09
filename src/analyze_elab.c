@@ -3732,7 +3732,7 @@ static int lr_target_runs_block(Compiler *c, int call) {
   const char *nm = nt_kind(nt, call) == NK_CallNode ? nt_str(nt, call, "name") : NULL;
   int rv = nm ? nt_ref(nt, call, "receiver") : -1;
   const char *cls = rv >= 0 ? lr_literal_class(nt_kind(nt, rv)) : NULL;
-  if (!r || r->nreopens || !cls || !lr_defines(r, nm) || builtin_instance_method_known(cls, nm)) return 0;
+  if (!r || r->nreopens || !cls || !lr_defines(r, nm) || builtin_answers_ahead_of(cls, nm, "Object")) return 0;
   LoadPoint p = elab_point_of(c, call);
   for (int hop = 0; hop < 8; hop++) {
     const LrDef *d = NULL;

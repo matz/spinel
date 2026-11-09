@@ -311,7 +311,7 @@ int cplan_reopen_runs_builtin(Compiler *c, int id, int mi) {
   const char *kn = k >= 0 && k < c->nclasses && c->classes[k].name && c->classes[k].enclosing_class < 0 &&
                    builtin_class_id(c->classes[k].name) < 0 ? c->classes[k].name : NULL;
   const char *cn = nt_str(nt, id, "name");
-  return kn && (builtin_method_known(kn, cn) || builtin_module_owns(kn, cn)) && cplan_called_before_def(c, id, mi);
+  return kn && builtin_answers_ahead_of(kn, cn, NULL) && cplan_called_before_def(c, id, mi);
 }
 /* The existing boxed dispatch candidates also serve literal-name send arms:
    the method call `call` runs on each candidate's arm. */
@@ -622,7 +622,8 @@ static void cplan_resolve_call(Compiler *c, int id, CallPlan *p) {
   /* last, a program's own Object method for a name the receiver's builtin
      class and Object's own surface do not have (object_reopen_answers) */
   int bcls = object_fallback_class_of_type(rt);
-  if (rt == TY_BOOL || (bcls >= 0 && !builtin_method_known(core_class_name(bcls), name))) cplan_object_reopen(c, id, name, p);
+  const char *bn = rt == TY_BOOL ? "TrueClass" : bcls >= 0 ? core_class_name(bcls) : NULL;
+  if (bn && !builtin_answers_ahead_of(bn, name, "Object")) cplan_object_reopen(c, id, name, p);
 }
 
 static void cplan_resolve(Compiler *c, int id, CallPlan *p) {
@@ -1881,7 +1882,7 @@ static int cm_self_kind(Compiler *c, int self) {
 static int ct_builtin_reopen_undefined_at(Compiler *c, int id, int cls, const char *name, unsigned flags) {
   if ((flags & (CT_CMETHOD | CT_TOP | CT_OWN)) || cls < 0 || cls >= c->nclasses || !c->classes[cls].name ||
       c->classes[cls].enclosing_class >= 0 || builtin_class_id(c->classes[cls].name) >= 0 ||
-      !(builtin_method_known(c->classes[cls].name, name) || builtin_module_owns(c->classes[cls].name, name)) ||
+      !builtin_answers_ahead_of(c->classes[cls].name, name, NULL) ||
       !elab_method_versions(c, name))
     return 0;
   int framed = elab_plan_enter(c, id);
@@ -5564,13 +5565,6 @@ int cplan_nil_program_method(Compiler *c, int call, const char *name, int *nilcl
    Kernel and BasicObject that defines it answers, true when that method is
    public or include_all is set (a literal `true` 2nd argument); -1 when
    none of them defines it. */
-int cplan_nil_own_builtin(const char *name) {
-  static const char *const nil_own[] = {
-    "&", "===", "=~", "^", "|", "inspect", "nil?", "rationalize", "to_a", "to_c",
-    "to_f", "to_h", "to_i", "to_r", "to_s", NULL };
-  for (int j = 0; name && nil_own[j]; j++) if (sp_streq(name, nil_own[j])) return 1;
-  return 0;
-}
 int cplan_nil_program_responds(Compiler *c, const char *name, int include_all) {
   static const int owners[] = { CORE_NILCLASS, CORE_OBJECT, CORE_KERNEL, CORE_BASIC_OBJECT, -1 };
   /* an undef on NilClass or Object (above the first definer) hides the
@@ -5582,7 +5576,7 @@ int cplan_nil_program_responds(Compiler *c, const char *name, int include_all) {
      false): one sits below every program method of Object, Kernel and
      BasicObject, so a top-level `def to_a` leaves nil's answer true */
   for (int i = 0; owners[i] >= 0; i++) {
-    if (owners[i] == CORE_OBJECT && cplan_nil_own_builtin(name)) return 1;
+    if (owners[i] == CORE_OBJECT && builtin_answers_ahead_of("NilClass", name, "Object")) return 1;
     int k = comp_core_class(c, owners[i]);
     if (k < 0 || call_target(c, -1, k, name, 0, NULL) < 0) {
       if (owners[i] == CORE_OBJECT && call_target(c, -1, -1, name, CT_TOP, NULL) >= 0)
@@ -5744,7 +5738,7 @@ int cplan_nil(Compiler *c, int id) {
      top-level def or a Kernel or BasicObject method of the name: nil's
      answer, where neither NilClass nor Object has one of the program's) */
   int pnil = 0;
-  int nil_own = cplan_nil_own_builtin(nm) && cplan_nil_program_method(c, id, nm, &pnil) < 0;
+  int nil_own = builtin_answers_ahead_of("NilClass", nm, "Object") && cplan_nil_program_method(c, id, nm, &pnil) < 0;
   if (!nil_own && cplan_nil_user_method(c, id, nm))
     return (rr.kind == RK_PTR || rr.kind == RK_STRBUF) && cplan_nil_runs_other(c, id, rt, nm) &&
            cplan_nil_program_served(c, id)

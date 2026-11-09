@@ -52,6 +52,9 @@ if ARGV.first == "--data"
   seen = {}
   walk = lambda do |mod|
     mod.constants(false).each do |n|
+      # (an autoload constant is a library CRuby has not loaded: reading it would load it, and its methods
+      # on the core classes (Integer#to_bn from openssl) would be read as CRuby's own)
+      next if mod.autoload?(n)
       v = (mod.const_get(n, false) rescue nil)
       next unless v.is_a?(Module) && v.name && !seen[v.name] && v.name == (mod == Object ? n.to_s : "#{mod.name}::#{n}")
       seen[v.name] = v

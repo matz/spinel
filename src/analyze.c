@@ -41728,11 +41728,13 @@ static void mark_nullable_int_locals(Compiler *c) {
       }
     }
     changed |= mark_block_param_arrays(c);
-    /* `a.zip(b) { |x, y| }`: x is an element of a, y one of b */
+    /* `a.zip(b) { |x, y| }`: x is an element of a, y one of b; so are a
+       product's `|x, y|` (product_block_binds_elems) */
     NT_FOREACH_KIND(nt, NK_CallNode, id) {
       const char *znm = nt_str(nt, id, "name");
       int blk = nt_ref(nt, id, "block"), recv = nt_ref(nt, id, "receiver");
-      if (!znm || !sp_streq(znm, "zip") || blk < 0 || recv < 0) continue;
+      if (!znm || blk < 0 || recv < 0) continue;
+      if (!sp_streq(znm, "zip") && !(sp_streq(znm, "product") && product_block_binds_elems(c, blk))) continue;
       int za = nt_ref(nt, id, "arguments"), zn = 0;
       const int *zv = za >= 0 ? nt_arr(nt, za, "arguments", &zn) : NULL;
       Scope *bsc = comp_scope_of(c, blk);

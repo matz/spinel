@@ -5820,9 +5820,12 @@ int emit_array_filter_loop(Compiler *c, int recv, int block, TyKind rt, const ch
    param was still inferred as the receiver's element type. Assigning the
    box into that slot does not compile. Narrow it, keeping nil as the
    slot's own nil so a shorter operand still yields nil. */
-static void emit_zip_block_param(Compiler *c, TyKind slot, TyKind src_ty,
-                                 const char *src, Buf *b) {
+void emit_zip_block_param(Compiler *c, TyKind slot, TyKind src_ty,
+                          const char *src, Buf *b) {
   if (slot == TY_POLY && src_ty != TY_POLY) emit_boxed_elem_read(c, src_ty, src, b);
+  /* a String element into a param held as a String handle (one the block
+     stores or mutates), as the each walk binds it */
+  else if (slot == TY_STRBUF && src_ty == TY_STRING) buf_printf(b, "sp_String_new_shared(%s)", src);
   else if (src_ty == TY_POLY && slot != TY_POLY && slot != TY_UNKNOWN)
     emit_unbox_nilable_text(c, slot, src, b);
   else buf_puts(b, src);

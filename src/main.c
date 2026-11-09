@@ -1007,9 +1007,6 @@ int main(int argc, char **argv) {
     else if (sp_streq(a, "--line-map"))    { line_map = 1; i++; }
     else if (sp_streq(a, "--no-line-map")) { line_map = 0; i++; }
     else if (sp_streq(a, "--defer-refusals")) { g_opt_defer_refusals = 1; i++; }
-    /* (Strings are always shared now, #6765: the flag is kept so a build
-       script that passes it still works) */
-    else if (sp_streq(a, "--share-strings")) { i++; }
     else if (sp_streq(a, "--warn-widen"))  { warn_widen = 1; i++; }
     else if (sp_streq(a, "--check-stores")) { check_stores = 1; i++; }
     /* keep every GC root, so a suspected miscompile can be bisected against

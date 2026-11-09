@@ -24337,7 +24337,17 @@ int emit_unresolved_call(Compiler *c, int id, Buf *b) {
             int slot2 = view_bind(recv, "_t%d", tv);
             int sv2 = g_cls_tag_skip;
             g_cls_tag_skip = id;
+            /* Array#at, kept by name for a program's class method `at`
+               (desugar_array_at): the index read that checks its receiver
+               is an Array, as the builtin default arm takes it */
+            TyKind at_ty = argc == 1 ? comp_ntype(c, argv[0]) : TY_UNKNOWN;
+            int as_at = sp_streq(nm, "at") && argc == 1 && nt_kind(nt, argv[0]) != NK_SplatNode &&
+                        nt_ref(nt, id, "block") < 0 && !nt_int(nt, id, "was_at", 0) &&
+                        at_ty != TY_RANGE && at_ty != TY_FLOAT_RANGE && at_ty != TY_STR_RANGE;
+            char *sv_nm = NULL;
+            if (as_at) { sv_nm = nt_node_swap_str((NodeTable *)nt, id, "name", "[]"); nt_node_set_int((NodeTable *)nt, id, "was_at", 1); }
             emit_boxed(c, id, &eb2);
+            if (as_at) { nt_node_restore_str((NodeTable *)nt, id, "name", sv_nm); nt_node_set_int((NodeTable *)nt, id, "was_at", 0); }
             g_cls_tag_skip = sv2;
             view_unbind(g_n_argov - 1);
           }

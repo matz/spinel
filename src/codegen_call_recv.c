@@ -1498,10 +1498,13 @@ int emit_array_splat_mutator(Compiler *c, int id, Buf *b) {
   int is_unshift = is_prepend_alias(name);
   int is_insert = sp_streq(name, "insert");
   int is_concat = sp_streq(name, "concat");
-  if (!is_push && !is_unshift && !is_insert && !is_concat) return 0;
   int args = nt_ref(nt, id, "arguments");
   int argc = 0;
   const int *argv = args >= 0 ? nt_arr(nt, args, "arguments", &argc) : NULL;
+  /* `a.<<(*xs, *ys)`: Array#<< takes one argument, so the spread count is
+     checked at run time; one splat alone has its own arm */
+  int is_shovel = sp_streq(name, "<<") && argc >= 2;
+  if (!is_push && !is_unshift && !is_insert && !is_concat && !is_shovel) return 0;
   int has_splat = nt_argv_has_splat(nt, argv, argc);
   if (!has_splat) return 0;
   if (is_insert && nt_kind(nt, argv[0]) == NK_SplatNode) return 0;
@@ -1549,6 +1552,9 @@ int emit_array_splat_mutator(Compiler *c, int id, Buf *b) {
     buf_printf(b, "sp_int _t%d = ", ti); emit_int_expr(c, argv[0], b); buf_puts(b, "; ");
   }
   emit_gather_call_args(c, argv + (is_insert ? 1 : 0), argc - (is_insert ? 1 : 0), ta, b);
+  if (is_shovel)
+    buf_printf(b, " if (_t%d->len != 1) sp_raise_cls(\"ArgumentError\", sp_sprintf(\"wrong number of arguments"
+                  " (given %%lld, expected 1)\", (long long)_t%d->len));", ta, ta);
   /* The builtin method version has already received its arguments. Its
      frozen check precedes any to_ary, including an empty argument list. */
   if (poly_concat)
@@ -1579,7 +1585,7 @@ int emit_array_splat_mutator(Compiler *c, int id, Buf *b) {
                   " sp_IntArray_push((sp_IntArray *)_t%d.v.p, sp_bm_arg_sym(_t%d->data[_t%d]));"
                   " else sp_poly_ary_append(_t%d, _t%d->data[_t%d]); }",
                tj, tj, ta, tj, tr, tr, ta, tj, tr, ta, tj);
-  else if (is_push || is_concat)
+  else if (is_push || is_concat || is_shovel)
     buf_printf(b, " for (sp_int _t%d = 0; _t%d < _t%d->len; _t%d++)"
                   " sp_%sArray_push%s(_t%d, %s(_t%d->data[_t%d]));",
                tj, tj, ta, tj, k, nsfx, tr, conv, ta, tj);

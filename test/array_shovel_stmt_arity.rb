@@ -47,3 +47,23 @@ end
 b = Box.new
 p b.add2(1, 2)
 p b.items
+
+# Several splats: the spread count decides.
+c = [1]
+e = []
+c.<<(*one, *e)
+p c
+p try { c.<<(*e, *one, *one); :pushed }
+p try { c.<<(*e, *e); :pushed }
+p c
+
+# A constant that holds an Array, and other builtin values held by constants.
+C = [1]
+p try { C.<<(2, 3); :pushed }
+p try { C.<<(*xs); :pushed }
+C << 4
+p C
+S = +"ab"
+p try { S.upcase(1, 2, 3) }
+H = {a: 1}
+p try { H.fetch }

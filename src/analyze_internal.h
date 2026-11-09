@@ -475,6 +475,8 @@ int new_recv_every_class(Compiler *c, int recv);
 int dm_each_inner(const NodeTable *nt, int call);   /* the define_method call of `[...].each { |v| define_method(...) { } }`, else -1 */
 const char *vis_arg_name(const NodeTable *nt, int arg);   /* a Symbol or String argument's method name (analyze_scope.c) */
 void register_struct_members(Compiler *c, ClassInfo *cls, int val);
+/* The member names a splat's list resolves to (`Struct.new(*KEYS)`), or -1 */
+int resolve_symbol_list(Compiler *c, int node, const char **out, int cap, int depth);
 void register_structs(Compiler *c);
 void register_singleton_defs(Compiler *c);
 void register_attr_versions(Compiler *c);

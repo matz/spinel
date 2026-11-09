@@ -151,7 +151,7 @@ int builtin_method_known_any(const char *m);   /* codegen_call.c */
 int builtin_instance_name_known(const char *m);   /* codegen_call.c */
 int builtin_name_below_object(const char *m);   /* codegen_call.c */
 int builtin_object_method_known(const char *m);   /* builtin_names.c */
-int core_method_vis(const char *cls, const char *m, int inherit);   /* codegen_call_class.c */
+int core_method_vis(const char *cls, const char *m, int inherit, const char **owner);   /* codegen_call_class.c */
 int core_method_name_any(const char *m);   /* codegen_call_class.c: an instance method of any core class */
 const char *core_class_ancestors(const char *cls);   /* codegen_call_class.c */
 int builtin_method_arity(const char *cls, const char *m, int *out);

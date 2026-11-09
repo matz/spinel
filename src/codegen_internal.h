@@ -2911,6 +2911,13 @@ int poly_name_cmethod_claimed(Compiler *c, const char *name);
 /* Does CRuby take argc arguments to cls#name, by the instance arity table
    (sp_builtin_arity_spec_tbl)? 1 for a name the table has no row for. */
 int builtin_arity_admits(const char *cls, const char *name, int argc);
+void warn_unrouted_call(Compiler *c, int id, const char *what);   /* codegen_util.c */
+int emitted_nomethod_token(const char *txt); /* codegen.c */
+int emitted_no_method(const char *txt);      /* codegen.c */
+int emitted_no_method_in(const char *txt);   /* codegen.c */
+int emitted_unrouted_in(const char *txt);    /* codegen.c */
+int emitted_unrouted_for(const char *txt, const char *name);   /* codegen.c */
+int order_operand_inert(Compiler *c, int call, int op, int is_recv);   /* codegen_stmt.c */
 /* ...and the count it expects when it does not (NULL when it admits it) */
 const char *builtin_arity_expected(const char *cls, const char *name, int with_block, int argc,
                                    char *exp, size_t n);

@@ -1,0 +1,19 @@
+14
+NoMethodError: private method 'puts' called for an instance of Object
+NoMethodError: private method 'local_variables' called for an instance of Integer
+NoMethodError: private method 'global_variables' called for class Integer
+NoMethodError: private method 'global_variables' called for module Comparable
+NameError: undefined local variable or method 'fooo' for main
+NoMethodError: undefined method 'zork' for an instance of Object
+NoMethodError: undefined method 'zork' for class String
+NoMethodError: undefined method 'instance_methods' for an instance of Object
+NoMethodError: undefined method 'instance_method' for an instance of Integer
+NameError: undefined local variable or method 'local_variables' for an instance of B
+NameError: true
+NameError: true
+NameError: true
+NameError: true
+NameError: true
+NameError: true
+argument
+TypeError: no implicit conversion of Integer into Proc

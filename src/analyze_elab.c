@@ -4554,7 +4554,7 @@ static int lr_header_hooks(Compiler *c, int id) {
   NtImplied rows[16];
   int n = nt_implied_calls(c->nt, id, rows, 16);
   for (int i = 0; i < n && i < 16; i++)
-    if ((rows[i].side & NTS_CLASS) && lr_class_hook(c, rows[i].name, core_method_vis("Class", rows[i].name, 0) >= 0)) return 1;   /* (a hook Class itself has is a class's) */
+    if ((rows[i].side & NTS_CLASS) && lr_class_hook(c, rows[i].name, core_method_vis("Class", rows[i].name, 0, NULL) >= 0)) return 1;   /* (a hook Class itself has is a class's) */
   return n > 16;
 }
 

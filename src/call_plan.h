@@ -828,6 +828,29 @@ int cplan_block_arg(Compiler *c, int id, const char **cn);
    otherwise; anon may be NULL). Pure. */
 typedef enum { CM_NONE, CM_NAMEERROR, CM_NOMETHOD } CplanMissing;
 int cplan_missing(Compiler *c, int id, char *self_text, size_t cap, int *anon);
+/* ---- CU_*: a builtin name CRuby answers that no route of the compiler took ----
+   cplan_missing's mirror: that one proves CRuby raises for a program's
+   name; this one reads CRuby's tables for a builtin's. Whether call id --
+   receiverless, on self, on a constant or on a typed value -- names a method
+   its receiver's class answers with the visibility the call's shape reaches
+   (an explicit receiver reaches public methods, send and a receiverless call
+   any, public_send public), at an argument count the arity facts have a row
+   for and admit, when no builtin-op row takes the call (a row's decline is
+   that route's rejection of an operand, which CRuby raises over too):
+   CU_GAP, with owner the CRuby method ("Kernel#local_variables",
+   "Module#instance_methods", "Kernel.global_variables"). CU_RAISES: the
+   tables hold the receiver and it does not answer the name that way, so
+   the gate's raise stands. CU_NONE: the plan cannot tell the receiver's
+   class (a boxed value, a self the record does not settle, a module's
+   instance side), or the arity facts have no row, and the gate behaves as
+   before. *nil_answers (when asked) is whether NilClass has the method too:
+   a receiver that may be nil is then one gap, else nil is the NoMethodError
+   for nil. CU_RAISES_NAME: a lookup by a literal name (Module#instance_method,
+   method) whose name the record proves is nowhere, which raises CRuby's
+   NameError, with owner holding its message. Not a CP_REFUSE: read only where codegen's last fallback is
+   reached (emit_unresolved_call), as cplan_nil's answers are. Pure. */
+typedef enum { CU_NONE, CU_RAISES, CU_RAISES_NAME, CU_GAP } CplanUnrouted;
+CplanUnrouted cplan_unrouted(Compiler *c, int id, char *owner, size_t cap, int *nil_answers);
 /* The visibility bit (1 public, 2 protected, 4 private) CRuby gives
    instance method m of a builtin class where reflection call node runs,
    for a name the program's own methods of the class leave open: of class
@@ -867,8 +890,9 @@ int cplan_missing_in_order(Compiler *c, int v);
 /* The class call id's constant receiver recv names where the call runs, as
    the load record resolves the reference there (elab_class_ref_at): -1 for
    none of the program's (Object's top level), below -1 for one it does not
-   know */
-int cplan_const_recv_class(Compiler *c, int id, int recv);
+   know; *core (when asked) is the core class's slot when the name stands
+   for a builtin class or module, also one the program reopens, else -1 */
+int cplan_const_recv_class(Compiler *c, int id, int recv, int *core);
 /* The self where call id runs, as the load record has it there
    (elab_self_at), asked in the plan's frame: a program class or module,
    -1 for main, below -1 for one it does not know */

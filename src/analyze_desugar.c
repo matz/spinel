@@ -6179,7 +6179,7 @@ static int engine_method_absent(Compiler *c, const char *cls, const char *m, int
   /* (a record the fold cannot read leaves the question to the steps below) */
   if (rec > 0) return 0;
   if (data >= 0) {
-    int v = core_method_vis(data ? "Data" : "Struct", m, 1);
+    int v = core_method_vis(data ? "Data" : "Struct", m, 1, NULL);
     if (v < 0) return -1;
     if (v == 1 || v == 2) return 0;
   }
@@ -6187,7 +6187,7 @@ static int engine_method_absent(Compiler *c, const char *cls, const char *m, int
      method list: fiber-annotation's `unless Fiber.method_defined?(:annotation)` */
   if (is_builtin_class_name(cls) || is_builtin_module_name(cls)) {
     if (builtin_method_known(cls, NULL)) return 1;
-    int v = core_method_vis(cls, m, 1);
+    int v = core_method_vis(cls, m, 1, NULL);
     return v < 0 ? -1 : v == 1 || v == 2 ? 0 : 1;
   }
   if (!me_leaf_defined(nt, cls) || depth > 16) return -1;
@@ -6881,7 +6881,7 @@ static int mdfold_call(NodeTable *nt, const int *parent, int e, int cond) {
   const char *cls = rk == NK_ConstantReadNode ? nt_str(nt, recv, "name") :
                     rk == NK_SelfNode ? mdfold_body_class(nt, parent, e) : NULL;
   if (!m || !cls || !(is_builtin_class_name(cls) || is_builtin_module_name(cls))) return 0;
-  int v = core_method_vis(cls, m, ik == NK_TrueNode);
+  int v = core_method_vis(cls, m, ik == NK_TrueNode, NULL);
   if (v <= 0 || !(v & mask) || !mdfold_answer_sure(nt, parent, m, cond)) return 0;
   nt_node_reset(nt, e, "TrueNode");
   return 1;
@@ -18966,7 +18966,7 @@ static int bx_copy_self_free(Compiler *c, int copy) {
          of the name answers first in CRuby (`to_s` in Comparable) */
       if (nt_int(nt, id, "bx_copy", -1) >= 0) {
         for (int r = 0; bx_cmp_recv_cls[r] && ok; r++)
-          if (!cn || core_method_vis(bx_cmp_recv_cls[r], cn, 0) > 0) ok = 0;
+          if (!cn || core_method_vis(bx_cmp_recv_cls[r], cn, 0, NULL) > 0) ok = 0;
         break;
       }
       int k = 0;
@@ -18995,12 +18995,12 @@ static const char *bx_cmp_own_class(Compiler *c, int bx, int copy, TyKind rt, co
   if (!nt_int(nt, (int)nt_int(nt, copy, "bx_def", -1), "bx_own", 0)) return NULL;
   const char *cls = rt == TY_STRING || rt == TY_STRBUF ? "String" : rt == TY_SYMBOL ? "Symbol"
                   : rt == TY_TIME ? "Time" : rt == TY_RATIONAL ? "Rational" : NULL;
-  if (!cls || core_method_vis(cls, name, 0) > 0) return NULL;
+  if (!cls || core_method_vis(cls, name, 0, NULL) > 0) return NULL;
   /* Numeric comes before Comparable in a Rational's ancestors: a builtin
      Numeric method of the name (`integer?`) or the program's own one
      answers first. */
   if (rt == TY_RATIONAL) {
-    if (core_method_vis("Numeric", name, 0) > 0) return NULL;
+    if (core_method_vis("Numeric", name, 0, NULL) > 0) return NULL;
     int k = comp_builtin_class_named(c, "Numeric");
     int mi = k >= 0 ? comp_method_in_chain(c, k, name, NULL) : -1;
     if (mi >= 0 && mi < c->nscopes && c->scopes[mi].def_node >= 0 &&

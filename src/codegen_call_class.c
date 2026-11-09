@@ -438,10 +438,13 @@ static const struct { const char *cls, *anc; } core_cls_ancestors[] = {
 #undef CCM
 #undef CCA
 
-static int core_own_vis(const char *cls, size_t cl, const char *m) {
+static int core_own_vis(const char *cls, size_t cl, const char *m, const char **owner) {
   for (int i = 0; core_cls_methods[i].cls; i++)
     if (strlen(core_cls_methods[i].cls) == cl && !strncmp(core_cls_methods[i].cls, cls, cl) &&
-        sp_streq(core_cls_methods[i].m, m)) return core_cls_methods[i].vis;
+        sp_streq(core_cls_methods[i].m, m)) {
+      if (owner) *owner = core_cls_methods[i].cls;
+      return core_cls_methods[i].vis;
+    }
   return 0;
 }
 
@@ -451,6 +454,14 @@ const char *core_class_ancestors(const char *cls) {
   for (int i = 0; cls && core_cls_ancestors[i].cls; i++)
     if (sp_streq(core_cls_ancestors[i].cls, cls)) return core_cls_ancestors[i].anc;
   return NULL;
+}
+
+/* The ancestor at p in a core_class_ancestors list: its length in *len, and
+   the next one, NULL after the last (core_method_vis, cu_name_absent) */
+const char *core_ancestor_step(const char *p, size_t *len) {
+  const char *e = strchr(p, ' ');
+  *len = e ? (size_t)(e - p) : strlen(p);
+  return e ? e + 1 : NULL;
 }
 
 /* Calls f(ud, m, vis) for each instance method core class or module `cls`
@@ -472,19 +483,19 @@ int core_method_name_any(const char *m) {
 /* The visibility (1 public, 2 protected, 4 private) of instance method `m`
    of core class or module `cls` in CRuby, through its ancestors with
    `inherit` (only those above `cls` with 2, where its `super` looks); 0
-   where it has none, -1 where the table does not hold `cls`. */
-int core_method_vis(const char *cls, const char *m, int inherit) {
+   where it has none, -1 where the table does not hold `cls`. `owner`, when
+   given, is set to the class or module that defines it. */
+int core_method_vis(const char *cls, const char *m, int inherit, const char **owner) {
   const char *anc = NULL;
   for (int i = 0; cls && !anc && core_cls_ancestors[i].cls; i++)
     if (sp_streq(core_cls_ancestors[i].cls, cls)) anc = core_cls_ancestors[i].anc;
   if (!anc) return -1;
-  if (!inherit) return core_own_vis(cls, strlen(cls), m);
-  for (const char *p = anc; *p;) {
-    const char *e = strchr(p, ' ');
-    size_t l = e ? (size_t)(e - p) : strlen(p);
-    int v = inherit == 2 && p == anc ? 0 : core_own_vis(p, l, m);
+  if (!inherit) return core_own_vis(cls, strlen(cls), m, owner);
+  size_t l;
+  for (const char *p = *anc ? anc : NULL, *nx; p; p = nx) {
+    nx = core_ancestor_step(p, &l);
+    int v = inherit == 2 && p == anc ? 0 : core_own_vis(p, l, m, owner);
     if (v) return v;
-    p += l + (e ? 1 : 0);
   }
   return 0;
 }
@@ -501,34 +512,25 @@ static int refl_explicit_vis(const ClassInfo *k, const char *m) {
    as core_method_vis answers. For what k's own super reaches (`above`), past
    k's own builtin method, and with no visibility the program gives its own
    methods, which emit_super's lookup answers for. */
-static int refl_builtin_vis_in(Compiler *c, int k, const char *m, int depth, int above, int own) {
+static int refl_builtin_vis_in(Compiler *c, int k, const char *m, int depth, int above, int own, const char **owner) {
   const ClassInfo *ki = &c->classes[k];
   int v = own ? refl_explicit_vis(ki, m) : 0;
   if (v) return v;
-  if (ki->is_builtin_const && ki->enclosing_class < 0 && (v = core_method_vis(ki->name, m, above ? 2 : 1)) != 0)
+  if (ki->is_builtin_const && ki->enclosing_class < 0 && (v = core_method_vis(ki->name, m, above ? 2 : 1, owner)) != 0)
     return v;
   for (int j = 0; j < ki->nincluded_mods && depth < 16; j++)
-    if ((v = refl_builtin_vis_in(c, ki->included_mods[j], m, depth + 1, 0, own)) != 0) return v;
+    if ((v = refl_builtin_vis_in(c, ki->included_mods[j], m, depth + 1, 0, own, owner)) != 0) return v;
   for (int j = 0; j < ki->nincluded_mod_names; j++)
-    if ((v = core_method_vis(ki->included_mod_names[j], m, 1)) != 0) return v;
+    if ((v = core_method_vis(ki->included_mod_names[j], m, 1, owner)) != 0) return v;
   return 0;
 }
 
-/* The visibility CRuby gives instance method m of class ci where the
-   program defines none: from a builtin class it reopens, the builtin modules
-   its chain includes, and the builtin class at the root of the chain (Object
-   unless it names another). With `inherit` 2, what a super in ci's own m
-   reaches there, past a reopened builtin's own method. 0 for none; -1 where
-   one of those is not in core_class_methods.inc. */
-int refl_builtin_vis(Compiler *c, int ci, const char *m, int inherit) {
-  const ClassInfo *ki = &c->classes[ci];
-  if (!inherit) {
-    int v = refl_explicit_vis(ki, m);
-    return v ? v : ki->is_builtin_const && ki->enclosing_class < 0 ? core_method_vis(ki->name, m, 0) : 0;
-  }
+/* refl_builtin_vis's walk of ci's chain, with the visibilities the program
+   gives its classes' methods (own) or without */
+static int refl_builtin_vis_walk(Compiler *c, int ci, const char *m, int inherit, int own, const char **owner) {
   int root = ci;
   for (int k = ci; k >= 0; k = c->classes[k].parent) {
-    int v = refl_builtin_vis_in(c, k, m, 0, inherit == 2 && k == ci, inherit != 2);
+    int v = refl_builtin_vis_in(c, k, m, 0, inherit == 2 && k == ci, own, owner);
     if (v) return v;
     root = k;
   }
@@ -544,7 +546,29 @@ int refl_builtin_vis(Compiler *c, int ci, const char *m, int inherit) {
     else if (sk == NK_ConstantReadNode || sk == NK_ConstantPathNode) sup = nt_str(c->nt, sc, "name");
     else if (sc >= 0) return -1;
   }
-  return core_method_vis(sup, m, 1);
+  return core_method_vis(sup, m, 1, owner);
+}
+
+/* The visibility CRuby gives instance method m of class ci where the
+   program defines none: from a builtin class it reopens, the builtin modules
+   its chain includes, and the builtin class at the root of the chain (Object
+   unless it names another). With `inherit` 2, what a super in ci's own m
+   reaches there, past a reopened builtin's own method. 0 for none; -1 where
+   one of those is not in core_class_methods.inc. `owner`, when given, is
+   set to the builtin class or module that defines the method. */
+int refl_builtin_vis(Compiler *c, int ci, const char *m, int inherit, const char **owner) {
+  const ClassInfo *ki = &c->classes[ci];
+  if (!inherit) {
+    int v = refl_explicit_vis(ki, m);
+    return v ? v : ki->is_builtin_const && ki->enclosing_class < 0 ? core_method_vis(ki->name, m, 0, owner) : 0;
+  }
+  if (owner) *owner = NULL;
+  int v = refl_builtin_vis_walk(c, ci, m, inherit, inherit != 2, owner);
+  /* a visibility the program gives a builtin method it inherits (`public
+     :global_variables`) leaves the method the builtin's: its owner is the
+     one the walk past the program's visibilities finds */
+  if (v > 0 && owner && !*owner && inherit != 2) refl_builtin_vis_walk(c, ci, m, inherit, 0, owner);
+  return v;
 }
 
 /* Whether RECV is an object of a class whose chain defines NAME itself: its
@@ -570,8 +594,8 @@ static int emit_boxed_responds_builtin_absent(Compiler *c, int recv, const char 
   };
   unsigned absent = 0;
   for (unsigned i = 0; i < sizeof kinds / sizeof *kinds; i++)
-    if (core_method_vis(kinds[i].core, name, 1) == 0 &&
-        (!kinds[i].other || core_method_vis(kinds[i].other, name, 1) == 0))
+    if (core_method_vis(kinds[i].core, name, 1, NULL) == 0 &&
+        (!kinds[i].other || core_method_vis(kinds[i].other, name, 1, NULL) == 0))
       absent |= 1u << i;
   if (!absent) return 0;
   int tv = ++g_tmp;
@@ -2327,7 +2351,7 @@ int emit_call_cmethod_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
               Buf fb; memset(&fb, 0, sizeof fb);
               emit_expr(c, argv[ai], &fb);
               const char *ft = fb.p ? fb.p : "";
-              if (strncmp(ft, "sp_raise_nomethod(", 18) == 0 ||
+              if (emitted_no_method(ft) ||
                   strncmp(ft, "(sp_raise_cls(", 14) == 0)
                 buf_printf(&call_buf, "((void)(%s), (const char *)0)", ft);
               else buf_puts(&call_buf, ft);

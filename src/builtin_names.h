@@ -114,6 +114,7 @@ int is_endpoint_query(const char *n); /* first last: collection or Range endpoin
 int is_map_alias(const char *n); /* map collect: Enumerable transformation aliases */
 int is_instance_eval_family(const char *n); /* instance_eval instance_exec */
 int is_reflective_access(const char *n); /* instance_variable_get/set, class_variable_get/set, const_get/set, remove_* */
+int is_name_checked_call(const char *n); /* CRuby's answer turns on the name given: a NameError for one not allowed or not there */
 int is_reflective_listing(const char *n); /* instance_variables class_variables constants */
 int is_local_reflection(const char *n); /* eval binding local_variable_get/set local_variables */
 int is_block_given_name(const char *n); /* block_given? */
@@ -298,6 +299,7 @@ int is_class_relatives_query(const char *n); /* ancestors superclass subclasses 
 int is_class_query(const char *n); /* class */
 int is_method_owner_query(const char *n); /* owner */
 int is_instance_method_name(const char *n); /* instance_method public_instance_method */
+int is_public_method_lookup(const char *n); /* public_instance_method public_method */
 int is_method_object_maker(const char *n); /* method public_method singleton_method instance_method public_instance_method */
 int is_bound_method_maker(const char *n);  /* method public_method: a Method of the receiver's own method */
 int is_super_method_name(const char *n);   /* super_method: the Method one step up its owner's chain */
@@ -511,6 +513,9 @@ int builtin_method_answers(const char *cls, const char *name, int sg, int certai
    (also Class's)? */
 enum { BSELF_MAIN, BSELF_MODULE, BSELF_CLASS, BSELF_N };
 int builtin_self_method_known(const char *name, int kind);
+/* Is `m` one of main's own methods, beside Object's (its to_s and inspect, the
+   private ones a top-level body calls as a class body would)? */
+int main_self_method(const char *m);
 int is_builtin_module_const_name(const char *n);
 int is_untabled_native_class_name(const char *n);
 

@@ -10451,7 +10451,7 @@ static int emit_scalar_recv_arms(Compiler *c, int id, Buf *b, const NodeTable *n
      sp_raise_nomethod(...) is a side-effecting poly value, so coerce it (the
      raise diverges before the result is read) rather than feed the raw
      sp_RbVal into a const char* string op. */
-  else if (rt == TY_STRING && strncmp(r, "sp_raise_nomethod(", 18) == 0) {
+  else if (rt == TY_STRING && emitted_no_method(r)) {
     Buf cb; memset(&cb, 0, sizeof cb); buf_printf(&cb, "sp_poly_to_s(%s)", r); r = cb.p ? cb.p : r;
   }
   /* A receiver whose nil flag is set IS nil, and CRuby's nil answers only
@@ -15963,7 +15963,7 @@ static TyKind emit_face_arm(Compiler *c, int id, unsigned kind, unsigned flags, 
   g_face_oint_id = sfo; g_face_oint_got = sfg;
   /* the raise token below is no oint, whatever the emitter noted on its way
      to declining: it is handed on as the token */
-  if (got_o && cb.p && strncmp(cb.p, "sp_raise_nomethod(", 18) == 0) got_o = TY_UNKNOWN;
+  if (got_o && cb.p && emitted_no_method(cb.p)) got_o = TY_UNKNOWN;
   if (got_o) {
     Buf ob; memset(&ob, 0, sizeof ob);
     Repr slotr = repr_of(c, id);
@@ -15990,7 +15990,7 @@ static TyKind emit_face_arm(Compiler *c, int id, unsigned kind, unsigned flags, 
   size_t cl = strlen(call);
   int val_tok = strncmp(call, "({ (void)(", 10) == 0 && strstr(call, "sp_raise_cls(") != NULL &&
                 cl > 18 && strcmp(call + cl - 18, "; sp_box_nil(); })") == 0;
-  if (strncmp(call, "sp_raise_nomethod(", 18) == 0 || val_tok) {
+  if (emitted_no_method(call) || val_tok) {
     TyKind slot = repr_of(c, id).as_ty;
     if (slot == TY_POLY || slot == TY_UNKNOWN || slot == TY_VOID) { buf_puts(val, call); slot = TY_POLY; }
     else emit_unbox_text(c, slot, call, val);   /* the token is an sp_RbVal; the slot is not */

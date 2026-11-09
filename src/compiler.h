@@ -1720,6 +1720,9 @@ typedef struct {
      + 2 (1: none; 0: not asked yet) */
   int *missing_order;
   int missing_order_n;
+  /* per node, 1 once warn_unrouted_call has warned of it */
+  unsigned char *unrouted_warned;
+  int unrouted_warned_n;
   /* per local write node, once asked: the source lazy_alias_src_hoist
      answers for it, + 2 (1: none; 0: not asked yet) */
   int *lazy_hoist;
@@ -2585,7 +2588,7 @@ int        class_builtin_parent(Compiler *c, int cid);   /* codegen.c: the built
 int        class_is_exc_subclass(Compiler *c, int ci);   /* analyze.c */
 int        comp_plain_class(Compiler *c, int cid);    /* only Object's and Kernel's builtin methods behind the class: no core class or core module among its ancestors */
 int        comp_enum_behind(Compiler *c, int cid);    /* Enumerable's methods behind the class: Enumerable, or an Array, Struct or native ancestor */
-int        core_method_vis(const char *cls, const char *m, int inherit);   /* codegen_call_class.c */
+int        core_method_vis(const char *cls, const char *m, int inherit, const char **owner);   /* codegen_call_class.c */
 int        comp_is_writer(ClassInfo *ci, const char *name);
 int        comp_any_class_accessor(Compiler *c, const char *name);   /* any class declares a reader or writer of the name */
 int        name_is_plain_setter(const char *name);

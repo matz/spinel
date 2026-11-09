@@ -2060,7 +2060,7 @@ static void cls_value_probe_fn(Compiler *c, int id, void *ctx, Buf *nb) {
    can raise NoMethodError: a raise, or the Class emitter's own
    class-method switch (the program's methods of the name, then the raise)? */
 static int cls_value_answer_raises(const char *t) {
-  return strncmp(t, "sp_raise_", 9) == 0 || strstr(t, "sp_raise_nomethod(") ||
+  return strncmp(t, "sp_raise_", 9) == 0 || emitted_no_method_in(t) ||
          strstr(t, "sp_raise_poly_nomethod(") || strstr(t, "sp_raise_cls(\"NoMethodError\"");
 }
 /* The default arm of the class-side switch below: a class value whose class
@@ -3300,7 +3300,7 @@ static int proc_arg_is_box_nil(const char *txt) {
    emit_block_arg_coerced). An unresolved hook's boxed nil is the slot's 0. */
 static void emit_proc_arg_temp_init(Compiler *c, int node, int typed, const char *txt, Buf *b) {
   if (!txt) txt = "";
-  if (!typed && (strncmp(past_open_parens(txt), "sp_raise_nomethod(", 18) == 0 || text_diverges(txt)))
+  if (!typed && (emitted_no_method(past_open_parens(txt)) || text_diverges(txt)))
     emit_unresolved_coerced_text(c, node, TY_INT, txt, b);
   else if (!typed && proc_arg_is_box_nil(txt)) buf_puts(b, "0");
   /* a nil that runs code (a call answering nil) runs for its effects, and
@@ -8469,7 +8469,7 @@ static int emit_poly_str_prearm(Compiler *c, int id, int recv, const char *name,
     Buf nb; memset(&nb, 0, sizeof nb);
     emit_expr(c, id, &nb);
     /* a raise token stays bare, for the test below */
-    if (nb.p && (strncmp(nb.p, "sp_raise_nomethod(", 18) == 0 || strncmp(nb.p, "sp_raise_poly_nomethod(", 23) == 0))
+    if (nb.p && (emitted_no_method(nb.p) || strncmp(nb.p, "sp_raise_poly_nomethod(", 23) == 0))
       buf_puts(&ib, nb.p);
     else emit_builtin_arm_boxed(c, id, bt, nb.p ? nb.p : "0", &ib);
     free(nb.p);
@@ -8484,7 +8484,7 @@ static int emit_poly_str_prearm(Compiler *c, int id, int recv, const char *name,
   char *arm_pre = poly_arm_take_pre(sv_pre);
   /* an emission that fell through to the raise token adds nothing: leave the
      String tag on the switch's own default so the message is the same */
-  if (!ib.p || strncmp(ib.p, "sp_raise_nomethod(", 18) == 0 ||
+  if (!ib.p || emitted_no_method(ib.p) ||
       strncmp(ib.p, "sp_raise_poly_nomethod(", 23) == 0) {
     free(ib.p); free(arm_pre);
     if (g_plan_check) pa_observe_at(id, PA_TRIAL, PA_KEY_TRIAL + PT_STR, -1, TY_UNKNOWN, pa_kept);
@@ -9030,7 +9030,7 @@ static int emit_poly_builtin_default_at(Compiler *c, int id, int recv, const cha
       if (ok2 && nb2->p && !arm_raises_nomethod_for(nb2->p, name)) own_raise = 0;
       free(nb2->p); free(nb2); free(pre2);
     } }
-  if (!ib.p || strncmp(ib.p, "sp_raise_nomethod(", 18) == 0 ||
+  if (!ib.p || emitted_no_method(ib.p) ||
       strncmp(ib.p, "sp_raise_poly_nomethod(", 23) == 0 || own_raise) {
     free(ib.p); free(arm_pre); return 0;
   }
@@ -18688,7 +18688,7 @@ static int emit_array_arith_call(Compiler *c, int id, Buf *b) {
           int saved_tmp = g_tmp;
           Buf rb; memset(&rb, 0, sizeof rb);
           emit_boxed(c, recv, &rb);
-          if (strncmp(past_open_parens(rb.p ? rb.p : ""), "sp_raise_nomethod(", 18) == 0) {
+          if (emitted_no_method(past_open_parens(rb.p ? rb.p : ""))) {
             buf_puts(b, rb.p);
             free(rb.p);
             return 1;
@@ -22982,10 +22982,10 @@ static int object_reopen_builtin_owns(Compiler *c, int id, int oci, const char *
    so a public method of Class's (superclass, new, allocate) answers too. */
 int builtin_cmethod_name_known(const char *m);   /* below */
 static int class_value_builtin_answers(Compiler *c, const char *vnm, int is_class) {
-  if (core_method_vis(is_class ? "Class" : "Module", vnm, 1) != 1) return 0;
+  if (core_method_vis(is_class ? "Class" : "Module", vnm, 1, NULL) != 1) return 0;
   /* (of Class's own, only those the class-value paths answer: a typed
      receiver's superclass, subclasses, allocate and new) */
-  if (core_method_vis("Module", vnm, 1) != 1 && !sp_streq(vnm, "superclass") && !sp_streq(vnm, "subclasses") &&
+  if (core_method_vis("Module", vnm, 1, NULL) != 1 && !sp_streq(vnm, "superclass") && !sp_streq(vnm, "subclasses") &&
       !sp_streq(vnm, "allocate") && !sp_streq(vnm, "new")) return 0;
   if (!builtin_instance_method_known("Class", vnm) && !builtin_instance_method_known("Module", vnm)) return 0;
   /* a `class Class` reopening is registered as the module Class__reopen */
@@ -23825,6 +23825,31 @@ static void emit_missing_operand(Compiler *c, int op, int t, Buf *b) {
   else buf_printf(b, "(void)(%s); ", ae.p ? ae.p : "0");
   free(ap.p); free(ae.p);
 }
+/* The `&expr` ahead of a raise (emit_missing_raise, emit_unrouted_gap), as
+   CRuby evaluates it before the method is looked up: its value is taken as a
+   proc (a Symbol or a Method is one, anything else answers its TypeError) and
+   run for its effect, the prelude of each in front. */
+static void emit_block_arg_operand(Compiler *c, int id, int fe, Buf *b) {
+  Buf ap, ae; memset(&ap, 0, sizeof ap); memset(&ae, 0, sizeof ae);
+  Buf *sv = g_pre; g_pre = &ap;
+  const char *cn;
+  int cb = cplan_block_arg(c, id, &cn);
+  if (cb == CB_RAISE) emit_block_arg_type_error(c, fe, cn, &ae, 0);
+  else if (cb == CB_CHECK) {
+    emit_block_arg_check(c, fe, cn, &ae);
+    buf_puts(&ae, "; ");
+  }
+  else {
+    Buf pv; memset(&pv, 0, sizeof pv);
+    if (!emit_block_arg_proc(c, fe, &pv)) emit_expr(c, fe, &pv);
+    buf_printf(&ae, "(void)(%s); ", pv.p ? pv.p : "0");
+    free(pv.p);
+  }
+  g_pre = sv;
+  if (ap.p) buf_puts(b, ap.p);
+  if (ae.p) buf_puts(b, ae.p);
+  free(ap.p); free(ae.p);
+}
 /* The raise of call m, which finds no method where it runs (cplan_missing
    kind, self, anon): CRuby's NameError or NoMethodError, raised after the
    operands of run that the value at holder runs ahead of m (none for NULL)
@@ -23852,27 +23877,7 @@ static void emit_missing_raise(Compiler *c, int m, int kind, const char *self, i
   if (body) buf_puts(b, "({ ");
   for (int k = 0; run && k < run->n; k++) emit_missing_operand(c, run->ids[k], 0, b);
   for (int k = 0; k < argc; k++) emit_missing_operand(c, argv[k], staged ? t0 + k : 0, b);
-  if (fe >= 0) {
-    Buf ap, ae; memset(&ap, 0, sizeof ap); memset(&ae, 0, sizeof ae);
-    Buf *sv = g_pre; g_pre = &ap;
-    const char *cn;
-    int cb = cplan_block_arg(c, m, &cn);
-    if (cb == CB_RAISE) emit_block_arg_type_error(c, fe, cn, &ae, 0);
-    else if (cb == CB_CHECK) {
-      emit_block_arg_check(c, fe, cn, &ae);
-      buf_puts(&ae, "; ");
-    }
-    else {
-      Buf pv; memset(&pv, 0, sizeof pv);
-      if (!emit_block_arg_proc(c, fe, &pv)) emit_expr(c, fe, &pv);
-      buf_printf(&ae, "(void)(%s); ", pv.p ? pv.p : "0");
-      free(pv.p);
-    }
-    g_pre = sv;
-    if (ap.p) buf_puts(b, ap.p);
-    if (ae.p) buf_puts(b, ae.p);
-    free(ap.p); free(ae.p);
-  }
+  if (fe >= 0) emit_block_arg_operand(c, m, fe, b);
   snprintf(head, sizeof head, "%s '%s' for %s ", kind == CM_NAMEERROR ? "undefined local variable or method" : "undefined method",
            name, anon >= 0 && comp_class_is_module(c, &c->classes[anon]) ? "module" : "class");
   buf_puts(b, staged ? "sp_stage_recv_args_msg(" : "sp_stage_recv_msg(");
@@ -23935,44 +23940,83 @@ int call_misses_self_method(Compiler *c, int id) {
          g_emitting_class_id >= 0 && call_target(c, id, g_emitting_class_id, name, 0, NULL) < 0 &&
          an_user_defines_method(c, name);
 }
-/* The builtin class a receiver of type t is an instance of, for the
-   unresolved-call refusal below, or NULL. */
-static const char *unresolved_builtin_class(TyKind t) {
-  if (ty_is_array(t)) return "Array";
-  if (ty_is_hash(t)) return "Hash";
-  if (t == TY_STRING || t == TY_STRBUF) return "String";
-  if (t == TY_INT) return "Integer";
-  if (t == TY_FLOAT) return "Float";
-  if (t == TY_SYMBOL) return "Symbol";
-  if (t == TY_RANGE) return "Range";
-  return NULL;
-}
-/* A call on a receiver of a builtin type known here, whose class has the
-   method (CRuby's own table, builtin_arity.inc), that no emitter took: the
-   analysis missed a route for it, and the NoMethodError the gate below
-   would raise is no answer CRuby gives. Refused instead, naming the method;
-   under --defer-refusals it raises NotImplementedError where it runs. Only
-   a call the program wrote: an arm a rewrite builds is guarded by a test
-   that may never pass here (desugar_builtin_enum_calls' `is_a?(K) ?
-   recv.m : ...` for a class of the program's own, the arities and block
-   forms of desugar_builtin_splat_forward, desugar_unpack_block's block
-   test), and is left to the gate. */
 int an_written_call(int id);
-static void unresolved_builtin_refusal(Compiler *c, int id, int recv, const char *nm, TyKind t) {
-  if (recv < 0 || !nm || !an_written_call(id)) return;
-  /* (a call with arguments may have no route because CRuby rejects one of
-     them too: `[1].find(42) { false }` raises NoMethodError over 42.call,
-     and gsub!(an Array) a TypeError; the gate's raise stands for that, so
-     only a call with none is refused) */
-  int ac = 0;
-  call_args(c->nt, id, &ac);
-  if (ac > 0) return;
-  const char *cls = unresolved_builtin_class(t);
-  if (!cls || !builtin_method_known(cls, nm)) return;
-  char msg[256];
-  snprintf(msg, sizeof msg, "%s#%s on a value typed as %s, a call no route of the compiler took "
-           "(CRuby calls the method; this would raise NoMethodError)", cls, nm, cls);
-  unsupported(c, id, msg);
+/* A call no route of the compiler took, to a method CRuby answers
+   (cplan_unrouted: its tables give the receiver's class this name, with the
+   visibility and count the call has): the NoMethodError or NameError the
+   gates below would raise is no answer CRuby gives. The compile warns of it
+   (once, outside a probe), and the call raises NotImplementedError where it
+   runs, after the receiver and the arguments have run in order, as CRuby
+   evaluates them before the method. Only a call the program wrote: an arm a
+   rewrite builds is guarded by a test that may never pass here
+   (desugar_builtin_enum_calls' `is_a?(K) ? recv.m : ...`, the arities and
+   block forms of desugar_builtin_splat_forward, desugar_unpack_block's block
+   test), and is left to the gates.
+
+   The text starts with sp_raise_unrouted(, which emitted_no_method reads as it
+   reads the gate's NoMethodError token: the arms that build a call from
+   several attempts take another route on it (a poly dispatch's arm for a
+   class, an operator through its `==`), so a call that answers in the end
+   keeps answering. The operands run while its message argument is built, in
+   order, then the call raises NotImplementedError (or, for a lookup by a name
+   the record proves is nowhere, CRuby's NameError). A slot of a scalar type
+   takes it with its default, as the gate's other arms give it. */
+static int emit_unrouted_gap(Compiler *c, int id, Buf *b) {
+  if (!g_gate_raise || !an_written_call(id)) return 0;
+  char own[160];
+  int nil_answers = 0;
+  CplanUnrouted cu = cplan_unrouted(c, id, own, sizeof own, &nil_answers);
+  if (cu != CU_GAP && cu != CU_RAISES_NAME) return 0;
+  const NodeTable *nt = c->nt;
+  const char *name = nt_str(nt, id, "name");
+  int gap = cu == CU_GAP;
+  if (gap) {
+    if (g_plan_check) cplan_served("unrouted");
+    warn_unrouted_call(c, id, own);
+  }
+  int recv = nt_ref(nt, id, "receiver"), blk = nt_ref(nt, id, "block"), argc;
+  const int *argv = call_args(nt, id, &argc);
+  NodeKind rk = recv >= 0 ? nt_kind(nt, recv) : NK_NONE;
+  int rv = recv >= 0 && rk != NK_SelfNode ? recv : -1;
+  int fe = blk >= 0 && nt_kind(nt, blk) == NK_BlockArgumentNode ? nt_ref(nt, blk, "expression") : -1;
+  /* a nullable Integer or Float receiver is read as it is held (an oint),
+     which an unwrapping read would raise a TypeError for; where it is nil
+     and NilClass has no such method, CRuby's NoMethodError for nil is the
+     answer, and where NilClass answers too the gap is one */
+  TyKind rty = rv >= 0 ? repr_of(c, rv).as_ty : TY_UNKNOWN;
+  int nullable = rv >= 0 && (rty == TY_INT || rty == TY_FLOAT) && nullable_int_value(c, rv);
+  int nil_test = nullable && !nil_answers;
+  TyKind ret = repr_of(c, id).as_ty;
+  int boxed = !(is_scalar_ret(ret) && ret != TY_UNKNOWN) || repr_of(c, id).kind == RK_BOXED;
+  int tv = nullable ? ++g_tmp : 0;
+  buf_puts(b, boxed ? "sp_raise_unrouted(" : "(sp_raise_unrouted(");
+  buf_printf(b, "\"%s\", ({ ", gap ? "NotImplementedError" : "NameError");
+  /* the operands run in order, ahead of the raise (those that run nothing
+     and raise nothing are left out) */
+  if (nullable) {
+    Buf ob; memset(&ob, 0, sizeof ob);
+    emit_oint_expr(c, rv, rty, &ob);
+    buf_printf(b, "%s _t%d = %s; ", oint_ctype(rty), tv, ob.p ? ob.p : "0");
+    free(ob.p);
+  }
+  else if (rv >= 0 && !order_operand_inert(c, id, rv, 1)) emit_missing_operand(c, rv, 0, b);
+  for (int k = 0; k < argc; k++)
+    if (!order_operand_inert(c, id, argv[k], 0)) emit_missing_operand(c, argv[k], 0, b);
+  /* (a block argument is taken as a proc even where it runs nothing: a
+     local that holds an Integer answers its TypeError) */
+  const char *bcn;
+  if (fe >= 0 && (!order_operand_inert(c, id, fe, 0) || cplan_block_arg(c, id, &bcn) != CB_BINDS))
+    emit_block_arg_operand(c, id, fe, b);
+  if (nil_test) {
+    char hd[96];
+    snprintf(hd, sizeof hd, nomethod_head(name), name);
+    buf_printf(b, "_t%d.nil ? (sp_raise_cls(\"NoMethodError\", \"%s nil\"), \"\") : ", tv, hd);
+  }
+  if (gap) buf_printf(b, "\"spinel: %s is not supported\"; })", own);
+  else { buf_puts(b, "\""); emit_c_escaped(b, own); buf_puts(b, "\"; })"); }
+  buf_puts(b, ")");
+  if (!boxed) emit_raise_placeholder(c, id, b);
+  return 1;
 }
 /* Call id emitted again with its receiver recv boxed (PB_SUBDISPATCH, the
    call plan's cplan_poly_sub): the poly dispatch picks the method by the
@@ -24051,6 +24095,10 @@ int emit_unresolved_call(Compiler *c, int id, Buf *b) {
   }
   (void)nt; (void)argv; (void)recv; (void)argc;
   if (!name) return 0;
+  /* the raises below that need no receiver come first; an explicit receiver
+     has arms that answer (a subclass's dispatch, a boxed hash's face), so its
+     gap is read after them, where its NoMethodError would be made */
+  if ((recv < 0 || nt_kind(nt, recv) == NK_SelfNode) && emit_unrouted_gap(c, id, b)) return 1;
   /* NoMethodError gate: an unresolved call on a dynamically-typed receiver
      (poly/nil/int/unknown -- no user class defines the method and no builtin
      matches) yields a typed nil/0 placeholder instead of aborting. In practice
@@ -24759,9 +24807,7 @@ if (recv >= 0 && nm && (grt == TY_RATIONAL || grt == TY_COMPLEX)) {
         unsupported(c, id, "a lazy chain held in an instance, class or global variable or a "
                            "constant (an Enumerator::Lazy is fused into the call that forces it; "
                            "keep the chain in a local or force it where it is built)");
-      /* after the refusals of particular shapes above, whose words say what
-         to do instead: this one only names the method */
-      unresolved_builtin_refusal(c, id, recv, nm, grt);
+      if (emit_unrouted_gap(c, id, b)) return 1;
       if (g_gate_raise) {
         /* Scalar slot: the comma-expr yields a typed default the surrounding C
            accepts directly. Poly slot: emit the recognizable sp_raise_nomethod
@@ -25265,7 +25311,7 @@ int operand_order_trial(int id) { return id >= 0 && id == g_operand_order_node; 
 static int text_is_raise_token(const char *txt) {
   if (!txt) return 0;
   while (*txt == '(' || *txt == ' ') txt++;
-  return strncmp(txt, "sp_raise_nomethod", 17) == 0 || strncmp(txt, "sp_raise_cls(", 13) == 0;
+  return emitted_no_method(txt) || strncmp(txt, "sp_raise_cls(", 13) == 0;
 }
 
 /* Is this call a reader the emitter lowers to a plain field read -- an
@@ -28355,7 +28401,7 @@ static int emit_nil_target_call(Compiler *c, int id, Buf *b) {
     free(rest.p);
     buf_puts(b, cb.p ? cb.p : "");
   }
-  else if (cb.p && strncmp(cb.p, "sp_raise_nomethod(", 18) == 0 &&
+  else if (cb.p && emitted_nomethod_token(cb.p) &&
            whole_call_text(cb.p + 17)) {
     /* The call raises NoMethodError whatever the receiver holds (a method
        its class lacks). The raise stays outermost, with the nil test ahead
@@ -30935,7 +30981,7 @@ static void emit_call_held(Compiler *c, int id, Buf *b) {
      looks for it; a raise anywhere inside -- a block body's index check --
      is not this call's value */
   const char *head = past_open_parens(ob.p ? ob.p : "");
-  int ok = hold.n > 0 && !hold.guarded && strncmp(head, "sp_raise_nomethod(", 18) != 0 &&
+  int ok = hold.n > 0 && !hold.guarded && !emitted_no_method(head) &&
            strncmp(head, "sp_raise_cls(", 13) != 0;
   for (int i = 0; i < hold.n && ok; i++)
     if (g_pre && g_pre->p && g_pre->len > pre_mark && text_uses_tmp(g_pre->p + pre_mark, hold.tmp[i])) ok = 0;

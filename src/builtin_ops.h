@@ -465,6 +465,7 @@ int bop_covers(TyKind rt);
 /* The kind whose rows a receiver of kind rt reads: rt itself where a row
    covers it, else the Array or Hash family's (every variant shares them). */
 TyKind bop_family_of(TyKind rt);
+int bop_row_takes(TyKind rt, const char *name, int argc, int has_block);
 
 /* What the call answers on a receiver of kind rt: the row's result, with a
    derived result (BOPR_*) worked out from rt. */

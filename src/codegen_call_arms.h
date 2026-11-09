@@ -330,9 +330,10 @@ int bind_owner_mismatch(Compiler *c, int target, TyKind ot);
 int builtin_method_arity(const char *cls, const char *m, int *out);
 const char *builtin_method_params(const char *owner, const char *m, int *in_c);
 int builtin_method_known(const char *cls, const char *m);
-int core_method_vis(const char *cls, const char *m, int inherit);   /* codegen_call_class.c */
-int refl_builtin_vis(Compiler *c, int ci, const char *m, int inherit);   /* codegen_call_class.c */
+int core_method_vis(const char *cls, const char *m, int inherit, const char **owner);   /* codegen_call_class.c */
+int refl_builtin_vis(Compiler *c, int ci, const char *m, int inherit, const char **owner);   /* codegen_call_class.c */
 const char *core_class_ancestors(const char *cls);   /* codegen_call_class.c */
+const char *core_ancestor_step(const char *p, size_t *len);   /* codegen_call_class.c */
 void core_own_methods_each(const char *cls, size_t cl, void (*f)(void *, const char *, int), void *ud);
 int emit_value_methods_reflection(Compiler *c, int id, Buf *b);   /* codegen_call.c */
 void emit_value_methods_helpers(Compiler *c, const char *const *texts, int ntexts, Buf *protos,

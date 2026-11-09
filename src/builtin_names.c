@@ -535,6 +535,20 @@ int is_reflective_access(const char *n) {
          sp_streq(n, "const_get") || sp_streq(n, "const_set") || sp_streq(n, "remove_instance_variable") ||
          sp_streq(n, "remove_class_variable") || sp_streq(n, "remove_const");
 }
+/* The methods whose CRuby answer turns on the name they are given: a
+   NameError for one not allowed as a name of its kind, or for one that is
+   not there. The reflective accesses of a variable or constant by name and
+   the questions about one (`Object.class_variable_get("x")`,
+   `const_source_location("lower")`), the method-list calls (attr_reader,
+   remove_method, undef_method) and alias_method, the visibility calls given
+   names, and ruby2_keywords. (The method lookups by name, instance_method
+   and method, are the call plan's cu_lookup_by_name.) */
+int is_name_checked_call(const char *n) {
+  return n && (is_reflective_access(n) || is_const_query_name(n) || is_const_visibility_name(n) ||
+               is_cvar_defined_name(n) || is_ivar_reflection_name(n) ||
+               is_method_list_call(n) || is_alias_method_name(n) || visibility_of_name(n) ||
+               class_method_vis_of_name(n) || sp_streq(n, "ruby2_keywords"));
+}
 /* The reflective listings of a kind of variable */
 int is_reflective_listing(const char *n) {
   return sp_streq(n, "instance_variables") || sp_streq(n, "class_variables") || sp_streq(n, "constants");
@@ -760,6 +774,8 @@ int is_method_owner_query(const char *n) {
 }
 
 int is_instance_method_name(const char *n) { return n && (sp_streq(n, "instance_method") || sp_streq(n, "public_instance_method")); }
+/* public_instance_method, public_method: the lookups that take public methods only */
+int is_public_method_lookup(const char *n) { return n && (sp_streq(n, "public_instance_method") || sp_streq(n, "public_method")); }
 /* method, public_method: a Method of the receiver's own method by name */
 int is_bound_method_maker(const char *n) { return n && (sp_streq(n, "method") || sp_streq(n, "public_method")); }
 /* super_method: the Method of the same method one step up its owner's chain */
@@ -2172,7 +2188,7 @@ static int self_fact_cmp(const void *a, const void *b) { return strcmp(*(const c
 /* main's own methods, beside Object's: its singleton's (`to_s`, `inspect`
    answer "main") and the private ones a top-level body calls as a class
    body would (`include`, `private`, `define_method`, ...) */
-static int main_self_method(const char *m) {
+int main_self_method(const char *m) {
   static const char *const MAINM[] = { "to_s", "inspect", "include", "public", "private", "define_method",
                                        "using", "ruby2_keywords", NULL };
   return builtin_name_in(m, MAINM);

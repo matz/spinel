@@ -14704,7 +14704,7 @@ static void emit_tail_value_1(Compiler *c, int node, Buf *b) {
      value (it raises): coerce it to the non-poly slot, keeping the call, rather
      than passing the sp_RbVal through raw. A text match on the gate's own token
      is reliable where comp_ntype is not (it can diverge from the emitted C). */
-  else if (strncmp(txt, "sp_raise_nomethod(", 18) == 0 &&
+  else if (emitted_no_method(txt) &&
            g_ret_type != TY_POLY && g_ret_type != TY_UNKNOWN)
     emit_unbox_text(c, g_ret_type, full, b);
   /* A NameError-raising constant read is a comma expression whose dummy value
@@ -21245,11 +21245,11 @@ static int operand_op_may_raise(Compiler *c, int id) {
    shows the same whether it ran or not: self, a constant receiver the
    load record resolves to a program class, or a pure read none of whose
    operators can raise? */
-static int order_operand_inert(Compiler *c, int call, int op, int is_recv) {
+int order_operand_inert(Compiler *c, int call, int op, int is_recv) {
   NodeKind k = nt_kind(c->nt, op);
   if (k == NK_SelfNode) return 1;
   if (is_recv && (k == NK_ConstantReadNode || k == NK_ConstantPathNode) &&
-      cplan_const_recv_class(c, call, op) >= 0) return 1;
+      cplan_const_recv_class(c, call, op, NULL) >= 0) return 1;
   return subtree_is_pure_read(c, op) && !operand_op_may_raise(c, op);
 }
 

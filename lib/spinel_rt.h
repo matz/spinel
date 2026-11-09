@@ -192,6 +192,13 @@ SP_NORETURN SP_COLD void sp_raise_cls(const char *cls, const char *msg);
    exact shape of the sp_box_nil() it replaced; the raise still never
    returns at runtime (sp_raise_cls longjmps). */
 sp_RbVal sp_raise_nomethod(const char *msg);
+/* The raise of a call CRuby answers that no route of the compiler took: the
+   class cls (NotImplementedError, or the NameError of a lookup by a name that
+   is nowhere) with msg, both static texts, in the gate's shape (a
+   value-returning extern, not noreturn, for the same reason as
+   sp_raise_nomethod). The compiler's emitted_no_method reads it as it reads
+   the gate's token. */
+sp_RbVal sp_raise_unrouted(const char *cls, const char *msg);
 
 /* A nullable Integer or Float is an sp_oint / sp_ofloat (sp_types.h); the
    unwraps that raise as CRuby's nil would -- sp_oint_val (the receiver),

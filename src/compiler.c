@@ -541,6 +541,9 @@ void comp_free(Compiler *c) {
   free(c->missing_order);
   c->missing_order = NULL;
   c->missing_order_n = 0;
+  free(c->unrouted_warned);
+  c->unrouted_warned = NULL;
+  c->unrouted_warned_n = 0;
   free(c->hash_default_arg_memo);
   c->hash_default_arg_memo = NULL;
   free(c->blk_body_map);
@@ -3592,7 +3595,7 @@ static int mixin_answers_first(Compiler *c, int cid, const char *name, int compa
   int master = comp_method_in_chain(c, cid, name, NULL) < 0 && !comp_reader_in_chain(c, cid, name, NULL);
   if (cid < 0 || cid >= c->nclasses || !name) return master;
   /* a name Enumerable does not have (each, join, index ...): the program's alone */
-  if (core_method_vis(comparable ? "Comparable" : "Enumerable", name, 0) <= 0) return master;
+  if (core_method_vis(comparable ? "Comparable" : "Enumerable", name, 0, NULL) <= 0) return master;
   /* the topmost class that has Enumerable among its ancestors, by an include
      of its own or of a module: below it the include is a no-op. A Struct, an Array or a native class has Enumerable of its
      own, at a place the includes do not show: master's answer there. */

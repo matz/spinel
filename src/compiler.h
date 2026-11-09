@@ -168,8 +168,7 @@ typedef struct {
   int cell_outlives; /* the cell was made for a proc that can OUTLIVE the call
                        (a proc/lambda, a Fiber/Thread body, a handler, a block
                        forwarded into a poly callee). A cell only lifted
-                       iteration blocks made is consumed while the call runs,
-                       so a byref parameter may still lend its slot (#4568). */
+                       iteration blocks made is consumed while the call runs. */
   int proc_rebinds; /* a proc or block that captures it assigns the cell:
                        any later call may run it and rebind the local, so a
                        read ahead of one is taken first (read_rebound_by) */
@@ -178,12 +177,6 @@ typedef struct {
                        C slot. Keep that slot alongside the cell and copy it in
                        at the top of the body, so a proc lifted out of the block
                        reads this iteration's value through the cell. */
-  int byref_out;    /* (params) a string param the method body mutates in place
-                       (`<<`/bang mutators): passed as const char** so the
-                       mutation lands in the caller's variable, like CRuby's
-                       shared-object semantics. Implies is_cell (body reads and
-                       writes go through *_cell_<name>), but the cell is the
-                       caller's slot -- no heap cell is allocated on entry. */
   int borrowed_volatile; /* codegen: this String slot, or a slot borrowed here,
                            is live across setjmp; propagate through lending */
   int inline_alias; /* (params of a yielding method, codegen only) how many
@@ -365,7 +358,7 @@ typedef struct {
                        place, by the method itself or by a method it hands
                        the parameter to (its read lifted into the handle,
                        poly_strbuf_lift), so its callers hand over the handle
-                       (convert_byref_handle_params). POLY_LIFT_ZSUPER: a
+                       (pull_args_into_handle_params). POLY_LIFT_ZSUPER: a
                        bare `super` hands it to such a parameter and it can
                        hold a String, so the super lifts it as a marked read
                        is (emit_zsuper_arg). (#6179) */
@@ -1750,11 +1743,6 @@ typedef struct {
   unsigned bsl_cur;
   struct HandleArgTab *share_args; /* final callers, while sealing share facts */
   struct SbArgIndex *sb_args; /* settled parameter sources, built once for storage */
-  /* the methods compute_byref_out_params let take a lent slot
-     (an_byref_eligible_scopes), kept for the share facts built after it
-     (nbyref_elig scopes; NULL before it runs) */
-  char *byref_elig;
-  int nbyref_elig;
   /* the names the program's global writes assign, as of the node table it
      was made for (analyze_infer.c, gvar_has_write; NULL before the first ask) */
   struct GvarWrites *gvar_writes;
@@ -2309,9 +2297,6 @@ int        comp_cvar_index(ClassInfo *ci, const char *name);  /* class var; -1 i
 int        comp_cvar_intern(ClassInfo *ci, const char *name); /* find or add; returns index */
 int        comp_cvar_owner(const Compiler *c, int cid, const char *name); /* the class whose slot holds @@name */
 int        cvar_name_ok(const char *n);   /* `@@` and an identifier: a reflection call's literal name that is not one raises NameError */
-/* 1 iff method m's param idx is a byref string out-param (LocalVar.byref_out):
-   passed as const char** so callee mutation lands in the caller's variable. */
-int        comp_byref_param(Compiler *c, Scope *m, int idx);
 /* Propagate codegen's setjmp-slot qualifiers through borrowed String calls. */
 void       propagate_borrowed_volatile(Compiler *c);
 /* Find the instance-method scope index for class_id + method name, or -1. */

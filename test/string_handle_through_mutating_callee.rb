@@ -4,9 +4,8 @@
 # CALLEE performs on what the reader HANDED OUT stayed a copy, and the
 # caller's string came back empty with no error.
 #
-# Each source shape gets its own helper: a plain local is lent by address (the
-# byref out-param) while a reader result is a handle, and one name cannot yet
-# carry both ABIs.
+# Each source shape gets its own helper: a plain local and a reader result each
+# reach the callee as a handle.
 def push_reader(x);    x << "!"; end
 def push_alias(x);     x << "!"; end
 def push_getter(x);    x << "!"; end
@@ -29,7 +28,7 @@ h = { k: +"" }; push_hash(h[:k]);              p h[:k]
 a = [+""];      push_array(a[0]);              p a[0]
 
 # the shapes that already worked: a plain local, and a bare ivar argument --
-# both lvalues the caller can lend to the byref out-param
+# both lvalues the caller can hand over as a handle
 s = +"a"; push_local(s);                       p s
 
 class Inner

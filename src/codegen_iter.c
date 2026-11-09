@@ -829,8 +829,8 @@ void emit_inline_locals_aliased(Compiler *c, int mi, int tag, unsigned alias_mas
 void emit_inline_alias_arg(Compiler *c, int av, Buf *b) {
   const NodeTable *nt = c->nt;
   if (nt_kind(nt, av) == NK_InstanceVariableReadNode) {
-    /* the slot itself, and the owner pinned as a byref call pins it: the
-       store lands inside this expansion, past any dirty bit (#4378) */
+    /* the slot itself, and the owner pinned: the store lands inside this
+       expansion, past any dirty bit (#4378) */
     const char *ivn = nt_str(nt, av, "name");
     /* a C global is a root every collection marks: no owner to pin */
     Buf gref; memset(&gref, 0, sizeof gref);
@@ -841,12 +841,11 @@ void emit_inline_alias_arg(Compiler *c, int av, Buf *b) {
   emit_expr(c, av, b); buf_puts(b, ")");
   /* The caller's variable may be a heap cell (captured by a proc): the
      body will store through it from inside this expansion, which is the
-     placement a dirty bit cannot cover, so pin the cell as a byref call
-     would (#4391); a stack slot, or a cell the caller itself was lent,
-     is not ours to pin. */
+     placement a dirty bit cannot cover, so pin the cell (#4391); a cell
+     the caller itself was lent is not ours to pin. */
   const char *avn = nt_str(nt, av, "name");
   LocalVar *alv = avn ? scope_local(comp_scope_of(c, av), avn) : NULL;
-  if (alv && alv->is_cell && !alv->byref_out && !alv->inline_alias &&
+  if (alv && alv->is_cell && !alv->inline_alias &&
       !(g_cap_struct && g_cap_names && nameset_has(g_cap_names, avn)))
     buf_printf(b, "; sp_gc_pin_remembered((void *)_cell_%s)", rename_local(avn));
 }

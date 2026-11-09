@@ -13215,8 +13215,8 @@ static void emit_while_loop(Compiler *c, int id, Buf *b, int indent, int is_unti
   if (hr >= 0) {
     const char *hn = nt_str(nt, hr, "name");
     /* a call that hands the local to a method's parameter that method
-       changes in place (a byref slot, whatever the method is: an instance,
-       class or module method) changes the String the bound measured */
+       changes in place (whatever the method is: an instance, class or
+       module method) changes the String the bound measured */
     if (hn && !subtree_changes_local(c, body, hn) && !subtree_changes_local(c, pred, hn) &&
         !an_subtree_may_lend_local(c, body, hn) && !an_subtree_may_lend_local(c, pred, hn)) {
       int ht = ++g_tmp;
@@ -20326,8 +20326,8 @@ static int emit_call_stmt(Compiler *c, int id, Buf *b, int indent, const NodeTab
           }
           /* Every other name that reads back as an expression is still a
              String the freeze has to reach: an ivar that holds the shared
-             handle freezes the handle, and a byref parameter's cell or a
-             yielded block parameter's (`(*_cell_x)`) takes the frozen
+             handle freezes the handle, and a cell or a yielded block
+             parameter's (`(*_cell_x)`) takes the frozen
              String back through the value form, which assigns it. This
              emitted `(void)(x)`, so `x.freeze; x << "!"` appended to a
              String frozen? called unfrozen. */
@@ -23628,7 +23628,7 @@ void emit_stmt_tail_inner(Compiler *c, int id, Buf *b, int indent) {
       /* return the chain's BASE receiver: for `buf << a << b` the immediate
          receiver is the inner `<<` call, and re-emitting it would run the
          inner links a second time (doubling the appended text -- and writing
-         the doubled string back through a byref param) */
+         the doubled string back to the receiver) */
       int _sbase = sp_streq(_snm, "<<") ? str_append_chain_base(c, id) : _srecv;
       emit_indent(b, indent); emit_tail_lead(b);
       int _wp = g_result_var ? g_result_poly : (g_ret_type == TY_POLY);

@@ -1427,10 +1427,6 @@ int emit_splat_gather(Compiler *c, Scope *m, const int *argv, const ArgLayout *L
 int gather_lead_placed(Compiler *c, Scope *m, const int *argv, int argc, int i);
 void emit_gather_arity_check(Compiler *c, Scope *m, int ct);
 void emit_gathered_param(Compiler *c, Scope *m, int i, int ct, Buf *out);
-/* A byref parameter's value with no caller slot to lend: a rooted temp's address. */
-void emit_lent_temp(const char *val, Buf *out);
-/* The slot a String local lends a byref parameter; 0 when it has none. */
-int emit_lent_local(LocalVar *lv, const char *vn, Buf *out);
 /* The parameter of s a bare super in s hands pm's parameter j, or -1. */
 int zsuper_param_source(Compiler *c, Scope *s, Scope *pm, int j);
 int gathered_param_index(Compiler *c, Scope *m, int i, const char *len, char *idx, size_t cap,

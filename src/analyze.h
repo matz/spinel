@@ -975,8 +975,8 @@ int dyn_open_site(Compiler *c, int n, int *shift);
 void dyn_open_reach(Compiler *c, int n, int k, DynReach *r);
 int dyn_method_appends(Compiler *c, int mi, int j);
 /* The code under node may append to local vn in place, or hand it to a
-   parameter that is lent (a byref slot or the handle): 1 also for a
-   subtree too deep to be walked to the bottom */
+   parameter that appends to it: 1 also for a subtree too deep to be walked
+   to the bottom */
 int an_subtree_may_lend_local(Compiler *c, int node, const char *vn);
 int an_local_array_changed_x(Compiler *c, const char *xn, Scope *xs);
 int an_local_array_stores_unshared(Compiler *c, const char *xn, Scope *xs);

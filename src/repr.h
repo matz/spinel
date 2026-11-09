@@ -148,8 +148,6 @@ typedef enum {
   RC_NONE,       /* its own C variable, lv_<name> */
   RC_HEAP,       /* is_cell: a heap cell an escaping proc shares with the
                     scope, read and written through *_cell_<name> */
-  RC_BYREF,      /* byref_out: a String parameter the method mutates in
-                    place, the caller's own slot passed as const char ** */
   RC_ALIAS       /* inline_alias: a parameter an inline expansion binds to
                     the caller's variable for its duration */
 } ReprCell;

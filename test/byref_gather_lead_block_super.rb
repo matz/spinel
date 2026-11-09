@@ -1,11 +1,11 @@
-# A String a method appends to is the caller's String, and Spinel lends the
-# caller's slot to the parameter that takes it (the byref out-param). Two
-# binders lent a copy instead. A call whose count the run time decides (a
-# splat with an argument after it) binds every positional out of one gathered
-# Array, so a String written ahead of the splat went into a temp; and a bare
-# `super` inside a block passed the method's captured parameter as a temp of
-# its value where a call there passes the capture's cell. Each probe appends
-# LONG, which always reallocates, and prints what the caller's name sees.
+# A String a method appends to is the caller's String, and Spinel hands the
+# parameter that takes it the caller's own handle. Two binders handed a copy
+# instead. A call whose count the run time decides (a splat with an argument
+# after it) binds every positional out of one gathered Array, so a String
+# written ahead of the splat went into a temp; and a bare `super` inside a
+# block passed the method's captured parameter as a temp of its value. Each
+# probe appends LONG, which always reallocates, and prints what the caller's
+# name sees.
 # spinel: gc-minor
 LONG = "!" * 100
 

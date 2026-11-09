@@ -11416,7 +11416,6 @@ static void emit_data_with_init(Compiler *c, int id, int recv, ClassInfo *sc, in
     LocalVar *p = m->pnames[j] ? scope_local(m, m->pnames[j]) : NULL;
     if (!p || !callee_param_is_declared_kwarg(c, m, m->pnames[j]))
       unsupported_feature(c, id, "Data#with on a Data whose initialize takes a parameter other than a keyword");
-    if (p->byref_out) unsupported_feature(c, id, "Data#with on a Data whose initialize appends to a String keyword");
   }
   /* CRuby's errors, in its order: the required keywords nothing fills, then
      the keys initialize does not take (the members first, as to_h has them) */

@@ -5294,11 +5294,29 @@ static TyKind local_write_ty(Compiler *c, int id, int stashed) {
   return newt;
 }
 
+/* A String local or parameter holds the handle (one-string), from the round
+   its type says String: not the loop variable of an unrolled define_method
+   (collect_dm_each_unroll: no C slot, its reads are the literal), nor a slot
+   an --rbs seed pins to another type. A slot typed the handle without the
+   mark (a parameter a bare super widened from a handle) takes the mark.
+   Answers whether it changed the slot. */
+int slot_take_string_handle(Compiler *c, LocalVar *lv) {
+  if (lv->type != TY_STRING && !(lv->type == TY_STRBUF && !lv->str_shared)) return 0;
+  if (lv->rbs_seeded && lv->rbs_type != TY_UNKNOWN && lv->rbs_type != TY_STRING) return 0;
+  if (lv->owner >= 0) {
+    const Scope *sc = &c->scopes[lv->owner];
+    if (sc->dm_subst_name && lv->name && sp_streq(lv->name, sc->dm_subst_name)) return 0;
+  }
+  lv_set_type(lv, TY_STRBUF);
+  if (!lv->str_shared) { lv->str_shared = 1; comp_touch_scope(lv->owner); }
+  return 1;
+}
+
 /* What infer_write_types keeps of a slot across its join: the decisions
    about the slot's representation that a re-derivation from its writes alone
    would undo. Inside the recompute frame (`stashed`), a slot the round could
    not derive at all also keeps the type the reset stashed. */
-static void lv_keep_decisions(LocalVar *lv, int stashed) {
+static void lv_keep_decisions(Compiler *c, LocalVar *lv, int stashed) {
   /* The same contract for a slot narrowed to a pointer array. The reset
      re-derives it from its writes, which still read the poly array, and the
      two array KINDS unify to the plain poly SCALAR -- strictly worse than
@@ -5352,11 +5370,7 @@ static void lv_keep_decisions(LocalVar *lv, int stashed) {
      above, and for the same reason. */
   if (lv->str_shared &&
       (lv->type == TY_STRING || lv->type == TY_STR_ARRAY)) lv_set_type(lv, TY_STRBUF);
-  /* every String local holds the handle (one-string) */
-  if (lv->type == TY_STRING && !lv->is_param && !lv->rbs_seeded && !lv->byref_out) {
-    lv_set_type(lv, TY_STRBUF);
-    if (!lv->str_shared) { lv->str_shared = 1; comp_touch_scope(lv->owner); }
-  }
+  slot_take_string_handle(c, lv);
 }
 
 /* infer_write_multi_assign, with each table narrowed to a pointer array
@@ -5653,7 +5667,7 @@ int infer_write_types(Compiler *c) {
 
   for (int s = 0; s < c->nscopes; s++)
     for (int i = 0; i < c->scopes[s].nlocals; i++)
-      lv_keep_decisions(&c->scopes[s].locals[i], 1);
+      lv_keep_decisions(c, &c->scopes[s].locals[i], 1);
 
   /* Detect change vs the stashed old types -- over EXACTLY the slots the reset
      above stashed. It used to skip only params and block params, so a slot the
@@ -5736,7 +5750,7 @@ int rejoin_local_writes(Compiler *c) {
       if (m == was) continue;
       slot_set(c, lv, m, v, nt_ref(nt, id, "value"));
       if (lv->oa_pin != TY_UNKNOWN && lv->type != lv->oa_pin) lv->oa_pin = TY_UNKNOWN;
-      lv_keep_decisions(lv, 0);
+      lv_keep_decisions(c, lv, 0);
       if (lv->type == was) continue;
       changed = 1;
       if (lv->type != TY_POLY) continue;

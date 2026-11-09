@@ -612,8 +612,7 @@ static void repr_layout(Repr *r, TyKind t) {
    proven to hold only a PolyArray or nil. A read of the local says the
    same. */
 static void repr_slot_storage(Repr *r, const LocalVar *lv) {
-  r->cell = (unsigned char)(lv->byref_out ? RC_BYREF : lv->inline_alias ? RC_ALIAS
-                            : lv->is_cell ? RC_HEAP : RC_NONE);
+  r->cell = (unsigned char)(lv->inline_alias ? RC_ALIAS : lv->is_cell ? RC_HEAP : RC_NONE);
   r->volatile_str = lv->borrowed_volatile != 0;
   r->arr_or_nil = lv->arr_or_nil == 1 && lv->type == TY_POLY;
 }
@@ -1747,8 +1746,38 @@ static void repr_check_block_params(Compiler *c) {
   }
 }
 
+/* A String slot is the handle or bytes, and the rule marks every handle
+   (slot_take_string_handle): no local, global, instance variable or class
+   variable holds TY_STRBUF without the mark, which repr_of_slot reads as bytes. */
+static void repr_check_string_slots(Compiler *c) {
+  for (int si = 0; si < c->nscopes; si++) {
+    Scope *sc = &c->scopes[si];
+    for (int i = 0; i < sc->nlocals; i++) {
+      const LocalVar *lv = &sc->locals[i];
+      if (lv->type == TY_STRBUF && !lv->str_shared)
+        fprintf(stderr, "repr-check: conflict: scope %s local %s: slot string buffer without the handle mark\n",
+                sc->name ? sc->name : "?", lv->name ? lv->name : "?");
+    }
+  }
+  for (int g = 0; g < c->ngvars; g++)
+    if (c->gvars[g].type == TY_STRBUF && !c->gvars[g].str_shared)
+      fprintf(stderr, "repr-check: conflict: global %s: slot string buffer without the handle mark\n",
+              c->gvars[g].name ? c->gvars[g].name : "?");
+  for (int k = 0; k < c->nclasses; k++) {
+    const ClassInfo *ci = &c->classes[k];
+    for (int i = 0; i < ci->nivars; i++)
+      if (ci->ivar_types[i] == TY_STRBUF && !ci->ivar_str_shared[i])
+        fprintf(stderr, "repr-check: conflict: class %s ivar %s: slot string buffer without the handle mark\n",
+                ci->name ? ci->name : "?", ci->ivars[i] ? ci->ivars[i] : "?");
+    for (int i = 0; i < ci->ncvars; i++)
+      if (ci->cvar_types[i] == TY_STRBUF && !ci->cvar_str_shared[i])
+        fprintf(stderr, "repr-check: conflict: class %s class variable %s: slot string buffer without the handle mark\n",
+                ci->name ? ci->name : "?", ci->cvars[i] ? ci->cvars[i] : "?");
+  }
+}
+
 void repr_seal(Compiler *c) {
-  if (g_repr_check) repr_check_block_params(c);
+  if (g_repr_check) { repr_check_block_params(c); repr_check_string_slots(c); }
   repr_sealed_flag = 1;
   /* the String plan (share_plan.c), from the final facts and flags, asked
      as codegen will ask them: sealed */
@@ -1898,7 +1927,6 @@ static const char *repr_cell_name(int cell) {
   switch ((ReprCell)cell) {
   case RC_NONE:  return "";
   case RC_HEAP:  return " cell=heap";
-  case RC_BYREF: return " cell=byref";
   case RC_ALIAS: return " cell=alias";
   }
   return " cell=?";

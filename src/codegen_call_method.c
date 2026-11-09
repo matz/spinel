@@ -2574,6 +2574,11 @@ static void emit_poly_callable_blk_call(Compiler *c, int t, int argc, const int 
   if (pubs) buf_puts(b, ")");
 }
 
+/* A boxed value's callable surface: a Method read out of a container
+   answers name, owner and receiver from its sp_BoundMethod; arity is a
+   Method's or a Proc's, NoMethodError naming the receiver's class for
+   any other value; call, (), yield and a bare [] call a boxed Proc or
+   Method. */
 int emit_call_poly_callable_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc, const int *argv) {
   /* A Method read out of a container widened to poly: answer from the
      sp_BoundMethod itself, which carries everything the compile-time arms

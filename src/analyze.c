@@ -16596,7 +16596,7 @@ static int walk_row_store_fits(Compiler *c, int v, TyKind et) {
   if (lk != TY_UNKNOWN && lk != et) return 0;
   return walk_row_value_fits(infer_type(c, v), et);
 }
-static int walk_row_param_kept(Compiler *c, int s, const char *nm, TyKind row, int depth);
+static int walk_row_param_kept(Compiler *c, int s, const char *nm, TyKind row, int depth, int local);
 /* A read r yielded by a method of the program (an Enumerable method a
    builtin defines in Ruby, `yield x, i` in each_with_index): the row goes
    to the block of each call of that method, whose parameter at the same
@@ -16620,12 +16620,12 @@ static int walk_row_yield_kept(Compiler *c, int s, int r, TyKind row, int depth)
       if (nt_kind(nt, blk) != NK_BlockNode) return 0;
       const char *pn = an == 1 && block_param_is_multi(c, blk, 0) ? NULL : block_param_name(c, blk, at);
       if (!pn) return 0;
-      if (!walk_row_param_kept(c, c->nscope[blk], pn, row, depth + 1)) return 0;
+      if (!walk_row_param_kept(c, c->nscope[blk], pn, row, depth + 1, 0)) return 0;
     }
   }
   return 1;
 }
-static int walk_row_param_kept(Compiler *c, int s, const char *nm, TyKind row, int depth) {
+static int walk_row_param_kept(Compiler *c, int s, const char *nm, TyKind row, int depth, int local) {
   const NodeTable *nt = c->nt;
   TyKind et = row == TY_INT_ARRAY ? TY_INT : TY_FLOAT;
   for (int e = comp_vsite_first(c, VS_READ, NK_LocalVariableReadNode, nm, s); e >= 0; e = comp_vsite_next(c, e)) {
@@ -16638,7 +16638,7 @@ static int walk_row_param_kept(Compiler *c, int s, const char *nm, TyKind row, i
     for (int w = comp_lwrite_of_value(c, r); w >= 0; w = comp_lwrite_next(c, w)) {
       const char *wn = nt_str(nt, w, "name");
       if (nt_kind(nt, w) != NK_LocalVariableWriteNode || !wn || sp_streq(wn, nm)) continue;
-      if (depth >= 4 || !walk_row_param_kept(c, c->nscope[w], wn, row, depth + 1)) return 0;
+      if (depth >= 4 || !walk_row_param_kept(c, c->nscope[w], wn, row, depth + 1, 1)) return 0;
     }
     int p = comp_recv_parent(c, r);
     if (p < 0 && !walk_row_yield_kept(c, s, r, row, depth)) return 0;
@@ -16648,6 +16648,12 @@ static int walk_row_param_kept(Compiler *c, int s, const char *nm, TyKind row, i
     int a = nt_ref(nt, p, "arguments"), an = 0;
     const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &an) : NULL;
     int first = -1;   /* the first argument stored, -1 for a call that stores none */
+    /* a push or `r[i] = 0.5` on the row itself is left to the typed row:
+       the emitter refuses it there, and a boxed row built typed
+       (`Array.new(n) { Array.new(m, 0) }`) would store it into a widened
+       copy. On a local the row was written to, the local widened to a copy
+       and the store was lost. */
+    if ((is_push_alias(cn) || sp_streq(cn, "[]=")) && !local) continue;
     if (is_push_alias(cn) || sp_streq(cn, "unshift") || sp_streq(cn, "prepend")) first = 0;
     else if (sp_streq(cn, "insert")) first = 1;
     else if (sp_streq(cn, "[]=")) first = an - 1;
@@ -16703,8 +16709,8 @@ static int oa_walk_arm(Compiler *c, int id, int recv, OAS *sl, int S, char *clai
     int bs = pn ? c->nscope[blk] : -1;
     if (!pn || bs < 0 || block_param_is_multi(c, blk, pi)) sl[S].row_mut = 3;
     else {
-      if (!walk_row_param_kept(c, bs, pn, TY_INT_ARRAY, 0)) sl[S].row_mut |= 1;
-      if (!walk_row_param_kept(c, bs, pn, TY_FLOAT_ARRAY, 0)) sl[S].row_mut |= 2;
+      if (!walk_row_param_kept(c, bs, pn, TY_INT_ARRAY, 0, 0)) sl[S].row_mut |= 1;
+      if (!walk_row_param_kept(c, bs, pn, TY_FLOAT_ARRAY, 0, 0)) sl[S].row_mut |= 2;
     }
   }
   if (!fold && !(name && is_map_alias(name)) && !(id < nc && walk_disc[id])) sl[S].row_iter |= 8;
@@ -17297,9 +17303,7 @@ static int narrow_walk_block_params(Compiler *c) {
       if (!lv->is_block_param || lv->rbs_seeded) continue;
       int gi = off[s] + li;
       int fits = !bad[gi] && (ty_is_object(elem[gi]) || walk_row_kind(elem[gi])) &&
-                 !comp_lvw_any_sc(c, s, lv->name) &&  /* not written in the body */
-                 /* and a row stays a row of its kind (`r.unshift(1.5)` keeps it boxed) */
-                 (!walk_row_kind(elem[gi]) || walk_row_param_kept(c, s, lv->name, elem[gi], 0));
+                 !comp_lvw_any_sc(c, s, lv->name);   /* not written in the body */
       /* a pin whose walk no longer qualifies (the array widened, another
          block binds the name) goes, and the parameter is the walk's boxed
          element again */

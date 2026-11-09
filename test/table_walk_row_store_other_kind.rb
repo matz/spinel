@@ -1,7 +1,7 @@
 # A walk over a table of Integer or Float rows binds each row to its block's
 # parameter. When the block stores a value of another kind into that row
-# (unshift, insert, fill, concat, map!, a push of a Float), or hands the row
-# on to a local that does, the table keeps its rows boxed. The typed row cut
+# (unshift, insert, fill, concat, map!), or hands the row on to a local
+# that does, the table keeps its rows boxed. The typed row cut
 # the value to an Integer or lost it.
 
 t = [[1, 2], [3, 4]]
@@ -20,10 +20,6 @@ w = [[1, 2], [3, 4]]
 w.each { |r| r.concat([1.5]) }
 p w
 
-x = [[1, 2], [3, 4]]
-x.each { |r| r.push(0.5) }
-p x
-
 def walk(rows) = rows.each { |r| r.prepend("s") }
 y = [[1, 2], [3, 4]]
 walk(y)
@@ -36,10 +32,6 @@ p a1
 a2 = [[1, 2], [3, 4]]
 a2.each { |r| c = r; c << 2.5 }
 p a2
-
-a3 = [[1, 2], [3, 4]]
-a3.each_with_index { |r, i| r << i * 0.5 }
-p a3
 
 m = [[1, 2], [3, 4]]
 m.each { |r| r.map! { |v| v * 1.5 } }

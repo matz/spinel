@@ -8462,9 +8462,13 @@ static sp_PolyArray *sp_poly_product(sp_RbVal *arrs, sp_int n) {
         const char *cn = sp_poly_class_name(v);
         sp_raise_cls("TypeError", sp_sprintf("can't convert %s to Array (%s#to_ary gives %s)", cn, cn, sp_poly_class_name(got)));
       }
-      pa = sp_poly_to_poly_array(got);
+      /* the Array itself, not a copy: a later operand's #to_ary can still
+         change it, and CRuby reads every operand after all are converted */
+      sp_PolyArray_push(conv, got);
+      arrs[i] = got;
+      continue;
     }
-    else pa = sp_poly_set_operand(v);
+    pa = sp_poly_set_operand(v);
     sp_PolyArray_push(conv, sp_box_poly_array(pa));
     arrs[i] = sp_box_poly_array(pa);
   }

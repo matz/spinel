@@ -61,3 +61,15 @@ class NilAry; def to_ary; nil; end; end
 begin; b.product([9], NilAry.new); rescue TypeError => e; p e.message; end
 class PrivAry; private def to_ary; [5, 6]; end; end
 p b.product(PrivAry.new, [0])
+# a later operand's to_ary changes an Array an earlier operand gave, or the
+# receiver: the product reads them after every operand is converted
+$shared = [1, 2]
+class ShA; def to_ary = $shared; end
+class ShB; def to_ary; $shared << 3; [9]; end; end
+p [0].product(ShA.new, ShB.new)
+seen = []
+[0].product(ShA.new, ShB.new) { |t| seen << t }
+p seen.size, $shared
+$recv = [4, 5]
+class ShR; def to_ary; $recv << 6; [7]; end; end
+p $recv.product([8], ShR.new).size

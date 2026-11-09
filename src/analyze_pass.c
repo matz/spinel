@@ -16683,11 +16683,31 @@ static int block_leaves_unify(Compiler *c, int block, Scope *s, TyKind t) {
   return changed;
 }
 
+/* The other methods call id can hand its block to bind it too: a virtual
+   call's initially resolved method is only one arm. Fold their sites and
+   forwards through the same binding walk, including a version entry's arms.
+   An open target set can call the block with anything, as a kept block can. */
+static int block_dispatch_bindings(Compiler *c, int id, int mi, int ym, const BlockSig *s,
+                                   TyKind *pos, char *absent, char *seen) {
+  int targets[CPT_MAX], n = cplan_entries(c, id, targets, CPT_MAX);
+  if (n == CPT_UNKNOWN) return 1;
+  int np = s->P + s->O + s->Q, kept = 0;
+  for (int i = 0; i < n; i++) {
+    int t = targets[i];
+    if (t == mi || t == ym) continue;   /* already bound by block_bind_plan */
+    int arms[VER_MAX_ARMS + 1];
+    int na = c->scopes[t].entry ? ver_entry_targets(c, t, arms, NULL) : (arms[0] = t, 1);
+    for (int j = 0; j < na; j++)
+      kept |= block_reach(c, arms[j], s, pos, absent, pos + np, seen, 1, 0);
+  }
+  return kept;
+}
+
 /* What binds `block`, handed by call `id` to method `mi` whose sites are
    `ym`'s (its yields when `yields`, else its &block's calls): pos/absent
-   from every site (block_site_types), posf/absentf from the calls the
-   method hands the block on to, and 1 when it is kept, so anything may call
-   it (block_reach). The caller frees the four arrays. */
+   from every site (block_site_types), posf/absentf from the other dispatch
+   arms and the calls the method hands the block on to, and 1 when it is
+   kept, so anything may call it (block_reach). The caller frees the arrays. */
 static int block_bind_plan(Compiler *c, int id, int block, int mi, int ym, int yields, BlockSig *s,
                            TyKind **pos, char **absent, TyKind **posf, char **absentf) {
   const NodeTable *nt = c->nt;
@@ -16719,6 +16739,7 @@ static int block_bind_plan(Compiler *c, int id, int block, int mi, int ym, int y
   *absentf = calloc((size_t)np + 1, 1);
   if (!seen || !*posf || !*absentf) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   int kept = block_reach(c, ym, s, *posf, *absentf, *posf + np, seen, 0, 0);
+  kept |= block_dispatch_bindings(c, id, mi, ym, s, *posf, *absentf, seen);
   free(seen);
   return kept;
 }

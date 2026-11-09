@@ -3176,6 +3176,8 @@ const char *oint_unbox(TyKind t);   /* "sp_unbox_oint" / "sp_unbox_ofloat" */
 int oint_kind(TyKind t);
 /* a local's / parameter's slot is an sp_oint / sp_ofloat */
 int slot_is_oint(const LocalVar *lv);
+/* one zip (or product) block param from an element read `src` of type src_ty */
+void emit_zip_block_param(Compiler *c, TyKind slot, TyKind src_ty, const char *src, Buf *b);
 /* the C type of a local's slot: the oint type, or emit_ctype's */
 void emit_slot_ctype(Compiler *c, const LocalVar *lv, Buf *b);
 /* instance ivar iv of class cid has a nil byte in iv__nilb; its index;

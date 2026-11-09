@@ -12588,6 +12588,23 @@ int block_lead_only(Compiler *c, int block) {
   return P >= 1 && rk == NK_ImplicitRestNode;
 }
 
+/* A literal block taking exactly two plain requireds, `|x, y|` (no
+   destructuring, rest, trailing comma, optional, post or keyword): the
+   shape of a product block whose pair is bound element by element, typed
+   (infer_block_params) and read straight from the arrays (codegen) */
+int product_block_binds_elems(Compiler *c, int block) {
+  const NodeTable *nt = c->nt;
+  if (block < 0 || nt_kind(nt, block) != NK_BlockNode) return 0;
+  if (!block_lead_only(c, block) || block_rest_marker(c, block)) return 0;
+  if (!block_param_name(c, block, 1) || block_param_name(c, block, 2)) return 0;
+  if (block_param_is_multi(c, block, 0) || block_param_is_multi(c, block, 1)) return 0;
+  if (block_keyword_name(c, block, 0)) return 0;
+  int bp = nt_ref(nt, block, "parameters");
+  int pn = bp >= 0 && nt_kind(nt, bp) == NK_BlockParametersNode ? nt_ref(nt, bp, "parameters") : -1;
+  /* (nor a `**` or a `&b` of its own) */
+  return pn >= 0 && nt_ref(nt, pn, "keyword_rest") < 0 && nt_ref(nt, pn, "block") < 0;
+}
+
 /* CRuby's auto-splat, for a block, a proc and instance_exec alike: one
    Array passed alone is spread across the parameters when the block takes a
    required (leading or post) or two optionals, and more than one positional
@@ -17185,8 +17202,15 @@ static int infer_block_params_container_arms(Compiler *c, const NodeTable *nt, i
     return changed | 2;
   }
 
-  /* array.product(other) { |pair| } binds the boxed pair array */
+  /* array.product(other) { |pair| } binds the boxed pair array; `|x, y|`
+     takes it apart, x an element of the receiver and y one of other, as
+     zip's block does (and its emitter reads them from the arrays) */
   if (sp_streq(name, "product") && ty_is_array(rt) && p0) {
+    int pa = nt_ref(nt, id, "arguments"), pn = 0;
+    const int *pv = pa >= 0 ? nt_arr(nt, pa, "arguments", &pn) : NULL;
+    if (product_block_binds_elems(c, block) && pn == 1 && nt_kind(nt, pv[0]) != NK_SplatNode &&
+        ty_is_array(infer_type(c, pv[0])))
+      return infer_zip_block_params(c, id, block, p0, rt) | 2;
     Scope *aps = comp_scope_of(c, block);
     if (bp_widen(aps, p0, TY_POLY)) changed = 1;
     return changed | 2;

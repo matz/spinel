@@ -1187,6 +1187,7 @@ const char *block_post_name(Compiler *c, int block, int idx);
 int block_lone_rest(Compiler *c, int block);
 int block_rest_marker(Compiler *c, int block);
 int block_lead_only(Compiler *c, int block);
+int product_block_binds_elems(Compiler *c, int block);
 int block_auto_splats(int P, int O, int Q, int R);
 int block_no_keywords(Compiler *c, int block);
 void block_fill(int P, int O, int Q, int R, int n, int *ot, int *ps);

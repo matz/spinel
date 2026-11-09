@@ -2833,6 +2833,10 @@ else {
     int blk = nt_ref(nt, id, "block");
     int pv = empty_array_poly_view(c, argv[0]);
     TyKind at = comp_ntype(c, argv[0]);
+    /* `|x, y|` over an Array operand: the pair's parts typed by
+       infer_block_params, as zip's are */
+    int typed_pair = product_block_binds_elems(c, blk) && nt_kind(nt, argv[0]) != NK_SplatNode &&
+                     ty_is_array(at);
     Buf ra; memset(&ra, 0, sizeof ra);
     emit_expr(c, recv, &ra);  /* the receiver's prelude first, as Ruby evaluates */
     Buf rb2; memset(&rb2, 0, sizeof rb2);
@@ -2847,10 +2851,34 @@ else {
     free(ra.p); free(rb2.p);
     buf_printf(b, " for (sp_int _t%d = 0; _t%d < sp_%sArray_length(_t%d); _t%d++) {", ti, ti, k, ta, ti);
     buf_printf(b, " for (sp_int _t%d = 0; _t%d < sp_%sArray_length(_t%d); _t%d++) {", tj, tj, kb, tb, tj);
-    buf_printf(b, " sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d);", tpair, tpair);
     char e1[96], e2[96];
     snprintf(e1, sizeof e1, "sp_%sArray_get(_t%d, _t%d)", k, ta, ti);
     snprintf(e2, sizeof e2, "sp_%sArray_get(_t%d, _t%d)", kb, tb, tj);
+    /* such a `|x, y|` takes each from its array: no pair is built */
+    Scope *pbs = typed_pair ? comp_scope_of(c, blk) : NULL;
+    const char *fp1 = pbs ? block_param_name(c, blk, 1) : NULL;
+    LocalVar *pl[2] = { pbs ? scope_local(pbs, fp0) : NULL, fp1 ? scope_local(pbs, fp1) : NULL };
+    if (pbs) {
+      const char *pn[2] = { fp0, fp1 }, *pk[2] = { k, kb }, *ps[2] = { e1, e2 };
+      TyKind pe[2] = { ty_array_elem(rt), ty_array_elem(at) };
+      int pa[2] = { ta, tb }, pi[2] = { ti, tj };
+      for (int q = 0; q < 2; q++) {
+        /* (a param no slot was made for is never read: emit_iter_param_assign) */
+        if (!pl[q] || pl[q]->type == TY_UNKNOWN) continue;
+        buf_printf(b, " lv_%s = ", rename_local(pn[q]));
+        /* an element that can be nil, into a slot that holds its nil */
+        if (!sp_streq(pk[q], "Poly") && oint_kind(pe[q]) && slot_is_oint(pl[q]))
+          buf_printf(b, "sp_%sArray_oget(_t%d, _t%d)", pk[q], pa[q], pi[q]);
+        else emit_zip_block_param(c, pl[q]->type, pe[q], ps[q], b);
+        buf_puts(b, ";");
+      }
+      buf_puts(b, " {");
+      emit_iter_step_body(c, blk, b, 0);
+      buf_printf(b, " } } } _t%d; })", ta);
+      if (pv >= 0) view_pop(c, pv);
+      { *out = 1; return 1; }
+    }
+    buf_printf(b, " sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d);", tpair, tpair);
     buf_printf(b, " sp_PolyArray_push(_t%d, ", tpair);
     emit_boxed_text(c, ty_array_elem(rt), e1, b);
     buf_printf(b, "); sp_PolyArray_push(_t%d, ", tpair);

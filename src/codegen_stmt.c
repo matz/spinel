@@ -221,9 +221,11 @@ void emit_puts_one(Compiler *c, int arg, Buf *b, int indent) {
     buf_puts(b, "sp_poly_puts("); emit_expr(c, arg, b); buf_puts(b, ");\n");
   }
   else if (t == TY_POLY_ARRAY) {
+    /* rooted for the walk, as the table arm below roots its box: a fresh
+       Array is held nowhere else, and an element's render allocates */
     int ta = ++g_tmp, ti = ++g_tmp;
     Buf ab; memset(&ab, 0, sizeof ab); emit_expr(c, arg, &ab);
-    buf_printf(b, "{ sp_PolyArray *_t%d = %s;\n", ta, ab.p ? ab.p : "");
+    buf_printf(b, "{ sp_PolyArray *_t%d = %s; SP_GC_ROOT(_t%d);\n", ta, ab.p ? ab.p : "", ta);
     emit_indent(b, indent);
     buf_printf(b, "for (sp_int _t%d = 0; _t%d < sp_PolyArray_length(_t%d); _t%d++) sp_poly_puts(sp_PolyArray_get(_t%d, _t%d)); }\n",
                ti, ti, ta, ti, ta, ti);

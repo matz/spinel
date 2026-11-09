@@ -12641,6 +12641,8 @@ static sp_PolyArray *sp_poly_product_n(sp_RbVal a, sp_PolyArray *ops) {
    message that already ends in a newline does not get a second one. */
 static void sp_poly_warn_line(sp_RbVal v, FILE *f) {
   if (v.tag == SP_TAG_OBJ && sp_poly_is_array_kind(v.cls_id)) {
+    /* rooted while its elements render, as sp_poly_warn_text roots it */
+    SP_GC_ROOT_RBVAL(v);
     sp_int n = sp_poly_arr_len(v);
     for (sp_int i = 0; i < n; i++) sp_poly_warn_line(sp_poly_each_elem(v, i), f);
     return;
@@ -18432,6 +18434,9 @@ sp_int sp_file_stat_mode(const char *path);
 /* IO#puts with an Array argument: one element per line, recursively (#2813) */
 static void sp_File_puts_val(sp_File *f, sp_RbVal v) {
   v = sp_poly_strbuf_deref(v);
+  /* rooted while it renders: a fresh Array is held by this call alone, and
+     an element's to_s allocates */
+  SP_GC_ROOT_RBVAL(v);
   if (v.tag == SP_TAG_OBJ && sp_poly_is_array_kind(v.cls_id)) {
     sp_int n = sp_poly_length(v);
     for (sp_int i = 0; i < n; i++) sp_File_puts_val(f, sp_poly_arr_get(v, i));

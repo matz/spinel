@@ -5270,29 +5270,22 @@ void comp_prep_chain_add(ClassInfo *ci, const char *from, const char *to) {
 
 const char *comp_super_shadow(Compiler *c, const Scope *s) {
   if (!s || !s->name) return NULL;
+  /* A proc-form clone has no chain entry of its own: its super reaches the
+     shadow the method's does -- the shadow's own clone when it has one, as
+     the clone of a class's initialize does that calls super into an included
+     module's on a cycle of constructors, or the shadow itself. A yielding
+     shadow without a clone is kept so make_yield_proc_forms can give it one.
+     Sent up the parent chain instead, it skipped that method or raised "no
+     superclass method". */
+  const Scope *m = s->is_proc_form && s->pf_source ? &c->scopes[s->pf_source - 1] : s;
   char key[320];
-  snprintf(key, sizeof key, "%s%s", s->is_cmethod ? "self." : "", s->name);
-  const char *t = comp_prep_chain_target(c, s->class_id, key);
-  /* A proc-form clone ("<m>#pf", make_yield_proc_forms) has no chain entry
-     of its own: its super reaches the shadow the method's does -- the
-     shadow's own clone when it has one, as the clone of a class's
-     initialize does that calls super into an included module's on a cycle
-     of constructors, or the shadow itself. A yielding shadow without a
-     clone is kept so make_yield_proc_forms can give it one. Sent up the
-     parent chain instead, it skipped that method or raised "no superclass
-     method". */
-  size_t n = strlen(key);
-  if (t || n <= 3 || n >= sizeof key || strcmp(key + n - 3, "#pf") != 0) return t;
-  key[n - 3] = '\0';
-  t = comp_prep_chain_target(c, s->class_id, key);
-  if (!t) return NULL;
-  char pf[320];
-  snprintf(pf, sizeof pf, "%s#pf", t);
-  int (*in_class)(Compiler *, int, const char *) = s->is_cmethod ? comp_cmethod_in_class : comp_method_in_class;
-  int k = in_class(c, s->class_id, pf);
-  if (k >= 0) return c->scopes[k].name;
-  k = in_class(c, s->class_id, t);
-  return k >= 0 ? t : NULL;
+  snprintf(key, sizeof key, "%s%s", m->is_cmethod ? "self." : "", m->name);
+  const char *t = comp_prep_chain_target(c, m->class_id, key);
+  if (m == s || !t) return t;
+  int (*in_class)(Compiler *, int, const char *) = m->is_cmethod ? comp_cmethod_in_class : comp_method_in_class;
+  int k = in_class(c, m->class_id, t);
+  if (k < 0) return NULL;
+  return c->scopes[k].pf_clone ? c->scopes[c->scopes[k].pf_clone - 1].name : t;
 }
 
 void comp_cprep_chain_add(ClassInfo *ci, const char *from, const char *to) {
@@ -5432,6 +5425,21 @@ int comp_super_parent(Compiler *c, int class_id, int is_cmethod) {
   return obj;
 }
 
+/* The proc-form clone scope `s` runs, or -1. A def that was cloned holds its
+   clone (Scope.pf_clone). A yielding def that lost its name to a later one in
+   its class, a reopen or a copy an include makes (pf_by_name), runs the clone
+   of the def that won: the method table's "a name runs its last def", asked
+   here, at the reader's site, as the table's answer for s's own name. That is
+   master's answer; where a call reaches the earlier def it runs the last
+   def's body, owed to the per-site question (one clone per reached version). */
+int comp_scope_pf_clone(Compiler *c, const Scope *s) {
+  if (s->pf_clone) return s->pf_clone - 1;
+  if (!s->pf_by_name || !s->name) return -1;
+  int last = s->class_id < 0 ? comp_method_index(c, s->name)
+           : (s->is_cmethod ? comp_cmethod_in_class : comp_method_in_class)(c, s->class_id, s->name);
+  return last >= 0 && last != s->idx && c->scopes[last].pf_clone ? c->scopes[last].pf_clone - 1 : -1;
+}
+
 const Scope *comp_super_site(Compiler *c, const Scope *s) {
   int pf = s->is_proc_form;
   /* (a link never reaches its own chain again: a cycle is a bug at the link) */
@@ -5440,10 +5448,8 @@ const Scope *comp_super_site(Compiler *c, const Scope *s) {
     s = &c->scopes[s->super_of - 1];
   }
   /* a proc-form clone of a copy supers as the owner's proc-form clone does */
-  if (pf && !s->is_proc_form && s->name) {
-    char nm[320];
-    snprintf(nm, sizeof nm, "%s#pf", s->name);
-    int k = s->is_cmethod ? comp_cmethod_in_class(c, s->class_id, nm) : comp_method_in_class(c, s->class_id, nm);
+  if (pf && !s->is_proc_form) {
+    int k = comp_scope_pf_clone(c, s);
     if (k >= 0) s = &c->scopes[k];
   }
   return s;
@@ -5674,7 +5680,7 @@ const char *comp_scope_def_name(Compiler *c, const Scope *s) {
   if (!dn) return u;
   size_t dl = strlen(dn);
   size_t n = strlen(u);
-  int pf = n > 3 && strcmp(u + n - 3, "#pf") == 0;
+  int pf = s->is_proc_form;
   size_t base = pf ? n - 3 : n;
   if (dl == base && strncmp(u, dn, base) == 0) return u;
   static char buf[4][320];
@@ -5683,42 +5689,21 @@ const char *comp_scope_def_name(Compiler *c, const Scope *s) {
   snprintf(b, sizeof buf[0], "%.*s%s", (int)dl, dn, pf ? "#pf" : "");
   return b;
 }
-const char *comp_super_name(Compiler *c, int parent, const char *name, int is_cmethod) {
-  if (!name) return name;
-  size_t n = strlen(name);
-  if (n <= 3 || strcmp(name + n - 3, "#pf") != 0) return name;
+const char *comp_super_name(Compiler *c, int parent, const Scope *s) {
+  const char *name = comp_scope_def_name(c, s);
+  if (!name || !s->is_proc_form) return name;
+  const Scope *src = s->pf_source ? &c->scopes[s->pf_source - 1] : NULL;
+  const char *base = src ? comp_scope_def_name(c, src) : name;
   /* a class whose parent is builtin (Object, StandardError) supers into the
      plain method, which the super emitter answers for itself */
-  if (parent < 0) goto plain;
+  if (parent < 0 || !src) return base;
   /* The nearest ancestor that defines the method decides: its own clone when
      it yields, else its plain method. Asking the chain for the clone found a
      grandparent's and skipped a parent that overrides without yielding
      (CodeRabbit on #4996). */
-  char base[256];
-  if (n - 3 >= sizeof base) return name;
-  memcpy(base, name, n - 3); base[n - 3] = '\0';
-  int dc = -1;
-  int bm = is_cmethod ? comp_cmethod_in_chain(c, parent, base, &dc)
-                      : comp_method_in_chain(c, parent, base, &dc);
-  int hit = bm < 0 || dc < 0 ? -1
-          : is_cmethod ? comp_cmethod_in_class(c, dc, name) : comp_method_in_class(c, dc, name);
-  if (hit >= 0 || bm < 0) {
-    if (bm >= 0) return name;
-    /* no ancestor defines the plain name: keep the old answer, the clone
-       found anywhere up the chain */
-    int any = is_cmethod ? comp_cmethod_in_chain(c, parent, name, NULL)
-                         : comp_method_in_chain(c, parent, name, NULL);
-    if (any >= 0) return name;
-  }
-plain:;
-  static struct pf_base { char *from, *to; struct pf_base *next; } *cache;
-  for (struct pf_base *e = cache; e; e = e->next)
-    if (strcmp(e->from, name) == 0) return e->to;
-  struct pf_base *e = (struct pf_base *)malloc(sizeof *e);
-  char *to = strndup(name, n - 3), *from = strdup(name);
-  if (!e || !to || !from) { free(e); free(to); free(from); return name; }
-  e->from = from; e->to = to; e->next = cache; cache = e;
-  return to;
+  int bm = s->is_cmethod ? comp_cmethod_in_chain(c, parent, base, NULL)
+                         : comp_method_in_chain(c, parent, base, NULL);
+  return bm >= 0 && c->scopes[bm].pf_clone ? name : base;
 }
 
 /* The sp_poly_enum_proc op for a block-carrying Enumerable name, or NULL.

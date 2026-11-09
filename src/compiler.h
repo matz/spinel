@@ -494,6 +494,15 @@ typedef struct {
      owner's own, a mixin's copy or a prepend's), whose super the copy's is
      (cplan_super_target); 0 for none */
   int super_of;
+  /* a yielding method's proc-form clone (make_yield_proc_forms) and the
+     method it was cloned from, each 1 + the other's scope; 0 for none. The
+     clone is no method of the program's table, so the two know each other
+     by index, not by the spelling of the clone's name. Only the def that
+     was cloned holds pf_clone; pf_by_name marks a yielding def that lost
+     its name to a later one in its class (comp_scope_pf_clone) */
+  int pf_clone;
+  int pf_source;
+  int pf_by_name;
   /* the copy of an ancestor's method an alias is (register_alias_methods): a
      method of its class, not an inherited copy, and the name of the method
      it is the copy of (Method#original_name of a define_method's, which no
@@ -2602,8 +2611,9 @@ int scope_is_initialize(const Scope *s);   /* is s compiled as a void initialize
 int comp_scope_copied_away(Compiler *c, int s);
 int comp_scope_may_run(Compiler *c, int s);
 int comp_name_is_shadow_copy(Compiler *c, const char *name, int kind);
-const char *comp_super_name(Compiler *c, int parent, const char *name, int is_cmethod);
+const char *comp_super_name(Compiler *c, int parent, const Scope *s);
 const char *comp_scope_def_name(Compiler *c, const Scope *s);
+int comp_scope_pf_clone(Compiler *c, const Scope *s);   /* the proc-form clone s runs, or -1 */
 int comp_super_is_class_new(Compiler *c, int id);
 int comp_super_class_new_boxed(Compiler *c, int id);
 int comp_new_receiver(Compiler *c, int k);

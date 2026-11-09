@@ -1595,10 +1595,12 @@ static int lr_path_const_owner(Compiler *c, int node, int path) {
 
 /* A known class's singleton has its own constant history, disjoint from
    the class's. A singleton of an arbitrary object remains unknown. */
-static int lr_singleton_owner(Compiler *c, int f) {
+static int lr_singleton_class(Compiler *c, int f) {
   int ex = nt_ref(c->nt, c->lrec->st[f].node, "expression");
-  int cls = nt_kind(c->nt, ex) == NK_SelfNode ? lr_cref(c, f) : lr_class_ref_at(c, ex, NULL);
-  return lr_sg_const_owner(cls);
+  return nt_kind(c->nt, ex) == NK_SelfNode ? lr_cref(c, f) : lr_class_ref_at(c, ex, NULL);
+}
+static int lr_singleton_owner(Compiler *c, int f) {
+  return lr_sg_const_owner(lr_singleton_class(c, f));
 }
 
 /* A constant of a reopened Object is a top-level one: CRuby's Object is
@@ -1643,11 +1645,14 @@ static void lr_const_write(Compiler *c, int node, int e, int fc, int fs, int may
   if (node < c->lrec->n && (c->lrec->bits[node] & LR_LATE)) {
     const int *par = comp_parent_map(c);
     owner = lr_const_owner(LR_MAIN);
+    int in_def = 0;   /* (inside a method a `class << self` defines, self is the class) */
     for (int a = par[node]; a >= 0; a = par[a]) {
       NodeKind ak = nt_kind(nt, a);
+      if (ak == NK_DefNode && nt_ref(nt, a, "receiver") < 0) in_def = 1;
       if (ak == NK_SingletonClassNode) {
         int f = a < c->lrec->n ? c->lrec->at[a] : -1;
-        owner = f >= 0 && c->lrec->st[f].node == a ? lr_singleton_owner(c, f) : 0;
+        owner = f >= 0 && c->lrec->st[f].node == a ?
+          (in_def ? lr_const_owner(lr_object_as_main(c, lr_singleton_class(c, f))) : lr_singleton_owner(c, f)) : 0;
         break;
       }
       if (ak == NK_ClassNode || ak == NK_ModuleNode) { owner = lr_const_owner(lr_object_as_main(c, elab_header_class(c, a, NULL, NULL))); break; }

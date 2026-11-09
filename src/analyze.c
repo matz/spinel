@@ -11566,6 +11566,44 @@ static int srange_own_method(const char *nm) {
   for (int i = 0; own[i]; i++) if (sp_streq(nm, own[i])) return 1;
   return 0;
 }
+/* Range#to_set raises RangeError for an endless Range before it calls
+   Enumerable's: put that test in front of the receiver of a to_set the
+   program's Enumerable answers, `(raise RangeError, "..." if r.end.nil?;
+   r)`. A literal Range has its end in the tree; a local, self or a
+   parameter is read again for the test. Another receiver is left as it
+   is. 1 when the call changed. */
+static int srange_endless_guard(Compiler *c, int id, int recv) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  if (nt_int(nt, id, "srange_endless_checked", 0)) return 0;
+  nt_node_set_int(nt, id, "srange_endless_checked", 1);
+  int base0 = nt->count, r = nt_paren_single(nt, recv), test = -1;
+  if (r >= 0 && nt_kind(nt, r) == NK_RangeNode) {
+    if (nt_ref(nt, r, "right") >= 0) return 0;   /* (it has an end) */
+  } else {
+    int rc = dyn_parent_copy(nt, recv);
+    if (rc < 0 || nt_kind(nt, recv) == NK_CallNode) return 0;
+    test = te_call(nt, te_call(nt, rc, "end", -1, -1), "nil?", -1, -1);
+  }
+  int msg = nt_new_node(nt, "StringNode");
+  nt_node_set_str(nt, msg, "content", "cannot convert endless range to a set");
+  nt_node_set_str(nt, msg, "unescaped", "cannot convert endless range to a set");
+  int rargs = nt_new_node(nt, "ArgumentsNode");
+  { int ra[2] = { te_const(nt, "RangeError"), msg }; nt_node_set_arr(nt, rargs, "arguments", ra, 2); }
+  int rz = te_call(nt, -1, "raise", rargs, -1), first = rz;
+  if (test >= 0) {
+    first = nt_new_node(nt, "IfNode");
+    nt_node_set_ref(nt, first, "predicate", test);
+    nt_node_set_ref(nt, first, "statements", te_stmts1(nt, rz));
+  }
+  int body = nt_new_node(nt, "StatementsNode");
+  { int bs[2] = { first, recv }; nt_node_set_arr(nt, body, "body", bs, 2); }
+  int par = nt_new_node(nt, "ParenthesesNode");
+  nt_node_set_ref(nt, par, "body", body);
+  nt_node_set_ref(nt, id, "receiver", par);
+  comp_grow_node_arrays(c);
+  for (int j = base0; j < nt->count; j++) c->nscope[j] = c->nscope[id];
+  return 1;
+}
 static int desugar_str_range_methods(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int changed = 0;
@@ -11598,7 +11636,10 @@ static int desugar_str_range_methods(Compiler *c) {
     /* a program's Enumerable method that Range does not define itself runs
        with the RANGE as self, as it does for an Integer Range. For a String
        Range, Range#to_set, #count and #reverse_each call Enumerable's too. */
-    if (an_enum_prog_method(c, nm) && !srange_own_method(nm)) continue;
+    if (an_enum_prog_method(c, nm) && !srange_own_method(nm)) {
+      if (sp_streq(nm, "to_set") && srange_endless_guard(c, id, recv)) changed = 1;
+      continue;
+    }
     /* `range % n { }` is `range.step(n) { }` (#3671): the walk has no row of
        its own under the `%` name, so name it what it is. The blockless form is
        the `%` row's, whose Enumerator inspects as `%(n)`. */

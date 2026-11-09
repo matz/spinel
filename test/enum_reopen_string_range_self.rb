@@ -34,3 +34,22 @@ module Enumerable
 end
 p r.preds
 p [r.nil?, r.equal?(r), r.is_a?(Enumerable), (1.0..2.0).is_a?(Enumerable)]
+
+# An endless String Range: Range#to_set raises before the program's to_set
+def srange_to_set_of(x) = x.to_set
+[-> { ("a"..).to_set }, -> { er = ("b"..); er.to_set }, -> { srange_to_set_of(("c"..)) }].each do |l|
+  begin
+    p l.call
+  rescue RangeError => e
+    p [e.class, e.message]
+  end
+end
+p srange_to_set_of(("a".."b"))
+
+# equal?, == and eql? with a boxed String Range, and the side effects
+sr = ("a".."c")
+box = [sr, 1, "x"]
+p sr.equal?(box[0]), sr == box[0], sr.eql?(box[0]), sr == box[1], sr.equal?(box[2]), ("a".."d") == box[0]
+def srange_eff(t) = (puts "eff #{t}"; t)
+p srange_eff("a".."c").equal?(srange_eff(1))
+p srange_eff("a".."c") == srange_eff("x")

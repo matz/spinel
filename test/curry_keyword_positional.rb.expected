@@ -1,0 +1,22 @@
+"wrong number of arguments (given 2, expected 1)"
+[1, 0]
+"wrong number of arguments (given 3, expected 2)"
+[1, 2, 0]
+[1, {k: 5}, 0]
+[1, 2, 0]
+[1, 2, 0]
+"wrong number of arguments (given 3, expected 2)"
+[1, 2, 0]
+"wrong number of arguments (given 2, expected 1)"
+[1, {}]
+"wrong number of arguments (given 2, expected 1)"
+[1, {k: 5}]
+"wrong number of arguments (given 2, expected 1)"
+[1, {k: 5}]
+{z: 1}
+[1, {k: 5}, 0]
+[1, {k: 5}, 0]
+[1, 2]
+[1, 7, 0]
+Proc
+[1, 2, 3]

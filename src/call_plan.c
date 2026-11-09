@@ -2171,7 +2171,12 @@ int call_target(Compiler *c, int id, int cls, const char *name, unsigned flags, 
     }
     r = mi;
   }
-  else if ((c->scopes[mi].versioned || c->scopes[mi].mixin_guarded || c->scopes[mi].entry) && (pin = ct_pin_of(c, id)) != -1) {   /* (an entry's arm: its method's own class) */
+  else if ((c->scopes[mi].versioned || c->scopes[mi].mixin_guarded || c->scopes[mi].entry) && (pin = ct_pin_of(c, id)) != -1 &&
+           /* (a pin answers the side its entry is on: an instance entry's
+              arm, asked for a class method of a Class value its receiver
+              may hold, finds that class's own method. A call on main takes
+              main's singleton versions and Object's alike.) */
+           (pin < 0 || (flags & CT_TOP) || !c->scopes[pin].is_cmethod == !(flags & CT_CMETHOD))) {   /* (an entry's arm: its method's own class) */
     if (pin == CT_PIN_BUILTIN || ct_top_version(c, pin, flags)) {
       ml->kind = ML_NONE;
       r = -1;

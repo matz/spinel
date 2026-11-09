@@ -6062,6 +6062,25 @@ static void emit_row_optional_binds(Compiler *c, int block, int np, const char *
   }
 }
 
+/* A String receiver that builds a String (`s.b`, a method's result) beside
+   an argument that allocates too (a separator or pattern built the same
+   way): held and rooted first, its text in rb replaced by the temp's, as
+   the expression arms hold it (operand_allocates_beside). The block forms
+   below splice the receiver into one call with the argument, and C
+   evaluates them in no set order: the one built first was nobody's while
+   the other allocated. */
+static void iter_hold_built_str_recv(Compiler *c, int recv, const int *argv, int argc, Buf *rb, Buf *b, int indent) {
+  if (!operand_may_allocate(c, recv)) return;
+  int beside = 0;
+  for (int ai = 0; ai < argc && !beside; ai++) beside = operand_allocates_beside(c, argv[ai]);
+  if (!beside) return;
+  int th = ++g_tmp;
+  emit_indent(b, indent);
+  buf_printf(b, "const char *_t%d = SP_STR_B(%s); SP_GC_ROOT(_t%d);\n", th, rb->p ? rb->p : "", th);
+  free(rb->p); memset(rb, 0, sizeof *rb);
+  buf_printf(rb, "_t%d", th);
+}
+
 /* emit_iteration_stmt_body's tap, Array#each_slice, and String#split / scan
    with a block (answers 1 emitted, 0 declined, -1 to go on) */
 static int iter_tap_slice_string_arms(Compiler *c, int id, Buf *b, int indent, const NodeTable *nt, int block, const char *name, int recv, int body, const char *p0_orig, const char *p0, TyKind rt) {
@@ -6252,6 +6271,7 @@ static int iter_tap_slice_string_arms(Compiler *c, int id, Buf *b, int indent, c
     int use_shadow_sp = clv0 && clv0->type != et && et != TY_UNKNOWN;
     int tm = ++g_tmp, ti = ++g_tmp;
     Buf rb; memset(&rb, 0, sizeof rb); emit_expr(c, recv, &rb);
+    iter_hold_built_str_recv(c, recv, sp_argv, sp_argc, &rb, b, indent);
     emit_indent(b, indent);
     buf_printf(b, "sp_StrArray *_t%d = ", tm);
     if (sp_argc == 0) buf_printf(b, "sp_str_split_ws(%s);\n", rb.p ? rb.p : "");
@@ -6351,6 +6371,7 @@ static int iter_tap_slice_string_arms(Compiler *c, int id, Buf *b, int indent, c
     int live = sc_re >= 0;
     char sc_get[96], sc_get_e[96];
     Buf rb; memset(&rb, 0, sizeof rb); emit_expr(c, recv, &rb);
+    if (!live) iter_hold_built_str_recv(c, recv, sc_argv, 1, &rb, b, indent);
     emit_indent(b, indent);
     if (live) {
       int th = ++g_tmp;

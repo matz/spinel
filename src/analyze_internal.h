@@ -1229,6 +1229,7 @@ int kwh_arg_param(Compiler *c, Scope *m, int pos_argc);
 
 /* --ext-entry designations (see codegen_internal.h / ext-design.md) */
 extern const char *g_ext_entries;
+extern const char *g_ext_classes;
 
 /* the class every value of a boxed-value hash slot holds, or -1 (#4846) */
 int hv_value_class(Compiler *c, int recv);

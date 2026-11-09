@@ -1942,7 +1942,11 @@ static void walk_scope_in(Compiler *c, int id, WalkCtx w) {
     if (dead && dm_is_dm) dm_ok = 0;
     int dm_in_def = dm_ok && dm_is_dm && scope_idx > 0 && c->scopes[scope_idx].def_node >= 0 &&
                     nt_kind(c->nt, c->scopes[scope_idx].def_node) == NK_DefNode;
-    if (dm_in_def && method_never_named(c, c->scopes[scope_idx].name))
+    /* A method a host can call through --ext-class (one an exported class
+       answers, of a shape the thunk calls) runs though nothing in the
+       program names it: its define_method stays registered as an
+       --ext-entry's does (method_never_named). */
+    if (dm_in_def && !ext_scope_host_callable(c, scope_idx) && method_never_named(c, c->scopes[scope_idx].name))
       dm_ok = 0;
     /* Otherwise it is registered from the start, which is right only for a
        method the class does not answer yet: the codegen prepass refuses the
@@ -10072,6 +10076,26 @@ void specialize_inherited_cls_new(Compiler *c) {
       for (int t = 0; t < ntgt; t++) specialize_cmethod_for(c, mi, NULL, def_cls, tgt[t], 0, -1);
     free(tgt);
   }
+  /* A host calls an inherited class method on the class value of a class
+     --ext-class exports with no call node in the program (sp_ext_send by
+     name), so the row of that class must run it on the class's own
+     class-level ivars: each exported descendant gets its own copy, chosen
+     as the escaping class values above are. */
+  if (g_ext_classes && *g_ext_classes)
+    for (int mi = 1; mi < snap; mi++) {
+      if (!c->scopes[mi].is_cmethod || !c->scopes[mi].name || c->scopes[mi].class_id < 0) continue;
+      int def_cls = c->scopes[mi].class_id;
+      const char *mname = c->scopes[mi].name;
+      for (int k = 0; k < c->nclasses; k++) {
+        if (k == def_cls || !is_descendant(c, k, def_cls) || !ext_class_exported(c, k)) continue;
+        int kmi = comp_cmethod_in_chain(c, k, mname, NULL);
+        if (kmi != mi && (kmi < snap || c->scopes[kmi].def_node != c->scopes[mi].def_node ||
+                          c->scopes[kmi].class_id == k)) continue;
+        int has_new = 0;
+        if (cmethod_needs_specialization(c, mi, k, def_cls, &has_new))
+          specialize_cmethod_for(c, mi, NULL, def_cls, k, 0, -1);
+      }
+    }
   /* a class's own class method whose super reaches its parent's */
   /* (the copies made above for subclasses as well: each copy's super runs
      on its own class) */
@@ -10178,6 +10202,9 @@ void specialize_inherited_cls_new(Compiler *c) {
        receiver's call can reach */
     if (!called_direct && class_value_escapes(c, src->class_id) &&
         name_called_on_dynamic_recv(c, s, &src->class_id, 1, node_count, &an)) called_direct = 1;
+    /* ... or if a host calls it by name through the table of --ext-class:
+       the thunk of the defining class's row is emitted against this source */
+    if (!called_direct && ext_scope_host_callable(c, s)) called_direct = 1;
     free(cmemo);
     if (!called_direct) src->is_transplanted_source = 1;
   }

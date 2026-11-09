@@ -62,6 +62,7 @@ extern int g_inline_hot;
 extern int g_no_write_barrier;
 extern const char *g_ext_init_name;
 extern const char *g_ext_entries;
+extern const char *g_ext_classes;
 extern const char *g_ext_target;
 extern const char *g_ext_feature;
 extern char *g_ext_header_text;
@@ -524,6 +525,8 @@ static void usage(void) {
     "               statement of a method, when the method is called)\n"
     "  --ext-init NAME    Emit a host-callable library: NAME() replaces main\n"
     "  --ext-entry M.m,.. Export these module methods (with -c; writes a .h contract)\n"
+    "  --ext-class C,..   Export the instance methods of these classes (or `all`)\n"
+    "               by name: sp_ext_send and sp_ext_methods in the contract\n"
     "  --ext cruby        Also generate the CRuby extension shim (<out>_ext.c)\n"
     "  --no-inline-hot  Do not force small leaf methods inline (default: do).\n"
     "                 Forcing is worth a sixth of optcarrot's frame rate and\n"
@@ -894,6 +897,19 @@ static void miscompile_errors(Str *cmd) {
              "-Werror=implicit-function-declaration ");
 }
 
+/* The value of an --ext option: the next argument, which is a name and so
+   never starts with '-'. A missing one stops the run, where taking the
+   next flag as the value lost that flag and failed later for a reason that
+   named nothing. */
+static const char *ext_option_value(int argc, char **argv, int *i, const char *flag) {
+  if (*i + 1 >= argc || argv[*i + 1][0] == '-') {
+    fprintf(stderr, "spinel: %s needs a value\n", flag);
+    exit(1);
+  }
+  *i += 2;
+  return argv[*i - 1];
+}
+
 int main(int argc, char **argv) {
 #ifdef SP_WORK_COUNT
   atexit(work_report);
@@ -1037,8 +1053,9 @@ int main(int argc, char **argv) {
     /* Library emission for host extensions (docs/internals/ext-design.md):
        --ext-init names the host-callable init function (emitted in place of
        main), --ext-entry designates the exported methods. */
-    else if (sp_streq(a, "--ext-init") && i + 1 < argc) { g_ext_init_name = argv[i + 1]; i += 2; }
-    else if (sp_streq(a, "--ext-entry") && i + 1 < argc) { g_ext_entries = argv[i + 1]; i += 2; }
+    else if (sp_streq(a, "--ext-init"))  { g_ext_init_name = ext_option_value(argc, argv, &i, a); }
+    else if (sp_streq(a, "--ext-entry")) { g_ext_entries = ext_option_value(argc, argv, &i, a); }
+    else if (sp_streq(a, "--ext-class")) { g_ext_classes = ext_option_value(argc, argv, &i, a); }
     else if (sp_streq(a, "--ext") && i + 1 < argc) { g_ext_target = argv[i + 1]; i += 2; }
     else if (parse_flag(a))                { i++; }
     else if (sp_streq(a, "-c"))            { c_only = 1; i++; }
@@ -1366,14 +1383,14 @@ int main(int argc, char **argv) {
 
   if (stdout_mode) { fputs(csrc, stdout); free(csrc); return 0; }
 
-  if ((g_ext_init_name || g_ext_entries) && !c_only) {
+  if ((g_ext_init_name || g_ext_entries || g_ext_classes) && !c_only) {
     fprintf(stderr, "spinel: --ext-init/--ext-entry emit a LIBRARY: pass -c "
                     "(the host's build compiles and links the result)\n");
     free(csrc);
     return 1;
   }
-  if (g_ext_entries && !g_ext_init_name) {
-    fprintf(stderr, "spinel: --ext-entry needs --ext-init (the host must "
+  if ((g_ext_entries || g_ext_classes) && !g_ext_init_name) {
+    fprintf(stderr, "spinel: --ext-entry and --ext-class need --ext-init (the host must "
                     "initialize the runtime before calling an entry)\n");
     free(csrc);
     return 1;

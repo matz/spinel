@@ -197,6 +197,9 @@ src/codegen.c sg_delegate_scope a scope's own name
 src/codegen.c sg_parent_answers_as_object a scope's own name
 src/codegen.c range_rat_walk_own_def a name's presence in a Range, Enumerable or Integer reopen
 src/codegen.c struct_display_owned whether the program owns a Struct's inspect or to_s
+src/codegen.c ext_emit_method_thunk the class that defines an exported method's name (--ext-class)
+src/codegen.c ext_emit_attr_rows whether a def answers an attr's name (--ext-class)
+src/codegen.c ext_emit_method_tables the class that defines an exported method's name (--ext-class)
 src/codegen_call_class.c emit_respond_to_runtime_name =c->scopes[s].name a scope's own name
 src/codegen_expr.c defined_super_reaches super, by its def's name
 src/codegen_util.c ivs_super_method super, by its def's name
@@ -217,6 +220,7 @@ src/analyze_util.c class_value_bind_call_gap a Symbol argument's method
 src/analyze_util.c class_value_bind_call_target a Symbol argument's method
 src/analyze_util.c method_obj_lookup a Method object's method
 src/analyze_util.c method_super_target super_method: the Method's def's own name, a step up its owner
+src/analyze_util.c ext_method_exported the method a class answers for an exported name (--ext-class)
 src/codegen_call.c class_responds_to a Symbol argument's method (respond_to?)
 src/codegen_call.c method_hidden_from_reflection a reflected method's name
 src/codegen_call.c obj_responds_answer a Symbol argument's method (respond_to?)

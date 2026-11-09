@@ -1,0 +1,46 @@
+1
+2
+"c:2"
+1
+2
+"c"
+"t"
+"t"
+"c2"
+no method secret
+no method nothing
+bump/1 label/1 half/0 twin/0 keys/1 half_of/1 greet/1 twin_name/1 pick/1 spare/0 named/0 stamp/1 .opts/0 .zero/0 .tally/0 .install_dyn/0 dyn/0 .call_dyn/1 name/0 n/0 tag/0 tag=/1
+2
+"L"
+1
+label/1^ half/0^ twin/0^ keys/1^ half_of/1^ greet/1^ twin_name/1^ pick/1^ spare/0^ named/0^ stamp/1^ .opts/0^ .zero/0^ .install_dyn/0^ dyn/0^ .call_dyn/1^ shout/0 bump/1 .tally/0 name/0^ n/0^ tag/0^ tag=/1^
+"C"
+label/1^ half/0^ twin/0^ keys/1^ half_of/1^ greet/1^ twin_name/1^ pick/1^ spare/0^ named/0^ stamp/1^ .opts/0^ .zero/0^ .install_dyn/0^ dyn/0^ .call_dyn/1^ shout/0 bump/1 .tally/0 name/0^ n/0^ tag/0^ tag=/1^
+"spare"
+"s!"
+"s!"
+"zero"
+"zero:0"
+no method bump
+no method zero
+1
+1
+2
+"c!"
+"a,b"
+raised ArgumentError: wrong number of arguments (given 0, expected 1)
+raised TypeError: no implicit conversion of String into Integer
+raised TypeError: no implicit conversion of Integer into Hash
+-1
+"hi nobody"
+"hi you"
+raised TypeError: no implicit conversion of Symbol into Integer
+raised NoMethodError: undefined method 'name' for nil
+no method opt_mid
+no method span
+raised TypeError: no implicit conversion of Integer into String
+"hi nd"
+"nd!"
+raised TypeError: no implicit conversion of Encoding into String
+raised TypeError: no implicit conversion of Encoding into String
+0

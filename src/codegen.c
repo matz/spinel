@@ -758,6 +758,7 @@ int class_has_subclass(Compiler *c, int ocid) {
 
 const char *g_ext_init_name = NULL;
 const char *g_ext_entries = NULL;
+const char *g_ext_classes = NULL;      /* --ext-class: classes whose instance methods the library exports by name */
 const char *g_ext_target = NULL;       /* --ext cruby: generate the host shim */
 const char *g_ext_feature = NULL;      /* Init_<feature> / require name (from -o) */
 char *g_ext_header_text = NULL;
@@ -20700,6 +20701,261 @@ static void ext_generate_cruby_shim(Compiler *c) {
 }
 
 
+/* --ext-class (compiler.h, ext_method_exported): the row type of the method
+   table, written once into the library and once into its header. */
+static void ext_emit_method_typedef(Buf *b) {
+  buf_puts(b, "#ifndef SP_EXT_METHOD_T\n#define SP_EXT_METHOD_T 1\n"
+              "typedef sp_RbVal (*sp_ext_thunk)(sp_RbVal self, int argc, const sp_RbVal *argv);\n"
+              "typedef struct { const char *name; int argc; int owner; int singleton; sp_ext_thunk fn; } sp_ext_method;\n"
+              "#endif\n");
+}
+/* The --ext-class part of the contract header: the row type and the two
+   functions a host calls, with their contract. */
+static void ext_emit_contract_decls(Buf *hb) {
+  buf_puts(hb, "\n/* --ext-class: the public methods of the exported classes and modules, by\n"
+               "   name. sp_ext_methods answers the table of a class id (NULL for a class\n"
+               "   not exported), each row the method's name, its arity, the id of the\n"
+               "   class that defines it, whether it is a singleton method (one of the\n"
+               "   class value, else of an instance) and its thunk; a row of NULLs ends\n"
+               "   it. sp_ext_send calls the method `name` of recv (a boxed object, or a\n"
+               "   boxed class value for a singleton method) with argc boxed arguments,\n"
+               "   writes the boxed result to *out and answers 1; 0 when recv's class\n"
+               "   has no such method. A wrong count of arguments raises ArgumentError,\n"
+               "   an argument of a wrong kind TypeError, as a call in the program would. */\n");
+  ext_emit_method_typedef(hb);
+  buf_puts(hb, "const sp_ext_method *sp_ext_methods(int cls_id);\n"
+               "int sp_ext_send(sp_RbVal recv, const char *name, int argc, const sp_RbVal *argv, sp_RbVal *out);\n");
+}
+/* A host's argument for an Integer or a Float parameter, checked as a
+   builtin checks one: an Integer, or a number for a Float; anything else
+   is the TypeError of the conversion. */
+static void ext_thunk_scalar(TyKind t, const char *ex, Buf *b) {
+  if (t == TY_INT) { buf_printf(b, "sp_poly_arg_int_chk(%s)", ex); return; }
+  buf_printf(b, "({ sp_RbVal _v = %s; if (_v.tag != SP_TAG_INT && _v.tag != SP_TAG_FLT && !sp_poly_is_rational(_v))"
+                " sp_raise_cls(\"TypeError\", sp_sprintf(\"can't convert %%s into Float\", sp_poly_class_name(_v)));"
+                " sp_poly_to_f(_v); })", ex);
+}
+
+/* The thunk of method scope s called on an instance of class ci: it unboxes
+   self and each argument to the C type the method takes, calls the method,
+   and boxes the result. The method keeps its own C signature; a host that
+   knows only boxed values reaches it through the thunk. */
+static void ext_emit_method_thunk(Compiler *c, int ci, int s, Buf *b) {
+  Scope *sc = &c->scopes[s];
+  int def = -1;
+  if (sc->is_cmethod) comp_cmethod_in_chain(c, ci, sc->name, &def);
+  else comp_method_in_chain(c, ci, sc->name, &def);
+  if (def < 0) def = sc->class_id;
+  TyKind st = ty_object(ci);
+  int vt = comp_ty_value_obj(c, st);
+  buf_printf(b, "static sp_RbVal sp_extm_%d_%d(sp_RbVal self, int argc, const sp_RbVal *argv) {\n"
+                "  (void)argc; (void)argv;\n", ci, s);
+  /* self: a singleton method's is the class value, which only a method
+     dispatched on the subclass reads; an instance's box is checked against
+     the class, and a method an ancestor defines takes the ancestor's
+     pointer */
+  if (sc->is_cmethod) buf_puts(b, "  (void)self;\n");
+  else {
+    buf_printf(b, "  %s %s_self = ", class_ctype(c, ci), vt ? "" : "*");
+    emit_unbox_text(c, st, "self", b);
+    buf_puts(b, ";\n");
+  }
+  for (int p = 0; p < sc->nparams; p++) {
+    LocalVar *lv = scope_local(sc, sc->pnames[p]);
+    char ex[32], nm[16];
+    snprintf(ex, sizeof ex, "argv[%d]", p);
+    snprintf(nm, sizeof nm, "_a%d", p);
+    buf_puts(b, "  ");
+    /* a call in the program is typed, so the plain unbox checks nothing; a
+       host's argument is checked as a builtin's argument is: a scalar of
+       the kind (ext_thunk_scalar), and nil only where the slot can hold it */
+    int may_nil = repr_of_slot(c, lv).may_nil;
+    if (slot_is_oint(lv)) {
+      /* a nullable Integer or Float parameter: nil is the flag of the pair */
+      buf_printf(b, "%s %s = %s.tag == SP_TAG_NIL ? %s : %s(", oint_ctype(lv->type), nm, ex,
+                 oint_nil(lv->type), oint_of(lv->type));
+      ext_thunk_scalar(lv->type, ex, b);
+      buf_puts(b, ");\n");
+      continue;
+    }
+    emit_ctype(c, lv->type, b);
+    buf_printf(b, " %s = ", nm);
+    if (lv->type == TY_INT || lv->type == TY_FLOAT) ext_thunk_scalar(lv->type, ex, b);
+    else if (lv->type == TY_BOOL) buf_printf(b, "sp_poly_truthy(%s)", ex);
+    else if (lv->type == TY_STRING || lv->type == TY_STRBUF) {
+      /* a String value or handle: nil stays nil where the slot can hold
+         it, else it is the TypeError of a builtin; the bytes are what the
+         strict conversion answers (sp_str_aset_rep: a String, a handle, or
+         a program object's to_str; a Class, an Encoding or a value of
+         another kind is CRuby's TypeError, where the loose check reads it
+         through to_s). The box itself holds no String for a to_str
+         object, so the plain unbox would read its payload as one, and the
+         handle's conversion would make an empty String of it. A handle
+         stays the handle, so the method's appends reach the host's
+         String. */
+      if (may_nil) buf_printf(b, "%s.tag == SP_TAG_NIL ? NULL : ", ex);
+      if (lv->type == TY_STRBUF)
+        buf_printf(b, "sp_poly_is_strbuf(%s) ? (sp_String *)%s.v.p : sp_String_new_fresh(sp_str_aset_rep(%s))",
+                   ex, ex, ex);
+      else buf_printf(b, "sp_str_aset_rep(%s)", ex);
+    }
+    else emit_unbox_text(c, lv->type, ex, b);
+    buf_puts(b, ";\n  ");
+    emit_gc_root_var(c, lv->type, nm, b);
+    buf_puts(b, "\n");
+    /* a container's or an object's conversion answers NULL for nil and for
+       a value of another kind, which the method would read through:
+       TypeError instead, as a builtin raises it, unless the slot can hold
+       nil and the value is nil */
+    if (ty_is_hash(lv->type) || ty_is_array(lv->type) || ty_is_object(lv->type)) {
+      const char *what = ty_is_hash(lv->type) ? "Hash" : ty_is_array(lv->type) ? "Array"
+                         : c->classes[ty_object_class(lv->type)].name;
+      char nil_ok[64] = "";
+      if (may_nil) snprintf(nil_ok, sizeof nil_ok, " && %s.tag != SP_TAG_NIL", ex);
+      buf_printf(b, "  if (!%s%s) sp_raise_cls(\"TypeError\", "
+                    "sp_sprintf(\"no implicit conversion of %%s into %s\", sp_poly_class_name(%s)));\n",
+                 nm, nil_ok, what, ex);
+    }
+  }
+  /* the call */
+  Buf call; memset(&call, 0, sizeof call);
+  buf_printf(&call, "%s(", mc_method(c, sc));
+  const char *sep = "";
+  if (sc->is_cmethod) {
+    /* a class method a subclass may call takes the class it was called on */
+    if (cmethod_takes_self_cls(c, s)) { buf_puts(&call, "(sp_Class){ self.cls_id, 0 }"); sep = ", "; }
+  }
+  else {
+    if (def != ci && !vt) buf_printf(&call, "(%s *)", class_ctype(c, def));
+    buf_puts(&call, "_self");
+    sep = ", ";
+  }
+  for (int p = 0; p < sc->nparams; p++) { buf_printf(&call, "%s_a%d", sep, p); sep = ", "; }
+  buf_puts(&call, ")");
+  if (method_is_void(sc)) buf_printf(b, "  %s;\n  return sp_box_nil();\n}\n", call.p);
+  else if (method_ret_is_oint(sc))
+    buf_printf(b, "  return %s(%s);\n}\n", oint_box(sc->ret), call.p);
+  else if (sc->ret == TY_POLY) buf_printf(b, "  return %s;\n}\n", call.p);   /* boxed already */
+  else {
+    /* an object (with the id of its own class when a subclass's instance
+       can come back), an array of objects, or a builtin kind, boxed as a
+       field of the kind is */
+    buf_puts(b, "  return ");
+    emit_boxed_text(c, sc->ret, call.p, b);
+    buf_puts(b, ";\n}\n");
+  }
+  free(call.p);
+}
+/* The method tables of the --ext-class classes, and the two functions of
+   the contract that read them: sp_ext_methods (the table of a class id)
+   and sp_ext_send (a call by name). Each table holds the methods the
+   class answers, its own and the inherited ones, each row naming the
+   class that defines it, so a host lists them per class as CRuby does. */
+/* Whether the table of class ci has a row of the name already: a def wins
+   over an attr of the same name, and the nearest attr over an ancestor's. */
+static int ext_name_taken(const char **names, int n, const char *name) {
+  for (int i = 0; i < n; i++) if (sp_streq(names[i], name)) return 1;
+  return 0;
+}
+/* The attr readers and writers of class ci and its ancestors, as rows of
+   the table: a reader's thunk reads the ivar by its name as a computed
+   instance_variable_get does, boxed as the literal read boxes the field; a
+   writer's stores the argument the same way and answers it. */
+static void ext_emit_attr_rows(Compiler *c, int ci, const char ***names, int *nn, int *cap, Buf *thunks, Buf *rows) {
+  if (comp_ty_value_obj(c, ty_object(ci))) return;   /* a by-value object has no pointer to read through */
+  for (int k = ci; k >= 0; k = c->classes[k].parent) {
+    ClassInfo *ki = &c->classes[k];
+    for (int w = 0; w < 2; w++) {
+      char **list = w ? ki->writers : ki->readers;
+      int n = w ? ki->nwriters : ki->nreaders;
+      for (int i = 0; i < n; i++) {
+        char mname[300], ivar[300];
+        snprintf(mname, sizeof mname, w ? "%s=" : "%s", list[i]);
+        snprintf(ivar, sizeof ivar, "@%s", list[i]);
+        if (ext_name_taken(*names, *nn, mname)) continue;
+        if (comp_method_in_chain(c, ci, mname, NULL) >= 0) continue;   /* a def of the name, exported or not */
+        if (comp_method_vis_in_chain(c, ci, mname) != SP_VIS_PUBLIC) continue;
+        if (*nn == *cap) { *cap = *cap ? *cap * 2 : 16; *names = realloc(*names, sizeof **names * (size_t)*cap); }
+        (*names)[(*nn)++] = strdup(mname);
+        /* a subclass lists the attrs it inherits too: the owner is the
+           highest ancestor that lists the name */
+        int owner = k;
+        for (int a = c->classes[k].parent; a >= 0; a = c->classes[a].parent) {
+          ClassInfo *ai = &c->classes[a];
+          char **al = w ? ai->writers : ai->readers;
+          int an = w ? ai->nwriters : ai->nreaders, found = 0;
+          for (int j = 0; j < an && !found; j++) found = sp_streq(al[j], list[i]);
+          if (!found) break;
+          owner = a;
+        }
+        buf_printf(thunks, "static sp_RbVal sp_extm_%c_%d_%d_%d(sp_RbVal self, int argc, const sp_RbVal *argv) {\n"
+                           "  (void)argc; (void)argv;\n  %s *_self = ", w ? 'w' : 'r', ci, k, i, class_ctype(c, ci));
+        emit_unbox_text(c, ty_object(ci), "self", thunks);
+        buf_printf(thunks, ";\n  sp_sym _sy = sp_sym_intern(\"%s\");\n", ivar);
+        if (w) {
+          buf_puts(thunks, "  ");
+          emit_ivar_set_by_name(c, ci, "_self", "_sy", "argv[0]", "self", thunks);
+          buf_puts(thunks, "\n  return argv[0];\n}\n");
+        }
+        else {
+          buf_puts(thunks, "  sp_RbVal _out = sp_box_nil();\n  ");
+          emit_ivar_get_by_name(c, ci, "_self->", "_sy", "_out", "self", thunks);
+          buf_puts(thunks, "\n  return _out;\n}\n");
+        }
+        buf_puts(rows, "  { ");
+        emit_str_literal(rows, mname);
+        buf_printf(rows, ", %d, %d, 0, sp_extm_%c_%d_%d_%d },\n", w, owner, w ? 'w' : 'r', ci, k, i);
+      }
+    }
+  }
+}
+static void ext_emit_method_tables(Compiler *c, Buf *b) {
+  if (!g_ext_classes || !*g_ext_classes) return;
+  ext_emit_method_typedef(b);
+  for (int ci = 0; ci < c->nclasses; ci++) {
+    if (!ext_class_exported(c, ci)) continue;
+    const char **names = NULL;
+    int nn = 0, cap = 0;
+    Buf rows; memset(&rows, 0, sizeof rows);
+    for (int s = 1; s < c->nscopes; s++) {
+      if (!ext_method_exported(c, ci, s, 1)) continue;
+      Scope *sc = &c->scopes[s];
+      ext_emit_method_thunk(c, ci, s, b);
+      int def = -1;
+      if (sc->is_cmethod) comp_cmethod_in_chain(c, ci, sc->name, &def);
+      else comp_method_in_chain(c, ci, sc->name, &def);
+      buf_puts(&rows, "  { ");
+      emit_str_literal(&rows, sc->name);
+      buf_printf(&rows, ", %d, %d, %d, sp_extm_%d_%d },\n", sc->nparams, def < 0 ? ci : def, sc->is_cmethod ? 1 : 0, ci, s);
+      if (sc->is_cmethod) continue;   /* an attr shares no name with an instance method */
+      if (nn == cap) { cap = cap ? cap * 2 : 16; names = realloc(names, sizeof *names * (size_t)cap); }
+      names[nn++] = strdup(sc->name);
+    }
+    if (!comp_class_is_module(c, &c->classes[ci])) ext_emit_attr_rows(c, ci, &names, &nn, &cap, b, &rows);
+    buf_printf(b, "static const sp_ext_method sp_extm_tab_%d[] = {\n%s  { 0, 0, 0, 0, 0 }\n};\n", ci, rows.p ? rows.p : "");
+    for (int i = 0; i < nn; i++) free((char *)names[i]);
+    free(names);
+    free(rows.p);
+  }
+  buf_puts(b, "const sp_ext_method *sp_ext_methods(int cls_id) {\n  switch (cls_id) {\n");
+  for (int ci = 0; ci < c->nclasses; ci++)
+    if (ext_class_exported(c, ci)) buf_printf(b, "  case %d: return sp_extm_tab_%d;\n", ci, ci);
+  buf_puts(b, "  default: return 0;\n  }\n}\n"
+              "int sp_ext_send(sp_RbVal recv, const char *name, int argc, const sp_RbVal *argv, sp_RbVal *out) {\n"
+              "  /* a class value calls a singleton method, an object an instance method */\n"
+              "  int singleton = recv.tag == SP_TAG_CLASS;\n"
+              "  if (singleton ? recv.cls_id == SP_CLASS_BY_NAME : (recv.tag != SP_TAG_OBJ || !recv.v.p)) return 0;\n"
+              "  const sp_ext_method *m = sp_ext_methods((int)recv.cls_id);\n"
+              "  if (!m) return 0;\n"
+              "  for (; m->name; m++) {\n"
+              "    if (m->singleton != singleton || strcmp(m->name, name)) continue;\n"
+              "    if (argc != m->argc) sp_raise_arity(argc, m->argc, m->argc, 0);\n"
+              "    *out = m->fn(recv, argc, argv);\n"
+              "    return 1;\n"
+              "  }\n"
+              "  return 0;\n}\n");
+}
+
 static int exc_text_method(Compiler *c, int i, int want_message, int *dcls) {
   int dmsg = -1, dtos = -1;
   int mi_msg = comp_method_in_chain(c, i, "message", &dmsg);
@@ -22992,6 +23248,8 @@ static int emit_toplevel_fns(Compiler *c, Buf *body) {
       if (!g_no_root_frame) gc_frame_build(c, body, end_frame_ins, decide_node_site(c->nt, tbody[k]));
     }
   }
+  /* the method tables of --ext-class follow the functions of the program */
+  ext_emit_method_tables(c, body);
   return end_count;
 }
 
@@ -23940,6 +24198,7 @@ char *codegen_program(const NodeTable *nt) {
       emit_method_signature(c, &c->scopes[s9], &hb);
       buf_puts(&hb, ";\n");
     }
+    if (g_ext_classes && *g_ext_classes) ext_emit_contract_decls(&hb);
     buf_puts(&hb, "\n#endif\n");
     free(g_ext_header_text);
     g_ext_header_text = hb.p;

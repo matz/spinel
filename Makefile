@@ -1746,6 +1746,24 @@ ext-test: $(SPINEL) $(SP_RT_LIB) $(SP_RT_MT_LIB) $(SPINEL_TIMEOUT)
 	      { echo "ext-test: FAIL (late_new host output mismatch, or status $$rc)"; cat "$$tmp/out"; ok=0; }; \
 	  else echo "ext-test: FAIL (late_new host C did not compile)"; sed -n 1,6p "$$tmp/cc.err"; ok=0; fi; \
 	fi; \
+	if [ $$ok -eq 1 ]; then \
+	  if ! $(SPINEL) test/ext/methods.rb -c --no-line-map --ext-init Init_ext_methods \
+	      --ext-entry ExtMethods.make,ExtMethods.loud --ext-class all -o "$$tmp/m.c" >/dev/null 2>&1; then \
+	    echo "ext-test: FAIL (--ext-class emission)"; ok=0; \
+	  elif $(CC) -O1 -w -Ilib -I"$$tmp" test/ext/methods_host.c "$$tmp/m.c" $(SP_RT_LIB) $(LDFLAGS) -lm -o "$$tmp/mhost" 2>"$$tmp/cc.err"; then \
+	    "$$tmp/mhost" > "$$tmp/out" 2>&1; rc=$$?; \
+	    cmp -s "$$tmp/out" test/ext/expected_methods && [ $$rc -eq 0 ] || { echo "ext-test: FAIL (--ext-class host output mismatch, or status $$rc)"; diff -u test/ext/expected_methods "$$tmp/out" || true; ok=0; }; \
+	  else echo "ext-test: FAIL (--ext-class host C did not compile)"; sed -n 1,6p "$$tmp/cc.err"; ok=0; fi; \
+	fi; \
+	if [ $$ok -eq 1 ]; then \
+	  if ! $(SPINEL) test/ext/methods_sub.rb -c --no-line-map --ext-init Init_ext_methods_sub \
+	      --ext-entry ExtSub.make --ext-class ExtSub::Sub -o "$$tmp/m.c" >/dev/null 2>&1; then \
+	    echo "ext-test: FAIL (--ext-class subclass emission)"; ok=0; \
+	  elif $(CC) -O1 -w -Ilib -I"$$tmp" test/ext/methods_sub_host.c "$$tmp/m.c" $(SP_RT_LIB) $(LDFLAGS) -lm -o "$$tmp/mshost" 2>"$$tmp/cc.err"; then \
+	    "$$tmp/mshost" > "$$tmp/out" 2>&1; rc=$$?; \
+	    cmp -s "$$tmp/out" test/ext/expected_methods_sub && [ $$rc -eq 0 ] || { echo "ext-test: FAIL (--ext-class subclass host output mismatch, or status $$rc)"; diff -u test/ext/expected_methods_sub "$$tmp/out" || true; ok=0; }; \
+	  else echo "ext-test: FAIL (--ext-class subclass host C did not compile)"; sed -n 1,6p "$$tmp/cc.err"; ok=0; fi; \
+	fi; \
 	rm -rf "$$tmp"; \
 	if [ $$ok -eq 1 ]; then echo "ext-test: pass"; else exit 1; fi
 

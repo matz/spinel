@@ -6419,3 +6419,166 @@ int def_takes_forwarding(const NodeTable *nt, int def) {
   int kr = pn >= 0 ? nt_ref(nt, pn, "keyword_rest") : -1;
   return kr >= 0 && nt_kind(nt, kr) == NK_ForwardingParameterNode;
 }
+
+/* ---- --ext-class: the instance methods a host calls by name ----
+
+   A library (--ext-init) exports the module methods --ext-entry names in
+   their C signatures. A host that holds an object of the program (an entry
+   answered it) has no way to call the object's methods: every call the
+   program makes is a direct C call, and the poly dispatch of a boxed
+   receiver is a switch the call site owns. --ext-class names the classes
+   whose public instance methods the library also exports in a table of
+   (name, arity, thunk), read by sp_ext_send and sp_ext_methods
+   (ext_emit_method_tables, codegen.c). */
+
+/* A kind a boxed value converts to and from: a builtin kind with a traits
+   row, an object of the program, or an array of such objects. */
+int ext_ty_crosses(TyKind t) {
+  return ty_traits_of(t) != NULL || ty_is_object(t) || ty_is_ptr_array(t);
+}
+
+/* A kind a thunk can check a host's argument against before it unboxes
+   it: a scalar the thunk checks itself (ext_thunk_scalar, truthiness), a
+   String whose value or handle sp_poly_arg_str_chk checks, a container
+   whose sp_poly_as_* answers NULL or raises for a value of another kind,
+   an object whose unbox checks the class, or a boxed value. The other
+   kinds (Range, Time, Symbol, Regexp, IO, ...) unbox by a plain cast, so
+   a method with such a parameter stays out of the table. */
+static int ext_param_ty_checked(TyKind t) {
+  switch (t) {
+  case TY_INT: case TY_FLOAT: case TY_BOOL: case TY_STRING: case TY_STRBUF: case TY_POLY:
+  case TY_INT_ARRAY: case TY_FLOAT_ARRAY: case TY_STR_ARRAY: case TY_POLY_ARRAY:
+  case TY_INT_ARRAY_ARRAY: case TY_FLOAT_ARRAY_ARRAY:
+  case TY_SYM_POLY_HASH: case TY_STR_POLY_HASH: case TY_POLY_POLY_HASH:
+    return 1;
+  default:
+    return ty_is_object(t) || ty_is_ptr_array(t);
+  }
+}
+
+/* Whether the list names class_id: a class or module of the program (not
+   a reopened builtin, not a package's native class). A module exports its
+   singleton methods only. */
+/* Whether the list names a class of that name: as written (`Sub`), or as
+   the last name of a path (`ExtSub::Sub`); `all` names every class. */
+static int ext_name_listed(const char *name) {
+  if (!g_ext_classes || !*g_ext_classes || !name) return 0;
+  if (sp_streq(g_ext_classes, "all")) return 1;
+  size_t n = strlen(name);
+  for (const char *p = g_ext_classes; *p; ) {
+    const char *e = strchr(p, ',');
+    size_t len = e ? (size_t)(e - p) : strlen(p);
+    if (len == n && !strncmp(p, name, n)) return 1;
+    if (len > n + 2 && !strncmp(p + len - n, name, n) && p[len - n - 1] == ':' && p[len - n - 2] == ':') return 1;
+    if (!e) break;
+    p = e + 1;
+  }
+  return 0;
+}
+
+int ext_class_exported(Compiler *c, int class_id) {
+  if (!g_ext_classes || !*g_ext_classes || class_id < 0 || class_id >= c->nclasses) return 0;
+  ClassInfo *ci = &c->classes[class_id];
+  if (!ci->name || is_builtin_reopen(ci->name) || ci->is_native_class) return 0;
+  return ext_name_listed(ci->name);
+}
+
+/* Whether scope si is the method the chain of class_id answers for its
+   name, public there, and of a shape the thunk can call: fixed positional
+   parameters (no optional, rest, keyword or block parameter, no yield),
+   and, when `typed` (after inference; the roots are marked before it),
+   each of a kind that crosses, and a result that crosses or is none. */
+/* Whether the method of scope si has a shape the thunk calls, seen from
+   class_id (the class it is answered for): public there, not initialize,
+   fixed positional parameters (no optional, rest, keyword or block
+   parameter, no yield). */
+static int ext_method_shape(Compiler *c, int class_id, int si) {
+  if (si <= 0 || si >= c->nscopes || class_id < 0 || class_id >= c->nclasses) return 0;
+  Scope *sc = &c->scopes[si];
+  if (!sc->name || sc->class_id < 0 || is_initialize_name(sc->name)) return 0;
+  if (sc->replaced || sc->entry != ENTRY_NONE) return 0;
+  if (sc->is_cmethod) {
+    int at = -1;
+    if (comp_cmethod_vis_declared(c, class_id, sc->name, &at) != SP_VIS_PUBLIC) return 0;
+  }
+  else {
+    if (comp_class_is_module(c, &c->classes[class_id])) return 0;   /* no instance */
+    if (comp_method_vis_in_chain(c, class_id, sc->name) != SP_VIS_PUBLIC) return 0;
+  }
+  if (sc->rest_idx >= 0 || sc->kwrest_idx >= 0 || sc->nrequired != sc->nparams || sc->ps_nkw > 0 ||
+      (sc->blk_param && sc->blk_param[0]) || sc->yields)
+    return 0;
+  /* a default before a required parameter (`def f(x = 1, y)`) keeps
+     nrequired at nparams: the defaults themselves say */
+  for (int p = 0; sc->pdefault && p < sc->nparams; p++)
+    if (sc->pdefault[p] >= 0) return 0;
+  return 1;
+}
+
+int ext_method_exported(Compiler *c, int class_id, int si, int typed) {
+  if (!ext_method_shape(c, class_id, si)) return 0;
+  Scope *sc = &c->scopes[si];
+  /* the one the class (or module) answers by name: its own, or an ancestor's */
+  if (sc->is_cmethod ? comp_cmethod_in_chain(c, class_id, sc->name, NULL) != si
+                     : comp_method_in_chain(c, class_id, sc->name, NULL) != si)
+    return 0;
+  if (!typed) return 1;
+  for (int p = 0; p < sc->nparams; p++) {
+    LocalVar *lv = scope_local(sc, sc->pnames[p]);
+    if (!lv || !ext_param_ty_checked(lv->type)) return 0;
+  }
+  if (sc->ret != TY_VOID && sc->ret != TY_NIL && !ext_ty_crosses(sc->ret)) return 0;
+  return 1;
+}
+
+/* The last name of a constant reference (`Base`, `ExtSub::Base`); NULL for
+   another expression. */
+static const char *ext_const_leaf(const NodeTable *nt, int id) {
+  if (id < 0) return NULL;
+  NodeKind k = nt_kind(nt, id);
+  return k == NK_ConstantReadNode || k == NK_ConstantPathNode ? nt_str(nt, id, "name") : NULL;
+}
+
+/* The class definition of the source whose constant name is `name`; -1
+   for none. */
+static int ext_class_def_named(const NodeTable *nt, const char *name) {
+  int found = -1;
+  NT_FOREACH_KIND(nt, NK_ClassNode, d) {
+    const char *cn = found < 0 ? class_def_name(nt, d) : NULL;
+    if (cn && sp_streq(cn, name)) found = d;
+  }
+  return found;
+}
+
+/* Whether the source defines a class the list names under a class named
+   `name`: by the superclass names the definitions write, since the classes
+   defined after the method asked about are not in the table yet when a
+   define_method in its body is elaborated. */
+static int ext_listed_descendant(Compiler *c, const char *name) {
+  const NodeTable *nt = c->nt;
+  int found = 0;
+  NT_FOREACH_KIND(nt, NK_ClassNode, d) {
+    const char *cn = found ? NULL : class_def_name(nt, d);
+    if (!cn || sp_streq(cn, name) || !ext_name_listed(cn)) continue;
+    const char *sup = ext_const_leaf(nt, class_def_super(nt, d));
+    for (int h = 0; sup && !found && h < 64; h++) {
+      if (sp_streq(sup, name)) found = 1;
+      else {
+        int next = ext_class_def_named(nt, sup);
+        sup = next >= 0 ? ext_const_leaf(nt, class_def_super(nt, next)) : NULL;
+      }
+    }
+  }
+  return found;
+}
+
+/* Whether a host can call the method of scope si by name, so that it runs
+   though nothing in the program names it: its shape is one the thunk
+   calls, and the list names its class or a class under it. */
+int ext_scope_host_callable(Compiler *c, int si) {
+  if (!g_ext_classes || !*g_ext_classes || si <= 0 || si >= c->nscopes) return 0;
+  Scope *sc = &c->scopes[si];
+  if (sc->class_id < 0 || !ext_method_shape(c, sc->class_id, si)) return 0;
+  if (ext_class_exported(c, sc->class_id)) return 1;
+  return c->classes[sc->class_id].name && ext_listed_descendant(c, c->classes[sc->class_id].name);
+}

@@ -7040,11 +7040,15 @@ static int iter_enum_poly_walk_arms(Compiler *c, int id, Buf *b, int indent, con
     /* an Integer or Float array the loop's region caches (hc_iter_begin)
        is walked through that header, as a while loop's reads are: its
        length and its elements below the nil-free length, the rest by the
-       accessor as before */
+       accessor as before. A String or object array (or a table) has no
+       nil-free length (hc_ptr_array, hp): every element below the held
+       length is read where the header holds it. */
     char hd[48] = "", hl[48], hw[48], hr[48];
+    int hp = 0;
     if (!rev && (rt == TY_INT_ARRAY || rt == TY_FLOAT_ARRAY) &&
         hc_array(c, recv, rt == TY_FLOAT_ARRAY, hd, hl, hw, sizeof hd))
       hc_read_len(hd, hr, sizeof hr);
+    else if (!rev && hc_ptr_array(c, recv, hd, hl, sizeof hd)) hp = 1;
     emit_indent(b, indent);
     if (rev) buf_printf(b, "for (sp_int _t%d = _t%d - 1; _t%d >= 0; _t%d--) {\n", t, tn, t, t);
     else if (hd[0]) buf_printf(b, "for (sp_int _t%d = 0; _t%d < %s; _t%d++) {\n", t, t, hl, t);
@@ -7134,10 +7138,13 @@ static int iter_enum_poly_walk_arms(Compiler *c, int id, Buf *b, int indent, con
         int o0 = (sp_streq(k, "Int") || sp_streq(k, "Float")) && block_param_slot_is_oint(c, block, 0);
         /* an oint slot reads the element with its nil (oget) */
         /* (one representation: the element into a slot of either face, SP_STR_TO) */
-        if (sp_streq(k, "Str")) {
+        if (sp_streq(k, "Str") && hp)
+          buf_printf(b, "lv_%s = SP_STR_TO(lv_%s, SP_SEB((sp_strelem)%s[_t%d]));\n", p0, p0, hd, t);
+        else if (sp_streq(k, "Str")) {
           buf_printf(b, "lv_%s = SP_STR_TO(lv_%s, sp_StrArray_get(", p0, p0);
           buf_puts(b, rb.p); buf_printf(b, ", _t%d));\n", t);
         }
+        else if (hp) buf_printf(b, "lv_%s = %s[_t%d];\n", p0, hd, t);
         else if (hd[0] && !o0)
           buf_printf(b, "lv_%s = SP_LIKELY((unsigned long long)_t%d < (unsigned long long)%s) ? %s[_t%d] : sp_%sArray_get(%s, _t%d);\n",
                      p0, t, hr, hd, t, k, rb.p, t);

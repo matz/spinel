@@ -12042,7 +12042,9 @@ static int subtree_changes_local_syn(Compiler *c, int root, const char *name) {
    slow path -- a call the C compiler cannot see into -- so in a loop it reads
    each array's data, start and length again at every access. A split-search
    loop (`counts[b] += 1; sums[b] += vals[i]` over a byte buffer) spent a third
-   of its time on those reloads.
+   of its time on those reloads. An Array of objects', a table's or an Array
+   of Strings' accessors have no slow path, but the loop's poll does, so
+   their data and length are read again at every pass too (HC_PTR).
 
    In a loop whose body runs no code, the headers of the arrays it indexes are
    read into C locals before the loop, and each access tests the index against
@@ -12052,15 +12054,15 @@ static int subtree_changes_local_syn(Compiler *c, int root, const char *name) {
    two names can denote one), and a safepoint, where another thread runs.
 
    A loop qualifies when every node in it is one this can see through: reads,
-   writes to locals and ivars, scalar arithmetic, typed-array reads and element
-   writes, `getbyte`, `length`/`size`, plain field reads, the pure scalar
-   methods and Math functions, class tests and `!` on a scalar, and control
-   flow (a `return` only leaves the loop; through an ensure it is a goto to
-   the ensure, outside the loop), a nested while (which takes this loop's
-   headers). A call to anything else, a block, another kind of loop or a rescue leaves
-   the loop as it was. An array is cached when it is read through a local, an
-   ivar, or a field read of a local, where the loop assigns neither the local
-   nor the ivar.
+   writes to locals and ivars, scalar arithmetic, typed-array reads (an Array
+   of objects' too) and element writes, `getbyte`, `length`/`size`/`bytesize`,
+   plain field reads, the pure scalar methods and Math functions, class tests
+   and `!` on a scalar, and control flow (a `return` only leaves the loop;
+   through an ensure it is a goto to the ensure, outside the loop), a nested
+   while (which takes this loop's headers). A call to anything else, a block,
+   another kind of loop or a rescue leaves the loop as it was. An array is
+   cached when it is read through a local, an ivar, or a field read of a
+   local, where the loop assigns neither the local nor the ivar.
 
    An IO::Buffer is cached the same way: its literal-typed `get_value` reads,
    `set_value` writes and its `size` run no code and move no buffer, so the
@@ -12071,7 +12073,7 @@ static int subtree_changes_local_syn(Compiler *c, int root, const char *name) {
    loop uncached; a finalizer or a trap handler runs only at a poll, after
    which the cache is read again. Another thread's free in parallel is a data
    race, as it is for an Array (docs/thread.md). */
-enum { HC_INT, HC_FLOAT, HC_STR, HC_IOB };
+enum { HC_INT, HC_FLOAT, HC_STR, HC_IOB, HC_PTR };
 /* recv: the array's text, on the heap (a field read of a long-named local
    is as long as its names: no length decides whether a loop is cached) */
 typedef struct { char *recv; int kind; int nf; Buf guard; } HcEntry;   /* nf: hc_array_nilfree asked;
@@ -12360,12 +12362,14 @@ static int hc_call_ok(Compiler *c, int id, int stmt) {
     return 1;
   TyKind rt = recv >= 0 ? comp_ntype(c, recv) : TY_UNKNOWN;
   int ix_ok = ac >= 1 && (comp_ntype(c, av[0]) == TY_INT || hc_promoted_int(c, av[0]));
-  if (sp_streq(nm, "[]") && ac == 1 && ty_is_array(rt) && ix_ok) return 1;
+  /* (an Array of objects reads its element inline too, running no code) */
+  if (sp_streq(nm, "[]") && ac == 1 && (ty_is_array(rt) || ty_is_obj_array(rt)) && ix_ok) return 1;
   if (sp_streq(nm, "[]=") && ac == 2 && stmt && (rt == TY_INT_ARRAY || rt == TY_FLOAT_ARRAY) && ix_ok &&
       (comp_ntype(c, av[1]) == ty_array_elem(rt) || (rt == TY_INT_ARRAY && hc_promoted_int(c, av[1])))) return 1;
   if (sp_streq(nm, "getbyte") && ac == 1 && rt == TY_STRING && comp_ntype(c, av[0]) == TY_INT) return 1;
-  if (is_len_alias(nm) && ac == 0 && (ty_is_array(rt) || rt == TY_STRING))
+  if (is_len_alias(nm) && ac == 0 && (ty_is_array(rt) || ty_is_obj_array(rt) || rt == TY_STRING))
     return 1;
+  if (sp_streq(nm, "bytesize") && ac == 0 && rt == TY_STRING) return 1;
   if (hc_iob_read(c, id) || hc_iob_write(c, id) ||
       (ac == 0 && sp_streq(nm, "size") && hc_iob_binding(c, rt, nm, 0))) return 1;
   int alloc = 0;
@@ -12400,7 +12404,7 @@ static int hc_node_ok(Compiler *c, int id, int stmt, HcRegion *r);
 /* An Integer block loop the header cache covers as it does a while:
    `n.times { }`, `a.upto(b) { }` / downto, `n.step(...) { }`, an Integer
    Range's `each { }` -- each a plain C `for` around the block's body --
-   an Integer or Float Array's `each { }`, which walks its own receiver
+   an Integer, Float, String or object Array's (or a table's) `each { }`, which walks its own receiver
    through the cache too (emit_iteration_stmt_body), and an Array's
    `each_index { }` (emit_typed_array_call) */
 static int hc_block_loop(Compiler *c, int id) {
@@ -12412,7 +12416,8 @@ static int hc_block_loop(Compiler *c, int id) {
   TyKind rt = comp_ntype(c, recv);
   if (rt == TY_INT && (sp_streq(nm, "times") || sp_streq(nm, "upto") || sp_streq(nm, "downto") || sp_streq(nm, "step")))
     return 1;
-  if ((rt == TY_INT_ARRAY || rt == TY_FLOAT_ARRAY) && sp_streq(nm, "each")) return 1;
+  if ((rt == TY_INT_ARRAY || rt == TY_FLOAT_ARRAY || rt == TY_STR_ARRAY || ty_is_ptr_array(rt)) &&
+      sp_streq(nm, "each")) return 1;
   if (ty_is_array(rt) && sp_streq(nm, "each_index")) return 1;
   return rt == TY_RANGE && sp_streq(nm, "each");
 }
@@ -12601,6 +12606,19 @@ int hc_array(Compiler *c, int recv, int is_float, char *d, char *l, char *w, siz
   snprintf(d, cap, "_hcd%d_%d", g_hc->id, e);
   snprintf(l, cap, "_hcl%d_%d", g_hc->id, e);
   snprintf(w, cap, "_hcw%d_%d", g_hc->id, e);
+  return 1;
+}
+
+/* An Array of objects, a table of rows (ty_is_ptr_array) or an Array of
+   Strings, whose elements are pointers (a nil is a NULL, with no bit beside
+   it, so no nil-free length): its elements (_hcd) and length (_hcl) */
+int hc_ptr_array(Compiler *c, int recv, char *d, char *l, size_t cap) {
+  TyKind t = recv >= 0 ? comp_ntype(c, recv) : TY_UNKNOWN;
+  if (!ty_is_ptr_array(t) && t != TY_STR_ARRAY) return 0;
+  int e = hc_entry(c, recv, HC_PTR);
+  if (e < 0) return 0;
+  snprintf(d, cap, "_hcd%d_%d", g_hc->id, e);
+  snprintf(l, cap, "_hcl%d_%d", g_hc->id, e);
   return 1;
 }
 
@@ -12796,7 +12814,8 @@ static void hc_bounded_index(Compiler *c, int prev, int pred, int body, HcRegion
       nt_kind(nt, av) != NK_LocalVariableReadNode) return;
   const char *an = nt_str(nt, av, "name");
   TyKind at = comp_ntype(c, av);
-  if (!an || (at != TY_INT_ARRAY && at != TY_FLOAT_ARRAY) || nameset_has(&r->wl, an)) return;
+  if (!an || (at != TY_INT_ARRAY && at != TY_FLOAT_ARRAY && at != TY_STR_ARRAY && !ty_is_ptr_array(at)) ||
+      nameset_has(&r->wl, an)) return;
   /* i = <literal >= 0>, the statement just ahead of the loop */
   if (nt_kind(nt, prev) != NK_LocalVariableWriteNode || !nt_str(nt, prev, "name") ||
       !sp_streq(nt_str(nt, prev, "name"), in)) return;
@@ -12942,7 +12961,8 @@ static int hc_bounded_cond(Compiler *c, int pred, Buf *out) {
   const int *pav = nt_arr(nt, pa, "arguments", &pac);
   int av = nt_ref(nt, pav[0], "receiver");
   char hd[64], hl[64], hw[64];
-  if (!hc_array(c, av, comp_ntype(c, av) == TY_FLOAT_ARRAY, hd, hl, hw, sizeof hd)) return 0;
+  if (!hc_ptr_array(c, av, hd, hl, sizeof hd) &&
+      !hc_array(c, av, comp_ntype(c, av) == TY_FLOAT_ARRAY, hd, hl, hw, sizeof hd)) return 0;
   buf_puts(out, "(");
   emit_expr(c, nt_ref(nt, pred, "receiver"), out);
   buf_printf(out, " < %s)", hl);
@@ -12976,7 +12996,7 @@ static void hc_close(HcRegion *r, const char *loop, Buf *b, int indent) {
     emit_indent(b, indent); buf_puts(b, "{\n");
     for (int i = 0; i < r->n; i++) {
       const char *et = r->e[i].kind == HC_INT ? "sp_int" : r->e[i].kind == HC_FLOAT ? "sp_float" :
-                       r->e[i].kind == HC_IOB ? "uint8_t" : "const char";
+                       r->e[i].kind == HC_IOB ? "uint8_t" : r->e[i].kind == HC_PTR ? "void *" : "const char";
       emit_indent(b, indent + 1);
       buf_printf(b, "%s *_hcd%d_%d; sp_int _hcl%d_%d;", et, r->id, i, r->id, i);
       /* _hcr: the nil-free length, below the array's lowest possible nil
@@ -13002,6 +13022,9 @@ static void hc_close(HcRegion *r, const char *loop, Buf *b, int indent) {
       if (r->e[i].kind == HC_STR)
         buf_printf(&rd, "{ const char *_s = %s; _hcd%d_%d = _s; _hcl%d_%d = _s ? (sp_int)sp_str_byte_len(_s) : 0; } ",
                    rv, r->id, i, r->id, i);
+      else if (r->e[i].kind == HC_PTR)
+        buf_printf(&rd, "{ __typeof__(%s) _a = %s; _hcd%d_%d = _a ? (void **)_a->data : NULL; _hcl%d_%d = _a ? _a->len : 0; } ",
+                   rv, rv, r->id, i, r->id, i);
       else if (r->e[i].kind == HC_IOB)
         buf_printf(&rd, "{ sp_IOBuffer *_b = %s; _hcd%d_%d = sp_iob_view(_b, &_hcl%d_%d); _hcw%d_%d = sp_iob_view_wlen(_b, _hcl%d_%d); } ",
                    rv, r->id, i, r->id, i, r->id, i, r->id, i);

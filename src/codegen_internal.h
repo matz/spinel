@@ -726,6 +726,7 @@ int implicit_self_reader_cid(Compiler *c, int id);
    which the cached headers are read again ("" outside such a loop). */
 int hc_array(Compiler *c, int recv, int is_float, char *d, char *l, char *w, size_t cap);
 void hc_read_len(const char *hd, char *out, size_t cap);
+int hc_ptr_array(Compiler *c, int recv, char *d, char *l, size_t cap);
 int hc_index_in_range(Compiler *c, int recv, int idx);
 void *hc_iter_begin(Compiler *c, int id, Buf **bp);   /* an Integer block loop's header cache region */
 void hc_iter_end(void *h, Buf **bp, int indent, int keep);

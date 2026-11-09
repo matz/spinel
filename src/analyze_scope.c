@@ -3527,10 +3527,7 @@ static int sg_const_holds_class(Compiler *c, const char *name) {
     writes++;
   }
   if (writes) return 1;
-  static const char *const objs[] = { "ARGV", "ARGF", "ENV", "STDIN", "STDOUT", "STDERR",
-                                      "DATA", "TOPLEVEL_BINDING", NULL };
-  for (int i = 0; objs[i]; i++) if (sp_streq(name, objs[i])) return 0;
-  return strncmp(name, "RUBY_", 5) != 0;
+  return !is_runtime_const_name(name);
 }
 
 /* The innermost `def` whose body holds `id`, or -1 */

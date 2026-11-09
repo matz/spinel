@@ -17942,8 +17942,10 @@ static void oa_recv_use(Compiler *c, OAS *sl, int S, int id, int recv, const int
       for (int a = 0; a < argc; a++) sl[S].cls = oa_cls_join(sl[S].cls, oa_elem_evidence(c, sl, S, argv[a], read_slot));
       /* a `*splat` spreads elements the slot cannot see, and the
          object-array push takes each argument as one element: the slot
-         keeps the poly path, whose push spreads it */
-      if (nt_argv_has_splat(nt, argv, argc)) sl[S].alive = 0;
+         keeps the poly path, whose push spreads it. (Not `<<`: it takes
+         exactly one argument, and the poly path's `<<` spreads a splat
+         of two without the ArgumentError, so it keeps master's form.) */
+      if (!sp_streq(name, "<<") && nt_argv_has_splat(nt, argv, argc)) sl[S].alive = 0;
       /* an append answers the array: like a sort result it must land
          in a modeled consumer, or a chained `a.push(x).push(y)` pushes
          an element no slot sees */

@@ -1583,10 +1583,10 @@ spinel: 1 refusal, nothing written
 spinel: test/reject/runtime_condition_def_list_two_arms.rb:10: a method defined under a condition only the run time decides is not answered for by respond_to?, method_defined?, instance_methods and their kin (it would answer as if the branch had run); see docs/limitations.md
 spinel: 1 refusal, nothing written
 == test/reject/runtime_condition_def_module_includers.rb [default] rc=1
-spinel: test/reject/runtime_condition_def_module_includers.rb:11: a def under a condition only the run time decides, of a name another method answers (a builtin's, another def's or an accessor's), is not supported: which one answers when the branch did not run is not known at compile time; see docs/limitations.md
+spinel: test/reject/runtime_condition_def_module_includers.rb:8: a def under a condition only the run time decides, of a name another method answers (a builtin's, another def's or an accessor's), is not supported: which one answers when the branch did not run is not known at compile time; see docs/limitations.md
 spinel: 1 refusal, nothing written
 == test/reject/runtime_condition_def_module_includers.rb [promote] rc=1
-spinel: test/reject/runtime_condition_def_module_includers.rb:11: a def under a condition only the run time decides, of a name another method answers (a builtin's, another def's or an accessor's), is not supported: which one answers when the branch did not run is not known at compile time; see docs/limitations.md
+spinel: test/reject/runtime_condition_def_module_includers.rb:8: a def under a condition only the run time decides, of a name another method answers (a builtin's, another def's or an accessor's), is not supported: which one answers when the branch did not run is not known at compile time; see docs/limitations.md
 spinel: 1 refusal, nothing written
 == test/reject/runtime_condition_def_private_instance_methods.rb [default] rc=1
 spinel: test/reject/runtime_condition_def_private_instance_methods.rb:7: a method defined under a condition only the run time decides is not answered for by respond_to?, method_defined?, instance_methods and their kin (it would answer as if the branch had run); see docs/limitations.md

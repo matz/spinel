@@ -2707,7 +2707,8 @@ int emit_poly_defaults0(Compiler *c, int id, int recv, const char *name, const P
      blank. Route the fallthrough through the runtime poly converter. */
   if (!obj_default_done && (is_text_conversion(name))) {
     if (g_plan_check) pa_observe(PA_BUILTIN, PA_KEY_BUILTIN + PB_D_TO_S, -1, TY_UNKNOWN, PC_SAME);
-    const char *pfn = sp_streq(name, "to_s") ? "sp_poly_to_s" : "sp_poly_inspect";
+    /* (to_s as the program calls it: a Symbol's is a new String) */
+    const char *pfn = sp_streq(name, "to_s") ? "sp_poly_to_s_call" : "sp_poly_inspect";
     buf_printf(b, " default: _t%d = ", tr);
     if (ret == TY_STRBUF && repr_boxed_to_s_operand(c, id) >= 0) {
       /* (a String subclass instance's to_s is a new String, #9968) */

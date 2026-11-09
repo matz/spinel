@@ -16891,7 +16891,8 @@ static int emit_poly_call0_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
     for (int k = 0; k < c->nclasses; k++)
       if (comp_poly_arm_defines_n(c, k, name, argc)) { has_user_method = 1; break; }
     if (!has_user_method) {
-      buf_printf(b, "%s(", sp_streq(name, "to_s") ? "sp_poly_to_s" : "sp_poly_inspect");
+      /* (to_s as the program calls it: a Symbol's is a new String) */
+      buf_printf(b, "%s(", sp_streq(name, "to_s") ? "sp_poly_to_s_call" : "sp_poly_inspect");
       emit_expr(c, recv, b); buf_puts(b, ")"); { *out = 1; return 1; }
     }
   }

@@ -382,6 +382,24 @@ void sp_poly_puts(sp_RbVal v)
   }
 }
 
+/* Symbol#to_s and #id2name as a program calls them: a new String at each
+   call, as CRuby answers one, and frozen, as Spinel answers it (CRuby's is
+   chilled; docs/limitations.md). sp_sym_to_s_frozen is the one frozen copy
+   the runtime renders a Symbol with (puts, interpolation, inspect); two
+   calls answered that one object, so `s.to_s.equal?(s.to_s)` was true. */
+const char *sp_sym_to_s_new(sp_sym id)
+{
+  const char *nm = sp_sym_to_s_frozen(id);
+  return sp_str_freeze_val(sp_str_from_bytes(nm, sp_str_byte_len(nm)));
+}
+/* a boxed receiver's to_s as a program calls it: a Symbol's is a new
+   String (sp_sym_to_s_new), every other value's is sp_poly_to_s's */
+const char *sp_poly_to_s_call(sp_RbVal v)
+{
+  if (v.tag == SP_TAG_SYM) return sp_sym_to_s_new((sp_sym)v.v.i);
+  return sp_poly_to_s(v);
+}
+
 const char *sp_poly_to_s(sp_RbVal v)
 {
   switch (v.tag) {

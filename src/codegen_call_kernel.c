@@ -558,7 +558,7 @@ int emit_call_kernel_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, cons
       /* the frozen "true" / "false" true.to_s answers; a bare C literal here
          had no marker byte at all */
       else if (at == TY_BOOL) { buf_puts(b, "(("); emit_expr(c, av[0], b); buf_puts(b, ") ? sp_str_frozen_true : sp_str_frozen_false)"); }
-      else if (at == TY_SYMBOL) { buf_puts(b, "sp_sym_to_s_frozen("); emit_expr(c, av[0], b); buf_puts(b, ")"); }
+      else if (at == TY_SYMBOL) { buf_puts(b, "sp_sym_to_s_new("); emit_expr(c, av[0], b); buf_puts(b, ")"); }   /* String(sym) calls to_s: a new String */
       else if (at == TY_NIL || at == TY_UNKNOWN) { buf_puts(b, "sp_poly_to_s(sp_box_nil())"); }
       else if (ty_is_object(at) && emit_kconv_obj_nil(c, av[0], ty_object_class(at), "to_str", NULL, b)) {}
       /* Kernel#String asks for #to_str first, and only then #to_s (#3721) */

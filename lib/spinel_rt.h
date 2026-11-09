@@ -2047,6 +2047,10 @@ static inline int sp_is_exc_subclass_cls(sp_int cls_id) {
   return 0;
 }
 const char *sp_poly_to_s(sp_RbVal v);
+/* Symbol#to_s / #id2name and a boxed receiver's to_s as a program calls
+   them: a Symbol's is a new frozen String each call (lib/sp_poly_cold.c) */
+const char *sp_sym_to_s_new(sp_sym id);
+const char *sp_poly_to_s_call(sp_RbVal v);
 /* Unwrap a boxed IO value to its sp_File *. The user-#to_io dispatch
    asks this for a poly return type, because the generated arm is forced
    to box the answer through sp_RbVal (the codegen of a poly body has
@@ -3298,7 +3302,7 @@ static inline sp_RbVal sp_strbuf_to_s_box(sp_String *h) {
 static inline sp_RbVal sp_poly_to_s_box(sp_RbVal v) {
   if (sp_poly_is_str_subclass(v)) return sp_box_str_new(sp_str_dup(sp_String_cstr((sp_String *)v.v.p)));
   if ((v.tag == SP_TAG_STR && v.v.s) || (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_STRBUF && v.v.p)) return v;
-  return sp_box_str_new(sp_poly_to_s(v));
+  return sp_box_str_new(sp_poly_to_s_call(v));   /* (a Symbol's to_s is a new String) */
 }
 /* ...for a value stored where no handle is wanted for what is not a String
    (a Hash's value a block answers): a String answers its own box as
@@ -3307,7 +3311,7 @@ static inline sp_RbVal sp_poly_to_s_box(sp_RbVal v) {
 static inline sp_RbVal sp_poly_to_s_box_plain(sp_RbVal v) {
   if (sp_poly_is_str_subclass(v)) return sp_box_str(sp_str_dup(sp_String_cstr((sp_String *)v.v.p)));
   if ((v.tag == SP_TAG_STR && v.v.s) || (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_STRBUF && v.v.p)) return v;
-  return sp_box_str(sp_poly_to_s(v));
+  return sp_box_str(sp_poly_to_s_call(v));
 }
 /* A boxed value unboxed into a String slot. A mutable String's box carries
    its sp_String handle in the union, so reading `.v.s` there hands the slot
@@ -4311,7 +4315,7 @@ static SP_UNUSED sp_int sp_poly_cmp_ans(sp_RbVal r, sp_RbVal a, sp_RbVal b) {
    to_s answers it; a value of any other kind has no id2name. */
 static const char *sp_poly_sym_id2name(sp_RbVal v) {
   if (v.tag != SP_TAG_SYM) sp_raise_nomethod(sp_nomethod_msg("id2name", v));
-  return sp_sym_to_s_frozen((sp_sym)v.v.i);
+  return sp_sym_to_s_new((sp_sym)v.v.i);
 }
 static SP_UNUSED sp_RbVal sp_poly_nil_no_method(const char *m, sp_RbVal v) { sp_raise_nomethod(sp_nomethod_msg(m, v)); return sp_box_nil(); }
 /* The receiver of an operation on a String Array of handles that can be nil

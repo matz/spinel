@@ -2965,6 +2965,8 @@ int call_on_builtin_class_missing(Compiler *c, int id);
 int static_block_given_cond(Compiler *c, int pred);
 int static_nil_ivar_cond(Compiler *c, int pred);
 void emit_if(Compiler *c, int id, Buf *b, int indent, int is_unless, int tail);
+void emit_arm_cond(Compiler *c, int pred, int is_unless, Buf *b);
+void emit_ladder_arm_head(Compiler *c, int pred, int is_unless, Buf *b, int indent);
 int emit_poly_class_when(Compiler *c, int cond_id, const char *tmp, Buf *b);
 void emit_class_val_when(const char *cn, int t, Buf *b);
 void emit_pm_eq(Compiler *c, int t, TyKind pt, int valnode, Buf *b);

@@ -671,7 +671,7 @@ typedef struct {
   int ret_rbs_box_held; /* a box reached that container seed while the
                           fixpoint ran and the seed held: the settled types
                           decide (ret_seed_holds, an_settle_seed_boxes) */
-  int ret_elems_shared; /* --share-strings: that seed was Array[String], and the
+  int ret_elems_shared; /* that seed was Array[String], and the
                           Strings the method answers are shared, so the return
                           settled in its poly form, the boxes holding the
                           handles (share_default_apply); the same Ruby type in its
@@ -828,7 +828,7 @@ typedef struct {
   unsigned char *ivar_str_shared; /* (#3227) the slot is a shared-mutable
                                      string handle (sp_String *): survives
                                      re-clears; post-fixpoint reasserts it */
-  unsigned char *ivar_elems_shared; /* --share-strings: the TY_POLY_ARRAY slot
+  unsigned char *ivar_elems_shared; /* the TY_POLY_ARRAY slot
                                        holds its Strings as handles */
   unsigned char *ivar_nullable_int; /* the slot holds a nilable scalar: some
                                      write to it can leave nil (its nil byte),

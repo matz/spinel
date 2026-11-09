@@ -79,8 +79,8 @@ typedef struct {
   unsigned discarded:1;   /* emitted where its value is thrown away
                              (VR_DISCARDED, a view around the emission) */
   unsigned big:1;         /* an Integer held as an sp_Bigint * */
-  unsigned elems_handle:1; /* a container slot whose String elements are
-                              boxed shared handles (--share-strings) */
+  unsigned elems_handle:1; /* an ivar's container slot whose String elements are
+                              boxed shared handles (set only by repr_of_ivar) */
   unsigned share:1;       /* the shared String handle the --share-strings rule
                              assigned (#6765): a slot that is the handle
                              (repr_of_slot, repr_of_ivar, repr_of_cvar), or a

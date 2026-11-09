@@ -3199,20 +3199,10 @@ void emit_block_binds(Compiler *c, int blk, const int *yargs, int yc,
     buf_printf(b, "sp_PolyArray *_t%d = sp_PolyArray_new();%s", trest, as_expr ? " " : "\n");
     if (!as_expr) emit_indent(b, indent);
     buf_printf(b, "SP_GC_ROOT(_t%d);%s", trest, as_expr ? " " : "\n");
-    /* a rest whose elements are the rule's handles takes an ivar's handle
-       itself (a local's boxes as its handle already) */
-    LocalVar *rlv = bsc ? scope_local(bsc, brest) : NULL;
-    int rest_handles = repr_of_slot(c, rlv).elems_handle;
     for (int j = P + ot_static; j < yc - Q; j++) {
       if (!as_expr) emit_indent(b, indent);
       buf_printf(b, "sp_PolyArray_push(_t%d, ", trest);
-      int vt[2], nv = 0;
-      if (rest_handles && !c->strbuf_box[yargs[j]] && ivar_read_is_handle(c, yargs[j])) {
-        vt[nv++] = view_push_repr(c, yargs[j], VR_STRBUF_BOX, 1);
-        vt[nv++] = view_push(c, yargs[j], TY_STRBUF);
-      }
       emit_boxed(c, yargs[j], b);
-      while (nv > 0) view_pop(c, vt[--nv]);
       buf_puts(b, as_expr ? "); " : ");\n");
     }
     rest_tmp = trest;

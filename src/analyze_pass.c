@@ -1411,7 +1411,7 @@ void intern_block_params(Compiler *c) {
   }
 }
 
-/* --share-strings: is lv the shared handle a String of type t is held in?
+/* Is lv the shared handle a String of type t is held in?
    A pass that types the slot as that String leaves it so; resetting it each
    round, against share_default_apply setting it back, kept the fixpoint
    from settling. */
@@ -5342,7 +5342,7 @@ static void lv_keep_decisions(LocalVar *lv, int stashed) {
   if (stashed && !lv->is_param && !lv->is_block_param && !lv->rbs_seeded &&
       lv->type == TY_UNKNOWN && (TyKind)lv->gc_root != TY_UNKNOWN)
     lv_set_type(lv, (TyKind)lv->gc_root);
-  /* The shared-mutable / append-accumulator promotion is durable -- the mark
+  /* The shared-mutable promotion is durable -- the mark
      is, and analyze re-asserts the slot type from it after the fixpoint. Do it
      HERE too, before infer_write_types compares the slot with its stash: the
      reset wipes the promotion, the writes re-derive TY_STRING, and

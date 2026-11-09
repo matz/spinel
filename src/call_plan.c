@@ -1044,6 +1044,16 @@ static int ver_takes(Compiler *c, int s, int n) {
   for (int i = 0; i < kn; i++) if (nt_kind(nt, kw[i]) == NK_RequiredKeywordParameterNode) return 0;
   return n >= rn + qn && (nt_ref(nt, pn, "rest") >= 0 || n <= rn + qn + on);
 }
+/* Does a call of `name` that the table answers with method mi choose among
+   versions: mi's own (Scope.versioned), or, where the table reached mi
+   through an alias of `name`, the alias's own versions? Two aliases of one
+   name, one under a run-time condition, leave the table on the last one
+   made, which need not have run; the versions are the name's, not its
+   target's, whose scope holds one. */
+static int ct_versioned(Compiler *c, int mi, const char *name) {
+  const Scope *s = &c->scopes[mi];
+  return s->versioned || (name && s->name && !sp_streq(s->name, name) && elab_method_versions(c, name) > 1);
+}
 /* The parameters of the entry call id reaches whose arms call the methods
    to[0..nto): their required ones, when they all take that many and
    nothing else; else the call's plain positional arguments, when every
@@ -1675,6 +1685,25 @@ static int ct_capture_keeps_table(Compiler *c, int id, int cls, int sg, const ch
   int k = cplan_capture_names(c, id, cls, sg, name, entry);
   return k == CP_ABSENT_NONE || k == CP_ABSENT_UNTOLD;
 }
+/* The builtin class whose reopenings hold every version of `name` on
+   program class rcls's chain (instance side), where rcls is a program
+   class under it (`class Scalar < Numeric`): -1 for none. Its methods take
+   a boxed self, and rcls holds none of its own, so a call on rcls meets the
+   versions as the builtin's entry arms them (the table answered the
+   builtin's method there too); an entry made for rcls would hand its own
+   typed self to them. */
+static int ct_builtin_versions_holder(Compiler *c, int rcls, const char *name) {
+  ElabVersion vs[VER_MAX_ARMS];
+  if (rcls < 0 || rcls >= c->nclasses || c->classes[rcls].is_builtin_const) return -1;
+  int nv = elab_chain_versions(c, rcls, 0, name, vs, VER_MAX_ARMS), h = -1;
+  if (nv < 1) return -1;
+  for (int i = 0; i < nv; i++) {
+    int node = vs[i].v->node, k = node >= 0 && node < c->node_cap ? c->node_cbody[node] : -1;
+    if (k < 0 || (h >= 0 && k != h)) return -1;
+    h = k;
+  }
+  return h != rcls && c->classes[h].is_builtin_const && !is_object_base_name(c->classes[h].name) ? h : -1;
+}
 /* The version of `name` call id runs, when the method has more than one
    (#9898), or one the call may run before (elab_versions_late): a call at
    a load point gets the version live there; any other (a load point in a
@@ -1701,6 +1730,8 @@ static int ct_capture_keeps_table(Compiler *c, int id, int cls, int sg, const ch
 static int mixin_copies_module(Compiler *c, int mi, int *to, ElabVersion *vs, int *n);
 static int ct_version_at(Compiler *c, int id, int cls, const char *name, unsigned flags, int mi, MethodLookup *ml) {
   int sg = (flags & CT_CMETHOD) != 0, rcls = flags & CT_TOP ? -1 : cls, vi = -1, dc = -1, n = 0, first_def = 0, none = 0, body = 0, cl = 0;
+  /* (a program class under a reopened builtin that holds every version: the builtin's chain) */
+  { int bh = !sg && rcls >= 0 ? ct_builtin_versions_holder(c, rcls, name) : -1; if (bh >= 0) rcls = bh; }
   const LrDef *d = NULL, *ds[VER_MAX_ARMS];
   /* a call may meet the chain with no version made yet: the late bit of
      its histories, or a version a method body makes on the chain (its
@@ -2129,7 +2160,7 @@ static int ct_table(Compiler *c, int cls, const char *name, unsigned flags, int 
    table's, or for a name with versions the one call_target binds on pc's
    class (a version, an entry), which the dispatch's arm calls */
 int cplan_cand_target(Compiler *c, int id, const char *name, const PolyCand *pc, unsigned flags) {
-  int mi = pc->mi >= 0 && (c->scopes[pc->mi].versioned || c->scopes[pc->mi].mixin_guarded) ? call_target(c, id, pc->cls, name, flags, NULL) : -1;
+  int mi = pc->mi >= 0 && (ct_versioned(c, pc->mi, name) || c->scopes[pc->mi].mixin_guarded) ? call_target(c, id, pc->cls, name, flags, NULL) : -1;
   return mi >= 0 ? mi : pc->mi;
 }
 /* See call_plan.h. */
@@ -2165,13 +2196,13 @@ int call_target(Compiler *c, int id, int cls, const char *name, unsigned flags, 
   }
   else if ((mi = ct_lookup(c, id, cls, name, &flags, ml)) < 0 || id < 0 || (!(flags & (CT_REACH | CT_CAPTURE)) && !ct_calls(c, id, name))) {
     if (mi < 0) ml->kind = ML_NONE;
-    else if (c->scopes[mi].versioned || c->scopes[mi].mixin_guarded) {   /* (the record was not asked) */
+    else if (ct_versioned(c, mi, name) || c->scopes[mi].mixin_guarded) {   /* (the record was not asked) */
       ml->kind = ML_TABLE;
       ml->why = MLW_UNASKED;
     }
     r = mi;
   }
-  else if ((c->scopes[mi].versioned || c->scopes[mi].mixin_guarded || c->scopes[mi].entry) && (pin = ct_pin_of(c, id)) != -1 &&
+  else if ((ct_versioned(c, mi, name) || c->scopes[mi].mixin_guarded || c->scopes[mi].entry) && (pin = ct_pin_of(c, id)) != -1 &&
            /* (a pin answers the side its entry is on: an instance entry's
               arm, asked for a class method of a Class value its receiver
               may hold, finds that class's own method. A call on main takes
@@ -2193,7 +2224,7 @@ int call_target(Compiler *c, int id, int cls, const char *name, unsigned flags, 
        a point that may run any time after it (ct_after_point) takes the
        entry, whose cells tell at run time; with no entry, it raises too:
        nothing proves it runs after a def */
-    int vi = c->scopes[mi].versioned && ct_after_point(c, id) ? ct_version(c, id, cls, name, flags, mi, ml) : -1;
+    int vi = ct_versioned(c, mi, name) && ct_after_point(c, id) ? ct_version(c, id, cls, name, flags, mi, ml) : -1;
     if (vi >= 0 && c->scopes[vi].entry) r = vi;
     else {
       *ml = (MethodLookup){ .kind = ML_NONE, .def_class = dc0 };
@@ -2201,7 +2232,7 @@ int call_target(Compiler *c, int id, int cls, const char *name, unsigned flags, 
     }
   }
   else {
-    int asked = c->scopes[mi].versioned || (flags & CT_CAPTURE);
+    int asked = ct_versioned(c, mi, name) || (flags & CT_CAPTURE);
     if (asked) mi = ct_version(c, id, cls, name, flags, mi, ml);
     /* An alias's record already selected its captured definition. */
     if (mi >= 0 && c->scopes[mi].mixin_guarded && sp_streq(name, c->scopes[mi].name)) r = ct_guard(c, id, mi, flags, ml);
@@ -6851,7 +6882,7 @@ static const VerPre *ver_pre(Compiler *c, int id, const char *nm, int k, unsigne
   VerPre p = { k, flags, nm, n, 0, -1, 0, 0 };
   unsigned fl = flags;
   if (elab_chain_versions(c, k, (flags & CT_CMETHOD) != 0, nm, vs, VER_MAX_ARMS) >= 2 &&
-      (p.mi = ct_lookup(c, id, k, nm, &fl, NULL)) >= 0 && !c->scopes[p.mi].mixin_guarded && c->scopes[p.mi].versioned) {
+      (p.mi = ct_lookup(c, id, k, nm, &fl, NULL)) >= 0 && !c->scopes[p.mi].mixin_guarded && ct_versioned(c, p.mi, nm)) {
     p.ok = 1;
     p.sg = (fl & CT_CMETHOD) != 0;
     p.ar = ver_call_arity(c, id, k, p.sg, nm, p.mi);
@@ -6876,7 +6907,7 @@ static void ver_need(Compiler *c, int id, const char *nm, int k, unsigned flags,
     mi = p->mi; sg = p->sg; ar = p->ar;
   }
   else if (elab_chain_versions(c, rcls, 1, nm, vs, VER_MAX_ARMS) < 2 ||
-           (mi = ct_lookup(c, id, k, nm, &flags, NULL)) < 0 || c->scopes[mi].mixin_guarded || !c->scopes[mi].versioned) asked = 0;
+           (mi = ct_lookup(c, id, k, nm, &flags, NULL)) < 0 || c->scopes[mi].mixin_guarded || !ct_versioned(c, mi, nm)) asked = 0;
   else {
     sg = (flags & CT_CMETHOD) != 0;
     ar = ver_call_arity(c, id, rcls, sg, nm, mi);

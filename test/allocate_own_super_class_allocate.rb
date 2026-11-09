@@ -56,3 +56,12 @@ end
 p H.allocate.class
 k = [A, B][ARGV.size + 1]
 p k.allocate.class
+# allocate in a parameter default and in a yielding class method, on a subclass
+class P2
+  def self.make(o = allocate) = o
+  def self.each_mk; yield allocate; end
+end
+class Q2 < P2; end
+p P2.make.class, Q2.make.class
+Q2.each_mk { |x| p x.class }
+P2.each_mk { |x| p x.class }

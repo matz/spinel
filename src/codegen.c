@@ -12990,7 +12990,10 @@ void emit_own_class_alloc(Compiler *c, int id, int base, Buf *b) {
     if (g_emitting_class_id >= 0) base = g_emitting_class_id;
     /* one that takes the receiving class (a subclass's super reaches it)
        allocates that class */
-    if (cmethod_takes_self_cls(c, (int)(s - c->scopes))) snprintf(sel, sizeof sel, "_sp_cls.cls_id");
+    /* (the token `self` reads there: a yielding method inlined at its
+       caller reads g_self, a parameter default the call's class) */
+    if (cmethod_takes_self_cls(c, (int)(s - c->scopes)))
+      snprintf(sel, sizeof sel, "(%s).cls_id", s->yields && g_self ? g_self : cmethod_cls_token(c, s));
   }
   else if (!comp_ty_value_obj(c, ty_object(base))) {
     int recv = nt_ref(nt, id, "receiver");

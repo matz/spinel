@@ -5892,6 +5892,10 @@ int allocate_super_reaches_class(Compiler *c, int id) {
       c->classes[cid].is_native_class || class_builtin_parent(c, cid) != -116) return 0;   /* (Object) */
   int p = comp_super_parent(c, cid, 1);
   if (p >= 0 && comp_cmethod_in_chain(c, p, "allocate", NULL) >= 0) return 0;
+  /* nor one a module the class extends defines (the super reaches it) */
+  for (int i = 1; i < c->nscopes; i++)
+    if (c->scopes[i].is_cmethod && c->scopes[i].class_id == cid && c->scopes[i].origin_module_ci > 0 &&
+        c->scopes[i].name && sp_streq(comp_scope_user_name(&c->scopes[i]), "allocate")) return 0;
   if (k == NK_SuperNode) {
     int args = nt_ref(nt, id, "arguments"), an = 0;
     if (args >= 0) nt_arr(nt, args, "arguments", &an);

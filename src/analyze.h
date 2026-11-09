@@ -1421,7 +1421,6 @@ int strh_call_op(Compiler *c, int call, TyKind rt);
    not settled yet counts as the type asked (the gate runs again, and
    refuses for good, once it is) */
 int strh_call_op_in(Compiler *c, int call, TyKind rt, int unknown_ok);
-int strh_literal_held(Compiler *c, int n);   /* an Array literal a variable of any kind is written */
 int strh_var_read(const NodeTable *nt, int n);   /* a variable's read, whatever its kind of variable */
 
 #endif

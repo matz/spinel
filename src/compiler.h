@@ -1694,7 +1694,6 @@ typedef struct {
   /* every String slot is the shared handle (#6765, --share-strings is
      still accepted); the share classes (share.h) are rebuilt as the
      analysis goes for the questions still asked of them. */
-  int share_borrows;    /* arguments share_mark_borrows lets borrow the bytes */
   /* the program's parent map, for the emitter's questions about where a node
      sits (codegen_util.c's codegen_parents); rebuilt when the node table
      changed, freed with the Compiler */

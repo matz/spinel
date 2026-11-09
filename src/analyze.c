@@ -26488,7 +26488,6 @@ static void strh_reflect_scan(Compiler *c, StrhReflect *r) {
     }
   }
 }
-enum { STRH_CAND = 1, STRH_BAD = 2 };
 /* One-String mode: a container a reflective call reaches by its name
    (const_get, instance_variable_get, a send of either, a listing, eval)
    takes values no inference sees stored, so a String Array held there
@@ -55535,8 +55534,8 @@ void analyze_program(Compiler *c) {
   if (getenv("SP_FIXPOINT_LOG"))
     fprintf(stderr, "[fp] rounds=%d%s\n", g_fixpoint_rounds,
             g_fixpoint_capped ? " (CAP -- did not converge)" : "");
-  /* --share-strings: a String-keyed Hash's key borrows a handle's bytes,
-     read off the final types and flags */
+  /* a String-keyed Hash's key borrows a handle's bytes, read off the final
+     types and flags */
   share_mark_borrows(c);
   /* --share-strings: the methods whose value is a shared String's handle */
   AN_STEP_V("an_mark_handle_returns", an_mark_handle_returns(c));

@@ -26793,8 +26793,8 @@ void emit_index_and_or_write(Compiler *c, int id, Buf *b, int indent, int is_or)
    (strbuf_call_reads_handle, a native binding's answer) is boxed as its
    bytes, as a route reader (strbuf_route_reader) and a reflective ivar
    read (strbuf_route_ivar_get) are not. The String plan's
-   SPR_BOX form answers it: a value it gives no form (SPF_REFUSE) is the
-   one a box cannot carry. */
+   SPR_BOX form answers it: a value it gives only the bytes (SPF_COPY) is
+   the one a box cannot carry. */
 static int strbuf_box_carries(Compiler *c, int v) {
   SharePlan p = share_plan_of(c, v, SPR_BOX, NULL);
   int u = nt_paren_single(c->nt, v);
@@ -26804,7 +26804,7 @@ static int strbuf_box_carries(Compiler *c, int v) {
   if (p.form == SPF_HANDLE && p.kind == SPK_READER && !strbuf_route_reader(c, u) && !strbuf_route_ivar_get(c, u) &&
       !strbuf_poly_user_boxes(c, u))
     return p.need != SPN_OBJECT;
-  return p.form != SPF_REFUSE;
+  return p.form != SPF_COPY;
 }
 
 /* Does each `next` leaving the statements n (not one in a nested block,

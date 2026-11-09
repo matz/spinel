@@ -13517,6 +13517,7 @@ static int anon_fwd_rewrite(Compiler *c, int node, int parent, unsigned anon) {
     nt_node_set_int(nt, rd, "depth", 0);
     nt_node_set_ref(nt, node, field, rd);
     comp_grow_node_arrays(c);
+    c->nscope[rd] = c->nscope[node]; c->node_cbody[rd] = c->node_cbody[node];   /* (where it reads: the walk's, or after it) */
     return 1;
   }
   int changed = 0;
@@ -14568,7 +14569,7 @@ static int fwd_rest_callee_pass(Compiler *c, int wait) {
       nt_node_set_ref(nt, pn, "block", bp);
       /* the per-node arrays grow over the new parameters, as below */
       comp_grow_node_arrays(c);
-      for (int j = pbase; j < nt->count; j++) c->nscope[j] = c->nscope[def];
+      for (int j = pbase; j < nt->count; j++) { c->nscope[j] = elab_def_scope_of(c, def); c->node_cbody[j] = c->node_cbody[def]; }
       changed = 1;
       continue;
     }
@@ -14608,9 +14609,12 @@ static int fwd_rest_callee_pass(Compiler *c, int wait) {
       if (bp < 0) continue;
       nt_node_set_ref(nt, pn, "block", bp);
     }
+    /* the parameters stand in the method's scope */
+    comp_grow_node_arrays(c);
+    for (int j = base; j < nt->count; j++) { c->nscope[j] = elab_def_scope_of(c, def); c->node_cbody[j] = c->node_cbody[def]; }
     /* callee(x, ...) -> callee(x, *, **, &) */
     for (int k = 0; k < ncalls; k++) {
-      int call = calls[k];
+      int call = calls[k], cbase = nt->count;
       if (fwd_node_is(nt, call, "ForwardingSuperNode")) {
         int line = (int)nt_int(nt, call, "node_line", 0);
         int file = (int)nt_int(nt, call, "node_file", 0);
@@ -14667,9 +14671,10 @@ static int fwd_rest_callee_pass(Compiler *c, int wait) {
         nt_node_set_ref(nt, ba, "expression", -1);
         nt_node_set_ref(nt, call, "block", ba);
       }
+      /* ...and the call's arguments in the call's */
+      comp_grow_node_arrays(c);
+      for (int j = cbase; j < nt->count; j++) { c->nscope[j] = c->nscope[call]; c->node_cbody[j] = c->node_cbody[call]; }
     }
-    comp_grow_node_arrays(c);
-    for (int j = base; j < nt->count; j++) c->nscope[j] = c->nscope[def];
     changed = 1;
   }
   free(calls);

@@ -1243,4 +1243,7 @@ char **dsend_candidates(Compiler *c, int *out_n);
 int exc_reopen_definers(Compiler *c, const char *mname, int *out, int max);
 
 int infer_cext_builtin_constant(Compiler *c, int node);
+/* A `...` def's method scope takes its parameters after the forwarding lowering (analyze_scope.c) */
+int def_takes_forwarding(const NodeTable *nt, int def);   /* analyze_util.c */
+void scope_forwarding_params(Compiler *c);
 #endif

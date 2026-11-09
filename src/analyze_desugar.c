@@ -5385,6 +5385,23 @@ static int cvb_split(Compiler *c, int id, const char *nm, const int *bval, int n
   }
   return 1;
 }
+/* Is nm a class method of some builtin class its instances do not answer
+   (cvb_split's arms, before the classes the value can be narrow them)?
+   The tables are fixed, so the answer is kept by name. */
+static int cvb_name_may_split(const char *nm) {
+  enum { CAP = 1 << 12 };
+  static struct { char *nm; signed char may; } memo[CAP];
+  static int nmemo;
+  unsigned h = sp_strhash(nm) & (CAP - 1);
+  for (; memo[h].nm; h = (h + 1) & (CAP - 1))
+    if (sp_streq(memo[h].nm, nm)) return memo[h].may;
+  int may = 0;
+  const BuiltinClass *r = NULL;
+  for (int i = 0; !may && (r = builtin_class_at(i)); i++)
+    may = r->name && builtin_cmethod_known(r->name, nm) && !builtin_instance_method_known(r->name, nm);
+  if (nmemo < CAP / 2) { memo[h].nm = strdup(nm); memo[h].may = (signed char)may; nmemo++; }
+  return may;
+}
 int desugar_class_value_builtin_cmethod(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int bval[32], nb = -1, changed = 0, n0 = nt->count;
@@ -5393,6 +5410,11 @@ int desugar_class_value_builtin_cmethod(Compiler *c) {
     const char *nm = nt_str(nt, id, "name");
     int recv = nt_ref(nt, id, "receiver");
     if (!nm || recv < 0) continue;
+    /* what cvb_split turns down by the tree and the name alone, ahead of
+       the receiver's inference: asked of every call each round, that was
+       most of this pass */
+    if (nt_kind(nt, recv) != NK_LocalVariableReadNode || nt_ref(nt, id, "block") >= 0 || nt_safe_nav(nt, id) ||
+        !cvb_name_may_split(nm)) continue;
     if (infer_type(c, recv) != TY_POLY) continue;
     if (nb < 0) nb = cvb_value_builtins(c, bval, 32);
     if (nb == 0) break;

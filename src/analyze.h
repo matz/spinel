@@ -715,6 +715,7 @@ const NodeKind *class_def_kinds(int *n);   /* the node kinds a definition can be
 const NodeKind *class_def_module_kinds(int *n);   /* ...a module's definition can be */
 int class_def_builder(const NodeTable *nt, int def_node);   /* a constant write's Class.new / Module.new call that defines a class, -1 for none */
 int class_def_path(const NodeTable *nt, int def_node);   /* the constant node it writes: a header's path, a builder's write or path target */
+int mixin_stmt_args(const NodeTable *nt, int st, int *prepend, const int **av);   /* a body's receiverless include/prepend: its argument count, -1 for another node */
 const char *class_def_name(const NodeTable *nt, int def_node);   /* the constant name it writes, NULL for none */
 const char *class_def_bare_name(const NodeTable *nt, int def_node);   /* ...written as a plain constant, NULL under a path */
 void class_def_set_body(NodeTable *nt, int def_node, int body);   /* its body statements, as a pass rebuilds them */

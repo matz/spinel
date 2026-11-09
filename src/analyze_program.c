@@ -1027,9 +1027,8 @@ void prog_refuse_order(Compiler *c) {
     int st = prog_root_stmts(c, i), n = 0;
     const int *v = st >= 0 ? nt_arr(nt, st, "body", &n) : NULL;
     for (int k = 0; k < n; k++) {
-      NodeKind sk = nt_kind(nt, v[k]);
-      const char *nm = nt_str(nt, v[k], "name");
-      if (i > 0 && sk == NK_CallNode && nt_ref(nt, v[k], "receiver") < 0 && nm && is_include_name(nm))
+      int prep; const int *av;
+      if (i > 0 && mixin_stmt_args(nt, v[k], &prep, &av) >= 0 && !prep)
         unsupported_feature(c, v[k], "--load-model=graph: a top-level include in a required file (qc_object_mixin_write reads one file), for now");
     }
   }

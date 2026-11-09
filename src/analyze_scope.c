@@ -2447,6 +2447,20 @@ int class_def_path(const NodeTable *nt, int def_node) {
   return nt_kind(nt, def_node) == NK_ConstantPathWriteNode ? nt_ref(nt, def_node, "target") : def_node;
 }
 
+/* A mixin statement: a receiverless `include` or `prepend` call st. Its
+   argument count (the arguments in *av), -1 for any other node; *prepend
+   says which of the two it is. (The record's lr_call reads the wider
+   forms, with a receiver or through send, by lr_mix_kind.) */
+int mixin_stmt_args(const NodeTable *nt, int st, int *prepend, const int **av) {
+  if (nt_kind(nt, st) != NK_CallNode || nt_ref(nt, st, "receiver") >= 0) return -1;
+  const char *nm = nt_str(nt, st, "name");
+  if (!nm || (!is_include_name(nm) && !is_prepend_name(nm))) return -1;
+  int a = nt_ref(nt, st, "arguments"), an = 0;
+  *prepend = is_prepend_name(nm);
+  *av = a >= 0 ? nt_arr(nt, a, "arguments", &an) : NULL;
+  return *av ? an : 0;
+}
+
 /* The constant name a definition writes: its path's last name (a header's
    C spelling, which the qualify passes may have renamed); NULL for none. */
 const char *class_def_name(const NodeTable *nt, int def_node) {
@@ -4376,11 +4390,9 @@ static int alias_module_included_before(Compiler *c, int k, int mi, int at) {
   const char *leaf = strrchr(mn, ':');
   leaf = leaf ? leaf + 1 : mn;
   NT_FOREACH_KIND(nt, NK_CallNode, id) {
-    const char *cn = nt_str(nt, id, "name");
-    if (!cn || (!is_include_name(cn) && !is_prepend_name(cn)) || nt_ref(nt, id, "receiver") >= 0) continue;
-    if (id >= c->node_cap || c->node_cbody[id] != k) continue;
-    int a = nt_ref(nt, id, "arguments"), an = 0;
-    const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &an) : NULL;
+    int prep; const int *av;
+    int an = mixin_stmt_args(nt, id, &prep, &av);
+    if (an < 0 || id >= c->node_cap || c->node_cbody[id] != k) continue;
     for (int j = 0; j < an; j++) {
       const char *an_ = nt_str(nt, av[j], "name");
       if (an_ && sp_streq(an_, leaf) && prog_cmp_run(c, id, at, at, "the alias reading") < 0) return 1;
@@ -4461,12 +4473,9 @@ static int alias_def_in_effect(Compiler *c, int k, const char *od, const char *n
     const int *stmts = ob[b].body >= 0 ? nt_arr(nt, ob[b].body, "body", &n) : NULL;
     for (int j = 0; j < n; j++) {
       int st = stmts[j];
-      if (nt_kind(nt, st) != NK_CallNode || nt_ref(nt, st, "receiver") >= 0) continue;
-      const char *nm = nt_str(nt, st, "name");
-      int prep = nm && is_prepend_name(nm);
-      if (!nm || (!prep && !is_include_name(nm))) continue;
-      int a = nt_ref(nt, st, "arguments"), an = 0;
-      const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &an) : NULL;
+      int prep = 0; const int *av;
+      int an = mixin_stmt_args(nt, st, &prep, &av);
+      if (an < 0) continue;
       /* `include A, B` puts A in front */
       for (int q = an - 1; q >= 0; q--) {
         int mod = mixin_arg_module(c, av[q]);

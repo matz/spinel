@@ -2329,12 +2329,9 @@ int desugar_fiber_prepended_init(Compiler *c) {
 /* A receiverless `include M` / `prepend M` of constants: the mixin
    statement a singleton-class body can hold. */
 static int scm_mixin_stmt(const NodeTable *nt, int st) {
-  if (nt_kind(nt, st) != NK_CallNode || nt_ref(nt, st, "block") >= 0 || nt_ref(nt, st, "receiver") >= 0) return 0;
-  const char *nm = nt_str(nt, st, "name");
-  if (!nm || (!sp_streq(nm, "prepend") && !sp_streq(nm, "include"))) return 0;
-  int args = nt_ref(nt, st, "arguments");
-  int an = 0; const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &an) : NULL;
-  if (an < 1 || !av) return 0;
+  int prep; const int *av;
+  int an = mixin_stmt_args(nt, st, &prep, &av);
+  if (an < 1 || nt_ref(nt, st, "block") >= 0) return 0;
   for (int a = 0; a < an; a++)
     if (nt_kind(nt, av[a]) != NK_ConstantReadNode && nt_kind(nt, av[a]) != NK_ConstantPathNode) return 0;
   return 1;
@@ -15841,15 +15838,6 @@ static int bi_opens(const NodeTable *nt, int id, const char *ns, const char *lea
   return 1;
 }
 
-/* the arguments of a body's `include` statement st (`prepend` with
-   want_prepend): their count, 0 for another statement */
-static int bi_mixin_args(const NodeTable *nt, int st, int want_prepend, const int **av) {
-  const char *mx = nt_kind(nt, st) == NK_CallNode && nt_ref(nt, st, "receiver") < 0 ? nt_str(nt, st, "name") : NULL;
-  int an = 0;
-  *av = mx && (want_prepend ? is_prepend_name(mx) : is_include_name(mx))
-        ? nt_arr(nt, nt_ref(nt, st, "arguments"), "arguments", &an) : NULL;
-  return *av ? an : 0;
-}
 /* the module such an argument names, read in a body's namespace key: its
    name, *at its namespace; NULL when it names no module of the program */
 static const char *bi_mixin_module(const NodeTable *nt, int arg, const char *key, char *at, size_t cap) {
@@ -15872,12 +15860,10 @@ static int bi_body_defines(const NodeTable *nt, const char *ns, const char *leaf
     for (int j = 0; j < bn; j++) {
       int d = fwd_body_def(nt, bb[j]);
       if (d >= 0 && nt_ref(nt, d, "receiver") < 0 && sp_streq(nt_str(nt, d, "name"), nm)) return 1;
-      for (int pp = 0; pp < 2; pp++) {
-        const int *av; int an = bi_mixin_args(nt, bb[j], pp, &av);
-        for (int a = 0; a < an; a++) {
-          const char *ml = bi_mixin_module(nt, av[a], key, at, sizeof at);
-          if (ml && bi_body_defines(nt, at, ml, nm, seen)) return 1;
-        }
+      int prep; const int *av; int an = mixin_stmt_args(nt, bb[j], &prep, &av);
+      for (int a = 0; a < an; a++) {
+        const char *ml = bi_mixin_module(nt, av[a], key, at, sizeof at);
+        if (ml && bi_body_defines(nt, at, ml, nm, seen)) return 1;
       }
     }
   }
@@ -15940,20 +15926,18 @@ static int bi_receivers_all_answer(const char *cls, const char *nm) {
       (!builtin_instance_method_known("String", nm) || !builtin_instance_method_known("Symbol", nm))) return 0;
   return any;
 }
+/* What bi_root_defines answered for the names a pass asked: one answer per
+   name while the pass's node table stands (the program's defs are all there
+   before the copies are made). Held by the pass that asks. */
+typedef struct { char *name[64]; unsigned char ans[64]; int n; } BiRoots;
+static void bi_roots_free(BiRoots *br) { for (int i = 0; i < br->n; i++) free(br->name[i]); }
+
 /* does the program define nm at the top level, or in a body of Object or
    Kernel? CRuby's lookup reaches such a def after the receiver's class and
    the mixed-in module, ahead of Object's and Kernel's builtin method */
 static int def_at_top_level(const NodeTable *nt, int n0, int def);
-static int bi_root_defines(const NodeTable *nt, const char *nm) {
-  /* one answer per name for the node table (the program's defs are all
-     there before the copies are made) */
-  static const NodeTable *cache_nt = NULL;
-  static char *cache_name[64]; static int cache_ans[64], cache_n = 0;
-  if (cache_nt != nt) {
-    for (int i = 0; i < cache_n; i++) free(cache_name[i]);
-    cache_n = 0; cache_nt = nt;
-  }
-  for (int i = 0; i < cache_n; i++) if (sp_streq(cache_name[i], nm)) return cache_ans[i];
+static int bi_root_defines(const NodeTable *nt, BiRoots *br, const char *nm) {
+  for (int i = 0; i < br->n; i++) if (sp_streq(br->name[i], nm)) return br->ans[i];
   int o = 0;
   for (int id = 0; id < nt->count && !o; id++)
     if (nt_kind(nt, id) == NK_DefNode && nt_ref(nt, id, "receiver") < 0 && nt_str(nt, id, "name") &&
@@ -15963,10 +15947,11 @@ static int bi_root_defines(const NodeTable *nt, const char *nm) {
     o = bi_body_defines(nt, "", "Object", nm, &seen) || bi_body_defines(nt, "", "Kernel", nm, &seen);
     bi_seen_free(&seen);
   }
-  if (cache_n < 64 && (cache_name[cache_n] = strdup(nm))) cache_ans[cache_n++] = o;
+  /* a copy: the node a name came from may be renamed later in the pass */
+  if (br->n < 64 && (br->name[br->n] = strdup(nm))) br->ans[br->n++] = o;
   return o;
 }
-static int bi_keeps_receiverless(const NodeTable *nt, const char *cls, int own, const char *nm) {
+static int bi_keeps_receiverless(const NodeTable *nt, BiRoots *br, const char *cls, int own, const char *nm) {
   if (is_enum_helper_name(nm)) return 1;
   if (!object_instance_method_name(nm)) return 0;
   /* in a copy of the program's own method, a public method of Object is
@@ -15974,7 +15959,7 @@ static int bi_keeps_receiverless(const NodeTable *nt, const char *cls, int own, 
      (a receiver class with no builtin method of the name): such a call
      stays as it was */
   if (object_public_method_name(nm))
-    return !own || (!bi_receivers_all_answer(cls, nm) && bi_root_defines(nt, nm) && !own_chain_defines(nt, cls, nm));
+    return !own || (!bi_receivers_all_answer(cls, nm) && bi_root_defines(nt, br, nm) && !own_chain_defines(nt, cls, nm));
   if (own && own_chain_defines(nt, cls, nm)) return 0;
   return !bi_receiver_answers(cls, nm);
 }
@@ -16038,7 +16023,7 @@ static int program_defines_name_off_class(const NodeTable *nt, int n0, const cha
 /* `self` in nodes [lo, hi] reads the `__self` parameter, and the
    receiverless calls there (Kernel's aside) take it as their receiver; cls
    and own as bi_keeps_receiverless takes them */
-static void bi_self_to_local(NodeTable *nt, int lo, int hi, const char *cls, int own) {
+static void bi_self_to_local(NodeTable *nt, BiRoots *br, int lo, int hi, const char *cls, int own) {
   /* the block of a call that runs it with another self (`7.instance_exec
      { inspect }`): a public Object method there stays as it was. The nodes
      are pre-order, so a block's subtree is one range; a block passed as a
@@ -16068,7 +16053,7 @@ static void bi_self_to_local(NodeTable *nt, int lo, int hi, const char *cls, int
     }
     else if (kind == NK_CallNode && nt_ref(nt, id, "receiver") < 0) {
       const char *nm = nt_str(nt, id, "name");
-      if (!nm || bi_keeps_receiverless(nt, cls, own, nm)) continue;
+      if (!nm || bi_keeps_receiverless(nt, br, cls, own, nm)) continue;
       if ((keep_all || (rebound && rebound[id - lo])) && object_public_method_name(nm)) continue;
       int rd = nt_new_node(nt, "LocalVariableReadNode"); if (rd < 0) break;
       nt_node_set_str(nt, rd, "name", "__self");
@@ -16149,7 +16134,8 @@ static void own_enum_mixin_defs(const NodeTable *nt, const char *ns, const char 
         if (g) { *own = g; (*own)[(*nown)++] = bb[j]; }
         continue;
       }
-      const int *av; int an = bi_mixin_args(nt, bb[j], part == 2, &av);
+      int prep; const int *av; int an = mixin_stmt_args(nt, bb[j], &prep, &av);
+      if (an > 0 && prep != (part == 2)) an = 0;
       for (int a = an - 1; a >= 0; a--) {
         const char *ml = bi_mixin_module(nt, av[a], key, at, sizeof at);
         if (!ml || bi_seen(seen, at, ml)) continue;
@@ -16163,10 +16149,10 @@ static void own_enum_mixin_defs(const NodeTable *nt, const char *ns, const char 
    taking the receiver as the first parameter as a builtin's does, the
    reopening's def left to answer for the module's includers; cls the
    module's name */
-static int own_enum_generic(NodeTable *nt, int def, const char *cls) {
+static int own_enum_generic(NodeTable *nt, BiRoots *br, int def, const char *cls) {
   int copy = nt_clone_subtree(nt, def);
   if (copy < 0) return -1;
-  bi_self_to_local(nt, copy, nt->count - 1, cls, 1);
+  bi_self_to_local(nt, br, copy, nt->count - 1, cls, 1);
   int pn = nt_ref(nt, copy, "parameters");
   if (pn < 0) { pn = nt_new_node(nt, "ParametersNode"); if (pn < 0) return -1; nt_node_set_ref(nt, copy, "parameters", pn); }
   int sp = nt_new_node(nt, "RequiredParameterNode"); if (sp < 0) return -1;
@@ -16304,6 +16290,7 @@ static int bi_program_calls_late(const NodeTable *nt, int n0) {
 
 int desugar_builtins(Compiler *c) {
   if (sp_builtin_enum_names_n == 0) return 0;
+  BiRoots br = { .n = 0 };
   NodeTable *nt = (NodeTable *)c->nt;
   int root = nt->root_id;
   int top = root >= 0 ? nt_ref(nt, root, "statements") : -1;
@@ -16354,7 +16341,7 @@ int desugar_builtins(Compiler *c) {
         int dbi = d >= 0 ? builtin_enum_name_index(nt_str(nt, d, "name")) : -1;
         if (dbi >= 0 && dbi < nbdef && nt_ref(nt, d, "receiver") < 0 && !nt_int(nt, d, "node_bi", 0) &&
             !bi_def_calls_super(nt, d) && bi_def_visibility(nt, bb[k]) == BVIS_PUBLIC) {
-          int g = own_enum_generic(nt, d, mn);
+          int g = own_enum_generic(nt, &br, d, mn);
           if (g < 0) break;
           nt_node_set_int(nt, g, "enum_prog_def", 1);
           if (gdef[dbi] >= 0 && !nt_int(nt, gdef[dbi], "enum_prog_def", 0)) bdef[dbi] = gdef[dbi];
@@ -16397,7 +16384,7 @@ int desugar_builtins(Compiler *c) {
       /* `self` and the receiverless calls in the body */
       int dbody = nt_ref(nt, def, "body");
       int lo = dbody >= 0 ? dbody : def;
-      bi_self_to_local(nt, lo, hi, mn, 0);
+      bi_self_to_local(nt, &br, lo, hi, mn, 0);
       /* the generic definition itself stays out of the program: the copies
          below are what the call sites use. It keeps a name of its own so
          that, orphaned in the node table, it cannot be mistaken for a
@@ -16453,7 +16440,7 @@ int desugar_builtins(Compiler *c) {
       gdef[bi] = -1;
     }
     if (bi < nbuiltin) continue;
-    int g = own_enum_generic(nt, d, own_mn);
+    int g = own_enum_generic(nt, &br, d, own_mn);
     if (g < 0) break;
     /* a method its module's bodies leave private or protected (`private
        def m`, a bare `private` above the def, `private :m` after it,
@@ -16465,6 +16452,7 @@ int desugar_builtins(Compiler *c) {
     gdef[bi] = g;
     changed = 1;
   }
+  bi_roots_free(&br);
   free(own);
   if (!changed) { free(gdef); free(bdef); free(nb); return 0; }
   int n0 = nt->count;   /* the program's own nodes (the generics among them): the call sites to clone for */
@@ -18349,6 +18337,7 @@ extern int sp_builtin_extra_name_index(int idx, const char *name);
 
 int desugar_builtin_scalar_defs(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
+  BiRoots br = { .n = 0 };
   int root = nt->root_id;
   int top = root >= 0 ? nt_ref(nt, root, "statements") : -1;
   if (top < 0) return 0;
@@ -18433,7 +18422,7 @@ int desugar_builtin_scalar_defs(Compiler *c) {
           nt_node_set_arr(nt, pn, "requireds", nr, rn + 1); free(nr); }
         int dbody = nt_ref(nt, def, "body");
         int lo = dbody >= 0 ? dbody : def;
-        bi_self_to_local(nt, lo, hi, mn, 0);
+        bi_self_to_local(nt, &br, lo, hi, mn, 0);
         { char gn[256]; snprintf(gn, sizeof gn, "%s%s", sp_bx_prefix[bx], name); nt_node_set_str(nt, def, "name", gn); }
         if (bi >= 0) gdef[bx][bi] = def;
       }
@@ -18513,7 +18502,7 @@ int desugar_builtin_scalar_defs(Compiler *c) {
         nr[0] = spself; for (int j = 0; j < rn; j++) nr[j + 1] = reqs[j];
         nt_node_set_arr(nt, pn, "requireds", nr, rn + 1); free(nr); }
       int lo = clone;
-      bi_self_to_local(nt, lo, hi, mn, 1);
+      bi_self_to_local(nt, &br, lo, hi, mn, 1);
       { char gn[256]; snprintf(gn, sizeof gn, "%s%s", sp_bx_prefix[bx], name); nt_node_set_str(nt, clone, "name", gn); }
       if (closed) nt_node_set_int(nt, clone, "bx_closed", 1);
       int bi = sp_builtin_extra_name_index(bx, name);
@@ -18550,6 +18539,7 @@ int desugar_builtin_scalar_defs(Compiler *c) {
       changed = 1;
     }
   }
+  bi_roots_free(&br);
   free(tb); free(tfile);
   if (!changed) {
     for (int bx = 0; bx < SP_BX_N; bx++) {

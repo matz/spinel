@@ -2619,7 +2619,7 @@ int emit_call_poly_callable_arms(Compiler *c, int id, Buf *b, const NodeTable *n
         buf_printf(b, "sp_box_sym(sp_sym_intern(((sp_BoundMethod *)_t%d.v.p)->name))"
                       " : _t%d.tag == SP_TAG_CLASS ? %s"
                       " : _t%d.tag == SP_TAG_ENCODING ? sp_box_str(sp_str_uminus_val(_t%d.v.s))"
-                      " : _t%d.tag == SP_TAG_SYM ? sp_box_str(sp_str_uminus_val(sp_sym_to_s((sp_sym)_t%d.v.i)))"
+                      " : _t%d.tag == SP_TAG_SYM ? sp_box_str(sp_sym_name_str((sp_sym)_t%d.v.i))"   /* (a Symbol's name: its one frozen String, no fstring) */
                       " : (_t%d.tag == SP_TAG_OBJ && _t%d.v.p && (_t%d.cls_id == SP_BUILTIN_EXCEPTION || sp_is_exc_subclass_cls(_t%d.cls_id)))"
                       " ? sp_exc_name_acc((sp_Exception *)_t%d.v.p)",
                    t, t, cls_arm, t, t, t, t, t, t, t, t, t);

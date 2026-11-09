@@ -6278,8 +6278,14 @@ void fzl_emit_defs(const char *t, Buf *out, int handles) {
     if (k >= 0) used[k] = 1;
     p = q;
   }
+  /* a program that dedups a String (-@, dedup, Symbol#name) hands its
+     literals to the runtime's fstring table (sp_fzl_intern): `-x` of a
+     literal's content answers the literal. One that does not pays nothing. */
+  int dedups = handles && (strstr(t, "sp_str_uminus_val(") || strstr(t, "sp_str_dedup("));
+  int nlit = 0;
   for (int k = 0; k < g_fzl_n; k++) {
     FzlLit *f = &g_fzl[k];
+    if (used[k]) nlit++;
     if (used[k] && handles)
       buf_printf(out, "static sp_StringLiteral _fzl_%s_slot = { NULL, NULL };\n"
                       "static struct { sp_str_hdr h; unsigned char m; char d[%zu]; } _fzl_%s = "
@@ -6293,8 +6299,15 @@ void fzl_emit_defs(const char *t, Buf *out, int handles) {
                  f->raw_len + 1, f->name, f->raw_len + 1,
                  fzl_esc_ascii7(f->esc, f->esc_len) ? " | SP_STR_SIZE_ASCII7" : "",
                  f->raw_len, f->esc);
-    free(f->esc);
   }
+  if (dedups && nlit) {
+    buf_puts(out, "static const char *const sp_fzl_all[] = {");
+    for (int k = 0, i = 0; k < g_fzl_n; k++)
+      if (used[k]) buf_printf(out, "%s_fzl_%s.d", i++ ? ", " : " ", g_fzl[k].name);
+    buf_printf(out, " };\nstatic void __attribute__((constructor)) sp_fzl_all_set(void) "
+                    "{ sp_fzl_lits = sp_fzl_all; sp_fzl_nlits = %d; }\n", nlit);
+  }
+  for (int k = 0; k < g_fzl_n; k++) free(g_fzl[k].esc);
   free(used);
   free(g_fzl); g_fzl = NULL; g_fzl_n = g_fzl_cap = 0;
   free(g_fzl_slot); g_fzl_slot = NULL; g_fzl_slots = 0;

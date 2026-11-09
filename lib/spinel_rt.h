@@ -1132,8 +1132,23 @@ static void sp_fstr_insert(const char *f) {  /* caller holds the heap lock */
   while (sp_fstr_tab[idx]) idx = (idx + 1) & mask;
   sp_fstr_tab[idx] = f; sp_fstr_len++;
 }
+/* The program's frozen literals (codegen's sp_fzl_all, which a program that
+   dedups hands over from its constructor): interned at the first dedup, as
+   CRuby's fstring table holds a literal from the program's load on, so `-x`
+   of a content a literal has answers that literal (`(-("ab" + "c"))
+   .equal?("abc")`). A literal never written there was a copy of its own. */
+static const char *const *sp_fzl_lits = NULL;
+static int sp_fzl_nlits = 0;
+static void sp_fzl_intern(void) {  /* caller holds the heap lock */
+  if (SP_LIKELY(!sp_fzl_lits)) return;
+  const char *const *l = sp_fzl_lits;
+  int n = sp_fzl_nlits;
+  sp_fzl_lits = NULL;
+  for (int i = 0; i < n; i++) if (!sp_fstr_lookup(l[i])) sp_fstr_insert(l[i]);
+}
 static const char *sp_str_dedup(const char *s) {
   SP_HEAP_LOCK();
+  sp_fzl_intern();
   const char *hit = sp_fstr_lookup(s);
   SP_HEAP_UNLOCK();
   if (hit) return hit;
@@ -1163,6 +1178,7 @@ static inline const char *sp_str_uminus_val(const char *s) {
      dedup below, which hands back a frozen interned copy. */
   if (((const unsigned char *)s)[-1] == 0xf1) {
     SP_HEAP_LOCK();
+    sp_fzl_intern();
     const char *hit = sp_fstr_lookup(s);
     if (!hit) { sp_fstr_insert(s); hit = s; }
     SP_HEAP_UNLOCK();
@@ -1171,6 +1187,39 @@ static inline const char *sp_str_uminus_val(const char *s) {
   /* otherwise intern by content so two dedups of equal contents share one
      frozen object (#2462). The result reports frozen? (0xf1). */
   return sp_str_dedup(s);
+}
+/* Symbol#name: the symbol's one frozen String, apart from the fstring
+   table, as CRuby's is (`:a.name.equal?(-"a")` is false). A heap String
+   like the table's entries (immortal at 0xf1), so a String slot that
+   takes it keeps one handle for it and `s.name.equal?(s.name)` holds there
+   too; the static per-symbol copy sp_sym_to_s_frozen answers got a new
+   handle at each store. Made at the first call, kept per symbol. The
+   table is the generated unit's state, as sp_fstr_tab is (the runtime
+   objects own no writable static: tools/poly_cold_check.rb). */
+static const char **sp_sym_name_tab = NULL;
+static sp_int sp_sym_name_cap = 0;
+static SP_UNUSED const char *sp_sym_name_str(sp_sym id)
+{
+  if (id < 0) return sp_sym_to_s_frozen(id);
+  SP_HEAP_LOCK();
+  const char *hit = id < sp_sym_name_cap ? sp_sym_name_tab[id] : NULL;
+  SP_HEAP_UNLOCK();
+  if (hit) return hit;
+  const char *nm = sp_sym_to_s_frozen(id);
+  const char *f = sp_str_freeze_val(sp_str_from_bytes(nm, sp_str_byte_len(nm)));
+  SP_HEAP_LOCK();
+  if (id >= sp_sym_name_cap) {
+    sp_int nc = sp_sym_name_cap ? sp_sym_name_cap : 64;
+    while (nc <= id) nc *= 2;
+    const char **t = (const char **)realloc(sp_sym_name_tab, sizeof *t * (size_t)nc);
+    if (!t) { SP_HEAP_UNLOCK(); return f; }
+    for (sp_int i = sp_sym_name_cap; i < nc; i++) t[i] = NULL;
+    sp_sym_name_tab = t; sp_sym_name_cap = nc;
+  }
+  if (sp_sym_name_tab[id]) f = sp_sym_name_tab[id];   /* another thread's first */
+  else sp_sym_name_tab[id] = f;
+  SP_HEAP_UNLOCK();
+  return f;
 }
 /* String#clone: a copy that preserves the frozen state, unlike #dup which always
    returns an unfrozen copy (CRuby semantics). Carries the 0xf1 heap-frozen marker

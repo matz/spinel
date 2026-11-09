@@ -2177,7 +2177,7 @@ void emit_to_s_expr(Compiler *c, int node, Buf *b) {
      SP_STR_B resolves the face on the expression's C type. Any other
      String is the bytes already.) */
   if (wt == TY_STRING) {
-    int hnd = g_one_string && repr_of(c, node).handle;
+    int hnd = repr_of(c, node).handle;
     if (hnd) buf_puts(b, "SP_STR_B(");
     emit_expr(c, node, b);
     if (hnd) buf_puts(b, ")");
@@ -20559,9 +20559,7 @@ static void ext_generate_cruby_shim(Compiler *c) {
     "    if (ei != rb_utf8_encindex() && ei != rb_usascii_encindex() && ei != rb_ascii8bit_encindex())\n"
     "      rb_raise(rb_eArgError, \"string encoding %%s cannot cross into the compiled kernel (UTF-8 or binary only)\", rb_enc_name(rb_enc_get(v))); }\n"
     "  return sp_str_from_bytes(RSTRING_PTR(v), (size_t)RSTRING_LEN(v));\n}\n"
-    "#ifdef SP_ONE_STRING\n"
     "static sp_String *spx_in_strh(VALUE v) { return SP_STR_HDL(spx_in_str(v)); }\n"
-    "#endif\n"
     "static sp_IntArray *spx_in_int_array(VALUE v) {\n"
     "  if (!RB_TYPE_P(v, T_ARRAY)) rb_raise(rb_eTypeError, \"no implicit conversion of %%s into Array\", rb_obj_classname(v));\n"
     "  { long n = RARRAY_LEN(v); sp_IntArray *a = sp_IntArray_new(); SP_GC_ROOT(a);\n"
@@ -22584,10 +22582,6 @@ static void emit_user_exc_dispatch(Compiler *c, Buf *b) {
 
 static void emit_runtime_include(Compiler *c, Buf *b, int blank) {
   buf_puts(b, "#define SP_SHARE_STRING_LITERALS 1\n#define SP_SHARE_BOX_HANDLES 1\n");
-  /* the one-representation String: the runtime's headers lay the typed
-     containers out over the handle, so the define comes before them (the
-     marker the driver reads to pick the archive is beside the thread one) */
-  buf_puts(b, "#define SP_ONE_STRING 1\n");
   /* sp_feature_required, not strict require: without SPINEL_STRICT_REQUIRE,
      respond_to?'s io/console answer must still follow the program's require,
      as CRuby's does. */
@@ -23153,7 +23147,6 @@ char *codegen_program(const NodeTable *nt) {
      the byte-identical single-threaded archive. Emitted only when the program
      references Thread/Mutex/Queue/... -- so it must follow the feature scan. */
   if (g_uses_threads) buf_puts(&b, "/* SPINEL_USES_THREADS */\n");
-  buf_puts(&b, "/* SPINEL_ONE_STRING */\n");
   /* Ask the C compiler for a brake the frame estimate cannot provide: on a
      program that runs user code on a fiber stack, any frame past that stack is
      a guard-page crash waiting for the right input, so it is worth a warning

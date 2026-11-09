@@ -26,12 +26,6 @@ COPT += -DSP_PORTABLE
 endif
 # Machine-local overrides (gitignored config.mk is a common dev pattern).
 -include config.mk
-# One representation of String: every String slot holds the handle
-# (docs/internals/string-one-repr-design.md), so the runtime and the native
-# objects of the packages are compiled with -DSP_ONE_STRING, as the generated
-# C defines it. `override` keeps it under a command-line COPT.
-override COPT += -DSP_ONE_STRING
-
 # Shared toolchain configuration (CC wrapping, CFLAGS, stamps, …).
 include common.mk
 
@@ -60,7 +54,7 @@ RBS_LIB      = build/librbs.a
 
 .PHONY: ty-setter-check imemo-shadow-test imemo-shadow-corpus int-min-test all hooks share-strings-test line-map-check unit-stability-test incremental-test incremental-bench gate-tool-test regexp wasm-rt wasm-test rbs_extract rbs-test rbs-seed-test inline-rbs-test rbs-seed-extractor cident plan-check-test method-table-check timing-test shadow-check signal-default-test source-marker-test magic-comment-test repr-check-test run-scale-test gate-costs arm-check-test traits-check-test poly-cold-test bop-arity-check-test bop-callbacks-test bop-share-check-test share-spec-check bop-callbacks-check arity-spec-check builtin-method-tables-check builtin-method-tables-regen value-edges-check value-edges-regen implied-calls-check implied-calls-regen implied-calls-test lower-rows-check node-kinds-check node-kinds-regen package-facts-check package-facts-regen value-pos-test re-lit-test reject-test cli-opts-test link-names-test reach-test defer-refusals-test check-stores-test backtrace-test gc-minor-test thread-puts-test ext-test ext-cruby-test alloc-report-test rubyspec rubyspec-gate spin-check \ repr-diff c-costs alloc-diff \
         test test-run clean-test-results regen-rbs-expected \
-        regen-expected regen-expected-err bench optcarrot gate gate-full check gate-legs gate-test gate-bench gc-phases-test gc-stress-test gc-str-major-test gc-str-budget-test threaded-render-test gc-locality-test test-corpus test-corpus-summary \
+        regen-expected regen-expected-err bench optcarrot gate gate-full check gate-legs gate-test gate-bench gc-phases-test gc-stress-test threaded-render-test gc-locality-test test-corpus test-corpus-summary \
         gate-optcarrot rubyboy gate-rubyboy scale-test clean install uninstall deps tools
 
 # `make all` includes the RBS extractor when vendor/rbs has been fetched
@@ -1576,11 +1570,6 @@ share-strings-test: $(SPINEL) $(SP_RT_LIB) $(SP_RT_MT_LIB) $(BUNDLED_NATIVE_OBJS
 	    echo "share-strings-test: FAIL (Class calls of Stat field names add a dispatch)"; ok=0; \
 	  fi; \
 	done; \
-	if [ -z "$(filter -DSP_ONE_STRING,$(COPT))" ] && { ! $(SPINEL) --share-strings test/share/share_strings_open_targets.rb -c --no-line-map -o "$$tmp/open.c" >"$$tmp/out" 2>&1 || \
-	   ! grep -q 'const char \* lv_path = NULL;' "$$tmp/open.c" || \
-	   grep -q 'sp_strbuf_read_pub(lv_path)' "$$tmp/open.c"; }; then \
-	  echo "share-strings-test: FAIL (File.open's path shares StringIO.open's init)"; ok=0; \
-	fi; \
 	if ! $(SPINEL) --share-strings test/share/share_strings_literal_queries.rb -c --no-line-map -o "$$tmp/queries.c" >"$$tmp/out" 2>&1 || \
 	   grep -q 'sp_String_new_shared' "$$tmp/queries.c"; then \
 	  echo "share-strings-test: FAIL (a literal query unnecessarily shares its Strings)"; ok=0; \
@@ -1589,48 +1578,20 @@ share-strings-test: $(SPINEL) $(SP_RT_LIB) $(SP_RT_MT_LIB) $(BUNDLED_NATIVE_OBJS
 	   grep -q 'sp_String_new_fresh' "$$tmp/ivstore.c"; then \
 	  echo "share-strings-test: FAIL (a Hash store through a boxed ivar's reader shares a String)"; ok=0; \
 	fi; \
-	if [ -z "$(filter -DSP_ONE_STRING,$(COPT))" ] && { ! $(SPINEL) --share-strings test/share/poly_ivar_op_write_shares.rb -c --no-line-map -o "$$tmp/ivopw.c" >"$$tmp/out" 2>&1 || \
-	   ! grep -q 'sp_String_new_fresh' "$$tmp/ivopw.c"; }; then \
-	  echo "share-strings-test: FAIL (an operator write through an attribute is not taken as a String write)"; ok=0; \
-	fi; \
 	if ! $(SPINEL) --share-strings test/share/share_strings_narrow_reads.rb -c --no-line-map -o "$$tmp/reads.c" >"$$tmp/out" 2>&1 || \
 	   grep -q 'sp_poly_as_strbuf' "$$tmp/reads.c"; then \
 	  echo "share-strings-test: FAIL (a narrowed byte read allocates a handle)"; ok=0; \
-	fi; \
-	if [ -z "$(filter -DSP_ONE_STRING,$(COPT))" ] && { ! $(SPINEL) --share-strings test/share/share_strings_poly_transient_returns.rb -c --no-line-map -o "$$tmp/transient.c" >"$$tmp/out" 2>&1 || \
-	   ! grep -q 'sp_box_str(sp_TransientStringReturn_upcase(' "$$tmp/transient.c" || \
-	   ! grep -q 'sp_box_str(sp_TransientStringReturn_delete(' "$$tmp/transient.c" || \
-	   [ "$$(grep -c 'const char \*_t[0-9]* = sp_TransientStringReturn_upcase(' "$$tmp/transient.c")" != 1 ]; }; then \
-	  echo "share-strings-test: FAIL (transient String returns allocate, or kept returns lose their handle)"; ok=0; \
 	fi; \
 	if ! $(SPINEL) --share-strings test/share/share_strings_self.rb -c --no-line-map -o "$$tmp/self.c" >"$$tmp/out" 2>&1 || \
 	   ! grep -q 'sp_String_receiver_return(sp_String \*self)' "$$tmp/self.c" || \
 	   ! grep -q 'sp_String_receiver_bytes(sp_String \*self)' "$$tmp/self.c"; then \
 	  echo "share-strings-test: FAIL (a String reopening's method does not take self as its handle)"; ok=0; \
 	fi; \
-	if [ -z "$(filter -DSP_ONE_STRING,$(COPT))" ] && { ! $(SPINEL) --share-strings test/share/share_strings_self_forwarding.rb -c --no-line-map -o "$$tmp/forward.c" >"$$tmp/out" 2>&1 || \
-	   grep -q 'sp_String_self_bytes_[a-z_]*(sp_String \*self' "$$tmp/forward.c" || \
-	   grep -q 'sp_String_self_handle_[a-z_]*(const char \*self' "$$tmp/forward.c" || \
-	   ! grep -q 'sp_String_self_bytes_argument(const char \*self)' "$$tmp/forward.c" || \
-	   ! grep -q 'sp_String_self_handle_argument(sp_String \*self)' "$$tmp/forward.c"; }; then \
-	  echo "share-strings-test: FAIL (String self forwarding does not select the callee ABI)"; ok=0; \
-	fi; \
 	t=test/share_strings_copy_beside_alloc.rb; \
 	if ! $(SPINEL) --share-strings "$$t" -o "$$tmp/cba" >"$$tmp/out" 2>&1 || \
 	   ! SPINEL_GC_STRESS=2 "$$tmp/cba" 2>&1 | cmp -s - "$$t.expected"; then \
 	  echo "share-strings-test: FAIL (a shared String's copy beside an allocating operand is not rooted, GC stress 2)"; ok=0; \
 	fi; \
-	[ -n "$(filter -DSP_ONE_STRING,$(COPT))" ] || for t in test/share/strh_*.rb; do \
-	  if ! $(SPINEL) --share-strings "$$t" -c --no-line-map -o "$$tmp/strh.c" >"$$tmp/out" 2>&1; then \
-	    echo "share-strings-test: FAIL $$t (refused)"; ok=0; \
-	  elif [ "$$t" = test/share/strh_poly_fallback.rb ]; then \
-	    ! grep -q 'sp_StrhArray_new' "$$tmp/strh.c" || \
-	      { echo "share-strings-test: FAIL $$t (an Array with a use the handle form does not answer took it)"; ok=0; }; \
-	  else \
-	    grep -q 'sp_StrhArray_new' "$$tmp/strh.c" || \
-	      { echo "share-strings-test: FAIL $$t (its Array of shared Strings is not held as their handles)"; ok=0; }; \
-	  fi; \
-	done; \
 	rm -rf "$$tmp"; \
 	if [ $$ok = 1 ]; then echo "share-strings-test: pass"; else exit 1; fi
 
@@ -1662,7 +1623,7 @@ test: lib/spinel_rt_responds_generated.h $(SPINEL_TIMEOUT) cext-header-test cext
 # The actual run. rbs-test golden-checks the RBS extractor (cheap, C-only).
 # rbs-seed-test checks the seeds actually reach the analyzer (incl. nested
 # classes, #1417).
-test-run: int-min-test timing-test signal-default-test source-marker-test magic-comment-test rbs-test rbs-seed-test inline-rbs-test re-lit-test value-pos-test value-edges-check implied-calls-check implied-calls-test node-kinds-check package-facts-check reject-test cli-opts-test link-names-test reach-test defer-refusals-test check-stores-test backtrace-test gc-minor-test gc-phases-test gc-stress-test gc-threshold-test gc-none-test gc-obj-budget-test gc-nogc-poll-test gc-str-budget-test gc-str-major-test threaded-render-test gc-locality-test byref-capture-test thread-puts-test ext-test ext-cruby-test test-corpus-summary
+test-run: int-min-test timing-test signal-default-test source-marker-test magic-comment-test rbs-test rbs-seed-test inline-rbs-test re-lit-test value-pos-test value-edges-check implied-calls-check implied-calls-test node-kinds-check package-facts-check reject-test cli-opts-test link-names-test reach-test defer-refusals-test check-stores-test backtrace-test gc-minor-test gc-phases-test gc-stress-test gc-none-test gc-nogc-poll-test threaded-render-test gc-locality-test byref-capture-test thread-puts-test ext-test ext-cruby-test test-corpus-summary
 
 # The test/*.rb corpus (and the bundled packages') on its own, without the
 # C-side legs: what a 32-bit target runs (`make test-corpus CC='cc -m32'`),
@@ -1775,7 +1736,7 @@ ext-cruby-test: $(SPINEL) $(SP_RT_LIB)
 	  --ext-entry ExtKernel.triple,ExtKernel.shout,ExtKernel.total,ExtKernel.pair_sum,ExtKernel.must_pos,ExtKernel.pause_total \
 	  -o "$$tmp/extk.c" >/dev/null 2>&1 || { echo "ext-cruby-test: FAIL (emission)"; ok=0; }; \
 	if [ $$ok -eq 1 ]; then \
-	  if $(CC) $$SOFLAGS -fPIC -O1 -w $(filter -DSP_ONE_STRING,$(COPT)) -I"$$RH" -I"$$RA" -Ilib -Ilib/regexp -Ilib/regexp/shim -I"$$tmp" \
+	  if $(CC) $$SOFLAGS -fPIC -O1 -w -I"$$RH" -I"$$RA" -Ilib -Ilib/regexp -Ilib/regexp/shim -I"$$tmp" \
 	       "$$tmp/extk_ext.c" "$$tmp/extk.c" $$(ls lib/*.c lib/regexp/*.c | sed 's/^/ /') \
 	       $(LDFLAGS) -lm -o "$$tmp/extk.$$DLEXT" 2>"$$tmp/cc.err"; then \
 	    ( cd "$$tmp" && cp $(CURDIR)/test/ext/driver.rb . && ruby driver.rb > out 2>&1 ); rc=$$?; \
@@ -2549,10 +2510,6 @@ gc-stress-test: $(SPINEL) $(SP_RT_LIB) $(SP_RT_MT_LIB) $(SPINEL_TIMEOUT)
 	rm -rf "$$tmp"; \
 	if [ $$ok -eq 1 ]; then echo "gc-stress-test: pass"; else exit 1; fi
 
-# The two per-heap collection floors move ONE trigger each, which is the whole
-# point of having them: moving both together cannot say which heap paces the
-# collections (#4384). Read back off SPINEL_GC_STATS, which reports the two
-# separately, so the test asserts the mechanism rather than a timing.
 # --gc=none: the program answers as with the collector, and the collector
 # (sp_gc_collect and what only it reaches) is not in the binary.
 # The program answers as with the collector, and the binary holds neither
@@ -2571,77 +2528,6 @@ gc-none-test: $(SPINEL) $(SP_RT_NOGC_LIB) $(SPINEL_TIMEOUT)
 	fi; \
 	rm -rf "$$tmp"; if [ $$ok -eq 1 ]; then echo "gc-none-test: pass"; else exit 1; fi
 
-gc-threshold-test: $(SPINEL) $(SP_RT_LIB) $(SP_RT_MT_LIB) $(SPINEL_TIMEOUT)
-	@if [ -n "$(filter -DSP_ONE_STRING,$(COPT))" ]; then echo "gc-threshold-test: skipped (one-String mode: a String lives in the object heap, and the String heap these budgets weigh holds none)"; exit 0; fi; \
-	tmp=$$(mktemp -d /tmp/spinel-gcthr.XXXXXX); ok=1; \
-	src=test/gc_threshold_per_heap.rb; \
-	$(SPINEL) "$$src" -o "$$tmp/t" >"$$tmp/cc.out" 2>&1; rc=$$?; \
-	[ $$rc -eq 0 ] || \
-	  { echo "gc-threshold-test: FAIL (compile, exit $$rc)"; tail -5 "$$tmp/cc.out"; rm -rf "$$tmp"; exit 1; }; \
-	SPINEL_GC_STATS=1 $(TIMEOUT60) "$$tmp/t" >/dev/null 2> "$$tmp/base.err"; \
-	SPINEL_GC_THRESHOLD_OBJ_KB=16384 SPINEL_GC_STATS=1 $(TIMEOUT60) "$$tmp/t" >/dev/null 2> "$$tmp/obj.err"; \
-	SPINEL_GC_THRESHOLD_STR_KB=16384 SPINEL_GC_STATS=1 $(TIMEOUT60) "$$tmp/t" >/dev/null 2> "$$tmp/str.err"; \
-	first_obj() { sed -n 's/.*trigger \([0-9.]*\) MB obj.*/\1/p' "$$1" | head -1; }; \
-	first_str() { sed -n 's/.*+ \([0-9.]*\) MB str.*/\1/p' "$$1" | head -1; }; \
-	bo=$$(first_obj "$$tmp/base.err"); bs=$$(first_str "$$tmp/base.err"); \
-	oo=$$(first_obj "$$tmp/obj.err");  os=$$(first_str "$$tmp/obj.err"); \
-	so=$$(first_obj "$$tmp/str.err");  ss=$$(first_str "$$tmp/str.err"); \
-	for v in "$$bo" "$$bs" "$$oo" "$$os" "$$so" "$$ss"; do \
-	  [ -n "$$v" ] || { echo "gc-threshold-test: FAIL (no trigger line from SPINEL_GC_STATS)"; ok=0; break; }; \
-	done; \
-	awk -v a="$$oo" -v b="$$bo" 'BEGIN{exit !(a > b * 8)}' || \
-	  { echo "gc-threshold-test: FAIL (OBJ_KB did not raise the object trigger: $$bo -> $$oo)"; ok=0; }; \
-	awk -v a="$$os" -v b="$$bs" 'BEGIN{exit !(a < b * 4)}' || \
-	  { echo "gc-threshold-test: FAIL (OBJ_KB moved the string trigger too: $$bs -> $$os)"; ok=0; }; \
-	awk -v a="$$ss" -v b="$$bs" 'BEGIN{exit !(a > b * 8)}' || \
-	  { echo "gc-threshold-test: FAIL (STR_KB did not raise the string trigger: $$bs -> $$ss)"; ok=0; }; \
-	awk -v a="$$so" -v b="$$bo" 'BEGIN{exit !(a < b * 4)}' || \
-	  { echo "gc-threshold-test: FAIL (STR_KB moved the object trigger too: $$bo -> $$so)"; ok=0; }; \
-	rm -rf "$$tmp"; \
-	if [ $$ok -eq 1 ]; then echo "gc-threshold-test: pass"; else exit 1; fi
-
-# The string major has two policies and this leg asserts the difference is the
-# one they claim, on a shape where the SIZE gate ratchets: a 12 MB live string
-# set under a 4 MB pinned floor, so promotion runs ahead of the gate. The
-# schedule is the default and SPINEL_GC_STR_MAJOR=size is the way back, so the
-# leg also pins which of the two ships. Everything here is a comparison of the
-# two arms in the SAME run of the same binary on the same machine -- no absolute
-# either arm has to hit, because both numbers are set by how much this box
-# promotes (#4407).
-gc-str-major-test: $(SPINEL) $(SP_RT_LIB) $(SP_RT_MT_LIB) $(SPINEL_TIMEOUT)
-	@if [ -n "$(filter -DSP_ONE_STRING,$(COPT))" ]; then echo "gc-str-major-test: skipped (one-String mode: a String lives in the object heap, and the String heap these budgets weigh holds none)"; exit 0; fi; \
-	tmp=$$(mktemp -d /tmp/spinel-gcstrmaj.XXXXXX); ok=1; \
-	src=test/gc_str_major_interval.rb; \
-	$(SPINEL) "$$src" -o "$$tmp/t" >"$$tmp/cc.out" 2>&1; rc=$$?; \
-	[ $$rc -eq 0 ] || \
-	  { echo "gc-str-major-test: FAIL (compile, exit $$rc)"; tail -5 "$$tmp/cc.out"; rm -rf "$$tmp"; exit 1; }; \
-	run() { SPINEL_GC_STR_BUDGET=fixed SPINEL_GC_THRESHOLD_STR_KB=4096 \
-	        SPINEL_GC_PHASES=1 $(TIMEOUT60) "$$tmp/t" > "$$tmp/$$1.out" 2> "$$tmp/$$1.err"; }; \
-	run default; \
-	SPINEL_GC_STR_MAJOR=size; export SPINEL_GC_STR_MAJOR; run size; \
-	unset SPINEL_GC_STR_MAJOR; \
-	for m in default size; do \
-	  cmp -s "$$tmp/$$m.out" "$$src.expected" || \
-	    { echo "gc-str-major-test: FAIL ($$m changed the answer)"; ok=0; }; \
-	done; \
-	old_of() { sed -n 's/.*+ \([0-9.]*\) MB old .*/\1/p' "$$1" | tail -1; }; \
-	maj_of() { sed -n 's/.*old, \([0-9]*\) so far.*/\1/p' "$$1" | tail -1; }; \
-	do=$$(old_of "$$tmp/default.err"); io=$$(old_of "$$tmp/size.err"); \
-	dm=$$(maj_of "$$tmp/default.err"); im=$$(maj_of "$$tmp/size.err"); \
-	for v in "$$do" "$$io" "$$dm" "$$im"; do \
-	  [ -n "$$v" ] || { echo "gc-str-major-test: FAIL (no [gcph] string live line)"; ok=0; break; }; \
-	done; \
-	grep -q "major every .* sweeps, backstop " "$$tmp/default.err" || \
-	  { echo "gc-str-major-test: FAIL (the schedule is not the default)"; ok=0; }; \
-	grep -q "major at " "$$tmp/size.err" || \
-	  { echo "gc-str-major-test: FAIL (=size did not restore the size gate)"; ok=0; }; \
-	awk -v a="$$dm" -v b="$$im" 'BEGIN{exit !(a > b)}' || \
-	  { echo "gc-str-major-test: FAIL (the schedule did not run more majors: $$im -> $$dm)"; ok=0; }; \
-	awk -v a="$$do" -v b="$$io" 'BEGIN{exit !(a <= b)}' || \
-	  { echo "gc-str-major-test: FAIL (the schedule left MORE old behind: $$io -> $$do)"; ok=0; }; \
-	rm -rf "$$tmp"; \
-	if [ $$ok -eq 1 ]; then echo "gc-str-major-test: pass"; else exit 1; fi
-
 # A loop whose only allocations are a Bignum operation's (sp_gc_alloc_nogc,
 # which may not collect: the operands are temporaries nothing roots) asks
 # the loop's back-edge to collect (sp_gc_poll_request): 200000 rounds
@@ -2657,149 +2543,6 @@ gc-nogc-poll-test: $(SPINEL) $(SP_RT_LIB) $(SPINEL_TIMEOUT)
 	[ "$${n:-0}" -ge 10 ] || \
 	  { echo "gc-nogc-poll-test: FAIL ($${n:-0} collections over 200000 rounds of Bignums: the back-edge ran none)"; rm -rf "$$tmp"; exit 1; }; \
 	rm -rf "$$tmp"; echo "gc-nogc-poll-test: pass ($$n collections)"
-
-# The object budget is priced off objects PLUS strings by default;
-# SPINEL_GC_OBJ_BUDGET=obj restores pricing it off the object heap alone.
-# The assertion is a WITHIN-RUN invariant -- the trigger against the live set
-# that same line reports -- not a comparison of one run's number with another's.
-# Both triggers retune continuously, so two runs' last lines are two different
-# moments, which is what made a cross-run version of this flake.
-gc-obj-budget-test: $(SPINEL) $(SP_RT_LIB) $(SPINEL_TIMEOUT)
-	@if [ -n "$(filter -DSP_ONE_STRING,$(COPT))" ]; then echo "gc-obj-budget-test: skipped (one-String mode: a String lives in the object heap, and the String heap these budgets weigh holds none)"; exit 0; fi; \
-	tmp=$$(mktemp -d /tmp/spinel-gcobj.XXXXXX); ok=1; \
-	str_of() { sed -n 's/.*+ \([0-9.]*\) MB str; trigger.*/\1/p' "$$1" | tail -1; }; \
-	trg_of() { sed -n 's/.*trigger \([0-9.]*\) MB obj.*/\1/p' "$$1" | tail -1; }; \
-	for prog in gc_obj_budget_walk gc_obj_budget_mark; do \
-	  $(SPINEL) test/$$prog.rb -o "$$tmp/$$prog" >"$$tmp/cc.out" 2>&1; rc=$$?; \
-	  [ $$rc -eq 0 ] || \
-	    { echo "gc-obj-budget-test: FAIL ($$prog: compile, exit $$rc)"; tail -5 "$$tmp/cc.out"; ok=0; continue; }; \
-	  for mode in default walk obj; do \
-	    if [ "$$mode" = default ]; then unset SPINEL_GC_OBJ_BUDGET; \
-	    else SPINEL_GC_OBJ_BUDGET=$$mode; export SPINEL_GC_OBJ_BUDGET; fi; \
-	    SPINEL_GC_STATS=1 $(TIMEOUT60) "$$tmp/$$prog" > "$$tmp/$$prog.$$mode.out" 2> "$$tmp/$$prog.$$mode.err"; \
-	    cmp -s "$$tmp/$$prog.$$mode.out" test/$$prog.rb.expected || \
-	      { echo "gc-obj-budget-test: FAIL ($$prog: $$mode changed the answer)"; ok=0; }; \
-	  done; \
-	  unset SPINEL_GC_OBJ_BUDGET; \
-	done; \
-	ws=$$(str_of "$$tmp/gc_obj_budget_walk.obj.err"); \
-	ot=$$(trg_of "$$tmp/gc_obj_budget_walk.obj.err"); \
-	wt=$$(trg_of "$$tmp/gc_obj_budget_walk.walk.err"); \
-	gt=$$(trg_of "$$tmp/gc_obj_budget_walk.default.err"); \
-	mo=$$(trg_of "$$tmp/gc_obj_budget_mark.obj.err"); \
-	mw=$$(trg_of "$$tmp/gc_obj_budget_mark.walk.err"); \
-	mg=$$(trg_of "$$tmp/gc_obj_budget_mark.default.err"); \
-	[ -n "$$ws" ] && [ -n "$$wt" ] && [ -n "$$gt" ] && [ -n "$$mg" ] || \
-	  { echo "gc-obj-budget-test: FAIL (no trigger line)"; ok=0; }; \
-	awk -v t="$$ot" -v s="$$ws" 'BEGIN{exit !(t < s)}' || \
-	  { echo "gc-obj-budget-test: FAIL (obj still saw the strings: trigger $$ot vs live str $$ws)"; ok=0; }; \
-	awk -v t="$$wt" -v s="$$ws" 'BEGIN{exit !(t > s)}' || \
-	  { echo "gc-obj-budget-test: FAIL (walk did not price in the strings: trigger $$wt vs live str $$ws)"; ok=0; }; \
-	awk -v g="$$gt" -v w="$$wt" 'BEGIN{exit !(g < w)}' || \
-	  { echo "gc-obj-budget-test: FAIL (the gate widened a sweep-bound program: $$gt vs walk $$wt)"; ok=0; }; \
-	awk -v g="$$mg" -v o="$$mo" 'BEGIN{exit !(g > o)}' || \
-	  { echo "gc-obj-budget-test: FAIL (the gate did not widen a mark-bound program: $$mg vs obj $$mo)"; ok=0; }; \
-	awk -v g="$$mg" -v w="$$mw" 'BEGIN{exit !(g > 0.99 * w)}' || \
-	  { echo "gc-obj-budget-test: FAIL (the gate fell short of walk on a mark-bound program: $$mg vs walk $$mw)"; ok=0; }; \
-	rm -rf "$$tmp"; \
-	if [ $$ok -eq 1 ]; then echo "gc-obj-budget-test: pass"; else exit 1; fi
-
-# The string budget carries a share of the object old generation, gated on
-# what the last collection cost; SPINEL_GC_STR_BUDGET=str pins the share off
-# and `walk` pins it on. Three arms of the SAME binary on two programs at the
-# two ends of the gate, as gc-obj-budget-test does for the object budget.
-# gc_str_budget_objects keeps objects and throws its strings away: the share is
-# read as a WITHIN-RUN invariant -- the figure the `[gc]` line reports against
-# the object live set on that same line -- and has to sit between an eighth and
-# a half of it, so the leg fails with the share gone and with the whole heap in
-# it. gc_str_budget_still holds a heap its collections do not walk: there the
-# gate has to decline, which is read against `walk`. The collection counts are
-# compared across arms: they are counts, so a busy machine gives the same
-# answer as an idle one.
-# The gate reads the mark share the last collection MEASURED, not what
-# SPINEL_GC_OBJ_BUDGET made of it for the object budget, and four more runs
-# hold that: `obj` there must not take the share off the first program, `walk`
-# must not put it on the second, and neither must `fixed` (with the object
-# floor raised, so that budget is held where the string trigger still decides
-# when to collect), read against `walk` under the same held budget.
-# gc_str_budget_kept is the reading itself: a sweep that reclaims nothing puts
-# no share in the trigger, so the last `[gc]` line has to say zero -- on a
-# program whose first half did carry it, which the count against `str` shows.
-gc-str-budget-test: $(SPINEL) $(SP_RT_LIB) $(SPINEL_TIMEOUT)
-	@if [ -n "$(filter -DSP_ONE_STRING,$(COPT))" ]; then echo "gc-str-budget-test: skipped (one-String mode: a String lives in the object heap, and the String heap these budgets weigh holds none)"; exit 0; fi; \
-	tmp=$$(mktemp -d /tmp/spinel-gcstr.XXXXXX); ok=1; \
-	for prog in gc_str_budget_objects gc_str_budget_still gc_str_budget_kept; do \
-	  $(SPINEL) test/$$prog.rb -o "$$tmp/$$prog" >"$$tmp/cc.out" 2>&1; rc=$$?; \
-	  [ $$rc -eq 0 ] || \
-	    { echo "gc-str-budget-test: FAIL ($$prog: compile, exit $$rc)"; tail -5 "$$tmp/cc.out"; ok=0; continue; }; \
-	  for mode in default walk str; do \
-	    if [ "$$mode" = default ]; then unset SPINEL_GC_STR_BUDGET; \
-	    else SPINEL_GC_STR_BUDGET=$$mode; export SPINEL_GC_STR_BUDGET; fi; \
-	    SPINEL_GC_STATS=1 $(TIMEOUT60) "$$tmp/$$prog" > "$$tmp/$$prog.$$mode.out" 2> "$$tmp/$$prog.$$mode.err"; \
-	    cmp -s "$$tmp/$$prog.$$mode.out" test/$$prog.rb.expected || \
-	      { echo "gc-str-budget-test: FAIL ($$prog: $$mode changed the answer)"; ok=0; }; \
-	  done; \
-	  unset SPINEL_GC_STR_BUDGET; \
-	done; \
-	held="SPINEL_GC_OBJ_BUDGET=fixed SPINEL_GC_THRESHOLD_OBJ_KB=65536"; \
-	for arm in "gc_str_budget_objects objpin SPINEL_GC_OBJ_BUDGET=obj" \
-	           "gc_str_budget_still walkpin SPINEL_GC_OBJ_BUDGET=walk" \
-	           "gc_str_budget_still held $$held" \
-	           "gc_str_budget_still heldwalk $$held SPINEL_GC_STR_BUDGET=walk"; do \
-	  set -- $$arm; prog=$$1; tag=$$2; shift 2; \
-	  [ -x "$$tmp/$$prog" ] || continue; \
-	  env "$$@" SPINEL_GC_STATS=1 $(TIMEOUT60) "$$tmp/$$prog" > "$$tmp/$$prog.$$tag.out" 2> "$$tmp/$$prog.$$tag.err"; \
-	  cmp -s "$$tmp/$$prog.$$tag.out" test/$$prog.rb.expected || \
-	    { echo "gc-str-budget-test: FAIL ($$prog: $$* changed the answer)"; ok=0; }; \
-	done; \
-	n_of() { sed -n 's/^\[gc\] \([0-9]*\) collections.*/\1/p' "$$1" | tail -1; }; \
-	obj_of() { sed -n 's/.*live \([0-9.]*\) MB obj.*/\1/p' "$$1" | tail -1; }; \
-	share_of() { sed -n 's/.*old obj in str trigger \([0-9.]*\) MB.*/\1/p' "$$1" | tail -1; }; \
-	on=$$(n_of "$$tmp/gc_str_budget_objects.default.err"); \
-	ow=$$(n_of "$$tmp/gc_str_budget_objects.walk.err"); \
-	os=$$(n_of "$$tmp/gc_str_budget_objects.str.err"); \
-	ol=$$(obj_of "$$tmp/gc_str_budget_objects.default.err"); \
-	oh=$$(share_of "$$tmp/gc_str_budget_objects.default.err"); \
-	sh=$$(share_of "$$tmp/gc_str_budget_objects.str.err"); \
-	gn=$$(n_of "$$tmp/gc_str_budget_still.default.err"); \
-	gw=$$(n_of "$$tmp/gc_str_budget_still.walk.err"); \
-	pl=$$(obj_of "$$tmp/gc_str_budget_objects.objpin.err"); \
-	ph=$$(share_of "$$tmp/gc_str_budget_objects.objpin.err"); \
-	wn=$$(n_of "$$tmp/gc_str_budget_still.walkpin.err"); \
-	hn=$$(n_of "$$tmp/gc_str_budget_still.held.err"); \
-	hw=$$(n_of "$$tmp/gc_str_budget_still.heldwalk.err"); \
-	kn=$$(n_of "$$tmp/gc_str_budget_kept.default.err"); \
-	ks=$$(n_of "$$tmp/gc_str_budget_kept.str.err"); \
-	kh=$$(share_of "$$tmp/gc_str_budget_kept.default.err"); \
-	for v in "$$on" "$$ow" "$$os" "$$ol" "$$oh" "$$sh" "$$gn" "$$gw" "$$pl" "$$ph" "$$wn" "$$hn" "$$hw" "$$kn" "$$ks" "$$kh"; do \
-	  [ -n "$$v" ] || { echo "gc-str-budget-test: FAIL (no [gc] line with the share on it)"; ok=0; break; }; \
-	done; \
-	awk -v s="$$sh" 'BEGIN{exit !(s == 0)}' || \
-	  { echo "gc-str-budget-test: FAIL (str still carried the object heap: $$sh MB)"; ok=0; }; \
-	awk -v s="$$oh" -v o="$$ol" 'BEGIN{exit !(s > o / 8)}' || \
-	  { echo "gc-str-budget-test: FAIL (the string budget did not see the object heap: $$oh MB against $$ol MB live)"; ok=0; }; \
-	awk -v s="$$oh" -v o="$$ol" 'BEGIN{exit !(s < o / 2)}' || \
-	  { echo "gc-str-budget-test: FAIL (the string budget carried more than a share of the object heap: $$oh MB against $$ol MB live)"; ok=0; }; \
-	awk -v d="$$on" 'BEGIN{exit !(d >= 8)}' || \
-	  { echo "gc-str-budget-test: FAIL (only $$on collections: the program no longer exercises the budget)"; ok=0; }; \
-	awk -v d="$$on" -v s="$$os" 'BEGIN{exit !(d * 2 < s)}' || \
-	  { echo "gc-str-budget-test: FAIL (the share did not buy fewer collections: $$os -> $$on)"; ok=0; }; \
-	awk -v d="$$on" -v w="$$ow" 'BEGIN{exit !(d * 4 <= w * 5)}' || \
-	  { echo "gc-str-budget-test: FAIL (the gate fell short of walk on a mark-bound program: $$on collections vs walk $$ow)"; ok=0; }; \
-	awk -v d="$$gn" -v w="$$gw" 'BEGIN{exit !(d * 2 > w * 3)}' || \
-	  { echo "gc-str-budget-test: FAIL (the gate carried the share on a sweep-bound program: $$gn collections vs walk $$gw)"; ok=0; }; \
-	awk -v s="$$ph" -v o="$$pl" 'BEGIN{exit !(s > o / 8)}' || \
-	  { echo "gc-str-budget-test: FAIL (SPINEL_GC_OBJ_BUDGET=obj took the share off the string budget: $$ph MB against $$pl MB live)"; ok=0; }; \
-	awk -v d="$$wn" -v w="$$gw" 'BEGIN{exit !(d * 2 > w * 3)}' || \
-	  { echo "gc-str-budget-test: FAIL (SPINEL_GC_OBJ_BUDGET=walk opened the string budget's gate: $$wn collections vs walk $$gw)"; ok=0; }; \
-	awk -v d="$$hn" -v w="$$hw" 'BEGIN{exit !(d * 2 > w * 3)}' || \
-	  { echo "gc-str-budget-test: FAIL (SPINEL_GC_OBJ_BUDGET=fixed opened the string budget's gate: $$hn collections vs walk $$hw)"; ok=0; }; \
-	awk -v d="$$kn" -v s="$$ks" 'BEGIN{exit !(d * 2 < s)}' || \
-	  { echo "gc-str-budget-test: FAIL (gc_str_budget_kept never carried the share: $$ks -> $$kn collections)"; ok=0; }; \
-	awk -v s="$$kh" 'BEGIN{exit !(s == 0)}' || \
-	  { echo "gc-str-budget-test: FAIL (the reading kept a share the last retune did not put in: $$kh MB)"; ok=0; }; \
-	rm -rf "$$tmp"; \
-	if [ $$ok -eq 1 ]; then echo "gc-str-budget-test: pass"; else exit 1; fi
 
 # A byref String parameter that a lifted proc also captures: the capture holds
 # the CALLER's slot, which for the stack shape is not a GC object, and marking
@@ -3054,11 +2797,8 @@ build/gc-minor-results/never_young_store.chk: FORCE | $(SPINEL) $(SP_RT_LIB) $(S
 	$(SPINEL) test/gc_minor_never_young_store.rb --no-line-map -c -o "$$tmp/ny.c" >/dev/null 2>&1; \
 	sed -n '/^[^ ].* sp_Node_initialize(.*) {$$/,/^}$$/p' "$$tmp/ny.c" > "$$tmp/ny.init"; \
 	sed -n '/^[^ ].* sp_grow(.*) {$$/,/^}$$/p' "$$tmp/ny.c" > "$$tmp/ny.grow"; \
-	if [ -n "$(filter -DSP_ONE_STRING,$(COPT))" ]; then \
-	  if [ ! -s "$$tmp/ny.init" ] || grep -E '= NULL;' "$$tmp/ny.init" | grep -q 'sp_gc_wb\|SP_WBO'; then \
-	    echo "gc-minor-test: FAIL (a store of nil took a barrier: nil is no object)"; ok=0; fi; \
-	elif [ ! -s "$$tmp/ny.init" ] || grep -q 'sp_gc_wb\|SP_WBO' "$$tmp/ny.init"; then \
-	  echo "gc-minor-test: FAIL (a store of nil or of a string literal took a barrier: neither is ever a young object)"; ok=0; fi; \
+	if [ ! -s "$$tmp/ny.init" ] || grep -E '= NULL;' "$$tmp/ny.init" | grep -q 'sp_gc_wb\|SP_WBO'; then \
+	  echo "gc-minor-test: FAIL (a store of nil took a barrier: nil is no object)"; ok=0; fi; \
 	if [ "$$(grep -c sp_gc_wb "$$tmp/ny.grow")" != 3 ]; then \
 	  echo "gc-minor-test: FAIL (a store of a fresh object or string lost its barrier)"; ok=0; fi; \
 	rm -rf "$$tmp"; echo $$ok > $@
@@ -3419,15 +3159,8 @@ build/rbs-seed-results/%.res: FORCE | rbs-seed-extractor $(SP_RT_LIB) $(SPINEL_T
 	done; \
 	;; \
 	shared_rbs_string_return_refused) \
-	if [ -n "$(filter -DSP_ONE_STRING,$(COPT))" ]; then \
-	  $(SPINEL) test/rbs-seed/shared_rbs_string_return_refused.rb --rbs test/rbs-seed/sig -c --no-line-map -o "$$tmp/srsf.c" >/dev/null 2>"$$tmp/srsf.err" || \
-	    { echo "rbs-seed-test: FAIL (one-String mode: a seeded String method whose tail is the handle was refused)"; sed -n 1,3p "$$tmp/srsf.err"; ok=0; }; \
-	else \
-	SP_COLLECT_ERRORS=1 $(SPINEL) test/rbs-seed/shared_rbs_string_return_refused.rb --rbs test/rbs-seed/sig --share-strings -c --no-line-map -o "$$tmp/srsf.c" >/dev/null 2>"$$tmp/srsf.err"; \
-	for m in ens_after ens_reader ens_tail ens_def ens_block; do \
-	  grep -q "the value of \`$$m\` hands on" "$$tmp/srsf.err" || { echo "rbs-seed-test: FAIL (#6765 a seeded String method's $$m was not refused: its tail does not publish the box's handle)"; ok=0; }; \
-	done; \
-	fi; \
+	$(SPINEL) test/rbs-seed/shared_rbs_string_return_refused.rb --rbs test/rbs-seed/sig -c --no-line-map -o "$$tmp/srsf.c" >/dev/null 2>"$$tmp/srsf.err" || \
+	  { echo "rbs-seed-test: FAIL (a seeded String method whose tail is the handle was refused)"; sed -n 1,3p "$$tmp/srsf.err"; ok=0; }; \
 	;; \
 	byref_string_param) \
 	$(SPINEL) test/rbs-seed/byref_string_param.rb --rbs test/rbs-seed/sig \
@@ -4773,19 +4506,12 @@ cls-fact-check: $(SPINEL)
 # only -- so without this a fixture whose C names the right types but does not
 # compile, or compiles and then raises, passes the whole leg.
 # The C a String parameter, field or local is declared as, which the checks
-# below read: the handle in the one-String mode, the bytes otherwise, and a
-# by-reference String parameter the same (a handle needs no cell)
-ifneq ($(filter -DSP_ONE_STRING,$(COPT)),)
+# below read: the handle, and a by-reference String parameter the same (a
+# handle needs no cell)
 STR_SLOT_C = sp_String \*
 STR_SLOT_RE = sp_String[[:space:]]*\*
 STR_BYREF_S = sp_String \* lv_s
 STR_BYREF_PLAIN = sp_String \* lv_plain
-else
-STR_SLOT_C = const char \*
-STR_SLOT_RE = const char[[:space:]]*\*
-STR_BYREF_S = const char \* \*_cell_s
-STR_BYREF_PLAIN = const char \* \*_cell_plain
-endif
 infer-test: $(SPINEL) $(SP_RT_LIB)
 	@tmp=$$(mktemp -d /tmp/spinel-infer.XXXXXX); ok=1; \
 	for f in test/infer/*.rb; do \
@@ -5474,22 +5200,6 @@ collect-errors-test: $(SPINEL)
 	n=$$(grep -c 'seed contradicted' "$$tmp/s2.err"); \
 	[ "$$n" -eq 2 ] || { echo "collect-errors-test: FAIL (without the flag the run reported $$n of 2 contradictions: every compile collects)"; ok=0; }; \
 	[ $$rc -ne 0 ] || { echo "collect-errors-test: FAIL (a contradicted seed was emitted without the flag)"; ok=0; }; \
-	sr=test/seal_collect_route_and_flow.rb; \
-	if [ -z "$(filter -DSP_ONE_STRING,$(COPT))" ]; then \
-	SP_COLLECT_ERRORS=1 $(SPINEL) --share-strings "$$sr" -c -o "$$tmp/sr.c" >"$$tmp/sr.err" 2>&1; \
-	n=$$(grep -cE '^spinel: .*(shared with another name|does not follow this route)' "$$tmp/sr.err"); \
-	[ "$$n" -eq 3 ] || { echo "collect-errors-test: FAIL (collect mode reported $$n of the seal's 3 refusals)"; ok=0; }; \
-	$(SPINEL) --share-strings "$$sr" -c -o "$$tmp/sr2.c" >"$$tmp/sr2.err" 2>&1; rc=$$?; \
-	n=$$(grep -cE '^spinel: .*(shared with another name|does not follow this route)' "$$tmp/sr2.err"); \
-	[ $$rc -ne 0 ] && [ "$$n" -eq 1 ] || { echo "collect-errors-test: FAIL (without the flag the seal reported $$n refusals, rc=$$rc: it stops at the first)"; ok=0; }; \
-	rm -f "$$tmp/sr.json"; \
-	$(SPINEL) --share-strings "$$sr" --emit-types -o "$$tmp/sr.json" >"$$tmp/sr3.err" 2>&1; rc=$$?; \
-	n=$$(grep -cE '^spinel: .*(shared with another name|does not follow this route)' "$$tmp/sr3.err"); \
-	[ $$rc -eq 1 ] && [ "$$n" -eq 3 ] || { echo "collect-errors-test: FAIL (under --emit-types the seal reported $$n of its 3 refusals, rc=$$rc: the run goes on past each and exits 1)"; ok=0; }; \
-	[ -f "$$tmp/sr.json" ] || { echo "collect-errors-test: FAIL (a program the seal refuses left no --emit-types JSON)"; ok=0; }; \
-	n=$$(grep -c '"severity":"error"' "$$tmp/sr.json" 2>/dev/null); \
-	[ "$$n" -eq 3 ] || { echo "collect-errors-test: FAIL (the --emit-types JSON carries $$n of the seal's 3 refusals)"; ok=0; }; \
-	fi; \
 	$(SPINEL) "$$src" -c --no-line-map -o "$$tmp/g2.c" >"$$tmp/g2.err" 2>&1; rc=$$?; \
 	[ $$rc -ne 0 ] || { echo "collect-errors-test: FAIL (a program with a gap compiled without the flag)"; ok=0; }; \
 	[ ! -f "$$tmp/g2.c" ] || { echo "collect-errors-test: FAIL (a refused program's C was written)"; ok=0; }; \
@@ -5544,7 +5254,7 @@ alloc-report-test: $(SPINEL) $(SP_RT_LIB)
 	grep -q '^960$$' "$$tmp/sa.out" || { echo "alloc-report-test: FAIL (straight_append wrong length)"; ok=0; }; \
 	awk '/^# bytes .*String /{n=$$NF} END{ if (n == "" || n+0 > 5000) exit 1 }' "$$tmp/sa.folded" || { echo "alloc-report-test: FAIL (straight-line appends allocate a multiple of the result: quadratic is back)"; grep String "$$tmp/sa.folded"; ok=0; }; \
 	grep -q '^alloc;(unattributed) ' "$$tmp/s.folded" && { echo "alloc-report-test: FAIL (the stats table saturated on a normal run)"; ok=0; }; \
-	$(CC) $(CFLAGS) $(filter -DSP_ONE_STRING,$(COPT)) -DSP_ALLOC_STATS=2 -Ilib -c lib/sp_alloc.c -o "$$tmp/sm.o" 2>/dev/null || { echo "alloc-report-test: FAIL (compile small-table sp_alloc)"; exit 1; }; \
+	$(CC) $(CFLAGS) -DSP_ALLOC_STATS=2 -Ilib -c lib/sp_alloc.c -o "$$tmp/sm.o" 2>/dev/null || { echo "alloc-report-test: FAIL (compile small-table sp_alloc)"; exit 1; }; \
 	cp $(SP_RT_LIB) "$$tmp/sm.a" && ar d "$$tmp/sm.a" sp_alloc.o 2>/dev/null && ar r "$$tmp/sm.a" "$$tmp/sm.o" 2>/dev/null; \
 	$(SPINEL) test/alloc-report/sites.rb -c --no-line-map -o "$$tmp/sm.c" >/dev/null 2>&1; \
 	$(CC) $(CFLAGS) -Ilib "$$tmp/sm.c" "$$tmp/sm.a" $(LDFLAGS) -lm $(GC_FLAGS) -o "$$tmp/sm" 2>/dev/null || { echo "alloc-report-test: FAIL (link small-table binary)"; exit 1; }; \

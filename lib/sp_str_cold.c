@@ -265,8 +265,8 @@ const char*sp_str_dump(const char*s){SP_GC_ROOT_STR(s);
   }
   out[oi++]='"';out[oi]=0;sp_str_set_len(out,oi);return out;
 }
-const char*sp_str_delete_prefix(const char*s,const char*p){SP_GC_ROOT_STR(s);SP_GC_ROOT_STR(p);if(!s)sp_nil_recv("delete_prefix");if(!p)return SP_ONE_ANSWER(s);size_t sl=sp_str_byte_len(s),pl=sp_str_byte_len(p);if(pl<=sl&&memcmp(s,p,pl)==0){char*r=sp_str_alloc_raw(sl-pl+1);memcpy(r,s+pl,sl-pl+1);sp_str_set_len(r,sl-pl);return sp_str_bin_like(s,r);}char*r=sp_str_alloc_raw(sl+1);memcpy(r,s,sl+1);sp_str_set_len(r,sl);return sp_str_bin_like(s,r);}
-const char*sp_str_delete_suffix(const char*s,const char*p){SP_GC_ROOT_STR(s);SP_GC_ROOT_STR(p);if(!s)sp_nil_recv("delete_suffix");if(!p)return SP_ONE_ANSWER(s);size_t sl=sp_str_byte_len(s),pl=sp_str_byte_len(p);if(pl<=sl&&memcmp(s+sl-pl,p,pl)==0){char*r=sp_str_alloc_raw(sl-pl+1);memcpy(r,s,sl-pl);r[sl-pl]=0;sp_str_set_len(r,sl-pl);return sp_str_bin_like(s,r);}char*r=sp_str_alloc_raw(sl+1);memcpy(r,s,sl+1);sp_str_set_len(r,sl);return sp_str_bin_like(s,r);}
+const char*sp_str_delete_prefix(const char*s,const char*p){SP_GC_ROOT_STR(s);SP_GC_ROOT_STR(p);if(!s)sp_nil_recv("delete_prefix");if(!p)return sp_str_one_answer(s);size_t sl=sp_str_byte_len(s),pl=sp_str_byte_len(p);if(pl<=sl&&memcmp(s,p,pl)==0){char*r=sp_str_alloc_raw(sl-pl+1);memcpy(r,s+pl,sl-pl+1);sp_str_set_len(r,sl-pl);return sp_str_bin_like(s,r);}char*r=sp_str_alloc_raw(sl+1);memcpy(r,s,sl+1);sp_str_set_len(r,sl);return sp_str_bin_like(s,r);}
+const char*sp_str_delete_suffix(const char*s,const char*p){SP_GC_ROOT_STR(s);SP_GC_ROOT_STR(p);if(!s)sp_nil_recv("delete_suffix");if(!p)return sp_str_one_answer(s);size_t sl=sp_str_byte_len(s),pl=sp_str_byte_len(p);if(pl<=sl&&memcmp(s+sl-pl,p,pl)==0){char*r=sp_str_alloc_raw(sl-pl+1);memcpy(r,s,sl-pl);r[sl-pl]=0;sp_str_set_len(r,sl-pl);return sp_str_bin_like(s,r);}char*r=sp_str_alloc_raw(sl+1);memcpy(r,s,sl+1);sp_str_set_len(r,sl);return sp_str_bin_like(s,r);}
 /* strip / lstrip / rstrip. CRuby strips the set "\0\t\n\v\f\r " from the
    ends -- i.e. isspace() plus the NUL byte. Use sp_str_byte_len (not
    strlen) so a heap string carrying an embedded NUL (e.g. from pack /
@@ -311,8 +311,8 @@ const char*sp_str_chop(const char*s){SP_GC_ROOT_STR(s);if(!s)sp_nil_recv("chop")
    opportunistic NUL policy -- fix what is met). */
 /* slice!(str): s without the first occurrence of pat, or s itself when there
    is none. Unlike sub it sets no `$~`, as CRuby's slice! sets none. */
-const char*sp_str_remove_first(const char*s,const char*pat){SP_GC_ROOT_STR(s);SP_GC_ROOT_STR(pat);if(!s||!pat)return SP_ONE_ANSWER(s);size_t pl=sp_str_byte_len(pat),sl=sp_str_byte_len(s);const char*f=sp_bytestr(s,sl,pat,pl);if(!f)return SP_ONE_ANSWER(s);size_t n=(size_t)(f-s);char*r=sp_str_alloc_raw(sl-pl+1);memcpy(r,s,n);memcpy(r+n,f+pl,sl-n-pl);r[sl-pl]=0;sp_str_set_len(r,sl-pl);return r;}
-const char*sp_str_sub(const char*s,const char*pat,const char*rep){SP_GC_ROOT_STR(s);SP_GC_ROOT_STR(pat);SP_GC_ROOT_STR(rep);if(!s)sp_nil_recv("sub");if(!pat||!rep)return SP_ONE_ANSWER(s);size_t pl0=sp_str_byte_len(pat),sl0=sp_str_byte_len(s);const char*f=sp_bytestr(s,sl0,pat,pl0);if(!f){if(sp_re_track_last)sp_re_clear_last_match();return sp_str_dup(s);}sp_re_sub_matched=1;if(sp_re_track_last)sp_re_set_lit_match(s,(sp_int)(f-s),(sp_int)(f-s+pl0));size_t el=0;char*rep_exp=sp_str_rep_expand(rep,pat,pl0,&el);const char*rp=rep_exp?rep_exp:rep;size_t pl=pl0,rl=rep_exp?el:sp_str_byte_len(rp),sl=sl0;char*r=sp_str_alloc_raw(sl-pl+rl+1);size_t n=f-s;memcpy(r,s,n);memcpy(r+n,rp,rl);memcpy(r+n+rl,f+pl,sl-n-pl);r[sl-pl+rl]=0;sp_str_set_len(r,sl-pl+rl);if(rep_exp)free(rep_exp);return sp_str_bin_like(s,r);}
+const char*sp_str_remove_first(const char*s,const char*pat){SP_GC_ROOT_STR(s);SP_GC_ROOT_STR(pat);if(!s||!pat)return sp_str_one_answer(s);size_t pl=sp_str_byte_len(pat),sl=sp_str_byte_len(s);const char*f=sp_bytestr(s,sl,pat,pl);if(!f)return sp_str_one_answer(s);size_t n=(size_t)(f-s);char*r=sp_str_alloc_raw(sl-pl+1);memcpy(r,s,n);memcpy(r+n,f+pl,sl-n-pl);r[sl-pl]=0;sp_str_set_len(r,sl-pl);return r;}
+const char*sp_str_sub(const char*s,const char*pat,const char*rep){SP_GC_ROOT_STR(s);SP_GC_ROOT_STR(pat);SP_GC_ROOT_STR(rep);if(!s)sp_nil_recv("sub");if(!pat||!rep)return sp_str_one_answer(s);size_t pl0=sp_str_byte_len(pat),sl0=sp_str_byte_len(s);const char*f=sp_bytestr(s,sl0,pat,pl0);if(!f){if(sp_re_track_last)sp_re_clear_last_match();return sp_str_dup(s);}sp_re_sub_matched=1;if(sp_re_track_last)sp_re_set_lit_match(s,(sp_int)(f-s),(sp_int)(f-s+pl0));size_t el=0;char*rep_exp=sp_str_rep_expand(rep,pat,pl0,&el);const char*rp=rep_exp?rep_exp:rep;size_t pl=pl0,rl=rep_exp?el:sp_str_byte_len(rp),sl=sl0;char*r=sp_str_alloc_raw(sl-pl+rl+1);size_t n=f-s;memcpy(r,s,n);memcpy(r+n,rp,rl);memcpy(r+n+rl,f+pl,sl-n-pl);r[sl-pl+rl]=0;sp_str_set_len(r,sl-pl+rl);if(rep_exp)free(rep_exp);return sp_str_bin_like(s,r);}
 static const char*sp_str_capitalize_f(const char*s,uint32_t(*fu)(uint32_t),uint32_t(*fl)(uint32_t)){SP_GC_ROOT_STR(s);if(!s)sp_nil_recv("capitalize");if(sp_str_is_binary(s))return sp_str_case_bin(s,3);size_t l=sp_str_byte_len(s);char*r=sp_str_alloc_raw(l*3+1);size_t oi=0;int first=1;for(size_t i=0;i<l;){uint32_t cp;int n=sp_utf8_decode(s+i,&cp);i+=(size_t)n;if(first){
   /* the first character's titlecase ("ǆ" is "ǅ", "ß" is "Ss"); a Turkic
      mapping of i/I first */
@@ -433,7 +433,7 @@ static char *sp_str_rep_expand(const char *rep, const char *match, size_t mlen, 
 }
 const char*sp_str_gsub(const char*s,const char*pat,const char*rep){SP_GC_ROOT_STR(s);SP_GC_ROOT_STR(pat);SP_GC_ROOT_STR(rep);
   if(!s)sp_nil_recv("gsub");
-  if(!pat||!rep)return SP_ONE_ANSWER(s);
+  if(!pat||!rep)return sp_str_one_answer(s);
   /* byte lengths and a byte-exact search throughout: strlen/strstr stop at an
      embedded NUL, so a subject or pattern holding one was cut short (the
      opportunistic NUL policy). */

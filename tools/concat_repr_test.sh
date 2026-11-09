@@ -11,7 +11,7 @@ TIMEOUT=${SPINEL_TIMEOUT:-build/spinel-timeout}
 
 $REF_RUBY --enable-frozen-string-literal "$src/symbol_bridge.rb" > "$tmp/expected"
 diff -u "$src/symbol_bridge.rb.expected" "$tmp/expected"
-$CC ${CFLAGS:-} ${SEC_FLAGS:-} -DSP_ONE_STRING -Ilib -c "$src/symbol_bridge.c" -o "$tmp/bridge.o"
+$CC ${CFLAGS:-} ${SEC_FLAGS:-} -Ilib -c "$src/symbol_bridge.c" -o "$tmp/bridge.o"
 for opt in 0 2; do
   "$SPINEL" "$src/symbol_bridge.rb" --cc="$CC" -O"$opt" --repr-check --plan-check \
     --link "$tmp/bridge.o" -o "$tmp/symbol" > "$tmp/compile.log" 2>&1 || {

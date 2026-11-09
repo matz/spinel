@@ -116,7 +116,6 @@ const char*sp_sym_to_s_frozen(sp_sym id){
   return r;
 }
 
-#ifdef SP_ONE_STRING
 struct sp_String_s *sp_strelem_of(const char *b) { return sp_String_new_shared(b); }
 const char *sp_str_keep_copy(const char *s) { return sp_str_concat(s, sp_str_empty); }
 /* A Hash's String key made from `len` bytes at `data`: a frozen handle over
@@ -127,4 +126,3 @@ const char *sp_hash_key_from_bytes(const char *data, size_t len, int bin) {
   sp_String_freeze(h);
   return h->data;
 }
-#endif

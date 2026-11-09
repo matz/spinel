@@ -242,9 +242,7 @@ void sp_str_sweep_young_done(int wid, sp_str_hdr *keep, sp_str_hdr *tail, size_t
 extern int sp_str_par_done;
 #endif
 void sp_str_lcache_clear(void);
-/* Collect + retune (see sp_alloc.c). The single-threaded allocators call the
-   per-heap variants directly; sp_stw_collect (threaded) runs _all under STW. */
-void sp_str_collect_retune(void);
+/* Collect + retune (see sp_alloc.c); sp_stw_collect (threaded) runs _all under STW. */
 void sp_gc_collect_retune_all(void);
 int  sp_gc_collection_wanted(void);
 void sp_stw_collect(void);   /* lib/sp_sched.c: stop-the-world collect (threaded) */
@@ -273,7 +271,6 @@ void sp_alloc_report_tag(void *scan, const char *name);
    is bounded at 1GB rather than 2. Every reader of `size` masks. */
 #define SP_STR_SIZE_MASK   0x3FFFFFFFu
 
-#ifdef SP_ONE_STRING
 /* One representation, U2 (string-u2-design.md): a heap String is born inside
    the handle that will hold it, one GC object laid out as an inline handle
    ([sp_gc_hdr][sp_String][sp_str_hdr][0xfe][bytes][NUL]). To the builtins
@@ -313,82 +310,8 @@ static inline const char *sp_str_retained(const char *s) {
   }
   return s;
 }
-#else
-#define sp_str_retained(s) (s)
-#endif
 static inline char *sp_str_alloc(size_t len) {
-#ifdef SP_ONE_STRING
   return sp_str_alloc_born(len, 0);
-#endif
-  size_t total = sizeof(sp_str_hdr) + 1 + len + 1;
-  sp_str_hdr *h;
-  /* String-heap pressure drives its own collection (see sp_str_heap_bytes).
-     Collect BEFORE the new allocation, like sp_gc_alloc, so the string being
-     built isn't yet live during the sweep. Operands of the calling op (e.g. the
-     arguments to sp_str_concat) must be reachable across this point -- they are
-     for rooted locals; the codegen's SP_GC_ROOT discipline is what keeps them
-     so. Threshold recompute mirrors sp_gc_alloc's. */
-#ifdef SP_THREADS
-  int wid = sp_worker_id;
-  if (!sp_str_stress_checked) { sp_str_stress_checked = 1; const char *e = getenv("SPINEL_GC_STRESS"); if (e && *e && *e != '0') { sp_str_threshold = 2048; sp_str_threshold_init = 2048; sp_gc_stress_pin = 1; } }
-  /* Per-worker trigger: the fast path reads only this worker's own byte count,
-     no shared state. Each worker fires at the full threshold, so the aggregate
-     bound scales with the worker count -- keeping the stop-the-world frequency
-     per worker independent of N. A shared aggregate check (threshold/N) instead
-     multiplied the collection count by N and left allocation-heavy parallel
-     workloads STW-bound; this keeps them flat. */
-#ifndef SP_GC_NONE   /* (--gc=none: nothing collects, so nothing asks; #10699) */
-  { size_t _yb = SP_GC_CTR_GET(sp_str_wslot[wid].young_bytes);
-    /* over the threshold AND past this worker's ask mark; the threshold clause
-       stays first so a retune that LOWERS it still triggers at once. */
-    if (_yb > sp_str_threshold && _yb >= sp_str_wslot[wid].ask_at) {
-      sp_stw_collect();
-      /* A collection resets young_bytes, so this lands back at one threshold;
-         a refusal leaves it where it was, so the next ask is one threshold of
-         allocation later rather than the next allocation. */
-      sp_str_wslot[wid].ask_at = SP_GC_CTR_GET(sp_str_wslot[wid].young_bytes) + sp_str_threshold;
-    } }
-#endif
-  h = (sp_str_hdr *)sp_slab_alloc_str(total);
-  h->size = (uint32_t)total;
-  h->len = (uint32_t)len;
-  h->hash = 0;
-  /* A slab block's generation is a bit in its chunk (lib/sp_slab.c); only
-     a string too large for the slab goes on the worker's young list.
-     Publish h->next before the head store so a concurrent GC.stat walk that
-     observes the new head reaches a fully-linked node (only pushes touch the
-     head; the sweep runs under stop-the-world). */
-  if (!sp_slab_owns(h)) {
-    unsigned sub = sp_str_wslot[wid].rr++ & (SP_STR_YSUB - 1);
-    h->next = sp_str_wslot[wid].young[sub];
-    sp_str_wslot[wid].young[sub] = h; }
-  SP_GC_CTR_ADD(sp_str_wslot[wid].young_bytes, total);
-#else
-  SP_HEAP_LOCK();
-  if (!sp_str_stress_checked) { sp_str_stress_checked = 1; const char *e = getenv("SPINEL_GC_STRESS"); if (e && *e && *e != '0') { SP_GC_CTR_SET(sp_str_threshold, 2048); sp_str_threshold_init = 2048; sp_gc_stress_pin = 1; } }
-#ifndef SP_GC_NONE   /* (--gc=none: nothing collects, so nothing asks; #10699) */
-  if (SP_GC_CTR_GET(sp_str_heap_bytes) > sp_str_threshold) {
-    sp_str_collect_retune();         /* sp_gc_collect runs sp_str_sweep */
-  }
-#endif
-  h = (sp_str_hdr *)sp_slab_alloc_str(total);
-  h->size = (uint32_t)total;
-  h->len = (uint32_t)len;
-  h->hash = 0;
-  if (!sp_slab_owns(h)) { h->next = sp_str_heap; sp_str_heap = h; }
-  SP_GC_CTR_ADD(sp_str_heap_bytes, total);
-  SP_HEAP_UNLOCK();
-#endif
-  /* Don't fold string-heap pressure into sp_gc_bytes: the threshold heuristic
-     in sp_gc_alloc is keyed on object-heap survivors, and the str-heap sweep
-     that runs alongside (sp_str_sweep, from sp_gc_collect) doesn't add surviving
-     strings back into sp_gc_bytes. Folding them in over-fires the object
-     heuristic (the reason they're excluded). */
-  char *body = (char *)(h + 1);
-  body[0] = (char)0xfe;
-  body[1 + len] = 0;
-  if (sp_alloc_report_on) sp_alloc_report_str(len);
-  return body + 1;
 }
 
 /* Allocate a string WITHOUT giving the collector a chance to run first.
@@ -400,32 +323,7 @@ static inline char *sp_str_alloc(size_t len) {
    copies through here. The heap simply runs a little past the threshold; the
    next ordinary allocation collects. */
 static inline char *sp_str_alloc_nogc(size_t len) {
-#ifdef SP_ONE_STRING
   return sp_str_alloc_born(len, 1);
-#endif
-  size_t total = sizeof(sp_str_hdr) + 1 + len + 1;
-  sp_str_hdr *h = (sp_str_hdr *)sp_slab_alloc_str(total);
-  h->size = (uint32_t)total;
-  h->len = (uint32_t)len;
-  h->hash = 0;
-#ifdef SP_THREADS
-  { int wid = sp_worker_id;
-    if (!sp_slab_owns(h)) {
-      unsigned sub = sp_str_wslot[wid].rr++ & (SP_STR_YSUB - 1);
-      h->next = sp_str_wslot[wid].young[sub];
-      sp_str_wslot[wid].young[sub] = h; }
-    SP_GC_CTR_ADD(sp_str_wslot[wid].young_bytes, total); }
-#else
-  SP_HEAP_LOCK();
-  if (!sp_slab_owns(h)) { h->next = sp_str_heap; sp_str_heap = h; }
-  SP_GC_CTR_ADD(sp_str_heap_bytes, total);
-  SP_HEAP_UNLOCK();
-#endif
-  { char *body = (char *)(h + 1);
-    body[0] = (char)0xfe;
-    body[1 + len] = 0;
-    if (sp_alloc_report_on) sp_alloc_report_str(len);
-    return body + 1; }
 }
 
 /* Copy a message onto the string heap so it can be held by a string root.
@@ -1131,14 +1029,10 @@ static inline void sp_str_check_mutable(const char *s) {
    payload's view (0xfd, of a handle that is not frozen) are copied, since
    the handle changes under the hold, where CRuby's object keeps what it was
    given then. Any other bytes are kept as they are. */
-#ifdef SP_ONE_STRING
 const char *sp_str_keep_copy(const char *s);
 static inline const char *sp_str_keep(const char *s) {
   return s && ((const unsigned char *)s)[-1] == 0xfd && !sp_str_fd_owner_frozen(s) ? sp_str_keep_copy(s) : sp_str_retained(s);
 }
-#else
-#define sp_str_keep(s) (s)
-#endif
 /* A String key as a Hash stores it: a mutable string is copied into a frozen
    0xfa, so a later `<<` or setbyte on the caller's string cannot move the key
    (CRuby's rb_hash_key_str). A frozen or literal key is stored as is, and so
@@ -1152,16 +1046,7 @@ static inline const char *sp_str_keep(const char *s) {
    `bin`): a String key the Hash stores as is. The data must stay put while
    it allocates. (one representation: the copy is a frozen handle's payload,
    so the key's handle, sp_String_key_handle, is that one String each time) */
-#ifdef SP_ONE_STRING
 const char *sp_hash_key_from_bytes(const char *data, size_t len, int bin);
-#else
-static inline const char *sp_hash_key_from_bytes(const char *data, size_t len, int bin) {
-  char *r = (char *)sp_str_from_bytes(data, len);
-  if (bin) sp_str_mark_binary(r);
-  ((unsigned char *)r)[-1] = 0xfa;
-  return r;
-}
-#endif
 static inline const char *sp_hash_key_str(const char *s) {
   unsigned char m = ((const unsigned char *)s)[-1];
   if (m != 0xfe && m != 0xfc && m != 0xfd) return s;

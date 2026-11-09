@@ -221,11 +221,6 @@ int repr_box_nullable_arg(Compiler *c, int v);
 int repr_typed_str_container(TyKind t);
 /* A retained typed literal whose String elements need shared handles. */
 int repr_str_literal_shares(Compiler *c, int node);
-/* Does the share rule decide which Strings are the shared handle
-   (--share-strings, #6765)? Codegen asks this, not the flag: where it is
-   0, every emitter takes master's form. */
-/* The share rule is the only one (one representation): folded away. */
-#define repr_share_rule(c) ((void)(c), 1)
 
 /* R1 (--repr-check): the form a boxer gave a value, recorded at each of
    emit_boxed's and emit_boxed_text's returns, and the form repr_of predicts

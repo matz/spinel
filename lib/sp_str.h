@@ -13,9 +13,7 @@
  * sp_sprintf / sp_raise_cls are provided by the generated TU and resolved
  * at the final link (same as lib/sp_core.c). */
 #include "sp_array.h"   /* sp_StrArray, sp_IntArray + sp_alloc.h / sp_gc.h / sp_types.h */
-#ifdef SP_ONE_STRING
-#include "sp_string.h"   /* sp_String_new_shared, behind SP_SEF (sp_str_split_push) */
-#endif
+#include "sp_string.h"   /* sp_String_new_shared, for the elements (sp_str_split_push) */
 
 const char *sp_sprintf(const char *fmt, ...) SP_PRINTF_FORMAT(1, 2);  /* defined in the generated TU */
 
@@ -65,7 +63,7 @@ static inline void sp_str_split_push(sp_StrArray*a,const char*p,size_t n){
   /* record the real length: alloc_raw leaves it unset, so a piece holding an
      embedded NUL would answer strlen and read short */
   sp_str_set_len(r,n);
-  sp_StrArray_push_e(a,SP_SEF(r));
+  sp_StrArray_push_e(a,sp_String_new_shared(r));
 }
 
 const char *sp_bytestr(const char *hay, size_t hn, const char *need, size_t nn);   /* byte-wise substring search; lib/sp_str.c, also used by lib/sp_str_cold.c */
@@ -156,15 +154,10 @@ const char*sp_str_rstrip(const char*s);
 const char*sp_str_dup(const char*s);
 /* A builtin's answer that is its own String operand, unchanged (a tr with
    nothing to translate, a sub with no match): CRuby answers a new String.
-   Under the one-String mode the operand's bytes may be a handle's own
+   The operand's bytes may be a handle's own
    payload (marker 0xfd), which a sink would take as that handle, so the
    answer is a copy of it; any other bytes are the fresh String they were. */
-#ifdef SP_ONE_STRING
 static inline const char*sp_str_one_answer(const char*s){return s&&((const unsigned char*)s)[-1]==0xfd?sp_str_dup(s):s;}
-#define SP_ONE_ANSWER(s) sp_str_one_answer(s)
-#else
-#define SP_ONE_ANSWER(s) (s)
-#endif
 const char *sp_plain_char(unsigned char c);
 const char *sp_bin_char(unsigned char c);
 const char*sp_str_b(const char*s);
@@ -176,7 +169,6 @@ const char*sp_str_b(const char*s);
    carry Ruby receiver semantics at method call sites. */
 SP_NORETURN SP_COLD void sp_nil_recv(const char *meth);
 sp_int sp_str_length_m(const char *s);
-#ifdef SP_ONE_STRING
 /* String#length answered inline for a String whose header knows its width
    (binary, or 7-bit once a scan proved it): a String is a handle in this
    mode, so a loop bound on one is measured on every test, where the default
@@ -186,7 +178,6 @@ static inline sp_int sp_str_length_mi(const char *s) {
   if (s && sp_str_fixed_width(s, &fb)) return (sp_int)fb;
   return sp_str_length_m(s);
 }
-#endif
 sp_int sp_str_bytesize_m(const char *s);
 sp_bool sp_str_empty_p(const char *s);
 const char *sp_str_plus(const char *a, const char *b);

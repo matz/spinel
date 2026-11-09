@@ -190,15 +190,11 @@ int sp_str_stress_checked = 0;
 const char sp_str_empty_data[] = "\xff";
 /* nil.to_s, true.to_s and false.to_s answer FROZEN Strings in CRuby: a
    header-carrying static object marked 0xf1, as a frozen literal is */
-#ifdef SP_ONE_STRING
 /* ...with the handle slot a generated literal has (sp_StringLiteral: the
    handle, then the next slot; the header links it, tagged), so each of them
    is one String object wherever it is boxed or held, as CRuby's is */
 static struct { void *value, *next; } sp_fz_empty_l, sp_fz_true_l, sp_fz_false_l;
 #define SP_FZ_LINK(l) ((sp_str_hdr *)((char *)&(l) + 1))
-#else
-#define SP_FZ_LINK(l) NULL
-#endif
 /* the link Symbol#to_s's String carries in its header (sp_str_is_sym_name) */
 const sp_str_hdr sp_sym_str_tag = { NULL, 0, 0, 0 };
 static struct { sp_str_hdr h; unsigned char m; char d[1]; } sp_fz_empty_s = { { SP_FZ_LINK(sp_fz_empty_l), 1 | SP_STR_SIZE_ASCII7, 0, 0 }, 0xf1, "" };
@@ -750,11 +746,6 @@ void sp_gc_collect_retune(void) {
   if (!sp_gc_collect_installed()) return;
   sp_gc_collect_fn();
   sp_gc_enforce_mem_limit();
-}
-void sp_str_collect_retune(void) {
-  /* the gated sweep hook inside sp_gc_collect retunes the string threshold */
-  if (!sp_gc_collect_installed()) return;
-  sp_gc_collect_fn();
 }
 void sp_gc_collect_retune_all(void) {
   if (!sp_gc_collect_installed()) return;

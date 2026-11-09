@@ -176,10 +176,6 @@ Compiler *comp_new(const NodeTable *nt) {
   c->ucall_inf = calloc((size_t)n, sizeof *c->ucall_inf);
   c->node_cap = n;
   for (int k = 0; k < CORE_N; k++) c->core_cls[k] = -1;
-  /* On only when set to something: empty is off, as SPINEL_DEFER_REFUSALS
-     reads it, and so is "0". An environment that exports the variable as
-     "0" or "" means off. */
-  c->share_strings = 1;
   comp_node_pbases(c);
   comp_node_ords(c);   /* the parsed nodes, before any rewrite */
   nt_track_origins((NodeTable *)nt);   /* the appended ones, by origin */

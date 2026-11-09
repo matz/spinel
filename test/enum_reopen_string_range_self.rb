@@ -53,3 +53,15 @@ p sr.equal?(box[0]), sr == box[0], sr.eql?(box[0]), sr == box[1], sr.equal?(box[
 def srange_eff(t) = (puts "eff #{t}"; t)
 p srange_eff("a".."c").equal?(srange_eff(1))
 p srange_eff("a".."c") == srange_eff("x")
+
+# An ivar receiver gets the endless test too
+class SrangeHolder
+  def initialize(r) = @r = r
+  def go = @r.to_set
+end
+begin
+  p SrangeHolder.new(("a"..)).go
+rescue RangeError => e
+  p [e.class, e.message]
+end
+p SrangeHolder.new(("a".."b")).go

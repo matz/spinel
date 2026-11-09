@@ -11570,20 +11570,41 @@ static int srange_own_method(const char *nm) {
    Enumerable's: put that test in front of the receiver of a to_set the
    program's Enumerable answers, `(raise RangeError, "..." if r.end.nil?;
    r)`. A literal Range has its end in the tree; a local, self or a
-   parameter is read again for the test. Another receiver is left as it
-   is. 1 when the call changed. */
+   parameter or an ivar is read again for the test. 1 when the call
+   changed, 0 when it needs no change, -1 when the test cannot be put
+   there (a method call receiver): the caller then keeps the member Array
+   path, which raises for an endless Range. */
+static int srange_pure_copy(NodeTable *nt, int n) {
+  n = nt_paren_single(nt, n);
+  if (n < 0) return -1;
+  if (nt_kind(nt, n) == NK_InstanceVariableReadNode) {
+    int m = nt_new_node(nt, "InstanceVariableReadNode");
+    nt_node_set_str(nt, m, "name", nt_str(nt, n, "name"));
+    return m;
+  }
+  if (nt_kind(nt, n) == NK_CallNode) return -1;
+  return dyn_parent_copy(nt, n);
+}
 static int srange_endless_guard(Compiler *c, int id, int recv) {
   NodeTable *nt = (NodeTable *)c->nt;
-  if (nt_int(nt, id, "srange_endless_checked", 0)) return 0;
-  nt_node_set_int(nt, id, "srange_endless_checked", 1);
+  int was = nt_int(nt, id, "srange_endless_checked", 0);
+  if (was) return was == 2 ? -1 : 0;
   int base0 = nt->count, r = nt_paren_single(nt, recv), test = -1;
   if (r >= 0 && nt_kind(nt, r) == NK_RangeNode) {
-    if (nt_ref(nt, r, "right") >= 0) return 0;   /* (it has an end) */
+    int rt = nt_ref(nt, r, "right");
+    if (rt >= 0 && nt_kind(nt, rt) != NK_NilNode) {
+      if (nt_kind(nt, rt) == NK_StringNode) { nt_node_set_int(nt, id, "srange_endless_checked", 1); return 0; }
+      /* ("a"..x): the end is read again for the test */
+      int ec = srange_pure_copy(nt, rt);
+      if (ec < 0) { nt_node_set_int(nt, id, "srange_endless_checked", 2); return -1; }
+      test = te_call(nt, ec, "nil?", -1, -1);
+    }
   } else {
-    int rc = dyn_parent_copy(nt, recv);
-    if (rc < 0 || nt_kind(nt, recv) == NK_CallNode) return 0;
+    int rc = srange_pure_copy(nt, recv);
+    if (rc < 0) { nt_node_set_int(nt, id, "srange_endless_checked", 2); return -1; }
     test = te_call(nt, te_call(nt, rc, "end", -1, -1), "nil?", -1, -1);
   }
+  nt_node_set_int(nt, id, "srange_endless_checked", 1);
   int msg = nt_new_node(nt, "StringNode");
   nt_node_set_str(nt, msg, "content", "cannot convert endless range to a set");
   nt_node_set_str(nt, msg, "unescaped", "cannot convert endless range to a set");
@@ -11637,8 +11658,9 @@ static int desugar_str_range_methods(Compiler *c) {
        with the RANGE as self, as it does for an Integer Range. For a String
        Range, Range#to_set, #count and #reverse_each call Enumerable's too. */
     if (an_enum_prog_method(c, nm) && !srange_own_method(nm)) {
-      if (sp_streq(nm, "to_set") && srange_endless_guard(c, id, recv)) changed = 1;
-      continue;
+      int g = sp_streq(nm, "to_set") ? srange_endless_guard(c, id, recv) : 0;
+      if (g > 0) changed = 1;
+      if (g >= 0) continue;
     }
     /* `range % n { }` is `range.step(n) { }` (#3671): the walk has no row of
        its own under the `%` name, so name it what it is. The blockless form is

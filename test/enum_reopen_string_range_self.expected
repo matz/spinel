@@ -26,3 +26,5 @@ false
 eff a..c
 eff x
 false
+[RangeError, "cannot convert endless range to a set"]
+[:range, "a".."b"]

@@ -693,18 +693,46 @@ static int hv_slot_key(Compiler *c, int node, int *kind, int *owner, const char 
   }
   return 0;
 }
+/* slot + 1 by (kind, owner, name), open addressed: every read of a hash
+   asks, and a scan of the slots per question was quadratic in them */
+static int *g_hv_tab, g_hv_tab_cap, g_hv_tab_n;
+static unsigned hv_hash(int kind, int owner, const char *name) {
+  return (sp_strhash(name) * 31u + (unsigned)owner) * 2u + (unsigned)kind;
+}
+static void hv_tab_put(int i) {
+  unsigned m = (unsigned)g_hv_tab_cap - 1, h = hv_hash(g_hv[i].kind, g_hv[i].owner, g_hv[i].name) & m;
+  while (g_hv_tab[h]) h = (h + 1) & m;
+  g_hv_tab[h] = i + 1;
+}
 static HvSlot *hv_find(int kind, int owner, const char *name, int create) {
-  for (int i = 0; i < g_hv_n; i++)
-    if (g_hv[i].kind == kind && g_hv[i].owner == owner && sp_streq(g_hv[i].name, name)) return &g_hv[i];
+  if (g_hv_tab_n != g_hv_n) {
+    if (g_hv_tab) memset(g_hv_tab, 0, sizeof(int) * (size_t)g_hv_tab_cap);
+    g_hv_tab_n = g_hv_n;
+  }
+  if (g_hv_tab) {
+    unsigned m = (unsigned)g_hv_tab_cap - 1;
+    for (unsigned h = hv_hash(kind, owner, name) & m; g_hv_tab[h]; h = (h + 1) & m) {
+      HvSlot *e = &g_hv[g_hv_tab[h] - 1];
+      if (e->kind == kind && e->owner == owner && sp_streq(e->name, name)) return e;
+    }
+  }
   if (!create) return NULL;
   if (g_hv_n == g_hv_cap) {
     g_hv_cap = g_hv_cap ? g_hv_cap * 2 : 64;
     g_hv = realloc(g_hv, sizeof(HvSlot) * (size_t)g_hv_cap);
     if (!g_hv) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   }
+  if (2 * (g_hv_n + 1) > g_hv_tab_cap) {
+    g_hv_tab_cap = g_hv_tab_cap ? 2 * g_hv_tab_cap : 256;
+    free(g_hv_tab);
+    g_hv_tab = calloc((size_t)g_hv_tab_cap, sizeof(int));
+    if (!g_hv_tab) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    for (int i = 0; i < g_hv_n; i++) hv_tab_put(i);
+  }
   HvSlot *h = &g_hv[g_hv_n++];
   h->kind = kind; h->owner = owner; h->name = strdup(name); h->cls = -1; h->bad = 0; h->writes = 0;
   if (!h->name) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  hv_tab_put(g_hv_n - 1); g_hv_tab_n = g_hv_n;
   return h;
 }
 /* The hash operations a slot may be the receiver of, with their argument and
@@ -734,7 +762,7 @@ static void hv_build(Compiler *c) {
   const NodeTable *nt = c->nt;
   g_hv_building = 1;
   for (int i = 0; i < g_hv_n; i++) free(g_hv[i].name);
-  g_hv_n = 0;
+  g_hv_n = 0; g_hv_tab_n = -1;
   int n = nt->count;
   unsigned char *ok = calloc((size_t)(n > 0 ? n : 1), 1);
   if (!ok) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
@@ -1617,6 +1645,100 @@ static int an_row_from_untyped_slot(Compiler *c, int n) {
   return u.hit;
 }
 
+/* The writes and `[]=` / `store` calls of each constant name, in node
+   order, for the tree as it is: the question is asked once a round for
+   each constant table read, and each walked the whole table */
+typedef struct { const NodeTable *nt; unsigned ver; unsigned long edits; int count; ANameHash names; int **ids, *n, cap; } NameNodes;
+static void nnodes_free_ids(int **p) { free(*p); }
+static int nnodes_cmp(const void *a, const void *b) { return *(const int *)a - *(const int *)b; }
+static void nnodes_add(NameNodes *x, const char *nm, int id) {
+  int i = anh_find(&x->names, nm);
+  if (i < 0) {
+    if (x->names.n == x->cap) {
+      x->cap = x->cap ? x->cap * 2 : 64;
+      x->ids = realloc(x->ids, sizeof(int *) * (size_t)x->cap);
+      x->n = realloc(x->n, sizeof(int) * (size_t)x->cap);
+      if (!x->ids || !x->n) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    }
+    i = x->names.n;
+    x->ids[i] = NULL; x->n[i] = 0;
+    anh_add(&x->names, nm);
+  }
+  int m = x->n[i];
+  if ((m & (m - 1)) == 0) {
+    x->ids[i] = realloc(x->ids[i], sizeof(int) * (size_t)(m ? 2 * m : 1));
+    if (!x->ids[i]) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  }
+  x->ids[i][x->n[i]++] = id;
+}
+/* 1 when x must be filled again for the tree as it is (emptied here) */
+static int nnodes_stale(NameNodes *x, const NodeTable *nt) {
+  if (x->nt == nt && x->ver == nt->version && x->edits == nt->edits && x->count == nt->count) return 0;
+  for (int i = 0; i < x->names.n; i++) free(x->ids[i]);
+  anh_free(&x->names); memset(&x->names, 0, sizeof x->names);
+  x->nt = nt; x->ver = nt->version; x->edits = nt->edits; x->count = nt->count;
+  return 1;
+}
+/* name's nodes, in node order, as a copy the caller frees: a question asked
+   while walking them may edit the tree, and the index goes with it */
+static int *nnodes_of(NameNodes *x, const char *nm, int *count) {
+  int i = anh_find(&x->names, nm);
+  *count = i >= 0 ? x->n[i] : 0;
+  if (*count == 0) return NULL;
+  int *r = malloc(sizeof(int) * (size_t)*count);
+  if (!r) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  memcpy(r, x->ids[i], sizeof(int) * (size_t)*count);
+  return r;
+}
+static void nnodes_sort(NameNodes *x) {
+  for (int i = 0; i < x->names.n; i++) qsort(x->ids[i], (size_t)x->n[i], sizeof(int), nnodes_cmp);
+}
+static NameNodes g_cwr;
+static int *const_writes_of(const NodeTable *nt, const char *cname, int *count) {
+  if (nnodes_stale(&g_cwr, nt)) {
+    NT_FOREACH_KIND(nt, NK_ConstantWriteNode, id) {
+      const char *nm = nt_str(nt, id, "name");
+      if (nm) nnodes_add(&g_cwr, nm, id);
+    }
+    NT_FOREACH_KIND(nt, NK_CallNode, id) {
+      const char *nm = nt_str(nt, id, "name");
+      if (!nm || (!sp_streq(nm, "[]=") && !sp_streq(nm, "store"))) continue;
+      int recv = nt_ref(nt, id, "receiver");
+      if (recv < 0 || nt_kind(nt, recv) != NK_ConstantReadNode) continue;
+      const char *rn = nt_str(nt, recv, "name");
+      if (rn) nnodes_add(&g_cwr, rn, id);
+    }
+    nnodes_sort(&g_cwr);
+  }
+  return nnodes_of(&g_cwr, cname, count);
+}
+/* The same for an ivar name: its stores (the calls the scan below vets) and
+   its writes, and apart, its reads and op-writes */
+static NameNodes g_ivst, g_ivrd;
+static void ivar_nodes_index(const NodeTable *nt) {
+  if (!nnodes_stale(&g_ivst, nt)) return;
+  nnodes_stale(&g_ivrd, nt);
+  NT_FOREACH_KIND(nt, NK_CallNode, id) {
+    const char *nm = nt_str(nt, id, "name");
+    if (!nm || (!is_store_alias(nm) && !sp_streq(nm, "insert") && !sp_streq(nm, "concat") && !is_array_push_family(nm))) continue;
+    int recv = nt_ref(nt, id, "receiver");
+    if (recv < 0 || nt_kind(nt, recv) != NK_InstanceVariableReadNode) continue;
+    const char *rn = nt_str(nt, recv, "name");
+    if (rn) nnodes_add(&g_ivst, rn, id);
+  }
+  NT_FOREACH_KIND(nt, NK_InstanceVariableWriteNode, id) {
+    const char *nm = nt_str(nt, id, "name");
+    if (nm) nnodes_add(&g_ivst, nm, id);
+  }
+  static const NodeKind rd[] = { NK_InstanceVariableReadNode, NK_InstanceVariableOperatorWriteNode,
+                                 NK_InstanceVariableOrWriteNode, NK_InstanceVariableAndWriteNode };
+  for (int k = 0; k < 4; k++)
+    NT_FOREACH_KIND(nt, rd[k], id) {
+      const char *nm = nt_str(nt, id, "name");
+      if (nm) nnodes_add(&g_ivrd, nm, id);
+    }
+  nnodes_sort(&g_ivst); nnodes_sort(&g_ivrd);
+}
 /* Whether every element stored into poly-array ivar `@<ivname>` is an int
    array (a nested array of int arrays, e.g. @chr_banks / @nmt_mem). Element
    reads then yield an int array rather than a boxed poly. */
@@ -1640,10 +1762,13 @@ static int ivar_array_elems_all_int_array_impl(Compiler *c, int cid, const char 
   const char *bare = ivname[0] == '@' ? ivname + 1 : ivname;
   ClassInfo *cl = &c->classes[cid];
   if (comp_is_reader(cl, bare) || comp_is_writer(cl, bare)) return 0;
-  for (int id = 0; id < nt->count; id++) {
-    const char *ty = nt_type(nt, id);
+  ivar_nodes_index(nt);
+  int nst = 0, nrd = 0;
+  int *st __attribute__((cleanup(nnodes_free_ids))) = nnodes_of(&g_ivst, ivname, &nst);
+  int *rdv __attribute__((cleanup(nnodes_free_ids))) = nnodes_of(&g_ivrd, ivname, &nrd);
+  for (int si = 0; si < nst; si++) {
+    int id = st[si];
     NodeKind ty_k = nt_kind(nt, id);
-    if (!ty) continue;
     if (ty_k == NK_CallNode) {
       const char *nm = nt_str(nt, id, "name");
       if (!nm) continue;
@@ -1733,7 +1858,8 @@ static int ivar_array_elems_all_int_array_impl(Compiler *c, int cid, const char 
      where this scan does not look. */
   int *parent = an_parent_map(nt);
   if (!parent) return 0;
-  for (int id = 0; id < nt->count && saw; id++) {
+  for (int ri = 0; ri < nrd && saw; ri++) {
+    int id = rdv[ri];
     NodeKind k = nt_kind(nt, id);
     int is_read = k == NK_InstanceVariableReadNode;
     if (!is_read && k != NK_InstanceVariableOperatorWriteNode &&
@@ -1801,11 +1927,11 @@ static int ivar_array_elems_all_int_array(Compiler *c, int cid, const char *ivna
    any `CNAME[i] = v` mutation must agree. */
 static int const_array_elems_all_int_array_impl(Compiler *c, const char *cname) {
   const NodeTable *nt = c->nt;
-  int saw = 0;
-  for (int id = 0; id < nt->count; id++) {
-    const char *ty = nt_type(nt, id);
+  int saw = 0, nw = 0;
+  int *ws __attribute__((cleanup(nnodes_free_ids))) = const_writes_of(nt, cname, &nw);
+  for (int wi = 0; wi < nw; wi++) {
+    int id = ws[wi];
     NodeKind k = nt_kind(nt, id);
-    if (!ty) continue;
     if (k == NK_CallNode) {
       const char *nm = nt_str(nt, id, "name");
       if (!nm || (!sp_streq(nm, "[]=") && !sp_streq(nm, "store"))) continue;

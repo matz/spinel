@@ -15310,9 +15310,38 @@ int disp_def_build(NodeTable *nt, int like, const char *name, int sg, int ar, in
   return def;
 }
 
-/* A program's own `def method(n)` in a class body (#10719): its `super`
-   is Object#method, the Method of self that the builtin makes, which a
-   call reaches by name only when nothing of the program answers it. Each
+/* Can a program `method` other than def node `def` exist: another def of
+   the name anywhere, or an alias or define_method of it, also one named at
+   run time? (desugar_method_override_super, for a module's def) */
+static int dmo_other_method(const NodeTable *nt, int n0, int def) {
+  for (int d = 0; d < n0; d++) {
+    NodeKind k = nt_kind(nt, d);
+    const char *nn = NULL;
+    if (k == NK_DefNode) {
+      if (d == def || nt_ref(nt, d, "receiver") >= 0) continue;
+      nn = nt_str(nt, d, "name");
+    }
+    else if (k == NK_AliasMethodNode) {
+      nn = sym_or_str_literal(nt, nt_ref(nt, d, "new_name"));
+      if (!nn) return 1;
+    }
+    else if (k == NK_CallNode) {
+      const char *cn = nt_str(nt, d, "name");
+      if (!cn || (!sp_streq(cn, "define_method") && !sp_streq(cn, "alias_method"))) continue;
+      int an = 0; const int *av = nt_arr(nt, nt_ref(nt, d, "arguments"), "arguments", &an);
+      nn = an > 0 ? sym_or_str_literal(nt, av[0]) : NULL;
+      if (!nn) return 1;
+    }
+    if (nn && sp_streq(nn, "method")) return 1;
+  }
+  return 0;
+}
+/* A program's own `def method(n)` in a class or module body (#10719): its
+   `super` is Object#method, the Method of self that the builtin makes,
+   which a call reaches by name only when nothing of the program answers
+   it. A module's def is taken only where the program has no other
+   `method` (dmo_other_method): what its super reaches then depends on
+   each class that includes it, which this pass does not follow. Each
    super in the def's body (not in a def or class nested in it) becomes
    `self.method(args)` marked builtin_only, its own arguments or, for a
    bare super, the def's required parameters. A def with other parameters,
@@ -15363,9 +15392,12 @@ int desugar_method_override_super(Compiler *c) {
     const char *nm = nt_str(nt, id, "name");
     if (!nm || !sp_streq(nm, "method")) continue;
     if (!parent && !(parent = an_parent_map(nt))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-    /* a statement of a class body (StatementsNode, then the ClassNode) */
-    int st = parent[id], owner = st >= 0 ? parent[st] : -1;
-    if (st < 0 || nt_kind(nt, st) != NK_StatementsNode || owner < 0 || nt_kind(nt, owner) != NK_ClassNode) continue;
+    /* a statement of a class or module body (StatementsNode, then the
+       ClassNode or ModuleNode) */
+    int st = parent[id];
+    int owner = st >= 0 ? parent[st] : -1;
+    if (st < 0 || nt_kind(nt, st) != NK_StatementsNode || owner < 0 ||
+        (nt_kind(nt, owner) != NK_ClassNode && nt_kind(nt, owner) != NK_ModuleNode)) continue;
     int ps = nt_ref(nt, id, "parameters"), npreq = 0;
     const int *preq = NULL;
     if (ps >= 0) {
@@ -15378,6 +15410,7 @@ int desugar_method_override_super(Compiler *c) {
       for (int i = 0; i < npreq && ok; i++) ok = nt_kind(nt, preq[i]) == NK_RequiredParameterNode && nt_str(nt, preq[i], "name");
       if (!ok) continue;
     }
+    if (nt_kind(nt, owner) == NK_ModuleNode && dmo_other_method(nt, n0, id)) continue;
     dmo_rewrite(nt, nt_ref(nt, id, "body"), preq, npreq, &changed);
   }
   free(parent);

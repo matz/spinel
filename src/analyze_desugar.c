@@ -2564,7 +2564,7 @@ int desugar_constant_path_self_alias(Compiler *c) {
     }
     if (!same || !me_leaf_defined(nt, leaf)) continue;
     /* the statement goes, the write it was stays on record: the scope still
-       holds the constant (program_writes_const_in, cw_name) */
+       holds the constant (program_writes_const_in, const_writes_of) */
     nt_node_reset(nt, id, "NilNode");
     nt_node_set_int(nt, id, "dropped_target", tgt);   /* a number, not a ref: the walkers stay out of it */
     changed = 1;

@@ -54,3 +54,13 @@ module DIncA; class Foo; def w = :inca; end; end
 class BaseB; include DIncA; end
 class DUnder < BaseB; end
 p [fb(DK), fb(DOwn), fb(DOwn2), fb(DDup), fb(BaseB), fb(DUnder)]
+
+# The insertion point of an include moves only forward; an unrelated
+# class's own `include` method does not change how class bodies read.
+module IA; end
+module IB; class Foo; def w = :b; end; end
+module IN; class Foo; def w = :n; end; end
+module IM; include IN; include IA; include IB; end
+class IK; include IB; include IA; include IM; end
+class Builder; def include(x) = x; end
+p [fb(IK), Builder.new.include(3)]

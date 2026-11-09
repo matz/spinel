@@ -25,3 +25,4 @@ Base::Foo
 [IncB, :inc]
 [PreB, :pre]
 [:a, :own, :pre, :inc2, :base, :base]
+[:b, 3]

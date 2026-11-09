@@ -3685,7 +3685,8 @@ static int dyn_anc_mix(Compiler *c, int *L, int *n, int cap, int kpos, const int
         if (L[p] == m) { found = p; break; }
         if (!comp_class_is_module(c, &c->classes[L[p]])) sup_seen = 1;
       }
-      if (found >= 0) { if (!sup_seen) at = found; continue; }
+      /* (the insertion point moves only forward) */
+      if (found >= 0) { if (!sup_seen && found > at) at = found; continue; }
     }
     if (*n >= cap) return -1;
     int pos = at + 1;
@@ -3737,6 +3738,27 @@ static int dyn_anc_build(Compiler *c, DynAnc *d, int k, int depth) {
   d->anc[k] = L; d->nanc[k] = n;
   return n;
 }
+/* Can def h be what an `include` in a class body calls: a singleton def,
+   one in a module (it can be extended) or a `class << x` body, or one in
+   a reopened Module or Class? An instance method of another class, or a
+   top-level def (Module's own comes first), cannot. */
+static int dyn_def_reaches_class_bodies(Compiler *c, int h) {
+  const NodeTable *nt = c->nt;
+  if (nt_ref(nt, h, "receiver") >= 0) return 1;
+  const int *par = comp_parent_map(c);
+  if (!par) return 1;
+  for (int p = par[h], g = 0; p >= 0 && g < 4096; p = par[p], g++) {
+    NodeKind pk = nt_kind(nt, p);
+    if (pk == NK_SingletonClassNode || pk == NK_ModuleNode || pk == NK_BlockNode) return 1;
+    if (pk == NK_ClassNode) {
+      int cp = nt_ref(nt, p, "constant_path");
+      const char *cn = cp >= 0 ? nt_str(nt, cp, "name") : NULL;
+      return !cn || sp_streq(cn, "Module") || sp_streq(cn, "Class");
+    }
+    if (pk == NK_DefNode) return 1;
+  }
+  return 0;
+}
 /* Build the ancestors of every class once. A program that gives some
    class its own include or prepend method leaves them unread (bad). */
 static void dyn_anc_all(Compiler *c, DynAnc *d) {
@@ -3756,7 +3778,7 @@ static void dyn_anc_all(Compiler *c, DynAnc *d) {
     if (hk == NK_DefNode) {
       const char *dn = nt_str(nt, h, "name");
       if (dn && (sp_streq(dn, "include") || sp_streq(dn, "prepend") || sp_streq(dn, "append_features") ||
-                 sp_streq(dn, "prepend_features"))) d->bad = 1;
+                 sp_streq(dn, "prepend_features")) && dyn_def_reaches_class_bodies(c, h)) d->bad = 1;
       continue;
     }
     if (hk != NK_ClassNode && hk != NK_ModuleNode) continue;
@@ -3981,6 +4003,38 @@ static void desugar_dyn_parent_class_leaf(Compiler *c) {
         for (int i = 0; i < na && kf[k] < 0; i++) if (arms_k[i] == k) kf[k] = i;
         for (int j = 0; j < danc.nanc[k] && kf[k] < 0; j++)
           for (int i = 0; i < na && kf[k] < 0; i++) if (arms_k[i] == danc.anc[k][j]) kf[k] = i;
+      }
+      /* First try an order of the holders' arms that gives every class its
+         answer: the holder a class takes comes before the other holders
+         among its ancestors. */
+      { unsigned char adj[64][64], used[64];
+        int ord[64], no = 0;
+        memset(adj, 0, sizeof adj); memset(used, 0, sizeof used);
+        for (int k = 0; k < nk; k++) {
+          if (kf[k] < 0) continue;
+          for (int j = 0; j < danc.nanc[k]; j++)
+            for (int i = 0; i < na; i++)
+              if (i != kf[k] && arms_k[i] == danc.anc[k][j]) adj[kf[k]][i] = 1;
+        }
+        while (no < na) {
+          int pick = -1;
+          for (int i = 0; i < na && pick < 0; i++) {
+            if (used[i]) continue;
+            int free_ = 1;
+            for (int j = 0; j < na && free_; j++) if (!used[j] && j != i && adj[j][i]) free_ = 0;
+            if (free_) pick = i;
+          }
+          if (pick < 0) break;   /* (a cycle: no one order fits every class) */
+          used[pick] = 1; ord[no++] = pick;
+        }
+        if (no == na) {
+          int oc[64], oh[64], okk[64], inv[64];
+          for (int i = 0; i < na; i++) { oc[i] = arms_c[ord[i]]; oh[i] = arms_h[ord[i]]; okk[i] = arms_k[ord[i]]; inv[ord[i]] = i; }
+          for (int i = 0; i < na; i++) { arms_c[i] = oc[i]; arms_h[i] = oh[i]; arms_k[i] = okk[i]; }
+          for (int k = 0; k < nk; k++) if (kf[k] >= 0) kf[k] = inv[kf[k]];
+        }
+      }
+      for (int k = 0; k < nk; k++) {
         if (kf[k] < 0) continue;
         int chain = -1;
         for (int i = 0; i < na && chain < 0; i++) if (dyn_anc_has(&danc, k, arms_k[i])) chain = i;

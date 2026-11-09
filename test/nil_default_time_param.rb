@@ -28,3 +28,5 @@ def rng2(a = nil, b = nil) = (a..b).cover?(Time.at(5))
 p rng2(Time.at(1), Time.at(9)), rng2(Time.at(6), Time.at(9)), rng2, rng2(nil, Time.at(9))
 def always(t = nil) = (t - Time.at(0)).to_i
 p always(Time.at(42))
+def rsp(t = nil) = [t.respond_to?(:year), t.respond_to?(:each)]
+p rsp(Time.at(0)), rsp

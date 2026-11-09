@@ -21934,91 +21934,6 @@ static int yield_lowers_block(Compiler *c, int mi) {
   if (!m->blk_param || !m->blk_param[0]) return 0;
   return m->blk_param_value_use || scope_calls_itself(c, mi) || scope_yields_inside_lifted_body(c, mi);
 }
-static int an_byref_group_member_string(Compiler *c, Scope *m, int pi) {
-  if (pi >= m->nparams || !m->pnames[pi]) return 0;
-  /* a yielding method spliced into each call that gives it a block binds
-     its parameters there, aliasing the caller's String where its block
-     appends (inline_alias_params): no lent slot either. One that names its
-     block can be lowered to keep it, and keeps its say. */
-  if (m->yields && !m->is_lowered_yield && !yield_lowers_block(c, (int)(m - c->scopes))) return 0;
-  LocalVar *q = scope_local(m, m->pnames[pi]);
-  if (!q || !q->is_param || q->is_block_param) return 1;
-  TyKind t = q->type;
-  /* a boxed one takes the box whatever the group lends: a String it
-     appends to in place reaches it as the handle (convert_byref_handle_params) */
-  if (t == TY_UNKNOWN || t == TY_NIL || t == TY_INT || t == TY_BIGINT || t == TY_FLOAT || t == TY_BOOL ||
-      t == TY_SYMBOL || t == TY_POLY || ty_is_array(t) || ty_is_hash(t) || ty_is_object(t))
-    return 0;
-  return 1;
-}
-/* Can the name group of `nm` take parameter pi by reference: the lent
-   slot, or, where *captured comes back set, the shared handle? 0 when one
-   member keeps the whole group on the value ABI. blocked (the parameters
-   each scope rebinds) may be NULL: none. */
-static int an_byref_group_takes_ref(Compiler *c, const char *nm, int pi, const char *elig,
-                                    const unsigned *blocked, int n, int *captured) {
-  if (!nm || pi < 0 || pi >= 32) return 0;
-  for (int k = 1; k < n; k++) {
-    Scope *m = &c->scopes[k];
-    if (!m->name || !sp_streq(m->name, nm)) continue;
-    if (m->class_id >= 0 && !m->is_cmethod && !an_class_can_be_reached(c, m->class_id)) continue;
-    if (!an_byref_group_member_string(c, m, pi)) continue;
-    /* A module's method is called through the copies its includers get
-       (their own scopes, judged on their own), so the source is not refused
-       for being one: it takes the group's ABI and keeps the group's answer
-       the same whichever member an_any_scope_by_name finds first. Refused,
-       `def g(a) = super` into an included module's `g` kept the value ABI
-       and the module's appends stopped at its copy. */
-    /* A yielder the lowering turns into a proc call is a real function, but
-       one the slot ABI is not built for (elig): the group takes the shared
-       handle instead, as for a captured parameter. Refused, every other
-       member of the name kept the value ABI and appended to a copy. */
-    if (!elig[k] && !m->is_transplanted_source) {
-      if (!yield_lowers_block(c, k)) return 0;
-      *captured = 1;
-    }
-    if (pi >= m->nparams || !m->pnames[pi]) return 0;
-    /* a parameter rebound after its append (`io << x; io = String.new`)
-       cannot be the caller's slot, whose String the rebind would replace:
-       the group takes the shared handle, which the rebind leaves to the
-       caller. Refused, the append before the rebind went to a copy. */
-    if (blocked && (blocked[k] & (1u << pi))) *captured = 1;
-    LocalVar *q = scope_local(m, m->pnames[pi]);
-    if (!q || !q->is_param || q->is_block_param || q->type != TY_STRING) return 0;
-    /* celled for a proc that can outlive the call (a stored proc, a Thread
-       body) is not a slot the caller can lend: the proc would keep the
-       caller's frame. It is one String the proc, the method and the caller
-       all hold, which is what the shared handle is, so the group takes the
-       handle instead. Refused, the group kept the value ABI: a `super` or a
-       call handing the captured parameter on appended to a copy, and so did
-       the parent that shares the name (#6179). Celled because it is already
-       byref is this group, mid-fixpoint. A cell only lifted iteration blocks
-       made is consumed while the call runs, and the block reads the caller's
-       slot through it exactly as when byref promoted first -- refusing it
-       made the ABI depend on which of the two passes ran first, and the
-       caller's buffer came back empty (#4568). */
-    if (q->is_cell && !q->byref_out && q->cell_outlives) *captured = 1;
-  }
-  return 1;
-}
-static int an_byref_promote_group(Compiler *c, const char *nm, int pi,
-                                  const char *elig, const unsigned *blocked, int n,
-                                  unsigned *handle) {
-  int captured = 0;
-  if (!an_byref_group_takes_ref(c, nm, pi, elig, blocked, n, &captured)) return 0;
-  int did = 0;
-  for (int k = 1; k < n; k++) {
-    Scope *m = &c->scopes[k];
-    if (!m->name || !sp_streq(m->name, nm)) continue;
-    if (m->class_id >= 0 && !m->is_cmethod && !an_class_can_be_reached(c, m->class_id)) continue;
-    if (!an_byref_group_member_string(c, m, pi)) continue;
-    if (captured) handle[k] |= 1u << pi;
-    LocalVar *q = scope_local(m, m->pnames[pi]);
-    if (q && !q->byref_out) { { q->byref_out = 1; comp_touch_scope(q->owner); } { q->is_cell = 1; comp_touch_scope(q->owner); } did = 1; }
-  }
-  return did;
-}
-
 
 /* The method a plain call `id` names, by its receiver: self or none (the
    enclosing class's, else a top-level method's), a constant's `new` (its
@@ -22335,181 +22250,6 @@ int an_inline_param_lent(Compiler *c, int mi, int j, int blk) {
   return 0;
 }
 
-int a_super_target(Compiler *c, Scope *m);
-/* The scope indices of the named methods, ordered by name, for the name
-   lookups an_byref_eligible_scopes makes per alias and per literal. */
-typedef struct { const char *name; int si; } ByrefName;
-static int byref_name_cmp(const void *a, const void *b) {
-  const ByrefName *x = a, *y = b;
-  int d = strcmp(x->name, y->name);
-  return d ? d : x->si - y->si;
-}
-/* every method named nm keeps the plain ABI */
-static void byref_name_ineligible(const ByrefName *idx, int ni, const char *nm, char *elig) {
-  if (!nm) return;
-  int lo = 0, hi = ni;
-  while (lo < hi) {
-    int mid = lo + (hi - lo) / 2;
-    if (strcmp(idx[mid].name, nm) < 0) lo = mid + 1;
-    else hi = mid;
-  }
-  for (int i = lo; i < ni && sp_streq(idx[i].name, nm); i++) elig[idx[i].si] = 0;
-}
-
-/* Which methods the default build may lend a String parameter's slot by
-   address (elig[si], c->nscopes entries): a method with a body and
-   parameters, not yielding, not a constructor, not in a Struct or a
-   native class, and no alias, Symbol or String reaching its name. A name
-   group takes the slot only when every member may
-   (an_byref_group_takes_ref). compute_byref_out_params promotes from it,
-   and --share-strings asks it which parameters it can lend (#6765). */
-void an_byref_eligible_scopes(Compiler *c, char *elig) {
-  const NodeTable *nt = c->nt;
-  int n = c->nscopes;
-  memset(elig, 0, (size_t)(n > 0 ? n : 1));
-  for (int si = 1; si < n; si++) {
-    Scope *s = &c->scopes[si];
-    if (!s->name || s->def_node < 0 || s->body < 0) continue;
-    if (s->yields || s->is_lowered_yield || s->dm_subst_name || s->cs_synth) continue;
-    if (s->is_transplanted_source) continue;
-    /* An instance method qualifies too: `def add(buf, i); buf << ...; end` is
-       ordinary Ruby, and without the out-param the append landed in a copy and
-       the caller's string stayed empty (#3781). The unique-name rule above
-       still holds, so no override or dispatch sees a different ABI. A class
-       whose instances reach the method through a poly dispatch is fine: those
-       arms fill their arguments through the same emitter. */
-    if (s->class_id >= 0 && !s->is_cmethod && c->toplevel_class != s->class_id &&
-        (c->classes[s->class_id].is_struct || c->classes[s->class_id].is_native_class ||
-         c->classes[s->class_id].is_value_type)) continue;
-    /* An OPTIONAL parameter beside the lent one is not an ABI difference, and
-       treating it as one dropped the callee's appends without a word (#4390).
-       The caller materialises every default, so the callee is emitted
-       fixed-arity either way: the two emits of `def fill(io, prefix = nil)`
-       and of the same method with `prefix` required differ in one token, the
-       parameter's own spelling. The default that is a lent parameter's own
-       (`def fill(io = String.new)`) passes a fresh caller-side temp, which is
-       unaliased, so the appends go nowhere -- which is what CRuby answers for
-       that shape too. */
-    /* A keyword, a rest, a **kwrest or a post beside the lent parameter is
-       no ABI difference either: the keywords are positional C parameters, and
-       every binder that fills one -- a literal keyword, a `**` or merged hash,
-       a splat's element, a gather, a default -- lends what it binds, a temp
-       where no caller variable stands behind the value (emit_lent_temp). So
-       `def m(k:) = k << "x"` called `m(k: s)` lends s like a positional, where
-       refusing the method made the appends stay in a copy. */
-    if (s->nparams <= 0 || s->nparams > 32) continue;
-    /* A constructor is reached through sp_X_new, which about two dozen
-       emitters (class values, `raise`, `allocate`, the poly `new` dispatch)
-       call with values: lent a slot at the `.new` site alone, the C build
-       stopped on the wrapper's value parameter. */
-    if (s->name && sp_streq(s->name, "initialize")) continue;
-    elig[si] = 1;
-  }
-  ByrefName *idx = malloc(sizeof *idx * (size_t)(n > 0 ? n : 1));
-  if (!idx) {
-    fprintf(stderr, "spinel: out of memory\n");
-    exit(1);
-  }
-  int ni = 0;
-  for (int si = 1; si < n; si++)
-    if (elig[si]) idx[ni++] = (ByrefName){ c->scopes[si].name, si };
-  qsort(idx, (size_t)ni, sizeof *idx, byref_name_cmp);
-  /* an aliased name reaches the method under another spelling; the alias call
-     sites keep the plain ABI, so the method must too */
-  for (int ci = 0; ci < c->nclasses; ci++) {
-    ClassInfo *cls = &c->classes[ci];
-    for (int a = 0; a < cls->naliases; a++) {
-      byref_name_ineligible(idx, ni, cls->alias_old[a], elig);
-      byref_name_ineligible(idx, ni, cls->alias_new[a], elig);
-    }
-  }
-  /* A name reached by a Symbol or String -- send / method(:x) /
-     define_method / respond_to? / `&:x` / inject(:x) -- takes the plain
-     ABI. When every such reach names its method with a literal, only the
-     names those literals spell are refused; a literal anywhere else (`p
-     :edit`, a Hash key) calls nothing, and refusing its method for it lost
-     the appends of every caller silently (#6040). One reach whose name is
-     only the run time's (`send(m)`, `&blk_sym`) may call any method, and
-     every name any literal spells keeps the plain ABI, as before. */
-  static const char *const DYN[] = {
-    "send", "__send__", "public_send", "method", "public_method", "instance_method",
-    "public_instance_method", "singleton_method", "define_method", "define_singleton_method",
-    "respond_to?", "alias_method", "method_defined?", "public_method_defined?",
-    "private_method_defined?", "protected_method_defined?", "inject", "reduce", "to_proc", NULL };
-  int dyn_nonlit = 0;
-  for (int id = 0; id < nt->count && !dyn_nonlit; id++) {
-    NodeKind k = nt_kind(nt, id);
-    int lit = -1;
-    if (k == NK_BlockArgumentNode) lit = nt_ref(nt, id, "expression");
-    else if (k == NK_CallNode) {
-      const char *cn = nt_str(nt, id, "name");
-      int hit = 0;
-      for (int d = 0; cn && DYN[d] && !hit; d++) hit = sp_streq(cn, DYN[d]);
-      if (!hit) continue;
-      if (sp_streq(cn, "to_proc")) lit = nt_ref(nt, id, "receiver");
-      else { int a = nt_ref(nt, id, "arguments"), ac = 0;
-             const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &ac) : NULL;
-             lit = ac > 0 ? av[is_reduce_alias(cn) ? ac - 1 : 0] : -2; }
-    }
-    else continue;
-    if (lit == -2) continue;   /* no argument names a method */
-    if (lit < 0) continue;     /* `&` forwarding the enclosing block */
-    NodeKind lk = nt_kind(nt, lit);
-    if (lk == NK_SymbolNode || lk == NK_StringNode) continue;
-    /* inject(0) / reduce(init) { }: an operand, not a method name */
-    if ((k == NK_CallNode) && comp_ntype(c, lit) != TY_SYMBOL && comp_ntype(c, lit) != TY_STRING &&
-        comp_ntype(c, lit) != TY_POLY && comp_ntype(c, lit) != TY_UNKNOWN) continue;
-    if (k == NK_BlockArgumentNode && comp_ntype(c, lit) != TY_SYMBOL && comp_ntype(c, lit) != TY_POLY)
-      continue;
-    /* the `&blk` of a forward that became a literal block
-       (desugar_value_callable_forwards) is no call's any more: its read
-       carries the sentinel name, and it reaches no method */
-    if (k == NK_BlockArgumentNode && lk == NK_LocalVariableReadNode && sp_streq(nt_str(nt, lit, "name"), "__orphaned__"))
-      continue;
-    dyn_nonlit = 1;
-  }
-  for (int id = 0; id < nt->count; id++) {
-    if (!nt_type(nt, id)) continue;
-    /* a symbol/string literal spelling the name (see DYN above) */
-    const char *v = NULL;
-    int lit = -1;
-    if (dyn_nonlit) lit = id;
-    else if (nt_kind(nt, id) == NK_BlockArgumentNode) lit = nt_ref(nt, id, "expression");
-    else if (nt_kind(nt, id) == NK_CallNode) {
-      const char *cn = nt_str(nt, id, "name");
-      int hit = 0;
-      for (int d = 0; cn && DYN[d] && !hit; d++) hit = sp_streq(cn, DYN[d]);
-      if (hit) {
-        if (sp_streq(cn, "to_proc")) lit = nt_ref(nt, id, "receiver");
-        else { int a = nt_ref(nt, id, "arguments"), ac = 0;
-               const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &ac) : NULL;
-               for (int j = 0; j < ac && lit < 0; j++) {
-                 NodeKind jk = nt_kind(nt, av[j]);
-                 /* each literal argument: alias_method and define_method name two */
-                 if (jk == NK_SymbolNode || jk == NK_StringNode) {
-                   const char *jv = jk == NK_SymbolNode ? nt_str(nt, av[j], "value") : nt_str(nt, av[j], "content");
-                   if (!jv) jv = nt_str(nt, av[j], "unescaped");
-                   byref_name_ineligible(idx, ni, jv, elig);
-                 }
-               } }
-      }
-    }
-    if (lit >= 0) {
-      NodeKind lty_k = nt_kind(nt, lit);
-      if (lty_k == NK_SymbolNode) {
-        v = nt_str(nt, lit, "value");
-        if (!v) v = nt_str(nt, lit, "unescaped");
-      }
-      else if (lty_k == NK_StringNode) {
-        v = nt_str(nt, lit, "content");
-        if (!v) v = nt_str(nt, lit, "unescaped");
-      }
-    }
-    byref_name_ineligible(idx, ni, v, elig);
-  }
-  free(idx);
-}
-
 /* Is `v` a String nobody else holds: a literal, or a builtin String method
    that answers a new one (`text.gsub(...)`, `text.strip`, `text.dup`)? On a
    receiver that may also be another kind of object, only a substitution no
@@ -22570,236 +22310,6 @@ static int an_param_fresh_at(Compiler *c, Scope *s, const char *vn, int use) {
     if (wn && sp_streq(wn, vn)) ahead = 1;
   }
   return ahead && !an_writes_unfresh(c, s->body, vn, 0);
-}
-
-static void compute_byref_out_params(Compiler *c) {
-  const NodeTable *nt = c->nt;
-  int n = c->nscopes;
-  char *elig = calloc((size_t)n, 1);
-  unsigned *blocked = calloc((size_t)n, sizeof(unsigned));  /* per-scope param bitmask */
-  char *polyr = calloc((size_t)n, 1);   /* a POLY receiver reaches the name */
-  unsigned *cellh = calloc((size_t)n, sizeof(unsigned));  /* a proc captures the param */
-  /* the calls of a scope that lends: an eligible one, or a yielder the
-     lowering turns into a proc call, whose group takes the shared handle
-     instead (an_byref_group_takes_ref). Its own appends were followed, the
-     parameter it hands on to a byref slot was not, and that append landed in
-     its copy. Asked once per scope: the lowering's test walks the program. */
-  char *lends = calloc((size_t)n, 1);
-  if (!elig || !blocked || !polyr || !cellh || !lends) {
-    fprintf(stderr, "spinel: out of memory\n");
-    exit(1);
-  }
-  an_byref_eligible_scopes(c, elig);
-  for (int si = 1; si < n; si++)
-    lends[si] = elig[si] || ((c->scopes[si].yields || c->scopes[si].is_lowered_yield) &&
-                             yield_lowers_block(c, si));
-  /* The eligible scopes by name, each name's chained from efirst through
-     enext: a call on a POLY receiver below marks those of its name, found
-     by hash rather than by a walk of every scope at every such call. */
-  ANameHash enames; memset(&enames, 0, sizeof enames);
-  int *efirst = NULL, ecap = 0;
-  int *enext = malloc(sizeof(int) * (size_t)(n > 0 ? n : 1));
-  if (!enext) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-  for (int si = 1; si < n; si++) {
-    enext[si] = -1;
-    const char *sn = c->scopes[si].name;
-    if (!elig[si] || !sn) continue;
-    int e = anh_find(&enames, sn);
-    if (e < 0) {
-      anh_add(&enames, sn); e = anh_find(&enames, sn);
-      if (e >= ecap) {
-        ecap = e + 64;
-        efirst = realloc(efirst, sizeof(int) * (size_t)ecap);
-        if (!efirst) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-      }
-      efirst[e] = -1;
-    }
-    enext[si] = efirst[e]; efirst[e] = si;
-  }
-
-  for (int id = 0; id < nt->count; id++) {
-    const char *ty = nt_type(nt, id);
-    NodeKind k = nt_kind(nt, id);
-    if (!ty) continue;
-    /* A POLY receiver reaches the method through the cls_id switch, and that
-       switch hoists its arguments once, by the argument's own type, for every
-       arm to share -- it has no callee to ask, and the arms are what it is
-       choosing between. So it passes the value where a byref arm wants the
-       slot, and the C build stops:
-         expected 'const char **' but argument is of type 'const char *'
-       The uniqueness rule used to hide this: two classes defining one name
-       was exactly the case it refused, and a poly dispatch needs two. Making
-       the group agree (df30ed28) removed that accident and left the dispatch
-       unable to call what it now agrees about.
-       Kept on the value ABI, though, every arm appended to a copy and the
-       caller's String came back empty. So such a name is promoted as any
-       other, and takes the shared handle instead of the slot once the
-       group has settled (below): the dispatch hands a handle arm the
-       caller's handle (emit_poly_shared_arg), and a handle, unlike a slot,
-       is one thing whichever arm the receiver picks. */
-    if (k == NK_CallNode) {
-      int rcv = nt_ref(nt, id, "receiver");
-      const char *cn = nt_str(nt, id, "name");
-      if (rcv >= 0 && cn && comp_ntype(c, rcv) == TY_POLY) {
-        int e = anh_find(&enames, cn);
-        for (int si = e >= 0 ? efirst[e] : -1; si >= 0; si = enext[si]) polyr[si] = 1;
-      }
-    }
-    /* a plain rebind of a param blocks it (see the header comment) */
-    if (k == NK_LocalVariableWriteNode ||
-        k == NK_LocalVariableOperatorWriteNode ||
-        k == NK_LocalVariableOrWriteNode ||
-        k == NK_LocalVariableAndWriteNode ||
-        k == NK_LocalVariableTargetNode) {
-      Scope *s = comp_scope_of(c, id);
-      int si = s ? (int)(s - c->scopes) : -1;
-      if (si > 0 && si < n && elig[si]) {
-        int pi = an_param_idx(s, nt_str(nt, id, "name"));
-        if (pi >= 0 && pi < 32) blocked[si] |= 1u << pi;
-      }
-    }
-  }
-
-  int changed = 1;
-  while (changed) {
-    changed = 0;
-    for (int id = 0; id < nt->count; id++) {
-      NodeKind k = nt_kind(nt, id);
-      if (k == NK_SuperNode || k == NK_ForwardingSuperNode) {
-        /* transitive through `super`: a parameter a super hands on into the
-           parent's byref slot. A same-named parent shares the name group; one
-           an included module brings is copied under a name of its own, and
-           the child kept the value ABI the lent slot came back through. */
-        Scope *s = comp_scope_of(c, id);
-        int si = s ? (int)(s - c->scopes) : -1;
-        if (si <= 0 || si >= n || !lends[si] || s->class_id < 0) continue;
-        int mi = a_super_target(c, s);
-        if (mi < 0) continue;
-        Scope *m = &c->scopes[mi];
-        for (int j = 0; j < m->nparams; j++) {
-          if (!comp_byref_param(c, m, j)) continue;
-          int pi = -1;
-          if (k == NK_ForwardingSuperNode) pi = zsuper_param_source(c, s, m, j);
-          else {
-            int an = arg_layout_param_node(c, m, id, j, NULL);
-            if (an >= 0 && nt_kind(nt, an) == NK_LocalVariableReadNode)
-              pi = an_param_idx(s, nt_str(nt, an, "name"));
-          }
-          if (pi < 0 || pi >= 32) continue;
-          LocalVar *p = scope_local(s, s->pnames[pi]);
-          if (p && p->is_param && p->type == TY_STRING && !p->byref_out &&
-              !an_param_fresh_at(c, s, s->pnames[pi], id) &&
-              an_byref_promote_group(c, s->name, pi, elig, blocked, n, cellh))
-            changed = 1;
-        }
-        continue;
-      }
-      if (k != NK_CallNode) continue;
-      Scope *s = comp_scope_of(c, id);
-      int si = s ? (int)(s - c->scopes) : -1;
-      if (si <= 0 || si >= n || !lends[si]) continue;
-      const char *nm = nt_str(nt, id, "name");
-      int recv = nt_ref(nt, id, "receiver");
-      NodeKind rk = nt_kind(nt, recv);
-      /* direct mutator: param << ... / param.gsub!(...) */
-      if (rk == NK_LocalVariableReadNode && an_str_mutator_name(nm)) {
-        const char *vn = nt_str(nt, recv, "name");
-        int pi = an_param_idx(s, vn);
-        if (pi >= 0 && pi < 32) {
-          LocalVar *p = scope_local(s, vn);
-          /* the whole name group takes it or none of it does; the cell deref
-             forms the body already emits are what the ABI rides on */
-          if (p && p->is_param && p->type == TY_STRING && !p->byref_out &&
-              !an_param_fresh_at(c, s, vn, id) &&
-              an_byref_promote_group(c, s->name, pi, elig, blocked, n, cellh))
-            changed = 1;
-        }
-      }
-      /* transitive through a splice: the param passed to an inlined yielding
-         method (or a yielding initialize) that lends it, or handed by
-         instance_exec to a block that does, is aliased there, so the
-         append reaches this method's own variable and stops at a copy
-         unless the param is lent too */
-      { int blk = nt_ref(nt, id, "block");
-        if (blk >= 0 && nt_kind(nt, blk) != NK_BlockNode) blk = -1;
-        int a = nt_ref(nt, id, "arguments"), ac = 0;
-        const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &ac) : NULL;
-        int ymi = -1;
-        if (nm && sp_streq(nm, "instance_exec")) ymi = -2;
-        else if ((ymi = an_call_target_mi(c, id)) >= 0 && !c->scopes[ymi].yields) ymi = -1;
-        for (int j = 0; ymi != -1 && j < (ymi >= 0 ? c->scopes[ymi].nparams : ac) && j < 32; j++) {
-          int an = -1;
-          if (ymi == -2) {
-            if (blk < 0 || nt_kind(nt, av[j]) == NK_SplatNode) break;
-            if (an_block_param_lent(c, blk, j, call_plain_argc(c, id))) an = av[j];
-          }
-          else if (an_inline_param_lent(c, ymi, j, blk)) an = arg_layout_param_node(c, &c->scopes[ymi], id, j, NULL);
-          if (an < 0 || nt_kind(nt, an) != NK_LocalVariableReadNode) continue;
-          const char *vn = nt_str(nt, an, "name");
-          int pi = an_param_idx(s, vn);
-          if (pi < 0 || pi >= 32) continue;
-          LocalVar *p = scope_local(s, vn);
-          if (p && p->is_param && p->type == TY_STRING && !p->byref_out &&
-              !an_param_fresh_at(c, s, vn, id) &&
-              an_byref_promote_group(c, s->name, pi, elig, blocked, n, cellh))
-            changed = 1;
-        } }
-      /* transitive: the param passed on into another method's byref slot */
-      if (recv < 0 || ((rk == NK_ConstantReadNode ||
-                               rk == NK_ConstantPathNode ||
-                               rk == NK_SelfNode))) {
-        int mi = an_any_scope_by_name(c, nm);
-        if (mi < 0) continue;
-        Scope *m = &c->scopes[mi];
-        for (int j = 0; j < m->nparams; j++) {
-          if (!comp_byref_param(c, m, j)) continue;
-          /* the argument the binders give parameter j, a keyword's by name */
-          int an = arg_layout_param_node(c, m, id, j, NULL);
-          if (an < 0 || nt_kind(nt, an) != NK_LocalVariableReadNode) continue;
-          const char *vn = nt_str(nt, an, "name");
-          int pi = an_param_idx(s, vn);
-          if (pi < 0 || pi >= 32) continue;
-          LocalVar *p = scope_local(s, vn);
-          if (p && p->is_param && p->type == TY_STRING && !p->byref_out &&
-              !an_param_fresh_at(c, s, vn, id) &&
-              an_byref_promote_group(c, s->name, pi, elig, blocked, n, cellh))
-            changed = 1;
-        }
-      }
-    }
-  }
-  /* A name a POLY receiver reaches takes the shared handle where the group
-     settled on the slot (see the POLY receiver note above), and the
-     conversion pass pulls each caller's local into it: `[Loud.new,
-     Quiet.new].each { |v| v.append_into(io) }` left every append in a
-     copy. The whole name group is marked, so every member it promoted
-     converts, and the group still agrees. */
-  /* A group a captured parameter promoted takes the handle at that index
-     (see an_byref_promote_group). The captured member keeps its cell: the
-     proc reads the handle through it, and the handle, unlike a lent slot,
-     outlives the call. */
-  for (int si = 1; si < n; si++) {
-    if (!polyr[si] && !cellh[si]) continue;
-    Scope *m = &c->scopes[si];
-    for (int j = 0; j < m->nparams && j < 32; j++) {
-      if (!polyr[si] && !(cellh[si] & (1u << j))) continue;
-      LocalVar *q = m->pnames[j] ? scope_local(m, m->pnames[j]) : NULL;
-      if (!q || !q->byref_out) continue;
-      { q->byref_out = 0; comp_touch_scope(q->owner); } { q->is_cell = q->cell_outlives; comp_touch_scope(q->owner); }
-      lv_set_type(q, TY_STRBUF); { q->str_shared = 1; comp_touch_scope(q->owner); }
-    }
-  }
-  /* the share facts built from here on ask the same answer */
-  free(c->byref_elig);
-  c->byref_elig = elig;
-  c->nbyref_elig = n;
-  free(blocked);
-  free(polyr);
-  free(cellh);
-  free(lends);
-  anh_free(&enames);
-  free(efirst);
-  free(enext);
 }
 
 /* Does scope mi's body contain a call to its own method name on implicit or
@@ -23189,17 +22699,21 @@ static int strbuf_promote_ivar(Compiler *c, int cid, const char *nm) {
   return 1;
 }
 
-/* Every String instance variable, class variable and global holds the
-   handle, as every String local does (one-string) */
-static int all_handle_static_slots(Compiler *c) {
+/* Every String local, parameter, instance variable, class variable and
+   global holds the handle (one-string). A local takes it where its type
+   settles (lv_keep_decisions); this catches the slots typed after that
+   write, and a seeded one. */
+static int all_handle_slots(Compiler *c) {
   int changed = 0;
+  for (int s = 0; s < c->nscopes; s++)
+    for (int i = 0; i < c->scopes[s].nlocals; i++) changed |= slot_take_string_handle(c, &c->scopes[s].locals[i]);
   for (int k = 0; k < c->nclasses; k++) {
     ClassInfo *ci = &c->classes[k];
     for (int i = 0; i < ci->nivars; i++)
       if (ci->ivar_types[i] == TY_STRING || (ci->ivar_types[i] == TY_STRBUF && !ci->ivar_str_shared[i]))
         changed |= strbuf_promote_ivar(c, k, ci->ivars[i]);
     for (int i = 0; i < ci->ncvars; i++)
-      if (ci->cvar_types[i] == TY_STRING) {
+      if (ci->cvar_types[i] == TY_STRING || (ci->cvar_types[i] == TY_STRBUF && !ci->cvar_str_shared[i])) {
         cvar_set_type(ci, i, TY_STRBUF);
         ci->cvar_str_shared[i] = 1;
         changed = 1;
@@ -25755,12 +25269,11 @@ static int smc_first(Compiler *c, int si) {
 static int smc_next_of(int u) { return u >= 0 && u < smc_count ? smc_next[u] : -1; }
 
 /* Does scope `mi` mutate its parameter `pi` in place (`p << x`, `p.gsub!`)?
-   The byref machinery answers the same question, but it is computed after the
-   fixpoint (compute_byref_out_params), so this pass -- which runs inside it --
-   asks the body directly. Only a plain local read of the parameter counts,
-   and not one after the body rebinds it to a fresh String, as the byref
-   pass asks (an_param_fresh_at). Encoding and frozen-state changes
-   under sharing need the same parameter handle as byte mutations. */
+   Asked of the body directly, as this pass runs inside the fixpoint. Only a
+   plain local read of the parameter counts, and not one after the body
+   rebinds it to a fresh String (an_param_fresh_at). Encoding and
+   frozen-state changes under sharing need the same parameter handle as
+   byte mutations. */
 static int an_param_mutated_in_place(Compiler *c, int mi, int pi) {
   if (mi < 0 || mi >= c->nscopes) return 0;
   Scope *m = &c->scopes[mi];
@@ -31163,8 +30676,7 @@ static int convert_byref_handle_params(Compiler *c,
       }
     }
   }
-  /* A name group lends the slot as one (an_byref_promote_group), so it
-     leaves the slot as one too. The rules above turn a single method's
+  /* A name group lends the slot as one, so it leaves the slot as one too. The rules above turn a single method's
      parameter into the handle -- the one a POLY parameter's pull reaches --
      and left its same-named siblings lending theirs. A dispatch over the
      group then hoisted the argument in one ABI for both: a bare
@@ -33100,9 +32612,8 @@ static int dyn_pull_arg(Compiler *c, int a, int mark_read) {
 /* The callee side. A proc literal's (or a kept block's) String parameter
    that its body appends to reads the boxed channel as the handle
    (emit_proc_literal_here), and so does a method a `method(:m)` names:
-   such a name keeps the value ABI (the DYN rule in compute_byref_out_params,
-   since a Method's trampoline has no slot to lend), and a value parameter
-   appends to a copy. The method takes the handle instead, which its
+   such a name keeps the value ABI (a Method's trampoline has no slot to
+   lend), and a value parameter appends to a copy. The method takes the handle instead, which its
    trampoline, its thunk and a devirtualized `m.call(s)` all hand over, and
    its direct callers are pulled in as a handle method's are. */
 static int dyn_convert_params(Compiler *c) {
@@ -33194,9 +32705,8 @@ static int dyn_convert_params(Compiler *c) {
    A constructor is reached through sp_C_new, which about two dozen emitters
    call: a constant's `new`, a class value's, `self.new` in a class method,
    `raise`, a Struct's and a Data's, the poly `new` dispatch. So its
-   parameters kept the value ABI (compute_byref_out_params skips
-   `initialize`: a slot lent at the `.new` site alone left the others
-   passing values), and an initialize that appended to its String appended
+   parameters kept the value ABI (a slot lent at the `.new` site alone
+   left the others passing values), and an initialize that appended to its String appended
    to a copy. A String parameter the initialize appends to, or hands on to
    a method or a `super` that does, takes the shared handle instead: one C
    type every binder can hand over (emit_arg_or_default's handle arm, and
@@ -52654,7 +52164,7 @@ static void an_phase_infer_fixpoint(Compiler *c) {
     ch |= AN_PASS("infer_multiwrite_const_types", infer_multiwrite_const_types(c));
     ch |= AN_PASS("promote_forwarded_rest_args", promote_forwarded_rest_args(c));
     ch |= AN_PASS("infer_ivar_types", infer_ivar_types(c));
-    ch |= AN_PASS("all_handle_static_slots", all_handle_static_slots(c));
+    ch |= AN_PASS("all_handle_slots", all_handle_slots(c));
     ch |= AN_PASS("infer_cvar_types", infer_cvar_types(c, 0));
     ch |= AN_PASS("infer_inherited_ivars", infer_inherited_ivars(c));
     ch |= AN_PASS("infer_return_types", infer_return_types(c));
@@ -52917,7 +52427,7 @@ static void an_phase_infer_fixpoint(Compiler *c) {
         { int _w = AN_PASS_T("infer_global_const_types", infer_global_const_types(c)); ch |= _w; ch_other |= _w; }
         { int _w = AN_PASS_T("infer_multiwrite_const_types", infer_multiwrite_const_types(c)); ch |= _w; ch_other |= _w; }
         ch |= AN_PASS("infer_ivar_types", infer_ivar_types(c));
-        ch |= AN_PASS("all_handle_static_slots", all_handle_static_slots(c));
+        ch |= AN_PASS("all_handle_slots", all_handle_slots(c));
         /* AFTER the ivar write-merge: the re-clear zeroes recorded ivars at
            each iteration's top, so a promote gated on STRING must see the
            freshly re-derived type, not the cleared UNKNOWN (#3227 P4) */
@@ -55347,10 +54857,10 @@ static void an_phase_storage(Compiler *c) {
     an_ie_class_id = saved2;
   }
 
-  /* Byref string out-params: must run before the STRBUF promotion below so
-     the promotion can exclude locals whose address is passed to a byref slot
-     (a STRBUF local is an sp_String*, not the const char* slot byref needs). */
-  AN_STEP_V("compute_byref_out_params", compute_byref_out_params(c));
+  /* Every String slot holds the handle before the argument index and the
+     rule's facts are built from the slots (some parameters are typed String
+     only after the fixpoint). */
+  AN_STEP_V("all_handle_slots", all_handle_slots(c));
   AN_STEP_V("strbuf_arg_index_build", strbuf_arg_index_build(c));
   /* handle args cannot ride byref's const char** slot: convert such params
      to the handle representation, cascading through transitive passes. A
@@ -55373,8 +54883,10 @@ static void an_phase_storage(Compiler *c) {
   g_share_widened_holder = 0;
   for (int round = 0;; round++) {
     for (;;) {
+      /* a parameter the last iteration's settling typed String */
+      int ch = all_handle_slots(c);
       handle_arg_tab_init(c, &hat);
-      int ch = promote_params_stored_in_shared_ivars(c, &hat);
+      if (promote_params_stored_in_shared_ivars(c, &hat)) ch = 1;
       if (convert_byref_handle_params(c, &hat)) ch = 1;
       if (lift_poly_alias_reads(c, &hat)) ch = 1;
       if (promote_local_alias_pairs(c)) ch = 1;

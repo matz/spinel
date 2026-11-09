@@ -118,13 +118,8 @@ void du_memo_free(void);
 enum { AN_DROP_CLIMB = VPS_ALL };
 int an_value_dropped(const NodeTable *nt, const int *parent, int node);
 int cow_user_block_value(Compiler *c, const int *parent, int id);
-/* The methods the default build may lend a String parameter's slot by
-   address (elig, c->nscopes entries), and whether it passes parameter pi
-   of method mi by value: no slot and no shared handle reach it, because a
-   member of its name group may not take either. A spliced yielder's
-   parameters alias the caller's String, and are not passed by value.
-   analyze.c */
-void an_byref_eligible_scopes(Compiler *c, char *elig);
+/* The String rule for a local or parameter slot: it holds the handle (analyze_pass.c) */
+int slot_take_string_handle(Compiler *c, LocalVar *lv);
 /* A runtime protocol name: the emitted program can call the method with
    no CallNode of its own (`puts obj` calls to_s). analyze.c */
 int method_name_implicitly_invoked(const char *nm);

@@ -1704,6 +1704,11 @@ void emit_tail_lead(Buf *b);
 const char *rename_local(const char *nm);
 const char *rename_local_cell(const char *nm);
 int sb_shim_shadow(const char *name, const char *rn);
+/* A shim shadow's name, by value so a format takes it as `%s` (sb_shadow_local) */
+typedef struct { char s[24]; } ShimShadow;
+ShimShadow sb_shadow_local(int tH);
+ShimShadow sb_shadow_cname(int tH);
+ShimShadow sb_held_shadow_cname(int tH);
 typedef struct { TyKind type, shim_ty; int shim_lift; } SbShimSave;
 SbShimSave sb_shim_enter(LocalVar *lv);
 void sb_shim_leave(LocalVar *lv, SbShimSave sv);

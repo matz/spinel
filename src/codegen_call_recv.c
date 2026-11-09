@@ -741,10 +741,10 @@ static void emit_sb_shim_answer(Compiler *c, int id, int tH, TyKind resty, Buf *
     fl = bop_answers_self(TY_STRING, nt_str(c->nt, id, "name"), argc, nt_ref(c->nt, id, "block") >= 0);
   }
   if (fl == BOPF_SELF || fl == BOPF_SELF_EXACT)
-    buf_printf(b, " sp_String_set_bin(_t%d, lv__sb%d); (void)_res%d; sp_strbuf_read_pub(_t%d); })", tH, tH, tH, tH);
+    buf_printf(b, " sp_String_set_bin(_t%d, %s); (void)_res%d; sp_strbuf_read_pub(_t%d); })", tH, sb_shadow_cname(tH).s, tH, tH);
   else if (fl == BOPF_SELF_OR_NIL)
-    buf_printf(b, " sp_String_set_bin(_t%d, lv__sb%d); _res%d ? sp_strbuf_read_pub(_t%d) : (const char *)NULL; })", tH, tH, tH, tH);
-  else buf_printf(b, " sp_String_set_bin(_t%d, lv__sb%d); _res%d; })", tH, tH, tH);
+    buf_printf(b, " sp_String_set_bin(_t%d, %s); _res%d ? sp_strbuf_read_pub(_t%d) : (const char *)NULL; })", tH, sb_shadow_cname(tH).s, tH, tH);
+  else buf_printf(b, " sp_String_set_bin(_t%d, %s); _res%d; })", tH, sb_shadow_cname(tH).s, tH);
 }
 
 /* The shared-mutable shim over an IVAR receiver, in expression position. The
@@ -765,7 +765,7 @@ static int sb_iv_expr_shim(Compiler *c, int id, int recvS, Buf *b,
   int mark = sb_shim_args_first(c, id, &pre, g_indent);
   int tH = ++g_tmp;
   Buf armb; memset(&armb, 0, sizeof armb);
-  snprintf(g_sb_iv_repl, sizeof g_sb_iv_repl, "lv__sb%d", tH);
+  snprintf(g_sb_iv_repl, sizeof g_sb_iv_repl, "%s", sb_shadow_cname(tH).s);
   g_sb_iv_name = ivn; g_sb_iv_cid = icid;
   int handled = rerun(c, id, &armb);
   g_sb_iv_name = NULL; g_sb_iv_cid = -1;
@@ -774,9 +774,9 @@ static int sb_iv_expr_shim(Compiler *c, int id, int recvS, Buf *b,
   TyKind resty = repr_of(c, id).as_ty;
   buf_printf(b, "({ sp_String *_t%d = SP_STR_HDL(%s);%s"
                 " if (sp_String_is_frozen(_t%d)) sp_raise_frozen_str(_t%d->data);"
-                " const char *lv__sb%d = sp_str_concat(sp_String_cstr(_t%d), (&(\"\\xff\")[1]));"
-                " SP_GC_ROOT(lv__sb%d); ",
-             tH, srefI.p, pre.p ? pre.p : "", tH, tH, tH, tH, tH);
+                " const char *%s = sp_str_concat(sp_String_cstr(_t%d), (&(\"\\xff\")[1]));"
+                " SP_GC_ROOT(%s); ",
+             tH, srefI.p, pre.p ? pre.p : "", tH, tH, sb_shadow_cname(tH).s, tH, sb_shadow_cname(tH).s);
   free(pre.p); free(srefI.p);
   emit_sb_res_ctype(c, resty, b);
   buf_printf(b, " _res%d = %s;", tH, armb.p ? armb.p : "0");
@@ -803,9 +803,9 @@ static int sb_reader_expr_shim(Compiler *c, int id, int recvS, Buf *b,
   TyKind resty = repr_of(c, id).as_ty;
   buf_printf(b, "({ sp_String *_t%d = SP_STR_HDL(%s);%s"
                 " if (sp_String_is_frozen(_t%d)) sp_raise_frozen_str(_t%d->data);"
-                " const char *lv__sb%d = sp_str_concat(sp_String_cstr(_t%d), (&(\"\\xff\")[1]));"
-                " SP_GC_ROOT(lv__sb%d); ",
-             tH, srefR.p, pre.p ? pre.p : "", tH, tH, tH, tH, tH);
+                " const char *%s = sp_str_concat(sp_String_cstr(_t%d), (&(\"\\xff\")[1]));"
+                " SP_GC_ROOT(%s); ",
+             tH, srefR.p, pre.p ? pre.p : "", tH, tH, sb_shadow_cname(tH).s, tH, sb_shadow_cname(tH).s);
   free(pre.p); free(srefR.p);
   emit_sb_res_ctype(c, resty, b);
   buf_printf(b, " _res%d = %s;", tH, armb.p ? armb.p : "0");
@@ -836,7 +836,7 @@ static int sb_route_expr_shim(Compiler *c, int id, int recvS, Buf *b,
   view_push_repr(c, recvS, VR_HANDLE_DEMAND, 0);
   int ntok = 2;
   if (repr_of(c, recvS).as_ty == TY_STRBUF) { view_push(c, recvS, TY_STRING); ntok = 3; }
-  view_bind(recvS, "lv__sb%d", tH);
+  view_bind(recvS, "%s", sb_shadow_cname(tH).s);
   Buf pre; memset(&pre, 0, sizeof pre);
   int mark = sb_shim_args_first(c, id, &pre, g_indent);
   Buf armb; memset(&armb, 0, sizeof armb);
@@ -855,9 +855,9 @@ static int sb_route_expr_shim(Compiler *c, int id, int recvS, Buf *b,
   /* (one representation: the receiver's text may be a view of the handle; sp_String_new_fresh finds it) */
   buf_printf(b, "({ sp_String *_t%d = %s%s%s; SP_GC_ROOT(_t%d);%s"
                 " if (sp_String_is_frozen(_t%d)) sp_raise_frozen_str(_t%d->data);"
-                " const char *lv__sb%d = sp_str_concat(sp_String_cstr(_t%d), (&(\"\\xff\")[1]));"
-                " SP_GC_ROOT(lv__sb%d); ",
-             tH, "SP_STR_HDL(", hb.p, ")", tH, pre.p ? pre.p : "", tH, tH, tH, tH, tH);
+                " const char *%s = sp_str_concat(sp_String_cstr(_t%d), (&(\"\\xff\")[1]));"
+                " SP_GC_ROOT(%s); ",
+             tH, "SP_STR_HDL(", hb.p, ")", tH, pre.p ? pre.p : "", tH, tH, sb_shadow_cname(tH).s, tH, sb_shadow_cname(tH).s);
   free(hb.p); free(pre.p);
   emit_sb_res_ctype(c, resty, b);
   buf_printf(b, " _res%d = %s;", tH, armb.p ? armb.p : "0");
@@ -5454,11 +5454,11 @@ int emit_array_call(Compiler *c, int id, Buf *b) {
         int mark = sb_shim_args_first(c, id, &pre, g_indent);
         int tH = ++g_tmp;
         Buf armb; memset(&armb, 0, sizeof armb);
-        ren_push(sbn, "_sb%d", tH);
+        ren_push(sbn, "%s", sb_shadow_local(tH).s);
         /* (a receiver bound to its held handle's read, `s&.slice!(f(1))`
            after the argument ran, reads as the shadow too: the binding
            comes before the rename) */
-        if (ran_first_read_handle(recvS) >= 0 && g_n_argov < MAX_ARG_OVERRIDE) view_bind(recvS, "lv__sb%d", tH);
+        if (ran_first_read_handle(recvS) >= 0 && g_n_argov < MAX_ARG_OVERRIDE) view_bind(recvS, "%s", sb_shadow_cname(tH).s);
         SbShimSave sv_sh = sb_shim_enter(shlv);
         int handled = emit_array_call(c, id, &armb);
         sb_shim_leave(shlv, sv_sh);
@@ -5469,9 +5469,9 @@ int emit_array_call(Compiler *c, int id, Buf *b) {
           TyKind resty = repr_of(c, id).as_ty;
           buf_printf(b, "({ sp_String *_t%d = SP_STR_HDL(%s);%s"
                         " if (sp_String_is_frozen(_t%d)) sp_raise_frozen_str(_t%d->data);"
-                        " const char *lv__sb%d = sp_str_concat(sp_String_cstr(_t%d), (&(\"\\xff\")[1]));"
-                        " SP_GC_ROOT(lv__sb%d); ",
-                     tH, srefL.p, pre.p ? pre.p : "", tH, tH, tH, tH, tH);
+                        " const char *%s = sp_str_concat(sp_String_cstr(_t%d), (&(\"\\xff\")[1]));"
+                        " SP_GC_ROOT(%s); ",
+                     tH, srefL.p, pre.p ? pre.p : "", tH, tH, sb_shadow_cname(tH).s, tH, sb_shadow_cname(tH).s);
           free(pre.p); free(srefL.p);
           emit_sb_res_ctype(c, resty, b);
           buf_printf(b, " _res%d = %s;", tH, armb.p ? armb.p : "0");
@@ -11137,7 +11137,7 @@ static int emit_scalar_call_arms(Compiler *c, int id, Buf *b) {
         LocalVar *shlv = scope_local(shs, sbn);
         int tH = ++g_tmp;
         Buf armb; memset(&armb, 0, sizeof armb);
-        ren_push(sbn, "_sb%d", tH);
+        ren_push(sbn, "%s", sb_shadow_local(tH).s);
         SbShimSave sv_sh = sb_shim_enter(shlv);
         int handled = emit_scalar_call(c, id, &armb);
         sb_shim_leave(shlv, sv_sh);
@@ -11146,12 +11146,12 @@ static int emit_scalar_call_arms(Compiler *c, int id, Buf *b) {
         else {
           buf_printf(b, "({ sp_String *_t%d = SP_STR_HDL(%s);"
                         " if (sp_String_is_frozen(_t%d)) sp_raise_frozen_str(_t%d->data);"
-                        " const char *lv__sb%d = sp_str_concat(sp_String_cstr(_t%d), (&(\"\\xff\")[1]));"
-                        " SP_GC_ROOT(lv__sb%d);"
+                        " const char *%s = sp_str_concat(sp_String_cstr(_t%d), (&(\"\\xff\")[1]));"
+                        " SP_GC_ROOT(%s);"
                         " sp_int _res%d = %s;"
-                        " sp_String_set_bin(_t%d, lv__sb%d); _res%d; })",
-                     tH, srefL.p, tH, tH, tH, tH, tH,
-                     tH, armb.p ? armb.p : "0", tH, tH, tH);
+                        " sp_String_set_bin(_t%d, %s); _res%d; })",
+                     tH, srefL.p, tH, tH, sb_shadow_cname(tH).s, tH, sb_shadow_cname(tH).s,
+                     tH, armb.p ? armb.p : "0", tH, sb_shadow_cname(tH).s, tH);
           free(armb.p); free(srefL.p);
           return 1;
         }
@@ -15760,7 +15760,10 @@ static TyKind emit_face_arm(Compiler *c, int id, unsigned kind, unsigned flags, 
      contents back into it, as it does for a variable, and the write-back
      below hands them to the handle. Under a plain name, slice! answered the
      removed part and wrote nothing back. */
-  const char *tp = (kind == PF_STRING && box && (flags & PF_MUT) && !face_str_var_recv(nt, recv)) ? "lv__sb" : "_t";
+  int shadowed = kind == PF_STRING && box && (flags & PF_MUT) && !face_str_var_recv(nt, recv);
+  ShimShadow tn;
+  if (shadowed) tn = sb_shadow_cname(t);
+  else snprintf(tn.s, sizeof tn.s, "_t%d", t);
   char bx[32];
   Buf rb; memset(&rb, 0, sizeof rb);
   if (box) snprintf(bx, sizeof bx, "_t%d", box);
@@ -15823,8 +15826,8 @@ static TyKind emit_face_arm(Compiler *c, int id, unsigned kind, unsigned flags, 
        first, as the Array and Hash coercions below do: the handle hands out
        its own bytes, and setbyte wrote them before the write-back raised. */
     case PF_STRING:
-      buf_printf(g_pre, "const char *%s%d = sp_poly_recv_s%s(%s, \"%s\"); SP_GC_ROOT(%s%d);\n",
-                 tp, t, (flags & PF_MUT) ? "_mut" : "", rs, name, tp, t);
+      buf_printf(g_pre, "const char *%s = sp_poly_recv_s%s(%s, \"%s\"); SP_GC_ROOT(%s);\n",
+                 tn.s, (flags & PF_MUT) ? "_mut" : "", rs, name, tn.s);
       break;
     case PF_INT:
       /* The block iterators check: `"x".times { }` is a NoMethodError in
@@ -15886,7 +15889,7 @@ static TyKind emit_face_arm(Compiler *c, int id, unsigned kind, unsigned flags, 
       break;
   }
   free(rb.p);
-  view_bind(recv, "%s%d", tp, t);
+  view_bind(recv, "%s", tn.s);
   TyKind as = ty_poly_face_kind(kind);
   int v = view_push(c, recv, as);
   int fv = view_push_face(recv, as);
@@ -16006,10 +16009,11 @@ static TyKind emit_face_arm(Compiler *c, int id, unsigned kind, unsigned flags, 
         buf_printf(&wb, "sp_poly_str_become%s(_t%d, _t%d)", flags & PF_ENC ? "_enc" : "", box, nv);
       }
       else {
-        const char *np = nv == t ? tp : "_t";
-        if (flags & PF_SAME_OK) buf_printf(&wb, "if (!sp_poly_str_is_own(_t%d, %s%d)) ", box, np, nv);
-        buf_printf(&wb, "sp_poly_str_become_handle%s(_t%d, %s%d, \"%s\")", flags & PF_ENC ? "_enc" : "",
-                   box, np, nv, name);
+        ShimShadow nn = tn;
+        if (nv != t) snprintf(nn.s, sizeof nn.s, "_t%d", nv);
+        if (flags & PF_SAME_OK) buf_printf(&wb, "if (!sp_poly_str_is_own(_t%d, %s)) ", box, nn.s);
+        buf_printf(&wb, "sp_poly_str_become_handle%s(_t%d, %s, \"%s\")", flags & PF_ENC ? "_enc" : "",
+                   box, nn.s, name);
       }
     }
     if (!has_val) buf_printf(val, "({ (void)(%s); %s; })", call, wb.p);

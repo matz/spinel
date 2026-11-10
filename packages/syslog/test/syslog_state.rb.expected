@@ -1,0 +1,27 @@
+[false, nil, nil, nil, nil]
+"<#Syslog: opened=false>"
+true
+"must open syslog before write"
+"syslog not opened"
+"must open syslog before setting log mask"
+"no implicit conversion of Integer into String"
+true
+true
+"spinel-syslog-test"
+true
+true
+true
+true
+"syslog already open"
+true
+"spinel-syslog-reopened"
+[true, true]
+"spinel-syslog-reopened-2"
+nil
+[false, nil, nil, nil, nil]
+true
+true
+[true, false]
+["in block", false]
+true
+true

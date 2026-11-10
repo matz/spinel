@@ -24650,23 +24650,6 @@ static int emit_array_mutate_stmt_dispatch(Compiler *c, int id, Buf *b, int inde
     if (!rv && g_pre && g_pre->len > pre0) { g_pre->len = pre0; g_pre->p[pre0] = 0; }
     return rv;
   }
-  int recv = nt_ref(c->nt, id, "receiver");
-  const char *name = nt_str(c->nt, id, "name");
-  int args = nt_ref(c->nt, id, "arguments"), argc = 0;
-  const int *argv = args >= 0 ? nt_arr(c->nt, args, "arguments", &argc) : NULL;
-  const BuiltinOp *op = bop_find_stage(TY_STRING, name, argc,
-                                      nt_ref(c->nt, id, "block") >= 0, NULL, NULL, 6);
-  if (recv >= 0 && op && op->emit == BOPE_STRING_SLICE && argc == 1 &&
-      (comp_ntype(c, recv) == TY_STRING || comp_ntype(c, recv) == TY_STRBUF) &&
-      repr_of(c, argv[0]).kind == RK_BOXED) {
-    Buf vb; memset(&vb, 0, sizeof vb);
-    if (emit_or_take_back(c, id, &vb, emit_array_call)) {
-      emit_indent(b, indent); buf_printf(b, "(void)(%s);\n", vb.p ? vb.p : "0");
-      free(vb.p);
-      return 1;
-    }
-    free(vb.p);
-  }
   return emit_array_mutate_stmt_body(c, id, b, indent);
 }
 int emit_array_mutate_stmt(Compiler *c, int id, Buf *b, int indent) {
@@ -25394,87 +25377,6 @@ static int str_mutate_append_bang_arms(Compiler *c, int id, Buf *b, int indent, 
       nt_node_restore_str((NodeTable *)nt, id, "name", sv_nm);
       return 1;
     }
-    if (sp_streq(name, "slice!") && assignable2) {
-      if (argc == 1 && comp_ntype(c, argv[0]) == TY_STRING) {
-        /* remove the first occurrence */
-        emit_indent(b, indent); emit_str_frozen_check(c, recv, b); buf_puts(b, "\n");
-        emit_indent(b, indent);
-        /* sub would set `$~`, which slice! leaves alone; a program that
-           never reads it has sub record nothing */
-        emit_expr(c, recv, b);
-        buf_puts(b, g_reads_match_regs ? " = sp_str_remove_first(" : " = sp_str_sub(");
-        emit_expr(c, recv, b); buf_puts(b, ", ");
-        emit_expr(c, argv[0], b);
-        buf_puts(b, g_reads_match_regs ? ");\n" : ", (&(\"\\xff\")[1]));\n");
-        return 1;
-      }
-      if (argc == 1 && (comp_ntype(c, argv[0]) == TY_INT || comp_ntype(c, argv[0]) == TY_RANGE)) {
-        /* slice!(i): one char at i; slice!(range): the range's span. Same
-           clamped splice as the (start, len) arm below (OOB is a no-op). */
-        int ti2 = ++g_tmp, tl2 = ++g_tmp, tn2 = ++g_tmp;
-        emit_indent(b, indent); emit_str_frozen_check(c, recv, b); buf_puts(b, "\n");
-        emit_indent(b, indent);
-        if (comp_ntype(c, argv[0]) == TY_RANGE) {
-          int tr2 = ++g_tmp;
-          buf_printf(b, "{ sp_Range _t%d = sp_range_ix(", tr2); emit_expr(c, argv[0], b); buf_puts(b, ")");
-          buf_printf(b, "; sp_int _t%d = (sp_int)sp_str_length(", tn2); emit_expr(c, recv, b);
-          /* a beginless Range starts at 0, and an endless one runs to the
-             end: `last + 1` overflowed */
-          buf_printf(b, "); sp_int _t%d = _t%d.nobeg ? 0 : _t%d.first < 0 ? _t%d.first + _t%d : _t%d.first;",
-                     ti2, tr2, tr2, tr2, tn2, tr2);
-          buf_printf(b, " sp_int _t%d = _t%d.noend ? _t%d - _t%d :"
-                        " (_t%d.last < 0 ? _t%d.last + _t%d : _t%d.last) - _t%d + (_t%d.excl ? 0 : 1);",
-                     tl2, tr2, tn2, ti2, tr2, tr2, tn2, tr2, ti2, tr2);
-          buf_printf(b, " if (_t%d < 0) _t%d = 0;", tl2, tl2);
-        }
-        else {
-          buf_printf(b, "{ sp_int _t%d = ", ti2); emit_int_expr(c, argv[0], b);
-          buf_printf(b, "; sp_int _t%d = 1; sp_int _t%d = (sp_int)sp_str_length(", tl2, tn2);
-          emit_expr(c, recv, b);
-          buf_printf(b, "); if (_t%d < 0) _t%d += _t%d;", ti2, ti2, tn2);
-        }
-        buf_printf(b, " if (_t%d >= 0 && _t%d < _t%d && _t%d > 0) {"
-                      " if (_t%d > _t%d - _t%d) _t%d = _t%d - _t%d; ",
-                   ti2, ti2, tn2, tl2,
-                   tl2, tn2, ti2, tl2, tn2, ti2);
-        /* the head is rooted while the tail allocates */
-        buf_puts(b, "const char *_h = sp_str_sub_range("); emit_expr(c, recv, b);
-        buf_printf(b, ", 0, _t%d); SP_GC_ROOT_STR(_h); ", ti2);
-        emit_expr(c, recv, b);
-        buf_puts(b, " = sp_str_concat(_h, sp_str_sub_range(");
-        emit_expr(c, recv, b);
-        buf_printf(b, ", _t%d + _t%d, _t%d - _t%d - _t%d)); } }\n", ti2, tl2, tn2, ti2, tl2);
-        return 1;
-      }
-      /* a Regexp first argument (`slice!(/(or)/, 1)`, a boxed value that may
-         hold one) cuts a capture group: the expression's arms answer it */
-      if (argc == 2 && re_lit_index(c, argv[0]) < 0 && comp_ntype(c, argv[0]) != TY_REGEX &&
-          repr_of(c, argv[0]).kind != RK_BOXED) {
-        /* splice out [i, i+len): head + tail, bounds clamped to the string in
-           characters (a negative i counts from the end; OOB is a no-op) (#3084) */
-        int ti2 = ++g_tmp, tl2 = ++g_tmp, tn2 = ++g_tmp;
-        emit_indent(b, indent); emit_str_frozen_check(c, recv, b); buf_puts(b, "\n");
-        emit_indent(b, indent);
-        buf_printf(b, "{ sp_int _t%d = ", ti2); emit_int_expr(c, argv[0], b);
-        buf_printf(b, "; sp_int _t%d = ", tl2); emit_int_expr(c, argv[1], b);
-        buf_printf(b, "; sp_int _t%d = (sp_int)sp_str_length(", tn2);
-        emit_expr(c, recv, b);
-        buf_printf(b, "); if (_t%d < 0) _t%d += _t%d;"
-                      " if (_t%d >= 0 && _t%d <= _t%d && _t%d > 0) {"
-                      " if (_t%d > _t%d - _t%d) _t%d = _t%d - _t%d; ",
-                   ti2, ti2, tn2,
-                   ti2, ti2, tn2, tl2,
-                   tl2, tn2, ti2, tl2, tn2, ti2);
-        /* the head is rooted while the tail allocates */
-        buf_puts(b, "const char *_h = sp_str_sub_range("); emit_expr(c, recv, b);
-        buf_printf(b, ", 0, _t%d); SP_GC_ROOT_STR(_h); ", ti2);
-        emit_expr(c, recv, b);
-        buf_puts(b, " = sp_str_concat(_h, sp_str_sub_range(");
-        emit_expr(c, recv, b);
-        buf_printf(b, ", _t%d + _t%d, _t%d - _t%d - _t%d)); } }\n", ti2, tl2, tn2, ti2, tl2);
-        return 1;
-      }
-    }
   }
   return -1;
 }
@@ -25506,8 +25408,8 @@ static int str_mutate_narrowed_poly(Compiler *c, int id, Buf *b, int indent, con
   return 1;
 }
 
-/* String#insert and clear as a statement: the stage-7 row's value form
-   (emit_op_string_insert, emit_op_string_clear), which changes the
+/* String#insert, clear and slice! as a statement: the stage-7 row's value
+   form (emit_op_string_insert and its siblings), which changes the
    receiver's String in place through its handle. The answer is left as
    the C statement's value, not cast away: a block's last statement is the
    value of the statement expression a yield reads (emit_block_invoke).
@@ -25529,8 +25431,8 @@ static int str_mutator_row_stmt(Compiler *c, int id, int recv, Buf *b, int inden
 
 /* emit_array_mutate_stmt_body's shims for a String whose mutation every
    alias must see: a local String, a reader call that hands out the handle,
-   and []= / slice! / setbyte on a shared handle (answers 1 emitted, 0
-   declined, -1 to go on) */
+   and []= / setbyte on a shared handle (answers 1 emitted, 0 declined, -1
+   to go on) */
 static int str_mutate_shared_arms(Compiler *c, int id, Buf *b, int indent, const NodeTable *nt, const char *name, int recv, TyKind rt) {
   /* The same shim over a READER call that hands out the handle
      (`obj.name[0] = "X"`), whose call node reads as the shadow. */
@@ -25569,8 +25471,8 @@ static int str_mutate_shared_arms(Compiler *c, int id, Buf *b, int indent, const
   }
 
   /* --share-strings: the same shim over a route that hands on a handle
-     (`(+s)[0] = "X"`, `String(s).slice!(0)`): the handle is taken once,
-     and the route reads as its shadow */
+     (`(+s)[0] = "X"`): the handle is taken once, and the route reads as
+     its shadow */
   if ((rt == TY_STRING || rt == TY_STRBUF) && is_string_position_mutator(name) &&
       g_n_argov < MAX_ARG_OVERRIDE && !sb_shadowed_reader(c, recv)) {
     Buf *pre = g_pre;

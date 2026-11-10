@@ -5426,8 +5426,8 @@ int emit_array_call(Compiler *c, int id, Buf *b) {
     const NodeTable *ntS = c->nt;
     const char *nmS = nt_str(ntS, id, "name");
     int recvS = nt_ref(ntS, id, "receiver");
-    /* String#insert and clear change the receiver's String in place,
-       through its handle (the String rows of stage 7) */
+    /* String#insert, clear and slice! change the receiver's String in
+       place, through its handle (the String rows of stage 7) */
     TyKind rtS = comp_recv_type(c, recvS);
     if (recvS >= 0 && (rtS == TY_STRING || rtS == TY_STRBUF) &&
         emit_builtin_op_stage(c, id, recvS, TY_STRING, nmS, 7, b)) return 1;

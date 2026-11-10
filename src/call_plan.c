@@ -3019,7 +3019,11 @@ const CallPlan *cplan_user(Compiler *c, int id) {
 #ifndef NDEBUG
   int tmp0 = g_tmp;
 #endif
-  cplan_resolve(c, id, &fresh);
+  /* (resolved into a local: resolving may ask the analysis, which asks the
+     plan of another call, and that call writes `fresh` too) */
+  CallPlan res;
+  cplan_resolve(c, id, &res);
+  fresh = res;
 #ifndef NDEBUG
   assert(g_tmp == tmp0);   /* resolving emits nothing */
 #endif
@@ -3045,7 +3049,9 @@ const CallPlan *cplan_user_fresh(Compiler *c, int id) {
   static CallPlan fresh;
   cplan_set(&fresh, -1, -1, UC_NONE, CP_NONE);
   if (id < 0 || id >= c->node_cap) return &fresh;
-  cplan_resolve(c, id, &fresh);
+  CallPlan res;   /* (a local: see cplan_user) */
+  cplan_resolve(c, id, &res);
+  fresh = res;
   return cplan_dep(&fresh);
 }
 

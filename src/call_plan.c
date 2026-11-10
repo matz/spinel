@@ -2262,7 +2262,7 @@ int cplan_class_row(Compiler *c, int id, int recv, const char *name) {
   return !((fl & BOPF_PRIVATE) && recv >= 0 && nt_kind(nt, recv) != NK_SelfNode && !nt_ignore_visibility(nt, id) && !nt_str(nt, id, "send_blind"));
 }
 
-CvCtor cplan_cv_ctor(Compiler *c, int id) {
+CvCtor cplan_cv_ctor_shape(Compiler *c, int id) {
   const NodeTable *nt = c->nt;
   if (!c->has_arysub || nt_kind(nt, id) != NK_CallNode) return CVC_NONE;
   const char *nm = nt_str(nt, id, "name");
@@ -2272,23 +2272,33 @@ CvCtor cplan_cv_ctor(Compiler *c, int id) {
       nt_argv_has(nt, argv, argc, NT_ARG_SPLAT | NT_ARG_BLOCK | NT_ARG_KEYWORDS)) return CVC_NONE;
   int aref = !is_new_name(nm);
   if (aref ? nt_ref(nt, id, "block") >= 0 : argc == 0) return CVC_NONE;
-  if (!class_recv_is_dynamic(c, recv) || class_var_static_ci(c, recv) >= 0 || (aref && infer_type(c, recv) != TY_CLASS))
-    return CVC_NONE;   /* (a `[]` on any other type is an index) */
   if (aref) {
     int ncc = 0;
     comp_cmethod_candidates(c, nm, &ncc);
     if (ncc) return CVC_NONE;
   }
+  if (!class_recv_may_be_dynamic(c, recv) || class_var_static_ci(c, recv) >= 0) return CVC_NONE;
   return aref ? CVC_AREF : CVC_NEW;
 }
 
-int cplan_cv_ctor_builds(Compiler *c, int id, int k) {
-  CvCtor f = cplan_cv_ctor(c, id);
+CvCtor cplan_cv_ctor(Compiler *c, int id) {
+  CvCtor f = cplan_cv_ctor_shape(c, id);
+  if (f == CVC_NONE) return f;
+  int recv = nt_ref(c->nt, id, "receiver");
+  /* a constant holds a class value where its slot is typed one
+     (class_recv_is_dynamic), and a `[]` on any other type is an index */
+  if (!class_recv_is_dynamic(c, recv) || (f == CVC_AREF && infer_type(c, recv) != TY_CLASS)) return CVC_NONE;
+  return f;
+}
+
+int cplan_cv_ctor_class(Compiler *c, CvCtor f, int k) {
   if (f == CVC_NONE || comp_ary_root(c, k) < 0 || !comp_class_builds_by_aref(c, k))
     return 0;
-  if (f == CVC_NEW && (comp_method_in_chain(c, k, "initialize", NULL) >= 0 || comp_cmethod_in_chain(c, k, "new", NULL) >= 0))
-    return 0;
-  return poly_cls_value_reaches(c, id, k);
+  return f != CVC_NEW || (comp_method_in_chain(c, k, "initialize", NULL) < 0 && comp_cmethod_in_chain(c, k, "new", NULL) < 0);
+}
+
+int cplan_cv_ctor_builds(Compiler *c, int id, int k) {
+  return cplan_cv_ctor_class(c, cplan_cv_ctor(c, id), k) && poly_cls_value_reaches(c, id, k);
 }
 
 int cplan_own_class_reflection(Compiler *c, int id, int recv, const char *name) {

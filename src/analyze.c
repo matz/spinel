@@ -1841,12 +1841,14 @@ static int marshal_read_as_value(Compiler *c) {
    field read beside it went poly (#4460); and again after it, when a `.new`
    on a receiver the types can name as a Class value can be told from one
    that cannot. The early pass has no types, so it takes every `.new` on a
-   non-constant receiver as the dynamic case and keeps every class: it can
-   only over-mark relative to the late pass, and the late pass can only
+   non-constant receiver as the dynamic case and keeps every class (and a
+   `[]` on one as building every Array or Hash subclass): it can only
+   over-mark relative to the late pass, and the late pass can only
    un-mark, so an arm codegen drops was never in the inferred union. */
 void compute_instantiated(Compiler *c, int early) {
   const NodeTable *nt = c->nt;
   int disable = 0, marshal_val = -1;   /* marshal_val: Marshal is read as a value (found on first need) */
+  int cv_aref = 0;   /* early: a reachable `[]` may build on a Class value */
   /* The early pass writes ctor_reachable and leaves `instantiated` as the
      fixpoint has always seen it (unset); the late pass writes both. */
   int *keep = NULL;
@@ -1915,12 +1917,22 @@ void compute_instantiated(Compiler *c, int early) {
       }
     }
     /* a Class value's `k[..]` builds an instance of each Array or Hash
-       subclass it may hold (cplan_cv_ctor) */
-    if (!early && cplan_cv_ctor(c, id) == CVC_AREF) {
+       subclass it may hold (cplan_cv_ctor). Ahead of the fixpoint no type
+       tells a Class receiver from an indexed one, nor which classes it
+       holds, so a reachable `[]` of that shape (cplan_cv_ctor_shape) may
+       build any of them: they are marked once, after the scan, as a `.new`
+       on such a receiver keeps every class. Left to the late pass, a
+       subclass that `pick(0)[1, 2]` alone builds was out of the census the
+       fixpoint and the desugars read, and `b[0] += 10` on a box holding one
+       skipped its own `[]` and `[]=` (#11501). */
+    if (early ? !cv_aref && cplan_cv_ctor_shape(c, id) == CVC_AREF : cplan_cv_ctor(c, id) == CVC_AREF) {
       Scope *encl = comp_scope_of(c, id);
-      if (!encl || encl->reachable)
-        for (int k = 0; k < c->nclasses; k++)
-          if (cplan_cv_ctor_builds(c, id, k)) c->classes[k].instantiated = 1;
+      if (!encl || encl->reachable) {
+        if (early) cv_aref = 1;
+        else
+          for (int k = 0; k < c->nclasses; k++)
+            if (cplan_cv_ctor_builds(c, id, k)) c->classes[k].instantiated = 1;
+      }
     }
     /* C.new / C.allocate */
     if (recv >= 0 && (sp_streq(name, "new") || sp_streq(name, "allocate"))) {
@@ -1938,8 +1950,9 @@ void compute_instantiated(Compiler *c, int early) {
         Scope *encl = comp_scope_of(c, id);
         if (ci >= 0 && (!encl || encl->reachable)) c->classes[ci].instantiated = 1;
         /* a constant holding a class value (`K = make`) is a Class value
-           known only at run time, as a variable's below */
-        else if (ci < 0 && class_recv_is_dynamic(c, recv)) { disable = 1; break; }
+           known only at run time, as a variable's below; ahead of the
+           fixpoint, one whose writes may hold a class (no slot type yet) */
+        else if (ci < 0 && (early ? class_recv_may_be_dynamic(c, recv) : class_recv_is_dynamic(c, recv))) { disable = 1; break; }
         /* an unknown constant is a builtin (Array.new, ...) -- not a user arm */
       }
       else if (early || comp_ntype(c, recv) == TY_CLASS || comp_ntype(c, recv) == TY_POLY ||
@@ -2014,6 +2027,9 @@ void compute_instantiated(Compiler *c, int early) {
       for (int k = 0; k < c->nclasses; k++)
         if (k == xc || is_descendant(c, k, xc)) c->classes[k].instantiated = 1;
     }
+  if (cv_aref)
+    for (int k = 0; k < c->nclasses; k++)
+      if (cplan_cv_ctor_class(c, CVC_AREF, k)) c->classes[k].instantiated = 1;
   if (disable)
     for (int k = 0; k < c->nclasses; k++) {
       /* main's ivars live on the Toplevel pseudo-class, which is never built */

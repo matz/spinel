@@ -1,0 +1,31 @@
+MyA#[] 0
+MyA#[]= 0 11
+[11, 2]
+MyA
+MyH#[] a
+MyH#[]= a 6
+{a: 6}
+MyH
+MyA#[] 1
+MyA#[]= 1 5
+[3, 5]
+MyB
+MyA#[] 0
+MyA#[]= 0 6
+[6, 6]
+MyK
+3
+[[]]
+MyC
+[{}]
+Hash
+[[], {}]
+[nil, 1]
+MyC
+nil
+1
+[nil, nil]
+MyC
+nil
+[5, nil]
+2

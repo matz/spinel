@@ -6012,8 +6012,10 @@ int self_class_base_ci(Compiler *c, int recv) {
    call, which resolve statically through their own dispatch. A method
    returning a class value was left with nowhere to dispatch, so the chained
    call was rejected outright even though the value at run time was right
-   (#3415). */
-int class_recv_is_dynamic(Compiler *c, int recv) {
+   (#3415). This is the receiver's shape alone, a constant judged by its
+   writes (const_writes_may_hold_class): it reads no type, for the census
+   ahead of the type fixpoint (cplan_cv_ctor_shape). */
+int class_recv_may_be_dynamic(Compiler *c, int recv) {
   const NodeTable *nt = c->nt;
   const char *rty = recv >= 0 ? nt_type(nt, recv) : NULL;
   NodeKind rk = nt_kind(nt, recv);
@@ -6028,7 +6030,7 @@ int class_recv_is_dynamic(Compiler *c, int recv) {
       rk == NK_AndNode || rk == NK_OrNode)
     return 1;
   /* A constant assigned a class value (`K = make`) names no class it knows */
-  if (rk == NK_ConstantReadNode || rk == NK_ConstantPathNode) return const_class_value_only(c, recv);
+  if (rk == NK_ConstantReadNode || rk == NK_ConstantPathNode) return const_writes_may_hold_class(c, recv);
   if (rk != NK_CallNode) return 0;
   /* `self.class` in a class with no subclass resolves to that class
      statically and has its own arms on both sides; treating it as dynamic
@@ -6037,6 +6039,14 @@ int class_recv_is_dynamic(Compiler *c, int recv) {
   if (comp_sg_reader_const(c, recv) >= 0) return 0;
   { int cand[4]; if (comp_sg_reader_candidates(c, recv, cand, 4) >= 2) return 0; }
   return 1;
+}
+/* ...and once the types are known: a constant whose slot is typed Class or
+   poly (const_class_value_only). */
+int class_recv_is_dynamic(Compiler *c, int recv) {
+  NodeKind rk = nt_kind(c->nt, recv);
+  if (rk == NK_ConstantReadNode || rk == NK_ConstantPathNode)
+    return nt_type(c->nt, recv) && const_class_value_only(c, recv);
+  return class_recv_may_be_dynamic(c, recv);
 }
 
 

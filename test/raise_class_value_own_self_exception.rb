@@ -47,3 +47,12 @@ show { fail k, "fail" }
 # a value that is not a class keeps its own result
 ["str", Object.new, 3].each { |v| show { raise v, "x" } }
 show { raise PlainErr.new("inst"), "msg" }
+
+# a call result held in a new local inside a method
+def pick_in_method = WrapErr
+def raise_in_method
+  raise pick_in_method, "in method"
+rescue => e
+  p [e.class, e.message]
+end
+raise_in_method

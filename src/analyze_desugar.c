@@ -11458,7 +11458,7 @@ static int raise_value_own_exception(Compiler *c, int id, int npos) {
       test = fwd_new_node_like(nt, kept, "LocalVariableWriteNode");
       nt_node_set_str(nt, test, "name", tname); nt_node_set_int(nt, test, "depth", 0);
       nt_node_set_ref(nt, test, "value", recv);
-      scope_local_intern(comp_scope_of(c, kept), tname);
+      scope_local_intern(comp_scope_of(c, id), tname);
     }
     else if (hold) {
       test = fwd_new_node_like(nt, kept, "LocalVariableReadNode");

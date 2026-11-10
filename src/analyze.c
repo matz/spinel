@@ -16184,8 +16184,10 @@ static int desugar_to_enum(Compiler *c) {
    entry, sidx OA_CONST).
    row_cls / row_escape / odd_elem: the evidence the rows a slot's element
    reads answer give (oa_row_use), for a table whose rows are empty literals.
-   printed: a printer is handed the slot (oa_printer_takes_args). */
-typedef struct { int sidx; LocalVar *lv; int cls; int alive; int uf; int needs_cmp; int removes; int poly_elem; int row_iter; int saw_call; TyKind old_pin; int ici, iiv; int row_cls, row_escape, odd_elem, printed; } OAS;
+   printed: a printer is handed the slot (oa_printer_takes_args).
+   row_mut: a walk's block may store into the row it binds a value an
+   Integer row (bit 1) or a Float row (bit 2) cannot hold (oa_walk_arm). */
+typedef struct { int sidx; LocalVar *lv; int cls; int alive; int uf; int needs_cmp; int removes; int poly_elem; int row_iter; int saw_call; TyKind old_pin; int ici, iiv; int row_cls, row_escape, odd_elem, printed, row_mut; } OAS;
 #define OA_CONST (-2)
 
 /* The (sidx, lv) -> first slot index map, so a lookup is not a scan of every
@@ -16554,6 +16556,133 @@ static int oa_printer_takes_args(Compiler *c, int id, const char *walk_disc, int
   const int *argv = args >= 0 ? nt_arr(nt, args, "arguments", &argc) : NULL;
   return argc > 0 && !nt_argv_has_splat(nt, argv, argc) && !nt_argv_has_keywords(nt, argv, argc);
 }
+/* Does the block parameter `nm` (a local of scope s) that a walk binds to
+   each row of a table keep that row a row of kind `row`? A typed row holds
+   one kind of element. `r.unshift(1.5)`, `r.fill(2.5)`, `r.map! { |v| v *
+   1.5 }` or `x = r; x << 2.5` in the walk put another kind of value in the
+   row: CRuby's row holds it, and the typed row cut it to an Integer or lost
+   it. So a read of the parameter (or of a local it is written to) must not
+   be the receiver of a store of a value whose type is known and is not the
+   element's. A boxed value is checked where it is stored, and raises. */
+static int walk_row_value_fits(TyKind vt, TyKind et) {
+  return vt == et || vt == TY_POLY || vt == TY_UNKNOWN;
+}
+/* ...and a value whose own shape says its kind, whatever the round has
+   typed so far: a literal, or arithmetic on a Float literal (`i * 0.5`) */
+static TyKind walk_row_literal_kind(const NodeTable *nt, int v, int depth) {
+  switch (nt_kind(nt, v)) {
+  case NK_IntegerNode: return TY_INT;
+  case NK_FloatNode: return TY_FLOAT;
+  case NK_StringNode: case NK_InterpolatedStringNode: case NK_SymbolNode: case NK_ArrayNode:
+  case NK_HashNode: case NK_NilNode: case NK_TrueNode: case NK_FalseNode: case NK_RationalNode:
+  case NK_ImaginaryNode: case NK_RangeNode:
+    return TY_POLY;   /* neither an Integer nor a Float */
+  case NK_ParenthesesNode: {
+    int b = nt_ref(nt, v, "body"), n = 0;
+    const int *bb = b >= 0 && nt_kind(nt, b) == NK_StatementsNode ? nt_arr(nt, b, "body", &n) : NULL;
+    return n == 1 && depth < 8 ? walk_row_literal_kind(nt, bb[0], depth + 1) : TY_UNKNOWN;
+  }
+  case NK_CallNode: {
+    const char *op = nt_str(nt, v, "name");
+    int rv = nt_ref(nt, v, "receiver"), a = nt_ref(nt, v, "arguments"), an = 0;
+    const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &an) : NULL;
+    if (!op || rv < 0 || an != 1 || depth >= 8 ||
+        !(sp_streq(op, "+") || sp_streq(op, "-") || sp_streq(op, "*") || sp_streq(op, "/") || sp_streq(op, "**")))
+      return TY_UNKNOWN;
+    TyKind l = walk_row_literal_kind(nt, rv, depth + 1), r = walk_row_literal_kind(nt, av[0], depth + 1);
+    return l == TY_FLOAT || r == TY_FLOAT ? TY_FLOAT : TY_UNKNOWN;
+  }
+  default: return TY_UNKNOWN;
+  }
+}
+static int walk_row_store_fits(Compiler *c, int v, TyKind et) {
+  TyKind lk = walk_row_literal_kind(c->nt, v, 0);
+  if (lk != TY_UNKNOWN && lk != et) return 0;
+  return walk_row_value_fits(infer_type(c, v), et);
+}
+static int walk_row_param_kept(Compiler *c, int s, const char *nm, TyKind row, int depth, int local);
+/* A read r yielded by a method of the program (an Enumerable method a
+   builtin defines in Ruby, `yield x, i` in each_with_index): the row goes
+   to the block of each call of that method, whose parameter at the same
+   place decides. */
+static int walk_row_yield_kept(Compiler *c, int s, int r, TyKind row, int depth) {
+  const NodeTable *nt = c->nt;
+  for (int y = comp_kind_first(c, NK_YieldNode); y >= 0; y = comp_kind_next(c, y)) {
+    if (nt_kind(nt, y) != NK_YieldNode || c->nscope[y] != s) continue;
+    int a = nt_ref(nt, y, "arguments"), an = 0;
+    const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &an) : NULL;
+    int at = -1;
+    for (int k = 0; k < an; k++) if (av[k] == r) at = k;
+    if (at < 0) continue;
+    int def = c->scopes[s].def_node;
+    const char *mn = def >= 0 ? nt_str(nt, def, "name") : NULL;
+    if (!mn || depth >= 4) return 0;
+    NT_FOREACH_KIND(nt, NK_CallNode, id) {
+      const char *cn = nt_str(nt, id, "name");
+      int blk = cn && sp_streq(cn, mn) ? nt_ref(nt, id, "block") : -1;
+      if (blk < 0) continue;
+      if (nt_kind(nt, blk) != NK_BlockNode) return 0;
+      const char *pn = an == 1 && block_param_is_multi(c, blk, 0) ? NULL : block_param_name(c, blk, at);
+      if (!pn) return 0;
+      if (!walk_row_param_kept(c, c->nscope[blk], pn, row, depth + 1, 0)) return 0;
+    }
+  }
+  return 1;
+}
+static int walk_row_param_kept(Compiler *c, int s, const char *nm, TyKind row, int depth, int local) {
+  const NodeTable *nt = c->nt;
+  TyKind et = row == TY_INT_ARRAY ? TY_INT : TY_FLOAT;
+  for (int e = comp_vsite_first(c, VS_READ, NK_LocalVariableReadNode, nm, s); e >= 0; e = comp_vsite_next(c, e)) {
+    int r = comp_vsite_var(c, e);
+    if (nt_kind(nt, r) != NK_LocalVariableReadNode || c->nscope[r] != s || !sp_streq(nt_str(nt, r, "name"), nm))
+      continue;
+    /* the value of a local's write (`x = row`, or the program block's
+       parameter an inlined each_with_index binds): that local's reads
+       decide too */
+    for (int w = comp_lwrite_of_value(c, r); w >= 0; w = comp_lwrite_next(c, w)) {
+      const char *wn = nt_str(nt, w, "name");
+      if (nt_kind(nt, w) != NK_LocalVariableWriteNode || !wn || sp_streq(wn, nm)) continue;
+      if (depth >= 4 || !walk_row_param_kept(c, c->nscope[w], wn, row, depth + 1, 1)) return 0;
+    }
+    int p = comp_recv_parent(c, r);
+    if (p < 0 && !walk_row_yield_kept(c, s, r, row, depth)) return 0;
+    const char *cn = p >= 0 && nt_kind(nt, p) == NK_CallNode ? nt_str(nt, p, "name") : NULL;
+    if (!cn) continue;
+    int blk = nt_ref(nt, p, "block");
+    int a = nt_ref(nt, p, "arguments"), an = 0;
+    const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &an) : NULL;
+    int first = -1;   /* the first argument stored, -1 for a call that stores none */
+    /* a push or `r[i] = 0.5` on the row itself is left to the typed row:
+       the emitter refuses it there, and a boxed row built typed
+       (`Array.new(n) { Array.new(m, 0) }`) would store it into a widened
+       copy. On a local the row was written to, the local widened to a copy
+       and the store was lost. */
+    if ((is_push_alias(cn) || sp_streq(cn, "[]=")) && !local) continue;
+    if (is_push_alias(cn) || sp_streq(cn, "unshift") || sp_streq(cn, "prepend")) first = 0;
+    else if (sp_streq(cn, "insert")) first = 1;
+    else if (sp_streq(cn, "[]=")) first = an - 1;
+    else if (sp_streq(cn, "fill")) first = blk >= 0 ? an : 0;
+    else if (sp_streq(cn, "concat") || sp_streq(cn, "replace")) {
+      /* another Array's elements: one of the row's own kind */
+      for (int k = 0; k < an; k++) {
+        TyKind at = nt_kind(nt, av[k]) == NK_SplatNode ? TY_UNKNOWN : infer_type(c, av[k]);
+        if (at != row && at != TY_POLY && at != TY_UNKNOWN) return 0;
+      }
+      continue;
+    }
+    else if (sp_streq(cn, "map!") || sp_streq(cn, "collect!")) first = an;
+    else continue;
+    if (first < 0) continue;
+    for (int k = first; k < an; k++) {
+      if (nt_kind(nt, av[k]) == NK_SplatNode) return 0;
+      if (!walk_row_store_fits(c, av[k], et)) return 0;
+    }
+    /* a block's value is stored: map!, collect!, fill with a block */
+    if (blk >= 0 && nt_kind(nt, blk) == NK_BlockNode && first == an &&
+        !walk_row_value_fits(infer_map_block_elem_ty(c, blk), et)) return 0;
+  }
+  return 1;
+}
 /* narrow_object_arrays' arm for a walk on slot S that yields the row: each,
    each_with_index, zip, map and reduce (nested_row_iter_call). Admitted so
    the slot can still narrow. A nested numeric table takes all of them, and a
@@ -16574,6 +16703,18 @@ static int oa_walk_arm(Compiler *c, int id, int recv, OAS *sl, int S, char *clai
   else {
     sl[S].row_escape = 1;   /* the block binds each row */
     sl[S].row_iter |= fold ? 2 : 1;
+    /* and what the block does to the row it binds decides whether a table
+       may type its rows: a store of another kind keeps it boxed */
+    const NodeTable *nt = c->nt;
+    int blk = nt_ref(nt, id, "block");
+    int pi = name && (sp_streq(name, "reduce") || sp_streq(name, "inject")) ? 1 : 0;
+    const char *pn = blk >= 0 && nt_kind(nt, blk) == NK_BlockNode ? block_param_name(c, blk, pi) : NULL;
+    int bs = pn ? c->nscope[blk] : -1;
+    if (!pn || bs < 0 || block_param_is_multi(c, blk, pi)) sl[S].row_mut = 3;
+    else {
+      if (!walk_row_param_kept(c, bs, pn, TY_INT_ARRAY, 0, 0)) sl[S].row_mut |= 1;
+      if (!walk_row_param_kept(c, bs, pn, TY_FLOAT_ARRAY, 0, 0)) sl[S].row_mut |= 2;
+    }
   }
   if (!fold && !(name && is_map_alias(name)) && !(id < nc && walk_disc[id])) sl[S].row_iter |= 8;
   return 1;
@@ -18644,7 +18785,7 @@ static int narrow_object_arrays(Compiler *c) {
       LocalVar *lv = &sc->locals[li];
       if (lv->type != TY_POLY_ARRAY || lv->is_block_param || lv->rbs_seeded || cext_scope(c, s)) continue;
       if (n >= cap) { cap *= 2; sl = (OAS *)realloc(sl, sizeof(OAS) * cap); if (!sl) { fprintf(stderr, "oom\n"); exit(1); } }
-      sl[n].sidx = s; sl[n].lv = lv; sl[n].cls = -1; sl[n].alive = 1; sl[n].uf = n; sl[n].needs_cmp = 0; sl[n].removes = 0; sl[n].poly_elem = 0; sl[n].row_iter = 0; sl[n].saw_call = 0; sl[n].ici = -1; sl[n].iiv = -1; sl[n].row_cls = -1; sl[n].row_escape = 0; sl[n].odd_elem = 0; sl[n].printed = 0;
+      sl[n].sidx = s; sl[n].lv = lv; sl[n].cls = -1; sl[n].alive = 1; sl[n].uf = n; sl[n].needs_cmp = 0; sl[n].removes = 0; sl[n].poly_elem = 0; sl[n].row_iter = 0; sl[n].saw_call = 0; sl[n].ici = -1; sl[n].iiv = -1; sl[n].row_cls = -1; sl[n].row_escape = 0; sl[n].row_mut = 0; sl[n].odd_elem = 0; sl[n].printed = 0;
       sl[n].old_pin = lv->oa_pin; lv->oa_pin = TY_UNKNOWN; n++;
     }
   }
@@ -18674,7 +18815,7 @@ static int narrow_object_arrays(Compiler *c) {
        Money#coerce for a pair) */
     if (method_name_implicitly_invoked(sc->name)) continue;
     if (n >= cap) { cap *= 2; sl = (OAS *)realloc(sl, sizeof(OAS) * cap); if (!sl) { fprintf(stderr, "oom\n"); exit(1); } }
-    sl[n].sidx = s; sl[n].lv = NULL; sl[n].cls = -1; sl[n].alive = 1; sl[n].uf = n; sl[n].needs_cmp = 0; sl[n].removes = 0; sl[n].poly_elem = 0; sl[n].row_iter = 0; sl[n].saw_call = 0; sl[n].ici = -1; sl[n].iiv = -1; sl[n].row_cls = -1; sl[n].row_escape = 0; sl[n].odd_elem = 0; sl[n].printed = 0;
+    sl[n].sidx = s; sl[n].lv = NULL; sl[n].cls = -1; sl[n].alive = 1; sl[n].uf = n; sl[n].needs_cmp = 0; sl[n].removes = 0; sl[n].poly_elem = 0; sl[n].row_iter = 0; sl[n].saw_call = 0; sl[n].ici = -1; sl[n].iiv = -1; sl[n].row_cls = -1; sl[n].row_escape = 0; sl[n].row_mut = 0; sl[n].odd_elem = 0; sl[n].printed = 0;
     sl[n].old_pin = sc->ret_oa_pin; sc->ret_oa_pin = TY_UNKNOWN; n++;
   }
   /* 1c. one slot per @ivar holding a poly array (#4444). An ivar's references
@@ -18712,7 +18853,7 @@ static int narrow_object_arrays(Compiler *c) {
          decision is applied to every copy, and reset with it above */
       if (inherited) { cl->ivar_oa_type[iv] = TY_UNKNOWN; continue; }
       if (n >= cap) { cap *= 2; sl = (OAS *)realloc(sl, sizeof(OAS) * cap); if (!sl) { fprintf(stderr, "oom\n"); exit(1); } }
-      sl[n].sidx = -1; sl[n].lv = NULL; sl[n].cls = -1; sl[n].alive = 1; sl[n].uf = n; sl[n].needs_cmp = 0; sl[n].removes = 0; sl[n].poly_elem = 0; sl[n].row_iter = 0; sl[n].saw_call = 0; sl[n].ici = ci; sl[n].iiv = iv; sl[n].row_cls = -1; sl[n].row_escape = 0; sl[n].odd_elem = 0; sl[n].printed = 0;
+      sl[n].sidx = -1; sl[n].lv = NULL; sl[n].cls = -1; sl[n].alive = 1; sl[n].uf = n; sl[n].needs_cmp = 0; sl[n].removes = 0; sl[n].poly_elem = 0; sl[n].row_iter = 0; sl[n].saw_call = 0; sl[n].ici = ci; sl[n].iiv = iv; sl[n].row_cls = -1; sl[n].row_escape = 0; sl[n].row_mut = 0; sl[n].odd_elem = 0; sl[n].printed = 0;
       /* An `Array[Array[Integer]]` / `Array[Array[Float]]` seed is element
          evidence, the same evidence a pushed row gives: it decides the kind
          when the program's own rows are silent (`Array.new(n) { [] }`), and
@@ -18736,7 +18877,7 @@ static int narrow_object_arrays(Compiler *c) {
     LocalVar *cv = &c->consts[i];
     if (cv->type != TY_POLY_ARRAY || cv->rbs_seeded) continue;
     if (n >= cap) { cap *= 2; sl = (OAS *)realloc(sl, sizeof(OAS) * cap); if (!sl) { fprintf(stderr, "oom\n"); exit(1); } }
-    sl[n].sidx = OA_CONST; sl[n].lv = cv; sl[n].cls = -1; sl[n].alive = 1; sl[n].uf = n; sl[n].needs_cmp = 0; sl[n].removes = 0; sl[n].poly_elem = 0; sl[n].row_iter = 0; sl[n].saw_call = 0; sl[n].ici = -1; sl[n].iiv = -1; sl[n].row_cls = -1; sl[n].row_escape = 0; sl[n].odd_elem = 0; sl[n].printed = 0;
+    sl[n].sidx = OA_CONST; sl[n].lv = cv; sl[n].cls = -1; sl[n].alive = 1; sl[n].uf = n; sl[n].needs_cmp = 0; sl[n].removes = 0; sl[n].poly_elem = 0; sl[n].row_iter = 0; sl[n].saw_call = 0; sl[n].ici = -1; sl[n].iiv = -1; sl[n].row_cls = -1; sl[n].row_escape = 0; sl[n].row_mut = 0; sl[n].odd_elem = 0; sl[n].printed = 0;
     sl[n].old_pin = cv->oa_pin; cv->oa_pin = TY_UNKNOWN; n++;
   }
   /* the drop still has to be reported (and `cleared` freed) on the way out:
@@ -19399,6 +19540,7 @@ static int narrow_object_arrays(Compiler *c) {
     if (!sl[i].alive) sl[r].alive = 0;
     sl[r].row_cls = oa_cls_join(sl[r].row_cls, sl[i].row_cls);
     sl[r].row_escape |= sl[i].row_escape;
+    sl[r].row_mut |= sl[i].row_mut;
     sl[r].odd_elem |= sl[i].odd_elem;
     sl[r].printed |= sl[i].printed;
   }
@@ -19422,6 +19564,12 @@ static int narrow_object_arrays(Compiler *c) {
     if (oa_uf_find(sl, i) == i &&
         (OA_CLS_IS_NESTED(sl[i].cls) ? oa_empty_rows(c, sl, i, sl[i].cls) < 0 && !oa_component_seeded(c, sl, n, i)
                                      : sl[i].printed))
+      sl[i].alive = 0;
+  /* a table whose rows a walk's block may store another kind of value
+     into keeps its rows boxed */
+  for (int i = 0; i < n; i++)
+    if (oa_uf_find(sl, i) == i && ((sl[i].cls == OA_CLS_IA && (sl[i].row_mut & 1)) ||
+                                   (sl[i].cls == OA_CLS_FA && (sl[i].row_mut & 2))))
       sl[i].alive = 0;
   oa_seeded_literal_rows(c, sl, n);
   /* A call step 5d decided on the class of a slot's element holds only if

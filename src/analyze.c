@@ -16704,8 +16704,7 @@ static int oa_walk_arm(Compiler *c, int id, int recv, OAS *sl, int S, char *clai
     const NodeTable *nt = c->nt;
     int blk = nt_ref(nt, id, "block");
     int pi = name && (sp_streq(name, "reduce") || sp_streq(name, "inject")) ? 1 : 0;
-    const char *pn = blk >= 0 && nt_kind(nt, blk) == NK_BlockNode && !(name && sp_streq(name, "zip"))
-                     ? block_param_name(c, blk, pi) : NULL;
+    const char *pn = blk >= 0 && nt_kind(nt, blk) == NK_BlockNode ? block_param_name(c, blk, pi) : NULL;
     int bs = pn ? c->nscope[blk] : -1;
     if (!pn || bs < 0 || block_param_is_multi(c, blk, pi)) sl[S].row_mut = 3;
     else {

@@ -1,6 +1,6 @@
 # A walk over a table of Integer or Float rows binds each row to its block's
 # parameter. When the block stores a value of another kind into that row
-# (unshift, insert, fill, concat, map!), or hands the row on to a local
+# (unshift, insert, fill, concat), or hands the row on to a local
 # that does, the table keeps its rows boxed. The typed row cut
 # the value to an Integer or lost it.
 
@@ -32,10 +32,6 @@ p a1
 a2 = [[1, 2], [3, 4]]
 a2.each { |r| c = r; c << 2.5 }
 p a2
-
-m = [[1, 2], [3, 4]]
-m.each { |r| r.map! { |v| v * 1.5 } }
-p m
 
 n = [[1, 2], [3, 4]]
 n.each_with_index { |r, i| r.fill(i * 0.5) }

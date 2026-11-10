@@ -30,3 +30,10 @@ p y.method(:+) == x.method(:+)
 s = [1, "abc"].last
 p s.method(:upcase) == s.method(:upcase)
 p s.method(:upcase) == "abc".dup.method(:upcase)
+# a Float is compared whole (not by a machine word): 0.0 and -0.0 are two
+# receivers, one NaN is one
+z = 0.0
+nz = -0.0
+p z.method(:+) == nz.method(:+)
+nan = Float::NAN
+p nan.method(:+) == nan.method(:+)

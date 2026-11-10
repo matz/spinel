@@ -1344,7 +1344,12 @@ int emit_array_splat_mutator(Compiler *c, int id, Buf *b) {
   const NodeTable *nt = c->nt;
   const char *name = nt_str(nt, id, "name");
   int recv = nt_ref(nt, id, "receiver");
-  if (!name || recv < 0 || nt_ref(nt, id, "block") >= 0) return 0;
+  if (!name || recv < 0) return 0;
+  /* These methods never call a block. A literal one (`a.push(*r) { }`) is
+     left out, and the splat still spreads. A `&blk` pass keeps the other
+     path: its to_proc (or TypeError) must still happen. */
+  int blk = nt_ref(nt, id, "block");
+  if (blk >= 0 && nt_kind(nt, blk) != NK_BlockNode) return 0;
   int is_push = sp_streq(name, "push") || sp_streq(name, "append");
   int is_unshift = is_prepend_alias(name);
   int is_insert = sp_streq(name, "insert");

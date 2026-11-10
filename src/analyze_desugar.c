@@ -7105,9 +7105,19 @@ static const char *const object_methods[] = { "to_s", "inspect", "class", "hash"
 /* While desugar_dynamic_send runs, each class's names are computed once:
    an untyped receiver's send asks every class, and every such send asked
    again (dsend_receiver_names_uncached walks every method per class). The
-   memo is dropped when the pass ends, or if the class or scope table grows
-   meanwhile. Callers own what they get back, as before. */
-static struct { int on, ncls, nscp; char ***names; int *n; char **inames; int ninames; } g_dsn;
+   memo is dropped if the class or scope table grows meanwhile. Callers own
+   what they get back, as before.
+
+   It is kept from one run of the passes to the next while nothing its
+   answers read has moved since it was made (dsn_memo_kept): every round of
+   the fixpoint asked every class again, about an hour of a Rails
+   application's build. Its answers read the scopes' classes and names and
+   the chains (the frozen scope index's epoch, no scope moved, the scope
+   and class counts, as the chain lookup's memo is kept), the parents and
+   aliases (comp_class_shape_gen), and the readers and writers
+   (comp_table_gen). */
+static struct { int on, ncls, nscp, keyed; unsigned sgen, shape, tgen; const Compiler *c;
+                char ***names; int *n; char **inames; int ninames; } g_dsn;
 static void dsn_inames_free(char **in, int n) {
   for (int i = 0; i < n; i++) free(in[i]);
   free(in);
@@ -7169,10 +7179,28 @@ static void dsn_memo_sync(Compiler *c) {
   if (g_dsn.ncls == c->nclasses && g_dsn.nscp == c->nscopes && g_dsn.names) return;
   dsn_memo_free();
   g_dsn.ncls = c->nclasses; g_dsn.nscp = c->nscopes;
+  g_dsn.c = c; g_dsn.keyed = comp_scope_index_is_frozen() && !comp_scope_moving();
+  g_dsn.sgen = comp_scope_index_gen(); g_dsn.shape = comp_class_shape_gen(); g_dsn.tgen = comp_table_gen;
   g_dsn.names = calloc((size_t)(g_dsn.ncls * 2 + 2), sizeof *g_dsn.names);
   g_dsn.n = malloc(sizeof *g_dsn.n * (size_t)(g_dsn.ncls * 2 + 2));
   if (!g_dsn.names || !g_dsn.n) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   for (int i = 0; i < g_dsn.ncls * 2 + 2; i++) g_dsn.n[i] = -1;
+}
+/* Has nothing the memo's answers read moved since it was made? */
+static int dsn_memo_kept(Compiler *c) {
+  return g_dsn.names && g_dsn.keyed && g_dsn.c == c && comp_scope_index_is_frozen() && !comp_scope_moving() &&
+         g_dsn.sgen == comp_scope_index_gen() && g_dsn.shape == comp_class_shape_gen() &&
+         g_dsn.tgen == comp_table_gen && g_dsn.ncls == c->nclasses && g_dsn.nscp == c->nscopes;
+}
+/* A run of the passes that ask it: the memo on, the one a run before left
+   taken up when it still holds, and left for the next when it still does */
+static void dsn_memo_begin(Compiler *c) {
+  if (!dsn_memo_kept(c)) dsn_memo_free();
+  g_dsn.on = 1;
+}
+static void dsn_memo_end(Compiler *c) {
+  g_dsn.on = 0;
+  if (!dsn_memo_kept(c)) dsn_memo_free();
 }
 /* The instance-method names (dsn_inames_build): the memo's while the pass
    runs, else a list of the asker's own, which it frees (*owned) */
@@ -7639,10 +7667,9 @@ static void dsend_param_literals(Compiler *c, int name, ANameHash *out) {
 
 static int desugar_dynamic_send_inner(Compiler *c);
 int desugar_dynamic_send(Compiler *c) {
-  g_dsn.on = 1;
+  dsn_memo_begin(c);
   int changed = desugar_dynamic_send_inner(c);
-  g_dsn.on = 0;
-  dsn_memo_free();
+  dsn_memo_end(c);
   return changed;
 }
 /* Is receiver recv one a dynamic send evaluates once into a local its arms
@@ -8431,10 +8458,9 @@ static int desugar_dynamic_method_inner(Compiler *c) {
    On a Rails application one round's pass was two thirds of a sample. The
    memo's stamps (the class and scope counts) hold here as there. */
 int desugar_dynamic_method(Compiler *c) {
-  g_dsn.on = 1;
+  dsn_memo_begin(c);
   int changed = desugar_dynamic_method_inner(c);
-  g_dsn.on = 0;
-  dsn_memo_free();
+  dsn_memo_end(c);
   return changed;
 }
 

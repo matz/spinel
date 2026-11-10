@@ -6281,6 +6281,19 @@ int elab_call_method(Compiler *c, int id, int cls, const char *name, int sg, int
   return o;
 }
 
+int elab_call_own_method(Compiler *c, int id, int cls, const char *name, int sg) {
+  LoadRecord *r = elab_fresh(c);
+  LoadPoint p = elab_point_of(c, id);
+  if (p.region < 0 || !r->recorded || r->st[p.seq].kept || lr_unplaced(c, id) || lr_chain_open(c, cls) || !name) return ELAB_UNKNOWN;
+  const LrDef *d = NULL;
+  int o = lr_own(c, lr_hist(r, cls, sg, name, 0), p, 0, 0, &d);
+  /* (an undef or a removal: that one's answer, as elab_call_method's) */
+  if (o == LR_STOP || (o == ELAB_NO && d)) return ELAB_UNKNOWN;
+  if (o == ELAB_NO && (elab_method_versions(c, "method_missing") || elab_method_versions(c, "respond_to_missing?"))) return ELAB_UNKNOWN;
+  if (o == ELAB_NO && (elab_runs_unseen(c) || lr_unordered_supply(c, cls, sg, name, p))) return ELAB_UNKNOWN;
+  return o;
+}
+
 int elab_self_at(Compiler *c, int node) {
   LoadRecord *r = elab_fresh(c);
   LoadPoint p = elab_point_of(c, node);

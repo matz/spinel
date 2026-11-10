@@ -370,6 +370,10 @@ void elab_open_histories(Compiler *c, void (*fn)(void *arg, int cls, int sg, con
    make a none unknown (an alias's original is looked up in the method tables
    alone, so a method that only they answer is none); a call passes 1. */
 int elab_call_method(Compiler *c, int id, int cls, const char *name, int sg, int mm);
+/* ...the same of cls's own methods alone (its singleton's own when sg), as
+   a call that asks the class itself sees them (CT_OWN: singleton_methods(false)):
+   its own history of name at the call, none of its ancestors' or mixins' */
+int elab_call_own_method(Compiler *c, int id, int cls, const char *name, int sg);
 /* the class a record builder made (`Foo = Struct.new(:a)`), or one whose
    header's superclass is the class a builder makes (`class Foo <
    Struct.new(:a)`), that cls is or inherits from; -1 for none. Past it

@@ -3845,6 +3845,7 @@ static int emit_class_instance_methods_all(Compiler *c, int id, Buf *b, const No
     for (int k = 0; k < c->nclasses; k++) {
       if (!cv[k]) continue;
       ReflNames r = {0};
+      refl_at(&r, id, k, 0);
       refl_class_instance_methods(c, k, 1, prot, &r);
       buf_printf(b, " case %d: _t%d = ", k, rt);
       refl_emit_sym_array(c, k, &r, b);
@@ -3866,6 +3867,7 @@ static int emit_class_instance_methods_all(Compiler *c, int id, Buf *b, const No
   if (comp_class_is_module(c, &c->classes[ci])) {
     if (si >= 0 || !an_module_methods_listable(c, ci, name)) return 0;
     ReflNames r = {0};
+    refl_at(&r, id, ci, 0);
     refl_module_instance_methods(c, ci, prot, &r);
     buf_puts(b, "sp_box_poly_array(");
     refl_emit_sym_array(c, ci, &r, b);
@@ -3882,6 +3884,7 @@ static int emit_class_instance_methods_all(Compiler *c, int id, Buf *b, const No
   for (int k = 0; k < c->nclasses; k++) {
     if (k != ci && (!dyn || !is_descendant(c, k, ci))) continue;
     ReflNames r = {0};
+    refl_at(&r, id, k, 0);
     refl_class_instance_methods(c, k, 1, prot, &r);
     if (dyn) buf_printf(b, " case %d:", k);
     buf_printf(b, " _t%d = ", rt);
@@ -4143,7 +4146,6 @@ void emit_class_value_constants(Compiler *c, const char *cv, int inherit, Buf *b
 /* ClassName.singleton_methods / singleton_methods(false): the class
    methods the program defines, a compile-time list like the one above. */
 static int emit_class_value_singleton_methods(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc, const int *argv) {
-  (void)id;
   if (!sp_streq(name, "singleton_methods") || argc > 1) return 0;
   const char *cn2 = nt_kind(nt, recv) == NK_ConstantReadNode
                     ? nt_str(nt, recv, "name") : NULL;
@@ -4151,6 +4153,8 @@ static int emit_class_value_singleton_methods(Compiler *c, int id, Buf *b, const
   int all = argc == 0 || nt_kind(nt, argv[0]) == NK_TrueNode;
   if (!cn2 || (argc == 1 && !all && nt_kind(nt, argv[0]) != NK_FalseNode) || !an_singleton_methods_foldable(c, recv)) return 0;
   ReflNames r = {0};
+  /* the class side where the list runs, its own methods alone for `false` */
+  if (ci2 >= 0) refl_at(&r, id, ci2, CT_CMETHOD | (all ? 0 : CT_OWN));
   refl_builtin_singleton_methods(cn2, all, &r);
   if (ci2 >= 0) refl_class_singleton_methods(c, ci2, all, &r);
   buf_puts(b, "sp_box_poly_array(");
@@ -4357,6 +4361,7 @@ static int emit_class_own_instance_methods(Compiler *c, int id, Buf *b, const No
   if (ci2 < 0 && nt_kind(nt, recv) == NK_SelfNode) ci2 = view_class_is(c, recv, ELAB_GAIN_METHODS);
   if (ci2 >= 0) {
     ReflNames r = {0};
+    refl_at(&r, id, ci2, CT_OWN);
     /* a module's own: what it answers for itself, not what an
        include copied in */
     if (comp_class_is_module(c, &c->classes[ci2]) && an_module_methods_listable(c, ci2, name))
@@ -4384,6 +4389,7 @@ static int emit_class_own_instance_methods(Compiler *c, int id, Buf *b, const No
     for (int k = 0; k < c->nclasses; k++) {
       if (!cv[k]) continue;
       ReflNames r = {0};
+      refl_at(&r, id, k, CT_OWN);
       if (comp_class_is_module(c, &c->classes[k]) && an_module_methods_listable(c, k, name))
         refl_module_own_methods(c, k, im_pub, im_prot, im_priv, &r);
       else

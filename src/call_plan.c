@@ -1915,7 +1915,8 @@ static int cm_self_kind(Compiler *c, int self) {
 }
 /* Does call id run where no method of `name` is live yet, as the record
    proves it at the call (elab_call_method): cls's chain, its class side
-   for CT_CMETHOD, main's top-level functions for CT_TOP? The method the
+   for CT_CMETHOD, main's top-level functions for CT_TOP, cls's own methods
+   alone for CT_OWN (elab_call_own_method)? The method the
    tables answer is then one a later statement defines, and the call
    raises (cplan_missing) or reaches the builtin self answers
    (cplan_self_builtin). Asked in the record's frame, once it is made.
@@ -1948,8 +1949,10 @@ static int ct_undefined_at(Compiler *c, int id, int cls, const char *name, unsig
   int rcls = flags & CT_TOP ? -1 : cls, sg = (flags & CT_CMETHOD) != 0, first_def = 0, body = 0, cl = 0;
   if (ct_capture_keeps_table(c, id, rcls, sg, name, flags, 0) && (ver_chain_count(c, rcls, sg, name, &first_def, &body, &cl), body))
     return 0;
+  /* (CT_OWN: cls's own methods alone, as its own history stands at the
+     call, whatever an ancestor or an extended module holds) */
   int framed = elab_plan_enter(c, id);
-  int none = elab_call_method(c, id, flags & CT_TOP ? -1 : cls, name, (flags & CT_CMETHOD) != 0, 1) == ELAB_NO;
+  int none = (flags & CT_OWN ? elab_call_own_method(c, id, rcls, name, sg) : elab_call_method(c, id, rcls, name, sg, 1)) == ELAB_NO;
   if (framed) elab_plan_leave(c);
   return none && !(nt_ref(c->nt, id, "receiver") >= 0 && !nt_int(c->nt, id, "self_call", 0) &&
                    builtin_self_method_known(name, cm_self_kind(c, flags & CT_TOP ? -1 : cls)) &&
@@ -2185,6 +2188,13 @@ static int ct_lookup(Compiler *c, int id, int cls, const char *name, unsigned *f
   if ((*flags & CT_TOP) && mi >= 0 && c->scopes[mi].is_cmethod) *flags |= CT_CMETHOD;
   return mi;
 }
+/* The visibility a call of name on cls's route checks: the final table's,
+   which a lookup of the name finds declared (public where none is) */
+static int ct_vis(Compiler *c, int cls, const char *name, unsigned flags) {
+  if (cls < 0 || (flags & CT_TOP)) return SP_VIS_PUBLIC;
+  if (flags & CT_CMETHOD) return comp_cmethod_vis_declared(c, cls, name, NULL);
+  return flags & CT_OWN ? comp_method_vis(&c->classes[cls], name) : comp_method_vis_declared(c, cls, name, NULL);
+}
 int call_target(Compiler *c, int id, int cls, const char *name, unsigned flags, MethodLookup *out) {
   MethodLookup own = { .def_class = -1 }, *ml = out ? out : &own;
   int dc0 = ml->def_class, mi = -1, pin, r;
@@ -2248,9 +2258,54 @@ int call_target(Compiler *c, int id, int cls, const char *name, unsigned flags, 
     ml->kind = ML_ENTRY;
     ml->why = 0;
   }
+  if (flags & CT_REACH) ml->vis = ct_vis(c, cls, name, flags);
   mtab_leave(c);
   if (g_method_table_check && ml->kind == ML_TABLE) mtab_table(c, id, cls, flags, name, ml->why);
   return r;
+}
+
+/* Whether the final tables hold name on cls's side as a method of it: the
+   method mi the table lookup found, or an accessor; mi is the generated
+   iterator of a Data class (or, under CT_OWN, of any Struct), or a module's
+   copy under CT_OWN, no method of the class's */
+static int pr_in_table(Compiler *c, int cls, unsigned side, const char *name, int mi) {
+  ClassInfo *k = &c->classes[cls];
+  char base[256];
+  if (side & CT_CMETHOD) {
+    if (mi >= 0) return 1;
+    if (name_is_plain_setter(name)) return setter_base_name(name, base, sizeof base) && comp_is_sg_writer(k, base);
+    return comp_is_sg_reader(k, name);
+  }
+  int wr = setter_base_name(name, base, sizeof base), parent = k->parent;
+  if (!(side & CT_OWN))
+    return (mi >= 0 && !method_hidden_from_reflection(c, cls, name)) || comp_reader_in_chain(c, cls, name, NULL) ||
+           (wr && comp_writer_in_chain(c, cls, base, NULL));
+  /* attr readers and writers are flattened into descendants at analyze
+     time, so "own" means present here but not in the parent chain */
+  return (mi >= 0 && !scope_is_struct_synth(c, mi) && c->scopes[mi].origin_module_ci == 0) ||
+         (comp_is_reader(k, name) && (parent < 0 || !comp_reader_in_chain(c, parent, name, NULL)) &&
+          !refl_member_of_struct_superclass(c, cls, name)) ||
+         (wr && comp_is_writer(k, base) && (parent < 0 || !comp_writer_in_chain(c, parent, base, NULL)) &&
+          !refl_member_of_struct_superclass(c, cls, base));
+}
+/* See call_plan.h. */
+PresenceKind cplan_presence(Compiler *c, int id, int cls, unsigned side, const char *name, CplanPresence *out) {
+  MethodLookup ml = { .def_class = -1 };
+  int tmi = ct_table(c, cls, name, side, NULL);
+  *out = (CplanPresence){ .table = pr_in_table(c, cls, side, name, tmi) };
+  if (!(side & CT_CMETHOD)) out->undef = comp_is_undeffed_in_chain(c, cls, name);
+  call_target(c, id, cls, name, side | CT_REACH, &ml);
+  out->vis = ml.vis;
+  if (ml.kind == ML_TABLE || ml.kind == ML_ENTRY) return PR_TABLE;
+  if (ml.kind == ML_NONE && tmi >= 0) return PR_ABSENT;   /* (the record: none where id runs) */
+  return out->table ? PR_PRESENT : PR_ABSENT;
+}
+/* See call_plan.h. */
+int cplan_list_omits(Compiler *c, int id, int cls, unsigned side, const char *name) {
+  ElabVersion vs[1];
+  CplanPresence pr;
+  if (id < 0 || cls < 0 || !name || elab_chain_versions(c, cls, (side & CT_CMETHOD) != 0, name, vs, 1) == 0) return 0;
+  return cplan_presence(c, id, cls, side, name, &pr) == PR_ABSENT && pr.table;
 }
 
 int cplan_class_row(Compiler *c, int id, int recv, const char *name) {

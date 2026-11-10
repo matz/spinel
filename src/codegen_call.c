@@ -19125,8 +19125,9 @@ int method_hidden_from_reflection(Compiler *c, int cid, const char *m) {
 
 /* ReflNames: codegen_call_arms.h */
 
-static void refl_note(ReflNames *r, const char *m, int show) {
-  for (int i = 0; i < r->n; i++) if (sp_streq(r->v[i], m)) return;
+/* (1 where m is new to r) */
+static int refl_note(ReflNames *r, const char *m, int show) {
+  for (int i = 0; i < r->n; i++) if (sp_streq(r->v[i], m)) return 0;
   if (r->n >= r->cap) {
     r->cap = r->cap ? r->cap * 2 : 32;
     r->v = realloc(r->v, sizeof(char *) * (size_t)r->cap);
@@ -19134,8 +19135,19 @@ static void refl_note(ReflNames *r, const char *m, int show) {
     if (!r->v || !r->show) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   }
   r->v[r->n] = strdup(m);
-  r->show[r->n] = (unsigned char)(show != 0);
+  r->show[r->n] = (unsigned char)(show ? REFL_SHOWN : 0);
   r->n++;
+  return 1;
+}
+/* ...a builtin row's name, which the row answers (REFL_ROW) */
+static void refl_note_row(ReflNames *r, const char *m, int show) {
+  if (refl_note(r, m, show)) r->show[r->n - 1] |= REFL_ROW;
+}
+/* See codegen_call_arms.h. */
+void refl_at(ReflNames *r, int id, int cls, unsigned side) {
+  r->at = id + 1;
+  r->at_cls = cls;
+  r->at_side = side;
 }
 
 void refl_free(ReflNames *r) {
@@ -19281,7 +19293,7 @@ static void refl_object_methods(Compiler *c, int cid, int pub, int prot, int sin
     class_is_comparable(c, cid) ? cmpm : NULL,
     objm };
   for (int t = 0; t < 4; t++)
-    for (int i = 0; core[t] && core[t][i]; i++) refl_note(r, core[t][i], pub);
+    for (int i = 0; core[t] && core[t][i]; i++) refl_note_row(r, core[t][i], pub);
 }
 
 /* Klass.instance_methods / public_instance_methods with inherited methods
@@ -19424,13 +19436,16 @@ void refl_class_singleton_methods(Compiler *c, int ci, int all, ReflNames *r) {
 
 /* Emit the listed names of `r` as a PolyArray of symbols. Interned at run
    time: a name the source never spells is not in the generated symbol
-   table. */
+   table. A name of the program's is left out where the call plan proves
+   that no method of it is live at the list's call (cplan_list_omits); a
+   row's is the row's. */
 void refl_emit_sym_array(Compiler *c, int cid, ReflNames *r, Buf *b) {
   int ta = ++g_tmp;
   buf_printf(b, "({ sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d); ", ta, ta);
   for (int i = 0; i < r->n; i++) {
-    if (!r->show[i]) continue;
+    if (!(r->show[i] & REFL_SHOWN)) continue;
     if (cid >= 0 && comp_is_undeffed_in_chain(c, cid, r->v[i])) continue;
+    if (r->at && !(r->show[i] & REFL_ROW) && cplan_list_omits(c, r->at - 1, r->at_cls, r->at_side, r->v[i])) continue;
     buf_printf(b, "sp_PolyArray_push(_t%d, sp_box_sym(sp_sym_intern(", ta);
     emit_str_literal(b, r->v[i]);
     buf_puts(b, "))); ");
@@ -19452,10 +19467,13 @@ static void refl_object_own_methods(Compiler *c, int cid, const char *name, Refl
   if (pub_only && k >= 0) refl_own_instance_methods(c, k, 1, 0, 0, 0, r);
 }
 
-/* The list emit_object_methods_reflection answers for an instance of cid. */
-static void emit_object_methods_list(Compiler *c, int cid, const char *name, int pub, int prot,
+/* The list emit_object_methods_reflection answers for an instance of cid,
+   at list call id (-1 for the table every site shares): the whole chain's
+   asks the plan there (refl_at) */
+static void emit_object_methods_list(Compiler *c, int id, int cid, const char *name, int pub, int prot,
                                      int sg, int all, int arg, Buf *b) {
   ReflNames ra = {0}, ro = {0};
+  if (!sg) refl_at(&ra, id, cid, 0);
   if (all != 0) refl_object_methods(c, cid, pub, prot, sg, &ra);
   if (all != 1) refl_object_own_methods(c, cid, name, &ro);
   if (all == 2) {
@@ -19511,7 +19529,7 @@ int emit_poly_object_methods_reflection(Compiler *c, int id, const char *name, i
       continue;
     }
     buf_printf(b, " case %d: _t%d = ", k, ta);
-    emit_object_methods_list(c, k, name, pub, prot, sg, an_object_methods_all_arg(c, k, argc, argv),
+    emit_object_methods_list(c, id, k, name, pub, prot, sg, an_object_methods_all_arg(c, k, argc, argv),
                              argc > 0 ? argv[0] : -1, b);
     buf_puts(b, "; break;");
   }
@@ -19526,7 +19544,7 @@ int emit_poly_object_methods_reflection(Compiler *c, int id, const char *name, i
    evaluated for its effects. `all` is an_object_methods_all_arg's answer:
    1 the whole list, 0 the object's own (refl_object_own_methods), 2 the one
    the truth of the argument `arg` picks at run time. */
-int emit_object_methods_reflection(Compiler *c, int recv, int cid, const char *name, int all,
+int emit_object_methods_reflection(Compiler *c, int id, int recv, int cid, const char *name, int all,
                                    int arg, Buf *b) {
   int pub = 1, prot = 0, sg = 0;
   if (sp_streq(name, "methods")) prot = 1;
@@ -19550,10 +19568,10 @@ int emit_object_methods_reflection(Compiler *c, int recv, int cid, const char *n
     emit_expr_for_effect(c, recv, b);
     buf_puts(b, "); ");
   }
-  emit_object_methods_list(c, cid, name, pub, prot, sg, all, arg, b);
+  emit_object_methods_list(c, id, cid, name, pub, prot, sg, all, arg, b);
   if (pid >= 0) {
     buf_puts(b, " : ");
-    emit_object_methods_list(c, pid, name, pub, prot, sg, all, arg, b);
+    emit_object_methods_list(c, id, pid, name, pub, prot, sg, all, arg, b);
   }
   buf_puts(b, "; })");
   return 1;
@@ -19565,7 +19583,7 @@ int emit_object_methods_reflection(Compiler *c, int recv, int cid, const char *n
 typedef struct { ReflNames *r; int prot; } ReflCoreNote;
 static void refl_core_note(void *ud, const char *m, int vis) {
   ReflCoreNote *n = ud;
-  refl_note(n->r, m, vis == 1 || (n->prot && vis == 2));
+  refl_note_row(n->r, m, vis == 1 || (n->prot && vis == 2));
 }
 static void refl_value_methods(Compiler *c, const char *cls, int prot, ReflNames *r) {
   ReflCoreNote n = { r, prot };
@@ -19646,7 +19664,7 @@ void emit_value_methods_helpers(Compiler *c, const char *const *texts, int ntext
       int leaf = comp_builtin_class_named(c, value_methods_classes[i]);
       buf_printf(b, "  case %d: { static const char *const t[] = { ", 2 * i + prot);
       for (int j = 0; j < r.n; j++) {
-        if (!r.show[j] || (leaf >= 0 && comp_is_undeffed_in_chain(c, leaf, r.v[j]))) continue;
+        if (!(r.show[j] & REFL_SHOWN) || (leaf >= 0 && comp_is_undeffed_in_chain(c, leaf, r.v[j]))) continue;
         emit_str_literal(b, r.v[j]);
         buf_puts(b, ", ");
       }
@@ -19672,7 +19690,7 @@ void emit_value_methods_helpers(Compiler *c, const char *const *texts, int ntext
       if (!c->classes[k].instantiated || c->classes[k].is_singleton_of ||
           !an_object_methods_listable(c, k, name)) continue;
       buf_printf(b, "    case %d: return ", k);
-      emit_object_methods_list(c, k, name, 1, prot, 0, 1, -1, b);
+      emit_object_methods_list(c, -1, k, name, 1, prot, 0, 1, -1, b);
       buf_puts(b, ";\n");
     }
     buf_puts(b, "    default: break;\n    }\n");
@@ -20730,7 +20748,7 @@ static void refl_builtin_cls_rows(const char *k, const char *skip, ReflNames *r)
     if (sp_streq(sp_builtin_cmeth_arity_spec_tbl[i].cls, k) && (own_new || !sp_streq(m, "new")) &&
         !(is_kernel_module_name(k) && !is_kernel_module_function(m)) &&   /* (Kernel's arity rows also hold its private methods) */
         !(skip && builtin_cmethod_known(skip, m)))
-      refl_note(r, m, 1);
+      refl_note_row(r, m, 1);
   }
 }
 

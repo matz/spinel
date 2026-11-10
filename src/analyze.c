@@ -45161,9 +45161,9 @@ static void psb_add(PsbSyms *s, const char *v) {
 
 /* The Symbol literals `node` can evaluate to -- or, with `elems`, that the
    Array it evaluates to can hold: a literal, an element read out of an Array
-   literal, a local's or a constant's assignments, and the arms of a
-   conditional. `depth` counts the reads and calls followed, which bounds a
-   local assigned from itself. */
+   literal, a local's or a constant's assignments, the first parameter of an
+   iterator's block, and the arms of a conditional. `depth` counts the reads
+   and calls followed, which bounds a local assigned from itself. */
 typedef struct {
   Compiler *c;
   int elems;
@@ -45202,6 +45202,34 @@ static void psb_collect(Compiler *c, int node, int elems, PsbSyms *s, int depth)
       const char *wn = nt_str(nt, w, "name");
       if (vn && wn && sp_streq(wn, vn) && c->nscope[w] == c->nscope[node])
         psb_collect(c, nt_ref(nt, w, "value"), elems, s, depth + 1);
+    }
+    /* the first parameter of an iterator's block holds an element of its
+       receiver: `syms.each { |s| m(&s) }` */
+    if (!vn) return;
+    NT_FOREACH_KIND(nt, NK_CallNode, call) {
+      const char *cn = nt_str(nt, call, "name");
+      int blk = nt_ref(nt, call, "block"), recv = nt_ref(nt, call, "receiver");
+      char nb[64];
+      /* a call desugar_builtin_enum_calls moved onto its builtin's copy,
+         `__enum_each_with_index__N(recv, ...)`, by the name it had */
+      if (cn && recv < 0 && strncmp(cn, "__enum_", 7) == 0) {
+        const char *sep = strstr(cn + 7, "__");
+        int an = 0, ar = nt_ref(nt, call, "arguments");
+        const int *av = ar >= 0 ? nt_arr(nt, ar, "arguments", &an) : NULL;
+        if (!sep || an < 1 || (size_t)(sep - cn - 7) >= sizeof nb) continue;
+        memcpy(nb, cn + 7, (size_t)(sep - cn - 7)); nb[sep - cn - 7] = 0;
+        cn = nb; recv = av[0];
+      }
+      if (!cn || blk < 0 || recv < 0 || nt_kind(nt, blk) != NK_BlockNode) continue;
+      if (!sp_streq(cn, "each") && !sp_streq(cn, "map") && !sp_streq(cn, "collect") &&
+          !sp_streq(cn, "flat_map") && !sp_streq(cn, "each_with_index") && !sp_streq(cn, "select") &&
+          !sp_streq(cn, "filter") && !sp_streq(cn, "reject") && !sp_streq(cn, "find"))
+        continue;
+      int bp = nt_ref(nt, blk, "parameters");
+      int ps = bp >= 0 ? nt_ref(nt, bp, "parameters") : -1;
+      int rn = 0; const int *rq = ps >= 0 ? nt_arr(nt, ps, "requireds", &rn) : NULL;
+      if (rn < 1 || !sp_streq(nt_str(nt, rq[0], "name"), vn) || c->nscope[rq[0]] != c->nscope[node]) continue;
+      psb_collect(c, recv, 1, s, depth + 1);
     }
     return;
   }
@@ -45274,6 +45302,19 @@ static int psb_symbol_proc(Compiler *c, Scope *sc, const char *name, int nv, con
   return pr;
 }
 
+/* Is call `id` an Array's, a Hash's or a String's builtin that takes a block
+   operand without calling it? */
+static int psb_block_unused(Compiler *c, int id) {
+  static const char *const N[] = { "push", "append", "unshift", "prepend", "insert", "concat",
+                                   "store", "[]=", NULL };
+  const NodeTable *nt = c->nt;
+  const char *nm = nt_str(nt, id, "name");
+  int recv = nt_ref(nt, id, "receiver");
+  if (!nm || recv < 0 || !str_in(nm, N)) return 0;
+  TyKind rt = infer_type(c, recv);
+  return ty_is_array(rt) || ty_is_hash(rt) || rt == TY_STRING;
+}
+
 static int desugar_poly_symbol_block_arg(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int changed = 0;
@@ -45287,6 +45328,9 @@ static int desugar_poly_symbol_block_arg(Compiler *c) {
     /* `r&.m(&v)` evaluates v only when r is not nil, and the parentheses
        would read it first */
     if (nt_safe_nav(nt, id)) continue;
+    /* a builtin that never calls its block (`a.push(7, &f)`, `h.store(k, v,
+       &f)`) only checks the operand, which the call does on the value itself */
+    if (k == NK_CallNode && psb_block_unused(c, id)) continue;
     int ex = nt_ref(nt, ba, "expression");
     if (ex < 0) continue;
     /* A Symbol-typed value too: a local is desugar_symbol_var_block_arg's

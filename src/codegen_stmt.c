@@ -24450,23 +24450,6 @@ static int str_mut_recv_assignable(Compiler *c, int recv) {
   return nt_kind(c->nt, recv) == NK_SelfNode || str_mut_var_recv(c, recv);
 }
 
-static void emit_sb_shim_swap(Buf *b, int indent, int tH, Buf *pre, char *arm) {
-  buf_puts(b, pre->p ? pre->p : "");
-  free(pre->p);
-  emit_indent(b, indent + 1);
-  buf_printf(b, "if (sp_String_is_frozen(_t%d)) sp_raise_frozen_str(_t%d->data);\n", tH, tH);
-  emit_indent(b, indent + 1);
-  buf_printf(b, "const char *%s = sp_str_concat(sp_String_cstr(_t%d), (&(\"\\xff\")[1]));\n", sb_shadow_cname(tH).s, tH);
-  emit_indent(b, indent + 1);
-  buf_printf(b, "SP_GC_ROOT(%s);\n", sb_shadow_cname(tH).s);
-  buf_puts(b, arm ? arm : "");
-  free(arm);
-  emit_indent(b, indent + 1);
-  buf_printf(b, "sp_String_set_bin(_t%d, %s);\n", tH, sb_shadow_cname(tH).s);
-  emit_indent(b, indent);
-  buf_puts(b, "}\n");
-}
-
 /* The writes of @iv under `id`. With `own`, only those a method body makes
    itself: a block or a lambda written in it runs whenever it is called. */
 static int ivar_direct_writes(const NodeTable *nt, int id, const char *iv, int own) {
@@ -24673,43 +24656,6 @@ void emit_str_frozen_check(Compiler *c, int recv, Buf *b) {
   buf_puts(b, "if ("); emit_expr(c, recv, b); buf_puts(b, ") sp_str_check_mutable(");
   emit_expr(c, recv, b); buf_puts(b, ");");
 }
-/* The value of a String splice (`s[...] = v`, `s.insert(i, v)`), emitted
-   after the arm took its index into temps. CRuby evaluates every argument
-   before it reads the String, and C orders a call's operands as it likes: a v
-   that changes the String (`s[1] = (s << "x"; "y")`) or runs the collector
-   has to have run before the String is checked, measured and cut. A literal
-   or a pure read can do neither and stays where the splice reads it; anything
-   else is evaluated here into a rooted temp, and converted to a String there
-   too, which is where CRuby raises its TypeError: ahead of the frozen check
-   and of an index out of the String, so a value that is not a String is
-   converted here even when it is a read (`s[9] = 5`). With `late`, the arm
-   matches a substring or a Regexp first, and CRuby converts the value only
-   after its "not matched" IndexError: a boxed v is held boxed and converted
-   at the splice, and a v of another type that is not a String stays there.
-   Emits the temp (numbered `tv`, or a fresh number when `tv` is -1) and the
-   frozen check, and answers the text the splice passes for v (the caller
-   frees it). */
-static char *emit_str_splice_value(Compiler *c, int recv, int v, int late, int tv, Buf *b) {
-  int is_str = comp_ntype(c, v) == TY_STRING;
-  int inert = nt_kind(c->nt, v) == NK_StringNode || subtree_is_pure_read(c, v) || arg_ran_first(v, 0);
-  int boxed = yield_site_type(c, v) == TY_POLY;
-  Buf vb; memset(&vb, 0, sizeof vb);
-  if (late && !is_str && boxed && !inert) {
-    if (tv < 0) tv = ++g_tmp;
-    buf_printf(b, " sp_RbVal _v%d = ", tv); emit_expr(c, v, b);
-    buf_printf(b, "; SP_GC_ROOT_RBVAL(_v%d);", tv);
-    buf_printf(&vb, "sp_poly_arg_str_chk(_v%d)", tv);
-  }
-  else if (inert ? !is_str && !late : is_str || !late) {
-    if (tv < 0) tv = ++g_tmp;
-    buf_printf(b, " const char *_v%d = ", tv); emit_str_insert_text(c, v, b);
-    buf_printf(b, "; SP_GC_ROOT_STR(_v%d);", tv);
-    buf_printf(&vb, "_v%d", tv);
-  }
-  else emit_str_insert_text(c, v, &vb);
-  buf_puts(b, " sp_str_check_mutable("); emit_expr(c, recv, b); buf_puts(b, ");");
-  return vb.p;
-}
 /* emit_array_mutate_stmt_body's String mutators done by reassigning the
    receiver: replace, prepend, concat, delete_prefix! /
    delete_suffix! (answers 1 emitted, 0 declined, -1 to go on) */
@@ -24826,148 +24772,6 @@ static int str_mutate_reassign_arms(Compiler *c, Buf *b, int indent, const NodeT
         buf_printf(b, ", _t%d);\n", base + a);
       }
       emit_indent(b, indent); buf_puts(b, "}\n");
-      return 1;
-    }
-    /* s[i] = str: replace the single character at index i (negative from the
-       end) with the (string) value -> s[0,i] + val + s[i+1..]. Valid range is
-       -len..len (i == len appends, matching CRuby); anything outside raises
-       IndexError with the original index. The (start,len) and Range / Regexp
-       forms remain unsupported (string splice). */
-    /* A boxed index reaches here whenever the value came out of a container --
-       a destructured block parameter (`pairs.each { |r, c| s[c] = "*" }`), an
-       element read, an untyped argument. It was not in the gate, so the call
-       fell through to "undefined method '[]=' for an instance of String" for a
-       program CRuby runs (#4060). emit_int_expr converts it through the
-       CHECKED form, so a boxed Integer works and a Range or String -- the
-       splice forms spinel does not support -- raises TypeError rather than
-       being read as a number. */
-    if (assignable && sp_streq(name, "[]=") && argc == 2 &&
-        (comp_ntype(c, argv[0]) == TY_INT || repr_of(c, argv[0]).kind == RK_BOXED)) {
-      int ti = ++g_tmp;
-      emit_indent(b, indent);
-      buf_printf(b, "{ sp_int _t%d = ", ti); emit_int_expr(c, argv[0], b); buf_puts(b, ";");
-      char *v = emit_str_splice_value(c, recv, argv[1], 0, ti, b);
-      /* the index runs -len..len (len appends); outside it raises IndexError */
-      buf_puts(b, " "); emit_expr(c, recv, b); buf_puts(b, " = sp_str_splice_at("); emit_expr(c, recv, b);
-      buf_printf(b, ", _t%d, 1, %s, 0); }\n", ti, v ? v : "NULL");
-      free(v);
-      return 1;
-    }
-    /* (one representation: a receiver that is no variable, an element read,
-       is still a String the program holds: its handle takes the splice,
-       sp_poly_str_aset_key over the handle's box, which writes it in place) */
-    if (!assignable && sp_streq(name, "[]=") && argc == 2) {
-      int ta = ++g_tmp, tk = ++g_tmp, tv = ++g_tmp;
-      emit_indent(b, indent);
-      buf_printf(b, "{ sp_RbVal _t%d = SP_STR_BOX(", ta); emit_expr(c, recv, b);
-      buf_printf(b, "); SP_GC_ROOT_RBVAL(_t%d); sp_RbVal _t%d = ", ta, tk); emit_boxed(c, argv[0], b);
-      buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); sp_RbVal _t%d = ", tk, tv); emit_boxed(c, argv[1], b);
-      buf_printf(b, "; (void)sp_poly_str_aset_key(_t%d, _t%d, _t%d); }\n", ta, tk, tv);
-      return 1;
-    }
-    /* s[range] = v: splice over the range's char span (negative n inserts) */
-    if (assignable && sp_streq(name, "[]=") && argc == 2 && comp_ntype(c, argv[0]) == TY_RANGE) {
-      int ti = ++g_tmp;
-      emit_indent(b, indent);
-      buf_printf(b, "{ sp_Range _t%d = sp_range_ix(", ti); emit_expr(c, argv[0], b); buf_puts(b, ");");
-      char *v = emit_str_splice_value(c, recv, argv[1], 0, ti, b);
-      buf_printf(b, " sp_int _len%d = (sp_int)sp_str_length(", ti); emit_expr(c, recv, b); buf_puts(b, ");");
-      /* a beginless bound is 0 and an endless one is the last index, rather
-         than the open-bound marker a negative-index fixup would fold into a
-         wild offset (`s[..1] = x` raised RangeError) */
-      buf_printf(b, " sp_int _a%d = _t%d.nobeg ? 0 :"
-                    " (_t%d.first < 0 ? _t%d.first + _len%d : _t%d.first);", ti, ti, ti, ti, ti, ti);
-      buf_printf(b, " int _oe%d = _t%d.noend;", ti, ti);
-      buf_printf(b, " sp_int _e%d = _oe%d ? _len%d - 1 :"
-                    " (_t%d.last < 0 ? _t%d.last + _len%d : _t%d.last);", ti, ti, ti, ti, ti, ti, ti);
-      buf_printf(b, " sp_int _n%d = _e%d - _a%d + ((_t%d.excl && !_oe%d) ? 0 : 1);", ti, ti, ti, ti, ti);
-      buf_puts(b, " "); emit_expr(c, recv, b); buf_puts(b, " = sp_str_splice_at(");
-      emit_expr(c, recv, b);
-      buf_printf(b, ", _a%d, _n%d < 0 ? 0 : _n%d, %s, 1); }\n", ti, ti, ti, v ? v : "NULL");
-      free(v);
-      return 1;
-    }
-    /* (one representation: `rows[0][0, 2] = v` on an element read, as the
-       single-index form above: the element's handle takes the splice, its
-       start and length converted before the value, as CRuby does) */
-    if (!assignable && sp_streq(name, "[]=") && argc == 3 &&
-        (comp_ntype(c, argv[0]) == TY_INT || repr_of(c, argv[0]).kind == RK_BOXED)) {
-      int th = ++g_tmp, ts = ++g_tmp, tl = ++g_tmp;
-      emit_indent(b, indent);
-      buf_printf(b, "{ sp_String *_t%d = SP_STR_HDL(", th); emit_expr(c, recv, b);
-      buf_printf(b, "); SP_GC_ROOT(_t%d); if (!_t%d) sp_nil_recv(\"[]=\");", th, th);
-      buf_printf(b, " sp_int _t%d = ", ts); emit_int_expr(c, argv[0], b);
-      buf_printf(b, "; sp_int _t%d = ", tl); emit_int_expr(c, argv[1], b); buf_puts(b, ";");
-      char *v = emit_str_splice_value(c, recv, argv[2], 0, ts, b);
-      buf_printf(b, " if (sp_String_is_frozen(_t%d)) sp_raise_frozen_str(_t%d->data);", th, th);
-      buf_printf(b, " sp_String_set_bin(_t%d, sp_str_splice_at(sp_String_cstr(_t%d), _t%d, _t%d, %s, 0)); }\n",
-                 th, th, ts, tl, v ? v : "NULL");
-      free(v);
-      return 1;
-    }
-    /* s[start, len] = v; a boxed start goes through the checked unbox like
-       the single-index form's (#4060) -- the arm refused it (#4766) */
-    if (assignable && sp_streq(name, "[]=") && argc == 3 &&
-        (comp_ntype(c, argv[0]) == TY_INT || repr_of(c, argv[0]).kind == RK_BOXED)) {
-      int ts = ++g_tmp, tl = ++g_tmp;
-      emit_indent(b, indent);
-      /* the start and the length are converted before the value, as CRuby
-         does: as arguments of one C call their order was the C compiler's,
-         and gcc raised the value's TypeError ahead of the index's */
-      buf_printf(b, "{ sp_int _t%d = ", ts); emit_int_expr(c, argv[0], b);
-      buf_printf(b, "; sp_int _t%d = ", tl); emit_int_expr(c, argv[1], b); buf_puts(b, ";");
-      char *v = emit_str_splice_value(c, recv, argv[2], 0, ts, b);
-      buf_puts(b, " "); emit_expr(c, recv, b); buf_puts(b, " = sp_str_splice_at("); emit_expr(c, recv, b);
-      buf_printf(b, ", _t%d, _t%d, %s, 0); }\n", ts, tl, v ? v : "NULL");
-      free(v);
-      return 1;
-    }
-    /* s["sub"] = v: replace the first occurrence; missing raises IndexError */
-    if (assignable && sp_streq(name, "[]=") && argc == 2 && comp_ntype(c, argv[0]) == TY_STRING &&
-        re_lit_index(c, argv[0]) < 0) {
-      int ti = ++g_tmp;
-      emit_indent(b, indent);
-      buf_printf(b, "{ const char *_t%d = ", ti); emit_str_expr(c, argv[0], b); buf_puts(b, ";");
-      if (nt_kind(nt, argv[0]) != NK_StringNode) buf_printf(b, " SP_GC_ROOT_STR(_t%d);", ti);
-      char *v = emit_str_splice_value(c, recv, argv[1], 1, ti, b);
-      buf_printf(b, " sp_oint _a%d = sp_str_index_opt(", ti); emit_expr(c, recv, b);
-      buf_printf(b, ", _t%d); if (_a%d.nil) sp_raise_cls(\"IndexError\", \"string not matched\");", ti, ti);
-      buf_puts(b, " "); emit_expr(c, recv, b); buf_puts(b, " = sp_str_splice_at(");
-      emit_expr(c, recv, b);
-      buf_printf(b, ", _a%d.v, (sp_int)sp_str_length(_t%d), %s, 0); }\n", ti, ti, v ? v : "NULL");
-      free(v);
-      return 1;
-    }
-    /* s[/re/, n] = v: replace the nth capture group's span (#3548) */
-    if (assignable && sp_streq(name, "[]=") && argc == 3 && re_lit_index(c, argv[0]) >= 0) {
-      int ts = ++g_tmp, tn = ++g_tmp;
-      emit_indent(b, indent);
-      buf_printf(b, "{ sp_int _t%d = ", tn); emit_int_expr(c, argv[1], b); buf_puts(b, ";");
-      char *v = emit_str_splice_value(c, recv, argv[2], 1, tn, b);
-      buf_printf(b, " const char *_t%d = ", ts); emit_expr(c, recv, b);
-      buf_printf(b, "; if (sp_re_match(sp_re_pat_%d, _t%d) < 0)"
-                    " sp_raise_cls(\"IndexError\", \"regexp not matched\");",
-                 re_lit_index(c, argv[0]), ts);
-      buf_printf(b, " if (_t%d < 0 || _t%d > 9)"
-                    " sp_raise_cls(\"IndexError\", sp_sprintf(\"index %%lld out of regexp\","
-                    " (long long)_t%d));", tn, tn, tn);
-      /* each piece is rooted while the next one allocates */
-      buf_printf(b, " { sp_int _b = sp_re_caps[2 * _t%d], _e = sp_re_caps[2 * _t%d + 1];", tn, tn);
-      buf_printf(b, " const char *_h = sp_str_byteslice(_t%d, 0, _b); SP_GC_ROOT_STR(_h);", ts);
-      buf_printf(b, " const char *_r = sp_str_byteslice(_t%d, _e, (sp_int)sp_str_byte_len(_t%d) - _e); SP_GC_ROOT_STR(_r);", ts, ts);
-      buf_printf(b, " const char *_p = sp_str_concat(_h, %s); SP_GC_ROOT_STR(_p); ", v ? v : "NULL");
-      emit_expr(c, recv, b); buf_puts(b, " = sp_str_concat(_p, _r); } }\n");
-      free(v);
-      return 1;
-    }
-    /* s[/re/] = v: replace the first match's span; no match raises IndexError */
-    if (assignable && sp_streq(name, "[]=") && argc == 2 && re_lit_index(c, argv[0]) >= 0) {
-      emit_indent(b, indent); buf_puts(b, "{");
-      char *v = emit_str_splice_value(c, recv, argv[1], 0, -1, b);
-      buf_puts(b, " "); emit_expr(c, recv, b);
-      buf_printf(b, " = sp_str_splice_re(sp_re_pat_%d, ", re_lit_index(c, argv[0]));
-      emit_expr(c, recv, b); buf_printf(b, ", %s); }\n", v ? v : "NULL");
-      free(v);
       return 1;
     }
   }
@@ -25408,8 +25212,8 @@ static int str_mutate_narrowed_poly(Compiler *c, int id, Buf *b, int indent, con
   return 1;
 }
 
-/* String#insert, clear and slice! as a statement: the stage-7 row's value
-   form (emit_op_string_insert and its siblings), which changes the
+/* String#[]=, insert, clear and slice! as a statement: the stage-7 row's
+   value form (emit_op_string_aset and its siblings), which changes the
    receiver's String in place through its handle. The answer is left as
    the C statement's value, not cast away: a block's last statement is the
    value of the statement expression a yield reads (emit_block_invoke).
@@ -25427,159 +25231,6 @@ static int str_mutator_row_stmt(Compiler *c, int id, int recv, Buf *b, int inden
   }
   free(vb.p);
   return ok;
-}
-
-/* emit_array_mutate_stmt_body's shims for a String whose mutation every
-   alias must see: a local String, a reader call that hands out the handle,
-   and []= / setbyte on a shared handle (answers 1 emitted, 0 declined, -1
-   to go on) */
-static int str_mutate_shared_arms(Compiler *c, int id, Buf *b, int indent, const NodeTable *nt, const char *name, int recv, TyKind rt) {
-  /* The same shim over a READER call that hands out the handle
-     (`obj.name[0] = "X"`), whose call node reads as the shadow. */
-  if ((rt == TY_STRING || rt == TY_STRBUF) &&
-      (nt_kind(nt, recv) == NK_CallNode || (repr_static_read_kind(nt_kind(nt, recv)))) &&
-      (is_string_position_mutator(name))) {
-    Buf srefR; memset(&srefR, 0, sizeof srefR);
-    SbReaderSave svR;
-    /* (--share-strings: what the reader's read put ahead of the statement
-       goes with a declined shim, or the reader runs twice) */
-    Buf *pre0 = g_pre;
-    size_t pre0_mark = pre0 ? pre0->len : 0;
-    int tH = sb_reader_shim_open(c, id, recv, &srefR, &svR);
-    if (tH) {
-      Buf pre; memset(&pre, 0, sizeof pre);
-      int mark = sb_shim_args_first(c, id, &pre, indent + 1);
-      Buf armb; memset(&armb, 0, sizeof armb);
-      int handled = emit_array_mutate_stmt(c, id, &armb, indent + 1);
-      view_unbind(mark);
-      sb_reader_shim_close(c, recv, &svR);
-      if (!handled) {
-        free(armb.p); free(pre.p); free(srefR.p);
-        if (pre0 && g_pre == pre0 && pre0->len > pre0_mark) {
-          pre0->len = pre0_mark;
-          pre0->p[pre0_mark] = '\0';
-        }
-      }
-      else {
-        emit_indent(b, indent);
-        buf_printf(b, "{ sp_String *_t%d = SP_STR_HDL(%s);\n", tH, srefR.p);
-        free(srefR.p);
-        emit_sb_shim_swap(b, indent, tH, &pre, armb.p);
-        return 1;
-      }
-    }
-  }
-
-  /* --share-strings: the same shim over a route that hands on a handle
-     (`(+s)[0] = "X"`): the handle is taken once, and the route reads as
-     its shadow */
-  if ((rt == TY_STRING || rt == TY_STRBUF) && is_string_position_mutator(name) &&
-      g_n_argov < MAX_ARG_OVERRIDE && !sb_shadowed_reader(c, recv)) {
-    Buf *pre = g_pre;
-    size_t pre_mark = pre ? pre->len : 0;
-    Buf hb; memset(&hb, 0, sizeof hb);
-    Buf lb; memset(&lb, 0, sizeof lb);
-    int got = strbuf_route_recv(c, id, recv, &hb);
-    if (!got) got = emit_recv_route_handle(c, id, recv, &lb);
-    if (got) {
-      int tH = ++g_tmp;
-      /* the arguments that run code go ahead of the copy, after the
-         receiver's handle is taken (what the route put ahead is in g_pre),
-         as the other shims run them: one that changes the String through
-         another name would be undone by the write-back */
-      Buf apre; memset(&apre, 0, sizeof apre);
-      int fx = 0, rna = nt_ref(nt, id, "arguments"), rac = 0;
-      const int *rav = rna >= 0 ? nt_arr(nt, rna, "arguments", &rac) : NULL;
-      for (int ai = 0; ai < rac; ai++) fx |= subtree_has_side_effect(c, rav[ai]);
-      int mark0 = fx ? sb_shim_args_first(c, id, &apre, indent + 1) : g_n_argov;
-      view_bind(recv, "%s", sb_shadow_cname(tH).s);
-      int shv = view_push_repr(c, recv, VR_STR_SHADOW, 1);
-      Buf armb; memset(&armb, 0, sizeof armb);
-      int handled = emit_array_mutate_stmt(c, id, &armb, indent + 1);
-      view_pop(c, shv);
-      view_unbind(mark0);
-      if (handled) {
-        emit_indent(b, indent);
-        buf_printf(b, "{ sp_String *_t%d = SP_STR_HDL(%s);", tH, lb.p ? lb.p : hb.p);
-        free(lb.p); lb.p = NULL; free(hb.p);
-        emit_route_recv_root(c, 2, tH, 0, NULL, TY_UNKNOWN, b);
-        buf_puts(b, "\n");
-        emit_sb_shim_swap(b, indent, tH, &apre, armb.p);
-        return 1;
-      }
-      free(apre.p);
-      free(armb.p); free(lb.p); free(hb.p);
-      /* what the route put ahead of the statement goes with it */
-      if (pre && g_pre == pre && pre->len > pre_mark) { pre->len = pre_mark; pre->p[pre_mark] = '\0'; }
-    }
-  }
-
-  /* Shared-mutable shim (#3227): a strbuf-local receiver of a rebinding
-     string mutator re-runs the existing value-semantics arm against a plain
-     SHADOW copy (a rename entry plus a temporary slot-type flip point every
-     read and the final reassignment at it), then swaps the handle's buffer
-     contents in place so every alias observes the mutation. */
-  if (rt == TY_STRING &&
-      (is_string_position_mutator(name))) {
-    /* An IVAR receiver has no name the rename table can carry, so the shadow
-       is published to the ivar emitter instead; everything else -- the value
-       arm re-run, the frozen check, the byte swap at the end -- is the same
-       (#4363). Without this the arm ran against `self->iv_x` itself, which is
-       an sp_String * and not the const char * lvalue the arm assigns to:
-       `lvalue required as left operand of assignment`. */
-    if (!strbuf_local_name(c, recv) && nt_kind(nt, recv) == NK_InstanceVariableReadNode) {
-      Buf srefI; memset(&srefI, 0, sizeof srefI);
-      int icid = strbuf_ivar_owner(c, recv);
-      const char *ivn = nt_str(nt, recv, "name");
-      if (ivn && icid >= 0 && !g_sb_iv_name &&
-          strbuf_slot_text(c, recv, &srefI)) {
-        Buf pre; memset(&pre, 0, sizeof pre);
-        int mark = sb_shim_args_first(c, id, &pre, indent + 1);
-        int tH = ++g_tmp;
-        Buf armb; memset(&armb, 0, sizeof armb);
-        snprintf(g_sb_iv_repl, sizeof g_sb_iv_repl, "%s", sb_shadow_cname(tH).s);
-        g_sb_iv_name = ivn; g_sb_iv_cid = icid;
-        int handled = emit_array_mutate_stmt(c, id, &armb, indent + 1);
-        g_sb_iv_name = NULL; g_sb_iv_cid = -1;
-        view_unbind(mark);
-        if (!handled) { free(armb.p); free(pre.p); free(srefI.p); }
-        else {
-          emit_indent(b, indent);
-          buf_printf(b, "{ sp_String *_t%d = SP_STR_HDL(%s);\n", tH, srefI.p);
-          free(srefI.p);
-          emit_sb_shim_swap(b, indent, tH, &pre, armb.p);
-          return 1;
-        }
-      }
-    }
-    const char *sbn = strbuf_local_name(c, recv);
-    /* the handle's slot through the holder: a captured or celled local's
-       is its cell, not lv_<name> (nothing declares that) */
-    Buf srefL; memset(&srefL, 0, sizeof srefL);
-    if (sbn && g_nren < MAX_RENAME && strbuf_slot_text(c, recv, &srefL)) {
-      Scope *shs = comp_scope_of(c, recv);
-      LocalVar *shlv = scope_local(shs, sbn);
-      Buf pre; memset(&pre, 0, sizeof pre);
-      int mark = sb_shim_args_first(c, id, &pre, indent + 1);
-      int tH = ++g_tmp;
-      Buf armb; memset(&armb, 0, sizeof armb);
-      ren_push(sbn, "%s", sb_shadow_local(tH).s);
-      SbShimSave sv_sh = sb_shim_enter(shlv);
-      int handled = emit_array_mutate_stmt(c, id, &armb, indent + 1);
-      sb_shim_leave(shlv, sv_sh);
-      g_nren--;
-      view_unbind(mark);
-      if (!handled) { free(armb.p); free(pre.p); free(srefL.p); }
-      else {
-        emit_indent(b, indent);
-        buf_printf(b, "{ sp_String *_t%d = SP_STR_HDL(%s);\n", tH, srefL.p);
-        free(srefL.p);
-        emit_sb_shim_swap(b, indent, tH, &pre, armb.p);
-        return 1;
-      }
-    }
-  }
-  return -1;
 }
 
 /* `sp_int _t<tk> = ` the index of a store into an array a cached header
@@ -25706,7 +25357,6 @@ static int emit_array_mutate_stmt_body(Compiler *c, int id, Buf *b, int indent) 
 
   { int rv = str_mutate_narrowed_poly(c, id, b, indent, nt, name, recv, rt); if (rv >= 0) return rv; }
   if (str_mutator_row_stmt(c, id, recv, b, indent)) return 1;
-  { int rv = str_mutate_shared_arms(c, id, b, indent, nt, name, recv, rt); if (rv >= 0) return rv; }
 
   { int rv = str_mutate_append_bang_arms(c, id, b, indent, nt, name, recv, rt, argc, argv); if (rv >= 0) return rv; }
   { int rv = str_mutate_reassign_arms(c, b, indent, nt, name, recv, rt, argc, argv); if (rv >= 0) return rv; }

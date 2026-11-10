@@ -1,14 +1,19 @@
 # spinel: gc-minor
-# String#insert, clear and slice! change the receiver's String in place,
+# String#[]=, insert, clear and slice! change the receiver's String in place,
 # whichever way the receiver is reached: self and a bare call in a reopened
 # String, a local, an ivar, a method's answer, an Array element and the
 # handle a `&.` guard holds. Other names for the String see the change,
-# insert and clear answer the receiver and slice! a new unfrozen String,
-# and object_id holds across the changes. A frozen String raises
-# FrozenError in the order CRuby checks: after the index for insert, before
-# it for clear and slice!.
+# insert and clear answer the receiver, []= answers the right-hand object
+# and slice! a new unfrozen String, and object_id holds across the changes.
+# A frozen String raises FrozenError in the order CRuby checks: after the
+# index for []= and insert, before it for clear and slice!.
 
 class String
+  def cap0!
+    self[0] = self[0].upcase
+    self
+  end
+
   def wrap!
     self.insert(0, "<")
     self.insert(-1, ">")
@@ -37,6 +42,18 @@ class String
     self.slice!(0..1)
   end
 
+  def mask!
+    self[1..-2] = "*" * (length - 2) if length > 2
+    self
+  end
+
+  def edit!
+    self[0, 1] = "E"
+    s2 = slice!(-1)
+    insert(1, s2)
+    self
+  end
+
   def wipe!
     clear
   end
@@ -45,17 +62,22 @@ end
 s = +"abc"
 t = s
 id = s.object_id
+p s.cap0!.equal?(s), t
 p s.wrap!.equal?(s), t
 p s.lead!("."), t
 p s.chop1!, t
 p (+"abcabc").drop_s!("ca")
 p (+"ab12cd").strip_digits!
 p (+"abcdef").take2!
+p (+"secret").mask!
+p (+"word").edit!
 p s.wipe!.equal?(s), t, s.object_id == id
 
 # a local, and the values the four answer
 u = +"hello"
 v = u
+r = (u[0] = "J")
+p r, u, v
 r = u.insert(1, "-")
 p r.equal?(u), v
 x = u.slice!(0, 2)
@@ -68,15 +90,18 @@ class Box
   def initialize = @s = +"inside"
   def s = @s
   def run
+    @s[0] = "I"
     @s.insert(-1, "!")
     [@s.slice!(1, 2), @s]
   end
 end
 b = Box.new
 p b.run, b.s
+b.s[0] = "Z"
 b.s.insert(1, "+")
 p b.s.slice!(-1), b.s
 a = [+"one", +"two"]
+a[0][0] = "O"
 a[1].insert(0, "<")
 p a[1].slice!(/w/), a
 
@@ -95,12 +120,23 @@ end
 k = +"aba"
 p k.slice!(k), k
 k = +"abc"
+k[k] = "x"; p k
 k = +"q"
 k.insert(0, k.dup); p k
 k = +"ab"
 k.insert(1, 2.9.to_s); p k
 k = +"abcdef"
 k.insert(2.9, "-"); p k
+
+# a regexp key with a group
+g = +"hello world"
+g[/(o) (w)/, 2] = "W"; p g
+g[/(l+)/, -1] = "L"; p g
+begin; g[/xyz/] = "q"; rescue IndexError => e; p [e.class, e.message]; end
+begin; g[/(h)/, 3] = "q"; rescue IndexError => e; p [e.class, e.message]; end
+begin; g[/(h)/, -3] = "q"; rescue IndexError => e; p [e.class, e.message]; end
+begin; g[/(h)|(z)/, 2] = "q"; rescue IndexError => e; p [e.class, e.message]; end
+p g
 
 # frozen: the order of the checks
 e = "".freeze
@@ -111,4 +147,7 @@ begin; p f.slice!("zz"); rescue FrozenError => x; p [x.class, x.message]; end
 begin; p f.slice!(/q/); rescue FrozenError => x; p [x.class, x.message]; end
 begin; f.insert(0, ""); rescue FrozenError => x; p [x.class, x.message]; end
 begin; f.insert(9, "q"); rescue => x; p [x.class, x.message]; end
+begin; f[0, 0] = ""; rescue FrozenError => x; p [x.class, x.message]; end
+begin; f[9] = "q"; rescue => x; p [x.class, x.message]; end
+begin; f[0] = 5; rescue => x; p [x.class, x.message]; end
 p f

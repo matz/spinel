@@ -5426,7 +5426,7 @@ int emit_array_call(Compiler *c, int id, Buf *b) {
     const NodeTable *ntS = c->nt;
     const char *nmS = nt_str(ntS, id, "name");
     int recvS = nt_ref(ntS, id, "receiver");
-    /* String#insert, clear and slice! change the receiver's String in
+    /* String#[]=, insert, clear and slice! change the receiver's String in
        place, through its handle (the String rows of stage 7) */
     TyKind rtS = comp_recv_type(c, recvS);
     if (recvS >= 0 && (rtS == TY_STRING || rtS == TY_STRBUF) &&
@@ -17679,7 +17679,14 @@ static int emit_poly_index_call(Compiler *c, int id, Buf *b, const NodeTable *nt
         buf_puts(b, ", "); emit_boxed(c, argv[0], b);
       }
       else {
-        buf_printf(b, "sp_poly_set_poly("); emit_expr(c, recv, b);
+        /* a key of no other kind (a Float, nil): a String receiver takes it
+           as an index, converted as CRuby converts one, stored back where
+           the receiver is a slot (sp_poly_aset_index_key) */
+        NodeKind rk2 = nt_kind(nt, recv);
+        if (rk2 == NK_LocalVariableReadNode || rk2 == NK_InstanceVariableReadNode) {
+          emit_recv_slot(c, recv, b); buf_puts(b, " = ");
+        }
+        buf_printf(b, "sp_poly_aset_index_key("); emit_expr(c, recv, b);
         buf_puts(b, ", "); emit_boxed(c, argv[0], b);
       }
     }

@@ -3520,7 +3520,7 @@ const BuiltinOp *an_bop_row_for_kind(Compiler *c, int id, TyKind rt) {
 
 /* bop_result_args with the call's arguments' kinds from infer_type, for the
    rows whose result turns on them (BOPR_ARRAY_PLUS, BOPR_ARRAY_SETOP,
-   BOPR_ARG0, BOPR_ARG1, BOPR_HASH_REPLACE, BOPR_HASH_STORE); any other row
+   BOPR_ARG0, BOPR_ARG1, BOPR_ARG_LAST, BOPR_HASH_REPLACE, BOPR_HASH_STORE); any other row
    answers as bop_result does. Seeded sums also read the seed's literal kind
    and the integer overflow mode. */
 TyKind an_bop_result(Compiler *c, const BuiltinOp *op, TyKind rt, int id, int argc, const int *argv) {
@@ -5600,7 +5600,9 @@ static int infer_string_recv_call(Compiler *c, int id, const NodeTable *nt, cons
        and lines' separator) */
     {
       const BuiltinOp *op = an_bop_find_arg(c, id, rt, name, argc, argv, nt_ref(nt, id, "block") >= 0);
-      if (op && op->result != TY_UNKNOWN) { *out = op->result; return 1; }
+      /* (a row whose answer is an operand's kind, `[]=`'s right-hand
+         object, works it out from the arguments: an_bop_result) */
+      if (op && op->result != TY_UNKNOWN) { *out = an_bop_result(c, op, rt, id, argc, argv); return 1; }
     }
     /* casecmp/casecmp? with an argument the rows' guards do not hold (a
        boxed one, a String or an untyped one are theirs): CRuby answers nil

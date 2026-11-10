@@ -127,6 +127,7 @@ sp_RbVal sp_re_rindex_poly(mrb_regexp_pattern *pat, const char *str);
 sp_RbVal sp_re_index_poly(mrb_regexp_pattern *pat, const char *str);
 const char *sp_str_splice_re(mrb_regexp_pattern *pat, const char *s, const char *val);
 const char *sp_str_slice_re(mrb_regexp_pattern *pat, const char *s, const char **rest_out);
+void sp_re_nth_span(mrb_regexp_pattern *pat, const char *s, sp_int nth, sp_int *b, sp_int *e);   /* s[/re/, nth] = val's span */
 const char *sp_re_alt_join(const char *a, const char *b);  /* `a|b`, NUL-safe */
 const char *sp_re_source(void *pat);
 uint32_t sp_re_source_len(void *pat);   /* its byte length (may hold a NUL) */

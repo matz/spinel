@@ -2168,7 +2168,7 @@ static const BuiltinOp bop_rows[] = {
      it or nil BOPF_SELF_OR_NIL, the ones that answer it or a copy of it
      BOPF_SELF_CLASS (bop_answers_self). */
   { TY_STRING, "clear",           0,   0, BF_ANY,      TY_STRING,     BOPE_STRING_CLEAR, NULL, 0, 0, BOPF_SELF, 7 },  /* self (#2332) */
-  { TY_STRING, "[]=",             2,   3, BF_ANY,      TY_STRING,     BOPE_NONE },  /* the assigned string (#2370) */
+  { TY_STRING, "[]=",             2,   3, BF_ANY,      BOPR_ARG_LAST, BOPE_STRING_ASET, NULL, 0, 0, 0, 7 },  /* the right-hand object (#2370) */
   { TY_STRING, "clone",           1,   1, BF_ANY,      TY_STRING,     BOPE_NONE, NULL, 0, 0, BOPF_COPY_CLASS | BOPF_KEYWORDS },  /* clone(freeze: ...) */
   /* encoding and ascii_only? read the binary tag or the bytes through a
      function that takes NULL for "": a nil receiver raises through
@@ -3276,6 +3276,7 @@ TyKind bop_result(const BuiltinOp *op, TyKind rt) {
   case (int)BOPR_ARRAY_SETOP:
   case (int)BOPR_ARG0:
   case (int)BOPR_ARG1:
+  case (int)BOPR_ARG_LAST:
   case (int)BOPR_HASH_REPLACE:
   case (int)BOPR_ARRAY_SUM_SEED:
   case (int)BOPR_HASH_STORE: return TY_UNKNOWN;
@@ -3296,6 +3297,8 @@ TyKind bop_result_args(const BuiltinOp *op, TyKind rt, int argc, BopArgKind arg_
     return argc >= 1 ? arg_of(ud, 0) : TY_UNKNOWN;
   case (int)BOPR_ARG1:
     return argc >= 2 ? arg_of(ud, 1) : TY_UNKNOWN;
+  case (int)BOPR_ARG_LAST:
+    return argc >= 1 ? arg_of(ud, argc - 1) : TY_UNKNOWN;
   case (int)BOPR_HASH_REPLACE: {
     /* other of the receiver's own variant keeps the receiver's kind; a
        Hash of another variant, or a boxed one (whichever variant it really

@@ -4543,7 +4543,7 @@ static void emit_held_handle(Compiler *c, int r, Buf *b) {
    handle r answers (emit_bang_self_handle) is held, a nil raising
    NoMethodError for id, as the copy's own check did; id's arguments run
    (sb_shim_args_first); r then reads as a shadow copy of the handle's bytes
-   (`lv__shT`, which the mutator arms write back to as to a variable), and
+   (`lv_ShT`, which the mutator arms write back to as to a variable), and
    the shadow goes back into the handle once `emit` has emitted the arm into
    its result `_resT`, typed `ty` (the answer the caller reads), so the
    mutation reaches the String every other name holds. Read as its bytes
@@ -4563,7 +4563,7 @@ static int emit_held_self_answer_shim(Compiler *c, int id, int r, TyKind ty, Buf
   /* no handle to hold (a link that renders none): the call's own emission */
   if (!hb.p || !hb.p[0]) { free(hb.p); return 0; }
   int mark = sb_shim_args_first(c, id, &pre, g_indent);
-  view_bind(r, "lv__sh%d", tH);
+  view_bind(r, "%s", sb_held_shadow_cname(tH).s);
   /* what the arm puts ahead of its statement reads the shadow: it goes
      after the shadow's declaration; the shim tests the receiver for nil,
      which the arm does not test again (cplan_nil) */
@@ -4584,23 +4584,23 @@ static int emit_held_self_answer_shim(Compiler *c, int id, int r, TyKind ty, Buf
     if (nilok) buf_printf(b, " _res%d = 0; if (_t%d) {", tH, tH);
     else buf_printf(b, " _res%d; if (SP_UNLIKELY(!_t%d)) sp_nil_recv_raise(\"%s\");",
                     tH, tH, nt_str(c->nt, id, "name"));
-    buf_printf(b, " SP_GC_ROOT(_t%d);%s const char *lv__sh%d = ", tH, pre.p ? pre.p : "", tH);
+    buf_printf(b, " SP_GC_ROOT(_t%d);%s const char *%s = ", tH, pre.p ? pre.p : "", sb_held_shadow_cname(tH).s);
     { int held = g_one_held;
       /* (one representation: with a block, the shadow is a copy the block
          cannot move, as every read was) */
       if (nt_ref(c->nt, id, "block") >= 0) g_one_held = 1;
       str_read_handle_tmp(b, tH, 0);
       g_one_held = held; }
-    buf_printf(b, "; SP_GC_ROOT(lv__sh%d);", tH);
+    buf_printf(b, "; SP_GC_ROOT(%s);", sb_held_shadow_cname(tH).s);
     /* a block that changes the String through another name while gsub! or
        sub! runs over it is CRuby's RuntimeError, where the shadow's write
        back would drop the change */
     int blk = nt_ref(c->nt, id, "block") >= 0;
-    if (blk) buf_printf(b, " const char *_o%d = lv__sh%d; SP_GC_ROOT_STR(_o%d);", tH, tH, tH);
+    if (blk) buf_printf(b, " const char *_o%d = %s; SP_GC_ROOT_STR(_o%d);", tH, sb_held_shadow_cname(tH).s, tH);
     buf_printf(b, "\n%s _res%d = %s;", apre.p ? apre.p : "", tH, armb.p ? armb.p : "0");
     if (blk) buf_printf(b, " if (!sp_str_eq(sp_String_cstr(_t%d), _o%d)) sp_raise_cls(\"RuntimeError\", \"string modified\");",
                         tH, tH);
-    buf_printf(b, " sp_String_set_bin(_t%d, lv__sh%d);%s ", tH, tH, nilok ? " }" : "");
+    buf_printf(b, " sp_String_set_bin(_t%d, %s);%s ", tH, sb_held_shadow_cname(tH).s, nilok ? " }" : "");
   }
   free(hb.p); free(pre.p); free(apre.p); free(armb.p);
   return handled ? tH : 0;
@@ -24180,13 +24180,13 @@ static void emit_sb_shim_swap(Buf *b, int indent, int tH, Buf *pre, char *arm) {
   emit_indent(b, indent + 1);
   buf_printf(b, "if (sp_String_is_frozen(_t%d)) sp_raise_frozen_str(_t%d->data);\n", tH, tH);
   emit_indent(b, indent + 1);
-  buf_printf(b, "const char *lv__sb%d = sp_str_concat(sp_String_cstr(_t%d), (&(\"\\xff\")[1]));\n", tH, tH);
+  buf_printf(b, "const char *%s = sp_str_concat(sp_String_cstr(_t%d), (&(\"\\xff\")[1]));\n", sb_shadow_cname(tH).s, tH);
   emit_indent(b, indent + 1);
-  buf_printf(b, "SP_GC_ROOT(lv__sb%d);\n", tH);
+  buf_printf(b, "SP_GC_ROOT(%s);\n", sb_shadow_cname(tH).s);
   buf_puts(b, arm ? arm : "");
   free(arm);
   emit_indent(b, indent + 1);
-  buf_printf(b, "sp_String_set_bin(_t%d, lv__sb%d);\n", tH, tH);
+  buf_printf(b, "sp_String_set_bin(_t%d, %s);\n", tH, sb_shadow_cname(tH).s);
   emit_indent(b, indent);
   buf_puts(b, "}\n");
 }
@@ -25348,7 +25348,7 @@ static int str_mutate_shared_arms(Compiler *c, int id, Buf *b, int indent, const
       const int *rav = rna >= 0 ? nt_arr(nt, rna, "arguments", &rac) : NULL;
       for (int ai = 0; ai < rac; ai++) fx |= subtree_has_side_effect(c, rav[ai]);
       int mark0 = fx ? sb_shim_args_first(c, id, &apre, indent + 1) : g_n_argov;
-      view_bind(recv, "lv__sb%d", tH);
+      view_bind(recv, "%s", sb_shadow_cname(tH).s);
       Buf armb; memset(&armb, 0, sizeof armb);
       int handled = emit_array_mutate_stmt(c, id, &armb, indent + 1);
       view_unbind(mark0);
@@ -25391,7 +25391,7 @@ static int str_mutate_shared_arms(Compiler *c, int id, Buf *b, int indent, const
         int mark = sb_shim_args_first(c, id, &pre, indent + 1);
         int tH = ++g_tmp;
         Buf armb; memset(&armb, 0, sizeof armb);
-        snprintf(g_sb_iv_repl, sizeof g_sb_iv_repl, "lv__sb%d", tH);
+        snprintf(g_sb_iv_repl, sizeof g_sb_iv_repl, "%s", sb_shadow_cname(tH).s);
         g_sb_iv_name = ivn; g_sb_iv_cid = icid;
         int handled = emit_array_mutate_stmt(c, id, &armb, indent + 1);
         g_sb_iv_name = NULL; g_sb_iv_cid = -1;
@@ -25417,7 +25417,7 @@ static int str_mutate_shared_arms(Compiler *c, int id, Buf *b, int indent, const
       int mark = sb_shim_args_first(c, id, &pre, indent + 1);
       int tH = ++g_tmp;
       Buf armb; memset(&armb, 0, sizeof armb);
-      ren_push(sbn, "_sb%d", tH);
+      ren_push(sbn, "%s", sb_shadow_local(tH).s);
       SbShimSave sv_sh = sb_shim_enter(shlv);
       int handled = emit_array_mutate_stmt(c, id, &armb, indent + 1);
       sb_shim_leave(shlv, sv_sh);

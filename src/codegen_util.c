@@ -2002,12 +2002,42 @@ void emit_poly_lift_ref(const char *ref, Buf *b) {
 void emit_local_ref(Compiler *c, int scope_node, const char *name, Buf *b) {
   emit_scope_local_ref(c, scope_node >= 0 ? comp_scope_of(c, scope_node) : NULL, name, b);
 }
+/* The names a shim gives its shadow copy of a String. A Ruby local cannot
+   start with an uppercase letter, so `lv_Sb<T>` (the String's change), and
+   `lv_Sh<T>` (a held chain's, --share-strings), are no program local's C
+   name, where `lv__sb1`, the old spelling, was the C name of a program local
+   `_sb1`.
+   The rename is what rename_local answers for the shim's receiver local
+   (the shadow's name without the `lv_`); every spelling of both, and every
+   test of one, goes through these. */
+ShimShadow sb_shadow_local(int tH) {
+  ShimShadow n;
+  snprintf(n.s, sizeof n.s, "Sb%d", tH);
+  return n;
+}
+ShimShadow sb_shadow_cname(int tH) {
+  ShimShadow n;
+  snprintf(n.s, sizeof n.s, "lv_Sb%d", tH);
+  return n;
+}
+ShimShadow sb_held_shadow_cname(int tH) {
+  ShimShadow n;
+  snprintf(n.s, sizeof n.s, "lv_Sh%d", tH);
+  return n;
+}
+/* Does `text` start as the C name of a shim shadow: `lv_` and the kind's
+   letter (`b` the change shadow, `h` the held chain's, 0 either), `Sb` or
+   `Sh`, then the temp's digits? */
+static int shim_shadow_text(const char *text, char kind) {
+  if (strncmp(text, "lv_S", 4) != 0) return 0;
+  if (kind ? text[4] != kind : text[4] != 'b' && text[4] != 'h') return 0;
+  return isdigit((unsigned char)text[5]);
+}
 /* Is `rn`, what rename_local answers for local `name`, the shadow a
-   shared-handle shim reads and writes that local through (`_sbN`, the
-   shim's `lv__sbN`)? Only as a rename: a local the program itself names
-   `_sb1` is its own. */
+   shared-handle shim reads and writes that local through (`Sb<T>`, the
+   shim's `lv_Sb<T>`)? Only as a rename: no program local is spelled so. */
 int sb_shim_shadow(const char *name, const char *rn) {
-  return rn != name && !strncmp(rn, "_sb", 3) && isdigit((unsigned char)rn[3]);
+  return rn != name && rn[0] == 'S' && rn[1] == 'b' && isdigit((unsigned char)rn[2]);
 }
 /* A shim types its receiver local String for the arm it re-runs, though the
    slot is the handle (sb_shim_enter); it answers the local's shim state as
@@ -2050,7 +2080,7 @@ void emit_scope_local_ref(Compiler *c, Scope *s, const char *name, Buf *b) {
      plain C local the shim declares, even when the local itself lives in a
      cell or a capture field: that slot holds the handle, which the shim
      reads before and writes back after. The cell form spelled the shadow
-     `(*_cell__sbN)`, and the capture form handed the arm the handle slot,
+     `(*_cell_SbN)`, and the capture form handed the arm the handle slot,
      neither of which compiles. */
   const char *rn = rename_local(name);
   if (sb_shim_shadow(name, rn)) {
@@ -3786,15 +3816,15 @@ int str_mut_var_recv(Compiler *c, int recv) {
 int sb_shadowed_reader(int node) {
   for (int i = 0; i < g_n_argov; i++)
     if (g_argov_node[i] == node &&
-        (strncmp(g_argov_text[i], "lv__sb", 6) == 0 || strncmp(g_argov_text[i], "lv__sh", 6) == 0)) return 1;
+        shim_shadow_text(g_argov_text[i], 0)) return 1;
   return 0;
 }
 /* --share-strings: the shadow a held chain's shim reads its receiver as
-   (`lv__shT`, emit_held_self_answer_shim), which every value arm writes its
+   (`lv_ShT`, emit_held_self_answer_shim), which every value arm writes its
    answer back to */
 int sb_held_shadow(int node) {
   for (int i = 0; i < g_n_argov; i++)
-    if (g_argov_node[i] == node && strncmp(g_argov_text[i], "lv__sh", 6) == 0) return 1;
+    if (g_argov_node[i] == node && shim_shadow_text(g_argov_text[i], 'h')) return 1;
   return 0;
 }
 /* The arguments of the String mutator `id` that a shim re-runs on its
@@ -3818,7 +3848,7 @@ int sb_shim_args_first(Compiler *c, int id, Buf *pre, int indent) {
 }
 /* Open the shim over a reader call `recv` that hands out the shared handle
    to String mutator id: the handle's text is appended to sref, and until
-   sb_reader_shim_close the call node reads as the shadow `lv__sbT`, with the
+   sb_reader_shim_close the call node reads as the shadow `lv_SbT`, with the
    handle marks lifted. Answers T, or 0 when `recv` is no such call. A pickup
    that can answer nil raises NoMethodError for id there, as the mutator's
    handle arms do (strbuf_pickup_nil_check). */
@@ -3842,7 +3872,7 @@ int sb_reader_shim_open(Compiler *c, int id, int recv, Buf *sref, SbReaderSave *
   view_push_repr(c, recv, VR_HANDLE_DEMAND, 0);
   sv->ntok = 2;
   if (sv->ty == TY_STRBUF) { view_push(c, recv, TY_STRING); sv->ntok = 3; }
-  view_bind(recv, "lv__sb%d", tH);
+  view_bind(recv, "%s", sb_shadow_cname(tH).s);
   return tH;
 }
 void sb_reader_shim_close(Compiler *c, int recv, const SbReaderSave *sv) {

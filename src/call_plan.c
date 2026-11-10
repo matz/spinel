@@ -2285,11 +2285,37 @@ static int pr_in_table(Compiler *c, int cls, unsigned side, const char *name, in
          (wr && comp_is_writer(k, base) && (parent < 0 || !comp_writer_in_chain(c, parent, base, NULL)) &&
           !refl_member_of_struct_superclass(c, cls, base));
 }
+/* Is presence site id in a block its call may run after it answers, as
+   the types tell: the block of a call on a receiver typed no one kind
+   (poly or unknown; a lazy enumerator has no type of its own: `l =
+   [1].lazy; l.map { }`), or of a stage of a lazy chain a desugar runs
+   eagerly over a finite source (its first stage is marked lazy_stage),
+   where CRuby runs it once the chain is forced; up to the def or lambda
+   whose body holds it? The record places such a block at its call, an
+   iterator's name read as run at once, so its none there is not the
+   site's. */
+static int pr_in_untyped_block(Compiler *c, int id) {
+  int n;
+  const int *par = elab_node_parents(c, &n);
+  for (int a = id; a >= 0 && a < n && par[a] >= 0; a = par[a]) {
+    NodeKind k = nt_kind(c->nt, a);
+    int call = par[a], rv;
+    if (k == NK_DefNode || k == NK_LambdaNode) return 0;
+    if (k != NK_BlockNode || nt_kind(c->nt, call) != NK_CallNode || nt_ref(c->nt, call, "block") != a ||
+        (rv = nt_ref(c->nt, call, "receiver")) < 0) continue;
+    TyKind t = comp_ntype(c, rv);
+    if (t == TY_POLY || t == TY_UNKNOWN) return 1;
+    for (int s = call; s >= 0 && nt_kind(c->nt, s) == NK_CallNode; s = nt_ref(c->nt, s, "receiver"))
+      if (nt_int(c->nt, s, "lazy_stage", 0)) return 1;
+  }
+  return 0;
+}
 /* See call_plan.h. */
 PresenceKind cplan_presence(Compiler *c, int id, int cls, unsigned side, const char *name, CplanPresence *out) {
   MethodLookup ml = { .def_class = -1 };
   int tmi = ct_table(c, cls, name, side, NULL);
   *out = (CplanPresence){ .table = pr_in_table(c, cls, side, name, tmi) };
+  if (pr_in_untyped_block(c, id)) return PR_TABLE;
   call_target(c, id, cls, name, side | CT_REACH, &ml);
   if (ml.kind == ML_TABLE || ml.kind == ML_ENTRY) return PR_TABLE;
   if (ml.kind == ML_NONE && tmi >= 0) return PR_ABSENT;   /* (the record: none where id runs) */

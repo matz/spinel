@@ -998,7 +998,8 @@ int cplan_cmethod_presence(Compiler *c, int id, int cls, const char *name, int i
    cls's own methods alone). PR_PRESENT: a method or an accessor; PR_ABSENT:
    none (the builtin tiers may answer), as the tables have it or because the
    record proves none is live where id runs; PR_TABLE: the record gives no
-   proof and the reader keeps the final tables' answer. out->table is that
+   proof and the reader keeps the final tables' answer, as in a block a
+   call on a receiver of no one type may run later. out->table is that
    answer for every kind (a hidden method, a Data class's generated iterator
    and, under CT_OWN, a module's copy are no method of the class's). */
 typedef enum { PR_PRESENT, PR_ABSENT, PR_TABLE } PresenceKind;

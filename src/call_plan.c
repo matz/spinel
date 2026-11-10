@@ -2257,6 +2257,16 @@ int cplan_class_row(Compiler *c, int id, int recv, const char *name) {
   const NodeTable *nt = c->nt;
   int ci = class_recv_static_ci(c, recv);
   if (ci >= 0 && call_target(c, id, ci, name, CT_CMETHOD, NULL) >= 0) return 0;
+  /* a Class value known only at run time may be one that defines the method
+     (`def self.include?`): the class-value dispatch answers it, its own
+     method where it has one and the row elsewhere. Not a receiver an
+     enclosing dispatch bound: its arms took the classes that define one. */
+  if (ci < 0 && recv >= 0) {
+    int bound = 0;
+    for (int i = 0; i < g_n_argov && !bound; i++) bound = g_argov_node[i] == recv;
+    for (int k = 0; !bound && k < c->nclasses; k++)
+      if (call_target(c, id, k, name, CT_CMETHOD, NULL) >= 0) return 0;
+  }
   int fl = bop_flags(TY_CLASS, name);
   if ((fl & BOPF_CLASS_ONLY) && !cplan_recv_class(c, id, recv)) return 0;
   return !((fl & BOPF_PRIVATE) && recv >= 0 && nt_kind(nt, recv) != NK_SelfNode && !nt_ignore_visibility(nt, id) && !nt_str(nt, id, "send_blind"));

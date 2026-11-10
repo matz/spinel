@@ -2106,15 +2106,12 @@ static int emit_poly_cls_value_builtin(Compiler *c, int id, const char *name, in
 }
 
 /* The test a class-tag arm keys class k on: its index, or its name for a
-   Class value that carries one (`obj.class` of a poly object,
-   sp_poly_class_val), followed by ` ? `. */
+   Class value boxed by its name, followed by ` ? `. */
 static void emit_cls_value_test(Compiler *c, int k, int tv, Buf *b) {
   const char *crn = class_ruby_name(c, k);
   if (!crn) crn = c->classes[k].name;
-  int bid = cv_reopen_builtin_id(c, k);
-  buf_printf(b, "(_t%d.cls_id == %d || ", tv, k);
-  if (bid) buf_printf(b, "_t%d.cls_id == %d || ", tv, bid);
-  buf_printf(b, "(_t%d.cls_id == SP_CLASS_BY_NAME && _t%d.v.s && strcmp(_t%d.v.s, \"%s\") == 0)) ? ", tv, tv, tv, crn);
+  buf_printf(b, "(_t%d.cls_id == %d || (_t%d.cls_id == SP_CLASS_BY_NAME && _t%d.v.s && "
+                "strcmp(_t%d.v.s, \"%s\") == 0)) ? ", tv, k, tv, tv, tv, crn);
 }
 /* One class value's arm of a class-tag switch (a class-value trial arm of
    cplan_poly_cmeth): the call re-entered on the receiver read as the
@@ -4177,7 +4174,7 @@ int emit_lazy_class_expr(Compiler *c, int id, Buf *b) {
     if (ac != 0) return 0; }
   int recv = nt_ref(nt, id, "receiver");
   if (recv < 0 || !chain_is_lazy_valued(c, recv)) return 0;
-  buf_puts(b, "((sp_Class){(sp_int)-1, SPL(\"Enumerator::Lazy\")})");
+  emit_builtin_class_value(c, "Enumerator::Lazy", b);
   return 1;
 }
 

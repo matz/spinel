@@ -2589,7 +2589,8 @@ int emit_call_enum_random_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
       /* a NULL slot is nil, whose class is NilClass */
       int tr = ++g_tmp;
       buf_printf(b, "({ sp_Random *_t%d = ", tr); emit_expr(c, recv, b);
-      buf_printf(b, "; _t%d ? ((sp_Class){0, SPL(\"Random\")}) : ((sp_Class){SP_BCLS_NILCLASS, SPL(\"NilClass\")}); })", tr);
+      buf_printf(b, "; _t%d ? ", tr); emit_builtin_class_value(c, "Random", b);
+      buf_puts(b, " : "); emit_builtin_class_value(c, "NilClass", b); buf_puts(b, "; })");
       return 1;
     }
     /* equal? and eql? are identity; == compares by internal PRNG state

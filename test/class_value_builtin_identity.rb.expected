@@ -1,0 +1,36 @@
+[Array, "Array", true, true, :array]
+[[true, true, true, :y], [false, false, false, :n], [true, true, true, :y], [false, false, false, :n], [false, false, false, :n], [false, false, false, :n], [false, false, false, :n], [false, false, false, :n]]
+[Hash, "Hash", true, true, :hash]
+[[false, false, false, :n], [true, true, true, :y], [false, false, false, :n], [true, true, true, :y], [false, false, false, :n], [false, false, false, :n], [false, false, false, :n], [false, false, false, :n]]
+[MyA, "MyA", true, true, :mya]
+[[false, false, false, :n], [false, false, false, :n], [true, true, true, :y], [false, false, false, :n], [false, false, false, :n], [false, false, false, :n], [false, false, false, :n], [false, false, false, :n]]
+[MyH, "MyH", true, true, :other]
+[[false, false, false, :n], [false, false, false, :n], [false, false, false, :n], [true, true, true, :y], [false, false, false, :n], [false, false, false, :n], [false, false, false, :n], [false, false, false, :n]]
+[Foo, "Foo", true, true, :foo]
+[[false, false, false, :n], [false, false, false, :n], [false, false, false, :n], [false, false, false, :n], [true, true, true, :y], [false, false, false, :n], [false, false, false, :n], [false, false, false, :n]]
+[Integer, "Integer", true, true, :other]
+[[false, false, false, :n], [false, false, false, :n], [false, false, false, :n], [false, false, false, :n], [false, false, false, :n], [true, true, true, :y], [false, false, false, :n], [false, false, false, :n]]
+[String, "String", true, true, :other]
+[[false, false, false, :n], [false, false, false, :n], [false, false, false, :n], [false, false, false, :n], [false, false, false, :n], [false, false, false, :n], [true, true, true, :y], [false, false, false, :n]]
+[NilClass, "NilClass", true, true, :other]
+[[false, false, false, :n], [false, false, false, :n], [false, false, false, :n], [false, false, false, :n], [false, false, false, :n], [false, false, false, :n], [false, false, false, :n], [true, true, true, :y]]
+true
+true
+true
+true
+:ah
+1
+true
+true
+:y
+MyA
+:ma
+Array
+:ah
+:oh
+true
+3
+[:ah, :ah]
+Numeric
+:oh
+true

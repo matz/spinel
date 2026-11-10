@@ -3555,7 +3555,7 @@ static int emit_constant_value(Compiler *c, int id, Buf *b, Buf *checks, const N
              OpenStruct): a name-backed Class value -- sp_class_eq and the
              boxed form both compare by name, and an instance's #class
              answers the same (`Random.new.class`) */
-          buf_printf(b, "((sp_Class){%d, SPL(\"%s\")})", builtin_class_val_id(nm), nm);
+          emit_builtin_class_value(c, nm, b);
         }
         else {
           /* A constant defined NOWHERE in the program: spinel is closed-world
@@ -3612,13 +3612,13 @@ static int emit_constant_value(Compiler *c, int id, Buf *b, Buf *checks, const N
       snprintf(qbuf, sizeof qbuf, "%s::%s", par_nmc, nm);
       int qid = builtin_class_id(qbuf);
       if (qid != 0) {
-        buf_printf(b, "((sp_Class){(sp_int)%d, SPL(\"%s\")})", qid, qbuf);
+        emit_builtin_class_value(c, qbuf, b);
         return 1;
       }
       /* the Errno:: family (and its id-less siblings) is a name-backed
          Class value; raised exceptions carry this same qualified name */
       if (is_builtin_exception_name(qbuf)) {
-        buf_printf(b, "((sp_Class){%d, SPL(\"%s\")})", builtin_class_val_id(qbuf), qbuf);
+        emit_builtin_class_value(c, qbuf, b);
         return 1;
       }
     }
@@ -3726,18 +3726,16 @@ static int emit_constant_value(Compiler *c, int id, Buf *b, Buf *checks, const N
           }
           else buf_printf(&rhs, "%scst_%s", slot ? "&" : "", ckey[i]);
           /* a constant not assigned yet is as missing as one the class lacks */
-          buf_puts(b, " ");
-          emit_cv_case_labels(c, ccls[i], ccls, nc, b);
           if (const_has_flag(comp_const(c, ckey[i])) && topc && i >= nc - (obj_k >= 0 ? 2 : 1))
             /* (Object's own: CRuby's message names the constant alone) */
-            buf_printf(b, "if (!cst_%s__set) sp_raise_cls(\"NameError\", \"uninitialized constant %s\");"
-                          " _t%d = %s; break;", ckey[i], nm, tr, rhs.p);
+            buf_printf(b, " case %d: if (!cst_%s__set) sp_raise_cls(\"NameError\", \"uninitialized constant %s\");"
+                          " _t%d = %s; break;", ccls[i], ckey[i], nm, tr, rhs.p);
           else if (const_has_flag(comp_const(c, ckey[i])))
-            buf_printf(b, "if (!cst_%s__set) sp_raise_cls(\"NameError\", sp_sprintf("
+            buf_printf(b, " case %d: if (!cst_%s__set) sp_raise_cls(\"NameError\", sp_sprintf("
                           "\"uninitialized constant %%s::%s\", %s(_t%d)));"
-                          " _t%d = %s; break;", ckey[i], nm, comp_class_display_fn(c), tk, tr, rhs.p);
+                          " _t%d = %s; break;", ccls[i], ckey[i], nm, comp_class_display_fn(c), tk, tr, rhs.p);
           else
-            buf_printf(b, "_t%d = %s; break;", tr, rhs.p);
+            buf_printf(b, " case %d: _t%d = %s; break;", ccls[i], tr, rhs.p);
           free(rhs.p);
         }
         /* A class with no such constant is CRuby's NameError, not the
@@ -3945,7 +3943,7 @@ static int emit_constant_value(Compiler *c, int id, Buf *b, Buf *checks, const N
          (Enumerator::Chain): the name-backed value the bare form above
          gives Random or Process */
       if (is_builtin_class_name(fullname) || is_builtin_module_name(fullname)) {
-        buf_printf(b, "((sp_Class){%d, SPL(\"%s\")})", builtin_class_val_id(fullname), fullname);
+        emit_builtin_class_value(c, fullname, b);
         return 1;
       }
       if (!const_ref_is_rescued(c, id) && !const_ref_is_guarded(c, id))

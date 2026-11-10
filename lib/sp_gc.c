@@ -104,6 +104,7 @@ int (*sp_obj_conv_fn)(int cls_id, void *p, int which, sp_RbVal *out) = NULL;
 const char *(*sp_obj_cls_name_fn)(int cls_id) = NULL;
 int (*sp_bsub_cls_fn)(sp_RbVal v) = NULL;
 int (*sp_cls_visible_fn)(int cls_id) = NULL;
+int (*sp_cls_reopen_fn)(int bid) = NULL;
 int (*sp_class_le_id_fn)(int sub, int super) = NULL;
 sp_RbVal (*sp_class_cmp_fn)(sp_RbVal a, sp_RbVal b) = NULL;
 int (*sp_class_kind_of_name_fn)(int cls, const char *name) = NULL;

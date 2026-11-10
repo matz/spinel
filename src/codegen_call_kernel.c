@@ -1529,7 +1529,7 @@ int emit_call_kernel_flow_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
       }
       /* the remaining query/mutation surface (#2832) */
       if (enm && sp_streq(enm, "class") && eac == 0) {
-        buf_puts(b, "((sp_Class){(sp_int)-116, SPL(\"Object\")})");   /* ENV is an Object singleton */
+        emit_builtin_class_value(c, "Object", b);   /* ENV is an Object singleton */
         return 1;
       }
       if (enm && sp_streq(enm, "frozen?") && eac == 0) {

@@ -4312,16 +4312,37 @@ int comp_class_is_leaf(Compiler *c, int cid) {
   for (int j = 0; j < c->nclasses; j++) if (c->classes[j].parent == cid) return 0;
   return 1;
 }
-/* The builtin class id a reopened builtin's class value carries when it is
-   read off a value (`[1].class` is -104), 0 for a class that has none or
-   whose values are named otherwise (a module, an exception, an IO). The
-   constant `Array` is the reopening's own class index; the two name one
-   class, so an arm for the reopening answers to both. */
+/* The builtin class id of reopened builtin k whose class value a value
+   answers (`[1].class`), 0 for a class that has none or whose values are
+   named otherwise (a module, an exception, an IO). Such a class value is
+   named by the reopening's own class index, as the constant `Array` is: the
+   compiler writes the index (cv_builtin_class_index), and the generated
+   sp_cls_reopen maps the id the runtime finds to it. */
 int cv_reopen_builtin_id(Compiler *c, int k) {
   const char *nm = c->classes[k].name;
   if (!is_builtin_reopen(nm) || is_builtin_exception_name(nm) || io_family_name(nm) ||
       comp_class_is_module(c, &c->classes[k])) return 0;
   return builtin_class_id(nm);
+}
+/* Does the program reopen a builtin whose class value is named by the
+   reopening's index: the generated sp_cls_reopen then maps the builtin's id
+   to it */
+int comp_reopens_cv_builtin(Compiler *c) {
+  for (int k = 0; k < c->nclasses; k++) if (cv_reopen_builtin_id(c, k)) return 1;
+  return 0;
+}
+/* ...and the other way: the class index that names builtin class `name`'s
+   class value, -1 when the program does not reopen it and the value carries
+   the builtin's id and name */
+int cv_builtin_class_index(Compiler *c, const char *name) {
+  int k = comp_builtin_class_named(c, name);
+  return k >= 0 && sp_streq(c->classes[k].name, name) && cv_reopen_builtin_id(c, k) ? k : -1;
+}
+/* ...and the id a class value of builtin `name` carries: that index, else
+   the builtin's own id */
+int cv_builtin_class_id(Compiler *c, const char *name) {
+  int k = cv_builtin_class_index(c, name);
+  return k >= 0 ? k : builtin_class_id(name);
 }
 /* Does a class-value switch give class k an arm: every class but a reopened
    builtin that carries no class value id */

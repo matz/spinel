@@ -13425,8 +13425,7 @@ static void emit_cls_answers_dispatch(Compiler *c, Buf *b) {
     int sn = class_def_super(c->nt, ci->def_node);
     const char *pn = sn >= 0 ? nt_str(c->nt, sn, "name") : NULL;
     if (!pn || !sp_streq(pn, "Integer")) continue;
-    buf_printf(b, "      sp_PolyArray_push(a, sp_box_class(((sp_Class){%d, SPL(\"%s\")})));\n",
-               i, class_ruby_name(c, i));
+    buf_printf(b, "      sp_PolyArray_push(a, sp_box_class(((sp_Class){%d})));\n", i);
   }
   buf_puts(b, "      return a;\n    }\n  }\n"
               "  sp_raise_nomethod(sp_nomethod_msg(\"subclasses\", v));\n  return a;\n}\n");
@@ -16388,9 +16387,11 @@ void emit_super(Compiler *c, int id, Buf *b) {
       Repr sr = repr_of(c, id);
       if (sp_streq(uname, "ancestors"))
         buf_printf(b, "; %s(sp_class_ancestors(_t%d)); })", sr.kind == RK_BOXED ? "sp_box_poly_array" : "", tc);
-      else
-        buf_printf(b, "; %s(_t%d.cls_id>=0?sp_class_superclass(_t%d):sp_builtin_superclass(_t%d)); })",
-                   sr.kind == RK_BOXED ? "sp_box_class" : "", tc, tc, tc);
+      else {
+        buf_printf(b, "; %s(", sr.kind == RK_BOXED ? "sp_box_class" : "");
+        emit_cv_canon(c, b, "_t%d.cls_id>=0?sp_class_superclass(_t%d):sp_builtin_superclass(_t%d)", tc, tc, tc);
+        buf_puts(b, "); })");
+      }
       return;
     }
     /* `super` in a class-level ` override is Kernel#` too */
@@ -18066,6 +18067,8 @@ void emit_regex_section(Compiler *c, Buf *b) {
     buf_puts(b, "static sp_RbVal sp_arysub_dup_dispatch(sp_RbVal v, int keep_frozen, sp_bool *handled);\n");
   if (g_needs_class_machinery)
     buf_puts(b, "static int sp_poly_is_a(sp_RbVal obj, sp_Class klass);\n");
+  if (g_needs_class_machinery && comp_reopens_cv_builtin(c))
+    buf_puts(b, "static int sp_cls_reopen(int bid);\n");
   if (program_has_own_cmethod_eqq(c))
     buf_puts(b, "static int sp_cmeth_eqq_dispatch(sp_RbVal e, sp_Class cl, sp_RbVal *out);\n");
   buf_puts(b, "static inline void *sp_poly_unbox_cls(sp_RbVal v, int cls, const char *want);\n");
@@ -18240,6 +18243,7 @@ void emit_regex_section(Compiler *c, Buf *b) {
   }
   if (c->nclasses > 0) buf_puts(b, "  sp_obj_cls_name_fn = sp_obj_cls_name_rt;\n");
   if (program_has_arysub(c)) buf_puts(b, "  sp_bsub_cls_fn = sp_bsub_cls_of;\n");   /* #7449 */
+  if (g_needs_class_machinery && comp_reopens_cv_builtin(c)) buf_puts(b, "  sp_cls_reopen_fn = sp_cls_reopen;\n");
   if (g_needs_class_machinery && program_has_masquerade(c))
     buf_puts(b, "  sp_cls_visible_fn = sp_cls_visible;\n");
   if (g_uses_marshal) {
@@ -21146,6 +21150,19 @@ static void emit_class_machinery(const NodeTable *nt, Compiler *c, Buf *b, char 
     }
     buf_puts(b, "  default: return cls_id;\n  }\n}\n");
   }
+  if (comp_reopens_cv_builtin(c)) {
+    buf_puts(b, "static int sp_cls_reopen(int bid){\n  switch(bid){\n");
+    for (int i = 0; i < c->nclasses; i++) {
+      int bid = cv_reopen_builtin_id(c, i);
+      if (bid) buf_printf(b, "  case %d: return %d;\n", bid, i);
+    }
+    buf_puts(b, "  default: return -1;\n  }\n}\n");
+    /* ...and a class value the builtin chain answers (a superclass), named
+       as the compiler names it (emit_cv_canon) */
+    buf_puts(b, "static sp_Class sp_cls_canon(sp_Class s){\n"
+                 "  if(s.cls_id<0){int k=sp_cls_reopen((int)s.cls_id);if(k>=0)return ((sp_Class){k});}\n"
+                 "  return s;\n}\n");
+  }
   /* Forward decl: sp_builtin_superclass is defined below but used by
      sp_class_superclass (a reopened builtin) and sp_class_is_ancestor. */
   buf_puts(b, "static sp_Class sp_builtin_superclass(sp_Class c);\n");
@@ -21173,8 +21190,9 @@ static void emit_class_machinery(const NodeTable *nt, Compiler *c, Buf *b, char 
         buf_printf(b, "  case %d: return ((sp_Class){%d});\n", i, par);
       }
       else if (class_builtin_superclass_name(c, i)) {
-        buf_printf(b, "  case %d: return ((sp_Class){%d, SPL(\"%s\")});\n", i,
-                   builtin_class_val_id(class_builtin_superclass_name(c, i)), class_builtin_superclass_name(c, i));
+        buf_printf(b, "  case %d: return ", i);
+        emit_builtin_class_value(c, class_builtin_superclass_name(c, i), b);
+        buf_puts(b, ";\n");
       }
       else {
         buf_printf(b, "  case %d: return ((sp_Class){%d});\n", i, class_builtin_superclass(c, i));
@@ -21451,8 +21469,12 @@ static void emit_class_machinery(const NodeTable *nt, Compiler *c, Buf *b, char 
        match (sp_class_le_mod). The module-aware `<=` built the whole
        ancestors array -- a PolyArray and a box per ancestor -- on every
        dynamic is_a?, ===, kind_of? and Class comparison, to scan it once. */
-    buf_puts(b, "static int sp_class_anc_step(sp_PolyArray *a,sp_Class want,sp_RbVal v){\n"
-                "  if(a){sp_PolyArray_push(a,v);return 0;}\n"
+    /* an ancestor that is a builtin the program reopens goes into the
+       array as the reopening's index, as Class#superclass answers it */
+    buf_puts(b, "static int sp_class_anc_step(sp_PolyArray *a,sp_Class want,sp_RbVal v){\n");
+    if (comp_reopens_cv_builtin(c))
+      buf_puts(b, "  if(a&&v.tag==SP_TAG_CLASS&&v.cls_id<0){int k=sp_cls_reopen((int)v.cls_id);if(k>=0)v=sp_box_class(((sp_Class){k}));}\n");
+    buf_puts(b, "  if(a){sp_PolyArray_push(a,v);return 0;}\n"
                 "  return v.tag==SP_TAG_CLASS&&sp_class_eq(sp_unbox_class(v),want);\n}\n");
     buf_puts(b, "static int sp_class_anc_walk(sp_Class c,sp_Class want,sp_PolyArray *a){\n");
     buf_puts(b, "  sp_Class cur=c;\n");

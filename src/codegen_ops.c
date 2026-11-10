@@ -328,6 +328,24 @@ static int emit_op_pstatus_success(Compiler *c, const BopCtx *x, Buf *b) {
   return 1;
 }
 
+/* #class of a builtin receiver (BOPE_CLASS_VALUE): the class value of the
+   builtin the row's arg names (emit_builtin_class_value), and NilClass's
+   for a slot whose NULL is nil ($? before any child was waited for) */
+static int emit_op_class_value(Compiler *c, const BopCtx *x, Buf *b) {
+  char *r = op_recv_text(c, x);
+  int t = ++g_tmp;
+  buf_puts(b, "({ "); emit_ctype(c, x->rt, b);
+  buf_printf(b, " _t%d = %s; ", t, r);
+  if (ty_null_is_nil(x->rt)) {
+    buf_printf(b, "_t%d ? ", t); emit_builtin_class_value(c, x->op->arg, b);
+    buf_puts(b, " : "); emit_builtin_class_value(c, "NilClass", b);
+  }
+  else { buf_printf(b, "(void)_t%d; ", t); emit_builtin_class_value(c, x->op->arg, b); }
+  buf_puts(b, "; })");
+  free(r);
+  return 1;
+}
+
 /* Process::Status#== / #eql? with no operand: false, the receiver still
    evaluated */
 static int emit_op_pstatus_eq(Compiler *c, const BopCtx *x, Buf *b) {
@@ -429,6 +447,7 @@ static int (*const bop_emitters[BOPE__COUNT])(Compiler *, const BopCtx *, Buf *)
   [BOPE_RANGE_FREEZE] = emit_op_range_freeze,
   [BOPE_TEMPLATE] = emit_op_template,
   [BOPE_PSTATUS_SUCCESS] = emit_op_pstatus_success,
+  [BOPE_CLASS_VALUE] = emit_op_class_value,
   [BOPE_PSTATUS_EQ] = emit_op_pstatus_eq,
   [BOPE_THREAD_SET_REPORT] = emit_op_thread_set_report,
   [BOPE_FLOAT_RATIONALIZE] = emit_op_float_rationalize,

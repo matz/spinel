@@ -766,6 +766,10 @@ extern int (*sp_bsub_cls_fn)(sp_RbVal v);
 /* the class id Ruby sees for a user class id: a synthesized singleton class
    answers as the class it hides behind (generated sp_cls_visible) */
 extern int (*sp_cls_visible_fn)(int cls_id);
+/* the class index of the program's reopening of builtin class id bid, -1
+   when it has none: such a class value is named by the index, as the
+   constant is (generated sp_cls_reopen) */
+extern int (*sp_cls_reopen_fn)(int bid);
 /* Is user class `sub` the class `super` or a descendant of it? The generated
    class bank installs it; NULL means only an exact id can be trusted. A
    pointer array of one class checks a stored object against it (#4486). */

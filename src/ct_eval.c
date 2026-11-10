@@ -495,16 +495,20 @@ static int ct_call_values(const NodeTable *nt, CtEnv *e, int call, CtVal *pv, in
 /* Bind def's parameters in the running frame, as CRuby does: required
    ones, then optional ones (a default evaluated in the frame, after the
    parameters before it), then keywords (a required one must be passed, and
-   every key passed must be one). 0 for a parameter of another kind (rest,
-   post, `**`, block, `...`) or a call it does not take. */
+   every key passed must be one); a rest takes the positionals left over as
+   an Array, each a value the evaluator knows (`def forward(*names, to:)`).
+   0 for a parameter of another kind (post, `**`, block, `...`) or a call
+   it does not take. */
 static int ct_bind_params(const NodeTable *nt, CtEnv *e, int def, const CtVal *pv, int np, const char **kn, const CtVal *kv, int nk) {
   int ps = nt_ref(nt, def, "parameters"), rn = 0, on = 0, kw = 0, pn = 0, used = 0;
   const int *req = ps >= 0 ? nt_arr(nt, ps, "requireds", &rn) : NULL;
   const int *opt = ps >= 0 ? nt_arr(nt, ps, "optionals", &on) : NULL;
   const int *kws = ps >= 0 ? nt_arr(nt, ps, "keywords", &kw) : NULL;
   if (ps >= 0) nt_arr(nt, ps, "posts", &pn);
-  if (pn || (ps >= 0 && (nt_ref(nt, ps, "rest") >= 0 || nt_ref(nt, ps, "keyword_rest") >= 0 || nt_ref(nt, ps, "block") >= 0)) ||
-      np < rn || np > rn + on || (nk && !kw))
+  int rest = ps >= 0 ? nt_ref(nt, ps, "rest") : -1;
+  const char *rname = rest >= 0 && nt_kind(nt, rest) == NK_RestParameterNode ? nt_str(nt, rest, "name") : NULL;
+  if (pn || (rest >= 0 && !rname) || (ps >= 0 && (nt_ref(nt, ps, "keyword_rest") >= 0 || nt_ref(nt, ps, "block") >= 0)) ||
+      np < rn || (np > rn + on && rest < 0) || (nk && !kw))
     return 0;
   for (int i = 0; i < rn; i++)
     if (nt_kind(nt, req[i]) != NK_RequiredParameterNode || !nt_str(nt, req[i], "name") ||
@@ -515,6 +519,18 @@ static int ct_bind_params(const NodeTable *nt, CtEnv *e, int def, const CtVal *p
     if (rn + i < np) d = pv[rn + i];
     else if (!ct_eval(nt, e, nt_ref(nt, opt[i], "value"), &d) || d.k != CT_VALUE) return 0;
     if (nt_kind(nt, opt[i]) != NK_OptionalParameterNode || !pname || !ct_env_set(e, pname, d)) return 0;
+  }
+  if (rname) {
+    int from = rn + on, cnt = np > from ? np - from : 0;
+    CtVal r; memset(&r, 0, sizeof r);
+    r.mv = mv_nil(); r.mv.k = MV_ARR; r.mv.n = cnt;
+    r.mv.a = calloc((size_t)cnt + 1, sizeof(Mv));
+    if (!r.mv.a) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    for (int i = 0; i < cnt; i++) {
+      if (pv[from + i].k != CT_VALUE) return 0;
+      r.mv.a[i] = pv[from + i].mv;
+    }
+    if (!ct_env_set(e, rname, r)) return 0;
   }
   for (int i = 0; i < kw; i++) {
     const char *kname = nt_str(nt, kws[i], "name");

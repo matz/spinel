@@ -22909,6 +22909,14 @@ static SP_NOINLINE void sp_curry_call_target(sp_Curry *c) {
     slots[i] = (e.tag == SP_TAG_OBJ || e.tag == SP_TAG_STR) ? (sp_int)(uintptr_t)e.v.p : sp_poly_slot_arg(e);
     sp_proc_arg_set(i, e);
   }
+  /* CRuby's curry collects its arguments as plain positionals -- a trailing
+     `k: 5` is a Hash among them -- and calls the target with that list, so
+     the target must not read the last one as keywords (kwpos 1: positional,
+     not 0: not said). Only a callee that reads the flag is given it: a
+     Method proc without a thunk runs a stamped lane, which never clears
+     it, and a 1 left there reached the next call (sp_bm_enter). */
+  sp_BoundMethod *tm = c->target->fn == (void *)sp_method_proc_tramp ? (sp_BoundMethod *)c->target->cap : NULL;
+  _sp_proc_kwpos = tm && !(tm->thunk && !tm->unbound) ? 0 : 1;
   /* the target publishes its (boxed) result through the return slot */
   sp_proc_call(c->target, n, slots);
 }

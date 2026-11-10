@@ -3,7 +3,9 @@
 # brought by define_singleton_method after the list is not in it yet, as a
 # call of it there raises. The `false` form lists the class's own methods
 # alone, whatever a superclass or an extended module holds. Lines marked
-# "row" are a builtin class's own class methods, there from the start.
+# "row" are a builtin class's own class methods, there from the start. A
+# list that runs after its point (a lazy chain's block, an END body) lists
+# what is defined when it runs.
 
 # a def after the list, both forms; a subclass and its parent's later def
 class A1; end
@@ -81,3 +83,12 @@ $blk.call
 p String.singleton_methods.include?(:try_convert)   # row
 class String; def self.try_convert(x) = x; end
 p String.singleton_methods.include?(:try_convert)
+
+# run after their point: a lazy chain's block, forced after the defs, and an
+# END body see the class methods defined before they run
+class C12; end
+e12 = [1].lazy.map { |x| C12.singleton_methods(false).sort }
+g12 = [1].lazy.filter_map { |x| C12.singleton_methods(false).include?(:v) ? C12.v : nil }
+END { p C12.singleton_methods(false).sort, (C12.singleton_methods(false).include?(:w) ? C12.w : :none) }
+class C12; def self.v = 9; def self.w = 8; end
+p e12.first, g12.first

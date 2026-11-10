@@ -11825,6 +11825,11 @@ TyKind infer_uncached(Compiler *c, int id) {
     if (wcls < 0) return infer_type(c, nt_ref(nt, id, "value"));
     ClassInfo *ci = &c->classes[wcls];
     int iv = nm ? comp_ivar_index(ci, nm) : -1;
+    /* an ivar only nil is written to has no slot (it holds nothing): the
+       write answers its value, the nil (`def root = @root ||= nil`, which
+       typed the method void and its caller's `root.nil?` unknown) */
+    if (iv < 0 && nk != NK_InstanceVariableOperatorWriteNode && infer_type(c, nt_ref(nt, id, "value")) == TY_NIL)
+      return TY_NIL;
     /* a strbuf slot's write, like its read, is the String face (the handle
        rides _sp_ret_strbuf): the raw STRBUF typed a method whose body is the
        write `sp_String *` while its callers read the face (#4567) */

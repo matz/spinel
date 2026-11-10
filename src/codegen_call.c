@@ -2483,6 +2483,7 @@ const char *const comparable_names[] = {
 
 #define BAK(...)
 #define BAP(...)
+#define BAL(...)
 /* Method#arity reads the introspection column of the shared facts. */
 #define BAI(c,m,a,...) {c,m,a},
 #define BAM(c,m,a) {c,m,a},
@@ -20539,7 +20540,8 @@ static int emit_range_step_bad_stride(Compiler *c, int id, int recv, int arg,
 typedef struct { const char *cls; const char *m; int min; int max;
                  const char *lo_exp; const char *hi_exp;
                  int blk_min; int blk_max;
-                 const char *blk_lo_exp; const char *blk_hi_exp; } SpAritySpec;
+                 const char *blk_lo_exp; const char *blk_hi_exp;
+                 const char *feature; } SpAritySpec;
 
 /* A call whose argument count CRuby's own method cannot take: evaluate the
    receiver and arguments for effect, then raise CRuby's ArgumentError --
@@ -20559,12 +20561,32 @@ typedef struct { const char *cls; const char *m; int min; int max;
 static const SpAritySpec
 sp_builtin_arity_spec_tbl[] = {
 #include "builtin_arity.inc"
-  {NULL, NULL, 0, 0, NULL, NULL, 0, 0, NULL, NULL}
+  {NULL, NULL, 0, 0, NULL, NULL, 0, 0, NULL, NULL, NULL}
 };
 #undef BAI
 #undef BAM
 #undef BAS
 #undef BAC
+/* The counts of the methods a library adds to a builtin class (BAL: io/console's
+   IO#winsize), each with its library: the count check reads them where the
+   program has the library, and nothing else does */
+#undef BAL
+#define BAI(...)
+#define BAM(...)
+#define BAS(...)
+#define BAC(...)
+#define BAL(f, ...) {__VA_ARGS__, f},
+static const SpAritySpec
+sp_builtin_lib_arity_spec_tbl[] = {
+#include "builtin_arity.inc"
+  {NULL, NULL, 0, 0, NULL, NULL, 0, 0, NULL, NULL, NULL}
+};
+#undef BAI
+#undef BAM
+#undef BAS
+#undef BAC
+#undef BAL
+#define BAL(...)
 /* Method#arity of a Numeric method that Integer and Float inherit (abs2,
    quo, +@, step): the Method#arity rows are each class's own methods, so
    these have only the counts the class accepts. One count is the arity, a
@@ -20699,7 +20721,7 @@ int builtin_method_names(const char *cls, const char **out, int cap) {
 static const SpAritySpec
 sp_builtin_cmeth_arity_spec_tbl[] = {
 #include "builtin_arity.inc"
-  {NULL, NULL, 0, 0, NULL, NULL, 0, 0, NULL, NULL}
+  {NULL, NULL, 0, 0, NULL, NULL, 0, 0, NULL, NULL, NULL}
 };
 #undef BAI
 #undef BAM
@@ -20720,6 +20742,7 @@ static const struct { const char *cls; const char *m; } sp_builtin_kwpos_tbl[] =
 #undef BAS
 #undef BAC
 #undef BAK
+#undef BAL
 #undef BAP
 static int kwh_counts(const char *cls, const char *name) {
   int fa, fixed = 0;
@@ -20740,6 +20763,7 @@ static int kwh_counts(const char *cls, const char *name) {
 #define BAS(...)
 #define BAC(...)
 #define BAK(...)
+#define BAL(...)
 #define BAP(c,m,p,cside) {c,m,p,cside},
 static const struct { const char *owner, *m, *params; int cside; } sp_builtin_params_tbl[] = {
 #include "builtin_arity.inc"
@@ -20750,6 +20774,7 @@ static const struct { const char *owner, *m, *params; int cside; } sp_builtin_pa
 #undef BAS
 #undef BAC
 #undef BAK
+#undef BAL
 #undef BAP
 /* The parameters CRuby lists for owner's instance method m, as
    sp_BoundMethod.params carries them ("kind[:name]" entries separated by
@@ -20779,22 +20804,31 @@ int builtin_kernel_fn_span(const char *name, int with_block, int *lo, int *hi) {
   }
   return 0;
 }
-/* The row of one spec table for (cls, name), read for the bare or the
-   block-carrying call. Answers whether the table has the row; exp receives
-   CRuby's wording when argc falls outside the accepted counts. */
+/* The row of one spec table for (cls, name); the instance table takes in
+   the rows of the libraries the program has. */
+static const SpAritySpec *arity_spec_find(const SpAritySpec *tbl, const char *cls, const char *name) {
+  for (int i = 0; tbl[i].cls; i++)
+    if (sp_streq(tbl[i].cls, cls) && sp_streq(tbl[i].m, name)) return &tbl[i];
+  for (int i = 0; tbl == sp_builtin_arity_spec_tbl && sp_builtin_lib_arity_spec_tbl[i].cls; i++) {
+    const SpAritySpec *l = &sp_builtin_lib_arity_spec_tbl[i];
+    if (sp_streq(l->cls, cls) && sp_streq(l->m, name) && sp_feature_enabled(l->feature)) return l;
+  }
+  return NULL;
+}
+/* That row read for the bare or the block-carrying call. Answers whether
+   the table has the row; exp receives CRuby's wording when argc falls
+   outside the accepted counts. */
 static int arity_spec_row(const SpAritySpec *tbl, const char *cls, const char *name,
                           int with_block, int argc, char *exp, size_t n) {
-  for (int i = 0; tbl[i].cls; i++) {
-    if (!sp_streq(tbl[i].cls, cls) || !sp_streq(tbl[i].m, name)) continue;
-    int mn = with_block ? tbl[i].blk_min : tbl[i].min;
-    int mx = with_block ? tbl[i].blk_max : tbl[i].max;
-    const char *lo = with_block ? tbl[i].blk_lo_exp : tbl[i].lo_exp;
-    const char *hi = with_block ? tbl[i].blk_hi_exp : tbl[i].hi_exp;
-    if (mn >= 0 && argc < mn && lo) snprintf(exp, n, "%s", lo);
-    else if (mx >= 0 && argc > mx && hi) snprintf(exp, n, "%s", hi);
-    return 1;
-  }
-  return 0;
+  const SpAritySpec *r = arity_spec_find(tbl, cls, name);
+  if (!r) return 0;
+  int mn = with_block ? r->blk_min : r->min;
+  int mx = with_block ? r->blk_max : r->max;
+  const char *lo = with_block ? r->blk_lo_exp : r->lo_exp;
+  const char *hi = with_block ? r->blk_hi_exp : r->hi_exp;
+  if (mn >= 0 && argc < mn && lo) snprintf(exp, n, "%s", lo);
+  else if (mx >= 0 && argc > mx && hi) snprintf(exp, n, "%s", hi);
+  return 1;
 }
 int builtin_cmethod_known(const char *cls, const char *name) {
   char exp[32] = "";
@@ -20924,9 +20958,7 @@ int builtin_ops_arity_check(void) {
     if (r->flags & BOPF_INTERNAL) continue;   /* a function of the compiler's, not a CRuby method: no count to check */
     const char *cls = bop_spec_class(r->recv);
     if (!cls) continue;
-    const SpAritySpec *sp = NULL;
-    for (const SpAritySpec *t = sp_builtin_arity_spec_tbl; t->cls; t++)
-      if (sp_streq(t->cls, cls) && sp_streq(t->m, r->name)) { sp = t; break; }
+    const SpAritySpec *sp = arity_spec_find(sp_builtin_arity_spec_tbl, cls, r->name);
     if (!sp || (sp->min < 0 && sp->blk_min < 0)) continue;   /* no row, or unproved */
     /* the bare and the block-carrying counts together: a row serves both */
     int lo = sp->min >= 0 ? sp->min : sp->blk_min;
@@ -21173,11 +21205,11 @@ static int arity_call_block(Compiler *c, int id, int non_nil, int *argc, int *kw
    exp receives CRuby's wording of the accepted range, eval_recv whether the
    receiver is an expression to evaluate before the raise. */
 /* Does constant read `recv` hold a builtin value -- an Array, a Hash, a
-   String, a number -- rather than a class or module? */
+   String, a number, a stream (STDOUT) -- rather than a class or module? */
 static int const_reads_builtin_value(Compiler *c, int recv) {
   TyKind rt = comp_ntype(c, recv);
   return ty_is_array(rt) || ty_is_hash(rt) || rt == TY_STRING || rt == TY_STRBUF ||
-         rt == TY_INT || rt == TY_FLOAT || rt == TY_SYMBOL;
+         rt == TY_INT || rt == TY_FLOAT || rt == TY_SYMBOL || rt == TY_IO;
 }
 static int arity_violation(Compiler *c, int id, int non_nil, char *exp, size_t n, int *eval_recv) {
   const NodeTable *nt = c->nt;

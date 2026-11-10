@@ -436,6 +436,24 @@ inst.map! do |r|
 end
 inst.compact!
 
+# The methods a library adds to a builtin class that Spinel answers from the
+# library's builtin-op rows (io/console's IO#winsize): probed with the library
+# loaded, after the core surface above, and written as BAL rows that name the
+# library first. Only the count check reads them, for a program that has the
+# library; the core tables (names, reflection) stay the core's.
+LIBRARY_METHODS = { "io/console" => { "File" => %w[winsize winsize=] } }
+lib = []
+LIBRARY_METHODS.each do |feature, classes|
+  require feature
+  classes.each do |cls, meths|
+    thunk = INSTANCE_RECEIVERS.fetch(cls)
+    meths.each do |m|
+      s = full_spec_of(thunk, m)
+      lib << [feature, cls, m, *s] if s
+    end
+  end
+end
+
 CLASS_CONSTANTS = {
   "StructClass" => Struct.new(:a), "DataClass" => Data.define(:a),
 }
@@ -507,7 +525,8 @@ out = <<~C
      add a new method to the generator's lists and regenerate with --write.
      Method#arity and accepted positional counts are independent facts.
      BAI carries both, BAM only Method#arity, BAS only instance counts,
-     and BAC class/module counts. -1 maxima are unbounded; NULL messages
+     and BAC class/module counts; BAL is a library's instance counts, its
+     name first. -1 maxima are unbounded; NULL messages
      and unproved -1 minima never reject a call. Block counts are separate.
      Kernel Method#arity describes receiverless method(:name) wrappers.
      BAP is Method#parameters by the class or module that defines the
@@ -524,9 +543,10 @@ end
 end
 inst.each { |r| render.("BAS", r) if counts.key?(r[0, 2]) }
 cm.each { |r| render.("BAC", r) }
+lib.each { |r| render.("BAL", r) }
 kwpos.each { |r| render.("BAK", r[0, 2]) }
 params.each { |_, k, m, ps, cside| render.("BAP", [k, m, ps, cside.to_i]) }
-summary = "#{arity.length + kernel_arity.length} Method#arity + #{inst.length} instance + #{cm.length} class-method + #{params.length} parameters entries"
+summary = "#{arity.length + kernel_arity.length} Method#arity + #{inst.length} instance + #{cm.length} class-method + #{lib.length} library + #{params.length} parameters entries"
 if ARGV.include?("--check")
   # the private-Kernel list the compiler and the runtime share is held to CRuby's
   listed = File.read(File.join(__dir__, "../lib/sp_kernel_private.h")).scan(/X\("([^"]+)"\)/).flatten

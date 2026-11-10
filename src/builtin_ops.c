@@ -1834,8 +1834,9 @@ static const BuiltinOp bop_rows[] = {
      the lookup rather than guessed into a size. Rows of the library: a
      program that does not require it has no winsize (NoMethodError). */
   { TY_IO, "winsize",        0,   0, BF_ANY, TY_INT_ARRAY, BOPE_TEMPLATE, "sp_File_winsize($r)", 0, 0, 0, 0, "io/console" },
+  { TY_IO, "winsize",        0, 127, BF_ANY, TY_INT_ARRAY, BOPE_NONE, NULL, 0, 0, 0, 0, "io/console" },
   { TY_IO, "winsize=",       1,   1, BF_ANY, TY_INT_ARRAY, BOPE_IO_SET_WINSIZE, NULL, BOP_K(TY_INT_ARRAY), 0, 0, 0, "io/console" },
-  { TY_IO, "winsize=",       1,   1, BF_ANY, TY_INT_ARRAY, BOPE_NONE, NULL, 0, 0, 0, 0, "io/console" },
+  { TY_IO, "winsize=",       0, 127, BF_ANY, TY_INT_ARRAY, BOPE_NONE, NULL, 0, 0, 0, 0, "io/console" },
 
   /* Regexp: result kinds; emission stays in emit_call_body. */
   { TY_REGEX, "match?",          0, 127, BF_ANY,      TY_BOOL,          BOPE_NONE },
@@ -3133,7 +3134,7 @@ static int bop_row_fits(const BuiltinOp *r, int argc, int has_block) {
 }
 
 int bop_io_library_row(const BuiltinOp *op) {
-  return op && op->recv == TY_IO && op->feature && op->emit != BOPE_NONE;
+  return op && op->recv == TY_IO && op->feature;
 }
 
 /* A builtin class's own methods (bop_class_find), one table: IO's (#2815).

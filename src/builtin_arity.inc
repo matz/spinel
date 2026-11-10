@@ -2,7 +2,8 @@
    add a new method to the generator's lists and regenerate with --write.
    Method#arity and accepted positional counts are independent facts.
    BAI carries both, BAM only Method#arity, BAS only instance counts,
-   and BAC class/module counts. -1 maxima are unbounded; NULL messages
+   and BAC class/module counts; BAL is a library's instance counts, its
+   name first. -1 maxima are unbounded; NULL messages
    and unproved -1 minima never reject a call. Block counts are separate.
    Kernel Method#arity describes receiverless method(:name) wrappers.
    BAP is Method#parameters by the class or module that defines the
@@ -2192,6 +2193,8 @@ BAC("Pathname","new",1,1,"1","1",1,1,"1","1")
 BAC("Pathname","glob",1,2,"1..2","1..2",1,2,"1..2","1..2")
 BAC("Pathname","getwd",0,0,NULL,"0",0,0,NULL,"0")
 BAC("Pathname","pwd",0,0,NULL,"0",0,0,NULL,"0")
+BAL("io/console","File","winsize",0,0,NULL,"0",0,0,NULL,"0")
+BAL("io/console","File","winsize=",1,1,"1","1",1,1,"1","1")
 BAK("String","[]")
 BAK("String","[]=")
 BAK("String","byteindex")

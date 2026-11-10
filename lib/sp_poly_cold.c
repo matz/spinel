@@ -1230,6 +1230,8 @@ sp_RbVal sp_poly_to_h_m(sp_RbVal v)
      boxed hash otherwise -- reading an Integer key as a symbol id built a
      hash whose keys were other programs' symbols (#3972) */
   if (v.tag == SP_TAG_OBJ && sp_poly_is_array_kind(v.cls_id)) {
+    v = sp_poly_elems_to_ary_v(v);   /* a program object's to_ary (any visibility) */
+    SP_GC_ROOT_RBVAL(v);
     sp_int n = sp_poly_length(v);
     int all_sym = 1;
     for (sp_int i = 0; i < n && all_sym; i++) {

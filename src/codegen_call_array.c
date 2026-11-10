@@ -1449,7 +1449,8 @@ int emit_op_array_transpose(Compiler *c, const BopCtx *x, Buf *b) {
   }
   if (rt != TY_POLY_ARRAY) return 0;
   if (sp_streq(name, "transpose") && argc == 0) {
-    buf_puts(b, "sp_int_array_transpose("); emit_expr(c, recv, b); buf_puts(b, ")");
+    /* a program object row converts through its to_ary, public or not */
+    buf_puts(b, "sp_int_array_transpose(sp_poly_elems_to_ary("); emit_expr(c, recv, b); buf_puts(b, ", 1))");
     return 1;
   }
   return 0;

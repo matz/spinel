@@ -3561,6 +3561,42 @@ static sp_RbVal sp_poly_ary_operand(sp_RbVal v) {
   sp_raise_cls("TypeError", sp_sprintf("can't convert %s to Array (%s#to_ary gives %s)", cn, cn, sp_poly_class_name(a)));
   return v;
 }
+
+/* The elements of Array#to_h and the rows of Array#transpose, converted
+   as CRuby's to_ary does: a program object with #to_ary (public or not)
+   becomes that Array. The conversion stops at the first element that is
+   no Array and has no to_ary, so the caller raises there, and no later
+   to_ary runs, as in CRuby. For transpose (rows != 0) that element is
+   CRuby's TypeError named by its own class. The same array comes back
+   when nothing converts. */
+static sp_PolyArray *sp_poly_elems_to_ary(sp_PolyArray *a, int rows) {
+  if (!a || !sp_obj_to_ary_fn) return a;
+  sp_int n = a->len, i = 0;
+  for (; i < n; i++) if (sp_poly_is_user_obj(a->data[i]) && a->data[i].v.p) break;
+  if (i == n) return a;
+  SP_GC_ROOT(a);
+  sp_PolyArray *out = sp_PolyArray_new(); SP_GC_ROOT(out);
+  for (sp_int j = 0; j < n; j++) {
+    sp_RbVal e = a->data[j];
+    if (j >= i && sp_poly_is_user_obj(e) && e.v.p) {
+      sp_RbVal got = sp_poly_ary_operand(e);
+      if (got.tag == SP_TAG_OBJ && got.v.p == e.v.p && got.cls_id == e.cls_id) {
+        if (rows) sp_raise_cls("TypeError", sp_sprintf("no implicit conversion of %s into Array", sp_poly_class_name(e)));
+        for (; j < n; j++) sp_PolyArray_push(out, a->data[j]);
+        break;
+      }
+      e = got;
+    }
+    sp_PolyArray_push(out, e);
+  }
+  return out;
+}
+static inline sp_RbVal sp_poly_elems_to_ary_v(sp_RbVal v) {
+  if (!(v.tag == SP_TAG_OBJ && sp_poly_is_array_kind(v.cls_id) && v.v.p && sp_obj_to_ary_fn)) return v;
+  sp_PolyArray *a = sp_poly_to_poly_array(v);
+  sp_PolyArray *b = sp_poly_elems_to_ary(a, 0);
+  return b == a ? v : sp_box_poly_array(b);
+}
 static int sp_poly_user_cmp(const char *op, sp_RbVal a, sp_RbVal b, sp_RbVal *out);  /* fwd */
 /* An object of the program's subclass of Time or Array (`class Rev <
    Time`) is boxed with the builtin's id. The class its allocation names
@@ -19466,7 +19502,7 @@ static sp_RbVal sp_poly_to_h_val(sp_RbVal v) {
     if (h.tag == SP_TAG_OBJ && sp_poly_is_hash_kind(h.cls_id)) return h;
   }
   if (v.tag == SP_TAG_OBJ && sp_poly_is_array_kind(v.cls_id)) {
-    sp_PolyArray *a = sp_poly_to_a_arr(v); SP_GC_ROOT(a);
+    sp_PolyArray *a = sp_poly_elems_to_ary(sp_poly_to_a_arr(v), 0); SP_GC_ROOT(a);
     sp_PolyPolyHash *out = sp_PolyPolyHash_new(); SP_GC_ROOT(out);
     for (sp_int i = 0; a && i < a->len; i++) {
       sp_RbVal e = a->data[i];

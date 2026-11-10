@@ -1829,8 +1829,11 @@ static int emit_poly_array_call(Compiler *c, int id, Buf *b, const NodeTable *nt
     if (!hn) hn = "SymPoly";
     TyKind kty = hr.key, vty = hr.val;
     int tr = ++g_tmp, th = ++g_tmp, ti = ++g_tmp, tp = ++g_tmp;
-    buf_printf(b, "({ sp_PolyArray *_t%d = ", tr); emit_expr(c, recv, b);
-    buf_printf(b, "; SP_GC_ROOT(_t%d); sp_%sHash *_t%d = sp_%sHash_new(); SP_GC_ROOT(_t%d);", tr, hn, th, hn, th);
+    /* a program object among the elements converts through its to_ary,
+       public or not, as CRuby's to_h does; Hash[] keeps its own path */
+    int conv = !nt_int(nt, id, "hash_brackets", 0);
+    buf_printf(b, "({ sp_PolyArray *_t%d = %s", tr, conv ? "sp_poly_elems_to_ary(" : ""); emit_expr(c, recv, b);
+    buf_printf(b, "%s; SP_GC_ROOT(_t%d); sp_%sHash *_t%d = sp_%sHash_new(); SP_GC_ROOT(_t%d);", conv ? ", 0)" : "", tr, hn, th, hn, th);
     buf_printf(b, " for (sp_int _t%d = 0; _t%d < sp_PolyArray_length(_t%d); _t%d++) {", ti, ti, tr, ti);
     /* Each pair is a boxed array whose own kind varies (IntArray for [1,2],
        StrArray for ["a","b"], PolyArray for mixed); sp_poly_arr_get boxes an

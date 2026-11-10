@@ -2038,6 +2038,10 @@ than with `true`.
 
 ## Now supported (older write-ups are stale here)
 
+A statement `case` whose subject is of another kind than a splatted list of
+Integers, Strings or Floats (`case [1, 2] when *ints`, `case "a" when *ints`,
+`case :a when *strs`) runs the list and does not match, as CRuby does.
+
 These were limits in an earlier (Ruby self-hosted) version of the compiler and
 now work on current master:
 

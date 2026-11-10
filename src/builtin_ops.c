@@ -1831,8 +1831,9 @@ static const BuiltinOp bop_rows[] = {
   { TY_IO, "birthtime",      0, 127, BF_ANY, TY_TIME,     BOPE_NONE },
   /* io/console's size, [rows, cols], and its writer, which answers its
      Integer Array: a writer's other operand is left to the refusal after
-     the lookup rather than guessed into a size. Rows of the library: a
-     program that does not require it has no winsize (NoMethodError). */
+     the lookup rather than guessed into a size. Rows of the library, which
+     the default require mode provides whether or not the program requires
+     it; under strict require a program without the require has none. */
   { TY_IO, "winsize",        0,   0, BF_ANY, TY_INT_ARRAY, BOPE_TEMPLATE, "sp_File_winsize($r)", 0, 0, 0, 0, "io/console" },
   { TY_IO, "winsize",        0, 127, BF_ANY, TY_INT_ARRAY, BOPE_NONE, NULL, 0, 0, 0, 0, "io/console" },
   { TY_IO, "winsize=",       1,   1, BF_ANY, TY_INT_ARRAY, BOPE_IO_SET_WINSIZE, NULL, BOP_K(TY_INT_ARRAY), 0, 0, 0, "io/console" },

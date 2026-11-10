@@ -593,7 +593,7 @@ int boxed_stat_name(const char *n);   /* mode or a numeric field */
 int boxed_stat_reader(const char *n); /* mtime, atime, ftype */
 /* ---- Lowerings onto a library's method: the shared shape rows ----
    A call of one of these shapes is lowered by the analysis onto a method or
-   constant a library defines (builtins/*.rb, Set): `system(cmd, out: ...)`
+   constant a library defines (the .rb files of builtins/, Set): `system(cmd, out: ...)`
    onto builtins/system_spawn.rb's __sp_system_spawn, and so on. Each row is
    the shape, the name it lowers to and the library that defines that name.
    The desugar a row's family names reads its shape from here; conditions on

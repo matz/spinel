@@ -50742,14 +50742,7 @@ static uint64_t an_ts_mix_bytes(uint64_t h, const void *p, size_t n) {
 static uint64_t an_loop_state(Compiler *c) {
   uint64_t h = an_type_state(c);
   int n = c->nt->count < c->node_cap ? c->nt->count : c->node_cap;
-#define AN_LS_ARR(a) do { if (c->a) h = an_ts_mix_bytes(h, c->a, (size_t)n * sizeof *c->a); } while (0)
-  AN_LS_ARR(norigin); AN_LS_ARR(strbuf_box); AN_LS_ARR(strbuf_handle_demand);
-  AN_LS_ARR(strbuf_read_raw); AN_LS_ARR(poly_strbuf_lift); AN_LS_ARR(nil_tested);
-  AN_LS_ARR(head_held); AN_LS_ARR(value_discarded); AN_LS_ARR(str_shadow); AN_LS_ARR(nilnarrow); AN_LS_ARR(empty_arr_recv);
-  AN_LS_ARR(empty_hash_recv); AN_LS_ARR(empty_hash_arg); AN_LS_ARR(store_misfit_arg);
-  AN_LS_ARR(ivar_widen_src); AN_LS_ARR(hash_want); AN_LS_ARR(arr_want);
-  AN_LS_ARR(lw_joined); AN_LS_ARR(poly_builtin_ty); AN_LS_ARR(bop_inf);
-#undef AN_LS_ARR
+  h = comp_node_marks_digest(c, h, n, an_ts_mix_bytes);
   if (c->ucall_inf)
     for (int id = 0; id < n; id++) {
       UCallInf *u = &c->ucall_inf[id];
@@ -54120,11 +54113,11 @@ static void an_phase_storage(Compiler *c) {
     if (round < 4) {
       if (!nt0) nt0 = malloc(sizeof(TyKind) * (size_t)(c->nt->count > 0 ? c->nt->count : 1));
       if (!nt0) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-      memcpy(nt0, c->ntype, sizeof(TyKind) * (size_t)c->nt->count);
+      comp_ntype_snapshot(c, nt0, c->nt->count);
     }
     if (late_widened)
       for (int id = 0; id < c->nt->count; id++) infer_type(c, id);
-    if (round >= 4 || !memcmp(nt0, c->ntype, sizeof(TyKind) * (size_t)c->nt->count)) break;
+    if (round >= 4 || comp_ntype_snapshot_equal(c, nt0, c->nt->count)) break;
     handle_arg_tab_free(&hat);
     late_widened = 0;
   }

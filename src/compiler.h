@@ -9,6 +9,8 @@
 #ifndef SPINEL_COMPILER_H
 #define SPINEL_COMPILER_H
 
+#include <stdint.h>
+#include <string.h>
 #include "node_table.h"
 #include "types.h"
 #include "builtin_names.h"
@@ -1277,6 +1279,22 @@ enum { UC_NONE, UC_TOP, UC_INST, UC_CMETH, UC_SUPER, UC_SEND_BLIND, UC_IE,
        UC_POLY };   /* a boxed receiver's dispatch: the first user candidate
                        stands for the union the call was typed over */
 typedef struct { int mi; short owner_ci; unsigned char via; } UCallInf;
+
+/* Hide the viewed node arrays from non-owners during ty-setter-check.
+   The renames end with this header, so similarly named fields of other
+   records are unaffected. compiler.c owns allocation/growth/free, and
+   codegen_view.c owns temporary overrides. */
+#if defined(SP_TY_GUARD) && !defined(SP_NODE_FACT_OWNER)
+#define ntype sp_guarded_ntype
+#define nilnarrow sp_guarded_nilnarrow
+#define strbuf_box sp_guarded_strbuf_box
+#define strbuf_handle_demand sp_guarded_strbuf_handle_demand
+#define poly_strbuf_lift sp_guarded_poly_strbuf_lift
+#define nil_tested sp_guarded_nil_tested
+#define head_held sp_guarded_head_held
+#define value_discarded sp_guarded_value_discarded
+#define str_shadow sp_guarded_str_shadow
+#endif
 
 typedef struct {
   const NodeTable *nt;
@@ -2753,6 +2771,41 @@ static inline void comp_write_strbuf_handle_demand(Compiler *c, int id, unsigned
 static inline void comp_write_poly_strbuf_lift(Compiler *c, int id, unsigned char v) { c->poly_strbuf_lift[id] = v; }
 static inline void comp_write_nil_tested(Compiler *c, int id, unsigned char v) { c->nil_tested[id] = v; }
 
+/* Byte-for-byte snapshots used by the analysis convergence check. */
+static inline void comp_ntype_snapshot(const Compiler *c, TyKind *out, int n) {
+  memcpy(out, c->ntype, sizeof(TyKind) * (size_t)n);
+}
+static inline int comp_ntype_snapshot_equal(const Compiler *c, const TyKind *old, int n) {
+  return !memcmp(old, c->ntype, sizeof(TyKind) * (size_t)n);
+}
+
+/* The node-mark portion of the analysis state digest. Keep the old byte
+   order, element widths and absent-array checks; mix is analysis's hash. */
+static inline uint64_t comp_node_marks_digest(const Compiler *c, uint64_t h, int n,
+                                             uint64_t (*mix)(uint64_t, const void *, size_t)) {
+  if (c->norigin) h = mix(h, c->norigin, (size_t)n * sizeof *c->norigin);
+  if (c->strbuf_box) h = mix(h, c->strbuf_box, (size_t)n * sizeof *c->strbuf_box);
+  if (c->strbuf_handle_demand) h = mix(h, c->strbuf_handle_demand, (size_t)n * sizeof *c->strbuf_handle_demand);
+  if (c->strbuf_read_raw) h = mix(h, c->strbuf_read_raw, (size_t)n * sizeof *c->strbuf_read_raw);
+  if (c->poly_strbuf_lift) h = mix(h, c->poly_strbuf_lift, (size_t)n * sizeof *c->poly_strbuf_lift);
+  if (c->nil_tested) h = mix(h, c->nil_tested, (size_t)n * sizeof *c->nil_tested);
+  if (c->head_held) h = mix(h, c->head_held, (size_t)n * sizeof *c->head_held);
+  if (c->value_discarded) h = mix(h, c->value_discarded, (size_t)n * sizeof *c->value_discarded);
+  if (c->str_shadow) h = mix(h, c->str_shadow, (size_t)n * sizeof *c->str_shadow);
+  if (c->nilnarrow) h = mix(h, c->nilnarrow, (size_t)n * sizeof *c->nilnarrow);
+  if (c->empty_arr_recv) h = mix(h, c->empty_arr_recv, (size_t)n * sizeof *c->empty_arr_recv);
+  if (c->empty_hash_recv) h = mix(h, c->empty_hash_recv, (size_t)n * sizeof *c->empty_hash_recv);
+  if (c->empty_hash_arg) h = mix(h, c->empty_hash_arg, (size_t)n * sizeof *c->empty_hash_arg);
+  if (c->store_misfit_arg) h = mix(h, c->store_misfit_arg, (size_t)n * sizeof *c->store_misfit_arg);
+  if (c->ivar_widen_src) h = mix(h, c->ivar_widen_src, (size_t)n * sizeof *c->ivar_widen_src);
+  if (c->hash_want) h = mix(h, c->hash_want, (size_t)n * sizeof *c->hash_want);
+  if (c->arr_want) h = mix(h, c->arr_want, (size_t)n * sizeof *c->arr_want);
+  if (c->lw_joined) h = mix(h, c->lw_joined, (size_t)n * sizeof *c->lw_joined);
+  if (c->poly_builtin_ty) h = mix(h, c->poly_builtin_ty, (size_t)n * sizeof *c->poly_builtin_ty);
+  if (c->bop_inf) h = mix(h, c->bop_inf, (size_t)n * sizeof *c->bop_inf);
+  return h;
+}
+
 static inline TyKind comp_set_ntype(Compiler *c, int id, TyKind t) {
 #ifdef SP_EMIT_TRACE
   if (c->ntype[id] != t) emit_trace_fact(c, id, 't', (int)c->ntype[id], (int)t);
@@ -2863,5 +2916,17 @@ int allocate_on_own_class(Compiler *c, int id);    /* allocate on the method's o
 /* An ivar whose type came from an --rbs seed (class_pin_ivar). Codegen reads
    it to decide where a seed assertion belongs (#3412). */
 int class_ivar_pinned(ClassInfo *ci, const char *name);
+
+#if defined(SP_TY_GUARD) && !defined(SP_NODE_FACT_OWNER)
+#undef ntype
+#undef nilnarrow
+#undef strbuf_box
+#undef strbuf_handle_demand
+#undef poly_strbuf_lift
+#undef nil_tested
+#undef head_held
+#undef value_discarded
+#undef str_shadow
+#endif
 
 #endif

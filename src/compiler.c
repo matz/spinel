@@ -1,3 +1,4 @@
+#define SP_NODE_FACT_OWNER 1
 #include <assert.h>
 #include "compiler.h"
 #include "share.h"

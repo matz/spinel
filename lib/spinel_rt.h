@@ -4376,20 +4376,6 @@ static const char *sp_poly_sym_id2name(sp_RbVal v) {
   return sp_sym_to_s_new((sp_sym)v.v.i);
 }
 static SP_UNUSED sp_RbVal sp_poly_nil_no_method(const char *m, sp_RbVal v) { sp_raise_nomethod(sp_nomethod_msg(m, v)); return sp_box_nil(); }
-/* The receiver of an operation on a String Array of handles that can be nil
-   (a method's value, a parameter, an instance variable not set yet): the
-   Array, or CRuby's NoMethodError. */
-static inline sp_PtrArray *sp_StrhArray_rnn(sp_PtrArray *a, const char *m) {
-  if (SP_UNLIKELY(!a)) sp_raise_nomethod(sp_nomethod_msg(m, sp_box_nil()));
-  return a;
-}
-/* An element of a String Array of handles (TY_STRH_ARRAY) that a method of
-   the String is called on: its handle, or CRuby's NoMethodError for a nil
-   one (a read past the end, a gap, an empty Array's pop). */
-static inline sp_String *sp_StrhArray_nn(sp_String *h, const char *m) {
-  if (SP_UNLIKELY(!h)) sp_raise_nomethod(sp_nomethod_msg(m, sp_box_nil()));
-  return h;
-}
 /* The bounds of `for i in lo..hi` read out of a box or an Integer slot that
    may hold nil: a nil end is an endless range (the loop runs until a break),
    and a nil beginning cannot be iterated (TypeError, as CRuby). */

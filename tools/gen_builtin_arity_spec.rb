@@ -210,10 +210,13 @@ CLASS_TARGETS = {
   "Signal"  => %w[signame list trap],
   "Socket"  => %w[new getaddrinfo getnameinfo pair socketpair gethostname sockaddr_in
                   unpack_sockaddr_in pack_sockaddr_in sockaddr_un pack_sockaddr_un],
+  # (BasicSocket's own class methods; for_fd is ahead of IO.for_fd)
+  "BasicSocket" => %w[for_fd do_not_reverse_lookup do_not_reverse_lookup=],
   "TCPSocket"  => %w[new open],
   "TCPServer"  => %w[new open],
   "UNIXSocket" => %w[new open],
   "UNIXServer" => %w[new open],
+  "UDPSocket"  => %w[new],
   "SizedQueue" => %w[new],
   "Queue"      => %w[new],
   "Base64"  => %w[encode64 decode64 strict_encode64 strict_decode64

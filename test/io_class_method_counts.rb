@@ -1,6 +1,7 @@
 # A count CRuby refuses on IO's own methods raises its ArgumentError, also
 # when the call goes through File's singleton chain (File.sysopen is IO's).
-# A subclass's `new` keeps its own counts: UDPSocket.new is not IO.new.
+# A subclass's `new` keeps its own counts: UDPSocket.new is not IO.new, and
+# the socket classes' for_fd is BasicSocket's own, not IO's.
 require "tmpdir"
 require "socket"
 
@@ -33,5 +34,18 @@ rescue ArgumentError => e
 end
 u = UDPSocket.new
 p u.class
+begin
+  BasicSocket.for_fd(u.fileno, 2, 3)
+rescue ArgumentError => e
+  p e.message
+end
+begin
+  UDPSocket.for_fd(u.fileno, 2)
+rescue ArgumentError => e
+  p e.message
+end
 u.close
+# the rows are the classes' own methods, as reflection lists them
+p BasicSocket.singleton_methods(false).sort
+p UDPSocket.singleton_methods(false).sort
 File.delete(src)

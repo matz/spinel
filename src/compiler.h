@@ -2737,6 +2737,15 @@ static inline unsigned char comp_head_held_stored(const Compiler *c, int id) { r
 static inline unsigned char comp_value_discarded_stored(const Compiler *c, int id) { return c->value_discarded[id]; }
 static inline unsigned char comp_str_shadow_stored(const Compiler *c, int id) { return c->str_shadow[id]; }
 
+/* Presence checks for optional storage; these never read an element. */
+static inline int comp_ntype_present(const Compiler *c) { return c->ntype != NULL; }
+static inline int comp_nilnarrow_present(const Compiler *c) { return c->nilnarrow != NULL; }
+static inline int comp_poly_strbuf_lift_present(const Compiler *c) { return c->poly_strbuf_lift != NULL; }
+static inline int comp_nil_tested_present(const Compiler *c) { return c->nil_tested != NULL; }
+static inline int comp_head_held_present(const Compiler *c) { return c->head_held != NULL; }
+static inline int comp_value_discarded_present(const Compiler *c) { return c->value_discarded != NULL; }
+static inline int comp_str_shadow_present(const Compiler *c) { return c->str_shadow != NULL; }
+
 static inline TyKind comp_set_ntype(Compiler *c, int id, TyKind t) {
 #ifdef SP_EMIT_TRACE
   if (c->ntype[id] != t) emit_trace_fact(c, id, 't', (int)c->ntype[id], (int)t);

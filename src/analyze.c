@@ -41442,7 +41442,7 @@ static unsigned char *hash_vnil_flag(Compiler *c, TyKind t) {
 }
 int hash_vals_nullable(Compiler *c, int node) {
   if (node < 0) return 0;
-  TyKind t = c->ntype && node < c->node_cap && comp_ntype_stored(c, node) != TY_UNKNOWN ? comp_ntype_stored(c, node) : infer_type(c, node);
+  TyKind t = comp_ntype_present(c) && node < c->node_cap && comp_ntype_stored(c, node) != TY_UNKNOWN ? comp_ntype_stored(c, node) : infer_type(c, node);
   unsigned char *f = hash_vnil_flag(c, t);
   return f && *f;
 }

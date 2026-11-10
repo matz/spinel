@@ -1267,14 +1267,14 @@ static int nf_expr_uncached(NF *f, int v) {
     if (!lv) return NFW_OPAQUE;
     if (!lv->obj_may_nil) return NFW_NONE;
     /* a read a guard narrowed (c->nilnarrow, or a truthiness test here) */
-    if ((c->nilnarrow && comp_nilnarrow_stored(c, v) != TY_UNKNOWN) || nf_local_guarded(f, v, nm, lv)) {
+    if ((comp_nilnarrow_present(c) && comp_nilnarrow_stored(c, v) != TY_UNKNOWN) || nf_local_guarded(f, v, nm, lv)) {
       f->guarded = 1;
       return NFW_NONE;
     }
     return nf_slot_why(f, &lv->obj_may_nil);
   }
   case NK_InstanceVariableReadNode: {
-    if (c->nilnarrow && comp_nilnarrow_stored(c, v) != TY_UNKNOWN) { f->guarded = 1; return NFW_NONE; }
+    if (comp_nilnarrow_present(c) && comp_nilnarrow_stored(c, v) != TY_UNKNOWN) { f->guarded = 1; return NFW_NONE; }
     Scope *s = comp_scope_of(c, v);
     const char *ivn = nt_str(nt, v, "name");
     /* the main object's ivar: nil until a write the load phase runs ahead of the read */

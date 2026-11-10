@@ -4300,6 +4300,45 @@ static void emit_exc_cls_name_pick(Compiler *c, int id, const char *name, int tk
   buf_printf(b, " } if (_xi%d >= 0) break; } ", t);
 }
 
+/* The default arm of a class-value dispatch over a method of Class's own
+   (Module#include?), which some class of the program defines (`def
+   self.include?`): a class without its own answers by the Class row, as
+   CRuby's lookup reaches Module's. 0 where no row answers the call. */
+static int cls_value_row_default(Compiler *c, int id, int recv, const char *name, int argc, const int *argv,
+                                 const TyKind *argt, int tk, int tr, TyKind slot, Buf *b) {
+  /* the rows of a name answer one kind: the one an argument kind picks is
+     the template's, which the arm text below finds */
+  const BuiltinOp *op = bop_find(TY_CLASS, name, argc, nt_ref(c->nt, id, "block") >= 0);
+  if (!op) return 0;
+  TyKind res = bop_result(op, TY_CLASS);
+  if (res == TY_UNKNOWN || res == TY_VOID || (slot != TY_POLY && slot != res)) return 0;
+  char rt[32];
+  snprintf(rt, sizeof rt, "_t%d", tk);
+  /* the dispatch holds each argument boxed: the row reads it as the kind it
+     had, as its own call would have */
+  int slots[4], vws[4], n = 0;
+  for (int i = 0; i < argc && i < 4; i++) {
+    if (argt[i] == TY_POLY || argt[i] == TY_UNKNOWN || comp_ntype(c, argv[i]) != TY_POLY) continue;
+    Buf held; memset(&held, 0, sizeof held);
+    emit_expr(c, argv[i], &held);
+    Buf ub; memset(&ub, 0, sizeof ub);
+    emit_unbox_text(c, argt[i], held.p ? held.p : "", &ub);
+    slots[n] = view_bind(argv[i], "%s", ub.p ? ub.p : "");
+    vws[n++] = view_push(c, argv[i], argt[i]);
+    free(held.p); free(ub.p);
+  }
+  Buf ab; memset(&ab, 0, sizeof ab);
+  int ok = emit_builtin_op_arm_text(c, id, recv, TY_CLASS, name, rt, tk, &ab);
+  while (n-- > 0) { view_pop(c, vws[n]); view_unbind(slots[n]); }
+  if (!ok) { free(ab.p); return 0; }
+  buf_printf(b, " default: _t%d = ", tr);
+  if (slot == TY_POLY && res != TY_POLY) emit_boxed_text(c, res, ab.p ? ab.p : "", b);
+  else buf_puts(b, ab.p ? ab.p : "");
+  buf_puts(b, "; break;");
+  free(ab.p);
+  return 1;
+}
+
 /* `recv.class`: the receiver's class value, compile-time for the types
    that know it, a builtin's as emit_builtin_class_value writes it; 0 when
    the receiver's own `class` member answers instead. */
@@ -5282,6 +5321,8 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
           emit_expr(c, recv, &rb9);
           buf_printf(g_pre, "sp_Class _t%d = %s; ", tk9, rb9.p ? rb9.p : "");
           free(rb9.p);
+          TyKind argt9[4] = { TY_UNKNOWN, TY_UNKNOWN, TY_UNKNOWN, TY_UNKNOWN };
+          for (int i = 0; i < argc && i < 4; i++) argt9[i] = comp_ntype(c, argv[i]);
           int hn9 = hoist_dispatch_args(c, argsN9, &hsv9, &hty9);
           g_pre = sv_pre9;
           if (hp9.p) buf_puts(b, hp9.p);
@@ -5386,6 +5427,7 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
           else if (!rdef9 && is_name_reader(name) &&
                    class_name_reader_arity_msg(c, name, argc, argv, nb9am, sizeof nb9am))
             buf_printf(b, " default: sp_raise_cls(\"ArgumentError\", \"%s\"); break;", nb9am);
+          else if (!rdef9 && argc <= 4 && cls_value_row_default(c, id, recv, name, argc, argv, argt9, tk9, tr9, slot9, b)) {}
           else if (!rdef9) buf_printf(b, " default: %s; break;", rraise9);
           buf_printf(b, " } _t%d; })", tr9);
           unhoist_dispatch_args(c, hn9, hsv9, hty9);

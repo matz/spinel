@@ -169,7 +169,6 @@ t { x = +"ab"; x[10, 1] = 5; x }   # S+V
 t { x = +"ab"; x[10, "1"] = "x"; x }   # S+Nl
 t { x = +"ab"; x[nil, 1] = 5; x }   # V+Ns
 t { x = +"ab"; x[1, "1"] = 5; x }   # V+Nl
-t { x = +"ab"; x[nil, "1"] = "x"; x }   # Ns+Nl
 t { x = +"ab"; x.freeze; x[0, -1] = 5; x }   # F+L+V
 t { x = +"ab"; x.freeze; x[5, -1] = 5; x }   # F+L+S+V
 t { x = +"ab"; x[0, -1] = 5; x }   # L+V

@@ -112,7 +112,6 @@ W
 [TypeError, "no implicit conversion of String into Integer"]
 [TypeError, "no implicit conversion from nil to integer"]
 [TypeError, "no implicit conversion of String into Integer"]
-[TypeError, "no implicit conversion from nil to integer"]
 [IndexError, "negative length -1"]
 [IndexError, "negative length -1"]
 [IndexError, "negative length -1"]

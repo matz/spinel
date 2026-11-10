@@ -582,3 +582,21 @@ init function and an `.h` contract that states each entry's C signature;
 `spinel --help` lists the flags. `spin ext build` drives exactly this, so
 the emitted `ext/<name>/<name>.h` of any scaffolded gem is a worked example
 of the contract.
+
+An entry can answer an object of the program (declare its return `untyped`
+in inline RBS, and the host gets it boxed). `--ext-class C,...` (a class
+by its name or by its path, `A::B`; or `--ext-class all`) exports the
+public methods of those classes and modules
+by name: the contract gains `sp_ext_send(recv, name, argc, argv, &out)`,
+which calls the method `name` of a boxed object, or the singleton method
+`name` of a boxed class value, with boxed arguments, and answers 0 when
+the class has no such method; and `sp_ext_methods(cls_id)`, the table of a
+class (each row a name, its arity, the class that defines it, whether it
+is a singleton method, and the thunk). The table holds the methods a `def`
+or a `def self.` defines, inherited ones included, and the `attr_*`
+readers and writers; a method with an optional, rest, keyword or block
+parameter stays out of it, as does a private or protected one, and one
+with a parameter whose kind the thunk cannot check a host's argument
+against (a Range, a Time, a Symbol, an IO, ...). A host
+that reads source at run time (a REPL) reaches the program's classes and
+objects through it; `test/ext/methods_host.c` is a worked example.

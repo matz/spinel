@@ -688,6 +688,9 @@ typedef struct {
   int is_ext_entry;    /* designated --ext-entry: emitted non-static, a DCE
                           root, declared in the emitted extension header (#M1
                           of docs/internals/ext-design.md) */
+  int is_ext_method;   /* an instance method of an --ext-class class: a DCE
+                          root, called by name through the method table the
+                          library exports (ext_emit_method_tables) */
   int ret_rbs_seeded;  /* ret pinned from an --rbs advisory seed: the fixpoint
                           must not recompute it from the body */
   int ret_rbs_box_held; /* a box reached that container seed while the
@@ -2487,6 +2490,15 @@ int        comp_method_vis(ClassInfo *ci, const char *name);
    class with an explicit entry wins (a subclass may re-`public` an inherited
    private method), defaulting to SP_VIS_PUBLIC when none records it. */
 int        comp_method_vis_in_chain(Compiler *c, int class_id, const char *name);
+/* --ext-class (analyze_util.c): whether class_id is one the list names
+   (or the list is `all`) and has instances a host can hold, and whether
+   scope si is a public instance method its chain answers that a host can
+   call by name through the exported method table (fixed positional
+   parameters whose types and whose result cross the boundary). */
+int        ext_class_exported(Compiler *c, int class_id);
+int        ext_method_exported(Compiler *c, int class_id, int si, int typed);
+int        ext_scope_host_callable(Compiler *c, int si);
+int        ext_ty_crosses(TyKind t);
 int        comp_method_vis_declared(Compiler *c, int class_id, const char *name, int *at);
 /* Detect an instance_eval/exec trampoline (def m(args,&b); instance_eval/exec(args,&b); end).
    Returns 1 (eval) / 2 (exec) / 0; sets *def_class to the defining class. */

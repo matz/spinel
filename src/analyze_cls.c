@@ -2630,6 +2630,25 @@ static int cf_poison_class_call(CF *f, int v, const char *key, const char *nm, c
   return 1;
 }
 
+/* `Kernel.proc { }` and `Kernel.lambda { }` on the builtin module call the
+   module function a bare `proc { }` calls, and answer the same Proc:
+   Kernel's other calls answer anything (cf_poison_const), which would
+   leave the Proc's set without its `pr` */
+static int cf_kernel_proc(const char *recv, const char *nm) {
+  return recv && is_kernel_module_name(recv) && is_proc_constructor(nm);
+}
+static int cf_kernel_proc_call(CF *f, int v, const char *recv, const char *nm, const int *argv, int argc, int blk) {
+  if (!cf_kernel_proc(recv, nm)) return 0;
+  cf_proc_constructor(f, v, blk);
+  cf_builtin_rule(f, v, -1, argv, argc, blk, nm);
+  return 1;
+}
+/* the same call where the program writes the constant: the Proc beside
+   whatever the call answers */
+static void cf_kernel_proc_beside(CF *f, int v, const char *recv, const char *nm, int blk) {
+  if (cf_kernel_proc(recv, nm)) cf_proc_constructor(f, v, blk);
+}
+
 /* cf_user_target, once per method in one call (its answer kept) */
 static int cf_user_target(CF *f, int v, int mi, const int *argv, int argc, int blk);
 static int cf_user_target_once(CF *f, int v, int mi, const int *argv, int argc, int blk, int *seen, int *res, int *n) {
@@ -3515,6 +3534,8 @@ static void cf_call(CF *f, int v) {
       if (blk >= 0 && nt_kind(nt, blk) == NK_BlockNode) cf_all_block_params(f, blk);
       return;
     }
+    /* a reopened Kernel whose proc and lambda are the builtin's */
+    if (cf_kernel_proc_call(f, v, k->name, nm, argv, argc, blk)) return;
     if (cf_poison_class_call(f, v, k->name, nm, argv, argc, blk)) return;
     /* a method of Class or Module: nothing of the program's own comes out,
        except through a block */
@@ -3526,15 +3547,10 @@ static void cf_call(CF *f, int v) {
   if (rk == NK_ConstantReadNode || rk == NK_ConstantPathNode) {
     const char *cn = const_key_at(c, r);
     const char *key = cf_const_key(cn);
-    /* `Kernel.proc { }` and `Kernel.lambda { }` call the module function a
-       bare `proc { }` calls, and answer the same Proc: Kernel's other
-       calls answer anything (cf_poison_const), which left the Proc's set
-       without its `pr` */
-    if (key && is_kernel_module_name(key) && is_proc_constructor(nm)) {
-      cf_proc_constructor(f, v, blk);
-      cf_builtin_rule(f, v, -1, argv, argc, blk, nm);
-      return;
-    }
+    /* a constant the program writes is not the builtin module: what the
+       code below makes of it, with the Proc a builtin call would make */
+    if (cf_entry_has(f, CF_K_CONSTW, key)) cf_kernel_proc_beside(f, v, key, nm, blk);
+    else if (cf_kernel_proc_call(f, v, key, nm, argv, argc, blk)) return;
     if (cf_poison_class_call(f, v, key, nm, argv, argc, blk)) return;
     /* a constant holding a value of the program's own (`REG = Registry.new`)
        is a receiver like any other; a builtin class or module answers

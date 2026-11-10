@@ -33,8 +33,9 @@
    makes none, ct_table_loop_form) each is asked at the loop's point: the
    methods by the load record, and the table's uses by the nodes that may
    run before the loop, since CRuby has run it by the time a later one
-   runs. (A value given to one of its constants anywhere still declines
-   it: the walk would keep the loop's value over a later one.)
+   runs, and the constants' values by the nodes that may run before the
+   loop (a later value replaces the loop's, as the written-out statements
+   it becomes are the source's writes: elab_note_spliced_const_write).
 
      ct_table_only_read        the table's constant is written once and only
                                read, by calls that leave it as it is
@@ -261,11 +262,11 @@ static int ct_const_given_elsewhere(const NodeTable *nt, const int *parent, int 
     for (int i = 0; i < n; i++) {
       int m = 0; const int *ids = ct_const_idx_ids(x, ct_leaf(full[i]), &m);
       for (int k = 0; k < m; k++)
-        if (ct_gives_const(nt, parent, ids[k], full, n, loop, own)) return 1;
+        if (!ct_runs_after(nt, parent, at, ids[k]) && ct_gives_const(nt, parent, ids[k], full, n, loop, own)) return 1;
     }
     int m = 0; const int *ids = ct_const_idx_unspelled(x, &m);
     for (int k = 0; k < m; k++)
-      if (ct_gives_const(nt, parent, ids[k], full, n, loop, own)) return 1;
+      if (!ct_runs_after(nt, parent, at, ids[k]) && ct_gives_const(nt, parent, ids[k], full, n, loop, own)) return 1;
     return 0;
   }
   for (int id = 0; id < count; id++) if (ct_gives_const(nt, parent, id, full, n, loop, own)) return 1;
@@ -1898,6 +1899,10 @@ int ct_table_loop_form(Compiler *c, int st, int list, int j) {
   host_splice(c, h, frame, list, j, nout, NULL, NULL);
   comp_grow_node_arrays(c);
   bb = nt_arr(nt, list, "body", &bn);
+  /* the constants the loop's writes give values to are written by the
+     source from now on: a later write of one is a second write, not the
+     only one (lr_const_final) */
+  for (int k = j; k < j + nout && k < bn; k++) elab_note_spliced_const_write(c, bb[k]);
   int first = bb[j];
   elab_walk_replace(c, st, first);
   return first;

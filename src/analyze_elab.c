@@ -7771,6 +7771,24 @@ void elab_note_const_writes(Compiler *c) {
   }
 }
 
+/* A constant write a form of the walk splices in place of the statement it
+   stands for (a table loop's `const_set`, ct_table_loop_form): one of the
+   source's writes from now on, as the statement it replaces was the
+   program's, so a constant it writes is not taken for one bound once
+   (lr_const_final) by a later write alone (#10791). */
+void elab_note_spliced_const_write(Compiler *c, int node) {
+  LoadRecord *r = c->lrec;
+  const char *nm = r ? lr_const_written(c->nt, node) : NULL;
+  if (!nm) return;
+  r->srcw = realloc(r->srcw, sizeof *r->srcw * (size_t)(r->nsrcw + 1));
+  if (!r->srcw) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  r->srcw[r->nsrcw].node = node;
+  r->srcw[r->nsrcw].name = strdup(nm);
+  if (!r->srcw[r->nsrcw].name) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  r->nsrcw++;
+  r->fin_of.builds = -1;   /* (the final index is made again at the next ask) */
+}
+
 /* The path a constant write w names its class by (`A::X = 1`, `class
    A::X`): the ConstantPath whose parent is that class; -1 where w writes
    the bare name, in the class whose body is its lexical scope */

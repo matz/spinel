@@ -16511,8 +16511,9 @@ int emit_class_new_call(Compiler *c, int id, Buf *b) {
     return 1;
   }
   /* String.try_convert(x) / IO.try_convert(x): the value when it already is
-     one, else nil. Neither builtin calls #to_str / #to_io on a user object --
-     a user class reaching here is simply not convertible. */
+     one, else nil. String's calls a user object's #to_str (private or not), as
+     CRuby's rb_check_string_type does, through the conversion bridge
+     (sp_poly_check_str): its String answer, or nil. IO's calls no #to_io. */
   if (recv >= 0 && argc == 1 && sp_streq(name, "try_convert") &&
       nt_kind(nt, recv) == NK_ConstantReadNode &&
       nt_str(nt, recv, "name") &&
@@ -16522,6 +16523,13 @@ int emit_class_new_call(Compiler *c, int id, Buf *b) {
     int ok = want_str ? (at == TY_STRING || at == TY_STRBUF) : (at == TY_IO);
     if (ok) { emit_boxed(c, argv[0], b); return 1; }
     if (want_str && try_convert_arysub(c, argv[0], 2, b)) return 1;
+    if (want_str && (ty_is_object(at) || repr_of(c, argv[0]).kind == RK_BOXED)) {
+      int t = ++g_tmp;
+      buf_printf(b, "({ const char *_t%d = sp_poly_check_str(", t);
+      emit_boxed(c, argv[0], b);
+      buf_printf(b, "); _t%d ? sp_box_str(_t%d) : sp_box_nil(); })", t, t);
+      return 1;
+    }
     if (emit_try_convert_boxed(c, nt_str(nt, recv, "name"), argv[0], b)) return 1;
     buf_puts(b, "((void)("); emit_expr_for_effect(c, argv[0], b); buf_puts(b, "), sp_box_nil())");
     return 1;

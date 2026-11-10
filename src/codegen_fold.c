@@ -13918,6 +13918,11 @@ else {
     int pf_d = m && m->yields ? scope_proc_form_of(c, mi) : -1;
     Scope *callee = pf_d >= 0 ? &c->scopes[pf_d] : m;
     if (pf_d >= 0 && blk_node >= 0) blk_tmp = emit_blk_proc_tmp(c, blk_node);
+    /* the clone answers boxed, whatever this call's type: its value goes
+       through the conversion a switch arm's takes (emit_disp_arm_assign) */
+    Buf pf_call; memset(&pf_call, 0, sizeof pf_call);
+    Buf *direct_b = b;
+    if (pf_d >= 0 && !ret_is_void) b = &pf_call;
     /* a value-type receiver is passed by value (no pointer cast); so is
        the self of an Object / Array / Hash / Numeric reopening, which its
        methods take boxed (emit_method_signature) and which has no struct */
@@ -13955,6 +13960,16 @@ else {
       else buf_puts(b, ", NULL");
     }
     buf_puts(b, ")");
+    if (b == &pf_call) {
+      b = direct_b;
+      int rt = ++g_tmp;
+      buf_puts(b, "({ ");
+      if (g_disp_ro) buf_puts(b, oint_ctype(disp_ret)); else emit_ctype(c, disp_ret, b);
+      buf_printf(b, " _t%d; ", rt);
+      emit_disp_arm_assign(c, callee, pf_call.p ? pf_call.p : "", ret, disp_ret, rt, b);
+      buf_printf(b, "_t%d; })", rt);
+      free(pf_call.p);
+    }
     free(atmp); free(atmp_ty); free(atmp_o); arg_layout_free(&L);
     return;
   }

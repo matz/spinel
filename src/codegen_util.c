@@ -1033,7 +1033,7 @@ void ren_copy_free(RenCopy *k) {
 }
 
 RenPark ren_park(int from) {
-  RenPark p = { g_nren, from, { NULL, NULL, 0 }, -1, -1 };
+  RenPark p = { g_nren, from, { NULL, NULL, 0 }, -1 };
   /* from 0: a C function body of its own. It is not inside the poly
      dispatch arm its call site may sit in either: the arm context (g_arm) is the
      call's, under which no user class owns a name, and a proc body
@@ -1046,7 +1046,6 @@ RenPark ren_park(int from) {
   if (from == 0) {
     p.arm = view_push_arm(-1, -1, 0);
     g_arm.send_split = -1;
-    p.fence = view_push_fn();
   }
   ren_copy_out(&p.k, from, g_nren - from);
   g_nren = from;
@@ -1054,7 +1053,6 @@ RenPark ren_park(int from) {
 }
 
 void ren_unpark(RenPark *p) {
-  if (p->fence >= 0) view_pop(NULL, p->fence);
   if (p->arm >= 0) view_pop(NULL, p->arm);
   g_nren = p->sv;
   ren_copy_in(&p->k, p->from);

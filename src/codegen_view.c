@@ -54,7 +54,7 @@
 
 /* what an entry overrides: the node's type, one representation flag, or
    the arm context */
-enum { VK_TYPE = -1, VK_ARM = -2, VK_FACE = -3, VK_STMT = -4, VK_FN = -6, VK_TARGET = -7, VK_CONVERSION = -8, VK_CONST_READ = -9, VK_CLASS_IS = -10 };
+enum { VK_TYPE = -1, VK_ARM = -2, VK_FACE = -3, VK_STMT = -4, VK_TARGET = -7, VK_CONVERSION = -8, VK_CONST_READ = -9, VK_CLASS_IS = -10 };
 static struct { Compiler *c; int id; int kind; int saved; int val; ArmCtx arm_saved; const void *pre; } view_stack[VIEW_MAX];
 static int view_face = -1;   /* the innermost face entry, or -1 */
 static int view_stmt = -1;   /* the innermost statement entry, or -1 */
@@ -329,12 +329,8 @@ int view_class_is(Compiler *c, int node, unsigned reads) {
 }
 unsigned view_class_is_read(int tok) { return tok >= 0 && tok < view_sp ? (unsigned)view_stack[tok].val : 0; }
 
-/* (the entry now only holds a slot of the emission stack per nested function body; the next change removes it) */
-int view_push_fn(void) { return view_open_mark(VK_FN, -1, 0, NULL); }
-
 /* the entry on top, put back */
 static void view_close(int tok) {
-  if (view_stack[tok].kind == VK_FN) return;
   if (view_stack[tok].kind == VK_ARM) { g_arm = view_stack[tok].arm_saved; return; }
   if (view_stack[tok].kind == VK_FACE) { view_face = view_stack[tok].arm_saved.pd_skip; return; }
   if (view_stack[tok].kind == VK_STMT) { view_stmt = view_stack[tok].saved; return; }

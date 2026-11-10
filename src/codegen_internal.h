@@ -122,7 +122,7 @@ typedef struct { char **f, **t; int n; } RenCopy;
 void ren_copy_out(RenCopy *k, int from, int n);
 void ren_copy_in(const RenCopy *k, int from);
 void ren_copy_free(RenCopy *k);
-typedef struct { int sv, from; RenCopy k; int fence, arm; } RenPark;
+typedef struct { int sv, from; RenCopy k; int arm; } RenPark;
 RenPark ren_park(int from);
 void ren_unpark(RenPark *p);
 const char *strbuf_local_name(Compiler *c, int recv);
@@ -2665,8 +2665,6 @@ int view_const_read_done(Compiler *c, int id);
 int view_push_const_read(Compiler *c, int id);
 enum { VR_STRBUF_BOX, VR_HANDLE_DEMAND, VR_POLY_LIFT, VR_NILNARROW, VR_NIL_TESTED, VR_HEAD_HELD, VR_DISCARDED };
 int view_push_repr(Compiler *c, int id, int flag, int v);
-/* A fence entry for a C function body emitted by ren_park(0) (popped by ren_unpark): it now only holds a slot of the emission stack */
-int view_push_fn(void);
 /* bumped by every view push, pop and unwind: a per-node memo of a decision
    that reads the flags or the type keys on it */
 unsigned view_epoch(void);

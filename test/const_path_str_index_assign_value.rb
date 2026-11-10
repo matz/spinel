@@ -1,3 +1,4 @@
+# frozen_string_literal: true
 # String#[]= through a constant, a global or a class variable, in value
 # position. A statement stored through the constant already; an assignment
 # whose value is read (`x = (K::BUF[0] = "Q")`, an argument, an element) was

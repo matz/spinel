@@ -160,6 +160,11 @@ void sp_re_set_captures(const char *str, int *caps, int ncaps) {SP_GC_ROOT_STR(s
   sp_re_last_str = str;
   sp_re_last_ncap = ncaps;
   sp_re_last_lit = 0;
+  /* `$~` is built from sp_re_caps (sp_re_last_matchdata): a caller that
+     matched into its own array (Regexp#match, String#match) has its
+     positions copied there, or `$~` read the positions of an older match */
+  if (caps != sp_re_caps)
+    for (int i = 0; i < ncaps * 2 && i < 64; i++) sp_re_caps[i] = caps[i];
   for (int i = 0; i < 10; i++) sp_re_captures[i] = NULL;
   for (int i = 1; i < ncaps && i < 10; i++) {
     if (caps[i*2] >= 0 && caps[(i*2)+1] >= 0) {
@@ -1304,6 +1309,7 @@ sp_MatchData *sp_re_matchdata(mrb_regexp_pattern *pat, const char *str) {SP_GC_R
   }
   int pairs = (n > 64 ? 64 : n) / 2;
   str = sp_str_keep(str);   /* (the MatchData and $~ keep the target: a copy of a live payload, sp_str_keep) */
+  sp_re_last_pat = pat;
   sp_re_set_captures(str, caps, pairs);
   sp_MatchData *m = sp_md_alloc(pairs);
   m->source = str;
@@ -1331,6 +1337,7 @@ sp_MatchData *sp_re_matchdata_at(mrb_regexp_pattern *pat, const char *str, sp_in
   }
   int pairs = (n > 64 ? 64 : n) / 2;
   str = sp_str_keep(str);   /* (the MatchData and $~ keep the target: a copy of a live payload, sp_str_keep) */
+  sp_re_last_pat = pat;
   sp_re_set_captures(str, caps, pairs);
   sp_MatchData *m = sp_md_alloc(pairs);
   m->source = str;

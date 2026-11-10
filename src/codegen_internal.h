@@ -734,6 +734,10 @@ extern int g_loop_quiet;   /* the next emit_loop_body leaves its safepoint and f
 void hcv_end(Compiler *c, void *v, int indent);
 int hc_cob_entry(Compiler *c, int recv, int idx, char *d, size_t cap);
 int hc_cob_entry_of(Compiler *c, int recv, char *d, size_t cap);
+/* Does the loop with body `body` and block `blk` (-1 for none) leave the
+   variable node `n` reads as it is: a local it neither writes nor binds as a
+   block's parameter, or an instance variable it does not write? */
+int hcv_node_stable(Compiler *c, int body, int blk, int n);
 void hc_cob_mark(Buf *b, int part);
 extern int g_hc_cob_off;
 void *hc_iter_begin(Compiler *c, int id, Buf **bp);   /* an Integer block loop's header cache region */

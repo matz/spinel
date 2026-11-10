@@ -13092,7 +13092,7 @@ static int hcv_binds(Compiler *c, int n, const char *nm) {
    variable node `n` reads as it is: a local it writes nowhere, binds as no
    block's parameter (its own block's included) -- or an instance variable it
    writes nowhere? Any other node may read something else at each pass. */
-static int hcv_node_stable(Compiler *c, int body, int blk, int n) {
+int hcv_node_stable(Compiler *c, int body, int blk, int n) {
   const NodeTable *nt = c->nt;
   NodeKind k = n >= 0 ? nt_kind(nt, n) : NK_NONE;
   const char *nm = n >= 0 ? nt_str(nt, n, "name") : NULL;

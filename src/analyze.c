@@ -41999,12 +41999,14 @@ static void mark_nullable_int_locals(Compiler *c) {
     }
     changed |= mark_block_param_arrays(c);
     /* `a.zip(b) { |x, y| }`: x is an element of a, y one of b; so are a
-       product's `|x, y|` (product_block_binds_elems) */
+       product's `|x, y|` (product_block_binds_elems). A zip's y is also
+       nil past b's end when b is shorter than a, which no type tells. */
     NT_FOREACH_KIND(nt, NK_CallNode, id) {
       const char *znm = nt_str(nt, id, "name");
       int blk = nt_ref(nt, id, "block"), recv = nt_ref(nt, id, "receiver");
       if (!znm || blk < 0 || recv < 0) continue;
-      if (!sp_streq(znm, "zip") && !(sp_streq(znm, "product") && product_block_binds_elems(c, blk))) continue;
+      int zip = sp_streq(znm, "zip");
+      if (!zip && !(sp_streq(znm, "product") && product_block_binds_elems(c, blk))) continue;
       int za = nt_ref(nt, id, "arguments"), zn = 0;
       const int *zv = za >= 0 ? nt_arr(nt, za, "arguments", &zn) : NULL;
       Scope *bsc = comp_scope_of(c, blk);
@@ -42012,7 +42014,7 @@ static void mark_nullable_int_locals(Compiler *c) {
         const char *pnm = block_param_name(c, blk, pk);
         LocalVar *plv = pnm && bsc ? scope_local(bsc, pnm) : NULL;
         if (!plv || (plv->type != TY_INT && plv->type != TY_FLOAT) || plv->nullable_int ||
-            !nullable_int_elem_expr(c, pk ? zv[pk - 1] : recv, 0)) continue;
+            (!(zip && pk) && !nullable_int_elem_expr(c, pk ? zv[pk - 1] : recv, 0))) continue;
         plv->nullable_int = 1; changed = 1;
       }
     }

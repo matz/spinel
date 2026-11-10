@@ -1,0 +1,8 @@
+[226445.0, 519300, "TypeError: nil can't be coerced into Float", "TypeError: nil can't be coerced into Integer"]
+[226445.0, 519300, "TypeError: nil can't be coerced into Float", "TypeError: nil can't be coerced into Integer"]
+[226445.0, 519300, "TypeError: nil can't be coerced into Float", "TypeError: nil can't be coerced into Integer"]
+[226445.0, 519300, "TypeError: nil can't be coerced into Float", "TypeError: nil can't be coerced into Integer"]
+[[0.3125, 0.5, 0.6875], [0.5, 0.875, 1.25], [0.6875, 1.25, 1.8125]]
+"TypeError: nil can't be coerced into Float"
+[1.5, -1.0, -1.0]
+[11, 22, 0]

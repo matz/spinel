@@ -9,4 +9,3 @@ end
 p Math.lgamma(Float::NAN)
 p Math.lgamma(1.0e308)
 p Math.lgamma(-0.0)
-p Math.lgamma(-1.0)

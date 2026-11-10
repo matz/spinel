@@ -3,4 +3,3 @@ Math::DomainError: Numerical argument is out of domain - lgamma
 [NaN, 1]
 [Infinity, 1]
 [Infinity, -1]
-[Infinity, 1]

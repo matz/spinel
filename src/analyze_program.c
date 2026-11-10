@@ -563,6 +563,29 @@ int prog_load_sets_flag(Compiler *c, int id) {
   return id >= 0 && id < nt->count && c->load_sets_flag[id];
 }
 
+/* Does def `def`'s body call the eval family (class_eval, module_eval,
+   instance_eval) on a String rather than a block? */
+static int prog_evals_text_in(const NodeTable *nt, int id, int depth) {
+  if (id < 0 || depth > 64) return 0;
+  NodeKind k = nt_kind(nt, id);
+  if (k == NK_DefNode || k == NK_ClassNode || k == NK_ModuleNode) return 0;
+  if (k == NK_CallNode) {
+    const char *nm = nt_str(nt, id, "name");
+    if (nm && (sp_streq(nm, "class_eval") || sp_streq(nm, "module_eval") || sp_streq(nm, "instance_eval")) &&
+        nt_ref(nt, id, "block") < 0 && nt_ref(nt, id, "arguments") >= 0) return 1;
+  }
+  for (int i = 0, nr = nt_num_refs(nt, id); i < nr; i++) if (prog_evals_text_in(nt, nt_ref_at(nt, id, i), depth + 1)) return 1;
+  for (int i = 0, na = nt_num_arrs(nt, id); i < na; i++) {
+    int n = 0;
+    const int *v = nt_arr_at(nt, id, i, &n);
+    for (int j = 0; j < n; j++) if (prog_evals_text_in(nt, v[j], depth + 1)) return 1;
+  }
+  return 0;
+}
+static int prog_body_evals_text(const NodeTable *nt, int def) {
+  return def >= 0 && nt_kind(nt, def) == NK_DefNode && prog_evals_text_in(nt, nt_ref(nt, def, "body"), 0);
+}
+
 /* A registration runs where its ordinary call stands, including in a body
    whose bare calls otherwise default to declarations. */
 int prog_stmt_call_executable(Compiler *c, int id, int ci) {
@@ -583,6 +606,19 @@ int prog_stmt_call_executable(Compiler *c, int id, int ci) {
      and nothing said so (#4051). */
   if (!is_user && cn && ci >= 0)
     is_user = call_target(c, id, ci, cn, CT_CMETHOD, NULL) >= 0;
+  /* ...or, past the class's own chain, an instance method a `class Class`
+     (for a class's body) or `class Module` reopening gives, as CRuby's
+     lookup on self goes on through the class of a class, whose body
+     evaluates a String (`module_eval("def #{name} = ...")`): skipped, the
+     methods it writes were missing where nothing expanded it (a module's
+     body under the graph model, ct_macro_form), and the call now runs
+     there, refused as its eval is */
+  for (int u = 0; !is_user && cn && ci >= 0 && u < 2; u++) {
+    if (u == 0 && comp_class_is_module(c, &c->classes[ci])) continue;
+    int k = comp_class_index(c, u == 0 ? "Class" : "Module");
+    int mi = k >= 0 && k != ci ? call_target(c, id, k, cn, 0, NULL) : -1;
+    is_user = mi >= 0 && prog_body_evals_text(nt, c->scopes[mi].def_node);
+  }
   /* ...and so is one that finds none of the program's methods of its name
      where it runs (`zz` before `def self.zz`): CRuby's NameError there
      (cplan_missing) */

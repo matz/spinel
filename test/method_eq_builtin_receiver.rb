@@ -22,3 +22,11 @@ p h[s.method(:upcase)]
 p h[s.method(:downcase)]
 # not a Method
 p s.method(:upcase) == "upcase"
+# an unbound copy keeps the method it stands for; a Method is not its own
+# UnboundMethod's equal
+u = s.method(:upcase).unbind
+p u == s.method(:upcase).unbind
+p u.eql?(s.method(:upcase).unbind)
+p u == s.method(:downcase).unbind
+p u == s.method(:upcase)
+p({ u => :u }[s.method(:upcase).unbind])

@@ -1926,6 +1926,42 @@ const char *past_open_parens(const char *s) {
   return s;
 }
 
+/* The gate's NoMethodError token alone, at the start of the text (the gap's
+   raise is not it), for a site that rebuilds that token's text. */
+int emitted_nomethod_token(const char *txt) {
+  return txt && strncmp(txt, "sp_raise_nomethod(", 18) == 0;
+}
+/* Does the emitted text start with the raise of a call that found no method
+   here: the unresolved-call gate's NoMethodError token, or the NotImplementedError
+   of a call CRuby answers that no route took (emit_unrouted_gap)? The arms that
+   build a call from several attempts read it as "this attempt found nothing"
+   and take another route. The text is read as it stands: a caller that sees
+   the token behind parentheses (a scalar slot's `(token, default)`) skips them
+   first with past_open_parens. The poly gate's sp_raise_poly_nomethod( is a
+   token of its own, which the sites that take it test beside this. */
+int emitted_no_method(const char *txt) {
+  return emitted_nomethod_token(txt) || (txt && strncmp(txt, "sp_raise_unrouted(", 18) == 0);
+}
+/* ... anywhere in the text, not only at its start */
+int emitted_no_method_in(const char *txt) {
+  return txt && (strstr(txt, "sp_raise_nomethod(") || emitted_unrouted_in(txt));
+}
+/* ... the raise of a call CRuby answers that no route took, anywhere in it */
+int emitted_unrouted_in(const char *txt) {
+  return txt && strstr(txt, "sp_raise_unrouted(") != NULL;
+}
+/* ... the gap's raise of a call named name, anywhere in it: its message names
+   the CRuby method, `Owner#name` or `Owner.name` (emit_unrouted_gap) */
+int emitted_unrouted_for(const char *txt, const char *name) {
+  char tok[300];
+  if (!emitted_unrouted_in(txt) || !name) return 0;
+  for (const char *sep = "#."; *sep; sep++) {
+    snprintf(tok, sizeof tok, "%c%s is not supported\"; })", *sep, name);
+    if (strstr(txt, tok)) return 1;
+  }
+  return 0;
+}
+
 /* Does an emitted expression diverge: lead with one of the SP_NORETURN
    sp_raise_ helpers, or Kernel#abort / #exit's (sp_abort_raise,
    sp_exit_raise), bare or as the voided first operand of a comma (the
@@ -2331,7 +2367,7 @@ int emit_unresolved_coerced(Compiler *c, int node, TyKind target, Buf *b) {
 
 /* The same over the node's emitted text, for a caller that has it already */
 int emit_unresolved_coerced_text(Compiler *c, int node, TyKind target, const char *txt, Buf *b) {
-  int is_tok = strncmp(past_open_parens(txt), "sp_raise_nomethod(", 18) == 0;
+  int is_tok = emitted_no_method(past_open_parens(txt));
   /* The missing-super arm emits a `(sp_raise_cls(...), 0)` comma expression
      whose dummy tail is a bare int; in a pointer-typed slot that is ill-typed
      C. The raise never returns, so evaluate it for the raise and yield the

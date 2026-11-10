@@ -1025,9 +1025,21 @@ x = nil
 r = (begin; x.nope; rescue NoMethodError; "runtime"; end)   # => "runtime"
 ```
 
-A name CRuby *does* define on that class, which Spinel has not implemented, is
-a different thing entirely: that is a gap in Spinel, and it reports itself as
-an `unsupported call` naming the node, not as a `NoMethodError`.
+A name CRuby *does* give the receiver's class, at a visibility the call reaches
+and an argument count it accepts, which Spinel has no route for, is a different
+thing entirely: that is a gap in Spinel, and it is not a `NoMethodError`. The
+build warns of it, naming the CRuby method, and the call raises
+`NotImplementedError` where it runs, after its receiver and arguments have run:
+
+```ruby
+a = 1
+p local_variables   # spinel: t.rb:2: warning: Kernel#local_variables is not supported (raises NotImplementedError when reached)
+```
+
+`NotImplementedError` is a `ScriptError`, so a `rescue NameError` or
+`rescue NoMethodError` around such a call does not catch it. A call in code that
+never runs (a branch not taken, a method nothing calls) gets the warning if it
+is compiled, and the program builds and answers as before.
 
 #### A typed array holds one kind of element
 

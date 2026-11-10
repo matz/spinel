@@ -114,6 +114,7 @@ int is_endpoint_query(const char *n); /* first last: collection or Range endpoin
 int is_map_alias(const char *n); /* map collect: Enumerable transformation aliases */
 int is_instance_eval_family(const char *n); /* instance_eval instance_exec */
 int is_reflective_access(const char *n); /* instance_variable_get/set, class_variable_get/set, const_get/set, remove_* */
+int is_name_checked_call(const char *n); /* CRuby's answer turns on the name given: a NameError for one not allowed or not there */
 int is_reflective_listing(const char *n); /* instance_variables class_variables constants */
 int is_local_reflection(const char *n); /* eval binding local_variable_get/set local_variables */
 int is_block_given_name(const char *n); /* block_given? */
@@ -298,6 +299,7 @@ int is_class_relatives_query(const char *n); /* ancestors superclass subclasses 
 int is_class_query(const char *n); /* class */
 int is_method_owner_query(const char *n); /* owner */
 int is_instance_method_name(const char *n); /* instance_method public_instance_method */
+int is_public_method_lookup(const char *n); /* public_instance_method public_method */
 int is_method_object_maker(const char *n); /* method public_method singleton_method instance_method public_instance_method */
 int is_bound_method_maker(const char *n);  /* method public_method: a Method of the receiver's own method */
 int is_super_method_name(const char *n);   /* super_method: the Method one step up its owner's chain */
@@ -382,7 +384,7 @@ int is_string_rebind_mutator(const char *n); /* mutators needing argument-rebind
 int is_string_read_only_method(const char *name);
 int str_mutator_str_args(const char *n, int argc, int *int_ok); /* the arguments a String mutator takes as Strings */
 
-int builtin_answers_ahead_of(const char *cls, const char *m, const char *root); /* an ancestor of cls ahead of root (NULL: any) owns instance method m (CRuby's tables) */
+int builtin_answers_ahead_of(const char *cls, const char *m, const char *root); /* an ancestor of cls ahead of root (NULL: any) owns instance method m, or undefines it (CRuby's tables) */
 const char *builtin_ancestor_at(const char *cls, int i);   /* the i-th ancestor (0: cls) in CRuby's lookup order, NULL past the last */
 int builtin_owns_instance_method(const char *cls, const char *m);   /* cls's own instance method m, any visibility (CRuby's tables) */
 const char *builtin_next_class_answering(int *i, const char *m);   /* the next class of the tables, from table *i, that Spinel has as a value and that answers m ahead of Object */
@@ -493,12 +495,15 @@ int core_class_value_answers(const char *cls, const char *m); /* CRuby's core cl
 /* One builtin class or module's row of CRuby's own method tables
    (builtin_method_tables.inc, generated): its own instance method names
    (public, private, protected), its own singleton method names and its
-   ancestors, sorted, with their lengths. */
+   ancestors, sorted, with their lengths, then the names it and its singleton
+   class undefine (Complex#floor, Rational.allocate), where a lookup stops. */
 typedef struct { const char *name; int module; unsigned flags; const char *const *inst; const unsigned short *iflags; int ninst;
-                 const char *const *sing; const unsigned short *sflags; int nsing; const char *const *ancestors; const unsigned short *aflags; int nanc; } BuiltinMethodTable;
+                 const char *const *sing; const unsigned short *sflags; int nsing; const char *const *ancestors; const unsigned short *aflags; int nanc;
+                 const char *const *undef; int nundef; const char *const *sundef; int nsundef; } BuiltinMethodTable;
 /* Does CRuby's builtin class or module cls, or an ancestor of it, have a
    method `name` (sg: on its class side: its singleton methods and its
-   ancestors', then Class's or Module's instance methods)? A builtin the tables
+   ancestors', then Class's or Module's instance methods)? A name CRuby
+   undefines on the way (Complex#floor, Rational.allocate) is not there. A builtin the tables
    do not hold (a builtin class row, a reopened builtin) answers 1, unknown, so
    it never raises; 0 for any other name. With certain, only a method CRuby
    has with no library required, or with one the program requires, at the
@@ -511,6 +516,9 @@ int builtin_method_answers(const char *cls, const char *name, int sg, int certai
    (also Class's)? */
 enum { BSELF_MAIN, BSELF_MODULE, BSELF_CLASS, BSELF_N };
 int builtin_self_method_known(const char *name, int kind);
+/* Is `m` one of main's own methods, beside Object's (its to_s and inspect, the
+   private ones a top-level body calls as a class body would)? */
+int main_self_method(const char *m);
 int is_builtin_module_const_name(const char *n);
 int is_untabled_native_class_name(const char *n);
 

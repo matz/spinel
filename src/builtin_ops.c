@@ -3200,6 +3200,13 @@ static unsigned bop_call_flags(TyKind rt, const char *name, int argc, int has_bl
   return op ? op->flags : 0;
 }
 
+/* Does a row take a call of name and argc arguments on a receiver of kind rt,
+   its Array or Hash variant through the family's rows, a String buffer as a
+   String? */
+int bop_row_takes(TyKind rt, const char *name, int argc, int has_block) {
+  return bop_find(rt == TY_STRBUF ? TY_STRING : bop_family_of(rt), name, argc, has_block) != NULL;
+}
+
 int bop_answers_self(TyKind rt, const char *name, int argc, int has_block) {
   return bop_call_flags(rt, name, argc, has_block) &
          (BOPF_SELF | BOPF_SELF_OR_NIL | BOPF_SELF_CLASS | BOPF_SELF_EXACT | BOPF_COPY_CLASS);

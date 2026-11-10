@@ -2542,9 +2542,9 @@ static const char *cm_self_name(Compiler *c, int self, char *buf, size_t cap) {
   return buf;
 }
 /* See call_plan.h. */
-int cplan_const_recv_class(Compiler *c, int id, int recv) {
+int cplan_const_recv_class(Compiler *c, int id, int recv, int *core) {
   int framed = elab_plan_enter(c, id);
-  int ci = elab_class_ref_at(c, recv, NULL);
+  int ci = elab_class_ref_at(c, recv, core);
   if (framed) elab_plan_leave(c);
   return ci;
 }
@@ -2570,7 +2570,7 @@ int cplan_missing(Compiler *c, int id, char *self_text, size_t cap, int *anon) {
   NodeKind rk = recv >= 0 ? nt_kind(nt, recv) : NK_NONE;
   int cr = rk == NK_ConstantReadNode || rk == NK_ConstantPathNode;
   if (!name || (recv >= 0 && !cr && rk != NK_SelfNode) || an_scopes_named_first(c, name) < 0) return CM_NONE;
-  int ci = cr ? cplan_const_recv_class(c, id, recv) : cplan_self_class(c, id);
+  int ci = cr ? cplan_const_recv_class(c, id, recv, NULL) : cplan_self_class(c, id);
   if (ci < -1 || ci >= c->nclasses || (cr && ci < 0)) return CM_NONE;
   /* a method the tables answer for self, which the record proves is not
      defined where the call runs: a class's class methods, main's (and a
@@ -2583,6 +2583,229 @@ int cplan_missing(Compiler *c, int id, char *self_text, size_t cap, int *anon) {
   if (cm_builtin_answers(c, ci, name)) return CM_NONE;
   if (anon) *anon = cm_self_name(c, ci, self_text, cap) ? -1 : ci;
   return nt_vcall(nt, id) ? CM_NAMEERROR : CM_NOMETHOD;
+}
+/* The builtin class a program class's class side inherits from (Object
+   unless it names another), for the singleton methods it answers; NULL where
+   the chain ends at a native class, a Struct or a superclass that is no
+   plain `class K` (refl_builtin_vis reads those apart). */
+static const char *cu_class_root(Compiler *c, int ci) {
+  int depth = 0;
+  for (int k = ci; k >= 0 && depth++ <= c->nclasses; k = c->classes[k].parent)
+    if (c->classes[k].is_native_class) return NULL;
+  const ClassInfo *ri = &c->classes[ci];
+  if (ri->is_builtin_const && ri->enclosing_class < 0) return ri->name;
+  /* the builtin class the whole chain stands on (class_builtin_parent), by its row */
+  int bid = class_builtin_parent(c, ci), i = 0;
+  const BuiltinClass *r = NULL;
+  while ((r = builtin_class_at(i++)) && r->id != bid) {}
+  return r ? r->name : NULL;
+}
+/* Does CRuby's arity table hold a row for `name` of the class that owns it
+   (Kernel's and BasicObject's public methods are Object's rows; Kernel's
+   module functions have their own, builtin_kernel_fn_span), and admit argc
+   positional arguments? No row: not admitted, the table cannot tell. */
+static int cu_arity_admits(const char *own, const char *name, int argc) {
+  const char *rows = is_object_root(own) ? "Object" : own;
+  int lo, hi;
+  if (builtin_instance_method_known(rows, name)) return builtin_arity_admits(rows, name, argc);
+  return is_kernel_module_name(own) && builtin_kernel_fn_span(name, 0, &lo, &hi) && argc >= lo && (hi < 0 || argc <= hi);
+}
+/* Does the record prove that no method `name` is defined where call id runs,
+   for the instance side of the class named cls (program class ci, or -1 for
+   a builtin)? A def proves nothing about a class it does not reach, so the
+   proof is the record's answer for each class a def could be on: the
+   program's top-level defs (Object's private methods), program class ci's
+   chain, or each builtin ancestor of cls the program reopens (a reopening
+   carries its includes and prepends, and the record lists them: a mixin it
+   cannot place makes the answer unknown, and a computed include is refused).
+   elab_call_method also fails the proof for a run the record does not see.
+   CRuby's instance_method looks at neither method_missing nor
+   respond_to_missing?, and `method` at respond_to_missing? only (bound), so
+   only that hook fails the proof, and only for `method`. It cannot
+   place a call in a block a user method yields to (then only a name the
+   program defines nowhere is proved). */
+static int cu_name_absent(Compiler *c, int id, const char *cls, int ci, const char *name, int bound) {
+  /* a method CRuby's tables give the subject or an ancestor (with the
+     libraries the program loads: the json or bigdecimal methods a require
+     adds) is there whatever the program defines */
+  const char *tcls = ci >= 0 ? cu_class_root(c, ci) : cls;
+  if (tcls && builtin_method_answers(tcls, name, 0, 1)) return 0;
+  /* a define_method, alias_method or attr_* of a name the program computes
+     adds names the record cannot list */
+  if (an_prog_meta_by_value()) return 0;
+  /* a name no def, alias or define_method of the program has anywhere needs no
+     placement: nothing can add it but the sources the next tests rule out */
+  int hooks = bound && elab_method_versions(c, RESPOND_TO_MISSING_NAME);
+  if (!elab_method_versions(c, name) && !hooks && !elab_runs_unseen(c)) return 1;
+  if (hooks) return 0;
+  const char *anc = ci >= 0 ? NULL : core_class_ancestors(cls);
+  if (ci < 0 && !anc) return 0;
+  int framed = elab_plan_enter(c, id);
+  int none = elab_call_method(c, id, -1, name, 0, 0) == ELAB_NO && (ci < 0 || elab_call_method(c, id, ci, name, 0, 0) == ELAB_NO);
+  size_t l;
+  for (const char *p = anc && *anc ? anc : NULL, *nx; none && p; p = nx) {
+    char an[96];
+    nx = core_ancestor_step(p, &l);
+    snprintf(an, sizeof an, "%.*s", (int)l, p);
+    int slot = builtin_core_class_slot(an), ca = slot >= 0 ? comp_core_class(c, slot) : -1;
+    if (ca >= 0) none = elab_call_method(c, id, ca, name, 0, 0) == ELAB_NO;
+  }
+  if (framed) elab_plan_leave(c);
+  return none;
+}
+/* The calls that look a method up by the name they are given and raise
+   NameError for one that is not there: Module#instance_method and
+   public_instance_method on a class or module value (subj 1), method and
+   public_method on a value (subj 2). CRuby's NameError (and its words) when
+   a literal name is provably absent, the gap when it is there or the record
+   cannot prove it is not (a method_missing or respond_to_missing?, a run it
+   does not see, a def of the name it cannot place); a computed name, a
+   private name asked of the public forms, singleton_method and a self or a
+   class value as the subject of method are CU_NONE: the gate's NoMethodError, which is a
+   NameError, stays. msg gets the NameError's message. */
+static CplanUnrouted cu_lookup_by_name(Compiler *c, int id, const char *name, int subj, const char *cls,
+                                       int ci, int is_mod, char *msg, size_t cap) {
+  const char *sym = method_sym_arg(c, id);
+  if (!sym || !cls || ci < -1 || (ci >= 0 && comp_class_anonymous(c, ci)) || !subj) return CU_NONE;
+  int pub = is_public_method_lookup(name);
+  /* a program class's chain is the record's; a builtin's, CRuby's tables (any
+     visibility for the plain forms) */
+  int v = ci >= 0 && !c->classes[ci].is_builtin_const ? refl_builtin_vis(c, ci, sym, 1, NULL) : core_method_vis(cls, sym, 1, NULL);
+  if (v < 0) return CU_NONE;
+  if (v > 0) return (pub && v != 1) ? CU_NONE : CU_GAP;
+  /* not in the tables: absent only where the record proves it; else a method
+     a source it cannot list may add is the gap, not a NameError */
+  if (!cu_name_absent(c, id, cls, ci >= 0 && !c->classes[ci].is_builtin_const ? ci : -1, sym,
+                      subj == 2)) return CU_GAP;
+  snprintf(msg, cap, "undefined method '%s' for %s '%s'", sym, is_mod ? "module" : "class", cls);
+  return CU_RAISES_NAME;
+}
+/* What a class or module value answers for `name`, by CRuby's lookup on its
+   class side: the singleton methods of root (the builtin class it is or
+   stands on; NULL for a module) and of its superclasses, then Class's or
+   Module's instance methods, an undefine on the way ending it
+   (Rational.allocate, Integer.new). The visibility and *own as
+   core_method_vis gives them; a method of root's own class side is public
+   there, with *sep '.'. */
+static int cu_class_value_vis(int mod, const char *root, const char *name, int any_vis, const char **own, int *sep) {
+  int v = core_method_vis(mod ? "Module" : "Class", name, 1, own);
+  if (!root) return v;
+  if ((v <= 0 || (v != 1 && !any_vis)) && builtin_method_answers(root, name, 1, 1)) { *own = root; *sep = '.'; return 1; }
+  /* what Class or Module has, the lookup may not reach */
+  return v > 0 && !builtin_method_answers(root, name, 1, 0) ? 0 : v;
+}
+/* See call_plan.h. */
+CplanUnrouted cplan_unrouted(Compiler *c, int id, char *owner, size_t cap, int *nil_answers) {
+  const NodeTable *nt = c->nt;
+  const char *name = nt_kind(nt, id) == NK_CallNode ? nt_str(nt, id, "name") : NULL;
+  int recv = name ? nt_ref(nt, id, "receiver") : -1, argc = 0;
+  const int *argv = name ? call_args(nt, id, &argc) : NULL;
+  if (nil_answers) *nil_answers = name && core_method_vis("NilClass", name, 1, NULL) > 0;
+  if (!name || nt_argv_has(nt, argv, argc, NT_ARG_SPLAT | NT_ARG_KEYWORDS | NT_ARG_FORWARDING)) return CU_NONE;
+  /* a method whose CRuby answer turns on the name it is given (a NameError
+     for one not allowed or not there, `Object.class_variable_get("x")`) is
+     no gap the plan can tell: a `rescue NameError` around the call catches
+     CRuby's raise, and the gate's NoMethodError, which is a NameError, but
+     no NotImplementedError */
+  if (argc > 0 && is_name_checked_call(name)) return CU_NONE;
+  NodeKind rk = recv >= 0 ? nt_kind(nt, recv) : NK_NONE;
+  int selfish = recv < 0 || rk == NK_SelfNode;
+  /* the visibility the call's shape reaches: send and a receiverless call
+     reach any, public_send and an explicit receiver only public methods */
+  int any_vis = (selfish || nt_str(nt, id, "send_blind")) && !nt_str(nt, id, "vis_enforce");
+  /* what the tables say: vis (1 public, 2 protected, 4 private, 0 none, -1
+     the class is not in the tables), the owner, and the call's separator
+     ('.' for a module function on its module) */
+  int v = 0, ocls = comp_core_class(c, CORE_OBJECT), sep = '#', undef_ci = -1;
+  const char *own = NULL;
+  /* what a lookup by name asks of (cu_lookup_by_name): the subject's kind (1 a
+     class or module value, 2 a value), its class's name and program class */
+  int subj = 0, subj_ci = -1, subj_mod = 0;
+  const char *subj_cls = NULL;
+  TyKind rkinds[2] = { TY_UNKNOWN, TY_UNKNOWN };
+  if (selfish) {
+    int ie = ie_class_of(c, id), si = cplan_self_class(c, id);
+    const Scope *sc = comp_scope_of(c, id);
+    /* an instance_eval block (or define_method's) has the class of the
+       object it runs on, or none the plan knows; otherwise the record
+       settles main and a class body, and a def's own class says the rest */
+    int inst = -2, cval = -2, main_self = 0;
+    if (ie != -1) { if (ie < 0) return CU_NONE; inst = ie; }
+    else if (si >= 0) cval = si;
+    else if (si == -1) main_self = 1;
+    else if (sc && sc->class_id >= 0) { if (sc->is_cmethod) cval = sc->class_id; else inst = sc->class_id; }
+    else if (sc) inst = -1;
+    else return CU_NONE;
+    rkinds[0] = BOP_KERNEL;
+    if (inst >= 0 && (comp_class_is_module(c, &c->classes[inst]) || cu_class_root(c, inst) == NULL)) return CU_NONE;
+    if (main_self || inst == -1) {
+      v = core_method_vis("Object", name, 1, &own);
+      if (v <= 0 && main_self && main_self_method(name)) { v = 4; own = "main"; }
+    }
+    else if (inst >= 0) { v = refl_builtin_vis(c, inst, name, 1, &own); undef_ci = inst; }
+    else {
+      int mod = comp_class_is_module(c, &c->classes[cval]);
+      v = cu_class_value_vis(mod, mod ? NULL : cu_class_root(c, cval), name, any_vis, &own, &sep);
+      rkinds[1] = TY_CLASS;
+      subj = 1; subj_mod = mod; subj_ci = cval;
+      subj_cls = c->classes[cval].is_builtin_const ? c->classes[cval].name : class_ruby_name(c, cval);
+    }
+  }
+  else if (rk == NK_ConstantReadNode || rk == NK_ConstantPathNode) {
+    int core = -1, ci = cplan_const_recv_class(c, id, recv, &core);
+    const char *nm = core >= 0 ? core_class_name(core) : NULL;   /* a builtin class or module (also a reopened one) */
+    if (!nm && ci < 0) return CU_NONE;
+    int mod = nm ? is_builtin_module_name(nm) : comp_class_is_module(c, &c->classes[ci]);
+    v = cu_class_value_vis(mod, nm ? nm : mod ? NULL : cu_class_root(c, ci), name, any_vis, &own, &sep);
+    rkinds[0] = TY_CLASS;
+    subj = 1; subj_mod = mod;
+    subj_ci = ci >= 0 && core < 0 ? ci : -1;
+    subj_cls = nm ? nm : ci >= 0 ? class_ruby_name(c, ci) : NULL;
+  }
+  else {
+    TyKind rt = comp_ntype(c, recv);
+    if (repr_of(c, recv).kind == RK_BOXED || rt == TY_CLASS) return CU_NONE;
+    if (ty_is_object(rt)) {
+      undef_ci = ty_object_class(rt);
+      if (!cu_class_root(c, undef_ci)) return CU_NONE;
+      v = refl_builtin_vis(c, undef_ci, name, 1, &own);
+    }
+    else {
+      int k = core_of_type(rt);
+      const char *cn = k >= 0 ? core_class_name(k) : NULL;
+      if (!cn) return CU_NONE;
+      v = core_method_vis(cn, name, 1, &own);
+      subj_cls = cn;
+    }
+    if (ty_is_object(rt)) subj_cls = class_ruby_name(c, undef_ci);
+    subj = 2; subj_ci = undef_ci;
+    rkinds[0] = rt;
+    if (ty_builtin_ivar_less(rt)) rkinds[1] = BOP_IVAR_LESS;
+  }
+  if (v < 0 || (v > 0 && !own)) return CU_NONE;
+  /* the program may undefine the name on the receiver's chain (or Object's) */
+  if (v > 0 && ((undef_ci >= 0 && comp_is_undeffed_in_chain(c, undef_ci, name)) ||
+                (ocls >= 0 && comp_is_undeffed_in_chain(c, ocls, name)))) return CU_RAISES;
+  /* a method of the name that the program gives Object stands in front of
+     Kernel's for every receiver (a version of it may be the live one where
+     this call runs): not the builtin's gap */
+  if (v > 0 && ((ocls >= 0 && call_target(c, -1, ocls, name, 0, NULL) >= 0) ||
+                call_target(c, -1, -1, name, CT_TOP, NULL) >= 0)) return CU_NONE;
+  if (v == 0 || (v != 1 && !any_vis)) return CU_RAISES;
+  if (!cu_arity_admits(own, name, argc)) return CU_NONE;
+  /* a builtin-op row that takes the call is a route; the call's decline is
+     that route's rejection of an operand, which CRuby raises over too
+     (`[1].find(42) { false }` raises over `42.call`) */
+  for (int i = 0; argc > 0 && i < 2; i++)
+    if (rkinds[i] != TY_UNKNOWN && bop_row_takes(rkinds[i], name, argc, nt_ref(nt, id, "block") >= 0))
+      return CU_NONE;
+  if (is_method_object_maker(name)) {
+    CplanUnrouted r = (is_instance_method_name(name) && subj == 1) || (is_bound_method_maker(name) && subj == 2)
+                      ? cu_lookup_by_name(c, id, name, subj, subj_cls, subj_ci, subj_mod, owner, cap) : CU_NONE;
+    if (r != CU_GAP) return r;
+  }
+  snprintf(owner, cap, "%s%c%s", own, sep, name);
+  return CU_GAP;
 }
 /* The program class a bound capture (`S.method(:z)`, or on self or bare)
    asks of, by the record where it runs, the name it asks into *name; -1
@@ -2597,7 +2820,7 @@ static int cm_capture_class(Compiler *c, int id, const char **name) {
       (recv >= 0 && !cr && rk != NK_SelfNode) || !sym)
     return -1;
   if (name) *name = sym;
-  int ci = cr ? cplan_const_recv_class(c, id, recv) : cplan_self_class(c, id);
+  int ci = cr ? cplan_const_recv_class(c, id, recv, NULL) : cplan_self_class(c, id);
   return ci >= 0 && ci < c->nclasses ? ci : -1;
 }
 /* Can capture id (`K.method(:k)`, `public_method`) of cls's `name`, on
@@ -2723,8 +2946,8 @@ static int cplan_capture_gap(Compiler *c, int id) {
    core_method_vis), or any where cid's chain holds a native class?) */
 static int capture_builtin_answers(Compiler *c, int cid, const char *name) {
   if (object_instance_method_name(name) ||
-      (class_is_comparable(c, cid) && core_method_vis("Comparable", name, 0) > 0) ||
-      (class_mixes_in(c, cid, elab_module_named(c, "Enumerable"), 0) && core_method_vis("Enumerable", name, 0) > 0))
+      (class_is_comparable(c, cid) && core_method_vis("Comparable", name, 0, NULL) > 0) ||
+      (class_mixes_in(c, cid, elab_module_named(c, "Enumerable"), 0) && core_method_vis("Enumerable", name, 0, NULL) > 0))
     return 1;
   for (int k = cid, d = 0; k >= 0 && d <= c->nclasses; k = c->classes[k].parent, d++)
     if (c->classes[k].is_native_class) return 1;
@@ -2763,7 +2986,7 @@ int cplan_capture_misses(Compiler *c, int id, int k, const char *sym) {
 /* See call_plan.h. */
 int cplan_builtin_method_vis(Compiler *c, int node, int ci, const char *cls, const char *m, int inherit) {
   const ClassInfo *ki = ci >= 0 ? &c->classes[ci] : NULL;
-  int bv = ki ? refl_builtin_vis(c, ci, m, inherit) : core_method_vis(cls, m, inherit);
+  int bv = ki ? refl_builtin_vis(c, ci, m, inherit, NULL) : core_method_vis(cls, m, inherit, NULL);
   /* main's defs are Object's own methods, ahead of its and Kernel's rows */
   const char *on = ki ? (ki->is_builtin_const && ki->enclosing_class < 0 ? ki->name : NULL) : cls;
   int mv = bv >= 0 && on && is_object_class_name(on) ? elab_main_method_vis_at(c, node, m) : -1;
@@ -2848,7 +3071,7 @@ int cplan_self_builtin(Compiler *c, int id) {
   const char *name = nt_str(nt, id, "name");
   if (!name || recv < 0 || !nt_int(nt, id, "self_call", 0)) return 0;
   NodeKind rk = nt_kind(nt, recv);
-  int ci = rk == NK_ConstantReadNode || rk == NK_ConstantPathNode ? cplan_const_recv_class(c, id, recv) : -1;
+  int ci = rk == NK_ConstantReadNode || rk == NK_ConstantPathNode ? cplan_const_recv_class(c, id, recv, NULL) : -1;
   return ci >= 0 && call_target(c, -1, ci, name, CT_CMETHOD, NULL) >= 0 &&
          call_target(c, id, ci, name, CT_CMETHOD, NULL) < 0 && is_kernel_module_function(name);
 }
@@ -3746,7 +3969,7 @@ static int ver_list_held(Compiler *c, int id) {
   if (!c->nver_refl && !c->ncond_disp) return 0;
   NodeKind rk = r >= 0 ? nt_kind(nt, r) : NK_NONE;
   if (rk == NK_ConstantReadNode || rk == NK_ConstantPathNode) {
-    int k = cplan_const_recv_class(c, id, r);
+    int k = cplan_const_recv_class(c, id, r, NULL);
     /* a read a pass rewrote from a local has no place in the record: its
        name, as the list builtin resolves it (an_singleton_methods_foldable) */
     if (k < -1 && rk == NK_ConstantReadNode) k = comp_class_index(c, nt_str(nt, r, "name"));

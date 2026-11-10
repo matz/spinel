@@ -3336,6 +3336,10 @@ int poly_block_dispatch_cands(Compiler *c, int id, int *cand, int max) {
 static int builtin_arm_raises_name(const char *text, const char *name) {
   char rtok[300];
   snprintf(rtok, sizeof rtok, "sp_raise_nomethod(sp_nomethod_msg(\"%s\"", name);
+  /* this call's gap (emit_unrouted_gap) is the builtin declining too: it
+     reaches the gap reader outside the probe, which warns. A gap of another
+     call, in an operand, is that call's own raise, which the arm runs */
+  if (emitted_unrouted_for(text, name)) return 1;
   static const char tail[] = "else ";
   for (const char *p = strstr(text, rtok); p; p = strstr(p + 1, rtok))
     if ((size_t)(p - text) < sizeof tail - 1 || strncmp(p - (sizeof tail - 1), tail, sizeof tail - 1) != 0)
@@ -3501,8 +3505,8 @@ static int emit_poly_recv_block_dispatch_x(Compiler *c, int id, Buf *b, int inde
       view_pop(c, v);
     }
     view_unbind(g_n_argov - 1);
-    int str_arm = ab.p && !strstr(ab.p, "sp_raise_nomethod(");
-    int io_arm = fb.p && !strstr(fb.p, "sp_raise_nomethod(");
+    int str_arm = ab.p && !emitted_no_method_in(ab.p);
+    int io_arm = fb.p && !emitted_no_method_in(fb.p);
     if (str_arm || io_arm) {
       emit_indent(&sw, indent); buf_puts(&sw, "default: {\n");
       if (str_arm) {

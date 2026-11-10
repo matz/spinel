@@ -2662,7 +2662,7 @@ void emit_poly_cases0(Compiler *c, int id, int recv, const char *name, const Pol
     view_unbind(g_n_argov - 1);
     /* an emission that fell through to the raise token adds nothing: leave
        those tags on the switch's own default so the message is the same */
-    int kept9 = ib9.p && strncmp(ib9.p, "sp_raise_nomethod(", 18) != 0;
+    int kept9 = ib9.p && !emitted_no_method(ib9.p);
     if (g_plan_check) pa_observe(PA_TRIAL, PA_KEY_TRIAL + PT_CONTAINER, -1, TY_UNKNOWN, kept9);
     if (kept9) {
       buf_puts(b, " case SP_BUILTIN_INT_ARRAY: case SP_BUILTIN_SYM_ARRAY:"

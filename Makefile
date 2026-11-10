@@ -2162,12 +2162,6 @@ reject-test: string-minus-reject-test $(SPINEL)
 	  echo "reject-test: FAIL (an ivar written in a block default on a value with no ivars compiled)"; ok=0; \
 	else grep -q "on a value with no instance variable layout" "$$tmp/idw.out" || \
 	  { echo "reject-test: FAIL (an ivar written in a block default rejected without saying why)"; sed -n 1,5p "$$tmp/idw.out"; ok=0; }; fi; \
-	for t in $(shell grep -l '^\# spinel: reject-super-new-block$$' test/reject/*.rb); do \
-	  if $(SPINEL) "$$t" -c --no-line-map -o "$$tmp/snb.c" >"$$tmp/snb.out" 2>&1; then \
-	    echo "reject-test: FAIL ($$t, a block that may be nil through a program new's super, compiled)"; ok=0; \
-	  else grep -q "unsupported Array#min" "$$tmp/snb.out" || \
-	    { echo "reject-test: FAIL ($$t, a block that may be nil through a program new's super, rejected without saying why)"; sed -n 1,5p "$$tmp/snb.out"; ok=0; }; fi; \
-	done; \
 	for t in $(shell grep -l '^\# spinel: reject-string-method$$' test/reject/*.rb); do \
 	  if $(SPINEL) "$$t" -c --no-line-map -o "$$tmp/smm.c" >"$$tmp/smm.out" 2>&1; then \
 	    echo "reject-test: FAIL ($$t, a Method bound to a String mutator, compiled)"; ok=0; \

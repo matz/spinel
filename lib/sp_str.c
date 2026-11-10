@@ -184,6 +184,12 @@ sp_RbVal sp_raise_nomethod(const char *msg) {SP_GC_ROOT_STR(msg);
   sp_raise_cls("NoMethodError", msg);
   return sp_box_nil();
 }
+/* The raise of a call CRuby answers that no route of the compiler took (see
+   spinel_rt.h). */
+sp_RbVal sp_raise_unrouted(const char *cls, const char *msg) {
+  sp_raise_cls(cls, msg);
+  return sp_box_nil();
+}
 /* NoMethodError for a String method reaching a nil (NULL) receiver,
    matching CRuby's "undefined method 'upcase' for nil" message shape. */
 void sp_nil_recv(const char*meth){SP_GC_ROOT_STR(meth);

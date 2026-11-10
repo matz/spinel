@@ -523,6 +523,29 @@ static const char *unsup_pos(Compiler *c, int id, int *line) {
   return file;
 }
 
+/* The compile-time warning of a call CRuby answers that no route of the
+   compiler took (cplan_unrouted): `what` names the CRuby method. Once per
+   node, and never while a silent probe tries an emission -- the probe's text
+   is dropped, and the emission that is kept warns. */
+void warn_unrouted_call(Compiler *c, int id, const char *what) {
+  if (g_unsup_probe || id < 0) return;
+  if (id >= c->unrouted_warned_n) {
+    int n = c->nt->count > id ? c->nt->count : id + 1;
+    unsigned char *g = realloc(c->unrouted_warned, (size_t)n);
+    if (!g) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    memset(g + c->unrouted_warned_n, 0, (size_t)(n - c->unrouted_warned_n));
+    c->unrouted_warned = g;
+    c->unrouted_warned_n = n;
+  }
+  if (c->unrouted_warned[id]) return;
+  c->unrouted_warned[id] = 1;
+  int ln; const char *file = unsup_pos(c, id, &ln);
+  if (ln > 0)
+    fprintf(stderr, "spinel: %s:%d: warning: %s is not supported (raises NotImplementedError when reached)\n", file, ln, what);
+  else
+    fprintf(stderr, "spinel: warning: %s is not supported (raises NotImplementedError when reached)\n", what);
+}
+
 /* A receiver an arm passes straight into a C call beside an argument is held
    by nothing while that argument runs, nor while the call itself allocates.
    This opens a statement expression that binds the receiver to a rooted temp

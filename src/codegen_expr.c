@@ -1651,7 +1651,7 @@ void emit_slot_orw_value_o(Compiler *c, TyKind t, int elems_handle, const char *
          assignment compiles -- the raise aborts before the NULL is reached
          (#2457). */
       const char *ivtxt = vval.p ? vval.p : "";
-      if (strncmp(ivtxt, "sp_raise_nomethod(", 18) == 0 ||
+      if (emitted_no_method(ivtxt) ||
           strncmp(ivtxt, "(sp_raise_cls(", 14) == 0) {
         Buf w; memset(&w, 0, sizeof w);
         buf_printf(&w, "(%s, %s)", ivtxt, default_value_from_compiler(c, t));
@@ -4067,7 +4067,7 @@ static int defined_super_reaches(Compiler *c, int sup) {
   if (!u) return -1;
   if (s->is_cmethod) {
     if (p >= 0 && comp_cmethod_in_chain(c, p, u, NULL) >= 0) return 1;
-    if (core_method_vis(mod ? "Module" : "Class", u, 1) > 0) return 1;
+    if (core_method_vis(mod ? "Module" : "Class", u, 1, NULL) > 0) return 1;
     int root = s->class_id;
     while (c->classes[root].parent >= 0) root = c->classes[root].parent;
     const ClassInfo *ri = &c->classes[root];
@@ -4083,7 +4083,7 @@ static int defined_super_reaches(Compiler *c, int sup) {
   if (p >= 0 && (comp_method_in_chain(c, p, u, NULL) >= 0 || comp_reader_in_chain(c, p, u, NULL) ||
                  (setter && comp_writer_in_chain(c, p, base, NULL))))
     return 1;
-  int v = refl_builtin_vis(c, s->class_id, u, 2);
+  int v = refl_builtin_vis(c, s->class_id, u, 2, NULL);
   return v < 0 ? -1 : v > 0;
 }
 

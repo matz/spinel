@@ -5908,6 +5908,51 @@ int emit_call_class_method_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
   return 0;
 }
 
+/* A program's method mi on a root class ci (NilClass, Numeric or Object)
+   that call id runs on recv, which any receiver the lookup reaches the root
+   for takes: the owner picks how the receiver is passed (nil carries
+   nothing, Numeric's and Object's self is boxed). A yielding one goes
+   through its proc form (#5779), with the call's block or without one: it
+   has no symbol of its own, being spliced where it can. */
+int emit_root_reopen_call(Compiler *c, int id, Buf *b, const NodeTable *nt, int recv, int ci, int mi) {
+  if (emit_reopen_block_call(c, id, recv, mi, NULL, b)) return 1;
+  if (g_plan_check) ucall_observe(c, id, mi, ci, 0);
+  if (ci == comp_core_class(c, CORE_NILCLASS)) {
+    /* (self is the `int self` the bool reopens take) */
+    buf_printf(b, "((void)("); emit_expr_for_effect(c, recv, b);
+    buf_printf(b, "), %s(0", mc_method(c, &c->scopes[mi]));
+    emit_args_filled(c, mi, nt_ref(nt, id, "arguments"), ", ", b);
+    emit_trailing_blk_arg(c, &c->scopes[mi], id, -1, b);
+    buf_puts(b, "))");
+    return 1;
+  }
+  if (ci == comp_core_class(c, CORE_NUMERIC)) {
+    size_t at = b->len;
+    buf_printf(b, "%s(", mc_method(c, &c->scopes[mi]));
+    int open = emit_reopen_recv_in_order(c, id, mi, recv, 1, NULL, at, b);
+    buf_puts(b, open ? "); })" : ")");
+    return 1;
+  }
+  /* a method with no value (it raises, or ends in a void call) where the
+     site's slot wants one: nil in that slot's type */
+  Repr want_repr = repr_of(c, id);
+  TyKind want3 = want_repr.as_ty;
+  int void3 = method_is_void(&c->scopes[mi]) && want3 != TY_VOID && want3 != TY_UNKNOWN && want3 != TY_NIL;
+  if (void3) buf_puts(b, "(");
+  Buf call = {0};
+  buf_printf(&call, "%s(", mc_method(c, &c->scopes[mi]));
+  int open = emit_reopen_recv_args(c, id, mi, recv, 1, NULL, 0, &call);
+  emit_trailing_blk_arg(c, &c->scopes[mi], id, -1, &call);
+  buf_puts(&call, open ? "); })" : ")");
+  /* (the value-less one's slot takes the nil below, not a coerced one) */
+  if (void3) buf_puts(b, call.p);
+  else emit_coerce_text(c, id, (TyKind)c->scopes[mi].ret, want_repr.kind == RK_BOXED ? TY_POLY : want3,
+                        CO_HOLD, call.p, "an Object method result", b);
+  free(call.p);
+  if (void3) buf_printf(b, ", %s)", want_repr.kind == RK_BOXED ? "sp_box_nil()" : default_value_from_compiler(c, want3));
+  return 1;
+}
+
 /* a method a program's reopen of a builtin type defines, on a receiver of that type (not for an alias that captured the builtin) */
 int emit_call_reopen_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, TyKind rt) {
   /* dispatch user-defined methods on reopened built-in types -- not for an
@@ -5973,37 +6018,13 @@ int emit_call_reopen_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, cons
         return 1;
       }
     }
-    /* NilClass methods on a receiver known to be nil (self is the `int self`
-       the bool reopens take; nil carries nothing); a yielding one through
-       its proc form, as the reopens beside it */
-    if (rt == TY_NIL) {
-      int nc_ci = comp_core_class(c, CORE_NILCLASS);
-      int nc_mi = nc_ci >= 0 ? call_target(c, id, nc_ci, name, 0, NULL) : -1;
-      if (nc_mi >= 0 && emit_reopen_block_call(c, id, recv, nc_mi, NULL, b)) return 1;
-      if (nc_mi >= 0) {
-        if (g_plan_check) ucall_observe(c, id, nc_mi, nc_ci, 0);
-        buf_printf(b, "((void)("); emit_expr_for_effect(c, recv, b);
-        buf_printf(b, "), %s(0", mc_method(c, &c->scopes[nc_mi]));
-        emit_args_filled(c, nc_mi, nt_ref(nt, id, "arguments"), ", ", b);
-        emit_trailing_blk_arg(c, &c->scopes[nc_mi], id, -1, b);
-        buf_puts(b, "))");
-        return 1;
-      }
-    }
-    /* Numeric reopening: an Integer / Float receiver whose own reopen (above)
-       did not answer; the inference twin has typed it. Self is boxed. */
-    if (rt == TY_INT || rt == TY_FLOAT || rt == TY_BIGINT) {
-      int nm_ci = comp_core_class(c, CORE_NUMERIC);
-      int nm_mi = nm_ci >= 0 ? call_target(c, id, nm_ci, name, 0, NULL) : -1;
-      if (nm_mi >= 0 && emit_reopen_block_call(c, id, recv, nm_mi, NULL, b)) return 1;
-      if (nm_mi >= 0) {
-        if (g_plan_check) ucall_observe(c, id, nm_mi, nm_ci, 0);
-        size_t at = b->len;
-        buf_printf(b, "%s(", mc_method(c, &c->scopes[nm_mi]));
-        int open = emit_reopen_recv_in_order(c, id, nm_mi, recv, 1, NULL, at, b);
-        buf_puts(b, open ? "); })" : ")");
-        return 1;
-      }
+    /* NilClass methods on a receiver known to be nil, and Numeric's on an
+       Integer / Float receiver whose own reopen (above) did not answer (the
+       inference twin has typed it) */
+    if (rt == TY_NIL || rt == TY_INT || rt == TY_FLOAT || rt == TY_BIGINT) {
+      int rc_ci = comp_core_class(c, rt == TY_NIL ? CORE_NILCLASS : CORE_NUMERIC);
+      int rc_mi = rc_ci >= 0 ? call_target(c, id, rc_ci, name, 0, NULL) : -1;
+      if (rc_mi >= 0) return emit_root_reopen_call(c, id, b, nt, recv, rc_ci, rc_mi);
     }
     /* Array reopening: any array-typed receiver -> box to sp_RbVal */
     if (ty_is_array(rt)) {
@@ -6038,33 +6059,7 @@ int emit_call_reopen_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, cons
             fprintf(stderr, "plan-check: cplan-conflict: object-fallback node %d: plan %d, lookup %d\n",
                     id, oc_mi3, own);
         }
-        /* a yielding one goes through its proc form (#5779), with the
-           call's block or without one: it has no symbol of its own, being
-           spliced where it can */
-        if (oc_mi3 >= 0 && emit_reopen_block_call(c, id, recv, oc_mi3, NULL, b)) return 1;
-        if (oc_mi3 >= 0) {
-          /* a method with no value (it raises, or ends in a void call) where
-             the site's slot wants one: nil in that slot's type */
-          Repr want_repr = repr_of(c, id);
-          TyKind want3 = want_repr.as_ty;
-          int void3 = method_is_void(&c->scopes[oc_mi3]) && want3 != TY_VOID &&
-                      want3 != TY_UNKNOWN && want3 != TY_NIL;
-          if (g_plan_check) ucall_observe(c, id, oc_mi3, oc_ci3, 0);
-          if (void3) buf_puts(b, "(");
-          Buf call = {0};
-          buf_printf(&call, "%s(", mc_method(c, &c->scopes[oc_mi3]));
-          int open = emit_reopen_recv_args(c, id, oc_mi3, recv, 1, NULL, 0, &call);
-          emit_trailing_blk_arg(c, &c->scopes[oc_mi3], id, -1, &call);
-          buf_puts(&call, open ? "); })" : ")");
-          /* (the value-less one's slot takes the nil below, not a coerced one) */
-          if (void3) buf_puts(b, call.p);
-          else emit_coerce_text(c, id, (TyKind)c->scopes[oc_mi3].ret,
-                                want_repr.kind == RK_BOXED ? TY_POLY : want3,
-                                CO_HOLD, call.p, "an Object method result", b);
-          free(call.p);
-          if (void3) buf_printf(b, ", %s)", want_repr.kind == RK_BOXED ? "sp_box_nil()" : default_value_from_compiler(c, want3));
-          return 1;
-        }
+        if (oc_mi3 >= 0) return emit_root_reopen_call(c, id, b, nt, recv, oc_ci3, oc_mi3);
       }
     }
   }

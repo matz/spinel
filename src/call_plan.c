@@ -7,6 +7,8 @@
 #include "analyze_internal.h"
 #include "builtin_ops.h"
 #include "call_plan.h"
+static int cplan_is_root_class(Compiler *c, int ci);
+static int cplan_in_closure(Compiler *c, int id);
 #include "repr.h"
 #include "codegen_call_arms.h"
 #include "implicit_calls.h"
@@ -133,13 +135,87 @@ int cplan_bool_sides(Compiler *c, int id, int *tmi, int *fmi) {
   return *tmi >= 0 || *fmi >= 0;
 }
 
-/* a program's own Object method, for a name Object's builtin surface does
-   not answer itself, that call `call` runs */
-static void cplan_object_reopen(Compiler *c, int call, const char *name, CallPlan *p) {
-  if (builtin_object_method_known(name)) return;
-  int oci = comp_core_class(c, CORE_OBJECT);
-  int omi = oci >= 0 ? call_target(c, call, oci, name, 0, NULL) : -1;
-  if (omi >= 0) cplan_set(p, omi, oci, UC_REOPEN, CP_DIRECT);
+/* The builtin class an instance of program class cid is, by its chain's
+   builtin root ("Object" for a plain one); NULL for a BasicObject's, which
+   no Object method reaches. */
+static const char *cplan_builtin_name_of(Compiler *c, int cid) {
+  const BuiltinClass *r = NULL;
+  if (class_is_blank_slate(c, cid)) return NULL;
+  int bp = class_builtin_parent(c, cid);
+  for (int i = 0; (r = builtin_class_at(i)) && r->id != bp; i++) {}
+  return r ? r->name : "Object";
+}
+
+/* Does a class value (a call's receiver recv, typed Class) answer `name`
+   with a method of CRuby's before Object's instance method: its class's
+   singleton chain (File.basename), or Class's and Module's own? A constant
+   names the class; a class held in a variable could be any builtin one. */
+static int cplan_class_value_answers(Compiler *c, int recv, const char *name) {
+  const NodeTable *nt = c->nt;
+  NodeKind rk = recv >= 0 ? nt_kind(nt, recv) : NK_NONE;
+  const char *bn = rk == NK_ConstantReadNode || (rk == NK_ConstantPathNode && nt_ref(nt, recv, "parent") < 0) ? nt_str(nt, recv, "name") : NULL;
+  int bid = bn && comp_class_index(c, bn) < 0 ? builtin_class_id(bn) : 0;
+  if (!bid) return (!bn && builtin_cmethod_known_any(name)) || core_class_value_answers("Class#", name) || core_class_value_answers("Module#", name);
+  return core_class_value_answers(bn, name) || core_class_value_answers(is_builtin_module_name(bn) ? "Module#" : "Class#", name) ||
+         builtin_class_id_answers(bid, name, 1);
+}
+
+/* A program's own method on builtin class root (CORE_OBJECT, CORE_NUMERIC,
+   CORE_NILCLASS) that call `call` runs, on an instance of builtin class cls
+   (a program object's: its chain's builtin root; NULL: one the root does not
+   reach): for a name no ancestor of cls ahead of root owns, as CRuby's
+   lookup reaches the reopening first. */
+static void cplan_root_reopen(Compiler *c, int call, const char *name, const char *cls, int root, CallPlan *p) {
+  if (!cls || builtin_answers_ahead_of(cls, name, core_class_name(root))) return;
+  /* A call in a closure has no place in the load: before the program's def
+     it reaches the builtin's method, which only a name the builtin owns
+     (Kernel's tap, frozen?) could tell apart, so that call keeps the
+     builtin's, as before the def. */
+  if (cplan_in_closure(c, call) && builtin_answers_ahead_of(cls, name, NULL)) return;
+  int rci = comp_core_class(c, root);
+  int mi = rci >= 0 ? call_target(c, call, rci, name, 0, NULL) : -1;
+  /* (Object's lookup also finds its modules' methods and the top level's,
+     which a Numeric's or a NilClass's must not stand for) */
+  if (mi >= 0 && (root == CORE_OBJECT || c->scopes[mi].class_id == rci)) cplan_set(p, mi, rci, UC_REOPEN, CP_DIRECT);
+}
+
+/* See call_plan.h. */
+int cplan_object_method_named(Compiler *c, const char *name) {
+  for (int si = 1; si < c->nscopes; si++) {
+    Scope *sc = &c->scopes[si];
+    if (sc->is_cmethod || !sc->name || !sp_streq(sc->name, name)) continue;
+    const char *cn = sc->class_id >= 0 && sc->class_id < c->nclasses ? c->classes[sc->class_id].name : NULL;
+    if (!cn || is_object_root(cn) || sc->class_id == c->toplevel_class) return 1;
+  }
+  return 0;
+}
+/* Is class ci one of the roots a program's method on a builtin receiver is
+   found on ahead of the lookup's later ancestors: Object, Kernel, Numeric,
+   NilClass? */
+static int cplan_is_root_class(Compiler *c, int ci) {
+  return ci >= 0 && (ci == comp_core_class(c, CORE_OBJECT) || ci == comp_core_class(c, CORE_KERNEL) ||
+                     ci == comp_core_class(c, CORE_NUMERIC) || ci == comp_core_class(c, CORE_NILCLASS));
+}
+/* See call_plan.h. */
+int cplan_root_reopen_owner(Compiler *c, const CallPlan *p) {
+  return p->via == UC_REOPEN && cplan_is_root_class(c, p->owner_ci);
+}
+/* See call_plan.h. */
+const CallPlan *cplan_root_reopen_call(Compiler *c, int id, const CallPlan *p, int public_only) {
+  const char *name = nt_str(c->nt, id, "name");
+  if (!name || nt_int(c->nt, id, "builtin_only", 0)) return NULL;
+  if (p->mi < 0 || !cplan_root_reopen_owner(c, p)) return NULL;
+  /* (a class-gated exception accessor the program adds to Object is picked
+     by an exception's class at run time) */
+  int recv = nt_ref(c->nt, id, "receiver");
+  TyKind rt = recv >= 0 ? comp_ntype(c, recv) : TY_UNKNOWN;
+  int exc = rt == TY_EXCEPTION || (ty_is_object(rt) && class_is_exc_subclass(c, ty_object_class(rt)));
+  if (exc && cplan_exc_object_method(c, id, name) >= 0) return NULL;
+  public_only |= exc;   /* (its exception arms refuse a private one themselves) */
+  /* (a private or protected one is refused, or allowed, by the visibility
+     arms, which see the receiver's class: the emitter leaves it to them) */
+  int mc = c->scopes[p->mi].class_id;
+  return mc >= 0 && (!public_only || comp_method_vis_declared(c, mc, name, NULL) == SP_VIS_PUBLIC) ? p : NULL;
 }
 
 /* A method the program adds to Object under the name of a class-gated
@@ -443,7 +519,7 @@ static void cplan_resolve_call(Compiler *c, int id, CallPlan *p) {
     if (imi >= 0) { cplan_set(p, imi, c->scopes[imi].class_id, UC_INCLUDED, CP_DIRECT); return; }
     /* outside a class method, self reaches a program's own Object method */
     Scope *self = comp_scope_of(c, id);
-    if (!(self && self->is_cmethod)) cplan_object_reopen(c, id, name, p);
+    if (!(self && self->is_cmethod)) cplan_root_reopen(c, id, name, self && self->class_id >= 0 ? cplan_builtin_name_of(c, self->class_id) : "Object", CORE_OBJECT, p);
     /* ...unless a descendant of self's class overrides it: a switch on
        self's class, Object's method its default */
     if (p->mi >= 0 && p->via == UC_REOPEN && self && cplan_self_root_override(c, id, self->class_id, p->mi)) {
@@ -530,8 +606,11 @@ static void cplan_resolve_call(Compiler *c, int id, CallPlan *p) {
       }
     }
     if (class_is_exc_subclass(c, cid)) cplan_exc_reopen(c, id, name, p);
-    if (p->mi < 0) {
-      cplan_object_reopen(c, id, name, p);
+    /* (an attribute of the class or a Struct's member answers its name first) */
+    char abase[256];
+    int accessor = comp_reader_in_chain(c, cid, name, NULL) || (setter_base_name(name, abase, sizeof abase) && comp_writer_in_chain(c, cid, abase, NULL));
+    if (p->mi < 0 && !accessor) {
+      cplan_root_reopen(c, id, name, cplan_builtin_name_of(c, cid), CORE_OBJECT, p);
       /* `self.m` (or a bare m the analysis gave self) reaching Object's
          method that a descendant of self's class overrides: a switch on
          self's class, Object's method its default */
@@ -600,13 +679,9 @@ static void cplan_resolve_call(Compiler *c, int id, CallPlan *p) {
   /* a nil receiver's NilClass reopen, an Integer or Float receiver's
      Numeric reopen (the inference rule beside the scalar reopens) */
   if (rt == TY_NIL || rt == TY_INT || rt == TY_FLOAT || rt == TY_BIGINT) {
-    const char *own = rt == TY_NIL ? "NilClass" : rt == TY_FLOAT ? "Float" : "Integer";
-    const char *anc = rt == TY_NIL ? "NilClass" : "Numeric";
-    if (!builtin_method_known(own, name) && !builtin_object_method_known(name)) {
-      int aci = comp_builtin_class_named(c, anc);
-      int ami = aci >= 0 ? call_target(c, id, aci, name, 0, NULL) : -1;
-      if (ami >= 0 && c->scopes[ami].class_id == aci) { cplan_set(p, ami, aci, UC_REOPEN, CP_DIRECT); return; }
-    }
+    cplan_root_reopen(c, id, name, rt == TY_NIL ? "NilClass" : rt == TY_FLOAT ? "Float" : "Integer",
+                      rt == TY_NIL ? CORE_NILCLASS : CORE_NUMERIC, p);
+    if (p->mi >= 0) return;
   }
   /* an Array or Hash reopen's own method of the name. With a block, the
      reopen's only when the builtin arms do not keep the call: a yielding
@@ -619,11 +694,14 @@ static void cplan_resolve_call(Compiler *c, int id, CallPlan *p) {
     int ami = an_reopen_owner(c, id, cn);
     if (ami >= 0) { cplan_set(p, ami, comp_core_class(c, cn), UC_REOPEN, CP_DIRECT); return; }
   }
-  /* last, a program's own Object method for a name the receiver's builtin
-     class and Object's own surface do not have (object_reopen_answers) */
+  /* last, a program's own Object method for a name no builtin class the
+     receiver's lookup passes first answers */
   int bcls = object_fallback_class_of_type(rt);
   const char *bn = rt == TY_BOOL ? "TrueClass" : bcls >= 0 ? core_class_name(bcls) : NULL;
-  if (bn && !builtin_answers_ahead_of(bn, name, "Object")) cplan_object_reopen(c, id, name, p);
+  /* (not a String, Integer or Float that may be nil, where NilClass has the
+     name too: the boxed dispatch, cplan_poly_sub, picks by the value) */
+  if (bn && !(rt == TY_CLASS && cplan_class_value_answers(c, recv, name)) && !cplan_nil_scalar_reach(c, id))
+    cplan_root_reopen(c, id, name, bn, CORE_OBJECT, p);
 }
 
 static void cplan_resolve(Compiler *c, int id, CallPlan *p) {
@@ -1931,7 +2009,7 @@ static int cm_self_kind(Compiler *c, int self) {
    tally) */
 static int ct_builtin_reopen_undefined_at(Compiler *c, int id, int cls, const char *name, unsigned flags) {
   if ((flags & (CT_CMETHOD | CT_TOP | CT_OWN)) || cls < 0 || cls >= c->nclasses || !c->classes[cls].name ||
-      c->classes[cls].enclosing_class >= 0 || builtin_class_id(c->classes[cls].name) >= 0 ||
+      c->classes[cls].enclosing_class >= 0 || (builtin_class_id(c->classes[cls].name) >= 0 && !cplan_is_root_class(c, cls)) ||
       !builtin_answers_ahead_of(c->classes[cls].name, name, NULL) ||
       !elab_method_versions(c, name))
     return 0;
@@ -2374,7 +2452,7 @@ int ct_version_marked(Compiler *c, const char *nm) {
    Each of the others also on Object's instance side: every lookup but
    BasicObject's ends in Object's methods (Kernel's among them), which the
    tables leave out of a program class's chain and of its class side, so
-   the plan binds them by asking Object (cplan_object_reopen). Reachability
+   the plan binds them by asking Object (cplan_root_reopen). Reachability
    marks the versions the call binds on each (cr_collect_versions);
    ver_entries_build makes the version and guard entries they need. */
 static void ct_class_and_descendants(Compiler *c, int id, const char *nm, int k, unsigned flags, CtClassFn fn, void *arg) {

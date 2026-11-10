@@ -3319,17 +3319,39 @@ int sclass_value_call(Compiler *c, int id) {
   return recv >= 0 && infer_type(c, recv) == TY_CLASS;
 }
 
-int object_reopen_answers(Compiler *c, const char *cls, int call_id, TyKind *out) {
+/* The type of call `id` bound to the program's method mi of the root class
+   (Object, Numeric, NilClass) that the plan found for it. A yielding Object
+   method given a block answers what its proc form does, a boxed value
+   (#5779). */
+static TyKind an_root_reopen_call(Compiler *c, int id, const CallPlan *p) {
+  an_user_call_record(c, id, p->mi, UC_REOPEN, p->owner_ci);
+  return p->owner_ci == comp_core_class(c, CORE_OBJECT) && c->scopes[p->mi].yields && nt_ref(c->nt, id, "block") >= 0
+         ? TY_POLY : an_user_call(c, id, p->mi, UC_REOPEN, p->owner_ci);
+}
+
+/* The type of call id, on a typed receiver recv, where a method of the
+   program's the plan binds answers it ahead of the builtin rules: one on
+   Enumerator, or on a root class (an_root_reopen_call). 0 for any other. */
+static int an_reopen_head_call(Compiler *c, int id, int recv, TyKind *out) {
+  TyKind hrt = infer_type(c, recv);
+  const CallPlan *p = hrt != TY_POLY && hrt != TY_UNKNOWN && !nt_int(c->nt, id, "builtin_only", 0) ? cplan_user_fresh(c, id) : NULL;
+  if (p && p->mi >= 0 && p->via == UC_REOPEN && hrt == TY_ENUMERATOR) *out = an_user_call(c, id, p->mi, p->via, p->owner_ci);
+  else if (p && (p = cplan_root_reopen_call(c, id, p, 0))) *out = an_root_reopen_call(c, id, p);
+  else return 0;
+  return 1;
+}
+
+/* A boxed receiver's call of a name no builtin class owns that the program
+   defines on Object: the poly dispatch's default arm (the plan keeps the
+   builtin's names there, so does this reader). */
+int object_reopen_answers(Compiler *c, int call_id, TyKind *out) {
   const char *name = nt_str(c->nt, call_id, "name");
-  if (!name || builtin_answers_ahead_of(cls, name, "Object") || builtin_object_method_known(name)) return 0;
+  if (!name || builtin_object_method_known(name)) return 0;
   int oci = comp_core_class(c, CORE_OBJECT);
   int omi = oci >= 0 ? call_target(c, call_id, oci, name, 0, NULL) : -1;
   if (omi < 0) return 0;
-  /* a yielding one given a block answers what its proc form does, a boxed
-     value (#5779), as the general Object fallback says */
-  an_user_call_record(c, call_id, omi, UC_REOPEN, oci);
-  *out = c->scopes[omi].yields && nt_ref(c->nt, call_id, "block") >= 0
-         ? TY_POLY : an_user_call(c, call_id, omi, UC_REOPEN, oci);
+  const CallPlan p = { .mi = omi, .owner_ci = (short)oci, .via = UC_REOPEN };
+  *out = an_root_reopen_call(c, call_id, &p);
   return 1;
 }
 
@@ -5248,7 +5270,6 @@ static int infer_handle_call(Compiler *c, int id, const NodeTable *nt, const cha
       }
       { *out = TY_IO; return 1; }
     }
-    { TyKind ort; if (object_reopen_answers(c, "File", id, &ort)) { *out = ort; return 1; } }
     { *out = TY_POLY; return 1; }
   }
 
@@ -5281,10 +5302,6 @@ static int infer_handle_call(Compiler *c, int id, const NodeTable *nt, const cha
        the result is poly (#2677). */
     if (sp_streq(name, "<=>") && argc == 1)
       { *out = infer_type(c, argv[0]) == TY_TIME ? TY_INT : TY_POLY; return 1; }
-    /* a program's own Object method answers what it returns, whatever its
-       name says (activesupport's Object#acts_like? gives a respond_to?
-       answer that may be boxed): asked before the predicate rule below */
-    { TyKind ort; if (object_reopen_answers(c, "Time", id, &ort)) { *out = ort; return 1; } }
     /* predicates (is_a?/kind_of?/instance_of?/between?/...) before the int
        catch-all below swallows them */
     { size_t tnl = strlen(name); if (tnl > 0 && name[tnl - 1] == '?') { *out = TY_BOOL; return 1; } }
@@ -7149,23 +7166,6 @@ static int infer_user_method_call(Compiler *c, int id, const NodeTable *nt, cons
         if (oc_mi >= 0 && !cplan_reopen_runs_builtin(c, id, oc_mi)) { *out = an_user_call(c, id, oc_mi, UC_REOPEN, oc_ci); return 1; }
       }
     }
-    /* ...and a nil receiver's NilClass reopen, an Integer or Float
-       receiver's Numeric reopen, ahead of Object's: the emitter's reopened-
-       builtin dispatch calls them for a name the receiver's own class does
-       not define, as CRuby's ancestry does. Answered by Object's method, the
-       call was typed from a method it never ran (`3.kind_tag` a String slot
-       around Numeric's Float). A name the builtin surface knows stays the
-       builtin's, where the emitter's earlier arms keep it. */
-    if (rt == TY_NIL || rt == TY_INT || rt == TY_FLOAT || rt == TY_BIGINT) {
-      const char *own = rt == TY_NIL ? "NilClass" : rt == TY_FLOAT ? "Float" : "Integer";
-      const char *anc = rt == TY_NIL ? "NilClass" : "Numeric";
-      if (!builtin_method_known(own, name) && !builtin_object_method_known(name)) {
-        int aci = comp_builtin_class_named(c, anc);
-        int ami = aci >= 0 ? call_target(c, id, aci, name, 0, NULL) : -1;
-        if (ami >= 0 && c->scopes[ami].class_id == aci)
-          { *out = an_user_call(c, id, ami, UC_REOPEN, aci); return 1; }
-      }
-    }
   }
 
   /* instance_variable_get(:@x) on a POLY receiver: unify @x's declared type
@@ -7512,15 +7512,13 @@ static int infer_universal_call(Compiler *c, int id, const NodeTable *nt, const 
     { *out = TY_BOOL; return 1; }
   { TyKind r; if (infer_operator_call(c, id, nt, name, recv, argc, argv, rt, a0, &r)) { *out = r; return 1; } }
 
-  /* a program's own Object method answers what it returns, whatever its
-     name says: activesupport's Object#acts_like? gives respond_to?'s
-     answer, which a class's own respond_to? may give as any value */
-  if (recv >= 0) {
-    /* a boxed receiver too: the builtin-only answer the poly dispatch's
-       default arm is shaped by is the Object fallback's call */
-    const char *ocls = ty_is_object(rt) || rt == TY_POLY || rt == TY_BOOL ? "Object" : core_class_name(object_fallback_class_of_type(rt));
+  /* a boxed receiver's call of a program's own Object method answers what it
+     returns, whatever its name says (activesupport's Object#acts_like? gives
+     respond_to?'s answer, which a class's own respond_to? may give as any
+     value) */
+  if (recv >= 0 && rt == TY_POLY) {
     TyKind ort;
-    if (ocls && object_reopen_answers(c, ocls, id, &ort)) { *out = ort; return 1; }
+    if (object_reopen_answers(c, id, &ort)) { *out = ort; return 1; }
   }
   size_t nl = strlen(name);
   if (nl > 0 && name[nl - 1] == '?') { *out = TY_BOOL; return 1; }
@@ -9434,13 +9432,11 @@ static TyKind infer_call_inner(Compiler *c, int id) {
     if (ty_is_object(crt)) return crt;
   }
 
-  /* a method the program defines on Enumerator answers an Enumerator's call
-     (by the name an alias resolved to above) ahead
-     of the builtin arms below, as the emitter calls it */
-  if (recv >= 0 && infer_type(c, recv) == TY_ENUMERATOR && !bonly && !nt_int(nt, id, "builtin_only", 0)) {
-    const CallPlan *p = cplan_user(c, id);
-    if (p->mi >= 0 && p->via == UC_REOPEN) return an_user_call(c, id, p->mi, p->via, p->owner_ci);
-  }
+  /* a method the program defines on Enumerator, or on a class every receiver of
+     the type reaches (Object, and Numeric or NilClass ahead of it), answers
+     the call (by the name an alias resolved to above) ahead of the builtin
+     arms below, as the emitter calls it */
+  { TyKind rty; if (recv >= 0 && !bonly && an_reopen_head_call(c, id, recv, &rty)) return rty; }
 
   TyKind accessor_ret;
   if (infer_accessor_call(c, id, recv, name, &accessor_ret)) return accessor_ret;

@@ -815,13 +815,13 @@ const char *builtin_class_of_type(TyKind t) {
 }
 
 /* The class name of a type whose calls fall back to a program's own Object
-   method (object_reopen_answers): builtin_class_of_type's names plus the
+   method (cplan_root_reopen): builtin_class_of_type's names plus the
    kinds nothing else asks a name of. builtin_class_of_type stays as it was,
    since the dynamic-send desugar and the other readers resolve through it.
    This helper returns that class's core id, or -1 when there is none. */
 int object_fallback_class_of_type(TyKind t) {
-  if (t == TY_RATIONAL || t == TY_COMPLEX || t == TY_PROC ||
-      t == TY_QUEUE || t == TY_EXCEPTION) return core_of_type(t);
+  if (t == TY_RATIONAL || t == TY_COMPLEX || t == TY_PROC || t == TY_QUEUE || t == TY_EXCEPTION ||
+      t == TY_FLOAT_RANGE || t == TY_STR_RANGE) return core_of_type(t);
   return builtin_class_of_type(t) ? core_of_type(t) : -1;
 }
 

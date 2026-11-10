@@ -88,6 +88,22 @@ typedef struct {
   const char *delegate;     /* the protocol method name, before alias resolution */
 } CallPlan;
 
+/* Is plan p a program's method on a root of the builtin classes (Object,
+   or Numeric or NilClass ahead of it), one that answers every receiver the
+   lookup reaches it for (cplan_root_reopen)? The kinds of reopening below
+   that, a builtin class's own, bind by the receiver's type. */
+int cplan_root_reopen_owner(Compiler *c, const CallPlan *p);
+/* ...and call id's plan p where it is such a binding that answers the call
+   ahead of the builtin arms (not an alias that captured the builtin's
+   method, nor an exception accessor picked at run time, nor, with
+   public_only (the emitter's), a private or protected method), else NULL. The
+   analysis asks cplan_user_fresh's plan, its types still moving. */
+const CallPlan *cplan_root_reopen_call(Compiler *c, int id, const CallPlan *p, int public_only);
+/* Does any scope define an instance method `name` every object answers: the
+   top level's, or Object's, Kernel's or BasicObject's own? The name-level
+   twin of cplan_root_reopen, for the desugars that run before types exist
+   (it holds for a receiver whose builtin class owns the name too). */
+int cplan_object_method_named(Compiler *c, const char *name);
 int cplan_accessor_classes(Compiler *c, int id, int *out, int cap);
 /* ...and the methods a super in s that no call stands for may run, into
    to[VER_MAX_ARMS]: that one, or each version a layer of a mixin's copies

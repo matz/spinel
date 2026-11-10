@@ -14610,6 +14610,16 @@ int emit_range_call(Compiler *c, int id, Buf *b) {
         buf_printf(b, "%s(_t%d, ", fn, tr); emit_str_expr(c, argv[0], b);
         buf_puts(b, "); })"); return 1;
       }
+      /* cover? reads a String Range argument by its ends (r_cover_range_p,
+         sp_srange_cover_poly); ===, include? and member? compare it as a
+         value, and give false */
+      if (sp_streq(name, "cover?") && (a0 == TY_STR_RANGE || a0 == TY_POLY)) {
+        /* (the boxed receiver is rooted while the argument is made) */
+        buf_printf(b, "({ sp_RbVal _r%d = ", tr); emit_boxed(c, recv, b);
+        buf_printf(b, "; SP_GC_ROOT_RBVAL(_r%d); sp_RbVal _a%d = ", tr, tr); emit_boxed(c, argv[0], b);
+        buf_printf(b, "; sp_srange_cover_poly(_r%d, _a%d); })", tr, tr);
+        return 1;
+      }
       if (a0 == TY_POLY) {
         buf_printf(b, "({ sp_StrRange _t%d = ", tr); emit_expr(c, recv, b);
         buf_puts(b, "; ");

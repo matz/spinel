@@ -30,3 +30,24 @@ p leaf.root
 p leaf.root.nil?
 p leaf.cached.nil?
 p leaf.relative_root?
+
+# `&&=` on an ivar that holds nothing answers nil without running its value,
+# and `||=` on a frozen receiver still refuses the write.
+class Guarded
+  def and_memo
+    @y &&= nil
+  end
+
+  def memo
+    @z ||= nil
+  end
+end
+
+p Guarded.new.and_memo
+frozen = Guarded.new.freeze
+begin
+  frozen.memo
+  p :written
+rescue FrozenError => e
+  p e.class
+end

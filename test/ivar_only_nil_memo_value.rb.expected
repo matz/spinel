@@ -2,3 +2,5 @@ nil
 true
 true
 false
+nil
+FrozenError

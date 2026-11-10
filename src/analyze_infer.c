@@ -26,6 +26,15 @@
    stores an sp_String handle but reads as a plain String (the read copies),
    so every reader -- attr_reader, a `def m = @x` shim, instance_variable_get
    -- reports the value form, exactly as a direct ivar read does. */
+int is_descendant(Compiler *c, int k, int anc);
+/* Does class k, or a class below it, hold a slot for ivar nm? (a subclass
+   writing it gives the inherited method's read a value) */
+static int infer_ivar_slot_below(Compiler *c, int k, const char *nm) {
+  for (int j = 0; nm && j < c->nclasses; j++)
+    if ((j == k || is_descendant(c, j, k)) && comp_ivar_index(&c->classes[j], nm) >= 0) return 1;
+  return 0;
+}
+
 TyKind ivar_value_ty(ClassInfo *ci, int iv) {
   if (iv < 0 || iv >= ci->nivars) return TY_UNKNOWN;
   return ci->ivar_types[iv] == TY_STRBUF ? TY_STRING : ci->ivar_types[iv];
@@ -11828,7 +11837,8 @@ TyKind infer_uncached(Compiler *c, int id) {
     /* an ivar only nil is written to has no slot (it holds nothing): the
        write answers its value, the nil (`def root = @root ||= nil`, which
        typed the method void and its caller's `root.nil?` unknown) */
-    if (iv < 0 && nk != NK_InstanceVariableOperatorWriteNode && infer_type(c, nt_ref(nt, id, "value")) == TY_NIL)
+    if (iv < 0 && nk != NK_InstanceVariableOperatorWriteNode && infer_type(c, nt_ref(nt, id, "value")) == TY_NIL &&
+        !infer_ivar_slot_below(c, wcls, nm))
       return TY_NIL;
     /* a strbuf slot's write, like its read, is the String face (the handle
        rides _sp_ret_strbuf): the raw STRBUF typed a method whose body is the

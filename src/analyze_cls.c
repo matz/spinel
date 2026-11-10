@@ -3669,6 +3669,9 @@ static void cf_rescue(CF *f, int v) {
 static void cf_node(CF *f, int v) {
   Compiler *c = f->c;
   const NodeTable *nt = f->nt;
+#ifdef SP_EMIT_TRACE
+  emit_trace_ask(c, v, 'k', f->round, !f->directed ? "unified" : f->closed ? "closed" : "open");
+#endif
   NodeKind k = nt_kind(nt, v);
   switch (k) {
   case NK_NONE:
@@ -4940,6 +4943,9 @@ static void cf_solve(Compiler *c, int directed, int dump_facts) {
     for (int v = 0; v < nt->count; v++) c->cls_fact[v] = cf_set_of(&f, v);
     c->cls_fact_n = nt->count;
     c->cls_pool = f.pool; c->ncls_pool = f.npool;
+#ifdef SP_EMIT_TRACE
+    emit_trace_sets(c, f.closed ? "closed" : f.directed ? "open" : "unified");
+#endif
     if (dump_facts) cf_dump_facts(c);
   }
   if (f.directed && !f.closed) cf_alias_groups(&f);
@@ -5192,6 +5198,9 @@ void an_cls_facts(Compiler *c) {
   c->cls_fact = NULL; c->cls_pool = NULL; c->cls_fact_n = 0; c->ncls_pool = 0;
   cf_solve(c, 0, 0);
   cf_meet_into(c, df, dp, dn, dnp);
+#ifdef SP_EMIT_TRACE
+  emit_trace_sets(c, "meet");
+#endif
   if (flow) {
     cf_flow_compare(c, cf_keep, cp_keep, cn_keep);
     free(cf_keep); cls_pool_free(cp_keep, cnp_keep);

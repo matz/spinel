@@ -13066,6 +13066,9 @@ TyKind infer_type(Compiler *c, int id) {
   }
   g_infer_depth++;
   MtabMark mt_was = mtab_push(c, id);
+#ifdef SP_EMIT_TRACE
+  emit_trace_ask(c, id, 't', g_infer_round, NULL);
+#endif
   TyKind t = infer_uncached(c, id);
   g_infer_depth--;
   ImemoRec rec = { -1, {0} };

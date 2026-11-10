@@ -2663,7 +2663,18 @@ static inline TyKind ty_ref_set(Compiler *c, TyRef r, TyKind t) {
   if (*r != t) { *(TyKind *)r = t; int o = comp_ref_owner(c, r); if (o != COMP_REF_NONE) comp_touch_key(o); }
   return t;
 }
+#ifdef SP_EMIT_TRACE
+/* The trace build's analysis markers (src/emit_trace.c): a node's fact is
+   about to be computed ('t' its type, 'n' its nil fact, 'k' its class set),
+   one changed, and a class walk has left its sets. */
+void emit_trace_ask(Compiler *c, int id, int kind, int round, const char *walk);
+void emit_trace_fact(Compiler *c, int id, int kind, int was, int now);
+void emit_trace_sets(Compiler *c, const char *walk);
+#endif
 static inline TyKind comp_set_ntype(Compiler *c, int id, TyKind t) {
+#ifdef SP_EMIT_TRACE
+  if (c->ntype[id] != t) emit_trace_fact(c, id, 't', (int)c->ntype[id], (int)t);
+#endif
   if (c->ntype[id] != t) { ((TyKind *)c->ntype)[id] = t; comp_touch_node(c, id); }
   return t;
 }

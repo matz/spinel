@@ -7784,6 +7784,14 @@ void emit_method(Compiler *c, Scope *s, Buf *b) {
   }
   else emit_method_signature(c, s, b);
   buf_puts(b, " {\n");
+  /* the program's own #inspect, #to_s or #message, where the program
+     reopens Array#inspect: it runs as outside a pp, so its p and inspect
+     calls run that method, however it was reached (a Struct member's, an
+     exception's message). A raise out of it leaves the flag cleared, the
+     state outside a pp; a boxed render's call (SP_PP_USER) restores it. */
+  if (s->name && (sp_streq(s->name, "inspect") || sp_streq(s->name, "to_s") || sp_streq(s->name, "message")) &&
+      array_user_inspect_mi(c) >= 0)
+    buf_puts(b, "  sp_pp_printing = 0;\n");
   /* The singleton override does not exist until the statement that created it
      has run (#4084). The object carries its parent's cls_id until then, so a
      call arriving early takes the parent's method -- emitted before SP_GC_SAVE
@@ -14501,12 +14509,20 @@ static void emit_obj_cls_name_rt(Buf *b) {
    proc-form clone: its arm calls that with no block, and renders the box it
    answers. Answers 1 when the method yields, whether or not an arm was
    written (a dead clone leaves the object default). */
+/* Around a call into the program's own #inspect or #to_s from a boxed
+   render, where the program reopens Array#inspect: SP_PP_USER clears
+   sp_pp_printing for the call, so what that method prints or inspects runs
+   the program's Array#inspect as CRuby does, also inside a pp. (A raise
+   out of the method leaves the flag cleared, the state outside a pp.) */
+static const char *ppu_open(Compiler *c) { return array_user_inspect_mi(c) >= 0 ? "SP_PP_USER(" : ""; }
+static const char *ppu_close(Compiler *c) { return array_user_inspect_mi(c) >= 0 ? ")" : ""; }
 static int emit_display_yield_arm(Compiler *c, int cid, int mi, int def, int by_value, Buf *b) {
   if (mi < 0 || !c->scopes[mi].yields) return 0;
   int pf = scope_proc_form_of(c, mi);
   if (pf >= 0 && proc_form_live(c, pf) && c->scopes[mi].nparams == 0)
-    buf_printf(b, "    case %d: return sp_poly_to_s(%s(%s(sp_%s %s)p, NULL));\n", cid, mc_method(c, &c->scopes[pf]),
-               by_value ? "*" : "", c->classes[def].c_name, by_value ? "*" : "*");
+    buf_printf(b, "    case %d: return %ssp_poly_to_s(%s(%s(sp_%s %s)p, NULL))%s;\n", cid, ppu_open(c),
+               mc_method(c, &c->scopes[pf]), by_value ? "*" : "", c->classes[def].c_name, by_value ? "*" : "*",
+               ppu_close(c));
   return 1;
 }
 static void emit_obj_inspect_dispatch(Compiler *c, Buf *b) {
@@ -14684,9 +14700,9 @@ static void emit_obj_inspect_dispatch(Compiler *c, Buf *b) {
       if (vdef == i && emit_display_yield_arm(c, i, vmi, vdef, 1, b)) continue;
       if (vmi >= 0 && vdef == i && c->scopes[vmi].reachable &&
           (c->scopes[vmi].ret == TY_STRING || vpoly) && c->scopes[vmi].nparams == 0)
-        buf_printf(b, "    case %d: return %s%s(*(sp_%s *)p%s)%s;\n",
-                   i, vpoly ? "sp_poly_to_s(" : "", mc_method(c, &c->scopes[vmi]),
-                   c->classes[i].c_name, bridge_blk_arg(c, vmi), vpoly ? ")" : "");
+        buf_printf(b, "    case %d: return %s%s%s(*(sp_%s *)p%s)%s%s;\n",
+                   i, ppu_open(c), vpoly ? "sp_poly_to_s(" : "", mc_method(c, &c->scopes[vmi]),
+                   c->classes[i].c_name, bridge_blk_arg(c, vmi), vpoly ? ")" : "", ppu_close(c));
       if (vmi >= 0) continue;
     }
     if (!class_inspectable(c, i)) continue;
@@ -14701,9 +14717,9 @@ static void emit_obj_inspect_dispatch(Compiler *c, Buf *b) {
     if (uimi >= 0 && c->scopes[uimi].reachable && emit_display_yield_arm(c, i, uimi, uidef, 0, b)) continue;
     if (uimi >= 0 && c->scopes[uimi].reachable && (c->scopes[uimi].ret == TY_STRING || uipoly) &&
         c->scopes[uimi].nparams == 0) {
-      buf_printf(b, "    case %d: return %s%s((sp_%s *)p%s)%s;\n",
-                 i, uipoly ? "sp_poly_to_s(" : "", mc_method(c, &c->scopes[uimi]),
-                 c->classes[uidef].c_name, bridge_blk_arg(c, uimi), uipoly ? ")" : "");
+      buf_printf(b, "    case %d: return %s%s%s((sp_%s *)p%s)%s%s;\n",
+                 i, ppu_open(c), uipoly ? "sp_poly_to_s(" : "", mc_method(c, &c->scopes[uimi]),
+                 c->classes[uidef].c_name, bridge_blk_arg(c, uimi), uipoly ? ")" : "", ppu_close(c));
       continue;
     }
     /* Struct/Data have a generated #inspect (#<struct Name a=1> / #<data ...>);

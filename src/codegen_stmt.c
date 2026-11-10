@@ -792,9 +792,25 @@ void emit_p_one(Compiler *c, int arg, Buf *b, int indent) {
    per-argument emitters interleave evaluation and output, which is only
    observable when a later argument has side effects; then box all arguments
    first and print the array. Returns 0 when the per-argument path is fine. */
+/* is this a pp where the program reopens Array#inspect? It prints through
+   sp_pp_inspect, which leaves that method out (CRuby's pp lays an Array
+   out by its own pretty_print) */
+int pp_leaves_array_inspect(Compiler *c, const char *name) {
+  return name && sp_streq(name, "pp") && array_user_inspect_mi(c) >= 0;
+}
 int emit_output_spilled(Compiler *c, const char *name, int argc, const int *argv, Buf *b, int indent) {
-  if (argc < 2) return 0;
-  int effectful = 0;
+  /* pp where the program reopens Array#inspect: every argument is boxed
+     first, then printed through sp_pp_inspect, which leaves that method
+     out (CRuby's pp lays an Array out by its own pretty_print) */
+  int pp_own = argc >= 1 && pp_leaves_array_inspect(c, name);
+  /* (an object whose class has its own #inspect prints by that method, as
+     CRuby's pp does: it keeps its typed emission) */
+  for (int k = 0; k < argc && pp_own; k++) {
+    TyKind at = repr_of(c, argv[k]).as_ty;
+    if (ty_is_object(at) && comp_method_in_chain(c, ty_object_class(at), "inspect", NULL) >= 0) pp_own = 0;
+  }
+  if (argc < 2 && !pp_own) return 0;
+  int effectful = pp_own;
   for (int k = 1; k < argc && !effectful; k++) {
     int a = argv[k];
     if (nt_kind(c->nt, a) == NK_SplatNode) a = nt_ref(c->nt, a, "expression");
@@ -828,7 +844,8 @@ int emit_output_spilled(Compiler *c, const char *name, int argc, const int *argv
   if (sp_streq(name, "puts"))       buf_printf(b, "sp_puts_elems(sp_box_poly_array(_t%d));\n", t);
   else if (sp_streq(name, "print")) buf_printf(b, "sp_splat_print(sp_box_poly_array(_t%d));\n", t);
   else buf_printf(b, "for (sp_int _i%d = 0; _i%d < _t%d->len; _i%d++) { "
-                     "sp_puts_line(sp_poly_inspect(_t%d->data[_i%d])); }\n", t, t, t, t, t, t);
+                     "sp_puts_line(%s(_t%d->data[_i%d])); }\n", t, t, t, t,
+                  pp_own ? "sp_pp_inspect" : "sp_poly_inspect", t, t);
   emit_indent(b, indent); buf_puts(b, "}\n");
   return 1;
 }

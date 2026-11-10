@@ -63,7 +63,11 @@ int emit_poly_concat_splat(Compiler *c, int t, int splat, Buf *b) {
    known only at run time. Gather them (a splat through sp_splat_to_array),
    print each one's inspect, and answer what Kernel#p does: nil for none, the
    argument for one, the array for more. */
-static int emit_p_splat_value(Compiler *c, int argc, const int *argv, Buf *b) {
+/* the inspect a value-form p or pp prints with (pp_leaves_array_inspect) */
+static const char *p_inspect_fn(Compiler *c, const char *name) {
+  return pp_leaves_array_inspect(c, name) ? "sp_pp_inspect" : "sp_poly_inspect";
+}
+static int emit_p_splat_value(Compiler *c, const char *name, int argc, const int *argv, Buf *b) {
   const NodeTable *nt = c->nt;
   int t = ++g_tmp;
   buf_printf(b, "({ sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d); ", t, t);
@@ -76,9 +80,9 @@ static int emit_p_splat_value(Compiler *c, int argc, const int *argv, Buf *b) {
     }
   }
   buf_printf(b, "for (sp_int _i%d = 0; _i%d < _t%d->len; _i%d++) { "
-                "sp_puts_line(sp_poly_inspect(_t%d->data[_i%d])); } "
+                "sp_puts_line(%s(_t%d->data[_i%d])); } "
                 "_t%d->len == 0 ? sp_box_nil() : _t%d->len == 1 ? _t%d->data[0] : sp_box_poly_array(_t%d); })",
-             t, t, t, t, t, t, t, t, t, t);
+             t, t, t, t, p_inspect_fn(c, name), t, t, t, t, t, t);
   return 1;
 }
 
@@ -993,7 +997,7 @@ int emit_call_kernel_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, cons
      value is boxed once, printed through the poly inspect (which consults
      the user-object hook), and unboxed back to the static type. */
   if (recv < 0 && !bare_call_class_owned(c, id) && (is_inspect_print(name)) && nt_ref(nt, id, "block") < 0 &&
-      nt_argv_has_splat(nt, argv, argc)) return emit_p_splat_value(c, argc, argv, b);
+      nt_argv_has_splat(nt, argv, argc)) return emit_p_splat_value(c, name, argc, argv, b);
   /* p(a, b, ...) as a value: prints each argument's inspect, returns the
      argument array. */
   if (recv < 0 && !bare_call_class_owned(c, id) && (is_inspect_print(name)) && argc >= 2 && nt_ref(nt, id, "block") < 0) {
@@ -1005,15 +1009,15 @@ int emit_call_kernel_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, cons
       buf_puts(b, "); ");
     }
     buf_printf(b, "for (sp_int _i%d = 0; _i%d < _t%d->len; _i%d++) { "
-                  "sp_puts_line(sp_poly_inspect(_t%d->data[_i%d])); } %s_t%d; })",
-               t, t, t, t, t, t, sp_streq(name, "p") ? "fflush(stdout); " : "", t);
+                  "sp_puts_line(%s(_t%d->data[_i%d])); } %s_t%d; })",
+               t, t, t, t, p_inspect_fn(c, name), t, t, sp_streq(name, "p") ? "fflush(stdout); " : "", t);
     return 1;
   }
   if (recv < 0 && !bare_call_class_owned(c, id) && (is_inspect_print(name)) && argc == 1 && nt_ref(nt, id, "block") < 0) {
     TyKind at = repr_of(c, argv[0]).as_ty;
     int t = ++g_tmp;
     buf_puts(b, "({ "); t = hold_operand(c, argv[0], TY_POLY, 1, t, 1, " ", b);
-    buf_printf(b, "sp_puts_line(sp_poly_inspect(_t%d)); %s", t,
+    buf_printf(b, "sp_puts_line(%s(_t%d)); %s", p_inspect_fn(c, name), t,
                sp_streq(name, "p") ? "fflush(stdout); " : "");   /* p flushes, as CRuby's does */
     char tv[16]; snprintf(tv, sizeof tv, "_t%d", t);
     /* a nullable number printed and handed on answers its oint */

@@ -6148,7 +6148,11 @@ static int si_class_may_stop(Compiler *c, int ref, int depth) {
   const char *nm = nt_str(c->nt, ref, "name");
   if (!nm || depth > 64) return 1;
   if (sp_streq(nm, "StopIteration") || sp_streq(nm, "ClosedQueueError")) return 1;
-  int k = comp_class_index(c, nm);
+  /* (a read or a path asks the node: a nested class's leaf, `raise SSLError`
+     in OpenSSL::SSL, names no class by itself, and was taken for one that
+     may stop) */
+  NodeKind rk = nt_kind(c->nt, ref);
+  int k = rk == NK_ConstantReadNode || rk == NK_ConstantPathNode ? const_node_class_index(c, ref) : comp_class_index(c, nm);
   if (k < 0) return !is_builtin_exception_name(nm);
   for (int d = 0; k >= 0 && d < 64; d++) {
     ClassInfo *ci = &c->classes[k];

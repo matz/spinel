@@ -174,6 +174,11 @@ static void cplan_root_reopen(Compiler *c, int call, const char *name, const cha
   if (cplan_in_closure(c, call) && builtin_answers_ahead_of(cls, name, NULL)) return;
   int rci = comp_core_class(c, root);
   int mi = rci >= 0 ? call_target(c, call, rci, name, 0, NULL) : -1;
+  /* Where the builtin has the name, the program's def answers only if the
+     load record has it live at the call: a def under a condition that does
+     not run, or one with several versions, keeps the builtin's. */
+  if (mi >= 0 && c->scopes[mi].class_id >= 0 && builtin_answers_ahead_of(cls, name, NULL) &&
+      elab_method_at(c, c->scopes[mi].class_id, name, 0, elab_point_of(c, call), NULL) != ELAB_YES) return;
   /* (Object's lookup also finds its modules' methods and the top level's,
      which a Numeric's or a NilClass's must not stand for) */
   if (mi >= 0 && (root == CORE_OBJECT || c->scopes[mi].class_id == rci)) cplan_set(p, mi, rci, UC_REOPEN, CP_DIRECT);

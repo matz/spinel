@@ -5964,6 +5964,9 @@ static int emit_iteration_stmt_sn(Compiler *c, int id, Buf *b, int indent) {
 
 int emit_iteration_stmt(Compiler *c, int id, Buf *b, int indent) {
   if (sn_guard_pending(c, id)) {
+    /* a count the row refuses raises where the receiver is not nil: the call
+       is left to the `&.` guard, whose non-nil arm carries the arity guard */
+    if (builtin_arity_violation(c, id, 1)) return 0;
     int r = emit_iteration_stmt_sn(c, id, b, indent);
     if (r >= 0) return r;
   }

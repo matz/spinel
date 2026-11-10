@@ -16725,9 +16725,50 @@ static int walk_row_param_kept(Compiler *c, int s, const char *nm, TyKind row, i
    builtin defines in Ruby, `yield x, i` in each_with_index): the row goes
    to the block of each call of that method, whose parameter at the same
    place decides. */
+/* The yield each node is a direct argument of (-1 for none), made once per
+   state of the tree: walk_row_yield_kept asks it of every read, and a walk
+   of every yield per read grew with the yields times the reads (scale-test) */
+static int walk_row_yield_of(Compiler *c, int r) {
+  static int *of; static int n_of; static const NodeTable *of_nt; static unsigned of_ver; static unsigned long of_edits;
+  const NodeTable *nt = c->nt;
+  if (!of || of_nt != nt || n_of != nt->count || of_ver != nt->version || of_edits != nt->edits) {
+    free(of);
+    of = malloc(sizeof(int) * ((size_t)nt->count + 1));
+    if (!of) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    for (int i = 0; i < nt->count; i++) of[i] = -1;
+    for (int y = comp_kind_first(c, NK_YieldNode); y >= 0; y = comp_kind_next(c, y)) {
+      if (nt_kind(nt, y) != NK_YieldNode) continue;
+      int a = nt_ref(nt, y, "arguments"), an = 0;
+      const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &an) : NULL;
+      for (int k = 0; k < an; k++) if (av[k] >= 0 && av[k] < nt->count && of[av[k]] < 0) of[av[k]] = y;
+    }
+    of_nt = nt; n_of = nt->count; of_ver = nt->version; of_edits = nt->edits;
+  }
+  return r >= 0 && r < n_of ? of[r] : -1;
+}
+/* walk_row_yield_kept's answers at depth 0, per (scope, place, row kind),
+   for one state of the tree: put >= 0 stores it, -1 asks (-1: not known) */
+static int walk_row_yield_memo(Compiler *c, int s, int at, TyKind row, int put) {
+  static struct { int s, at, row, v; } *m; static int n, cap; static const NodeTable *m_nt;
+  static unsigned m_ver; static unsigned long m_edits; static int m_count;
+  const NodeTable *nt = c->nt;
+  if (m_nt != nt || m_count != nt->count || m_ver != nt->version || m_edits != nt->edits) {
+    n = 0; m_nt = nt; m_count = nt->count; m_ver = nt->version; m_edits = nt->edits;
+  }
+  for (int i = 0; i < n; i++)
+    if (m[i].s == s && m[i].at == at && m[i].row == (int)row) { if (put >= 0) m[i].v = put; return m[i].v; }
+  if (put < 0) return -1;
+  if (n == cap) {
+    cap = cap ? cap * 2 : 32;
+    m = realloc(m, sizeof *m * (size_t)cap);
+    if (!m) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  }
+  m[n].s = s; m[n].at = at; m[n].row = (int)row; m[n].v = put; n++;
+  return put;
+}
 static int walk_row_yield_kept(Compiler *c, int s, int r, TyKind row, int depth) {
   const NodeTable *nt = c->nt;
-  for (int y = comp_kind_first(c, NK_YieldNode); y >= 0; y = comp_kind_next(c, y)) {
+  for (int y = walk_row_yield_of(c, r); y >= 0; y = -1) {
     if (nt_kind(nt, y) != NK_YieldNode || c->nscope[y] != s) continue;
     int a = nt_ref(nt, y, "arguments"), an = 0;
     const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &an) : NULL;
@@ -16737,6 +16778,13 @@ static int walk_row_yield_kept(Compiler *c, int s, int r, TyKind row, int depth)
     int def = c->scopes[s].def_node;
     const char *mn = def >= 0 ? nt_str(nt, def, "name") : NULL;
     if (!mn || depth >= 4) return 0;
+    /* (what the calls of the method do with the row at place `at` is the
+       answer of every read the method yields there: asked from a walk, at
+       depth 0, it is kept per (method, place, row kind) for the state of
+       the tree, as a walk of every call of the name per read grew with the
+       program squared) */
+    int memo = depth == 0 ? walk_row_yield_memo(c, s, at, row, -1) : -1;
+    if (memo >= 0) return memo;
     /* (the calls of that name, by the name index: not every call of the
        program for each such yield) */
     for (int id = an_calls_named_first(c, mn); id >= 0; id = an_calls_named_next(id)) {
@@ -16746,8 +16794,12 @@ static int walk_row_yield_kept(Compiler *c, int s, int r, TyKind row, int depth)
       if (nt_kind(nt, blk) != NK_BlockNode) return 0;
       const char *pn = an == 1 && block_param_is_multi(c, blk, 0) ? NULL : block_param_name(c, blk, at);
       if (!pn) return 0;
-      if (!walk_row_param_kept(c, c->nscope[blk], pn, row, depth + 1, 0)) return 0;
+      if (!walk_row_param_kept(c, c->nscope[blk], pn, row, depth + 1, 0)) {
+        if (depth == 0) walk_row_yield_memo(c, s, at, row, 0);
+        return 0;
+      }
     }
+    if (depth == 0) walk_row_yield_memo(c, s, at, row, 1);
   }
   return 1;
 }

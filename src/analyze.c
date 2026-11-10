@@ -17934,11 +17934,15 @@ static void oa_mark_subtree(const NodeTable *nt, int id, unsigned char *dead) {
    this pass to reset it again, every round to the cap (#4962). That holds
    for a slot the evidence rejected (a boxed row, a comparator, an iterator)
    as for one it reached no decision on. */
+/* Set for the run after the fixpoint: no round follows it to take a graced
+   pin back, and infer_return_types makes a return's pin its type while the
+   body still reads the poly array. */
+static int g_oa_after_fixpoint;
 static void oa_restore_pin(Compiler *c, OAS *sl) {
   TyKind back = sl->old_pin;
   unsigned char *grace = sl->lv ? &sl->lv->oa_grace : &c->scopes[sl->sidx].ret_oa_grace;
   if (back == TY_INT_ARRAY_ARRAY || back == TY_FLOAT_ARRAY_ARRAY || ty_is_obj_array(back)) {
-    if (*grace) { back = TY_UNKNOWN; *grace = 0; }
+    if (*grace || g_oa_after_fixpoint) { back = TY_UNKNOWN; *grace = 0; }
     else *grace = 1;
   }
   if (sl->lv) sl->lv->oa_pin = back;
@@ -53141,7 +53145,9 @@ static void an_phase_late_widen(Compiler *c, NodeTypes *promote_before) {
      the node cache is finalized so the rebuild below propagates the new element
      types to every `arr[i]` / `arr[i].field` site. */
   AN_STEP_V("narrow_int_table_ivars", narrow_int_table_ivars(c, 0));
+  g_oa_after_fixpoint = 1;
   AN_STEP_V("narrow_object_arrays", narrow_object_arrays(c));
+  g_oa_after_fixpoint = 0;
   AN_STEP_V("narrow_locals_from_arrays", narrow_locals_from_arrays(c));
   /* after the locals: a parameter can be fed an element the local rule has
      just narrowed, and both read the settled array types */

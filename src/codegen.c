@@ -23848,7 +23848,8 @@ char *codegen_program(const NodeTable *nt) {
     /* and the dispatch bodies pd_emit_used just wrote, which can hold a
        value's #methods call of their own */
     const char *vmt[4] = { g_procs.p, body->p, b.p, g_pd_defs.p };
-    emit_value_methods_helpers(c, vmt, 4, &g_pd_protos, &g_pd_defs); }
+    emit_value_methods_helpers(c, vmt, 4, &g_pd_protos, &g_pd_defs);
+    emit_class_value_responds_helper(c, vmt, 4, &g_pd_protos, &g_pd_defs); }
   if (isa_ext) {
     if (calls_poly_is_a(b.p + isa_ext_at) || calls_poly_is_a(g_procs.p) ||
         calls_poly_is_a(body->p) || calls_poly_is_a(g_pd_defs.p))

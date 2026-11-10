@@ -113,6 +113,8 @@ int any_class_responds(Compiler *c, const char *qm);
 int class_implicit_responds(Compiler *c, int cid, const char *qm);
 int class_struct_kind(Compiler *c, int cid);
 int class_value_responds(Compiler *c, int tv, const char *qm, Buf *b);
+void class_value_responds_runtime(int tv, Buf *b);
+void emit_class_value_responds_helper(Compiler *c, const char *const *texts, int ntexts, Buf *protos, Buf *defs);
 extern const char *const comparable_names[];
 int const_name_is_wrong(const char *s);
 int emit_io_pick(Compiler *c, int tv, const char *name, int public_only, Buf *b);

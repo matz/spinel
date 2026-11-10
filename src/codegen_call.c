@@ -1878,10 +1878,24 @@ static int kwh_elem_named(Compiler *c, int kwn, const int *kwels, const char *pn
 int emit_reopen_arm_test(Compiler *c, int kmi, const char *name, const char *cls,
                                 const char *raise, Buf *b) {
   if (kmi != class_reopen_cmethod(c, -1, -1, name)) return 0;
-  char t[200];
-  snprintf(t, sizeof t, "(%s).cls_id < 0 && !sp_class_nil_p(%s) && !sp_class_is_module_val(%s)", cls, cls, cls);
-  if (raise) buf_printf(b, " default: if (!(%s)) { %s; break; } ", t, raise);
-  else buf_printf(b, "(%s) ? ", t);
+  /* a core class, or a program's class whose own class methods (its chain's)
+     do not define the name otherwise: a class value self in an included
+     method (`try` on `A`), which no arm of A's own reaches, answers by the
+     reopening as CRuby does. A copy of the reopening's method in the class
+     (same def) is the same method. */
+  Buf t; memset(&t, 0, sizeof t);
+  buf_printf(&t, "!sp_class_nil_p(%s) && !sp_class_is_module_val(%s) && ((%s).cls_id < 0 || ((%s).cls_id != SP_CLASS_BY_NAME", cls, cls, cls, cls);
+  int rc = comp_core_class(c, CORE_CLASS_REOPEN), kdef = c->scopes[kmi].def_node;
+  for (int k = 0; k < c->nclasses; k++) {
+    if (k == rc || comp_class_is_module(c, &c->classes[k])) continue;
+    int own = comp_cmethod_in_chain(c, k, name, NULL);
+    if (own >= 0 && own != kmi && c->scopes[own].def_node != kdef)
+      buf_printf(&t, " && (%s).cls_id != %d", cls, k);
+  }
+  buf_puts(&t, "))");
+  if (raise) buf_printf(b, " default: if (!(%s)) { %s; break; } ", t.p, raise);
+  else buf_printf(b, "(%s) ? ", t.p);
+  free(t.p);
   return 1;
 }
 /* Class-only targets need this dispatch when the name also has builtin
@@ -19886,23 +19900,23 @@ void emit_responds_name(Compiler *c, int k, const char *nm, Buf *pub, Buf *priv)
 /* The Class/Module surface every class object carries, `new` included (a
    MODULE object answers everything here except `new`, which its callers gate).
    One list, so a core class object and a user one answer alike (#3494). */
+/* Class's public instance methods beyond Object's, from ruby 4.0.1 */
+static const char *const cls_uni[] = {
+  "new", "allocate", "attached_object", "subclasses", "superclass",
+  "<", "<=", ">", ">=", "alias_method", "ancestors", "attr", "attr_accessor",
+  "attr_reader", "attr_writer", "autoload", "autoload?", "class_eval", "class_exec",
+  "class_variable_defined?", "class_variable_get", "class_variable_set",
+  "class_variables", "const_defined?", "const_get", "const_missing", "const_set",
+  "const_source_location", "constants", "define_method", "deprecate_constant",
+  "include", "include?", "included_modules", "instance_method", "instance_methods",
+  "method_defined?", "module_eval", "module_exec", "name", "prepend",
+  "private_class_method", "private_constant", "private_instance_methods",
+  "private_method_defined?", "protected_instance_methods", "protected_method_defined?",
+  "public_class_method", "public_constant", "public_instance_method",
+  "public_instance_methods", "public_method_defined?", "refinements",
+  "remove_class_variable", "remove_method", "set_temporary_name", "singleton_class?",
+  "undef_method", "undefined_instance_methods", NULL };
 static int class_object_universal_method(const char *qm) {
-  /* Class's public instance methods beyond Object's, from ruby 4.0.1 */
-  static const char *const cls_uni[] = {
-    "new", "allocate", "attached_object", "subclasses", "superclass",
-    "<", "<=", ">", ">=", "alias_method", "ancestors", "attr", "attr_accessor",
-    "attr_reader", "attr_writer", "autoload", "autoload?", "class_eval", "class_exec",
-    "class_variable_defined?", "class_variable_get", "class_variable_set",
-    "class_variables", "const_defined?", "const_get", "const_missing", "const_set",
-    "const_source_location", "constants", "define_method", "deprecate_constant",
-    "include", "include?", "included_modules", "instance_method", "instance_methods",
-    "method_defined?", "module_eval", "module_exec", "name", "prepend",
-    "private_class_method", "private_constant", "private_instance_methods",
-    "private_method_defined?", "protected_instance_methods", "protected_method_defined?",
-    "public_class_method", "public_constant", "public_instance_method",
-    "public_instance_methods", "public_method_defined?", "refinements",
-    "remove_class_variable", "remove_method", "set_temporary_name", "singleton_class?",
-    "undef_method", "undefined_instance_methods", NULL };
   for (int u = 0; cls_uni[u]; u++) if (sp_streq(qm, cls_uni[u])) return 1;
   return 0;
 }
@@ -20001,6 +20015,95 @@ int class_value_responds(Compiler *c, int tv, const char *qm, Buf *b) {
   for (int k = 0; k < c->nclasses; k++) if (class_responds_to(c, k, qm, -1)) buf_printf(b, " || _t%d.cls_id == %d", tv, k);
   buf_puts(b, ")))");
   return 1;
+}
+
+/* The same for a name known only at run time: a class value answers the
+   Class/Module surface, the methods a `class Class` reopening gives every
+   class, and its own class methods, by its class. One function, written
+   with its prototype when the finished program calls it (as pd_emit_used
+   writes its helpers): its lists name every class's class methods, too
+   many to repeat at each site. */
+static void class_value_name_once(Buf *b, Buf *seen, const char *nm) {
+  /* seen holds "\0name\0" entries to keep each list free of repeats */
+  size_t n = strlen(nm);
+  for (size_t i = 0; seen->p && i < seen->len; i += strlen(seen->p + i) + 1)
+    if (strlen(seen->p + i) == n && !memcmp(seen->p + i, nm, n)) return;
+  buf_putn(seen, nm, n + 1);
+  buf_puts(b, "\""); emit_c_escaped(b, nm); buf_puts(b, "\", ");
+}
+void class_value_responds_runtime(int tv, Buf *b) {
+  buf_printf(b, " || sp_class_value_responds(_t%d, _n%d)", tv, tv);
+}
+void emit_class_value_responds_helper(Compiler *c, const char *const *texts, int ntexts, Buf *protos, Buf *defs) {
+  int any = 0;
+  for (int t = 0; t < ntexts && !any; t++) any = texts[t] && strstr(texts[t], "sp_class_value_responds(") != NULL;
+  if (!any) return;
+  buf_puts(protos, "static sp_bool sp_class_value_responds(sp_RbVal v, const char *n);\n");
+  Buf *b = defs;
+  Buf uni, cls_only, reopen;
+  memset(&uni, 0, sizeof uni); memset(&cls_only, 0, sizeof cls_only); memset(&reopen, 0, sizeof reopen);
+  /* the Class/Module surface, split by what a module object lacks */
+  for (int u = 0; cls_uni[u]; u++) {
+    buf_puts(class_only_method(cls_uni[u]) ? &cls_only : &uni, "\"");
+    emit_c_escaped(class_only_method(cls_uni[u]) ? &cls_only : &uni, cls_uni[u]);
+    buf_puts(class_only_method(cls_uni[u]) ? &cls_only : &uni, "\", ");
+  }
+  /* a `class Class` reopening's methods, every class's */
+  Buf seen;
+  memset(&seen, 0, sizeof seen);
+  for (int s = 0; s < c->nscopes; s++) {
+    const Scope *sc = &c->scopes[s];
+    if (sc->name && sc->is_cmethod && !sc->is_proc_form && !name_is_synth_method(c, sc->name) &&
+        class_reopen_cmethod(c, -1, -1, sc->name) == s)
+      class_value_name_once(&reopen, &seen, sc->name);
+  }
+  free(seen.p);
+  buf_printf(b, "static sp_bool sp_class_value_responds(sp_RbVal v, const char *n) {\n  if (v.tag != SP_TAG_CLASS) return 0;\n  if (sp_str_in_list(n, (const char *const[]){%sNULL})) return 1;\n  sp_bool r = 0;\n  switch (v.cls_id) {", uni.p ? uni.p : "");
+  /* the class methods of the program, asked of each class's chain */
+  int ncm = 0, *cms = malloc(sizeof(int) * (size_t)(c->nscopes > 0 ? c->nscopes : 1));
+  for (int s = 0; s < c->nscopes; s++) {
+    const Scope *sc = &c->scopes[s];
+    /* (one the program compiles: an uncompiled one no dispatch arm calls) */
+    if (sc->name && sc->is_cmethod && sc->reachable && !sc->is_proc_form && !name_is_synth_method(c, sc->name)) cms[ncm++] = s;
+  }
+  for (int k = 0; k < c->nclasses; k++) {
+    if (k == comp_core_class(c, CORE_CLASS_REOPEN)) continue;
+    int is_module = comp_class_is_module(c, &c->classes[k]);
+    Buf nb;
+    memset(&nb, 0, sizeof nb);
+    memset(&seen, 0, sizeof seen);
+    for (int i = 0; i < ncm; i++)
+      if (comp_cmethod_in_chain(c, k, c->scopes[cms[i]].name, NULL) == cms[i])
+        class_value_name_once(&nb, &seen, c->scopes[cms[i]].name);
+    for (int p = k; p >= 0; p = c->classes[p].parent) {
+      ClassInfo *ci = &c->classes[p];
+      for (int r = 0; r < ci->nsg_readers; r++) class_value_name_once(&nb, &seen, ci->sg_readers[r]);
+      for (int w = 0; w < ci->nsg_writers; w++) {
+        char wn[260];
+        if (snprintf(wn, sizeof wn, "%s=", ci->sg_writers[w]) < (int)sizeof wn) class_value_name_once(&nb, &seen, wn);
+      }
+    }
+    free(seen.p);
+    /* a class with no names of its own answers by the default's; a module
+       answers neither Class's own methods nor the reopening's */
+    if (!nb.len && !is_module) continue;
+    buf_printf(b, " case %d: r = ", k);
+    if (nb.len) buf_printf(b, "sp_str_in_list(n, (const char *const[]){%sNULL}) || ", nb.p);
+    if (!is_module) {
+      if (cls_only.len) buf_printf(b, "sp_str_in_list(n, (const char *const[]){%sNULL}) || ", cls_only.p);
+      if (reopen.len) buf_printf(b, "sp_str_in_list(n, (const char *const[]){%sNULL}) || ", reopen.p);
+    }
+    buf_puts(b, "0; break;");
+    free(nb.p);
+  }
+  /* a core class value (or one named at run time): Class's whole surface
+     and the reopening's methods */
+  buf_puts(b, " default: r = ");
+  if (cls_only.len) buf_printf(b, "sp_str_in_list(n, (const char *const[]){%sNULL}) || ", cls_only.p);
+  if (reopen.len) buf_printf(b, "sp_str_in_list(n, (const char *const[]){%sNULL}) || ", reopen.p);
+  buf_puts(b, "0; break; }\n  return r;\n}\n");
+  free(cms);
+  free(uni.p); free(cls_only.p); free(reopen.p);
 }
 
 /* Append the trailing `&block` argument (an sp_Proc *, or NULL) to a direct

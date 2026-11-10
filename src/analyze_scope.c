@@ -11914,6 +11914,9 @@ static int pivs_value_uncached(Compiler *c, int v, char *set, int depth) {
       return 1;
     case NK_SelfNode: {
       Scope *s = comp_scope_of(c, v);
+      /* a yielding method's proc-form clone has its method's callers: the
+         clone itself is called by no Ruby call site of its own spelling */
+      if (s && s->is_proc_form && s->pf_source > 0 && s->pf_source <= c->nscopes) s = &c->scopes[s->pf_source - 1];
       if (s && s->def_node < 0 && s->class_id < 0) return pivs_note_class_value(c, v);
       if (s && s->is_cmethod && s->def_node >= 0) return pivs_note_cmethod_self(c, s);
       if (!s || s->is_cmethod || s->class_id < 0) return 0;

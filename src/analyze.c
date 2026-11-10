@@ -1387,7 +1387,11 @@ void compute_reachable(Compiler *c, int typed) {
           if(_t>=0 && !c->scopes[_t].reachable)cr_live_reach(&lv, _t); } } \
       for(int _t=SN_FIRST(_mn+1);_t>=0;_t=sn_link[_t]) \
         if(c->scopes[_t].class_id<0 && !c->scopes[_t].is_cmethod && !c->scopes[_t].replaced && !c->scopes[_t].reachable) \
-          cr_live_reach(&lv, _t); } } \
+          cr_live_reach(&lv, _t); \
+      { int _r=class_reopen_cmethod(c,-1,-1,_mn+1); \
+        if(_r>=0 && !c->scopes[_r].replaced && !c->scopes[_r].reachable) cr_live_reach(&lv, _r); \
+        for(int _k=0;_r>=0 && _k<c->nclasses;_k++){ int _t=comp_cmethod_in_chain(c,_k,_mn+1,NULL); \
+          if(_t>=0 && _t!=_r && !c->scopes[_t].replaced && !c->scopes[_t].reachable) cr_live_reach(&lv, _t); } } } } \
     else if(_mn && _mn[0]=='\x03'){ if(!anh_has(&cn_set,_mn) && !anh_has(&cn_set,_mn+1)){ CN_ADD(_mn); \
       for(int _t=SN_FIRST(_mn+1);_t>=0;_t=sn_link[_t]) \
         if((!c->scopes[_t].is_cmethod || c->scopes[_t].is_module_function) && !c->scopes[_t].replaced && !c->scopes[_t].reachable) \

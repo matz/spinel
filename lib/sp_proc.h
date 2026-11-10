@@ -299,7 +299,12 @@ static inline sp_RbVal sp_bm_held_recv(void *holder) { return sp_PolyArray_get_m
 static inline sp_bool sp_bm_held_recv_same(void *a, void *b) {
   if (a == b) return 1;
   sp_RbVal x = sp_bm_held_recv(a), y = sp_bm_held_recv(b);
-  return x.tag == y.tag && x.cls_id == y.cls_id && x.v.i == y.v.i;
+  if (x.tag != y.tag || x.cls_id != y.cls_id) return 0;
+  /* a Float is the whole double: on a 32-bit target sp_int is half of it, and
+     1.5 and 2.5 share their low word (compared by bits, as CRuby compares the
+     object: 0.0 and -0.0 are two receivers) */
+  if (x.tag == SP_TAG_FLT) return memcmp(&x.v.f, &y.v.f, sizeof(sp_float)) == 0;
+  return x.v.i == y.v.i;
 }
 /* Method#== / #eql? / #equal? and the Hash-key compare: the same bound receiver
    and the same target -- one fn, or one builtin method (ident). A class

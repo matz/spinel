@@ -144,9 +144,10 @@ module Syslog
     self
   end
 
-  # A close when the log is open, then an open.
+  # A close, then an open; as in CRuby, the close raises when the log is
+  # not open.
   def self.open!(ident = $0, options = nil, facility = nil, &block)
-    close if @opened
+    close
     open(ident, options, facility, &block)
   end
 

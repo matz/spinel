@@ -53,6 +53,12 @@ p [Syslog.options == Syslog::LOG_NDELAY, Syslog.facility == Syslog::LOG_LOCAL1]
 p Syslog.reopen("spinel-syslog-reopened-2").ident
 p Syslog.close
 p [Syslog.opened?, Syslog.ident, Syslog.options, Syslog.facility, Syslog.mask]
+# open! and reopen close first, and the close raises when nothing is open
+begin
+  Syslog.open!("spinel-syslog-not-open")
+rescue RuntimeError => e
+  p [e.message, Syslog.opened?]
+end
 
 v = Syslog.open("spinel-syslog-block") do |s|
   p s.equal?(Syslog)

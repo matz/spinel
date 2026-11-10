@@ -19,6 +19,7 @@ true
 "spinel-syslog-reopened-2"
 nil
 [false, nil, nil, nil, nil]
+["syslog not opened", false]
 true
 true
 [true, false]

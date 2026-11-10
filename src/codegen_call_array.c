@@ -2012,9 +2012,12 @@ int emit_builtin_array_concat(Compiler *c, int id, int recv, TyKind rt, const in
       buf_printf(b, " for (sp_int _t%d = 0; _t%d < _t%d; _t%d++) {", ti, ti, lengths + i, ti);
     else
       buf_printf(b, " for (sp_int _t%d = 0; _t%d < _t%d; _t%d++) sp_%sArray_push%s(_t%d, ",
-                 ti, ti, lengths + i, ti, k, num ? (same ? "_o" : "_nilable") : "", tr);
+                 ti, ti, lengths + i, ti, k, num ? (same ? "_o" : "_nilable") : same ? typed_elem_store_sfx(rt) : "", tr);
     Buf el = {0};
-    if (same) buf_printf(&el, "sp_%sArray_%s(_t%d, _t%d)", ak, num ? "oget" : "get", tv, ti);
+    /* an element of the same kind is copied as it is held (a String
+       Array's handle: the String itself, read and stored by the `_e`
+       entries) */
+    if (same) buf_printf(&el, "sp_%sArray_%s%s(_t%d, _t%d)", ak, num ? "oget" : "get", num ? "" : typed_elem_store_sfx(rt), tv, ti);
     else if (op[i].boxed) {
       /* The checked Array's numeric kinds retain the iterator's inline
          nil-aware reads. Other kinds need the Array getter: the generic
@@ -2456,41 +2459,47 @@ int emit_call_append_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, cons
     else emit_recv_rooted(c, recv, t, "SP_GC_ROOT", b);
     TyKind elem = ty_array_elem(art);
     for (int a = 0; a < argc; a++) {
-      buf_printf(b, "sp_%sArray_push%s(_t%d, ", k, nil_store_sfx(c, k, argv[a]), t);
-      if (art == TY_POLY_ARRAY) emit_boxed(c, argv[a], b);
+      const char *psfx = nil_store_sfx(c, k, argv[a]);
+      buf_printf(b, "sp_%sArray_push%s(_t%d, ", k, psfx[0] || art == TY_POLY_ARRAY ? psfx : typed_elem_store_sfx(art), t);
+      Buf vb; memset(&vb, 0, sizeof vb);
+      if (art == TY_POLY_ARRAY) emit_boxed(c, argv[a], &vb);
       /* a poly value into a String, Integer or Float array: its nil is the
          slot's nil, and a value of another kind is refused, as the statement
          form takes them (sp_poly_elem_*). The sp_poly_to_* conversions read
          a nil as 0, 0.0 or "", and turned 1 into "1" and 2.5 into 2. */
       else if (repr_of(c, argv[a]).kind == RK_BOXED && elem == TY_STRING) {
-        buf_puts(b, "sp_poly_elem_s("); emit_expr(c, argv[a], b); buf_puts(b, ")");
+        buf_puts(&vb, "sp_poly_elem_s("); emit_expr(c, argv[a], &vb); buf_puts(&vb, ")");
       }
       else if (repr_of(c, argv[a]).kind == RK_BOXED && elem == TY_INT) {
-        buf_puts(b, "sp_poly_elem_i("); emit_expr(c, argv[a], b); buf_puts(b, ")");
+        buf_puts(&vb, "sp_poly_elem_i("); emit_expr(c, argv[a], &vb); buf_puts(&vb, ")");
       }
       else if (repr_of(c, argv[a]).kind == RK_BOXED && elem == TY_FLOAT) {
-        buf_puts(b, "sp_poly_elem_f("); emit_expr(c, argv[a], b); buf_puts(b, ")");
+        buf_puts(&vb, "sp_poly_elem_f("); emit_expr(c, argv[a], &vb); buf_puts(&vb, ")");
       }
       else if (repr_of(c, argv[a]).untyped) {
         /* the _nilable store of an unresolved value takes an oint */
-        if (oint_kind(elem)) buf_printf(b, "%s(", oint_of(elem));
-        emit_unresolved_coerced(c, argv[a], elem, b);
-        if (oint_kind(elem)) buf_puts(b, ")");
+        if (oint_kind(elem)) buf_printf(&vb, "%s(", oint_of(elem));
+        emit_unresolved_coerced(c, argv[a], elem, &vb);
+        if (oint_kind(elem)) buf_puts(&vb, ")");
       }
       /* an Array, a Hash or an object into an Integer, Float or String
          array is refused at run time, as the statement form refuses it
          (the plain store here unwraps the oint the refusal never answers) */
       else if ((elem == TY_INT || elem == TY_FLOAT || elem == TY_STRING) &&
                container_or_object_operand(c, argv[a])) {
-        if (oint_kind(elem)) buf_printf(b, "%s(", oint_arg(elem));
-        buf_puts(b, elem == TY_INT ? "sp_poly_elem_i(" : elem == TY_FLOAT ? "sp_poly_elem_f(" : "sp_poly_elem_s(");
-        emit_boxed(c, argv[a], b); buf_puts(b, ")");
-        if (oint_kind(elem)) buf_puts(b, ")");
+        if (oint_kind(elem)) buf_printf(&vb, "%s(", oint_arg(elem));
+        buf_puts(&vb, elem == TY_INT ? "sp_poly_elem_i(" : elem == TY_FLOAT ? "sp_poly_elem_f(" : "sp_poly_elem_s(");
+        emit_boxed(c, argv[a], &vb); buf_puts(&vb, ")");
+        if (oint_kind(elem)) buf_puts(&vb, ")");
       }
       /* an Integer or Float value that can be nil stores with it; any other
          value keeps the push's own coercion (and its refusal wording) */
-      else if (oint_kind(elem) && nil_store_sfx(c, k, argv[a])[0]) emit_elem_store_value(c, k, argv[a], b);
-      else emit_coerce(c, argv[a], elem, CO_HOLD, "an Array push", b);
+      else if (oint_kind(elem) && nil_store_sfx(c, k, argv[a])[0]) emit_elem_store_value(c, k, argv[a], &vb);
+      else emit_typed_elem_coerce(c, argv[a], art, "an Array push", &vb);
+      /* the value as the element is held (a String Array's handle) */
+      if (art == TY_POLY_ARRAY || psfx[0]) buf_puts(b, vb.p ? vb.p : "");
+      else emit_typed_elem_hold(c, argv[a], art, vb.p ? vb.p : "", b);
+      free(vb.p);
       buf_puts(b, "); ");
     }
     /* a nil mixed Array took none of the pushes: it raises, under the name
@@ -2982,16 +2991,26 @@ int emit_call_array_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const
            an oint; a nullable read, a bound oint temp) travels as its oint
            into the _nilable store; a plain one into the plain store */
         int voint = oint_kind(et) && nil_store_sfx(c, k, argv[1])[0];
-        if (voint) buf_puts(b, oint_ctype(et)); else emit_ctype(c, et, b);
+        /* the value is held as the element is (a String Array's handle) */
+        TyKind held = typed_elem_held(rt);
+        if (voint) buf_puts(b, oint_ctype(et)); else emit_ctype(c, held != TY_UNKNOWN ? held : et, b);
         buf_printf(b, " _t%d = ", tv);
-        if (vboxed && et == TY_INT) { buf_puts(b, "sp_poly_elem_i("); emit_expr(c, argv[1], b); buf_puts(b, ")"); }
-        else if (vboxed && et == TY_STRING) { buf_puts(b, "sp_poly_elem_s("); emit_expr(c, argv[1], b); buf_puts(b, ")"); }
-        else if (vboxed && et == TY_FLOAT) { buf_puts(b, "sp_poly_elem_f("); emit_expr(c, argv[1], b); buf_puts(b, ")"); }
-        else if (voint) emit_oint_expr(c, argv[1], et, b);
-        else emit_coerce(c, argv[1], et, CO_HOLD, "an Array element store", b);
-        buf_printf(b, "; sp_%sArray_set%s(_t%d, _t%d, _t%d); ", k, nil_store_sfx(c, k, argv[1]), t, ti, tv);
-        /* the store answers the value: with its nil where the consumer takes the oint */
+        Buf vb; memset(&vb, 0, sizeof vb);
+        if (vboxed && et == TY_INT) { buf_puts(&vb, "sp_poly_elem_i("); emit_expr(c, argv[1], &vb); buf_puts(&vb, ")"); }
+        else if (vboxed && et == TY_STRING) { buf_puts(&vb, "sp_poly_elem_s("); emit_expr(c, argv[1], &vb); buf_puts(&vb, ")"); }
+        else if (vboxed && et == TY_FLOAT) { buf_puts(&vb, "sp_poly_elem_f("); emit_expr(c, argv[1], &vb); buf_puts(&vb, ")"); }
+        else if (voint) emit_oint_expr(c, argv[1], et, &vb);
+        else emit_typed_elem_coerce(c, argv[1], rt, "an Array element store", &vb);
+        if (voint) buf_puts(b, vb.p ? vb.p : "");
+        else emit_typed_elem_hold(c, argv[1], rt, vb.p ? vb.p : "", b);
+        free(vb.p);
+        const char *vsfx = nil_store_sfx(c, k, argv[1]);
+        buf_printf(b, "; sp_%sArray_set%s(_t%d, _t%d, _t%d); ", k, vsfx[0] ? vsfx : typed_elem_store_sfx(rt), t, ti, tv);
+        /* the store answers the value: with its nil where the consumer takes
+           the oint, and as the String it is typed where it was held as the
+           handle */
         if (voint) { oint_open(c, id, et, b); buf_printf(b, "_t%d", tv); oint_close(c, id, b); buf_puts(b, "; })"); }
+        else if (held == TY_STRBUF) buf_printf(b, "SP_STR_B(_t%d); })", tv);
         else buf_printf(b, "_t%d; })", tv);
         return 1;
       }

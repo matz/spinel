@@ -1991,26 +1991,97 @@ int g_re_init_needed = 0;
    int/float/string forms already convert between the numeric kinds). An
    element slot takes nil, so a nilable Integer passes its nil, as `<<`
    and `[]=` store it, rather than the strict slot's TypeError: analyze marks
-   the array it lands in (unshift, insert, fill) as able to hold one. */
-void emit_typed_elem_value(Compiler *c, int node, TyKind et, Buf *b) {
+   the array it lands in (unshift, insert, fill) as able to hold one.
+
+   How the element is held is the container's ty_traits row (rt, the
+   Array's kind): its elem_held column names the kind, and its elem_sfx
+   the suffix of the runtime entries that store it. A String Array holds
+   the String's handle (sp_strelem), stored through the `_e` entries: the
+   value is taken as its handle where it is written (emit_typed_elem_hold),
+   so a String in hand is stored as itself rather than handed over as its
+   bytes for the runtime to find the handle again (sp_strelem_fx). */
+void emit_typed_elem_value(Compiler *c, int node, TyKind rt, Buf *b) {
+  TyKind et = ty_array_elem(rt);
   Repr vr = repr_of(c, node);
   TyKind vt = vr.as_ty;
+  Buf v; memset(&v, 0, sizeof v);
   if (vr.kind == RK_BOXED && (et == TY_INT || et == TY_FLOAT || et == TY_STRING)) {
-    buf_printf(b, "sp_poly_elem_%s(", et == TY_INT ? "i" : et == TY_FLOAT ? "f" : "s");
-    emit_expr(c, node, b);
-    buf_puts(b, ")");
-    return;
+    buf_printf(&v, "sp_poly_elem_%s(", et == TY_INT ? "i" : et == TY_FLOAT ? "f" : "s");
+    emit_expr(c, node, &v);
+    buf_puts(&v, ")");
   }
   /* An untyped value that never arrives -- an unresolved call's raise token,
      a call to a method that answers no value -- is coerced for its raise, as
      in the other typed slots. The numeric forms discard the token already. */
-  if (vt == TY_UNKNOWN && (et == TY_STRING || call_answers_no_value(c, node))) {
-    emit_unresolved_coerced(c, node, et, b);
+  else if (vt == TY_UNKNOWN && (et == TY_STRING || call_answers_no_value(c, node)))
+    emit_unresolved_coerced(c, node, et, &v);
+  else if (et == TY_INT) emit_int_expr_nilable(c, node, &v);
+  else if (et == TY_FLOAT) emit_float_expr(c, node, &v);
+  else emit_typed_elem_coerce(c, node, rt, "an Array element", &v);
+  emit_typed_elem_hold(c, node, rt, v.p ? v.p : "", b);
+  free(v.p);
+}
+/* The suffix of the element-store entries of typed Array kind rt (the
+   elem_sfx column), or NULL for a kind that is no typed Array */
+const char *typed_elem_sfx(TyKind rt) {
+  const TyTraits *tr = ty_traits_of(rt);
+  return tr ? tr->elem_sfx : NULL;
+}
+/* The kind typed Array kind rt holds its element as (the elem_held
+   column): the element's own kind, or the handle (TY_STRBUF) for a String
+   element; TY_UNKNOWN for a kind that is no typed Array */
+TyKind typed_elem_held(TyKind rt) {
+  const TyTraits *tr = ty_traits_of(rt);
+  return tr ? (TyKind)tr->elem_held : TY_UNKNOWN;
+}
+/* The element store's suffix for rt, "" where its entries take none */
+const char *typed_elem_store_sfx(TyKind rt) {
+  const char *s = typed_elem_sfx(rt);
+  return s ? s : "";
+}
+/* Value node into an element of typed Array kind rt, as its slot converts
+   or refuses it (emit_coerce), the face aside: where the element is held as
+   the handle, a String of either face, which that slot takes as it is
+   (CF_FIT, its text under SP_STR_B), is written as it is, for
+   emit_typed_elem_hold to take its handle. */
+void emit_typed_elem_coerce(Compiler *c, int node, TyKind rt, const char *what, Buf *b) {
+  TyKind et = ty_array_elem(rt), from = TY_UNKNOWN;
+  if (typed_elem_held(rt) == TY_STRBUF && repr_coerce_plan(c, node, et, CO_HOLD, &from) == CF_FIT &&
+      (from == TY_STRING || from == TY_STRBUF)) {
+    emit_expr(c, node, b);
     return;
   }
-  if (et == TY_INT) emit_int_expr_nilable(c, node, b);
-  else if (et == TY_FLOAT) emit_float_expr(c, node, b);
-  else emit_coerce(c, node, et, CO_HOLD, "an Array element", b);
+  emit_coerce(c, node, et, CO_HOLD, what, b);
+}
+/* text, the value node is written as on its way into an element of rt, as
+   the element is held: for the handle, the handle of either face (SP_STR_HDL:
+   a handle is itself; bytes adopt the handle they were born in, or name a
+   payload's owner, or get the new handle sp_strelem_fx made for them in the
+   bytes entries) and a frozen literal's static object (strbuf_new_of_text),
+   nil's NULL; for any other kind the text as it is. */
+void emit_typed_elem_hold(Compiler *c, int node, TyKind rt, const char *text, Buf *b) {
+  if (typed_elem_held(rt) != TY_STRBUF) { buf_puts(b, text); return; }
+  if (node >= 0 && nt_kind(c->nt, node) == NK_NilNode) { buf_puts(b, "NULL"); return; }
+  strbuf_new_of_text(c, node, text, b);
+}
+/* Whether value node, written into an element of rt, may be given a new
+   handle on its way in (emit_typed_elem_hold). Nil is stored as NULL, and
+   a variable's read that yields the handle its slot holds (repr_of's handle
+   face, as operand_may_allocate asks it) is the slot's String itself,
+   rooted by the slot: neither is new. Any other value may be, and is held
+   by nothing until the store, so an operand of the store that allocates
+   (the receiver, the index) is read, and rooted, ahead of it. A value's
+   type does not say which face its text comes in (a String call on a
+   handle local can be typed the handle and answer bytes), so only the
+   read's own answer is taken. */
+int typed_elem_hold_may_make(Compiler *c, int node, TyKind rt) {
+  if (typed_elem_held(rt) != TY_STRBUF) return 0;
+  node = nt_paren_single(c->nt, node);
+  if (node < 0) return 0;
+  NodeKind k = nt_kind(c->nt, node);
+  if (k == NK_NilNode) return 0;
+  int var = k == NK_LocalVariableReadNode || k == NK_InstanceVariableReadNode || repr_static_read_kind(k);
+  return !(var && repr_of(c, node).handle);
 }
 /* A POLY variable's slot `ref` lifted into the shared handle as it is read
    (sp_poly_strbuf_lift, #6179): the lifted value is taken into a temp first

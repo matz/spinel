@@ -1178,17 +1178,6 @@ static const char*sp_str_strip_sets(const char*s,const char**chars,sp_int n,int 
 const char*sp_str_strip_n(const char*s,const char**chars,sp_int n){return sp_str_strip_sets(s,chars,n,3);}
 const char*sp_str_lstrip_n(const char*s,const char**chars,sp_int n){return sp_str_strip_sets(s,chars,n,1);}
 const char*sp_str_rstrip_n(const char*s,const char**chars,sp_int n){return sp_str_strip_sets(s,chars,n,2);}
-/* String#scrub!: replace invalid bytes IN PLACE. CRuby raises FrozenError on
-   a frozen receiver only when it would actually change it -- a frozen string
-   with nothing to scrub comes back unchanged (#3338). */
-const char *sp_str_scrub_bang(const char *s, const char *repl) {
-  SP_GC_ROOT_STR(s); SP_GC_ROOT_STR(repl);
-  if (SP_UNLIKELY(!s)) sp_nil_recv("scrub!");
-  const char *r = sp_str_scrub(s, repl);
-  if (r == s || sp_str_eq(r, s)) return s;
-  sp_str_check_mutable(s);
-  return r;
-}
 /* The length of the UTF-8 character at p (n bytes left), or of the invalid
    sequence there, *bad set: a lead byte and the continuation bytes that fit
    it before one that does not, as CRuby takes them (Unicode's maximal

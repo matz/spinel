@@ -243,7 +243,6 @@ const char *sp_str_scrub_repl(const char *r);
 const char *sp_str_encode(const char *s, int npos, sp_RbVal dst, sp_RbVal src, sp_RbVal invalid, sp_RbVal undef, sp_RbVal replace);
 const char *sp_str_encode_into(const char *s, const char *t);
 const char *sp_str_encode_slot(const char *s, const char *t);
-const char *sp_str_scrub_bang(const char *s, const char *repl);
 const char*sp_str_ljust(const char*s,sp_int w);
 const char*sp_str_rjust(const char*s,sp_int w);
 const char*sp_str_center(const char*s,sp_int w);

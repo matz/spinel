@@ -6432,23 +6432,6 @@ int qc_leaf_qualified(const char *leaf) {
   return 0;
 }
 
-/* Is the name `w` writes also defined at another place by an entry of `os`
-   -- the same leaf under a different module path? An entry that is the same
-   node (a `Point = Struct.new(...)`, both a constant write and a class
-   definition) is the write itself, not another definition. */
-static int qc_is_class_write(const QCWrite *w, const QCWrite *os, int on) {
-  for (int j = 0; j < on; j++) if (os[j].node == w->node) return 1;
-  return 0;
-}
-static int qc_leaf_elsewhere(const QCWrite *w, const QCWrite *os, int on) {
-  for (int j = 0; j < on; j++) {
-    if (os[j].node == w->node || !sp_streq(os[j].name, w->name)) continue;
-    if (os[j].depth != w->depth) return 1;
-    for (int k = 0; k < w->depth; k++) if (!sp_streq(os[j].path[k], w->path[k])) return 1;
-  }
-  return 0;
-}
-
 /* Writes ordered by name, then by module path: the writes of one name are
    adjacent, and those under one path too. */
 static const QCWrite *qc_order_ws;
@@ -6462,6 +6445,50 @@ static int qc_write_order(const void *a, const void *b) {
 }
 static int qc_name_order(const void *a, const void *b) {
   return strcmp(*(const char *const *)a, *(const char *const *)b);
+}
+/* The writes of a list os by name and by node, for the questions asked of
+   each write of another list (qc_is_class_write, qc_leaf_elsewhere): each
+   scanned all of os, N^2 for N constants of N names beside N classes
+   (test/scale/const_collisions.sh). os stays as it is while the index is
+   asked. */
+typedef struct { const QCWrite *os; int *by_name, *by_node, n; } QCIndex;
+static int qc_int_order(const void *a, const void *b) {
+  int x = *(const int *)a, y = *(const int *)b;
+  return x < y ? -1 : x > y;
+}
+static void qci_build(QCIndex *x, const QCWrite *os, int on) {
+  x->os = os; x->n = on;
+  x->by_name = malloc(sizeof(int) * (size_t)(on ? on : 1));
+  x->by_node = malloc(sizeof(int) * (size_t)(on ? on : 1));
+  if (!x->by_name || !x->by_node) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  for (int i = 0; i < on; i++) { x->by_name[i] = i; x->by_node[i] = os[i].node; }
+  qc_order_ws = os;
+  qsort(x->by_name, (size_t)on, sizeof(int), qc_write_order);
+  qsort(x->by_node, (size_t)on, sizeof(int), qc_int_order);
+}
+static void qci_free(QCIndex *x) { free(x->by_name); free(x->by_node); }
+/* Is `w` the same node as an entry of the index (a `Point = Struct.new(...)`,
+   both a constant write and a class definition)? */
+static int qc_is_class_write(const QCWrite *w, const QCIndex *x) {
+  return bsearch(&w->node, x->by_node, (size_t)x->n, sizeof(int), qc_int_order) != NULL;
+}
+/* Is the name `w` writes also defined at another place by an entry of the
+   index -- the same leaf under a different module path? An entry that is
+   the same node is the write itself, not another definition. */
+static int qc_leaf_elsewhere(const QCWrite *w, const QCIndex *x) {
+  int lo = 0, hi = x->n;   /* the first entry of w's name */
+  while (lo < hi) {
+    int mid = lo + (hi - lo) / 2;
+    if (strcmp(x->os[x->by_name[mid]].name, w->name) < 0) lo = mid + 1;
+    else hi = mid;
+  }
+  for (int q = lo; q < x->n && sp_streq(x->os[x->by_name[q]].name, w->name); q++) {
+    const QCWrite *o = &x->os[x->by_name[q]];
+    if (o->node == w->node) continue;
+    if (o->depth != w->depth) return 1;
+    for (int k = 0; k < w->depth; k++) if (!sp_streq(o->path[k], w->path[k])) return 1;
+  }
+  return 0;
 }
 /* What the constant pass does to reads, all the writes in ws colliding: a
    `::X` read of a colliding name is Object's X, read as the bare constant
@@ -6539,17 +6566,20 @@ static void qc_value_collisions(Compiler *c) {
   }
   free(ord);
   int any = 0;
+  QCIndex cx;
+  qci_build(&cx, cws, cwn);
   for (int i = 0; i < wn; i++) {
     int collide = two[i];
     if (!collide && ws[i].depth > 0 && builtin_class_id(ws[i].name) != 0) collide = 1;
     /* ... and a nested constant named like a class defined elsewhere. A
        class-defining write (`Point = Struct.new`) is the class pass's to
        qualify, as a class. */
-    if (!collide && ws[i].depth > 0 && !qc_is_class_write(&ws[i], cws, cwn) &&
-        qc_leaf_elsewhere(&ws[i], cws, cwn)) collide = 1;
+    if (!collide && ws[i].depth > 0 && !qc_is_class_write(&ws[i], &cx) &&
+        qc_leaf_elsewhere(&ws[i], &cx)) collide = 1;
     if (!collide) { ws[i] = ws[--wn]; two[i] = two[wn]; i--; continue; }
     any = 1;
   }
+  qci_free(&cx);
   free(two);
   free(cws);
   qc_nvalue_keys = nt->count;
@@ -6942,10 +6972,15 @@ void qualify_colliding_classes(Compiler *c) {
   QCWrite *kws = NULL; int kwn = 0, kwcap = 0;
   for (int r = 0; r < nt_nroots(nt); r++)
     qc_collect_writes(c, nt_root(nt, r), path, 0, &kws, &kwn, &kwcap);
+  QCIndex wx;
+  qci_build(&wx, ws, wn);
   for (int i = 0; i < kwn; i++)
-    if (qc_is_class_write(&kws[i], ws, wn)) { kws[i] = kws[--kwn]; i--; }
+    if (qc_is_class_write(&kws[i], &wx)) { kws[i] = kws[--kwn]; i--; }
     else if (kws[i].node >= 0 && kws[i].node < qc_nvalue_keys && qc_value_keys[kws[i].node])
       snprintf(kws[i].name, sizeof kws[i].name, "%s", qc_value_keys[kws[i].node]);
+  qci_free(&wx);
+  QCIndex kx;   /* (after the renames above: the index orders by name) */
+  qci_build(&kx, kws, kwn);
   free(qc_value_keys); qc_value_keys = NULL; qc_nvalue_keys = 0;
   /* keep only leaf names defined under 2+ distinct module paths */
   unsigned char *leaf_collides = qc_colliding_leaves(ws, wn);   /* moves with its write */
@@ -6997,7 +7032,7 @@ void qualify_colliding_classes(Compiler *c) {
     }
     /* ... and a nested class sharing its leaf with a plain constant written
        elsewhere, which keeps the bare leaf as its key */
-    if (!collide && ws[i].depth > 0 && qc_leaf_elsewhere(&ws[i], kws, kwn)) collide = 1;
+    if (!collide && ws[i].depth > 0 && qc_leaf_elsewhere(&ws[i], &kx)) collide = 1;
     /* ... except the native class itself, written under the path its
        declaration spells: the native class registers under its bare leaf,
        so the reopening keeps the leaf whatever else shares it, and the
@@ -7031,6 +7066,7 @@ void qualify_colliding_classes(Compiler *c) {
   }
   free(leaf_collides);
   free(native_decls);
+  qci_free(&kx);
   free(kws);
   if (any) {
     /* rewrite references first (they match against the original leaf names),

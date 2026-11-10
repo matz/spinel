@@ -23027,6 +23027,12 @@ static sp_RbVal sp_curry_call_channel(sp_Curry *c, sp_int n) {
 static sp_int sp_curry_proc_fn(void *cap, sp_int argc, sp_int *args) {
   sp_Curry *cy = (sp_Curry *)cap;
   (void)args;
+  /* what the caller said of its trailing argument is consumed here, as a
+     proc's prologue consumes it: a curry that is this wrapper's target set
+     it (sp_curry_call_target), and a call that stops short of the target
+     answers the next curry with the flag still set for the next, unrelated
+     Proc call to read */
+  _sp_proc_kwpos = 0;
   /* apply-and-decide, like every other application path: a call that does
      not reach the accumulator's count answers the next curry, not the
      target called short */

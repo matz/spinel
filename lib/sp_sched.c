@@ -2216,15 +2216,19 @@ int sp_sched_other_threads_live(void) {
    exact wake-up. sp_Thread_pass runs a runnable sibling immediately; the sleep
    only keeps a busy loop from burning the core while the child works, and it
    caps at 5ms, which is nothing against a wait long enough to matter. */
-int sp_sched_wait_child(int pid, int *status) {
+int sp_sched_wait_child(int pid, int *status) { return sp_sched_wait_child_flags(pid, status, 0); }
+/* The same with the flags of waitpid(2): WNOHANG asks once and answers 0 for
+   a child still running, with no wait and no poll; WUNTRACED takes a stopped
+   child too. The poll keeps the caller's flags beside its own WNOHANG. */
+int sp_sched_wait_child_flags(int pid, int *status, int flags) {
   int r;
-  if (!sp_sched_other_threads_live()) {
-    do { r = (int)waitpid((pid_t)pid, status, 0); } while (r < 0 && errno == EINTR);
+  if ((flags & WNOHANG) || !sp_sched_other_threads_live()) {
+    do { r = (int)waitpid((pid_t)pid, status, flags); } while (r < 0 && errno == EINTR);
     return r;
   }
   { double back = 0.0002;
     for (;;) {
-      do { r = (int)waitpid((pid_t)pid, status, WNOHANG); } while (r < 0 && errno == EINTR);
+      do { r = (int)waitpid((pid_t)pid, status, WNOHANG | flags); } while (r < 0 && errno == EINTR);
       if (r != 0) return r;   /* reaped, or an error for the caller to report */
       sp_Thread_pass();
 #ifdef SP_THREADS

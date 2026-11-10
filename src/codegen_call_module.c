@@ -2327,6 +2327,18 @@ int emit_call_builtin_cmethod_arms(Compiler *c, int id, Buf *b, const NodeTable 
       buf_puts(b, ")");
       return 1;
     }
+    /* The four with the flags of waitpid(2): the answer is boxed, as WNOHANG
+       answers nil for a child still running */
+    if (tcn && sp_streq(tcn, "Process") && argc == 2 &&
+        (sp_streq(name, "wait") || sp_streq(name, "waitpid") || sp_streq(name, "wait2") || sp_streq(name, "waitpid2"))) {
+      int pair = sp_streq(name, "wait2") || sp_streq(name, "waitpid2");
+      buf_puts(b, "sp_process_wait_flags(");
+      emit_int_expr(c, argv[0], b);
+      buf_puts(b, ", ");
+      emit_int_expr(c, argv[1], b);
+      buf_printf(b, ", %d)", pair);
+      return 1;
+    }
     /* Process::Status.new(status_int) is handled earlier in
        emit_call_body (the ConstantPathNode arm above); the
        ConstantReadNode-scoped block here does not see it. */

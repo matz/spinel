@@ -10139,6 +10139,11 @@ static TyKind infer_call_inner(Compiler *c, int id) {
     if (rname && sp_streq(rname, "Process") &&
         (sp_streq(name, "wait") || sp_streq(name, "waitpid")) && argc <= 1)
       return TY_INT;
+    /* With the flags of waitpid(2), each is nil under WNOHANG for a child
+       still running, so the answer rides boxed */
+    if (rname && sp_streq(rname, "Process") && argc == 2 &&
+        (sp_streq(name, "wait") || sp_streq(name, "waitpid") || sp_streq(name, "wait2") || sp_streq(name, "waitpid2")))
+      return TY_POLY;
   }
 
   /* Fiber storage: Fiber[:k] and Fiber.current[:k] -> poly */
@@ -10851,7 +10856,8 @@ static int infer_constant_path(Compiler *c, int id, const NodeTable *nt, NodeKin
     /* clock ids (codegen emits their integer values) */
     if (nm && (sp_streq(nm, "CLOCK_MONOTONIC") || sp_streq(nm, "CLOCK_REALTIME") ||
                sp_streq(nm, "CLOCK_PROCESS_CPUTIME_ID") || sp_streq(nm, "CLOCK_THREAD_CPUTIME_ID") ||
-               sp_streq(nm, "PRIO_PROCESS") || sp_streq(nm, "PRIO_PGRP") || sp_streq(nm, "PRIO_USER")))
+               sp_streq(nm, "PRIO_PROCESS") || sp_streq(nm, "PRIO_PGRP") || sp_streq(nm, "PRIO_USER") ||
+               sp_streq(nm, "WNOHANG") || sp_streq(nm, "WUNTRACED")))
       { *out = TY_INT; return 1; }
   }
   if (par_nm && sp_streq(par_nm, "Integer")) {

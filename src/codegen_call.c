@@ -6885,9 +6885,11 @@ static int emit_poly_builtin_method(Compiler *c, int id, Buf *b) {
     if (sp_streq(name, "signaled?")) ps_bool_fn = "sp_process_status_signaled_p";
     else if (sp_streq(name, "exited?")) ps_bool_fn = "sp_process_status_exited_p";
     else if (sp_streq(name, "coredump?")) ps_bool_fn = "sp_process_status_coredump_p";
+    else if (sp_streq(name, "stopped?")) ps_bool_fn = "sp_process_status_stopped_p";
     else if (sp_streq(name, "success?")) ps_tri_fn = "sp_process_status_success_p";
     else if (sp_streq(name, "exitstatus")) ps_int_fn = "sp_process_status_exitstatus";
     else if (sp_streq(name, "termsig")) ps_int_fn = "sp_process_status_termsig";
+    else if (sp_streq(name, "stopsig")) ps_int_fn = "sp_process_status_stopsig";
     else if (sp_streq(name, "pid")) ps_pid_fn = "sp_process_status_pid_of";
     if (ps_tri_fn) {
       /* success? is nil, not false, when the process did not exit normally --

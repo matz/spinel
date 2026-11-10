@@ -487,6 +487,7 @@ int sp_process_open_redirect(const char *path, int slot, int *owned);
 SP_NORETURN void sp_process_spawn_fail(int *owned, const char *cls, const char *msg);
 sp_PolyArray *sp_process_waitpid2(sp_int pid);
 sp_int sp_process_waitpid(sp_int pid);   /* Process.wait / waitpid: the pid reaped */
+sp_RbVal sp_process_wait_flags(sp_int pid, sp_int flags, int pair);   /* the waits with flags: the pid or [pid, status], nil under WNOHANG for a running child */
 
 
 /* `recycle`: optional sweep hook. If non-NULL, sp_gc_collect calls

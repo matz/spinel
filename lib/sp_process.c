@@ -680,44 +680,60 @@ void sp_process_exec(sp_RbVal cmd, sp_RbVal args_box) {
    waitpid answers for the OS worker, and a started green thread is pinned to
    its worker, so blocking here stalls the thread that may have to drain this
    child's output before it can exit (#4381). */
+/* The wait of each form: the pid reaped, 0 for a child still running
+   under WNOHANG, and the errors raised as CRuby raises them. $? and $$'s
+   last pid follow the child this wait reaped, as after Kernel#system and a
+   backtick; before, a waitpid2 left $? at whatever the last system call or
+   backtick stored. */
+static pid_t process_wait_reap(sp_int pid, int flags, int *status) {
+  extern int sp_sched_wait_child_flags(int pid, int *status, int flags);   /* see the note at the top on this TU's includes */
+  *status = 0;
+  pid_t r = (pid_t)sp_sched_wait_child_flags((int)pid, status, flags);
+  if (r < 0) {
+    if (errno == ECHILD) {
+      sp_raise_cls("Errno::ECHILD", "No child processes");
+    }
+    sp_raise_cls("SystemCallError", sp_errf_errno("waitpid failed", errno));
+  }
+  if (r > 0) {
+    sp_last_status = *status;
+    sp_last_pid = (int)r;
+  }
+  return r;
+}
+
+/* [pid, status]: the status is a Process::Status instance wrapping (pid,
+   status), not a raw int -- .signaled? / .termsig dispatch on the boxed
+   cls_id. */
+static sp_PolyArray *process_wait_pair(pid_t r, int status) {
+  sp_PolyArray *pa = sp_PolyArray_new(); SP_GC_ROOT(pa);   /* the status object below is an allocation */
+  sp_PolyArray_push(pa, sp_box_int((sp_int)r));
+  sp_PolyArray_push(pa, sp_box_process_status(sp_process_status_new((sp_int)r, (sp_int)status)));
+  return pa;
+}
+
 /* Process.wait / waitpid: the same wait as waitpid2, answering only the
    pid; the status goes to $? */
 sp_int sp_process_waitpid(sp_int pid) {
-  extern int sp_sched_wait_child(int pid, int *status);
-  int status = 0;
-  pid_t r = (pid_t)sp_sched_wait_child((int)pid, &status);
-  if (r < 0) {
-    if (errno == ECHILD) {
-      sp_raise_cls("Errno::ECHILD", "No child processes");
-    }
-    sp_raise_cls("SystemCallError", sp_errf_errno("waitpid failed", errno));
-  }
-  sp_last_status = status;
-  sp_last_pid = (int)r;
-  return (sp_int)r;
+  int status;
+  return (sp_int)process_wait_reap(pid, 0, &status);
+}
+
+/* Process.wait, waitpid, wait2 and waitpid2 with the flags of waitpid(2)
+   (Process::WNOHANG, Process::WUNTRACED): the pid, or [pid, status] when
+   pair is set, boxed; nil when WNOHANG finds the child still running. */
+sp_RbVal sp_process_wait_flags(sp_int pid, sp_int flags, int pair) {
+  int status;
+  pid_t r = process_wait_reap(pid, (int)flags, &status);
+  if (r == 0) return sp_box_nil();
+  if (!pair) return sp_box_int((sp_int)r);
+  return sp_box_poly_array(process_wait_pair(r, status));
 }
 
 sp_PolyArray *sp_process_waitpid2(sp_int pid) {
-  extern int sp_sched_wait_child(int pid, int *status);   /* see the note at the top on this TU's includes */
-  int status = 0;
-  pid_t r = (pid_t)sp_sched_wait_child((int)pid, &status);
-  if (r < 0) {
-    if (errno == ECHILD) {
-      sp_raise_cls("Errno::ECHILD", "No child processes");
-    }
-    sp_raise_cls("SystemCallError", sp_errf_errno("waitpid failed", errno));
-  }
-  /* $? follows the child this wait reaped, as it does after Kernel#system
-     and a backtick; before this a waitpid2 left $? at whatever the last
-     system call or backtick stored. */
-  sp_last_status = status;
-  sp_last_pid = (int)r;
-  sp_PolyArray *pa = sp_PolyArray_new(); SP_GC_ROOT(pa);   /* the status object below is an allocation */
-  sp_PolyArray_push(pa, sp_box_int((sp_int)r));
-  /* Second element is a Process::Status instance wrapping (pid, status),
-     not a raw int -- .signaled? / .termsig dispatch on the boxed cls_id. */
-  sp_PolyArray_push(pa, sp_box_process_status(sp_process_status_new((sp_int)r, (sp_int)status)));
-  return pa;
+  int status;
+  pid_t r = process_wait_reap(pid, 0, &status);
+  return process_wait_pair(r, status);
 }
 
 /* Process.daemon(nochdir, noclose): the process carries on as a child of

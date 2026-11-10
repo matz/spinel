@@ -1393,9 +1393,7 @@ int emit_call_reflection_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
           int kc = -1;
           const char *kk = c->classes[k].name ? const_get_resolve(c, k, cg_qm, &kc) : NULL;
           if (!kk || !sp_streq(kk, cg_key)) continue;
-          buf_puts(b, " ");
-          emit_cv_case_labels(c, k, NULL, 0, b);
-          buf_printf(b, "_ok%d = 1; break;", t);
+          buf_printf(b, " case %d: _ok%d = 1; break;", k, t);
         }
         buf_printf(b, " default: break; } if (!_ok%d) { const char *_cn%d = sp_class_val_display(sp_box_class(_cr%d)); "
                       "sp_exc_stage_recv(sp_box_class(_cr%d)); "

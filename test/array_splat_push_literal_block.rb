@@ -38,3 +38,9 @@ p x
 
 def grow(a, *rest) = a.push(*rest) { }
 p grow([0], 1, 2)
+
+# an empty literal receiver builds the spread Array
+p([].push(*r) { })
+p([].unshift(*r) { })
+e = [].append(*r) { }
+p e.size

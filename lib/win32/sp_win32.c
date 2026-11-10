@@ -1411,6 +1411,18 @@ struct passwd *getpwnam(const char *name) {
 }
 struct group *getgrgid(gid_t gid) { (void)gid; errno = 0; return NULL; }
 struct group *getgrnam(const char *name) { (void)name; errno = 0; return NULL; }
+/* the walks of the two databases: the one user getpwuid knows, and no group */
+static int sp_w32_pw_walked;
+void setpwent(void) { sp_w32_pw_walked = 0; }
+void endpwent(void) { sp_w32_pw_walked = 0; }
+struct passwd *getpwent(void) {
+  if (sp_w32_pw_walked) return NULL;
+  sp_w32_pw_walked = 1;
+  return sp_w32_me();
+}
+void setgrent(void) {}
+void endgrent(void) {}
+struct group *getgrent(void) { return NULL; }
 
 uid_t getuid(void) { return 0; }
 uid_t geteuid(void) { return 0; }

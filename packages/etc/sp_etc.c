@@ -8,9 +8,15 @@
    unit separator (0x1f). A walk answers every record, separated by the
    record separator (0x1e). The Ruby of the package splits them and
    builds the Structs; nothing here is thread-safe beyond what
-   getpwent(3) and getgrent(3) are. */
+   getpwent(3) and getgrent(3) are.
+
+   wasm32-wasi has no user or group database (docs/wasm.md): there a
+   lookup finds no entry, a walk finds none, and the login name is
+   $USER's. */
 #include "spinel/runtime.h"
+#ifndef __wasi__
 #include <grp.h>
+#endif
 #include <pwd.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -77,6 +83,7 @@ static void passwd_record(etc_buf *b, const struct passwd *pw) {
   buf_str(b, pw->pw_shell);
 }
 
+#ifndef __wasi__
 static void group_record(etc_buf *b, const struct group *gr) {
   buf_str(b, gr->gr_name);
   buf_fs(b);
@@ -103,10 +110,15 @@ static const char *one_group(const struct group *gr) {
   group_record(&b, gr);
   return buf_done(&b);
 }
+#endif
 
 /* Etc.getlogin: getlogin(3), else $USER, else nil, as CRuby's etc.c. */
 const char *sp_etc_getlogin(void) {
+#ifdef __wasi__
+  const char *l = NULL;
+#else
   const char *l = getlogin();
+#endif
   if (!l || !*l) l = getenv("USER");
   if (!l || !*l) return NULL;
   size_t n = strlen(l);
@@ -118,12 +130,18 @@ const char *sp_etc_getlogin(void) {
 
 const char *sp_etc_getpwnam(const char *name) { return one_passwd(getpwnam(name)); }
 const char *sp_etc_getpwuid(sp_int uid) { return one_passwd(getpwuid((uid_t)uid)); }
+#ifdef __wasi__
+const char *sp_etc_getgrnam(const char *name) { (void)name; return NULL; }
+const char *sp_etc_getgrgid(sp_int gid) { (void)gid; return NULL; }
+#else
 const char *sp_etc_getgrnam(const char *name) { return one_group(getgrnam(name)); }
 const char *sp_etc_getgrgid(sp_int gid) { return one_group(getgrgid((gid_t)gid)); }
+#endif
 
 /* Every entry of the user database, from the first. */
 const char *sp_etc_passwd_all(void) {
   etc_buf b = { 0 };
+#ifndef __wasi__
   const struct passwd *pw;
   setpwent();
   while ((pw = getpwent()) != NULL) {
@@ -131,12 +149,14 @@ const char *sp_etc_passwd_all(void) {
     passwd_record(&b, pw);
   }
   endpwent();
+#endif
   return buf_done(&b);
 }
 
 /* Every entry of the group database, from the first. */
 const char *sp_etc_group_all(void) {
   etc_buf b = { 0 };
+#ifndef __wasi__
   const struct group *gr;
   setgrent();
   while ((gr = getgrent()) != NULL) {
@@ -144,5 +164,6 @@ const char *sp_etc_group_all(void) {
     group_record(&b, gr);
   }
   endgrent();
+#endif
   return buf_done(&b);
 }

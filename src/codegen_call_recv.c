@@ -1340,11 +1340,23 @@ void emit_gather_call_args(Compiler *c, const int *argv, int argc, int ta, Buf *
    and apply the operation element by element. Used by the value and the
    statement form alike. A poly receiver is taken for insert, which may be
    a String's (one text), and the initial builtin concat method version. */
+/* The builtin push, append, unshift, insert, concat and << never call a
+   block, so a literal one (`a.push(*r) { }`) is left out and the splat
+   still spreads. Not when the program defines a method of that name: its
+   own method may yield. A `&blk` pass keeps the per-argument path too. */
+int splat_mutator_block_ok(Compiler *c, int id) {
+  const NodeTable *nt = c->nt;
+  int blk = nt_ref(nt, id, "block");
+  if (blk < 0) return 1;
+  const char *name = nt_str(nt, id, "name");
+  return nt_kind(nt, blk) == NK_BlockNode && name && !an_user_defines_method(c, name);
+}
+
 int emit_array_splat_mutator(Compiler *c, int id, Buf *b) {
   const NodeTable *nt = c->nt;
   const char *name = nt_str(nt, id, "name");
   int recv = nt_ref(nt, id, "receiver");
-  if (!name || recv < 0 || nt_ref(nt, id, "block") >= 0) return 0;
+  if (!name || recv < 0 || !splat_mutator_block_ok(c, id)) return 0;
   int is_push = sp_streq(name, "push") || sp_streq(name, "append");
   int is_unshift = is_prepend_alias(name);
   int is_insert = sp_streq(name, "insert");

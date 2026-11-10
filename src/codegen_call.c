@@ -35245,7 +35245,8 @@ static void emit_call_body_ordinary(Compiler *c, int id, Buf *b) {
   /* push/append/<< on an empty array literal in value position: the literal
      has no storage to mutate and returns self, so `[].push(1, 2)` is just the
      array `[1, 2]`, a fresh poly array of the args (the empty literal infers
-     TY_POLY_ARRAY). A splat with no block goes to emit_array_splat_mutator. */
+     TY_POLY_ARRAY). A splat goes to emit_array_splat_mutator when
+     splat_mutator_block_ok allows its block. */
   {
     const char *pnm = nt_str(nt, id, "name");
     int precv = nt_ref(nt, id, "receiver");
@@ -35256,7 +35257,7 @@ static void emit_call_body_ordinary(Compiler *c, int id, Buf *b) {
         nt_kind(nt, precv) == NK_ArrayNode &&
         ({ int _n = 0; nt_arr(nt, precv, "elements", &_n); _n == 0; })) {
       int pargc = 0; const int *pargv = call_args(nt, id, &pargc);
-      if (pargc >= 1 && !(nt_argv_has_splat(nt, pargv, pargc) && nt_ref(nt, id, "block") < 0)) {
+      if (pargc >= 1 && !(nt_argv_has_splat(nt, pargv, pargc) && splat_mutator_block_ok(c, id))) {
         int tr = ++g_tmp;
         buf_printf(b, "({ sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d); ", tr, tr);
         for (int a = 0; a < pargc; a++) {
@@ -35271,7 +35272,7 @@ static void emit_call_body_ordinary(Compiler *c, int id, Buf *b) {
      in an Int/Float array (it would store 0), so widen the whole thing to a
      poly array. `[1, 2].unshift(nil)` == the poly array `[nil, 1, 2]`. Only the
      direct-literal receiver needs this -- a variable receiver is already
-     widened by the analyze pass, a blockless splat by emit_array_splat_mutator. */
+     widened by the analyze pass, a splat by emit_array_splat_mutator. */
   {
     const char *unm = nt_str(nt, id, "name");
     int urecv = nt_ref(nt, id, "receiver");
@@ -35279,7 +35280,7 @@ static void emit_call_body_ordinary(Compiler *c, int id, Buf *b) {
         nt_kind(nt, urecv) == NK_ArrayNode) {
       Repr urr = repr_of(c, urecv);
       int uargc = 0; const int *uargv = call_args(nt, id, &uargc);
-      int has_nil = 0, spread = nt_argv_has_splat(nt, uargv, uargc) && nt_ref(nt, id, "block") < 0;
+      int has_nil = 0, spread = nt_argv_has_splat(nt, uargv, uargc) && splat_mutator_block_ok(c, id);
       for (int a = 0; a < uargc; a++) {
         TyKind at = comp_ntype(c, uargv[a]);
         NodeKind ank = nt_kind(nt, uargv[a]);

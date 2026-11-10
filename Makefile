@@ -2259,12 +2259,6 @@ reject-test: string-minus-reject-test $(SPINEL)
 	  echo "reject-test: FAIL (system with an environment Hash and an options Hash compiled)"; ok=0; \
 	else grep -q "system with an options Hash" "$$tmp/se.out" || \
 	  { echo "reject-test: FAIL (system with an environment and an options Hash refused without saying why)"; sed -n 1,5p "$$tmp/se.out"; ok=0; }; fi; \
-	for t in $(patsubst test/reject/%.rb,%,$(shell grep -l '^\# spinel: reject-lent-rebound$$' test/reject/*.rb)); do \
-	  if $(SPINEL) "test/reject/$$t.rb" -c --no-line-map -o "$$tmp/$$t.c" >"$$tmp/$$t.out" 2>&1; then \
-	    echo "reject-test: FAIL (#6179: $$t, a lent global slot assigned during the call, compiled)"; ok=0; \
-	  else grep -q "where the assignment can run during the call" "$$tmp/$$t.out" || \
-	    { echo "reject-test: FAIL (#6179: $$t rejected without saying why)"; sed -n 1,5p "$$tmp/$$t.out"; ok=0; }; fi; \
-	done; \
 	t=test/reject/typed_array_kept_by_struct_into_boxed_param_store.rb; \
 	if $(SPINEL) "$$t" -c --no-line-map -o "$$tmp/tb.c" >"$$tmp/tb.out" 2>&1; then \
 	  echo "reject-test: FAIL (a typed array held by the caller, stored into through a boxed parameter, compiled)"; ok=0; \

@@ -88,114 +88,6 @@ static int pure_forwarding_target(Compiler *c, int mi, int depth) {
 static int g_inline_depth = 0;
 int inline_splice_depth(void) { return g_inline_depth; }
 
-/* --- inline parameter aliasing ------------------------------------------
-   An inlined (yielding) method's String parameter that the body APPENDS to
-   is bound as an alias of the caller's variable, not a copy: the copy shares
-   the buffer only until the first reallocation, after which the caller's
-   variable still names the old bytes. `wrap_into(io, name) { io << "x" }`
-   handed the caller back only what its own block appended (#4476), and a
-   second nesting lost the outer expansion's post-yield append (#4479).
-   The alias is a pointer to the caller's slot, declared under the callee's
-   renamed cell name, and the parameter's is_cell is held at 1 while the
-   expansion is emitted so the body reads and writes through it. */
-/* Does scope mi's body rebind `name`? 0 = never; 1 = only by plain
-   assignment (`io = String.new(...)`), which the alias survives: the store
-   repoints the cell at a private local, so the caller's variable keeps what
-   was appended before the rebind and the body's later reads and writes go to
-   its own binding, which is what CRuby does; 2 = by an op-assign, `||=`, or
-   a multiple-assignment target, forms the store emitters do not spell that
-   way, so such a parameter is copied as before. */
-static int inline_param_rebound(Compiler *c, int mi, const char *name) {
-  const NodeTable *nt = c->nt;
-  int kind = 0;
-  for (int q = 0; q < nt->count; q++) {
-    if (c->nscope[q] != mi) continue;
-    NodeKind k = nt_kind(nt, q);
-    if (k != NK_LocalVariableWriteNode && k != NK_LocalVariableOperatorWriteNode &&
-        k != NK_LocalVariableOrWriteNode && k != NK_LocalVariableAndWriteNode &&
-        k != NK_LocalVariableTargetNode) continue;
-    const char *wn = nt_str(nt, q, "name");
-    if (!wn || !sp_streq(wn, name)) continue;
-    if (k != NK_LocalVariableWriteNode) return 2;
-    kind = 1;
-  }
-  return kind;
-}
-/* Does scope mi's body mutate `name` in place, or hand it on as a call
-   argument (where a callee may)? */
-static int inline_param_mutated(Compiler *c, int mi, const char *name) {
-  const NodeTable *nt = c->nt;
-  for (int q = 0; q < nt->count; q++) {
-    if (c->nscope[q] != mi || nt_kind(nt, q) != NK_CallNode) continue;
-    int r = nt_ref(nt, q, "receiver");
-    if (r >= 0 && nt_kind(nt, r) == NK_LocalVariableReadNode) {
-      const char *rn = nt_str(nt, r, "name");
-      if (rn && sp_streq(rn, name) && an_str_mutator_name(nt_str(nt, q, "name"))) return 1;
-    }
-    int aa = nt_ref(nt, q, "arguments"); int an = 0;
-    const int *av = aa >= 0 ? nt_arr(nt, aa, "arguments", &an) : NULL;
-    for (int k = 0; k < an; k++) {
-      if (nt_kind(nt, av[k]) != NK_LocalVariableReadNode) continue;
-      const char *vn = nt_str(nt, av[k], "name");
-      if (vn && sp_streq(vn, name)) return 1;
-    }
-  }
-  return 0;
-}
-
-/* Does the subtree under `id` mutate local `name` in place (a receiver-
-   reassigning string mutator on a plain read of it)? The block body of a
-   call site, asked about the block's own parameter. */
-static int subtree_str_mutates_local(const NodeTable *nt, int id, const char *name) {
-  if (id < 0) return 0;
-  if (nt_kind(nt, id) == NK_CallNode) {
-    int r = nt_ref(nt, id, "receiver");
-    if (r >= 0 && nt_kind(nt, r) == NK_LocalVariableReadNode) {
-      const char *rn = nt_str(nt, r, "name");
-      if (rn && sp_streq(rn, name) && an_str_mutator_name(nt_str(nt, id, "name"))) return 1;
-    }
-  }
-  int nr = nt_num_refs(nt, id);
-  for (int i = 0; i < nr; i++)
-    if (subtree_str_mutates_local(nt, nt_ref_at(nt, id, i), name)) return 1;
-  int na = nt_num_arrs(nt, id);
-  for (int i = 0; i < na; i++) {
-    int n = 0; const int *a = nt_arr_at(nt, id, i, &n);
-    for (int k = 0; k < n; k++)
-      if (subtree_str_mutates_local(nt, a[k], name)) return 1;
-  }
-  return 0;
-}
-/* Does block `blk` append to its parameter `bp` through a method it hands
-   it to, whose parameter there is lent, the handle or appended to (the
-   dynamic-call analysis's answer, dyn_block_appends)? */
-static int block_param_handed_to_appender(Compiler *c, int blk, const char *bp) {
-  for (int j = 0; j < 16; j++) {
-    const char *pn = proc_param_name(c, blk, j);
-    if (!pn) break;
-    if (sp_streq(pn, bp)) return dyn_block_appends(c, blk, j);
-  }
-  return 0;
-}
-/* Block `blk`'s keyword parameter that keyword `key` binds, or NULL. */
-static int block_kw_key_is(const Compiler *c, const char *kp, const char *key);
-static const char *block_kw_param_named(Compiler *c, int blk, const char *key) {
-  for (int ki = 0; key; ki++) {
-    const char *kp = block_keyword_name(c, blk, ki);
-    if (!kp) break;
-    if (block_kw_key_is(c, kp, key)) return kp;
-  }
-  return NULL;
-}
-static int block_local_wants_alias_at(Compiler *c, int blk, const char *bp, int depth);
-static int block_local_wants_alias(Compiler *c, int blk, const char *bp) {
-  return block_local_wants_alias_at(c, blk, bp, 0);
-}
-/* The same for block `blk`'s keyword parameter that keyword `key` binds. */
-int block_kw_wants_alias(Compiler *c, int blk, const char *key) {
-  const char *kp = block_kw_param_named(c, blk, key);
-  return kp && block_local_wants_alias(c, blk, kp);
-}
 /* The block a spliced block's own `yield` reaches, per enclosing inline: a
    literal block passed to an inlined method yields to the block that was
    current where it is written (g_yield_block_fallback while its body is
@@ -212,7 +104,7 @@ int block_kw_wants_alias(Compiler *c, int blk, const char *key) {
    `def run3(x) = run2(x) { |v| yield v }`) found no block two splices out
    and raised LocalJumpError. */
 typedef struct {
-  int blk, target, up;
+  int blk, up;
   const char *owner;
   int nren;
   const char *brk; int brk_ebase;
@@ -364,7 +256,7 @@ int yield_target_push(int block, int saved_block, const char *owner, int nren,
                       const char *brk, int brk_ebase) {
   if (block >= 0 && block != saved_block && g_nytgt <= SP_INLINE_DEPTH_MAX) {
     YieldTarget *yt = &g_ytgt[g_nytgt];
-    yt->blk = block; yt->target = saved_block;
+    yt->blk = block;
     yt->up = (g_ytgt_cur >= 0 && g_ytgt[g_ytgt_cur].blk == saved_block) ? g_ytgt_cur : -1;
     yt->owner = owner;
     yt->nren = nren;
@@ -383,147 +275,6 @@ void yield_target_pop(int pushed, int saved_cur) {
   if (pushed) g_nytgt--;
   g_ytgt_cur = saved_cur;
 }
-static int yield_target_of(int blk, const char **owner) {
-  for (int i = g_nytgt - 1; i >= 0; i--)
-    if (g_ytgt[i].blk == blk) { *owner = g_ytgt[i].owner; return g_ytgt[i].target; }
-  return -1;
-}
-/* Does the subtree under `id` yield a plain read of `name` at a position
-   whose parameter of block `target` wants the alias? A `blk.call(...)` on
-   the &block parameter of the method the block is written in (`owner`)
-   splices as that yield does. */
-static int block_param_wants_alias_at(Compiler *c, int blk, int k, int n, int depth);
-static int subtree_yields_local_to_alias(Compiler *c, int id, const char *name, int target,
-                                         const char *owner, int depth) {
-  const NodeTable *nt = c->nt;
-  if (id < 0) return 0;
-  NodeKind k = nt_kind(nt, id);
-  if (k == NK_DefNode || k == NK_ClassNode || k == NK_ModuleNode) return 0;
-  int yields = k == NK_YieldNode;
-  if (!yields && k == NK_CallNode && owner) {
-    int r = nt_ref(nt, id, "receiver");
-    const char *cn = nt_str(nt, id, "name");
-    yields = r >= 0 && nt_kind(nt, r) == NK_LocalVariableReadNode && cn && sp_streq(cn, "call") &&
-             nt_str(nt, r, "name") && sp_streq(nt_str(nt, r, "name"), owner);
-  }
-  if (yields) {
-    int aa = nt_ref(nt, id, "arguments"); int an = 0;
-    const int *av = aa >= 0 ? nt_arr(nt, aa, "arguments", &an) : NULL;
-    for (int j = 0; j < an; j++) {
-      /* yielded on by keyword (`yield(k: u)`) to the target's keyword */
-      if (nt_kind(nt, av[j]) == NK_KeywordHashNode) {
-        int en = 0; const int *el = nt_arr(nt, av[j], "elements", &en);
-        for (int e = 0; e < en; e++) {
-          int v;
-          const char *key = dyn_kw_elem_key(c, el[e], &v);
-          const char *kp = key ? block_kw_param_named(c, target, key) : NULL;
-          if (kp && v >= 0 && nt_kind(nt, v) == NK_LocalVariableReadNode && nt_str(nt, v, "name") &&
-              sp_streq(nt_str(nt, v, "name"), name) && block_local_wants_alias_at(c, target, kp, depth + 1))
-            return 1;
-        }
-        continue;
-      }
-      if (nt_kind(nt, av[j]) != NK_LocalVariableReadNode) continue;
-      const char *vn = nt_str(nt, av[j], "name");
-      if (vn && sp_streq(vn, name) && block_param_wants_alias_at(c, target, j, call_plain_argc(c, id), depth + 1)) return 1;
-    }
-  }
-  int nr = nt_num_refs(nt, id);
-  for (int i = 0; i < nr; i++)
-    if (subtree_yields_local_to_alias(c, nt_ref_at(nt, id, i), name, target, owner, depth)) return 1;
-  int na = nt_num_arrs(nt, id);
-  for (int i = 0; i < na; i++) {
-    int n = 0; const int *a = nt_arr_at(nt, id, i, &n);
-    for (int q = 0; q < n; q++)
-      if (subtree_yields_local_to_alias(c, a[q], name, target, owner, depth)) return 1;
-  }
-  return 0;
-}
-/* A block parameter of `blk` that the block's body mutates in place, or
-   hands to a method that appends to it, and that no write site in its scope
-   rebinds: the yield it is bound from has to lend the yielded variable
-   itself (see emit_block_invoke's alias binding), or the append lands in
-   the parameter's copy and the yielded string never sees it (`fill(buf) {
-   |s| s << "z" }` left buf empty, and so did `{ |s| grow(s) }`). */
-int block_param_wants_alias(Compiler *c, int blk, int k, int n) {
-  return block_param_wants_alias_at(c, blk, k, n, 0);
-}
-static int block_param_wants_alias_at(Compiler *c, int blk, int k, int n, int depth) {
-  if (blk < 0 || depth > SP_INLINE_DEPTH_MAX) return 0;
-  /* a post the position binds of a yield of n plain arguments too
-     (emit_block_binds aliases it) */
-  const char *bp = block_param_at(c, blk, k, n);
-  return bp && block_local_wants_alias_at(c, blk, bp, depth);
-}
-/* The same for any of the block's own parameters by name, a keyword one
-   (`|k:|`) included. */
-static int block_local_wants_alias_at(Compiler *c, int blk, const char *bp, int depth) {
-  const NodeTable *nt = c->nt;
-  Scope *bs = comp_scope_of(c, blk);
-  LocalVar *lv = bs ? scope_local(bs, bp) : NULL;
-  if (!lv || lv->type != TY_STRING || (lv->is_cell && !lv->inline_alias)) return 0;
-  /* Mutated in place, or yielded on to a block that is: `run(x) { |u|
-     yield u }` inside a method whose own block appends hands that block
-     the parameter, which is a copy unless it aliases the yielded variable
-     in turn (each level's copy kept the append from the one before). */
-  if (!subtree_str_mutates_local(nt, nt_ref(nt, blk, "body"), bp) &&
-      !block_param_handed_to_appender(c, blk, bp)) {
-    const char *owner = NULL;
-    int tgt = yield_target_of(blk, &owner);
-    if (tgt < 0 || !subtree_yields_local_to_alias(c, nt_ref(nt, blk, "body"), bp, tgt, owner, depth))
-      return 0;
-  }
-  for (int w = 0; w < nt->count; w++) {
-    NodeKind wk = nt_kind(nt, w);
-    if (wk != NK_LocalVariableWriteNode && wk != NK_LocalVariableOperatorWriteNode &&
-        wk != NK_LocalVariableOrWriteNode && wk != NK_LocalVariableAndWriteNode &&
-        wk != NK_LocalVariableTargetNode) continue;
-    const char *wn = nt_str(nt, w, "name");
-    if (wn && sp_streq(wn, bp) && comp_scope_of(c, w) == bs) return 0;
-  }
-  return 1;
-}
-/* Does scope mi yield `name` to a block parameter the call site's block
-   (`blk`) mutates in place? Then the parameter is mutated through the block,
-   and has to be an alias of the caller's variable like a directly mutated
-   one (inline_param_mutated). */
-static int inline_param_yielded_mutated(Compiler *c, int mi, const char *name, int blk) {
-  const NodeTable *nt = c->nt;
-  if (blk < 0) return 0;
-  const char *bpn = c->scopes[mi].blk_param;
-  for (int q = 0; q < nt->count; q++) {
-    if (c->nscope[q] != mi) continue;
-    /* `blk.call(...)` on the method's own &block splices as a yield does */
-    int r = nt_kind(nt, q) == NK_CallNode ? nt_ref(nt, q, "receiver") : -1;
-    int blk_call = r >= 0 && bpn && nt_kind(nt, r) == NK_LocalVariableReadNode &&
-                   nt_str(nt, r, "name") && sp_streq(nt_str(nt, r, "name"), bpn) &&
-                   nt_str(nt, q, "name") && sp_streq(nt_str(nt, q, "name"), "call");
-    if (nt_kind(nt, q) != NK_YieldNode && !blk_call) continue;
-    int aa = nt_ref(nt, q, "arguments"); int an = 0;
-    const int *av = aa >= 0 ? nt_arr(nt, aa, "arguments", &an) : NULL;
-    for (int k = 0; k < an; k++) {
-      /* a keyword (`yield(k: name)`) binds the block's keyword of that name */
-      if (nt_kind(nt, av[k]) == NK_KeywordHashNode) {
-        int en = 0; const int *el = nt_arr(nt, av[k], "elements", &en);
-        for (int e = 0; e < en; e++) {
-          int key = nt_kind(nt, el[e]) == NK_AssocNode ? nt_ref(nt, el[e], "key") : -1;
-          int v = key >= 0 ? nt_ref(nt, el[e], "value") : -1;
-          if (key < 0 || nt_kind(nt, key) != NK_SymbolNode || v < 0 ||
-              nt_kind(nt, v) != NK_LocalVariableReadNode || !nt_str(nt, v, "name") ||
-              !sp_streq(nt_str(nt, v, "name"), name)) continue;
-          const char *kp = block_kw_param_named(c, blk, nt_str(nt, key, "value"));
-          if (kp && block_local_wants_alias(c, blk, kp)) return 1;
-        }
-        continue;
-      }
-      if (nt_kind(nt, av[k]) != NK_LocalVariableReadNode) continue;
-      const char *vn = nt_str(nt, av[k], "name");
-      if (vn && sp_streq(vn, name) && block_param_wants_alias(c, blk, k, call_plain_argc(c, q))) return 1;
-    }
-  }
-  return 0;
-}
-
 /* Does `name` call `call` to yielding method `mi` on a `disp_cls` receiver
    go through the cls_id switch rather than being spliced? */
 static int takes_class_dispatch(Compiler *c, int call, int mi, int disp_cls, const char *name) {
@@ -604,227 +355,15 @@ int emit_handle_var_ref(Compiler *c, int a, Buf *b) {
   view_pop(c, svm);
   return ok;
 }
-/* Which parameters of inlined method `mi` bind as ALIASES of the caller's
-   variables (see inline_param_mutated above): a String the body mutates,
-   hands on, or yields to a block parameter `blk` mutates, passed as a plain
-   local read (or an instance method's ivar), not rebound by the body, and
-   not celled for a capture of its own. A parameter the body only reads or
-   hands to a method that does not change it, whose
-   argument something can assign while the body runs -- the call's block
-   (comp_block_rebinds_arg), or for a C global's slot a write anywhere it
-   can run (lent_global_slot_rebound) -- takes the argument's value
-   instead: an alias followed the rebinding (`def m(w) = (yield; p w)`,
-   `m(u) { u = "k" }` printed "k"), and a global's was refused. Each is
-   marked an alias until inline_alias_release. Decided before the locals
-   are declared, since an aliased parameter gets no local of its own.
-
-   An alias the body does lend keeps the caller's variable's String only
-   until the call's block assigns the variable: from there the parameter
-   still holds the String it was given. When the block literal writes the
-   variable, and nothing else assigns it while the call runs (no proc that
-   captures it does, no argument of the call does), the alias is marked
-   open for the splice `tag` (view_push_splice): each store to the
-   variable in the block moves the alias onto the splice's private slot
-   holding that String (splice_store_open/close). */
-static int splice_alias_detachable(Compiler *c, int blk, int an, const int *argv, int pargc);
-unsigned inline_alias_params(Compiler *c, int mi, const int *argv, int pargc, const ArgLayout *L, int blk,
-                             int tag, int *splice_tok) {
-  const NodeTable *nt = c->nt;
-  Scope *m = &c->scopes[mi];
-  unsigned alias_mask = 0;
-  Buf gref; memset(&gref, 0, sizeof gref);
-  for (int i = 0; i < m->nparams && i < 32 && !L->gather; i++) {
-    if (L->from[i] != ARG_NODE || L->arg[i] >= pargc || (m->rest_idx >= 0 && i >= m->rest_idx)) continue;
-    int an = argv[L->arg[i]];
-    NodeKind ak = nt_kind(nt, an);
-    /* the C global lent, when the argument is one (refuse_lent_global_rebound) */
-    gref.len = 0;
-    if (gref.p) gref.p[0] = '\0';
-    int gslot = 0;
-    if (ak == NK_InstanceVariableReadNode) {
-      /* an ivar buffer: the object's own slot, from an instance method of a
-         heap class (a value type is a struct copy with no slot to lend), or
-         the C global a top-level or class method's ivar lives in */
-      Scope *as = comp_scope_of(c, an);
-      if (comp_ntype(c, an) != TY_STRING) continue;
-      gslot = ivar_global_slot(c, an, &gref);
-      if (!gslot &&
-          (!as || as->class_id < 0 || as->is_cmethod ||
-           comp_ty_value_obj(c, ty_object(as->class_id)) || !g_self)) continue;
-    }
-    /* a global variable's C global (gv_), and a class variable's, as a call
-       lends it */
-    else if (ak == NK_GlobalVariableReadNode || ak == NK_ClassVariableReadNode) {
-      if (comp_ntype(c, an) != TY_STRING ||
-          !(ak == NK_GlobalVariableReadNode ? gvar_global_slot(c, an, &gref)
-                                            : cvar_global_slot(c, an, &gref))) continue;
-      gslot = 1;
-    }
-    /* a String that is the shared handle has no slot to lend: the
-       parameter takes the handle (yield_splice_handles) or a copy */
-    else if (ak != NK_LocalVariableReadNode || local_is_handle(c, an)) continue;
-    /* a variable that can hold other values (`u = nil`) is an sp_RbVal,
-       no `const char *` slot to lend either */
-    else if (comp_ntype(c, an) != TY_STRING) continue;
-    LocalVar *lv = m->pnames[i] ? scope_local(m, m->pnames[i]) : NULL;
-    if (!lv || !lv->is_param || lv->is_block_param || lv->type != TY_STRING) continue;
-    if (lv->is_cell && !lv->inline_alias) continue;
-    if (inline_param_rebound(c, mi, m->pnames[i]) == 2 ||
-        (!inline_param_mutated(c, mi, m->pnames[i]) &&
-         !inline_param_yielded_mutated(c, mi, m->pnames[i], blk))) continue;
-    if (!lv->inline_alias &&
-        (gslot ? lent_global_slot_rebound(c, an, gref.p) >= 0 : comp_block_rebinds_arg(c, blk, an))) continue;
-    if (gslot) refuse_lent_global_rebound(c, an, gref.p, m->name, m->pnames[i]);
-    alias_mask |= 1u << i;
-    lv->inline_alias++;
-    { lv->is_cell = 1; comp_touch_scope(lv->owner); }
-    if (!gslot && splice_alias_detachable(c, blk, an, argv, pargc)) {
-      int tok = view_push_splice(an, tag, m->pnames[i]);
-      if (*splice_tok < 0) *splice_tok = tok;
-    }
-  }
-  free(gref.p);
-  return alias_mask;
-}
-/* Can the alias of argument `an` move onto the splice's private slot at
-   each write of the call's block (see inline_alias_params)? */
-static int splice_alias_detachable(Compiler *c, int blk, int an, const int *argv, int pargc) {
-  const NodeTable *nt = c->nt;
-  if (blk < 0 || nt_kind(nt, blk) != NK_BlockNode || !comp_node_writes_var(c, blk, an)) return 0;
-  if (nt_kind(nt, an) == NK_LocalVariableReadNode) {
-    LocalVar *v = scope_local(comp_scope_of(c, an), nt_str(nt, an, "name"));
-    if (!v || v->proc_rebinds) return 0;
-  }
-  for (int k = 0; k < pargc; k++)
-    if (comp_node_writes_var(c, argv[k], an)) return 0;
-  return 1;
-}
-/* Does write or target node w assign the variable argument node `arg`
-   reads: a local of the same scope, or an instance variable of the same
-   class? */
-static int splice_writes_arg(Compiler *c, int w, int arg) {
-  const NodeTable *nt = c->nt;
-  NodeKind wk = nt_kind(nt, w);
-  const char *wn = nt_str(nt, w, "name"), *an = nt_str(nt, arg, "name");
-  if (!wn || !an || !sp_streq(wn, an)) return 0;
-  if (nt_kind(nt, arg) == NK_LocalVariableReadNode)
-    return comp_is_local_write(wk) && comp_scope_of(c, arg) == comp_scope_of(c, w);
-  int ivw = wk == NK_InstanceVariableWriteNode || wk == NK_InstanceVariableOrWriteNode ||
-            wk == NK_InstanceVariableAndWriteNode || wk == NK_InstanceVariableOperatorWriteNode ||
-            wk == NK_InstanceVariableTargetNode;
-  return ivw && nt_kind(nt, arg) == NK_InstanceVariableReadNode && comp_ivar_owner(c, arg) == comp_ivar_owner(c, w);
-}
-/* A store through write or target node w, about to emit the value it
-   stores: with an open splice alias of that variable (view_push_splice),
-   the value goes into a temporary first (splice_store_open), and then
-   (splice_store_close) each such alias still on the variable moves onto
-   its splice's private slot, which takes the String the variable holds
-   once the value ran -- unless the value is that String itself (`s = s`,
-   a `||=` that keeps it). The stored value is the temporary. One store
-   site brackets its value with the pair, whatever the write's kind. */
-int splice_store_open(Compiler *c, int w, Buf *b) {
-  int arg, tag;
-  const char *pn;
-  for (int e = view_splice_next(-1, &arg, &tag, &pn); e >= 0; e = view_splice_next(e, &arg, &tag, &pn))
-    if (splice_writes_arg(c, w, arg)) {
-      int n = ++g_tmp;
-      buf_printf(b, "({ const char *_t%d = (", n);
-      return n;
-    }
-  return -1;
-}
-/* `lhs = val` for a store through w whose value text is ready, bracketed
-   as above when `str` (the slot is a plain String's) */
-void emit_splice_store_text(Compiler *c, int w, const char *lhs, const char *val, int str, Buf *b) {
-  buf_printf(b, "%s = ", lhs);
-  int n = str ? splice_store_open(c, w, b) : -1;
-  buf_puts(b, val);
-  splice_store_close(c, w, n, b);
-}
-void splice_store_close(Compiler *c, int w, int n, Buf *b) {
-  if (n < 0) return;
-  buf_puts(b, ");");
-  int arg, tag;
-  const char *pn;
-  for (int e = view_splice_next(-1, &arg, &tag, &pn); e >= 0; e = view_splice_next(e, &arg, &tag, &pn))
-    if (splice_writes_arg(c, w, arg))
-      buf_printf(b, " if (_t%d != (*_cell__y%d_%s)) { lv__y%d_%s = (*_cell__y%d_%s); _cell__y%d_%s = &lv__y%d_%s; }",
-                 n, tag, pn, tag, pn, tag, pn, tag, pn, tag, pn);
-  buf_printf(b, " _t%d; })", n);
-}
-/* Is parameter `pname` of the splice `tag` an open alias (view_push_splice)? */
-static int splice_alias_open(int tag, const char *pname) {
-  int arg, t;
-  const char *pn;
-  for (int e = view_splice_next(-1, &arg, &t, &pn); e >= 0; e = view_splice_next(e, &arg, &t, &pn))
-    if (t == tag && sp_streq(pn, pname)) return 1;
-  return 0;
-}
-void inline_alias_release(Compiler *c, Scope *m, unsigned alias_mask, int splice_tok) {
-  /* the splice's open aliases, pushed last by inline_alias_params */
-  if (splice_tok >= 0)
-    for (int top = view_mark() >> 16; top > splice_tok; top--) view_pop(c, top - 1);
-  for (int i = 0; i < m->nparams && i < 32; i++) {
-    if (!(alias_mask & (1u << i))) continue;
-    LocalVar *lv = scope_local(m, m->pnames[i]);
-    if (lv && --lv->inline_alias == 0) { lv->is_cell = 0; comp_touch_scope(lv->owner); }
-  }
-}
-/* Declare inlined method `mi`'s locals under renamed names, all but the
-   aliased parameters: the alias is initialized at the binding, and a
-   parameter the body also rebinds gets the private local the rebind
-   repoints the cell at. */
-void emit_inline_locals_aliased(Compiler *c, int mi, int tag, unsigned alias_mask, Buf *b, int din) {
+/* Declare inlined method `mi`'s locals under renamed names. */
+void emit_inline_locals(Compiler *c, int mi, int tag, Buf *b, int din) {
   Scope *m = &c->scopes[mi];
   for (int i = 0; i < m->nlocals; i++) {
     LocalVar *lv = &m->locals[i];
     if (m->blk_param && lv->name && sp_streq(lv->name, m->blk_param)) continue;  /* virtual &block slot */
     const char *rn = ren_push(lv->name, "_y%d_%s", tag, lv->name);
-    if (lv->is_param && lv->inline_alias) {
-      int pi = -1;
-      for (int k = 0; k < m->nparams; k++) if (m->pnames[k] && sp_streq(m->pnames[k], lv->name)) { pi = k; break; }
-      if (pi >= 0 && (alias_mask & (1u << pi))) {
-        int vol = inlined_local_needs_volatile(c, lv);
-        if (inline_param_rebound(c, mi, lv->name) == 1 || splice_alias_open(tag, lv->name)) {
-          emit_indent(b, din);
-          buf_printf(b, "const char *%s lv_%s = NULL; SP_GC_ROOT_STR(lv_%s);\n",
-                     vol ? " volatile" : "", rn, rn);
-        }
-        /* A rebind changes both the private slot and its selector. Preserve
-           both across the same setjmp as ordinary inline locals (#6552).
-           Nested inlines must also retain the borrowed slot's qualifier. */
-        emit_indent(b, din);
-        buf_printf(b, "const char * *%s _cell_%s = NULL;\n",
-                   vol ? " volatile" : "", rn);
-        continue;
-      }
-    }
     emit_inlined_local_decl(c, lv, rn, b, din);
   }
-}
-/* The alias an aliased parameter binds: the caller's variable's own slot. */
-void emit_inline_alias_arg(Compiler *c, int av, Buf *b) {
-  const NodeTable *nt = c->nt;
-  if (nt_kind(nt, av) == NK_InstanceVariableReadNode) {
-    /* the slot itself, and the owner pinned: the store lands inside this
-       expansion, past any dirty bit (#4378) */
-    const char *ivn = nt_str(nt, av, "name");
-    /* a C global is a root every collection marks: no owner to pin */
-    Buf gref; memset(&gref, 0, sizeof gref);
-    if (ivar_global_slot(c, av, &gref)) { buf_printf(b, "%s)", gref.p); free(gref.p); return; }
-    buf_printf(b, "%s%siv_%s); sp_gc_pin_remembered((void *)%s)", g_self, g_self_deref, iv_c(ivn + 1), g_self);
-    return;
-  }
-  emit_expr(c, av, b); buf_puts(b, ")");
-  /* The caller's variable may be a heap cell (captured by a proc): the
-     body will store through it from inside this expansion, which is the
-     placement a dirty bit cannot cover, so pin the cell (#4391); a cell
-     the caller itself was lent is not ours to pin. */
-  const char *avn = nt_str(nt, av, "name");
-  LocalVar *alv = avn ? scope_local(comp_scope_of(c, av), avn) : NULL;
-  if (alv && alv->is_cell && !alv->inline_alias &&
-      !(g_cap_struct && g_cap_names && nameset_has(g_cap_names, avn)))
-    buf_printf(b, "; sp_gc_pin_remembered((void *)_cell_%s)", rename_local(avn));
 }
 
 /* Bind an inlined yielding method's parameters from a call's arguments:
@@ -832,7 +371,7 @@ void emit_inline_alias_arg(Compiler *c, int av, Buf *b) {
    packed, as the ordinary call paths bind them. The expansion's renames
    above saved_nren are hidden while argument code is emitted. */
 void emit_inline_bind_params(Compiler *c, Scope *m, int args, const int *argv, int argc,
-                             const ArgLayout *L, unsigned alias_mask, int tag, int saved_nren,
+                             const ArgLayout *L, int tag, int saved_nren,
                              int din, Buf *b) {
   const NodeTable *nt = c->nt;
   /* `bar(...)` inside a `def foo(...)` forwarder: bind this (inlined) target's
@@ -885,10 +424,8 @@ void emit_inline_bind_params(Compiler *c, Scope *m, int args, const int *argv, i
   ren_unpark(&park0);
   for (int i = 0; i < m->nparams; i++) {
     emit_indent(b, din);
-    int aliased = i < 32 && (alias_mask & (1u << i));
     int pc = 0;
-    if (aliased) buf_printf(b, "_cell__y%d_%s = &(", tag, m->pnames[i]);
-    else { Buf rn; memset(&rn, 0, sizeof rn); buf_printf(&rn, "_y%d_%s", tag, m->pnames[i]);
+    { Buf rn; memset(&rn, 0, sizeof rn); buf_printf(&rn, "_y%d_%s", tag, m->pnames[i]);
       pc = emit_inlined_param_target(c, m, m->pnames[i], rn.p, b); free(rn.p); }
     /* hide THIS inline's renames only: args are call-site expressions,
        and the call site may itself be an outer inlined body whose locals
@@ -927,7 +464,6 @@ void emit_inline_bind_params(Compiler *c, Scope *m, int args, const int *argv, i
       emit_arg_or_default(c, m, i, L->from[i] == ARG_NODE ? argv[L->arg[i]] : -1, b);
     /* Anything past the rest that is not one of its posts is a keyword (or
        **kwrest) param: it binds by name, never positionally. */
-    else if (aliased) emit_inline_alias_arg(c, argv[L->arg[i]], b);
     /* a **kwrest collects the keywords no declared keyword param takes, as
        on the other call paths; it bound its nil default here */
     else if (i == m->kwrest_idx) {
@@ -1551,27 +1087,19 @@ int emit_inline_call_x(Compiler *c, int id, Buf *b, int indent, int as_expr) {
   }
   int din = indent + 1;
 
-  /* Which parameters this expansion binds as ALIASES of the caller's
-     variables (see inline_param_mutated above): a String the body mutates,
-     passed as a plain local read, not rebound by the body, and not celled
-     for a capture of its own. Decided before the locals are declared, since
-     an aliased parameter gets no local of its own. */
   int args = nt_ref(nt, id, "arguments");
   int argc = 0;
   const int *argv = args >= 0 ? nt_arr(nt, args, "arguments", &argc) : NULL;
   ArgLayout L;
-  unsigned alias_mask;
-  int splice_tok = -1;
   {
     int pargc = argc;
     if (nt_argv_kwh(nt, argv, argc) >= 0) pargc = argc - 1;
     arg_layout(c, m, argv, pargc, pargc < argc ? argv[pargc] : -1, 1, &L);
     refuse_yield_handle_args(c, id);
-    alias_mask = inline_alias_params(c, mi, argv, pargc, &L, nt_ref(nt, id, "block"), tag, &splice_tok);
   }
 
   /* declare method locals under renamed names */
-  emit_inline_locals_aliased(c, mi, tag, alias_mask, b, din);
+  emit_inline_locals(c, mi, tag, b, din);
 
   char dflt_cm_self[32];
   const char *dflt_self = recv_self_deref ? selfbuf : NULL, *dflt_deref = recv_self_deref;
@@ -1581,7 +1109,7 @@ int emit_inline_call_x(Compiler *c, int id, Buf *b, int indent, int as_expr) {
   }
   InlDflt sv_dflt = inl_dflt_enter(m, g_nren, dflt_self, dflt_deref,
                                    recv_class >= 0 ? recv_class : cm_class);
-  emit_inline_bind_params(c, m, args, argv, argc, &L, alias_mask, tag, saved_nren, din, b);
+  emit_inline_bind_params(c, m, args, argv, argc, &L, tag, saved_nren, din, b);
   arg_layout_free(&L);
   inl_dflt_leave(sv_dflt);
   /* the call-site code is bound: the body runs under the callee's block context */
@@ -1697,7 +1225,6 @@ int emit_inline_call_x(Compiler *c, int id, Buf *b, int indent, int as_expr) {
   if (as_expr) { emit_indent(b, indent); buf_puts(b, "})"); }
   else { emit_indent(b, indent); buf_puts(b, "}\n"); }
 
-  inline_alias_release(c, m, alias_mask, splice_tok);
   g_nren = saved_nren;
   g_block_id = saved_block;
   g_yield_proc_ref = saved_ypr;
@@ -1969,18 +1496,12 @@ static void emit_block_arg_coerced(Compiler *c, int node, TyKind ot, Buf *b) {
   /* a String into a parameter a mutating callee made a buffer, as a plain
      assignment of one takes it (#6039). Under --share-strings it takes the
      String plan's form (emit_str_form's handle face), the handle wherever
-     a method's parameter takes one; without the flag, a new handle of its
-     bytes */
-  else if (ot == TY_STRBUF && at == TY_STRING && c->share_plan) {
+     a method's parameter takes one */
+  else if (ot == TY_STRBUF && at == TY_STRING) {
     StrForm sf;
     emit_str_form(c, node, SPR_TAKE, SPX_HANDLE, 0, &sf);
     str_form_settle(c, &sf, b);
     str_form_free(&sf);
-  }
-  else if (ot == TY_STRBUF && at == TY_STRING) {
-    buf_puts(b, "sp_String_new_shared(");
-    emit_expr(c, node, b);
-    buf_puts(b, ")");
   }
   /* the shared handle, its read marked for a proc a yield of it may call,
      into a plain String parameter: the copy a plain read takes */
@@ -2154,37 +1675,6 @@ static void bi_method_side(BiRen *r) {
   g_nren = r->cs_nren;
 }
 
-/* Was yielded value `v` run ahead into a temp (emit_args_before), since a
-   later value rebinds the variable it reads? An alias of it then names the
-   temp, not the variable's slot, and the block's append never reaches the
-   String the caller holds: refused rather than compiled without it. */
-static void refuse_alias_of_snapshot(Compiler *c, int v, const char *pn) {
-  for (int i = 0; i < g_n_argov; i++) {
-    if (g_argov_node[i] != v) continue;
-    char msg[512];
-    snprintf(msg, sizeof msg,
-             "a String is passed to a block's parameter `%s` through a yield, which the block appends to, "
-             "and a later value of the same yield rebinds the variable it is read from: the block would "
-             "append to a copy of the String the variable held, so the append would not reach the "
-             "caller's String. Read the variable into another one ahead of the yield.", pn);
-    unsupported_feature(c, v, msg);
-    return;
-  }
-}
-void block_alias_hold(BlockAliases *al, Scope *s, LocalVar *lv) {
-  al->s[al->n] = s;
-  al->nm[al->n++] = lv->name;
-  lv->inline_alias++;
-  { lv->is_cell = 1; comp_touch_scope(lv->owner); }
-}
-
-void block_aliases_release(BlockAliases *al) {
-  for (int i = 0; i < al->n; i++) {
-    LocalVar *lv = scope_local(al->s[i], al->nm[i]);
-    if (--lv->inline_alias == 0) { lv->is_cell = 0; comp_touch_scope(lv->owner); }
-  }
-}
-
 /* The default dv of block parameter pl (of type pt), on the block side.
    Under --share-strings a parameter that is the shared handle takes the
    handle a default reads off a variable (`|v = s|`, `|v: s|`), as it takes
@@ -2201,7 +1691,7 @@ static void emit_block_default(Compiler *c, LocalVar *pl, int dv, TyKind pt, BiR
    keyword hash `ykw` (-1: the call passes none), for a yield or block.call
    and for instance_exec. `bsc` holds the parameters' slots. */
 void emit_block_kw_binds(Compiler *c, int blk, int ykw, Scope *bsc, Buf *b, int indent,
-                         int as_expr, BiRen *bi, BlockAliases *al) {
+                         int as_expr, BiRen *bi) {
   const NodeTable *nt = c->nt;
   /* Keyword block params (`|a:, b: 5|`) and a `**kw` keyword-rest take the
      trailing yielded kwargs hash. Literal pairs match by name at compile
@@ -2287,11 +1777,6 @@ void emit_block_kw_binds(Compiler *c, int blk, int ykw, Scope *bsc, Buf *b, int 
     TyKind kt = kl ? kl->type : TY_UNKNOWN;
     int vn = ykw >= 0 && !ykw_splat ? ie_kwhash_value(c, ykw, kn) : -1;
     int dv = block_keyword_default(c, blk, ki);
-    /* A keyword the block appends to, bound from a yield of a plain String
-       variable: alias the variable, as a positional parameter is aliased
-       (emit_block_binds), or the append lands in the keyword's copy. */
-    int kw_alias = al && vn >= 0 && kl && nt_kind(nt, vn) == NK_LocalVariableReadNode &&
-                   comp_ntype(c, vn) == TY_STRING && block_local_wants_alias(c, blk, kp);
     /* a keyword that is the shared handle takes a handle yielded to it
        itself (yield_splice_kw_handles), as a positional one does */
     if (vn >= 0 && kl && kwh_tmp < 0 && repr_of_slot(c, kl).handle &&
@@ -2304,30 +1789,6 @@ void emit_block_kw_binds(Compiler *c, int blk, int ykw, Scope *bsc, Buf *b, int 
         continue;
       }
       free(hb.p);
-    }
-    /* A variable that is the shared handle has no `const char *` slot to
-       lend: a keyword that did not take the handle above would append to a
-       copy, so the program is refused rather than compiled without it. */
-    if (kw_alias && strbuf_local_name(c, vn)) {
-      char msg[512];
-      snprintf(msg, sizeof msg,
-               "a String is passed to a block's keyword `%s` through a yield, which the block appends to: "
-               "this yield hands the block a copy, so the append would not reach the caller's String (a "
-               "String is not yet shared by reference through a `yield` from a variable that is also "
-               "shared with a proc or method). Return the String from the block and assign it, or append "
-               "to it in the caller.", kn);
-      unsupported_feature(c, vn, msg);
-    }
-    if (kw_alias) refuse_alias_of_snapshot(c, vn, kn);
-    if (kw_alias && al->n < (int)(sizeof al->nm / sizeof al->nm[0])) {
-      if (!as_expr) emit_indent(b, indent);
-      if (!as_expr && !al->open) { buf_puts(b, "{\n"); emit_indent(b, indent); al->open = 1; }
-      buf_printf(b, "const char * *_cell_%s = &(", kpr);
-      emit_expr(c, vn, b);
-      buf_puts(b, ")");
-      buf_puts(b, as_expr ? "; " : ";\n");
-      block_alias_hold(al, bsc, kl);
-      continue;
     }
     if (!as_expr) emit_indent(b, indent);
     buf_printf(b, "lv_%s = ", kpr);
@@ -2457,47 +1918,12 @@ static TyKind builtin_yield_self_pair(Compiler *c, int arg) {
    that may be empty -- gathers every value into one array first. The yield
    of a spliced block (emit_block_invoke) and instance_exec's literal block
    bind through here; `bi` switches the rename tables for the former (NULL
-   for a block bound in place), and `al` collects the parameters aliased to
-   a yielded String variable (NULL: none are). */
-/* A post block parameter `bp` (renamed `bpr`) the block appends to, bound
-   from a yield of plain String variable `yarg`: alias the variable, as a
-   required parameter is aliased, or the append lands in the post's copy
-   (#6179). A variable that is the shared handle has no slot to lend, and a
-   post that does not take the handle is refused there, as a keyword is.
-   Answers 1 when it bound the alias. */
-static int emit_block_post_alias(Compiler *c, int blk, const char *bp, const char *bpr, LocalVar *bl,
-                                 int yarg, Buf *b, int indent, int as_expr, BlockAliases *al) {
-  const NodeTable *nt = c->nt;
-  if (!al || !bl || nt_kind(nt, yarg) != NK_LocalVariableReadNode || !block_local_wants_alias(c, blk, bp))
-    return 0;
-  if (local_is_handle(c, yarg) || repr_of(c, yarg).as_ty == TY_STRBUF) {
-    char msg[512];
-    snprintf(msg, sizeof msg,
-             "a String is passed to a block's post parameter `%.*s` through a yield, which the block "
-             "appends to: this yield hands the block a copy, so the append would not reach the caller's "
-             "String (a String is not yet shared by reference through a `yield` into a post block "
-             "parameter from a variable that is also shared with a proc or method). Return the String "
-             "from the block and assign it, or append to it in the caller.", block_kw_key_len(c, bp), bp);
-    unsupported_feature(c, yarg, msg);
-    return 0;
-  }
-  if (comp_ntype(c, yarg) != TY_STRING || al->n >= (int)(sizeof al->nm / sizeof al->nm[0])) return 0;
-  refuse_alias_of_snapshot(c, yarg, bp);
-  if (!as_expr) emit_indent(b, indent);
-  if (!as_expr && !al->open) { buf_puts(b, "{\n"); emit_indent(b, indent); al->open = 1; }
-  buf_printf(b, "const char * *_cell_%s = &(", bpr);
-  emit_expr(c, yarg, b);
-  buf_puts(b, ")");
-  buf_puts(b, as_expr ? "; " : ";\n");
-  block_alias_hold(al, comp_scope_of(c, blk), bl);
-  return 1;
-}
-
+   for a block bound in place). */
 /* The binds that close every form of emit_block_binds: the keywords, from
    the yield's keyword hash `ykw` (-1: none), and then the rest parameter
    `rest_lv`, from the array built into temp `rest_tmp` (-1: none). */
 static void emit_block_binds_close(Compiler *c, int blk, int ykw, Scope *bsc, int rest_tmp, const char *rest_lv,
-                                   Buf *b, int indent, int as_expr, BiRen *bi, BlockAliases *al) {
+                                   Buf *b, int indent, int as_expr, BiRen *bi) {
   /* The keywords come last in the call, so they run after every positional
      (the dropped ones above among them): a missing keyword raised before
      `yield(lit(1))` into `|k:|` had evaluated its argument. */
@@ -2512,7 +1938,7 @@ static void emit_block_binds_close(Compiler *c, int blk, int ykw, Scope *bsc, in
                hb.p ? hb.p : "sp_box_nil()", as_expr ? " " : "\n");
     free(hb.p);
   }
-  else emit_block_kw_binds(c, blk, ykw, bsc, b, indent, as_expr, bi, al);
+  else emit_block_kw_binds(c, blk, ykw, bsc, b, indent, as_expr, bi);
   if (rest_tmp >= 0) {
     if (!as_expr) emit_indent(b, indent);
     buf_printf(b, "lv_%s = _t%d;%s", rest_lv, rest_tmp, as_expr ? " " : "\n");
@@ -2531,7 +1957,7 @@ static void emit_block_binds_close(Compiler *c, int blk, int ykw, Scope *bsc, in
    with a splat through here, and the walks of a boxed receiver bind the
    values of each step (emit_boxed_step_binds). */
 static void emit_block_binds_gathered(Compiler *c, int blk, int t, TyKind at, int sure_n, int ykw, int site,
-                                      Buf *b, int indent, int as_expr, BiRen *bi, BlockAliases *al) {
+                                      Buf *b, int indent, int as_expr, BiRen *bi) {
   Scope *bsc = comp_scope_of(c, blk);
   int P = 0; while (block_param_name(c, blk, P)) P++;
   int O = 0; while (block_opt_name(c, blk, O)) O++;
@@ -2690,7 +2116,7 @@ static void emit_block_binds_gathered(Compiler *c, int blk, int t, TyKind at, in
     emit_block_param_share(c, bsc, ql, qprbuf.p, b, 1);
   }
   free(qprbuf.p);
-  emit_block_binds_close(c, blk, ykw, bsc, rest_tmp, rest_lv.p, b, indent, as_expr, bi, al);
+  emit_block_binds_close(c, blk, ykw, bsc, rest_tmp, rest_lv.p, b, indent, as_expr, bi);
   free(rest_lv.p);
 }
 
@@ -2732,12 +2158,12 @@ int emit_boxed_step_binds(Compiler *c, int blk, const char *vals, Buf *b, int in
                   "_t%d = sp_poly_to_poly_array(_e); }%s",
                t, t, t, as_expr ? " " : "\n");
   }
-  emit_block_binds_gathered(c, blk, t, TY_POLY_ARRAY, 0, -1, blk, b, indent, as_expr, NULL, NULL);
+  emit_block_binds_gathered(c, blk, t, TY_POLY_ARRAY, 0, -1, blk, b, indent, as_expr, NULL);
   return 1;
 }
 
 void emit_block_binds(Compiler *c, int blk, const int *yargs, int yc,
-                      Buf *b, int indent, int as_expr, BiRen *bi, BlockAliases *al) {
+                      Buf *b, int indent, int as_expr, BiRen *bi) {
   const NodeTable *nt = c->nt;
   Scope *bsc = comp_scope_of(c, blk);
   /* A trailing kwargs hash (`k: 1`, `**h`) goes to a block that declares
@@ -3005,7 +2431,7 @@ void emit_block_binds(Compiler *c, int blk, const int *yargs, int yc,
   }
   if (splat_tmp >= 0) {
     emit_block_binds_gathered(c, blk, splat_tmp, splat_at, splat_sure, ykw, yargs && yc > 0 ? yargs[0] : blk,
-                              b, indent, as_expr, bi, al);
+                              b, indent, as_expr, bi);
     return;
   }
   Buf bprbuf; memset(&bprbuf, 0, sizeof bprbuf);
@@ -3019,36 +2445,6 @@ void emit_block_binds(Compiler *c, int blk, const int *yargs, int yc,
     bi_method_side(bi);
     const char *bpr = bprbuf.p;
     if (!as_expr) emit_indent(b, indent);
-    /* A parameter the block mutates in place, bound from a yield of a plain
-       variable: alias the variable itself rather than copy it, so the
-       block's append reaches what was yielded. The parameter reads and
-       writes through the cell for the rest of this splice. */
-    /* A global's or a class variable's C global is aliased the same way,
-       as a call lends it, unless the block or what it calls can assign the
-       variable meanwhile (refuse_lent_global_rebound). */
-    Buf gref; memset(&gref, 0, sizeof gref);
-    NodeKind yk = poly_splat_tmp < 0 && k < yc ? nt_kind(nt, yargs[k]) : NK__COUNT;
-    int gslot = (yk == NK_GlobalVariableReadNode && gvar_global_slot(c, yargs[k], &gref)) ||
-                (yk == NK_ClassVariableReadNode && cvar_global_slot(c, yargs[k], &gref));
-    if (poly_splat_tmp < 0 && k < yc &&
-        ((yk == NK_LocalVariableReadNode && !local_is_handle(c, yargs[k])) || gslot) &&
-        comp_ntype(c, yargs[k]) == TY_STRING && block_param_wants_alias(c, blk, k, -1)) {
-      LocalVar *bl = bsc ? scope_local(bsc, bp) : NULL;
-      if (bl && al && !gslot) refuse_alias_of_snapshot(c, yargs[k], bp);
-      if (bl && al && gslot) refuse_lent_global_rebound(c, yargs[k], gref.p, "a block", bp);
-      free(gref.p);
-      gref.p = NULL;
-      if (bl && al && al->n < (int)(sizeof al->nm / sizeof al->nm[0])) {
-        if (!as_expr && !al->open) { buf_puts(b, "{\n"); emit_indent(b, indent); al->open = 1; }
-        buf_printf(b, "const char * *_cell_%s = &(", bpr);
-        emit_expr(c, yargs[k], b);
-        buf_puts(b, ")");
-        buf_puts(b, as_expr ? "; " : ";\n");
-        block_alias_hold(al, bsc, bl);
-        continue;
-      }
-    }
-    free(gref.p);
     buf_printf(b, "lv_%s = ", bpr);
     if (poly_splat_tmp >= 0) {
       LocalVar *bl = bsc ? scope_local(bsc, bp) : NULL;
@@ -3109,36 +2505,6 @@ void emit_block_binds(Compiler *c, int blk, const int *yargs, int yc,
     int dv = block_opt_default(c, blk, oi);
     int yi = P + oi;
     const char *odflt = ot == TY_RANGE ? "(sp_Range){0}" : default_value_from_compiler(c, ot);
-    /* An optional the block appends to, bound from a yield of a plain
-       String variable: alias the variable, as a required parameter is
-       aliased above, or the append lands in the optional's copy (#6179).
-       A variable that is the shared handle has no slot to lend, and the
-       optional does not take the handle: refused, as a keyword is. */
-    int opt_alias = al && ol && poly_splat_tmp < 0 && oi < ot_static && yi < yc &&
-                    nt_kind(nt, yargs[yi]) == NK_LocalVariableReadNode &&
-                    block_local_wants_alias(c, blk, op);
-    if (opt_alias && (local_is_handle(c, yargs[yi]) || repr_of(c, yargs[yi]).as_ty == TY_STRBUF)) {
-      char msg[512];
-      snprintf(msg, sizeof msg,
-               "a String is passed to a block's optional parameter `%.*s` through a yield, which the block "
-               "appends to: this yield hands the block a copy, so the append would not reach the caller's "
-               "String (a String is not yet shared by reference through a `yield` into an optional block "
-               "parameter from a variable that is also shared with a proc or method). Return the String "
-               "from the block and assign it, or append to it in the caller.", block_kw_key_len(c, op), op);
-      unsupported_feature(c, yargs[yi], msg);
-    }
-    if (opt_alias && comp_ntype(c, yargs[yi]) == TY_STRING && !local_is_handle(c, yargs[yi]) &&
-        al->n < (int)(sizeof al->nm / sizeof al->nm[0])) {
-      refuse_alias_of_snapshot(c, yargs[yi], op);
-      if (!as_expr) emit_indent(b, indent);
-      if (!as_expr && !al->open) { buf_puts(b, "{\n"); emit_indent(b, indent); al->open = 1; }
-      buf_printf(b, "const char * *_cell_%s = &(", opr);
-      emit_expr(c, yargs[yi], b);
-      buf_puts(b, ")");
-      buf_puts(b, as_expr ? "; " : ";\n");
-      block_alias_hold(al, bsc, ol);
-      continue;
-    }
     if (!as_expr) emit_indent(b, indent);
     buf_printf(b, "lv_%s = ", opr);
     if (oi < ot_static) {
@@ -3197,10 +2563,6 @@ void emit_block_binds(Compiler *c, int blk, const int *yargs, int yc,
       LocalVar *ql = bsc ? scope_local(bsc, qp) : NULL;
       TyKind qt = ql ? ql->type : TY_UNKNOWN;
       const char *qdflt = qt == TY_RANGE ? "(sp_Range){0}" : default_value_from_compiler(c, qt);
-      /* a post the block appends to aliases the variable yielded to it */
-      if (poly_splat_tmp < 0 && ps_static + qi < yc &&
-          emit_block_post_alias(c, blk, qp, qpr, ql, yargs[ps_static + qi], b, indent, as_expr, al))
-        continue;
       if (!as_expr) emit_indent(b, indent);
       buf_printf(b, "lv_%s = ", qpr);
       int idx = ps_static + qi;
@@ -3231,7 +2593,7 @@ void emit_block_binds(Compiler *c, int blk, const int *yargs, int yc,
       free(vb.p);
     }
   }
-  emit_block_binds_close(c, blk, ykw, bsc, rest_tmp, rest_lv.p, b, indent, as_expr, bi, al);
+  emit_block_binds_close(c, blk, ykw, bsc, rest_tmp, rest_lv.p, b, indent, as_expr, bi);
   free(rest_lv.p);
 }
 
@@ -3276,11 +2638,10 @@ void emit_block_invoke(Compiler *c, int args_node, Buf *b, int indent, int as_ex
   bi.cnt = bi.cs_nren - bi.bi_nren;
   #define BI_BLOCK_SIDE() bi_block_side(&bi)
   #define BI_METHOD_SIDE() bi_method_side(&bi)
-  BlockAliases al = { .n = 0 };
   refuse_yield_splat(c, blk, yc, yargs);
   refuse_yield_capwrap(c, blk, yc, yargs);
   if (as_expr) buf_puts(b, "({ ");
-  emit_block_binds(c, blk, yargs, yc, b, indent, as_expr, &bi, &al);
+  emit_block_binds(c, blk, yargs, yc, b, indent, as_expr, &bi);
   /* Keep the rename table active for the block body: the block's variable
      references are in the same lexical scope as the surrounding inlined
      method, so renames like x → _y3_x must stay visible. Nested inlines
@@ -3801,8 +3162,6 @@ void emit_block_invoke(Compiler *c, int args_node, Buf *b, int indent, int as_ex
     else { emit_indent(b, indent); buf_puts(b, "} while(0);\n"); }
     g_ie_next_var = sv_nx2; g_ie_res_poly = sv_poly2; g_ie_next_ty = sv_nty2; g_ie_next_oint = sv_nxo2;
   }
-  block_aliases_release(&al);
-  if (al.open) { emit_indent(b, indent); buf_puts(b, "}\n"); }
   g_self = sv_bself; g_self_deref = sv_bderef;
   g_yield_self_fallback = sv_ysf; g_yield_self_deref_fallback = sv_ysdf; g_yield_emitting_class_fallback = sv_yecf;
   g_emitting_class_id = sv_bemcls;
@@ -7027,7 +6386,7 @@ static int iter_enum_poly_walk_arms(Compiler *c, int id, Buf *b, int indent, con
     Buf rb; memset(&rb, 0, sizeof rb);
     /* a receiver the nil fact says can be nil, which nothing tested ahead
        (a safe navigation guards it itself), raises CRuby's NoMethodError:
-       the walk read the NULL Array as an empty one (strh_emit_recv) */
+       the walk read the NULL Array as an empty one */
     int rnn = !nt_safe_nav(c->nt, id) && repr_of(c, recv).may_nil && !repr_of(c, recv).nil_tested;
     int trn = rnn ? ++g_tmp : 0;
     if (rnn) buf_printf(&rb, "({ __auto_type _t%d = ", trn);

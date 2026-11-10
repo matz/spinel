@@ -177,14 +177,6 @@ typedef struct {
                        C slot. Keep that slot alongside the cell and copy it in
                        at the top of the body, so a proc lifted out of the block
                        reads this iteration's value through the cell. */
-  int inline_alias; /* (params of a yielding method, codegen only) how many
-                       inline expansions currently in progress bind this
-                       parameter as an ALIAS of the caller's variable rather
-                       than a copy: is_cell is held at 1 for their duration so
-                       the body's reads and writes go through *_cell_<name>,
-                       which the expansion points at the caller's slot. A
-                       String the body appends to has to be the caller's, not
-                       a copy that goes stale on the first reallocation. */
   int init_guarded; /* (consts) initialized via `CONST = Class.new(...)`: reads
                        during the init raise NameError (uninitialized constant) */
   int nil_default_boxed; /* (params) a Time, Complex, Rational or Tms
@@ -1977,22 +1969,10 @@ Scope *comp_scope_of(Compiler *c, int node_id);        /* owning scope */
    keyed on name alone and revalidated against nt->version, so the scope of
    each write is still read fresh at every visit. */
 int comp_is_local_write(NodeKind k);
-/* Can a call's block `blk` (a literal or a `&blk` argument) assign the
-   variable argument node `arg` reads while the call runs? A local: the
-   literal's body writes it (of the same scope, by any write kind, at any
-   depth), or a proc that captures it assigns it. An instance variable:
-   the literal's body may write it (subtree_may_write_ivar: a write, a self
-   call whose method may, anything else that runs code), and a `&blk`
-   argument always may. 0 for any other argument, or a call with no block. */
-int comp_block_rebinds_arg(Compiler *c, int blk, int arg);
 /* Can the subtree at id write ivar `iv` of class cls's object: a write of
    it, a self call whose method may, or anything else that runs code
    (codegen_util.c) */
 int subtree_may_write_ivar(Compiler *c, int id, const char *iv, int cls, int depth);
-/* Does the subtree under node n assign the variable argument node `arg`
-   reads (a local of the same scope, or an instance variable), by any write
-   kind, at any depth? 0 when `arg` is no variable read. */
-int comp_node_writes_var(Compiler *c, int n, int arg);
 int comp_lvw_first(Compiler *c, const char *name);
 int comp_module_includes(Compiler *c, int m, int mod, int depth);
 int comp_class_singleton_has_module(Compiler *c, int ci, int mod);

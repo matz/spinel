@@ -1,13 +1,13 @@
 # A yielding method is spliced at its call site, and a String parameter it
-# appends to, or hands to another call, binds as an alias of the caller's
-# variable. One the body only reads followed the block's rebinding of that
-# variable: `m(u) { u = "k" }` showed "k" where the parameter still holds
-# the String it was given. Such a parameter now takes the argument's value
-# at the call wherever something can assign the variable while the body
-# runs: the call's block (at any depth, by any write kind), a proc that
-# captures the variable, or, for a global, any write that can run then (the
-# alias was refused there). The same holds for an instance variable the
-# block assigns. Integer, Array and object parameters bind by value already.
+# appends to, or hands to another call, is the caller's String. One the body
+# only reads followed the block's rebinding of that variable: `m(u) { u =
+# "k" }` showed "k" where the parameter still holds the String it was
+# given. Such a parameter holds the argument's value at the call wherever
+# something can assign the variable while the body runs: the call's block
+# (at any depth, by any write kind), a proc that captures the variable, or,
+# for a global, any write that can run then. The same holds for an instance
+# variable the block assigns. Integer, Array and object parameters bind by
+# value already.
 
 def show(w)
   yield

@@ -12516,9 +12516,8 @@ int block_opt_default(Compiler *c, int block, int idx) {
    a count not known here): a required one; an optional after them when no
    post follows, whatever the count (`|a = 1, b|` hands its post b the last
    argument first); or a post the count lands there (block_fill hands the
-   posts the last values); else NULL. A parameter the block appends to
-   binds as an alias of the variable yielded to it at such a position
-   (block_param_wants_alias), an optional or a post as a required one
+   posts the last values); else NULL. A parameter the block appends to is
+   found at such a position, an optional or a post as a required one
    (#6179). */
 const char *block_param_at(Compiler *c, int block, int idx, int n) {
   const char *bp = block_param_name(c, block, idx);

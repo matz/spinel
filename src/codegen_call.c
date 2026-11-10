@@ -366,21 +366,8 @@ int emit_ctor_yield_inline(Compiler *c, int id, int ci, Buf *b) {
   g_self_deref = is_val ? "." : "->";
   int din = g_indent + 1;
 
-  /* A String the body appends to, or yields to a block that does, binds as
-     an alias of the caller's variable, as an inlined method's does
-     (inline_alias_params): a copy took the block's appends (#6179) */
-  unsigned alias_mask = 0;
-  int splice_tok = -1;
-  { int aa = nt_ref(nt, id, "arguments"), ac = 0;
-    const int *av = aa >= 0 ? nt_arr(nt, aa, "arguments", &ac) : NULL;
-    int pac = nt_argv_kwh(nt, av, ac) >= 0 ? ac - 1 : ac;
-    ArgLayout LA;
-    arg_layout(c, m, av, pac, pac < ac ? av[pac] : -1, 1, &LA);
-    alias_mask = inline_alias_params(c, mi, av, pac, &LA, block, tag, &splice_tok);
-    arg_layout_free(&LA); }
-
   /* declare the initialize body's locals under renamed names */
-  emit_inline_locals_aliased(c, mi, tag, alias_mask, b, din);
+  emit_inline_locals(c, mi, tag, b, din);
 
   /* bind params to the call args (call-site scope: renames off) */
   int args = nt_ref(nt, id, "arguments");
@@ -451,17 +438,6 @@ int emit_ctor_yield_inline(Compiler *c, int id, int ci, Buf *b) {
       ren_unpark(&park);
     }
     emit_indent(b, din);
-    if (i < 32 && (alias_mask & (1u << i))) {
-      RenPark park = ren_park(saved_nren);
-      const char *svs = g_self, *svd = g_self_deref;
-      g_self = saved_self; g_self_deref = saved_self_deref;
-      buf_printf(b, "_cell__y%d_%s = &(", tag, m->pnames[i]);
-      emit_inline_alias_arg(c, argv2[L.arg[i]], b);
-      buf_puts(b, ";\n");
-      g_self = svs; g_self_deref = svd;
-      ren_unpark(&park);
-      continue;
-    }
     int pc = 0;
     { Buf rn; memset(&rn, 0, sizeof rn); buf_printf(&rn, "_y%d_%s", tag, m->pnames[i]);
       pc = emit_inlined_param_target(c, m, m->pnames[i], rn.p, b); free(rn.p); }
@@ -534,7 +510,6 @@ int emit_ctor_yield_inline(Compiler *c, int id, int ci, Buf *b) {
   int save_ind = g_indent; g_indent = din;
   emit_stmts(c, m->body, b, din);
   g_indent = save_ind;
-  inline_alias_release(c, m, alias_mask, splice_tok);
   emit_indent(b, g_indent + 1);
   buf_printf(b, "_t%d;\n", st);
   emit_indent(b, g_indent); buf_puts(b, "})");
@@ -5076,7 +5051,7 @@ static int emit_dynamic_send(Compiler *c, int id, Buf *b) {
        change through the answer missed the target's String. One the plan
        wraps (a new String, a literal) is boxed as the new handle it is, so
        the answer's copies name one String. */
-    int arm_form = !self_ret && c->share_plan && (at == TY_STRING || at == TY_STRBUF)
+    int arm_form = !self_ret && (at == TY_STRING || at == TY_STRBUF)
                    ? share_plan_of(c, arm, share_plan_role(c, arm), NULL).form : SPF_BYTES;
     int arm_str = arm_form == SPF_HANDLE || arm_form == SPF_WRAP;
     if (setjmp(g_unsup_recover) == 0) {
@@ -29099,17 +29074,6 @@ static int block_param_is_handle(Compiler *c, int blk, int k, int n) {
   LocalVar *t = bs ? scope_local(bs, bp) : NULL;
   return repr_of_slot(c, t).handle;
 }
-/* Is `a` a String variable a splice can alias: a local or a parameter, not
-   a block's parameter or a variable a proc captures? */
-static int ie_arg_aliases(Compiler *c, int a) {
-  const NodeTable *nt = c->nt;
-  if (nt_kind(nt, a) != NK_LocalVariableReadNode || comp_ntype(c, a) != TY_STRING) return 0;
-  const char *vn = nt_str(nt, a, "name");
-  Scope *vs = vn ? comp_scope_of(c, a) : NULL;
-  LocalVar *lv = vs ? scope_local(vs, vn) : NULL;
-  return lv && lv->type == TY_STRING && !lv->is_block_param && !lv->is_cell;
-}
-
 /* A method that yields its parameter to a block that appends to it, where
    the parameter is the handle: a lowered method's yield into the block it
    keeps, or a spliced method's that a handle reached (yield_splice_handles).
@@ -29990,7 +29954,6 @@ static void refuse_string_copies(Compiler *c, int id) {
       const char *kind = strvar_arg(c, av[k], &shared);
       if (!kind) continue;
       if (gathered && repr_of(c, av[k]).handle && !sp_streq(kind, "a block's parameter")) continue;
-      if (spliced && ie_arg_aliases(c, av[k]) && block_param_wants_alias(c, blk, k, call_plain_argc(c, id))) continue;
       /* a parameter that is the shared handle takes the caller's, pulled in
          (yield_splice_handles) */
       if (spliced && local_is_handle(c, av[k]) && block_param_is_handle(c, blk, k, call_plain_argc(c, id))) continue;
@@ -30010,8 +29973,6 @@ static void refuse_string_copies(Compiler *c, int id) {
         int v, shared;
         const char *key = dyn_kw_elem_key(c, el[e], &v);
         if (!key || v < 0 || !strvar_arg(c, v, &shared)) continue;
-        /* aliased on an object's splice, as a position is */
-        if (spliced && ie_arg_aliases(c, v) && block_kw_wants_alias(c, blk, key)) continue;
         DynReach r;
         dyn_value_kw_reach(c, blk, key, &r);
         if (!r.app || r.unknown) continue;

@@ -126,11 +126,6 @@ typedef struct { int sv, from; RenCopy k; int fence, arm; } RenPark;
 RenPark ren_park(int from);
 void ren_unpark(RenPark *p);
 const char *strbuf_local_name(Compiler *c, int recv);
-int ivar_global_slot(Compiler *c, int node, Buf *out);
-int gvar_global_slot(Compiler *c, int node, Buf *out);
-int cvar_global_slot(Compiler *c, int node, Buf *out);
-int lent_global_slot_rebound(Compiler *c, int arg, const char *slot);
-void refuse_lent_global_rebound(Compiler *c, int arg, const char *slot, const char *target, const char *pname);
 int strbuf_ivar_owner(Compiler *c, int node);
 int attr_assign_slot(Compiler *c, int id, int *cid, int *iv);
 const int *codegen_node_parents(Compiler *c, int node);
@@ -569,7 +564,6 @@ void emit_str_form_handle(Compiler *c, int v, Buf *b);
    handles answers (codegen_util.c), and whether an element read reads like
    a variable's slot (a local's Array at a literal or local index) */
 void strh_elem_handle_text(Compiler *c, int v, Buf *b);
-void strh_emit_recv(Compiler *c, int id, int recv, Buf *b);   /* the receiver of an operation on the Array of handles, nil-checked */
 int strh_elem_slot(Compiler *c, int v);
 int strh_handle_call(Compiler *c, int v);
 int one_str_elem_call(Compiler *c, int v, TyKind rt);
@@ -1459,16 +1453,9 @@ int gathered_param_index(Compiler *c, Scope *m, int i, const char *len, char *id
 extern unsigned g_yield_live_mask;   /* emit_proc_yield: positions whose targets take live bytes */
 void refuse_yield_handle_args(Compiler *c, int id);
 int emit_handle_var_ref(Compiler *c, int a, Buf *b);
-unsigned inline_alias_params(Compiler *c, int mi, const int *argv, int pargc, const ArgLayout *L, int blk,
-                             int tag, int *splice_tok);
-void inline_alias_release(Compiler *c, Scope *m, unsigned alias_mask, int splice_tok);
-int splice_store_open(Compiler *c, int w, Buf *b);
-void splice_store_close(Compiler *c, int w, int n, Buf *b);
-void emit_splice_store_text(Compiler *c, int w, const char *lhs, const char *val, int str, Buf *b);
-void emit_inline_locals_aliased(Compiler *c, int mi, int tag, unsigned alias_mask, Buf *b, int din);
-void emit_inline_alias_arg(Compiler *c, int av, Buf *b);
+void emit_inline_locals(Compiler *c, int mi, int tag, Buf *b, int din);
 void emit_inline_bind_params(Compiler *c, Scope *m, int args, const int *argv, int argc,
-                             const ArgLayout *L, unsigned alias_mask, int tag, int saved_nren,
+                             const ArgLayout *L, int tag, int saved_nren,
                              int din, Buf *b);
 /* A splat operand whose static type is nil or a scalar: Ruby spreads nil to
    nothing and any of the others to itself. */
@@ -2678,15 +2665,8 @@ int view_const_read_done(Compiler *c, int id);
 int view_push_const_read(Compiler *c, int id);
 enum { VR_STRBUF_BOX, VR_HANDLE_DEMAND, VR_POLY_LIFT, VR_NILNARROW, VR_NIL_TESTED, VR_HEAD_HELD, VR_DISCARDED };
 int view_push_repr(Compiler *c, int id, int flag, int v);
-/* A splice's alias of a caller's variable that the call's block assigns
-   (argument node arg, splice tag, parameter name), and a fence for a C
-   function emitted inside it (ren_park(0) pushes it, ren_unpark pops it);
-   both popped by view_pop. view_splice_next
-   answers the next open entry below position `from` (-1: from the top)
-   and above the innermost fence, or -1. */
-int view_push_splice(int arg, int tag, const char *pname);
+/* A fence entry for a C function body emitted by ren_park(0) (popped by ren_unpark): it now only holds a slot of the emission stack */
 int view_push_fn(void);
-int view_splice_next(int from, int *arg, int *tag, const char **pname);
 /* bumped by every view push, pop and unwind: a per-node memo of a decision
    that reads the flags or the type keys on it */
 unsigned view_epoch(void);
@@ -2940,17 +2920,10 @@ int is_blockless_block_param_call(Compiler *c, int id);
 const char *blockless_block_param_call_name(Compiler *c, int id);
 void emit_block_invoke(Compiler *c, int args_node, Buf *b, int indent, int as_expr, TyKind want_ty);
 typedef struct BiRen BiRen;
-/* A spliced block's parameter aliases (see emit_block_binds), undone by the
-   caller once the body is emitted. */
-typedef struct BlockAliases { Scope *s[16]; const char *nm[16]; int n, open; } BlockAliases;
-void block_alias_hold(BlockAliases *al, Scope *s, LocalVar *lv);
-void block_aliases_release(BlockAliases *al);
 void emit_block_kw_binds(Compiler *c, int blk, int ykw, Scope *bsc, Buf *b, int indent,
-                         int as_expr, BiRen *bi, BlockAliases *al);
-int block_param_wants_alias(Compiler *c, int blk, int k, int n);
-int block_kw_wants_alias(Compiler *c, int blk, const char *key);
+                         int as_expr, BiRen *bi);
 void emit_block_binds(Compiler *c, int blk, const int *yargs, int yc,
-                      Buf *b, int indent, int as_expr, BiRen *bi, BlockAliases *al);
+                      Buf *b, int indent, int as_expr, BiRen *bi);
 int block_binds_gathered(Compiler *c, int blk);
 int emit_boxed_step_binds(Compiler *c, int blk, const char *vals, Buf *b, int indent, int as_expr);
 void emit_yield_proc_call(Compiler *c, int args_node, TyKind result_ty, Buf *b, int indent, int as_expr);

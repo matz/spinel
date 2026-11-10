@@ -1693,7 +1693,6 @@ int share_value_needs_handle(Compiler *c, int v) {
   if (!sc || !sc->reachable || share_frozen_string(c, v)) return SHN_NO;
   return SHN_YES;
 }
-int share_store_needs_handle(Compiler *c, int v) { return share_value_needs_handle(c, v); }
 
 static int sh_ivar_owner(Compiler *c, int node);
 /* A String method answering its receiver or nil (bop_share_self_answer:

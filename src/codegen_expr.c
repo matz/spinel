@@ -1468,8 +1468,7 @@ void emit_strbuf_orw_guard(Compiler *c, const char *ref, int v, int is_or, Buf *
   if (strbuf_slot_text(c, v, &vval)) { }
   else if (emit_strbuf_write_handle(c, v, &vval)) { }
   /* (--share-strings: in the String plan's form, a box's handle) */
-  else if (c->share_plan) emit_str_form_handle(c, v, &vval);
-  else { str_new_handle_open(&vval); emit_str_expr(c, v, &vval); str_new_handle_close(&vval); }
+  else emit_str_form_handle(c, v, &vval);
   g_pre = saved_pre;
   buf_printf(b, "if (%s%s) { ", is_or ? "!" : "", ref);
   if (vpre.p) buf_puts(b, vpre.p);
@@ -2579,7 +2578,6 @@ static int emit_local_ivar_write_expr(Compiler *c, int id, Buf *b, const NodeTab
       return 1;
     }
     emit_local_ref(c, id, nm, b); buf_puts(b, " = ");
-    int sk = splice_store_open(c, id, b);   /* an open splice alias of the variable */
     int ven = 0;
     int v_empty_array = nt_kind(nt, v) == NK_ArrayNode && (nt_arr(nt, v, "elements", &ven), ven == 0);
     if (lv && lv->type == TY_POLY && repr_of(c, v).kind != RK_BOXED) emit_boxed(c, v, b);
@@ -2624,7 +2622,6 @@ static int emit_local_ivar_write_expr(Compiler *c, int id, Buf *b, const NodeTab
     else if (lv && emit_poly_rhs_coerced(c, lv->type, v, b)) { }
     else if (lv) emit_coerce(c, v, lv->type, CO_HOLD, "a local variable write", b);
     else emit_expr(c, v, b);
-    splice_store_close(c, id, sk, b);
     buf_puts(b, "; "); emit_local_ref(c, id, nm, b);
     /* the value: the slot's oint where the write answers one, its value
        where the write is plain (`(w = 7).to_s`) */
@@ -2733,7 +2730,6 @@ static int emit_local_ivar_write_expr(Compiler *c, int id, Buf *b, const NodeTab
     if (fz_cid >= 0) emit_frozen_obj_guard(c, fz_cid, g_self ? g_self : "self", b);
     buf_printf(b, "%s = ", ref2e);
     /* an open splice alias of the ivar (a plain String slot's) */
-    int sk = ivt2 == TY_STRING ? splice_store_open(c, id, b) : -1;
     Repr rp = repr_of(c, v);
     int wcid2, wiv2, wk2 = ivar_node_slot(c, id, &wcid2, &wiv2);
     /* an Integer or Float field with a nil bit, or an oint static */
@@ -2829,7 +2825,6 @@ static int emit_local_ivar_write_expr(Compiler *c, int id, Buf *b, const NodeTab
       emit_obj_upcast_prefix(c, ivt2, comp_ntype(c, v), b);
       emit_coerce(c, v, ivt2, CO_HOLD, "an instance variable write", b);
     }
-    splice_store_close(c, id, sk, b);
     emit_ivar_write_result(c, id, v, ivt2, ref2e, b);
     return 1;
   }

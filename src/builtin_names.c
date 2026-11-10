@@ -2298,8 +2298,6 @@ int strh_op(const char *n, int argc, int block) {
 
 int is_pop_name(const char *n) { return n && sp_streq(n, "pop"); }
 
-int is_first_name(const char *n) { return n && sp_streq(n, "first"); }
-
 int is_mul_op(const char *n) { return n && sp_streq(n, "*"); }
 
 int is_pow_op(const char *n) { return n && sp_streq(n, "**"); }

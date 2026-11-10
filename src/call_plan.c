@@ -599,9 +599,7 @@ static void cplan_resolve_call(Compiler *c, int id, CallPlan *p) {
   int bci = rk == NK_SelfNode ? class_body_self_ci(c, recv) : -1;   /* a class body's self */
   if (sci >= 0 || bci >= 0 || (rk == NK_ConstantReadNode || rk == NK_ConstantPathNode)) {
     int ci = sci >= 0 ? sci : bci >= 0 ? bci : const_node_class_index(c, recv);
-    /* (a `new`: the one the call reaches, as inference and the static
-       emitter take it: cplan_user_new) */
-    int mi = ci < 0 ? -1 : is_new_name(name) ? cplan_user_new(c, id, ci) : call_target(c, id, ci, name, CT_CMETHOD, NULL);
+    int mi = ci < 0 ? -1 : cplan_cmethod_target(c, id, ci, name);
     /* a package's native_func, which the constant calls in C directly; its
        def is for the module reached as a value */
     if (sci < 0 && comp_scope_native_twin(c, mi)) return;
@@ -2295,6 +2293,10 @@ static int user_new_at(Compiler *c, int id, int ci, int *unplaced) {
 }
 /* See call_plan.h. */
 int cplan_user_new(Compiler *c, int id, int ci) { return user_new_at(c, id, ci, NULL); }
+/* See call_plan.h. */
+int cplan_cmethod_target(Compiler *c, int id, int ci, const char *name) {
+  return is_new_name(name) ? cplan_user_new(c, id, ci) : call_target(c, id, ci, name, CT_CMETHOD, NULL);
+}
 /* Is call id a `new` (or a record class's `[]`) on a record class whose
    target the record cannot place (user_new_at)? The class is the
    receiver's constant, or self's in a class method (the copy's class for
@@ -2861,7 +2863,7 @@ const BuiltinClassOp *cplan_builtin_class_row(Compiler *c, int id, const char *c
   const char *a;
   for (int i = 0; cop && (a = builtin_ancestor_at(cls, i)); i++) {
     int ci = comp_class_index(c, a);
-    if (ci >= 0 && call_target(c, -1, ci, name, CT_CMETHOD, NULL) >= 0) return NULL;
+    if (ci >= 0 && cplan_cmethod_target(c, id, ci, name) >= 0) return NULL;
     if (sp_streq(a, cop->cls)) break;
   }
   return cop;

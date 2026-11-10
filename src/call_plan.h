@@ -1094,6 +1094,11 @@ int cplan_entry_finds(const Compiler *c, int e);
    class's `self.new`, so that inference, the emitter and the call plan
    name one method. */
 int cplan_user_new(Compiler *c, int id, int ci);
+/* The class method of program class ci that call id, named name, runs:
+   for a `new` the one cplan_user_new answers (none where the builtin
+   constructor answers a call before the class's `def self.new`), for any
+   other name the one call_target finds there. */
+int cplan_cmethod_target(Compiler *c, int id, int ci, const char *name);
 /* How a NameError or NoMethodError of call id names self, into buf:
    "class U" or "module M" in a class or module body and "main" at the top
    level (the record's self where the call runs, elab_self_at), else "an

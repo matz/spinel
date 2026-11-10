@@ -5,7 +5,8 @@
 # method writing the instance variable -- and leave the temp the old
 # object's only holder while it allocates. The temp was rooted only for a
 # right-hand side with an effect: the read after the key took a freed Array
-# ("undefined method '+' for nil").
+# ("undefined method '+' for nil"). The op-assign used as a value holds its
+# receiver in a temp of its own, typed or boxed, and had the same gap.
 def boxed(x) = x.respond_to?(:zzz) ? 0 : x
 
 def by_closure
@@ -62,3 +63,35 @@ def counts(s)
   c
 end
 p counts("spinel" * 50)
+
+# ...and the op-assign used as a value
+def ints = [1, 2, 3]
+def typed_val
+  a = ints
+  swap = -> { a = Array.new(1000) { |i| i * 2 }; Array.new(1000) { |i| "s#{i}" }.size % 3 }
+  r = (a[swap.call] += 7)
+  [r, a.size, a.sum]
+end
+p typed_val
+
+def boxed_val
+  a = boxed([1, 2, 3])
+  swap = -> { a = Array.new(1000) { |i| i * 2 }; Array.new(1000) { |i| "s#{i}" }.size % 3 }
+  r = (a[swap.call] += 7)
+  [r, a.size, a.sum]
+end
+p boxed_val
+
+class TallyVal
+  def initialize = @t = boxed({ "k" => 1 })
+  def key = (@t = boxed({ "k" => 100 }); Array.new(1000) { |i| "t#{i}" }; "k")
+  def run = [(@t[key] += 1), @t]
+end
+p TallyVal.new.run
+
+class HistVal
+  def initialize = @h = [0, 0, 0]
+  def swap = (@h = Array.new(1000) { |i| "x#{i}" }.map(&:size); 0)
+  def run = [(@h[swap] *= 3), @h.sum]
+end
+p HistVal.new.run

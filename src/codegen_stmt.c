@@ -26044,6 +26044,7 @@ const char *g_iow_key_ref = NULL;
 static char g_iow_recv_buf[32], g_iow_key_buf[32];
 
 enum { IOW_KEY_HASH, IOW_KEY_INT, IOW_KEY_RAW, IOW_KEY_BOXED };
+static int iow_recv_local_held(Compiler *c, int recv, int key, int v);
 
 static void iow_emit_recv(Compiler *c, int recv, Buf *b) {
   if (g_iow_recv_ref) { buf_puts(b, g_iow_recv_ref); return; }
@@ -26108,8 +26109,12 @@ int emit_index_opw_hoist(Compiler *c, int id, Buf *pre, int indent) {
   emit_indent(pre, indent);
   buf_printf(pre, "%s _t%d = %s;\n", c_type_name(rt), ta, rb.p ? rb.p : "0");
   /* a receiver or key that allocates has no other root while the fold below
-     runs, and the fold can collect */
-  if (subtree_may_allocate(nt, recv) || subtree_has_side_effect(c, nt_ref(nt, id, "value"))) {
+     runs, and the fold can collect; nor has one a key that runs code can
+     rebind (`(a[swap.call] += 7)`, a closure over `a`) while it allocates,
+     unless a plain local nothing rebinds still holds it */
+  int v = nt_ref(nt, id, "value");
+  if (subtree_may_allocate(nt, recv) || subtree_has_side_effect(c, v) ||
+      (!subtree_is_pure_read(c, argv[0]) && !iow_recv_local_held(c, recv, argv[0], v))) {
     emit_indent(pre, indent);
     buf_printf(pre, rr.kind == RK_BOXED ? "SP_GC_ROOT_RBVAL(_t%d);\n" : "SP_GC_ROOT(_t%d);\n", ta);
   }

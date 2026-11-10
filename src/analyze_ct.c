@@ -1458,7 +1458,7 @@ static int ct_fx_stmt(CtBind *b, Compiler *c, int list, int call, const CtFx *f)
    cls's, at p), grafted as a class_eval of that text at f's call is
    (sce_graft_text), into *ids (*n): 0 where it may not run there. Only a
    class's body, not a module's. Only defs of
-   self's methods, each unasked by a folded definition query and none a
+   self's methods (and `NAME = <literal>`, the text's const_set), each unasked by a folded definition query and none a
    hook (desugar_included_hooks reads those), nor a class method `extend
    Enumerable` routes (desugar_extend_enumerable reads those), nor one
    singleton_method_added would see. In their bodies: no class, module,
@@ -1468,6 +1468,15 @@ static int ct_fx_stmt(CtBind *b, Compiler *c, int list, int call, const CtFx *f)
    write (desugar_reopened_op_write); no call that loads, defines, reflects
    or opens a singleton class; and none of the other shapes a step before
    the walk reads (host_prewalk_shape). */
+/* A literal a text's constant write may hold: one that names nothing */
+static int ct_text_const_lit(const NodeTable *nt, int v) {
+  switch (v >= 0 ? nt_kind(nt, v) : NK_NONE) {
+  case NK_IntegerNode: case NK_FloatNode: case NK_StringNode: case NK_SymbolNode:
+  case NK_NilNode: case NK_TrueNode: case NK_FalseNode:
+    return 1;
+  default: return 0;
+  }
+}
 static int ct_text_stmts(Compiler *c, HostStep *h, int frame, int cls, LoadPoint p, const CtFx *f, int **ids, int *n) {
   NodeTable *nt = (NodeTable *)c->nt;
   *ids = NULL; *n = 0;
@@ -1476,6 +1485,17 @@ static int ct_text_stmts(Compiler *c, HostStep *h, int frame, int cls, LoadPoint
   for (int i = 0; i < *n && ok; i++) {
     int d = (*ids)[i], rv = nt_ref(nt, d, "receiver");
     const char *dn = nt_str(nt, d, "name");
+    /* `NAME = <literal>` is the text's const_set: the core's at the call,
+       with no const_added hook (ct_macro_const_set_ok), its value a
+       literal that names nothing (#9898) */
+    if (nt_kind(nt, d) == NK_ConstantWriteNode) {
+      ok = dn && ct_text_const_lit(nt, nt_ref(nt, d, "value")) &&
+           elab_method_at(c, cls, "const_set", 1, p, NULL) == ELAB_NO &&
+           elab_method_at(c, cls, "const_added", 1, p, NULL) == ELAB_NO;
+      for (int k = 0; k < i && ok; k++)
+        ok = !(nt_kind(nt, (*ids)[k]) == NK_ConstantWriteNode && ct_eq(nt_str(nt, (*ids)[k], "name"), dn));
+      continue;
+    }
     ok = nt_kind(nt, d) == NK_DefNode && dn && (rv < 0 || nt_kind(nt, rv) == NK_SelfNode) &&
          ct_name_unasked(c, dn) && !is_definition_hook_name(dn) &&
          (rv < 0 || (extend_enumerable_name_index(dn) < 0 && elab_method_at(c, cls, "singleton_method_added", 1, p, NULL) == ELAB_NO));
@@ -1486,9 +1506,10 @@ static int ct_text_stmts(Compiler *c, HostStep *h, int frame, int cls, LoadPoint
     const char *nm = nt_str(nt, id, "name");
     for (int t = 0; t < *n && !top; t++) top = (*ids)[t] == id;
     switch (nt_kind(nt, id)) {
+    case NK_ConstantWriteNode: ok = top; break;   /* (a text const_set, above) */
     case NK_ClassNode: case NK_ModuleNode: case NK_SingletonClassNode: case NK_AliasMethodNode:
     case NK_AliasGlobalVariableNode: case NK_UndefNode:
-    case NK_ConstantReadNode: case NK_ConstantPathNode: case NK_ConstantWriteNode: case NK_ConstantOperatorWriteNode:
+    case NK_ConstantReadNode: case NK_ConstantPathNode: case NK_ConstantOperatorWriteNode:
     case NK_ConstantOrWriteNode: case NK_ConstantAndWriteNode: case NK_ConstantTargetNode:
       ok = 0;
       break;
@@ -2014,6 +2035,9 @@ int ct_macro_form(Compiler *c, int call, int list, int j) {
   ct_macro_drop(nt, &b, &e, tid, tn, 1);
   /* the call leaves the program; its statement is the first one's */
   bb = nt_arr(nt, list, "body", &bn);
+  /* its constant writes (a const_set's, a text's) are the source's from
+     now on, as a table loop's are (ct_table_loop_form) */
+  for (int k = j; k < j + nout && k < bn; k++) elab_note_spliced_const_write(c, bb[k]);
   int first = bb[j];
   elab_walk_replace(c, call, first);
   nt_subtree_blank(nt, call);

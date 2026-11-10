@@ -18721,7 +18721,7 @@ int infer_block_params(Compiler *c) {
     int yields_self = is_tap_alias(cname);
     /* a program's method on a root class that the plan binds takes the
        block: its own yield types the parameter, not the receiver */
-    if (yields_self && cplan_root_reopen_call(c, id, cplan_user_fresh(c, id), 0)) continue;
+    if (yields_self && cplan_root_reopen_call(c, id, cplan_user_fresh(c, id))) continue;
     /* An untyped receiver leaves the param untyped too -- body usage is what
        types it there (`[].tap { |a| a << 1 }` gets its array kind from the
        push). The SLOT still has to exist: codegen binds the param whether or
@@ -18995,7 +18995,7 @@ int infer_block_params(Compiler *c) {
     /* then / yield_self: block param receives the receiver value */
     if ((is_then_alias(name)) && p0) {
       /* (a program's method the plan binds yields it: its yield types it) */
-      if (cplan_root_reopen_call(c, id, cplan_user_fresh(c, id), 0)) continue;
+      if (cplan_root_reopen_call(c, id, cplan_user_fresh(c, id))) continue;
       Scope *bs = comp_scope_of(c, block);
       LocalVar *plv = scope_local(bs, p0);
       if (plv && lv_is_handle_of(c, plv, rt)) continue;

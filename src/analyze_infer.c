@@ -3336,7 +3336,7 @@ static int an_reopen_head_call(Compiler *c, int id, int recv, TyKind *out) {
   TyKind hrt = infer_type(c, recv);
   const CallPlan *p = hrt != TY_POLY && hrt != TY_UNKNOWN && !nt_int(c->nt, id, "builtin_only", 0) ? cplan_user_fresh(c, id) : NULL;
   if (p && p->mi >= 0 && p->via == UC_REOPEN && hrt == TY_ENUMERATOR) *out = an_user_call(c, id, p->mi, p->via, p->owner_ci);
-  else if (p && (p = cplan_root_reopen_call(c, id, p, 0))) *out = an_root_reopen_call(c, id, p);
+  else if (p && (p = cplan_root_reopen_call(c, id, p))) *out = an_root_reopen_call(c, id, p);
   else return 0;
   return 1;
 }

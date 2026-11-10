@@ -201,7 +201,7 @@ int cplan_root_reopen_owner(Compiler *c, const CallPlan *p) {
   return p->via == UC_REOPEN && cplan_is_root_class(c, p->owner_ci);
 }
 /* See call_plan.h. */
-const CallPlan *cplan_root_reopen_call(Compiler *c, int id, const CallPlan *p, int public_only) {
+const CallPlan *cplan_root_reopen_call(Compiler *c, int id, const CallPlan *p) {
   const char *name = nt_str(c->nt, id, "name");
   if (!name || nt_int(c->nt, id, "builtin_only", 0)) return NULL;
   if (p->mi < 0 || !cplan_root_reopen_owner(c, p)) return NULL;
@@ -211,11 +211,15 @@ const CallPlan *cplan_root_reopen_call(Compiler *c, int id, const CallPlan *p, i
   TyKind rt = recv >= 0 ? comp_ntype(c, recv) : TY_UNKNOWN;
   int exc = rt == TY_EXCEPTION || (ty_is_object(rt) && class_is_exc_subclass(c, ty_object_class(rt)));
   if (exc && cplan_exc_object_method(c, id, name) >= 0) return NULL;
-  public_only |= exc;   /* (its exception arms refuse a private one themselves) */
-  /* (a private or protected one is refused, or allowed, by the visibility
-     arms, which see the receiver's class: the emitter leaves it to them) */
+  /* A private or protected one is refused, or allowed, by the visibility
+     arms, which see the receiver's class (an exception's arms refuse it
+     themselves), so every reader leaves it to them where a call of the name
+     would otherwise reach a builtin's method: Kernel's tap, dup, frozen?.
+     One no builtin has is typed by the program's method, as before. */
   int mc = c->scopes[p->mi].class_id;
-  return mc >= 0 && (!public_only || comp_method_vis_declared(c, mc, name, NULL) == SP_VIS_PUBLIC) ? p : NULL;
+  if (mc < 0) return NULL;
+  if ((exc || builtin_answers_ahead_of("Object", name, NULL)) && comp_method_vis_declared(c, mc, name, NULL) != SP_VIS_PUBLIC) return NULL;
+  return p;
 }
 
 /* A method the program adds to Object under the name of a class-gated

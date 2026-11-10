@@ -95,10 +95,10 @@ typedef struct {
 int cplan_root_reopen_owner(Compiler *c, const CallPlan *p);
 /* ...and call id's plan p where it is such a binding that answers the call
    ahead of the builtin arms (not an alias that captured the builtin's
-   method, nor an exception accessor picked at run time, nor, with
-   public_only (the emitter's), a private or protected method), else NULL. The
+   method, nor an exception accessor picked at run time, nor a private or
+   protected method of a name a builtin has), else NULL. The
    analysis asks cplan_user_fresh's plan, its types still moving. */
-const CallPlan *cplan_root_reopen_call(Compiler *c, int id, const CallPlan *p, int public_only);
+const CallPlan *cplan_root_reopen_call(Compiler *c, int id, const CallPlan *p);
 /* Does any scope define an instance method `name` every object answers: the
    top level's, or Object's, Kernel's or BasicObject's own? The name-level
    twin of cplan_root_reopen, for the desugars that run before types exist

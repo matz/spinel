@@ -2791,7 +2791,7 @@ static int a_block_forwarded_to_proc(Compiler *c, int id) {
     if (ty_is_object(rt)) mi = call_target(c, id, cls = ty_object_class(rt), name, 0, NULL);
     /* ...and a method of the root classes every receiver reaches (the plan's) */
     if (mi < 0) {
-      const CallPlan *rp = cplan_root_reopen_call(c, id, cplan_user_fresh(c, id), 0);
+      const CallPlan *rp = cplan_root_reopen_call(c, id, cplan_user_fresh(c, id));
       if (rp) mi = rp->mi;
     }
   }

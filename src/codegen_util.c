@@ -677,8 +677,11 @@ int subtree_allocates(const NodeTable *nt, int id) {
     return 0;
   }
   /* A Rational literal past sp_int is built as the big Rational each time it
-     is read (sp_box_brat); any other is an sp_Rational value. */
-  if (nt_kind(nt, id) == NK_RationalNode) return nt_int(nt, id, "rat_big", 0) != 0;
+     is read (sp_box_brat); any other is an sp_Rational value, boxed each
+     time it is read where --int-overflow=promote holds it boxed
+     (sp_promote_rat_box): `x - 0.5r` left x's fresh Rational unrooted. */
+  if (nt_kind(nt, id) == NK_RationalNode)
+    return nt_int(nt, id, "rat_big", 0) != 0 || (g_promote_mode && an_rat_boxed(id));
   int nr = nt_num_refs(nt, id);
   for (int i = 0; i < nr; i++)
     if (subtree_allocates(nt, nt_ref_at(nt, id, i))) return 1;

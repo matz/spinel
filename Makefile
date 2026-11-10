@@ -2507,7 +2507,8 @@ gc-phases-test: $(SPINEL) $(SP_RT_LIB) $(SP_RT_MT_LIB) $(SPINEL_TIMEOUT)
 # and at level 2 print the poison and abort naming the root phase, with a
 # threshold floor asked for beside it too: the level is over the floors. Then the
 # other half of the contract: programs that root what they use answer the same
-# at level 2, alone and beside the full verifier, on both runtimes.
+# at level 2, alone and beside the full verifier, on both runtimes. A
+# promote_* program is compiled in the mode its answer is defined in.
 GC_STRESS_TESTS = $(shell grep -l '^\# spinel: gc-stress$$' test/*.rb)
 gc-stress-test: $(SPINEL) $(SP_RT_LIB) $(SP_RT_MT_LIB) $(SPINEL_TIMEOUT)
 	@tmp=$$(mktemp -d /tmp/spinel-gcstress.XXXXXX); ok=1; \
@@ -2529,8 +2530,8 @@ gc-stress-test: $(SPINEL) $(SP_RT_LIB) $(SP_RT_MT_LIB) $(SPINEL_TIMEOUT)
 	  done; \
 	else echo "gc-stress-test: FAIL (host C did not compile)"; sed -n 1,6p "$$tmp/cc.err"; ok=0; fi; \
 	for src in $(GC_STRESS_TESTS); do \
-	  bn=$$(basename "$$src" .rb); \
-	  $(SPINEL) "$$src" -o "$$tmp/$$bn" >"$$tmp/cc.out" 2>&1; rc=$$?; \
+	  bn=$$(basename "$$src" .rb); fl=; case $$bn in promote_*) fl=--int-overflow=promote;; esac; \
+	  $(SPINEL) $$fl "$$src" -o "$$tmp/$$bn" >"$$tmp/cc.out" 2>&1; rc=$$?; \
 	  if [ $$rc -ne 0 ]; then \
 	    echo "gc-stress-test: FAIL ($$bn: compile, exit $$rc)"; tail -5 "$$tmp/cc.out"; ok=0; continue; fi; \
 	  for v in 0 1; do \

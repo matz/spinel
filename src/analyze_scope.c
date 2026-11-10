@@ -2861,6 +2861,7 @@ int resolve_symbol_list(Compiler *c, int node, const char **out, int cap, int de
 void register_struct_members(Compiler *c, ClassInfo *cls, int val) {
   const NodeTable *nt = c->nt;
   cls->is_struct = 1;
+  c->has_record = 1;
   if (class_def_record_is_data(nt, val)) cls->is_data = 1;
   int args = nt_ref(nt, val, "arguments");
   int an = 0;

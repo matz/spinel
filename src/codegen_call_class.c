@@ -81,27 +81,37 @@ static int emit_cv_new_arm(Compiler *c, int id, int ci, int argc, const int *atm
   return 1;
 }
 
+static void emit_cv_positional_new_arm(Compiler *c, int id, int ci, int argc, const int *argv, const int *atmp, int rt2,
+                                       CtorArityArms *aerr, Buf *b);
 /* `k[args]` on a Class value (cplan_cv_ctor): an arm per Array or Hash
-   subclass the fact says it builds, and for Array and Hash themselves
-   (their reopenings, if the program has them, by index and by builtin id);
-   any other class has no `[]`. The result is boxed. */
+   subclass the fact says it builds, the arm of `new` for each Struct or
+   Data class (cplan_cv_ctor's `[]` is their `new`, cplan_as_new), and for
+   Array and Hash themselves (their reopenings, if the program has them, by
+   index and by builtin id); any other class has no `[]`. The result is
+   boxed. */
 static int emit_class_value_aref(Compiler *c, int id, Buf *b, int recv, int argc, const int *argv) {
   if (cplan_cv_ctor(c, id) != CVC_AREF || repr_of(c, id).kind != RK_BOXED) return 0;
   int kt = ++g_tmp, rt2 = ++g_tmp;
   buf_printf(b, "({ sp_Class _t%d = ", kt); emit_expr(c, recv, b); buf_puts(b, "; ");
+  int sv_cbt = hoist_ctor_block(c, id, b);
   Buf av; memset(&av, 0, sizeof av);
   buf_puts(&av, argc ? "(sp_RbVal[]){" : "NULL");
+  int *atmp = calloc((size_t)(argc > 0 ? argc : 1), sizeof(int));
+  if (!atmp) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   for (int a = 0; a < argc; a++) {
-    int t = ++g_tmp;
-    buf_printf(b, "sp_RbVal _t%d = ", t); emit_boxed(c, argv[a], b);
-    buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); ", t);
-    buf_printf(&av, "%s_t%d", a ? ", " : "", t);
+    atmp[a] = ++g_tmp;
+    buf_printf(b, "sp_RbVal _t%d = ", atmp[a]); emit_boxed(c, argv[a], b);
+    buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); ", atmp[a]);
+    buf_printf(&av, "%s_t%d", a ? ", " : "", atmp[a]);
   }
   if (argc) buf_puts(&av, "}");
   char an[24]; snprintf(an, sizeof an, "%d", argc);
   emit_class_value_new_switch(c, rt2, kt, 0, b);
+  CtorArityArms aerr = {0};
   for (int ci = 0; ci < c->nclasses; ci++)
     if (cplan_cv_ctor_builds(c, id, ci)) emit_cv_ctor_arm(c, id, ci, an, av.p, rt2, b);
+    else if (cplan_as_new(c, id, ci)) emit_cv_positional_new_arm(c, id, ci, argc, argv, atmp, rt2, &aerr, b);
+  ctor_arity_emit(&aerr, b);
   /* Array and Hash themselves: their reopening's class index when the
      program has one, else the builtin id */
   for (int hash = 0; hash < 2; hash++) {
@@ -111,7 +121,8 @@ static int emit_class_value_aref(Compiler *c, int id, Buf *b, int recv, int argc
   }
   buf_printf(b, "default: sp_raise_nomethod(sp_sprintf(\"undefined method '[]' for class %%s\", sp_class_to_s(_t%d))); break; } _t%d; })",
              kt, rt2);
-  free(av.p);
+  g_ctor_blk_tmp = sv_cbt;
+  free(av.p); free(atmp);
   return 1;
 }
 

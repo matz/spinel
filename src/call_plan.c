@@ -2274,7 +2274,7 @@ int cplan_class_row(Compiler *c, int id, int recv, const char *name) {
 
 CvCtor cplan_cv_ctor_shape(Compiler *c, int id) {
   const NodeTable *nt = c->nt;
-  if (!c->has_arysub || nt_kind(nt, id) != NK_CallNode) return CVC_NONE;
+  if ((!c->has_arysub && !c->has_record) || nt_kind(nt, id) != NK_CallNode) return CVC_NONE;
   const char *nm = nt_str(nt, id, "name");
   int recv = nt_ref(nt, id, "receiver"), argc = 0;
   const int *argv = call_args(nt, id, &argc);
@@ -2292,12 +2292,16 @@ CvCtor cplan_cv_ctor_shape(Compiler *c, int id) {
 }
 
 CvCtor cplan_cv_ctor(Compiler *c, int id) {
+  if ((!c->has_arysub && !c->has_record) || nt_kind(c->nt, id) != NK_CallNode) return CVC_NONE;
+  int recv = nt_ref(c->nt, id, "receiver");
+  /* a `[]` on any other type than a Class is an index: the cheap answer for
+     most `[]`, ahead of the shape's receiver walks */
+  if (recv < 0 || (is_aref_name(nt_str(c->nt, id, "name")) && infer_type(c, recv) != TY_CLASS)) return CVC_NONE;
   CvCtor f = cplan_cv_ctor_shape(c, id);
   if (f == CVC_NONE) return f;
-  int recv = nt_ref(c->nt, id, "receiver");
   /* a constant holds a class value where its slot is typed one
-     (class_recv_is_dynamic), and a `[]` on any other type is an index */
-  if (!class_recv_is_dynamic(c, recv) || (f == CVC_AREF && infer_type(c, recv) != TY_CLASS)) return CVC_NONE;
+     (class_recv_is_dynamic) */
+  if (!class_recv_is_dynamic(c, recv)) return CVC_NONE;
   return f;
 }
 
@@ -2309,6 +2313,14 @@ int cplan_cv_ctor_class(Compiler *c, CvCtor f, int k) {
 
 int cplan_cv_ctor_builds(Compiler *c, int id, int k) {
   return cplan_cv_ctor_class(c, cplan_cv_ctor(c, id), k) && poly_cls_value_reaches(c, id, k);
+}
+
+int cplan_as_new(Compiler *c, int id, int k) {
+  if (nt_kind(c->nt, id) != NK_CallNode) return 0;
+  const char *nm = nt_str(c->nt, id, "name");
+  if (is_new_name(nm)) return 1;
+  if (!is_aref_name(nm) || (k < 0 ? !c->has_record : k >= c->nclasses || !c->classes[k].is_struct)) return 0;
+  return cplan_cv_ctor(c, id) == CVC_AREF;
 }
 
 int cplan_own_class_reflection(Compiler *c, int id, int recv, const char *name) {

@@ -11409,21 +11409,27 @@ static int raise_own_exception_ok(Compiler *c, int id, int ci) {
    and every other value keeps the raise as written (Exception.exception is
    `new`, and a value that is not a class keeps its TypeError). The test
    asks identity, so no `==` of the program runs. A k that is not a variable
-   read is held in a new local first, so it runs once. Where one of the
-   classes cannot take the call here (see raise_own_exception_ok), the
-   raise stays as written. */
+   read is held in a new local first, so it runs once. */
 static int raise_value_own_exception(Compiler *c, int id, int npos) {
   NodeTable *nt = (NodeTable *)c->nt;
   int ncand = 0;
   const PolyCand *cands = comp_cmethod_candidates(c, "exception", &ncand);
   if (ncand <= 0) return 0;
+  /* the test is the builtin identity: a program's own `equal?` keeps the
+     raise as written */
+  if (raise_name_program_defined(c, "equal?")) return 0;
   int *own = malloc(sizeof(int) * (size_t)ncand);
   if (!own) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  /* a class whose method cannot take the call here (a module, a class
+     with no name, one raise_own_exception_ok turns down) has no test of
+     its own: it keeps the raise as written */
   int nown = 0;
-  for (int q = 0; q < ncand; q++) own[nown++] = cands[q].cls;
-  for (int q = 0; q < nown; q++)
-    if (comp_class_is_module(c, &c->classes[own[q]]) || !class_ruby_name(c, own[q]) ||
-        !raise_own_exception_ok(c, id, own[q])) { free(own); return 0; }
+  for (int q = 0; q < ncand; q++) {
+    int k = cands[q].cls;
+    if (!comp_class_is_module(c, &c->classes[k]) && class_ruby_name(c, k) && raise_own_exception_ok(c, id, k))
+      own[nown++] = k;
+  }
+  if (nown == 0) { free(own); return 0; }
   int base = nt->count;
   int args = nt_ref(nt, id, "arguments"), ac = 0;
   const int *av = nt_arr(nt, args, "arguments", &ac);

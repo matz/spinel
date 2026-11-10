@@ -21824,6 +21824,15 @@ static int send_alias_leaf_followable(RodIndex *x, const NodeTable *nt, const ch
   }
   return q != NULL && (!top || sp_streq(q, leaf));
 }
+/* Does statement `st` run before the alias? Node ids are one file's own
+   order, and under the inline load model the spliced program's. Under
+   --load-model=graph two files run in the load graph's order, which the
+   load record knows only after this pass (prog_order): a statement of
+   another file is not taken. */
+static int send_alias_runs_before(const NodeTable *nt, int st, int alias) {
+  if (st >= alias) return 0;
+  return nt->nfile_roots <= 0 || nt_int(nt, st, "node_file", 0) == nt_int(nt, alias, "node_file", 0);
+}
 /* Does statement `st` of a class or module body bind instance method
    `meth`: a def, an alias, an attr_reader / attr_accessor / attr, or a
    define_method of a literal name? */
@@ -21852,7 +21861,7 @@ static int send_alias_stmt_defines(const NodeTable *nt, int st, const char *meth
    when the alias runs: its own, or one of a superclass or a module that cls
    or a superclass includes or prepends. The walk goes by constant name
    (send_alias_leaf_followable), and takes only a definition or an include
-   that comes before the alias in the source (the node order). A path it cannot follow (a computed superclass, a module
+   that runs before the alias (send_alias_runs_before). A path it cannot follow (a computed superclass, a module
    that is not a constant) adds nothing: the alias then names Kernel's
    method, as before. */
 static int send_alias_reaches_program_method(const NodeTable *nt, const char *cls, const char *meth, int alias, int n0) {
@@ -21874,7 +21883,7 @@ static int send_alias_reaches_program_method(const NodeTable *nt, const char *cl
       int body = class_def_body(nt, m);
       int n = 0; const int *st = body >= 0 && nt_kind(nt, body) == NK_StatementsNode ? nt_arr(nt, body, "body", &n) : NULL;
       for (int k = 0; k < n && !found; k++) {
-        if (st[k] >= alias) continue;
+        if (!send_alias_runs_before(nt, st[k], alias)) continue;
         if (send_alias_stmt_defines(nt, st[k], meth)) { found = 1; break; }
         if (nt_kind(nt, st[k]) != NK_CallNode || nt_ref(nt, st[k], "receiver") >= 0) continue;
         const char *an = nt_str(nt, st[k], "name");

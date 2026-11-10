@@ -2277,6 +2277,7 @@ int cg_flat_seen(Compiler *c, int rk, const char *cgn) {
    or NULL with *cls the class, -1 when there is neither. RK is R's class
    (CG_NONE, CG_OBJECT, CG_UNTABLED when it has none, is Object not reopened,
    or is a name the class table lacks). */
+static int g_cgr_superclass_only;   /* const_get_resolve_at's walk of the superclasses alone */
 const char *const_get_resolve(Compiler *c, int rk, const char *cgn, int *cls) {
   *cls = -1;
   /* A qualified path ("A::B", "::A::B") is read segment by segment: each
@@ -2302,6 +2303,17 @@ const char *const_get_resolve(Compiler *c, int rk, const char *cgn, int *cls) {
   /* the common case, one constant of that leaf and no class: no body scan */
   if (cv && cv->type != TY_UNKNOWN && !qc_leaf_qualified(cgn) && !class_leaf_any(c, cgn) &&
       cg_flat_seen(c, rk, cgn)) return cgn;
+  /* R's ancestors in CRuby's order: the modules R prepends and includes
+     come before its superclass. Past them (Object), the superclass walk. */
+  int anc[256], nanc = g_cgr_superclass_only ? 0 : const_lookup_order(c, rk, anc, 256);
+  for (int i = 0; i < nanc; i++) {
+    int k = anc[i];
+    const char *own = const_value_owned_key(c, k, cgn);
+    LocalVar *ov = own ? comp_const(c, own) : NULL;
+    if (ov && ov->type != TY_UNKNOWN) return own;
+    int nk = class_nested_leaf(c, k, cgn);
+    if (nk >= 0) { *cls = nk; return NULL; }
+  }
   for (int k = rk, n = 0; k >= 0 && n < 64; k = c->classes[k].parent, n++) {
     const char *own = const_value_owned_key(c, k, cgn);
     if (own) {
@@ -2321,6 +2333,47 @@ const char *const_get_resolve(Compiler *c, int rk, const char *cgn, int *cls) {
   *cls = comp_class_index(c, cgn);
   if (!cv || cv->type == TY_UNKNOWN) return NULL;
   return *cls < 0 ? cgn : NULL;
+}
+/* Does `recv.const_get(:N)`, with recv a class value known only
+   at run time, need a check of recv's class before it reads slot KEY? Yes
+   when some class of the program does not see N while every class that
+   does reads that same slot, and no builtin or top-level path sees it:
+   CRuby's NameError for the others. A class whose N is another slot or a
+   class keeps the old read (the typing chose KEY's type). */
+int const_get_value_guard(Compiler *c, int recv, int rk, const char *cgn, const char *key, int inherit) {
+  const NodeTable *nt = c->nt;
+  if (rk != CG_NONE || !inherit || !cgn || !key || strstr(cgn, "::") || recv < 0) return 0;
+  NodeKind k0 = nt_kind(nt, recv);
+  if (k0 == NK_ConstantReadNode || k0 == NK_ConstantPathNode || k0 == NK_SelfNode) return 0;
+  TyKind rt = infer_type(c, recv);
+  if (rt != TY_CLASS && rt != TY_POLY) return 0;
+  if (const_name_resolves_top_level(c, cgn) || cg_flat_seen(c, CG_UNTABLED, cgn)) return 0;
+  int miss = 0;
+  for (int k = 0; k < c->nclasses; k++) {
+    if (!c->classes[k].name) continue;
+    int kc = -1;
+    const char *kk = const_get_resolve(c, k, cgn, &kc);
+    if (kk ? !sp_streq(kk, key) : kc >= 0) return 0;
+    if (!kk) miss = 1;
+  }
+  return miss;
+}
+/* const_get_resolve for the call id: R's mixins come before its superclass
+   only where the record proves each ran before the call (no
+   ELAB_GAIN_INHERITED left unsettled). Else, where the two walks part, the
+   superclass walk's answer is kept: an include written after the call has
+   not run when it does. */
+const char *const_get_resolve_at(Compiler *c, int id, int rk, const char *cgn, int *cls) {
+  const char *k = const_get_resolve(c, rk, cgn, cls);
+  if (id < 0 || rk < 0 || rk >= c->nclasses || !cgn || strstr(cgn, "::")) return k;
+  int ocls = -1;
+  g_cgr_superclass_only = 1;
+  const char *ok = const_get_resolve(c, rk, cgn, &ocls);
+  g_cgr_superclass_only = 0;
+  if (ocls == *cls && (ok == k || (ok && k && sp_streq(ok, k)))) return k;
+  if (!(elab_class_unsettled(c, rk, ELAB_GAIN_INHERITED, id, 0) & ELAB_GAIN_INHERITED)) return k;
+  *cls = ocls;
+  return ok;
 }
 /* Does the program know constant N, for `R.const_defined?(:N)` (R's class,
    CG_NONE for none): a constant or class keyed N, a wellknown one, or the
@@ -2502,6 +2555,24 @@ static int cpv_order(Compiler *c, int k, CpvEnt *out, int cap, int depth, int st
   }
   free(seq);
   return own < 0 ? -1 : n;
+}
+/* Class or module k's constant lookup order, as class-table entries in
+   `out` (k's own first, Object and above left out): cpv_order's own and
+   module entries. 0 when k is no class of the table or the order does not
+   fit. */
+int const_lookup_order(Compiler *c, int k, int *out, int cap) {
+  if (k < 0 || k >= c->nclasses || cap <= 0) return 0;
+  enum { CAP = 1024 };
+  CpvEnt *L = malloc(sizeof *L * CAP);
+  if (!L) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  int n = cpv_order(c, k, L, CAP, 0, 0), m = 0;
+  for (int i = 0; i < n; i++) {
+    if (L[i].kind == CPV_HEAD) continue;
+    if (m == cap) { m = 0; break; }
+    out[m++] = L[i].m;
+  }
+  free(L);
+  return m;
 }
 static int cpv_walk(Compiler *c, int k, const char *nm, const int *cands, int ncands, int cls) {
   int own = cls ? class_nested_leaf(c, k, nm) : cpv_own(c, k, nm, cands, ncands);

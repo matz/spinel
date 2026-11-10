@@ -2303,6 +2303,9 @@ int        const_seen_by_class(Compiler *c, int k, const char *cgn);
 LocalVar  *const_defined_slot(Compiler *c, int rk, const char *cgn);
 int        const_defined_any_class(Compiler *c, const char *cgn);
 const char *const_key_leaf(const char *key);
+int        const_lookup_order(Compiler *c, int k, int *out, int cap);
+const char *const_get_resolve_at(Compiler *c, int id, int rk, const char *cgn, int *cls);
+int        const_get_value_guard(Compiler *c, int recv, int rk, const char *cgn, const char *key, int inherit);
 int        const_path_value_const(Compiler *c, int k, const char *nm, const int *cands, int ncands); /* what `m::NM` reads for m = class K: K's chain, not Object's (-1: NameError) */
 const LocalVar *const_value_path_top(Compiler *c, const char *nm); /* the top-level NM `Object::NM` reads through a value, or NULL */
 int        const_path_value_class(Compiler *c, int k, const char *nm); /* the class nested as NM in K's chain, -1 for none */

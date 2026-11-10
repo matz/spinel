@@ -3957,11 +3957,13 @@ int g_loop_uncounted = 0, g_poll_loop_nest = 0;
    loop may not end; `nest`, how many loops of its function hold the body,
    the loop's own included. */
 void emit_loop_polls(Compiler *c, int body, Buf *b, int indent, int uncounted, int nest) {
-  if (g_uses_threads) { emit_indent(b, indent); buf_printf(b, "if (SP_UNLIKELY(SP_SAFEPOINT_POLL())) sp_safepoint()%s;\n", hc_mark()); }
+  /* an array's walk an enclosing loop polls for (hcv_begin) */
+  int quiet = g_loop_quiet; g_loop_quiet = 0;
+  if (g_uses_threads && !quiet) { emit_indent(b, indent); buf_printf(b, "if (SP_UNLIKELY(SP_SAFEPOINT_POLL())) sp_safepoint()%s;\n", hc_mark()); }
   /* and for pending finalizers (sp_gc.h), when the program defines any. A
      finalizer is Ruby code that may resize an array this loop has cached, so
      the cache reloads after one runs, as after a safepoint. */
-  if (g_uses_finalizers) { emit_indent(b, indent); buf_printf(b, "if (SP_UNLIKELY(SP_ATOMIC_LOAD(&sp_fin_pending_flag, __ATOMIC_RELAXED))) sp_fin_run_pending()%s;\n", hc_mark()); }
+  if (g_uses_finalizers && !quiet) { emit_indent(b, indent); buf_printf(b, "if (SP_UNLIKELY(SP_ATOMIC_LOAD(&sp_fin_pending_flag, __ATOMIC_RELAXED))) sp_fin_run_pending()%s;\n", hc_mark()); }
   /* and for a delivered Signal.trap, Ruby code as a finalizer is */
   if (sig_polls() && (uncounted || nest == 1 || loop_body_polls_alone(c, body)) && !poll_in_pure(c, body)) {
     emit_indent(b, indent); buf_printf(b, "%s%s;\n", sig_poll_stmt(), hc_mark());
@@ -5902,12 +5904,20 @@ static int iter_range_upto_arms(Compiler *c, int id, Buf *b, int indent, const N
       emit_indent(b, indent); buf_puts(b, "}\n");
       return 1;
     }
+    /* other arrays read at the counter, in place (hcv_begin): an ascending
+       walk from 0 or past it, with an end, counts in [0, last + 1) */
+    char rtrip[200];
+    snprintf(rtrip, sizeof rtrip, "_t%d > 0 && _t%d.first >= 0 && !_t%d.noend && _t%d < INTPTR_MAX ? _t%d + 1 : INTPTR_MAX",
+             ts, t, t, te, te);
+    char rbic[300]; snprintf(rbic, sizeof rbic, "lv_%s", p0);
+    void *hcv = hcv_begin(c, id, body, block, p0_orig, rbic, rtrip, -1, 0, &b);
     { Buf v; memset(&v, 0, sizeof v); char f[40], s[32], l[32];
       buf_printf(&v, "lv_%s", p0); snprintf(f, sizeof f, "_t%d.first", t);
       snprintf(s, sizeof s, "_t%d", ts); snprintf(l, sizeof l, "_t%d", te);
       emit_range_walk_head(b, indent, v.p, 0, f, s, l); free(v.p); }
     emit_loop_body(c, body, b, indent + 1);
     emit_indent(b, indent); buf_puts(b, "}\n");
+    hcv_end(c, hcv, indent);
     return 1;
   }
 
@@ -5950,6 +5960,16 @@ static int iter_range_upto_arms(Compiler *c, int id, Buf *b, int indent, const N
       free(hi.p); memset(&hi, 0, sizeof hi);
       buf_printf(&hi, "_t%d", th);
     }
+    /* other arrays read at the counter, in place (hcv_begin): counting up
+       from a literal 0 or past it to an Integer limit, in [0, limit + 1) */
+    void *hcv = NULL;
+    if (up && p0 && comp_ntype(c, argv[0]) != TY_FLOAT && nt_kind(nt, recv) == NK_IntegerNode &&
+        !nt_str(nt, recv, "bigval") && nt_int(nt, recv, "value", -1) >= 0 && hi.p) {
+      char utrip[200];
+      snprintf(utrip, sizeof utrip, "%s < INTPTR_MAX ? %s + 1 : INTPTR_MAX", hi.p, hi.p);
+      char ubic[300]; snprintf(ubic, sizeof ubic, "lv_%s", p0);
+      hcv = hcv_begin(c, id, body, block, p0_orig, ubic, utrip, -1, 0, &b);
+    }
     emit_indent(b, indent);
     if (comp_ntype(c, argv[0]) == TY_FLOAT) {
       buf_printf(b, "for (sp_int _t%d = ", ti); buf_puts(b, lo.p);
@@ -5972,6 +5992,7 @@ static int iter_range_upto_arms(Compiler *c, int id, Buf *b, int indent, const N
       emit_iter_bind_rest(c, block, rs_np, TY_INT, rs_es, b, indent + 1); }
     emit_loop_body(c, body, b, indent + 1);
     emit_indent(b, indent); buf_puts(b, "}\n");
+    hcv_end(c, hcv, indent);
     free(lo.p); free(hi.p);
     return 1;
   }
@@ -6614,6 +6635,26 @@ static void emit_zip_many_block(Compiler *c, int recv, int block, int body,
   emit_indent(b, indent); buf_puts(b, "}\n");
 }
 
+/* Is `t` a temp's name (`_t12`): a receiver hoist_loop_recv bound ahead
+   of the loop, which no pass assigns again? */
+static int iter_text_is_temp(const char *t) {
+  return t && t[0] == '_' && t[1] == 't' && t[2] >= '0' && t[2] <= '9' && strspn(t + 2, "0123456789") == strlen(t + 2);
+}
+/* The element _t<t> of array node `arr`, bound to a block parameter of a
+   loop hcv_begin is versioning: the element in place (hc_cob_entry_of), an
+   oint lifted for a slot that holds one, as the first of the two forms. 1
+   when it opened them: the caller writes the read as it was, then
+   hc_cob_mark(b, 2). */
+static int iter_cob_open(Compiler *c, int arr, int oint_slot, TyKind ek, int t, Buf *b) {
+  char d[48];
+  if (!hc_cob_entry_of(c, arr, d, sizeof d)) return 0;
+  hc_cob_mark(b, 0);
+  if (oint_slot) buf_printf(b, "%s(%s[_t%d])", oint_of(ek), d, t);
+  else buf_printf(b, "%s[_t%d]", d, t);
+  hc_cob_mark(b, 1);
+  return 1;
+}
+
 /* emit_iteration_stmt_body's Array#each_with_index, zip with a block, and
    each / each_pair on a poly value dispatched at run time (answers 1
    emitted, 0 declined, -1 to go on) */
@@ -6636,6 +6677,12 @@ static int iter_ewi_zip_poly_arms(Compiler *c, int id, Buf *b, int indent, const
     int ts_p0 = 0, ts_p1 = 0;
     if (p0 && clv_ewi_p0) ts_p0 = emit_shadow_save(c, clv_ewi_p0, p0, b, indent);
     if (p1 && clv_ewi_p1) ts_p1 = emit_shadow_save(c, clv_ewi_p1, p1, b, indent);
+    /* the element and other arrays read at the index, in place (hcv_begin):
+       every pass's index lies below the receiver's length */
+    char etrip[160]; snprintf(etrip, sizeof etrip, "sp_%sArray_length(%s)", k, rb.p ? rb.p : "NULL");
+    char ebic[300]; snprintf(ebic, sizeof ebic, "lv_%s", p1 ? p1 : "");
+    void *hcv = hcv_begin(c, id, body, block, p1 ? block_param_name(c, block, 1) : NULL, p1 ? ebic : NULL, etrip,
+                          iter_text_is_temp(rb.p) ? -1 : recv, 1, &b);
     emit_indent(b, indent);
     buf_printf(b, "for (sp_int _t%d = 0; _t%d < sp_%sArray_length(", t, t, k);
     buf_puts(b, rb.p); buf_printf(b, "); _t%d++) {\n", t);
@@ -6661,8 +6708,12 @@ static int iter_ewi_zip_poly_arms(Compiler *c, int id, Buf *b, int indent, const
           buf_puts(b, rb.p); buf_printf(b, ", _t%d));\n", t);
         }
         else {
-        buf_printf(b, "lv_%s = sp_%sArray_%s(", p0, k, o0 ? "oget" : "get");
-        buf_puts(b, rb.p); buf_printf(b, ", _t%d);\n", t);
+        buf_printf(b, "lv_%s = ", p0);
+        int cob = iter_cob_open(c, recv, o0, ewi_et, t, b);
+        buf_printf(b, "sp_%sArray_%s(", k, o0 ? "oget" : "get");
+        buf_puts(b, rb.p); buf_printf(b, ", _t%d)", t);
+        if (cob) hc_cob_mark(b, 2);
+        buf_puts(b, ";\n");
         }
       }
     }
@@ -6688,6 +6739,7 @@ static int iter_ewi_zip_poly_arms(Compiler *c, int id, Buf *b, int indent, const
     }
     emit_loop_body(c, body, b, indent + 1);
     emit_indent(b, indent); buf_puts(b, "}\n");
+    hcv_end(c, hcv, indent);
     /* Restore outer variables */
     if (p0 && ts_p0 > 0) { emit_indent(b, indent); buf_printf(b, "lv_%s = _t%d;\n", p0, ts_p0); }
     if (p1 && ts_p1 > 0) { emit_indent(b, indent); buf_printf(b, "lv_%s = _t%d;\n", p1, ts_p1); }
@@ -6751,6 +6803,13 @@ static int iter_ewi_zip_poly_arms(Compiler *c, int id, Buf *b, int indent, const
       int zs0 = 0, zs1 = 0;
       if (p0 && zlv0) zs0 = emit_shadow_save(c, zlv0, p0, b, indent);
       if (p1n && zlv1) zs1 = emit_shadow_save(c, zlv1, p1n, b, indent);
+      /* both arrays' elements in place (hcv_begin): the walk's count lies
+         below the receiver's length */
+      void *hcv = NULL;
+      if (!recv_poly && !arg_poly) {
+        char ztrip[160]; snprintf(ztrip, sizeof ztrip, "sp_%sArray_length(%s)", k, rb.p ? rb.p : "NULL");
+        hcv = hcv_begin(c, id, body, block, NULL, NULL, ztrip, iter_text_is_temp(rb.p) ? -1 : recv, 1, &b);
+      }
       emit_indent(b, indent);
       if (recv_poly)
         buf_printf(b, "for (sp_int _t%d = 0; _t%d < sp_poly_arr_len(%s); _t%d++) {\n",
@@ -6784,9 +6843,12 @@ static int iter_ewi_zip_poly_arms(Compiler *c, int id, Buf *b, int indent, const
         if (recv_poly) snprintf(src, sizeof src, "sp_poly_arr_get(%s, _t%d)", rb.p ? rb.p : "sp_box_nil()", t);
         else snprintf(src, sizeof src, "sp_%sArray_get(%s, _t%d)", k, rb.p ? rb.p : "NULL", t);
         emit_indent(b, indent + 1); buf_printf(b, "lv_%s = ", p0);
-        if (!recv_poly && oint_kind(et) && slot_is_oint(zlv0))
+        int ox = !recv_poly && oint_kind(et) && slot_is_oint(zlv0);
+        int cobx = hcv && (ox || zlv0->type == et) && iter_cob_open(c, recv, ox, et, t, b);
+        if (ox)
           buf_printf(b, "sp_%sArray_oget(%s, _t%d)", k, rb.p ? rb.p : "NULL", t);
         else emit_zip_block_param(c, zlv0->type, et, src, b);
+        if (cobx) hc_cob_mark(b, 2);
         buf_puts(b, ";\n");
       }
       if (p1n && zlv1 && ob.p) {
@@ -6794,6 +6856,10 @@ static int iter_ewi_zip_poly_arms(Compiler *c, int id, Buf *b, int indent, const
         if (arg_poly) snprintf(src2, sizeof src2, "sp_poly_arr_get(%s, _t%d)", ob.p, t);
         else snprintf(src2, sizeof src2, "sp_%sArray_get(%s, _t%d)", k2, ob.p, t);
         emit_indent(b, indent + 1); buf_printf(b, "lv_%s = ", p1n);
+        /* below the receiver's length, which the loop tested the argument
+           reaches, its element in place (hcv_begin) */
+        int oy = !arg_poly && oint_kind(et2) && slot_is_oint(zlv1);
+        int coby = hcv && (oy || zlv1->type == et2) && iter_cob_open(c, zargv[0], oy, et2, t, b);
         /* a number argument shorter than the receiver pads with nil: read
            with its nil into a boxed or nil-holding param */
         if (!arg_poly && oint_kind(et2) && (zlv1->type == TY_POLY || slot_is_oint(zlv1))) {
@@ -6801,10 +6867,12 @@ static int iter_ewi_zip_poly_arms(Compiler *c, int id, Buf *b, int indent, const
           else buf_printf(b, "sp_%sArray_oget(%s, _t%d)", k2, ob.p, t);
         }
         else emit_zip_block_param(c, zlv1->type, et2, src2, b);
+        if (coby) hc_cob_mark(b, 2);
         buf_puts(b, ";\n");
       }
       emit_loop_body(c, body, b, indent + 1);
       emit_indent(b, indent); buf_puts(b, "}\n");
+      hcv_end(c, hcv, indent);
       if (p0 && zs0 > 0) { emit_indent(b, indent); buf_printf(b, "lv_%s = _t%d;\n", p0, zs0); }
       if (p1n && zs1 > 0) { emit_indent(b, indent); buf_printf(b, "lv_%s = _t%d;\n", p1n, zs1); }
       free(rb.p); free(ob.p);
@@ -7862,6 +7930,10 @@ static int emit_iteration_stmt_body(Compiler *c, int id, Buf *b, int indent) {
     /* an IO::Buffer loop element by element runs its chunks first (hv_emit) */
     char vs[32] = "0", vn[32];
     int hv = !rr.big && hv_emit(c, id, rb.p, b, indent, vs, vn, sizeof vs);
+    /* other arrays read at the count, in place (hcv_begin): every pass's
+       count lies in [0, n) */
+    char tbic[300]; snprintf(tbic, sizeof tbic, "lv_%s", p0 ? p0 : "");
+    void *hcv = p0 && !rr.big ? hcv_begin(c, id, body, block, p0_orig, tbic, rb.p, -1, 0, &b) : NULL;
     emit_indent(b, indent);
     buf_printf(b, "for (sp_int _t%d = %s; _t%d < ", t, vs, t);
     buf_puts(b, hv ? vn : rb.p); buf_printf(b, "; _t%d++) {\n", t);
@@ -7871,6 +7943,7 @@ static int emit_iteration_stmt_body(Compiler *c, int id, Buf *b, int indent) {
       emit_iter_bind_rest(c, block, rs_np, TY_INT, rs_es, b, indent + 1); }
     emit_loop_body(c, body, b, indent + 1);
     emit_indent(b, indent); buf_puts(b, "}\n");
+    hcv_end(c, hcv, indent);
     free(rb.p);
     return 1;
   }

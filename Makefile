@@ -1886,7 +1886,7 @@ test-run: decisions-test
 # would be named by no bisect. A key holds the whole of a long name.
 # Each kind also has its row in the table in tools/README.md.
 DECISION_TESTS = $(shell grep -l '^\# spinel: decisions$$' test/*.rb test/fixtures/decisions/*.rb)
-DECISION_KINDS = aon-get case-root fetch-inert fetch-slot gc-save index-sum inline-force masgn-root nn-inb nn-read no-alloc \
+DECISION_KINDS = aon-get case-root fetch-inert fetch-slot gc-save hc-cobound index-sum inline-force masgn-root nn-inb nn-read no-alloc \
                  pd-hoist push-slot root-elide root-frame strbuf-raw
 decisions-test: $(SPINEL) $(SPINEL_TIMEOUT)
 	@ok=1; tmp=$$(mktemp -d /tmp/spinel-decisions.XXXXXX); : > "$$tmp/none"; \
@@ -4628,6 +4628,11 @@ infer-test: $(SPINEL) $(SP_RT_LIB)
 	[ "$$(awk '/^struct sp_Cell_s \{/,/^\}/' "$$tmp/crt.c" | grep -c 'sp_int iv_[xy];')" = 2 ] || { echo "infer-test: FAIL (a key stored into a row of a table reached the table's every read and typed a Struct's members, #10520)"; ok=0; }; \
 	grep -q 'sp_Vec__plus(sp_Vec \*self, sp_Vec \* lv_o)' "$$tmp/pph.c" || { echo "infer-test: FAIL (an operator on a boxed value that holds no Vec boxed Vec#+'s parameter)"; ok=0; }; \
 	grep -q 'sp_Money__plus(sp_Money \*self, sp_RbVal lv_other)' "$$tmp/pph.c" || { echo "infer-test: FAIL (an operator on a boxed value that can be a Money left Money#+'s parameter narrow, #3511)"; ok=0; }; \
+	$(SPINEL) test/loop_cobounded_reads.rb -c --no-line-map -o "$$tmp/lcb.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (loop_cobounded_reads: -c)"; ok=0; }; \
+	[ "$$(awk '/^static inline [^(]* sp_(rb_)?(w_dot|t_sum|ei_sum|r_sum|u_sum|zip_dot)\(.*\{$$/,/^\}/' "$$tmp/lcb.c" | grep -c '_hcvr[0-9]*_[0-9]* >= ')" -ge 6 ] || \
+	  { echo "infer-test: FAIL (a while, times, each_index, Range each, upto or zip over two arrays no longer reads the second one in place behind one test: hcv_end)"; ok=0; }; \
+	[ "$$(awk '/^static inline [^(]* sp_(rb_)?(w_store|t_reindex)\(.*\{$$/,/^\}/' "$$tmp/lcb.c" | grep -c '_hcvr')" = 0 ] || \
+	  { echo "infer-test: FAIL (a loop that stores an element or reassigns its index was emitted twice)"; ok=0; }; \
 	$(SPINEL) test/loop_stop_iteration_sources.rb -c --no-line-map -o "$$tmp/lss.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (loop_stop_iteration_sources: -c)"; ok=0; }; \
 	[ "$$(grep -cE '^static inline sp_o?int sp_(count_to|first_square_over|halvings)\(sp_int lv_n\) \{' "$$tmp/lss.c")" = 3 ] || { echo "infer-test: FAIL (loop_stop_iteration_sources: count_to, first_square_over or halvings not found)"; ok=0; }; \
 	[ "$$(awk '/^static inline sp_o?int sp_(count_to|first_square_over|halvings)\(sp_int lv_n\) \{/,/^\}/' "$$tmp/lss.c" | grep -c 'setjmp')" = 0 ] || { echo "infer-test: FAIL (a loop whose body cannot raise StopIteration opened a handler)"; ok=0; }; \

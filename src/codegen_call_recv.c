@@ -2543,6 +2543,32 @@ static int emit_kind_array_call(Compiler *c, int id, Buf *b, const NodeTable *nt
     { *out = 1; return 1; }
   }
   if ((is_element_at_alias(name)) && argc == 1) {
+    /* another array read at the index its loop proved (hc_cob_entry): the
+       element in place, below a length the loop tested ahead of it to be
+       nil-free, beside the read as it was -- this emitter's again */
+    char cd[48];
+    if ((rt == TY_INT_ARRAY || rt == TY_FLOAT_ARRAY) && comp_ntype(c, argv[0]) == TY_INT &&
+        !hc_index_in_range(c, recv, argv[0]) && hc_cob_entry(c, recv, argv[0], cd, sizeof cd)) {
+      /* the read as it was first: the element takes its face, an oint
+         unless it took its consumer's unwrap (g_ck_done) */
+      Buf ck; memset(&ck, 0, sizeof ck);
+      int sv_done = g_ck_done; g_ck_done = 0;
+      g_hc_cob_off++;
+      emit_kind_array_call(c, id, &ck, nt, name, recv, argc, argv, rt, a0, k, out);
+      g_hc_cob_off--;
+      int took = g_ck_done;
+      g_ck_done = sv_done || took;
+      int lift = node_is_oint(c, id) && !took;
+      hc_cob_mark(b, 0);
+      if (lift) buf_printf(b, "%s(", oint_of(rt == TY_INT_ARRAY ? TY_INT : TY_FLOAT));
+      buf_printf(b, "%s[", cd); emit_int_expr(c, argv[0], b); buf_puts(b, "]");
+      if (lift) buf_puts(b, ")");
+      hc_cob_mark(b, 1);
+      buf_puts(b, ck.p ? ck.p : "");
+      free(ck.p);
+      hc_cob_mark(b, 2);
+      { *out = 1; return 1; }
+    }
     /* an array whose header the loop being emitted holds (hc_array):
        in range, read the element there; anything else, the get */
     char hd[48], hl[48], hw[48];
@@ -4128,6 +4154,11 @@ static int emit_typed_array_call(Compiler *c, int id, Buf *b, const NodeTable *n
         Buf *sv_pre = g_pre, *pb = g_pre;
         void *hc = hc_iter_begin(c, id, &pb);
         g_pre = pb;
+        /* other arrays read at the index, in place (hcv_begin): every
+           pass's index lies below the receiver's length */
+        char eitrip[64]; snprintf(eitrip, sizeof eitrip, "sp_%sArray_length(_t%d)", ek, trecv);
+        char eibic[300]; snprintf(eibic, sizeof eibic, "lv_%s", ip ? ip : "");
+        void *hcv = ip ? hcv_begin(c, id, body, ei_blk, ip0, eibic, eitrip, -1, 0, &g_pre) : NULL;
         emit_indent(g_pre, g_indent);
         buf_printf(g_pre, "for (sp_int _t%d = 0; _t%d < sp_%sArray_length(_t%d); _t%d++) {\n",
                    ti, ti, ek, trecv, ti);
@@ -4146,6 +4177,7 @@ static int emit_typed_array_call(Compiler *c, int id, Buf *b, const NodeTable *n
         }
         emit_iter_loop_stmts(c, body, g_pre, g_indent + 1);
         emit_indent(g_pre, g_indent); buf_puts(g_pre, "}\n");
+        hcv_end(c, hcv, g_indent);
         g_pre = sv_pre;
         hc_iter_end(hc, &pb, g_indent, 1);
         buf_printf(b, "_t%d", trecv); { *out = 1; return 1; }

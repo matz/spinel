@@ -26587,7 +26587,16 @@ void emit_index_op_write(Compiler *c, int id, Buf *b, int indent) {
     int tc = ++g_tmp;
     int eff = g_pre && subtree_has_side_effect(c, v);
     buf_printf(b, "{ sp_RbVal _t%d = ", ta); iow_emit_recv(c, recv, b);
-    if (eff && !g_iow_recv_ref) buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d)", ta);
+    /* held as the typed receivers are: a key or right-hand side that runs
+       code can rebind the variable the receiver came from (a closure over
+       `a` in `a[swap.call] += 7`) and leave the temp the old object's only
+       holder while it allocates; a plain local nothing rebinds still holds
+       it (iow_recv_local_held) */
+    if (!g_iow_recv_ref &&
+        (subtree_may_allocate(nt, recv) ||
+         ((!subtree_is_pure_read(c, argv[0]) || subtree_has_side_effect(c, v)) &&
+          !iow_recv_local_held(c, recv, argv[0], v))))
+      buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d)", ta);
     if (kt == TY_INT) {
       buf_printf(b, "; sp_int _t%d = ", tb); iow_emit_key(c, argv[0], b, IOW_KEY_INT, TY_INT); buf_puts(b, "; ");
       buf_printf(b, "sp_RbVal _t%d = sp_poly_arr_get_hash(_t%d, _t%d);", tc, ta, tb);

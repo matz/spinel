@@ -21566,6 +21566,7 @@ static int send_forwarder_like(NodeTable *nt, int like, const char *nw, const ch
   nt_node_set_arr(nt, args, "arguments", two, 2);
   return d;
 }
+static int send_alias_reaches_program_method(const NodeTable *nt, const char *cls, const char *meth, int alias, int n0);
 int desugar_send_aliases(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int n0 = nt->count, changed = 0;
@@ -21579,7 +21580,7 @@ int desugar_send_aliases(Compiler *c) {
       const char *nw = NULL, *od = NULL;
       alias_pair_names(nt, s, &nw, &od);
       if (!nw || !od || !(sp_streq(od, "send") || sp_streq(od, "__send__") || sp_streq(od, "public_send")) ||
-          alias_class_defines(nt, cls, od, n0))
+          send_alias_reaches_program_method(nt, cls, od, s, n0))
         continue;
       char nwc[256];
       snprintf(nwc, sizeof nwc, "%s", nw);
@@ -21790,6 +21791,110 @@ static void rod_index_free(RodIndex *x, int n0) {
   free(x->qn); free(x->qs);
   anh_free(&x->byq); anh_free(&x->byleaf);
   free(x->qhead); free(x->lhead); free(x->qnext); free(x->lnext); free(x->seen);
+}
+/* May the walk follow the constant name `leaf` to its headers? Every
+   header of the name must open one qualified name, and with `top` that
+   name is the leaf itself: a superclass or module named from a class body
+   is taken only when it is a top-level class or module. A name that two
+   namespaces share (`Outer::Base` and `Base`), that only a nested header
+   opens (`Mine::Comparable` against the core Comparable), or that a
+   constant assignment writes (`Base = Struct.new(:a)`) is not followed. */
+static int send_alias_leaf_followable(RodIndex *x, const NodeTable *nt, const char *leaf, int top, int n0) {
+  const char *q = NULL;
+  for (int m = 0; m < n0; m++) {
+    NodeKind k = nt_kind(nt, m);
+    if (k == NK_ConstantWriteNode || k == NK_ConstantOrWriteNode || k == NK_ConstantAndWriteNode ||
+        k == NK_ConstantOperatorWriteNode || k == NK_ConstantTargetNode || k == NK_ConstantPathTargetNode) {
+      const char *wn = nt_str(nt, m, "name");
+      if (wn && sp_streq(wn, leaf)) return 0;
+      continue;
+    }
+    if (k == NK_ConstantPathWriteNode || k == NK_ConstantPathOrWriteNode || k == NK_ConstantPathAndWriteNode ||
+        k == NK_ConstantPathOperatorWriteNode) {
+      int t = nt_ref(nt, m, "target");
+      const char *wn = t >= 0 ? nt_str(nt, t, "name") : NULL;
+      if (wn && sp_streq(wn, leaf)) return 0;
+      continue;
+    }
+    if (!class_def_opens_frame(nt, m)) continue;
+    const char *cn = class_def_name(nt, m);
+    if (!cn || !sp_streq(cn, leaf)) continue;
+    if (!x->qn[m] || (q && !sp_streq(q, x->qn[m]))) return 0;
+    q = x->qn[m];
+  }
+  return q != NULL && (!top || sp_streq(q, leaf));
+}
+/* Does statement `st` of a class or module body bind instance method
+   `meth`: a def, an alias, an attr_reader / attr_accessor / attr, or a
+   define_method of a literal name? */
+static int send_alias_stmt_defines(const NodeTable *nt, int st, const char *meth) {
+  int d = nt_kind(nt, st) == NK_DefNode ? st : fwd_body_def(nt, st);
+  if (d >= 0 && nt_kind(nt, d) == NK_DefNode && nt_ref(nt, d, "receiver") < 0 &&
+      nt_str(nt, d, "name") && sp_streq(nt_str(nt, d, "name"), meth)) return 1;
+  const char *anw = NULL, *aod = NULL;
+  alias_pair_names(nt, st, &anw, &aod);
+  if (anw && sp_streq(anw, meth)) return 1;
+  if (nt_kind(nt, st) != NK_CallNode || nt_ref(nt, st, "receiver") >= 0) return 0;
+  const char *an = nt_str(nt, st, "name");
+  if (!an || !(sp_streq(an, "attr_reader") || sp_streq(an, "attr_accessor") || sp_streq(an, "attr") ||
+               sp_streq(an, "define_method"))) return 0;
+  int ar = nt_ref(nt, st, "arguments"), ac = 0;
+  const int *av = ar >= 0 ? nt_arr(nt, ar, "arguments", &ac) : NULL;
+  if (sp_streq(an, "define_method")) ac = ac > 0 ? 1 : 0;
+  for (int a = 0; a < ac; a++) {
+    const char *v = sym_or_str_literal(nt, av[a]);
+    if (v && sp_streq(v, meth)) return 1;
+  }
+  return 0;
+}
+/* Does `alias nw <meth>` (node `alias`) in class or module `cls` name a
+   method of the program? CRuby's alias names the method that cls reaches
+   when the alias runs: its own, or one of a superclass or a module that cls
+   or a superclass includes or prepends. The walk goes by constant name
+   (send_alias_leaf_followable), and takes only a definition or an include
+   that comes before the alias in the source (the node order). A path it cannot follow (a computed superclass, a module
+   that is not a constant) adds nothing: the alias then names Kernel's
+   method, as before. */
+static int send_alias_reaches_program_method(const NodeTable *nt, const char *cls, const char *meth, int alias, int n0) {
+  if (alias_class_defines(nt, cls, meth, n0)) return 1;
+  enum { CAP = 64 };
+  RodIndex x;
+  rod_index_build(&x, nt, n0);
+  const char *q[CAP]; int nq = 0, found = 0;
+  if (send_alias_leaf_followable(&x, nt, cls, 0, n0)) q[nq++] = cls;
+  for (int i = 0; i < nq && !found; i++) {
+    for (int m = 0; m < n0 && !found; m++) {
+      if (!class_def_opens_frame(nt, m)) continue;
+      const char *cn = class_def_name(nt, m);
+      if (!cn || !sp_streq(cn, q[i])) continue;
+      const char *add[CAP]; int na = 0;
+      int sc = class_def_is_class(nt, m) ? class_def_super(nt, m) : -1;
+      const char *sn = rod_leaf(nt, sc);
+      if (sn) add[na++] = sn;
+      int body = class_def_body(nt, m);
+      int n = 0; const int *st = body >= 0 && nt_kind(nt, body) == NK_StatementsNode ? nt_arr(nt, body, "body", &n) : NULL;
+      for (int k = 0; k < n && !found; k++) {
+        if (st[k] >= alias) continue;
+        if (send_alias_stmt_defines(nt, st[k], meth)) { found = 1; break; }
+        if (nt_kind(nt, st[k]) != NK_CallNode || nt_ref(nt, st[k], "receiver") >= 0) continue;
+        const char *an = nt_str(nt, st[k], "name");
+        if (!an || !(sp_streq(an, "include") || sp_streq(an, "prepend"))) continue;
+        int ar = nt_ref(nt, st[k], "arguments"), ac = 0;
+        const int *av = ar >= 0 ? nt_arr(nt, ar, "arguments", &ac) : NULL;
+        for (int a = 0; a < ac && na < CAP; a++) {
+          const char *mn = rod_leaf(nt, av[a]);
+          if (mn) add[na++] = mn;
+        }
+      }
+      for (int a = 0; a < na && nq < CAP; a++) {
+        int seen = 0;
+        for (int j = 0; j < nq && !seen; j++) seen = sp_streq(q[j], add[a]);
+        if (!seen && send_alias_leaf_followable(&x, nt, add[a], 1, n0)) q[nq++] = add[a];
+      }
+    }
+  }
+  rod_index_free(&x, n0);
+  return found;
 }
 static int rod_above_defines(RodIndex *x, const NodeTable *nt, int m, const char *meth);
 /* Does a header of the class or module named `q` (qualified; NULL when the

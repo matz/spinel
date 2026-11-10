@@ -66,81 +66,93 @@ int is_builtin_exception_name(const char *n) {
      any qualified Errno name is an exception class (#2922 follow-up) */
   return n && strncmp(n, "Errno::", 7) == 0;
 }
-/* Does subtree n (not entering a nested class, module or method) write
-   the constant nm? */
-static int body_writes_const(const NodeTable *nt, int n, const char *nm) {
-  if (n < 0) return 0;
+/* The pairs (class or module name, constant name) the program writes a
+   constant under, for the tree as it is (program_writes_const_in): one
+   walk of the class bodies, the path writes and the nils a desugaring
+   dropped. Each question walked all of them, once for each pair, and N
+   scoped reads of N names asked N pairs. */
+struct ConstPairs { const NodeTable *nt; unsigned ver; unsigned long edits; int count; ANameHash keys; };
+static void const_pairs_clear(struct ConstPairs *p) {
+  for (int i = 0; i < p->keys.n; i++) free((char *)p->keys.key[i]);
+  anh_free(&p->keys);
+  memset(&p->keys, 0, sizeof p->keys);
+}
+void const_pairs_free(Compiler *c) {
+  if (!c->const_pairs) return;
+  const_pairs_clear(c->const_pairs);
+  free(c->const_pairs);
+  c->const_pairs = NULL;
+}
+/* The pair's key, "pn\001nm": in kb when it fits in kn bytes, else
+   malloc'd */
+static char *const_pair_key(char *kb, size_t kn, const char *pn, const char *nm) {
+  size_t pl = strlen(pn), nl = strlen(nm);
+  char *key = pl + nl + 2 <= kn ? kb : malloc(pl + nl + 2);
+  if (!key) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  memcpy(key, pn, pl); key[pl] = '\001'; memcpy(key + pl + 1, nm, nl + 1);
+  return key;
+}
+static void const_pair_add(ANameHash *out, const char *pn, const char *nm) {
+  if (!pn || !nm) return;
+  char *key = const_pair_key(NULL, 0, pn, nm);
+  if (anh_has(out, key)) free(key);
+  else anh_add(out, key);
+}
+/* The constants subtree n (not entering a nested class, module or method)
+   writes, as pn's */
+static void body_const_writes(const NodeTable *nt, int n, const char *pn, ANameHash *out) {
+  if (n < 0) return;
   NodeKind k = nt_kind(nt, n);
-  if (k == NK_ClassNode || k == NK_ModuleNode || k == NK_SingletonClassNode || k == NK_DefNode) return 0;
+  if (k == NK_ClassNode || k == NK_ModuleNode || k == NK_SingletonClassNode || k == NK_DefNode) return;
   /* (a multiple assignment's target too: `P, Q = ...`) */
-  if ((k == NK_ConstantWriteNode || k == NK_ConstantOrWriteNode || k == NK_ConstantAndWriteNode ||
-       k == NK_ConstantOperatorWriteNode || k == NK_ConstantTargetNode) && sp_streq(nt_str(nt, n, "name"), nm)) return 1;
+  if (k == NK_ConstantWriteNode || k == NK_ConstantOrWriteNode || k == NK_ConstantAndWriteNode ||
+      k == NK_ConstantOperatorWriteNode || k == NK_ConstantTargetNode)
+    const_pair_add(out, pn, nt_str(nt, n, "name"));
   int nr = nt_num_refs(nt, n);
-  for (int i = 0; i < nr; i++) if (body_writes_const(nt, nt_ref_at(nt, n, i), nm)) return 1;
+  for (int i = 0; i < nr; i++) body_const_writes(nt, nt_ref_at(nt, n, i), pn, out);
   int na = nt_num_arrs(nt, n);
   for (int i = 0; i < na; i++) {
     int m = 0;
     const int *ids = nt_arr_at(nt, n, i, &m);
-    for (int j = 0; j < m; j++) if (body_writes_const(nt, ids[j], nm)) return 1;
+    for (int j = 0; j < m; j++) body_const_writes(nt, ids[j], pn, out);
   }
-  return 0;
 }
-/* Is `node` the path `pn::nm` (or `::pn::nm`)? */
-static int const_path_is(const NodeTable *nt, int node, const char *pn, const char *nm) {
-  if (node < 0 || !sp_streq(nt_str(nt, node, "name"), nm)) return 0;
+/* the path `pn::nm` (or `::pn::nm`) that node is; none for `self::nm` */
+static void path_const_write(const NodeTable *nt, int node, ANameHash *out) {
+  if (node < 0) return;
   int par = nt_ref(nt, node, "parent");
-  const char *qn = par >= 0 ? nt_str(nt, par, "name") : NULL;   /* none for `self::nm` */
-  return qn && sp_streq(qn, pn);
+  const_pair_add(out, par >= 0 ? nt_str(nt, par, "name") : NULL, nt_str(nt, node, "name"));
 }
-/* Does the program write the constant nm into the class or module named pn:
-   in a body of it, or through the path `pn::nm = v`? */
-static int program_writes_const_in_tree(Compiler *c, const char *pn, const char *nm);
-/* The answers for the tree as it is: a scoped constant read asks again for
-   the same pair, and each question walked every class body and every nil */
-static struct { const NodeTable *nt; unsigned ver; unsigned long edits; int count; ANameHash keys; signed char *ans; int cap; } g_pwc;
-int program_writes_const_in(Compiler *c, const char *pn, const char *nm) {
+static const ANameHash *const_pairs_of(Compiler *c) {
   const NodeTable *nt = c->nt;
-  if (!pn || !nm) return program_writes_const_in_tree(c, pn, nm);
-  if (g_pwc.nt != nt || g_pwc.ver != nt->version || g_pwc.edits != nt->edits || g_pwc.count != nt->count) {
-    for (int i = 0; i < g_pwc.keys.n; i++) free((char *)g_pwc.keys.key[i]);
-    anh_free(&g_pwc.keys); memset(&g_pwc.keys, 0, sizeof g_pwc.keys);
-    g_pwc.nt = nt; g_pwc.ver = nt->version; g_pwc.edits = nt->edits; g_pwc.count = nt->count;
-  }
-  size_t pl = strlen(pn), nl = strlen(nm);
-  char kb[256], *key = pl + nl + 2 <= sizeof kb ? kb : malloc(pl + nl + 2);
-  memcpy(key, pn, pl); key[pl] = '\001'; memcpy(key + pl + 1, nm, nl + 1);
-  int i = anh_find(&g_pwc.keys, key);
-  if (i >= 0) { int r = g_pwc.ans[i]; if (key != kb) free(key); return r; }
-  int r = program_writes_const_in_tree(c, pn, nm);
-  if (g_pwc.keys.n == g_pwc.cap) {
-    g_pwc.cap = g_pwc.cap ? g_pwc.cap * 2 : 64;
-    g_pwc.ans = realloc(g_pwc.ans, (size_t)g_pwc.cap);
-    if (!g_pwc.ans) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-  }
-  g_pwc.ans[g_pwc.keys.n] = (signed char)r;
-  anh_add(&g_pwc.keys, key == kb ? strdup(kb) : key);
-  return r;
-}
-static int program_writes_const_in_tree(Compiler *c, const char *pn, const char *nm) {
-  const NodeTable *nt = c->nt;
+  if (!c->const_pairs && !(c->const_pairs = calloc(1, sizeof *c->const_pairs))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  struct ConstPairs *p = c->const_pairs;
+  if (p->nt == nt && p->ver == nt->version && p->edits == nt->edits && p->count == nt->count) return &p->keys;
+  const_pairs_clear(p);
   int ndk = 0; const NodeKind *dk = class_def_kinds(&ndk);
   for (int dh = 0; dh < ndk; dh++)
     NT_FOREACH_KIND(nt, dk[dh], d) {
       const char *dn = class_def_opens_cref(nt, d) ? class_def_name(nt, d) : NULL;
-      if (!dn || !sp_streq(dn, pn)) continue;
-      if (body_writes_const(nt, class_def_body(nt, d), nm)) return 1;
+      if (dn) body_const_writes(nt, class_def_body(nt, d), dn, &p->keys);
     }
   static const NodeKind writes[] = { NK_ConstantPathWriteNode, NK_ConstantPathOrWriteNode,
                                      NK_ConstantPathAndWriteNode, NK_ConstantPathOperatorWriteNode };
   for (int i = 0; i < 4; i++)
-    NT_FOREACH_KIND(nt, writes[i], w)
-      if (const_path_is(nt, nt_ref(nt, w, "target"), pn, nm)) return 1;
-  NT_FOREACH_KIND(nt, NK_ConstantPathTargetNode, t)
-    if (const_path_is(nt, t, pn, nm)) return 1;
+    NT_FOREACH_KIND(nt, writes[i], w) path_const_write(nt, nt_ref(nt, w, "target"), &p->keys);
+  NT_FOREACH_KIND(nt, NK_ConstantPathTargetNode, t) path_const_write(nt, t, &p->keys);
   /* a self-alias write the desugaring dropped (desugar_constant_path_self_alias) */
-  NT_FOREACH_KIND(nt, NK_NilNode, d)
-    if (const_path_is(nt, (int)nt_int(nt, d, "dropped_target", -1), pn, nm)) return 1;
-  return 0;
+  NT_FOREACH_KIND(nt, NK_NilNode, d) path_const_write(nt, (int)nt_int(nt, d, "dropped_target", -1), &p->keys);
+  p->nt = nt; p->ver = nt->version; p->edits = nt->edits; p->count = nt->count;
+  return &p->keys;
+}
+/* Does the program write the constant nm into the class or module named pn:
+   in a body of it, or through the path `pn::nm = v`? */
+int program_writes_const_in(Compiler *c, const char *pn, const char *nm) {
+  if (!pn || !nm) return 0;
+  char kb[256], *key = const_pair_key(kb, sizeof kb, pn, nm);
+  int r = anh_has(const_pairs_of(c), key);
+  if (key != kb) free(key);
+  return r;
 }
 /* Does the program write the constant nm through a path whose parent names
    class or module k by another name (`Alias::NAME = v`, with `Alias = K`)?

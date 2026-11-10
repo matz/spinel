@@ -1765,6 +1765,10 @@ typedef struct {
   /* the names the program's global writes assign, as of the node table it
      was made for (analyze_infer.c, gvar_has_write; NULL before the first ask) */
   struct GvarWrites *gvar_writes;
+  /* the (class name, constant name) pairs the program writes a constant
+     under, as of the node table it was made for (analyze_util.c,
+     program_writes_const_in; NULL before the first ask) */
+  struct ConstPairs *const_pairs;
   /* the inline hint's call counts (codegen.c, mih_count_calls): the first
      scope of each name, hashed (mih_head, mih_cap slots), and each scope's
      first scope of its name (mih_first) */

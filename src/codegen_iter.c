@@ -3749,10 +3749,13 @@ void emit_block_invoke(Compiler *c, int args_node, Buf *b, int indent, int as_ex
   }
   else if (as_expr && !rd_lbl && !nx_own && bn3 > 0 && !nx_tail_stmt &&
            nt_kind(nt, bd3[bn3 - 1]) == NK_CallNode &&
-           repr_of(c, bd3[bn3 - 1]).opt_producer && tail_iter_receiver(c, bd3[bn3 - 1]) < 0) {
+           ((repr_of(c, bd3[bn3 - 1]).opt_producer && tail_iter_receiver(c, bd3[bn3 - 1]) < 0) ||
+            sn_guard_pending(c, bd3[bn3 - 1]))) {
     /* a tail call answering its oint, read as the statement expression's
        value in the plain form: emitted as the value, not as a statement
-       (which discards an oint) */
+       (which discards an oint); a `&.` call whose nil guard is pending is the
+       same, its statement form being the guard around a call whose value is
+       dropped */
     if (block_of_body(c, bbody) >= 0) emit_block_locals_reset(c, block_of_body(c, bbody), b, 0);
     for (int k3 = 0; k3 < bn3 - 1; k3++) emit_stmt(c, bd3[k3], b, 0);
     { Buf tb; memset(&tb, 0, sizeof tb);

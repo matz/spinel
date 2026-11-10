@@ -7446,7 +7446,7 @@ static int infer_universal_call(Compiler *c, int id, const NodeTable *nt, const 
     /* a CLASS or module name answers the class object itself (#3969) --
        unless a value constant of that leaf is the receiver's own */
     int cg_cls = -1;
-    const char *cgk = cgn ? const_get_resolve(c, cg_rk, cgn, &cg_cls) : NULL;
+    const char *cgk = cgn ? const_get_resolve_at(c, id, cg_rk, cgn, &cg_cls) : NULL;
     if (cgn && cg_cls >= 0 && !cgk) { *out = TY_CLASS; return 1; }
     /* a leaf the receiver does not see is a NameError (cg_flat_seen) */
     if (cgn && !cgk && !cg_flat_seen(c, cg_rk, cgn)) { *out = TY_POLY; return 1; }

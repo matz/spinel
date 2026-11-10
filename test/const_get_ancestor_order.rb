@@ -24,4 +24,10 @@ ks.each { |k| p((k.const_get(:Z) rescue $!.message)) }
 p((Integer.const_get(:Z) rescue $!.class))
 def g(k) = k.const_get(:Z)
 p g(Sub), (g(Other) rescue $!.message)
-p ks.map { |k| k.const_defined?(:Z) }
+# an include that runs after the call: the superclass's constant, then the module's
+module A3; W = :a3; end
+class Base3; W = :base3; end
+class K5 < Base3; end
+p K5.const_get(:W)
+class K5; include A3; end
+p K5.const_get(:W)

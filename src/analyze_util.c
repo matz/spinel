@@ -2272,6 +2272,7 @@ int cg_flat_seen(Compiler *c, int rk, const char *cgn) {
    or NULL with *cls the class, -1 when there is neither. RK is R's class
    (CG_NONE, CG_OBJECT, CG_UNTABLED when it has none, is Object not reopened,
    or is a name the class table lacks). */
+static int g_cgr_superclass_only;   /* const_get_resolve_at's walk of the superclasses alone */
 const char *const_get_resolve(Compiler *c, int rk, const char *cgn, int *cls) {
   *cls = -1;
   /* A qualified path ("A::B", "::A::B") is read segment by segment: each
@@ -2299,7 +2300,7 @@ const char *const_get_resolve(Compiler *c, int rk, const char *cgn, int *cls) {
       cg_flat_seen(c, rk, cgn)) return cgn;
   /* R's ancestors in CRuby's order: the modules R prepends and includes
      come before its superclass. Past them (Object), the superclass walk. */
-  int anc[256], nanc = const_lookup_order(c, rk, anc, 256);
+  int anc[256], nanc = g_cgr_superclass_only ? 0 : const_lookup_order(c, rk, anc, 256);
   for (int i = 0; i < nanc; i++) {
     int k = anc[i];
     const char *own = const_value_owned_key(c, k, cgn);
@@ -2328,14 +2329,13 @@ const char *const_get_resolve(Compiler *c, int rk, const char *cgn, int *cls) {
   if (!cv || cv->type == TY_UNKNOWN) return NULL;
   return *cls < 0 ? cgn : NULL;
 }
-/* Does `recv.const_get(:N)` (call id), with recv a class value known only
+/* Does `recv.const_get(:N)`, with recv a class value known only
    at run time, need a check of recv's class before it reads slot KEY? Yes
    when some class of the program does not see N while every class that
    does reads that same slot, and no builtin or top-level path sees it:
    CRuby's NameError for the others. A class whose N is another slot or a
    class keeps the old read (the typing chose KEY's type). */
-int const_get_value_guard(Compiler *c, int id, int recv, int rk, const char *cgn, const char *key, int inherit) {
-  (void)id;
+int const_get_value_guard(Compiler *c, int recv, int rk, const char *cgn, const char *key, int inherit) {
   const NodeTable *nt = c->nt;
   if (rk != CG_NONE || !inherit || !cgn || !key || strstr(cgn, "::") || recv < 0) return 0;
   NodeKind k0 = nt_kind(nt, recv);
@@ -2352,6 +2352,23 @@ int const_get_value_guard(Compiler *c, int id, int recv, int rk, const char *cgn
     if (!kk) miss = 1;
   }
   return miss;
+}
+/* const_get_resolve for the call id: R's mixins come before its superclass
+   only where the record proves each ran before the call (no
+   ELAB_GAIN_INHERITED left unsettled). Else, where the two walks part, the
+   superclass walk's answer is kept: an include written after the call has
+   not run when it does. */
+const char *const_get_resolve_at(Compiler *c, int id, int rk, const char *cgn, int *cls) {
+  const char *k = const_get_resolve(c, rk, cgn, cls);
+  if (id < 0 || rk < 0 || rk >= c->nclasses || !cgn || strstr(cgn, "::")) return k;
+  int ocls = -1;
+  g_cgr_superclass_only = 1;
+  const char *ok = const_get_resolve(c, rk, cgn, &ocls);
+  g_cgr_superclass_only = 0;
+  if (ocls == *cls && (ok == k || (ok && k && sp_streq(ok, k)))) return k;
+  if (!(elab_class_unsettled(c, rk, ELAB_GAIN_INHERITED, id, 0) & ELAB_GAIN_INHERITED)) return k;
+  *cls = ocls;
+  return ok;
 }
 /* Does the program know constant N, for `R.const_defined?(:N)` (R's class,
    CG_NONE for none): a constant or class keyed N, a wellknown one, or the

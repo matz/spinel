@@ -1362,19 +1362,25 @@ int emit_call_reflection_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
     if (cg_qm && !cg_own) {
       /* the value or the class of that leaf, as the typing chose */
       int cg_cls;
-      const char *cg_key = const_get_resolve(c, cg_rk, cg_qm, &cg_cls);
+      const char *cg_key = const_get_resolve_at(c, id, cg_rk, cg_qm, &cg_cls);
       /* a class value receiver reads the one slot only where its class
          sees it: a class whose chain holds no such constant raises
          NameError, as CRuby's lookup misses (`[Own, Other].each { |k|
          k.const_get(:Z) }` with Z Own's alone) */
-      int cg_guard = cg_key ? const_get_value_guard(c, id, recv, cg_rk, cg_qm, cg_key, cg_inherit) : 0;
+      int cg_guard = cg_key ? const_get_value_guard(c, recv, cg_rk, cg_qm, cg_key, cg_inherit) : 0;
       if (cg_guard) {
         int t = ++g_tmp;
         TyKind rt1 = infer_type(c, recv);
-        buf_printf(b, "(({ sp_Class _cr%d = ", t);
-        if (rt1 == TY_POLY) { buf_puts(b, "sp_isa_class_arg("); emit_boxed(c, recv, b); buf_puts(b, ")"); }
-        else emit_expr(c, recv, b);
-        buf_printf(b, "; int _ok%d = 0; switch (_cr%d.cls_id) {", t, t);
+        /* (a boxed receiver that holds no class keeps the read: its own
+           NoMethodError is not this check's) */
+        if (rt1 == TY_POLY) {
+          buf_printf(b, "(({ sp_RbVal _cv%d = ", t); emit_boxed(c, recv, b);
+          buf_printf(b, "; sp_Class _cr%d = _cv%d.tag == SP_TAG_CLASS ? sp_unbox_class(_cv%d) : (sp_Class){SP_CLASS_NIL_ID}; "
+                        "int _ok%d = _cv%d.tag != SP_TAG_CLASS; switch (_cr%d.cls_id) {", t, t, t, t, t, t);
+        } else {
+          buf_printf(b, "(({ sp_Class _cr%d = ", t); emit_expr(c, recv, b);
+          buf_printf(b, "; int _ok%d = 0; switch (_cr%d.cls_id) {", t, t);
+        }
         for (int k = 0; k < c->nclasses; k++) {
           int kc = -1;
           const char *kk = c->classes[k].name ? const_get_resolve(c, k, cg_qm, &kc) : NULL;
@@ -1383,7 +1389,7 @@ int emit_call_reflection_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
           emit_cv_case_labels(c, k, NULL, 0, b);
           buf_printf(b, "_ok%d = 1; break;", t);
         }
-        buf_printf(b, " default: break; } if (!_ok%d) { const char *_cn%d = sp_class_to_s(_cr%d); "
+        buf_printf(b, " default: break; } if (!_ok%d) { const char *_cn%d = sp_class_val_display(sp_box_class(_cr%d)); "
                       "sp_exc_stage_recv(sp_box_class(_cr%d)); "
                       "if (strcmp(_cn%d, \"Object\") == 0) sp_raise_cls(\"NameError\", \"uninitialized constant %s\"); "
                       "else sp_raise_cls(\"NameError\", sp_sprintf(\"uninitialized constant %%s::%s\", _cn%d)); } }), ",

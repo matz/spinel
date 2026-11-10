@@ -31,9 +31,8 @@
    into takes it (SPR_STORE), where the literal is no container; or it
    asks the value's identity, as equal?, object_id and __id__ do where no
    class of the program defines them (SPR_IDENTITY). A taker needs what
-   the value's facts say (share_value_needs_handle); a reader and a test
-   need its bytes; a store needs what its target does
-   (share_store_needs_handle). An identity asks for the object, and is the
+   the value's facts say (share_value_needs_handle), as a store does; a
+   reader and a test need its bytes. An identity asks for the object, and is the
    handle where the producer has one (for an exception's message, the box
    the exception keeps it in) and the bytes' pointer where it has only
    bytes, which are then all the String there is: never a new handle,
@@ -747,8 +746,6 @@ static int share_plan_role_need(Compiler *c, int v, int role, int need) {
     if (share_value_fresh(c, v, 0))
       return !share_plan_box_kept(c, v) ? SPN_BYTES : SPN_NEW;
   }
-  /* the store asks past the literal it splits (never less than the value) */
-  if (role == SPR_STORE && need == SPN_BYTES) return share_plan_need_of(share_store_needs_handle(c, v));
   return need;
 }
 
@@ -893,7 +890,7 @@ int share_plan_box_handle(Compiler *c, int v) {
 
 
 int share_plan_role(Compiler *c, int v) {
-  return c->share_plan && v >= 0 && v < c->share_plan_n ? c->share_plan[v] >> SPM_ROLE_SHIFT : SPR_TAKE;
+  return v >= 0 && v < c->share_plan_n ? c->share_plan[v] >> SPM_ROLE_SHIFT : SPR_TAKE;
 }
 
 
@@ -1153,7 +1150,7 @@ static int share_plan_plain_ctx(void) {
 
 /* The memo's need of node v where codegen is, or -1 where it cannot answer. */
 static int share_plan_memo_need(Compiler *c, int v) {
-  int m = c->share_plan && v >= 0 && v < c->share_plan_n && (c->share_plan[v] & SPM_NEED) != SPN_ASK &&
+  int m = v >= 0 && v < c->share_plan_n && (c->share_plan[v] & SPM_NEED) != SPN_ASK &&
           c->nt->version == c->share_plan_ver && c->ntype[v] == c->share_plan_ty[v] && share_plan_plain_ctx();
   return m ? c->share_plan[v] & SPM_NEED : -1;
 }

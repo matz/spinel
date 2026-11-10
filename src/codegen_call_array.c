@@ -3323,25 +3323,3 @@ int emit_arysub_call_stmt(Compiler *c, int id, Buf *b, int indent) {
   return 1;
 }
 
-
-/* The receiver of an operation on a String Array of handles: its text, or
-   CRuby's NoMethodError for a nil one where the nil fact says it can be
-   (a method that answers the Array or nil, a parameter some call gives nil,
-   an instance variable not set yet). A safe navigation guards it itself. */
-/* Can the receiver be nil, and is the call no safe navigation (which guards
-   it itself) and its receiver not tested already? A receiver the call plan
-   tests ahead of the call (emit_nil_target_head: cplan_nil, the arguments
-   run first) is seen as tested (nil_tested) and read bare; any other, such
-   as an instance variable the plan leaves untested, is read through
-   sp_StrhArray_rnn. */
-static int strh_recv_nilable(Compiler *c, int id, int recv) {
-  return !nt_safe_nav(c->nt, id) && repr_of(c, recv).may_nil && !repr_of(c, recv).nil_tested;
-}
-void strh_emit_recv(Compiler *c, int id, int recv, Buf *b) {
-  const char *nm = nt_str(c->nt, id, "name");
-  int nilable = nm && !is_nil_method(nm) && strh_recv_nilable(c, id, recv);
-  if (nilable) buf_printf(b, "sp_StrhArray_rnn(");
-  emit_expr(c, recv, b);
-  if (nilable) buf_printf(b, ", \"%s\")", nm);
-}
-

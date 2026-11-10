@@ -317,7 +317,7 @@ static int poll_local_on_heap(Compiler *c, int n) {
   Scope *sc = comp_scope_of(c, n);
   const char *nm = nt_str(c->nt, n, "name");
   LocalVar *lv = sc && nm ? scope_local(sc, nm) : NULL;
-  return !lv || lv->is_cell || lv->inline_alias;
+  return !lv || lv->is_cell;
 }
 static int poll_pure_kids(Compiler *c, int n, int ret_ok, int stores) {
   const NodeTable *nt = c->nt;
@@ -3259,7 +3259,7 @@ static void emit_boxed_impl(Compiler *c, int node, Buf *b) {
        the plan wraps is boxed as the new handle it is (sp_box_str_new), so
        the box's copies name one String; any other is boxed as its bytes,
        which sp_box_str boxes as their handle where a handle owns them */
-    int wrap = c->share_plan && share_plan_of(c, node, SPR_BOX, NULL).form == SPF_WRAP;
+    int wrap = share_plan_of(c, node, SPR_BOX, NULL).form == SPF_WRAP;
     emit_str_box_leaf(c, node, wrap, b);
     RC(RF_STR, RW_NONE);
     return;
@@ -3589,7 +3589,7 @@ void emit_boxed_by_repr(Compiler *c, int node, Buf *b) {
    producer's kind (emit_str_form's box face, codegen_str.c); else the route
    arms, then the representation's. */
 static void emit_boxed_string(Compiler *c, int node, Buf *b) {
-  TyKind bt = c->share_plan && node >= 0 ? comp_ntype(c, node) : TY_UNKNOWN;
+  TyKind bt = node >= 0 ? comp_ntype(c, node) : TY_UNKNOWN;
   if (bt == TY_STRING || bt == TY_STRBUF) {
     StrForm sf;
     if (emit_str_form(c, node, SPR_BOX, SPX_BOX, 0, &sf) >= 0) {
@@ -10851,8 +10851,7 @@ else if (orecv >= 0 && onm) {
       /* a float capture rides a native sp_float cell, a poly capture an
          sp_RbVal cell, a heap object its typed pointer (see emit_scope_decls). */
       buf_puts(&g_procs, " ");
-      if (clv && clv->inline_alias) buf_puts(&g_procs, "const char *");
-      else emit_cell_elem_type(c, clv, &g_procs);
+      emit_cell_elem_type(c, clv, &g_procs);
       buf_printf(&g_procs, " *c_%s;", caps.v[i]);
     }
     if (cap_self && self_is_value) buf_printf(&g_procs, " sp_%s __self_val;", self_cls);
@@ -15758,7 +15757,7 @@ int emit_super_inline(Compiler *c, int id, Buf *b, int indent, int as_expr) {
     if (nt_argv_kwh(c->nt, argv, argc) >= 0) pargc = argc - 1;
     ArgLayout L;
     arg_layout(c, m, argv, pargc, pargc < argc ? argv[pargc] : -1, 1, &L);
-    emit_inline_bind_params(c, m, args, argv, argc, &L, 0, tag, saved_nren, din, b);
+    emit_inline_bind_params(c, m, args, argv, argc, &L, tag, saved_nren, din, b);
     arg_layout_free(&L);
   }
   ZSuper z;

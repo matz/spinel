@@ -1,7 +1,6 @@
 # A class variable handed to a method that appends to its parameter is the
-# class's own String, as in CRuby: the method is lent the class variable's
-# slot, as a global's or a top-level ivar's is. It was lent a copy in a
-# temp, so the append never reached the class variable.
+# class's own String, as in CRuby: the append reaches the class variable. It
+# was once handed a copy in a temp, so the append never reached it.
 
 X = "x" * 40
 def top(a) = (a << X; nil)

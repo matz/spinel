@@ -541,7 +541,6 @@ int strh_op(const char *n, int argc, int block);
 /* the receiver kind a block-taking iterator name belongs to */
 enum { BITER_NONE, BITER_ARRAY, BITER_INTEGER, BITER_STRING };
 int is_pop_name(const char *n);               /* pop */
-int is_first_name(const char *n);             /* first */
 
 
 const char *encoding_const_name(const char *nm);  /* Encoding::NM's encoding name, or NULL */

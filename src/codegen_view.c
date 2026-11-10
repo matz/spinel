@@ -40,14 +40,6 @@
    the emission (a class-tag arm's), for the Class emitters that answer
    from a statically known class; like a target it views no cached type.
 
-   view_push_splice marks a spliced method's parameter bound as an alias
-   of the caller's variable (inline_alias_params) that the call's block
-   assigns: the variable's argument node, the splice's tag and the
-   parameter's name. view_push_fn fences a C function emitted while such
-   splices are open (a proc's or a fiber's body), whose code cannot name
-   the splice's slots: view_splice_next walks the open splice entries from
-   the innermost down to the innermost fence. Neither views a node.
-
    view_push_arm does the same for the arm context a poly dispatch's
    builtin arm re-enters the call under (g_arm: the node whose dispatch
    declines its own re-entry, g_pd_skip and g_prbd_skip, and
@@ -62,7 +54,7 @@
 
 /* what an entry overrides: the node's type, one representation flag, or
    the arm context */
-enum { VK_TYPE = -1, VK_ARM = -2, VK_FACE = -3, VK_STMT = -4, VK_SPLICE = -5, VK_FN = -6, VK_TARGET = -7, VK_CONVERSION = -8, VK_CONST_READ = -9, VK_CLASS_IS = -10 };
+enum { VK_TYPE = -1, VK_ARM = -2, VK_FACE = -3, VK_STMT = -4, VK_FN = -6, VK_TARGET = -7, VK_CONVERSION = -8, VK_CONST_READ = -9, VK_CLASS_IS = -10 };
 static struct { Compiler *c; int id; int kind; int saved; int val; ArmCtx arm_saved; const void *pre; } view_stack[VIEW_MAX];
 static int view_face = -1;   /* the innermost face entry, or -1 */
 static int view_stmt = -1;   /* the innermost statement entry, or -1 */
@@ -337,24 +329,12 @@ int view_class_is(Compiler *c, int node, unsigned reads) {
 }
 unsigned view_class_is_read(int tok) { return tok >= 0 && tok < view_sp ? (unsigned)view_stack[tok].val : 0; }
 
-int view_push_splice(int arg, int tag, const char *pname) { return view_open_mark(VK_SPLICE, arg, tag, pname); }
+/* (the entry now only holds a slot of the emission stack per nested function body; the next change removes it) */
 int view_push_fn(void) { return view_open_mark(VK_FN, -1, 0, NULL); }
-
-int view_splice_next(int from, int *arg, int *tag, const char **pname) {
-  for (int i = (from < 0 || from > view_sp ? view_sp : from) - 1; i >= 0; i--) {
-    if (view_stack[i].kind == VK_FN) return -1;
-    if (view_stack[i].kind != VK_SPLICE) continue;
-    *arg = view_stack[i].id;
-    *tag = view_stack[i].saved;
-    *pname = (const char *)view_stack[i].pre;
-    return i;
-  }
-  return -1;
-}
 
 /* the entry on top, put back */
 static void view_close(int tok) {
-  if (view_stack[tok].kind == VK_SPLICE || view_stack[tok].kind == VK_FN) return;
+  if (view_stack[tok].kind == VK_FN) return;
   if (view_stack[tok].kind == VK_ARM) { g_arm = view_stack[tok].arm_saved; return; }
   if (view_stack[tok].kind == VK_FACE) { view_face = view_stack[tok].arm_saved.pd_skip; return; }
   if (view_stack[tok].kind == VK_STMT) { view_stmt = view_stack[tok].saved; return; }

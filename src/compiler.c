@@ -4357,55 +4357,6 @@ int comp_is_local_write(NodeKind k) {
          k == NK_LocalVariableOrWriteNode || k == NK_LocalVariableAndWriteNode ||
          k == NK_LocalVariableOperatorWriteNode;
 }
-/* Does the subtree under n assign the variable read node `arg` reads: a
-   local of the same scope, or an instance variable, by any write kind
-   (plain, operator, `||=`, `&&=`, a multiple-assignment target)? */
-static int comp_subtree_writes_var(Compiler *c, int n, int arg, const char *name, int depth) {
-  const NodeTable *nt = c->nt;
-  if (n < 0 || depth > 300) return 0;
-  NodeKind k = nt_kind(nt, n);
-  int ivar = nt_kind(nt, arg) == NK_InstanceVariableReadNode;
-  int w = ivar ? k == NK_InstanceVariableWriteNode || k == NK_InstanceVariableOrWriteNode ||
-                 k == NK_InstanceVariableAndWriteNode || k == NK_InstanceVariableOperatorWriteNode ||
-                 k == NK_InstanceVariableTargetNode
-               : comp_is_local_write(k);
-  if (w && nt_str(nt, n, "name") && sp_streq(nt_str(nt, n, "name"), name) &&
-      (ivar || comp_scope_of(c, n) == comp_scope_of(c, arg))) return 1;
-  int nr = nt_num_refs(nt, n);
-  for (int i = 0; i < nr; i++)
-    if (comp_subtree_writes_var(c, nt_ref_at(nt, n, i), arg, name, depth + 1)) return 1;
-  int na = nt_num_arrs(nt, n);
-  for (int i = 0; i < na; i++) {
-    int an = 0; const int *av = nt_arr_at(nt, n, i, &an);
-    for (int j = 0; j < an; j++)
-      if (comp_subtree_writes_var(c, av[j], arg, name, depth + 1)) return 1;
-  }
-  return 0;
-}
-int comp_node_writes_var(Compiler *c, int n, int arg) {
-  const NodeTable *nt = c->nt;
-  NodeKind ak = arg >= 0 ? nt_kind(nt, arg) : NK__COUNT;
-  const char *name = arg >= 0 ? nt_str(nt, arg, "name") : NULL;
-  if (n < 0 || !name || (ak != NK_LocalVariableReadNode && ak != NK_InstanceVariableReadNode)) return 0;
-  return comp_subtree_writes_var(c, n, arg, name, 0);
-}
-int comp_block_rebinds_arg(Compiler *c, int blk, int arg) {
-  const NodeTable *nt = c->nt;
-  NodeKind ak = arg >= 0 ? nt_kind(nt, arg) : NK__COUNT;
-  const char *name = arg >= 0 ? nt_str(nt, arg, "name") : NULL;
-  if (blk < 0 || !name || (ak != NK_LocalVariableReadNode && ak != NK_InstanceVariableReadNode)) return 0;
-  if (ak == NK_LocalVariableReadNode) {
-    LocalVar *lv = scope_local(comp_scope_of(c, arg), name);
-    if (lv && lv->proc_rebinds) return 1;
-    return nt_kind(nt, blk) == NK_BlockNode && comp_subtree_writes_var(c, blk, arg, name, 0);
-  }
-  /* an instance variable: a write in the block, or one a method the block
-     calls on self makes, or anything else that runs code the walk cannot
-     name (subtree_may_write_ivar); a block passed as a value (`&pr`) is a
-     proc whose body is not known here */
-  if (nt_kind(nt, blk) != NK_BlockNode) return 1;
-  return subtree_may_write_ivar(c, nt_ref(nt, blk, "body"), name, comp_ivar_owner(c, arg), 0);
-}
 static int comp_chain_alloc(int **head, int **next, int nb, int n, int *built) {
   *head = malloc((size_t)nb * sizeof(int));
   *next = malloc((size_t)(n > 0 ? n : 1) * sizeof(int));
@@ -5298,7 +5249,6 @@ LocalVar *scope_local_intern(Scope *s, const char *name) {
   { lv->is_cell = 0; comp_touch_scope(lv->owner); }
   lv->cell_shadow = 0;
   lv->cell_outlives = 0;
-  lv->inline_alias = 0;
   lv->init_guarded = 0;
   lv->rbs_seeded = 0;
   lv->rbs_type = TY_UNKNOWN;

@@ -1037,9 +1037,8 @@ void ren_copy_free(RenCopy *k) {
 
 RenPark ren_park(int from) {
   RenPark p = { g_nren, from, { NULL, NULL, 0 }, -1, -1 };
-  /* from 0: a C function body of its own, which cannot name the open
-     splices' slots either (view_splice_next). Nor is it inside the poly
-     dispatch arm its call site may sit in: the arm context (g_arm) is the
+  /* from 0: a C function body of its own. It is not inside the poly
+     dispatch arm its call site may sit in either: the arm context (g_arm) is the
      call's, under which no user class owns a name, and a proc body
      emitted there -- the `&block` a dispatch's default arm hands on to a
      Class value's method -- took every builtin shortcut for its own calls
@@ -3339,48 +3338,6 @@ const char *ivar_write_mark(Compiler *c, int w, char *buf, size_t cap) {
   if (!s || cid < 0 || !nm || !g_self) return NULL;
   return ivar_set_mark(c, cid, nm, g_self, g_self_deref, buf, cap);
 }
-/* The C global ivar read `node` lives in, by the read emitter's storage
-   rule: a class method's ivar is the class's civ_ slot, a top-level one
-   (outside an instance_eval) the Toplevel's. Appends it to `out` and answers 1;
-   0 for an instance's field. */
-int ivar_global_slot(Compiler *c, int node, Buf *out) {
-  const char *nm = nt_str(c->nt, node, "name");
-  Scope *cs = comp_scope_of(c, node);
-  if (!nm || !cs || g_ie_nil_ivars) return 0;
-  if (g_sb_iv_name && sp_streq(nm, g_sb_iv_name)) return 0;
-  if (cs->is_cmethod && cs->class_id >= 0)
-    buf_printf(out, "civ_%s_%s", c->classes[cs->class_id].name, iv_c(nm + 1));
-  else if (cs->class_id < 0 && g_ie_class_id < 0 && c->toplevel_class >= 0)
-    buf_printf(out, "civ_Toplevel_%s", iv_c(nm + 1));
-  else return 0;
-  return 1;
-}
-/* The C global global-variable read `node` reads, when it is the plain
-   gv_ slot rather than a special global's runtime accessor (`$0`, `$~`,
-   `$stdout`, ...): the read emitter decides, so its own text is asked. */
-int gvar_global_slot(Compiler *c, int node, Buf *out) {
-  const char *gn = nt_str(c->nt, node, "name");
-  const char *grn = gn && gn[0] == '$' ? comp_resolve_gvar(c, gn + 1) : NULL;
-  if (!grn || !comp_gvar(c, grn)) return 0;
-  Buf gb; memset(&gb, 0, sizeof gb);
-  emit_expr(c, node, &gb);
-  int plain = gb.p && !strncmp(gb.p, "gv_", 3) && sp_streq(gb.p + 3, grn);
-  if (plain) buf_puts(out, gb.p);
-  free(gb.p);
-  return plain;
-}
-/* The C global a class variable read or write `node` names
-   (cvar_<owner>_<name>), by the read emitter's rule (holder_cvar_owner):
-   the class it is looked up from, or the Toplevel, then the ancestor that
-   owns the class variable. Appends it to `out` and answers 1, or 0. */
-int cvar_global_slot(Compiler *c, int node, Buf *out) {
-  const char *nm = nt_str(c->nt, node, "name");
-  HolderRef h;
-  if (!nm || nm[0] != '@' || nm[1] != '@' || !holder_of_node(c, node, &h) || h.kind != HK_CVAR) return 0;
-  return holder_slot_buf(c, &h, out);
-}
-/* The innermost block or lambda `node` is written in, within its method;
-   -1 at the method's own level. */
 int *an_parent_map(const NodeTable *nt);
 /* The parent map of the program being emitted, kept on the Compiler. A
    strict ask rebuilds it when the node table changed; a loose one (for a
@@ -3396,16 +3353,6 @@ static const int *codegen_parents(Compiler *c, int node, int strict) {
     c->cg_parent_n = nt->count; c->cg_parent_ver = nt->version;
   }
   return c->cg_parent;
-}
-static int lent_enclosing_closure(Compiler *c, int node) {
-  const NodeTable *nt = c->nt;
-  const int *par = codegen_parents(c, node, 1);
-  for (int p = node >= 0 && node < nt->count ? par[node] : -1; p >= 0; p = par[p]) {
-    NodeKind k = nt_kind(nt, p);
-    if (k == NK_BlockNode || k == NK_LambdaNode) return p;
-    if (k == NK_DefNode) return -1;
-  }
-  return -1;
 }
 /* The parent map for asking about node (a node the program had before
    emission; one emission added has no entry), or NULL when node is not one. */
@@ -3423,74 +3370,6 @@ int node_is_block_stmt(Compiler *c, int node) {
   if (p >= 0 && nt_kind(c->nt, p) == NK_StatementsNode) p = par[p];
   if (p >= 0 && nt_kind(c->nt, p) == NK_BeginNode) p = par[p];
   return p >= 0 && nt_kind(c->nt, p) == NK_BlockNode;
-}
-/* A write of the C global `slot` (ivar_global_slot, gvar_global_slot,
-   cvar_global_slot) that can run while a call lent `slot` at `arg` is
-   running: one in another
-   method, or in a block or lambda other than the one the call is written
-   in. The callee holds the slot's address, so after such a write its
-   appends land in the new String, where CRuby appends to the one the call
-   was handed. Answers the write, or -1 when every write is in the call's
-   own method and block or in the program's top level outside a block (it
-   runs before or after the call). A write in the call's own method still
-   runs during the call when the callee calls that method back; that
-   recursion is not followed. */
-int lent_global_slot_rebound(Compiler *c, int arg, const char *slot) {
-  static const NodeKind gk[] = { NK_GlobalVariableWriteNode, NK_GlobalVariableOrWriteNode,
-                                 NK_GlobalVariableAndWriteNode, NK_GlobalVariableOperatorWriteNode,
-                                 NK_GlobalVariableTargetNode };
-  static const NodeKind ik[] = { NK_InstanceVariableWriteNode, NK_InstanceVariableOrWriteNode,
-                                 NK_InstanceVariableAndWriteNode, NK_InstanceVariableOperatorWriteNode,
-                                 NK_InstanceVariableTargetNode };
-  static const NodeKind ck[] = { NK_ClassVariableWriteNode, NK_ClassVariableOrWriteNode,
-                                 NK_ClassVariableAndWriteNode, NK_ClassVariableOperatorWriteNode,
-                                 NK_ClassVariableTargetNode };
-  const NodeTable *nt = c->nt;
-  int is_g = nt_kind(nt, arg) == NK_GlobalVariableReadNode;
-  int is_c = nt_kind(nt, arg) == NK_ClassVariableReadNode;
-  const NodeKind *ks = is_g ? gk : is_c ? ck : ik;
-  Scope *as = comp_scope_of(c, arg);
-  int ab = lent_enclosing_closure(c, arg);
-  Buf ws; memset(&ws, 0, sizeof ws);
-  for (int k = 0; k < 5; k++)
-    for (int w = comp_kind_first(c, ks[k]); w >= 0; w = comp_kind_next(c, w)) {
-      if (nt_kind(nt, w) != ks[k]) continue;
-      ws.len = 0;
-      if (ws.p) ws.p[0] = '\0';
-      if (is_g) {
-        const char *gn = nt_str(nt, w, "name");
-        const char *grn = gn && gn[0] == '$' ? comp_resolve_gvar(c, gn + 1) : NULL;
-        if (!grn) continue;
-        buf_printf(&ws, "gv_%s", grn);
-      }
-      else if (is_c ? !cvar_global_slot(c, w, &ws) : !ivar_global_slot(c, w, &ws)) continue;
-      if (!ws.p || !sp_streq(ws.p, slot)) continue;
-      /* the program's top level, outside any block or lambda, runs once and
-         is never reentered, so it is never running during a call */
-      Scope *ws2 = comp_scope_of(c, w);
-      int wb = lent_enclosing_closure(c, w);
-      if (wb < 0 && ws2 && !ws2->name && ws2->def_node < 0) continue;
-      if (ws2 != as || wb != ab) { free(ws.p); return w; }
-    }
-  free(ws.p);
-  return -1;
-}
-/* Refuse lending `slot` at `arg` when lent_global_slot_rebound finds a
-   write that can run during the call. */
-void refuse_lent_global_rebound(Compiler *c, int arg, const char *slot, const char *target, const char *pname) {
-  int w = lent_global_slot_rebound(c, arg, slot);
-  if (w < 0) return;
-  const char *vn = nt_str(c->nt, arg, "name");
-  char msg[768];
-  snprintf(msg, sizeof msg,
-           "`%s` is passed to %s's parameter `%s`, which appends to it, and `%s` is assigned at line %d, "
-           "where the assignment can run during the call: the append would then reach the newly "
-           "assigned String instead of the one passed (a String held by a global, a class variable, or "
-           "a top-level or class-level instance variable is not yet shared by reference). Pass a local "
-           "and assign it back after the call.",
-           vn ? vn : "?", target ? target : "a method", pname ? pname : "?", vn ? vn : "?",
-           (int)nt_int(c->nt, w, "node_line", 0));
-  unsupported_feature(c, arg, msg);
 }
 /* Emit-side lvalue for a shared-mutable string receiver: lv_<x> for a
    strbuf local, <self>-><iv_x> (or civ_Toplevel_x) for a strbuf ivar.
@@ -4035,43 +3914,17 @@ const NativeMethod *strbuf_native_answer(Compiler *c, int n) {
 /* --share-strings (#8328 step 5): the handle call v (an element read or a
    pop or shift of a String Array of handles, strh_call_op) answers, as the
    C expression of the sp_String * */
-/* The name of the method called on element read v when nil has none of it
-   and v can be nil, which the handle is then tested for, or NULL */
-static const char *strh_elem_nil_raise(Compiler *c, int v) {
-  const NodeTable *nt = c->nt;
-  const int *par = codegen_parents(c, v, 0);
-  int p = v < nt->count ? par[v] : -1;
-  if (p < 0 || nt_kind(nt, p) != NK_CallNode || nt_paren_single(nt, nt_ref(nt, p, "receiver")) != v) return NULL;
-  const char *nm = nt_str(nt, p, "name");
-  return nm && !is_nil_method(nm) ? nm : NULL;
-}
 void strh_elem_handle_text(Compiler *c, int v, Buf *b) {
-  const NodeTable *nt = c->nt;
-  int recv = nt_ref(nt, v, "receiver"), argc = 0;
-  const int *argv = call_args(nt, v, &argc);
-  const char *nm = nt_str(nt, v, "name");
   /* (one representation: the typed container's own read answers the handle;
      emit_expr reads it as bytes unless the node is named here) */
-  if (one_str_elem_call(c, v, TY_UNKNOWN)) {
-    /* (the read answers the element's bytes face, or a temp it is bound to
-       of either face; the handle is its owner, SP_STR_HDL) */
-    int save = g_one_elem_raw;
-    g_one_elem_raw = v;
-    buf_puts(b, "SP_STR_HDL(");
-    emit_expr(c, v, b);
-    buf_puts(b, ")");
-    g_one_elem_raw = save;
-    return;
-  }
-  const char *nilm = strh_elem_nil_raise(c, v);
-  if (nilm) buf_puts(b, "sp_StrhArray_nn(");
-  buf_puts(b, "((sp_String *)sp_PtrArray_get(");
-  strh_emit_recv(c, v, recv, b);
-  buf_puts(b, ", ");
-  if (argc == 1) emit_int_expr(c, argv[0], b);
-  else buf_puts(b, is_first_name(nm) ? "0" : "-1");
-  buf_puts(b, "))");
-  if (nilm) buf_printf(b, ", \"%s\")", nilm);
+  /* (the read answers the element's bytes face, or a temp it is bound to
+     of either face; the handle is its owner, SP_STR_HDL) */
+  int save = g_one_elem_raw;
+  g_one_elem_raw = v;
+  buf_puts(b, "SP_STR_HDL(");
+  emit_expr(c, v, b);
+  buf_puts(b, ")");
+  g_one_elem_raw = save;
 }
 /* Is v an element read, pop or shift of a String Array of handles, which
    answers the String's handle (strh_elem_handle_text)? */
@@ -4224,10 +4077,7 @@ int strh_elem_slot(Compiler *c, int v) {
     NodeKind ik = nt_kind(nt, argv[0]);
     return argc == 1 && (ik == NK_IntegerNode || ik == NK_LocalVariableReadNode || ik == NK_StringNode || ik == NK_SymbolNode);
   }
-  if (recv < 0 || !strh_var_read(nt, recv)) return 0;
-  TyKind rt = comp_recv_type(c, recv);
-  if (strh_call_op(c, v, rt) != STRH_ELEM) return 0;
-  return argc == 0 || nt_kind(nt, argv[0]) == NK_IntegerNode || nt_kind(nt, argv[0]) == NK_LocalVariableReadNode;
+  return 0;
 }
 static int strbuf_slot_into(Compiler *c, int recv, Buf *b) {
   HolderRef h;

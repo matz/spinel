@@ -127,9 +127,6 @@ int share_value_unobserved(Compiler *c, int n);
    String and one in a method no call reaches. */
 enum { SHN_NO, SHN_YES };
 int share_value_needs_handle(Compiler *c, int v);
-/* ... asked for the target of a multiple write that stores v, an element
-   of an Array literal it splits into its targets (also through a splat) */
-int share_store_needs_handle(Compiler *c, int v);
 /* Does node n hand over the shared handle (or a box holding it), not a
    copy of its bytes? The carry a deferred route is checked against
    (share_route_defer), and the String plan's supply for a value held as

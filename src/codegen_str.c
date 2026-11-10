@@ -203,10 +203,7 @@ static int str_handle_new(Compiler *c, int v, int form, unsigned dest, StrForm *
 static int str_handle_by_kind(Compiler *c, int v, int form, unsigned dest, StrForm *sf);
 static int str_render_handle(Compiler *c, int v, int form, unsigned dest, StrForm *sf) {
   sf->cty = TY_STRBUF;
-  if (c->share_plan) return str_handle_by_kind(c, v, form, dest, sf);
-  if (emit_strbuf_local_write_handle(c, v, &sf->expr)) return SPF_HANDLE;
-  if (str_handle_ran_first(c, v, sf) || str_handle_route(c, v, sf) || str_handle_slot(c, v, sf)) return SPF_HANDLE;
-  return str_handle_new(c, v, form, dest, sf);
+  return str_handle_by_kind(c, v, form, dest, sf);
 }
 
 /* --share-strings: the handle face's render of each producer kind
@@ -296,8 +293,7 @@ static int str_render_ident(Compiler *c, int v, int form, StrForm *sf) {
     for (int i = 0; i < n - 1; i++) emit_stmt(c, bv[i], g_pre, 0);
     StrForm last;
     memset(&last, 0, sizeof last);
-    int lf = str_render_ident(c, bv[n - 1], c->share_plan ? share_plan_of(c, bv[n - 1], SPR_IDENTITY, NULL).form
-                                                         : SPF_HANDLE, &last);
+    int lf = str_render_ident(c, bv[n - 1], share_plan_of(c, bv[n - 1], SPR_IDENTITY, NULL).form, &last);
     g_pre = sv;
     buf_printf(b, "({ %s%s; })", pre.p ? pre.p : "", last.expr.p ? last.expr.p : "");
     sf->cty = last.cty;
@@ -693,17 +689,13 @@ int emit_str_form(Compiler *c, int v, int role, int face, unsigned dest, StrForm
     sf->cty = TY_POLY;
     return str_box_by_kind(c, v, sf) ? 0 : -1;
   }
-  /* (the plan exists where share_plan_build made it: under the flag, once
-     the share facts are built) */
-  int form = c->share_plan ? share_plan_of(c, v, role, NULL).form : SPF_HANDLE;
+  int form = share_plan_of(c, v, role, NULL).form;
   switch (face) {
   case SPX_ID:
     sf->cty = TY_INT;
     return str_render_id(c, v, form, sf);
   case SPX_HANDLE:
-    /* (without a plan, the producer decides, as a form the plan does not
-       give the handle does: no box is read as its handle) */
-    return str_render_handle(c, v, c->share_plan ? form : SPF_BYTES, dest, sf);
+    return str_render_handle(c, v, form, dest, sf);
   case SPX_IDENT:
     return str_render_ident(c, v, form, sf);
   }
@@ -760,7 +752,7 @@ void emit_str_form_box(Compiler *c, int v, Buf *b) {
   TyKind t = comp_ntype(c, v);
   /* (a reader's handle is taken by emit_boxed's route for it: the
      identity face has no arm for a field read) */
-  if (!c->share_plan || (t != TY_STRING && t != TY_STRBUF) || share_plan_of(c, v, share_plan_role(c, v), NULL).form != SPF_HANDLE ||
+  if ((t != TY_STRING && t != TY_STRBUF) || share_plan_of(c, v, share_plan_role(c, v), NULL).form != SPF_HANDLE ||
       (share_plan_producer(c, v, NULL) == SPK_READER ||
        share_plan_producer(c, v, NULL) == SPK_POLY_ARMS)) {
     emit_boxed(c, v, b);
@@ -804,7 +796,7 @@ int emit_str_equal(Compiler *c, int id, Buf *b) {
   const NodeTable *nt = c->nt;
   const char *nm = nt_str(nt, id, "name");
   int recv = nt_ref(nt, id, "receiver"), argc = 0, tg[CPT_MAX];
-  if (!c->share_plan || !nm || !is_equal_name(nm) || recv < 0 || nt_ref(nt, id, "block") >= 0 ||
+  if (!nm || !is_equal_name(nm) || recv < 0 || nt_ref(nt, id, "block") >= 0 ||
       sn_guard_pending(c, id))
     return 0;
   const int *argv = call_args(nt, id, &argc);

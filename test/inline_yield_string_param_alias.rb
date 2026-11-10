@@ -1,8 +1,7 @@
 # A yielding (inlined) method's String parameter that the body appends to is
-# bound as an alias of the caller's variable, not a copy: the copy shared the
-# buffer only until its first reallocation. A helper that delegated only to
-# such a callee handed the caller back what its own block appended (#4476),
-# a second nesting lost the outer expansion's post-yield append (#4479), and
+# the caller's String, not a copy. A helper that delegated only to such a
+# callee handed the caller back what its own block appended (#4476), a
+# second nesting lost the outer expansion's post-yield append (#4479), and
 # a callee forwarding an anonymous block with `blk.call unless blk.nil?` was
 # read as letting the block escape, which celled the caller's buffer and took
 # the by-reference ABI away from every append the caller made (#4477).

@@ -33245,15 +33245,11 @@ static int dyn_pull_site_args(Compiler *c, int n) {
 /* ---- A String yielded into a spliced block (#6179) ---------------------
 
    A yielding method is spliced into its call sites, and so is the literal
-   block: a parameter the block appends to binds as an alias of the variable
-   yielded to it (block_param_wants_alias), and a parameter the method lends
-   (appends to, hands to a lent parameter, yields to a block that lends it)
-   as an alias of the caller's variable (inline_alias_params). An alias is a
-   `const char **` slot, and a String that is the shared handle has none: the
-   handle is carried instead. Such a parameter takes the handle, and every
-   variable bound to it is pulled in (pull_args_into_handle_params pulls a
-   method's callers, dyn_pull_arg a yield's variables). A program that
-   yields no handle into an appending block keeps its C. */
+   block. A block parameter that is the shared handle takes a String that
+   is the handle yielded to it, and every variable bound to such a
+   parameter is pulled in (dyn_pull_arg a yield's variables,
+   pull_args_into_handle_params a method's callers). A program that yields
+   no handle into an appending block keeps its C. */
 /* The arguments yield_splice_handles found going into a boxed parameter
    that the call's block appends to through a yield: a local is pulled into
    the handle there, and the emitter refuses any other String variable

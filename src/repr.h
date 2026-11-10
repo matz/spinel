@@ -143,10 +143,8 @@ typedef enum {
 /* Where a local's value lives. */
 typedef enum {
   RC_NONE,       /* its own C variable, lv_<name> */
-  RC_HEAP,       /* is_cell: a heap cell an escaping proc shares with the
+  RC_HEAP        /* is_cell: a heap cell an escaping proc shares with the
                     scope, read and written through *_cell_<name> */
-  RC_ALIAS       /* inline_alias: a parameter an inline expansion binds to
-                    the caller's variable for its duration */
 } ReprCell;
 
 /* Is value v (of representation r) typed as the handle while its own text

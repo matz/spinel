@@ -1860,8 +1860,8 @@ int emit_call_operator_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, co
       g_pre->len = rpre0; if (g_pre->p) g_pre->p[rpre0] = 0;
     }
   }
-  /* String#insert and #clear change the receiver's String in place through
-     its handle (the String rows of stage 7) */
+  /* String#insert, #clear and #slice! change the receiver's String in
+     place through its handle (the String rows of stage 7) */
   if (recv >= 0 && (rt == TY_STRING || rt == TY_STRBUF) &&
       emit_builtin_op_stage(c, id, recv, TY_STRING, name, 7, b)) return 1;
   /* poly `<<` in expression position: sp_poly_shl dispatches on the runtime tag

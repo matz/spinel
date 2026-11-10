@@ -1,20 +1,43 @@
+[TypeError, "no implicit conversion from nil to integer"]
+"a"
+"b"
+[TypeError, "no implicit conversion of String into Integer"]
+[TypeError, "no implicit conversion from nil to integer"]
+[TypeError, "no implicit conversion of String into Integer"]
+[TypeError, "no implicit conversion of Range into Integer"]
+[FrozenError, "can't modify frozen String: \"abc\""]
+["a", "cd", "bef"]
 "a-bc"
 [TypeError, "no implicit conversion of Integer into String"]
 [IndexError, "index 10 out of string"]
 [TypeError, "no implicit conversion of Integer into String"]
+[FrozenError, "can't modify frozen String: \"abc\""]
+[FrozenError, "can't modify frozen String: \"abc\""]
+[FrozenError, "can't modify frozen String: \"abc\""]
+[FrozenError, "can't modify frozen String: \"abc\""]
 302
+299
+3
 ""
 102
-"x<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<ab"
-"x<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<ab"
+102
+""
+nil
+""
 "qZrs"
 "Zqrs"
 "qrsZ"
 ""
 ""
 ""
+"r"
+"qr"
+"r"
+"rs"
 [IndexError, "index 5 out of string"]
 [FrozenError, "can't modify frozen String: \"qrs\""]
+[FrozenError, "can't modify frozen String: \"qrs\""]
 "Zabc"
+"abc"
 ""
 "t1abc"

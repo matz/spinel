@@ -2,27 +2,47 @@ true
 "<abc>"
 ".<abc>"
 ".<abc>"
+"."
+"<abc>"
+"abbc"
+["12", "abcd"]
+"ab"
 true
 ""
 true
 true
 "h-ello"
+"h-"
+false
+"ello"
+"ello"
 true
 ""
-"inside!"
-"inside!"
-"i+nside!"
-["one", "<two"]
+["ns", "iide!"]
+"iide!"
+"!"
+"i+ide"
+"w"
+["one", "<to"]
 "<maybe"
+"e"
+"<m"
 ""
 ""
 nil
 nil
 nil
+nil
+nil
+"aba"
+""
 "qq"
 "a2.9b"
 "ab-cdef"
 [FrozenError, "can't modify frozen String: \"\""]
+[FrozenError, "can't modify frozen String: \"abc\""]
+[FrozenError, "can't modify frozen String: \"abc\""]
+[FrozenError, "can't modify frozen String: \"abc\""]
 [FrozenError, "can't modify frozen String: \"abc\""]
 [IndexError, "index 9 out of string"]
 "abc"

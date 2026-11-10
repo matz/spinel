@@ -4414,15 +4414,15 @@ static int infer_poly_operand_call(Compiler *c, int id, const NodeTable *nt, con
       /* sync= answers its argument (only its truth sets the mode) */
       if (sp_streq(name, "sync=") && argc == 1)
         { *out = an_poly_concrete(c, id, name, infer_type(c, argv[0])); return 1; }
-      /* IO#winsize on a poly-carried handle: [rows, cols], same as the TY_IO
-         arm. Without this the call falls through to a plain poly result and the
-         `size[0]` that follows reads it as an untyped value. */
-      if (sp_streq(name, "winsize") && sp_feature_enabled("io/console"))
-        { *out = an_poly_concrete(c, id, name, TY_INT_ARRAY); return 1; }
-      /* and winsize=, which answers its Integer Array argument */
-      if (sp_streq(name, "winsize=") && argc == 1 && sp_feature_enabled("io/console") &&
-          infer_type(c, argv[0]) == TY_INT_ARRAY)
-        { *out = an_poly_concrete(c, id, name, TY_INT_ARRAY); return 1; }
+      /* a library's IO method on a poly-carried handle (io/console's
+         winsize, winsize=): what the TY_IO row the boxed dispatch emits
+         answers. Without this the call falls through to a plain poly result
+         and the `size[0]` that follows reads it as an untyped value. */
+      {
+        AnBopArgs ba = { c, argv };
+        const BuiltinOp *lop = bop_find_arg(TY_IO, name, argc, nt_ref(nt, id, "block") >= 0, an_bop_arg_type, &ba);
+        if (bop_io_library_row(lop)) { *out = an_poly_concrete(c, id, name, lop->result); return 1; }
+      }
       if ((sp_streq(name, "__sp_tty_mode") || sp_streq(name, "__sp_tty_restore")) && argc == 1)
         { *out = an_poly_concrete(c, id, name, TY_INT); return 1; }
       /* a boxed socket's non-blocking connect and options, as the TY_IO arms
@@ -5047,15 +5047,10 @@ static int infer_builtin_cmethod_call(Compiler *c, int id, const NodeTable *nt, 
       if (sp_streq(name, "unpack_sockaddr_in") && argc == 1) { *out = TY_POLY_ARRAY; return 1; }
       if (sp_streq(name, "unpack_sockaddr_un") && argc == 1) { *out = TY_STRING; return 1; }
     }
-    if (rk == NK_ConstantReadNode &&
-        nt_key_name(nt, recv) && sp_streq(nt_key_name(nt, recv), "IO")) {
-      /* IO.pipe -> [reader, writer], boxed IO handles (#2815) */
-      if (sp_streq(name, "pipe")) { *out = TY_POLY_ARRAY; return 1; }
-      if (sp_streq(name, "copy_stream") || sp_streq(name, "sysopen")) { *out = TY_INT; return 1; }
-      /* IO.new(fd, ...) is the descriptor form, same as IO.for_fd */
-      if ((sp_streq(name, "for_fd") || sp_streq(name, "new")) && argc >= 1) { *out = TY_IO; return 1; }
-      /* [ready_read, ready_write, ready_error] or nil on timeout */
-      if (sp_streq(name, "select") && argc >= 1) { *out = TY_POLY; return 1; }
+    /* a builtin class's own methods (IO.pipe, IO.select): its class-side rows */
+    if (rk == NK_ConstantReadNode) {
+      const BuiltinClassOp *cop = cplan_builtin_class_row(c, id, nt_key_name(nt, recv));
+      if (cop && cop->op.result != TY_UNKNOWN) { *out = cop->op.result; return 1; }
     }
 
     /* <local>.yield(v) or bare <local>.yield: a generator yielder / fiber yield
@@ -5257,10 +5252,8 @@ static int infer_handle_call(Compiler *c, int id, const NodeTable *nt, const cha
       { *out = TY_POLY; return 1; }
     if (sp_streq(name, "write_nonblock")) { *out = TY_INT; return 1; }
     if (sp_streq(name, "read_nonblock")) { *out = TY_STRING; return 1; }
-    if (sp_streq(name, "winsize") && sp_feature_enabled("io/console")) { *out = TY_INT_ARRAY; return 1; }
     /* IO#raw / IO#noecho's mode switch and restore (desugar_io_console_modes) */
     if ((sp_streq(name, "__sp_tty_mode") || sp_streq(name, "__sp_tty_restore")) && argc == 1) { *out = TY_INT; return 1; }
-    if (sp_streq(name, "winsize=") && argc == 1 && sp_feature_enabled("io/console")) { *out = TY_INT_ARRAY; return 1; }
     if (sp_streq(name, "each_line") || sp_streq(name, "each") ||
         sp_streq(name, "each_char") || sp_streq(name, "each_byte") ||
         sp_streq(name, "each_codepoint")) {

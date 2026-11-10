@@ -231,6 +231,12 @@ int cplan_kernel_def(Compiler *c, const char *name);   /* a version of the name'
    an explicit receiver and does not ignore visibility (a send does): that is
    NoMethodError. */
 int cplan_class_row(Compiler *c, int id, int recv, const char *name);
+/* The class-side row (bop_class_find) call id takes on builtin class cls,
+   its constant receiver: NULL where none of cls's singleton chain has one,
+   or where a class method the program gives a class of the chain, up to
+   the row's own, stands in front of it (`class IO; def self.select` is
+   what File.select runs). */
+const BuiltinClassOp *cplan_builtin_class_row(Compiler *c, int id, const char *cls);
 /* A call that builds an instance of an Array or Hash subclass (or, with
    `[]`, of a Struct or Data class: cplan_as_new) from its arguments through
    a Class value known only at run time (a parameter, an element, a call's

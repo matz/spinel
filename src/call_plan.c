@@ -2852,6 +2852,21 @@ int cplan_self_class(Compiler *c, int id) {
   if (framed) elab_plan_leave(c);
   return ci;
 }
+/* See call_plan.h. */
+const BuiltinClassOp *cplan_builtin_class_row(Compiler *c, int id, const char *cls) {
+  const char *name = nt_str(c->nt, id, "name");
+  int argc = 0;
+  call_args(c->nt, id, &argc);
+  const BuiltinClassOp *cop = bop_class_find(cls, name, argc, nt_ref(c->nt, id, "block") >= 0);
+  const char *a;
+  for (int i = 0; cop && (a = builtin_ancestor_at(cls, i)); i++) {
+    int ci = comp_class_index(c, a);
+    if (ci >= 0 && call_target(c, -1, ci, name, CT_CMETHOD, NULL) >= 0) return NULL;
+    if (sp_streq(a, cop->cls)) break;
+  }
+  return cop;
+}
+
 /* Does a builtin answer `name` on program class ci (main for -1): one on
    any self, a core class's own, a record class's own
    (elab_record_cmethod)? */

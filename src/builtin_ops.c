@@ -5,6 +5,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include "builtin_ops.h"
+#include "builtin_names.h"
+#include "compiler.h"   /* sp_feature_enabled: a library row answers where the program has it */
 
 /* The names a boxed builtin surface serves and the storage sites at which
    a String mutator is supported. Filter the rows before comparing names:
@@ -1660,10 +1662,11 @@ static const BuiltinOp bop_rows[] = {
   { TY_CONDVAR, "broadcast", 0, BOP_ARGC_ANY, BF_ANY, TY_CONDVAR, BOPE_NONE },
 
   /* IO / File (sp_File *, NULL is nil): the calls typed by name and arity.
-     sync= (its argument), the socket and io/console methods (features),
-     the *_nonblock family (exception: false) and the each_* iterators
-     (they type the block parameter) stay in infer_call_inner; a name with
-     no rule there is poly. */
+     sync= (its argument), the socket methods (a feature), io/console's
+     raw and noecho (desugar_io_console_modes), the *_nonblock family
+     (exception: false) and the each_* iterators (they type the block
+     parameter) stay in infer_call_inner; a name with no rule there is
+     poly. */
   { TY_IO, "respond_to?",    0, 127, BF_ANY, TY_BOOL,     BOPE_NONE },  /* true or false whatever the name */
   { TY_IO, "timeout",        0, 127, BF_ANY, TY_POLY,     BOPE_NONE },
   { TY_IO, "timeout=",       0, 127, BF_ANY, TY_UNKNOWN,  BOPE_NONE },
@@ -1826,6 +1829,13 @@ static const BuiltinOp bop_rows[] = {
   { TY_IO, "ctime",          0, 127, BF_ANY, TY_TIME,     BOPE_NONE },
   { TY_IO, "birthtime",      0,   0, BF_ANY, TY_TIME,     BOPE_TEMPLATE, "sp_file_birthtime(sp_File_path($r))", TY_UNKNOWN },
   { TY_IO, "birthtime",      0, 127, BF_ANY, TY_TIME,     BOPE_NONE },
+  /* io/console's size, [rows, cols], and its writer, which answers its
+     Integer Array: a writer's other operand is left to the refusal after
+     the lookup rather than guessed into a size. Rows of the library: a
+     program that does not require it has no winsize (NoMethodError). */
+  { TY_IO, "winsize",        0,   0, BF_ANY, TY_INT_ARRAY, BOPE_TEMPLATE, "sp_File_winsize($r)", 0, 0, 0, 0, "io/console" },
+  { TY_IO, "winsize=",       1,   1, BF_ANY, TY_INT_ARRAY, BOPE_IO_SET_WINSIZE, NULL, BOP_K(TY_INT_ARRAY), 0, 0, 0, "io/console" },
+  { TY_IO, "winsize=",       1,   1, BF_ANY, TY_INT_ARRAY, BOPE_NONE, NULL, 0, 0, 0, 0, "io/console" },
 
   /* Regexp: result kinds; emission stays in emit_call_body. */
   { TY_REGEX, "match?",          0, 127, BF_ANY,      TY_BOOL,          BOPE_NONE },
@@ -3119,7 +3129,49 @@ static int bop_row_fits(const BuiltinOp *r, int argc, int has_block) {
   if (argc < r->argc_min || argc > r->argc_max) return 0;
   if (r->block == BF_NONE && has_block) return 0;
   if (r->block == BF_REQUIRED && !has_block) return 0;
-  return 1;
+  return !r->feature || sp_feature_enabled(r->feature);
+}
+
+int bop_io_library_row(const BuiltinOp *op) {
+  return op && op->recv == TY_IO && op->feature && op->emit != BOPE_NONE;
+}
+
+/* A builtin class's own methods (bop_class_find), one table: IO's (#2815).
+   pipe, for_fd and new build instances of IO itself (BOPF_OWN_CLASS);
+   select, copy_stream and sysopen answer the same for any IO class. As the
+   instance rows do, an emitting row comes first and a typing row after it
+   types every count, the counts CRuby rejects too (the arity check raises
+   before the call answers). IO.new's answer is the constructor rule's
+   (infer_new_call), as every builtin class's new is: its row emits the
+   call (BOPF_INFERRED). */
+static const BuiltinClassOp bop_class_rows[] = {
+  { "IO", { TY_CLASS, "pipe",        0,   0, BF_ANY, TY_POLY_ARRAY, BOPE_TEMPLATE, "sp_io_pipe()", 0, 0, BOPF_OWN_CLASS } },
+  { "IO", { TY_CLASS, "pipe",        0, 127, BF_ANY, TY_POLY_ARRAY, BOPE_NONE, NULL, 0, 0, BOPF_OWN_CLASS | BOPF_KEYWORDS } },
+  { "IO", { TY_CLASS, "for_fd",      1, 127, BF_ANY, TY_IO,         BOPE_IO_FOR_FD, NULL, 0, 0, BOPF_OWN_CLASS | BOPF_KEYWORDS } },
+  { "IO", { TY_CLASS, "new",         1, 127, BF_ANY, TY_UNKNOWN,    BOPE_IO_FOR_FD, NULL, 0, 0, BOPF_OWN_CLASS | BOPF_KEYWORDS | BOPF_INFERRED } },
+  { "IO", { TY_CLASS, "select",      1,   4, BF_ANY, TY_POLY,       BOPE_IO_SELECT } },
+  { "IO", { TY_CLASS, "select",      1, 127, BF_ANY, TY_POLY,       BOPE_NONE } },
+  { "IO", { TY_CLASS, "copy_stream", 2,   2, BF_ANY, TY_INT,        BOPE_IO_COPY_STREAM } },
+  { "IO", { TY_CLASS, "copy_stream", 0, 127, BF_ANY, TY_INT,        BOPE_NONE } },
+  { "IO", { TY_CLASS, "sysopen",     1, 127, BF_ANY, TY_INT,        BOPE_IO_SYSOPEN } },
+  { "IO", { TY_CLASS, "sysopen",     0, 127, BF_ANY, TY_INT,        BOPE_NONE } },
+};
+
+const BuiltinClassOp *bop_class_find(const char *cls, const char *name, int argc, int has_block) {
+  if (!cls || !name) return NULL;
+  const char *a;
+  /* the first class of the chain with a row of the name has the method */
+  for (int i = 0; (a = builtin_ancestor_at(cls, i)); i++) {
+    int owns = 0;
+    for (size_t k = 0; k < sizeof bop_class_rows / sizeof bop_class_rows[0]; k++) {
+      const BuiltinClassOp *r = &bop_class_rows[k];
+      if (!sp_streq(r->cls, a) || !sp_streq(r->op.name, name)) continue;
+      owns = 1;
+      if ((i == 0 || !(r->op.flags & BOPF_OWN_CLASS)) && bop_row_fits(&r->op, argc, has_block)) return r;
+    }
+    if (owns) return NULL;
+  }
+  return NULL;
 }
 
 int bop_row_count(void) { return (int)(sizeof bop_rows / sizeof bop_rows[0]); }

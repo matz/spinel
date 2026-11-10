@@ -811,12 +811,6 @@ static int boxed_accept_nb_ok(const NodeTable *nt, const char *name, int argc, c
   return ne == 1 && kwh_lookup(nt, argv[0], "exception") >= 0;
 }
 
-/* winsize= as the typed arm takes it: one Integer Array */
-static int boxed_winsize_set(Compiler *c, const char *name, int argc, const int *argv) {
-  return sp_streq(name, "winsize=") && argc == 1 && sp_feature_enabled("io/console") &&
-         repr_of(c, argv[0]).elem == TY_INT;
-}
-
 static int emit_io_timeout_set(Compiler *c, int id, int recv, int value, Buf *b) {
   int tv = ++g_tmp, ta = ++g_tmp, tf = ++g_tmp;
   buf_puts(b, "({ ");
@@ -860,8 +854,8 @@ int emit_call_poly_io_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
        sp_streq(name, "eof?") || sp_streq(name, "closed?") || sp_streq(name, "path") ||
        sp_streq(name, "to_path") ||
        sp_streq(name, "tty?") || sp_streq(name, "isatty") ||
-       (sp_streq(name, "winsize") && sp_feature_enabled("io/console")) ||
-       (boxed_winsize_set(c, name, argc, argv)) ||
+       /* a library's methods (io/console's winsize, winsize=) */
+       bop_io_library_row(emit_builtin_op_row(c, id, TY_IO, name)) ||
        ((sp_streq(name, "__sp_tty_mode") || sp_streq(name, "__sp_tty_restore")) && argc == 1) ||
        sp_streq(name, "readlines") || sp_streq(name, "rewind") ||
        poly_io_codepoint_enum(c, id) ||
@@ -1112,7 +1106,8 @@ int emit_call_poly_io_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
       char tio[32]; snprintf(tio, sizeof tio, "_t%d", tio2);
       /* winsize=: the receiver, then the size, then the handle, as the
          typed arm sets it; a PTY master returned through a lambda is boxed */
-      if (boxed_winsize_set(c, name, argc, argv)) {
+      const BuiltinOp *lop = emit_builtin_op_row(c, id, TY_IO, name);
+      if (lop && lop->emit == BOPE_IO_SET_WINSIZE) {
         int trv = ++g_tmp, tsz = ++g_tmp;
         buf_puts(b, "({ "); trv = hold_operand(c, recv, TY_POLY, 1, trv, 1, " ", b);
         buf_printf(b, "sp_IntArray *_t%d = ", tsz);
@@ -1308,7 +1303,8 @@ int emit_call_poly_io_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
       else if (sp_streq(name, "closed?")) buf_printf(b, "sp_File_closed_p(_t%d); })", tio2);
       else if (sp_streq(name, "tty?") || sp_streq(name, "isatty"))
         buf_printf(b, "sp_File_tty_p(_t%d); })", tio2);
-      else if (sp_streq(name, "winsize")) buf_printf(b, "sp_File_winsize(_t%d); })", tio2);
+      /* a library's reader (io/console's winsize), through its row */
+      else if (bop_io_library_row(lop) && emit_builtin_op_arm_text(c, id, recv, TY_IO, name, tio, 0, b)) buf_puts(b, "; })");
       else if (sp_streq(name, "__sp_tty_mode") || sp_streq(name, "__sp_tty_restore")) {
         buf_printf(b, "%s(_t%d, ", sp_streq(name, "__sp_tty_mode") ? "sp_File_tty_mode" : "sp_File_tty_restore", tio2);
         emit_int_expr(c, argv[0], b); buf_puts(b, "); })");
@@ -2355,23 +2351,10 @@ int emit_call_io_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const ch
       buf_printf(b, "); _t%d; })", t);
       free(rb.p); return 1;
     }
-    if (sp_streq(name, "winsize") && sp_feature_enabled("io/console")) {
-      buf_printf(b, "sp_File_winsize(%s)", r); free(rb.p); return 1;
-    }
     /* IO#raw / IO#noecho's mode switch and restore (desugar_io_console_modes) */
     if ((sp_streq(name, "__sp_tty_mode") || sp_streq(name, "__sp_tty_restore")) && argc == 1) {
       buf_printf(b, "%s(%s, ", sp_streq(name, "__sp_tty_mode") ? "sp_File_tty_mode" : "sp_File_tty_restore", r);
       emit_int_expr(c, argv[0], b); buf_puts(b, ")"); free(rb.p); return 1;
-    }
-    /* IO#winsize= [rows, cols(, xpixel, ypixel)]: an Integer Array, the shape
-       every caller writes. Any other operand is left to the refusal below,
-       rather than guessed into a size. */
-    if (sp_streq(name, "winsize=") && argc == 1 && sp_feature_enabled("io/console") &&
-        repr_of(c, argv[0]).elem == TY_INT) {
-      Buf ab = {0};
-      emit_expr(c, argv[0], &ab);
-      buf_printf(b, "sp_File_set_winsize(%s, %s)", r, ab.p ? ab.p : "NULL");
-      free(ab.p); free(rb.p); return 1;
     }
     if (is_text_print(name)) {
       /* emit as a statement-like expression: print each arg, return nil.
@@ -2648,4 +2631,133 @@ int emit_call_handle_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, cons
     free(drb.p);
   }
   return 0;
+}
+
+/* IO's own methods, its class-side rows' emitters (bop_class_find) */
+
+/* IO.for_fd(fd [, mode] [, autoclose: bool]). IO.new takes the same
+   descriptor form -- it is how CRuby spells "wrap this fd", and the way
+   to reach a File::Stat from one. */
+int emit_op_io_for_fd(Compiler *c, const BopCtx *x, Buf *b) {
+  const NodeTable *nt = c->nt;
+  int argc;
+  const int *argv = call_args(c->nt, x->id, &argc);
+  int kwh = nt_argv_kwh(nt, argv, argc);
+  int ac = kwh >= 0 ? kwh_lookup(nt, kwh, "autoclose") : -1;
+  buf_puts(b, "sp_io_for_fd(");
+  emit_int_expr(c, argv[0], b);
+  buf_puts(b, ", ");
+  /* the positional mode rides through whatever its inferred type: a
+     STRING as-is, a widened (poly) one unboxed -- the TY_STRING-only
+     guard dropped a mode variable that widened in a larger program
+     (PR #4209's observation). argv[1] may also BE the keyword hash. */
+  if (argc >= 2 && argv[1] != kwh && comp_ntype(c, argv[1]) == TY_STRING)
+    emit_expr(c, argv[1], b);
+  else if (argc >= 2 && argv[1] != kwh && repr_of(c, argv[1]).kind == RK_BOXED) {
+    buf_puts(b, "sp_poly_to_s("); emit_expr(c, argv[1], b); buf_puts(b, ")");
+  }
+  /* no mode: the runtime derives it from the fd's own access mode
+     (a fixed "r" made fdopen fail on a write-only fd, #4208) */
+  else buf_puts(b, "\"\"");
+  buf_puts(b, ", ");
+  if (ac >= 0) { buf_puts(b, "("); emit_expr(c, ac, b); buf_puts(b, ")"); }
+  else buf_puts(b, "1");
+  buf_puts(b, ")");
+  return 1;
+}
+
+/* IO.select(read, write, error, timeout): a nil array watches nothing */
+int emit_op_io_select(Compiler *c, const BopCtx *x, Buf *b) {
+  int argc;
+  const int *argv = call_args(c->nt, x->id, &argc);
+  return emit_io_select(c, argc, argv, b);
+}
+
+/* IO.copy_stream(src, dst): read the whole source, write it to the dest,
+   returning the byte count. sp_io_copy_stream takes two path strings, so
+   a StringIO (#3216) or an IO/socket (#3217, an sp_File*) endpoint passed
+   straight in was an incompatible-pointer error. When both endpoints are
+   stream objects (StringIO or IO), read/write them by kind; two path
+   strings keep the filename copy. */
+int emit_op_io_copy_stream(Compiler *c, const BopCtx *x, Buf *b) {
+  int argc;
+  const int *argv = call_args(c->nt, x->id, &argc);
+  int a0_sio = node_is_stringio(c, argv[0]), a0_io = comp_ntype(c, argv[0]) == TY_IO;
+  int a1_sio = node_is_stringio(c, argv[1]), a1_io = comp_ntype(c, argv[1]) == TY_IO;
+  int a0_poly = repr_of(c, argv[0]).kind == RK_BOXED;
+  int a1_poly = repr_of(c, argv[1]).kind == RK_BOXED;
+  /* A boxed endpoint may hold a path, including a shared String handle,
+     or a stream. Check its kind before reading the payload as sp_File. */
+  if (a0_poly || a1_poly) {
+    int sio_cid = comp_core_class(c, CORE_STRINGIO);
+    int td = ++g_tmp;
+    buf_printf(b, "({ const char *_t%d = ", td);
+    if (a0_poly) {
+      int ts = ++g_tmp;
+      buf_puts(b, "({ "); ts = hold_operand(c, argv[0], TY_POLY, 0, ts, 1, " ", b);
+      buf_printf(b, "(_t%d.tag == SP_TAG_STR || sp_poly_is_strbuf(_t%d))"
+                    " ? sp_file_read(sp_poly_unbox_s(_t%d)) : ", ts, ts, ts);
+      if (sio_cid >= 0)
+        buf_printf(b, "_t%d.tag == SP_TAG_OBJ && _t%d.cls_id == %d"
+                      " ? sp_StringIO_read((sp_StringIO *)_t%d.v.p) : ", ts, ts, sio_cid, ts);
+      buf_printf(b, "_t%d.tag == SP_TAG_OBJ && _t%d.cls_id == SP_BUILTIN_IO"
+                    " ? sp_io_copy_stream_read((sp_File *)_t%d.v.p)"
+                    " : (sp_raise_nomethod(sp_nomethod_msg(\"read\", _t%d)), (const char *)0); })", ts, ts, ts, ts);
+    }
+    else if (a0_sio) { buf_puts(b, "sp_StringIO_read("); emit_expr(c, argv[0], b); buf_puts(b, ")"); }
+    else if (a0_io) { buf_puts(b, "sp_io_copy_stream_read("); emit_expr(c, argv[0], b); buf_puts(b, ")"); }
+    else { buf_puts(b, "sp_file_read("); emit_path_expr(c, argv[0], b); buf_puts(b, ")"); }
+    buf_printf(b, "; SP_GC_ROOT(_t%d); ", td);
+    if (a1_poly) {
+      int tdd = ++g_tmp;
+      tdd = hold_operand(c, argv[1], TY_POLY, 0, tdd, 1, " ", b);
+      buf_printf(b, "(_t%d.tag == SP_TAG_STR || sp_poly_is_strbuf(_t%d))"
+                    " ? sp_file_write(sp_poly_unbox_s(_t%d), _t%d) : ", tdd, tdd, tdd, td);
+      if (sio_cid >= 0)
+        buf_printf(b, "_t%d.tag == SP_TAG_OBJ && _t%d.cls_id == %d"
+                      " ? sp_StringIO_write((sp_StringIO *)_t%d.v.p, _t%d) : ", tdd, tdd, sio_cid, tdd, td);
+      buf_printf(b, "_t%d.tag == SP_TAG_OBJ && _t%d.cls_id == SP_BUILTIN_IO"
+                    " ? sp_File_write_bin((sp_File *)_t%d.v.p, _t%d)"
+                    " : (sp_raise_nomethod(sp_nomethod_msg(\"write\", _t%d)), (sp_int)0); })", tdd, tdd, tdd, td, tdd);
+    }
+    else if (a1_sio) { buf_puts(b, "sp_StringIO_write("); emit_expr(c, argv[1], b); buf_printf(b, ", _t%d); })", td); }
+    else if (a1_io) { buf_puts(b, "sp_File_write_bin("); emit_expr(c, argv[1], b); buf_printf(b, ", _t%d); })", td); }
+    else { buf_puts(b, "sp_file_write("); emit_path_expr(c, argv[1], b); buf_printf(b, ", _t%d); })", td); }
+    return 1;
+  }
+  if ((a0_sio || a0_io) && (a1_sio || a1_io)) {
+    buf_puts(b, a1_sio ? "sp_StringIO_write(" : "sp_File_write_bin(");
+    emit_expr(c, argv[1], b);
+    buf_puts(b, a0_sio ? ", sp_StringIO_read(" : ", sp_io_copy_stream_read(");
+    emit_expr(c, argv[0], b);
+    buf_puts(b, "))"); return 1;
+  }
+  buf_puts(b, "sp_io_copy_stream("); emit_path_expr(c, argv[0], b); buf_puts(b, ", ");
+  emit_path_expr(c, argv[1], b); buf_puts(b, ")"); return 1;
+}
+
+/* IO.sysopen(path [, mode [, perm]]): the descriptor */
+int emit_op_io_sysopen(Compiler *c, const BopCtx *x, Buf *b) {
+  int argc;
+  const int *argv = call_args(c->nt, x->id, &argc);
+  buf_puts(b, "sp_io_sysopen("); emit_path_expr(c, argv[0], b);
+  buf_puts(b, ", ");
+  if (argc >= 2) emit_int_expr(c, argv[1], b); else buf_puts(b, "0");
+  buf_puts(b, ", ");
+  if (argc >= 3) emit_int_expr(c, argv[2], b); else buf_puts(b, "0");
+  buf_puts(b, ")"); return 1;
+}
+
+/* IO#winsize= [rows, cols(, xpixel, ypixel)] (io/console): an Integer
+   Array, the shape every caller writes (the row's guard). A handle read
+   back out of a container is set by the boxed dispatch, which takes the
+   receiver, then the size, then the handle (emit_call_poly_io_arms). */
+int emit_op_io_set_winsize(Compiler *c, const BopCtx *x, Buf *b) {
+  int argc;
+  const int *argv = call_args(c->nt, x->id, &argc);
+  Buf ab = {0};
+  emit_expr(c, argv[0], &ab);
+  buf_printf(b, "sp_File_set_winsize(%s, %s)", x->rtext ? x->rtext : "NULL", ab.p ? ab.p : "NULL");
+  free(ab.p);
+  return 1;
 }

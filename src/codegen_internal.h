@@ -2641,6 +2641,14 @@ int emit_builtin_op_tmp(Compiler *c, int id, int recv, TyKind rt, const char *na
    there; every other lookup reads stage 0 */
 int emit_builtin_op_stage(Compiler *c, int id, int recv, TyKind rt, const char *name,
                           int stage, Buf *b);
+/* The row emit_builtin_op finds for call id, named name, on a receiver
+   read as kind rt (stage 0, the arguments' kinds as codegen has them), or
+   NULL: what an arm that renders the call itself switches on */
+const struct BuiltinOp *emit_builtin_op_row(Compiler *c, int id, TyKind rt, const char *name);
+/* Call id, named name, on builtin class cls (a constant receiver's name),
+   emitted through its class-side row (cplan_builtin_class_row): 0 when no
+   row of the class's singleton chain emits it */
+int emit_builtin_class_op(Compiler *c, int id, const char *cls, const char *name, Buf *b);
 
 /* #7483: a block's body typed again under one arm's type for its parameter
    (the caller set the parameter's slot to `kind`): each statement's
@@ -2850,6 +2858,12 @@ int emit_op_array_cycle_endless(Compiler *c, const BopCtx *x, Buf *b);
 int emit_op_array_slice_groups(Compiler *c, const BopCtx *x, Buf *b);
 int emit_op_array_join_str(Compiler *c, const BopCtx *x, Buf *b);
 int emit_op_array_pred_class(Compiler *c, const BopCtx *x, Buf *b);
+/* IO's class-side rows and io/console's writer (codegen_call_io.c) */
+int emit_op_io_for_fd(Compiler *c, const BopCtx *x, Buf *b);
+int emit_op_io_select(Compiler *c, const BopCtx *x, Buf *b);
+int emit_op_io_copy_stream(Compiler *c, const BopCtx *x, Buf *b);
+int emit_op_io_sysopen(Compiler *c, const BopCtx *x, Buf *b);
+int emit_op_io_set_winsize(Compiler *c, const BopCtx *x, Buf *b);
 /* A typed array receiver of a compare (`ck` "cmp") or a blockless sum (`ck`
    "sum"), wrapped in the runtime's nil check where the array can hold nil
    (codegen_call_recv.c) */

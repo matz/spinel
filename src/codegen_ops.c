@@ -6,6 +6,7 @@
 
 #include "codegen_internal.h"
 #include "builtin_ops.h"
+#include "call_plan.h"
 
 /* The receiver's C text, emitted once. A row names it as $r, possibly
    more than once; every $r prints the same text, as the arms the rows
@@ -572,6 +573,11 @@ static int (*const bop_emitters[BOPE__COUNT])(Compiler *, const BopCtx *, Buf *)
   [BOPE_PROC_SOURCE_LOCATION] = emit_op_proc_source_location,
   [BOPE_ARRAY_PRED_CLASS] = emit_op_array_pred_class,
   [BOPE_CONV_USER_OK] = emit_op_conv_user_ok,
+  [BOPE_IO_FOR_FD] = emit_op_io_for_fd,
+  [BOPE_IO_SELECT] = emit_op_io_select,
+  [BOPE_IO_COPY_STREAM] = emit_op_io_copy_stream,
+  [BOPE_IO_SYSOPEN] = emit_op_io_sysopen,
+  [BOPE_IO_SET_WINSIZE] = emit_op_io_set_winsize,
 };
 
 static int emit_builtin_op_ex(Compiler *c, int id, int recv, TyKind rt, const char *name,
@@ -653,6 +659,24 @@ int emit_builtin_op(Compiler *c, int id, int recv, TyKind rt, const char *name, 
 int emit_builtin_op_stage(Compiler *c, int id, int recv, TyKind rt, const char *name,
                           int stage, Buf *b) {
   return emit_builtin_op_ex(c, id, recv, rt, name, NULL, 0, stage, bop_arg_ntype, 1, b);
+}
+
+/* See codegen_internal.h. */
+const BuiltinOp *emit_builtin_op_row(Compiler *c, int id, TyKind rt, const char *name) {
+  int argc;
+  const int *argv = call_args(c->nt, id, &argc);
+  BopArgs a = { c, argv };
+  return bop_find_stage(bop_family_of(rt), name, argc, nt_ref(c->nt, id, "block") >= 0, bop_arg_ntype, &a, 0);
+}
+
+/* See codegen_internal.h. */
+int emit_builtin_class_op(Compiler *c, int id, const char *cls, const char *name, Buf *b) {
+  int argc;
+  call_args(c->nt, id, &argc);
+  const BuiltinClassOp *cop = cplan_builtin_class_row(c, id, cls);
+  if (!cop || cop->op.emit == BOPE_NONE || !bop_emitters[cop->op.emit]) return 0;
+  BopCtx x = { id, nt_ref(c->nt, id, "receiver"), argc, TY_CLASS, name, &cop->op, NULL, 0 };
+  return bop_emitters[cop->op.emit](c, &x, b);
 }
 
 /* The call emitted through the row of its name that guards no argument kind,

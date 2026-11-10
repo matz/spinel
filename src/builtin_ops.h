@@ -216,6 +216,12 @@ typedef enum {
   BOPE_BOXED_ARRAY_COUNT, /* a count-taking Enumerable read through a box */
   BOPE_BOXED_ARRAY_ONLY,  /* a boxed Array read that requires an Array */
   BOPE_BOXED_ARRAY_OR_RANGE, /* a boxed read that accepts Array and Range */
+  /* IO's own methods, class-side rows (codegen_call_io.c) */
+  BOPE_IO_FOR_FD,         /* IO.for_fd / IO.new(fd [, mode] [, autoclose:]) */
+  BOPE_IO_SELECT,         /* IO.select(read [, write [, error [, timeout]]]) */
+  BOPE_IO_COPY_STREAM,    /* IO.copy_stream(src, dst) */
+  BOPE_IO_SYSOPEN,        /* IO.sysopen(path [, mode [, perm]]) */
+  BOPE_IO_SET_WINSIZE,    /* IO#winsize= (io/console) with an Integer Array */
   BOPE__COUNT
 } BopEmit;
 
@@ -242,6 +248,10 @@ typedef struct BuiltinOp {
                              places in the emission chain gives the rows of
                              each place their own stage. Inference reads
                              every row whatever its stage. */
+  const char *feature;    /* the library that defines the method
+                             (io/console), or NULL for the core's: the row
+                             answers only where the program has it
+                             (sp_feature_enabled) */
 } BuiltinOp;
 
 /* The row answers for a boxed (poly) receiver too, behind a run-time class
@@ -357,6 +367,12 @@ typedef struct BuiltinOp {
    the program wrote never takes it. It is no CRuby method, so the arity
    check against CRuby's counts skips it. */
 #define BOPF_INTERNAL 8192
+/* A class-side row (BuiltinClassOp) whose answer is built as an instance of
+   its own class (IO.pipe, IO.for_fd, IO.new): a subclass's call (File.pipe)
+   answers instances of the subclass, which the row's emitter does not
+   build, so the row answers for its own class only and the lookup does not
+   hand it down the singleton chain. */
+#define BOPF_OWN_CLASS 16384
 
 /* A row's recv may name a family of kinds rather than one; a caller looks
    the family up with the family's value. Not a TyKind any value has. */
@@ -469,6 +485,25 @@ const BuiltinOp *bop_find_arg(TyKind rt, const char *name, int argc, int has_blo
    negative stage reads every row, as bop_find_arg does */
 const BuiltinOp *bop_find_stage(TyKind rt, const char *name, int argc, int has_block,
                                 BopArgKind arg_of, const void *ud, int stage);
+
+/* Is op a library's IO row (io/console's winsize, winsize=) that emits the
+   call? The boxed IO dispatch serves these on a handle read back out of a
+   container, as the typed arm does (emit_call_poly_io_arms). */
+int bop_io_library_row(const BuiltinOp *op);
+
+/* A builtin class's own method (a singleton method: IO.select), as a row:
+   op says what `Cls.name(...)` answers and how codegen emits it, as a
+   BuiltinOp row does for an instance's method (op.recv is TY_CLASS). */
+typedef struct {
+  const char *cls;        /* the builtin class whose singleton defines it */
+  BuiltinOp op;
+} BuiltinClassOp;
+/* The class-side row for `name` called with argc arguments (a block when
+   has_block) on builtin class cls, read through cls's singleton chain as
+   CRuby looks the method up: File.select finds IO's row. A row flagged
+   BOPF_OWN_CLASS answers on its own class only, and a row of a library
+   (op.feature) only where the program has the library. NULL for none. */
+const BuiltinClassOp *bop_class_find(const char *cls, const char *name, int argc, int has_block);
 
 /* Whether any row applies to receivers of kind rt: a caller checks this
    before reading the call's arguments, so receivers no row covers cost

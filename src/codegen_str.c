@@ -85,7 +85,7 @@ static int str_render_id(Compiler *c, int v, int form, StrForm *sf) {
 
 /* Is node v a read of a variable (a local, an ivar, a global, a class
    variable or a constant), which hands over the handle its slot holds? */
-static int str_var_read(Compiler *c, int v) {
+int str_var_read(Compiler *c, int v) {
   NodeKind k = nt_kind(c->nt, v);
   return k == NK_LocalVariableReadNode || k == NK_InstanceVariableReadNode || repr_static_read_kind(k);
 }

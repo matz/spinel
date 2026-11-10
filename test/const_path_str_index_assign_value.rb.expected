@@ -1,0 +1,53 @@
+-- first and later, value and statement
+"Q"
+"RR"
+"Z"
+"QRScdeZ"
+-- range, regexp and string indexes
+"J"
+"0"
+"RL"
+"Jll0oRLd"
+-- three arguments
+"XYZ"
+"D"
+"aXYZDef"
+["q"]
+"qXYZDef"
+-- a nested path
+"N"
+"D"
+"NEsteD"
+-- a frozen constant
+FrozenError: can't modify frozen String: "frozen"
+FrozenError: can't modify frozen String: "frozen"
+"frozen"
+"M"
+"Mut"
+-- a Class value holder
+pick 1
+"Z"
+"Za"
+"bb"
+pick 2
+"Za"
+"bY"
+pick 3
+["W"]
+"Wa"
+"bY"
+3
+"V"
+"Va"
+-- a top-level constant, a global, a class variable
+"T"
+"G"
+"Top"
+"Gob"
+"C"
+-- as an argument, an element and a hash value
+"1"
+["2", "3"]
+{k: "4"}
+"1234ef"
+"5"

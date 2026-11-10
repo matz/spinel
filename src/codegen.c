@@ -9017,10 +9017,7 @@ static void emit_fiber_full_bind(Compiler *c, FiberParams *f, Scope *encl, NameS
 
 static void emit_fiber_new_here(Compiler *c, int id, Buf *b, int as_gen, int size_node);
 void emit_fiber_new(Compiler *c, int id, Buf *b, int as_gen, int size_node) {
-  /* the capture struct and the body type a shim's receiver local as the handle */
-  sb_shim_lift(c, id);
   emit_fiber_new_here(c, id, b, as_gen, size_node);
-  sb_shim_drop(c, id);
 }
 /* A Thread block's parameter typed from Thread.new's argument, an Integer or
    a Float (infer_block_params): the runtime hands the value over boxed, and
@@ -9175,13 +9172,10 @@ static void emit_fiber_new_here(Compiler *c, int id, Buf *b, int as_gen, int siz
      source name once the body pushed fewer entries (`_cell_recv` instead of
      `_cell__y6_recv`, an undeclared identifier at the C level). */
   char **cap_rn = ncap > 0 ? calloc((size_t)ncap, sizeof *cap_rn) : NULL;
-  /* and the name of the cell: the shim's shadow rename names no cell */
-  char **cap_cn = ncap > 0 ? calloc((size_t)ncap, sizeof *cap_cn) : NULL;
-  if (ncap > 0 && (!cap_rn || !cap_cn)) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  if (ncap > 0 && !cap_rn) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   for (int i = 0; i < ncap; i++) {
     cap_rn[i] = strdup(rename_local(caps.v[i]));
-    cap_cn[i] = strdup(rename_local_cell(caps.v[i]));
-    if (!cap_rn[i] || !cap_cn[i]) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    if (!cap_rn[i]) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   }
 
   /* Capture self if the body accesses ivars or dispatches to self implicitly */
@@ -9680,13 +9674,12 @@ static void emit_fiber_new_here(Compiler *c, int id, Buf *b, int as_gen, int siz
            (`only` -> `_y1234_only`) and the cell is DECLARED under the
            renamed name by emit_scope_decls, so capturing under the source
            name emits a reference to an identifier that does not exist. */
-        buf_printf(g_pre, "_t%d->c_%s = _cell_%s;\n", tc, caps.v[i], cap_cn[i]);   /* the shared cell pointer */
+        buf_printf(g_pre, "_t%d->c_%s = _cell_%s;\n", tc, caps.v[i], cap_rn[i]);   /* the shared cell pointer */
       else
         buf_printf(g_pre, "_t%d->c_%s = lv_%s;\n", tc, caps.v[i], cap_rn[i]);
     }
-    for (int i = 0; i < ncap; i++) { free(cap_rn[i]); free(cap_cn[i]); }
+    for (int i = 0; i < ncap; i++) free(cap_rn[i]);
     free(cap_rn);
-    free(cap_cn);
     if (as_gen) {
       buf_printf(b, "%ssp_Enumerator_new_gen(%s, _t%d, ", gen_multi ? "sp_enum_mark_pair(" : "", fname, tc);
       emit_enum_size_arg(c, size_node, b);
@@ -10147,10 +10140,8 @@ static void emit_proc_param_cell(Compiler *c, Scope *bs, const char *p, Buf *pb)
 }
 
 void emit_proc_literal(Compiler *c, int create, Buf *b) {
-  sb_shim_lift(c, create);
   if (create < 0 || create != g_block_id || !g_yield_self_fallback) {
     emit_proc_literal_here(c, create, b);
-    sb_shim_drop(c, create);
     return;
   }
   const char *sv_self = g_self, *sv_deref = g_self_deref;
@@ -10165,7 +10156,6 @@ void emit_proc_literal(Compiler *c, int create, Buf *b) {
   if (hid) ren_unhide(&bh);
   g_self = sv_self; g_self_deref = sv_deref;
   g_emitting_class_id = sv_emcls; g_nren = sv_nren;
-  sb_shim_drop(c, create);
 }
 
 /* A boxed parameter of a shared class may receive a fresh plain String.
@@ -11536,8 +11526,8 @@ else if (orecv >= 0 && onm) {
             sp_streq(rename_local(caps.v[i]), caps.v[i]))
           buf_printf(g_pre, "_capv_%s->c_%s = ((%s *)_cap)->c_%s;\n", pid, caps.v[i], g_cap_struct, caps.v[i]);
         else
-          /* as the sibling site above, minus a shim's shadow rename: it names no cell */
-          buf_printf(g_pre, "_capv_%s->c_%s = _cell_%s;\n", pid, caps.v[i], rename_local_cell(caps.v[i]));
+          /* as the sibling site above */
+          buf_printf(g_pre, "_capv_%s->c_%s = _cell_%s;\n", pid, caps.v[i], rename_local(caps.v[i]));
       }
       /* Capture the enclosing instance self: by value for a value-type class
          (deref if the enclosing method holds self as a pointer, e.g. an

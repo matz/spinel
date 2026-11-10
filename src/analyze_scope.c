@@ -8759,11 +8759,27 @@ static void unbound_module_methods_away(Compiler *c) {
   for (int id = 0; id < nt->count; id++) {
     if (nt_kind(nt, id) != NK_CallNode) continue;
     const char *nm = nt_str(nt, id, "name");
-    if (!nm || !(sp_streq(nm, "instance_method") || sp_streq(nm, "public_instance_method"))) continue;
+    if (!nm) continue;
     int recv = nt_ref(nt, id, "receiver");
-    int k = recv >= 0 && (nt_kind(nt, recv) == NK_ConstantReadNode || nt_kind(nt, recv) == NK_ConstantPathNode)
-              ? const_node_class_index(c, recv) : -1;
-    if (k >= 0 && k < c->nclasses) bound[k] = 1;
+    if (sp_streq(nm, "instance_method") || sp_streq(nm, "public_instance_method")) {
+      int k = recv >= 0 && (nt_kind(nt, recv) == NK_ConstantReadNode || nt_kind(nt, recv) == NK_ConstantPathNode)
+                ? const_node_class_index(c, recv) : -1;
+      if (k >= 0 && k < c->nclasses) bound[k] = 1;
+      continue;
+    }
+    /* a mixin the walk does not record (one under a condition, `extend M
+       if ...`) may still run: its module is bound. (A module's own include
+       of another binds that one too, which is harmless: that one's methods
+       are copied away into the including module, whose own binding is
+       what decides.) */
+    if (!(sp_streq(nm, "extend") || sp_streq(nm, "include") || sp_streq(nm, "prepend"))) continue;
+    int args = nt_ref(nt, id, "arguments"), argc = 0;
+    const int *argv = args >= 0 ? nt_arr(nt, args, "arguments", &argc) : NULL;
+    for (int a = 0; a < argc; a++) {
+      NodeKind ak = nt_kind(nt, argv[a]);
+      int k = ak == NK_ConstantReadNode || ak == NK_ConstantPathNode ? const_node_class_index(c, argv[a]) : -1;
+      if (k >= 0 && k < c->nclasses) bound[k] = 1;
+    }
   }
   for (int changed = 1; changed;) {
     changed = 0;

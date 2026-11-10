@@ -13569,12 +13569,11 @@ static int block_with_own_self(Compiler *c, int call) {
    class as self: a class method in its chain (any visibility: the call
    is marked self_call, so a private one stays callable), or Module's
    name / to_s / inspect (which `Foo.name` reaches as the bare call does)? */
-static int bare_call_on_class(Compiler *c, const char *cname, const char *nm) {
-  int ci = cname && nm ? comp_class_index(c, cname) : -1;
-  if (ci < 0) return 0;
+static int bare_call_on_class(Compiler *c, int ci, const char *nm) {
+  if (ci < 0 || !nm) return 0;
   return comp_cmethod_in_chain(c, ci, nm, NULL) >= 0 || is_name_reader(nm);
 }
-static void subtree_self_to_const(Compiler *c, int root, const char *cname, int depth) {
+static void subtree_self_to_const(Compiler *c, int root, const char *cname, int ci, int depth) {
   NodeTable *nt = (NodeTable *)c->nt;
   if (root < 0 || root >= nt->count || depth > 200) return;
   NodeKind k = nt_kind(nt, root);
@@ -13585,7 +13584,7 @@ static void subtree_self_to_const(Compiler *c, int root, const char *cname, int 
      self of the code around the block (`A.k = Foo.class_eval { name }`
      answered "A"). */
   if (k == NK_CallNode && nt_ref(nt, root, "receiver") < 0 &&
-      (is_cvar_reflection_name(nt_str(nt, root, "name")) || bare_call_on_class(c, cname, nt_str(nt, root, "name")))) {
+      (is_cvar_reflection_name(nt_str(nt, root, "name")) || bare_call_on_class(c, ci, nt_str(nt, root, "name")))) {
     int cr = nt_new_node(nt, "ConstantReadNode");
     if (cr < 0) return;
     nt_node_set_str(nt, cr, "name", cname);
@@ -13608,7 +13607,7 @@ static void subtree_self_to_const(Compiler *c, int root, const char *cname, int 
       nd = &nt->nodes[root];        /* nt_new_node may realloc nt->nodes */
       nd->r[i].ref = cr;
     }
-    else subtree_self_to_const(c, ch, cname, depth + 1);
+    else subtree_self_to_const(c, ch, cname, ci, depth + 1);
     nd = &nt->nodes[root];
   }
   for (int i = 0; i < nd->na; i++) {
@@ -13623,7 +13622,7 @@ static void subtree_self_to_const(Compiler *c, int root, const char *cname, int 
         nd = &nt->nodes[root];
         nd->a[i].ids[j] = cr;
       }
-      else subtree_self_to_const(c, ch, cname, depth + 1);
+      else subtree_self_to_const(c, ch, cname, ci, depth + 1);
       nd = &nt->nodes[root];
     }
   }
@@ -13747,7 +13746,8 @@ int desugar_class_eval_value(Compiler *c) {
     int recv = nt_ref(nt, id, "receiver");
     if (recv < 0 || nt_kind(nt, recv) != NK_ConstantReadNode) continue;
     const char *cname = nt_str(nt, recv, "name");
-    if (!cname || const_node_class_index(c, recv) < 0) continue;
+    int rci = cname ? const_node_class_index(c, recv) : -1;
+    if (rci < 0) continue;
     int blk = nt_ref(nt, id, "block");
     if (blk < 0 || nt_kind(nt, blk) != NK_BlockNode) continue;
     int body = nt_ref(nt, blk, "body");
@@ -13777,7 +13777,7 @@ int desugar_class_eval_value(Compiler *c) {
       np = rn;
     }
 
-    subtree_self_to_const(c, body, cname, 0);
+    subtree_self_to_const(c, body, cname, rci, 0);
     int base = nt->count;
     /* `param = arg` writes prepended to the body, then the body statements */
     int items[8 + 64]; int ni = 0;

@@ -20274,12 +20274,16 @@ static const char *nng_guard_param(Compiler *c, Scope *s, int st) {
    exact; elsewhere the reads stay boxed, where the boxed dispatch answers
    for both. */
 int class_has_subclass(Compiler *c, int ocid);
-static TyKind isa_narrow_type(Compiler *c, const char *cn, const Scope *s) {
+static TyKind isa_narrow_type(Compiler *c, int arg, const Scope *s) {
+  const NodeTable *nt = c->nt;
+  const char *cn = nt_str(nt, arg, "name");
+  NodeKind ak = nt_kind(nt, arg);
   if (!cn) return TY_UNKNOWN;
   /* A user class with no subclass: is_a?(K) proves the exact class, so the
      read unboxes to K and its calls bind statically. A subclass instance
      would also pass, and K's static dispatch would skip its overrides. */
-  int ci = is_builtin_class_name(cn) || is_builtin_module_name(cn) ? -1 : comp_class_index(c, cn);
+  int ci = is_builtin_class_name(cn) || is_builtin_module_name(cn) ? -1 :
+           ak == NK_ConstantReadNode || ak == NK_ConstantPathNode ? const_node_class_index(c, arg) : comp_class_index(c, cn);
   if (ci >= 0) {
     const ClassInfo *k = &c->classes[ci];
     if (!(class_def_is_class(c->nt, k->def_node) &&
@@ -20326,7 +20330,7 @@ static const char *isa_guard_local(Compiler *c, int pred, Scope *s, TyKind *out_
   int args = nt_ref(nt, pred, "arguments");
   int an = 0; const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &an) : NULL;
   if (an != 1 || !av || nt_kind(nt, av[0]) != NK_ConstantReadNode) return NULL;
-  TyKind t = isa_narrow_type(c, nt_str(nt, av[0], "name"), s);
+  TyKind t = isa_narrow_type(c, av[0], s);
   if (t == TY_UNKNOWN) return NULL;
   *out_t = t;
   return pn;

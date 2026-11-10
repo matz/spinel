@@ -11315,11 +11315,10 @@ int desugar_exception_super_new(Compiler *c) {
       /* `self.new(*a)` in a class method builds the class that defines it,
          not the receiving one: a splat is spelled so only for a class no
          other class inherits from, where the two are the same */
-      if (an > 0 && nt_argv_has(nt, av, an, NT_ARG_SPLAT)) {
-        int nd = 0;
-        comp_descendants(c, cid, &nd);
-        if (nd > 0) continue;
-      }
+      /* (keywords beside the splat keep the super: new would take an
+         empty `**h` as one more positional argument) */
+      if (an > 0 && nt_argv_has(nt, av, an, NT_ARG_SPLAT) &&
+          (nt_argv_has(nt, av, an, NT_ARG_KEYWORDS) || !comp_class_is_leaf(c, cid))) continue;
       if (sk) {
         int ps = nt_ref(nt, s->def_node, "parameters"), nq = 0, no = 0;
         const int *pq = NULL, *po = NULL;

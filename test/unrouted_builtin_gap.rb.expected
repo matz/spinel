@@ -27,3 +27,21 @@ pp method: NotImplementedError: spinel: Module#instance_method is not supported
 slice
 gap in a spliced block: NotImplementedError: spinel: Kernel#global_variables is not supported
 slice
+a
+gap in a String iterator's block: NotImplementedError: spinel: Kernel#global_variables is not supported
+pick 0
+block argument 0: NotImplementedError: spinel: Kernel#singleton_methods is not supported
+pick 1
+block argument 1: NotImplementedError: spinel: Kernel#singleton_methods is not supported
+pick 2
+block argument 2: NotImplementedError: spinel: Kernel#singleton_methods is not supported
+pick 3
+block argument 3: NotImplementedError: spinel: Kernel#singleton_methods is not supported
+pick 4
+block argument 4: NotImplementedError: spinel: Kernel#singleton_methods is not supported
+pick 5
+block argument 5: TypeError: no implicit conversion of Array into Proc
+pick 6
+block argument 6: TypeError: no implicit conversion of Range into Proc
+pick 7
+block argument 7: TypeError: no implicit conversion of Object into Proc

@@ -2060,7 +2060,7 @@ static void cls_value_probe_fn(Compiler *c, int id, void *ctx, Buf *nb) {
    can raise NoMethodError: a raise, or the Class emitter's own
    class-method switch (the program's methods of the name, then the raise)? */
 static int cls_value_answer_raises(const char *t) {
-  return strncmp(t, "sp_raise_", 9) == 0 || emitted_no_method_in(t) ||
+  return strncmp(t, "sp_raise_", 9) == 0 || strstr(t, "sp_raise_nomethod(") ||
          strstr(t, "sp_raise_poly_nomethod(") || strstr(t, "sp_raise_cls(\"NoMethodError\"");
 }
 /* The default arm of the class-side switch below: a class value whose class
@@ -2090,6 +2090,9 @@ static int emit_poly_cls_value_builtin(Compiler *c, int id, const char *name, in
   for (int a = 0; a < argc; a++)
     if (subtree_has_side_effect(c, argv[a])) view_bind(argv[a], "_t%d", atmp[a]);
   int va = view_push_arm(id, g_prbd_skip, 1);
+  /* the call's own gap is a raise too (ArmCtx.gap_watch) */
+  int gap = 0;
+  int gw = view_push_gap_watch(id, &gap);
   int vw = view_push(c, recv, TY_CLASS);
   int fv = view_push_face(recv, TY_CLASS);
   /* under the silent probe: an emitter that refuses the call on a Class
@@ -2097,10 +2100,11 @@ static int emit_poly_cls_value_builtin(Compiler *c, int id, const char *name, in
   ClsValueProbe pr = { ret, TY_UNKNOWN };
   Buf *nb = calloc(1, sizeof *nb);
   char *arm_pre = NULL;
-  int ok = poly_arm_probe(c, id, cls_value_probe_fn, &pr, nb, &arm_pre) && pr.got != TY_UNKNOWN;
+  int ok = poly_arm_probe(c, id, cls_value_probe_fn, &pr, nb, &arm_pre) && pr.got != TY_UNKNOWN && !gap;
   TyKind got = pr.got;
   view_pop(c, fv);
   view_pop(c, vw);
+  view_pop(c, gw);
   view_pop(c, va);
   view_unbind(slot);
   const char *t = ok && nb->p ? nb->p : NULL;
@@ -2163,6 +2167,9 @@ static int cls_value_known_arm(Compiler *c, int id, int k, unsigned unsettled, i
   int sv_tmp = g_tmp;
   int slot = view_bind(recv, "sp_unbox_class(_t%d)", tv);
   int va = view_push_arm(id, g_prbd_skip, 1);
+  /* the call's own gap is a raise too (ArmCtx.gap_watch) */
+  int gap = 0;
+  int gw = view_push_gap_watch(id, &gap);
   int vw = view_push(c, recv, TY_CLASS);
   int fv = view_push_face(recv, TY_CLASS);
   int vk = view_push_class_is(c, recv, k);
@@ -2170,10 +2177,11 @@ static int cls_value_known_arm(Compiler *c, int id, int k, unsigned unsettled, i
   Buf nb; memset(&nb, 0, sizeof nb);
   char *pre = NULL;
   int ok = poly_arm_probe(c, id, cls_value_probe_fn, &pr, &nb, &pre) && pr.got != TY_UNKNOWN &&
-           pr.got != TY_VOID && view_class_is_read(vk) && !(view_class_is_read(vk) & unsettled);
+           pr.got != TY_VOID && view_class_is_read(vk) && !(view_class_is_read(vk) & unsettled) && !gap;
   view_pop(c, vk);
   view_pop(c, fv);
   view_pop(c, vw);
+  view_pop(c, gw);
   view_pop(c, va);
   view_unbind(slot);
   const char *t = ok ? nb.p : NULL;
@@ -23835,6 +23843,16 @@ static void emit_block_arg_operand(Compiler *c, int id, int fe, Buf *b) {
   const char *cn;
   int cb = cplan_block_arg(c, id, &cn);
   if (cb == CB_RAISE) emit_block_arg_type_error(c, fe, cn, &ae, 0);
+  else if (cb == CB_CHECK && !cn) {
+    /* a boxed value, converted as a `&` operand converted ahead of its call
+       is (__blk_conv's sp_poly_blk_conv): nil, a Proc, a Method, a Symbol and
+       a Hash pass, anything else (an Array, a Range, a program object with no
+       #to_proc) answers CRuby's TypeError. The call does not run after it, so
+       this is the operand's one conversion. */
+    buf_puts(&ae, "(void)sp_poly_blk_conv(");
+    emit_boxed(c, fe, &ae);
+    buf_printf(&ae, ", %d); ", kw_splat_user_may_convert(c));
+  }
   else if (cb == CB_CHECK) {
     emit_block_arg_check(c, fe, cn, &ae);
     buf_puts(&ae, "; ");
@@ -23957,7 +23975,9 @@ int an_written_call(int id);
    reads the gate's NoMethodError token: the arms that build a call from
    several attempts take another route on it (a poly dispatch's arm for a
    class, an operator through its `==`), so a call that answers in the end
-   keeps answering. The operands run while its message argument is built, in
+   keeps answering. An arm whose text holds more than the call (the block a
+   poly dispatch's builtin arm splices) asks for this call's own gap instead
+   (ArmCtx.gap_watch). The operands run while its message argument is built, in
    order, then the call raises NotImplementedError (or, for a lookup by a name
    the record proves is nowhere, CRuby's NameError). A slot of a scalar type
    takes it with its default, as the gate's other arms give it. */
@@ -23973,6 +23993,9 @@ static int emit_unrouted_gap(Compiler *c, int id, Buf *b) {
   if (gap) {
     if (g_plan_check) cplan_served("unrouted");
     warn_unrouted_call(c, id, own);
+    /* the call an arm emits to see whether a builtin answers it: the
+       builtin declined it (ArmCtx.gap_watch) */
+    if (id == g_arm.gap_watch && g_arm.gap_hit) *g_arm.gap_hit = 1;
   }
   int recv = nt_ref(nt, id, "receiver"), blk = nt_ref(nt, id, "block"), argc;
   const int *argv = call_args(nt, id, &argc);

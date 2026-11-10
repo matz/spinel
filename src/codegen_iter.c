@@ -3988,10 +3988,6 @@ int poly_block_dispatch_cands(Compiler *c, int id, int *cand, int max) {
 static int builtin_arm_raises_name(const char *text, const char *name) {
   char rtok[300];
   snprintf(rtok, sizeof rtok, "sp_raise_nomethod(sp_nomethod_msg(\"%s\"", name);
-  /* this call's gap (emit_unrouted_gap) is the builtin declining too: it
-     reaches the gap reader outside the probe, which warns. A gap of another
-     call, in an operand, is that call's own raise, which the arm runs */
-  if (emitted_unrouted_for(text, name)) return 1;
   static const char tail[] = "else ";
   for (const char *p = strstr(text, rtok); p; p = strstr(p + 1, rtok))
     if ((size_t)(p - text) < sizeof tail - 1 || strncmp(p - (sizeof tail - 1), tail, sizeof tail - 1) != 0)
@@ -4138,7 +4134,12 @@ static int emit_poly_recv_block_dispatch_x(Compiler *c, int id, Buf *b, int inde
     Buf ab; memset(&ab, 0, sizeof ab);
     Buf fb; memset(&fb, 0, sizeof fb);
     int slot = view_bind(recv, "_t%d", ts);
+    /* the arm's own call declines where it is the gap (the String or IO
+       emission has no route for it), not where a call in the block it
+       splices is (ArmCtx.gap_watch) */
+    int str_gap = 0, io_gap = 0;
     if (str_iter) {
+      int gw = view_push_gap_watch(id, &str_gap);
       int v = view_push(c, recv, TY_STRING);
       /* analysis renames a String's each_grapheme_cluster to each_char (the
          two agree over the text spinel carries); this receiver was not a
@@ -4148,17 +4149,20 @@ static int emit_poly_recv_block_dispatch_x(Compiler *c, int id, Buf *b, int inde
       emit_stmt(c, id, &ab, indent + 2);
       if (graph) nt_node_restore_str((NodeTable *)nt, id, "name", sv_nm);
       view_pop(c, v);
+      view_pop(c, gw);
     }
     if (io_iter) {
       view_unbind(slot);
       view_bind(recv, "_t%d", tf);
+      int gw = view_push_gap_watch(id, &io_gap);
       int v = view_push(c, recv, TY_IO);
       emit_stmt(c, id, &fb, indent + 2);
       view_pop(c, v);
+      view_pop(c, gw);
     }
     view_unbind(g_n_argov - 1);
-    int str_arm = ab.p && !emitted_no_method_in(ab.p);
-    int io_arm = fb.p && !emitted_no_method_in(fb.p);
+    int str_arm = ab.p && !strstr(ab.p, "sp_raise_nomethod(") && !str_gap;
+    int io_arm = fb.p && !strstr(fb.p, "sp_raise_nomethod(") && !io_gap;
     if (str_arm || io_arm) {
       emit_indent(&sw, indent); buf_puts(&sw, "default: {\n");
       if (str_arm) {
@@ -4208,6 +4212,12 @@ static int emit_poly_recv_block_dispatch_x(Compiler *c, int id, Buf *b, int inde
     Buf *ab = calloc(1, sizeof *ab);
     int slot = view_bind(recv, "_t%d", trecv);
     int va = view_push_arm(g_pd_skip, id, 1);
+    /* this call's gap (emit_unrouted_gap) is the builtin declining too: it
+       reaches the gap reader outside the probe, which warns. A gap of another
+       call, in an operand or the block the arm splices, is that call's own
+       raise, which the arm runs (ArmCtx.gap_watch) */
+    int gap = 0;
+    int gw = view_push_gap_watch(id, &gap);
     /* under the silent probe: a builtin emitter that refuses the call drops
        this arm, not the build */
     Buf *sv_gpre = g_pre;
@@ -4234,9 +4244,10 @@ static int emit_poly_recv_block_dispatch_x(Compiler *c, int id, Buf *b, int inde
     g_conv_hold = sv_hold; g_open_defaults = sv_open_defaults;
     g_nren = sv_nren; g_block_id = sv_block;
     g_unsup_probe = sv_probe; g_pre = sv_gpre;
+    view_pop(c, gw);
     view_pop(c, va);
     view_unbind(slot);
-    if (ok && ab->p && !builtin_arm_raises_name(ab->p, name)) {
+    if (ok && ab->p && !gap && !builtin_arm_raises_name(ab->p, name)) {
       emit_indent(&sw, indent); buf_puts(&sw, "default: {\n");
       buf_puts(&sw, ab->p);
       emit_indent(&sw, indent + 1); buf_puts(&sw, "break;\n");

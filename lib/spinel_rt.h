@@ -7,6 +7,7 @@
    the first system header. Must precede <stdio.h>. */
 #include "sp_types.h"
 #include "sp_builtin_classes.h"
+#include "sp_kernel_private.h"
 #ifdef SP_CEXT
 #include "sp_cext.h"
 #endif
@@ -5811,13 +5812,13 @@ SP_NORETURN SP_COLD static void sp_raise_poly_nomethod(const char *m, sp_RbVal v
    "module <Name>", anything else as "an instance of <Class>". Only builds the
    message -- the caller keeps the recognizable sp_raise_nomethod(...) form
    the coercion paths key on. */
-/* The methods Kernel defines private: sent to an explicit receiver that does
-   not define them itself they are "private method 'select' called for ...",
-   not "undefined method" (the list is CRuby's Kernel.private_instance_methods;
-   src/codegen_util.c keeps the compiler's copy). */
+/* The methods Kernel defines private (sp_kernel_private.h): sent to an explicit
+   receiver that does not define them itself they are "private method
+   'select' called for ...", not "undefined method". */
 static int sp_nomethod_kernel_private(const char *m) {
-  static const char *const k[] = { "Array", "Complex", "Float", "Hash", "Integer", "Rational", "String", "abort", "at_exit", "autoload", "autoload?", "binding", "block_given?", "caller", "caller_locations", "catch", "eval", "exec", "exit", "exit!", "fail", "fork", "format", "gets", "global_variables", "iterator?", "lambda", "load", "local_variables", "loop", "open", "p", "pp", "print", "printf", "proc", "putc", "puts", "raise", "rand", "readline", "readlines", "require", "require_relative", "select", "set_trace_func", "sleep", "spawn", "sprintf", "srand", "syscall", "system", "test", "throw", "trace_var", "trap", "untrace_var", "warn", NULL };
-  for (int i = 0; k[i]; i++) if (!strcmp(m, k[i])) return 1;
+#define X(n) if (!strcmp(m, n)) return 1;
+  SP_KERNEL_PRIVATE(X)
+#undef X
   return 0;
 }
 /* How a NoMethodError's text names its receiver v: nil, true, false, "class

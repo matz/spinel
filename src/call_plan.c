@@ -2769,11 +2769,34 @@ int cplan_builtin_method_vis(Compiler *c, int node, int ci, const char *cls, con
   int mv = bv >= 0 && on && is_object_class_name(on) ? elab_main_method_vis_at(c, node, m) : -1;
   return mv > 0 ? mv : bv;
 }
+/* Does call id's form reach a Kernel function (they are private)? Receiverless,
+   `self.`, or a send (the retargeted call) whose receiver's class does not own
+   the name; any other explicit receiver names a private method. A dispatch's
+   default arm (dflt) takes the receivers its arms did not, so none of them
+   owns the name there. */
+static int cplan_kernel_form(Compiler *c, int id, const char *name, int dflt) {
+  const NodeTable *nt = c->nt;
+  int recv = nt_ref(nt, id, "receiver");
+  return recv < 0 || nt_kind(nt, recv) == NK_SelfNode ||
+         (nt_str(nt, id, "send_blind") && (dflt || !send_blind_recv_owns(c, id, recv, comp_ntype(c, recv), name)));
+}
+/* See call_plan.h. */
+int cplan_dispatch_row(Compiler *c, int id) {
+  const NodeTable *nt = c->nt;
+  const char *name = id >= 0 && nt_kind(nt, id) == NK_CallNode ? nt_str(nt, id, "name") : NULL;
+  int argc = 0;
+  if (name) call_args(nt, id, &argc);
+  const BuiltinOp *op = name ? bop_find(BOP_KERNEL, name, argc, nt_ref(nt, id, "block") >= 0) : NULL;
+  int oci = comp_core_class(c, CORE_OBJECT);   /* (Object's reopening answers every self) */
+  return op && !(op->flags & BOPF_INTERNAL) && cplan_kernel_form(c, id, name, 1) &&
+         call_target(c, id, -1, name, CT_TOP, NULL) < 0 &&
+         !(oci >= 0 && call_target(c, id, oci, name, 0, NULL) >= 0);
+}
 /* See call_plan.h. */
 CplanMissing cplan_dispatch_miss(Compiler *c, int id, int cid) {
   const NodeTable *nt = c->nt;
   const char *name = id >= 0 && nt_kind(nt, id) == NK_CallNode ? nt_str(nt, id, "name") : NULL;
-  if (!name || cid < 0 || cid >= c->nclasses || call_target(c, id, cid, name, 0, NULL) >= 0 ||
+  if (!name || cid < 0 || cid >= c->nclasses || call_target(c, id, cid, name, 0, NULL) >= 0 || cplan_dispatch_row(c, id) ||
       builtin_object_method_known(name) || is_kernel_module_function(name) ||
       (is_comparable_module_method(name) && class_is_comparable(c, cid)) ||
       (name_is_enumerable_module_method(name) && class_mixes_in(c, cid, elab_module_named(c, "Enumerable"), 0)) ||
@@ -2856,14 +2879,29 @@ int cplan_kernel_row(Compiler *c, int id, const char *name) {
   const NodeTable *nt = c->nt;
   int argc = 0;
   call_args(nt, id, &argc);
-  const BuiltinOp *op = name && nt_ref(nt, id, "receiver") < 0 ? bop_find(BOP_KERNEL, name, argc, nt_ref(nt, id, "block") >= 0) : NULL;
+  int recv = nt_ref(nt, id, "receiver");
+  const BuiltinOp *op = name ? bop_find(BOP_KERNEL, name, argc, nt_ref(nt, id, "block") >= 0) : NULL;
   if (!op) return 0;
   /* an internal row answers the calls the compiler made (builtin_only: it
      never reaches a method of the program's), whatever the program defines;
      the program's own call of its name never takes it */
-  if (op->flags & BOPF_INTERNAL) return nt_int(nt, id, "builtin_only", 0);
+  if (op->flags & BOPF_INTERNAL) return recv < 0 && nt_int(nt, id, "builtin_only", 0);
+  if (!cplan_kernel_form(c, id, name, 0)) return 0;
+  /* an arm pinned to a version runs it, and its else arm (CT_PIN_BUILTIN)
+     the row */
+  int pin = ct_pin_of(c, id);
+  if (pin != -1) return pin == CT_PIN_BUILTIN;
   int self = cplan_self_class(c, id);
-  return call_target(c, id, -1, name, CT_TOP, NULL) < 0 && (self < 0 || call_target(c, id, self, name, 0, NULL) < 0);
+  /* (a call whose self the record cannot place, in a def the analysis made, has its scope's class) */
+  if (self < -1) {
+    const Scope *in = comp_scope_of(c, id);
+    self = in ? in->class_id : -1;
+  }
+  int own = recv < 0 || nt_kind(nt, recv) == NK_SelfNode;
+  if (!cplan_dispatch_row(c, id) || (self >= 0 && own && call_target(c, id, self, name, 0, NULL) >= 0)) return 0;
+  /* ...and no method of the program's answers the call by the plan (a descendant's override) */
+  const CallPlan *p = cplan_user_fresh(c, id);
+  return p->mi < 0 && p->send_fallback < 0;
 }
 
 const char *cplan_self_text(Compiler *c, int id, int ci, char *buf, size_t cap) {

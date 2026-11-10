@@ -1,0 +1,49 @@
+false
+false
+false
+false
+true
+false
+true
+false
+true
+false
+false
+false
+true
+false
+[false, true, false]
+true
+false
+true
+false
+false
+false
+false
+true
+false
+false
+false
+false
+[true, false, false, false, false, false, false]
+false
+false
+false
+false
+[:a, false]
+0
+ArgumentError: wrong number of arguments (given 1, expected 2)
+ArgumentError: wrong number of arguments (given 3, expected 2)
+NoMethodError: private method 'respond_to_missing?' called for an instance of Plain
+NoMethodError: private method 'respond_to_missing?' called for an instance of Opt
+[:nm, :nm, :nm]
+[true, false, false]
+:nm
+:nm
+false
+true
+false
+[:x, true, nil]
+false
+[false, false]
+false

@@ -187,7 +187,8 @@ CLASS_TARGETS = {
   "Random"  => %w[new rand srand],
   "ENV"     => %w[fetch key? has_key? include? member? assoc rassoc values_at],
   "Kernel"  => %w[format sprintf Integer Float String Array Hash Rational Complex
-                  throw catch raise rand srand caller lambda proc binding block_given?],
+                  throw catch raise rand srand caller lambda proc binding block_given?
+                  respond_to_missing?],
   # the class-side surface of the constants a program names bare: GC, Fiber
   # and Thread are not classes the compiler declares; a class Struct.new or
   # Data.define answered is keyed StructClass / DataClass
@@ -291,7 +292,7 @@ end
 # anything that could act on the probing process.
 def spec_of(recv, m, block: false)
   sym = m.to_sym
-  return nil unless recv.call.respond_to?(sym)
+  return nil unless recv.call.respond_to?(sym, true)
   low = (0..3).map { |n| probe_counts(recv, sym, n, block: block) }
   min = low.index(:ok)
   return nil if min.nil?  # needs > 3 required args: not on this surface
@@ -518,6 +519,10 @@ kwpos.each { |r| render.("BAK", r[0, 2]) }
 params.each { |_, k, m, ps, cside| render.("BAP", [k, m, ps, cside.to_i]) }
 summary = "#{arity.length + kernel_arity.length} Method#arity + #{inst.length} instance + #{cm.length} class-method + #{params.length} parameters entries"
 if ARGV.include?("--check")
+  # the private-Kernel list the compiler and the runtime share is held to CRuby's
+  listed = File.read(File.join(__dir__, "../lib/sp_kernel_private.h")).scan(/X\("([^"]+)"\)/).flatten
+  stray = listed - Kernel.private_instance_methods.map(&:to_s)
+  abort "lib/sp_kernel_private.h names methods #{ver}'s Kernel does not define private: #{stray.join(", ")}" unless stray.empty?
   if File.read(SOURCE) == out
     $stderr.puts "arity facts match #{ver}: #{summary}"
     exit 0

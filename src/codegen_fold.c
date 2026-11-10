@@ -12945,11 +12945,16 @@ void emit_obj_dispatch_key(Compiler *c, int cid, const char *selfptr, Buf *b) {
    naming self's class as it runs and staging self as the receiver;
    otherwise, and after the raise, the typed placeholder the result slot
    takes. A per-arm dispatch passes its arguments (argsNode), which no
-   arm ran for this self: CRuby runs them before it finds no method. */
+   arm ran for this self: CRuby runs them before it finds no method. A call
+   with a Kernel row (cplan_dispatch_row) takes the row's answer in the
+   placeholder's place; a dispatch that ran its arguments ahead passes their
+   temps (atmp). */
 static void emit_dispatch_miss_default(Compiler *c, int cid, int miss_id, const char *name, const char *selfptr,
-                                       int argsNode, int rtmp, TyKind ret, TyKind disp_ret, Buf *b) {
+                                       int argsNode, const int *atmp, int rtmp, TyKind ret, TyKind disp_ret, Buf *b) {
   int miss = miss_id >= 0 ? cplan_dispatch_miss(c, miss_id, cid) : CM_NONE;
-  if (miss != CM_NONE) {
+  int row = miss_id >= 0 && cplan_dispatch_row(c, miss_id);   /* Kernel's row answers, not a raise */
+  Buf rv; memset(&rv, 0, sizeof rv);
+  if (miss != CM_NONE || (row && argsNode >= 0)) {
     int argc = 0;
     const int *argv = argsNode >= 0 ? nt_arr(c->nt, argsNode, "arguments", &argc) : NULL;
     Buf pb; memset(&pb, 0, sizeof pb);
@@ -12959,18 +12964,19 @@ static void emit_dispatch_miss_default(Compiler *c, int cid, int miss_id, const 
       g_pre = &pb;
       emit_args_run(c, argv, argc);
       g_pre = sv;
+      if (row) emit_dispatch_row_answer(c, miss_id, NULL, ret, &rv);   /* (the operands' temps are bound) */
       view_unbind(ov);
     }
     /* in a block of its own: the arguments' temps are declarations */
     if (pb.p) buf_printf(b, "{ %s", pb.p);
     Buf v; memset(&v, 0, sizeof v);
-    emit_obj_self_box(c, cid, selfptr, &v);
+    if (miss != CM_NONE) emit_obj_self_box(c, cid, selfptr, &v);
     if (miss == CM_NAMEERROR) {
       buf_puts(b, "sp_raise_cls(\"NameError\", sp_stage_recv_msg(sp_sprintf(\"undefined local variable or method '%s' for %s\", ");
       emit_str_literal(b, name);
       buf_printf(b, ", sp_nomethod_recv_desc(%s)), %s)); ", v.p, v.p);
     }
-    else {
+    else if (miss != CM_NONE) {
       buf_puts(b, "sp_raise_poly_nomethod(");
       emit_str_literal(b, name);
       buf_printf(b, ", %s); ", v.p);
@@ -12979,8 +12985,13 @@ static void emit_dispatch_miss_default(Compiler *c, int cid, int miss_id, const 
     if (pb.p) buf_puts(b, "} ");
     free(pb.p);
   }
+  /* (a per-arm dispatch ran the arguments ahead, into atmp; with none to run
+     there is nothing to bind) */
+  if (row && !rv.p) emit_dispatch_row_answer(c, miss_id, argsNode < 0 ? atmp : NULL, ret, &rv);
   buf_printf(b, "_t%d = %s; break;", rtmp,
+             rv.p ? rv.p :
              ret == TY_POLY ? "sp_box_nil()" : g_disp_ro ? oint_nil(disp_ret) : default_value_from_compiler(c, disp_ret));
+  free(rv.p);
 }
 
 /* The dispatch switch for arms that disagree on their parameters: each arm
@@ -13036,7 +13047,7 @@ static void emit_dispatch_per_arm(Compiler *c, int cid, int miss_id, const char 
   else if (dmi >= 0)
     emit_dispatch_arm_call(c, defcls, dmi, selfptr, argsNode, blk_tmp, ret, disp_ret, rtmp, b);
   else
-    emit_dispatch_miss_default(c, cid, miss_id, name, selfptr, argsNode, rtmp, ret, disp_ret, b);
+    emit_dispatch_miss_default(c, cid, miss_id, name, selfptr, argsNode, NULL, rtmp, ret, disp_ret, b);
   buf_printf(b, " } _t%d; })", rtmp);
 }
 
@@ -13955,7 +13966,7 @@ else {
      call to a nonexistent sp_<base>_<name>. */
   if (!m) {
     buf_puts(b, " default: ");
-    emit_dispatch_miss_default(c, cid, miss_id, name, selfptr, -1, rtmp, ret, disp_ret, b);
+    emit_dispatch_miss_default(c, cid, miss_id, name, selfptr, -1, atmp, rtmp, ret, disp_ret, b);
     buf_printf(b, " } _t%d; })", rtmp);
     free(atmp); free(atmp_ty); free(atmp_o); arg_layout_free(&L);
     return;

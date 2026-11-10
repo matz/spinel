@@ -848,6 +848,10 @@ int cplan_builtin_method_vis(Compiler *c, int node, int ci, const char *cls, con
    program defines a method_missing anywhere: spinel does not dispatch to
    one, and the call keeps the answer it had. Pure. */
 CplanMissing cplan_dispatch_miss(Compiler *c, int id, int cid);
+/* Does that dispatch's default arm take a builtin Kernel row (BOP_KERNEL) of
+   the call's name in place of the raise: the row answers self of any class
+   without a method of the name (Kernel#respond_to_missing?'s false)? */
+int cplan_dispatch_row(Compiler *c, int id);
 /* Does the subtree at id hold a call cplan_missing answers, in a block or
    an operand alike? */
 int cplan_subtree_missing(Compiler *c, int id);

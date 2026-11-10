@@ -377,6 +377,8 @@ static const BuiltinOp bop_rows[] = {
     BOP_K(TY_STR_INT_HASH) | BOP_K(TY_STR_STR_HASH) | BOP_K(TY_INT_INT_HASH) | BOP_K(TY_INT_STR_HASH) |
     BOP_K(TY_SYM_POLY_HASH) | BOP_K(TY_STR_POLY_HASH) | BOP_K(TY_POLY_POLY_HASH), 0, BOPF_INTERNAL },
   { BOP_KERNEL, "__blk_conv",  1, 1, BF_NONE, TY_POLY, BOPE_CONV_USER_OK, "sp_poly_blk_conv", 0, 0, BOPF_INTERNAL },
+  /* Kernel#respond_to_missing?: false, its two operands, where they have an effect, run first (private: a program's own definition, and the explicit forms that reach it, are the plan's) */
+  { BOP_KERNEL, "respond_to_missing?", 2, 2, BF_NONE, TY_BOOL, BOPE_TEMPLATE, "($j0$j1(sp_bool)0)" },
 #include "builtin_zero_ops.inc"
   { TY_POLY, "upcase", 0, 0, BF_ANY, TY_POLY, BOPE_TEMPLATE,
     "sp_poly_case_conv($r, sp_str_upcase, \"upcase\")", 0, 0, 0, 1 },

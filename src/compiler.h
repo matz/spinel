@@ -2621,12 +2621,22 @@ int comp_new_receivers(Compiler *c, int own);
 int method_answers_receiver(Compiler *c, int mi);
 int comp_super_parent(Compiler *c, int class_id, int is_cmethod); /* super in `self.new` is Class#new */
 const Scope *comp_super_site(Compiler *c, const Scope *s);   /* the method scope a super in s resolves as: its class starts the parent chain, its def names the method asked for; a copy of an alias (Scope.super_of) is the owner's */
-enum { SUPER_OBJ_SAME = 1, SUPER_OBJ_FALSE, SUPER_OBJ_FROZEN, SUPER_OBJ_SELF };
+enum { SUPER_OBJ_SAME = 1, SUPER_OBJ_FALSE, SUPER_OBJ_FROZEN, SUPER_OBJ_SELF, SUPER_OBJ_ROW };
 /* a super (node id) no program ancestor answers that reaches BasicObject's
    or Kernel's ==, equal?, eql?, !, nil?, frozen?, itself or
    respond_to_missing?: SUPER_OBJ_*,
    else 0 */
 int comp_super_object_builtin(Compiler *c, const Scope *s, const char *uname, int id);
+/* A bare super's plain operands: the parameters of s's def it passes on, the
+   requireds then the optionals, as parameter nodes into out (up to cap; out
+   may be NULL), and their count; -1 where the def has a post, keyword or rest
+   parameter (a block parameter is passed as the block, not counted); the one
+   place super_plain_argc and codegen read. */
+int comp_zsuper_plain_params(Compiler *c, const Scope *s, int *out, int cap);
+/* Kernel's builtin row (a non-internal BOP_KERNEL row, matched by the count of
+   super id's plain operands) that owns uname: the answer of a super that
+   reaches Kernel's method of that name (SUPER_OBJ_ROW). NULL for none. */
+const BuiltinOp *comp_super_kernel_row(Compiler *c, const Scope *s, const char *uname, int id);
 /* Resolve `name` through the class's (chain-aware) alias table to the
    underlying method/attr name. Returns `name` unchanged if not aliased. */
 /* What a name means on a class: nothing, an attribute (attr_reader/writer,

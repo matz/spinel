@@ -5599,13 +5599,6 @@ int typed_array_lit_flag_free(Compiler *c, int node) {
    and an element read is typed as a number even where the receiver holds nil
    (a gap a computed index wrote past the end), so their stores take the
    flag-setting form and their boxes the _or_nil one, whatever the element. */
-/* The methods Kernel defines private (CRuby's Kernel.private_instance_methods;
-   lib/spinel_rt.h keeps the runtime's copy). */
-int kernel_private_method(const char *name) {
-  static const char *const k[] = { "Array", "Complex", "Float", "Hash", "Integer", "Rational", "String", "abort", "at_exit", "autoload", "autoload?", "binding", "block_given?", "caller", "caller_locations", "catch", "eval", "exec", "exit", "exit!", "fail", "fork", "format", "gets", "global_variables", "iterator?", "lambda", "load", "local_variables", "loop", "open", "p", "pp", "print", "printf", "proc", "putc", "puts", "raise", "rand", "readline", "readlines", "require", "require_relative", "select", "set_trace_func", "sleep", "spawn", "sprintf", "srand", "syscall", "system", "test", "throw", "trace_var", "trap", "untrace_var", "warn", NULL };
-  for (int i = 0; name && k[i]; i++) if (sp_streq(name, k[i])) return 1;
-  return 0;
-}
 /* An explicit receiver that does not define a Kernel private method gets
    "private method 'select' called for ...", not "undefined method". Answers
    the format's head, with the name and `for` in place. */

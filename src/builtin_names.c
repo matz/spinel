@@ -7,6 +7,7 @@
 #include "types.h"
 #include "builtin_names.h"
 #include "analyze_internal.h"
+#include "../lib/sp_kernel_private.h"
 
 int is_zip_name(const char *n) {
   return sp_streq(n, "zip");
@@ -2797,4 +2798,12 @@ int is_allocator_undefined_class(const char *n) {
 }
 const char *allocator_undefined_class_at(int i) {
   return i >= 0 && i < (int)(sizeof allocator_undefined_names / sizeof *allocator_undefined_names) - 1 ? allocator_undefined_names[i] : NULL;
+}
+
+/* The methods Kernel defines private (sp_kernel_private.h). */
+int kernel_private_method(const char *name) {
+#define X(n) if (name && sp_streq(name, n)) return 1;
+  SP_KERNEL_PRIVATE(X)
+#undef X
+  return 0;
 }

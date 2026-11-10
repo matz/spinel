@@ -52,6 +52,7 @@ static char *op_recv_text(Compiler *c, const BopCtx *x) {
      $Y   an Array receiver's boxed class id, for sp_raise_frozen_array_at
           (array_frozen_cls)
      $eN  argument N by emit_expr
+     $jN  argument N run for its effect, "(void)(...), ": nothing when it has none
      $B / $E  a String Range's begin / end in _t$T, through its handle
           under --share-strings (sp_srange_first / sp_srange_last)
      $bN  argument N boxed (emit_boxed)
@@ -124,7 +125,7 @@ static int emit_op_template(Compiler *c, const BopCtx *x, Buf *b) {
   }
   char *r = NULL, *o = NULL;
   int argc;
-  const int *argv = call_args(c->nt, x->id, &argc);
+  const int *argv = x->argv ? (argc = x->argc, x->argv) : call_args(c->nt, x->id, &argc);
   /* a length row (length, size, count: a plain Integer, never nil) where
      the call's slot holds its nil (a site of a call another receiver of
      which can answer nil): the whole text lifted. Only these names: a row
@@ -256,11 +257,14 @@ static int emit_op_template(Compiler *c, const BopCtx *x, Buf *b) {
       buf_printf(b, "%d", tn[tk - tnames]);
       p++;
     }
-    else if (p[0] == '$' && p[1] && strchr("ebfFicoqs", p[1]) &&
+    else if (p[0] == '$' && p[1] && strchr("ebfFicoqsj", p[1]) &&
              p[2] >= '0' && p[2] <= '9' && p[2] - '0' < argc) {
       int a = argv[p[2] - '0'];
       switch (p[1]) {
       case 'e': emit_expr(c, a, b); break;
+      case 'j':
+        if (subtree_has_side_effect(c, a)) { buf_puts(b, "(void)("); emit_expr_for_effect(c, a, b); buf_puts(b, "), "); }
+        break;
       case 'b': emit_boxed(c, a, b); break;
       case 'f': emit_float_expr(c, a, b); break;
       case 'F': emit_float_coerce_expr(c, a, b); break;
@@ -589,6 +593,13 @@ int emit_builtin_op_arm_boxed(Compiler *c, int id, int recv, TyKind rt, const ch
 int emit_builtin_op_tmp(Compiler *c, int id, int recv, TyKind rt, const char *name,
                         int t0, Buf *b) {
   return emit_builtin_op_ex(c, id, recv, rt, name, NULL, t0, 0, bop_arg_ntype, 1, b);
+}
+
+int emit_builtin_op_operands(Compiler *c, int id, TyKind rt, const char *name, const int *argv, int argc, Buf *b) {
+  const BuiltinOp *op = bop_find(rt, name, argc, 0);
+  if (!op || op->emit != BOPE_TEMPLATE) return 0;
+  BopCtx x = { id, -1, argc, rt, name, op, NULL, 0, argv };
+  return emit_op_template(c, &x, b);
 }
 
 int emit_builtin_op(Compiler *c, int id, int recv, TyKind rt, const char *name, Buf *b) {

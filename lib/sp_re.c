@@ -367,8 +367,16 @@ const char *sp_str_splice_re(mrb_regexp_pattern *pat, const char *s, const char 
    no part in the match "regexp group N not matched". The span is written
    through b and e before the value is converted, which CRuby does after
    these checks and which can run a match of its own (a #to_str). */
-void sp_re_nth_span(mrb_regexp_pattern *pat, const char *s, sp_int nth, sp_int *b, sp_int *e) {
-  if (sp_re_match(pat, s) < 0) sp_raise_cls("IndexError", "regexp not matched");
+void sp_re_nth_span(mrb_regexp_pattern *pat, const char *s, sp_int nth, sp_int *b, sp_int *e) {SP_GC_ROOT_STR(s);
+  /* the match as sp_re_match makes it, but asking for every group the
+     engine supports (sp_re_caps holds them all, RE_MAX_CAPTURES pairs):
+     sp_re_match asks for 16, and a group past them read stale offsets */
+  sp_re_check_subject(s);
+  int at, n = s ? re_exec_attempt(pat, s, (int64_t)sp_str_byte_len(s), 0, sp_re_caps,
+                                  (int)(sizeof sp_re_caps / sizeof sp_re_caps[0]), sp_str_is_binary(s), &at) : 0;
+  if (n <= 0) { sp_re_clear_last_match(); sp_raise_cls("IndexError", "regexp not matched"); }
+  sp_re_last_pat = pat;
+  sp_re_set_captures(s, sp_re_caps, n / 2);
   sp_int ng = sp_re_last_ncap, g = nth < 0 ? nth + ng : nth;
   if (g < 0 || g >= ng || (nth < 0 && g == 0))
     sp_raise_cls("IndexError", sp_sprintf("index %lld out of regexp", (long long)nth));

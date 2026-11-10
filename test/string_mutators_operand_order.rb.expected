@@ -121,3 +121,20 @@ W
 3
 "tt3bc"
 "t1tt3bc"
+"aXb"
+[ArgumentError, "wrong number of arguments (given 1, expected 2)"]
+[ArgumentError, "wrong number of arguments (given 3, expected 2)"]
+[TypeError, "no implicit conversion of Integer into String"]
+["aqbcdef", "XYZ"]
+["aqbcdef", "XYZ"]
+["b", "XYZ"]
+["bc", "XYZ"]
+["b", "XYZ"]
+["c", "abd!"]
+["b", "acd!"]
+["bc", "XYZ"]
+["bc", "XYZ"]
+["q", "XYZ"]
+["q", "XYZ"]
+["q", "XYZ"]
+["q", "XYZ"]

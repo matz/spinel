@@ -14804,7 +14804,9 @@ static sp_RbVal sp_str_aset_box_key(sp_String *h, sp_RbVal key, sp_RbVal val) {
   SP_GC_ROOT(rep);
   if (a + n > (sp_int)(bytes ? sp_str_byte_len(cur) : sp_str_length(cur)))
     n = (sp_int)(bytes ? sp_str_byte_len(cur) : sp_str_length(cur)) - a;
-  sp_String_set_bin(h, bytes ? sp_str_bytesplice(cur, a, n, rep) : sp_str_splice_at(cur, a, n, rep, 0));
+  /* (the splice's encoding too, which the compatibility rule picked: an
+     ASCII-only binary String given a UTF-8 text becomes UTF-8) */
+  sp_String_set_bin_enc(h, bytes ? sp_str_bytesplice(cur, a, n, rep) : sp_str_splice_at(cur, a, n, rep, 0));
   return val;
 }
 /* poly_val[key] = val for a key of no kind the String store picks a form by

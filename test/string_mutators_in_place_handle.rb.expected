@@ -64,3 +64,27 @@ nil
 [IndexError, "index 9 out of string"]
 [TypeError, "no implicit conversion of Integer into String"]
 "abc"
+["aé", 2, "UTF-8"]
+["a\xC3\xA9", 3, "ASCII-8BIT"]
+["ax", 2, "UTF-8"]
+["", 0, "ASCII-8BIT"]
+"abcdefghijklmnoXqrst"
+"abcdefghijklmnopXrst"
+"abcdefghijklmnopqrsX"
+"abcdefghijklmnopqrsX"
+[IndexError, "index 21 out of regexp"]
+[1, "UTF-8", 2]
+[1, "UTF-8", 2]
+[1, "UTF-8", 2]
+[1, "UTF-8", 2]
+[1, "UTF-8", 2]
+[1, "UTF-8", 2]
+[1, "UTF-8", 2]
+[1, "UTF-8", 2]
+[1, "UTF-8", 2]
+[1, "UTF-8", 2]
+[1, "UTF-8", 2]
+[1, "UTF-8", 2]
+[1, "ASCII-8BIT", 1]
+[1, "ASCII-8BIT", 1]
+[2, "ASCII-8BIT", 2]

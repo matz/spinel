@@ -1650,15 +1650,26 @@ int emit_op_poly_case_options(Compiler *c, const BopCtx *x, Buf *b) {
   return 0;
 }
 
+static int str_mut_open(Compiler *c, const BopCtx *x, int *nilchk, Buf *b);
+static void str_mut_nil_check(const BopCtx *x, int t, int nilchk, Buf *b);
+
 /* Boxed slice! arguments select the same overloads as typed arguments.
-   Keep the argument rooted and evaluate it once before re-entering the arms.
-   With a second argument (`slice!(x, n)`, two) only a Regexp and an
-   Integer take one: any other value goes to the Integer arm, which raises
-   TypeError as CRuby does. */
-static int emit_string_slice_poly(Compiler *c, int id, int arg, int two, Buf *b) {
+   The receiver's handle is taken first (str_mut_open, which roots it while
+   the operand can rebind its slot), as the row takes it, then the argument
+   is evaluated once and rooted -- or read where it ran first -- and each
+   arm is the row over that handle (x->t0 its temp, which tells the row it
+   is an arm). With a second argument (`slice!(x, n)`, two) only a Regexp
+   and an Integer take one: any other value goes to the Integer arm, which
+   raises TypeError as CRuby does. */
+static int emit_string_slice_poly(Compiler *c, const BopCtx *x, int arg, int two, Buf *b) {
   if (repr_of(c, arg).kind != RK_BOXED) return 0;
+  int id = x->id, chk, th = str_mut_open(c, x, &chk, b);
+  char rt[32];
+  snprintf(rt, sizeof rt, "_t%d", th);
+  BopCtx arm = *x;
+  arm.rtext = rt; arm.t0 = th;
   int ta = ++g_tmp, tr = ++g_tmp;
-  buf_printf(b, "({ sp_RbVal _t%d = ", ta); emit_boxed(c, arg, b);
+  buf_printf(b, " ({ sp_RbVal _t%d = ", ta); emit_boxed(c, arg, b);
   buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); _t%d = sp_poly_strbuf_deref(_t%d); const char *_t%d; ",
              ta, ta, ta, tr);
   int bind, v;
@@ -1676,11 +1687,14 @@ static int emit_string_slice_poly(Compiler *c, int id, int arg, int two, Buf *b)
       view_bind(argv[1], "_t%d", t2);
     }
   }
+  /* a nil receiver raises once the arguments ran, before the form is picked */
+  str_mut_nil_check(x, th, chk, b);
+  buf_puts(b, " ");
   if (!two) {
     buf_printf(b, "if (_t%d.tag == SP_TAG_STR) { _t%d = ", ta, tr);
     bind = view_bind(arg, "_t%d.v.s", ta);
     v = view_push(c, arg, TY_STRING);
-    emit_array_call(c, id, b);
+    emit_op_string_slice(c, &arm, b);
     view_pop(c, v);
     view_unbind(bind);
     buf_puts(b, "; }\nelse ");
@@ -1688,23 +1702,23 @@ static int emit_string_slice_poly(Compiler *c, int id, int arg, int two, Buf *b)
   buf_printf(b, "if (_t%d.tag == SP_TAG_OBJ && _t%d.cls_id == SP_BUILTIN_REGEX) { _t%d = ", ta, ta, tr);
   bind = view_bind(arg, "((mrb_regexp_pattern *)_t%d.v.p)", ta);
   v = view_push(c, arg, TY_REGEX);
-  emit_array_call(c, id, b);
+  emit_op_string_slice(c, &arm, b);
   view_pop(c, v);
   view_unbind(bind);
   if (!two) {
     buf_printf(b, "; }\nelse if (_t%d.tag == SP_TAG_OBJ && _t%d.cls_id == SP_BUILTIN_RANGE) { _t%d = ", ta, ta, tr);
     bind = view_bind(arg, "(*(sp_Range *)_t%d.v.p)", ta);
     v = view_push(c, arg, TY_RANGE);
-    emit_array_call(c, id, b);
+    emit_op_string_slice(c, &arm, b);
     view_pop(c, v);
     view_unbind(bind);
   }
   /* the Integer form takes the box, converted after its frozen check */
   buf_printf(b, "; }\nelse { _t%d = ", tr);
   bind = view_bind(arg, "_t%d", ta);
-  emit_array_call(c, id, b);
+  emit_op_string_slice(c, &arm, b);
   view_unbind(bind);
-  buf_printf(b, "; } _t%d; })", tr);
+  buf_printf(b, "; } _t%d; }); })", tr);
   if (b2 >= 0) view_unbind(b2);
   return 1;
 }
@@ -1794,8 +1808,9 @@ int emit_op_string_dedup(Compiler *c, const BopCtx *x, Buf *b) {
    and a slot its own handle (strbuf_recv_handle_any: a variable's, a
    captured cell's, a route's over one); any other receiver is the handle
    of its value (SP_STR_HDL finds the String a payload view belongs to),
-   rooted while the arguments allocate. *nilchk says whether the handle can
-   be nil, for str_mut_nil_check once the arguments ran. */
+   rooted while the arguments allocate -- a slot's too when an argument can
+   run code. *nilchk says whether the handle can be nil, for
+   str_mut_nil_check once the arguments ran. */
 static int str_mut_open(Compiler *c, const BopCtx *x, int *nilchk, Buf *b) {
   int t = ++g_tmp;
   Buf hb; memset(&hb, 0, sizeof hb);
@@ -1808,7 +1823,12 @@ static int str_mut_open(Compiler *c, const BopCtx *x, int *nilchk, Buf *b) {
   else emit_expr(c, x->recv, b);
   buf_puts(b, ");");
   free(hb.p); free(lb.p);
-  if (hr != 1) buf_printf(b, " SP_GC_ROOT(_t%d);", t);
+  /* (an argument that runs code can rebind the slot, `@s.insert(m, v)`
+     with m setting @s, and the row changes the String it took) */
+  int argc, runs = 0;
+  const int *argv = call_args(c->nt, x->id, &argc);
+  for (int i = 0; i < argc && !runs; i++) runs = subtree_has_side_effect(c, argv[i]);
+  if (hr != 1 || runs) buf_printf(b, " SP_GC_ROOT(_t%d);", t);
   *nilchk = held || (!hr && repr_of(c, x->recv).may_nil);
   return t;
 }
@@ -1928,10 +1948,12 @@ static void str_mut_value_answer(Compiler *c, const BopCtx *x, const StrMutOp *o
 }
 
 /* `_t<t>` takes `s` spliced as `splice` (a call over its bytes), which
-   raises its IndexError first; sp_String_set_bin raises FrozenError after
-   it, the order CRuby checks them in for []= and insert */
+   raises its IndexError first; sp_String_set_bin_enc raises FrozenError
+   after it, the order CRuby checks them in for []= and insert, and takes
+   the splice's encoding, which the compatibility rule picked (an
+   ASCII-only binary receiver takes a UTF-8 value's) */
 static void str_mut_set(Buf *b, int t, const char *splice) {
-  buf_printf(b, " sp_String_set_bin(_t%d, %s);", t, splice);
+  buf_printf(b, " sp_String_set_bin_enc(_t%d, %s);", t, splice);
 }
 
 /* The forms of `[]=`, which CRuby picks by the key's class: an Integer
@@ -2072,7 +2094,7 @@ int emit_op_string_clear(Compiler *c, const BopCtx *x, Buf *b) {
   /* emptied in place (a frozen String raises, an empty one too) */
   int chk, t = str_mut_open(c, x, &chk, b);
   str_mut_nil_check(x, t, chk, b);
-  str_mut_set(b, t, "(&(\"\\xff\")[1])");
+  buf_printf(b, " sp_String_set_bin(_t%d, (&(\"\\xff\")[1]));", t);   /* its encoding kept */
   str_mut_self_answer(c, x, t, b);
   return 1;
 }
@@ -2087,8 +2109,9 @@ int emit_op_string_slice(Compiler *c, const BopCtx *x, Buf *b) {
   int id = x->id, argc;
   const int *argv = call_args(c->nt, id, &argc);
   /* a boxed first argument picks its form at run time (emit_string_slice_poly),
-     which re-enters here with it bound, as a box for the Integer form */
-  if (!arg_ran_first(argv[0], 0) && emit_string_slice_poly(c, id, argv[0], argc == 2, b)) return 1;
+     also one that ran first; each arm re-enters here (x->t0) with it bound,
+     as a box for the Integer form */
+  if (!x->t0 && emit_string_slice_poly(c, x, argv[0], argc == 2, b)) return 1;
   int re = re_lit_index(c, argv[0]);
   Repr r0 = repr_of(c, argv[0]);
   TyKind k0 = r0.kind == RK_BOXED ? TY_POLY : comp_ntype(c, argv[0]);

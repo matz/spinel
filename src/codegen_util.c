@@ -2041,6 +2041,25 @@ void emit_typed_elem_hold(Compiler *c, int node, TyKind rt, const char *text, Bu
   if (node >= 0 && nt_kind(c->nt, node) == NK_NilNode) { buf_puts(b, "NULL"); return; }
   strbuf_new_of_text(c, node, text, b);
 }
+/* Whether value node, written into an element of rt, may be given a new
+   handle on its way in (emit_typed_elem_hold). Nil is stored as NULL, and
+   a variable's read that yields the handle its slot holds (repr_of's handle
+   face, as operand_may_allocate asks it) is the slot's String itself,
+   rooted by the slot: neither is new. Any other value may be, and is held
+   by nothing until the store, so an operand of the store that allocates
+   (the receiver, the index) is read, and rooted, ahead of it. A value's
+   type does not say which face its text comes in (a String call on a
+   handle local can be typed the handle and answer bytes), so only the
+   read's own answer is taken. */
+int typed_elem_hold_may_make(Compiler *c, int node, TyKind rt) {
+  if (typed_elem_held(rt) != TY_STRBUF) return 0;
+  node = nt_paren_single(c->nt, node);
+  if (node < 0) return 0;
+  NodeKind k = nt_kind(c->nt, node);
+  if (k == NK_NilNode) return 0;
+  int var = k == NK_LocalVariableReadNode || k == NK_InstanceVariableReadNode || repr_static_read_kind(k);
+  return !(var && repr_of(c, node).handle);
+}
 /* A POLY variable's slot `ref` lifted into the shared handle as it is read
    (sp_poly_strbuf_lift, #6179): the lifted value is taken into a temp first
    and stored after, so the store into a captured local's cell follows its

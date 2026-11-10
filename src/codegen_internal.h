@@ -1710,6 +1710,7 @@ void emit_typed_elem_coerce(Compiler *c, int node, TyKind rt, const char *what, 
 const char *typed_elem_sfx(TyKind rt);
 const char *typed_elem_store_sfx(TyKind rt);
 TyKind typed_elem_held(TyKind rt);
+int typed_elem_hold_may_make(Compiler *c, int node, TyKind rt);
 void emit_block_locals_reset(Compiler *c, int blk, Buf *b, int indent);
 const char *resolve_class_alias(Compiler *c, const char *cname);
 const char *resolve_class_alias_chain(Compiler *c, const char *cname);

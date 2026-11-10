@@ -25845,20 +25845,38 @@ static int emit_array_mutate_stmt_body(Compiler *c, int id, Buf *b, int indent) 
       buf_printf(g_pre, "sp_%sArray *_t%d = ", k, th); emit_expr(c, recv, g_pre);
       buf_printf(g_pre, "; SP_GC_ROOT(_t%d);\n", th);
     }
-    buf_printf(b, "sp_%sArray_set%s(", k, nsfx);
-    if (hold) buf_printf(b, "_t%d", th);
+    /* a value given a new handle on its way in (typed_elem_hold_may_make)
+       comes after the receiver and the index, read into rooted temps first
+       where either can allocate */
+    int ti = typed_elem_hold_may_make(c, argv[1], rt) &&
+             (operand_may_allocate(c, recv) || operand_may_allocate(c, argv[0])) ? ++g_tmp : 0;
+    if (ti) {
+      if (!hold) {
+        th = ++g_tmp;
+        buf_printf(b, "{ sp_%sArray *_t%d = ", k, th); emit_expr(c, recv, b);
+        buf_printf(b, "; SP_GC_ROOT(_t%d); ", th);
+      } else buf_puts(b, "{ ");
+      buf_printf(b, "sp_int _t%d = ", ti); emit_int_expr(c, argv[0], b); buf_puts(b, "; ");
+    }
+    buf_printf(b, "sp_%sArray_set%s(", k, nsfx[0] ? nsfx : typed_elem_store_sfx(rt));
+    if (th) buf_printf(b, "_t%d", th);
     else emit_expr(c, recv, b);
     buf_puts(b, ", ");
-    emit_int_expr(c, argv[0], b); buf_puts(b, ", ");
+    if (ti) buf_printf(b, "_t%d", ti); else emit_int_expr(c, argv[0], b);
+    buf_puts(b, ", ");
     /* a value that can be nil is stored with it (the _nilable set takes the
        oint); a poly RHS converts to the element representation */
-    if (*nsfx) emit_elem_store_value(c, k, argv[1], b);
-    else if (vr.kind == RK_BOXED && et == TY_INT) { buf_puts(b, "sp_poly_elem_i("); emit_expr(c, argv[1], b); buf_puts(b, ")"); }
-    else if (vr.kind == RK_BOXED && et == TY_STRING) { buf_puts(b, "sp_poly_elem_s("); emit_expr(c, argv[1], b); buf_puts(b, ")"); }
-    else if (vr.kind == RK_BOXED && et == TY_FLOAT) { buf_puts(b, "sp_poly_elem_f("); emit_expr(c, argv[1], b); buf_puts(b, ")"); }
-    else if (vt == TY_UNKNOWN) emit_unresolved_coerced(c, argv[1], et, b);   /* a raise token, a void call */
-    else emit_coerce(c, argv[1], et, CO_HOLD, "an Array element store", b);
-    buf_printf(b, ")%s;\n", hc_mark());
+    Buf vb; memset(&vb, 0, sizeof vb);
+    if (*nsfx) emit_elem_store_value(c, k, argv[1], &vb);
+    else if (vr.kind == RK_BOXED && et == TY_INT) { buf_puts(&vb, "sp_poly_elem_i("); emit_expr(c, argv[1], &vb); buf_puts(&vb, ")"); }
+    else if (vr.kind == RK_BOXED && et == TY_STRING) { buf_puts(&vb, "sp_poly_elem_s("); emit_expr(c, argv[1], &vb); buf_puts(&vb, ")"); }
+    else if (vr.kind == RK_BOXED && et == TY_FLOAT) { buf_puts(&vb, "sp_poly_elem_f("); emit_expr(c, argv[1], &vb); buf_puts(&vb, ")"); }
+    else if (vt == TY_UNKNOWN) emit_unresolved_coerced(c, argv[1], et, &vb);   /* a raise token, a void call */
+    else emit_typed_elem_coerce(c, argv[1], rt, "an Array element store", &vb);
+    if (*nsfx) buf_puts(b, vb.p ? vb.p : "");
+    else emit_typed_elem_hold(c, argv[1], rt, vb.p ? vb.p : "", b);
+    free(vb.p);
+    buf_printf(b, ")%s;%s\n", hc_mark(), ti ? " }" : "");
     return 1;
   }
   /* onto a fresh typed Array given another kind (an_push_widens_fresh): the
@@ -25874,11 +25892,21 @@ static int emit_array_mutate_stmt_body(Compiler *c, int id, Buf *b, int indent) 
        the same array (#3208). A literal splat is pre-expanded upstream, but a
        variable/expression splat arrives as a SplatNode. */
     int has_splat = nt_argv_has_splat(nt, argv, argc);
+    /* ...and so does a receiver that can allocate where a value is taken as
+       its handle on its way in: the handle a static one-character String
+       is given is new, and held by nothing until the push, so the receiver
+       runs (and is rooted) first. Read beside the value, in either order,
+       one of the two was unrooted while the other allocated. */
+    int hold = 0;
+    for (int a = 0; a < argc && !has_splat && !hold; a++)
+      hold = typed_elem_hold_may_make(c, argv[a], rt) && operand_may_allocate(c, recv);
     int tr = -1;
-    if (has_splat) {
+    if (has_splat || hold) {
       tr = ++g_tmp;
       emit_indent(b, indent);
-      buf_printf(b, "{ sp_%sArray *_t%d = ", k, tr); emit_expr(c, recv, b); buf_puts(b, ";\n");
+      buf_printf(b, "{ sp_%sArray *_t%d = ", k, tr); emit_expr(c, recv, b); buf_puts(b, ";");
+      if (hold) buf_printf(b, " SP_GC_ROOT(_t%d);", tr);
+      buf_puts(b, "\n");
     }
     for (int a = 0; a < argc; a++) {
       NodeKind aty_k = nt_kind(nt, argv[a]);
@@ -25922,23 +25950,26 @@ static int emit_array_mutate_stmt_body(Compiler *c, int id, Buf *b, int indent) 
         }
         continue;
       }
-      emit_indent(b, indent + (has_splat ? 1 : 0));
-      buf_printf(b, "sp_%sArray_push%s(", k, nil_store_sfx(c, k, argv[a]));
-      if (has_splat) buf_printf(b, "_t%d", tr); else emit_expr(c, recv, b);
+      emit_indent(b, indent + (tr >= 0 ? 1 : 0));
+      const char *psfx = nil_store_sfx(c, k, argv[a]);
+      buf_printf(b, "sp_%sArray_push%s(", k, psfx[0] ? psfx : typed_elem_store_sfx(rt));
+      if (tr >= 0) buf_printf(b, "_t%d", tr); else emit_expr(c, recv, b);
       buf_puts(b, ", ");
       /* coerce a poly value (holds the element type at runtime) to the typed
-         array's element representation */
+         array's element representation, which the element is held as
+         (emit_typed_elem_hold) */
       Repr vt_repr = repr_of(c, argv[a]);
       TyKind vt = vt_repr.as_ty;
+      Buf vb; memset(&vb, 0, sizeof vb);
       /* a poly-array element must be boxed; emit_boxed also fixes a yield whose
          node type widened to poly but whose per-site value is concrete (#2454). */
-      if (et == TY_POLY) emit_boxed(c, argv[a], b);
+      if (et == TY_POLY) emit_boxed(c, argv[a], &vb);
       /* an Integer or Float that can be nil is pushed with it (the _nilable
          push takes the oint); a boxed value converts to the element */
-      else if (oint_kind(et) && *nil_store_sfx(c, k, argv[a])) emit_elem_store_value(c, k, argv[a], b);
-      else if (vt_repr.kind == RK_BOXED && et == TY_STRING) { buf_puts(b, "sp_poly_elem_s("); emit_expr(c, argv[a], b); buf_puts(b, ")"); }
-      else if (vt_repr.kind == RK_BOXED && et == TY_INT) { buf_puts(b, "sp_poly_elem_i("); emit_expr(c, argv[a], b); buf_puts(b, ")"); }
-      else if (vt_repr.kind == RK_BOXED && et == TY_FLOAT) { buf_puts(b, "sp_poly_elem_f("); emit_expr(c, argv[a], b); buf_puts(b, ")"); }
+      else if (oint_kind(et) && *psfx) emit_elem_store_value(c, k, argv[a], &vb);
+      else if (vt_repr.kind == RK_BOXED && et == TY_STRING) { buf_puts(&vb, "sp_poly_elem_s("); emit_expr(c, argv[a], &vb); buf_puts(&vb, ")"); }
+      else if (vt_repr.kind == RK_BOXED && et == TY_INT) { buf_puts(&vb, "sp_poly_elem_i("); emit_expr(c, argv[a], &vb); buf_puts(&vb, ")"); }
+      else if (vt_repr.kind == RK_BOXED && et == TY_FLOAT) { buf_puts(&vb, "sp_poly_elem_f("); emit_expr(c, argv[a], &vb); buf_puts(&vb, ")"); }
       /* an Array, a Hash or an object into an Integer, Float or String
          array: refused at run time, as a boxed one is (sp_raise_typed_elem).
          Passed raw, the pointer did not compile -- an arm of a dynamic send
@@ -25946,8 +25977,8 @@ static int emit_array_mutate_stmt_body(Compiler *c, int id, Buf *b, int indent) 
          `:push` anywhere in the program) reached here. */
       else if ((et == TY_INT || et == TY_FLOAT || et == TY_STRING) &&
                (ty_is_array(vt) || ty_is_obj_array(vt) || ty_is_hash(vt) || ty_is_object(vt))) {
-        buf_puts(b, et == TY_INT ? "sp_poly_elem_i(" : et == TY_FLOAT ? "sp_poly_elem_f(" : "sp_poly_elem_s(");
-        emit_boxed(c, argv[a], b); buf_puts(b, ")");
+        buf_puts(&vb, et == TY_INT ? "sp_poly_elem_i(" : et == TY_FLOAT ? "sp_poly_elem_f(" : "sp_poly_elem_s(");
+        emit_boxed(c, argv[a], &vb); buf_puts(&vb, ")");
       }
       /* A shared-mutable string (#3227) reads as its sp_String* handle. A
          typed array's element slot is a plain const char*, so the handle has
@@ -25956,11 +25987,13 @@ static int emit_array_mutate_stmt_body(Compiler *c, int id, Buf *b, int indent) 
          (#3400). The copy is the same one every other plain-String slot takes:
          only a str_shared slot aliases. (Under the one-String mode the
          element is the handle: the value goes in as it is, emit_coerce.) */
-      else if (vt == TY_UNKNOWN) emit_unresolved_coerced(c, argv[a], et, b);   /* a raise token, a void call */
-      else emit_coerce(c, argv[a], et, CO_HOLD, "an Array push", b);
+      else if (vt == TY_UNKNOWN) emit_unresolved_coerced(c, argv[a], et, &vb);   /* a raise token, a void call */
+      else emit_typed_elem_coerce(c, argv[a], rt, "an Array push", &vb);
+      emit_typed_elem_hold(c, argv[a], rt, vb.p ? vb.p : "", b);
+      free(vb.p);
       buf_puts(b, ");\n");
     }
-    if (has_splat) { emit_indent(b, indent); buf_puts(b, "}\n"); }
+    if (tr >= 0) { emit_indent(b, indent); buf_puts(b, "}\n"); }
     return 1;
   }
   if (sp_streq(name, "concat") && argc >= 1) {

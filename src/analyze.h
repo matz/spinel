@@ -952,11 +952,6 @@ int an_send_name_is_computed(Compiler *c, int arg);
 /* Is scope si an iterator synth_struct_each generated, not a def? */
 int scope_is_struct_synth(Compiler *c, int si);
 int an_str_mutator_name(const char *nm);
-/* Does inlined yielding method mi lend its parameter j at a call whose
-   literal block is blk: append to it, hand it to a lent parameter, or yield
-   it to a block parameter the block lends? The splice then binds it as an
-   alias of the caller's variable. */
-int an_inline_param_lent(Compiler *c, int mi, int j, int blk);
 /* A String handed to a proc, a lambda or a Method (#6179): what the targets
    a `.call` / `.()` / `[]` / `.yield` / `===` on a Proc or Method value can
    reach do with its argument at one position. Filled by dyn_call_reach, for

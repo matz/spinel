@@ -19187,7 +19187,7 @@ static int emit_multi_write_stmt(Compiler *c, int id, Buf *b, int indent, const 
     int poly_empty_hash = el_empty_hash && elt == TY_POLY;
     int nilish = (elt == TY_NIL || elt == TY_VOID);
     /* A target that is the shared handle takes the element's own object
-       (`t, u = s, 1` names s as t, promote_local_alias_pairs): a local
+       (`t, u = s, 1` names s as t): a local
        that is the handle is held as the handle, so a swap (`a, b = b, a`)
        reads both before either is rebound. */
     Buf hsrc; memset(&hsrc, 0, sizeof hsrc);

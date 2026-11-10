@@ -5715,10 +5715,52 @@ int comp_scope_may_run(Compiler *c, int s) {
    a scope of that name is a copy or none is. A SHADOW_INC name is not checked,
    so the answer is not exact: a program method spelled like an include copy
    (in a class whose copies do not include that name) counts as one too. */
-int comp_name_is_shadow_copy(Compiler *c, const char *name, int kind) {
-  if (!name) return 0;
+/* The copies by the hash of their names, open-addressed (a name may be two
+   copies': `__inc` copies of one method in two classes), each slot a scope
+   index. The answer is read off the scope, so a copy's kind is the one it
+   has now; the set is read while the scope index is frozen (the passes that
+   rename scopes run while it is not, as comp_method_index's note says) and
+   rebuilt when a copy or a scope was added or the index's epoch moved.
+   Before it, every call target resolved compared the name with every copy's:
+   an application with thousands of prepend copies spent half of its
+   inference in the comparisons. */
+static int *g_shn;
+static int g_shn_cap, g_shn_n, g_shn_scopes;
+static unsigned g_shn_gen;
+static const Compiler *g_shn_c;
+static void shadow_names_build(Compiler *c) {
+  g_shn_c = c; g_shn_n = c->nshadow_copies; g_shn_scopes = c->nscopes; g_shn_gen = comp_scope_index_gen();
+  int cap = 64;
+  while (cap < c->nshadow_copies * 2) cap *= 2;
+  if (cap != g_shn_cap) {
+    free(g_shn);
+    g_shn = malloc(sizeof *g_shn * (size_t)cap);
+    if (!g_shn) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    g_shn_cap = cap;
+  }
+  for (int i = 0; i < cap; i++) g_shn[i] = -1;
   for (int i = 0; i < c->nshadow_copies; i++) {
-    const Scope *s = &c->scopes[c->shadow_copies[i]];
+    int si = c->shadow_copies[i];
+    const char *nm = c->scopes[si].name;
+    if (!nm) continue;
+    unsigned h = name_idx_hash(nm) & (unsigned)(cap - 1);
+    while (g_shn[h] >= 0) h = (h + 1) & (unsigned)(cap - 1);
+    g_shn[h] = si;
+  }
+}
+int comp_name_is_shadow_copy(Compiler *c, const char *name, int kind) {
+  if (!name || c->nshadow_copies == 0) return 0;
+  if (!comp_scope_index_is_frozen()) {
+    for (int i = 0; i < c->nshadow_copies; i++) {
+      const Scope *s = &c->scopes[c->shadow_copies[i]];
+      if (s->shadow == kind && s->name && sp_streq(s->name, name)) return 1;
+    }
+    return 0;
+  }
+  if (g_shn_c != c || g_shn_n != c->nshadow_copies || g_shn_scopes != c->nscopes || g_shn_gen != comp_scope_index_gen())
+    shadow_names_build(c);
+  for (unsigned h = name_idx_hash(name) & (unsigned)(g_shn_cap - 1); g_shn[h] >= 0; h = (h + 1) & (unsigned)(g_shn_cap - 1)) {
+    const Scope *s = &c->scopes[g_shn[h]];
     if (s->shadow == kind && s->name && sp_streq(s->name, name)) return 1;
   }
   return 0;

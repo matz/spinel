@@ -1942,25 +1942,6 @@ int emitted_nomethod_token(const char *txt) {
 int emitted_no_method(const char *txt) {
   return emitted_nomethod_token(txt) || (txt && strncmp(txt, "sp_raise_unrouted(", 18) == 0);
 }
-/* ... anywhere in the text, not only at its start */
-int emitted_no_method_in(const char *txt) {
-  return txt && (strstr(txt, "sp_raise_nomethod(") || emitted_unrouted_in(txt));
-}
-/* ... the raise of a call CRuby answers that no route took, anywhere in it */
-int emitted_unrouted_in(const char *txt) {
-  return txt && strstr(txt, "sp_raise_unrouted(") != NULL;
-}
-/* ... the gap's raise of a call named name, anywhere in it: its message names
-   the CRuby method, `Owner#name` or `Owner.name` (emit_unrouted_gap) */
-int emitted_unrouted_for(const char *txt, const char *name) {
-  char tok[300];
-  if (!emitted_unrouted_in(txt) || !name) return 0;
-  for (const char *sep = "#."; *sep; sep++) {
-    snprintf(tok, sizeof tok, "%c%s is not supported\"; })", *sep, name);
-    if (strstr(txt, tok)) return 1;
-  }
-  return 0;
-}
 
 /* Does an emitted expression diverge: lead with one of the SP_NORETURN
    sp_raise_ helpers, or Kernel#abort / #exit's (sp_abort_raise,

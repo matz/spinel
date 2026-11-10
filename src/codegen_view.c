@@ -43,8 +43,10 @@
    view_push_arm does the same for the arm context a poly dispatch's
    builtin arm re-enters the call under (g_arm: the node whose dispatch
    declines its own re-entry, g_pd_skip and g_prbd_skip, and
-   g_poly_builtin_arm, under which no user class owns a name). It is no
-   view of a node: it counts toward neither view_depth nor view_epoch. */
+   g_poly_builtin_arm, under which no user class owns a name), and
+   view_push_gap_watch for the call whose own gap an arm reads as the
+   builtin declining (ArmCtx.gap_watch). Neither is a view of a node: they
+   count toward neither view_depth nor view_epoch. */
 
 #include "codegen_internal.h"
 #include "share.h"
@@ -62,7 +64,7 @@ static int view_sp;
 static int view_nodes;   /* the entries that view a node (all but VK_ARM) */
 static unsigned view_epoch_n;
 
-ArmCtx g_arm = { -1, -1, 0, -1, -1, -1 };
+ArmCtx g_arm = { -1, -1, 0, -1, -1, -1, -1, NULL };
 
 /* Argument-hoist overrides: emit_args_filled pre-evaluates GC-hazardous
    call arguments into rooted temps; emit_expr then substitutes the temp
@@ -193,7 +195,8 @@ static int view_open(Compiler *c, int id, int kind, int v) {
   return tok;
 }
 
-int view_push_arm(int pd_skip, int prbd_skip, int builtin_arm) {
+/* a VK_ARM entry holding the arm context to put back at its pop */
+static int view_save_arm(void) {
   if (view_sp >= VIEW_MAX) {
     view_too_deep();
   }
@@ -202,9 +205,21 @@ int view_push_arm(int pd_skip, int prbd_skip, int builtin_arm) {
   view_stack[tok].id = -1;
   view_stack[tok].kind = VK_ARM;
   view_stack[tok].arm_saved = g_arm;
+  return tok;
+}
+
+int view_push_arm(int pd_skip, int prbd_skip, int builtin_arm) {
+  int tok = view_save_arm();
   g_arm.pd_skip = pd_skip;
   g_arm.prbd_skip = prbd_skip;
   g_arm.builtin_arm = builtin_arm;
+  return tok;
+}
+
+int view_push_gap_watch(int id, int *hit) {
+  int tok = view_save_arm();
+  g_arm.gap_watch = id;
+  g_arm.gap_hit = hit;
   return tok;
 }
 

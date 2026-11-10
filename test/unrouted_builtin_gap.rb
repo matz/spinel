@@ -109,3 +109,40 @@ def slicer(i) = i > 0 ? Slicer.new : [1, 2, 3, 4]
 sl = slicer(ARGV.size)
 attempt("gap in a spliced block") { sl.each_slice(2) { |x| puts "slice"; global_variables } }
 slicer(1).each_slice(3) { |x| puts "slice" }
+
+# ...and so does a String's iterator beside a program class's: the String
+# runs the block, which raises
+class Graphemes
+  def each_grapheme_cluster
+    yield "g"
+    self
+  end
+end
+def graphemes(i) = i > 0 ? Graphemes.new : "ab"
+attempt("gap in a String iterator's block") { graphemes(ARGV.size).each_grapheme_cluster { |g| puts g; global_variables } }
+
+# A boxed `&` argument is taken as a proc before the gap raises, as CRuby
+# converts it before the method runs, and is read once: nil, a Symbol, a
+# Proc, a Method and a Hash pass, an Array, a Range and a plain object raise
+# CRuby's TypeError
+def blk_arg(i)
+  puts "pick #{i}"
+  [nil, :to_s, proc { }, method(:puts), { a: 1 }, [1, 2], 1..2, Object.new][i]
+end
+8.times do |i|
+  attempt("block argument #{i}") { 5.singleton_methods(&blk_arg(i)) }
+rescue TypeError => e
+  puts "block argument #{i}: TypeError: #{e.message}"
+end
+
+# A class value's call names the method its class side holds, as CRuby's
+# lookup finds it ahead of Class's or Module's: Class.constants is
+# Module.constants, a method apart from Module#constants
+attempt("class side of Module") { Class.constants }
+attempt("Module's own") { Module.constants }
+
+# ...and names the class side's own method for a class's own class
+# method: Class.allocate (CRuby answers a class) and Complex.polar with no
+# argument (CRuby's ArgumentError, which the gap stands in for) stay the gap
+attempt("Class's own allocate") { Class.allocate }
+attempt("Complex.polar with no argument") { Complex.polar }

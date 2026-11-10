@@ -31,3 +31,7 @@ NameError: true
 NameError: true
 argument
 TypeError: no implicit conversion of Integer into Proc
+iterators ran no block
+TypeError: no implicit conversion of Array into Proc
+TypeError: no implicit conversion of Range into Proc
+TypeError: no implicit conversion of Object into Proc

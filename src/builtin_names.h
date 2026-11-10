@@ -515,6 +515,14 @@ typedef struct { const char *name; int module; unsigned flags; const char *const
    NoMethodError because of the answer needs it sure, and an unknown builtin
    is none. */
 int builtin_method_answers(const char *cls, const char *name, int sg, int certain);
+/* The builtin class or module whose own singleton methods hold public `name`
+   first on the class side of builtin class or module cls, in a library the
+   program has, as CRuby's lookup finds it ahead of Class's or Module's
+   instance methods: cls's own or a superclass's (Array.new; File.open, IO's;
+   Class.constants, Module's), a module's own (Kernel.global_variables). NULL
+   where none holds it there, or an undefine ends the lookup first
+   (Rational.allocate). */
+const char *builtin_singleton_owner(const char *cls, const char *name);
 /* Does a builtin answer `name` on a self of the kind: main (Kernel's,
    Object's and main's own methods), a module (also Module's) or a class
    (also Class's)? */

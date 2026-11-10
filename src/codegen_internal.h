@@ -2680,13 +2680,19 @@ int view_mark(void);
    prevents a boxed send's class arm from splitting the same call again;
    each_inline and each_dispatch name the call a boxed `each` split is
    emitting the inline and the dispatch arm of (cplan_each_split), so
-   neither arm splits it again. */
-typedef struct { int pd_skip, prbd_skip, builtin_arm, send_split, each_inline, each_dispatch; } ArmCtx;
+   neither arm splits it again. gap_watch names the call an arm emits to
+   see whether a builtin answers it, and the gap of that call
+   (emit_unrouted_gap) sets *gap_hit: the builtin declined it. A gap of
+   another call in the arm's text (in a block the arm splices, an operand)
+   is that call's own raise, which the arm runs. */
+typedef struct { int pd_skip, prbd_skip, builtin_arm, send_split, each_inline, each_dispatch, gap_watch; int *gap_hit; } ArmCtx;
 extern ArmCtx g_arm;
 #define g_pd_skip (g_arm.pd_skip)
 #define g_prbd_skip (g_arm.prbd_skip)
 #define g_poly_builtin_arm (g_arm.builtin_arm)
 int view_push_arm(int pd_skip, int prbd_skip, int builtin_arm);
+/* the arm context with call id's gap watched into *hit (ArmCtx.gap_watch), popped by view_pop */
+int view_push_gap_watch(int id, int *hit);
 /* A node pinned to one face kind for the inference asked under it,
    pushed and popped like a view (view_pop) and put back by view_unwind
    (face_of, analyze.h). */
@@ -2939,9 +2945,6 @@ int builtin_arity_admits(const char *cls, const char *name, int argc);
 void warn_unrouted_call(Compiler *c, int id, const char *what);   /* codegen_util.c */
 int emitted_nomethod_token(const char *txt); /* codegen.c */
 int emitted_no_method(const char *txt);      /* codegen.c */
-int emitted_no_method_in(const char *txt);   /* codegen.c */
-int emitted_unrouted_in(const char *txt);    /* codegen.c */
-int emitted_unrouted_for(const char *txt, const char *name);   /* codegen.c */
 int order_operand_inert(Compiler *c, int call, int op, int is_recv);   /* codegen_stmt.c */
 /* ...and the count it expects when it does not (NULL when it admits it) */
 const char *builtin_arity_expected(const char *cls, const char *name, int with_block, int argc,

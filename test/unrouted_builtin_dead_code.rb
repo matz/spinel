@@ -95,3 +95,38 @@ rescue TypeError => e
   puts "TypeError: #{e.message}"
 end
 not_a_proc(ARGV.size > 5 ? nil : 5)
+
+# A String's or a File's iterator beside a program class's own runs the
+# block a gap is in only for what it iterates: an empty String or File runs
+# none, and nothing raises
+require "tmpdir"
+class Lines
+  def each_grapheme_cluster
+    yield "g"
+    self
+  end
+  def each_line
+    yield "l"
+    self
+  end
+  def close = nil
+end
+def text(i) = i > 0 ? Lines.new : ""
+text(ARGV.size).each_grapheme_cluster { |g| global_variables }
+path = File.join(Dir.tmpdir, "unrouted_builtin_dead_code_#{Process.pid}.txt")
+File.write(path, "")
+def stream(i, path) = i > 0 ? Lines.new : File.open(path)
+f = stream(ARGV.size, path)
+f.each_line { |l| local_variables }
+f.close
+File.delete(path)
+puts "iterators ran no block"
+
+# A boxed `&` argument that is no proc raises CRuby's TypeError ahead of
+# the call
+def boxed_blk(i) = [[1, 2], 1..2, Object.new][i]
+3.times do |i|
+  5.singleton_methods(&boxed_blk(i))
+rescue TypeError => e
+  puts "TypeError: #{e.message}"
+end

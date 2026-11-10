@@ -649,6 +649,7 @@ typedef struct {
   ANameHash *dyn;               /* names called on a receiver no constant names */
   ANameHash *adm;               /* "<class>:<name>": called on that class */
   CrRead **reads; int *nreads, *creads;  /* per scope: the classes it names, the calls it makes */
+  int *rh_s, *rh_i, rh_cap, rh_n;  /* those reads hashed: a slot's scope and index there, -1 free */
   int *open_next;               /* per class: the next class a side opened with */
   int *cls_first, *cls_next;    /* class -> its scopes, scope -> the next */
   unsigned char *weak_done;     /* per scope: its reads counted unreached */
@@ -675,17 +676,51 @@ static const char *cr_live_segment(const char *nm) {
   return p ? p + 1 : nm;
 }
 
+static int cr_read_is(const CrRead *r, int kind, const char *nm, const char *call, int cls) {
+  return r->kind == kind && r->cls == cls && (r->name == nm || (r->name && nm && sp_streq(r->name, nm))) &&
+         (r->call == call || (r->call && call && sp_streq(r->call, call)));
+}
+static unsigned cr_read_hash(int s, int kind, const char *nm, const char *call, int cls) {
+  unsigned h = (unsigned)s * 2654435761u ^ (unsigned)kind * 40503u ^ (unsigned)cls * 2246822519u;
+  if (nm) h ^= sp_strhash(nm);
+  if (call) h = h * 31u + sp_strhash(call);
+  return h;
+}
+/* Record that scope s reads (kind, nm, call, cls), once: a scope that names
+   N classes or calls looked through all it had for each, N^2 for the top
+   level of a program of N classes. */
 static void cr_live_add(CrLive *lv, int s, int kind, const char *nm, const char *call, int cls, int persist) {
   if ((kind == CR_VALUE || kind == CR_CONST_CALL) && !nm) return;
   if (kind != CR_VALUE && !call) call = "";
-  CrRead *r = lv->reads[s];
-  for (int i = 0; i < lv->nreads[s]; i++)
-    if (r[i].kind == kind && r[i].cls == cls && (r[i].name == nm || (r[i].name && nm && sp_streq(r[i].name, nm))) &&
-        (r[i].call == call || (r[i].call && call && sp_streq(r[i].call, call)))) { r[i].persist |= persist; return; }
+  unsigned h = cr_read_hash(s, kind, nm, call, cls);
+  unsigned mask = (unsigned)lv->rh_cap - 1;
+  for (unsigned j = h & mask; lv->rh_cap && lv->rh_s[j] >= 0; j = (j + 1) & mask) {
+    CrRead *r = &lv->reads[lv->rh_s[j]][lv->rh_i[j]];
+    if (lv->rh_s[j] == s && cr_read_is(r, kind, nm, call, cls)) { r->persist |= persist; return; }
+  }
+  if (2 * (lv->rh_n + 1) > lv->rh_cap) {
+    int cap = lv->rh_cap ? 2 * lv->rh_cap : 256;
+    int *ns = malloc(sizeof(int) * (size_t)cap), *ni = malloc(sizeof(int) * (size_t)cap);
+    if (!ns || !ni) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    for (int j = 0; j < cap; j++) ns[j] = -1;
+    for (int o = 0; o < lv->rh_cap; o++) {
+      if (lv->rh_s[o] < 0) continue;
+      const CrRead *r = &lv->reads[lv->rh_s[o]][lv->rh_i[o]];
+      unsigned j = cr_read_hash(lv->rh_s[o], r->kind, r->name, r->call, r->cls) & (unsigned)(cap - 1);
+      while (ns[j] >= 0) j = (j + 1) & (unsigned)(cap - 1);
+      ns[j] = lv->rh_s[o]; ni[j] = lv->rh_i[o];
+    }
+    free(lv->rh_s); free(lv->rh_i);
+    lv->rh_s = ns; lv->rh_i = ni; lv->rh_cap = cap;
+  }
   if (lv->nreads[s] >= lv->creads[s]) {
     lv->creads[s] = lv->creads[s] ? lv->creads[s] * 2 : 8;
     lv->reads[s] = realloc(lv->reads[s], sizeof(CrRead) * (size_t)lv->creads[s]);
+    if (!lv->reads[s]) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   }
+  unsigned j = h & (unsigned)(lv->rh_cap - 1);
+  while (lv->rh_s[j] >= 0) j = (j + 1) & (unsigned)(lv->rh_cap - 1);
+  lv->rh_s[j] = s; lv->rh_i[j] = lv->nreads[s]; lv->rh_n++;
   lv->reads[s][lv->nreads[s]++] = (CrRead){ nm, call, cls, kind, persist };
 }
 
@@ -1203,7 +1238,7 @@ static void cr_live_end(CrLive *lv) {
     }
   }
   for (int s = 0; s < c->nscopes; s++) free(lv->reads[s]);
-  free(lv->reads); free(lv->nreads); free(lv->creads);
+  free(lv->reads); free(lv->nreads); free(lv->creads); free(lv->rh_s); free(lv->rh_i);
   free(lv->held_c); free(lv->held_i); free(lv->builds);
   free(lv->pend_c); free(lv->pend_i); free(lv->pend_next); free(lv->pend_mark);
   free(lv->open_next); free(lv->cls_first); free(lv->cls_next); free(lv->weak_done);

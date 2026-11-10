@@ -1,29 +1,36 @@
 true
-"<abc>"
-".<abc>"
-".<abc>"
+"Abc"
+true
+"<Abc>"
+".<Abc>"
+".<Abc>"
 "."
-"<abc>"
+"<Abc>"
 "abbc"
 ["12", "abcd"]
 "ab"
+"s****t"
+"Edor"
 true
 ""
 true
+"J"
+"Jello"
+"Jello"
 true
-"h-ello"
-"h-"
+"J-ello"
+"J-"
 false
 "ello"
 "ello"
 true
 ""
-["ns", "iide!"]
-"iide!"
+["ns", "Iide!"]
+"Iide!"
 "!"
-"i+ide"
+"Z+ide"
 "w"
-["one", "<to"]
+["One", "<to"]
 "<maybe"
 "e"
 "<m"
@@ -36,13 +43,24 @@ nil
 nil
 "aba"
 ""
+"x"
 "qq"
 "a2.9b"
 "ab-cdef"
+"hello World"
+"heLo World"
+[IndexError, "regexp not matched"]
+[IndexError, "index 3 out of regexp"]
+[IndexError, "index -3 out of regexp"]
+[IndexError, "regexp group 2 not matched"]
+"heLo World"
 [FrozenError, "can't modify frozen String: \"\""]
 [FrozenError, "can't modify frozen String: \"abc\""]
 [FrozenError, "can't modify frozen String: \"abc\""]
 [FrozenError, "can't modify frozen String: \"abc\""]
 [FrozenError, "can't modify frozen String: \"abc\""]
 [IndexError, "index 9 out of string"]
+[FrozenError, "can't modify frozen String: \"abc\""]
+[IndexError, "index 9 out of string"]
+[TypeError, "no implicit conversion of Integer into String"]
 "abc"

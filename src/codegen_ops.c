@@ -433,6 +433,7 @@ static int (*const bop_emitters[BOPE__COUNT])(Compiler *, const BopCtx *, Buf *)
   [BOPE_THREAD_SET_REPORT] = emit_op_thread_set_report,
   [BOPE_FLOAT_RATIONALIZE] = emit_op_float_rationalize,
   [BOPE_STRING_SCAN_CHECKED] = emit_op_string_scan_checked,
+  [BOPE_STRING_ASET] = emit_op_string_aset,
   [BOPE_STRING_INSERT] = emit_op_string_insert,
   [BOPE_STRING_CLEAR] = emit_op_string_clear,
   [BOPE_STRING_SLICE] = emit_op_string_slice,

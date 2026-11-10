@@ -360,6 +360,23 @@ const char *sp_str_splice_re(mrb_regexp_pattern *pat, const char *s, const char 
   if (n <= 0) { sp_raise_cls("IndexError", "regexp not matched"); return s; }
   return sp_sprintf("%.*s%s%s", (int)caps[0], s, val, s + caps[1]);
 }
+/* The byte span of group nth of re's first match in s, for s[/re/, nth] =
+   val, checked as CRuby's rb_str_subpat_set checks it: no match raises
+   "regexp not matched", an nth past the pattern's groups (a negative one
+   counts back from the last) "index N out of regexp", and a group that took
+   no part in the match "regexp group N not matched". The span is written
+   through b and e before the value is converted, which CRuby does after
+   these checks and which can run a match of its own (a #to_str). */
+void sp_re_nth_span(mrb_regexp_pattern *pat, const char *s, sp_int nth, sp_int *b, sp_int *e) {
+  if (sp_re_match(pat, s) < 0) sp_raise_cls("IndexError", "regexp not matched");
+  sp_int ng = sp_re_last_ncap, g = nth < 0 ? nth + ng : nth;
+  if (g < 0 || g >= ng || (nth < 0 && g == 0))
+    sp_raise_cls("IndexError", sp_sprintf("index %lld out of regexp", (long long)nth));
+  if (sp_re_caps[2 * g] < 0)
+    sp_raise_cls("IndexError", sp_sprintf("regexp group %lld not matched", (long long)g));
+  *b = sp_re_caps[2 * g];
+  *e = sp_re_caps[2 * g + 1];
+}
 /* String#slice!(regexp): the removed match (or NULL when unmatched), with
    the receiver's remainder written through rest_out and the match
    registers set (cleared on no-match, like sp_re_match). */

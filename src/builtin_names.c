@@ -1031,7 +1031,7 @@ int is_substitution_bang(const char *n) {
    String literal receiver, once their arguments ran (str_mutate_reassign_arms) */
 int is_str_reassign_mutator(const char *n) {
   return sp_streq(n, "prepend") || sp_streq(n, "<<") || sp_streq(n, "concat") || sp_streq(n, "replace") ||
-         sp_streq(n, "delete_prefix!") || sp_streq(n, "delete_suffix!") || sp_streq(n, "[]=");
+         sp_streq(n, "delete_prefix!") || sp_streq(n, "delete_suffix!");
 }
 
 int is_encoding_mutator(const char *n) {

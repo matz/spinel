@@ -14730,6 +14730,77 @@ static sp_RbVal sp_poly_str_aset_key(sp_RbVal v, sp_RbVal key, sp_RbVal val) {
   sp_String_set_bin((sp_String *)v.v.p, out);
   return v;
 }
+/* String#[]= with a boxed key on the String handle h, written in place,
+   the key's class picking the form as CRuby's rb_str_aset_m picks it: a
+   String (its first occurrence; IndexError when there is none), a Regexp
+   (its first match), a Range (its span; a start outside the String a
+   RangeError naming the Range), and any other key an index, converted as
+   CRuby's NUM2LONG converts it (a Float truncated, anything else the
+   TypeError), which splices one character. The checks come in CRuby's
+   order: the key's conversion and its match or range; then the value's
+   conversion (TypeError), then an index outside the String (IndexError),
+   then FrozenError. The caller holds h, key and val rooted; every check is
+   made before this roots anything, so a raise never longjmps with a root of
+   its own live (an inline rescue does not restore sp_gc_nroots), as
+   sp_poly_str_aset_key refuses before it roots. Answers val. */
+static sp_RbVal sp_str_aset_box_key(sp_String *h, sp_RbVal key, sp_RbVal val) {
+  if (sp_poly_is_strbuf(key)) key = sp_poly_strbuf_deref(key);
+  const char *cur = sp_String_cstr(h);
+  sp_int len = (sp_int)sp_str_length(cur), a = 0, n = 1;
+  int bytes = 0, index = 0;
+  if (key.tag == SP_TAG_STR) {
+    const char *k = key.v.s ? key.v.s : sp_str_empty;
+    sp_oint at = sp_str_index_opt(cur, k);
+    if (at.nil) sp_raise_cls("IndexError", "string not matched");
+    a = at.v; n = (sp_int)sp_str_length(k);
+  }
+  else if (key.tag == SP_TAG_OBJ && key.v.p && key.cls_id == SP_BUILTIN_REGEX) {
+    sp_int e;
+    sp_re_nth_span((mrb_regexp_pattern *)key.v.p, cur, 0, &a, &e);
+    n = e - a; bytes = 1;
+  }
+  else if (key.tag == SP_TAG_OBJ && key.v.p && key.cls_id == SP_BUILTIN_RANGE) {
+    /* the span as CRuby's rb_range_beg_len reads it: a beginless one from
+       0, an endless one (noend) to the end */
+    sp_Range r0 = *(sp_Range *)key.v.p, r = sp_range_ix(r0);
+    a = r.nobeg ? 0 : (r.first < 0 ? r.first + len : r.first);
+    if (a < 0 || a > len) sp_raise_cls("RangeError", sp_sprintf("%s out of range", sp_range_str(r0)));
+    if (r.noend) n = len - a;
+    else n = (r.last < 0 ? r.last + len : r.last) - a + (r.excl ? 0 : 1);
+    if (n < 0) n = 0;
+  }
+  else { a = sp_poly_arg_int_chk(key); index = 1; }
+  /* the value's conversion (a #to_str runs here); what it answers needs no
+     root until the splice allocates: nothing allocates between, but for a
+     raise, after which it is not read */
+  const char *rep = sp_str_aset_rep(val);
+  cur = sp_String_cstr(h);
+  len = (sp_int)sp_str_length(cur);
+  if (index) {
+    sp_int i = a < 0 ? a + len : a;
+    if (i < 0 || i > len) sp_raise_cls("IndexError", sp_sprintf("index %lld out of string", (long long)a));
+    a = i;
+  }
+  if (sp_String_is_frozen(h)) sp_raise_frozen_str(cur);
+  SP_GC_ROOT(rep);
+  if (a + n > (sp_int)(bytes ? sp_str_byte_len(cur) : sp_str_length(cur)))
+    n = (sp_int)(bytes ? sp_str_byte_len(cur) : sp_str_length(cur)) - a;
+  sp_String_set_bin(h, bytes ? sp_str_bytesplice(cur, a, n, rep) : sp_str_splice_at(cur, a, n, rep, 0));
+  return val;
+}
+/* poly_val[key] = val for a key of no kind the String store picks a form by
+   (a Float, nil, a Rational): a String receiver takes it as an index,
+   converted as CRuby's NUM2LONG converts it (a Float truncated, anything
+   else the TypeError), raised before anything is rooted, and splices as
+   sp_poly_str_aset_key does, answering what it answers for the caller to
+   store back; any other receiver stores as sp_poly_set_poly does and is
+   answered unchanged. */
+static sp_RbVal sp_poly_aset_index_key(sp_RbVal v, sp_RbVal key, sp_RbVal val) {
+  if (v.tag == SP_TAG_STR || sp_poly_is_strbuf(v))
+    return sp_poly_str_aset_key(v, sp_box_int(sp_poly_arg_int_chk(key)), val);
+  (void)sp_poly_set_poly(v, key, val);
+  return v;
+}
 /* poly_val[poly_key] = val: fully dynamic dispatch for poly recv + poly key. */
 static sp_RbVal sp_poly_set_poly(sp_RbVal v, sp_RbVal key, sp_RbVal val) {
   if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_THREAD) {

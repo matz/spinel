@@ -1774,7 +1774,7 @@ int emit_op_string_dedup(Compiler *c, const BopCtx *x, Buf *b) {
   return 1;
 }
 
-/* ---- String#insert, #clear and #slice! (stage 7) ----
+/* ---- String#[]=, #insert, #clear and #slice! (stage 7) ----
    A String slot holds the String's handle, so these rows change the String
    where it lives: the receiver's handle is taken once, before the arguments
    run (CRuby evaluates the receiver first), and the new bytes are written
@@ -1905,6 +1905,25 @@ static int str_mut_convert(Compiler *c, const StrMutOp *o, Buf *b) {
   return ts;
 }
 
+/* The value of `x[k] = v`: the right-hand object itself, whatever the
+   method did with it, read from its hold in the representation the call's
+   value is kept in */
+static void str_mut_value_answer(Compiler *c, const BopCtx *x, const StrMutOp *o, Buf *b) {
+  Repr w = repr_of(c, x->id);
+  int wbox = w.kind == RK_BOXED || w.as_ty == TY_POLY;
+  buf_puts(b, " ");
+  if (o->t >= 0 && o->boxed) {
+    char tn[24];
+    snprintf(tn, sizeof tn, "_t%d", o->t);
+    if (wbox || w.as_ty == TY_UNKNOWN || w.as_ty == TY_VOID) buf_puts(b, tn);
+    else emit_unbox_text(c, w.as_ty, tn, b);
+  }
+  else if (wbox) emit_boxed(c, o->node, b);
+  else if (w.handle) { buf_puts(b, "SP_STR_HDL("); emit_expr(c, o->node, b); buf_puts(b, ")"); }
+  else emit_expr(c, o->node, b);
+  buf_puts(b, "; })");
+}
+
 /* `_t<t>` takes `s` spliced as `splice` (a call over its bytes), which
    raises its IndexError first; sp_String_set_bin raises FrozenError after
    it, the order CRuby checks them in for []= and insert */
@@ -1912,11 +1931,112 @@ static void str_mut_set(Buf *b, int t, const char *splice) {
   buf_printf(b, " sp_String_set_bin(_t%d, %s);", t, splice);
 }
 
+/* The forms of `[]=`, which CRuby picks by the key's class: an Integer
+   index, a Range, a Regexp, a String, and with three operands a Regexp's
+   group or a start and a length. Any other key (a Float, nil, a boxed one)
+   picks its form at run time, by its class (sp_str_aset_box_key). */
+enum { SA_INDEX, SA_RANGE, SA_RE, SA_STR, SA_BOX, SA_RE_N, SA_SPAN };
+
 /* The pattern text of a Regexp key: a literal's compiled pattern, or the
    held value's */
 static void str_mut_pattern(Compiler *c, int re, int key, Buf *b) {
   if (re >= 0) buf_printf(b, "sp_re_pat_%d", re);
   else emit_expr(c, key, b);
+}
+
+int emit_op_string_aset(Compiler *c, const BopCtx *x, Buf *b) {
+  int argc;
+  const int *argv = call_args(c->nt, x->id, &argc);
+  int re = re_lit_index(c, argv[0]);
+  Repr r0 = repr_of(c, argv[0]);
+  TyKind k0 = r0.kind == RK_BOXED ? TY_POLY : comp_ntype(c, argv[0]);
+  int rx = re >= 0 || k0 == TY_REGEX;
+  int form = argc == 3 ? (rx ? SA_RE_N : SA_SPAN)
+           : rx ? SA_RE : k0 == TY_RANGE ? SA_RANGE : k0 == TY_STRING ? SA_STR
+           : k0 == TY_INT && !r0.nil_scalar && !r0.may_nil ? SA_INDEX : SA_BOX;
+  int chk, t = str_mut_open(c, x, &chk, b), mark = g_n_argov;
+  StrMutOp k[2], v;
+  for (int i = 0; i < argc - 1; i++)
+    str_mut_hold(c, argv, argc, i, i == 1 || form == SA_INDEX || form == SA_SPAN || form == SA_BOX, &k[i], b);
+  str_mut_hold(c, argv, argc, argc - 1, 0, &v, b);
+  str_mut_nil_check(x, t, chk, b);
+  Buf sp; memset(&sp, 0, sizeof sp);
+  Buf cs; memset(&cs, 0, sizeof cs);
+  str_mut_bytes(&cs, t);
+  int tn = ++g_tmp, ts;
+  switch (form) {
+  case SA_BOX:
+    /* the key's class picks the form, each checked in CRuby's order */
+    buf_printf(b, " (void)sp_str_aset_box_key(_t%d, ", t);
+    str_mut_boxed(c, &k[0], b); buf_puts(b, ", "); str_mut_boxed(c, &v, b);
+    buf_puts(b, ");");
+    break;
+  case SA_INDEX:
+    /* s[i] = v: the character at i (-len..len, len appends); the value is
+       converted before the index is checked */
+    buf_printf(b, " sp_int _t%d = ", tn); str_mut_index(c, &k[0], b); buf_puts(b, ";");
+    ts = str_mut_convert(c, &v, b);
+    buf_printf(&sp, "sp_str_splice_at(%s, _t%d, 1, _s%d, 0)", cs.p, tn, ts);
+    break;
+  case SA_RANGE:
+    /* s[range] = v: the range's character span (a negative length inserts);
+       a beginless bound is 0 and an endless one the last index. A start
+       outside the String is CRuby's RangeError, naming the Range, ahead of
+       the value's conversion */
+    buf_printf(b, " sp_Range _r%d = ", tn); emit_expr(c, argv[0], b);
+    buf_printf(b, "; sp_Range _t%d = sp_range_ix(_r%d);", tn, tn);
+    buf_printf(b, " sp_int _len%d = (sp_int)sp_str_length(%s);", tn, cs.p);
+    buf_printf(b, " sp_int _a%d = _t%d.nobeg ? 0 :"
+                  " (_t%d.first < 0 ? _t%d.first + _len%d : _t%d.first);", tn, tn, tn, tn, tn, tn);
+    buf_printf(b, " if (_a%d < 0 || _a%d > _len%d)"
+                  " sp_raise_cls(\"RangeError\", sp_sprintf(\"%%s out of range\", sp_range_str(_r%d)));",
+               tn, tn, tn, tn);
+    buf_printf(b, " int _oe%d = _t%d.noend;", tn, tn);
+    buf_printf(b, " sp_int _e%d = _oe%d ? _len%d - 1 :"
+                  " (_t%d.last < 0 ? _t%d.last + _len%d : _t%d.last);", tn, tn, tn, tn, tn, tn, tn);
+    buf_printf(b, " sp_int _n%d = _e%d - _a%d + ((_t%d.excl && !_oe%d) ? 0 : 1);", tn, tn, tn, tn, tn);
+    ts = str_mut_convert(c, &v, b);
+    buf_printf(&sp, "sp_str_splice_at(%s, _a%d, _n%d < 0 ? 0 : _n%d, _s%d, 1)", cs.p, tn, tn, tn, ts);
+    break;
+  case SA_RE:
+  case SA_RE_N:
+    /* s[/re/] = v and s[/re/, n] = v: group n (0, the match) of the first
+       match, its span found and checked as CRuby checks it (sp_re_nth_span)
+       before v is converted */
+    if (form == SA_RE_N) { buf_printf(b, " sp_int _t%d = ", tn); str_mut_index(c, &k[1], b); buf_puts(b, ";"); }
+    buf_printf(b, " sp_int _b%d, _e%d; sp_re_nth_span(", tn, tn);
+    str_mut_pattern(c, re, argv[0], b);
+    buf_printf(b, ", %s, ", cs.p);
+    if (form == SA_RE_N) buf_printf(b, "_t%d", tn); else buf_puts(b, "0");
+    buf_printf(b, ", &_b%d, &_e%d);", tn, tn);
+    ts = str_mut_convert(c, &v, b);
+    buf_printf(&sp, "sp_str_bytesplice(%s, _b%d, _e%d - _b%d, _s%d)", cs.p, tn, tn, tn, ts);
+    break;
+  case SA_STR:
+    /* s["sub"] = v: the first occurrence; none raises IndexError, before v
+       is converted */
+    buf_printf(b, " const char *_k%d = ", tn); emit_str_expr(c, argv[0], b);
+    buf_printf(b, "; SP_GC_ROOT_STR(_k%d);", tn);
+    buf_printf(b, " sp_oint _a%d = sp_str_index_opt(%s, _k%d);"
+                  " if (_a%d.nil) sp_raise_cls(\"IndexError\", \"string not matched\");", tn, cs.p, tn, tn);
+    ts = str_mut_convert(c, &v, b);
+    buf_printf(&sp, "sp_str_splice_at(%s, _a%d.v, (sp_int)sp_str_length(_k%d), _s%d, 0)", cs.p, tn, tn, ts);
+    break;
+  default:
+    /* s[start, len] = v: the start and the length are converted, and a
+       negative length raises, before the value is (rb_str_update) */
+    buf_printf(b, " sp_int _t%d = ", tn); str_mut_index(c, &k[0], b);
+    buf_printf(b, "; sp_int _l%d = ", tn); str_mut_index(c, &k[1], b); buf_puts(b, ";");
+    buf_printf(b, " if (_l%d < 0) sp_raise_cls(\"IndexError\", sp_sprintf(\"negative length %%lld\", (long long)_l%d));", tn, tn);
+    ts = str_mut_convert(c, &v, b);
+    buf_printf(&sp, "sp_str_splice_at(%s, _t%d, _l%d, _s%d, 0)", cs.p, tn, tn, ts);
+    break;
+  }
+  if (sp.p) str_mut_set(b, t, sp.p);
+  str_mut_value_answer(c, x, &v, b);
+  view_unbind(mark);
+  free(sp.p); free(cs.p);
+  return 1;
 }
 
 int emit_op_string_insert(Compiler *c, const BopCtx *x, Buf *b) {

@@ -204,8 +204,9 @@ typedef enum {
   BOPE_IVAR_REFLECTION,   /* reflection on a builtin value without ivar slots */
   BOPE_FLOAT_RATIONALIZE,
   BOPE_STRING_SCAN_CHECKED,
-  /* String#insert, #clear and #slice!, which change the receiver's String
-     in place through its handle (codegen_call_string.c, stage 7) */
+  /* String#[]=, #insert, #clear and #slice!, which change the receiver's
+     String in place through its handle (codegen_call_string.c, stage 7) */
+  BOPE_STRING_ASET,
   BOPE_STRING_INSERT,
   BOPE_STRING_CLEAR,
   BOPE_STRING_SLICE,
@@ -414,6 +415,10 @@ typedef struct BuiltinOp {
                                            value kind */
 #define BOPR_ARRAY_SUM_SEED ((TyKind)-27) /* blockless Array#sum(seed): the seed
                                            and element kinds, in the build mode */
+#define BOPR_ARG_LAST    ((TyKind)-28)  /* the last argument's kind (String#[]=:
+                                           an assignment answers its right-hand
+                                           object, whatever the method does
+                                           with it) */
 
 /* argc_max of a row that takes any number of arguments */
 #define BOP_ARGC_ANY 127
@@ -474,7 +479,7 @@ TyKind bop_family_of(TyKind rt);
    derived result (BOPR_*) worked out from rt. */
 TyKind bop_result(const BuiltinOp *op, TyKind rt);
 /* bop_result for the rows whose answer also turns on the call's operands'
-   kinds (BOPR_ARRAY_PLUS, BOPR_ARRAY_SETOP, BOPR_ARG0, BOPR_ARG1,
+   kinds (BOPR_ARRAY_PLUS, BOPR_ARRAY_SETOP, BOPR_ARG0, BOPR_ARG1, BOPR_ARG_LAST,
    BOPR_HASH_REPLACE, BOPR_HASH_STORE); any other row answers as bop_result
    does. arg_of(ud, i) answers argument i's kind, as for
    bop_find_arg, and is called only for those rows. TY_UNKNOWN where the row

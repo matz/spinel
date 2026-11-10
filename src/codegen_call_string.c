@@ -1794,8 +1794,9 @@ int emit_op_string_dedup(Compiler *c, const BopCtx *x, Buf *b) {
    and a slot its own handle (strbuf_recv_handle_any: a variable's, a
    captured cell's, a route's over one); any other receiver is the handle
    of its value (SP_STR_HDL finds the String a payload view belongs to),
-   rooted while the arguments allocate. *nilchk says whether the handle can
-   be nil, for str_mut_nil_check once the arguments ran. */
+   rooted while the arguments allocate -- a slot's too when an argument can
+   run code. *nilchk says whether the handle can be nil, for
+   str_mut_nil_check once the arguments ran. */
 static int str_mut_open(Compiler *c, const BopCtx *x, int *nilchk, Buf *b) {
   int t = ++g_tmp;
   Buf hb; memset(&hb, 0, sizeof hb);
@@ -1808,7 +1809,12 @@ static int str_mut_open(Compiler *c, const BopCtx *x, int *nilchk, Buf *b) {
   else emit_expr(c, x->recv, b);
   buf_puts(b, ");");
   free(hb.p); free(lb.p);
-  if (hr != 1) buf_printf(b, " SP_GC_ROOT(_t%d);", t);
+  /* (an argument that runs code can rebind the slot, `@s.insert(m, v)`
+     with m setting @s, and the row changes the String it took) */
+  int argc, runs = 0;
+  const int *argv = call_args(c->nt, x->id, &argc);
+  for (int i = 0; i < argc && !runs; i++) runs = subtree_has_side_effect(c, argv[i]);
+  if (hr != 1 || runs) buf_printf(b, " SP_GC_ROOT(_t%d);", t);
   *nilchk = held || (!hr && repr_of(c, x->recv).may_nil);
   return t;
 }

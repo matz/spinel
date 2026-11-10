@@ -213,17 +213,17 @@ int cplan_super_chain_mi(Compiler *c, int id, const Scope *s, int par, const cha
     /* (not under BasicObject: Object is not in that chain; not under another
        builtin: its methods come first, cplan_root_under_builtin) */
     if (!class_is_blank_slate(c, top) && !cplan_root_under_builtin(c, top)) {
-      static const struct { int core; const char *name; } owners[] = {
-        { CORE_KERNEL, "Kernel" }, { CORE_BASIC_OBJECT, "BasicObject" } };
+      static const int owners[] = { CORE_KERNEL, CORE_BASIC_OBJECT };
       int obj = comp_super_parent(c, top, 0);
       if (obj >= 0 && obj != top) mi = call_target(c, id, obj, name, CT_REACH, ml);
       /* a reopening of Kernel or BasicObject answers only where no builtin
-         method of the name comes before it (Object's, then Kernel's) */
-      int builtin_first = core_method_vis("Object", name, 0) > 0;
+         method of the name comes before it (Object's, then Kernel's, as
+         CRuby's tables hold them) */
+      int builtin_first = builtin_owns_instance_method("Object", name);
       for (int i = 0; mi < 0 && !builtin_first && i < 2; i++) {
-        int k = comp_core_class(c, owners[i].core);
+        int k = comp_core_class(c, owners[i]);
         if (k >= 0) mi = call_target(c, id, k, name, CT_REACH, ml);
-        builtin_first = core_method_vis(owners[i].name, name, 0) > 0;
+        builtin_first = builtin_owns_instance_method(core_class_name(owners[i]), name);
       }
     }
   }

@@ -532,7 +532,8 @@ int an_class_needs_presence(Compiler *c, int ci) {
    class the passes made of self later. */
 static int const_class_presence(Compiler *c, int id, int program) {
   const char *nm = nt_str(c->nt, id, "name");
-  int ci = nm ? comp_class_index(c, nm) : -1;
+  NodeKind ik = nt_kind(c->nt, id);
+  int ci = !nm ? -1 : ik == NK_ConstantReadNode || ik == NK_ConstantPathNode ? const_node_class_index(c, id) : comp_class_index(c, nm);
   if (!an_class_needs_presence(c, ci)) return 0;
   int def = c->classes[ci].def_node, in_own = 0;
   Scope *scope = comp_scope_of(c, id);

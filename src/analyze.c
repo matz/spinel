@@ -3745,7 +3745,7 @@ static int dyn_mixin_arg(Compiler *c, int a) {
   int m = const_node_class_index(c, a);
   if (m >= 0 && m < c->nclasses && comp_class_is_module(c, &c->classes[m])) return m;
   const char *mn = nt_str(nt, a, "name");
-  if (m < 0 && mn && ak == NK_ConstantReadNode && is_builtin_module_name(mn) && comp_class_index(c, mn) < 0) return -2;
+  if (m < 0 && mn && ak == NK_ConstantReadNode && is_builtin_module_name(mn) && comp_builtin_class_named(c, mn) < 0) return -2;
   return -1;
 }
 static int dyn_anc_build(Compiler *c, DynAnc *d, int k, int depth);

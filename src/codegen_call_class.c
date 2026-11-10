@@ -4963,14 +4963,12 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
                                  rvt2_k == NK_ConstantPathNode)) ? nt_str(nt, recv, "name") : NULL;
     /* an alias of a class (`E = Mod::ParseError`) is no longer renamed to
        the class it names: ask the node which class it is */
-    if (rcn2 && comp_class_index(c, rcn2) < 0) {
-      int aci = const_node_class_index(c, recv);
-      if (aci >= 0) rcn2 = c->classes[aci].name;
-    }
+    int rci2 = rcn2 ? const_node_class_index(c, recv) : -1;
+    if (rci2 >= 0) rcn2 = c->classes[rci2].name;
     const CallPlan *eqp = rcn2 && sp_streq(name, "===") && argc == 1 ? cplan_user(c, id) : NULL;
     if (sp_streq(name, "===") && argc == 1 &&
         !(eqp && eqp->mi >= 0 && eqp->via == UC_CMETH && !scope_calls_super(c, eqp->mi))) {
-      if (rcn2 && (comp_class_index(c, rcn2) >= 0 ||
+      if (rcn2 && (rci2 >= 0 ||
                    is_boolean_class_name(rcn2) ||
                    /* the roots: every object is one, and `Object === x` used to
                       fall past this arm into the missing-method gate */

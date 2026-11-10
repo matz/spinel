@@ -615,7 +615,7 @@ int prog_stmt_call_executable(Compiler *c, int id, int ci) {
      there, refused as its eval is */
   for (int u = 0; !is_user && cn && ci >= 0 && u < 2; u++) {
     if (u == 0 && comp_class_is_module(c, &c->classes[ci])) continue;
-    int k = comp_class_index(c, u == 0 ? "Class" : "Module");
+    int k = comp_builtin_class_named(c, u == 0 ? "Class" : "Module");
     int mi = k >= 0 && k != ci ? call_target(c, id, k, cn, 0, NULL) : -1;
     is_user = mi >= 0 && prog_body_evals_text(nt, c->scopes[mi].def_node);
   }

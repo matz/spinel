@@ -828,8 +828,8 @@ static void builtin_given_build(Compiler *c, struct BuiltinGiven *g) {
     for (int i = 0; i < an; i++) {
       NodeKind ak = nt_kind(nt, av[i]);
       if (ak != NK_ConstantReadNode && ak != NK_ConstantPathNode) { g->dynamic = 1; continue; }
-      const char *mn = nt_str(nt, av[i], "name"), *al = resolve_class_alias_chain(c, mn);
-      int m = comp_class_index(c, al ? al : mn);
+      /* (the node's class follows an alias, as the alias chain did) */
+      int m = const_node_class_index(c, av[i]);
       if (m >= 0) held[m] = 1;
     }
   }

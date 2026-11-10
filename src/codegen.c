@@ -19907,10 +19907,15 @@ typedef struct EmitUnitState {
   int move_depth;   /* instance_exec scope moves (comp_scope_move_unwind) */
   int view_depth;   /* codegen views (view_unwind) */
   MtabMark mt;      /* --method-table-check's frame and brackets (mtab_unwind) */
+  /* the header cache's region and versioned loops (hc_state_restore): a
+     refusal inside a cached loop left the region pointing into its frame,
+     and the next unit's reads cached through it */
+  HcState hc;
 } EmitUnitState;
 
 void emit_unit_state_save(Compiler *c, EmitUnitState *s) {
   s->mt = mtab_mark(c);
+  hc_state_save(&s->hc);
   s->move_depth = comp_scope_move_depth();
   s->view_depth = view_mark();
   s->ret_type = g_ret_type; s->fn_ret_type = g_fn_ret_type; s->fn_ret_oint = g_fn_ret_oint; s->result_ty = g_result_ty;
@@ -19968,6 +19973,7 @@ void emit_unit_state_save(Compiler *c, EmitUnitState *s) {
 
 void emit_unit_state_restore(Compiler *c, const EmitUnitState *s) {
   mtab_unwind(c, s->mt);
+  hc_state_restore(&s->hc);
   comp_scope_move_unwind(s->move_depth);
   view_unwind(s->view_depth);
   g_ret_type = s->ret_type; g_fn_ret_type = s->fn_ret_type; g_fn_ret_oint = s->fn_ret_oint; g_result_ty = s->result_ty;

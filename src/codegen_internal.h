@@ -727,6 +727,11 @@ int hc_cob_entry(Compiler *c, int recv, int idx, char *d, size_t cap);
 int hc_cob_entry_of(Compiler *c, int recv, char *d, size_t cap);
 void hc_cob_mark(Buf *b, int part);
 extern int g_hc_cob_off;
+/* ...and that state, saved and put back around a unit a refusal may abandon
+   (EmitUnitState, codegen.c) */
+typedef struct { void *hc, *hcv; int cob_off, loop_quiet; } HcState;
+void hc_state_save(HcState *s);
+void hc_state_restore(const HcState *s);
 void *hc_iter_begin(Compiler *c, int id, Buf **bp);   /* an Integer block loop's header cache region */
 void hc_iter_end(void *h, Buf **bp, int indent, int keep);
 extern int g_loop_polls_in_cond;   /* the next emit_loop_body leaves its polls to the loop's condition */

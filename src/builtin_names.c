@@ -2031,13 +2031,13 @@ int is_instance_method_list(const char *n) {
 }
 /* The visibilities method list n shows, a mask of 1 << SP_VIS_*:
    instance_methods, methods and singleton_methods list the public and
-   protected methods, a public_, protected_ or private_ form its one kind;
-   0 for a name that is no list */
+   protected methods, public_methods and a public_, protected_ or private_
+   instance_methods form its one kind; 0 for any other name */
 int method_list_vis_mask(const char *n) {
   static const char *const pub_prot[] = { "instance_methods", "methods", "singleton_methods", NULL };
   static const char *const pub[] = { "public_instance_methods", "public_methods", NULL };
-  static const char *const prot[] = { "protected_instance_methods", "protected_methods", NULL };
-  static const char *const priv[] = { "private_instance_methods", "private_methods", NULL };
+  static const char *const prot[] = { "protected_instance_methods", NULL };
+  static const char *const priv[] = { "private_instance_methods", NULL };
   return builtin_name_in(n, pub_prot) ? 1 << SP_VIS_PUBLIC | 1 << SP_VIS_PROTECTED
        : builtin_name_in(n, pub) ? 1 << SP_VIS_PUBLIC
        : builtin_name_in(n, prot) ? 1 << SP_VIS_PROTECTED

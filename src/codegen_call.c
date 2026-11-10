@@ -19490,6 +19490,16 @@ static void emit_object_methods_list(Compiler *c, int id, int cid, const char *n
   refl_free(&ro);
 }
 
+/* The form of an object's method list `name` (methods, public_methods,
+   singleton_methods): 1, with *prot whether it shows protected methods
+   and *sg whether it is the singleton list; 0 for any other name */
+static int object_method_list_form(const char *name, int *prot, int *sg) {
+  int vm = method_list_vis_mask(name);
+  if (!vm || is_instance_method_list(name)) return 0;
+  *prot = (vm >> SP_VIS_PROTECTED) & 1;
+  *sg = is_singleton_method_list(name);
+  return 1;
+}
 /* obj.methods / obj.public_methods / obj.singleton_methods on a boxed
    receiver that may be an instance of several classes of the program: each
    class's static list (emit_object_methods_list), picked by the object's
@@ -19504,9 +19514,7 @@ static void emit_object_methods_list(Compiler *c, int id, int cid, const char *n
 int emit_poly_object_methods_reflection(Compiler *c, int id, const char *name, int recv, int argc,
                                         const int *argv, Buf *b) {
   int pub = 1, prot = 0, sg = 0;
-  if (sp_streq(name, "methods")) prot = 1;
-  else if (sp_streq(name, "singleton_methods")) { prot = 1; sg = 1; }
-  else if (!sp_streq(name, "public_methods")) return 0;
+  if (!object_method_list_form(name, &prot, &sg)) return 0;
   if (!an_poly_object_methods_listable(c, id, name, argc, argv)) return 0;
   int nk = 0;
   const int *ks = poly_recv_classes(c, id, &nk);
@@ -19547,9 +19555,7 @@ int emit_poly_object_methods_reflection(Compiler *c, int id, const char *name, i
 int emit_object_methods_reflection(Compiler *c, int id, int recv, int cid, const char *name, int all,
                                    int arg, Buf *b) {
   int pub = 1, prot = 0, sg = 0;
-  if (sp_streq(name, "methods")) prot = 1;
-  else if (sp_streq(name, "singleton_methods")) { prot = 1; sg = 1; }
-  else if (!sp_streq(name, "public_methods")) return 0;
+  if (!object_method_list_form(name, &prot, &sg)) return 0;
   if (!an_object_methods_listable(c, cid, name)) return 0;
   /* an object typed as its singleton class has those methods only once its
      `def obj.m` has run, and not in a #dup: until then it lists as the class

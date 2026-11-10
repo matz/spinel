@@ -83,8 +83,8 @@ class O
 end
 O.new("s").run
 
-# a rest that cannot move (a setter on a computed receiver) stays in the
-# assignment, and the class setters still move
+# a rest whose setter has a computed receiver (the receiver is read ahead of
+# the values), and the class setters move
 class Keep; attr_accessor :v; end
 def mk = (@mk ||= Keep.new)
 K.b, *mk.v = 1, 2, 3

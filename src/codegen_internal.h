@@ -2583,9 +2583,9 @@ int emit_builtin_op_operands(Compiler *c, int id, TyKind rt, const char *name, c
 int emit_builtin_op(Compiler *c, int id, int recv, TyKind rt, const char *name, Buf *b);
 /* The answer of call id's Kernel row (BOP_KERNEL, cplan_dispatch_row) for a
    dispatch's default arm, boxed when the slot is a poly (ret); the operands
-   ran ahead, those with a side effect read their temps atmp (NULL: they are
-   bound already). 0 and nothing written when the row does not emit. */
-int emit_dispatch_row_answer(Compiler *c, int id, const int *atmp, TyKind ret, Buf *b);
+   ran ahead, those with a side effect read their natmp temps atmp (NULL: they
+   are bound already; an operand past them has not run). 0 and nothing written when the row does not emit. */
+int emit_dispatch_row_answer(Compiler *c, int id, const int *atmp, int natmp, TyKind ret, Buf *b);
 int emit_builtin_op_unguarded(Compiler *c, int id, int recv, TyKind rt, const char *name, Buf *b);
 /* the same, the receiver already rendered as rtext by a family that renders
    it once before its own arms */

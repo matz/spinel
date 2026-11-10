@@ -94,3 +94,22 @@ class ClC
   end
 end
 p ClC.new.send(:respond_to_missing?, :x, false)
+# Kernel's arity row is not a singleton method; a block is accepted and ignored
+p Kernel.singleton_methods(false).include?(:respond_to_missing?), Kernel.singleton_methods(false).include?(:block_given?)
+class WithBlock; def t = respond_to_missing?(:x, false) { }; end
+p WithBlock.new.t, WithBlock.new.send(:respond_to_missing?, :x, false) { }
+# an operand that raises still raises
+class Raises
+  def t = respond_to_missing?(1 / 0, false)
+  def t2(z) = respond_to_missing?(:x, z / 0)
+end
+[[:t], [:t2, 0]].each { |m, *a| begin; p Raises.new.__send__(m, *a); rescue => e; p e.class; end }
+begin; p Raises.new.send(:respond_to_missing?, 1 / 0, false); rescue => e; p e.class; end
+# a descendant-only definition of another arity, the operands run once
+$bumped = 0
+def bump = ($bumped += 1)
+class DBase; def go = respond_to_missing?(:q, bump > 0); end
+class DS1 < DBase; def respond_to_missing?(n, a) = a; end
+class DS2 < DBase; def respond_to_missing?(n, a, b = 2) = b == 2; end
+[DBase.new, DS1.new, DS2.new].each { |x| p x.go }
+p $bumped

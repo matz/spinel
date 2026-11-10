@@ -52,7 +52,7 @@ static char *op_recv_text(Compiler *c, const BopCtx *x) {
      $Y   an Array receiver's boxed class id, for sp_raise_frozen_array_at
           (array_frozen_cls)
      $eN  argument N by emit_expr
-     $jN  argument N run for its effect, "(void)(...), ": nothing when it has none
+     $jN  argument N run for its effect, "(void)(...), ": nothing for a plain read (a variable, self, a literal)
      $B / $E  a String Range's begin / end in _t$T, through its handle
           under --share-strings (sp_srange_first / sp_srange_last)
      $bN  argument N boxed (emit_boxed)
@@ -98,6 +98,21 @@ static int emit_op_conv_user_ok(Compiler *c, const BopCtx *x, Buf *b) {
   emit_boxed(c, argv[0], b);
   buf_printf(b, ", %d)", kw_splat_user_may_convert(c));
   return 1;
+}
+
+/* An operand that is a read of a variable, self or a literal: running it has no
+   effect and cannot raise (a quotient or a constant can, so those are not
+   plain), so a row that ignores it need not emit it ($jN). */
+static int op_operand_is_plain_read(Compiler *c, int id) {
+  switch (nt_kind(c->nt, id)) {
+    case NK_LocalVariableReadNode: case NK_InstanceVariableReadNode: case NK_SelfNode:
+    case NK_IntegerNode: case NK_FloatNode: case NK_NilNode: case NK_TrueNode:
+    case NK_FalseNode: case NK_SymbolNode:
+    case NK_RequiredParameterNode: case NK_OptionalParameterNode:   /* (a bare super's operands) */
+      return 1;
+    default:
+      return 0;
+  }
 }
 
 static int emit_op_template(Compiler *c, const BopCtx *x, Buf *b) {
@@ -263,7 +278,7 @@ static int emit_op_template(Compiler *c, const BopCtx *x, Buf *b) {
       switch (p[1]) {
       case 'e': emit_expr(c, a, b); break;
       case 'j':
-        if (subtree_has_side_effect(c, a)) { buf_puts(b, "(void)("); emit_expr_for_effect(c, a, b); buf_puts(b, "), "); }
+        if (!op_operand_is_plain_read(c, a)) { buf_puts(b, "(void)("); emit_expr_for_effect(c, a, b); buf_puts(b, "), "); }
         break;
       case 'b': emit_boxed(c, a, b); break;
       case 'f': emit_float_expr(c, a, b); break;

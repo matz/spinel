@@ -12950,10 +12950,11 @@ void emit_obj_dispatch_key(Compiler *c, int cid, const char *selfptr, Buf *b) {
    placeholder's place; a dispatch that ran its arguments ahead passes their
    temps (atmp). */
 static void emit_dispatch_miss_default(Compiler *c, int cid, int miss_id, const char *name, const char *selfptr,
-                                       int argsNode, const int *atmp, int rtmp, TyKind ret, TyKind disp_ret, Buf *b) {
+                                       int argsNode, const int *atmp, int natmp, int rtmp, TyKind ret, TyKind disp_ret, Buf *b) {
   int miss = miss_id >= 0 ? cplan_dispatch_miss(c, miss_id, cid) : CM_NONE;
   int row = miss_id >= 0 && cplan_dispatch_row(c, miss_id);   /* Kernel's row answers, not a raise */
   Buf rv; memset(&rv, 0, sizeof rv);
+  int in_block = 0;   /* the row answer is assigned inside the operands' block */
   if (miss != CM_NONE || (row && argsNode >= 0)) {
     int argc = 0;
     const int *argv = argsNode >= 0 ? nt_arr(c->nt, argsNode, "arguments", &argc) : NULL;
@@ -12964,7 +12965,7 @@ static void emit_dispatch_miss_default(Compiler *c, int cid, int miss_id, const 
       g_pre = &pb;
       emit_args_run(c, argv, argc);
       g_pre = sv;
-      if (row) emit_dispatch_row_answer(c, miss_id, NULL, ret, &rv);   /* (the operands' temps are bound) */
+      if (row) emit_dispatch_row_answer(c, miss_id, NULL, 0, ret, &rv);   /* (the operands' temps are bound) */
       view_unbind(ov);
     }
     /* in a block of its own: the arguments' temps are declarations */
@@ -12982,12 +12983,18 @@ static void emit_dispatch_miss_default(Compiler *c, int cid, int miss_id, const 
       buf_printf(b, ", %s); ", v.p);
     }
     free(v.p);
+    /* (the answer reads the operands' temps, declared in this block) */
+    if (pb.p && rv.p) {
+      buf_printf(b, "_t%d = %s; break; ", rtmp, rv.p);
+      in_block = 1;
+    }
     if (pb.p) buf_puts(b, "} ");
     free(pb.p);
   }
   /* (a per-arm dispatch ran the arguments ahead, into atmp; with none to run
      there is nothing to bind) */
-  if (row && !rv.p) emit_dispatch_row_answer(c, miss_id, argsNode < 0 ? atmp : NULL, ret, &rv);
+  if (in_block) { free(rv.p); return; }
+  if (row && !rv.p) emit_dispatch_row_answer(c, miss_id, argsNode < 0 ? atmp : NULL, argsNode < 0 ? natmp : 0, ret, &rv);
   buf_printf(b, "_t%d = %s; break;", rtmp,
              rv.p ? rv.p :
              ret == TY_POLY ? "sp_box_nil()" : g_disp_ro ? oint_nil(disp_ret) : default_value_from_compiler(c, disp_ret));
@@ -13047,7 +13054,7 @@ static void emit_dispatch_per_arm(Compiler *c, int cid, int miss_id, const char 
   else if (dmi >= 0)
     emit_dispatch_arm_call(c, defcls, dmi, selfptr, argsNode, blk_tmp, ret, disp_ret, rtmp, b);
   else
-    emit_dispatch_miss_default(c, cid, miss_id, name, selfptr, argsNode, NULL, rtmp, ret, disp_ret, b);
+    emit_dispatch_miss_default(c, cid, miss_id, name, selfptr, argsNode, NULL, 0, rtmp, ret, disp_ret, b);
   buf_printf(b, " } _t%d; })", rtmp);
 }
 
@@ -13966,7 +13973,7 @@ else {
      call to a nonexistent sp_<base>_<name>. */
   if (!m) {
     buf_puts(b, " default: ");
-    emit_dispatch_miss_default(c, cid, miss_id, name, selfptr, -1, atmp, rtmp, ret, disp_ret, b);
+    emit_dispatch_miss_default(c, cid, miss_id, name, selfptr, -1, atmp, np, rtmp, ret, disp_ret, b);
     buf_printf(b, " } _t%d; })", rtmp);
     free(atmp); free(atmp_ty); free(atmp_o); arg_layout_free(&L);
     return;

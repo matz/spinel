@@ -2780,6 +2780,25 @@ static int cplan_kernel_form(Compiler *c, int id, const char *name, int dflt) {
   return recv < 0 || nt_kind(nt, recv) == NK_SelfNode ||
          (nt_str(nt, id, "send_blind") && (dflt || !send_blind_recv_owns(c, id, recv, comp_ntype(c, recv), name)));
 }
+/* Does Kernel reach the receiver of call id (its self, or the class of a send's
+   receiver; any class a dispatch's default arm takes when the receiver is of
+   no one class)? A class under BasicObject without `include Kernel` has no
+   Kernel above it, and its instances raise NoMethodError. */
+static int cplan_kernel_reaches(Compiler *c, int id) {
+  const NodeTable *nt = c->nt;
+  int recv = nt_ref(nt, id, "receiver");
+  int ci = recv < 0 || nt_kind(nt, recv) == NK_SelfNode ? cplan_self_class(c, id)
+         : ty_is_object(comp_ntype(c, recv)) ? ty_object_class(comp_ntype(c, recv)) : -1;
+  if (ci < -1 && (recv < 0 || nt_kind(nt, recv) == NK_SelfNode)) {   /* (a self the record cannot place: its scope's class) */
+    const Scope *in = comp_scope_of(c, id);
+    ci = in ? in->class_id : -1;
+  }
+  if (ci >= 0 && ci < c->nclasses) return !class_lacks_kernel(c, ci);
+  if (recv < 0 || nt_kind(nt, recv) == NK_SelfNode) return 1;
+  for (int k = 0; k < c->nclasses; k++)
+    if (class_lacks_kernel(c, k)) return 0;
+  return 1;
+}
 /* See call_plan.h. */
 int cplan_dispatch_row(Compiler *c, int id) {
   const NodeTable *nt = c->nt;
@@ -2788,7 +2807,7 @@ int cplan_dispatch_row(Compiler *c, int id) {
   if (name) call_args(nt, id, &argc);
   const BuiltinOp *op = name ? bop_find(BOP_KERNEL, name, argc, nt_ref(nt, id, "block") >= 0) : NULL;
   int oci = comp_core_class(c, CORE_OBJECT);   /* (Object's reopening answers every self) */
-  return op && !(op->flags & BOPF_INTERNAL) && cplan_kernel_form(c, id, name, 1) &&
+  return op && !(op->flags & BOPF_INTERNAL) && cplan_kernel_form(c, id, name, 1) && cplan_kernel_reaches(c, id) &&
          call_target(c, id, -1, name, CT_TOP, NULL) < 0 &&
          !(oci >= 0 && call_target(c, id, oci, name, 0, NULL) >= 0);
 }

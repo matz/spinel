@@ -711,11 +711,11 @@ extern const char *(*sp_obj_to_json_fn)(sp_RbVal);
 /* Symbol-keyed Struct/Data #to_h, for a poly receiver (#2906). */
 extern sp_RbVal (*sp_obj_to_h_fn)(sp_RbVal);
 extern sp_RbVal (*sp_obj_struct_values_fn)(sp_RbVal);
-/* Set by the generated prologue when a reopened Object, Kernel or
-   BasicObject defines one of the Array or Enumerable names a boxed Struct,
-   IO or Symbol lacks: that method answers them, so the run-time checks
-   leave those three to the old route. */
-extern int sp_poly_root_lacks_names;
+/* Set by the generated prologue to the NULL-ended list of the Array or
+   Enumerable names a boxed Struct, IO or Symbol lacks that a reopened
+   Object, Kernel or BasicObject defines: that method answers the name, so
+   the run-time checks leave it to the old route. NULL when there is none. */
+extern const char *const *sp_poly_root_lacks_names;
 /* user-object #to_a for container-read poly receivers (#3234): installed by
    the generated prologue when any instantiated class defines a no-arg to_a */
 extern sp_RbVal (*sp_obj_to_a_fn)(sp_RbVal);

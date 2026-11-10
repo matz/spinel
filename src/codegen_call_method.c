@@ -663,6 +663,8 @@ int emit_op_method_super_method(Compiler *c, const BopCtx *x, Buf *b) {
   int imip = mnp >= 0 ? method_obj_target_mi(c, mnp) : -1;
   int pmip = imip >= 0 ? cplan_super_target(c, -1, &c->scopes[imip], NULL) : -1;
   if (pmip >= 0) {
+    /* a yielding target is called through the clone that is emitted for it (#3399) */
+    const int pfi = scope_proc_form_of(c, pmip), fmip = pfi >= 0 ? pfi : pmip;
     int tvp = ++g_tmp;
     buf_printf(b, "({ sp_BoundMethod *_t%d = ", tvp);
     emit_expr(c, recv, b);
@@ -673,7 +675,7 @@ int emit_op_method_super_method(Compiler *c, const BopCtx *x, Buf *b) {
     const char *pp = proc_params_arg(method_proc_params(c, pmip));
     if (pp) buf_puts(b, "sp_bm_set_proc_params(");
     buf_printf(b, "%ssp_bm_set_thunk(sp_bm_set_abi(sp_bound_method_new_d(_t%d->self, _t%d->self_kind, (sp_int)(uintptr_t)&", sup_unb ? "sp_bm_set_unbound(" : "", tvp, tvp);
-    buf_puts(b, mc_method(c, &c->scopes[pmip]));
+    buf_puts(b, mc_method(c, &c->scopes[fmip]));
     buf_puts(b, ", ");
     emit_str_literal(b, comp_scope_user_name(&c->scopes[pmip]));
     { int ar; if (method_scope_arity(c, pmip, &ar)) buf_printf(b, ", (sp_int)%d", ar); else buf_puts(b, ", (sp_int)-1"); }
@@ -681,14 +683,14 @@ int emit_op_method_super_method(Compiler *c, const BopCtx *x, Buf *b) {
     emit_method_desc_args(c, -1, pmip, -1, comp_scope_user_name(&c->scopes[pmip]), sup_unb, 0, b);
     buf_puts(b, ")");
     { char _s[8 * 64 + 1]; int _fx = 0, _rs = 0, _rt = 0, _pf = 0, _prt = 0;
-      int _ab = method_legacy_int_abi(c, pmip, !sup_unb, _s, sizeof _s, &_fx, &_rs, &_rt);
-      int _pa = method_poly_abi(c, pmip, !sup_unb, &_pf, &_prt);
+      int _ab = method_legacy_int_abi(c, fmip, !sup_unb, _s, sizeof _s, &_fx, &_rs, &_rt);
+      int _pa = method_poly_abi(c, fmip, !sup_unb, &_pf, &_prt);
       char _rbb[32]; snprintf(_rbb, sizeof _rbb, "_t%d->recv_bound", tvp);
       /* the parent's binding is the source Method's: an instance method
          is receiver-bound, a class method is not */
       int _prb = c->scopes[pmip].class_id >= 0 && !c->scopes[pmip].is_cmethod;
       int _tmin = 0, _tmax = 0;
-      const char *_th = sup_unb ? NULL : emit_method_thunk(c, pmip, _prb, &_tmin, &_tmax);
+      const char *_th = sup_unb ? NULL : emit_method_thunk(c, fmip, _prb, &_tmin, &_tmax);
       emit_bm_abi_args(b, _rbb, _ab, _s, _fx, _rs, _ab ? _rt : _prt, _pa, _pf, _th, _tmin, _tmax); }
     if (sup_unb) buf_puts(b, ")");
     if (pp) buf_printf(b, ", %s)", pp);

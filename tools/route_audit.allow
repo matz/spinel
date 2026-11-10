@@ -234,6 +234,7 @@ src/codegen_call_class.c emit_refl_im_params a reflected method's name
 src/codegen_call_class.c obj_defines_own whether the receiver's class defines the reflection method itself
 src/codegen_call_class.c emit_refl_method_defined a reflected method's name
 src/codegen_call_method.c emit_method_obj_target =disp arity metadata for a boxed receiver's method, not an invocation target
+src/codegen_call_method.c bam_recv_reopen_answers whether a reopening defines a name on a boxed receiver's builtin class chain, not an invocation target
 src/codegen_call_method.c emit_method_params_by_recv parameters metadata for a boxed receiver's method, as its arity, not an invocation target
 src/codegen_call_method.c emit_op_method_arity a Symbol argument's method
 src/codegen_call_method.c emit_method_source_target a Symbol argument's method

@@ -77,3 +77,11 @@ p e, e.class
 f = k[{}]
 p f, f.first.class
 p k[[], {}]
+
+# a nil element, through `k[..]` and `k.new(n, v)`, beside the Integers MyC holds
+n = k[nil, 1]
+p n, n.class, n[0], n[1]
+m = k.new(2, nil)
+p m, m.class, m[0]
+m[0] = 5
+p m, m.size

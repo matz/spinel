@@ -20,3 +20,12 @@ MyC
 [{}]
 Hash
 [[], {}]
+[nil, 1]
+MyC
+nil
+1
+[nil, nil]
+MyC
+nil
+[5, nil]
+2

@@ -67,7 +67,7 @@ p(C10.singleton_methods(false).include?(:v) ? C10.v : :none)
 # a def in a required file
 class K1; end
 p K1.singleton_methods(false)
-require_relative "fixtures/class_side_list_at_point/late"
+require_relative "class_side_list_at_point_lib/late"
 p K1.singleton_methods(false)
 
 # stays: a class << self accessor, a block kept and run later, a row

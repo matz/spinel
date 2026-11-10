@@ -5092,7 +5092,7 @@ infer-test: $(SPINEL) $(SP_RT_LIB)
 	$(SPINEL) test/nested_table_iter.rb -c --no-line-map -o "$$tmp/nti.c" >/dev/null 2>&1 || { echo "infer-test: FAIL (compile nested_table_iter)"; exit 1; }; \
 	grep -Eq 'sp_mul\(sp_PtrArray \* *lv_a, sp_PtrArray \* *lv_b\)' "$$tmp/nti.c" || { echo "infer-test: FAIL (a nested table passed as a method argument stayed boxed)"; grep -E 'sp_mul\(' "$$tmp/nti.c" | head -1; ok=0; }; \
 	grep -Eq 'sp_FloatArray \* *lv_bj' "$$tmp/nti.c" || { echo "infer-test: FAIL (each_with_index on that argument did not yield a float row)"; ok=0; }; \
-	grep -Eq 'sp_FloatArray_get\(lv_bj,' "$$tmp/nti.c" || { echo "infer-test: FAIL (the zip read the yielded row through the poly accessor)"; ok=0; }; \
+	grep -Eq 'sp_FloatArray_o?get\(lv_bj,' "$$tmp/nti.c" || { echo "infer-test: FAIL (the zip read the yielded row through the poly accessor)"; ok=0; }; \
 	grep -Eq 'sp_PtrArray \* *lv_c' "$$tmp/nti.c" || { echo "infer-test: FAIL (each_with_index on the result table left it boxed)"; ok=0; }; \
 	grep -Eq 'sp_FloatArray \* *lv_ci' "$$tmp/nti.c" || { echo "infer-test: FAIL (each_with_index on the result table did not yield a float row)"; ok=0; }; \
 	grep -Eq 'sp_PtrArray \* *lv_other' "$$tmp/nti.c" || { echo "infer-test: FAIL (a nested table passed as zip'\''s other operand stayed boxed)"; ok=0; }; \

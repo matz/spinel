@@ -34,8 +34,14 @@ static int c_int_literal_text(const char *s, long long *v) {
    Evaluate once into a rooted temp and rewrite the buffer to name it; a bare
    lvalue (`lv_x`, `sp_self->iv_a`) is left alone so the common loop keeps its
    current shape. */
+static void hoist_loop_recv_as(Compiler *c, TyKind rt, Buf *rb, Buf *b, int indent, int always);
 static void hoist_loop_recv(Compiler *c, TyKind rt, Buf *rb, Buf *b, int indent) {
-  if (!rb->p || !strchr(rb->p, '(')) return;
+  hoist_loop_recv_as(c, rt, rb, b, indent, 0);
+}
+/* ...and, `always`, a bare lvalue too: one the loop's body may rebind, where
+   the walk goes on over the object the call was made on */
+static void hoist_loop_recv_as(Compiler *c, TyKind rt, Buf *rb, Buf *b, int indent, int always) {
+  if (!rb->p || (!always && !strchr(rb->p, '('))) return;
   int t = ++g_tmp;
   Buf ct; memset(&ct, 0, sizeof ct); emit_ctype(c, rt, &ct);
   emit_indent(b, indent);
@@ -6792,14 +6798,36 @@ static int iter_ewi_zip_poly_arms(Compiler *c, int id, Buf *b, int indent, const
         g_pre = b;
         if (arg_poly) emit_boxed(c, zargv[0], &ob); else emit_expr(c, zargv[0], &ob);
         g_pre = pre;
-        hoist_loop_recv(c, arg_poly ? TY_POLY : a0t, &ob, b, indent);
+        hoist_loop_recv_as(c, arg_poly ? TY_POLY : a0t, &ob, b, indent,
+                           !arg_poly && !hcv_node_stable(c, body, block, zargv[0]));
         emit_indent(b, indent);
         buf_printf(b, "if (_t%d.tag != SP_TAG_OBJ || !SP_IS_BUILTIN_ARRAY(_t%d.cls_id)) sp_raise_poly_nomethod(\"zip\", _t%d);\n", trz, trz, trz);
       }
       else {
         if (arg_poly) emit_boxed(c, zargv[0], &ob); else emit_expr(c, zargv[0], &ob);
-        hoist_loop_recv(c, rt, &rb, b, indent);
-        if (ty_is_array(a0t)) hoist_loop_recv(c, a0t, &ob, b, indent);
+        /* (a receiver or operand the block may rebind is read once: the
+           walk is over the objects the call was made with) */
+        hoist_loop_recv_as(c, rt, &rb, b, indent, !hcv_node_stable(c, body, block, recv));
+        if (ty_is_array(a0t)) hoist_loop_recv_as(c, a0t, &ob, b, indent, !hcv_node_stable(c, body, block, zargv[0]));
+      }
+      /* An operand that is no typed array is taken as CRuby's block zip
+         takes it, once ahead of the walk (sp_zip_block_arg, as
+         emit_zip_many_block does): an Array's first n elements, n the
+         receiver's length, a Range as it is, a Hash's pairs, an
+         Enumerator's first n values. Its element is then read as
+         sp_zip_block_row reads it: nil past its end or past n. */
+      int tzn = 0;
+      if (arg_poly) {
+        int tz = ++g_tmp;
+        tzn = ++g_tmp;
+        emit_indent(b, indent);
+        if (recv_poly) buf_printf(b, "sp_int _t%d = sp_poly_arr_len(%s);\n", tzn, rb.p ? rb.p : "sp_box_nil()");
+        else buf_printf(b, "sp_int _t%d = sp_%sArray_length(%s);\n", tzn, k, rb.p ? rb.p : "NULL");
+        emit_indent(b, indent);
+        buf_printf(b, "sp_RbVal _t%d = sp_zip_block_arg(%s, _t%d); SP_GC_ROOT_RBVAL(_t%d);\n",
+                   tz, ob.p ? ob.p : "sp_box_nil()", tzn, tz);
+        free(ob.p); memset(&ob, 0, sizeof ob);
+        buf_printf(&ob, "_t%d", tz);
       }
       Scope *zs = comp_scope_of(c, id);
       LocalVar *zlv0 = (p0 && zs) ? scope_local(zs, p0) : NULL;
@@ -6827,7 +6855,8 @@ static int iter_ewi_zip_poly_arms(Compiler *c, int id, Buf *b, int indent, const
         char s1[512], s2[512];
         if (recv_poly) snprintf(s1, sizeof s1, "sp_poly_arr_get(%s, _t%d)", rb.p ? rb.p : "sp_box_nil()", t);
         else snprintf(s1, sizeof s1, "sp_%sArray_get(%s, _t%d)", k, rb.p ? rb.p : "NULL", t);
-        if (arg_poly) snprintf(s2, sizeof s2, "sp_poly_arr_get(%s, _t%d)", ob.p ? ob.p : "sp_box_nil()", t);
+        if (arg_poly) snprintf(s2, sizeof s2, "(_t%d < _t%d && _t%d < sp_poly_arr_len_ex(%s) ? sp_poly_each_elem(%s, _t%d) : sp_box_nil())",
+                               t, tzn, t, ob.p, ob.p, t);
         else snprintf(s2, sizeof s2, "sp_%sArray_get(%s, _t%d)", k2, ob.p ? ob.p : "NULL", t);
         emit_indent(b, indent + 1);
         buf_printf(b, "lv_%s = ({ sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d); ", p0, tpz, tpz);
@@ -6857,7 +6886,8 @@ static int iter_ewi_zip_poly_arms(Compiler *c, int id, Buf *b, int indent, const
       }
       if (p1n && zlv1 && ob.p) {
         char src2[512];
-        if (arg_poly) snprintf(src2, sizeof src2, "sp_poly_arr_get(%s, _t%d)", ob.p, t);
+        if (arg_poly) snprintf(src2, sizeof src2, "(_t%d < _t%d && _t%d < sp_poly_arr_len_ex(%s) ? sp_poly_each_elem(%s, _t%d) : sp_box_nil())",
+                               t, tzn, t, ob.p, ob.p, t);
         else snprintf(src2, sizeof src2, "sp_%sArray_get(%s, _t%d)", k2, ob.p, t);
         emit_indent(b, indent + 1); buf_printf(b, "lv_%s = ", p1n);
         /* below the receiver's length, which the loop tested the argument
@@ -6867,7 +6897,16 @@ static int iter_ewi_zip_poly_arms(Compiler *c, int id, Buf *b, int indent, const
         /* a number argument shorter than the receiver pads with nil: read
            with its nil into a boxed or nil-holding param */
         if (!arg_poly && oint_kind(et2) && (zlv1->type == TY_POLY || slot_is_oint(zlv1))) {
+          char hd[48], hl[48], hw[48], hr[48];
           if (zlv1->type == TY_POLY) buf_printf(b, "%s(sp_%sArray_oget(%s, _t%d))", oint_box(et2), k2, ob.p, t);
+          /* below the nil-free length of the header the loop's region
+             holds (_hcr), the element, with no test of its own (as a
+             while's read is); past it, oget's nil */
+          else if (hc_array(c, zargv[0], et2 == TY_FLOAT, hd, hl, hw, sizeof hd)) {
+            hc_read_len(hd, hr, sizeof hr);
+            buf_printf(b, "SP_LIKELY(_t%d < %s) ? %s(%s[_t%d]) : sp_%sArray_oget(%s, _t%d)",
+                       t, hr, oint_of(et2), hd, t, k2, ob.p, t);
+          }
           else buf_printf(b, "sp_%sArray_oget(%s, _t%d)", k2, ob.p, t);
         }
         else emit_zip_block_param(c, zlv1->type, et2, src2, b);

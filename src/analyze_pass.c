@@ -17093,8 +17093,15 @@ static int infer_zip_block_params(Compiler *c, int id, int block, const char *p0
   if (zp1) {
     int zargs = nt_ref(nt, id, "arguments");
     int zargc = 0; const int *zargv = zargs >= 0 ? nt_arr(nt, zargs, "arguments", &zargc) : NULL;
-    TyKind et2 = (zargc > 0 && zargv && ty_is_array(infer_type(c, zargv[0])))
-                 ? ty_array_elem(infer_type(c, zargv[0])) : ty_array_elem(rt);
+    /* y is an element of the operand: an Integer Range's an Integer, and
+       any other enumerable that is no array (a Hash's pair, an
+       Enumerator's value) hands it over boxed. An operand not typed yet,
+       or one that is an array only at run time (a row of a table, boxed
+       until the table narrows), takes the receiver's element type: its
+       read is narrowed into it (emit_zip_block_param). */
+    TyKind at = zargc > 0 && zargv ? infer_type(c, zargv[0]) : TY_UNKNOWN;
+    TyKind et2 = ty_is_array(at) ? ty_array_elem(at) : at == TY_RANGE ? TY_INT :
+                 at == TY_UNKNOWN || at == TY_POLY ? ty_array_elem(rt) : TY_POLY;
     if (bp_widen(zs, zp1, et2)) changed = 1;
   }
   return changed;

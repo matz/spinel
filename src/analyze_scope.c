@@ -840,7 +840,7 @@ static const char *local_holds_class(Compiler *c, int v) {
       if (!wn || !sp_streq(wn, ln)) continue;
       int wv = WK[k] == NK_LocalVariableWriteNode ? nt_ref(nt, w, "value") : -1;
       const char *vn = wv >= 0 && nt_kind(nt, wv) == NK_ConstantReadNode ? nt_str(nt, wv, "name") : NULL;
-      if (!vn || comp_class_index(c, vn) < 0 || (held && !sp_streq(held, vn))) return NULL;
+      if (!vn || const_node_class_index(c, wv) < 0 || (held && !sp_streq(held, vn))) return NULL;
       held = vn;
     }
   return held;
@@ -1090,7 +1090,7 @@ int class_eval_reopen_class(Compiler *c, int id, int enclosing_class) {
                          recv_k == NK_ConstantPathNode)) {
     const char *recv_name = nt_str(nt, recv, "name");
     if (!recv_name) return -1;
-    ci = comp_class_index(c, recv_name);
+    ci = const_node_class_index(c, recv);
     if (ci < 0) return -1;
   }
   else {
@@ -1118,7 +1118,7 @@ int class_reopen_cmethod(Compiler *c, int call, int recv, const char *name) {
   if (recv >= 0) {
     NodeKind rk = nt_kind(c->nt, recv);
     const char *cn = rk == NK_ConstantReadNode || rk == NK_ConstantPathNode ? nt_str(c->nt, recv, "name") : NULL;
-    int ci = cn ? comp_class_index(c, cn) : -1;
+    int ci = cn ? const_node_class_index(c, recv) : -1;
     if (!cn || !builtin_class_id(cn) || is_builtin_module_name(cn) ||
         (ci >= 0 && call_target(c, call, ci, name, CT_CMETHOD, NULL) >= 0)) return -1;
   }
@@ -1386,7 +1386,7 @@ static int singleton_const_class(Compiler *c, int recv, int class_id) {
   if (k != NK_ConstantReadNode && k != NK_ConstantPathNode) return -1;
   const char *name = nt_str(c->nt, recv, "name");
   if (reopened_native_class(c, recv, class_id, name) || is_untabled_native_class_name(name)) return -2;
-  int ci = comp_class_index(c, name);
+  int ci = const_node_class_index(c, recv);
   if (ci < 0 && (is_builtin_class_name(name) || is_builtin_module_const_name(name))) {
     comp_class_new(c, name, -1);
     ci = c->nclasses - 1;
@@ -2865,7 +2865,7 @@ static int sg_new_class_ci(Compiler *c, int val) {
   const char *cn = nt_kind(nt, recv) == NK_ConstantReadNode ? nt_str(nt, recv, "name") : NULL;
   if (cn && sp_streq(cn, "Object")) return -2;
   if (cn && sp_streq(cn, "BasicObject")) return -3;
-  int ci = nt_kind(nt, recv) == NK_ConstantReadNode ? comp_class_index(c, cn)
+  int ci = nt_kind(nt, recv) == NK_ConstantReadNode ? const_node_class_index(c, recv)
          : nt_kind(nt, recv) == NK_LocalVariableReadNode ? class_var_static_ci(c, recv) : -1;
   if (ci < 0) return -1;
   /* Other object-base names and native/exception/struct classes do not have
@@ -2908,7 +2908,7 @@ static int sg_class_root(Compiler *c, int k) {
       int sc = class_def_super(c->nt, c->classes[k].def_node);
       NodeKind sk = sc >= 0 ? nt_kind(c->nt, sc) : NK_NilNode;
       const char *sn = sk == NK_ConstantReadNode || sk == NK_ConstantPathNode ? nt_str(c->nt, sc, "name") : NULL;
-      p = sn ? comp_class_index(c, sn) : -1;
+      p = sn ? const_node_class_index(c, sc) : -1;
     }
     if (p < 0 || p == k) return k;
     k = p;
@@ -3226,7 +3226,7 @@ static int sg_binding(Compiler *c, int id, int recv, int *bk, const char **rn, S
   }
   *rn = nt_str(nt, recv, "name");
   if (!*rn) return -1;
-  if (*bk == SG_CONST && comp_class_index(c, *rn) >= 0) return -1;  /* class method */
+  if (*bk == SG_CONST && const_node_class_index(c, recv) >= 0) return -1;  /* class method */
   /* the local's binding scope is the node's ENCLOSING scope (the receiver read
      is walked under the method/call scope, so its own nscope is wrong). */
   *owner = *bk == SG_CONST ? NULL : comp_scope_of(c, id);
@@ -3490,7 +3490,7 @@ static int sg_class_value(Compiler *c, int v) {
   NodeKind k = nt_kind(nt, v);
   if (k == NK_ConstantReadNode || k == NK_ConstantPathNode) {
     const char *cn = nt_str(nt, v, "name");
-    return cn && (comp_class_index(c, cn) >= 0 || is_builtin_class_name(cn));
+    return cn && (const_node_class_index(c, v) >= 0 || is_builtin_class_name(cn));
   }
   if (k != NK_CallNode) return 0;
   int r = nt_ref(nt, v, "receiver");
@@ -4485,7 +4485,7 @@ static int mixin_arg_module(Compiler *c, int arg) {
   NodeKind ak = nt_kind(c->nt, arg);
   const char *mn = (ak == NK_ConstantReadNode || ak == NK_ConstantPathNode) ? nt_str(c->nt, arg, "name") : NULL;
   if (!mn) return -1;
-  int mod = comp_class_index(c, mn);
+  int mod = const_node_class_index(c, arg);
   if (mod < 0) { const char *al = resolve_class_alias(c, mn); if (al) mod = comp_class_index(c, al); }
   return mod;
 }
@@ -7282,7 +7282,7 @@ static int superclass_alias_target(Compiler *c, const char *name, int depth, int
   NodeKind vk = v >= 0 ? nt_kind(nt, v) : NK_NONE;
   if (vk == NK_ConstantReadNode || vk == NK_ConstantPathNode) {
     const char *vn = nt_str(nt, v, "name");
-    int k = vn ? comp_class_index(c, vn) : -1;
+    int k = vn ? const_node_class_index(c, v) : -1;
     return k >= 0 ? k : superclass_alias_target(c, vn, depth + 1, wr);
   }
   *wr = w;
@@ -8995,7 +8995,7 @@ void unmark_referenced_module_sources(Compiler *c) {
     if (recv < 0) continue;
     if (nt_kind(nt, recv) != NK_ConstantReadNode && nt_kind(nt, recv) != NK_ConstantPathNode) continue;
     const char *cn = nt_str(nt, recv, "name");
-    int ci = cn ? comp_class_index(c, cn) : -1;
+    int ci = cn ? const_node_class_index(c, recv) : -1;
     if (ci < 0) continue;
     int args = nt_ref(nt, id, "arguments");
     int an = 0; const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &an) : NULL;
@@ -9251,7 +9251,7 @@ static int extend_arg_module(Compiler *c, int arg) {
   const char *mname = NULL;
   if (ak == NK_ConstantReadNode) mname = nt_str(nt, arg, "name");
   else if (ak == NK_ConstantPathNode) mname = nt_str(nt, arg, "name");
-  return mname ? comp_class_index(c, mname) : -1;
+  return mname ? const_node_class_index(c, arg) : -1;
 }
 
 /* Whether a body of class ci has a bare `extend` naming mod_id. */
@@ -9335,7 +9335,7 @@ void desugar_module_prepends(Compiler *c) {
       NodeKind ak = nt_kind(nt, a);
       const char *mn = ak == NK_ConstantReadNode || ak == NK_ConstantPathNode ? nt_str(nt, a, "name") : NULL;
       int pre[64];
-      int np = module_prepend_list(c, mn ? comp_class_index(c, mn) : -1, pre, 64);
+      int np = module_prepend_list(c, mn ? const_node_class_index(c, a) : -1, pre, 64);
       if (nn + np + 1 > cap) {
         cap = nn + np + 1 + an;
         nargs = realloc(nargs, sizeof(int) * (size_t)cap);
@@ -11497,7 +11497,7 @@ static int pivs_param(Compiler *c, Scope *s, const char *pn, char *set, int dept
       int r = nt_ref(nt, u, "receiver");
       if (r < 0 || (nt_kind(nt, r) != NK_ConstantReadNode && nt_kind(nt, r) != NK_ConstantPathNode)) return 0;
       const char *rn = nt_str(nt, r, "name");
-      int rc = rn ? comp_class_index(c, rn) : -1;
+      int rc = rn ? const_node_class_index(c, r) : -1;
       if (rc < 0) { if (rn && is_builtin_class_name(rn)) continue; return 0; }
       if (comp_cmethod_in_chain(c, rc, "new", NULL) >= 0) return 0;
       if (comp_method_in_chain(c, rc, "initialize", NULL) != (int)(s - c->scopes)) continue;
@@ -12398,7 +12398,7 @@ static int sg_writer_class(Compiler *c, int id, int recv) {
   NodeKind rk = nt_kind(nt, recv);
   if (rk == NK_ConstantReadNode || rk == NK_ConstantPathNode) {
     const char *cn = nt_str(nt, recv, "name");
-    return cn ? comp_class_index(c, cn) : -1;
+    return cn ? const_node_class_index(c, recv) : -1;
   }
   if (rk == NK_SelfNode) {
     Scope *s = comp_scope_of(c, id);

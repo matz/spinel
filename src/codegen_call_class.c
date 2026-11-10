@@ -2025,7 +2025,8 @@ static int emit_setter_assign_value(Compiler *c, int id, const int *argv, Buf *b
     return 1;
   }
   if (shr) at = TY_STRBUF;
-  if (at != TY_UNKNOWN && at != TY_VOID) {
+  /* (not a nil, whose C type is void: no temporary holds it) */
+  if (at != TY_UNKNOWN && at != TY_VOID && at != TY_NIL) {
     Scope *esc = comp_scope_of(c, id);
     int saved0_arg = argv[0];
     if (esc) {

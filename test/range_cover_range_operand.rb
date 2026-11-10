@@ -36,3 +36,13 @@ a = 9007199254740993      # 2**53 + 1
 f = 9007199254740992.0    # 2**53
 p (0.0..f).cover?(a..a), (0.0..f).cover?(0..a - 1), (0..a).cover?(1.0..f), (0...a).cover?(1.0..f)
 p (a..a + 1).cover?(f..f), (0..a - 1).cover?(1.0..f), (0...a - 1).cover?(1.0..f)
+
+# two open ends are equal: an excluded one covers only an excluded one
+p (1.0...).cover?(1.0..), (1.0...).cover?(1..), (1...).cover?(1.0..), ("a"...).cover?("a"..)
+p (1.0...).cover?(1.0...), (1.0..).cover?(1.0...), ("a"...).cover?(("a"...)), ("a"..).cover?(("a"...))
+p [1.0...].map { |r| r.cover?(1.0..) }, [1...].map { |r| r.cover?(2.0..) }, f(("a"...), ("a"..))
+
+# a NaN bound is never covered and covers nothing
+nan = Float::NAN
+p (nan..).cover?(1.0..2.0), (nan..).cover?(nan..), (1.0..).cover?(nan..), (nan..).cover?(2.0..)
+p [nan..].map { |r| r.cover?(1.0..2.0) }, f((nan..), 1..2), f((1.0..), (nan..))

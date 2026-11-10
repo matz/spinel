@@ -4602,7 +4602,7 @@ static SP_UNUSED sp_bool sp_frange_cover_rng(sp_FloatRange a, sp_Range b) {
     int c0 = sp_int_flt_cmp(b.first, a.first);
     if (c0 == 2 || c0 < 0) return 0;
   }
-  if (aen) return 1;
+  if (aen) return !(ben && aex && !bex);
   if (ben) return 0;
   int c = sp_range_end_flt_cmp(b, a.last);
   if (c == 2) return 0;
@@ -4622,9 +4622,11 @@ static SP_UNUSED sp_bool sp_frange_cover_frange(sp_FloatRange a, sp_FloatRange b
   int abn = (a.omitted & SP_FRANGE_NO_BEGIN) != 0, aen = (a.omitted & SP_FRANGE_NO_END) != 0;
   int bbn = (b.omitted & SP_FRANGE_NO_BEGIN) != 0, ben = (b.omitted & SP_FRANGE_NO_END) != 0;
   int aex = a.excl != 0, bex = b.excl != 0;
-  if (!bbn && !ben && (b.first > b.last || (b.first == b.last && bex))) return 0;
-  if (!abn && (bbn || b.first < a.first)) return 0;
-  if (aen) return 1;
+  /* (a NaN bound compares with nothing, so it is never covered) */
+  if (!bbn && !ben && !(b.first < b.last || (b.first == b.last && !bex))) return 0;
+  if (!abn && (bbn || !(b.first >= a.first))) return 0;
+  /* two open ends are equal: an excluded one covers only an excluded one */
+  if (aen) return !(ben && aex && !bex);
   if (ben) return 0;
   if (aex && !bex) return b.last < a.last;
   return b.last <= a.last;
@@ -4668,7 +4670,8 @@ static SP_UNUSED sp_bool sp_range_cover_frange(sp_Range r, sp_FloatRange a) {
     int c0 = sp_int_flt_cmp(r.first, a.first);
     if (c0 == 2 || c0 > 0) return 0;
   }
-  if (ren) return 1;
+  /* two open ends are equal: an excluded one covers only an excluded one */
+  if (ren) return !(aen && rex && !aex);
   if (aen) return 0;
   /* an excluded end covers an operand end below it, or the same end when
      the operand excludes it too (1...10 covers 1.0..9.5 and 1.0...10.0) */
@@ -4797,7 +4800,8 @@ static SP_UNUSED sp_bool sp_srange_cover_poly(sp_RbVal recv, sp_RbVal x) {
   if (r.sym != o.sym) return 0;
   if (o.first && o.last && (o.excl ? strcmp(o.first, o.last) >= 0 : strcmp(o.first, o.last) > 0)) return 0;
   if (r.first && (!o.first || strcmp(o.first, r.first) < 0)) return 0;
-  if (!r.last) return 1;
+  /* two open ends are equal: an excluded one covers only an excluded one */
+  if (!r.last) return !(!o.last && r.excl && !o.excl);
   if (!o.last) return 0;
   int d = strcmp(o.last, r.last);
   return r.excl ? (d < 0 || (d == 0 && o.excl)) : d <= 0;

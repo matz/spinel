@@ -2846,6 +2846,13 @@ static int emit_local_ivar_write_expr(Compiler *c, int id, Buf *b, const NodeTab
     if (tcid3 >= 0) {
       int iv3 = comp_ivar_index(&c->classes[tcid3], nm);
       if (iv3 >= 0) { ivt3 = c->classes[tcid3].ivar_types[iv3]; eh3 = repr_of_ivar(c, tcid3, iv3).elems_handle; }
+      /* an ivar only nil is written to has no slot: it is nil, so `||=`
+         answers the value it runs (the nil it writes); read as a field, the
+         C named a member the struct does not have */
+      else if (is_or && !(cws3 && cws3->is_cmethod) && !tl3 && comp_ntype(c, v) == TY_NIL) {
+        emit_expr(c, v, b);
+        return 1;
+      }
     }
     char ref3[300];
     if (cws3 && cws3->is_cmethod && cid3 >= 0)

@@ -128,12 +128,14 @@ const char *sp_etc_getlogin(void) {
   return r;
 }
 
-const char *sp_etc_getpwnam(const char *name) { return one_passwd(getpwnam(name)); }
-const char *sp_etc_getpwuid(sp_int uid) { return one_passwd(getpwuid((uid_t)uid)); }
 #ifdef __wasi__
+const char *sp_etc_getpwnam(const char *name) { (void)name; return NULL; }
+const char *sp_etc_getpwuid(sp_int uid) { (void)uid; return NULL; }
 const char *sp_etc_getgrnam(const char *name) { (void)name; return NULL; }
 const char *sp_etc_getgrgid(sp_int gid) { (void)gid; return NULL; }
 #else
+const char *sp_etc_getpwnam(const char *name) { return one_passwd(getpwnam(name)); }
+const char *sp_etc_getpwuid(sp_int uid) { return one_passwd(getpwuid((uid_t)uid)); }
 const char *sp_etc_getgrnam(const char *name) { return one_group(getgrnam(name)); }
 const char *sp_etc_getgrgid(sp_int gid) { return one_group(getgrgid((gid_t)gid)); }
 #endif

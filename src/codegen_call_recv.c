@@ -10348,15 +10348,6 @@ static int pre_names_tmp(const Buf *pre, size_t mark, int id) {
   }
   return 0;
 }
-/* insert `text` into `b` at byte offset `at` */
-static void buf_insert_at(Buf *b, size_t at, const char *text) {
-  size_t tl = strlen(text);
-  Buf nb; memset(&nb, 0, sizeof nb);
-  if (b->p && at) { char save = b->p[at]; b->p[at] = 0; buf_puts(&nb, b->p); b->p[at] = save; }
-  buf_puts(&nb, text);
-  if (b->p) buf_puts(&nb, b->p + at);
-  free(b->p); *b = nb; (void)tl;
-}
 static int emit_scalar_recv_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc, const int *argv, TyKind rt, TyKind a0, int *out) {
   /* scalar receiver methods: evaluate the receiver once into rs, then
      splice its text (so a literal/complex receiver isn't rebuilt). */

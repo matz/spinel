@@ -20988,16 +20988,6 @@ static int calls_poly_is_a(const char *t) {
   return 0;
 }
 
-/* Insert `s` into `b` at offset `at`. */
-static void buf_splice(Buf *b, size_t at, const char *s) {
-  char *tail = strdup(b->p + at);
-  b->len = at;
-  b->p[at] = 0;
-  buf_puts(b, s);
-  buf_puts(b, tail);
-  free(tail);
-}
-
 /* SystemCallError#initialize reads the errno through the class's own `Errno`
    constant, so a class of the program below SystemCallError that defines
    one picks the number its instances carry. The runtime knows the Errno
@@ -24163,7 +24153,7 @@ char *codegen_program(const NodeTable *nt) {
   if (isa_ext) {
     if (calls_poly_is_a(b.p + isa_ext_at) || calls_poly_is_a(g_procs.p) ||
         calls_poly_is_a(body->p) || calls_poly_is_a(g_pd_defs.p))
-      buf_splice(&b, isa_ext_at, isa_ext);
+      buf_insert_at(&b, isa_ext_at, isa_ext);
     free(isa_ext);
   }
   emit_program_tail(c, &b, body);
@@ -24177,7 +24167,7 @@ char *codegen_program(const NodeTable *nt) {
   tcg = cg_phase(tcg, "cg_write_barriers");
   { Buf fz; memset(&fz, 0, sizeof fz);
     fzl_emit_defs(b.p ? b.p : "", &fz);
-    if (fz.len) buf_splice(&b, fzl_at, fz.p);
+    if (fz.len) buf_insert_at(&b, fzl_at, fz.p);
     free(fz.p); }
   if (g_debug) bt_block_table(&b);
   if (g_line_map) line_map_reanchor(&b);

@@ -600,6 +600,14 @@ void buf_erase(Buf *b, size_t off, size_t n) {
   b->len -= n;
   b->p[b->len] = '\0';
 }
+/* Insert `text` into `b` at byte offset `at` (at most its length). */
+void buf_insert_at(Buf *b, size_t at, const char *text) {
+  char *tail = b->p ? strdup(b->p + at) : NULL;
+  if (b->p && !tail) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  if (b->p) { b->len = at; b->p[at] = '\0'; }
+  buf_puts(b, text);
+  if (tail) { buf_puts(b, tail); free(tail); }
+}
 /* Replace `b`'s text with the formatted one, reusing its storage. */
 static void buf_vsetf(Buf *b, const char *fmt, va_list ap) {
   va_list aq; va_copy(aq, ap);

@@ -33,6 +33,7 @@ typedef struct { char *p; size_t len, cap; } Buf;
 void buf_putn(Buf *b, const char *s, size_t n);
 void buf_puts(Buf *b, const char *s);
 void buf_erase(Buf *b, size_t off, size_t n);
+void buf_insert_at(Buf *b, size_t at, const char *text);   /* text into b at byte offset at */
 extern int g_no_root_elision;
 extern int g_no_root_frame;
 extern int g_inline_hot;

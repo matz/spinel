@@ -736,6 +736,15 @@ static const char *cr_live_call_name(const NodeTable *nt, int id) {
   return call;
 }
 
+/* The name a constant node is held under: the last segment of the class the
+   load record resolves it to (a bare read of a leaf two namespaces define
+   names the one the lookup finds, `Leaf` for H::Leaf), else the node's own
+   name. */
+static const char *cr_live_read_name(Compiler *c, int node) {
+  int k = const_node_class_index(c, node);
+  return k >= 0 && k < c->nclasses && c->classes[k].name ? cr_live_segment(c->classes[k].name) : nt_str(c->nt, node, "name");
+}
+
 /* Does a node write a slot that outlives the method: an instance, class or
    global variable, or a constant? */
 static int cr_live_slot_write(const NodeTable *nt, int id) {
@@ -755,7 +764,7 @@ static int cr_live_slot_read(CrLive *lv, int r) {
   NodeKind k = nt_kind(nt, r);
   if (k == NK_InstanceVariableReadNode || k == NK_ClassVariableReadNode || k == NK_GlobalVariableReadNode) return 1;
   if (k != NK_ConstantReadNode && k != NK_ConstantPathNode) return 0;
-  const char *nm = nt_str(nt, r, "name");
+  const char *nm = cr_live_read_name(lv->c, r);
   return nm && anh_find(&lv->seg, nm) < 0 && const_node_class_index(lv->c, r) < 0;
 }
 
@@ -771,7 +780,7 @@ static void cr_live_collect(CrLive *lv, int s, int id, int cls, int persist) {
   NodeKind k = nt_kind(nt, id);
   if (k == NK_DefNode) return;
   if (k == NK_ConstantReadNode || k == NK_ConstantPathNode) {
-    cr_live_add(lv, s, CR_VALUE, nt_str(nt, id, "name"), NULL, -1, persist);
+    cr_live_add(lv, s, CR_VALUE, cr_live_read_name(c, id), NULL, -1, persist);
     int p = k == NK_ConstantPathNode ? nt_ref(nt, id, "parent") : -1;
     if (p >= 0 && nt_kind(nt, p) != NK_ConstantReadNode && nt_kind(nt, p) != NK_ConstantPathNode)
       cr_live_collect(lv, s, p, cls, persist);
@@ -797,7 +806,7 @@ static void cr_live_collect(CrLive *lv, int s, int id, int cls, int persist) {
          an instance: the call names the class as a value */
       int nc = call && sp_streq(call, "new") ? const_node_class_index(c, r) : -1;
       if (nc >= 0 && !c->classes[nc].is_struct && comp_cmethod_in_chain(c, nc, "new", NULL) >= 0 && cplan_user_new(c, id, nc) < 0) call = "";
-      cr_live_add(lv, s, CR_CONST_CALL, nt_str(nt, r, "name"), call, -1, persist);
+      cr_live_add(lv, s, CR_CONST_CALL, cr_live_read_name(c, r), call, -1, persist);
       int p = rk == NK_ConstantPathNode ? nt_ref(nt, r, "parent") : -1;
       if (p >= 0 && nt_kind(nt, p) != NK_ConstantReadNode && nt_kind(nt, p) != NK_ConstantPathNode)
         cr_live_collect(lv, s, p, cls, persist);
@@ -6201,31 +6210,6 @@ static int qc_ancestor_lookup(const NodeTable *nt, char (*path)[64], int n, cons
 static int qc_ancestor_write(Compiler *c, char (*path)[64], int n, const char *nm, QCWrite *ws, int wn) {
   return qc_ancestor_lookup(c->nt, path, n, nm, ws, wn, 1, 0);
 }
-/* A read no body and no top-level write defines is looked up in the modules
-   the top level includes (`include Outer::Helpers`): they are Object's, and
-   Object is the last ancestor of every lookup, so their constants are visible
-   from everywhere. The one included last first, as for any body. */
-static int qc_object_mixin_write(Compiler *c, const char *nm, QCWrite *ws, int wn) {
-  const NodeTable *nt = c->nt;
-  int sn = 0;
-  const int *st = nt->root_id < 0 ? NULL : nt_arr(nt, nt_ref(nt, nt->root_id, "statements"), "body", &sn);
-  char top[1][64];
-  for (int q = sn - 1; q >= 0; q--) {
-    if (nt_kind(nt, st[q]) != NK_CallNode || nt_ref(nt, st[q], "receiver") >= 0) continue;
-    const char *cn = nt_str(nt, st[q], "name");
-    if (!cn || !sp_streq(cn, "include")) continue;
-    int args = nt_ref(nt, st[q], "arguments");
-    int an = 0; const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &an) : NULL;
-    for (int a = 0; a < an; a++) {
-      char inc[QC_MAXDEPTH][64];
-      int incn = qc_resolve_ref(nt, av[a], top, 0, inc);
-      if (incn <= 0) continue;
-      int m = qc_ancestor_lookup(nt, inc, incn, nm, ws, wn, 0, 1);
-      if (m >= 0) return m;
-    }
-  }
-  return -1;
-}
 
 /* qc_lex[d]: the body at depth d of qc_rewrite_reads' path is a lexical
    scope of its own -- not a segment a compact header (`class A::B`) pushed
@@ -6356,7 +6340,6 @@ void qc_rewrite_reads(Compiler *c, int node, char (*mods)[64], int mdepth,
         if (matched < 0 && depth > 0) matched = qc_ancestor_write(c, path, depth, nm, ws, wn);
         for (int i = 0; i < wn && matched < 0; i++)
           if (!qc_skipped(&ws[i]) && sp_streq(ws[i].name, nm) && ws[i].depth == 0) matched = i;
-        if (matched < 0) matched = qc_object_mixin_write(c, nm, ws, wn);
         if (matched >= 0 && ws[matched].depth > 0) {
           char qn[512]; qc_qualified_name(qn, sizeof qn, &ws[matched]);
           qc_rename_read(nt, node, matched, qn, 1);

@@ -1020,8 +1020,7 @@ void prog_settle_files(Compiler *c) {
 /* The statements a reader of the top level in order would have to place
    across a load (part 3b), refused by name, asked once the builtins/ files'
    modules are taken apart (desugar_builtins, desugar_builtin_scalar_defs):
-   `include` in a required file's top level (qc_object_mixin_write, which
-   runs ahead of the load record). */
+   `include` in a required file's top level. */
 void prog_refuse_order(Compiler *c) {
   const NodeTable *nt = c->nt;
   if (!prog_graph(c)) return;
@@ -1031,7 +1030,7 @@ void prog_refuse_order(Compiler *c) {
     for (int k = 0; k < n; k++) {
       int prep; const int *av;
       if (i > 0 && mixin_stmt_args(nt, v[k], &prep, &av) >= 0 && !prep)
-        unsupported_feature(c, v[k], "--load-model=graph: a top-level include in a required file (qc_object_mixin_write reads one file), for now");
+        unsupported_feature(c, v[k], "--load-model=graph: a top-level include in a required file, for now");
     }
   }
 }

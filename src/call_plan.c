@@ -215,6 +215,9 @@ const CallPlan *cplan_root_reopen_call(Compiler *c, int id, const CallPlan *p) {
      by an exception's class at run time) */
   int recv = nt_ref(c->nt, id, "receiver");
   TyKind rt = recv >= 0 ? comp_ntype(c, recv) : TY_UNKNOWN;
+  /* (an Object method beside a NilClass one of the name: a String, Integer or
+     Float is answered boxed, as the analysis reads it before the nullability settles) */
+  if (p->owner_ci == comp_core_class(c, CORE_OBJECT) && cplan_nil_scalar_boxed(c, id, name, recv, rt)) return NULL;
   int exc = rt == TY_EXCEPTION || (ty_is_object(rt) && class_is_exc_subclass(c, ty_object_class(rt)));
   if (exc && cplan_exc_object_method(c, id, name) >= 0) return NULL;
   /* A private or protected one is refused, or allowed, by the visibility
@@ -714,8 +717,7 @@ static void cplan_resolve_call(Compiler *c, int id, CallPlan *p) {
   const char *bn = rt == TY_BOOL ? "TrueClass" : bcls >= 0 ? core_class_name(bcls) : NULL;
   /* (not a String, Integer or Float that may be nil, where NilClass has the
      name too: the boxed dispatch, cplan_poly_sub, picks by the value) */
-  if (bn && !(rt == TY_CLASS && cplan_class_value_answers(c, recv, name)) && !cplan_nil_scalar_reach(c, id) &&
-      !cplan_nil_scalar_boxed(c, id, name, recv, rt))
+  if (bn && !(rt == TY_CLASS && cplan_class_value_answers(c, recv, name)) && !cplan_nil_scalar_reach(c, id))
     cplan_root_reopen(c, id, name, bn, CORE_OBJECT, p);
 }
 

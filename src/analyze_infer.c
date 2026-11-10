@@ -3336,6 +3336,10 @@ static int an_reopen_head_call(Compiler *c, int id, int recv, TyKind *out) {
   TyKind hrt = infer_type(c, recv);
   const CallPlan *p = hrt != TY_POLY && hrt != TY_UNKNOWN && !nt_int(c->nt, id, "builtin_only", 0) ? cplan_user_fresh(c, id) : NULL;
   if (p && p->mi >= 0 && p->via == UC_REOPEN && hrt == TY_ENUMERATOR) *out = an_user_call(c, id, p->mi, p->via, p->owner_ci);
+  else if (p && p->mi >= 0 && p->owner_ci == comp_core_class(c, CORE_OBJECT) && cplan_nil_scalar_boxed(c, id, nt_str(c->nt, id, "name"), recv, hrt)) {
+    an_user_call_record(c, id, p->mi, UC_REOPEN, p->owner_ci);   /* (typed boxed below, but bound) */
+    return 0;
+  }
   else if (p && (p = cplan_root_reopen_call(c, id, p))) *out = an_root_reopen_call(c, id, p);
   else return 0;
   return 1;

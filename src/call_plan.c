@@ -186,6 +186,15 @@ static int cplan_root_under_builtin(Compiler *c, int top) {
    record, a shadow's name too. ml->from is the par asked, though the
    extend-copy skip and the Object start look further; ml->def_class is the
    class that answered, -1 on a miss. */
+/* Does the program define `name` on Kernel (a top-level def that
+   desugar_kernel_reopen made of it)? A super from a method of Object whose
+   chain ends there reaches that def, which takes the receiver as self: the
+   top-level def has none, so such a super is no builtin's answer either. */
+int cplan_kernel_def(Compiler *c, int id, const char *name) {
+  MethodLookup ml = { .def_class = -1 };
+  int mi = call_target(c, id, -1, name, CT_TOP | CT_REACH, &ml);
+  return mi >= 0 && nt_int(c->nt, c->scopes[mi].def_node, "kernel_def", 0);
+}
 int cplan_super_chain_mi(Compiler *c, int id, const Scope *s, int par, const char *name, MethodLookup *ml) {
   MethodLookup own = { .def_class = -1 };
   if (!ml) ml = &own;

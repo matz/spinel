@@ -5583,8 +5583,10 @@ int comp_super_object_builtin(Compiler *c, const Scope *s, const char *uname, in
   int root = s->class_id;
   for (int d = 0; c->classes[root].parent >= 0 && d < 64; d++) root = c->classes[root].parent;
   if (kernel && class_is_blank_slate(c, root) && comp_super_parent(c, root, 0) < 0) return 0;
-  /* (a method of the program's Object, Kernel or BasicObject is the plan's) */
-  return cplan_super_target(c, id, s, NULL) < 0 ? kind : 0;
+  /* (a method of the program's Object, Kernel or BasicObject is the plan's;
+     a program's Kernel def is reached with its receiver as self, which the
+     super cannot give it yet: it raises as it did) */
+  return cplan_super_target(c, id, s, NULL) < 0 && !cplan_kernel_def(c, id, uname) ? kind : 0;
 }
 
 int comp_super_is_class_new(Compiler *c, int id) {

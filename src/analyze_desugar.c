@@ -1430,6 +1430,7 @@ static int kernel_reopen_top(NodeTable *nt, int top, const char **names, int *nn
     for (int k = 0; k < bn; k++) {
       int d = bb0[k];
       if (nt_kind(nt, d) == NK_DefNode && nt_ref(nt, d, "receiver") < 0) {
+        nt_node_set_int(nt, d, "kernel_def", 1);   /* (cplan_kernel_def asks for it) */
         nb[nbn++] = d;
         if (*nn < KR_MAX && nt_str(nt, d, "name")) names[(*nn)++] = nt_str(nt, d, "name");
         if (objd) { int cl = nt_clone_subtree(nt, d); if (cl >= 0) objd[nobj++] = cl; }

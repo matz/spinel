@@ -355,17 +355,6 @@ int emit_handle_var_ref(Compiler *c, int a, Buf *b) {
   view_pop(c, svm);
   return ok;
 }
-/* Declare inlined method `mi`'s locals under renamed names. */
-void emit_inline_locals(Compiler *c, int mi, int tag, Buf *b, int din) {
-  Scope *m = &c->scopes[mi];
-  for (int i = 0; i < m->nlocals; i++) {
-    LocalVar *lv = &m->locals[i];
-    if (m->blk_param && lv->name && sp_streq(lv->name, m->blk_param)) continue;  /* virtual &block slot */
-    const char *rn = ren_push(lv->name, "_y%d_%s", tag, lv->name);
-    emit_inlined_local_decl(c, lv, rn, b, din);
-  }
-}
-
 /* Bind an inlined yielding method's parameters from a call's arguments:
    a splat spread at run time, a keyword hash by name, a rest and its posts
    packed, as the ordinary call paths bind them. The expansion's renames
@@ -1099,7 +1088,7 @@ int emit_inline_call_x(Compiler *c, int id, Buf *b, int indent, int as_expr) {
   }
 
   /* declare method locals under renamed names */
-  emit_inline_locals(c, mi, tag, b, din);
+  emit_inlined_locals(c, &c->scopes[mi], tag, b, din);
 
   char dflt_cm_self[32];
   const char *dflt_self = recv_self_deref ? selfbuf : NULL, *dflt_deref = recv_self_deref;

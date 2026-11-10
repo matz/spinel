@@ -2729,7 +2729,6 @@ static int emit_local_ivar_write_expr(Compiler *c, int id, Buf *b, const NodeTab
     buf_puts(b, "({ ");
     if (fz_cid >= 0) emit_frozen_obj_guard(c, fz_cid, g_self ? g_self : "self", b);
     buf_printf(b, "%s = ", ref2e);
-    /* an open splice alias of the ivar (a plain String slot's) */
     Repr rp = repr_of(c, v);
     int wcid2, wiv2, wk2 = ivar_node_slot(c, id, &wcid2, &wiv2);
     /* an Integer or Float field with a nil bit, or an oint static */

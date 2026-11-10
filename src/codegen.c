@@ -10077,10 +10077,11 @@ void emit_inlined_local_decl(Compiler *c, LocalVar *lv, const char *rn, Buf *b, 
   emit_cell_alloc(c, lv, rn, b);
 }
 
+/* Declare inlined method `m`'s locals under renamed names. */
 void emit_inlined_locals(Compiler *c, Scope *m, int tag, Buf *b, int din) {
   for (int i = 0; i < m->nlocals; i++) {
     LocalVar *lv = &m->locals[i];
-    if (m->blk_param && lv->name && sp_streq(lv->name, m->blk_param)) continue;
+    if (m->blk_param && lv->name && sp_streq(lv->name, m->blk_param)) continue;  /* virtual &block slot */
     const char *rn = ren_push(lv->name, "_y%d_%s", tag, lv->name);
     emit_inlined_local_decl(c, lv, rn, b, din);
   }

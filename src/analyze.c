@@ -39641,9 +39641,22 @@ int nullable_int_value(Compiler *c, int v) {
     const char *cn = const_key_at(c, v);
     LocalVar *k = cn ? comp_const(c, cn) : NULL;
     if (!k || (k->type != TY_INT && k->type != TY_FLOAT && k->type != TY_POLY)) return 0;
-    NT_FOREACH_KIND(nt, NK_ConstantWriteNode, w)
-      if (sp_streq(const_key_at(c, w), cn) && nullable_int_value(c, nt_ref(nt, w, "value"))) return 1;
-    return 0;
+    /* Its `NAME = v` writes, from the key's chain (newest first), asked
+       oldest first as the kind list ran. A copy: a question may rebuild
+       the index. (The kind-list walk tested each key at its visit, so a
+       write renamed by a question was skipped there; nothing the question
+       reaches edits the tree.) */
+    int nw = 0;
+    for (int w = const_writes_head(c, cn); w >= 0; w = const_writes_next(c, w)) nw += nt_kind(nt, w) == NK_ConstantWriteNode;
+    int wb[16], *ws = nw <= 16 ? wb : malloc(sizeof(int) * (size_t)nw);
+    if (!ws) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    int at = nw;
+    for (int w = const_writes_head(c, cn); w >= 0; w = const_writes_next(c, w))
+      if (nt_kind(nt, w) == NK_ConstantWriteNode) ws[--at] = w;
+    int r = 0;
+    for (int i = 0; i < nw && !r; i++) r = nullable_int_value(c, nt_ref(nt, ws[i], "value"));
+    if (ws != wb) free(ws);
+    return r;
   }
   /* `(e)` is e, and a parenthesized sequence `(y = a[i]; y)` is its last
      statement, as a block's body is: the arm above walks it. Only the

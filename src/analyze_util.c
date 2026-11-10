@@ -700,61 +700,81 @@ static int const_path_write_reaches(Compiler *c, int t, int k) {
     if (comp_module_includes(c, a, qi, 0)) return 1;
   return 0;
 }
-/* const_path_misses_toplevel's walks, indexed by the name written for the
-   tree as it is: per name, the constant writes (list 0) and the targets of
-   the path writes (list 1), chained through next. */
-static struct {
+/* The constant writes by the key written (const_key_at), for the tree as
+   it is: per key, the constant writes (list 0) and the targets of the path
+   writes (list 1), chained through next, newest first. Held by the
+   Compiler (c->const_writes): const_path_misses_toplevel, the builtin
+   names and a constant read's nil question each walked every write. */
+struct ConstWrites {
   const NodeTable *nt; unsigned ver; int count, gen;
   ANameHash names;
   int *head[2], cap, *next;
-} g_cw;
-static void cw_add(int list, const char *nm, int node) {
-  if (!nm || g_cw.next[node] != -2) return;
-  int k = anh_find(&g_cw.names, nm);
+};
+void const_writes_free(Compiler *c) {
+  struct ConstWrites *cw = c->const_writes;
+  if (!cw) return;
+  anh_free(&cw->names);
+  free(cw->head[0]); free(cw->head[1]); free(cw->next); free(cw);
+  c->const_writes = NULL;
+}
+static void cw_add(struct ConstWrites *cw, int list, const char *nm, int node) {
+  if (!nm || cw->next[node] != -2) return;
+  int k = anh_find(&cw->names, nm);
   if (k < 0) {
-    anh_add(&g_cw.names, nm); k = g_cw.names.n - 1;
-    if (k >= g_cw.cap) {
-      g_cw.cap = g_cw.cap ? g_cw.cap * 2 : 64;
+    anh_add(&cw->names, nm); k = cw->names.n - 1;
+    if (k >= cw->cap) {
+      cw->cap = cw->cap ? cw->cap * 2 : 64;
       for (int l = 0; l < 2; l++) {
-        g_cw.head[l] = realloc(g_cw.head[l], sizeof(int) * (size_t)g_cw.cap);
-        if (!g_cw.head[l]) { fprintf(stderr, "out of memory\n"); exit(1); }
+        cw->head[l] = realloc(cw->head[l], sizeof(int) * (size_t)cw->cap);
+        if (!cw->head[l]) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
       }
     }
-    g_cw.head[0][k] = g_cw.head[1][k] = -1;
+    cw->head[0][k] = cw->head[1][k] = -1;
   }
-  g_cw.next[node] = g_cw.head[list][k];
-  g_cw.head[list][k] = node;
+  cw->next[node] = cw->head[list][k];
+  cw->head[list][k] = node;
 }
-/* The name's index in g_cw, rebuilt when the tree changed, or -1 for a
-   name the program never writes */
-static int cw_name(Compiler *c, const char *nm) {
+/* The index, rebuilt when the tree or the keys changed */
+static struct ConstWrites *const_writes_of(Compiler *c) {
   const NodeTable *nt = c->nt;
-  if (g_cw.nt != nt || g_cw.ver != nt->version || g_cw.count != nt->count || g_cw.gen != elab_const_keys_gen(c)) {
-    anh_free(&g_cw.names); memset(&g_cw.names, 0, sizeof g_cw.names);
-    free(g_cw.next);
-    g_cw.next = malloc(sizeof(int) * (size_t)(nt->count > 0 ? nt->count : 1));
-    if (!g_cw.next) { fprintf(stderr, "out of memory\n"); exit(1); }
-    for (int n = 0; n < nt->count; n++) g_cw.next[n] = -2;   /* not listed */
-    g_cw.nt = nt; g_cw.ver = nt->version; g_cw.count = nt->count; g_cw.gen = elab_const_keys_gen(c);
+  if (!c->const_writes && !(c->const_writes = calloc(1, sizeof *c->const_writes))) {
+    fprintf(stderr, "spinel: out of memory\n"); exit(1);
+  }
+  struct ConstWrites *cw = c->const_writes;
+  if (cw->nt != nt || cw->ver != nt->version || cw->count != nt->count || cw->gen != elab_const_keys_gen(c)) {
+    anh_free(&cw->names); memset(&cw->names, 0, sizeof cw->names);
+    free(cw->next);
+    cw->next = malloc(sizeof(int) * (size_t)(nt->count > 0 ? nt->count : 1));
+    if (!cw->next) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    for (int n = 0; n < nt->count; n++) cw->next[n] = -2;   /* not listed */
+    cw->nt = nt; cw->ver = nt->version; cw->count = nt->count; cw->gen = elab_const_keys_gen(c);
     static const NodeKind writes[] = { NK_ConstantWriteNode, NK_ConstantOrWriteNode, NK_ConstantAndWriteNode,
                                        NK_ConstantOperatorWriteNode, NK_ConstantTargetNode };
     for (int i = 0; i < 5; i++)
-      NT_FOREACH_KIND(nt, writes[i], w) cw_add(0, const_key_at(c, w), w);
+      NT_FOREACH_KIND(nt, writes[i], w) cw_add(cw, 0, const_key_at(c, w), w);
     static const NodeKind paths[] = { NK_ConstantPathWriteNode, NK_ConstantPathOrWriteNode,
                                       NK_ConstantPathAndWriteNode, NK_ConstantPathOperatorWriteNode };
     for (int i = 0; i < 4; i++)
       NT_FOREACH_KIND(nt, paths[i], w) {
         int t = nt_ref(nt, w, "target");
-        if (t >= 0) cw_add(1, const_key_at(c, t), t);
+        if (t >= 0) cw_add(cw, 1, const_key_at(c, t), t);
       }
-    NT_FOREACH_KIND(nt, NK_ConstantPathTargetNode, t) cw_add(1, const_key_at(c, t), t);
+    NT_FOREACH_KIND(nt, NK_ConstantPathTargetNode, t) cw_add(cw, 1, const_key_at(c, t), t);
     /* a self-alias write the desugaring dropped keeps its target */
     NT_FOREACH_KIND(nt, NK_NilNode, d) {
       int t = (int)nt_int(nt, d, "dropped_target", -1);
-      if (t >= 0) cw_add(1, nt_str(nt, t, "name"), t);
+      if (t >= 0) cw_add(cw, 1, nt_str(nt, t, "name"), t);
     }
   }
-  return anh_find(&g_cw.names, nm);
+  return cw;
+}
+int const_writes_head(Compiler *c, const char *key) {
+  struct ConstWrites *cw = const_writes_of(c);
+  int k = key ? anh_find(&cw->names, key) : -1;
+  return k < 0 ? -1 : cw->head[0][k];
+}
+int const_writes_next(Compiler *c, int node) {
+  return c->const_writes->next[node];
 }
 /* The names the program gives to builtin scopes, built once per tree and
    class table (the key const_path_in_closed_builtin keeps): a body of a
@@ -826,21 +846,21 @@ static void builtin_given_build(Compiler *c, struct BuiltinGiven *g) {
     int o = comp_class_index(c, ob);
     if (o >= 0 && held[o]) anh_add(&g->names, sep + 2);
   }
-  (void)cw_name(c, "");
-  for (int i = 0; i < g_cw.names.n; i++) {
+  const struct ConstWrites *cw = const_writes_of(c);
+  for (int i = 0; i < cw->names.n; i++) {
     /* a constant written in such a body, by the name the program wrote (a
        class alias, `SA = Foo`, included) */
-    for (int w = g_cw.head[0][i]; w >= 0 && c->node_cbody; w = g_cw.next[w]) {
+    for (int w = cw->head[0][i]; w >= 0 && c->node_cbody; w = cw->next[w]) {
       int o = w < c->node_cap ? c->node_cbody[w] : -1;
       if (o >= 0 && held[o]) anh_add(&g->names, nt_str(nt, w, "name"));
     }
-    for (int t = g_cw.head[1][i]; t >= 0; t = g_cw.next[t]) {
+    for (int t = cw->head[1][i]; t >= 0; t = cw->next[t]) {
       int q = nt_ref(nt, t, "parent");
       NodeKind qk = q >= 0 ? nt_kind(nt, q) : NK_NilNode;
       const char *qn = qk == NK_ConstantReadNode || qk == NK_ConstantPathNode ? nt_str(nt, q, "name") : NULL;
       int qi = qn ? comp_class_index(c, qn) : -1;
       if (qn && is_object_class_name(qn)) continue;
-      if (!qn || qi < 0 || held[qi] || c->classes[qi].is_builtin_const) anh_add(&g->names, g_cw.names.key[i]);
+      if (!qn || qi < 0 || held[qi] || c->classes[qi].is_builtin_const) anh_add(&g->names, cw->names.key[i]);
     }
   }
   free(rec);
@@ -906,15 +926,16 @@ int const_path_misses_toplevel(Compiler *c, int id) {
   if (!pn || !nm || sp_streq(pn, "Object") || comp_class_index(c, pn) < 0 || comp_const(c, pn)) return 0;
   /* the writes of NAME alone: walking every write of the program for each
      path was a tenth of a large program's analysis */
-  int ni = cw_name(c, nm);
+  const struct ConstWrites *cw = const_writes_of(c);
+  int ni = anh_find(&cw->names, nm);
   if (ni < 0) return 0;
   int top = 0;
-  for (int w = g_cw.head[0][ni]; w >= 0; w = g_cw.next[w]) {
+  for (int w = cw->head[0][ni]; w >= 0; w = cw->next[w]) {
     if (w >= c->node_cap || c->node_cbody[w] >= 0) return 0;
     top = 1;
   }
   int k = comp_class_index(c, pn);
-  for (int t = g_cw.head[1][ni]; t >= 0; t = g_cw.next[t])
+  for (int t = cw->head[1][ni]; t >= 0; t = cw->next[t])
     if (const_path_write_reaches(c, t, k)) return 0;
   return top;
 }

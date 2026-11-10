@@ -648,6 +648,7 @@ void comp_free(Compiler *c) {
   free(c->mih_calls);
   for (int i = 0; i < c->nconsts; i++) free(c->consts[i].name);
   free(c->consts);
+  const_writes_free(c);
   free(c->toplevel_includes);
   free(c->toplevel_extends);
   free(c->ary_viewed);

@@ -1571,6 +1571,9 @@ typedef struct {
   int *gvar_ix, gvar_ix_cap;   /* open addressing over the names, by index into gvars (-1 free); a program with thousands of globals asks by name on every read */
   LocalVar *consts;   /* top-level constants (FOO) */
   int nconsts, cconsts;
+  /* the constant writes of each slot key, as of the node table it was made
+     for (analyze_util.c, const_writes_head; NULL before the first ask) */
+  struct ConstWrites *const_writes;
 
   /* alias $copy $orig → gvar_alias_from[i]="copy", gvar_alias_to[i]="orig" */
   char **gvar_alias_from;

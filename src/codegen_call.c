@@ -27369,9 +27369,23 @@ static int nil_target_read_rebound(Compiler *c, int v, int a) {
    C slot: it runs for its effect ahead of the test, as CRuby runs it
    before the call raises. 0 when it meets a part that runs code and
    cannot be bound -- a value with no C type, a block argument, a shared
-   String slot's read, which binds as a copy -- or the temps run out: the
-   parts after it run in the call as before. */
-static int nil_target_operand(Compiler *c, int v, int a, int boxed, int *node, TyKind *ty, int *n, int max) {
+   String slot's read, which binds as a copy: the parts after it run in the
+   call as before. */
+typedef struct { int *node; TyKind *ty; int n, cap; } NilOperands;
+static void nil_operands_free(NilOperands *o) {
+  free(o->node); free(o->ty);
+  o->node = NULL; o->ty = NULL; o->n = o->cap = 0;
+}
+static void nil_operands_add(NilOperands *o, int v, TyKind t) {
+  if (o->n == o->cap) {
+    o->cap = o->cap ? o->cap * 2 : 8;
+    o->node = realloc(o->node, sizeof(int) * (size_t)o->cap);
+    o->ty = realloc(o->ty, sizeof(TyKind) * (size_t)o->cap);
+    if (!o->node || !o->ty) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  }
+  o->node[o->n] = v; o->ty[o->n] = t; o->n++;
+}
+static int nil_target_operand(Compiler *c, int v, int a, int boxed, NilOperands *o) {
   const NodeTable *nt = c->nt;
   int read = v >= 0 && nil_target_read_rebound(c, v, a);
   if (read && strbuf_slot_has(c, v)) return 0;
@@ -27381,25 +27395,24 @@ static int nil_target_operand(Compiler *c, int v, int a, int boxed, int *node, T
     int en = 0;
     const int *ev = nt_arr(nt, v, "elements", &en);
     for (int i = 0; i < en; i++)
-      if (!nil_target_operand(c, ev[i], a, boxed, node, ty, n, max)) return 0;
+      if (!nil_target_operand(c, ev[i], a, boxed, o)) return 0;
     return 1;
   }
   if (k == NK_AssocNode)
-    return nil_target_operand(c, nt_ref(nt, v, "key"), a, boxed, node, ty, n, max) &&
-           nil_target_operand(c, nt_ref(nt, v, "value"), a, boxed, node, ty, n, max);
-  if (k == NK_AssocSplatNode) return nil_target_operand(c, nt_ref(nt, v, "value"), a, boxed, node, ty, n, max);
-  if (k == NK_SplatNode) return nil_target_operand(c, nt_ref(nt, v, "expression"), a, boxed, node, ty, n, max);
+    return nil_target_operand(c, nt_ref(nt, v, "key"), a, boxed, o) &&
+           nil_target_operand(c, nt_ref(nt, v, "value"), a, boxed, o);
+  if (k == NK_AssocSplatNode) return nil_target_operand(c, nt_ref(nt, v, "value"), a, boxed, o);
+  if (k == NK_SplatNode) return nil_target_operand(c, nt_ref(nt, v, "expression"), a, boxed, o);
   Repr tr = repr_of(c, v);
   TyKind t = tr.as_ty;
   /* a String the store wraps in a handle of its own (`+"x"` pushed where the
      element is a handle, a Range's endpoint: repr_handle_apart) renders as
      its bytes where its stored type is the handle, so no temp of that type
      holds it: it runs in the call */
-  if (*n >= max ||
-      (!read && !nil_target_bindable(k, boxed)) || tr.untyped || t == TY_VOID || comp_ty_value_obj(c, t) ||
+  if ((!read && !nil_target_bindable(k, boxed)) || tr.untyped || t == TY_VOID || comp_ty_value_obj(c, t) ||
       repr_handle_apart(c, v, tr))
     return 0;
-  node[*n] = v; ty[*n] = t; (*n)++;
+  nil_operands_add(o, v, t);
   return 1;
 }
 
@@ -27407,10 +27420,10 @@ static int nil_target_operand(Compiler *c, int v, int a, int boxed, int *node, T
    receiver unless it is a local's or a global's read or one the loop
    caches (or, for a boxed receiver, an ivar's or a class variable's: a
    mutator's arm writes back into the slot), then each argument that runs
-   code, in Ruby's order (nil_target_operand). Answers the count. */
-static int nil_target_operands(Compiler *c, int id, int boxed, int *node, TyKind *ty, int max) {
+   code, in Ruby's order (nil_target_operand), into o, which the caller
+   initializes and frees. */
+static void nil_target_operands(Compiler *c, int id, int boxed, NilOperands *o) {
   const NodeTable *nt = c->nt;
-  int n = 0;
   int r = nt_ref(nt, id, "receiver");
   NodeKind rk = nt_kind(nt, r);
   int a = nt_ref(nt, id, "arguments"), an = 0;
@@ -27448,11 +27461,10 @@ static int nil_target_operands(Compiler *c, int id, int boxed, int *node, TyKind
                    (repr_of(c, r).as_ty == TY_STRING && an_str_mutator_name(nt_str(nt, id, "name"))));
   if ((rk != NK_LocalVariableReadNode || rebound) && rk != NK_GlobalVariableReadNode && !hc_recv_cached(c, r) &&
       !(boxed && (rk == NK_InstanceVariableReadNode || rk == NK_ClassVariableReadNode)) && !ivar_slot) {
-    node[n] = r; ty[n] = repr_of(c, r).as_ty; n++;
+    nil_operands_add(o, r, repr_of(c, r).as_ty);
   }
   for (int i = 0; i < an; i++)
-    if (!nil_target_operand(c, av[i], a, boxed, node, ty, &n, max)) break;
-  return n;
+    if (!nil_target_operand(c, av[i], a, boxed, o)) break;
 }
 
 /* Receiver r of a nil-tested call, when it is a route over a shared String
@@ -27542,10 +27554,12 @@ static int poly_target_call(Compiler *c, int id) {
     return 0;
   for (int k = 0; k < c->nclasses; k++)
     if (call_target(c, id, k, nm, CT_CMETHOD, NULL) >= 0) return 0;
-  int node[8]; TyKind ty[8];
-  int n = nil_target_operands(c, id, 1, node, ty, 8);
-  for (int i = 0; i < n; i++) if (node[i] != r && arg_ran_first(node[i], 0)) return 0;
-  return n > 0 && node[n - 1] != r;
+  NilOperands o = { NULL, NULL, 0, 0 };
+  nil_target_operands(c, id, 1, &o);
+  int ok = o.n > 0 && o.node[o.n - 1] != r;
+  for (int i = 0; i < o.n && ok; i++) if (o.node[i] != r && arg_ran_first(o.node[i], 0)) ok = 0;
+  nil_operands_free(&o);
+  return ok;
 }
 
 /* The temps' declarations and the test, into b, each statement after
@@ -27566,8 +27580,10 @@ static void emit_nil_target_head(Compiler *c, int id, Buf *b, const char *lead, 
 static void emit_nil_target_head_r(Compiler *c, int id, Buf *b, const char *lead, int test, int boxed,
                                    int *mark, int *held, char *rout, size_t rcap) {
   const NodeTable *nt = c->nt;
-  int node[8]; TyKind ty[8];
-  int n = nil_target_operands(c, id, boxed, node, ty, 8);
+  NilOperands ops = { NULL, NULL, 0, 0 };
+  nil_target_operands(c, id, boxed, &ops);
+  int *node = ops.node, n = ops.n;
+  TyKind *ty = ops.ty;
   int r = nt_ref(nt, id, "receiver");
   char rtext[32] = "";
   *mark = g_n_argov;
@@ -27702,7 +27718,7 @@ static void emit_nil_target_head_r(Compiler *c, int id, Buf *b, const char *lead
     if (node[i] == r) snprintf(rtext, sizeof rtext, "_t%d", t);
   }
   if (rout) snprintf(rout, rcap, "%s", rtext);
-  if (!test) return;
+  if (!test) { nil_operands_free(&ops); return; }
   buf_puts(b, lead);
   /* an array the loop being emitted caches (hc_array) has a cached length
      of 0 while it is nil: that register spares the receiver's read on every
@@ -27744,6 +27760,7 @@ static void emit_nil_target_head_r(Compiler *c, int id, Buf *b, const char *lead
                enum_walk_name(c, id, r, cplan_call_name(nt, id)), rb.p ? " }" : "");
   free(rb.p);
   buf_puts(b, *lead ? "\n" : " ");
+  nil_operands_free(&ops);
 }
 
 /* Does the parenthesis at p close at the end of the text, so that the text
@@ -27851,14 +27868,16 @@ static int emit_nil_target_own(Compiler *c, int id, Buf *b, int stmt, int indent
    emission taken back (a call nested in the trial skips its own). 1 when
    the head can stay out. */
 static int nil_target_runs_in_call(Compiler *c, int id) {
-  int node[8]; TyKind ty[8];
-  int n = nil_target_operands(c, id, 1, node, ty, 8);
+  NilOperands o = { NULL, NULL, 0, 0 };
+  nil_target_operands(c, id, 1, &o);
+  int n = o.n, vars = 0;
   for (int i = 0; i < n; i++) {
-    NodeKind k = nt_kind(c->nt, node[i]);
+    NodeKind k = nt_kind(c->nt, o.node[i]);
     if (k == NK_LocalVariableReadNode || k == NK_InstanceVariableReadNode ||
-        k == NK_GlobalVariableReadNode || k == NK_ClassVariableReadNode) return 0;
+        k == NK_GlobalVariableReadNode || k == NK_ClassVariableReadNode) vars = 1;
   }
-  if (n < 1 || c->args_in_call_trial) return 0;
+  nil_operands_free(&o);
+  if (vars || n < 1 || c->args_in_call_trial) return 0;
   size_t pre0 = g_pre ? g_pre->len : 0;
   int tmp0 = g_tmp, ov0 = g_n_argov;
   Buf tb; memset(&tb, 0, sizeof tb);

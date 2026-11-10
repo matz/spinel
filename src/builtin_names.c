@@ -2308,6 +2308,7 @@ int builtin_core_is_a(int k, int anc) {
 #define BAK(...)
 #define BAP(...)
 #define BAL(...)
+#define BALC(...)
 static const struct { const char *cls, *m; } self_fact_rows[] = {
 #include "builtin_arity.inc"
 };
@@ -2317,6 +2318,7 @@ static const struct { const char *cls, *m; } self_fact_rows[] = {
 #undef BAC
 #undef BAK
 #undef BAL
+#undef BALC
 #undef BAP
 /* Does Spinel have values of table class k: a builtin class row, a synthetic slot, or a class the arity facts
    list (StringScanner, Set, StringIO)? */

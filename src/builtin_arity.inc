@@ -2,8 +2,8 @@
    add a new method to the generator's lists and regenerate with --write.
    Method#arity and accepted positional counts are independent facts.
    BAI carries both, BAM only Method#arity, BAS only instance counts,
-   and BAC class/module counts; BAL is a library's instance counts, its
-   name first. -1 maxima are unbounded; NULL messages
+   and BAC class/module counts; BAL and BALC are a library's instance
+   and class counts, its name first. -1 maxima are unbounded; NULL messages
    and unproved -1 minima never reject a call. Block counts are separate.
    Kernel Method#arity describes receiverless method(:name) wrappers.
    BAP is Method#parameters by the class or module that defines the
@@ -2193,6 +2193,37 @@ BAC("Pathname","new",1,1,"1","1",1,1,"1","1")
 BAC("Pathname","glob",1,2,"1..2","1..2",1,2,"1..2","1..2")
 BAC("Pathname","getwd",0,0,NULL,"0",0,0,NULL,"0")
 BAC("Pathname","pwd",0,0,NULL,"0",0,0,NULL,"0")
+BAL("io/console","StringIO","getch",0,0,NULL,"0",0,0,NULL,"0")
+BAL("io/console","StringIO","getpass",0,1,NULL,"0..1",0,1,NULL,"0..1")
+BAL("io/console","File","beep",0,0,NULL,"0",0,0,NULL,"0")
+BAL("io/console","File","clear_screen",0,0,NULL,"0",0,0,NULL,"0")
+BAL("io/console","File","console_mode",0,0,NULL,"0",0,0,NULL,"0")
+BAL("io/console","File","console_mode=",1,1,"1","1",1,1,"1","1")
+BAL("io/console","File","cooked",0,0,NULL,"0",0,0,NULL,"0")
+BAL("io/console","File","cooked!",0,0,NULL,"0",0,0,NULL,"0")
+BAL("io/console","File","cursor",0,0,NULL,"0",0,0,NULL,"0")
+BAL("io/console","File","cursor=",1,1,"1","1",1,1,"1","1")
+BAL("io/console","File","cursor_down",1,1,"1","1",1,1,"1","1")
+BAL("io/console","File","cursor_left",1,1,"1","1",1,1,"1","1")
+BAL("io/console","File","cursor_right",1,1,"1","1",1,1,"1","1")
+BAL("io/console","File","cursor_up",1,1,"1","1",1,1,"1","1")
+BAL("io/console","File","echo=",1,1,"1","1",1,1,"1","1")
+BAL("io/console","File","echo?",0,0,NULL,"0",0,0,NULL,"0")
+BAL("io/console","File","erase_line",1,1,"1","1",1,1,"1","1")
+BAL("io/console","File","erase_screen",1,1,"1","1",1,1,"1","1")
+BAL("io/console","File","getch",0,0,NULL,"0",0,0,NULL,"0")
+BAL("io/console","File","getpass",0,1,NULL,"0..1",0,1,NULL,"0..1")
+BAL("io/console","File","goto",2,2,"2","2",2,2,"2","2")
+BAL("io/console","File","goto_column",1,1,"1","1",1,1,"1","1")
+BAL("io/console","File","iflush",0,0,NULL,"0",0,0,NULL,"0")
+BAL("io/console","File","ioflush",0,0,NULL,"0",0,0,NULL,"0")
+BAL("io/console","File","noecho",0,0,NULL,"0",0,0,NULL,"0")
+BAL("io/console","File","oflush",0,0,NULL,"0",0,0,NULL,"0")
+BAL("io/console","File","raw",0,0,NULL,"0",0,0,NULL,"0")
+BAL("io/console","File","raw!",0,0,NULL,"0",0,0,NULL,"0")
+BAL("io/console","File","scroll_backward",1,1,"1","1",1,1,"1","1")
+BAL("io/console","File","scroll_forward",1,1,"1","1",1,1,"1","1")
+BAL("io/console","File","ttyname",0,0,NULL,"0",0,0,NULL,"0")
 BAL("io/console","File","winsize",0,0,NULL,"0",0,0,NULL,"0")
 BAL("io/console","File","winsize=",1,1,"1","1",1,1,"1","1")
 BAK("String","[]")

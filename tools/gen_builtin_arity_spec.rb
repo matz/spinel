@@ -436,23 +436,6 @@ inst.map! do |r|
 end
 inst.compact!
 
-# The methods a library adds to a builtin class that Spinel answers from the
-# library's builtin-op rows (io/console's IO#winsize): probed with the library
-# loaded, after the core surface above, and written as BAL rows that name the
-# library first. Only the count check reads them, for a program that has the
-# library; the core tables (names, reflection) stay the core's.
-LIBRARY_METHODS = { "io/console" => { "File" => %w[winsize winsize=] } }
-lib = []
-LIBRARY_METHODS.each do |feature, classes|
-  require feature
-  classes.each do |cls, meths|
-    thunk = INSTANCE_RECEIVERS.fetch(cls)
-    meths.each do |m|
-      s = full_spec_of(thunk, m)
-      lib << [feature, cls, m, *s] if s
-    end
-  end
-end
 
 CLASS_CONSTANTS = {
   "StructClass" => Struct.new(:a), "DataClass" => Data.define(:a),
@@ -469,6 +452,38 @@ CLASS_TARGETS.each do |cls, meths|
         else full_spec_of(thunk, m, private_ok: cls == "Kernel")
         end
     cm << [cls, m, *s] if s
+  end
+end
+
+# The libraries whose methods on a builtin class Spinel answers from the
+# library's builtin-op rows (io/console: IO#winsize, IO.console). Each is
+# loaded after the core surface above is probed, and what it adds -- the
+# public methods a probe receiver answers after the require and not before,
+# and the class methods a class itself defines then -- is probed and written
+# as BAL (instance) and BALC (class) rows that name the library first. Only
+# the count check reads them, for a program that has the library; the core
+# tables (names, reflection) stay the core's.
+LIBRARIES = %w[io/console]
+lib = []
+libc = []
+LIBRARIES.each do |feature|
+  inst_before = INSTANCE_RECEIVERS.to_h { |cls, thunk| [cls, thunk.call.public_methods] }
+  consts = CLASS_TARGETS.keys.to_h { |cls| [cls, CLASS_CONSTANTS.fetch(cls) { Object.const_get(cls) }] }
+  cls_before = consts.transform_values(&:public_methods)
+  require feature
+  INSTANCE_RECEIVERS.each do |cls, thunk|
+    added = thunk.call.public_methods - inst_before[cls]
+    (added.map(&:to_s).sort - INSTANCE_METHOD_SKIP).each do |m|
+      s = full_spec_of(thunk, m)
+      lib << [feature, cls, m, *s] if s
+    end
+  end
+  consts.each do |cls, const|
+    added = (const.public_methods - cls_before[cls]).select { |m| const.method(m).owner == const.singleton_class }
+    added.map(&:to_s).sort.each do |m|
+      s = full_spec_of(-> { const }, m)
+      libc << [feature, cls, m, *s] if s
+    end
   end
 end
 # Method#arity of each class's OWN public instance methods, read straight off
@@ -525,8 +540,8 @@ out = <<~C
      add a new method to the generator's lists and regenerate with --write.
      Method#arity and accepted positional counts are independent facts.
      BAI carries both, BAM only Method#arity, BAS only instance counts,
-     and BAC class/module counts; BAL is a library's instance counts, its
-     name first. -1 maxima are unbounded; NULL messages
+     and BAC class/module counts; BAL and BALC are a library's instance
+     and class counts, its name first. -1 maxima are unbounded; NULL messages
      and unproved -1 minima never reject a call. Block counts are separate.
      Kernel Method#arity describes receiverless method(:name) wrappers.
      BAP is Method#parameters by the class or module that defines the
@@ -544,9 +559,10 @@ end
 inst.each { |r| render.("BAS", r) if counts.key?(r[0, 2]) }
 cm.each { |r| render.("BAC", r) }
 lib.each { |r| render.("BAL", r) }
+libc.each { |r| render.("BALC", r) }
 kwpos.each { |r| render.("BAK", r[0, 2]) }
 params.each { |_, k, m, ps, cside| render.("BAP", [k, m, ps, cside.to_i]) }
-summary = "#{arity.length + kernel_arity.length} Method#arity + #{inst.length} instance + #{cm.length} class-method + #{lib.length} library + #{params.length} parameters entries"
+summary = "#{arity.length + kernel_arity.length} Method#arity + #{inst.length} instance + #{cm.length} class-method + #{lib.length + libc.length} library + #{params.length} parameters entries"
 if ARGV.include?("--check")
   # the private-Kernel list the compiler and the runtime share is held to CRuby's
   listed = File.read(File.join(__dir__, "../lib/sp_kernel_private.h")).scan(/X\("([^"]+)"\)/).flatten

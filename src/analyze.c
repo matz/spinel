@@ -16617,8 +16617,10 @@ static int walk_row_yield_kept(Compiler *c, int s, int r, TyKind row, int depth)
     int def = c->scopes[s].def_node;
     const char *mn = def >= 0 ? nt_str(nt, def, "name") : NULL;
     if (!mn || depth >= 4) return 0;
-    NT_FOREACH_KIND(nt, NK_CallNode, id) {
-      const char *cn = nt_str(nt, id, "name");
+    /* (the calls of that name, by the name index: not every call of the
+       program for each such yield) */
+    for (int id = an_calls_named_first(c, mn); id >= 0; id = an_calls_named_next(id)) {
+      const char *cn = nt_kind(nt, id) == NK_CallNode ? nt_str(nt, id, "name") : NULL;
       int blk = cn && sp_streq(cn, mn) ? nt_ref(nt, id, "block") : -1;
       if (blk < 0) continue;
       if (nt_kind(nt, blk) != NK_BlockNode) return 0;

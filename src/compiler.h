@@ -1344,6 +1344,12 @@ typedef struct {
                           is thrown away (emit_expr_for_effect: `((void)(...))`,
                           the left of a comma): set only as a view
                           (VR_DISCARDED) around that emission */
+  unsigned char *str_shadow; /* [node_cap] a String receiver bound to a copy
+                          of a handle's bytes that its mutator writes back to
+                          as to a variable (1: a boxed face's receiver,
+                          emit_face_arm; 2: a held chain's shadow,
+                          emit_held_self_answer_shim): set only as a view
+                          (VR_STR_SHADOW) around the call's emission */
   SP_TY_FIELD TyKind *nilnarrow; /* [node_cap] param-read narrowed by a `return .. if p.nil?`
                         guard: the read's non-nil type (codegen unboxes the poly
                         slot at the read site); TY_UNKNOWN = not narrowed */

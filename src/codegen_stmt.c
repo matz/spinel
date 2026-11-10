@@ -3813,7 +3813,7 @@ int strbuf_pickup_nil_check(Compiler *c, const char *name, int recv, Buf *out) {
 int strbuf_self_route(Compiler *c, int recv) {
   int u = nt_paren_single(c->nt, recv);
   /* (not a held chain's shadow, whose shim holds the handle) */
-  return u >= 0 && nt_kind(c->nt, u) == NK_CallNode && !sb_shadowed_reader(u) &&
+  return u >= 0 && nt_kind(c->nt, u) == NK_CallNode && !sb_shadowed_reader(c, u) &&
          !strbuf_chain_over_handle(c, u) &&
          strbuf_bang_self_local(c, u);
 }
@@ -3830,7 +3830,7 @@ int emit_recv_route_handle(Compiler *c, int id, int recv, Buf *b) {
   if (g_n_argov >= MAX_ARG_OVERRIDE) return 0;
   /* (a held chain's shadow has none: its shim holds the handle and writes
      the shadow back, emit_held_self_answer_shim) */
-  if (sb_shadowed_reader(nt_paren_single(c->nt, recv))) return 0;
+  if (sb_shadowed_reader(c, nt_paren_single(c->nt, recv))) return 0;
   int th = ran_first_handle(recv);
   if (th >= 0) { buf_printf(b, "_t%d", th); return 1; }
   /* a receiver a head ran into its bytes alone has no handle to give (the
@@ -4564,6 +4564,7 @@ static int emit_held_self_answer_shim(Compiler *c, int id, int r, TyKind ty, Buf
   if (!hb.p || !hb.p[0]) { free(hb.p); return 0; }
   int mark = sb_shim_args_first(c, id, &pre, g_indent);
   view_bind(r, "%s", sb_held_shadow_cname(tH).s);
+  int shv = view_push_repr(c, r, VR_STR_SHADOW, 2);
   /* what the arm puts ahead of its statement reads the shadow: it goes
      after the shadow's declaration; the shim tests the receiver for nil,
      which the arm does not test again (cplan_nil) */
@@ -4576,6 +4577,7 @@ static int emit_held_self_answer_shim(Compiler *c, int id, int r, TyKind ty, Buf
   nt_node_set_int((NodeTable *)c->nt, id, "recv_nil_tested", 0);
   g_sn_skip = sv_skip;
   g_pre = sv_pre;
+  view_pop(c, shv);
   view_unbind(mark);
   if (handled) {
     /* `&.` answers nil for a nil receiver, where any other call raises */
@@ -4760,7 +4762,7 @@ int strbuf_mutator_on_held_self_answer(Compiler *c, int id) {
      the shim keeps after its hold; any other block is no mutator's */
   if (!name || r < 0 || (nt_ref(nt, id, "block") >= 0 && !ty_str_typed_bang_flags(name)) ||
       !(an_str_mutator_name(name) || is_encoding_mutator(name)) || is_freeze_name(name) ||
-      sb_shadowed_reader(nt_paren_single(c->nt, r)) ||
+      sb_shadowed_reader(c, nt_paren_single(c->nt, r)) ||
       !strbuf_held_self_answer(c, r) ||
       cplan_targets(c, id, targets, CPT_MAX) != 0)
     return 0;
@@ -4926,7 +4928,7 @@ static int bang_self_form(Compiler *c, int v, int pub) {
   const char *vn = nt_str(c->nt, v, "name");
   int route_form = vn && !is_receiver_conversion(vn) && !is_freeze_name(vn) &&
                    !(is_substitution_bang(vn) && nt_ref(c->nt, v, "block") >= 0) && strbuf_self_route(c, r);
-  if (!slot && !route_form && !arg_ran_first(v, 0) && !sb_shadowed_reader(ru) && strbuf_held_self_answer(c, r)) {
+  if (!slot && !route_form && !arg_ran_first(v, 0) && !sb_shadowed_reader(c, ru) && strbuf_held_self_answer(c, r)) {
     if (pub) return BSF_NONE;
     /* a freeze freezes the held handle and answers it (nil for nil); a
        conversion answers it (emit_held_handle) */
@@ -24402,14 +24404,10 @@ static int str_mutate_reassign_arms(Compiler *c, Buf *b, int indent, const NodeT
   if (rt == TY_STRING) {
     NodeKind rk = nt_kind(nt, recv);
     int assignable = str_mut_recv_assignable(c, recv);
-    if (sb_shadowed_reader(recv)) assignable = 1;   /* the reader shim's shadow */
+    if (sb_shadowed_reader(c, recv)) assignable = 1;   /* the reader shim's shadow */
     /* an in-place mutator on a frozen string literal raises FrozenError,
        once its arguments are evaluated */
-    if (rk == NK_StringNode &&
-        (sp_streq(name, "insert") || sp_streq(name, "prepend") || sp_streq(name, "<<") ||
-         sp_streq(name, "concat") || sp_streq(name, "replace") || sp_streq(name, "clear") ||
-         sp_streq(name, "delete_prefix!") || sp_streq(name, "delete_suffix!") ||
-         sp_streq(name, "[]="))) {
+    if (rk == NK_StringNode && is_str_reassign_mutator(name)) {
       for (int a = 0; a < argc; a++)
         if (nt_kind(nt, argv[a]) != NK_SplatNode) emit_stmt(c, argv[a], b, indent);
       emit_indent(b, indent);
@@ -25078,7 +25076,7 @@ static int str_mutate_append_bang_arms(Compiler *c, int id, Buf *b, int indent, 
      splices the span out. */
   if ((rt == TY_STRING || rt == TY_STRBUF) && argc >= 1) {
     int assignable2 = str_mut_recv_assignable(c, recv);
-    if (sb_shadowed_reader(recv)) assignable2 = 1;   /* the reader shim's shadow */
+    if (sb_shadowed_reader(c, recv)) assignable2 = 1;   /* the reader shim's shadow */
     const char *abase = NULL, *abang = NULL;
     /* gsub!(pattern) with no block edits nothing: it is an Enumerator, an
        expression like any other */
@@ -25273,7 +25271,7 @@ static int str_mutate_shared_arms(Compiler *c, int id, Buf *b, int indent, const
      (`(+s)[0] = "X"`, `String(s).clear`): the handle is taken once, and the
      route reads as its shadow */
   if ((rt == TY_STRING || rt == TY_STRBUF) && is_string_position_mutator(name) &&
-      g_n_argov < MAX_ARG_OVERRIDE && !sb_shadowed_reader(recv)) {
+      g_n_argov < MAX_ARG_OVERRIDE && !sb_shadowed_reader(c, recv)) {
     Buf *pre = g_pre;
     size_t pre_mark = pre ? pre->len : 0;
     Buf hb; memset(&hb, 0, sizeof hb);
@@ -25292,8 +25290,10 @@ static int str_mutate_shared_arms(Compiler *c, int id, Buf *b, int indent, const
       for (int ai = 0; ai < rac; ai++) fx |= subtree_has_side_effect(c, rav[ai]);
       int mark0 = fx ? sb_shim_args_first(c, id, &apre, indent + 1) : g_n_argov;
       view_bind(recv, "%s", sb_shadow_cname(tH).s);
+      int shv = view_push_repr(c, recv, VR_STR_SHADOW, 1);
       Buf armb; memset(&armb, 0, sizeof armb);
       int handled = emit_array_mutate_stmt(c, id, &armb, indent + 1);
+      view_pop(c, shv);
       view_unbind(mark0);
       if (handled) {
         emit_indent(b, indent);
@@ -25465,7 +25465,7 @@ static int emit_array_mutate_stmt_body(Compiler *c, int id, Buf *b, int indent) 
      (sb_shadowed_reader): the shim took the receiver and tested it, and the
      guard read the shadow ahead of the statement, before the shim declared it */
   int sn_str = nt_safe_nav(nt, id) && (rt == TY_STRING || rt == TY_STRBUF) && sn_guard_pending(c, id) &&
-               !sb_shadowed_reader(recv);
+               !sb_shadowed_reader(c, recv);
   if (sn_str) { int rv = str_mutate_sn_var_guard(c, id, recv, b, indent); if (rv >= 0) return rv; }
   /* a safe navigation on an Array or a Hash that can be nil, or a push on a
      boxed value, takes the value form, which tests the receiver before it

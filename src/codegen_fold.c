@@ -9488,9 +9488,26 @@ int head_held_box(Compiler *c, int node) {
 }
 
 /* See codegen_internal.h. */
+void hold_string_handle_decl(Compiler *c, int node, int t, int root, Buf *b) {
+  Buf hh; memset(&hh, 0, sizeof hh);
+  emit_strbuf_handle_of(c, node, &hh);
+  buf_printf(b, "sp_String *_t%d = SP_STR_HDL(%s);", t, hh.p ? hh.p : "NULL");
+  if (root) buf_printf(b, " SP_GC_ROOT(_t%d);", t);
+  free(hh.p);
+}
+
+/* See codegen_internal.h. */
 int hold_operand(Compiler *c, int node, TyKind ty, int boxed, int t, int root, const char *sep, Buf *b) {
   /* a value with no C slot of its own (nil) is held boxed */
   if (!boxed && (ty == TY_NIL || ty == TY_VOID || ty == TY_UNKNOWN)) { boxed = 1; ty = TY_POLY; }
+  /* a String that is a handle, and that no head holds, is rendered once,
+     as its handle (below): rendered first as its bytes too, a block or a
+     loop it runs in g_pre ran twice (`s[1] = a.map { s << x; "B" }.first`) */
+  if (!boxed && ty == TY_STRING && repr_of(c, node).strbuf_src == RS_HANDLE && head_held_temp(c, node) < 0) {
+    hold_string_handle_decl(c, node, t, root, b);
+    buf_puts(b, sep);
+    return t;
+  }
   Buf vb; memset(&vb, 0, sizeof vb);
   if (boxed) emit_boxed(c, node, &vb); else emit_expr(c, node, &vb);
   /* the head's temp, read unconverted: no copy, no second root */
@@ -9504,12 +9521,9 @@ int hold_operand(Compiler *c, int node, TyKind ty, int boxed, int t, int root, c
      (SP_STR_B); a bytes temp of it was a view the other operands could
      move (`s.concat(s, s)` grew the payload under it). */
   if (!boxed && ty == TY_STRING && repr_of(c, node).strbuf_src == RS_HANDLE) {
-    Buf hh; memset(&hh, 0, sizeof hh);
-    emit_strbuf_handle_of(c, node, &hh);
-    buf_printf(b, "sp_String *_t%d = SP_STR_HDL(%s);", t, hh.p ? hh.p : "NULL");
-    if (root) buf_printf(b, " SP_GC_ROOT(_t%d);", t);
+    hold_string_handle_decl(c, node, t, root, b);
     buf_puts(b, sep);
-    free(hh.p); free(vb.p);
+    free(vb.p);
     return t;
   }
   /* ...and a String the head holds as its handle, read from it

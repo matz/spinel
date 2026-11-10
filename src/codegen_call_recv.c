@@ -821,7 +821,7 @@ static int sb_reader_expr_shim(Compiler *c, int id, int recvS, Buf *b,
 static int sb_route_expr_shim(Compiler *c, int id, int recvS, Buf *b,
                               int (*rerun)(Compiler *, int, Buf *)) {
   int u = nt_paren_single(c->nt, recvS);
-  if (u < 0 || nt_kind(c->nt, u) != NK_CallNode || sb_shadowed_reader(recvS) ||
+  if (u < 0 || nt_kind(c->nt, u) != NK_CallNode || sb_shadowed_reader(c, recvS) ||
       g_n_argov + 1 >= MAX_ARG_OVERRIDE)
     return 0;
   Buf *pre0 = g_pre;
@@ -837,6 +837,7 @@ static int sb_route_expr_shim(Compiler *c, int id, int recvS, Buf *b,
   int ntok = 2;
   if (repr_of(c, recvS).as_ty == TY_STRBUF) { view_push(c, recvS, TY_STRING); ntok = 3; }
   view_bind(recvS, "%s", sb_shadow_cname(tH).s);
+  view_push_repr(c, recvS, VR_STR_SHADOW, 1); ntok++;
   Buf pre; memset(&pre, 0, sizeof pre);
   int mark = sb_shim_args_first(c, id, &pre, g_indent);
   Buf armb; memset(&armb, 0, sizeof armb);
@@ -4834,7 +4835,7 @@ static int emit_str_mutator_call(Compiler *c, int id, Buf *b, const NodeTable *n
        the Enumerator slot */
     if (sbi >= 0 && comp_ntype(c, id) == TY_ENUMERATOR) sbi = -1;
     if (sbi >= 0) {
-      int lvw = str_mut_var_recv(c, recv) || sb_shadowed_reader(recv);
+      int lvw = str_mut_var_recv(c, recv) || sb_shadowed_reader(c, recv);
       /* A shared-mutable (STRBUF) local mutates its buffer IN PLACE so every
          alias/container observes it: recompute via the non-bang transform of
          the current contents, then replace the buffer (#3227). */
@@ -5071,7 +5072,7 @@ static int emit_str_mutator_call(Compiler *c, int id, Buf *b, const NodeTable *n
     }
     if ((sp_streq(name, "concat") || sp_streq(name, "<<") ||
          sp_streq(name, "prepend")) && argc >= 1) {
-      int lvw = str_mut_var_recv(c, recv) || sb_shadowed_reader(recv);
+      int lvw = str_mut_var_recv(c, recv) || sb_shadowed_reader(c, recv);
       int tn2 = ++g_tmp, trc = ++g_tmp;
       /* Evaluate the receiver once into a temp: it feeds both the frozen-mutability
          check and the concatenation, and a chained `s << a << b` receiver has a
@@ -5103,7 +5104,7 @@ static int emit_str_mutator_call(Compiler *c, int id, Buf *b, const NodeTable *n
       { *out = 1; return 1; }
     }
     if (sp_streq(name, "insert") && argc == 2) {
-      int lvw = str_mut_var_recv(c, recv) || sb_shadowed_reader(recv);
+      int lvw = str_mut_var_recv(c, recv) || sb_shadowed_reader(c, recv);
       int to = ++g_tmp, ti2 = ++g_tmp, tn2 = ++g_tmp;
       /* CRuby evaluates the receiver, the index and the text, and only then
          reads the String: a variable receiver is read after them, so a text
@@ -5149,7 +5150,7 @@ static int emit_str_mutator_call(Compiler *c, int id, Buf *b, const NodeTable *n
           { *out = 1; return 1; }
         }
       }
-      int lvw = str_mut_var_recv(c, recv) || sb_shadowed_reader(recv);
+      int lvw = str_mut_var_recv(c, recv) || sb_shadowed_reader(c, recv);
       int tn2 = ++g_tmp;
       buf_printf(b, "({ sp_str_check_mutable(");   /* frozen -> FrozenError (#3003) */
       emit_expr(c, recv, b);
@@ -5201,7 +5202,7 @@ static int emit_str_mutator_call(Compiler *c, int id, Buf *b, const NodeTable *n
         { *out = 1; return 1; }
       } }
     if (hrecv) return 0;
-    int lvw9 = str_mut_var_recv(c, recv) || sb_held_shadow(recv);
+    int lvw9 = str_mut_var_recv(c, recv) || sb_held_shadow(c, recv);
     int tn9 = ++g_tmp;
     /* append_as_bytes accepts String AND Integer arguments; an Integer is its
        low byte (100 -> "d"), materialized via sp_int_chr (#2463). A frozen
@@ -5253,7 +5254,7 @@ static int emit_str_mutator_call(Compiler *c, int id, Buf *b, const NodeTable *n
         { *out = 1; return 1; }
       } }
     if (hrecv) return 0;
-    int lvw = str_mut_var_recv(c, recv) || sb_shadowed_reader(recv);
+    int lvw = str_mut_var_recv(c, recv) || sb_shadowed_reader(c, recv);
     int tn2 = ++g_tmp;
     /* in-place mutator: a frozen receiver raises before the splice (#3333) */
     buf_puts(b, "({ ");
@@ -5481,10 +5482,15 @@ int emit_array_call(Compiler *c, int id, Buf *b) {
         /* (a receiver bound to its held handle's read, `s&.slice!(f(1))`
            after the argument ran, reads as the shadow too: the binding
            comes before the rename) */
-        if (ran_first_read_handle(recvS) >= 0 && g_n_argov < MAX_ARG_OVERRIDE) view_bind(recvS, "%s", sb_shadow_cname(tH).s);
+        int shv = -1;
+        if (ran_first_read_handle(recvS) >= 0 && g_n_argov < MAX_ARG_OVERRIDE) {
+          view_bind(recvS, "%s", sb_shadow_cname(tH).s);
+          shv = view_push_repr(c, recvS, VR_STR_SHADOW, 1);
+        }
         SbShimSave sv_sh = sb_shim_enter(shlv);
         int handled = emit_array_call(c, id, &armb);
         sb_shim_leave(shlv, sv_sh);
+        if (shv >= 0) view_pop(c, shv);
         g_nren--;
         view_unbind(mark);
         if (!handled) { free(armb.p); free(pre.p); free(srefL.p); }
@@ -5526,7 +5532,7 @@ int emit_array_call(Compiler *c, int id, Buf *b) {
         (nt_kind(ntC, rcore) == NK_CallNode ||
          nt_kind(ntC, rcore) == NK_StringNode ||
          nt_kind(ntC, rcore) == NK_InterpolatedStringNode) &&
-        !strbuf_local_name(c, rcore) && !sb_held_shadow(rcore)) {
+        !strbuf_local_name(c, rcore) && !sb_held_shadow(c, rcore)) {
       int aC = nt_ref(ntC, id, "arguments"); int anC = 0;
       if (aC >= 0) nt_arr(ntC, aC, "arguments", &anC);
       if (anC == 0 && nt_ref(ntC, id, "block") < 0) {
@@ -9009,7 +9015,7 @@ static int str_arms_slice_encode(Compiler *c, int id, Buf *b, const char *name, 
   else if (sp_streq(name, "setbyte") && argc == 2) {
     /* copy-on-write: rebind an lvalue receiver to the mutated copy
        (a literal's bytes live in static storage, #2029) */
-    int lvw = str_mut_var_recv(c, recv) || sb_shadowed_reader(recv);
+    int lvw = str_mut_var_recv(c, recv) || sb_shadowed_reader(c, recv);
     int tv2 = ++g_tmp;
     buf_printf(b, "({ sp_int _t%d = ", tv2); emit_int_expr(c, argv[1], b);
     buf_puts(b, "; ");
@@ -15772,14 +15778,14 @@ static TyKind emit_face_arm(Compiler *c, int id, unsigned kind, unsigned flags, 
   int t = ++g_tmp;
   /* A String mutator on a receiver that is no variable -- an element read,
      a Hash value -- has only the shared handle behind the box to take its
-     new contents. Its temp is named as the reader shim names a handle's
-     shadow copy (sb_shadowed_reader), so the typed emitter writes the new
-     contents back into it, as it does for a variable, and the write-back
-     below hands them to the handle. Under a plain name, slice! answered the
-     removed part and wrote nothing back. */
-  int shadowed = kind == PF_STRING && box && (flags & PF_MUT) && !face_str_var_recv(nt, recv);
+     new contents. Its temp is viewed as a shadow copy (VR_STR_SHADOW,
+     sb_shadowed_reader), so the typed emitter writes the new contents back
+     into it, as it does for a variable, and the write-back below hands them
+     to the handle. Read as a plain temp, slice! answered the removed part
+     and wrote nothing back. */
+  int shadow = kind == PF_STRING && box && (flags & PF_MUT) && !face_str_var_recv(nt, recv);
   ShimShadow tn;
-  if (shadowed) tn = sb_shadow_cname(t);
+  if (shadow) tn = sb_shadow_cname(t);
   else snprintf(tn.s, sizeof tn.s, "_t%d", t);
   char bx[32];
   Buf rb; memset(&rb, 0, sizeof rb);
@@ -15907,6 +15913,7 @@ static TyKind emit_face_arm(Compiler *c, int id, unsigned kind, unsigned flags, 
   }
   free(rb.p);
   view_bind(recv, "%s", tn.s);
+  int sv_shadow = shadow ? view_push_repr(c, recv, VR_STR_SHADOW, 1) : -1;
   TyKind as = ty_poly_face_kind(kind);
   int v = view_push(c, recv, as);
   int fv = view_push_face(recv, as);
@@ -15978,6 +15985,7 @@ static TyKind emit_face_arm(Compiler *c, int id, unsigned kind, unsigned flags, 
   while (an > 0) view_pop(c, av[--an]);
   view_pop(c, fv);
   view_pop(c, v);
+  if (sv_shadow >= 0) view_pop(c, sv_shadow);
   view_unbind(g_n_argov - 1);
   const char *call = cb.p ? cb.p : "0";
   /* A typed emitter that declines the call's argument shape answers the

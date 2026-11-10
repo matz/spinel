@@ -2008,8 +2008,9 @@ void emit_local_ref(Compiler *c, int scope_node, const char *name, Buf *b) {
    name, where `lv__sb1`, the old spelling, was the C name of a program local
    `_sb1`.
    The rename is what rename_local answers for the shim's receiver local
-   (the shadow's name without the `lv_`); every spelling of both, and every
-   test of one, goes through these. */
+   (the shadow's name without the `lv_`); every spelling of both goes
+   through these. A shadow read is known by its view (VR_STR_SHADOW,
+   sb_shadowed_reader), not by its name. */
 ShimShadow sb_shadow_local(int tH) {
   ShimShadow n;
   snprintf(n.s, sizeof n.s, "Sb%d", tH);
@@ -2024,14 +2025,6 @@ ShimShadow sb_held_shadow_cname(int tH) {
   ShimShadow n;
   snprintf(n.s, sizeof n.s, "lv_Sh%d", tH);
   return n;
-}
-/* Does `text` start as the C name of a shim shadow: `lv_` and the kind's
-   letter (`b` the change shadow, `h` the held chain's, 0 either), `Sb` or
-   `Sh`, then the temp's digits? */
-static int shim_shadow_text(const char *text, char kind) {
-  if (strncmp(text, "lv_S", 4) != 0) return 0;
-  if (kind ? text[4] != kind : text[4] != 'b' && text[4] != 'h') return 0;
-  return isdigit((unsigned char)text[5]);
 }
 /* Is `rn`, what rename_local answers for local `name`, the shadow a
    shared-handle shim reads and writes that local through (`Sb<T>`, the
@@ -3586,22 +3579,17 @@ int str_mut_var_recv(Compiler *c, int recv) {
     return 0;
   }
 }
-/* A reader call the shared-mutable shim has substituted with its shadow copy
-   (through the argument-override table): the value arms may rebind it as they
-   would a local. */
-int sb_shadowed_reader(int node) {
-  for (int i = 0; i < g_n_argov; i++)
-    if (g_argov_node[i] == node &&
-        shim_shadow_text(g_argov_text[i], 0)) return 1;
-  return 0;
+/* A String receiver read as a copy of a handle's bytes that its mutator
+   writes back to (VR_STR_SHADOW, a view around the call): the value arms
+   may rebind it as they would a local. */
+int sb_shadowed_reader(const Compiler *c, int node) {
+  return node >= 0 && repr_of(c, node).str_shadow != 0;
 }
 /* --share-strings: the shadow a held chain's shim reads its receiver as
-   (`lv_ShT`, emit_held_self_answer_shim), which every value arm writes its
-   answer back to */
-int sb_held_shadow(int node) {
-  for (int i = 0; i < g_n_argov; i++)
-    if (g_argov_node[i] == node && shim_shadow_text(g_argov_text[i], 'h')) return 1;
-  return 0;
+   (VR_STR_SHADOW 2, emit_held_self_answer_shim), which every value arm
+   writes its answer back to */
+int sb_held_shadow(const Compiler *c, int node) {
+  return node >= 0 && repr_of(c, node).str_shadow == 2;
 }
 /* The arguments of the String mutator `id` that a shim re-runs on its
    shadow copy, run ahead of the copy into rooted temps the arm reads
@@ -3631,7 +3619,7 @@ int sb_shim_args_first(Compiler *c, int id, Buf *pre, int indent) {
 int sb_reader_shim_open(Compiler *c, int id, int recv, Buf *sref, SbReaderSave *sv) {
   /* a global holding the handle (--share-strings) is such a slot too:
      strbuf_slot_text answers for it only then */
-  int gv = recv >= 0 && repr_static_read_kind(nt_kind(c->nt, recv)) && !sb_shadowed_reader(recv);
+  int gv = recv >= 0 && repr_static_read_kind(nt_kind(c->nt, recv)) && !sb_shadowed_reader(c, recv);
   if (recv < 0 || (nt_kind(c->nt, recv) != NK_CallNode && !gv)) return 0;
   Repr rp = repr_of(c, recv);
   /* (--share-strings: or a value route whose handle ran first, `(+s)`
@@ -3649,6 +3637,7 @@ int sb_reader_shim_open(Compiler *c, int id, int recv, Buf *sref, SbReaderSave *
   sv->ntok = 2;
   if (sv->ty == TY_STRBUF) { view_push(c, recv, TY_STRING); sv->ntok = 3; }
   view_bind(recv, "%s", sb_shadow_cname(tH).s);
+  view_push_repr(c, recv, VR_STR_SHADOW, 1); sv->ntok++;
   return tH;
 }
 void sb_reader_shim_close(Compiler *c, int recv, const SbReaderSave *sv) {
@@ -4177,7 +4166,7 @@ static int strbuf_slot_into(Compiler *c, int recv, Buf *b) {
       const_path_on_class_value(c, recv, repr_of(c, nt_ref(c->nt, recv, "parent")).as_ty) &&
       repr_of(c, recv).kind == RK_STRBUF) {
     /* inside the shim over it, the read is its plain shadow */
-    if (sb_shadowed_reader(recv)) return 0;
+    if (sb_shadowed_reader(c, recv)) return 0;
     if (!b) return 1;
     Buf sb; memset(&sb, 0, sizeof sb);
     emit_constant_slot(c, recv, &sb);
@@ -4189,7 +4178,7 @@ static int strbuf_slot_into(Compiler *c, int recv, Buf *b) {
   /* a global or a constant holding the handle (--share-strings, #6765) */
   if (recv >= 0 && repr_static_read_kind(nt_kind(c->nt, recv))) {
     /* inside the shim over it, the read is its plain shadow */
-    if (sb_shadowed_reader(recv)) return 0;
+    if (sb_shadowed_reader(c, recv)) return 0;
     return holder_static_handle_buf(c, recv, b);
   }
   if (recv < 0 || nt_kind(c->nt, recv) != NK_InstanceVariableReadNode || !holder_of_node(c, recv, &h) ||

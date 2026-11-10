@@ -1297,6 +1297,7 @@ Repr repr_of(const Compiler *c, int node) {
   r.nil_cold = c->nil_tested ? c->nil_tested[node] == 2 : 0;
   r.head_held = c->head_held ? c->head_held[node] != 0 : 0;
   r.discarded = c->value_discarded ? c->value_discarded[node] != 0 : 0;
+  r.str_shadow = c->str_shadow ? c->str_shadow[node] & 3 : 0;
   /* a node is boxed as the type it is stored as; a nil-guard narrowing is
      read where the value is used, not where it is boxed */
   TyKind kt = r.as_ty;

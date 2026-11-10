@@ -159,6 +159,8 @@ Compiler *comp_new(const NodeTable *nt) {
   if (!c->head_held) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   c->value_discarded = calloc((size_t)n, 1);
   if (!c->value_discarded) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  c->str_shadow = calloc((size_t)n, 1);
+  if (!c->str_shadow) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   c->nscope = calloc((size_t)n, sizeof(int));   /* default scope 0 */
   c->node_cbody = malloc((size_t)n * sizeof(int));   /* enclosing class-body, -1 = none */
   for (int i = 0; i < n; i++) c->node_cbody[i] = -1;
@@ -482,6 +484,8 @@ void comp_grow_node_arrays(Compiler *c) {
   if (!c->head_held) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   c->value_discarded = realloc(c->value_discarded, (size_t)n);
   if (!c->value_discarded) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  c->str_shadow = realloc(c->str_shadow, (size_t)n);
+  if (!c->str_shadow) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   c->nscope = realloc(c->nscope, sizeof(int) * (size_t)n);
   c->node_cbody = realloc(c->node_cbody, sizeof(int) * (size_t)n);
   c->empty_arr_recv = realloc((char *)c->empty_arr_recv, (size_t)n);
@@ -498,7 +502,7 @@ void comp_grow_node_arrays(Compiler *c) {
   for (int i = c->node_cap; i < n; i++) c->bop_inf[i] = NULL;
   c->ucall_inf = realloc(c->ucall_inf, sizeof *c->ucall_inf * (size_t)n);
   memset(c->ucall_inf + c->node_cap, 0, sizeof *c->ucall_inf * (size_t)(n - c->node_cap));
-  for (int i = c->node_cap; i < n; i++) { ((TyKind *)c->ntype)[i] = TY_UNKNOWN; c->norigin[i] = -1; ((TyKind *)c->nilnarrow)[i] = TY_UNKNOWN; c->nscope[i] = 0; c->node_cbody[i] = -1; ((char *)c->empty_arr_recv)[i] = 0; ((char *)c->empty_hash_recv)[i] = 0; ((char *)c->empty_hash_arg)[i] = 0; c->store_misfit_arg[i] = 0; c->ivar_widen_src[i] = 0; ((TyKind *)c->hash_want)[i] = TY_UNKNOWN; ((TyKind *)c->arr_want)[i] = TY_UNKNOWN; ((TyKind *)c->poly_builtin_ty)[i] = TY_UNKNOWN; c->lw_joined[i] = TY_UNKNOWN; ((unsigned char *)c->strbuf_box)[i] = 0; c->strbuf_handle_demand[i] = 0; c->strbuf_read_raw[i] = 0; c->poly_strbuf_lift[i] = 0; c->nil_tested[i] = 0; c->head_held[i] = 0; c->value_discarded[i] = 0; }
+  for (int i = c->node_cap; i < n; i++) { ((TyKind *)c->ntype)[i] = TY_UNKNOWN; c->norigin[i] = -1; ((TyKind *)c->nilnarrow)[i] = TY_UNKNOWN; c->nscope[i] = 0; c->node_cbody[i] = -1; ((char *)c->empty_arr_recv)[i] = 0; ((char *)c->empty_hash_recv)[i] = 0; ((char *)c->empty_hash_arg)[i] = 0; c->store_misfit_arg[i] = 0; c->ivar_widen_src[i] = 0; ((TyKind *)c->hash_want)[i] = TY_UNKNOWN; ((TyKind *)c->arr_want)[i] = TY_UNKNOWN; ((TyKind *)c->poly_builtin_ty)[i] = TY_UNKNOWN; c->lw_joined[i] = TY_UNKNOWN; ((unsigned char *)c->strbuf_box)[i] = 0; c->strbuf_handle_demand[i] = 0; c->strbuf_read_raw[i] = 0; c->poly_strbuf_lift[i] = 0; c->nil_tested[i] = 0; c->head_held[i] = 0; c->value_discarded[i] = 0; c->str_shadow[i] = 0; }
   c->node_cap = n;
 }
 

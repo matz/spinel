@@ -81,3 +81,26 @@ class Mu
 end
 z = ARGV.size > 5 ? 3 : [$q, Mu.new]
 p z.to_h
+
+# the same for a pair after the first converted element, and a String key
+$q2 = [5, 6]
+class A2
+  def to_ary = [1, 2]
+end
+class B2
+  def to_ary
+    $q2[1] = 77
+    [7, 8]
+  end
+end
+z2 = ARGV.size > 5 ? 3 : [A2.new, $q2, B2.new]
+p z2.to_h
+$k = +"a"
+class K2
+  def to_ary
+    $k << "z"
+    [7, 8]
+  end
+end
+z3 = ARGV.size > 5 ? 3 : [[$k, 1], K2.new]
+p z3.to_h

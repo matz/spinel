@@ -1210,11 +1210,16 @@ sp_RbVal sp_kw_splat_check(sp_RbVal h, const char *const *mem, int n, const unsi
   return named ? sp_box_obj(named, SP_BUILTIN_POLY_POLY_HASH) : h;
 }
 
-/* a checked [k, v] pair, copied: to_h keeps the pair as it was read */
+/* a checked [k, v] pair, copied: to_h keeps the pair as it was read.  A
+   String key is copied and frozen here, as the Hash does on insert, so a
+   later to_ary that changes it does not change the key either */
 static sp_RbVal sp_poly_pair_copy(sp_RbVal e) {
   SP_GC_ROOT_RBVAL(e);
   sp_PolyArray *p = sp_PolyArray_new(); SP_GC_ROOT(p);
-  sp_PolyArray_push(p, sp_poly_arr_get(e, 0));
+  sp_RbVal k = sp_poly_arr_get(e, 0); SP_GC_ROOT_RBVAL(k);
+  if (k.tag == SP_TAG_STR && k.v.s) k.v.s = sp_hash_key_str(k.v.s);
+  else if (sp_poly_is_strbuf(k)) k = sp_box_str(sp_hash_key_str(sp_String_cstr((sp_String *)k.v.p)));
+  sp_PolyArray_push(p, k);
   sp_PolyArray_push(p, sp_poly_arr_get(e, 1));
   return sp_box_poly_array(p);
 }

@@ -290,15 +290,26 @@ static void emit_respond_to_runtime_name(Compiler *c, int id, Buf *b, int recv, 
      chain of every name nests as deep as it is long, which overflows
      clang's stack at a few thousand */
   buf_printf(b, "; ((({ sp_bool _r%d = 0; switch (_k%d) {", tv, tv);
+  /* A chain lookup from class k answers a scope owned by k or one of its
+     ancestors (chain_lookup: an alias resumes at an ancestor, and the walk
+     is up the parents), so only those scopes are asked below, in the order
+     every scope was. Asking every scope of every class took about five
+     seconds an emission on an application of 1,300 classes and 45,000
+     scopes, a third of its methods' emission. */
+  unsigned char *anc = calloc((size_t)c->nclasses + 1, 1);
+  if (!anc) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   for (int k = 0; k < c->nclasses; k++) {
     if (comp_class_is_module(c, &c->classes[k])) continue;
     Buf pb, vb;
     memset(&pb, 0, sizeof pb);
     memset(&vb, 0, sizeof vb);
+    for (int p = k; p >= 0; p = c->classes[p].parent) anc[p] = 1;
     for (int s = 0; s < c->nscopes; s++)
       if (c->scopes[s].name && !c->scopes[s].is_cmethod && !c->scopes[s].is_proc_form &&
+          (c->scopes[s].class_id < 0 || (c->scopes[s].class_id < c->nclasses && anc[c->scopes[s].class_id])) &&
           comp_method_in_chain(c, k, c->scopes[s].name, NULL) == s)
         emit_responds_name(c, k, c->scopes[s].name, &pb, &vb);
+    for (int p = k; p >= 0; p = c->classes[p].parent) anc[p] = 0;
     /* Native methods are inherited too. The receiver's visibility and
        undef declarations still decide which list receives each name. */
     for (int p = k; p >= 0; p = c->classes[p].parent)
@@ -337,6 +348,7 @@ static void emit_respond_to_runtime_name(Compiler *c, int id, Buf *b, int recv, 
     free(pb.p);
     free(vb.p);
   }
+  free(anc);
   /* a builtin value, or an object of a class with no names of its own,
      answers the Object reopening's methods */
   {

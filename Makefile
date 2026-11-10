@@ -523,19 +523,25 @@ $(SPINEL_TRACE): $(SPINEL_TRACE_OBJ) build/csrc/sp_parse_lib.o build/csrc/re_lit
 # whose arms are not about to move, a typed Array's push and an Integer +,
 # and the tool has to name each. Its --analysis has to show that + get its
 # type with infer_universal_call the last rule called, its nil fact and its
-# class set. Not a leg of `make test` or the gate.
+# class set. The line's other nodes (the local it reads, the 2, the write)
+# have the same facts, so those are looked for in the + node's section only:
+# the sections are paragraphs, each headed by its node. Not a leg of
+# `make test` or the gate.
 .PHONY: emit-trace-test
 emit-trace-test: $(SPINEL_TRACE)
 	@fail=0; \
-	has() { out=$$(ruby tools/emit_trace.rb $$4 test/emit-trace/calls.rb $$1) && printf '%s\n' "$$out" | grep -Eq "$$2" || \
+	has() { out=$$(ruby tools/emit_trace.rb test/emit-trace/calls.rb $$1) && printf '%s\n' "$$out" | grep -Eq "$$2" || \
 	  { echo "emit-trace-test: FAIL (line $$1: $$3)"; fail=1; }; }; \
+	fact() { out=$$(ruby tools/emit_trace.rb --analysis test/emit-trace/calls.rb 7) && printf '%s\n' "$$out" | \
+	  awk 'BEGIN { RS = "" } index($$0, "test/emit-trace/calls.rb:7:5  +  ") == 1' | grep -Eq "$$1" || \
+	  { echo "emit-trace-test: FAIL (line 7: $$2)"; fail=1; }; }; \
 	has 5 "^ +emit_call_append_arms +<- took the call$$" "emit_call_append_arms did not take the call"; \
 	has 7 "^ +emit_array_arith_call +<- took the call$$" "emit_array_arith_call did not take the call"; \
 	has 10 ":10:3  tail ReturnNode " "the method's last statement has no tree"; \
-	has 7 "^  type: unknown -> int$$" "the analysis shows no type for the +" --analysis; \
-	has 7 "^ +infer_universal_call +<- last rule called$$" "the analysis does not mark infer_universal_call for the +" --analysis; \
-	has 7 "^  nil fact: not nil$$" "the analysis shows no nil fact" --analysis; \
-	has 7 "^  class set: no class" "the analysis shows no class set" --analysis; \
+	fact "^  type: unknown -> int$$" "the analysis shows no type for the +"; \
+	fact "^ +infer_universal_call +<- last rule called$$" "the analysis does not mark infer_universal_call for the +"; \
+	fact "^  nil fact: not nil$$" "the analysis shows no nil fact for the +"; \
+	fact "^  class set: no class" "the analysis shows no class set for the +"; \
 	[ $$fail = 0 ] && echo "emit-trace-test: OK (3 lines, and the analysis of one)"
 
 # The compiler again under AddressSanitizer and UndefinedBehaviorSanitizer,

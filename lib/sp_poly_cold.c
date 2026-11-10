@@ -1210,6 +1210,15 @@ sp_RbVal sp_kw_splat_check(sp_RbVal h, const char *const *mem, int n, const unsi
   return named ? sp_box_obj(named, SP_BUILTIN_POLY_POLY_HASH) : h;
 }
 
+/* a checked [k, v] pair, copied: to_h keeps the pair as it was read */
+static sp_RbVal sp_poly_pair_copy(sp_RbVal e) {
+  SP_GC_ROOT_RBVAL(e);
+  sp_PolyArray *p = sp_PolyArray_new(); SP_GC_ROOT(p);
+  sp_PolyArray_push(p, sp_poly_arr_get(e, 0));
+  sp_PolyArray_push(p, sp_poly_arr_get(e, 1));
+  return sp_box_poly_array(p);
+}
+
 sp_RbVal sp_poly_to_h_m(sp_RbVal v)
 {
   if (v.tag == SP_TAG_NIL) return sp_box_obj(sp_SymPolyHash_new(), SP_BUILTIN_SYM_POLY_HASH);
@@ -1233,14 +1242,16 @@ sp_RbVal sp_poly_to_h_m(sp_RbVal v)
     /* every element is checked in order, and a program object's to_ary
        (any visibility) gives its pair just before its check, as in CRuby:
        from the first such object on, the pairs are kept in their own
-       array */
+       array, each one copied as it is checked, so a later to_ary that
+       changes an earlier pair does not change the result (CRuby inserts
+       each pair before it converts the next element) */
     SP_GC_ROOT_RBVAL(v);
     sp_PolyArray *conv = NULL; SP_GC_ROOT(conv);
     for (sp_int i = 0; i < sp_poly_length(v); i++) {
       sp_RbVal e = sp_poly_arr_get(v, i);
       if (sp_poly_is_user_obj(e) && e.v.p && !conv) {
         conv = sp_PolyArray_new();
-        for (sp_int j = 0; j < i; j++) sp_PolyArray_push(conv, sp_poly_arr_get(v, j));
+        for (sp_int j = 0; j < i; j++) sp_PolyArray_push(conv, sp_poly_pair_copy(sp_poly_arr_get(v, j)));
       }
       if (conv) e = sp_poly_pair_to_ary(e);
       if (!(e.tag == SP_TAG_OBJ && sp_poly_is_array_kind(e.cls_id)))
@@ -1249,7 +1260,7 @@ sp_RbVal sp_poly_to_h_m(sp_RbVal v)
       if (sp_poly_length(e) != 2)
         sp_raise_cls("ArgumentError", sp_sprintf("wrong array length at %lld (expected 2, was %lld)",
                                               (long long)i, (long long)sp_poly_length(e)));
-      if (conv) sp_PolyArray_push(conv, e);
+      if (conv) sp_PolyArray_push(conv, sp_poly_pair_copy(e));
     }
     if (conv) v = sp_box_poly_array(conv);
     sp_int n = sp_poly_length(v);

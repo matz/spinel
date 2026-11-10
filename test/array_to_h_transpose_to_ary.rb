@@ -70,3 +70,14 @@ class G; def to_ary = ($r << 5; [3, 4]); end
 p [$r, M.new].transpose
 $r = [1, 2]
 p [$r, G.new].transpose
+
+# a later to_ary that changes an earlier pair does not change the result
+$q = [5, 6]
+class Mu
+  def to_ary
+    $q[1] = 77
+    [7, 8]
+  end
+end
+z = ARGV.size > 5 ? 3 : [$q, Mu.new]
+p z.to_h

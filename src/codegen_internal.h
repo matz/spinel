@@ -250,6 +250,14 @@ int scan_block_hoists(Compiler *c, int id);
 int strbuf_held_chain(const Compiler *c, int r);
 int sb_held_shadow(const Compiler *c, int node);
 int strbuf_held_self_answer(Compiler *c, int r);
+/* --share-strings: the handle held chain r answers (a bang's answer, its
+   receiver's String, or NULL for nil), written to b; 0 and nothing written
+   when r is no such chain or renders no handle. The in-place String rows
+   take it as their receiver (str_mut_open), with no shadow copy. */
+int emit_held_chain_handle(Compiler *c, int r, Buf *b);
+/* Is call id one an in-place String row of stage 7 owns (String#insert,
+   clear), which takes its receiver's handle itself? */
+int str_in_place_row(Compiler *c, int id);
 int emit_call_on_held_self_answer(Compiler *c, int id, Buf *b);
 int emit_freeze_self_answer(Compiler *c, int id, int recv, Buf *b);
 int emit_equal_self_answer(Compiler *c, int recv, int arg, Buf *b);
@@ -2772,6 +2780,8 @@ int rationalize_eps_is_number(TyKind et);
 void emit_rationalize_eps_raise(Compiler *c, int arg, Buf *b);
 void emit_rationalize_eps_float(Compiler *c, int arg, TyKind et, Buf *b);
 int emit_op_string_scan_checked(Compiler *c, const BopCtx *x, Buf *b);
+int emit_op_string_insert(Compiler *c, const BopCtx *x, Buf *b);
+int emit_op_string_clear(Compiler *c, const BopCtx *x, Buf *b);
 int emit_op_string_slice(Compiler *c, const BopCtx *x, Buf *b);
 int emit_op_string_dedup(Compiler *c, const BopCtx *x, Buf *b);
 int emit_op_string_scrub_block(Compiler *c, const BopCtx *x, Buf *b);

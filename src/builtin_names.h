@@ -130,7 +130,7 @@ int is_eql_or_equal(const char *n); /* eql? equal? */
 int is_equal_name(const char *n);   /* equal? */
 int is_substitution(const char *n); /* gsub sub */
 int is_substitution_bang(const char *n); /* gsub! sub! */
-int is_str_reassign_mutator(const char *n); /* insert prepend << concat replace clear delete_prefix! delete_suffix! []= */
+int is_str_reassign_mutator(const char *n); /* prepend << concat replace delete_prefix! delete_suffix! []= */
 int is_element_at_alias(const char *n); /* [] at */
 int is_map_bang_alias(const char *n); /* collect! map! */
 int is_each_or_pair(const char *n); /* each each_pair */

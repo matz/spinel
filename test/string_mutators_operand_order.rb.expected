@@ -1,0 +1,20 @@
+"a-bc"
+[TypeError, "no implicit conversion of Integer into String"]
+[IndexError, "index 10 out of string"]
+[TypeError, "no implicit conversion of Integer into String"]
+302
+""
+102
+"x<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<ab"
+"x<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<ab"
+"qZrs"
+"Zqrs"
+"qrsZ"
+""
+""
+""
+[IndexError, "index 5 out of string"]
+[FrozenError, "can't modify frozen String: \"qrs\""]
+"Zabc"
+""
+"t1abc"

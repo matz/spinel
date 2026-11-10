@@ -1,0 +1,28 @@
+true
+"<abc>"
+".<abc>"
+".<abc>"
+true
+""
+true
+true
+"h-ello"
+true
+""
+"inside!"
+"inside!"
+"i+nside!"
+["one", "<two"]
+"<maybe"
+""
+""
+nil
+nil
+nil
+"qq"
+"a2.9b"
+"ab-cdef"
+[FrozenError, "can't modify frozen String: \"\""]
+[FrozenError, "can't modify frozen String: \"abc\""]
+[IndexError, "index 9 out of string"]
+"abc"

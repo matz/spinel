@@ -4762,6 +4762,8 @@ int strbuf_mutator_on_held_self_answer(Compiler *c, int id) {
      the shim keeps after its hold; any other block is no mutator's */
   if (!name || r < 0 || (nt_ref(nt, id, "block") >= 0 && !ty_str_typed_bang_flags(name)) ||
       !(an_str_mutator_name(name) || is_encoding_mutator(name)) || is_freeze_name(name) ||
+      /* (an in-place row takes the handle the chain answers itself) */
+      str_in_place_row(c, id) ||
       sb_shadowed_reader(c, nt_paren_single(c->nt, r)) ||
       !strbuf_held_self_answer(c, r) ||
       cplan_targets(c, id, targets, CPT_MAX) != 0)
@@ -4878,13 +4880,15 @@ static void emit_bang_answer_end(Buf *b, int tr, const char *h, int pub) {
      BSF_FREEZE       a freeze over a handle: the handle frozen;
      BSF_HELD_CONV    a conversion over a held chain: the handle it holds;
      BSF_HELD_FREEZE  a freeze over a held chain: that handle frozen;
+     BSF_HELD_ROW     an in-place row's call over a held chain (insert,
+                      clear): the handle the row took and changed;
      BSF_HELD_SHIM    any other bang over a held chain, through its shim;
      BSF_ROUTE        a bang over a route that hands on a handle, taken once;
      BSF_SLOT_REBOUND a bang on a slot an argument rebinds, the old handle
                       held;
      BSF_SLOT_VAR     a bang on a variable's slot;
      BSF_SLOT_CALL    a bang on a reader call read as its handle. */
-enum { BSF_NONE, BSF_FREEZE, BSF_HELD_CONV, BSF_HELD_FREEZE, BSF_HELD_SHIM, BSF_ROUTE, BSF_SLOT_REBOUND,
+enum { BSF_NONE, BSF_FREEZE, BSF_HELD_CONV, BSF_HELD_FREEZE, BSF_HELD_ROW, BSF_HELD_SHIM, BSF_ROUTE, BSF_SLOT_REBOUND,
        BSF_SLOT_VAR, BSF_SLOT_CALL };
 static int bang_self_form(Compiler *c, int v, int pub);
 /* Does emit_held_handle render a handle for held chain r? Every form of it
@@ -4895,6 +4899,13 @@ static int held_handle_has(Compiler *c, int r) {
   if (is_receiver_conversion(rn) || face_str_bang_sn_call(c, r) || face_str_bang_call(c, r) || is_unary_plus(rn))
     return 1;
   return bang_self_handle_has(c, r);
+}
+/* See codegen_internal.h. */
+int emit_held_chain_handle(Compiler *c, int r, Buf *b) {
+  r = nt_paren_single(c->nt, r);
+  if (r < 0 || sb_shadowed_reader(c, r) || !strbuf_held_self_answer(c, r) || !held_handle_has(c, r)) return 0;
+  emit_held_handle(c, r, b);
+  return 1;
 }
 int bang_self_handle_has(Compiler *c, int v) {
   return (strbuf_bang_self_local(c, v) && ran_first_handle(v) >= 0) ||
@@ -4933,7 +4944,8 @@ static int bang_self_form(Compiler *c, int v, int pub) {
     /* a freeze freezes the held handle and answers it (nil for nil); a
        conversion answers it (emit_held_handle) */
     if (is_receiver_conversion(vn)) return BSF_HELD_CONV;
-    if (held_handle_has(c, r)) return is_freeze_name(vn) ? BSF_HELD_FREEZE : BSF_HELD_SHIM;
+    if (held_handle_has(c, r))
+      return is_freeze_name(vn) ? BSF_HELD_FREEZE : str_in_place_row(c, v) ? BSF_HELD_ROW : BSF_HELD_SHIM;
   }
   /* A receiver-returning call takes its receiver route's handle once,
      before its own arguments can change the base slot. */
@@ -5022,6 +5034,12 @@ static int emit_bang_self_handle_1(Compiler *c, int v, int pub, Buf *b) {
     free(hb.p);
     break;
   }
+  case BSF_HELD_ROW:
+    /* the row answers its receiver, the chain's handle (str_mut_open) */
+    buf_puts(b, "SP_STR_HDL(");
+    emit_expr(c, v, b);
+    buf_puts(b, ")");
+    break;
   case BSF_HELD_SHIM: {
     int tH = emit_held_self_answer_shim(c, v, nt_paren_single(c->nt, r), TY_STRING, b, emit_self_call_arm);
     buf_printf(b, "_res%d ? _t%d : (sp_String *)NULL; })", tH, tH);
@@ -24397,10 +24415,10 @@ static char *emit_str_splice_value(Compiler *c, int recv, int v, int late, int t
   return vb.p;
 }
 /* emit_array_mutate_stmt_body's String mutators done by reassigning the
-   receiver: replace, prepend, insert, concat, clear, delete_prefix! /
+   receiver: replace, prepend, concat, delete_prefix! /
    delete_suffix! (answers 1 emitted, 0 declined, -1 to go on) */
 static int str_mutate_reassign_arms(Compiler *c, Buf *b, int indent, const NodeTable *nt, const char *name, int recv, TyKind rt, int argc, const int *argv) {
-  /* replace / prepend / clear / delete_prefix!/suffix! via reassignment */
+  /* replace / prepend / delete_prefix!/suffix! via reassignment */
   if (rt == TY_STRING) {
     NodeKind rk = nt_kind(nt, recv);
     int assignable = str_mut_recv_assignable(c, recv);
@@ -24463,56 +24481,6 @@ static int str_mutate_reassign_arms(Compiler *c, Buf *b, int indent, const NodeT
       /* a boxed argument reads as its string, TypeError for anything else,
          as replace's does */
       emit_indent(b, indent); emit_expr(c, recv, b); buf_puts(b, " = sp_str_concat("); emit_str_expr(c, argv[0], b); buf_puts(b, ", "); emit_expr(c, recv, b); buf_puts(b, ");\n");
-      return 1;
-    }
-    /* (one-String mode: only a receiver made afresh; any other call can
-       answer a String something else holds -- an element, a field) */
-    const char *clr_rn = nt_kind(nt, recv) == NK_CallNode ? nt_str(nt, recv, "name") : NULL;
-    if (!assignable && sp_streq(name, "clear") && argc == 0 &&
-        nt_kind(nt, recv) == NK_CallNode &&
-        clr_rn && (sp_streq(clr_rn, "+@") || sp_streq(clr_rn, "dup") || sp_streq(clr_rn, "new"))) {
-      /* clear on an unnamed mutable receiver ((+"abc").clear): the temp's
-         mutation is unobservable, so evaluate the receiver (a frozen value
-         still raises, as CRuby) and yield a fresh unfrozen empty */
-      int tcl9 = ++g_tmp;
-      emit_indent(b, indent);
-      buf_printf(b, "{ const char *_t%d = ", tcl9); emit_expr(c, recv, b);
-      buf_printf(b, "; sp_str_check_mutable(_t%d); (void)_t%d; }\n", tcl9, tcl9);
-      return 1;
-    }
-    if (sp_streq(name, "clear") && argc == 0) {
-      /* a shared-mutable receiver owns a buffer: empty it in place, so every
-         alias sees the clear and the result is the same object. The
-         reassignment form below cannot serve it -- the read of a handle is not
-         an lvalue, and the emitted C did not compile. */
-      Buf srefC; memset(&srefC, 0, sizeof srefC);
-      if (strbuf_slot_text(c, recv, &srefC)) {
-        emit_indent(b, indent);
-        buf_printf(b, "sp_String_set_bin(%s, (&(\"\\xff\")[1]));\n", srefC.p);
-        free(srefC.p);
-        return 1;
-      }
-    }
-    if (assignable && sp_streq(name, "clear") && argc == 0) {
-      /* a fresh unfrozen empty: the shared frozen "" literal would make a
-         later mutation of the cleared receiver raise */
-      emit_indent(b, indent); buf_puts(b, "sp_str_check_mutable("); emit_expr(c, recv, b); buf_puts(b, ");\n");
-      emit_indent(b, indent); emit_expr(c, recv, b); buf_puts(b, " = sp_str_from_bytes(\"\", 0);\n");
-      return 1;
-    }
-    if (assignable && sp_streq(name, "insert") && argc == 2) {
-      /* insert(i, x): x spliced in at i. A negative i counts from the end
-         and inserts after that character (i += len + 1). */
-      int ti = ++g_tmp;
-      emit_indent(b, indent);
-      buf_printf(b, "{ sp_int _t%d = ", ti); emit_int_expr(c, argv[0], b); buf_puts(b, ";");
-      char *v = emit_str_splice_value(c, recv, argv[1], 0, ti, b);
-      /* -1 appends; an index past the ends raises IndexError, as CRuby */
-      buf_printf(b, " sp_int _a%d = _t%d == -1 ? (sp_int)sp_str_length(", ti, ti); emit_expr(c, recv, b);
-      buf_printf(b, ") : _t%d < 0 ? _t%d + 1 : _t%d; ", ti, ti, ti);
-      emit_expr(c, recv, b); buf_puts(b, " = sp_str_splice_at("); emit_expr(c, recv, b);
-      buf_printf(b, ", _a%d, 0, %s, 0); }\n", ti, v ? v : "NULL");
-      free(v);
       return 1;
     }
     if ((sp_streq(name, "delete_prefix!") || sp_streq(name, "delete_suffix!")) && argc == 1) {
@@ -25198,39 +25166,59 @@ static int str_mutate_append_bang_arms(Compiler *c, int id, Buf *b, int indent, 
   return -1;
 }
 
+/* A guard-narrowed POLY receiver of a String mutator (#3227): `x << "!" if
+   x.is_a?(String)` narrows the read to TY_STRING, but the SLOT is poly --
+   the String emitters would write the box's .v.s field and lose the shared
+   handle (or misread a strbuf box). Re-route through the poly mutator
+   emission by restoring the node's poly type for this call (answers 1
+   emitted, -1 to go on). */
+static int str_mutate_narrowed_poly(Compiler *c, int id, Buf *b, int indent, const NodeTable *nt, const char *name, int recv, TyKind rt) {
+  if (rt != TY_STRING || nt_kind(nt, recv) != NK_LocalVariableReadNode || !sp_str_mutator(name, SP_MUT_NARROW)) return -1;
+  const char *rnN = nt_str(nt, recv, "name");
+  Scope *rsN = rnN ? comp_scope_of(c, recv) : NULL;
+  LocalVar *rlN = rsN ? scope_local(rsN, rnN) : NULL;
+  if (!rlN || rlN->type != TY_POLY) return -1;
+  int vr = view_push(c, recv, TY_POLY);
+  int vn = view_push_repr(c, recv, VR_NILNARROW, TY_UNKNOWN);
+  /* the call's value is the poly arm's too (a String-typed call made an
+     arm hold its boxed answer in a String temp) */
+  int vi = view_push(c, id, TY_POLY);
+  emit_indent(b, indent);
+  buf_puts(b, "(void)(");
+  emit_call(c, id, b);
+  buf_puts(b, ");\n");
+  view_pop(c, vi);
+  view_pop(c, vn);
+  view_pop(c, vr);
+  return 1;
+}
+
+/* String#insert and clear as a statement: the stage-7 row's value form
+   (emit_op_string_insert, emit_op_string_clear), which changes the
+   receiver's String in place through its handle. The answer is left as
+   the C statement's value, not cast away: a block's last statement is the
+   value of the statement expression a yield reads (emit_block_invoke).
+   0, with nothing emitted, when no row takes the call's form. */
+static int str_mutator_row_stmt(Compiler *c, int id, int recv, Buf *b, int indent) {
+  TyKind rt = comp_recv_type(c, recv);
+  if (recv < 0 || (rt != TY_STRING && rt != TY_STRBUF)) return 0;
+  Buf vb; memset(&vb, 0, sizeof vb);
+  int ve = effect_view_open(c, id);
+  int ok = emit_builtin_op_stage(c, id, recv, TY_STRING, nt_str(c->nt, id, "name"), 7, &vb);
+  effect_view_close(c, ve);
+  if (ok) {
+    emit_indent(b, indent);
+    buf_printf(b, "%s;\n", vb.p ? vb.p : "0");
+  }
+  free(vb.p);
+  return ok;
+}
+
 /* emit_array_mutate_stmt_body's shims for a String whose mutation every
    alias must see: a local String, a reader call that hands out the handle,
-   and []= / insert / clear / slice! / setbyte on a shared handle (answers 1
-   emitted, 0 declined, -1 to go on) */
+   and []= / slice! / setbyte on a shared handle (answers 1 emitted, 0
+   declined, -1 to go on) */
 static int str_mutate_shared_arms(Compiler *c, int id, Buf *b, int indent, const NodeTable *nt, const char *name, int recv, TyKind rt) {
-  /* Guard-narrowed POLY receiver (#3227): `x << "!" if x.is_a?(String)`
-     narrows the read to TY_STRING, but the SLOT is poly -- the string-value
-     emitters would write the box's .v.s field and lose the shared handle
-     (or misread a strbuf box). Re-route through the poly mutator emission
-     by restoring the node's poly type for this call. */
-  if (rt == TY_STRING && nt_kind(nt, recv) == NK_LocalVariableReadNode) {
-    if (sp_str_mutator(name, SP_MUT_NARROW)) {
-      const char *rnN = nt_str(nt, recv, "name");
-      Scope *rsN = rnN ? comp_scope_of(c, recv) : NULL;
-      LocalVar *rlN = rsN ? scope_local(rsN, rnN) : NULL;
-      if (rlN && rlN->type == TY_POLY) {
-        int vr = view_push(c, recv, TY_POLY);
-        int vn = view_push_repr(c, recv, VR_NILNARROW, TY_UNKNOWN);
-        /* the call's value is the poly arm's too (a String-typed call made
-           an arm hold its boxed answer in a String temp) */
-        int vi = view_push(c, id, TY_POLY);
-        emit_indent(b, indent);
-        buf_puts(b, "(void)(");
-        emit_call(c, id, b);
-        buf_puts(b, ");\n");
-        view_pop(c, vi);
-        view_pop(c, vn);
-        view_pop(c, vr);
-        return 1;
-      }
-    }
-  }
-
   /* The same shim over a READER call that hands out the handle
      (`obj.name[0] = "X"`), whose call node reads as the shadow. */
   if ((rt == TY_STRING || rt == TY_STRBUF) &&
@@ -25268,8 +25256,8 @@ static int str_mutate_shared_arms(Compiler *c, int id, Buf *b, int indent, const
   }
 
   /* --share-strings: the same shim over a route that hands on a handle
-     (`(+s)[0] = "X"`, `String(s).clear`): the handle is taken once, and the
-     route reads as its shadow */
+     (`(+s)[0] = "X"`, `String(s).slice!(0)`): the handle is taken once,
+     and the route reads as its shadow */
   if ((rt == TY_STRING || rt == TY_STRBUF) && is_string_position_mutator(name) &&
       g_n_argov < MAX_ARG_OVERRIDE && !sb_shadowed_reader(c, recv)) {
     Buf *pre = g_pre;
@@ -25501,6 +25489,8 @@ static int emit_array_mutate_stmt_body(Compiler *c, int id, Buf *b, int indent) 
     free(sb.p);
   }
 
+  { int rv = str_mutate_narrowed_poly(c, id, b, indent, nt, name, recv, rt); if (rv >= 0) return rv; }
+  if (str_mutator_row_stmt(c, id, recv, b, indent)) return 1;
   { int rv = str_mutate_shared_arms(c, id, b, indent, nt, name, recv, rt); if (rv >= 0) return rv; }
 
   { int rv = str_mutate_append_bang_arms(c, id, b, indent, nt, name, recv, rt, argc, argv); if (rv >= 0) return rv; }

@@ -204,6 +204,10 @@ typedef enum {
   BOPE_IVAR_REFLECTION,   /* reflection on a builtin value without ivar slots */
   BOPE_FLOAT_RATIONALIZE,
   BOPE_STRING_SCAN_CHECKED,
+  /* String#insert and #clear, which change the receiver's String in place
+     through its handle (codegen_call_string.c, stage 7) */
+  BOPE_STRING_INSERT,
+  BOPE_STRING_CLEAR,
   BOPE_STRING_SLICE,     /* String#slice!: lvalue and pattern-dependent */
   BOPE_STRING_DEDUP,     /* String#dedup: -@ under the name a nil receiver is raised with */
   BOPE_STRING_SCRUB_BLOCK, /* String#scrub with a block */

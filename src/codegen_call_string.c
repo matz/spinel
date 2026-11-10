@@ -1788,6 +1788,177 @@ int emit_op_string_dedup(Compiler *c, const BopCtx *x, Buf *b) {
   return 1;
 }
 
+/* ---- String#insert and #clear (stage 7) ----
+   A String slot holds the String's handle, so these rows change the String
+   where it lives: the receiver's handle is taken once, before the arguments
+   run (CRuby evaluates the receiver first), and the new bytes are written
+   into it (sp_String_set_bin), which every name holding the String sees: a
+   variable, an ivar, self in a reopened String, an element, a call's
+   answer, the temp a `&.` tested, the String a bang on a held chain
+   answers. A String no name holds (a call's fresh answer) is changed in a
+   handle of its own, which nobody else reads.
+
+   Every operand runs once, in Ruby's order -- the receiver, then the
+   arguments left to right -- before any check the method makes (StrMutOp);
+   the checks and conversions then come in the order CRuby makes them,
+   reading the held operands. */
+
+/* Opens `({ sp_String *_t<t> = <the receiver's handle>;` and answers t. A
+   bang on a held chain hands over the handle it answers (emit_held_chain_handle),
+   and a slot its own handle (strbuf_recv_handle_any: a variable's, a
+   captured cell's, a route's over one); any other receiver is the handle
+   of its value (SP_STR_HDL finds the String a payload view belongs to),
+   rooted while the arguments allocate. *nilchk says whether the handle can
+   be nil, for str_mut_nil_check once the arguments ran. */
+static int str_mut_open(Compiler *c, const BopCtx *x, int *nilchk, Buf *b) {
+  int t = ++g_tmp;
+  Buf hb; memset(&hb, 0, sizeof hb);
+  Buf lb; memset(&lb, 0, sizeof lb);
+  int held = !x->rtext && emit_held_chain_handle(c, x->recv, &hb);
+  int hr = x->rtext || held ? 0 : strbuf_recv_handle_any(c, x->id, x->recv, &hb, &lb);
+  buf_printf(b, "({ sp_String *_t%d = SP_STR_HDL(", t);
+  if (x->rtext) buf_puts(b, x->rtext);
+  else if (held || hr) buf_puts(b, lb.p ? lb.p : hb.p ? hb.p : "NULL");
+  else emit_expr(c, x->recv, b);
+  buf_puts(b, ");");
+  free(hb.p); free(lb.p);
+  if (hr != 1) buf_printf(b, " SP_GC_ROOT(_t%d);", t);
+  *nilchk = held || (!hr && repr_of(c, x->recv).may_nil);
+  return t;
+}
+
+/* A nil receiver raises NoMethodError for the row's name, after the
+   arguments ran, as CRuby dispatches */
+static void str_mut_nil_check(const BopCtx *x, int t, int nilchk, Buf *b) {
+  if (nilchk) buf_printf(b, " if (SP_UNLIKELY(!_t%d)) sp_nil_recv_raise(\"%s\");", t, x->op->name);
+}
+
+/* What insert and clear answer, the receiver: the handle where the call's
+   value is kept as one, else its bytes, the payload view every face macro
+   finds the handle of */
+static void str_mut_self_answer(Compiler *c, const BopCtx *x, int t, Buf *b) {
+  if (repr_of(c, x->id).handle) buf_printf(b, " _t%d; })", t);
+  else buf_printf(b, " sp_strbuf_read_pub(_t%d); })", t);
+}
+
+/* An operand of these rows. One that can run code, or read what a later
+   operand can change, is held in _t<t> by hold_operand -- a String as its
+   handle, its bytes taken where they are used; a boxed value, or an index
+   that is not an Integer, boxed -- and an operand held typed is bound to
+   its temp (view_bind), so the emitters below read the temp where they
+   convert it. t < 0 for an operand read where it is used: a literal, one
+   the call's operand order already ran, a pure read no later operand can
+   change. */
+typedef struct { int node, t, boxed; } StrMutOp;
+
+static int str_mut_inert(Compiler *c, int n, int later_effects) {
+  switch (nt_kind(c->nt, n)) {
+  case NK_StringNode: case NK_IntegerNode: case NK_FloatNode: case NK_NilNode: case NK_SymbolNode:
+  case NK_TrueNode: case NK_FalseNode: case NK_RegularExpressionNode:
+  case NK_SplatNode:   /* insert's `*r`, read where the splice takes it (emit_str_insert_text) */
+    return 1;
+  default:
+    return arg_ran_first(n, 0) || (!later_effects && subtree_is_pure_read(c, n));
+  }
+}
+
+/* Holds argv[i] into *o. As an index (as_index), an Integer stays an
+   sp_int and any other value is held boxed, for the conversion CRuby's
+   NUM2LONG makes (str_mut_index); otherwise the operand is held as what it
+   is. */
+static void str_mut_hold(Compiler *c, const int *argv, int argc, int i, int as_index, StrMutOp *o, Buf *b) {
+  int n = argv[i], later = 0;
+  for (int j = i + 1; j < argc; j++) later |= subtree_has_side_effect(c, argv[j]);
+  Repr r = repr_of(c, n);
+  TyKind ty = r.as_ty;
+  int boxed = r.kind == RK_BOXED || ty == TY_POLY || ty == TY_NIL || ty == TY_VOID || ty == TY_UNKNOWN ||
+              yield_site_type(c, n) == TY_POLY;
+  if (as_index && !(ty == TY_INT && !r.nil_scalar && !r.may_nil)) boxed = 1;
+  o->node = n; o->t = -1; o->boxed = boxed;
+  if (str_mut_inert(c, n, later)) return;
+  buf_puts(b, " ");
+  o->t = hold_operand(c, n, boxed ? TY_POLY : ty, boxed, ++g_tmp, 1, "", b);
+  if (!boxed) view_bind(n, "_t%d", o->t);
+}
+
+/* The sp_int index operand o reads as: an Integer as it is; any other
+   value through CRuby's implicit conversion (sp_poly_arg_int_chk: a Float
+   truncated, a #to_int, and nil, a String or a Range CRuby's TypeError) */
+static void str_mut_index(Compiler *c, const StrMutOp *o, Buf *b) {
+  if (o->t >= 0 && o->boxed) buf_printf(b, "sp_poly_arg_int_chk(_t%d)", o->t);
+  else if (!o->boxed) emit_int_expr(c, o->node, b);
+  else { buf_puts(b, "sp_poly_arg_int_chk("); emit_boxed(c, o->node, b); buf_puts(b, ")"); }
+}
+
+/* o's value boxed */
+static void str_mut_boxed(Compiler *c, const StrMutOp *o, Buf *b) {
+  if (o->t >= 0 && o->boxed) buf_printf(b, "_t%d", o->t);
+  else emit_boxed(c, o->node, b);
+}
+
+/* Converts value operand o to the bytes the splice takes, into a rooted
+   `_s<n>`, and answers n: a String as it is, an object by its #to_str, and
+   any other value raises CRuby's TypeError (sp_str_aset_rep, where the
+   String-slot conversion would splice in a Class's or an Encoding's to_s).
+   The caller places it where CRuby converts the value. */
+static int str_mut_convert(Compiler *c, const StrMutOp *o, Buf *b) {
+  int ts = ++g_tmp;
+  /* (an object's #to_str renders here, inline, rooted as _s<ts>: collected
+     into the call's conversion hold (conv_hold_begin), it was declared in
+     front of the row, ahead of the hold of the operand it reads) */
+  ConvHold *hold0 = g_conv_hold;
+  g_conv_hold = NULL;
+  buf_printf(b, " const char *_s%d = ", ts);
+  if (o->boxed) { buf_puts(b, "sp_str_aset_rep("); str_mut_boxed(c, o, b); buf_puts(b, ")"); }
+  else emit_str_insert_text(c, o->node, b);
+  buf_printf(b, "; SP_GC_ROOT_STR(_s%d);", ts);
+  g_conv_hold = hold0;
+  return ts;
+}
+
+
+/* `_t<t>` takes `s` spliced as `splice` (a call over its bytes), which
+   raises its IndexError first; sp_String_set_bin raises FrozenError after
+   it, the order CRuby checks them in for []= and insert */
+static void str_mut_set(Buf *b, int t, const char *splice) {
+  buf_printf(b, " sp_String_set_bin(_t%d, %s);", t, splice);
+}
+
+int emit_op_string_insert(Compiler *c, const BopCtx *x, Buf *b) {
+  int argc;
+  const int *argv = call_args(c->nt, x->id, &argc);
+  int chk, t = str_mut_open(c, x, &chk, b), mark = g_n_argov;
+  StrMutOp a, v;
+  str_mut_hold(c, argv, argc, 0, 1, &a, b);
+  str_mut_hold(c, argv, argc, 1, 0, &v, b);
+  str_mut_nil_check(x, t, chk, b);
+  /* the index converts first (a Float truncated toward zero, anything but
+     an Integer CRuby's TypeError), then the value */
+  int ti = ++g_tmp;
+  buf_printf(b, " sp_int _t%d = ", ti); str_mut_index(c, &a, b); buf_puts(b, ";");
+  int ts = str_mut_convert(c, &v, b);
+  /* insert(i, x): x spliced in at i; -1 appends, and any other negative i
+     counts from the end and inserts after that character (i + 1); an index
+     past the ends raises IndexError */
+  Buf sp; memset(&sp, 0, sizeof sp);
+  buf_printf(&sp, "sp_str_splice_at(sp_String_cstr(_t%d), _t%d == -1 ? (sp_int)sp_str_length(sp_String_cstr(_t%d)) :"
+                  " _t%d < 0 ? _t%d + 1 : _t%d, 0, _s%d, 0)", t, ti, t, ti, ti, ti, ts);
+  str_mut_set(b, t, sp.p);
+  str_mut_self_answer(c, x, t, b);
+  view_unbind(mark);
+  free(sp.p);
+  return 1;
+}
+
+int emit_op_string_clear(Compiler *c, const BopCtx *x, Buf *b) {
+  /* emptied in place (a frozen String raises, an empty one too) */
+  int chk, t = str_mut_open(c, x, &chk, b);
+  str_mut_nil_check(x, t, chk, b);
+  str_mut_set(b, t, "(&(\"\\xff\")[1])");
+  str_mut_self_answer(c, x, t, b);
+  return 1;
+}
+
 int emit_op_string_slice(Compiler *c, const BopCtx *x, Buf *b) {
   int id = x->id, recv = x->recv, argc;
   const int *argv = call_args(c->nt, id, &argc);
@@ -2023,4 +2194,14 @@ int emit_op_string_slice(Compiler *c, const BopCtx *x, Buf *b) {
     return 1;
   }
   return 0;
+}
+
+
+/* See codegen_internal.h. */
+int str_in_place_row(Compiler *c, int id) {
+  const NodeTable *nt = c->nt;
+  const char *name = nt_str(nt, id, "name");
+  int argc;
+  (void)call_args(nt, id, &argc);
+  return name && bop_find_stage(TY_STRING, name, argc, nt_ref(nt, id, "block") >= 0, NULL, NULL, 7) != NULL;
 }

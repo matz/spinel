@@ -286,6 +286,9 @@ static void emit_respond_to_runtime_name(Compiler *c, int id, Buf *b, int recv, 
   }
   buf_puts(b, "NULL})");
   buf_printf(b, ")) || sp_poly_responds_builtin(_t%d, _n%d)", tv, tv);
+  /* a class value: Class's surface, a `class Class` reopening's methods
+     and its own class methods */
+  class_value_responds_runtime(tv, b);
   /* a boxed IO: the methods IO reopenings add, by the handle's kind */
   for (int s2 = 0; s2 < c->nscopes; s2++) {
     Scope *ms = &c->scopes[s2];

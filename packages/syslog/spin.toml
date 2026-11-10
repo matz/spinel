@@ -1,0 +1,6 @@
+[package]
+name = "syslog"
+sources = ["sp_syslog.c"]   # carried C is declared, not discovered (#4362)
+
+# Pre-installed spin package: ships with the compiler, versioned with it.
+# The system log (Syslog), carried in C (sp_syslog.c) over syslog(3).

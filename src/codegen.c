@@ -19543,7 +19543,7 @@ static void scan_prologue_features(Compiler *c) {
           {NULL,NULL} };
         for (int pk = 0; PKG[pk].cls; pk++) {
           if (!sp_streq(nm, PKG[pk].cls)) continue;
-          if (comp_class_index(c, nm) >= 0) break;      /* the program defines it */
+          if (const_node_class_index(c, i) >= 0) break;      /* the program defines it */
           /* ... or defines it under a path: a nested `module Digest` the
              collision qualifier registered as `OpenSSL::Digest` (beside
              activesupport's ActiveSupport::Digest) is what a bare `Digest`

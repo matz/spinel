@@ -649,7 +649,7 @@ static int prog_registration_dropped(Compiler *c, int id) {
     if (k == NK_SingletonClassNode) {
       int x = nt_ref(nt, p, "expression"); NodeKind xk = nt_kind(nt, x);
       if (xk != NK_SelfNode && !((xk == NK_ConstantReadNode || xk == NK_ConstantPathNode) &&
-          comp_class_index(c, nt_str(nt, x, "name")) >= 0)) return 1;
+          const_node_class_index(c, x) >= 0)) return 1;
     }
     if (k == NK_AliasMethodNode || k == NK_UndefNode ||
         (k == NK_DefNode && ch == nt_ref(nt, p, "receiver"))) return 1;

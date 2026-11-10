@@ -6161,7 +6161,7 @@ static int class_set_leaf(const VpLeaf *leaf, void *ud) {
   const NodeTable *nt = k->c->nt;
   if (leaf->kind == VPK_EXPR &&
       (nt_kind(nt, leaf->node) == NK_ConstantReadNode || nt_kind(nt, leaf->node) == NK_ConstantPathNode)) {
-    int ci = comp_class_index(k->c, nt_str(nt, leaf->node, "name"));
+    int ci = const_node_class_index(k->c, leaf->node);
     if (ci >= 0) {
       k->set[ci] = 1;
       return 0;

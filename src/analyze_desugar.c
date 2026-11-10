@@ -135,7 +135,7 @@ int desugar_builtin_class_var_recv(Compiler *c) {
       int val = nt_ref(nt, w, "value");
       const char *vcn = (val >= 0 && nt_kind(nt, val) == NK_ConstantReadNode)
                         ? nt_str(nt, val, "name") : NULL;
-      if (!vcn || !(is_builtin_class_name(vcn) || comp_class_index(c, vcn) >= 0)) { bail = 1; break; }
+      if (!vcn || !(is_builtin_class_name(vcn) || const_node_class_index(c, val) >= 0)) { bail = 1; break; }
       if (cn && !sp_streq(cn, vcn)) { bail = 1; break; }
       cn = vcn;
     }

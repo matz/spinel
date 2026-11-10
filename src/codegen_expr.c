@@ -18,7 +18,7 @@ static int subtree_has_unresolved_const(Compiler *c, int id) {
   if (ty_k == NK_ConstantReadNode) {
     const char *cn = nt_str(c->nt, id, "name");
     if (!cn) return 0;
-    if (comp_const(c, cn) || comp_class_index(c, cn) >= 0) return 0;
+    if (comp_const(c, cn) || const_node_class_index(c, id) >= 0) return 0;
     if (comp_is_wellknown_const(cn)) return 0;
     return 1;
   }

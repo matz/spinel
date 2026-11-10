@@ -401,7 +401,7 @@ static int nf_class_excludes_nil(Compiler *c, int p) {
       sp_streq(k, "Kernel")) return 0;
   /* a builtin class the program does not reopen (String, Hash, Integer):
      nil is no instance of one, but it is of a builtin module */
-  if (comp_class_index(c, k) < 0)
+  if (const_node_class_index(c, av[0]) < 0)
     return ak == NK_ConstantReadNode && is_builtin_class_name(k) && !is_builtin_module_name(k);
   int ndk = 0; const NodeKind *dk = class_def_module_kinds(&ndk);
   for (int dh = 0; dh < ndk; dh++)

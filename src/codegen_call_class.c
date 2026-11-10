@@ -5065,7 +5065,7 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
              so are the modules that module includes and the ones the
              superclasses extend: `Klass.is_a?(M)` is true for exactly those
              classes. Any other target answers false. */
-          int mcid = comp_class_index(c, cn2);
+          int mcid = const_node_class_index(c, argv[0]);
           int any = 0;
           buf_puts(b, "(");
           if (mcid >= 0 && comp_class_is_module(c, &c->classes[mcid]) && !exact)

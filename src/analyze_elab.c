@@ -6259,11 +6259,12 @@ static int lr_call_point(Compiler *c, int id, int cls, LoadPoint *p) {
   *p = elab_point_of(c, id);
   return p->region >= 0 && r->recorded && !r->st[p->seq].kept && !lr_unplaced(c, id) && !lr_chain_open(c, cls);
 }
-/* Does a class-side ask of cls read its instance side too: the tables'
-   side holds the Class reopening's class methods as its instance
-   methods, which every class answers */
-static int lr_class_reopen_side(Compiler *c, int cls, int sg) {
-  return sg && cls >= 0 && cls == comp_core_class(c, CORE_CLASS_REOPEN);
+/* A class-side ask of the Class reopening that finds none on its
+   singleton: the tables' side holds the reopening's class methods as its
+   instance methods (its own and its modules'), which every class answers,
+   so its instance side's answer at p; ELAB_NO for any other class */
+static int lr_class_reopen_side(Compiler *c, int cls, int sg, const char *name, LoadPoint p) {
+  return sg && cls >= 0 && cls == comp_core_class(c, CORE_CLASS_REOPEN) ? elab_method_at(c, cls, name, 0, p, NULL) : ELAB_NO;
 }
 /* Is a none at call id's point p its answer: no method_missing may answer
    it (mm), no code the record cannot follow or supply it cannot order may
@@ -6287,7 +6288,7 @@ int elab_call_method(Compiler *c, int id, int cls, const char *name, int sg, int
      and its singleton's, and the Class reopening's class methods as its
      instance methods (lr_class_reopen_side) */
   if (o == ELAB_NO && cls < 0 && !sg) o = elab_method_at(c, LR_MAIN, name, 1, p, NULL);
-  if (o == ELAB_NO && lr_class_reopen_side(c, cls, sg)) o = elab_method_at(c, cls, name, 0, p, NULL);
+  if (o == ELAB_NO) o = lr_class_reopen_side(c, cls, sg, name, p);
   /* a class's singleton chain passes Object's and BasicObject's singletons
      before Class's instance methods */
   int d0 = cls >= 0 ? c->classes[cls].def_node : -1;
@@ -6309,10 +6310,7 @@ int elab_call_own_method(Compiler *c, int id, int cls, const char *name, int sg)
   int o = lr_own(c, lr_hist(c->lrec, cls, sg, name, 0), p, 0, 0, &d);
   /* (an undef or a removal: that one's answer, as elab_call_method's) */
   if (o == LR_STOP || (o == ELAB_NO && d)) return ELAB_UNKNOWN;
-  if (o == ELAB_NO && lr_class_reopen_side(c, cls, sg)) {
-    o = lr_own(c, lr_hist(c->lrec, cls, 0, name, 0), p, 0, 0, &d);
-    if (o == LR_STOP || (o == ELAB_NO && d)) return ELAB_UNKNOWN;
-  }
+  if (o == ELAB_NO) o = lr_class_reopen_side(c, cls, sg, name, p);
   if (o == ELAB_NO && !lr_none_holds(c, id, cls, sg, name, p, 1)) return ELAB_UNKNOWN;
   return o;
 }

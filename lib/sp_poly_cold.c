@@ -232,6 +232,9 @@ const char *(*sp_class_display_fn)(sp_Class);
 const char *(*sp_class_user_to_s_fn)(sp_Class);
 const char *(*sp_class_user_inspect_fn)(sp_Class);
 const char *(*sp_array_user_inspect_fn)(sp_RbVal);
+/* set while pp prints: CRuby's pp lays out an Array by its own
+   pretty_print, never by the program's Array#inspect */
+int sp_pp_printing;
 /* A boxed Time's to_s (inspect 0) or inspect (1): a Time subclass
    instance's goes through its class's own dispatcher, which runs an
    override of the class's and falls back to Time's. */
@@ -709,6 +712,15 @@ sp_RbVal sp_poly_slice(sp_RbVal a, sp_int start, sp_int len)
   }
 }
 
+/* the inspect pp prints: sp_poly_inspect with the program's own
+   Array#inspect left out, for v and what it holds */
+const char *sp_pp_inspect(sp_RbVal v) {
+  int was = sp_pp_printing;
+  sp_pp_printing = 1;
+  const char *r = sp_poly_inspect(v);
+  sp_pp_printing = was;
+  return r;
+}
 const char *sp_poly_inspect(sp_RbVal v)
 {
   switch (v.tag) {
@@ -724,7 +736,7 @@ const char *sp_poly_inspect(sp_RbVal v)
     case SP_TAG_BIGINT: return sp_bigint_to_s((sp_Bigint *)v.v.p);
     case SP_TAG_OBJ:
       /* an Array of any kind, where the program reopens Array#inspect */
-      if (sp_array_user_inspect_fn && sp_poly_is_array_kind(v.cls_id)) {
+      if (sp_array_user_inspect_fn && !sp_pp_printing && sp_poly_is_array_kind(v.cls_id)) {
         const char *r = sp_array_user_inspect_fn(v);
         if (r) return r;
       }

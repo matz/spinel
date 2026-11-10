@@ -1002,6 +1002,12 @@ int builtin_class_id(const char *name) {
   const BuiltinClass *r = builtin_row(name);
   return r ? r->id : 0;
 }
+/* The cls_id a builtin's class value carries in the program (the id of the
+   constant naming it), -1 for a name the table gives none. */
+int builtin_class_val_id(const char *name) {
+  int id = builtin_class_id(name);
+  return id ? id : -1;
+}
 /* The builtin exception a class's superclass node `sc` names, or NULL. A
    path is read whole first: `class E < Errno::ENOENT` names Errno::ENOENT,
    which its leaf "ENOENT" is not, so the class was taken for a plain object

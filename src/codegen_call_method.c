@@ -472,7 +472,7 @@ static void emit_method_owner_class(Compiler *c, int mn, int mi, int unbound, Bu
   const char *bn;
   int sg, ci = method_owner_ci(c, mn, mi, unbound, &sg, &bn);
   if (ci < 0 && !bn && bam_builtin_sym(c, mi, NULL)) buf_puts(b, "SP_CLASS_NIL");
-  else if (bn || ci < 0) buf_printf(b, "((sp_Class){(sp_int)-1, SPL(\"%s\")})", bn ? bn : "Object");
+  else if (bn || ci < 0) buf_printf(b, "((sp_Class){%d, SPL(\"%s\")})", builtin_class_val_id(bn ? bn : "Object"), bn ? bn : "Object");
   else if (sg) buf_printf(b, "((sp_Class){sp_sclass_id(%d), NULL})", ci);
   else buf_printf(b, "((sp_Class){%d, NULL})", ci);
 }
@@ -1016,7 +1016,7 @@ int emit_op_method_owner(Compiler *c, const BopCtx *x, Buf *b) {
     buf_printf(b, "((void)("); emit_expr_for_effect(c, recv, b);
     buf_puts(b, "), ");
     if (osg) emit_method_owner_class(c, mn, target, unbound, b);
-    else buf_printf(b, "((sp_Class){(sp_int)-1, SPL(\"%s\")})", ocn);
+    else buf_printf(b, "((sp_Class){%d, SPL(\"%s\")})", builtin_class_val_id(ocn), ocn);
     buf_puts(b, ")");
     return 1;
   }
@@ -1034,7 +1034,7 @@ int emit_op_method_owner(Compiler *c, const BopCtx *x, Buf *b) {
       const char *own = builtin_method_owner(mcls, osym);
       if (own) mcls = own;
       buf_printf(b, "((void)("); emit_expr_for_effect(c, recv, b);
-      buf_printf(b, "), ((sp_Class){(sp_int)-1, SPL(\"%s\")}))", mcls);
+      buf_printf(b, "), ((sp_Class){%d, SPL(\"%s\")}))", builtin_class_val_id(mcls), mcls);
       return 1;
     }
   }
@@ -1045,7 +1045,7 @@ int emit_op_method_owner(Compiler *c, const BopCtx *x, Buf *b) {
     if (method_recv_owner_unknown(c, recv)) return 0;
     buf_puts(b, "({ sp_Class _o = sp_bm_owner(");
     emit_expr(c, recv, b);
-    buf_puts(b, "); sp_class_nil_p(_o) ? (sp_Class){(sp_int)-1, SPL(\"Object\")} : _o; })");
+    buf_puts(b, "); sp_class_nil_p(_o) ? (sp_Class){SP_BCLS_OBJECT, SPL(\"Object\")} : _o; })");
     return 1;
   }
   return 0;
@@ -2417,7 +2417,7 @@ static int emit_method_obj_target(Compiler *c, int id, Buf *b, const NodeTable *
       /* (the facts name Array for each of the ops; none answered is nil) */
       const char *aown = builtin_method_owner("Array", sym);
       buf_puts(b, ", NULL, NULL, ");
-      if (aown) buf_printf(b, "((sp_Class){(sp_int)-1, SPL(\"%s\")})", aown);
+      if (aown) buf_printf(b, "((sp_Class){%d, SPL(\"%s\")})", builtin_class_val_id(aown), aown);
       else buf_puts(b, "SP_CLASS_NIL");
       buf_puts(b, ", NULL, (sp_int)0");
     }

@@ -4148,7 +4148,7 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
       /* the builtin above it: the row the generated sp_class_superclass
          table carries, by name for an id-less exception (LoadError) */
       const char *bpn = class_builtin_superclass_name(c, ci);
-      if (bpn) buf_printf(b, "((sp_Class){-1, SPL(\"%s\")})", bpn);
+      if (bpn) buf_printf(b, "((sp_Class){%d, SPL(\"%s\")})", builtin_class_val_id(bpn), bpn);
       else buf_printf(b, "((sp_Class){%d})", class_builtin_superclass(c, ci));
       return 1;
     }
@@ -4184,8 +4184,8 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
     if (rt == TY_MATCHDATA) {
       int tm = ++g_tmp;
       buf_printf(b, "({ sp_MatchData *_t%d = ", tm); emit_expr(c, recv, b);
-      buf_printf(b, "; _t%d ? ((sp_Class){(sp_int)-1, SPL(\"MatchData\")})"
-                    " : ((sp_Class){(sp_int)-1, SPL(\"NilClass\")}); })", tm);
+      buf_printf(b, "; _t%d ? ((sp_Class){SP_BCLS_MATCHDATA, SPL(\"MatchData\")})"
+                    " : ((sp_Class){SP_BCLS_NILCLASS, SPL(\"NilClass\")}); })", tm);
       return 1;
     }
     const char *cn = NULL;
@@ -4205,10 +4205,10 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
          slot's no-match is. */
       int te = ++g_tmp;
       buf_printf(b, "({ sp_Enumerator *_t%d = ", te); emit_expr(c, recv, b);
-      buf_printf(b, "; !_t%d ? ((sp_Class){(sp_int)-1, SPL(\"NilClass\")})"
+      buf_printf(b, "; !_t%d ? ((sp_Class){SP_BCLS_NILCLASS, SPL(\"NilClass\")})"
                     " : _t%d->is_chain ? ((sp_Class){(sp_int)-1, SPL(\"Enumerator::Chain\")})"
                     " : _t%d->is_product ? ((sp_Class){(sp_int)-1, SPL(\"Enumerator::Product\")})"
-                    " : ((sp_Class){(sp_int)-1, SPL(\"Enumerator\")}); })", te, te, te);
+                    " : ((sp_Class){SP_BCLS_ENUMERATOR, SPL(\"Enumerator\")}); })", te, te, te);
       return 1;
     }
     case TY_DIR: cn = "Dir"; break;
@@ -4226,7 +4226,7 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
       /* a NULL slot is nil, whose class is NilClass */
       if (node_may_be_null_nil(c, recv))
         buf_printf(b, "; _t%d ? ((sp_Class){(sp_int)%d, sp_Queue_class_name(_t%d)})"
-                      " : ((sp_Class){(sp_int)-1, SPL(\"NilClass\")}); })",
+                      " : ((sp_Class){SP_BCLS_NILCLASS, SPL(\"NilClass\")}); })",
                    tq2, builtin_class_id("Queue"), tq2);
       else
         buf_printf(b, "; ((sp_Class){(sp_int)%d, sp_Queue_class_name(_t%d)}); })",
@@ -4288,7 +4288,7 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
       const char *_ocn = _cidx >= 0 && _cidx < c->nclasses ? c->classes[_cidx].name : NULL;
       if (_ocn && (is_object_base_name(_ocn))) {
         buf_puts(b, "((void)("); emit_expr_for_effect(c, recv, b);
-        buf_printf(b, "), ((sp_Class){(sp_int)-1, SPL(\"%s\")}))", _ocn);
+        buf_printf(b, "), ((sp_Class){%d, SPL(\"%s\")}))", builtin_class_val_id(_ocn), _ocn);
         return 1;
       }
       /* a native-bound class's struct is opaque in the generated TU (no
@@ -4313,7 +4313,7 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
         buf_puts(g_pre, _eb.p ? _eb.p : ""); buf_puts(g_pre, ";\n"); free(_eb.p);
         /* by its own id (sp_user_exc_class), so #superclass and #ancestors
            walk the user chain */
-        buf_printf(b, "(_t%d ? sp_user_exc_class(sp_exc_class_name((sp_Exception *)_t%d)) : ((sp_Class){(sp_int)-1, SPL(\"NilClass\")}))", _texc, _texc);
+        buf_printf(b, "(_t%d ? sp_user_exc_class(sp_exc_class_name((sp_Exception *)_t%d)) : ((sp_Class){SP_BCLS_NILCLASS, SPL(\"NilClass\")}))", _texc, _texc);
         return 1;
       }
       int _tobj = ++g_tmp;
@@ -4343,11 +4343,11 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
       if (node_has_oint_form(c, recv)) {
         int tcv = ++g_tmp;
         buf_printf(b, "({ %s _t%d = ", oint_ctype(rt), tcv); emit_oint_expr(c, recv, rt, b);
-        buf_printf(b, "; ((sp_Class){(sp_int)-1, _t%d.nil ? SPL(\"NilClass\") : SPL(\"%s\")}); })", tcv, cls);
+        buf_printf(b, "; ((sp_Class){_t%d.nil ? SP_BCLS_NILCLASS : %d, _t%d.nil ? SPL(\"NilClass\") : SPL(\"%s\")}); })", tcv, builtin_class_val_id(cls), tcv, cls);
       }
       else {
         buf_puts(b, "({ (void)("); emit_expr_for_effect(c, recv, b);
-        buf_printf(b, "); ((sp_Class){(sp_int)-1, SPL(\"%s\")}); })", cls);
+        buf_printf(b, "); ((sp_Class){%d, SPL(\"%s\")}); })", builtin_class_val_id(cls), cls);
       }
       return 1;
     }
@@ -4356,8 +4356,8 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
       int tcv = ++g_tmp;
       Buf crb = expr_buf(c, recv);
       buf_puts(b, "({ "); emit_ctype(c, rt, b);
-      buf_printf(b, " _t%d = %s; ((sp_Class){(sp_int)-1, _t%d ? SPL(\"%s\") : SPL(\"NilClass\")}); })",
-                 tcv, crb.p ? crb.p : "0", tcv, cn);
+      buf_printf(b, " _t%d = %s; ((sp_Class){_t%d ? %d : SP_BCLS_NILCLASS, _t%d ? SPL(\"%s\") : SPL(\"NilClass\")}); })",
+                 tcv, crb.p ? crb.p : "0", tcv, builtin_class_val_id(cn), tcv, cn);
       free(crb.p);
       return 1;
     }
@@ -4365,12 +4365,12 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
       /* a first-class name-backed Class value; the receiver is side-effect-
          evaluated when it is not a plain read */
       buf_puts(b, "((void)("); emit_expr_for_effect(c, recv, b);
-      buf_printf(b, "), ((sp_Class){(sp_int)-1, SPL(\"%s\")}))", cn);
+      buf_printf(b, "), ((sp_Class){%d, SPL(\"%s\")}))", builtin_class_val_id(cn), cn);
       return 1;
     }
     if (rt == TY_BOOL) {
       buf_puts(b, "(("); emit_expr(c, recv, b);
-      buf_puts(b, ") ? ((sp_Class){(sp_int)-1, SPL(\"TrueClass\")}) : ((sp_Class){(sp_int)-1, SPL(\"FalseClass\")}))");
+      buf_puts(b, ") ? ((sp_Class){SP_BCLS_TRUECLASS, SPL(\"TrueClass\")}) : ((sp_Class){SP_BCLS_FALSECLASS, SPL(\"FalseClass\")}))");
       return 1;
     }
     if (rt == TY_POLY) {
@@ -4602,8 +4602,8 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
     if (sp_streq(name, "class")) {
       buf_printf(b, "({ sp_Class _cl%da = ", _clt); emit_expr(c, recv, b);
       buf_printf(b, "; sp_class_is_module_val(_cl%da)"
-                    "?((sp_Class){(sp_int)-1, SPL(\"Module\")})"
-                    ":((sp_Class){(sp_int)-1, SPL(\"Class\")}); })", _clt);
+                    "?((sp_Class){SP_BCLS_MODULE, SPL(\"Module\")})"
+                    ":((sp_Class){SP_BCLS_CLASS, SPL(\"Class\")}); })", _clt);
       return 1;
     }
     if (sp_streq(name, "superclass") && argc == 0) {

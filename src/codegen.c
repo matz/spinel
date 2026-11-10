@@ -20905,8 +20905,8 @@ static void emit_class_machinery(const NodeTable *nt, Compiler *c, Buf *b, char 
         buf_printf(b, "  case %d: return ((sp_Class){%d});\n", i, par);
       }
       else if (class_builtin_superclass_name(c, i)) {
-        buf_printf(b, "  case %d: return ((sp_Class){-1, SPL(\"%s\")});\n", i,
-                   class_builtin_superclass_name(c, i));
+        buf_printf(b, "  case %d: return ((sp_Class){%d, SPL(\"%s\")});\n", i,
+                   builtin_class_val_id(class_builtin_superclass_name(c, i)), class_builtin_superclass_name(c, i));
       }
       else {
         buf_printf(b, "  case %d: return ((sp_Class){%d});\n", i, class_builtin_superclass(c, i));

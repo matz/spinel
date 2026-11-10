@@ -3561,7 +3561,7 @@ static int emit_constant_value(Compiler *c, int id, Buf *b, Buf *checks, const N
              OpenStruct): a name-backed Class value -- sp_class_eq and the
              boxed form both compare by name, and an instance's #class
              answers the same (`Random.new.class`) */
-          buf_printf(b, "((sp_Class){(sp_int)-1, SPL(\"%s\")})", nm);
+          buf_printf(b, "((sp_Class){%d, SPL(\"%s\")})", builtin_class_val_id(nm), nm);
         }
         else {
           /* A constant defined NOWHERE in the program: spinel is closed-world
@@ -3624,7 +3624,7 @@ static int emit_constant_value(Compiler *c, int id, Buf *b, Buf *checks, const N
       /* the Errno:: family (and its id-less siblings) is a name-backed
          Class value; raised exceptions carry this same qualified name */
       if (is_builtin_exception_name(qbuf)) {
-        buf_printf(b, "((sp_Class){(sp_int)-1, SPL(\"%s\")})", qbuf);
+        buf_printf(b, "((sp_Class){%d, SPL(\"%s\")})", builtin_class_val_id(qbuf), qbuf);
         return 1;
       }
     }
@@ -3949,7 +3949,7 @@ static int emit_constant_value(Compiler *c, int id, Buf *b, Buf *checks, const N
          (Enumerator::Chain): the name-backed value the bare form above
          gives Random or Process */
       if (is_builtin_class_name(fullname) || is_builtin_module_name(fullname)) {
-        buf_printf(b, "((sp_Class){(sp_int)-1, SPL(\"%s\")})", fullname);
+        buf_printf(b, "((sp_Class){%d, SPL(\"%s\")})", builtin_class_val_id(fullname), fullname);
         return 1;
       }
       if (!const_ref_is_rescued(c, id) && !const_ref_is_guarded(c, id))

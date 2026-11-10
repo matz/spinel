@@ -176,8 +176,8 @@ static void cplan_root_reopen(Compiler *c, int call, const char *name, const cha
   int rci = comp_core_class(c, root);
   int mi = rci >= 0 ? call_target(c, call, rci, name, 0, NULL) : -1;
   /* Where the builtin has the name, the program's def answers only if the
-     load record has it live at the call: a def under a condition that does
-     not run, or one with several versions, keeps the builtin's. */
+     load record has it live at the call: a def under any condition, one that
+     runs or not, keeps the builtin's. */
   if (mi >= 0 && c->scopes[mi].class_id >= 0 && builtin_answers_ahead_of(cls, name, NULL) &&
       elab_method_at(c, c->scopes[mi].class_id, name, 0, elab_point_of(c, call), NULL) != ELAB_YES) return;
   /* (Object's lookup also finds its modules' methods and the top level's,
@@ -224,7 +224,11 @@ const CallPlan *cplan_root_reopen_call(Compiler *c, int id, const CallPlan *p) {
      One no builtin has is typed by the program's method, as before. */
   int mc = c->scopes[p->mi].class_id;
   if (mc < 0) return NULL;
-  if ((exc || builtin_answers_ahead_of("Object", name, NULL)) && comp_method_vis_declared(c, mc, name, NULL) != SP_VIS_PUBLIC) return NULL;
+  if (exc || builtin_answers_ahead_of("Object", name, NULL)) {
+    /* (the visibility at the call, which a later `public` or `private` does not change) */
+    int vis = elab_method_vis_at(c, mc, name, 0, elab_point_of(c, id));
+    if ((vis < 0 ? comp_method_vis_declared(c, mc, name, NULL) : vis) != SP_VIS_PUBLIC) return NULL;
+  }
   return p;
 }
 

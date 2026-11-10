@@ -84,6 +84,8 @@ src/analyze_util.c io_reopen_defs a name's presence in an IO reopening
 src/analyze_util.c io_reopen_ret_mixed a name's presence in an IO reopening
 src/codegen.c exc_class_defines a name's presence on an exception class
 src/codegen_call.c any_class_defines a name's presence
+src/codegen_call.c emit_class_value_responds_helper comp_cmethod_in_chain each class's own class methods, for respond_to? with a run-time name
+src/codegen_call.c emit_reopen_arm_test comp_cmethod_in_chain which classes define a class Class reopening's name otherwise
 src/codegen_call.c class_method_named a name's presence as a class method
 src/codegen_call.c diag_user_defines a name's presence
 src/codegen_call.c exc_subclass_defines a name's presence on an exception class

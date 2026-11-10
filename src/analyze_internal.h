@@ -84,7 +84,6 @@ const char *method_sym_arg(Compiler *c, int node);
 int is_method_obj_call(Compiler *c, int node);
 int method_user_override_recv(Compiler *c, int node);
 int method_obj_target_mi(Compiler *c, int node);
-int method_super_target(Compiler *c, int mi);
 int method_obj_alias_owner(Compiler *c, int node, int *sg);
 int method_recv_node(Compiler *c, int recv);
 int method_recv_nodes(Compiler *c, int recv, int **out);
@@ -682,7 +681,6 @@ int block_sites(Compiler *c, int si, const int **sites);
 int block_site_args(Compiler *c, int si, int site, int call);
 int method_obj_block_sites_each(Compiler *c, int ymi, int call, int depth,
                                 int (*visit)(Compiler *, int, const int *, int, void *), void *ctx);
-int a_super_target(Compiler *c, Scope *m);
 int a_is_fiber_or_gen_create(Compiler *c, int id);   /* analyze.c */
 /* A block's (or a proc literal's) parameters as its binders count them:
    P leading requireds, O optionals, Q posts, R a rest marker (`*r`, `*`,

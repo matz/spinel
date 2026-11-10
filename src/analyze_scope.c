@@ -481,8 +481,7 @@ void refuse_super_init_value(Compiler *c) {
       Scope *s0 = comp_scope_of(c, v);
       const Scope *s = s0 ? comp_super_site(c, s0) : NULL;
       if (!s || s->is_cmethod || s->class_id < 0 || !s->name || !sp_streq(s->name, "initialize")) continue;
-      int pc = comp_super_parent(c, s->class_id, 0);
-      if (pc < 0 || comp_method_in_chain(c, pc, "initialize", NULL) < 0) continue;
+      if (cplan_super_target(c, v, s0, NULL) < 0) continue;
       if (!par) {   /* each node's parent, built once a candidate turns up */
         par = malloc(sizeof(int) * (size_t)(nt->count > 0 ? nt->count : 1));
         for (int n = 0; n < nt->count; n++) par[n] = -1;
@@ -9983,8 +9982,9 @@ static void specialize_super_cmethod(Compiler *c, int own, int snap) {
   int cur = own;
   for (int depth = 0; depth < 32; depth++) {
     int par = comp_super_parent(c, from, 1);
-    int pdef = -1;
-    int pm = par >= 0 ? comp_cmethod_in_chain(c, par, own_name, &pdef) : -1;
+    MethodLookup ml = { .def_class = -1 };
+    int pm = par >= 0 ? call_target(c, -1, par, own_name, CT_CMETHOD | CT_REACH, &ml) : -1;
+    int pdef = pm >= 0 ? ml.def_class : -1;
     if (pm < 0 || pdef < 0 || !cmethod_reaches_class_ivar(c, pm, pdef, 0)) break;
     char behind[256];
     snprintf(behind, sizeof behind, "__inc %d %s", c->classes[ci].prep_shadow_count++, own_name);

@@ -20568,7 +20568,7 @@ static int method_block_values(Compiler *c, int mi, int depth) {
                           bpn, -1, &calls, &reads, &sups);
   if (n == -2 || reads != calls) return -2;
   if (sups > 0) {
-    int m = method_block_values(c, a_super_target(c, ms), depth + 1);
+    int m = method_block_values(c, cplan_super_target(c, -1, ms, NULL), depth + 1);
     if (m == -2 || (n >= 0 && m >= 0 && n != m)) return -2;
     if (m >= 0) n = m;
   }
@@ -20585,7 +20585,7 @@ static int user_block_values(Compiler *c, int id) {
   int sup = nt_kind(nt, id) == NK_SuperNode;
   if ((!sup && nt_kind(nt, id) != NK_CallNode) || (nm && strncmp(nm, "__enum_", 7) == 0)) return -1;
   Scope *in = sup ? comp_scope_of(c, id) : NULL;
-  int mi = sup ? (in ? a_super_target(c, in) : -1) : backprop_call_target(c, id);
+  int mi = sup ? (in ? cplan_super_target(c, id, in, NULL) : -1) : backprop_call_target(c, id);
   if (mi < 0 || mi >= c->nscopes) return -1;
   int n = method_block_values(c, mi, 0);
   return n >= 2 && n <= 8 ? n : 0;

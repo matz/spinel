@@ -13279,10 +13279,10 @@ int super_reaches_exc_text(Compiler *c, int id, int reopen) {
   if (!s || s->class_id < 0 || !s->name || s->is_cmethod || comp_super_shadow(c, s) ||
       !class_is_exc_subclass(c, s->class_id))
     return 0;
-  int p = comp_super_parent(c, s->class_id, 0);
-  const char *uname = comp_super_name(c, p, s);
-  if (!uname || !is_exception_message(uname) || (p >= 0 && comp_method_in_chain(c, p, uname, NULL) >= 0))
-    return 0;
+  MethodLookup ml = { .def_class = -1 };
+  if (cplan_super_target(c, id, s0, &ml) >= 0) return 0;
+  const char *uname = comp_super_name(c, ml.from, s);
+  if (!uname || !is_exception_message(uname)) return 0;
   int xr[8], xn = reopen ? exc_reopen_definers(c, uname, xr, 8) : 0;
   for (int q = 0; q < xn; q++)
     if (xr[q] != s->class_id) return 0;

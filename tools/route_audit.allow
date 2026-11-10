@@ -151,7 +151,6 @@ src/codegen_util.c exc_text_override_calls_super message / to_s
 
 # a scope's own name, super from its def's name
 src/analyze.c a_block_forwarded_to_proc =u super, by its def's name
-src/analyze.c a_super_target super, by its def's name
 src/analyze.c an_presence_observe a scope's own name
 src/analyze.c an_super_object_text super, by its def's name
 src/analyze.c an_super_struct_text super, by its def's name
@@ -161,7 +160,6 @@ src/analyze.c dyn_site_may_reach a scope's own name
 src/analyze.c dyn_site_misses a scope's own name
 src/analyze.c inline_replacing_def a scope's own name
 src/analyze.c iter_disc_self_targets =cur->name a scope's own name
-src/analyze.c super_parent_method =sn super, by its def's name
 src/analyze.c pf_in_class_dispatch a scope's own name
 src/analyze.c pf_scope_named a scope's own name
 src/analyze.c pf_wanted a scope's own name
@@ -202,7 +200,6 @@ src/codegen.c ext_emit_attr_rows whether a def answers an attr's name (--ext-cla
 src/codegen.c ext_emit_method_tables the class that defines an exported method's name (--ext-class)
 src/codegen_call_class.c emit_respond_to_runtime_name =c->scopes[s].name a scope's own name
 src/codegen_expr.c defined_super_reaches super, by its def's name
-src/codegen_util.c ivs_super_method super, by its def's name
 src/codegen_util.c proc_form_source a proc form's source method, by its own name
 src/codegen_util.c scope_proc_form_of a scope's own proc-form clone, by its own name
 src/codegen_util.c mc_number_versions whether Object has a top-level function of a main method's own name, which would share its C name
@@ -219,7 +216,6 @@ src/analyze_scope.c pivs_callable_lit a Symbol argument's method
 src/analyze_util.c class_value_bind_call_gap a Symbol argument's method
 src/analyze_util.c class_value_bind_call_target a Symbol argument's method
 src/analyze_util.c method_obj_lookup a Method object's method
-src/analyze_util.c method_super_target super_method: the Method's def's own name, a step up its owner
 src/analyze_util.c ext_method_exported the method a class answers for an exported name (--ext-class)
 src/codegen_call.c class_responds_to a Symbol argument's method (respond_to?)
 src/codegen_call.c method_hidden_from_reflection a reflected method's name

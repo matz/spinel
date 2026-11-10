@@ -15604,6 +15604,14 @@ static void emit_super_block_arg(Compiler *c, int id, Scope *s, Scope *pm, int l
   else if (s->yields && g_yield_proc_ref) buf_puts(b, g_yield_proc_ref);
   else buf_puts(b, "NULL");
 }
+/* emit_super's target from the super's plan (call_plan.c), or -1. The plan
+   started its lookup where the super does (cplan_super_target), so there is
+   no start to compare. A miss selects the existing builtin or error
+   rendering. */
+static int super_plan_mi(Compiler *c, int id) {
+  const CallPlan *spl = cplan_user(c, id);
+  return spl->via == UC_SUPER ? spl->mi : -1;
+}
 
 /* Inline super { block } when the parent method uses yield.
    Returns 1 if the expansion was emitted, 0 if it should fall through to a
@@ -15612,7 +15620,7 @@ int emit_super_inline(Compiler *c, int id, Buf *b, int indent, int as_expr) {
   if (g_plan_check) ucall_emitted(id);
   Scope *s = comp_scope_of(c, id);
   if (s->class_id < 0 || !s->name) return 0;
-  refuse_super_splat(c, id, a_super_target(c, s));
+  refuse_super_splat(c, id, super_plan_mi(c, id));
   const Scope *st = comp_super_site(c, s);
   int p = comp_super_parent(c, st->class_id, st->is_cmethod);
   int defcls = -1;
@@ -16052,15 +16060,6 @@ static int struct_super_handle_arg(Compiler *c, int v, Buf *b) {
   return 1;
 }
 
-/* emit_super's target from the super's plan (call_plan.c), or -1. The plan
-   started its lookup where the super does (cplan_super_target), so there is
-   no start to compare. A miss selects the existing builtin or error
-   rendering. */
-static int super_plan_mi(Compiler *c, int id) {
-  const CallPlan *spl = cplan_user(c, id);
-  return spl->via == UC_SUPER ? spl->mi : -1;
-}
-
 /* self, boxed, in a method of class `cls`: a builtin's reopening holds it
    as the builtin's own C value (emit_method_signature) -- a double for a
    Float, the sp_RbVal already for an Array or Object -- and an ordinary
@@ -16263,8 +16262,7 @@ void emit_super(Compiler *c, int id, Buf *b) {
   refuse_from_plan(c, id, CRF_LIMIT, "super-refusal");
   if (repr_of(c, id).demand && repr_call_returns_handle(c, id) && emit_strbuf_route(c, id, b)) return;
   if (g_plan_check) ucall_emitted(id);
-  { Scope *ss = comp_scope_of(c, id);
-    if (ss && ss->class_id >= 0 && ss->name) refuse_super_splat(c, id, a_super_target(c, ss)); }
+  refuse_super_splat(c, id, super_plan_mi(c, id));
   Scope *s = comp_scope_of(c, id);
   if (s->class_id < 0 || !s->name) { unsupported(c, id, "super (not in a method)"); return; }
   /* `def inspect = super` / `def to_s = super` reaching Kernel's: the default

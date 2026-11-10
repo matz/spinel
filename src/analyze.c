@@ -25453,7 +25453,7 @@ static int strbuf_super_ret_walk(Compiler *c, int mi, int v, int blk, int depth,
   if (v < 0 || (nt_kind(nt, v) != NK_SuperNode && nt_kind(nt, v) != NK_ForwardingSuperNode))
     return -1;
   Scope *m = &c->scopes[mi];
-  int t = m->class_id >= 0 ? a_super_target(c, m) : -1;
+  int t = m->class_id >= 0 ? cplan_super_target(c, v, m, NULL) : -1;
   if (t < 0 || t == mi) return 0;
   int sb = nt_ref(nt, v, "block");
   return strbuf_method_ret_source_walk(c, t, sb >= 0 && nt_kind(nt, sb) == NK_BlockNode ? sb : blk, depth + 1, mode);
@@ -27270,9 +27270,8 @@ int an_super_object_text(Compiler *c, int n, int mi) {
       ci->is_native_class || ci->nsub_root > 0 ||
       comp_ary_root(c, cid) >= 0 || class_inherits_builtin_exception(c, cid) || class_is_exc_subclass(c, cid))
     return 0;
-  if (ci->parent >= 0 && comp_method_in_chain(c, ci->parent, nm, NULL) >= 0) return 0;
-  /* (an included module's method, or an Object reopening's, is the call
-     plan's target) */
+  /* (a method of an ancestor, an included module's, or an Object
+     reopening's, is the call plan's target) */
   return cplan_user_fresh(c, n)->mi < 0;
 }
 /* The same super in a Struct or Data class's own inspect or to_s, where no
@@ -27291,8 +27290,7 @@ int an_super_struct_text(Compiler *c, int n, int mi) {
   if (k == NK_SuperNode && nt_ref(c->nt, n, "arguments") >= 0) return 0;
   ClassInfo *ci = &c->classes[s->class_id];
   if (!ci->is_struct || comp_class_is_module(c, ci)) return 0;
-  if (ci->parent >= 0 && comp_method_in_chain(c, ci->parent, nm, NULL) >= 0) return 0;
-  /* (an included module's method is the call plan's target) */
+  /* (a method of an ancestor or an included module's is the call plan's target) */
   return cplan_user_fresh(c, n)->mi < 0;
 }
 /* Method mi is decided: yes or no, and for the handle walk its field. */
@@ -30779,7 +30777,7 @@ static int pull_args_into_handle_params(Compiler *c,
       if (nt_kind(nt, q) != sk) continue;
       Scope *s = comp_scope_of(c, q);
       if (!s || !s->name || s->class_id < 0) continue;
-      int mi = a_super_target(c, s);
+      int mi = cplan_super_target(c, q, s, NULL);
       if (mi < 0) continue;
       Scope *pm = &c->scopes[mi];
       for (int j = 0; j < pm->nparams; j++) {
@@ -32737,7 +32735,7 @@ static unsigned ctor_append_scan(Compiler *c, int mi, unsigned *kept_out) {
       }
     }
   }
-  int pi = m->class_id >= 0 ? a_super_target(c, m) : -1;
+  int pi = m->class_id >= 0 ? cplan_super_target(c, -1, m, NULL) : -1;
   if (pi < 0 || !c->scopes[pi].name || !sp_streq(c->scopes[pi].name, "initialize")) return app;
   Scope *pm = &c->scopes[pi];
   int ph = 0;
@@ -32980,7 +32978,7 @@ static int ctor_pull_args(Compiler *c) {
   for (int q = comp_kind_first(c, NK_SuperNode); q >= 0; q = comp_kind_next(c, q)) {
     if (nt_kind(nt, q) != NK_SuperNode) continue;
     Scope *s = comp_scope_of(c, q);
-    int pi = s && s->name && sp_streq(s->name, "initialize") && s->class_id >= 0 ? a_super_target(c, s) : -1;
+    int pi = s && s->name && sp_streq(s->name, "initialize") && s->class_id >= 0 ? cplan_super_target(c, q, s, NULL) : -1;
     if (pi < 0) continue;
     Scope *pm = &c->scopes[pi];
     for (int j = 0; j < pm->nparams && j < DYN_ARGS; j++) {
@@ -34461,7 +34459,7 @@ static int promote_spread_string_args(Compiler *c) {
     const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &ac) : NULL;
     int splat = nt_argv_has_splat(nt, av, ac);
     Scope *ss = splat ? comp_scope_of(c, n) : NULL;
-    int mi = ss && ss->class_id >= 0 && ss->name ? a_super_target(c, ss) : -1;
+    int mi = ss && ss->class_id >= 0 && ss->name ? cplan_super_target(c, n, ss, NULL) : -1;
     if (mi < 0) continue;
     Scope *m = &c->scopes[mi];
     for (int pj = 0; pj < m->nparams && pj < 31; pj++) {
@@ -34488,30 +34486,6 @@ static int promote_spread_string_args(Compiler *c) {
   free(rest_from);
   dyn_memo_stale();
   return changed;
-}
-
-/* The method a `super` with arguments in scope s reaches in the parent
-   chain, under the name its def gives, or -1. */
-static int super_parent_method(Compiler *c, Scope *s) {
-  const Scope *st = comp_super_site(c, s);
-  int sp = comp_super_parent(c, st->class_id, st->is_cmethod);
-  const char *sn = sp >= 0 ? comp_super_name(c, sp, st) : NULL;
-  if (!sn) return -1;
-  return st->is_cmethod ? comp_cmethod_in_chain(c, sp, sn, NULL) : comp_method_in_chain(c, sp, sn, NULL);
-}
-
-/* The method a `super` in scope `m` calls, or -1. */
-int a_super_target(Compiler *c, Scope *m0) {
-  const Scope *m = comp_super_site(c, m0);
-  const char *shadow = comp_super_shadow(c, m);
-  if (shadow) return m->is_cmethod ? comp_cmethod_in_class(c, m->class_id, shadow)
-                                   : comp_method_in_class(c, m->class_id, shadow);
-  if (m->class_id < 0) return -1; /* a top-level def: no class, so no superclass method */
-  int p = c->classes[m->class_id].parent;
-  if (p < 0) return -1;
-  const char *u = comp_scope_user_name(m);
-  return m->is_cmethod ? comp_cmethod_in_chain(c, p, u, NULL)
-                       : comp_method_in_chain(c, p, u, NULL);
 }
 
 /* Whether a `super` in scope `m` passes m's own block on: a bare `super`, one
@@ -34764,7 +34738,7 @@ static unsigned fwd_rest_bits_once(Compiler *c, int mi, const char *rn) {
     for (int q = comp_kind_first(c, sk); q >= 0; q = comp_kind_next(c, q)) {
       if (nt_kind(nt, q) != sk || comp_scope_of(c, q) != m) continue;
       int p = pass ? m->rest_idx : fwd_splat_start(c, q, rn);
-      int t = p >= 0 ? a_super_target(c, m) : -1;
+      int t = p >= 0 ? cplan_super_target(c, q, m, NULL) : -1;
       for (int i = 0; t >= 0 && i < 16; i++)
         if (fwd_param_appends(c, t, p + i, 0)) bits |= 1u << i;
       if (t >= 0) bits |= fwd_rest_past(c, t, p);
@@ -34783,7 +34757,7 @@ static int fwd_poly_param_handed_on(Compiler *c, int mi, int pj, int depth) {
   Scope *m = &c->scopes[mi];
   if (pj < 0 || pj >= m->nparams || !m->pnames[pj]) return 0;
   const char *pn = m->pnames[pj];
-  int t = m->class_id >= 0 ? a_super_target(c, m) : -1;
+  int t = m->class_id >= 0 ? cplan_super_target(c, -1, m, NULL) : -1;
   if (t >= 0) {
     Scope *tm = &c->scopes[t];
     for (int q = comp_kind_first(c, NK_ForwardingSuperNode); q >= 0; q = comp_kind_next(c, q)) {
@@ -34888,7 +34862,7 @@ static int fwd_super_string_params(Compiler *c) {
     for (int q = comp_kind_first(c, sk); q >= 0; q = comp_kind_next(c, q)) {
       if (nt_kind(nt, q) != sk) continue;
       Scope *m = comp_scope_of(c, q);
-      int t = m && m->name && m->class_id >= 0 ? a_super_target(c, m) : -1;
+      int t = m && m->name && m->class_id >= 0 ? cplan_super_target(c, q, m, NULL) : -1;
       if (t < 0) continue;
       Scope *tm = &c->scopes[t];
       for (int j = 0; j < tm->nparams && j < 32; j++) {
@@ -39503,7 +39477,7 @@ int nullable_int_value(Compiler *c, int v) {
      `super(&proc { nil })`) with a nil-capable tail */
   if (nt_kind(nt, v) == NK_SuperNode || nt_kind(nt, v) == NK_ForwardingSuperNode) {
     Scope *ss = comp_scope_of(c, v);
-    int tmi = ss ? a_super_target(c, ss) : -1;
+    int tmi = ss ? cplan_super_target(c, v, ss, NULL) : -1;
     if (tmi >= 0 && c->scopes[tmi].ret_nullable_int) return 1;
     int blk = nt_ref(nt, v, "block"), bb = -1;
     if (blk >= 0 && nt_kind(nt, blk) == NK_BlockNode) bb = nt_ref(nt, blk, "body");
@@ -42665,13 +42639,13 @@ static void mark_nullable_int_locals(Compiler *c) {
     NT_FOREACH_KIND(nt, NK_SuperNode, id) {
       Scope *ss = comp_scope_of(c, id);
       if (!ss || ss->class_id < 0 || !ss->name || comp_super_is_class_new(c, id)) continue;
-      int smi = super_parent_method(c, ss);
+      int smi = cplan_super_target(c, id, ss, NULL);
       if (smi >= 0) changed |= mark_nullable_params_of_call(c, id, smi);
     }
     NT_FOREACH_KIND(nt, NK_ForwardingSuperNode, id) {
       Scope *ss = comp_scope_of(c, id);
       if (!ss || ss->class_id < 0 || !ss->name || comp_super_is_class_new(c, id)) continue;
-      int smi = a_super_target(c, ss);
+      int smi = cplan_super_target(c, id, ss, NULL);
       if (smi >= 0) changed |= mark_nullable_params_of_zsuper(c, id, smi);
     }
     /* A BLOCK parameter bound from such a value: the sites that bind the
@@ -49954,7 +49928,7 @@ static void an_phase_block_inline(Compiler *c) {
     /* `super`, bare or with `&blk`, hands this method's block to the parent
        method, which may keep it: an edge like a forward into a user method. */
     if (!escapes && uses > 0 && m->class_id >= 0 && m->name) {
-      int sm = a_super_target(c, m);
+      int sm = cplan_super_target(c, -1, m, NULL);
       Scope *ss = sm >= 0 ? &c->scopes[sm] : NULL;
       if (ss && ss->blk_param && ss->blk_param[0] && a_scope_super_passes_block(c, m)) {
         fwd_edge_add(&fwd_from, &fwd_to, &nfwd, &cfwd, mi, sm);

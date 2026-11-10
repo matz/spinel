@@ -1306,7 +1306,6 @@ const char *block_param_multi_leaf(Compiler *c, int block, int idx, int leaf_idx
 const char *method_sym_arg(Compiler *c, int node);   /* :sym arg name, or NULL */
 int is_method_obj_call(Compiler *c, int node);        /* is node a method(:sym) call? */
 int method_obj_target_mi(Compiler *c, int node);      /* target method scope idx, or -1 */
-int method_super_target(Compiler *c, int mi);         /* the scope <m>.super_method answers, or -1 */
 int method_obj_alias_owner(Compiler *c, int node, int *sg); /* the class an alias it names was made in, or -1 */
 /* The class whose chain a `method(:sym)` node's lookup searched: its
    receiver's (a constant's, self's, an object's class), which a Method of a

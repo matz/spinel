@@ -4053,12 +4053,14 @@ static int defined_super_reaches(Compiler *c, int sup) {
   int mod = comp_class_is_module(c, (ClassInfo *)ci);
   if (mod && !s->is_cmethod) return -1;   /* its includer's chain decides */
   const Scope *st = comp_super_site(c, s);
+  MethodLookup ml = { .def_class = -1 };
+  int mi = cplan_super_target(c, sup, s, &ml);
   if (comp_super_shadow(c, st)) return 1;
-  int p = comp_super_parent(c, st->class_id, st->is_cmethod);
+  const int p = ml.from;
   const char *u = comp_super_name(c, p, st);
   if (!u) return -1;
   if (s->is_cmethod) {
-    if (p >= 0 && comp_cmethod_in_chain(c, p, u, NULL) >= 0) return 1;
+    if (mi >= 0) return 1;
     if (core_method_vis(mod ? "Module" : "Class", u, 1, NULL) > 0) return 1;
     int root = s->class_id;
     while (c->classes[root].parent >= 0) root = c->classes[root].parent;
@@ -4072,8 +4074,7 @@ static int defined_super_reaches(Compiler *c, int sup) {
   /* an ancestor that undefs the name ahead of any definition: the super
      reaches nothing (`undef :test` in the superclass) */
   if (p >= 0 && comp_is_undeffed_in_chain(c, p, u)) return 0;
-  if (p >= 0 && (comp_method_in_chain(c, p, u, NULL) >= 0 || comp_reader_in_chain(c, p, u, NULL) ||
-                 (setter && comp_writer_in_chain(c, p, base, NULL))))
+  if (mi >= 0 || (p >= 0 && (comp_reader_in_chain(c, p, u, NULL) || (setter && comp_writer_in_chain(c, p, base, NULL)))))
     return 1;
   int v = refl_builtin_vis(c, s->class_id, u, 2, NULL);
   return v < 0 ? -1 : v > 0;

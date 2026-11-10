@@ -1506,6 +1506,13 @@ static void cf_all_block_params_at(CF *f, int blk, int line) {
   for (int i = 0; i < n; i++) cf_all(f, cf_lv(f, body >= 0 ? body : blk, names[i]));
 }
 #define cf_all_block_params(f, blk) cf_all_block_params_at((f), (blk), __LINE__)
+
+/* `proc { }` and `lambda { }`: the value is a Proc, and the block's
+   parameters take what the Proc's calls pass */
+static void cf_proc_constructor(CF *f, int v, int blk) {
+  if (blk >= 0 && nt_kind(f->nt, blk) == NK_BlockNode) cf_all_block_params(f, blk);
+  if (v >= 0) cf_add_set(f, v, cf_proc_set(f));
+}
 /* (directed) a lambda's or a proc's parameters, where the walk binds no
    call of it: what a call of one hands on (dynarg: `l.call(x)`, `l.(x)`,
    `l[x]`, `l === x`, a yield of a method it is given to, a builtin it is
@@ -3441,10 +3448,8 @@ static void cf_call(CF *f, int v) {
     }
     /* Kernel: a conversion, an iteration, `lambda`, `proc`, `loop`, `raise`
        hand on what they are given; `new` has no class here */
-    if (sp_streq(nm, "lambda") || sp_streq(nm, "proc") || sp_streq(nm, "define_method")) {
-      if (blk >= 0 && nt_kind(nt, blk) == NK_BlockNode) cf_all_block_params(f, blk);
-    }
-    if (v >= 0 && (sp_streq(nm, "lambda") || sp_streq(nm, "proc"))) cf_add_set(f, v, cf_proc_set(f));
+    if (is_define_method_name(nm) && blk >= 0 && nt_kind(nt, blk) == NK_BlockNode) cf_all_block_params(f, blk);
+    if (is_proc_constructor(nm)) cf_proc_constructor(f, v, blk);
     /* Kernel's conversions answer their kind whatever they are handed:
        Integer(x) an Integer (to_int / to_i must answer one, else it
        raises), Float, String, Rational and Complex likewise; Array(x) and
@@ -3522,6 +3527,15 @@ static void cf_call(CF *f, int v) {
   if (rk == NK_ConstantReadNode || rk == NK_ConstantPathNode) {
     const char *cn = const_key_at(c, r);
     const char *key = cf_const_key(cn);
+    /* `Kernel.proc { }` and `Kernel.lambda { }` call the module function a
+       bare `proc { }` calls, and answer the same Proc: Kernel's other
+       calls answer anything (cf_poison_const), which left the Proc's set
+       without its `pr` */
+    if (key && is_kernel_module_name(key) && is_proc_constructor(nm)) {
+      cf_proc_constructor(f, v, blk);
+      cf_builtin_rule(f, v, -1, argv, argc, blk, nm);
+      return;
+    }
     if (cf_poison_class_call(f, v, key, nm, argv, argc, blk)) return;
     /* a constant holding a value of the program's own (`REG = Registry.new`)
        is a receiver like any other; a builtin class or module answers

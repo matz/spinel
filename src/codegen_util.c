@@ -2025,84 +2025,19 @@ void emit_poly_lift_ref(const char *ref, Buf *b) {
 void emit_local_ref(Compiler *c, int scope_node, const char *name, Buf *b) {
   emit_scope_local_ref(c, scope_node >= 0 ? comp_scope_of(c, scope_node) : NULL, name, b);
 }
-/* The names a shim gives its shadow copy of a String. A Ruby local cannot
-   start with an uppercase letter, so `lv_Sb<T>` (the String's change), and
-   `lv_Sh<T>` (a held chain's, --share-strings), are no program local's C
-   name, where `lv__sb1`, the old spelling, was the C name of a program local
-   `_sb1`.
-   The rename is what rename_local answers for the shim's receiver local
-   (the shadow's name without the `lv_`); every spelling of both goes
-   through these. A shadow read is known by its view (VR_STR_SHADOW,
-   sb_shadowed_reader), not by its name. */
-ShimShadow sb_shadow_local(int tH) {
-  ShimShadow n;
-  snprintf(n.s, sizeof n.s, "Sb%d", tH);
-  return n;
-}
-ShimShadow sb_shadow_cname(int tH) {
-  ShimShadow n;
-  snprintf(n.s, sizeof n.s, "lv_Sb%d", tH);
-  return n;
-}
+/* The name the held chain's shim (emit_held_self_answer_shim,
+   --share-strings) gives its shadow copy of a String. A Ruby local cannot
+   start with an uppercase letter, so `lv_Sh<T>` is no program local's C
+   name, where `lv__sh1`, the old spelling, was the C name of a program
+   local `_sh1`. A shadow read is known by its view (VR_STR_SHADOW 2,
+   sb_held_shadow), not by its name. */
 ShimShadow sb_held_shadow_cname(int tH) {
   ShimShadow n;
   snprintf(n.s, sizeof n.s, "lv_Sh%d", tH);
   return n;
 }
-/* Is `rn`, what rename_local answers for local `name`, the shadow a
-   shared-handle shim reads and writes that local through (`Sb<T>`, the
-   shim's `lv_Sb<T>`)? Only as a rename: no program local is spelled so. */
-int sb_shim_shadow(const char *name, const char *rn) {
-  return rn != name && rn[0] == 'S' && rn[1] == 'b' && isdigit((unsigned char)rn[2]);
-}
-/* A shim types its receiver local String for the arm it re-runs, though the
-   slot is the handle (sb_shim_enter); it answers the local's shim state as
-   it was, which sb_shim_leave puts back whole. A shim inside a proc made in
-   another shim's arm enters a local the outer one lifted: putting back only
-   the type cleared the outer shim's shim_ty, so its drop skipped the local,
-   which kept the handle type for the rest of the outer arm. */
-SbShimSave sb_shim_enter(LocalVar *lv) {
-  SbShimSave sv = { lv->type, lv->shim_ty, lv->shim_lift };
-  lv->shim_ty = lv->type;
-  lv_set_type(lv, TY_STRING);
-  lv->shim_lift = 0;
-  return sv;
-}
-void sb_shim_leave(LocalVar *lv, SbShimSave sv) {
-  lv_set_type(lv, sv.type);
-  lv->shim_ty = sv.shim_ty;
-  lv->shim_lift = sv.shim_lift;
-}
-/* A proc or a fiber made inside the arm shares the real slot, and types its
-   capture struct and its body from the local: put the handle type back on
-   the locals a live shim lowered, for it (sb_shim_drop sets them back). Only
-   the shim's own local carries shim_ty, so a same-named local of an inlined
-   method is left alone. */
-static void sb_shim_lifted(Compiler *c, int node, int delta) {
-  Scope *sc = node >= 0 ? comp_scope_of(c, node) : NULL;
-  if (!sc) return;
-  for (int i = 0; i < g_nren; i++) {
-    if (!sb_shim_shadow(g_ren_from[i].p, g_ren_to[i].p)) continue;
-    LocalVar *lv = scope_local(sc, g_ren_from[i].p);
-    if (!lv || lv->shim_ty == TY_UNKNOWN) continue;
-    if (delta > 0) { if (lv->shim_lift++ == 0) lv_set_type(lv, lv->shim_ty); }
-    else if (--lv->shim_lift == 0) lv_set_type(lv, TY_STRING);
-  }
-}
-void sb_shim_lift(Compiler *c, int node) { sb_shim_lifted(c, node, 1); }
-void sb_shim_drop(Compiler *c, int node) { sb_shim_lifted(c, node, -1); }
 void emit_scope_local_ref(Compiler *c, Scope *s, const char *name, Buf *b) {
-  /* Inside a shared-handle shim the local reads as the shim's shadow, a
-     plain C local the shim declares, even when the local itself lives in a
-     cell or a capture field: that slot holds the handle, which the shim
-     reads before and writes back after. The cell form spelled the shadow
-     `(*_cell_SbN)`, and the capture form handed the arm the handle slot,
-     neither of which compiles. */
   const char *rn = rename_local(name);
-  if (sb_shim_shadow(name, rn)) {
-    buf_printf(b, "lv_%s", rn);
-    return;
-  }
   /* A name renamed inside the proc body is the renaming's local, not the
      capture: a proc body starts with no renames (ren_park), so a rename
      here is one the body pushed, such as a default argument's binding of
@@ -3633,44 +3568,6 @@ int sb_shim_args_first(Compiler *c, int id, Buf *pre, int indent) {
   g_pre = sv_pre; g_indent = sv_ind;
   return mark;
 }
-/* Open the shim over a reader call `recv` that hands out the shared handle
-   to String mutator id: the handle's text is appended to sref, and until
-   sb_reader_shim_close the call node reads as the shadow `lv_SbT`, with the
-   handle marks lifted. Answers T, or 0 when `recv` is no such call. A pickup
-   that can answer nil raises NoMethodError for id there, as the mutator's
-   handle arms do (strbuf_pickup_nil_check). */
-int sb_reader_shim_open(Compiler *c, int id, int recv, Buf *sref, SbReaderSave *sv) {
-  /* a global holding the handle (--share-strings) is such a slot too:
-     strbuf_slot_text answers for it only then */
-  int gv = recv >= 0 && repr_static_read_kind(nt_kind(c->nt, recv)) && !sb_shadowed_reader(c, recv);
-  if (recv < 0 || (nt_kind(c->nt, recv) != NK_CallNode && !gv)) return 0;
-  Repr rp = repr_of(c, recv);
-  /* (--share-strings: or a value route whose handle ran first, `(+s)`
-     under emit_bang_self_handle, whose temp strbuf_slot_text answers) */
-  int ran = nt_kind(c->nt, recv) == NK_CallNode && ran_first_read_handle(recv) >= 0;
-  if (!gv && !rp.handle && !rp.demand && !ran) return 0;
-  if (g_n_argov >= MAX_ARG_OVERRIDE) return 0;
-  if (!strbuf_pickup_nil_check(c, nt_str(c->nt, id, "name"), recv, sref)) return 0;
-  int tH = ++g_tmp;
-  /* the marks lifted and the handle type dropped for the shim's lifetime:
-     views, so a refusal inside it puts them back (view_unwind) */
-  sv->box = rp.handle; sv->demand = rp.demand; sv->ty = rp.ty;
-  sv->tok = view_push_repr(c, recv, VR_STRBUF_BOX, 0);
-  view_push_repr(c, recv, VR_HANDLE_DEMAND, 0);
-  sv->ntok = 2;
-  if (sv->ty == TY_STRBUF) { view_push(c, recv, TY_STRING); sv->ntok = 3; }
-  view_bind(recv, "%s", sb_shadow_cname(tH).s);
-  view_push_repr(c, recv, VR_STR_SHADOW, 1); sv->ntok++;
-  return tH;
-}
-void sb_reader_shim_close(Compiler *c, int recv, const SbReaderSave *sv) {
-  (void)recv;
-  view_unbind(g_n_argov - 1);
-  for (int k = sv->ntok - 1; k >= 0; k--) view_pop(c, sv->tok + k);
-}
-const char *g_sb_iv_name = NULL;
-int         g_sb_iv_cid  = -1;
-char        g_sb_iv_repl[64];
 /* Does demand-marked call `v` render as a handle itself? A reader call, a
    container's element read and a call that answers its receiver (`h << x
    << y`, `h.freeze`) do. A call on a String that makes a new one -- `+"lit"`,
@@ -4206,20 +4103,10 @@ static int strbuf_slot_into(Compiler *c, int recv, Buf *b) {
   }
   if (recv < 0 || nt_kind(c->nt, recv) != NK_InstanceVariableReadNode || !holder_of_node(c, recv, &h) ||
       h.idx < 0 || c->classes[h.cid].ivar_types[h.idx] != TY_STRBUF) return 0;
-  /* The ivar shim's value arm writes its shadow, as the read emitter does. */
-  if (g_sb_iv_name && sp_streq(h.name, g_sb_iv_name) && h.cid == g_sb_iv_cid) return 0;
   return holder_slot_buf(c, &h, b);
 }
 int strbuf_slot_text(Compiler *c, int recv, Buf *b) { return strbuf_slot_into(c, recv, b); }
 int strbuf_slot_has(Compiler *c, int recv) { return strbuf_slot_into(c, recv, NULL); }
-/* rename_local for a name whose CELL is wanted: the shim's shadow rename is
-   skipped, since the shadow is a plain C local and the cell the local lives
-   in keeps the name an enclosing inline gave it (or the source name). */
-const char *rename_local_cell(const char *nm) {
-  for (int i = g_nren - 1; i >= 0; i--)
-    if (sp_streq(g_ren_from[i].p, nm) && !sb_shim_shadow(nm, g_ren_to[i].p)) return g_ren_to[i].p;
-  return nm;
-}
 /* Hide the renames from `base` up while a caller's expression is emitted
    (a provided argument reads none of the callee's parameters). A call in
    that expression pushes renames of its own into the same slots, so the

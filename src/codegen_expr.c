@@ -2399,8 +2399,6 @@ static int emit_local_ivar_write_expr(Compiler *c, int id, Buf *b, const NodeTab
       in_splat_view = 0;
       return 1;
     }
-    /* a local a shared-handle shim reads through its shadow, which the shim
-       writes back into the handle: no copy of the String */
     /* compile-time define_method substitution: the loop var IS the literal */
     if (g_dm_subst_name && lrn && sp_streq(lrn, g_dm_subst_name) && g_dm_subst_node >= 0) {
       emit_expr(c, g_dm_subst_node, b); return 1;
@@ -3024,14 +3022,6 @@ static int emit_ivar_cvar_gvar_expr(Compiler *c, int id, Buf *b, const NodeTable
       int want_ni = g_oint_read; g_oint_read = 0;
       if ((want_ni || node_is_oint(c, id)) && oint_kind(it)) buf_puts(b, oint_nil(it));
       else emit_slot_nil_read(c, it, b);
-      return 1;
-    }
-    /* inside a shared-mutable shim over THIS slot: both the reads and the
-       arm's own write-back go to the shadow (see codegen_internal.h) */
-    if (g_sb_iv_name && nm && sp_streq(nm, g_sb_iv_name) &&
-        strbuf_ivar_owner(c, id) == g_sb_iv_cid) {
-      buf_printf(b, "%s", g_sb_iv_repl);
-   /* (the shim writes the shadow back) */
       return 1;
     }
     /* a shared-mutable string slot: a marked read yields the live HANDLE, an
@@ -6425,7 +6415,6 @@ static void emit_expr_node(Compiler *c, int id, Buf *b) {
       int th = comp_ntype(c, id) == TY_STRBUF ? ran_first_read_handle(id) : -1;
       if (th >= 0) buf_printf(b, "_t%d", th);
       else buf_puts(b, g_argov_text[i]);
-      /* a reader call the shim has substituted with its shadow, written back */
       return;
     }
 

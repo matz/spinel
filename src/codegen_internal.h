@@ -160,15 +160,6 @@ void emit_civ_slot_decl(Compiler *c, int cid, const char *nm, const char *ctype,
                         const char *init, Buf *b);
 int ie_class_of(Compiler *c, int node);
 int ie_own_class_of(Compiler *c, int node);
-/* The shared-mutable shim (codegen_stmt.c) re-runs a value-semantics mutator
-   arm against a plain shadow copy, then swaps the handle's bytes for it. A
-   LOCAL receiver is redirected into the shadow by the rename table; an ivar
-   has no name to rename, so the shim publishes the slot it is shadowing here
-   and the ivar emitter resolves reads AND the arm's write-back to the shadow
-   -- the same substitution one level down (#4363). */
-extern const char *g_sb_iv_name;   /* "@bt" while a shim is open, else NULL */
-extern int         g_sb_iv_cid;
-extern char        g_sb_iv_repl[64];
 /* The handle text of recv's slot appended to b, never declined for its
    length, and whether recv has one at all (nothing emitted) */
 int strbuf_slot_text(Compiler *c, int recv, Buf *b);
@@ -428,14 +419,6 @@ int operand_allocates_beside(Compiler *c, int v);
    read that hands out the handle or the live buffer copies nothing, and
    one that ran already is its temp. */
 int strbuf_read_copies(Compiler *c, int v);
-/* The same shim over a READER call that hands out the handle
-   (`obj.name[0] = "X"`): no name to rename and no ivar node, so the call node
-   itself reads as the shadow through the argument-override table. */
-/* what sb_reader_shim_open lifted: the node's marks and type as they were,
-   and the views (ntok of them from tok) that hold the lifted ones */
-typedef struct { unsigned char box, demand; TyKind ty; int tok, ntok; } SbReaderSave;
-int sb_reader_shim_open(Compiler *c, int id, int recv, Buf *sref, SbReaderSave *sv);
-void sb_reader_shim_close(Compiler *c, int recv, const SbReaderSave *sv);
 int sb_shadowed_reader(const Compiler *c, int node);
 int sb_shim_args_first(Compiler *c, int id, Buf *pre, int indent);
 int str_mut_var_recv(Compiler *c, int recv);
@@ -1743,18 +1726,9 @@ void emit_yblk_ref(Buf *b);
 /* Emit the lead of a tail value: `return ` or `<result> = `. */
 void emit_tail_lead(Buf *b);
 const char *rename_local(const char *nm);
-const char *rename_local_cell(const char *nm);
-int sb_shim_shadow(const char *name, const char *rn);
-/* A shim shadow's name, by value so a format takes it as `%s` (sb_shadow_local) */
+/* A shim shadow's name, by value so a format takes it as `%s` (sb_held_shadow_cname) */
 typedef struct { char s[24]; } ShimShadow;
-ShimShadow sb_shadow_local(int tH);
-ShimShadow sb_shadow_cname(int tH);
 ShimShadow sb_held_shadow_cname(int tH);
-typedef struct { TyKind type, shim_ty; int shim_lift; } SbShimSave;
-SbShimSave sb_shim_enter(LocalVar *lv);
-void sb_shim_leave(LocalVar *lv, SbShimSave sv);
-void sb_shim_lift(Compiler *c, int node);
-void sb_shim_drop(Compiler *c, int node);
 /* `unsupported` never returns: it longjmps to the codegen driver's per-unit
    recovery (see g_unsup_recover) when one is armed, else exits. Marked noreturn so every caller's
    "this construct is unsupported" guard correctly treats the code after it as

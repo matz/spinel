@@ -717,156 +717,6 @@ int conv_to_ary_misfit(Compiler *c, TyKind t) {
   return t == TY_NIL || t == TY_BOOL || conv_to_ary_impossible(t) || obj_to_ary_misfit(c, t);
 }
 
-/* The C type of a shared-mutable shim's result temp. The arm it re-runs
-   reads the bytes shadow, so under the one String representation a String
-   answer has the arm's own face (bytes, or a handle it built), which the
-   consumers read through the face macros: the temp takes that face rather
-   than the call's handle. */
-static void emit_sb_res_ctype(Compiler *c, TyKind resty, Buf *b) {
-  if ((resty == TY_STRING || resty == TY_STRBUF)) { buf_puts(b, "__auto_type"); return; }
-  emit_ctype(c, resty == TY_UNKNOWN || resty == TY_VOID ? TY_STRING : resty, b);
-}
-/* The shim's answer, once the shadow is written back to the handle _t<tH>.
-   Under the one String representation a mutator answering its receiver
-   (insert, concat, a bang that changed it) answers that handle's payload
-   view, which is the String itself where it is stored (SP_STR_HDL finds
-   the handle) and its bytes where they are read: the arm's own answer is
-   the shadow's bytes, a copy once the handle took them, and
-   `[s.insert(0, "<")]` stored the copy. */
-static void emit_sb_shim_answer(Compiler *c, int id, int tH, TyKind resty, Buf *b) {
-  int fl = 0;
-  if ((resty == TY_STRING || resty == TY_STRBUF)) {
-    int argc = 0;
-    call_args(c->nt, id, &argc);
-    fl = bop_answers_self(TY_STRING, nt_str(c->nt, id, "name"), argc, nt_ref(c->nt, id, "block") >= 0);
-  }
-  if (fl == BOPF_SELF || fl == BOPF_SELF_EXACT)
-    buf_printf(b, " sp_String_set_bin(_t%d, %s); (void)_res%d; sp_strbuf_read_pub(_t%d); })", tH, sb_shadow_cname(tH).s, tH, tH);
-  else if (fl == BOPF_SELF_OR_NIL)
-    buf_printf(b, " sp_String_set_bin(_t%d, %s); _res%d ? sp_strbuf_read_pub(_t%d) : (const char *)NULL; })", tH, sb_shadow_cname(tH).s, tH, tH);
-  else buf_printf(b, " sp_String_set_bin(_t%d, %s); _res%d; })", tH, sb_shadow_cname(tH).s, tH);
-}
-
-/* The shared-mutable shim over an IVAR receiver, in expression position. The
-   local form renames the slot so the value arm's reads and its write-back both
-   land on a plain shadow; an ivar has no name to rename, so the shadow is
-   published to the ivar emitter instead and the same re-run works unchanged.
-   `rerun` is the emitter whose arms are being borrowed (#4363). */
-static int sb_iv_expr_shim(Compiler *c, int id, int recvS, Buf *b,
-                           int (*rerun)(Compiler *, int, Buf *)) {
-  const NodeTable *nt = c->nt;
-  if (strbuf_local_name(c, recvS)) return 0;
-  if (nt_kind(nt, recvS) != NK_InstanceVariableReadNode || g_sb_iv_name) return 0;
-  Buf srefI; memset(&srefI, 0, sizeof srefI);
-  int icid = strbuf_ivar_owner(c, recvS);
-  const char *ivn = nt_str(nt, recvS, "name");
-  if (!ivn || icid < 0 || !strbuf_slot_text(c, recvS, &srefI)) return 0;
-  Buf pre; memset(&pre, 0, sizeof pre);
-  int mark = sb_shim_args_first(c, id, &pre, g_indent);
-  int tH = ++g_tmp;
-  Buf armb; memset(&armb, 0, sizeof armb);
-  snprintf(g_sb_iv_repl, sizeof g_sb_iv_repl, "%s", sb_shadow_cname(tH).s);
-  g_sb_iv_name = ivn; g_sb_iv_cid = icid;
-  int handled = rerun(c, id, &armb);
-  g_sb_iv_name = NULL; g_sb_iv_cid = -1;
-  view_unbind(mark);
-  if (!handled) { free(armb.p); free(pre.p); free(srefI.p); return 0; }
-  TyKind resty = repr_of(c, id).as_ty;
-  buf_printf(b, "({ sp_String *_t%d = SP_STR_HDL(%s);%s"
-                " if (sp_String_is_frozen(_t%d)) sp_raise_frozen_str(_t%d->data);"
-                " const char *%s = sp_str_concat(sp_String_cstr(_t%d), (&(\"\\xff\")[1]));"
-                " SP_GC_ROOT(%s); ",
-             tH, srefI.p, pre.p ? pre.p : "", tH, tH, sb_shadow_cname(tH).s, tH, sb_shadow_cname(tH).s);
-  free(pre.p); free(srefI.p);
-  emit_sb_res_ctype(c, resty, b);
-  buf_printf(b, " _res%d = %s;", tH, armb.p ? armb.p : "0");
-  free(armb.p);
-  emit_sb_shim_answer(c, id, tH, resty, b);
-  return 1;
-}
-
-/* The expression-position shim over a READER call that hands out the handle
-   (`x = obj.name.insert(0, "-")`), as sb_iv_expr_shim is over an ivar. */
-static int sb_reader_expr_shim(Compiler *c, int id, int recvS, Buf *b,
-                               int (*rerun)(Compiler *, int, Buf *)) {
-  Buf srefR; memset(&srefR, 0, sizeof srefR);
-  SbReaderSave svR;
-  int tH = sb_reader_shim_open(c, id, recvS, &srefR, &svR);
-  if (!tH) return 0;
-  Buf pre; memset(&pre, 0, sizeof pre);
-  int mark = sb_shim_args_first(c, id, &pre, g_indent);
-  Buf armb; memset(&armb, 0, sizeof armb);
-  int handled = rerun(c, id, &armb);
-  view_unbind(mark);
-  sb_reader_shim_close(c, recvS, &svR);
-  if (!handled) { free(armb.p); free(pre.p); free(srefR.p); return 0; }
-  TyKind resty = repr_of(c, id).as_ty;
-  buf_printf(b, "({ sp_String *_t%d = SP_STR_HDL(%s);%s"
-                " if (sp_String_is_frozen(_t%d)) sp_raise_frozen_str(_t%d->data);"
-                " const char *%s = sp_str_concat(sp_String_cstr(_t%d), (&(\"\\xff\")[1]));"
-                " SP_GC_ROOT(%s); ",
-             tH, srefR.p, pre.p ? pre.p : "", tH, tH, sb_shadow_cname(tH).s, tH, sb_shadow_cname(tH).s);
-  free(pre.p); free(srefR.p);
-  emit_sb_res_ctype(c, resty, b);
-  buf_printf(b, " _res%d = %s;", tH, armb.p ? armb.p : "0");
-  free(armb.p);
-  emit_sb_shim_answer(c, id, tH, resty, b);
-  return 1;
-}
-
-/* --share-strings: the same shim over a receiver that hands on its handle
-   through a route (`id(s).concat(x).slice!(0)`, emit_recv_route_handle): the
-   handle is taken once, the shadow of the call node is the arm's variable,
-   and the handle's buffer takes the change. */
-static int sb_route_expr_shim(Compiler *c, int id, int recvS, Buf *b,
-                              int (*rerun)(Compiler *, int, Buf *)) {
-  int u = nt_paren_single(c->nt, recvS);
-  if (u < 0 || nt_kind(c->nt, u) != NK_CallNode || sb_shadowed_reader(c, recvS) ||
-      g_n_argov + 1 >= MAX_ARG_OVERRIDE)
-    return 0;
-  Buf *pre0 = g_pre;
-  size_t pre0_mark = pre0 ? pre0->len : 0;
-  Buf hb; memset(&hb, 0, sizeof hb);
-  /* (one representation: an element read of a typed String container is
-     the element's handle, which the change goes into) */
-  if (one_str_elem_call(c, u, TY_UNKNOWN)) strh_elem_handle_text(c, u, &hb);
-  else if (!emit_recv_route_handle(c, id, recvS, &hb)) { free(hb.p); return 0; }
-  int tH = ++g_tmp;
-  int tok = view_push_repr(c, recvS, VR_STRBUF_BOX, 0);
-  view_push_repr(c, recvS, VR_HANDLE_DEMAND, 0);
-  int ntok = 2;
-  if (repr_of(c, recvS).as_ty == TY_STRBUF) { view_push(c, recvS, TY_STRING); ntok = 3; }
-  view_bind(recvS, "%s", sb_shadow_cname(tH).s);
-  view_push_repr(c, recvS, VR_STR_SHADOW, 1); ntok++;
-  Buf pre; memset(&pre, 0, sizeof pre);
-  int mark = sb_shim_args_first(c, id, &pre, g_indent);
-  Buf armb; memset(&armb, 0, sizeof armb);
-  int handled = rerun(c, id, &armb);
-  view_unbind(mark);
-  view_unbind(g_n_argov - 1);
-  for (int k = ntok - 1; k >= 0; k--) view_pop(c, tok + k);
-  if (!handled) {
-    free(armb.p); free(pre.p); free(hb.p);
-    if (pre0 && g_pre == pre0 && pre0->len > pre0_mark) { pre0->len = pre0_mark; pre0->p[pre0_mark] = '\0'; }
-    return 0;
-  }
-  TyKind resty = repr_of(c, id).as_ty;
-  /* rooted: a route can answer a String of its own while the arguments
-     allocate */
-  /* (one representation: the receiver's text may be a view of the handle; sp_String_new_fresh finds it) */
-  buf_printf(b, "({ sp_String *_t%d = %s%s%s; SP_GC_ROOT(_t%d);%s"
-                " if (sp_String_is_frozen(_t%d)) sp_raise_frozen_str(_t%d->data);"
-                " const char *%s = sp_str_concat(sp_String_cstr(_t%d), (&(\"\\xff\")[1]));"
-                " SP_GC_ROOT(%s); ",
-             tH, "SP_STR_HDL(", hb.p, ")", tH, pre.p ? pre.p : "", tH, tH, sb_shadow_cname(tH).s, tH, sb_shadow_cname(tH).s);
-  free(hb.p); free(pre.p);
-  emit_sb_res_ctype(c, resty, b);
-  buf_printf(b, " _res%d = %s;", tH, armb.p ? armb.p : "0");
-  free(armb.p);
-  emit_sb_shim_answer(c, id, tH, resty, b);
-  return 1;
-}
-
 /* find_index { |x| cond } / index { |x| cond } / rindex { |x| cond } on an
    array of kind `k` ("Int", ..., "Poly") - the index or nil (rindex scans
    from the end). Returns 0 when the block has no body. */
@@ -4907,8 +4757,8 @@ static int emit_str_mutator_call(Compiler *c, int id, Buf *b, const NodeTable *n
           Buf nbB; memset(&nbB, 0, sizeof nbB);
           int vC = -1, nC = 0;
           if (rd_call) {
-            /* as sb_reader_shim_open: the call reads as a plain String, its
-               marks lifted and its handle type dropped as views */
+            /* the call reads as a plain String, its marks lifted and its
+               handle type dropped as views */
             int was_sb = repr_of(c, recv).ty == TY_STRBUF;
             vC = view_push_repr(c, recv, VR_STRBUF_BOX, 0);
             view_push_repr(c, recv, VR_HANDLE_DEMAND, 0);
@@ -5419,22 +5269,16 @@ int emit_array_call(Compiler *c, int id, Buf *b) {
     }
   }
 
-  /* Shared-mutable shim, value position (#3227): same shadow-copy re-entry
-     as emit_array_mutate_stmt's -- the existing arm computes the value and
-     reassigns the shadow, then the handle's buffer swaps in place. */
+  /* String#[]=, insert, clear and slice! change the receiver's String in
+     place, through its handle (the String rows of stage 7) */
   {
     const NodeTable *ntS = c->nt;
     const char *nmS = nt_str(ntS, id, "name");
     int recvS = nt_ref(ntS, id, "receiver");
-    /* String#[]=, insert, clear and slice! change the receiver's String in
-       place, through its handle (the String rows of stage 7) */
     TyKind rtS = comp_recv_type(c, recvS);
     if (recvS >= 0 && (rtS == TY_STRING || rtS == TY_STRBUF) &&
         emit_builtin_op_stage(c, id, recvS, TY_STRING, nmS, 7, b)) return 1;
-    if (nmS && recvS >= 0 && repr_of(c, recvS).as_ty == TY_STRBUF &&
-        (is_string_position_mutator(nmS)) &&
-        sb_reader_expr_shim(c, id, recvS, b, emit_array_call)) return 1;
-    /* --share-strings: an encoding mutator on a call typed as the handle
+    /* an encoding mutator on a call typed as the handle
        (`id(s).concat(x).force_encoding(e)`, after a `&.`) tags that handle,
        read once, and answers its bytes, as on a handle variable */
     if (nmS && recvS >= 0 && is_encoding_mutator(nmS) && repr_of(c, recvS).as_ty == TY_STRBUF &&
@@ -5447,113 +5291,6 @@ int emit_array_call(Compiler *c, int id, Buf *b) {
       if (hrE) {
         emit_strbuf_force_encoding(c, nmS, lbE.p ? lbE.p : feref.p, hrE, avE, acE, b);
         free(lbE.p); free(feref.p);
-        return 1;
-      }
-    }
-    /* --share-strings: one answering its receiver (insert, clear) over a call
-       that answers a handle (`id(s).concat(x).insert(0, y)`) changes that
-       handle, held once (emit_bang_self_handle), and answers its read; a
-       receiver already read off that held handle (ran_first_read_handle)
-       is the shim's below */
-    if (nmS && recvS >= 0 && is_string_position_mutator(nmS) && strbuf_self_route(c, recvS) &&
-        repr_of(c, recvS).as_ty != TY_STRBUF && ran_first_read_handle(recvS) < 0 &&
-        (!arg_ran_first(recvS, 0) || ran_first_handle(recvS) >= 0) &&
-        strbuf_bang_self_local(c, id)) {
-      Buf hb; memset(&hb, 0, sizeof hb);
-      if (emit_bang_self_handle(c, id, &hb)) {
-        int t = ++g_tmp;
-        buf_printf(b, "({ sp_String *_t%d = SP_STR_HDL(%s); sp_strbuf_read_pub(_t%d); })", t, hb.p, t);
-        free(hb.p);
-        return 1;
-      }
-      free(hb.p);
-    }
-    /* --share-strings: any other (slice!, setbyte) over a call that hands
-       on a handle runs on that handle's shadow (`.insert(0, y).slice!(0)`);
-       one already read off the held handle takes the reader shim below */
-    if (nmS && recvS >= 0 && is_string_position_mutator(nmS) && repr_of(c, recvS).as_ty != TY_STRBUF &&
-        ran_first_read_handle(recvS) < 0 && sb_route_expr_shim(c, id, recvS, b, emit_array_call)) return 1;
-    if (nmS && recvS >= 0 && comp_ntype(c, recvS) == TY_STRING &&
-        (is_string_position_mutator(nmS))) {
-      if (sb_iv_expr_shim(c, id, recvS, b, emit_array_call)) return 1;
-      /* (--share-strings: a value route whose handle ran first, `(+s)`) */
-      if (nt_kind(ntS, recvS) == NK_CallNode && ran_first_read_handle(recvS) >= 0 &&
-          sb_reader_expr_shim(c, id, recvS, b, emit_array_call)) return 1;
-      /* a global holding the handle (--share-strings) */
-      if (repr_static_read_kind(nt_kind(ntS, recvS)) &&
-          sb_reader_expr_shim(c, id, recvS, b, emit_array_call)) return 1;
-      const char *sbn = strbuf_local_name(c, recvS);
-      /* the handle's slot through the holder (a captured local's cell) */
-      Buf srefL; memset(&srefL, 0, sizeof srefL);
-      if (sbn && g_nren < MAX_RENAME && strbuf_slot_text(c, recvS, &srefL)) {
-        Scope *shs = comp_scope_of(c, recvS);
-        LocalVar *shlv = scope_local(shs, sbn);
-        Buf pre; memset(&pre, 0, sizeof pre);
-        int mark = sb_shim_args_first(c, id, &pre, g_indent);
-        int tH = ++g_tmp;
-        Buf armb; memset(&armb, 0, sizeof armb);
-        ren_push(sbn, "%s", sb_shadow_local(tH).s);
-        /* (a receiver bound to its held handle's read, `s&.slice!(f(1))`
-           after the argument ran, reads as the shadow too: the binding
-           comes before the rename) */
-        int shv = -1;
-        if (ran_first_read_handle(recvS) >= 0 && g_n_argov < MAX_ARG_OVERRIDE) {
-          view_bind(recvS, "%s", sb_shadow_cname(tH).s);
-          shv = view_push_repr(c, recvS, VR_STR_SHADOW, 1);
-        }
-        SbShimSave sv_sh = sb_shim_enter(shlv);
-        int handled = emit_array_call(c, id, &armb);
-        sb_shim_leave(shlv, sv_sh);
-        if (shv >= 0) view_pop(c, shv);
-        g_nren--;
-        view_unbind(mark);
-        if (!handled) { free(armb.p); free(pre.p); free(srefL.p); }
-        else {
-          TyKind resty = repr_of(c, id).as_ty;
-          buf_printf(b, "({ sp_String *_t%d = SP_STR_HDL(%s);%s"
-                        " if (sp_String_is_frozen(_t%d)) sp_raise_frozen_str(_t%d->data);"
-                        " const char *%s = sp_str_concat(sp_String_cstr(_t%d), (&(\"\\xff\")[1]));"
-                        " SP_GC_ROOT(%s); ",
-                     tH, srefL.p, pre.p ? pre.p : "", tH, tH, sb_shadow_cname(tH).s, tH, sb_shadow_cname(tH).s);
-          free(pre.p); free(srefL.p);
-          emit_sb_res_ctype(c, resty, b);
-          buf_printf(b, " _res%d = %s;", tH, armb.p ? armb.p : "0");
-          free(armb.p);
-          emit_sb_shim_answer(c, id, tH, resty, b);
-          return 1;
-        }
-      }
-    }
-  }
-  /* String#clear in VALUE position on an unnamed mutable receiver
-     ((+"abc").clear): the temp's mutation is unobservable, so evaluate the
-     receiver (a frozen value still raises, as CRuby) and yield a fresh
-     unfrozen empty string. Named receivers keep the assignable arms. */
-  {
-    const NodeTable *ntC = c->nt;
-    const char *nmC = nt_str(ntC, id, "name");
-    int recvC = nt_ref(ntC, id, "receiver");
-    int rcore = recvC;
-    while (rcore >= 0 &&
-           nt_kind(ntC, rcore) == NK_ParenthesesNode) {
-      int pb0 = nt_ref(ntC, rcore, "body"); int pbn0 = 0;
-      const int *pbb0 = pb0 >= 0 ? nt_arr(ntC, pb0, "body", &pbn0) : NULL;
-      rcore = pbn0 == 1 ? pbb0[0] : -1;
-    }
-    if (nmC && sp_streq(nmC, "clear") && recvC >= 0 && rcore >= 0 &&
-        comp_ntype(c, recvC) == TY_STRING &&
-        nt_type(ntC, rcore) &&
-        (nt_kind(ntC, rcore) == NK_CallNode ||
-         nt_kind(ntC, rcore) == NK_StringNode ||
-         nt_kind(ntC, rcore) == NK_InterpolatedStringNode) &&
-        !strbuf_local_name(c, rcore) && !sb_held_shadow(c, rcore)) {
-      int aC = nt_ref(ntC, id, "arguments"); int anC = 0;
-      if (aC >= 0) nt_arr(ntC, aC, "arguments", &anC);
-      if (anC == 0 && nt_ref(ntC, id, "block") < 0) {
-        int tC = ++g_tmp;
-        buf_printf(b, "({ const char *_t%d = ", tC);
-        emit_expr(c, recvC, b);
-        buf_printf(b, "; sp_str_check_mutable(_t%d); (void)_t%d; sp_str_from_bytes(\"\", 0); })", tC, tC);
         return 1;
       }
     }
@@ -11071,17 +10808,16 @@ static int emit_scalar_recv_arms(Compiler *c, int id, Buf *b, const NodeTable *n
 }
 
 static int emit_scalar_call_arms(Compiler *c, int id, Buf *b) {
-  /* Shared-mutable shim (#3227): setbyte on a strbuf local -- shadow-copy
-     re-entry, same as emit_array_call's. */
+  /* setbyte on a String handle: one byte written into the handle's own
+     buffer */
   {
     const NodeTable *ntS = c->nt;
     const char *nmS = nt_str(ntS, id, "name");
     int recvS = nt_ref(ntS, id, "receiver");
-    /* setbyte on a handle writes one byte into the handle's OWN buffer. The
-       shims below read the whole String out, mutate that copy and append it
-       back -- two O(len) passes to write one byte, so a per-row column write
-       over a large buffer is quadratic in it. sp_str_setbyte_cow already
-       mutates a heap string in place and copies only a static literal, so the
+    /* setbyte on a handle writes one byte into the handle's OWN buffer, not
+       into a copy of the whole String, which a per-row column write over a
+       large buffer made quadratic in it. sp_str_setbyte_cow already mutates
+       a heap string in place and copies only a static literal, so the
        handle's buffer serves directly and the republish is needed only in
        that one case. */
     /* (--share-strings: a route over a handle, `(+s).setbyte(0, 90)`, too) */
@@ -11146,45 +10882,6 @@ static int emit_scalar_call_arms(Compiler *c, int id, Buf *b) {
                       " if (_q%d != _p%d) sp_String_set_bin(_t%d, _q%d); _v%d; })",
                    tH, tH, tH, tH, tH, tH);
         return 1;
-      }
-    }
-    if (nmS && recvS >= 0 && repr_of(c, recvS).as_ty == TY_STRBUF &&
-        sp_streq(nmS, "setbyte") &&
-        sb_reader_expr_shim(c, id, recvS, b, emit_scalar_call)) return 1;
-    if (nmS && recvS >= 0 && comp_ntype(c, recvS) == TY_STRING &&
-        sp_streq(nmS, "setbyte")) {
-      if (sb_iv_expr_shim(c, id, recvS, b, emit_scalar_call)) return 1;
-      /* (--share-strings: a value route whose handle ran first, `(+s)`) */
-      if (nt_kind(ntS, recvS) == NK_CallNode && ran_first_read_handle(recvS) >= 0 &&
-          sb_reader_expr_shim(c, id, recvS, b, emit_scalar_call)) return 1;
-      if (repr_static_read_kind(nt_kind(ntS, recvS)) &&
-          sb_reader_expr_shim(c, id, recvS, b, emit_scalar_call)) return 1;
-      const char *sbn = strbuf_local_name(c, recvS);
-      /* the handle's slot through the holder (a captured local's cell) */
-      Buf srefL; memset(&srefL, 0, sizeof srefL);
-      if (sbn && g_nren < MAX_RENAME && strbuf_slot_text(c, recvS, &srefL)) {
-        Scope *shs = comp_scope_of(c, recvS);
-        LocalVar *shlv = scope_local(shs, sbn);
-        int tH = ++g_tmp;
-        Buf armb; memset(&armb, 0, sizeof armb);
-        ren_push(sbn, "%s", sb_shadow_local(tH).s);
-        SbShimSave sv_sh = sb_shim_enter(shlv);
-        int handled = emit_scalar_call(c, id, &armb);
-        sb_shim_leave(shlv, sv_sh);
-        g_nren--;
-        if (!handled) { free(armb.p); free(srefL.p); }
-        else {
-          buf_printf(b, "({ sp_String *_t%d = SP_STR_HDL(%s);"
-                        " if (sp_String_is_frozen(_t%d)) sp_raise_frozen_str(_t%d->data);"
-                        " const char *%s = sp_str_concat(sp_String_cstr(_t%d), (&(\"\\xff\")[1]));"
-                        " SP_GC_ROOT(%s);"
-                        " sp_int _res%d = %s;"
-                        " sp_String_set_bin(_t%d, %s); _res%d; })",
-                     tH, srefL.p, tH, tH, sb_shadow_cname(tH).s, tH, sb_shadow_cname(tH).s,
-                     tH, armb.p ? armb.p : "0", tH, sb_shadow_cname(tH).s, tH);
-          free(armb.p); free(srefL.p);
-          return 1;
-        }
       }
     }
   }

@@ -399,11 +399,6 @@ typedef struct {
                        stripped the builtin answer from the dispatch (#3459),
                        and widening unconditionally instead poisoned classes
                        whose poly slots never hold a container (Set's @data). */
-  TyKind shim_ty;   /* while a shared-handle shim emits its arm, the type this
-                       local had before the shim typed it String for the arm
-                       (the handle's); TY_UNKNOWN otherwise. A proc or fiber
-                       made inside the arm sees the handle (sb_shim_lift). */
-  int shim_lift;    /* how many sb_shim_lift calls hold the local at shim_ty */
   unsigned char plain_int; /* (TY_INT) int_value_plain's memo: 0 not asked, 1 being
                        asked, 2 never holds nil, 3 may */
   signed char hcp_int; /* (--int-overflow=promote, codegen) hcp_compute's fact: 1 the

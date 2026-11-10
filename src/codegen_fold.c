@@ -6,6 +6,19 @@
 #include "share.h"
 #include <ctype.h>
 
+/* Is a Method's wrapper (`__bam_N`) one of an operator's (`__bam_r <op>
+   __bam_a`): its body's call is named by punctuation */
+static int bam_wrapper_is_operator(Compiler *c, const Scope *m) {
+  const NodeTable *nt = c->nt;
+  int d = m->def_node, body = d >= 0 ? nt_ref(nt, d, "body") : -1;
+  if (body >= 0 && nt_kind(nt, body) == NK_StatementsNode) {
+    int n = 0; const int *st = nt_arr(nt, body, "body", &n);
+    body = n ? st[n - 1] : -1;
+  }
+  const char *op = body >= 0 && nt_kind(nt, body) == NK_CallNode ? nt_str(nt, body, "name") : NULL;
+  return op && op[0] && !(op[0] == '_' || (op[0] >= 'a' && op[0] <= 'z') || (op[0] >= 'A' && op[0] <= 'Z'));
+}
+
 /* One representation: a block parameter bound to a typed String Array's
    element holds the handle the Array keeps (the element is one), so its
    slot is the handle's; the body is inferred over that slot where the
@@ -8042,6 +8055,16 @@ static void emit_arg_or_default_fill(Compiler *c, Scope *m, int idx, int provide
 
         else if (oint_kind(pt) && slot_is_oint(p))
           emit_oint_expr(c, provided, pt, out);
+        /* a Method's wrapper (`10.method(:+)`, `__bam_N`) takes what its
+           caller passed, a block's parameter among it: a nil is CRuby's
+           TypeError where the builtin reads it -- the coercion one for an
+           operator's operand (`10 + nil`), the conversion one for another
+           argument -- not a refusal of the program */
+        else if (oint_kind(pt) && node_may_be_nil(c, provided) && m->name && !strncmp(m->name, "__bam_", 6) &&
+                 m->pnames[idx] && !strncmp(m->pnames[idx], "__bam_a", 7)) {
+          int binop_wrap = idx == 1 && m->nparams == 2 && bam_wrapper_is_operator(c, m);
+          emit_oint_unwrap_ck(c, provided, pt, binop_wrap ? g_ck_opnd : NULL, out);
+        }
         else if (oint_kind(pt) && node_may_be_nil(c, provided)) {
           char pw[300];
           snprintf(pw, sizeof pw, "parameter %s of %s", m->pnames[idx] ? m->pnames[idx] : "?", m->name ? m->name : "?");

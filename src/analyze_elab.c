@@ -6251,20 +6251,43 @@ int elab_record_cmethod(Compiler *c, int cls, const char *name) {
   return is_record_class_cmethod(name, class_def_record_is_data(c->nt, call >= 0 ? call : class_def_super(c->nt, d)));
 }
 
-int elab_call_method(Compiler *c, int id, int cls, const char *name, int sg, int mm) {
+/* The point call id runs at, for the two call questions below, where the
+   record places it: 0 for none (no point, a statement kept to run later or
+   unplaced, a chain through a class whose superclass it does not hold) */
+static int lr_call_point(Compiler *c, int id, int cls, LoadPoint *p) {
   LoadRecord *r = elab_fresh(c);
-  LoadPoint p = elab_point_of(c, id);
-  if (p.region < 0 || !r->recorded || r->st[p.seq].kept || lr_unplaced(c, id) || lr_chain_open(c, cls)) return ELAB_UNKNOWN;
+  *p = elab_point_of(c, id);
+  return p->region >= 0 && r->recorded && !r->st[p->seq].kept && !lr_unplaced(c, id) && !lr_chain_open(c, cls);
+}
+/* Does a class-side ask of cls read its instance side too: the tables'
+   side holds the Class reopening's class methods as its instance
+   methods, which every class answers */
+static int lr_class_reopen_side(Compiler *c, int cls, int sg) {
+  return sg && cls >= 0 && cls == comp_core_class(c, CORE_CLASS_REOPEN);
+}
+/* Is a none at call id's point p its answer: no method_missing may answer
+   it (mm), no code the record cannot follow or supply it cannot order may
+   define it, and the call runs at p, not any time after it (an END body,
+   a lazy chain's block: elab_runs_later), when a later def may be live */
+static int lr_none_holds(Compiler *c, int id, int owner, int sg, const char *name, LoadPoint p, int mm) {
+  if (mm && (elab_method_versions(c, "method_missing") || elab_method_versions(c, "respond_to_missing?"))) return 0;
+  return !elab_runs_unseen(c) && !lr_unordered_supply(c, owner, sg, name, p) && !elab_runs_later(c, id);
+}
+
+int elab_call_method(Compiler *c, int id, int cls, const char *name, int sg, int mm) {
+  LoadPoint p;
+  if (!lr_call_point(c, id, cls, &p)) return ELAB_UNKNOWN;
+  LoadRecord *r = c->lrec;
   const LrDef *d = NULL;
   int o = elab_method_at(c, cls, name, sg, p, &d);
   /* an undef or a removal of an earlier definition: the call's answer is
      that undef's, not one of a method not defined yet */
   if (o == ELAB_NO && d) return ELAB_UNKNOWN;
-  /* the tables' side holds two of the record's: main's top-level functions
-     are its own methods and its singleton's, and the Class reopening's
-     class methods are its instance methods, which every class answers */
+  /* the tables' side holds main's top-level functions as its own methods
+     and its singleton's, and the Class reopening's class methods as its
+     instance methods (lr_class_reopen_side) */
   if (o == ELAB_NO && cls < 0 && !sg) o = elab_method_at(c, LR_MAIN, name, 1, p, NULL);
-  if (o == ELAB_NO && sg && cls >= 0 && cls == comp_core_class(c, CORE_CLASS_REOPEN)) o = elab_method_at(c, cls, name, 0, p, NULL);
+  if (o == ELAB_NO && lr_class_reopen_side(c, cls, sg)) o = elab_method_at(c, cls, name, 0, p, NULL);
   /* a class's singleton chain passes Object's and BasicObject's singletons
      before Class's instance methods */
   int d0 = cls >= 0 ? c->classes[cls].def_node : -1;
@@ -6275,22 +6298,22 @@ int elab_call_method(Compiler *c, int id, int cls, const char *name, int sg, int
   /* an instance's chain passes Object's reopenings: a module they include */
   int ob = o == ELAB_NO && !sg ? lr_core(r, CORE_OBJECT) : -1;
   if (ob >= 0 && ob != cls) o = elab_method_at(c, ob, name, 0, p, NULL);
-  /* a method_missing may answer the call */
-  if (mm && o == ELAB_NO && (elab_method_versions(c, "method_missing") || elab_method_versions(c, "respond_to_missing?"))) return ELAB_UNKNOWN;
-  if (o == ELAB_NO && (elab_runs_unseen(c) || lr_unordered_supply(c, cls < 0 ? LR_MAIN : cls, sg, name, p))) return ELAB_UNKNOWN;
+  if (o == ELAB_NO && !lr_none_holds(c, id, cls < 0 ? LR_MAIN : cls, sg, name, p, mm)) return ELAB_UNKNOWN;
   return o;
 }
 
 int elab_call_own_method(Compiler *c, int id, int cls, const char *name, int sg) {
-  LoadRecord *r = elab_fresh(c);
-  LoadPoint p = elab_point_of(c, id);
-  if (p.region < 0 || !r->recorded || r->st[p.seq].kept || lr_unplaced(c, id) || lr_chain_open(c, cls) || !name) return ELAB_UNKNOWN;
+  LoadPoint p;
+  if (!name || !lr_call_point(c, id, cls, &p)) return ELAB_UNKNOWN;
   const LrDef *d = NULL;
-  int o = lr_own(c, lr_hist(r, cls, sg, name, 0), p, 0, 0, &d);
+  int o = lr_own(c, lr_hist(c->lrec, cls, sg, name, 0), p, 0, 0, &d);
   /* (an undef or a removal: that one's answer, as elab_call_method's) */
   if (o == LR_STOP || (o == ELAB_NO && d)) return ELAB_UNKNOWN;
-  if (o == ELAB_NO && (elab_method_versions(c, "method_missing") || elab_method_versions(c, "respond_to_missing?"))) return ELAB_UNKNOWN;
-  if (o == ELAB_NO && (elab_runs_unseen(c) || lr_unordered_supply(c, cls, sg, name, p))) return ELAB_UNKNOWN;
+  if (o == ELAB_NO && lr_class_reopen_side(c, cls, sg)) {
+    o = lr_own(c, lr_hist(c->lrec, cls, 0, name, 0), p, 0, 0, &d);
+    if (o == LR_STOP || (o == ELAB_NO && d)) return ELAB_UNKNOWN;
+  }
+  if (o == ELAB_NO && !lr_none_holds(c, id, cls, sg, name, p, 1)) return ELAB_UNKNOWN;
   return o;
 }
 

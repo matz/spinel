@@ -356,7 +356,9 @@ void elab_open_histories(Compiler *c, void (*fn)(void *arg, int cls, int sg, con
    when sg; main's when cls < 0, both its sides, as the top-level functions
    are) where it runs: ELAB_YES / NO / UNKNOWN, for a reader that acts on
    ELAB_NO. ELAB_UNKNOWN, not ELAB_NO, for a call at no point, in a block a
-   call may keep to run later, or a pass made (a hook the language calls);
+   call may keep to run later, one that runs any time after its point (an
+   END body, a lazy chain's block: elab_runs_later), or a pass made (a hook
+   the language calls);
    for a chain through a class whose superclass the record does not hold
    (`Struct.new`, a core class); after an undef or a removal of an earlier
    definition; and where what the record cannot order may supply the name
@@ -372,7 +374,9 @@ void elab_open_histories(Compiler *c, void (*fn)(void *arg, int cls, int sg, con
 int elab_call_method(Compiler *c, int id, int cls, const char *name, int sg, int mm);
 /* ...the same of cls's own methods alone (its singleton's own when sg), as
    a call that asks the class itself sees them (CT_OWN: singleton_methods(false)):
-   its own history of name at the call, none of its ancestors' or mixins' */
+   its own history of name at the call, none of its ancestors' or mixins'
+   (the Class reopening's class side reads its instance side too, as
+   elab_call_method does) */
 int elab_call_own_method(Compiler *c, int id, int cls, const char *name, int sg);
 /* the class a record builder made (`Foo = Struct.new(:a)`), or one whose
    header's superclass is the class a builder makes (`class Foo <

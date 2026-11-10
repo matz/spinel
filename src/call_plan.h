@@ -214,10 +214,18 @@ int cplan_class_row(Compiler *c, int id, int recv, const char *name);
    read it. */
 typedef enum { CVC_NONE, CVC_AREF, CVC_NEW } CvCtor;
 CvCtor cplan_cv_ctor(Compiler *c, int id);
-/* ...and whether class k is one it builds: a subclass of Array or Hash the
-   receiver may hold (poly_cls_value_reaches) that runs no constructor of
+/* ...the same on the call's shape alone, for the census ahead of the type
+   fixpoint (compute_instantiated): a `[]` it answers CVC_AREF is one whose
+   receiver may hold a Class value, which cplan_cv_ctor then asks the
+   receiver's type to settle */
+CvCtor cplan_cv_ctor_shape(Compiler *c, int id);
+/* ...whether a call of form f builds an instance of class k when its
+   receiver holds k: a subclass of Array or Hash that runs no constructor of
    its own for the call (`new` reaches an initialize or a self.new; `[]`
    skips an initialize, as CRuby's does) */
+int cplan_cv_ctor_class(Compiler *c, CvCtor f, int k);
+/* ...and whether class k is one call id builds: one cplan_cv_ctor_class
+   takes that the receiver may hold (poly_cls_value_reaches) */
 int cplan_cv_ctor_builds(Compiler *c, int id, int k);
 /* Does call `id`, which has no receiver, take the BOP_KERNEL row of its name: an internal row for a call the compiler made, any other where no method of the program's own (a top-level function or the enclosing class's) answers the name? */
 int cplan_kernel_row(Compiler *c, int id, const char *name);

@@ -5404,8 +5404,11 @@ static int infer_write_multi_assign_pinned(Compiler *c, const NodeTable *nt) {
 /* A call that builds an Array or Hash subclass from its arguments through a
    Class value (cplan_cv_ctor) is evidence for the Array or Hash each class
    it builds embeds, as a push through a boxed receiver is: the kind folds
-   in the arguments' element type, and a Hash holds boxed keys and values.
-   1 when a class's kind changed. */
+   in the arguments' element type, each argument read as a pushed value
+   (push_elem_ty: an empty `[]` or `{}`, which infers no type of its own, is
+   a container all the same, and `k[[]]` beside an Integer construction left
+   the kind Integer and dropped the nested Array, #11501), and a Hash holds
+   boxed keys and values. 1 when a class's kind changed. */
 static int class_value_fill_evidence(Compiler *c) {
   if (!c->has_arysub) return 0;
   const NodeTable *nt = c->nt;
@@ -5424,8 +5427,8 @@ static int class_value_fill_evidence(Compiler *c) {
            elements, and any other form (a size, a block) nils or block values */
         TyKind at = argc == 1 ? infer_type(c, argv[0]) : TY_UNKNOWN;
         for (int a = 0; a < argc; a++) {
-          TyKind vt = f == CVC_AREF ? infer_type(c, argv[a])
-                    : argc == 2 ? (a == 1 ? infer_type(c, argv[1]) : TY_UNKNOWN)
+          TyKind vt = f == CVC_AREF ? push_elem_ty(c, argv[a])
+                    : argc == 2 ? (a == 1 ? push_elem_ty(c, argv[1]) : TY_UNKNOWN)
                     : array_new_copies(at) ? ty_array_elem(at) : TY_POLY;
           if (vt == TY_STRBUF) vt = TY_STRING;
           if (vt != TY_UNKNOWN) fold_evidence(&now, 1, 0, TY_INT, vt);

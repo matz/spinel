@@ -1133,7 +1133,7 @@ int g_traits_promote = 0;
 const TyTraits ty_traits_promote_rational = {
   "sp_Rational", "(sp_Rational){0}", "(sp_Rational){0}", NULL, "sp_promote_rat_box", NULL,
   "sp_promote_rat_box($e)", NULL, NULL, "(*(sp_Rational *)($e).v.p)", "(*(sp_Rational *)($e).v.p)",
-  NULL, NULL, NULL, NULL, 0, 0, 1, 1, 3, 10 };
+  NULL, NULL, NULL, NULL, 0, 0, 1, 1, 3, 10, NULL, 0 };
 
 /* A builtin value's type, which lays out no instance variables: a String,
    a number, true, false, nil, a Symbol, a Range (of any endpoints), a Random,

@@ -2748,7 +2748,7 @@ else {
       /* a value that can be nil travels as its oint into the _nilable store */
       for (int a = 0; a < argc; a++) {
         if (nil_store_sfx(c, "Int", argv[a])[0]) { buf_printf(b, " sp_oint _u%d_%d = ", t, a); emit_elem_store_value(c, "Int", argv[a], b); }
-        else { buf_printf(b, " sp_int _u%d_%d = ", t, a); emit_typed_elem_value(c, argv[a], TY_INT, b); }
+        else { buf_printf(b, " sp_int _u%d_%d = ", t, a); emit_typed_elem_value(c, argv[a], rt, b); }
         buf_puts(b, ";");
       }
       buf_puts(b, nilck);
@@ -2761,14 +2761,15 @@ else {
       if (held) { emit_expr(c, recv, b); buf_puts(b, ";"); }
       else emit_recv_rooted(c, recv, t, "SP_GC_ROOT", b);
       /* every argument before the first insert, each rooted across the
-         later ones, then inserted in order */
+         later ones, then inserted in order, as the element is held */
       for (int a = 0; a < argc; a++) {
-        buf_printf(b, " const char *_u%d_%d = ", t, a); emit_typed_elem_value(c, argv[a], TY_STRING, b);
-        buf_printf(b, "; SP_GC_ROOT_STR(_u%d_%d);", t, a);
+        char un[32]; snprintf(un, sizeof un, "_u%d_%d", t, a);
+        buf_puts(b, " "); emit_ctype(c, typed_elem_held(rt), b); buf_printf(b, " %s = ", un); emit_typed_elem_value(c, argv[a], rt, b);
+        buf_puts(b, "; "); emit_gc_root_var(c, typed_elem_held(rt), un, b);
       }
       buf_puts(b, nilck);
       for (int a = 0; a < argc; a++) {
-        buf_printf(b, " sp_StrArray_insert(_t%d, %d, _u%d_%d);", t, a, t, a);
+        buf_printf(b, " sp_StrArray_insert%s(_t%d, %d, _u%d_%d);", typed_elem_store_sfx(rt), t, a, t, a);
       }
     }
     else {
@@ -2781,7 +2782,7 @@ else {
       else emit_recv_rooted(c, recv, t, "SP_GC_ROOT", b);
       for (int a = 0; a < argc; a++) {
         if (nil_store_sfx(c, "Float", argv[a])[0]) { buf_printf(b, " sp_ofloat _u%d_%d = ", t, a); emit_elem_store_value(c, "Float", argv[a], b); }
-        else { buf_printf(b, " sp_float _u%d_%d = ", t, a); emit_typed_elem_value(c, argv[a], TY_FLOAT, b); }
+        else { buf_printf(b, " sp_float _u%d_%d = ", t, a); emit_typed_elem_value(c, argv[a], rt, b); }
         buf_puts(b, ";");
       }
       buf_puts(b, nilck);
@@ -2966,10 +2967,10 @@ else {
                to2, ti2, ti2, ti2, t, t, ti2, to2, t, t);
     for (int a2 = 1; a2 < argc; a2++) {
       const char *isfx = nil_store_sfx(c, k, argv[a2]);
-      buf_printf(b, " sp_%sArray_insert%s(_t%d, _t%d + %d, ", k, isfx, t, ti2, a2 - 1);
-      /* the _nilable store takes the value with its nil */
+      buf_printf(b, " sp_%sArray_insert%s(_t%d, _t%d + %d, ", k, isfx[0] ? isfx : typed_elem_store_sfx(rt), t, ti2, a2 - 1);
+      /* the _nilable store takes the value with its nil, others as held */
       if (isfx[0]) emit_elem_store_value(c, k, argv[a2], b);
-      else emit_typed_elem_value(c, argv[a2], ty_array_elem(rt), b);
+      else emit_typed_elem_value(c, argv[a2], rt, b);
       buf_puts(b, ");");
     }
     buf_printf(b, " _t%d; })", t);
@@ -3980,10 +3981,10 @@ static int emit_typed_array_call(Compiler *c, int id, Buf *b, const NodeTable *n
         buf_printf(b, "SP_GC_ROOT(_t%d); ", t);
       const char *fsfx = nil_store_sfx(c, fk, argv[0]);   /* a nil fill value takes the _nilable store */
       if (fsfx[0] && fill_rt != TY_POLY_ARRAY) buf_printf(b, "%s _t%d = ", oint_ctype(ty_array_elem(fill_rt)), tv);
-      else { emit_ctype(c, ty_array_elem(fill_rt), b); buf_printf(b, " _t%d = ", tv); }
+      else { emit_ctype(c, typed_elem_held(fill_rt), b); buf_printf(b, " _t%d = ", tv); }
       if (fill_rt == TY_POLY_ARRAY) emit_boxed(c, argv[0], b);
       else if (fsfx[0]) emit_elem_store_value(c, fk, argv[0], b);
-      else emit_typed_elem_value(c, argv[0], ty_array_elem(fill_rt), b);
+      else { emit_typed_elem_value(c, argv[0], fill_rt, b); fsfx = typed_elem_store_sfx(fill_rt); }   /* held once: one object at each index */
       buf_printf(b, "; sp_int _t%d = sp_%sArray_length(_t%d);", tn, fk, t);
       if (argc >= 2 && fill_range_fn(comp_ntype(c, argv[1]))) {
         /* fill(val, range): the range is the index span, its end in place

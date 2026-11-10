@@ -426,6 +426,7 @@ int strbuf_read_copies(Compiler *c, int v);
 /* what sb_reader_shim_open lifted: the node's marks and type as they were,
    and the views (ntok of them from tok) that hold the lifted ones */
 typedef struct { unsigned char box, demand; TyKind ty; int tok, ntok; } SbReaderSave;
+int str_var_read(Compiler *c, int v);   /* a read of a variable, a global, a class variable or a constant */
 int sb_reader_shim_open(Compiler *c, int id, int recv, Buf *sref, SbReaderSave *sv);
 void sb_reader_shim_close(Compiler *c, int recv, const SbReaderSave *sv);
 int sb_shadowed_reader(int node);

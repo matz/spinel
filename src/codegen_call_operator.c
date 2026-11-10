@@ -1782,10 +1782,11 @@ int emit_call_operator_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, co
                    strbuf_self_route(c, recv) && g_n_argov + 2 < MAX_ARG_OVERRIDE;
   /* (one a `&.` guard holds already is taken from there: ran_first_handle) */
   int aset_held = aset_route && ran_first_handle(recv) >= 0;
-  if (recv >= 0 && sp_streq(name, "[]=") && (argc == 2 || argc == 3) &&
-      ((repr_of(c, recv).as_ty == TY_STRING &&
-        (nt_kind(nt, recv) == NK_LocalVariableReadNode ||
-         nt_kind(nt, recv) == NK_InstanceVariableReadNode)) ||
+  if (recv >= 0 && is_index_assign(name) && (argc == 2 || argc == 3) &&
+      /* (a variable of any kind, a global, a constant or a class variable
+         too: the statement stores through them, its reader shim for the
+         last three, sb_reader_shim_open) */
+      ((repr_of(c, recv).as_ty == TY_STRING && str_var_read(c, recv)) ||
        (repr_of(c, recv).as_ty == TY_STRBUF && nt_kind(nt, recv) == NK_CallNode) || aset_route ||
        /* or the shadow a shim reads it as (emit_held_self_answer_shim) */
        sb_held_shadow(recv))) {

@@ -218,7 +218,7 @@ int holder_slot_buf(Compiler *c, const HolderRef *h, Buf *b) {
   case HK_CONST: {
     /* a constant not assigned yet is a NameError at the read; the text stays an lvalue */
     if (!b) return 1;
-    int cptr = (int)nt_int(c->nt, h->node, "const_ptr", 0);   /* its slot, held by emit_const_recv_wrap */
+    int cptr = view_const_slot(c, h->node);   /* its slot, held by emit_const_recv_wrap */
     if (cptr) buf_printf(b, "(*_p%d)", cptr);
     else emit_const_slot_read(c, h->node, h->lv, h->lv->name, 0, 0, b);
     return 1;

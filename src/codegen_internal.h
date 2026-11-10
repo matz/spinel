@@ -1943,9 +1943,9 @@ void emit_const_read_open(Compiler *c, int id, const LocalVar *lv, Buf *b);
 void emit_const_read_close(Compiler *c, int id, const LocalVar *lv, Buf *b);
 int emit_const_class_call_wrap(Compiler *c, int id, Buf *b, void (*emit)(Compiler *, int, Buf *));
 int emit_const_recv_wrap(Compiler *c, int id, Buf *b);
-/* a hold const_recv_hold_open made: the receiver node r (or -1), the view of a class read's (-1 if none), whether the pointer
+/* a hold const_recv_hold_open made: the receiver view, whether the pointer
    is declared in the prelude (in_pre) or inside a statement expression whose call has a prelude of its own (inl) */
-typedef struct { int r, view, inl, in_pre; size_t at; Buf own; Buf *sv_pre; } ConstHold;
+typedef struct { int view, inl, in_pre; size_t at; Buf own; Buf *sv_pre; } ConstHold;
 int const_recv_hold_open(Compiler *c, int id, Buf *b, ConstHold *h, int inline_only);
 void const_recv_hold_close(Compiler *c, ConstHold *h, Buf *b);
 int str_changing_name(const char *nm);   /* a String method that changes its receiver: a mutator or an encoding one */
@@ -2705,10 +2705,14 @@ int stmt_may_rebind_local(Compiler *c, int stmt, int read, const char *name);
    from slot n up. */
 int view_bind(int node, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
 void view_unbind(int n);
-/* One representation flag of node id seen as v for one nested emission,
-   restored by view_pop (or view_unwind on a refusal) like a type view. */
+/* A constant receiver's read effect already ran, or its slot is held in
+   _p<temp>. Each view lasts for the enclosing call's emission. */
 int view_const_read_done(Compiler *c, int id);
 int view_push_const_read(Compiler *c, int id);
+int view_const_slot(Compiler *c, int id);
+int view_push_const_slot(Compiler *c, int id, int temp);
+/* One representation flag of node id seen as v for one nested emission,
+   restored by view_pop (or view_unwind on a refusal) like a type view. */
 enum { VR_STRBUF_BOX, VR_HANDLE_DEMAND, VR_POLY_LIFT, VR_NILNARROW, VR_NIL_TESTED, VR_HEAD_HELD, VR_DISCARDED,
        VR_STR_SHADOW };
 int view_push_repr(Compiler *c, int id, int flag, int v);

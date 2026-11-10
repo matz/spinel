@@ -12,3 +12,11 @@ ARR
 {k: [8]}
 {k: ARR}
 ARR
+ARR
+[1]
+Q
+1
+boom
+ARR
+[2]
+[#<struct S a=[1]>]

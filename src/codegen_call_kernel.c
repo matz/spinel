@@ -63,11 +63,9 @@ int emit_poly_concat_splat(Compiler *c, int t, int splat, Buf *b) {
    known only at run time. Gather them (a splat through sp_splat_to_array),
    print each one's inspect, and answer what Kernel#p does: nil for none, the
    argument for one, the array for more. */
-/* the inspect a value-form p or pp prints with: pp where the program
-   reopens Array#inspect leaves that method out (sp_pp_inspect), as CRuby's
-   pp lays an Array out by its own pretty_print */
+/* the inspect a value-form p or pp prints with (pp_leaves_array_inspect) */
 static const char *p_inspect_fn(Compiler *c, const char *name) {
-  return sp_streq(name, "pp") && array_user_inspect_mi(c) >= 0 ? "sp_pp_inspect" : "sp_poly_inspect";
+  return pp_leaves_array_inspect(c, name) ? "sp_pp_inspect" : "sp_poly_inspect";
 }
 static int emit_p_splat_value(Compiler *c, const char *name, int argc, const int *argv, Buf *b) {
   const NodeTable *nt = c->nt;

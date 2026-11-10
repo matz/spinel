@@ -1712,6 +1712,9 @@ int emit_regex_pat_to_buf(Compiler *c, int nid, Buf *b);
 int nameset_has(NameSet *s, const char *nm);
 /* the program's own Array#inspect (a reopened Array), or -1 (codegen.c) */
 int array_user_inspect_mi(Compiler *c);
+/* a pp where the program reopens Array#inspect: printed through
+   sp_pp_inspect (codegen_stmt.c) */
+int pp_leaves_array_inspect(Compiler *c, const char *name);
 void emit_param_cell_publish(Compiler *c, int blk, const char *pname, Buf *b, int indent);
 void nameset_add(NameSet *s, const char *nm);
 /* Emit the C lvalue for local `name` in the current emission context: a

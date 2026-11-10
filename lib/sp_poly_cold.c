@@ -732,7 +732,8 @@ const char *sp_poly_inspect(sp_RbVal v)
     case SP_TAG_NIL:  return SPL("nil");
     case SP_TAG_SYM:  return sp_sym_inspect((sp_sym)v.v.i);
     case SP_TAG_ENCODING: return sp_encoding_inspect_name(v.v.s ? v.v.s : "");
-    case SP_TAG_CLASS: return sp_class_val_user(v, sp_class_user_inspect_fn);
+    /* (the class's own self.inspect runs as outside a pp: SP_PP_USER) */
+    case SP_TAG_CLASS: return SP_PP_USER(sp_class_val_user(v, sp_class_user_inspect_fn));
     case SP_TAG_BIGINT: return sp_bigint_to_s((sp_Bigint *)v.v.p);
     case SP_TAG_OBJ:
       /* an Array of any kind, where the program reopens Array#inspect */

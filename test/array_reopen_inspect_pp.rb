@@ -17,3 +17,32 @@ h = {k: [8]}
 pp h
 p h
 p [1]
+# the program's own #inspect that pp calls runs as outside a pp: its p and
+# its inspect calls run the program's Array#inspect, and after a raise out
+# of it p still does
+class Q
+  def initialize = @a = [1]
+  def inspect
+    p @a
+    pp @a
+    "Q"
+  end
+end
+pp Q.new
+$n = 0
+class Boom
+  def inspect
+    $n += 1
+    raise "boom" if $n == 1
+    "Boom"
+  end
+end
+begin
+  pp 1, Boom.new
+rescue => e
+  puts e.message
+end
+p [1]
+pp [2]
+S = Struct.new(:a)
+pp [S.new([1])]

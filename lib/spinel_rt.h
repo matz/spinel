@@ -1922,6 +1922,11 @@ extern const char *(*sp_array_user_inspect_fn)(sp_RbVal);
    it runs) */
 extern int sp_pp_printing;
 const char *sp_pp_inspect(sp_RbVal v);
+/* a call into the program's own #inspect or #to_s from a boxed render:
+   sp_pp_printing is cleared for it, so inside that method p and inspect run
+   the program's Array#inspect as outside a pp */
+#define SP_PP_USER(e) ({ int _ppw = sp_pp_printing; sp_pp_printing = 0; \
+  const char *_ppr = (e); sp_pp_printing = _ppw; _ppr; })
 static inline const char *sp_class_val_user(sp_RbVal v, const char *(*fn)(sp_Class)) {
   if (fn && v.cls_id != SP_CLASS_BY_NAME) {
     sp_Class _c = {v.v.i, NULL};

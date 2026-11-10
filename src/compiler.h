@@ -2549,6 +2549,9 @@ void comp_descendants_reset(void);
 /* Can no class inherit from class `cid`: no descendant, and not a reopened
    builtin class, whose subclasses the parent links do not show. */
 int comp_class_is_leaf(Compiler *c, int cid);
+int cv_reopen_builtin_id(Compiler *c, int k);   /* the builtin id a reopened builtin's class value carries, 0 for none */
+int comp_cv_arm_class(Compiler *c, int k);   /* does a class-value switch give class k an arm */
+int comp_class_builds_by_aref(Compiler *c, int k);   /* does `K[..]` build an instance of k */
 /* Walk the chain for an attr reader/writer; returns 1 and the owning class. */
 int        comp_reader_in_chain(Compiler *c, int class_id, const char *name, int *def_class);
 int        comp_writer_in_chain(Compiler *c, int class_id, const char *name, int *def_class);

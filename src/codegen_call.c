@@ -1959,7 +1959,7 @@ int poly_cls_value_cands(Compiler *c, int id, const char *name, int argc, const 
   *wants_blk = 0;
   for (int ki = 0; ki < ncc8; ki++) {
     int k = cc8[ki].cls;
-    if (is_builtin_reopen(c->classes[k].name)) continue;
+    if (!comp_cv_arm_class(c, k)) continue;
     /* the Class values the receiver can hold, when the walk bounds them: a
        class method of any other class is unreachable (Shellwords.split for
        a value that is a String or Integer), and its arm would put that
@@ -2136,8 +2136,10 @@ static int emit_poly_cls_value_builtin(Compiler *c, int id, const char *name, in
 static void emit_cls_value_test(Compiler *c, int k, int tv, Buf *b) {
   const char *crn = class_ruby_name(c, k);
   if (!crn) crn = c->classes[k].name;
-  buf_printf(b, "(_t%d.cls_id == %d || (_t%d.cls_id == SP_CLASS_BY_NAME && _t%d.v.s && "
-                "strcmp(_t%d.v.s, \"%s\") == 0)) ? ", tv, k, tv, tv, tv, crn);
+  int bid = cv_reopen_builtin_id(c, k);
+  buf_printf(b, "(_t%d.cls_id == %d || ", tv, k);
+  if (bid) buf_printf(b, "_t%d.cls_id == %d || ", tv, bid);
+  buf_printf(b, "(_t%d.cls_id == SP_CLASS_BY_NAME && _t%d.v.s && strcmp(_t%d.v.s, \"%s\") == 0)) ? ", tv, tv, tv, crn);
 }
 /* One class value's arm of a class-tag switch (a class-value trial arm of
    cplan_poly_cmeth): the call re-entered on the receiver read as the

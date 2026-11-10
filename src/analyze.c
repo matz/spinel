@@ -1889,6 +1889,14 @@ void compute_instantiated(Compiler *c, int early) {
         continue;
       }
     }
+    /* a Class value's `k[..]` builds an instance of each Array or Hash
+       subclass it may hold (cplan_cv_ctor) */
+    if (!early && cplan_cv_ctor(c, id) == CVC_AREF) {
+      Scope *encl = comp_scope_of(c, id);
+      if (!encl || encl->reachable)
+        for (int k = 0; k < c->nclasses; k++)
+          if (cplan_cv_ctor_builds(c, id, k)) c->classes[k].instantiated = 1;
+    }
     /* C.new / C.allocate */
     if (recv >= 0 && (sp_streq(name, "new") || sp_streq(name, "allocate"))) {
       NodeKind rk = nt_kind(nt, recv);
@@ -46818,6 +46826,9 @@ static void rewrite_array_subclass_new(Compiler *c, int id) {
   int k = -1;
   if (recv >= 0 && (nt_kind(nt, recv) == NK_ConstantReadNode || nt_kind(nt, recv) == NK_ConstantPathNode))
     k = const_node_class_index(c, recv);
+  /* a local holding that one class (`k = MyA; k.new(2, 0)`) names it as the constant does */
+  else if (recv >= 0 && nt_kind(nt, recv) == NK_LocalVariableReadNode)
+    k = class_var_static_ci(c, recv);
   else if (recv < 0 || nt_kind(nt, recv) == NK_SelfNode) {
     Scope *s = comp_scope_of(c, id);
     if (s && s->is_cmethod) k = s->class_id;

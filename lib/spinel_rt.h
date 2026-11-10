@@ -22155,6 +22155,7 @@ static void sp_dyn_new_arity(sp_int given, sp_int max) {
   sp_arity_check(given, 0, max, NULL);
 }
 sp_RbVal sp_builtin_class_new(int kind, sp_int argc, const sp_RbVal *av, sp_Proc *blk);
+sp_RbVal sp_builtin_class_aref(int kind, sp_int argc, const sp_RbVal *av);
 /* The class `exception` is sent to as a value: a class of Exception, and
    NoMethodError for any other. A class of the program can come by its name
    alone, from a boxed exception's #class, and takes its id here: the id is

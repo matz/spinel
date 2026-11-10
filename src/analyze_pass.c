@@ -5401,10 +5401,52 @@ static int infer_write_multi_assign_pinned(Compiler *c, const NodeTable *nt) {
   return changed;
 }
 
+/* A call that builds an Array or Hash subclass from its arguments through a
+   Class value (cplan_cv_ctor) is evidence for the Array or Hash each class
+   it builds embeds, as a push through a boxed receiver is: the kind folds
+   in the arguments' element type, and a Hash holds boxed keys and values.
+   1 when a class's kind changed. */
+static int class_value_fill_evidence(Compiler *c) {
+  if (!c->has_arysub) return 0;
+  const NodeTable *nt = c->nt;
+  int changed = 0;
+  NT_FOREACH_KIND(nt, NK_CallNode, id) {
+    CvCtor f = cplan_cv_ctor(c, id);
+    if (f == CVC_NONE) continue;
+    int argc = 0; const int *argv = call_args(nt, id, &argc);
+    for (int k = 0; k < c->nclasses; k++) {
+      if (!cplan_cv_ctor_builds(c, id, k)) continue;
+      int root = comp_ary_root(c, k);
+      TyKind *slot = &c->classes[root].ary_kind, was = *slot, now = was;
+      if (c->classes[root].ary_hash) now = TY_POLY_POLY_HASH;
+      else {
+        /* `[]` holds its arguments; `new(n, v)` n copies of v, `new(a)` a's
+           elements, and any other form (a size, a block) nils or block values */
+        TyKind at = argc == 1 ? infer_type(c, argv[0]) : TY_UNKNOWN;
+        for (int a = 0; a < argc; a++) {
+          TyKind vt = f == CVC_AREF ? infer_type(c, argv[a])
+                    : argc == 2 ? (a == 1 ? infer_type(c, argv[1]) : TY_UNKNOWN)
+                    : array_new_copies(at) ? ty_array_elem(at) : TY_POLY;
+          if (vt == TY_STRBUF) vt = TY_STRING;
+          if (vt != TY_UNKNOWN) fold_evidence(&now, 1, 0, TY_INT, vt);
+          if (f == CVC_NEW && argc != 2) break;
+        }
+        if (f == CVC_NEW && nt_ref(nt, id, "block") >= 0) fold_evidence(&now, 1, 0, TY_INT, TY_POLY);
+        if (now != was && !array_new_copies(now)) now = TY_POLY_ARRAY;
+      }
+      if (now == was) continue;
+      *slot = now;
+      comp_touch_class(root);
+      changed = 1;
+    }
+  }
+  return changed;
+}
 int infer_write_types(Compiler *c) {
   const NodeTable *nt = c->nt;
   int changed = 0;
   g_infer_write_round = 1;
+  changed |= class_value_fill_evidence(c);
   int nfb = 0, *fb = fiber_new_blocks(c, &nfb);
   /* The reset below moves every scope it resets a local of, and most of them
      derive the same types again: their versions would say they changed, and

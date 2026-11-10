@@ -3732,16 +3732,18 @@ static int emit_constant_value(Compiler *c, int id, Buf *b, Buf *checks, const N
           }
           else buf_printf(&rhs, "%scst_%s", slot ? "&" : "", ckey[i]);
           /* a constant not assigned yet is as missing as one the class lacks */
+          buf_puts(b, " ");
+          emit_cv_case_labels(c, ccls[i], ccls, nc, b);
           if (const_has_flag(comp_const(c, ckey[i])) && topc && i >= nc - (obj_k >= 0 ? 2 : 1))
             /* (Object's own: CRuby's message names the constant alone) */
-            buf_printf(b, " case %d: if (!cst_%s__set) sp_raise_cls(\"NameError\", \"uninitialized constant %s\");"
-                          " _t%d = %s; break;", ccls[i], ckey[i], nm, tr, rhs.p);
+            buf_printf(b, "if (!cst_%s__set) sp_raise_cls(\"NameError\", \"uninitialized constant %s\");"
+                          " _t%d = %s; break;", ckey[i], nm, tr, rhs.p);
           else if (const_has_flag(comp_const(c, ckey[i])))
-            buf_printf(b, " case %d: if (!cst_%s__set) sp_raise_cls(\"NameError\", sp_sprintf("
+            buf_printf(b, "if (!cst_%s__set) sp_raise_cls(\"NameError\", sp_sprintf("
                           "\"uninitialized constant %%s::%s\", %s(_t%d)));"
-                          " _t%d = %s; break;", ccls[i], ckey[i], nm, comp_class_display_fn(c), tk, tr, rhs.p);
+                          " _t%d = %s; break;", ckey[i], nm, comp_class_display_fn(c), tk, tr, rhs.p);
           else
-            buf_printf(b, " case %d: _t%d = %s; break;", ccls[i], tr, rhs.p);
+            buf_printf(b, "_t%d = %s; break;", tr, rhs.p);
           free(rhs.p);
         }
         /* A class with no such constant is CRuby's NameError, not the

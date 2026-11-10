@@ -3,15 +3,6 @@
 require_relative "zonetab"
 
 class Date
-  # Character class flags used by _parse
-  HAVE_ALPHA = 1
-  HAVE_DIGIT = 2
-  HAVE_DASH  = 4
-  HAVE_DOT   = 8
-  HAVE_SLASH = 16
-  HAVE_COLON = 32
-  private_constant :HAVE_ALPHA, :HAVE_DIGIT, :HAVE_DASH, :HAVE_DOT, :HAVE_SLASH, :HAVE_COLON
-
   class << self
 
     # ------------------------------------------------------------------
@@ -33,10 +24,12 @@ class Date
     #
     # Related: Date.rfc3339 (returns a \Date object).
     def _rfc3339(string, limit: 128)
-      return {} if string.nil?
-      string = string_value(string)
+      unless String === string
+        return {} if string.nil?
+        string = to_string_value(string)
+      end
       return {} if string.empty?
-      raise ArgumentError, "string length (#{string.length}) exceeds the limit #{limit}" if limit && string.length > limit
+      parse_check_limit(string, limit)
 
       # Fast path: YYYY-MM-DDTHH:MM:SS+HH:MM (25 bytes) or YYYY-MM-DDTHH:MM:SSZ (20 bytes)
       len = string.length
@@ -97,10 +90,12 @@ class Date
     #
     # Related: Date.httpdate (returns a \Date object).
     def _httpdate(string, limit: 128)
-      return {} if string.nil?
-      string = string_value(string)
+      unless String === string
+        return {} if string.nil?
+        string = to_string_value(string)
+      end
       return {} if string.empty?
-      raise ArgumentError, "string length (#{string.length}) exceeds the limit #{limit}" if limit && string.length > limit
+      parse_check_limit(string, limit)
 
       # Fast path for Type 1: "Dow, DD Mon YYYY HH:MM:SS GMT" (29 bytes)
       len = string.length
@@ -125,7 +120,7 @@ class Date
 
       h = {}
       if (m = HTTPDATE_TYPE1_RE.match(string))
-        h[:wday]   = HTTPDATE_WDAY[m[1].downcase]
+        h[:wday]   = ABBR_DAY_NUM[m[1].downcase]
         h[:mday]   = m[2].to_i
         h[:mon]    = ABBR_MONTH_NUM[m[3].downcase]
         h[:year]   = m[4].to_i
@@ -146,7 +141,7 @@ class Date
         h[:zone]   = m[8]
         h[:offset] = 0
       elsif (m = HTTPDATE_TYPE3_RE.match(string))
-        h[:wday]   = HTTPDATE_WDAY[m[1].downcase]
+        h[:wday]   = ABBR_DAY_NUM[m[1].downcase]
         h[:mon]    = ABBR_MONTH_NUM[m[2].downcase]
         h[:mday]   = m[3].to_i
         h[:hour]   = m[4].to_i
@@ -176,10 +171,12 @@ class Date
     #
     # Related: Date.rfc2822 (returns a \Date object).
     def _rfc2822(string, limit: 128)
-      return {} if string.nil?
-      string = string_value(string)
+      unless String === string
+        return {} if string.nil?
+        string = to_string_value(string)
+      end
       return {} if string.empty?
-      raise ArgumentError, "string length (#{string.length}) exceeds the limit #{limit}" if limit && string.length > limit
+      parse_check_limit(string, limit)
 
       # Fast path: "Dow, DD Mon YYYY HH:MM:SS +ZZZZ" (31 bytes, 2-digit day)
       len = string.length
@@ -195,7 +192,6 @@ class Date
               zone = sc[8]
               sign = zone[0] == '-' ? -1 : 1
               offset_val = sign * (zone[1, 2].to_i * 3600 + zone[3, 2].to_i * 60)
-              zone = '+0000' if zone == '+0000'
               return {
                 wday: wday_info[0], mday: sc[2].to_i, mon: mon_info[0],
                 year: sc[4].to_i, hour: sc[5].to_i, min: sc[6].to_i, sec: sc[7].to_i,
@@ -211,7 +207,7 @@ class Date
           string.gsub(/[\r\n\0]+/, ' ') : string
       h = {}
       if (m = RFC2822_RE.match(s))
-        h[:wday]   = HTTPDATE_WDAY[m[1].downcase] if m[1]
+        h[:wday]   = ABBR_DAY_NUM[m[1].downcase] if m[1]
         h[:mday]   = m[2].to_i
         h[:mon]    = ABBR_MONTH_NUM[m[3].downcase]
         y_s = m[4]
@@ -254,10 +250,12 @@ class Date
     #
     # Related: Date.xmlschema (returns a \Date object).
     def _xmlschema(string, limit: 128)
-      return {} if string.nil?
-      string = string_value(string)
+      unless String === string
+        return {} if string.nil?
+        string = to_string_value(string)
+      end
       return {} if string.empty?
-      raise ArgumentError, "string length (#{string.length}) exceeds the limit #{limit}" if limit && string.length > limit
+      parse_check_limit(string, limit)
 
       # Fast path: YYYY-MM-DD (exactly 10 bytes, all ASCII)
       if string.length == 10
@@ -313,10 +311,12 @@ class Date
     #
     # Related: Date.iso8601 (returns a \Date object).
     def _iso8601(string, limit: 128)
-      return {} if string.nil?
-      string = string_value(string)
+      unless String === string
+        return {} if string.nil?
+        string = to_string_value(string)
+      end
       return {} if string.empty?
-      raise ArgumentError, "string length (#{string.length}) exceeds the limit #{limit}" if limit && string.length > limit
+      parse_check_limit(string, limit)
 
       # Fast path: YYYY-MM-DD (exactly 10 bytes, all ASCII)
       if string.length == 10
@@ -366,10 +366,12 @@ class Date
     #
     # Related: Date.jisx0301 (returns a \Date object).
     def _jisx0301(string, limit: 128)
-      return {} if string.nil?
-      string = string_value(string)
+      unless String === string
+        return {} if string.nil?
+        string = to_string_value(string)
+      end
       return {} if string.empty?
-      raise ArgumentError, "string length (#{string.length}) exceeds the limit #{limit}" if limit && string.length > limit
+      parse_check_limit(string, limit)
 
       # Fast path: X##.##.## (9 bytes: era + YY.MM.DD)
       if string.length == 9
@@ -436,9 +438,9 @@ class Date
     #
     # Related: Date.parse(returns a \Date object).
     def _parse(string, comp = true, limit: 128)
-      string = string_value(string)
+      string = to_string_value(string) unless String === string
       return {} if string.empty?
-      raise ArgumentError, "string length (#{string.length}) exceeds limit (#{limit})" if limit && string.length > limit
+      parse_check_limit(string, limit)
 
       # === Fast paths for common date formats ===
       len = string.length
@@ -489,95 +491,97 @@ class Date
       str = string.dup
       str.gsub!(/[^-+',.\/:\@\[\][:alnum:]]+/, ' ')
 
-      # check_class (byte-level for speed)
-      cc = 0
+      # check_class (byte-level for speed): record which character classes the
+      # string contains, so each parser below runs only when the classes it
+      # needs are present.
+      have_alpha = have_digit = have_dash = have_dot = have_slash = have_colon = false
       str.each_byte do |b|
         if b >= 65 && b <= 90 || b >= 97 && b <= 122 || b > 127
-          cc |= HAVE_ALPHA
+          have_alpha = true
         elsif b >= 48 && b <= 57
-          cc |= HAVE_DIGIT
+          have_digit = true
         elsif b == 45
-          cc |= HAVE_DASH
+          have_dash = true
         elsif b == 46
-          cc |= HAVE_DOT
+          have_dot = true
         elsif b == 47
-          cc |= HAVE_SLASH
+          have_slash = true
         elsif b == 58
-          cc |= HAVE_COLON
+          have_colon = true
         end
       end
 
       h = {}
 
       # parse_day (always runs)
-      if (cc & HAVE_ALPHA) != 0
+      if have_alpha
         parse_day(str, h)
       end
 
       # parse_time (needs colon or alpha for h/am/pm patterns)
-      if (cc & HAVE_DIGIT) != 0 && (cc & (HAVE_COLON | HAVE_ALPHA)) != 0
+      if have_digit && (have_colon || have_alpha)
         parse_time(str, h)
       end
 
       # Date parsers: first match wins (goto ok)
       matched = false
 
-      if !matched && (cc & (HAVE_ALPHA | HAVE_DIGIT)) == (HAVE_ALPHA | HAVE_DIGIT)
+      if !matched && have_alpha && have_digit
         matched = parse_eu(str, h)
       end
 
-      if !matched && (cc & (HAVE_ALPHA | HAVE_DIGIT)) == (HAVE_ALPHA | HAVE_DIGIT)
+      if !matched && have_alpha && have_digit
         matched = parse_us(str, h)
       end
 
-      if !matched && (cc & (HAVE_DIGIT | HAVE_DASH)) == (HAVE_DIGIT | HAVE_DASH)
+      if !matched && have_digit && have_dash
         matched = parse_iso(str, h)
       end
 
-      if !matched && (cc & (HAVE_DIGIT | HAVE_DOT)) == (HAVE_DIGIT | HAVE_DOT)
+      if !matched && have_digit && have_dot
         matched = parse_jis(str, h)
       end
 
-      if !matched && (cc & (HAVE_ALPHA | HAVE_DIGIT | HAVE_DASH)) == (HAVE_ALPHA | HAVE_DIGIT | HAVE_DASH)
+      if !matched && have_alpha && have_digit && have_dash
         matched = parse_vms(str, h)
       end
 
-      if !matched && (cc & (HAVE_DIGIT | HAVE_SLASH)) == (HAVE_DIGIT | HAVE_SLASH)
+      if !matched && have_digit && have_slash
         matched = parse_sla(str, h)
       end
 
-      if !matched && (cc & (HAVE_DIGIT | HAVE_DOT)) == (HAVE_DIGIT | HAVE_DOT)
+      if !matched && have_digit && have_dot
         matched = parse_dot(str, h)
       end
 
-      if !matched && (cc & HAVE_DIGIT) != 0
+      if !matched && have_digit
         matched = parse_iso2(str, h)
       end
 
-      if !matched && (cc & HAVE_DIGIT) != 0
+      if !matched && have_digit
         matched = parse_year(str, h)
       end
 
-      if !matched && (cc & HAVE_ALPHA) != 0
+      if !matched && have_alpha
         matched = parse_mon(str, h)
       end
 
-      if !matched && (cc & HAVE_DIGIT) != 0
+      if !matched && have_digit
         matched = parse_mday(str, h)
       end
 
-      if !matched && (cc & HAVE_DIGIT) != 0
+      if !matched && have_digit
         parse_ddd(str, h)
       end
 
       # Post-processing (always runs after ok label)
       # parse_bc
-      if (cc & HAVE_ALPHA) != 0
+      if have_alpha
         parse_bc_post(str, h)
       end
 
       # parse_frag
-      if (cc & HAVE_DIGIT) != 0
+      if have_digit
         parse_frag(str, h)
       end
 
@@ -643,7 +647,7 @@ class Date
     # - Argument {limit}[rdoc-ref:Date@Argument+limit].
     #
     # Related: Date._parse (returns a hash).
-    def parse(string = '-4712-01-01', comp = true, start = DEFAULT_SG, limit: 128)
+    def parse(string = '-4712-01-01', comp = true, start = ITALY, limit: 128)
       hash = _parse(string, comp, limit: limit)
       fast_new_date(hash, start)
     end
@@ -669,7 +673,7 @@ class Date
     # - Argument {limit}[rdoc-ref:Date@Argument+limit].
     #
     # Related: Date._iso8601 (returns a hash).
-    def iso8601(string = JULIAN_EPOCH_DATE, start = DEFAULT_SG, limit: 128)
+    def iso8601(string = '-4712-01-01', start = ITALY, limit: 128)
       hash = _iso8601(string, limit: limit)
       fast_new_date(hash, start)
     end
@@ -691,7 +695,7 @@ class Date
     # - Argument {limit}[rdoc-ref:Date@Argument+limit].
     #
     # Related: Date._rfc3339 (returns a hash).
-    def rfc3339(string = JULIAN_EPOCH_DATETIME, start = DEFAULT_SG, limit: 128)
+    def rfc3339(string = '-4712-01-01T00:00:00+00:00', start = ITALY, limit: 128)
       hash = _rfc3339(string, limit: limit)
       fast_new_date(hash, start)
     end
@@ -712,7 +716,7 @@ class Date
     # - Argument {limit}[rdoc-ref:Date@Argument+limit].
     #
     # Related: Date._xmlschema (returns a hash).
-    def xmlschema(string = JULIAN_EPOCH_DATE, start = DEFAULT_SG, limit: 128)
+    def xmlschema(string = '-4712-01-01', start = ITALY, limit: 128)
       hash = _xmlschema(string, limit: limit)
       fast_new_date(hash, start)
     end
@@ -734,7 +738,7 @@ class Date
     # - Argument {limit}[rdoc-ref:Date@Argument+limit].
     #
     # Related: Date._rfc2822 (returns a hash).
-    def rfc2822(string = JULIAN_EPOCH_DATETIME_RFC2822, start = DEFAULT_SG, limit: 128)
+    def rfc2822(string = 'Mon, 1 Jan -4712 00:00:00 +0000', start = ITALY, limit: 128)
       hash = _rfc2822(string, limit: limit)
       fast_new_date(hash, start)
     end
@@ -757,7 +761,7 @@ class Date
     # - Argument {limit}[rdoc-ref:Date@Argument+limit].
     #
     # Related: Date._httpdate (returns a hash).
-    def httpdate(string = JULIAN_EPOCH_DATETIME_HTTPDATE, start = DEFAULT_SG, limit: 128)
+    def httpdate(string = 'Mon, 01 Jan -4712 00:00:00 GMT', start = ITALY, limit: 128)
       hash = _httpdate(string, limit: limit)
       fast_new_date(hash, start)
     end
@@ -782,7 +786,7 @@ class Date
     # - Argument {limit}[rdoc-ref:Date@Argument+limit].
     #
     # Related: Date._jisx0301 (returns a hash).
-    def jisx0301(string = JULIAN_EPOCH_DATE, start = DEFAULT_SG, limit: 128)
+    def jisx0301(string = '-4712-01-01', start = ITALY, limit: 128)
       hash = _jisx0301(string, limit: limit)
       fast_new_date(hash, start)
     end
@@ -794,21 +798,15 @@ class Date
     # ------------------------------------------------------------------
 
     def parse_check_limit(str, limit)
-      raise ArgumentError, "string length (#{str.length}) exceeds limit (#{limit})" if limit && str.length > limit
+      raise ArgumentError, "string length (#{str.length}) exceeds the limit #{limit}" if limit && str.length > limit
     end
 
-    # A String, the String its to_str gives, or a TypeError naming the value.
-    def string_value(obj)
-      case obj
-      when String then return obj
-      when nil, true, false then raise TypeError, "no implicit conversion of #{obj.inspect} into String"
-      end
-      if obj.respond_to?(:to_str, true)
-        str = obj.__send__(:to_str)
-        return str if String === str
-        raise TypeError, "can't convert #{obj.class} to String (#{obj.class}#to_str gives #{str.class})"
-      end
-      raise TypeError, "no implicit conversion of #{obj.class} into String"
+    # Blank out the span matched by +m+ in +str+, replacing it with spaces of
+    # equal length. Avoids allocating a Range for the assignment.
+    def blank_match!(str, m)
+      b = m.begin(0)
+      size = m.end(0) - b
+      str[b, size] = ' ' * size
     end
 
     def parse_zone_and_offset(zone_str, hash)
@@ -946,7 +944,7 @@ class Date
     def parse_day(str, h)
       if (m = PARSE_DAYS_RE.match(str))
         h[:wday] = ABBR_DAY_NUM[m[1].downcase]
-        str[m.begin(0)...m.end(0)] = ' ' * (m.end(0) - m.begin(0))
+        blank_match!(str, m)
       end
     end
 
@@ -954,7 +952,7 @@ class Date
       if (m = PARSE_TIME_RE.match(str))
         time_part = m[1]
         zone_part = m[2]
-        str[m.begin(0)...m.end(0)] = ' ' * (m.end(0) - m.begin(0))
+        blank_match!(str, m)
 
         if (tm = PARSE_TIME_CB_RE.match(time_part))
           hour = tm[1].to_i
@@ -984,7 +982,7 @@ class Date
         return false unless mon
         bc = m[3] && m[3] =~ /\Ab/i ? true : false
         s3e(h, m[4], mon, m[1], bc)
-        str[m.begin(0)...m.end(0)] = ' ' * (m.end(0) - m.begin(0))
+        blank_match!(str, m)
         true
       else
         false
@@ -997,7 +995,7 @@ class Date
         return false unless mon
         bc = m[3] && m[3] =~ /\Ab/i ? true : false
         s3e(h, m[4], mon, m[2], bc)
-        str[m.begin(0)...m.end(0)] = ' ' * (m.end(0) - m.begin(0))
+        blank_match!(str, m)
         true
       else
         false
@@ -1018,7 +1016,7 @@ class Date
         else
           s3e(h, y_s, m_s, d_s, false)
         end
-        str[m.begin(0)...m.end(0)] = ' ' * (m.end(0) - m.begin(0))
+        blank_match!(str, m)
         true
       else
         false
@@ -1033,7 +1031,7 @@ class Date
         h[:year] = m[2].to_i + era_offset
         h[:mon]  = m[3].to_i
         h[:mday] = m[4].to_i
-        str[m.begin(0)...m.end(0)] = ' ' * (m.end(0) - m.begin(0))
+        blank_match!(str, m)
         true
       else
         false
@@ -1045,13 +1043,13 @@ class Date
         mon = ABBR_MONTH_NUM[m[2].downcase]
         return false unless mon
         s3e(h, m[3], mon, m[1], false)
-        str[m.begin(0)...m.end(0)] = ' ' * (m.end(0) - m.begin(0))
+        blank_match!(str, m)
         true
       elsif (m = PARSE_VMS12_RE.match(str))
         mon = ABBR_MONTH_NUM[m[1].downcase]
         return false unless mon
         s3e(h, m[3], mon, m[2], false)
-        str[m.begin(0)...m.end(0)] = ' ' * (m.end(0) - m.begin(0))
+        blank_match!(str, m)
         true
       else
         false
@@ -1061,7 +1059,7 @@ class Date
     def parse_sla(str, h)
       if (m = PARSE_SLA_RE.match(str))
         s3e(h, m[1], m[2], m[3], false)
-        str[m.begin(0)...m.end(0)] = ' ' * (m.end(0) - m.begin(0))
+        blank_match!(str, m)
         true
       else
         false
@@ -1071,7 +1069,7 @@ class Date
     def parse_dot(str, h)
       if (m = PARSE_DOT_RE.match(str))
         s3e(h, m[1], m[2], m[3], false)
-        str[m.begin(0)...m.end(0)] = ' ' * (m.end(0) - m.begin(0))
+        blank_match!(str, m)
         true
       else
         false
@@ -1087,14 +1085,14 @@ class Date
         end
         h[:cweek] = m[2].to_i
         h[:cwday] = m[3].to_i if m[3]
-        str[m.begin(0)...m.end(0)] = ' ' * (m.end(0) - m.begin(0))
+        blank_match!(str, m)
         return true
       end
 
       # iso22: -w-D
       if (m = PARSE_ISO22_RE.match(str))
         h[:cwday] = m[1].to_i
-        str[m.begin(0)...m.end(0)] = ' ' * (m.end(0) - m.begin(0))
+        blank_match!(str, m)
         return true
       end
 
@@ -1102,7 +1100,7 @@ class Date
       if (m = PARSE_ISO23_RE.match(str))
         h[:mon]  = m[1].to_i if m[1]
         h[:mday] = m[2].to_i
-        str[m.begin(0)...m.end(0)] = ' ' * (m.end(0) - m.begin(0))
+        blank_match!(str, m)
         return true
       end
 
@@ -1110,7 +1108,7 @@ class Date
       if (m = PARSE_ISO24_RE.match(str))
         h[:mon]  = m[1].to_i
         h[:mday] = m[2].to_i if m[2]
-        str[m.begin(0)...m.end(0)] = ' ' * (m.end(0) - m.begin(0))
+        blank_match!(str, m)
         return true
       end
 
@@ -1119,7 +1117,7 @@ class Date
         if (m = PARSE_ISO25_RE.match(str))
           h[:year] = m[1].to_i
           h[:yday] = m[2].to_i
-          str[m.begin(0)...m.end(0)] = ' ' * (m.end(0) - m.begin(0))
+          blank_match!(str, m)
           return true
         end
       end
@@ -1128,7 +1126,7 @@ class Date
       unless str =~ /\d-\d{3}\b/
         if (m = PARSE_ISO26_RE.match(str))
           h[:yday] = m[1].to_i
-          str[m.begin(0)...m.end(0)] = ' ' * (m.end(0) - m.begin(0))
+          blank_match!(str, m)
           return true
         end
       end
@@ -1139,7 +1137,7 @@ class Date
     def parse_year(str, h)
       if (m = PARSE_YEAR_RE.match(str))
         h[:year] = m[1].to_i
-        str[m.begin(0)...m.end(0)] = ' ' * (m.end(0) - m.begin(0))
+        blank_match!(str, m)
         true
       else
         false
@@ -1151,7 +1149,7 @@ class Date
         mon = ABBR_MONTH_NUM[m[1].downcase]
         if mon
           h[:mon] = mon
-          str[m.begin(0)...m.end(0)] = ' ' * (m.end(0) - m.begin(0))
+          blank_match!(str, m)
           return true
         end
       end
@@ -1161,7 +1159,7 @@ class Date
     def parse_mday(str, h)
       if (m = PARSE_MDAY_RE.match(str))
         h[:mday] = m[1].to_i
-        str[m.begin(0)...m.end(0)] = ' ' * (m.end(0) - m.begin(0))
+        blank_match!(str, m)
         true
       else
         false
@@ -1294,34 +1292,31 @@ class Date
           if zone.start_with?('[')
             zone = zone[1...-1] # strip brackets
             # Format: [offset:zonename] or [offset zonename] or [offset] or [zonename]
+            off_s = nil
             if (zm = zone.match(/\A([-+]?\d+(?:[,.]\d+)?):(.+)/))
               # +9:JST, -5:EST, +12:XXX YYY ZZZ
               h[:zone] = zm[2].strip
               off_s = zm[1]
-              off_s = "+#{off_s}" unless off_s.start_with?('+') || off_s.start_with?('-')
-              h[:offset] = fast_zone_offset(off_s)
             elsif (zm = zone.match(/\A([-+]?\d+(?:[,.]\d+)?)\s+(\S.+)/))
               # Number followed by space and non-empty name
               h[:zone] = zm[2]
               off_s = zm[1]
-              off_s = "+#{off_s}" unless off_s.start_with?('+') || off_s.start_with?('-')
-              h[:offset] = fast_zone_offset(off_s)
             else
               # Could be just a number with optional trailing space: [9], [-9], [9 ]
               h[:zone] = zone
               stripped = zone.strip
-              if stripped =~ /\A([-+]?\d+(?:[,.]\d+)?)\z/
-                off_s = $1
-                off_s = "+#{off_s}" unless off_s.start_with?('+') || off_s.start_with?('-')
-                h[:offset] = fast_zone_offset(off_s)
-              end
+              off_s = $1 if stripped =~ /\A([-+]?\d+(?:[,.]\d+)?)\z/
+            end
+            if off_s
+              off_s = "+#{off_s}" unless off_s.start_with?('+') || off_s.start_with?('-')
+              h[:offset] = fast_zone_offset(off_s)
             end
           else
             h[:zone] = zone
           end
         end
 
-        str[m.begin(0)...m.end(0)] = ' ' * (m.end(0) - m.begin(0))
+        blank_match!(str, m)
         true
       else
         false
@@ -1331,7 +1326,7 @@ class Date
     def parse_bc_post(str, h)
       if (m = PARSE_BC_RE.match(str))
         h[:_bc] = true
-        str[m.begin(0)...m.end(0)] = ' ' * (m.end(0) - m.begin(0))
+        blank_match!(str, m)
       end
     end
 
@@ -1373,9 +1368,7 @@ class Date
 
       # Step 2: If y is nil but d is present, check if d looks like a year
       if y.nil? && d
-        ds = d.to_s
-        digits = ds.sub(/\A'?-?/, '').sub(/(?:st|nd|rd|th)\z/i, '')
-        if digits.length > 2 || ds.start_with?("'")
+        if s3e_year_like?(d.to_s)
           y = d
           d = nil
         end
@@ -1393,7 +1386,7 @@ class Date
           # Match digits (with optional leading sign), check for trailing non-digit
           if ys_raw =~ /\A[^-+\d]*([-+]?\d+)/
             num_s = $1
-            rest = ys_raw[$~.end(0)..]
+            rest = $'
             if rest && !rest.empty? && rest =~ /[^\d]/
               # trailing non-digit (like "st" in "1st"): this y becomes d, old d becomes y
               old_d = d
@@ -1408,9 +1401,7 @@ class Date
               end
             else
               year_val = num_s.to_i
-              if num_s.start_with?('-') || num_s.start_with?('+') || num_s.sub(/\A[-+]/, '').length > 2
-                comp_flag = false
-              end
+              comp_flag = false if s3e_full_year?(num_s)
             end
           end
         end
@@ -1418,8 +1409,7 @@ class Date
 
       # Step 4: Check m - if it looks like a year (apostrophe or > 2 digits), swap US→BE
       if m.is_a?(String)
-        ms_digits = m.sub(/\A'?-?/, '').sub(/(?:st|nd|rd|th)\z/i, '')
-        if m.start_with?("'") || ms_digits.length > 2
+        if s3e_year_like?(m)
           # Rotate: old_y=y, y=m, m=d, d=old_y_string
           old_y = y
           y = m
@@ -1434,15 +1424,14 @@ class Date
           elsif ys =~ /([-+]?\d+)/
             num_s = $1
             year_val = num_s.to_i
-            comp_flag = (num_s.start_with?('-') || num_s.start_with?('+') || num_s.sub(/\A[-+]/, '').length > 2) ? false : nil
+            comp_flag = s3e_full_year?(num_s) ? false : nil
           end
         end
       end
 
       # Step 5: Check d - if it looks like a year, swap with y
       if d.is_a?(String)
-        ds_digits = d.sub(/\A'?-?/, '').sub(/(?:st|nd|rd|th)\z/i, '')
-        if d.start_with?("'") || ds_digits.length > 2
+        if s3e_year_like?(d)
           old_y = y
           # d becomes year
           ys = d.sub(/(?:st|nd|rd|th)\z/i, '')
@@ -1452,7 +1441,7 @@ class Date
           elsif ys =~ /([-+]?\d+)/
             num_s = $1
             year_val = num_s.to_i
-            comp_flag = (num_s.start_with?('-') || num_s.start_with?('+') || num_s.sub(/\A[-+]/, '').length > 2) ? false : nil
+            comp_flag = s3e_full_year?(num_s) ? false : nil
           end
           d = old_y
         end
@@ -1490,9 +1479,23 @@ class Date
         [s[1..].to_i, true]
       elsif s =~ /\A[^-+\d]*([-+]?\d+)/
         num_s = $1
-        cf = (num_s.start_with?('-') || num_s.start_with?('+') || num_s.sub(/\A[-+]/, '').length > 2) ? false : nil
+        cf = s3e_full_year?(num_s) ? false : nil
         [num_s.to_i, cf]
       end
+    end
+
+    # Helper: does token +s+ look like a year? True when it is apostrophe-prefixed
+    # or has more than two significant digits after stripping a leading sign or
+    # apostrophe and any ordinal suffix. Used by s3e to decide year/day swaps.
+    def s3e_year_like?(s)
+      digits = s.sub(/\A'?-?/, '').sub(/(?:st|nd|rd|th)\z/i, '')
+      digits.length > 2 || s.start_with?("'")
+    end
+
+    # Helper: is the numeric year string +num_s+ an explicit (non-abbreviated)
+    # year, i.e. signed or with more than two digits? Determines the _comp flag.
+    def s3e_full_year?(num_s)
+      num_s.start_with?('-') || num_s.start_with?('+') || num_s.sub(/\A[-+]/, '').length > 2
     end
 
     # ------------------------------------------------------------------

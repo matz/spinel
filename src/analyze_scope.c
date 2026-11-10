@@ -2663,11 +2663,11 @@ static const char *rsl_block_sends_to_self(const NodeTable *nt, int bk) {
 }
 /* Can the program's own method answer `name` for a receiver of the
    builtin class cls (Array, String or Symbol)? The builtin has its own
-   method of each name asked here, so only a method in a reopen of that
-   class answers first, or one a module brings in. So: a def, alias,
-   alias_method or define_method of the name in a `class cls` body, or
-   any include, prepend, class_eval or define_method on cls at all (what
-   such a module or block holds is not looked at). `class String; def
+   method of each name asked here, so only a reopen of that class can
+   change it, or a module put into it. So: a `class cls` body with a
+   statement that may make or remove the name (rsl_stmt_defines), or an
+   include, prepend, class_eval, define_method, undef_method and the like
+   called on cls (what such a module or block holds is not looked at). `class String; def
    to_sym ...` turns `%w[a b].map(&:to_sym)` into other names, so that
    list is not the literal's. (The scopes are not built yet here.) */
 static int rsl_is_const(const NodeTable *nt, int n, const char *cls) {
@@ -2685,26 +2685,36 @@ static int rsl_sym_is(const NodeTable *nt, int n, const char *name) {
   const char *v = nt_str(nt, n, k == NK_SymbolNode ? "value" : "unescaped");
   return !v || sp_streq(v, name);
 }
-/* does statement st of a class body make the method name? */
+/* may statement st of a class body make the method name? Only a plain
+   def or alias of another name, a constant write, or a visibility call
+   over such is passed over; any other statement (a begin, an if, a
+   receiverless class_eval or define_method, an include, an undef, a
+   block) counts, as what it does is not looked at. */
 static int rsl_stmt_defines(const NodeTable *nt, int st, const char *name) {
   NodeKind k = nt_kind(nt, st);
   if (k == NK_DefNode)
-    return nt_ref(nt, st, "receiver") < 0 && nt_str(nt, st, "name") && sp_streq(nt_str(nt, st, "name"), name);
+    return nt_ref(nt, st, "receiver") < 0 && (!nt_str(nt, st, "name") || sp_streq(nt_str(nt, st, "name"), name));
   if (k == NK_AliasMethodNode) return rsl_sym_is(nt, nt_ref(nt, st, "new_name"), name);
-  if (k != NK_CallNode || nt_ref(nt, st, "receiver") >= 0) return 0;
+  if (k == NK_ConstantWriteNode) return 0;
+  if (k != NK_CallNode || nt_ref(nt, st, "receiver") >= 0 || nt_ref(nt, st, "block") >= 0) return 1;
   const char *cn = nt_str(nt, st, "name");
   int args = nt_ref(nt, st, "arguments"), an = 0;
   const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &an) : NULL;
-  if (!cn) return 0;
-  /* a module brought in: its methods are not looked at */
-  if (sp_streq(cn, "include") || sp_streq(cn, "prepend")) return 1;
-  if ((sp_streq(cn, "alias_method") || sp_streq(cn, "define_method")) && an >= 1)
-    return rsl_sym_is(nt, av[0], name);
-  /* `private def m`, `public alias_method ...` */
-  for (int i = 0; i < an; i++)
-    if (nt_kind(nt, av[i]) == NK_DefNode || nt_kind(nt, av[i]) == NK_CallNode)
-      if (rsl_stmt_defines(nt, av[i], name)) return 1;
-  return 0;
+  if (!cn) return 1;
+  /* `private def m`, `public :m`, `private`: a def among its arguments
+     counts as above; a visibility change of the name itself counts */
+  if (sp_streq(cn, "private") || sp_streq(cn, "public") || sp_streq(cn, "protected")) {
+    for (int i = 0; i < an; i++)
+      if (nt_kind(nt, av[i]) == NK_DefNode ? rsl_stmt_defines(nt, av[i], name) : rsl_sym_is(nt, av[i], name)) return 1;
+    return 0;
+  }
+  /* alias_method, attr_reader and the like: the names they make */
+  if (sp_streq(cn, "alias_method") && an >= 1) return rsl_sym_is(nt, av[0], name);
+  if (sp_streq(cn, "attr_reader") || sp_streq(cn, "attr_writer") || sp_streq(cn, "attr_accessor") || sp_streq(cn, "attr")) {
+    for (int i = 0; i < an; i++) if (rsl_sym_is(nt, av[i], name)) return 1;
+    return 0;
+  }
+  return 1;
 }
 static int rsl_own_method(const NodeTable *nt, const char *cls, const char *name) {
   NT_FOREACH_KIND(nt, NK_ClassNode, d) {
@@ -2719,7 +2729,8 @@ static int rsl_own_method(const NodeTable *nt, const char *cls, const char *name
     if (sp_streq(cn, "include") || sp_streq(cn, "prepend") || sp_streq(cn, "class_eval") ||
         sp_streq(cn, "class_exec") || sp_streq(cn, "module_eval") || sp_streq(cn, "send") ||
         sp_streq(cn, "__send__") || sp_streq(cn, "public_send") || sp_streq(cn, "define_method") ||
-        sp_streq(cn, "alias_method")) return 1;
+        sp_streq(cn, "alias_method") || sp_streq(cn, "undef_method") || sp_streq(cn, "remove_method") ||
+        sp_streq(cn, "instance_eval") || sp_streq(cn, "instance_exec")) return 1;
   }
   return 0;
 }

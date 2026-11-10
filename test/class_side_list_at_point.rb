@@ -46,6 +46,9 @@ class C7; extend M7; end
 p C7.singleton_methods(false), C7.singleton_methods
 def C7.v = 2
 p C7.singleton_methods(false), C7.singleton_methods
+module EM; def em = :em; end
+class Class; extend EM; end
+p Class.em, Class.singleton_methods(false).include?(:em)
 class P8; def self.v = 1; end
 class C8 < P8; end
 p C8.singleton_methods(false)
@@ -89,6 +92,7 @@ p String.singleton_methods.include?(:try_convert)
 class C12; end
 e12 = [1].lazy.map { |x| C12.singleton_methods(false).sort }
 g12 = [1].lazy.filter_map { |x| C12.singleton_methods(false).include?(:v) ? C12.v : nil }
+z12 = [1].lazy.zip([2]).map { |x| C12.singleton_methods(false).sort }
 END { p C12.singleton_methods(false).sort, (C12.singleton_methods(false).include?(:w) ? C12.w : :none) }
 class C12; def self.v = 9; def self.w = 8; end
-p e12.first, g12.first
+p e12.first, g12.first, z12.first

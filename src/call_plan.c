@@ -7,13 +7,14 @@
 #include "analyze_internal.h"
 #include "builtin_ops.h"
 #include "call_plan.h"
-static int cplan_is_root_class(Compiler *c, int ci);
-static int cplan_in_closure(Compiler *c, int id);
 #include "repr.h"
 #include "codegen_call_arms.h"
 #include "implicit_calls.h"
 #include "implied_calls.h"
 #include "method_table_check.h"
+
+static int cplan_is_root_class(Compiler *c, int ci);
+static int cplan_in_closure(Compiler *c, int id);
 
 static CallPlan *g_cp_memo = NULL;
 static unsigned char *g_cp_have = NULL;
@@ -150,7 +151,7 @@ static const char *cplan_builtin_name_of(Compiler *c, int cid) {
    with a method of CRuby's before Object's instance method: its class's
    singleton chain (File.basename), or Class's and Module's own? A constant
    names the class; a class held in a variable could be any builtin one. */
-static int cplan_class_value_answers(Compiler *c, int recv, const char *name) {
+int cplan_class_value_answers(Compiler *c, int recv, const char *name) {
   const NodeTable *nt = c->nt;
   NodeKind rk = recv >= 0 ? nt_kind(nt, recv) : NK_NONE;
   const char *bn = rk == NK_ConstantReadNode || (rk == NK_ConstantPathNode && nt_ref(nt, recv, "parent") < 0) ? nt_str(nt, recv, "name") : NULL;
@@ -171,7 +172,7 @@ static void cplan_root_reopen(Compiler *c, int call, const char *name, const cha
      it reaches the builtin's method, which only a name the builtin owns
      (Kernel's tap, frozen?) could tell apart, so that call keeps the
      builtin's, as before the def. */
-  if (cplan_in_closure(c, call) && builtin_answers_ahead_of(cls, name, NULL)) return;
+  if (builtin_answers_ahead_of(cls, name, NULL) && cplan_in_closure(c, call)) return;
   int rci = comp_core_class(c, root);
   int mi = rci >= 0 ? call_target(c, call, rci, name, 0, NULL) : -1;
   /* Where the builtin has the name, the program's def answers only if the
@@ -617,8 +618,8 @@ static void cplan_resolve_call(Compiler *c, int id, CallPlan *p) {
     if (class_is_exc_subclass(c, cid)) cplan_exc_reopen(c, id, name, p);
     /* (an attribute of the class or a Struct's member answers its name first) */
     char abase[256];
-    int accessor = comp_reader_in_chain(c, cid, name, NULL) || (setter_base_name(name, abase, sizeof abase) && comp_writer_in_chain(c, cid, abase, NULL));
-    if (p->mi < 0 && !accessor) {
+    if (p->mi < 0 && !(comp_reader_in_chain(c, cid, name, NULL) ||
+                       (setter_base_name(name, abase, sizeof abase) && comp_writer_in_chain(c, cid, abase, NULL)))) {
       cplan_root_reopen(c, id, name, cplan_builtin_name_of(c, cid), CORE_OBJECT, p);
       /* `self.m` (or a bare m the analysis gave self) reaching Object's
          method that a descendant of self's class overrides: a switch on

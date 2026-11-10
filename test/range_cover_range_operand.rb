@@ -1,3 +1,4 @@
+# spinel: int64
 # Range#cover? with a Range argument reads the argument's ends: a Float
 # Range or a String Range argument is covered when both ends fit.
 ir = 1..10; ie = 1...10; fr = 1.0..2.0; fe = 1.0...2.0; sr = "a".."z"

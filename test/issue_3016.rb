@@ -1,4 +1,5 @@
-# poles at non-positive integers are exactly [Infinity, 1]
+# poles at non-positive integers are exactly Infinity; the sign is -1 at every
+# negative integer (Ruby's documented answer) and 1 at 0.0
 p Math.lgamma(-1.0)
 p Math.lgamma(-2.0)
 p Math.lgamma(0.0)

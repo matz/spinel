@@ -419,30 +419,36 @@ static int refl_md_literal_call(const NodeTable *nt, int recv, int arg) {
 
 
 /* CRuby's own instance methods of each core class and module with their
-   visibility, and its ancestors (core_class_methods.inc, written by
-   tools/gen_method_names.rb) */
+   visibility, the ones it undefines (CORE_VIS_UNDEF: Complex#floor, which
+   CRuby's lookup stops at with no method), and its ancestors
+   (core_class_methods.inc, written by tools/gen_method_names.rb) */
+enum { CORE_VIS_UNDEF = 8 };
 #define CCM(k, m, v) { k, m, v },
+#define CCU(k, m) { k, m, CORE_VIS_UNDEF },
 #define CCA(k, a)
 static const struct { const char *cls, *m; int vis; } core_cls_methods[] = {
 #include "core_class_methods.inc"
   { NULL, NULL, 0 }
 };
 #undef CCM
+#undef CCU
 #undef CCA
 #define CCM(k, m, v)
+#define CCU(k, m)
 #define CCA(k, a) { k, a },
 static const struct { const char *cls, *anc; } core_cls_ancestors[] = {
 #include "core_class_methods.inc"
   { NULL, NULL }
 };
 #undef CCM
+#undef CCU
 #undef CCA
 
 static int core_own_vis(const char *cls, size_t cl, const char *m, const char **owner) {
   for (int i = 0; core_cls_methods[i].cls; i++)
     if (strlen(core_cls_methods[i].cls) == cl && !strncmp(core_cls_methods[i].cls, cls, cl) &&
         sp_streq(core_cls_methods[i].m, m)) {
-      if (owner) *owner = core_cls_methods[i].cls;
+      if (owner && core_cls_methods[i].vis != CORE_VIS_UNDEF) *owner = core_cls_methods[i].cls;
       return core_cls_methods[i].vis;
     }
   return 0;
@@ -468,7 +474,8 @@ const char *core_ancestor_step(const char *p, size_t *len) {
    (its first `cl` bytes) defines itself, in the table's order */
 void core_own_methods_each(const char *cls, size_t cl, void (*f)(void *, const char *, int), void *ud) {
   for (int i = 0; core_cls_methods[i].cls; i++)
-    if (strlen(core_cls_methods[i].cls) == cl && !strncmp(core_cls_methods[i].cls, cls, cl))
+    if (strlen(core_cls_methods[i].cls) == cl && !strncmp(core_cls_methods[i].cls, cls, cl) &&
+        core_cls_methods[i].vis != CORE_VIS_UNDEF)
       f(ud, core_cls_methods[i].m, core_cls_methods[i].vis);
 }
 
@@ -476,26 +483,30 @@ void core_own_methods_each(const char *cls, size_t cl, void (*f)(void *, const c
    module in CRuby? */
 int core_method_name_any(const char *m) {
   for (int i = 0; m && core_cls_methods[i].cls; i++)
-    if (sp_streq(core_cls_methods[i].m, m)) return 1;
+    if (sp_streq(core_cls_methods[i].m, m) && core_cls_methods[i].vis != CORE_VIS_UNDEF) return 1;
   return 0;
 }
 
 /* The visibility (1 public, 2 protected, 4 private) of instance method `m`
    of core class or module `cls` in CRuby, through its ancestors with
    `inherit` (only those above `cls` with 2, where its `super` looks); 0
-   where it has none, -1 where the table does not hold `cls`. `owner`, when
-   given, is set to the class or module that defines it. */
+   where it has none (an ancestor that undefines it ends the lookup there),
+   -1 where the table does not hold `cls`. `owner`, when given, is set to
+   the class or module that defines it. */
 int core_method_vis(const char *cls, const char *m, int inherit, const char **owner) {
   const char *anc = NULL;
   for (int i = 0; cls && !anc && core_cls_ancestors[i].cls; i++)
     if (sp_streq(core_cls_ancestors[i].cls, cls)) anc = core_cls_ancestors[i].anc;
   if (!anc) return -1;
-  if (!inherit) return core_own_vis(cls, strlen(cls), m, owner);
+  if (!inherit) {
+    int v = core_own_vis(cls, strlen(cls), m, owner);
+    return v == CORE_VIS_UNDEF ? 0 : v;
+  }
   size_t l;
   for (const char *p = *anc ? anc : NULL, *nx; p; p = nx) {
     nx = core_ancestor_step(p, &l);
     int v = inherit == 2 && p == anc ? 0 : core_own_vis(p, l, m, owner);
-    if (v) return v;
+    if (v) return v == CORE_VIS_UNDEF ? 0 : v;
   }
   return 0;
 }

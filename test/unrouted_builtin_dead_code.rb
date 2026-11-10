@@ -4,10 +4,11 @@
 # program's answer alone: the call raises only where it runs. The names that
 # CRuby does not answer that way keep raising what CRuby raises: a private
 # method called with a receiver, a name the receiver's class does not have,
-# a method the Kernel does not give a BasicObject. A method whose answer
-# turns on the name it is given raises a NameError, as CRuby does for a name
-# that is not allowed, and a block argument that is no proc raises its
-# TypeError.
+# a method the Kernel does not give a BasicObject, one a core class
+# undefines (Rational.allocate, Integer.new, Complex#floor, also looked up
+# by name and asked of method_defined?). A method whose answer turns on
+# the name it is given raises a NameError, as CRuby does for a name that is
+# not allowed, and a block argument that is no proc raises its TypeError.
 def never(flag)
   return 1 unless flag
   global_variables
@@ -58,6 +59,22 @@ class B < BasicObject
   def try = local_variables
 end
 show { B.new.try }
+
+show { Rational.allocate }
+show { Complex.allocate }
+show { MatchData.allocate }
+show { Module.allocate }
+show { Integer.new }
+k = Rational
+show { k.allocate }
+show { Rational.send(:allocate) }
+show { Complex.instance_method(:floor) }
+show { Complex.public_instance_method(:round) }
+show { Complex.instance_method(:clamp) }
+p Complex.method_defined?(:floor)
+p Complex.public_method_defined?(:floor)
+p Complex.method_defined?(:positive?)
+p Class.private_method_defined?(:module_function)
 
 def name_error
   yield

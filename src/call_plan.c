@@ -2680,6 +2680,20 @@ static CplanUnrouted cu_lookup_by_name(Compiler *c, int id, const char *name, in
   snprintf(msg, cap, "undefined method '%s' for %s '%s'", sym, is_mod ? "module" : "class", cls);
   return CU_RAISES_NAME;
 }
+/* What a class or module value answers for `name`, by CRuby's lookup on its
+   class side: the singleton methods of root (the builtin class it is or
+   stands on; NULL for a module) and of its superclasses, then Class's or
+   Module's instance methods, an undefine on the way ending it
+   (Rational.allocate, Integer.new). The visibility and *own as
+   core_method_vis gives them; a method of root's own class side is public
+   there, with *sep '.'. */
+static int cu_class_value_vis(int mod, const char *root, const char *name, int any_vis, const char **own, int *sep) {
+  int v = core_method_vis(mod ? "Module" : "Class", name, 1, own);
+  if (!root) return v;
+  if ((v <= 0 || (v != 1 && !any_vis)) && builtin_method_answers(root, name, 1, 1)) { *own = root; *sep = '.'; return 1; }
+  /* what Class or Module has, the lookup may not reach */
+  return v > 0 && !builtin_method_answers(root, name, 1, 0) ? 0 : v;
+}
 /* See call_plan.h. */
 CplanUnrouted cplan_unrouted(Compiler *c, int id, char *owner, size_t cap, int *nil_answers) {
   const NodeTable *nt = c->nt;
@@ -2731,9 +2745,7 @@ CplanUnrouted cplan_unrouted(Compiler *c, int id, char *owner, size_t cap, int *
     else if (inst >= 0) { v = refl_builtin_vis(c, inst, name, 1, &own); undef_ci = inst; }
     else {
       int mod = comp_class_is_module(c, &c->classes[cval]);
-      const char *root = mod ? NULL : cu_class_root(c, cval);
-      v = core_method_vis(mod ? "Module" : "Class", name, 1, &own);
-      if (v <= 0 && root && builtin_method_answers(root, name, 1, 1)) { v = 1; own = root; sep = '.'; }
+      v = cu_class_value_vis(mod, mod ? NULL : cu_class_root(c, cval), name, any_vis, &own, &sep);
       rkinds[1] = TY_CLASS;
       subj = 1; subj_mod = mod; subj_ci = cval;
       subj_cls = c->classes[cval].is_builtin_const ? c->classes[cval].name : class_ruby_name(c, cval);
@@ -2744,9 +2756,7 @@ CplanUnrouted cplan_unrouted(Compiler *c, int id, char *owner, size_t cap, int *
     const char *nm = core >= 0 ? core_class_name(core) : NULL;   /* a builtin class or module (also a reopened one) */
     if (!nm && ci < 0) return CU_NONE;
     int mod = nm ? is_builtin_module_name(nm) : comp_class_is_module(c, &c->classes[ci]);
-    const char *root = nm ? nm : mod ? NULL : cu_class_root(c, ci);
-    v = core_method_vis(mod ? "Module" : "Class", name, 1, &own);
-    if ((v <= 0 || (v != 1 && !any_vis)) && root && builtin_method_answers(root, name, 1, 1)) { v = 1; own = root; sep = '.'; }
+    v = cu_class_value_vis(mod, nm ? nm : mod ? NULL : cu_class_root(c, ci), name, any_vis, &own, &sep);
     rkinds[0] = TY_CLASS;
     subj = 1; subj_mod = mod;
     subj_ci = ci >= 0 && core < 0 ? ci : -1;

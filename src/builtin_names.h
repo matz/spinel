@@ -384,7 +384,7 @@ int is_string_rebind_mutator(const char *n); /* mutators needing argument-rebind
 int is_string_read_only_method(const char *name);
 int str_mutator_str_args(const char *n, int argc, int *int_ok); /* the arguments a String mutator takes as Strings */
 
-int builtin_answers_ahead_of(const char *cls, const char *m, const char *root); /* an ancestor of cls ahead of root (NULL: any) owns instance method m (CRuby's tables) */
+int builtin_answers_ahead_of(const char *cls, const char *m, const char *root); /* an ancestor of cls ahead of root (NULL: any) owns instance method m, or undefines it (CRuby's tables) */
 const char *builtin_ancestor_at(const char *cls, int i);   /* the i-th ancestor (0: cls) in CRuby's lookup order, NULL past the last */
 int builtin_owns_instance_method(const char *cls, const char *m);   /* cls's own instance method m, any visibility (CRuby's tables) */
 const char *builtin_next_class_answering(int *i, const char *m);   /* the next class of the tables, from table *i, that Spinel has as a value and that answers m ahead of Object */
@@ -495,12 +495,15 @@ int core_class_value_answers(const char *cls, const char *m); /* CRuby's core cl
 /* One builtin class or module's row of CRuby's own method tables
    (builtin_method_tables.inc, generated): its own instance method names
    (public, private, protected), its own singleton method names and its
-   ancestors, sorted, with their lengths. */
+   ancestors, sorted, with their lengths, then the names it and its singleton
+   class undefine (Complex#floor, Rational.allocate), where a lookup stops. */
 typedef struct { const char *name; int module; unsigned flags; const char *const *inst; const unsigned short *iflags; int ninst;
-                 const char *const *sing; const unsigned short *sflags; int nsing; const char *const *ancestors; const unsigned short *aflags; int nanc; } BuiltinMethodTable;
+                 const char *const *sing; const unsigned short *sflags; int nsing; const char *const *ancestors; const unsigned short *aflags; int nanc;
+                 const char *const *undef; int nundef; const char *const *sundef; int nsundef; } BuiltinMethodTable;
 /* Does CRuby's builtin class or module cls, or an ancestor of it, have a
    method `name` (sg: on its class side: its singleton methods and its
-   ancestors', then Class's or Module's instance methods)? A builtin the tables
+   ancestors', then Class's or Module's instance methods)? A name CRuby
+   undefines on the way (Complex#floor, Rational.allocate) is not there. A builtin the tables
    do not hold (a builtin class row, a reopened builtin) answers 1, unknown, so
    it never raises; 0 for any other name. With certain, only a method CRuby
    has with no library required, or with one the program requires, at the

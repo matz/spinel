@@ -9,6 +9,20 @@ NoMethodError: undefined method 'zork' for class String
 NoMethodError: undefined method 'instance_methods' for an instance of Object
 NoMethodError: undefined method 'instance_method' for an instance of Integer
 NameError: undefined local variable or method 'local_variables' for an instance of B
+NoMethodError: undefined method 'allocate' for class Rational
+NoMethodError: undefined method 'allocate' for class Complex
+NoMethodError: undefined method 'allocate' for class MatchData
+NoMethodError: undefined method 'allocate' for class Module
+NoMethodError: undefined method 'new' for class Integer
+NoMethodError: undefined method 'allocate' for class Rational
+NoMethodError: undefined method 'allocate' for class Rational
+NameError: undefined method 'floor' for class 'Complex'
+NameError: undefined method 'round' for class 'Complex'
+NameError: undefined method 'clamp' for class 'Complex'
+false
+false
+false
+false
 NameError: true
 NameError: true
 NameError: true

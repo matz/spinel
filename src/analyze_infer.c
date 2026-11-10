@@ -2562,7 +2562,8 @@ int an_object_methods_all_arg(Compiler *c, int cid, int argc, const int *argv) {
 /* obj.methods / obj.public_methods (no argument, or `true`) on a builtin
    value typed `rt`: the core class whose instance it is, whose whole list
    core_class_methods.inc holds (a class that undefines inherited methods,
-   as Complex does, is left out: the table has no rows for an undef), or ""
+   as Complex does, is left out: the list is built from each ancestor's own
+   rows, core_own_methods_each, which drops the undefined ones), or ""
    for a boxed receiver, whose class is known only at run time. NULL for any
    other call. A def of the name answers it itself -- one in the class or
    an ancestor the program reopens, or for a boxed receiver one anywhere --

@@ -6,6 +6,8 @@
    (public, private, protected), its own singleton method names and its ancestors,
    sorted, with their lengths, and for each the libraries it needs: bit 0 none, bit 1 + i
    library i of BMT_LIBS alone at the shipped version (0: only the newest installed has it, or only libraries loaded together).
+   Then the names it and its singleton class undefine (a lookup stops there),
+   in every run that has it.
    builtin_method_answers (builtin_names.c) reads them. */
 static const char *const BMT_LIBS[] = { "time", "json", "date", "set", "stringio", "strscan", "io/console", "bigdecimal", "socket", "monitor", "ostruct", "rbconfig" };
 static const char *const bmt_Addrinfo_i[] = { "afamily", "bind", "canonname", "connect", "connect_from", "connect_internal", "connect_to", "family_addrinfo", "getnameinfo", "initialize", "inspect", "inspect_sockaddr", "ip?", "ip_address", "ip_port", "ip_unpack", "ipv4?", "ipv4_loopback?", "ipv4_multicast?", "ipv4_private?", "ipv6?", "ipv6_linklocal?", "ipv6_loopback?", "ipv6_mc_global?", "ipv6_mc_linklocal?", "ipv6_mc_nodelocal?", "ipv6_mc_orglocal?", "ipv6_mc_sitelocal?", "ipv6_multicast?", "ipv6_sitelocal?", "ipv6_to_ipv4", "ipv6_unique_local?", "ipv6_unspecified?", "ipv6_v4compat?", "ipv6_v4mapped?", "listen", "marshal_dump", "marshal_load", "pfamily", "protocol", "socktype", "to_s", "to_sockaddr", "unix?", "unix_path", NULL };
@@ -44,6 +46,7 @@ static const char *const bmt_BigDecimal_s[] = { "_load", "double_fig", "interpre
 static const unsigned short bmt_BigDecimal_sf[] = { 16640, 16640, 16640, 16640, 16640, 16640, 16640, 16640, 0 };
 static const char *const bmt_BigDecimal_a[] = { "BigDecimal", "Numeric", "Comparable", "Object", "JSON::Ext::Generator::GeneratorMethods::Object", "Kernel", "BasicObject", "JSON::GeneratorMethods", NULL };
 static const unsigned short bmt_BigDecimal_af[] = { 256, 256, 256, 256, 0, 256, 256, 0, 0 };
+static const char *const bmt_BigDecimal_su[] = { "new" };
 static const char *const bmt_BigDecimal__Internal_i[] = { NULL };
 static const unsigned short bmt_BigDecimal__Internal_if[] = { 0 };
 static const char *const bmt_BigDecimal__Internal_s[] = { "coerce_to_bigdecimal", "coerce_validate_prec", "float_log", "infinity_computation_result", "nan_computation_result", "newton_loop", "taylor_sum_binary_splitting", "underflow_computation_result", NULL };
@@ -62,12 +65,14 @@ static const char *const bmt_Binding_s[] = { NULL };
 static const unsigned short bmt_Binding_sf[] = { 0 };
 static const char *const bmt_Binding_a[] = { "Binding", "Object", "JSON::Ext::Generator::GeneratorMethods::Object", "Kernel", "BasicObject", "JSON::GeneratorMethods", NULL };
 static const unsigned short bmt_Binding_af[] = { 8191, 8191, 4, 8191, 8191, 0, 0 };
+static const char *const bmt_Binding_su[] = { "new" };
 static const char *const bmt_Class_i[] = { "allocate", "attached_object", "inherited", "initialize", "new", "subclasses", "superclass", NULL };
 static const unsigned short bmt_Class_if[] = { 24575, 24575, 8191, 8191, 24575, 24575, 24575, 0 };
 static const char *const bmt_Class_s[] = { "allocate", NULL };
 static const unsigned short bmt_Class_sf[] = { 24575, 0 };
 static const char *const bmt_Class_a[] = { "Class", "Module", "Object", "JSON::Ext::Generator::GeneratorMethods::Object", "Kernel", "BasicObject", "JSON::GeneratorMethods", NULL };
 static const unsigned short bmt_Class_af[] = { 8191, 8191, 8191, 4, 8191, 8191, 0, 0 };
+static const char *const bmt_Class_u[] = { "append_features", "extend_object", "module_function", "prepend_features", "refine" };
 static const char *const bmt_ClosedQueueError_i[] = { NULL };
 static const unsigned short bmt_ClosedQueueError_if[] = { 0 };
 static const char *const bmt_ClosedQueueError_s[] = { NULL };
@@ -86,12 +91,15 @@ static const char *const bmt_Complex_s[] = { "convert", "polar", "rect", "rectan
 static const unsigned short bmt_Complex_sf[] = { 8191, 24575, 24575, 24575, 0 };
 static const char *const bmt_Complex_a[] = { "Complex", "Numeric", "Comparable", "Object", "JSON::Ext::Generator::GeneratorMethods::Object", "Kernel", "BasicObject", "JSON::GeneratorMethods", NULL };
 static const unsigned short bmt_Complex_af[] = { 8191, 8191, 8191, 8191, 4, 8191, 8191, 0, 0 };
+static const char *const bmt_Complex_u[] = { "%", "<", "<=", ">", ">=", "between?", "ceil", "clamp", "div", "divmod", "floor", "i", "modulo", "negative?", "positive?", "remainder", "round", "step", "truncate" };
+static const char *const bmt_Complex_su[] = { "allocate", "new" };
 static const char *const bmt_Data_i[] = { "==", "deconstruct", "deconstruct_keys", "eql?", "hash", "initialize", "initialize_copy", "inspect", "members", "to_h", "to_s", "with", NULL };
 static const unsigned short bmt_Data_if[] = { 24575, 24575, 24575, 24575, 24575, 8191, 8191, 24575, 24575, 24575, 24575, 24575, 0 };
 static const char *const bmt_Data_s[] = { "define", NULL };
 static const unsigned short bmt_Data_sf[] = { 24575, 0 };
 static const char *const bmt_Data_a[] = { "Data", "Object", "JSON::Ext::Generator::GeneratorMethods::Object", "Kernel", "BasicObject", "JSON::GeneratorMethods", NULL };
 static const unsigned short bmt_Data_af[] = { 8191, 8191, 4, 8191, 8191, 0, 0 };
+static const char *const bmt_Data_su[] = { "new" };
 static const char *const bmt_Date_i[] = { "+", "-", "<<", "<=>", "===", ">>", "ajd", "amjd", "asctime", "ctime", "cwday", "cweek", "cwyear", "day", "day_fraction", "deconstruct_keys", "downto", "england", "eql?", "friday?", "gregorian", "gregorian?", "hash", "hour", "httpdate", "infinite?", "initialize", "initialize_copy", "inspect", "iso8601", "italy", "jd", "jisx0301", "julian", "julian?", "ld", "leap?", "marshal_dump", "marshal_load", "mday", "min", "minute", "mjd", "mon", "monday?", "month", "new_start", "next", "next_day", "next_month", "next_year", "prev_day", "prev_month", "prev_year", "rfc2822", "rfc3339", "rfc822", "saturday?", "sec", "second", "start", "step", "strftime", "succ", "sunday?", "thursday?", "to_date", "to_datetime", "to_s", "to_time", "tuesday?", "upto", "wday", "wednesday?", "xmlschema", "yday", "year", NULL };
 static const unsigned short bmt_Date_if[] = { 16394, 16394, 16394, 16394, 16394, 16394, 16394, 16394, 16394, 16394, 16394, 16394, 16394, 16394, 16394, 16394, 16394, 16394, 16394, 16394, 16394, 16394, 16394, 10, 16394, 16394, 10, 10, 16394, 16394, 16394, 16394, 16394, 16394, 16394, 16394, 16394, 16394, 16394, 16394, 10, 10, 16394, 16394, 16394, 16394, 16394, 16394, 16394, 16394, 16394, 16394, 16394, 16394, 16394, 16394, 16394, 16394, 10, 10, 16394, 16394, 16394, 16394, 16394, 16394, 16394, 16394, 16394, 16394, 16394, 16394, 16394, 16394, 16394, 16394, 16394, 0 };
 static const char *const bmt_Date_s[] = { "_httpdate", "_iso8601", "_jisx0301", "_load", "_parse", "_rfc2822", "_rfc3339", "_rfc822", "_strptime", "_xmlschema", "civil", "commercial", "gregorian_leap?", "httpdate", "iso8601", "jd", "jisx0301", "julian_leap?", "leap?", "ordinal", "parse", "rfc2822", "rfc3339", "rfc822", "strptime", "today", "valid_civil?", "valid_commercial?", "valid_date?", "valid_jd?", "valid_ordinal?", "xmlschema", NULL };
@@ -116,6 +124,7 @@ static const char *const bmt_DateTime_s[] = { "_strptime", "civil", "commercial"
 static const unsigned short bmt_DateTime_sf[] = { 16394, 16394, 16394, 16394, 16394, 16394, 16394, 16394, 16394, 16394, 16394, 16394, 16394, 16394, 16394, 16394, 0 };
 static const char *const bmt_DateTime_a[] = { "DateTime", "Date", "Comparable", "Object", "JSON::Ext::Generator::GeneratorMethods::Object", "Kernel", "BasicObject", "JSON::GeneratorMethods", NULL };
 static const unsigned short bmt_DateTime_af[] = { 10, 10, 10, 10, 0, 10, 10, 0, 0 };
+static const char *const bmt_DateTime_su[] = { "today" };
 static const char *const bmt_DidYouMean_i[] = { NULL };
 static const unsigned short bmt_DidYouMean_if[] = { 0 };
 static const char *const bmt_DidYouMean_s[] = { "correct_error", "formatter", "formatter=", "spell_checkers", NULL };
@@ -224,6 +233,7 @@ static const char *const bmt_Encoding_s[] = { "_load", "aliases", "compatible?",
 static const unsigned short bmt_Encoding_sf[] = { 24575, 24575, 24575, 24575, 24575, 24575, 24575, 24575, 24575, 24575, 24575, 0 };
 static const char *const bmt_Encoding_a[] = { "Encoding", "Object", "JSON::Ext::Generator::GeneratorMethods::Object", "Kernel", "BasicObject", "JSON::GeneratorMethods", NULL };
 static const unsigned short bmt_Encoding_af[] = { 8191, 8191, 4, 8191, 8191, 0, 0 };
+static const char *const bmt_Encoding_su[] = { "new" };
 static const char *const bmt_Encoding__CompatibilityError_i[] = { NULL };
 static const unsigned short bmt_Encoding__CompatibilityError_if[] = { 0 };
 static const char *const bmt_Encoding__CompatibilityError_s[] = { NULL };
@@ -278,12 +288,14 @@ static const char *const bmt_Enumerator__ArithmeticSequence_s[] = { NULL };
 static const unsigned short bmt_Enumerator__ArithmeticSequence_sf[] = { 0 };
 static const char *const bmt_Enumerator__ArithmeticSequence_a[] = { "Enumerator::ArithmeticSequence", "Enumerator", "Enumerable", "Object", "JSON::Ext::Generator::GeneratorMethods::Object", "Kernel", "BasicObject", "JSON::GeneratorMethods", NULL };
 static const unsigned short bmt_Enumerator__ArithmeticSequence_af[] = { 8191, 8191, 8191, 8191, 4, 8191, 8191, 0, 0 };
+static const char *const bmt_Enumerator__ArithmeticSequence_su[] = { "new" };
 static const char *const bmt_Enumerator__Chain_i[] = { "each", "initialize", "initialize_copy", "inspect", "rewind", "size", NULL };
 static const unsigned short bmt_Enumerator__Chain_if[] = { 24575, 8191, 8191, 24575, 24575, 24575, 0 };
 static const char *const bmt_Enumerator__Chain_s[] = { NULL };
 static const unsigned short bmt_Enumerator__Chain_sf[] = { 0 };
 static const char *const bmt_Enumerator__Chain_a[] = { "Enumerator::Chain", "Enumerator", "Enumerable", "Object", "JSON::Ext::Generator::GeneratorMethods::Object", "Kernel", "BasicObject", "JSON::GeneratorMethods", NULL };
 static const unsigned short bmt_Enumerator__Chain_af[] = { 8191, 8191, 8191, 8191, 4, 8191, 8191, 0, 0 };
+static const char *const bmt_Enumerator__Chain_u[] = { "feed", "next", "next_values", "peek", "peek_values" };
 static const char *const bmt_Enumerator__Generator_i[] = { "each", "initialize", "initialize_copy", NULL };
 static const unsigned short bmt_Enumerator__Generator_if[] = { 24575, 8191, 8191, 0 };
 static const char *const bmt_Enumerator__Generator_s[] = { NULL };
@@ -308,6 +320,7 @@ static const char *const bmt_Enumerator__Product_s[] = { NULL };
 static const unsigned short bmt_Enumerator__Product_sf[] = { 0 };
 static const char *const bmt_Enumerator__Product_a[] = { "Enumerator::Product", "Enumerator", "Enumerable", "Object", "JSON::Ext::Generator::GeneratorMethods::Object", "Kernel", "BasicObject", "JSON::GeneratorMethods", NULL };
 static const unsigned short bmt_Enumerator__Product_af[] = { 8191, 8191, 8191, 8191, 4, 8191, 8191, 0, 0 };
+static const char *const bmt_Enumerator__Product_u[] = { "feed", "next", "next_values", "peek", "peek_values" };
 static const char *const bmt_Enumerator__Yielder_i[] = { "<<", "initialize", "to_proc", "yield", NULL };
 static const unsigned short bmt_Enumerator__Yielder_if[] = { 24575, 8191, 24575, 24575, 0 };
 static const char *const bmt_Enumerator__Yielder_s[] = { NULL };
@@ -998,6 +1011,7 @@ static const char *const bmt_FalseClass_s[] = { NULL };
 static const unsigned short bmt_FalseClass_sf[] = { 0 };
 static const char *const bmt_FalseClass_a[] = { "FalseClass", "JSON::Ext::Generator::GeneratorMethods::FalseClass", "Object", "JSON::Ext::Generator::GeneratorMethods::Object", "Kernel", "BasicObject", "JSON::GeneratorMethods", NULL };
 static const unsigned short bmt_FalseClass_af[] = { 8191, 4, 8191, 4, 8191, 8191, 0, 0 };
+static const char *const bmt_FalseClass_su[] = { "new" };
 static const char *const bmt_Fiber_i[] = { "alive?", "backtrace", "backtrace_locations", "blocking?", "initialize", "inspect", "kill", "raise", "resume", "storage", "storage=", "to_s", "transfer", NULL };
 static const unsigned short bmt_Fiber_if[] = { 24575, 24575, 24575, 24575, 8191, 24575, 24575, 24575, 24575, 24575, 24575, 24575, 24575, 0 };
 static const char *const bmt_Fiber_s[] = { "[]", "[]=", "blocking", "blocking?", "current", "current_scheduler", "schedule", "scheduler", "set_scheduler", "yield", NULL };
@@ -1040,6 +1054,7 @@ static const char *const bmt_Float_s[] = { NULL };
 static const unsigned short bmt_Float_sf[] = { 0 };
 static const char *const bmt_Float_a[] = { "Float", "JSON::Ext::Generator::GeneratorMethods::Float", "Numeric", "Comparable", "Object", "JSON::Ext::Generator::GeneratorMethods::Object", "Kernel", "BasicObject", "JSON::GeneratorMethods", NULL };
 static const unsigned short bmt_Float_af[] = { 8191, 4, 8191, 8191, 8191, 4, 8191, 8191, 0, 0 };
+static const char *const bmt_Float_su[] = { "new" };
 static const char *const bmt_FloatDomainError_i[] = { NULL };
 static const unsigned short bmt_FloatDomainError_if[] = { 0 };
 static const char *const bmt_FloatDomainError_s[] = { NULL };
@@ -1442,12 +1457,14 @@ static const char *const bmt_IO__Console__Mode_s[] = { NULL };
 static const unsigned short bmt_IO__Console__Mode_sf[] = { 0 };
 static const char *const bmt_IO__Console__Mode_a[] = { "IO::Console::Mode", "Object", "JSON::GeneratorMethods", "Kernel", "BasicObject", NULL };
 static const unsigned short bmt_IO__Console__Mode_af[] = { 0, 0, 0, 0, 0, 0 };
+static const char *const bmt_IO__Console__Mode_u[] = { "initialize" };
 static const char *const bmt_IO__ConsoleMode_i[] = { "echo=", "initialize_copy", "raw", "raw!", NULL };
 static const unsigned short bmt_IO__ConsoleMode_if[] = { 16512, 128, 16512, 16512, 0 };
 static const char *const bmt_IO__ConsoleMode_s[] = { NULL };
 static const unsigned short bmt_IO__ConsoleMode_sf[] = { 0 };
 static const char *const bmt_IO__ConsoleMode_a[] = { "IO::ConsoleMode", "Object", "JSON::Ext::Generator::GeneratorMethods::Object", "Kernel", "BasicObject", NULL };
 static const unsigned short bmt_IO__ConsoleMode_af[] = { 128, 128, 0, 128, 128, 0 };
+static const char *const bmt_IO__ConsoleMode_u[] = { "initialize" };
 static const char *const bmt_IO__EAGAINWaitReadable_i[] = { NULL };
 static const unsigned short bmt_IO__EAGAINWaitReadable_if[] = { 0 };
 static const char *const bmt_IO__EAGAINWaitReadable_s[] = { NULL };
@@ -1502,6 +1519,7 @@ static const char *const bmt_IPSocket_s[] = { "getaddress", NULL };
 static const unsigned short bmt_IPSocket_sf[] = { 16896, 0 };
 static const char *const bmt_IPSocket_a[] = { "IPSocket", "BasicSocket", "IO", "File::Constants", "Enumerable", "Object", "JSON::Ext::Generator::GeneratorMethods::Object", "Kernel", "BasicObject", "IO::platform_tty", "JSON::GeneratorMethods", NULL };
 static const unsigned short bmt_IPSocket_af[] = { 512, 512, 512, 512, 512, 512, 0, 512, 512, 0, 0, 0 };
+static const char *const bmt_IPSocket_u[] = { "getpeereid" };
 static const char *const bmt_IndexError_i[] = { NULL };
 static const unsigned short bmt_IndexError_if[] = { 0 };
 static const char *const bmt_IndexError_s[] = { NULL };
@@ -1514,6 +1532,7 @@ static const char *const bmt_Integer_s[] = { "sqrt", "try_convert", NULL };
 static const unsigned short bmt_Integer_sf[] = { 24575, 24575, 0 };
 static const char *const bmt_Integer_a[] = { "Integer", "JSON::Ext::Generator::GeneratorMethods::Integer", "Numeric", "Comparable", "Object", "JSON::Ext::Generator::GeneratorMethods::Object", "Kernel", "BasicObject", "JSON::GeneratorMethods", NULL };
 static const unsigned short bmt_Integer_af[] = { 8191, 4, 8191, 8191, 8191, 4, 8191, 8191, 0, 0 };
+static const char *const bmt_Integer_su[] = { "new" };
 static const char *const bmt_Interrupt_i[] = { "initialize", NULL };
 static const unsigned short bmt_Interrupt_if[] = { 8191, 0 };
 static const char *const bmt_Interrupt_s[] = { NULL };
@@ -1706,6 +1725,7 @@ static const char *const bmt_MatchData_s[] = { NULL };
 static const unsigned short bmt_MatchData_sf[] = { 0 };
 static const char *const bmt_MatchData_a[] = { "MatchData", "Object", "JSON::Ext::Generator::GeneratorMethods::Object", "Kernel", "BasicObject", "JSON::GeneratorMethods", NULL };
 static const unsigned short bmt_MatchData_af[] = { 8191, 8191, 4, 8191, 8191, 0, 0 };
+static const char *const bmt_MatchData_su[] = { "allocate", "new" };
 static const char *const bmt_Math_i[] = { "acos", "acosh", "asin", "asinh", "atan", "atan2", "atanh", "cbrt", "cos", "cosh", "erf", "erfc", "exp", "expm1", "frexp", "gamma", "hypot", "ldexp", "lgamma", "log", "log10", "log1p", "log2", "sin", "sinh", "sqrt", "tan", "tanh", NULL };
 static const unsigned short bmt_Math_if[] = { 8191, 8191, 8191, 8191, 8191, 8191, 8191, 8191, 8191, 8191, 8191, 8191, 8191, 8191, 8191, 8191, 8191, 8191, 8191, 8191, 8191, 8191, 8191, 8191, 8191, 8191, 8191, 8191, 0 };
 static const char *const bmt_Math_s[] = { "acos", "acosh", "asin", "asinh", "atan", "atan2", "atanh", "cbrt", "cos", "cosh", "erf", "erfc", "exp", "expm1", "frexp", "gamma", "hypot", "ldexp", "lgamma", "log", "log10", "log1p", "log2", "sin", "sinh", "sqrt", "tan", "tanh", NULL };
@@ -1724,12 +1744,14 @@ static const char *const bmt_Method_s[] = { NULL };
 static const unsigned short bmt_Method_sf[] = { 0 };
 static const char *const bmt_Method_a[] = { "Method", "Object", "JSON::Ext::Generator::GeneratorMethods::Object", "Kernel", "BasicObject", "JSON::GeneratorMethods", NULL };
 static const unsigned short bmt_Method_af[] = { 8191, 8191, 4, 8191, 8191, 0, 0 };
+static const char *const bmt_Method_su[] = { "new" };
 static const char *const bmt_Module_i[] = { "<", "<=", "<=>", "==", "===", ">", ">=", "alias_method", "ancestors", "append_features", "attr", "attr_accessor", "attr_reader", "attr_writer", "autoload", "autoload?", "class_eval", "class_exec", "class_variable_defined?", "class_variable_get", "class_variable_set", "class_variables", "const_added", "const_defined?", "const_get", "const_missing", "const_set", "const_source_location", "constants", "define_method", "deprecate_constant", "extend_object", "extended", "freeze", "include", "include?", "included", "included_modules", "initialize", "initialize_clone", "inspect", "instance_method", "instance_methods", "method_added", "method_defined?", "method_removed", "method_undefined", "module_eval", "module_exec", "module_function", "name", "prepend", "prepend_features", "prepended", "private", "private_class_method", "private_constant", "private_instance_methods", "private_method_defined?", "protected", "protected_instance_methods", "protected_method_defined?", "public", "public_class_method", "public_constant", "public_instance_method", "public_instance_methods", "public_method_defined?", "refine", "refinements", "remove_class_variable", "remove_const", "remove_method", "ruby2_keywords", "set_temporary_name", "singleton_class?", "to_s", "undef_method", "undefined_instance_methods", "using", NULL };
 static const unsigned short bmt_Module_if[] = { 24575, 24575, 24575, 24575, 24575, 24575, 24575, 24575, 24575, 8191, 24575, 24575, 24575, 24575, 24575, 24575, 24575, 24575, 24575, 24575, 24575, 24575, 8191, 24575, 24575, 24575, 24575, 24575, 24575, 24575, 24575, 8191, 8191, 24575, 24575, 24575, 8191, 24575, 8191, 8191, 24575, 24575, 24575, 8191, 24575, 8191, 8191, 24575, 24575, 8191, 24575, 24575, 8191, 8191, 8191, 24575, 24575, 24575, 24575, 8191, 24575, 24575, 8191, 24575, 24575, 24575, 24575, 24575, 8191, 24575, 24575, 8191, 24575, 8191, 24575, 24575, 24575, 24575, 24575, 8191, 0 };
 static const char *const bmt_Module_s[] = { "constants", "nesting", "used_modules", "used_refinements", NULL };
 static const unsigned short bmt_Module_sf[] = { 24575, 24575, 24575, 24575, 0 };
 static const char *const bmt_Module_a[] = { "Module", "Object", "JSON::Ext::Generator::GeneratorMethods::Object", "Kernel", "BasicObject", "JSON::GeneratorMethods", NULL };
 static const unsigned short bmt_Module_af[] = { 8191, 8191, 4, 8191, 8191, 0, 0 };
+static const char *const bmt_Module_su[] = { "allocate" };
 static const char *const bmt_Monitor_i[] = { "enter", "exit", "mon_check_owner", "mon_enter", "mon_exit", "mon_locked?", "mon_owned?", "mon_synchronize", "mon_try_enter", "new_cond", "synchronize", "try_enter", "try_mon_enter", "wait_for_cond", NULL };
 static const unsigned short bmt_Monitor_if[] = { 24575, 24575, 24575, 24575, 24575, 24575, 24575, 24575, 24575, 24575, 24575, 24575, 24575, 24575, 0 };
 static const char *const bmt_Monitor_s[] = { NULL };
@@ -1760,6 +1782,7 @@ static const char *const bmt_NilClass_s[] = { NULL };
 static const unsigned short bmt_NilClass_sf[] = { 0 };
 static const char *const bmt_NilClass_a[] = { "NilClass", "JSON::Ext::Generator::GeneratorMethods::NilClass", "Object", "JSON::Ext::Generator::GeneratorMethods::Object", "Kernel", "BasicObject", "JSON::GeneratorMethods", NULL };
 static const unsigned short bmt_NilClass_af[] = { 8191, 4, 8191, 4, 8191, 8191, 0, 0 };
+static const char *const bmt_NilClass_su[] = { "new" };
 static const char *const bmt_NoMatchingPatternError_i[] = { NULL };
 static const unsigned short bmt_NoMatchingPatternError_if[] = { 0 };
 static const char *const bmt_NoMatchingPatternError_s[] = { NULL };
@@ -1856,6 +1879,7 @@ static const char *const bmt_Process__Status_s[] = { "wait", NULL };
 static const unsigned short bmt_Process__Status_sf[] = { 24575, 0 };
 static const char *const bmt_Process__Status_a[] = { "Process::Status", "Object", "JSON::Ext::Generator::GeneratorMethods::Object", "Kernel", "BasicObject", "JSON::GeneratorMethods", NULL };
 static const unsigned short bmt_Process__Status_af[] = { 8191, 8191, 4, 8191, 8191, 0, 0 };
+static const char *const bmt_Process__Status_su[] = { "new" };
 static const char *const bmt_Process__Sys_i[] = { "getegid", "geteuid", "getgid", "getuid", "issetugid", "setegid", "seteuid", "setgid", "setregid", "setresgid", "setresuid", "setreuid", "setrgid", "setruid", "setuid", NULL };
 static const unsigned short bmt_Process__Sys_if[] = { 8191, 8191, 8191, 8191, 8191, 8191, 8191, 8191, 8191, 8191, 8191, 8191, 8191, 8191, 8191, 0 };
 static const char *const bmt_Process__Sys_s[] = { "getegid", "geteuid", "getgid", "getuid", "issetugid", "setegid", "seteuid", "setgid", "setregid", "setresgid", "setresuid", "setreuid", "setrgid", "setruid", "setuid", NULL };
@@ -1880,6 +1904,7 @@ static const char *const bmt_Process__Waiter_s[] = { NULL };
 static const unsigned short bmt_Process__Waiter_sf[] = { 0 };
 static const char *const bmt_Process__Waiter_a[] = { "Process::Waiter", "Thread", "Object", "JSON::Ext::Generator::GeneratorMethods::Object", "Kernel", "BasicObject", "JSON::GeneratorMethods", NULL };
 static const unsigned short bmt_Process__Waiter_af[] = { 8191, 8191, 8191, 4, 8191, 8191, 0, 0 };
+static const char *const bmt_Process__Waiter_su[] = { "new" };
 static const char *const bmt_Ractor_i[] = { "<<", "[]", "[]=", "close", "default_port", "inspect", "join", "monitor", "name", "receive", "recv", "send", "to_s", "unmonitor", "value", NULL };
 static const unsigned short bmt_Ractor_if[] = { 24575, 24575, 24575, 24575, 24575, 24575, 24575, 24575, 24575, 8191, 8191, 24575, 24575, 24575, 24575, 0 };
 static const char *const bmt_Ractor_s[] = { "[]", "[]=", "_activated", "_require", "count", "current", "main", "main?", "make_shareable", "new", "receive", "recv", "select", "shareable?", "shareable_lambda", "shareable_proc", "store_if_absent", NULL };
@@ -1970,6 +1995,7 @@ static const char *const bmt_Rational_s[] = { "convert", NULL };
 static const unsigned short bmt_Rational_sf[] = { 8191, 0 };
 static const char *const bmt_Rational_a[] = { "Rational", "Numeric", "Comparable", "Object", "JSON::Ext::Generator::GeneratorMethods::Object", "Kernel", "BasicObject", "JSON::GeneratorMethods", NULL };
 static const unsigned short bmt_Rational_af[] = { 8191, 8191, 8191, 8191, 4, 8191, 8191, 0, 0 };
+static const char *const bmt_Rational_su[] = { "allocate", "new" };
 static const char *const bmt_RbConfig_i[] = { NULL };
 static const unsigned short bmt_RbConfig_if[] = { 0 };
 static const char *const bmt_RbConfig_s[] = { "expand", "fire_update!", "ruby", NULL };
@@ -1982,6 +2008,7 @@ static const char *const bmt_Refinement_s[] = { NULL };
 static const unsigned short bmt_Refinement_sf[] = { 0 };
 static const char *const bmt_Refinement_a[] = { "Refinement", "Module", "Object", "JSON::Ext::Generator::GeneratorMethods::Object", "Kernel", "BasicObject", "JSON::GeneratorMethods", NULL };
 static const unsigned short bmt_Refinement_af[] = { 8191, 8191, 8191, 4, 8191, 8191, 0, 0 };
+static const char *const bmt_Refinement_u[] = { "append_features", "extend_object", "prepend_features" };
 static const char *const bmt_Regexp_i[] = { "==", "===", "=~", "casefold?", "encoding", "eql?", "fixed_encoding?", "hash", "initialize", "initialize_copy", "inspect", "match", "match?", "named_captures", "names", "options", "source", "timeout", "to_s", "~", NULL };
 static const unsigned short bmt_Regexp_if[] = { 24575, 24575, 24575, 24575, 24575, 24575, 24575, 24575, 8191, 8191, 24575, 24575, 24575, 24575, 24575, 24575, 24575, 24575, 24575, 24575, 0 };
 static const char *const bmt_Regexp_s[] = { "compile", "escape", "last_match", "linear_time?", "quote", "timeout", "timeout=", "try_convert", "union", NULL };
@@ -2030,6 +2057,7 @@ static const char *const bmt_RubyVM_s[] = { "keep_script_lines", "keep_script_li
 static const unsigned short bmt_RubyVM_sf[] = { 24575, 24575, 24575, 0 };
 static const char *const bmt_RubyVM_a[] = { "RubyVM", "Object", "JSON::Ext::Generator::GeneratorMethods::Object", "Kernel", "BasicObject", "JSON::GeneratorMethods", NULL };
 static const unsigned short bmt_RubyVM_af[] = { 8191, 8191, 4, 8191, 8191, 0, 0 };
+static const char *const bmt_RubyVM_su[] = { "new" };
 static const char *const bmt_RubyVM__AbstractSyntaxTree_i[] = { NULL };
 static const unsigned short bmt_RubyVM__AbstractSyntaxTree_if[] = { 0 };
 static const char *const bmt_RubyVM__AbstractSyntaxTree_s[] = { "node_id_for_backtrace_location", "of", "parse", "parse_file", NULL };
@@ -2198,6 +2226,7 @@ static const char *const bmt_Symbol_s[] = { "all_symbols", NULL };
 static const unsigned short bmt_Symbol_sf[] = { 24575, 0 };
 static const char *const bmt_Symbol_a[] = { "Symbol", "Comparable", "Object", "JSON::Ext::Generator::GeneratorMethods::Object", "Kernel", "BasicObject", "JSON::GeneratorMethods", NULL };
 static const unsigned short bmt_Symbol_af[] = { 8191, 8191, 8191, 4, 8191, 8191, 0, 0 };
+static const char *const bmt_Symbol_su[] = { "new" };
 static const char *const bmt_SyntaxError_i[] = { "initialize", "path", NULL };
 static const unsigned short bmt_SyntaxError_if[] = { 8191, 24575, 0 };
 static const char *const bmt_SyntaxError_s[] = { NULL };
@@ -2252,18 +2281,21 @@ static const char *const bmt_Thread__Backtrace_s[] = { "limit", NULL };
 static const unsigned short bmt_Thread__Backtrace_sf[] = { 24575, 0 };
 static const char *const bmt_Thread__Backtrace_a[] = { "Thread::Backtrace", "Object", "JSON::Ext::Generator::GeneratorMethods::Object", "Kernel", "BasicObject", "JSON::GeneratorMethods", NULL };
 static const unsigned short bmt_Thread__Backtrace_af[] = { 8191, 8191, 4, 8191, 8191, 0, 0 };
+static const char *const bmt_Thread__Backtrace_su[] = { "new" };
 static const char *const bmt_Thread__Backtrace__Location_i[] = { "absolute_path", "base_label", "inspect", "label", "lineno", "path", "to_s", NULL };
 static const unsigned short bmt_Thread__Backtrace__Location_if[] = { 24575, 24575, 24575, 24575, 24575, 24575, 24575, 0 };
 static const char *const bmt_Thread__Backtrace__Location_s[] = { NULL };
 static const unsigned short bmt_Thread__Backtrace__Location_sf[] = { 0 };
 static const char *const bmt_Thread__Backtrace__Location_a[] = { "Thread::Backtrace::Location", "Object", "JSON::Ext::Generator::GeneratorMethods::Object", "Kernel", "BasicObject", "JSON::GeneratorMethods", NULL };
 static const unsigned short bmt_Thread__Backtrace__Location_af[] = { 8191, 8191, 4, 8191, 8191, 0, 0 };
+static const char *const bmt_Thread__Backtrace__Location_su[] = { "new" };
 static const char *const bmt_Thread__ConditionVariable_i[] = { "broadcast", "initialize", "marshal_dump", "signal", "wait", NULL };
 static const unsigned short bmt_Thread__ConditionVariable_if[] = { 24575, 8191, 24575, 24575, 24575, 0 };
 static const char *const bmt_Thread__ConditionVariable_s[] = { NULL };
 static const unsigned short bmt_Thread__ConditionVariable_sf[] = { 0 };
 static const char *const bmt_Thread__ConditionVariable_a[] = { "Thread::ConditionVariable", "Object", "JSON::Ext::Generator::GeneratorMethods::Object", "Kernel", "BasicObject", "JSON::GeneratorMethods", NULL };
 static const unsigned short bmt_Thread__ConditionVariable_af[] = { 8191, 8191, 4, 8191, 8191, 0, 0 };
+static const char *const bmt_Thread__ConditionVariable_u[] = { "initialize_copy" };
 static const char *const bmt_Thread__Mutex_i[] = { "initialize", "lock", "locked?", "owned?", "sleep", "synchronize", "try_lock", "unlock", NULL };
 static const unsigned short bmt_Thread__Mutex_if[] = { 8191, 24575, 24575, 24575, 24575, 24575, 24575, 24575, 0 };
 static const char *const bmt_Thread__Mutex_s[] = { NULL };
@@ -2276,6 +2308,7 @@ static const char *const bmt_Thread__Queue_s[] = { NULL };
 static const unsigned short bmt_Thread__Queue_sf[] = { 0 };
 static const char *const bmt_Thread__Queue_a[] = { "Thread::Queue", "Object", "JSON::Ext::Generator::GeneratorMethods::Object", "Kernel", "BasicObject", "JSON::GeneratorMethods", NULL };
 static const unsigned short bmt_Thread__Queue_af[] = { 8191, 8191, 4, 8191, 8191, 0, 0 };
+static const char *const bmt_Thread__Queue_u[] = { "initialize_copy" };
 static const char *const bmt_Thread__SizedQueue_i[] = { "<<", "clear", "close", "deq", "enq", "initialize", "max", "max=", "num_waiting", "pop", "push", "shift", NULL };
 static const unsigned short bmt_Thread__SizedQueue_if[] = { 24575, 24575, 24575, 24575, 24575, 8191, 24575, 24575, 24575, 24575, 24575, 24575, 0 };
 static const char *const bmt_Thread__SizedQueue_s[] = { NULL };
@@ -2312,6 +2345,7 @@ static const char *const bmt_TrueClass_s[] = { NULL };
 static const unsigned short bmt_TrueClass_sf[] = { 0 };
 static const char *const bmt_TrueClass_a[] = { "TrueClass", "JSON::Ext::Generator::GeneratorMethods::TrueClass", "Object", "JSON::Ext::Generator::GeneratorMethods::Object", "Kernel", "BasicObject", "JSON::GeneratorMethods", NULL };
 static const unsigned short bmt_TrueClass_af[] = { 8191, 4, 8191, 4, 8191, 8191, 0, 0 };
+static const char *const bmt_TrueClass_su[] = { "new" };
 static const char *const bmt_TypeError_i[] = { NULL };
 static const unsigned short bmt_TypeError_if[] = { 0 };
 static const char *const bmt_TypeError_s[] = { NULL };
@@ -2342,6 +2376,7 @@ static const char *const bmt_UnboundMethod_s[] = { NULL };
 static const unsigned short bmt_UnboundMethod_sf[] = { 0 };
 static const char *const bmt_UnboundMethod_a[] = { "UnboundMethod", "Object", "JSON::Ext::Generator::GeneratorMethods::Object", "Kernel", "BasicObject", "JSON::GeneratorMethods", NULL };
 static const unsigned short bmt_UnboundMethod_af[] = { 8191, 8191, 4, 8191, 8191, 0, 0 };
+static const char *const bmt_UnboundMethod_su[] = { "new" };
 static const char *const bmt_UncaughtThrowError_i[] = { "initialize", "tag", "to_s", "value", NULL };
 static const unsigned short bmt_UncaughtThrowError_if[] = { 8191, 24575, 24575, 24575, 0 };
 static const char *const bmt_UncaughtThrowError_s[] = { NULL };
@@ -2367,401 +2402,401 @@ static const unsigned short bmt_ZeroDivisionError_sf[] = { 0 };
 static const char *const bmt_ZeroDivisionError_a[] = { "ZeroDivisionError", "StandardError", "Exception", "Object", "JSON::Ext::Generator::GeneratorMethods::Object", "Kernel", "BasicObject", "JSON::GeneratorMethods", NULL };
 static const unsigned short bmt_ZeroDivisionError_af[] = { 8191, 8191, 8191, 8191, 4, 8191, 8191, 0, 0 };
 static const BuiltinMethodTable BUILTIN_METHOD_TABLES[] = {
-  { "Addrinfo", 0, 512, bmt_Addrinfo_i, bmt_Addrinfo_if, 45, bmt_Addrinfo_s, bmt_Addrinfo_sf, 6, bmt_Addrinfo_a, bmt_Addrinfo_af, 6 },
-  { "ArgumentError", 0, 8191, bmt_ArgumentError_i, bmt_ArgumentError_if, 0, bmt_ArgumentError_s, bmt_ArgumentError_sf, 0, bmt_ArgumentError_a, bmt_ArgumentError_af, 9 },
-  { "Array", 0, 8191, bmt_Array_i, bmt_Array_if, 115, bmt_Array_s, bmt_Array_sf, 3, bmt_Array_a, bmt_Array_af, 8 },
-  { "BasicObject", 0, 8191, bmt_BasicObject_i, bmt_BasicObject_if, 13, bmt_BasicObject_s, bmt_BasicObject_sf, 0, bmt_BasicObject_a, bmt_BasicObject_af, 1 },
-  { "BasicSocket", 0, 512, bmt_BasicSocket_i, bmt_BasicSocket_if, 25, bmt_BasicSocket_s, bmt_BasicSocket_sf, 3, bmt_BasicSocket_a, bmt_BasicSocket_af, 10 },
-  { "BigDecimal", 0, 256, bmt_BigDecimal_i, bmt_BigDecimal_if, 57, bmt_BigDecimal_s, bmt_BigDecimal_sf, 8, bmt_BigDecimal_a, bmt_BigDecimal_af, 8 },
-  { "BigDecimal::Internal", 1, 256, bmt_BigDecimal__Internal_i, bmt_BigDecimal__Internal_if, 0, bmt_BigDecimal__Internal_s, bmt_BigDecimal__Internal_sf, 8, bmt_BigDecimal__Internal_a, bmt_BigDecimal__Internal_af, 1 },
-  { "BigMath", 1, 256, bmt_BigMath_i, bmt_BigMath_if, 4, bmt_BigMath_s, bmt_BigMath_sf, 4, bmt_BigMath_a, bmt_BigMath_af, 1 },
-  { "Binding", 0, 8191, bmt_Binding_i, bmt_Binding_if, 13, bmt_Binding_s, bmt_Binding_sf, 0, bmt_Binding_a, bmt_Binding_af, 6 },
-  { "Class", 0, 8191, bmt_Class_i, bmt_Class_if, 7, bmt_Class_s, bmt_Class_sf, 1, bmt_Class_a, bmt_Class_af, 7 },
-  { "ClosedQueueError", 0, 8191, bmt_ClosedQueueError_i, bmt_ClosedQueueError_if, 0, bmt_ClosedQueueError_s, bmt_ClosedQueueError_sf, 0, bmt_ClosedQueueError_a, bmt_ClosedQueueError_af, 10 },
-  { "Comparable", 1, 8191, bmt_Comparable_i, bmt_Comparable_if, 7, bmt_Comparable_s, bmt_Comparable_sf, 0, bmt_Comparable_a, bmt_Comparable_af, 1 },
-  { "Complex", 0, 8191, bmt_Complex_i, bmt_Complex_if, 40, bmt_Complex_s, bmt_Complex_sf, 4, bmt_Complex_a, bmt_Complex_af, 8 },
-  { "ConditionVariable", 0, 8191, bmt_Thread__ConditionVariable_i, bmt_Thread__ConditionVariable_if, 5, bmt_Thread__ConditionVariable_s, bmt_Thread__ConditionVariable_sf, 0, bmt_Thread__ConditionVariable_a, bmt_Thread__ConditionVariable_af, 6 },
-  { "Data", 0, 8191, bmt_Data_i, bmt_Data_if, 12, bmt_Data_s, bmt_Data_sf, 1, bmt_Data_a, bmt_Data_af, 6 },
-  { "Date", 0, 10, bmt_Date_i, bmt_Date_if, 77, bmt_Date_s, bmt_Date_sf, 32, bmt_Date_a, bmt_Date_af, 7 },
-  { "Date::Error", 0, 10, bmt_Date__Error_i, bmt_Date__Error_if, 0, bmt_Date__Error_s, bmt_Date__Error_sf, 0, bmt_Date__Error_a, bmt_Date__Error_af, 10 },
-  { "Date::Infinity", 0, 10, bmt_Date__Infinity_i, bmt_Date__Infinity_if, 12, bmt_Date__Infinity_s, bmt_Date__Infinity_sf, 0, bmt_Date__Infinity_a, bmt_Date__Infinity_af, 8 },
-  { "DateTime", 0, 10, bmt_DateTime_i, bmt_DateTime_if, 20, bmt_DateTime_s, bmt_DateTime_sf, 16, bmt_DateTime_a, bmt_DateTime_af, 8 },
-  { "DidYouMean", 1, 8191, bmt_DidYouMean_i, bmt_DidYouMean_if, 0, bmt_DidYouMean_s, bmt_DidYouMean_sf, 4, bmt_DidYouMean_a, bmt_DidYouMean_af, 1 },
-  { "DidYouMean::ClassNameChecker", 0, 8191, bmt_DidYouMean__ClassNameChecker_i, bmt_DidYouMean__ClassNameChecker_if, 5, bmt_DidYouMean__ClassNameChecker_s, bmt_DidYouMean__ClassNameChecker_sf, 0, bmt_DidYouMean__ClassNameChecker_a, bmt_DidYouMean__ClassNameChecker_af, 6 },
-  { "DidYouMean::Correctable", 1, 8191, bmt_DidYouMean__Correctable_i, bmt_DidYouMean__Correctable_if, 4, bmt_DidYouMean__Correctable_s, bmt_DidYouMean__Correctable_sf, 0, bmt_DidYouMean__Correctable_a, bmt_DidYouMean__Correctable_af, 1 },
-  { "DidYouMean::Formatter", 0, 8191, bmt_DidYouMean__Formatter_i, bmt_DidYouMean__Formatter_if, 1, bmt_DidYouMean__Formatter_s, bmt_DidYouMean__Formatter_sf, 1, bmt_DidYouMean__Formatter_a, bmt_DidYouMean__Formatter_af, 6 },
-  { "DidYouMean::Jaro", 1, 8191, bmt_DidYouMean__Jaro_i, bmt_DidYouMean__Jaro_if, 1, bmt_DidYouMean__Jaro_s, bmt_DidYouMean__Jaro_sf, 1, bmt_DidYouMean__Jaro_a, bmt_DidYouMean__Jaro_af, 1 },
-  { "DidYouMean::JaroWinkler", 1, 8191, bmt_DidYouMean__JaroWinkler_i, bmt_DidYouMean__JaroWinkler_if, 1, bmt_DidYouMean__JaroWinkler_s, bmt_DidYouMean__JaroWinkler_sf, 1, bmt_DidYouMean__JaroWinkler_a, bmt_DidYouMean__JaroWinkler_af, 1 },
-  { "DidYouMean::KeyErrorChecker", 0, 8191, bmt_DidYouMean__KeyErrorChecker_i, bmt_DidYouMean__KeyErrorChecker_if, 4, bmt_DidYouMean__KeyErrorChecker_s, bmt_DidYouMean__KeyErrorChecker_sf, 0, bmt_DidYouMean__KeyErrorChecker_a, bmt_DidYouMean__KeyErrorChecker_af, 6 },
-  { "DidYouMean::Levenshtein", 1, 8191, bmt_DidYouMean__Levenshtein_i, bmt_DidYouMean__Levenshtein_if, 2, bmt_DidYouMean__Levenshtein_s, bmt_DidYouMean__Levenshtein_sf, 2, bmt_DidYouMean__Levenshtein_a, bmt_DidYouMean__Levenshtein_af, 1 },
-  { "DidYouMean::MethodNameChecker", 0, 8191, bmt_DidYouMean__MethodNameChecker_i, bmt_DidYouMean__MethodNameChecker_if, 6, bmt_DidYouMean__MethodNameChecker_s, bmt_DidYouMean__MethodNameChecker_sf, 0, bmt_DidYouMean__MethodNameChecker_a, bmt_DidYouMean__MethodNameChecker_af, 6 },
-  { "DidYouMean::NullChecker", 0, 8191, bmt_DidYouMean__NullChecker_i, bmt_DidYouMean__NullChecker_if, 2, bmt_DidYouMean__NullChecker_s, bmt_DidYouMean__NullChecker_sf, 0, bmt_DidYouMean__NullChecker_a, bmt_DidYouMean__NullChecker_af, 6 },
-  { "DidYouMean::PatternKeyNameChecker", 0, 8191, bmt_DidYouMean__PatternKeyNameChecker_i, bmt_DidYouMean__PatternKeyNameChecker_if, 4, bmt_DidYouMean__PatternKeyNameChecker_s, bmt_DidYouMean__PatternKeyNameChecker_sf, 0, bmt_DidYouMean__PatternKeyNameChecker_a, bmt_DidYouMean__PatternKeyNameChecker_af, 6 },
-  { "DidYouMean::RequirePathChecker", 0, 8191, bmt_DidYouMean__RequirePathChecker_i, bmt_DidYouMean__RequirePathChecker_if, 3, bmt_DidYouMean__RequirePathChecker_s, bmt_DidYouMean__RequirePathChecker_sf, 1, bmt_DidYouMean__RequirePathChecker_a, bmt_DidYouMean__RequirePathChecker_af, 6 },
-  { "DidYouMean::SpellChecker", 0, 8191, bmt_DidYouMean__SpellChecker_i, bmt_DidYouMean__SpellChecker_if, 3, bmt_DidYouMean__SpellChecker_s, bmt_DidYouMean__SpellChecker_sf, 0, bmt_DidYouMean__SpellChecker_a, bmt_DidYouMean__SpellChecker_af, 6 },
-  { "DidYouMean::TreeSpellChecker", 0, 8191, bmt_DidYouMean__TreeSpellChecker_i, bmt_DidYouMean__TreeSpellChecker_if, 17, bmt_DidYouMean__TreeSpellChecker_s, bmt_DidYouMean__TreeSpellChecker_sf, 0, bmt_DidYouMean__TreeSpellChecker_a, bmt_DidYouMean__TreeSpellChecker_af, 6 },
-  { "DidYouMean::VariableNameChecker", 0, 8191, bmt_DidYouMean__VariableNameChecker_i, bmt_DidYouMean__VariableNameChecker_if, 7, bmt_DidYouMean__VariableNameChecker_s, bmt_DidYouMean__VariableNameChecker_sf, 0, bmt_DidYouMean__VariableNameChecker_a, bmt_DidYouMean__VariableNameChecker_af, 6 },
-  { "Dir", 0, 8191, bmt_Dir_i, bmt_Dir_if, 16, bmt_Dir_s, bmt_Dir_sf, 20, bmt_Dir_a, bmt_Dir_af, 7 },
-  { "EOFError", 0, 8191, bmt_EOFError_i, bmt_EOFError_if, 0, bmt_EOFError_s, bmt_EOFError_sf, 0, bmt_EOFError_a, bmt_EOFError_af, 9 },
-  { "Encoding", 0, 8191, bmt_Encoding_i, bmt_Encoding_if, 7, bmt_Encoding_s, bmt_Encoding_sf, 11, bmt_Encoding_a, bmt_Encoding_af, 6 },
-  { "Encoding::CompatibilityError", 0, 8191, bmt_Encoding__CompatibilityError_i, bmt_Encoding__CompatibilityError_if, 0, bmt_Encoding__CompatibilityError_s, bmt_Encoding__CompatibilityError_sf, 0, bmt_Encoding__CompatibilityError_a, bmt_Encoding__CompatibilityError_af, 9 },
-  { "Encoding::Converter", 0, 8191, bmt_Encoding__Converter_i, bmt_Encoding__Converter_if, 15, bmt_Encoding__Converter_s, bmt_Encoding__Converter_sf, 2, bmt_Encoding__Converter_a, bmt_Encoding__Converter_af, 6 },
-  { "Encoding::ConverterNotFoundError", 0, 8191, bmt_Encoding__ConverterNotFoundError_i, bmt_Encoding__ConverterNotFoundError_if, 0, bmt_Encoding__ConverterNotFoundError_s, bmt_Encoding__ConverterNotFoundError_sf, 0, bmt_Encoding__ConverterNotFoundError_a, bmt_Encoding__ConverterNotFoundError_af, 9 },
-  { "Encoding::InvalidByteSequenceError", 0, 8191, bmt_Encoding__InvalidByteSequenceError_i, bmt_Encoding__InvalidByteSequenceError_if, 7, bmt_Encoding__InvalidByteSequenceError_s, bmt_Encoding__InvalidByteSequenceError_sf, 0, bmt_Encoding__InvalidByteSequenceError_a, bmt_Encoding__InvalidByteSequenceError_af, 9 },
-  { "Encoding::UndefinedConversionError", 0, 8191, bmt_Encoding__UndefinedConversionError_i, bmt_Encoding__UndefinedConversionError_if, 5, bmt_Encoding__UndefinedConversionError_s, bmt_Encoding__UndefinedConversionError_sf, 0, bmt_Encoding__UndefinedConversionError_a, bmt_Encoding__UndefinedConversionError_af, 9 },
-  { "EncodingError", 0, 8191, bmt_EncodingError_i, bmt_EncodingError_if, 0, bmt_EncodingError_s, bmt_EncodingError_sf, 0, bmt_EncodingError_a, bmt_EncodingError_af, 8 },
-  { "Enumerable", 1, 8191, bmt_Enumerable_i, bmt_Enumerable_if, 61, bmt_Enumerable_s, bmt_Enumerable_sf, 0, bmt_Enumerable_a, bmt_Enumerable_af, 1 },
-  { "Enumerator", 0, 8191, bmt_Enumerator_i, bmt_Enumerator_if, 16, bmt_Enumerator_s, bmt_Enumerator_sf, 2, bmt_Enumerator_a, bmt_Enumerator_af, 7 },
-  { "Enumerator::ArithmeticSequence", 0, 8191, bmt_Enumerator__ArithmeticSequence_i, bmt_Enumerator__ArithmeticSequence_if, 13, bmt_Enumerator__ArithmeticSequence_s, bmt_Enumerator__ArithmeticSequence_sf, 0, bmt_Enumerator__ArithmeticSequence_a, bmt_Enumerator__ArithmeticSequence_af, 8 },
-  { "Enumerator::Chain", 0, 8191, bmt_Enumerator__Chain_i, bmt_Enumerator__Chain_if, 6, bmt_Enumerator__Chain_s, bmt_Enumerator__Chain_sf, 0, bmt_Enumerator__Chain_a, bmt_Enumerator__Chain_af, 8 },
-  { "Enumerator::Generator", 0, 8191, bmt_Enumerator__Generator_i, bmt_Enumerator__Generator_if, 3, bmt_Enumerator__Generator_s, bmt_Enumerator__Generator_sf, 0, bmt_Enumerator__Generator_a, bmt_Enumerator__Generator_af, 7 },
-  { "Enumerator::Lazy", 0, 8191, bmt_Enumerator__Lazy_i, bmt_Enumerator__Lazy_if, 48, bmt_Enumerator__Lazy_s, bmt_Enumerator__Lazy_sf, 0, bmt_Enumerator__Lazy_a, bmt_Enumerator__Lazy_af, 8 },
-  { "Enumerator::Producer", 0, 8191, bmt_Enumerator__Producer_i, bmt_Enumerator__Producer_if, 1, bmt_Enumerator__Producer_s, bmt_Enumerator__Producer_sf, 0, bmt_Enumerator__Producer_a, bmt_Enumerator__Producer_af, 6 },
-  { "Enumerator::Product", 0, 8191, bmt_Enumerator__Product_i, bmt_Enumerator__Product_if, 6, bmt_Enumerator__Product_s, bmt_Enumerator__Product_sf, 0, bmt_Enumerator__Product_a, bmt_Enumerator__Product_af, 8 },
-  { "Enumerator::Yielder", 0, 8191, bmt_Enumerator__Yielder_i, bmt_Enumerator__Yielder_if, 4, bmt_Enumerator__Yielder_s, bmt_Enumerator__Yielder_sf, 0, bmt_Enumerator__Yielder_a, bmt_Enumerator__Yielder_af, 6 },
-  { "Errno", 1, 8191, bmt_Errno_i, bmt_Errno_if, 0, bmt_Errno_s, bmt_Errno_sf, 0, bmt_Errno_a, bmt_Errno_af, 1 },
-  { "Errno::E2BIG", 0, 8191, bmt_Errno__E2BIG_i, bmt_Errno__E2BIG_if, 0, bmt_Errno__E2BIG_s, bmt_Errno__E2BIG_sf, 0, bmt_Errno__E2BIG_a, bmt_Errno__E2BIG_af, 9 },
-  { "Errno::EACCES", 0, 8191, bmt_Errno__EACCES_i, bmt_Errno__EACCES_if, 0, bmt_Errno__EACCES_s, bmt_Errno__EACCES_sf, 0, bmt_Errno__EACCES_a, bmt_Errno__EACCES_af, 9 },
-  { "Errno::EADDRINUSE", 0, 8191, bmt_Errno__EADDRINUSE_i, bmt_Errno__EADDRINUSE_if, 0, bmt_Errno__EADDRINUSE_s, bmt_Errno__EADDRINUSE_sf, 0, bmt_Errno__EADDRINUSE_a, bmt_Errno__EADDRINUSE_af, 9 },
-  { "Errno::EADDRNOTAVAIL", 0, 8191, bmt_Errno__EADDRNOTAVAIL_i, bmt_Errno__EADDRNOTAVAIL_if, 0, bmt_Errno__EADDRNOTAVAIL_s, bmt_Errno__EADDRNOTAVAIL_sf, 0, bmt_Errno__EADDRNOTAVAIL_a, bmt_Errno__EADDRNOTAVAIL_af, 9 },
-  { "Errno::EAFNOSUPPORT", 0, 8191, bmt_Errno__EAFNOSUPPORT_i, bmt_Errno__EAFNOSUPPORT_if, 0, bmt_Errno__EAFNOSUPPORT_s, bmt_Errno__EAFNOSUPPORT_sf, 0, bmt_Errno__EAFNOSUPPORT_a, bmt_Errno__EAFNOSUPPORT_af, 9 },
-  { "Errno::EAGAIN", 0, 8191, bmt_Errno__EAGAIN_i, bmt_Errno__EAGAIN_if, 0, bmt_Errno__EAGAIN_s, bmt_Errno__EAGAIN_sf, 0, bmt_Errno__EAGAIN_a, bmt_Errno__EAGAIN_af, 9 },
-  { "Errno::EALREADY", 0, 8191, bmt_Errno__EALREADY_i, bmt_Errno__EALREADY_if, 0, bmt_Errno__EALREADY_s, bmt_Errno__EALREADY_sf, 0, bmt_Errno__EALREADY_a, bmt_Errno__EALREADY_af, 9 },
-  { "Errno::EAUTH", 0, 8191, bmt_Errno__EAUTH_i, bmt_Errno__EAUTH_if, 0, bmt_Errno__EAUTH_s, bmt_Errno__EAUTH_sf, 0, bmt_Errno__EAUTH_a, bmt_Errno__EAUTH_af, 9 },
-  { "Errno::EBADARCH", 0, 8191, bmt_Errno__EBADARCH_i, bmt_Errno__EBADARCH_if, 0, bmt_Errno__EBADARCH_s, bmt_Errno__EBADARCH_sf, 0, bmt_Errno__EBADARCH_a, bmt_Errno__EBADARCH_af, 9 },
-  { "Errno::EBADEXEC", 0, 8191, bmt_Errno__EBADEXEC_i, bmt_Errno__EBADEXEC_if, 0, bmt_Errno__EBADEXEC_s, bmt_Errno__EBADEXEC_sf, 0, bmt_Errno__EBADEXEC_a, bmt_Errno__EBADEXEC_af, 9 },
-  { "Errno::EBADF", 0, 8191, bmt_Errno__EBADF_i, bmt_Errno__EBADF_if, 0, bmt_Errno__EBADF_s, bmt_Errno__EBADF_sf, 0, bmt_Errno__EBADF_a, bmt_Errno__EBADF_af, 9 },
-  { "Errno::EBADMACHO", 0, 8191, bmt_Errno__EBADMACHO_i, bmt_Errno__EBADMACHO_if, 0, bmt_Errno__EBADMACHO_s, bmt_Errno__EBADMACHO_sf, 0, bmt_Errno__EBADMACHO_a, bmt_Errno__EBADMACHO_af, 9 },
-  { "Errno::EBADMSG", 0, 8191, bmt_Errno__EBADMSG_i, bmt_Errno__EBADMSG_if, 0, bmt_Errno__EBADMSG_s, bmt_Errno__EBADMSG_sf, 0, bmt_Errno__EBADMSG_a, bmt_Errno__EBADMSG_af, 9 },
-  { "Errno::EBADRPC", 0, 8191, bmt_Errno__EBADRPC_i, bmt_Errno__EBADRPC_if, 0, bmt_Errno__EBADRPC_s, bmt_Errno__EBADRPC_sf, 0, bmt_Errno__EBADRPC_a, bmt_Errno__EBADRPC_af, 9 },
-  { "Errno::EBUSY", 0, 8191, bmt_Errno__EBUSY_i, bmt_Errno__EBUSY_if, 0, bmt_Errno__EBUSY_s, bmt_Errno__EBUSY_sf, 0, bmt_Errno__EBUSY_a, bmt_Errno__EBUSY_af, 9 },
-  { "Errno::ECANCELED", 0, 8191, bmt_Errno__ECANCELED_i, bmt_Errno__ECANCELED_if, 0, bmt_Errno__ECANCELED_s, bmt_Errno__ECANCELED_sf, 0, bmt_Errno__ECANCELED_a, bmt_Errno__ECANCELED_af, 9 },
-  { "Errno::ECHILD", 0, 8191, bmt_Errno__ECHILD_i, bmt_Errno__ECHILD_if, 0, bmt_Errno__ECHILD_s, bmt_Errno__ECHILD_sf, 0, bmt_Errno__ECHILD_a, bmt_Errno__ECHILD_af, 9 },
-  { "Errno::ECONNABORTED", 0, 8191, bmt_Errno__ECONNABORTED_i, bmt_Errno__ECONNABORTED_if, 0, bmt_Errno__ECONNABORTED_s, bmt_Errno__ECONNABORTED_sf, 0, bmt_Errno__ECONNABORTED_a, bmt_Errno__ECONNABORTED_af, 9 },
-  { "Errno::ECONNREFUSED", 0, 8191, bmt_Errno__ECONNREFUSED_i, bmt_Errno__ECONNREFUSED_if, 0, bmt_Errno__ECONNREFUSED_s, bmt_Errno__ECONNREFUSED_sf, 0, bmt_Errno__ECONNREFUSED_a, bmt_Errno__ECONNREFUSED_af, 9 },
-  { "Errno::ECONNRESET", 0, 8191, bmt_Errno__ECONNRESET_i, bmt_Errno__ECONNRESET_if, 0, bmt_Errno__ECONNRESET_s, bmt_Errno__ECONNRESET_sf, 0, bmt_Errno__ECONNRESET_a, bmt_Errno__ECONNRESET_af, 9 },
-  { "Errno::EDEADLK", 0, 8191, bmt_Errno__EDEADLK_i, bmt_Errno__EDEADLK_if, 0, bmt_Errno__EDEADLK_s, bmt_Errno__EDEADLK_sf, 0, bmt_Errno__EDEADLK_a, bmt_Errno__EDEADLK_af, 9 },
-  { "Errno::EDESTADDRREQ", 0, 8191, bmt_Errno__EDESTADDRREQ_i, bmt_Errno__EDESTADDRREQ_if, 0, bmt_Errno__EDESTADDRREQ_s, bmt_Errno__EDESTADDRREQ_sf, 0, bmt_Errno__EDESTADDRREQ_a, bmt_Errno__EDESTADDRREQ_af, 9 },
-  { "Errno::EDEVERR", 0, 8191, bmt_Errno__EDEVERR_i, bmt_Errno__EDEVERR_if, 0, bmt_Errno__EDEVERR_s, bmt_Errno__EDEVERR_sf, 0, bmt_Errno__EDEVERR_a, bmt_Errno__EDEVERR_af, 9 },
-  { "Errno::EDOM", 0, 8191, bmt_Errno__EDOM_i, bmt_Errno__EDOM_if, 0, bmt_Errno__EDOM_s, bmt_Errno__EDOM_sf, 0, bmt_Errno__EDOM_a, bmt_Errno__EDOM_af, 9 },
-  { "Errno::EDQUOT", 0, 8191, bmt_Errno__EDQUOT_i, bmt_Errno__EDQUOT_if, 0, bmt_Errno__EDQUOT_s, bmt_Errno__EDQUOT_sf, 0, bmt_Errno__EDQUOT_a, bmt_Errno__EDQUOT_af, 9 },
-  { "Errno::EEXIST", 0, 8191, bmt_Errno__EEXIST_i, bmt_Errno__EEXIST_if, 0, bmt_Errno__EEXIST_s, bmt_Errno__EEXIST_sf, 0, bmt_Errno__EEXIST_a, bmt_Errno__EEXIST_af, 9 },
-  { "Errno::EFAULT", 0, 8191, bmt_Errno__EFAULT_i, bmt_Errno__EFAULT_if, 0, bmt_Errno__EFAULT_s, bmt_Errno__EFAULT_sf, 0, bmt_Errno__EFAULT_a, bmt_Errno__EFAULT_af, 9 },
-  { "Errno::EFBIG", 0, 8191, bmt_Errno__EFBIG_i, bmt_Errno__EFBIG_if, 0, bmt_Errno__EFBIG_s, bmt_Errno__EFBIG_sf, 0, bmt_Errno__EFBIG_a, bmt_Errno__EFBIG_af, 9 },
-  { "Errno::EFTYPE", 0, 8191, bmt_Errno__EFTYPE_i, bmt_Errno__EFTYPE_if, 0, bmt_Errno__EFTYPE_s, bmt_Errno__EFTYPE_sf, 0, bmt_Errno__EFTYPE_a, bmt_Errno__EFTYPE_af, 9 },
-  { "Errno::EHOSTDOWN", 0, 8191, bmt_Errno__EHOSTDOWN_i, bmt_Errno__EHOSTDOWN_if, 0, bmt_Errno__EHOSTDOWN_s, bmt_Errno__EHOSTDOWN_sf, 0, bmt_Errno__EHOSTDOWN_a, bmt_Errno__EHOSTDOWN_af, 9 },
-  { "Errno::EHOSTUNREACH", 0, 8191, bmt_Errno__EHOSTUNREACH_i, bmt_Errno__EHOSTUNREACH_if, 0, bmt_Errno__EHOSTUNREACH_s, bmt_Errno__EHOSTUNREACH_sf, 0, bmt_Errno__EHOSTUNREACH_a, bmt_Errno__EHOSTUNREACH_af, 9 },
-  { "Errno::EIDRM", 0, 8191, bmt_Errno__EIDRM_i, bmt_Errno__EIDRM_if, 0, bmt_Errno__EIDRM_s, bmt_Errno__EIDRM_sf, 0, bmt_Errno__EIDRM_a, bmt_Errno__EIDRM_af, 9 },
-  { "Errno::EILSEQ", 0, 8191, bmt_Errno__EILSEQ_i, bmt_Errno__EILSEQ_if, 0, bmt_Errno__EILSEQ_s, bmt_Errno__EILSEQ_sf, 0, bmt_Errno__EILSEQ_a, bmt_Errno__EILSEQ_af, 9 },
-  { "Errno::EINPROGRESS", 0, 8191, bmt_Errno__EINPROGRESS_i, bmt_Errno__EINPROGRESS_if, 0, bmt_Errno__EINPROGRESS_s, bmt_Errno__EINPROGRESS_sf, 0, bmt_Errno__EINPROGRESS_a, bmt_Errno__EINPROGRESS_af, 9 },
-  { "Errno::EINTR", 0, 8191, bmt_Errno__EINTR_i, bmt_Errno__EINTR_if, 0, bmt_Errno__EINTR_s, bmt_Errno__EINTR_sf, 0, bmt_Errno__EINTR_a, bmt_Errno__EINTR_af, 9 },
-  { "Errno::EINVAL", 0, 8191, bmt_Errno__EINVAL_i, bmt_Errno__EINVAL_if, 0, bmt_Errno__EINVAL_s, bmt_Errno__EINVAL_sf, 0, bmt_Errno__EINVAL_a, bmt_Errno__EINVAL_af, 9 },
-  { "Errno::EIO", 0, 8191, bmt_Errno__EIO_i, bmt_Errno__EIO_if, 0, bmt_Errno__EIO_s, bmt_Errno__EIO_sf, 0, bmt_Errno__EIO_a, bmt_Errno__EIO_af, 9 },
-  { "Errno::EISCONN", 0, 8191, bmt_Errno__EISCONN_i, bmt_Errno__EISCONN_if, 0, bmt_Errno__EISCONN_s, bmt_Errno__EISCONN_sf, 0, bmt_Errno__EISCONN_a, bmt_Errno__EISCONN_af, 9 },
-  { "Errno::EISDIR", 0, 8191, bmt_Errno__EISDIR_i, bmt_Errno__EISDIR_if, 0, bmt_Errno__EISDIR_s, bmt_Errno__EISDIR_sf, 0, bmt_Errno__EISDIR_a, bmt_Errno__EISDIR_af, 9 },
-  { "Errno::ELOOP", 0, 8191, bmt_Errno__ELOOP_i, bmt_Errno__ELOOP_if, 0, bmt_Errno__ELOOP_s, bmt_Errno__ELOOP_sf, 0, bmt_Errno__ELOOP_a, bmt_Errno__ELOOP_af, 9 },
-  { "Errno::EMFILE", 0, 8191, bmt_Errno__EMFILE_i, bmt_Errno__EMFILE_if, 0, bmt_Errno__EMFILE_s, bmt_Errno__EMFILE_sf, 0, bmt_Errno__EMFILE_a, bmt_Errno__EMFILE_af, 9 },
-  { "Errno::EMLINK", 0, 8191, bmt_Errno__EMLINK_i, bmt_Errno__EMLINK_if, 0, bmt_Errno__EMLINK_s, bmt_Errno__EMLINK_sf, 0, bmt_Errno__EMLINK_a, bmt_Errno__EMLINK_af, 9 },
-  { "Errno::EMSGSIZE", 0, 8191, bmt_Errno__EMSGSIZE_i, bmt_Errno__EMSGSIZE_if, 0, bmt_Errno__EMSGSIZE_s, bmt_Errno__EMSGSIZE_sf, 0, bmt_Errno__EMSGSIZE_a, bmt_Errno__EMSGSIZE_af, 9 },
-  { "Errno::EMULTIHOP", 0, 8191, bmt_Errno__EMULTIHOP_i, bmt_Errno__EMULTIHOP_if, 0, bmt_Errno__EMULTIHOP_s, bmt_Errno__EMULTIHOP_sf, 0, bmt_Errno__EMULTIHOP_a, bmt_Errno__EMULTIHOP_af, 9 },
-  { "Errno::ENAMETOOLONG", 0, 8191, bmt_Errno__ENAMETOOLONG_i, bmt_Errno__ENAMETOOLONG_if, 0, bmt_Errno__ENAMETOOLONG_s, bmt_Errno__ENAMETOOLONG_sf, 0, bmt_Errno__ENAMETOOLONG_a, bmt_Errno__ENAMETOOLONG_af, 9 },
-  { "Errno::ENEEDAUTH", 0, 8191, bmt_Errno__ENEEDAUTH_i, bmt_Errno__ENEEDAUTH_if, 0, bmt_Errno__ENEEDAUTH_s, bmt_Errno__ENEEDAUTH_sf, 0, bmt_Errno__ENEEDAUTH_a, bmt_Errno__ENEEDAUTH_af, 9 },
-  { "Errno::ENETDOWN", 0, 8191, bmt_Errno__ENETDOWN_i, bmt_Errno__ENETDOWN_if, 0, bmt_Errno__ENETDOWN_s, bmt_Errno__ENETDOWN_sf, 0, bmt_Errno__ENETDOWN_a, bmt_Errno__ENETDOWN_af, 9 },
-  { "Errno::ENETRESET", 0, 8191, bmt_Errno__ENETRESET_i, bmt_Errno__ENETRESET_if, 0, bmt_Errno__ENETRESET_s, bmt_Errno__ENETRESET_sf, 0, bmt_Errno__ENETRESET_a, bmt_Errno__ENETRESET_af, 9 },
-  { "Errno::ENETUNREACH", 0, 8191, bmt_Errno__ENETUNREACH_i, bmt_Errno__ENETUNREACH_if, 0, bmt_Errno__ENETUNREACH_s, bmt_Errno__ENETUNREACH_sf, 0, bmt_Errno__ENETUNREACH_a, bmt_Errno__ENETUNREACH_af, 9 },
-  { "Errno::ENFILE", 0, 8191, bmt_Errno__ENFILE_i, bmt_Errno__ENFILE_if, 0, bmt_Errno__ENFILE_s, bmt_Errno__ENFILE_sf, 0, bmt_Errno__ENFILE_a, bmt_Errno__ENFILE_af, 9 },
-  { "Errno::ENOATTR", 0, 8191, bmt_Errno__ENOATTR_i, bmt_Errno__ENOATTR_if, 0, bmt_Errno__ENOATTR_s, bmt_Errno__ENOATTR_sf, 0, bmt_Errno__ENOATTR_a, bmt_Errno__ENOATTR_af, 9 },
-  { "Errno::ENOBUFS", 0, 8191, bmt_Errno__ENOBUFS_i, bmt_Errno__ENOBUFS_if, 0, bmt_Errno__ENOBUFS_s, bmt_Errno__ENOBUFS_sf, 0, bmt_Errno__ENOBUFS_a, bmt_Errno__ENOBUFS_af, 9 },
-  { "Errno::ENODATA", 0, 8191, bmt_Errno__ENODATA_i, bmt_Errno__ENODATA_if, 0, bmt_Errno__ENODATA_s, bmt_Errno__ENODATA_sf, 0, bmt_Errno__ENODATA_a, bmt_Errno__ENODATA_af, 9 },
-  { "Errno::ENODEV", 0, 8191, bmt_Errno__ENODEV_i, bmt_Errno__ENODEV_if, 0, bmt_Errno__ENODEV_s, bmt_Errno__ENODEV_sf, 0, bmt_Errno__ENODEV_a, bmt_Errno__ENODEV_af, 9 },
-  { "Errno::ENOENT", 0, 8191, bmt_Errno__ENOENT_i, bmt_Errno__ENOENT_if, 0, bmt_Errno__ENOENT_s, bmt_Errno__ENOENT_sf, 0, bmt_Errno__ENOENT_a, bmt_Errno__ENOENT_af, 9 },
-  { "Errno::ENOEXEC", 0, 8191, bmt_Errno__ENOEXEC_i, bmt_Errno__ENOEXEC_if, 0, bmt_Errno__ENOEXEC_s, bmt_Errno__ENOEXEC_sf, 0, bmt_Errno__ENOEXEC_a, bmt_Errno__ENOEXEC_af, 9 },
-  { "Errno::ENOLCK", 0, 8191, bmt_Errno__ENOLCK_i, bmt_Errno__ENOLCK_if, 0, bmt_Errno__ENOLCK_s, bmt_Errno__ENOLCK_sf, 0, bmt_Errno__ENOLCK_a, bmt_Errno__ENOLCK_af, 9 },
-  { "Errno::ENOLINK", 0, 8191, bmt_Errno__ENOLINK_i, bmt_Errno__ENOLINK_if, 0, bmt_Errno__ENOLINK_s, bmt_Errno__ENOLINK_sf, 0, bmt_Errno__ENOLINK_a, bmt_Errno__ENOLINK_af, 9 },
-  { "Errno::ENOMEM", 0, 8191, bmt_Errno__ENOMEM_i, bmt_Errno__ENOMEM_if, 0, bmt_Errno__ENOMEM_s, bmt_Errno__ENOMEM_sf, 0, bmt_Errno__ENOMEM_a, bmt_Errno__ENOMEM_af, 9 },
-  { "Errno::ENOMSG", 0, 8191, bmt_Errno__ENOMSG_i, bmt_Errno__ENOMSG_if, 0, bmt_Errno__ENOMSG_s, bmt_Errno__ENOMSG_sf, 0, bmt_Errno__ENOMSG_a, bmt_Errno__ENOMSG_af, 9 },
-  { "Errno::ENOPOLICY", 0, 8191, bmt_Errno__ENOPOLICY_i, bmt_Errno__ENOPOLICY_if, 0, bmt_Errno__ENOPOLICY_s, bmt_Errno__ENOPOLICY_sf, 0, bmt_Errno__ENOPOLICY_a, bmt_Errno__ENOPOLICY_af, 9 },
-  { "Errno::ENOPROTOOPT", 0, 8191, bmt_Errno__ENOPROTOOPT_i, bmt_Errno__ENOPROTOOPT_if, 0, bmt_Errno__ENOPROTOOPT_s, bmt_Errno__ENOPROTOOPT_sf, 0, bmt_Errno__ENOPROTOOPT_a, bmt_Errno__ENOPROTOOPT_af, 9 },
-  { "Errno::ENOSPC", 0, 8191, bmt_Errno__ENOSPC_i, bmt_Errno__ENOSPC_if, 0, bmt_Errno__ENOSPC_s, bmt_Errno__ENOSPC_sf, 0, bmt_Errno__ENOSPC_a, bmt_Errno__ENOSPC_af, 9 },
-  { "Errno::ENOSR", 0, 8191, bmt_Errno__ENOSR_i, bmt_Errno__ENOSR_if, 0, bmt_Errno__ENOSR_s, bmt_Errno__ENOSR_sf, 0, bmt_Errno__ENOSR_a, bmt_Errno__ENOSR_af, 9 },
-  { "Errno::ENOSTR", 0, 8191, bmt_Errno__ENOSTR_i, bmt_Errno__ENOSTR_if, 0, bmt_Errno__ENOSTR_s, bmt_Errno__ENOSTR_sf, 0, bmt_Errno__ENOSTR_a, bmt_Errno__ENOSTR_af, 9 },
-  { "Errno::ENOSYS", 0, 8191, bmt_Errno__ENOSYS_i, bmt_Errno__ENOSYS_if, 0, bmt_Errno__ENOSYS_s, bmt_Errno__ENOSYS_sf, 0, bmt_Errno__ENOSYS_a, bmt_Errno__ENOSYS_af, 9 },
-  { "Errno::ENOTBLK", 0, 8191, bmt_Errno__ENOTBLK_i, bmt_Errno__ENOTBLK_if, 0, bmt_Errno__ENOTBLK_s, bmt_Errno__ENOTBLK_sf, 0, bmt_Errno__ENOTBLK_a, bmt_Errno__ENOTBLK_af, 9 },
-  { "Errno::ENOTCAPABLE", 0, 8191, bmt_Errno__ENOTCAPABLE_i, bmt_Errno__ENOTCAPABLE_if, 0, bmt_Errno__ENOTCAPABLE_s, bmt_Errno__ENOTCAPABLE_sf, 0, bmt_Errno__ENOTCAPABLE_a, bmt_Errno__ENOTCAPABLE_af, 9 },
-  { "Errno::ENOTCONN", 0, 8191, bmt_Errno__ENOTCONN_i, bmt_Errno__ENOTCONN_if, 0, bmt_Errno__ENOTCONN_s, bmt_Errno__ENOTCONN_sf, 0, bmt_Errno__ENOTCONN_a, bmt_Errno__ENOTCONN_af, 9 },
-  { "Errno::ENOTDIR", 0, 8191, bmt_Errno__ENOTDIR_i, bmt_Errno__ENOTDIR_if, 0, bmt_Errno__ENOTDIR_s, bmt_Errno__ENOTDIR_sf, 0, bmt_Errno__ENOTDIR_a, bmt_Errno__ENOTDIR_af, 9 },
-  { "Errno::ENOTEMPTY", 0, 8191, bmt_Errno__ENOTEMPTY_i, bmt_Errno__ENOTEMPTY_if, 0, bmt_Errno__ENOTEMPTY_s, bmt_Errno__ENOTEMPTY_sf, 0, bmt_Errno__ENOTEMPTY_a, bmt_Errno__ENOTEMPTY_af, 9 },
-  { "Errno::ENOTRECOVERABLE", 0, 8191, bmt_Errno__ENOTRECOVERABLE_i, bmt_Errno__ENOTRECOVERABLE_if, 0, bmt_Errno__ENOTRECOVERABLE_s, bmt_Errno__ENOTRECOVERABLE_sf, 0, bmt_Errno__ENOTRECOVERABLE_a, bmt_Errno__ENOTRECOVERABLE_af, 9 },
-  { "Errno::ENOTSOCK", 0, 8191, bmt_Errno__ENOTSOCK_i, bmt_Errno__ENOTSOCK_if, 0, bmt_Errno__ENOTSOCK_s, bmt_Errno__ENOTSOCK_sf, 0, bmt_Errno__ENOTSOCK_a, bmt_Errno__ENOTSOCK_af, 9 },
-  { "Errno::ENOTSUP", 0, 8191, bmt_Errno__ENOTSUP_i, bmt_Errno__ENOTSUP_if, 0, bmt_Errno__ENOTSUP_s, bmt_Errno__ENOTSUP_sf, 0, bmt_Errno__ENOTSUP_a, bmt_Errno__ENOTSUP_af, 9 },
-  { "Errno::ENOTTY", 0, 8191, bmt_Errno__ENOTTY_i, bmt_Errno__ENOTTY_if, 0, bmt_Errno__ENOTTY_s, bmt_Errno__ENOTTY_sf, 0, bmt_Errno__ENOTTY_a, bmt_Errno__ENOTTY_af, 9 },
-  { "Errno::ENXIO", 0, 8191, bmt_Errno__ENXIO_i, bmt_Errno__ENXIO_if, 0, bmt_Errno__ENXIO_s, bmt_Errno__ENXIO_sf, 0, bmt_Errno__ENXIO_a, bmt_Errno__ENXIO_af, 9 },
-  { "Errno::EOPNOTSUPP", 0, 8191, bmt_Errno__EOPNOTSUPP_i, bmt_Errno__EOPNOTSUPP_if, 0, bmt_Errno__EOPNOTSUPP_s, bmt_Errno__EOPNOTSUPP_sf, 0, bmt_Errno__EOPNOTSUPP_a, bmt_Errno__EOPNOTSUPP_af, 9 },
-  { "Errno::EOVERFLOW", 0, 8191, bmt_Errno__EOVERFLOW_i, bmt_Errno__EOVERFLOW_if, 0, bmt_Errno__EOVERFLOW_s, bmt_Errno__EOVERFLOW_sf, 0, bmt_Errno__EOVERFLOW_a, bmt_Errno__EOVERFLOW_af, 9 },
-  { "Errno::EOWNERDEAD", 0, 8191, bmt_Errno__EOWNERDEAD_i, bmt_Errno__EOWNERDEAD_if, 0, bmt_Errno__EOWNERDEAD_s, bmt_Errno__EOWNERDEAD_sf, 0, bmt_Errno__EOWNERDEAD_a, bmt_Errno__EOWNERDEAD_af, 9 },
-  { "Errno::EPERM", 0, 8191, bmt_Errno__EPERM_i, bmt_Errno__EPERM_if, 0, bmt_Errno__EPERM_s, bmt_Errno__EPERM_sf, 0, bmt_Errno__EPERM_a, bmt_Errno__EPERM_af, 9 },
-  { "Errno::EPFNOSUPPORT", 0, 8191, bmt_Errno__EPFNOSUPPORT_i, bmt_Errno__EPFNOSUPPORT_if, 0, bmt_Errno__EPFNOSUPPORT_s, bmt_Errno__EPFNOSUPPORT_sf, 0, bmt_Errno__EPFNOSUPPORT_a, bmt_Errno__EPFNOSUPPORT_af, 9 },
-  { "Errno::EPIPE", 0, 8191, bmt_Errno__EPIPE_i, bmt_Errno__EPIPE_if, 0, bmt_Errno__EPIPE_s, bmt_Errno__EPIPE_sf, 0, bmt_Errno__EPIPE_a, bmt_Errno__EPIPE_af, 9 },
-  { "Errno::EPROCLIM", 0, 8191, bmt_Errno__EPROCLIM_i, bmt_Errno__EPROCLIM_if, 0, bmt_Errno__EPROCLIM_s, bmt_Errno__EPROCLIM_sf, 0, bmt_Errno__EPROCLIM_a, bmt_Errno__EPROCLIM_af, 9 },
-  { "Errno::EPROCUNAVAIL", 0, 8191, bmt_Errno__EPROCUNAVAIL_i, bmt_Errno__EPROCUNAVAIL_if, 0, bmt_Errno__EPROCUNAVAIL_s, bmt_Errno__EPROCUNAVAIL_sf, 0, bmt_Errno__EPROCUNAVAIL_a, bmt_Errno__EPROCUNAVAIL_af, 9 },
-  { "Errno::EPROGMISMATCH", 0, 8191, bmt_Errno__EPROGMISMATCH_i, bmt_Errno__EPROGMISMATCH_if, 0, bmt_Errno__EPROGMISMATCH_s, bmt_Errno__EPROGMISMATCH_sf, 0, bmt_Errno__EPROGMISMATCH_a, bmt_Errno__EPROGMISMATCH_af, 9 },
-  { "Errno::EPROGUNAVAIL", 0, 8191, bmt_Errno__EPROGUNAVAIL_i, bmt_Errno__EPROGUNAVAIL_if, 0, bmt_Errno__EPROGUNAVAIL_s, bmt_Errno__EPROGUNAVAIL_sf, 0, bmt_Errno__EPROGUNAVAIL_a, bmt_Errno__EPROGUNAVAIL_af, 9 },
-  { "Errno::EPROTO", 0, 8191, bmt_Errno__EPROTO_i, bmt_Errno__EPROTO_if, 0, bmt_Errno__EPROTO_s, bmt_Errno__EPROTO_sf, 0, bmt_Errno__EPROTO_a, bmt_Errno__EPROTO_af, 9 },
-  { "Errno::EPROTONOSUPPORT", 0, 8191, bmt_Errno__EPROTONOSUPPORT_i, bmt_Errno__EPROTONOSUPPORT_if, 0, bmt_Errno__EPROTONOSUPPORT_s, bmt_Errno__EPROTONOSUPPORT_sf, 0, bmt_Errno__EPROTONOSUPPORT_a, bmt_Errno__EPROTONOSUPPORT_af, 9 },
-  { "Errno::EPROTOTYPE", 0, 8191, bmt_Errno__EPROTOTYPE_i, bmt_Errno__EPROTOTYPE_if, 0, bmt_Errno__EPROTOTYPE_s, bmt_Errno__EPROTOTYPE_sf, 0, bmt_Errno__EPROTOTYPE_a, bmt_Errno__EPROTOTYPE_af, 9 },
-  { "Errno::EPWROFF", 0, 8191, bmt_Errno__EPWROFF_i, bmt_Errno__EPWROFF_if, 0, bmt_Errno__EPWROFF_s, bmt_Errno__EPWROFF_sf, 0, bmt_Errno__EPWROFF_a, bmt_Errno__EPWROFF_af, 9 },
-  { "Errno::EQFULL", 0, 8191, bmt_Errno__EQFULL_i, bmt_Errno__EQFULL_if, 0, bmt_Errno__EQFULL_s, bmt_Errno__EQFULL_sf, 0, bmt_Errno__EQFULL_a, bmt_Errno__EQFULL_af, 9 },
-  { "Errno::ERANGE", 0, 8191, bmt_Errno__ERANGE_i, bmt_Errno__ERANGE_if, 0, bmt_Errno__ERANGE_s, bmt_Errno__ERANGE_sf, 0, bmt_Errno__ERANGE_a, bmt_Errno__ERANGE_af, 9 },
-  { "Errno::EREMOTE", 0, 8191, bmt_Errno__EREMOTE_i, bmt_Errno__EREMOTE_if, 0, bmt_Errno__EREMOTE_s, bmt_Errno__EREMOTE_sf, 0, bmt_Errno__EREMOTE_a, bmt_Errno__EREMOTE_af, 9 },
-  { "Errno::EROFS", 0, 8191, bmt_Errno__EROFS_i, bmt_Errno__EROFS_if, 0, bmt_Errno__EROFS_s, bmt_Errno__EROFS_sf, 0, bmt_Errno__EROFS_a, bmt_Errno__EROFS_af, 9 },
-  { "Errno::ERPCMISMATCH", 0, 8191, bmt_Errno__ERPCMISMATCH_i, bmt_Errno__ERPCMISMATCH_if, 0, bmt_Errno__ERPCMISMATCH_s, bmt_Errno__ERPCMISMATCH_sf, 0, bmt_Errno__ERPCMISMATCH_a, bmt_Errno__ERPCMISMATCH_af, 9 },
-  { "Errno::ESHLIBVERS", 0, 8191, bmt_Errno__ESHLIBVERS_i, bmt_Errno__ESHLIBVERS_if, 0, bmt_Errno__ESHLIBVERS_s, bmt_Errno__ESHLIBVERS_sf, 0, bmt_Errno__ESHLIBVERS_a, bmt_Errno__ESHLIBVERS_af, 9 },
-  { "Errno::ESHUTDOWN", 0, 8191, bmt_Errno__ESHUTDOWN_i, bmt_Errno__ESHUTDOWN_if, 0, bmt_Errno__ESHUTDOWN_s, bmt_Errno__ESHUTDOWN_sf, 0, bmt_Errno__ESHUTDOWN_a, bmt_Errno__ESHUTDOWN_af, 9 },
-  { "Errno::ESOCKTNOSUPPORT", 0, 8191, bmt_Errno__ESOCKTNOSUPPORT_i, bmt_Errno__ESOCKTNOSUPPORT_if, 0, bmt_Errno__ESOCKTNOSUPPORT_s, bmt_Errno__ESOCKTNOSUPPORT_sf, 0, bmt_Errno__ESOCKTNOSUPPORT_a, bmt_Errno__ESOCKTNOSUPPORT_af, 9 },
-  { "Errno::ESPIPE", 0, 8191, bmt_Errno__ESPIPE_i, bmt_Errno__ESPIPE_if, 0, bmt_Errno__ESPIPE_s, bmt_Errno__ESPIPE_sf, 0, bmt_Errno__ESPIPE_a, bmt_Errno__ESPIPE_af, 9 },
-  { "Errno::ESRCH", 0, 8191, bmt_Errno__ESRCH_i, bmt_Errno__ESRCH_if, 0, bmt_Errno__ESRCH_s, bmt_Errno__ESRCH_sf, 0, bmt_Errno__ESRCH_a, bmt_Errno__ESRCH_af, 9 },
-  { "Errno::ESTALE", 0, 8191, bmt_Errno__ESTALE_i, bmt_Errno__ESTALE_if, 0, bmt_Errno__ESTALE_s, bmt_Errno__ESTALE_sf, 0, bmt_Errno__ESTALE_a, bmt_Errno__ESTALE_af, 9 },
-  { "Errno::ETIME", 0, 8191, bmt_Errno__ETIME_i, bmt_Errno__ETIME_if, 0, bmt_Errno__ETIME_s, bmt_Errno__ETIME_sf, 0, bmt_Errno__ETIME_a, bmt_Errno__ETIME_af, 9 },
-  { "Errno::ETIMEDOUT", 0, 8191, bmt_Errno__ETIMEDOUT_i, bmt_Errno__ETIMEDOUT_if, 0, bmt_Errno__ETIMEDOUT_s, bmt_Errno__ETIMEDOUT_sf, 0, bmt_Errno__ETIMEDOUT_a, bmt_Errno__ETIMEDOUT_af, 9 },
-  { "Errno::ETOOMANYREFS", 0, 8191, bmt_Errno__ETOOMANYREFS_i, bmt_Errno__ETOOMANYREFS_if, 0, bmt_Errno__ETOOMANYREFS_s, bmt_Errno__ETOOMANYREFS_sf, 0, bmt_Errno__ETOOMANYREFS_a, bmt_Errno__ETOOMANYREFS_af, 9 },
-  { "Errno::ETXTBSY", 0, 8191, bmt_Errno__ETXTBSY_i, bmt_Errno__ETXTBSY_if, 0, bmt_Errno__ETXTBSY_s, bmt_Errno__ETXTBSY_sf, 0, bmt_Errno__ETXTBSY_a, bmt_Errno__ETXTBSY_af, 9 },
-  { "Errno::EUSERS", 0, 8191, bmt_Errno__EUSERS_i, bmt_Errno__EUSERS_if, 0, bmt_Errno__EUSERS_s, bmt_Errno__EUSERS_sf, 0, bmt_Errno__EUSERS_a, bmt_Errno__EUSERS_af, 9 },
-  { "Errno::EXDEV", 0, 8191, bmt_Errno__EXDEV_i, bmt_Errno__EXDEV_if, 0, bmt_Errno__EXDEV_s, bmt_Errno__EXDEV_sf, 0, bmt_Errno__EXDEV_a, bmt_Errno__EXDEV_af, 9 },
-  { "Errno::NOERROR", 0, 8191, bmt_Errno__NOERROR_i, bmt_Errno__NOERROR_if, 0, bmt_Errno__NOERROR_s, bmt_Errno__NOERROR_sf, 0, bmt_Errno__NOERROR_a, bmt_Errno__NOERROR_af, 9 },
-  { "ErrorHighlight", 1, 8191, bmt_ErrorHighlight_i, bmt_ErrorHighlight_if, 0, bmt_ErrorHighlight_s, bmt_ErrorHighlight_sf, 4, bmt_ErrorHighlight_a, bmt_ErrorHighlight_af, 1 },
-  { "ErrorHighlight::CoreExt", 1, 8191, bmt_ErrorHighlight__CoreExt_i, bmt_ErrorHighlight__CoreExt_if, 2, bmt_ErrorHighlight__CoreExt_s, bmt_ErrorHighlight__CoreExt_sf, 0, bmt_ErrorHighlight__CoreExt_a, bmt_ErrorHighlight__CoreExt_af, 1 },
-  { "ErrorHighlight::DefaultFormatter", 0, 8191, bmt_ErrorHighlight__DefaultFormatter_i, bmt_ErrorHighlight__DefaultFormatter_if, 0, bmt_ErrorHighlight__DefaultFormatter_s, bmt_ErrorHighlight__DefaultFormatter_sf, 4, bmt_ErrorHighlight__DefaultFormatter_a, bmt_ErrorHighlight__DefaultFormatter_af, 6 },
-  { "Exception", 0, 8191, bmt_Exception_i, bmt_Exception_if, 15, bmt_Exception_s, bmt_Exception_sf, 2, bmt_Exception_a, bmt_Exception_af, 6 },
-  { "FalseClass", 0, 8191, bmt_FalseClass_i, bmt_FalseClass_if, 6, bmt_FalseClass_s, bmt_FalseClass_sf, 0, bmt_FalseClass_a, bmt_FalseClass_af, 7 },
-  { "Fiber", 0, 8191, bmt_Fiber_i, bmt_Fiber_if, 13, bmt_Fiber_s, bmt_Fiber_sf, 10, bmt_Fiber_a, bmt_Fiber_af, 6 },
-  { "FiberError", 0, 8191, bmt_FiberError_i, bmt_FiberError_if, 0, bmt_FiberError_s, bmt_FiberError_sf, 0, bmt_FiberError_a, bmt_FiberError_af, 8 },
-  { "File", 0, 8191, bmt_File_i, bmt_File_if, 11, bmt_File_s, bmt_File_sf, 61, bmt_File_a, bmt_File_af, 10 },
-  { "File::Constants", 1, 8191, bmt_File__Constants_i, bmt_File__Constants_if, 0, bmt_File__Constants_s, bmt_File__Constants_sf, 0, bmt_File__Constants_a, bmt_File__Constants_af, 1 },
-  { "File::Stat", 0, 8191, bmt_File__Stat_i, bmt_File__Stat_if, 45, bmt_File__Stat_s, bmt_File__Stat_sf, 0, bmt_File__Stat_a, bmt_File__Stat_af, 7 },
-  { "FileTest", 1, 8191, bmt_FileTest_i, bmt_FileTest_if, 26, bmt_FileTest_s, bmt_FileTest_sf, 26, bmt_FileTest_a, bmt_FileTest_af, 1 },
-  { "Float", 0, 8191, bmt_Float_i, bmt_Float_if, 47, bmt_Float_s, bmt_Float_sf, 0, bmt_Float_a, bmt_Float_af, 9 },
-  { "FloatDomainError", 0, 8191, bmt_FloatDomainError_i, bmt_FloatDomainError_if, 0, bmt_FloatDomainError_s, bmt_FloatDomainError_sf, 0, bmt_FloatDomainError_a, bmt_FloatDomainError_af, 9 },
-  { "FrozenError", 0, 8191, bmt_FrozenError_i, bmt_FrozenError_if, 2, bmt_FrozenError_s, bmt_FrozenError_sf, 0, bmt_FrozenError_a, bmt_FrozenError_af, 9 },
-  { "GC", 1, 8191, bmt_GC_i, bmt_GC_if, 1, bmt_GC_s, bmt_GC_sf, 19, bmt_GC_a, bmt_GC_af, 1 },
-  { "GC::Profiler", 1, 8191, bmt_GC__Profiler_i, bmt_GC__Profiler_if, 0, bmt_GC__Profiler_s, bmt_GC__Profiler_sf, 8, bmt_GC__Profiler_a, bmt_GC__Profiler_af, 1 },
-  { "Gem", 1, 8191, bmt_Gem_i, bmt_Gem_if, 0, bmt_Gem_s, bmt_Gem_sf, 134, bmt_Gem_a, bmt_Gem_af, 1 },
-  { "Gem::BUNDLED_GEMS", 1, 8191, bmt_Gem__BUNDLED_GEMS_i, bmt_Gem__BUNDLED_GEMS_if, 0, bmt_Gem__BUNDLED_GEMS_s, bmt_Gem__BUNDLED_GEMS_sf, 5, bmt_Gem__BUNDLED_GEMS_a, bmt_Gem__BUNDLED_GEMS_af, 1 },
-  { "Gem::BasicSpecification", 0, 8191, bmt_Gem__BasicSpecification_i, bmt_Gem__BasicSpecification_if, 44, bmt_Gem__BasicSpecification_s, bmt_Gem__BasicSpecification_sf, 0, bmt_Gem__BasicSpecification_a, bmt_Gem__BasicSpecification_af, 6 },
-  { "Gem::CommandLineError", 0, 8191, bmt_Gem__CommandLineError_i, bmt_Gem__CommandLineError_if, 0, bmt_Gem__CommandLineError_s, bmt_Gem__CommandLineError_sf, 0, bmt_Gem__CommandLineError_a, bmt_Gem__CommandLineError_af, 10 },
-  { "Gem::ConflictError", 0, 8191, bmt_Gem__ConflictError_i, bmt_Gem__ConflictError_if, 3, bmt_Gem__ConflictError_s, bmt_Gem__ConflictError_sf, 0, bmt_Gem__ConflictError_a, bmt_Gem__ConflictError_af, 11 },
-  { "Gem::Dependency", 0, 8191, bmt_Gem__Dependency_i, bmt_Gem__Dependency_if, 27, bmt_Gem__Dependency_s, bmt_Gem__Dependency_sf, 0, bmt_Gem__Dependency_a, bmt_Gem__Dependency_af, 6 },
-  { "Gem::DependencyError", 0, 8191, bmt_Gem__DependencyError_i, bmt_Gem__DependencyError_if, 0, bmt_Gem__DependencyError_s, bmt_Gem__DependencyError_sf, 0, bmt_Gem__DependencyError_a, bmt_Gem__DependencyError_af, 10 },
-  { "Gem::DependencyRemovalException", 0, 8191, bmt_Gem__DependencyRemovalException_i, bmt_Gem__DependencyRemovalException_if, 0, bmt_Gem__DependencyRemovalException_s, bmt_Gem__DependencyRemovalException_sf, 0, bmt_Gem__DependencyRemovalException_a, bmt_Gem__DependencyRemovalException_af, 10 },
-  { "Gem::DependencyResolutionError", 0, 8191, bmt_Gem__DependencyResolutionError_i, bmt_Gem__DependencyResolutionError_if, 3, bmt_Gem__DependencyResolutionError_s, bmt_Gem__DependencyResolutionError_sf, 0, bmt_Gem__DependencyResolutionError_a, bmt_Gem__DependencyResolutionError_af, 11 },
-  { "Gem::Deprecate", 1, 8191, bmt_Gem__Deprecate_i, bmt_Gem__Deprecate_if, 4, bmt_Gem__Deprecate_s, bmt_Gem__Deprecate_sf, 6, bmt_Gem__Deprecate_a, bmt_Gem__Deprecate_af, 1 },
-  { "Gem::DocumentError", 0, 8191, bmt_Gem__DocumentError_i, bmt_Gem__DocumentError_if, 0, bmt_Gem__DocumentError_s, bmt_Gem__DocumentError_sf, 0, bmt_Gem__DocumentError_a, bmt_Gem__DocumentError_af, 10 },
-  { "Gem::EndOfYAMLException", 0, 8191, bmt_Gem__EndOfYAMLException_i, bmt_Gem__EndOfYAMLException_if, 0, bmt_Gem__EndOfYAMLException_s, bmt_Gem__EndOfYAMLException_sf, 0, bmt_Gem__EndOfYAMLException_a, bmt_Gem__EndOfYAMLException_af, 10 },
-  { "Gem::ErrorReason", 0, 8191, bmt_Gem__ErrorReason_i, bmt_Gem__ErrorReason_if, 0, bmt_Gem__ErrorReason_s, bmt_Gem__ErrorReason_sf, 0, bmt_Gem__ErrorReason_a, bmt_Gem__ErrorReason_af, 6 },
-  { "Gem::Exception", 0, 8191, bmt_Gem__Exception_i, bmt_Gem__Exception_if, 0, bmt_Gem__Exception_s, bmt_Gem__Exception_sf, 0, bmt_Gem__Exception_a, bmt_Gem__Exception_af, 9 },
-  { "Gem::FilePermissionError", 0, 8191, bmt_Gem__FilePermissionError_i, bmt_Gem__FilePermissionError_if, 2, bmt_Gem__FilePermissionError_s, bmt_Gem__FilePermissionError_sf, 0, bmt_Gem__FilePermissionError_a, bmt_Gem__FilePermissionError_af, 10 },
-  { "Gem::FormatException", 0, 8191, bmt_Gem__FormatException_i, bmt_Gem__FormatException_if, 2, bmt_Gem__FormatException_s, bmt_Gem__FormatException_sf, 0, bmt_Gem__FormatException_a, bmt_Gem__FormatException_af, 10 },
-  { "Gem::GemNotFoundException", 0, 8191, bmt_Gem__GemNotFoundException_i, bmt_Gem__GemNotFoundException_if, 0, bmt_Gem__GemNotFoundException_s, bmt_Gem__GemNotFoundException_sf, 0, bmt_Gem__GemNotFoundException_a, bmt_Gem__GemNotFoundException_af, 10 },
-  { "Gem::GemNotInHomeException", 0, 8191, bmt_Gem__GemNotInHomeException_i, bmt_Gem__GemNotInHomeException_if, 2, bmt_Gem__GemNotInHomeException_s, bmt_Gem__GemNotInHomeException_sf, 0, bmt_Gem__GemNotInHomeException_a, bmt_Gem__GemNotInHomeException_af, 10 },
-  { "Gem::ImpossibleDependenciesError", 0, 8191, bmt_Gem__ImpossibleDependenciesError_i, bmt_Gem__ImpossibleDependenciesError_if, 5, bmt_Gem__ImpossibleDependenciesError_s, bmt_Gem__ImpossibleDependenciesError_sf, 0, bmt_Gem__ImpossibleDependenciesError_a, bmt_Gem__ImpossibleDependenciesError_af, 10 },
-  { "Gem::InstallError", 0, 8191, bmt_Gem__InstallError_i, bmt_Gem__InstallError_if, 0, bmt_Gem__InstallError_s, bmt_Gem__InstallError_sf, 0, bmt_Gem__InstallError_a, bmt_Gem__InstallError_af, 10 },
-  { "Gem::InvalidSpecificationException", 0, 8191, bmt_Gem__InvalidSpecificationException_i, bmt_Gem__InvalidSpecificationException_if, 0, bmt_Gem__InvalidSpecificationException_s, bmt_Gem__InvalidSpecificationException_sf, 0, bmt_Gem__InvalidSpecificationException_a, bmt_Gem__InvalidSpecificationException_af, 10 },
-  { "Gem::List", 0, 8191, bmt_Gem__List_i, bmt_Gem__List_if, 9, bmt_Gem__List_s, bmt_Gem__List_sf, 1, bmt_Gem__List_a, bmt_Gem__List_af, 7 },
-  { "Gem::LoadError", 0, 8191, bmt_Gem__LoadError_i, bmt_Gem__LoadError_if, 4, bmt_Gem__LoadError_s, bmt_Gem__LoadError_sf, 0, bmt_Gem__LoadError_a, bmt_Gem__LoadError_af, 10 },
-  { "Gem::MissingSpecError", 0, 8191, bmt_Gem__MissingSpecError_i, bmt_Gem__MissingSpecError_if, 3, bmt_Gem__MissingSpecError_s, bmt_Gem__MissingSpecError_sf, 0, bmt_Gem__MissingSpecError_a, bmt_Gem__MissingSpecError_af, 11 },
-  { "Gem::MissingSpecVersionError", 0, 8191, bmt_Gem__MissingSpecVersionError_i, bmt_Gem__MissingSpecVersionError_if, 3, bmt_Gem__MissingSpecVersionError_s, bmt_Gem__MissingSpecVersionError_sf, 0, bmt_Gem__MissingSpecVersionError_a, bmt_Gem__MissingSpecVersionError_af, 12 },
-  { "Gem::OperationNotSupportedError", 0, 8191, bmt_Gem__OperationNotSupportedError_i, bmt_Gem__OperationNotSupportedError_if, 0, bmt_Gem__OperationNotSupportedError_s, bmt_Gem__OperationNotSupportedError_sf, 0, bmt_Gem__OperationNotSupportedError_a, bmt_Gem__OperationNotSupportedError_af, 10 },
-  { "Gem::PathSupport", 0, 8191, bmt_Gem__PathSupport_i, bmt_Gem__PathSupport_if, 8, bmt_Gem__PathSupport_s, bmt_Gem__PathSupport_sf, 0, bmt_Gem__PathSupport_a, bmt_Gem__PathSupport_af, 6 },
-  { "Gem::Platform", 0, 8191, bmt_Gem__Platform_i, bmt_Gem__Platform_if, 17, bmt_Gem__Platform_s, bmt_Gem__Platform_sf, 16, bmt_Gem__Platform_a, bmt_Gem__Platform_af, 6 },
-  { "Gem::PlatformMismatch", 0, 8191, bmt_Gem__PlatformMismatch_i, bmt_Gem__PlatformMismatch_if, 6, bmt_Gem__PlatformMismatch_s, bmt_Gem__PlatformMismatch_sf, 0, bmt_Gem__PlatformMismatch_a, bmt_Gem__PlatformMismatch_af, 7 },
-  { "Gem::RemoteError", 0, 8191, bmt_Gem__RemoteError_i, bmt_Gem__RemoteError_if, 0, bmt_Gem__RemoteError_s, bmt_Gem__RemoteError_sf, 0, bmt_Gem__RemoteError_a, bmt_Gem__RemoteError_af, 10 },
-  { "Gem::RemoteInstallationCancelled", 0, 8191, bmt_Gem__RemoteInstallationCancelled_i, bmt_Gem__RemoteInstallationCancelled_if, 0, bmt_Gem__RemoteInstallationCancelled_s, bmt_Gem__RemoteInstallationCancelled_sf, 0, bmt_Gem__RemoteInstallationCancelled_a, bmt_Gem__RemoteInstallationCancelled_af, 10 },
-  { "Gem::RemoteInstallationSkipped", 0, 8191, bmt_Gem__RemoteInstallationSkipped_i, bmt_Gem__RemoteInstallationSkipped_if, 0, bmt_Gem__RemoteInstallationSkipped_s, bmt_Gem__RemoteInstallationSkipped_sf, 0, bmt_Gem__RemoteInstallationSkipped_a, bmt_Gem__RemoteInstallationSkipped_af, 10 },
-  { "Gem::RemoteSourceException", 0, 8191, bmt_Gem__RemoteSourceException_i, bmt_Gem__RemoteSourceException_if, 0, bmt_Gem__RemoteSourceException_s, bmt_Gem__RemoteSourceException_sf, 0, bmt_Gem__RemoteSourceException_a, bmt_Gem__RemoteSourceException_af, 10 },
-  { "Gem::Requirement", 0, 8191, bmt_Gem__Requirement_i, bmt_Gem__Requirement_if, 24, bmt_Gem__Requirement_s, bmt_Gem__Requirement_sf, 5, bmt_Gem__Requirement_a, bmt_Gem__Requirement_af, 6 },
-  { "Gem::Requirement::BadRequirementError", 0, 8191, bmt_Gem__Requirement__BadRequirementError_i, bmt_Gem__Requirement__BadRequirementError_if, 0, bmt_Gem__Requirement__BadRequirementError_s, bmt_Gem__Requirement__BadRequirementError_sf, 0, bmt_Gem__Requirement__BadRequirementError_a, bmt_Gem__Requirement__BadRequirementError_af, 10 },
-  { "Gem::RubyVersionMismatch", 0, 8191, bmt_Gem__RubyVersionMismatch_i, bmt_Gem__RubyVersionMismatch_if, 0, bmt_Gem__RubyVersionMismatch_s, bmt_Gem__RubyVersionMismatch_sf, 0, bmt_Gem__RubyVersionMismatch_a, bmt_Gem__RubyVersionMismatch_af, 10 },
-  { "Gem::RuntimeRequirementNotMetError", 0, 8191, bmt_Gem__RuntimeRequirementNotMetError_i, bmt_Gem__RuntimeRequirementNotMetError_if, 3, bmt_Gem__RuntimeRequirementNotMetError_s, bmt_Gem__RuntimeRequirementNotMetError_sf, 0, bmt_Gem__RuntimeRequirementNotMetError_a, bmt_Gem__RuntimeRequirementNotMetError_af, 11 },
-  { "Gem::SourceFetchProblem", 0, 8191, bmt_Gem__SourceFetchProblem_i, bmt_Gem__SourceFetchProblem_if, 5, bmt_Gem__SourceFetchProblem_s, bmt_Gem__SourceFetchProblem_sf, 0, bmt_Gem__SourceFetchProblem_a, bmt_Gem__SourceFetchProblem_af, 7 },
-  { "Gem::SpecificGemNotFoundException", 0, 8191, bmt_Gem__SpecificGemNotFoundException_i, bmt_Gem__SpecificGemNotFoundException_if, 4, bmt_Gem__SpecificGemNotFoundException_s, bmt_Gem__SpecificGemNotFoundException_sf, 0, bmt_Gem__SpecificGemNotFoundException_a, bmt_Gem__SpecificGemNotFoundException_af, 11 },
-  { "Gem::Specification", 0, 8191, bmt_Gem__Specification_i, bmt_Gem__Specification_if, 157, bmt_Gem__Specification_s, bmt_Gem__Specification_sf, 48, bmt_Gem__Specification_a, bmt_Gem__Specification_af, 7 },
-  { "Gem::SpecificationRecord", 0, 8191, bmt_Gem__SpecificationRecord_i, bmt_Gem__SpecificationRecord_if, 19, bmt_Gem__SpecificationRecord_s, bmt_Gem__SpecificationRecord_sf, 2, bmt_Gem__SpecificationRecord_a, bmt_Gem__SpecificationRecord_af, 7 },
-  { "Gem::StubSpecification", 0, 8191, bmt_Gem__StubSpecification_i, bmt_Gem__StubSpecification_if, 24, bmt_Gem__StubSpecification_s, bmt_Gem__StubSpecification_sf, 2, bmt_Gem__StubSpecification_a, bmt_Gem__StubSpecification_af, 7 },
-  { "Gem::StubSpecification::StubLine", 0, 8191, bmt_Gem__StubSpecification__StubLine_i, bmt_Gem__StubSpecification__StubLine_if, 7, bmt_Gem__StubSpecification__StubLine_s, bmt_Gem__StubSpecification__StubLine_sf, 0, bmt_Gem__StubSpecification__StubLine_a, bmt_Gem__StubSpecification__StubLine_af, 6 },
-  { "Gem::SystemExitException", 0, 8191, bmt_Gem__SystemExitException_i, bmt_Gem__SystemExitException_if, 2, bmt_Gem__SystemExitException_s, bmt_Gem__SystemExitException_sf, 0, bmt_Gem__SystemExitException_a, bmt_Gem__SystemExitException_af, 8 },
-  { "Gem::TargetRbConfig", 0, 8191, bmt_Gem__TargetRbConfig_i, bmt_Gem__TargetRbConfig_if, 3, bmt_Gem__TargetRbConfig_s, bmt_Gem__TargetRbConfig_sf, 2, bmt_Gem__TargetRbConfig_a, bmt_Gem__TargetRbConfig_af, 6 },
-  { "Gem::UninstallError", 0, 8191, bmt_Gem__UninstallError_i, bmt_Gem__UninstallError_if, 2, bmt_Gem__UninstallError_s, bmt_Gem__UninstallError_sf, 0, bmt_Gem__UninstallError_a, bmt_Gem__UninstallError_af, 10 },
-  { "Gem::UnknownCommandError", 0, 8191, bmt_Gem__UnknownCommandError_i, bmt_Gem__UnknownCommandError_if, 2, bmt_Gem__UnknownCommandError_s, bmt_Gem__UnknownCommandError_sf, 1, bmt_Gem__UnknownCommandError_a, bmt_Gem__UnknownCommandError_af, 10 },
-  { "Gem::UnknownCommandSpellChecker", 0, 8191, bmt_Gem__UnknownCommandSpellChecker_i, bmt_Gem__UnknownCommandSpellChecker_if, 4, bmt_Gem__UnknownCommandSpellChecker_s, bmt_Gem__UnknownCommandSpellChecker_sf, 0, bmt_Gem__UnknownCommandSpellChecker_a, bmt_Gem__UnknownCommandSpellChecker_af, 6 },
-  { "Gem::UnsatisfiableDependencyError", 0, 8191, bmt_Gem__UnsatisfiableDependencyError_i, bmt_Gem__UnsatisfiableDependencyError_if, 6, bmt_Gem__UnsatisfiableDependencyError_s, bmt_Gem__UnsatisfiableDependencyError_sf, 0, bmt_Gem__UnsatisfiableDependencyError_a, bmt_Gem__UnsatisfiableDependencyError_af, 11 },
-  { "Gem::Util", 1, 8191, bmt_Gem__Util_i, bmt_Gem__Util_if, 0, bmt_Gem__Util_s, bmt_Gem__Util_sf, 8, bmt_Gem__Util_a, bmt_Gem__Util_af, 1 },
-  { "Gem::VerificationError", 0, 8191, bmt_Gem__VerificationError_i, bmt_Gem__VerificationError_if, 0, bmt_Gem__VerificationError_s, bmt_Gem__VerificationError_sf, 0, bmt_Gem__VerificationError_a, bmt_Gem__VerificationError_af, 10 },
-  { "Gem::Version", 0, 8191, bmt_Gem__Version_i, bmt_Gem__Version_if, 24, bmt_Gem__Version_s, bmt_Gem__Version_sf, 3, bmt_Gem__Version_a, bmt_Gem__Version_af, 7 },
-  { "Gem::WebauthnVerificationError", 0, 8191, bmt_Gem__WebauthnVerificationError_i, bmt_Gem__WebauthnVerificationError_if, 1, bmt_Gem__WebauthnVerificationError_s, bmt_Gem__WebauthnVerificationError_sf, 0, bmt_Gem__WebauthnVerificationError_a, bmt_Gem__WebauthnVerificationError_af, 10 },
-  { "Hash", 0, 8191, bmt_Hash_i, bmt_Hash_if, 75, bmt_Hash_s, bmt_Hash_sf, 4, bmt_Hash_a, bmt_Hash_af, 8 },
-  { "IO", 0, 8191, bmt_IO_i, bmt_IO_if, 116, bmt_IO_s, bmt_IO_sf, 16, bmt_IO_a, bmt_IO_af, 9 },
-  { "IO::Buffer", 0, 8191, bmt_IO__Buffer_i, bmt_IO__Buffer_if, 45, bmt_IO__Buffer_s, bmt_IO__Buffer_sf, 4, bmt_IO__Buffer_a, bmt_IO__Buffer_af, 7 },
-  { "IO::Buffer::AccessError", 0, 8191, bmt_IO__Buffer__AccessError_i, bmt_IO__Buffer__AccessError_if, 0, bmt_IO__Buffer__AccessError_s, bmt_IO__Buffer__AccessError_sf, 0, bmt_IO__Buffer__AccessError_a, bmt_IO__Buffer__AccessError_af, 9 },
-  { "IO::Buffer::AllocationError", 0, 8191, bmt_IO__Buffer__AllocationError_i, bmt_IO__Buffer__AllocationError_if, 0, bmt_IO__Buffer__AllocationError_s, bmt_IO__Buffer__AllocationError_sf, 0, bmt_IO__Buffer__AllocationError_a, bmt_IO__Buffer__AllocationError_af, 9 },
-  { "IO::Buffer::InvalidatedError", 0, 8191, bmt_IO__Buffer__InvalidatedError_i, bmt_IO__Buffer__InvalidatedError_if, 0, bmt_IO__Buffer__InvalidatedError_s, bmt_IO__Buffer__InvalidatedError_sf, 0, bmt_IO__Buffer__InvalidatedError_a, bmt_IO__Buffer__InvalidatedError_af, 9 },
-  { "IO::Buffer::LockedError", 0, 8191, bmt_IO__Buffer__LockedError_i, bmt_IO__Buffer__LockedError_if, 0, bmt_IO__Buffer__LockedError_s, bmt_IO__Buffer__LockedError_sf, 0, bmt_IO__Buffer__LockedError_a, bmt_IO__Buffer__LockedError_af, 9 },
-  { "IO::Buffer::MaskError", 0, 8191, bmt_IO__Buffer__MaskError_i, bmt_IO__Buffer__MaskError_if, 0, bmt_IO__Buffer__MaskError_s, bmt_IO__Buffer__MaskError_sf, 0, bmt_IO__Buffer__MaskError_a, bmt_IO__Buffer__MaskError_af, 10 },
-  { "IO::Console", 1, 0, bmt_IO__Console_i, bmt_IO__Console_if, 0, bmt_IO__Console_s, bmt_IO__Console_sf, 0, bmt_IO__Console_a, bmt_IO__Console_af, 1 },
-  { "IO::Console::Mode", 0, 0, bmt_IO__Console__Mode_i, bmt_IO__Console__Mode_if, 10, bmt_IO__Console__Mode_s, bmt_IO__Console__Mode_sf, 0, bmt_IO__Console__Mode_a, bmt_IO__Console__Mode_af, 5 },
-  { "IO::ConsoleMode", 0, 128, bmt_IO__ConsoleMode_i, bmt_IO__ConsoleMode_if, 4, bmt_IO__ConsoleMode_s, bmt_IO__ConsoleMode_sf, 0, bmt_IO__ConsoleMode_a, bmt_IO__ConsoleMode_af, 5 },
-  { "IO::EAGAINWaitReadable", 0, 8191, bmt_IO__EAGAINWaitReadable_i, bmt_IO__EAGAINWaitReadable_if, 0, bmt_IO__EAGAINWaitReadable_s, bmt_IO__EAGAINWaitReadable_sf, 0, bmt_IO__EAGAINWaitReadable_a, bmt_IO__EAGAINWaitReadable_af, 11 },
-  { "IO::EAGAINWaitWritable", 0, 8191, bmt_IO__EAGAINWaitWritable_i, bmt_IO__EAGAINWaitWritable_if, 0, bmt_IO__EAGAINWaitWritable_s, bmt_IO__EAGAINWaitWritable_sf, 0, bmt_IO__EAGAINWaitWritable_a, bmt_IO__EAGAINWaitWritable_af, 11 },
-  { "IO::EINPROGRESSWaitReadable", 0, 8191, bmt_IO__EINPROGRESSWaitReadable_i, bmt_IO__EINPROGRESSWaitReadable_if, 0, bmt_IO__EINPROGRESSWaitReadable_s, bmt_IO__EINPROGRESSWaitReadable_sf, 0, bmt_IO__EINPROGRESSWaitReadable_a, bmt_IO__EINPROGRESSWaitReadable_af, 11 },
-  { "IO::EINPROGRESSWaitWritable", 0, 8191, bmt_IO__EINPROGRESSWaitWritable_i, bmt_IO__EINPROGRESSWaitWritable_if, 0, bmt_IO__EINPROGRESSWaitWritable_s, bmt_IO__EINPROGRESSWaitWritable_sf, 0, bmt_IO__EINPROGRESSWaitWritable_a, bmt_IO__EINPROGRESSWaitWritable_af, 11 },
-  { "IO::TimeoutError", 0, 8191, bmt_IO__TimeoutError_i, bmt_IO__TimeoutError_if, 0, bmt_IO__TimeoutError_s, bmt_IO__TimeoutError_sf, 0, bmt_IO__TimeoutError_a, bmt_IO__TimeoutError_af, 9 },
-  { "IO::WaitReadable", 1, 8191, bmt_IO__WaitReadable_i, bmt_IO__WaitReadable_if, 0, bmt_IO__WaitReadable_s, bmt_IO__WaitReadable_sf, 0, bmt_IO__WaitReadable_a, bmt_IO__WaitReadable_af, 1 },
-  { "IO::WaitWritable", 1, 8191, bmt_IO__WaitWritable_i, bmt_IO__WaitWritable_if, 0, bmt_IO__WaitWritable_s, bmt_IO__WaitWritable_sf, 0, bmt_IO__WaitWritable_a, bmt_IO__WaitWritable_af, 1 },
-  { "IOError", 0, 8191, bmt_IOError_i, bmt_IOError_if, 0, bmt_IOError_s, bmt_IOError_sf, 0, bmt_IOError_a, bmt_IOError_af, 8 },
-  { "IPSocket", 0, 512, bmt_IPSocket_i, bmt_IPSocket_if, 4, bmt_IPSocket_s, bmt_IPSocket_sf, 1, bmt_IPSocket_a, bmt_IPSocket_af, 11 },
-  { "IndexError", 0, 8191, bmt_IndexError_i, bmt_IndexError_if, 0, bmt_IndexError_s, bmt_IndexError_sf, 0, bmt_IndexError_a, bmt_IndexError_af, 8 },
-  { "Integer", 0, 8191, bmt_Integer_i, bmt_Integer_if, 65, bmt_Integer_s, bmt_Integer_sf, 2, bmt_Integer_a, bmt_Integer_af, 9 },
-  { "Interrupt", 0, 8191, bmt_Interrupt_i, bmt_Interrupt_if, 1, bmt_Interrupt_s, bmt_Interrupt_sf, 0, bmt_Interrupt_a, bmt_Interrupt_af, 8 },
-  { "JSON", 1, 4, bmt_JSON_i, bmt_JSON_if, 14, bmt_JSON_s, bmt_JSON_sf, 36, bmt_JSON_a, bmt_JSON_af, 1 },
-  { "JSON::Coder", 0, 4, bmt_JSON__Coder_i, bmt_JSON__Coder_if, 6, bmt_JSON__Coder_s, bmt_JSON__Coder_sf, 0, bmt_JSON__Coder_a, bmt_JSON__Coder_af, 6 },
-  { "JSON::Ext", 1, 4, bmt_JSON__Ext_i, bmt_JSON__Ext_if, 0, bmt_JSON__Ext_s, bmt_JSON__Ext_sf, 4, bmt_JSON__Ext_a, bmt_JSON__Ext_af, 1 },
-  { "JSON::Ext::Generator", 1, 4, bmt_JSON__Ext__Generator_i, bmt_JSON__Ext__Generator_if, 0, bmt_JSON__Ext__Generator_s, bmt_JSON__Ext__Generator_sf, 0, bmt_JSON__Ext__Generator_a, bmt_JSON__Ext__Generator_af, 1 },
-  { "JSON::Ext::Generator::GeneratorMethods", 1, 4, bmt_JSON__Ext__Generator__GeneratorMethods_i, bmt_JSON__Ext__Generator__GeneratorMethods_if, 0, bmt_JSON__Ext__Generator__GeneratorMethods_s, bmt_JSON__Ext__Generator__GeneratorMethods_sf, 0, bmt_JSON__Ext__Generator__GeneratorMethods_a, bmt_JSON__Ext__Generator__GeneratorMethods_af, 1 },
-  { "JSON::Ext::Generator::GeneratorMethods::Array", 1, 4, bmt_JSON__Ext__Generator__GeneratorMethods__Array_i, bmt_JSON__Ext__Generator__GeneratorMethods__Array_if, 1, bmt_JSON__Ext__Generator__GeneratorMethods__Array_s, bmt_JSON__Ext__Generator__GeneratorMethods__Array_sf, 0, bmt_JSON__Ext__Generator__GeneratorMethods__Array_a, bmt_JSON__Ext__Generator__GeneratorMethods__Array_af, 1 },
-  { "JSON::Ext::Generator::GeneratorMethods::FalseClass", 1, 4, bmt_JSON__Ext__Generator__GeneratorMethods__FalseClass_i, bmt_JSON__Ext__Generator__GeneratorMethods__FalseClass_if, 1, bmt_JSON__Ext__Generator__GeneratorMethods__FalseClass_s, bmt_JSON__Ext__Generator__GeneratorMethods__FalseClass_sf, 0, bmt_JSON__Ext__Generator__GeneratorMethods__FalseClass_a, bmt_JSON__Ext__Generator__GeneratorMethods__FalseClass_af, 1 },
-  { "JSON::Ext::Generator::GeneratorMethods::Float", 1, 4, bmt_JSON__Ext__Generator__GeneratorMethods__Float_i, bmt_JSON__Ext__Generator__GeneratorMethods__Float_if, 1, bmt_JSON__Ext__Generator__GeneratorMethods__Float_s, bmt_JSON__Ext__Generator__GeneratorMethods__Float_sf, 0, bmt_JSON__Ext__Generator__GeneratorMethods__Float_a, bmt_JSON__Ext__Generator__GeneratorMethods__Float_af, 1 },
-  { "JSON::Ext::Generator::GeneratorMethods::Hash", 1, 4, bmt_JSON__Ext__Generator__GeneratorMethods__Hash_i, bmt_JSON__Ext__Generator__GeneratorMethods__Hash_if, 1, bmt_JSON__Ext__Generator__GeneratorMethods__Hash_s, bmt_JSON__Ext__Generator__GeneratorMethods__Hash_sf, 0, bmt_JSON__Ext__Generator__GeneratorMethods__Hash_a, bmt_JSON__Ext__Generator__GeneratorMethods__Hash_af, 1 },
-  { "JSON::Ext::Generator::GeneratorMethods::Integer", 1, 4, bmt_JSON__Ext__Generator__GeneratorMethods__Integer_i, bmt_JSON__Ext__Generator__GeneratorMethods__Integer_if, 1, bmt_JSON__Ext__Generator__GeneratorMethods__Integer_s, bmt_JSON__Ext__Generator__GeneratorMethods__Integer_sf, 0, bmt_JSON__Ext__Generator__GeneratorMethods__Integer_a, bmt_JSON__Ext__Generator__GeneratorMethods__Integer_af, 1 },
-  { "JSON::Ext::Generator::GeneratorMethods::NilClass", 1, 4, bmt_JSON__Ext__Generator__GeneratorMethods__NilClass_i, bmt_JSON__Ext__Generator__GeneratorMethods__NilClass_if, 1, bmt_JSON__Ext__Generator__GeneratorMethods__NilClass_s, bmt_JSON__Ext__Generator__GeneratorMethods__NilClass_sf, 0, bmt_JSON__Ext__Generator__GeneratorMethods__NilClass_a, bmt_JSON__Ext__Generator__GeneratorMethods__NilClass_af, 1 },
-  { "JSON::Ext::Generator::GeneratorMethods::Object", 1, 4, bmt_JSON__Ext__Generator__GeneratorMethods__Object_i, bmt_JSON__Ext__Generator__GeneratorMethods__Object_if, 1, bmt_JSON__Ext__Generator__GeneratorMethods__Object_s, bmt_JSON__Ext__Generator__GeneratorMethods__Object_sf, 0, bmt_JSON__Ext__Generator__GeneratorMethods__Object_a, bmt_JSON__Ext__Generator__GeneratorMethods__Object_af, 1 },
-  { "JSON::Ext::Generator::GeneratorMethods::String", 1, 4, bmt_JSON__Ext__Generator__GeneratorMethods__String_i, bmt_JSON__Ext__Generator__GeneratorMethods__String_if, 1, bmt_JSON__Ext__Generator__GeneratorMethods__String_s, bmt_JSON__Ext__Generator__GeneratorMethods__String_sf, 0, bmt_JSON__Ext__Generator__GeneratorMethods__String_a, bmt_JSON__Ext__Generator__GeneratorMethods__String_af, 1 },
-  { "JSON::Ext::Generator::GeneratorMethods::TrueClass", 1, 4, bmt_JSON__Ext__Generator__GeneratorMethods__TrueClass_i, bmt_JSON__Ext__Generator__GeneratorMethods__TrueClass_if, 1, bmt_JSON__Ext__Generator__GeneratorMethods__TrueClass_s, bmt_JSON__Ext__Generator__GeneratorMethods__TrueClass_sf, 0, bmt_JSON__Ext__Generator__GeneratorMethods__TrueClass_a, bmt_JSON__Ext__Generator__GeneratorMethods__TrueClass_af, 1 },
-  { "JSON::Ext::Generator::State", 0, 4, bmt_JSON__Ext__Generator__State_i, bmt_JSON__Ext__Generator__State_if, 48, bmt_JSON__Ext__Generator__State_s, bmt_JSON__Ext__Generator__State_sf, 6, bmt_JSON__Ext__Generator__State_a, bmt_JSON__Ext__Generator__State_af, 6 },
-  { "JSON::Ext::Parser", 0, 4, bmt_JSON__Ext__Parser_i, bmt_JSON__Ext__Parser_if, 3, bmt_JSON__Ext__Parser_s, bmt_JSON__Ext__Parser_sf, 1, bmt_JSON__Ext__Parser_a, bmt_JSON__Ext__Parser_af, 6 },
-  { "JSON::Ext::ParserConfig", 0, 4, bmt_JSON__Ext__ParserConfig_i, bmt_JSON__Ext__ParserConfig_if, 2, bmt_JSON__Ext__ParserConfig_s, bmt_JSON__Ext__ParserConfig_sf, 0, bmt_JSON__Ext__ParserConfig_a, bmt_JSON__Ext__ParserConfig_af, 6 },
-  { "JSON::Fragment", 0, 4, bmt_JSON__Fragment_i, bmt_JSON__Fragment_if, 4, bmt_JSON__Fragment_s, bmt_JSON__Fragment_sf, 5, bmt_JSON__Fragment_a, bmt_JSON__Fragment_af, 8 },
-  { "JSON::GeneratorError", 0, 4, bmt_JSON__GeneratorError_i, bmt_JSON__GeneratorError_if, 3, bmt_JSON__GeneratorError_s, bmt_JSON__GeneratorError_sf, 0, bmt_JSON__GeneratorError_a, bmt_JSON__GeneratorError_af, 9 },
-  { "JSON::GeneratorMethods", 1, 0, bmt_JSON__GeneratorMethods_i, bmt_JSON__GeneratorMethods_if, 1, bmt_JSON__GeneratorMethods_s, bmt_JSON__GeneratorMethods_sf, 0, bmt_JSON__GeneratorMethods_a, bmt_JSON__GeneratorMethods_af, 1 },
-  { "JSON::JSONError", 0, 4, bmt_JSON__JSONError_i, bmt_JSON__JSONError_if, 0, bmt_JSON__JSONError_s, bmt_JSON__JSONError_sf, 0, bmt_JSON__JSONError_a, bmt_JSON__JSONError_af, 8 },
-  { "JSON::NestingError", 0, 4, bmt_JSON__NestingError_i, bmt_JSON__NestingError_if, 0, bmt_JSON__NestingError_s, bmt_JSON__NestingError_sf, 0, bmt_JSON__NestingError_a, bmt_JSON__NestingError_af, 10 },
-  { "JSON::ParserError", 0, 4, bmt_JSON__ParserError_i, bmt_JSON__ParserError_if, 4, bmt_JSON__ParserError_s, bmt_JSON__ParserError_sf, 0, bmt_JSON__ParserError_a, bmt_JSON__ParserError_af, 9 },
-  { "JSON::ParserOptions", 1, 4, bmt_JSON__ParserOptions_i, bmt_JSON__ParserOptions_if, 0, bmt_JSON__ParserOptions_s, bmt_JSON__ParserOptions_sf, 5, bmt_JSON__ParserOptions_a, bmt_JSON__ParserOptions_af, 1 },
-  { "JSON::ResumableParser", 0, 0, bmt_JSON__ResumableParser_i, bmt_JSON__ResumableParser_if, 12, bmt_JSON__ResumableParser_s, bmt_JSON__ResumableParser_sf, 0, bmt_JSON__ResumableParser_a, bmt_JSON__ResumableParser_af, 5 },
-  { "Kernel", 1, 8191, bmt_Kernel_i, bmt_Kernel_if, 117, bmt_Kernel_s, bmt_Kernel_sf, 63, bmt_Kernel_a, bmt_Kernel_af, 1 },
-  { "KeyError", 0, 8191, bmt_KeyError_i, bmt_KeyError_if, 3, bmt_KeyError_s, bmt_KeyError_sf, 0, bmt_KeyError_a, bmt_KeyError_af, 10 },
-  { "LoadError", 0, 8191, bmt_LoadError_i, bmt_LoadError_if, 2, bmt_LoadError_s, bmt_LoadError_sf, 0, bmt_LoadError_a, bmt_LoadError_af, 9 },
-  { "LocalJumpError", 0, 8191, bmt_LocalJumpError_i, bmt_LocalJumpError_if, 2, bmt_LocalJumpError_s, bmt_LocalJumpError_sf, 0, bmt_LocalJumpError_a, bmt_LocalJumpError_af, 8 },
-  { "Marshal", 1, 8191, bmt_Marshal_i, bmt_Marshal_if, 1, bmt_Marshal_s, bmt_Marshal_sf, 3, bmt_Marshal_a, bmt_Marshal_af, 1 },
-  { "MatchData", 0, 8191, bmt_MatchData_i, bmt_MatchData_if, 28, bmt_MatchData_s, bmt_MatchData_sf, 0, bmt_MatchData_a, bmt_MatchData_af, 6 },
-  { "Math", 1, 8191, bmt_Math_i, bmt_Math_if, 28, bmt_Math_s, bmt_Math_sf, 28, bmt_Math_a, bmt_Math_af, 1 },
-  { "Math::DomainError", 0, 8191, bmt_Math__DomainError_i, bmt_Math__DomainError_if, 0, bmt_Math__DomainError_s, bmt_Math__DomainError_sf, 0, bmt_Math__DomainError_a, bmt_Math__DomainError_af, 8 },
-  { "Method", 0, 8191, bmt_Method_i, bmt_Method_if, 24, bmt_Method_s, bmt_Method_sf, 0, bmt_Method_a, bmt_Method_af, 6 },
-  { "Module", 0, 8191, bmt_Module_i, bmt_Module_if, 80, bmt_Module_s, bmt_Module_sf, 4, bmt_Module_a, bmt_Module_af, 6 },
-  { "Monitor", 0, 8191, bmt_Monitor_i, bmt_Monitor_if, 14, bmt_Monitor_s, bmt_Monitor_sf, 0, bmt_Monitor_a, bmt_Monitor_af, 6 },
-  { "MonitorMixin", 1, 8191, bmt_MonitorMixin_i, bmt_MonitorMixin_if, 12, bmt_MonitorMixin_s, bmt_MonitorMixin_sf, 1, bmt_MonitorMixin_a, bmt_MonitorMixin_af, 1 },
-  { "MonitorMixin::ConditionVariable", 0, 8191, bmt_MonitorMixin__ConditionVariable_i, bmt_MonitorMixin__ConditionVariable_if, 6, bmt_MonitorMixin__ConditionVariable_s, bmt_MonitorMixin__ConditionVariable_sf, 0, bmt_MonitorMixin__ConditionVariable_a, bmt_MonitorMixin__ConditionVariable_af, 6 },
-  { "Mutex", 0, 8191, bmt_Thread__Mutex_i, bmt_Thread__Mutex_if, 8, bmt_Thread__Mutex_s, bmt_Thread__Mutex_sf, 0, bmt_Thread__Mutex_a, bmt_Thread__Mutex_af, 6 },
-  { "NameError", 0, 8191, bmt_NameError_i, bmt_NameError_if, 4, bmt_NameError_s, bmt_NameError_sf, 0, bmt_NameError_a, bmt_NameError_af, 10 },
-  { "NilClass", 0, 8191, bmt_NilClass_i, bmt_NilClass_if, 15, bmt_NilClass_s, bmt_NilClass_sf, 0, bmt_NilClass_a, bmt_NilClass_af, 7 },
-  { "NoMatchingPatternError", 0, 8191, bmt_NoMatchingPatternError_i, bmt_NoMatchingPatternError_if, 0, bmt_NoMatchingPatternError_s, bmt_NoMatchingPatternError_sf, 0, bmt_NoMatchingPatternError_a, bmt_NoMatchingPatternError_af, 8 },
-  { "NoMatchingPatternKeyError", 0, 8191, bmt_NoMatchingPatternKeyError_i, bmt_NoMatchingPatternKeyError_if, 3, bmt_NoMatchingPatternKeyError_s, bmt_NoMatchingPatternKeyError_sf, 0, bmt_NoMatchingPatternKeyError_a, bmt_NoMatchingPatternKeyError_af, 10 },
-  { "NoMemoryError", 0, 8191, bmt_NoMemoryError_i, bmt_NoMemoryError_if, 0, bmt_NoMemoryError_s, bmt_NoMemoryError_sf, 0, bmt_NoMemoryError_a, bmt_NoMemoryError_af, 7 },
-  { "NoMethodError", 0, 8191, bmt_NoMethodError_i, bmt_NoMethodError_if, 3, bmt_NoMethodError_s, bmt_NoMethodError_sf, 0, bmt_NoMethodError_a, bmt_NoMethodError_af, 11 },
-  { "NotImplementedError", 0, 8191, bmt_NotImplementedError_i, bmt_NotImplementedError_if, 0, bmt_NotImplementedError_s, bmt_NotImplementedError_sf, 0, bmt_NotImplementedError_a, bmt_NotImplementedError_af, 8 },
-  { "Numeric", 0, 8191, bmt_Numeric_i, bmt_Numeric_if, 47, bmt_Numeric_s, bmt_Numeric_sf, 0, bmt_Numeric_a, bmt_Numeric_af, 7 },
-  { "Object", 0, 8191, bmt_Object_i, bmt_Object_if, 0, bmt_Object_s, bmt_Object_sf, 0, bmt_Object_a, bmt_Object_af, 5 },
-  { "ObjectSpace", 1, 8191, bmt_ObjectSpace_i, bmt_ObjectSpace_if, 6, bmt_ObjectSpace_s, bmt_ObjectSpace_sf, 6, bmt_ObjectSpace_a, bmt_ObjectSpace_af, 1 },
-  { "ObjectSpace::WeakKeyMap", 0, 8191, bmt_ObjectSpace__WeakKeyMap_i, bmt_ObjectSpace__WeakKeyMap_if, 7, bmt_ObjectSpace__WeakKeyMap_s, bmt_ObjectSpace__WeakKeyMap_sf, 0, bmt_ObjectSpace__WeakKeyMap_a, bmt_ObjectSpace__WeakKeyMap_af, 6 },
-  { "ObjectSpace::WeakMap", 0, 8191, bmt_ObjectSpace__WeakMap_i, bmt_ObjectSpace__WeakMap_if, 15, bmt_ObjectSpace__WeakMap_s, bmt_ObjectSpace__WeakMap_sf, 0, bmt_ObjectSpace__WeakMap_a, bmt_ObjectSpace__WeakMap_af, 7 },
-  { "OpenStruct", 0, 2048, bmt_OpenStruct_i, bmt_OpenStruct_if, 72, bmt_OpenStruct_s, bmt_OpenStruct_sf, 0, bmt_OpenStruct_a, bmt_OpenStruct_af, 6 },
-  { "Pathname", 0, 8191, bmt_Pathname_i, bmt_Pathname_if, 107, bmt_Pathname_s, bmt_Pathname_sf, 3, bmt_Pathname_a, bmt_Pathname_af, 6 },
-  { "Proc", 0, 8191, bmt_Proc_i, bmt_Proc_if, 21, bmt_Proc_s, bmt_Proc_sf, 1, bmt_Proc_a, bmt_Proc_af, 6 },
-  { "Process", 1, 8191, bmt_Process_i, bmt_Process_if, 39, bmt_Process_s, bmt_Process_sf, 47, bmt_Process_a, bmt_Process_af, 1 },
-  { "Process::GID", 1, 8191, bmt_Process__GID_i, bmt_Process__GID_if, 9, bmt_Process__GID_s, bmt_Process__GID_sf, 10, bmt_Process__GID_a, bmt_Process__GID_af, 1 },
-  { "Process::Status", 0, 8191, bmt_Process__Status_i, bmt_Process__Status_if, 13, bmt_Process__Status_s, bmt_Process__Status_sf, 1, bmt_Process__Status_a, bmt_Process__Status_af, 6 },
-  { "Process::Sys", 1, 8191, bmt_Process__Sys_i, bmt_Process__Sys_if, 15, bmt_Process__Sys_s, bmt_Process__Sys_sf, 15, bmt_Process__Sys_a, bmt_Process__Sys_af, 1 },
-  { "Process::Tms", 0, 8191, bmt_Process__Tms_i, bmt_Process__Tms_if, 8, bmt_Process__Tms_s, bmt_Process__Tms_sf, 5, bmt_Process__Tms_a, bmt_Process__Tms_af, 8 },
-  { "Process::UID", 1, 8191, bmt_Process__UID_i, bmt_Process__UID_if, 9, bmt_Process__UID_s, bmt_Process__UID_sf, 10, bmt_Process__UID_a, bmt_Process__UID_af, 1 },
-  { "Process::Waiter", 0, 8191, bmt_Process__Waiter_i, bmt_Process__Waiter_if, 1, bmt_Process__Waiter_s, bmt_Process__Waiter_sf, 0, bmt_Process__Waiter_a, bmt_Process__Waiter_af, 7 },
-  { "Queue", 0, 8191, bmt_Thread__Queue_i, bmt_Thread__Queue_if, 16, bmt_Thread__Queue_s, bmt_Thread__Queue_sf, 0, bmt_Thread__Queue_a, bmt_Thread__Queue_af, 6 },
-  { "Ractor", 0, 8191, bmt_Ractor_i, bmt_Ractor_if, 15, bmt_Ractor_s, bmt_Ractor_sf, 17, bmt_Ractor_a, bmt_Ractor_af, 6 },
-  { "Ractor::ClosedError", 0, 8191, bmt_Ractor__ClosedError_i, bmt_Ractor__ClosedError_if, 0, bmt_Ractor__ClosedError_s, bmt_Ractor__ClosedError_sf, 0, bmt_Ractor__ClosedError_a, bmt_Ractor__ClosedError_af, 10 },
-  { "Ractor::Error", 0, 8191, bmt_Ractor__Error_i, bmt_Ractor__Error_if, 0, bmt_Ractor__Error_s, bmt_Ractor__Error_sf, 0, bmt_Ractor__Error_a, bmt_Ractor__Error_af, 9 },
-  { "Ractor::IsolationError", 0, 8191, bmt_Ractor__IsolationError_i, bmt_Ractor__IsolationError_if, 0, bmt_Ractor__IsolationError_s, bmt_Ractor__IsolationError_sf, 0, bmt_Ractor__IsolationError_a, bmt_Ractor__IsolationError_af, 10 },
-  { "Ractor::MovedError", 0, 8191, bmt_Ractor__MovedError_i, bmt_Ractor__MovedError_if, 0, bmt_Ractor__MovedError_s, bmt_Ractor__MovedError_sf, 0, bmt_Ractor__MovedError_a, bmt_Ractor__MovedError_af, 10 },
-  { "Ractor::MovedObject", 0, 8191, bmt_Ractor__MovedObject_i, bmt_Ractor__MovedObject_if, 9, bmt_Ractor__MovedObject_s, bmt_Ractor__MovedObject_sf, 0, bmt_Ractor__MovedObject_a, bmt_Ractor__MovedObject_af, 2 },
-  { "Ractor::Port", 0, 8191, bmt_Ractor__Port_i, bmt_Ractor__Port_if, 8, bmt_Ractor__Port_s, bmt_Ractor__Port_sf, 0, bmt_Ractor__Port_a, bmt_Ractor__Port_af, 6 },
-  { "Ractor::RemoteError", 0, 8191, bmt_Ractor__RemoteError_i, bmt_Ractor__RemoteError_if, 1, bmt_Ractor__RemoteError_s, bmt_Ractor__RemoteError_sf, 0, bmt_Ractor__RemoteError_a, bmt_Ractor__RemoteError_af, 10 },
-  { "Ractor::UnsafeError", 0, 8191, bmt_Ractor__UnsafeError_i, bmt_Ractor__UnsafeError_if, 0, bmt_Ractor__UnsafeError_s, bmt_Ractor__UnsafeError_sf, 0, bmt_Ractor__UnsafeError_a, bmt_Ractor__UnsafeError_af, 10 },
-  { "Random", 0, 8191, bmt_Random_i, bmt_Random_if, 6, bmt_Random_s, bmt_Random_sf, 8, bmt_Random_a, bmt_Random_af, 8 },
-  { "Random::Base", 0, 8191, bmt_Random__Base_i, bmt_Random__Base_if, 4, bmt_Random__Base_s, bmt_Random__Base_sf, 0, bmt_Random__Base_a, bmt_Random__Base_af, 7 },
-  { "Random::Formatter", 1, 8191, bmt_Random__Formatter_i, bmt_Random__Formatter_if, 2, bmt_Random__Formatter_s, bmt_Random__Formatter_sf, 0, bmt_Random__Formatter_a, bmt_Random__Formatter_af, 1 },
-  { "Range", 0, 8191, bmt_Range_i, bmt_Range_if, 30, bmt_Range_s, bmt_Range_sf, 0, bmt_Range_a, bmt_Range_af, 7 },
-  { "RangeError", 0, 8191, bmt_RangeError_i, bmt_RangeError_if, 0, bmt_RangeError_s, bmt_RangeError_sf, 0, bmt_RangeError_a, bmt_RangeError_af, 8 },
-  { "Rational", 0, 8191, bmt_Rational_i, bmt_Rational_if, 29, bmt_Rational_s, bmt_Rational_sf, 1, bmt_Rational_a, bmt_Rational_af, 8 },
-  { "RbConfig", 1, 8191, bmt_RbConfig_i, bmt_RbConfig_if, 0, bmt_RbConfig_s, bmt_RbConfig_sf, 3, bmt_RbConfig_a, bmt_RbConfig_af, 1 },
-  { "Refinement", 0, 8191, bmt_Refinement_i, bmt_Refinement_if, 2, bmt_Refinement_s, bmt_Refinement_sf, 0, bmt_Refinement_a, bmt_Refinement_af, 7 },
-  { "Regexp", 0, 8191, bmt_Regexp_i, bmt_Regexp_if, 20, bmt_Regexp_s, bmt_Regexp_sf, 9, bmt_Regexp_a, bmt_Regexp_af, 6 },
-  { "Regexp::TimeoutError", 0, 8191, bmt_Regexp__TimeoutError_i, bmt_Regexp__TimeoutError_if, 0, bmt_Regexp__TimeoutError_s, bmt_Regexp__TimeoutError_sf, 0, bmt_Regexp__TimeoutError_a, bmt_Regexp__TimeoutError_af, 9 },
-  { "RegexpError", 0, 8191, bmt_RegexpError_i, bmt_RegexpError_if, 0, bmt_RegexpError_s, bmt_RegexpError_sf, 0, bmt_RegexpError_a, bmt_RegexpError_af, 8 },
-  { "Ruby", 1, 8191, bmt_Ruby_i, bmt_Ruby_if, 0, bmt_Ruby_s, bmt_Ruby_sf, 0, bmt_Ruby_a, bmt_Ruby_af, 1 },
-  { "Ruby::Box", 0, 8191, bmt_Ruby__Box_i, bmt_Ruby__Box_if, 7, bmt_Ruby__Box_s, bmt_Ruby__Box_sf, 2, bmt_Ruby__Box_a, bmt_Ruby__Box_af, 7 },
-  { "Ruby::Box::Entry", 0, 8191, bmt_Ruby__Box__Entry_i, bmt_Ruby__Box__Entry_if, 0, bmt_Ruby__Box__Entry_s, bmt_Ruby__Box__Entry_sf, 0, bmt_Ruby__Box__Entry_a, bmt_Ruby__Box__Entry_af, 6 },
-  { "Ruby::Box::Loader", 1, 8191, bmt_Ruby__Box__Loader_i, bmt_Ruby__Box__Loader_if, 3, bmt_Ruby__Box__Loader_s, bmt_Ruby__Box__Loader_sf, 3, bmt_Ruby__Box__Loader_a, bmt_Ruby__Box__Loader_af, 1 },
-  { "RubyVM", 0, 8191, bmt_RubyVM_i, bmt_RubyVM_if, 0, bmt_RubyVM_s, bmt_RubyVM_sf, 3, bmt_RubyVM_a, bmt_RubyVM_af, 6 },
-  { "RubyVM::AbstractSyntaxTree", 1, 8191, bmt_RubyVM__AbstractSyntaxTree_i, bmt_RubyVM__AbstractSyntaxTree_if, 0, bmt_RubyVM__AbstractSyntaxTree_s, bmt_RubyVM__AbstractSyntaxTree_sf, 4, bmt_RubyVM__AbstractSyntaxTree_a, bmt_RubyVM__AbstractSyntaxTree_af, 1 },
-  { "RubyVM::AbstractSyntaxTree::Location", 0, 8191, bmt_RubyVM__AbstractSyntaxTree__Location_i, bmt_RubyVM__AbstractSyntaxTree__Location_if, 5, bmt_RubyVM__AbstractSyntaxTree__Location_s, bmt_RubyVM__AbstractSyntaxTree__Location_sf, 0, bmt_RubyVM__AbstractSyntaxTree__Location_a, bmt_RubyVM__AbstractSyntaxTree__Location_af, 6 },
-  { "RubyVM::AbstractSyntaxTree::Node", 0, 8191, bmt_RubyVM__AbstractSyntaxTree__Node_i, bmt_RubyVM__AbstractSyntaxTree__Node_if, 13, bmt_RubyVM__AbstractSyntaxTree__Node_s, bmt_RubyVM__AbstractSyntaxTree__Node_sf, 0, bmt_RubyVM__AbstractSyntaxTree__Node_a, bmt_RubyVM__AbstractSyntaxTree__Node_af, 6 },
-  { "RubyVM::InstructionSequence", 0, 8191, bmt_RubyVM__InstructionSequence_i, bmt_RubyVM__InstructionSequence_if, 14, bmt_RubyVM__InstructionSequence_s, bmt_RubyVM__InstructionSequence_sf, 13, bmt_RubyVM__InstructionSequence_a, bmt_RubyVM__InstructionSequence_af, 6 },
-  { "RubyVM::YJIT", 1, 8191, bmt_RubyVM__YJIT_i, bmt_RubyVM__YJIT_if, 0, bmt_RubyVM__YJIT_s, bmt_RubyVM__YJIT_sf, 26, bmt_RubyVM__YJIT_a, bmt_RubyVM__YJIT_af, 1 },
-  { "RuntimeError", 0, 8191, bmt_RuntimeError_i, bmt_RuntimeError_if, 0, bmt_RuntimeError_s, bmt_RuntimeError_sf, 0, bmt_RuntimeError_a, bmt_RuntimeError_af, 8 },
-  { "ScriptError", 0, 8191, bmt_ScriptError_i, bmt_ScriptError_if, 0, bmt_ScriptError_s, bmt_ScriptError_sf, 0, bmt_ScriptError_a, bmt_ScriptError_af, 7 },
-  { "SecurityError", 0, 8191, bmt_SecurityError_i, bmt_SecurityError_if, 0, bmt_SecurityError_s, bmt_SecurityError_sf, 0, bmt_SecurityError_a, bmt_SecurityError_af, 7 },
-  { "Set", 0, 8191, bmt_Set_i, bmt_Set_if, 59, bmt_Set_s, bmt_Set_sf, 2, bmt_Set_a, bmt_Set_af, 7 },
-  { "Set::CoreSet", 0, 8191, bmt_Set__CoreSet_i, bmt_Set__CoreSet_if, 0, bmt_Set__CoreSet_s, bmt_Set__CoreSet_sf, 0, bmt_Set__CoreSet_a, bmt_Set__CoreSet_af, 8 },
-  { "Signal", 1, 8191, bmt_Signal_i, bmt_Signal_if, 3, bmt_Signal_s, bmt_Signal_sf, 3, bmt_Signal_a, bmt_Signal_af, 1 },
-  { "SignalException", 0, 8191, bmt_SignalException_i, bmt_SignalException_if, 3, bmt_SignalException_s, bmt_SignalException_sf, 0, bmt_SignalException_a, bmt_SignalException_af, 7 },
-  { "SizedQueue", 0, 8191, bmt_Thread__SizedQueue_i, bmt_Thread__SizedQueue_if, 12, bmt_Thread__SizedQueue_s, bmt_Thread__SizedQueue_sf, 0, bmt_Thread__SizedQueue_a, bmt_Thread__SizedQueue_af, 7 },
-  { "Socket", 0, 512, bmt_Socket_i, bmt_Socket_if, 14, bmt_Socket_s, bmt_Socket_sf, 40, bmt_Socket_a, bmt_Socket_af, 11 },
-  { "Socket::AncillaryData", 0, 512, bmt_Socket__AncillaryData_i, bmt_Socket__AncillaryData_if, 14, bmt_Socket__AncillaryData_s, bmt_Socket__AncillaryData_sf, 4, bmt_Socket__AncillaryData_a, bmt_Socket__AncillaryData_af, 6 },
-  { "Socket::Constants", 1, 512, bmt_Socket__Constants_i, bmt_Socket__Constants_if, 0, bmt_Socket__Constants_s, bmt_Socket__Constants_sf, 0, bmt_Socket__Constants_a, bmt_Socket__Constants_af, 1 },
-  { "Socket::Ifaddr", 0, 512, bmt_Socket__Ifaddr_i, bmt_Socket__Ifaddr_if, 8, bmt_Socket__Ifaddr_s, bmt_Socket__Ifaddr_sf, 0, bmt_Socket__Ifaddr_a, bmt_Socket__Ifaddr_af, 6 },
-  { "Socket::Option", 0, 512, bmt_Socket__Option_i, bmt_Socket__Option_if, 14, bmt_Socket__Option_s, bmt_Socket__Option_sf, 6, bmt_Socket__Option_a, bmt_Socket__Option_af, 6 },
-  { "Socket::ResolutionError", 0, 512, bmt_Socket__ResolutionError_i, bmt_Socket__ResolutionError_if, 1, bmt_Socket__ResolutionError_s, bmt_Socket__ResolutionError_sf, 0, bmt_Socket__ResolutionError_a, bmt_Socket__ResolutionError_af, 9 },
-  { "Socket::UDPSource", 0, 512, bmt_Socket__UDPSource_i, bmt_Socket__UDPSource_if, 5, bmt_Socket__UDPSource_s, bmt_Socket__UDPSource_sf, 0, bmt_Socket__UDPSource_a, bmt_Socket__UDPSource_af, 6 },
-  { "SocketError", 0, 512, bmt_SocketError_i, bmt_SocketError_if, 0, bmt_SocketError_s, bmt_SocketError_sf, 0, bmt_SocketError_a, bmt_SocketError_af, 8 },
-  { "StandardError", 0, 8191, bmt_StandardError_i, bmt_StandardError_if, 0, bmt_StandardError_s, bmt_StandardError_sf, 0, bmt_StandardError_a, bmt_StandardError_af, 7 },
-  { "StopIteration", 0, 8191, bmt_StopIteration_i, bmt_StopIteration_if, 1, bmt_StopIteration_s, bmt_StopIteration_sf, 0, bmt_StopIteration_a, bmt_StopIteration_af, 9 },
-  { "String", 0, 8191, bmt_String_i, bmt_String_if, 136, bmt_String_s, bmt_String_sf, 2, bmt_String_a, bmt_String_af, 8 },
-  { "StringIO", 0, 32, bmt_StringIO_i, bmt_StringIO_if, 52, bmt_StringIO_s, bmt_StringIO_sf, 2, bmt_StringIO_a, bmt_StringIO_af, 9 },
-  { "StringScanner", 0, 64, bmt_StringScanner_i, bmt_StringScanner_if, 50, bmt_StringScanner_s, bmt_StringScanner_sf, 1, bmt_StringScanner_a, bmt_StringScanner_af, 6 },
-  { "StringScanner::Error", 0, 64, bmt_StringScanner__Error_i, bmt_StringScanner__Error_if, 0, bmt_StringScanner__Error_s, bmt_StringScanner__Error_sf, 0, bmt_StringScanner__Error_a, bmt_StringScanner__Error_af, 8 },
-  { "Struct", 0, 8191, bmt_Struct_i, bmt_Struct_if, 23, bmt_Struct_s, bmt_Struct_sf, 1, bmt_Struct_a, bmt_Struct_af, 7 },
-  { "Symbol", 0, 8191, bmt_Symbol_i, bmt_Symbol_if, 29, bmt_Symbol_s, bmt_Symbol_sf, 1, bmt_Symbol_a, bmt_Symbol_af, 7 },
-  { "SyntaxError", 0, 8191, bmt_SyntaxError_i, bmt_SyntaxError_if, 2, bmt_SyntaxError_s, bmt_SyntaxError_sf, 0, bmt_SyntaxError_a, bmt_SyntaxError_af, 8 },
-  { "SyntaxSuggest", 1, 8191, bmt_SyntaxSuggest_i, bmt_SyntaxSuggest_if, 0, bmt_SyntaxSuggest_s, bmt_SyntaxSuggest_sf, 1, bmt_SyntaxSuggest_a, bmt_SyntaxSuggest_af, 1 },
-  { "SystemCallError", 0, 8191, bmt_SystemCallError_i, bmt_SystemCallError_if, 2, bmt_SystemCallError_s, bmt_SystemCallError_sf, 1, bmt_SystemCallError_a, bmt_SystemCallError_af, 8 },
-  { "SystemExit", 0, 8191, bmt_SystemExit_i, bmt_SystemExit_if, 3, bmt_SystemExit_s, bmt_SystemExit_sf, 0, bmt_SystemExit_a, bmt_SystemExit_af, 7 },
-  { "SystemStackError", 0, 8191, bmt_SystemStackError_i, bmt_SystemStackError_if, 0, bmt_SystemStackError_s, bmt_SystemStackError_sf, 0, bmt_SystemStackError_a, bmt_SystemStackError_af, 7 },
-  { "TCPServer", 0, 512, bmt_TCPServer_i, bmt_TCPServer_if, 6, bmt_TCPServer_s, bmt_TCPServer_sf, 0, bmt_TCPServer_a, bmt_TCPServer_af, 13 },
-  { "TCPSocket", 0, 512, bmt_TCPSocket_i, bmt_TCPSocket_if, 1, bmt_TCPSocket_s, bmt_TCPSocket_sf, 1, bmt_TCPSocket_a, bmt_TCPSocket_af, 12 },
-  { "Thread", 0, 8191, bmt_Thread_i, bmt_Thread_if, 38, bmt_Thread_s, bmt_Thread_sf, 19, bmt_Thread_a, bmt_Thread_af, 6 },
-  { "Thread::Backtrace", 0, 8191, bmt_Thread__Backtrace_i, bmt_Thread__Backtrace_if, 0, bmt_Thread__Backtrace_s, bmt_Thread__Backtrace_sf, 1, bmt_Thread__Backtrace_a, bmt_Thread__Backtrace_af, 6 },
-  { "Thread::Backtrace::Location", 0, 8191, bmt_Thread__Backtrace__Location_i, bmt_Thread__Backtrace__Location_if, 7, bmt_Thread__Backtrace__Location_s, bmt_Thread__Backtrace__Location_sf, 0, bmt_Thread__Backtrace__Location_a, bmt_Thread__Backtrace__Location_af, 6 },
-  { "Thread::ConditionVariable", 0, 8191, bmt_Thread__ConditionVariable_i, bmt_Thread__ConditionVariable_if, 5, bmt_Thread__ConditionVariable_s, bmt_Thread__ConditionVariable_sf, 0, bmt_Thread__ConditionVariable_a, bmt_Thread__ConditionVariable_af, 6 },
-  { "Thread::Mutex", 0, 8191, bmt_Thread__Mutex_i, bmt_Thread__Mutex_if, 8, bmt_Thread__Mutex_s, bmt_Thread__Mutex_sf, 0, bmt_Thread__Mutex_a, bmt_Thread__Mutex_af, 6 },
-  { "Thread::Queue", 0, 8191, bmt_Thread__Queue_i, bmt_Thread__Queue_if, 16, bmt_Thread__Queue_s, bmt_Thread__Queue_sf, 0, bmt_Thread__Queue_a, bmt_Thread__Queue_af, 6 },
-  { "Thread::SizedQueue", 0, 8191, bmt_Thread__SizedQueue_i, bmt_Thread__SizedQueue_if, 12, bmt_Thread__SizedQueue_s, bmt_Thread__SizedQueue_sf, 0, bmt_Thread__SizedQueue_a, bmt_Thread__SizedQueue_af, 7 },
-  { "ThreadError", 0, 8191, bmt_ThreadError_i, bmt_ThreadError_if, 0, bmt_ThreadError_s, bmt_ThreadError_sf, 0, bmt_ThreadError_a, bmt_ThreadError_af, 8 },
-  { "ThreadGroup", 0, 8191, bmt_ThreadGroup_i, bmt_ThreadGroup_if, 4, bmt_ThreadGroup_s, bmt_ThreadGroup_sf, 0, bmt_ThreadGroup_a, bmt_ThreadGroup_af, 6 },
-  { "Time", 0, 8191, bmt_Time_i, bmt_Time_if, 67, bmt_Time_s, bmt_Time_sf, 22, bmt_Time_a, bmt_Time_af, 7 },
-  { "TracePoint", 0, 8191, bmt_TracePoint_i, bmt_TracePoint_if, 17, bmt_TracePoint_s, bmt_TracePoint_sf, 4, bmt_TracePoint_a, bmt_TracePoint_af, 6 },
-  { "TrueClass", 0, 8191, bmt_TrueClass_i, bmt_TrueClass_if, 6, bmt_TrueClass_s, bmt_TrueClass_sf, 0, bmt_TrueClass_a, bmt_TrueClass_af, 7 },
-  { "TypeError", 0, 8191, bmt_TypeError_i, bmt_TypeError_if, 0, bmt_TypeError_s, bmt_TypeError_sf, 0, bmt_TypeError_a, bmt_TypeError_af, 9 },
-  { "UDPSocket", 0, 512, bmt_UDPSocket_i, bmt_UDPSocket_if, 6, bmt_UDPSocket_s, bmt_UDPSocket_sf, 0, bmt_UDPSocket_a, bmt_UDPSocket_af, 12 },
-  { "UNIXServer", 0, 512, bmt_UNIXServer_i, bmt_UNIXServer_if, 6, bmt_UNIXServer_s, bmt_UNIXServer_sf, 0, bmt_UNIXServer_a, bmt_UNIXServer_af, 12 },
-  { "UNIXSocket", 0, 512, bmt_UNIXSocket_i, bmt_UNIXSocket_if, 7, bmt_UNIXSocket_s, bmt_UNIXSocket_sf, 2, bmt_UNIXSocket_a, bmt_UNIXSocket_af, 11 },
-  { "UnboundMethod", 0, 8191, bmt_UnboundMethod_i, bmt_UnboundMethod_if, 16, bmt_UnboundMethod_s, bmt_UnboundMethod_sf, 0, bmt_UnboundMethod_a, bmt_UnboundMethod_af, 6 },
-  { "UncaughtThrowError", 0, 8191, bmt_UncaughtThrowError_i, bmt_UncaughtThrowError_if, 4, bmt_UncaughtThrowError_s, bmt_UncaughtThrowError_sf, 0, bmt_UncaughtThrowError_a, bmt_UncaughtThrowError_af, 10 },
-  { "UnicodeNormalize", 1, 8191, bmt_UnicodeNormalize_i, bmt_UnicodeNormalize_if, 0, bmt_UnicodeNormalize_s, bmt_UnicodeNormalize_sf, 0, bmt_UnicodeNormalize_a, bmt_UnicodeNormalize_af, 1 },
-  { "Warning", 1, 8191, bmt_Warning_i, bmt_Warning_if, 1, bmt_Warning_s, bmt_Warning_sf, 3, bmt_Warning_a, bmt_Warning_af, 1 },
-  { "ZeroDivisionError", 0, 8191, bmt_ZeroDivisionError_i, bmt_ZeroDivisionError_if, 0, bmt_ZeroDivisionError_s, bmt_ZeroDivisionError_sf, 0, bmt_ZeroDivisionError_a, bmt_ZeroDivisionError_af, 8 },
+  { "Addrinfo", 0, 512, bmt_Addrinfo_i, bmt_Addrinfo_if, 45, bmt_Addrinfo_s, bmt_Addrinfo_sf, 6, bmt_Addrinfo_a, bmt_Addrinfo_af, 6, NULL, 0, NULL, 0 },
+  { "ArgumentError", 0, 8191, bmt_ArgumentError_i, bmt_ArgumentError_if, 0, bmt_ArgumentError_s, bmt_ArgumentError_sf, 0, bmt_ArgumentError_a, bmt_ArgumentError_af, 9, NULL, 0, NULL, 0 },
+  { "Array", 0, 8191, bmt_Array_i, bmt_Array_if, 115, bmt_Array_s, bmt_Array_sf, 3, bmt_Array_a, bmt_Array_af, 8, NULL, 0, NULL, 0 },
+  { "BasicObject", 0, 8191, bmt_BasicObject_i, bmt_BasicObject_if, 13, bmt_BasicObject_s, bmt_BasicObject_sf, 0, bmt_BasicObject_a, bmt_BasicObject_af, 1, NULL, 0, NULL, 0 },
+  { "BasicSocket", 0, 512, bmt_BasicSocket_i, bmt_BasicSocket_if, 25, bmt_BasicSocket_s, bmt_BasicSocket_sf, 3, bmt_BasicSocket_a, bmt_BasicSocket_af, 10, NULL, 0, NULL, 0 },
+  { "BigDecimal", 0, 256, bmt_BigDecimal_i, bmt_BigDecimal_if, 57, bmt_BigDecimal_s, bmt_BigDecimal_sf, 8, bmt_BigDecimal_a, bmt_BigDecimal_af, 8, NULL, 0, bmt_BigDecimal_su, 1 },
+  { "BigDecimal::Internal", 1, 256, bmt_BigDecimal__Internal_i, bmt_BigDecimal__Internal_if, 0, bmt_BigDecimal__Internal_s, bmt_BigDecimal__Internal_sf, 8, bmt_BigDecimal__Internal_a, bmt_BigDecimal__Internal_af, 1, NULL, 0, NULL, 0 },
+  { "BigMath", 1, 256, bmt_BigMath_i, bmt_BigMath_if, 4, bmt_BigMath_s, bmt_BigMath_sf, 4, bmt_BigMath_a, bmt_BigMath_af, 1, NULL, 0, NULL, 0 },
+  { "Binding", 0, 8191, bmt_Binding_i, bmt_Binding_if, 13, bmt_Binding_s, bmt_Binding_sf, 0, bmt_Binding_a, bmt_Binding_af, 6, NULL, 0, bmt_Binding_su, 1 },
+  { "Class", 0, 8191, bmt_Class_i, bmt_Class_if, 7, bmt_Class_s, bmt_Class_sf, 1, bmt_Class_a, bmt_Class_af, 7, bmt_Class_u, 5, NULL, 0 },
+  { "ClosedQueueError", 0, 8191, bmt_ClosedQueueError_i, bmt_ClosedQueueError_if, 0, bmt_ClosedQueueError_s, bmt_ClosedQueueError_sf, 0, bmt_ClosedQueueError_a, bmt_ClosedQueueError_af, 10, NULL, 0, NULL, 0 },
+  { "Comparable", 1, 8191, bmt_Comparable_i, bmt_Comparable_if, 7, bmt_Comparable_s, bmt_Comparable_sf, 0, bmt_Comparable_a, bmt_Comparable_af, 1, NULL, 0, NULL, 0 },
+  { "Complex", 0, 8191, bmt_Complex_i, bmt_Complex_if, 40, bmt_Complex_s, bmt_Complex_sf, 4, bmt_Complex_a, bmt_Complex_af, 8, bmt_Complex_u, 19, bmt_Complex_su, 2 },
+  { "ConditionVariable", 0, 8191, bmt_Thread__ConditionVariable_i, bmt_Thread__ConditionVariable_if, 5, bmt_Thread__ConditionVariable_s, bmt_Thread__ConditionVariable_sf, 0, bmt_Thread__ConditionVariable_a, bmt_Thread__ConditionVariable_af, 6, bmt_Thread__ConditionVariable_u, 1, NULL, 0 },
+  { "Data", 0, 8191, bmt_Data_i, bmt_Data_if, 12, bmt_Data_s, bmt_Data_sf, 1, bmt_Data_a, bmt_Data_af, 6, NULL, 0, bmt_Data_su, 1 },
+  { "Date", 0, 10, bmt_Date_i, bmt_Date_if, 77, bmt_Date_s, bmt_Date_sf, 32, bmt_Date_a, bmt_Date_af, 7, NULL, 0, NULL, 0 },
+  { "Date::Error", 0, 10, bmt_Date__Error_i, bmt_Date__Error_if, 0, bmt_Date__Error_s, bmt_Date__Error_sf, 0, bmt_Date__Error_a, bmt_Date__Error_af, 10, NULL, 0, NULL, 0 },
+  { "Date::Infinity", 0, 10, bmt_Date__Infinity_i, bmt_Date__Infinity_if, 12, bmt_Date__Infinity_s, bmt_Date__Infinity_sf, 0, bmt_Date__Infinity_a, bmt_Date__Infinity_af, 8, NULL, 0, NULL, 0 },
+  { "DateTime", 0, 10, bmt_DateTime_i, bmt_DateTime_if, 20, bmt_DateTime_s, bmt_DateTime_sf, 16, bmt_DateTime_a, bmt_DateTime_af, 8, NULL, 0, bmt_DateTime_su, 1 },
+  { "DidYouMean", 1, 8191, bmt_DidYouMean_i, bmt_DidYouMean_if, 0, bmt_DidYouMean_s, bmt_DidYouMean_sf, 4, bmt_DidYouMean_a, bmt_DidYouMean_af, 1, NULL, 0, NULL, 0 },
+  { "DidYouMean::ClassNameChecker", 0, 8191, bmt_DidYouMean__ClassNameChecker_i, bmt_DidYouMean__ClassNameChecker_if, 5, bmt_DidYouMean__ClassNameChecker_s, bmt_DidYouMean__ClassNameChecker_sf, 0, bmt_DidYouMean__ClassNameChecker_a, bmt_DidYouMean__ClassNameChecker_af, 6, NULL, 0, NULL, 0 },
+  { "DidYouMean::Correctable", 1, 8191, bmt_DidYouMean__Correctable_i, bmt_DidYouMean__Correctable_if, 4, bmt_DidYouMean__Correctable_s, bmt_DidYouMean__Correctable_sf, 0, bmt_DidYouMean__Correctable_a, bmt_DidYouMean__Correctable_af, 1, NULL, 0, NULL, 0 },
+  { "DidYouMean::Formatter", 0, 8191, bmt_DidYouMean__Formatter_i, bmt_DidYouMean__Formatter_if, 1, bmt_DidYouMean__Formatter_s, bmt_DidYouMean__Formatter_sf, 1, bmt_DidYouMean__Formatter_a, bmt_DidYouMean__Formatter_af, 6, NULL, 0, NULL, 0 },
+  { "DidYouMean::Jaro", 1, 8191, bmt_DidYouMean__Jaro_i, bmt_DidYouMean__Jaro_if, 1, bmt_DidYouMean__Jaro_s, bmt_DidYouMean__Jaro_sf, 1, bmt_DidYouMean__Jaro_a, bmt_DidYouMean__Jaro_af, 1, NULL, 0, NULL, 0 },
+  { "DidYouMean::JaroWinkler", 1, 8191, bmt_DidYouMean__JaroWinkler_i, bmt_DidYouMean__JaroWinkler_if, 1, bmt_DidYouMean__JaroWinkler_s, bmt_DidYouMean__JaroWinkler_sf, 1, bmt_DidYouMean__JaroWinkler_a, bmt_DidYouMean__JaroWinkler_af, 1, NULL, 0, NULL, 0 },
+  { "DidYouMean::KeyErrorChecker", 0, 8191, bmt_DidYouMean__KeyErrorChecker_i, bmt_DidYouMean__KeyErrorChecker_if, 4, bmt_DidYouMean__KeyErrorChecker_s, bmt_DidYouMean__KeyErrorChecker_sf, 0, bmt_DidYouMean__KeyErrorChecker_a, bmt_DidYouMean__KeyErrorChecker_af, 6, NULL, 0, NULL, 0 },
+  { "DidYouMean::Levenshtein", 1, 8191, bmt_DidYouMean__Levenshtein_i, bmt_DidYouMean__Levenshtein_if, 2, bmt_DidYouMean__Levenshtein_s, bmt_DidYouMean__Levenshtein_sf, 2, bmt_DidYouMean__Levenshtein_a, bmt_DidYouMean__Levenshtein_af, 1, NULL, 0, NULL, 0 },
+  { "DidYouMean::MethodNameChecker", 0, 8191, bmt_DidYouMean__MethodNameChecker_i, bmt_DidYouMean__MethodNameChecker_if, 6, bmt_DidYouMean__MethodNameChecker_s, bmt_DidYouMean__MethodNameChecker_sf, 0, bmt_DidYouMean__MethodNameChecker_a, bmt_DidYouMean__MethodNameChecker_af, 6, NULL, 0, NULL, 0 },
+  { "DidYouMean::NullChecker", 0, 8191, bmt_DidYouMean__NullChecker_i, bmt_DidYouMean__NullChecker_if, 2, bmt_DidYouMean__NullChecker_s, bmt_DidYouMean__NullChecker_sf, 0, bmt_DidYouMean__NullChecker_a, bmt_DidYouMean__NullChecker_af, 6, NULL, 0, NULL, 0 },
+  { "DidYouMean::PatternKeyNameChecker", 0, 8191, bmt_DidYouMean__PatternKeyNameChecker_i, bmt_DidYouMean__PatternKeyNameChecker_if, 4, bmt_DidYouMean__PatternKeyNameChecker_s, bmt_DidYouMean__PatternKeyNameChecker_sf, 0, bmt_DidYouMean__PatternKeyNameChecker_a, bmt_DidYouMean__PatternKeyNameChecker_af, 6, NULL, 0, NULL, 0 },
+  { "DidYouMean::RequirePathChecker", 0, 8191, bmt_DidYouMean__RequirePathChecker_i, bmt_DidYouMean__RequirePathChecker_if, 3, bmt_DidYouMean__RequirePathChecker_s, bmt_DidYouMean__RequirePathChecker_sf, 1, bmt_DidYouMean__RequirePathChecker_a, bmt_DidYouMean__RequirePathChecker_af, 6, NULL, 0, NULL, 0 },
+  { "DidYouMean::SpellChecker", 0, 8191, bmt_DidYouMean__SpellChecker_i, bmt_DidYouMean__SpellChecker_if, 3, bmt_DidYouMean__SpellChecker_s, bmt_DidYouMean__SpellChecker_sf, 0, bmt_DidYouMean__SpellChecker_a, bmt_DidYouMean__SpellChecker_af, 6, NULL, 0, NULL, 0 },
+  { "DidYouMean::TreeSpellChecker", 0, 8191, bmt_DidYouMean__TreeSpellChecker_i, bmt_DidYouMean__TreeSpellChecker_if, 17, bmt_DidYouMean__TreeSpellChecker_s, bmt_DidYouMean__TreeSpellChecker_sf, 0, bmt_DidYouMean__TreeSpellChecker_a, bmt_DidYouMean__TreeSpellChecker_af, 6, NULL, 0, NULL, 0 },
+  { "DidYouMean::VariableNameChecker", 0, 8191, bmt_DidYouMean__VariableNameChecker_i, bmt_DidYouMean__VariableNameChecker_if, 7, bmt_DidYouMean__VariableNameChecker_s, bmt_DidYouMean__VariableNameChecker_sf, 0, bmt_DidYouMean__VariableNameChecker_a, bmt_DidYouMean__VariableNameChecker_af, 6, NULL, 0, NULL, 0 },
+  { "Dir", 0, 8191, bmt_Dir_i, bmt_Dir_if, 16, bmt_Dir_s, bmt_Dir_sf, 20, bmt_Dir_a, bmt_Dir_af, 7, NULL, 0, NULL, 0 },
+  { "EOFError", 0, 8191, bmt_EOFError_i, bmt_EOFError_if, 0, bmt_EOFError_s, bmt_EOFError_sf, 0, bmt_EOFError_a, bmt_EOFError_af, 9, NULL, 0, NULL, 0 },
+  { "Encoding", 0, 8191, bmt_Encoding_i, bmt_Encoding_if, 7, bmt_Encoding_s, bmt_Encoding_sf, 11, bmt_Encoding_a, bmt_Encoding_af, 6, NULL, 0, bmt_Encoding_su, 1 },
+  { "Encoding::CompatibilityError", 0, 8191, bmt_Encoding__CompatibilityError_i, bmt_Encoding__CompatibilityError_if, 0, bmt_Encoding__CompatibilityError_s, bmt_Encoding__CompatibilityError_sf, 0, bmt_Encoding__CompatibilityError_a, bmt_Encoding__CompatibilityError_af, 9, NULL, 0, NULL, 0 },
+  { "Encoding::Converter", 0, 8191, bmt_Encoding__Converter_i, bmt_Encoding__Converter_if, 15, bmt_Encoding__Converter_s, bmt_Encoding__Converter_sf, 2, bmt_Encoding__Converter_a, bmt_Encoding__Converter_af, 6, NULL, 0, NULL, 0 },
+  { "Encoding::ConverterNotFoundError", 0, 8191, bmt_Encoding__ConverterNotFoundError_i, bmt_Encoding__ConverterNotFoundError_if, 0, bmt_Encoding__ConverterNotFoundError_s, bmt_Encoding__ConverterNotFoundError_sf, 0, bmt_Encoding__ConverterNotFoundError_a, bmt_Encoding__ConverterNotFoundError_af, 9, NULL, 0, NULL, 0 },
+  { "Encoding::InvalidByteSequenceError", 0, 8191, bmt_Encoding__InvalidByteSequenceError_i, bmt_Encoding__InvalidByteSequenceError_if, 7, bmt_Encoding__InvalidByteSequenceError_s, bmt_Encoding__InvalidByteSequenceError_sf, 0, bmt_Encoding__InvalidByteSequenceError_a, bmt_Encoding__InvalidByteSequenceError_af, 9, NULL, 0, NULL, 0 },
+  { "Encoding::UndefinedConversionError", 0, 8191, bmt_Encoding__UndefinedConversionError_i, bmt_Encoding__UndefinedConversionError_if, 5, bmt_Encoding__UndefinedConversionError_s, bmt_Encoding__UndefinedConversionError_sf, 0, bmt_Encoding__UndefinedConversionError_a, bmt_Encoding__UndefinedConversionError_af, 9, NULL, 0, NULL, 0 },
+  { "EncodingError", 0, 8191, bmt_EncodingError_i, bmt_EncodingError_if, 0, bmt_EncodingError_s, bmt_EncodingError_sf, 0, bmt_EncodingError_a, bmt_EncodingError_af, 8, NULL, 0, NULL, 0 },
+  { "Enumerable", 1, 8191, bmt_Enumerable_i, bmt_Enumerable_if, 61, bmt_Enumerable_s, bmt_Enumerable_sf, 0, bmt_Enumerable_a, bmt_Enumerable_af, 1, NULL, 0, NULL, 0 },
+  { "Enumerator", 0, 8191, bmt_Enumerator_i, bmt_Enumerator_if, 16, bmt_Enumerator_s, bmt_Enumerator_sf, 2, bmt_Enumerator_a, bmt_Enumerator_af, 7, NULL, 0, NULL, 0 },
+  { "Enumerator::ArithmeticSequence", 0, 8191, bmt_Enumerator__ArithmeticSequence_i, bmt_Enumerator__ArithmeticSequence_if, 13, bmt_Enumerator__ArithmeticSequence_s, bmt_Enumerator__ArithmeticSequence_sf, 0, bmt_Enumerator__ArithmeticSequence_a, bmt_Enumerator__ArithmeticSequence_af, 8, NULL, 0, bmt_Enumerator__ArithmeticSequence_su, 1 },
+  { "Enumerator::Chain", 0, 8191, bmt_Enumerator__Chain_i, bmt_Enumerator__Chain_if, 6, bmt_Enumerator__Chain_s, bmt_Enumerator__Chain_sf, 0, bmt_Enumerator__Chain_a, bmt_Enumerator__Chain_af, 8, bmt_Enumerator__Chain_u, 5, NULL, 0 },
+  { "Enumerator::Generator", 0, 8191, bmt_Enumerator__Generator_i, bmt_Enumerator__Generator_if, 3, bmt_Enumerator__Generator_s, bmt_Enumerator__Generator_sf, 0, bmt_Enumerator__Generator_a, bmt_Enumerator__Generator_af, 7, NULL, 0, NULL, 0 },
+  { "Enumerator::Lazy", 0, 8191, bmt_Enumerator__Lazy_i, bmt_Enumerator__Lazy_if, 48, bmt_Enumerator__Lazy_s, bmt_Enumerator__Lazy_sf, 0, bmt_Enumerator__Lazy_a, bmt_Enumerator__Lazy_af, 8, NULL, 0, NULL, 0 },
+  { "Enumerator::Producer", 0, 8191, bmt_Enumerator__Producer_i, bmt_Enumerator__Producer_if, 1, bmt_Enumerator__Producer_s, bmt_Enumerator__Producer_sf, 0, bmt_Enumerator__Producer_a, bmt_Enumerator__Producer_af, 6, NULL, 0, NULL, 0 },
+  { "Enumerator::Product", 0, 8191, bmt_Enumerator__Product_i, bmt_Enumerator__Product_if, 6, bmt_Enumerator__Product_s, bmt_Enumerator__Product_sf, 0, bmt_Enumerator__Product_a, bmt_Enumerator__Product_af, 8, bmt_Enumerator__Product_u, 5, NULL, 0 },
+  { "Enumerator::Yielder", 0, 8191, bmt_Enumerator__Yielder_i, bmt_Enumerator__Yielder_if, 4, bmt_Enumerator__Yielder_s, bmt_Enumerator__Yielder_sf, 0, bmt_Enumerator__Yielder_a, bmt_Enumerator__Yielder_af, 6, NULL, 0, NULL, 0 },
+  { "Errno", 1, 8191, bmt_Errno_i, bmt_Errno_if, 0, bmt_Errno_s, bmt_Errno_sf, 0, bmt_Errno_a, bmt_Errno_af, 1, NULL, 0, NULL, 0 },
+  { "Errno::E2BIG", 0, 8191, bmt_Errno__E2BIG_i, bmt_Errno__E2BIG_if, 0, bmt_Errno__E2BIG_s, bmt_Errno__E2BIG_sf, 0, bmt_Errno__E2BIG_a, bmt_Errno__E2BIG_af, 9, NULL, 0, NULL, 0 },
+  { "Errno::EACCES", 0, 8191, bmt_Errno__EACCES_i, bmt_Errno__EACCES_if, 0, bmt_Errno__EACCES_s, bmt_Errno__EACCES_sf, 0, bmt_Errno__EACCES_a, bmt_Errno__EACCES_af, 9, NULL, 0, NULL, 0 },
+  { "Errno::EADDRINUSE", 0, 8191, bmt_Errno__EADDRINUSE_i, bmt_Errno__EADDRINUSE_if, 0, bmt_Errno__EADDRINUSE_s, bmt_Errno__EADDRINUSE_sf, 0, bmt_Errno__EADDRINUSE_a, bmt_Errno__EADDRINUSE_af, 9, NULL, 0, NULL, 0 },
+  { "Errno::EADDRNOTAVAIL", 0, 8191, bmt_Errno__EADDRNOTAVAIL_i, bmt_Errno__EADDRNOTAVAIL_if, 0, bmt_Errno__EADDRNOTAVAIL_s, bmt_Errno__EADDRNOTAVAIL_sf, 0, bmt_Errno__EADDRNOTAVAIL_a, bmt_Errno__EADDRNOTAVAIL_af, 9, NULL, 0, NULL, 0 },
+  { "Errno::EAFNOSUPPORT", 0, 8191, bmt_Errno__EAFNOSUPPORT_i, bmt_Errno__EAFNOSUPPORT_if, 0, bmt_Errno__EAFNOSUPPORT_s, bmt_Errno__EAFNOSUPPORT_sf, 0, bmt_Errno__EAFNOSUPPORT_a, bmt_Errno__EAFNOSUPPORT_af, 9, NULL, 0, NULL, 0 },
+  { "Errno::EAGAIN", 0, 8191, bmt_Errno__EAGAIN_i, bmt_Errno__EAGAIN_if, 0, bmt_Errno__EAGAIN_s, bmt_Errno__EAGAIN_sf, 0, bmt_Errno__EAGAIN_a, bmt_Errno__EAGAIN_af, 9, NULL, 0, NULL, 0 },
+  { "Errno::EALREADY", 0, 8191, bmt_Errno__EALREADY_i, bmt_Errno__EALREADY_if, 0, bmt_Errno__EALREADY_s, bmt_Errno__EALREADY_sf, 0, bmt_Errno__EALREADY_a, bmt_Errno__EALREADY_af, 9, NULL, 0, NULL, 0 },
+  { "Errno::EAUTH", 0, 8191, bmt_Errno__EAUTH_i, bmt_Errno__EAUTH_if, 0, bmt_Errno__EAUTH_s, bmt_Errno__EAUTH_sf, 0, bmt_Errno__EAUTH_a, bmt_Errno__EAUTH_af, 9, NULL, 0, NULL, 0 },
+  { "Errno::EBADARCH", 0, 8191, bmt_Errno__EBADARCH_i, bmt_Errno__EBADARCH_if, 0, bmt_Errno__EBADARCH_s, bmt_Errno__EBADARCH_sf, 0, bmt_Errno__EBADARCH_a, bmt_Errno__EBADARCH_af, 9, NULL, 0, NULL, 0 },
+  { "Errno::EBADEXEC", 0, 8191, bmt_Errno__EBADEXEC_i, bmt_Errno__EBADEXEC_if, 0, bmt_Errno__EBADEXEC_s, bmt_Errno__EBADEXEC_sf, 0, bmt_Errno__EBADEXEC_a, bmt_Errno__EBADEXEC_af, 9, NULL, 0, NULL, 0 },
+  { "Errno::EBADF", 0, 8191, bmt_Errno__EBADF_i, bmt_Errno__EBADF_if, 0, bmt_Errno__EBADF_s, bmt_Errno__EBADF_sf, 0, bmt_Errno__EBADF_a, bmt_Errno__EBADF_af, 9, NULL, 0, NULL, 0 },
+  { "Errno::EBADMACHO", 0, 8191, bmt_Errno__EBADMACHO_i, bmt_Errno__EBADMACHO_if, 0, bmt_Errno__EBADMACHO_s, bmt_Errno__EBADMACHO_sf, 0, bmt_Errno__EBADMACHO_a, bmt_Errno__EBADMACHO_af, 9, NULL, 0, NULL, 0 },
+  { "Errno::EBADMSG", 0, 8191, bmt_Errno__EBADMSG_i, bmt_Errno__EBADMSG_if, 0, bmt_Errno__EBADMSG_s, bmt_Errno__EBADMSG_sf, 0, bmt_Errno__EBADMSG_a, bmt_Errno__EBADMSG_af, 9, NULL, 0, NULL, 0 },
+  { "Errno::EBADRPC", 0, 8191, bmt_Errno__EBADRPC_i, bmt_Errno__EBADRPC_if, 0, bmt_Errno__EBADRPC_s, bmt_Errno__EBADRPC_sf, 0, bmt_Errno__EBADRPC_a, bmt_Errno__EBADRPC_af, 9, NULL, 0, NULL, 0 },
+  { "Errno::EBUSY", 0, 8191, bmt_Errno__EBUSY_i, bmt_Errno__EBUSY_if, 0, bmt_Errno__EBUSY_s, bmt_Errno__EBUSY_sf, 0, bmt_Errno__EBUSY_a, bmt_Errno__EBUSY_af, 9, NULL, 0, NULL, 0 },
+  { "Errno::ECANCELED", 0, 8191, bmt_Errno__ECANCELED_i, bmt_Errno__ECANCELED_if, 0, bmt_Errno__ECANCELED_s, bmt_Errno__ECANCELED_sf, 0, bmt_Errno__ECANCELED_a, bmt_Errno__ECANCELED_af, 9, NULL, 0, NULL, 0 },
+  { "Errno::ECHILD", 0, 8191, bmt_Errno__ECHILD_i, bmt_Errno__ECHILD_if, 0, bmt_Errno__ECHILD_s, bmt_Errno__ECHILD_sf, 0, bmt_Errno__ECHILD_a, bmt_Errno__ECHILD_af, 9, NULL, 0, NULL, 0 },
+  { "Errno::ECONNABORTED", 0, 8191, bmt_Errno__ECONNABORTED_i, bmt_Errno__ECONNABORTED_if, 0, bmt_Errno__ECONNABORTED_s, bmt_Errno__ECONNABORTED_sf, 0, bmt_Errno__ECONNABORTED_a, bmt_Errno__ECONNABORTED_af, 9, NULL, 0, NULL, 0 },
+  { "Errno::ECONNREFUSED", 0, 8191, bmt_Errno__ECONNREFUSED_i, bmt_Errno__ECONNREFUSED_if, 0, bmt_Errno__ECONNREFUSED_s, bmt_Errno__ECONNREFUSED_sf, 0, bmt_Errno__ECONNREFUSED_a, bmt_Errno__ECONNREFUSED_af, 9, NULL, 0, NULL, 0 },
+  { "Errno::ECONNRESET", 0, 8191, bmt_Errno__ECONNRESET_i, bmt_Errno__ECONNRESET_if, 0, bmt_Errno__ECONNRESET_s, bmt_Errno__ECONNRESET_sf, 0, bmt_Errno__ECONNRESET_a, bmt_Errno__ECONNRESET_af, 9, NULL, 0, NULL, 0 },
+  { "Errno::EDEADLK", 0, 8191, bmt_Errno__EDEADLK_i, bmt_Errno__EDEADLK_if, 0, bmt_Errno__EDEADLK_s, bmt_Errno__EDEADLK_sf, 0, bmt_Errno__EDEADLK_a, bmt_Errno__EDEADLK_af, 9, NULL, 0, NULL, 0 },
+  { "Errno::EDESTADDRREQ", 0, 8191, bmt_Errno__EDESTADDRREQ_i, bmt_Errno__EDESTADDRREQ_if, 0, bmt_Errno__EDESTADDRREQ_s, bmt_Errno__EDESTADDRREQ_sf, 0, bmt_Errno__EDESTADDRREQ_a, bmt_Errno__EDESTADDRREQ_af, 9, NULL, 0, NULL, 0 },
+  { "Errno::EDEVERR", 0, 8191, bmt_Errno__EDEVERR_i, bmt_Errno__EDEVERR_if, 0, bmt_Errno__EDEVERR_s, bmt_Errno__EDEVERR_sf, 0, bmt_Errno__EDEVERR_a, bmt_Errno__EDEVERR_af, 9, NULL, 0, NULL, 0 },
+  { "Errno::EDOM", 0, 8191, bmt_Errno__EDOM_i, bmt_Errno__EDOM_if, 0, bmt_Errno__EDOM_s, bmt_Errno__EDOM_sf, 0, bmt_Errno__EDOM_a, bmt_Errno__EDOM_af, 9, NULL, 0, NULL, 0 },
+  { "Errno::EDQUOT", 0, 8191, bmt_Errno__EDQUOT_i, bmt_Errno__EDQUOT_if, 0, bmt_Errno__EDQUOT_s, bmt_Errno__EDQUOT_sf, 0, bmt_Errno__EDQUOT_a, bmt_Errno__EDQUOT_af, 9, NULL, 0, NULL, 0 },
+  { "Errno::EEXIST", 0, 8191, bmt_Errno__EEXIST_i, bmt_Errno__EEXIST_if, 0, bmt_Errno__EEXIST_s, bmt_Errno__EEXIST_sf, 0, bmt_Errno__EEXIST_a, bmt_Errno__EEXIST_af, 9, NULL, 0, NULL, 0 },
+  { "Errno::EFAULT", 0, 8191, bmt_Errno__EFAULT_i, bmt_Errno__EFAULT_if, 0, bmt_Errno__EFAULT_s, bmt_Errno__EFAULT_sf, 0, bmt_Errno__EFAULT_a, bmt_Errno__EFAULT_af, 9, NULL, 0, NULL, 0 },
+  { "Errno::EFBIG", 0, 8191, bmt_Errno__EFBIG_i, bmt_Errno__EFBIG_if, 0, bmt_Errno__EFBIG_s, bmt_Errno__EFBIG_sf, 0, bmt_Errno__EFBIG_a, bmt_Errno__EFBIG_af, 9, NULL, 0, NULL, 0 },
+  { "Errno::EFTYPE", 0, 8191, bmt_Errno__EFTYPE_i, bmt_Errno__EFTYPE_if, 0, bmt_Errno__EFTYPE_s, bmt_Errno__EFTYPE_sf, 0, bmt_Errno__EFTYPE_a, bmt_Errno__EFTYPE_af, 9, NULL, 0, NULL, 0 },
+  { "Errno::EHOSTDOWN", 0, 8191, bmt_Errno__EHOSTDOWN_i, bmt_Errno__EHOSTDOWN_if, 0, bmt_Errno__EHOSTDOWN_s, bmt_Errno__EHOSTDOWN_sf, 0, bmt_Errno__EHOSTDOWN_a, bmt_Errno__EHOSTDOWN_af, 9, NULL, 0, NULL, 0 },
+  { "Errno::EHOSTUNREACH", 0, 8191, bmt_Errno__EHOSTUNREACH_i, bmt_Errno__EHOSTUNREACH_if, 0, bmt_Errno__EHOSTUNREACH_s, bmt_Errno__EHOSTUNREACH_sf, 0, bmt_Errno__EHOSTUNREACH_a, bmt_Errno__EHOSTUNREACH_af, 9, NULL, 0, NULL, 0 },
+  { "Errno::EIDRM", 0, 8191, bmt_Errno__EIDRM_i, bmt_Errno__EIDRM_if, 0, bmt_Errno__EIDRM_s, bmt_Errno__EIDRM_sf, 0, bmt_Errno__EIDRM_a, bmt_Errno__EIDRM_af, 9, NULL, 0, NULL, 0 },
+  { "Errno::EILSEQ", 0, 8191, bmt_Errno__EILSEQ_i, bmt_Errno__EILSEQ_if, 0, bmt_Errno__EILSEQ_s, bmt_Errno__EILSEQ_sf, 0, bmt_Errno__EILSEQ_a, bmt_Errno__EILSEQ_af, 9, NULL, 0, NULL, 0 },
+  { "Errno::EINPROGRESS", 0, 8191, bmt_Errno__EINPROGRESS_i, bmt_Errno__EINPROGRESS_if, 0, bmt_Errno__EINPROGRESS_s, bmt_Errno__EINPROGRESS_sf, 0, bmt_Errno__EINPROGRESS_a, bmt_Errno__EINPROGRESS_af, 9, NULL, 0, NULL, 0 },
+  { "Errno::EINTR", 0, 8191, bmt_Errno__EINTR_i, bmt_Errno__EINTR_if, 0, bmt_Errno__EINTR_s, bmt_Errno__EINTR_sf, 0, bmt_Errno__EINTR_a, bmt_Errno__EINTR_af, 9, NULL, 0, NULL, 0 },
+  { "Errno::EINVAL", 0, 8191, bmt_Errno__EINVAL_i, bmt_Errno__EINVAL_if, 0, bmt_Errno__EINVAL_s, bmt_Errno__EINVAL_sf, 0, bmt_Errno__EINVAL_a, bmt_Errno__EINVAL_af, 9, NULL, 0, NULL, 0 },
+  { "Errno::EIO", 0, 8191, bmt_Errno__EIO_i, bmt_Errno__EIO_if, 0, bmt_Errno__EIO_s, bmt_Errno__EIO_sf, 0, bmt_Errno__EIO_a, bmt_Errno__EIO_af, 9, NULL, 0, NULL, 0 },
+  { "Errno::EISCONN", 0, 8191, bmt_Errno__EISCONN_i, bmt_Errno__EISCONN_if, 0, bmt_Errno__EISCONN_s, bmt_Errno__EISCONN_sf, 0, bmt_Errno__EISCONN_a, bmt_Errno__EISCONN_af, 9, NULL, 0, NULL, 0 },
+  { "Errno::EISDIR", 0, 8191, bmt_Errno__EISDIR_i, bmt_Errno__EISDIR_if, 0, bmt_Errno__EISDIR_s, bmt_Errno__EISDIR_sf, 0, bmt_Errno__EISDIR_a, bmt_Errno__EISDIR_af, 9, NULL, 0, NULL, 0 },
+  { "Errno::ELOOP", 0, 8191, bmt_Errno__ELOOP_i, bmt_Errno__ELOOP_if, 0, bmt_Errno__ELOOP_s, bmt_Errno__ELOOP_sf, 0, bmt_Errno__ELOOP_a, bmt_Errno__ELOOP_af, 9, NULL, 0, NULL, 0 },
+  { "Errno::EMFILE", 0, 8191, bmt_Errno__EMFILE_i, bmt_Errno__EMFILE_if, 0, bmt_Errno__EMFILE_s, bmt_Errno__EMFILE_sf, 0, bmt_Errno__EMFILE_a, bmt_Errno__EMFILE_af, 9, NULL, 0, NULL, 0 },
+  { "Errno::EMLINK", 0, 8191, bmt_Errno__EMLINK_i, bmt_Errno__EMLINK_if, 0, bmt_Errno__EMLINK_s, bmt_Errno__EMLINK_sf, 0, bmt_Errno__EMLINK_a, bmt_Errno__EMLINK_af, 9, NULL, 0, NULL, 0 },
+  { "Errno::EMSGSIZE", 0, 8191, bmt_Errno__EMSGSIZE_i, bmt_Errno__EMSGSIZE_if, 0, bmt_Errno__EMSGSIZE_s, bmt_Errno__EMSGSIZE_sf, 0, bmt_Errno__EMSGSIZE_a, bmt_Errno__EMSGSIZE_af, 9, NULL, 0, NULL, 0 },
+  { "Errno::EMULTIHOP", 0, 8191, bmt_Errno__EMULTIHOP_i, bmt_Errno__EMULTIHOP_if, 0, bmt_Errno__EMULTIHOP_s, bmt_Errno__EMULTIHOP_sf, 0, bmt_Errno__EMULTIHOP_a, bmt_Errno__EMULTIHOP_af, 9, NULL, 0, NULL, 0 },
+  { "Errno::ENAMETOOLONG", 0, 8191, bmt_Errno__ENAMETOOLONG_i, bmt_Errno__ENAMETOOLONG_if, 0, bmt_Errno__ENAMETOOLONG_s, bmt_Errno__ENAMETOOLONG_sf, 0, bmt_Errno__ENAMETOOLONG_a, bmt_Errno__ENAMETOOLONG_af, 9, NULL, 0, NULL, 0 },
+  { "Errno::ENEEDAUTH", 0, 8191, bmt_Errno__ENEEDAUTH_i, bmt_Errno__ENEEDAUTH_if, 0, bmt_Errno__ENEEDAUTH_s, bmt_Errno__ENEEDAUTH_sf, 0, bmt_Errno__ENEEDAUTH_a, bmt_Errno__ENEEDAUTH_af, 9, NULL, 0, NULL, 0 },
+  { "Errno::ENETDOWN", 0, 8191, bmt_Errno__ENETDOWN_i, bmt_Errno__ENETDOWN_if, 0, bmt_Errno__ENETDOWN_s, bmt_Errno__ENETDOWN_sf, 0, bmt_Errno__ENETDOWN_a, bmt_Errno__ENETDOWN_af, 9, NULL, 0, NULL, 0 },
+  { "Errno::ENETRESET", 0, 8191, bmt_Errno__ENETRESET_i, bmt_Errno__ENETRESET_if, 0, bmt_Errno__ENETRESET_s, bmt_Errno__ENETRESET_sf, 0, bmt_Errno__ENETRESET_a, bmt_Errno__ENETRESET_af, 9, NULL, 0, NULL, 0 },
+  { "Errno::ENETUNREACH", 0, 8191, bmt_Errno__ENETUNREACH_i, bmt_Errno__ENETUNREACH_if, 0, bmt_Errno__ENETUNREACH_s, bmt_Errno__ENETUNREACH_sf, 0, bmt_Errno__ENETUNREACH_a, bmt_Errno__ENETUNREACH_af, 9, NULL, 0, NULL, 0 },
+  { "Errno::ENFILE", 0, 8191, bmt_Errno__ENFILE_i, bmt_Errno__ENFILE_if, 0, bmt_Errno__ENFILE_s, bmt_Errno__ENFILE_sf, 0, bmt_Errno__ENFILE_a, bmt_Errno__ENFILE_af, 9, NULL, 0, NULL, 0 },
+  { "Errno::ENOATTR", 0, 8191, bmt_Errno__ENOATTR_i, bmt_Errno__ENOATTR_if, 0, bmt_Errno__ENOATTR_s, bmt_Errno__ENOATTR_sf, 0, bmt_Errno__ENOATTR_a, bmt_Errno__ENOATTR_af, 9, NULL, 0, NULL, 0 },
+  { "Errno::ENOBUFS", 0, 8191, bmt_Errno__ENOBUFS_i, bmt_Errno__ENOBUFS_if, 0, bmt_Errno__ENOBUFS_s, bmt_Errno__ENOBUFS_sf, 0, bmt_Errno__ENOBUFS_a, bmt_Errno__ENOBUFS_af, 9, NULL, 0, NULL, 0 },
+  { "Errno::ENODATA", 0, 8191, bmt_Errno__ENODATA_i, bmt_Errno__ENODATA_if, 0, bmt_Errno__ENODATA_s, bmt_Errno__ENODATA_sf, 0, bmt_Errno__ENODATA_a, bmt_Errno__ENODATA_af, 9, NULL, 0, NULL, 0 },
+  { "Errno::ENODEV", 0, 8191, bmt_Errno__ENODEV_i, bmt_Errno__ENODEV_if, 0, bmt_Errno__ENODEV_s, bmt_Errno__ENODEV_sf, 0, bmt_Errno__ENODEV_a, bmt_Errno__ENODEV_af, 9, NULL, 0, NULL, 0 },
+  { "Errno::ENOENT", 0, 8191, bmt_Errno__ENOENT_i, bmt_Errno__ENOENT_if, 0, bmt_Errno__ENOENT_s, bmt_Errno__ENOENT_sf, 0, bmt_Errno__ENOENT_a, bmt_Errno__ENOENT_af, 9, NULL, 0, NULL, 0 },
+  { "Errno::ENOEXEC", 0, 8191, bmt_Errno__ENOEXEC_i, bmt_Errno__ENOEXEC_if, 0, bmt_Errno__ENOEXEC_s, bmt_Errno__ENOEXEC_sf, 0, bmt_Errno__ENOEXEC_a, bmt_Errno__ENOEXEC_af, 9, NULL, 0, NULL, 0 },
+  { "Errno::ENOLCK", 0, 8191, bmt_Errno__ENOLCK_i, bmt_Errno__ENOLCK_if, 0, bmt_Errno__ENOLCK_s, bmt_Errno__ENOLCK_sf, 0, bmt_Errno__ENOLCK_a, bmt_Errno__ENOLCK_af, 9, NULL, 0, NULL, 0 },
+  { "Errno::ENOLINK", 0, 8191, bmt_Errno__ENOLINK_i, bmt_Errno__ENOLINK_if, 0, bmt_Errno__ENOLINK_s, bmt_Errno__ENOLINK_sf, 0, bmt_Errno__ENOLINK_a, bmt_Errno__ENOLINK_af, 9, NULL, 0, NULL, 0 },
+  { "Errno::ENOMEM", 0, 8191, bmt_Errno__ENOMEM_i, bmt_Errno__ENOMEM_if, 0, bmt_Errno__ENOMEM_s, bmt_Errno__ENOMEM_sf, 0, bmt_Errno__ENOMEM_a, bmt_Errno__ENOMEM_af, 9, NULL, 0, NULL, 0 },
+  { "Errno::ENOMSG", 0, 8191, bmt_Errno__ENOMSG_i, bmt_Errno__ENOMSG_if, 0, bmt_Errno__ENOMSG_s, bmt_Errno__ENOMSG_sf, 0, bmt_Errno__ENOMSG_a, bmt_Errno__ENOMSG_af, 9, NULL, 0, NULL, 0 },
+  { "Errno::ENOPOLICY", 0, 8191, bmt_Errno__ENOPOLICY_i, bmt_Errno__ENOPOLICY_if, 0, bmt_Errno__ENOPOLICY_s, bmt_Errno__ENOPOLICY_sf, 0, bmt_Errno__ENOPOLICY_a, bmt_Errno__ENOPOLICY_af, 9, NULL, 0, NULL, 0 },
+  { "Errno::ENOPROTOOPT", 0, 8191, bmt_Errno__ENOPROTOOPT_i, bmt_Errno__ENOPROTOOPT_if, 0, bmt_Errno__ENOPROTOOPT_s, bmt_Errno__ENOPROTOOPT_sf, 0, bmt_Errno__ENOPROTOOPT_a, bmt_Errno__ENOPROTOOPT_af, 9, NULL, 0, NULL, 0 },
+  { "Errno::ENOSPC", 0, 8191, bmt_Errno__ENOSPC_i, bmt_Errno__ENOSPC_if, 0, bmt_Errno__ENOSPC_s, bmt_Errno__ENOSPC_sf, 0, bmt_Errno__ENOSPC_a, bmt_Errno__ENOSPC_af, 9, NULL, 0, NULL, 0 },
+  { "Errno::ENOSR", 0, 8191, bmt_Errno__ENOSR_i, bmt_Errno__ENOSR_if, 0, bmt_Errno__ENOSR_s, bmt_Errno__ENOSR_sf, 0, bmt_Errno__ENOSR_a, bmt_Errno__ENOSR_af, 9, NULL, 0, NULL, 0 },
+  { "Errno::ENOSTR", 0, 8191, bmt_Errno__ENOSTR_i, bmt_Errno__ENOSTR_if, 0, bmt_Errno__ENOSTR_s, bmt_Errno__ENOSTR_sf, 0, bmt_Errno__ENOSTR_a, bmt_Errno__ENOSTR_af, 9, NULL, 0, NULL, 0 },
+  { "Errno::ENOSYS", 0, 8191, bmt_Errno__ENOSYS_i, bmt_Errno__ENOSYS_if, 0, bmt_Errno__ENOSYS_s, bmt_Errno__ENOSYS_sf, 0, bmt_Errno__ENOSYS_a, bmt_Errno__ENOSYS_af, 9, NULL, 0, NULL, 0 },
+  { "Errno::ENOTBLK", 0, 8191, bmt_Errno__ENOTBLK_i, bmt_Errno__ENOTBLK_if, 0, bmt_Errno__ENOTBLK_s, bmt_Errno__ENOTBLK_sf, 0, bmt_Errno__ENOTBLK_a, bmt_Errno__ENOTBLK_af, 9, NULL, 0, NULL, 0 },
+  { "Errno::ENOTCAPABLE", 0, 8191, bmt_Errno__ENOTCAPABLE_i, bmt_Errno__ENOTCAPABLE_if, 0, bmt_Errno__ENOTCAPABLE_s, bmt_Errno__ENOTCAPABLE_sf, 0, bmt_Errno__ENOTCAPABLE_a, bmt_Errno__ENOTCAPABLE_af, 9, NULL, 0, NULL, 0 },
+  { "Errno::ENOTCONN", 0, 8191, bmt_Errno__ENOTCONN_i, bmt_Errno__ENOTCONN_if, 0, bmt_Errno__ENOTCONN_s, bmt_Errno__ENOTCONN_sf, 0, bmt_Errno__ENOTCONN_a, bmt_Errno__ENOTCONN_af, 9, NULL, 0, NULL, 0 },
+  { "Errno::ENOTDIR", 0, 8191, bmt_Errno__ENOTDIR_i, bmt_Errno__ENOTDIR_if, 0, bmt_Errno__ENOTDIR_s, bmt_Errno__ENOTDIR_sf, 0, bmt_Errno__ENOTDIR_a, bmt_Errno__ENOTDIR_af, 9, NULL, 0, NULL, 0 },
+  { "Errno::ENOTEMPTY", 0, 8191, bmt_Errno__ENOTEMPTY_i, bmt_Errno__ENOTEMPTY_if, 0, bmt_Errno__ENOTEMPTY_s, bmt_Errno__ENOTEMPTY_sf, 0, bmt_Errno__ENOTEMPTY_a, bmt_Errno__ENOTEMPTY_af, 9, NULL, 0, NULL, 0 },
+  { "Errno::ENOTRECOVERABLE", 0, 8191, bmt_Errno__ENOTRECOVERABLE_i, bmt_Errno__ENOTRECOVERABLE_if, 0, bmt_Errno__ENOTRECOVERABLE_s, bmt_Errno__ENOTRECOVERABLE_sf, 0, bmt_Errno__ENOTRECOVERABLE_a, bmt_Errno__ENOTRECOVERABLE_af, 9, NULL, 0, NULL, 0 },
+  { "Errno::ENOTSOCK", 0, 8191, bmt_Errno__ENOTSOCK_i, bmt_Errno__ENOTSOCK_if, 0, bmt_Errno__ENOTSOCK_s, bmt_Errno__ENOTSOCK_sf, 0, bmt_Errno__ENOTSOCK_a, bmt_Errno__ENOTSOCK_af, 9, NULL, 0, NULL, 0 },
+  { "Errno::ENOTSUP", 0, 8191, bmt_Errno__ENOTSUP_i, bmt_Errno__ENOTSUP_if, 0, bmt_Errno__ENOTSUP_s, bmt_Errno__ENOTSUP_sf, 0, bmt_Errno__ENOTSUP_a, bmt_Errno__ENOTSUP_af, 9, NULL, 0, NULL, 0 },
+  { "Errno::ENOTTY", 0, 8191, bmt_Errno__ENOTTY_i, bmt_Errno__ENOTTY_if, 0, bmt_Errno__ENOTTY_s, bmt_Errno__ENOTTY_sf, 0, bmt_Errno__ENOTTY_a, bmt_Errno__ENOTTY_af, 9, NULL, 0, NULL, 0 },
+  { "Errno::ENXIO", 0, 8191, bmt_Errno__ENXIO_i, bmt_Errno__ENXIO_if, 0, bmt_Errno__ENXIO_s, bmt_Errno__ENXIO_sf, 0, bmt_Errno__ENXIO_a, bmt_Errno__ENXIO_af, 9, NULL, 0, NULL, 0 },
+  { "Errno::EOPNOTSUPP", 0, 8191, bmt_Errno__EOPNOTSUPP_i, bmt_Errno__EOPNOTSUPP_if, 0, bmt_Errno__EOPNOTSUPP_s, bmt_Errno__EOPNOTSUPP_sf, 0, bmt_Errno__EOPNOTSUPP_a, bmt_Errno__EOPNOTSUPP_af, 9, NULL, 0, NULL, 0 },
+  { "Errno::EOVERFLOW", 0, 8191, bmt_Errno__EOVERFLOW_i, bmt_Errno__EOVERFLOW_if, 0, bmt_Errno__EOVERFLOW_s, bmt_Errno__EOVERFLOW_sf, 0, bmt_Errno__EOVERFLOW_a, bmt_Errno__EOVERFLOW_af, 9, NULL, 0, NULL, 0 },
+  { "Errno::EOWNERDEAD", 0, 8191, bmt_Errno__EOWNERDEAD_i, bmt_Errno__EOWNERDEAD_if, 0, bmt_Errno__EOWNERDEAD_s, bmt_Errno__EOWNERDEAD_sf, 0, bmt_Errno__EOWNERDEAD_a, bmt_Errno__EOWNERDEAD_af, 9, NULL, 0, NULL, 0 },
+  { "Errno::EPERM", 0, 8191, bmt_Errno__EPERM_i, bmt_Errno__EPERM_if, 0, bmt_Errno__EPERM_s, bmt_Errno__EPERM_sf, 0, bmt_Errno__EPERM_a, bmt_Errno__EPERM_af, 9, NULL, 0, NULL, 0 },
+  { "Errno::EPFNOSUPPORT", 0, 8191, bmt_Errno__EPFNOSUPPORT_i, bmt_Errno__EPFNOSUPPORT_if, 0, bmt_Errno__EPFNOSUPPORT_s, bmt_Errno__EPFNOSUPPORT_sf, 0, bmt_Errno__EPFNOSUPPORT_a, bmt_Errno__EPFNOSUPPORT_af, 9, NULL, 0, NULL, 0 },
+  { "Errno::EPIPE", 0, 8191, bmt_Errno__EPIPE_i, bmt_Errno__EPIPE_if, 0, bmt_Errno__EPIPE_s, bmt_Errno__EPIPE_sf, 0, bmt_Errno__EPIPE_a, bmt_Errno__EPIPE_af, 9, NULL, 0, NULL, 0 },
+  { "Errno::EPROCLIM", 0, 8191, bmt_Errno__EPROCLIM_i, bmt_Errno__EPROCLIM_if, 0, bmt_Errno__EPROCLIM_s, bmt_Errno__EPROCLIM_sf, 0, bmt_Errno__EPROCLIM_a, bmt_Errno__EPROCLIM_af, 9, NULL, 0, NULL, 0 },
+  { "Errno::EPROCUNAVAIL", 0, 8191, bmt_Errno__EPROCUNAVAIL_i, bmt_Errno__EPROCUNAVAIL_if, 0, bmt_Errno__EPROCUNAVAIL_s, bmt_Errno__EPROCUNAVAIL_sf, 0, bmt_Errno__EPROCUNAVAIL_a, bmt_Errno__EPROCUNAVAIL_af, 9, NULL, 0, NULL, 0 },
+  { "Errno::EPROGMISMATCH", 0, 8191, bmt_Errno__EPROGMISMATCH_i, bmt_Errno__EPROGMISMATCH_if, 0, bmt_Errno__EPROGMISMATCH_s, bmt_Errno__EPROGMISMATCH_sf, 0, bmt_Errno__EPROGMISMATCH_a, bmt_Errno__EPROGMISMATCH_af, 9, NULL, 0, NULL, 0 },
+  { "Errno::EPROGUNAVAIL", 0, 8191, bmt_Errno__EPROGUNAVAIL_i, bmt_Errno__EPROGUNAVAIL_if, 0, bmt_Errno__EPROGUNAVAIL_s, bmt_Errno__EPROGUNAVAIL_sf, 0, bmt_Errno__EPROGUNAVAIL_a, bmt_Errno__EPROGUNAVAIL_af, 9, NULL, 0, NULL, 0 },
+  { "Errno::EPROTO", 0, 8191, bmt_Errno__EPROTO_i, bmt_Errno__EPROTO_if, 0, bmt_Errno__EPROTO_s, bmt_Errno__EPROTO_sf, 0, bmt_Errno__EPROTO_a, bmt_Errno__EPROTO_af, 9, NULL, 0, NULL, 0 },
+  { "Errno::EPROTONOSUPPORT", 0, 8191, bmt_Errno__EPROTONOSUPPORT_i, bmt_Errno__EPROTONOSUPPORT_if, 0, bmt_Errno__EPROTONOSUPPORT_s, bmt_Errno__EPROTONOSUPPORT_sf, 0, bmt_Errno__EPROTONOSUPPORT_a, bmt_Errno__EPROTONOSUPPORT_af, 9, NULL, 0, NULL, 0 },
+  { "Errno::EPROTOTYPE", 0, 8191, bmt_Errno__EPROTOTYPE_i, bmt_Errno__EPROTOTYPE_if, 0, bmt_Errno__EPROTOTYPE_s, bmt_Errno__EPROTOTYPE_sf, 0, bmt_Errno__EPROTOTYPE_a, bmt_Errno__EPROTOTYPE_af, 9, NULL, 0, NULL, 0 },
+  { "Errno::EPWROFF", 0, 8191, bmt_Errno__EPWROFF_i, bmt_Errno__EPWROFF_if, 0, bmt_Errno__EPWROFF_s, bmt_Errno__EPWROFF_sf, 0, bmt_Errno__EPWROFF_a, bmt_Errno__EPWROFF_af, 9, NULL, 0, NULL, 0 },
+  { "Errno::EQFULL", 0, 8191, bmt_Errno__EQFULL_i, bmt_Errno__EQFULL_if, 0, bmt_Errno__EQFULL_s, bmt_Errno__EQFULL_sf, 0, bmt_Errno__EQFULL_a, bmt_Errno__EQFULL_af, 9, NULL, 0, NULL, 0 },
+  { "Errno::ERANGE", 0, 8191, bmt_Errno__ERANGE_i, bmt_Errno__ERANGE_if, 0, bmt_Errno__ERANGE_s, bmt_Errno__ERANGE_sf, 0, bmt_Errno__ERANGE_a, bmt_Errno__ERANGE_af, 9, NULL, 0, NULL, 0 },
+  { "Errno::EREMOTE", 0, 8191, bmt_Errno__EREMOTE_i, bmt_Errno__EREMOTE_if, 0, bmt_Errno__EREMOTE_s, bmt_Errno__EREMOTE_sf, 0, bmt_Errno__EREMOTE_a, bmt_Errno__EREMOTE_af, 9, NULL, 0, NULL, 0 },
+  { "Errno::EROFS", 0, 8191, bmt_Errno__EROFS_i, bmt_Errno__EROFS_if, 0, bmt_Errno__EROFS_s, bmt_Errno__EROFS_sf, 0, bmt_Errno__EROFS_a, bmt_Errno__EROFS_af, 9, NULL, 0, NULL, 0 },
+  { "Errno::ERPCMISMATCH", 0, 8191, bmt_Errno__ERPCMISMATCH_i, bmt_Errno__ERPCMISMATCH_if, 0, bmt_Errno__ERPCMISMATCH_s, bmt_Errno__ERPCMISMATCH_sf, 0, bmt_Errno__ERPCMISMATCH_a, bmt_Errno__ERPCMISMATCH_af, 9, NULL, 0, NULL, 0 },
+  { "Errno::ESHLIBVERS", 0, 8191, bmt_Errno__ESHLIBVERS_i, bmt_Errno__ESHLIBVERS_if, 0, bmt_Errno__ESHLIBVERS_s, bmt_Errno__ESHLIBVERS_sf, 0, bmt_Errno__ESHLIBVERS_a, bmt_Errno__ESHLIBVERS_af, 9, NULL, 0, NULL, 0 },
+  { "Errno::ESHUTDOWN", 0, 8191, bmt_Errno__ESHUTDOWN_i, bmt_Errno__ESHUTDOWN_if, 0, bmt_Errno__ESHUTDOWN_s, bmt_Errno__ESHUTDOWN_sf, 0, bmt_Errno__ESHUTDOWN_a, bmt_Errno__ESHUTDOWN_af, 9, NULL, 0, NULL, 0 },
+  { "Errno::ESOCKTNOSUPPORT", 0, 8191, bmt_Errno__ESOCKTNOSUPPORT_i, bmt_Errno__ESOCKTNOSUPPORT_if, 0, bmt_Errno__ESOCKTNOSUPPORT_s, bmt_Errno__ESOCKTNOSUPPORT_sf, 0, bmt_Errno__ESOCKTNOSUPPORT_a, bmt_Errno__ESOCKTNOSUPPORT_af, 9, NULL, 0, NULL, 0 },
+  { "Errno::ESPIPE", 0, 8191, bmt_Errno__ESPIPE_i, bmt_Errno__ESPIPE_if, 0, bmt_Errno__ESPIPE_s, bmt_Errno__ESPIPE_sf, 0, bmt_Errno__ESPIPE_a, bmt_Errno__ESPIPE_af, 9, NULL, 0, NULL, 0 },
+  { "Errno::ESRCH", 0, 8191, bmt_Errno__ESRCH_i, bmt_Errno__ESRCH_if, 0, bmt_Errno__ESRCH_s, bmt_Errno__ESRCH_sf, 0, bmt_Errno__ESRCH_a, bmt_Errno__ESRCH_af, 9, NULL, 0, NULL, 0 },
+  { "Errno::ESTALE", 0, 8191, bmt_Errno__ESTALE_i, bmt_Errno__ESTALE_if, 0, bmt_Errno__ESTALE_s, bmt_Errno__ESTALE_sf, 0, bmt_Errno__ESTALE_a, bmt_Errno__ESTALE_af, 9, NULL, 0, NULL, 0 },
+  { "Errno::ETIME", 0, 8191, bmt_Errno__ETIME_i, bmt_Errno__ETIME_if, 0, bmt_Errno__ETIME_s, bmt_Errno__ETIME_sf, 0, bmt_Errno__ETIME_a, bmt_Errno__ETIME_af, 9, NULL, 0, NULL, 0 },
+  { "Errno::ETIMEDOUT", 0, 8191, bmt_Errno__ETIMEDOUT_i, bmt_Errno__ETIMEDOUT_if, 0, bmt_Errno__ETIMEDOUT_s, bmt_Errno__ETIMEDOUT_sf, 0, bmt_Errno__ETIMEDOUT_a, bmt_Errno__ETIMEDOUT_af, 9, NULL, 0, NULL, 0 },
+  { "Errno::ETOOMANYREFS", 0, 8191, bmt_Errno__ETOOMANYREFS_i, bmt_Errno__ETOOMANYREFS_if, 0, bmt_Errno__ETOOMANYREFS_s, bmt_Errno__ETOOMANYREFS_sf, 0, bmt_Errno__ETOOMANYREFS_a, bmt_Errno__ETOOMANYREFS_af, 9, NULL, 0, NULL, 0 },
+  { "Errno::ETXTBSY", 0, 8191, bmt_Errno__ETXTBSY_i, bmt_Errno__ETXTBSY_if, 0, bmt_Errno__ETXTBSY_s, bmt_Errno__ETXTBSY_sf, 0, bmt_Errno__ETXTBSY_a, bmt_Errno__ETXTBSY_af, 9, NULL, 0, NULL, 0 },
+  { "Errno::EUSERS", 0, 8191, bmt_Errno__EUSERS_i, bmt_Errno__EUSERS_if, 0, bmt_Errno__EUSERS_s, bmt_Errno__EUSERS_sf, 0, bmt_Errno__EUSERS_a, bmt_Errno__EUSERS_af, 9, NULL, 0, NULL, 0 },
+  { "Errno::EXDEV", 0, 8191, bmt_Errno__EXDEV_i, bmt_Errno__EXDEV_if, 0, bmt_Errno__EXDEV_s, bmt_Errno__EXDEV_sf, 0, bmt_Errno__EXDEV_a, bmt_Errno__EXDEV_af, 9, NULL, 0, NULL, 0 },
+  { "Errno::NOERROR", 0, 8191, bmt_Errno__NOERROR_i, bmt_Errno__NOERROR_if, 0, bmt_Errno__NOERROR_s, bmt_Errno__NOERROR_sf, 0, bmt_Errno__NOERROR_a, bmt_Errno__NOERROR_af, 9, NULL, 0, NULL, 0 },
+  { "ErrorHighlight", 1, 8191, bmt_ErrorHighlight_i, bmt_ErrorHighlight_if, 0, bmt_ErrorHighlight_s, bmt_ErrorHighlight_sf, 4, bmt_ErrorHighlight_a, bmt_ErrorHighlight_af, 1, NULL, 0, NULL, 0 },
+  { "ErrorHighlight::CoreExt", 1, 8191, bmt_ErrorHighlight__CoreExt_i, bmt_ErrorHighlight__CoreExt_if, 2, bmt_ErrorHighlight__CoreExt_s, bmt_ErrorHighlight__CoreExt_sf, 0, bmt_ErrorHighlight__CoreExt_a, bmt_ErrorHighlight__CoreExt_af, 1, NULL, 0, NULL, 0 },
+  { "ErrorHighlight::DefaultFormatter", 0, 8191, bmt_ErrorHighlight__DefaultFormatter_i, bmt_ErrorHighlight__DefaultFormatter_if, 0, bmt_ErrorHighlight__DefaultFormatter_s, bmt_ErrorHighlight__DefaultFormatter_sf, 4, bmt_ErrorHighlight__DefaultFormatter_a, bmt_ErrorHighlight__DefaultFormatter_af, 6, NULL, 0, NULL, 0 },
+  { "Exception", 0, 8191, bmt_Exception_i, bmt_Exception_if, 15, bmt_Exception_s, bmt_Exception_sf, 2, bmt_Exception_a, bmt_Exception_af, 6, NULL, 0, NULL, 0 },
+  { "FalseClass", 0, 8191, bmt_FalseClass_i, bmt_FalseClass_if, 6, bmt_FalseClass_s, bmt_FalseClass_sf, 0, bmt_FalseClass_a, bmt_FalseClass_af, 7, NULL, 0, bmt_FalseClass_su, 1 },
+  { "Fiber", 0, 8191, bmt_Fiber_i, bmt_Fiber_if, 13, bmt_Fiber_s, bmt_Fiber_sf, 10, bmt_Fiber_a, bmt_Fiber_af, 6, NULL, 0, NULL, 0 },
+  { "FiberError", 0, 8191, bmt_FiberError_i, bmt_FiberError_if, 0, bmt_FiberError_s, bmt_FiberError_sf, 0, bmt_FiberError_a, bmt_FiberError_af, 8, NULL, 0, NULL, 0 },
+  { "File", 0, 8191, bmt_File_i, bmt_File_if, 11, bmt_File_s, bmt_File_sf, 61, bmt_File_a, bmt_File_af, 10, NULL, 0, NULL, 0 },
+  { "File::Constants", 1, 8191, bmt_File__Constants_i, bmt_File__Constants_if, 0, bmt_File__Constants_s, bmt_File__Constants_sf, 0, bmt_File__Constants_a, bmt_File__Constants_af, 1, NULL, 0, NULL, 0 },
+  { "File::Stat", 0, 8191, bmt_File__Stat_i, bmt_File__Stat_if, 45, bmt_File__Stat_s, bmt_File__Stat_sf, 0, bmt_File__Stat_a, bmt_File__Stat_af, 7, NULL, 0, NULL, 0 },
+  { "FileTest", 1, 8191, bmt_FileTest_i, bmt_FileTest_if, 26, bmt_FileTest_s, bmt_FileTest_sf, 26, bmt_FileTest_a, bmt_FileTest_af, 1, NULL, 0, NULL, 0 },
+  { "Float", 0, 8191, bmt_Float_i, bmt_Float_if, 47, bmt_Float_s, bmt_Float_sf, 0, bmt_Float_a, bmt_Float_af, 9, NULL, 0, bmt_Float_su, 1 },
+  { "FloatDomainError", 0, 8191, bmt_FloatDomainError_i, bmt_FloatDomainError_if, 0, bmt_FloatDomainError_s, bmt_FloatDomainError_sf, 0, bmt_FloatDomainError_a, bmt_FloatDomainError_af, 9, NULL, 0, NULL, 0 },
+  { "FrozenError", 0, 8191, bmt_FrozenError_i, bmt_FrozenError_if, 2, bmt_FrozenError_s, bmt_FrozenError_sf, 0, bmt_FrozenError_a, bmt_FrozenError_af, 9, NULL, 0, NULL, 0 },
+  { "GC", 1, 8191, bmt_GC_i, bmt_GC_if, 1, bmt_GC_s, bmt_GC_sf, 19, bmt_GC_a, bmt_GC_af, 1, NULL, 0, NULL, 0 },
+  { "GC::Profiler", 1, 8191, bmt_GC__Profiler_i, bmt_GC__Profiler_if, 0, bmt_GC__Profiler_s, bmt_GC__Profiler_sf, 8, bmt_GC__Profiler_a, bmt_GC__Profiler_af, 1, NULL, 0, NULL, 0 },
+  { "Gem", 1, 8191, bmt_Gem_i, bmt_Gem_if, 0, bmt_Gem_s, bmt_Gem_sf, 134, bmt_Gem_a, bmt_Gem_af, 1, NULL, 0, NULL, 0 },
+  { "Gem::BUNDLED_GEMS", 1, 8191, bmt_Gem__BUNDLED_GEMS_i, bmt_Gem__BUNDLED_GEMS_if, 0, bmt_Gem__BUNDLED_GEMS_s, bmt_Gem__BUNDLED_GEMS_sf, 5, bmt_Gem__BUNDLED_GEMS_a, bmt_Gem__BUNDLED_GEMS_af, 1, NULL, 0, NULL, 0 },
+  { "Gem::BasicSpecification", 0, 8191, bmt_Gem__BasicSpecification_i, bmt_Gem__BasicSpecification_if, 44, bmt_Gem__BasicSpecification_s, bmt_Gem__BasicSpecification_sf, 0, bmt_Gem__BasicSpecification_a, bmt_Gem__BasicSpecification_af, 6, NULL, 0, NULL, 0 },
+  { "Gem::CommandLineError", 0, 8191, bmt_Gem__CommandLineError_i, bmt_Gem__CommandLineError_if, 0, bmt_Gem__CommandLineError_s, bmt_Gem__CommandLineError_sf, 0, bmt_Gem__CommandLineError_a, bmt_Gem__CommandLineError_af, 10, NULL, 0, NULL, 0 },
+  { "Gem::ConflictError", 0, 8191, bmt_Gem__ConflictError_i, bmt_Gem__ConflictError_if, 3, bmt_Gem__ConflictError_s, bmt_Gem__ConflictError_sf, 0, bmt_Gem__ConflictError_a, bmt_Gem__ConflictError_af, 11, NULL, 0, NULL, 0 },
+  { "Gem::Dependency", 0, 8191, bmt_Gem__Dependency_i, bmt_Gem__Dependency_if, 27, bmt_Gem__Dependency_s, bmt_Gem__Dependency_sf, 0, bmt_Gem__Dependency_a, bmt_Gem__Dependency_af, 6, NULL, 0, NULL, 0 },
+  { "Gem::DependencyError", 0, 8191, bmt_Gem__DependencyError_i, bmt_Gem__DependencyError_if, 0, bmt_Gem__DependencyError_s, bmt_Gem__DependencyError_sf, 0, bmt_Gem__DependencyError_a, bmt_Gem__DependencyError_af, 10, NULL, 0, NULL, 0 },
+  { "Gem::DependencyRemovalException", 0, 8191, bmt_Gem__DependencyRemovalException_i, bmt_Gem__DependencyRemovalException_if, 0, bmt_Gem__DependencyRemovalException_s, bmt_Gem__DependencyRemovalException_sf, 0, bmt_Gem__DependencyRemovalException_a, bmt_Gem__DependencyRemovalException_af, 10, NULL, 0, NULL, 0 },
+  { "Gem::DependencyResolutionError", 0, 8191, bmt_Gem__DependencyResolutionError_i, bmt_Gem__DependencyResolutionError_if, 3, bmt_Gem__DependencyResolutionError_s, bmt_Gem__DependencyResolutionError_sf, 0, bmt_Gem__DependencyResolutionError_a, bmt_Gem__DependencyResolutionError_af, 11, NULL, 0, NULL, 0 },
+  { "Gem::Deprecate", 1, 8191, bmt_Gem__Deprecate_i, bmt_Gem__Deprecate_if, 4, bmt_Gem__Deprecate_s, bmt_Gem__Deprecate_sf, 6, bmt_Gem__Deprecate_a, bmt_Gem__Deprecate_af, 1, NULL, 0, NULL, 0 },
+  { "Gem::DocumentError", 0, 8191, bmt_Gem__DocumentError_i, bmt_Gem__DocumentError_if, 0, bmt_Gem__DocumentError_s, bmt_Gem__DocumentError_sf, 0, bmt_Gem__DocumentError_a, bmt_Gem__DocumentError_af, 10, NULL, 0, NULL, 0 },
+  { "Gem::EndOfYAMLException", 0, 8191, bmt_Gem__EndOfYAMLException_i, bmt_Gem__EndOfYAMLException_if, 0, bmt_Gem__EndOfYAMLException_s, bmt_Gem__EndOfYAMLException_sf, 0, bmt_Gem__EndOfYAMLException_a, bmt_Gem__EndOfYAMLException_af, 10, NULL, 0, NULL, 0 },
+  { "Gem::ErrorReason", 0, 8191, bmt_Gem__ErrorReason_i, bmt_Gem__ErrorReason_if, 0, bmt_Gem__ErrorReason_s, bmt_Gem__ErrorReason_sf, 0, bmt_Gem__ErrorReason_a, bmt_Gem__ErrorReason_af, 6, NULL, 0, NULL, 0 },
+  { "Gem::Exception", 0, 8191, bmt_Gem__Exception_i, bmt_Gem__Exception_if, 0, bmt_Gem__Exception_s, bmt_Gem__Exception_sf, 0, bmt_Gem__Exception_a, bmt_Gem__Exception_af, 9, NULL, 0, NULL, 0 },
+  { "Gem::FilePermissionError", 0, 8191, bmt_Gem__FilePermissionError_i, bmt_Gem__FilePermissionError_if, 2, bmt_Gem__FilePermissionError_s, bmt_Gem__FilePermissionError_sf, 0, bmt_Gem__FilePermissionError_a, bmt_Gem__FilePermissionError_af, 10, NULL, 0, NULL, 0 },
+  { "Gem::FormatException", 0, 8191, bmt_Gem__FormatException_i, bmt_Gem__FormatException_if, 2, bmt_Gem__FormatException_s, bmt_Gem__FormatException_sf, 0, bmt_Gem__FormatException_a, bmt_Gem__FormatException_af, 10, NULL, 0, NULL, 0 },
+  { "Gem::GemNotFoundException", 0, 8191, bmt_Gem__GemNotFoundException_i, bmt_Gem__GemNotFoundException_if, 0, bmt_Gem__GemNotFoundException_s, bmt_Gem__GemNotFoundException_sf, 0, bmt_Gem__GemNotFoundException_a, bmt_Gem__GemNotFoundException_af, 10, NULL, 0, NULL, 0 },
+  { "Gem::GemNotInHomeException", 0, 8191, bmt_Gem__GemNotInHomeException_i, bmt_Gem__GemNotInHomeException_if, 2, bmt_Gem__GemNotInHomeException_s, bmt_Gem__GemNotInHomeException_sf, 0, bmt_Gem__GemNotInHomeException_a, bmt_Gem__GemNotInHomeException_af, 10, NULL, 0, NULL, 0 },
+  { "Gem::ImpossibleDependenciesError", 0, 8191, bmt_Gem__ImpossibleDependenciesError_i, bmt_Gem__ImpossibleDependenciesError_if, 5, bmt_Gem__ImpossibleDependenciesError_s, bmt_Gem__ImpossibleDependenciesError_sf, 0, bmt_Gem__ImpossibleDependenciesError_a, bmt_Gem__ImpossibleDependenciesError_af, 10, NULL, 0, NULL, 0 },
+  { "Gem::InstallError", 0, 8191, bmt_Gem__InstallError_i, bmt_Gem__InstallError_if, 0, bmt_Gem__InstallError_s, bmt_Gem__InstallError_sf, 0, bmt_Gem__InstallError_a, bmt_Gem__InstallError_af, 10, NULL, 0, NULL, 0 },
+  { "Gem::InvalidSpecificationException", 0, 8191, bmt_Gem__InvalidSpecificationException_i, bmt_Gem__InvalidSpecificationException_if, 0, bmt_Gem__InvalidSpecificationException_s, bmt_Gem__InvalidSpecificationException_sf, 0, bmt_Gem__InvalidSpecificationException_a, bmt_Gem__InvalidSpecificationException_af, 10, NULL, 0, NULL, 0 },
+  { "Gem::List", 0, 8191, bmt_Gem__List_i, bmt_Gem__List_if, 9, bmt_Gem__List_s, bmt_Gem__List_sf, 1, bmt_Gem__List_a, bmt_Gem__List_af, 7, NULL, 0, NULL, 0 },
+  { "Gem::LoadError", 0, 8191, bmt_Gem__LoadError_i, bmt_Gem__LoadError_if, 4, bmt_Gem__LoadError_s, bmt_Gem__LoadError_sf, 0, bmt_Gem__LoadError_a, bmt_Gem__LoadError_af, 10, NULL, 0, NULL, 0 },
+  { "Gem::MissingSpecError", 0, 8191, bmt_Gem__MissingSpecError_i, bmt_Gem__MissingSpecError_if, 3, bmt_Gem__MissingSpecError_s, bmt_Gem__MissingSpecError_sf, 0, bmt_Gem__MissingSpecError_a, bmt_Gem__MissingSpecError_af, 11, NULL, 0, NULL, 0 },
+  { "Gem::MissingSpecVersionError", 0, 8191, bmt_Gem__MissingSpecVersionError_i, bmt_Gem__MissingSpecVersionError_if, 3, bmt_Gem__MissingSpecVersionError_s, bmt_Gem__MissingSpecVersionError_sf, 0, bmt_Gem__MissingSpecVersionError_a, bmt_Gem__MissingSpecVersionError_af, 12, NULL, 0, NULL, 0 },
+  { "Gem::OperationNotSupportedError", 0, 8191, bmt_Gem__OperationNotSupportedError_i, bmt_Gem__OperationNotSupportedError_if, 0, bmt_Gem__OperationNotSupportedError_s, bmt_Gem__OperationNotSupportedError_sf, 0, bmt_Gem__OperationNotSupportedError_a, bmt_Gem__OperationNotSupportedError_af, 10, NULL, 0, NULL, 0 },
+  { "Gem::PathSupport", 0, 8191, bmt_Gem__PathSupport_i, bmt_Gem__PathSupport_if, 8, bmt_Gem__PathSupport_s, bmt_Gem__PathSupport_sf, 0, bmt_Gem__PathSupport_a, bmt_Gem__PathSupport_af, 6, NULL, 0, NULL, 0 },
+  { "Gem::Platform", 0, 8191, bmt_Gem__Platform_i, bmt_Gem__Platform_if, 17, bmt_Gem__Platform_s, bmt_Gem__Platform_sf, 16, bmt_Gem__Platform_a, bmt_Gem__Platform_af, 6, NULL, 0, NULL, 0 },
+  { "Gem::PlatformMismatch", 0, 8191, bmt_Gem__PlatformMismatch_i, bmt_Gem__PlatformMismatch_if, 6, bmt_Gem__PlatformMismatch_s, bmt_Gem__PlatformMismatch_sf, 0, bmt_Gem__PlatformMismatch_a, bmt_Gem__PlatformMismatch_af, 7, NULL, 0, NULL, 0 },
+  { "Gem::RemoteError", 0, 8191, bmt_Gem__RemoteError_i, bmt_Gem__RemoteError_if, 0, bmt_Gem__RemoteError_s, bmt_Gem__RemoteError_sf, 0, bmt_Gem__RemoteError_a, bmt_Gem__RemoteError_af, 10, NULL, 0, NULL, 0 },
+  { "Gem::RemoteInstallationCancelled", 0, 8191, bmt_Gem__RemoteInstallationCancelled_i, bmt_Gem__RemoteInstallationCancelled_if, 0, bmt_Gem__RemoteInstallationCancelled_s, bmt_Gem__RemoteInstallationCancelled_sf, 0, bmt_Gem__RemoteInstallationCancelled_a, bmt_Gem__RemoteInstallationCancelled_af, 10, NULL, 0, NULL, 0 },
+  { "Gem::RemoteInstallationSkipped", 0, 8191, bmt_Gem__RemoteInstallationSkipped_i, bmt_Gem__RemoteInstallationSkipped_if, 0, bmt_Gem__RemoteInstallationSkipped_s, bmt_Gem__RemoteInstallationSkipped_sf, 0, bmt_Gem__RemoteInstallationSkipped_a, bmt_Gem__RemoteInstallationSkipped_af, 10, NULL, 0, NULL, 0 },
+  { "Gem::RemoteSourceException", 0, 8191, bmt_Gem__RemoteSourceException_i, bmt_Gem__RemoteSourceException_if, 0, bmt_Gem__RemoteSourceException_s, bmt_Gem__RemoteSourceException_sf, 0, bmt_Gem__RemoteSourceException_a, bmt_Gem__RemoteSourceException_af, 10, NULL, 0, NULL, 0 },
+  { "Gem::Requirement", 0, 8191, bmt_Gem__Requirement_i, bmt_Gem__Requirement_if, 24, bmt_Gem__Requirement_s, bmt_Gem__Requirement_sf, 5, bmt_Gem__Requirement_a, bmt_Gem__Requirement_af, 6, NULL, 0, NULL, 0 },
+  { "Gem::Requirement::BadRequirementError", 0, 8191, bmt_Gem__Requirement__BadRequirementError_i, bmt_Gem__Requirement__BadRequirementError_if, 0, bmt_Gem__Requirement__BadRequirementError_s, bmt_Gem__Requirement__BadRequirementError_sf, 0, bmt_Gem__Requirement__BadRequirementError_a, bmt_Gem__Requirement__BadRequirementError_af, 10, NULL, 0, NULL, 0 },
+  { "Gem::RubyVersionMismatch", 0, 8191, bmt_Gem__RubyVersionMismatch_i, bmt_Gem__RubyVersionMismatch_if, 0, bmt_Gem__RubyVersionMismatch_s, bmt_Gem__RubyVersionMismatch_sf, 0, bmt_Gem__RubyVersionMismatch_a, bmt_Gem__RubyVersionMismatch_af, 10, NULL, 0, NULL, 0 },
+  { "Gem::RuntimeRequirementNotMetError", 0, 8191, bmt_Gem__RuntimeRequirementNotMetError_i, bmt_Gem__RuntimeRequirementNotMetError_if, 3, bmt_Gem__RuntimeRequirementNotMetError_s, bmt_Gem__RuntimeRequirementNotMetError_sf, 0, bmt_Gem__RuntimeRequirementNotMetError_a, bmt_Gem__RuntimeRequirementNotMetError_af, 11, NULL, 0, NULL, 0 },
+  { "Gem::SourceFetchProblem", 0, 8191, bmt_Gem__SourceFetchProblem_i, bmt_Gem__SourceFetchProblem_if, 5, bmt_Gem__SourceFetchProblem_s, bmt_Gem__SourceFetchProblem_sf, 0, bmt_Gem__SourceFetchProblem_a, bmt_Gem__SourceFetchProblem_af, 7, NULL, 0, NULL, 0 },
+  { "Gem::SpecificGemNotFoundException", 0, 8191, bmt_Gem__SpecificGemNotFoundException_i, bmt_Gem__SpecificGemNotFoundException_if, 4, bmt_Gem__SpecificGemNotFoundException_s, bmt_Gem__SpecificGemNotFoundException_sf, 0, bmt_Gem__SpecificGemNotFoundException_a, bmt_Gem__SpecificGemNotFoundException_af, 11, NULL, 0, NULL, 0 },
+  { "Gem::Specification", 0, 8191, bmt_Gem__Specification_i, bmt_Gem__Specification_if, 157, bmt_Gem__Specification_s, bmt_Gem__Specification_sf, 48, bmt_Gem__Specification_a, bmt_Gem__Specification_af, 7, NULL, 0, NULL, 0 },
+  { "Gem::SpecificationRecord", 0, 8191, bmt_Gem__SpecificationRecord_i, bmt_Gem__SpecificationRecord_if, 19, bmt_Gem__SpecificationRecord_s, bmt_Gem__SpecificationRecord_sf, 2, bmt_Gem__SpecificationRecord_a, bmt_Gem__SpecificationRecord_af, 7, NULL, 0, NULL, 0 },
+  { "Gem::StubSpecification", 0, 8191, bmt_Gem__StubSpecification_i, bmt_Gem__StubSpecification_if, 24, bmt_Gem__StubSpecification_s, bmt_Gem__StubSpecification_sf, 2, bmt_Gem__StubSpecification_a, bmt_Gem__StubSpecification_af, 7, NULL, 0, NULL, 0 },
+  { "Gem::StubSpecification::StubLine", 0, 8191, bmt_Gem__StubSpecification__StubLine_i, bmt_Gem__StubSpecification__StubLine_if, 7, bmt_Gem__StubSpecification__StubLine_s, bmt_Gem__StubSpecification__StubLine_sf, 0, bmt_Gem__StubSpecification__StubLine_a, bmt_Gem__StubSpecification__StubLine_af, 6, NULL, 0, NULL, 0 },
+  { "Gem::SystemExitException", 0, 8191, bmt_Gem__SystemExitException_i, bmt_Gem__SystemExitException_if, 2, bmt_Gem__SystemExitException_s, bmt_Gem__SystemExitException_sf, 0, bmt_Gem__SystemExitException_a, bmt_Gem__SystemExitException_af, 8, NULL, 0, NULL, 0 },
+  { "Gem::TargetRbConfig", 0, 8191, bmt_Gem__TargetRbConfig_i, bmt_Gem__TargetRbConfig_if, 3, bmt_Gem__TargetRbConfig_s, bmt_Gem__TargetRbConfig_sf, 2, bmt_Gem__TargetRbConfig_a, bmt_Gem__TargetRbConfig_af, 6, NULL, 0, NULL, 0 },
+  { "Gem::UninstallError", 0, 8191, bmt_Gem__UninstallError_i, bmt_Gem__UninstallError_if, 2, bmt_Gem__UninstallError_s, bmt_Gem__UninstallError_sf, 0, bmt_Gem__UninstallError_a, bmt_Gem__UninstallError_af, 10, NULL, 0, NULL, 0 },
+  { "Gem::UnknownCommandError", 0, 8191, bmt_Gem__UnknownCommandError_i, bmt_Gem__UnknownCommandError_if, 2, bmt_Gem__UnknownCommandError_s, bmt_Gem__UnknownCommandError_sf, 1, bmt_Gem__UnknownCommandError_a, bmt_Gem__UnknownCommandError_af, 10, NULL, 0, NULL, 0 },
+  { "Gem::UnknownCommandSpellChecker", 0, 8191, bmt_Gem__UnknownCommandSpellChecker_i, bmt_Gem__UnknownCommandSpellChecker_if, 4, bmt_Gem__UnknownCommandSpellChecker_s, bmt_Gem__UnknownCommandSpellChecker_sf, 0, bmt_Gem__UnknownCommandSpellChecker_a, bmt_Gem__UnknownCommandSpellChecker_af, 6, NULL, 0, NULL, 0 },
+  { "Gem::UnsatisfiableDependencyError", 0, 8191, bmt_Gem__UnsatisfiableDependencyError_i, bmt_Gem__UnsatisfiableDependencyError_if, 6, bmt_Gem__UnsatisfiableDependencyError_s, bmt_Gem__UnsatisfiableDependencyError_sf, 0, bmt_Gem__UnsatisfiableDependencyError_a, bmt_Gem__UnsatisfiableDependencyError_af, 11, NULL, 0, NULL, 0 },
+  { "Gem::Util", 1, 8191, bmt_Gem__Util_i, bmt_Gem__Util_if, 0, bmt_Gem__Util_s, bmt_Gem__Util_sf, 8, bmt_Gem__Util_a, bmt_Gem__Util_af, 1, NULL, 0, NULL, 0 },
+  { "Gem::VerificationError", 0, 8191, bmt_Gem__VerificationError_i, bmt_Gem__VerificationError_if, 0, bmt_Gem__VerificationError_s, bmt_Gem__VerificationError_sf, 0, bmt_Gem__VerificationError_a, bmt_Gem__VerificationError_af, 10, NULL, 0, NULL, 0 },
+  { "Gem::Version", 0, 8191, bmt_Gem__Version_i, bmt_Gem__Version_if, 24, bmt_Gem__Version_s, bmt_Gem__Version_sf, 3, bmt_Gem__Version_a, bmt_Gem__Version_af, 7, NULL, 0, NULL, 0 },
+  { "Gem::WebauthnVerificationError", 0, 8191, bmt_Gem__WebauthnVerificationError_i, bmt_Gem__WebauthnVerificationError_if, 1, bmt_Gem__WebauthnVerificationError_s, bmt_Gem__WebauthnVerificationError_sf, 0, bmt_Gem__WebauthnVerificationError_a, bmt_Gem__WebauthnVerificationError_af, 10, NULL, 0, NULL, 0 },
+  { "Hash", 0, 8191, bmt_Hash_i, bmt_Hash_if, 75, bmt_Hash_s, bmt_Hash_sf, 4, bmt_Hash_a, bmt_Hash_af, 8, NULL, 0, NULL, 0 },
+  { "IO", 0, 8191, bmt_IO_i, bmt_IO_if, 116, bmt_IO_s, bmt_IO_sf, 16, bmt_IO_a, bmt_IO_af, 9, NULL, 0, NULL, 0 },
+  { "IO::Buffer", 0, 8191, bmt_IO__Buffer_i, bmt_IO__Buffer_if, 45, bmt_IO__Buffer_s, bmt_IO__Buffer_sf, 4, bmt_IO__Buffer_a, bmt_IO__Buffer_af, 7, NULL, 0, NULL, 0 },
+  { "IO::Buffer::AccessError", 0, 8191, bmt_IO__Buffer__AccessError_i, bmt_IO__Buffer__AccessError_if, 0, bmt_IO__Buffer__AccessError_s, bmt_IO__Buffer__AccessError_sf, 0, bmt_IO__Buffer__AccessError_a, bmt_IO__Buffer__AccessError_af, 9, NULL, 0, NULL, 0 },
+  { "IO::Buffer::AllocationError", 0, 8191, bmt_IO__Buffer__AllocationError_i, bmt_IO__Buffer__AllocationError_if, 0, bmt_IO__Buffer__AllocationError_s, bmt_IO__Buffer__AllocationError_sf, 0, bmt_IO__Buffer__AllocationError_a, bmt_IO__Buffer__AllocationError_af, 9, NULL, 0, NULL, 0 },
+  { "IO::Buffer::InvalidatedError", 0, 8191, bmt_IO__Buffer__InvalidatedError_i, bmt_IO__Buffer__InvalidatedError_if, 0, bmt_IO__Buffer__InvalidatedError_s, bmt_IO__Buffer__InvalidatedError_sf, 0, bmt_IO__Buffer__InvalidatedError_a, bmt_IO__Buffer__InvalidatedError_af, 9, NULL, 0, NULL, 0 },
+  { "IO::Buffer::LockedError", 0, 8191, bmt_IO__Buffer__LockedError_i, bmt_IO__Buffer__LockedError_if, 0, bmt_IO__Buffer__LockedError_s, bmt_IO__Buffer__LockedError_sf, 0, bmt_IO__Buffer__LockedError_a, bmt_IO__Buffer__LockedError_af, 9, NULL, 0, NULL, 0 },
+  { "IO::Buffer::MaskError", 0, 8191, bmt_IO__Buffer__MaskError_i, bmt_IO__Buffer__MaskError_if, 0, bmt_IO__Buffer__MaskError_s, bmt_IO__Buffer__MaskError_sf, 0, bmt_IO__Buffer__MaskError_a, bmt_IO__Buffer__MaskError_af, 10, NULL, 0, NULL, 0 },
+  { "IO::Console", 1, 0, bmt_IO__Console_i, bmt_IO__Console_if, 0, bmt_IO__Console_s, bmt_IO__Console_sf, 0, bmt_IO__Console_a, bmt_IO__Console_af, 1, NULL, 0, NULL, 0 },
+  { "IO::Console::Mode", 0, 0, bmt_IO__Console__Mode_i, bmt_IO__Console__Mode_if, 10, bmt_IO__Console__Mode_s, bmt_IO__Console__Mode_sf, 0, bmt_IO__Console__Mode_a, bmt_IO__Console__Mode_af, 5, bmt_IO__Console__Mode_u, 1, NULL, 0 },
+  { "IO::ConsoleMode", 0, 128, bmt_IO__ConsoleMode_i, bmt_IO__ConsoleMode_if, 4, bmt_IO__ConsoleMode_s, bmt_IO__ConsoleMode_sf, 0, bmt_IO__ConsoleMode_a, bmt_IO__ConsoleMode_af, 5, bmt_IO__ConsoleMode_u, 1, NULL, 0 },
+  { "IO::EAGAINWaitReadable", 0, 8191, bmt_IO__EAGAINWaitReadable_i, bmt_IO__EAGAINWaitReadable_if, 0, bmt_IO__EAGAINWaitReadable_s, bmt_IO__EAGAINWaitReadable_sf, 0, bmt_IO__EAGAINWaitReadable_a, bmt_IO__EAGAINWaitReadable_af, 11, NULL, 0, NULL, 0 },
+  { "IO::EAGAINWaitWritable", 0, 8191, bmt_IO__EAGAINWaitWritable_i, bmt_IO__EAGAINWaitWritable_if, 0, bmt_IO__EAGAINWaitWritable_s, bmt_IO__EAGAINWaitWritable_sf, 0, bmt_IO__EAGAINWaitWritable_a, bmt_IO__EAGAINWaitWritable_af, 11, NULL, 0, NULL, 0 },
+  { "IO::EINPROGRESSWaitReadable", 0, 8191, bmt_IO__EINPROGRESSWaitReadable_i, bmt_IO__EINPROGRESSWaitReadable_if, 0, bmt_IO__EINPROGRESSWaitReadable_s, bmt_IO__EINPROGRESSWaitReadable_sf, 0, bmt_IO__EINPROGRESSWaitReadable_a, bmt_IO__EINPROGRESSWaitReadable_af, 11, NULL, 0, NULL, 0 },
+  { "IO::EINPROGRESSWaitWritable", 0, 8191, bmt_IO__EINPROGRESSWaitWritable_i, bmt_IO__EINPROGRESSWaitWritable_if, 0, bmt_IO__EINPROGRESSWaitWritable_s, bmt_IO__EINPROGRESSWaitWritable_sf, 0, bmt_IO__EINPROGRESSWaitWritable_a, bmt_IO__EINPROGRESSWaitWritable_af, 11, NULL, 0, NULL, 0 },
+  { "IO::TimeoutError", 0, 8191, bmt_IO__TimeoutError_i, bmt_IO__TimeoutError_if, 0, bmt_IO__TimeoutError_s, bmt_IO__TimeoutError_sf, 0, bmt_IO__TimeoutError_a, bmt_IO__TimeoutError_af, 9, NULL, 0, NULL, 0 },
+  { "IO::WaitReadable", 1, 8191, bmt_IO__WaitReadable_i, bmt_IO__WaitReadable_if, 0, bmt_IO__WaitReadable_s, bmt_IO__WaitReadable_sf, 0, bmt_IO__WaitReadable_a, bmt_IO__WaitReadable_af, 1, NULL, 0, NULL, 0 },
+  { "IO::WaitWritable", 1, 8191, bmt_IO__WaitWritable_i, bmt_IO__WaitWritable_if, 0, bmt_IO__WaitWritable_s, bmt_IO__WaitWritable_sf, 0, bmt_IO__WaitWritable_a, bmt_IO__WaitWritable_af, 1, NULL, 0, NULL, 0 },
+  { "IOError", 0, 8191, bmt_IOError_i, bmt_IOError_if, 0, bmt_IOError_s, bmt_IOError_sf, 0, bmt_IOError_a, bmt_IOError_af, 8, NULL, 0, NULL, 0 },
+  { "IPSocket", 0, 512, bmt_IPSocket_i, bmt_IPSocket_if, 4, bmt_IPSocket_s, bmt_IPSocket_sf, 1, bmt_IPSocket_a, bmt_IPSocket_af, 11, bmt_IPSocket_u, 1, NULL, 0 },
+  { "IndexError", 0, 8191, bmt_IndexError_i, bmt_IndexError_if, 0, bmt_IndexError_s, bmt_IndexError_sf, 0, bmt_IndexError_a, bmt_IndexError_af, 8, NULL, 0, NULL, 0 },
+  { "Integer", 0, 8191, bmt_Integer_i, bmt_Integer_if, 65, bmt_Integer_s, bmt_Integer_sf, 2, bmt_Integer_a, bmt_Integer_af, 9, NULL, 0, bmt_Integer_su, 1 },
+  { "Interrupt", 0, 8191, bmt_Interrupt_i, bmt_Interrupt_if, 1, bmt_Interrupt_s, bmt_Interrupt_sf, 0, bmt_Interrupt_a, bmt_Interrupt_af, 8, NULL, 0, NULL, 0 },
+  { "JSON", 1, 4, bmt_JSON_i, bmt_JSON_if, 14, bmt_JSON_s, bmt_JSON_sf, 36, bmt_JSON_a, bmt_JSON_af, 1, NULL, 0, NULL, 0 },
+  { "JSON::Coder", 0, 4, bmt_JSON__Coder_i, bmt_JSON__Coder_if, 6, bmt_JSON__Coder_s, bmt_JSON__Coder_sf, 0, bmt_JSON__Coder_a, bmt_JSON__Coder_af, 6, NULL, 0, NULL, 0 },
+  { "JSON::Ext", 1, 4, bmt_JSON__Ext_i, bmt_JSON__Ext_if, 0, bmt_JSON__Ext_s, bmt_JSON__Ext_sf, 4, bmt_JSON__Ext_a, bmt_JSON__Ext_af, 1, NULL, 0, NULL, 0 },
+  { "JSON::Ext::Generator", 1, 4, bmt_JSON__Ext__Generator_i, bmt_JSON__Ext__Generator_if, 0, bmt_JSON__Ext__Generator_s, bmt_JSON__Ext__Generator_sf, 0, bmt_JSON__Ext__Generator_a, bmt_JSON__Ext__Generator_af, 1, NULL, 0, NULL, 0 },
+  { "JSON::Ext::Generator::GeneratorMethods", 1, 4, bmt_JSON__Ext__Generator__GeneratorMethods_i, bmt_JSON__Ext__Generator__GeneratorMethods_if, 0, bmt_JSON__Ext__Generator__GeneratorMethods_s, bmt_JSON__Ext__Generator__GeneratorMethods_sf, 0, bmt_JSON__Ext__Generator__GeneratorMethods_a, bmt_JSON__Ext__Generator__GeneratorMethods_af, 1, NULL, 0, NULL, 0 },
+  { "JSON::Ext::Generator::GeneratorMethods::Array", 1, 4, bmt_JSON__Ext__Generator__GeneratorMethods__Array_i, bmt_JSON__Ext__Generator__GeneratorMethods__Array_if, 1, bmt_JSON__Ext__Generator__GeneratorMethods__Array_s, bmt_JSON__Ext__Generator__GeneratorMethods__Array_sf, 0, bmt_JSON__Ext__Generator__GeneratorMethods__Array_a, bmt_JSON__Ext__Generator__GeneratorMethods__Array_af, 1, NULL, 0, NULL, 0 },
+  { "JSON::Ext::Generator::GeneratorMethods::FalseClass", 1, 4, bmt_JSON__Ext__Generator__GeneratorMethods__FalseClass_i, bmt_JSON__Ext__Generator__GeneratorMethods__FalseClass_if, 1, bmt_JSON__Ext__Generator__GeneratorMethods__FalseClass_s, bmt_JSON__Ext__Generator__GeneratorMethods__FalseClass_sf, 0, bmt_JSON__Ext__Generator__GeneratorMethods__FalseClass_a, bmt_JSON__Ext__Generator__GeneratorMethods__FalseClass_af, 1, NULL, 0, NULL, 0 },
+  { "JSON::Ext::Generator::GeneratorMethods::Float", 1, 4, bmt_JSON__Ext__Generator__GeneratorMethods__Float_i, bmt_JSON__Ext__Generator__GeneratorMethods__Float_if, 1, bmt_JSON__Ext__Generator__GeneratorMethods__Float_s, bmt_JSON__Ext__Generator__GeneratorMethods__Float_sf, 0, bmt_JSON__Ext__Generator__GeneratorMethods__Float_a, bmt_JSON__Ext__Generator__GeneratorMethods__Float_af, 1, NULL, 0, NULL, 0 },
+  { "JSON::Ext::Generator::GeneratorMethods::Hash", 1, 4, bmt_JSON__Ext__Generator__GeneratorMethods__Hash_i, bmt_JSON__Ext__Generator__GeneratorMethods__Hash_if, 1, bmt_JSON__Ext__Generator__GeneratorMethods__Hash_s, bmt_JSON__Ext__Generator__GeneratorMethods__Hash_sf, 0, bmt_JSON__Ext__Generator__GeneratorMethods__Hash_a, bmt_JSON__Ext__Generator__GeneratorMethods__Hash_af, 1, NULL, 0, NULL, 0 },
+  { "JSON::Ext::Generator::GeneratorMethods::Integer", 1, 4, bmt_JSON__Ext__Generator__GeneratorMethods__Integer_i, bmt_JSON__Ext__Generator__GeneratorMethods__Integer_if, 1, bmt_JSON__Ext__Generator__GeneratorMethods__Integer_s, bmt_JSON__Ext__Generator__GeneratorMethods__Integer_sf, 0, bmt_JSON__Ext__Generator__GeneratorMethods__Integer_a, bmt_JSON__Ext__Generator__GeneratorMethods__Integer_af, 1, NULL, 0, NULL, 0 },
+  { "JSON::Ext::Generator::GeneratorMethods::NilClass", 1, 4, bmt_JSON__Ext__Generator__GeneratorMethods__NilClass_i, bmt_JSON__Ext__Generator__GeneratorMethods__NilClass_if, 1, bmt_JSON__Ext__Generator__GeneratorMethods__NilClass_s, bmt_JSON__Ext__Generator__GeneratorMethods__NilClass_sf, 0, bmt_JSON__Ext__Generator__GeneratorMethods__NilClass_a, bmt_JSON__Ext__Generator__GeneratorMethods__NilClass_af, 1, NULL, 0, NULL, 0 },
+  { "JSON::Ext::Generator::GeneratorMethods::Object", 1, 4, bmt_JSON__Ext__Generator__GeneratorMethods__Object_i, bmt_JSON__Ext__Generator__GeneratorMethods__Object_if, 1, bmt_JSON__Ext__Generator__GeneratorMethods__Object_s, bmt_JSON__Ext__Generator__GeneratorMethods__Object_sf, 0, bmt_JSON__Ext__Generator__GeneratorMethods__Object_a, bmt_JSON__Ext__Generator__GeneratorMethods__Object_af, 1, NULL, 0, NULL, 0 },
+  { "JSON::Ext::Generator::GeneratorMethods::String", 1, 4, bmt_JSON__Ext__Generator__GeneratorMethods__String_i, bmt_JSON__Ext__Generator__GeneratorMethods__String_if, 1, bmt_JSON__Ext__Generator__GeneratorMethods__String_s, bmt_JSON__Ext__Generator__GeneratorMethods__String_sf, 0, bmt_JSON__Ext__Generator__GeneratorMethods__String_a, bmt_JSON__Ext__Generator__GeneratorMethods__String_af, 1, NULL, 0, NULL, 0 },
+  { "JSON::Ext::Generator::GeneratorMethods::TrueClass", 1, 4, bmt_JSON__Ext__Generator__GeneratorMethods__TrueClass_i, bmt_JSON__Ext__Generator__GeneratorMethods__TrueClass_if, 1, bmt_JSON__Ext__Generator__GeneratorMethods__TrueClass_s, bmt_JSON__Ext__Generator__GeneratorMethods__TrueClass_sf, 0, bmt_JSON__Ext__Generator__GeneratorMethods__TrueClass_a, bmt_JSON__Ext__Generator__GeneratorMethods__TrueClass_af, 1, NULL, 0, NULL, 0 },
+  { "JSON::Ext::Generator::State", 0, 4, bmt_JSON__Ext__Generator__State_i, bmt_JSON__Ext__Generator__State_if, 48, bmt_JSON__Ext__Generator__State_s, bmt_JSON__Ext__Generator__State_sf, 6, bmt_JSON__Ext__Generator__State_a, bmt_JSON__Ext__Generator__State_af, 6, NULL, 0, NULL, 0 },
+  { "JSON::Ext::Parser", 0, 4, bmt_JSON__Ext__Parser_i, bmt_JSON__Ext__Parser_if, 3, bmt_JSON__Ext__Parser_s, bmt_JSON__Ext__Parser_sf, 1, bmt_JSON__Ext__Parser_a, bmt_JSON__Ext__Parser_af, 6, NULL, 0, NULL, 0 },
+  { "JSON::Ext::ParserConfig", 0, 4, bmt_JSON__Ext__ParserConfig_i, bmt_JSON__Ext__ParserConfig_if, 2, bmt_JSON__Ext__ParserConfig_s, bmt_JSON__Ext__ParserConfig_sf, 0, bmt_JSON__Ext__ParserConfig_a, bmt_JSON__Ext__ParserConfig_af, 6, NULL, 0, NULL, 0 },
+  { "JSON::Fragment", 0, 4, bmt_JSON__Fragment_i, bmt_JSON__Fragment_if, 4, bmt_JSON__Fragment_s, bmt_JSON__Fragment_sf, 5, bmt_JSON__Fragment_a, bmt_JSON__Fragment_af, 8, NULL, 0, NULL, 0 },
+  { "JSON::GeneratorError", 0, 4, bmt_JSON__GeneratorError_i, bmt_JSON__GeneratorError_if, 3, bmt_JSON__GeneratorError_s, bmt_JSON__GeneratorError_sf, 0, bmt_JSON__GeneratorError_a, bmt_JSON__GeneratorError_af, 9, NULL, 0, NULL, 0 },
+  { "JSON::GeneratorMethods", 1, 0, bmt_JSON__GeneratorMethods_i, bmt_JSON__GeneratorMethods_if, 1, bmt_JSON__GeneratorMethods_s, bmt_JSON__GeneratorMethods_sf, 0, bmt_JSON__GeneratorMethods_a, bmt_JSON__GeneratorMethods_af, 1, NULL, 0, NULL, 0 },
+  { "JSON::JSONError", 0, 4, bmt_JSON__JSONError_i, bmt_JSON__JSONError_if, 0, bmt_JSON__JSONError_s, bmt_JSON__JSONError_sf, 0, bmt_JSON__JSONError_a, bmt_JSON__JSONError_af, 8, NULL, 0, NULL, 0 },
+  { "JSON::NestingError", 0, 4, bmt_JSON__NestingError_i, bmt_JSON__NestingError_if, 0, bmt_JSON__NestingError_s, bmt_JSON__NestingError_sf, 0, bmt_JSON__NestingError_a, bmt_JSON__NestingError_af, 10, NULL, 0, NULL, 0 },
+  { "JSON::ParserError", 0, 4, bmt_JSON__ParserError_i, bmt_JSON__ParserError_if, 4, bmt_JSON__ParserError_s, bmt_JSON__ParserError_sf, 0, bmt_JSON__ParserError_a, bmt_JSON__ParserError_af, 9, NULL, 0, NULL, 0 },
+  { "JSON::ParserOptions", 1, 4, bmt_JSON__ParserOptions_i, bmt_JSON__ParserOptions_if, 0, bmt_JSON__ParserOptions_s, bmt_JSON__ParserOptions_sf, 5, bmt_JSON__ParserOptions_a, bmt_JSON__ParserOptions_af, 1, NULL, 0, NULL, 0 },
+  { "JSON::ResumableParser", 0, 0, bmt_JSON__ResumableParser_i, bmt_JSON__ResumableParser_if, 12, bmt_JSON__ResumableParser_s, bmt_JSON__ResumableParser_sf, 0, bmt_JSON__ResumableParser_a, bmt_JSON__ResumableParser_af, 5, NULL, 0, NULL, 0 },
+  { "Kernel", 1, 8191, bmt_Kernel_i, bmt_Kernel_if, 117, bmt_Kernel_s, bmt_Kernel_sf, 63, bmt_Kernel_a, bmt_Kernel_af, 1, NULL, 0, NULL, 0 },
+  { "KeyError", 0, 8191, bmt_KeyError_i, bmt_KeyError_if, 3, bmt_KeyError_s, bmt_KeyError_sf, 0, bmt_KeyError_a, bmt_KeyError_af, 10, NULL, 0, NULL, 0 },
+  { "LoadError", 0, 8191, bmt_LoadError_i, bmt_LoadError_if, 2, bmt_LoadError_s, bmt_LoadError_sf, 0, bmt_LoadError_a, bmt_LoadError_af, 9, NULL, 0, NULL, 0 },
+  { "LocalJumpError", 0, 8191, bmt_LocalJumpError_i, bmt_LocalJumpError_if, 2, bmt_LocalJumpError_s, bmt_LocalJumpError_sf, 0, bmt_LocalJumpError_a, bmt_LocalJumpError_af, 8, NULL, 0, NULL, 0 },
+  { "Marshal", 1, 8191, bmt_Marshal_i, bmt_Marshal_if, 1, bmt_Marshal_s, bmt_Marshal_sf, 3, bmt_Marshal_a, bmt_Marshal_af, 1, NULL, 0, NULL, 0 },
+  { "MatchData", 0, 8191, bmt_MatchData_i, bmt_MatchData_if, 28, bmt_MatchData_s, bmt_MatchData_sf, 0, bmt_MatchData_a, bmt_MatchData_af, 6, NULL, 0, bmt_MatchData_su, 2 },
+  { "Math", 1, 8191, bmt_Math_i, bmt_Math_if, 28, bmt_Math_s, bmt_Math_sf, 28, bmt_Math_a, bmt_Math_af, 1, NULL, 0, NULL, 0 },
+  { "Math::DomainError", 0, 8191, bmt_Math__DomainError_i, bmt_Math__DomainError_if, 0, bmt_Math__DomainError_s, bmt_Math__DomainError_sf, 0, bmt_Math__DomainError_a, bmt_Math__DomainError_af, 8, NULL, 0, NULL, 0 },
+  { "Method", 0, 8191, bmt_Method_i, bmt_Method_if, 24, bmt_Method_s, bmt_Method_sf, 0, bmt_Method_a, bmt_Method_af, 6, NULL, 0, bmt_Method_su, 1 },
+  { "Module", 0, 8191, bmt_Module_i, bmt_Module_if, 80, bmt_Module_s, bmt_Module_sf, 4, bmt_Module_a, bmt_Module_af, 6, NULL, 0, bmt_Module_su, 1 },
+  { "Monitor", 0, 8191, bmt_Monitor_i, bmt_Monitor_if, 14, bmt_Monitor_s, bmt_Monitor_sf, 0, bmt_Monitor_a, bmt_Monitor_af, 6, NULL, 0, NULL, 0 },
+  { "MonitorMixin", 1, 8191, bmt_MonitorMixin_i, bmt_MonitorMixin_if, 12, bmt_MonitorMixin_s, bmt_MonitorMixin_sf, 1, bmt_MonitorMixin_a, bmt_MonitorMixin_af, 1, NULL, 0, NULL, 0 },
+  { "MonitorMixin::ConditionVariable", 0, 8191, bmt_MonitorMixin__ConditionVariable_i, bmt_MonitorMixin__ConditionVariable_if, 6, bmt_MonitorMixin__ConditionVariable_s, bmt_MonitorMixin__ConditionVariable_sf, 0, bmt_MonitorMixin__ConditionVariable_a, bmt_MonitorMixin__ConditionVariable_af, 6, NULL, 0, NULL, 0 },
+  { "Mutex", 0, 8191, bmt_Thread__Mutex_i, bmt_Thread__Mutex_if, 8, bmt_Thread__Mutex_s, bmt_Thread__Mutex_sf, 0, bmt_Thread__Mutex_a, bmt_Thread__Mutex_af, 6, NULL, 0, NULL, 0 },
+  { "NameError", 0, 8191, bmt_NameError_i, bmt_NameError_if, 4, bmt_NameError_s, bmt_NameError_sf, 0, bmt_NameError_a, bmt_NameError_af, 10, NULL, 0, NULL, 0 },
+  { "NilClass", 0, 8191, bmt_NilClass_i, bmt_NilClass_if, 15, bmt_NilClass_s, bmt_NilClass_sf, 0, bmt_NilClass_a, bmt_NilClass_af, 7, NULL, 0, bmt_NilClass_su, 1 },
+  { "NoMatchingPatternError", 0, 8191, bmt_NoMatchingPatternError_i, bmt_NoMatchingPatternError_if, 0, bmt_NoMatchingPatternError_s, bmt_NoMatchingPatternError_sf, 0, bmt_NoMatchingPatternError_a, bmt_NoMatchingPatternError_af, 8, NULL, 0, NULL, 0 },
+  { "NoMatchingPatternKeyError", 0, 8191, bmt_NoMatchingPatternKeyError_i, bmt_NoMatchingPatternKeyError_if, 3, bmt_NoMatchingPatternKeyError_s, bmt_NoMatchingPatternKeyError_sf, 0, bmt_NoMatchingPatternKeyError_a, bmt_NoMatchingPatternKeyError_af, 10, NULL, 0, NULL, 0 },
+  { "NoMemoryError", 0, 8191, bmt_NoMemoryError_i, bmt_NoMemoryError_if, 0, bmt_NoMemoryError_s, bmt_NoMemoryError_sf, 0, bmt_NoMemoryError_a, bmt_NoMemoryError_af, 7, NULL, 0, NULL, 0 },
+  { "NoMethodError", 0, 8191, bmt_NoMethodError_i, bmt_NoMethodError_if, 3, bmt_NoMethodError_s, bmt_NoMethodError_sf, 0, bmt_NoMethodError_a, bmt_NoMethodError_af, 11, NULL, 0, NULL, 0 },
+  { "NotImplementedError", 0, 8191, bmt_NotImplementedError_i, bmt_NotImplementedError_if, 0, bmt_NotImplementedError_s, bmt_NotImplementedError_sf, 0, bmt_NotImplementedError_a, bmt_NotImplementedError_af, 8, NULL, 0, NULL, 0 },
+  { "Numeric", 0, 8191, bmt_Numeric_i, bmt_Numeric_if, 47, bmt_Numeric_s, bmt_Numeric_sf, 0, bmt_Numeric_a, bmt_Numeric_af, 7, NULL, 0, NULL, 0 },
+  { "Object", 0, 8191, bmt_Object_i, bmt_Object_if, 0, bmt_Object_s, bmt_Object_sf, 0, bmt_Object_a, bmt_Object_af, 5, NULL, 0, NULL, 0 },
+  { "ObjectSpace", 1, 8191, bmt_ObjectSpace_i, bmt_ObjectSpace_if, 6, bmt_ObjectSpace_s, bmt_ObjectSpace_sf, 6, bmt_ObjectSpace_a, bmt_ObjectSpace_af, 1, NULL, 0, NULL, 0 },
+  { "ObjectSpace::WeakKeyMap", 0, 8191, bmt_ObjectSpace__WeakKeyMap_i, bmt_ObjectSpace__WeakKeyMap_if, 7, bmt_ObjectSpace__WeakKeyMap_s, bmt_ObjectSpace__WeakKeyMap_sf, 0, bmt_ObjectSpace__WeakKeyMap_a, bmt_ObjectSpace__WeakKeyMap_af, 6, NULL, 0, NULL, 0 },
+  { "ObjectSpace::WeakMap", 0, 8191, bmt_ObjectSpace__WeakMap_i, bmt_ObjectSpace__WeakMap_if, 15, bmt_ObjectSpace__WeakMap_s, bmt_ObjectSpace__WeakMap_sf, 0, bmt_ObjectSpace__WeakMap_a, bmt_ObjectSpace__WeakMap_af, 7, NULL, 0, NULL, 0 },
+  { "OpenStruct", 0, 2048, bmt_OpenStruct_i, bmt_OpenStruct_if, 72, bmt_OpenStruct_s, bmt_OpenStruct_sf, 0, bmt_OpenStruct_a, bmt_OpenStruct_af, 6, NULL, 0, NULL, 0 },
+  { "Pathname", 0, 8191, bmt_Pathname_i, bmt_Pathname_if, 107, bmt_Pathname_s, bmt_Pathname_sf, 3, bmt_Pathname_a, bmt_Pathname_af, 6, NULL, 0, NULL, 0 },
+  { "Proc", 0, 8191, bmt_Proc_i, bmt_Proc_if, 21, bmt_Proc_s, bmt_Proc_sf, 1, bmt_Proc_a, bmt_Proc_af, 6, NULL, 0, NULL, 0 },
+  { "Process", 1, 8191, bmt_Process_i, bmt_Process_if, 39, bmt_Process_s, bmt_Process_sf, 47, bmt_Process_a, bmt_Process_af, 1, NULL, 0, NULL, 0 },
+  { "Process::GID", 1, 8191, bmt_Process__GID_i, bmt_Process__GID_if, 9, bmt_Process__GID_s, bmt_Process__GID_sf, 10, bmt_Process__GID_a, bmt_Process__GID_af, 1, NULL, 0, NULL, 0 },
+  { "Process::Status", 0, 8191, bmt_Process__Status_i, bmt_Process__Status_if, 13, bmt_Process__Status_s, bmt_Process__Status_sf, 1, bmt_Process__Status_a, bmt_Process__Status_af, 6, NULL, 0, bmt_Process__Status_su, 1 },
+  { "Process::Sys", 1, 8191, bmt_Process__Sys_i, bmt_Process__Sys_if, 15, bmt_Process__Sys_s, bmt_Process__Sys_sf, 15, bmt_Process__Sys_a, bmt_Process__Sys_af, 1, NULL, 0, NULL, 0 },
+  { "Process::Tms", 0, 8191, bmt_Process__Tms_i, bmt_Process__Tms_if, 8, bmt_Process__Tms_s, bmt_Process__Tms_sf, 5, bmt_Process__Tms_a, bmt_Process__Tms_af, 8, NULL, 0, NULL, 0 },
+  { "Process::UID", 1, 8191, bmt_Process__UID_i, bmt_Process__UID_if, 9, bmt_Process__UID_s, bmt_Process__UID_sf, 10, bmt_Process__UID_a, bmt_Process__UID_af, 1, NULL, 0, NULL, 0 },
+  { "Process::Waiter", 0, 8191, bmt_Process__Waiter_i, bmt_Process__Waiter_if, 1, bmt_Process__Waiter_s, bmt_Process__Waiter_sf, 0, bmt_Process__Waiter_a, bmt_Process__Waiter_af, 7, NULL, 0, bmt_Process__Waiter_su, 1 },
+  { "Queue", 0, 8191, bmt_Thread__Queue_i, bmt_Thread__Queue_if, 16, bmt_Thread__Queue_s, bmt_Thread__Queue_sf, 0, bmt_Thread__Queue_a, bmt_Thread__Queue_af, 6, bmt_Thread__Queue_u, 1, NULL, 0 },
+  { "Ractor", 0, 8191, bmt_Ractor_i, bmt_Ractor_if, 15, bmt_Ractor_s, bmt_Ractor_sf, 17, bmt_Ractor_a, bmt_Ractor_af, 6, NULL, 0, NULL, 0 },
+  { "Ractor::ClosedError", 0, 8191, bmt_Ractor__ClosedError_i, bmt_Ractor__ClosedError_if, 0, bmt_Ractor__ClosedError_s, bmt_Ractor__ClosedError_sf, 0, bmt_Ractor__ClosedError_a, bmt_Ractor__ClosedError_af, 10, NULL, 0, NULL, 0 },
+  { "Ractor::Error", 0, 8191, bmt_Ractor__Error_i, bmt_Ractor__Error_if, 0, bmt_Ractor__Error_s, bmt_Ractor__Error_sf, 0, bmt_Ractor__Error_a, bmt_Ractor__Error_af, 9, NULL, 0, NULL, 0 },
+  { "Ractor::IsolationError", 0, 8191, bmt_Ractor__IsolationError_i, bmt_Ractor__IsolationError_if, 0, bmt_Ractor__IsolationError_s, bmt_Ractor__IsolationError_sf, 0, bmt_Ractor__IsolationError_a, bmt_Ractor__IsolationError_af, 10, NULL, 0, NULL, 0 },
+  { "Ractor::MovedError", 0, 8191, bmt_Ractor__MovedError_i, bmt_Ractor__MovedError_if, 0, bmt_Ractor__MovedError_s, bmt_Ractor__MovedError_sf, 0, bmt_Ractor__MovedError_a, bmt_Ractor__MovedError_af, 10, NULL, 0, NULL, 0 },
+  { "Ractor::MovedObject", 0, 8191, bmt_Ractor__MovedObject_i, bmt_Ractor__MovedObject_if, 9, bmt_Ractor__MovedObject_s, bmt_Ractor__MovedObject_sf, 0, bmt_Ractor__MovedObject_a, bmt_Ractor__MovedObject_af, 2, NULL, 0, NULL, 0 },
+  { "Ractor::Port", 0, 8191, bmt_Ractor__Port_i, bmt_Ractor__Port_if, 8, bmt_Ractor__Port_s, bmt_Ractor__Port_sf, 0, bmt_Ractor__Port_a, bmt_Ractor__Port_af, 6, NULL, 0, NULL, 0 },
+  { "Ractor::RemoteError", 0, 8191, bmt_Ractor__RemoteError_i, bmt_Ractor__RemoteError_if, 1, bmt_Ractor__RemoteError_s, bmt_Ractor__RemoteError_sf, 0, bmt_Ractor__RemoteError_a, bmt_Ractor__RemoteError_af, 10, NULL, 0, NULL, 0 },
+  { "Ractor::UnsafeError", 0, 8191, bmt_Ractor__UnsafeError_i, bmt_Ractor__UnsafeError_if, 0, bmt_Ractor__UnsafeError_s, bmt_Ractor__UnsafeError_sf, 0, bmt_Ractor__UnsafeError_a, bmt_Ractor__UnsafeError_af, 10, NULL, 0, NULL, 0 },
+  { "Random", 0, 8191, bmt_Random_i, bmt_Random_if, 6, bmt_Random_s, bmt_Random_sf, 8, bmt_Random_a, bmt_Random_af, 8, NULL, 0, NULL, 0 },
+  { "Random::Base", 0, 8191, bmt_Random__Base_i, bmt_Random__Base_if, 4, bmt_Random__Base_s, bmt_Random__Base_sf, 0, bmt_Random__Base_a, bmt_Random__Base_af, 7, NULL, 0, NULL, 0 },
+  { "Random::Formatter", 1, 8191, bmt_Random__Formatter_i, bmt_Random__Formatter_if, 2, bmt_Random__Formatter_s, bmt_Random__Formatter_sf, 0, bmt_Random__Formatter_a, bmt_Random__Formatter_af, 1, NULL, 0, NULL, 0 },
+  { "Range", 0, 8191, bmt_Range_i, bmt_Range_if, 30, bmt_Range_s, bmt_Range_sf, 0, bmt_Range_a, bmt_Range_af, 7, NULL, 0, NULL, 0 },
+  { "RangeError", 0, 8191, bmt_RangeError_i, bmt_RangeError_if, 0, bmt_RangeError_s, bmt_RangeError_sf, 0, bmt_RangeError_a, bmt_RangeError_af, 8, NULL, 0, NULL, 0 },
+  { "Rational", 0, 8191, bmt_Rational_i, bmt_Rational_if, 29, bmt_Rational_s, bmt_Rational_sf, 1, bmt_Rational_a, bmt_Rational_af, 8, NULL, 0, bmt_Rational_su, 2 },
+  { "RbConfig", 1, 8191, bmt_RbConfig_i, bmt_RbConfig_if, 0, bmt_RbConfig_s, bmt_RbConfig_sf, 3, bmt_RbConfig_a, bmt_RbConfig_af, 1, NULL, 0, NULL, 0 },
+  { "Refinement", 0, 8191, bmt_Refinement_i, bmt_Refinement_if, 2, bmt_Refinement_s, bmt_Refinement_sf, 0, bmt_Refinement_a, bmt_Refinement_af, 7, bmt_Refinement_u, 3, NULL, 0 },
+  { "Regexp", 0, 8191, bmt_Regexp_i, bmt_Regexp_if, 20, bmt_Regexp_s, bmt_Regexp_sf, 9, bmt_Regexp_a, bmt_Regexp_af, 6, NULL, 0, NULL, 0 },
+  { "Regexp::TimeoutError", 0, 8191, bmt_Regexp__TimeoutError_i, bmt_Regexp__TimeoutError_if, 0, bmt_Regexp__TimeoutError_s, bmt_Regexp__TimeoutError_sf, 0, bmt_Regexp__TimeoutError_a, bmt_Regexp__TimeoutError_af, 9, NULL, 0, NULL, 0 },
+  { "RegexpError", 0, 8191, bmt_RegexpError_i, bmt_RegexpError_if, 0, bmt_RegexpError_s, bmt_RegexpError_sf, 0, bmt_RegexpError_a, bmt_RegexpError_af, 8, NULL, 0, NULL, 0 },
+  { "Ruby", 1, 8191, bmt_Ruby_i, bmt_Ruby_if, 0, bmt_Ruby_s, bmt_Ruby_sf, 0, bmt_Ruby_a, bmt_Ruby_af, 1, NULL, 0, NULL, 0 },
+  { "Ruby::Box", 0, 8191, bmt_Ruby__Box_i, bmt_Ruby__Box_if, 7, bmt_Ruby__Box_s, bmt_Ruby__Box_sf, 2, bmt_Ruby__Box_a, bmt_Ruby__Box_af, 7, NULL, 0, NULL, 0 },
+  { "Ruby::Box::Entry", 0, 8191, bmt_Ruby__Box__Entry_i, bmt_Ruby__Box__Entry_if, 0, bmt_Ruby__Box__Entry_s, bmt_Ruby__Box__Entry_sf, 0, bmt_Ruby__Box__Entry_a, bmt_Ruby__Box__Entry_af, 6, NULL, 0, NULL, 0 },
+  { "Ruby::Box::Loader", 1, 8191, bmt_Ruby__Box__Loader_i, bmt_Ruby__Box__Loader_if, 3, bmt_Ruby__Box__Loader_s, bmt_Ruby__Box__Loader_sf, 3, bmt_Ruby__Box__Loader_a, bmt_Ruby__Box__Loader_af, 1, NULL, 0, NULL, 0 },
+  { "RubyVM", 0, 8191, bmt_RubyVM_i, bmt_RubyVM_if, 0, bmt_RubyVM_s, bmt_RubyVM_sf, 3, bmt_RubyVM_a, bmt_RubyVM_af, 6, NULL, 0, bmt_RubyVM_su, 1 },
+  { "RubyVM::AbstractSyntaxTree", 1, 8191, bmt_RubyVM__AbstractSyntaxTree_i, bmt_RubyVM__AbstractSyntaxTree_if, 0, bmt_RubyVM__AbstractSyntaxTree_s, bmt_RubyVM__AbstractSyntaxTree_sf, 4, bmt_RubyVM__AbstractSyntaxTree_a, bmt_RubyVM__AbstractSyntaxTree_af, 1, NULL, 0, NULL, 0 },
+  { "RubyVM::AbstractSyntaxTree::Location", 0, 8191, bmt_RubyVM__AbstractSyntaxTree__Location_i, bmt_RubyVM__AbstractSyntaxTree__Location_if, 5, bmt_RubyVM__AbstractSyntaxTree__Location_s, bmt_RubyVM__AbstractSyntaxTree__Location_sf, 0, bmt_RubyVM__AbstractSyntaxTree__Location_a, bmt_RubyVM__AbstractSyntaxTree__Location_af, 6, NULL, 0, NULL, 0 },
+  { "RubyVM::AbstractSyntaxTree::Node", 0, 8191, bmt_RubyVM__AbstractSyntaxTree__Node_i, bmt_RubyVM__AbstractSyntaxTree__Node_if, 13, bmt_RubyVM__AbstractSyntaxTree__Node_s, bmt_RubyVM__AbstractSyntaxTree__Node_sf, 0, bmt_RubyVM__AbstractSyntaxTree__Node_a, bmt_RubyVM__AbstractSyntaxTree__Node_af, 6, NULL, 0, NULL, 0 },
+  { "RubyVM::InstructionSequence", 0, 8191, bmt_RubyVM__InstructionSequence_i, bmt_RubyVM__InstructionSequence_if, 14, bmt_RubyVM__InstructionSequence_s, bmt_RubyVM__InstructionSequence_sf, 13, bmt_RubyVM__InstructionSequence_a, bmt_RubyVM__InstructionSequence_af, 6, NULL, 0, NULL, 0 },
+  { "RubyVM::YJIT", 1, 8191, bmt_RubyVM__YJIT_i, bmt_RubyVM__YJIT_if, 0, bmt_RubyVM__YJIT_s, bmt_RubyVM__YJIT_sf, 26, bmt_RubyVM__YJIT_a, bmt_RubyVM__YJIT_af, 1, NULL, 0, NULL, 0 },
+  { "RuntimeError", 0, 8191, bmt_RuntimeError_i, bmt_RuntimeError_if, 0, bmt_RuntimeError_s, bmt_RuntimeError_sf, 0, bmt_RuntimeError_a, bmt_RuntimeError_af, 8, NULL, 0, NULL, 0 },
+  { "ScriptError", 0, 8191, bmt_ScriptError_i, bmt_ScriptError_if, 0, bmt_ScriptError_s, bmt_ScriptError_sf, 0, bmt_ScriptError_a, bmt_ScriptError_af, 7, NULL, 0, NULL, 0 },
+  { "SecurityError", 0, 8191, bmt_SecurityError_i, bmt_SecurityError_if, 0, bmt_SecurityError_s, bmt_SecurityError_sf, 0, bmt_SecurityError_a, bmt_SecurityError_af, 7, NULL, 0, NULL, 0 },
+  { "Set", 0, 8191, bmt_Set_i, bmt_Set_if, 59, bmt_Set_s, bmt_Set_sf, 2, bmt_Set_a, bmt_Set_af, 7, NULL, 0, NULL, 0 },
+  { "Set::CoreSet", 0, 8191, bmt_Set__CoreSet_i, bmt_Set__CoreSet_if, 0, bmt_Set__CoreSet_s, bmt_Set__CoreSet_sf, 0, bmt_Set__CoreSet_a, bmt_Set__CoreSet_af, 8, NULL, 0, NULL, 0 },
+  { "Signal", 1, 8191, bmt_Signal_i, bmt_Signal_if, 3, bmt_Signal_s, bmt_Signal_sf, 3, bmt_Signal_a, bmt_Signal_af, 1, NULL, 0, NULL, 0 },
+  { "SignalException", 0, 8191, bmt_SignalException_i, bmt_SignalException_if, 3, bmt_SignalException_s, bmt_SignalException_sf, 0, bmt_SignalException_a, bmt_SignalException_af, 7, NULL, 0, NULL, 0 },
+  { "SizedQueue", 0, 8191, bmt_Thread__SizedQueue_i, bmt_Thread__SizedQueue_if, 12, bmt_Thread__SizedQueue_s, bmt_Thread__SizedQueue_sf, 0, bmt_Thread__SizedQueue_a, bmt_Thread__SizedQueue_af, 7, NULL, 0, NULL, 0 },
+  { "Socket", 0, 512, bmt_Socket_i, bmt_Socket_if, 14, bmt_Socket_s, bmt_Socket_sf, 40, bmt_Socket_a, bmt_Socket_af, 11, NULL, 0, NULL, 0 },
+  { "Socket::AncillaryData", 0, 512, bmt_Socket__AncillaryData_i, bmt_Socket__AncillaryData_if, 14, bmt_Socket__AncillaryData_s, bmt_Socket__AncillaryData_sf, 4, bmt_Socket__AncillaryData_a, bmt_Socket__AncillaryData_af, 6, NULL, 0, NULL, 0 },
+  { "Socket::Constants", 1, 512, bmt_Socket__Constants_i, bmt_Socket__Constants_if, 0, bmt_Socket__Constants_s, bmt_Socket__Constants_sf, 0, bmt_Socket__Constants_a, bmt_Socket__Constants_af, 1, NULL, 0, NULL, 0 },
+  { "Socket::Ifaddr", 0, 512, bmt_Socket__Ifaddr_i, bmt_Socket__Ifaddr_if, 8, bmt_Socket__Ifaddr_s, bmt_Socket__Ifaddr_sf, 0, bmt_Socket__Ifaddr_a, bmt_Socket__Ifaddr_af, 6, NULL, 0, NULL, 0 },
+  { "Socket::Option", 0, 512, bmt_Socket__Option_i, bmt_Socket__Option_if, 14, bmt_Socket__Option_s, bmt_Socket__Option_sf, 6, bmt_Socket__Option_a, bmt_Socket__Option_af, 6, NULL, 0, NULL, 0 },
+  { "Socket::ResolutionError", 0, 512, bmt_Socket__ResolutionError_i, bmt_Socket__ResolutionError_if, 1, bmt_Socket__ResolutionError_s, bmt_Socket__ResolutionError_sf, 0, bmt_Socket__ResolutionError_a, bmt_Socket__ResolutionError_af, 9, NULL, 0, NULL, 0 },
+  { "Socket::UDPSource", 0, 512, bmt_Socket__UDPSource_i, bmt_Socket__UDPSource_if, 5, bmt_Socket__UDPSource_s, bmt_Socket__UDPSource_sf, 0, bmt_Socket__UDPSource_a, bmt_Socket__UDPSource_af, 6, NULL, 0, NULL, 0 },
+  { "SocketError", 0, 512, bmt_SocketError_i, bmt_SocketError_if, 0, bmt_SocketError_s, bmt_SocketError_sf, 0, bmt_SocketError_a, bmt_SocketError_af, 8, NULL, 0, NULL, 0 },
+  { "StandardError", 0, 8191, bmt_StandardError_i, bmt_StandardError_if, 0, bmt_StandardError_s, bmt_StandardError_sf, 0, bmt_StandardError_a, bmt_StandardError_af, 7, NULL, 0, NULL, 0 },
+  { "StopIteration", 0, 8191, bmt_StopIteration_i, bmt_StopIteration_if, 1, bmt_StopIteration_s, bmt_StopIteration_sf, 0, bmt_StopIteration_a, bmt_StopIteration_af, 9, NULL, 0, NULL, 0 },
+  { "String", 0, 8191, bmt_String_i, bmt_String_if, 136, bmt_String_s, bmt_String_sf, 2, bmt_String_a, bmt_String_af, 8, NULL, 0, NULL, 0 },
+  { "StringIO", 0, 32, bmt_StringIO_i, bmt_StringIO_if, 52, bmt_StringIO_s, bmt_StringIO_sf, 2, bmt_StringIO_a, bmt_StringIO_af, 9, NULL, 0, NULL, 0 },
+  { "StringScanner", 0, 64, bmt_StringScanner_i, bmt_StringScanner_if, 50, bmt_StringScanner_s, bmt_StringScanner_sf, 1, bmt_StringScanner_a, bmt_StringScanner_af, 6, NULL, 0, NULL, 0 },
+  { "StringScanner::Error", 0, 64, bmt_StringScanner__Error_i, bmt_StringScanner__Error_if, 0, bmt_StringScanner__Error_s, bmt_StringScanner__Error_sf, 0, bmt_StringScanner__Error_a, bmt_StringScanner__Error_af, 8, NULL, 0, NULL, 0 },
+  { "Struct", 0, 8191, bmt_Struct_i, bmt_Struct_if, 23, bmt_Struct_s, bmt_Struct_sf, 1, bmt_Struct_a, bmt_Struct_af, 7, NULL, 0, NULL, 0 },
+  { "Symbol", 0, 8191, bmt_Symbol_i, bmt_Symbol_if, 29, bmt_Symbol_s, bmt_Symbol_sf, 1, bmt_Symbol_a, bmt_Symbol_af, 7, NULL, 0, bmt_Symbol_su, 1 },
+  { "SyntaxError", 0, 8191, bmt_SyntaxError_i, bmt_SyntaxError_if, 2, bmt_SyntaxError_s, bmt_SyntaxError_sf, 0, bmt_SyntaxError_a, bmt_SyntaxError_af, 8, NULL, 0, NULL, 0 },
+  { "SyntaxSuggest", 1, 8191, bmt_SyntaxSuggest_i, bmt_SyntaxSuggest_if, 0, bmt_SyntaxSuggest_s, bmt_SyntaxSuggest_sf, 1, bmt_SyntaxSuggest_a, bmt_SyntaxSuggest_af, 1, NULL, 0, NULL, 0 },
+  { "SystemCallError", 0, 8191, bmt_SystemCallError_i, bmt_SystemCallError_if, 2, bmt_SystemCallError_s, bmt_SystemCallError_sf, 1, bmt_SystemCallError_a, bmt_SystemCallError_af, 8, NULL, 0, NULL, 0 },
+  { "SystemExit", 0, 8191, bmt_SystemExit_i, bmt_SystemExit_if, 3, bmt_SystemExit_s, bmt_SystemExit_sf, 0, bmt_SystemExit_a, bmt_SystemExit_af, 7, NULL, 0, NULL, 0 },
+  { "SystemStackError", 0, 8191, bmt_SystemStackError_i, bmt_SystemStackError_if, 0, bmt_SystemStackError_s, bmt_SystemStackError_sf, 0, bmt_SystemStackError_a, bmt_SystemStackError_af, 7, NULL, 0, NULL, 0 },
+  { "TCPServer", 0, 512, bmt_TCPServer_i, bmt_TCPServer_if, 6, bmt_TCPServer_s, bmt_TCPServer_sf, 0, bmt_TCPServer_a, bmt_TCPServer_af, 13, NULL, 0, NULL, 0 },
+  { "TCPSocket", 0, 512, bmt_TCPSocket_i, bmt_TCPSocket_if, 1, bmt_TCPSocket_s, bmt_TCPSocket_sf, 1, bmt_TCPSocket_a, bmt_TCPSocket_af, 12, NULL, 0, NULL, 0 },
+  { "Thread", 0, 8191, bmt_Thread_i, bmt_Thread_if, 38, bmt_Thread_s, bmt_Thread_sf, 19, bmt_Thread_a, bmt_Thread_af, 6, NULL, 0, NULL, 0 },
+  { "Thread::Backtrace", 0, 8191, bmt_Thread__Backtrace_i, bmt_Thread__Backtrace_if, 0, bmt_Thread__Backtrace_s, bmt_Thread__Backtrace_sf, 1, bmt_Thread__Backtrace_a, bmt_Thread__Backtrace_af, 6, NULL, 0, bmt_Thread__Backtrace_su, 1 },
+  { "Thread::Backtrace::Location", 0, 8191, bmt_Thread__Backtrace__Location_i, bmt_Thread__Backtrace__Location_if, 7, bmt_Thread__Backtrace__Location_s, bmt_Thread__Backtrace__Location_sf, 0, bmt_Thread__Backtrace__Location_a, bmt_Thread__Backtrace__Location_af, 6, NULL, 0, bmt_Thread__Backtrace__Location_su, 1 },
+  { "Thread::ConditionVariable", 0, 8191, bmt_Thread__ConditionVariable_i, bmt_Thread__ConditionVariable_if, 5, bmt_Thread__ConditionVariable_s, bmt_Thread__ConditionVariable_sf, 0, bmt_Thread__ConditionVariable_a, bmt_Thread__ConditionVariable_af, 6, bmt_Thread__ConditionVariable_u, 1, NULL, 0 },
+  { "Thread::Mutex", 0, 8191, bmt_Thread__Mutex_i, bmt_Thread__Mutex_if, 8, bmt_Thread__Mutex_s, bmt_Thread__Mutex_sf, 0, bmt_Thread__Mutex_a, bmt_Thread__Mutex_af, 6, NULL, 0, NULL, 0 },
+  { "Thread::Queue", 0, 8191, bmt_Thread__Queue_i, bmt_Thread__Queue_if, 16, bmt_Thread__Queue_s, bmt_Thread__Queue_sf, 0, bmt_Thread__Queue_a, bmt_Thread__Queue_af, 6, bmt_Thread__Queue_u, 1, NULL, 0 },
+  { "Thread::SizedQueue", 0, 8191, bmt_Thread__SizedQueue_i, bmt_Thread__SizedQueue_if, 12, bmt_Thread__SizedQueue_s, bmt_Thread__SizedQueue_sf, 0, bmt_Thread__SizedQueue_a, bmt_Thread__SizedQueue_af, 7, NULL, 0, NULL, 0 },
+  { "ThreadError", 0, 8191, bmt_ThreadError_i, bmt_ThreadError_if, 0, bmt_ThreadError_s, bmt_ThreadError_sf, 0, bmt_ThreadError_a, bmt_ThreadError_af, 8, NULL, 0, NULL, 0 },
+  { "ThreadGroup", 0, 8191, bmt_ThreadGroup_i, bmt_ThreadGroup_if, 4, bmt_ThreadGroup_s, bmt_ThreadGroup_sf, 0, bmt_ThreadGroup_a, bmt_ThreadGroup_af, 6, NULL, 0, NULL, 0 },
+  { "Time", 0, 8191, bmt_Time_i, bmt_Time_if, 67, bmt_Time_s, bmt_Time_sf, 22, bmt_Time_a, bmt_Time_af, 7, NULL, 0, NULL, 0 },
+  { "TracePoint", 0, 8191, bmt_TracePoint_i, bmt_TracePoint_if, 17, bmt_TracePoint_s, bmt_TracePoint_sf, 4, bmt_TracePoint_a, bmt_TracePoint_af, 6, NULL, 0, NULL, 0 },
+  { "TrueClass", 0, 8191, bmt_TrueClass_i, bmt_TrueClass_if, 6, bmt_TrueClass_s, bmt_TrueClass_sf, 0, bmt_TrueClass_a, bmt_TrueClass_af, 7, NULL, 0, bmt_TrueClass_su, 1 },
+  { "TypeError", 0, 8191, bmt_TypeError_i, bmt_TypeError_if, 0, bmt_TypeError_s, bmt_TypeError_sf, 0, bmt_TypeError_a, bmt_TypeError_af, 9, NULL, 0, NULL, 0 },
+  { "UDPSocket", 0, 512, bmt_UDPSocket_i, bmt_UDPSocket_if, 6, bmt_UDPSocket_s, bmt_UDPSocket_sf, 0, bmt_UDPSocket_a, bmt_UDPSocket_af, 12, NULL, 0, NULL, 0 },
+  { "UNIXServer", 0, 512, bmt_UNIXServer_i, bmt_UNIXServer_if, 6, bmt_UNIXServer_s, bmt_UNIXServer_sf, 0, bmt_UNIXServer_a, bmt_UNIXServer_af, 12, NULL, 0, NULL, 0 },
+  { "UNIXSocket", 0, 512, bmt_UNIXSocket_i, bmt_UNIXSocket_if, 7, bmt_UNIXSocket_s, bmt_UNIXSocket_sf, 2, bmt_UNIXSocket_a, bmt_UNIXSocket_af, 11, NULL, 0, NULL, 0 },
+  { "UnboundMethod", 0, 8191, bmt_UnboundMethod_i, bmt_UnboundMethod_if, 16, bmt_UnboundMethod_s, bmt_UnboundMethod_sf, 0, bmt_UnboundMethod_a, bmt_UnboundMethod_af, 6, NULL, 0, bmt_UnboundMethod_su, 1 },
+  { "UncaughtThrowError", 0, 8191, bmt_UncaughtThrowError_i, bmt_UncaughtThrowError_if, 4, bmt_UncaughtThrowError_s, bmt_UncaughtThrowError_sf, 0, bmt_UncaughtThrowError_a, bmt_UncaughtThrowError_af, 10, NULL, 0, NULL, 0 },
+  { "UnicodeNormalize", 1, 8191, bmt_UnicodeNormalize_i, bmt_UnicodeNormalize_if, 0, bmt_UnicodeNormalize_s, bmt_UnicodeNormalize_sf, 0, bmt_UnicodeNormalize_a, bmt_UnicodeNormalize_af, 1, NULL, 0, NULL, 0 },
+  { "Warning", 1, 8191, bmt_Warning_i, bmt_Warning_if, 1, bmt_Warning_s, bmt_Warning_sf, 3, bmt_Warning_a, bmt_Warning_af, 1, NULL, 0, NULL, 0 },
+  { "ZeroDivisionError", 0, 8191, bmt_ZeroDivisionError_i, bmt_ZeroDivisionError_if, 0, bmt_ZeroDivisionError_s, bmt_ZeroDivisionError_sf, 0, bmt_ZeroDivisionError_a, bmt_ZeroDivisionError_af, 8, NULL, 0, NULL, 0 },
 };

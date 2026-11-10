@@ -4638,7 +4638,7 @@ static int const_class_slot_held(Compiler *c, int id, int r) {
   const char *nm = nt_str(nt, id, "name");
   return nm && (str_changing_name(nm) || is_freeze_name(nm)) && const_recv_held(c, r) >= 0 &&
          const_path_on_class_value(c, r, repr_of(c, nt_ref(nt, r, "parent")).as_ty) &&
-         repr_of(c, r).kind == RK_STRBUF && !sb_shadowed_reader(r);
+         repr_of(c, r).kind == RK_STRBUF && !sb_shadowed_reader(c, r);
 }
 /* A call on a flagged constant read through a receiver that runs (`pick::BUF
    << "y"`): the receiver and the flag test run once, into a pointer to the

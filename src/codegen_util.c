@@ -3633,17 +3633,6 @@ int emit_poly_rhs_coerced(Compiler *c, TyKind slot, int v, Buf *b) {
   return 1;
 }
 
-static int strbuf_box_ref_as(Compiler *c, int recv, const char *fmt, Buf *b) {
-  Buf sref; memset(&sref, 0, sizeof sref);
-  int svm = view_push_repr(c, recv, VR_STRBUF_BOX, 1);
-  int is_sb = strbuf_slot_text(c, recv, &sref);
-  view_pop(c, svm);
-  if (!is_sb) return 0;
-  buf_printf(b, fmt, sref.p);
-  free(sref.p);
-  return 1;
-}
-
 /* Emit a shared-mutable string receiver for an operation that only READS its
    bytes: the live buffer, as an ordinary value read gives. Answers 0 when
    the receiver is not such a slot, so the caller falls back to emit_expr. A narrowed box is not a handle slot: its ordinary
@@ -3654,107 +3643,14 @@ static int strbuf_box_ref_as(Compiler *c, int recv, const char *fmt, Buf *b) {
 int emit_strbuf_read_ref(Compiler *c, int recv, Buf *b) {
   /* (one representation: the slot's text may be bound to a temp of either
      face; SP_STR_B reads both and keeps NULL) */
-  return strbuf_box_ref_as(c, recv, "SP_STR_B(%s)", b);
-}
-/* The object_id of handle `h`, a String that can be nil: the handle is
-   used twice, tested for nil and asked its identity, so it is evaluated
-   once (SF_EVAL_ONCE); nil answers `nil_id`. Without --share-strings the
-   id is the handle's address, as master's shared slot (#3227) has it. */
-static void strbuf_nilable_id(Compiler *c, const char *h, const char *nil_id, Buf *b) {
-  StrForm sf;
-  str_form_of_text(&sf, h ? h : "", TY_STRBUF, SF_EVAL_ONCE);
-  str_form_settle(c, &sf, b);
-  buf_printf(b, "_t%d ? (sp_int)(uintptr_t)sp_String_identity(_t%d) : %s", sf.tmp, sf.tmp, nil_id);
-  str_form_close(&sf, b);
-  str_form_free(&sf);
-}
-/* The object_id of a String held as a shared sp_String: the handle's address,
-   which is what a box of it carries. 0 when `recv` is not one.
-   A frozen literal's handle keeps the identity of its static bytes. */
-int strbuf_object_ref(Compiler *c, int recv, Buf *b) {
-  /* An exception's message is asked its own identity, whether or not the
-     program overrides the text (exc_message_identity_operand). */
-  if (exc_message_identity_operand(c, recv)) {
-    buf_puts(b, "((sp_int)(uintptr_t)sp_poly_identity_ptr(");
-    emit_exc_message_idbox(c, recv, b);
-    buf_puts(b, "))");
-    return 1;
-  }
-  /* an element a String Array of handles reads or removes is that handle,
-     nil the nil's id (strh_elem_handle_text) */
-  if (strh_handle_call(c, recv)) {
-    Buf hb; memset(&hb, 0, sizeof hb);
-    strh_elem_handle_text(c, recv, &hb);
-    strbuf_nilable_id(c, hb.p, "SP_NIL_OBJECT_ID", b);
-    free(hb.p);
-    return 1;
-  }
-  /* --share-strings: a String Range's begin / end is the String it holds,
-     a kept endpoint's handle included (sp_srange_end_id, #8321); its min /
-     max the endpoint, or a new String (sp_srange_extreme_id) */
-  int se = strbuf_route_srange_end(c, recv), sx = se ? 0 : strbuf_route_srange_extreme(c, recv);
-  if (se || sx) {
-    int t = ++g_tmp;
-    buf_printf(b, "({ sp_StrRange _t%d = ", t);
-    if (se) emit_srange_end_recv(c, recv, b);
-    else emit_expr(c, nt_ref(c->nt, nt_paren_single(c->nt, recv), "receiver"), b);
-    if (se) buf_printf(b, "; const void *_i%d = sp_srange_end_id(_t%d, %d);", t, t, se == 2);
-    else buf_printf(b, "; const void *_i%d = sp_srange_extreme_id(_t%d, %d, sp_srange_extreme_h(_t%d, %d));", t, t, sx == 2, t, sx == 2);
-    buf_printf(b, " _i%d ? (sp_int)(uintptr_t)_i%d : SP_NIL_OBJECT_ID; })", t, t);
-    return 1;
-  }
-  /* an attribute assignment on a handle, freeze or a chain over one: that
-     handle's; a String clamp: its chosen operand's */
-  int cops[3];
-  if (strbuf_assign_route(c, recv) || strbuf_route_clamp(c, recv, cops)) {
-    buf_puts(b, "((sp_int)(uintptr_t)sp_String_identity(");
-    size_t at = b->len;
-    emit_strbuf_route(c, recv, b);
-    /* (the route's text is that handle: the marks of the node's own
-       expressions in it, read as bytes by the check, are no read) */
-    buf_puts(b, "))");
-    return 1;
-  }
-  /* --share-strings: a spliced yield whose block answers a holder's
-     handle (strbuf_route_yield): that handle's */
-  if (recv >= 0 && nt_kind(c->nt, nt_paren_single(c->nt, recv)) == NK_YieldNode &&
-      strbuf_yield_tail_held(c)) {
-    Buf hb; memset(&hb, 0, sizeof hb);
-    if (emit_strbuf_route(c, recv, &hb)) {
-      strbuf_nilable_id(c, hb.p, "SP_NIL_OBJECT_ID", b);
-      free(hb.p);
-      return 1;
-    }
-    free(hb.p);
-  }
-  /* A receiver-returning route has the same identity as its slot. */
-  Buf ref; memset(&ref, 0, sizeof ref);
-  int up = 0;
-  int route = strbuf_self_route_slot(c, recv, &up, &ref);
-  if (route && !up) {
-    if (repr_of(c, route - 1).may_nil)
-      strbuf_nilable_id(c, ref.p, repr_of(c, recv).may_nil ? "SP_NIL_OBJECT_ID" : "(sp_int)(uintptr_t)sp_str_frozen_empty", b);
-    else buf_printf(b, "((sp_int)(uintptr_t)sp_String_identity(%s))", ref.p);
-    free(ref.p);
-    return 1;
-  }
-  free(ref.p);
-  if (repr_of(c, recv).may_nil) {
-    Buf rb; memset(&rb, 0, sizeof rb);
-    if (!strbuf_box_ref_as(c, recv, "%s", &rb)) return 0;
-    strbuf_nilable_id(c, rb.p, "SP_NIL_OBJECT_ID", b);
-    free(rb.p);
-    return 1;
-  }
-  /* The box's payload is already its identity, with or without a handle.
-     A frozen literal's handle resolves to the same identity as its bytes. */
-  if (recv >= 0 && repr_of(c, recv).strbuf_src == RS_SLOT_POLY) {
-    buf_puts(b, "((sp_int)(uintptr_t)sp_poly_identity_ptr(");
-    emit_local_ref(c, recv, nt_str(c->nt, recv, "name"), b);
-    buf_puts(b, "))");
-    return 1;
-  }
-  return strbuf_box_ref_as(c, recv, "((sp_int)(uintptr_t)sp_String_identity(%s))", b);
+  Buf sref; memset(&sref, 0, sizeof sref);
+  int svm = view_push_repr(c, recv, VR_STRBUF_BOX, 1);
+  int is_sb = strbuf_slot_text(c, recv, &sref);
+  view_pop(c, svm);
+  if (!is_sb) return 0;
+  buf_printf(b, "SP_STR_B(%s)", sref.p);
+  free(sref.p);
+  return 1;
 }
 /* `cont[k]` where the container hands its elements out BOXED (a poly array, a
    hash): the read is an sp_RbVal, so a shared-handle destination has to unbox

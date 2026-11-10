@@ -3183,13 +3183,6 @@ static inline const char *sp_srange_first(sp_StrRange r) {
 static inline const char *sp_srange_last(sp_StrRange r) {
   return r.hl ? sp_strbuf_read((sp_String *)r.hl) : r.last;
 }
-/* ...and the identity of that endpoint, for #equal? and #object_id: the
-   handle's (sp_String_identity) for a kept one, else the String the field
-   holds; NULL for an absent end */
-static inline const void *sp_srange_end_id(sp_StrRange r, int last) {
-  void *h = last ? r.hl : r.hf;
-  return h ? sp_String_identity((sp_String *)h) : (const void *)(last ? r.last : r.first);
-}
 /* ...a Range whose #first (last 0) / #last (1) with no count has that
    endpoint, else CRuby's RangeError for a beginless / endless one */
 static inline sp_StrRange sp_srange_need_end(sp_StrRange r, int last) {
@@ -3231,32 +3224,26 @@ static inline sp_String *sp_srange_extreme_h(sp_StrRange r, int greatest) {
   SP_GC_ROOT_STR(v);
   return sp_String_new_shared(v);
 }
-/* ...and the identity of h, that answer, for #equal? and #object_id: the
-   endpoint's (sp_srange_end_id) where it is one, a new String's own (the
-   caller keeps h while it compares), NULL for nil */
-static inline const void *sp_srange_extreme_id(sp_StrRange r, int greatest, sp_String *h) {
-  if (!h) return NULL;
-  if (!greatest || !r.excl) return sp_srange_end_id(r, greatest);
-  return sp_String_identity(h);
-}
 static inline sp_bool sp_poly_is_strbuf(sp_RbVal v) {
   return v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_STRBUF;
 }
-/* A literal's byte and handle faces name the same static object. */
+/* A literal's byte and handle faces name the same static object. A String
+   that owns its bytes (marker 0xfd, whose header names the handle,
+   sp_str_fd_owner) is the handle whether it is frozen or not, so an id taken
+   before `freeze` is the one after it. A frozen handle over bytes it does not
+   own (a literal's, a heap String's) answers those bytes. */
 static inline sp_RbVal sp_poly_literal_identity(sp_RbVal v) {
   if (sp_poly_is_strbuf(v) && v.v.p) {
     sp_String *h = (sp_String *)v.v.p;
     if (sp_String_literal_slot(h->data)) return sp_box_str(h->data);
-    /* and so do a frozen handle's: its payload is its read face
-       (sp_strbuf_read) */
-    if (sp_String_is_frozen(h)) return sp_box_str(h->data);
+    /* (a frozen handle's payload is its read face, sp_strbuf_read) */
+    if (sp_String_is_frozen(h) && sp_str_fd_owner(h->data) != h) return sp_box_str(h->data);
   }
-  /* A live handle's own bytes (marker 0xfd, whose header names the owning
-     handle, sp_fd_own) read as a plain String are that handle's object: a
+  /* A handle's own bytes read as a plain String are that handle's object: a
      box of them is the box of the handle */
-  if (v.tag == SP_TAG_STR && v.v.s && ((const unsigned char *)v.v.s)[-1] == 0xfd) {
-    sp_String *h = (sp_String *)(void *)(((const sp_str_hdr *)(v.v.s - 1)) - 1)->next;
-    if (h && h->data == v.v.s && !sp_String_is_frozen(h)) return sp_box_obj(h, SP_BUILTIN_STRBUF);
+  if (v.tag == SP_TAG_STR) {
+    sp_String *h = sp_str_fd_owner(v.v.s);
+    if (h && h->data == v.v.s) return sp_box_obj(h, SP_BUILTIN_STRBUF);
   }
   return v;
 }

@@ -11209,27 +11209,84 @@ static const char *bool_value_class(const NodeTable *nt, int n) {
       else o.method(:sym) end)                # builtin_only
 
    1 when it split. Another receiver is left as it was. */
-static int bam_split_user_method(Compiler *c, int id, int recv, const char *sym) {
-  NodeTable *nt = (NodeTable *)c->nt;
+/* (is class k's `method` the program's own?) */
+static int bsu_own_method(Compiler *c, int k) {
+  if (k < 0 || k >= c->nclasses || !c->classes[k].name) return 0;
+  int mi = comp_method_in_chain(c, k, "method", NULL);
+  return mi >= 0 && mi < c->nscopes && c->scopes[mi].def_node >= 0 &&
+         !nt_int(c->nt, c->scopes[mi].def_node, "node_bi", 0);
+}
+/* (is call id one bam_split_user_method asks the receiver's classes of?) */
+static int bsu_site(Compiler *c, int id, int recv) {
+  const NodeTable *nt = c->nt;
   if (nt_int(nt, id, "builtin_only", 0) || nt_int(nt, id, "user_method_call", 0)) return 0;
   NodeKind rk = nt_kind(nt, recv);
   if (rk != NK_LocalVariableReadNode && rk != NK_SelfNode) return 0;
   if (infer_type(c, recv) != TY_POLY) return 0;
   int args = nt_ref(nt, id, "arguments"), an = 0;
+  nt_arr(nt, args, "arguments", &an);
+  return an == 1 && nt_ref(nt, id, "block") < 0;
+}
+/* The receiver classes bam_split_user_method reads, answered for its sites
+   before desugar_builtin_method_obj changes the tree: each wrapper or split
+   the run makes is an edit, after which the next poly_recv_classes rebuilt
+   the class-value walk's indexes over the whole program (pivs_ix_ready),
+   once per Method -- an hour of each fixpoint round in a Rails program,
+   where a runtime-name send makes a Method per name the program defines.
+   Keyed by node: at[id] is 0 for a site not answered here (a node made
+   later in the run, asked then), -1 for no bound (every class), else the
+   offset + 1 of its count and classes in cls. `none`: no class has a
+   `method` of its own, so nothing splits. */
+static struct { int nodes, none, n, cap; int *at, *cls; } bsu_tab = { -1, 0, 0, 0, NULL, NULL };
+static void bsu_tab_free(void) {
+  free(bsu_tab.at); free(bsu_tab.cls);
+  memset(&bsu_tab, 0, sizeof bsu_tab);
+  bsu_tab.nodes = -1;
+}
+static void bsu_tab_build(Compiler *c) {
+  const NodeTable *nt = c->nt;
+  int nn = nt->count;
+  bsu_tab.nodes = nn;
+  bsu_tab.none = 1;
+  for (int k = 0; k < c->nclasses && bsu_tab.none; k++) if (bsu_own_method(c, k)) bsu_tab.none = 0;
+  if (bsu_tab.none) return;
+  bsu_tab.at = calloc((size_t)(nn > 0 ? nn : 1), sizeof(int));
+  if (!bsu_tab.at) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  NT_FOREACH_KIND(nt, NK_CallNode, id) {
+    const char *nm = nt_str(nt, id, "name");
+    int recv = nt_ref(nt, id, "receiver");
+    if (!nm || !sp_streq(nm, "method") || recv < 0 || !bsu_site(c, id, recv)) continue;
+    int nk = 0;
+    const int *ks = poly_recv_classes(c, id, &nk);
+    if (!ks) { bsu_tab.at[id] = -1; continue; }
+    if (bsu_tab.n + nk + 1 > bsu_tab.cap) {
+      while (bsu_tab.n + nk + 1 > bsu_tab.cap) bsu_tab.cap = bsu_tab.cap ? bsu_tab.cap * 2 : 1024;
+      bsu_tab.cls = realloc(bsu_tab.cls, sizeof(int) * (size_t)bsu_tab.cap);
+      if (!bsu_tab.cls) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    }
+    bsu_tab.at[id] = bsu_tab.n + 1;
+    bsu_tab.cls[bsu_tab.n++] = nk;
+    memcpy(bsu_tab.cls + bsu_tab.n, ks, sizeof(int) * (size_t)nk);
+    bsu_tab.n += nk;
+  }
+}
+static int bam_split_user_method(Compiler *c, int id, int recv, const char *sym) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  if (!bsu_site(c, id, recv)) return 0;
+  if (bsu_tab.nodes < 0) bsu_tab_build(c);
+  if (bsu_tab.none) return 0;
+  NodeKind rk = nt_kind(nt, recv);
+  int args = nt_ref(nt, id, "arguments"), an = 0;
   const int *av = nt_arr(nt, args, "arguments", &an);
-  if (an != 1 || nt_ref(nt, id, "block") >= 0) return 0;
   int dyn_sym = nt_int(nt, av[0], "dyn_sym", 0);
-  int nk = 0;
-  const int *ks = poly_recv_classes(c, id, &nk);
+  int nk = 0, at = id < bsu_tab.nodes ? bsu_tab.at[id] : 0;
+  const int *ks = at > 0 ? (nk = bsu_tab.cls[at - 1], bsu_tab.cls + at) : at < 0 ? NULL : poly_recv_classes(c, id, &nk);
   int n = ks ? nk : c->nclasses, own[64], nown = 0;
   for (int i = 0; i < n && nown < 64; i++) {
     int k = ks ? ks[i] : i;
     /* (instantiated is not known yet while the types settle: a class the
        value cannot be fails its is_a? at run time) */
-    if (k < 0 || k >= c->nclasses || !c->classes[k].name) continue;
-    int mi = comp_method_in_chain(c, k, "method", NULL);
-    if (mi < 0 || mi >= c->nscopes || c->scopes[mi].def_node < 0 || nt_int(nt, c->scopes[mi].def_node, "node_bi", 0)) continue;
-    own[nown++] = k;
+    if (bsu_own_method(c, k)) own[nown++] = k;
   }
   if (!nown) return 0;
   int base = nt->count;
@@ -11640,6 +11697,7 @@ static int desugar_builtin_method_obj(Compiler *c) {
     changed = 1;
   }
   bam_tab_free();
+  bsu_tab_free();
   return changed;
 }
 

@@ -13,7 +13,7 @@
                statement of a method that answers it) and its third is 1 when
                the node is in a required file
      TR_TEXT   the node's label, the call's method name or the statement's
-               node type: up to three records after TR_NODE, NUL-padded
+               node type: the records after TR_NODE, the last NUL-padded
      TR_ENTER  v[0],v[1] = the function's offset from the image base
      TR_EXIT   the same
    Offsets, not addresses, so two runs write the same bytes under address
@@ -85,11 +85,11 @@ static TR_HOOK void tr_open(void) {
 }
 
 /* The marker at the top of emit_call_body, emit_stmt and emit_stmt_tail: the
-   functions entered from here until the caller returns emitted this node. The node is
-   read before anything is written, so the accessors' own records do not land
-   inside the marker. With a line asked for, a marker on it turns the
-   recording on: the count starts at 1, the caller's own frame, whose exit
-   brings it back to 0. */
+   functions entered from here until the caller returns emitted this node.
+   The node is read before anything is written, so the accessors' own
+   records do not land inside the marker. With a line asked for, a marker on
+   it turns the recording on: the count starts at 1, the caller's own frame,
+   whose exit brings it back to 0. */
 void emit_trace_node(Compiler *c, int id, int kind) {
   if (!tr_asked) tr_open();
   if (!tr_out) return;
@@ -103,7 +103,7 @@ void emit_trace_node(Compiler *c, int id, int kind) {
     tr_depth = 1;
   }
   tr_put(TR_NODE | (uint32_t)(kind & 0xff) << 8 | required << 16, (uint32_t)id, line, col);
-  for (size_t i = 0; i < len && i < 3 * TR_TEXT_LEN; i += TR_TEXT_LEN) {
+  for (size_t i = 0; i < len; i += TR_TEXT_LEN) {
     TraceRec r = { TR_TEXT, { { 0, 0, 0 } } };
     memcpy(r.u.text, label + i, len - i < TR_TEXT_LEN ? len - i : TR_TEXT_LEN);
     fwrite(&r, sizeof r, 1, tr_out);

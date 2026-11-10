@@ -516,8 +516,8 @@ build/csrc-trace/codegen_util.o: build/csrc/sp_rt_names.h
 build/csrc-trace/analyze_desugar.o build/csrc-trace/codegen_call.o: $(wildcard src/*_method_names.inc)
 # dladdr is libdl's before glibc 2.34
 SPINEL_TRACE_LIBS = $(if $(filter Linux,$(shell uname -s)),-ldl)
-$(SPINEL_TRACE): $(SPINEL_TRACE_OBJ) build/csrc/sp_parse_lib.o build/csrc/re_lit_check.o $(RE_OBJ) $(PRISM_LIB) $(INLINE_RBS_LIBS)
-	$(CC) $(CFLAGS) $(SPINEL_TRACE_OBJ) build/csrc/sp_parse_lib.o build/csrc/re_lit_check.o $(RE_OBJ) $(PRISM_LIB) $(INLINE_RBS_LIBS) -lm $(LDFLAGS) $(SPINEL_TRACE_LIBS) -o $@
+$(SPINEL_TRACE): $(SPINEL_TRACE_OBJ) build/csrc/sp_parse_lib.o build/csrc/re_lit_check.o $(RE_OBJ) $(PRISM_LIB) $(INLINE_RBS_LIBS) $(PLATFORM_OBJ)
+	$(CC) $(CFLAGS) $(SPINEL_TRACE_OBJ) build/csrc/sp_parse_lib.o build/csrc/re_lit_check.o $(RE_OBJ) $(PRISM_LIB) $(INLINE_RBS_LIBS) $(PLATFORM_OBJ) -lm $(LDFLAGS) $(SPINEL_LDFLAGS) $(SPINEL_TRACE_LIBS) -o $@
 
 # Keeps the trace build working: test/emit-trace/calls.rb holds two calls
 # whose arms are not about to move, a typed Array's push and an Integer +,

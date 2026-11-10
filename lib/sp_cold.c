@@ -1136,8 +1136,14 @@ double sp_lgamma_pos(double x) {  /* x > 0 */
 
 sp_PolyArray *sp_math_lgamma(double x) {
   int sign = 1; double v;
+  /* -Infinity is outside lgamma's domain and raises, as CRuby's does for it
+     and for no other argument; the message names the function unquoted, like
+     the other Math.* ones. +Infinity is the limit gamma grows to: the series
+     below would compute inf - inf there and answer NaN. */
+  if (x == -INFINITY)
+    sp_raise_cls("Math::DomainError", "Numerical argument is out of domain - lgamma");
   if (x > 0.0) {
-    v = sp_lgamma_pos(x);
+    v = isinf(x) ? INFINITY : sp_lgamma_pos(x);
   }
   else if (x == floor(x)) {
     /* pole at every non-positive integer -- detect it directly, since

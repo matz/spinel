@@ -704,7 +704,8 @@ static void cplan_resolve_call(Compiler *c, int id, CallPlan *p) {
   const char *bn = rt == TY_BOOL ? "TrueClass" : bcls >= 0 ? core_class_name(bcls) : NULL;
   /* (not a String, Integer or Float that may be nil, where NilClass has the
      name too: the boxed dispatch, cplan_poly_sub, picks by the value) */
-  if (bn && !(rt == TY_CLASS && cplan_class_value_answers(c, recv, name)) && !cplan_nil_scalar_reach(c, id))
+  if (bn && !(rt == TY_CLASS && cplan_class_value_answers(c, recv, name)) && !cplan_nil_scalar_reach(c, id) &&
+      !cplan_nil_scalar_boxed(c, id, name, recv, rt))
     cplan_root_reopen(c, id, name, bn, CORE_OBJECT, p);
 }
 
@@ -5631,6 +5632,24 @@ int cplan_nil_scalar_reach(Compiler *c, int id) {
   if (comp_method_vis_declared(c, nk, name, NULL) != SP_VIS_PUBLIC) return 0;
   int k = comp_core_class(c, core);
   return k < 0 || call_target(c, id, k, name, 0, NULL) < 0;
+}
+
+/* See call_plan.h. */
+int cplan_nil_scalar_boxed(Compiler *c, int id, const char *name, int recv, TyKind rt) {
+  const NodeTable *nt = c->nt;
+  if (recv < 0 || !cplan_nil_scalar_form_ok(c, id, name)) return 0;
+  /* (a block into Object's method of the name that yields keeps the old
+     path, as cplan_nil_scalar_reach) */
+  int oc = comp_core_class(c, CORE_OBJECT), nk = comp_core_class(c, CORE_NILCLASS);
+  int omi = oc >= 0 ? comp_method_in_chain(c, oc, name, NULL) : -1;
+  if (nt_ref(nt, id, "block") >= 0 && omi >= 0 && c->scopes[omi].yields) return 0;
+  if ((nk >= 0 ? comp_method_in_chain(c, nk, name, NULL) : -1) < 0 || comp_method_vis_declared(c, nk, name, NULL) != SP_VIS_PUBLIC) return 0;
+  /* beside a public method the program adds to Object, an Integer or a
+     Float answers boxed before the analysis settles whether it may be nil:
+     an Array the answer is pushed into is built boxed from the start, not
+     typed by Object's method alone */
+  int beside_obj = (rt == TY_INT || rt == TY_FLOAT) && omi >= 0 && comp_method_vis_declared(c, oc, name, NULL) == SP_VIS_PUBLIC;
+  return rt == TY_STRING || rt == TY_STRBUF || beside_obj || ((rt == TY_INT || rt == TY_FLOAT) && nullable_int_value(c, recv));
 }
 
 const PolyPlan *cplan_poly_sub(Compiler *c, int id) {

@@ -8313,24 +8313,7 @@ static int infer_block_kernel_call(Compiler *c, int id, const NodeTable *nt, con
    universal rules, which type a `?` name as a bool. */
 static int infer_nil_scalar_call(Compiler *c, int id, const NodeTable *nt, const char *name,
                                  int recv, TyKind rt, TyKind *out) {
-  if (recv < 0 || !cplan_nil_scalar_form_ok(c, id, name)) return 0;
-  /* (a block into Object's method of the name that yields keeps the old
-     path, as cplan_nil_scalar_reach) */
-  if (nt_ref(nt, id, "block") >= 0) {
-    int om = an_reopen_method(c, CORE_OBJECT, name);
-    if (om >= 0 && c->scopes[om].yields) return 0;
-  }
-  if (an_reopen_method(c, CORE_NILCLASS, name) < 0 ||
-      comp_method_vis_declared(c, comp_core_class(c, CORE_NILCLASS), name, NULL) != SP_VIS_PUBLIC) return 0;
-  /* beside a public method the program adds to Object, an Integer or a
-     Float answers boxed before the analysis settles whether it may be nil:
-     an Array the answer is pushed into is built boxed from the start, not
-     typed by Object's method alone */
-  int oc = comp_core_class(c, CORE_OBJECT);
-  int beside_obj = (rt == TY_INT || rt == TY_FLOAT) && oc >= 0 && an_reopen_method(c, CORE_OBJECT, name) >= 0 &&
-                   comp_method_vis_declared(c, oc, name, NULL) == SP_VIS_PUBLIC;
-  if (!(rt == TY_STRING || rt == TY_STRBUF || beside_obj ||
-        ((rt == TY_INT || rt == TY_FLOAT) && nullable_int_value(c, recv)))) return 0;
+  if (recv < 0 || !cplan_nil_scalar_boxed(c, id, name, recv, rt)) return 0;
   *out = TY_POLY;
   return 1;
 }

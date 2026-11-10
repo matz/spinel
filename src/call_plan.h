@@ -729,6 +729,17 @@ const PolyPlan *cplan_poly_sub(Compiler *c, int id);
    NilClass answers, and for the other values nothing or Object's public
    method: dispatched boxed (PB_SUBDISPATCH) */
 int cplan_nil_scalar_reach(Compiler *c, int id);
+/* Does a class value (recv, typed Class) answer `name` with a method of
+   CRuby's before Object's instance method: its class's singleton chain
+   (File.basename), or Class's and Module's own? A constant names the class;
+   a class held in a variable could be any builtin one. */
+int cplan_class_value_answers(Compiler *c, int recv, const char *name);
+/* ...and the analysis' reading of it, before the nullability settles: call
+   id of name on recv (type rt) is answered boxed, NilClass's method for nil
+   and Object's for the rest (cplan_nil_scalar_form_ok, NilClass's public
+   method, and a String, an Integer or Float beside Object's public one or
+   that may be nil) */
+int cplan_nil_scalar_boxed(Compiler *c, int id, const char *name, int recv, TyKind rt);
 /* the most splats the boxed default arm spreads into Object's method */
 #define POLY_OBJ_SPREAD_MAX 8
 int cplan_nil_scalar_form_ok(Compiler *c, int id, const char *name);

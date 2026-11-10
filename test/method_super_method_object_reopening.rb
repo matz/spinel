@@ -45,3 +45,21 @@ class D; end
 p Object.instance_method(:h).bind_call(C.new, 2)
 p Object.instance_method(:h).bind_call(D.new, 3)
 p C.instance_method(:h).super_method.bind_call(C.new, 4)
+
+# a default that reads self, and an instance of a class under BasicObject only
+class Object
+  def hs(x = self) = [:o, x.class]
+end
+class Blank < BasicObject; end
+p Object.instance_method(:hs).bind_call(C.new)
+p Object.instance_method(:hs).bind(C.new).call
+begin
+  Object.instance_method(:hs).bind_call(Blank.new)
+rescue TypeError => e
+  p e.message
+end
+begin
+  Object.instance_method(:hs).bind(Blank.new)
+rescue TypeError => e
+  p e.message
+end

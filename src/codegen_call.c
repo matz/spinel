@@ -32108,7 +32108,8 @@ int emit_method_tramp_fn(Compiler *c, Scope *tm, int shift, const char *fname,
            ivar-reading default still has to read `_m->self`. A class
            method and a top-level def have no self to read. */
         if (tm->class_id >= 0 && !tm->is_cmethod) {
-          snprintf(sb, sizeof sb, "((sp_%s *)_m->self)", c->classes[tm->class_id].c_name);
+          if (repr_self_boxed(c, (int)(tm - c->scopes))) snprintf(sb, sizeof sb, "sp_bm_self_boxed(_m)");
+          else snprintf(sb, sizeof sb, "((sp_%s *)_m->self)", c->classes[tm->class_id].c_name);
           g_self = sb;
           g_self_deref = comp_ty_value_obj(c, ty_object(tm->class_id)) ? "." : "->";
           g_emitting_class_id = tm->class_id;
@@ -33094,15 +33095,16 @@ void emit_bound_method_call(Compiler *c, int id, int recv, int target, Buf *b) {
   }
   /* a default reading self or an ivar reads the bound receiver */
   char selfp[96] = "";
-  if (self_ful) snprintf(selfp, sizeof selfp, "((sp_%s *)_t%d->self)", c->classes[tm->class_id].c_name, tr);
+  /* (a reopening of Object takes self boxed: its raw slot is boxed by what it holds) */
+  const int boxed_self = self_ful && repr_self_boxed(c, target);
+  if (boxed_self) snprintf(selfp, sizeof selfp, "sp_bm_self_boxed(_t%d)", tr);
+  else if (self_ful) snprintf(selfp, sizeof selfp, "((sp_%s *)_t%d->self)", c->classes[tm->class_id].c_name, tr);
   Buf args; memset(&args, 0, sizeof args);
   const char *sv_arm_self = g_arm_self; const Scope *sv_arm_scope = g_arm_scope;
   int sv_arm_depth = g_arm_depth;
   if (self_ful) { g_arm_self = selfp; g_arm_scope = tm; g_arm_depth = g_expr_depth; }
   const char *lead = "";
-  /* (a reopening of Object takes self boxed: its raw slot is boxed by what it holds) */
-  const int boxed_self = self_ful && repr_self_boxed(c, target);
-  if (boxed_self) { buf_printf(&args, "sp_bm_self_boxed(_t%d)", tr); lead = ", "; }
+  if (boxed_self) { buf_printf(&args, "%s", selfp); lead = ", "; }
   else if (self_ful) { buf_printf(&args, "_t%d->self", tr); lead = ", "; }
   else lead = emit_cmethod_self_cls_arg(c, target, method_node_recv_class(c, recv, tm->class_id), &args);
   emit_args_filled(c, target, nt_ref(c->nt, id, "arguments"), lead, &args);
@@ -33155,7 +33157,9 @@ int bind_owner_mismatch(Compiler *c, int target, TyKind ot) {
   Scope *tm = &c->scopes[target];
   int cid = tm->class_id;
   /* (every object is an Object: a method of the program's Object binds to any) */
-  if (cid < 0 || tm->is_cmethod || comp_class_is_module(c, &c->classes[cid]) || cid == comp_core_class(c, CORE_OBJECT)) return 0;
+  if (cid < 0 || tm->is_cmethod || comp_class_is_module(c, &c->classes[cid])) return 0;
+  /* (a class under BasicObject only is no Object) */
+  if (cid == comp_core_class(c, CORE_OBJECT)) return ty_is_object(ot) && class_is_blank_slate(c, ty_object_class(ot));
   return !class_isa_user(c, ty_object_class(ot), cid);
 }
 
@@ -33206,7 +33210,7 @@ void emit_bind_call(Compiler *c, int id, int target, const int *argv, int argc, 
   /* a default reading self or an ivar reads obj */
   const char *sv_arm_self = g_arm_self; const Scope *sv_arm_scope = g_arm_scope;
   int sv_arm_depth = g_arm_depth;
-  if (!value && !boxed_self) { g_arm_self = selfp; g_arm_scope = tm; g_arm_depth = g_expr_depth; }
+  if (!value) { g_arm_self = selfp; g_arm_scope = tm; g_arm_depth = g_expr_depth; }
   Buf args; memset(&args, 0, sizeof args);
   buf_puts(&args, selfp);
   emit_args_filled_argv(c, target, argv + 1, argc - 1, nt_ref(c->nt, id, "arguments"), ", ", &args);
@@ -33230,9 +33234,20 @@ static void emit_bind_call_arm(Compiler *c, int id, int target, const int *argv,
   Scope *tm = &c->scopes[target];
   int cid = tm->class_id;
   const char *cn = c->classes[cid].name;
-  /* (a reopening of Object takes self boxed: every value is an instance) */
+  /* (a reopening of Object takes self boxed: every value is an instance but
+     an object of a class under BasicObject only) */
   const int boxed_self = repr_self_boxed(c, target);
-  if (!boxed_self) {
+  if (boxed_self) {
+    int any = 0;
+    for (int k = 0; k < c->nclasses; k++) {
+      if (!class_is_blank_slate(c, k)) continue;
+      if (!any) buf_printf(b, "if (_t%d.tag == SP_TAG_OBJ && (0", to);
+      buf_printf(b, " || _t%d.cls_id == %d", to, k);
+      any = 1;
+    }
+    if (any) buf_printf(b, ")) sp_raise_cls(\"TypeError\", \"bind argument must be an instance of %s\"); ", cn);
+  }
+  else {
     buf_printf(b, "if (!(_t%d.tag == SP_TAG_OBJ && (0", to);
     for (int k = 0; k < c->nclasses; k++)
       if (class_isa_user(c, k, cid)) buf_printf(b, " || _t%d.cls_id == %d", to, k);

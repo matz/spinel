@@ -13,3 +13,7 @@ B
 [:o, C, 2]
 [:o, D, 3]
 [:o, C, 4]
+[:o, C]
+[:o, C]
+"bind argument must be an instance of Object"
+"bind argument must be an instance of Object"

@@ -204,16 +204,28 @@ int cplan_super_chain_mi(Compiler *c, int id, const Scope *s, int par, const cha
     mi = par >= 0 ? call_target(c, id, par, name, side, ml) : -1;
     if (par < 0) *ml = (MethodLookup){ .kind = ML_NONE, .def_class = -1 };
   }
-  /* (a superclass chain ends in Object: a reopening of it is the last
-     class the super looks in) */
-  if (mi < 0 && par >= 0 && !s->is_cmethod) {
-    int top = par;
+  /* (a superclass chain ends in Object, then Kernel and BasicObject: a
+     reopening of each is looked in, in that order; a module's own chain is
+     its includer's) */
+  if (mi < 0 && !s->is_cmethod && s->class_id >= 0 && !comp_class_is_module(c, &c->classes[s->class_id])) {
+    int top = par >= 0 ? par : s->class_id;
     while (c->classes[top].parent >= 0) top = c->classes[top].parent;
-    int obj = comp_super_parent(c, top, 0);
     /* (not under BasicObject: Object is not in that chain; not under another
        builtin: its methods come first, cplan_root_under_builtin) */
-    if (obj >= 0 && obj != top && !class_is_blank_slate(c, top) && !cplan_root_under_builtin(c, top))
-      mi = call_target(c, id, obj, name, CT_REACH, ml);
+    if (!class_is_blank_slate(c, top) && !cplan_root_under_builtin(c, top)) {
+      static const struct { int core; const char *name; } owners[] = {
+        { CORE_KERNEL, "Kernel" }, { CORE_BASIC_OBJECT, "BasicObject" } };
+      int obj = comp_super_parent(c, top, 0);
+      if (obj >= 0 && obj != top) mi = call_target(c, id, obj, name, CT_REACH, ml);
+      /* a reopening of Kernel or BasicObject answers only where no builtin
+         method of the name comes before it (Object's, then Kernel's) */
+      int builtin_first = core_method_vis("Object", name, 0) > 0;
+      for (int i = 0; mi < 0 && !builtin_first && i < 2; i++) {
+        int k = comp_core_class(c, owners[i].core);
+        if (k >= 0) mi = call_target(c, id, k, name, CT_REACH, ml);
+        builtin_first = core_method_vis(owners[i].name, name, 0) > 0;
+      }
+    }
   }
   if (mi < 0) ml->def_class = -1;
   ml->from = start;

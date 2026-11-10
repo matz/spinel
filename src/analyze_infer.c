@@ -12410,7 +12410,7 @@ TyKind infer_uncached(Compiler *c, int id) {
        (emit_super_data_with) */
     if (!s->is_cmethod && uname && sp_streq(uname, "with") &&
         c->classes[s->class_id].is_struct && c->classes[s->class_id].is_data) none = ty_object(s->class_id);
-    if (p < 0) return none;
+    if (p < 0 && mi < 0) return none;
     /* a subclass of a native class (#9269): super reaches the native
        class's constructor (initialize) or binding */
     if (mi < 0 && !s->is_cmethod && uname && c->classes[s->class_id].nsub_root > 0) {

@@ -1,6 +1,5 @@
 # A super in a program's Object#respond_to_missing? reaches Kernel's, which
-# answers false (the call plan's miss, not a walk that found the method
-# itself and raised NoMethodError).
+# answers false; it does not raise NoMethodError.
 class Object
   def respond_to_missing?(name, include_all = false)
     name.to_s.start_with?("ghost_") || super

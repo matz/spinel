@@ -5557,7 +5557,7 @@ const BuiltinOp *comp_super_kernel_row(Compiler *c, const Scope *s, const char *
   const BuiltinOp *op = uname ? bop_find(BOP_KERNEL, uname, super_plain_argc(c, id, s), 0) : NULL;
   return op && !(op->flags & BOPF_INTERNAL) ? op : NULL;
 }
-int comp_super_object_builtin(Compiler *c, Scope *s, const char *uname, int id) {
+int comp_super_object_builtin(Compiler *c, const Scope *s, const char *uname, int id) {
   if (!s || s->is_cmethod || !uname || s->class_id < 0 || s->class_id >= c->nclasses) return 0;
   int kind = 0, nargs = 0, kernel = 0;
   /* Kernel's own row of the name (BOP_KERNEL) answers the super from any

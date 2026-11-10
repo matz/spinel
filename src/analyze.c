@@ -32978,7 +32978,7 @@ static int ctor_pull_args(Compiler *c) {
   for (int q = comp_kind_first(c, NK_SuperNode); q >= 0; q = comp_kind_next(c, q)) {
     if (nt_kind(nt, q) != NK_SuperNode) continue;
     Scope *s = comp_scope_of(c, q);
-    int pi = s && s->name && sp_streq(s->name, "initialize") && s->class_id >= 0 ? cplan_super_target(c, q, s, NULL) : -1;
+    int pi = s && s->name && is_initialize_name(s->name) && s->class_id >= 0 ? cplan_super_target(c, q, s, NULL) : -1;
     if (pi < 0) continue;
     Scope *pm = &c->scopes[pi];
     for (int j = 0; j < pm->nparams && j < DYN_ARGS; j++) {

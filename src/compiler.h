@@ -2656,7 +2656,7 @@ enum { SUPER_OBJ_SAME = 1, SUPER_OBJ_FALSE, SUPER_OBJ_FROZEN, SUPER_OBJ_SELF, SU
    or Kernel's ==, equal?, eql?, !, nil?, frozen?, itself or
    respond_to_missing?: SUPER_OBJ_*,
    else 0 */
-int comp_super_object_builtin(Compiler *c, Scope *s, const char *uname, int id);
+int comp_super_object_builtin(Compiler *c, const Scope *s, const char *uname, int id);
 /* A bare super's plain operands: the parameters of s's def it passes on, the
    requireds then the optionals, as parameter nodes into out (up to cap; out
    may be NULL), and their count; -1 where the def has a post, keyword or rest

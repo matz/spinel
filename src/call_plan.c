@@ -242,7 +242,7 @@ int cplan_super_chain_mi(Compiler *c, int id, const Scope *s, int par, const cha
    them once the entries are made (super_layer_entry). ml is call_target's
    answer for the lookup (NULL: the scope only). */
 static int super_layer_entry(Compiler *c, int id, int t);
-int cplan_super_target(Compiler *c, int id, Scope *s0, MethodLookup *ml) {
+int cplan_super_target(Compiler *c, int id, const Scope *s0, MethodLookup *ml) {
   const Scope *s = comp_super_site(c, s0);
   const char *shadow = comp_super_shadow(c, s);
   MethodLookup own = { .def_class = -1 };

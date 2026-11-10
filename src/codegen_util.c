@@ -2536,8 +2536,8 @@ static int ivs_init_sets(Compiler *c, int cid, const char *ivn, int depth, int s
    self handed on (kept in an ivar of its own, it is not), a reflective read
    or a print of a variable, in it or in a method of the program's it calls
    on self (the override of a class below mi's too) or the parent's
-   initialize its `super` runs (the plan's, for the scope mi: an included
-   module's method shares its nodes with each includer's copy of it)? lvl counts the calls followed; past the
+   initialize its `super` runs (the plan's for the scope mi: an included
+   module's method shares its nodes with its includers' copies)? lvl counts the calls followed; past the
    levels it follows, or on a call back into a method being walked, it
    answers that it may. */
 static int ivs_never_nil(Compiler *c, int v);

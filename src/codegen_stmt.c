@@ -4995,9 +4995,18 @@ void strbuf_hold_slot(Compiler *c, int v, int r, Buf *sb) {
 }
 /* Bang v's handle in the form bang_self_form decides; 0 with nothing
    emitted where it has none. */
+static void emit_bang_self_form(Compiler *c, int v, int pub, int form, Buf *b);
 static int emit_bang_self_handle_1(Compiler *c, int v, int pub, Buf *b) {
   int form = bang_self_form(c, v, pub);
   if (form == BSF_NONE) return 0;
+  /* a receiver whose slot the form names more than once (`pick::BUF.upcase!`)
+     is held ahead of all of them: the receiver runs once */
+  ConstHold hold, *held = const_recv_hold_open(c, v, b, &hold, 1) >= 0 ? &hold : NULL;
+  emit_bang_self_form(c, v, pub, form, b);
+  if (held) const_recv_hold_close(c, held, b);
+  return 1;
+}
+static void emit_bang_self_form(Compiler *c, int v, int pub, int form, Buf *b) {
   int r = nt_ref(c->nt, v, "receiver");
   /* the receiver's slot, where the form reads it, is read first */
   Buf sb;
@@ -5155,7 +5164,6 @@ static int emit_bang_self_handle_1(Compiler *c, int v, int pub, Buf *b) {
   }
   }
   free(sb.p);
-  return 1;
 }
 
 /* --share-strings: a bang tail on a handle (strbuf_bang_tail) as a method's

@@ -33,6 +33,7 @@ typedef struct { char *p; size_t len, cap; } Buf;
 void buf_putn(Buf *b, const char *s, size_t n);
 void buf_puts(Buf *b, const char *s);
 void buf_erase(Buf *b, size_t off, size_t n);
+void buf_insert_at(Buf *b, size_t at, const char *text);   /* text into b at byte offset at */
 extern int g_no_root_elision;
 extern int g_no_root_frame;
 extern int g_inline_hot;
@@ -1935,6 +1936,12 @@ void emit_const_read_open(Compiler *c, int id, const LocalVar *lv, Buf *b);
 void emit_const_read_close(Compiler *c, int id, const LocalVar *lv, Buf *b);
 int emit_const_class_call_wrap(Compiler *c, int id, Buf *b, void (*emit)(Compiler *, int, Buf *));
 int emit_const_recv_wrap(Compiler *c, int id, Buf *b);
+/* a hold const_recv_hold_open made: the receiver node r (or -1), the view of a class read's (-1 if none), whether the pointer
+   is declared in the prelude (in_pre) or inside a statement expression whose call has a prelude of its own (inl) */
+typedef struct { int r, view, inl, in_pre; size_t at; Buf own; Buf *sv_pre; } ConstHold;
+int const_recv_hold_open(Compiler *c, int id, Buf *b, ConstHold *h, int inline_only);
+void const_recv_hold_close(Compiler *c, ConstHold *h, Buf *b);
+int str_changing_name(const char *nm);   /* a String method that changes its receiver: a mutator or an encoding one */
 int emit_const_recv_stmt_wrap(Compiler *c, int id, Buf *b, int indent, int tail);
 void emit_const_slot_read(Compiler *c, int id, const LocalVar *lv, const char *key, int slot, int own, Buf *b);
 const char *ffi_c_type(const char *spec);

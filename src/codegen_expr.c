@@ -3749,11 +3749,11 @@ static int emit_constant_value(Compiler *c, int id, Buf *b, Buf *checks, const N
     LocalVar *cpcv = nm ? comp_const(c, nm) : NULL;
     if (cpcv && !const_path_reaches_leaf_const(c, id)) cpcv = NULL;
     /* the slot of a flagged constant already read through its receiver (emit_const_recv_wrap) */
-    int cptr = cpcv ? (int)nt_int(nt, id, "const_ptr", 0) : 0;
-    if (cptr) {
+    int cptr = (int)nt_int(nt, id, "const_ptr", 0);
+    if (cptr && (cpcv || const_path_on_class_value(c, id, par_idc >= 0 ? repr_of(c, par_idc).as_ty : TY_UNKNOWN))) {
       char sref[40]; snprintf(sref, sizeof sref, "(*_p%d)", cptr);
       if (slot) buf_printf(b, "_p%d", cptr);
-      else if (repr_of_slot(c, cpcv).kind == RK_STRBUF) emit_strbuf_slot_read(c, id, repr_of(c, id), sref, b);
+      else if (cpcv ? repr_of_slot(c, cpcv).kind == RK_STRBUF : repr_of(c, id).kind == RK_STRBUF) emit_strbuf_slot_read(c, id, repr_of(c, id), sref, b);
       else buf_puts(b, sref);
       return 1;
     }

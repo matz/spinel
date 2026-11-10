@@ -2595,13 +2595,14 @@ int emit_call_enum_random_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
     /* a Random instance is an opaque object: #class, and identity #==/#equal? (#2524) */
     if (sp_streq(name, "class") && argc == 0) {
       if (!node_may_be_null_nil(c, recv)) {
-        buf_puts(b, "((void)("); emit_expr_for_effect(c, recv, b); buf_puts(b, "), ((sp_Class){0, SPL(\"Random\")}))");
+        buf_puts(b, "((void)("); emit_expr_for_effect(c, recv, b); buf_puts(b, "), "); emit_builtin_class_value(c, "Random", b); buf_puts(b, ")");
         return 1;
       }
       /* a NULL slot is nil, whose class is NilClass */
       int tr = ++g_tmp;
       buf_printf(b, "({ sp_Random *_t%d = ", tr); emit_expr(c, recv, b);
-      buf_printf(b, "; _t%d ? ((sp_Class){0, SPL(\"Random\")}) : ((sp_Class){SP_BCLS_NILCLASS, SPL(\"NilClass\")}); })", tr);
+      buf_printf(b, "; _t%d ? ", tr); emit_builtin_class_value(c, "Random", b);
+      buf_puts(b, " : "); emit_builtin_class_value(c, "NilClass", b); buf_puts(b, "; })");
       return 1;
     }
     /* equal? and eql? are identity; == compares by internal PRNG state

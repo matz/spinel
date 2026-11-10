@@ -12,15 +12,28 @@
 #include "share.h"
 #include "value_pos.h"
 
-/* The case labels of class k's arm in a class-value switch: its index and,
-   for a reopened builtin, the id its class value carries when read off a
-   value (one `have` lists already is not repeated). The one place that
-   spells them. */
-void emit_cv_case_labels(Compiler *c, int k, const int *have, int nhave, Buf *b) {
-  buf_printf(b, "case %d: ", k);
-  int bid = k >= 0 && k < c->nclasses ? cv_reopen_builtin_id(c, k) : 0;
-  for (int i = 0; i < nhave && bid; i++) if (have[i] == bid) bid = 0;
-  if (bid) buf_printf(b, "case %d: ", bid);
+/* The class value of builtin class `name`, as the compiler writes it: the
+   reopening's class index when the program reopens the class, the index the
+   constant names it by (cv_builtin_class_index), else the builtin's id and
+   name. A class has one value either way, so a switch over class values
+   needs one label for it. The one place that spells a builtin's class
+   value. */
+void emit_builtin_class_value(Compiler *c, const char *name, Buf *b) {
+  int k = cv_builtin_class_index(c, name);
+  if (k >= 0) buf_printf(b, "((sp_Class){%d})", k);
+  else buf_printf(b, "((sp_Class){%d, SPL(\"%s\")})", builtin_class_val_id(name), name);
+}
+
+/* The class value the builtin chain answers (a superclass), its C written
+   as fmt: named as emit_builtin_class_value names a class, through the
+   generated sp_cls_canon when the program reopens a builtin, so a reopened
+   one is its index */
+void emit_cv_canon(Compiler *c, Buf *b, const char *fmt, ...) {
+  Buf e = {0};
+  va_list ap; va_start(ap, fmt); buf_vsetf(&e, fmt, ap); va_end(ap);
+  if (comp_reopens_cv_builtin(c)) { buf_puts(b, "sp_cls_canon("); buf_puts(b, e.p); buf_puts(b, ")"); }
+  else buf_puts(b, e.p);
+  free(e.p);
 }
 
 /* The arm of a Class-value constructor call (cplan_cv_ctor) for class ci, an
@@ -39,7 +52,7 @@ static void emit_cv_ctor_arm(Compiler *c, int id, int ci, const char *argc_txt, 
     unsupported(c, id, "a class value builds an Array or Hash subclass whose kind its arguments do not fit");
   char blk[24] = "NULL";
   if (g_ctor_blk_tmp >= 0) snprintf(blk, sizeof blk, "_t%d", g_ctor_blk_tmp);
-  emit_cv_case_labels(c, ci, NULL, 0, b);
+  buf_printf(b, "case %d: ", ci);
   buf_puts(b, "{ sp_RbVal _b = ");
   if (aref) buf_printf(b, "sp_builtin_class_aref('%c', %s, %s); ", hash ? 'H' : 'A', argc_txt, argv_txt);
   else buf_printf(b, "sp_builtin_class_new('%c', %s, %s, %s); ", hash ? 'H' : 'A', argc_txt, argv_txt, blk);
@@ -89,12 +102,11 @@ static int emit_class_value_aref(Compiler *c, int id, Buf *b, int recv, int argc
   emit_class_value_new_switch(c, rt2, kt, 0, b);
   for (int ci = 0; ci < c->nclasses; ci++)
     if (cplan_cv_ctor_builds(c, id, ci)) emit_cv_ctor_arm(c, id, ci, an, av.p, rt2, b);
-  /* Array and Hash themselves: their reopening's class index and builtin
-     id when the program has one, else the builtin id */
+  /* Array and Hash themselves: their reopening's class index when the
+     program has one, else the builtin id */
   for (int hash = 0; hash < 2; hash++) {
     int core = hash ? CORE_HASH : CORE_ARRAY, ri = comp_core_class(c, core);
-    if (ri >= 0) emit_cv_case_labels(c, ri, NULL, 0, b);
-    else buf_printf(b, "case %d: ", builtin_class_id(core_class_name(core)));
+    buf_printf(b, "case %d: ", ri >= 0 ? ri : builtin_class_id(core_class_name(core)));
     buf_printf(b, "{ _t%d = sp_builtin_class_aref('%c', %s, %s); } break; ", rt2, hash ? 'H' : 'A', an, av.p);
   }
   buf_printf(b, "default: sp_raise_nomethod(sp_sprintf(\"undefined method '[]' for class %%s\", sp_class_to_s(_t%d))); break; } _t%d; })",
@@ -1333,11 +1345,7 @@ int emit_call_reflection_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
           else emit_expr(c, recv, b);
           buf_printf(b, "; int _ck%d = %d; switch (_cr%d.cls_id) {", t, dflt, t);
           for (int k = 0; k < c->nclasses; k++)
-            if (cks[k] != dflt) {
-              buf_puts(b, " ");
-              emit_cv_case_labels(c, k, NULL, 0, b);
-              buf_printf(b, "_ck%d = %d; break;", t, cks[k]);
-            }
+            if (cks[k] != dflt) buf_printf(b, " case %d: _ck%d = %d; break;", k, t, cks[k]);
           buf_puts(b, " default: break; } ");
           /* a module with no such constant and none at the top level: NameError,
              with the receiver staged and the message qualified by its name as
@@ -4261,45 +4269,18 @@ static void emit_exc_cls_name_pick(Compiler *c, int id, const char *name, int tk
   buf_printf(b, " } if (_xi%d >= 0) break; } ", t);
 }
 
-int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc, const int *argv) {
-  /* SomeClass.superclass -> the parent class as sp_Class value */
-  if (recv >= 0 && argc == 0 && sp_streq(name, "superclass") &&
-      nt_kind(nt, recv) == NK_ConstantReadNode &&
-      nt_str(nt, recv, "name")) {
-    int ci = const_node_class_index(c, recv);
-    if (ci >= 0) {
-      /* superclass is Class's: a module raises NoMethodError (#10751) */
-      if (comp_class_is_module(c, &c->classes[ci])) {
-        const char *mn = class_ruby_name(c, ci); if (!mn) mn = c->classes[ci].name;
-        buf_printf(b, "(sp_raise_cls(\"NoMethodError\", sp_stage_recv_msg(\"undefined method 'superclass' for module %s\", sp_box_class((sp_Class){%d}))), (sp_Class){0})", mn, ci);
-        return 1;
-      }
-      int par = c->classes[ci].parent;
-      if (par >= 0) { buf_printf(b, "((sp_Class){%d})", par); return 1; }
-      /* a reopened builtin class: the builtin's own superclass */
-      int rbid = reopened_builtin_chain_id(c, ci);
-      if (rbid) { buf_printf(b, "sp_builtin_superclass(((sp_Class){%d}))", rbid); return 1; }
-      /* the builtin above it: the row the generated sp_class_superclass
-         table carries, by name for an id-less exception (LoadError) */
-      const char *bpn = class_builtin_superclass_name(c, ci);
-      if (bpn) buf_printf(b, "((sp_Class){%d, SPL(\"%s\")})", builtin_class_val_id(bpn), bpn);
-      else buf_printf(b, "((sp_Class){%d})", class_builtin_superclass(c, ci));
-      return 1;
-    }
-  }
-
-  /* x.class -> the class-name string (compile-time for known types) */
+/* `recv.class`: the receiver's class value, compile-time for the types
+   that know it, a builtin's as emit_builtin_class_value writes it; 0 when
+   the receiver's own `class` member answers instead. */
+static int emit_recv_class_value(Compiler *c, Buf *b, const NodeTable *nt, int recv) {
   /* top-level `self.class` (and inside a top-level def): self is main, an
      Object instance, so the class is Object -- the SelfNode has no C slot at
      top level and previously fell through unsupported (#3035) */
-  if (recv >= 0 && sp_streq(name, "class") && argc == 0 &&
-      nt_kind(nt, recv) == NK_SelfNode &&
-      self_is_main(c, recv)) {
-    buf_puts(b, "((sp_Class){(sp_int)-116, SPL(\"Object\")})");
+  if (nt_kind(nt, recv) == NK_SelfNode && self_is_main(c, recv)) {
+    emit_builtin_class_value(c, "Object", b);
     return 1;
   }
-  if (recv >= 0 && sp_streq(name, "class") && argc == 0 &&
-      !obj_member_shadows(c, comp_recv_type(c, recv), "class")) {
+  if (!obj_member_shadows(c, comp_recv_type(c, recv), "class")) {
     TyKind rt = comp_recv_type(c, recv);  /* empty-literal receivers coerce */
     /* When emitting a scope transplanted from a builtin-reopen class (Object/Array/
        Numeric), self is sp_RbVal even if the nscope-based type says otherwise.
@@ -4318,8 +4299,8 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
     if (rt == TY_MATCHDATA) {
       int tm = ++g_tmp;
       buf_printf(b, "({ sp_MatchData *_t%d = ", tm); emit_expr(c, recv, b);
-      buf_printf(b, "; _t%d ? ((sp_Class){SP_BCLS_MATCHDATA, SPL(\"MatchData\")})"
-                    " : ((sp_Class){SP_BCLS_NILCLASS, SPL(\"NilClass\")}); })", tm);
+      buf_printf(b, "; _t%d ? ", tm); emit_builtin_class_value(c, "MatchData", b);
+      buf_puts(b, " : "); emit_builtin_class_value(c, "NilClass", b); buf_puts(b, "; })");
       return 1;
     }
     const char *cn = NULL;
@@ -4339,10 +4320,10 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
          slot's no-match is. */
       int te = ++g_tmp;
       buf_printf(b, "({ sp_Enumerator *_t%d = ", te); emit_expr(c, recv, b);
-      buf_printf(b, "; !_t%d ? ((sp_Class){SP_BCLS_NILCLASS, SPL(\"NilClass\")})"
-                    " : _t%d->is_chain ? ((sp_Class){(sp_int)-1, SPL(\"Enumerator::Chain\")})"
-                    " : _t%d->is_product ? ((sp_Class){(sp_int)-1, SPL(\"Enumerator::Product\")})"
-                    " : ((sp_Class){SP_BCLS_ENUMERATOR, SPL(\"Enumerator\")}); })", te, te, te);
+      buf_printf(b, "; !_t%d ? ", te); emit_builtin_class_value(c, "NilClass", b);
+      buf_printf(b, " : _t%d->is_chain ? ", te); emit_builtin_class_value(c, "Enumerator::Chain", b);
+      buf_printf(b, " : _t%d->is_product ? ", te); emit_builtin_class_value(c, "Enumerator::Product", b);
+      buf_puts(b, " : "); emit_builtin_class_value(c, "Enumerator", b); buf_puts(b, "; })");
       return 1;
     }
     case TY_DIR: cn = "Dir"; break;
@@ -4358,10 +4339,11 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
       int tq2 = ++g_tmp;
       buf_printf(b, "({ sp_queue *_t%d = ", tq2); emit_expr(c, recv, b);
       /* a NULL slot is nil, whose class is NilClass */
-      if (node_may_be_null_nil(c, recv))
-        buf_printf(b, "; _t%d ? ((sp_Class){(sp_int)%d, sp_Queue_class_name(_t%d)})"
-                      " : ((sp_Class){SP_BCLS_NILCLASS, SPL(\"NilClass\")}); })",
+      if (node_may_be_null_nil(c, recv)) {
+        buf_printf(b, "; _t%d ? ((sp_Class){(sp_int)%d, sp_Queue_class_name(_t%d)}) : ",
                    tq2, builtin_class_id("Queue"), tq2);
+        emit_builtin_class_value(c, "NilClass", b); buf_puts(b, "; })");
+      }
       else
         buf_printf(b, "; ((sp_Class){(sp_int)%d, sp_Queue_class_name(_t%d)}); })",
                    builtin_class_id("Queue"), tq2);
@@ -4422,18 +4404,17 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
       const char *_ocn = _cidx >= 0 && _cidx < c->nclasses ? c->classes[_cidx].name : NULL;
       if (_ocn && (is_object_base_name(_ocn))) {
         buf_puts(b, "((void)("); emit_expr_for_effect(c, recv, b);
-        buf_printf(b, "), ((sp_Class){%d, SPL(\"%s\")}))", builtin_class_val_id(_ocn), _ocn);
+        buf_puts(b, "), "); emit_builtin_class_value(c, _ocn, b); buf_puts(b, ")");
         return 1;
       }
       /* a native-bound class's struct is opaque in the generated TU (no
-         cls_id deref possible); its class is statically known. The carried
-         name is the qualified Ruby one (a native_struct may declare
-         "IO::Buffer" over a leaf-keyed class). */
+         cls_id deref possible); its class is statically known, and is its
+         index alone like every program class's value: the qualified Ruby
+         name (a native_struct may declare "IO::Buffer" over a leaf-keyed
+         class) renders from the index. */
       if (_cidx >= 0 && c->classes[_cidx].is_native_class) {
-        const char *_nqn = class_ruby_name(c, _cidx);
         buf_puts(b, "((void)("); emit_expr_for_effect(c, recv, b);
-        buf_printf(b, "), ((sp_Class){(sp_int)%d, SPL(\"%s\")}))", _cidx,
-                   _nqn ? _nqn : c->classes[_cidx].name);
+        buf_printf(b, "), ((sp_Class){(sp_int)%d}))", _cidx);
         return 1;
       }
       /* an exception subclass shares sp_Exception's layout (no cls_id
@@ -4447,7 +4428,8 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
         buf_puts(g_pre, _eb.p ? _eb.p : ""); buf_puts(g_pre, ";\n"); free(_eb.p);
         /* by its own id (sp_user_exc_class), so #superclass and #ancestors
            walk the user chain */
-        buf_printf(b, "(_t%d ? sp_user_exc_class(sp_exc_class_name((sp_Exception *)_t%d)) : ((sp_Class){SP_BCLS_NILCLASS, SPL(\"NilClass\")}))", _texc, _texc);
+        buf_printf(b, "(_t%d ? sp_user_exc_class(sp_exc_class_name((sp_Exception *)_t%d)) : ", _texc, _texc);
+        emit_builtin_class_value(c, "NilClass", b); buf_puts(b, ")");
         return 1;
       }
       int _tobj = ++g_tmp;
@@ -4457,7 +4439,7 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
       /* a heap object slot's NULL is nil, whose class is NilClass (self is
          never nil) */
       int _nilcls = comp_ty_value_obj(c, rt) || nt_kind(c->nt, recv) == NK_SelfNode
-                      ? _cidx : builtin_class_id("NilClass");
+                      ? _cidx : cv_builtin_class_id(c, "NilClass");
       /* a singleton class answers as the class it hides behind, the Object
          stand-in as Object: `o.class == Foo` holds after `def o.m` */
       if (cls_id_masquerades(c, _cidx)) {
@@ -4477,11 +4459,12 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
       if (node_has_oint_form(c, recv)) {
         int tcv = ++g_tmp;
         buf_printf(b, "({ %s _t%d = ", oint_ctype(rt), tcv); emit_oint_expr(c, recv, rt, b);
-        buf_printf(b, "; ((sp_Class){_t%d.nil ? SP_BCLS_NILCLASS : %d, _t%d.nil ? SPL(\"NilClass\") : SPL(\"%s\")}); })", tcv, builtin_class_val_id(cls), tcv, cls);
+        buf_printf(b, "; _t%d.nil ? ", tcv); emit_builtin_class_value(c, "NilClass", b);
+        buf_puts(b, " : "); emit_builtin_class_value(c, cls, b); buf_puts(b, "; })");
       }
       else {
         buf_puts(b, "({ (void)("); emit_expr_for_effect(c, recv, b);
-        buf_printf(b, "); ((sp_Class){%d, SPL(\"%s\")}); })", builtin_class_val_id(cls), cls);
+        buf_puts(b, "); "); emit_builtin_class_value(c, cls, b); buf_puts(b, "; })");
       }
       return 1;
     }
@@ -4490,8 +4473,8 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
       int tcv = ++g_tmp;
       Buf crb = expr_buf(c, recv);
       buf_puts(b, "({ "); emit_ctype(c, rt, b);
-      buf_printf(b, " _t%d = %s; ((sp_Class){_t%d ? %d : SP_BCLS_NILCLASS, _t%d ? SPL(\"%s\") : SPL(\"NilClass\")}); })",
-                 tcv, crb.p ? crb.p : "0", tcv, builtin_class_val_id(cn), tcv, cn);
+      buf_printf(b, " _t%d = %s; _t%d ? ", tcv, crb.p ? crb.p : "0", tcv); emit_builtin_class_value(c, cn, b);
+      buf_puts(b, " : "); emit_builtin_class_value(c, "NilClass", b); buf_puts(b, "; })");
       free(crb.p);
       return 1;
     }
@@ -4499,12 +4482,13 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
       /* a first-class name-backed Class value; the receiver is side-effect-
          evaluated when it is not a plain read */
       buf_puts(b, "((void)("); emit_expr_for_effect(c, recv, b);
-      buf_printf(b, "), ((sp_Class){%d, SPL(\"%s\")}))", builtin_class_val_id(cn), cn);
+      buf_puts(b, "), "); emit_builtin_class_value(c, cn, b); buf_puts(b, ")");
       return 1;
     }
     if (rt == TY_BOOL) {
       buf_puts(b, "(("); emit_expr(c, recv, b);
-      buf_puts(b, ") ? ((sp_Class){SP_BCLS_TRUECLASS, SPL(\"TrueClass\")}) : ((sp_Class){SP_BCLS_FALSECLASS, SPL(\"FalseClass\")}))");
+      buf_puts(b, ") ? "); emit_builtin_class_value(c, "TrueClass", b);
+      buf_puts(b, " : "); emit_builtin_class_value(c, "FalseClass", b); buf_puts(b, ")");
       return 1;
     }
     if (rt == TY_POLY) {
@@ -4525,6 +4509,37 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
       return 1;
     }
   }
+  return 0;
+}
+
+int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc, const int *argv) {
+  /* SomeClass.superclass -> the parent class as sp_Class value */
+  if (recv >= 0 && argc == 0 && sp_streq(name, "superclass") &&
+      nt_kind(nt, recv) == NK_ConstantReadNode &&
+      nt_str(nt, recv, "name")) {
+    int ci = const_node_class_index(c, recv);
+    if (ci >= 0) {
+      /* superclass is Class's: a module raises NoMethodError (#10751) */
+      if (comp_class_is_module(c, &c->classes[ci])) {
+        const char *mn = class_ruby_name(c, ci); if (!mn) mn = c->classes[ci].name;
+        buf_printf(b, "(sp_raise_cls(\"NoMethodError\", sp_stage_recv_msg(\"undefined method 'superclass' for module %s\", sp_box_class((sp_Class){%d}))), (sp_Class){0})", mn, ci);
+        return 1;
+      }
+      int par = c->classes[ci].parent;
+      if (par >= 0) { buf_printf(b, "((sp_Class){%d})", par); return 1; }
+      /* a reopened builtin class: the builtin's own superclass */
+      int rbid = reopened_builtin_chain_id(c, ci);
+      if (rbid) { emit_cv_canon(c, b, "sp_builtin_superclass(((sp_Class){%d}))", rbid); return 1; }
+      /* the builtin above it: the row the generated sp_class_superclass
+         table carries, by name for an id-less exception (LoadError) */
+      const char *bpn = class_builtin_superclass_name(c, ci);
+      if (bpn) emit_builtin_class_value(c, bpn, b);
+      else buf_printf(b, "((sp_Class){%d})", class_builtin_superclass(c, ci));
+      return 1;
+    }
+  }
+
+  if (recv >= 0 && is_class_query(name) && argc == 0 && emit_recv_class_value(c, b, nt, recv)) return 1;
 
   /* Module#< / <= / > / >= / <=> with one side boxed: a class value read out
      of an Array or Hash ordered against a class, or a class ordered against
@@ -4745,21 +4760,23 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
     }
     if (sp_streq(name, "class")) {
       buf_printf(b, "({ sp_Class _cl%da = ", _clt); emit_expr(c, recv, b);
-      buf_printf(b, "; sp_class_is_module_val(_cl%da)"
-                    "?((sp_Class){SP_BCLS_MODULE, SPL(\"Module\")})"
-                    ":((sp_Class){SP_BCLS_CLASS, SPL(\"Class\")}); })", _clt);
+      buf_printf(b, "; sp_class_is_module_val(_cl%da)?", _clt);
+      emit_builtin_class_value(c, "Module", b); buf_puts(b, ":");
+      emit_builtin_class_value(c, "Class", b); buf_puts(b, "; })");
       return 1;
     }
     if (sp_streq(name, "superclass") && argc == 0) {
       /* sp_class_superclass only knows the user chain; a builtin class needs
          sp_builtin_superclass (Integer -> Numeric), as sp_class_is_ancestor
-         already dispatches. BasicObject (the root) yields the nil-class
+         already dispatches, its answer named as the compiler names a class
+         (emit_cv_canon). BasicObject (the root) yields the nil-class
          sentinel there (#2654). A Module has no #superclass -> NoMethodError. */
       buf_printf(b, "({ sp_Class _cl%d = ", _clt); emit_expr(c, recv, b);
       buf_printf(b, "; sp_class_is_module_val(_cl%d) ? "
                     "(sp_raise_cls(\"NoMethodError\", sp_sprintf(\"undefined method 'superclass' for module %%s\", %s(_cl%d))), (sp_Class){0}) : "
-                    "(_cl%d.cls_id>=0?sp_class_superclass(_cl%d):sp_builtin_superclass(_cl%d)); })",
-                 _clt, comp_class_display_fn(c), _clt, _clt, _clt, _clt);
+                    , _clt, comp_class_display_fn(c), _clt);
+      emit_cv_canon(c, b, "(_cl%d.cls_id>=0?sp_class_superclass(_cl%d):sp_builtin_superclass(_cl%d))", _clt, _clt, _clt);
+      buf_puts(b, "; })");
       return 1;
     }
     if (sp_streq(name, "ancestors") && argc == 0) {
@@ -5263,7 +5280,7 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
                itself: no value holds a class that answers by it */
             if (comp_scope_copied_away(c, kmi)) continue;
             int rarm9 = emit_reopen_arm_test(c, kmi, name, rcls9, rraise9, b);
-            if (!rarm9) { buf_puts(b, " "); emit_cv_case_labels(c, k, NULL, 0, b); }
+            if (!rarm9) buf_printf(b, " case %d: ", k);
             rdef9 |= rarm9;
             /* A class whose method cannot take this many arguments gets the
                answer CRuby gives, rather than no arm (which would fall to the

@@ -102,6 +102,7 @@ typedef enum {
   BOPE_RANGE_FREEZE,     /* Range#freeze */
   BOPE_TEMPLATE,          /* arg, its placeholders filled (codegen_ops.c) */
   BOPE_PSTATUS_SUCCESS,   /* Process::Status#success?: true, false or nil */
+  BOPE_CLASS_VALUE,       /* #class of a builtin receiver: the class value of the builtin `arg` names (NilClass's for a nil slot) */
   BOPE_PSTATUS_EQ,        /* Process::Status#== / #eql? with no operand */
   /* the concurrency handles (codegen_call_concurrency.c) */
   BOPE_THREAD_SET_REPORT, /* Thread#report_on_exception= */

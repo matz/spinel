@@ -2140,9 +2140,11 @@ void emit_poly_prearms0(Compiler *c, int id, const char *name, const PolySpecial
       buf_printf(b, "sp_cls_allocate(_t%d)", tv);
     else if (sp_streq(name, "keyword_init?"))
       buf_printf(b, "sp_cls_keyword_init_p(_t%d)", tv);
-    else
-      buf_printf(b, "({ sp_Class _cs%d = sp_unbox_class(_t%d); _cs%d.cls_id >= 0 ? sp_class_superclass(_cs%d) : sp_builtin_superclass(_cs%d); })",
-                 tv, tv, tv, tv, tv);
+    else {
+      buf_printf(b, "({ sp_Class _cs%d = sp_unbox_class(_t%d); ", tv, tv);
+      emit_cv_canon(c, b, "_cs%d.cls_id >= 0 ? sp_class_superclass(_cs%d) : sp_builtin_superclass(_cs%d)", tv, tv, tv);
+      buf_puts(b, "; })");
+    }
     buf_printf(b, "%s; else ", cbc);
   }
   /* an OpenStruct answers ANY reader with its member value; checked ahead of

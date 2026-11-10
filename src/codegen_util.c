@@ -624,7 +624,7 @@ void buf_erase(Buf *b, size_t off, size_t n) {
   b->p[b->len] = '\0';
 }
 /* Replace `b`'s text with the formatted one, reusing its storage. */
-static void buf_vsetf(Buf *b, const char *fmt, va_list ap) {
+void buf_vsetf(Buf *b, const char *fmt, va_list ap) {
   va_list aq; va_copy(aq, ap);
   int n = vsnprintf(NULL, 0, fmt, aq);
   va_end(aq);

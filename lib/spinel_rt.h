@@ -2631,6 +2631,13 @@ static sp_Class sp_poly_class_val(sp_RbVal v) {
   /* a builtin's class carries its id, as the constant naming it does: the
      switches over a class value (a new, a class method) arm on it */
   if (r.cls_id < 0) r.cls_id = bid;
+  /* ...and a builtin the program reopens is the reopening's index */
+  if (sp_cls_reopen_fn && r.cls_id < 0) { int k = sp_cls_reopen_fn(r.cls_id); if (k >= 0) r.cls_id = k; }
+  /* A class of the program is its index alone, as its constant is: a named
+     one boxes by its name (sp_box_class) and so loses the index the
+     switches over a class value arm on. Its name is read off the index
+     (sp_class_to_s). */
+  if (r.cls_id >= 0) r.name = NULL;
   return r;
 }
 /* Raise TypeError "no implicit conversion of <class> into String" for a poly
@@ -14369,6 +14376,9 @@ static sp_bool sp_poly_kind_of_builtin(sp_RbVal v, const char *cn) {
      above the class: walk it, as is_a? on the typed slot does. */
   if (v.tag == SP_TAG_OBJ && v.cls_id >= 0 && sp_class_kind_of_name_fn)
     return (sp_bool)sp_class_kind_of_name_fn((int)v.cls_id, cn);
+  /* An Array or Hash subclass instance boxes under the builtin's tag
+     (#7449), so the walk above never saw it: walk from its class */
+  if (sp_bsub_cls_fn && sp_class_kind_of_name_fn) { int k = sp_bsub_cls_fn(v); if (k >= 0) return (sp_bool)sp_class_kind_of_name_fn(k, cn); }
   return FALSE;
 }
 /* is_a?/instance_of? for a poly value against a RUNTIME class value `cls` (a

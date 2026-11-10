@@ -449,7 +449,7 @@ static const BuiltinOp bop_rows[] = {
   { TY_PROCESS_STATUS, "pid",        0, 0, BF_ANY, TY_INT,    BOPE_TEMPLATE, "sp_process_status_recv($r, \"pid\")->pid", 0, 0, BOPF_BOXED },
   { TY_PROCESS_STATUS, "to_s",       0, 0, BF_ANY, TY_STRING, BOPE_TEMPLATE, "sp_process_status_str($r, 0)" },
   { TY_PROCESS_STATUS, "inspect",    0, 0, BF_ANY, TY_STRING, BOPE_TEMPLATE, "sp_process_status_str($r, 1)" },
-  { TY_PROCESS_STATUS, "class",      0, 0, BF_ANY, TY_CLASS,  BOPE_TEMPLATE, "({ sp_ProcessStatus *_t$t = $r; _t$t ? ((sp_Class){(sp_int)-163, NULL}) : ((sp_Class){SP_BCLS_NILCLASS, SPL(\"NilClass\")}); })" },
+  { TY_PROCESS_STATUS, "class",      0, 0, BF_ANY, TY_CLASS,  BOPE_CLASS_VALUE, "Process::Status" },
   { TY_PROCESS_STATUS, "==",         0, 0, BF_ANY, TY_BOOL,    BOPE_PSTATUS_EQ },
   { TY_PROCESS_STATUS, "eql?",       0, 0, BF_ANY, TY_BOOL,    BOPE_PSTATUS_EQ },
   /* `$?` is nil (NULL) before any child has been waited for: the readers
@@ -530,7 +530,7 @@ static const BuiltinOp bop_rows[] = {
   { TY_TIME, "inspect",    0, 127, BF_ANY, TY_STRING, BOPE_TEMPLATE, "sp_time_inspect_v($r)" },
   { TY_TIME, "to_s",       0, 127, BF_ANY, TY_STRING, BOPE_TEMPLATE, "sp_time_to_s_v($r)" },
   { TY_TIME, "zone",       0, 127, BF_ANY, TY_STRING, BOPE_TEMPLATE, "sp_time_zone($r)" },
-  { TY_TIME, "class",      0, 127, BF_ANY, TY_STRING, BOPE_TEMPLATE, "((sp_Class){SP_BCLS_TIME, SPL(\"Time\")})" },
+  { TY_TIME, "class",      0, 127, BF_ANY, TY_CLASS,  BOPE_CLASS_VALUE, "Time" },
   { TY_TIME, "getgm",      0, 127, BF_ANY, TY_TIME,   BOPE_TEMPLATE, "sp_time_utc($r)" },
   { TY_TIME, "sunday?",    0, 127, BF_ANY, TY_BOOL,   BOPE_TEMPLATE, "(sp_time_wday($r) == 0)" },
   { TY_TIME, "monday?",    0, 127, BF_ANY, TY_BOOL,   BOPE_TEMPLATE, "(sp_time_wday($r) == 1)" },
@@ -1115,7 +1115,7 @@ static const BuiltinOp bop_rows[] = {
   { TY_TIME_RANGE, "to_s", 0, 0, BF_ANY, TY_STRING, BOPE_TEMPLATE, "sp_trange_to_s($r)", 0 },
   { TY_TIME_RANGE, "inspect", 0, 0, BF_ANY, TY_STRING, BOPE_TEMPLATE, "sp_trange_inspect($r)", 0 },
   { TY_TIME_RANGE, "hash", 0, 0, BF_ANY, TY_INT, BOPE_TEMPLATE, "sp_trange_hash($r)", 0 },
-  { TY_TIME_RANGE, "class", 0, 0, BF_ANY, TY_CLASS, BOPE_TEMPLATE, "((void)($r), ((sp_Class){0, SPL(\"Range\")}))", 0 },
+  { TY_TIME_RANGE, "class", 0, 0, BF_ANY, TY_CLASS, BOPE_CLASS_VALUE, "Range" },
   { TY_TIME_RANGE, "frozen?", 0, 0, BF_ANY, TY_BOOL, BOPE_TEMPLATE, "(sp_bool)!($r)->unfrozen", 0 },
   { TY_TIME_RANGE, "dup", 0, 0, BF_ANY, TY_TIME_RANGE, BOPE_TEMPLATE, "sp_trange_copy($r, 0)", 0 },
   { TY_TIME_RANGE, "clone", 0, 0, BF_ANY, TY_TIME_RANGE, BOPE_TEMPLATE, "sp_trange_copy($r, 1)", 0, 0, BOPF_KEYWORDS },
@@ -1149,7 +1149,7 @@ static const BuiltinOp bop_rows[] = {
   { TY_OBJ_RANGE, "to_s", 0, 0, BF_ANY, TY_STRING, BOPE_TEMPLATE, "sp_orange_to_s($r)", 0 },
   { TY_OBJ_RANGE, "inspect", 0, 0, BF_ANY, TY_STRING, BOPE_TEMPLATE, "sp_orange_inspect($r)", 0 },
   { TY_OBJ_RANGE, "hash", 0, 0, BF_ANY, TY_INT, BOPE_TEMPLATE, "sp_orange_hash($r)", 0 },
-  { TY_OBJ_RANGE, "class", 0, 0, BF_ANY, TY_CLASS, BOPE_TEMPLATE, "((void)($r), ((sp_Class){0, SPL(\"Range\")}))", 0 },
+  { TY_OBJ_RANGE, "class", 0, 0, BF_ANY, TY_CLASS, BOPE_CLASS_VALUE, "Range" },
   { TY_OBJ_RANGE, "frozen?", 0, 0, BF_ANY, TY_BOOL, BOPE_TEMPLATE, "(sp_bool)!($r)->unfrozen", 0 },
   { TY_OBJ_RANGE, "dup", 0, 0, BF_ANY, TY_OBJ_RANGE, BOPE_TEMPLATE, "sp_orange_copy($r, 0)", 0 },
   { TY_OBJ_RANGE, "clone", 0, 0, BF_ANY, TY_OBJ_RANGE, BOPE_TEMPLATE, "sp_orange_copy($r, 1)", 0, 0, BOPF_KEYWORDS },
@@ -1180,7 +1180,7 @@ static const BuiltinOp bop_rows[] = {
   { TY_STR_RANGE, "exclude_end?", 0,   0, BF_ANY,  TY_BOOL,        BOPE_TEMPLATE, "({ sp_StrRange _t$T = $r; (sp_bool)_t$T.excl; })", 0 },
   { TY_STR_RANGE, "overlap?",     1,   1, BF_NONE, TY_BOOL,        BOPE_TEMPLATE, "({ sp_StrRange _t$T = $r; sp_RbVal _a$T = $b0; sp_srange_overlap_v(_t$T, _a$T); })", 0 },  /* CRuby's range_overlap over String ends */
   { TY_STR_RANGE, "bsearch",      0,   0, BF_REQUIRED, TY_POLY,    BOPE_TEMPLATE, "({ sp_StrRange _t$T = $r; sp_raise_cls(\"TypeError\", $B ? \"can't do binary search for String\" : \"can't do binary search for NilClass\"); sp_box_nil(); })", 0 },  /* only a numeric Range searches; CRuby names the begin's class */
-  { TY_STR_RANGE, "class",        0,   0, BF_ANY,  TY_CLASS,       BOPE_TEMPLATE, "((void)($r), ((sp_Class){0, SPL(\"Range\")}))", 0 },
+  { TY_STR_RANGE, "class",        0,   0, BF_ANY,  TY_CLASS,       BOPE_CLASS_VALUE, "Range" },
   { TY_STR_RANGE, "frozen?",      0,   0, BF_ANY,  TY_BOOL,        BOPE_TEMPLATE, "!($r).unfrozen", 0, 0, 0, 1 },
   { TY_STR_RANGE, "freeze",       0,   0, BF_ANY,  TY_STR_RANGE,   BOPE_RANGE_FREEZE, NULL, 0, 0, 0, 1 },
   { TY_STR_RANGE, "itself",       0,   0, BF_ANY,  TY_STR_RANGE,   BOPE_TEMPLATE, "$r", 0 },
@@ -1275,7 +1275,7 @@ static const BuiltinOp bop_rows[] = {
   { TY_FLOAT_RANGE, "inspect",      0,   0, BF_ANY,  TY_STRING,      BOPE_TEMPLATE, "({ sp_FloatRange _t$T = $r; sp_frange_inspect(_t$T); })", 0 },
   { TY_FLOAT_RANGE, "step",         1,   1, BF_NONE, TY_FLOAT_ARRAY, BOPE_TEMPLATE, "({ sp_FloatRange _t$T = $r; sp_FloatArray_from_step(_t$T.first, _t$T.last, $f0, _t$T.excl); })", 0 },
   { TY_FLOAT_RANGE, "step",         0,   0, BF_NONE, TY_FLOAT_ARRAY, BOPE_TEMPLATE, "({ sp_FloatRange _t$T = $r; sp_FloatArray_from_step(_t$T.first, _t$T.last, 1.0, _t$T.excl); })", 0 },  /* no argument: a step of 1 */
-  { TY_FLOAT_RANGE, "class",        0,   0, BF_ANY,  TY_CLASS,       BOPE_TEMPLATE, "((void)($r), ((sp_Class){0, SPL(\"Range\")}))", 0 },
+  { TY_FLOAT_RANGE, "class",        0,   0, BF_ANY,  TY_CLASS,       BOPE_CLASS_VALUE, "Range" },
   { TY_FLOAT_RANGE, "frozen?",      0,   0, BF_ANY,  TY_BOOL,        BOPE_TEMPLATE, "!($r).unfrozen", 0, 0, 0, 1 },
   { TY_FLOAT_RANGE, "freeze",       0,   0, BF_ANY,  TY_FLOAT_RANGE, BOPE_RANGE_FREEZE, NULL, 0, 0, 0, 1 },
   { TY_FLOAT_RANGE, "itself",       0,   0, BF_ANY,  TY_FLOAT_RANGE, BOPE_TEMPLATE, "$r", 0 },

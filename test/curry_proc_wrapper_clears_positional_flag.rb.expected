@@ -1,0 +1,16 @@
+Proc
+[1, 2]
+[1, 5]
+[1, 0]
+[1, 5]
+"wrong number of arguments (given 2, expected 1)"
+[[[1, {k: 5}], 0]]
+[[1, {k: 5}, 0]]
+[1, 0]
+[1, 5]
+Proc
+"wrong number of arguments (given 3, expected 2)"
+[1, 5]
+[1, 0]
+[[[1, {k: 5}], 0]]
+[1, 0]

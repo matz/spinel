@@ -3885,10 +3885,13 @@ int strbuf_poly_ivar_get(Compiler *c, int n) {
 }
 /* ...and is it the receiver of a String mutator, which changes the String
    the slot keeps in place? */
+int str_changing_name(const char *nm) {
+  return nm && (an_str_mutator_name(nm) || is_encoding_mutator(nm));
+}
 int strbuf_poly_ivar_mutated(Compiler *c, int n) {
   int pc = comp_recv_parent(c, n);
   const char *pn = pc >= 0 ? nt_str(c->nt, pc, "name") : NULL;
-  return pn && (an_str_mutator_name(pn) || is_encoding_mutator(pn)) && !is_freeze_name(pn);
+  return pn && str_changing_name(pn) && !is_freeze_name(pn);
 }
 int strbuf_call_reads_handle(Compiler *c, int recv) {
   return recv >= 0 && nt_kind(c->nt, recv) == NK_CallNode &&
@@ -4643,13 +4646,37 @@ int emit_const_read_stmt(Compiler *c, int id, Buf *b, int indent) {
   buf_erase(b, mark, b->len - mark);
   return 0;
 }
+/* A String constant read off a Class value that runs (`pick::BUF`) and
+   call id changes it or freezes it: the slot of whichever class the value
+   carries is a switch over the value (emit_constant_value), and the
+   lowering of such a call names its receiver more than once (the nil test,
+   the bytes, the handle it answers), so it would run the value again for
+   each and could read two classes' slots. A call that only reads names it
+   once. */
+static int const_class_slot_held(Compiler *c, int id, int r);
+/* Is call id's receiver a constant read off a Class value that
+   const_recv_hold holds (not a flagged constant, which has its own hold)? */
+static int const_recv_on_class(Compiler *c, int id) {
+  const NodeTable *nt = c->nt;
+  int r = nt_kind(nt, id) == NK_CallNode ? nt_ref(nt, id, "receiver") : -1;
+  if (r < 0 || nt_kind(nt, r) != NK_ConstantPathNode || nt_int(nt, r, "const_ptr", 0)) return 0;
+  const char *nm = nt_str(nt, r, "name");
+  return !const_has_flag(nm ? comp_const(c, nm) : NULL) && const_class_slot_held(c, id, r);
+}
+static int const_class_slot_held(Compiler *c, int id, int r) {
+  const NodeTable *nt = c->nt;
+  const char *nm = nt_str(nt, id, "name");
+  return nm && (str_changing_name(nm) || is_freeze_name(nm)) && const_recv_held(c, r) >= 0 &&
+         const_path_on_class_value(c, r, repr_of(c, nt_ref(nt, r, "parent")).as_ty) &&
+         repr_of(c, r).kind == RK_STRBUF && !sb_shadowed_reader(r);
+}
 /* A call on a flagged constant read through a receiver that runs (`pick::BUF
    << "y"`): the receiver and the flag test run once, into a pointer to the
    slot, and the call reads and writes through it (the lowering of a String
    mutator names its receiver twice). Declares the pointer in b and marks the
    receiver node with its temp; the caller emits the call and unmarks. -1
    when the call is no such one. */
-static int const_recv_hold(Compiler *c, int id, Buf *b, int *view) {
+static int const_recv_hold(Compiler *c, int id, Buf *b, int *view, int stmt, int local_pre) {
   const NodeTable *nt = c->nt;
   int r = nt_kind(nt, id) == NK_CallNode ? nt_ref(nt, id, "receiver") : -1;
   *view = -1;
@@ -4662,19 +4689,23 @@ static int const_recv_hold(Compiler *c, int id, Buf *b, int *view) {
   if (r < 0 || nt_kind(nt, r) != NK_ConstantPathNode || nt_int(nt, r, "const_ptr", 0)) return -1;
   const char *nm = nt_str(nt, r, "name");
   LocalVar *lv = nm ? comp_const(c, nm) : NULL;
-  if (!const_has_flag(lv) || const_recv_held(c, r) < 0) return -1;
+  /* (a call with a block holds only as a statement, where the block's loop
+     reads the pointer from the statement's own scope) */
+  int on_class = !const_has_flag(lv) && const_class_slot_held(c, id, r) && (stmt || nt_ref(nt, id, "block") < 0);
+  if (!on_class && (!const_has_flag(lv) || const_recv_held(c, r) < 0)) return -1;
   int t = ++g_tmp;
   /* the receiver's own prelude (`l.class` holds l in a temp) goes ahead of
      the pointer; a statement has no prelude buffer of its own */
   Buf slot; memset(&slot, 0, sizeof slot);
   Buf own; memset(&own, 0, sizeof own);
   Buf *sv_pre = g_pre; int sv_ind = g_indent;
-  if (!g_pre) { g_pre = &own; g_indent = 0; }
+  if (!g_pre || local_pre) { g_pre = &own; g_indent = 0; }
   emit_constant_slot(c, r, &slot);
   g_pre = sv_pre; g_indent = sv_ind;
   if (own.p) buf_puts(b, own.p);
-  emit_ctype(c, lv->type, b);
-  buf_printf(b, " *_p%d = %s; ", t, slot.p ? slot.p : "NULL");
+  if (on_class) buf_puts(b, "sp_String");
+  else emit_ctype(c, lv->type, b);
+  buf_printf(b, " *%s_p%d = %s; ", on_class ? "*" : "", t, slot.p ? slot.p : "NULL");
   free(slot.p); free(own.p);
   nt_node_set_int((NodeTable *)nt, r, "const_ptr", t);
   return r;
@@ -4688,7 +4719,7 @@ int emit_const_class_call_wrap(Compiler *c, int id, Buf *b, void (*emit)(Compile
   for (int i = g_n_argov - 1; i >= 0; i--)
     if (g_argov_node[i] == id || g_argov_node[i] == r) return 0;
   Buf pre = {0};
-  if (const_recv_hold(c, id, &pre, &view) < 0) { free(pre.p); return 0; }
+  if (const_recv_hold(c, id, &pre, &view, 1, 0) < 0) { free(pre.p); return 0; }
   buf_puts(b, "({ "); buf_puts(b, pre.p); free(pre.p);
   Buf own = {0}, value = {0}; Buf *saved_pre = g_pre;
   g_pre = &own; emit(c, id, &value); g_pre = saved_pre;
@@ -4698,25 +4729,61 @@ int emit_const_class_call_wrap(Compiler *c, int id, Buf *b, void (*emit)(Compile
   buf_puts(b, "; })");
   return 1;
 }
-int emit_const_recv_wrap(Compiler *c, int id, Buf *b) {
+/* Holds the slot of call id's constant receiver where const_recv_hold finds
+   one to hold, ahead of a lowering that names the receiver more than once.
+   A flagged constant's pointer is declared in the prelude buffer when there
+   is one (a call that hoists its loop into the prelude, `K::H.map { }`, reads
+   it from there), else in a statement expression the lowering's text goes
+   inside. A constant read off a Class value, held by a call without a block,
+   always takes the statement expression, and the call gets a prelude buffer
+   of its own, spliced in after the declaration: the value runs where the
+   receiver is evaluated, after the operands Ruby evaluates first, and what
+   the lowering hoists names the pointer from inside its scope. inline_only:
+   the caller writes into the statement's prelude itself (a `&.` head) and
+   holds only that form. Fills *h; the receiver node, or -1 when there is
+   nothing to hold; const_recv_hold_close ends it. */
+int const_recv_hold_open(Compiler *c, int id, Buf *b, ConstHold *h, int inline_only) {
+  memset(h, 0, sizeof *h);
+  h->view = -1;
+  int inl = const_recv_on_class(c, id) && nt_ref(c->nt, id, "block") < 0;
+  if (inline_only && !inl) { h->r = -1; return -1; }
   Buf pre; memset(&pre, 0, sizeof pre);
-  int view;
-  int r = const_recv_hold(c, id, &pre, &view);
-  if (r < 0) { free(pre.p); return 0; }
-  /* with a prelude buffer the pointer is declared there: a call that
-     hoists its loop into the prelude (`K::H.map { }`) reads it from there */
-  if (g_pre && view < 0) {
-    emit_indent(g_pre, g_indent); buf_puts(g_pre, pre.p ? pre.p : ""); buf_puts(g_pre, "\n");
-    free(pre.p);
-    emit_call(c, id, b);
-    nt_node_set_int((NodeTable *)c->nt, r, "const_ptr", 0);
-    return 1;
+  h->r = const_recv_hold(c, id, &pre, &h->view, 0, inl);
+  if (h->r < 0) { free(pre.p); return -1; }
+  h->inl = inl && h->view < 0;
+  if (h->inl) {
+    buf_puts(b, "({ "); buf_puts(b, pre.p ? pre.p : "");
+    h->at = b->len;
+    h->sv_pre = g_pre;
+    g_pre = &h->own;
   }
-  buf_puts(b, "({ "); buf_puts(b, pre.p ? pre.p : ""); free(pre.p);
+  else if (g_pre && h->view < 0) {
+    h->in_pre = 1;
+    emit_indent(g_pre, g_indent); buf_puts(g_pre, pre.p ? pre.p : ""); buf_puts(g_pre, "\n");
+  }
+  else {
+    buf_puts(b, "({ "); buf_puts(b, pre.p ? pre.p : "");
+  }
+  free(pre.p);
+  return h->r;
+}
+void const_recv_hold_close(Compiler *c, ConstHold *h, Buf *b) {
+  if (h->inl) {
+    g_pre = h->sv_pre;
+    if (h->own.p) {   /* what the call hoisted goes after the declaration, ahead of its text */
+      buf_insert_at(b, h->at, h->own.p);
+      free(h->own.p);
+    }
+  }
+  if (h->view >= 0) view_pop(c, h->view);
+  else nt_node_set_int((NodeTable *)c->nt, h->r, "const_ptr", 0);
+  if (!h->in_pre) buf_puts(b, "; })");
+}
+int emit_const_recv_wrap(Compiler *c, int id, Buf *b) {
+  ConstHold h;
+  if (const_recv_hold_open(c, id, b, &h, 0) < 0) return 0;
   emit_call(c, id, b);
-  if (view >= 0) view_pop(c, view);
-  else nt_node_set_int((NodeTable *)c->nt, r, "const_ptr", 0);
-  buf_puts(b, "; })");
+  const_recv_hold_close(c, &h, b);
   return 1;
 }
 /* For a call that is a statement, a held pointer gets a block of its own
@@ -4726,7 +4793,7 @@ int emit_const_recv_wrap(Compiler *c, int id, Buf *b) {
 int emit_const_recv_stmt_wrap(Compiler *c, int id, Buf *b, int indent, int tail) {
   Buf pre; memset(&pre, 0, sizeof pre);
   int view;
-  int r = const_recv_hold(c, id, &pre, &view);
+  int r = const_recv_hold(c, id, &pre, &view, 1, 0);
   if (r < 0) { free(pre.p); return 0; }
   emit_indent(b, indent);
   int scoped = !tail && view < 0;

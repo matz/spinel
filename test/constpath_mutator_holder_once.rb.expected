@@ -1,0 +1,101 @@
+-- freeze in value position
+which 1
+"aa"
+true
+false
+which 2
+"bb"
+true
+true
+which 3
+"aa"
+true
+true
+-- freeze in statement position
+which 1
+true
+false
+-- upcase! in value position
+which 1
+"CC"
+"CC"
+"dd"
+which 1
+nil
+"CC"
+"dd"
+which 2
+nil
+"CC"
+"dd"
+-- mutators in statement position
+which 1
+"CC!"
+"dd"
+which 2
+"CC!"
+"dd?"
+which 3
+"CC!"
+"dd?"
+which 1
+"CC!"
+"DD?"
+-- a mutator that changes nothing answers nil
+which 1
+nil
+"CC!"
+"DD?"
+-- a holder with no side effect
+"cc!"
+"cc!"
+"CC!"
+"CC!"
+-- the holder runs where the receiver is evaluated, not ahead of operands Ruby evaluates first
+"1 4"
+"1 BBBB"
+"sxbbbb"
+"aa"
+"bbbb"
+-- a safe-navigation call on the result
+which 1
+3
+-- a String []= through the holder runs it once
+which 1
+["Z"]
+1
+"Zm"
+"nn"
+which 2
+"Y"
+2
+"Zm"
+"Yn"
+which 3
+3
+"ZX"
+"Yn"
+-- a program's own String bang method, a safe-navigation call, an encoding change
+which 1
+"pppp"
+"pppp"
+"qq"
+1
+which 1
+"PPPP"
+"PPPP"
+"qq"
+1
+which 1
+#<Encoding:BINARY (ASCII-8BIT)>
+#<Encoding:BINARY (ASCII-8BIT)>
+#<Encoding:UTF-8>
+1
+-- a block call: the statement holds, the value form is master's
+which 1
+"RR"
+"bb"
+1
+"1 BBBB"
+"aa"
+"BBBB"

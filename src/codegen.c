@@ -2450,6 +2450,9 @@ static int emit_boxed_bang_self(Compiler *c, int node, Buf *b) {
     RC(RF_STRBUF_HANDLE, RW_HANDLE_ROUTE);
     return 1;
   }
+  /* (a receiver whose slot is read twice here, once for the box and once by
+     the call, is held ahead of both: `pick::BUF.upcase!` runs `pick` once) */
+  ConstHold hold, *held = const_recv_hold_open(c, node, b, &hold, 1) >= 0 ? &hold : NULL;
   Buf sb; memset(&sb, 0, sizeof sb);
   strbuf_slot_text(c, r, &sb);
   /* (read ahead of a block's prelude where it can rebind the slot) */
@@ -2462,6 +2465,7 @@ static int emit_boxed_bang_self(Compiler *c, int node, Buf *b) {
   buf_printf(b, "; _t%d ? ", tb);
   str_box_handle(b, sb.p ? sb.p : "");
   buf_puts(b, " : sp_box_nil(); })");
+  if (held) const_recv_hold_close(c, held, b);
   free(sb.p);
   RC(RF_STRBUF_HANDLE, RW_HANDLE_ROUTE);
   return 1;

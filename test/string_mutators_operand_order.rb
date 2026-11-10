@@ -1,4 +1,5 @@
 # spinel: gc-minor
+# spinel: gc-stress
 # String#[]=, insert and slice! run every operand once, in Ruby's order --
 # the receiver, the keys, the value -- before any check the method makes,
 # and then check and convert them in CRuby's order. Any operand type is
@@ -150,7 +151,10 @@ t { (begin; x; end).clear; x }
 
 # `x[start, len] = v`: CRuby converts the start and the length, raises for a
 # negative length, converts the value, checks the start and then the frozen
-# state; every pair of two faults, and the three of a frozen String
+# state; every pair of two faults, and the three of a frozen String, with
+# one faulting conversion at a time: CRuby converts the start and the length
+# as two arguments of one C call, so which of the two raises is its C
+# compiler's order
 t { x = +"ab"; x.freeze; x[1, 1] = "x"; x }   # F
 t { x = +"ab"; x[1, -1] = "x"; x }   # L
 t { x = +"ab"; x[10, 1] = "x"; x }   # S
@@ -187,3 +191,62 @@ r = (s[1] = TSC)
 p r.n, s
 r = s.insert(0, $tsv)
 p r
+
+# a splat as insert's value is the one text it holds
+def ins1(s, *r) = s.insert(1, *r)
+t { ins1(+"ab", "X") }
+t { ins1(+"ab") }
+t { ins1(+"ab", "X", "Y") }
+t { ins1(+"ab", 5) }
+
+# an operand that rebinds the receiver's ivar or global and lets the old
+# String be collected: the row changes the String it took, which it holds
+class RI
+  def initialize = (@s = +"abcdef")
+  def ri = (@s = +"XYZ"; GC.start; 1)
+  def ins = [@s.insert(ri, "q"), @s]
+end
+t { RI.new.ins }
+def rig = ($g = +"XYZ"; GC.start; 1)
+$g = +"abcdef"
+t { [$g.insert(rig, "q"), $g] }
+
+# slice! with a boxed first operand: the receiver's handle is taken before
+# the operands run, so an operand that rebinds the receiver's ivar or global
+# leaves the String the call cuts; a boxed operand held ahead because the
+# second runs code still picks its form by its class at run time
+class SH
+  def initialize = (@s = +"abcdef")
+  def rb = (@s = +"XYZ"; [1, "x"][0])
+  def run = [@s.slice!(rb), @s]
+  def run2 = [@s.slice!(rb, 2), @s]
+end
+t { SH.new.run }
+t { SH.new.run2 }
+def grb = ($g = +"XYZ"; [1, "x"][0])
+$g = +"abcdef"
+t { [$g.slice!(grb), $g] }
+def group(s) = (s << "!"; 1)
+hr = {r: /b(c)/, i: 1}
+t { s = +"abcd"; [s.slice!(hr[:r], group(s)), s] }
+t { s = +"abcd"; [s.slice!(hr[:i], group(s)), s] }
+class RS
+  def initialize = (@s = +"abcdef")
+  def ri = (@s = +"XYZ"; GC.start; 1)
+  def cut = [@s.slice!(ri, 2), @s]
+end
+t { RS.new.cut }
+$g = +"abcdef"
+t { [$g.slice!(rig, 2), $g] }
+class RA
+  def initialize = (@s = +"abcdef")
+  def ri = (@s = +"XYZ"; GC.start; 1)
+  def set1 = [(@s[ri] = "q"), @s]
+  def set2 = [(@s[ri, 1] = "q"), @s]
+end
+t { RA.new.set1 }
+t { RA.new.set2 }
+$g = +"abcdef"
+t { [($g[rig] = "q"), $g] }
+$g = +"abcdef"
+t { [($g[rig, 1] = "q"), $g] }

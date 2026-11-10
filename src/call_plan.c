@@ -1915,8 +1915,8 @@ static int cm_self_kind(Compiler *c, int self) {
 }
 /* Does call id run where no method of `name` is live yet, as the record
    proves it at the call (elab_call_method): cls's chain, its class side
-   for CT_CMETHOD, main's top-level functions for CT_TOP, cls's own methods
-   alone for CT_OWN (elab_call_own_method)? The method the
+   for CT_CMETHOD, main's top-level functions for CT_TOP, for CT_OWN the
+   method mi the tables hold as cls's own (elab_call_own_method)? The method the
    tables answer is then one a later statement defines, and the call
    raises (cplan_missing) or reaches the builtin self answers
    (cplan_self_builtin). Asked in the record's frame, once it is made.
@@ -1941,7 +1941,7 @@ static int ct_builtin_reopen_undefined_at(Compiler *c, int id, int cls, const ch
   if (framed) elab_plan_leave(c);
   return none;
 }
-static int ct_undefined_at(Compiler *c, int id, int cls, const char *name, unsigned flags) {
+static int ct_undefined_at(Compiler *c, int id, int cls, const char *name, unsigned flags, int mi) {
   if (ct_builtin_reopen_undefined_at(c, id, cls, name, flags)) return 1;
   if (!(flags & (CT_CMETHOD | CT_TOP)) || !elab_method_versions(c, name)) return 0;
   /* (a capture that cannot state the NameError keeps the table's method
@@ -1949,10 +1949,15 @@ static int ct_undefined_at(Compiler *c, int id, int cls, const char *name, unsig
   int rcls = flags & CT_TOP ? -1 : cls, sg = (flags & CT_CMETHOD) != 0, first_def = 0, body = 0, cl = 0;
   if (ct_capture_keeps_table(c, id, rcls, sg, name, flags, 0) && (ver_chain_count(c, rcls, sg, name, &first_def, &body, &cl), body))
     return 0;
-  /* (CT_OWN: cls's own methods alone, as its own history stands at the
-     call, whatever an ancestor or an extended module holds) */
+  /* CT_OWN asks of the method the tables hold as cls's own (mi): for its
+     own def, cls's own history at the call, whatever an ancestor or an
+     extended module holds; for a module's copy (an extend's), that and
+     the side's mixins, each from its point on; for an inherited copy, the
+     chain, as a call there */
+  const Scope *m = mi >= 0 ? &c->scopes[mi] : NULL;
+  int copy = m && (m->origin_module_ci > 0 || m->is_extend_copy), own = (flags & CT_OWN) && !(m && m->is_cmethod_copy && !copy);
   int framed = elab_plan_enter(c, id);
-  int none = (flags & CT_OWN ? elab_call_own_method(c, id, rcls, name, sg) : elab_call_method(c, id, rcls, name, sg, 1)) == ELAB_NO;
+  int none = (own ? elab_call_own_method(c, id, rcls, name, sg, copy) : elab_call_method(c, id, rcls, name, sg, 1)) == ELAB_NO;
   if (framed) elab_plan_leave(c);
   return none && !(nt_ref(c->nt, id, "receiver") >= 0 && !nt_int(c->nt, id, "self_call", 0) &&
                    builtin_self_method_known(name, cm_self_kind(c, flags & CT_TOP ? -1 : cls)) &&
@@ -2014,7 +2019,7 @@ int cplan_sg_slot_call(Compiler *c, int id, int ci, const char *name) {
 int cplan_cmethod_later(Compiler *c, int id, int cls, const char *name) {
   int asked = id >= 0 ? (int)nt_int(c->nt, id, "defined_ask", 0) : 0;
   if (asked) id = asked - 1;   /* defined?'s respond_to?: at the call it asks of */
-  if (id < 0 || cls < 0 || !ct_undefined_at(c, id, cls, name, CT_CMETHOD)) return 0;
+  if (id < 0 || cls < 0 || !ct_undefined_at(c, id, cls, name, CT_CMETHOD, -1)) return 0;
   int framed = elab_plan_enter(c, id);
   int now = elab_blocks_run_now(c, id);
   if (framed) elab_plan_leave(c);
@@ -2220,7 +2225,7 @@ int call_target(Compiler *c, int id, int cls, const char *name, unsigned flags, 
       r = pin;
     }
   }
-  else if (ct_undefined_at(c, id, cls, name, flags)) {
+  else if (ct_undefined_at(c, id, cls, name, flags, mi)) {
     /* a call the record proves runs before any version of a class method or
        a top-level function is defined raises, whatever versions follow; the
        entry's else arm answers only a call that may run before them. One at
@@ -2965,7 +2970,7 @@ static int cplan_capture_absent(Compiler *c, int id, int mi) {
     name = method_sym_arg(c, id);
     if ((m->entry != ENTRY_DISPATCH && m->entry != ENTRY_TABLE) || cplan_entry_finds(c, mi) != VER_FINDS_NONE || is_instance_method_name(nt_str(c->nt, id, "name"))) return 0;
   }
-  else if (cls < 0 || !(ct_undefined_at(c, id, cls, name, CT_CMETHOD) || cm_capture_never_made(c, id, cls, name)) ||
+  else if (cls < 0 || !(ct_undefined_at(c, id, cls, name, CT_CMETHOD, -1) || cm_capture_never_made(c, id, cls, name)) ||
            cm_builtin_answers(c, cls, name)) return 0;
   return cplan_capture_names(c, id, cls, sg, name, m != NULL);
 }

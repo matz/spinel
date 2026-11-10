@@ -374,10 +374,11 @@ void elab_open_histories(Compiler *c, void (*fn)(void *arg, int cls, int sg, con
 int elab_call_method(Compiler *c, int id, int cls, const char *name, int sg, int mm);
 /* ...the same of cls's own methods alone (its singleton's own when sg), as
    a call that asks the class itself sees them (CT_OWN: singleton_methods(false)):
-   its own history of name at the call, none of its ancestors' or mixins'
-   (the Class reopening's class side reads its instance side too, as
-   elab_call_method does) */
-int elab_call_own_method(Compiler *c, int id, int cls, const char *name, int sg);
+   its own history of name at the call, none of its ancestors'; with
+   mixins, its side's prepends' and includes' or extends' too, each from
+   its point on (the Class reopening's class side reads its instance side
+   too, as elab_call_method does) */
+int elab_call_own_method(Compiler *c, int id, int cls, const char *name, int sg, int mixins);
 /* the class a record builder made (`Foo = Struct.new(:a)`), or one whose
    header's superclass is the class a builder makes (`class Foo <
    Struct.new(:a)`), that cls is or inherits from; -1 for none. Past it

@@ -6303,13 +6303,15 @@ int elab_call_method(Compiler *c, int id, int cls, const char *name, int sg, int
   return o;
 }
 
-int elab_call_own_method(Compiler *c, int id, int cls, const char *name, int sg) {
+int elab_call_own_method(Compiler *c, int id, int cls, const char *name, int sg, int mixins) {
   LoadPoint p;
   if (!name || !lr_call_point(c, id, cls, &p)) return ELAB_UNKNOWN;
   const LrDef *d = NULL;
-  int o = lr_own(c, lr_hist(c->lrec, cls, sg, name, 0), p, 0, 0, &d);
-  /* (an undef or a removal: that one's answer, as elab_call_method's) */
-  if (o == LR_STOP || (o == ELAB_NO && d)) return ELAB_UNKNOWN;
+  int unsure = 0, o = mixins ? lr_search_one(c, cls, sg, name, -1, p, 0, 0, &d, 0, &unsure, 0)
+                             : lr_own(c, lr_hist(c->lrec, cls, sg, name, 0), p, 0, 0, &d);
+  /* (an undef or a removal: that one's answer, as elab_call_method's; a
+     mixin that may have run: no answer) */
+  if (o == LR_STOP || (o == ELAB_NO && (d || unsure))) return ELAB_UNKNOWN;
   if (o == ELAB_NO) o = lr_class_reopen_side(c, cls, sg, name, p);
   if (o == ELAB_NO && !lr_none_holds(c, id, cls, sg, name, p, 1)) return ELAB_UNKNOWN;
   return o;

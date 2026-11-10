@@ -506,6 +506,11 @@ int bop_answers_recv(TyKind rt, const char *name, int argc, int has_block);
    value, by the Array and the Hash iterator rows (IA_RECV in each family
    that has the name)? */
 int iter_boxed_answers_recv(const char *name);
+/* Does `name` answer a copy of a boxed receiver (BOPF_COPY_CLASS), by the
+   String, Array and Hash rows that have it: 1 when each of them does, 2
+   when the Hash's does and another's does not (Array#compact makes a new
+   Array, Hash#compact a copy), else 0 */
+int bop_boxed_answers_copy(const char *name, int argc);
 /* Is `name` a method every value answers that hands its block the receiver
    itself, once (an any-receiver iterator row yielding YS_RECV: tap, then,
    yield_self)? Its answer is the receiver or the block's value. */

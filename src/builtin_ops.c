@@ -3208,6 +3208,18 @@ int bop_answers_recv(TyKind rt, const char *name, int argc, int has_block) {
   return r && (r->answer == IA_RECV || r->answer == IA_BLOCKVALS_INPLACE);
 }
 
+int bop_boxed_answers_copy(const char *name, int argc) {
+  static const TyKind fam[] = { TY_STRING, BOP_ANY_ARRAY, BOP_ANY_HASH };
+  int copies = 0, other = 0;
+  for (int i = 0; i < 3; i++) {
+    const BuiltinOp *op = bop_find(fam[i], name, argc, 0);
+    if (!op) continue;
+    if (op->flags & BOPF_COPY_CLASS) copies |= 1 << i;
+    else other = 1;
+  }
+  return !copies ? 0 : !other ? 1 : copies == 1 << 2 ? 2 : 0;
+}
+
 int iter_boxed_answers_recv(const char *name) {
   const IterRow *a = iter_row(BOP_ANY_ARRAY, name, 0, 0), *h = iter_row(BOP_ANY_HASH, name, 0, 0);
   return (a || h) && (!a || a->answer == IA_RECV) && (!h || h->answer == IA_RECV);

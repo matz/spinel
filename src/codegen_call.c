@@ -21819,7 +21819,10 @@ static int emit_bivar_copy_wrap(Compiler *c, int id, Buf *b) {
   Repr rr = repr_of(c, recv), ret_repr = repr_of(c, id);
   TyKind rt = rr.as_ty, ret = ret_repr.as_ty;
   if (!(ty_bivar_keyed(rt) || rt == TY_POLY) || !(ty_bivar_keyed(ret) || ret == TY_POLY)) return 0;
-  if (!(bop_answers_self(rt, nm, argc, 0) & BOPF_COPY_CLASS) && !is_object_copy(nm)) return 0;
+  /* a boxed receiver: by every kind's rows, the copy made only for a Hash
+     when only the Hash's copies (bop_boxed_answers_copy) */
+  int boxed_copy = rt == TY_POLY && rr.kind == RK_BOXED ? bop_boxed_answers_copy(nm, argc) : 0;
+  if (!(bop_answers_self(rt, nm, argc, 0) & BOPF_COPY_CLASS) && !is_object_copy(nm) && !boxed_copy) return 0;
   int t = ++g_tmp;
   char rn[24], dn[24];
   snprintf(rn, sizeof rn, "_t%d", t); snprintf(dn, sizeof dn, "_d%d", t);
@@ -21838,7 +21841,10 @@ static int emit_bivar_copy_wrap(Compiler *c, int id, Buf *b) {
   emit_ctype(c, ret, b); buf_printf(b, " %s = ", dn); emit_call_unwrapped(c, id, b);
   view_unbind(slot);
   g_ivar_nil_guarded_id = sv_ng;
-  buf_printf(b, ret_repr.kind == RK_BOXED ? "; SP_GC_ROOT_RBVAL(%s); sp_bivar_copy(" : "; SP_GC_ROOT(%s); sp_bivar_copy(", dn);
+  buf_printf(b, ret_repr.kind == RK_BOXED ? "; SP_GC_ROOT_RBVAL(%s); " : "; SP_GC_ROOT(%s); ", dn);
+  if (boxed_copy == 2 && !is_object_copy(nm))
+    buf_printf(b, "if (%s.tag == SP_TAG_OBJ && sp_poly_is_hash_kind(%s.cls_id)) ", rn, rn);
+  buf_puts(b, "sp_bivar_copy(");
   emit_boxed_text(c, rr.kind == RK_BOXED ? TY_POLY : rt, rn, b); buf_puts(b, ", "); emit_boxed_text(c, ret, dn, b);
   buf_printf(b, "); %s; })", dn);
   return 1;

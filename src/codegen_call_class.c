@@ -4694,8 +4694,7 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
                        : const_defined_known(c, CG_NONE, cn0);
         /* a constant two modules own (A__X, B__X) has no flat X: the classes
            that see it answer below */
-        if (!lit0 && !yes && !strstr(cn0, "::"))
-          for (int k = 0; k < c->nclasses && !yes; k++) yes = const_seen_by_class(c, k, cn0);
+        if (!lit0 && !yes) yes = const_defined_any_class(c, cn0);
         /* a Class known only at run time: the classes that see the constant,
            as its literal form decides for one (#9876); a top-level one, or
            a qualified name, every class sees */

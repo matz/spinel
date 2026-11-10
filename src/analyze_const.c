@@ -410,13 +410,21 @@ void an_const_presence(Compiler *c) {
     LocalVar *lv = rn && !cw_path_target(&w, id) ? comp_const(c, rn) : NULL;
     int listed = cn && is_constants_list_name(cn), computed = cn && !rn && is_const_query_name(cn) && nt_ref(nt, id, "arguments") >= 0;
     /* `A.const_defined?(:X)` with X keyed by owner only (A__X, B__X: two
-       modules own an X) asks each constant of that leaf */
+       modules own an X) asks the slot A's chain finds; a receiver known
+       only at run time asks each constant of that leaf */
     int leaf_q = !lv && rn && cn && is_const_query_name(cn) && !strstr(rn, "::");
+    if (leaf_q) {
+      int r = nt_ref(nt, id, "receiver");
+      NodeKind rk = r >= 0 ? nt_kind(nt, r) : NK_NONE;
+      if (rk == NK_ConstantReadNode || rk == NK_ConstantPathNode) {
+        lv = const_defined_slot(c, const_get_recv_class(c, id, r), rn);
+        if (lv) leaf_q = 0;
+      }
+    }
     if ((!lv && !listed && !computed && !leaf_q) || !cw_placed(&w, id)) continue;
     for (int i = lv ? cw_index(&w, lv) : 0, end = lv ? i + 1 : c->nconsts; i < end; i++) {
       if (leaf_q) {
-        const char *kn = c->consts[i].name, *lf = kn, *q;
-        for (q = kn; (q = strstr(q, "__")); q += 2) lf = q + 2;
+        const char *kn = c->consts[i].name, *lf = const_key_leaf(kn);
         if (lf == kn || !sp_streq(lf, rn)) continue;
       }
       if (!first_settled[i] && !an_const_read_finds(c, id, c->consts[i].name))

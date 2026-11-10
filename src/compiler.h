@@ -2546,6 +2546,9 @@ int comp_class_may_be_value(Compiler *c, int k);
    collected. See comp_descendants. */
 const int *comp_descendants(Compiler *c, int cid, int *n);
 void comp_descendants_reset(void);
+/* Can no class inherit from class `cid`: no descendant, and not a reopened
+   builtin class, whose subclasses the parent links do not show. */
+int comp_class_is_leaf(Compiler *c, int cid);
 /* Walk the chain for an attr reader/writer; returns 1 and the owning class. */
 int        comp_reader_in_chain(Compiler *c, int class_id, const char *name, int *def_class);
 int        comp_writer_in_chain(Compiler *c, int class_id, const char *name, int *def_class);

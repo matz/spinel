@@ -1,0 +1,20 @@
+[:o, :b]
+[:o, :b]
+[:q, :c]
+:o
+:q
+:e
+E
+RuntimeError
+O
+Object
+String
+Array
+Hash
+"O"
+"Integer"
+true
+false
+:leaf
+Leaf
+:int

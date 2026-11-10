@@ -2327,7 +2327,20 @@ int const_defined_known(Compiler *c, int rk, const char *cgn) {
     return 1;
   int cls = -1;
   if (rk != CG_NONE) const_get_resolve(c, rk, cgn, &cls);
-  return cls >= 0;
+  if (cls >= 0) return 1;
+  /* two modules that each own NM key it by their qualified name
+     (A__NM, B__NM), so the flat table has no NM: ask R's chain */
+  return rk >= 0 && rk < c->nclasses && cgn && !strstr(cgn, "::") && const_seen_by_class(c, rk, cgn);
+}
+/* The constant slot `R.const_defined?(:N)` finds (R's class, or CG_NONE /
+   CG_UNTABLED): the flat N, else the qualified key (A__N) that R's chain
+   holds when two modules each own an N. NULL for none. Its set flag says
+   whether the write has run. */
+LocalVar *const_defined_slot(Compiler *c, int rk, const char *cgn) {
+  LocalVar *lv = cgn ? comp_const(c, cgn) : NULL;
+  if (lv || rk < 0 || rk >= c->nclasses || !cgn || strstr(cgn, "::")) return lv;
+  int ix = const_path_value_const(c, rk, cgn, NULL, 0);
+  return ix >= 0 ? &c->consts[ix] : NULL;
 }
 /* Does class or module K see constant CGN as `K.const_defined?(CGN)` looks:
    K, its ancestors and the modules they include. (A top-level constant,

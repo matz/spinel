@@ -2291,6 +2291,7 @@ int        const_defined_from(Compiler *c, int rk, const char *cgn);   /* ... an
 int        const_defined_own(Compiler *c, int rk, const char *cgn);
 int        class_below_object(Compiler *c, int k);   /* below BasicObject, or BasicObject itself: its constants reach no Object */    /* R.const_defined?(N, false): R's own, Object's builtin names too */
 int        const_seen_by_class(Compiler *c, int k, const char *cgn);
+LocalVar  *const_defined_slot(Compiler *c, int rk, const char *cgn);
 int        const_path_value_const(Compiler *c, int k, const char *nm, const int *cands, int ncands); /* what `m::NM` reads for m = class K: K's chain, not Object's (-1: NameError) */
 const LocalVar *const_value_path_top(Compiler *c, const char *nm); /* the top-level NM `Object::NM` reads through a value, or NULL */
 int        const_path_value_class(Compiler *c, int k, const char *nm); /* the class nested as NM in K's chain, -1 for none */

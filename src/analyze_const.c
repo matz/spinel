@@ -409,10 +409,19 @@ void an_const_presence(Compiler *c) {
     const char *rn = cw_read_name(nt, id), *cn = nt_kind(nt, id) == NK_CallNode ? nt_str(nt, id, "name") : NULL;
     LocalVar *lv = rn && !cw_path_target(&w, id) ? comp_const(c, rn) : NULL;
     int listed = cn && is_constants_list_name(cn), computed = cn && !rn && is_const_query_name(cn) && nt_ref(nt, id, "arguments") >= 0;
-    if ((!lv && !listed && !computed) || !cw_placed(&w, id)) continue;
-    for (int i = lv ? cw_index(&w, lv) : 0, end = lv ? i + 1 : c->nconsts; i < end; i++)
+    /* `A.const_defined?(:X)` with X keyed by owner only (A__X, B__X: two
+       modules own an X) asks each constant of that leaf */
+    int leaf_q = !lv && rn && cn && is_const_query_name(cn) && !strstr(rn, "::");
+    if ((!lv && !listed && !computed && !leaf_q) || !cw_placed(&w, id)) continue;
+    for (int i = lv ? cw_index(&w, lv) : 0, end = lv ? i + 1 : c->nconsts; i < end; i++) {
+      if (leaf_q) {
+        const char *kn = c->consts[i].name, *lf = kn, *q;
+        for (q = kn; (q = strstr(q, "__")); q += 2) lf = q + 2;
+        if (lf == kn || !sp_streq(lf, rn)) continue;
+      }
       if (!first_settled[i] && !an_const_read_finds(c, id, c->consts[i].name))
         early_reads[i] |= listed ? 2 : computed ? 4 : 1;
+    }
   }
   for (int i = 0; i < c->nconsts; i++) {
     if (c->consts[i].const_early || !early_reads[i]) continue;

@@ -1503,7 +1503,8 @@ int emit_call_reflection_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
         if (cd_rk != CG_NONE && !const_defined_own(c, cd_rk, qm)) yes = 0;
       }
       /* a constant not assigned yet is not defined: asked at run time */
-      if (yes && const_has_flag(comp_const(c, qm))) buf_printf(b, "cst_%s__set", qm);
+      LocalVar *cd_lv = const_defined_slot(c, cd_rk, qm);
+      if (yes && const_has_flag(cd_lv)) buf_printf(b, "cst_%s__set", cd_lv->name);
       else buf_printf(b, "%d", yes);
       return 1;
     }
@@ -4687,9 +4688,14 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
         }
         int vci = view_class_is(c, recv, ELAB_GAIN_CONSTS);   /* a class-tag arm's: as its class's literal */
         int lit0 = vci >= 0 || rk0 == NK_ConstantReadNode || rk0 == NK_ConstantPathNode;
-        int yes = lit0 ? const_defined_from(c, vci >= 0 ? vci : const_get_recv_class(c, id, recv), cn0) &&
+        int rk0c = lit0 ? (vci >= 0 ? vci : const_get_recv_class(c, id, recv)) : CG_NONE;
+        int yes = lit0 ? const_defined_from(c, rk0c, cn0) &&
                          !(vci < 0 && const_defined_basic_object_misses(c, recv, cn0))
                        : const_defined_known(c, CG_NONE, cn0);
+        /* a constant two modules own (A__X, B__X) has no flat X: the classes
+           that see it answer below */
+        if (!lit0 && !yes && !strstr(cn0, "::"))
+          for (int k = 0; k < c->nclasses && !yes; k++) yes = const_seen_by_class(c, k, cn0);
         /* a Class known only at run time: the classes that see the constant,
            as its literal form decides for one (#9876); a top-level one, or
            a qualified name, every class sees */
@@ -4718,16 +4724,22 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
           int tc = ++g_tmp;
           buf_printf(b, "({ sp_Class _t%d = ", tc); emit_expr(c, recv, b);
           buf_printf(b, "; (0");
-          for (int k = 0; k < c->nclasses; k++)
-            if (const_seen_by_class(c, k, cn0)) buf_printf(b, " || _t%d.cls_id == %d", tc, k);
+          /* each class with the slot it finds: a constant two modules
+             own is keyed by its owner, with that key's set flag */
+          for (int k = 0; k < c->nclasses; k++) {
+            if (!const_seen_by_class(c, k, cn0)) continue;
+            LocalVar *klv = const_defined_slot(c, k, cn0);
+            if (const_has_flag(klv)) buf_printf(b, " || (_t%d.cls_id == %d && cst_%s__set)", tc, k, klv->name);
+            else buf_printf(b, " || _t%d.cls_id == %d", tc, k);
+          }
           buf_puts(b, ")");
-          if (const_has_flag(comp_const(c, cn0))) buf_printf(b, " && cst_%s__set", cn0);
           buf_puts(b, "; })");
           return 1;
         }
         buf_printf(b, "((void)("); emit_expr_for_effect(c, recv, b);
         /* a constant not assigned yet is not defined: asked at run time */
-        if (yes && const_has_flag(comp_const(c, cn0))) buf_printf(b, "), cst_%s__set)", cn0);
+        LocalVar *cd0 = const_defined_slot(c, rk0c, cn0);
+        if (yes && const_has_flag(cd0)) buf_printf(b, "), cst_%s__set)", cd0->name);
         else buf_printf(b, "), %d)", yes);
         return 1;
       }

@@ -24,3 +24,5 @@ E = Struct.new(*%w[k j].map(&:to_sym))
 p E.members, Tag.new.to_sym
 F = Struct.new(*%i[z y].sort)
 p F.members
+# ... also where the program names Array, String and Symbol elsewhere
+p [].is_a?(Array), "".is_a?(String), :a.is_a?(Symbol)

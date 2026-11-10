@@ -6419,7 +6419,7 @@ int cplan_nil(Compiler *c, int id) {
   if (r < 0 || !nm || nt_safe_nav(nt, id)) return CN_NONE;
   /* the receiver as settled, not as a view retypes it: a poly arm's
      unboxed String is never its box's nil */
-  TyKind rt = c->ntype[r];
+  TyKind rt = comp_ntype_stored(c, r);
   /* under --share-strings, a String the rule made the shared handle is
      nil as its NULL handle (#6765) */
   /* Exception text dispatch has the same nil target as an ordinary call,

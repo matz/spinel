@@ -7881,7 +7881,7 @@ static int dsend_poly_builtin_classes(Compiler *c, const char **out, int cap) {
   for (int k = 0; core[k] && n < cap; k++) out[n++] = core[k];
   const NodeTable *nt = c->nt;
   for (int id = 0; id < nt->count && n < cap; id++) {
-    TyKind t = c->ntype[id];
+    TyKind t = comp_ntype_stored(c, id);
     if (t == TY_CLASS) continue;
     const char *b = builtin_class_of_type(t);
     if (!b) continue;
@@ -21835,7 +21835,7 @@ int desugar_builtin_alias_calls(Compiler *c) {
     if (!nm) continue;
     int recv = nt_ref(nt, id, "receiver"), k = -1;
     if (recv >= 0) {
-      TyKind rt = c->ntype[recv];
+      TyKind rt = comp_ntype_stored(c, recv);
       if (ty_is_object(rt)) k = ty_object_class(rt);
     }
     else {

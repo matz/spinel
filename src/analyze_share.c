@@ -160,7 +160,7 @@ static int share_target_armed_plan(Compiler *c, const CallPlan *p, int call, int
   int recv = nt_ref(c->nt, call, "receiver");
   /* (a receiver of no type the walk follows the user methods of: with
      them gone its builtin arm is an unknown call, which joins UNKNOWN) */
-  if (recv < 0 || c->ntype[recv] != TY_POLY) return 1;
+  if (recv < 0 || comp_ntype_stored(c, recv) != TY_POLY) return 1;
   const ClsSet *cs = cls_fact_node(c, recv);
   if (!cs || cs->all) return 1;
   const char *nm = nt_str(c->nt, call, "name");
@@ -308,7 +308,7 @@ int share_exact_new_class(Compiler *c, int n) {
    class facts rule out (cls_fact_excludes). 0 for an argument of any other type, whose
    conversion is the builtin's; more than cap when they do not fit. */
 static int sh_string_conv_methods(Compiler *c, int arg, int *mis, int cap) {
-  TyKind at = c->ntype[arg];
+  TyKind at = comp_ntype_stored(c, arg);
   int obj = ty_is_object(at), ocid = obj ? ty_object_class(at) : -1, n = 0;
   int exact = obj && share_exact_new_class(c, arg) == ocid;
   if ((!obj && at != TY_POLY && at != TY_UNKNOWN)) return 0;
@@ -1421,7 +1421,7 @@ static int sh_fresh_elems(Compiler *c, int r, int depth) {
      names them: `sort_by { |x| ... }` is left to the block's own facts, and
      a name the program may answer itself to the Array rows,
      share_builtin_overridden.) */
-  if (nm && recv >= 0 && blk < 0 && ty_is_array(c->ntype[recv]) &&
+  if (nm && recv >= 0 && blk < 0 && ty_is_array(comp_ntype_stored(c, recv)) &&
       sh_answers_elems_run(bop_share_named(BOP_ANY_ARRAY, nm), call_plain_argc(c, r)) &&
       !share_builtin_overridden(c, "Array", nm))
     return sh_fresh_elems(c, recv, depth + 1);
@@ -1433,7 +1433,7 @@ static int sh_fresh_elems(Compiler *c, int r, int depth) {
     return bn > 0 && !sh_has_next(nt, body) && share_value_fresh(c, bb[bn - 1], depth + 1);
   }
   if (nt_kind(nt, blk) != NK_BlockArgumentNode || nt_kind(nt, nt_ref(nt, blk, "expression")) != NK_SymbolNode) return 0;
-  TyKind at = c->ntype[recv];
+  TyKind at = comp_ntype_stored(c, recv);
   TyKind et = ty_is_array(at) ? ty_array_elem(at) : TY_UNKNOWN;
   return et != TY_UNKNOWN && !sh_may_hold(c, et);
 }
@@ -1478,7 +1478,7 @@ static int sh_callable_fresh(Compiler *c, int k, int depth) {
   else body = nt_ref(nt, un ? nt_ref(nt, k, "block") : k, "body");
   int bn = 0; const int *bb = body >= 0 && nt_kind(nt, body) == NK_StatementsNode ? nt_arr(nt, body, "body", &bn) : NULL;
   if (bn == 0 || sh_has_jump(nt, body)) return 0;
-  TyKind t = c->ntype[bb[bn - 1]];
+  TyKind t = comp_ntype_stored(c, bb[bn - 1]);
   return (t != TY_STRING && t != TY_STRBUF && t != TY_POLY && t != TY_UNKNOWN) ||
          share_value_fresh(c, bb[bn - 1], depth + 1);
 }
@@ -1574,7 +1574,7 @@ static int sh_builtin_call_pure(Compiler *c, int n) {
   const char *name = nt_str(c->nt, n, "name");
   if (!name || is_receiver_conversion(name) || sh_has_targets(c, n)) return 0;
   int recv = nt_ref(c->nt, n, "receiver");
-  int s = recv >= 0 ? bop_share_named(sh_family(c->ntype[recv]), name)
+  int s = recv >= 0 ? bop_share_named(sh_family(comp_ntype_stored(c, recv)), name)
                      : bop_share_kernel(name, nt_int(c->nt, n, "builtin_only", 0));
   if (!s) s = bop_share_named(BOP_ANY_RECV, name);
   return s == BSH_PURE;
@@ -1599,7 +1599,7 @@ static int sh_value_fresh_leaf(Compiler *c, int n, int depth) {
       if (mis[i] < 0 || scope_ret_param(c, mis[i]) >= 0 || !scope_ret_fresh(c, mis[i]))
         return 0;
     /* (a boxed argument may be a String, which Kernel#String answers itself) */
-    return nconv <= 64 && (ty_is_object(c->ntype[conv]) || share_value_fresh(c, conv, depth + 1));
+    return nconv <= 64 && (ty_is_object(comp_ntype_stored(c, conv)) || share_value_fresh(c, conv, depth + 1));
   }
   if (k == NK_YieldNode) {
     int mi = sh_method_index(c, n);
@@ -1687,7 +1687,7 @@ int share_value_needs_handle(Compiler *c, int v) {
   if (k == NK_NilNode || k == NK_StringNode || k == NK_ArrayNode || k == NK_HashNode ||
       k == NK_RangeNode || k == NK_SymbolNode)
     return SHN_NO;
-  TyKind t = c->ntype[v];
+  TyKind t = comp_ntype_stored(c, v);
   if (t != TY_STRING && t != TY_STRBUF && t != TY_POLY) return SHN_NO;
   Scope *sc = comp_scope_of(c, v);
   if (!sc || !sc->reachable || share_frozen_string(c, v)) return SHN_NO;
@@ -1899,7 +1899,7 @@ static int sh_plain_operand(Compiler *c, int n) {
     return 1;
   case NK_CallNode: {
     int recv = nt_ref(nt, n, "receiver");
-    TyKind rt = recv >= 0 ? c->ntype[recv] : TY_VOID;
+    TyKind rt = recv >= 0 ? comp_ntype_stored(c, recv) : TY_VOID;
     /* a freeze moves no payload and changes no byte: a borrowed key read
        beside one stays the live buffer (`h[k] = k.freeze`) */
     if ((rt == TY_STRING || rt == TY_STRBUF) && is_freeze_name(nt_str(nt, n, "name")) &&
@@ -1922,7 +1922,7 @@ static int sh_plain_operand(Compiler *c, int n) {
    which reads out through the copying face? */
 static int sh_handle_read(Compiler *c, int a) {
   const NodeTable *nt = c->nt;
-  if (c->strbuf_box[a] || c->strbuf_handle_demand[a] || c->strbuf_read_raw[a]) return 0;
+  if (comp_strbuf_box_stored(c, a) || comp_strbuf_handle_demand_stored(c, a) || c->strbuf_read_raw[a]) return 0;
   if (nt_kind(nt, a) == NK_LocalVariableReadNode) {
     const char *ln = nt_str(nt, a, "name");
     LocalVar *lv = ln ? scope_local(comp_scope_of(c, a), ln) : NULL;
@@ -1944,7 +1944,7 @@ static int sh_hash_key_call(Compiler *c, int n) {
   int recv = nt_ref(nt, n, "receiver");
   const char *name = nt_str(nt, n, "name");
   if (recv < 0 || !name) return 0;
-  TyKind rt = c->ntype[recv];
+  TyKind rt = comp_ntype_stored(c, recv);
   if (rt != TY_STR_INT_HASH && rt != TY_STR_STR_HASH && rt != TY_STR_POLY_HASH) return 0;
   if (sh_has_targets(c, n)) return 0;
   if (is_store_alias(name)) return 1;
@@ -1969,7 +1969,7 @@ void share_mark_borrows(Compiler *c) {
   /* a String-keyed Hash literal stores each entry as such a call does:
      its key, beside a plain value */
   NT_FOREACH_KIND(nt, NK_HashNode, n) {
-    TyKind ht = c->ntype[n];
+    TyKind ht = comp_ntype_stored(c, n);
     if (ht != TY_STR_INT_HASH && ht != TY_STR_STR_HASH && ht != TY_STR_POLY_HASH) continue;
     int en = 0; const int *el = nt_arr(nt, n, "elements", &en);
     for (int i = 0; i < en; i++) {

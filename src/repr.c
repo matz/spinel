@@ -892,8 +892,8 @@ int repr_call_returns_handle(Compiler *c, int v) {
   }
   if (v < 0 || nt_kind(nt, v) != NK_CallNode) return 0;
   /* a String's value, or one the pickup marks to be stored as the handle */
-  TyKind t = c->ntype[v];
-  if (t != TY_STRING && !(t == TY_STRBUF && (c->strbuf_box[v] || c->n_cext_extensions))) return 0;
+  TyKind t = comp_ntype_stored(c, v);
+  if (t != TY_STRING && !(t == TY_STRBUF && (comp_strbuf_box_stored(c, v) || c->n_cext_extensions))) return 0;
   if (strbuf_io_outbuf(c, v) >= 0) return 1;
   /* a Method's call: the method `method(:m)` names */
   int recv = nt_ref(nt, v, "receiver");
@@ -978,7 +978,7 @@ int repr_call_returns_handle(Compiler *c, int v) {
 int repr_boxed_reader_handle(Compiler *c, int v) {
   const NodeTable *nt = c->nt;
   if (v < 0 || nt_kind(nt, v) != NK_CallNode ||
-      (c->ntype[v] != TY_STRING && !(c->ntype[v] == TY_STRBUF && c->strbuf_box[v])) ||
+      (comp_ntype_stored(c, v) != TY_STRING && !(comp_ntype_stored(c, v) == TY_STRBUF && comp_strbuf_box_stored(c, v))) ||
       nt_ref(nt, v, "block") >= 0 ||
       nt_ref(nt, v, "arguments") >= 0) return 0;
   int recv = nt_ref(nt, v, "receiver");
@@ -1009,7 +1009,7 @@ int repr_boxed_to_s_operand(Compiler *c, int v) {
   int recv = nt_ref(nt, v, "receiver");
   if (!is_to_s_name(nm) || recv < 0 || call_plain_argc(c, v) != 0 ||
       nt_ref(nt, v, "block") >= 0 || repr_of(c, recv).kind != RK_BOXED ||
-      (c->ntype[v] != TY_STRING && c->ntype[v] != TY_STRBUF)) return -1;
+      (comp_ntype_stored(c, v) != TY_STRING && comp_ntype_stored(c, v) != TY_STRBUF)) return -1;
   int targets[CPT_MAX], n = cplan_targets(c, v, targets, CPT_MAX);
   if (n < 0) return -1;
   for (int i = 0; i < n; i++) {
@@ -1137,7 +1137,7 @@ static int repr_strbuf_src(const Compiler *c, int node, TyKind t) {
     const char *ln = nt_str(nt, node, "name");
     Scope *s = ln ? comp_scope_of(mc, node) : NULL;
     LocalVar *lv = s ? scope_local(s, ln) : NULL;
-    if (lv && lv->type == TY_POLY && c->nilnarrow[node] == TY_STRBUF) return RS_SLOT_POLY;
+    if (lv && lv->type == TY_POLY && comp_nilnarrow_stored(c, node) == TY_STRBUF) return RS_SLOT_POLY;
     return lv && lv->type == TY_STRBUF && lv->str_shared ? RS_HANDLE : RS_NONE;
   }
   if (t != TY_STRBUF) return RS_NONE;
@@ -1181,7 +1181,7 @@ static int repr_strbuf_src(const Compiler *c, int node, TyKind t) {
   if (k == NK_CallNode) {
     /* A demanded `s.to_s` over a local holding the handle boxes that
        handle, as emit_boxed_strbuf does (an_str_conversion_local). */
-    if (c->strbuf_box[node]) {
+    if (comp_strbuf_box_stored(c, node)) {
       int cr = an_str_conversion_local(mc, node);
       if (cr >= 0 && comp_ntype(c, cr) == TY_STRBUF) return RS_HANDLE;
     }
@@ -1198,19 +1198,19 @@ static int repr_strbuf_src(const Compiler *c, int node, TyKind t) {
     if (repr_env_store_operand(mc, node) >= 0) return RS_HANDLE;
     /* A demanded call whose return route carries a handle is already that
        handle, including when operand ordering holds it in a temp. */
-    if (c->strbuf_handle_demand[node] && repr_call_returns_handle(mc, node)) return RS_DEMANDED;
+    if (comp_strbuf_handle_demand_stored(c, node) && repr_call_returns_handle(mc, node)) return RS_DEMANDED;
     /* A container store can mark the reader itself as the handle too. */
     if (repr_boxed_reader_handle(mc, node)) return RS_DEMANDED;
     /* The implicit-self reader boxes its slot too, not a fresh String. */
-    if ((c->strbuf_box[node] || c->strbuf_handle_demand[node]) &&
+    if ((comp_strbuf_box_stored(c, node) || comp_strbuf_handle_demand_stored(c, node)) &&
         strbuf_self_reader_slot(mc, node)) return RS_DEMANDED;
     int r = nt_ref(nt, node, "receiver");
     if (r >= 0 && ty_is_object(comp_ntype(c, r)) &&
-        (strbuf_marked_yields_handle(mc, node) || c->strbuf_handle_demand[node]))
+        (strbuf_marked_yields_handle(mc, node) || comp_strbuf_handle_demand_stored(c, node)))
       return RS_DEMANDED;
     /* A boxed return pickup keeps its published handle too. A demanded
        reader above already emits the handle, including from a held temp. */
-    if (c->strbuf_box[node] &&
+    if (comp_strbuf_box_stored(c, node) &&
         (repr_call_returns_handle(mc, node) || strbuf_route_inline_call(mc, node))) return RS_HANDLE;
   }
   /* a String value stored where a handle is demanded: a fresh one */
@@ -1235,11 +1235,11 @@ TyKind repr_stored_type(const Compiler *c, int id, TyKind t) {
   /* (--share-strings: a value the analysis typed as the handle that is
      demanded as one is stored as one, as any other demanded value is:
      `{ |t| u = t }` spliced under a demand, the write of a handle local) */
-  if (t == TY_STRBUF) return c->strbuf_box[id] || (c->strbuf_handle_demand[id]) ? TY_STRBUF : TY_STRING;
+  if (t == TY_STRBUF) return comp_strbuf_box_stored(c, id) || (comp_strbuf_handle_demand_stored(c, id)) ? TY_STRBUF : TY_STRING;
   /* (a boxed value is held in its box whatever is asked of it: a reader
      whose ivar widened past a String answers the box, which a handle's
      slot did not take, and the C did not build) */
-  if (c->strbuf_handle_demand[id] && t != TY_POLY) return TY_STRBUF;
+  if (comp_strbuf_handle_demand_stored(c, id) && t != TY_POLY) return TY_STRBUF;
   return t;
 }
 
@@ -1294,23 +1294,23 @@ Repr repr_of(const Compiler *c, int node) {
   r.kind = RK_NONE;
   r.untyped = 1;
   if (node < 0 || node >= c->nt->count) return r;
-  r.ty = c->ntype[node];
+  r.ty = comp_ntype_stored(c, node);
   r.as_ty = comp_ntype(c, node);
   /* the layout first, from the type it is stored as, then the flags:
      GCC 13's store merging at -O2 drops the nil_cold store when
      repr_layout's bitfield stores come after it; setting the layout first
      avoids it */
   repr_layout(&r, r.as_ty);
-  r.narrowed = c->nilnarrow ? c->nilnarrow[node] : TY_UNKNOWN;
-  r.handle = c->strbuf_box[node] != 0;
-  r.demand = c->strbuf_handle_demand[node] != 0;
+  r.narrowed = c->nilnarrow ? comp_nilnarrow_stored(c, node) : TY_UNKNOWN;
+  r.handle = comp_strbuf_box_stored(c, node) != 0;
+  r.demand = comp_strbuf_handle_demand_stored(c, node) != 0;
   r.read_raw = c->strbuf_read_raw ? c->strbuf_read_raw[node] != 0 : 0;
-  r.poly_lift = c->poly_strbuf_lift ? c->poly_strbuf_lift[node] != 0 : 0;
-  r.nil_tested = c->nil_tested ? c->nil_tested[node] != 0 : 0;
-  r.nil_cold = c->nil_tested ? c->nil_tested[node] == 2 : 0;
-  r.head_held = c->head_held ? c->head_held[node] != 0 : 0;
-  r.discarded = c->value_discarded ? c->value_discarded[node] != 0 : 0;
-  r.str_shadow = c->str_shadow ? c->str_shadow[node] & 3 : 0;
+  r.poly_lift = c->poly_strbuf_lift ? comp_poly_strbuf_lift_stored(c, node) != 0 : 0;
+  r.nil_tested = c->nil_tested ? comp_nil_tested_stored(c, node) != 0 : 0;
+  r.nil_cold = c->nil_tested ? comp_nil_tested_stored(c, node) == 2 : 0;
+  r.head_held = c->head_held ? comp_head_held_stored(c, node) != 0 : 0;
+  r.discarded = c->value_discarded ? comp_value_discarded_stored(c, node) != 0 : 0;
+  r.str_shadow = c->str_shadow ? comp_str_shadow_stored(c, node) & 3 : 0;
   /* a node is boxed as the type it is stored as; a nil-guard narrowing is
      read where the value is used, not where it is boxed */
   TyKind kt = r.as_ty;

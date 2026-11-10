@@ -3651,8 +3651,7 @@ static int emit_constant_value(Compiler *c, int id, Buf *b, Buf *checks, const N
        ran there, and the receiver runs once) */
     /* (nor is a leaf bound to one member's slot, const_leaf_bound: that
        constant is read below) */
-    if (nm && par_idc >= 0 && !par_nmc && (prt == TY_CLASS || prt == TY_POLY) && !nt_int(nt, id, "const_ptr", 0) &&
-        !const_leaf_bound(c, id)) {
+    if (!nt_int(nt, id, "const_ptr", 0) && const_path_on_class_value(c, id, prt)) {
       /* A constant is stored under its OWNER's qualified spelling
          (Probe__Block__CODE) while the class's c_name is its leaf (Block), so
          the owner is found by asking each class whether a constant keyed
@@ -3711,13 +3710,6 @@ static int emit_constant_value(Compiler *c, int id, Buf *b, Buf *checks, const N
         int sb = repr_of_slot(c, comp_const(c, ckey[i])).kind == RK_STRBUF;
         if (i == 0) strbuf = sb;
         else if (sb != strbuf) uniform = 0;
-      }
-      /* (a String mutator on the read needs the slot, which the read face
-         is not: such a call is left to the paths below) */
-      if (strbuf && !slot) {
-        int pc = comp_recv_parent(c, id);
-        const char *pm = pc >= 0 && nt_kind(nt, pc) == NK_CallNode ? nt_str(nt, pc, "name") : NULL;
-        if (pm && an_str_mutator_name(pm)) uniform = 0;
       }
       if (nc > 0 && ((uniform && ct != TY_UNKNOWN) || boxed)) {
         int tk = ++g_tmp, tr = ++g_tmp;

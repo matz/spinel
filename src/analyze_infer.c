@@ -10693,20 +10693,11 @@ static int infer_constant_path(Compiler *c, int id, const NodeTable *nt, NodeKin
      candidate search the emitter makes. */
   {
     int dpar = nt_ref(nt, id, "parent");
-    NodeKind dpk = nt_kind(nt, dpar);
-    int dyn = dpar >= 0 && !((dpk == NK_ConstantReadNode ||
-                                      dpk == NK_ConstantPathNode));
-    /* ...and a constant that HOLDS a class rather than naming one is a
-       dynamic receiver too (#4259) */
-    if (!dyn && dpar >= 0 && dpk == NK_ConstantReadNode) {
-      const char *pn = const_key_at(c, dpar);
-      if (pn && comp_class_index(c, pn) < 0 && !is_builtin_class_name(pn) &&
-          comp_const(c, pn)) dyn = 1;
-    }
-    TyKind prt = dyn ? infer_type(c, dpar) : TY_UNKNOWN;
-    /* (a leaf bound to one member's slot, const_leaf_bound, is that
-       constant's: no run-time question) */
-    if (nm && dyn && (prt == TY_CLASS || prt == TY_POLY) && !const_leaf_bound(c, id)) {
+    /* (a constant that HOLDS a class rather than naming one is a dynamic
+       receiver too, #4259; a leaf bound to one member's slot is that
+       constant's: no run-time question; const_path_on_class_value) */
+    TyKind prt = dpar >= 0 ? infer_type(c, dpar) : TY_UNKNOWN;
+    if (nm && const_path_on_class_value(c, id, prt)) {
       TyKind ct = TY_UNKNOWN; int nc = 0, uniform = 1, boxable = 1;
       int *cands, ncands = comp_const_tail_cands(c, nm, &cands);
       /* (each class's own chain, and Object's top-level one) */
@@ -10726,7 +10717,7 @@ static int infer_constant_path(Compiler *c, int id, const NodeTable *nt, NodeKin
       free(cands);
       /* (`self::NM` in the body of the one class holding NM, as the emitter
          reads it plainly, codegen_expr.c) */
-      if (nc == 1 && dpar >= 0 && dpk == NK_SelfNode && self_class_body(c, dpar) == dyn_cls1 &&
+      if (nc == 1 && dpar >= 0 && nt_kind(nt, dpar) == NK_SelfNode && self_class_body(c, dpar) == dyn_cls1 &&
           !elab_const_descendant_writes(c, dyn_cls1, nm)) nc = 0;
       const LocalVar *topc = through ? NULL : const_value_path_top(c, nm);
       if (topc) {

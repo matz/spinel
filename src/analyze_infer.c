@@ -3205,7 +3205,7 @@ TyKind infer_call(Compiler *c, int id) {
   }
   TyKind t = infer_call_inner(c, id);
   if (t == TY_UNKNOWN && boxed_struct_aref_may_construct(c, id)) return TY_POLY;
-  int av = t == TY_UNKNOWN ? builtin_arity_violation(c, id) : 0;
+  int av = t == TY_UNKNOWN ? builtin_arity_violation(c, id, 0) : 0;
   if (av) return av == 2 ? TY_POLY : TY_NIL;
   if (t == TY_UNKNOWN && poly_scalar_row_call(c, id)) return TY_POLY;
   if (t == TY_UNKNOWN && poly_cls_value_answers(c, id)) return TY_POLY;

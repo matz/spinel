@@ -166,7 +166,7 @@ int builtin_recv_owner_classes(const char *name, const char **out, int cap);
 int poly_splat_keyed(const char *name);
 int an_bi_generic_splat(Compiler *c, int id);
 int builtin_kernel_fn_span(const char *name, int with_block, int *lo, int *hi);
-int builtin_arity_violation(Compiler *c, int id);
+int builtin_arity_violation(Compiler *c, int id, int non_nil);
 int is_handler_proc_block(Compiler *c, int id);
 int builtin_class_id(const char *name);
 int class_is_prim_reopen(Compiler *c, int k);

@@ -21052,10 +21052,13 @@ static int toplevel_def(Compiler *c, const char *name) {
   return mi >= 0 && !c->scopes[mi].is_cmethod;
 }
 
-static int arity_call_block(const NodeTable *nt, int id, int *argc, int *kwh) {
+static int arity_call_block(Compiler *c, int id, int non_nil, int *argc, int *kwh) {
+  const NodeTable *nt = c->nt;
   *kwh = 0;
-  /* nil&.m short-circuits before any arity check */
-  if (nt_safe_nav(nt, id)) return -1;
+  /* nil&.m short-circuits before any arity check: the guards run ahead of
+     the `&.`'s nil test while it is pending (sn_guard_pending), and the
+     call's non-nil arm (non_nil) is checked as a plain call is */
+  if (!non_nil && sn_guard_pending(c, id)) return -1;
   /* several builtins change their accepted counts under a block (Array#fill:
      1..3 bare, 0..2 with a block) -- the spec carries a separate quartet
      probed with a block, so a call with a LITERAL block checks against that
@@ -21097,12 +21100,12 @@ static int const_reads_builtin_value(Compiler *c, int recv) {
   return ty_is_array(rt) || ty_is_hash(rt) || rt == TY_STRING || rt == TY_STRBUF ||
          rt == TY_INT || rt == TY_FLOAT || rt == TY_SYMBOL;
 }
-static int arity_violation(Compiler *c, int id, char *exp, size_t n, int *eval_recv) {
+static int arity_violation(Compiler *c, int id, int non_nil, char *exp, size_t n, int *eval_recv) {
   const NodeTable *nt = c->nt;
   const char *name = nt_str(nt, id, "name");
   int recv = nt_ref(nt, id, "receiver");
   if (!name) return 0;
-  int argc = 0, kwh, with_block = arity_call_block(nt, id, &argc, &kwh);
+  int argc = 0, kwh, with_block = arity_call_block(c, id, non_nil, &argc, &kwh);
   if (with_block < 0) return 0;
   exp[0] = 0;
   *eval_recv = 1;
@@ -21234,14 +21237,14 @@ static int arity_violation(Compiler *c, int id, char *exp, size_t n, int *eval_r
    the native classes after them. */
 #define POLY_ARITY_BUILTINS 10
 #define POLY_ARITY_MAX 16
-static int poly_arity_plan(Compiler *c, int id, const char **tests, char exps[][32]);
+static int poly_arity_plan(Compiler *c, int id, int non_nil, const char **tests, char exps[][32]);
 static int poly_arity_rows(Compiler *c, const char *name, int with_block, int argc, int kwh, int partial,
                            const char **tests, char exps[][32]);
-int builtin_arity_violation(Compiler *c, int id) {
+int builtin_arity_violation(Compiler *c, int id, int non_nil) {
   char exp[32]; int eval_recv;
-  if (arity_violation(c, id, exp, sizeof exp, &eval_recv)) return 1;
+  if (arity_violation(c, id, non_nil, exp, sizeof exp, &eval_recv)) return 1;
   const char *tests[POLY_ARITY_MAX]; char exps[POLY_ARITY_MAX][32];
-  return poly_arity_plan(c, id, tests, exps) > 0 ? 2 : 0;
+  return poly_arity_plan(c, id, non_nil, tests, exps) > 0 ? 2 : 0;
 }
 
 /* The raise for a count a method refuses: the receiver (when asked) and the
@@ -21491,12 +21494,12 @@ int emit_native_count_mismatch(Compiler *c, int id, int cid, const char *name, i
    on the class the receiver has at run time: ArgumentError with that
    class's range where it has the method, NoMethodError where it has not.
    Fills the classes' runtime tests and ranges; answers how many. */
-static int poly_arity_plan(Compiler *c, int id, const char **tests, char exps[][32]) {
+static int poly_arity_plan(Compiler *c, int id, int non_nil, const char **tests, char exps[][32]) {
   const NodeTable *nt = c->nt;
   const char *name = nt_str(nt, id, "name");
   int recv = nt_ref(nt, id, "receiver");
   if (!name || recv < 0 || repr_of(c, recv).kind != RK_BOXED) return 0;
-  int argc = 0, kwh, with_block = arity_call_block(nt, id, &argc, &kwh);
+  int argc = 0, kwh, with_block = arity_call_block(c, id, non_nil, &argc, &kwh);
   if (with_block < 0) return 0;
   if (recv_user_defines(c, name) || call_target(c, id, -1, name, CT_TOP, NULL) >= 0) return 0;
   /* a method_missing anywhere: the classes whose chain answers it, or every
@@ -21612,7 +21615,7 @@ static int g_poly_arity_node = -1;
 static int emit_poly_arity_guard(Compiler *c, int id, Buf *b) {
   if (g_poly_arity_node == id || g_n_argov >= MAX_ARG_OVERRIDE) return 0;
   const char *tests[POLY_ARITY_MAX]; char exps[POLY_ARITY_MAX][32];
-  int n = poly_arity_plan(c, id, tests, exps);
+  int n = poly_arity_plan(c, id, 0, tests, exps);
   if (n == 0) return 0;
   const NodeTable *nt = c->nt;
   int recv = nt_ref(nt, id, "receiver");
@@ -21731,7 +21734,7 @@ static int emit_case_opts_guard(Compiler *c, int id, Buf *b) {
 
 int emit_builtin_arity_guard(Compiler *c, int id, Buf *b) {
   char exp[32]; int eval_recv;
-  if (!arity_violation(c, id, exp, sizeof exp, &eval_recv)) return 0;
+  if (!arity_violation(c, id, 0, exp, sizeof exp, &eval_recv)) return 0;
   /* One TyKind holds Queue and SizedQueue, and their push takes 1 and 1..2
      (SizedQueue's non_block): the table keeps the wider range, and the
      message is the receiver's own, read off its capacity */

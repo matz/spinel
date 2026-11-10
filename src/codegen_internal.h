@@ -631,7 +631,7 @@ int builtin_cmethod_known(const char *cls, const char *name);
 int builtin_super_cmethod_known(const char *cls, const char *name);
 int builtin_instance_name_known(const char *m);
 int builtin_instance_method_known(const char *cls, const char *m);
-int builtin_arity_violation(Compiler *c, int id);
+int builtin_arity_violation(Compiler *c, int id, int non_nil);   /* non_nil: a `&.` call's non-nil arm */
 int builtin_object_method_known(const char *m);
 int name_is_enumerable_module_method(const char *m);
 int class_object_answers_builtin(const char *qm, int is_module);

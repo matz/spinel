@@ -2705,10 +2705,10 @@ int stmt_may_rebind_local(Compiler *c, int stmt, int read, const char *name);
    from slot n up. */
 int view_bind(int node, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
 void view_unbind(int n);
-/* A constant receiver's read effect already ran, or its slot is held in
-   _p<temp>. Each view lasts for the enclosing call's emission. */
+/* A constant receiver's read effect already ran for the enclosing emission. */
 int view_const_read_done(Compiler *c, int id);
 int view_push_const_read(Compiler *c, int id);
+/* A constant receiver's held slot is named by _p<temp> for the enclosing emission. */
 int view_const_slot(Compiler *c, int id);
 int view_push_const_slot(Compiler *c, int id, int temp);
 /* One representation flag of node id seen as v for one nested emission,

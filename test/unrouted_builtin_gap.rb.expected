@@ -45,3 +45,7 @@ pick 6
 block argument 6: TypeError: no implicit conversion of Range into Proc
 pick 7
 block argument 7: TypeError: no implicit conversion of Object into Proc
+class side of Module: NotImplementedError: spinel: Module.constants is not supported
+Module's own: NotImplementedError: spinel: Module.constants is not supported
+Class's own allocate: NotImplementedError: spinel: Class.allocate is not supported
+Complex.polar with no argument: NotImplementedError: spinel: Complex.polar is not supported

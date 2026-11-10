@@ -2717,7 +2717,9 @@ CplanUnrouted cplan_unrouted(Compiler *c, int id, char *owner, size_t cap, int *
      the class is not in the tables), the owner, and the call's separator
      ('.' for a module function on its module) */
   int v = 0, ocls = comp_core_class(c, CORE_OBJECT), sep = '#', undef_ci = -1;
-  const char *own = NULL;
+  /* (cside: a class or module value's builtin class, whose class side
+     holds the method the warning names) */
+  const char *own = NULL, *cside = NULL;
   /* what a lookup by name asks of (cu_lookup_by_name): the subject's kind (1 a
      class or module value, 2 a value), its class's name and program class */
   int subj = 0, subj_ci = -1, subj_mod = 0;
@@ -2745,7 +2747,8 @@ CplanUnrouted cplan_unrouted(Compiler *c, int id, char *owner, size_t cap, int *
     else if (inst >= 0) { v = refl_builtin_vis(c, inst, name, 1, &own); undef_ci = inst; }
     else {
       int mod = comp_class_is_module(c, &c->classes[cval]);
-      v = cu_class_value_vis(mod, mod ? NULL : cu_class_root(c, cval), name, any_vis, &own, &sep);
+      cside = mod ? NULL : cu_class_root(c, cval);
+      v = cu_class_value_vis(mod, cside, name, any_vis, &own, &sep);
       rkinds[1] = TY_CLASS;
       subj = 1; subj_mod = mod; subj_ci = cval;
       subj_cls = c->classes[cval].is_builtin_const ? c->classes[cval].name : class_ruby_name(c, cval);
@@ -2756,7 +2759,8 @@ CplanUnrouted cplan_unrouted(Compiler *c, int id, char *owner, size_t cap, int *
     const char *nm = core >= 0 ? core_class_name(core) : NULL;   /* a builtin class or module (also a reopened one) */
     if (!nm && ci < 0) return CU_NONE;
     int mod = nm ? is_builtin_module_name(nm) : comp_class_is_module(c, &c->classes[ci]);
-    v = cu_class_value_vis(mod, nm ? nm : mod ? NULL : cu_class_root(c, ci), name, any_vis, &own, &sep);
+    cside = nm ? nm : mod ? NULL : cu_class_root(c, ci);
+    v = cu_class_value_vis(mod, cside, name, any_vis, &own, &sep);
     rkinds[0] = TY_CLASS;
     subj = 1; subj_mod = mod;
     subj_ci = ci >= 0 && core < 0 ? ci : -1;
@@ -2804,7 +2808,11 @@ CplanUnrouted cplan_unrouted(Compiler *c, int id, char *owner, size_t cap, int *
                       ? cu_lookup_by_name(c, id, name, subj, subj_cls, subj_ci, subj_mod, owner, cap) : CU_NONE;
     if (r != CU_GAP) return r;
   }
-  snprintf(owner, cap, "%s%c%s", own, sep, name);
+  /* the method CRuby calls on a class value: its class side's, ahead of
+     Class's or Module's instance method of the name (Class.constants is
+     Module.constants), under the class or module that has it */
+  const char *so = cside ? builtin_singleton_owner(cside, name) : NULL;
+  snprintf(owner, cap, "%s%c%s", so ? so : own, so ? '.' : sep, name);
   return CU_GAP;
 }
 /* The program class a bound capture (`S.method(:z)`, or on self or bare)

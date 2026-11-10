@@ -2082,18 +2082,33 @@ static int bmt_undefines(const BuiltinMethodTable *t, const char *m, int sing_si
   return sing_side ? bmt_has(t->sundef, NULL, t->nsundef, m, 0, 0) : bmt_has(t->undef, NULL, t->nundef, m, 0, 0);
 }
 /* Does an ancestor of t ahead of root (NULL: any) have m among its own instance methods (sing_side: singleton
-   methods of a class); pub: only a public one counts. 1 it does, -1 the lookup reaches an ancestor that
-   undefines m first (it stops there), 0 neither */
-static int bmt_ancestors_have(const BuiltinMethodTable *t, const char *m, int sing_side, unsigned must, int pub, const char *root) {
+   methods of a class); pub: only a public one counts. 1 it does (*who, when given, names it), -1 the lookup
+   reaches an ancestor that undefines m first (it stops there), 0 neither */
+static int bmt_ancestors_have(const BuiltinMethodTable *t, const char *m, int sing_side, unsigned must, int pub, const char *root,
+                              const char **who) {
   for (int i = 0; i < t->nanc; i++) {
     if (root && !strcmp(t->ancestors[i], root)) break;
     const BuiltinMethodTable *a = bmt_find(t->ancestors[i]);
     if (!a || (must && !((t->aflags[i] & must) && (a->flags & must)))) continue;
     if (sing_side && a->module) continue;
-    if (sing_side ? bmt_has(a->sing, a->sflags, a->nsing, m, must, pub) : bmt_has(a->inst, a->iflags, a->ninst, m, must, pub)) return 1;
+    if (sing_side ? bmt_has(a->sing, a->sflags, a->nsing, m, must, pub) : bmt_has(a->inst, a->iflags, a->ninst, m, must, pub)) {
+      if (who) *who = t->ancestors[i];
+      return 1;
+    }
     if (bmt_undefines(a, m, sing_side)) return -1;
   }
   return 0;
+}
+/* The class side of t ahead of Class's or Module's instance methods: a class's own and its superclasses'
+   singleton methods, a module's own; public m there is 1 (*who names the class or module that has it), an
+   undefine on the way -1, neither 0 */
+static int bmt_singleton_chain(const BuiltinMethodTable *t, const char *m, unsigned must, const char **who) {
+  if (!t->module) return bmt_ancestors_have(t, m, 1, must, 1, NULL, who);
+  if (bmt_has(t->sing, t->sflags, t->nsing, m, must, 1)) {
+    if (who) *who = t->name;
+    return 1;
+  }
+  return bmt_undefines(t, m, 1) ? -1 : 0;
 }
 int builtin_method_answers(const char *cls, const char *name, int sg, int certain) {
   const BuiltinMethodTable *t = bmt_find(cls);
@@ -2104,15 +2119,21 @@ int builtin_method_answers(const char *cls, const char *name, int sg, int certai
      it is no sure answer */
   if (!t) return !certain && cls && (builtin_core_class_slot(cls) >= 0 || is_builtin_reopen_name(cls));
   if (must && !(t->flags & must)) return 0;
-  if (!sg) return bmt_ancestors_have(t, name, 0, must, 1, NULL) > 0;
+  if (!sg) return bmt_ancestors_have(t, name, 0, must, 1, NULL, NULL) > 0;
   /* a class's singleton chain: its own and its superclasses' singleton methods,
      then Class's instance methods and its ancestors'; a module's own singleton
      methods, then Module's. An undefine on the way ends it */
-  int own = t->module ? (bmt_has(t->sing, t->sflags, t->nsing, name, must, 1) ? 1 : bmt_undefines(t, name, 1) ? -1 : 0)
-                      : bmt_ancestors_have(t, name, 1, must, 1, NULL);
+  int own = bmt_singleton_chain(t, name, must, NULL);
   if (own) return own > 0;
   const BuiltinMethodTable *k = bmt_find(t->module ? "Module" : "Class");
-  return k && bmt_ancestors_have(k, name, 0, must, 1, NULL) > 0;
+  return k && bmt_ancestors_have(k, name, 0, must, 1, NULL, NULL) > 0;
+}
+const char *builtin_singleton_owner(const char *cls, const char *name) {
+  const BuiltinMethodTable *t = cls && name ? bmt_find(cls) : NULL;
+  unsigned must = bmt_loaded();
+  const char *who = NULL;
+  if (!t || !(t->flags & must)) return NULL;
+  return bmt_singleton_chain(t, name, must, &who) > 0 ? who : NULL;
 }
 
 /* Does an ancestor of builtin class cls ahead of root (NULL: any ancestor) own instance method m, of any
@@ -2125,7 +2146,7 @@ int builtin_answers_ahead_of(const char *cls, const char *m, const char *root) {
   if (!t || !m || !(t->flags & must)) return 0;
   int below = !root;
   for (int i = 0; !below && i < t->nanc; i++) below = !strcmp(t->ancestors[i], root);
-  return below && bmt_ancestors_have(t, m, 0, must, 0, root) != 0;
+  return below && bmt_ancestors_have(t, m, 0, must, 0, root, NULL) != 0;
 }
 /* The i-th ancestor of builtin class or module cls in CRuby's lookup order (0: cls itself), counting only those a
    library the program has defines; NULL past the last, and for a name with no table. The walk of a mixin's `super`

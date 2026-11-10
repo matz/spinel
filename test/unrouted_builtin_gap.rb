@@ -134,3 +134,15 @@ end
 rescue TypeError => e
   puts "block argument #{i}: TypeError: #{e.message}"
 end
+
+# A class value's call names the method its class side holds, as CRuby's
+# lookup finds it ahead of Class's or Module's: Class.constants is
+# Module.constants, a method apart from Module#constants
+attempt("class side of Module") { Class.constants }
+attempt("Module's own") { Module.constants }
+
+# ...and names the class side's own method for a class's own class
+# method: Class.allocate (CRuby answers a class) and Complex.polar with no
+# argument (CRuby's ArgumentError, which the gap stands in for) stay the gap
+attempt("Class's own allocate") { Class.allocate }
+attempt("Complex.polar with no argument") { Complex.polar }

@@ -4513,7 +4513,7 @@ static int str_lit_reads_late(Compiler *c, const int *els, int n) {
 }
 /* The pushes of such a literal into String Array _t<t>: each element in
    its order into a rooted temp, a handle-carrying one as its handle, then
-   each pushed, a handle read as the String it holds once all ran. */
+   each pushed once all ran. */
 static void emit_str_lit_late(Compiler *c, const int *els, int n, int t) {
   int *tmp = malloc(sizeof(int) * (size_t)(n > 0 ? n : 1));
   char *hnd = malloc((size_t)(n > 0 ? n : 1));
@@ -4532,10 +4532,15 @@ static void emit_str_lit_late(Compiler *c, const int *els, int n, int t) {
                el.p ? el.p : "NULL", hnd[j] ? "" : "_STR", tmp[j]);
     free(el.p);
   }
+  /* each as the Array holds it: a handle as itself, bytes as their handle
+     (emit_typed_elem_hold), taken at the push */
   for (int j = 0; j < n; j++) {
+    char tx[32];
+    snprintf(tx, sizeof tx, "_t%d", tmp[j]);
     emit_indent(g_pre, g_indent);
-    if (hnd[j]) buf_printf(g_pre, "sp_StrArray_push(_t%d, _t%d ? sp_String_cstr(_t%d) : NULL);\n", t, tmp[j], tmp[j]);
-    else buf_printf(g_pre, "sp_StrArray_push(_t%d, _t%d);\n", t, tmp[j]);
+    buf_printf(g_pre, "sp_StrArray_push%s(_t%d, ", typed_elem_store_sfx(TY_STR_ARRAY), t);
+    emit_typed_elem_hold(c, -1, TY_STR_ARRAY, tx, g_pre);
+    buf_puts(g_pre, ");\n");
   }
   free(tmp);
   free(hnd);
@@ -4847,10 +4852,12 @@ else {
         const char *esfx = nil_store_sfx(c, k, els[j]);
         if (esfx[0] && (sp_streq(k, "Int") || sp_streq(k, "Float"))) emit_elem_store_value(c, k, els[j], &el);
         else if (repr_of(c, els[j]).untyped) emit_unresolved_coerced(c, els[j], ty_array_elem(at), &el);
-        else emit_coerce(c, els[j], ty_array_elem(at), CO_HOLD, "an Array literal's element", &el);
+        else emit_typed_elem_coerce(c, els[j], at, "an Array literal's element", &el);
         emit_indent(g_pre, g_indent);
-        buf_printf(g_pre, "sp_%sArray_push%s(_t%d, ", k, esfx, t);
-        buf_puts(g_pre, el.p ? el.p : "");
+        /* each element as the Array holds it (emit_typed_elem_hold) */
+        buf_printf(g_pre, "sp_%sArray_push%s(_t%d, ", k, esfx[0] ? esfx : typed_elem_store_sfx(at), t);
+        if (esfx[0]) buf_puts(g_pre, el.p ? el.p : "");
+        else emit_typed_elem_hold(c, els[j], at, el.p ? el.p : "", g_pre);
         buf_puts(g_pre, ");\n");
         free(el.p);
       }

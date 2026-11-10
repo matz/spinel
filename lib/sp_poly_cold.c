@@ -1230,9 +1230,10 @@ sp_RbVal sp_poly_to_h_m(sp_RbVal v)
      boxed hash otherwise -- reading an Integer key as a symbol id built a
      hash whose keys were other programs' symbols (#3972) */
   if (v.tag == SP_TAG_OBJ && sp_poly_is_array_kind(v.cls_id)) {
-    /* a program object's to_ary (any visibility) gives its pair, run for
-       each element just before its check, as in CRuby: the pairs
-       converted so far are kept in their own array */
+    /* every element is checked in order, and a program object's to_ary
+       (any visibility) gives its pair just before its check, as in CRuby:
+       from the first such object on, the pairs are kept in their own
+       array */
     SP_GC_ROOT_RBVAL(v);
     sp_PolyArray *conv = NULL; SP_GC_ROOT(conv);
     for (sp_int i = 0; i < sp_poly_length(v); i++) {
@@ -1241,15 +1242,14 @@ sp_RbVal sp_poly_to_h_m(sp_RbVal v)
         conv = sp_PolyArray_new();
         for (sp_int j = 0; j < i; j++) sp_PolyArray_push(conv, sp_poly_arr_get(v, j));
       }
-      if (!conv) continue;
-      e = sp_poly_pair_to_ary(e);
+      if (conv) e = sp_poly_pair_to_ary(e);
       if (!(e.tag == SP_TAG_OBJ && sp_poly_is_array_kind(e.cls_id)))
         sp_raise_cls("TypeError", sp_sprintf("wrong element type %s at %lld (expected array)",
                                           sp_poly_class_name(e), (long long)i));
       if (sp_poly_length(e) != 2)
         sp_raise_cls("ArgumentError", sp_sprintf("wrong array length at %lld (expected 2, was %lld)",
                                               (long long)i, (long long)sp_poly_length(e)));
-      sp_PolyArray_push(conv, e);
+      if (conv) sp_PolyArray_push(conv, e);
     }
     if (conv) v = sp_box_poly_array(conv);
     sp_int n = sp_poly_length(v);

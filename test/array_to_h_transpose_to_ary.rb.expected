@@ -21,3 +21,5 @@ to_ary 1
 [IndexError, "element size differs (1 should be 2)"]
 [TypeError, "can't convert N to Array (N#to_ary gives NilClass)"]
 {0 => 0, 1 => 1, 2 => 2, 3 => 3}
+[[1, 3], [2, 4]]
+[[1, 3], [2, 4]]

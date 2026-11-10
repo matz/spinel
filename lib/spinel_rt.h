@@ -3578,6 +3578,7 @@ static inline sp_RbVal sp_poly_pair_to_ary(sp_RbVal e) {
    is copied; the transpose itself raises for any other row that is no
    Array. */
 static sp_int sp_poly_arr_len(sp_RbVal a);           /* defined below */
+static sp_PolyArray *sp_PolyArray_append_all(sp_PolyArray *a, sp_PolyArray *b);  /* defined below */
 static sp_PolyArray *sp_poly_transpose_rows(sp_PolyArray *a) {
   if (!a || !sp_obj_to_ary_fn) return a;
   sp_int n = a->len, i = 0;
@@ -3610,7 +3611,11 @@ static sp_PolyArray *sp_poly_transpose_rows(sp_PolyArray *a) {
     if (cols < 0) cols = len;
     else if (len != cols)
       sp_raise_cls("IndexError", sp_sprintf("element size differs (%lld should be %lld)", (long long)len, (long long)cols));
-    sp_PolyArray_push(out, e);
+    /* a copy of the row as read now: CRuby takes each row's elements when
+       it reads the row, so a later to_ary that changes it changes nothing */
+    sp_PolyArray *row = sp_PolyArray_new(); SP_GC_ROOT(row);
+    sp_PolyArray_append_all(row, sp_poly_to_poly_array(e));
+    sp_PolyArray_push(out, sp_box_poly_array(row));
   }
   return out;
 }
@@ -5429,6 +5434,7 @@ static SP_INLINE sp_RbVal sp_poly_ary_chk(sp_RbVal v, const char *m, int range_o
    a hash miss answered 0 instead of raising NoMethodError (#3974). */
 static sp_RbVal sp_poly_struct_values(sp_RbVal v);   /* defined below */
 static sp_int sp_poly_arr_len(sp_RbVal a);           /* defined below */
+static sp_PolyArray *sp_PolyArray_append_all(sp_PolyArray *a, sp_PolyArray *b);  /* defined below */
 /* A Struct's size and length are its member count; a program object of any
    other class has neither. -1 when v is no Struct. */
 static sp_int sp_poly_struct_size(sp_RbVal v) {

@@ -61,3 +61,12 @@ class S
 end
 $arr = [[0, 0]] + (1..5).map { |i| S.new(i) }
 p $arr.to_h
+
+# a row is read when transpose reaches it: a later to_ary that changes it
+# changes nothing
+$r = [1, 2]
+class M; def to_ary = ($r[0] = 99; [3, 4]); end
+class G; def to_ary = ($r << 5; [3, 4]); end
+p [$r, M.new].transpose
+$r = [1, 2]
+p [$r, G.new].transpose

@@ -508,6 +508,10 @@ const BuiltinClassOp *bop_class_find(const char *cls, const char *name, int argc
    the first with a row of the name, as CRuby finds a singleton method
    (File.sysopen is IO's), whatever the count. NULL for none. */
 const char *bop_class_owner(const char *cls, const char *name);
+/* Does class method name of builtin class cls take keywords in CRuby, as
+   its own class-side rows say (BOPF_KEYWORDS): 1, 0 for rows without the
+   flag, -1 where cls has no row of the name. */
+int bop_class_keywords(const char *cls, const char *name);
 int bop_class_row_count(void);
 const BuiltinClassOp *bop_class_row(int i);   /* the i-th class-side row, NULL past the last */
 

@@ -3147,7 +3147,7 @@ int bop_io_library_row(const BuiltinOp *op) {
    (infer_new_call), as every builtin class's new is: its row emits the
    call (BOPF_INFERRED). */
 static const BuiltinClassOp bop_class_rows[] = {
-  { "IO", { TY_CLASS, "pipe",        0,   0, BF_ANY, TY_POLY_ARRAY, BOPE_TEMPLATE, "sp_io_pipe()", 0, 0, BOPF_OWN_CLASS } },
+  { "IO", { TY_CLASS, "pipe",        0,   0, BF_ANY, TY_POLY_ARRAY, BOPE_TEMPLATE, "sp_io_pipe()", 0, 0, BOPF_OWN_CLASS | BOPF_KEYWORDS } },
   { "IO", { TY_CLASS, "pipe",        0, 127, BF_ANY, TY_POLY_ARRAY, BOPE_NONE, NULL, 0, 0, BOPF_OWN_CLASS | BOPF_KEYWORDS } },
   { "IO", { TY_CLASS, "for_fd",      1,   3, BF_ANY, TY_IO,         BOPE_IO_FOR_FD, NULL, 0, 0, BOPF_OWN_CLASS | BOPF_KEYWORDS } },
   { "IO", { TY_CLASS, "new",         1,   3, BF_ANY, TY_UNKNOWN,    BOPE_IO_FOR_FD, NULL, 0, 0, BOPF_OWN_CLASS | BOPF_KEYWORDS | BOPF_INFERRED } },
@@ -3166,6 +3166,14 @@ const char *bop_class_owner(const char *cls, const char *name) {
     for (size_t k = 0; k < sizeof bop_class_rows / sizeof bop_class_rows[0]; k++)
       if (sp_streq(bop_class_rows[k].cls, a) && sp_streq(bop_class_rows[k].op.name, name)) return bop_class_rows[k].cls;
   return NULL;
+}
+
+int bop_class_keywords(const char *cls, const char *name) {
+  int kw = -1;
+  for (size_t k = 0; cls && name && k < sizeof bop_class_rows / sizeof bop_class_rows[0]; k++)
+    if (sp_streq(bop_class_rows[k].cls, cls) && sp_streq(bop_class_rows[k].op.name, name))
+      kw = kw > 0 || (bop_class_rows[k].op.flags & BOPF_KEYWORDS) ? 1 : 0;
+  return kw;
 }
 
 const BuiltinClassOp *bop_class_find(const char *cls, const char *name, int argc, int has_block) {

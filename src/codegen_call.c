@@ -21261,7 +21261,18 @@ static int class_arity_spec_row(Compiler *c, int id, const char *cls, const char
   }
   return 0;
 }
-static int arity_violation(Compiler *c, int id, int non_nil, char *exp, size_t n, int *eval_recv) {
+/* Does class method `name` of builtin class cls count a keyword hash apart,
+   as CRuby counts it for a method that takes keywords: 1, 0 where it counts
+   as a positional, -1 where no class-side row says. A `new` is the class's
+   own (its initialize's), any other name its owner's on the chain. */
+static int class_kwh_apart(const char *cls, const char *name) {
+  return bop_class_keywords(is_new_name(name) ? cls : bop_class_owner(cls, name), name);
+}
+/* Does call id pass a count CRuby refuses: then exp is the expected range,
+   eval_recv whether the receiver is evaluated first, and given the count
+   CRuby's message gives. */
+static int arity_violation(Compiler *c, int id, int non_nil, char *exp, size_t n, int *eval_recv,
+                           int *given) {
   const NodeTable *nt = c->nt;
   const char *name = nt_str(nt, id, "name");
   int recv = nt_ref(nt, id, "receiver");
@@ -21276,7 +21287,7 @@ static int arity_violation(Compiler *c, int id, int non_nil, char *exp, size_t n
   /* a constant that holds a value (`C = [1]; C.<<(2, 3)`) is checked by
      its value's class below, not as a class object */
   if (rty2_k == NK_ConstantReadNode && const_reads_builtin_value(c, recv)) rty2_k = NK_CallNode;
-  if (kwh && (recv < 0 || (rty2_k == NK_ConstantReadNode))) return 0;
+  if (kwh && recv < 0) return 0;
   if (recv < 0) {
     /* A bare call resolves to the enclosing class's chain, then to a
        top-level def or a reopened Kernel or Object, and only then to the
@@ -21322,6 +21333,7 @@ static int arity_violation(Compiler *c, int id, int non_nil, char *exp, size_t n
       else surface = mod ? "Module" : "Class";
     }
     if (surface) {
+      if (kwh) return 0;   /* (Class's and Module's rows do not say which take keywords) */
       if (reopened_owns(c, surface, name) ||
           (sp_streq(surface, "Class") && reopened_owns(c, "Module", name)) ||
           reopened_owns(c, "Object", name) || reopened_owns(c, "Kernel", name)) return 0;
@@ -21329,7 +21341,14 @@ static int arity_violation(Compiler *c, int id, int non_nil, char *exp, size_t n
           (!arity_spec_row(itbl, "Object", name, with_block, argc, exp, n) || toplevel_def(c, name)))
         return 0;
     }
-    else if (!class_arity_spec_row(c, id, cn, name, with_block, argc, exp, n)) return 0;
+    else {
+      /* a keyword hash the method takes counts apart, CRuby's message
+         giving the positionals alone */
+      int kw = kwh ? class_kwh_apart(cn, name) : 0;
+      if (kw < 0) return 0;
+      argc -= kw;
+      if (!class_arity_spec_row(c, id, cn, name, with_block, argc, exp, n)) return 0;
+    }
     if (!exp[0]) return 0;
     *eval_recv = 0;  /* a constant read has no effect to evaluate */
   }
@@ -21391,6 +21410,7 @@ static int arity_violation(Compiler *c, int id, int non_nil, char *exp, size_t n
         (sp_streq(owner, "Object") && toplevel_def(c, name))) return 0;
     if (kwh && !kwh_counts(owner, name)) return 0;
   }
+  *given = argc;
   return 1;
 }
 
@@ -21402,8 +21422,8 @@ static int poly_arity_plan(Compiler *c, int id, int non_nil, const char **tests,
 static int poly_arity_rows(Compiler *c, const char *name, int with_block, int argc, int kwh, int partial,
                            const char **tests, char exps[][32]);
 int builtin_arity_violation(Compiler *c, int id, int non_nil) {
-  char exp[32]; int eval_recv;
-  if (arity_violation(c, id, non_nil, exp, sizeof exp, &eval_recv)) return 1;
+  char exp[32]; int eval_recv, given;
+  if (arity_violation(c, id, non_nil, exp, sizeof exp, &eval_recv, &given)) return 1;
   const char *tests[POLY_ARITY_MAX]; char exps[POLY_ARITY_MAX][32];
   return poly_arity_plan(c, id, non_nil, tests, exps) > 0 ? 2 : 0;
 }
@@ -21894,8 +21914,8 @@ static int emit_case_opts_guard(Compiler *c, int id, Buf *b) {
 }
 
 int emit_builtin_arity_guard(Compiler *c, int id, Buf *b) {
-  char exp[32]; int eval_recv;
-  if (!arity_violation(c, id, 0, exp, sizeof exp, &eval_recv)) return 0;
+  char exp[32]; int eval_recv, given;
+  if (!arity_violation(c, id, 0, exp, sizeof exp, &eval_recv, &given)) return 0;
   /* One TyKind holds Queue and SizedQueue, and their push takes 1 and 1..2
      (SizedQueue's non_block): the table keeps the wider range, and the
      message is the receiver's own, read off its capacity */
@@ -21916,7 +21936,7 @@ int emit_builtin_arity_guard(Compiler *c, int id, Buf *b) {
                tq, argc, argc, dv ? dv : "0");
     return 1;
   }
-  emit_wrong_count(c, id, exp, eval_recv, -1, b);
+  emit_wrong_count(c, id, exp, eval_recv, given, b);
   return 1;
 }
 

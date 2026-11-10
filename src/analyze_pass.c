@@ -16946,6 +16946,60 @@ static int new_block_initialize(Compiler *c, int id, int *several) {
   return found;
 }
 
+/* Box every parameter of `block`, the optionals, posts and keywords too, as
+   a kept block's are (block_params_widen). Answers whether one changed. */
+static int block_params_box(Compiler *c, int block) {
+  BlockSig s;
+  block_sig(c, nt_ref(c->nt, block, "parameters"), 0, &s);
+  size_t nw = (size_t)(s.P + s.O + s.Q + s.nk) + 1;
+  TyKind *tf = (TyKind *)calloc(nw, sizeof *tf);
+  char *ab = (char *)calloc(nw, 1);
+  if (!tf || !ab) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  int changed = block_params_widen(c, block, &s, 1, tf, ab, tf + s.P + s.O + s.Q);
+  free(tf); free(ab);
+  return changed;
+}
+
+/* May the boxed receiver `recv` of a call `name` be a Proc or a Method
+   that the call invokes: a proc-call name, and the class facts (#8530) do
+   not rule a Proc or a Method out (`pr`, which a Method's set carries too) */
+static int boxed_recv_may_be_callable(Compiler *c, int recv, const char *name) {
+  if (!is_proc_invoke(name)) return 0;
+  const ClsSet *s = cls_fact_node(c, recv);
+  return !s || s->all || s->pr;
+}
+
+/* The method a literal block given at a call `name` on a Proc or a Method
+   value `recv` is handed to. A Method that names one method alone answers
+   it (the proc form of a yielding one, method_obj_target_mi), whose
+   &block's calls bind the block as a direct call's do. A Proc runs the
+   block through its `&b`, and so do a boxed value and a Method held where
+   no one target is known (a parameter, a slot, a local written two
+   Methods): *boxed is set, and the parameters take the box, in which every
+   proc call publishes its arguments (`_sp_proc_poly_args`). Left alone, the
+   block was typed from its body: `y << "?"` made `y` an Array, and the
+   String the proc passed crashed it. Answers -1 when not such a call. */
+static int proc_value_block_target(Compiler *c, const char *name, int recv, int *boxed) {
+  TyKind rt = infer_type(c, recv);
+  if ((rt == TY_PROC && is_proc_invoke(name)) || (rt == TY_POLY && boxed_recv_may_be_callable(c, recv, name))) {
+    *boxed = 1;
+    return -1;
+  }
+  if (rt != TY_METHOD || !is_method_invoke(name)) return -1;
+  int *mns = NULL, nmn = method_recv_nodes(c, recv, &mns), mi = -1;
+  for (int j = 0; j < nmn; j++) {
+    int t = method_obj_target_mi(c, mns[j]);
+    if (t < 0 || method_call_param_shift(c, mns[j], t) || (mi >= 0 && t != mi)) { mi = -1; break; }
+    mi = t;
+  }
+  free(mns);
+  /* a target the block reaches only through a yield of its own has no
+     &block for the Method's call to hand it to */
+  if (mi >= 0 && c->scopes[mi].yields) mi = -1;
+  if (mi < 0) *boxed = 1;
+  return mi;
+}
+
 /* The class method call `call` (`K.run`) runs, for a constant receiver K. -1 if none. */
 static int const_recv_cmethod_mi(Compiler *c, int call, int recv, const char *name) {
   const NodeTable *nt = c->nt;
@@ -18276,7 +18330,10 @@ static int infer_block_params_call_arms(Compiler *c, const NodeTable *nt, int id
           if (!forwards) continue;
           ndef++; found = km;
         }
-        if (ndef == 1) mi = found;
+        /* ...unless a Proc or a Method the receiver may hold answers the
+           call too: it hands the block the box, which the one class's
+           bindings do not describe, and the widening below boxes it */
+        if (ndef == 1 && !(rt0 == TY_POLY && boxed_recv_may_be_callable(c, recv, name))) mi = found;
         /* ...but a name the builtin Enumerable surface also owns can reach
            a container at run time, through the dispatch's builtin arm. The
            adopted method's yield types describe only the user arm, so a
@@ -18333,19 +18390,14 @@ static int infer_block_params_call_arms(Compiler *c, const NodeTable *nt, int id
     if (mi < 0 && sp_streq(name, "new")) {
       int several = 0;
       mi = new_block_initialize(c, id, &several);
-      if (several) {
-        /* every parameter, the optionals, posts and keywords too, as a
-           kept block's are (block_params_widen) */
-        BlockSig s;
-        block_sig(c, nt_ref(nt, block, "parameters"), 0, &s);
-        size_t nw = (size_t)(s.P + s.O + s.Q + s.nk) + 1;
-        TyKind *tf = (TyKind *)calloc(nw, sizeof *tf);
-        char *ab = (char *)calloc(nw, 1);
-        if (!tf || !ab) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-        changed |= block_params_widen(c, block, &s, 1, tf, ab, tf + s.P + s.O + s.Q);
-        free(tf); free(ab);
-        return changed | 2;
-      }
+      if (several) return changed | block_params_box(c, block) | 2;
+    }
+    /* `pr.call(s) { |y| }`, `method(:m).call(s) { |y| }`: the block is the
+       callee's (proc_value_block_target) */
+    if (mi < 0 && recv >= 0) {
+      int boxed = 0;
+      mi = proc_value_block_target(c, name, recv, &boxed);
+      if (boxed) return changed | block_params_box(c, block) | 2;
     }
     /* A block passed to a pure `...` forwarder is really consumed by the
        method the forward eventually reaches; type its params from there. */

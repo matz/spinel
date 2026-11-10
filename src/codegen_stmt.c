@@ -12732,6 +12732,25 @@ int hc_recv_cached(Compiler *c, int recv) {
 /* The statement emit_stmts is emitting and the one before it in the same list,
    for a loop that needs to see what ran just ahead of it (hc_bounded_index). */
 int g_stmt_cur = -1, g_stmt_prev = -1;
+/* The statement that runs just ahead of statement `id`: the one before it in
+   the list emit_stmts is emitting, or, for a statement of a block's body
+   that its emitter runs one by one itself (the statements ahead of a `map`
+   block's value, a spliced block's), the one before it in that body; -1
+   when neither is known. (A redo's label may sit between two statements of
+   a block's body only after the parameter rebindings, which read a
+   parameter: a caller that wants a literal there never meets one.) */
+static int hc_prev_stmt(Compiler *c, int id) {
+  if (g_stmt_cur == id) return g_stmt_prev;
+  const NodeTable *nt = c->nt;
+  const int *par = codegen_node_parents(c, id);
+  int s = par ? par[id] : -1;
+  if (s < 0 || nt_kind(nt, s) != NK_StatementsNode || par[s] < 0 || nt_kind(nt, par[s]) != NK_BlockNode ||
+      nt_ref(nt, par[s], "body") != s) return -1;
+  int n = 0;
+  const int *st = nt_arr(nt, s, "body", &n);
+  for (int k = 1; k < n; k++) if (st[k] == id) return st[k - 1];
+  return -1;
+}
 
 /* Is `id`, a begin or a catch whose value goes ahead into a temp, the statement
    being emitted, or all that its local, ivar or global write stores, or the
@@ -13539,7 +13558,7 @@ void emit_while(Compiler *c, int id, Buf *b, int indent, int is_until) {
 }
 static void emit_while_loop(Compiler *c, int id, Buf *b, int indent, int is_until) {
   const NodeTable *nt = c->nt;
-  int prev_stmt = g_stmt_cur == id ? g_stmt_prev : -1;
+  int prev_stmt = hc_prev_stmt(c, id);
   int pred = nt_ref(nt, id, "predicate");
   int body = nt_ref(nt, id, "statements");
   /* `begin..end while cond` (nt_loop_post) is a post-test loop -- the body

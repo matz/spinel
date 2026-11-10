@@ -64,3 +64,7 @@ nil
 [IndexError, "index 9 out of string"]
 [TypeError, "no implicit conversion of Integer into String"]
 "abc"
+["aé", 2, "UTF-8"]
+["a\xC3\xA9", 3, "ASCII-8BIT"]
+["ax", 2, "UTF-8"]
+["", 0, "ASCII-8BIT"]

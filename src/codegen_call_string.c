@@ -1934,10 +1934,12 @@ static void str_mut_value_answer(Compiler *c, const BopCtx *x, const StrMutOp *o
 }
 
 /* `_t<t>` takes `s` spliced as `splice` (a call over its bytes), which
-   raises its IndexError first; sp_String_set_bin raises FrozenError after
-   it, the order CRuby checks them in for []= and insert */
+   raises its IndexError first; sp_String_set_bin_enc raises FrozenError
+   after it, the order CRuby checks them in for []= and insert, and takes
+   the splice's encoding, which the compatibility rule picked (an
+   ASCII-only binary receiver takes a UTF-8 value's) */
 static void str_mut_set(Buf *b, int t, const char *splice) {
-  buf_printf(b, " sp_String_set_bin(_t%d, %s);", t, splice);
+  buf_printf(b, " sp_String_set_bin_enc(_t%d, %s);", t, splice);
 }
 
 /* The forms of `[]=`, which CRuby picks by the key's class: an Integer
@@ -2078,7 +2080,7 @@ int emit_op_string_clear(Compiler *c, const BopCtx *x, Buf *b) {
   /* emptied in place (a frozen String raises, an empty one too) */
   int chk, t = str_mut_open(c, x, &chk, b);
   str_mut_nil_check(x, t, chk, b);
-  str_mut_set(b, t, "(&(\"\\xff\")[1])");
+  buf_printf(b, " sp_String_set_bin(_t%d, (&(\"\\xff\")[1]));", t);   /* its encoding kept */
   str_mut_self_answer(c, x, t, b);
   return 1;
 }

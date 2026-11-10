@@ -151,3 +151,11 @@ begin; f[0, 0] = ""; rescue FrozenError => x; p [x.class, x.message]; end
 begin; f[9] = "q"; rescue => x; p [x.class, x.message]; end
 begin; f[0] = 5; rescue => x; p [x.class, x.message]; end
 p f
+
+# the String takes the encoding the change leaves it in: an ASCII-only
+# binary String given a UTF-8 text becomes UTF-8, and clear keeps it
+def enc(s) = [s, s.length, s.encoding.to_s]
+p enc("a".b.insert(1, "é"))
+p enc("é".b.insert(0, "a"))
+p enc((+"a").insert(1, "x".b))
+p enc("a".b.clear)

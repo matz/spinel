@@ -544,7 +544,11 @@ static int emit_builtin_op_ex(Compiler *c, int id, int recv, TyKind rt, const ch
   if (!op || op->emit == BOPE_NONE || !bop_emitters[op->emit]) return 0;
   BopCtx x = { id, recv, argc, rt, name, op, rtext, t0 };
   if (!bop_emitters[op->emit](c, &x, b)) return 0;
-  if (g_plan_check && observe) plan_check_observe(c, id, rt, op);
+  /* A row rendered while the node is the builtin arm of its own boxed send
+     split (emit_send_blind) is one arm of that dispatch, as
+     emit_builtin_op_arm_text's are: the node answers what the dispatch
+     answers (infer_send_blind), so the row is not compared with it */
+  if (g_plan_check && observe && g_arm.send_split != id) plan_check_observe(c, id, rt, op);
   return 1;
 }
 

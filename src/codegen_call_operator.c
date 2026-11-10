@@ -1609,9 +1609,10 @@ static int bigint_not_overridden(Compiler *c) {
 /* A block given to a builtin push, append or unshift with no argument:
    these never call a block, so it can be left out when nothing in it runs
    in CRuby either. That holds for a literal block, for `&nil` and a lambda
-   literal, and for a local or instance variable read that holds a Proc or
-   nil. Any other `&x` keeps the generic dispatch, because CRuby calls its
-   to_proc (or raises TypeError) before the call. */
+   literal, and for a local or instance variable read whose type is Proc
+   (or nil). Any other `&x` keeps the generic dispatch, because CRuby
+   calls its to_proc (or raises TypeError) before the call. A local that
+   holds nil on some path is boxed, so it keeps that dispatch too. */
 static int mutator0_block_droppable(Compiler *c, int id) {
   const NodeTable *nt = c->nt;
   int blk = nt_ref(nt, id, "block");

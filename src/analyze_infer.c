@@ -11568,7 +11568,7 @@ static TyKind ctr_site_join(TyKind nat, TyKind want) {
 /* What a super that comp_super_object_builtin answers (kind) is typed: self for
    itself, the row's result for Kernel's row, a Boolean for the rest. */
 static TyKind super_object_type(Compiler *c, const Scope *s, const char *uname, int id, int kind) {
-  return kind == SUPER_OBJ_SELF ? ty_object(s->class_id)
+  return kind == SUPER_OBJ_SELF ? (repr_self_boxed(c, (int)(s - c->scopes)) ? TY_POLY : ty_object(s->class_id))
        : kind == SUPER_OBJ_ROW ? comp_super_kernel_row(c, s, uname, id)->result : TY_BOOL;
 }
 TyKind infer_uncached(Compiler *c, int id) {

@@ -1034,6 +1034,19 @@ int repr_self_handle(const Compiler *c, int scope) {
   return scope_self_is_string(c, scope);
 }
 
+/* Is self of instance method `scope` a boxed value (sp_RbVal)? It is in a
+   reopening of Object, Numeric, Array or Hash: any value of the builtin, or
+   an instance of a program class below it, is the receiver. */
+int repr_self_boxed(const Compiler *c, int scope) {
+  if (scope < 0) return 0;
+  const Scope *s = &c->scopes[scope];
+  if (s->is_cmethod || s->class_id < 0) return 0;
+  static const int cores[] = { CORE_OBJECT, CORE_NUMERIC, CORE_ARRAY, CORE_HASH };
+  for (size_t i = 0; i < sizeof cores / sizeof cores[0]; i++)
+    if (s->class_id == comp_core_class(c, cores[i])) return 1;
+  return 0;
+}
+
 int repr_self_shared(const Compiler *c, int node) {
   if (node < 0 || nt_kind(c->nt, node) != NK_SelfNode) return 0;
   Scope *s = comp_scope_of((Compiler *)c, node);

@@ -52,7 +52,7 @@ RBS_SRC      = $(wildcard $(RBS_DIR)/src/*.c) $(wildcard $(RBS_DIR)/src/util/*.c
 RBS_OBJ      = $(patsubst $(RBS_DIR)/src/%.c,build/rbs/%.o,$(RBS_SRC))
 RBS_LIB      = build/librbs.a
 
-.PHONY: ty-setter-check imemo-shadow-test imemo-shadow-corpus int-min-test all hooks share-strings-test line-map-check unit-stability-test incremental-test incremental-bench gate-tool-test regexp wasm-rt wasm-test rbs_extract rbs-test rbs-seed-test inline-rbs-test rbs-seed-extractor cident plan-check-test method-table-check timing-test shadow-check signal-default-test source-marker-test magic-comment-test repr-check-test run-scale-test gate-costs arm-check-test traits-check-test poly-cold-test bop-arity-check-test bop-callbacks-test bop-share-check-test share-spec-check bop-callbacks-check arity-spec-check builtin-method-tables-check builtin-method-tables-regen value-edges-check value-edges-regen implied-calls-check implied-calls-regen implied-calls-test lower-rows-check node-kinds-check node-kinds-regen package-facts-check package-facts-regen value-pos-test re-lit-test reject-test cli-opts-test link-names-test reach-test defer-refusals-test check-stores-test backtrace-test gc-minor-test thread-puts-test ext-test ext-cruby-test alloc-report-test rubyspec rubyspec-gate spin-check \ repr-diff c-costs alloc-diff \
+.PHONY: ty-setter-check imemo-shadow-test imemo-shadow-corpus int-min-test all hooks share-strings-test line-map-check unit-stability-test incremental-test incremental-bench gate-tool-test regexp wasm-rt wasm-test rbs_extract rbs-test rbs-seed-test inline-rbs-test rbs-seed-extractor cident plan-check-test method-table-check timing-test shadow-check signal-default-test source-marker-test magic-comment-test repr-check-test run-scale-test gate-costs arm-check-test traits-check-test poly-cold-test bop-arity-check-test bop-callbacks-test bop-share-check-test share-spec-check bop-callbacks-check arity-spec-check builtin-method-tables-check builtin-method-tables-regen value-edges-check value-edges-regen implied-calls-check implied-calls-regen implied-calls-test lower-rows-check node-kinds-check node-kinds-regen package-facts-check package-facts-regen value-pos-test re-lit-test reject-test cli-opts-test link-names-test reach-test defer-refusals-test check-stores-test backtrace-test gc-minor-test thread-puts-test ext-test ext-cruby-test alloc-report-test no-bigint-test no-alloc-report-test rubyspec rubyspec-gate spin-check \ repr-diff c-costs alloc-diff \
         test test-run clean-test-results regen-rbs-expected \
         regen-expected regen-expected-err bench optcarrot gate gate-full check gate-legs gate-test gate-bench gc-phases-test gc-stress-test threaded-render-test gc-locality-test test-corpus test-corpus-summary \
         gate-optcarrot rubyboy gate-rubyboy scale-test clean install uninstall deps tools
@@ -1660,7 +1660,7 @@ test: lib/spinel_rt_responds_generated.h $(SPINEL_TIMEOUT) cext-header-test cext
 # The actual run. rbs-test golden-checks the RBS extractor (cheap, C-only).
 # rbs-seed-test checks the seeds actually reach the analyzer (incl. nested
 # classes, #1417).
-test-run: int-min-test timing-test signal-default-test source-marker-test magic-comment-test rbs-test rbs-seed-test inline-rbs-test re-lit-test value-pos-test value-edges-check implied-calls-check implied-calls-test node-kinds-check package-facts-check reject-test cli-opts-test link-names-test reach-test defer-refusals-test check-stores-test backtrace-test gc-minor-test gc-phases-test gc-stress-test gc-none-test gc-nogc-poll-test threaded-render-test gc-locality-test byref-capture-test thread-puts-test ext-test ext-cruby-test test-corpus-summary
+test-run: int-min-test timing-test signal-default-test source-marker-test magic-comment-test rbs-test rbs-seed-test inline-rbs-test re-lit-test value-pos-test value-edges-check implied-calls-check implied-calls-test node-kinds-check package-facts-check reject-test cli-opts-test link-names-test reach-test defer-refusals-test check-stores-test backtrace-test gc-minor-test gc-phases-test gc-stress-test gc-none-test no-bigint-test no-alloc-report-test gc-nogc-poll-test threaded-render-test gc-locality-test byref-capture-test thread-puts-test ext-test ext-cruby-test test-corpus-summary
 
 # The test/*.rb corpus (and the bundled packages') on its own, without the
 # C-side legs: what a 32-bit target runs (`make test-corpus CC='cc -m32'`),
@@ -2555,6 +2555,39 @@ gc-none-test: $(SPINEL) $(SP_RT_NOGC_LIB) $(SPINEL_TIMEOUT)
 	  fi; \
 	fi; \
 	rm -rf "$$tmp"; if [ $$ok -eq 1 ]; then echo "gc-none-test: pass"; else exit 1; fi
+
+# Small-target switches (32-bit MCUs, where the runtime's flash and static RAM
+# are the budget). --no-bigint: a loop accumulator stays Integer and raises on
+# overflow, nothing in the binary is the bigint runtime, a literal that can
+# only be a Bignum is refused at its line, and the switch refuses to pair with
+# promote. SP_NO_ALLOC_REPORT: the generated TU's report tags compile to nothing, so a
+# TU compiled with it references no reporter symbol, and sp_alloc.c compiled
+# with it defines none (no counters, no type-name table, no constructor).
+no-bigint-test: $(SPINEL) $(SP_RT_LIB) $(SPINEL_TIMEOUT)
+	@tmp=$$(mktemp -d /tmp/spinel-nobig.XXXXXX); ok=1; d=test/small-target; \
+	$(SPINEL) --no-bigint $$d/no_bigint_loop.rb -o "$$tmp/t" >"$$tmp/cc.out" 2>&1 || { echo "no-bigint-test: FAIL (compile)"; tail -5 "$$tmp/cc.out"; ok=0; }; \
+	if [ $$ok -eq 1 ]; then \
+	  $(TIMEOUT60) "$$tmp/t" > "$$tmp/out" 2>&1; cmp -s "$$tmp/out" $$d/no_bigint_loop.rb.expected || { echo "no-bigint-test: FAIL (output)"; diff $$d/no_bigint_loop.rb.expected "$$tmp/out" | head -5; ok=0; }; \
+	  if command -v nm >/dev/null 2>&1; then \
+	    nm "$$tmp/t" | grep -q ' sp_bigint_' && { echo "no-bigint-test: FAIL (bigint runtime still linked)"; nm "$$tmp/t" | grep ' sp_bigint_' | head -3; ok=0; }; \
+	  fi; \
+	fi; \
+	$(SPINEL) --no-bigint $$d/no_bigint_literal.rb -o "$$tmp/l" >"$$tmp/l.out" 2>&1 && { echo "no-bigint-test: FAIL (Bignum literal compiled)"; ok=0; }; \
+	grep -q 'no_bigint_literal.rb:4: --no-bigint' "$$tmp/l.out" || { echo "no-bigint-test: FAIL (literal refusal not at its line)"; head -3 "$$tmp/l.out"; ok=0; }; \
+	$(SPINEL) --no-bigint --int-overflow=promote $$d/no_bigint_loop.rb -o "$$tmp/p" >/dev/null 2>&1; \
+	[ $$? -eq 2 ] || { echo "no-bigint-test: FAIL (--no-bigint with promote accepted)"; ok=0; }; \
+	rm -rf "$$tmp"; if [ $$ok -eq 1 ]; then echo "no-bigint-test: pass"; else exit 1; fi
+
+no-alloc-report-test: $(SPINEL)
+	@tmp=$$(mktemp -d /tmp/spinel-noar.XXXXXX); ok=1; \
+	$(SPINEL) test/small-target/no_alloc_report.rb -S > "$$tmp/t.c" 2>"$$tmp/cc.out" || { echo "no-alloc-report-test: FAIL (emit)"; tail -5 "$$tmp/cc.out"; ok=0; }; \
+	if [ $$ok -eq 1 ]; then \
+	  $(CC) $(COPT) -w -c -DSP_NO_ALLOC_REPORT -Ilib -Ilib/regexp "$$tmp/t.c" -o "$$tmp/t.o" 2>"$$tmp/t.err" || { echo "no-alloc-report-test: FAIL (TU compile)"; head -5 "$$tmp/t.err"; ok=0; }; \
+	  [ $$ok -eq 1 ] && nm "$$tmp/t.o" | grep -q 'sp_alloc_report' && { echo "no-alloc-report-test: FAIL (TU references the reporter)"; ok=0; }; \
+	  $(CC) $(COPT) -w -c -DSP_NO_ALLOC_REPORT -Ilib -Ilib/regexp lib/sp_alloc.c -o "$$tmp/a.o" 2>"$$tmp/a.err" || { echo "no-alloc-report-test: FAIL (sp_alloc.c compile)"; head -5 "$$tmp/a.err"; ok=0; }; \
+	  [ $$ok -eq 1 ] && nm "$$tmp/a.o" | grep -q 'sp_alloc_report\|sp_alloc_stats' && { echo "no-alloc-report-test: FAIL (sp_alloc.c still defines the reporter)"; nm "$$tmp/a.o" | grep 'sp_alloc_report\|sp_alloc_stats' | head -3; ok=0; }; \
+	fi; \
+	rm -rf "$$tmp"; if [ $$ok -eq 1 ]; then echo "no-alloc-report-test: pass"; else exit 1; fi
 
 # A loop whose only allocations are a Bignum operation's (sp_gc_alloc_nogc,
 # which may not collect: the operands are temporaries nothing roots) asks

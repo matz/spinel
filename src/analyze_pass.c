@@ -21549,8 +21549,9 @@ static int bi_round(Compiler *c) {
 }
 
 void infer_bigint_loop_locals(Compiler *c) {
-  /* (wrap: Integer arithmetic wraps wherever it stands, a loop's included) */
-  if (g_wrap_mode) return;
+  /* (wrap: Integer arithmetic wraps wherever it stands, a loop's included;
+     --no-bigint: it raises there, as everywhere else) */
+  if (g_wrap_mode || g_no_bigint) return;
   const NodeTable *nt = c->nt;
   /* every write asked is a local write whose own name is the local asked */
   if (bi_memo.valid && bi_memo.version == nt->version && bi_memo.count == nt->count &&
@@ -21567,6 +21568,36 @@ void infer_bigint_loop_locals(Compiler *c) {
     }
   bi_memo.recording = 0; bi_memo.valid = 1;
   bi_memo.version = nt->version; bi_memo.count = nt->count; bi_memo.promote_mode = g_promote_mode;
+}
+
+/* See analyze_internal.h. A Bignum spreads from where it starts through
+   every result and slot it reaches, so only the start is reported: the node
+   typed Bignum with no operand typed Bignum (a literal, a constant power, an
+   rand(big) bound, ...). The first one stops the build. */
+static int bigint_child_typed(Compiler *c, int id) {
+  const NodeTable *nt = c->nt;
+  int nr = nt_num_refs(nt, id);
+  for (int i = 0; i < nr; i++) { int ch = nt_ref_at(nt, id, i); if (ch >= 0 && comp_ntype(c, ch) == TY_BIGINT) return 1; }
+  int na = nt_num_arrs(nt, id);
+  for (int i = 0; i < na; i++) {
+    int m = 0; const int *ids = nt_arr_at(nt, id, i, &m);
+    for (int j = 0; j < m; j++) if (ids[j] >= 0 && comp_ntype(c, ids[j]) == TY_BIGINT) return 1;
+  }
+  return 0;
+}
+
+void refuse_bigint_values(Compiler *c) {
+  if (!g_no_bigint) return;
+  const NodeTable *nt = c->nt;
+  for (int id = 0; id < nt->count; id++) {
+    if (comp_ntype(c, id) != TY_BIGINT || bigint_child_typed(c, id)) continue;
+    if (nt_kind(nt, id) == NK_IntegerNode)
+      unsupported_feature(c, id, "--no-bigint: this Integer literal does not fit sp_int on this target and would be a Bignum "
+                                 "(on a 32-bit target, anything past 2**31 - 1: write a mask such as 0xdeadbeef as a negative "
+                                 "number or build it from shifts, or drop --no-bigint)");
+    unsupported_feature(c, id, "--no-bigint: this value can only be a Bignum (it exceeds sp_int on this target); "
+                               "compute it in range or drop --no-bigint");
+  }
 }
 
 /* io/console's `io.raw { |x| body }` and `io.noecho { |x| body }`: the mode is

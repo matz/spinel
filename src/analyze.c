@@ -22,6 +22,7 @@ int callee_param_is_declared_kwarg(Compiler *c, Scope *m, const char *name);
 /* --int-overflow=promote flag; see analyze.h. Default off. */
 int g_promote_mode = 0;
 int g_wrap_mode = 0;
+int g_no_bigint = 0;
 /* --exceptions=abort (src/main.c): the constructs that need a frame to catch an exception are refused */
 int g_exc_abort = 0;
 int g_gc_none = 0;
@@ -3252,7 +3253,7 @@ void bigint_scan_body(const NodeTable *nt, int id, char ***names, int *n, int *c
 }
 
 void detect_bigint_loop_vars(Compiler *c) {
-  if (g_wrap_mode) return;   /* (see infer_bigint_loop_locals) */
+  if (g_wrap_mode || g_no_bigint) return;   /* (see infer_bigint_loop_locals) */
   const NodeTable *nt = c->nt;
   for (int id = 0; id < nt->count; id++) {
     NodeKind ty_k = nt_kind(nt, id);
@@ -55316,6 +55317,7 @@ void analyze_program(Compiler *c) {
   double tm_fp = sp_timing_now();
   AN_STEP_V("an_phase_infer_fixpoint", an_phase_infer_fixpoint(c));
   refuse_self_singleton_calls(c);   /* (on the settled receiver types, #11157) */
+  refuse_bigint_values(c);   /* --no-bigint, on the settled types */
   { char ex[64]; snprintf(ex, sizeof ex, " rounds=%d%s", g_fixpoint_rounds, g_fixpoint_capped ? " capped=1" : ""); sp_timing_end(tm_fp, "analysis_fixpoint", ex); }
   an_pass_report();
   an_shadow_report();

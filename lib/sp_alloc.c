@@ -1307,6 +1307,7 @@ const char *sp_float_to_s(sp_float f) {
   out[o]=0;sp_str_set_len(out,(size_t)o);return out;
 }
 
+#ifndef SP_NO_ALLOC_REPORT
 /* ---- SPINEL_ALLOC_REPORT: deterministic allocation counters (#1336) ----
    Env-var gated (set to 1 or an output path); zero work when off beyond one
    predictable branch at each allocation entry point. Counters key on the
@@ -1856,3 +1857,4 @@ SP_CONSTRUCTOR static void sp_alloc_report_boot(void) {
     atexit(sp_alloc_report_dump);
   }
 }
+#endif /* !SP_NO_ALLOC_REPORT */

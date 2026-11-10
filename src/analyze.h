@@ -76,6 +76,12 @@ extern int g_promote_mode;
 /* --int-overflow=wrap: an Integer stays a machine integer, wrapping; no
    local is widened to Bignum by the loop-growth detectors */
 extern int g_wrap_mode;
+/* --no-bigint: no value may be a Bignum. The loop-growth detectors leave
+   accumulating locals at Integer (their overflow raises, as anywhere else in
+   raise mode), and a value that could only be a Bignum -- a literal past
+   sp_int, a constant power that overflows -- is refused at compile time
+   (refuse_bigint_values). For targets where the bigint runtime does not fit. */
+extern int g_no_bigint;
 void an_rat_boxed_mark(int id);
 int an_rat_boxed(int id);
 int an_rat_value(Compiler *c, int n);

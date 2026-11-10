@@ -11571,9 +11571,9 @@ TyKind infer_uncached(Compiler *c, int id) {
      the box the value now is was handed on as a String. */
   if (comp_strbuf_box_stored(c, id)) {
     /* put back before it returns: not a change of the table */
-    ((unsigned char *)c->strbuf_box)[id] = 0;
+    comp_write_strbuf_box(c, id, 0);
     TyKind u = infer_uncached(c, id);
-    ((unsigned char *)c->strbuf_box)[id] = 1;
+    comp_write_strbuf_box(c, id, 1);
     return u == TY_POLY ? TY_POLY : TY_STRBUF;
   }
   /* a multiple assignment's element, read back for desugar_masgn_store_evidence:

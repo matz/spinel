@@ -2746,6 +2746,13 @@ static inline int comp_head_held_present(const Compiler *c) { return c->head_hel
 static inline int comp_value_discarded_present(const Compiler *c) { return c->value_discarded != NULL; }
 static inline int comp_str_shadow_present(const Compiler *c) { return c->str_shadow != NULL; }
 
+/* Existing unversioned stores, kept separate from the memo-invalidating
+   comp_set_* operations. Routing them here must not add an invalidation. */
+static inline void comp_write_strbuf_box(Compiler *c, int id, unsigned char v) { ((unsigned char *)c->strbuf_box)[id] = v; }
+static inline void comp_write_strbuf_handle_demand(Compiler *c, int id, unsigned char v) { c->strbuf_handle_demand[id] = v; }
+static inline void comp_write_poly_strbuf_lift(Compiler *c, int id, unsigned char v) { c->poly_strbuf_lift[id] = v; }
+static inline void comp_write_nil_tested(Compiler *c, int id, unsigned char v) { c->nil_tested[id] = v; }
+
 static inline TyKind comp_set_ntype(Compiler *c, int id, TyKind t) {
 #ifdef SP_EMIT_TRACE
   if (c->ntype[id] != t) emit_trace_fact(c, id, 't', (int)c->ntype[id], (int)t);

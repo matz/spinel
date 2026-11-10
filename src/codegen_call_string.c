@@ -1898,7 +1898,10 @@ static int str_mut_convert(Compiler *c, const StrMutOp *o, Buf *b) {
   ConvHold *hold0 = g_conv_hold;
   g_conv_hold = NULL;
   buf_printf(b, " const char *_s%d = ", ts);
-  if (o->boxed) { buf_puts(b, "sp_str_aset_rep("); str_mut_boxed(c, o, b); buf_puts(b, ")"); }
+  /* (insert's `*r` takes out its one element, whatever the splat reads as) */
+  if (o->boxed && nt_kind(c->nt, o->node) != NK_SplatNode) {
+    buf_puts(b, "sp_str_aset_rep("); str_mut_boxed(c, o, b); buf_puts(b, ")");
+  }
   else emit_str_insert_text(c, o->node, b);
   buf_printf(b, "; SP_GC_ROOT_STR(_s%d);", ts);
   g_conv_hold = hold0;

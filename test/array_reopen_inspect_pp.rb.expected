@@ -20,3 +20,9 @@ boom
 ARR
 [2]
 [#<struct S a=[1]>]
+#<struct S2 a=FOO, b=[1]>
+[#<struct S2 a=FOO, b=2>, [3]]
+[FOO, [5]]
+[#<E: e>, [1]]
+[[2], #<E: e>, [3]]
+ARR

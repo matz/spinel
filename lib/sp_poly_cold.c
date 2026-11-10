@@ -233,8 +233,9 @@ const char *(*sp_class_user_to_s_fn)(sp_Class);
 const char *(*sp_class_user_inspect_fn)(sp_Class);
 const char *(*sp_array_user_inspect_fn)(sp_RbVal);
 /* set while pp prints: CRuby's pp lays out an Array by its own
-   pretty_print, never by the program's Array#inspect */
-int sp_pp_printing;
+   pretty_print, never by the program's Array#inspect. One flag for each
+   thread, as each thread can print at the same time. */
+SP_TLS int sp_pp_printing;
 /* A boxed Time's to_s (inspect 0) or inspect (1): a Time subclass
    instance's goes through its class's own dispatcher, which runs an
    override of the class's and falls back to Time's. */

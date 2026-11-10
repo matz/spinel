@@ -46,3 +46,18 @@ p [1]
 pp [2]
 S = Struct.new(:a)
 pp [S.new([1])]
+# pp prints the rest of its value without the program's Array#inspect after
+# it calls the program's own #inspect or #to_s of an element
+class Foo
+  def inspect = "FOO"
+end
+S2 = Struct.new(:a, :b)
+pp S2.new(Foo.new, [1])
+pp [S2.new(Foo.new, 2), [3]]
+pp [Foo.new, [5]]
+class E < StandardError
+  def to_s = "e"
+end
+pp [E.new, [1]]
+pp [[2], E.new, [3]]
+p [1]

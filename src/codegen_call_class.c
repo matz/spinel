@@ -1363,6 +1363,32 @@ int emit_call_reflection_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
       /* the value or the class of that leaf, as the typing chose */
       int cg_cls;
       const char *cg_key = const_get_resolve(c, cg_rk, cg_qm, &cg_cls);
+      /* a class value receiver reads the one slot only where its class
+         sees it: a class whose chain holds no such constant raises
+         NameError, as CRuby's lookup misses (`[Own, Other].each { |k|
+         k.const_get(:Z) }` with Z Own's alone) */
+      int cg_guard = cg_key ? const_get_value_guard(c, id, recv, cg_rk, cg_qm, cg_key, cg_inherit) : 0;
+      if (cg_guard) {
+        int t = ++g_tmp;
+        TyKind rt1 = infer_type(c, recv);
+        buf_printf(b, "(({ sp_Class _cr%d = ", t);
+        if (rt1 == TY_POLY) { buf_puts(b, "sp_isa_class_arg("); emit_boxed(c, recv, b); buf_puts(b, ")"); }
+        else emit_expr(c, recv, b);
+        buf_printf(b, "; int _ok%d = 0; switch (_cr%d.cls_id) {", t, t);
+        for (int k = 0; k < c->nclasses; k++) {
+          int kc = -1;
+          const char *kk = c->classes[k].name ? const_get_resolve(c, k, cg_qm, &kc) : NULL;
+          if (!kk || !sp_streq(kk, cg_key)) continue;
+          buf_puts(b, " ");
+          emit_cv_case_labels(c, k, NULL, 0, b);
+          buf_printf(b, "_ok%d = 1; break;", t);
+        }
+        buf_printf(b, " default: break; } if (!_ok%d) { const char *_cn%d = sp_class_to_s(_cr%d); "
+                      "sp_exc_stage_recv(sp_box_class(_cr%d)); "
+                      "if (strcmp(_cn%d, \"Object\") == 0) sp_raise_cls(\"NameError\", \"uninitialized constant %s\"); "
+                      "else sp_raise_cls(\"NameError\", sp_sprintf(\"uninitialized constant %%s::%s\", _cn%d)); } }), ",
+                   t, t, t, t, t, cg_qm, cg_qm, t);
+      }
       if (cg_key) {
         LocalVar *cgv = comp_const(c, cg_key);
         if (const_has_flag(cgv)) {
@@ -1384,6 +1410,7 @@ int emit_call_reflection_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
         }
         else buf_printf(b, "cst_%s", cg_key);
         if (const_has_flag(cgv)) buf_puts(b, ")");
+        if (cg_guard) buf_puts(b, ")");
         return 1;
       }
       /* A CLASS or module name: const_get answers the class object. The lookup

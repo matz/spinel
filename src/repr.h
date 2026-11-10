@@ -76,6 +76,9 @@ typedef struct {
   unsigned head_held:1;   /* a call's nil arm head ran this operand into a
                              temp of its own ahead of the call (VR_HEAD_HELD,
                              a view around the call): it reads as that temp */
+  unsigned str_shadow:2;  /* a String receiver read as a copy of a handle's
+                             bytes its mutator writes back to (VR_STR_SHADOW:
+                             1 a boxed face's, 2 a held chain's shadow) */
   unsigned discarded:1;   /* emitted where its value is thrown away
                              (VR_DISCARDED, a view around the emission) */
   unsigned big:1;         /* an Integer held as an sp_Bigint * */

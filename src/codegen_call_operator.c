@@ -1646,7 +1646,7 @@ int emit_call_operator_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, co
         return 1;
       } }
     NodeKind rk = nt_kind(nt, recv);
-    if (str_mut_var_recv(c, recv) || sb_held_shadow(recv)) {
+    if (str_mut_var_recv(c, recv) || sb_held_shadow(c, recv)) {
       /* a fresh unfrozen empty: the shared frozen "" would make a later
          mutation of the cleared receiver raise */
       buf_puts(b, "({ sp_str_check_mutable("); emit_expr(c, recv, b);
@@ -1788,7 +1788,7 @@ int emit_call_operator_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, co
          nt_kind(nt, recv) == NK_InstanceVariableReadNode)) ||
        (repr_of(c, recv).as_ty == TY_STRBUF && nt_kind(nt, recv) == NK_CallNode) || aset_route ||
        /* or the shadow a shim reads it as (emit_held_self_answer_shim) */
-       sb_held_shadow(recv))) {
+       sb_held_shadow(c, recv))) {
     int rslot = g_n_argov;
     size_t rpre0 = g_pre->len;
     if (aset_route && !aset_held) {

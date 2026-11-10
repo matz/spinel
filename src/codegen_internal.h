@@ -248,7 +248,7 @@ int face_str_bang_sn_call(Compiler *c, int id);
 int sb_block_hoists(Compiler *c, int id);
 int scan_block_hoists(Compiler *c, int id);
 int strbuf_held_chain(const Compiler *c, int r);
-int sb_held_shadow(int node);
+int sb_held_shadow(const Compiler *c, int node);
 int strbuf_held_self_answer(Compiler *c, int r);
 int emit_call_on_held_self_answer(Compiler *c, int id, Buf *b);
 int emit_freeze_self_answer(Compiler *c, int id, int recv, Buf *b);
@@ -428,7 +428,7 @@ int strbuf_read_copies(Compiler *c, int v);
 typedef struct { unsigned char box, demand; TyKind ty; int tok, ntok; } SbReaderSave;
 int sb_reader_shim_open(Compiler *c, int id, int recv, Buf *sref, SbReaderSave *sv);
 void sb_reader_shim_close(Compiler *c, int recv, const SbReaderSave *sv);
-int sb_shadowed_reader(int node);
+int sb_shadowed_reader(const Compiler *c, int node);
 int sb_shim_args_first(Compiler *c, int id, Buf *pre, int indent);
 int str_mut_var_recv(Compiler *c, int recv);
 void emit_str_frozen_check(Compiler *c, int recv, Buf *b);
@@ -1437,6 +1437,12 @@ int head_held_box(Compiler *c, int node);
    it (an immediate, a pointer the head's temp roots), the box is declared
    without a root of its own. Answers the temp the arm reads. */
 int hold_operand(Compiler *c, int node, TyKind ty, int boxed, int t, int root, const char *sep, Buf *b);
+/* The hold of String `node` that a slot or a container keeps, as its
+   handle: `sp_String *_t<t> = SP_STR_HDL(<handle>);` and, when `root`, its
+   root, into b. The bytes are taken where the hold is read (SP_STR_B), so
+   an operand that runs between the hold and the read and changes the
+   String in place is seen, and one that rebinds the slot is not. */
+void hold_string_handle_decl(Compiler *c, int node, int t, int root, Buf *b);
 /* hold_operand as a statement of its own in g_pre, at the current indent. */
 int hold_operand_pre(Compiler *c, int node, TyKind ty, int boxed, int t, int root);
 int emit_splat_gather(Compiler *c, Scope *m, const int *argv, const ArgLayout *L);
@@ -2676,7 +2682,8 @@ void view_unbind(int n);
    restored by view_pop (or view_unwind on a refusal) like a type view. */
 int view_const_read_done(Compiler *c, int id);
 int view_push_const_read(Compiler *c, int id);
-enum { VR_STRBUF_BOX, VR_HANDLE_DEMAND, VR_POLY_LIFT, VR_NILNARROW, VR_NIL_TESTED, VR_HEAD_HELD, VR_DISCARDED };
+enum { VR_STRBUF_BOX, VR_HANDLE_DEMAND, VR_POLY_LIFT, VR_NILNARROW, VR_NIL_TESTED, VR_HEAD_HELD, VR_DISCARDED,
+       VR_STR_SHADOW };
 int view_push_repr(Compiler *c, int id, int flag, int v);
 /* bumped by every view push, pop and unwind: a per-node memo of a decision
    that reads the flags or the type keys on it */

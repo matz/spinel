@@ -1718,7 +1718,7 @@ static int str_self_chain_root(Compiler *c, int n) {
     case VP1_NIL: return -1;
     case VP1_MANY: return -1;
     }
-    if (str_mut_var_recv(c, n) || sb_shadowed_reader(n)) return n;
+    if (str_mut_var_recv(c, n) || sb_shadowed_reader(c, n)) return n;
   }
   return -1;
 }
@@ -1792,7 +1792,7 @@ int emit_op_string_slice(Compiler *c, const BopCtx *x, Buf *b) {
   int id = x->id, recv = x->recv, argc;
   const int *argv = call_args(c->nt, id, &argc);
   if (argc <= 2 && argc >= 1 && emit_string_slice_poly(c, id, argv[0], argc == 2, b)) return 1;
-  int sb_asgn = str_mut_var_recv(c, recv) || sb_shadowed_reader(recv);
+  int sb_asgn = str_mut_var_recv(c, recv) || sb_shadowed_reader(c, recv);
   /* `s.insert(0, "<").slice!(0, 2)` cuts s's String: the chain runs, in
      Ruby's order, then the slice! is the variable's own, which every arm
      below serves (reassigning it, or through a handle's shim). The answer

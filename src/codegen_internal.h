@@ -1452,7 +1452,6 @@ int gathered_param_index(Compiler *c, Scope *m, int i, const char *len, char *id
 extern unsigned g_yield_live_mask;   /* emit_proc_yield: positions whose targets take live bytes */
 void refuse_yield_handle_args(Compiler *c, int id);
 int emit_handle_var_ref(Compiler *c, int a, Buf *b);
-void emit_inline_locals(Compiler *c, int mi, int tag, Buf *b, int din);
 void emit_inline_bind_params(Compiler *c, Scope *m, int args, const int *argv, int argc,
                              const ArgLayout *L, int tag, int saved_nren,
                              int din, Buf *b);

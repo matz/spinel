@@ -367,7 +367,7 @@ int emit_ctor_yield_inline(Compiler *c, int id, int ci, Buf *b) {
   int din = g_indent + 1;
 
   /* declare the initialize body's locals under renamed names */
-  emit_inline_locals(c, mi, tag, b, din);
+  emit_inlined_locals(c, &c->scopes[mi], tag, b, din);
 
   /* bind params to the call args (call-site scope: renames off) */
   int args = nt_ref(nt, id, "arguments");
@@ -29061,10 +29061,9 @@ static int refuse_ctor_copies(Compiler *c, int id, const char *name, int recv) {
 }
 
 /* Does `instance_exec` call `id` splice its literal block into an object's
-   context with every argument bound in place, so that a String variable the
-   block appends to is aliased (emit_block_binds)? Not through a trampoline,
-   a poly or non-object receiver, a class's own `instance_exec`, or a splat,
-   which gathers the arguments into an Array first. */
+   context with every argument bound in place (emit_block_binds)? Not through
+   a trampoline, a poly or non-object receiver, a class's own `instance_exec`,
+   or a splat, which gathers the arguments into an Array first. */
 static int ie_splice_aliases(Compiler *c, int id, const char *name, int recv) {
   const NodeTable *nt = c->nt;
   if (!sp_streq(name, "instance_exec")) return 0;
@@ -29954,9 +29953,8 @@ static void refuse_string_copies(Compiler *c, int id) {
   if ((sp_streq(name, "new") || (sp_streq(name, "raise") && recv < 0)) && refuse_ctor_copies(c, id, name, recv))
     return;
   /* `o.instance_exec(s) { |t| t << x }`: the block's parameter is bound as
-     a yield binds it, and on an object's splice a plain String variable is
-     aliased as a yield's is (ie_splice_aliases); elsewhere it is bound as a
-     plain assignment */
+     a yield binds it (on an object's splice, ie_splice_aliases); elsewhere it
+     is bound as a plain assignment */
   if (sp_streq(name, "instance_exec") || sp_streq(name, "class_exec") || sp_streq(name, "module_exec")) {
     int blk = nt_ref(nt, id, "block");
     if (blk < 0 || nt_kind(nt, blk) != NK_BlockNode) return;

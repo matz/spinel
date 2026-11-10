@@ -20466,7 +20466,6 @@ static int emit_ivar_cvar_write_stmt(Compiler *c, int id, Buf *b, int indent, co
         iv_elems_handle = repr_of_ivar(c, sc, iv).elems_handle;
       }
     }
-    /* an open splice alias of the ivar (a plain String slot's) */
     int ven = 0;
     int v_empty_array = vk == NK_ArrayNode && (nt_arr(nt, v, "elements", &ven), ven == 0);
     int v_empty_hash = 0;

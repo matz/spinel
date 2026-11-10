@@ -7560,7 +7560,7 @@ static int tmc_prog_module_in_builtin(Compiler *c, const char *self_cls, const c
   chain[n++] = "Object";
   chain[n++] = "Kernel";
   for (int i = 0; i < n; i++) {
-    int k = comp_class_index(c, chain[i]);
+    int k = comp_builtin_class_named(c, chain[i]);
     if (k >= 0 && tmc_includes(c, k, mod, 0)) return 1;
   }
   return 0;

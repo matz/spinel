@@ -1749,7 +1749,7 @@ static void emit_poly_dispatch_key_pick(Compiler *c, int tv, int key_guard, int 
   buf_printf(b, "(_t%d.tag == SP_TAG_OBJ ? _t%d.cls_id", tv, tv);
   /* an Integer or Float whose own reopening (if any) lacks the name takes
      the Numeric reopening's arm */
-  int nmi = comp_class_index(c, "Numeric");
+  int nmi = comp_builtin_class_named(c, "Numeric");
   if (nmi >= 0 && !(class_is_prim_reopen(c, nmi) &&
                     (!pick_name || comp_method_in_chain(c, nmi, pick_name, NULL) >= 0))) nmi = -1;
   for (unsigned i = 0; i < sizeof P / sizeof P[0]; i++) {
@@ -15514,7 +15514,7 @@ static int emit_new_call_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
     if (!cn) cn = nt_str(nt, recv, "name");
     if (cn && is_exc_name(cn)) {
       /* a reopening's own initialize runs on the runtime's exception */
-      { int rci = comp_class_index(c, cn);
+      { int rci = comp_builtin_class_named(c, cn);
         int rim = rci >= 0 ? exc_reopen_initialize(c, rci) : -1;
         if (rim >= 0) { emit_exc_reopen_construct(c, rci, rim, nt_ref(nt, id, "arguments"), -1, b); { *out = 1; return 1; } } }
       /* SystemCallError#initialize builds the message from the errno:
@@ -23053,7 +23053,7 @@ static int emit_object_reopen_vis_refusal(Compiler *c, int id, int vrecv, TyKind
     NodeKind vk = nt_kind(c->nt, vrecv);
     const char *bn = ci < 0 && (vk == NK_ConstantReadNode || (vk == NK_ConstantPathNode && nt_ref(c->nt, vrecv, "parent") < 0)) ? nt_str(c->nt, vrecv, "name") : NULL;
     int bid = bn ? builtin_class_id(bn) : 0;
-    if (bid && comp_class_index(c, bn) < 0) {
+    if (bid && comp_builtin_class_named(c, bn) < 0) {
       int mod = is_builtin_module_name(bn);
       if (core_class_value_answers(bn, vnm) || core_class_value_answers(mod ? "Module#" : "Class#", vnm) || builtin_class_id_answers(bid, vnm, 1) || class_value_builtin_answers(c, vnm, !mod) ||
           object_reopen_class_value_owns(c, id, oci, vnm, 0, mod ? -3 : -2)) return 0;

@@ -7989,7 +7989,7 @@ static int obj_is_root_class(Compiler *c, int cid, const char *cn) {
    test. */
 static int emit_obj_exc_when(Compiler *c, int cid, const char *cn, int t, Buf *b) {
   if (!cn || comp_const(c, cn) || !is_builtin_exception_name(cn)) return 0;
-  if (comp_class_index(c, cn) >= 0) return 0;
+  if (comp_builtin_class_named(c, cn) >= 0) return 0;
   if (!class_inherits_builtin_exception(c, cid)) return 0;
   buf_printf(b, "sp_exc_is_a((sp_Exception *)_t%d, \"%s\")", t, cn);
   return 1;

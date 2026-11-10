@@ -1496,7 +1496,7 @@ int emit_call_compare_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
       nt_kind(nt, recv) == NK_ConstantReadNode && nt_str(nt, recv, "name")) {
     const char *mcn = nt_str(nt, recv, "name");
     if ((sp_streq(mcn, "Comparable") || sp_streq(mcn, "Enumerable")) &&
-        comp_class_index(c, mcn) < 0) {
+        comp_builtin_class_named(c, mcn) < 0) {
       buf_puts(b, "sp_poly_kind_of_builtin(");
       emit_boxed(c, argv[0], b);
       buf_printf(b, ", \"%s\")", mcn);

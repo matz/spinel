@@ -5542,7 +5542,7 @@ int comp_super_object_builtin(Compiler *c, const Scope *s, const char *uname, in
   if (kernel && class_is_blank_slate(c, root) && comp_super_parent(c, root, 0) < 0) return 0;
   const char *own[] = { "Object", "Kernel", "BasicObject" };
   for (int i = 0; i < 3; i++) {
-    int k = comp_class_index(c, own[i]);
+    int k = comp_builtin_class_named(c, own[i]);
     if (k >= 0 && comp_method_in_class(c, k, uname) >= 0) return 0;
   }
   return kind;

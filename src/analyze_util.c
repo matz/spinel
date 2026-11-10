@@ -5966,7 +5966,7 @@ int an_kernel_backtick_recv(Compiler *c, int id, int recv, int fresh, int in_def
   if (rt == TY_POLY) return in_default && !comp_toplevel_mod_defines(c, "`", 1);
   const char *cn = rt == TY_CLASS || ty_is_object(rt) ? NULL : builtin_class_of_type(rt);
   if (!cn) return 0;
-  int ci = comp_class_index(c, cn);
+  int ci = comp_builtin_class_named(c, cn);
   return ci < 0 || comp_method_in_chain(c, ci, "`", NULL) < 0;
 }
 

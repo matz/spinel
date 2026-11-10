@@ -7193,7 +7193,7 @@ static char **dsn_inames(Compiler *c, int *nin, int *owned) {
 static void dsend_add_every_object_names(Compiler *c, int cls, char **in, int nin,
                                          char ***names, int *n, int *cap, ANameHash *seen) {
   if (cls >= 0 && class_is_blank_slate(c, cls)) return;
-  int oc = comp_class_index(c, "Object");
+  int oc = comp_builtin_class_named(c, "Object");
   for (int i = 0; i < nin; i++) {
     int tm = comp_method_index(c, in[i]);   /* a top-level def, not main's own (`def self.k`) */
     if ((oc >= 0 && oc != cls && comp_method_in_chain(c, oc, in[i], NULL) >= 0) ||
@@ -7817,7 +7817,7 @@ static void dsend_add_builtin_names(Compiler *c, const char *bcls, char ***own, 
   for (int k = 0; is_num && numeric_methods[k]; k++) dsend_add_name(own, nown, cap, seen, numeric_methods[k]);
   const char *pcls[] = { bcls, "Object", is_num ? "Numeric" : NULL, is_enum ? "Enumerable" : NULL };
   for (int r = 0; r < 4; r++) {
-    int pci = pcls[r] ? comp_class_index(c, pcls[r]) : -1;
+    int pci = pcls[r] ? comp_builtin_class_named(c, pcls[r]) : -1;
     if (pci < 0) continue;
     char **kn = NULL; int nk = dsend_receiver_names(c, pci, 0, &kn);
     for (int j = 0; j < nk; j++) { dsend_add_name(own, nown, cap, seen, kn[j]); free(kn[j]); }
@@ -7825,7 +7825,7 @@ static void dsend_add_builtin_names(Compiler *c, const char *bcls, char ***own, 
   }
   /* and the top-level defs, which Object's names above hold only when the
      program reopens Object: `5.send("hel" + "per")` raised NoMethodError */
-  if (comp_class_index(c, "Object") < 0) {
+  if (comp_builtin_class_named(c, "Object") < 0) {
     int nin = 0, owned; char **in = dsn_inames(c, &nin, &owned);
     dsend_add_every_object_names(c, -1, in, nin, own, nown, cap, seen);
     if (owned) dsn_inames_free(in, nin);

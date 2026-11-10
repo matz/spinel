@@ -2242,6 +2242,10 @@ static int emit_method_obj_target(Compiler *c, int id, Buf *b, const NodeTable *
     if (mmq >= 0 && (self_rooted || recv < 0)) emit_missing_guard(c, id, mi, mmq, self_rooted ? self_tmp : -1, b);
     char identbuf[256];
     const char *ident = method_builtin_ident(c, id, mi, 0, identbuf, sizeof identbuf);
+    /* (the holder a boxed receiver rides in is new on every call: the Method
+       says so, and == / hash read the receiver inside it) */
+    int held = self_receiver && bam_poly;
+    if (held) buf_puts(b, "sp_bm_set_held(");
     if (ident) buf_puts(b, "sp_bm_set_ident(");
     if (pp) buf_puts(b, "sp_bm_set_proc_params(");
     buf_puts(b, mi >= 0 || bop ? "sp_bm_set_thunk(sp_bm_set_abi(sp_bound_method_new_d(" : "sp_bm_set_thunk(sp_bm_set_abi(sp_bound_method_new(");
@@ -2447,6 +2451,7 @@ static int emit_method_obj_target(Compiler *c, int id, Buf *b, const NodeTable *
                        mi >= 0 ? (mi_legacy ? mi_ret : mi_pret) : bop_ret, mi_poly, mi_pfixed, _th, _tmin, _tmax); }
     if (pp) buf_printf(b, ", %s)", pp);
     if (ident) { buf_puts(b, ", "); emit_str_literal(b, ident); buf_puts(b, ")"); }
+    if (held) buf_puts(b, ")");
     if (mmq >= 0 && (self_rooted || recv < 0)) buf_puts(b, ")");
     if (self_rooted) buf_puts(b, "; })");
     return 1;

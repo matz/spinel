@@ -33154,7 +33154,8 @@ void emit_bound_method_call(Compiler *c, int id, int recv, int target, Buf *b) {
 int bind_owner_mismatch(Compiler *c, int target, TyKind ot) {
   Scope *tm = &c->scopes[target];
   int cid = tm->class_id;
-  if (cid < 0 || tm->is_cmethod || comp_class_is_module(c, &c->classes[cid])) return 0;
+  /* (every object is an Object: a method of the program's Object binds to any) */
+  if (cid < 0 || tm->is_cmethod || comp_class_is_module(c, &c->classes[cid]) || cid == comp_core_class(c, CORE_OBJECT)) return 0;
   return !class_isa_user(c, ty_object_class(ot), cid);
 }
 

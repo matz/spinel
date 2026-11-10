@@ -30,3 +30,7 @@ p sm.call
 puts sm.inspect.sub(/ \S+:\d+>/, ">")
 p sm.arity
 p sm.owner
+
+# an unbound method of Object binds to an instance of any class
+p A.instance_method(:twice).super_method.bind(A.new).call(21)
+p Object.instance_method(:twice).bind(A.new).call(21)

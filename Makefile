@@ -154,7 +154,7 @@ export SPINEL_OPENSSL_LIBDIR := $(OPENSSL_PREFIX)/lib
 endif
 endif
 endif
-BUNDLED_NATIVE_OBJS = packages/json/sp_json.o packages/stringio/sp_stringio.o packages/strscan/sp_strscan.o packages/base64/sp_base64.o packages/tmpdir/sp_tmpdir.o packages/zlib/sp_zlib.o packages/pty/sp_pty.o
+BUNDLED_NATIVE_OBJS = packages/json/sp_json.o packages/stringio/sp_stringio.o packages/strscan/sp_strscan.o packages/base64/sp_base64.o packages/tmpdir/sp_tmpdir.o packages/etc/sp_etc.o packages/zlib/sp_zlib.o packages/pty/sp_pty.o
 ifeq ($(OPENSSL_AVAILABLE),yes)
 BUNDLED_NATIVE_OBJS += packages/openssl/sp_openssl.o
 endif
@@ -710,6 +710,15 @@ packages/tmpdir/sp_tmpdir.o: packages/tmpdir/sp_tmpdir.c \
 packages/tmpdir/sp_tmpdir_mt.o: packages/tmpdir/sp_tmpdir.c \
                                 lib/spinel/runtime.h lib/sp_dtoa.h lib/sp_alloc.h lib/sp_gc.h lib/sp_types.h lib/sp_compat.h lib/sp_setjmp.h
 	$(CC) -c $(COPT) -Wno-all $(SEC_FLAGS) $(PKG_MT_FLAGS) -Ilib packages/tmpdir/sp_tmpdir.c -o $@
+
+# etc: the user and group databases, each entry as one string the Ruby
+# splits. Pure C, no struct.
+packages/etc/sp_etc.o: packages/etc/sp_etc.c \
+                       lib/spinel/runtime.h lib/sp_dtoa.h lib/sp_alloc.h lib/sp_gc.h lib/sp_types.h lib/sp_compat.h lib/sp_setjmp.h
+	$(CC) -c $(COPT) -Wno-all $(SEC_FLAGS) -Ilib packages/etc/sp_etc.c -o $@
+packages/etc/sp_etc_mt.o: packages/etc/sp_etc.c \
+                          lib/spinel/runtime.h lib/sp_dtoa.h lib/sp_alloc.h lib/sp_gc.h lib/sp_types.h lib/sp_compat.h lib/sp_setjmp.h
+	$(CC) -c $(COPT) -Wno-all $(SEC_FLAGS) $(PKG_MT_FLAGS) -Ilib packages/etc/sp_etc.c -o $@
 
 # pty: PTY.spawn, a child on a new pseudo-terminal (posix_openpt + fork).
 # Pure C over libc; no wasm32-wasi object, since WASI has no fork.

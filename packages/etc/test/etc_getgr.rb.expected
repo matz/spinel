@@ -1,0 +1,11 @@
+Etc::Group
+true
+true
+true
+true
+true
+true
+true
+0
+"can't find group for no-such-group-xyz"
+"can't find group for 1073741824"

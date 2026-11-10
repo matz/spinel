@@ -88,6 +88,8 @@ TEST_SKIP += test/file_expand_path.rb test/file_surface_extended.rb test/implici
 TEST_SKIP += test/ffi_header_declared_extern.rb test/handle_nil_equality.rb
 TEST_SKIP += test/process_spawn_failure_names_path.rb test/process_spawn_file_redirect.rb
 TEST_SKIP += test/process_spawn_splat_and_pair.rb test/std_stream_stat.rb
+# the user database knows the current user alone, as uid 0, and no group
+TEST_SKIP += packages/etc/test/etc_each.rb packages/etc/test/etc_getgr.rb packages/etc/test/etc_getpw.rb
 # no fork: Process.daemon is NotImplementedError there, as in CRuby
 TEST_SKIP += test/process_daemon.rb
 # FIFOs (File.mkfifo)

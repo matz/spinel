@@ -1,0 +1,6 @@
+[package]
+name = "etc"
+sources = ["sp_etc.c"]   # carried C is declared, not discovered (#4362)
+
+# Pre-installed spin package: ships with the compiler, versioned with it.
+# The user and group databases of the system (Etc), carried in C (sp_etc.c).

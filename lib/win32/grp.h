@@ -1,4 +1,4 @@
-/* Windows: no group database; getgrgid/getgrnam answer NULL. */
+/* Windows: no group database; getgrgid/getgrnam and getgrent answer NULL. */
 #ifndef SP_WIN32_GRP_H
 #define SP_WIN32_GRP_H
 #include "sp_win32.h"
@@ -8,6 +8,9 @@ extern "C" {
 #endif
 struct group *getgrgid(gid_t gid);
 struct group *getgrnam(const char *name);
+void setgrent(void);
+void endgrent(void);
+struct group *getgrent(void);
 #ifdef __cplusplus
 }
 #endif

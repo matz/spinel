@@ -676,7 +676,9 @@ int emit_builtin_class_op(Compiler *c, int id, const char *cls, const char *name
   const BuiltinClassOp *cop = cplan_builtin_class_row(c, id, cls);
   if (!cop || cop->op.emit == BOPE_NONE || !bop_emitters[cop->op.emit]) return 0;
   BopCtx x = { id, nt_ref(c->nt, id, "receiver"), argc, TY_CLASS, name, &cop->op, NULL, 0 };
-  return bop_emitters[cop->op.emit](c, &x, b);
+  if (!bop_emitters[cop->op.emit](c, &x, b)) return 0;
+  if (g_plan_check) plan_check_observe(c, id, TY_CLASS, &cop->op);
+  return 1;
 }
 
 /* The call emitted through the row of its name that guards no argument kind,

@@ -5050,7 +5050,11 @@ static int infer_builtin_cmethod_call(Compiler *c, int id, const NodeTable *nt, 
     /* a builtin class's own methods (IO.pipe, IO.select): its class-side rows */
     if (rk == NK_ConstantReadNode) {
       const BuiltinClassOp *cop = cplan_builtin_class_row(c, id, nt_key_name(nt, recv));
-      if (cop && cop->op.result != TY_UNKNOWN) { *out = cop->op.result; return 1; }
+      if (cop && cop->op.result != TY_UNKNOWN) {
+        if (an_bop_records(c, id)) c->bop_inf[id] = &cop->op;
+        *out = cop->op.result;
+        return 1;
+      }
     }
 
     /* <local>.yield(v) or bare <local>.yield: a generator yielder / fiber yield

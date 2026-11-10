@@ -13538,52 +13538,44 @@ static void emit_builtin_new_arms_text(Compiler *c, const char *pre, const char 
 }
 
 /* The arm of a Class-value `new` switch for a user exception class without
-   its own initialize: built as the static `MyError.new(msg)` is, from the
-   message argument `_t<atmp[0]>` when there is one. */
-int emit_exc_sub_new_arm(Compiler *c, int ci, int argc, const int *atmp, int rt2, Buf *b) {
+   its own initialize: built as the static `MyError.new(msg)` is. The
+   arguments are `argc_txt` boxed values at `argv_txt` (a count known only at
+   run time for a spread array), the message `a0` the first of them; `pre`
+   runs first in the arm. With `argc` >= 0 the count is that constant. */
+static int exc_sub_new_arm_text(Compiler *c, int ci, int argc, const char *argc_txt, const char *argv_txt,
+                                const char *a0, const char *pre, int rt2, Buf *b) {
   if (!class_is_exc_subclass(c, ci) || comp_method_in_chain(c, ci, "initialize", NULL) >= 0) return 0;
   const char *cn = class_ruby_name(c, ci); if (!cn) cn = c->classes[ci].name;
   if (class_is_sysexit(c, ci)) {
     Buf alloc; memset(&alloc, 0, sizeof alloc);
     const char *dim = "sp_Exception";
     emit_sysexit_alloc(c, ci, &dim, &alloc);
-    buf_printf(b, "case %d: { %s *_e = %s; SP_GC_ROOT(_e); sp_sysexit_super((sp_Exception *)_e, %d, ", ci, dim, alloc.p, argc);
+    buf_printf(b, "case %d: { %s%s *_e = %s; SP_GC_ROOT(_e); sp_sysexit_super((sp_Exception *)_e, %s, %s); ",
+               ci, pre, dim, alloc.p, argc_txt, argc == 0 ? "NULL" : argv_txt);
     free(alloc.p);
-    if (argc == 0) buf_puts(b, "NULL); ");
-    else {
-      buf_puts(b, "(sp_RbVal[]){");
-      for (int a = 0; a < argc; a++) buf_printf(b, "%s_t%d", a ? ", " : "", atmp[a]);
-      buf_puts(b, "}); ");
-    }
     buf_printf(b, "_t%d = sp_box_obj(_e, %d); } break; ", rt2, ci);
     return 1;
   }
-  if (class_takes_exc_attrs(c, ci) && argc > 1) {
+  if (class_takes_exc_attrs(c, ci) && argc != 0 && argc != 1) {
+    if (argc < 0) return 0;   /* (a spread array: the caller's own arm) */
     Buf alloc; memset(&alloc, 0, sizeof alloc);
     const char *dim = "sp_Exception";
     emit_sysexit_alloc(c, ci, &dim, &alloc);
-    buf_printf(b, "case %d: { %s *_e = %s; SP_GC_ROOT(_e); sp_exc_attrs_super((sp_Exception *)_e, %d, (sp_RbVal[]){", ci, dim, alloc.p, argc);
+    buf_printf(b, "case %d: { %s%s *_e = %s; SP_GC_ROOT(_e); sp_exc_attrs_super((sp_Exception *)_e, %s, %s, sp_box_nil()); "
+                  "_t%d = sp_box_obj(_e, %d); } break; ", ci, pre, dim, alloc.p, argc_txt, argv_txt, rt2, ci);
     free(alloc.p);
-    for (int a = 0; a < argc; a++) buf_printf(b, "%s_t%d", a ? ", " : "", atmp[a]);
-    buf_printf(b, "}, sp_box_nil()); _t%d = sp_box_obj(_e, %d); } break; ", rt2, ci);
     return 1;
   }
   if (class_is_syserr(c, ci)) {
     /* SystemCallError#initialize(msg = nil, func = nil): the errno text */
-    buf_printf(b, "case %d: { const char *_m = sp_syserr_msg_a(\"%s\", %d, ", ci, cn, argc);
-    if (argc == 0) buf_puts(b, "NULL); ");
-    else {
-      buf_puts(b, "(sp_RbVal[]){");
-      for (int a = 0; a < argc; a++) buf_printf(b, "%s_t%d", a ? ", " : "", atmp[a]);
-      buf_puts(b, "}); ");
-    }
+    buf_printf(b, "case %d: { %sconst char *_m = sp_syserr_msg_a(\"%s\", %s, %s); ", ci, pre, cn, argc_txt,
+               argc == 0 ? "NULL" : argv_txt);
   }
   else {
-    buf_printf(b, "case %d: { sp_dyn_new_arity(%d, 1); const char *_m = ", ci, argc);
-    if (argc >= 1)
-      buf_printf(b, "_t%d.tag == SP_TAG_NIL ? (&(\"\\xff\")[1]) : sp_exc_msg_given("
-                    "_t%d.tag == SP_TAG_STR ? _t%d.v.s : sp_poly_to_s(_t%d)); ",
-                 atmp[0], atmp[0], atmp[0], atmp[0]);
+    buf_printf(b, "case %d: { %ssp_dyn_new_arity(%s, 1); const char *_m = ", ci, pre, argc_txt);
+    if (argc != 0)
+      buf_printf(b, "%s.tag == SP_TAG_NIL ? (&(\"\\xff\")[1]) : sp_exc_msg_given("
+                    "%s.tag == SP_TAG_STR ? %s.v.s : sp_poly_to_s(%s)); ", a0, a0, a0, a0);
     else buf_puts(b, "(&(\"\\xff\")[1]); ");
   }
   if (c->classes[ci].nivars > 0)
@@ -13593,6 +13585,27 @@ int emit_exc_sub_new_arm(Compiler *c, int ci, int argc, const int *atmp, int rt2
     buf_printf(b, "_t%d = sp_box_obj(sp_exc_new_sub(\"%s\", \"%s\", _m), %d); } break; ",
                rt2, cn, exc_builtin_parent(c, ci), ci);
   return 1;
+}
+int emit_exc_sub_new_arm(Compiler *c, int ci, int argc, const int *atmp, int rt2, Buf *b) {
+  Buf av; memset(&av, 0, sizeof av);
+  buf_puts(&av, "(sp_RbVal[]){");
+  for (int a = 0; a < argc; a++) buf_printf(&av, "%s_t%d", a ? ", " : "", atmp[a]);
+  buf_puts(&av, "}");
+  char an[24], a0[24] = "";
+  snprintf(an, sizeof an, "%d", argc);
+  if (argc > 0) snprintf(a0, sizeof a0, "_t%d", atmp[0]);
+  int r = exc_sub_new_arm_text(c, ci, argc, an, av.p, a0, "", rt2, b);
+  free(av.p);
+  return r;
+}
+/* The same arm for `k.new(*args)`: the elements of the spread array `_t<tsa>`
+   are the arguments; `pre` makes that array. */
+int emit_exc_sub_new_arm_splat(Compiler *c, int ci, int tsa, const char *pre, int rt2, Buf *b) {
+  char an[32], av[32], a0[96];
+  snprintf(an, sizeof an, "_t%d->len", tsa);
+  snprintf(av, sizeof av, "_t%d->data", tsa);
+  snprintf(a0, sizeof a0, "(_t%d->len > 0 ? _t%d->data[0] : sp_box_nil())", tsa, tsa);
+  return exc_sub_new_arm_text(c, ci, -1, an, av, a0, pre, rt2, b);
 }
 
 /* `raise k, msg` / `raise k` with the class in a variable is `raise k.new(msg)`,
@@ -13792,8 +13805,27 @@ void emit_class_value_new_kw(Compiler *c, int id, int recv, int boxed, Buf *b) {
        argument too many. */
     if (initm < 0) {
       if (spl < 0 || !splat_operand_ok(c, spl) ||
-          comp_class_is_module(c, &c->classes[ci]) || class_is_exc_subclass(c, ci) ||
-          comp_cmethod_in_chain(c, ci, "new", NULL) >= 0) continue;
+          comp_class_is_module(c, &c->classes[ci]) || comp_cmethod_in_chain(c, ci, "new", NULL) >= 0) continue;
+      /* an exception class takes the spread array's first element as its
+         message, as Exception#initialize(msg = nil) does */
+      if (class_is_exc_subclass(c, ci)) {
+        int tsa = ++g_tmp;
+        Buf spre; memset(&spre, 0, sizeof spre);
+        Buf sv; memset(&sv, 0, sizeof sv);
+        Buf *sv_pre = g_pre; g_pre = &spre;
+        emit_splat_operand_array(c, spl, &sv);
+        g_pre = sv_pre;
+        Buf pre; memset(&pre, 0, sizeof pre);
+        buf_printf(&pre, "%s sp_PolyArray *_t%d = %s; SP_GC_ROOT(_t%d); ",
+                   spre.p ? spre.p : "", tsa, sv.p ? sv.p : "sp_PolyArray_new()", tsa);
+        if (sole_splat < 0) {
+          char len[48]; snprintf(len, sizeof len, "_t%d->len", tsa);
+          emit_kwsplat_empty_check(c, id, kw_hash, len, &pre);
+        }
+        emit_exc_sub_new_arm_splat(c, ci, tsa, pre.p, rt2, b);
+        free(spre.p); free(sv.p); free(pre.p);
+        continue;
+      }
       int tsa = ++g_tmp;
       buf_printf(b, "case %d: { sp_PolyArray *_t%d = ", ci, tsa);
       emit_splat_operand_array(c, spl, b);

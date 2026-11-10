@@ -5030,8 +5030,23 @@ const char *ffi_c_type(const char *spec) {
    header declaration, function-like macro or second module binding the same
    symbol under other specs can conflict with it. */
 void ffi_extern_name(Compiler *c, int fi, Buf *out) {
-  const char *sym = c->ffi_funcs[fi].csym ? c->ffi_funcs[fi].csym : c->ffi_funcs[fi].name;
-  buf_printf(out, "sp_ffi_f%d_%s", fi, sym);
+  const FfiFunc *f = &c->ffi_funcs[fi];
+  const char *sym = f->csym ? f->csym : f->name;
+  if (!f->via_fp) { buf_printf(out, "sp_ffi_f%d_%s", fi, sym); return; }
+  /* through the pointer the package's attach resolved (#11362), cast to the
+     function type the specs declare */
+  int ci = comp_class_index(c, f->mod);
+  const char *rn = ci >= 0 ? class_ruby_name(c, ci) : NULL;
+  buf_printf(out, "((%s (*)(", ffi_c_type(f->ret));
+  for (int ai = 0; ai < f->nargs; ai++) buf_printf(out, "%s%s", ai ? ", " : "", ffi_c_type(f->args[ai]));
+  buf_printf(out, "%s))sp_ffi_fp_live(", f->nargs ? "" : "void");
+  ffi_fp_slot_name(c, fi, out);
+  buf_printf(out, ", \"%s\", \"%s\"))", rn ? rn : f->mod, f->name);
+}
+/* The static pointer a via_fp entry calls through */
+void ffi_fp_slot_name(Compiler *c, int fi, Buf *out) {
+  const FfiFunc *f = &c->ffi_funcs[fi];
+  buf_printf(out, "sp_ffi_fp%d_%s", fi, f->csym ? f->csym : f->name);
 }
 
 /* The C type of one ffi_callback argument, used to build the trampoline's own

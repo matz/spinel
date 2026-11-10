@@ -29307,10 +29307,90 @@ static int body_defines_smethod(const NodeTable *nt, const int *st, int n, const
   return 0;
 }
 
+/* ---- a literal attach_function called through a function pointer (#11362) ----
+ *
+ * An attach_function whose name, parameter types and return type are all
+ * literals of the scalar vocabulary below, written as a statement of the
+ * module's own body, is also an ffi_func entry (register_ffi_decls) whose C
+ * callee is a function pointer, not an extern: the address the attach
+ * resolves at run time, which the bundled package hands to the program
+ * (FFI::Native.note_fp). The library is opened and the symbol looked up as
+ * before, so ffi_lib, NotFoundError and the order the libraries are tried in
+ * stay the package's. A call reaches the pointer with its arguments
+ * converted as an ffi_func's are: no Array, no table lookup, no libffi, and
+ * an unboxed answer. Anything else -- a pointer, a callback, a :string
+ * answer (nil for NULL), :bool (true or false), an unsigned 64-bit answer
+ * (a Bignum past 2**63), a typedef'd name, varargs, options -- keeps the
+ * package's own route (__ffi_call). */
+static int ffi_direct_arg_spec(const char *v) {
+  static const char *const A[] = {
+    "int", "int8", "int16", "int32", "int64", "uint8", "uint16", "uint32", "uint64", "char", "uchar",
+    "short", "ushort", "uint", "long", "ulong", "long_long", "ulong_long", "size_t", "float", "double",
+    "string", NULL };
+  for (int i = 0; v && A[i]; i++) if (sp_streq(A[i], v)) return 1;
+  return 0;
+}
+static int ffi_direct_ret_spec(const char *v) {
+  static const char *const R[] = {
+    "void", "int", "int8", "int16", "int32", "int64", "uint8", "uint16", "uint32", "char", "uchar",
+    "short", "ushort", "uint", "long", "long_long", "size_t", "float", "double", NULL };
+  for (int i = 0; v && R[i]; i++) if (sp_streq(R[i], v)) return 1;
+  return 0;
+}
+int ffi_attach_direct(const NodeTable *nt, int call, const char **fname, const char **csym, int *arr,
+                      const char **ret) {
+  if (call < 0 || nt_kind(nt, call) != NK_CallNode || nt_ref(nt, call, "block") >= 0) return 0;
+  const char *nm = nt_str(nt, call, "name");
+  int r = nt_ref(nt, call, "receiver");
+  if (!nm || !sp_streq(nm, "attach_function") || (r >= 0 && nt_kind(nt, r) != NK_SelfNode)) return 0;
+  int an = nt_ref(nt, call, "arguments");
+  int ac = 0; const int *av = an >= 0 ? nt_arr(nt, an, "arguments", &ac) : NULL;
+  if (ac != 3 && ac != 4) return 0;
+  int ai = ac == 4 ? 2 : 1, ri = ac == 4 ? 3 : 2;
+  if (nt_kind(nt, av[0]) != NK_SymbolNode || nt_kind(nt, av[ai]) != NK_ArrayNode ||
+      nt_kind(nt, av[ri]) != NK_SymbolNode) return 0;
+  const char *cs = NULL;
+  if (ac == 4) {
+    cs = ffi_literal_name(nt, av[1]);
+    if (!cs) return 0;
+  }
+  const char *rv = nt_str(nt, av[ri], "value");
+  if (!ffi_direct_ret_spec(rv)) return 0;
+  int en = 0; const int *els = nt_arr(nt, av[ai], "elements", &en);
+  for (int i = 0; i < en; i++)
+    if (nt_kind(nt, els[i]) != NK_SymbolNode || !ffi_direct_arg_spec(nt_str(nt, els[i], "value"))) return 0;
+  if (fname) *fname = nt_str(nt, av[0], "value");
+  if (csym) *csym = cs;
+  if (arr) *arr = av[ai];
+  if (ret) *ret = rv;
+  return 1;
+}
+/* Is attach statement `call` one the module calls through a pointer: a
+   direct attach (ffi_attach_direct) written as a statement of `body`, and
+   the only attach of its name the body makes (one under a rescue may be
+   replaced by a fallback proc, __ffi_define_proc) */
+int ffi_attach_direct_stmt(const NodeTable *nt, int body, int call) {
+  const char *fname = NULL;
+  if (!ffi_attach_direct(nt, call, &fname, NULL, NULL, NULL)) return 0;
+  int n = 0, own = 0;
+  const int *st = body >= 0 ? nt_arr(nt, body, "body", &n) : NULL;
+  for (int k = 0; k < n; k++) if (st[k] == call) own = 1;
+  if (!own) return 0;
+  FfiAttach *at = NULL; int na = 0, cap = 0, same = 0;
+  ffi_collect_attaches(nt, body, &at, &na, &cap);
+  for (int i = 0; i < na; i++) {
+    if (at[i].kind == 0 && sp_streq(at[i].name, fname)) same++;
+    free(at[i].name);
+  }
+  free(at);
+  return same == 1;
+}
+
 int comp_ffi_library_module(const NodeTable *nt, const char *mn) {
   return mn && ffi_library_module(nt, mn, nt->count);
 }
 
+static int native_twin_def(NodeTable *nt, int like, const char *mn, const char *fname, int np);
 int desugar_ffi_library_functions(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int n0 = nt->count;
@@ -29334,7 +29414,18 @@ int desugar_ffi_library_functions(Compiler *c) {
       int dup = 0;
       for (int j = 0; j < i; j++) if (at[j].kind == at[i].kind && sp_streq(at[j].name, at[i].name)) dup = 1;
       if (dup || body_defines_smethod(nt, st, n, at[i].name)) continue;
-      if (at[i].kind == 0) {
+      /* (a module's alone: register_ffi_decls reads module bodies, and a
+         class's twin def would have no entry to call) */
+      if (at[i].kind == 0 && class_def_is_module(nt, m) && ffi_attach_direct_stmt(nt, body, at[i].at)) {
+        /* called through the pointer the attach resolves: the def is for
+           the module reached as a value, a constant calls the pointer */
+        int arr = -1, np = 0;
+        ffi_attach_direct(nt, at[i].at, NULL, NULL, &arr, NULL);
+        (void)nt_arr(nt, arr, "elements", &np);
+        int d = native_twin_def(nt, at[i].at, mn, at[i].name, np);
+        if (d >= 0) out[no++] = d;
+      }
+      else if (at[i].kind == 0) {
         int np = 0, mcb = 0;
         int d = ffi_attach_params(nt, at[i].at, &np, &mcb) >= 0
                   ? ffi_fixed_def(nt, at[i].at, at[i].name, at[i].name, np, mcb)

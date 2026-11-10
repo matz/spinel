@@ -21607,6 +21607,14 @@ static void emit_ffi_decls(Compiler *c, Buf *b) {
       int is_va = na > 0 && sp_streq(cf->ffi_funcs[fi].args[na - 1], "varargs");
       int fixed = is_va ? na - 1 : na;
       if (is_va && fixed == 0) continue;
+      /* a literal attach_function of the ffi package: no extern, the pointer
+         its attach resolves (ffi_extern_name calls through it) */
+      if (cf->ffi_funcs[fi].via_fp) {
+        buf_puts(b, "static void *");
+        ffi_fp_slot_name(cf, fi, b);
+        buf_puts(b, ";\n");
+        continue;
+      }
       if (!any_extern) {
         buf_puts(b, "#define SP_FFI_STR_(x) #x\n#define SP_FFI_STR(x) SP_FFI_STR_(x)\n"
                      "#ifdef __USER_LABEL_PREFIX__\n"
@@ -21633,6 +21641,33 @@ static void emit_ffi_decls(Compiler *c, Buf *b) {
       if (na == 0) buf_puts(b, "void");
       buf_printf(b, ") __asm__(SP_FFI_SYM(\"%s\"));\n",
                  cf->ffi_funcs[fi].csym ? cf->ffi_funcs[fi].csym : cf->ffi_funcs[fi].name);
+    }
+    /* The attaches called through a pointer (#11362): the package hands each
+       address it resolves to sp_ffi_fp_hook (packages/ffi/sp_ffi.c), which
+       the program points at the setter of its own pointers before main. A
+       call before its attach has run raises NoMethodError, as the method
+       the attach defines would not exist yet. */
+    {
+      int any_fp = 0;
+      for (int fi = 0; fi < cf->n_ffi_funcs; fi++) any_fp |= cf->ffi_funcs[fi].via_fp;
+      if (any_fp) {
+        buf_puts(b, "extern void (*sp_ffi_fp_hook)(const char *, const char *, sp_int);\n"
+                    "static void sp_ffi_fp_note(const char *mod, const char *name, sp_int addr) {\n");
+        for (int fi = 0; fi < cf->n_ffi_funcs; fi++) {
+          if (!cf->ffi_funcs[fi].via_fp) continue;
+          int ci = comp_class_index(cf, cf->ffi_funcs[fi].mod);
+          const char *rn = ci >= 0 ? class_ruby_name(cf, ci) : NULL;
+          buf_printf(b, "  if (!strcmp(mod, \"%s\") && !strcmp(name, \"%s\")) ",
+                     rn ? rn : cf->ffi_funcs[fi].mod, cf->ffi_funcs[fi].name);
+          ffi_fp_slot_name(cf, fi, b);
+          buf_puts(b, " = (void *)(intptr_t)addr;\n");
+        }
+        buf_puts(b, "}\n"
+                    "__attribute__((constructor)) static void sp_ffi_fp_init(void) { sp_ffi_fp_hook = sp_ffi_fp_note; }\n"
+                    "static inline void *sp_ffi_fp_live(void *p, const char *mod, const char *name) {\n"
+                    "  if (!p) sp_raise_cls(\"NoMethodError\", sp_sprintf(\"undefined method '%s' for module %s\", name, mod));\n"
+                    "  return p;\n}\n");
+      }
     }
     /* Byte count for the :binstr return mode (defined in sp_alloc.c). */
     /* sp_alloc.h already declares it, and declares it SP_TLS in the threaded

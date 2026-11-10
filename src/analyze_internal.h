@@ -1060,6 +1060,12 @@ int desugar_to_h_block(Compiler *c);
 int desugar_ffi_library_functions(Compiler *c);
 int desugar_native_func_defs(Compiler *c);
 int comp_ffi_library_module(const NodeTable *nt, const char *mn);
+/* a literal attach_function of the scalar vocabulary, called through the
+   pointer the attach resolves (#11362): its name, C symbol (NULL: the
+   name), parameter Array node and return spec */
+int ffi_attach_direct(const NodeTable *nt, int call, const char **fname, const char **csym, int *arr,
+                      const char **ret);
+int ffi_attach_direct_stmt(const NodeTable *nt, int body, int call);
 int rewrite_ffi_dynamic_calls(Compiler *c);
 int desugar_builtin_reopen_const_reads(Compiler *c);
 int desugar_builtin_reopen_self_calls(Compiler *c);

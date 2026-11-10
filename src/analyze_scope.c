@@ -5538,7 +5538,34 @@ void register_ffi_decls(Compiler *c) {
     /* A module that extends FFI::Library is the ffi gem's: its ffi_lib,
        attach_function, callback and typedef are runtime calls into the
        bundled package (packages/ffi), not this compile-time DSL. */
-    if (comp_ffi_library_module(nt, mname)) continue;
+    if (comp_ffi_library_module(nt, mname)) {
+      /* (but for its literal attaches of scalar types, which a constant
+         calls through the pointer the attach resolves: ffi_attach_direct) */
+      int fb = class_def_body(nt, id), fn = 0;
+      const int *fst = fb >= 0 ? nt_arr(nt, fb, "body", &fn) : NULL;
+      for (int k = 0; k < fn; k++) {
+        const char *fname = NULL, *csym = NULL, *ret = NULL;
+        int arr = -1;
+        if (!ffi_attach_direct_stmt(nt, fb, fst[k]) || !ffi_attach_direct(nt, fst[k], &fname, &csym, &arr, &ret)) continue;
+        if (ffi_find_func(c, mname, fname) >= 0) continue;
+        int en = 0;
+        const int *els = nt_arr(nt, arr, "elements", &en);
+        char **specs = malloc(sizeof(char *) * (size_t)(en + 1));
+        if (!specs) { perror("malloc"); exit(1); }
+        for (int ei = 0; ei < en; ei++) specs[ei] = strdup(nt_str(nt, els[ei], "value"));
+        c->ffi_funcs = ffi_grow(c->ffi_funcs, c->n_ffi_funcs, &c->c_ffi_funcs, 16, sizeof(FfiFunc));
+        FfiFunc *f = &c->ffi_funcs[c->n_ffi_funcs++];
+        memset(f, 0, sizeof *f);
+        f->mod = strdup(mname);
+        f->name = strdup(fname);
+        f->csym = csym ? strdup(csym) : NULL;
+        f->ret = strdup(ret);
+        f->args = specs;
+        f->nargs = en;
+        f->via_fp = 1;
+      }
+      continue;
+    }
     int body = class_def_body(nt, id);
     int sn = 0;
     const int *stmts = body >= 0 ? nt_arr(nt, body, "body", &sn) : NULL;
@@ -5959,6 +5986,7 @@ void register_ffi_decls(Compiler *c) {
         c->ffi_funcs[fi].args  = arg_specs;
         c->ffi_funcs[fi].nargs = en;
         c->ffi_funcs[fi].blocking = blocking;
+        c->ffi_funcs[fi].via_fp = 0;
         continue;
       }
 

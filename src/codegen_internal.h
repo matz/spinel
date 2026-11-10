@@ -1937,6 +1937,7 @@ const char *ffi_c_type(const char *spec);
    Uses standard C types to avoid conflicting with system headers. */
 const char *ffi_cb_arg_ctype(const char *spec);
 void ffi_extern_name(Compiler *c, int fi, Buf *out);
+void ffi_fp_slot_name(Compiler *c, int fi, Buf *out);   /* a via_fp entry's pointer (#11362) */
 int ty_is_struct_valued(TyKind t);   /* see codegen_util.c: struct passed by value */
 const char *native_c_type(const char *spec);
 const char *default_value(TyKind t);

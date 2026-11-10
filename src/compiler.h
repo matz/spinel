@@ -1193,6 +1193,9 @@ typedef struct {
                       (sp_native_enter/leave): a collection does not wait for it.
                       An ffi_callback from inside it comes back in for the method
                       (sp_native_callback_enter/leave) */
+  int via_fp;      /* a literal attach_function of the bundled ffi package: the
+                      callee is the function pointer the attach resolves at run
+                      time (FFI::Native.note_fp), not an extern (#11362) */
 } FfiFunc;
 
 typedef struct { char *mod; char *name; int val; } FfiConst;     /* ffi_const */

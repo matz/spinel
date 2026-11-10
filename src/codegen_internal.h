@@ -729,6 +729,21 @@ int hc_array(Compiler *c, int recv, int is_float, char *d, char *l, char *w, siz
 void hc_read_len(const char *hd, char *out, size_t cap);
 int hc_ptr_array(Compiler *c, int recv, char *d, char *l, size_t cap);
 int hc_index_in_range(Compiler *c, int recv, int idx);
+/* Co-bounded reads (codegen_stmt.c): a loop proved over the index local
+   bi (the C variable bic) in [0, trip) -- a trip that reads trip_node again
+   at each pass, or -1 -- reads other arrays at that index in place, behind one
+   test ahead of the loop (hcv_begin / hcv_end around the loop's text). A
+   reader that hc_cob_entry or hc_cob_entry_of answers emits both forms
+   between hc_cob_mark(0), (1) and (2): the element at *d, and the read as
+   it was, emitted again with g_hc_cob_off set. */
+void *hcv_begin(Compiler *c, int node, int body, int blk, const char *bi, const char *bic,
+                const char *trip, int trip_node, int walk, Buf **bp);
+extern int g_loop_quiet;   /* the next emit_loop_body leaves its safepoint and finalizer polls to an enclosing loop */
+void hcv_end(Compiler *c, void *v, int indent);
+int hc_cob_entry(Compiler *c, int recv, int idx, char *d, size_t cap);
+int hc_cob_entry_of(Compiler *c, int recv, char *d, size_t cap);
+void hc_cob_mark(Buf *b, int part);
+extern int g_hc_cob_off;
 void *hc_iter_begin(Compiler *c, int id, Buf **bp);   /* an Integer block loop's header cache region */
 void hc_iter_end(void *h, Buf **bp, int indent, int keep);
 extern int g_loop_polls_in_cond;   /* the next emit_loop_body leaves its polls to the loop's condition */

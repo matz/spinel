@@ -6227,9 +6227,27 @@ static int nilfree_operand(Compiler *c, int v, const char *op, int left, const c
   char hd[48], hn[48];
   if (!vn || (!sp_streq(vn, "[]") && !sp_streq(vn, "at")) || vr < 0 || vc != 1 ||
       nt_ref(nt, v, "block") >= 0 || comp_ntype(c, vr) != TY_FLOAT_ARRAY ||
-      comp_ntype(c, vav[0]) != TY_INT || nullable_int_elem_array(c, vr) ||
-      !hc_array_nilfree(c, vr, -1, hd, hn, sizeof hd))
+      comp_ntype(c, vav[0]) != TY_INT || nullable_int_elem_array(c, vr))
     return 0;
+  /* another array read at the index its loop proved (hc_cob_entry): the
+     element in place beside this read as it was, which is a plain Float
+     either way */
+  if (hc_cob_entry(c, vr, vav[0], hd, sizeof hd)) {
+    Buf ck; memset(&ck, 0, sizeof ck);
+    g_hc_cob_off++;
+    int got = nilfree_operand(c, v, op, left, lhs, cmp, &ck);
+    g_hc_cob_off--;
+    if (got) {
+      hc_cob_mark(b, 0);
+      buf_printf(b, "%s[", hd); emit_int_expr(c, vav[0], b); buf_puts(b, "]");
+      hc_cob_mark(b, 1);
+      buf_puts(b, ck.p ? ck.p : "");
+      hc_cob_mark(b, 2);
+    }
+    free(ck.p);
+    return got;
+  }
+  if (!hc_array_nilfree(c, vr, -1, hd, hn, sizeof hd)) return 0;
   int nilr = cplan_nil(c, v) == CN_RAISE;
   int tk = ++g_tmp;
   char redo[160];
@@ -12081,8 +12099,9 @@ enum { HC_INT, HC_FLOAT, HC_STR, HC_IOB, HC_PTR };
 typedef struct { char *recv; int kind; int nf; Buf guard; } HcEntry;   /* nf: hc_array_nilfree asked;
                                                        guard: Float locals whose nil zeroes _hcn */
 typedef struct { int id; int n; HcEntry e[16]; NameSet wl, wi; char mark[32];
-                 const char *bi, *ba; int inl; } HcRegion;  /* bi/ba: see hc_bounded_index;
-                                                   inl: see hc_close */
+                 const char *bi, *ba; char *bic, *bac; int inl; } HcRegion;
+                 /* bi/ba: see hc_bounded_index (bic/bac, their C variables);
+                    inl: see hc_close */
 static HcRegion *g_hc = NULL;
 static void hc_region_free(HcRegion *r) {
   for (int i = 0; i < r->n; i++) { free(r->e[i].recv); free(r->e[i].guard.p); }
@@ -12407,8 +12426,9 @@ static int hc_node_ok(Compiler *c, int id, int stmt, HcRegion *r);
    `n.times { }`, `a.upto(b) { }` / downto, `n.step(...) { }`, an Integer
    Range's `each { }` -- each a plain C `for` around the block's body --
    an Integer, Float, String or object Array's (or a table's) `each { }`, which walks its own receiver
-   through the cache too (emit_iteration_stmt_body), and an Array's
-   `each_index { }` (emit_typed_array_call) */
+   through the cache too (emit_iteration_stmt_body), and its
+   `each_with_index { }`, an Integer or Float Array's `zip` with one such
+   Array, and an Array's `each_index { }` (emit_typed_array_call) */
 static int hc_block_loop(Compiler *c, int id) {
   const NodeTable *nt = c->nt;
   if (id < 0 || nt_kind(nt, id) != NK_CallNode) return 0;
@@ -12419,7 +12439,15 @@ static int hc_block_loop(Compiler *c, int id) {
   if (rt == TY_INT && (sp_streq(nm, "times") || sp_streq(nm, "upto") || sp_streq(nm, "downto") || sp_streq(nm, "step")))
     return 1;
   if ((rt == TY_INT_ARRAY || rt == TY_FLOAT_ARRAY || rt == TY_STR_ARRAY || ty_is_ptr_array(rt)) &&
-      sp_streq(nm, "each")) return 1;
+      (sp_streq(nm, "each") || sp_streq(nm, "each_with_index"))) return 1;
+  /* a typed array's zip with one typed array (emit_iteration_stmt_body's
+     block form), which walks both by its count */
+  if ((rt == TY_INT_ARRAY || rt == TY_FLOAT_ARRAY) && is_zip_name(nm)) {
+    int a = nt_ref(nt, id, "arguments"), an = 0;
+    const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &an) : NULL;
+    TyKind at = an == 1 && nt_kind(nt, av[0]) != NK_SplatNode ? comp_ntype(c, av[0]) : TY_UNKNOWN;
+    return at == TY_INT_ARRAY || at == TY_FLOAT_ARRAY;
+  }
   if (ty_is_array(rt) && sp_streq(nm, "each_index")) return 1;
   return rt == TY_RANGE && sp_streq(nm, "each");
 }
@@ -12455,6 +12483,9 @@ static int hc_node_ok(Compiler *c, int id, int stmt, HcRegion *r) {
       return 1;
     case NK_StatementsNode: kids_stmt = 1; break;
     case NK_ParenthesesNode: kids_stmt = stmt; break;
+    /* a Range literal (an Integer Range's `each` walks one) is a value its
+       ends make; they must qualify */
+    case NK_RangeNode: break;
     case NK_YieldNode: {
       /* a yield a splice expands into its caller's literal block
          (g_block_id: `a.each_with_index { }` is enumerable.rb's loop over
@@ -12797,6 +12828,30 @@ static int hc_subtree_stores(const NodeTable *nt, int id) {
   }
   return 0;
 }
+/* The C text a local or instance variable read renders as, on the heap; a
+   name says which variable only within one scope, and a method's body that
+   a splice puts in its caller's (`yield` in a loop) reads its own `i` beside
+   the caller's: the text tells them apart (lv__y1_i, lv_i). NULL for a
+   text with a temp in it. */
+static char *hc_var_text(Compiler *c, int n) {
+  int sv_tmp = g_tmp;
+  Buf t; memset(&t, 0, sizeof t);
+  emit_expr(c, n, &t);
+  g_tmp = sv_tmp;
+  int ok = t.p && !strstr(t.p, "({");
+  for (const char *q = t.p ? strstr(t.p, "_t") : NULL; ok && q; q = strstr(q + 2, "_t"))
+    if (q[2] >= '0' && q[2] <= '9') ok = 0;
+  if (!ok) { free(t.p); return NULL; }
+  return t.p;
+}
+/* Does node n read the C variable `text` (hc_var_text)? */
+static int hc_reads_var(Compiler *c, int n, const char *text) {
+  char *t = text ? hc_var_text(c, n) : NULL;
+  int same = t && sp_streq(t, text);
+  free(t);
+  return same;
+}
+
 static void hc_bounded_index(Compiler *c, int prev, int pred, int body, HcRegion *r) {
   const NodeTable *nt = c->nt;
   if (prev < 0 || pred < 0 || body < 0 || nt_kind(nt, pred) != NK_CallNode) return;
@@ -12839,6 +12894,9 @@ static void hc_bounded_index(Compiler *c, int prev, int pred, int body, HcRegion
   if ((g_uses_threads || g_uses_finalizers || g_uses_traps) && hc_subtree_loops(nt, body)) return;
   r->bi = in;
   r->ba = an;
+  r->bic = hc_var_text(c, iv);
+  r->bac = hc_var_text(c, av);
+  if (!r->bic || !r->bac) { free(r->bic); free(r->bac); r->bic = r->bac = NULL; r->bi = r->ba = NULL; }
 }
 
 /* A box stored into a shared String slot (a variable's or an ivar's
@@ -12956,8 +13014,9 @@ static int poll_while_counted_step(Compiler *c, int pred, int body, int *stepn, 
    cache holds the array's current header wherever the test runs -- nothing in
    the loop shrinks it, a write that grows it refreshes it, and the polls ahead
    of the test refresh it after other code has run -- so the test and the read
-   compare i with the same local, and the C compiler can fold the two. */
-static int hc_bounded_cond(Compiler *c, int pred, Buf *out) {
+   compare i with the same local, and the C compiler can fold the two. *trip
+   names that length: every pass's i lies below it. */
+static int hc_bounded_cond(Compiler *c, int pred, Buf *out, char *trip, size_t tcap) {
   const NodeTable *nt = c->nt;
   int pa = nt_ref(nt, pred, "arguments"), pac = 0;
   const int *pav = nt_arr(nt, pa, "arguments", &pac);
@@ -12968,16 +13027,262 @@ static int hc_bounded_cond(Compiler *c, int pred, Buf *out) {
   buf_puts(out, "(");
   emit_expr(c, nt_ref(nt, pred, "receiver"), out);
   buf_printf(out, " < %s)", hl);
+  snprintf(trip, tcap, "%s", hl);
   return 1;
 }
 
-/* Is `recv[idx]` the read hc_bounded_index proved in range for this loop? */
+/* Is `recv[idx]` the read hc_bounded_index proved in range for this loop?
+   The same variables, not only the same names: a caller's `a[i]` in a block
+   a method's proved loop yields to is another `a` and another `i`. */
 int hc_index_in_range(Compiler *c, int recv, int idx) {
   const NodeTable *nt = c->nt;
   if (!g_hc || !g_hc->bi || recv < 0 || idx < 0) return 0;
   return nt_kind(nt, recv) == NK_LocalVariableReadNode && nt_kind(nt, idx) == NK_LocalVariableReadNode &&
          nt_str(nt, recv, "name") && sp_streq(nt_str(nt, recv, "name"), g_hc->ba) &&
-         nt_str(nt, idx, "name") && sp_streq(nt_str(nt, idx, "name"), g_hc->bi);
+         nt_str(nt, idx, "name") && sp_streq(nt_str(nt, idx, "name"), g_hc->bi) &&
+         hc_reads_var(c, recv, g_hc->bac) && hc_reads_var(c, idx, g_hc->bic);
+}
+
+/* ---- Co-bounded reads: a second array read at a loop's proved index ----
+
+   A loop whose index the cache proved in range of one array (a `while`'s
+   `i < a.length`, a block loop's own count) reads that array where its
+   header holds it; any other array read at the same index (`b[i]` beside
+   `a[i]`, the second operand of a zip) took its bounds test, or its
+   accessor, at every pass -- a third of a dot product's time.
+
+   Such a read is emitted as both forms, between marks: the element where
+   the array's data holds it, and the read as it was. When the loop is done,
+   hcv_end puts the loop twice behind one test made ahead of it: every such
+   array reaches as far as the loop runs (its nil-free length, so the element
+   read is no nil) -- the first copy reads each element in place -- else the
+   second copy is the loop as it always was. Both run the same passes.
+
+   The test holds for the whole loop when nothing in it can change a length
+   or move a header: the loop sits in a header-cache region (its body runs no
+   code), stores no element (an element write may grow any array of its
+   kind), and has no poll or refresh in it (another thread, a finalizer or a
+   trap runs only there) -- but a delivered signal's poll that raises, which
+   runs no Ruby code (it raises, or comes back after a collection, which
+   moves no object). An array's walk that another loop of its
+   function encloses leaves its safepoint and finalizer polls to that loop's
+   back-edge, as a proved while does (emit_while): it ends within one pass
+   over an array nothing in it can grow. A loop that holds any of them is emitted once, as
+   it was, and so is one whose text defines a label (two copies would define
+   it twice), one too long to copy, and one whose `hc-cobound` decision is
+   denied. The headers of the arrays read this way are read just ahead of
+   the loop, into locals of its own: a row a loop around it fetches is read
+   at each run of this one. */
+typedef struct HcVer {
+  int id, node, body, blk;   /* blk: the loop's block (its parameters change each pass), or -1 */
+  const char *bi;        /* the index local the loop proved, or NULL (zip's walk has none) */
+  char *bic;             /* ...its C variable (hc_var_text), on the heap */
+  char trip[256];        /* every pass's index lies in [0, trip) */
+  int n;
+  struct { char *recv; int kind; } e[8];
+  struct HcVer *up;
+  Buf **bp, *out;        /* the loop's text goes into buf; out is where it lands */
+  Buf buf;
+} HcVer;
+static HcVer *g_hcv = NULL;
+static int g_hcv_seq = 0;
+int g_hc_cob_off = 0;    /* emitting the read as it was, inside its marks */
+static int chunk_writes_ivar(Compiler *c, int n, const char *nm);
+
+/* Does a block within `n` bind the local `nm` -- a block of `n` itself, or,
+   for a yield `n` holds, the block a splice expands it into (g_block_id)?
+   Each pass binds it anew, as an assignment does. */
+static int hcv_binds(Compiler *c, int n, const char *nm) {
+  const NodeTable *nt = c->nt;
+  if (n < 0) return 0;
+  NodeKind k = nt_kind(nt, n);
+  int blk = k == NK_BlockNode ? n : k == NK_YieldNode ? g_block_id : -1;
+  for (int j = 0; blk >= 0 && nt_kind(nt, blk) == NK_BlockNode && block_param_name(c, blk, j); j++)
+    if (sp_streq(block_param_name(c, blk, j), nm)) return 1;
+  int nr = nt_num_refs(nt, n);
+  for (int i = 0; i < nr; i++) if (hcv_binds(c, nt_ref_at(nt, n, i), nm)) return 1;
+  int na = nt_num_arrs(nt, n);
+  for (int i = 0; i < na; i++) {
+    int an = 0; const int *av = nt_arr_at(nt, n, i, &an);
+    for (int j = 0; j < an; j++) if (hcv_binds(c, av[j], nm)) return 1;
+  }
+  return 0;
+}
+/* Does the loop with body `body` and block `blk` (-1 for none) leave the
+   variable node `n` reads as it is: a local it writes nowhere, binds as no
+   block's parameter (its own block's included) -- or an instance variable it
+   writes nowhere? Any other node may read something else at each pass. */
+static int hcv_node_stable(Compiler *c, int body, int blk, int n) {
+  const NodeTable *nt = c->nt;
+  NodeKind k = n >= 0 ? nt_kind(nt, n) : NK_NONE;
+  const char *nm = n >= 0 ? nt_str(nt, n, "name") : NULL;
+  if (!nm) return 0;
+  if (k == NK_LocalVariableReadNode) {
+    if (subtree_changes_local(c, body, nm) || hcv_binds(c, body, nm)) return 0;
+    for (int j = 0; blk >= 0 && block_param_name(c, blk, j); j++)
+      if (sp_streq(block_param_name(c, blk, j), nm)) return 0;
+    return 1;
+  }
+  return k == NK_InstanceVariableReadNode && !chunk_writes_ivar(c, body, nm);
+}
+
+/* Can the loop being emitted at `node`, proved over `bi` in [0, trip), read
+   other arrays at bi in place? `blk` is its block, or -1; `walk`, the loop
+   walks an array (its own polls go to an enclosing loop). Its text goes
+   into a buffer of its own until hcv_end. NULL leaves the loop as it is. */
+int g_loop_quiet = 0;
+void *hcv_begin(Compiler *c, int node, int body, int blk, const char *bi, const char *bic,
+                const char *trip, int trip_node, int walk, Buf **bp) {
+  /* (a while's index steps in its body, as hc_bounded_index proved; a block
+     loop's parameter is its count only while the body leaves it alone; a
+     trip the loop reads again at each pass, through trip_node, holds only
+     while the body leaves that alone) */
+  if (!g_hc || !trip || !*trip || body < 0 || hc_subtree_stores(c->nt, body) ||
+      (bi && !bic) || (bi && blk >= 0 && (subtree_changes_local(c, body, bi) || hcv_binds(c, body, bi))) ||
+      (trip_node >= 0 && !hcv_node_stable(c, body, blk, trip_node)) ||
+      strlen(trip) >= sizeof ((HcVer *)0)->trip) return NULL;
+  /* (the next emit_loop_body is this loop's, which leaves the polls; hcv_end
+     clears it for a loop that took none) */
+  if (walk && (g_uses_threads || g_uses_finalizers) && g_poll_loop_nest > 0) g_loop_quiet = 1;
+  HcVer *v = calloc(1, sizeof *v);
+  if (!v) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  v->id = ++g_hcv_seq; v->node = node; v->body = body; v->blk = blk; v->bi = bi;
+  v->bic = bic ? strdup(bic) : NULL;
+  snprintf(v->trip, sizeof v->trip, "%s", trip);
+  v->up = g_hcv; v->bp = bp; v->out = *bp;
+  *bp = &v->buf;
+  g_hcv = v;
+  return v;
+}
+
+/* Can the loop being versioned read array recv in place at any index in
+   [0, trip) -- an Integer or Float array read through a local or an
+   instance variable the loop leaves as it is (and no block parameter of its
+   own, which each pass binds anew)? *d names its element pointer. An
+   iterator's own walk asks this of its receiver and operands. */
+int hc_cob_entry_of(Compiler *c, int recv, char *d, size_t cap) {
+  const NodeTable *nt = c->nt;
+  HcVer *v = g_hcv;
+  if (!v || g_hc_cob_off || recv < 0) return 0;
+  TyKind rt = repr_of(c, recv).as_ty;
+  if (rt != TY_INT_ARRAY && rt != TY_FLOAT_ARRAY) return 0;
+  if (!hcv_node_stable(c, v->body, v->blk, recv)) return 0;
+  int sv_tmp = g_tmp;
+  Buf t; memset(&t, 0, sizeof t);
+  emit_expr(c, recv, &t);
+  g_tmp = sv_tmp;
+  int kind = rt == TY_FLOAT_ARRAY ? HC_FLOAT : HC_INT;
+  /* (a temp is declared where the loop's own text runs, not ahead of it) */
+  int ok = t.p && !strstr(t.p, "({");
+  for (const char *q = t.p ? strstr(t.p, "_t") : NULL; ok && q; q = strstr(q + 2, "_t"))
+    if (q[2] >= '0' && q[2] <= '9') ok = 0;
+  int e = -1;
+  for (int i = 0; ok && i < v->n && e < 0; i++)
+    if (v->e[i].kind == kind && sp_streq(v->e[i].recv, t.p)) e = i;
+  if (ok && e < 0 && v->n < (int)(sizeof v->e / sizeof v->e[0])) {
+    e = v->n++;
+    v->e[e].recv = t.p; t.p = NULL;
+    v->e[e].kind = kind;
+  }
+  free(t.p);
+  if (!ok || e < 0) return 0;
+  snprintf(d, cap, "_hcv%d_%d", v->id, e);
+  return 1;
+}
+/* ...and `recv[idx]`, idx the index the loop proved */
+int hc_cob_entry(Compiler *c, int recv, int idx, char *d, size_t cap) {
+  const NodeTable *nt = c->nt;
+  HcVer *v = g_hcv;
+  if (!v || !v->bi || g_hc_cob_off || recv < 0 || idx < 0 || nt_kind(nt, idx) != NK_LocalVariableReadNode ||
+      !nt_str(nt, idx, "name") || !sp_streq(nt_str(nt, idx, "name"), v->bi) || !hc_reads_var(c, idx, v->bic))
+    return 0;
+  return hc_cob_entry_of(c, recv, d, cap);
+}
+/* The marks around the two forms: 0 ahead of the element in place, 1
+   between it and the read as it was, 2 after */
+void hc_cob_mark(Buf *b, int part) {
+  buf_printf(b, "/*@HCV%d%c@*/", g_hcv ? g_hcv->id : 0, part == 0 ? '[' : part == 1 ? '|' : ']');
+}
+
+/* `text` with each pair of forms of loop `id` replaced by one of them:
+   `first`, the element in place; else the read as it was */
+static void hcv_pick(const char *text, int id, int first, Buf *out) {
+  char o[32], m[32], e[32];
+  snprintf(o, sizeof o, "/*@HCV%d[@*/", id);
+  snprintf(m, sizeof m, "/*@HCV%d|@*/", id);
+  snprintf(e, sizeof e, "/*@HCV%d]@*/", id);
+  const char *p = text;
+  for (const char *q; (q = strstr(p, o)); ) {
+    const char *mq = strstr(q, m), *eq = mq ? strstr(mq, e) : NULL;
+    if (!eq) break;
+    buf_putn(out, p, (size_t)(q - p));
+    if (first) buf_putn(out, q + strlen(o), (size_t)(mq - q - strlen(o)));
+    else buf_putn(out, mq + strlen(m), (size_t)(eq - mq - strlen(m)));
+    p = eq + strlen(e);
+  }
+  buf_puts(out, p);
+}
+
+/* The loop's text, once or twice (see above), where it goes */
+#define HCV_MAX_TEXT 16384
+void hcv_end(Compiler *c, void *hv, int indent) {
+  if (!hv) return;
+  g_loop_quiet = 0;
+  HcVer *v = hv;
+  g_hcv = v->up;
+  *v->bp = v->out;
+  Buf *b = v->out;
+  const char *t = v->buf.p ? v->buf.p : "";
+  /* a delivered signal's poll that raises (no trap set) runs no Ruby code:
+     it raises, or comes back after a collection an allocation put off
+     (sp_gc_poll_due), which moves no header -- the refresh after it changes
+     nothing the test has to see */
+  Buf rt; memset(&rt, 0, sizeof rt);
+  char rmark[96]; snprintf(rmark, sizeof rmark, "sp_sig_poll_raise()%s", g_hc ? g_hc->mark : "");
+  const char *rp = t;
+  for (const char *q; g_hc && (q = strstr(rp, rmark)); rp = q + strlen(rmark)) {
+    buf_putn(&rt, rp, (size_t)(q - rp));
+    buf_puts(&rt, "sp_sig_poll_raise()");
+  }
+  buf_puts(&rt, rp);
+  const char *u = rt.p ? rt.p : "";
+  /* the arrays the text reads in place (an entry a reader asked for and
+     then left to the read as it was takes no part in the test) */
+  int used[sizeof v->e / sizeof v->e[0]], nused = 0;
+  for (int i = 0; i < v->n; i++) {
+    char nm[48]; snprintf(nm, sizeof nm, "_hcv%d_%d[", v->id, i);
+    used[i] = strstr(t, nm) != NULL;
+    nused += used[i];
+  }
+  int twice = nused > 0 && strlen(t) <= HCV_MAX_TEXT &&
+              !(g_hc && strstr(u, g_hc->mark)) && !strstr(u, "SP_SAFEPOINT_POLL") &&
+              !strstr(u, "sp_fin_pending_flag") && !strstr(u, "sp_sig_run_pending") &&
+              !strstr(u, "goto ") && !strstr(u, ": ;") && !strstr(u, "#define");
+  free(rt.p);
+  if (twice) twice = decide_node(c->nt, v->node, "hc-cobound", NULL);
+  if (!twice) hcv_pick(t, v->id, 0, b);
+  else {
+    emit_indent(b, indent); buf_puts(b, "{\n");
+    for (int i = 0; i < v->n; i++) {
+      if (!used[i]) continue;
+      int fl = v->e[i].kind == HC_FLOAT;
+      emit_indent(b, indent + 1);
+      buf_printf(b, "%s *_hcv%d_%d; sp_int _hcvr%d_%d; { sp_%sArray *_a = %s; _hcv%d_%d = _a ? _a->data%s : NULL; _hcvr%d_%d = _a ? SP_%s_NILFREE_LEN(_a) : 0; }\n",
+                 fl ? "sp_float" : "sp_int", v->id, i, v->id, i, fl ? "Float" : "Int", v->e[i].recv,
+                 v->id, i, fl ? "" : " + _a->start", v->id, i, fl ? "FLOAT" : "INT");
+    }
+    emit_indent(b, indent + 1); buf_puts(b, "if (");
+    for (int i = 0, k = 0; i < v->n; i++)
+      if (used[i]) buf_printf(b, "%s_hcvr%d_%d >= (%s)", k++ ? " && " : "", v->id, i, v->trip);
+    buf_puts(b, ") {\n");
+    hcv_pick(t, v->id, 1, b);
+    emit_indent(b, indent + 1); buf_puts(b, "} else {\n");
+    hcv_pick(t, v->id, 0, b);
+    emit_indent(b, indent + 1); buf_puts(b, "}\n");
+    emit_indent(b, indent); buf_puts(b, "}\n");
+  }
+  for (int i = 0; i < v->n; i++) free(v->e[i].recv);
+  free(v->bic); free(v->buf.p); free(v);
 }
 
 /* inl for a region opened here (hc_close) */
@@ -13313,8 +13618,9 @@ static void emit_while_loop(Compiler *c, int id, Buf *b, int indent, int is_unti
      it cannot have proved; the slot is put back after it. */
   HcRegion *pr = use_hc ? &hcr : sv_hc;
   const char *sv_bi = pr ? pr->bi : NULL, *sv_ba = pr ? pr->ba : NULL;
+  char *sv_bic = pr ? pr->bic : NULL, *sv_bac = pr ? pr->bac : NULL;
   if (pr) {
-    pr->bi = pr->ba = NULL;
+    pr->bi = pr->ba = NULL; pr->bic = pr->bac = NULL;
     if (!is_until) hc_bounded_index(c, prev_stmt, pred, body, pr);
   }
   int proved = pr && pr->bi;
@@ -13348,9 +13654,10 @@ static void emit_while_loop(Compiler *c, int id, Buf *b, int indent, int is_unti
      was the enclosing loop's already (#9222). */
   int quiet = polls_in_cond && (g_uses_threads || g_uses_finalizers) && g_poll_loop_nest > 0 &&
               !hc_subtree_stores(nt, body);
+  char trip[64] = "";
   if (proved) {
     Buf hcc; memset(&hcc, 0, sizeof hcc);
-    if (hc_bounded_cond(c, pred, &hcc)) { free(ccond.p); ccond = hcc; }
+    if (hc_bounded_cond(c, pred, &hcc, trip, sizeof trip)) { free(ccond.p); ccond = hcc; }
     else free(hcc.p);
   }
   if (cpre.p && cpre.p[0]) {
@@ -13367,6 +13674,8 @@ static void emit_while_loop(Compiler *c, int id, Buf *b, int indent, int is_unti
     emit_indent(b, indent); buf_puts(b, "}\n");
   }
   else {
+    /* other arrays read at the proved index, in place (hcv_begin) */
+    void *hv = trip[0] ? hcv_begin(c, id, body, -1, pr->bi, pr->bic, trip, -1, 0, &b) : NULL;
     emit_indent(b, indent);
     buf_puts(b, "while (");
     /* (a quiet loop has none left there; its body takes none either) */
@@ -13390,9 +13699,13 @@ static void emit_while_loop(Compiler *c, int id, Buf *b, int indent, int is_unti
     emit_loop_body(c, body, b, indent + 1);
     emit_indent(b, indent);
     buf_puts(b, "}\n");
+    hcv_end(c, hv, indent);
   }
   free(cpre.p); free(ccond.p);
-  if (pr) { pr->bi = sv_bi; pr->ba = sv_ba; }
+  if (pr) {
+    free(pr->bic); free(pr->bac);
+    pr->bi = sv_bi; pr->ba = sv_ba; pr->bic = sv_bic; pr->bac = sv_bac;
+  }
   if (use_hc) {
     g_hc = sv_hc; b = hob;
     hc_close(&hcr, hlb.p ? hlb.p : "", b, indent);

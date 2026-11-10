@@ -22694,8 +22694,8 @@ static void emit_stmt_node(Compiler *c, int id, Buf *b, int indent) {
       /* an ivar only nil is written to has no slot, here or below: it is
          nil, so `||=` runs its value (a frozen receiver refusing the write)
          and `&&=` runs nothing (emit_expr_node's value form says the same) */
-      else if (!(cws2 && cws2->is_cmethod) && sc2 != c->toplevel_class && comp_ntype(c, v) == TY_NIL &&
-               !ivar_slot_below(c, sc2, nm)) {
+      else if (cws2 && cws2->class_id >= 0 && !cws2->is_cmethod && sc2 != c->toplevel_class &&
+               comp_ntype(c, v) == TY_NIL && !ivar_slot_below(c, sc2, nm)) {
         if (is_or) {
           emit_indent(b, indent);
           buf_puts(b, "(void)(");

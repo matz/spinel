@@ -2859,7 +2859,10 @@ static int emit_local_ivar_write_expr(Compiler *c, int id, Buf *b, const NodeTab
          (the nil it writes, a frozen receiver refusing the write) and `&&=`
          answers nil without running it. Read as a field, the C named a
          member the struct does not have. */
-      else if (!(cws3 && cws3->is_cmethod) && !tl3 && comp_ntype(c, v) == TY_NIL && !ivar_slot_below(c, tcid3, nm)) {
+      /* (an instance method's only: a class body's ivar is the class's, its
+         storage a civ_ static) */
+      else if (cws3 && cws3->class_id >= 0 && !cws3->is_cmethod && !tl3 && comp_ntype(c, v) == TY_NIL &&
+               !ivar_slot_below(c, tcid3, nm)) {
         if (!is_or) { emit_slot_nil_read(c, comp_ntype(c, id), b); return 1; }
         Buf fz; memset(&fz, 0, sizeof fz);
         emit_frozen_obj_guard(c, tcid3, g_self ? g_self : "self", &fz);

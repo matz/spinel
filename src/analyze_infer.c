@@ -4336,23 +4336,18 @@ static int infer_poly_operand_call(Compiler *c, int id, const NodeTable *nt, con
       }
       /* String#getbyte on a boxed value: int byte or nil on out-of-range. */
       if (argc == 1 && sp_streq(name, "getbyte")) { *out = an_poly_concrete(c, id, name, TY_POLY); return 1; }
-      /* The count-taking Array reads on a boxed array. Their value is a new
-         array; without a rule they typed nil/void and the call emitted as a
-         discarded statement (#3464). rotate's count is optional. */
-      if ((argc == 1 || (argc == 0 && (sp_streq(name, "rotate") || sp_streq(name, "shuffle")))) &&
-          nt_ref(nt, id, "block") < 0 &&
-          (sp_streq(name, "first") || sp_streq(name, "last") ||
-           sp_streq(name, "take") || sp_streq(name, "drop") ||
-           sp_streq(name, "rotate") || sp_streq(name, "sample") ||
-           (sp_streq(name, "shuffle") && argc == 0) ||
-           is_minmax_query(name))) {
-        int has_user = 0;
-        if (!an_builtin_only)
-        for (int k = 0; k < c->nclasses && !has_user; k++)
-          if (comp_poly_arm_defines_n(c, k, name, argc) ||
-              (!c->classes[k].is_native_class && comp_reader_in_chain(c, k, name, NULL))) has_user = 1;
-        if (!has_user) { *out = an_poly_concrete(c, id, name, TY_POLY_ARRAY); return 1; }
+      /* After the random: forms, read the same boxed fallback as emission. */
+      {
+        const BuiltinOp *op = bop_find(BOP_BOXED_FALLBACK, name, argc, nt_ref(nt, id, "block") >= 0);
+        if (op && !an_user_poly_arm(c, name, argc)) {
+          if (an_bop_records(c, id)) c->bop_inf[id] = op;
+          *out = an_poly_concrete(c, id, name, bop_result(op, rt));
+          return 1;
+        }
       }
+      if (argc == 1 && nt_ref(nt, id, "block") < 0 && sp_streq(name, "sample") &&
+          !an_user_poly_arm(c, name, argc))
+        { *out = an_poly_concrete(c, id, name, TY_POLY_ARRAY); return 1; }
       if (argc >= 1 && sp_streq(name, "values_at") && nt_ref(nt, id, "block") < 0) {
         if (!an_user_poly_arm(c, name, argc)) { *out = an_poly_concrete(c, id, name, TY_POLY_ARRAY); return 1; }
       }

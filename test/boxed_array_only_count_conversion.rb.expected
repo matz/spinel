@@ -1,0 +1,26 @@
+:argument
+:to_int
+[3, 1, 2]
+:argument
+:to_int
+[1, 2, 3]
+:plain_argument
+[1, 2, 3]
+:argument
+:no_rotate
+:argument
+:no_sample
+:plain_argument
+:no_rotate
+:argument
+:no_rotate
+:argument
+:no_sample
+:plain_argument
+:no_rotate
+:argument
+:no_rotate
+:argument
+:no_sample
+:plain_argument
+:no_rotate

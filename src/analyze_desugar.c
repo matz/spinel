@@ -10495,6 +10495,14 @@ static int fwd_poly_recv_one_param_iter(const char *name) {
   return str_in(name, names);
 }
 
+/* Is ex a read of the named `&blk` of the method holding call id? */
+static int fwd_own_named_block(Compiler *c, int id, int ex) {
+  const NodeTable *nt = c->nt;
+  Scope *ms = comp_scope_of(c, id);
+  const char *xn = ex >= 0 && nt_kind(nt, ex) == NK_LocalVariableReadNode ? nt_str(nt, ex, "name") : NULL;
+  return xn && ms && ms->name && ms->blk_param && ms->blk_param[0] && sp_streq(xn, ms->blk_param);
+}
+
 /* The File and IO iterators whose arm (codegen_call_io.c) yields exactly one
    value per step. */
 static int fwd_io_one_param_iter(Compiler *c, const char *name) {
@@ -11746,7 +11754,9 @@ int desugar_value_callable_forwards(Compiler *c) {
       }
     }
     else if (rt == TY_POLY && fwd_poly_recv_one_param_iter(name) &&
-             (anon || sp_streq(name, "each_char") || sp_streq(name, "each_line") || sp_streq(name, "each_byte"))) {
+             (anon || (blockless_form && nt_ref(nt, id, "arguments") < 0 && fwd_own_named_block(c, id, ex) &&
+              !hash_two_value_iter(name) && !recv_may_reach_program_method(c, id, rt, name)) || sp_streq(name, "each_char") || sp_streq(name, "each_line") ||
+              sp_streq(name, "each_byte"))) {
       /* A poly receiver (`@mutex.synchronize { @items.dup }.each(&)`, a
          snapshot handed out from under a lock) has no static element type
          to read a yield shape from, and the decline below left the forward
@@ -11754,7 +11764,14 @@ int desugar_value_callable_forwards(Compiler *c) {
          method and runs it with the wrong self (#4625). The poly iterator
          arms yield one boxed value per element (a Hash's pair as one
          array, which the caller's block auto-splats), so the forward is
-         `{ |__fwd| yield __fwd }` with a poly parameter. */
+         `{ |__fwd| yield __fwd }` with a poly parameter. The method's
+         named `&blk` read beside the forward (`blk.nil?`) is the caller's
+         block as well, and goes the same way, where the call has its
+         blockless form for a caller that gives none and no argument
+         (each_slice(n)'s two arms have no common type yet). A Hash's
+         select, filter, reject and to_h yield two (hash_two_value_iter):
+         their two-value forward is kept, and so is a call a method of the
+         program may answer. */
       arity = 1;
       pty[0] = TY_POLY;
     }

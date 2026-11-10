@@ -2725,6 +2725,18 @@ void emit_trace_ask(Compiler *c, int id, int kind, int round, const char *walk);
 void emit_trace_fact(Compiler *c, int id, int kind, int was, int now);
 void emit_trace_sets(Compiler *c, const char *walk);
 #endif
+/* Raw node facts: no bounds fallback, memo dependency, yield hook or
+   String refinement. Callers keep the guards of the original array read. */
+static inline TyKind comp_ntype_stored(const Compiler *c, int id) { return c->ntype[id]; }
+static inline TyKind comp_nilnarrow_stored(const Compiler *c, int id) { return c->nilnarrow[id]; }
+static inline unsigned char comp_strbuf_box_stored(const Compiler *c, int id) { return c->strbuf_box[id]; }
+static inline unsigned char comp_strbuf_handle_demand_stored(const Compiler *c, int id) { return c->strbuf_handle_demand[id]; }
+static inline unsigned char comp_poly_strbuf_lift_stored(const Compiler *c, int id) { return c->poly_strbuf_lift[id]; }
+static inline unsigned char comp_nil_tested_stored(const Compiler *c, int id) { return c->nil_tested[id]; }
+static inline unsigned char comp_head_held_stored(const Compiler *c, int id) { return c->head_held[id]; }
+static inline unsigned char comp_value_discarded_stored(const Compiler *c, int id) { return c->value_discarded[id]; }
+static inline unsigned char comp_str_shadow_stored(const Compiler *c, int id) { return c->str_shadow[id]; }
+
 static inline TyKind comp_set_ntype(Compiler *c, int id, TyKind t) {
 #ifdef SP_EMIT_TRACE
   if (c->ntype[id] != t) emit_trace_fact(c, id, 't', (int)c->ntype[id], (int)t);

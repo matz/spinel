@@ -106,8 +106,14 @@ static inline void comp_touch_key(int key) {
    A member at or past nclasses is the Class object of (member - nclasses),
    which a call dispatches to class methods. `bv`: the value may also be a
    builtin (a container, a Proc), whose own methods then answer too; `os`
-   an OpenStruct; `pr` (with bv) a Proc, whose `[]` is its call. Read with cls_set_has and cls_set_next. */
-typedef struct { unsigned char all, bv, os, pr, bc; int n, nw; unsigned long long *w; int *wi; } ClsSet;
+   an OpenStruct; `pr` (with bv) a Proc, whose `[]` is its call. Read with cls_set_has and cls_set_next.
+   `bk` is the builtin part by class: bit k (0 <= k < CORE_N) says the value may be an instance of exactly
+   CORE_k, bit CLS_BK_OTHER one of a builtin class the core table does not list, and every bit set is any
+   builtin. nil is not tracked (the nil fact's). Read with cls_bk_has and cls_fact_may_hold_builtin. */
+#define CLS_BK_OTHER CORE_N
+#define CLS_BK_WORDS ((CORE_N + 64) / 64)
+typedef struct { unsigned char all, bv, os, pr, bc; unsigned long long bk[CLS_BK_WORDS]; int n, nw; unsigned long long *w; int *wi; } ClsSet;
+static inline int cls_bk_has(const ClsSet *s, int k) { return (int)((s->bk[k >> 6] >> (k & 63)) & 1); }
 /* the position of the first word at word index q or past it */
 static inline int cls_set_word_from(const ClsSet *s, int q) {
   int lo = 0, hi = s->nw;
@@ -1372,6 +1378,8 @@ typedef struct {
                        set of user classes its value can hold (analyze_cls.c,
                        #8530); 0 is every class. Read through cls_fact_node. */
   ClsSet *cls_pool; int ncls_pool, cls_fact_n;
+  struct SendOwners *send_owners; int nsend_owners, csend_owners;   /* per send name, the builtin classes the tables give as answering it (cplan_send_split_owners) */
+  unsigned long long (*cls_bk_sub)[CLS_BK_WORDS]; unsigned char *cls_bk_sub_ok;   /* per builtin class, the mask of it and the classes below it, made on first ask (cls_bk_subtree) */
   int range_unheld; /* while the arguments of a call on a receiver of no known
                        class bind to every method of the name: a Range among
                        them makes no parameter range_held (slot_set) */
@@ -2500,6 +2508,14 @@ int        comp_is_nested_int_array_literal(Compiler *c, int node); /* `[[ints],
    pass did not see, a value it cannot bound). A class the set leaves out
    is one no instance of which reaches the node (analyze_cls.c, #8530). */
 const ClsSet *cls_fact_node(Compiler *c, int node);
+/* May the value at `node` be an instance of builtin class `core` (CORE_*; -1
+   for a class the core table does not list) or of a builtin class below it?
+   1 when the facts cannot say: no fact (a node made after the pass), every
+   class, a NilClass (nil is the nil fact's), or a builtin part holding a
+   class the tables give no ancestry for. A program class below it is the
+   class set's (cls_set_has), not this. */
+int cls_fact_may_hold_builtin(Compiler *c, int node, int core);
+void cplan_send_owners_free(Compiler *c);   /* call_plan.c: the memo of the builtin classes that answer a send's name */
 /* Is class k one the fact bounds: a class the program defines, whose
    instances the pass follows from their construction? A reopened builtin's,
    a native class's and a module's are not. */

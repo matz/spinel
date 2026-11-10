@@ -673,6 +673,7 @@ const PolyPlan *cplan_poly(Compiler *c, int id);
    receiver form). Cheaper: the builtin families and trials, which only the
    --plan-check shadow compares, are left out. */
 const PolyPlan *cplan_poly_arms(Compiler *c, int id);
+int cplan_send_split_owners(Compiler *c, int recv, const char *name, const char **out, int max);   /* the classes a boxed send of name tests: the builtin ones recv may be, and the program's under them */
 /* Resolve the complete plan without reading or writing the per-node memo.
    Use while inference facts are still moving; the scratch plan is overwritten
    by the next fresh resolve, so finish reading it before another planner call. */

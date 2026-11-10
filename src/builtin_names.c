@@ -1565,6 +1565,24 @@ static int builtin_name_in(const char *name, const char *const *names) {
   return 0;
 }
 
+/* The globals the runtime sets, by name without the `$` (the punctuation ones
+   are told by their spelling): their values are the runtime's objects, not
+   a write of the program's. tools/runtime_gvar_check.rb holds the list
+   against CRuby's global_variables. */
+int is_runtime_gvar_name(const char *n) {
+  static const char *const names[] = { "stdout", "stderr", "stdin", "PROGRAM_NAME", "LOAD_PATH", "LOADED_FEATURES",
+                                       "VERBOSE", "DEBUG", "FILENAME", "_", NULL };
+  return n && builtin_name_in(n, names);
+}
+
+/* The constants the runtime defines that are no class or module (the classes are is_builtin_class_name's): the
+   standard streams, ARGV and the rest, DATA (which only a program with __END__ has), and every RUBY_ one.
+   tools/runtime_gvar_check.rb holds the list against CRuby's Object.constants. */
+int is_runtime_const_name(const char *n) {
+  static const char *const names[] = { "STDIN", "STDOUT", "STDERR", "ARGV", "ARGF", "ENV", "DATA", "TOPLEVEL_BINDING", NULL };
+  return n && (builtin_name_in(n, names) || !strncmp(n, "RUBY_", 5));
+}
+
 /* A builtin module the ancestors tables list by its (negative) builtin id
    (Comparable, Enumerable, Kernel, Math): that id, 0 for any other name */
 int builtin_mixin_module_id(const char *n) {
@@ -1863,6 +1881,8 @@ int is_env_const(const char *n) { return n && sp_streq(n, "ENV"); }
 /* RUBY_DESCRIPTION and its siblings: a builtin constant that is a frozen
    String (one object, read after read) */
 int is_engine_string_const(const char *n) {
+  /* (the String ones of the RUBY_ constants, by name: is_runtime_const_name takes the whole prefix, for a
+     constant the program must not be taken to define, and RUBY_PATCHLEVEL is an Integer) */
   return n && (sp_streq(n, "RUBY_DESCRIPTION") || sp_streq(n, "RUBY_VERSION") || sp_streq(n, "RUBY_PLATFORM") ||
                sp_streq(n, "RUBY_ENGINE") || sp_streq(n, "RUBY_ENGINE_VERSION") ||
                sp_streq(n, "RUBY_RELEASE_DATE") || sp_streq(n, "RUBY_REVISION") || sp_streq(n, "RUBY_COPYRIGHT"));
@@ -2154,6 +2174,18 @@ int builtin_id_below_object_answers(int id, const char *m) {
   const BuiltinClass *r = NULL;
   for (int i = 0; id && (r = builtin_class_at(i)) && r->id != id; i++) {}
   return r && builtin_answers_ahead_of(r->name, m, "Object");
+}
+
+/* See builtin_names.h. The ancestors are the tables' (the class's own methods' owners ahead of Object and the
+   modules it includes). A class with no table, or a slot with no name, is unknown: below anything. */
+int builtin_core_is_a(int k, int anc) {
+  if (k == anc) return 1;
+  const char *kn = core_class_name(k), *an = core_class_name(anc);
+  const BuiltinMethodTable *t = kn ? bmt_find(kn) : NULL;
+  if (!t || !an) return 1;
+  for (int i = 0; i < t->nanc; i++)
+    if (!strcmp(t->ancestors[i], an)) return 1;
+  return 0;
 }
 
 /* The names CRuby's own facts give Object, BasicObject, Kernel, Module and
@@ -2767,7 +2799,8 @@ int is_stdlib_const_name(const char *n) {
   return 0;
 }
 
-/* A name CRuby (or a library spinel provides) answers at the top level. */
+/* A name CRuby (or a library spinel provides) answers at the top level: the classes and modules, and the
+   constants of is_runtime_const_name (listed here by name, but DATA, which a program has only with __END__). */
 int is_toplevel_const_name(const char *n) {
   static const char *const names[] = {
     "ARGF", "ARGV", "ArgumentError", "Array", "BasicObject", "Binding", "Class", "ClosedQueueError",

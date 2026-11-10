@@ -3078,15 +3078,13 @@ int emit_send_blind(Compiler *c, int id, Buf *b) {
            class name reads */
         { Buf lb; memset(&lb, 0, sizeof lb);
           const char *snm = nt_str(c->nt, id, "name");
-          int nl = 0, ri = 0;
-          for (const char *bn; (bn = builtin_next_class_answering(&ri, snm)); )
-            buf_printf(&lb, "%s\"%s\"", nl++ ? ", " : "(const char *const[]){", bn);
-          for (int k = 0; k < c->nclasses; k++) {
-            const char *rn = class_ruby_name(c, k);
-            if (rn && !comp_class_is_module(c, &c->classes[k]) &&
-                builtin_id_below_object_answers(class_builtin_parent(c, k), snm))
-              buf_printf(&lb, "%s\"%s\"", nl++ ? ", " : "(const char *const[]){", rn);
-          }
+          int nl = cplan_send_split_owners(c, srcv, snm, NULL, 0);
+          const char **owners = nl ? malloc(sizeof *owners * (size_t)nl) : NULL;
+          if (nl && !owners) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+          if (nl) cplan_send_split_owners(c, srcv, snm, owners, nl);
+          for (int i = 0; i < nl; i++)
+            buf_printf(&lb, "%s\"%s\"", i ? ", " : "(const char *const[]){", owners[i]);
+          free(owners);
           if (nl) {
             buf_puts(&lb, ", NULL}");
             buf_printf(b, " || sp_str_in_list(sp_poly_class_name(_t%d), %s)", tv, lb.p);

@@ -348,6 +348,9 @@ enum {
 /* CORE_* for any builtin row or non-row slot above, -1 for any other name. */
 int builtin_core_class_slot(const char *n);
 int core_of_type(TyKind t);
+int builtin_core_is_a(int k, int anc);   /* CORE_k is CORE_anc or has it among its ancestors in CRuby's tables; 1 for a class the tables lack */
+int is_runtime_gvar_name(const char *n);   /* a global the runtime sets (stdout, PROGRAM_NAME, ...), by its name without the $ */
+int is_runtime_const_name(const char *n);   /* a constant the runtime defines that is no class (STDERR, ARGV, ENV, RUBY_VERSION) */
 int core_reopen_calls_proc_form(int core);   /* a reopened builtin's yielding method goes through its proc form */
 const char *core_class_name(int k);
 int is_builtin_method_host_name(const char *n); /* Object BasicObject Kernel Comparable Enumerable Module */

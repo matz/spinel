@@ -52,7 +52,7 @@ RBS_SRC      = $(wildcard $(RBS_DIR)/src/*.c) $(wildcard $(RBS_DIR)/src/util/*.c
 RBS_OBJ      = $(patsubst $(RBS_DIR)/src/%.c,build/rbs/%.o,$(RBS_SRC))
 RBS_LIB      = build/librbs.a
 
-.PHONY: ty-setter-check imemo-shadow-test imemo-shadow-corpus int-min-test all hooks share-strings-test line-map-check unit-stability-test incremental-test incremental-bench gate-tool-test regexp wasm-rt wasm-test rbs_extract rbs-test rbs-seed-test inline-rbs-test rbs-seed-extractor cident plan-check-test method-table-check timing-test shadow-check signal-default-test source-marker-test magic-comment-test repr-check-test run-scale-test gate-costs arm-check-test traits-check-test poly-cold-test bop-arity-check-test bop-callbacks-test bop-share-check-test share-spec-check bop-callbacks-check arity-spec-check builtin-method-tables-check builtin-method-tables-regen value-edges-check value-edges-regen implied-calls-check implied-calls-regen implied-calls-test lower-rows-check node-kinds-check node-kinds-regen package-facts-check package-facts-regen value-pos-test re-lit-test reject-test cli-opts-test link-names-test reach-test defer-refusals-test check-stores-test backtrace-test gc-minor-test thread-puts-test ext-test ext-cruby-test alloc-report-test no-bigint-test no-alloc-report-test rubyspec rubyspec-gate spin-check \ repr-diff c-costs alloc-diff \
+.PHONY: ty-setter-check imemo-shadow-test imemo-shadow-corpus int-min-test all hooks share-strings-test line-map-check unit-stability-test incremental-test incremental-bench gate-tool-test regexp wasm-rt wasm-test rbs_extract rbs-test rbs-seed-test inline-rbs-test rbs-seed-extractor cident plan-check-test method-table-check timing-test shadow-check signal-default-test source-marker-test magic-comment-test repr-check-test run-scale-test gate-costs arm-check-test traits-check-test poly-cold-test bop-arity-check-test bop-callbacks-test bop-share-check-test share-spec-check bop-callbacks-check arity-spec-check runtime-gvar-check builtin-method-tables-check builtin-method-tables-regen value-edges-check value-edges-regen implied-calls-check implied-calls-regen implied-calls-test lower-rows-check node-kinds-check node-kinds-regen package-facts-check package-facts-regen value-pos-test re-lit-test reject-test cli-opts-test link-names-test reach-test defer-refusals-test check-stores-test backtrace-test gc-minor-test thread-puts-test ext-test ext-cruby-test alloc-report-test no-bigint-test no-alloc-report-test rubyspec rubyspec-gate spin-check \ repr-diff c-costs alloc-diff \
         test test-run clean-test-results regen-rbs-expected \
         regen-expected regen-expected-err bench optcarrot gate gate-full check gate-legs gate-test gate-bench gc-phases-test gc-stress-test threaded-render-test gc-locality-test test-corpus test-corpus-summary \
         gate-optcarrot rubyboy gate-rubyboy scale-test clean install uninstall deps tools
@@ -1928,6 +1928,9 @@ decisions-test: $(SPINEL) $(SPINEL_TIMEOUT)
 	$(SPINEL) test/fixtures/decisions/frame_and_receiver_test.rb -o "$$tmp/fa" >/dev/null 2>&1 && \
 	  [ "$$(SPINEL_GC_STRESS=2 $(TIMEOUT10) "$$tmp/fa" 2>&1)" = "$$(printf 'true\ntrue')" ] || \
 	  { echo "decisions-test: FAIL (the program whose receiver temp is a slot of the frame does not answer true, true under SPINEL_GC_STRESS=2)"; ok=0; }; \
+	$(SPINEL) test/fixtures/decisions/builtin_split_narrowed.rb -c -o "$$tmp/bs.c" >/dev/null 2>&1 && \
+	  [ "$$(grep -c 'sp_str_in_list(sp_poly_class_name' "$$tmp/bs.c")" = 1 ] && grep 'sp_str_in_list(sp_poly_class_name' "$$tmp/bs.c" | grep -q '"IO"' && grep -q 'sp_message()' "$$tmp/bs.c" || \
+	  { echo "decisions-test: FAIL (a boxed send tested builtin classes its receiver cannot be, or dropped the one it may be)"; ok=0; }; \
 	n=$$(printf 'm%0700d' 0); \
 	printf 'class Sprites\n  def initialize; @s = [[1, 2], [3]]; end\n  def %sa(i) = @s[i].size\n  def %sb(i) = @s[i].first\nend\ns = Sprites.new\np s.%sa(0), s.%sb(1)\n' $$n $$n $$n $$n > "$$tmp/long.rb"; \
 	$(SPINEL) --decisions-log="$$tmp/long.keys" "$$tmp/long.rb" -c -o "$$tmp/o.c" >/dev/null 2>&1; \
@@ -5638,6 +5641,11 @@ share-spec-check:
 ARITY_RUBY ?= ruby
 arity-spec-check:
 	@$(ARITY_RUBY) tools/gen_builtin_arity_spec.rb --check
+
+# The globals the class facts take for the runtime's (is_runtime_gvar_name)
+# against CRuby's own global_variables: any name it lacks is a miss.
+runtime-gvar-check: $(SPINEL)
+	@SPINEL=$(SPINEL) $(ARITY_RUBY) tools/runtime_gvar_check.rb
 
 # CRuby's own method tables for its builtin classes and modules
 # (src/builtin_method_tables.inc) against the CRuby they were generated from:

@@ -178,10 +178,7 @@ const char *call_sent_name(const NodeTable *nt, int id, int *used);
    the class whose table holds the method, written only where one is found,
    so a caller that presets it finds it as it was (not so for
    cplan_super_target and cplan_super_chain_mi, which set *ml whole). from:
-   the class a super's lookup started from, written by those two only. vis:
-   for a CT_REACH ask, the visibility the call checks of name on that
-   route, public where the tables declare none: the final table's, until
-   visibility is per version (cplan_presence reads it). Only
+   the class a super's lookup started from, written by those two only. Only
    cplan_resolve_super and cplan_presence read kind, and nothing reads why
    yet. */
 typedef enum { ML_METHOD, ML_ENTRY, ML_NONE, ML_TABLE } MlKind;
@@ -193,7 +190,7 @@ typedef enum { ML_METHOD, ML_ENTRY, ML_NONE, ML_TABLE } MlKind;
    without asking the record, as for a call with no node or a name the node
    does not itself call (UNASKED) */
 typedef enum { MLW_UNPLACED = 1, MLW_MOVES, MLW_MANY, MLW_UNMAPPED, MLW_DISAGREE, MLW_NEVER, MLW_UNASKED } MlWhy;
-typedef struct { MlKind kind; unsigned char why, copies, survey; short n; int def_class, from, vis; } MethodLookup;
+typedef struct { MlKind kind; unsigned char why, copies, survey; short n; int def_class, from; } MethodLookup;
 /* ml (NULL for a caller that wants the scope only) */
 int call_target(Compiler *c, int id, int cls, const char *name, unsigned flags, MethodLookup *ml);
 /* A super's parent-chain target, asked from class par under name; ml (NULL
@@ -1003,12 +1000,9 @@ int cplan_cmethod_presence(Compiler *c, int id, int cls, const char *name, int i
    record proves none is live where id runs; PR_TABLE: the record gives no
    proof and the reader keeps the final tables' answer. out->table is that
    answer for every kind (a hidden method, a Data class's generated iterator
-   and, under CT_OWN, a module's copy are no method of the class's); out->vis
-   the visibility the call checks (MethodLookup.vis); out->undef, on the
-   instance side, an undef_method on the chain that takes the name away,
-   whatever builtin answers it. */
+   and, under CT_OWN, a module's copy are no method of the class's). */
 typedef enum { PR_PRESENT, PR_ABSENT, PR_TABLE } PresenceKind;
-typedef struct { int table, vis, undef; } CplanPresence;
+typedef struct { int table; } CplanPresence;
 PresenceKind cplan_presence(Compiler *c, int id, int cls, unsigned side, const char *name, CplanPresence *out);
 /* Does method-list call id leave out name, a candidate the final tables
    list for cls's side (side as cplan_presence's: CT_CMETHOD for

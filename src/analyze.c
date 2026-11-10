@@ -17675,8 +17675,9 @@ static int oa_read_is_param(Compiler *c, int node) {
 /* The row kind a map's block answers (OA_CLS_IA / OA_CLS_FA), or -1: its
    tail and every valued next or break are one kind of scalar row, and a
    literal row has every element typed (oa_obj_class_of). An object is
-   oa_map_obj_evidence's; a boxed value or an empty `[]` is no evidence. Nor is a block
-   that breaks: the map then answers the break's value, not a table. */
+   oa_map_obj_evidence's; a boxed value or an empty `[]` is no evidence.
+   Nor is a block that breaks: the map then answers the break's value, not
+   a table. */
 static int oa_map_row_evidence(Compiler *c, int block, int tail) {
   if (tail < 0 || block_body_breaks(c->nt, nt_ref(c->nt, block, "body"))) return -1;
   TyKind et = infer_map_block_elem_ty(c, block);
@@ -17848,12 +17849,9 @@ static void oa_classify_value(Compiler *c, OAS *sl, int n, const int *read_slot,
        slot dies. The while-loop spelling never needed this because its rows
        come from its own `Array.new(0, 0.0)` generator.
 
-       Deliberately only this shape. Keeping every map source alive also
-       narrows `[...].map { Obj.new(s) }` to an object table, and the places
-       that consume one -- `min`, `join`, interpolation -- still want the boxed
-       element, so the C stopped compiling. The rows here are already unboxed
-       pointers read out of a narrowed table, which is what makes this shape
-       the one that pays.
+       Beside this edge, a map's block is element evidence only for the
+       shapes below: a row of one scalar kind, or one class
+       (oa_map_obj_evidence). Every other map source kills the slot.
 
        The receiver must be an ARRAY. `h.map { |k, v| cols[v] }` answers the
        same rows, but its emitter has no pointer-array container to collect

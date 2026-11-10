@@ -200,7 +200,7 @@ int cplan_super_chain_mi(Compiler *c, int id, const Scope *s, int par, const cha
    chain's); ml as call_target's, and ml->from the class the lookup started
    from (-1: a prepend chain with no next) */
 int cplan_super_target(Compiler *c, int id, const Scope *s, MethodLookup *ml);
-int cplan_kernel_def(Compiler *c, int id, const char *name);   /* a program Kernel def of the name (a top-level def) */
+int cplan_kernel_def(Compiler *c, const char *name);   /* a version of the name's top-level history is a program Kernel def */
 /* Does the Class row for call id, named name, on the class value recv answer
    the call? Not where a class method of the program's does (the plan binds
    it a target), nor where the row is a private method's and the call names

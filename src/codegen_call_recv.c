@@ -5103,29 +5103,6 @@ static int emit_str_mutator_call(Compiler *c, int id, Buf *b, const NodeTable *n
       buf_printf(b, "_t%d; })", tn2);
       { *out = 1; return 1; }
     }
-    if (sp_streq(name, "insert") && argc == 2) {
-      int lvw = str_mut_var_recv(c, recv) || sb_shadowed_reader(c, recv);
-      int to = ++g_tmp, ti2 = ++g_tmp, tn2 = ++g_tmp;
-      /* CRuby evaluates the receiver, the index and the text, and only then
-         reads the String: a variable receiver is read after them, so a text
-         that changes it (`s.insert(1, (s << "x"; "y"))`) is seen; any other
-         receiver is taken first and rooted across them, which may allocate.
-         The text is converted, and rooted, before the frozen check, where
-         CRuby raises its TypeError. */
-      buf_puts(b, "({ ");
-      if (!lvw) { buf_printf(b, "const char *_t%d = ", to); emit_recv_rooted(c, recv, to, "SP_GC_ROOT_STR", b); }
-      buf_printf(b, "sp_int _t%d = ", ti2); emit_int_expr(c, argv[0], b);
-      buf_printf(b, "; const char *_v%d = ", tn2); emit_str_insert_text(c, argv[1], b);
-      buf_printf(b, "; SP_GC_ROOT_STR(_v%d); ", tn2);
-      if (lvw) { buf_printf(b, "const char *_t%d = ", to); emit_recv_rooted(c, recv, to, "SP_GC_ROOT_STR", b); }
-      buf_printf(b, "sp_str_check_mutable(_t%d);", to);   /* frozen -> FrozenError (#3003) */
-      /* -1 appends; an index past the ends raises IndexError, as CRuby */
-      buf_printf(b, " const char *_t%d = sp_str_splice_at(_t%d, _t%d == -1 ? (sp_int)sp_str_length(_t%d) : _t%d < 0 ? _t%d + 1 : _t%d, 0, _v%d, 0); ",
-                 tn2, to, ti2, to, ti2, ti2, ti2, tn2);
-      { char rt[24]; snprintf(rt, sizeof rt, "_t%d", to); emit_str_mut_writeback(c, recv, lvw, tn2, rt, b); }
-      buf_printf(b, "_t%d; })", tn2);
-      { *out = 1; return 1; }
-    }
     if (sp_streq(name, "replace") && argc == 1) {
       /* shared-mutable local: swap the buffer contents in place (#3227) */
       { Buf srefR; memset(&srefR, 0, sizeof srefR);
@@ -5417,6 +5394,11 @@ int emit_array_call(Compiler *c, int id, Buf *b) {
     const NodeTable *ntS = c->nt;
     const char *nmS = nt_str(ntS, id, "name");
     int recvS = nt_ref(ntS, id, "receiver");
+    /* String#insert and clear change the receiver's String in place,
+       through its handle (the String rows of stage 7) */
+    TyKind rtS = comp_recv_type(c, recvS);
+    if (recvS >= 0 && (rtS == TY_STRING || rtS == TY_STRBUF) &&
+        emit_builtin_op_stage(c, id, recvS, TY_STRING, nmS, 7, b)) return 1;
     if (nmS && recvS >= 0 && repr_of(c, recvS).as_ty == TY_STRBUF &&
         (is_string_position_mutator(nmS)) &&
         sb_reader_expr_shim(c, id, recvS, b, emit_array_call)) return 1;
@@ -15785,8 +15767,7 @@ static TyKind emit_face_arm(Compiler *c, int id, unsigned kind, unsigned flags, 
      and wrote nothing back. */
   int shadow = kind == PF_STRING && box && (flags & PF_MUT) && !face_str_var_recv(nt, recv);
   ShimShadow tn;
-  if (shadow) tn = sb_shadow_cname(t);
-  else snprintf(tn.s, sizeof tn.s, "_t%d", t);
+  snprintf(tn.s, sizeof tn.s, "_t%d", t);
   char bx[32];
   Buf rb; memset(&rb, 0, sizeof rb);
   if (box) snprintf(bx, sizeof bx, "_t%d", box);

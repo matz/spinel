@@ -1646,7 +1646,7 @@ int emit_call_operator_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, co
         return 1;
       } }
     NodeKind rk = nt_kind(nt, recv);
-    if (str_mut_var_recv(c, recv) || sb_held_shadow(c, recv)) {
+    if (str_mut_var_recv(c, recv)) {
       /* a fresh unfrozen empty: the shared frozen "" would make a later
          mutation of the cleared receiver raise */
       buf_puts(b, "({ sp_str_check_mutable("); emit_expr(c, recv, b);
@@ -1860,6 +1860,10 @@ int emit_call_operator_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, co
       g_pre->len = rpre0; if (g_pre->p) g_pre->p[rpre0] = 0;
     }
   }
+  /* String#insert and #clear change the receiver's String in place through
+     its handle (the String rows of stage 7) */
+  if (recv >= 0 && (rt == TY_STRING || rt == TY_STRBUF) &&
+      emit_builtin_op_stage(c, id, recv, TY_STRING, name, 7, b)) return 1;
   /* poly `<<` in expression position: sp_poly_shl dispatches on the runtime tag
      (Integer#<< shift -> boxed int, Array#push append -> the array) and returns
      a poly either way, matching the statement-level path. */

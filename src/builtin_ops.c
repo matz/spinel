@@ -2165,7 +2165,7 @@ static const BuiltinOp bop_rows[] = {
      calls that answer the receiver carry BOPF_SELF, the bangs that answer
      it or nil BOPF_SELF_OR_NIL, the ones that answer it or a copy of it
      BOPF_SELF_CLASS (bop_answers_self). */
-  { TY_STRING, "clear",           0,   0, BF_ANY,      TY_STRING,     BOPE_NONE, NULL, 0, 0, BOPF_SELF },  /* self (#2332) */
+  { TY_STRING, "clear",           0,   0, BF_ANY,      TY_STRING,     BOPE_STRING_CLEAR, NULL, 0, 0, BOPF_SELF, 7 },  /* self (#2332) */
   { TY_STRING, "[]=",             2,   3, BF_ANY,      TY_STRING,     BOPE_NONE },  /* the assigned string (#2370) */
   { TY_STRING, "clone",           1,   1, BF_ANY,      TY_STRING,     BOPE_NONE, NULL, 0, 0, BOPF_COPY_CLASS | BOPF_KEYWORDS },  /* clone(freeze: ...) */
   /* encoding and ascii_only? read the binary tag or the bytes through a
@@ -2286,6 +2286,7 @@ static const BuiltinOp bop_rows[] = {
   { TY_STRING, "<<",              0, 127, BF_ANY,      TY_STRING,     BOPE_NONE, NULL, 0, 0, BOPF_SELF | BOPF_ARGS_BUILTIN },
   { TY_STRING, "prepend",         0,   0, BF_ANY,      TY_STRING,     BOPE_TEMPLATE, "({ const char *_t$t = $r; sp_str_check_mutable(_t$t); _t$t; })", 0, 0, BOPF_SELF | BOPF_ARGS_BUILTIN },
   { TY_STRING, "prepend",         0, 127, BF_ANY,      TY_STRING,     BOPE_NONE, NULL, 0, 0, BOPF_SELF | BOPF_ARGS_BUILTIN },
+  { TY_STRING, "insert",          2,   2, BF_ANY,      TY_STRING,     BOPE_STRING_INSERT, NULL, 0, 0, BOPF_SELF | BOPF_ARGS_BUILTIN, 7 },
   { TY_STRING, "insert",          0, 127, BF_ANY,      TY_STRING,     BOPE_NONE, NULL, 0, 0, BOPF_SELF | BOPF_ARGS_BUILTIN },
   { TY_STRING, "replace",         0, 127, BF_ANY,      TY_STRING,     BOPE_NONE, NULL, 0, 0, BOPF_SELF | BOPF_ARGS_BUILTIN },
   { TY_STRING, "ascii_only?",     0,   0, BF_ANY,      TY_BOOL,       BOPE_TEMPLATE, "sp_str_ascii_only(sp_nil_recv_named($r, \"ascii_only?\"))", 0 },  /* as encoding's row */

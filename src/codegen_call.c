@@ -1002,35 +1002,8 @@ int emit_ie_untraced(Compiler *c, int id, int recv, int blk, Buf *b) {
   return 1;
 }
 
-/* Do only the builtins convert a `&` value: no to_proc of the program's
-   own (`class Integer; def to_proc`), and no respond_to? or
-   respond_to_missing? that CRuby asks before it calls method_missing? */
-static int block_arg_conv_builtin(Compiler *c) {
-  static const Compiler *conv_c;
-  static int conv_free;
-  if (conv_c != c) {
-    conv_c = c;
-    conv_free = an_name_binder_free(c, "to_proc") && an_name_binder_free(c, "respond_to?") &&
-                an_name_binder_free(c, "respond_to_missing?");
-  }
-  return conv_free;
-}
-/* The class CRuby's TypeError names ("no implicit conversion of X into
-   Proc") for a `&fe` block argument whose type cannot become a block: X,
-   "" for a Boolean, whose value names TrueClass or FalseClass; NULL where
-   it converts or its type does not say (a Proc, Method, curried Proc,
-   Symbol, Hash, nil, an object with to_proc, a boxed or unknown value). */
-static const char *block_arg_no_proc_class(Compiler *c, int fe) {
-  if (fe < 0) return NULL;
-  Repr fr = repr_of(c, fe);
-  TyKind ft = fr.as_ty;
-  if (fr.kind == RK_BOXED || ft == TY_PROC || ft == TY_METHOD || ft == TY_SYMBOL || ft == TY_NIL ||
-      ft == TY_POLY || ft == TY_UNKNOWN || ft == TY_VOID || ft == TY_CURRY || ty_is_hash(ft) ||
-      (ty_is_object(ft) && comp_method_in_chain(c, ty_object_class(ft), "to_proc", NULL) >= 0)) return NULL;
-  return ft == TY_BOOL ? "" : conv_cls_name_of(c, ft);
-}
 /* The TypeError of a `&fe` block argument whose type cannot become a
-   block (block_arg_no_proc_class cn), as a statement at indent after fe's
+   block (cplan_block_arg cn), as a statement at indent after fe's
    value is evaluated */
 static void emit_block_arg_type_error(Compiler *c, int fe, const char *cn, Buf *b, int indent) {
   Buf fb; memset(&fb, 0, sizeof fb);
@@ -1107,51 +1080,54 @@ static void emit_non_proc_block_raise(Compiler *c, int id, int recv, const int *
   else { emit_ie_param_default(c, t, b); buf_puts(b, "; })"); }
   free(pb.p);
 }
-/* Can fe's typed slot hold nil (a String, an object, an Array, a nullable
-   Integer or Float)? Only a Boolean or a plain Integer or Float cannot. */
-static int np_slot_may_be_nil(Compiler *c, int fe, TyKind ft) {
-  if (ft == TY_BOOL) return 0;
-  if (ft == TY_INT || ft == TY_FLOAT)
-    return (oint_kind(ft) && node_is_oint(c, fe)) || repr_nil_scalar(c, fe, ft);
-  return 1;
-}
-static int emit_call_non_proc_block(Compiler *c, int id, Buf *b) {
-  const NodeTable *nt = c->nt;
-  int blk = nt_ref(nt, id, "block");
-  if (blk < 0 || nt_kind(nt, blk) != NK_BlockArgumentNode || nt_safe_nav(nt, id) || np_block_node == id ||
-      !block_arg_conv_builtin(c)) return 0;
-  int fe = nt_ref(nt, blk, "expression");
-  if (fe < 0) return 0;
-  int recv = nt_ref(nt, id, "receiver"), an = 0;
-  const int *av = call_args(nt, id, &an);
-  const char *cn = block_arg_no_proc_class(c, fe);
-  Repr fr = repr_of(c, fe);
-  if (cn && !np_slot_may_be_nil(c, fe, fr.as_ty)) {
-    emit_non_proc_block_raise(c, id, recv, av, an, fe, cn, b);
-    return 1;
-  }
-  /* A value that may be nil, or a boxed one, is checked where it runs: nil
-     passes no block, and a boxed Proc, Method, Symbol or Hash becomes one,
-     and so may an object of the program's own classes; a plain
-     Object.new, an Integer, a Float, a String, true or false raises. The
-     check goes ahead of the call, so only where the receiver, the
-     arguments and fe run nothing. */
-  if (!cn && fr.kind != RK_BOXED && fr.as_ty != TY_POLY) return 0;
-  if (!np_operand_pure(c, fe) || !np_operand_pure(c, recv)) return 0;
-  for (int i = 0; i < an; i++) if (!np_operand_pure(c, av[i])) return 0;
+/* The run-time check of a `&fe` argument the plan leaves to the run (CB_CHECK):
+   nil passes no block, and a boxed Proc, Method, Symbol or Hash becomes one,
+   and so may an object of the program's own classes; a plain Object.new, an
+   Integer, a Float, a String, true or false raises. cn names the class of a
+   typed value that may be nil ("" for a Boolean), NULL for a boxed one. As a
+   statement expression of no value; fe runs in it. */
+static void emit_block_arg_check(Compiler *c, int fe, const char *cn, Buf *b) {
   int tv = ++g_tmp;
-  buf_printf(b, "((void)({ sp_RbVal _t%d = ", tv);
+  buf_printf(b, "({ sp_RbVal _t%d = ", tv);
   emit_boxed(c, fe, b);
   if (cn) {
     /* a Boolean's class is its value's; any other typed value's is cn */
-    buf_printf(b, "; if (_t%d.tag != SP_TAG_NIL) sp_raise_cls(\"TypeError\", \"no implicit conversion of %s into Proc\"); }), ",
+    buf_printf(b, "; if (_t%d.tag != SP_TAG_NIL) sp_raise_cls(\"TypeError\", \"no implicit conversion of %s into Proc\"); })",
                tv, cn[0] ? cn : "FalseClass");
   } else
     buf_printf(b, "; if (_t%d.tag == SP_TAG_INT || _t%d.tag == SP_TAG_FLT || _t%d.tag == SP_TAG_BOOL || "
                   "_t%d.tag == SP_TAG_STR || _t%d.tag == SP_TAG_BIGINT || (_t%d.tag == SP_TAG_OBJ && "
                   "(_t%d.cls_id == SP_BUILTIN_OBJECT || _t%d.cls_id == SP_BUILTIN_BASIC_OBJECT))) "
-                  "sp_raise_cls(\"TypeError\", sp_sprintf(\"no implicit conversion of %%s into Proc\", sp_poly_class_name(_t%d))); }), ",
+                  "sp_raise_cls(\"TypeError\", sp_sprintf(\"no implicit conversion of %%s into Proc\", sp_poly_class_name(_t%d))); })",
                tv, tv, tv, tv, tv, tv, tv, tv, tv);
+}
+/* Does the check of call id's `&` argument go ahead of the call: the
+   receiver, the arguments and fe run nothing a program can see? */
+static int np_check_ahead_ok(Compiler *c, int id, int fe) {
+  int recv = nt_ref(c->nt, id, "receiver"), an = 0;
+  const int *av = call_args(c->nt, id, &an);
+  if (!np_operand_pure(c, fe) || !np_operand_pure(c, recv)) return 0;
+  for (int i = 0; i < an; i++) if (!np_operand_pure(c, av[i])) return 0;
+  return 1;
+}
+static int emit_call_non_proc_block(Compiler *c, int id, Buf *b) {
+  const NodeTable *nt = c->nt;
+  const char *cn;
+  int cb = cplan_block_arg(c, id, &cn);
+  if (cb == CB_BINDS || np_block_node == id) return 0;
+  int fe = nt_ref(nt, nt_ref(nt, id, "block"), "expression");
+  int recv = nt_ref(nt, id, "receiver"), an = 0;
+  const int *av = call_args(nt, id, &an);
+  if (cb == CB_RAISE) {
+    emit_non_proc_block_raise(c, id, recv, av, an, fe, cn, b);
+    return 1;
+  }
+  /* The check goes ahead of the call, so only where the receiver, the
+     arguments and fe run nothing. */
+  if (!np_check_ahead_ok(c, id, fe)) return 0;
+  buf_puts(b, "((void)");
+  emit_block_arg_check(c, fe, cn, b);
+  buf_puts(b, ", ");
   int sv = np_block_node;
   np_block_node = id;
   buf_puts(b, "(");
@@ -1160,12 +1136,48 @@ static int emit_call_non_proc_block(Compiler *c, int id, Buf *b) {
   np_block_node = sv;
   return 1;
 }
+/* A mutator written as a statement (emit_array_mutate_stmt) emits no
+   expression for emit_call_non_proc_block to wrap, so its `&` argument is
+   decided here, at indent in b: one that raises is the whole statement
+   (1: the receiver, the arguments and fe run, then TypeError), and where
+   the call's value is read it is the value form's (-1, nothing emitted);
+   one checked where it runs puts its check ahead of the statement the
+   caller emits (0, the check emitted, or none where its operands run
+   code); one bound as written leaves the statement alone (0) unless the
+   value is read (-1). */
+int emit_call_block_arg_stmt(Compiler *c, int id, Buf *b, int indent) {
+  const NodeTable *nt = c->nt;
+  const char *cn;
+  int cb = cplan_block_arg(c, id, &cn);
+  int blk = nt_ref(nt, id, "block");
+  /* (a `&` argument bound as written, where the call's value is read: the
+     statement form has none to give, as a block's value tail needs) */
+  if (cb == CB_BINDS) return blk >= 0 && nt_kind(nt, blk) == NK_BlockArgumentNode && !an_node_dropped(c, id) ? -1 : 0;
+  int fe = nt_ref(nt, blk, "expression");
+  if (cb == CB_RAISE) {
+    if (!an_node_dropped(c, id)) return -1;
+    int an = 0;
+    const int *av = call_args(nt, id, &an);
+    Buf vb; memset(&vb, 0, sizeof vb);
+    emit_non_proc_block_raise(c, id, nt_ref(nt, id, "receiver"), av, an, fe, cn, &vb);
+    emit_indent(b, indent);
+    buf_printf(b, "(void)%s;\n", vb.p ? vb.p : "0");
+    free(vb.p);
+    return 1;
+  }
+  if (!np_check_ahead_ok(c, id, fe)) return 0;
+  emit_indent(b, indent);
+  buf_puts(b, "(void)");
+  emit_block_arg_check(c, fe, cn, b);
+  buf_puts(b, ";\n");
+  return 0;
+}
 
 int emit_ie_non_proc_block(Compiler *c, int id, int recv, int blk, Buf *b) {
   const NodeTable *nt = c->nt;
+  const char *cn;
+  if (cplan_block_arg(c, id, &cn) != CB_RAISE) return 0;
   int fe = nt_ref(nt, blk, "expression"), args = nt_ref(nt, id, "arguments"), an = 0;
-  const char *cn = block_arg_no_proc_class(c, fe);
-  if (!cn) return 0;
   const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &an) : NULL;
   emit_non_proc_block_raise(c, id, recv, av, an, fe, cn, b);
   return 1;
@@ -23824,8 +23836,13 @@ static void emit_missing_raise(Compiler *c, int m, int kind, const char *self, i
   if (fe >= 0) {
     Buf ap, ae; memset(&ap, 0, sizeof ap); memset(&ae, 0, sizeof ae);
     Buf *sv = g_pre; g_pre = &ap;
-    const char *cn = block_arg_no_proc_class(c, fe);
-    if (cn) emit_block_arg_type_error(c, fe, cn, &ae, 0);
+    const char *cn;
+    int cb = cplan_block_arg(c, m, &cn);
+    if (cb == CB_RAISE) emit_block_arg_type_error(c, fe, cn, &ae, 0);
+    else if (cb == CB_CHECK) {
+      emit_block_arg_check(c, fe, cn, &ae);
+      buf_puts(&ae, "; ");
+    }
     else {
       Buf pv; memset(&pv, 0, sizeof pv);
       if (!emit_block_arg_proc(c, fe, &pv)) emit_expr(c, fe, &pv);

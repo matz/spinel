@@ -24397,7 +24397,15 @@ int emit_array_mutate_stmt(Compiler *c, int id, Buf *b, int indent) {
   /* a String mutator on a String method answering its receiver or nil on a
      handle takes the value form, which holds that handle */
   if (push_stmt_takes_value_form(c, id) || strbuf_mutator_on_held_self_answer(c, id)) return 0;
-  return emit_ivar_nil_guarded(c, id, b, indent, emit_array_mutate_stmt_dispatch);
+  /* a `&` argument that raises TypeError is the statement (or, read as a
+     value, the value form's); one checked where it runs has its check
+     ahead of the statement, which the value form's retake drops */
+  size_t mark = b->len;
+  int ba = emit_call_block_arg_stmt(c, id, b, indent);
+  if (ba) return ba > 0;
+  int r = emit_ivar_nil_guarded(c, id, b, indent, emit_array_mutate_stmt_dispatch);
+  if (!r && b->len > mark) buf_erase(b, mark, b->len - mark);
+  return r;
 }
 /* The FrozenError an in-place String mutator raises before it reads its
    arguments, hit or miss; a nil receiver is left to the mutator's own

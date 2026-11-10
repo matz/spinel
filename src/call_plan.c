@@ -5737,6 +5737,46 @@ static int cplan_nil_ivar_tested(Compiler *c, int r, TyKind rt, const char *nm) 
          nil_fact_why(c, r) == NFW_IVAR;
 }
 
+/* Do only the builtins convert a `&` value: no to_proc of the program's
+   own (`class Integer; def to_proc`), and no respond_to? or
+   respond_to_missing? that CRuby asks before it calls method_missing? */
+static int cplan_block_conv_builtin(Compiler *c) {
+  if (!c->block_arg_conv)
+    c->block_arg_conv = an_name_binder_free(c, "to_proc") && an_name_binder_free(c, "respond_to?") &&
+                        an_name_binder_free(c, "respond_to_missing?") ? 1 : 2;
+  return c->block_arg_conv == 1;
+}
+/* The class CRuby's TypeError names ("no implicit conversion of X into
+   Proc") for a `&fe` argument whose type cannot become a block: X, "" for a
+   Boolean, whose value names TrueClass or FalseClass; NULL where it
+   converts or its type does not say (a Proc, Method, curried Proc, Symbol,
+   Hash, nil, an object with to_proc, a boxed or unknown value). */
+static const char *cplan_block_no_proc_class(Compiler *c, int fe) {
+  Repr fr = repr_of(c, fe);
+  TyKind ft = fr.as_ty;
+  if (fr.kind == RK_BOXED || ft == TY_PROC || ft == TY_METHOD || ft == TY_SYMBOL || ft == TY_NIL ||
+      ft == TY_POLY || ft == TY_UNKNOWN || ft == TY_VOID || ft == TY_CURRY || ty_is_hash(ft) ||
+      (ty_is_object(ft) && comp_method_in_chain(c, ty_object_class(ft), "to_proc", NULL) >= 0)) return NULL;
+  return ft == TY_BOOL ? "" : conv_cls_name_of(c, ft);
+}
+int cplan_block_arg(Compiler *c, int id, const char **cn) {
+  const NodeTable *nt = c->nt;
+  *cn = NULL;
+  int blk = id >= 0 && id < nt->count && nt_kind(nt, id) == NK_CallNode ? nt_ref(nt, id, "block") : -1;
+  if (blk < 0 || nt_kind(nt, blk) != NK_BlockArgumentNode || nt_safe_nav(nt, id) ||
+      !cplan_block_conv_builtin(c)) return CB_BINDS;
+  int fe = nt_ref(nt, blk, "expression");
+  if (fe < 0) return CB_BINDS;
+  *cn = cplan_block_no_proc_class(c, fe);
+  if (!*cn) {
+    Repr fr = repr_of(c, fe);
+    return fr.kind == RK_BOXED || fr.as_ty == TY_POLY ? CB_CHECK : CB_BINDS;
+  }
+  /* what the slot can hold is the value's representation's fact: a nil
+     passes no block, and only a value that cannot be nil raises */
+  return repr_of(c, fe).may_nil ? CB_CHECK : CB_RAISE;
+}
+
 int cplan_nil(Compiler *c, int id) {
   const NodeTable *nt = c->nt;
   if (id < 0 || id >= nt->count || nt_kind(nt, id) != NK_CallNode) return CN_NONE;

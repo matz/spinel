@@ -13911,6 +13911,13 @@ else {
   }
 
   if (!virtual) {
+    /* A yielding method the inliner left to this call (a default that reads
+       self keeps it from splicing) has no function of its own: its proc
+       form, handed the call's block as a proc, or none, as a switch arm
+       calls it. The plain name was never emitted. */
+    int pf_d = m && m->yields ? scope_proc_form_of(c, mi) : -1;
+    Scope *callee = pf_d >= 0 ? &c->scopes[pf_d] : m;
+    if (pf_d >= 0 && blk_node >= 0) blk_tmp = emit_blk_proc_tmp(c, blk_node);
     /* a value-type receiver is passed by value (no pointer cast); so is
        the self of an Object / Array / Hash / Numeric reopening, which its
        methods take boxed (emit_method_signature) and which has no struct */
@@ -13926,17 +13933,22 @@ else {
          version, and the pointer passed as it was did not compile. Boxed
          as every boxed use of the instance is (arysub_box_id). */
       if (!vptr && cid >= 0 && c->classes[cid].ary_root > 0 && reopen_takes_boxed_self(c, defcls)) {
-        buf_printf(b, "%s(", mc_method(c, m));
+        buf_printf(b, "%s(", mc_method(c, callee));
         emit_boxed_text(c, ty_object(cid), selfptr, b);
       }
-      else buf_printf(b, vptr ? "%s((*%s)" : "%s(%s", mc_method(c, m), selfptr);
+      else buf_printf(b, vptr ? "%s((*%s)" : "%s(%s", mc_method(c, callee), selfptr);
     }
     else
-      buf_printf(b, "%s((sp_%s *)%s", mc_method(c, m), c->classes[defcls].c_name, selfptr);
+      buf_printf(b, "%s((sp_%s *)%s", mc_method(c, callee), c->classes[defcls].c_name, selfptr);
     for (int k = 0; k < np; k++) {
       /* a temp the call ran first keeps its own form: the parameter's */
-      if (m && atmp_o[k] && atmp_ty[k] != TY_POLY) emit_arm_arg(c, m, k, atmp[k], atmp_ty[k], 1, b);
+      if (pf_d >= 0) emit_arm_arg(c, callee, k, atmp[k], atmp_ty[k], atmp_o[k], b);
+      else if (m && atmp_o[k] && atmp_ty[k] != TY_POLY) emit_arm_arg(c, m, k, atmp[k], atmp_ty[k], 1, b);
       else buf_printf(b, ", _t%d", atmp[k]);
+    }
+    if (pf_d >= 0) {
+      if (blk_tmp >= 0) buf_printf(b, ", _t%d", blk_tmp);
+      else buf_puts(b, ", NULL");
     }
     if (needs_blk_arg) {
       if (blk_tmp >= 0) buf_printf(b, ", _t%d", blk_tmp);

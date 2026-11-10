@@ -8344,7 +8344,7 @@ static int class_leaf_check(const VpLeaf *leaf, void *ud) {
   if (leaf->kind == VPK_EXPR &&
       (nt_kind(nt, leaf->node) == NK_ConstantReadNode || nt_kind(nt, leaf->node) == NK_ConstantPathNode)) {
     const char *nm = nt_str(nt, leaf->node, "name");
-    if (nm && comp_class_index(k->c, nm) >= 0) {
+    if (nm && const_node_class_index(k->c, leaf->node) >= 0) {
       if (!strstr(k->names, nm) && strlen(k->names) + strlen(nm) + 3 < k->cap) {
         if (*k->names) strcat(k->names, ", ");
         strcat(k->names, nm);
@@ -18577,7 +18577,7 @@ static int oa_const_slot(Compiler *c, OAS *sl, int n, int id, int *dyn) {
     NodeKind pk = p >= 0 ? nt_kind(nt, p) : NK_NONE;
     const char *pn = p >= 0 ? nt_str(nt, p, "name") : NULL;
     if (p >= 0 && (!(pk == NK_ConstantReadNode || pk == NK_ConstantPathNode) || !pn ||
-                   comp_class_index(c, pn) < 0)) *dyn = 1;
+                   const_node_class_index(c, p) < 0)) *dyn = 1;
   }
   LocalVar *cv = comp_const(c, nm);
   return cv ? oa_find(sl, n, OA_CONST, cv) : -1;

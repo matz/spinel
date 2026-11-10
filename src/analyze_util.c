@@ -706,7 +706,7 @@ static int const_path_write_reaches(Compiler *c, int t, int k) {
   if (q < 0) return 0;
   NodeKind qk = nt_kind(nt, q);
   const char *qn = qk == NK_ConstantReadNode || qk == NK_ConstantPathNode ? nt_str(nt, q, "name") : NULL;
-  int qi = qn ? comp_class_index(c, qn) : -1;
+  int qi = qn ? const_node_class_index(c, q) : -1;
   if (qi < 0) return 1;
   for (int a = k, d = 0; a >= 0 && a < c->nclasses && d < 64; a = c->classes[a].parent, d++)
     if (comp_module_includes(c, a, qi, 0)) return 1;
@@ -870,7 +870,7 @@ static void builtin_given_build(Compiler *c, struct BuiltinGiven *g) {
       int q = nt_ref(nt, t, "parent");
       NodeKind qk = q >= 0 ? nt_kind(nt, q) : NK_NilNode;
       const char *qn = qk == NK_ConstantReadNode || qk == NK_ConstantPathNode ? nt_str(nt, q, "name") : NULL;
-      int qi = qn ? comp_class_index(c, qn) : -1;
+      int qi = qn ? const_node_class_index(c, q) : -1;
       if (qn && is_object_class_name(qn)) continue;
       if (!qn || qi < 0 || held[qi] || c->classes[qi].is_builtin_const) anh_add(&g->names, cw->names.key[i]);
     }
@@ -935,7 +935,7 @@ int const_path_misses_toplevel(Compiler *c, int id) {
   NodeKind pk = nt_kind(nt, par);
   if (pk != NK_ConstantReadNode && pk != NK_ConstantPathNode) return 0;
   const char *pn = nt_str(nt, par, "name"), *nm = const_key_at(c, id);
-  if (!pn || !nm || sp_streq(pn, "Object") || comp_class_index(c, pn) < 0 || comp_const(c, pn)) return 0;
+  if (!pn || !nm || sp_streq(pn, "Object") || const_node_class_index(c, par) < 0 || comp_const(c, pn)) return 0;
   /* the writes of NAME alone: walking every write of the program for each
      path was a tenth of a large program's analysis */
   const struct ConstWrites *cw = const_writes_of(c);
@@ -946,7 +946,7 @@ int const_path_misses_toplevel(Compiler *c, int id) {
     if (w >= c->node_cap || c->node_cbody[w] >= 0) return 0;
     top = 1;
   }
-  int k = comp_class_index(c, pn);
+  int k = const_node_class_index(c, par);
   for (int t = cw->head[1][ni]; t >= 0; t = cw->next[t])
     if (const_path_write_reaches(c, t, k)) return 0;
   return top;
@@ -2173,7 +2173,7 @@ int const_get_recv_class(Compiler *c, int call, int recv) {
   if (rk == NK_ConstantReadNode || rk == NK_ConstantPathNode) {
     const char *nm = nt_str(nt, recv, "name");
     if (!nm) return CG_NONE;
-    int k = comp_class_index(c, nm);
+    int k = const_node_class_index(c, recv);
     if (k >= 0) return k;
     return builtin_core_class_slot(nm) == CORE_OBJECT ? CG_OBJECT : CG_UNTABLED;
   }
@@ -5457,7 +5457,7 @@ int call_user_yield_mi(Compiler *c, int id) {
                         ? nt_str(nt, recv, "name") : NULL;
     /* ... and `self.class.run { }` by the class self.class names, as the
        inliner does (self_class_static_ci) */
-    int ci = cname ? comp_class_index(c, cname) : self_class_static_ci(c, recv);
+    int ci = cname ? const_node_class_index(c, recv) : self_class_static_ci(c, recv);
     if (ci >= 0) mi = call_target(c, id, ci, name, CT_CMETHOD, NULL);
     else if (ty_is_object(rt)) mi = call_target(c, id, ty_object_class(rt), name, 0, NULL);
   }

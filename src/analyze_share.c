@@ -395,7 +395,7 @@ static int sh_yielder_new(Compiler *c, int u) {
   NodeKind rk = r >= 0 ? nt_kind(nt, r) : NK_NONE;
   const char *cn = rk == NK_ConstantReadNode || rk == NK_ConstantPathNode ? nt_str(nt, r, "name") : NULL;
   const char *nm = nt_str(nt, u, "name");
-  return cn && nm && bop_share_named(BOP_ANY_RECV, nm) == BSH_NEW && comp_class_index(c, cn) < 0 &&
+  return cn && nm && bop_share_named(BOP_ANY_RECV, nm) == BSH_NEW && const_node_class_index(c, r) < 0 &&
          bop_share_named(BOP_CLASS_NEW, cn) == BSH_NEW_YIELDER;
 }
 

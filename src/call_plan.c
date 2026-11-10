@@ -3935,7 +3935,7 @@ static const char *feature_limit(Compiler *c, int id, int *stop, int *lx, char *
           "from. Call the method on the String directly, or wrap it in a block "
           "(`->(x) { s << x }`) (see docs/limitations.md)";
 
-  if (!why && rcn && comp_class_index(c, rcn) < 0) {
+  if (!why && rcn && const_node_class_index(c, recv) < 0) {
     /* Namespaces that exist only in an interpreter. Keyed on the receiver, so
        every method on them reports the same way rather than one-by-one. */
     if (sp_streq(rcn, "ObjectSpace"))
@@ -3971,7 +3971,7 @@ static const char *feature_limit(Compiler *c, int id, int *stop, int *lx, char *
   int mixin = sp_streq(name, "include") || sp_streq(name, "prepend");
   /* (one the load record takes as a mixin of the class's: mixin_by_record) */
   if (mixin && nt_int(nt, id, "mixin_by_record", 0)) mixin = -1;
-  if (!why && rcn && mixin >= 0 && (comp_class_index(c, rcn) >= 0 || sp_streq(rcn, "Object") ||
+  if (!why && rcn && mixin >= 0 && (const_node_class_index(c, recv) >= 0 || sp_streq(rcn, "Object") ||
                       (mixin && is_builtin_reopen_name(rcn))) &&
       (mixin ||
        sp_streq(name, "attr_accessor") || sp_streq(name, "attr_reader") ||

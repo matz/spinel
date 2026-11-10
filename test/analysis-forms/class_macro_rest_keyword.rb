@@ -24,9 +24,11 @@ class Server
   flag :ready
 end
 
+# (the call is the body's last statement, and the macro's last line does
+# not run: the class statement's value, nil, is read by no one)
 class Mirror
-  forward :port, to: :config
   def config = Config.new
+  forward :port, to: :config
 end
 
 s = Server.new

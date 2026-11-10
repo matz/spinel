@@ -2005,7 +2005,11 @@ int ct_macro_form(Compiler *c, int call, int list, int j) {
   /* the call's value is the macro's: the class body's, when it is last */
   int last = -1, nout = 0;
   for (int f = 0; f < e.nfx; f++) if (ct_fx_kept(&b, &e.fx[f]) && tn[f]) { last = f; nout += tn[f]; }
-  if (ok && j == bn - 1) ok = last >= 0 && ct_fx_answers(nt, &e, &e.fx[last]);
+  /* (only where the body's value is read: a class statement whose value is
+     dropped, as nearly every one is, has its last statement's value read
+     by no one) */
+  int read = j == bn - 1 && !(list == class_def_body(nt, frame) && an_value_dropped(nt, comp_parent_map(c), frame));
+  if (ok && read) ok = last >= 0 && ct_fx_answers(nt, &e, &e.fx[last]);
   if (!ok) {
     if (ran) ct_state_note(c, h, call, &e, seeded, seed_nw);
     free(seed_nw);

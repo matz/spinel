@@ -11630,10 +11630,7 @@ static sp_int sp_rbval_hash_key(sp_RbVal v) {
            `obj.method(:m)` instances collapse to one entry (optcarrot
            @peeks/@pokes dedup). The name disambiguates class methods, whose
            fn slot is 0 (no resolvable callable address). */
-        sp_BoundMethod *m = (sp_BoundMethod *)v.v.p;
-        if (!m) return 0;
-        return (sp_int)(((uintptr_t)m->self * 31) + m->fn) +
-               (m->name ? (sp_int)sp_str_hash(m->name) : 0);
+        return sp_bm_hash((sp_BoundMethod *)v.v.p);
       }
       if (v.cls_id == SP_BUILTIN_RATIONAL) {
         /* value-based so equal Rationals (reduced to lowest terms) hash alike
@@ -11807,11 +11804,7 @@ static sp_bool sp_rbval_eql_key(sp_RbVal a, sp_RbVal b) {
       if (a.cls_id == SP_BUILTIN_REGEX)
         return sp_re_eq(a.v.p, b.v.p);   /* same source, same pattern (#3681) */
       if (a.cls_id == SP_BUILTIN_METHOD) {
-        sp_BoundMethod *ma = (sp_BoundMethod *)a.v.p, *mb = (sp_BoundMethod *)b.v.p;
-        if (!ma || !mb) return ma == mb;
-        if (ma->self != mb->self || ma->fn != mb->fn) return FALSE;
-        if (ma->name == mb->name) return TRUE;
-        return ma->name && mb->name && strcmp(ma->name, mb->name) == 0;
+        return sp_bm_same((sp_BoundMethod *)a.v.p, (sp_BoundMethod *)b.v.p);
       }
       if (a.cls_id == SP_BUILTIN_RATIONAL) {
         /* value-based so equal Rationals serve as one Hash key (paired with the
@@ -14216,9 +14209,7 @@ static sp_bool sp_poly_eql_strict_obj(sp_RbVal a, sp_RbVal b) {
     }
     case SP_BUILTIN_REGEX: return sp_re_eq(a.v.p, b.v.p);
     case SP_BUILTIN_METHOD: {   /* the same receiver's same method, as a Hash key compares them */
-      sp_BoundMethod *x = (sp_BoundMethod *)a.v.p, *y = (sp_BoundMethod *)b.v.p;
-      if (x->self != y->self || x->fn != y->fn) return FALSE;
-      return x->name == y->name || (x->name && y->name && strcmp(x->name, y->name) == 0);
+      return sp_bm_same((sp_BoundMethod *)a.v.p, (sp_BoundMethod *)b.v.p);
     }
     default: return FALSE;   /* identity, checked above */
   }

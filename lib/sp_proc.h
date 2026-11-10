@@ -200,6 +200,13 @@ typedef struct sp_BoundMethod { void *self; sp_int fn; const char *name; sp_int 
   sp_int proc_params;     /* the rule its proc's #parameters follow,
                              SP_BM_PROC_PARAMS_*: stamped at the bind site
                              (sp_bm_set_proc_params) */
+  const char *ident;      /* "Owner#name" of the builtin method a synthesized
+                             wrapper stands for, a literal; NULL for any other
+                             target. Each `.method(:sym)` on a builtin receiver
+                             gets its own wrapper (its own fn), so two Methods
+                             of one builtin method differ in fn: sp_bm_same and
+                             sp_bm_hash read this key in place of it
+                             (sp_bm_set_ident) */
 } sp_BoundMethod;
 void sp_bm_cap_scan(void *p);
 void sp_method_proc_scan(void *p);
@@ -224,7 +231,7 @@ static inline sp_int sp_bm_fn_opaque(sp_int fn) {
   return fn;
 #endif
 }
-static inline sp_BoundMethod *sp_bound_method_new(void *self, sp_int self_kind, sp_int fn, const char *name, sp_int arity) { sp_BoundMethod *m = (sp_BoundMethod *)sp_gc_alloc(sizeof(sp_BoundMethod), NULL, sp_BoundMethod_scan); m->self = self; m->self_kind = self_kind; m->fn = sp_bm_fn_opaque(fn); m->name = name; m->arity = arity; m->desc = NULL; m->params = NULL; m->unbound = 0; m->recv_bound = 0; m->legacy_int_abi = 0; m->legacy_sig = NULL; m->legacy_fixed = 0; m->legacy_rest = 0; m->legacy_ret = SP_BM_RET_INT; m->poly_abi = 0; m->poly_fixed = 0; m->thunk = 0; m->thunk_min = 0; m->thunk_max = 0; m->owner = SP_CLASS_NIL; m->src_file = NULL; m->src_line = 0; m->proc_params = SP_BM_PROC_PARAMS_LIST; return m; }
+static inline sp_BoundMethod *sp_bound_method_new(void *self, sp_int self_kind, sp_int fn, const char *name, sp_int arity) { sp_BoundMethod *m = (sp_BoundMethod *)sp_gc_alloc(sizeof(sp_BoundMethod), NULL, sp_BoundMethod_scan); m->self = self; m->self_kind = self_kind; m->fn = sp_bm_fn_opaque(fn); m->name = name; m->arity = arity; m->desc = NULL; m->params = NULL; m->unbound = 0; m->recv_bound = 0; m->legacy_int_abi = 0; m->legacy_sig = NULL; m->legacy_fixed = 0; m->legacy_rest = 0; m->legacy_ret = SP_BM_RET_INT; m->poly_abi = 0; m->poly_fixed = 0; m->thunk = 0; m->thunk_min = 0; m->thunk_max = 0; m->owner = SP_CLASS_NIL; m->src_file = NULL; m->src_line = 0; m->proc_params = SP_BM_PROC_PARAMS_LIST; m->ident = NULL; return m; }
 /* Tag a freshly-built Method with whether its target has the legacy sp_int C
    ABI, the per-position type signature, the fixed/rest slot counts, and how
    its sp_int C return boxes. The constructors default to 0 (unsafe), so every
@@ -277,6 +284,28 @@ static inline sp_int sp_bm_norm_ret(sp_BoundMethod *m, sp_int raw) {
 static inline sp_BoundMethod *sp_bm_set_unbound(sp_BoundMethod *m) { if (m) m->unbound = 1; return m; }
 /* Stamp the rule the Method's proc's #parameters follow (sp_BoundMethod.proc_params). */
 static inline sp_BoundMethod *sp_bm_set_proc_params(sp_BoundMethod *m, sp_int rule) { if (m) m->proc_params = rule; return m; }
+static inline sp_BoundMethod *sp_bm_set_ident(sp_BoundMethod *m, const char *ident) { if (m) m->ident = ident; return m; }
+/* Method#== / #eql? / #equal? and the Hash-key compare: the same bound receiver
+   and the same target -- one fn, or one builtin method (ident). A class
+   method has no fn (0), so its name tells it apart; an alias of a def shares
+   the fn and is equal, as CRuby's. */
+static inline sp_bool sp_bm_same(const sp_BoundMethod *x, const sp_BoundMethod *y) {
+  if (!x || !y) return x == y;
+  if (x->self != y->self) return 0;
+  if (x->ident || y->ident) return x->ident && y->ident && strcmp(x->ident, y->ident) == 0;
+  if (x->fn != y->fn) return 0;
+  return x->fn != 0 || x->name == y->name || (x->name && y->name && strcmp(x->name, y->name) == 0);
+}
+/* The hash sp_bm_same agrees with. */
+static inline sp_int sp_bm_hash(const sp_BoundMethod *m) {
+  if (!m) return 0;
+  uintptr_t h = (uintptr_t)m->self * 31;
+  const char *k = m->ident ? m->ident : (m->fn == 0 ? m->name : NULL);
+  if (k) { for (; *k; k++) h = h * 33 + (unsigned char)*k; }
+  else h += (uintptr_t)m->fn;
+  return (sp_int)h;
+}
+
 /* The scalar-kind ABI token of a boxed argument (see abi_sig_token in
    codegen_call.c: TY_INT/TY_BOOL/TY_SYMBOL/TY_NIL are 1/2/3/4), or 0 when the
    value has no scalar sp_int slot at all (a pointer, Float, or Bigint). The

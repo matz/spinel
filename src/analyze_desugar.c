@@ -21767,18 +21767,37 @@ static void rod_index_free(RodIndex *x, int n0) {
   anh_free(&x->byq); anh_free(&x->byleaf);
   free(x->qhead); free(x->lhead); free(x->qnext); free(x->lnext); free(x->seen);
 }
-/* Do the headers of `leaf` all open one qualified name? A leaf that two
-   namespaces share (`Outer::Base` and `Base`) is not followed by name. */
-static int send_alias_leaf_unique(RodIndex *x, const NodeTable *nt, const char *leaf, int n0) {
+/* May the walk follow the constant name `leaf` to its headers? Every
+   header of the name must open one qualified name, and with `top` that
+   name is the leaf itself: a superclass or module named from a class body
+   is taken only when it is a top-level class or module. A name that two
+   namespaces share (`Outer::Base` and `Base`), that only a nested header
+   opens (`Mine::Comparable` against the core Comparable), or that a
+   constant assignment writes (`Base = Struct.new(:a)`) is not followed. */
+static int send_alias_leaf_followable(RodIndex *x, const NodeTable *nt, const char *leaf, int top, int n0) {
   const char *q = NULL;
   for (int m = 0; m < n0; m++) {
+    NodeKind k = nt_kind(nt, m);
+    if (k == NK_ConstantWriteNode || k == NK_ConstantOrWriteNode || k == NK_ConstantAndWriteNode ||
+        k == NK_ConstantOperatorWriteNode || k == NK_ConstantTargetNode || k == NK_ConstantPathTargetNode) {
+      const char *wn = nt_str(nt, m, "name");
+      if (wn && sp_streq(wn, leaf)) return 0;
+      continue;
+    }
+    if (k == NK_ConstantPathWriteNode || k == NK_ConstantPathOrWriteNode || k == NK_ConstantPathAndWriteNode ||
+        k == NK_ConstantPathOperatorWriteNode) {
+      int t = nt_ref(nt, m, "target");
+      const char *wn = t >= 0 ? nt_str(nt, t, "name") : NULL;
+      if (wn && sp_streq(wn, leaf)) return 0;
+      continue;
+    }
     if (!class_def_opens_frame(nt, m)) continue;
     const char *cn = class_def_name(nt, m);
     if (!cn || !sp_streq(cn, leaf)) continue;
     if (!x->qn[m] || (q && !sp_streq(q, x->qn[m]))) return 0;
     q = x->qn[m];
   }
-  return q != NULL;
+  return q != NULL && (!top || sp_streq(q, leaf));
 }
 /* Does statement `st` of a class or module body bind instance method
    `meth`: a def, an alias, an attr_reader / attr_accessor / attr, or a
@@ -21806,10 +21825,9 @@ static int send_alias_stmt_defines(const NodeTable *nt, int st, const char *meth
 /* Does `alias nw <meth>` (node `alias`) in class or module `cls` name a
    method of the program? CRuby's alias names the method that cls reaches
    when the alias runs: its own, or one of a superclass or a module that cls
-   or a superclass includes or prepends. The walk goes by constant name and
-   takes only a name whose headers all open one qualified name, and only a
-   definition or an include that comes before the alias in the source (the
-   node order). A path it cannot follow (a computed superclass, a module
+   or a superclass includes or prepends. The walk goes by constant name
+   (send_alias_leaf_followable), and takes only a definition or an include
+   that comes before the alias in the source (the node order). A path it cannot follow (a computed superclass, a module
    that is not a constant) adds nothing: the alias then names Kernel's
    method, as before. */
 static int send_alias_reaches_program_method(const NodeTable *nt, const char *cls, const char *meth, int alias, int n0) {
@@ -21818,7 +21836,7 @@ static int send_alias_reaches_program_method(const NodeTable *nt, const char *cl
   RodIndex x;
   rod_index_build(&x, nt, n0);
   const char *q[CAP]; int nq = 0, found = 0;
-  if (send_alias_leaf_unique(&x, nt, cls, n0)) q[nq++] = cls;
+  if (send_alias_leaf_followable(&x, nt, cls, 0, n0)) q[nq++] = cls;
   for (int i = 0; i < nq && !found; i++) {
     for (int m = 0; m < n0 && !found; m++) {
       if (!class_def_opens_frame(nt, m)) continue;
@@ -21846,7 +21864,7 @@ static int send_alias_reaches_program_method(const NodeTable *nt, const char *cl
       for (int a = 0; a < na && nq < CAP; a++) {
         int seen = 0;
         for (int j = 0; j < nq && !seen; j++) seen = sp_streq(q[j], add[a]);
-        if (!seen && send_alias_leaf_unique(&x, nt, add[a], n0)) q[nq++] = add[a];
+        if (!seen && send_alias_leaf_followable(&x, nt, add[a], 1, n0)) q[nq++] = add[a];
       }
     }
   }

@@ -144,6 +144,7 @@ int        sp_sched_other_threads_live(void);
 int        sp_sched_fork(void);   /* fork(2) that leaves the child a sound scheduler (#10516) */
 int        sp_sched_threads_started(void);   /* the worker pool is up: Process.daemon refuses to fork */
 int        sp_sched_wait_child(int pid, int *status);
+int        sp_sched_wait_child_flags(int pid, int *status, int flags);   /* the same with waitpid(2) flags (WNOHANG: no wait, 0 for a running child) */
 void       sp_sleep(sp_float s);   /* Kernel#sleep; relocated from spinel_rt.h to lib/sp_cold.c */
 void       sp_sleep_forever(void);  /* a bare Kernel#sleep, until Thread#wakeup */
 /* Scheduler-aware blocking I/O: park the calling green thread until `fd` is ready

@@ -496,7 +496,7 @@ static int node_is_oint_asked(Compiler *c, int node) {
                                         sp_streq(nm, "byteindex") || sp_streq(nm, "byterindex"))) return 1;
     /* String#getbyte past the end, IO#getbyte at end of file: nil */
     if (sp_streq(nm, "getbyte") && r >= 0 && !oint_kind(rt)) return 1;
-    if (sp_streq(nm, "exitstatus") || sp_streq(nm, "termsig") ||
+    if (sp_streq(nm, "exitstatus") || sp_streq(nm, "termsig") || sp_streq(nm, "stopsig") ||
         sp_streq(nm, "world_readable?") || sp_streq(nm, "world_writable?")) return 1;
     if (r >= 0 && ty_is_array(rt) &&
         (sp_streq(nm, "index") || sp_streq(nm, "rindex") || sp_streq(nm, "find_index") || sp_streq(nm, "delete_at") || sp_streq(nm, "delete") ||

@@ -834,6 +834,16 @@ static int emit_io_timeout_set(Compiler *c, int id, int recv, int value, Buf *b)
   return 1;
 }
 
+/* A library's IO method (io/console's winsize, winsize=) on a boxed handle:
+   a row of the library emits the call, or CRuby refuses its count, which
+   the stream check of emit_call_poly_io_arms raises as ArgumentError. An
+   operand no row takes (`winsize = "x"`) is left to the general dispatch. */
+static int boxed_io_library_call(Compiler *c, int id, const char *name, int argc) {
+  const BuiltinOp *op = emit_builtin_op_row(c, id, TY_IO, name);
+  if (bop_io_library_row(op)) return 1;
+  return op && op->recv == TY_IO && op->feature && !builtin_arity_admits(bop_spec_class(op->recv), name, argc);
+}
+
 /* the IO methods on a poly receiver that may hold a stream (write, read, gets, puts, print, ...) */
 int emit_call_poly_io_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc, const int *argv) {
   if (emit_io_read_nonblock_outbuf(c, id, b)) return 1;
@@ -855,7 +865,7 @@ int emit_call_poly_io_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
        sp_streq(name, "to_path") ||
        sp_streq(name, "tty?") || sp_streq(name, "isatty") ||
        /* a library's methods (io/console's winsize, winsize=) */
-       bop_io_library_row(emit_builtin_op_row(c, id, TY_IO, name)) ||
+       boxed_io_library_call(c, id, name, argc) ||
        ((sp_streq(name, "__sp_tty_mode") || sp_streq(name, "__sp_tty_restore")) && argc == 1) ||
        sp_streq(name, "readlines") || sp_streq(name, "rewind") ||
        poly_io_codepoint_enum(c, id) ||

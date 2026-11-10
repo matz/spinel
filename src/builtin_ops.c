@@ -3134,7 +3134,7 @@ static int bop_row_fits(const BuiltinOp *r, int argc, int has_block) {
 }
 
 int bop_io_library_row(const BuiltinOp *op) {
-  return op && op->recv == TY_IO && op->feature;
+  return op && op->recv == TY_IO && op->feature && op->emit != BOPE_NONE;
 }
 
 /* A builtin class's own methods (bop_class_find), one table: IO's (#2815).

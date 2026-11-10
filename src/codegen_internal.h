@@ -2973,6 +2973,9 @@ int order_operand_inert(Compiler *c, int call, int op, int is_recv);   /* codege
 /* ...and the count it expects when it does not (NULL when it admits it) */
 const char *builtin_arity_expected(const char *cls, const char *name, int with_block, int argc,
                                    char *exp, size_t n);
+/* The arity table's class for a row's receiver kind, or NULL: the kinds the
+   table probes a receiver of (a stream's are File's). */
+const char *bop_spec_class(TyKind k);
 void emit_complex_coerce(Compiler *c, int node, Buf *b);
 int emit_complex_real_args(Compiler *c, const int *argv, int argc, int polar, Buf *b);
 void emit_brk_wrapped_call(Compiler *c, int id, Buf *b);

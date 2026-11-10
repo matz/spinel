@@ -20877,9 +20877,8 @@ int builtin_super_cmethod_known(const char *cls, const char *name) {
   return 0;
 }
 
-/* The arity table's class for a row's receiver kind, or NULL: the kinds the
-   table probes a receiver of. */
-static const char *bop_spec_class(TyKind k) {
+/* See codegen_internal.h. */
+const char *bop_spec_class(TyKind k) {
   if (k == BOP_ANY_ARRAY || (k >= 0 && ty_is_array(k))) return "Array";
   if (k == BOP_ANY_HASH || (k >= 0 && ty_is_hash(k))) return "Hash";
   switch (k) {

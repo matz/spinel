@@ -486,10 +486,9 @@ const BuiltinOp *bop_find_arg(TyKind rt, const char *name, int argc, int has_blo
 const BuiltinOp *bop_find_stage(TyKind rt, const char *name, int argc, int has_block,
                                 BopArgKind arg_of, const void *ud, int stage);
 
-/* Is op a library's IO row (io/console's winsize, winsize=)? The boxed IO
-   dispatch takes these on a handle read back out of a container, as the
-   typed arm does (emit_call_poly_io_arms): an emitting row serves the call,
-   and a count CRuby refuses raises its ArgumentError there. */
+/* Is op a library's IO row (io/console's winsize, winsize=) that emits the
+   call? The boxed IO dispatch serves these on a handle read back out of a
+   container, as the typed arm does (emit_call_poly_io_arms). */
 int bop_io_library_row(const BuiltinOp *op);
 
 /* A builtin class's own method (a singleton method: IO.select), as a row:

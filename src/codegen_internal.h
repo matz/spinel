@@ -40,6 +40,7 @@ extern int g_no_write_barrier;
 extern const char *g_ruby_description;
 void buf_printf(Buf *b, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
 void buf_setf(Buf *b, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
+void buf_vsetf(Buf *b, const char *fmt, va_list ap);
 
 static inline void emit_indent(Buf *b, int n) { for (int i = 0; i < n; i++) buf_puts(b, "  "); }
 

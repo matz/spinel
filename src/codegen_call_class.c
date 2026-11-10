@@ -29,10 +29,11 @@ void emit_builtin_class_value(Compiler *c, const char *name, Buf *b) {
    generated sp_cls_canon when the program reopens a builtin, so a reopened
    one is its index */
 void emit_cv_canon(Compiler *c, Buf *b, const char *fmt, ...) {
-  char e[256];
-  va_list ap; va_start(ap, fmt); vsnprintf(e, sizeof e, fmt, ap); va_end(ap);
-  if (comp_reopens_cv_builtin(c)) buf_printf(b, "sp_cls_canon(%s)", e);
-  else buf_puts(b, e);
+  Buf e = {0};
+  va_list ap; va_start(ap, fmt); buf_vsetf(&e, fmt, ap); va_end(ap);
+  if (comp_reopens_cv_builtin(c)) { buf_puts(b, "sp_cls_canon("); buf_puts(b, e.p); buf_puts(b, ")"); }
+  else buf_puts(b, e.p);
+  free(e.p);
 }
 
 /* The arm of a Class-value constructor call (cplan_cv_ctor) for class ci, an
@@ -4371,14 +4372,13 @@ static int emit_recv_class_value(Compiler *c, Buf *b, const NodeTable *nt, int r
         return 1;
       }
       /* a native-bound class's struct is opaque in the generated TU (no
-         cls_id deref possible); its class is statically known. The carried
-         name is the qualified Ruby one (a native_struct may declare
-         "IO::Buffer" over a leaf-keyed class). */
+         cls_id deref possible); its class is statically known, and is its
+         index alone like every program class's value: the qualified Ruby
+         name (a native_struct may declare "IO::Buffer" over a leaf-keyed
+         class) renders from the index. */
       if (_cidx >= 0 && c->classes[_cidx].is_native_class) {
-        const char *_nqn = class_ruby_name(c, _cidx);
         buf_puts(b, "((void)("); emit_expr_for_effect(c, recv, b);
-        buf_printf(b, "), ((sp_Class){(sp_int)%d, SPL(\"%s\")}))", _cidx,
-                   _nqn ? _nqn : c->classes[_cidx].name);
+        buf_printf(b, "), ((sp_Class){(sp_int)%d}))", _cidx);
         return 1;
       }
       /* an exception subclass shares sp_Exception's layout (no cls_id

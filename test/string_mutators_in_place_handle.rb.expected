@@ -68,3 +68,8 @@ nil
 ["a\xC3\xA9", 3, "ASCII-8BIT"]
 ["ax", 2, "UTF-8"]
 ["", 0, "ASCII-8BIT"]
+"abcdefghijklmnoXqrst"
+"abcdefghijklmnopXrst"
+"abcdefghijklmnopqrsX"
+"abcdefghijklmnopqrsX"
+[IndexError, "index 21 out of regexp"]

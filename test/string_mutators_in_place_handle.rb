@@ -159,3 +159,10 @@ p enc("a".b.insert(1, "é"))
 p enc("é".b.insert(0, "a"))
 p enc((+"a").insert(1, "x".b))
 p enc("a".b.clear)
+
+# s[/re/, n] = v reaches every group of the pattern, past the 16th too
+re20 = /(a)(b)(c)(d)(e)(f)(g)(h)(i)(j)(k)(l)(m)(n)(o)(p)(q)(r)(s)(t)/
+[16, 17, 20, -1, 21].each do |n|
+  s = +"abcdefghijklmnopqrst"
+  begin; s[re20, n] = "X"; p s; rescue IndexError => x; p [x.class, x.message]; end
+end

@@ -2724,8 +2724,7 @@ static void cf_call_known(CF *f, int v, int pidx, int recv_el, const char *nm, c
       /* the Class object: a construction, a class method, else Class's own */
       int kc = k - c->nclasses;
       if (kc < 0 || kc >= c->nclasses) { builtin = 1; continue; }
-      if (sp_streq(nm, "new") || sp_streq(nm, "allocate") ||
-          ((c->classes[kc].is_struct || c->classes[kc].is_data) && sp_streq(nm, "[]"))) {
+      if (is_new_name(nm) || is_allocate_name(nm) || (comp_class_builds_by_aref(c, kc) && is_aref_name(nm))) {
         cf_construct(f, v, kc, argv, argc, blk, nm);
         continue;
       }
@@ -3484,7 +3483,7 @@ static void cf_call(CF *f, int v) {
   int x = cf_is_class_const(f, r);
   if (x >= 0) {
     ClassInfo *k = &c->classes[x];
-    if (sp_streq(nm, "new") || sp_streq(nm, "allocate") || ((k->is_struct || k->is_data) && sp_streq(nm, "[]"))) {
+    if (is_new_name(nm) || is_allocate_name(nm) || (comp_class_builds_by_aref(c, x) && is_aref_name(nm))) {
       cf_construct(f, v, x, argv, argc, blk, nm);
       return;
     }

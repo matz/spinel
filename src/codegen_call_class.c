@@ -12,6 +12,97 @@
 #include "share.h"
 #include "value_pos.h"
 
+/* The case labels of class k's arm in a class-value switch: its index and,
+   for a reopened builtin, the id its class value carries when read off a
+   value (one `have` lists already is not repeated). The one place that
+   spells them. */
+void emit_cv_case_labels(Compiler *c, int k, const int *have, int nhave, Buf *b) {
+  buf_printf(b, "case %d: ", k);
+  int bid = k >= 0 && k < c->nclasses ? cv_reopen_builtin_id(c, k) : 0;
+  for (int i = 0; i < nhave && bid; i++) if (have[i] == bid) bid = 0;
+  if (bid) buf_printf(b, "case %d: ", bid);
+}
+
+/* The arm of a Class-value constructor call (cplan_cv_ctor) for class ci, an
+   Array or Hash subclass it builds (cplan_cv_ctor_builds): the builtin builds
+   the contents from the call's boxed arguments (argc_txt, argv_txt: C text),
+   and a blank instance of the class takes them over, as CRuby's `[]` and the
+   builtin `new` do without running an initialize. The contents are taken in
+   the kind the class's Array holds (class_value_fill_evidence made it one
+   they fit). */
+static void emit_cv_ctor_arm(Compiler *c, int id, int ci, const char *argc_txt, const char *argv_txt, int rt2, Buf *b) {
+  int hash = comp_ary_is_hash(c, ci), aref = cplan_cv_ctor(c, id) == CVC_AREF;
+  const char *ct = arysub_array_ctype(c, ci);
+  TyKind kd = comp_ary_kind(c, ci);
+  /* (class_value_fill_evidence made the kind one the contents fit) */
+  if (hash ? kd != TY_POLY_POLY_HASH : !array_new_copies(kd))
+    unsupported(c, id, "a class value builds an Array or Hash subclass whose kind its arguments do not fit");
+  char blk[24] = "NULL";
+  if (g_ctor_blk_tmp >= 0) snprintf(blk, sizeof blk, "_t%d", g_ctor_blk_tmp);
+  emit_cv_case_labels(c, ci, NULL, 0, b);
+  buf_puts(b, "{ sp_RbVal _b = ");
+  if (aref) buf_printf(b, "sp_builtin_class_aref('%c', %s, %s); ", hash ? 'H' : 'A', argc_txt, argv_txt);
+  else buf_printf(b, "sp_builtin_class_new('%c', %s, %s, %s); ", hash ? 'H' : 'A', argc_txt, argv_txt, blk);
+  buf_printf(b, "SP_GC_ROOT_RBVAL(_b); sp_%s *_s = sp_%s__alloc(); SP_GC_ROOT(_s); ", c->classes[ci].c_name, c->classes[ci].c_name);
+  /* (the contents arrive as the boxed Array; a typed kind takes them by element) */
+  if (hash || kd == TY_POLY_ARRAY) buf_printf(b, "%s *_o = (%s *)_b.v.p; ", ct, ct);
+  else buf_printf(b, "%s *_o = %s_from_poly_array((sp_PolyArray *)_b.v.p); SP_GC_ROOT(_o); ", ct, ct);
+  buf_printf(b, "%s_replace((%s *)_s, _o); ", ct, ct);
+  if (hash)
+    buf_puts(b, "sp_gc_wb((void *)_s); ((sp_PolyPolyHash *)_s)->default_v = _o->default_v; "
+                "((sp_PolyPolyHash *)_s)->dproc = _o->dproc; ((sp_PolyPolyHash *)_s)->dproc_self = _o->dproc_self; ");
+  buf_printf(b, "_t%d = sp_box_obj(_s, ", rt2);
+  arysub_box_id(c, ty_object(ci), b);
+  buf_puts(b, "); } break; ");
+}
+/* ...for `new` with its arguments in the boxed temps atmp */
+static int emit_cv_new_arm(Compiler *c, int id, int ci, int argc, const int *atmp, int rt2, Buf *b) {
+  if (!cplan_cv_ctor_builds(c, id, ci)) return 0;
+  Buf av; memset(&av, 0, sizeof av);
+  buf_puts(&av, "(sp_RbVal[]){");
+  for (int a = 0; a < argc; a++) buf_printf(&av, "%s_t%d", a ? ", " : "", atmp[a]);
+  buf_puts(&av, "}");
+  char an[24]; snprintf(an, sizeof an, "%d", argc);
+  emit_cv_ctor_arm(c, id, ci, an, av.p, rt2, b);
+  free(av.p);
+  return 1;
+}
+
+/* `k[args]` on a Class value (cplan_cv_ctor): an arm per Array or Hash
+   subclass the fact says it builds, and for Array and Hash themselves
+   (their reopenings, if the program has them, by index and by builtin id);
+   any other class has no `[]`. The result is boxed. */
+static int emit_class_value_aref(Compiler *c, int id, Buf *b, int recv, int argc, const int *argv) {
+  if (cplan_cv_ctor(c, id) != CVC_AREF || repr_of(c, id).kind != RK_BOXED) return 0;
+  int kt = ++g_tmp, rt2 = ++g_tmp;
+  buf_printf(b, "({ sp_Class _t%d = ", kt); emit_expr(c, recv, b); buf_puts(b, "; ");
+  Buf av; memset(&av, 0, sizeof av);
+  buf_puts(&av, argc ? "(sp_RbVal[]){" : "NULL");
+  for (int a = 0; a < argc; a++) {
+    int t = ++g_tmp;
+    buf_printf(b, "sp_RbVal _t%d = ", t); emit_boxed(c, argv[a], b);
+    buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); ", t);
+    buf_printf(&av, "%s_t%d", a ? ", " : "", t);
+  }
+  if (argc) buf_puts(&av, "}");
+  char an[24]; snprintf(an, sizeof an, "%d", argc);
+  emit_class_value_new_switch(c, rt2, kt, 0, b);
+  for (int ci = 0; ci < c->nclasses; ci++)
+    if (cplan_cv_ctor_builds(c, id, ci)) emit_cv_ctor_arm(c, id, ci, an, av.p, rt2, b);
+  /* Array and Hash themselves: their reopening's class index and builtin
+     id when the program has one, else the builtin id */
+  for (int hash = 0; hash < 2; hash++) {
+    int core = hash ? CORE_HASH : CORE_ARRAY, ri = comp_core_class(c, core);
+    if (ri >= 0) emit_cv_case_labels(c, ri, NULL, 0, b);
+    else buf_printf(b, "case %d: ", builtin_class_id(core_class_name(core)));
+    buf_printf(b, "{ _t%d = sp_builtin_class_aref('%c', %s, %s); } break; ", rt2, hash ? 'H' : 'A', an, av.p);
+  }
+  buf_printf(b, "default: sp_raise_nomethod(sp_sprintf(\"undefined method '[]' for class %%s\", sp_class_to_s(_t%d))); break; } _t%d; })",
+             kt, rt2);
+  free(av.p);
+  return 1;
+}
+
 /* Does `obj.class.name`'s dispatch switch over cid and the classes below it
    have an arm that answers an sp_oint / sp_ofloat? Then the switch's value
    is one, the other arms' plain values wrapped. Whether the call's value can
@@ -1207,7 +1298,11 @@ int emit_call_reflection_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
           else emit_expr(c, recv, b);
           buf_printf(b, "; int _ck%d = %d; switch (_cr%d.cls_id) {", t, dflt, t);
           for (int k = 0; k < c->nclasses; k++)
-            if (cks[k] != dflt) buf_printf(b, " case %d: _ck%d = %d; break;", k, t, cks[k]);
+            if (cks[k] != dflt) {
+              buf_puts(b, " ");
+              emit_cv_case_labels(c, k, NULL, 0, b);
+              buf_printf(b, "_ck%d = %d; break;", t, cks[k]);
+            }
           buf_puts(b, " default: break; } ");
           /* a module with no such constant and none at the top level: NameError,
              with the receiver staged and the message qualified by its name as
@@ -2913,6 +3008,7 @@ const unsigned char *g_poly_new_only = NULL;
 
 /* new and allocate on a Class value, a poly receiver, self's class or a constant */
 int emit_call_new_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc, const int *argv) {
+  if (emit_class_value_aref(c, id, b, recv, argc, argv)) return 1;
   /* .new WITH arguments on a Class value whose class is only known at run time.
      A local statically holding one class folds to that class and never gets
      here; a call returning a class cannot fold, so it had no emitter at all
@@ -2957,6 +3053,7 @@ int emit_call_new_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const c
     for (int ci = 0; ci < c->nclasses; ci++) {
       if (is_builtin_reopen(c->classes[ci].name) || c->classes[ci].is_native_class) continue;
       if (emit_user_new_arm(c, id, ci, argc, atmp, 1, rt2, b)) continue;
+      if (emit_cv_new_arm(c, id, ci, argc, atmp, rt2, b)) continue;
       if (emit_exc_sub_new_arm(c, ci, argc, atmp, rt2, b)) continue;
       int initm = comp_method_in_chain(c, ci, "initialize", NULL);
       /* a class whose constructor takes some other count: CRuby's
@@ -3276,6 +3373,7 @@ int emit_call_new_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const c
       if (g_poly_new_only && !g_poly_new_only[ci]) continue;
       /* a class built by its own `self.new` may never be instantiated at all */
       if (emit_user_new_arm(c, id, ci, argc, atmp, 1, rt2, b)) continue;
+      if (emit_cv_new_arm(c, id, ci, argc, atmp, rt2, b)) continue;
       if (emit_exc_sub_new_arm(c, ci, argc, atmp, rt2, b)) continue;
       int initm = comp_method_in_chain(c, ci, "initialize", NULL);
       { char am[256];   /* as in the Class-valued form above */
@@ -5000,7 +5098,7 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
       if (sp_streq(name, "new") && anon_struct_recv_ci(c, recv) >= 0) goto skip_cls_cmethod9;
       TyKind uret9 = TY_UNKNOWN; int uret_set9 = 0, splat9 = nt_argv_splat_count(nt, argv, argc);
       for (int k = 0; k < c->nclasses; k++) {
-        if (is_builtin_reopen(c->classes[k].name) || cls_value_own_sg_answers(c, id, k, name, argc)) continue;
+        if (!comp_cv_arm_class(c, k) || cls_value_own_sg_answers(c, id, k, name, argc)) continue;
         int kmi = call_target(c, id, k, name, CT_CMETHOD, NULL);
         if (kmi < 0) continue;
         /* Only the candidates this call could actually reach set the return
@@ -5046,7 +5144,7 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
           }
         }
         for (int k = 0; simple9 && k < c->nclasses; k++) {
-          if (is_builtin_reopen(c->classes[k].name) || cls_value_own_sg_answers(c, id, k, name, argc)) continue;
+          if (!comp_cv_arm_class(c, k) || cls_value_own_sg_answers(c, id, k, name, argc)) continue;
           int kmi = call_target(c, id, k, name, CT_CMETHOD, NULL);
           if (kmi < 0) continue;
           /* A candidate that yields, takes a block, or has a rest param has no
@@ -5106,7 +5204,7 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
           snprintf(rraise9, sizeof rraise9, "sp_raise_nomethod(sp_sprintf(\"undefined method '%s' for %%s\", sp_class_to_s(_t%d)))", name, tk9);
           int rdef9 = 0;
           for (int k = 0; k < c->nclasses; k++) {
-            if (is_builtin_reopen(c->classes[k].name) || cls_value_own_sg_answers(c, id, k, name, argc)) continue;
+            if (!comp_cv_arm_class(c, k) || cls_value_own_sg_answers(c, id, k, name, argc)) continue;
             /* a class no reached code names, and no named class descends
                from, is no class value: its singleton copy is not compiled
                (#10592), so an arm calling it would dangle */
@@ -5117,7 +5215,7 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
                itself: no value holds a class that answers by it */
             if (comp_scope_copied_away(c, kmi)) continue;
             int rarm9 = emit_reopen_arm_test(c, kmi, name, rcls9, rraise9, b);
-            if (!rarm9) buf_printf(b, " case %d: ", k);
+            if (!rarm9) { buf_puts(b, " "); emit_cv_case_labels(c, k, NULL, 0, b); }
             rdef9 |= rarm9;
             /* A class whose method cannot take this many arguments gets the
                answer CRuby gives, rather than no arm (which would fall to the

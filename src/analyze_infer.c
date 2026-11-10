@@ -6242,6 +6242,10 @@ static int infer_class_module_call(Compiler *c, int id, const NodeTable *nt, con
       { *out = TY_POLY; return 1; }
   }
 
+  /* `k[..]` on a Class value that may be an Array or Hash subclass: the
+     instance it builds, boxed */
+  if (cplan_cv_ctor(c, id) == CVC_AREF) { *out = TY_POLY; return 1; }
+
   if (recv >= 0 && rt == TY_CLASS && !sp_streq(name, "new")) {
     /* Module#name / to_s / inspect, unless the class answers with a class
        method of its own (`def self.name = Thread.current[:name]`), whose
@@ -6339,7 +6343,7 @@ static int infer_class_module_call(Compiler *c, int id, const NodeTable *nt, con
       const PolyCand *ccs = recv_is_var ? comp_cmethod_candidates(c, name, &ncc) : NULL;
       for (int ki = 0; ki < ncc; ki++) {
         int k = ccs[ki].cls;
-        if (is_builtin_reopen(c->classes[k].name)) continue;
+        if (!comp_cv_arm_class(c, k)) continue;
         int kmi = cplan_cand_target(c, id, name, &ccs[ki], CT_CMETHOD);   /* (the method its arm calls) */
         /* A candidate that yields, takes a block, or has a rest param has no
            arm the emitter can build, so it kills the whole dispatch. A

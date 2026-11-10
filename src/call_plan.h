@@ -206,6 +206,19 @@ int cplan_super_target(Compiler *c, int id, Scope *s, MethodLookup *ml);
    an explicit receiver and does not ignore visibility (a send does): that is
    NoMethodError. */
 int cplan_class_row(Compiler *c, int id, int recv, const char *name);
+/* A call that builds an instance of an Array or Hash subclass from its
+   arguments through a Class value known only at run time (a parameter, an
+   element, a call's answer): `k[..]` while no class of the program defines a
+   class method `[]`, or `k.new(..)` with arguments. The one place that says
+   so; inference, the kind evidence, the instantiation pass and the emitters
+   read it. */
+typedef enum { CVC_NONE, CVC_AREF, CVC_NEW } CvCtor;
+CvCtor cplan_cv_ctor(Compiler *c, int id);
+/* ...and whether class k is one it builds: a subclass of Array or Hash the
+   receiver may hold (poly_cls_value_reaches) that runs no constructor of
+   its own for the call (`new` reaches an initialize or a self.new; `[]`
+   skips an initialize, as CRuby's does) */
+int cplan_cv_ctor_builds(Compiler *c, int id, int k);
 /* Does call `id`, which has no receiver, take the BOP_KERNEL row of its name: an internal row for a call the compiler made, any other where no method of the program's own (a top-level function or the enclosing class's) answers the name? */
 int cplan_kernel_row(Compiler *c, int id, const char *name);
 /* Does the call id on a known class (recv) run the program's own class

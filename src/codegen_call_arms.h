@@ -213,6 +213,7 @@ int collect_class_constants(Compiler *c, int ci, int inherit, const char **out, 
                             int max, int n, int depth);
 void emit_class_id_is(Compiler *c, int cname, const char *expr, Buf *b);
 int emit_reopen_arm_test(Compiler *c, int kmi, const char *name, const char *cls, const char *raise, Buf *b);
+void emit_cv_case_labels(Compiler *c, int k, const int *have, int nhave, Buf *b);
 /* The ArgumentError text of Module#name / to_s / inspect given these
    arguments; 0 when there are none or only the run time knows the count */
 int class_name_reader_arity_msg(Compiler *c, const char *nm, int argc, const int *argv, char *am, size_t n);

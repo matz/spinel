@@ -12238,20 +12238,32 @@ int emit_reopen_recv_in_order(Compiler *c, int id, int mi, int recv, int boxed, 
   free(callee); free(pre.p); free(rx.p); free(ab.p); free(rb.p);
   return 1;
 }
-int emit_reopen_recv_args(Compiler *c, int id, int mi, int recv, int boxed, const char *box_fn, size_t at, Buf *b) {
+/* Does call `id` of reopened method `mi` leave out a parameter whose default
+   reads self? The default is callee code, so the call binds the receiver as
+   self for it (emit_reopen_recv_args); rendered at the call site it would
+   read the caller's self. A method that hands its block a container stays
+   off the receiver-default route (reopen_self_defaults), but its left-out
+   default reads the receiver all the same. A keyword hash may bind no
+   positional: counted out, a default it might leave is held for (only a temp
+   too many if it does bind one). */
+static int reopen_call_leaves_self_default(Compiler *c, int id, int mi) {
   const NodeTable *nt = c->nt;
   Scope *m = &c->scopes[mi];
   int args = nt_ref(nt, id, "arguments"), argc = 0;
   const int *argv = args >= 0 ? nt_arr(nt, args, "arguments", &argc) : NULL;
-  /* a keyword hash may bind no positional: counted out, a default it might
-     leave is held for (only a temp too many if it does bind one) */
   int n = nt_argv_has_splat(nt, argv, argc) ? 0
-        : argc - (nt_argv_kwh(nt, argv, argc) >= 0), hold = 0;
-  int container = reopen_yields_container(c, m);
-  for (int i = 0; i < m->nparams && !hold && !container; i++)
-    hold = m->pdefault && m->pdefault[i] >= 0 &&
-           (callee_param_is_declared_kwarg(c, m, m->pnames[i]) || arg_slot_for_param(c, m, i, n) < 0) &&
-           ctor_default_reads_self(c, m, m->pdefault[i], 0);
+        : argc - (nt_argv_kwh(nt, argv, argc) >= 0);
+  for (int i = 0; m->pdefault && i < m->nparams; i++)
+    if (m->pdefault[i] >= 0 &&
+        (callee_param_is_declared_kwarg(c, m, m->pnames[i]) || arg_slot_for_param(c, m, i, n) < 0) &&
+        ctor_default_reads_self(c, m, m->pdefault[i], 0)) return 1;
+  return 0;
+}
+int emit_reopen_recv_args(Compiler *c, int id, int mi, int recv, int boxed, const char *box_fn, size_t at, Buf *b) {
+  const NodeTable *nt = c->nt;
+  Scope *m = &c->scopes[mi];
+  int args = nt_ref(nt, id, "arguments");
+  int hold = reopen_call_leaves_self_default(c, id, mi);
   if (repr_self_handle(c, mi)) hold = 1;
   if (!hold) return emit_reopen_recv_in_order(c, id, mi, recv, boxed, box_fn, at, b);
   TyKind rt = repr_self_handle(c, mi) ? TY_STRBUF : boxed ? TY_POLY : comp_ntype(c, recv);
@@ -34412,7 +34424,7 @@ static int reopen_mixed_later(Compiler *c, int id, int mi) {
    has no symbol of its own, being spliced where it can, so the call goes to
    its proc form with the block as a proc (#5779). `recv_text` is the
    receiver, boxed the way the reopening's methods take self. */
-void emit_reopen_pf_call(Compiler *c, int id, int pf, int cblk, const char *recv_text, Buf *b) {
+void emit_reopen_pf_call(Compiler *c, int id, int pf, int cblk, const char *recv_text, const char *box_fn, Buf *b) {
   const NodeTable *nt = c->nt;
   /* no block at the call: the clone's block parameter is NULL, which its
      block_given? reads as false */
@@ -34438,7 +34450,7 @@ void emit_reopen_pf_call(Compiler *c, int id, int pf, int cblk, const char *recv
     int ci = c->scopes[pf].class_id;
     int boxed = ci != comp_core_class(c, CORE_STRING) && !reopen_pf_raw_self(c, ci);
     buf_puts(&oc, "(");
-    open = emit_reopen_recv_args(c, id, pf, nt_ref(nt, id, "receiver"), boxed, NULL, 0, &oc);
+    open = emit_reopen_recv_args(c, id, pf, nt_ref(nt, id, "receiver"), boxed, box_fn, 0, &oc);
   }
   if (tp >= 0) buf_printf(&oc, ", _t%d)", tp);
   else buf_puts(&oc, ", NULL)");
@@ -34491,8 +34503,8 @@ int emit_reopen_block_call(Compiler *c, int id, int recv, int mi, const char *bo
   int cblk = nt_ref(nt, id, "block") >= 0 ? resolve_forwarded_block(c, nt_ref(nt, id, "block")) : -1;
   /* a forwarded `&blk` resolves below 0 when the caller passed no block:
      the clone's block parameter is then NULL (block_given? is false) */
-  if (reopen_self_defaults(c, mi)) {
-    emit_reopen_pf_call(c, id, pf, cblk, NULL, b);
+  if (reopen_self_defaults(c, mi) || reopen_call_leaves_self_default(c, id, mi)) {
+    emit_reopen_pf_call(c, id, pf, cblk, NULL, box_fn, b);
     return 1;
   }
   Buf rb; memset(&rb, 0, sizeof rb);
@@ -34532,7 +34544,7 @@ int emit_reopen_block_call(Compiler *c, int id, int recv, int mi, const char *bo
   else if (reopen_pf_raw_self(c, c->scopes[mi].class_id)) emit_expr(c, recv, &rb);
   else if (box_fn) { buf_printf(&rb, "%s(", box_fn); emit_expr(c, recv, &rb); buf_puts(&rb, ")"); }
   else emit_boxed(c, recv, &rb);
-  emit_reopen_pf_call(c, id, pf, cblk, rb.p ? rb.p : "sp_box_nil()", b);
+  emit_reopen_pf_call(c, id, pf, cblk, rb.p ? rb.p : "sp_box_nil()", NULL, b);
   free(rb.p);
   return 1;
 }

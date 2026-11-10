@@ -640,14 +640,17 @@ int emit_op_method_unbind(Compiler *c, const BopCtx *x, Buf *b) {
   /* (an unknown target's fact is the source Method's) */
   char ppv[32];
   const char *pp = tmu >= 0 ? proc_params_arg(method_proc_params(c, tmu)) : (snprintf(ppv, sizeof ppv, "_t%d->proc_params", tvu), ppv);
-  buf_puts(b, "; ");
+  /* (the source Method's key: two unbinds of one builtin method stay one
+     method. Read before the copy is allocated: the allocation may collect the
+     source, which nothing here roots.) */
+  buf_printf(b, "; const char *_i%d = _t%d->ident; sp_bm_set_ident(", tvu, tvu);
   if (pp) buf_puts(b, "sp_bm_set_proc_params(");
   buf_printf(b, "sp_bm_set_unbound(sp_bm_set_abi(sp_bound_method_new_d(NULL, SP_BM_SELF_NONE, _t%d->fn, _t%d->name, _t%d->arity, ", tvu, tvu, tvu);
   if (tmu >= 0) emit_method_desc_args(c, mnu, tmu, -1, method_sym_arg(c, mnu), 1, 0, b);
   else buf_printf(b, "NULL, _t%d->params, _t%d->owner, _t%d->src_file, _t%d->src_line", tvu, tvu, tvu, tvu);
   buf_printf(b, "), 0, _t%d->legacy_int_abi, _t%d->legacy_sig, _t%d->legacy_fixed, _t%d->legacy_rest, _t%d->legacy_ret, _t%d->poly_abi, _t%d->poly_fixed))", tvu, tvu, tvu, tvu, tvu, tvu, tvu);
   if (pp) buf_printf(b, ", %s)", pp);
-  buf_puts(b, "; })");
+  buf_printf(b, ", _i%d); })", tvu);
   return 1;
   return 0;
 }

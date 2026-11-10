@@ -291,7 +291,7 @@ static inline sp_BoundMethod *sp_bm_set_ident(sp_BoundMethod *m, const char *ide
    the fn and is equal, as CRuby's. */
 static inline sp_bool sp_bm_same(const sp_BoundMethod *x, const sp_BoundMethod *y) {
   if (!x || !y) return x == y;
-  if (x->self != y->self) return 0;
+  if (x->self != y->self || x->unbound != y->unbound) return 0;   /* (a Method is never an UnboundMethod's equal) */
   if (x->ident || y->ident) return x->ident && y->ident && strcmp(x->ident, y->ident) == 0;
   if (x->fn != y->fn) return 0;
   return x->fn != 0 || x->name == y->name || (x->name && y->name && strcmp(x->name, y->name) == 0);
@@ -378,6 +378,7 @@ static inline sp_BoundMethod *sp_bm_unbind(sp_BoundMethod *m) {
   u->src_file = m->src_file;
   u->src_line = m->src_line;
   u->proc_params = m->proc_params;
+  u->ident = m->ident;
   u->unbound = 1;
   u->legacy_int_abi = m->legacy_int_abi;
   u->legacy_sig = m->legacy_sig;

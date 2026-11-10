@@ -490,6 +490,7 @@ const char *builtin_function_owner(const char *m);   /* the module defining the 
 int is_respond_to_name(const char *n); /* respond_to?: does the receiver itself answer a name */
 int is_method_presence_query(const char *n); /* 1: respond_to? *method_defined? (public_)instance_method (public_)method; 2: (public_)instance_methods (public_)methods, answered for the whole program; 3: private_/protected_instance_methods, private_/protected_methods, singleton_methods, answered by the receiver's chain */
 int is_instance_method_list(const char *n); /* (public_|private_|protected_)instance_methods */
+int method_list_vis_mask(const char *n); /* the visibilities a method list shows, 1 << SP_VIS_* each: public and protected for instance_methods, methods, singleton_methods; the prefixed forms one; 0 for no list */
 int is_instance_method_table_read(const char *n); /* is_instance_method_list names, instance_method */
 int is_class_value_reflection(const char *n); /* a listing, const_defined?, class_variable_get/set/defined?: from the receiver's class */
 int is_singleton_method_list(const char *n); /* singleton_methods */

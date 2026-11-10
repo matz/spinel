@@ -4339,6 +4339,67 @@ static int cls_value_row_default(Compiler *c, int id, int recv, const char *name
   return 1;
 }
 
+/* ClassName.{,public_,private_,protected_}instance_methods(false):
+   compile-time sym array of own methods, filtered by visibility. CRuby's
+   `instance_methods` is public+protected; the prefixed forms narrow to a
+   single visibility (method_list_vis_mask). Only the own-methods (`false`)
+   form is foldable -- the inherited form needs built-in ancestor method sets
+   (left to reject). */
+static int emit_class_own_instance_methods(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc, const int *argv) {
+  int vm = is_instance_method_list(name) ? method_list_vis_mask(name) : 0;
+  int im_pub = (vm >> SP_VIS_PUBLIC) & 1, im_prot = (vm >> SP_VIS_PROTECTED) & 1, im_priv = (vm >> SP_VIS_PRIVATE) & 1;
+  if (!vm || argc != 1 || nt_kind(nt, argv[0]) != NK_FalseNode) return 0;
+  const char *cn2 = nt_kind(nt, recv) == NK_ConstantReadNode
+                    ? nt_str(nt, recv, "name") : NULL;
+  /* (a class body's self names its class, class_recv_static_ci) */
+  int ci2 = nt_kind(nt, recv) == NK_SelfNode ? class_body_self_ci(c, recv)
+          : cn2 ? const_node_class_index(c, recv) : view_class_is(c, recv, ELAB_GAIN_METHODS);   /* or a class-tag arm's */
+  if (ci2 < 0 && nt_kind(nt, recv) == NK_SelfNode) ci2 = view_class_is(c, recv, ELAB_GAIN_METHODS);
+  if (ci2 >= 0) {
+    ReflNames r = {0};
+    /* a module's own: what it answers for itself, not what an
+       include copied in */
+    if (comp_class_is_module(c, &c->classes[ci2]) && an_module_methods_listable(c, ci2, name))
+      refl_module_own_methods(c, ci2, im_pub, im_prot, im_priv, &r);
+    else
+      refl_own_instance_methods(c, ci2, im_pub, im_prot, im_priv, 0, &r);
+    /* a real sp_PolyArray of boxed symbols, so chained ops like
+       `.map(&:to_s).sort` iterate it (a boxed SYM_ARRAY obj is opaque
+       to the poly-array path and iterated as empty) */
+    buf_puts(b, "sp_box_poly_array(");
+    refl_emit_sym_array(c, ci2, &r, b);
+    buf_puts(b, ")");
+    refl_free(&r);
+    return 1;
+  }
+  /* a class held in a value: a switch on its class id over the
+     classes the walk bounds it to, each listing its own */
+  const char *cv = ci2 < 0 ? cls_value_recv_classes(c, id, recv) : NULL;
+  int any = 0;
+  for (int k = 0; cv && k < c->nclasses; k++) any |= cv[k];
+  if (any) {
+    int tc = ++g_tmp, rt = ++g_tmp;
+    buf_printf(b, "({ sp_Class _cl%d = ", tc); emit_expr(c, recv, b);
+    buf_printf(b, "; sp_PolyArray *_t%d = NULL; switch (_cl%d.cls_id) {", rt, tc);
+    for (int k = 0; k < c->nclasses; k++) {
+      if (!cv[k]) continue;
+      ReflNames r = {0};
+      if (comp_class_is_module(c, &c->classes[k]) && an_module_methods_listable(c, k, name))
+        refl_module_own_methods(c, k, im_pub, im_prot, im_priv, &r);
+      else
+        refl_own_instance_methods(c, k, im_pub, im_prot, im_priv, 0, &r);
+      buf_printf(b, " case %d: _t%d = ", k, rt);
+      refl_emit_sym_array(c, k, &r, b);
+      buf_puts(b, "; break;");
+      refl_free(&r);
+    }
+    cls_value_unlisted_default(name, tc, b);
+    buf_printf(b, " sp_box_poly_array(_t%d ? _t%d : sp_PolyArray_new()); })", rt, rt);
+    return 1;
+  }
+  return 0;
+}
+
 /* `recv.class`: the receiver's class value, compile-time for the types
    that know it, a builtin's as emit_builtin_class_value writes it; 0 when
    the receiver's own `class` member answers instead. */
@@ -4925,71 +4986,7 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
         return 1;
       }
     }
-    /* ClassName.{,public_,private_,protected_}instance_methods(false):
-       compile-time sym array of own methods, filtered by visibility. CRuby's
-       `instance_methods` is public+protected; the prefixed forms narrow to a
-       single visibility. Only the own-methods (`false`) form is foldable -- the
-       inherited form needs built-in ancestor method sets (left to reject). */
-    int im_pub = 0, im_prot = 0, im_priv = 0, im_ok = 1;
-    if (sp_streq(name, "instance_methods"))             { im_pub = 1; im_prot = 1; }
-    else if (sp_streq(name, "public_instance_methods")) { im_pub = 1; }
-    else if (sp_streq(name, "protected_instance_methods")) { im_prot = 1; }
-    else if (sp_streq(name, "private_instance_methods")) { im_priv = 1; }
-    else im_ok = 0;
-    if (im_ok && argc == 1) {
-      NodeKind argk = nt_kind(nt, argv[0]);
-      int is_false_arg = argk == NK_FalseNode;
-      if (is_false_arg) {
-        const char *cn2 = nt_kind(nt, recv) == NK_ConstantReadNode
-                          ? nt_str(nt, recv, "name") : NULL;
-        /* (a class body's self names its class, class_recv_static_ci) */
-        int ci2 = nt_kind(nt, recv) == NK_SelfNode ? class_body_self_ci(c, recv)
-                : cn2 ? const_node_class_index(c, recv) : view_class_is(c, recv, ELAB_GAIN_METHODS);   /* or a class-tag arm's */
-        if (ci2 < 0 && nt_kind(nt, recv) == NK_SelfNode) ci2 = view_class_is(c, recv, ELAB_GAIN_METHODS);
-        if (ci2 >= 0) {
-          ReflNames r = {0};
-          /* a module's own: what it answers for itself, not what an
-             include copied in */
-          if (comp_class_is_module(c, &c->classes[ci2]) && an_module_methods_listable(c, ci2, name))
-            refl_module_own_methods(c, ci2, im_pub, im_prot, im_priv, &r);
-          else
-            refl_own_instance_methods(c, ci2, im_pub, im_prot, im_priv, 0, &r);
-          /* a real sp_PolyArray of boxed symbols, so chained ops like
-             `.map(&:to_s).sort` iterate it (a boxed SYM_ARRAY obj is opaque
-             to the poly-array path and iterated as empty) */
-          buf_puts(b, "sp_box_poly_array(");
-          refl_emit_sym_array(c, ci2, &r, b);
-          buf_puts(b, ")");
-          refl_free(&r);
-          return 1;
-        }
-        /* a class held in a value: a switch on its class id over the
-           classes the walk bounds it to, each listing its own */
-        const char *cv = ci2 < 0 ? cls_value_recv_classes(c, id, recv) : NULL;
-        int any = 0;
-        for (int k = 0; cv && k < c->nclasses; k++) any |= cv[k];
-        if (any) {
-          int tc = ++g_tmp, rt = ++g_tmp;
-          buf_printf(b, "({ sp_Class _cl%d = ", tc); emit_expr(c, recv, b);
-          buf_printf(b, "; sp_PolyArray *_t%d = NULL; switch (_cl%d.cls_id) {", rt, tc);
-          for (int k = 0; k < c->nclasses; k++) {
-            if (!cv[k]) continue;
-            ReflNames r = {0};
-            if (comp_class_is_module(c, &c->classes[k]) && an_module_methods_listable(c, k, name))
-              refl_module_own_methods(c, k, im_pub, im_prot, im_priv, &r);
-            else
-              refl_own_instance_methods(c, k, im_pub, im_prot, im_priv, 0, &r);
-            buf_printf(b, " case %d: _t%d = ", k, rt);
-            refl_emit_sym_array(c, k, &r, b);
-            buf_puts(b, "; break;");
-            refl_free(&r);
-          }
-          cls_value_unlisted_default(name, tc, b);
-          buf_printf(b, " sp_box_poly_array(_t%d ? _t%d : sp_PolyArray_new()); })", rt, rt);
-          return 1;
-        }
-      }
-    }
+    if (emit_class_own_instance_methods(c, id, b, nt, name, recv, argc, argv)) return 1;
     if (emit_class_value_singleton_methods(c, id, b, nt, name, recv, argc, argv)) return 1;
     /* `equal?` joins them: a class is one object per name, so identity and
        equality are the same question here (#4271). */

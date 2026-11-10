@@ -609,7 +609,7 @@ int emit_handle_var_ref(Compiler *c, int a, Buf *b) {
    hands on, or yields to a block parameter `blk` mutates, passed as a plain
    local read (or an instance method's ivar), not rebound by the body, and
    not celled for a capture of its own. A parameter the body only reads or
-   hands to a method that does not change it (an_inline_param_lent), whose
+   hands to a method that does not change it, whose
    argument something can assign while the body runs -- the call's block
    (comp_block_rebinds_arg), or for a C global's slot a write anywhere it
    can run (lent_global_slot_rebound) -- takes the argument's value
@@ -672,7 +672,7 @@ unsigned inline_alias_params(Compiler *c, int mi, const int *argv, int pargc, co
     if (inline_param_rebound(c, mi, m->pnames[i]) == 2 ||
         (!inline_param_mutated(c, mi, m->pnames[i]) &&
          !inline_param_yielded_mutated(c, mi, m->pnames[i], blk))) continue;
-    if (!lv->inline_alias && !an_inline_param_lent(c, mi, i, blk) &&
+    if (!lv->inline_alias &&
         (gslot ? lent_global_slot_rebound(c, an, gref.p) >= 0 : comp_block_rebinds_arg(c, blk, an))) continue;
     if (gslot) refuse_lent_global_rebound(c, an, gref.p, m->name, m->pnames[i]);
     alias_mask |= 1u << i;

@@ -29934,7 +29934,7 @@ static void refuse_string_copies(Compiler *c, int id) {
           const char *key = dyn_kw_elem_key(c, el[e], &v);
           if (!key || v < 0 || !strvar_arg(c, v, &shared) || shared) continue;
           if (shift) {
-            /* the method's keyword can be the handle (dyn_convert_params),
+            /* the method's keyword is the handle (every String slot is),
                but the caller's String is not pulled into it here */
             if (!shared && mi >= 0 && dyn_method_kw_appends(c, mi, key, &j) && refuse_param_copies_dm(c, mi, j, v)) {
               char mt[96]; snprintf(mt, sizeof mt, "`%s`", c->scopes[mi].name);
@@ -30045,7 +30045,7 @@ static void refuse_string_copies(Compiler *c, int id) {
   if (!dyn) refuse_forwarded_args(c, id, name);
   if (!dyn) refuse_nonlocal_param_args(c, id, name);
   /* a method `define_method` defines takes an appended String as the handle
-     (dyn_convert_params), and its callers are pulled in as a handle
+     (every String slot is one), and its callers are pulled in as a handle
      method's are, but for a variable that cannot be */
   if (dyn) return;
   static int dm_any = -1;

@@ -726,6 +726,7 @@ of every line:
 
 ```
 ruby tools/emit_trace.rb [--prefix P] [--all] PROG.rb [LINE]
+ruby tools/emit_trace.rb --analysis [--prefix P] [--all] PROG.rb LINE
 ```
 
 ```
@@ -765,6 +766,61 @@ names that call and the arm it was emitted in, as
 mark in the enclosing call's tree, it declined, and the emission was its
 trial. The tool exits 1 when the compile fails, after printing what was
 emitted up to there.
+
+`--analysis PROG.rb LINE` asks the question before that one: why the
+emitter sees a node as it does. For each node of the line it prints what the
+analysis decided, in the order it did: the class set (the `cf_` rules
+`cf_node` ran for the node in each walk, and the set each walk and their
+meet left), each change of the type, and the nil fact. A change comes with
+its pass (the name the analysis driver gives `nt_set_pass`), the fixpoint
+round, the functions it was asked from, and the tree under `infer_type` or
+`nf_expr`:
+
+```
+poly.rb:9:7  speak  `pet.speak`
+  class set: Cat, Dog +builtin  (closed, open, unified, meet)
+  class set rules
+    pass an_cls_facts closed rounds 0-5
+    cf_node
+      cf_call
+        ...
+  type: unknown -> string
+    pass infer_write_types round 2
+    from main > codegen_program > analyze_program > an_phase_infer_fixpoint > infer_write_types > local_write_ty
+    infer_type
+      infer_uncached
+        infer_call
+          infer_call_inner
+            infer_type  [LocalVariableReadNode 9:7]
+            ...
+            infer_poly_call
+              an_user_recv_defines_method (x16)
+                ...
+            infer_poly_operand_call             <- last rule called
+              ...
+      = unknown -> string
+  nil fact: not nil
+    ...
+```
+
+"Last rule called" is the last `infer_` (or `nf_`) function the inference
+called before it returned. `infer_uncached`, `infer_call_inner` and
+`nf_expr_uncached` are mostly chains of `if (rule) return`, so it is usually
+the rule that answered; what the tree shows after the mark is the chain's
+own code, which may have answered instead, and the mark is on the chain
+itself where that code went on to another node's inference. An
+`infer_type` with a node in brackets computed that node inside this one, and
+is one line here: a node of the same line has its own tree, and another
+line's is that line's to ask about. Without a node it computed nothing: it
+answered from its memo, or from the guard against asking itself. A type a
+pass writes itself (a widening, the re-narrow's clear) shows the pass and
+the functions it was written from. An inference that changed nothing is not
+shown; one that repeats the one before it is shown once with its rounds, a
+tree printed earlier is referred to, and the rounds of one class walk are
+shown as one tree. The class sets are solved
+over the whole program, so a set's tree is the rules that ran for the node,
+not the flow from elsewhere that grew it (`SPINEL_CLS_FLOW=why` names the
+rule that made a set every class).
 
 The trace build takes about twice the normal compile. With a LINE the tool
 has the hooks record only that line's calls and statements

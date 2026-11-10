@@ -1334,8 +1334,14 @@ static int nf_expr(NF *f, int v) {
   f->memo[v] = NF_BUSY;
   int sv = f->guarded;
   f->guarded = 0;
+#ifdef SP_EMIT_TRACE
+  emit_trace_ask(f->c, v, 'n', f->round, NULL);
+#endif
   int r = nf_expr_uncached(f, v);
   f->memo[v] = nf_code(r, f->guarded);
+#ifdef SP_EMIT_TRACE
+  emit_trace_fact(f->c, v, 'n', 0, f->memo[v]);
+#endif
   f->guarded = sv;
   return r;
 }

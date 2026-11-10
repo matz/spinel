@@ -22155,7 +22155,43 @@ static void sp_dyn_new_arity(sp_int given, sp_int max) {
   sp_arity_check(given, 0, max, NULL);
 }
 sp_RbVal sp_builtin_class_new(int kind, sp_int argc, const sp_RbVal *av, sp_Proc *blk);
-sp_RbVal sp_builtin_class_aref(int kind, sp_int argc, const sp_RbVal *av);
+/* `[]` on a Class value that turns out at run time to be Array or Hash
+   (`kind` 'A', 'H'), with the call's arguments boxed: what `Array[..]` and
+   `Hash[..]` build, boxed. (In the header, not sp_poly_cold.c: the Hash
+   stores compare keys through the program's hooks, writable statics the
+   generated unit owns, poly-cold-test.) */
+static SP_UNUSED sp_RbVal sp_builtin_class_aref(int kind, sp_int argc, const sp_RbVal *av)
+{
+  if (kind == 'A') {
+    sp_PolyArray *r = sp_PolyArray_new(); SP_GC_ROOT(r);
+    for (sp_int i = 0; i < argc; i++) sp_PolyArray_push(r, av[i]);
+    return sp_box_poly_array(r);
+  }
+  sp_PolyPolyHash *h;
+  int one_hash = argc == 1 && av[0].tag == SP_TAG_OBJ && sp_poly_is_hash_kind(av[0].cls_id);
+  int one_list = argc == 1 && av[0].tag == SP_TAG_OBJ && sp_poly_is_array_kind(av[0].cls_id);
+  if (one_hash) h = sp_PolyPolyHash_from_poly(av[0]);
+  else if (one_list) {
+    /* Hash[[[k, v], [k]]]: each element is a pair, or a key alone */
+    h = sp_PolyPolyHash_new(); SP_GC_ROOT(h);
+    sp_int n = sp_poly_length(av[0]);
+    for (sp_int i = 0; i < n; i++) {
+      sp_RbVal e = sp_poly_arr_get(av[0], i);
+      if (!(e.tag == SP_TAG_OBJ && sp_poly_is_array_kind(e.cls_id)))
+        sp_raise_cls("ArgumentError", sp_sprintf("wrong element type %s at %lld (expected array)", sp_poly_class_name(e), (long long)i));
+      sp_int m = sp_poly_length(e);
+      if (m < 1 || m > 2)
+        sp_raise_cls("ArgumentError", sp_sprintf("invalid number of elements (%lld for 1..2)", (long long)m));
+      sp_PolyPolyHash_set(h, sp_poly_arr_get(e, 0), m == 2 ? sp_poly_arr_get(e, 1) : sp_box_nil());
+    }
+  }
+  else {
+    if (argc & 1) sp_raise_cls("ArgumentError", "odd number of arguments for Hash");
+    h = sp_PolyPolyHash_new(); SP_GC_ROOT(h);
+    for (sp_int i = 0; i < argc; i += 2) sp_PolyPolyHash_set(h, av[i], av[i + 1]);
+  }
+  return sp_box_obj(h, SP_BUILTIN_POLY_POLY_HASH);
+}
 /* The class `exception` is sent to as a value: a class of Exception, and
    NoMethodError for any other. A class of the program can come by its name
    alone, from a boxed exception's #class, and takes its id here: the id is

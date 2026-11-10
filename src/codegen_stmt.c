@@ -13178,6 +13178,24 @@ int hc_cob_entry(Compiler *c, int recv, int idx, char *d, size_t cap) {
     return 0;
   return hc_cob_entry_of(c, recv, d, cap);
 }
+/* The header cache's emission state, for a unit or a probe a refusal
+   abandons by a longjmp (EmitUnitState): the region and the versioned loops
+   being emitted, and the two flags their readers set. A region is a frame's
+   or a block loop's (hc_iter_begin), so the pointer is put back; a versioned
+   loop the jump left open is freed, as its hcv_end would have. */
+void hc_state_save(HcState *s) {
+  s->hc = g_hc; s->hcv = g_hcv; s->cob_off = g_hc_cob_off; s->loop_quiet = g_loop_quiet;
+}
+void hc_state_restore(const HcState *s) {
+  while (g_hcv && g_hcv != s->hcv) {
+    HcVer *v = g_hcv;
+    g_hcv = v->up;
+    for (int i = 0; i < v->n; i++) free(v->e[i].recv);
+    free(v->bic); free(v->buf.p); free(v);
+  }
+  g_hc = s->hc; g_hcv = s->hcv; g_hc_cob_off = s->cob_off; g_loop_quiet = s->loop_quiet;
+}
+
 /* The marks around the two forms: 0 ahead of the element in place, 1
    between it and the read as it was, 2 after */
 void hc_cob_mark(Buf *b, int part) {

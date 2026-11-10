@@ -3650,6 +3650,10 @@ static int emit_class_instance_methods_all(Compiler *c, int id, Buf *b, const No
       ci = s->class_id;
       si = (int)(s - c->scopes);
     }
+    /* a class body's self names the class whose body holds it */
+    else if (recv >= 0 && (ci = class_body_self_ci(c, recv)) >= 0 &&
+             call_target(c, id, ci, name, CT_CMETHOD, NULL) >= 0)
+      ci = -1;
   }
   /* a class held in a value: a switch on its class id over the classes the
      walk bounds it to, each listing what its instances answer */

@@ -3562,40 +3562,57 @@ static sp_RbVal sp_poly_ary_operand(sp_RbVal v) {
   return v;
 }
 
-/* The elements of Array#to_h and the rows of Array#transpose, converted
-   as CRuby's to_ary does: a program object with #to_ary (public or not)
-   becomes that Array. The conversion stops at the first element that is
-   no Array and has no to_ary, so the caller raises there, and no later
-   to_ary runs, as in CRuby. For transpose (rows != 0) that element is
-   CRuby's TypeError named by its own class. The same array comes back
-   when nothing converts. */
-static sp_PolyArray *sp_poly_elems_to_ary(sp_PolyArray *a, int rows) {
+/* One element of Array#to_h, converted as CRuby's rb_check_array_type: a
+   program object with #to_ary (public or not) becomes that Array. One with
+   no to_ary, or whose to_ary answers nil, comes back as it was, for the
+   caller's "wrong element type" error. The caller converts each element
+   just before it checks it, so the to_ary calls and the errors come in
+   CRuby's order. */
+static inline sp_RbVal sp_poly_pair_to_ary(sp_RbVal e) {
+  return sp_poly_is_user_obj(e) && e.v.p ? sp_poly_ary_operand(e) : e;
+}
+/* The rows of Array#transpose, as CRuby's rb_ary_transpose reads them: the
+   row count once, then for each row its Array (a program object through
+   its to_ary, public or not) and a length check against the first row,
+   before the next to_ary runs. Only an array with a program object row
+   is copied; the transpose itself raises for any other row that is no
+   Array. */
+static sp_int sp_poly_arr_len(sp_RbVal a);           /* defined below */
+static sp_PolyArray *sp_poly_transpose_rows(sp_PolyArray *a) {
   if (!a || !sp_obj_to_ary_fn) return a;
   sp_int n = a->len, i = 0;
   for (; i < n; i++) if (sp_poly_is_user_obj(a->data[i]) && a->data[i].v.p) break;
   if (i == n) return a;
   SP_GC_ROOT(a);
   sp_PolyArray *out = sp_PolyArray_new(); SP_GC_ROOT(out);
+  sp_int cols = -1;
   for (sp_int j = 0; j < n; j++) {
-    sp_RbVal e = a->data[j];
-    if (j >= i && sp_poly_is_user_obj(e) && e.v.p) {
-      sp_RbVal got = sp_poly_ary_operand(e);
-      if (got.tag == SP_TAG_OBJ && got.v.p == e.v.p && got.cls_id == e.cls_id) {
-        if (rows) sp_raise_cls("TypeError", sp_sprintf("no implicit conversion of %s into Array", sp_poly_class_name(e)));
-        for (; j < n; j++) sp_PolyArray_push(out, a->data[j]);
-        break;
+    sp_RbVal e = j < a->len ? a->data[j] : sp_box_nil();
+    if (sp_poly_is_user_obj(e) && e.v.p) {
+      sp_RbVal got = sp_obj_to_ary_fn(e); SP_GC_ROOT_RBVAL(got);
+      const char *cn = sp_poly_class_name(e);
+      if (got.tag == SP_TAG_NIL) {
+        /* the class probe answers a Bool where the class has a to_ary */
+        if (sp_obj_to_ary_fn((sp_RbVal){ .tag = SP_TAG_OBJ, .cls_id = e.cls_id }).tag == SP_TAG_BOOL)
+          sp_raise_cls("TypeError", sp_sprintf("can't convert %s to Array (%s#to_ary gives NilClass)", cn, cn));
+        sp_raise_cls("TypeError", sp_sprintf("no implicit conversion of %s into Array", cn));
       }
+      if (!(got.tag == SP_TAG_OBJ && got.v.p && sp_poly_is_array_kind(got.cls_id)))
+        sp_raise_cls("TypeError", sp_sprintf("can't convert %s to Array (%s#to_ary gives %s)", cn, cn, sp_poly_class_name(got)));
       e = got;
     }
+    else if (!(e.tag == SP_TAG_OBJ && e.v.p && sp_poly_is_array_kind(e.cls_id))) {
+      /* the transpose raises for this row, after the rows before it */
+      sp_PolyArray_push(out, e);
+      return out;
+    }
+    sp_int len = sp_poly_arr_len(e);
+    if (cols < 0) cols = len;
+    else if (len != cols)
+      sp_raise_cls("IndexError", sp_sprintf("element size differs (%lld should be %lld)", (long long)len, (long long)cols));
     sp_PolyArray_push(out, e);
   }
   return out;
-}
-static inline sp_RbVal sp_poly_elems_to_ary_v(sp_RbVal v) {
-  if (!(v.tag == SP_TAG_OBJ && sp_poly_is_array_kind(v.cls_id) && v.v.p && sp_obj_to_ary_fn)) return v;
-  sp_PolyArray *a = sp_poly_to_poly_array(v);
-  sp_PolyArray *b = sp_poly_elems_to_ary(a, 0);
-  return b == a ? v : sp_box_poly_array(b);
 }
 static int sp_poly_user_cmp(const char *op, sp_RbVal a, sp_RbVal b, sp_RbVal *out);  /* fwd */
 /* An object of the program's subclass of Time or Array (`class Rev <
@@ -19502,10 +19519,10 @@ static sp_RbVal sp_poly_to_h_val(sp_RbVal v) {
     if (h.tag == SP_TAG_OBJ && sp_poly_is_hash_kind(h.cls_id)) return h;
   }
   if (v.tag == SP_TAG_OBJ && sp_poly_is_array_kind(v.cls_id)) {
-    sp_PolyArray *a = sp_poly_elems_to_ary(sp_poly_to_a_arr(v), 0); SP_GC_ROOT(a);
+    sp_PolyArray *a = sp_poly_to_a_arr(v); SP_GC_ROOT(a);
     sp_PolyPolyHash *out = sp_PolyPolyHash_new(); SP_GC_ROOT(out);
     for (sp_int i = 0; a && i < a->len; i++) {
-      sp_RbVal e = a->data[i];
+      sp_RbVal e = sp_poly_pair_to_ary(a->data[i]); SP_GC_ROOT_RBVAL(e);
       if (e.tag != SP_TAG_OBJ || !sp_poly_is_array_kind(e.cls_id))
         sp_raise_cls("TypeError", sp_sprintf("wrong element type %s at %lld (expected array)",
                                           sp_poly_class_name(e), (long long)i));

@@ -37,3 +37,27 @@ show { [Q.new([1, 2]), 5].to_h }
 show { [[1, 2], Z.new].transpose }
 show { [[1, 2], W.new].transpose }
 show { [[1, 2], Q.new([3])].transpose }
+
+# each to_ary runs just before its element's check, as in CRuby
+class L
+  def initialize(n, a) = (@n = n; @a = a)
+  def to_ary
+    puts "to_ary #{@n}"
+    @a
+  end
+end
+show { [L.new(1, [1, 2]), 5, L.new(2, [3, 4])].to_h }
+show { [L.new(1, [1]), L.new(2, [3, 4])].to_h }
+show { [L.new(1, [1, 2]), [3], L.new(2, [5, 6])].transpose }
+show { [N.new].transpose }
+
+# a to_ary that shortens the receiver: the live length is read
+class S
+  def initialize(n) = @n = n
+  def to_ary
+    $arr.pop if $arr.size > 3
+    [@n, @n]
+  end
+end
+$arr = [[0, 0]] + (1..5).map { |i| S.new(i) }
+p $arr.to_h

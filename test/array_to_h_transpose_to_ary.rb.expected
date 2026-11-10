@@ -13,3 +13,11 @@
 [TypeError, "no implicit conversion of Z into Array"]
 [TypeError, "can't convert W to Array (W#to_ary gives Integer)"]
 [IndexError, "element size differs (1 should be 2)"]
+to_ary 1
+[TypeError, "wrong element type Integer at 1 (expected array)"]
+to_ary 1
+[ArgumentError, "wrong array length at 0 (expected 2, was 1)"]
+to_ary 1
+[IndexError, "element size differs (1 should be 2)"]
+[TypeError, "can't convert N to Array (N#to_ary gives NilClass)"]
+{0 => 0, 1 => 1, 2 => 2, 3 => 3}

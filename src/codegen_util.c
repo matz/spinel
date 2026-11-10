@@ -5941,6 +5941,37 @@ static int fzl_esc_ascii7(const char *e, size_t n) {
     if (e[i] == '\\') { i++; if (i < n && (e[i] == '2' || e[i] == '3')) return 0; }
   return 1;
 }
+/* The hash the runtime keeps in a String's header (sp_str_hash: FNV-1a over
+   the bytes, 0 kept as 1), of the bytes the escaped text spells in the form
+   emit_c_escaped_n writes. A literal's header is read-only, so its hash is
+   written here rather than cached at the first lookup; a literal is never
+   BINARY, so the BINARY fold does not apply. 0 if the text is in some other
+   form or does not decode to raw_len bytes: that literal stays writable. No
+   literal reaches this today; a future escape the decoder does not know
+   keeps the literal writable and unhashed rather than wrong. */
+static int fzl_str_hash(const char *e, size_t n, size_t raw_len, uint64_t *out) {
+  uint64_t h = 14695981039346656037ULL;
+  size_t len = 0;
+  for (size_t i = 0; i < n; i++, len++) {
+    unsigned char ch = (unsigned char)e[i];
+    if (ch == '\\') {
+      if (++i >= n) return 0;
+      ch = (unsigned char)e[i];
+      if (ch >= '0' && ch <= '3' && i + 2 < n && e[i + 1] >= '0' && e[i + 1] <= '7' &&
+          e[i + 2] >= '0' && e[i + 2] <= '7') {
+        ch = (unsigned char)(((ch - '0') << 6) | ((e[i + 1] - '0') << 3) | (e[i + 2] - '0'));
+        i += 2;
+      } else if (ch == 'n') ch = '\n';
+      else if (ch == 't') ch = '\t';
+      else if (ch == 'r') ch = '\r';
+      else if (ch != '\\' && ch != '"') return 0;
+    }
+    h ^= ch; h *= 1099511628211ULL;
+  }
+  if (len != raw_len) return 0;
+  *out = h ? h : 1;
+  return 1;
+}
 void emit_frozen_literal(Buf *b, const char *esc, size_t esc_len, size_t raw_len) {
   if (!esc) esc = "";
   unsigned h = fzl_hash(esc, esc_len);
@@ -5990,7 +6021,7 @@ const char *fzl_id_name(int id) {
 }
 /* --repr-check, with handles: a frozen literal built into a handle by a
    constructor that copies it. sp_String_new_shared answers the literal's own
-   handle (sp_String_literal_handle) and sp_String_new_unfrozen is the copy a
+   handle (sp_String_of_literal) and sp_String_new_unfrozen is the copy a
    `+"lit"` asks for; any other sp_String_new* taking the literal itself would
    make a new String per evaluation. Reported as a conflict, which the
    sharing verifier (tools/share_verify.rb) fails on. */
@@ -6014,17 +6045,25 @@ static void fzl_check_handles(const char *t) {
 }
 /* The definitions of the literals the unit `t` names, in the order they were
    first met. A literal only a discarded emission named (a speculative arm, an
-   abandoned unit) is left out. Resets the table for the next unit. With
-   handles, the slot the header links to is a static of its own: the header
-   taking the address of its own object would stop the C compiler from reading
-   the bytes as constant (a `putc "|"` was no longer folded). */
-void fzl_emit_defs(const char *t, Buf *out, int handles) {
-  if (handles && g_repr_check) fzl_check_handles(t);
+   abandoned unit) is left out. Resets the table for the next unit. Each is
+   one String object (sp_StringLiteral, whose layout and GC contract are the
+   runtime's): the handle `_fzl_N_o` is a static whose header links to
+   itself, beside the bytes `_fzl_N`, whose header links to the handle. Two
+   statics, not one: bytes laid out right after their handle are what a
+   handle with its payload inside its own object looks like
+   (sp_fd_is_inline), which a literal is not. The bytes are const: what the
+   runtime would cache in their header, the hash and the 7-bit bit, is
+   written here, and nothing else writes a frozen String's header, so the C
+   compiler may read them at compile time (a `putc "|"` is a putchar('|')). */
+void fzl_emit_defs(const char *t, Buf *out) {
+  if (g_repr_check) fzl_check_handles(t);
   char *used = calloc((size_t)g_fzl_n + 1, 1);
   for (const char *p = t; p && (p = strstr(p, "_fzl_")); ) {
     p += 5;
+    /* the name, `<hash>` or `<hash>_<n>`, without the handle's `_o` */
     const char *q = p;
-    while (isxdigit((unsigned char)*q) || *q == '_') q++;
+    while (isxdigit((unsigned char)*q)) q++;
+    if (*q == '_' && isdigit((unsigned char)q[1])) for (q++; isdigit((unsigned char)*q); q++) {}
     int k = fzl_find_name(p, (size_t)(q - p));
     if (k >= 0) used[k] = 1;
     p = q;
@@ -6032,24 +6071,21 @@ void fzl_emit_defs(const char *t, Buf *out, int handles) {
   /* a program that dedups a String (-@, dedup, Symbol#name) hands its
      literals to the runtime's fstring table (sp_fzl_intern): `-x` of a
      literal's content answers the literal. One that does not pays nothing. */
-  int dedups = handles && (strstr(t, "sp_str_uminus_val(") || strstr(t, "sp_str_dedup("));
+  int dedups = strstr(t, "sp_str_uminus_val(") || strstr(t, "sp_str_dedup(");
   int nlit = 0;
   for (int k = 0; k < g_fzl_n; k++) {
     FzlLit *f = &g_fzl[k];
-    if (used[k]) nlit++;
-    if (used[k] && handles)
-      buf_printf(out, "static sp_StringLiteral _fzl_%s_slot = { NULL, NULL };\n"
-                      "static struct { sp_str_hdr h; unsigned char m; char d[%zu]; } _fzl_%s = "
-                      "{ { (sp_str_hdr *)((char *)&_fzl_%s_slot + 1), %zu%s, %zu, 0 }, 0xf1, \"%s\" };\n",
-                 f->name, f->raw_len + 1, f->name, f->name, f->raw_len + 1,
-                 fzl_esc_ascii7(f->esc, f->esc_len) ? " | SP_STR_SIZE_ASCII7" : "",
-                 f->raw_len, f->esc);
-    else if (used[k])
-      buf_printf(out, "static struct { sp_str_hdr h; unsigned char m; char d[%zu]; } _fzl_%s = "
-                      "{ { NULL, %zu%s, %zu, 0 }, 0xf1, \"%s\" };\n",
-                 f->raw_len + 1, f->name, f->raw_len + 1,
-                 fzl_esc_ascii7(f->esc, f->esc_len) ? " | SP_STR_SIZE_ASCII7" : "",
-                 f->raw_len, f->esc);
+    if (!used[k]) continue;
+    nlit++;
+    uint64_t h;
+    int known = fzl_str_hash(f->esc, f->esc_len, f->raw_len, &h);
+    buf_printf(out, "static sp_StringLiteral _fzl_%s_o;\n"
+                    "static %sstruct { sp_str_hdr h; unsigned char m; char d[%zu]; } _fzl_%s = "
+                    "{ { (sp_str_hdr *)((char *)&_fzl_%s_o.s + 1), %zu%s, %zu, 0x%llxULL }, 0xf1, \"%s\" };\n"
+                    "static sp_StringLiteral _fzl_%s_o = SP_STRING_LITERAL_INIT(_fzl_%s_o, _fzl_%s.d, %zu);\n",
+               f->name, known ? "const " : "", f->raw_len + 1, f->name, f->name, f->raw_len + 1,
+               fzl_esc_ascii7(f->esc, f->esc_len) ? " | SP_STR_SIZE_ASCII7" : "",
+               f->raw_len, known ? (unsigned long long)h : 0ULL, f->esc, f->name, f->name, f->name, f->raw_len);
   }
   if (dedups && nlit) {
     buf_puts(out, "static const char *const sp_fzl_all[] = {");
@@ -6171,9 +6207,10 @@ void emit_str_literal_n(Buf *b, const char *content, size_t len, int frozen) {
      Hash#[] with the literal key missed entries whose equal-content keys
      were built at runtime (#1749; ASAN: global-buffer-overflow). Emit a
      static header+marker+data object instead: the layout matches a heap
-     string exactly (hdr | marker | bytes), the hash cache write hits our
-     own static storage, and next=NULL keeps it off the sweep list.
-     Shared literal definitions use a tagged link to their handle slot. */
+     string exactly (hdr | marker | bytes), the hash is in the header from
+     the start, and next=NULL keeps it off the sweep list.
+     Shared literal definitions use a tagged link to their String object
+     (fzl_emit_defs). */
   if (frozen) {
     Buf e; memset(&e, 0, sizeof e);
     if (content && len) emit_c_escaped_n(&e, content, len);

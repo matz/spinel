@@ -1507,7 +1507,7 @@ static int sh_call_fresh(Compiler *c, int n, int depth) {
    literals are frozen (`fzl`), or a `freeze`, `-@` or `dedup` of one, which
    answer their receiver? Every evaluation answers the one object the
    literal names, so the handle a shared slot takes for it is that
-   literal's own (sp_String_literal_handle), never a new one. Adjacent
+   literal's own static object (sp_StringLiteral), never a new one. Adjacent
    literals (`"a" "b"`) and a squiggly heredoc of mixed indents parse as an
    interpolated String that emit_interp folds into one literal: that is one
    too (interp_is_literal_fold). A `+"lit"` is a call that copies, and a

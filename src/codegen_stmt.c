@@ -1527,11 +1527,11 @@ void emit_strbuf_handle_of(Compiler *c, int v, Buf *b) {
   emit_strbuf_value(c, v, b);
 }
 /* The handle of text t, node v's bytes (SP_STR_HDL, which takes either
-   face of the operand); a frozen literal's is its slot's, read where the
-   literal is named (sp_String_literal_of) */
+   face of the operand); a frozen literal's is its static object's
+   (fzl_emit_defs), a constant address */
 void strbuf_new_of_text(Compiler *c, int v, const char *t, Buf *b) {
   int id = fzl_text_id(t);
-  if (id >= 0) buf_printf(b, "sp_String_literal_of(&_fzl_%s_slot, (char *)_fzl_%s.d)", fzl_id_name(id), fzl_id_name(id));
+  if (id >= 0) buf_printf(b, "(&_fzl_%s_o.s)", fzl_id_name(id));
   else buf_printf(b, "SP_STR_HDL(%s)", t ? t : "");
 }
 /* --share-strings: put the handle demand on each `next` (k NK_NextNode) or

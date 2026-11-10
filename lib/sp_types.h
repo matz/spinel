@@ -334,6 +334,29 @@ typedef struct{void**data;sp_int len;sp_int cap;void(*scan_elem)(void*);int32_t 
    (SP_SEB spells the bytes face) */
 /* the shared String handle (sp_string.h) */
 struct sp_String_s { char *data; int64_t len; int64_t cap; unsigned binary; };
+/* A frozen literal is one static String object: a GC header and the handle,
+   beside its static bytes ([sp_str_hdr][0xf1][bytes][NUL]), whose header
+   links to the handle, tagged with bit 0 to tell it from the aligned links
+   of the string heap (sp_String_of_literal). The generated unit defines one
+   per literal it names (fzl_emit_defs) and the runtime its own frozen
+   Strings (sp_alloc.c), each with SP_STRING_LITERAL_INIT, so the handle is
+   a constant address: no slot to load, no handle made on first use and no
+   root to keep it.
+
+   The header is the GC's contract for an object it never allocated: it
+   links to itself, which no list's header does (sp_gc_hdr_is_static), so
+   the verify registry accepts it (sp_gc_obj_registered); `old` keeps a
+   minor mark off it, and a major one stamps it and stops, since it has no
+   scan; `pinned` keeps it off the sticky remembered set; `frozen` is the
+   String's frozen bit (sp_String_is_frozen); a size of 0 counts nothing to
+   the live bytes. No sweep reaches it, since no list holds it, and it
+   holds nothing collectable, so a store of it needs no barrier
+   (wb_value_never_young). */
+typedef struct sp_StringLiteral { sp_gc_hdr g; struct sp_String_s s; } sp_StringLiteral;
+/* The constant initializer of literal object `o` over its bytes `d`, `len`
+   bytes long: a static's initializer cannot be a function's answer. */
+#define SP_STRING_LITERAL_INIT(o, d, len) \
+  { { .next = &(o).g, .frozen = 1, .pinned = 1, .old = 1 }, { (char *)(d), (len), (len) + 1, 0 } }
 typedef struct sp_String_s *sp_strelem;
 /* head: the slots a shift stepped past (SP_ARR_BUF, above) */
 typedef struct{sp_strelem*data;sp_int len;sp_int cap;int32_t frozen;int32_t head;sp_strelem inline_data[SP_STRARR_INLINE];}sp_StrArray;

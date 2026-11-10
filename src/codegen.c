@@ -7293,24 +7293,29 @@ static void gc_wb_cells(Compiler *c, Buf *b) {
   (void)c;
 }
 
-/* Is the value stored at `q` (the `=` of a store) one that can never be a
-   young object: nil, or a frozen string literal? nil is no object, and the
-   literal is static storage under the 0xf1 marker, which sp_mark_string steps
-   over and nothing sweeps. The barrier exists to record an old holder that now
-   points at a young object, so such a store needs none, whoever the holder is
-   and however old. A constructor is mostly these -- `@left = nil`,
-   `@tag = "n"` -- and gcbench ran three per Node.
+/* Is the value stored at `q` (the `=` of a store) one the barrier need not
+   record: nil, or a frozen string literal? nil is no object, and the literal
+   is static storage: its bytes under the 0xf1 marker, which sp_mark_string
+   steps over, and its handle a static object (sp_StringLiteral). Neither is
+   ever swept, and neither references anything collectable. The barrier
+   exists so that a minor collection marks a young object an old holder now
+   points at; one that is never freed and holds nothing needs no mark to
+   survive, so such a store needs none, whoever the holder is and however
+   old. A constructor is mostly these -- `@left = nil`, `@tag = "n"` -- and
+   gcbench ran three per Node.
 
    Decided on the emitted text, like everything else in this pass, and only
    when the value is the whole right-hand side: `NULL`, `sp_box_nil()`, or
-   exactly what emit_frozen_literal writes. Anything else,
-   `sp_str_dup(<literal>)` included, keeps its barrier.
+   exactly what emit_frozen_literal or strbuf_new_of_text writes for a
+   literal. Anything else, `sp_str_dup(<literal>)` included, keeps its
+   barrier.
 
    Answers where the value ends, 0 for no. The scan goes on from there: a
    store it wraps is stepped over whole. */
 static size_t wb_value_never_young(const Buf *b, size_t q) {
   static const char fzl[] = "((char *)_fzl_", data[] = ".d)";
-  size_t fn = sizeof fzl - 1, dn = sizeof data - 1;
+  static const char fzh[] = "(&_fzl_", obj[] = "_o.s)";
+  size_t fn = sizeof fzl - 1, dn = sizeof data - 1, hn = sizeof fzh - 1, on = sizeof obj - 1;
   const char *p = b->p + q + 1, *end = b->p + b->len;
   while (p < end && *p == ' ') p++;
   if (!strncmp(p, "NULL", 4)) p += 4;
@@ -7320,6 +7325,13 @@ static size_t wb_value_never_young(const Buf *b, size_t q) {
     while (s < end && (isxdigit((unsigned char)*s) || *s == '_')) s++;
     if (strncmp(s, data, dn)) return 0;
     p = s + dn;
+  }
+  else if (!strncmp(p, fzh, hn) && isxdigit((unsigned char)p[hn])) {
+    const char *s = p + hn;
+    while (s < end && isxdigit((unsigned char)*s)) s++;
+    if (*s == '_' && isdigit((unsigned char)s[1])) for (s++; s < end && isdigit((unsigned char)*s); s++) {}
+    if (strncmp(s, obj, on)) return 0;
+    p = s + on;
   }
   else return 0;
   while (p < end && *p == ' ') p++;
@@ -24163,7 +24175,7 @@ char *codegen_program(const NodeTable *nt) {
   gc_wb_insert(c, &b, 0);
   tcg = cg_phase(tcg, "cg_write_barriers");
   { Buf fz; memset(&fz, 0, sizeof fz);
-    fzl_emit_defs(b.p ? b.p : "", &fz, 1);
+    fzl_emit_defs(b.p ? b.p : "", &fz);
     if (fz.len) buf_splice(&b, fzl_at, fz.p);
     free(fz.p); }
   if (g_debug) bt_block_table(&b);

@@ -33186,23 +33186,27 @@ void emit_bind_call(Compiler *c, int id, int target, const int *argv, int argc, 
     return;
   }
   int value = c->classes[cid].is_value_type;
+  /* (a reopening of Object takes self boxed: any value binds to it) */
+  const int boxed_self = repr_self_boxed(c, target);
   int to = ++g_tmp;
   Buf ob; memset(&ob, 0, sizeof ob);
-  emit_expr(c, argv[0], &ob);
+  if (boxed_self) emit_boxed(c, argv[0], &ob);
+  else emit_expr(c, argv[0], &ob);
   emit_indent(g_pre, g_indent);
-  if (value) {
+  if (boxed_self) buf_printf(g_pre, "sp_RbVal _t%d = %s; SP_GC_ROOT_RBVAL(_t%d);\n", to, ob.p ? ob.p : "sp_box_nil()", to);
+  else if (value) {
     emit_ctype(c, ot, g_pre);
     buf_printf(g_pre, " _t%d = %s;\n", to, ob.p ? ob.p : "");
   }
   else buf_printf(g_pre, "void *_t%d = (void *)(%s); SP_GC_ROOT(_t%d);\n", to, ob.p ? ob.p : "NULL", to);
   free(ob.p);
   char selfp[96];
-  if (value) snprintf(selfp, sizeof selfp, "_t%d", to);
+  if (value || boxed_self) snprintf(selfp, sizeof selfp, "_t%d", to);
   else snprintf(selfp, sizeof selfp, "((sp_%s *)_t%d)", c->classes[cid].c_name, to);
   /* a default reading self or an ivar reads obj */
   const char *sv_arm_self = g_arm_self; const Scope *sv_arm_scope = g_arm_scope;
   int sv_arm_depth = g_arm_depth;
-  if (!value) { g_arm_self = selfp; g_arm_scope = tm; g_arm_depth = g_expr_depth; }
+  if (!value && !boxed_self) { g_arm_self = selfp; g_arm_scope = tm; g_arm_depth = g_expr_depth; }
   Buf args; memset(&args, 0, sizeof args);
   buf_puts(&args, selfp);
   emit_args_filled_argv(c, target, argv + 1, argc - 1, nt_ref(c->nt, id, "arguments"), ", ", &args);
@@ -33226,12 +33230,17 @@ static void emit_bind_call_arm(Compiler *c, int id, int target, const int *argv,
   Scope *tm = &c->scopes[target];
   int cid = tm->class_id;
   const char *cn = c->classes[cid].name;
-  buf_printf(b, "if (!(_t%d.tag == SP_TAG_OBJ && (0", to);
-  for (int k = 0; k < c->nclasses; k++)
-    if (class_isa_user(c, k, cid)) buf_printf(b, " || _t%d.cls_id == %d", to, k);
-  buf_printf(b, "))) sp_raise_cls(\"TypeError\", \"bind argument must be an instance of %s\"); ", cn);
+  /* (a reopening of Object takes self boxed: every value is an instance) */
+  const int boxed_self = repr_self_boxed(c, target);
+  if (!boxed_self) {
+    buf_printf(b, "if (!(_t%d.tag == SP_TAG_OBJ && (0", to);
+    for (int k = 0; k < c->nclasses; k++)
+      if (class_isa_user(c, k, cid)) buf_printf(b, " || _t%d.cls_id == %d", to, k);
+    buf_printf(b, "))) sp_raise_cls(\"TypeError\", \"bind argument must be an instance of %s\"); ", cn);
+  }
   char selfp[96];
-  snprintf(selfp, sizeof selfp, "((sp_%s *)_t%d.v.p)", c->classes[cid].c_name, to);
+  if (boxed_self) snprintf(selfp, sizeof selfp, "_t%d", to);
+  else snprintf(selfp, sizeof selfp, "((sp_%s *)_t%d.v.p)", c->classes[cid].c_name, to);
   const char *sv_arm_self = g_arm_self; const Scope *sv_arm_scope = g_arm_scope;
   int sv_arm_depth = g_arm_depth;
   g_arm_self = selfp; g_arm_scope = tm; g_arm_depth = g_expr_depth;

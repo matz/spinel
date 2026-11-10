@@ -34,3 +34,14 @@ p sm.owner
 # an unbound method of Object binds to an instance of any class
 p A.instance_method(:twice).super_method.bind(A.new).call(21)
 p Object.instance_method(:twice).bind(A.new).call(21)
+
+# bind_call binds a method of Object to an instance of any class, and to the
+# super_method of a method that reaches it
+class Object
+  def h(x) = [:o, self.class, x]
+end
+class C; def h(x) = :c; end
+class D; end
+p Object.instance_method(:h).bind_call(C.new, 2)
+p Object.instance_method(:h).bind_call(D.new, 3)
+p C.instance_method(:h).super_method.bind_call(C.new, 4)

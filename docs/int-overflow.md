@@ -22,6 +22,13 @@ spinel app.rb --int-overflow=promote
 | **`wrap`** | two's-complement wraparound, like C (`a + b` with no check) | no | modular arithmetic, hashes, checksums, PRNGs -- anywhere defined wraparound *is* the intent |
 | **`promote`** | promotes the result to an arbitrary-precision integer (bigint) | yes | CRuby-faithful integer math (experimental, see below) |
 
+The mode says what an overflowing operation does. Whether a Bignum may exist
+at all is a separate switch, [`--no-bigint`](#no-bignum-at-all---no-bigint): even
+under `raise` a loop's growth pattern, a literal past `sp_int` and an
+overflowing constant power make one, and `--no-bigint` turns those off too. It
+combines with `raise` and `wrap`; with `promote`, whose overflow is a Bignum,
+it is refused.
+
 The mode applies to integer `+`, `-`, `*`, unary `-`, and (under `promote`) `**`
 and shifts. It does not change division: `1 / 0` is always a
 `ZeroDivisionError` regardless of mode.

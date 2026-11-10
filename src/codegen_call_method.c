@@ -675,10 +675,10 @@ int emit_op_method_super_method(Compiler *c, const BopCtx *x, Buf *b) {
     buf_printf(b, "%ssp_bm_set_thunk(sp_bm_set_abi(sp_bound_method_new_d(_t%d->self, _t%d->self_kind, (sp_int)(uintptr_t)&", sup_unb ? "sp_bm_set_unbound(" : "", tvp, tvp);
     buf_puts(b, mc_method(c, &c->scopes[pmip]));
     buf_puts(b, ", ");
-    emit_str_literal(b, c->scopes[pmip].name ? c->scopes[pmip].name : "?");
+    emit_str_literal(b, comp_scope_user_name(&c->scopes[pmip]));
     { int ar; if (method_scope_arity(c, pmip, &ar)) buf_printf(b, ", (sp_int)%d", ar); else buf_puts(b, ", (sp_int)-1"); }
     buf_puts(b, ", ");
-    emit_method_desc_args(c, -1, pmip, -1, c->scopes[pmip].name, sup_unb, 0, b);
+    emit_method_desc_args(c, -1, pmip, -1, comp_scope_user_name(&c->scopes[pmip]), sup_unb, 0, b);
     buf_puts(b, ")");
     { char _s[8 * 64 + 1]; int _fx = 0, _rs = 0, _rt = 0, _pf = 0, _prt = 0;
       int _ab = method_legacy_int_abi(c, pmip, !sup_unb, _s, sizeof _s, &_fx, &_rs, &_rt);
@@ -1756,7 +1756,7 @@ int emit_call_callable_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, co
       else if (oret) buf_puts(b, oint_ctype(tret));
       else emit_ctype(c, tret, b);
       buf_puts(b, " (*)(");
-      const char *sct = bm_self_ctype(tm, shift);
+      const char *sct = bm_self_ctype(c, tm, shift);
       if (arm == 0) buf_puts(b, sct);
       for (int k = 0; k < eargc; k++) {
         if (arm == 0 || k) buf_puts(b, ", ");
@@ -1770,7 +1770,7 @@ int emit_call_callable_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, co
       }
       if (arm != 0 && eargc == 0) buf_puts(b, "void");
       buf_printf(b, "))(uintptr_t)_t%d->fn)(", tr);
-      if (arm == 0) { char sx[32]; snprintf(sx, sizeof sx, "_t%d->self", tr); emit_bm_self_arg(sct, sx, b); }
+      if (arm == 0) { char sx[32]; snprintf(sx, sizeof sx, "_t%d", tr); emit_bm_self_arg(sct, sx, b); }
       for (int k = 0; k < eargc; k++) {
         if (arm == 0 || k) buf_puts(b, ", ");
         buf_printf(b, "_t%d", atmp[k]);

@@ -24,7 +24,9 @@ int g_sn_proc_node = -1;
    slot holds. An Integer __bam_r that holds its nil (a dynamic send that
    may pass the wrapper a nil) is an sp_oint, two registers wide: cast as
    sp_int, the callee read its nil flag from whatever the second one held. */
-const char *bm_self_ctype(Scope *tm, int shift) {
+const char *bm_self_ctype(const Compiler *c, Scope *tm, int shift) {
+  /* (a reopening of Object takes self boxed) */
+  if (tm && repr_self_boxed(c, (int)(tm - c->scopes))) return "sp_RbVal";
   if (!tm || shift != 1 || tm->nparams < 1 || !tm->pnames[0] || strcmp(tm->pnames[0], "__bam_r") != 0) return "void *";
   LocalVar *pp = scope_local(tm, tm->pnames[0]);
   if (!pp) return "void *";
@@ -33,11 +35,12 @@ const char *bm_self_ctype(Scope *tm, int shift) {
   if (pp->type == TY_SYMBOL) return "sp_sym";
   return "void *";
 }
-/* The self argument of that call, from the slot text `self` (a raw
-   pointer-sized value): converted to the type bm_self_ctype names. */
-void emit_bm_self_arg(const char *sct, const char *self, Buf *b) {
-  if (strcmp(sct, "sp_oint") == 0) buf_printf(b, "sp_oint_of((sp_int)(uintptr_t)%s)", self);
-  else buf_printf(b, "(%s)(uintptr_t)%s", sct, self);
+/* The self argument of that call, from the Method's text `bm`: its raw
+   pointer-sized self slot converted to the type bm_self_ctype names. */
+void emit_bm_self_arg(const char *sct, const char *bm, Buf *b) {
+  if (strcmp(sct, "sp_oint") == 0) buf_printf(b, "sp_oint_of((sp_int)(uintptr_t)%s->self)", bm);
+  else if (strcmp(sct, "sp_RbVal") == 0) buf_printf(b, "sp_bm_self_boxed(%s)", bm);
+  else buf_printf(b, "(%s)(uintptr_t)%s->self", sct, bm);
 }
 
 static int g_pp_hash_node = -1;
@@ -7876,6 +7879,8 @@ int method_legacy_int_abi(Compiler *c, int mi, int recv_bound, char *out_sig, si
   /* both casts pass that receiver as `void *`; an Integer one holding its nil
      is an sp_oint, two registers, and only the thunk passes it as one */
   if (pstart && bam_self_is_oint(m)) return 0;
+  /* (a reopening of Object takes self boxed, which the raw self slot is not) */
+  if (recv_bound && repr_self_boxed(c, mi)) return 0;
   if (!method_bm_ret_kind(c, m, out_ret)) return 0;
   /* An explicit `&blk` adds a trailing sp_Proc* C parameter the legacy cast
      does not supply, so the callee would read garbage for it. */
@@ -7961,6 +7966,7 @@ int method_poly_abi(Compiler *c, int mi, int recv_bound, int *out_fixed, int *ou
   /* both casts pass that receiver as `void *`; an Integer one holding its nil
      is an sp_oint, two registers, and only the thunk passes it as one */
   if (pstart && bam_self_is_oint(m)) return 0;
+  if (recv_bound && repr_self_boxed(c, mi)) return 0;   /* (as method_legacy_int_abi) */
   /* the return may be any boxable kind, not only sp_RbVal: promote leaves a
      bool/Symbol/typed-array/user-object return un-widened over boxed
      parameters (optcarrot's poke_* family), and each such kind has its cast
@@ -32234,7 +32240,7 @@ int emit_method_tramp_fn(Compiler *c, Scope *tm, int shift, const char *fname,
   if (ret_o) buf_puts(&selfc, oint_ctype(tret));
   else if (is_scalar_ret(tret)) emit_ctype(c, tret, &selfc);
   else buf_puts(&selfc, "void");
-  { const char *sct = bm_self_ctype(tm, shift);
+  { const char *sct = bm_self_ctype(c, tm, shift);
     buf_printf(&selfc, " (*)(%s", sct);
     for (int k = shift; k < np; k++) {
       buf_puts(&selfc, ", ");
@@ -32244,7 +32250,7 @@ int emit_method_tramp_fn(Compiler *c, Scope *tm, int shift, const char *fname,
     }
     if (takes_blk) buf_puts(&selfc, ", sp_Proc *");
     buf_puts(&selfc, "))(uintptr_t)_m->fn)(");
-    emit_bm_self_arg(sct, "_m->self", &selfc); }
+    emit_bm_self_arg(sct, "_m", &selfc); }
   if (np > shift || takes_blk) buf_puts(&selfc, ", ");
   buf_puts(&selfc, args.p ? args.p : "");
   buf_puts(&selfc, ")");
@@ -33094,7 +33100,10 @@ void emit_bound_method_call(Compiler *c, int id, int recv, int target, Buf *b) {
   int sv_arm_depth = g_arm_depth;
   if (self_ful) { g_arm_self = selfp; g_arm_scope = tm; g_arm_depth = g_expr_depth; }
   const char *lead = "";
-  if (self_ful) { buf_printf(&args, "_t%d->self", tr); lead = ", "; }
+  /* (a reopening of Object takes self boxed: its raw slot is boxed by what it holds) */
+  const int boxed_self = self_ful && repr_self_boxed(c, target);
+  if (boxed_self) { buf_printf(&args, "sp_bm_self_boxed(_t%d)", tr); lead = ", "; }
+  else if (self_ful) { buf_printf(&args, "_t%d->self", tr); lead = ", "; }
   else lead = emit_cmethod_self_cls_arg(c, target, method_node_recv_class(c, recv, tm->class_id), &args);
   emit_args_filled(c, target, nt_ref(c->nt, id, "arguments"), lead, &args);
   g_arm_self = sv_arm_self; g_arm_scope = sv_arm_scope; g_arm_depth = sv_arm_depth;
@@ -33110,7 +33119,7 @@ void emit_bound_method_call(Compiler *c, int id, int recv, int target, Buf *b) {
   else emit_ctype(c, tret, &cast);
   buf_puts(&cast, " (*)(");
   int np = 0;
-  if (self_ful) { buf_puts(&cast, "void *"); np++; }
+  if (self_ful) { buf_puts(&cast, boxed_self ? "sp_RbVal" : "void *"); np++; }
   else if (cmethod_takes_self_cls(c, target)) { buf_puts(&cast, "sp_Class"); np++; }
   for (int k = 0; k < tm->nparams; k++) {
     if (np++) buf_puts(&cast, ", ");

@@ -1,0 +1,10 @@
+"obj 1!"
+Object
+"obj 2"
+42
+"obj"
+:foo
+:b
+#<Method: B#foo()>
+0
+B

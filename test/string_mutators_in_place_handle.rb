@@ -166,3 +166,24 @@ re20 = /(a)(b)(c)(d)(e)(f)(g)(h)(i)(j)(k)(l)(m)(n)(o)(p)(q)(r)(s)(t)/
   s = +"abcdefghijklmnopqrst"
   begin; s[re20, n] = "X"; p s; rescue IndexError => x; p [x.class, x.message]; end
 end
+
+# []= leaves the String in the encoding the splice has: an ASCII-only
+# binary String given a UTF-8 text becomes UTF-8, for every key form, typed
+# or boxed; an empty or binary text keeps it binary
+def bx(v) = [v, 1][0]
+def encs(s) = p([s.length, s.encoding.to_s, s.bytesize])
+s = "a".b; s["a"] = "é"; encs(s)
+s = "a".b; s[/a/] = "é"; encs(s)
+s = "a".b; s[/(a)/, 1] = "é"; encs(s)
+s = "a".b; s[0] = "é"; encs(s)
+s = "a".b; s[0, 1] = "é"; encs(s)
+s = "a".b; s[0..0] = "é"; encs(s)
+s = "a".b; s[bx("a")] = "é"; encs(s)
+s = "a".b; s[bx(/a/)] = "é"; encs(s)
+s = "a".b; s[bx(0)] = "é"; encs(s)
+s = "a".b; s[bx(0..0)] = "é"; encs(s)
+s = "a".b; s[bx(0), 1] = "é"; encs(s)
+s = "a".b; s[0.0] = "é"; encs(s)
+s = "ab".b; s[/a/] = ""; encs(s)
+s = "ab".b; s[bx(/a/)] = ""; encs(s)
+s = +"ab"; s[0] = "\xff".b; encs(s)

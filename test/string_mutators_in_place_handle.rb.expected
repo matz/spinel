@@ -73,3 +73,18 @@ nil
 "abcdefghijklmnopqrsX"
 "abcdefghijklmnopqrsX"
 [IndexError, "index 21 out of regexp"]
+[1, "UTF-8", 2]
+[1, "UTF-8", 2]
+[1, "UTF-8", 2]
+[1, "UTF-8", 2]
+[1, "UTF-8", 2]
+[1, "UTF-8", 2]
+[1, "UTF-8", 2]
+[1, "UTF-8", 2]
+[1, "UTF-8", 2]
+[1, "UTF-8", 2]
+[1, "UTF-8", 2]
+[1, "UTF-8", 2]
+[1, "ASCII-8BIT", 1]
+[1, "ASCII-8BIT", 1]
+[2, "ASCII-8BIT", 2]

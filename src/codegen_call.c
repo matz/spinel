@@ -8612,6 +8612,14 @@ int emit_poly_builtin_default(Compiler *c, int id, int recv, const char *name,
                                      int argc, const int *argv, const int *atmp,
                                      const TyKind *atmp_ty, TyKind ret, int tv, int tr,
                                      int label, Buf *b) {
+  /* a Kernel row's name (respond_to_missing?): the row's answer for a receiver no arm took (the operands ran ahead) */
+  Buf rb; memset(&rb, 0, sizeof rb);
+  if (cplan_dispatch_row(c, id) && emit_dispatch_row_answer(c, id, atmp, argc, ret, &rb)) {
+    buf_printf(b, "%s _t%d = %s; break;", label ? " default:" : "", tr, rb.p ? rb.p : "0");
+    free(rb.p);
+    return 1;
+  }
+  free(rb.p);
   if (recv >= 0 && name && argc > 0 && atmp && nt_kind(c->nt, argv[0]) == NK_SplatNode &&
       emit_poly_builtin_default_spread(c, id, recv, name, argc, argv, atmp, ret, tv, tr, label, b))
     return 1;
@@ -20721,6 +20729,7 @@ static void refl_builtin_cls_rows(const char *k, const char *skip, ReflNames *r)
   for (int i = 0; sp_builtin_cmeth_arity_spec_tbl[i].cls; i++) {
     const char *m = sp_builtin_cmeth_arity_spec_tbl[i].m;
     if (sp_streq(sp_builtin_cmeth_arity_spec_tbl[i].cls, k) && (own_new || !sp_streq(m, "new")) &&
+        !(is_kernel_module_name(k) && !is_kernel_module_function(m)) &&   /* (Kernel's arity rows also hold its private methods) */
         !(skip && builtin_cmethod_known(skip, m)))
       refl_note(r, m, 1);
   }

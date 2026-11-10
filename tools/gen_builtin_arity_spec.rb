@@ -193,7 +193,7 @@ CLASS_TARGETS = {
   "ENV"     => %w[fetch key? has_key? include? member? assoc rassoc values_at],
   "Kernel"  => %w[format sprintf Integer Float String Array Hash Rational Complex
                   throw catch raise rand srand caller lambda proc binding block_given?
-                  local_variables global_variables],
+                  local_variables global_variables respond_to_missing?],
   # the class-side surface of the constants a program names bare: GC, Fiber
   # and Thread are not classes the compiler declares; a class Struct.new or
   # Data.define answered is keyed StructClass / DataClass
@@ -448,7 +448,7 @@ CLASS_TARGETS.each do |cls, meths|
                 [CLASS_INTROSPECTED, :introspected]].find { |t, _| t.fetch(cls, []).include?(m) }
     s = if CLASS_BELOW_MIN.fetch(cls, []).include?(m) then below_min_spec_of(const, m)
         elsif declared then declared_spec_of(const, m, declared[1])
-        else full_spec_of(thunk, m)
+        else full_spec_of(thunk, m, private_ok: cls == "Kernel")
         end
     cm << [cls, m, *s] if s
   end
@@ -528,6 +528,10 @@ kwpos.each { |r| render.("BAK", r[0, 2]) }
 params.each { |_, k, m, ps, cside| render.("BAP", [k, m, ps, cside.to_i]) }
 summary = "#{arity.length + kernel_arity.length} Method#arity + #{inst.length} instance + #{cm.length} class-method + #{params.length} parameters entries"
 if ARGV.include?("--check")
+  # the private-Kernel list the compiler and the runtime share is held to CRuby's
+  listed = File.read(File.join(__dir__, "../lib/sp_kernel_private.h")).scan(/X\("([^"]+)"\)/).flatten
+  stray = listed - Kernel.private_instance_methods.map(&:to_s)
+  abort "lib/sp_kernel_private.h names methods #{ver}'s Kernel does not define private: #{stray.join(", ")}" unless stray.empty?
   if File.read(SOURCE) == out
     $stderr.puts "arity facts match #{ver}: #{summary}"
     exit 0

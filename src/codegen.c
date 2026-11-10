@@ -16165,12 +16165,39 @@ static int emit_super_object_builtin(Compiler *c, int id, Scope *s, const char *
                tk, g_self, tk, tk, tk, tk);
     free(kb.p);
   }
+  else if (kind == SUPER_OBJ_ROW) {
+    /* Kernel's row answers over the super's operands (a bare super's are the
+       method's parameters, read as their locals); the block argument's effect
+       follows them */
+    const BuiltinOp *row = comp_super_kernel_row(c, s, uname, id);
+    int argc = 0, ov = g_n_argov;
+    const int *argv = call_args(c->nt, id, &argc);
+    int *pv = NULL;
+    if (nt_kind(c->nt, id) == NK_ForwardingSuperNode) {
+      argc = comp_zsuper_plain_params(c, s, NULL, 0);
+      pv = malloc(((size_t)argc + 1) * sizeof *pv);
+      comp_zsuper_plain_params(c, s, pv, argc);
+      for (int k = 0; k < argc; k++) {
+        Buf ref; memset(&ref, 0, sizeof ref);
+        emit_scope_local_ref(c, s, s->pnames[k], &ref);
+        view_bind(pv[k], "%s", ref.p);
+        free(ref.p);
+      }
+      argv = pv;
+    }
+    Buf rb, eb; memset(&rb, 0, sizeof rb); memset(&eb, 0, sizeof eb);
+    int ok = emit_builtin_op_operands(c, id, BOP_KERNEL, uname, argv, argc, &rb);
+    view_unbind(ov);
+    free(pv);
+    if (!ok) { free(rb.p); return 0; }
+    emit_super_blockarg_effect(c, id, &eb);
+    vt = row->result;
+    if (eb.p) buf_printf(&vb, "({ %s _r = %s; %s_r; })", c_type_name(vt), rb.p, eb.p);
+    else buf_printf(&vb, "({ %s; })", rb.p);
+    free(rb.p); free(eb.p);
+  }
   else {
     buf_puts(&vb, "({ ");
-    /* (respond_to_missing?'s two arguments are run for their effect) */
-    int sa = nt_kind(c->nt, id) == NK_SuperNode ? nt_ref(c->nt, id, "arguments") : -1, na = 0;
-    const int *av = sa >= 0 ? nt_arr(c->nt, sa, "arguments", &na) : NULL;
-    for (int i = 0; i < na; i++) { buf_puts(&vb, "(void)("); emit_expr_for_effect(c, av[i], &vb); buf_puts(&vb, "); "); }
     emit_super_blockarg_effect(c, id, &vb);
     if (kind == SUPER_OBJ_FALSE) buf_puts(&vb, "((sp_bool)0); })");
     else if (kind == SUPER_OBJ_FROZEN) buf_printf(&vb, "((sp_bool)sp_gc_is_frozen(%s)); })", g_self);
@@ -16894,10 +16921,10 @@ void emit_super(Compiler *c, int id, Buf *b) {
     if (uname && sp_streq(uname, "with") && emit_super_data_with(c, id, s, b)) return;
     /* `super` in a ` override no ancestor defines is Kernel#` */
     if (uname && sp_streq(uname, "`") && emit_super_backtick(c, id, s, b)) return;
-    /* `super` in an ==, equal?, eql?, !, nil?, frozen? or itself override
-       no program ancestor defines is BasicObject's or Kernel's
-       (comp_super_object_builtin): the same object, false, the frozen bit
-       or the object itself */
+    /* `super` in an ==, equal?, eql?, !, nil?, frozen?, itself or
+       respond_to_missing? override no program ancestor defines is
+       BasicObject's or Kernel's (comp_super_object_builtin): the same object,
+       false, the frozen bit, the object itself or Kernel's row's answer */
     if (uname && emit_super_object_builtin(c, id, s, uname, b)) return;
     /* `super` from the program's own send, __send__ or public_send that no
        ancestor of the program defines is Object's: it dispatches on the name

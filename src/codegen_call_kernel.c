@@ -96,9 +96,36 @@ static int emit_kconv_obj_nil(Compiler *c, int arg, int ci, const char *m1, cons
   return 1;
 }
 
+/* See codegen_internal.h. */
+int emit_dispatch_row_answer(Compiler *c, int id, const int *atmp, int natmp, TyKind ret, Buf *b) {
+  int argc = 0;
+  const int *argv = call_args(c->nt, id, &argc);
+  const char *name = nt_str(c->nt, id, "name");
+  int ov = g_n_argov;
+  if (atmp)
+    for (int a = 0; a < argc && a < natmp; a++)
+      if (subtree_has_side_effect(c, argv[a])) view_bind(argv[a], "_t%d", atmp[a]);
+  Buf rb; memset(&rb, 0, sizeof rb);
+  const BuiltinOp *op = name ? bop_find(BOP_KERNEL, name, argc, nt_ref(c->nt, id, "block") >= 0) : NULL;
+  int ok = op && emit_builtin_op_arm_text(c, id, -1, BOP_KERNEL, name, NULL, 0, &rb);   /* (one arm of a dispatch: the node answers what the dispatch does) */
+  view_unbind(ov);
+  if (ok && ret == TY_POLY) emit_boxed_text(c, op->result, rb.p ? rb.p : "", b);
+  else if (ok) buf_puts(b, rb.p ? rb.p : "");
+  free(rb.p);
+  return ok;
+}
+
 int emit_call_kernel_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc, const int *argv) {
   /* a receiverless builtin the rows name (BOP_KERNEL): the desugared ENV snapshot */
-  if (recv < 0 && cplan_kernel_row(c, id, name) && emit_builtin_op(c, id, -1, BOP_KERNEL, name, b)) return 1;
+  if (cplan_kernel_row(c, id, name)) {
+    /* (a send's explicit receiver runs first, for its effect) */
+    int ext = recv >= 0 && nt_kind(nt, recv) != NK_SelfNode;
+    if (ext) { buf_puts(b, "((void)("); emit_expr_for_effect(c, recv, b); buf_puts(b, "), "); }
+    if (emit_builtin_op(c, id, -1, BOP_KERNEL, name, b)) {
+      if (ext) buf_puts(b, ")");
+      return 1;
+    }
+  }
   /* Kernel's private select is IO.select, after user methods (Kernel.select
      reaches here bare: desugar_kernel_recv drops the receiver). */
   if (recv < 0 && sp_streq(name, "select") && argc >= 1 && argc <= 4 &&

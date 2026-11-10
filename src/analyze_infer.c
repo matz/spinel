@@ -9317,7 +9317,7 @@ static TyKind infer_call_inner(Compiler *c, int id) {
     if (op && op->result != TY_UNKNOWN)
       return !g_infer_ignore_brk && call_breaks(c, id) ? an_planned_call_ret(c, id, TY_POLY) : op->result;
   }
-  { TyKind kr; if (recv < 0 && infer_kernel_row(c, id, name, argc, argv, &kr)) return kr; }
+  { TyKind kr; if (infer_kernel_row(c, id, name, argc, argv, &kr)) return kr; }
   { TyKind ar; if (infer_arysub_call(c, id, &ar)) return ar; }   /* Array's, on an Array subclass (#7449) */
 
   /* Array#to_a and #to_ary answer the receiver itself, and a boxed typed
@@ -11557,6 +11557,12 @@ static TyKind ctr_site_join(TyKind nat, TyKind want) {
   }
   return nat;
 }
+/* What a super that comp_super_object_builtin answers (kind) is typed: self for
+   itself, the row's result for Kernel's row, a Boolean for the rest. */
+static TyKind super_object_type(Compiler *c, const Scope *s, const char *uname, int id, int kind) {
+  return kind == SUPER_OBJ_SELF ? ty_object(s->class_id)
+       : kind == SUPER_OBJ_ROW ? comp_super_kernel_row(c, s, uname, id)->result : TY_BOOL;
+}
 TyKind infer_uncached(Compiler *c, int id) {
   const NodeTable *nt = c->nt;
   const char *ty = nt_type(nt, id);
@@ -12391,8 +12397,7 @@ TyKind infer_uncached(Compiler *c, int id) {
                 : rel_super == 1 ? TY_CLASS
                 : rto_super ? TY_BOOL
                 : freeze_super ? ty_object(s->class_id)
-                : obj_super == SUPER_OBJ_SELF ? ty_object(s->class_id)
-                : obj_super ? TY_BOOL : TY_UNKNOWN;
+                : obj_super ? super_object_type(c, s, uname, id, obj_super) : TY_UNKNOWN;
     /* and `super` in a Data's own with reaches Data#with: a copy, or self
        (emit_super_data_with) */
     if (!s->is_cmethod && uname && sp_streq(uname, "with") &&

@@ -5485,8 +5485,9 @@ const Scope *comp_super_site(Compiler *c, const Scope *s) {
 /* What a `super` that no program ancestor answers reaches when the
    method is one of BasicObject's or Kernel's that Spinel answers for any
    object of a program class: SUPER_OBJ_SAME (==, equal?, eql?: the same
-   object), SUPER_OBJ_FALSE (!, nil?, respond_to_missing?),
-   SUPER_OBJ_FROZEN (frozen?) or SUPER_OBJ_SELF (itself); 0 for any
+   object), SUPER_OBJ_FALSE (!, nil?), SUPER_OBJ_FROZEN (frozen?),
+   SUPER_OBJ_SELF (itself) or SUPER_OBJ_ROW (the name of a Kernel builtin row,
+   respond_to_missing?: the row's answer); 0 for any
    other, and for a super `id` that
    passes a splat, a keyword, a forwarded list or a count the method does
    not take. Only a plain class qualifies
@@ -5497,22 +5498,26 @@ const Scope *comp_super_site(Compiler *c, const Scope *s) {
    the name in a program's Object, Kernel or BasicObject is not this one. */
 int class_is_comparable(Compiler *c, int cid);   /* codegen_call.c */
 int is_descendant(Compiler *c, int k, int anc);
+/* See compiler.h. */
+int comp_zsuper_plain_params(Compiler *c, const Scope *s, int *out, int cap) {
+  const NodeTable *nt = c->nt;
+  int pn = s->def_node >= 0 ? nt_ref(nt, s->def_node, "parameters") : -1, n = 0, k = 0;
+  if (pn < 0) return 0;
+  const char *arrs[] = { "posts", "keywords" };
+  for (int i = 0; i < 2; i++) { (void)nt_arr(nt, pn, arrs[i], &k); if (k) return -1; }
+  if (nt_ref(nt, pn, "rest") >= 0 || nt_ref(nt, pn, "keyword_rest") >= 0) return -1;
+  /* (an optional's value as it stands is passed too) */
+  const int *rq = nt_arr(nt, pn, "requireds", &n), *op = nt_arr(nt, pn, "optionals", &k);
+  if (n + k != s->nparams) return -1;
+  for (int i = 0; out && i < n + k && i < cap; i++) out[i] = i < n ? rq[i] : op[i - n];
+  return n + k;
+}
 /* The plain argument count a super passes, or -1 for a splat, a keyword
-   or a forwarded list: a bare super's comes from the method's parameters,
-   which must all be required ones. */
+   or a forwarded list: a bare super's comes from the method's requireds
+   and optionals (comp_zsuper_plain_params). */
 static int super_plain_argc(Compiler *c, int id, const Scope *s) {
   const NodeTable *nt = c->nt;
-  if (nt_kind(nt, id) == NK_ForwardingSuperNode) {
-    int pn = s->def_node >= 0 ? nt_ref(nt, s->def_node, "parameters") : -1, n = 0, k = 0;
-    if (pn < 0) return 0;
-    const char *arrs[] = { "posts", "keywords" };
-    for (int i = 0; i < 2; i++) { (void)nt_arr(nt, pn, arrs[i], &k); if (k) return -1; }
-    if (nt_ref(nt, pn, "rest") >= 0 || nt_ref(nt, pn, "keyword_rest") >= 0) return -1;
-    /* (an optional's value as it stands is passed too) */
-    (void)nt_arr(nt, pn, "requireds", &n);
-    (void)nt_arr(nt, pn, "optionals", &k);
-    return n + k == s->nparams ? n + k : -1;
-  }
+  if (nt_kind(nt, id) == NK_ForwardingSuperNode) return comp_zsuper_plain_params(c, s, NULL, 0);
   int sa = nt_ref(nt, id, "arguments"), n = 0;
   const int *av = sa >= 0 ? nt_arr(nt, sa, "arguments", &n) : NULL;
   for (int i = 0; i < n; i++) {
@@ -5522,22 +5527,31 @@ static int super_plain_argc(Compiler *c, int id, const Scope *s) {
   }
   return n;
 }
+const BuiltinOp *comp_super_kernel_row(Compiler *c, const Scope *s, const char *uname, int id) {
+  const BuiltinOp *op = uname ? bop_find(BOP_KERNEL, uname, super_plain_argc(c, id, s), 0) : NULL;
+  return op && !(op->flags & BOPF_INTERNAL) ? op : NULL;
+}
 int comp_super_object_builtin(Compiler *c, const Scope *s, const char *uname, int id) {
   if (!s || s->is_cmethod || !uname || s->class_id < 0 || s->class_id >= c->nclasses) return 0;
   int kind = 0, nargs = 0, kernel = 0;
+  /* Kernel's own row of the name (BOP_KERNEL) answers the super from any
+     program class: the core classes that define the name themselves
+     (Exception's private one) answer as the row does */
+  const BuiltinOp *krow = comp_super_kernel_row(c, s, uname, id);
+  int any_core = krow != NULL;
   if (sp_streq(uname, "==") || sp_streq(uname, "equal?")) { kind = SUPER_OBJ_SAME; nargs = 1; }
   else if (sp_streq(uname, "eql?")) { kind = SUPER_OBJ_SAME; nargs = 1; kernel = 1; }
   else if (sp_streq(uname, "!")) kind = SUPER_OBJ_FALSE;
   else if (sp_streq(uname, "nil?")) { kind = SUPER_OBJ_FALSE; kernel = 1; }
   else if (sp_streq(uname, "frozen?")) { kind = SUPER_OBJ_FROZEN; kernel = 1; }
   else if (sp_streq(uname, "itself")) { kind = SUPER_OBJ_SELF; kernel = 1; }
-  else if (sp_streq(uname, RESPOND_TO_MISSING_NAME)) { kind = SUPER_OBJ_FALSE; nargs = 2; kernel = 1; }
+  else if (any_core) { kind = SUPER_OBJ_ROW; nargs = super_plain_argc(c, id, s); kernel = 1; }
   if (!kind || super_plain_argc(c, id, s) != nargs) return 0;
   /* (Comparable reached through Object's own include answers == too) */
-  if (!comp_plain_class(c, s->class_id) || class_is_comparable(c, s->class_id)) return 0;
+  if (!any_core && (!comp_plain_class(c, s->class_id) || class_is_comparable(c, s->class_id))) return 0;
   /* the method runs for a subclass's instance too, and a subclass that
      includes Comparable answers == by <=> */
-  for (int k = 0; k < c->nclasses; k++)
+  for (int k = 0; k < c->nclasses && !any_core; k++)
     if (k != s->class_id && is_descendant(c, k, s->class_id) &&
         (!comp_plain_class(c, k) || class_is_comparable(c, k))) return 0;
   int root = s->class_id;

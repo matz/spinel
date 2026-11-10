@@ -3148,32 +3148,37 @@ int bop_io_library_row(const BuiltinOp *op) {
 static const BuiltinClassOp bop_class_rows[] = {
   { "IO", { TY_CLASS, "pipe",        0,   0, BF_ANY, TY_POLY_ARRAY, BOPE_TEMPLATE, "sp_io_pipe()", 0, 0, BOPF_OWN_CLASS } },
   { "IO", { TY_CLASS, "pipe",        0, 127, BF_ANY, TY_POLY_ARRAY, BOPE_NONE, NULL, 0, 0, BOPF_OWN_CLASS | BOPF_KEYWORDS } },
-  { "IO", { TY_CLASS, "for_fd",      1, 127, BF_ANY, TY_IO,         BOPE_IO_FOR_FD, NULL, 0, 0, BOPF_OWN_CLASS | BOPF_KEYWORDS } },
-  { "IO", { TY_CLASS, "new",         1, 127, BF_ANY, TY_UNKNOWN,    BOPE_IO_FOR_FD, NULL, 0, 0, BOPF_OWN_CLASS | BOPF_KEYWORDS | BOPF_INFERRED } },
+  { "IO", { TY_CLASS, "for_fd",      1,   3, BF_ANY, TY_IO,         BOPE_IO_FOR_FD, NULL, 0, 0, BOPF_OWN_CLASS | BOPF_KEYWORDS } },
+  { "IO", { TY_CLASS, "new",         1,   3, BF_ANY, TY_UNKNOWN,    BOPE_IO_FOR_FD, NULL, 0, 0, BOPF_OWN_CLASS | BOPF_KEYWORDS | BOPF_INFERRED } },
   { "IO", { TY_CLASS, "select",      1,   4, BF_ANY, TY_POLY,       BOPE_IO_SELECT } },
   { "IO", { TY_CLASS, "select",      1, 127, BF_ANY, TY_POLY,       BOPE_NONE } },
   { "IO", { TY_CLASS, "copy_stream", 2,   2, BF_ANY, TY_INT,        BOPE_IO_COPY_STREAM } },
   { "IO", { TY_CLASS, "copy_stream", 0, 127, BF_ANY, TY_INT,        BOPE_NONE } },
-  { "IO", { TY_CLASS, "sysopen",     1, 127, BF_ANY, TY_INT,        BOPE_IO_SYSOPEN } },
+  { "IO", { TY_CLASS, "sysopen",     1,   3, BF_ANY, TY_INT,        BOPE_IO_SYSOPEN } },
   { "IO", { TY_CLASS, "sysopen",     0, 127, BF_ANY, TY_INT,        BOPE_NONE } },
 };
 
-const BuiltinClassOp *bop_class_find(const char *cls, const char *name, int argc, int has_block) {
+const char *bop_class_owner(const char *cls, const char *name) {
   if (!cls || !name) return NULL;
   const char *a;
-  /* the first class of the chain with a row of the name has the method */
-  for (int i = 0; (a = builtin_ancestor_at(cls, i)); i++) {
-    int owns = 0;
-    for (size_t k = 0; k < sizeof bop_class_rows / sizeof bop_class_rows[0]; k++) {
-      const BuiltinClassOp *r = &bop_class_rows[k];
-      if (!sp_streq(r->cls, a) || !sp_streq(r->op.name, name)) continue;
-      owns = 1;
-      if ((i == 0 || !(r->op.flags & BOPF_OWN_CLASS)) && bop_row_fits(&r->op, argc, has_block)) return r;
-    }
-    if (owns) return NULL;
+  for (int i = 0; (a = builtin_ancestor_at(cls, i)); i++)
+    for (size_t k = 0; k < sizeof bop_class_rows / sizeof bop_class_rows[0]; k++)
+      if (sp_streq(bop_class_rows[k].cls, a) && sp_streq(bop_class_rows[k].op.name, name)) return bop_class_rows[k].cls;
+  return NULL;
+}
+
+const BuiltinClassOp *bop_class_find(const char *cls, const char *name, int argc, int has_block) {
+  const char *own = bop_class_owner(cls, name);
+  for (size_t k = 0; own && k < sizeof bop_class_rows / sizeof bop_class_rows[0]; k++) {
+    const BuiltinClassOp *r = &bop_class_rows[k];
+    if (!sp_streq(r->cls, own) || !sp_streq(r->op.name, name)) continue;
+    if ((sp_streq(own, cls) || !(r->op.flags & BOPF_OWN_CLASS)) && bop_row_fits(&r->op, argc, has_block)) return r;
   }
   return NULL;
 }
+
+int bop_class_row_count(void) { return (int)(sizeof bop_class_rows / sizeof bop_class_rows[0]); }
+const BuiltinClassOp *bop_class_row(int i) { return i >= 0 && i < bop_class_row_count() ? &bop_class_rows[i] : NULL; }
 
 int bop_row_count(void) { return (int)(sizeof bop_rows / sizeof bop_rows[0]); }
 const BuiltinOp *bop_row(int i) { return i >= 0 && i < bop_row_count() ? &bop_rows[i] : NULL; }

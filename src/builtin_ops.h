@@ -504,6 +504,12 @@ typedef struct {
    BOPF_OWN_CLASS answers on its own class only, and a row of a library
    (op.feature) only where the program has the library. NULL for none. */
 const BuiltinClassOp *bop_class_find(const char *cls, const char *name, int argc, int has_block);
+/* The class of cls's singleton chain whose rows have class method name:
+   the first with a row of the name, as CRuby finds a singleton method
+   (File.sysopen is IO's), whatever the count. NULL for none. */
+const char *bop_class_owner(const char *cls, const char *name);
+int bop_class_row_count(void);
+const BuiltinClassOp *bop_class_row(int i);   /* the i-th class-side row, NULL past the last */
 
 /* Whether any row applies to receivers of kind rt: a caller checks this
    before reading the call's arguments, so receivers no row covers cost

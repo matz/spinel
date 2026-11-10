@@ -20918,6 +20918,7 @@ static const char *const bop_arity_kw_rows[][2] = {
   {"Array", "pack"},        /* buffer: */
   {"Queue", "pop"}, {"Queue", "shift"}, {"Queue", "deq"},    /* timeout: */
   {"Queue", "push"}, {"Queue", "<<"}, {"Queue", "enq"},      /* timeout: (SizedQueue's) */
+  {"IO", "for_fd"}, {"IO", "new"},   /* class methods: mode:, autoclose:, ... */
   {NULL, NULL}
 };
 static int bop_arity_kw_row(const char *cls, const char *name) {
@@ -20948,6 +20949,32 @@ static int builtin_arity_tables_agree(void) {
           checked, bad);
   return bad;
 }
+/* Is builtin-op row r (of class cls; sep "#" for an instance method, "."
+   for a class method) outside CRuby's counts sp? Prints the finding; a
+   keyword row in bop_arity_kw_rows is marked used instead. */
+static int bop_row_outside(const char *cls, const char *sep, const BuiltinOp *r, const SpAritySpec *sp,
+                           int *kw_used, int *checked) {
+  if (!sp || (sp->min < 0 && sp->blk_min < 0)) return 0;   /* no row, or unproved */
+  /* the bare and the block-carrying counts together: a row serves both */
+  int lo = sp->min >= 0 ? sp->min : sp->blk_min;
+  if (sp->min >= 0 && sp->blk_min >= 0 && sp->blk_min < lo) lo = sp->blk_min;
+  int hi = -2;
+  if (sp->min >= 0) hi = sp->max;
+  if (sp->blk_min >= 0 && hi != -1 && (sp->blk_max == -1 || sp->blk_max > hi)) hi = sp->blk_max;
+  (*checked)++;
+  if (r->argc_min >= lo && (hi < 0 || r->argc_max <= hi)) return 0;
+  if (bop_arity_kw_row(cls, r->name)) {
+    for (int k = 0; bop_arity_kw_rows[k][0]; k++)
+      if (sp_streq(cls, bop_arity_kw_rows[k][0]) && sp_streq(r->name, bop_arity_kw_rows[k][1])) kw_used[k] = 1;
+    return 0;
+  }
+  char his[16];
+  if (hi < 0) snprintf(his, sizeof his, "any");
+  else snprintf(his, sizeof his, "%d", hi);
+  fprintf(stderr, "check-bop-arity: %s%s%s: row %d..%d, CRuby %d..%s\n", cls, sep, r->name,
+          r->argc_min, r->argc_max, lo, his);
+  return 1;
+}
 int builtin_ops_arity_check(void) {
   int checked = 0, bad = builtin_arity_tables_agree();
   int kw_used[sizeof bop_arity_kw_rows / sizeof bop_arity_kw_rows[0]] = {0};
@@ -20957,27 +20984,14 @@ int builtin_ops_arity_check(void) {
     if (r->flags & BOPF_INTERNAL) continue;   /* a function of the compiler's, not a CRuby method: no count to check */
     const char *cls = bop_spec_class(r->recv);
     if (!cls) continue;
-    const SpAritySpec *sp = arity_spec_find(sp_builtin_arity_spec_tbl, cls, r->name);
-    if (!sp || (sp->min < 0 && sp->blk_min < 0)) continue;   /* no row, or unproved */
-    /* the bare and the block-carrying counts together: a row serves both */
-    int lo = sp->min >= 0 ? sp->min : sp->blk_min;
-    if (sp->min >= 0 && sp->blk_min >= 0 && sp->blk_min < lo) lo = sp->blk_min;
-    int hi = -2;
-    if (sp->min >= 0) hi = sp->max;
-    if (sp->blk_min >= 0 && hi != -1 && (sp->blk_max == -1 || sp->blk_max > hi)) hi = sp->blk_max;
-    checked++;
-    if (r->argc_min >= lo && (hi < 0 || r->argc_max <= hi)) continue;
-    if (bop_arity_kw_row(cls, r->name)) {
-      for (int k = 0; bop_arity_kw_rows[k][0]; k++)
-        if (sp_streq(cls, bop_arity_kw_rows[k][0]) && sp_streq(r->name, bop_arity_kw_rows[k][1])) kw_used[k] = 1;
-      continue;
-    }
-    char his[16];
-    if (hi < 0) snprintf(his, sizeof his, "any");
-    else snprintf(his, sizeof his, "%d", hi);
-    fprintf(stderr, "check-bop-arity: %s#%s: row %d..%d, CRuby %d..%s\n", cls, r->name,
-            r->argc_min, r->argc_max, lo, his);
-    bad++;
+    bad += bop_row_outside(cls, "#", r, arity_spec_find(sp_builtin_arity_spec_tbl, cls, r->name), kw_used, &checked);
+  }
+  /* the class-side rows, against their own class's class-method counts */
+  for (int i = 0; i < bop_class_row_count(); i++) {
+    const BuiltinClassOp *r = bop_class_row(i);
+    if (r->op.argc_max == BOP_ARGC_ANY) continue;
+    bad += bop_row_outside(r->cls, ".", &r->op, arity_spec_find(sp_builtin_cmeth_arity_spec_tbl, r->cls, r->op.name),
+                           kw_used, &checked);
   }
   /* an exemption no row needs any more is a stale hand entry */
   for (int k = 0; bop_arity_kw_rows[k][0]; k++)
@@ -21210,6 +21224,26 @@ static int const_reads_builtin_value(Compiler *c, int recv) {
   return ty_is_array(rt) || ty_is_hash(rt) || rt == TY_STRING || rt == TY_STRBUF ||
          rt == TY_INT || rt == TY_FLOAT || rt == TY_SYMBOL || rt == TY_IO;
 }
+/* CRuby's counts for class method `name` of builtin class cls: its own row
+   of the facts, or the row of the class of its singleton chain that has
+   the method (bop_class_owner: File.sysopen is IO's), read as CRuby finds
+   it. A `new` is the class's own: its counts are its initialize's, never a
+   superclass's. The modules a class includes are not on the chain, their
+   singleton methods not being inherited, and a class method the program
+   defines on the chain, up to that class, keeps its own count. */
+static int class_arity_spec_row(Compiler *c, int id, const char *cls, const char *name,
+                                int with_block, int argc, char *exp, size_t n) {
+  const char *owner = is_new_name(name) ? NULL : bop_class_owner(cls, name);
+  const char *a = cls;
+  for (int i = 0; a; a = builtin_ancestor_at(cls, ++i)) {
+    if (i > 0 && is_builtin_module_name(a)) continue;
+    int ci = i > 0 ? comp_class_index(c, a) : -1;
+    if (ci >= 0 && cplan_cmethod_target(c, id, ci, name) >= 0) return 0;
+    if (arity_spec_row(sp_builtin_cmeth_arity_spec_tbl, a, name, with_block, argc, exp, n)) return 1;
+    if (!owner || sp_streq(a, owner)) break;
+  }
+  return 0;
+}
 static int arity_violation(Compiler *c, int id, int non_nil, char *exp, size_t n, int *eval_recv) {
   const NodeTable *nt = c->nt;
   const char *name = nt_str(nt, id, "name");
@@ -21278,7 +21312,7 @@ static int arity_violation(Compiler *c, int id, int non_nil, char *exp, size_t n
           (!arity_spec_row(itbl, "Object", name, with_block, argc, exp, n) || toplevel_def(c, name)))
         return 0;
     }
-    else if (!arity_spec_row(ctbl, cn, name, with_block, argc, exp, n)) return 0;
+    else if (!class_arity_spec_row(c, id, cn, name, with_block, argc, exp, n)) return 0;
     if (!exp[0]) return 0;
     *eval_recv = 0;  /* a constant read has no effect to evaluate */
   }

@@ -2661,6 +2661,79 @@ static const char *rsl_block_sends_to_self(const NodeTable *nt, int bk) {
   const char *rv = r >= 0 && nt_kind(nt, r) == NK_LocalVariableReadNode ? nt_str(nt, r, "name") : NULL;
   return pn && rv && sp_streq(pn, rv) ? nt_str(nt, st[0], "name") : NULL;
 }
+/* Can the program's own method answer `name` for a receiver of the
+   builtin class cls (Array, String or Symbol)? The builtin has its own
+   method of each name asked here, so only a reopen of that class can
+   change it, or a module put into it. So: a `class cls` body with a
+   statement that may make or remove the name (rsl_stmt_defines), or an
+   include, prepend, class_eval, define_method, undef_method and the like
+   called on cls (what such a module or block holds is not looked at). `class String; def
+   to_sym ...` turns `%w[a b].map(&:to_sym)` into other names, so that
+   list is not the literal's. (The scopes are not built yet here.) */
+static int rsl_is_const(const NodeTable *nt, int n, const char *cls) {
+  if (n < 0) return 0;
+  NodeKind k = nt_kind(nt, n);
+  if (k == NK_ConstantPathNode && nt_ref(nt, n, "parent") >= 0) return 0;
+  return (k == NK_ConstantReadNode || k == NK_ConstantPathNode) &&
+         nt_str(nt, n, "name") && sp_streq(nt_str(nt, n, "name"), cls);
+}
+static int rsl_sym_is(const NodeTable *nt, int n, const char *name) {
+  if (n < 0) return 0;
+  NodeKind k = nt_kind(nt, n);
+  /* a name the compiler cannot read may be this one */
+  if (k != NK_SymbolNode && k != NK_StringNode) return 1;
+  const char *v = nt_str(nt, n, k == NK_SymbolNode ? "value" : "unescaped");
+  return !v || sp_streq(v, name);
+}
+/* may statement st of a class body make the method name? Only a plain
+   def or alias of another name, a constant write, or a visibility call
+   over such is passed over; any other statement (a begin, an if, a
+   receiverless class_eval or define_method, an include, an undef, a
+   block) counts, as what it does is not looked at. */
+static int rsl_stmt_defines(const NodeTable *nt, int st, const char *name) {
+  NodeKind k = nt_kind(nt, st);
+  if (k == NK_DefNode)
+    return nt_ref(nt, st, "receiver") < 0 && (!nt_str(nt, st, "name") || sp_streq(nt_str(nt, st, "name"), name));
+  if (k == NK_AliasMethodNode) return rsl_sym_is(nt, nt_ref(nt, st, "new_name"), name);
+  if (k == NK_ConstantWriteNode) return 0;
+  if (k != NK_CallNode || nt_ref(nt, st, "receiver") >= 0 || nt_ref(nt, st, "block") >= 0) return 1;
+  const char *cn = nt_str(nt, st, "name");
+  int args = nt_ref(nt, st, "arguments"), an = 0;
+  const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &an) : NULL;
+  if (!cn) return 1;
+  /* `private def m`, `public :m`, `private`: a def among its arguments
+     counts as above; a visibility change of the name itself counts */
+  if (sp_streq(cn, "private") || sp_streq(cn, "public") || sp_streq(cn, "protected")) {
+    for (int i = 0; i < an; i++)
+      if (nt_kind(nt, av[i]) == NK_DefNode ? rsl_stmt_defines(nt, av[i], name) : rsl_sym_is(nt, av[i], name)) return 1;
+    return 0;
+  }
+  /* alias_method, attr_reader and the like: the names they make */
+  if (sp_streq(cn, "alias_method") && an >= 1) return rsl_sym_is(nt, av[0], name);
+  if (sp_streq(cn, "attr_reader") || sp_streq(cn, "attr_writer") || sp_streq(cn, "attr_accessor") || sp_streq(cn, "attr")) {
+    for (int i = 0; i < an; i++) if (rsl_sym_is(nt, av[i], name)) return 1;
+    return 0;
+  }
+  return 1;
+}
+static int rsl_own_method(const NodeTable *nt, const char *cls, const char *name) {
+  NT_FOREACH_KIND(nt, NK_ClassNode, d) {
+    if (!rsl_is_const(nt, nt_ref(nt, d, "constant_path"), cls)) continue;
+    int body = class_def_body(nt, d), bn = 0;
+    const int *bb = body >= 0 && nt_kind(nt, body) == NK_StatementsNode ? nt_arr(nt, body, "body", &bn) : NULL;
+    for (int i = 0; i < bn; i++) if (rsl_stmt_defines(nt, bb[i], name)) return 1;
+  }
+  NT_FOREACH_KIND(nt, NK_CallNode, k) {
+    const char *cn = nt_str(nt, k, "name");
+    if (!cn || !rsl_is_const(nt, nt_ref(nt, k, "receiver"), cls)) continue;
+    if (sp_streq(cn, "include") || sp_streq(cn, "prepend") || sp_streq(cn, "class_eval") ||
+        sp_streq(cn, "class_exec") || sp_streq(cn, "module_eval") || sp_streq(cn, "send") ||
+        sp_streq(cn, "__send__") || sp_streq(cn, "public_send") || sp_streq(cn, "define_method") ||
+        sp_streq(cn, "alias_method") || sp_streq(cn, "undef_method") || sp_streq(cn, "remove_method") ||
+        sp_streq(cn, "instance_eval") || sp_streq(cn, "instance_exec")) return 1;
+  }
+  return 0;
+}
 int resolve_symbol_list(Compiler *c, int node, const char **out, int cap, int depth) {
   const NodeTable *nt = c->nt;
   if (node < 0 || depth > 8) return -1;
@@ -2738,6 +2811,12 @@ int resolve_symbol_list(Compiler *c, int node, const char **out, int cap, int de
       /* (the `&:to_sym` is a block `{ |x| x.to_sym }` by now) */
       if (!bs && bk >= 0 && nt_kind(nt, bk) == NK_BlockNode) bs = rsl_block_sends_to_self(nt, bk);
       if (!bs || !(sp_streq(bs, "to_sym") || sp_streq(bs, "intern"))) return -1;
+      /* the program's own Array#map, String#to_sym or Symbol#to_sym (the
+         list may hold Symbols), or Symbol#to_proc for `&:to_sym` (a block
+         by now, so asked for either form), makes other names */
+      if (rsl_own_method(nt, "Array", mn) || rsl_own_method(nt, "String", bs) ||
+          rsl_own_method(nt, "Symbol", bs) ||
+          rsl_own_method(nt, "Symbol", "to_proc")) return -1;
       int was = rsl_strings;
       rsl_strings = 1;
       int n = resolve_symbol_list(c, recv, out, cap, depth + 1);
@@ -2746,6 +2825,12 @@ int resolve_symbol_list(Compiler *c, int node, const char **out, int cap, int de
     }
     int n = resolve_symbol_list(c, recv, out, cap, depth + 1);
     if (n < 0) return -1;
+    /* the program's own Array method of the name answers something else,
+       and sort asks each element's <=> (a Symbol's, or a String's ahead of
+       a map(&:to_sym)), which the program may define */
+    if (rsl_own_method(nt, "Array", mn)) return -1;
+    if (sp_streq(mn, "sort") && (rsl_own_method(nt, "Symbol", "<=>") ||
+                                 (rsl_strings && rsl_own_method(nt, "String", "<=>")))) return -1;
     if (sp_streq(mn, "freeze") && an == 0) return n;
     if (sp_streq(mn, "reverse") && an == 0) {
       for (int i = 0; i < n / 2; i++) { const char *t = out[i]; out[i] = out[n-1-i]; out[n-1-i] = t; }

@@ -1822,6 +1822,10 @@ spinel: 1 refusal, nothing written
 spinel: test/reject/stringio_subclass_initialize_no_super.rb:7: NoSuper#initialize does not call super: the StringIO it is would be left unset, where CRuby raises IOError (uninitialized stream) on its first use; call super in initialize
 == test/reject/stringio_subclass_initialize_no_super.rb [promote] rc=1
 spinel: test/reject/stringio_subclass_initialize_no_super.rb:7: NoSuper#initialize does not call super: the StringIO it is would be left unset, where CRuby raises IOError (uninitialized stream) on its first use; call super in initialize
+== test/reject/struct_new_member_names_own_to_sym.rb [default] rc=1
+spinel: test/reject/struct_new_member_names_own_to_sym.rb:8: Struct.new with member names known only at run time (a splat of a list the compiler cannot read): write the names, or a constant of literal symbols
+== test/reject/struct_new_member_names_own_to_sym.rb [promote] rc=1
+spinel: test/reject/struct_new_member_names_own_to_sym.rb:8: Struct.new with member names known only at run time (a splat of a list the compiler cannot read): write the names, or a constant of literal symbols
 == test/reject/struct_new_runtime_member_names.rb [default] rc=1
 spinel: test/reject/struct_new_runtime_member_names.rb:6: Struct.new with member names known only at run time (a splat of a list the compiler cannot read): write the names, or a constant of literal symbols
 == test/reject/struct_new_runtime_member_names.rb [promote] rc=1

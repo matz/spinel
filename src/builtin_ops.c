@@ -1932,9 +1932,9 @@ static const BuiltinOp bop_rows[] = {
   { TY_METHOD, "receiver",        0,   0, BF_ANY, TY_UNKNOWN,    BOPE_METHOD_RECEIVER, NULL, 0, 0, BOPF_INFERRED },  /* typed by infer_method_proc_call (#2701) */
   { TY_METHOD, "arity",           0,   0, BF_ANY, TY_INT,        BOPE_METHOD_ARITY },
   { TY_METHOD, "==",              1,   1, BF_ANY, TY_BOOL,       BOPE_NONE },
-  { TY_METHOD, "eql?",            1,   1, BF_ANY,      TY_BOOL,       BOPE_TEMPLATE, "({ sp_BoundMethod *_t$t = $r; sp_BoundMethod *_t$u = $e0; (sp_bool)(_t$t->self == _t$u->self && _t$t->fn == _t$u->fn); })", BOP_K(TY_METHOD) },
+  { TY_METHOD, "eql?",            1,   1, BF_ANY,      TY_BOOL,       BOPE_TEMPLATE, "sp_bm_same($r, $e0)", BOP_K(TY_METHOD) },
   { TY_METHOD, "eql?",            1,   1, BF_ANY,      TY_BOOL,       BOPE_TEMPLATE, "((void)($r), (void)($b0), (sp_bool)0)", 0 },
-  { TY_METHOD, "equal?",          1,   1, BF_ANY,      TY_BOOL,       BOPE_TEMPLATE, "({ sp_BoundMethod *_t$t = $r; sp_BoundMethod *_t$u = $e0; (sp_bool)(_t$t->self == _t$u->self && _t$t->fn == _t$u->fn); })", BOP_K(TY_METHOD) },
+  { TY_METHOD, "equal?",          1,   1, BF_ANY,      TY_BOOL,       BOPE_TEMPLATE, "((void *)($r) == (void *)($e0))", BOP_K(TY_METHOD) },  /* object identity: two Methods of one method are == but not equal? */
   { TY_METHOD, "equal?",          1,   1, BF_ANY,      TY_BOOL,       BOPE_TEMPLATE, "((void)($r), (void)($b0), (sp_bool)0)", 0 },
   { TY_METHOD, "bind",            1,   1, BF_ANY, TY_METHOD,     BOPE_METHOD_BIND },  /* #2676 */
   { TY_PROC,   "to_proc",         0,   0, BF_ANY, TY_PROC,       BOPE_TEMPLATE, "$r", 0 },  /* self (#3687) */

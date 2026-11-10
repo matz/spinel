@@ -17657,14 +17657,11 @@ static int emit_case_eq_call(Compiler *c, int id, Buf *b) {
       return 1;
     }
     /* Method/UnboundMethod#== / #eql?: same bound receiver and same target
-       function; any non-method operand is simply unequal (#3247). */
+       (sp_bm_same: one function, or one builtin method); any non-method operand is simply unequal (#3247). */
     if (recv >= 0 && rt == TY_METHOD) {
       if (a0 == TY_METHOD) {
-        int ta2 = ++g_tmp, tb2 = ++g_tmp;
-        buf_printf(b, "({ sp_BoundMethod *_t%d = ", ta2); emit_expr(c, recv, b);
-        buf_printf(b, "; sp_BoundMethod *_t%d = ", tb2); emit_expr(c, argv[0], b);
-        buf_printf(b, "; (sp_bool)%s(_t%d->self == _t%d->self && _t%d->fn == _t%d->fn); })",
-                   eq ? "" : "!", ta2, tb2, ta2, tb2);
+        buf_printf(b, "(%ssp_bm_same(", eq ? "" : "!"); emit_expr(c, recv, b);
+        buf_puts(b, ", "); emit_expr(c, argv[0], b); buf_puts(b, "))");
       }
       else emit_voided_operands(c, recv, argv[0], eq ? 0 : 1, b);
       return 1;

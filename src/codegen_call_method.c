@@ -477,6 +477,17 @@ static void emit_method_owner_class(Compiler *c, int mn, int mi, int unbound, Bu
   else buf_printf(b, "((sp_Class){%d, NULL})", ci);
 }
 
+/* The identity key of the builtin method a synthesized wrapper mi stands for,
+   "Owner#name" (sp_BoundMethod.ident), or NULL for any other target. Each
+   `.method(:sym)` on a builtin receiver has a wrapper of its own, so the
+   wrapper's address cannot say that two Methods are one method: this does. */
+static const char *method_builtin_ident(Compiler *c, int mn, int mi, int unbound, char *buf, size_t n) {
+  const char *bn, *sym = mi >= 0 ? bam_builtin_sym(c, mi, NULL) : NULL;
+  if (!sym || method_owner_ci(c, mn, mi, unbound, &(int){0}, &bn) >= 0 || !bn) return NULL;
+  snprintf(buf, n, "%s#%s", bn, sym);
+  return buf;
+}
+
 /* Where method mi stands, for #source_location: 1 and its def's file and
    line, 0 for none (nil: a C extension's method has none), or -1 where no
    fact tells: a builtin's wrapper (desugar_builtin_method_obj, bam_sym)
@@ -2226,6 +2237,9 @@ static int emit_method_obj_target(Compiler *c, int id, Buf *b, const NodeTable *
     if (bop) builtin_method_params("Array", sym, &in_c);
     const char *pp = proc_params_arg(mi >= 0 ? method_proc_params(c, mi) : bop && in_c ? PROC_PARAMS_ARITY : PROC_PARAMS_LIST);
     if (mmq >= 0 && (self_rooted || recv < 0)) emit_missing_guard(c, id, mi, mmq, self_rooted ? self_tmp : -1, b);
+    char identbuf[256];
+    const char *ident = method_builtin_ident(c, id, mi, 0, identbuf, sizeof identbuf);
+    if (ident) buf_puts(b, "sp_bm_set_ident(");
     if (pp) buf_puts(b, "sp_bm_set_proc_params(");
     buf_puts(b, mi >= 0 || bop ? "sp_bm_set_thunk(sp_bm_set_abi(sp_bound_method_new_d(" : "sp_bm_set_thunk(sp_bm_set_abi(sp_bound_method_new(");
     if (self_rooted) buf_printf(b, "_t%d", self_tmp);
@@ -2429,6 +2443,7 @@ static int emit_method_obj_target(Compiler *c, int id, Buf *b, const NodeTable *
                        mi >= 0 ? mi_fixed : bop_argc, mi >= 0 ? mi_rest : bop_rest,
                        mi >= 0 ? (mi_legacy ? mi_ret : mi_pret) : bop_ret, mi_poly, mi_pfixed, _th, _tmin, _tmax); }
     if (pp) buf_printf(b, ", %s)", pp);
+    if (ident) { buf_puts(b, ", "); emit_str_literal(b, ident); buf_puts(b, ")"); }
     if (mmq >= 0 && (self_rooted || recv < 0)) buf_puts(b, ")");
     if (self_rooted) buf_puts(b, "; })");
     return 1;

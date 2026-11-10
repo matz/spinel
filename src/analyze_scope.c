@@ -2661,6 +2661,44 @@ static const char *rsl_block_sends_to_self(const NodeTable *nt, int bk) {
   const char *rv = r >= 0 && nt_kind(nt, r) == NK_LocalVariableReadNode ? nt_str(nt, r, "name") : NULL;
   return pn && rv && sp_streq(pn, rv) ? nt_str(nt, st[0], "name") : NULL;
 }
+/* Can the program's own method answer `name` for a receiver of the
+   builtin class cls (Array, String or Symbol)? Only a reopen of that class,
+   or a module put into it, reaches it ahead of the builtin's own method, so
+   the class is named somewhere; and a def, alias, alias_method or
+   define_method somewhere makes the name. Either missing: the builtin's
+   method answers (`class String; def to_sym ...` turns `%w[a b].map(&:to_sym)`
+   into other names, so that list is not the literal's). */
+static int rsl_names_const(const NodeTable *nt, const char *cls) {
+  NT_FOREACH_KIND(nt, NK_ConstantReadNode, r)
+    if (nt_str(nt, r, "name") && sp_streq(nt_str(nt, r, "name"), cls)) return 1;
+  NT_FOREACH_KIND(nt, NK_ConstantPathNode, r)
+    if (nt_str(nt, r, "name") && sp_streq(nt_str(nt, r, "name"), cls)) return 1;
+  return 0;
+}
+static int rsl_program_defines(const NodeTable *nt, const char *name) {
+  NT_FOREACH_KIND(nt, NK_DefNode, d)
+    if (nt_str(nt, d, "name") && sp_streq(nt_str(nt, d, "name"), name)) return 1;
+  NT_FOREACH_KIND(nt, NK_AliasMethodNode, a) {
+    int nn = nt_ref(nt, a, "new_name");
+    if (nn >= 0 && nt_kind(nt, nn) == NK_SymbolNode && nt_str(nt, nn, "value") && sp_streq(nt_str(nt, nn, "value"), name)) return 1;
+  }
+  NT_FOREACH_KIND(nt, NK_CallNode, k) {
+    const char *cn = nt_str(nt, k, "name");
+    if (!cn || !(sp_streq(cn, "alias_method") || sp_streq(cn, "define_method"))) continue;
+    int args = nt_ref(nt, k, "arguments"), an = 0;
+    const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &an) : NULL;
+    if (an < 1) continue;
+    NodeKind ak = nt_kind(nt, av[0]);
+    /* a name the compiler cannot read may be this one */
+    if (ak != NK_SymbolNode && ak != NK_StringNode) return 1;
+    const char *v = nt_str(nt, av[0], ak == NK_SymbolNode ? "value" : "unescaped");
+    if (!v || sp_streq(v, name)) return 1;
+  }
+  return 0;
+}
+static int rsl_own_method(const NodeTable *nt, const char *cls, const char *name) {
+  return rsl_program_defines(nt, name) && rsl_names_const(nt, cls);
+}
 int resolve_symbol_list(Compiler *c, int node, const char **out, int cap, int depth) {
   const NodeTable *nt = c->nt;
   if (node < 0 || depth > 8) return -1;
@@ -2738,6 +2776,8 @@ int resolve_symbol_list(Compiler *c, int node, const char **out, int cap, int de
       /* (the `&:to_sym` is a block `{ |x| x.to_sym }` by now) */
       if (!bs && bk >= 0 && nt_kind(nt, bk) == NK_BlockNode) bs = rsl_block_sends_to_self(nt, bk);
       if (!bs || !(sp_streq(bs, "to_sym") || sp_streq(bs, "intern"))) return -1;
+      /* the program's own Array#map or String#to_sym makes other names */
+      if (rsl_own_method(nt, "Array", mn) || rsl_own_method(nt, "String", bs)) return -1;
       int was = rsl_strings;
       rsl_strings = 1;
       int n = resolve_symbol_list(c, recv, out, cap, depth + 1);
@@ -2746,6 +2786,10 @@ int resolve_symbol_list(Compiler *c, int node, const char **out, int cap, int de
     }
     int n = resolve_symbol_list(c, recv, out, cap, depth + 1);
     if (n < 0) return -1;
+    /* the program's own Array method of the name answers something else,
+       and sort asks each Symbol's <=>, which the program may define */
+    if (rsl_own_method(nt, "Array", mn)) return -1;
+    if (sp_streq(mn, "sort") && rsl_own_method(nt, "Symbol", "<=>")) return -1;
     if (sp_streq(mn, "freeze") && an == 0) return n;
     if (sp_streq(mn, "reverse") && an == 0) {
       for (int i = 0; i < n / 2; i++) { const char *t = out[i]; out[i] = out[n-1-i]; out[n-1-i] = t; }

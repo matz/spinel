@@ -1557,19 +1557,18 @@ int record_recv_class(Compiler *c, int node) {
   return ci >= 0 && c->classes[ci].is_struct ? ci : -1;
 }
 
-/* A constant slot whose value may be a class known only at run time.
-   A Class slot dispatches on that class, and a poly slot on its tag and
-   class. A conditional or deferred write can replace the class with
-   another value; the slot's joined type includes both. Lexical lookup
-   must find a visible write, even when its value is uncertain. A class named by
-   the program, a builtin class or an alias has its own static dispatch. */
-int const_class_value_only(Compiler *c, int node) {
+/* A constant that may hold a class known only at run time, judged on its
+   writes alone: lexical lookup finds a visible write, and the constant is
+   not a class named by the program, a builtin class or an alias, which
+   have their own static dispatch. Such a write can hold any value, a class
+   among them. It reads no type, so the census ahead of the type fixpoint
+   can ask it (cplan_cv_ctor_shape); const_class_value_only adds the slot's
+   type. */
+int const_writes_may_hold_class(Compiler *c, int node) {
   const NodeTable *nt = c->nt;
   NodeKind k = nt_kind(nt, node);
   const char *nm = k == NK_ConstantReadNode || k == NK_ConstantPathNode ? const_key_at(c, node) : NULL;
-  if (!nm || class_recv_static_ci(c, node) >= 0 || is_builtin_class_name(nm)) return 0;
-  LocalVar *lv = comp_const(c, nm);
-  if (!lv || (lv->type != TY_CLASS && lv->type != TY_POLY) || resolve_class_alias_chain(c, nm)) return 0;
+  if (!nm || class_recv_static_ci(c, node) >= 0 || is_builtin_class_name(nm) || resolve_class_alias_chain(c, nm)) return 0;
   const LrDef *d = NULL;
   if (k == NK_ConstantReadNode)
     return elab_const_at(c, node, nm, (LoadPoint){ -1, -1, -1 }, &d) != ELAB_NO && d && d->kind == LR_WRITE;
@@ -1580,6 +1579,17 @@ int const_class_value_only(Compiler *c, int node) {
   int owner = par < 0 ? -1 : class_recv_static_ci(c, par);
   if (par >= 0 && owner < 0) return 0;
   return elab_const_own_at(c, owner, nm, elab_point_of(c, node), &d) != ELAB_NO && d && d->kind == LR_WRITE;
+}
+
+/* A constant slot whose value may be a class known only at run time: one
+   const_writes_may_hold_class takes whose slot is typed Class or poly. A
+   Class slot dispatches on that class, and a poly slot on its tag and
+   class. A conditional or deferred write can replace the class with
+   another value; the slot's joined type includes both. */
+int const_class_value_only(Compiler *c, int node) {
+  if (!const_writes_may_hold_class(c, node)) return 0;
+  LocalVar *lv = comp_const(c, const_key_at(c, node));
+  return lv && (lv->type == TY_CLASS || lv->type == TY_POLY);
 }
 
 /* The class method `name` the program defines for the class a class-valued

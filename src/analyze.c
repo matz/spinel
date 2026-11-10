@@ -1950,8 +1950,9 @@ void compute_instantiated(Compiler *c, int early) {
         Scope *encl = comp_scope_of(c, id);
         if (ci >= 0 && (!encl || encl->reachable)) c->classes[ci].instantiated = 1;
         /* a constant holding a class value (`K = make`) is a Class value
-           known only at run time, as a variable's below */
-        else if (ci < 0 && class_recv_is_dynamic(c, recv)) { disable = 1; break; }
+           known only at run time, as a variable's below; ahead of the
+           fixpoint, one whose writes may hold a class (no slot type yet) */
+        else if (ci < 0 && (early ? class_recv_may_be_dynamic(c, recv) : class_recv_is_dynamic(c, recv))) { disable = 1; break; }
         /* an unknown constant is a builtin (Array.new, ...) -- not a user arm */
       }
       else if (early || comp_ntype(c, recv) == TY_CLASS || comp_ntype(c, recv) == TY_POLY ||

@@ -57,6 +57,14 @@ s = [Foo.new, pickb(ARGV.size)[3, 4]][ARGV.size + 1]
 s[1] += 1
 p s, s.class
 
+# a constant holding the Class value
+class MyK < MyA; end
+def pickk(i) = i == 0 ? MyK : Array
+K = pickk(ARGV.size)
+q = [Foo.new, K[5, 6]][ARGV.size + 1]
+q[0] += 1
+p q, q.class
+
 # an empty container element, beside the Integers MyC holds elsewhere
 class MyC < Array; end
 x = MyC.new

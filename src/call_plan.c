@@ -2272,19 +2272,22 @@ CvCtor cplan_cv_ctor_shape(Compiler *c, int id) {
       nt_argv_has(nt, argv, argc, NT_ARG_SPLAT | NT_ARG_BLOCK | NT_ARG_KEYWORDS)) return CVC_NONE;
   int aref = !is_new_name(nm);
   if (aref ? nt_ref(nt, id, "block") >= 0 : argc == 0) return CVC_NONE;
-  if (!class_recv_is_dynamic(c, recv) || class_var_static_ci(c, recv) >= 0) return CVC_NONE;
   if (aref) {
     int ncc = 0;
     comp_cmethod_candidates(c, nm, &ncc);
     if (ncc) return CVC_NONE;
   }
+  if (!class_recv_may_be_dynamic(c, recv) || class_var_static_ci(c, recv) >= 0) return CVC_NONE;
   return aref ? CVC_AREF : CVC_NEW;
 }
 
 CvCtor cplan_cv_ctor(Compiler *c, int id) {
   CvCtor f = cplan_cv_ctor_shape(c, id);
-  /* (a `[]` on any other type is an index) */
-  if (f == CVC_AREF && infer_type(c, nt_ref(c->nt, id, "receiver")) != TY_CLASS) return CVC_NONE;
+  if (f == CVC_NONE) return f;
+  int recv = nt_ref(c->nt, id, "receiver");
+  /* a constant holds a class value where its slot is typed one
+     (class_recv_is_dynamic), and a `[]` on any other type is an index */
+  if (!class_recv_is_dynamic(c, recv) || (f == CVC_AREF && infer_type(c, recv) != TY_CLASS)) return CVC_NONE;
   return f;
 }
 

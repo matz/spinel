@@ -215,9 +215,10 @@ int cplan_class_row(Compiler *c, int id, int recv, const char *name);
 typedef enum { CVC_NONE, CVC_AREF, CVC_NEW } CvCtor;
 CvCtor cplan_cv_ctor(Compiler *c, int id);
 /* ...the same on the call's shape alone, for the census ahead of the type
-   fixpoint (compute_instantiated): a `[]` it answers CVC_AREF is one whose
-   receiver may hold a Class value, which cplan_cv_ctor then asks the
-   receiver's type to settle */
+   fixpoint (compute_instantiated): it reads no type (a constant receiver is
+   judged by its writes, class_recv_may_be_dynamic), and a `[]` it answers
+   CVC_AREF is one whose receiver may hold a Class value, which
+   cplan_cv_ctor then asks the receiver's type to settle */
 CvCtor cplan_cv_ctor_shape(Compiler *c, int id);
 /* ...whether a call of form f builds an instance of class k when its
    receiver holds k: a subclass of Array or Hash that runs no constructor of

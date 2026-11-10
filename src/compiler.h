@@ -2220,6 +2220,7 @@ int        class_body_self_ci(Compiler *c, int node);   /* the class a class bod
    time: as class_recv_static_ci reads it, or `self` in a class method of
    the class (a version entry's else arm); -1 for none */
 int        record_recv_class(Compiler *c, int node);
+int        const_writes_may_hold_class(Compiler *c, int node); /* ...by its writes alone, no type read (the census ahead of the fixpoint) */
 int        const_class_value_only(Compiler *c, int node); /* constant slot that may hold a class known only at run time */
 int        class_recv_user_cmethod(Compiler *c, int call, int node, const char *name); /* call's user class method of the name on it */
 int        class_name_reader_argc_raises(Compiler *c, const char *nm, int argc, const int *argv); /* the builtin reader's arity raise applies */
@@ -2780,6 +2781,9 @@ int poly_string_read_p(const char *name);
    variable, or a call returning a class); 0 for a constant or accessor
    receiver, which resolve statically (#3415). */
 int class_recv_is_dynamic(Compiler *c, int recv);
+/* ...the same on the receiver's shape alone, a constant judged by its
+   writes: no type read (the census ahead of the type fixpoint) */
+int class_recv_may_be_dynamic(Compiler *c, int recv);
 int self_class_static_ci(Compiler *c, int recv);  /* self.class naming one class */
 int self_class_base_ci(Compiler *c, int recv);    /* self.class: the instance method's own class */
 int allocate_on_own_class(Compiler *c, int id);    /* allocate on the method's own class */

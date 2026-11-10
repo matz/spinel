@@ -18270,8 +18270,14 @@ void emit_regex_section(Compiler *c, Buf *b) {
     static const char *const lacks[] = { "last", "join", "sample", "shuffle", "flatten", "at", "pack",
                                          "rotate", "values_at", "length", "empty?", "include?", "member?",
                                          "count", "first", NULL };
+    /* one entry per name: an Object#last leaves IO#length raising */
+    int any = 0;
     for (int i = 0; lacks[i]; i++)
-      if (root_reopen_defines(c, lacks[i])) { buf_puts(b, "  sp_poly_root_lacks_names = 1;\n"); break; }
+      if (root_reopen_defines(c, lacks[i])) {
+        buf_printf(b, "%s\"%s\"", any ? ", " : "  { static const char *const rl[] = { ", lacks[i]);
+        any = 1;
+      }
+    if (any) buf_puts(b, ", NULL }; sp_poly_root_lacks_names = rl; }\n");
   }
   if (obj_to_a_any(c))
     buf_puts(b, "  sp_obj_to_a_fn = sp_obj_to_a;\n");

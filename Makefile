@@ -1892,6 +1892,9 @@ decisions-test: $(SPINEL) $(SPINEL_TIMEOUT)
 	$(SPINEL) test/fixtures/decisions/frame_and_receiver_test.rb -c -o "$$tmp/fa.c" >/dev/null 2>&1 && \
 	  ! grep -q 'SP_GC_ROOT_RBVAL(_t' "$$tmp/fa.c" && grep -q 'sp_RbVal v\[' "$$tmp/fa.c" || \
 	  { echo "decisions-test: FAIL (a receiver temp tested as '&& _t1' kept a registered root, not a slot of the frame)"; ok=0; }; \
+	$(SPINEL) test/fixtures/decisions/frame_and_receiver_test.rb -o "$$tmp/fa" >/dev/null 2>&1 && \
+	  [ "$$(SPINEL_GC_STRESS=2 $(TIMEOUT10) "$$tmp/fa" 2>&1)" = "$$(printf 'true\ntrue')" ] || \
+	  { echo "decisions-test: FAIL (the program whose receiver temp is a slot of the frame does not answer true, true under SPINEL_GC_STRESS=2)"; ok=0; }; \
 	n=$$(printf 'm%0700d' 0); \
 	printf 'class Sprites\n  def initialize; @s = [[1, 2], [3]]; end\n  def %sa(i) = @s[i].size\n  def %sb(i) = @s[i].first\nend\ns = Sprites.new\np s.%sa(0), s.%sb(1)\n' $$n $$n $$n $$n > "$$tmp/long.rb"; \
 	$(SPINEL) --decisions-log="$$tmp/long.keys" "$$tmp/long.rb" -c -o "$$tmp/o.c" >/dev/null 2>&1; \

@@ -2117,6 +2117,57 @@ const char *builtin_method_canonical(const char *cls, const char *name) {
   const BmtAlias *a = bsearch(key, BMT_ALIASES, sizeof BMT_ALIASES / sizeof *BMT_ALIASES, sizeof *BMT_ALIASES, bmt_alias_cmp);
   return a ? a->canonical : name;
 }
+/* Every name builtin cls's own alias group holds that CRuby's Method#== calls one
+   method with `canonical` (itself included), as " a b c " with a space each
+   side, so a name is found by searching " name "; NULL when the group is just
+   `canonical`. A typed Method carries it: a held one, which has no owner to
+   ask, finds its own written name in it. */
+const char *builtin_method_alias_group(const char *cls, const char *canonical) {
+  if (!cls || !canonical) return NULL;
+  size_t n = 0, cap = strlen(canonical) + 4;
+  for (size_t i = 0; i < sizeof BMT_ALIASES / sizeof *BMT_ALIASES; i++)
+    if (!strcmp(BMT_ALIASES[i].owner, cls) && !strcmp(BMT_ALIASES[i].canonical, canonical)) { n++; cap += strlen(BMT_ALIASES[i].name) + 1; }
+  if (!n) return NULL;
+  char *out = malloc(cap);
+  if (!out) return NULL;
+  size_t o = (size_t)snprintf(out, cap, " %s ", canonical);
+  for (size_t i = 0; i < sizeof BMT_ALIASES / sizeof *BMT_ALIASES; i++)
+    if (!strcmp(BMT_ALIASES[i].owner, cls) && !strcmp(BMT_ALIASES[i].canonical, canonical))
+      o += (size_t)snprintf(out + o, cap - o, "%s ", BMT_ALIASES[i].name);
+  return out;
+}
+/* A number every spelling of one method shares, whichever class a Method's
+   receiver is: the names that are aliases of each other in some class are
+   one group (a union over every class, looser than any one class's own
+   groups, which is safe for a hash and wrong for ==), and the number is the
+   group's first name's hash. A name in no group is its own. A Method's hash
+   takes it, so a held Method and a typed one that spell an alias differently
+   still hash alike without either knowing the other's owner. */
+enum { BNG_MAX = 2 * (int)(sizeof BMT_ALIASES / sizeof *BMT_ALIASES) };
+static const char *bng_names[BNG_MAX];
+static int bng_parent[BNG_MAX], bng_n = -1;
+static int bng_find(int x) { while (bng_parent[x] != x) x = bng_parent[x]; return x; }
+static int bng_index(const char *w) { int j = 0; while (j < bng_n && strcmp(bng_names[j], w)) j++; return j; }
+unsigned builtin_name_group_hash(const char *name) {
+  if (bng_n < 0) {
+    bng_n = 0;
+    for (size_t i = 0; i < sizeof BMT_ALIASES / sizeof *BMT_ALIASES; i++)
+      for (int k = 0; k < 2; k++) {
+        const char *w = k ? BMT_ALIASES[i].canonical : BMT_ALIASES[i].name;
+        if (bng_index(w) == bng_n) { bng_names[bng_n] = w; bng_parent[bng_n] = bng_n; bng_n++; }
+      }
+    for (size_t i = 0; i < sizeof BMT_ALIASES / sizeof *BMT_ALIASES; i++)
+      bng_parent[bng_find(bng_index(BMT_ALIASES[i].name))] = bng_find(bng_index(BMT_ALIASES[i].canonical));
+  }
+  const char *rep = name;
+  int at = bng_index(name);
+  if (at < bng_n)
+    for (int j = 0, g = bng_find(at); j < bng_n; j++)
+      if (bng_find(j) == g && strcmp(bng_names[j], rep) < 0) rep = bng_names[j];
+  unsigned h = 5381;
+  for (; *rep; rep++) h = h * 33 + (unsigned char)*rep;
+  return h;
+}
 /* The libraries the program requires, in the table's flag bits (bit 0:
    none needed), and whether a name's flags hold for them: a reader that
    must be sure a method exists (must) counts only what CRuby has with no

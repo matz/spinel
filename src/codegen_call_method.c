@@ -2215,6 +2215,8 @@ static int emit_method_obj_target(Compiler *c, int id, Buf *b, const NodeTable *
       /* (a true or a false is its value, which a #receiver read back out of a
          container answers by this kind) */
       else if (rt2 == TY_BOOL && rr2.kind != RK_BOXED) self_kind = "SP_BM_SELF_BOOL";
+      /* (a Symbol is its id, which boxes back as a Symbol, not an Integer) */
+      else if (rt2 == TY_SYMBOL && rr2.kind != RK_BOXED) self_kind = "SP_BM_SELF_SYM";
       /* The constructor allocates and may collect: a fresh receiver
          (`M.new.method(:v)`) is otherwise unreachable and would be swept, so
          hold it in a rooted C temporary across the call -- the same shape as
@@ -2244,9 +2246,18 @@ static int emit_method_obj_target(Compiler *c, int id, Buf *b, const NodeTable *
     if (mmq >= 0 && (self_rooted || recv < 0)) emit_missing_guard(c, id, mi, mmq, self_rooted ? self_tmp : -1, b);
     char identbuf[256];
     const char *ident = method_builtin_ident(c, id, mi, 0, identbuf, sizeof identbuf);
+    /* (a typed array's adapter stands for Array's method of that name, which
+       CRuby writes in C: it takes the same key, or it would compare and hash
+       by its own function against the same Method read back out of a container) */
+    if (!ident && bop) { snprintf(identbuf, sizeof identbuf, "Array#%s", builtin_method_canonical("Array", sym)); ident = identbuf; }
     /* (the holder a boxed receiver rides in is new on every call: the Method
        says so, and == / hash read the receiver inside it) */
     int held = self_receiver && bam_poly;
+    /* a held or builtin Method also carries the number every spelling of its
+       name shares, and a typed one its owner's alias group, which a held
+       Method finds its own written name in (sp_bm_set_group) */
+    int grp = held || ident != NULL;
+    if (grp) buf_puts(b, "sp_bm_set_group(");
     if (held) buf_puts(b, "sp_bm_set_held(");
     if (ident) buf_puts(b, "sp_bm_set_ident(");
     if (pp) buf_puts(b, "sp_bm_set_proc_params(");
@@ -2454,6 +2465,18 @@ static int emit_method_obj_target(Compiler *c, int id, Buf *b, const NodeTable *
     if (pp) buf_printf(b, ", %s)", pp);
     if (ident) { buf_puts(b, ", "); emit_str_literal(b, ident); buf_puts(b, ")"); }
     if (held) buf_puts(b, ")");
+    if (grp) {
+      const char *own = NULL, *hash = strchr(ident ? ident : "", '#'), *al = NULL;
+      char ownbuf[128];
+      if (ident && hash && (size_t)(hash - ident) < sizeof ownbuf) {
+        snprintf(ownbuf, sizeof ownbuf, "%.*s", (int)(hash - ident), ident);
+        own = ownbuf;
+        al = builtin_method_alias_group(own, hash + 1);
+      }
+      buf_puts(b, ", ");
+      if (al) emit_str_literal(b, al); else buf_puts(b, "NULL");
+      buf_printf(b, ", (sp_int)%uu)", builtin_name_group_hash(ident && hash ? hash + 1 : disp));
+    }
     if (mmq >= 0 && (self_rooted || recv < 0)) buf_puts(b, ")");
     if (self_rooted) buf_puts(b, "; })");
     return 1;
@@ -2665,6 +2688,7 @@ int emit_call_poly_callable_arms(Compiler *c, int id, Buf *b, const NodeTable *n
            class; a true or a false is the value its kind says it is */
         buf_printf(b, "({ sp_BoundMethod *_m = (sp_BoundMethod *)_t%d.v.p;"
                       " _m->self_kind == SP_BM_SELF_BOOL ? sp_box_bool(_m->self != NULL)"
+                      " : _m->self_kind == SP_BM_SELF_SYM ? sp_box_sym((sp_sym)(uintptr_t)_m->self)"
                       " : (_m->self && _m->self_kind == SP_BM_SELF_OBJ)"
                       " ? sp_box_nullable_obj_dyn(_m->self, 0) : sp_box_nil(); })", t);
       else

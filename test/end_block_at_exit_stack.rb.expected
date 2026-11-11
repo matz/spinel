@@ -1,0 +1,7 @@
+main
+block END v=1
+loop END, registered once, i=3
+END2
+nested END
+at_exit
+END1 x=2

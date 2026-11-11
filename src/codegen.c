@@ -23440,33 +23440,11 @@ static void emit_file_tops(Compiler *c, Buf *body) {
 }
 
 /* The top-level bodies that run as functions of their own: each required
-   file's top level (emit_file_tops) and the program's END blocks, each a
-   static function for atexit registration. Answers the END blocks' count. */
-static int emit_toplevel_fns(Compiler *c, Buf *body) {
+   file's top level (emit_file_tops). */
+static void emit_toplevel_fns(Compiler *c, Buf *body) {
   emit_file_tops(c, body);
-  int end_count = 0;
-  int top_body = c->scopes[0].body;
-  if (top_body >= 0) {
-    NodeKind tk = nt_kind(c->nt, top_body);
-    int tn = 0;
-    const int *tbody = (tk == NK_StatementsNode)
-                       ? nt_arr(c->nt, top_body, "body", &tn) : NULL;
-    for (int k = 0; k < tn; k++) {
-      NodeKind sk = nt_kind(c->nt, tbody[k]);
-      if (sk != NK_PostExecutionNode) continue;
-      int stmts = nt_ref(c->nt, tbody[k], "statements");
-      end_count++;
-      { char et[32]; snprintf(et, sizeof et, "end_%d", end_count); unit_begin_in(body, et, "main"); }
-      buf_printf(body, "static void sp_end_fn_%d(void) { SP_GC_SAVE();\n  sp_at_exit_begin();\n", end_count);
-      size_t end_frame_ins = body->len;
-      EMIT_COLLECT_UNIT(emit_stmts(c, stmts, body, 1));
-      buf_puts(body, "}\n");
-      if (!g_no_root_frame) gc_frame_build(c, body, end_frame_ins, decide_node_site(c->nt, tbody[k]));
-    }
-  }
   /* the method tables of --ext-class follow the functions of the program */
   ext_emit_method_tables(c, body);
-  return end_count;
 }
 
 char *codegen_program(const NodeTable *nt) {
@@ -24152,7 +24130,7 @@ char *codegen_program(const NodeTable *nt) {
   /* Hash-key hooks (after the user #hash/#eql? definitions they call). */
   if (g_gen_obj_hashkey) emit_obj_hashkey_dispatch(c, body);
 
-  int end_count = emit_toplevel_fns(c, body);
+  emit_toplevel_fns(c, body);
 
   tcg = cg_phase(tcg, "cg_dispatch");
   unit_begin_in(body, "main", "main");
@@ -24261,9 +24239,8 @@ char *codegen_program(const NodeTable *nt) {
   /* No PRNG seeding here: the shared Kernel stream (lib/sp_random.c)
      self-seeds lazily on its first draw, so a program that consumes no
      randomness pays nothing and one that does still varies per run. */
-  /* Register END blocks (atexit runs LIFO, so they execute in reverse registration order) */
-  for (int e = 1; e <= end_count; e++)
-    buf_printf(body, "    sp_at_exit_armed = 1; atexit(sp_end_fn_%d);\n", e);
+  /* END blocks are at_exit hooks, registered where they run (the parser
+     reads `END { }` as an end_once at_exit) */
   size_t main_dbeg = body->len;
   int main_ndecl = c->scopes[0].nlocals;
   size_t *main_dends = (size_t *)calloc((size_t)(main_ndecl + 1), sizeof(size_t));

@@ -879,6 +879,27 @@ static int class_with_path_key(Compiler *c, const char *p) {
   }
   return -1;
 }
+/* See compiler.h. */
+int comp_class_at_ruby_path(Compiler *c, const char *path) {
+  if (!path || !*path) return -1;
+  if (path[0] == ':' && path[1] == ':') path += 2;   /* `::A::B` is A::B */
+  /* a class written where its path is spelled out (`module A; class B`) by
+     the key of its leaves; a class keyed with no enclosing link (a native
+     class declared as "IO::Buffer", a class under a builtin) by the Ruby
+     name it carries */
+  char key[512];
+  size_t j = 0;
+  for (const char *p = path; *p && j + 2 < sizeof key; ) {
+    if (p[0] == ':' && p[1] == ':') { key[j++] = '_'; key[j++] = '_'; p += 2; }
+    else key[j++] = *p++;
+  }
+  key[j] = 0;
+  int k = class_with_path_key(c, key);
+  if (k >= 0 && !(c->classes[k].ruby_name_cache && !sp_streq(c->classes[k].ruby_name_cache, path))) return k;
+  for (int i = 0; i < c->nclasses; i++)
+    if (c->classes[i].ruby_name_cache && sp_streq(c->classes[i].ruby_name_cache, path)) return i;
+  return -1;
+}
 /* The constant class k owns under NM (comp_const_tail_cands above), or -1:
    the one keyed by k's whole path (A__M__NM) first. Otherwise the first, in
    table order, whose key is "<c_name>__NM" or ends in "__<c_name>__NM"

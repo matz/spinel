@@ -2160,6 +2160,9 @@ int comp_class_owned_const(Compiler *c, int k, const char *nm, const int *cands,
 const char *comp_class_ruby_leaf(const Compiler *c, int k);
 /* a class's enclosing class changed: the class path table is old */
 void comp_class_path_moved(void);
+/* The program class whose Ruby path is PATH ("A::B", "::A::B", or a
+   top-level "A"), whatever name the class table keys it by; -1 for none */
+int comp_class_at_ruby_path(Compiler *c, const char *path);
 int comp_const_write_valued(const Compiler *c, const LocalVar *cv);
 LocalVar *comp_const_intern(Compiler *c, const char *name);
 /* 1 when `pred` is a statically-false `defined?(Const)` if-guard (optionally

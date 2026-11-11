@@ -8138,6 +8138,8 @@ static int seed_name_und_eq(const char *a, const char *b) {
 }
 
 static int seed_class_index(Compiler *c, const char *name) {
+  /* a Ruby path names its class exactly */
+  if (name && strstr(name, "::")) { int rp = comp_class_at_ruby_path(c, name); if (rp >= 0) return rp; }
   char buf[256];
   size_t j = 0;
   for (const char *p = name; *p && j < sizeof buf - 1; ) {

@@ -11261,8 +11261,9 @@ int desugar_exception_class_ctor(Compiler *c) {
      receiving class answers (Exception's does not run it);
    - where a call of the program may hand `exception` a block, which the
      super passes on (exc_super_block_reaches);
-   - where the super has a block or a splat (`self.new(*a)` in a class
-     method builds the class that defines it, not the receiving one);
+   - where the super has a block, or a splat in a class that another
+     class inherits from (`self.new(*a)` in a class method builds the
+     class that defines it, not the receiving one);
    - where a bare super's def takes other parameters. */
 static int exc_super_new_kept(Compiler *c, int id, int cid) {
   if (call_target(c, id, cid, "new", CT_CMETHOD, NULL) >= 0) return 1;
@@ -11310,7 +11311,14 @@ int desugar_exception_super_new(Compiler *c) {
       if (blk) continue;
       int base = nt->count, args = sk ? -1 : nt_ref(nt, id, "arguments"), an = 0;
       const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &an) : NULL;
-      if (an > 0 && nt_argv_has(nt, av, an, NT_ARG_SPLAT | NT_ARG_BLOCK | NT_ARG_FORWARDING)) continue;
+      if (an > 0 && nt_argv_has(nt, av, an, NT_ARG_BLOCK | NT_ARG_FORWARDING)) continue;
+      /* `self.new(*a)` in a class method builds the class that defines it,
+         not the receiving one: a splat is spelled so only for a class no
+         other class inherits from, where the two are the same */
+      /* (keywords beside the splat keep the super: new would take an
+         empty `**h` as one more positional argument) */
+      if (an > 0 && nt_argv_has(nt, av, an, NT_ARG_SPLAT) &&
+          (nt_argv_has(nt, av, an, NT_ARG_KEYWORDS) || !comp_class_is_leaf(c, cid))) continue;
       if (sk) {
         int ps = nt_ref(nt, s->def_node, "parameters"), nq = 0, no = 0;
         const int *pq = NULL, *po = NULL;

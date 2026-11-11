@@ -21656,9 +21656,34 @@ static void emit_class_machinery(const NodeTable *nt, Compiler *c, Buf *b, char 
         for (int ci = 0; ci < c->nclasses; ci++) {
           if (cls_npreps[ci] == 0) continue;
           buf_printf(b, "    case %d:", ci);
-          /* last prepend wins, so it lands closest to the front */
-          for (int q = cls_npreps[ci] - 1; q >= 0; q--)
-            buf_printf(b, " if(sp_class_anc_step(a,want,sp_box_class(((sp_Class){%d}))))return 1;", cls_preps[ci][q]);
+          /* A prepended module brings its own ancestors with it: the
+             modules it prepends, the module, then the modules it includes
+             (closed above), as `class L; prepend C; end` with C including
+             B gives [C, B, L]. The zone ahead of the class is built as
+             CRuby's prepend builds it, in the order the class prepends:
+             each module goes in at the front after the ones its own call
+             put in, and one the zone already has stays where it is (the
+             next one goes in after it). */
+          int *zone = malloc(sizeof(int) * (size_t)(c->nclasses * 2 + 8)), nz = 0;
+          if (!zone) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+          for (int q = 0; q < cls_npreps[ci]; q++) {
+            int pm = cls_preps[ci][q], at = 0;
+            int nsub = pm >= 0 && pm < c->nclasses && pm != ci ? cls_npreps[pm] : 0;
+            int nin = pm >= 0 && pm < c->nclasses && pm != ci ? cls_nincs[pm] : 0;
+            for (int s = -nsub; s <= nin; s++) {
+              int m = s < 0 ? cls_preps[pm][-s - 1] : s == 0 ? pm : cls_incs[pm][nin - s];
+              int found = -1;
+              for (int z = 0; z < nz && found < 0; z++) if (zone[z] == m) found = z;
+              if (m == ci) continue;
+              if (found >= 0) { at = found + 1; continue; }
+              if (nz >= c->nclasses * 2 + 8) continue;
+              memmove(&zone[at + 1], &zone[at], sizeof(int) * (size_t)(nz - at));
+              zone[at++] = m; nz++;
+            }
+          }
+          for (int z = 0; z < nz; z++)
+            buf_printf(b, " if(sp_class_anc_step(a,want,sp_box_class(((sp_Class){%d}))))return 1;", zone[z]);
+          free(zone);
           buf_puts(b, " break;\n");
         }
         buf_puts(b, "    }\n");
@@ -21925,7 +21950,7 @@ static void emit_class_machinery(const NodeTable *nt, Compiler *c, Buf *b, char 
     if (any) {
       for (int i = 0; i < c->nclasses; i++) {
         if (!class_is_exc_subclass(c, i)) continue;
-        if (c->classes[i].nincluded_mods == 0 &&
+        if (c->classes[i].nincluded_mods == 0 && c->classes[i].nprepended_mods == 0 &&
             c->classes[i].nincluded_mod_names == 0) continue;
         const char *cn0 = class_ruby_name(c, i);
         if (!cn0) cn0 = c->classes[i].name;

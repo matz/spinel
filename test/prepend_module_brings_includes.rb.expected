@@ -1,0 +1,24 @@
+true
+true
+true
+true
+true
+[C, B, A, L, Object]
+true
+true
+true
+true
+:a
+when A
+1
+true
+true
+[P, D, A, N, Object]
+true
+true
+[C, B, A, Q, A, Object]
+[C, B, E, A, R, Object]
+[:rescued, MyErr, true]
+[C, B, A, MyErr]
+true
+[L2, C, B, A, L, Object]

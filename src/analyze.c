@@ -45481,8 +45481,33 @@ static int desugar_poly_symbol_block_arg(Compiler *c) {
 
    Monotonic (unify only widens), so callers iterate to a fixpoint. Returns
    whether anything widened. */
+/* The ivars an instance method test-and-writes (`@x ||= v`, `@x &&= v`), by class. Such a write reads the
+   receiver's slot as a plain read does, though the scope pass interns no slot for it: a base whose only
+   mention is `@x ||= nil` keeps none of its own, and reads the subclass's slot it then needs (#11571). */
+typedef struct { int cls; const char *name; } OrwIvar;
+static int orw_ivars_collect(Compiler *c, OrwIvar **out) {
+  static const NodeKind kinds[] = { NK_InstanceVariableOrWriteNode, NK_InstanceVariableAndWriteNode };
+  int n = 0, cap = 0;
+  *out = NULL;
+  for (int q = 0; q < 2; q++)
+    NT_FOREACH_KIND(c->nt, kinds[q], id) {
+      Scope *s = comp_scope_of(c, id);
+      const char *nm = nt_str(c->nt, id, "name");
+      if (!s || s->class_id < 0 || s->is_cmethod || !nm) continue;
+      if (n == cap) {
+        cap = cap ? cap * 2 : 16;
+        *out = realloc(*out, sizeof(OrwIvar) * (size_t)cap);
+        if (!*out) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+      }
+      (*out)[n].cls = s->class_id; (*out)[n].name = nm; n++;
+    }
+  return n;
+}
+
 static int propagate_ivars_up(Compiler *c) {
   int prop_changed = 0;
+  OrwIvar *orw = NULL;
+  int norw = orw_ivars_collect(c, &orw);
   for (int k = 0; k < c->nclasses; k++) {
     ClassInfo *kc = &c->classes[k];
     for (int iv = 0; iv < kc->nivars; iv++) {
@@ -45491,6 +45516,12 @@ static int propagate_ivars_up(Compiler *c) {
       const char *ivn = kc->ivars[iv];
       for (int a = kc->parent; a >= 0; a = c->classes[a].parent) {
         int ai = comp_ivar_index(&c->classes[a], ivn);
+        /* (a base that only test-and-writes it gains the slot here, before the layout is rebuilt parent-first) */
+        if (ai < 0 && kt != TY_NIL) {
+          int orw_here = 0;
+          for (int q = 0; q < norw && !orw_here; q++) orw_here = orw[q].cls == a && sp_streq(orw[q].name, ivn);
+          if (orw_here) { ai = comp_ivar_intern(&c->classes[a], ivn); prop_changed = 1; }
+        }
         if (ai < 0) continue;
         if (class_ivar_pinned(&c->classes[a], ivn)) continue;  /* --rbs seed pins it */
         TyKind merged = ty_unify(c->classes[a].ivar_types[ai], kt);
@@ -45500,6 +45531,7 @@ static int propagate_ivars_up(Compiler *c) {
       }
     }
   }
+  free(orw);
   return prop_changed;
 }
 /* Does method scope `ms` hand its named `&blk` on as a value -- keep it in a

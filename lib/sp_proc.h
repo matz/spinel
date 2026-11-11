@@ -306,15 +306,32 @@ static inline sp_BoundMethod *sp_bm_set_ident(sp_BoundMethod *m, const char *ide
    holders carry one value: the same tag and class and the same payload word,
    which is an immediate's value or an object's identity. */
 static inline sp_RbVal sp_bm_held_recv(void *holder) { return sp_PolyArray_get_m((sp_PolyArray *)holder, 0); }
-static inline sp_bool sp_bm_held_recv_same(void *a, void *b) {
-  if (a == b) return 1;
-  sp_RbVal x = sp_bm_held_recv(a), y = sp_bm_held_recv(b);
+static inline sp_bool sp_bm_recv_same(sp_RbVal x, sp_RbVal y) {
   if (x.tag != y.tag || x.cls_id != y.cls_id) return 0;
   /* a Float is the whole double: on a 32-bit target sp_int is half of it, and
      1.5 and 2.5 share their low word (compared by bits, as CRuby compares the
      object: 0.0 and -0.0 are two receivers) */
   if (x.tag == SP_TAG_FLT) return memcmp(&x.v.f, &y.v.f, sizeof(sp_float)) == 0;
   return x.v.i == y.v.i;
+}
+static inline sp_bool sp_bm_held_recv_same(void *a, void *b) {
+  return a == b || sp_bm_recv_same(sp_bm_held_recv(a), sp_bm_held_recv(b));
+}
+/* A held Method and one whose receiver is typed stand for one method when the
+   typed one is a builtin's (its ident names the method) and both bind one
+   receiver value under one name as written: `s.method(:upcase)` and the same
+   call on the `s` read back out of an Array. A held Method knows no owner, so
+   it cannot name the first of an alias group (size and length): the two
+   spellings of one method compare unequal across the representations, as they
+   always did, and equal within one. */
+static inline sp_bool sp_bm_cross_same(const sp_BoundMethod *h, const sp_BoundMethod *u) {
+  if (!u->ident || !h->name || !u->name || strcmp(u->name, h->name) != 0) return 0;
+  /* (a typed receiver's class id is not known at run time, so an object is told
+     by its pointer alone: sp_bm_self_boxed leaves cls_id unset) */
+  sp_RbVal x = sp_bm_held_recv(h->self), y = sp_bm_self_boxed(u);
+  if (x.tag != y.tag) return 0;
+  if (x.tag == SP_TAG_OBJ) return x.v.i == y.v.i;
+  return sp_bm_recv_same(x, y);
 }
 /* Method#== / #eql? / #equal? and the Hash-key compare: the same bound receiver
    and the same target -- one fn, or one builtin method (ident). A class
@@ -323,7 +340,10 @@ static inline sp_bool sp_bm_held_recv_same(void *a, void *b) {
 static inline sp_bool sp_bm_same(const sp_BoundMethod *x, const sp_BoundMethod *y) {
   if (!x || !y) return x == y;
   if (x->unbound != y->unbound) return 0;   /* (a Method is never an UnboundMethod's equal) */
-  if (x->held != y->held) return 0;
+  if (x->held != y->held) return x->held ? sp_bm_cross_same(x, y) : sp_bm_cross_same(y, x);
+  /* (a Boolean receiver is held as 1 or 0 with no reference: false and the
+     Integer 0 under one method, object_id, are two receivers) */
+  if (!x->held && (x->self_kind == SP_BM_SELF_BOOL) != (y->self_kind == SP_BM_SELF_BOOL)) return 0;
   if (x->held) {
     /* the receivers are the elements of two holders, equal as CRuby's
        Method#== reads them: one value (an immediate's bits, or one object) */
@@ -343,7 +363,11 @@ static inline sp_bool sp_bm_same(const sp_BoundMethod *x, const sp_BoundMethod *
 static inline sp_int sp_bm_hash(const sp_BoundMethod *m) {
   if (!m) return 0;
   uintptr_t h = m->held ? (uintptr_t)sp_bm_held_recv(m->self).v.i * 31 : (uintptr_t)m->self * 31;
-  const char *k = m->ident ? m->ident : (m->fn == 0 || m->held ? m->name : NULL);
+  /* a held or builtin Method hashes by its receiver alone: equal Methods may be
+     held or typed and spell an alias differently, and neither side knows the
+     other's name, so a name in the hash would split them */
+  if (m->ident || m->held) return (sp_int)h;
+  const char *k = m->fn == 0 ? m->name : NULL;
   if (k) { for (; *k; k++) h = h * 33 + (unsigned char)*k; }
   else h += (uintptr_t)m->fn;
   return (sp_int)h;

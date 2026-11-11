@@ -1047,7 +1047,7 @@ static int lr_form_answer(Compiler *c, int node, int cls, int sg);
 typedef struct LrHist { int a, b; char *name; LrDef *v; int n, cap, next, nlink; unsigned char open, late; } LrHist;
 /* sup: the superclass the first header naming one names, as resolved
    there (has_sup); LR_UNKNOWN_CLASS when it is not a class the record knows */
-typedef struct LrClass { LrOpen *open; int nopen, copen; LrMixin *mix; int nmix, cmix, sup, sup_ref; unsigned char has_sup, unheld; } LrClass;   /* unheld: the module is mixed onto a receiver the record holds no class of (an object, `o.extend M`) */
+typedef struct LrClass { LrOpen *open; int nopen, copen; LrMixin *mix; int nmix, cmix, sup, sup_ref; unsigned char has_sup, unheld, vconst; } LrClass;   /* vconst: a header in a value wrote its constant (lr_nested_header) */   /* unheld: the module is mixed onto a receiver the record holds no class of (an object, `o.extend M`) */
 /* LR_NEW: a header's entity names a new class; LR_LATER_ALIAS: one an
    alias written after it reopens until N2b; LR_BUILTIN: it reopens a
    builtin, the class registration names (LrHeader.want) */
@@ -2463,12 +2463,13 @@ static void lr_nested_header(ElabRec *x, int node, int e) {
   LoadRecord *r = x->r;
   int owner, ci = elab_header_class(x->c, node, &owner, NULL), cp = nt_ref(nt, node, "constant_path");
   LrClass *kc = ci >= 0 ? lr_class(r, ci) : NULL;
-  if (!kc || kc->nopen || cp < 0 || lr_header_builtin(r, node)) return;
+  if (!kc || kc->nopen || kc->vconst || cp < 0 || lr_header_builtin(r, node)) return;
   owner = owner >= LR_MAIN ? lr_const_owner(owner) : nt_kind(nt, cp) == NK_ConstantReadNode ?
     lr_const_scope_owner(x->c, e) : lr_const_owner(x->c->classes[ci].enclosing_class);
   lr_write(r, ELAB_CONST, owner, lr_written_name(nt, cp), node, 0, r->st[e].may);
-  kc->open = lr_grow(kc->open, &kc->copen, kc->nopen, sizeof *kc->open);
-  kc->open[kc->nopen++] = (LrOpen){ node, class_def_body(nt, node) };
+  /* (not an opening of the class: its body's definitions stay unplaced,
+     as no statement of the load phase runs them) */
+  kc->vconst = 1;
 }
 static int lr_nested_part(void *ud, int ch, ElabPos *q) {
   LrNested *n = ud;
@@ -2580,7 +2581,7 @@ static void lr_record_stmt(ElabRec *x, int e) {
        where that is not known, in the lexical scope for a name, in the
        class the scope walk nested it in for a path. A builtin's reopening
        finds Object's constant and writes none, as in CRuby. */
-    if (kc && !kc->nopen && cp >= 0 && !lr_header_builtin(r, node)) {
+    if (kc && !kc->nopen && !kc->vconst && cp >= 0 && !lr_header_builtin(r, node)) {
       int owner;
       elab_header_class(x->c, node, &owner, NULL);
       owner = owner >= LR_MAIN ? lr_const_owner(owner) : nt_kind(nt, cp) == NK_ConstantReadNode ?

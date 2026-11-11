@@ -1010,7 +1010,7 @@ static int share_plan_builtin_keeps(Compiler *c, int call) {
   const char *nm = nt_str(nt, call, "name");
   int recv = nt_ref(nt, call, "receiver");
   if (!nm) return 0;
-  TyKind rt = recv >= 0 ? comp_ntype_stored(c, recv) : TY_UNKNOWN;
+  TyKind rt = comp_ntype_stored(c, recv);
   TyKind fams[6];
   int nf = 0;
   if (rt == TY_STRING || rt == TY_STRBUF) fams[nf++] = TY_STRING;

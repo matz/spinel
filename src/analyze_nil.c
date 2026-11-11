@@ -778,7 +778,7 @@ static int nf_call(NF *f, int v) {
   int owner = -1, dispatch = CP_NONE;
   int pmi = nf_plan(f, v, &owner, &dispatch);
   if (pmi >= 0) return nf_method_value(f, pmi, owner, dispatch, nm);
-  TyKind rt = r >= 0 ? comp_ntype_stored(c, r) : TY_UNKNOWN;
+  TyKind rt = comp_ntype_stored(c, r);
   if (sp_streq(nm, "new") || sp_streq(nm, "allocate")) return NFW_NONE;
   /* an attr reader: its ivar */
   if (ty_is_object(rt) || r < 0) {
@@ -948,7 +948,7 @@ static int nf_elem_slot_op(NF *f, int v, int bits) {
     break;
   case NK_CallNode: {
     int r = nt_ref(nt, v, "receiver"), dc = -1;
-    TyKind rt = r >= 0 ? comp_ntype_stored(c, r) : TY_UNKNOWN;
+    TyKind rt = comp_ntype_stored(c, r);
     char ivn[256];
     if (r < 0 || !ty_is_object(rt) || nt_ref(nt, v, "arguments") >= 0 ||
         !comp_reader_in_chain(c, ty_object_class(rt), nm, &dc) || dc < 0)
@@ -1124,7 +1124,7 @@ static void nf_elem_writes(NF *f) {
          value (a choice between an Array and nil) carries no element fact
          of its own, but a nil stored through its slot still lands in the
          Array it was chosen from */
-      int boxed = val >= 0 && comp_ntype_stored(c, val) == TY_POLY;
+      int boxed = comp_ntype_stored(c, val) == TY_POLY;
       if (val < 0 || !(nf_elem_tracked(comp_ntype_stored(c, val)) || comp_ntype_stored(c, val) == TY_POLY_ARRAY || boxed)) continue;
       if (!boxed) nf_elem_mark(f, w, nf_elem(f, val, 0));
       int wf = nf_elem_slot_op(f, w, 0);
@@ -1267,14 +1267,14 @@ static int nf_expr_uncached(NF *f, int v) {
     if (!lv) return NFW_OPAQUE;
     if (!lv->obj_may_nil) return NFW_NONE;
     /* a read a guard narrowed (c->nilnarrow, or a truthiness test here) */
-    if ((comp_nilnarrow_present(c) && comp_nilnarrow_stored(c, v) != TY_UNKNOWN) || nf_local_guarded(f, v, nm, lv)) {
+    if (comp_nilnarrow_stored(c, v) != TY_UNKNOWN || nf_local_guarded(f, v, nm, lv)) {
       f->guarded = 1;
       return NFW_NONE;
     }
     return nf_slot_why(f, &lv->obj_may_nil);
   }
   case NK_InstanceVariableReadNode: {
-    if (comp_nilnarrow_present(c) && comp_nilnarrow_stored(c, v) != TY_UNKNOWN) { f->guarded = 1; return NFW_NONE; }
+    if (comp_nilnarrow_stored(c, v) != TY_UNKNOWN) { f->guarded = 1; return NFW_NONE; }
     Scope *s = comp_scope_of(c, v);
     const char *ivn = nt_str(nt, v, "name");
     /* the main object's ivar: nil until a write the load phase runs ahead of the read */

@@ -5094,7 +5094,8 @@ void ie_body_restore(Compiler *c, int *snap) {
   if (!snap) return;
   int n = snap[0];
   for (int i = 0; i < n; i++) {
-    comp_set_ntype(c, i, (TyKind)snap[1 + i]);
+    /* (a node past the arrays was kept as unset and has no slot to put back) */
+    if (comp_node_in(c, i)) comp_set_ntype(c, i, (TyKind)snap[1 + i]);
     if (c->ie_map.cls[i] != snap[1 + n + i]) { c->ie_map.cls[i] = snap[1 + n + i]; comp_touch_node(c, i); }
   }
   free(snap);
@@ -40108,7 +40109,7 @@ static int site_args_may_be_nil(Compiler *c, const int *av, int an) {
       if (el && site_args_may_be_nil(c, el, en)) return 1;
       continue;
     }
-    TyKind t = v >= 0 ? comp_ntype_stored(c, v) : TY_UNKNOWN;
+    TyKind t = comp_ntype_stored(c, v);
     if ((t == TY_INT || t == TY_FLOAT) && nullable_int_value(c, v)) return 1;
     /* under promote a boxed ivar (an Integer member) can hand its nil too */
     if (g_promote_mode && promote_boxed_var_read(c, v)) return 1;
@@ -41257,8 +41258,8 @@ static void widen_nullable_keyed_hash_literals(Compiler *c) {
       if (nt_kind(nt, els[j]) != NK_AssocNode) continue;
       int k = nt_ref(nt, els[j], "key"), v = nt_ref(nt, els[j], "value");
       /* (a boxed key or value -- a promote-widened local -- can be nil too) */
-      if ((kt == TY_INT || kt == TY_FLOAT) && (nullable_int_value(c, k) || (k >= 0 && comp_ntype_stored(c, k) == TY_POLY))) kn = 1;
-      if ((vt == TY_INT || vt == TY_FLOAT) && (nullable_int_value(c, v) || (v >= 0 && comp_ntype_stored(c, v) == TY_POLY))) vn = 1;
+      if ((kt == TY_INT || kt == TY_FLOAT) && (nullable_int_value(c, k) || comp_ntype_stored(c, k) == TY_POLY)) kn = 1;
+      if ((vt == TY_INT || vt == TY_FLOAT) && (nullable_int_value(c, v) || comp_ntype_stored(c, v) == TY_POLY)) vn = 1;
     }
     if (!kn && !vn) continue;
     TyKind nk = kn ? TY_POLY : kt, nv = vn ? TY_POLY : vt;
@@ -41466,7 +41467,7 @@ static unsigned char *hash_vnil_flag(Compiler *c, TyKind t) {
 }
 int hash_vals_nullable(Compiler *c, int node) {
   if (node < 0) return 0;
-  TyKind t = comp_ntype_present(c) && node < c->node_cap && comp_ntype_stored(c, node) != TY_UNKNOWN ? comp_ntype_stored(c, node) : infer_type(c, node);
+  TyKind t = comp_ntype_stored(c, node) != TY_UNKNOWN ? comp_ntype_stored(c, node) : infer_type(c, node);
   unsigned char *f = hash_vnil_flag(c, t);
   return f && *f;
 }
@@ -55153,7 +55154,7 @@ static void an_phase_reconcile_check(Compiler *c) {
         else if (nt_kind(c->nt, recv) == NK_CallNode && nt_str(c->nt, recv, "name") &&
                  sp_streq(nt_str(c->nt, recv, "name"), "class")) {
           int robj = nt_ref(c->nt, recv, "receiver");
-          TyKind rot = robj >= 0 ? comp_ntype_stored(c, robj) : TY_UNKNOWN;
+          TyKind rot = comp_ntype_stored(c, robj);
           if (ty_is_object(rot)) rci = ty_object_class(rot);
         }
         if (rci >= 0) hits = call_target(c, cid, rci, cn, CT_CMETHOD, NULL) == s;

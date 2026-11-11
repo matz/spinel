@@ -19324,7 +19324,7 @@ int masgn_boxed_index_keeps(Compiler *c, int t, int e) {
   const NodeTable *nt = c->nt;
   if (t < 0 || nt_kind(nt, t) != NK_IndexTargetNode || e < 0) return 0;
   int r = nt_ref(nt, t, "receiver");
-  TyKind rt = r >= 0 ? comp_ntype_stored(c, r) : TY_UNKNOWN;
+  TyKind rt = comp_ntype_stored(c, r);
   if (rt != TY_POLY_ARRAY && rt != TY_POLY && rt != TY_SYM_POLY_HASH && rt != TY_STR_POLY_HASH && rt != TY_POLY_POLY_HASH)
     return 0;
   TyKind et = comp_ntype_stored(c, e);

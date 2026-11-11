@@ -27976,7 +27976,7 @@ static int emit_nil_target_cold(Compiler *c, int id, Buf *b) {
    as for any call. `stmt` emits it as a statement at `indent`. */
 static int emit_nil_target_own(Compiler *c, int id, Buf *b, int stmt, int indent) {
   int r = nt_ref(c->nt, id, "receiver");
-  if (!comp_nil_tested_present(c) || comp_ntype(c, r) != TY_STRING || !recv_may_be_sentinel(c, r)) return 0;
+  if (comp_ntype(c, r) != TY_STRING || !recv_may_be_sentinel(c, r)) return 0;
   size_t pre0 = g_pre ? g_pre->len : 0;
   int sv_tmp = g_tmp;
   int vt = view_push_repr(c, r, VR_NIL_TESTED, 3);

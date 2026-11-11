@@ -18847,8 +18847,8 @@ static void why_hop(WhyOut *o, int id, const char *role, const char *extra) {
   int fid = (int)nt_int(nt, id, "node_file", 0);
   char text[64], rbs[128];
   why_slice(c, id, text, sizeof text);
-  if (id < c->node_cap && comp_ntype_stored(c, id) == TY_UNKNOWN) snprintf(rbs, sizeof rbs, "untyped (no type of its own)");
-  else why_rbs(c, id < c->node_cap ? comp_ntype_stored(c, id) : TY_UNKNOWN, rbs, sizeof rbs);
+  if (comp_node_in(c, id) && comp_ntype_stored(c, id) == TY_UNKNOWN) snprintf(rbs, sizeof rbs, "untyped (no type of its own)");
+  else why_rbs(c, comp_ntype_stored(c, id), rbs, sizeof rbs);
   if (!o->json) {
     /* a synthesized node (an `__enum_to_a` body, a splice) has no source
        line to point at and nothing to quote */
@@ -18901,7 +18901,7 @@ static int why_pushed_object(Compiler *c, int lit) {
     if (!rn || !sp_streq(rn, nm) || comp_scope_of(c, recv) != ws) continue;
     int args = nt_ref(nt, id, "arguments");
     int n = 0; const int *a = args >= 0 ? nt_arr(nt, args, "arguments", &n) : NULL;
-    if (a && n >= 1 && a[0] < c->node_cap && ty_is_object(comp_ntype_stored(c, a[0]))) return ty_object_class(comp_ntype_stored(c, a[0]));
+    if (a && n >= 1 && ty_is_object(comp_ntype_stored(c, a[0]))) return ty_object_class(comp_ntype_stored(c, a[0]));
   }
   return -1;
 }
@@ -19068,7 +19068,7 @@ static void why_chain(WhyOut *o, const SlotWhy *w, const char *first) {
       Scope *sc = comp_scope_of(c, id);
       LocalVar *lv = (nm && sc) ? scope_local(sc, nm) : NULL;
       int recv = (lv && lv->is_block_param) ? why_block_recv(c, id, nm) : -1;
-      if (recv >= 0 && recv < c->node_cap && ty_degraded(comp_ntype_stored(c, recv)) && recv != id) {
+      if (ty_degraded(comp_ntype_stored(c, recv)) && recv != id) {
         if (!silent) why_hop(o, id, role, " (a parameter of the block on:)");
         role = "from"; id = recv; last_ln = -1;
         continue;

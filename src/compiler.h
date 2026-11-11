@@ -2766,26 +2766,25 @@ void emit_trace_ask(Compiler *c, int id, int kind, int round, const char *walk);
 void emit_trace_fact(Compiler *c, int id, int kind, int was, int now);
 void emit_trace_sets(Compiler *c, const char *walk);
 #endif
-/* Raw node facts: no bounds fallback, memo dependency, yield hook or
-   String refinement. Callers keep the guards of the original array read. */
-static inline TyKind comp_ntype_stored(const Compiler *c, int id) { return c->ntype[id]; }
-static inline TyKind comp_nilnarrow_stored(const Compiler *c, int id) { return c->nilnarrow[id]; }
-static inline unsigned char comp_strbuf_box_stored(const Compiler *c, int id) { return c->strbuf_box[id]; }
-static inline unsigned char comp_strbuf_handle_demand_stored(const Compiler *c, int id) { return c->strbuf_handle_demand[id]; }
-static inline unsigned char comp_poly_strbuf_lift_stored(const Compiler *c, int id) { return c->poly_strbuf_lift[id]; }
-static inline unsigned char comp_nil_tested_stored(const Compiler *c, int id) { return c->nil_tested[id]; }
-static inline unsigned char comp_head_held_stored(const Compiler *c, int id) { return c->head_held[id]; }
-static inline unsigned char comp_value_discarded_stored(const Compiler *c, int id) { return c->value_discarded[id]; }
-static inline unsigned char comp_str_shadow_stored(const Compiler *c, int id) { return c->str_shadow[id]; }
+/* node_cap bounds every per-node array. nt->count runs ahead of it between
+   a node's append and comp_grow_node_arrays: a node there has no entry yet
+   and reads as unset. */
+static inline int comp_node_in(const Compiler *c, int id) { return id >= 0 && id < c->node_cap; }
 
-/* Presence checks for optional storage; these never read an element. */
-static inline int comp_ntype_present(const Compiler *c) { return c->ntype != NULL; }
-static inline int comp_nilnarrow_present(const Compiler *c) { return c->nilnarrow != NULL; }
-static inline int comp_poly_strbuf_lift_present(const Compiler *c) { return c->poly_strbuf_lift != NULL; }
-static inline int comp_nil_tested_present(const Compiler *c) { return c->nil_tested != NULL; }
-static inline int comp_head_held_present(const Compiler *c) { return c->head_held != NULL; }
-static inline int comp_value_discarded_present(const Compiler *c) { return c->value_discarded != NULL; }
-static inline int comp_str_shadow_present(const Compiler *c) { return c->str_shadow != NULL; }
+/* The readers of the node facts. Each answers for any id (-1, one past the
+   arrays) and for a Compiler with no arrays yet (node_cap 0) with the
+   fact's unset value, so no caller tests the range or the allocation.
+   comp_ntype_stored is the cache alone: no yield-site hook, String
+   refinement or memo dependency (comp_ntype below adds them). */
+static inline TyKind comp_ntype_stored(const Compiler *c, int id) { return comp_node_in(c, id) ? c->ntype[id] : TY_UNKNOWN; }
+static inline TyKind comp_nilnarrow_stored(const Compiler *c, int id) { return comp_node_in(c, id) ? c->nilnarrow[id] : TY_UNKNOWN; }
+static inline unsigned char comp_strbuf_box_stored(const Compiler *c, int id) { return comp_node_in(c, id) ? c->strbuf_box[id] : 0; }
+static inline unsigned char comp_strbuf_handle_demand_stored(const Compiler *c, int id) { return comp_node_in(c, id) ? c->strbuf_handle_demand[id] : 0; }
+static inline unsigned char comp_poly_strbuf_lift_stored(const Compiler *c, int id) { return comp_node_in(c, id) ? c->poly_strbuf_lift[id] : 0; }
+static inline unsigned char comp_nil_tested_stored(const Compiler *c, int id) { return comp_node_in(c, id) ? c->nil_tested[id] : 0; }
+static inline unsigned char comp_head_held_stored(const Compiler *c, int id) { return comp_node_in(c, id) ? c->head_held[id] : 0; }
+static inline unsigned char comp_value_discarded_stored(const Compiler *c, int id) { return comp_node_in(c, id) ? c->value_discarded[id] : 0; }
+static inline unsigned char comp_str_shadow_stored(const Compiler *c, int id) { return comp_node_in(c, id) ? c->str_shadow[id] : 0; }
 
 /* Existing unversioned stores, kept separate from the memo-invalidating
    comp_set_* operations. Routing them here must not add an invalidation. */
@@ -2794,12 +2793,19 @@ static inline void comp_write_strbuf_handle_demand(Compiler *c, int id, unsigned
 static inline void comp_write_poly_strbuf_lift(Compiler *c, int id, unsigned char v) { c->poly_strbuf_lift[id] = v; }
 static inline void comp_write_nil_tested(Compiler *c, int id, unsigned char v) { c->nil_tested[id] = v; }
 
-/* Byte-for-byte snapshots used by the analysis convergence check. */
+/* The stored types kept and compared as a whole, for the analysis's
+   convergence check. A node past the arrays (n may run to the table's
+   count) reads and compares as unset. */
 static inline void comp_ntype_snapshot(const Compiler *c, TyKind *out, int n) {
-  memcpy(out, c->ntype, sizeof(TyKind) * (size_t)n);
+  int m = n < c->node_cap ? n : c->node_cap;
+  if (m > 0) memcpy(out, c->ntype, sizeof(TyKind) * (size_t)m);
+  for (int i = m > 0 ? m : 0; i < n; i++) out[i] = TY_UNKNOWN;
 }
 static inline int comp_ntype_snapshot_equal(const Compiler *c, const TyKind *old, int n) {
-  return !memcmp(old, c->ntype, sizeof(TyKind) * (size_t)n);
+  int m = n < c->node_cap ? n : c->node_cap;
+  if (m > 0 && memcmp(old, c->ntype, sizeof(TyKind) * (size_t)m)) return 0;
+  for (int i = m > 0 ? m : 0; i < n; i++) if (old[i] != TY_UNKNOWN) return 0;
+  return 1;
 }
 
 /* The node-mark portion of the analysis state digest. Keep the old byte
@@ -2876,7 +2882,7 @@ static inline TyKind comp_set_nilnarrow(Compiler *c, int id, TyKind t) {
    while it emits that arm, because dispatches downstream read the cache to
    type their own temps (#4070). */
 static inline TyKind comp_sn_retype(Compiler *c, int id, TyKind t) {
-  if (id < 0 || id >= c->nt->count) return t;
+  if (!comp_node_in(c, id)) return t;
   TyKind old = c->ntype[id];
   comp_set_ntype(c, id, t);
   return old;
@@ -2890,11 +2896,12 @@ int repr_value_obj(const Compiler *c, TyKind t);
 static inline TyKind comp_ntype(const Compiler *c, int id) {
   if (id < 0 || id >= c->nt->count) return TY_UNKNOWN;
   /* (the node's type is its scope's slot: noted for infer_type's memo) */
-  if (imemo_dep_on) imemo_dep_scope(id < c->node_cap && c->nscope ? c->nscope[id] : -1);
+  if (imemo_dep_on) imemo_dep_scope(comp_node_in(c, id) ? c->nscope[id] : -1);
   if (sp_yield_site_type_hook) {
     TyKind yt;
     if (sp_yield_site_type_hook(c, id, &yt)) return yt;
   }
+  if (!comp_node_in(c, id)) return TY_UNKNOWN;
   /* TY_STRBUF is a codegen-only storage refinement (mutable sp_String for a
      `<<`-appended local). All type-directed logic treats it as a string;
      codegen consults the raw scope-local type where the distinction matters.

@@ -1397,6 +1397,7 @@ typedef struct {
                        set of user classes its value can hold (analyze_cls.c,
                        #8530); 0 is every class. Read through cls_fact_node. */
   ClsSet *cls_pool; int ncls_pool, cls_fact_n;
+  struct CplanMemo *cplan_memo;   /* the call plans kept per node where the node is read as itself (call_plan.c, cplan_user), made on first use */
   struct SendOwners *send_owners; int nsend_owners, csend_owners;   /* per send name, the builtin classes the tables give as answering it (cplan_send_split_owners) */
   unsigned long long (*cls_bk_sub)[CLS_BK_WORDS]; unsigned char *cls_bk_sub_ok;   /* per builtin class, the mask of it and the classes below it, made on first ask (cls_bk_subtree) */
   int range_unheld; /* while the arguments of a call on a receiver of no known

@@ -223,6 +223,8 @@ const CallPlan *cplan_root_reopen_call(Compiler *c, int id, const CallPlan *p) {
      by an exception's class at run time) */
   int recv = nt_ref(c->nt, id, "receiver");
   TyKind rt = recv >= 0 ? comp_ntype(c, recv) : TY_UNKNOWN;
+  /* (`nil&.m` answers nil and calls nothing: the readers' own fold of it) */
+  if (rt == TY_NIL && nt_safe_nav(c->nt, id)) return NULL;
   /* (an Object method beside a NilClass one of the name: a String, Integer or
      Float is answered boxed, as the analysis reads it before the nullability settles) */
   if (p->owner_ci == comp_core_class(c, CORE_OBJECT) && cplan_nil_scalar_boxed(c, id, name, recv, rt)) return NULL;

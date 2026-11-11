@@ -133,9 +133,16 @@ int desugar_builtin_class_var_recv(Compiler *c) {
       if (!wn || !sp_streq(wn, vn) || comp_scope_of(c, w) != sc) continue;
       if (!local_write_binds_value(nt_kind(nt, w))) { bail = 1; break; }
       int val = nt_ref(nt, w, "value");
-      const char *vcn = (val >= 0 && nt_kind(nt, val) == NK_ConstantReadNode)
-                        ? nt_str(nt, val, "name") : NULL;
-      if (!vcn || !(is_builtin_class_name(vcn) || const_node_class_index(c, val) >= 0)) { bail = 1; break; }
+      NodeKind vk = val >= 0 ? nt_kind(nt, val) : NK_NONE;
+      const char *vcn = vk == NK_ConstantReadNode ? nt_str(nt, val, "name") : NULL;
+      /* a path to a class of the program (`m = Shop::Inflector`): that
+         class, by the name the class table keys it */
+      if (vk == NK_ConstantPathNode) {
+        int pci = const_node_class_index(c, val);
+        vcn = pci >= 0 ? c->classes[pci].name : NULL;
+      }
+      else if (vcn && !(is_builtin_class_name(vcn) || const_node_class_index(c, val) >= 0)) vcn = NULL;
+      if (!vcn) { bail = 1; break; }
       if (cn && !sp_streq(cn, vcn)) { bail = 1; break; }
       cn = vcn;
     }

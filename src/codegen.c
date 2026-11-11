@@ -7768,11 +7768,13 @@ void emit_method(Compiler *c, Scope *s, Buf *b) {
   /* the program's own #inspect, #to_s or #message, where the program
      reopens Array#inspect: it runs as outside a pp, so its p and inspect
      calls run that method, however it was reached (a Struct member's, an
-     exception's message). A raise out of it leaves the flag cleared, the
+     exception's message). Each return sets the flag back to its value at
+     entry, so the pp that reached the method prints the rest of its value
+     without that method. A raise out of it leaves the flag cleared, the
      state outside a pp; a boxed render's call (SP_PP_USER) restores it. */
   if (s->name && (sp_streq(s->name, "inspect") || sp_streq(s->name, "to_s") || sp_streq(s->name, "message")) &&
       array_user_inspect_mi(c) >= 0)
-    buf_puts(b, "  sp_pp_printing = 0;\n");
+    buf_puts(b, "  int _sp_ppw SP_CLEANUP(sp_pp_user_leave) = sp_pp_user_enter();\n");
   /* The singleton override does not exist until the statement that created it
      has run (#4084). The object carries its parent's cls_id until then, so a
      call arriving early takes the parent's method -- emitted before SP_GC_SAVE

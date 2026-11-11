@@ -1920,8 +1920,13 @@ extern const char *(*sp_array_user_inspect_fn)(sp_RbVal);
 /* sp_poly_inspect as pp prints it: the program's own Array#inspect is left
    out, as CRuby's pp lays an Array out itself (sp_pp_printing is set while
    it runs) */
-extern int sp_pp_printing;
+extern SP_TLS int sp_pp_printing;
 const char *sp_pp_inspect(sp_RbVal v);
+/* the entry of the program's own #inspect, #to_s or #message: the flag is
+   cleared for the method and set back to its value at entry when the method
+   returns (SP_CLEANUP), so pp prints the rest of its value as before */
+static inline int sp_pp_user_enter(void) { int w = sp_pp_printing; sp_pp_printing = 0; return w; }
+static inline void sp_pp_user_leave(int *w) { sp_pp_printing = *w; }
 /* a call into the program's own #inspect or #to_s from a boxed render:
    sp_pp_printing is cleared for it, so inside that method p and inspect run
    the program's Array#inspect as outside a pp */

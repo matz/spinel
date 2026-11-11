@@ -1106,6 +1106,60 @@ static int pm_is_container_pat(const NodeTable *nt, int pat) {
          pk == NK_HashPatternNode;
 }
 
+/* Does the lambda body `n` leave by anything but its last value: a return
+   (from it, through any block inside it), or a next, break or redo of its
+   own (not one of a loop or block inside it)? */
+static int lambda_body_jumps(const NodeTable *nt, int n, int nested) {
+  if (n < 0) return 0;
+  NodeKind k = nt_kind(nt, n);
+  if (k == NK_ReturnNode) return 1;
+  if (!nested && (k == NK_NextNode || k == NK_BreakNode || k == NK_RedoNode)) return 1;
+  if (k == NK_LambdaNode || k == NK_DefNode || k == NK_ClassNode || k == NK_ModuleNode ||
+      k == NK_SingletonClassNode) return 0;
+  if (k == NK_BlockNode || k == NK_WhileNode || k == NK_UntilNode || k == NK_ForNode) nested = 1;
+  int nr = nt_num_refs(nt, n);
+  for (int i = 0; i < nr; i++) if (lambda_body_jumps(nt, nt_ref_at(nt, n, i), nested)) return 1;
+  int na = nt_num_arrs(nt, n);
+  for (int i = 0; i < na; i++) {
+    int m = 0; const int *ids = nt_arr_at(nt, n, i, &m);
+    for (int j = 0; j < m; j++) if (lambda_body_jumps(nt, ids[j], nested)) return 1;
+  }
+  return 0;
+}
+
+static int lv_is_handle_of(const Compiler *c, const LocalVar *lv, TyKind t);
+
+/* See analyze.h. A === the program gives Proc, or a module Proc includes or
+   prepends, keeps master's path (an included one never runs before Proc's
+   own, so this errs towards master); Object's or Kernel's do not reach a Proc. */
+int case_in_lambda_param(Compiler *c, int lam) {
+  const NodeTable *nt = c->nt;
+  if (lam < 0 || nt_kind(nt, lam) != NK_LambdaNode) return -1;
+  int body = nt_ref(nt, lam, "body");
+  int bn = 0;
+  if (body < 0 || !nt_arr(nt, body, "body", &bn) || bn < 1) return -1;
+  int pn = nt_ref(nt, lam, "parameters");
+  if (pn >= 0 && nt_kind(nt, pn) == NK_BlockParametersNode) pn = nt_ref(nt, pn, "parameters");
+  if (pn < 0 || nt_kind(nt, pn) != NK_ParametersNode) return -1;
+  int rn = 0, on = 0, kn = 0, qn = 0;
+  const int *reqs = nt_arr(nt, pn, "requireds", &rn);
+  nt_arr(nt, pn, "optionals", &on);
+  nt_arr(nt, pn, "keywords", &kn);
+  nt_arr(nt, pn, "posts", &qn);
+  if (rn != 1 || on || kn || qn || nt_ref(nt, pn, "rest") >= 0 || nt_ref(nt, pn, "keyword_rest") >= 0 ||
+      nt_ref(nt, pn, "block") >= 0) return -1;
+  if (nt_kind(nt, reqs[0]) != NK_RequiredParameterNode || !nt_str(nt, reqs[0], "name")) return -1;
+  if (lambda_body_jumps(nt, body, 0)) return -1;
+  /* a body that writes its parameter keeps master's path: the parameter is typed from the subject */
+  if (subtree_writes_local(c, body, nt_str(nt, reqs[0], "name"))) return -1;
+  int pci = comp_class_index(c, "Proc"), dc = -1;
+  if (pci >= 0 && comp_method_in_chain(c, pci, "===", &dc) >= 0 && dc >= 0) {
+    const char *dn = c->classes[dc].name;
+    if (!dn || !builtin_answers_ahead_of("Proc", "===", dn)) return -1;
+  }
+  return reqs[0];
+}
+
 /* Both callers run this INSIDE infer_write_types, after its per-round reset of
    every non-param local to UNKNOWN -- so the sites here that type such a local
    must not report `changed` either, for the same reason and with the same
@@ -1152,6 +1206,19 @@ static int infer_case_pattern_locals(Compiler *c) {
         const int *body = stmts >= 0 ? nt_arr(nt, stmts, "body", &bn) : NULL;
         if (bn <= 0) continue;
         pat = body[0];
+      }
+      /* in ->(x) { ... }: Proc#=== calls the lambda with the subject, so its
+         parameter (not reset: the sweep does not report it) takes the
+         subject's type, for the lambdas codegen inlines */
+      int lprm = case_in_lambda_param(c, pat);
+      if (lprm >= 0) {
+        LocalVar *plv = scope_local(comp_scope_of(c, pat), nt_str(nt, lprm, "name"));
+        if (plv && scrutinee_t != TY_UNKNOWN && scrutinee_t != TY_VOID && scrutinee_t != TY_NIL &&
+            plv->type != scrutinee_t && !lv_is_handle_of(c, plv, scrutinee_t)) {
+          lv_set_type(plv, scrutinee_t);
+          changed = 1;
+        }
+        continue;
       }
       const char *pty = nt_type(nt, pat);
       NodeKind pk = nt_kind(nt, pat);

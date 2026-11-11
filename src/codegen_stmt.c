@@ -9728,6 +9728,18 @@ static int pm_unwrap_guard(const NodeTable *nt, int pat, int *guard, int *negate
   return pat;
 }
 
+static int emit_when_lambda_inline(Compiler *c, int cond, int t, TyKind pt, int subj, Buf *b);
+/* Can the inlined lambda `lam` bind its parameter to the subject `_tN`? One
+   that can be nil (its oint `_oN` beside it) only into a parameter slot of
+   its type that holds a nil. */
+static int pm_lambda_binds(Compiler *c, int lam, int t, TyKind pt) {
+  if (g_pm_sentinel_t != t) return 1;
+  int prm = case_in_lambda_param(c, lam);
+  Scope *ls = comp_scope_of(c, nt_ref(c->nt, lam, "body"));
+  LocalVar *plv = ls ? scope_local(ls, nt_str(c->nt, prm, "name")) : NULL;
+  return plv && plv->type == pt && repr_of_slot(c, plv).kind == RK_OPT;
+}
+
 static void emit_case_match_in(Compiler *c, int id, Buf *b, int indent, int tail, int value_cr);
 void emit_case_match(Compiler *c, int id, Buf *b, int indent, int tail, int value_cr) {
   int sro = g_pm_res_oint;
@@ -10175,6 +10187,14 @@ static void emit_case_match_in(Compiler *c, int id, Buf *b, int indent, int tail
     else if (reject_arm) {
       buf_puts(&cond_buf, "0");
       has_cond = 1;
+    }
+    else if (case_in_lambda_param(c, pat) >= 0 && pm_lambda_binds(c, pat, arm_t, arm_pt)) {
+      /* `in ->(x) { ... }`: Proc#=== calls the lambda with the subject, inlined
+         as a `when` lambda is; a subject that can be nil hands on its oint */
+      int sso = g_case_scrut_oint;
+      if (g_pm_sentinel_t == arm_t) g_case_scrut_oint = arm_t;
+      has_cond = emit_when_lambda_inline(c, pat, arm_t, arm_pt, arm_t == t && arm_pt == pt ? pred : PM_SUBJ_FRESH, &cond_buf);
+      g_case_scrut_oint = sso;
     }
     else {
       /* A hash pattern reached here (e.g. inside an alternation `{a:} | {b:}`)
@@ -10682,7 +10702,6 @@ static int emit_when_string_range(Compiler *c, int cond, int t, Buf *b) {
   return 1;
 }
 
-static int emit_when_lambda_inline(Compiler *c, int cond, int t, TyKind pt, int subj, Buf *b);
 /* Does the subject temp of a `case` need a root? The subject is bound before
    the `when` operands are evaluated, and a fresh subject held only by its
    temp was collected under an operand that allocates. A constant, a literal
@@ -11647,7 +11666,16 @@ static int emit_when_lambda_inline(Compiler *c, int cond, int t, TyKind pt, int 
     buf_puts(b, "; ");
   }
   for (int k9 = 0; k9 < lbn - 1; k9++) emit_stmt(c, lbb[k9], b, 0);
-  emit_cond(c, lbb[lbn - 1], b);
+  /* what the condition hoists (a Range receiver's temp) reads the parameter:
+     it runs here, after the binding, not ahead of the case */
+  Buf cpre; memset(&cpre, 0, sizeof cpre);
+  Buf cval; memset(&cval, 0, sizeof cval);
+  Buf *sv_pre = g_pre; g_pre = &cpre;
+  emit_cond(c, lbb[lbn - 1], &cval);
+  g_pre = sv_pre;
+  if (cpre.p) buf_puts(b, cpre.p);
+  buf_puts(b, cval.p ? cval.p : "0");
+  free(cpre.p); free(cval.p);
   buf_puts(b, "; })");
   return 1;
 }

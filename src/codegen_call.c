@@ -21900,16 +21900,27 @@ static int emit_bivar_copy_wrap(Compiler *c, int id, Buf *b) {
   /* The ivar receiver's nil test reads the hold, inside the expression: the
      call's own guard, under the view below, names `_tN` too, and when an
      argument hoists its work into g_pre (`@h.merge(k => v)`'s Hash) it
-     went ahead of the statement, before `_tN` was declared. */
+     went ahead of the statement, before `_tN` was declared. Capture the
+     test separately so the argument prelude still runs before it. */
+  Buf guard = {0, 0, 0};
   int sv_ng = g_ivar_nil_guarded_id;
-  if (rr.kind != RK_BOXED && emit_held_nil_guard(c, id, t, b)) {
-    buf_puts(b, " ");
+  if (rr.kind != RK_BOXED && emit_held_nil_guard(c, id, t, &guard)) {
+    buf_puts(&guard, " ");
     g_ivar_nil_guarded_id = id;
   }
   int slot = view_bind(recv, "%s", rn);
-  emit_ctype(c, ret, b); buf_printf(b, " %s = ", dn); emit_call_unwrapped(c, id, b);
+  /* The call's nil test and argument temps can read the held receiver.
+     Keep that prelude inside the wrap, after its declaration. */
+  Buf pre = {0, 0, 0}, call = {0, 0, 0};
+  Buf *sv_pre = g_pre; g_pre = &pre;
+  emit_call_unwrapped(c, id, &call);
+  g_pre = sv_pre;
   view_unbind(slot);
   g_ivar_nil_guarded_id = sv_ng;
+  if (pre.p) buf_puts(b, pre.p);
+  if (guard.p) buf_puts(b, guard.p);
+  emit_ctype(c, ret, b); buf_printf(b, " %s = %s", dn, call.p ? call.p : "");
+  free(pre.p); free(guard.p); free(call.p);
   buf_printf(b, ret_repr.kind == RK_BOXED ? "; SP_GC_ROOT_RBVAL(%s); " : "; SP_GC_ROOT(%s); ", dn);
   if (boxed_copy == 2 && !is_object_copy(nm))
     buf_printf(b, "if (%s.tag == SP_TAG_OBJ && sp_poly_is_hash_kind(%s.cls_id)) ", rn, rn);

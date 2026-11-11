@@ -7674,6 +7674,13 @@ void emit_frozen_obj_guard(Compiler *c, int cid, const char *selfexpr, Buf *b) {
     if (j != cid && is_descendant(c, j, cid)) { below = 1; observed |= c->classes[j].freeze_observed; }
   if (!observed) return;
   const char *rn = class_ruby_name(c, cid) ? class_ruby_name(c, cid) : c->classes[cid].name;
+  /* an exception subclass's struct has no cls_id: its name is the cls_name the raise machinery reads */
+  if (below && class_is_exc_subclass(c, cid)) {
+    buf_printf(b, "if (sp_gc_is_frozen((void *)%s)) sp_raise_frozen_obj(sp_box_obj((void *)%s, %d), "
+                  "sp_str_concat3((&(\"\\xff\" \"can't modify frozen \")[1]), ((sp_Exception *)(%s))->cls_name, (&(\"\\xff\" \"\")[1]))); ",
+               selfexpr, selfexpr, cid, selfexpr);
+    return;
+  }
   /* the receiver may be a subclass's: its own class names it, as CRuby's message does */
   if (below && c->classes[cid].ary_root <= 0) {
     buf_printf(b, "if (sp_gc_is_frozen((void *)%s)) sp_raise_frozen_obj(sp_box_obj((void *)%s, (int)(%s)->cls_id), "

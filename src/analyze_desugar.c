@@ -18963,6 +18963,42 @@ static int bx_mixes_in(Compiler *c, int m, int k, int depth) {
    method the program adds to `module Comparable` takes the method's copy
    (bx_cmp_own_class). NULL ends the list. */
 static const char *const bx_cmp_recv_cls[] = { "String", "Symbol", "Time", "Rational", "Complex", NULL };
+/* Does the program def nm in a `class cls` body? A Rational or Complex
+   reopening's def has by now moved onto Object behind a
+   `self.is_a?(cls)` arm (desugar_builtin_reopen_methods), so that arm
+   counts too. An alias or other call in such a body may define anything:
+   it counts as well. Read from the program's text: no class is
+   registered yet. */
+static int bx_guard_arm_names(const NodeTable *nt, int def, const char *cls) {
+  int body = nt_ref(nt, def, "body"), bn = 0;
+  const int *bb = body >= 0 && nt_kind(nt, body) == NK_StatementsNode ? nt_arr(nt, body, "body", &bn) : NULL;
+  for (int f = bn > 0 ? bb[0] : -1, g = 0; f >= 0 && nt_kind(nt, f) == NK_IfNode && g < 64; f = nt_ref(nt, f, "subsequent"), g++) {
+    int pr = nt_ref(nt, f, "predicate"), an = 0;
+    const char *pn = pr >= 0 && nt_kind(nt, pr) == NK_CallNode ? nt_str(nt, pr, "name") : NULL;
+    if (!pn || !sp_streq(pn, "is_a?")) continue;
+    int args = nt_ref(nt, pr, "arguments");
+    const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &an) : NULL;
+    if (an == 1 && nt_kind(nt, av[0]) == NK_ConstantReadNode && nt_str(nt, av[0], "name") &&
+        sp_streq(nt_str(nt, av[0], "name"), cls)) return 1;
+  }
+  return 0;
+}
+static int bx_class_body_defines(const NodeTable *nt, const char *cls, const char *nm) {
+  NT_FOREACH_KIND(nt, NK_ClassNode, k) {
+    const char *cn = class_def_name(nt, k);
+    int own = cn && sp_streq(cn, cls), obj = cn && sp_streq(cn, "Object");
+    if (!own && !obj) continue;
+    int body = class_def_body(nt, k), bn = 0;
+    const int *bb = body >= 0 ? nt_arr(nt, body, "body", &bn) : NULL;
+    for (int j = 0; j < bn; j++) {
+      NodeKind bk = nt_kind(nt, bb[j]);
+      const char *dn = bk == NK_DefNode && nt_ref(nt, bb[j], "receiver") < 0 ? nt_str(nt, bb[j], "name") : NULL;
+      if (dn && sp_streq(dn, nm) && (own || bx_guard_arm_names(nt, bb[j], cls))) return 1;
+      if (own && (bk == NK_AliasMethodNode || bk == NK_CallNode)) return 1;
+    }
+  }
+  return 0;
+}
 /* Does core class cls undefine a method its builtin ancestors have
    (Complex undefines Numeric's `round` and Comparable's `<`)? */
 static int bx_cmp_core_undefines(const char *cls, const char *nm) {
@@ -19178,7 +19214,7 @@ static int bx_copy_self_free(Compiler *c, int copy) {
       if (nt_int(nt, id, "bx_copy", -1) >= 0) {
         for (int r = 0; bx_cmp_recv_cls[r] && ok; r++)
           if (!cn || core_method_vis(bx_cmp_recv_cls[r], cn, 0, NULL) > 0 ||
-              bx_cmp_core_undefines(bx_cmp_recv_cls[r], cn)) ok = 0;
+              (sp_streq(bx_cmp_recv_cls[r], "Complex") && bx_cmp_core_undefines("Complex", cn))) ok = 0;
         break;
       }
       int k = 0;
@@ -19211,7 +19247,11 @@ static const char *bx_cmp_own_class(Compiler *c, int bx, int copy, TyKind rt, co
   /* A Complex undefines many Comparable and Numeric methods (`round`,
      `<`, `positive?`): CRuby raises NoMethodError for those, so the
      call keeps its old dispatch. */
-  if (bx_cmp_core_undefines(cls, name)) return NULL;
+  if (rt == TY_COMPLEX && bx_cmp_core_undefines(cls, name)) return NULL;
+  /* the program's own method of the receiver's class answers first */
+  if (rt == TY_COMPLEX || rt == TY_RATIONAL) {
+    if (bx_class_body_defines(nt, cls, name)) return NULL;
+  }
   /* Numeric comes before Comparable in a Rational's and a Complex's
      ancestors: a builtin Numeric method of the name (`integer?`) or the
      program's own one answers first. */

@@ -6,3 +6,8 @@ false
 "cmp"
 "cmp"
 "cmp"
+"cpx own"
+"rat own"
+"cmp"
+"cmp truncate"
+"cmp truncate"

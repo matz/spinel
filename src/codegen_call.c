@@ -21229,10 +21229,12 @@ static int arity_call_block(Compiler *c, int id, int non_nil, int *argc, int *kw
   for (int i = 0; i < *argc; i++) {
     const char *at = nt_type(nt, argv[i]);
     NodeKind ak = nt_kind(nt, argv[i]);
+    /* a trailing keyword hash: kwh 1, or 2 where it spreads a `**` operand,
+       which adds one positional or none at run time */
     if (i == *argc - 1 && nt_kind(nt, argv[i]) == NK_KeywordHashNode) {
       int en = 0; const int *els = nt_arr(nt, argv[i], "elements", &en);
-      for (int e = 0; e < en; e++) if (nt_kind(nt, els[e]) == NK_AssocSplatNode) return -1;
       *kwh = 1;
+      for (int e = 0; e < en; e++) if (nt_kind(nt, els[e]) == NK_AssocSplatNode) *kwh = 2;
       continue;
     }
     if (at && (ak == NK_SplatNode || ak == NK_KeywordHashNode ||
@@ -21273,7 +21275,8 @@ static int class_kwh_apart(const char *cls, const char *name) {
    defines on the chain, up to that class, keeps its own count. A keyword
    hash (kwh) is counted as the class whose counts are read takes it
    (class_kwh_apart): apart, leaving *argc the positionals CRuby's message
-   gives, or as a positional. Nothing says: not counted. */
+   gives, or as a positional; one that spreads a `**` operand (kwh 2) adds
+   no positional only where it is taken apart. Nothing says: not counted. */
 static int class_arity_spec_row(Compiler *c, int id, const char *cls, const char *name,
                                 int with_block, int *argc, int kwh, char *exp, size_t n) {
   const char *owner = is_new_name(name) ? NULL : bop_class_owner(cls, name);
@@ -21284,7 +21287,7 @@ static int class_arity_spec_row(Compiler *c, int id, const char *cls, const char
     if (ci >= 0 && cplan_cmethod_target(c, id, ci, name) >= 0) return 0;
     if (arity_spec_find(sp_builtin_cmeth_arity_spec_tbl, a, name)) {
       int kw = kwh ? class_kwh_apart(a, name) : 0;
-      if (kw < 0) return 0;
+      if (kw < 0 || (kwh == 2 && kw == 0)) return 0;
       *argc -= kw;
       return arity_spec_row(sp_builtin_cmeth_arity_spec_tbl, a, name, with_block, *argc, exp, n);
     }
@@ -21312,6 +21315,7 @@ static int arity_violation(Compiler *c, int id, int non_nil, char *exp, size_t n
      its value's class below, not as a class object */
   if (rty2_k == NK_ConstantReadNode && const_reads_builtin_value(c, recv)) rty2_k = NK_CallNode;
   if (kwh && recv < 0) return 0;
+  if (kwh == 2 && rty2_k != NK_ConstantReadNode) return 0;   /* (a `**` operand's count is open) */
   if (recv < 0) {
     /* A bare call resolves to the enclosing class's chain, then to a
        top-level def or a reopened Kernel or Object, and only then to the
@@ -21468,8 +21472,11 @@ void emit_wrong_count(Compiler *c, int id, const char *exp, int eval_recv, int g
     }
     int en = 0; const int *els = nt_arr(nt, argv[i], "elements", &en);
     for (int e = 0; e < en; e++) {
-      buf_puts(b, "(void)("); emit_expr_for_effect(c, nt_ref(nt, els[e], "key"), b); buf_puts(b, "); ");
-      buf_puts(b, "(void)("); emit_expr_for_effect(c, nt_ref(nt, els[e], "value"), b); buf_puts(b, "); ");
+      /* (a `**` operand has a value only, and an anonymous `**` none) */
+      int k = nt_kind(nt, els[e]) == NK_AssocSplatNode ? -1 : nt_ref(nt, els[e], "key");
+      int v = nt_ref(nt, els[e], "value");
+      if (k >= 0) { buf_puts(b, "(void)("); emit_expr_for_effect(c, k, b); buf_puts(b, "); "); }
+      if (v >= 0) { buf_puts(b, "(void)("); emit_expr_for_effect(c, v, b); buf_puts(b, "); "); }
     }
   }
   buf_printf(b, "sp_raise_cls(\"ArgumentError\","
@@ -21698,7 +21705,7 @@ static int poly_arity_plan(Compiler *c, int id, int non_nil, const char **tests,
   int recv = nt_ref(nt, id, "receiver");
   if (!name || recv < 0 || repr_of(c, recv).kind != RK_BOXED) return 0;
   int argc = 0, kwh, with_block = arity_call_block(c, id, non_nil, &argc, &kwh);
-  if (with_block < 0) return 0;
+  if (with_block < 0 || kwh == 2) return 0;
   if (recv_user_defines(c, name) || call_target(c, id, -1, name, CT_TOP, NULL) >= 0) return 0;
   /* a method_missing anywhere: the classes whose chain answers it, or every
      class while the chain memo cannot be trusted */

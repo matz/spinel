@@ -4,6 +4,11 @@
 [ArgumentError, "wrong number of arguments (given 3, expected 0..2)"]
 [ArgumentError, "wrong number of arguments (given 3, expected 1..2)"]
 [ArgumentError, "wrong number of arguments (given 3, expected 1..2)"]
+built
+[ArgumentError, "wrong number of arguments (given 3, expected 1..2)"]
+[ArgumentError, "wrong number of arguments (given 3, expected 1..2)"]
+[ArgumentError, "wrong number of arguments (given 3, expected 1..2)"]
+[ArgumentError, "wrong number of arguments (given 3, expected 1..2)"]
 [ArgumentError, "wrong number of arguments (given 3, expected 1..2)"]
 true
 true

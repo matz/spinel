@@ -6,16 +6,26 @@ File.write(src, "abc\n")
 f = File.open(src)
 fd = f.fileno
 def t; yield; rescue => e; p [e.class, e.message]; end
+h = {}
 # a keyword hash the method takes is counted apart: CRuby's message gives
 # the positionals alone
 t { IO.for_fd(fd, "r", {}, autoclose: false) }
 t { IO.new(fd, "r", 0, autoclose: false) }
 t { File.for_fd(fd, "r", {}, autoclose: false) }
 t { File.pipe(1, 2, 3, x: 1) }
+# and so is a `**` operand, which adds no positional to such a method
+t { IO.for_fd(fd, "r", 0, **h) }
+t { IO.new(fd, "r", 0, **{}) }
+def built
+  puts "built"
+  {}
+end
+t { IO.for_fd(fd, "r", 0, **built) }
+def forward(fd, **) = IO.for_fd(fd, "r", 0, **)
+t { forward(fd, autoclose: false) }
 # a positional hash still counts
 t { IO.new(fd, "r", {}) }
 t { IO.new(fd, "r", 1) }
-h = {}
 t { IO.new(fd, "r", h) }
 t { p IO.new(fd, "r", autoclose: false).fileno == fd }
 t { p IO.for_fd(fd, autoclose: false).fileno == fd }

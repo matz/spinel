@@ -589,6 +589,10 @@ int core_method_vis(const char *cls, const char *m, int inherit, const char **ow
   return 0;
 }
 
+int core_method_undefined(const char *cls, const char *m) {
+  return cls && m && core_own_vis(cls, strlen(cls), m, NULL) == CORE_VIS_UNDEF;
+}
+
 /* `private :m` and its kin on class k: the visibility bit it gives m, or 0 */
 static int refl_explicit_vis(const ClassInfo *k, const char *m) {
   for (int i = 0; i < k->nvis; i++)
@@ -665,6 +669,70 @@ int refl_builtin_vis(Compiler *c, int ci, const char *m, int inherit, const char
 static int obj_defines_own(Compiler *c, int recv, const char *name) {
   TyKind t = repr_of(c, recv).as_ty;
   return ty_is_object(t) && comp_method_in_chain(c, ty_object_class(t), name, NULL) >= 0;
+}
+
+/* The builtin classes whose values reach `qm` through the program's
+   reopening k of a builtin module or class (Comparable, Numeric,
+   Enumerable) into `out` (NULL-ended, at most 8): those for which k is
+   the first of the value's class, Numeric and the module that defines
+   or undefines qm. 0 when k is no such reopening. */
+const int *comp_parent_map(Compiler *c);
+/* Has the def of qm in class or module k run where call id runs, as the
+   load record places it? A call in a method body runs once that method's
+   def has run, so the def's own place stands for it. 0 where the record
+   cannot place either. */
+int builtin_ancestor_def_ran(Compiler *c, int id, int k, const char *qm) {
+  LoadPoint up = elab_point_of(c, id);
+  if (up.region < 0) {
+    const int *par = comp_parent_map(c);
+    int d = id;
+    while (d >= 0 && nt_kind(c->nt, d) != NK_DefNode) d = par[d];
+    if (d < 0) return 0;
+    up = elab_point_of(c, d);
+    if (up.region < 0) return 0;
+  }
+  return elab_method_at(c, k, qm, 0, up, NULL) == ELAB_YES;
+}
+/* Does class or module k's chain hold an attr reader or writer of qm? */
+int builtin_ancestor_accessor(Compiler *c, int k, const char *qm) {
+  char wbase[256]; wbase[0] = '\0';
+  int is_wr = setter_base_name(qm, wbase, sizeof wbase);
+  return comp_reader_in_chain(c, k, qm, NULL) || (is_wr && comp_writer_in_chain(c, k, wbase, NULL));
+}
+static int builtin_ancestor_holders(Compiler *c, int k, const char *qm, const char **out) {
+  static const struct { const char *cls, *mid, *mod; } rows[] = {
+    { "Integer", "Numeric", "Comparable" }, { "Float", "Numeric", "Comparable" },
+    { "Rational", "Numeric", "Comparable" }, { "Complex", "Numeric", "Comparable" },
+    { "String", NULL, "Comparable" }, { "Symbol", NULL, "Comparable" }, { "Time", NULL, "Comparable" },
+    { "Array", NULL, "Enumerable" }, { "Hash", NULL, "Enumerable" }, { "Range", NULL, "Enumerable" },
+    { "Set", NULL, "Enumerable" }, { "Enumerator", NULL, "Enumerable" },
+    { "Enumerator::Chain", "Enumerator", "Enumerable" }, { "Enumerator::Product", "Enumerator", "Enumerable" } };
+  const char *kn = c->classes[k].name;
+  int n = 0;
+  if (!kn || !c->classes[k].is_builtin_const || c->classes[k].enclosing_class >= 0) return 0;
+  if (!sp_streq(kn, "Comparable") && !sp_streq(kn, "Numeric") && !sp_streq(kn, "Enumerable")) return 0;
+  char wbase[256]; wbase[0] = '\0';
+  int is_wr = setter_base_name(qm, wbase, sizeof wbase);
+  for (unsigned r = 0; r < sizeof rows / sizeof *rows; r++) {
+    const char *chain[3] = { rows[r].cls, rows[r].mid, rows[r].mod };
+    /* (a builtin method of the class or a builtin ancestor answers first,
+       as does an undef in the class: Rational#numerator, Complex#round) */
+    if (core_method_vis(rows[r].cls, qm, 1, NULL) > 0 || core_method_undefined(rows[r].cls, qm)) continue;
+    for (int i = 0; i < 3; i++) {
+      if (!chain[i]) continue;
+      int a = comp_class_index(c, chain[i]);
+      if (a < 0) continue;
+      /* (a `private :m` in a nearer class decides there too) */
+      if (comp_is_undeffed_in_chain(c, a, qm) || comp_method_in_class(c, a, qm) >= 0 ||
+          comp_method_in_chain(c, a, qm, NULL) >= 0 || comp_reader_in_chain(c, a, qm, NULL) ||
+          (is_wr && comp_writer_in_chain(c, a, wbase, NULL)) || (a != k && refl_explicit_vis(&c->classes[a], qm))) {
+        if (a == k && n < 8) out[n++] = rows[r].cls;
+        break;
+      }
+    }
+  }
+  out[n] = NULL;
+  return 1;
 }
 
 /* Only the builtin-only fallback calls this: user methods and reflection
@@ -1098,6 +1166,26 @@ int emit_call_reflection_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
             const char *kn = c->classes[k].name;
             int root = kn && is_object_root(kn);
             if (root) { root_seen = 1; continue; }
+            /* a reopened builtin module or class a builtin value has among
+               its ancestors (`module Comparable` of a String): no value is
+               keyed by it, so the value's builtin class answers */
+            const char *holders[9];
+            if (has && builtin_ancestor_holders(c, k, qm, holders)) {
+              /* asked where the load record places the call, the def must
+                 have run by then */
+              if (!builtin_ancestor_def_ran(c, id, k, qm)) continue;
+              if (!holders[0]) continue;
+              buf_printf(b, "%s(sp_str_in_list(sp_poly_class_name(_t%d), (const char *const[]){", first ? "" : " || ", tv);
+              for (int h = 0; holders[h]; h++) buf_printf(b, "\"%s\", ", holders[h]);
+              buf_puts(b, "NULL})");
+              if (nonpublic) {
+                if (ia_once) buf_printf(b, " && _ia%d", tv);
+                else buf_puts(b, argc >= 2 && iak == NK_TrueNode ? " && 1" : " && 0");
+              }
+              buf_puts(b, ")");
+              first = 0;
+              continue;
+            }
             if (has) { if (nown < (int)(sizeof own / sizeof own[0])) own[nown++] = k; else own_full = 1; }
             if (!has) {
               buf_printf(b, "%s(_k%d == %d && (", first ? "" : " || ", tv, k);

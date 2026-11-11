@@ -34111,6 +34111,50 @@ int respond_to_static_answer(Compiler *c, int id, int recv, TyKind rt, const cha
       else return -1;
     }
   }
+  /* A builtin value reaches a method of a program's reopening of a builtin
+     module or class among its ancestors between its own class and Object
+     (`module Comparable; def me` asked of a String, `module Enumerable`
+     of a Range, `class Numeric` of an Integer), by its visibility there.
+     The probe typed no such call, so the answer read false. */
+  if (!resolved && recv >= 0 && !ty_is_object(rt) && rt != TY_CLASS && rt != TY_IO &&
+      rt != TY_POLY && rt != TY_UNKNOWN && rt != TY_BOOL) {
+    static const char *const rat[] = { "Rational", "Numeric", "Comparable", "Object", NULL };
+    static const char *const cpx[] = { "Complex", "Numeric", "Comparable", "Object", NULL };
+    const char *const *anc = builtin_value_ancestry(rt);
+    if (rt == TY_RATIONAL) anc = rat;
+    else if (rt == TY_COMPLEX) anc = cpx;
+    const char *bn = anc ? anc[0] : NULL;
+    int bcls = bn ? core_of_type(rt) : -1;
+    int bci = bcls >= 0 ? comp_core_class(c, bcls) : -1;
+    /* (an undef in the value's own class hides the name, as does one in
+       an ancestor nearer than the one that defines it) */
+    /* (a builtin method of the value's class or a builtin ancestor answers
+       first; an attr reader or writer in the chain is left to the paths
+       below) */
+    if (bn && (bci < 0 || !builtin_ancestor_accessor(c, bci, qm)) && !builtin_method_known(bn, qm) && core_method_vis(bn, qm, 1, NULL) <= 0 &&
+        !core_method_undefined(bn, qm) &&
+        (bci < 0 || (comp_method_in_chain(c, bci, qm, NULL) < 0 && !comp_is_undeffed_in_chain(c, bci, qm)))) {
+      for (int a = 1; anc[a] && !sp_streq(anc[a], "Object"); a++) {
+        int k = comp_class_index(c, anc[a]);
+        if (k < 0) continue;
+        if (comp_is_undeffed_in_chain(c, k, qm) || builtin_ancestor_accessor(c, k, qm)) break;
+        if (comp_method_in_chain(c, k, qm, NULL) < 0) continue;
+        /* the def must have run where the call runs (`"s".respond_to?(:m)`
+           ahead of `module Comparable; def m`); else the paths below
+           answer */
+        if (!builtin_ancestor_def_ran(c, id, k, qm)) break;
+        int v = comp_method_vis_in_chain(c, k, qm);
+        /* (a private or protected one with a second argument only the run
+           time knows is left to the paths below, as before) */
+        if (v == SP_VIS_PUBLIC) resolved = yes = 1;
+        else if (foldable) { resolved = 1; yes = include_all; }
+        /* a String that may be nil holds it as NULL, and nil answers only
+           its own surface: the answer is the value's non-nilness */
+        if (resolved && yes && nil_fact_tracked(rt) && nil_fact_node(c, recv)) g_rto_nil_obj = 1;
+        break;
+      }
+    }
+  }
   /* An IO answers by its kind -- a File, a socket, a server socket, a stat
      share the type -- which only the handle knows: sp_io_responds decides at
      run time. A method an Object reopening defines answers here; one an

@@ -5125,16 +5125,17 @@ int emit_sortby_expr(Compiler *c, int id, Buf *b) {
 
 /* Can a program definition answer the `>` or `<` that CRuby's rb_cmpint
    asks a Float or a Rational comparator answer? A Float owns both, so only
-   a reopened Float or a module the program puts ahead of Float's own
-   methods (prepend, extend) can. A Rational takes them from Comparable,
-   which calls Rational's <=>, so a `>`, `<` or `<=>` of Rational, Numeric
-   or Comparable, or of any module (it may be mixed into one of them), can.
-   A `>` of an unrelated class (a vector's) is none of these: keyed on the
-   name alone, it turned the sign reading off for every sort. */
+   a reopened Float or a module the program puts ahead of its methods can.
+   A Rational takes them from Comparable (or a Numeric reopened with them),
+   and Comparable calls Rational's own <=>. So a `>` or `<` of Rational,
+   Numeric, Comparable or of any module (it may be mixed into Numeric), or
+   a `<=>` of Rational itself, can. A `>` of an unrelated class (a
+   vector's) cannot. */
 static int cmp_sign_ops_overridden(Compiler *c, TyKind t) {
-  static const char *const ops[] = { ">", "<", "<=>" };
+  static const char *const ops[] = { ">", "<" };
   static const char *const rat_holders[] = { "Rational", "Numeric", "Comparable" };
-  for (int o = 0; o < (t == TY_FLOAT ? 2 : 3); o++) {
+  if (t == TY_RATIONAL && share_builtin_overridden(c, "Rational", "<=>")) return 1;
+  for (int o = 0; o < 2; o++) {
     if (t == TY_FLOAT) {
       if (share_builtin_overridden(c, "Float", ops[o])) return 1;
       continue;

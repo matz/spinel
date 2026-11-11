@@ -19097,6 +19097,11 @@ static int class_mixes_in_seen(Compiler *c, int cid, int mod, unsigned char *see
   for (int cur = cid; cur >= 0; cur = c->classes[cur].parent) {
     for (int m = 0; m < c->classes[cur].nincluded_mods; m++)
       if (class_mixes_in_seen(c, c->classes[cur].included_mods[m], mod, seen)) return 1;
+    /* a prepended module brings the modules it includes too */
+    for (int m = 0; m < c->classes[cur].nprepended_mods; m++) {
+      int pm = c->classes[cur].prepended_mods[m];
+      if (pm == mod || class_mixes_in_seen(c, pm, mod, seen)) return 1;
+    }
     if (c->classes[cur].parent == cur) break;
   }
   return 0;

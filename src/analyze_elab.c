@@ -2457,11 +2457,27 @@ static void lr_call(ElabRec *x, int node, int fc, int fs, unsigned char *vs, int
    `&&`). A form records its own arguments (lr_call). */
 typedef struct { ElabRec *x; int fc, fs, fnode; unsigned char *vs; } LrNested;
 static void lr_autoload(ElabRec *x, int node, int fc, int fs, int may);
+static int lr_header_builtin(LoadRecord *r, int node);
+static void lr_nested_header(ElabRec *x, int node, int e) {
+  const NodeTable *nt = x->c->nt;
+  LoadRecord *r = x->r;
+  int owner, ci = elab_header_class(x->c, node, &owner, NULL), cp = nt_ref(nt, node, "constant_path");
+  LrClass *kc = ci >= 0 ? lr_class(r, ci) : NULL;
+  if (!kc || kc->nopen || cp < 0 || lr_header_builtin(r, node)) return;
+  owner = owner >= LR_MAIN ? lr_const_owner(owner) : nt_kind(nt, cp) == NK_ConstantReadNode ?
+    lr_const_scope_owner(x->c, e) : lr_const_owner(x->c->classes[ci].enclosing_class);
+  lr_write(r, ELAB_CONST, owner, lr_written_name(nt, cp), node, 0, r->st[e].may);
+  kc->open = lr_grow(kc->open, &kc->copen, kc->nopen, sizeof *kc->open);
+  kc->open[kc->nopen++] = (LrOpen){ node, class_def_body(nt, node) };
+}
 static int lr_nested_part(void *ud, int ch, ElabPos *q) {
   LrNested *n = ud;
   const NodeTable *nt = n->x->c->nt;
   NodeKind k = nt_kind(nt, ch);
   if (q->kind == EP_LIST || q->kind == EP_NEW || (q->bits & LR_LATE) || q->defer) return 0;
+  /* a header in a value (`p((class K; 1; end))`): its class's first opening
+     defines the constant, as a header statement's does (lr_record_stmt) */
+  if ((k == NK_ClassNode || k == NK_ModuleNode) && !q->may) lr_nested_header(n->x, ch, q->e);
   if (k == NK_ClassNode || k == NK_ModuleNode || k == NK_SingletonClassNode || k == NK_BlockNode ||
       k == NK_LambdaNode || k == NK_DefinedNode) return 0;
   /* q->may is a condition inside the statement (lr_record_stmt starts the

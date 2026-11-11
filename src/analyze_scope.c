@@ -4415,13 +4415,28 @@ static void alias_refuse_early_call(Compiler *c, ClassInfo *cls, const char *nw,
 
 static const char *builtin_value_superclass(Compiler *c, int sc);
 int builtin_instance_method_known(const char *cls, const char *m);
-/* The builtin an Array or Hash subclass declares as its superclass
-   (`class X < Hash`), or NULL: the alias pass runs before the class chains
-   are resolved, so it reads the declaration */
-static const char *alias_embedding_parent(Compiler *c, ClassInfo *cls) {
-  if (!class_def_is_class(c->nt, cls->def_node)) return NULL;
-  const char *par = builtin_value_superclass(c, class_def_super(c->nt, cls->def_node));
-  return par && (sp_streq(par, "Array") || sp_streq(par, "Hash") || sp_streq(par, "String")) ? par : NULL;
+int class_super_index(Compiler *c, int i, int *wr);
+/* The builtin an Array or Hash subclass derives from (`class X < Hash`, or
+   `class X < Base` over `class Base < Hash`), or NULL: the alias pass runs
+   before the class chains are resolved, so it reads each declaration
+   (class_super_index). A class between them that has a method of od's name
+   is where the alias reaches, not the builtin. */
+static const char *alias_embedding_parent(Compiler *c, ClassInfo *cls, const char *od) {
+  int i = (int)(cls - c->classes);
+  for (int hop = 0; hop < 16 && i >= 0 && i < c->nclasses; hop++) {
+    ClassInfo *k = &c->classes[i];
+    if (!class_def_is_class(c->nt, k->def_node)) return NULL;
+    if (hop > 0) {
+      if (comp_method_in_class(c, i, od) >= 0 || comp_is_reader(k, od)) return NULL;
+      for (int a = 0; a < k->naliases; a++) if (sp_streq(k->alias_new[a], od)) return NULL;
+    }
+    const char *par = builtin_value_superclass(c, class_def_super(c->nt, k->def_node));
+    if (par) return sp_streq(par, "Array") || sp_streq(par, "Hash") || sp_streq(par, "String") ? par : NULL;
+    int wr = -1, p = class_super_index(c, i, &wr);
+    if (p == i) return NULL;
+    i = p;
+  }
+  return NULL;
 }
 /* The Object / Kernel methods an alias in a program class can capture: a
    call through the alias runs the builtin's own (builtin_only), as CRuby's
@@ -4495,7 +4510,7 @@ static void alias_register(Compiler *c, ClassInfo *cls, const char *nw, const ch
      instance is the builtin's (`alias_method :regular_writer, :[]=` ahead of
      its own `def []=`, as activesupport's HashWithIndifferentAccess has, or
      `alias original_concat concat` ahead of SafeBuffer's own concat) */
-  const char *ep = singleton ? NULL : alias_embedding_parent(c, cls);
+  const char *ep = singleton ? NULL : alias_embedding_parent(c, cls, od);
   if (s >= 0 && cid >= 0 &&
       (singleton ? builtin_cmethod_known(cls->name, od) :
        alias_prim_class(cls->name) || (ep && builtin_instance_method_known(ep, od))) &&

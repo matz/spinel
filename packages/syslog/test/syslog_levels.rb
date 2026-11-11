@@ -1,9 +1,12 @@
 # Each level writes a formatted message and answers Syslog; so does log
 # with a priority. A level the mask filters out is still a call that
-# answers. (What reaches the system log is not read back here.)
+# answers. (What reaches the system log is not read back here.) The mask
+# lets only debug through: an emerg that reached the system log would be
+# broadcast to every terminal (systemd-journald) each time the test runs.
 require "syslog"
 
 Syslog.open("spinel-syslog-levels", Syslog::LOG_PID, Syslog::LOG_USER) do |s|
+  s.mask = Syslog::LOG_MASK(Syslog::LOG_DEBUG)
   p s.emerg("spinel syslog test: emerg %d", 1).equal?(Syslog)
   p s.alert("spinel syslog test: alert %s", "a").equal?(Syslog)
   p s.crit("spinel syslog test: crit").equal?(Syslog)

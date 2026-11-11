@@ -63,10 +63,10 @@ r0 #60 f0 ConstantPathWriteNode line 69
 r0 #61 f0 CallNode p line 70
 r0 #62 f0 ClassNode Object line 71
   r0 #63 f0 CallNode p line 72
-block each line 27: assumed
-block map line 42: assumed
-block map line 43: assumed
-block map line 44: assumed
+block each line 27: now
+block map line 42: now
+block map line 43: now
+block map line 44: now
 block new line 48: assumed
 block new line 58: assumed
 class K: body#11

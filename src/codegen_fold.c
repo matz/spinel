@@ -8675,6 +8675,7 @@ else {
    in-sequence assignment (`a = {...}; foo(a)` as an operand passed a stale `a`).
    That matches the g_argov skip in emit_args_filled. A param default like `{}`
    (provided < 0) is a fresh allocation and does want the root -- #1445.
+   A node an outer emitter bound to a rooted temp (view_held) is rooted already.
    A String Range is no pointer, but it carries two Strings by value (and,
    built --share-strings, their handles): one made in the list is held by
    nothing once its own expression ends, and a later argument that
@@ -8682,6 +8683,7 @@ else {
 int arg_wants_root(Compiler *c, TyKind pt, int provided) {
   if (pt != TY_POLY && pt != TY_STR_RANGE && !needs_root(pt)) return 0;
   if (provided < 0) return 1;
+  if (view_held(provided)) return 0;
   NodeKind ak = nt_kind(c->nt, provided);
   return !((ak == NK_LocalVariableReadNode ||
                    ak == NK_InstanceVariableReadNode ||
@@ -12375,8 +12377,9 @@ void emit_args_filled_argv(Compiler *c, int callee_idx, const int *argv, int arg
          double-evaluates it and emits an ill-typed sp_RbVal temp (the splat
          lowers to sp_PolyArray*) (#3242) */
       if (ak == NK_SplatNode) continue;
-      /* one the call ran first (emit_args_before_binding) reads its temp */
-      if (arg_ran_first(argv[k], argov_saved)) continue;
+      /* one the call ran first (emit_args_before_binding) reads its temp, and
+         so does one an outer emitter bound to a rooted temp */
+      if (arg_ran_first(argv[k], argov_saved) || view_held(argv[k])) continue;
       /* `+"lit"` into a parameter that is the handle because a Method
          reaches it: the binding builds the handle from the literal itself
          (emit_arg_or_default), and a copy made here first went unused */
@@ -12417,7 +12420,7 @@ void emit_args_filled_argv(Compiler *c, int callee_idx, const int *argv, int arg
         emit_indent(g_pre, g_indent);
         buf_printf(g_pre, "sp_String *_t%d = SP_STR_HDL(%s); SP_GC_ROOT(_t%d);\n", ht, hb.p, ht);
         free(hb.p);
-        view_bind_temp(argv[k], ht);
+        view_hold(view_bind_temp(argv[k], ht));
         if (held) held[k] = ht;
         continue;
       }
@@ -12493,7 +12496,7 @@ else {
         buf_puts(g_pre, "\n");
       }
       free(hb.p);
-      view_bind_temp(argv[k], ht);
+      { int hs = view_bind_temp(argv[k], ht); if (root) view_hold(hs); }
       if (held && root) held[k] = ht;
     }
   }

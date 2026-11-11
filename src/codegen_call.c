@@ -23787,7 +23787,7 @@ int hoist_dispatch_args(Compiler *c, int argsN, int **sv, int **vw) {
        left in place, `o.m(@v, f(2))` read what f left in @v (read_rebound_by) */
     int rebound = 0;
     for (int j = a + 1; j < nhn && !rebound; j++) rebound = read_rebound_by(c, hn[a], hn[j]);
-    if (!aty || (!rebound && (ak == NK_LocalVariableReadNode ||
+    if (!aty || view_held(hn[a]) || (!rebound && (ak == NK_LocalVariableReadNode ||
                               ak == NK_InstanceVariableReadNode)) ||
         ak == NK_SplatNode || ak == NK_KeywordHashNode ||
         ak == NK_BlockArgumentNode || nt_kind(nt, hn[a]) == NK_ForwardingArgumentsNode ||
@@ -23799,7 +23799,7 @@ int hoist_dispatch_args(Compiler *c, int argsN, int **sv, int **vw) {
     argov_reserve();
     int ht = hoist_boxed_rooted(c, hn[a]);
     hoisted_sv[hoisted_n] = g_n_argov;
-    view_bind_temp(hn[a], ht);
+    view_hold(view_bind_temp(hn[a], ht));
     hoisted_vw[hoisted_n] = view_push(c, hn[a], TY_POLY);
     hoisted_n++;
   }

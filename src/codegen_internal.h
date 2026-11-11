@@ -621,10 +621,11 @@ int builtin_arity_violation(Compiler *c, int id, int non_nil);   /* non_nil: a `
 /* Does every builtin class a boxed receiver of call id can be refuse its
    count, a method_missing of the program aside (which may answer it)? */
 int builtin_count_refused_boxed(Compiler *c, int id);
-/* Does CRuby refuse argc arguments to the method of op, a library's IO row
-   (io/console's winsize given one)? A boxed handle's dispatch raises its
+/* Does CRuby refuse the arguments call id gives the method of op, a
+   library's IO row (io/console's winsize given one), a keyword hash
+   counted as the call plan says? A boxed handle's dispatch raises its
    ArgumentError, and inference types the call by the row's answer. */
-int io_library_count_refused(const BuiltinOp *op, const char *name, int argc);
+int io_library_count_refused(Compiler *c, int id, const BuiltinOp *op, const char *name);
 int builtin_object_method_known(const char *m);
 int name_is_enumerable_module_method(const char *m);
 int class_object_answers_builtin(const char *qm, int is_module);

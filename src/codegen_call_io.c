@@ -834,17 +834,35 @@ static int emit_io_timeout_set(Compiler *c, int id, int recv, int value, Buf *b)
   return 1;
 }
 
+/* How many arguments a stream's method `name` is given at call id, a
+   keyword hash counted as the call plan says the method takes it
+   (cplan_builtin_hash_positionals): the full branch of a `**` split is one
+   more argument where the method counts its keywords (`h.winsize(**f)`
+   with io/console required), and none where it takes no keywords. -1
+   where the run time decides: a `*` splat, or a `**` the split left
+   open. */
+static int io_given_count(Compiler *c, int id, const char *name) {
+  const NodeTable *nt = c->nt;
+  int argc = 0;
+  const int *argv = call_args(nt, id, &argc);
+  if (nt_argv_has_splat(nt, argv, argc)) return -1;
+  if (nt_argv_kwh(nt, argv, argc) < 0) return argc;
+  int hp = cplan_builtin_hash_positionals(c, id, "File", name, 0);
+  return hp < 0 ? -1 : argc - 1 + hp;
+}
 /* See codegen_internal.h. */
-int io_library_count_refused(const BuiltinOp *op, const char *name, int argc) {
-  return op && op->recv == TY_IO && op->feature && !builtin_arity_admits(bop_spec_class(op->recv), name, argc);
+int io_library_count_refused(Compiler *c, int id, const BuiltinOp *op, const char *name) {
+  if (!op || op->recv != TY_IO || !op->feature) return 0;
+  int given = io_given_count(c, id, name);
+  return given >= 0 && !builtin_arity_admits(bop_spec_class(op->recv), name, given);
 }
 /* A library's IO method (io/console's winsize, winsize=) on a boxed handle:
    a row of the library emits the call, or CRuby refuses its count, which
    the stream check of emit_call_poly_io_arms raises as ArgumentError. An
    operand no row takes (`winsize = "x"`) is left to the general dispatch. */
-static int boxed_io_library_call(Compiler *c, int id, const char *name, int argc) {
+static int boxed_io_library_call(Compiler *c, int id, const char *name) {
   const BuiltinOp *op = emit_builtin_op_row(c, id, TY_IO, name);
-  return bop_io_library_row(op) || io_library_count_refused(op, name, argc);
+  return bop_io_library_row(op) || io_library_count_refused(c, id, op, name);
 }
 
 /* the IO methods on a poly receiver that may hold a stream (write, read, gets, puts, print, ...) */
@@ -868,7 +886,7 @@ int emit_call_poly_io_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
        sp_streq(name, "to_path") ||
        sp_streq(name, "tty?") || sp_streq(name, "isatty") ||
        /* a library's methods (io/console's winsize, winsize=) */
-       boxed_io_library_call(c, id, name, argc) ||
+       boxed_io_library_call(c, id, name) ||
        ((sp_streq(name, "__sp_tty_mode") || sp_streq(name, "__sp_tty_restore")) && argc == 1) ||
        sp_streq(name, "readlines") || sp_streq(name, "rewind") ||
        poly_io_codepoint_enum(c, id) ||
@@ -1017,13 +1035,8 @@ int emit_call_poly_io_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
        is one more argument (`h.winsize(**f)`), and a `**` the split left
        open is the run time's, as a `*` splat's count is, and stays with
        those arms. */
-    int given = argc;
-    if (nt_argv_kwh(nt, argv, argc) >= 0) {
-      int hp = cplan_builtin_hash_positionals(c, id, "File", name, 0);
-      given = hp < 0 ? -1 : argc - 1 + hp;
-    }
-    if (!iocand && given > 0 && !nt_argv_has_splat(nt, argv, argc) &&
-        builtin_arity_admits("File", name, 0) && !builtin_arity_admits("File", name, 1)) {
+    int given = io_given_count(c, id, name);
+    if (!iocand && given > 0 && builtin_arity_admits("File", name, 0) && !builtin_arity_admits("File", name, 1)) {
       static const struct { const char *cls, *id; } owners[] = {
         { "Dir", "SP_BUILTIN_DIR" }, { "Queue", "SP_BUILTIN_QUEUE" },
         { "Enumerator", "SP_BUILTIN_ENUMERATOR" } };

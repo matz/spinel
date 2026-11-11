@@ -168,7 +168,7 @@ int an_bi_generic_splat(Compiler *c, int id);
 int builtin_kernel_fn_span(const char *name, int with_block, int *lo, int *hi);
 int builtin_arity_violation(Compiler *c, int id, int non_nil);
 int builtin_count_refused_boxed(Compiler *c, int id);
-int io_library_count_refused(const struct BuiltinOp *op, const char *name, int argc);
+int io_library_count_refused(Compiler *c, int id, const struct BuiltinOp *op, const char *name);
 int is_handler_proc_block(Compiler *c, int id);
 int builtin_class_id(const char *name);
 int class_is_prim_reopen(Compiler *c, int k);

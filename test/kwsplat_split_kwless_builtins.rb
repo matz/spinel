@@ -33,6 +33,10 @@ t("boxed size f") { x.size(**f) }
 io = [$stdout, 1][0]
 t("boxed flush f") { io.flush(**f) }
 t("boxed closed? f") { io.closed?(**f) }
+# without `require "io/console"` an IO has no winsize or noecho
+t("boxed winsize f") { io.winsize(**f) }
+t("boxed winsize pair") { io.winsize(a: 1) }
+t("boxed noecho e") { io.noecho(**e) { |i| 5 } }
 # a keyword fact holds only where it holds on each class one kind stands
 # for: SizedQueue#push and #enq take timeout:
 q = SizedQueue.new(3)

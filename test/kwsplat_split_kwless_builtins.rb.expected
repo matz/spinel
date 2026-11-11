@@ -17,6 +17,9 @@ basename f: ArgumentError: wrong number of arguments (given 3, expected 1..2)
 boxed size f: ArgumentError: wrong number of arguments (given 1, expected 0)
 boxed flush f: ArgumentError: wrong number of arguments (given 1, expected 0)
 boxed closed? f: ArgumentError: wrong number of arguments (given 1, expected 0)
+boxed winsize f: NoMethodError: undefined method 'winsize' for an instance of IO
+boxed winsize pair: NoMethodError: undefined method 'winsize' for an instance of IO
+boxed noecho e: NoMethodError: undefined method 'noecho' for an instance of IO
 sized push: 1
 sized push e: 2
 sized enq w: 3

@@ -2301,7 +2301,7 @@ int builtin_core_is_a(int k, int anc) {
 /* The builtins whose keyword hash is one more positional, from CRuby's own
    facts (builtin_arity.inc): BAK the instance methods, BALK a library's,
    with the library (io/console's IO#winsize), which hold only where the
-   program has it; BACK the class methods (fixed arity, no keywords) */
+   program requires it; BACK the class methods (fixed arity, no keywords) */
 #define BAI(...)
 #define BAM(...)
 #define BAS(...)
@@ -2350,9 +2350,12 @@ static const struct { const char *cls, *m, *key; int cside, max; } sp_builtin_kw
 #undef BALK
 #undef BAP
 /* Does keyword-fact row i hold for this program: a core method's always,
-   a library's where the program has the library */
+   a library's where the program requires the library. Not where the
+   default require mode only provides it: there CRuby has no such method,
+   and the fact would split and count a call of the name that the
+   program's own method or CRuby's NoMethodError answers. */
 static int kwpos_row_fits(int i) {
-  return !sp_builtin_kwpos_tbl[i].feature || sp_feature_enabled(sp_builtin_kwpos_tbl[i].feature);
+  return !sp_builtin_kwpos_tbl[i].feature || sp_feature_required(sp_builtin_kwpos_tbl[i].feature);
 }
 /* See builtin_names.h. */
 const char *builtin_kw_taken(const char *cls, const char *name, int cside) {

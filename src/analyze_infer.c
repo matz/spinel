@@ -4427,7 +4427,7 @@ static int infer_poly_operand_call(Compiler *c, int id, const NodeTable *nt, con
       {
         AnBopArgs ba = { c, argv };
         const BuiltinOp *lop = bop_find_arg(TY_IO, name, argc, nt_ref(nt, id, "block") >= 0, an_bop_arg_type, &ba);
-        if (bop_io_library_row(lop) || io_library_count_refused(lop, name, argc))
+        if (bop_io_library_row(lop) || io_library_count_refused(c, id, lop, name))
           { *out = an_poly_concrete(c, id, name, lop->result); return 1; }
       }
       if ((sp_streq(name, "__sp_tty_mode") || sp_streq(name, "__sp_tty_restore")) && argc == 1)

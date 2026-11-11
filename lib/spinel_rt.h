@@ -4553,6 +4553,24 @@ static SP_UNUSED sp_RbVal sp_range_sum_box(sp_Range r, sp_int seed) {
   return sp_poly_add(total, sp_box_int(seed));
 #endif
 }
+/* the same sum as a Float, for a Float (or any non-Integer) seed: CRuby
+   adds the exact total to the seed's Float, so the total never passes
+   through the word, where it raised under raise and wrapped under wrap */
+static SP_UNUSED sp_float sp_range_sum_f(sp_Range r) {
+#ifdef SP_RSUM_W
+  return (sp_float)sp_range_sum_w(r, 0);
+#else
+  if (r.nobeg) sp_range_nil_begin_raise();
+  if (r.noend) sp_raise_cls("RangeError", "cannot convert endless range to an array");
+  sp_int n = sp_range_count(r);
+  if (n <= 0) return 0.0;
+  if (n & 1) {
+    sp_int mid = (sp_int)((uintptr_t)r.first + (uintptr_t)((n - 1) / 2) * (uintptr_t)sp_range_step(r));
+    return (sp_float)n * (sp_float)mid;
+  }
+  return (sp_float)(n / 2) * ((sp_float)r.first + (sp_float)sp_range_last_elem(r));
+#endif
+}
 /* the same sum in the word, for the typed sum */
 static SP_UNUSED sp_int sp_range_sum_i(sp_Range r, sp_int seed) {
 #ifdef SP_RSUM_W
@@ -15912,13 +15930,13 @@ static sp_RbVal sp_range_sum_seed(sp_Range r, sp_RbVal seed) {
   /* an Integer seed goes into the sum itself, so a seed that brings the
      total back into the word is no overflow */
   if (seed.tag == SP_TAG_INT) return sp_range_sum_box(r, seed.v.i);
-  sp_RbVal total = sp_range_sum_box(r, 0);
-  SP_GC_ROOT_RBVAL(total);
+  /* any other seed is Kernel#Float's, added to the total as a Float */
+  if (seed.tag != SP_TAG_BIGINT) return sp_box_float(sp_poly_Float(seed) + sp_range_sum_f(r));
   /* through sp_poly_add so a Bignum seed keeps its digits instead of wrapping
      into the sp_int the typed emitter used to hand this path */
-  if (seed.tag == SP_TAG_BIGINT)
-    return sp_poly_add(total, seed);
-  return sp_box_float(sp_poly_Float(seed) + sp_poly_Float(total));
+  sp_RbVal total = sp_range_sum_box(r, 0);
+  SP_GC_ROOT_RBVAL(total);
+  return sp_poly_add(total, seed);
 }
 /* Is this a value CRuby's Array#sum keeps in its EXACT accumulation phase --
    the Integer/Rational family, which adds without dropping a digit? A Float is

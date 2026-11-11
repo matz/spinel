@@ -15094,7 +15094,7 @@ int emit_range_call(Compiler *c, int id, Buf *b) {
       }
       else if (sp_streq(name, "sum") && argc == 1 && comp_ntype(c, argv[0]) == TY_FLOAT) {
         buf_puts(b, "(("); emit_expr(c, argv[0], b);
-        buf_printf(b, ") + (double)sp_range_sum_i(_t%d, 0))", t);
+        buf_printf(b, ") + sp_range_sum_f(_t%d))", t);
       }
       /* Range#sum takes an INTEGER seed exactly and runs every other class
          through Kernel#Float, answering a Float -- so a Bignum seed wrapped

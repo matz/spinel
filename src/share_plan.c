@@ -146,8 +146,7 @@ static int share_plan_exc_super(Compiler *c, int v) {
   if (mi < 0 || cls < 0 || cls >= c->nclasses || sc->def_node < 0 || !sc->name ||
       (!is_exception_message(sc->name)) || (!class_is_exc_subclass(c, cls) && !class_is_exc_reopen(c, cls)))
     return 0;
-  int sup = c->classes[cls].parent;
-  return scope_ret_handle(c, mi) && (sup < 0 || comp_method_in_chain(c, sup, sc->name, NULL) < 0);
+  return scope_ret_handle(c, mi) && cplan_super_target(c, v, sc, NULL) < 0;
 }
 
 static int share_plan_yield_supply(Compiler *c, int v, int depth);

@@ -402,6 +402,12 @@ spinel: 1 refusal, nothing written
 == test/reject/class_macro_called_at_run_time.rb [promote] rc=1
 spinel: test/reject/class_macro_called_at_run_time.rb:5: Module#define_method with a non-literal name is not supported; use a literal Symbol or String (see docs/limitations.md)
 spinel: 1 refusal, nothing written
+== test/reject/class_method_def_in_block_never_run_call.rb [default] rc=1
+spinel: test/reject/class_method_def_in_block_never_run_call.rb:11: undefined method 'cm' for a Class: no class in the program defines a class method 'cm' (NoMethodError)
+spinel: 1 refusal, nothing written
+== test/reject/class_method_def_in_block_never_run_call.rb [promote] rc=1
+spinel: test/reject/class_method_def_in_block_never_run_call.rb:11: undefined method 'cm' for a Class: no class in the program defines a class method 'cm' (NoMethodError)
+spinel: 1 refusal, nothing written
 == test/reject/class_named_like_monitor_path.rb [default] rc=1
 spinel: test/reject/class_named_like_monitor_path.rb:4: unsupported class name 'Monitor': collides with the builtin class of that name
 == test/reject/class_named_like_monitor_path.rb [promote] rc=1

@@ -6743,6 +6743,108 @@ int elab_self_value_at(Compiler *c, int node) {
   return elab_self_at(c, node);
 }
 
+/* Does def node `def` use the block it is given anywhere in it: one of the
+   uses lr_def_block reads (a yield, a read of its block parameter, a
+   hand-on by `&`, `...` or a super that takes no block of its own), or a
+   read of its frame by name (is_local_reflection:
+   `binding.local_variable_get(:b)`)? Read from the tree alone, so the
+   answer is the same while the record is made and after. */
+static int lr_def_uses_block(const NodeTable *nt, int def) {
+  int ps = nt_ref(nt, def, "parameters"), bp = ps >= 0 ? nt_ref(nt, ps, "block") : -1, n = 0, uses = 0;
+  const char *bn = bp >= 0 ? nt_str(nt, bp, "name") : NULL;
+  int *ids = nt_subtree_ids((NodeTable *)nt, &def, 1, &n);
+  for (int i = 0; i < n && !uses; i++) {
+    const char *nm = nt_str(nt, ids[i], "name");
+    switch (nt_kind(nt, ids[i])) {
+      case NK_YieldNode: case NK_ForwardingArgumentsNode: uses = 1; break;
+      case NK_SuperNode: case NK_ForwardingSuperNode: uses = nt_ref(nt, ids[i], "block") < 0; break;
+      case NK_BlockArgumentNode: uses = nt_ref(nt, ids[i], "expression") < 0; break;
+      case NK_LocalVariableReadNode: uses = bn && nm && sp_streq(nm, bn); break;
+      case NK_CallNode: uses = nm && is_local_reflection(nm); break;
+      default: break;
+    }
+  }
+  free(ids);
+  return uses;
+}
+
+/* Does the program take a method named `name` away anywhere: an undef, an
+   undef_method or a remove_method that names it, or one whose argument the
+   tree does not spell? (One sent by name makes the record answer for any
+   name: lr_names_take.) Read from the tree, as lr_def_uses_block is: one
+   in a method body, which the record holds at no point, may have run
+   before any call. */
+static int lr_name_taken_away(const NodeTable *nt, const char *name) {
+  NT_FOREACH_KIND(nt, NK_UndefNode, u) {
+    int n = 0;
+    const int *v = nt_arr(nt, u, "names", &n);
+    for (int i = 0; i < n; i++) {
+      const char *s = vis_arg_name(nt, v[i]);
+      if (!s || sp_streq(s, name)) return 1;
+    }
+  }
+  NT_FOREACH_KIND(nt, NK_CallNode, k) {
+    const char *nm = nt_str(nt, k, "name");
+    if (!is_undef_method_name(nm) && !is_remove_method_name(nm)) continue;
+    int an = nt_ref(nt, k, "arguments"), n = 0;
+    const int *v = an >= 0 ? nt_arr(nt, an, "arguments", &n) : NULL;
+    for (int i = 0; i < n; i++) {
+      const char *s = vis_arg_name(nt, v[i]);
+      if (!s || sp_streq(s, name)) return 1;
+    }
+  }
+  return 0;
+}
+
+/* Does every method a call of `name` may run drop the block it is given:
+   is each place the program defines the name a def (no attr, alias or
+   define_method, and none by a name the record cannot read: lr_names_take)
+   that uses no block (lr_def_uses_block), and does it take the name away
+   nowhere (lr_name_taken_away), which would leave a call to
+   method_missing? The defs no point of the record sees are among them: one
+   in a method body, or in a block kept to run later, which may be the
+   version live when the call runs. */
+static int lr_name_drops_block(Compiler *c, const char *name) {
+  const LoadRecord *r = c->lrec;
+  int nn = 0, nd = 0;
+  if (r->names_any) return 0;
+  lr_name_range(r->names, r->nnames, sizeof *r->names, name, &nn);
+  const LrSite *d = lr_name_range(r->defs, r->ndefs, sizeof *r->defs, name, &nd);
+  if (!nd || nd < nn) return 0;
+  for (int i = 0; i < nd; i++)
+    if (lr_def_uses_block(c->nt, d[i].node)) return 0;
+  return !lr_name_taken_away(c->nt, name);
+}
+
+/* May the statement at p run more than once: is it in a body that runs
+   again (LrStmt.rep: a loop's, an iterator's block, a begin body a rescue
+   may retry), or in a clause of a begin with rescue clauses, which a retry
+   reaches again? A statement after p in such a body may run before p, and
+   the walk has not recorded it yet when it stands at p. */
+static int lr_point_runs_again(const LoadRecord *r, const NodeTable *nt, LoadPoint p) {
+  if (r->st[p.seq].rep >= 0) return 1;
+  for (int e = r->st[p.seq].up; e >= 0; e = r->st[e].up)
+    if (nt_kind(nt, r->st[e].node) == NK_BeginNode && nt_ref(nt, r->st[e].node, "rescue_clause") >= 0) return 1;
+  return 0;
+}
+
+int elab_block_never_runs(Compiler *c, int call, int cls) {
+  const NodeTable *nt = c->nt;
+  const char *nm = nt_kind(nt, call) == NK_CallNode ? nt_str(nt, call, "name") : NULL;
+  int rv = nm ? nt_ref(nt, call, "receiver") : -1, blk = nm ? nt_ref(nt, call, "block") : -1;
+  if (!c->lrec || cls < 0 || !nm || (rv >= 0 && nt_kind(nt, rv) != NK_SelfNode) || blk < 0 || nt_kind(nt, blk) != NK_BlockNode) return 0;
+  /* a name the walk has a reading of (an iterator's, class_eval's, a
+     define_method's: elab_block_when) keeps it: the emitted call may be
+     the builtin's, as a `loop` is whatever the class defines */
+  if (elab_block_when(c, call, 0) != ELAB_BLK_UNKNOWN) return 0;
+  LoadPoint p = elab_point_of(c, call);
+  const LrDef *d = NULL;
+  /* (a builtin's reopening answers by class methods the record does not hold) */
+  if (p.region < 0 || !lr_ready(c, p) || elab_self_at(c, call) != cls || lr_point_runs_again(c->lrec, nt, p) ||
+      is_builtin_class_name(c->classes[cls].name) || is_builtin_module_name(c->classes[cls].name)) return 0;
+  return lr_sg_chain_find(c, cls, nm, p, &d, NULL) == ELAB_YES && d && d->kind == LR_DEF && lr_name_drops_block(c, nm);
+}
+
 /* ---- a module's singleton class (elab_singleton_made) ---- */
 /* Which module a form makes the singleton class of: a class id, or */
 enum { LR_SG_ANY = -1, LR_SG_NONE = -2, LR_SG_MAIN = -3 };   /* any module it may be; none (an instance, a class); main, as self */

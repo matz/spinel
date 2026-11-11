@@ -2523,7 +2523,9 @@ gc-phases-test: $(SPINEL) $(SP_RT_LIB) $(SP_RT_MT_LIB) $(SPINEL_TIMEOUT)
 # threshold floor asked for beside it too: the level is over the floors. Then the
 # other half of the contract: programs that root what they use answer the same
 # at level 2, alone and beside the full verifier, on both runtimes. A
-# promote_* program is compiled in the mode its answer is defined in.
+# promote_* program is compiled in the mode its answer is defined in. Each
+# program runs in tools/gc_stress_one.sh, one per core: one after another,
+# the 280 of them were the gate's last leg running alone.
 GC_STRESS_TESTS = $(shell grep -l '^\# spinel: gc-stress$$' test/*.rb)
 gc-stress-test: $(SPINEL) $(SP_RT_LIB) $(SP_RT_MT_LIB) $(SPINEL_TIMEOUT)
 	@tmp=$$(mktemp -d /tmp/spinel-gcstress.XXXXXX); ok=1; \
@@ -2544,18 +2546,9 @@ gc-stress-test: $(SPINEL) $(SP_RT_LIB) $(SP_RT_MT_LIB) $(SPINEL_TIMEOUT)
 	      echo "gc-stress-test: FAIL (no report naming the root phase, SPINEL_GC_THRESHOLD_KB=$$kb)"; head -5 "$$tmp/err"; ok=0; fi; \
 	  done; \
 	else echo "gc-stress-test: FAIL (host C did not compile)"; sed -n 1,6p "$$tmp/cc.err"; ok=0; fi; \
-	for src in $(GC_STRESS_TESTS); do \
-	  bn=$$(basename "$$src" .rb); fl=; case $$bn in promote_*) fl=--int-overflow=promote;; esac; \
-	  $(SPINEL) $$fl "$$src" -o "$$tmp/$$bn" >"$$tmp/cc.out" 2>&1; rc=$$?; \
-	  if [ $$rc -ne 0 ]; then \
-	    echo "gc-stress-test: FAIL ($$bn: compile, exit $$rc)"; tail -5 "$$tmp/cc.out"; ok=0; continue; fi; \
-	  for v in 0 1; do \
-	    SPINEL_GC_STRESS=2 SPINEL_GC_VERIFY=$$v $(TIMEOUT60) "$$tmp/$$bn" > "$$tmp/out" 2> "$$tmp/err"; rc=$$?; \
-	    if [ $$rc -ne 0 ] || ! cmp -s "$$tmp/out" "$$src.expected"; then \
-	      echo "gc-stress-test: FAIL ($$bn: SPINEL_GC_STRESS=2 SPINEL_GC_VERIFY=$$v, exit $$rc)"; \
-	      diff -u "$$src.expected" "$$tmp/out" | head -10; head -4 "$$tmp/err"; ok=0; fi; \
-	  done; \
-	done; \
+	printf '%s\n' $(GC_STRESS_TESTS) | \
+	  xargs -P $(NPROC) -n 1 sh tools/gc_stress_one.sh $(SPINEL) $(SPINEL_TIMEOUT) > "$$tmp/runs" 2>&1 || ok=0; \
+	cat "$$tmp/runs"; \
 	rm -rf "$$tmp"; \
 	if [ $$ok -eq 1 ]; then echo "gc-stress-test: pass"; else exit 1; fi
 

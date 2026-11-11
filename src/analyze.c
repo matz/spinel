@@ -39710,7 +39710,7 @@ int nullable_int_value(Compiler *c, int v) {
     /* a yielding method the program defines on a builtin class that the plan
        binds to the call answers its block's value, nil included
        (`nil.f { |v| v }` over `yield nil`) */
-    if (mi < 0 && rcv >= 0 && cn) mi = cplan_reopen_yield_target(c, cplan_user_fresh(c, v));
+    if (mi < 0 && rcv >= 0 && cn) mi = cplan_reopen_target(c, cplan_user_fresh(c, v));
     if (mi >= 0 && c->scopes[mi].ret_nullable_int) return 1;
     /* A bare (receiverless) call to an attr_reader resolves `mi` through
        comp_self_call_mi straight to the synthesized `def x = @x` scope, but

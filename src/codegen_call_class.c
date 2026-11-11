@@ -6161,6 +6161,12 @@ int emit_root_reopen_call(Compiler *c, int id, Buf *b, const NodeTable *nt, int 
   buf_puts(&call, open ? "); })" : ")");
   /* (the value-less one's slot takes the nil below, not a coerced one) */
   if (void3) buf_puts(b, call.p);
+  /* a method answering an Integer or Float with its nil beside it
+     (method_ret_is_oint) fits the node's form: an oint slot keeps it, a
+     boxed one boxes it, a plain one reads the number (a nil raises) */
+  else if (method_ret_is_oint(&c->scopes[mi]) && want_repr.kind == RK_OPT) buf_puts(b, call.p);
+  else if (method_ret_is_oint(&c->scopes[mi]) && want_repr.kind == RK_BOXED) emit_boxed_ret_call(c, &c->scopes[mi], call.p, b);
+  else if (method_ret_is_oint(&c->scopes[mi])) buf_printf(b, "%s(%s)", oint_arg((TyKind)c->scopes[mi].ret), call.p);
   else emit_coerce_text(c, id, (TyKind)c->scopes[mi].ret, want_repr.kind == RK_BOXED ? TY_POLY : want3,
                         CO_HOLD, call.p, "an Object method result", b);
   free(call.p);

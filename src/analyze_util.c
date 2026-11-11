@@ -3337,7 +3337,7 @@ static int yvt_callee_index_scan(Compiler *c, int cid) {
     }
     /* a yielding method the program defines on a builtin class, which the
        plan binds to a call on a builtin value: its yield's block is this call's */
-    else if (cn) rmi = cplan_reopen_yield_target(c, cplan_user_fresh(c, cid));
+    else if (cn) rmi = cplan_reopen_target(c, cplan_user_fresh(c, cid));
   }
   return rmi;
 }

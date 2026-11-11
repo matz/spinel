@@ -99,8 +99,8 @@ int cplan_root_reopen_owner(Compiler *c, const CallPlan *p);
    protected method of a name a builtin has), else NULL. The
    analysis asks cplan_user_fresh's plan, its types still moving. */
 const CallPlan *cplan_root_reopen_call(Compiler *c, int id, const CallPlan *p);
-/* The yielding method of the program's p binds to a call on a builtin value (a reopened class's, or a root class's), -1 where p binds none: its yield's block is the call's. */
-int cplan_reopen_yield_target(Compiler *c, const CallPlan *p);
+/* The method of the program's that p binds directly to a call on a builtin value, a root class's or a reopened class's yielding one, -1 where p binds none: its answer, a yield's block value included, is the call's. */
+int cplan_reopen_target(Compiler *c, const CallPlan *p);
 /* Does any scope define an instance method `name` every object answers: the
    top level's, or Object's, Kernel's or BasicObject's own? The name-level
    twin of cplan_root_reopen, for the desugars that run before types exist

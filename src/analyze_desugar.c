@@ -18962,7 +18962,54 @@ static int bx_mixes_in(Compiler *c, int m, int k, int depth) {
 /* The Comparable builtins (other than Integer and Float) whose call to a
    method the program adds to `module Comparable` takes the method's copy
    (bx_cmp_own_class). NULL ends the list. */
-static const char *const bx_cmp_recv_cls[] = { "String", "Symbol", "Time", "Rational", NULL };
+static const char *const bx_cmp_recv_cls[] = { "String", "Symbol", "Time", "Rational", "Complex", NULL };
+/* Does the program def nm in a `class cls` body? A Rational or Complex
+   reopening's def has by now moved onto Object behind a
+   `self.is_a?(cls)` arm (desugar_builtin_reopen_methods), so that arm
+   counts too. An alias or other call in such a body may define anything:
+   it counts as well. Read from the program's text: no class is
+   registered yet. */
+static int bx_guard_arm_names(const NodeTable *nt, int def, const char *cls) {
+  int body = nt_ref(nt, def, "body"), bn = 0;
+  const int *bb = body >= 0 && nt_kind(nt, body) == NK_StatementsNode ? nt_arr(nt, body, "body", &bn) : NULL;
+  for (int f = bn > 0 ? bb[0] : -1, g = 0; f >= 0 && nt_kind(nt, f) == NK_IfNode && g < 64; f = nt_ref(nt, f, "subsequent"), g++) {
+    int pr = nt_ref(nt, f, "predicate"), an = 0;
+    const char *pn = pr >= 0 && nt_kind(nt, pr) == NK_CallNode ? nt_str(nt, pr, "name") : NULL;
+    if (!pn || !sp_streq(pn, "is_a?")) continue;
+    int args = nt_ref(nt, pr, "arguments");
+    const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &an) : NULL;
+    /* (only an arm desugar made: mo_guard_pred gives the call and its
+       argument one place, where a written `is_a?(Complex)` has the
+       argument after the call) */
+    if (an == 1 && nt_kind(nt, av[0]) == NK_ConstantReadNode && nt_str(nt, av[0], "name") &&
+        sp_streq(nt_str(nt, av[0], "name"), cls) &&
+        nt_int(nt, av[0], "node_line", -1) == nt_int(nt, pr, "node_line", -2) &&
+        nt_int(nt, av[0], "node_col", -1) == nt_int(nt, pr, "node_col", -2)) return 1;
+  }
+  return 0;
+}
+static int bx_class_body_defines(const NodeTable *nt, const char *cls, const char *nm) {
+  NT_FOREACH_KIND(nt, NK_ClassNode, k) {
+    const char *cn = class_def_name(nt, k);
+    int own = cn && sp_streq(cn, cls), obj = cn && sp_streq(cn, "Object");
+    if (!own && !obj) continue;
+    int body = class_def_body(nt, k), bn = 0;
+    const int *bb = body >= 0 ? nt_arr(nt, body, "body", &bn) : NULL;
+    for (int j = 0; j < bn; j++) {
+      NodeKind bk = nt_kind(nt, bb[j]);
+      const char *dn = bk == NK_DefNode && nt_ref(nt, bb[j], "receiver") < 0 ? nt_str(nt, bb[j], "name") : NULL;
+      if (dn && sp_streq(dn, nm) && (own || bx_guard_arm_names(nt, bb[j], cls))) return 1;
+      if (own && (bk == NK_AliasMethodNode || bk == NK_CallNode)) return 1;
+    }
+  }
+  return 0;
+}
+/* Does core class cls undefine a method its builtin ancestors have
+   (Complex undefines Numeric's `round` and Comparable's `<`)? */
+static int bx_cmp_core_undefines(const char *cls, const char *nm) {
+  return nm && core_method_vis(cls, nm, 1, NULL) == 0 &&
+         (core_method_vis("Numeric", nm, 1, NULL) > 0 || core_method_vis("Comparable", nm, 1, NULL) > 0);
+}
 /* Is class or module k one of bx_cmp_recv_cls, Numeric, Comparable,
    Object, Kernel, BasicObject or the top level, or a module one of them or
    the top level mixes in, as the class table holds them? (k < 0: a class
@@ -19171,7 +19218,8 @@ static int bx_copy_self_free(Compiler *c, int copy) {
          of the name answers first in CRuby (`to_s` in Comparable) */
       if (nt_int(nt, id, "bx_copy", -1) >= 0) {
         for (int r = 0; bx_cmp_recv_cls[r] && ok; r++)
-          if (!cn || core_method_vis(bx_cmp_recv_cls[r], cn, 0, NULL) > 0) ok = 0;
+          if (!cn || core_method_vis(bx_cmp_recv_cls[r], cn, 0, NULL) > 0 ||
+              (sp_streq(bx_cmp_recv_cls[r], "Complex") && bx_cmp_core_undefines("Complex", cn))) ok = 0;
         break;
       }
       int k = 0;
@@ -19189,7 +19237,7 @@ static int bx_copy_self_free(Compiler *c, int copy) {
   return ok;
 }
 
-/* A String, Symbol, Time or Rational is Comparable too. A
+/* A String, Symbol, Time, Rational or Complex is Comparable too. A
    method the program adds to `module Comparable` (bx_own) takes them; the
    gaps in desugar_builtin_scalar_calls are the builtins/ generic's own
    body. A builtin method of the receiver's class with the name answers
@@ -19199,12 +19247,20 @@ static const char *bx_cmp_own_class(Compiler *c, int bx, int copy, TyKind rt, co
   if (bx != SP_BX_COMPARABLE || copy < 0 || !name) return NULL;
   if (!nt_int(nt, (int)nt_int(nt, copy, "bx_def", -1), "bx_own", 0)) return NULL;
   const char *cls = rt == TY_STRING || rt == TY_STRBUF ? "String" : rt == TY_SYMBOL ? "Symbol"
-                  : rt == TY_TIME ? "Time" : rt == TY_RATIONAL ? "Rational" : NULL;
+                  : rt == TY_TIME ? "Time" : rt == TY_RATIONAL ? "Rational" : rt == TY_COMPLEX ? "Complex" : NULL;
   if (!cls || core_method_vis(cls, name, 0, NULL) > 0) return NULL;
-  /* Numeric comes before Comparable in a Rational's ancestors: a builtin
-     Numeric method of the name (`integer?`) or the program's own one
-     answers first. */
-  if (rt == TY_RATIONAL) {
+  /* A Complex undefines many Comparable and Numeric methods (`round`,
+     `<`, `positive?`): CRuby raises NoMethodError for those, so the
+     call keeps its old dispatch. */
+  if (rt == TY_COMPLEX && bx_cmp_core_undefines(cls, name)) return NULL;
+  /* the program's own method of the receiver's class answers first */
+  if (rt == TY_COMPLEX || rt == TY_RATIONAL) {
+    if (bx_class_body_defines(nt, cls, name)) return NULL;
+  }
+  /* Numeric comes before Comparable in a Rational's and a Complex's
+     ancestors: a builtin Numeric method of the name (`integer?`) or the
+     program's own one answers first. */
+  if (rt == TY_RATIONAL || rt == TY_COMPLEX) {
     if (core_method_vis("Numeric", name, 0, NULL) > 0) return NULL;
     int k = comp_builtin_class_named(c, "Numeric");
     int mi = k >= 0 ? comp_method_in_chain(c, k, name, NULL) : -1;

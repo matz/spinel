@@ -1,0 +1,14 @@
+"cmp"
+["cmp", "t1"]
+"t2"
+false
+1
+"cmp"
+"cmp"
+"cpx own"
+"rat own"
+"cmp"
+"cmp truncate"
+"cmp truncate"
+:comparable
+["cpx", "t1"]

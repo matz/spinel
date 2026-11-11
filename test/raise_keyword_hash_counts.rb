@@ -67,3 +67,16 @@ x = [1].size > 5 ? 1 : (raise(RuntimeError, "w", nil, cause: nil, **e) rescue 9)
 p x
 # a hash of cause: only at two positionals is no third (a backtrace)
 t("kernel 2 **g") { |m| raise(RuntimeError, "w", **g) }
+# a key the run time computes is counted when it is known: `cause` is the
+# keyword, any other key one more argument
+k = :cause
+z = :zz
+t("kernel **{k}") { |m| raise(RuntimeError, "w", nil, **{k => nil}) }
+t("kernel **{z}") { |m| raise(RuntimeError, "w", nil, **{z => 1}) }
+t("fail **{k}") { |m| fail(RuntimeError, "w", nil, **{k => nil}) }
+t("fiber **{k}") { |m| m.raise(RuntimeError, "w", nil, **{k => nil}) }
+t("kernel **{k} **{}") { |m| raise(RuntimeError, "w", nil, **{k => nil}, **{}) }
+t("kernel k pair") { |m| raise(RuntimeError, "w", nil, k => nil) }
+t("kernel cause k pair") { |m| raise(RuntimeError, "w", nil, cause: nil, k => nil) }
+t("kernel string key") { |m| raise(RuntimeError, "w", nil, "cause" => nil) }
+t("kernel **{string key}") { |m| raise(RuntimeError, "w", nil, **{"cause" => nil}) }

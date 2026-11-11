@@ -44532,14 +44532,16 @@ static void split_kwsplat_calls(Compiler *c, int from) {
       kwsplat_drop_rows(nt, id);
       continue;
     }
-    /* (a taken keyword's hash of pairs and literals: the plan reads its keys) */
+    /* (a taken keyword's hash of pairs and literals whose keys the plan
+       reads: it counts the hash; a computed key, `**{k => v}`, is the run
+       time's) */
     int rt = 0;
     for (int i = 0; i < ndyn; i++)
       if (nt_kind(nt, dyn[i]) == NK_AssocSplatNode) {
         int v = nt_ref(nt, dyn[i], "value");
         if (v < 0 || nt_kind(nt, v) != NK_HashNode || nt_hash_has_splat(nt, v)) rt = 1;
       }
-    if (taken && !rt) continue;
+    if (taken && !rt && cplan_hash_holds_key_past(c, kh, taken) >= 0) continue;
     /* what runs after each operand decides which reads are held */
     int recv = nt_ref(nt, id, "receiver"), blk = nt_ref(nt, id, "block"), safe = nt_safe_nav(nt, id);
     int bexp = blk >= 0 && nt_kind(nt, blk) == NK_BlockArgumentNode ? nt_ref(nt, blk, "expression") : -1;

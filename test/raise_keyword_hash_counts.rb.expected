@@ -43,3 +43,12 @@ fiber cause **e: RuntimeError: w
 <:a><{zz: 1}>kernel order: ArgumentError: wrong number of arguments (given 4, expected 0..3)
 9
 kernel 2 **g: RuntimeError: w
+kernel **{k}: RuntimeError: w
+kernel **{z}: ArgumentError: wrong number of arguments (given 4, expected 0..3)
+fail **{k}: RuntimeError: w
+fiber **{k}: RuntimeError: w
+kernel **{k} **{}: RuntimeError: w
+kernel k pair: RuntimeError: w
+kernel cause k pair: RuntimeError: w
+kernel string key: ArgumentError: wrong number of arguments (given 4, expected 0..3)
+kernel **{string key}: ArgumentError: wrong number of arguments (given 4, expected 0..3)

@@ -2886,24 +2886,39 @@ int cplan_hash_positionals(Compiler *c, int id, int kwpos) {
   if (sp == 0 || kwpos == 0) return 0;
   return kwpos == 1 ? sp : -1;
 }
-/* Does the keyword hash or Hash literal h hold a key other than `key`: 1
-   where a literal key is another (in a `**{...}` literal too); 0 where
-   every element is `key:` or spreads nothing; -1 where a `**` operand is
-   the run time's. */
-static int holds_key_past(const NodeTable *nt, int h, const char *key) {
+/* Is the key node k of a hash pair the Symbol `key`: 1; 0 where it is a
+   literal of another value; -1 where its value is the run time's (a
+   variable, a call, an interpolated Symbol). */
+static int hash_key_is(const NodeTable *nt, int k, const char *key) {
+  switch (nt_kind(nt, k)) {
+    case NK_SymbolNode: {
+      const char *kn = nt_str(nt, k, "value");
+      return kn ? sp_streq(kn, key) : -1;
+    }
+    case NK_StringNode: case NK_IntegerNode: case NK_FloatNode: case NK_RationalNode:
+    case NK_ImaginaryNode: case NK_NilNode: case NK_TrueNode: case NK_FalseNode:
+      return 0;
+    default:
+      return -1;
+  }
+}
+/* See call_plan.h. */
+int cplan_hash_holds_key_past(Compiler *c, int h, const char *key) {
+  const NodeTable *nt = c->nt;
   int en = 0, sp = 0;
   const int *els = nt_arr(nt, h, "elements", &en);
   for (int e = 0; e < en; e++) {
     int k = nt_kind(nt, els[e]) == NK_AssocNode ? nt_ref(nt, els[e], "key") : -1;
+    int one;
     if (k >= 0) {
-      const char *kn = nt_kind(nt, k) == NK_SymbolNode ? nt_str(nt, k, "value") : NULL;
-      if (!kn || !sp_streq(kn, key)) return 1;
-      continue;
+      int is = hash_key_is(nt, k, key);
+      one = is < 0 ? -1 : !is;
+    } else {
+      int v = nt_kind(nt, els[e]) == NK_AssocSplatNode ? nt_ref(nt, els[e], "value") : -1;
+      NodeKind vk = v >= 0 ? nt_kind(nt, v) : NK_NONE;
+      one = vk == NK_NilNode ? 0 : vk == NK_HashNode ? cplan_hash_holds_key_past(c, v, key) : -1;
     }
-    int v = nt_kind(nt, els[e]) == NK_AssocSplatNode ? nt_ref(nt, els[e], "value") : -1;
-    NodeKind vk = v >= 0 ? nt_kind(nt, v) : NK_NONE;
-    int one = vk == NK_NilNode ? 0 : vk == NK_HashNode ? holds_key_past(nt, v, key) : -1;
-    if (one > 0) return 1;
+    if (one == 1) return 1;
     if (one < 0) sp = -1;
   }
   return sp;
@@ -2911,7 +2926,7 @@ static int holds_key_past(const NodeTable *nt, int h, const char *key) {
 /* cplan_hash_positionals for a callee that takes the one keyword `key`
    and passes a hash with any other key on as one more positional
    (builtin_kw_taken): 1 where the hash holds another key
-   (holds_key_past) or is the full branch of a split (split_kwsplat_calls
+   (cplan_hash_holds_key_past) or is the full branch of a split (split_kwsplat_calls
    tests for another key), 0 where it holds none or is the split's other
    branch, -1 where a `**` operand is the run time's. */
 static int hash_positionals_past(Compiler *c, int id, const char *key) {
@@ -2922,7 +2937,7 @@ static int hash_positionals_past(Compiler *c, int id, const char *key) {
   int h = argv[argc - 1];
   if (nt_int(nt, h, "kwsplit_taken", 0)) return 0;
   /* the split's branches: one holds no other key, the other one does */
-  return nt_int(nt, h, "kwsplit_full", 0) ? 1 : holds_key_past(nt, h, key);
+  return nt_int(nt, h, "kwsplit_full", 0) ? 1 : cplan_hash_holds_key_past(c, h, key);
 }
 /* See call_plan.h. */
 int cplan_builtin_hash_positionals(Compiler *c, int id, const char *cls, const char *name, int cside) {

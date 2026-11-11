@@ -252,6 +252,11 @@ int cplan_hash_positionals(Compiler *c, int id, int kwpos);
    (the split, which runs from the method's most positionals on, gives each
    of its branches a count). */
 int cplan_builtin_hash_positionals(Compiler *c, int id, const char *cls, const char *name, int cside);
+/* Does the keyword hash or Hash literal h hold a key other than `key`: 1
+   where a literal key is another (in a `**{...}` literal too); 0 where
+   every element is `key:` or spreads nothing; -1 where a key or a `**`
+   operand is the run time's (`k => v`, `**h`). */
+int cplan_hash_holds_key_past(Compiler *c, int h, const char *key);
 /* The class-side row (bop_class_find) call id takes on builtin class cls,
    its constant receiver: NULL where none of cls's singleton chain has one,
    or where a class method the program gives a class of the chain, up to

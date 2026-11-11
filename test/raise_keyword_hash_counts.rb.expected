@@ -1,0 +1,14 @@
+fiber zz: ArgumentError: wrong number of arguments (given 4, expected 0..3)
+fiber cause: RuntimeError: w
+fiber cause zz: ArgumentError: wrong number of arguments (given 4, expected 0..3)
+fiber **e: RuntimeError: w
+fiber **f: ArgumentError: wrong number of arguments (given 4, expected 0..3)
+fiber **g: RuntimeError: w
+fiber **h: ArgumentError: wrong number of arguments (given 4, expected 0..3)
+kernel zz: ArgumentError: wrong number of arguments (given 4, expected 0..3)
+kernel cause zz: ArgumentError: wrong number of arguments (given 4, expected 0..3)
+kernel **e: RuntimeError: w
+kernel **f: ArgumentError: wrong number of arguments (given 4, expected 0..3)
+kernel **g: RuntimeError: w
+kernel **h: ArgumentError: wrong number of arguments (given 4, expected 0..3)
+kernel 2 **g: RuntimeError: w

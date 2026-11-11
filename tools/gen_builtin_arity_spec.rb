@@ -467,11 +467,12 @@ end
 # has, so `BasicSocket.for_fd(1, autoclose: false)` passes two arguments;
 # else, where a side's maximum is proved, the instance side's keyword probe
 # on each such side (File.basename(p, s, a: 1): given 3, expected 1..2).
-# KW_PASSTHROUGH methods, of a class (BACK) or its instances (BAK), take
-# one keyword and pass any other key as one more positional, so the probe's
-# unknown key reads as a method that takes none: they keep no row, and the
-# run aborts if one stops taking its keyword (an unborn Fiber checks the
-# arguments before it refuses the raise).
+# KW_PASSTHROUGH methods, of a class or its instances, take one keyword and
+# pass a hash with any other key as one more positional, so the probe's
+# unknown key reads as a method that takes none: they keep no BACK or BAK
+# row but a BAKT row naming the keyword, and the run aborts if one stops
+# taking it (an unborn Fiber checks the arguments before it refuses the
+# raise).
 #   Kernel.raise, Fiber#raise        cause:
 KW_PASSTHROUGH = {
   ["Kernel", :class] => { "raise" => :cause },
@@ -625,7 +626,9 @@ out = <<~C
      BAI carries both, BAM only Method#arity, BAS only instance counts,
      and BAC class/module counts; BAL and BALC are a library's instance
      and class counts, its name first. BACK names the class methods whose
-     keyword hash counts as a positional (no keywords). -1 maxima are unbounded; NULL messages
+     keyword hash counts as a positional (no keywords); BAKT a method that
+     takes one keyword and counts a hash with any other key as a
+     positional, 1 for a class method. -1 maxima are unbounded; NULL messages
      and unproved -1 minima never reject a call. Block counts are separate.
      Kernel Method#arity describes receiverless method(:name) wrappers.
      BAP is Method#parameters by the class or module that defines the
@@ -646,6 +649,7 @@ lib.each { |r| render.("BAL", r) }
 libc.each { |r| render.("BALC", r) }
 kwpos.each { |r| render.("BAK", r[0, 2]) }
 cmkw.each { |r| render.("BACK", r[0, 2]) }
+KW_PASSTHROUGH.each { |(cls, side), ms| ms.each { |m, key| render.("BAKT", [cls, m, key.to_s, side == :class ? 1 : 0]) } }
 params.each { |_, k, m, ps, cside| render.("BAP", [k, m, ps, cside.to_i]) }
 summary = "#{arity.length + kernel_arity.length} Method#arity + #{inst.length} instance + #{cm.length} class-method + #{lib.length + libc.length} library + #{params.length} parameters entries"
 if ARGV.include?("--check")

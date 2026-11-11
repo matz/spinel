@@ -38,8 +38,16 @@ int is_send_family(const char *n);    /* send __send__ public_send */
 int builtin_name_takes_keywords(const char *n);   /* a builtin of the name takes keywords in CRuby (clone, round, lines ...) */
 /* Is a keyword hash one more positional of cls's builtin method `name` (its
    class method where cside), as CRuby counts a method that takes no
-   keywords: 1; 0 where the method takes keywords; -1 where no fact says. */
+   keywords: 1; 0 where the method takes keywords; 2 where it takes the one
+   keyword builtin_kw_taken names and counts a hash with any other key as
+   a positional; -1 where no fact says. */
 int builtin_kw_positional(const char *cls, const char *name, int cside);
+/* The one keyword that method takes where its keyword fact is 2 (`cause`
+   for Kernel.raise and Fiber#raise); NULL otherwise. */
+const char *builtin_kw_taken(const char *cls, const char *name, int cside);
+/* The keyword every builtin named `name` that takes one that way takes;
+   NULL where none does, or two take different ones. */
+const char *builtin_name_kw_taken(const char *name);
 /* Does some builtin of the name take no keywords: an op row or class-side
    row without BOPF_KEYWORDS, a fixed Method#arity, the facts' BAK or BACK.
    The `**` split's gate. */

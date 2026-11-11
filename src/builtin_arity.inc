@@ -4,7 +4,9 @@
    BAI carries both, BAM only Method#arity, BAS only instance counts,
    and BAC class/module counts; BAL and BALC are a library's instance
    and class counts, its name first. BACK names the class methods whose
-   keyword hash counts as a positional (no keywords). -1 maxima are unbounded; NULL messages
+   keyword hash counts as a positional (no keywords); BAKT a method that
+   takes one keyword and counts a hash with any other key as a
+   positional, 1 for a class method. -1 maxima are unbounded; NULL messages
    and unproved -1 minima never reject a call. Block counts are separate.
    Kernel Method#arity describes receiverless method(:name) wrappers.
    BAP is Method#parameters by the class or module that defines the
@@ -3821,6 +3823,8 @@ BACK("Kernel","p")
 BACK("Kernel","pp")
 BACK("Kernel","puts")
 BACK("Kernel","print")
+BAKT("Kernel","raise","cause",1)
+BAKT("Fiber","raise","cause",0)
 BAP("String","%","req",1)
 BAP("String","*","req",1)
 BAP("String","+","req",1)

@@ -2880,6 +2880,29 @@ int cplan_hash_positionals(Compiler *c, int id, int kwpos) {
   return kwpos == 1 ? sp : -1;
 }
 /* See call_plan.h. */
+int cplan_hash_positionals_past(Compiler *c, int id, const char *key) {
+  const NodeTable *nt = c->nt;
+  int argc = 0, en = 0, sp = 0;
+  const int *argv = call_args(nt, id, &argc);
+  if (argc == 0 || nt_kind(nt, argv[argc - 1]) != NK_KeywordHashNode) return 0;
+  int h = argv[argc - 1];
+  if (nt_int(nt, h, "kwsplit_taken", 0)) return 0;
+  const int *els = nt_arr(nt, h, "elements", &en);
+  for (int e = 0; e < en; e++) {
+    int k = nt_kind(nt, els[e]) == NK_AssocNode ? nt_ref(nt, els[e], "key") : -1;
+    if (k >= 0) {
+      const char *kn = nt_kind(nt, k) == NK_SymbolNode ? nt_str(nt, k, "value") : NULL;
+      if (!kn || !sp_streq(kn, key)) return 1;
+      continue;
+    }
+    int v = nt_kind(nt, els[e]) == NK_AssocSplatNode ? nt_ref(nt, els[e], "value") : -1;
+    NodeKind vk = v >= 0 ? nt_kind(nt, v) : NK_NONE;
+    if (vk != NK_NilNode && !(vk == NK_HashNode && spread_elements(nt, v) == 0)) sp = -1;
+  }
+  /* the split's branches: one holds no other key, the other one does */
+  return nt_int(nt, h, "kwsplit_full", 0) ? 1 : sp;
+}
+/* See call_plan.h. */
 const BuiltinClassOp *cplan_builtin_class_row(Compiler *c, int id, const char *cls) {
   const char *name = nt_str(c->nt, id, "name");
   int argc = 0;

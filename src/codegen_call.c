@@ -2483,6 +2483,7 @@ const char *const comparable_names[] = {
 
 #define BAK(...)
 #define BACK(...)
+#define BAKT(...)
 #define BAP(...)
 #define BAL(...)
 #define BALC(...)
@@ -21224,11 +21225,15 @@ static int const_reads_builtin_value(Compiler *c, int recv) {
   return ty_is_array(rt) || ty_is_hash(rt) || rt == TY_STRING || rt == TY_STRBUF ||
          rt == TY_INT || rt == TY_FLOAT || rt == TY_SYMBOL || rt == TY_IO;
 }
-/* Count call id's trailing keyword hash into *argc as the call plan says a
-   callee of keyword fact kwpos sees it (cplan_hash_positionals): 0 where
-   the run time decides. */
-static int hash_counted(Compiler *c, int id, int kwpos, int *argc) {
-  int hp = cplan_hash_positionals(c, id, kwpos);
+/* Count call id's trailing keyword hash into *argc as the call plan says
+   builtin cls's method `name` (its class method where cside) sees it, by
+   its keyword fact (builtin_kw_positional; cplan_hash_positionals, or
+   cplan_hash_positionals_past for a method that takes one keyword and
+   passes any other on): 0 where the run time decides. */
+static int hash_counted(Compiler *c, int id, const char *cls, const char *name, int cside, int *argc) {
+  int kwpos = builtin_kw_positional(cls, name, cside);
+  int hp = kwpos == 2 ? cplan_hash_positionals_past(c, id, builtin_kw_taken(cls, name, cside))
+                      : cplan_hash_positionals(c, id, kwpos);
   if (hp < 0) return 0;
   *argc -= 1 - hp;
   return 1;
@@ -21253,7 +21258,7 @@ static int class_arity_spec_row(Compiler *c, int id, const char *cls, const char
     int ci = i > 0 ? comp_class_index(c, a) : -1;
     if (ci >= 0 && cplan_cmethod_target(c, id, ci, name) >= 0) return 0;
     if (arity_spec_find(sp_builtin_cmeth_arity_spec_tbl, a, name)) {
-      if (kwh && !hash_counted(c, id, builtin_kw_positional(a, name, 1), argc)) return 0;
+      if (kwh && !hash_counted(c, id, a, name, 1, argc)) return 0;
       return arity_spec_row(sp_builtin_cmeth_arity_spec_tbl, a, name, with_block, *argc, exp, n);
     }
     if (!owner || sp_streq(a, owner)) break;
@@ -21294,7 +21299,7 @@ static int arity_violation(Compiler *c, int id, int non_nil, char *exp, size_t n
       return 0;
     if (call_target(c, id, -1, name, CT_TOP, NULL) >= 0 ||
         reopened_owns(c, "Kernel", name) || reopened_owns(c, "Object", name)) return 0;
-    if (kwh && !hash_counted(c, id, builtin_kw_positional("Kernel", name, 1), &argc)) return 0;
+    if (kwh && !hash_counted(c, id, "Kernel", name, 1, &argc)) return 0;
     if (!arity_spec_row(ctbl, "Kernel", name, with_block, argc, exp, n) || !exp[0]) return 0;
     *eval_recv = 0;
   }
@@ -21383,7 +21388,7 @@ static int arity_violation(Compiler *c, int id, int non_nil, char *exp, size_t n
        table keeps a class's own row only where the class defines the name,
        and a forwarding name keeps one that never fires */
     const char *owner = arity_spec_find(itbl, bcn, name) ? bcn : arity_spec_find(itbl, "Object", name) ? "Object" : NULL;
-    if (!owner || (kwh && !hash_counted(c, id, builtin_kw_positional(owner, name, 0), &argc))) return 0;
+    if (!owner || (kwh && !hash_counted(c, id, owner, name, 0, &argc))) return 0;
     arity_spec_row(itbl, owner, name, with_block, argc, exp, n);
     if (!exp[0]) return 0;
     /* a reopened builtin that defines the name keeps its own dispatch --

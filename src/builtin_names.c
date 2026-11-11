@@ -2307,6 +2307,7 @@ int builtin_core_is_a(int k, int anc) {
 #define BAC(...)
 #define BAK(c,m) {c,m},
 #define BACK(...)
+#define BAKT(...)
 #define BAP(...)
 #define BAL(...)
 #define BALC(...)
@@ -2322,6 +2323,17 @@ static const struct { const char *cls; const char *m; } sp_builtin_cmeth_kwpos_t
 #include "builtin_arity.inc"
   {NULL, NULL}
 };
+#undef BACK
+#undef BAKT
+#define BACK(...)
+#define BAKT(c,m,k,cside) {c,m,k,cside},
+/* BAKT: the methods that take one keyword and pass a hash with any other
+   key on as one more positional (Kernel.raise and Fiber#raise, cause:) */
+static const struct { const char *cls, *m, *key; int cside; } sp_builtin_kw_taken_tbl[] = {
+#include "builtin_arity.inc"
+  {NULL, NULL, NULL, 0}
+};
+#undef BAKT
 #undef BAI
 #undef BAM
 #undef BAS
@@ -2331,12 +2343,32 @@ static const struct { const char *cls; const char *m; } sp_builtin_cmeth_kwpos_t
 #undef BAL
 #undef BALC
 #undef BAP
-/* See builtin_names.h. The instance side: a fixed Method#arity, or a fixed
-   accepted count where the class has no Method#arity row and some class
-   has a fixed one, or the facts' BAK; the class side: cls's own class-side
-   rows (bop_class_keywords), else the facts' BACK (BasicSocket.for_fd). */
+/* See builtin_names.h. */
+const char *builtin_kw_taken(const char *cls, const char *name, int cside) {
+  for (int i = 0; cls && name && sp_builtin_kw_taken_tbl[i].cls; i++)
+    if (sp_builtin_kw_taken_tbl[i].cside == cside && sp_streq(sp_builtin_kw_taken_tbl[i].cls, cls) &&
+        sp_streq(sp_builtin_kw_taken_tbl[i].m, name))
+      return sp_builtin_kw_taken_tbl[i].key;
+  return NULL;
+}
+/* See builtin_names.h. */
+const char *builtin_name_kw_taken(const char *name) {
+  const char *key = NULL;
+  for (int i = 0; name && sp_builtin_kw_taken_tbl[i].cls; i++) {
+    if (!sp_streq(sp_builtin_kw_taken_tbl[i].m, name)) continue;
+    if (key && !sp_streq(key, sp_builtin_kw_taken_tbl[i].key)) return NULL;
+    key = sp_builtin_kw_taken_tbl[i].key;
+  }
+  return key;
+}
+/* See builtin_names.h. The facts' BAKT first; then the instance side: a
+   fixed Method#arity, or a fixed accepted count where the class has no
+   Method#arity row and some class has a fixed one, or the facts' BAK; the
+   class side: cls's own class-side rows (bop_class_keywords), else the
+   facts' BACK (BasicSocket.for_fd). */
 int builtin_kw_positional(const char *cls, const char *name, int cside) {
   if (!cls || !name) return -1;
+  if (builtin_kw_taken(cls, name, cside)) return 2;
   if (cside) {
     int kw = bop_class_keywords(cls, name);
     if (kw >= 0) return !kw;
@@ -2373,6 +2405,7 @@ int builtin_name_kwless(const char *name) {
 #define BAC(...)
 #define BAK(...)
 #define BACK(...)
+#define BAKT(...)
 #define BAP(...)
 #define BAL(...)
 #define BALC(...)
@@ -2385,6 +2418,7 @@ static const struct { const char *cls, *m; } self_fact_rows[] = {
 #undef BAC
 #undef BAK
 #undef BACK
+#undef BAKT
 #undef BAL
 #undef BALC
 #undef BAP

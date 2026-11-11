@@ -35372,7 +35372,9 @@ static void emit_call_body_ordinary(Compiler *c, int id, Buf *b) {
      answers every receiver the lookup reaches it for, ahead of the arms
      below that know the name (Kernel's tap, then, frozen?) */
   { const CallPlan *rp = nt_ref(nt, id, "receiver") >= 0 ? cplan_root_reopen_call(c, id, cplan_user(c, id)) : NULL;
-    if (rp && rp->dispatch == CP_DIRECT) {
+    /* (a block that breaks is wrapped first, below: the wrapper's own pass,
+       with the call as g_brk_skip_id, comes back here) */
+    if (rp && rp->dispatch == CP_DIRECT && (id == g_brk_skip_id || !call_breaks(c, id))) {
       if (g_plan_check) cplan_served("root-reopen");
       if (emit_root_reopen_call(c, id, b, nt, nt_ref(nt, id, "receiver"), rp->owner_ci, rp->mi)) return;
     } }

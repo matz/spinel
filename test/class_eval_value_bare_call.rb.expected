@@ -1,0 +1,12 @@
+"Foo"
+"Foo.bar"
+["Sub", "Sub", "Sub", "Foo.bar", 3]
+15
+in Foo
+7
+"Foo"
+"Foo.bar"
+Sub
+["Pv.pv", "Pv.sp", "Pv.pt"]
+"Foo.bar"
+NoMethodError

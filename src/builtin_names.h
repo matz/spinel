@@ -35,6 +35,7 @@ int is_inspect_name(const char *n);       /* inspect */
 int is_object_class_name(const char *n);   /* Object alone: the top level's constants */
 int is_object_root(const char *n);    /* Object Kernel BasicObject: the classes every object has */
 int is_send_family(const char *n);    /* send __send__ public_send */
+int builtin_name_takes_keywords(const char *n);   /* a builtin of the name takes keywords in CRuby (clone, round, lines ...) */
 int is_method_name_reflection(const char *n); /* send family, method public_method instance_method define_method define_singleton_method alias_method singleton_method respond_to? method_defined? */
 int is_code_eval_name(const char *n);  /* eval class_eval module_eval instance_eval: given its code as a String */
 int is_symbol_conversion(const char *n); /* to_sym intern: a Symbol made of a value */
@@ -113,6 +114,7 @@ int is_endpoint_query(const char *n); /* first last: collection or Range endpoin
 int is_map_alias(const char *n); /* map collect: Enumerable transformation aliases */
 int is_instance_eval_family(const char *n); /* instance_eval instance_exec */
 int is_reflective_access(const char *n); /* instance_variable_get/set, class_variable_get/set, const_get/set, remove_* */
+int is_name_checked_call(const char *n); /* CRuby's answer turns on the name given: a NameError for one not allowed or not there */
 int is_reflective_listing(const char *n); /* instance_variables class_variables constants */
 int is_local_reflection(const char *n); /* eval binding local_variable_get/set local_variables */
 int is_block_given_name(const char *n); /* block_given? */
@@ -129,6 +131,7 @@ int is_eql_or_equal(const char *n); /* eql? equal? */
 int is_equal_name(const char *n);   /* equal? */
 int is_substitution(const char *n); /* gsub sub */
 int is_substitution_bang(const char *n); /* gsub! sub! */
+int is_str_reassign_mutator(const char *n); /* prepend << concat replace delete_prefix! delete_suffix! */
 int is_element_at_alias(const char *n); /* [] at */
 int is_map_bang_alias(const char *n); /* collect! map! */
 int is_each_or_pair(const char *n); /* each each_pair */
@@ -297,6 +300,7 @@ int is_class_relatives_query(const char *n); /* ancestors superclass subclasses 
 int is_class_query(const char *n); /* class */
 int is_method_owner_query(const char *n); /* owner */
 int is_instance_method_name(const char *n); /* instance_method public_instance_method */
+int is_public_method_lookup(const char *n); /* public_instance_method public_method */
 int is_method_object_maker(const char *n); /* method public_method singleton_method instance_method public_instance_method */
 int is_bound_method_maker(const char *n);  /* method public_method: a Method of the receiver's own method */
 int is_super_method_name(const char *n);   /* super_method: the Method one step up its owner's chain */
@@ -328,132 +332,7 @@ int is_object_base_name(const char *n); /* BasicObject Object */
    holds by the header that reopens each (builtin_core_class_slot), are among
    these builtin rows. The list generates the builtin table and core-class
    slots in the same order; non-row slots follow in the enum. */
-#define SP_BUILTIN_CLASSES(X) \
-  X(INTEGER, "Integer", -100, BC_CLASS) \
-  X(FLOAT, "Float", -101, BC_CLASS) \
-  X(STRING, "String", -102, BC_CLASS) \
-  X(SYMBOL, "Symbol", -103, BC_CLASS) \
-  X(ARRAY, "Array", -104, BC_CLASS) \
-  X(HASH, "Hash", -105, BC_CLASS) \
-  X(RANGE, "Range", -106, BC_CLASS) \
-  X(TIME, "Time", -107, BC_CLASS) \
-  X(MODULE, "Module", -108, BC_CLASS) \
-  X(CLASS, "Class", -109, BC_CLASS) \
-  X(NILCLASS, "NilClass", -110, BC_CLASS) \
-  X(TRUECLASS, "TrueClass", -111, BC_CLASS) \
-  X(FALSECLASS, "FalseClass", -112, BC_CLASS) \
-  X(NUMERIC, "Numeric", -113, BC_CLASS) \
-  X(COMPARABLE, "Comparable", -114, BC_CLASS | BC_MODULE) \
-  X(ENUMERABLE, "Enumerable", -115, BC_CLASS | BC_MODULE) \
-  X(OBJECT, "Object", -116, BC_CLASS | BC_PLAIN) \
-  X(BASIC_OBJECT, "BasicObject", -117, BC_CLASS | BC_PLAIN) \
-  X(PROC, "Proc", -118, BC_CLASS) \
-  X(KERNEL, "Kernel", -119, BC_CLASS | BC_MODULE | BC_SG_BOOT) \
-  X(IO, "IO", -120, BC_CLASS) \
-  X(FILE, "File", -121, BC_CLASS) \
-  X(EXCEPTION, "Exception", -122, BC_CLASS | BC_EXCEPTION) \
-  X(STANDARDERROR, "StandardError", -123, BC_CLASS | BC_EXCEPTION) \
-  X(RUNTIMEERROR, "RuntimeError", -124, BC_CLASS | BC_EXCEPTION) \
-  X(TYPEERROR, "TypeError", -125, BC_CLASS | BC_EXCEPTION) \
-  X(ARGUMENTERROR, "ArgumentError", -126, BC_CLASS | BC_EXCEPTION) \
-  X(NAMEERROR, "NameError", -127, BC_CLASS | BC_EXCEPTION) \
-  X(NOMETHODERROR, "NoMethodError", -128, BC_CLASS | BC_EXCEPTION) \
-  X(STOPITERATION, "StopIteration", -129, BC_CLASS | BC_EXCEPTION) \
-  X(MATH, "Math", -130, BC_CLASS | BC_MODULE | BC_SG_BOOT) \
-  X(COMPLEX, "Complex", -131, BC_CLASS) \
-  X(INDEXERROR, "IndexError", -132, BC_CLASS | BC_EXCEPTION) \
-  X(KEYERROR, "KeyError", -133, BC_CLASS | BC_EXCEPTION) \
-  X(RANGEERROR, "RangeError", -134, BC_CLASS | BC_EXCEPTION) \
-  X(FLOATDOMAINERROR, "FloatDomainError", -135, BC_CLASS | BC_EXCEPTION) \
-  X(ZERODIVISIONERROR, "ZeroDivisionError", -136, BC_CLASS | BC_EXCEPTION) \
-  X(FROZENERROR, "FrozenError", -137, BC_CLASS | BC_EXCEPTION) \
-  X(IOERROR, "IOError", -138, BC_CLASS | BC_EXCEPTION) \
-  X(LOCALJUMPERROR, "LocalJumpError", -139, BC_CLASS | BC_EXCEPTION) \
-  X(NOTIMPLEMENTEDERROR, "NotImplementedError", -140, BC_CLASS | BC_EXCEPTION) \
-  X(SCRIPTERROR, "ScriptError", -141, BC_CLASS | BC_EXCEPTION) \
-  X(RATIONAL, "Rational", -142, BC_CLASS) \
-  X(REGEXP, "Regexp", -143, BC_CLASS) \
-  X(ENUMERATOR, "Enumerator", -144, BC_CLASS) \
-  X(STRUCT, "Struct", -145, BC_CLASS) \
-  X(DATA, "Data", -146, BC_CLASS | BC_PLAIN) \
-  X(SYNTAXERROR, "SyntaxError", -147, BC_CLASS | BC_EXCEPTION) \
-  X(SECURITYERROR, "SecurityError", -148, BC_CLASS | BC_EXCEPTION) \
-  X(REGEXPERROR, "RegexpError", -149, BC_CLASS | BC_EXCEPTION) \
-  X(ENCODINGERROR, "EncodingError", -150, BC_CLASS | BC_EXCEPTION) \
-  X(SIGNALEXCEPTION, "SignalException", -151, BC_CLASS | BC_EXCEPTION) \
-  X(INTERRUPT, "Interrupt", -152, BC_CLASS | BC_EXCEPTION) \
-  X(THREADERROR, "ThreadError", -153, BC_CLASS | BC_EXCEPTION) \
-  X(FIBERERROR, "FiberError", -154, BC_CLASS | BC_EXCEPTION) \
-  X(CLOSEDQUEUEERROR, "ClosedQueueError", -155, BC_CLASS | BC_EXCEPTION) \
-  X(UNCAUGHTTHROWERROR, "UncaughtThrowError", -156, BC_CLASS | BC_EXCEPTION) \
-  X(NOMATCHINGPATTERNERROR, "NoMatchingPatternError", -157, BC_CLASS | BC_EXCEPTION) \
-  X(NOMATCHINGPATTERNKEYERROR, "NoMatchingPatternKeyError", -158, BC_CLASS | BC_EXCEPTION) \
-  X(EOFERROR, "EOFError", -159, BC_CLASS | BC_EXCEPTION) \
-  X(MATH_DOMAINERROR, "Math::DomainError", -160, BC_EXCEPTION) \
-  X(SYSTEMEXIT, "SystemExit", -161, BC_CLASS | BC_EXCEPTION) \
-  X(SIGNAL, "Signal", -162, BC_CLASS | BC_MODULE | BC_SG_BOOT) \
-  X(PROCESS_STATUS, "Process::Status", -163, BC_CLASS) \
-  X(PROCESS_TMS, "Process::Tms", -164, 0) \
-  X(DIR, "Dir", -165, BC_CLASS) \
-  X(BASICSOCKET, "BasicSocket", -166, BC_CLASS | BC_SOCKET) \
-  X(IPSOCKET, "IPSocket", -167, BC_CLASS | BC_SOCKET) \
-  X(TCPSOCKET, "TCPSocket", -168, BC_CLASS | BC_SOCKET) \
-  X(TCPSERVER, "TCPServer", -169, BC_CLASS | BC_SOCKET) \
-  X(UDPSOCKET, "UDPSocket", -170, BC_CLASS | BC_SOCKET) \
-  X(UNIXSOCKET, "UNIXSocket", -171, BC_CLASS | BC_SOCKET) \
-  X(UNIXSERVER, "UNIXServer", -172, BC_CLASS | BC_SOCKET) \
-  X(SOCKET, "Socket", -173, BC_CLASS | BC_SOCKET) \
-  X(THREAD, "Thread", -174, BC_CLASS) \
-  X(MUTEX, "Mutex", -175, BC_CLASS) \
-  X(THREAD_MUTEX, "Thread::Mutex", -175, 0) \
-  X(QUEUE, "Queue", -176, BC_CLASS) \
-  X(THREAD_QUEUE, "Thread::Queue", -176, 0) \
-  X(SIZEDQUEUE, "SizedQueue", -177, BC_CLASS) \
-  X(THREAD_SIZEDQUEUE, "Thread::SizedQueue", -177, 0) \
-  X(CONDITIONVARIABLE, "ConditionVariable", -178, BC_CLASS) \
-  X(THREAD_CONDITIONVARIABLE, "Thread::ConditionVariable", -178, 0) \
-  X(FIBER, "Fiber", -179, BC_CLASS) \
-  X(MATCHDATA, "MatchData", -180, BC_CLASS) \
-  X(ENCODING, "Encoding", 0, BC_CLASS) \
-  X(ENUMERATOR_CHAIN, "Enumerator::Chain", 0, BC_CLASS) \
-  X(ENUMERATOR_LAZY, "Enumerator::Lazy", 0, BC_CLASS) \
-  X(ENUMERATOR_PRODUCT, "Enumerator::Product", 0, BC_CLASS) \
-  /* the json package's errors, which lib/sp_exc.c gives their parents (JSONError < StandardError): \
-     a known name makes `rescue JSON::JSONError` climb that hierarchy, not compare a name (#7797) */ \
-  X(JSON_JSONERROR, "JSON::JSONError", 0, BC_EXCEPTION) \
-  X(JSON_PARSERERROR, "JSON::ParserError", 0, BC_EXCEPTION) \
-  X(JSON_NESTINGERROR, "JSON::NestingError", 0, BC_EXCEPTION) \
-  X(JSON_GENERATORERROR, "JSON::GeneratorError", 0, BC_EXCEPTION) \
-  X(ENCODING_COMPATIBILITYERROR, "Encoding::CompatibilityError", 0, BC_EXCEPTION) \
-  X(ENCODING_CONVERTERNOTFOUNDERROR, "Encoding::ConverterNotFoundError", 0, BC_EXCEPTION) \
-  X(ENCODING_INVALIDBYTESEQUENCEERROR, "Encoding::InvalidByteSequenceError", 0, BC_EXCEPTION) \
-  X(ENCODING_UNDEFINEDCONVERSIONERROR, "Encoding::UndefinedConversionError", 0, BC_EXCEPTION) \
-  X(ERRNO_ENOENT, "Errno::ENOENT", 0, BC_EXCEPTION) \
-  X(GC, "GC", 0, BC_CLASS | BC_MODULE | BC_SG_BOOT) \
-  X(IO_EAGAINWAITREADABLE, "IO::EAGAINWaitReadable", 0, BC_EXCEPTION) \
-  X(IO_TIMEOUTERROR, "IO::TimeoutError", 0, BC_EXCEPTION) \
-  /* the socket library's: lib/sp_exc.c gives them their parents, so \
-     `rescue SocketError` catches a failed lookup's Socket::ResolutionError */ \
-  X(SOCKETERROR, "SocketError", 0, BC_EXCEPTION) \
-  X(SOCKET_RESOLUTIONERROR, "Socket::ResolutionError", 0, BC_EXCEPTION) \
-  X(IO_EAGAINWAITWRITABLE, "IO::EAGAINWaitWritable", 0, BC_EXCEPTION) \
-  X(IO_EINPROGRESSWAITREADABLE, "IO::EINPROGRESSWaitReadable", 0, BC_EXCEPTION) \
-  X(IO_EINPROGRESSWAITWRITABLE, "IO::EINPROGRESSWaitWritable", 0, BC_EXCEPTION) \
-  X(IO_EWOULDBLOCKWAITREADABLE, "IO::EWOULDBLOCKWaitReadable", 0, BC_EXCEPTION) \
-  X(IO_EWOULDBLOCKWAITWRITABLE, "IO::EWOULDBLOCKWaitWritable", 0, BC_EXCEPTION) \
-  X(IO_WAITREADABLE, "IO::WaitReadable", 0, BC_EXCEPTION) \
-  X(IO_WAITWRITABLE, "IO::WaitWritable", 0, BC_EXCEPTION) \
-  X(LOADERROR, "LoadError", 0, BC_EXCEPTION) \
-  X(MARSHAL, "Marshal", 0, BC_CLASS | BC_MODULE | BC_SG_BOOT) \
-  X(METHOD, "Method", 0, BC_CLASS) \
-  X(NOMEMORYERROR, "NoMemoryError", 0, BC_EXCEPTION) \
-  X(OBJECTSPACE, "ObjectSpace", 0, BC_CLASS | BC_MODULE | BC_SG_BOOT) \
-  X(PROCESS, "Process", 0, BC_CLASS | BC_MODULE | BC_SG_BOOT) \
-  X(RANDOM, "Random", 0, BC_CLASS) \
-  X(STRINGSCANNER_ERROR, "StringScanner::Error", 0, BC_EXCEPTION) \
-  X(SYSTEMCALLERROR, "SystemCallError", 0, BC_EXCEPTION) \
-  X(SYSTEMSTACKERROR, "SystemStackError", 0, BC_EXCEPTION) \
-  X(UNBOUNDMETHOD, "UnboundMethod", 0, BC_CLASS)
+#include "../lib/sp_builtin_classes.h"
 
 /* A method added to Class is a class method of every class: the top-level
    `class Class` / `Class.class_eval { }` body becomes this module, and
@@ -470,6 +349,9 @@ enum {
 /* CORE_* for any builtin row or non-row slot above, -1 for any other name. */
 int builtin_core_class_slot(const char *n);
 int core_of_type(TyKind t);
+int builtin_core_is_a(int k, int anc);   /* CORE_k is CORE_anc or has it among its ancestors in CRuby's tables; 1 for a class the tables lack */
+int is_runtime_gvar_name(const char *n);   /* a global the runtime sets (stdout, PROGRAM_NAME, ...), by its name without the $ */
+int is_runtime_const_name(const char *n);   /* a constant the runtime defines that is no class (STDERR, ARGV, ENV, RUBY_VERSION) */
 int core_reopen_calls_proc_form(int core);   /* a reopened builtin's yielding method goes through its proc form */
 const char *core_class_name(int k);
 int is_builtin_method_host_name(const char *n); /* Object BasicObject Kernel Comparable Enumerable Module */
@@ -506,7 +388,11 @@ int is_string_rebind_mutator(const char *n); /* mutators needing argument-rebind
 int is_string_read_only_method(const char *name);
 int str_mutator_str_args(const char *n, int argc, int *int_ok); /* the arguments a String mutator takes as Strings */
 
-int builtin_module_owns(const char *cls, const char *name); /* included ahead of Object */
+int builtin_answers_ahead_of(const char *cls, const char *m, const char *root); /* an ancestor of cls ahead of root (NULL: any) owns instance method m, or undefines it (CRuby's tables) */
+const char *builtin_ancestor_at(const char *cls, int i);   /* the i-th ancestor (0: cls) in CRuby's lookup order, NULL past the last */
+int builtin_owns_instance_method(const char *cls, const char *m);   /* cls's own instance method m, any visibility (CRuby's tables) */
+const char *builtin_next_class_answering(int *i, const char *m);   /* the next class of the tables, from table *i, that Spinel has as a value and that answers m ahead of Object */
+int builtin_id_below_object_answers(int id, const char *m);   /* the builtin class with run-time id `id` does */
 int builtin_mixin_module_id(const char *n);   /* Comparable Enumerable Kernel Math: its builtin id */
 int is_include_name(const char *n);
 int is_prepend_name(const char *n);
@@ -537,6 +423,7 @@ int is_comparable_builtin_name(const char *n);
 typedef enum { BDC_BUILTIN, BDC_IDENTITY, BDC_EQUAL } BuiltinDefaultCmp;
 BuiltinDefaultCmp builtin_default_cmp(int family);   /* asks builtin_class_id */
 int builtin_class_id(const char *name);   /* analyze_util.c: a builtin class's id, 0 for none */
+int builtin_class_val_id(const char *name);   /* ...-1 for none: the cls_id of its class value */
 int is_comparable_module_method(const char *name); /* < <= == > >= between? clamp: Comparable's own */
 int builtin_comparable_owns(const char *cls, const char *name); /* Comparable's, on a class including it */
 int builtin_comparable_arity(const char *name);
@@ -603,6 +490,7 @@ const char *builtin_function_owner(const char *m);   /* the module defining the 
 int is_respond_to_name(const char *n); /* respond_to?: does the receiver itself answer a name */
 int is_method_presence_query(const char *n); /* 1: respond_to? *method_defined? (public_)instance_method (public_)method; 2: (public_)instance_methods (public_)methods, answered for the whole program; 3: private_/protected_instance_methods, private_/protected_methods, singleton_methods, answered by the receiver's chain */
 int is_instance_method_list(const char *n); /* (public_|private_|protected_)instance_methods */
+int method_list_vis_mask(const char *n); /* the visibilities a method list shows, 1 << SP_VIS_* each: public and protected for instance_methods, methods, singleton_methods; the prefixed forms one; 0 for no list */
 int is_instance_method_table_read(const char *n); /* is_instance_method_list names, instance_method */
 int is_class_value_reflection(const char *n); /* a listing, const_defined?, class_variable_get/set/defined?: from the receiver's class */
 int is_singleton_method_list(const char *n); /* singleton_methods */
@@ -612,24 +500,38 @@ int core_class_value_answers(const char *cls, const char *m); /* CRuby's core cl
 /* One builtin class or module's row of CRuby's own method tables
    (builtin_method_tables.inc, generated): its own instance method names
    (public, private, protected), its own singleton method names and its
-   ancestors, sorted, with their lengths. */
+   ancestors, sorted, with their lengths, then the names it and its singleton
+   class undefine (Complex#floor, Rational.allocate), where a lookup stops. */
 typedef struct { const char *name; int module; unsigned flags; const char *const *inst; const unsigned short *iflags; int ninst;
-                 const char *const *sing; const unsigned short *sflags; int nsing; const char *const *ancestors; const unsigned short *aflags; int nanc; } BuiltinMethodTable;
+                 const char *const *sing; const unsigned short *sflags; int nsing; const char *const *ancestors; const unsigned short *aflags; int nanc;
+                 const char *const *undef; int nundef; const char *const *sundef; int nsundef; } BuiltinMethodTable;
 /* Does CRuby's builtin class or module cls, or an ancestor of it, have a
    method `name` (sg: on its class side: its singleton methods and its
-   ancestors', then Class's or Module's instance methods)? A builtin the tables
+   ancestors', then Class's or Module's instance methods)? A name CRuby
+   undefines on the way (Complex#floor, Rational.allocate) is not there. A builtin the tables
    do not hold (a builtin class row, a reopened builtin) answers 1, unknown, so
    it never raises; 0 for any other name. With certain, only a method CRuby
-   has with no library required, or with one the program requires, at both
-   its shipped and its newest version: a reader that drops a method_missing
-   or a NoMethodError because of the answer needs it sure, and an unknown
-   builtin is none. */
+   has with no library required, or with one the program requires, at the
+   version CRuby ships: a reader that drops a method_missing or a
+   NoMethodError because of the answer needs it sure, and an unknown builtin
+   is none. */
 int builtin_method_answers(const char *cls, const char *name, int sg, int certain);
+/* The builtin class or module whose own singleton methods hold public `name`
+   first on the class side of builtin class or module cls, in a library the
+   program has, as CRuby's lookup finds it ahead of Class's or Module's
+   instance methods: cls's own or a superclass's (Array.new; File.open, IO's;
+   Class.constants, Module's), a module's own (Kernel.global_variables). NULL
+   where none holds it there, or an undefine ends the lookup first
+   (Rational.allocate). */
+const char *builtin_singleton_owner(const char *cls, const char *name);
 /* Does a builtin answer `name` on a self of the kind: main (Kernel's,
    Object's and main's own methods), a module (also Module's) or a class
    (also Class's)? */
 enum { BSELF_MAIN, BSELF_MODULE, BSELF_CLASS, BSELF_N };
 int builtin_self_method_known(const char *name, int kind);
+/* Is `m` one of main's own methods, beside Object's (its to_s and inspect, the
+   private ones a top-level body calls as a class body would)? */
+int main_self_method(const char *m);
 int is_builtin_module_const_name(const char *n);
 int is_untabled_native_class_name(const char *n);
 
@@ -648,30 +550,18 @@ int is_check_funcall_name(const char *n);   /* respond_to? respond_to_missing? m
 int is_implicitly_private_name(const char *n); /* initialize initialize_copy/_clone/_dup respond_to_missing? */
 int is_alias_method_name(const char *n);  /* alias_method */
 int is_class_declaration_call(const char *n);  /* visibility, attr_*, include/extend/prepend, alias_method, undef/remove_method */
-/* The operations a String Array (whose elements are handles) answers
-   itself, by name, argument count and block (0 none, 1 a literal block, 2
-   a block argument). */
+/* The operations on a String Array (whose elements are handles) that answer
+   an element's handle, by name, argument count and block (0 none, 1 a
+   literal block, 2 a block argument). */
 typedef enum {
   STRH_NONE,
   STRH_ELEM,     /* [](i), at(i), first, last: the element, a String */
-  STRH_STORE,    /* []=(i, v): stores v's String */
-  STRH_PUSH,     /* <<, push, append: stores each argument's String */
-  STRH_TAKE,     /* pop, shift: removes and answers the element */
-  STRH_LEN,      /* size, length */
-  STRH_EMPTY,    /* empty? */
-  STRH_EACH,     /* each { }: the receiver */
-  STRH_DUP,      /* dup: a new Array of the same Strings */
-  STRH_SELF,     /* to_a: the receiver */
-  STRH_JOIN,     /* join, join(sep) */
-  STRH_INCLUDE,  /* include?(v) */
-  STRH_EQ,       /* ==(other) */
-  STRH_INSPECT   /* inspect, to_s */
+  STRH_TAKE      /* pop, shift: removes and answers the element */
 } StrhOp;
 int strh_op(const char *n, int argc, int block);
 /* the receiver kind a block-taking iterator name belongs to */
 enum { BITER_NONE, BITER_ARRAY, BITER_INTEGER, BITER_STRING };
 int is_pop_name(const char *n);               /* pop */
-int is_first_name(const char *n);             /* first */
 
 
 const char *encoding_const_name(const char *nm);  /* Encoding::NM's encoding name, or NULL */
@@ -772,8 +662,9 @@ int boot_package_rank_of_path(const char *path, size_t len);   /* the same for s
    cls_id (0 when codegen has none). BC_PLAIN marks Object, BasicObject and
    Data, below which a program's class is an object of its own; BC_SG_BOOT
    a module CRuby 4.0 boots with its singleton class made (its module
-   functions'), as Comparable and Enumerable are not. */
-enum { BC_CLASS = 1, BC_MODULE = 2, BC_EXCEPTION = 4, BC_SOCKET = 8, BC_PLAIN = 16, BC_SG_BOOT = 32 };
+   functions'), as Comparable and Enumerable are not; BC_OSTRUCT
+   OpenStruct, a constant only after `require "ostruct"` (builtin_row). */
+enum { BC_CLASS = 1, BC_MODULE = 2, BC_EXCEPTION = 4, BC_SOCKET = 8, BC_PLAIN = 16, BC_SG_BOOT = 32, BC_OSTRUCT = 64 };
 typedef struct { const char *name; int id; unsigned flags; } BuiltinClass;
 const BuiltinClass *builtin_class_at(int i);   /* the i-th row, NULL past the last */
 int is_native_class_name(const char *n);       /* any row: a class Spinel has without a library */
@@ -818,4 +709,8 @@ int is_port_gvar_name(const char *n);      /* $stdout $stderr $>: assigning an o
    calls nothing), so it answers for each, to_a and deconstruct. */
 int synth_stands_for(const char *name, int i, const char **proto);
 int is_method_list_call(const char *n);    /* attr attr_reader attr_writer attr_accessor remove_method undef_method: every argument names a method */
+/* The builtin classes whose `allocate` raises TypeError "allocator undefined for K" in CRuby: the predicate, and the i-th name (NULL past the end) for a
+   caller that emits one compare each. */
+int is_allocator_undefined_class(const char *n);
+const char *allocator_undefined_class_at(int i);
 #endif

@@ -1,0 +1,10 @@
+[:d, :d]
+[:d, :e]
+[:f, :h]
+[:f, :g]
+[:f, :f]
+#<UnboundMethod: A#e(d)(x=...)>
+B
+:e
+:d
+#<Method: B(A)#e(d)(x=...)>

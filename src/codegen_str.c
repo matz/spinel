@@ -34,51 +34,58 @@ static int str_ident_boxes_arms(Compiler *c, int v) {
   return kind == SPK_COND || kind == SPK_POLY_ARMS;
 }
 
-/* Node v's object id, in the plan's form: the handle's where the plan
-   gives the handle -- strbuf_object_ref names it for each producer that
-   has one: a variable's slot, a box, a Range's kept endpoint, a route over
-   a handle, the box an exception keeps its message in -- and else the
-   bytes' address; a String that can be nil answers nil's id when it is
-   nil. An identity is never wrapped or refused. Answers the form it
-   rendered: the bytes' where strbuf_object_ref names no handle, as it did
-   before the plan was read. */
+/* Is v a `tap` or `then` with a literal block? It hands on a handle, which
+   the identity face would take for a box: the handle face renders it. */
+static int str_then_tap_block(Compiler *c, int v) {
+  const NodeTable *nt = c->nt;
+  int u = nt_paren_single(nt, v), blk = u >= 0 && nt_kind(nt, u) == NK_CallNode ? nt_ref(nt, u, "block") : -1;
+  const char *nm = blk >= 0 ? nt_str(nt, u, "name") : NULL;
+  return nm && nt_kind(nt, blk) == NK_BlockNode && (is_then_alias(nm) || is_tap_name(nm));
+}
+
+/* Node v's object id: the identity str_render_ident renders -- the plan's
+   form, as what the producer holds it in -- as the box of it, whatever C
+   type it comes in (a box as it is, a handle's box, the box of bytes, which
+   is the handle that owns them else their address), asked its
+   sp_poly_object_id. One question for all three, so the numbers agree:
+   sp_poly_identity_ptr maps a literal's or a frozen handle's own bytes to
+   the handle's and a live handle's bytes to the handle, as sp_poly_equal
+   does for #equal?, and a nil is nil's id. An identity is never wrapped or
+   refused. */
+static int str_render_ident(Compiler *c, int v, int form, StrForm *sf);
+static int str_render_handle(Compiler *c, int v, int form, unsigned dest, StrForm *sf);
 static int str_render_id(Compiler *c, int v, int form, StrForm *sf) {
   Buf *b = &sf->expr;
-  if (form == SPF_HANDLE && strbuf_object_ref(c, v, b)) {
-    /* (a String Range's min or max can be a String of its own, which
-       sp_srange_extreme_h makes: strbuf_object_ref's arm for it, after the
-       exception message's and the endpoints') */
-    if (!exc_message_identity_operand(c, v) && !strbuf_route_srange_end(c, v) && strbuf_route_srange_extreme(c, v))
-      sf->needs |= SF_ALLOCATES;
-    return SPF_HANDLE;
+  StrForm iv;
+  memset(&iv, 0, sizeof iv);
+  int f = str_then_tap_block(c, v) ? str_render_handle(c, v, form, 0, &iv) : str_render_ident(c, v, form, &iv);
+  sf->needs |= iv.needs & SF_ALLOCATES;
+  Buf eb;
+  memset(&eb, 0, sizeof eb);
+  str_form_settle(c, &iv, &eb);
+  char tn[32];
+  const char *e = eb.p ? eb.p : "NULL";
+  if (iv.needs & SF_EVAL_ONCE) {
+    /* (settled, the form is the opening of a statement expression and its
+       value the temp it binds) */
+    buf_puts(b, e);
+    snprintf(tn, sizeof tn, "_t%d", iv.tmp);
+    e = tn;
   }
-  /* (a conditional, or a boxed receiver's call, taken arm by arm: the
-     identity of its box, as the identity face takes it) */
-  if (form == SPF_HANDLE && str_ident_boxes_arms(c, v)) {
-    int t = ++g_tmp;
-    buf_printf(b, "({ sp_RbVal _t%d = ", t);
-    emit_boxed(c, v, b);
-    buf_printf(b, "; _t%d.tag == SP_TAG_NIL ? SP_NIL_OBJECT_ID : (sp_int)(uintptr_t)sp_poly_identity_ptr(_t%d); })", t, t);
-    sf->needs |= SF_ALLOCATES;
-    return SPF_HANDLE;
-  }
-  if (comp_recv_type(c, v) == TY_STRING && repr_of(c, v).may_nil) {
-    int t = ++g_tmp;
-    buf_printf(b, "({ sp_RbVal _t%d = ", t);
-    emit_boxed(c, v, b);
-    buf_printf(b, "; _t%d.tag == SP_TAG_NIL ? SP_NIL_OBJECT_ID : (sp_int)(uintptr_t)_t%d.v.p; })", t, t);
-  }
-  else {
-    buf_puts(b, "((sp_int)(uintptr_t)(");
-    emit_expr(c, v, b);
-    buf_puts(b, "))");
-  }
-  return SPF_BYTES;
+  buf_puts(b, "sp_poly_object_id(");
+  if (iv.cty == TY_POLY) buf_puts(b, e);
+  else if (iv.cty == TY_STRBUF) str_box_handle(b, e);
+  else buf_printf(b, "sp_box_str(%s)", e);
+  buf_puts(b, ")");
+  str_form_close(&iv, b);
+  free(eb.p);
+  str_form_free(&iv);
+  return f;
 }
 
 /* Is node v a read of a variable (a local, an ivar, a global, a class
    variable or a constant), which hands over the handle its slot holds? */
-static int str_var_read(Compiler *c, int v) {
+int str_var_read(Compiler *c, int v) {
   NodeKind k = nt_kind(c->nt, v);
   return k == NK_LocalVariableReadNode || k == NK_InstanceVariableReadNode || repr_static_read_kind(k);
 }
@@ -196,10 +203,7 @@ static int str_handle_new(Compiler *c, int v, int form, unsigned dest, StrForm *
 static int str_handle_by_kind(Compiler *c, int v, int form, unsigned dest, StrForm *sf);
 static int str_render_handle(Compiler *c, int v, int form, unsigned dest, StrForm *sf) {
   sf->cty = TY_STRBUF;
-  if (c->share_plan) return str_handle_by_kind(c, v, form, dest, sf);
-  if (emit_strbuf_local_write_handle(c, v, &sf->expr)) return SPF_HANDLE;
-  if (str_handle_ran_first(c, v, sf) || str_handle_route(c, v, sf) || str_handle_slot(c, v, sf)) return SPF_HANDLE;
-  return str_handle_new(c, v, form, dest, sf);
+  return str_handle_by_kind(c, v, form, dest, sf);
 }
 
 /* --share-strings: the handle face's render of each producer kind
@@ -289,8 +293,7 @@ static int str_render_ident(Compiler *c, int v, int form, StrForm *sf) {
     for (int i = 0; i < n - 1; i++) emit_stmt(c, bv[i], g_pre, 0);
     StrForm last;
     memset(&last, 0, sizeof last);
-    int lf = str_render_ident(c, bv[n - 1], c->share_plan ? share_plan_of(c, bv[n - 1], SPR_IDENTITY, NULL).form
-                                                         : SPF_HANDLE, &last);
+    int lf = str_render_ident(c, bv[n - 1], share_plan_of(c, bv[n - 1], SPR_IDENTITY, NULL).form, &last);
     g_pre = sv;
     buf_printf(b, "({ %s%s; })", pre.p ? pre.p : "", last.expr.p ? last.expr.p : "");
     sf->cty = last.cty;
@@ -447,13 +450,6 @@ void str_new_handle_open(Buf *b) {
 }
 void str_new_handle_close(Buf *b) {
   buf_puts(b, ")");
-}
-/* The open of a new handle around the bytes of node v, closed by
-   str_new_handle_close: the fresh handle (sp_String_new_fresh, which keeps
-   a small payload inside the new handle) where v is a String proven new,
-   else the shared one (strbuf_new_func chooses). */
-void str_new_handle_open_of(Compiler *c, int v, Buf *b) {
-  buf_printf(b, "%s(", strbuf_new_func(c, v));
 }
 
 /* The box of a String's bytes (sp_box_str, the String row's box template),
@@ -693,17 +689,13 @@ int emit_str_form(Compiler *c, int v, int role, int face, unsigned dest, StrForm
     sf->cty = TY_POLY;
     return str_box_by_kind(c, v, sf) ? 0 : -1;
   }
-  /* (the plan exists where share_plan_build made it: under the flag, once
-     the share facts are built) */
-  int form = c->share_plan ? share_plan_of(c, v, role, NULL).form : SPF_HANDLE;
+  int form = share_plan_of(c, v, role, NULL).form;
   switch (face) {
   case SPX_ID:
     sf->cty = TY_INT;
     return str_render_id(c, v, form, sf);
   case SPX_HANDLE:
-    /* (without a plan, the producer decides, as a form the plan does not
-       give the handle does: no box is read as its handle) */
-    return str_render_handle(c, v, c->share_plan ? form : SPF_BYTES, dest, sf);
+    return str_render_handle(c, v, form, dest, sf);
   case SPX_IDENT:
     return str_render_ident(c, v, form, sf);
   }
@@ -760,7 +752,7 @@ void emit_str_form_box(Compiler *c, int v, Buf *b) {
   TyKind t = comp_ntype(c, v);
   /* (a reader's handle is taken by emit_boxed's route for it: the
      identity face has no arm for a field read) */
-  if (!c->share_plan || (t != TY_STRING && t != TY_STRBUF) || share_plan_of(c, v, share_plan_role(c, v), NULL).form != SPF_HANDLE ||
+  if ((t != TY_STRING && t != TY_STRBUF) || share_plan_of(c, v, share_plan_role(c, v), NULL).form != SPF_HANDLE ||
       (share_plan_producer(c, v, NULL) == SPK_READER ||
        share_plan_producer(c, v, NULL) == SPK_POLY_ARMS)) {
     emit_boxed(c, v, b);
@@ -771,10 +763,7 @@ void emit_str_form_box(Compiler *c, int v, Buf *b) {
   memset(&e, 0, sizeof e);
   /* (`tap` and `then` with a literal block hand on a handle, which the
      identity face would take for a box: the handle face, boxed here) */
-  const NodeTable *nt = c->nt;
-  int u = nt_paren_single(c->nt, v), blk = u >= 0 && nt_kind(nt, u) == NK_CallNode ? nt_ref(nt, u, "block") : -1;
-  const char *nm = blk >= 0 ? nt_str(nt, u, "name") : NULL;
-  if (nm && nt_kind(nt, blk) == NK_BlockNode && (is_then_alias(nm) || is_tap_name(nm))) {
+  if (str_then_tap_block(c, v)) {
     emit_str_form(c, v, share_plan_role(c, v), SPX_HANDLE, 0, &sf);
     str_form_settle(c, &sf, &e);
     str_box_handle(b, e.p ? e.p : "NULL");
@@ -807,7 +796,7 @@ int emit_str_equal(Compiler *c, int id, Buf *b) {
   const NodeTable *nt = c->nt;
   const char *nm = nt_str(nt, id, "name");
   int recv = nt_ref(nt, id, "receiver"), argc = 0, tg[CPT_MAX];
-  if (!c->share_plan || !nm || !is_equal_name(nm) || recv < 0 || nt_ref(nt, id, "block") >= 0 ||
+  if (!nm || !is_equal_name(nm) || recv < 0 || nt_ref(nt, id, "block") >= 0 ||
       sn_guard_pending(c, id))
     return 0;
   const int *argv = call_args(nt, id, &argc);

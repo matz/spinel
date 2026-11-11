@@ -1,8 +1,8 @@
 # A seed must not change what the program DOES. The output-buffer pattern
 # (`def render_into(io, ...); io << ...; end`) relies on the caller seeing
-# the callee's appends, which spinel gives it by passing eligible String
-# params by reference. A truthful `(String io)` seed used to disqualify the
-# parameter from that ABI, so every append landed in a copy and the caller
+# the callee's appends, which spinel gives it by passing String params as the
+# caller's handle. A truthful `(String io)` seed used to disqualify the
+# parameter from sharing, so every append landed in a copy and the caller
 # got an empty buffer -- silently, and only when a sidecar was present.
 # spinel: rbs-seed-check
 module Views
@@ -15,7 +15,7 @@ module Views
 end
 
 # Forwards its buffer and never appends to it itself, so its parameter can
-# only reach byref through the TRANSITIVE arm -- the second site the seed
+# only be shared through the TRANSITIVE arm -- the second site the seed
 # exclusion sat on.
 module Views
   module Body

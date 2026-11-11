@@ -1,0 +1,90 @@
+true
+"Abc"
+true
+"<Abc>"
+".<Abc>"
+".<Abc>"
+"."
+"<Abc>"
+"abbc"
+["12", "abcd"]
+"ab"
+"s****t"
+"Edor"
+true
+""
+true
+"J"
+"Jello"
+"Jello"
+true
+"J-ello"
+"J-"
+false
+"ello"
+"ello"
+true
+""
+["ns", "Iide!"]
+"Iide!"
+"!"
+"Z+ide"
+"w"
+["One", "<to"]
+"<maybe"
+"e"
+"<m"
+""
+""
+nil
+nil
+nil
+nil
+nil
+"aba"
+""
+"x"
+"qq"
+"a2.9b"
+"ab-cdef"
+"hello World"
+"heLo World"
+[IndexError, "regexp not matched"]
+[IndexError, "index 3 out of regexp"]
+[IndexError, "index -3 out of regexp"]
+[IndexError, "regexp group 2 not matched"]
+"heLo World"
+[FrozenError, "can't modify frozen String: \"\""]
+[FrozenError, "can't modify frozen String: \"abc\""]
+[FrozenError, "can't modify frozen String: \"abc\""]
+[FrozenError, "can't modify frozen String: \"abc\""]
+[FrozenError, "can't modify frozen String: \"abc\""]
+[IndexError, "index 9 out of string"]
+[FrozenError, "can't modify frozen String: \"abc\""]
+[IndexError, "index 9 out of string"]
+[TypeError, "no implicit conversion of Integer into String"]
+"abc"
+["aé", 2, "UTF-8"]
+["a\xC3\xA9", 3, "ASCII-8BIT"]
+["ax", 2, "UTF-8"]
+["", 0, "ASCII-8BIT"]
+"abcdefghijklmnoXqrst"
+"abcdefghijklmnopXrst"
+"abcdefghijklmnopqrsX"
+"abcdefghijklmnopqrsX"
+[IndexError, "index 21 out of regexp"]
+[1, "UTF-8", 2]
+[1, "UTF-8", 2]
+[1, "UTF-8", 2]
+[1, "UTF-8", 2]
+[1, "UTF-8", 2]
+[1, "UTF-8", 2]
+[1, "UTF-8", 2]
+[1, "UTF-8", 2]
+[1, "UTF-8", 2]
+[1, "UTF-8", 2]
+[1, "UTF-8", 2]
+[1, "UTF-8", 2]
+[1, "ASCII-8BIT", 1]
+[1, "ASCII-8BIT", 1]
+[2, "ASCII-8BIT", 2]

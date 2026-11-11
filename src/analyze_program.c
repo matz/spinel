@@ -563,6 +563,29 @@ int prog_load_sets_flag(Compiler *c, int id) {
   return id >= 0 && id < nt->count && c->load_sets_flag[id];
 }
 
+/* Does def `def`'s body call the eval family (class_eval, module_eval,
+   instance_eval) on a String rather than a block? */
+static int prog_evals_text_in(const NodeTable *nt, int id, int depth) {
+  if (id < 0 || depth > 64) return 0;
+  NodeKind k = nt_kind(nt, id);
+  if (k == NK_DefNode || k == NK_ClassNode || k == NK_ModuleNode) return 0;
+  if (k == NK_CallNode) {
+    const char *nm = nt_str(nt, id, "name");
+    if (nm && (sp_streq(nm, "class_eval") || sp_streq(nm, "module_eval") || sp_streq(nm, "instance_eval")) &&
+        nt_ref(nt, id, "block") < 0 && nt_ref(nt, id, "arguments") >= 0) return 1;
+  }
+  for (int i = 0, nr = nt_num_refs(nt, id); i < nr; i++) if (prog_evals_text_in(nt, nt_ref_at(nt, id, i), depth + 1)) return 1;
+  for (int i = 0, na = nt_num_arrs(nt, id); i < na; i++) {
+    int n = 0;
+    const int *v = nt_arr_at(nt, id, i, &n);
+    for (int j = 0; j < n; j++) if (prog_evals_text_in(nt, v[j], depth + 1)) return 1;
+  }
+  return 0;
+}
+static int prog_body_evals_text(const NodeTable *nt, int def) {
+  return def >= 0 && nt_kind(nt, def) == NK_DefNode && prog_evals_text_in(nt, nt_ref(nt, def, "body"), 0);
+}
+
 /* A registration runs where its ordinary call stands, including in a body
    whose bare calls otherwise default to declarations. */
 int prog_stmt_call_executable(Compiler *c, int id, int ci) {
@@ -583,6 +606,19 @@ int prog_stmt_call_executable(Compiler *c, int id, int ci) {
      and nothing said so (#4051). */
   if (!is_user && cn && ci >= 0)
     is_user = call_target(c, id, ci, cn, CT_CMETHOD, NULL) >= 0;
+  /* ...or, past the class's own chain, an instance method a `class Class`
+     (for a class's body) or `class Module` reopening gives, as CRuby's
+     lookup on self goes on through the class of a class, whose body
+     evaluates a String (`module_eval("def #{name} = ...")`): skipped, the
+     methods it writes were missing where nothing expanded it (a module's
+     body under the graph model, ct_macro_form), and the call now runs
+     there, refused as its eval is */
+  for (int u = 0; !is_user && cn && ci >= 0 && u < 2; u++) {
+    if (u == 0 && comp_class_is_module(c, &c->classes[ci])) continue;
+    int k = comp_builtin_class_named(c, u == 0 ? "Class" : "Module");
+    int mi = k >= 0 && k != ci ? call_target(c, id, k, cn, 0, NULL) : -1;
+    is_user = mi >= 0 && prog_body_evals_text(nt, c->scopes[mi].def_node);
+  }
   /* ...and so is one that finds none of the program's methods of its name
      where it runs (`zz` before `def self.zz`): CRuby's NameError there
      (cplan_missing) */
@@ -613,7 +649,7 @@ static int prog_registration_dropped(Compiler *c, int id) {
     if (k == NK_SingletonClassNode) {
       int x = nt_ref(nt, p, "expression"); NodeKind xk = nt_kind(nt, x);
       if (xk != NK_SelfNode && !((xk == NK_ConstantReadNode || xk == NK_ConstantPathNode) &&
-          comp_class_index(c, nt_str(nt, x, "name")) >= 0)) return 1;
+          const_node_class_index(c, x) >= 0)) return 1;
     }
     if (k == NK_AliasMethodNode || k == NK_UndefNode ||
         (k == NK_DefNode && ch == nt_ref(nt, p, "receiver"))) return 1;
@@ -697,9 +733,11 @@ void prog_refuse_loads(Compiler *c) {
        methods reach the record only after the file runs */
     int margc = 0;
     const int *mav = c->nautoloads && nt_ref(nt, id, "receiver") < 0 ? call_args(nt, id, &margc) : NULL;
-    int msend = mav && margc > 1 && is_send_family(name) && nt_kind(nt, mav[0]) == NK_SymbolNode && is_mixin_call(nt_str(nt, mav[0], "value"));
+    int msent = 0;
+    const char *sent = mav ? call_sent_name(nt, id, &msent) : NULL;
+    int msend = mav && margc > msent && is_send_family(name) && sent && is_mixin_call(sent);
     if (!msend && !(mav && is_mixin_call(name) && !prog_mixin_plain_stmt(c, id))) mav = NULL;
-    for (int j = msend; mav && j < margc; j++)
+    for (int j = msend ? msent : 0; mav && j < margc; j++)
       if (elab_autoload_read(c, mav[j]))
         unsupported_feature(c, id, "--load-model=graph loads an autoload's file at its constant's first reference only later, for now");
     if (!is_autoload_name(name)) continue;
@@ -1018,8 +1056,7 @@ void prog_settle_files(Compiler *c) {
 /* The statements a reader of the top level in order would have to place
    across a load (part 3b), refused by name, asked once the builtins/ files'
    modules are taken apart (desugar_builtins, desugar_builtin_scalar_defs):
-   `include` in a required file's top level (qc_object_mixin_write, which
-   runs ahead of the load record). */
+   `include` in a required file's top level. */
 void prog_refuse_order(Compiler *c) {
   const NodeTable *nt = c->nt;
   if (!prog_graph(c)) return;
@@ -1027,10 +1064,9 @@ void prog_refuse_order(Compiler *c) {
     int st = prog_root_stmts(c, i), n = 0;
     const int *v = st >= 0 ? nt_arr(nt, st, "body", &n) : NULL;
     for (int k = 0; k < n; k++) {
-      NodeKind sk = nt_kind(nt, v[k]);
-      const char *nm = nt_str(nt, v[k], "name");
-      if (i > 0 && sk == NK_CallNode && nt_ref(nt, v[k], "receiver") < 0 && nm && is_include_name(nm))
-        unsupported_feature(c, v[k], "--load-model=graph: a top-level include in a required file (qc_object_mixin_write reads one file), for now");
+      int prep; const int *av;
+      if (i > 0 && mixin_stmt_args(nt, v[k], &prep, &av) >= 0 && !prep)
+        unsupported_feature(c, v[k], "--load-model=graph: a top-level include in a required file, for now");
     }
   }
 }

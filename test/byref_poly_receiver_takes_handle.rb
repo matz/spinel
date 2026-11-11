@@ -1,13 +1,8 @@
 # A POLY receiver reaches a method through the cls_id switch, and that switch
 # hoists its arguments once -- by the argument's own type, for every arm to
-# share. It has no callee to ask, so it passed the value where a byref arm
-# wanted the slot, and the C build stopped with
-#   expected 'const char **' but argument is of type 'const char *'
-#
-# So a name a poly receiver can reach kept the value ABI, and every arm
-# appended to a copy: this printed "p". Such a name now takes the shared
-# handle where the group settles on the slot, a handle arm takes the
-# caller's handle, and the answer is CRuby's.
+# share. It has no callee to ask, so a name a poly receiver can reach once
+# kept the value ABI, and every arm appended to a copy: this printed "p". Each
+# arm now takes the caller's handle, and the answer is CRuby's.
 def frag_into(io, n)
   io << "f#{n};"
   nil

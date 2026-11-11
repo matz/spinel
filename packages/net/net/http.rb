@@ -402,18 +402,29 @@ module Net
   class HTTPNotExtended < HTTPServerError; end
   class HTTPNetworkAuthenticationRequired < HTTPServerError; end
 
-  # A request. CRuby builds these as Net::HTTP::Get.new(path) and friends;
-  # the same shape is here so the same code compiles.
-  class HTTPRequest
+  # A request of any method: CRuby's Net::HTTPGenericRequest, the base of
+  # HTTPRequest and so of Net::HTTP::Get and the rest, which code that
+  # forwards a request of any method builds directly (#11347). The two flags
+  # say whether the method's request and response carry a body.
+  class HTTPGenericRequest
     attr_reader :method, :path, :decode_content
     attr_accessor :body
+
+    def initialize(method, request_has_body, response_has_body, path, initheader = nil)
+      @request_has_body = request_has_body
+      @response_has_body = response_has_body
+      __init_request(method, path, initheader)
+    end
+
+    def request_body_permitted? = @request_has_body
+    def response_body_permitted? = @response_has_body
 
     # `path` is a request path, or a URI -- CRuby takes either, and
     # `Net::HTTP::Post.new(uri, "Content-Type" => "application/json")` is the
     # spelling a caller reaches for when it already parsed the URL. A URI
     # contributes its `request_uri` (the path with the query), not its `to_s`,
     # which is the whole URL and would go out as an absolute request line.
-    def initialize(method, path, initheader = nil)
+    def __init_request(method, path, initheader)
       @method = method
       @path = if path.is_a?(URI::Generic)
         path.request_uri
@@ -547,6 +558,15 @@ module Net
     # header on the wire and make whatever follows it a header of its own.
     def crlf?(text)
       text.include?("\r") || text.include?("\n")
+    end
+  end
+
+  # A request. CRuby builds these as Net::HTTP::Get.new(path) and friends;
+  # the same shape is here so the same code compiles. (Here it also takes
+  # the method name first, the form post_form and the helpers build.)
+  class HTTPRequest < HTTPGenericRequest
+    def initialize(method, path, initheader = nil)
+      super(method, method == "POST" || method == "PUT" || method == "PATCH", method != "HEAD", path, initheader)
     end
   end
 

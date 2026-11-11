@@ -1,6 +1,6 @@
 # `def add(buf, i); buf << ...; end` is ordinary Ruby: the append lands in the
-# caller's string. Only free functions and class methods took the out-param
-# ABI, so an INSTANCE method appended to a copy and the caller's buffer stayed
+# caller's string. Only free functions and class methods shared the caller's
+# string, so an INSTANCE method appended to a copy and the caller's buffer stayed
 # empty -- the log a benchmark built line by line came out zero-length and
 # every later match found nothing.
 

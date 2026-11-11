@@ -1,0 +1,5 @@
+[:send_sum, 3]
+[:pub_push_n, [1, {a: 1}]]
+[:usend_push_e, [1]]
+[:send_join_e, "1-2"]
+[:send_dyn, 3]

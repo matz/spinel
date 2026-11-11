@@ -1,14 +1,14 @@
-# A String parameter a callee appends to is lent by reference, so the caller
-# sees the appends. An OPTIONAL parameter beside it used to take that ABI away
-# from the whole method, and the appends were dropped silently -- not always,
+# A String parameter a callee appends to is the caller's String, so the caller
+# sees the appends. An OPTIONAL parameter beside it used to take that sharing
+# away from the whole method, and the appends were dropped silently -- not always,
 # only once the string outgrew its capacity, so a short append answered
 # correctly and a long one did not (#4390).
 #
 # The exclusion was never an ABI constraint: the caller materialises every
 # default, so the callee is emitted fixed-arity whether a parameter has one or
 # not. Every arm here pairs a short append with a long one, because that pair
-# is what separates "lent" from "copied": a copy that still has spare capacity
-# answers the same as the original.
+# is what separates "shared" from "copied": a copy that still has spare
+# capacity answers the same as the original.
 
 SHORT = "b"
 LONG = "b" * 100_000

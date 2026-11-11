@@ -160,6 +160,11 @@ void sp_re_set_captures(const char *str, int *caps, int ncaps) {SP_GC_ROOT_STR(s
   sp_re_last_str = str;
   sp_re_last_ncap = ncaps;
   sp_re_last_lit = 0;
+  /* `$~` is built from sp_re_caps (sp_re_last_matchdata): a caller that
+     matched into its own array (Regexp#match, String#match) has its
+     positions copied there, or `$~` read the positions of an older match */
+  if (caps != sp_re_caps)
+    for (int i = 0; i < ncaps * 2 && i < 64; i++) sp_re_caps[i] = caps[i];
   for (int i = 0; i < 10; i++) sp_re_captures[i] = NULL;
   for (int i = 1; i < ncaps && i < 10; i++) {
     if (caps[i*2] >= 0 && caps[(i*2)+1] >= 0) {
@@ -355,6 +360,31 @@ const char *sp_str_splice_re(mrb_regexp_pattern *pat, const char *s, const char 
   if (n <= 0) { sp_raise_cls("IndexError", "regexp not matched"); return s; }
   return sp_sprintf("%.*s%s%s", (int)caps[0], s, val, s + caps[1]);
 }
+/* The byte span of group nth of re's first match in s, for s[/re/, nth] =
+   val, checked as CRuby's rb_str_subpat_set checks it: no match raises
+   "regexp not matched", an nth past the pattern's groups (a negative one
+   counts back from the last) "index N out of regexp", and a group that took
+   no part in the match "regexp group N not matched". The span is written
+   through b and e before the value is converted, which CRuby does after
+   these checks and which can run a match of its own (a #to_str). */
+void sp_re_nth_span(mrb_regexp_pattern *pat, const char *s, sp_int nth, sp_int *b, sp_int *e) {SP_GC_ROOT_STR(s);
+  /* the match as sp_re_match makes it, but asking for every group the
+     engine supports (sp_re_caps holds them all, RE_MAX_CAPTURES pairs):
+     sp_re_match asks for 16, and a group past them read stale offsets */
+  sp_re_check_subject(s);
+  int at, n = s ? re_exec_attempt(pat, s, (int64_t)sp_str_byte_len(s), 0, sp_re_caps,
+                                  (int)(sizeof sp_re_caps / sizeof sp_re_caps[0]), sp_str_is_binary(s), &at) : 0;
+  if (n <= 0) { sp_re_clear_last_match(); sp_raise_cls("IndexError", "regexp not matched"); }
+  sp_re_last_pat = pat;
+  sp_re_set_captures(s, sp_re_caps, n / 2);
+  sp_int ng = sp_re_last_ncap, g = nth < 0 ? nth + ng : nth;
+  if (g < 0 || g >= ng || (nth < 0 && g == 0))
+    sp_raise_cls("IndexError", sp_sprintf("index %lld out of regexp", (long long)nth));
+  if (sp_re_caps[2 * g] < 0)
+    sp_raise_cls("IndexError", sp_sprintf("regexp group %lld not matched", (long long)g));
+  *b = sp_re_caps[2 * g];
+  *e = sp_re_caps[2 * g + 1];
+}
 /* String#slice!(regexp): the removed match (or NULL when unmatched), with
    the receiver's remainder written through rest_out and the match
    registers set (cleared on no-match, like sp_re_match). */
@@ -425,25 +455,25 @@ sp_StrArray *sp_re_rpartition(mrb_regexp_pattern *pat, const char *str) {
   SP_GC_ROOT(r);
   if (ms < 0) {
     /* new Strings, as CRuby's: not the receiver, nor one shared "" */
-    sp_StrArray_push_e(r, SP_SEF(sp_str_empty_like(str)));
-    sp_StrArray_push_e(r, SP_SEF(sp_str_empty_like(str)));
-    sp_StrArray_push_e(r, SP_SEF(sp_str_dup(str)));
+    sp_StrArray_push_e(r, sp_String_new_shared(sp_str_empty_like(str)));
+    sp_StrArray_push_e(r, sp_String_new_shared(sp_str_empty_like(str)));
+    sp_StrArray_push_e(r, sp_String_new_shared(sp_str_dup(str)));
     return r;
   }
   char *before = sp_str_alloc_raw(ms + 1);
   memcpy(before, str, ms); before[ms] = 0;
   sp_str_set_len(before, (size_t)ms);
-  sp_StrArray_push_e(r, SP_SEF(sp_str_bin_like(str, before)));
+  sp_StrArray_push_e(r, sp_String_new_shared(sp_str_bin_like(str, before)));
   int mlen = (int)(me - ms);
   char *mid = sp_str_alloc_raw(mlen + 1);
   memcpy(mid, str + ms, mlen); mid[mlen] = 0;
   sp_str_set_len(mid, (size_t)mlen);
-  sp_StrArray_push_e(r, SP_SEF(sp_str_bin_like(str, mid)));
+  sp_StrArray_push_e(r, sp_String_new_shared(sp_str_bin_like(str, mid)));
   int alen = (int)(slen - me);
   char *after = sp_str_alloc_raw(alen + 1);
   memcpy(after, str + me, alen); after[alen] = 0;
   sp_str_set_len(after, (size_t)alen);
-  sp_StrArray_push_e(r, SP_SEF(sp_str_bin_like(str, after)));
+  sp_StrArray_push_e(r, sp_String_new_shared(sp_str_bin_like(str, after)));
   return r;
 }
 sp_bool sp_re_match_p(mrb_regexp_pattern *pat, const char *str) {
@@ -510,25 +540,6 @@ sp_bool sp_re_case_eq(mrb_regexp_pattern *pat, sp_RbVal v) {SP_GC_ROOT_RBVAL(v);
 /* The pattern behind a boxed value: a Regexp box is one already, and a String
    is compiled the way `str.match?("b")` compiles its argument. Answers NULL for
    anything else. Used by the poly-receiver match forms below (#3961). */
-/* Noted once each at startup, before any thread runs, and only read after:
-   a handful, so a list does. A note that cannot grow the list is out of
-   memory, as an allocation is. */
-static const mrb_regexp_pattern **sp_re_literals = NULL;
-static size_t sp_re_nliterals = 0, sp_re_cliterals = 0;
-void sp_re_note_literal(const mrb_regexp_pattern *pat) {
-  if (!pat) return;
-  if (sp_re_nliterals == sp_re_cliterals) {
-    size_t nc = sp_re_cliterals ? sp_re_cliterals * 2 : 16;
-    const mrb_regexp_pattern **nl = (const mrb_regexp_pattern **)realloc((void *)sp_re_literals, nc * sizeof *nl);
-    if (!nl) { fputs("spinel: out of memory\n", stderr); exit(1); }
-    sp_re_literals = nl; sp_re_cliterals = nc;
-  }
-  sp_re_literals[sp_re_nliterals++] = pat;
-}
-int sp_re_noted_literal_p(const void *pat) {
-  for (size_t i = 0; i < sp_re_nliterals; i++) if ((const void *)sp_re_literals[i] == pat) return 1;
-  return 0;
-}
 mrb_regexp_pattern *sp_poly_as_pattern(sp_RbVal v) {SP_GC_ROOT_RBVAL(v);
   if (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_REGEX) return (mrb_regexp_pattern *)v.v.p;
   const char *s = NULL;
@@ -819,13 +830,12 @@ sp_StrArray *sp_re_scan(mrb_regexp_pattern *pat, const char *str) {
     int len = caps[1] - caps[0];
     char *m = sp_str_alloc_raw(len+1); memcpy(m, str+caps[0], len); m[len] = 0;
     sp_str_set_len(m, (size_t)len);
-    sp_StrArray_push_e(arr, SP_SEF(sp_str_bin_like(str, m)));
+    sp_StrArray_push_e(arr, sp_String_new_shared(sp_str_bin_like(str, m)));
     pos = caps[1]; if (caps[0] == caps[1]) pos++;
   }
   if (sp_re_track_last) sp_re_set_last_match(pat, str, lastcaps, lastn);
   return arr;
 }
-#ifdef SP_ONE_STRING
 const char *sp_re_scan_next(mrb_regexp_pattern *pat, sp_re_scan_it *it) {
   sp_String *h = it->h;
   if (!h) sp_nil_recv("scan");
@@ -893,7 +903,6 @@ sp_PolyArray *sp_re_scan_next_row(mrb_regexp_pattern *pat, sp_re_scan_it *it) {
   it->data = h->data; it->len = h->len;
   return row;
 }
-#endif
 /* Forward decl from the regexp engine (lib/regexp/re_utf8.c). */
 int re_utf8_charlen(const char *s, const char *end);
 
@@ -910,7 +919,7 @@ static void split_push_slice(sp_StrArray *arr, const char *str, int64_t from, in
   char *m = sp_str_alloc_raw(len + 1);
   memcpy(m, str + from, len); m[len] = 0;
   sp_str_set_len(m, (size_t)len);
-  sp_StrArray_push_e(arr, SP_SEF(sp_str_bin_like(str, m)));
+  sp_StrArray_push_e(arr, sp_String_new_shared(sp_str_bin_like(str, m)));
 }
 
 sp_StrArray *sp_re_split_limit(mrb_regexp_pattern *pat, const char *str, sp_int limit) {SP_GC_ROOT_STR(str);if(!str)sp_nil_recv("split");
@@ -1110,7 +1119,7 @@ else {
     }
   }
   if (out_len == in_len) {
-    return SP_ONE_ANSWER(src);
+    return sp_str_one_answer(src);
   }
   char *buf = sp_str_alloc(out_len);
   size_t j = 0;
@@ -1325,6 +1334,7 @@ sp_MatchData *sp_re_matchdata(mrb_regexp_pattern *pat, const char *str) {SP_GC_R
   }
   int pairs = (n > 64 ? 64 : n) / 2;
   str = sp_str_keep(str);   /* (the MatchData and $~ keep the target: a copy of a live payload, sp_str_keep) */
+  sp_re_last_pat = pat;
   sp_re_set_captures(str, caps, pairs);
   sp_MatchData *m = sp_md_alloc(pairs);
   m->source = str;
@@ -1352,6 +1362,7 @@ sp_MatchData *sp_re_matchdata_at(mrb_regexp_pattern *pat, const char *str, sp_in
   }
   int pairs = (n > 64 ? 64 : n) / 2;
   str = sp_str_keep(str);   /* (the MatchData and $~ keep the target: a copy of a live payload, sp_str_keep) */
+  sp_re_last_pat = pat;
   sp_re_set_captures(str, caps, pairs);
   sp_MatchData *m = sp_md_alloc(pairs);
   m->source = str;
@@ -1419,7 +1430,7 @@ sp_StrArray *sp_Regexp_names(const mrb_regexp_pattern *pat) {
        whose length sp_str_dup and the comparison take from the byte before
        it -- the allocator's, past the start of the block. */
     nm = sp_str_dup_external(nm);
-    sp_strelem el = SP_SEF(nm);
+    sp_strelem el = sp_String_new_shared(nm);
     /* a name reused across alternatives is one name, however many groups
        carry it (#3682) */
     if (!sp_StrArray_include_e(a, el)) sp_StrArray_push_e(a, el);
@@ -1441,7 +1452,7 @@ sp_StrArray *sp_MatchData_names(sp_MatchData *m) {SP_GC_ROOT(m);
     const char *nm = re_named_name(m->pat, i, NULL);
     if (!nm) continue;
     nm = sp_str_dup_external(nm);   /* as in sp_Regexp_names */
-    sp_strelem el = SP_SEF(nm);
+    sp_strelem el = sp_String_new_shared(nm);
     if (!sp_StrArray_include_e(a, el)) sp_StrArray_push_e(a, el);
   }
   return a;
@@ -1499,6 +1510,14 @@ sp_PolyArray *sp_MatchData_aref_len(sp_MatchData *m, sp_int start, sp_int len) {
   }
   return a;
 }
+/* MatchData#match(n): group n's String, or nil when the group did not
+   take part. Unlike m[n], a negative n or one past the groups is CRuby's
+   IndexError. */
+const char *sp_MatchData_match(sp_MatchData *m, sp_int i) {SP_GC_ROOT(m);
+  if (m && (i < 0 || i >= m->ncap))
+    sp_raise_cls("IndexError", sp_sprintf("index %lld out of matches", (long long)i));
+  return sp_MatchData_aref(m, i);
+}
 /* char offset of a byte position within source */
 sp_oint sp_md_char_off(sp_MatchData *m, int byteoff) {SP_GC_ROOT(m);
   if (byteoff < 0) return sp_oint_nil();
@@ -1539,6 +1558,7 @@ sp_oint sp_MatchData_byteend(sp_MatchData *m, sp_int i) {
   return sp_oint_of(m->caps[(i * 2) + 1]);
 }
 sp_IntArray *sp_MatchData_byteoffset(sp_MatchData *m, sp_int i) {SP_GC_ROOT(m);
+  sp_md_check_index(m, i);
   sp_IntArray *a = sp_IntArray_new();
   if (!m || i < 0 || i >= m->ncap || m->caps[i * 2] < 0) { sp_IntArray_push_nil(a); sp_IntArray_push_nil(a); return a; }
   sp_IntArray_push(a, m->caps[i * 2]);

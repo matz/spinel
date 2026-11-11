@@ -7,6 +7,7 @@
 #include <stdint.h>
 #include <ctype.h>
 #include <stdio.h>
+#include <unistd.h>   /* access: ffi_lib_flag */
 #include <stdlib.h>
 
 /* `...` forwards the caller's args verbatim, so rather than a rest array we
@@ -66,6 +67,20 @@ static void collect_positional_params(Compiler *c, int pn, Scope *s) {
   }
 }
 
+/* The parameters of each method scope the walk made of a def that took `...`
+   (it left them to the forwarding lowering, which runs after the walk, on the
+   record): collected once that lowering has given the def its shape */
+void scope_forwarding_params(Compiler *c) {
+  const NodeTable *nt = c->nt;
+  for (int s = 1; s < c->nscopes; s++) {
+    Scope *sc = &c->scopes[s];
+    int dn = sc->def_node;
+    if (!sc->params_later || dn < 0 || dn >= nt->count) continue;
+    sc->params_later = 0;
+    collect_def_params(c, dn, sc);
+    comp_touch_scope(sc->idx);
+  }
+}
 void collect_def_params(Compiler *c, int def_id, Scope *s) {
   int pn = nt_ref(c->nt, def_id, "parameters");
   if (pn < 0) return;
@@ -81,10 +96,7 @@ void collect_def_params(Compiler *c, int def_id, Scope *s) {
          anonymous `&` block forward uses). */
       if (!rname) rname = "__anon_rest";
       if (rname) {
-        if (s->nparams % 8 == 0) {
-          s->pnames  = realloc(s->pnames,  sizeof(char *) * (size_t)(s->nparams + 8));
-          s->pdefault = realloc(s->pdefault, sizeof(int)    * (size_t)(s->nparams + 8));
-        }
+        scope_reserve_param(s);
         s->pdefault[s->nparams] = -1;
         s->pnames[s->nparams++] = strdup(rname);
         LocalVar *lv = scope_local_intern(s, rname);
@@ -125,10 +137,7 @@ void collect_def_params(Compiler *c, int def_id, Scope *s) {
         LocalVar *lv = scope_local_intern(s, kwrname);
         lv->is_param = 1;
         lv_set_type(lv, TY_SYM_POLY_HASH);
-        if (s->nparams % 8 == 0) {
-          s->pnames   = realloc(s->pnames,   sizeof(char *) * (size_t)(s->nparams + 8));
-          s->pdefault = realloc(s->pdefault, sizeof(int)    * (size_t)(s->nparams + 8));
-        }
+        scope_reserve_param(s);
         s->pdefault[s->nparams] = -1;
         s->pnames[s->nparams++] = strdup(kwrname);
         s->kwrest_idx = s->nparams - 1;
@@ -152,9 +161,7 @@ void collect_def_params(Compiler *c, int def_id, Scope *s) {
      sites); their types fall out of the normal call-site param seeding and a
      `bar(...)` body forwards them directly -- no rest/splat machinery (#1288). */
   {
-    int kwr = nt_ref(c->nt, pn, "keyword_rest");
-    if (kwr >= 0 &&
-        nt_kind(c->nt, kwr) == NK_ForwardingParameterNode && s->name) {
+    if (def_takes_forwarding(c->nt, def_id) && s->name) {
       /* Concrete leading params (`def f(a, ...)`) consume the first call args;
          only the remainder is forwarded, so synthesize one __fwd_ slot per
          forwarded arg, not per total arg. The zero-leading case (`def f(...)`)
@@ -187,12 +194,7 @@ void collect_def_params(Compiler *c, int def_id, Scope *s) {
 /* True if `s` is a `def m(...)` forwarding method (keyword_rest is a
    ForwardingParameterNode). */
 static int scope_is_forwarding(Compiler *c, Scope *s) {
-  if (!s || s->def_node < 0) return 0;
-  int pn = nt_ref(c->nt, s->def_node, "parameters");
-  if (pn < 0) return 0;
-  int kwr = nt_ref(c->nt, pn, "keyword_rest");
-  return kwr >= 0 &&
-         nt_kind(c->nt, kwr) == NK_ForwardingParameterNode;
+  return s && def_takes_forwarding(c->nt, s->def_node);
 }
 
 /* The method `s`'s body forwards `...` to (a `callee(...)` call, `super(...)`
@@ -342,7 +344,7 @@ void topup_forwarding_arity(Compiler *c) {
   }
 }
 
-/* The edges super_value_used climbs: the conditionals, a rescue modifier,
+/* The edges node_value_used_in_body climbs: the conditionals, a rescue modifier,
    a begin and its rescue clauses, and the one value of a `return`. A
    begin's body is a value only when no else follows it. Not `||` or `&&`:
    the C of an operator whose operand is the void call of initialize does
@@ -369,8 +371,10 @@ static int super_modifier_in_expression(const NodeTable *nt, const int *par, int
 /* Is node v's value used? A statement list, a branch, a begin and a rescue
    pass it on to whatever holds them (vp_climb). A statement before a list's
    last, a loop body, an ensure clause, a method body and the block of an
-   iterator that ignores its block's value throw it away. */
-static int super_value_used(const NodeTable *nt, const int *par, int v) {
+   iterator that ignores its block's value throw it away, and so does a
+   defined? or a respond_to? probe that asks about it without running it: a method's own last
+   value is not followed to its callers. */
+int node_value_used_in_body(const NodeTable *nt, const int *par, int v) {
   VpUp up;
   VpUpKind ended = vp_climb(nt, par, v, SUPER_CLIMB, &up);
   if (super_modifier_in_expression(nt, par, v, up.node, ended)) return 1;
@@ -397,7 +401,15 @@ static int super_value_used(const NodeTable *nt, const int *par, int v) {
   int p = up.parent;
   switch (nt_kind(nt, p)) {
   case NK_DefNode:
+  case NK_DefinedNode:   /* defined?(x) asks about x and never runs it */
     return 0;
+  case NK_CallNode: {   /* ...nor does respond_to? run the probes it keeps (desugar_respond_to_probe) */
+    int pn = 0;
+    const int *pr = nt_arr(nt, p, "rt_probes", &pn);
+    for (int i = 0; pr && i < pn; i++)
+      if (pr[i] == v) return 0;
+    return 1;
+  }
   case NK_BlockNode: {
     int call = vp_up_block_call(nt, par, &up);
     const char *cn = call >= 0 ? nt_str(nt, call, "name") : NULL;
@@ -469,8 +481,7 @@ void refuse_super_init_value(Compiler *c) {
       Scope *s0 = comp_scope_of(c, v);
       const Scope *s = s0 ? comp_super_site(c, s0) : NULL;
       if (!s || s->is_cmethod || s->class_id < 0 || !s->name || !sp_streq(s->name, "initialize")) continue;
-      int pc = comp_super_parent(c, s->class_id, 0);
-      if (pc < 0 || comp_method_in_chain(c, pc, "initialize", NULL) < 0) continue;
+      if (cplan_super_target(c, v, s0, NULL) < 0) continue;
       if (!par) {   /* each node's parent, built once a candidate turns up */
         par = malloc(sizeof(int) * (size_t)(nt->count > 0 ? nt->count : 1));
         for (int n = 0; n < nt->count; n++) par[n] = -1;
@@ -484,7 +495,7 @@ void refuse_super_init_value(Compiler *c) {
           }
         }
       }
-      if (!super_value_used(nt, par, v)) continue;
+      if (!node_value_used_in_body(nt, par, v)) continue;
       unsupported_feature(c, v, "unsupported value of `super` in initialize: initialize is compiled to "
                                 "return nothing, so the parent's last value is not there to answer "
                                 "(see docs/limitations.md)");
@@ -803,13 +814,13 @@ const char *builtin_class_of_type(TyKind t) {
 }
 
 /* The class name of a type whose calls fall back to a program's own Object
-   method (object_reopen_answers): builtin_class_of_type's names plus the
+   method (cplan_root_reopen): builtin_class_of_type's names plus the
    kinds nothing else asks a name of. builtin_class_of_type stays as it was,
    since the dynamic-send desugar and the other readers resolve through it.
    This helper returns that class's core id, or -1 when there is none. */
 int object_fallback_class_of_type(TyKind t) {
-  if (t == TY_RATIONAL || t == TY_COMPLEX || t == TY_PROC ||
-      t == TY_QUEUE || t == TY_EXCEPTION) return core_of_type(t);
+  if (t == TY_RATIONAL || t == TY_COMPLEX || t == TY_PROC || t == TY_QUEUE || t == TY_EXCEPTION ||
+      t == TY_FLOAT_RANGE || t == TY_STR_RANGE) return core_of_type(t);
   return builtin_class_of_type(t) ? core_of_type(t) : -1;
 }
 
@@ -828,7 +839,7 @@ static const char *local_holds_class(Compiler *c, int v) {
       if (!wn || !sp_streq(wn, ln)) continue;
       int wv = WK[k] == NK_LocalVariableWriteNode ? nt_ref(nt, w, "value") : -1;
       const char *vn = wv >= 0 && nt_kind(nt, wv) == NK_ConstantReadNode ? nt_str(nt, wv, "name") : NULL;
-      if (!vn || comp_class_index(c, vn) < 0 || (held && !sp_streq(held, vn))) return NULL;
+      if (!vn || const_node_class_index(c, wv) < 0 || (held && !sp_streq(held, vn))) return NULL;
       held = vn;
     }
   return held;
@@ -858,13 +869,44 @@ static const char *resolve_alias_value(Compiler *c, int v) {
 /* If `cname` is a constant assigned a class value (resolve_alias_value),
    return the underlying class name so `class CONST` reopens that class.
    Returns NULL if `cname` is a plain new class name. */
-const char *resolve_class_alias(Compiler *c, const char *cname) {
+/* The first constant write of each key, in node order (cw_first): the two
+   readers below asked every write of the program at each question, a
+   rescan per constant read that made a program of many constants quadratic
+   (scale-test's splices, a constant per block: #11387). A write's key is
+   its string fields' (ckey, ckey_at, name: const_key_at), so the index
+   stands while the table's count and version do, which count every node
+   added and every string rewritten. */
+static struct { const NodeTable *nt; int cnt; unsigned ver; int cap; const char **key; int *id; } g_cwk;
+static unsigned cwk_slot(const char *k, int cap) { return sp_strhash(k) & (unsigned)(cap - 1); }
+static int cw_first(Compiler *c, const char *cname) {
   const NodeTable *nt = c->nt;
-  NT_FOREACH_KIND(nt, NK_ConstantWriteNode, id) {
-    const char *n = const_key_at(c, id);
-    if (n && sp_streq(n, cname)) return resolve_alias_value(c, nt_ref(nt, id, "value"));
+  if (!cname) return -1;
+  if (g_cwk.nt != nt || g_cwk.cnt != nt->count || g_cwk.ver != nt->version) {
+    int nw = 0;
+    NT_FOREACH_KIND(nt, NK_ConstantWriteNode, id) { (void)id; nw++; }
+    int cap = 16;
+    while (cap < 2 * nw + 2) cap *= 2;
+    free(g_cwk.key); free(g_cwk.id);
+    g_cwk.key = calloc((size_t)cap, sizeof *g_cwk.key);
+    g_cwk.id = malloc(sizeof *g_cwk.id * (size_t)cap);
+    if (!g_cwk.key || !g_cwk.id) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    g_cwk.cap = cap;
+    NT_FOREACH_KIND(nt, NK_ConstantWriteNode, id) {
+      const char *k = const_key_at(c, id);
+      if (!k) continue;
+      unsigned h = cwk_slot(k, cap);
+      while (g_cwk.key[h] && !sp_streq(g_cwk.key[h], k)) h = (h + 1) & (unsigned)(cap - 1);
+      if (!g_cwk.key[h]) { g_cwk.key[h] = k; g_cwk.id[h] = id; }   /* (the first in node order) */
+    }
+    g_cwk.nt = nt; g_cwk.cnt = nt->count; g_cwk.ver = nt->version;
   }
-  return NULL;
+  for (unsigned h = cwk_slot(cname, g_cwk.cap); g_cwk.key[h]; h = (h + 1) & (unsigned)(g_cwk.cap - 1))
+    if (sp_streq(g_cwk.key[h], cname)) return g_cwk.id[h];
+  return -1;
+}
+const char *resolve_class_alias(Compiler *c, const char *cname) {
+  int id = cw_first(c, cname);
+  return id >= 0 ? resolve_alias_value(c, nt_ref(c->nt, id, "value")) : NULL;
 }
 
 /* The constant `cname` is assigned from, when its write's value is a
@@ -873,14 +915,11 @@ const char *resolve_class_alias(Compiler *c, const char *cname) {
    knows, does not follow. NULL otherwise. */
 const char *const_alias_source(Compiler *c, const char *cname) {
   const NodeTable *nt = c->nt;
-  NT_FOREACH_KIND(nt, NK_ConstantWriteNode, id) {
-    const char *n = const_key_at(c, id);
-    if (!n || !sp_streq(n, cname)) continue;
-    int v = nt_ref(nt, id, "value");
-    NodeKind vk = v >= 0 ? nt_kind(nt, v) : NK_NONE;
-    return vk == NK_ConstantReadNode || vk == NK_ConstantPathNode ? const_key_at(c, v) : NULL;
-  }
-  return NULL;
+  int id = cw_first(c, cname);
+  if (id < 0) return NULL;
+  int v = nt_ref(nt, id, "value");
+  NodeKind vk = v >= 0 ? nt_kind(nt, v) : NK_NONE;
+  return vk == NK_ConstantReadNode || vk == NK_ConstantPathNode ? const_key_at(c, v) : NULL;
 }
 
 /* resolve_class_alias through a chain of aliases (`B = A`, `A = Shout`):
@@ -1050,7 +1089,7 @@ int class_eval_reopen_class(Compiler *c, int id, int enclosing_class) {
                          recv_k == NK_ConstantPathNode)) {
     const char *recv_name = nt_str(nt, recv, "name");
     if (!recv_name) return -1;
-    ci = comp_class_index(c, recv_name);
+    ci = const_node_class_index(c, recv);
     if (ci < 0) return -1;
   }
   else {
@@ -1078,7 +1117,7 @@ int class_reopen_cmethod(Compiler *c, int call, int recv, const char *name) {
   if (recv >= 0) {
     NodeKind rk = nt_kind(c->nt, recv);
     const char *cn = rk == NK_ConstantReadNode || rk == NK_ConstantPathNode ? nt_str(c->nt, recv, "name") : NULL;
-    int ci = cn ? comp_class_index(c, cn) : -1;
+    int ci = cn ? const_node_class_index(c, recv) : -1;
     if (!cn || !builtin_class_id(cn) || is_builtin_module_name(cn) ||
         (ci >= 0 && call_target(c, call, ci, name, CT_CMETHOD, NULL) >= 0)) return -1;
   }
@@ -1087,6 +1126,65 @@ int class_reopen_cmethod(Compiler *c, int call, int recv, const char *name) {
 
 static int is_class_eval_name(const char *nm) {
   return nm && is_class_eval_family(nm);
+}
+
+/* Statement s of the top level, or of an if/unless/else there (`unless
+   $loaded; class Class; ...; end; end`, as a flattened program guards a
+   file it may load twice): a `class Class` or a `Class.class_eval { }`
+   becomes the reopening. Left a class named Class, its methods were taken
+   for a user class's, with a struct self, which a Class value is not. */
+static void class_reopen_stmt(Compiler *c, int s, int depth);
+static void class_reopen_stmts(Compiler *c, int body, int depth) {
+  const NodeTable *nt = c->nt;
+  int n = 0;
+  const int *st = body >= 0 ? nt_arr(nt, body, "body", &n) : NULL;
+  for (int i = 0; i < n; i++) class_reopen_stmt(c, st[i], depth);
+}
+static void class_reopen_stmt(Compiler *c, int s, int depth) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  if (s < 0 || depth > 64) return;
+  NodeKind sk = nt_kind(nt, s);
+  if (sk == NK_IfNode || sk == NK_UnlessNode || sk == NK_ElseNode) {
+    class_reopen_stmts(c, nt_ref(nt, s, "statements"), depth + 1);
+    if (sk == NK_IfNode) class_reopen_stmt(c, nt_ref(nt, s, "subsequent"), depth + 1);
+    if (sk == NK_UnlessNode) class_reopen_stmt(c, nt_ref(nt, s, "else_clause"), depth + 1);
+    return;
+  }
+  if (sk == NK_ClassNode) {
+    int cp = nt_ref(nt, s, "constant_path");
+    if (!is_class_const(nt, cp)) return;
+    if (nt_ref(nt, s, "superclass") >= 0)
+      unsupported_feature(c, s, "`class Class < ...` is not supported: reopen Class without a superclass");
+    nt_node_set_type(nt, s, "ModuleNode");
+    nt_node_set_str(nt, cp, "qc_orig_name", nt_str(nt, cp, "name"));   /* the name the program wrote */
+    nt_node_set_str(nt, cp, "name", CLASS_REOPEN_NAME);
+    return;
+  }
+  if (sk != NK_CallNode || !is_class_eval_name(nt_str(nt, s, "name"))) return;
+  int recv = nt_ref(nt, s, "receiver"), blk = nt_ref(nt, s, "block");
+  if (!is_class_const(nt, recv)) return;
+  /* top-level already: what is not supported is the shape, so say that
+     rather than the placement message below (from the #5078 review) */
+  if (blk < 0 || nt_kind(nt, blk) != NK_BlockNode ||
+      nt_ref(nt, blk, "parameters") >= 0 || nt_ref(nt, s, "arguments") >= 0) {
+    char msg[256];
+    snprintf(msg, sizeof msg, "Class.%s adds methods to Class only with a literal block and "
+                              "no block parameters or arguments", nt_str(nt, s, "name"));
+    unsupported_feature(c, s, msg);
+    return;
+  }
+  int bbody = nt_ref(nt, blk, "body");
+  long long line = nt_int(nt, s, "node_line", 0), file = nt_int(nt, s, "node_file", 0),
+            col = nt_int(nt, s, "node_col", 0);
+  nt_node_set_ref(nt, blk, "body", -1);
+  nt_node_reset(nt, s, "ModuleNode");
+  nt_node_set_int(nt, s, "node_line", line);
+  nt_node_set_int(nt, s, "node_file", file);
+  nt_node_set_int(nt, s, "node_col", col);
+  nt_node_set_ref(nt, s, "constant_path", recv);
+  nt_node_set_ref(nt, s, "body", bbody);
+  nt_node_set_str(nt, recv, "qc_orig_name", nt_str(nt, recv, "name"));
+  nt_node_set_str(nt, recv, "name", CLASS_REOPEN_NAME);
 }
 
 void desugar_class_reopen(Compiler *c) {
@@ -1102,47 +1200,7 @@ void desugar_class_reopen(Compiler *c) {
     if (cn && sp_streq(cn, CLASS_REOPEN_NAME))
       unsupported_feature(c, id, "the constant name Class__reopen is reserved by the compiler");
   }
-  int body = nt_ref(nt, nt->root_id, "statements");
-  int n = 0;
-  const int *st = body >= 0 ? nt_arr(nt, body, "body", &n) : NULL;
-  for (int i = 0; i < n; i++) {
-    int s = st[i];
-    if (nt_kind(nt, s) == NK_ClassNode) {
-      int cp = nt_ref(nt, s, "constant_path");
-      if (!is_class_const(nt, cp)) continue;
-      if (nt_ref(nt, s, "superclass") >= 0)
-        unsupported_feature(c, s, "`class Class < ...` is not supported: reopen Class without a superclass");
-      nt_node_set_type(nt, s, "ModuleNode");
-      nt_node_set_str(nt, cp, "qc_orig_name", nt_str(nt, cp, "name"));   /* the name the program wrote */
-      nt_node_set_str(nt, cp, "name", CLASS_REOPEN_NAME);
-      continue;
-    }
-    if (nt_kind(nt, s) != NK_CallNode || !is_class_eval_name(nt_str(nt, s, "name"))) continue;
-    int recv = nt_ref(nt, s, "receiver"), blk = nt_ref(nt, s, "block");
-    if (!is_class_const(nt, recv)) continue;
-    /* top-level already: what is not supported is the shape, so say that
-       rather than the placement message below (from the #5078 review) */
-    if (blk < 0 || nt_kind(nt, blk) != NK_BlockNode ||
-        nt_ref(nt, blk, "parameters") >= 0 || nt_ref(nt, s, "arguments") >= 0) {
-      char msg[256];
-      snprintf(msg, sizeof msg, "Class.%s adds methods to Class only with a literal block and "
-                                "no block parameters or arguments", nt_str(nt, s, "name"));
-      unsupported_feature(c, s, msg);
-      continue;
-    }
-    int bbody = nt_ref(nt, blk, "body");
-    long long line = nt_int(nt, s, "node_line", 0), file = nt_int(nt, s, "node_file", 0),
-              col = nt_int(nt, s, "node_col", 0);
-    nt_node_set_ref(nt, blk, "body", -1);
-    nt_node_reset(nt, s, "ModuleNode");
-    nt_node_set_int(nt, s, "node_line", line);
-    nt_node_set_int(nt, s, "node_file", file);
-    nt_node_set_int(nt, s, "node_col", col);
-    nt_node_set_ref(nt, s, "constant_path", recv);
-    nt_node_set_ref(nt, s, "body", bbody);
-    nt_node_set_str(nt, recv, "qc_orig_name", nt_str(nt, recv, "name"));
-    nt_node_set_str(nt, recv, "name", CLASS_REOPEN_NAME);
-  }
+  class_reopen_stmts(c, nt_ref(nt, nt->root_id, "statements"), 0);
   NT_FOREACH_KIND(nt, NK_CallNode, id) {
     const char *nm = nt_str(nt, id, "name");
     if (!is_class_eval_name(nm) || !is_class_const(nt, nt_ref(nt, id, "receiver"))) continue;
@@ -1217,7 +1275,8 @@ static void sclass_walk_stmt(Compiler *c, int s, const WalkCtx *w, int target_cl
     { sc->body = nt_ref(nt, s, "body"); comp_touch_scope(sc->idx); }
     { sc->class_id = target_class; comp_touch_scope(sc->idx); }
     { sc->is_cmethod = 1; comp_touch_scope(sc->idx); }
-    collect_def_params(c, s, sc);
+    if (def_takes_forwarding(nt, s)) sc->params_later = 1;   /* (scope_forwarding_params) */
+    else collect_def_params(c, s, sc);
     /* Assign scope to the def node and its body */
     c->nscope[s] = new_idx;
     c->node_cbody[s] = w->cbody;
@@ -1326,7 +1385,7 @@ static int singleton_const_class(Compiler *c, int recv, int class_id) {
   if (k != NK_ConstantReadNode && k != NK_ConstantPathNode) return -1;
   const char *name = nt_str(c->nt, recv, "name");
   if (reopened_native_class(c, recv, class_id, name) || is_untabled_native_class_name(name)) return -2;
-  int ci = comp_class_index(c, name);
+  int ci = const_node_class_index(c, recv);
   if (ci < 0 && (is_builtin_class_name(name) || is_builtin_module_const_name(name))) {
     comp_class_new(c, name, -1);
     ci = c->nclasses - 1;
@@ -1750,7 +1809,8 @@ static void walk_scope_in(Compiler *c, int id, WalkCtx w) {
         else if (rci == -2) singleton_reopen_mark(c, id, defrecv, class_id);
       }
     }
-    collect_def_params(c, id, s);
+    if (def_takes_forwarding(c->nt, id)) s->params_later = 1;   /* (scope_forwarding_params) */
+    else collect_def_params(c, id, s);
     child = new_idx;
   }
   else if (ty_k == NK_CallNode) {
@@ -1881,7 +1941,11 @@ static void walk_scope_in(Compiler *c, int id, WalkCtx w) {
     if (dead && dm_is_dm) dm_ok = 0;
     int dm_in_def = dm_ok && dm_is_dm && scope_idx > 0 && c->scopes[scope_idx].def_node >= 0 &&
                     nt_kind(c->nt, c->scopes[scope_idx].def_node) == NK_DefNode;
-    if (dm_in_def && method_never_named(c, c->scopes[scope_idx].name))
+    /* A method a host can call through --ext-class (one an exported class
+       answers, of a shape the thunk calls) runs though nothing in the
+       program names it: its define_method stays registered as an
+       --ext-entry's does (method_never_named). */
+    if (dm_in_def && !ext_scope_host_callable(c, scope_idx) && method_never_named(c, c->scopes[scope_idx].name))
       dm_ok = 0;
     /* Otherwise it is registered from the start, which is right only for a
        method the class does not answer yet: the codegen prepass refuses the
@@ -2414,6 +2478,20 @@ int class_def_path(const NodeTable *nt, int def_node) {
   return nt_kind(nt, def_node) == NK_ConstantPathWriteNode ? nt_ref(nt, def_node, "target") : def_node;
 }
 
+/* A mixin statement: a receiverless `include` or `prepend` call st. Its
+   argument count (the arguments in *av), -1 for any other node; *prepend
+   says which of the two it is. (The record's lr_call reads the wider
+   forms, with a receiver or through send, by lr_mix_kind.) */
+int mixin_stmt_args(const NodeTable *nt, int st, int *prepend, const int **av) {
+  if (nt_kind(nt, st) != NK_CallNode || nt_ref(nt, st, "receiver") >= 0) return -1;
+  const char *nm = nt_str(nt, st, "name");
+  if (!nm || (!is_include_name(nm) && !is_prepend_name(nm))) return -1;
+  int a = nt_ref(nt, st, "arguments"), an = 0;
+  *prepend = is_prepend_name(nm);
+  *av = a >= 0 ? nt_arr(nt, a, "arguments", &an) : NULL;
+  return *av ? an : 0;
+}
+
 /* The constant name a definition writes: its path's last name (a header's
    C spelling, which the qualify passes may have renamed); NULL for none. */
 const char *class_def_name(const NodeTable *nt, int def_node) {
@@ -2565,7 +2643,97 @@ static const char *resolve_member_symbol(Compiler *c, int node) {
    order-preserving/deterministic array transforms whose result is still a
    fixed symbol list -- so `%i[a b].reverse` and `keys = %i[a b]; keys.reverse`
    register their members in the right order (#3135). */
-static int resolve_symbol_list(Compiler *c, int node, const char **out, int cap, int depth) {
+/* (while set, a list of String literals counts too: the receiver of a
+   `.map(&:to_sym)`, below) */
+static int rsl_strings;
+/* The name a block `{ |x| x.m }` sends to its one parameter, or NULL */
+static const char *rsl_block_sends_to_self(const NodeTable *nt, int bk) {
+  int params = nt_ref(nt, bk, "parameters");
+  int inner = params >= 0 && nt_kind(nt, params) == NK_BlockParametersNode ? nt_ref(nt, params, "parameters") : -1;
+  int rn = 0; const int *rq = inner >= 0 ? nt_arr(nt, inner, "requireds", &rn) : NULL;
+  if (rn != 1) return NULL;
+  const char *pn = nt_str(nt, rq[0], "name");
+  int body = nt_ref(nt, bk, "body");
+  int sn = 0; const int *st = body >= 0 && nt_kind(nt, body) == NK_StatementsNode ? nt_arr(nt, body, "body", &sn) : NULL;
+  if (sn != 1 || nt_kind(nt, st[0]) != NK_CallNode || nt_ref(nt, st[0], "arguments") >= 0 || nt_ref(nt, st[0], "block") >= 0) return NULL;
+  int r = nt_ref(nt, st[0], "receiver");
+  const char *rv = r >= 0 && nt_kind(nt, r) == NK_LocalVariableReadNode ? nt_str(nt, r, "name") : NULL;
+  return pn && rv && sp_streq(pn, rv) ? nt_str(nt, st[0], "name") : NULL;
+}
+/* Can the program's own method answer `name` for a receiver of the
+   builtin class cls (Array, String or Symbol)? The builtin has its own
+   method of each name asked here, so only a reopen of that class can
+   change it, or a module put into it. So: a `class cls` body with a
+   statement that may make or remove the name (rsl_stmt_defines), or an
+   include, prepend, class_eval, define_method, undef_method and the like
+   called on cls (what such a module or block holds is not looked at). `class String; def
+   to_sym ...` turns `%w[a b].map(&:to_sym)` into other names, so that
+   list is not the literal's. (The scopes are not built yet here.) */
+static int rsl_is_const(const NodeTable *nt, int n, const char *cls) {
+  if (n < 0) return 0;
+  NodeKind k = nt_kind(nt, n);
+  if (k == NK_ConstantPathNode && nt_ref(nt, n, "parent") >= 0) return 0;
+  return (k == NK_ConstantReadNode || k == NK_ConstantPathNode) &&
+         nt_str(nt, n, "name") && sp_streq(nt_str(nt, n, "name"), cls);
+}
+static int rsl_sym_is(const NodeTable *nt, int n, const char *name) {
+  if (n < 0) return 0;
+  NodeKind k = nt_kind(nt, n);
+  /* a name the compiler cannot read may be this one */
+  if (k != NK_SymbolNode && k != NK_StringNode) return 1;
+  const char *v = nt_str(nt, n, k == NK_SymbolNode ? "value" : "unescaped");
+  return !v || sp_streq(v, name);
+}
+/* may statement st of a class body make the method name? Only a plain
+   def or alias of another name, a constant write, or a visibility call
+   over such is passed over; any other statement (a begin, an if, a
+   receiverless class_eval or define_method, an include, an undef, a
+   block) counts, as what it does is not looked at. */
+static int rsl_stmt_defines(const NodeTable *nt, int st, const char *name) {
+  NodeKind k = nt_kind(nt, st);
+  if (k == NK_DefNode)
+    return nt_ref(nt, st, "receiver") < 0 && (!nt_str(nt, st, "name") || sp_streq(nt_str(nt, st, "name"), name));
+  if (k == NK_AliasMethodNode) return rsl_sym_is(nt, nt_ref(nt, st, "new_name"), name);
+  if (k == NK_ConstantWriteNode) return 0;
+  if (k != NK_CallNode || nt_ref(nt, st, "receiver") >= 0 || nt_ref(nt, st, "block") >= 0) return 1;
+  const char *cn = nt_str(nt, st, "name");
+  int args = nt_ref(nt, st, "arguments"), an = 0;
+  const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &an) : NULL;
+  if (!cn) return 1;
+  /* `private def m`, `public :m`, `private`: a def among its arguments
+     counts as above; a visibility change of the name itself counts */
+  if (sp_streq(cn, "private") || sp_streq(cn, "public") || sp_streq(cn, "protected")) {
+    for (int i = 0; i < an; i++)
+      if (nt_kind(nt, av[i]) == NK_DefNode ? rsl_stmt_defines(nt, av[i], name) : rsl_sym_is(nt, av[i], name)) return 1;
+    return 0;
+  }
+  /* alias_method, attr_reader and the like: the names they make */
+  if (sp_streq(cn, "alias_method") && an >= 1) return rsl_sym_is(nt, av[0], name);
+  if (sp_streq(cn, "attr_reader") || sp_streq(cn, "attr_writer") || sp_streq(cn, "attr_accessor") || sp_streq(cn, "attr")) {
+    for (int i = 0; i < an; i++) if (rsl_sym_is(nt, av[i], name)) return 1;
+    return 0;
+  }
+  return 1;
+}
+static int rsl_own_method(const NodeTable *nt, const char *cls, const char *name) {
+  NT_FOREACH_KIND(nt, NK_ClassNode, d) {
+    if (!rsl_is_const(nt, nt_ref(nt, d, "constant_path"), cls)) continue;
+    int body = class_def_body(nt, d), bn = 0;
+    const int *bb = body >= 0 && nt_kind(nt, body) == NK_StatementsNode ? nt_arr(nt, body, "body", &bn) : NULL;
+    for (int i = 0; i < bn; i++) if (rsl_stmt_defines(nt, bb[i], name)) return 1;
+  }
+  NT_FOREACH_KIND(nt, NK_CallNode, k) {
+    const char *cn = nt_str(nt, k, "name");
+    if (!cn || !rsl_is_const(nt, nt_ref(nt, k, "receiver"), cls)) continue;
+    if (sp_streq(cn, "include") || sp_streq(cn, "prepend") || sp_streq(cn, "class_eval") ||
+        sp_streq(cn, "class_exec") || sp_streq(cn, "module_eval") || sp_streq(cn, "send") ||
+        sp_streq(cn, "__send__") || sp_streq(cn, "public_send") || sp_streq(cn, "define_method") ||
+        sp_streq(cn, "alias_method") || sp_streq(cn, "undef_method") || sp_streq(cn, "remove_method") ||
+        sp_streq(cn, "instance_eval") || sp_streq(cn, "instance_exec")) return 1;
+  }
+  return 0;
+}
+int resolve_symbol_list(Compiler *c, int node, const char **out, int cap, int depth) {
   const NodeTable *nt = c->nt;
   if (node < 0 || depth > 8) return -1;
   const char *ty = nt_type(nt, node);
@@ -2575,6 +2743,12 @@ static int resolve_symbol_list(Compiler *c, int node, const char **out, int cap,
     int en = 0; const int *els = nt_arr(nt, node, "elements", &en);
     if (en > cap) return -1;
     for (int e = 0; e < en; e++) {
+      if (rsl_strings && nt_kind(nt, els[e]) == NK_StringNode) {
+        out[e] = nt_str(nt, els[e], "unescaped");
+        if (!out[e]) out[e] = nt_str(nt, els[e], "content");
+        if (!out[e]) return -1;
+        continue;
+      }
       if (nt_kind(nt, els[e]) != NK_SymbolNode) return -1;
       out[e] = nt_str(nt, els[e], "value");
       if (!out[e]) return -1;
@@ -2627,8 +2801,35 @@ static int resolve_symbol_list(Compiler *c, int node, const char **out, int cap,
     if (!mn) return -1;
     int args = nt_ref(nt, node, "arguments");
     int an = 0; if (args >= 0) nt_arr(nt, args, "arguments", &an);
+    /* `%w[a b].map(&:to_sym)` (or `&:intern`): a fixed list of String
+       literals turned into the same names (#11342) */
+    if ((sp_streq(mn, "map") || sp_streq(mn, "collect")) && an == 0) {
+      int bk = nt_ref(nt, node, "block");
+      int bx = bk >= 0 && nt_kind(nt, bk) == NK_BlockArgumentNode ? nt_ref(nt, bk, "expression") : -1;
+      const char *bs = bx >= 0 && nt_kind(nt, bx) == NK_SymbolNode ? nt_str(nt, bx, "value") : NULL;
+      /* (the `&:to_sym` is a block `{ |x| x.to_sym }` by now) */
+      if (!bs && bk >= 0 && nt_kind(nt, bk) == NK_BlockNode) bs = rsl_block_sends_to_self(nt, bk);
+      if (!bs || !(sp_streq(bs, "to_sym") || sp_streq(bs, "intern"))) return -1;
+      /* the program's own Array#map, String#to_sym or Symbol#to_sym (the
+         list may hold Symbols), or Symbol#to_proc for `&:to_sym` (a block
+         by now, so asked for either form), makes other names */
+      if (rsl_own_method(nt, "Array", mn) || rsl_own_method(nt, "String", bs) ||
+          rsl_own_method(nt, "Symbol", bs) ||
+          rsl_own_method(nt, "Symbol", "to_proc")) return -1;
+      int was = rsl_strings;
+      rsl_strings = 1;
+      int n = resolve_symbol_list(c, recv, out, cap, depth + 1);
+      rsl_strings = was;
+      return n;
+    }
     int n = resolve_symbol_list(c, recv, out, cap, depth + 1);
     if (n < 0) return -1;
+    /* the program's own Array method of the name answers something else,
+       and sort asks each element's <=> (a Symbol's, or a String's ahead of
+       a map(&:to_sym)), which the program may define */
+    if (rsl_own_method(nt, "Array", mn)) return -1;
+    if (sp_streq(mn, "sort") && (rsl_own_method(nt, "Symbol", "<=>") ||
+                                 (rsl_strings && rsl_own_method(nt, "String", "<=>")))) return -1;
     if (sp_streq(mn, "freeze") && an == 0) return n;
     if (sp_streq(mn, "reverse") && an == 0) {
       for (int i = 0; i < n / 2; i++) { const char *t = out[i]; out[i] = out[n-1-i]; out[n-1-i] = t; }
@@ -2659,6 +2860,7 @@ static int resolve_symbol_list(Compiler *c, int node, const char **out, int cap,
 void register_struct_members(Compiler *c, ClassInfo *cls, int val) {
   const NodeTable *nt = c->nt;
   cls->is_struct = 1;
+  c->has_record = 1;
   if (class_def_record_is_data(nt, val)) cls->is_data = 1;
   int args = nt_ref(nt, val, "arguments");
   int an = 0;
@@ -2699,6 +2901,12 @@ void register_struct_members(Compiler *c, ClassInfo *cls, int val) {
       int se = nt_ref(nt, argv[a], "expression");
       const char *syms[128];
       int en = se >= 0 ? resolve_symbol_list(c, se, syms, 128, 0) : -1;
+      /* names only the run time knows: the class would have no members,
+         and `new` reject every one, so refuse it here (#11342) */
+      if (en < 0)
+        unsupported_feature(c, val, cls->is_data
+          ? "Data.define with member names known only at run time (a splat of a list the compiler cannot read): write the names, or a constant of literal symbols"
+          : "Struct.new with member names known only at run time (a splat of a list the compiler cannot read): write the names, or a constant of literal symbols");
       for (int e = 0; e < en; e++) {
         const char *sm = syms[e];
         if (!sm) continue;
@@ -2742,7 +2950,7 @@ static int sg_new_class_ci(Compiler *c, int val) {
   const char *cn = nt_kind(nt, recv) == NK_ConstantReadNode ? nt_str(nt, recv, "name") : NULL;
   if (cn && sp_streq(cn, "Object")) return -2;
   if (cn && sp_streq(cn, "BasicObject")) return -3;
-  int ci = nt_kind(nt, recv) == NK_ConstantReadNode ? comp_class_index(c, cn)
+  int ci = nt_kind(nt, recv) == NK_ConstantReadNode ? const_node_class_index(c, recv)
          : nt_kind(nt, recv) == NK_LocalVariableReadNode ? class_var_static_ci(c, recv) : -1;
   if (ci < 0) return -1;
   /* Other object-base names and native/exception/struct classes do not have
@@ -2785,7 +2993,7 @@ static int sg_class_root(Compiler *c, int k) {
       int sc = class_def_super(c->nt, c->classes[k].def_node);
       NodeKind sk = sc >= 0 ? nt_kind(c->nt, sc) : NK_NilNode;
       const char *sn = sk == NK_ConstantReadNode || sk == NK_ConstantPathNode ? nt_str(c->nt, sc, "name") : NULL;
-      p = sn ? comp_class_index(c, sn) : -1;
+      p = sn ? const_node_class_index(c, sc) : -1;
     }
     if (p < 0 || p == k) return k;
     k = p;
@@ -3103,7 +3311,7 @@ static int sg_binding(Compiler *c, int id, int recv, int *bk, const char **rn, S
   }
   *rn = nt_str(nt, recv, "name");
   if (!*rn) return -1;
-  if (*bk == SG_CONST && comp_class_index(c, *rn) >= 0) return -1;  /* class method */
+  if (*bk == SG_CONST && const_node_class_index(c, recv) >= 0) return -1;  /* class method */
   /* the local's binding scope is the node's ENCLOSING scope (the receiver read
      is walked under the method/call scope, so its own nscope is wrong). */
   *owner = *bk == SG_CONST ? NULL : comp_scope_of(c, id);
@@ -3139,20 +3347,23 @@ static void class_note_prepended_mod(Compiler *c, int ci, int mod_ci) {
 
 /* Copy the method shape of src into the clone dst: its yield flag, its
    parameter layout (names, defaults, required count, rest/post/kwrest slots),
-   its &block, and the define_method loop substitution. Runs after the cloned
-   body is walked; the parameters are interned as param locals so
+   its &block, and the define_method loop substitution. Runs once the clone
+   exists, before its body is walked (a proc-form clone's) or after (an
+   include's); the parameters are interned as param locals so
    infer_param_types can update their types. The copies an include, a
-   prepend, an extend, a class-method specialization and an alias make take
-   the whole shape from here: listing the fields by hand, they dropped the
-   loop substitution, and the body read the loop variable as an unset local
-   (nil) instead of the literal. (A yielding method's proc-form clone,
-   make_yield_proc_forms, still lists its own.) */
-static void scope_copy_method_shape(Scope *dst, Scope *src) {
+   prepend, an extend, a class-method specialization, an alias and a
+   yielding method's proc-form clone make take the whole shape from here:
+   listing the fields by hand, they dropped the loop substitution, and the
+   body read the loop variable as an unset local (nil) instead of the
+   literal. */
+void scope_copy_method_shape(Scope *dst, Scope *src) {
   dst->yields = src->yields;
   dst->nrequired = src->nrequired;
   dst->rest_idx = src->rest_idx;
   dst->kwrest_idx = src->kwrest_idx;
   dst->accessor_of = src->accessor_of;
+  dst->super_of = src->super_of;
+  dst->alias_of = src->alias_of ? strdup(src->alias_of) : NULL;
   /* A copied &block has the same Proc-or-NULL ABI as the original. It is
      outside pnames, so copying the positional/keyword locals does not
      register it. Seed it before inference; otherwise the body walk leaves an
@@ -3186,6 +3397,8 @@ static void scope_copy_method_shape(Scope *dst, Scope *src) {
   if (src->nparams <= 0) return;
   dst->pnames = malloc(sizeof(char *) * (size_t)src->nparams);
   dst->pdefault = malloc(sizeof(int) * (size_t)src->nparams);
+  if (!dst->pnames || !dst->pdefault) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  dst->pcap = src->nparams;
   for (int p = 0; p < src->nparams; p++) {
     dst->pnames[p] = src->pnames[p] ? strdup(src->pnames[p]) : NULL;
     dst->pdefault[p] = src->pdefault ? src->pdefault[p] : -1;
@@ -3207,9 +3420,49 @@ static void scope_copy_method_shape(Scope *dst, Scope *src) {
   }
 }
 
+/* A copy of instance method scope ms in class newci under the name nm: its
+   body cloned and walked under newci, so implicit-self calls (and ivar
+   reads) re-attribute to it, not to the class the method is in (a shared
+   body would resolve `name` against that one), with the original's shape
+   and defaults. The new scope's index. */
+static int scope_copy_to_class(Compiler *c, int ms, int newci, const char *nm, int sg) {
+  const NodeTable *nt = c->nt;
+  Scope *src = &c->scopes[ms];
+  Scope *dst = comp_scope_new(c, nm, src->def_node);
+  int dst_idx = (int)(dst - c->scopes);
+  src = &c->scopes[ms];   /* comp_scope_new may realloc */
+  comp_scope_copy_shadow(c, dst_idx, ms, NULL);
+  if (src->body >= 0) {
+    int nb = nt_clone_subtree((NodeTable *)nt, src->body);
+    if (nb >= 0) {
+      comp_grow_node_arrays(c);
+      src = &c->scopes[ms]; dst = &c->scopes[dst_idx];
+      { dst->body = nb; dst->is_cmethod = sg; comp_touch_scope(dst->idx); }
+      walk_scope(c, nb, dst_idx, newci);
+    }
+    else { dst->body = src->body; comp_touch_scope(dst->idx); }
+  }
+  { dst->class_id = newci; comp_touch_scope(dst->idx); }
+  { dst->is_cmethod = sg; comp_touch_scope(dst->idx); }
+  { dst->reachable = src->reachable; comp_touch_scope(dst->idx); }
+  scope_copy_method_shape(dst, src);
+  /* The copy's parameter locals carry the original's types. A method
+     that just hands its parameter to `super` reads none of them
+     (`def render(text) = "[#{super}]"`), so nothing in the cloned body
+     types them; the caller then passed the argument's own type, which the
+     emitted signature, typed poly, did not accept (#3951). */
+  for (int p = 0; p < dst->nparams; p++) {
+    if (!dst->pnames[p]) continue;
+    LocalVar *sp_lv = scope_local(src, dst->pnames[p]);
+    LocalVar *dp = scope_local(dst, dst->pnames[p]);
+    if (sp_lv && dp && dp->type == TY_UNKNOWN) lv_set_type(dp, sp_lv->type);
+  }
+  scope_own_defaults(c, dst_idx);
+  return dst_idx;
+}
+
 /* Copy module `mod_ci`'s instance methods onto subclass `newci` (obj.extend). */
 static void sg_transplant_module(Compiler *c, int mod_ci, int newci) {
-  const NodeTable *nt = c->nt;
   /* Record the membership the way `include` does, so the extended object
      answers is_a?(Mod) -- it reported false, because only the methods were
      transplanted and nothing said the synthesized subclass was a member
@@ -3220,42 +3473,12 @@ static void sg_transplant_module(Compiler *c, int mod_ci, int newci) {
     Scope *src = &c->scopes[ms];
     if (src->class_id != mod_ci || src->is_cmethod || !src->name) continue;
     if (comp_method_in_class(c, newci, src->name) >= 0) continue;
-    Scope *dst = comp_scope_new(c, src->name, src->def_node);
-    int dst_idx = (int)(dst - c->scopes);
-    src = &c->scopes[ms];   /* comp_scope_new may realloc */
-    comp_scope_copy_shadow(c, dst_idx, ms, NULL);
-    /* Clone + re-walk the module body under the subclass so implicit-self
-       calls (and ivar reads) re-attribute to it, not the module -- exactly
-       what `include` does (a shared body would resolve `name` against the
-       module). */
-    if (src->body >= 0) {
-      int nb = nt_clone_subtree((NodeTable *)nt, src->body);
-      if (nb >= 0) {
-        comp_grow_node_arrays(c);
-        src = &c->scopes[ms]; dst = &c->scopes[dst_idx];
-        { dst->body = nb; comp_touch_scope(dst->idx); }
-        walk_scope(c, nb, dst_idx, newci);
-      }
-      else { dst->body = src->body; comp_touch_scope(dst->idx); }
-    }
-    { dst->class_id = newci; comp_touch_scope(dst->idx); }
-    { dst->is_cmethod = 0; comp_touch_scope(dst->idx); }    /* an instance method of the singleton subclass */
-    { dst->reachable = src->reachable; comp_touch_scope(dst->idx); }
+    char *nm = strdup(src->name);
+    int dst_idx = scope_copy_to_class(c, ms, newci, nm, 0);
+    free(nm);
+    src = &c->scopes[ms];
     src->is_transplanted_source = 1;   /* the module original is copied away */
-    { dst->origin_module_ci = mod_ci + 1; comp_touch_scope(dst->idx); }  /* #owner names the module (#3662) */
-    scope_copy_method_shape(dst, src);
-    /* The copy's parameter locals carry the original's types. A method
-       that just hands its parameter to `super` reads none of them
-       (`def render(text) = "[#{super}]"`), so nothing in the cloned body
-       types them; the caller then passed the argument's own type, which the
-       emitted signature, typed poly, did not accept (#3951). */
-    for (int p = 0; p < dst->nparams; p++) {
-      if (!dst->pnames[p]) continue;
-      LocalVar *sp_lv = scope_local(src, dst->pnames[p]);
-      LocalVar *dp = scope_local(dst, dst->pnames[p]);
-      if (sp_lv && dp && dp->type == TY_UNKNOWN) lv_set_type(dp, sp_lv->type);
-    }
-    scope_own_defaults(c, dst_idx);
+    { c->scopes[dst_idx].origin_module_ci = mod_ci + 1; comp_touch_scope(c->scopes[dst_idx].idx); }  /* #owner names the module (#3662) */
   }
 }
 
@@ -3352,7 +3575,7 @@ static int sg_class_value(Compiler *c, int v) {
   NodeKind k = nt_kind(nt, v);
   if (k == NK_ConstantReadNode || k == NK_ConstantPathNode) {
     const char *cn = nt_str(nt, v, "name");
-    return cn && (comp_class_index(c, cn) >= 0 || is_builtin_class_name(cn));
+    return cn && (const_node_class_index(c, v) >= 0 || is_builtin_class_name(cn));
   }
   if (k != NK_CallNode) return 0;
   int r = nt_ref(nt, v, "receiver");
@@ -3389,10 +3612,7 @@ static int sg_const_holds_class(Compiler *c, const char *name) {
     writes++;
   }
   if (writes) return 1;
-  static const char *const objs[] = { "ARGV", "ARGF", "ENV", "STDIN", "STDOUT", "STDERR",
-                                      "DATA", "TOPLEVEL_BINDING", NULL };
-  for (int i = 0; objs[i]; i++) if (sp_streq(name, objs[i])) return 0;
-  return strncmp(name, "RUBY_", 5) != 0;
+  return !is_runtime_const_name(name);
 }
 
 /* The innermost `def` whose body holds `id`, or -1 */
@@ -4284,11 +4504,9 @@ static int alias_module_included_before(Compiler *c, int k, int mi, int at) {
   const char *leaf = strrchr(mn, ':');
   leaf = leaf ? leaf + 1 : mn;
   NT_FOREACH_KIND(nt, NK_CallNode, id) {
-    const char *cn = nt_str(nt, id, "name");
-    if (!cn || (!is_include_name(cn) && !is_prepend_name(cn)) || nt_ref(nt, id, "receiver") >= 0) continue;
-    if (id >= c->node_cap || c->node_cbody[id] != k) continue;
-    int a = nt_ref(nt, id, "arguments"), an = 0;
-    const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &an) : NULL;
+    int prep; const int *av;
+    int an = mixin_stmt_args(nt, id, &prep, &av);
+    if (an < 0 || id >= c->node_cap || c->node_cbody[id] != k) continue;
     for (int j = 0; j < an; j++) {
       const char *an_ = nt_str(nt, av[j], "name");
       if (an_ && sp_streq(an_, leaf) && prog_cmp_run(c, id, at, at, "the alias reading") < 0) return 1;
@@ -4349,7 +4567,7 @@ static int mixin_arg_module(Compiler *c, int arg) {
   NodeKind ak = nt_kind(c->nt, arg);
   const char *mn = (ak == NK_ConstantReadNode || ak == NK_ConstantPathNode) ? nt_str(c->nt, arg, "name") : NULL;
   if (!mn) return -1;
-  int mod = comp_class_index(c, mn);
+  int mod = const_node_class_index(c, arg);
   if (mod < 0) { const char *al = resolve_class_alias(c, mn); if (al) mod = comp_class_index(c, al); }
   return mod;
 }
@@ -4369,12 +4587,9 @@ static int alias_def_in_effect(Compiler *c, int k, const char *od, const char *n
     const int *stmts = ob[b].body >= 0 ? nt_arr(nt, ob[b].body, "body", &n) : NULL;
     for (int j = 0; j < n; j++) {
       int st = stmts[j];
-      if (nt_kind(nt, st) != NK_CallNode || nt_ref(nt, st, "receiver") >= 0) continue;
-      const char *nm = nt_str(nt, st, "name");
-      int prep = nm && is_prepend_name(nm);
-      if (!nm || (!prep && !is_include_name(nm))) continue;
-      int a = nt_ref(nt, st, "arguments"), an = 0;
-      const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &an) : NULL;
+      int prep = 0; const int *av;
+      int an = mixin_stmt_args(nt, st, &prep, &av);
+      if (an < 0) continue;
       /* `include A, B` puts A in front */
       for (int q = an - 1; q >= 0; q--) {
         int mod = mixin_arg_module(c, av[q]);
@@ -4687,24 +4902,65 @@ static const LrDef *alias_accessor_version(Compiler *c, const ElabEntry *e) {
    accessor. The def keeps the accessor's own name, which is the alias's
    #original_name; its scope is the alias's, linked to the alias's version
    (elab_attr_scope) for the call plan (ct_def_version). 0 where the walk
-   made no method, which alias_register then binds. */
-static int alias_accessor_method(Compiler *c, const ElabEntry *e, const LrDef *d) {
+   made no method, which alias_register then binds. A Struct or Data member
+   is the class's own writer, no attr_* call of the program's: at is the
+   alias statement and the method has no accessor_of (the member's store is
+   `@a = value` there as well). */
+static int alias_accessor_method(Compiler *c, const ElabEntry *e, int w, int at, int accessor) {
   NodeTable *nt = (NodeTable *)c->nt;
-  int w = d->kind == LR_WRITER, s = c->nscopes;
+  int s = c->nscopes;
   char base[256], ivname[260];
   if (w ? !setter_base_name(e->target, base, sizeof base) : snprintf(base, sizeof base, "%s", e->target) >= (int)sizeof base) return 0;
-  int def = attr_as_def(nt, d->node, base, w);
+  int def = attr_as_def(nt, at, base, w);
   if (def < 0) return 0;
   comp_grow_node_arrays(c);
   walk_scope(c, def, c->nscope[e->node], e->cls);
   if (s >= c->nscopes || c->scopes[s].def_node != def) return 0;
   free(c->scopes[s].name);
-  { c->scopes[s].name = strdup(e->name); c->scopes[s].accessor_of = d->node + 1; comp_touch_scope(c->scopes[s].idx); }
+  { c->scopes[s].name = strdup(e->name); c->scopes[s].accessor_of = accessor; comp_touch_scope(c->scopes[s].idx); }
   snprintf(ivname, sizeof ivname, "@%s", base);
   comp_ivar_intern(&c->classes[e->cls], ivname);
   elab_attr_scope(c, e, s);
   return 1;
 }
+/* The scope of the def an alias e names at its point, which the alias is
+   a copy of (register_alias_methods), found through the record the way
+   ct_def_version follows it (past the aliases made on the way, each at its
+   own point): an ancestor class's def, or an initialize,
+   the class's own too; -1 for any other target: another def of the
+   class's own, a builtin's, a version that may not have run. initialize is
+   compiled to answer nothing (scope_is_initialize), so its alias bound by
+   name answered nothing where CRuby answers its last value; the copy is a
+   method under the alias's name, compiled with its value. Asked before any
+   method is made, as alias_accessor_version is. */
+static int alias_copy_source(Compiler *c, const ElabEntry *e) {
+  LoadPoint p = elab_point_of(c, e->node);
+  const LrDef *d = NULL;
+  const char *t = e->target;
+  int cls = e->cls;
+  /* (a def of the alias's name later in the class stands newest by name where
+     the copy made now would: the alias is bound by name there, until that def) */
+  if (alias_def_after(c, e->cls, e->name, e->node, e->sg) >= 0 || (e->sg && comp_class_is_module(c, &c->classes[e->cls]))) return -1;
+  for (int hop = 0; p.region >= 0 && hop < 32; hop++) {
+    if (elab_method_at(c, cls, t, e->sg, p, &d) != ELAB_YES || !d || d->may || d->unplaced) return -1;
+    if (d->kind != LR_ALIAS) break;
+    if (!d->target) return -1;
+    p = elab_point_of(c, d->node);
+    cls = c->node_cbody[d->node];
+    t = d->target;
+    if (cls < 0) return -1;
+  }
+  if (!d || (d->kind != LR_DEF && d->kind != LR_DEFINE_METHOD)) return -1;
+  int q = c->node_cbody[d->node], si = elab_def_scope_of(c, d->node);
+  if (q < 0 || si <= 0 || (q == e->cls && !scope_is_initialize(&c->scopes[si])) ||
+      c->scopes[si].class_id != q || c->scopes[si].def_node != d->node) return -1;
+  /* the side the alias names: a class method of the ancestor's own, or on the class side an instance method of a
+     module the ancestry extends (the class's singleton holds a copy of it, as an extend makes) */
+  if (!c->scopes[si].is_cmethod != !e->sg && !(e->sg && comp_class_is_module(c, &c->classes[q]))) return -1;
+  return si;
+}
+
+static int alias_writer_unresolved(Compiler *c, const ElabEntry *e);
 
 /* Does an entry after a[i] on its class side declare the alias's name again
    (an attr that does replaces the alias, as a later definition does in
@@ -4722,23 +4978,181 @@ static int alias_replaced_later(const ElabEntry *a, int n, int i) {
    the arm a constant condition takes. An attr that declares the alias's
    name later on that class side replaces it, as the later definition does
    in CRuby. An alias of an accessor is a method of its own
-   (alias_accessor_method); binding any other is alias_register's. */
+   (alias_accessor_method), and so is an alias of an ancestor class's def
+   (register_alias_methods, once the classes have their parents); binding
+   any other is alias_register's. */
 void register_aliases(Compiler *c) {
   int n = 0, tl = -1;
   ElabEntry *a = elab_entries(c, 1u << LR_ALIAS | 1u << LR_READER | 1u << LR_WRITER, &n);
   const LrDef **acc = calloc((size_t)(n ? n : 1), sizeof *acc);
-  if (!acc) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  unsigned char *inh = calloc((size_t)(n ? n : 1), 1);
+  if (!acc || !inh) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  for (int i = 0; i < n; i++) {
+    if (a[i].kind != LR_ALIAS || !a[i].target || a[i].cls < 0 || alias_replaced_later(a, n, i)) continue;
+    acc[i] = alias_accessor_version(c, &a[i]);
+    int si = acc[i] ? -1 : alias_copy_source(c, &a[i]);
+    /* (the def is kept on the alias for register_alias_methods, which makes
+       its copy: asked again there, a method made since, an accessor alias's
+       `def foo = @foo` under another name, reads as a later def of the
+       alias's name, and the alias would get neither the copy nor a binding) */
+    if (si >= 0) nt_node_set_int((NodeTable *)c->nt, a[i].node, "alias_copy_src", si + 1);
+    inh[i] = si >= 0 || (!acc[i] && alias_writer_unresolved(c, &a[i]));
+  }
   for (int i = 0; i < n; i++)
-    if (a[i].kind == LR_ALIAS && a[i].target && a[i].cls >= 0 && !alias_replaced_later(a, n, i)) acc[i] = alias_accessor_version(c, &a[i]);
-  for (int i = 0; i < n; i++)
-    if (acc[i] && !alias_accessor_method(c, &a[i], acc[i])) acc[i] = NULL;
+    if (acc[i] && !alias_accessor_method(c, &a[i], acc[i]->kind == LR_WRITER, acc[i]->node, acc[i]->node + 1)) acc[i] = NULL;
   for (int top = 0; top < 2; top++)
     for (int i = 0; i < n; i++) {
-      if (a[i].kind != LR_ALIAS || !a[i].target || (a[i].cls < 0) != top || acc[i] || alias_replaced_later(a, n, i)) continue;
+      if (a[i].kind != LR_ALIAS || !a[i].target || (a[i].cls < 0) != top || acc[i] || inh[i] || alias_replaced_later(a, n, i)) continue;
       if (top && tl < 0) tl = comp_toplevel_class_make(c);
       alias_register(c, &c->classes[top ? tl : a[i].cls], a[i].name, a[i].target, a[i].node, a[i].sg);
     }
   free(acc);
+  free(inh);
+  free(a);
+}
+
+/* Does instance alias e name a writer that the record has no version of at
+   the alias's point: the writer of a Struct or Data member, which the
+   classes' parents may say (alias_of_member_writer), or a builtin's? The
+   alias is bound once the classes have their parents
+   (register_alias_methods). */
+static int alias_writer_unresolved(Compiler *c, const ElabEntry *e) {
+  char base[256];
+  const LrDef *d = NULL;
+  LoadPoint p;
+  if (e->kind != LR_ALIAS || !e->target || e->sg || e->cls < 0 || !setter_base_name(e->target, base, sizeof base)) return 0;
+  p = elab_point_of(c, e->node);
+  return p.region < 0 || (elab_method_at(c, e->cls, e->target, 0, p, &d) != ELAB_YES && !d);
+}
+
+/* ...and does the class's chain give it a Struct or Data member's writer? */
+static int alias_of_member_writer(Compiler *c, const ElabEntry *e) {
+  char base[256];
+  int dc = -1;
+  return setter_base_name(e->target, base, sizeof base) && comp_writer_in_chain(c, e->cls, base, &dc) && dc >= 0 &&
+         (c->classes[dc].is_struct || c->classes[dc].is_data);
+}
+
+/* Does a module the chain of the class method hold's class extends define the name hold's super asks for? */
+static int alias_super_in_extended(Compiler *c, int hold) {
+  const Scope *hs = &c->scopes[hold];
+  const char *nm = comp_scope_def_name(c, hs);
+  for (int k = hs->class_id, g = 0; nm && k >= 0 && g < c->nclasses; k = c->classes[k].parent, g++) {
+    for (int e = 0; e < c->classes[k].nextended_mods; e++) {
+      int m = c->classes[k].extended_mods[e];
+      if (m >= 0 && m < c->nclasses && comp_method_in_class(c, m, nm) >= 0) return 1;
+    }
+    if (k == c->classes[k].parent) break;
+  }
+  return 0;
+}
+
+/* The class method an extend put in the singleton ancestry of class cls as
+   the copy of the module's def at node dn (the nearest one up the parents),
+   or -1: where a super in an alias of that module method starts. The def's
+   scopes are the chain of its node (a method's body and its copies). */
+static int alias_extend_copy(Compiler *c, int cls, int dn) {
+  int best = -1, bd = c->nclasses + 1;
+  for (int si = comp_def_oldest(c, dn); si >= 0; si = comp_def_newer(c, si)) {
+    const Scope *sc = &c->scopes[si];
+    if (!sc->is_cmethod || !sc->is_extend_copy) continue;
+    int d = 0;
+    for (int k = cls; k >= 0 && d < bd; k = c->classes[k].parent, d++) {
+      if (k == sc->class_id) { best = si; bd = d; break; }
+      if (k == c->classes[k].parent) break;
+    }
+  }
+  return best;
+}
+
+/* A copy of an initialize answers its last value, which may be a super
+   into the initialize above it: each initialize a super reaches up the
+   chain from copy di answers its value too (init_value), whether the
+   super is the last value or not. */
+static void alias_init_super_values(Compiler *c, int di) {
+  for (int s = di, g = 0; s >= 0 && g < c->nscopes && scope_calls_super(c, s); g++) {
+    int t = cplan_super_target(c, -1, &c->scopes[s], NULL);
+    if (t < 0 || !scope_is_initialize(&c->scopes[t]) || c->scopes[t].init_value) break;
+    c->scopes[t].init_value = 1;
+    s = t;
+  }
+}
+
+/* An alias of an ancestor class's def, or of an initialize, the class's own
+   too (alias_copy_source, which register_aliases asks before any method is
+   made and keeps on the alias as alias_copy_src), is a method of the
+   alias's class made of that def: a copy of its scope under the alias's
+   name, the way an include puts a module's methods in its includer, so the
+   class has the method the alias is, which a call through self from an
+   inherited method reaches by dispatch where a name mapping met the
+   ancestor's own. The scope keeps the def, whose name is the alias's
+   #original_name, and is linked to the alias's version for the call plan
+   (ct_def_version). Run once the classes have their parents, which the
+   copy's body is walked under (an ivar it names is the ancestor's). A body
+   that calls super keeps its owner's: the copy's super is that of the
+   method the def is in the alias's class's ancestry (Scope.super_of). A
+   copy of an initialize is not named initialize, so it is compiled with
+   its value, and so is each initialize its super reaches
+   (alias_init_super_values). An alias in a module is a method of the
+   module's table, which an include copies, so the modules' go first
+   (modules), before the includes; the copy of a module's method has no
+   ancestry yet for a super to start from, and its alias is bound by
+   name. */
+void register_alias_methods(Compiler *c, int modules) {
+  int n = 0;
+  ElabEntry *a = elab_entries(c, 1u << LR_ALIAS | 1u << LR_READER | 1u << LR_WRITER, &n);
+  int *src = malloc(sizeof *src * (size_t)(n ? n : 1));
+  if (!src) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  for (int i = 0; i < n; i++)
+    src[i] = a[i].kind == LR_ALIAS && a[i].target && a[i].cls >= 0 && !alias_replaced_later(a, n, i) &&
+             !comp_class_is_module(c, &c->classes[a[i].cls]) == !modules ? (int)nt_int(c->nt, a[i].node, "alias_copy_src", 0) - 1 : -1;
+  int copied = 0;
+  for (int i = 0; i < n; i++) {
+    if (src[i] < 0 && a[i].kind == LR_ALIAS && a[i].target && a[i].cls >= 0 && !alias_replaced_later(a, n, i) &&
+        !comp_class_is_module(c, &c->classes[a[i].cls]) == !modules && alias_writer_unresolved(c, &a[i])) {
+      /* a member's store is the method; any other writer, or a failure to make it, is bound by name as it was */
+      if (!modules && alias_of_member_writer(c, &a[i]) && alias_accessor_method(c, &a[i], 1, a[i].node, 0)) copied = 1;
+      else alias_register(c, &c->classes[a[i].cls], a[i].name, a[i].target, a[i].node, a[i].sg);
+      continue;
+    }
+    if (src[i] < 0) continue;
+    if (modules && scope_calls_super(c, src[i])) {
+      alias_register(c, &c->classes[a[i].cls], a[i].name, a[i].target, a[i].node, a[i].sg);
+      continue;
+    }
+    /* (the def's method in the class's ancestry is looked up before the copy exists: the copy is a scope of the
+       same def, and a link from it to itself is no ancestry) */
+    int hold = -1, calls_super = scope_calls_super(c, src[i]);
+    if (calls_super) {
+      int dn = c->scopes[src[i]].def_node;
+      hold = comp_shadowed_body(c, a[i].cls, a[i].sg, dn, NULL);
+      if (hold < 0) hold = comp_method_version(c, a[i].cls, c->scopes[src[i]].name, a[i].sg, dn, NULL);
+      if (hold < 0 && a[i].sg) hold = alias_extend_copy(c, a[i].cls, dn);
+    }
+    int di = scope_copy_to_class(c, src[i], a[i].cls, a[i].name, a[i].sg);
+    c->scopes[di].alias_of = strdup(comp_scope_user_name(&c->scopes[src[i]]));
+    if (calls_super) {
+      /* the def's method in the class's ancestry: a prepend's copy of it,
+         else a mixin's or the owner's own */
+      /* a class method whose super reaches a module the class extends, behind a later def of its name: the plan finds
+         no method of that body for the copy's super to start from */
+      if (hold >= 0 && a[i].sg && cplan_super_target(c, -1, &c->scopes[hold], NULL) < 0 &&
+          alias_super_in_extended(c, hold)) {
+        char msg[400];
+        snprintf(msg, sizeof msg, "%s.%s: alias of an inherited class method whose `super` reaches a module the class "
+                 "extends, behind a later definition of the name, is not supported; see docs/limitations.md",
+                 c->classes[a[i].cls].name, a[i].name);
+        unsupported_feature(c, a[i].node, msg);
+      }
+      c->scopes[di].super_of = (hold >= 0 ? hold : src[i]) + 1;
+      if (scope_is_initialize(&c->scopes[src[i]])) alias_init_super_values(c, di);
+    }
+    elab_attr_scope(c, &a[i], di);
+    copied = 1;
+  }
+  /* the copies' locals and ivars (register_locals ran before them) */
+  if (copied) register_locals(c);
+  free(src);
   free(a);
 }
 
@@ -4873,6 +5287,66 @@ void register_globals_consts(Compiler *c) {
 }
 
 /* Extract a symbol or string literal text from a node, or NULL. */
+/* The link flag for an ffi_lib name, into out (#11363): a path (one with a
+   '/') goes to the linker as it is; a library file name ("libz.so.1",
+   "libz.1.dylib") is `-l:<file>` for GNU ld and lld, and on macOS, whose
+   system libraries link from the SDK's stubs, `-l<name>` of its base name;
+   a bare name ("z") is `-l<name>`. With `found` set, 1 only for a name this
+   machine has a library file for (an Array's candidates are tried in order,
+   as the ffi gem tries them), else 1 for any name. */
+static int ffi_lib_exists_in_dirs(const char *file) {
+  static const char *const dirs[] = { "/usr/lib", "/usr/local/lib", "/lib", "/usr/lib64", "/lib64",
+    "/usr/lib/x86_64-linux-gnu", "/lib/x86_64-linux-gnu", "/usr/lib/aarch64-linux-gnu", "/lib/aarch64-linux-gnu",
+    "/opt/homebrew/lib", "/opt/local/lib", NULL };
+  char p[1024];
+  for (int i = 0; dirs[i]; i++) {
+    snprintf(p, sizeof p, "%s/%s", dirs[i], file);
+    if (access(p, F_OK) == 0) return 1;
+  }
+  return 0;
+}
+static int ffi_lib_flag(const char *name, char *out, size_t cap, int found) {
+  if (!name || !*name) return 0;
+  size_t n = strlen(name);
+  if (strchr(name, '/')) {
+    if (found && access(name, F_OK) != 0) return 0;
+    snprintf(out, cap, "%s", name);
+    return 1;
+  }
+  int file = n > 3 && strncmp(name, "lib", 3) == 0 &&
+             (strstr(name, ".so") || strstr(name, ".dylib") || strstr(name, ".a") || strstr(name, ".tbd"));
+  if (file) {
+#ifdef __APPLE__
+    /* libz.1.dylib -> z */
+    const char *dot = strchr(name + 3, '.');
+    size_t bl = dot ? (size_t)(dot - (name + 3)) : n - 3;
+    if (bl == 0) return 0;
+    if (found) {
+      char f[512];
+      snprintf(f, sizeof f, "lib%.*s.dylib", (int)bl, name + 3);
+      char sdk[640]; snprintf(sdk, sizeof sdk, "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/lib/lib%.*s.tbd", (int)bl, name + 3);
+      if (!ffi_lib_exists_in_dirs(name) && !ffi_lib_exists_in_dirs(f) && access(sdk, F_OK) != 0) return 0;
+    }
+    snprintf(out, cap, "-l%.*s", (int)bl, name + 3);
+#else
+    if (found && !ffi_lib_exists_in_dirs(name)) return 0;
+    snprintf(out, cap, "-l:%s", name);
+#endif
+    return 1;
+  }
+  if (found) {
+    char f[512]; int any = 0;
+    static const char *const ext[] = { ".so", ".a", ".dylib", ".tbd", NULL };
+    for (int i = 0; ext[i] && !any; i++) { snprintf(f, sizeof f, "lib%s%s", name, ext[i]); any = ffi_lib_exists_in_dirs(f); }
+#ifdef __APPLE__
+    if (!any) { char sdk[640]; snprintf(sdk, sizeof sdk, "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/lib/lib%s.tbd", name); any = access(sdk, F_OK) == 0; }
+#endif
+    if (!any) return 0;
+  }
+  snprintf(out, cap, "-l%s", name);
+  return 1;
+}
+
 const char *ffi_arg_str(const NodeTable *nt, int nid) {
   if (nid < 0) return NULL;
   const char *ty = nt_type(nt, nid);
@@ -5150,7 +5624,34 @@ void register_ffi_decls(Compiler *c) {
     /* A module that extends FFI::Library is the ffi gem's: its ffi_lib,
        attach_function, callback and typedef are runtime calls into the
        bundled package (packages/ffi), not this compile-time DSL. */
-    if (comp_ffi_library_module(nt, mname)) continue;
+    if (comp_ffi_library_module(nt, mname)) {
+      /* (but for its literal attaches of scalar types, which a constant
+         calls through the pointer the attach resolves: ffi_attach_direct) */
+      int fb = class_def_body(nt, id), fn = 0;
+      const int *fst = fb >= 0 ? nt_arr(nt, fb, "body", &fn) : NULL;
+      for (int k = 0; k < fn; k++) {
+        const char *fname = NULL, *csym = NULL, *ret = NULL;
+        int arr = -1;
+        if (!ffi_attach_direct_stmt(nt, fb, fst[k]) || !ffi_attach_direct(nt, fst[k], &fname, &csym, &arr, &ret)) continue;
+        if (ffi_find_func(c, mname, fname) >= 0) continue;
+        int en = 0;
+        const int *els = nt_arr(nt, arr, "elements", &en);
+        char **specs = malloc(sizeof(char *) * (size_t)(en + 1));
+        if (!specs) { perror("malloc"); exit(1); }
+        for (int ei = 0; ei < en; ei++) specs[ei] = strdup(nt_str(nt, els[ei], "value"));
+        c->ffi_funcs = ffi_grow(c->ffi_funcs, c->n_ffi_funcs, &c->c_ffi_funcs, 16, sizeof(FfiFunc));
+        FfiFunc *f = &c->ffi_funcs[c->n_ffi_funcs++];
+        memset(f, 0, sizeof *f);
+        f->mod = strdup(mname);
+        f->name = strdup(fname);
+        f->csym = csym ? strdup(csym) : NULL;
+        f->ret = strdup(ret);
+        f->args = specs;
+        f->nargs = en;
+        f->via_fp = 1;
+      }
+      continue;
+    }
     int body = class_def_body(nt, id);
     int sn = 0;
     const int *stmts = body >= 0 ? nt_arr(nt, body, "body", &sn) : NULL;
@@ -5428,7 +5929,26 @@ void register_ffi_decls(Compiler *c) {
 
       if (sp_streq(dname, "ffi_lib")) {
         if (an < 1) ffi_decl_error(c, s, "`ffi_lib` needs a library name");
-        const char *libname = ffi_arg_str(nt, args[0]);
+        /* the link flag of a name, a file name or a path, or of the first
+           of an Array's candidates found here (ffi_lib_flag, #11363) */
+        const char *libname = NULL;
+        char flag[1024];
+        if (nt_kind(nt, args[0]) == NK_ArrayNode) {
+          int en = 0; const int *els = nt_arr(nt, args[0], "elements", &en);
+          const char *first = NULL;
+          for (int e = 0; e < en && !libname; e++) {
+            const char *nm = ffi_arg_str(nt, els[e]);
+            if (!nm) continue;
+            if (!first) first = nm;
+            if (ffi_lib_flag(nm, flag, sizeof flag, 1)) libname = flag;
+          }
+          if (!libname && first && ffi_lib_flag(first, flag, sizeof flag, 0)) libname = flag;
+          if (!libname) ffi_decl_error(c, s, "`ffi_lib` with an Array needs String library names");
+        }
+        else {
+          const char *nm = ffi_arg_str(nt, args[0]);
+          if (nm && ffi_lib_flag(nm, flag, sizeof flag, 0)) libname = flag;
+        }
         if (!libname) continue;  /* non-literal (e.g. a compile-time fold): tolerate */
         /* find or create the per-module lib entry, then semicolon-merge */
         int mi = -1;
@@ -5552,6 +6072,7 @@ void register_ffi_decls(Compiler *c) {
         c->ffi_funcs[fi].args  = arg_specs;
         c->ffi_funcs[fi].nargs = en;
         c->ffi_funcs[fi].blocking = blocking;
+        c->ffi_funcs[fi].via_fp = 0;
         continue;
       }
 
@@ -6843,7 +7364,7 @@ static int superclass_alias_target(Compiler *c, const char *name, int depth, int
   NodeKind vk = v >= 0 ? nt_kind(nt, v) : NK_NONE;
   if (vk == NK_ConstantReadNode || vk == NK_ConstantPathNode) {
     const char *vn = nt_str(nt, v, "name");
-    int k = vn ? comp_class_index(c, vn) : -1;
+    int k = vn ? const_node_class_index(c, v) : -1;
     return k >= 0 ? k : superclass_alias_target(c, vn, depth + 1, wr);
   }
   *wr = w;
@@ -7024,10 +7545,23 @@ static int inherited_alias_def_before(Compiler *c, int p, const char *od, int at
   return 0;
 }
 
+/* Does the load record place the original an alias names, a version of it at
+   the alias's point? Where it does not (a define_method whose name is
+   computed), nothing says which body the alias took. */
+static int alias_original_placed(Compiler *c, int ci, int a) {
+  ClassInfo *cls = &c->classes[ci];
+  const LrDef *d = NULL;
+  LoadPoint p = elab_point_of(c, cls->alias_node[a]);
+  return p.region >= 0 && elab_method_at(c, ci, cls->alias_old[a], cls->alias_sg && cls->alias_sg[a], p, &d) == ELAB_YES &&
+         d && !d->may && !d->unplaced;
+}
+
 /* An ancestor's method an alias took is the body in effect where the alias
    appears; one of the ancestors up to the owner `p` that defines the name
    again after it would take its place here, where CRuby keeps the earlier
-   body, so that is refused. */
+   body, so that is refused. This is the alias bound by name whose original
+   the record does not place (a define_method whose name is computed; a
+   placed one is a method of its class) */
 static void inherited_alias_refuse_later_def(Compiler *c, int ci, int a, int p) {
   ClassInfo *cls = &c->classes[ci];
   int at = cls->alias_node[a];
@@ -7039,13 +7573,9 @@ static void inherited_alias_refuse_later_def(Compiler *c, int ci, int a, int p) 
       Scope *sc = &c->scopes[si];
       if (sc->class_id != q || !sc->is_cmethod != !sg || !sc->name || !sp_streq(sc->name, cls->alias_old[a]) ||
           sc->def_node < 0 || prog_cmp_run(c, sc->def_node, at, at, "the alias reading") <= 0) continue;
-      /* the hidden alias of a forwarder (desugar_inherited_aliases) by
-         the name the program wrote */
-      const char *nw = cls->alias_new[a], *hash = strchr(nw, '#');
-      int nl = hash ? (int)(hash - nw) : (int)strlen(nw);
       char msg[512];
-      snprintf(msg, sizeof msg, "%s%s%.*s: alias of an inherited method that %s defines again after it is not supported; "
-               "see docs/limitations.md", cls->name, sg ? "." : "#", nl, nw, c->classes[q].name);
+      snprintf(msg, sizeof msg, "%s%s%s: alias of an inherited method that %s defines again after it is not supported; "
+               "see docs/limitations.md", cls->name, sg ? "." : "#", cls->alias_new[a], c->classes[q].name);
       unsupported_feature(c, at, msg);
       return;
     }
@@ -7104,7 +7634,7 @@ void resolve_inherited_aliases(Compiler *c) {
         if (!before && !(later && comp_method_in_class(c, p, od) >= 0) && comp_cmethod_in_class(c, p, od) < 0)
           continue;
         if (cls->alias_cls[a] != p) { cls->alias_cls[a] = p; comp_class_shape_changed(); }
-        if (before) inherited_alias_refuse_later_def(c, ci, a, p);
+        if (before && !alias_original_placed(c, ci, a)) inherited_alias_refuse_later_def(c, ci, a, p);
         break;
       }
     }
@@ -7623,8 +8153,12 @@ static void include_module_methods(Compiler *c, int ci, int mod_id, int guard, i
       ClassInfo *cif = &c->classes[ci];
       snprintf(inc_shadow, sizeof inc_shadow, "__inc %d %s",
                cif->prep_shadow_count++, src->name);
+      /* (its chain entry goes by the name it stands under: a guarded
+         copy's is its hidden one, `__prep N name`, which kept the entry
+         when the copy was renamed and left its super reaching nothing) */
+      const char *own_name = c->scopes[own].name;
       for (int kk = 0; kk < cif->nprep_chain; kk++)
-        if (sp_streq(cif->prep_from[kk], src->name)) {
+        if (sp_streq(cif->prep_from[kk], own_name)) {
           free(cif->prep_from[kk]); cif->prep_from[kk] = strdup(inc_shadow);
           break;
         }
@@ -8198,6 +8732,76 @@ static int body_mixin_dependencies_ready(Compiler *c, int ci, int body_node, con
   return ready;
 }
 
+/* A module no class includes, prepends or extends, through any chain of
+   modules, has no object its instance methods run on (an include through an
+   explicit receiver or into a live object is refused, so every mixin is one
+   of these). Its methods, and the copies a module it includes made in it, are
+   copied away with no copy left: reached by a name some class calls, they
+   were compiled with the module as self and refused the calls the module
+   leaves to its includers (`module Helpers; include StoreLocation; end`, which
+   nothing includes, made StoreLocation's methods Helpers' own). The top
+   level's includes still run as themselves (comp_scope_copied_away), and a
+   module whose instance_method is taken keeps its methods. */
+static void unbound_module_methods_away(Compiler *c) {
+  const NodeTable *nt = c->nt;
+  char *bound = calloc((size_t)(c->nclasses > 0 ? c->nclasses : 1), 1);
+  if (!bound) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  for (int k = 0; k < c->nclasses; k++) {
+    const ClassInfo *ci = &c->classes[k];
+    for (int e = 0; e < ci->nextended_mods; e++)
+      if (ci->extended_mods[e] >= 0 && ci->extended_mods[e] < c->nclasses) bound[ci->extended_mods[e]] = 1;
+    if (!comp_class_is_module(c, ci) || ci->is_builtin_const || ci->is_native_class || ci->cext_extension ||
+        (ci->name && is_builtin_reopen(ci->name)))
+      bound[k] = 1;
+  }
+  for (int i = 0; i < c->ntoplevel_includes; i++)
+    if (c->toplevel_includes[i] >= 0 && c->toplevel_includes[i] < c->nclasses) bound[c->toplevel_includes[i]] = 1;
+  for (int id = 0; id < nt->count; id++) {
+    if (nt_kind(nt, id) != NK_CallNode) continue;
+    const char *nm = nt_str(nt, id, "name");
+    if (!nm) continue;
+    int recv = nt_ref(nt, id, "receiver");
+    if (sp_streq(nm, "instance_method") || sp_streq(nm, "public_instance_method")) {
+      int k = recv >= 0 && (nt_kind(nt, recv) == NK_ConstantReadNode || nt_kind(nt, recv) == NK_ConstantPathNode)
+                ? const_node_class_index(c, recv) : -1;
+      if (k >= 0 && k < c->nclasses) bound[k] = 1;
+      continue;
+    }
+    /* a mixin the walk does not record (one under a condition, `extend M
+       if ...`) may still run: its module is bound. (A module's own include
+       of another binds that one too, which is harmless: that one's methods
+       are copied away into the including module, whose own binding is
+       what decides.) */
+    if (!(sp_streq(nm, "extend") || sp_streq(nm, "include") || sp_streq(nm, "prepend"))) continue;
+    int args = nt_ref(nt, id, "arguments"), argc = 0;
+    const int *argv = args >= 0 ? nt_arr(nt, args, "arguments", &argc) : NULL;
+    for (int a = 0; a < argc; a++) {
+      NodeKind ak = nt_kind(nt, argv[a]);
+      int k = ak == NK_ConstantReadNode || ak == NK_ConstantPathNode ? const_node_class_index(c, argv[a]) : -1;
+      if (k >= 0 && k < c->nclasses) bound[k] = 1;
+    }
+  }
+  for (int changed = 1; changed;) {
+    changed = 0;
+    for (int k = 0; k < c->nclasses; k++) {
+      if (!bound[k]) continue;
+      const ClassInfo *ci = &c->classes[k];
+      for (int m = 0; m < ci->nincluded_mods + ci->nprepended_mods; m++) {
+        int md = m < ci->nincluded_mods ? ci->included_mods[m] : ci->prepended_mods[m - ci->nincluded_mods];
+        if (md >= 0 && md < c->nclasses && !bound[md]) { bound[md] = 1; changed = 1; }
+      }
+    }
+  }
+  for (int s = 1; s < c->nscopes; s++) {
+    Scope *sc = &c->scopes[s];
+    if (sc->class_id < 0 || sc->class_id >= c->nclasses || bound[sc->class_id] || !sc->name || sc->is_cmethod ||
+        sc->is_module_function)
+      continue;
+    sc->is_transplanted_source = 1;
+  }
+  free(bound);
+}
+
 void register_includes(Compiler *c) {
   const NodeTable *nt = c->nt;
   g_list_has_c = c;
@@ -8280,6 +8884,7 @@ void register_includes(Compiler *c) {
         sc->is_transplanted_source = 1;
       }
   }
+  unbound_module_methods_away(c);
   if (g_inc_did_clone) register_locals(c);
 }
 
@@ -8543,7 +9148,7 @@ void unmark_referenced_module_sources(Compiler *c) {
     if (recv < 0) continue;
     if (nt_kind(nt, recv) != NK_ConstantReadNode && nt_kind(nt, recv) != NK_ConstantPathNode) continue;
     const char *cn = nt_str(nt, recv, "name");
-    int ci = cn ? comp_class_index(c, cn) : -1;
+    int ci = cn ? const_node_class_index(c, recv) : -1;
     if (ci < 0) continue;
     int args = nt_ref(nt, id, "arguments");
     int an = 0; const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &an) : NULL;
@@ -8799,7 +9404,7 @@ static int extend_arg_module(Compiler *c, int arg) {
   const char *mname = NULL;
   if (ak == NK_ConstantReadNode) mname = nt_str(nt, arg, "name");
   else if (ak == NK_ConstantPathNode) mname = nt_str(nt, arg, "name");
-  return mname ? comp_class_index(c, mname) : -1;
+  return mname ? const_node_class_index(c, arg) : -1;
 }
 
 /* Whether a body of class ci has a bare `extend` naming mod_id. */
@@ -8883,7 +9488,7 @@ void desugar_module_prepends(Compiler *c) {
       NodeKind ak = nt_kind(nt, a);
       const char *mn = ak == NK_ConstantReadNode || ak == NK_ConstantPathNode ? nt_str(nt, a, "name") : NULL;
       int pre[64];
-      int np = module_prepend_list(c, mn ? comp_class_index(c, mn) : -1, pre, 64);
+      int np = module_prepend_list(c, mn ? const_node_class_index(c, a) : -1, pre, 64);
       if (nn + np + 1 > cap) {
         cap = nn + np + 1 + an;
         nargs = realloc(nargs, sizeof(int) * (size_t)cap);
@@ -9209,6 +9814,8 @@ static int cmethod_needs_specialization_d(Compiler *c, int mi, int ci, int def_c
   int need = 0;
   if (has_new) *has_new = 0;
   for (int id = sn_next(c, mi, -1); id >= 0; id = sn_next(c, mi, id)) {
+    /* (and so does a super in an own allocate that reaches Class#allocate) */
+    if (allocate_super_reaches_class(c, id)) { if (has_new) *has_new = 1; need = 1; continue; }
     if (nt_kind(nt, id) != NK_CallNode) continue;
     /* `allocate` / `self.allocate` builds the calling class, as a bare `new` does */
     if (allocate_on_own_class(c, id) >= 0) { if (has_new) *has_new = 1; need = 1; continue; }
@@ -9447,8 +10054,9 @@ static void specialize_super_cmethod(Compiler *c, int own, int snap) {
   int cur = own;
   for (int depth = 0; depth < 32; depth++) {
     int par = comp_super_parent(c, from, 1);
-    int pdef = -1;
-    int pm = par >= 0 ? comp_cmethod_in_chain(c, par, own_name, &pdef) : -1;
+    MethodLookup ml = { .def_class = -1 };
+    int pm = par >= 0 ? call_target(c, -1, par, own_name, CT_CMETHOD | CT_REACH, &ml) : -1;
+    int pdef = pm >= 0 ? ml.def_class : -1;
     if (pm < 0 || pdef < 0 || !cmethod_reaches_class_ivar(c, pm, pdef, 0)) break;
     char behind[256];
     snprintf(behind, sizeof behind, "__inc %d %s", c->classes[ci].prep_shadow_count++, own_name);
@@ -9622,6 +10230,26 @@ void specialize_inherited_cls_new(Compiler *c) {
       for (int t = 0; t < ntgt; t++) specialize_cmethod_for(c, mi, NULL, def_cls, tgt[t], 0, -1);
     free(tgt);
   }
+  /* A host calls an inherited class method on the class value of a class
+     --ext-class exports with no call node in the program (sp_ext_send by
+     name), so the row of that class must run it on the class's own
+     class-level ivars: each exported descendant gets its own copy, chosen
+     as the escaping class values above are. */
+  if (g_ext_classes && *g_ext_classes)
+    for (int mi = 1; mi < snap; mi++) {
+      if (!c->scopes[mi].is_cmethod || !c->scopes[mi].name || c->scopes[mi].class_id < 0) continue;
+      int def_cls = c->scopes[mi].class_id;
+      const char *mname = c->scopes[mi].name;
+      for (int k = 0; k < c->nclasses; k++) {
+        if (k == def_cls || !is_descendant(c, k, def_cls) || !ext_class_exported(c, k)) continue;
+        int kmi = comp_cmethod_in_chain(c, k, mname, NULL);
+        if (kmi != mi && (kmi < snap || c->scopes[kmi].def_node != c->scopes[mi].def_node ||
+                          c->scopes[kmi].class_id == k)) continue;
+        int has_new = 0;
+        if (cmethod_needs_specialization(c, mi, k, def_cls, &has_new))
+          specialize_cmethod_for(c, mi, NULL, def_cls, k, 0, -1);
+      }
+    }
   /* a class's own class method whose super reaches its parent's */
   /* (the copies made above for subclasses as well: each copy's super runs
      on its own class) */
@@ -9728,6 +10356,9 @@ void specialize_inherited_cls_new(Compiler *c) {
        receiver's call can reach */
     if (!called_direct && class_value_escapes(c, src->class_id) &&
         name_called_on_dynamic_recv(c, s, &src->class_id, 1, node_count, &an)) called_direct = 1;
+    /* ... or if a host calls it by name through the table of --ext-class:
+       the thunk of the defining class's row is emitted against this source */
+    if (!called_direct && ext_scope_host_callable(c, s)) called_direct = 1;
     free(cmemo);
     if (!called_direct) src->is_transplanted_source = 1;
   }
@@ -10076,6 +10707,17 @@ void register_prepends(Compiler *c) {
   cell_writes_flush(c);
 }
 
+/* Does class ci define instance method `name` of its own: a def, or an
+   alias the record gives the class (elab_class_surface)? */
+static int class_defines_member(Compiler *c, int ci, const char *name) {
+  if (comp_method_in_class(c, ci, name) >= 0) return 1;
+  int n = 0;
+  const ElabSurface *v = elab_class_surface(c, ci, 0, &n);
+  for (int i = 0; i < n; i++)
+    if (v[i].alias && sp_streq(v[i].name, name)) return 1;
+  return 0;
+}
+
 /* Merge inherited ivar/reader/writer NAMES into subclasses so the struct
    layout is [parent ivars..., own ivars...] (cast-compatible). Types are
    propagated later in the fixpoint. Parent-first order. */
@@ -10214,24 +10856,30 @@ void inherit_members(Compiler *c) {
     free(old); free(oldt); free(old_ss); free(old_es); free(old_it); free(old_oa); free(old_os);
     free(old_oc); free(old_ni); free(old_ne); free(old_ae); free(old_aw); free(own_pin);
 
-    /* An inherited attribute the child overrides with a `def` stops there: the
-       def answers the name for the child and everything below it, so copying
-       the flag on let a grandchild read the attribute past the def -- and a
-       grandchild that re-declares the attribute looked like it had only
-       inherited it, so a `super` below it skipped to the def. An attribute
-       the parent undefines stops there too: copied on, it looked declared
-       again in the child, and a boxed `sub.x` read it. A Struct's readers
-       are its positional members, so they stay. */
+    /* An inherited attribute the child overrides with a `def` or an alias
+       stops there: the method answers the name for the child and everything
+       below it, so copying the flag on let a grandchild read the attribute
+       past it -- and a grandchild that re-declares the attribute looked like
+       it had only inherited it, so a `super` below it skipped to the def. An
+       alias's method may not exist yet (an ancestor's def's copy is made
+       once the mixins are in, register_alias_methods), so the record says.
+       An attribute the parent undefines stops there too: copied on, it
+       looked declared again in the child, and a boxed `sub.x` read it. A
+       Struct's readers are its positional members, so they stay. */
     for (int k = 0; k < pc->nreaders; k++) {
       int undeffed = 0;
       for (int j = 0; j < pc->nundefs && !undeffed; j++) undeffed = sp_streq(pc->undefs[j], pc->readers[k]);
-      if (comp_method_in_class(c, i, pc->readers[k]) < 0 && (!undeffed || ci->is_struct))
+      /* a reader the parent's own later def (or alias) replaces is not the
+         parent's method any more: the def answers the child too */
+      if (!ci->is_struct && elab_inst_attr_replaced(c, p, pc->readers[k])) continue;
+      if (!class_defines_member(c, i, pc->readers[k]) && (!undeffed || ci->is_struct))
         comp_add_reader(ci, pc->readers[k]);
     }
     for (int k = 0; k < pc->nwriters; k++) {
       char wn[300];
       snprintf(wn, sizeof wn, "%s=", pc->writers[k]);
-      if (comp_method_in_class(c, i, wn) < 0) comp_add_writer(ci, pc->writers[k]);
+      if (!ci->is_struct && elab_inst_attr_replaced(c, p, wn)) continue;
+      if (!class_defines_member(c, i, wn)) comp_add_writer(ci, pc->writers[k]);
     }
     }
     if (!progressed) break;   /* the rest are cycles or dangling parents */
@@ -11003,7 +11651,7 @@ static int pivs_param(Compiler *c, Scope *s, const char *pn, char *set, int dept
       int r = nt_ref(nt, u, "receiver");
       if (r < 0 || (nt_kind(nt, r) != NK_ConstantReadNode && nt_kind(nt, r) != NK_ConstantPathNode)) return 0;
       const char *rn = nt_str(nt, r, "name");
-      int rc = rn ? comp_class_index(c, rn) : -1;
+      int rc = rn ? const_node_class_index(c, r) : -1;
       if (rc < 0) { if (rn && is_builtin_class_name(rn)) continue; return 0; }
       if (comp_cmethod_in_chain(c, rc, "new", NULL) >= 0) return 0;
       if (comp_method_in_chain(c, rc, "initialize", NULL) != (int)(s - c->scopes)) continue;
@@ -11475,6 +12123,9 @@ static int pivs_value_uncached(Compiler *c, int v, char *set, int depth) {
       return 1;
     case NK_SelfNode: {
       Scope *s = comp_scope_of(c, v);
+      /* a yielding method's proc-form clone has its method's callers: the
+         clone itself is called by no Ruby call site of its own spelling */
+      if (s && s->is_proc_form && s->pf_source > 0 && s->pf_source <= c->nscopes) s = &c->scopes[s->pf_source - 1];
       if (s && s->def_node < 0 && s->class_id < 0) return pivs_note_class_value(c, v);
       if (s && s->is_cmethod && s->def_node >= 0) return pivs_note_cmethod_self(c, s);
       if (!s || s->is_cmethod || s->class_id < 0) return 0;
@@ -11901,7 +12552,7 @@ static int sg_writer_class(Compiler *c, int id, int recv) {
   NodeKind rk = nt_kind(nt, recv);
   if (rk == NK_ConstantReadNode || rk == NK_ConstantPathNode) {
     const char *cn = nt_str(nt, recv, "name");
-    return cn ? comp_class_index(c, cn) : -1;
+    return cn ? const_node_class_index(c, recv) : -1;
   }
   if (rk == NK_SelfNode) {
     Scope *s = comp_scope_of(c, id);
@@ -13330,12 +13981,8 @@ static void bc_walk(Bc *b, int id, const char *self, int mode) {
       target = bc_resolve(b, rv); target_known = target != NULL;
     }
     if (target && target[0] == '?') target_known = 0;
-    const char *m2 = nm;
     int a0 = 0;
-    if (nm && is_send_family(nm) && ac >= 1) {
-      m2 = bc_sym_arg(nt, av[0]);
-      a0 = 1;
-    }
+    const char *m2 = call_sent_name(nt, id, &a0);
     if (mode == 0 && m2 && sp_streq(m2, "const_set") && ac > a0) {
       const char *cn = bc_sym_arg(nt, av[a0]);
       if (cn && target_known) {
@@ -13435,18 +14082,49 @@ void refuse_unreachable_bare_constants(Compiler *c) {
   free(b);
 }
 
+/* Is class or module `cls` in class k's chain: k, a superclass, or a
+   module one of them includes? */
+static int ssc_in_chain(Compiler *c, int k, int cls) {
+  for (int d = 0; k >= 0 && k < c->nclasses && d < 64; k = c->classes[k].parent, d++)
+    if (comp_module_includes(c, k, cls, 0)) return 1;
+  return 0;
+}
+/* Can the receiver of a call on class k run a `def self.nm` that an
+   instance method makes (sg_self_in_method)? Its class is in k's chain.
+   For a bare or self call, self can also be an instance of a subclass of
+   k, so a def in a subclass counts too. An explicit receiver typed k holds
+   only k's instances (a value that can hold a subclass is typed poly). */
+static int ssc_def_reaches(Compiler *c, int k, const char *nm, int self_call) {
+  for (int s = 0; s < c->nscopes; s++) {
+    const Scope *sp = &c->scopes[s];
+    if (!sp->is_cmethod || !sp->name || !sp_streq(sp->name, nm) || sp->def_node < 0 ||
+        !nt_int(c->nt, sp->def_node, "sg_self_in_method", 0)) continue;
+    if (sp->class_id >= 0 && (ssc_in_chain(c, k, sp->class_id) || (self_call && ssc_in_chain(c, sp->class_id, k)))) return 1;
+  }
+  return 0;
+}
 /* See analyze_internal.h. */
 void refuse_self_singleton_calls(Compiler *c) {
   const NodeTable *nt = c->nt;
+  int any = 0;
+  for (int s = 0; s < c->nscopes && !any; s++)
+    any = c->scopes[s].is_cmethod && c->scopes[s].def_node >= 0 && nt_int(nt, c->scopes[s].def_node, "sg_self_in_method", 0);
+  if (!any) return;
   for (int id = comp_kind_first(c, NK_CallNode); id >= 0; id = comp_kind_next(c, id)) {
     const char *nm = nt_str(nt, id, "name");
     int recv = nt_ref(nt, id, "receiver"), sc = c->nscope[id], k = -1;
     if (!nm) continue;
+    int self_call = recv < 0 || nt_kind(nt, recv) == NK_SelfNode;
     if (recv >= 0) { TyKind rt = comp_ntype(c, recv); if (ty_is_object(rt)) k = ty_object_class(rt); }
     else if (sc >= 0 && c->scopes[sc].class_id >= 0 && !c->scopes[sc].is_cmethod) k = c->scopes[sc].class_id;
-    if (k < 0 || comp_method_in_chain(c, k, nm, NULL) >= 0) continue;
-    int cm = comp_cmethod_in_chain(c, k, nm, NULL);
-    if (cm < 0 || c->scopes[cm].def_node < 0 || !nt_int(nt, c->scopes[cm].def_node, "sg_self_in_method", 0)) continue;
+    if (k < 0) continue;
+    /* Refused also with an instance method of the name: the compiled call
+       runs it, but an instance that ran the def runs its own method. */
+    if (!ssc_def_reaches(c, k, nm, self_call)) {
+      if (comp_method_in_chain(c, k, nm, NULL) >= 0) continue;
+      int cm = comp_cmethod_in_chain(c, k, nm, NULL);
+      if (cm < 0 || c->scopes[cm].def_node < 0 || !nt_int(nt, c->scopes[cm].def_node, "sg_self_in_method", 0)) continue;
+    }
     unsupported_feature(c, id, "singleton method on self inside an instance method: self is whichever instance runs it, "
                                "and a compiled class cannot give one object a method of its own");
   }

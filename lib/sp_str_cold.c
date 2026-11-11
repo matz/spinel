@@ -158,9 +158,11 @@ static const char*sp_str_case_bin(const char*s,int mode){size_t l=sp_str_byte_le
 static const char*sp_str_case_map(const char*s,uint32_t(*fn)(uint32_t),int up){SP_GC_ROOT_STR(s);if(sp_str_is_binary(s))return sp_str_case_bin(s,up?0:1);
   size_t l=sp_str_byte_len(s);char*r=sp_str_alloc_raw(l*3+1);size_t oi=0;
   for(size_t i=0;i<l;){uint32_t cp;int n=sp_utf8_decode(s+i,&cp);i+=(size_t)n;
-    if(up&&cp==0xDF){r[oi++]='S';r[oi++]='S';continue;}
-    if(!up&&fn==sp_uc_tolower&&cp==0x130){r[oi++]='i';oi+=(size_t)sp_utf8_encode(0x307,r+oi);continue;}
-    oi+=(size_t)sp_utf8_encode(fn(cp),r+oi);}
+    uint32_t m=fn(cp);
+    /* a mapping to more than one codepoint ("ß".upcase is "SS") */
+    if(m==cp){uint32_t to[3];int k=sp_uc_special_of(up?SP_UC_UPPER:SP_UC_LOWER,cp,to);
+      if(k){for(int j=0;j<k;j++)oi+=(size_t)sp_utf8_encode(to[j],r+oi);continue;}}
+    oi+=(size_t)sp_utf8_encode(m,r+oi);}
   r[oi]=0;sp_str_set_len(r,oi);return r;
 }
 /* casecmp? compares the Unicode case FOLDING of both sides, not bytes under
@@ -169,13 +171,7 @@ static const char*sp_str_case_map(const char*s,uint32_t(*fn)(uint32_t),int up){S
    whose folding is not their lowercase: sharp s (and capital sharp s) fold to
    "ss", long s to "s", micro sign to Greek mu, and dotted capital I to "i"
    and a combining dot. */
-static size_t sp_uc_fold_into(uint32_t cp,char*o){
-  if(cp==0xDF||cp==0x1E9E){o[0]='s';o[1]='s';return 2;}
-  if(cp==0x17F){o[0]='s';return 1;}
-  if(cp==0xB5)return (size_t)sp_utf8_encode(0x3BC,o);
-  if(cp==0x130){o[0]='i';return 1+(size_t)sp_utf8_encode(0x307,o+1);}
-  return (size_t)sp_utf8_encode(sp_uc_tolower(cp),o);
-}
+static size_t sp_uc_fold_into(uint32_t cp,char*o){return sp_uc_fold_utf8(cp,o);}
 static char*sp_str_fold_buf(const char*s,size_t*out){
   size_t l=sp_str_byte_len(s);char*r=(char*)malloc(l*3+1);if(!r){perror("malloc");exit(1);}size_t oi=0;
   for(size_t i=0;i<l;){uint32_t cp;int n=sp_utf8_decode(s+i,&cp);i+=(size_t)n;
@@ -197,13 +193,29 @@ sp_bool sp_str_casecmp_p(const char*a,const char*b){if(!a)sp_nil_recv("casecmp?"
 const char*sp_str_upcase(const char*s){SP_GC_ROOT_STR(s);if(!s)sp_nil_recv("upcase");return sp_str_case_map(s,sp_uc_toupper,1);}
 const char*sp_str_downcase(const char*s){SP_GC_ROOT_STR(s);if(!s)sp_nil_recv("downcase");return sp_str_case_map(s,sp_uc_tolower,0);}
 static const char*sp_str_swapcase_f(const char*s,uint32_t(*fu)(uint32_t),uint32_t(*fl)(uint32_t)){SP_GC_ROOT_STR(s);if(!s)sp_nil_recv("swapcase");if(sp_str_is_binary(s))return sp_str_case_bin(s,2);size_t l=sp_str_byte_len(s);char*r=sp_str_alloc_raw(l*3+1);size_t oi=0;for(size_t i=0;i<l;){uint32_t cp;int n=sp_utf8_decode(s+i,&cp);i+=(size_t)n;
-    if(cp==0xDF){r[oi++]='S';r[oi++]='S';continue;}
-    if(fl==sp_uc_tolower&&cp==0x130){r[oi++]='i';oi+=(size_t)sp_utf8_encode(0x307,r+oi);continue;}
-    uint32_t up=fu(cp),lo=fl(cp);if(up!=cp){/* cp is lowercase -> uppercase */
+    uint32_t up=fu(cp),lo=fl(cp);uint32_t to[3];int k;
+    /* where CRuby's swapcase is neither ("ǅ" swaps to "dž") */
+    if(fu==sp_uc_toupper&&(k=sp_uc_special_of(SP_UC_SWAP,cp,to))){for(int j=0;j<k;j++)oi+=(size_t)sp_utf8_encode(to[j],r+oi);}
+    else if(up!=cp){/* cp is lowercase -> uppercase */
 oi+=(size_t)sp_utf8_encode(up,r+oi);}
 else if(lo!=cp){/* cp is uppercase -> lowercase */oi+=(size_t)sp_utf8_encode(lo,r+oi);}
+/* a mapping to more than one codepoint: "ß" upcases to "SS", "İ" downcases to "i̇" */
+else if((k=sp_uc_special_of(SP_UC_UPPER,cp,to))||(k=sp_uc_special_of(SP_UC_LOWER,cp,to))){for(int j=0;j<k;j++)oi+=(size_t)sp_utf8_encode(to[j],r+oi);}
 else oi+=(size_t)sp_utf8_encode(cp,r+oi);}r[oi]=0;sp_str_set_len(r,oi);return r;}
 const char*sp_str_swapcase(const char*s){return sp_str_swapcase_f(s,sp_uc_toupper,sp_uc_tolower);}
+/* downcase(:fold): the full Unicode case folding ("ß" folds to "ss"); a
+   BINARY String folds A-Z only (#11345) */
+const char*sp_str_downcase_fold(const char*s){SP_GC_ROOT_STR(s);if(!s)sp_nil_recv("downcase");if(sp_str_is_binary(s))return sp_str_case_bin(s,1);
+  size_t l=sp_str_byte_len(s);char*r=sp_str_alloc_raw(l*3+1);size_t oi=0;
+  for(size_t i=0;i<l;){uint32_t cp;int n=sp_utf8_decode(s+i,&cp);i+=(size_t)n;
+    if(n==1&&cp>=0x80){r[oi++]=(char)cp;continue;}
+    oi+=sp_uc_fold_utf8(cp,r+oi);}
+  r[oi]=0;sp_str_set_len(r,oi);return r;}
+/* :fold is for downcasing only (CRuby's ArgumentError) */
+SP_NORETURN static void sp_str_fold_not_down(void){sp_raise_cls("ArgumentError","option :fold only allowed for downcasing");}
+const char*sp_str_upcase_fold(const char*s){(void)s;sp_str_fold_not_down();}
+const char*sp_str_capitalize_fold(const char*s){(void)s;sp_str_fold_not_down();}
+const char*sp_str_swapcase_fold(const char*s){(void)s;sp_str_fold_not_down();}
 /* The `:ascii` option (upcase(:ascii)) restricts folding to A-Z/a-z and leaves
    every non-ASCII byte untouched, so these copy byte-for-byte. */
 const char*sp_str_upcase_ascii(const char*s){SP_GC_ROOT_STR(s);if(!s)sp_nil_recv("upcase");size_t l=sp_str_byte_len(s);char*r=sp_str_alloc_raw(l+1);for(size_t i=0;i<l;i++){unsigned char ch=(unsigned char)s[i];r[i]=(ch>='a'&&ch<='z')?(char)(ch-32):(char)ch;}r[l]=0;sp_str_set_len(r,l);return sp_str_bin_like(s,r);}
@@ -253,8 +265,8 @@ const char*sp_str_dump(const char*s){SP_GC_ROOT_STR(s);
   }
   out[oi++]='"';out[oi]=0;sp_str_set_len(out,oi);return out;
 }
-const char*sp_str_delete_prefix(const char*s,const char*p){SP_GC_ROOT_STR(s);SP_GC_ROOT_STR(p);if(!s)sp_nil_recv("delete_prefix");if(!p)return SP_ONE_ANSWER(s);size_t sl=sp_str_byte_len(s),pl=sp_str_byte_len(p);if(pl<=sl&&memcmp(s,p,pl)==0){char*r=sp_str_alloc_raw(sl-pl+1);memcpy(r,s+pl,sl-pl+1);sp_str_set_len(r,sl-pl);return sp_str_bin_like(s,r);}char*r=sp_str_alloc_raw(sl+1);memcpy(r,s,sl+1);sp_str_set_len(r,sl);return sp_str_bin_like(s,r);}
-const char*sp_str_delete_suffix(const char*s,const char*p){SP_GC_ROOT_STR(s);SP_GC_ROOT_STR(p);if(!s)sp_nil_recv("delete_suffix");if(!p)return SP_ONE_ANSWER(s);size_t sl=sp_str_byte_len(s),pl=sp_str_byte_len(p);if(pl<=sl&&memcmp(s+sl-pl,p,pl)==0){char*r=sp_str_alloc_raw(sl-pl+1);memcpy(r,s,sl-pl);r[sl-pl]=0;sp_str_set_len(r,sl-pl);return sp_str_bin_like(s,r);}char*r=sp_str_alloc_raw(sl+1);memcpy(r,s,sl+1);sp_str_set_len(r,sl);return sp_str_bin_like(s,r);}
+const char*sp_str_delete_prefix(const char*s,const char*p){SP_GC_ROOT_STR(s);SP_GC_ROOT_STR(p);if(!s)sp_nil_recv("delete_prefix");if(!p)return sp_str_one_answer(s);size_t sl=sp_str_byte_len(s),pl=sp_str_byte_len(p);if(pl<=sl&&memcmp(s,p,pl)==0){char*r=sp_str_alloc_raw(sl-pl+1);memcpy(r,s+pl,sl-pl+1);sp_str_set_len(r,sl-pl);return sp_str_bin_like(s,r);}char*r=sp_str_alloc_raw(sl+1);memcpy(r,s,sl+1);sp_str_set_len(r,sl);return sp_str_bin_like(s,r);}
+const char*sp_str_delete_suffix(const char*s,const char*p){SP_GC_ROOT_STR(s);SP_GC_ROOT_STR(p);if(!s)sp_nil_recv("delete_suffix");if(!p)return sp_str_one_answer(s);size_t sl=sp_str_byte_len(s),pl=sp_str_byte_len(p);if(pl<=sl&&memcmp(s+sl-pl,p,pl)==0){char*r=sp_str_alloc_raw(sl-pl+1);memcpy(r,s,sl-pl);r[sl-pl]=0;sp_str_set_len(r,sl-pl);return sp_str_bin_like(s,r);}char*r=sp_str_alloc_raw(sl+1);memcpy(r,s,sl+1);sp_str_set_len(r,sl);return sp_str_bin_like(s,r);}
 /* strip / lstrip / rstrip. CRuby strips the set "\0\t\n\v\f\r " from the
    ends -- i.e. isspace() plus the NUL byte. Use sp_str_byte_len (not
    strlen) so a heap string carrying an embedded NUL (e.g. from pack /
@@ -299,12 +311,18 @@ const char*sp_str_chop(const char*s){SP_GC_ROOT_STR(s);if(!s)sp_nil_recv("chop")
    opportunistic NUL policy -- fix what is met). */
 /* slice!(str): s without the first occurrence of pat, or s itself when there
    is none. Unlike sub it sets no `$~`, as CRuby's slice! sets none. */
-const char*sp_str_remove_first(const char*s,const char*pat){SP_GC_ROOT_STR(s);SP_GC_ROOT_STR(pat);if(!s||!pat)return SP_ONE_ANSWER(s);size_t pl=sp_str_byte_len(pat),sl=sp_str_byte_len(s);const char*f=sp_bytestr(s,sl,pat,pl);if(!f)return SP_ONE_ANSWER(s);size_t n=(size_t)(f-s);char*r=sp_str_alloc_raw(sl-pl+1);memcpy(r,s,n);memcpy(r+n,f+pl,sl-n-pl);r[sl-pl]=0;sp_str_set_len(r,sl-pl);return r;}
-const char*sp_str_sub(const char*s,const char*pat,const char*rep){SP_GC_ROOT_STR(s);SP_GC_ROOT_STR(pat);SP_GC_ROOT_STR(rep);if(!s)sp_nil_recv("sub");if(!pat||!rep)return SP_ONE_ANSWER(s);size_t pl0=sp_str_byte_len(pat),sl0=sp_str_byte_len(s);const char*f=sp_bytestr(s,sl0,pat,pl0);if(!f){if(sp_re_track_last)sp_re_clear_last_match();return sp_str_dup(s);}sp_re_sub_matched=1;if(sp_re_track_last)sp_re_set_lit_match(s,(sp_int)(f-s),(sp_int)(f-s+pl0));size_t el=0;char*rep_exp=sp_str_rep_expand(rep,pat,pl0,&el);const char*rp=rep_exp?rep_exp:rep;size_t pl=pl0,rl=rep_exp?el:sp_str_byte_len(rp),sl=sl0;char*r=sp_str_alloc_raw(sl-pl+rl+1);size_t n=f-s;memcpy(r,s,n);memcpy(r+n,rp,rl);memcpy(r+n+rl,f+pl,sl-n-pl);r[sl-pl+rl]=0;sp_str_set_len(r,sl-pl+rl);if(rep_exp)free(rep_exp);return sp_str_bin_like(s,r);}
-static const char*sp_str_capitalize_f(const char*s,uint32_t(*fu)(uint32_t),uint32_t(*fl)(uint32_t)){SP_GC_ROOT_STR(s);if(!s)sp_nil_recv("capitalize");if(sp_str_is_binary(s))return sp_str_case_bin(s,3);size_t l=sp_str_byte_len(s);char*r=sp_str_alloc_raw(l*3+1);size_t oi=0;int first=1;for(size_t i=0;i<l;){uint32_t cp;int n=sp_utf8_decode(s+i,&cp);i+=(size_t)n;if(first){uint32_t u=fu(cp);if(cp==0xDF){r[oi++]='S';r[oi++]='s';}
-else oi+=(size_t)sp_utf8_encode(u,r+oi);first=0;}
-else if(fl==sp_uc_tolower&&cp==0x130){r[oi++]='i';oi+=(size_t)sp_utf8_encode(0x307,r+oi);}
-else oi+=(size_t)sp_utf8_encode(fl(cp),r+oi);}r[oi]=0;sp_str_set_len(r,oi);return r;}
+const char*sp_str_remove_first(const char*s,const char*pat){SP_GC_ROOT_STR(s);SP_GC_ROOT_STR(pat);if(!s||!pat)return sp_str_one_answer(s);size_t pl=sp_str_byte_len(pat),sl=sp_str_byte_len(s);const char*f=sp_bytestr(s,sl,pat,pl);if(!f)return sp_str_one_answer(s);size_t n=(size_t)(f-s);char*r=sp_str_alloc_raw(sl-pl+1);memcpy(r,s,n);memcpy(r+n,f+pl,sl-n-pl);r[sl-pl]=0;sp_str_set_len(r,sl-pl);return r;}
+const char*sp_str_sub(const char*s,const char*pat,const char*rep){SP_GC_ROOT_STR(s);SP_GC_ROOT_STR(pat);SP_GC_ROOT_STR(rep);if(!s)sp_nil_recv("sub");if(!pat||!rep)return sp_str_one_answer(s);size_t pl0=sp_str_byte_len(pat),sl0=sp_str_byte_len(s);const char*f=sp_bytestr(s,sl0,pat,pl0);if(!f){if(sp_re_track_last)sp_re_clear_last_match();return sp_str_dup(s);}sp_re_sub_matched=1;if(sp_re_track_last)sp_re_set_lit_match(s,(sp_int)(f-s),(sp_int)(f-s+pl0));size_t el=0;char*rep_exp=sp_str_rep_expand(rep,pat,pl0,&el);const char*rp=rep_exp?rep_exp:rep;size_t pl=pl0,rl=rep_exp?el:sp_str_byte_len(rp),sl=sl0;char*r=sp_str_alloc_raw(sl-pl+rl+1);size_t n=f-s;memcpy(r,s,n);memcpy(r+n,rp,rl);memcpy(r+n+rl,f+pl,sl-n-pl);r[sl-pl+rl]=0;sp_str_set_len(r,sl-pl+rl);if(rep_exp)free(rep_exp);return sp_str_bin_like(s,r);}
+static const char*sp_str_capitalize_f(const char*s,uint32_t(*fu)(uint32_t),uint32_t(*fl)(uint32_t)){SP_GC_ROOT_STR(s);if(!s)sp_nil_recv("capitalize");if(sp_str_is_binary(s))return sp_str_case_bin(s,3);size_t l=sp_str_byte_len(s);char*r=sp_str_alloc_raw(l*3+1);size_t oi=0;int first=1;for(size_t i=0;i<l;){uint32_t cp;int n=sp_utf8_decode(s+i,&cp);i+=(size_t)n;if(first){
+  /* the first character's titlecase ("ǆ" is "ǅ", "ß" is "Ss"); a Turkic
+     mapping of i/I first */
+  uint32_t u=fu(cp);
+  if(u!=sp_uc_toupper(cp))oi+=(size_t)sp_utf8_encode(u,r+oi);
+  else oi+=sp_uc_title_utf8(cp,r+oi);
+  first=0;}
+else{uint32_t lo=fl(cp);uint32_t to[3];int k;
+  if(lo==cp&&(k=sp_uc_special_of(SP_UC_LOWER,cp,to))){for(int j=0;j<k;j++)oi+=(size_t)sp_utf8_encode(to[j],r+oi);}
+  else oi+=(size_t)sp_utf8_encode(lo,r+oi);}}r[oi]=0;sp_str_set_len(r,oi);return r;}
 const char*sp_str_capitalize(const char*s){return sp_str_capitalize_f(s,sp_uc_toupper,sp_uc_tolower);}
 static uint32_t sp_uc_toupper_tr(uint32_t c){return c==0x69?0x130:c==0x131?0x49:sp_uc_toupper(c);}
 static uint32_t sp_uc_tolower_tr(uint32_t c){return c==0x49||c==0x131?0x131:c==0x130?0x69:sp_uc_tolower(c);}
@@ -415,7 +433,7 @@ static char *sp_str_rep_expand(const char *rep, const char *match, size_t mlen, 
 }
 const char*sp_str_gsub(const char*s,const char*pat,const char*rep){SP_GC_ROOT_STR(s);SP_GC_ROOT_STR(pat);SP_GC_ROOT_STR(rep);
   if(!s)sp_nil_recv("gsub");
-  if(!pat||!rep)return SP_ONE_ANSWER(s);
+  if(!pat||!rep)return sp_str_one_answer(s);
   /* byte lengths and a byte-exact search throughout: strlen/strstr stop at an
      embedded NUL, so a subject or pattern holding one was cut short (the
      opportunistic NUL policy). */

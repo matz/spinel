@@ -22,14 +22,27 @@ class Date
   def strftime(format = DEFAULT_STRFTIME_FMT)
     if format.equal?(DEFAULT_STRFTIME_FMT)
       internal_civil unless @year
-      return fast_ymd.force_encoding(Encoding::US_ASCII)
+      result = fast_ymd.force_encoding(Encoding::US_ASCII)
+      fmt = DEFAULT_STRFTIME_FMT
+    else
+      fmt = Date.__send__(:to_string_value, format)
+      if fmt == YMD_FMT
+        internal_civil unless @year
+        result = fast_ymd.force_encoding(Encoding::US_ASCII)
+      else
+        result = internal_strftime(fmt).force_encoding(fmt.encoding)
+      end
     end
-    fmt = Date.__send__(:string_value, format)
-    if fmt == YMD_FMT
-      internal_civil unless @year
-      return fast_ymd.force_encoding(Encoding::US_ASCII)
+    # The C extension formats into an output buffer that grows 1024, 2048, ...
+    # and gives up with Errno::ERANGE once the buffer would reach 1024 * flen
+    # (flen = format string length) while still not fitting. The effective
+    # limit is thus the smallest 1024 * 2**k that is >= 1024 * flen, i.e.
+    # 1024 << ceil(log2(flen)); output whose byte length reaches it raises.
+    # The limit is always >= 1024, so skip the check entirely for shorter output.
+    if result.bytesize >= 1024
+      raise Errno::ERANGE, "strftime" if result.bytesize >= 1024 << (fmt.bytesize - 1).bit_length
     end
-    internal_strftime(fmt).force_encoding(fmt.encoding)
+    result
   end
 
   private
@@ -41,20 +54,15 @@ class Date
       internal_civil unless @year
       return fast_ymd
     when '%H:%M:%S', '%T', '%X'
-      return instance_of?(Date) ? +'00:00:00' : "#{PAD2[internal_hour]}:#{PAD2[internal_min]}:#{PAD2[internal_sec]}"
+      # +: this becomes the result string, which #strftime force_encodes in
+      # place, so it must be mutable (strftime_hms may be a frozen literal).
+      return +strftime_hms
     when '%m/%d/%y', '%D', '%x'
       internal_civil unless @year
       return "#{PAD2[@month]}/#{PAD2[@day]}/#{PAD2[@year % 100]}"
     when '%Y-%m-%dT%H:%M:%S%z'
       internal_civil unless @year
-      if instance_of?(Date)
-        return fast_ymd << 'T00:00:00+0000'
-      else
-        of = of_seconds
-        sign = of < 0 ? '-' : '+'
-        abs = of.abs
-        return "#{fast_ymd}T#{PAD2[internal_hour]}:#{PAD2[internal_min]}:#{PAD2[internal_sec]}#{sign}#{PAD2[abs / 3600]}#{PAD2[(abs % 3600) / 60]}"
-      end
+      return "#{fast_ymd}T#{strftime_hms}#{strftime_zoff}"
     when '%a %b %e %H:%M:%S %Y', '%c'
       internal_civil unless @year
       return fmt_asctime_str
@@ -88,7 +96,7 @@ class Date
       end
 
       # Quick dispatch: if next char is a simple letter spec (A-Z excluding E/O,
-      # or a-z), skip flag/width/prec parsing entirely.
+      # or a-z), skip flag/width parsing entirely.
       if (quick = sc.scan(/[A-DFG-NP-Za-z]/))
         fast = fast_spec(quick.ord)
         if fast
@@ -98,41 +106,74 @@ class Date
         sc.unscan
       end
 
+      # Record the position just after '%' so the original text can be
+      # restored verbatim if the spec turns out to be invalid.
+      spec_start = sc.charpos
+
       # Parse flags (bitmask)
       flags = 0
-      colons = 0
       while (f = sc.scan(/[-_0^#]/))
         case f
         when '-' then flags |= FL_LEFT
-        when '_' then flags |= FL_SPACE
-        when '0' then flags |= FL_ZERO
+        # '_' (space) and '0' (zero) padding are mutually exclusive; whichever
+        # is specified last wins, matching the C extension.
+        when '_' then flags = (flags | FL_SPACE) & ~FL_ZERO
+        when '0' then flags = (flags | FL_ZERO) & ~FL_SPACE
         when '^' then flags |= FL_UPPER
         when '#' then flags |= FL_CHCASE
         end
-      end
-      if (c = sc.scan(/:+/))
-        colons = c.length
       end
 
       # Parse width
       width = sc.scan(/\d+/)&.to_i
       raise Errno::ERANGE, "strftime" if width && width > STRFTIME_MAX_WIDTH
 
-      # Parse precision (after '.')
-      prec = sc.skip(/\./) ? (sc.scan(/\d+/)&.to_i || 0) : nil
-
-      # Post-width colons (for %8:z, %11::z etc.)
-      if (c = sc.scan(/:+/))
-        colons += c.length
+      # Flags must precede the width. A flag appearing after the width makes
+      # the spec invalid, so emit what was scanned so far verbatim (as the C
+      # extension does) and resume scanning from the stray flag.
+      if sc.check(/[-_0^#]/)
+        result << '%' << fmt[spec_start...sc.charpos]
+        next
       end
+
+      # The C extension's strftime grammar has no precision field, so a '.'
+      # here makes the spec invalid. Emit the text up to and including it
+      # verbatim (as the C extension does) and resume scanning after it.
+      if sc.skip(/\./)
+        result << '%' << fmt[spec_start...sc.charpos]
+        next
+      end
+
+      # Colons follow the flags and width, and are only meaningful for %z.
+      colons = (c = sc.scan(/:+/)) ? c.length : 0
 
       # Locale modifier (%E or %O)
       locale_mod = sc.scan(/[EO]/)&.ord
 
       spec = sc.getch&.ord
 
-      # Inline fast path: no flags, no width, no prec, no locale mod, no colons
-      if flags == 0 && width.nil? && prec.nil? && locale_mod.nil? && colons == 0
+      # Colons are valid only for %z and at most three of them. Any other use
+      # (a colon before the width, a colon with a non-z spec, or four or more
+      # colons) is invalid, and the C extension emits the original text
+      # literally rather than formatting it.
+      if colons > 0 && (spec != 122 || colons > 3)
+        result << '%' << fmt[spec_start...sc.charpos]
+        next
+      end
+
+      # A locale modifier (%E / %O) is only valid for certain conversions.
+      # When it is not, the C extension emits the original text verbatim,
+      # including any width, colons, and flags, so restore and emit it here.
+      if locale_mod
+        valid = locale_mod == 69 ? STRFTIME_E_VALID_BYTES : STRFTIME_O_VALID_BYTES  # 69='E'
+        unless valid.include?(spec)
+          result << '%' << fmt[spec_start...sc.charpos]
+          next
+        end
+      end
+
+      # Inline fast path: no flags, no width, no locale mod, no colons
+      if flags == 0 && width.nil? && locale_mod.nil? && colons == 0
         fast = fast_spec(spec)
         if fast
           result << fast
@@ -140,7 +181,7 @@ class Date
         end
       end
 
-      result << format_spec_b(spec, flags, colons, width, prec, locale_mod)
+      result << format_spec_b(spec, flags, colons, width)
     end
 
     result
@@ -153,23 +194,17 @@ class Date
     d_s = d < 10 ? " #{d}" : d.to_s
     y = @year
     y_s = y >= 1000 ? y.to_s : (y >= 0 ? format('%04d', y) : format('-%04d', -y))
-    if instance_of?(Date)
-      "#{ASCTIME_PREFIX[w][@month]}#{d_s} 00:00:00 #{y_s}"
-    else
-      "#{ASCTIME_PREFIX[w][@month]}#{d_s} #{PAD2[internal_hour]}:#{PAD2[internal_min]}:#{PAD2[internal_sec]} #{y_s}"
-    end
+    "#{ASCTIME_PREFIX[w][@month]}#{d_s} #{strftime_hms} #{y_s}"
   end
 
-  # Inline fast path for common specs with default formatting (no flags/width/prec)
+  # Inline fast path for common specs with default formatting (no flags/width)
   def fast_spec(spec)
     case spec
     when 89  # 'Y'
       internal_civil unless @year
       y = @year
       if y >= 1000
-        s = y.to_s
-        raise Errno::ERANGE, "strftime" if s.length >= STRFTIME_MAX_COPY_LEN
-        s
+        y.to_s
       elsif y >= 0
         format('%04d', y)
       else
@@ -192,15 +227,15 @@ class Date
     when 83  # 'S'
       PAD2[internal_sec]
     when 97  # 'a'
-      STRFTIME_DAYS_ABBR[(@jd + 1) % 7]
+      ABBR_DAYNAMES[(@jd + 1) % 7]
     when 65  # 'A'
-      STRFTIME_DAYS_FULL[(@jd + 1) % 7]
+      DAYNAMES[(@jd + 1) % 7]
     when 98, 104  # 'b', 'h'
       internal_civil unless @year
-      STRFTIME_MONTHS_ABBR[@month]
+      ABBR_MONTHNAMES[@month]
     when 66  # 'B'
       internal_civil unless @year
-      STRFTIME_MONTHS_FULL[@month]
+      MONTHNAMES[@month]
     when 112 # 'p'
       internal_hour < 12 ? 'AM' : 'PM'
     when 80  # 'P'
@@ -230,10 +265,7 @@ class Date
     when 90  # 'Z'
       zone_str
     when 122 # 'z'
-      of = of_seconds
-      sign = of < 0 ? '-' : '+'
-      abs = of.abs
-      "#{sign}#{PAD2[abs / 3600]}#{PAD2[(abs % 3600) / 60]}"
+      strftime_zoff
     when 115 # 's'
       ((@jd - 2440588) * 86400 - of_seconds + internal_hour * 3600 + internal_min * 60 + internal_sec).to_s
     # Composite specs — inline expansion
@@ -244,43 +276,28 @@ class Date
       internal_civil unless @year
       fast_ymd
     when 84, 88  # 'T', 'X'
-      instance_of?(Date) ? '00:00:00' : "#{PAD2[internal_hour]}:#{PAD2[internal_min]}:#{PAD2[internal_sec]}"
+      strftime_hms
     when 68, 120  # 'D', 'x'
       internal_civil unless @year
       "#{PAD2[@month]}/#{PAD2[@day]}/#{PAD2[@year % 100]}"
     when 82  # 'R'
-      instance_of?(Date) ? '00:00' : "#{PAD2[internal_hour]}:#{PAD2[internal_min]}"
+      strftime_hm
     when 114  # 'r'
-      if instance_of?(Date)
-        '12:00:00 AM'
-      else
-        h = internal_hour % 12
-        h = 12 if h == 0
-        "#{PAD2[h]}:#{PAD2[internal_min]}:#{PAD2[internal_sec]} #{internal_hour < 12 ? 'AM' : 'PM'}"
-      end
+      strftime_r12
     else
       nil  # fall through to format_spec_b
     end
   end
 
-  # Full spec handling with bitmask flags (called when fast_spec returns nil or flags/width/prec present)
-  def format_spec_b(spec, flags, colons, width, prec, locale_mod)
-    # Handle %E/%O locale modifiers
-    if locale_mod
-      valid = locale_mod == 69 ? STRFTIME_E_VALID_BYTES : STRFTIME_O_VALID_BYTES  # 69='E'
-      unless valid.include?(spec)
-        mod_chr = locale_mod == 69 ? 'E' : 'O'
-        return "%#{mod_chr}#{spec&.chr}"
-      end
-    end
-
+  # Full spec handling with bitmask flags (called when fast_spec returns nil or flags/width present)
+  def format_spec_b(spec, flags, colons, width)
     case spec
     when 89, 71  # 'Y', 'G'
       y = spec == 89 ? year : cwyear
-      fmt_year(y, width, prec, flags)
+      fmt_year(y, width, flags)
     when 67  # 'C'
       cent = year.div(100)
-      pad_num(cent, width || 2, flags)
+      pad_num(cent, width || 2, flags, zero: true)
     when 121 # 'y'
       pad_num(year % 100, width || 2, flags, zero: true)
     when 103 # 'g'
@@ -314,26 +331,26 @@ class Date
       ms = (sec_frac * (10**w)).floor
       ms.to_s.rjust(w, '0')
     when 78  # 'N'
-      w = width || prec || 9
+      w = width || 9
       ns = (sec_frac * (10**w)).floor
       ns.to_s.rjust(w, '0')
     when 115 # 's'
       unix = (@jd - 2440588) * 86400 - of_seconds +
              internal_hour * 3600 + internal_min * 60 + internal_sec
-      pad_num(unix, width || 1, flags)
+      pad_num(unix, width || 1, flags, zero: true)
     when 81  # 'Q'
       ms = ((@jd - 2440588) * 86400 - of_seconds +
             internal_hour * 3600 + internal_min * 60 + internal_sec) * 1000 +
            (sec_frac * 1000).floor
-      pad_num(ms, width || 1, flags)
+      pad_num(ms, width || 1, flags, zero: true)
     when 65  # 'A'
-      fmt_str(STRFTIME_DAYS_FULL[wday], width, flags)
+      fmt_str(DAYNAMES[wday], width, flags)
     when 97  # 'a'
-      fmt_str(STRFTIME_DAYS_ABBR[wday], width, flags)
+      fmt_str(ABBR_DAYNAMES[wday], width, flags)
     when 66  # 'B'
-      fmt_str(STRFTIME_MONTHS_FULL[month], width, flags)
+      fmt_str(MONTHNAMES[month], width, flags)
     when 98, 104  # 'b', 'h'
-      fmt_str(STRFTIME_MONTHS_ABBR[month], width, flags)
+      fmt_str(ABBR_MONTHNAMES[month], width, flags)
     when 112 # 'p'
       fmt_str(internal_hour < 12 ? 'AM' : 'PM', width, flags)
     when 80  # 'P'
@@ -341,11 +358,11 @@ class Date
     when 90  # 'Z'
       fmt_str(zone_str, width, flags)
     when 122 # 'z'
-      fmt_z(colons, width, prec, flags)
+      fmt_z(colons, width, flags)
     when 117 # 'u'
-      pad_num(cwday, width || 1, flags)
+      pad_num(cwday, width || 1, flags, zero: true)
     when 119 # 'w'
-      pad_num(wday, width || 1, flags)
+      pad_num(wday, width || 1, flags, zero: true)
     when 85  # 'U'
       pad_num(week_number(0), width || 2, flags, zero: true)
     when 87  # 'W'
@@ -353,12 +370,9 @@ class Date
     when 86  # 'V'
       pad_num(cweek, width || 2, flags, zero: true)
     when 37  # '%'
-      '%'
-    when 43  # '+'
-      s = internal_strftime('%a %b %e %H:%M:%S %Z %Y')
-      fmt_str(s, width, flags)
+      fmt_str('%', width, flags)
     else
-      # Try composite
+      # Try composite (includes '+', see STRFTIME_COMPOSITE_BYTE)
       expansion = STRFTIME_COMPOSITE_BYTE[spec]
       if expansion
         s = internal_strftime(expansion)
@@ -369,29 +383,20 @@ class Date
     end
   end
 
-  # Format year (handles negative years, precision, and all flag variants)
-  def fmt_year(y, width, prec, flags)
-    if prec
-      s = y.abs.to_s.rjust(prec, '0')
-      s = (y < 0 ? '-' : '') + s
-    elsif flags & FL_LEFT != 0
-      s = (y < 0 ? '-' : '') + y.abs.to_s
+  # Format year (handles negative years and all flag variants)
+  def fmt_year(y, width, flags)
+    # The result is always numeric (digits with an optional leading '-'), so the
+    # upper/chcase flags are no-ops and need no handling here.
+    sign = y < 0 ? '-' : ''
+    if flags & FL_LEFT != 0
+      sign + y.abs.to_s
     else
-      default_w = y < 0 ? 5 : 4
-      w = width || default_w
+      w = width || (y < 0 ? 5 : 4)
       if flags & FL_SPACE != 0
-        raw = (y < 0 ? '-' : '') + y.abs.to_s
-        s = raw.rjust(w, ' ')
+        (sign + y.abs.to_s).rjust(w, ' ')
       else
-        s = y.abs.to_s.rjust(w - (y < 0 ? 1 : 0), '0')
-        s = (y < 0 ? '-' : '') + s
+        sign + y.abs.to_s.rjust(w - sign.length, '0')
       end
-    end
-    raise Errno::ERANGE, "strftime" if s.length >= STRFTIME_MAX_COPY_LEN
-    if flags & (FL_UPPER | FL_CHCASE) != 0
-      s.upcase
-    else
-      s
     end
   end
 
@@ -403,7 +408,9 @@ class Date
     if flags & FL_LEFT != 0
       sign + abs
     elsif flags & FL_SPACE != 0 || (flags & FL_ZERO == 0 && zero == false)
-      sign + abs.rjust(w - sign.length, ' ')
+      # Space padding right-justifies the sign together with the digits, so a
+      # negative value pads as "  -1", not "-  1" (matching the C extension).
+      (sign + abs).rjust(w, ' ')
     else
       pad = (flags & FL_ZERO != 0 || zero) ? '0' : ' '
       sign + abs.rjust([w - sign.length, abs.length].max, pad)
@@ -411,20 +418,19 @@ class Date
   end
 
   def fmt_str(s, width, flags)
-    s = s.dup
     if flags & FL_CHCASE != 0
       s = (s == s.upcase) ? s.downcase : s.upcase
     elsif flags & FL_UPPER != 0
       s = s.upcase
     end
-    if flags & FL_LEFT != 0
-      s
-    elsif width
+    # Padding applies only when not left-justified and a width is given; the
+    # case conversions above already return fresh strings, so no defensive dup
+    # is needed for the paths that return s unchanged.
+    if flags & FL_LEFT == 0 && width
       pad = flags & FL_ZERO != 0 ? '0' : ' '
-      s.rjust(width, pad)
-    else
-      s
+      s = s.rjust(width, pad)
     end
+    s
   end
 
   # Week number (0=first partial week)
@@ -439,7 +445,7 @@ class Date
   end
 
   # Format %z with colons variant and GNU extension flag support
-  def fmt_z(colons, width, _prec, flags)
+  def fmt_z(colons, width, flags)
     of   = of_seconds
     sign = of < 0 ? '-' : '+'
     abs  = of.abs
@@ -449,55 +455,42 @@ class Date
 
     no_lead = flags & (FL_LEFT | FL_SPACE) != 0
 
-    if no_lead
-      case colons
-      when 0
-        s = format('%s%d%02d', sign, hh, mm)
-      when 1
-        s = format('%s%d:%02d', sign, hh, mm)
-      when 2
-        s = format('%s%d:%02d:%02d', sign, hh, mm, ss)
-      when 3
-        if ss != 0
-          s = format('%s%d:%02d:%02d', sign, hh, mm, ss)
-        elsif mm != 0
-          s = format('%s%d:%02d', sign, hh, mm)
-        else
-          s = format('%s%d', sign, hh)
-        end
-      else
-        s = format('%s%d:%02d', sign, hh, mm)
-      end
-    else
-      case colons
-      when 0
-        s = format('%s%02d%02d', sign, hh, mm)
-      when 1
-        s = format('%s%02d:%02d', sign, hh, mm)
-      when 2
-        s = format('%s%02d:%02d:%02d', sign, hh, mm, ss)
-      when 3
-        if ss != 0
-          s = format('%s%02d:%02d:%02d', sign, hh, mm, ss)
-        elsif mm != 0
-          s = format('%s%02d:%02d', sign, hh, mm)
-        else
-          s = format('%s%02d', sign, hh)
-        end
-      else
-        s = format('%s%02d:%02d', sign, hh, mm)
-      end
-    end
+    # The colons variants differ between the leading-zero and no-leading-zero
+    # forms only in how the hour is padded ('%02d' vs '%d'); the minutes and
+    # seconds are always two digits, so decide the hour rendering once here.
+    hh_s = (no_lead || hh >= 10) ? hh.to_s : "0#{hh}"
+    mm_s = mm < 10 ? "0#{mm}" : mm.to_s
+    ss_s = ss < 10 ? "0#{ss}" : ss.to_s
 
-    if width
-      if flags & FL_LEFT != 0
-        s
-      elsif flags & FL_SPACE != 0
-        s.rjust(width, ' ')
-      else
-        digits = s[1..]
-        sign + digits.rjust(width - 1, '0')
-      end
+    s = case colons
+        when 1
+          "#{sign}#{hh_s}:#{mm_s}"
+        when 2
+          "#{sign}#{hh_s}:#{mm_s}:#{ss_s}"
+        when 3
+          if ss != 0
+            "#{sign}#{hh_s}:#{mm_s}:#{ss_s}"
+          elsif mm != 0
+            "#{sign}#{hh_s}:#{mm_s}"
+          else
+            "#{sign}#{hh_s}"
+          end
+        when 0
+          "#{sign}#{hh_s}#{mm_s}"
+        else
+          "#{sign}#{hh_s}:#{mm_s}"
+        end
+
+    if flags & FL_SPACE != 0
+      # '_' pads with spaces. Without '-' it pads to at least the width the
+      # zero-padded form would occupy (the hour is the only field that loses
+      # its leading zero); '-' suppresses that automatic minimum width.
+      min_w = (flags & FL_LEFT != 0) ? 0 : s.length + (hh < 10 ? 1 : 0)
+      s.rjust([width || 0, min_w].max, ' ')
+    elsif width
+      # The default and '-' both zero-pad to the given width; for %z, '-' does
+      # not left-justify.
+      sign + s[1..].rjust(width - 1, '0')
     else
       s
     end
@@ -539,6 +532,26 @@ class Date
 
   def zone_str
     '+00:00'
+  end
+
+  # Time-component strings for the strftime fast paths. A Date has no time, so
+  # each is a fixed literal here; DateTime overrides them with the computed
+  # values. Keeping them as (overridable) methods lets each class supply its
+  # own without a per-call instance_of? test inside the formatter.
+  def strftime_hms   # %T, %X, %H:%M:%S
+    '00:00:00'
+  end
+
+  def strftime_hm    # %R
+    '00:00'
+  end
+
+  def strftime_r12   # %r
+    '12:00:00 AM'
+  end
+
+  def strftime_zoff  # %z (numeric +HHMM offset)
+    '+0000'
   end
 
 end

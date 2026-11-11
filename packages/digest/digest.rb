@@ -66,6 +66,14 @@ module Digest
       @data = "".b
     end
 
+    # a copy (dup, clone) takes its own state: update appends to @data in
+    # place, so a shared one changed the original too (#11348)
+    def initialize_copy(other)
+      @data = other.__data.dup
+    end
+
+    protected def __data = @data
+
     def update(string)
       @data << string.b
       self

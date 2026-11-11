@@ -1,6 +1,6 @@
 # A String a method appends to is the caller's String: CRuby passes the object,
-# so the growth shows through every name for it. Spinel lends the caller's slot
-# to a plain positional parameter (the byref out-param), but a keyword
+# so the growth shows through every name for it. Spinel hands a plain
+# positional parameter the caller's own handle, but a keyword
 # parameter, a positional beside a rest, a keyword or a post, and a value that
 # arrived through a splat or a `**` all took a copy, and the appends stayed in
 # the callee once the String outgrew its first allocation. Each probe appends

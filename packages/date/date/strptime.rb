@@ -18,8 +18,8 @@ class Date
     #
     # Related: Date.strptime (returns a \Date object).
     def _strptime(string, format = '%F')
-      string = string_value(string)
-      format = string_value(format)
+      string = to_string_value(string)
+      format = to_string_value(format)
       if format == '%F' || format == '%Y-%m-%d'
         return internal_strptime_ymd(string)
       end
@@ -63,15 +63,15 @@ class Date
     # See also {strptime(3)}[https://man7.org/linux/man-pages/man3/strptime.3.html].
     #
     # Related: Date._strptime (returns a hash).
-    def strptime(string = JULIAN_EPOCH_DATE, format = '%F', start = DEFAULT_SG)
-      str = string_value(string)
+    def strptime(string = '-4712-01-01', format = '%F', start = ITALY)
+      str = to_string_value(string)
       if format == '%F' || format == '%Y-%m-%d'
-        result = internalinternal_strptime_ymd_to_date(str, start)
+        result = internal_strptime_ymd_to_date(str, start)
         return result if result
         raise Error, 'invalid date'
       end
       if format == '%a %b %d %Y'
-        result = internalinternal_strptime_abdy_to_date(str, start)
+        result = internal_strptime_abdy_to_date(str, start)
         return result if result
         raise Error, 'invalid date'
       end
@@ -89,6 +89,32 @@ class Date
 
 
     private
+
+    # Coerce an argument to a String the way the C extension's StringValue
+    # does: accept a String or anything with #to_str, otherwise raise a
+    # TypeError with the "no implicit conversion" message (using the special
+    # names nil/true/false, as the C error does).
+    def to_string_value(obj)
+      str = String.try_convert(obj)
+      return str if str
+      name = case obj
+             when nil   then 'nil'
+             when true  then 'true'
+             when false then 'false'
+             else
+               klass = obj.class
+               # String.try_convert answers nil, too, for a to_str that gives
+               # nil, where StringValue names what it gave.
+               if obj.respond_to?(:to_str, true)
+                 gave = obj.__send__(:to_str)
+                 raise TypeError, "can't convert #{klass} to String (#{klass}#to_str gives #{gave.class})"
+               end
+               # The class itself, so an anonymous one reads as #<Class:0x...>
+               # as in C, where its name is nil.
+               klass
+             end
+      raise TypeError, "no implicit conversion of #{name} into String"
+    end
 
     # Pre-compiled regex constants for sp_run
     SP_WHITESPACE     = /[ \t\n\r\v\f]+/
@@ -113,6 +139,23 @@ class Date
                      :SP_AMPM_DOT, :SP_AMPM, :SP_NUM_CHECK,
                      :SP_DIGITS_1, :SP_DIGITS_2, :SP_DIGITS_3, :SP_DIGITS_4,
                      :SP_DIGITS_9, :SP_DIGITS_MAX
+
+    # Scan an optional leading sign, returning -1 for '-' and 1 otherwise
+    # (a '+' or no sign at all). When no sign is present the scanner is left
+    # untouched, since SP_SIGN does not match and #scan does not advance.
+    def sp_scan_sign(sc)
+      sc.scan(SP_SIGN) == '-' ? -1 : 1
+    end
+
+    # Convert an already-scanned numeric field, validate it against an inclusive
+    # range, and store it in +hash+ under +sym+. Throws :sp_fail when nothing was
+    # scanned or the value falls outside [lower, upper]. Returns the stored value.
+    def sp_store_int(hash, sym, s, lower, upper)
+      throw(:sp_fail) unless s
+      n = s.to_i
+      throw(:sp_fail) if n < lower || n > upper
+      hash[sym] = n
+    end
 
     # Core scanner: walks format string and string simultaneously using StringScanner.
     # Returns new string position on success; throws :sp_fail on failure.
@@ -195,11 +238,7 @@ class Date
 
         when 67 # 'C'
           num_next = !fmt_sc.eos? && fmt_sc.check(SP_NUM_CHECK)
-          if str_sc.scan(SP_SIGN)
-            sign = str_sc.matched == '-' ? -1 : 1
-          else
-            sign = 1
-          end
+          sign = sp_scan_sign(str_sc)
           s = str_sc.scan(num_next ? SP_DIGITS_2 : SP_DIGITS_MAX)
           throw(:sp_fail) unless s
           hash[:_cent] = sign * s.to_i
@@ -211,61 +250,33 @@ class Date
           str_sc.pos = sp_run(str, str_sc.pos, '%m/%d/%y', hash)
 
         when 100, 101 # 'd', 'e'
-          s = str_sc.scan(SP_SPACE_OR_DIGIT)
-          throw(:sp_fail) unless s
-          n = s.to_i
-          throw(:sp_fail) if n < 1 || n > 31
-          hash[:mday] = n
+          sp_store_int(hash, :mday, str_sc.scan(SP_SPACE_OR_DIGIT), 1, 31)
 
         when 70 # 'F'
           str_sc.pos = sp_run(str, str_sc.pos, '%Y-%m-%d', hash)
 
         when 71 # 'G'
-          if str_sc.scan(SP_SIGN)
-            sign = str_sc.matched == '-' ? -1 : 1
-          else
-            sign = 1
-          end
+          sign = sp_scan_sign(str_sc)
           num_next = !fmt_sc.eos? && fmt_sc.check(SP_NUM_CHECK)
           s = str_sc.scan(num_next ? SP_DIGITS_4 : SP_DIGITS_MAX)
           throw(:sp_fail) unless s
           hash[:cwyear] = sign * s.to_i
 
         when 103 # 'g'
-          s = str_sc.scan(SP_DIGITS_2)
-          throw(:sp_fail) unless s
-          n = s.to_i
-          throw(:sp_fail) if n > 99
-          hash[:cwyear] = n
+          n = sp_store_int(hash, :cwyear, str_sc.scan(SP_DIGITS_2), 0, 99)
           hash[:_cent] ||= n >= 69 ? 19 : 20
 
         when 72, 107 # 'H', 'k'
-          s = str_sc.scan(SP_SPACE_OR_DIGIT)
-          throw(:sp_fail) unless s
-          n = s.to_i
-          throw(:sp_fail) if n > 24
-          hash[:hour] = n
+          sp_store_int(hash, :hour, str_sc.scan(SP_SPACE_OR_DIGIT), 0, 24)
 
         when 73, 108 # 'I', 'l'
-          s = str_sc.scan(SP_SPACE_OR_DIGIT)
-          throw(:sp_fail) unless s
-          n = s.to_i
-          throw(:sp_fail) if n < 1 || n > 12
-          hash[:hour] = n
+          sp_store_int(hash, :hour, str_sc.scan(SP_SPACE_OR_DIGIT), 1, 12)
 
         when 106 # 'j'
-          s = str_sc.scan(SP_DIGITS_3)
-          throw(:sp_fail) unless s
-          n = s.to_i
-          throw(:sp_fail) if n < 1 || n > 366
-          hash[:yday] = n
+          sp_store_int(hash, :yday, str_sc.scan(SP_DIGITS_3), 1, 366)
 
         when 76 # 'L'
-          if str_sc.scan(SP_SIGN)
-            sign = str_sc.matched == '-' ? -1 : 1
-          else
-            sign = 1
-          end
+          sign = sp_scan_sign(str_sc)
           osi = str_sc.pos
           num_next = !fmt_sc.eos? && fmt_sc.check(SP_NUM_CHECK)
           s = str_sc.scan(num_next ? SP_DIGITS_3 : SP_DIGITS_MAX)
@@ -275,25 +286,13 @@ class Date
           hash[:sec_fraction] = Rational(n, 10**(str_sc.pos - osi))
 
         when 77 # 'M'
-          s = str_sc.scan(SP_DIGITS_2)
-          throw(:sp_fail) unless s
-          n = s.to_i
-          throw(:sp_fail) if n > 59
-          hash[:min] = n
+          sp_store_int(hash, :min, str_sc.scan(SP_DIGITS_2), 0, 59)
 
         when 109 # 'm'
-          s = str_sc.scan(SP_DIGITS_2)
-          throw(:sp_fail) unless s
-          n = s.to_i
-          throw(:sp_fail) if n < 1 || n > 12
-          hash[:mon] = n
+          sp_store_int(hash, :mon, str_sc.scan(SP_DIGITS_2), 1, 12)
 
         when 78 # 'N'
-          if str_sc.scan(SP_SIGN)
-            sign = str_sc.matched == '-' ? -1 : 1
-          else
-            sign = 1
-          end
+          sign = sp_scan_sign(str_sc)
           osi = str_sc.pos
           num_next = !fmt_sc.eos? && fmt_sc.check(SP_NUM_CHECK)
           s = str_sc.scan(num_next ? SP_DIGITS_9 : SP_DIGITS_MAX)
@@ -338,11 +337,7 @@ class Date
           str_sc.pos = sp_run(str, str_sc.pos, '%I:%M:%S %p', hash)
 
         when 83 # 'S'
-          s = str_sc.scan(SP_DIGITS_2)
-          throw(:sp_fail) unless s
-          n = s.to_i
-          throw(:sp_fail) if n > 60
-          hash[:sec] = n
+          sp_store_int(hash, :sec, str_sc.scan(SP_DIGITS_2), 0, 60)
 
         when 115 # 's'
           sign = 1
@@ -359,42 +354,22 @@ class Date
           str_sc.pos = sp_run(str, str_sc.pos, '%H:%M:%S', hash)
 
         when 85 # 'U'
-          s = str_sc.scan(SP_DIGITS_2)
-          throw(:sp_fail) unless s
-          n = s.to_i
-          throw(:sp_fail) if n > 53
-          hash[:wnum0] = n
+          sp_store_int(hash, :wnum0, str_sc.scan(SP_DIGITS_2), 0, 53)
 
         when 117 # 'u'
-          s = str_sc.scan(SP_DIGITS_1)
-          throw(:sp_fail) unless s
-          n = s.to_i
-          throw(:sp_fail) if n < 1 || n > 7
-          hash[:cwday] = n
+          sp_store_int(hash, :cwday, str_sc.scan(SP_DIGITS_1), 1, 7)
 
         when 86 # 'V'
-          s = str_sc.scan(SP_DIGITS_2)
-          throw(:sp_fail) unless s
-          n = s.to_i
-          throw(:sp_fail) if n < 1 || n > 53
-          hash[:cweek] = n
+          sp_store_int(hash, :cweek, str_sc.scan(SP_DIGITS_2), 1, 53)
 
         when 118 # 'v'
           str_sc.pos = sp_run(str, str_sc.pos, '%e-%b-%Y', hash)
 
         when 87 # 'W'
-          s = str_sc.scan(SP_DIGITS_2)
-          throw(:sp_fail) unless s
-          n = s.to_i
-          throw(:sp_fail) if n > 53
-          hash[:wnum1] = n
+          sp_store_int(hash, :wnum1, str_sc.scan(SP_DIGITS_2), 0, 53)
 
         when 119 # 'w'
-          s = str_sc.scan(SP_DIGITS_1)
-          throw(:sp_fail) unless s
-          n = s.to_i
-          throw(:sp_fail) if n > 6
-          hash[:wday] = n
+          sp_store_int(hash, :wday, str_sc.scan(SP_DIGITS_1), 0, 6)
 
         when 88 # 'X'
           str_sc.pos = sp_run(str, str_sc.pos, '%H:%M:%S', hash)
@@ -403,22 +378,14 @@ class Date
           str_sc.pos = sp_run(str, str_sc.pos, '%m/%d/%y', hash)
 
         when 89 # 'Y'
-          if str_sc.scan(SP_SIGN)
-            sign = str_sc.matched == '-' ? -1 : 1
-          else
-            sign = 1
-          end
+          sign = sp_scan_sign(str_sc)
           num_next = !fmt_sc.eos? && fmt_sc.check(SP_NUM_CHECK)
           s = str_sc.scan(num_next ? SP_DIGITS_4 : SP_DIGITS_MAX)
           throw(:sp_fail) unless s
           hash[:year] = sign * s.to_i
 
         when 121 # 'y'
-          s = str_sc.scan(SP_DIGITS_2)
-          throw(:sp_fail) unless s
-          n = s.to_i
-          throw(:sp_fail) if n > 99
-          hash[:year] = n
+          n = sp_store_int(hash, :year, str_sc.scan(SP_DIGITS_2), 0, 99)
           hash[:_cent] ||= n >= 69 ? 19 : 20
 
         when 90, 122 # 'Z', 'z'
@@ -495,7 +462,7 @@ class Date
     STRPTIME_YMD_GENERAL_EXACT = /\A([+-]?\d+)-(\d{1,2})-(\d{1,2})\z/
     private_constant :STRPTIME_YMD_GENERAL_EXACT
 
-    def internalinternal_strptime_ymd_to_date(str, sg)
+    def internal_strptime_ymd_to_date(str, sg)
       slen = str.bytesize
 
       # Fast path for exactly "YYYY-MM-DD" (10 chars, positive 4-digit year)
@@ -564,7 +531,7 @@ class Date
 
     # Parse "%a %b %d %Y" and directly create Date object.
     # Uses single regex match to avoid StringScanner allocation.
-    def internalinternal_strptime_abdy_to_date(str, sg)
+    def internal_strptime_abdy_to_date(str, sg)
       m = STRPTIME_ABDY_PAT.match(str)
       return nil unless m
       return nil unless m.post_match.empty?
@@ -608,6 +575,20 @@ class Date
       si + m[0].length
     end
 
+    # Measure a trailing +word+ within the first +len+ characters of +str+,
+    # ignoring case and requiring a preceding whitespace boundary. Returns the
+    # number of characters to strip (the word plus its leading whitespace run),
+    # or nil when +word+ is not present at that position.
+    def sp_strip_word(str, len, word)
+      n = word.length
+      return nil unless len > n
+      return nil unless str[len - n - 1] =~ /[[:space:]]/
+      return nil unless str[len - n, n].casecmp(word) == 0
+      n += 1
+      n += 1 while len > n && str[len - n - 1] =~ /[[:space:]]/
+      n
+    end
+
     # Convert a zone string to seconds offset from UTC.
     # Returns Integer (seconds) or Rational, or nil if unparseable.
     # Ported from the original C date_zone_to_diff().
@@ -635,28 +616,18 @@ class Date
       dst = false
 
       # Strip trailing " time" (optionally preceded by "standard" or "daylight")
-      strip_word = lambda do |str, len, word|
-        n = word.length
-        return nil unless len > n
-        return nil unless str[len - n - 1] =~ /[[:space:]]/
-        return nil unless str[len - n, n].casecmp(word) == 0
-        n += 1
-        n += 1 while len > n && str[len - n - 1] =~ /[[:space:]]/
-        n
-      end
-
       l = s.length
-      if (w = strip_word.call(s, l, 'time'))
+      if (w = sp_strip_word(s, l, 'time'))
         l -= w
-        if (w2 = strip_word.call(s, l, 'standard'))
+        if (w2 = sp_strip_word(s, l, 'standard'))
           l -= w2
-        elsif (w2 = strip_word.call(s, l, 'daylight'))
+        elsif (w2 = sp_strip_word(s, l, 'daylight'))
           l -= w2
           dst = true
         else
           l += w # revert
         end
-      elsif (w = strip_word.call(s, l, 'dst'))
+      elsif (w = sp_strip_word(s, l, 'dst'))
         l -= w
         dst = true
       end
@@ -669,7 +640,7 @@ class Date
       # Numeric parsing
       t = s[0, l].strip
       t = t[3..] if t =~ /\Agmt/i
-      t = t[$&.length..] if t =~ /\Autc?/i
+      t = $' if t =~ /\Autc?/i
       return nil unless t && t.length > 0 && (t[0] == '+' || t[0] == '-')
 
       sign = t[0] == '-' ? -1 : 1
@@ -737,18 +708,17 @@ class Date
 
     # Complete partial date fragments by filling defaults from today's date.
     # Mirrors rt_complete_frags() in C.
+    # Count how many of +keys+ are present in +hash+.
+    def sp_count_keys(hash, keys)
+      keys.count { |sym| hash.key?(sym) }
+    end
+
     def sp_complete_frags(klass, hash)
       # Fast path: detect :civil case (most common) without iterating all entries
       k = nil
       a = nil
       if hash.key?(:year) || hash.key?(:mon) || hash.key?(:mday)
-        civil_n = 0
-        civil_n += 1 if hash.key?(:year)
-        civil_n += 1 if hash.key?(:mon)
-        civil_n += 1 if hash.key?(:mday)
-        civil_n += 1 if hash.key?(:hour)
-        civil_n += 1 if hash.key?(:min)
-        civil_n += 1 if hash.key?(:sec)
+        civil_n = sp_count_keys(hash, [:year, :mon, :mday, :hour, :min, :sec])
         # Check if any other pattern matches better
         best_n = civil_n
         skip_civil = false
@@ -756,19 +726,19 @@ class Date
           skip_civil = true if 1 > best_n
         end
         if hash.key?(:yday) # ordinal [:year, :yday, :hour, :min, :sec]
-          ord_n = (hash.key?(:year) ? 1 : 0) + 1 + (hash.key?(:hour) ? 1 : 0) + (hash.key?(:min) ? 1 : 0) + (hash.key?(:sec) ? 1 : 0)
+          ord_n = sp_count_keys(hash, [:year, :yday, :hour, :min, :sec])
           skip_civil = true if ord_n > best_n
         end
         if hash.key?(:cwyear) || hash.key?(:cweek) || hash.key?(:cwday)
-          com_n = (hash.key?(:cwyear) ? 1 : 0) + (hash.key?(:cweek) ? 1 : 0) + (hash.key?(:cwday) ? 1 : 0) + (hash.key?(:hour) ? 1 : 0) + (hash.key?(:min) ? 1 : 0) + (hash.key?(:sec) ? 1 : 0)
+          com_n = sp_count_keys(hash, [:cwyear, :cweek, :cwday, :hour, :min, :sec])
           skip_civil = true if com_n > best_n
         end
         if hash.key?(:wnum0)
-          wn0_n = (hash.key?(:year) ? 1 : 0) + 1 + (hash.key?(:wday) ? 1 : 0) + (hash.key?(:hour) ? 1 : 0) + (hash.key?(:min) ? 1 : 0) + (hash.key?(:sec) ? 1 : 0)
+          wn0_n = sp_count_keys(hash, [:year, :wnum0, :wday, :hour, :min, :sec])
           skip_civil = true if wn0_n > best_n
         end
         if hash.key?(:wnum1)
-          wn1_n = (hash.key?(:year) ? 1 : 0) + 1 + (hash.key?(:wday) ? 1 : 0) + (hash.key?(:hour) ? 1 : 0) + (hash.key?(:min) ? 1 : 0) + (hash.key?(:sec) ? 1 : 0)
+          wn1_n = sp_count_keys(hash, [:year, :wnum1, :wday, :hour, :min, :sec])
           skip_civil = true if wn1_n > best_n
         end
         unless skip_civil
@@ -782,7 +752,7 @@ class Date
         best_a = nil
         best_n = 0
         COMPLETE_FRAGS_TAB.each do |ek, ea|
-          n = ea.count { |sym| hash.key?(sym) }
+          n = sp_count_keys(hash, ea)
           if n > best_n
             best_k = ek
             best_a = ea

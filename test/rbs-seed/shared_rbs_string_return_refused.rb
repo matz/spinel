@@ -1,13 +1,13 @@
-# Under --share-strings (#6765), a method an --rbs signature declares
-# `-> String` answers the handle a box holds only where the unboxing of its
-# tail publishes it (shared_rbs_string_return). These shapes unbox elsewhere
-# and keep the refusal, where answering the box's bytes would hand on a copy
-# that a change in place never reaches (or, from the ensure, a stale
-# handle):
+# A method an --rbs signature declares `-> String` whose tail unboxes
+# somewhere other than its last expression (shared_rbs_string_return):
 # - a `return` inside a begin with an ensure (the value waits in a result
 #   slot until the ensure has run), also a def's or a block's own ensure.
-# (An `||` or `&&` tail whose operand is a call answering a shared String is
-# boxed from the handle the call publishes: shared_rbs_logic_tail_pickup.)
+# These shapes were refused while a String slot could hold its bytes, since
+# answering the box's bytes would hand on a copy a change in place never
+# reaches. Every String slot is now the handle, so they compile and answer
+# the handle; the check guards that they keep compiling. (An `||` or `&&`
+# tail whose operand is a call answering a String is boxed from the handle
+# the call publishes: shared_rbs_logic_tail_pickup.)
 # spinel: rbs-seed-check
 module ShrsrfConf
   class << self

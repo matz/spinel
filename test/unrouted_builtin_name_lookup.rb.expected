@@ -1,0 +1,11 @@
+NameError: undefined method 'nope' for class 'Integer'
+NameError: undefined method 'nope' for class 'String'
+NameError: undefined method 'nope' for module 'Comparable'
+NameError: undefined method 'nope' for class 'Integer'
+:none
+:none
+NameError: undefined method 'zonk' for class 'Integer'
+NameError: undefined method 'zink' for class 'Integer'
+:none
+:none
+:none

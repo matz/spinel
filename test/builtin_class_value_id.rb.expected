@@ -1,0 +1,63 @@
+["A", "String", "Array", "Hash", "Object", "Integer", "Float", "Symbol", "NilClass", "TrueClass", "FalseClass", "Range", "Time", "Proc", "Integer"]
+["A", "String", "Array", "Hash", "Object", "Integer", "Float", "Symbol", "NilClass", "TrueClass", "FalseClass", "Range", "Time", "Proc", "Integer"]
+["A", "String", "Array", "Hash", "Object", "Integer", "Float", "Symbol", "NilClass", "TrueClass", "FalseClass", "Range", "Time", "Proc", "Integer"]
+[[false, false, false, false, false, false, false, false, false, true], [true, false, false, false, false, false, false, false, false, false], [false, true, false, false, false, false, false, false, false, false], [false, false, true, false, false, false, false, false, false, false], [false, false, false, true, false, false, false, false, false, false], [false, false, false, false, true, false, false, false, false, false], [false, false, false, false, false, true, false, false, false, false], [false, false, false, false, false, false, true, false, false, false], [false, false, false, false, false, false, false, true, false, false], [false, false, false, false, false, false, false, false, true, false]]
+A
+String
+Array
+Hash
+Object
+"#<A"
+"\"\""
+"[]"
+"{}"
+"#<O"
+[Object, A, Object, Object, Object, BasicObject, Numeric, Numeric, Object, Object, Object, Object]
+[[A, Object], [String, Comparable], [Array, Enumerable], [Hash, Enumerable], [Object, Kernel], [Integer, Numeric], [Float, Numeric], [Symbol, Comparable], [NilClass, Object]]
+[false, true, false, false, false, true, true, true, false]
+[:a, :class]
+[:string, :class]
+[:array, :class]
+[:hash, :class]
+[:integer, :class]
+[:float, :class]
+[:symbol, :class]
+[:nil, :class]
+[:other, :class]
+[4, 1, 3, 5, 2, 6, nil]
+[["A", 1], ["String", 1], ["Array", 1], ["Hash", 1], ["Integer", 1], ["NilClass", 1], ["Float", 1]]
+["A", "String", "Array", "Hash", "Integer", "NilClass", "Float"]
+7
+[false, true, false, true, false]
+[true, true, true, true, true]
+[nil, true, nil, true, nil]
+[true, true, true, true, true]
+["Array", "Float", "Hash", "Integer", "String", "Symbol"]
+6
+[true, true, true, true, true, true]
+"MyErr"
+"y"
+StandardError
+true
+"ArgumentError"
+"y"
+StandardError
+true
+"RuntimeError"
+"y"
+StandardError
+true
+undefined method 'new' for cla
+undefined method 'new' for cla
+undefined method 'new' for cla
+undefined method 'new' for cla
+undefined method 'new' for cla
+undefined method 'new' for cla
+[["A", 0], ["String", 1], ["Array", 2], ["Hash", 3], ["Integer", 4], ["NilClass", 5]]
+["A", "String", "Array", "Hash", "Integer", "NilClass"]
+[["A", "String"], ["Array", "Hash"], ["Integer", "NilClass"]]
+[false, true, false, false, false]
+[true, true, true, true, true]
+[false, false, false, false, false]
+[true, true, true, true, true]
+[true, true, true, true, true]

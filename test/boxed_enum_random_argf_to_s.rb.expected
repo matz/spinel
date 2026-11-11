@@ -1,0 +1,12 @@
+["enum|str", 4, true]
+["enum|int", 4, true]
+["enum|nil", 4, true]
+["each_slice|str", 4, true]
+["enum in array", 1, true]
+["random|str", 4, true]
+["ARGF", "ARGF", "ARGF", "ARGF"]
+ARGF
+ARGF
+["s", "s", "s", "s"]
+["7", "7", "7", "7"]
+150

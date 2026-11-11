@@ -87,6 +87,11 @@ int sp_process_status_coredump_p(sp_int s) {
   return WCOREDUMP(st) ? 1 : 0;
 }
 
+int sp_process_status_stopped_p(sp_int s) {
+  int st = (int)s;
+  return WIFSTOPPED(st) ? 1 : 0;
+}
+
 /* Tri-state, because CRuby's is: true when the process exited with status 0,
    false when it exited with anything else, and NIL when it did not exit
    normally at all. -1 is that nil; the call site boxes it. */
@@ -122,6 +127,12 @@ sp_oint sp_process_status_termsig(sp_int s) {
   int st = (int)s;
   if (!WIFSIGNALED(st)) return sp_oint_nil();
   return sp_oint_of((sp_int)WTERMSIG(st));
+}
+
+sp_oint sp_process_status_stopsig(sp_int s) {
+  int st = (int)s;
+  if (!WIFSTOPPED(st)) return sp_oint_nil();
+  return sp_oint_of((sp_int)WSTOPSIG(st));
 }
 
 /* ---- boxed-struct pid access ---- */

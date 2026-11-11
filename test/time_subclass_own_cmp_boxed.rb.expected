@@ -1,0 +1,35 @@
+false
+true
+false
+1
+[60, 0]
+0
+60
+false
+60
+true
+-1
+false
+1
+true
+-1
+false
+true
+true
+true
+[60, 0]
+[60, 0]
+[0, 60]
+:mine
+false
+:mine
+:mine
+:rows_eq
+-1
+[3, 2, 1]
+1
+ArgumentError
+ArgumentError
+false
+true
+false

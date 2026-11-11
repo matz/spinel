@@ -1,0 +1,11 @@
+:a
+"s"
+1
+Kernel
+[ArgumentError, "too few arguments"]
+[ArgumentError, "too few arguments"]
+[ArgumentError, "too few arguments"]
+[ArgumentError, "too few arguments"]
+[ArgumentError, "too few arguments"]
+"1-x"
+"003.1"

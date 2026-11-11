@@ -1,0 +1,21 @@
+false
+[3, 6]
+false
+["a=1", "b=2"]
+false
+[[:a, 1], [:b, 2]]
+true
+Enumerator
+[2, 3]
+true
+Enumerator
+false
+[0, 1]
+[true, [2]]
+[false, {b: 2}]
+true
+[Enumerator, Enumerator, Enumerator]
+true
+[Enumerator, Enumerator, Enumerator]
+false
+[Array, Array, Array]

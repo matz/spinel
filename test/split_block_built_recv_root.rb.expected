@@ -1,0 +1,10 @@
+[#<Encoding:BINARY (ASCII-8BIT)>]
+2
+["a", "b\xFFc"]
+[2, 1, 1]
+15
+"z"
+[#<Encoding:BINARY (ASCII-8BIT)>]
+["P", "Q"]
+10
+[#<Encoding:BINARY (ASCII-8BIT)>]

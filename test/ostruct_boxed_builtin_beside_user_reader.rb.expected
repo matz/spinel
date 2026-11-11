@@ -1,0 +1,12 @@
+lib.so
+"member"
+"lib.so"
+:this_file
+3
+"lib.so"
+"."
+4
+"src.rb"
+:this_file
+"."
+5

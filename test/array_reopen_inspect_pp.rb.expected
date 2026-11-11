@@ -1,0 +1,28 @@
+[1]
+[[1], 2]
+[3]
+ARR
+{a: [1]}
+1
+[2]
+[5]
+[6]
+[7]
+ARR
+{k: [8]}
+{k: ARR}
+ARR
+ARR
+[1]
+Q
+1
+boom
+ARR
+[2]
+[#<struct S a=[1]>]
+#<struct S2 a=FOO, b=[1]>
+[#<struct S2 a=FOO, b=2>, [3]]
+[FOO, [5]]
+[#<E: e>, [1]]
+[[2], #<E: e>, [3]]
+ARR

@@ -370,7 +370,29 @@ static const BuiltinOp bop_rows[] = {
   { BOP_KERNEL, "__env_to_h",  0, 0, BF_NONE, TY_STR_STR_HASH, BOPE_TEMPLATE, "sp_env_to_h()", 0, 0, BOPF_INTERNAL },  /* the desugared ENV snapshot (#2742) */
   /* (one representation: a String Hash holds the String it is handed, and ENV a frozen copy; ENV itself as a value is a snapshot that copies what is stored into it) */
   { BOP_KERNEL, "__env_value", 0, 0, BF_NONE, TY_STR_STR_HASH, BOPE_TEMPLATE, "sp_env_value()", 0, 0, BOPF_INTERNAL },
+  /* the implicit conversions of a call's operands, run ahead of the call (split_kwsplat_calls): a `**` operand's to_hash, a `&` operand's whole conversion (a kind that is already what the call converts stays what it is, typed; any other is converted at run time) */
+  { BOP_KERNEL, "__kw_hash",   1, 1, BF_NONE, TY_POLY, BOPE_CONV_USER_OK, "sp_kw_splat_conv", 0, 0, BOPF_INTERNAL },
+  { BOP_KERNEL, "__blk_conv",  1, 1, BF_NONE, BOPR_ARG0, BOPE_TEMPLATE, "$e0",
+    BOP_K(TY_NIL) | BOP_K(TY_SYMBOL) | BOP_K(TY_PROC) | BOP_K(TY_CURRY) | BOP_K(TY_METHOD) |
+    BOP_K(TY_STR_INT_HASH) | BOP_K(TY_STR_STR_HASH) | BOP_K(TY_INT_INT_HASH) | BOP_K(TY_INT_STR_HASH) |
+    BOP_K(TY_SYM_POLY_HASH) | BOP_K(TY_STR_POLY_HASH) | BOP_K(TY_POLY_POLY_HASH), 0, BOPF_INTERNAL },
+  { BOP_KERNEL, "__blk_conv",  1, 1, BF_NONE, TY_POLY, BOPE_CONV_USER_OK, "sp_poly_blk_conv", 0, 0, BOPF_INTERNAL },
+  /* Kernel#respond_to_missing?: false, its two operands, where they have an effect, run first (private: a program's own definition, and the explicit forms that reach it, are the plan's) */
+  { BOP_KERNEL, "respond_to_missing?", 2, 2, BF_ANY, TY_BOOL, BOPE_TEMPLATE, "($j0$j1(sp_bool)0)" },
 #include "builtin_zero_ops.inc"
+  /* Boxed reads that answer a new Array. A zero-argument rotate uses one;
+     shuffle has no count. Reached after the earlier routes: a call inference
+     types by a rule of its own (a builtin's super from its reopening, the
+     builtin-only re-derivation) records no row (BOPF_INFERRED) */
+  { BOP_BOXED_FALLBACK, "take",    1, 1, BF_NONE, TY_POLY_ARRAY, BOPE_BOXED_ARRAY_COUNT, "sp_poly_arr_take_n", 0, 0, BOPF_INFERRED },
+  { BOP_BOXED_FALLBACK, "first",   1, 1, BF_NONE, TY_POLY_ARRAY, BOPE_BOXED_ARRAY_COUNT, "sp_poly_arr_take", 0, 0, BOPF_INFERRED },
+  { BOP_BOXED_FALLBACK, "last",    1, 1, BF_NONE, TY_POLY_ARRAY, BOPE_BOXED_ARRAY_OR_RANGE, "sp_poly_arr_last_n", 0, 0, BOPF_INFERRED },
+  { BOP_BOXED_FALLBACK, "drop",    1, 1, BF_NONE, TY_POLY_ARRAY, BOPE_BOXED_ARRAY_COUNT, "sp_poly_arr_drop", 0, 0, BOPF_INFERRED },
+  { BOP_BOXED_FALLBACK, "rotate",  0, 1, BF_NONE, TY_POLY_ARRAY, BOPE_BOXED_ARRAY_ONLY,  "sp_poly_arr_rotate", 0, 0, BOPF_INFERRED },
+  { BOP_BOXED_FALLBACK, "min",     1, 1, BF_NONE, TY_POLY_ARRAY, BOPE_BOXED_ARRAY_COUNT, "sp_poly_arr_min_n", 0, 0, BOPF_INFERRED },
+  { BOP_BOXED_FALLBACK, "max",     1, 1, BF_NONE, TY_POLY_ARRAY, BOPE_BOXED_ARRAY_COUNT, "sp_poly_arr_max_n", 0, 0, BOPF_INFERRED },
+  { BOP_BOXED_FALLBACK, "shuffle", 0, 0, BF_NONE, TY_POLY_ARRAY, BOPE_BOXED_ARRAY_ONLY,  "sp_poly_arr_shuffle", 0, 0, BOPF_INFERRED },
+
   { TY_POLY, "upcase", 0, 0, BF_ANY, TY_POLY, BOPE_TEMPLATE,
     "sp_poly_case_conv($r, sp_str_upcase, \"upcase\")", 0, 0, 0, 1 },
   { TY_POLY, "downcase", 0, 0, BF_ANY, TY_POLY, BOPE_TEMPLATE,
@@ -432,13 +454,15 @@ static const BuiltinOp bop_rows[] = {
   { TY_PROCESS_STATUS, "signaled?",  0, 0, BF_ANY, TY_BOOL,   BOPE_TEMPLATE, "sp_process_status_signaled_p(sp_process_status_recv($r, \"signaled?\")->status)", 0, 0, BOPF_BOXED },
   { TY_PROCESS_STATUS, "exited?",    0, 0, BF_ANY, TY_BOOL,   BOPE_TEMPLATE, "sp_process_status_exited_p(sp_process_status_recv($r, \"exited?\")->status)", 0, 0, BOPF_BOXED },
   { TY_PROCESS_STATUS, "coredump?",  0, 0, BF_ANY, TY_BOOL,   BOPE_TEMPLATE, "sp_process_status_coredump_p(sp_process_status_recv($r, \"coredump?\")->status)", 0, 0, BOPF_BOXED },
+  { TY_PROCESS_STATUS, "stopped?",   0, 0, BF_ANY, TY_BOOL,   BOPE_TEMPLATE, "sp_process_status_stopped_p(sp_process_status_recv($r, \"stopped?\")->status)", 0, 0, BOPF_BOXED },
   { TY_PROCESS_STATUS, "success?",   0, 0, BF_ANY, TY_POLY,   BOPE_PSTATUS_SUCCESS, NULL, 0, 0, BOPF_BOXED },
   { TY_PROCESS_STATUS, "exitstatus", 0, 0, BF_ANY, TY_INT,    BOPE_TEMPLATE, "$<sp_process_status_exitstatus(sp_process_status_recv($r, \"exitstatus\")->status)$>", 0, 0, BOPF_BOXED },
   { TY_PROCESS_STATUS, "termsig",    0, 0, BF_ANY, TY_INT,    BOPE_TEMPLATE, "$<sp_process_status_termsig(sp_process_status_recv($r, \"termsig\")->status)$>", 0, 0, BOPF_BOXED },
+  { TY_PROCESS_STATUS, "stopsig",    0, 0, BF_ANY, TY_INT,    BOPE_TEMPLATE, "$<sp_process_status_stopsig(sp_process_status_recv($r, \"stopsig\")->status)$>", 0, 0, BOPF_BOXED },
   { TY_PROCESS_STATUS, "pid",        0, 0, BF_ANY, TY_INT,    BOPE_TEMPLATE, "sp_process_status_recv($r, \"pid\")->pid", 0, 0, BOPF_BOXED },
   { TY_PROCESS_STATUS, "to_s",       0, 0, BF_ANY, TY_STRING, BOPE_TEMPLATE, "sp_process_status_str($r, 0)" },
   { TY_PROCESS_STATUS, "inspect",    0, 0, BF_ANY, TY_STRING, BOPE_TEMPLATE, "sp_process_status_str($r, 1)" },
-  { TY_PROCESS_STATUS, "class",      0, 0, BF_ANY, TY_CLASS,  BOPE_TEMPLATE, "({ sp_ProcessStatus *_t$t = $r; _t$t ? ((sp_Class){(sp_int)-163, NULL}) : ((sp_Class){(sp_int)-1, SPL(\"NilClass\")}); })" },
+  { TY_PROCESS_STATUS, "class",      0, 0, BF_ANY, TY_CLASS,  BOPE_CLASS_VALUE, "Process::Status" },
   { TY_PROCESS_STATUS, "==",         0, 0, BF_ANY, TY_BOOL,    BOPE_PSTATUS_EQ },
   { TY_PROCESS_STATUS, "eql?",       0, 0, BF_ANY, TY_BOOL,    BOPE_PSTATUS_EQ },
   /* `$?` is nil (NULL) before any child has been waited for: the readers
@@ -519,7 +543,7 @@ static const BuiltinOp bop_rows[] = {
   { TY_TIME, "inspect",    0, 127, BF_ANY, TY_STRING, BOPE_TEMPLATE, "sp_time_inspect_v($r)" },
   { TY_TIME, "to_s",       0, 127, BF_ANY, TY_STRING, BOPE_TEMPLATE, "sp_time_to_s_v($r)" },
   { TY_TIME, "zone",       0, 127, BF_ANY, TY_STRING, BOPE_TEMPLATE, "sp_time_zone($r)" },
-  { TY_TIME, "class",      0, 127, BF_ANY, TY_STRING, BOPE_TEMPLATE, "((sp_Class){(sp_int)-1, SPL(\"Time\")})" },
+  { TY_TIME, "class",      0, 127, BF_ANY, TY_CLASS,  BOPE_CLASS_VALUE, "Time" },
   { TY_TIME, "getgm",      0, 127, BF_ANY, TY_TIME,   BOPE_TEMPLATE, "sp_time_utc($r)" },
   { TY_TIME, "sunday?",    0, 127, BF_ANY, TY_BOOL,   BOPE_TEMPLATE, "(sp_time_wday($r) == 0)" },
   { TY_TIME, "monday?",    0, 127, BF_ANY, TY_BOOL,   BOPE_TEMPLATE, "(sp_time_wday($r) == 1)" },
@@ -554,8 +578,8 @@ static const BuiltinOp bop_rows[] = {
   { TY_MATCHDATA, "deconstruct",      0,   0, BF_ANY, TY_POLY_ARRAY,     BOPE_TEMPLATE, "sp_MatchData_captures($r)" },
   { TY_MATCHDATA, "values_at",        0,   0, BF_ANY, TY_POLY_ARRAY,     BOPE_TEMPLATE, "((void)($r), sp_PolyArray_new())" },  /* selects nothing (#3846) */
   { TY_MATCHDATA, "values_at",        1, 127, BF_ANY, TY_POLY_ARRAY,     BOPE_NONE },
-  { TY_MATCHDATA, "named_captures",   0,   0, BF_ANY, TY_STR_POLY_HASH,  BOPE_TEMPLATE, "sp_md_named_captures($r)" },
-  { TY_MATCHDATA, "named_captures",   2, 127, BF_ANY, TY_STR_POLY_HASH,  BOPE_NONE },
+  { TY_MATCHDATA, "named_captures",   0,   0, BF_ANY, TY_STR_POLY_HASH,  BOPE_TEMPLATE, "sp_md_named_captures($r)", 0, 0, BOPF_KEYWORDS },
+  { TY_MATCHDATA, "named_captures",   2, 127, BF_ANY, TY_STR_POLY_HASH,  BOPE_NONE, NULL, 0, 0, BOPF_KEYWORDS },
   { TY_MATCHDATA, "nil?",             0, 127, BF_ANY, TY_BOOL,           BOPE_TEMPLATE, "($r == 0)" },
   { TY_MATCHDATA, "hash",             0,   0, BF_ANY, TY_INT,            BOPE_TEMPLATE, "sp_MatchData_hash($r)" },  /* content-based (#3014) */
   { TY_MATCHDATA, "frozen?",          0,   0, BF_ANY, TY_BOOL,           BOPE_TEMPLATE, "sp_gc_is_frozen((void *)($r))" },  /* the bit freeze sets (#3638) */
@@ -566,7 +590,7 @@ static const BuiltinOp bop_rows[] = {
   { TY_MATCHDATA, "eql?",            1,   1, BF_ANY, TY_BOOL,           BOPE_TEMPLATE, "((void)($r), (void)($b0), 0)", TY_UNKNOWN },
   { TY_MATCHDATA, "match",           1,   1, BF_ANY, TY_STRING,         BOPE_TEMPLATE, "sp_MatchData_aref_name($r, sp_sym_to_s($e0))", BOP_K(TY_SYMBOL) },
   { TY_MATCHDATA, "match",           1,   1, BF_ANY, TY_STRING,         BOPE_TEMPLATE, "sp_MatchData_aref_name($r, $e0)", BOP_K(TY_STRING) },
-  { TY_MATCHDATA, "match",           1,   1, BF_ANY, TY_STRING,         BOPE_TEMPLATE, "sp_MatchData_aref($r, $i0)", TY_UNKNOWN },
+  { TY_MATCHDATA, "match",           1,   1, BF_ANY, TY_STRING,         BOPE_TEMPLATE, "sp_MatchData_match($r, $i0)", TY_UNKNOWN },
   { TY_MATCHDATA, "match_length",    1,   1, BF_ANY, TY_POLY,           BOPE_TEMPLATE, "sp_MatchData_match_length_name($r, sp_sym_to_s($e0))", BOP_K(TY_SYMBOL) },
   { TY_MATCHDATA, "match_length",    1,   1, BF_ANY, TY_POLY,           BOPE_TEMPLATE, "sp_MatchData_match_length_name($r, $e0)", BOP_K(TY_STRING) },
   { TY_MATCHDATA, "match_length",    1,   1, BF_ANY, TY_POLY,           BOPE_TEMPLATE, "sp_MatchData_match_length($r, $i0)", TY_UNKNOWN },
@@ -824,10 +848,10 @@ static const BuiltinOp bop_rows[] = {
   { TY_RATIONAL, "to_i",        0, 127, BF_ANY, TY_INT,        BOPE_TEMPLATE, "(($r).num / ($R).den)" },
   { TY_RATIONAL, "to_int",      0, 127, BF_ANY, TY_INT,        BOPE_TEMPLATE, "(($r).num / ($R).den)" },
   { TY_RATIONAL, "truncate",    0,   0, BF_ANY, TY_INT,    BOPE_TEMPLATE, "(($r).num / ($R).den)" },
-  { TY_RATIONAL, "round",       0,   0, BF_ANY, TY_INT,    BOPE_TEMPLATE, "sp_rational_round_i($r)" },
+  { TY_RATIONAL, "round",       0,   0, BF_ANY, TY_INT,    BOPE_TEMPLATE, "sp_rational_round_i($r)", 0, 0, BOPF_KEYWORDS },
   { TY_RATIONAL, "floor",       0,   0, BF_ANY, TY_INT,    BOPE_TEMPLATE, "sp_rational_floor_i($r)" },
   { TY_RATIONAL, "ceil",        0,   0, BF_ANY, TY_INT,    BOPE_TEMPLATE, "sp_rational_ceil_i($r)" },
-  { TY_RATIONAL, "round",       1,   2, BF_ANY, TY_UNKNOWN,    BOPE_RATIONAL_ROUND, NULL, 0, 0, BOPF_INFERRED },  /* a count literal's value picks Integer or Rational (infer_numeric_call) */
+  { TY_RATIONAL, "round",       1,   2, BF_ANY, TY_UNKNOWN,    BOPE_RATIONAL_ROUND, NULL, 0, 0, BOPF_INFERRED | BOPF_KEYWORDS },  /* a count literal's value picks Integer or Rational (infer_numeric_call) */
   { TY_RATIONAL, "truncate",    1,   2, BF_ANY, TY_UNKNOWN,    BOPE_RATIONAL_ROUND, NULL, 0, 0, BOPF_INFERRED },  /* a count literal's value picks Integer or Rational (infer_numeric_call) */
   { TY_RATIONAL, "floor",       1,   2, BF_ANY, TY_UNKNOWN,    BOPE_RATIONAL_ROUND, NULL, 0, 0, BOPF_INFERRED },  /* a count literal's value picks Integer or Rational (infer_numeric_call) */
   { TY_RATIONAL, "ceil",        1,   2, BF_ANY, TY_UNKNOWN,    BOPE_RATIONAL_ROUND, NULL, 0, 0, BOPF_INFERRED },  /* a count literal's value picks Integer or Rational (infer_numeric_call) */
@@ -1056,8 +1080,8 @@ static const BuiltinOp bop_rows[] = {
      Stage 1 sits at the Object freeze/copy protocol, before its identity arm. */
   { TY_RANGE, "frozen?", 0, 0, BF_ANY, TY_BOOL, BOPE_TEMPLATE, "!($r).unfrozen", 0, 0, 0, 1 },
   { TY_RANGE, "dup", 0, 0, BF_ANY, TY_RANGE, BOPE_TEMPLATE, "({ sp_Range _t$t = $r; _t$t.unfrozen = 1; _t$t; })", 0, 0, 0, 1 },
-  { TY_RANGE, "clone", 0, 0, BF_ANY, TY_RANGE, BOPE_TEMPLATE, "$r", 0, 0, 0, 1 },
-  { TY_RANGE, "clone", 1, 1, BF_ANY, TY_RANGE, BOPE_RANGE_CLONE, NULL, 0, 0, 0, 1 },
+  { TY_RANGE, "clone", 0, 0, BF_ANY, TY_RANGE, BOPE_TEMPLATE, "$r", 0, 0, BOPF_KEYWORDS, 1 },
+  { TY_RANGE, "clone", 1, 1, BF_ANY, TY_RANGE, BOPE_RANGE_CLONE, NULL, 0, 0, BOPF_KEYWORDS, 1 },
   { TY_RANGE, "freeze", 0, 0, BF_ANY, TY_RANGE, BOPE_RANGE_FREEZE, NULL, 0, 0, 0, 1 },
 
   /* a Range of Times: its ends and membership compare the Times; anything that iterates raises CRuby's TypeError */
@@ -1104,10 +1128,10 @@ static const BuiltinOp bop_rows[] = {
   { TY_TIME_RANGE, "to_s", 0, 0, BF_ANY, TY_STRING, BOPE_TEMPLATE, "sp_trange_to_s($r)", 0 },
   { TY_TIME_RANGE, "inspect", 0, 0, BF_ANY, TY_STRING, BOPE_TEMPLATE, "sp_trange_inspect($r)", 0 },
   { TY_TIME_RANGE, "hash", 0, 0, BF_ANY, TY_INT, BOPE_TEMPLATE, "sp_trange_hash($r)", 0 },
-  { TY_TIME_RANGE, "class", 0, 0, BF_ANY, TY_CLASS, BOPE_TEMPLATE, "((void)($r), ((sp_Class){0, SPL(\"Range\")}))", 0 },
+  { TY_TIME_RANGE, "class", 0, 0, BF_ANY, TY_CLASS, BOPE_CLASS_VALUE, "Range" },
   { TY_TIME_RANGE, "frozen?", 0, 0, BF_ANY, TY_BOOL, BOPE_TEMPLATE, "(sp_bool)!($r)->unfrozen", 0 },
   { TY_TIME_RANGE, "dup", 0, 0, BF_ANY, TY_TIME_RANGE, BOPE_TEMPLATE, "sp_trange_copy($r, 0)", 0 },
-  { TY_TIME_RANGE, "clone", 0, 0, BF_ANY, TY_TIME_RANGE, BOPE_TEMPLATE, "sp_trange_copy($r, 1)", 0 },
+  { TY_TIME_RANGE, "clone", 0, 0, BF_ANY, TY_TIME_RANGE, BOPE_TEMPLATE, "sp_trange_copy($r, 1)", 0, 0, BOPF_KEYWORDS },
   { TY_TIME_RANGE, "itself", 0, 0, BF_ANY, TY_TIME_RANGE, BOPE_TEMPLATE, "$r", 0 },
   { TY_TIME_RANGE, "freeze", 0, 0, BF_ANY, TY_TIME_RANGE, BOPE_TEMPLATE, "({ sp_TimeRange *_t$T = $r; _t$T->unfrozen = 0; _t$T; })", 0 },
   { TY_TIME_RANGE, "to_a", 0, 0, BF_NONE, TY_POLY, BOPE_TEMPLATE, "sp_trange_to_a($r)", 0 },
@@ -1138,10 +1162,10 @@ static const BuiltinOp bop_rows[] = {
   { TY_OBJ_RANGE, "to_s", 0, 0, BF_ANY, TY_STRING, BOPE_TEMPLATE, "sp_orange_to_s($r)", 0 },
   { TY_OBJ_RANGE, "inspect", 0, 0, BF_ANY, TY_STRING, BOPE_TEMPLATE, "sp_orange_inspect($r)", 0 },
   { TY_OBJ_RANGE, "hash", 0, 0, BF_ANY, TY_INT, BOPE_TEMPLATE, "sp_orange_hash($r)", 0 },
-  { TY_OBJ_RANGE, "class", 0, 0, BF_ANY, TY_CLASS, BOPE_TEMPLATE, "((void)($r), ((sp_Class){0, SPL(\"Range\")}))", 0 },
+  { TY_OBJ_RANGE, "class", 0, 0, BF_ANY, TY_CLASS, BOPE_CLASS_VALUE, "Range" },
   { TY_OBJ_RANGE, "frozen?", 0, 0, BF_ANY, TY_BOOL, BOPE_TEMPLATE, "(sp_bool)!($r)->unfrozen", 0 },
   { TY_OBJ_RANGE, "dup", 0, 0, BF_ANY, TY_OBJ_RANGE, BOPE_TEMPLATE, "sp_orange_copy($r, 0)", 0 },
-  { TY_OBJ_RANGE, "clone", 0, 0, BF_ANY, TY_OBJ_RANGE, BOPE_TEMPLATE, "sp_orange_copy($r, 1)", 0 },
+  { TY_OBJ_RANGE, "clone", 0, 0, BF_ANY, TY_OBJ_RANGE, BOPE_TEMPLATE, "sp_orange_copy($r, 1)", 0, 0, BOPF_KEYWORDS },
   { TY_OBJ_RANGE, "itself", 0, 0, BF_ANY, TY_OBJ_RANGE, BOPE_TEMPLATE, "$r", 0 },
   { TY_OBJ_RANGE, "each", 0, 0, BF_REQUIRED, TY_OBJ_RANGE, BOPE_NONE },  /* the receiver, as CRuby; codegen_iter walks it */
   { TY_OBJ_RANGE, "first", 1, 1, BF_NONE, TY_POLY_ARRAY, BOPE_TEMPLATE, "({ sp_ObjRange *_t$T = $r; SP_GC_ROOT(_t$T); sp_orange_first_n(_t$T, $i0); })", 0 },
@@ -1169,13 +1193,13 @@ static const BuiltinOp bop_rows[] = {
   { TY_STR_RANGE, "exclude_end?", 0,   0, BF_ANY,  TY_BOOL,        BOPE_TEMPLATE, "({ sp_StrRange _t$T = $r; (sp_bool)_t$T.excl; })", 0 },
   { TY_STR_RANGE, "overlap?",     1,   1, BF_NONE, TY_BOOL,        BOPE_TEMPLATE, "({ sp_StrRange _t$T = $r; sp_RbVal _a$T = $b0; sp_srange_overlap_v(_t$T, _a$T); })", 0 },  /* CRuby's range_overlap over String ends */
   { TY_STR_RANGE, "bsearch",      0,   0, BF_REQUIRED, TY_POLY,    BOPE_TEMPLATE, "({ sp_StrRange _t$T = $r; sp_raise_cls(\"TypeError\", $B ? \"can't do binary search for String\" : \"can't do binary search for NilClass\"); sp_box_nil(); })", 0 },  /* only a numeric Range searches; CRuby names the begin's class */
-  { TY_STR_RANGE, "class",        0,   0, BF_ANY,  TY_CLASS,       BOPE_TEMPLATE, "((void)($r), ((sp_Class){0, SPL(\"Range\")}))", 0 },
+  { TY_STR_RANGE, "class",        0,   0, BF_ANY,  TY_CLASS,       BOPE_CLASS_VALUE, "Range" },
   { TY_STR_RANGE, "frozen?",      0,   0, BF_ANY,  TY_BOOL,        BOPE_TEMPLATE, "!($r).unfrozen", 0, 0, 0, 1 },
   { TY_STR_RANGE, "freeze",       0,   0, BF_ANY,  TY_STR_RANGE,   BOPE_RANGE_FREEZE, NULL, 0, 0, 0, 1 },
   { TY_STR_RANGE, "itself",       0,   0, BF_ANY,  TY_STR_RANGE,   BOPE_TEMPLATE, "$r", 0 },
   { TY_STR_RANGE, "dup",          0,   0, BF_ANY,  TY_STR_RANGE,   BOPE_TEMPLATE, "({ sp_StrRange _t$t = $r; _t$t.unfrozen = 1; _t$t; })", 0, 0, 0, 1 },
-  { TY_STR_RANGE, "clone",        0,   0, BF_ANY,  TY_STR_RANGE,   BOPE_TEMPLATE, "$r", 0, 0, 0, 1 },
-  { TY_STR_RANGE, "clone",        1,   1, BF_ANY,  TY_STR_RANGE, BOPE_RANGE_CLONE, NULL, 0, 0, 0, 1 },
+  { TY_STR_RANGE, "clone",        0,   0, BF_ANY,  TY_STR_RANGE,   BOPE_TEMPLATE, "$r", 0, 0, BOPF_KEYWORDS, 1 },
+  { TY_STR_RANGE, "clone",        1,   1, BF_ANY,  TY_STR_RANGE, BOPE_RANGE_CLONE, NULL, 0, 0, BOPF_KEYWORDS, 1 },
   { TY_STR_RANGE, "begin",        1, 127, BF_ANY,      TY_STR_ARRAY,   BOPE_NONE },
   { TY_STR_RANGE, "end",          1, 127, BF_ANY,      TY_STR_ARRAY,   BOPE_NONE },
   { TY_STR_RANGE, "min",          1, 127, BF_ANY,      TY_STR_ARRAY,   BOPE_NONE },
@@ -1223,7 +1247,7 @@ static const BuiltinOp bop_rows[] = {
   { TY_STR_RANGE, "freeze",       0, 127, BF_ANY,      TY_STR_RANGE,   BOPE_NONE },
   { TY_STR_RANGE, "itself",       0, 127, BF_ANY,      TY_STR_RANGE,   BOPE_NONE },
   { TY_STR_RANGE, "dup",          0, 127, BF_ANY,      TY_STR_RANGE,   BOPE_NONE },
-  { TY_STR_RANGE, "clone",        0, 127, BF_ANY,      TY_STR_RANGE,   BOPE_NONE },
+  { TY_STR_RANGE, "clone",        0, 127, BF_ANY,      TY_STR_RANGE,   BOPE_NONE, NULL, 0, 0, BOPF_KEYWORDS },
 
   /* Float range (1.0..3.0): not iterable. minmax is the endpoints (#3690).
      The iterators raise "can't iterate from Float" at run time and type
@@ -1238,7 +1262,10 @@ static const BuiltinOp bop_rows[] = {
   { TY_FLOAT_RANGE, "minmax",       0,   0, BF_NONE, TY_FLOAT_ARRAY, BOPE_TEMPLATE, "({ sp_FloatRange _t$T = $r; sp_ofloat _t$t = sp_frange_max_v(_t$T); sp_ofloat _t$u = sp_frange_min_v(_t$T); sp_FloatArray *_r$T = sp_FloatArray_new(); SP_GC_ROOT(_r$T); sp_FloatArray_push_nilable(_r$T, _t$u); sp_FloatArray_push_nilable(_r$T, _t$t); _r$T; })", 0 },  /* the endpoints (#3690): max first, as CRuby's range_minmax evaluates them, and nil for an empty range */
   { TY_FLOAT_RANGE, "cover?",       1,   1, BF_ANY,  TY_BOOL,        BOPE_TEMPLATE, "({ sp_FloatRange _t$T = $r; sp_frange_cover_i(_t$T, $i0); })", BOP_K(TY_INT) },  /* an Integer compares exactly (#7505) */
   { TY_FLOAT_RANGE, "cover?",       1,   1, BF_ANY,  TY_BOOL,        BOPE_TEMPLATE, "({ sp_FloatRange _t$T = $r; sp_frange_cover(_t$T, $f0); })", BOP_K(TY_FLOAT) },
-  { TY_FLOAT_RANGE, "cover?",       1,   1, BF_ANY,  TY_BOOL,        BOPE_TEMPLATE, "({ sp_FloatRange _t$T = $r; sp_RbVal _a$T = $b0; sp_frange_cover_poly(_t$T, _a$T); })", BOP_K(TY_POLY) | BOP_K(TY_RATIONAL) | BOP_K(TY_BIGINT) },
+  { TY_FLOAT_RANGE, "cover?",       1,   1, BF_ANY,  TY_BOOL,        BOPE_TEMPLATE, "({ sp_FloatRange _t$T = $r; sp_RbVal _a$T = $b0; sp_frange_cover_val(_t$T, _a$T); })", BOP_K(TY_POLY) | BOP_K(TY_RATIONAL) | BOP_K(TY_BIGINT) },
+  /* a Range is covered by its ends (r_cover_range_p) */
+  { TY_FLOAT_RANGE, "cover?",       1,   1, BF_ANY,  TY_BOOL,        BOPE_TEMPLATE, "({ sp_FloatRange _t$T = $r; sp_frange_cover_rng(_t$T, $e0); })", BOP_K(TY_RANGE) },
+  { TY_FLOAT_RANGE, "cover?",       1,   1, BF_ANY,  TY_BOOL,        BOPE_TEMPLATE, "({ sp_FloatRange _t$T = $r; sp_frange_cover_frange(_t$T, $e0); })", BOP_K(TY_FLOAT_RANGE) },
   { TY_FLOAT_RANGE, "cover?",       1,   1, BF_ANY,  TY_BOOL,        BOPE_TEMPLATE, "((void)($e0), 0)", 0 },  /* never covers a non-number */
   { TY_FLOAT_RANGE, "include?",     1,   1, BF_ANY,  TY_BOOL,        BOPE_TEMPLATE, "({ sp_FloatRange _t$T = $r; sp_frange_cover_i(_t$T, $i0); })", BOP_K(TY_INT) },  /* an Integer compares exactly (#7505) */
   { TY_FLOAT_RANGE, "include?",     1,   1, BF_ANY,  TY_BOOL,        BOPE_TEMPLATE, "({ sp_FloatRange _t$T = $r; sp_frange_cover(_t$T, $f0); })", BOP_K(TY_FLOAT) },
@@ -1261,13 +1288,13 @@ static const BuiltinOp bop_rows[] = {
   { TY_FLOAT_RANGE, "inspect",      0,   0, BF_ANY,  TY_STRING,      BOPE_TEMPLATE, "({ sp_FloatRange _t$T = $r; sp_frange_inspect(_t$T); })", 0 },
   { TY_FLOAT_RANGE, "step",         1,   1, BF_NONE, TY_FLOAT_ARRAY, BOPE_TEMPLATE, "({ sp_FloatRange _t$T = $r; sp_FloatArray_from_step(_t$T.first, _t$T.last, $f0, _t$T.excl); })", 0 },
   { TY_FLOAT_RANGE, "step",         0,   0, BF_NONE, TY_FLOAT_ARRAY, BOPE_TEMPLATE, "({ sp_FloatRange _t$T = $r; sp_FloatArray_from_step(_t$T.first, _t$T.last, 1.0, _t$T.excl); })", 0 },  /* no argument: a step of 1 */
-  { TY_FLOAT_RANGE, "class",        0,   0, BF_ANY,  TY_CLASS,       BOPE_TEMPLATE, "((void)($r), ((sp_Class){0, SPL(\"Range\")}))", 0 },
+  { TY_FLOAT_RANGE, "class",        0,   0, BF_ANY,  TY_CLASS,       BOPE_CLASS_VALUE, "Range" },
   { TY_FLOAT_RANGE, "frozen?",      0,   0, BF_ANY,  TY_BOOL,        BOPE_TEMPLATE, "!($r).unfrozen", 0, 0, 0, 1 },
   { TY_FLOAT_RANGE, "freeze",       0,   0, BF_ANY,  TY_FLOAT_RANGE, BOPE_RANGE_FREEZE, NULL, 0, 0, 0, 1 },
   { TY_FLOAT_RANGE, "itself",       0,   0, BF_ANY,  TY_FLOAT_RANGE, BOPE_TEMPLATE, "$r", 0 },
   { TY_FLOAT_RANGE, "dup",          0,   0, BF_ANY,  TY_FLOAT_RANGE, BOPE_TEMPLATE, "({ sp_FloatRange _t$t = $r; _t$t.unfrozen = 1; _t$t; })", 0, 0, 0, 1 },
-  { TY_FLOAT_RANGE, "clone",        0,   0, BF_ANY,  TY_FLOAT_RANGE, BOPE_TEMPLATE, "$r", 0, 0, 0, 1 },
-  { TY_FLOAT_RANGE, "clone",        1,   1, BF_ANY,  TY_FLOAT_RANGE, BOPE_RANGE_CLONE, NULL, 0, 0, 0, 1 },
+  { TY_FLOAT_RANGE, "clone",        0,   0, BF_ANY,  TY_FLOAT_RANGE, BOPE_TEMPLATE, "$r", 0, 0, BOPF_KEYWORDS, 1 },
+  { TY_FLOAT_RANGE, "clone",        1,   1, BF_ANY,  TY_FLOAT_RANGE, BOPE_RANGE_CLONE, NULL, 0, 0, BOPF_KEYWORDS, 1 },
   { TY_FLOAT_RANGE, "nil?",         0,   0, BF_ANY,  TY_BOOL,        BOPE_TEMPLATE, "((void)($r), (sp_bool)0)", 0 },  /* a Range value is never nil */
   { TY_FLOAT_RANGE, "first",        1,   1, BF_ANY,  TY_POLY,        BOPE_TEMPLATE, "({ sp_frange_count_raise($r, $b0, 0); sp_box_nil(); })", 0 },  /* the count is checked before the walk */
   { TY_FLOAT_RANGE, "first",        0, 127, BF_ANY,  TY_POLY,        BOPE_TEMPLATE, "({ sp_frange_iter_raise($r, 0); sp_box_nil(); })", 0 },  /* first(n)/last(n) iterate */
@@ -1298,7 +1325,7 @@ static const BuiltinOp bop_rows[] = {
   { TY_FLOAT_RANGE, "freeze",           0, 127, BF_ANY,      TY_FLOAT_RANGE, BOPE_NONE },
   { TY_FLOAT_RANGE, "itself",           0, 127, BF_ANY,      TY_FLOAT_RANGE, BOPE_NONE },
   { TY_FLOAT_RANGE, "dup",              0, 127, BF_ANY,      TY_FLOAT_RANGE, BOPE_NONE },
-  { TY_FLOAT_RANGE, "clone",            0, 127, BF_ANY,      TY_FLOAT_RANGE, BOPE_NONE },
+  { TY_FLOAT_RANGE, "clone",            0, 127, BF_ANY,      TY_FLOAT_RANGE, BOPE_NONE, NULL, 0, 0, BOPF_KEYWORDS },
   { TY_FLOAT_RANGE, "each",             0, 127, BF_ANY,      TY_POLY,        BOPE_TEMPLATE, "({ sp_frange_iter_raise($r, 0); sp_box_nil(); })" },
   { TY_FLOAT_RANGE, "map",              0, 127, BF_ANY,      TY_POLY,        BOPE_TEMPLATE, "({ sp_frange_iter_raise($r, 0); sp_box_nil(); })" },
   { TY_FLOAT_RANGE, "collect",          0, 127, BF_ANY,      TY_POLY,        BOPE_TEMPLATE, "({ sp_frange_iter_raise($r, 0); sp_box_nil(); })" },
@@ -1405,7 +1432,7 @@ static const BuiltinOp bop_rows[] = {
   { TY_ENUMERATOR, "to_a",            0,   0, BF_ANY,      TY_POLY_ARRAY,  BOPE_NONE },
   { TY_ENUMERATOR, "entries",         0,   0, BF_ANY,      TY_POLY_ARRAY,  BOPE_NONE },
   { TY_ENUMERATOR, "dup",             0,   0, BF_ANY,      BOPR_SELF,      BOPE_TEMPLATE, "sp_Enumerator_dup_unfrozen($r)", 0 },
-  { TY_ENUMERATOR, "clone",           0,   0, BF_ANY,      BOPR_SELF,      BOPE_TEMPLATE, "sp_Enumerator_dup($r)", 0 },
+  { TY_ENUMERATOR, "clone",           0,   0, BF_ANY,      BOPR_SELF,      BOPE_TEMPLATE, "sp_Enumerator_dup($r)", 0, 0, BOPF_KEYWORDS },
   { TY_ENUMERATOR, "inspect",         0,   0, BF_ANY,      TY_STRING,      BOPE_TEMPLATE, "sp_enum_inspect($r)" },
   { TY_ENUMERATOR, "to_s",            0,   0, BF_ANY,      TY_STRING,      BOPE_TEMPLATE, "sp_enum_inspect($r)" },
 
@@ -1457,7 +1484,7 @@ static const BuiltinOp bop_rows[] = {
      Fiber rules, so they leave inference to the rules after them. */
   { TY_FIBER, "resume",        0, BOP_ARGC_ANY, BF_ANY, TY_POLY,    BOPE_FIBER_RESUME },
   { TY_FIBER, "transfer",      0, BOP_ARGC_ANY, BF_ANY, TY_POLY,    BOPE_FIBER_TRANSFER },
-  { TY_FIBER, "raise",         0, BOP_ARGC_ANY, BF_ANY, TY_POLY,    BOPE_FIBER_RAISE },
+  { TY_FIBER, "raise",         0, BOP_ARGC_ANY, BF_ANY, TY_POLY,    BOPE_FIBER_RAISE, NULL, 0, 0, BOPF_KEYWORDS },
   /* the fiber's own storage by a literal key: what a `Fiber.attr_accessor`
      reader and writer (handle_attr_form) read and write on self */
   { TY_FIBER, "__storage_get", 1, 1, BF_ANY, TY_POLY, BOPE_TEMPLATE, "sp_Fiber_attr_get($r, $e0)", BOP_K(TY_SYMBOL) },
@@ -1507,7 +1534,7 @@ static const BuiltinOp bop_rows[] = {
   { TY_THREAD, "exit",      0, BOP_ARGC_ANY, BF_ANY, TY_THREAD, BOPE_NONE },
   { TY_THREAD, "terminate", 0, 0,            BF_ANY, TY_THREAD, BOPE_TEMPLATE, "sp_Thread_kill($r)" },
   { TY_THREAD, "terminate", 0, BOP_ARGC_ANY, BF_ANY, TY_THREAD, BOPE_NONE },
-  { TY_THREAD, "raise",     0, BOP_ARGC_ANY, BF_ANY, TY_NIL,    BOPE_THREAD_RAISE },  /* nil, as CRuby answers */
+  { TY_THREAD, "raise",     0, BOP_ARGC_ANY, BF_ANY, TY_NIL,    BOPE_THREAD_RAISE, NULL, 0, 0, BOPF_KEYWORDS },  /* nil, as CRuby answers */
   { TY_THREAD, "wakeup",    0, 0,            BF_ANY, TY_THREAD, BOPE_TEMPLATE, "sp_Thread_wakeup($r)" },
   { TY_THREAD, "wakeup",    0, BOP_ARGC_ANY, BF_ANY, TY_THREAD, BOPE_NONE },
   { TY_THREAD, "run",       0, 0,            BF_ANY, TY_THREAD, BOPE_TEMPLATE, "sp_Thread_run($r)" },
@@ -1565,7 +1592,7 @@ static const BuiltinOp bop_rows[] = {
   /* Queue and SizedQueue have no initialize_copy: dup and clone raise
      NoMethodError for it (sp_Queue_copy_error) */
   { TY_QUEUE, "dup",     0, 0, BF_ANY, TY_QUEUE, BOPE_TEMPLATE, "sp_Queue_copy_error($r)" },
-  { TY_QUEUE, "clone",   0, 0, BF_ANY, TY_QUEUE, BOPE_TEMPLATE, "sp_Queue_copy_error($r)" },
+  { TY_QUEUE, "clone",   0, 0, BF_ANY, TY_QUEUE, BOPE_TEMPLATE, "sp_Queue_copy_error($r)", 0, 0, BOPF_KEYWORDS },
   { TY_QUEUE, "pop",     0, 2,            BF_ANY, TY_POLY,  BOPE_QUEUE_POP },
   { TY_QUEUE, "pop",     0, BOP_ARGC_ANY, BF_ANY, TY_POLY,  BOPE_NONE },
   { TY_QUEUE, "shift",   0, 2,            BF_ANY, TY_POLY,  BOPE_QUEUE_POP },
@@ -1642,7 +1669,7 @@ static const BuiltinOp bop_rows[] = {
   { TY_IO, "timeout=",       0, 127, BF_ANY, TY_UNKNOWN,  BOPE_NONE },
   { TY_IO, "read",           0,   0, BF_ANY, TY_STRING,   BOPE_TEMPLATE, "sp_File_read($r)", TY_UNKNOWN },
   { TY_IO, "read",           0, 127, BF_ANY, TY_STRING,   BOPE_NONE },
-  { TY_IO, "gets",           0, 127, BF_ANY, TY_STRING,   BOPE_NONE },
+  { TY_IO, "gets",           0, 127, BF_ANY, TY_STRING,   BOPE_NONE, NULL, 0, 0, BOPF_KEYWORDS },
   { TY_IO, "path",           0, 127, BF_ANY, TY_STRING,   BOPE_TEMPLATE, "sp_File_path($r)", TY_UNKNOWN },
   { TY_IO, "to_path",        0, 127, BF_ANY, TY_STRING,   BOPE_TEMPLATE, "sp_File_path($r)", TY_UNKNOWN },
   { TY_IO, "getc",           0, 127, BF_ANY, TY_STRING,   BOPE_NONE },
@@ -1819,8 +1846,8 @@ static const BuiltinOp bop_rows[] = {
   { TY_REGEX, "freeze",          0, 127, BF_ANY,      TY_REGEX,         BOPE_NONE },
   { TY_REGEX, "dup",             0,   0, BF_ANY,      TY_REGEX,      BOPE_TEMPLATE, "$r", 0 },
   { TY_REGEX, "dup",             0, 127, BF_ANY,      TY_REGEX,         BOPE_NONE },
-  { TY_REGEX, "clone",           0,   0, BF_ANY,      TY_REGEX,      BOPE_TEMPLATE, "$r", 0 },
-  { TY_REGEX, "clone",           0, 127, BF_ANY,      TY_REGEX,         BOPE_NONE },
+  { TY_REGEX, "clone",           0,   0, BF_ANY,      TY_REGEX,      BOPE_TEMPLATE, "$r", 0, 0, BOPF_KEYWORDS },
+  { TY_REGEX, "clone",           0, 127, BF_ANY,      TY_REGEX,         BOPE_NONE, NULL, 0, 0, BOPF_KEYWORDS },
   { TY_REGEX, "itself",          0,   0, BF_ANY,      TY_REGEX,      BOPE_TEMPLATE, "$r", 0 },
   { TY_REGEX, "itself",          0, 127, BF_ANY,      TY_REGEX,         BOPE_NONE },
   { TY_REGEX, "frozen?",         0,   0, BF_ANY,      TY_BOOL,       BOPE_TEMPLATE, "((void)($r), 1)", 0 },
@@ -1847,9 +1874,9 @@ static const BuiltinOp bop_rows[] = {
 
   /* Symbol: result kinds; emission stays in emit_call_body. <=> and
      casecmp/casecmp? are typed by the operand (nil for a non-Symbol). */
-  { TY_SYMBOL, "to_s",            0, 127, BF_ANY,      TY_STRING,     BOPE_TEMPLATE, "sp_sym_to_s_frozen($r)", 0 },
-  { TY_SYMBOL, "id2name",         0, 127, BF_ANY,      TY_STRING,     BOPE_TEMPLATE, "sp_sym_to_s_frozen($r)", 0 },
-  { TY_SYMBOL, "name",            0, 127, BF_ANY,      TY_STRING,     BOPE_TEMPLATE, "sp_str_uminus_val(sp_sym_to_s($r))", 0 },
+  { TY_SYMBOL, "to_s",            0, 127, BF_ANY,      TY_STRING,     BOPE_TEMPLATE, "sp_sym_to_s_new($r)", 0 },
+  { TY_SYMBOL, "id2name",         0, 127, BF_ANY,      TY_STRING,     BOPE_TEMPLATE, "sp_sym_to_s_new($r)", 0 },
+  { TY_SYMBOL, "name",            0, 127, BF_ANY,      TY_STRING,     BOPE_TEMPLATE, "sp_sym_name_str($r)", 0 },
   { TY_SYMBOL, "inspect",         0, 127, BF_ANY,      TY_STRING,     BOPE_TEMPLATE, "sp_sym_inspect($r)", 0 },
   { TY_SYMBOL, "upcase",          0, 127, BF_ANY,      TY_SYMBOL,     BOPE_TEMPLATE, "sp_sym_intern(sp_str_upcase$C(sp_sym_to_s($r)))", 0 },
   { TY_SYMBOL, "downcase",        0, 127, BF_ANY,      TY_SYMBOL,     BOPE_TEMPLATE, "sp_sym_intern(sp_str_downcase$C(sp_sym_to_s($r)))", 0 },
@@ -1859,7 +1886,7 @@ static const BuiltinOp bop_rows[] = {
   { TY_SYMBOL, "intern",          0, 127, BF_ANY,      TY_SYMBOL,     BOPE_TEMPLATE, "$r", 0 },
   { TY_SYMBOL, "itself",          0, 127, BF_ANY,      TY_SYMBOL,     BOPE_TEMPLATE, "$r", 0 },
   { TY_SYMBOL, "dup",             0,   0, BF_ANY,      TY_SYMBOL,     BOPE_NONE },
-  { TY_SYMBOL, "clone",           0,   0, BF_ANY,      TY_SYMBOL,     BOPE_NONE },
+  { TY_SYMBOL, "clone",           0,   0, BF_ANY,      TY_SYMBOL,     BOPE_NONE, NULL, 0, 0, BOPF_KEYWORDS },
   { TY_SYMBOL, "freeze",          0,   0, BF_ANY,      TY_SYMBOL,     BOPE_NONE },
   { TY_SYMBOL, "succ",            0, 127, BF_ANY,      TY_SYMBOL,     BOPE_TEMPLATE, "sp_sym_intern(sp_str_succ(sp_sym_to_s($r)))", 0 },
   { TY_SYMBOL, "next",            0, 127, BF_ANY,      TY_SYMBOL,     BOPE_TEMPLATE, "sp_sym_intern(sp_str_succ(sp_sym_to_s($r)))", 0 },
@@ -1915,7 +1942,7 @@ static const BuiltinOp bop_rows[] = {
   { TY_METHOD, "parameters",      0,   0, BF_ANY, TY_POLY_ARRAY, BOPE_METHOD_PARAMETERS, 0, 0, 0, 0, 1 },  /* stage 1: after the reflection arm */
   { TY_METHOD, "source_location", 0,   0, BF_ANY, TY_POLY_ARRAY, BOPE_METHOD_SOURCE_LOCATION },
   { TY_METHOD, "dup",             0,   0, BF_ANY,      TY_METHOD,     BOPE_TEMPLATE, "$r", 0 },
-  { TY_METHOD, "clone",           0,   0, BF_ANY,      TY_METHOD,     BOPE_TEMPLATE, "$r", 0 },
+  { TY_METHOD, "clone",           0,   0, BF_ANY,      TY_METHOD,     BOPE_TEMPLATE, "$r", 0, 0, BOPF_KEYWORDS },
   { TY_METHOD, "unbind",          0,   0, BF_ANY, TY_METHOD,     BOPE_METHOD_UNBIND },
   { TY_METHOD, "super_method",    0,   0, BF_ANY, TY_METHOD,     BOPE_METHOD_SUPER_METHOD },
   { TY_METHOD, "inspect",         0,   0, BF_ANY,      TY_STRING,     BOPE_TEMPLATE, "sp_method_desc_cstr($r)", 0 },
@@ -1925,14 +1952,14 @@ static const BuiltinOp bop_rows[] = {
   { TY_METHOD, "receiver",        0,   0, BF_ANY, TY_UNKNOWN,    BOPE_METHOD_RECEIVER, NULL, 0, 0, BOPF_INFERRED },  /* typed by infer_method_proc_call (#2701) */
   { TY_METHOD, "arity",           0,   0, BF_ANY, TY_INT,        BOPE_METHOD_ARITY },
   { TY_METHOD, "==",              1,   1, BF_ANY, TY_BOOL,       BOPE_NONE },
-  { TY_METHOD, "eql?",            1,   1, BF_ANY,      TY_BOOL,       BOPE_TEMPLATE, "({ sp_BoundMethod *_t$t = $r; sp_BoundMethod *_t$u = $e0; (sp_bool)(_t$t->self == _t$u->self && _t$t->fn == _t$u->fn); })", BOP_K(TY_METHOD) },
+  { TY_METHOD, "eql?",            1,   1, BF_ANY,      TY_BOOL,       BOPE_TEMPLATE, "sp_bm_same($r, $e0)", BOP_K(TY_METHOD) },
   { TY_METHOD, "eql?",            1,   1, BF_ANY,      TY_BOOL,       BOPE_TEMPLATE, "((void)($r), (void)($b0), (sp_bool)0)", 0 },
-  { TY_METHOD, "equal?",          1,   1, BF_ANY,      TY_BOOL,       BOPE_TEMPLATE, "({ sp_BoundMethod *_t$t = $r; sp_BoundMethod *_t$u = $e0; (sp_bool)(_t$t->self == _t$u->self && _t$t->fn == _t$u->fn); })", BOP_K(TY_METHOD) },
+  { TY_METHOD, "equal?",          1,   1, BF_ANY,      TY_BOOL,       BOPE_TEMPLATE, "((void *)($r) == (void *)($e0))", BOP_K(TY_METHOD) },  /* object identity: two Methods of one method are == but not equal? */
   { TY_METHOD, "equal?",          1,   1, BF_ANY,      TY_BOOL,       BOPE_TEMPLATE, "((void)($r), (void)($b0), (sp_bool)0)", 0 },
   { TY_METHOD, "bind",            1,   1, BF_ANY, TY_METHOD,     BOPE_METHOD_BIND },  /* #2676 */
   { TY_PROC,   "to_proc",         0,   0, BF_ANY, TY_PROC,       BOPE_TEMPLATE, "$r", 0 },  /* self (#3687) */
   { TY_PROC,   "===",             1,   1, BF_ANY, TY_POLY,       BOPE_NONE },  /* the proc's value, boxed (#3818) */
-  { TY_PROC,   "parameters",      0,   1, BF_ANY, TY_POLY_ARRAY, BOPE_PROC_PARAMETERS },  /* parameters(lambda:) is the same shape */
+  { TY_PROC,   "parameters",      0,   1, BF_ANY, TY_POLY_ARRAY, BOPE_PROC_PARAMETERS, NULL, 0, 0, BOPF_KEYWORDS },  /* parameters(lambda:) is the same shape */
   { TY_PROC, "arity",           0,   0, BF_ANY,      TY_INT,        BOPE_TEMPLATE, "sp_proc_arity($r)", 0 },
   { TY_PROC, "lambda?",         0,   0, BF_ANY,      TY_BOOL,       BOPE_TEMPLATE, "sp_proc_lambda_p($r)", 0 },
   { TY_PROC, "frozen?",         0,   0, BF_ANY,      TY_BOOL,       BOPE_TEMPLATE, "(($r)->frozen)", 0 },
@@ -1941,7 +1968,7 @@ static const BuiltinOp bop_rows[] = {
   { TY_PROC, "to_s",            0,   0, BF_ANY,      TY_STRING,     BOPE_TEMPLATE, "sp_proc_inspect($r)", 0 },
   { TY_PROC, "freeze",          0,   0, BF_ANY,      TY_PROC,       BOPE_TEMPLATE, "({ sp_Proc *_t$t = $r; _t$t->frozen = TRUE; _t$t; })", 0 },
   { TY_PROC, "dup",             0,   0, BF_ANY,      TY_PROC,       BOPE_TEMPLATE, "sp_proc_dup($r, 0)", 0 },
-  { TY_PROC, "clone",           0,   0, BF_ANY,      TY_PROC,       BOPE_TEMPLATE, "sp_proc_dup($r, 1)", 0 },
+  { TY_PROC, "clone",           0,   0, BF_ANY,      TY_PROC,       BOPE_TEMPLATE, "sp_proc_dup($r, 1)", 0, 0, BOPF_KEYWORDS },
   { TY_PROC, "itself",          0,   0, BF_ANY,      TY_PROC,       BOPE_TEMPLATE, "$r", 0 },
   { TY_PROC, "equal?",          1,   1, BF_ANY,      TY_BOOL,       BOPE_TEMPLATE, "(($r) == ($e0))", BOP_K(TY_PROC) },
   { TY_PROC, "eql?",            1,   1, BF_ANY,      TY_BOOL,       BOPE_TEMPLATE, "(sp_proc_root($r) == sp_proc_root($e0))", BOP_K(TY_PROC) },
@@ -1998,7 +2025,7 @@ static const BuiltinOp bop_rows[] = {
   { TY_INT,   "-@",          0,   0, BF_ANY,      TY_INT,         BOPE_NONE },
   { TY_INT,   "itself",      0,   0, BF_ANY,      TY_INT,         BOPE_NONE },
   { TY_INT,   "dup",         0,   0, BF_ANY,      TY_INT,         BOPE_NONE },
-  { TY_INT,   "clone",       0,   0, BF_ANY,      TY_INT,         BOPE_NONE },
+  { TY_INT,   "clone",       0,   0, BF_ANY,      TY_INT,         BOPE_NONE, NULL, 0, 0, BOPF_KEYWORDS },
   { TY_INT,   "freeze",      0,   0, BF_ANY,      TY_INT,         BOPE_NONE },
   { TY_INT,   "size",        0,   0, BF_ANY,      TY_INT,         BOPE_TEMPLATE, "((void)($r), (sp_int)sizeof(sp_int))" },
   /* Numeric#singleton_method_added is public, and an Integer or a Float
@@ -2025,8 +2052,8 @@ static const BuiltinOp bop_rows[] = {
   { TY_INT,   "ceil",        0, 127, BF_ANY,      TY_INT,         BOPE_NONE },  /* no precision: self */
   { TY_INT,   "floor",       0,   0, BF_ANY,      TY_INT,         BOPE_TEMPLATE, "($r)" },
   { TY_INT,   "floor",       0, 127, BF_ANY,      TY_INT,         BOPE_NONE },
-  { TY_INT,   "round",       0,   0, BF_ANY,      TY_INT,         BOPE_TEMPLATE, "($r)" },
-  { TY_INT,   "round",       0, 127, BF_ANY,      TY_INT,         BOPE_NONE },
+  { TY_INT,   "round",       0,   0, BF_ANY,      TY_INT,         BOPE_TEMPLATE, "($r)", 0, 0, BOPF_KEYWORDS },
+  { TY_INT,   "round",       0, 127, BF_ANY,      TY_INT,         BOPE_NONE, NULL, 0, 0, BOPF_KEYWORDS },
   { TY_INT,   "truncate",    0,   0, BF_ANY,      TY_INT,         BOPE_TEMPLATE, "($r)" },
   { TY_INT,   "truncate",    0, 127, BF_ANY,      TY_INT,         BOPE_NONE },
   { TY_INT,   "divmod",      1,   1, BF_ANY,      TY_INT_ARRAY,   BOPE_NONE },
@@ -2072,7 +2099,7 @@ static const BuiltinOp bop_rows[] = {
   { TY_INT,   "times",       0, 127, BF_REQUIRED, TY_INT,         BOPE_NONE },  /* with a block: self */
   { TY_INT,   "upto",        0, 127, BF_REQUIRED, TY_INT,         BOPE_NONE },
   { TY_INT,   "downto",      0, 127, BF_REQUIRED, TY_INT,         BOPE_NONE },
-  { TY_INT,   "step",        0, 127, BF_REQUIRED, TY_INT,         BOPE_NONE },
+  { TY_INT,   "step",        0, 127, BF_REQUIRED, TY_INT,         BOPE_NONE, NULL, 0, 0, BOPF_KEYWORDS },
   { TY_INT,   "times",       0, 127, BF_NONE,     TY_RANGE,       BOPE_NONE },  /* without one: a range-like enumerator */
   { TY_INT,   "upto",        0, 127, BF_NONE,     TY_RANGE,       BOPE_NONE },
   { TY_INT,   "downto",      0, 127, BF_NONE,     TY_RANGE,       BOPE_NONE },
@@ -2125,7 +2152,7 @@ static const BuiltinOp bop_rows[] = {
   { TY_FLOAT, "-@",          0,   0, BF_ANY,      TY_FLOAT,       BOPE_NONE },
   { TY_FLOAT, "itself",      0,   0, BF_ANY,      TY_FLOAT,       BOPE_NONE },
   { TY_FLOAT, "dup",         0,   0, BF_ANY,      TY_FLOAT,       BOPE_NONE },
-  { TY_FLOAT, "clone",       0,   0, BF_ANY,      TY_FLOAT,       BOPE_NONE },
+  { TY_FLOAT, "clone",       0,   0, BF_ANY,      TY_FLOAT,       BOPE_NONE, NULL, 0, 0, BOPF_KEYWORDS },
   { TY_FLOAT, "freeze",      0,   0, BF_ANY,      TY_FLOAT,       BOPE_NONE },
   { TY_FLOAT, "magnitude",   0, 127, BF_ANY,      TY_FLOAT,       BOPE_TEMPLATE, "fabs($r)" },
   { TY_FLOAT, "modulo",      1,   1, BF_ANY,      TY_FLOAT,       BOPE_TEMPLATE, "sp_fmod($r, $F0)" },
@@ -2153,9 +2180,9 @@ static const BuiltinOp bop_rows[] = {
      calls that answer the receiver carry BOPF_SELF, the bangs that answer
      it or nil BOPF_SELF_OR_NIL, the ones that answer it or a copy of it
      BOPF_SELF_CLASS (bop_answers_self). */
-  { TY_STRING, "clear",           0,   0, BF_ANY,      TY_STRING,     BOPE_NONE, NULL, 0, 0, BOPF_SELF },  /* self (#2332) */
-  { TY_STRING, "[]=",             2,   3, BF_ANY,      TY_STRING,     BOPE_NONE },  /* the assigned string (#2370) */
-  { TY_STRING, "clone",           1,   1, BF_ANY,      TY_STRING,     BOPE_NONE, NULL, 0, 0, BOPF_COPY_CLASS },  /* clone(freeze: ...) */
+  { TY_STRING, "clear",           0,   0, BF_ANY,      TY_STRING,     BOPE_STRING_CLEAR, NULL, 0, 0, BOPF_SELF, 7 },  /* self (#2332) */
+  { TY_STRING, "[]=",             2,   3, BF_ANY,      BOPR_ARG_LAST, BOPE_STRING_ASET, NULL, 0, 0, 0, 7 },  /* the right-hand object (#2370) */
+  { TY_STRING, "clone",           1,   1, BF_ANY,      TY_STRING,     BOPE_NONE, NULL, 0, 0, BOPF_COPY_CLASS | BOPF_KEYWORDS },  /* clone(freeze: ...) */
   /* encoding and ascii_only? read the binary tag or the bytes through a
      function that takes NULL for "": a nil receiver raises through
      sp_nil_recv_named, as bytesize and valid_encoding? raise in their own
@@ -2192,7 +2219,7 @@ static const BuiltinOp bop_rows[] = {
   { TY_STRING, "delete",          0, 127, BF_ANY,      TY_STRING,     BOPE_NONE },
   /* Pattern analysis determines the result's element shape. */
   { TY_STRING, "scan", 1, 1, BF_NONE, TY_UNKNOWN, BOPE_STRING_SCAN_CHECKED, NULL, 0, 0, BOPF_INFERRED },  /* typed from the pattern's source (infer_string_recv_call) */
-  { TY_STRING, "slice!", 1, 2, BF_ANY, TY_STRING, BOPE_STRING_SLICE, 0, 0, 0, 0, 6 },
+  { TY_STRING, "slice!", 1, 2, BF_ANY, TY_STRING, BOPE_STRING_SLICE, 0, 0, 0, 0, 7 },
   { TY_STRING, "slice!",          0, 127, BF_ANY,      TY_STRING,     BOPE_NONE },  /* removed part, or nil */
   { TY_STRING, "[]",              0, 127, BF_ANY,      TY_STRING,     BOPE_NONE },
   { TY_STRING, "slice",           0, 127, BF_ANY,      TY_STRING,     BOPE_NONE },
@@ -2208,9 +2235,9 @@ static const BuiltinOp bop_rows[] = {
   { TY_STRING, "force_encoding",  0, 127, BF_ANY,      TY_STRING,     BOPE_NONE, NULL, 0, 0, BOPF_SELF },
   { TY_STRING, "b",               0,   0, BF_ANY,      TY_STRING,     BOPE_TEMPLATE, "sp_str_b($r)", 0 },
   { TY_STRING, "b",               0, 127, BF_ANY,      TY_STRING,     BOPE_NONE },
-  { TY_STRING, "encode",          0,   0, BF_ANY,      TY_STRING,     BOPE_TEMPLATE, "((const char *)sp_nil_recv_named($r, \"encode\"))", 0 },  /* the receiver, so nil raises */
-  { TY_STRING, "encode",          0, 127, BF_ANY,      TY_STRING,     BOPE_NONE },
-  { TY_STRING, "encode!",         0, 127, BF_ANY,      TY_STRING,     BOPE_NONE, NULL, 0, 0, BOPF_SELF },
+  { TY_STRING, "encode",          0,   0, BF_ANY,      TY_STRING,     BOPE_TEMPLATE, "((const char *)sp_nil_recv_named($r, \"encode\"))", 0, 0, BOPF_KEYWORDS },  /* the receiver, so nil raises */
+  { TY_STRING, "encode",          0, 127, BF_ANY,      TY_STRING,     BOPE_NONE, NULL, 0, 0, BOPF_KEYWORDS },
+  { TY_STRING, "encode!",         0, 127, BF_ANY,      TY_STRING,     BOPE_NONE, NULL, 0, 0, BOPF_SELF | BOPF_KEYWORDS },
   { TY_STRING, "dump",            0,   0, BF_ANY,      TY_STRING,     BOPE_TEMPLATE, "sp_str_dump($r)", 0 },
   { TY_STRING, "undump",          0,   0, BF_ANY,      TY_STRING,     BOPE_TEMPLATE, "sp_str_undump($r)", 0 },
   { TY_STRING, "scrub",           0,   0, BF_NONE,     TY_STRING,     BOPE_TEMPLATE, "sp_str_scrub($r, 0)", 0 },
@@ -2274,6 +2301,7 @@ static const BuiltinOp bop_rows[] = {
   { TY_STRING, "<<",              0, 127, BF_ANY,      TY_STRING,     BOPE_NONE, NULL, 0, 0, BOPF_SELF | BOPF_ARGS_BUILTIN },
   { TY_STRING, "prepend",         0,   0, BF_ANY,      TY_STRING,     BOPE_TEMPLATE, "({ const char *_t$t = $r; sp_str_check_mutable(_t$t); _t$t; })", 0, 0, BOPF_SELF | BOPF_ARGS_BUILTIN },
   { TY_STRING, "prepend",         0, 127, BF_ANY,      TY_STRING,     BOPE_NONE, NULL, 0, 0, BOPF_SELF | BOPF_ARGS_BUILTIN },
+  { TY_STRING, "insert",          2,   2, BF_ANY,      TY_STRING,     BOPE_STRING_INSERT, NULL, 0, 0, BOPF_SELF | BOPF_ARGS_BUILTIN, 7 },
   { TY_STRING, "insert",          0, 127, BF_ANY,      TY_STRING,     BOPE_NONE, NULL, 0, 0, BOPF_SELF | BOPF_ARGS_BUILTIN },
   { TY_STRING, "replace",         0, 127, BF_ANY,      TY_STRING,     BOPE_NONE, NULL, 0, 0, BOPF_SELF | BOPF_ARGS_BUILTIN },
   { TY_STRING, "ascii_only?",     0,   0, BF_ANY,      TY_BOOL,       BOPE_TEMPLATE, "sp_str_ascii_only(sp_nil_recv_named($r, \"ascii_only?\"))", 0 },  /* as encoding's row */
@@ -2306,8 +2334,8 @@ static const BuiltinOp bop_rows[] = {
   { TY_STRING, "split",           0, 127, BF_REQUIRED, TY_STRING,     BOPE_NONE, NULL, 0, 0, BOPF_SELF },
   { TY_STRING, "split",           0, 127, BF_ANY,      TY_STR_ARRAY,  BOPE_NONE },
   { TY_STRING, "upto",            1,   1, BF_ANY,      TY_STR_ARRAY,  BOPE_NONE },  /* blockless: the materialized sequence */
-  { TY_STRING, "unpack",          1,   1, BF_NONE,     TY_POLY_ARRAY, BOPE_TEMPLATE, "sp_str_unpack($r, $s0)", 0 },
-  { TY_STRING, "unpack",          1,   2, BF_NONE,     TY_POLY_ARRAY, BOPE_NONE },  /* a block yields each value (desugar_unpack_block) */
+  { TY_STRING, "unpack",          1,   1, BF_NONE,     TY_POLY_ARRAY, BOPE_TEMPLATE, "sp_str_unpack($r, $s0)", 0, 0, BOPF_KEYWORDS },
+  { TY_STRING, "unpack",          1,   2, BF_NONE,     TY_POLY_ARRAY, BOPE_NONE, NULL, 0, 0, BOPF_KEYWORDS },  /* a block yields each value (desugar_unpack_block) */
   { TY_STRING, "sub",             2,   2, BF_ANY,      TY_STRING,     BOPE_TEMPLATE, "sp_str_sub_str_str_hash($r, $e0, $e1)", 0, BOP_K(TY_STR_STR_HASH) },
   { TY_STRING, "sub",             2,   2, BF_ANY,      TY_STRING,     BOPE_TEMPLATE, "sp_str_sub_str_str_hash($r, $e0, sp_StrPolyHash_to_s_values($e1))", 0, BOP_K(TY_STR_POLY_HASH) },
   { TY_STRING, "sub",             2,   2, BF_ANY,      TY_STRING,     BOPE_TEMPLATE, "sp_str_sub_str_str_hash($r, $e0, sp_StrIntHash_to_s_values($e1))", 0, BOP_K(TY_STR_INT_HASH) },
@@ -2343,14 +2371,14 @@ static const BuiltinOp bop_rows[] = {
   { TY_STRING, "casecmp?",        1,   1, BF_ANY,      TY_BOOL,       BOPE_TEMPLATE, "sp_str_casecmp_p($r, $e0)", BOP_K(TY_STRING) | BOP_K(TY_UNKNOWN) },
   /* sp_str_lines reads nil as "" (each_line's arms take it too); a nil
      receiver raises as lines(sep)'s sp_str_lines_sep does */
-  { TY_STRING, "lines",           0,   0, BF_NONE,     TY_STR_ARRAY,  BOPE_TEMPLATE, "sp_str_lines(sp_nil_recv_named($r, \"lines\"))", 0 },
-  { TY_STRING, "lines",           0,   0, BF_REQUIRED, TY_STRING,     BOPE_TEMPLATE, "sp_str_lines(sp_nil_recv_named($r, \"lines\"))", 0, 0, BOPF_SELF },  /* the block form iterates and answers the receiver */
+  { TY_STRING, "lines",           0,   0, BF_NONE,     TY_STR_ARRAY,  BOPE_TEMPLATE, "sp_str_lines(sp_nil_recv_named($r, \"lines\"))", 0, 0, BOPF_KEYWORDS },
+  { TY_STRING, "lines",           0,   0, BF_REQUIRED, TY_STRING,     BOPE_TEMPLATE, "sp_str_lines(sp_nil_recv_named($r, \"lines\"))", 0, 0, BOPF_SELF | BOPF_KEYWORDS },  /* the block form iterates and answers the receiver */
   /* lines(sep): without a block the Array, with one the receiver (the block
      form iterates), whatever the separator's kind */
-  { TY_STRING, "lines",           1,   1, BF_NONE,     TY_STR_ARRAY,  BOPE_TEMPLATE, "sp_str_lines_sep($r, $e0)", BOP_K(TY_STRING) },
-  { TY_STRING, "lines",           1,   1, BF_REQUIRED, TY_STRING,     BOPE_TEMPLATE, "sp_str_lines_sep($r, $e0)", BOP_K(TY_STRING), 0, BOPF_SELF },
-  { TY_STRING, "lines",           1,   1, BF_NONE,     TY_STR_ARRAY,  BOPE_TEMPLATE, "sp_str_lines_sep($r, sp_poly_arg_str_or_null($b0))", BOP_K(TY_POLY) | BOP_K(TY_NIL) },
-  { TY_STRING, "lines",           1,   1, BF_REQUIRED, TY_STRING,     BOPE_TEMPLATE, "sp_str_lines_sep($r, sp_poly_arg_str_or_null($b0))", BOP_K(TY_POLY) | BOP_K(TY_NIL), 0, BOPF_SELF },
+  { TY_STRING, "lines",           1,   1, BF_NONE,     TY_STR_ARRAY,  BOPE_TEMPLATE, "sp_str_lines_sep($r, $e0)", BOP_K(TY_STRING), 0, BOPF_KEYWORDS },
+  { TY_STRING, "lines",           1,   1, BF_REQUIRED, TY_STRING,     BOPE_TEMPLATE, "sp_str_lines_sep($r, $e0)", BOP_K(TY_STRING), 0, BOPF_SELF | BOPF_KEYWORDS },
+  { TY_STRING, "lines",           1,   1, BF_NONE,     TY_STR_ARRAY,  BOPE_TEMPLATE, "sp_str_lines_sep($r, sp_poly_arg_str_or_null($b0))", BOP_K(TY_POLY) | BOP_K(TY_NIL), 0, BOPF_KEYWORDS },
+  { TY_STRING, "lines",           1,   1, BF_REQUIRED, TY_STRING,     BOPE_TEMPLATE, "sp_str_lines_sep($r, sp_poly_arg_str_or_null($b0))", BOP_K(TY_POLY) | BOP_K(TY_NIL), 0, BOPF_SELF | BOPF_KEYWORDS },
   { TY_STRING, "gsub",            2,   2, BF_ANY,      TY_STRING,     BOPE_TEMPLATE, "sp_str_gsub_str_str_hash($r, $e0, $e1)", 0, BOP_K(TY_STR_STR_HASH) },
   { TY_STRING, "gsub",            2,   2, BF_ANY,      TY_STRING,     BOPE_TEMPLATE, "sp_str_gsub_str_str_hash($r, $e0, sp_StrPolyHash_to_s_values($e1))", 0, BOP_K(TY_STR_POLY_HASH) },
   { TY_STRING, "gsub",            2,   2, BF_ANY,      TY_STRING,     BOPE_TEMPLATE, "sp_str_gsub_str_str_hash($r, $e0, sp_StrIntHash_to_s_values($e1))", 0, BOP_K(TY_STR_INT_HASH) },
@@ -2377,22 +2405,22 @@ static const BuiltinOp bop_rows[] = {
   { TY_STRING, "length",              0,   0, BF_ANY,      TY_UNKNOWN,    BOPE_NONE },
   { TY_STRING, "size",                0,   0, BF_ANY,      TY_UNKNOWN,    BOPE_NONE },
   { TY_STRING, "dup",                 0,   0, BF_ANY,      TY_STRING,     BOPE_NONE, NULL, 0, 0, BOPF_COPY_CLASS },
-  { TY_STRING, "clone",               0,   0, BF_ANY,      TY_STRING,     BOPE_NONE, NULL, 0, 0, BOPF_COPY_CLASS },
+  { TY_STRING, "clone",               0,   0, BF_ANY,      TY_STRING,     BOPE_NONE, NULL, 0, 0, BOPF_COPY_CLASS | BOPF_KEYWORDS },
   { TY_STRING, "freeze",              0,   0, BF_ANY,      TY_STRING,     BOPE_NONE, NULL, 0, 0, BOPF_SELF },
   { TY_STRING, "itself",              0,   0, BF_ANY,      TY_STRING,     BOPE_NONE },
   { TY_STRING, "byteindex",           1,   2, BF_ANY,      TY_UNKNOWN,    BOPE_NONE },
   { TY_STRING, "byterindex",          1,   2, BF_ANY,      TY_UNKNOWN,    BOPE_NONE },
   { TY_STRING, "match",               1,   2, BF_ANY,      TY_UNKNOWN,    BOPE_NONE },
   { TY_STRING, "match?",              1,   2, BF_ANY,      TY_UNKNOWN,    BOPE_NONE },
-  { TY_STRING, "unpack1",             1,   1, BF_ANY,      TY_UNKNOWN,    BOPE_NONE, NULL, 0, 0, BOPF_INFERRED },  /* typed from the format literal (an_unpack1_lit_type) */
+  { TY_STRING, "unpack1",             1,   1, BF_ANY,      TY_UNKNOWN,    BOPE_NONE, NULL, 0, 0, BOPF_INFERRED | BOPF_KEYWORDS },  /* typed from the format literal (an_unpack1_lit_type) */
   { TY_STRING, "unicode_normalize",   0,   1, BF_ANY,      TY_UNKNOWN,    BOPE_NONE },
   { TY_STRING, "unicode_normalize!",  0,   1, BF_ANY,      TY_UNKNOWN,    BOPE_NONE, NULL, 0, 0, BOPF_SELF },
   { TY_STRING, "unicode_normalized?", 0,   1, BF_ANY,      TY_UNKNOWN,    BOPE_NONE },
-  { TY_STRING, "each_line",           0,   1, BF_REQUIRED, TY_UNKNOWN,    BOPE_NONE, NULL, 0, 0, BOPF_SELF },  /* the walks answer the receiver */
+  { TY_STRING, "each_line",           0,   1, BF_REQUIRED, TY_UNKNOWN,    BOPE_NONE, NULL, 0, 0, BOPF_SELF | BOPF_KEYWORDS },  /* the walks answer the receiver */
   { TY_STRING, "each_grapheme_cluster", 0,   0, BF_REQUIRED, TY_UNKNOWN,    BOPE_NONE, NULL, 0, 0, BOPF_SELF },
   { TY_STRING, "each_codepoint",      0,   0, BF_REQUIRED, TY_UNKNOWN,    BOPE_NONE, NULL, 0, 0, BOPF_SELF },
   { TY_STRING, "grapheme_clusters",   0,   0, BF_REQUIRED, TY_UNKNOWN,    BOPE_NONE, NULL, 0, 0, BOPF_SELF },
-  { TY_STRING, "each_line",           0,   1, BF_NONE,     TY_UNKNOWN,    BOPE_NONE },  /* blockless: an Enumerator */
+  { TY_STRING, "each_line",           0,   1, BF_NONE,     TY_UNKNOWN,    BOPE_NONE, NULL, 0, 0, BOPF_KEYWORDS },  /* blockless: an Enumerator */
   { TY_STRING, "each_grapheme_cluster", 0,   0, BF_NONE,     TY_UNKNOWN,    BOPE_NONE },
   { TY_STRING, "grapheme_clusters",   0,   0, BF_NONE,     TY_UNKNOWN,    BOPE_NONE },  /* an Array */
 
@@ -2459,7 +2487,7 @@ static const BuiltinOp bop_rows[] = {
   { BOP_ANY_HASH, "to_proc",          0,   0, BF_ANY,      TY_PROC,        BOPE_HASH_TO_PROC },  /* a lambda over the hash */
   { BOP_ANY_HASH, "default_proc",     0,   0, BF_NONE,     TY_PROC,        BOPE_HASH_DEFAULT_PROC },
   { BOP_ANY_HASH, "dup",              0,   0, BF_ANY,      BOPR_SELF,      BOPE_TEMPLATE, "sp_$HHash_dup($r)", 0, 0, BOPF_COPY_CLASS },
-  { BOP_ANY_HASH, "clone",            0,   0, BF_ANY,      BOPR_SELF,      BOPE_TEMPLATE, "({ sp_$HHash *_t$t = $r; sp_$HHash *_t$u = sp_$HHash_dup(_t$t); if (_t$t && sp_gc_is_frozen(_t$t)) sp_gc_freeze(_t$u); _t$u; })", 0, 0, BOPF_COPY_CLASS },  /* the frozen flag too (#3751) */
+  { BOP_ANY_HASH, "clone",            0,   0, BF_ANY,      BOPR_SELF,      BOPE_TEMPLATE, "({ sp_$HHash *_t$t = $r; sp_$HHash *_t$u = sp_$HHash_dup(_t$t); if (_t$t && sp_gc_is_frozen(_t$t)) sp_gc_freeze(_t$u); _t$u; })", 0, 0, BOPF_COPY_CLASS | BOPF_KEYWORDS },  /* the frozen flag too (#3751) */
   { BOP_ANY_HASH, "merge",            0,   0, BF_ANY,      BOPR_SELF,      BOPE_TEMPLATE, "sp_$HHash_dup($r)", 0, 0, BOPF_COPY_CLASS | BOPF_ARGS_BUILTIN },  /* a copy (#2340) */
   { BOP_ANY_HASH, "slice",            0,   0, BF_ANY,      BOPR_SELF,      BOPE_TEMPLATE, "({ (void)($r); sp_$HHash_new(); })" },  /* an empty hash (#2349) */
   /* the mutators */
@@ -2516,7 +2544,7 @@ static const BuiltinOp bop_rows[] = {
   { BOP_ANY_HASH, "slice",            0, 127, BF_ANY,      BOPR_SELF,      BOPE_NONE },  /* a copy, or a key subset */
   { BOP_ANY_HASH, "except",           0, 127, BF_ANY,      BOPR_SELF,      BOPE_NONE },
   { BOP_ANY_HASH, "dup",              0, 127, BF_ANY,      BOPR_SELF,      BOPE_NONE, NULL, 0, 0, BOPF_COPY_CLASS },
-  { BOP_ANY_HASH, "clone",            0, 127, BF_ANY,      BOPR_SELF,      BOPE_NONE, NULL, 0, 0, BOPF_COPY_CLASS },
+  { BOP_ANY_HASH, "clone",            0, 127, BF_ANY,      BOPR_SELF,      BOPE_NONE, NULL, 0, 0, BOPF_COPY_CLASS | BOPF_KEYWORDS },
   /* itself's own emission is the universal BOP_ANY_RECV/BSH_RECV path
      ("answers its receiver"), the same as every other kind -- this row
      exists only so the yield-site table (K-033) has a concrete answer to
@@ -2707,9 +2735,9 @@ static const BuiltinOp bop_rows[] = {
   { BOP_ANY_ARRAY, "cycle",                 0, 127, BF_REQUIRED, TY_NIL,        BOPE_NONE },  /* the block form returns nil */
   { BOP_ANY_ARRAY, "minmax",                0, 127, BF_ANY,      BOPR_SELF,     BOPE_NONE },  /* [min, max], same element kind */
   { BOP_ANY_ARRAY, "join",                  0, 127, BF_ANY,      TY_STRING,     BOPE_NONE },
-  { BOP_ANY_ARRAY, "pack",                  1,   1, BF_ANY,      TY_STRING,     BOPE_TEMPLATE, "sp_$AArray_pack($h, $s0)" },
-  { BOP_ANY_ARRAY, "pack",                  2,   2, BF_ANY,      TY_POLY,       BOPE_ARRAY_PACK_BUFFER },
-  { TY_POLY, "pack",                       2,   2, BF_ANY,      TY_POLY,       BOPE_ARRAY_PACK_BUFFER },
+  { BOP_ANY_ARRAY, "pack",                  1,   1, BF_ANY,      TY_STRING,     BOPE_TEMPLATE, "sp_$AArray_pack($h, $s0)", 0, 0, BOPF_KEYWORDS },
+  { BOP_ANY_ARRAY, "pack",                  2,   2, BF_ANY,      TY_POLY,       BOPE_ARRAY_PACK_BUFFER, NULL, 0, 0, BOPF_KEYWORDS },
+  { TY_POLY, "pack",                       2,   2, BF_ANY,      TY_POLY,       BOPE_ARRAY_PACK_BUFFER, NULL, 0, 0, BOPF_KEYWORDS },
   { BOP_ANY_ARRAY, "inspect",               0, 127, BF_ANY,      TY_STRING,     BOPE_NONE },
   { BOP_ANY_ARRAY, "to_s",                  0, 127, BF_ANY,      TY_STRING,     BOPE_NONE },
   { BOP_ANY_ARRAY, "empty?",                0, 127, BF_ANY,      TY_BOOL,       BOPE_NONE },
@@ -2738,15 +2766,15 @@ static const BuiltinOp bop_rows[] = {
   { BOP_ANY_ARRAY, "deconstruct",           0, 127, BF_ANY,      BOPR_SELF,     BOPE_NONE, NULL, 0, 0, BOPF_SELF },
   { BOP_ANY_ARRAY, "entries",               0, 127, BF_ANY,      BOPR_SELF,     BOPE_NONE },
   { BOP_ANY_ARRAY, "dup",                   0, 127, BF_ANY,      BOPR_SELF,     BOPE_NONE, NULL, 0, 0, BOPF_COPY_CLASS },
-  { BOP_ANY_ARRAY, "clone",                 0, 127, BF_ANY,      BOPR_SELF,     BOPE_NONE, NULL, 0, 0, BOPF_COPY_CLASS },
+  { BOP_ANY_ARRAY, "clone",                 0, 127, BF_ANY,      BOPR_SELF,     BOPE_NONE, NULL, 0, 0, BOPF_COPY_CLASS | BOPF_KEYWORDS },
   { BOP_ANY_ARRAY, "compact",               0, 127, BF_ANY,      BOPR_SELF,     BOPE_NONE },
   { BOP_ANY_ARRAY, "flatten",               0, 127, BF_ANY,      BOPR_SELF,     BOPE_NONE },
   { BOP_ANY_ARRAY, "clear",                 0, 127, BF_ANY,      BOPR_SELF,     BOPE_NONE, NULL, 0, 0, BOPF_SELF },
   { BOP_ANY_ARRAY, "transpose",             0, 127, BF_ANY,      BOPR_SELF,     BOPE_NONE },
-  { BOP_ANY_ARRAY, "shuffle",               0, 127, BF_ANY,      BOPR_SELF,     BOPE_NONE },
+  { BOP_ANY_ARRAY, "shuffle",               0, 127, BF_ANY,      BOPR_SELF,     BOPE_NONE, NULL, 0, 0, BOPF_KEYWORDS },
   { BOP_ANY_ARRAY, "reverse!",              0, 127, BF_ANY,      BOPR_SELF,     BOPE_NONE, NULL, 0, 0, BOPF_SELF },
   { BOP_ANY_ARRAY, "sort!",                 0, 127, BF_ANY,      BOPR_SELF,     BOPE_NONE, NULL, 0, 0, BOPF_SELF },
-  { BOP_ANY_ARRAY, "shuffle!",              0, 127, BF_ANY,      BOPR_SELF,     BOPE_NONE, NULL, 0, 0, BOPF_SELF },
+  { BOP_ANY_ARRAY, "shuffle!",              0, 127, BF_ANY,      BOPR_SELF,     BOPE_NONE, NULL, 0, 0, BOPF_SELF | BOPF_KEYWORDS },
   { BOP_ANY_ARRAY, "rotate!",               0, 127, BF_ANY,      BOPR_SELF,     BOPE_NONE, NULL, 0, 0, BOPF_SELF },
   { BOP_ANY_ARRAY, "rotate",                0, 127, BF_ANY,      BOPR_SELF,     BOPE_NONE },
   { BOP_ANY_ARRAY, "insert",                0, 127, BF_ANY,      BOPR_SELF,     BOPE_NONE, NULL, 0, 0, BOPF_SELF },
@@ -2790,16 +2818,16 @@ static const BuiltinOp bop_rows[] = {
   { BOP_ANY_ARRAY, "first",                 0,   0, BF_ANY,      BOPR_ELEM,     BOPE_ARRAY_FIRST },  /* an Integer / Float element with its nil */
   { BOP_ANY_ARRAY, "shift",                 0,   0, BF_ANY,      BOPR_ELEM,     BOPE_ARRAY_POP_SHIFT },  /* nil when empty: an sp_oint for the scalar kinds */
   { BOP_ANY_ARRAY, "pop",                   0,   0, BF_ANY,      BOPR_ELEM,     BOPE_ARRAY_POP_SHIFT },
-  { BOP_ANY_ARRAY, "sample",                0,   0, BF_ANY,      BOPR_ELEM,     BOPE_TEMPLATE, "$<sp_$AArray_sample$O($r)$>" },  /* one element, or nil when empty; was TY_UNKNOWN without BOPF_INFERRED, an unfinished row -- no argument, so no ambiguity with sample(n)'s random:-kwarg case below */
+  { BOP_ANY_ARRAY, "sample",                0,   0, BF_ANY,      BOPR_ELEM,     BOPE_TEMPLATE, "$<sp_$AArray_sample$O($r)$>", 0, 0, BOPF_KEYWORDS },  /* one element, or nil when empty; was TY_UNKNOWN without BOPF_INFERRED, an unfinished row -- no argument, so no ambiguity with sample(n)'s random:-kwarg case below */
   { BOP_ANY_ARRAY, "inspect",               0,   0, BF_ANY,      TY_STRING,     BOPE_TEMPLATE, "sp_$AArray_inspect($r)" },
   { BOP_ANY_ARRAY, "to_a",                  0,   0, BF_ANY,      BOPR_SELF,     BOPE_ARRAY_NIL_RECV, NULL, 0, 0, BOPF_SELF_EXACT },  /* the receiver; nil.to_a is [] */
   { BOP_ANY_ARRAY, "to_ary",                0,   0, BF_ANY,      BOPR_SELF,     BOPE_TEMPLATE, "$r", 0, 0, BOPF_SELF },
   { BOP_ANY_ARRAY, "entries",               0,   0, BF_ANY,      BOPR_SELF,     BOPE_ARRAY_NIL_RECV },  /* a copy; nil has no entries */
   { BOP_ANY_ARRAY, "deconstruct",           0,   0, BF_ANY,      BOPR_SELF,     BOPE_TEMPLATE, "$r", 0, 0, BOPF_SELF },
   { BOP_ANY_ARRAY, "dup",                   0,   0, BF_ANY,      BOPR_SELF,     BOPE_TEMPLATE, "sp_$AArray_dup($r)", 0, 0, BOPF_COPY_CLASS },
-  { BOP_ANY_ARRAY, "clone",                 0,   0, BF_ANY,      BOPR_SELF,     BOPE_TEMPLATE, "({ sp_$AArray *_t$t = $r; sp_$AArray *_t$u = sp_$AArray_dup(_t$t); if (_t$t) _t$u->frozen = _t$t->frozen; _t$u; })", 0, 0, BOPF_COPY_CLASS },  /* the frozen flag carries over; nil.clone is nil */
+  { BOP_ANY_ARRAY, "clone",                 0,   0, BF_ANY,      BOPR_SELF,     BOPE_TEMPLATE, "({ sp_$AArray *_t$t = $r; sp_$AArray *_t$u = sp_$AArray_dup(_t$t); if (_t$t) _t$u->frozen = _t$t->frozen; _t$u; })", 0, 0, BOPF_COPY_CLASS | BOPF_KEYWORDS },  /* the frozen flag carries over; nil.clone is nil */
   { BOP_ANY_ARRAY, "compact",               0,   0, BF_ANY,      BOPR_SELF,     BOPE_TEMPLATE, "sp_$AArray_compact($r)" },  /* drops the nil elements */
-  { BOP_ANY_ARRAY, "shuffle",               0,   0, BF_ANY,      BOPR_SELF,     BOPE_TEMPLATE, "sp_$AArray_shuffle($r)" },
+  { BOP_ANY_ARRAY, "shuffle",               0,   0, BF_ANY,      BOPR_SELF,     BOPE_TEMPLATE, "sp_$AArray_shuffle($r)", 0, 0, BOPF_KEYWORDS },
   { BOP_ANY_ARRAY, "reverse",               0,   0, BF_ANY,      BOPR_SELF,     BOPE_TEMPLATE, "({ sp_$AArray *_t$t = sp_$AArray_dup($r); sp_$AArray_reverse_bang(_t$t); _t$t; })" },
   { BOP_ANY_ARRAY, "clear",                 0,   0, BF_ANY,      BOPR_SELF,     BOPE_TEMPLATE, "({ sp_$AArray *_t$t = $r; if (_t$t && _t$t->frozen) sp_raise_cls(\"FrozenError\", sp_sprintf(\"can't modify frozen Array: %s\", sp_$AArray_inspect(_t$t))); if (_t$t) _t$t->len = 0; _t$t; })", 0, 0, BOPF_SELF },
   { BOP_ANY_ARRAY, "values_at",             0,   0, BF_ANY,      BOPR_SELF,     BOPE_TEMPLATE, "((void)($r), sp_$AArray_new())" },  /* no indices: empty (#2980) */
@@ -2817,7 +2845,7 @@ static const BuiltinOp bop_rows[] = {
   { BOP_ANY_ARRAY, "slice!",                1,   1, BF_ANY,      TY_UNKNOWN,    BOPE_TEMPLATE, "$<({ sp_$AArray *_t$t = $h; sp_int _t$u = $i0; if (_t$t && _t$t->frozen) sp_raise_frozen_array_at(_t$t, $Y); sp_$AArray_delete_at$O(_t$t, _t$u); })$>" },  /* another index: a boxed one may be a Range, the rule after the lookup answers */
   { BOP_ANY_ARRAY, "uniq!",                 0,   0, BF_REQUIRED, TY_POLY,       BOPE_TEMPLATE, "sp_$AArray_uniq_bangq($r)", 0, 0, BOPF_SELF_OR_NIL },
   { BOP_ANY_ARRAY, "reverse!",              0,   0, BF_ANY,      BOPR_SELF,     BOPE_TEMPLATE, "({ sp_$AArray *_t$t = $r; sp_$AArray_reverse_bang(_t$t); _t$t; })", 0, 0, BOPF_SELF },
-  { BOP_ANY_ARRAY, "shuffle!",              0,   0, BF_ANY,      BOPR_SELF,     BOPE_TEMPLATE, "({ sp_$AArray *_t$t = $r; sp_$AArray_shuffle_bang(_t$t); _t$t; })", 0, 0, BOPF_SELF },
+  { BOP_ANY_ARRAY, "shuffle!",              0,   0, BF_ANY,      BOPR_SELF,     BOPE_TEMPLATE, "({ sp_$AArray *_t$t = $r; sp_$AArray_shuffle_bang(_t$t); _t$t; })", 0, 0, BOPF_SELF | BOPF_KEYWORDS },
   { BOP_ANY_ARRAY, "sort!",                 0,   0, BF_ANY,      BOPR_SELF,     BOPE_ARRAY_SORT_BANG, NULL, 0, 0, BOPF_SELF },
   { BOP_ANY_ARRAY, "rotate!",               0,   0, BF_ANY,      BOPR_SELF,     BOPE_TEMPLATE, "({ sp_$AArray *_t$t = $gsp_$AArray_rotate_bang(_t$t, 1); _t$t; })", 0, 0, BOPF_SELF },
   { BOP_ANY_ARRAY, "rotate!",               1,   1, BF_ANY,      BOPR_SELF,     BOPE_TEMPLATE, "({ sp_$AArray *_t$t = $gsp_$AArray_rotate_bang(_t$t, $i0); _t$t; })", 0, 0, BOPF_SELF },
@@ -2896,8 +2924,8 @@ static const BuiltinOp bop_rows[] = {
   { BOP_ANY_ARRAY, "<=>",                   1,   1, BF_ANY,      TY_UNKNOWN,    BOPE_NONE, NULL, 0, 0, BOPF_ARGS_BUILTIN },
   { BOP_ANY_ARRAY, "hash",                  0,   0, BF_ANY,      TY_UNKNOWN,    BOPE_NONE },
   { BOP_ANY_ARRAY, "member?",               1,   1, BF_ANY,      TY_UNKNOWN,    BOPE_NONE },
-  { BOP_ANY_ARRAY, "sample",                1,   1, BF_ANY,      BOPR_SELF,     BOPE_NONE, NULL, BOP_K(TY_INT) },  /* sample(n): n elements; sample(random: r) is told by its syntax, not its kind */
-  { BOP_ANY_ARRAY, "sample",                0,   1, BF_ANY,      TY_UNKNOWN,    BOPE_NONE },
+  { BOP_ANY_ARRAY, "sample",                1,   1, BF_ANY,      BOPR_SELF,     BOPE_NONE, NULL, BOP_K(TY_INT), 0, BOPF_KEYWORDS },  /* sample(n): n elements; sample(random: r) is told by its syntax, not its kind */
+  { BOP_ANY_ARRAY, "sample",                0,   1, BF_ANY,      TY_UNKNOWN,    BOPE_NONE, NULL, 0, 0, BOPF_KEYWORDS },
   { BOP_ANY_ARRAY, "push",                  0,   0, BF_ANY,      BOPR_SELF,     BOPE_TEMPLATE, "({ sp_$AArray *_t$t = $r; if (_t$t && _t$t->frozen) sp_raise_frozen_array_at(_t$t, $Y); _t$t; })", 0, 0, BOPF_SELF },  /* no values (a block operand is never called): self, or FrozenError */
   { BOP_ANY_ARRAY, "push",                  0, 127, BF_ANY,      TY_UNKNOWN,    BOPE_NONE, NULL, 0, 0, BOPF_SELF },
   { BOP_ANY_ARRAY, "append",                0,   0, BF_ANY,      BOPR_SELF,     BOPE_TEMPLATE, "({ sp_$AArray *_t$t = $r; if (_t$t && _t$t->frozen) sp_raise_frozen_array_at(_t$t, $Y); _t$t; })", 0, 0, BOPF_SELF },  /* no values (a block operand is never called): self, or FrozenError */
@@ -3106,6 +3134,20 @@ int bop_flags(TyKind rt, const char *name) {
   return r ? r->flags : 0;
 }
 
+/* The rows are sorted by kind, so a name's rows lie apart: the scan is over
+   the table, with the first letter tested before the name. */
+static int bop_name_rows(const char *name, int want_kw) {
+  if (!name) return 0;
+  for (int i = 0; i < BOP_NROWS; i++) {
+    const BuiltinOp *r = &bop_rows[i];
+    if (r->name[0] != name[0] || !sp_streq(r->name, name)) continue;
+    if (!!(r->flags & BOPF_KEYWORDS) == want_kw) return 1;
+  }
+  return 0;
+}
+int bop_name_kwless(const char *name) { return bop_name_rows(name, 0); }
+int bop_name_keywords(const char *name) { return bop_name_rows(name, 1); }
+
 /* See builtin_ops.h. */
 int bop_class_answers(const char *name, int argc, int has_block) {
   const BuiltinOp *r = argc >= 0 ? bop_find(TY_CLASS, name, argc, has_block) : NULL;
@@ -3116,9 +3158,9 @@ const BuiltinOp *bop_find_arg(TyKind rt, const char *name, int argc, int has_blo
                               BopArgKind arg_of, const void *ud) {
   return bop_find_stage(rt, name, argc, has_block, arg_of, ud, -1);
 }
-const BuiltinOp *bop_find_stage(TyKind rt, const char *name, int argc, int has_block,
-                                BopArgKind arg_of, const void *ud, int stage) {
-  if (!name) return NULL;
+/* the first place in the sorted index of the rows of kind rt for `name`
+   (BOP_NROWS, or a row of another key, when there are none) */
+static int bop_key_first(TyKind rt, const char *name) {
   if (!bop_indexed) bop_build_index();
   int lo = 0, hi = BOP_NROWS;
   while (lo < hi) {
@@ -3126,6 +3168,12 @@ const BuiltinOp *bop_find_stage(TyKind rt, const char *name, int argc, int has_b
     if (bop_cmp_key(rt, name, &bop_rows[bop_index[mid]]) > 0) lo = mid + 1;
     else hi = mid;
   }
+  return lo;
+}
+const BuiltinOp *bop_find_stage(TyKind rt, const char *name, int argc, int has_block,
+                                BopArgKind arg_of, const void *ud, int stage) {
+  if (!name) return NULL;
+  int lo = bop_key_first(rt, name);
   /* rows of one name differ by arity, block form or argument guard: take
      the first that fits */
   TyKind ak[2] = { TY_UNKNOWN, TY_UNKNOWN };
@@ -3170,6 +3218,13 @@ static unsigned bop_call_flags(TyKind rt, const char *name, int argc, int has_bl
   return op ? op->flags : 0;
 }
 
+/* Does a row take a call of name and argc arguments on a receiver of kind rt,
+   its Array or Hash variant through the family's rows, a String buffer as a
+   String? */
+int bop_row_takes(TyKind rt, const char *name, int argc, int has_block) {
+  return bop_find(rt == TY_STRBUF ? TY_STRING : bop_family_of(rt), name, argc, has_block) != NULL;
+}
+
 int bop_answers_self(TyKind rt, const char *name, int argc, int has_block) {
   return bop_call_flags(rt, name, argc, has_block) &
          (BOPF_SELF | BOPF_SELF_OR_NIL | BOPF_SELF_CLASS | BOPF_SELF_EXACT | BOPF_COPY_CLASS);
@@ -3179,6 +3234,18 @@ int bop_answers_recv(TyKind rt, const char *name, int argc, int has_block) {
   if (bop_answers_self(rt, name, argc, has_block) & (BOPF_SELF | BOPF_SELF_OR_NIL | BOPF_SELF_EXACT)) return 1;
   const IterRow *r = has_block ? iter_row_of(rt, name, argc) : NULL;
   return r && (r->answer == IA_RECV || r->answer == IA_BLOCKVALS_INPLACE);
+}
+
+int bop_boxed_answers_copy(const char *name, int argc) {
+  static const TyKind fam[] = { TY_STRING, BOP_ANY_ARRAY, BOP_ANY_HASH };
+  int copies = 0, other = 0;
+  for (int i = 0; i < 3; i++) {
+    const BuiltinOp *op = bop_find(fam[i], name, argc, 0);
+    if (!op) continue;
+    if (op->flags & BOPF_COPY_CLASS) copies |= 1 << i;
+    else other = 1;
+  }
+  return !copies ? 0 : !other ? 1 : copies == 1 << 2 ? 2 : 0;
 }
 
 int iter_boxed_answers_recv(const char *name) {
@@ -3222,6 +3289,7 @@ TyKind bop_result(const BuiltinOp *op, TyKind rt) {
   case (int)BOPR_ARRAY_SETOP:
   case (int)BOPR_ARG0:
   case (int)BOPR_ARG1:
+  case (int)BOPR_ARG_LAST:
   case (int)BOPR_HASH_REPLACE:
   case (int)BOPR_ARRAY_SUM_SEED:
   case (int)BOPR_HASH_STORE: return TY_UNKNOWN;
@@ -3242,6 +3310,8 @@ TyKind bop_result_args(const BuiltinOp *op, TyKind rt, int argc, BopArgKind arg_
     return argc >= 1 ? arg_of(ud, 0) : TY_UNKNOWN;
   case (int)BOPR_ARG1:
     return argc >= 2 ? arg_of(ud, 1) : TY_UNKNOWN;
+  case (int)BOPR_ARG_LAST:
+    return argc >= 1 ? arg_of(ud, argc - 1) : TY_UNKNOWN;
   case (int)BOPR_HASH_REPLACE: {
     /* other of the receiver's own variant keeps the receiver's kind; a
        Hash of another variant, or a boxed one (whichever variant it really
@@ -4209,6 +4279,20 @@ int bop_share_boxed(TyKind fam, const char *name) {
 
 int bop_share_named(TyKind fam, const char *name) {
   return name ? bop_share_find(fam, name) : 0;
+}
+/* Is a receiverless builtin row of `name` the compiler's own (BOPF_INTERNAL),
+   at any arity? */
+static int bop_kernel_internal(const char *name) {
+  for (int i = bop_key_first(BOP_KERNEL, name); i < BOP_NROWS; i++) {
+    const BuiltinOp *r = &bop_rows[bop_index[i]];
+    if (bop_cmp_key(BOP_KERNEL, name, r) != 0) break;
+    if (r->flags & BOPF_INTERNAL) return 1;
+  }
+  return 0;
+}
+int bop_share_kernel(const char *name, int builtin_only) {
+  if (!name || (!builtin_only && bop_kernel_internal(name))) return 0;
+  return bop_share_find(BOP_KERNEL, name);
 }
 int bop_share_kinds(const char *name, int *out, int max) {
   static const TyKind fams[] = { BOP_ANY_RECV, TY_STRING, BOP_ANY_ARRAY, BOP_ANY_HASH };

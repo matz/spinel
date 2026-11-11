@@ -45,6 +45,8 @@ int sp_process_status_exited_p(sp_int s);
 int sp_process_status_signaled_p(sp_int s);
 int sp_process_status_coredump_p(sp_int s);
 int sp_process_status_success_p(sp_int s);
+/* stopped?: the child stopped on a signal, which a wait with WUNTRACED answers */
+int sp_process_status_stopped_p(sp_int s);
 
 /* Accessors. CRuby semantics: exited? -> exitstatus, signaled? -> termsig;
    the un-applicable accessor answers nil (an sp_oint), so `p st.termsig`
@@ -55,6 +57,8 @@ sp_int sp_process_status_pid(sp_int s);
 sp_int sp_process_status_pid_of(sp_ProcessStatus *st);
 sp_oint sp_process_status_exitstatus(sp_int s);
 sp_oint sp_process_status_termsig(sp_int s);
+/* stopsig: the signal that stopped the child, nil when it did not stop */
+sp_oint sp_process_status_stopsig(sp_int s);
 
 /* Render the status to a string for to_s / inspect. The result lives
    in a static buffer; the runtime copies it to a GC-heap string for

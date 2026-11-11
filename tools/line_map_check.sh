@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # line_map_check.sh -- the generated C must not depend on the line map.
 #
-#   tools/line_map_check.sh [-j JOBS] [--share-strings] [--rbs DIR] PROGRAM...
+#   tools/line_map_check.sh [-j JOBS] [--rbs DIR] PROGRAM...
 #
 # Compiles each program to C twice, with and without --no-line-map, and
 # compares the two with the line map taken out: the `#line` lines, and the
@@ -25,13 +25,12 @@ FLAGS=
 while [ $# -gt 0 ]; do
   case "$1" in
     -j) JOBS=$2; shift 2 ;;
-    --share-strings) FLAGS="$FLAGS --share-strings"; shift ;;
     --rbs) FLAGS="$FLAGS --rbs $2"; shift 2 ;;
     *) break ;;
   esac
 done
 [ -x "$SPINEL" ] || { echo "line-map-check: build bin/spinel first" >&2; exit 2; }
-[ $# -gt 0 ] || { echo "usage: $0 [-j JOBS] [--share-strings] [--rbs DIR] PROGRAM..." >&2; exit 2; }
+[ $# -gt 0 ] || { echo "usage: $0 [-j JOBS] [--rbs DIR] PROGRAM..." >&2; exit 2; }
 T=$(mktemp -d "${TMPDIR:-/tmp}/spinel-line-map.XXXXXX") || exit 2
 trap 'rm -rf "${T:?}"' EXIT
 export SPINEL FLAGS T

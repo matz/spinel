@@ -2327,6 +2327,18 @@ int emit_call_builtin_cmethod_arms(Compiler *c, int id, Buf *b, const NodeTable 
       buf_puts(b, ")");
       return 1;
     }
+    /* The four with the flags of waitpid(2): the answer is boxed, as WNOHANG
+       answers nil for a child still running */
+    if (tcn && sp_streq(tcn, "Process") && argc == 2 &&
+        (sp_streq(name, "wait") || sp_streq(name, "waitpid") || sp_streq(name, "wait2") || sp_streq(name, "waitpid2"))) {
+      int pair = sp_streq(name, "wait2") || sp_streq(name, "waitpid2");
+      buf_puts(b, "sp_process_wait_flags(");
+      emit_int_expr(c, argv[0], b);
+      buf_puts(b, ", ");
+      emit_int_expr(c, argv[1], b);
+      buf_printf(b, ", %d)", pair);
+      return 1;
+    }
     /* Process::Status.new(status_int) is handled earlier in
        emit_call_body (the ConstantPathNode arm above); the
        ConstantReadNode-scoped block here does not see it. */
@@ -2583,13 +2595,14 @@ int emit_call_enum_random_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
     /* a Random instance is an opaque object: #class, and identity #==/#equal? (#2524) */
     if (sp_streq(name, "class") && argc == 0) {
       if (!node_may_be_null_nil(c, recv)) {
-        buf_puts(b, "((void)("); emit_expr_for_effect(c, recv, b); buf_puts(b, "), ((sp_Class){0, SPL(\"Random\")}))");
+        buf_puts(b, "((void)("); emit_expr_for_effect(c, recv, b); buf_puts(b, "), "); emit_builtin_class_value(c, "Random", b); buf_puts(b, ")");
         return 1;
       }
       /* a NULL slot is nil, whose class is NilClass */
       int tr = ++g_tmp;
       buf_printf(b, "({ sp_Random *_t%d = ", tr); emit_expr(c, recv, b);
-      buf_printf(b, "; _t%d ? ((sp_Class){0, SPL(\"Random\")}) : ((sp_Class){(sp_int)-1, SPL(\"NilClass\")}); })", tr);
+      buf_printf(b, "; _t%d ? ", tr); emit_builtin_class_value(c, "Random", b);
+      buf_puts(b, " : "); emit_builtin_class_value(c, "NilClass", b); buf_puts(b, "; })");
       return 1;
     }
     /* equal? and eql? are identity; == compares by internal PRNG state

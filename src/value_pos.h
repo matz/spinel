@@ -100,6 +100,9 @@ enum {
   VP_LOGIC_NODES = 1u << 7,
   /* Leave clause wrappers intact; only parentheses and statement lists peel. */
   VP_PARENS_ONLY = 1u << 17,
+  /* Parentheses holding other than exactly one statement (`()`, `(a; b)`) are
+     a leaf; those holding one are looked through. */
+  VP_PAREN_ONE = 1u << 18,
 
   /* The shapes the walk sees through; a shape that is off is a leaf. No bit
      at all means every shape. A walker passes the subset it handled before it

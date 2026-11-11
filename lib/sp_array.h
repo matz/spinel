@@ -17,12 +17,10 @@
 #include <stdint.h>
 #include <math.h>      /* isnan / isinf / signbit / NAN / fabs for sp_float_sum_step */
 #include "sp_gc.h"      /* sp_gc_hdr, sp_gc_bytes, SP_GC_ROOT, sp_oom_die */
-#ifdef SP_ONE_STRING
-/* SP_SEFX's fast cases, where a bytes-form wrapper takes a String in: a
-   payload view's owner (0xfd, the header's link) and a frozen literal
-   whose handle exists already (0xf1, the header's tagged link to its slot,
-   whose first word is the handle: sp_StringLiteral). Anything else, a new
-   handle, goes out of line (sp_strelem_of). */
+/* sp_strelem_fx's fast cases, where a bytes-form wrapper takes a String in: a
+   payload view's owner (0xfd, the header's link) and a frozen literal's
+   static handle (0xf1, the header's link to it, tagged: sp_StringLiteral).
+   Anything else, a new handle, goes out of line (sp_strelem_of). */
 static inline struct sp_String_s *sp_strelem_fx(const char *b) {
   if (b) {
     unsigned char m = ((const unsigned char *)b)[-1];
@@ -30,15 +28,11 @@ static inline struct sp_String_s *sp_strelem_fx(const char *b) {
     if (m == 0xfd) { if (h->next) return (struct sp_String_s *)(void *)h->next; }
     else if (m == 0xf1 && !sp_slab_owns(h)) {
       uintptr_t p = (uintptr_t)h->next;
-      if (p & 1) {
-        struct sp_String_s *v = SP_ATOMIC_LOAD((struct sp_String_s **)(void *)(p - 1), __ATOMIC_ACQUIRE);
-        if (v) return v;
-      }
+      if (p & 1) return (struct sp_String_s *)(void *)(p - 1);
     }
   }
   return sp_strelem_of(b);
 }
-#endif
 #include "sp_alloc.h"   /* sp_gc_alloc, sp_str_alloc, sp_raise_cls, sp_raise_frozen_array */
 
 const char *sp_sprintf(const char *fmt, ...);  /* defined in the generated TU */
@@ -156,7 +150,11 @@ static inline uint32_t sp_nil_lo_up(const uint64_t *b, uint32_t lo, sp_int cap) 
    cache miss vs. the GC-header bit. calloc in sp_gc_alloc zero-inits
    it, so constructors need no change. Issue #918. */
 static void sp_IntArray_fin(void*p){sp_IntArray*a=(sp_IntArray*)p;sp_pl_free(a->data);sp_pl_free(a->nilbits);}
-static sp_IntArray*sp_IntArray_new(void){sp_IntArray*a=(sp_IntArray*)sp_gc_alloc(sizeof(sp_IntArray),sp_IntArray_fin,NULL);a->cap=16;a->data=(sp_int*)sp_pl_alloc(sizeof(sp_int)*a->cap);if(!a->data)sp_oom_die();a->start=0;a->len=0;a->nilbits=NULL;{sp_gc_hdr*h=(sp_gc_hdr*)((char*)a-sizeof(sp_gc_hdr));h->size+=sizeof(sp_int)*a->cap;sp_gc_bytes_add(sizeof(sp_int)*a->cap);}return a;}
+/* An empty array whose buffer holds n elements before it grows (16 the
+   least, a count below that included): an array about to take a known
+   number, as map's result does */
+static sp_IntArray*sp_IntArray_new_cap(sp_int n){sp_IntArray*a=(sp_IntArray*)sp_gc_alloc(sizeof(sp_IntArray),sp_IntArray_fin,NULL);if(n<16)n=16;if((uintmax_t)n>SIZE_MAX/sizeof(sp_int))sp_oom_die();a->cap=n;a->data=(sp_int*)sp_pl_alloc(sizeof(sp_int)*a->cap);if(!a->data)sp_oom_die();a->start=0;a->len=0;a->nilbits=NULL;{sp_gc_hdr*h=(sp_gc_hdr*)((char*)a-sizeof(sp_gc_hdr));h->size+=sizeof(sp_int)*a->cap;sp_gc_bytes_add(sizeof(sp_int)*a->cap);}return a;}
+static sp_IntArray*sp_IntArray_new(void){return sp_IntArray_new_cap(16);}
 /* An Array set up inside a bigger object that starts with it -- an Array
    subclass instance, whose struct embeds its Array (#7449) -- as _new sets a
    fresh one up; the payload is counted to the enclosing object's header. */
@@ -170,11 +168,11 @@ static SP_NOINLINE void sp_IntArray_set_cap(sp_IntArray*a,sp_int nc){sp_gc_hdr*h
    a queue held at its capacity would otherwise copy every element on every
    push. */
 static SP_NOINLINE void sp_IntArray_push_grow(sp_IntArray*a){if(a->start>0){memmove(a->data,a->data+a->start,sizeof(sp_int)*a->len);if(SP_UNLIKELY(a->nilbits))SP_NILBITS_MOVE_A(a, a->cap, a->start, 0, a->len);a->start=0;if(a->cap-a->len>=a->len)return;}sp_IntArray_set_cap(a,a->cap*2+1);}
-static inline void sp_IntArray_push(sp_IntArray*a,sp_int v){if(a->frozen){sp_raise_frozen_array_at(a, SP_BUILTIN_INT_ARRAY);return;}if(a->start+a->len>=a->cap)sp_IntArray_push_grow(a);a->data[a->start+a->len]=v;a->len++;}
+static inline void sp_IntArray_push(sp_IntArray*a,sp_int v){if(a->frozen){sp_raise_frozen_array_at(a, SP_BUILTIN_INT_ARRAY);return;}sp_int l=SP_ARR_LEN_ONCE(a);if(a->start+l>=a->cap)sp_IntArray_push_grow(a);a->data[a->start+l]=v;a->len=l+1;}
 /* Array.new(n, v): the buffer is allocated at its final size and filled in
    place, where n pushes grew it from 16 by doubling -- a realloc and a copy
    at every step, and a frozen and a capacity test per element. */
-static sp_IntArray*sp_IntArray_new_fill(sp_int n,sp_int v){sp_IntArray*a=(sp_IntArray*)sp_gc_alloc(sizeof(sp_IntArray),sp_IntArray_fin,NULL);if((uintmax_t)n>SIZE_MAX/sizeof(sp_int))sp_oom_die();a->cap=n>16?n:16;a->data=(sp_int*)sp_pl_alloc(sizeof(sp_int)*a->cap);if(!a->data)sp_oom_die();a->start=0;a->nilbits=NULL;for(sp_int i=0;i<n;i++)a->data[i]=v;a->len=n;{sp_gc_hdr*h=(sp_gc_hdr*)((char*)a-sizeof(sp_gc_hdr));h->size+=sizeof(sp_int)*a->cap;sp_gc_bytes_add(sizeof(sp_int)*a->cap);}return a;}
+static sp_IntArray*sp_IntArray_new_fill(sp_int n,sp_int v){if((uintmax_t)n>SIZE_MAX/sizeof(sp_int))sp_oom_die();sp_IntArray*a=sp_IntArray_new_cap(n);for(sp_int i=0;i<n;i++)a->data[i]=v;a->len=n;return a;}
 /* Array.new(n) with no default: n nils, so the bitmap exists from the start
    with every live bit set (and the data zeroed, so a bit cleared by a later
    store leaves a real 0 behind only where the store wrote one). */
@@ -336,7 +334,9 @@ sp_oint sp_IntArray_cmp_o(sp_IntArray *a, sp_IntArray *b);   /* <=>: nil once a 
 
 /* =========================== sp_FloatArray =========================== */
 static void sp_FloatArray_fin(void*p){sp_FloatArray*a=(sp_FloatArray*)p;sp_gc_hdr*h=(sp_gc_hdr*)((char*)a-sizeof(sp_gc_hdr));sp_gc_bytes_sub(sizeof(sp_float)*SP_ARR_BUF_CAP(a));h->size-=sizeof(sp_float)*SP_ARR_BUF_CAP(a);sp_pl_free(SP_ARR_BUF(a));sp_pl_free(a->nilbits);}
-static sp_FloatArray*sp_FloatArray_new(void){sp_FloatArray*a=(sp_FloatArray*)sp_gc_alloc(sizeof(sp_FloatArray),sp_FloatArray_fin,NULL);a->cap=16;a->data=(sp_float*)sp_pl_alloc(sizeof(sp_float)*a->cap);if(!a->data)sp_oom_die();a->len=0;a->nilbits=NULL;{sp_gc_hdr*h=(sp_gc_hdr*)((char*)a-sizeof(sp_gc_hdr));h->size+=sizeof(sp_float)*a->cap;sp_gc_bytes_add(sizeof(sp_float)*a->cap);}return a;}
+/* see sp_IntArray_new_cap */
+static sp_FloatArray*sp_FloatArray_new_cap(sp_int n){sp_FloatArray*a=(sp_FloatArray*)sp_gc_alloc(sizeof(sp_FloatArray),sp_FloatArray_fin,NULL);if(n<16)n=16;if((uintmax_t)n>SIZE_MAX/sizeof(sp_float))sp_oom_die();a->cap=n;a->data=(sp_float*)sp_pl_alloc(sizeof(sp_float)*a->cap);if(!a->data)sp_oom_die();a->len=0;a->nilbits=NULL;{sp_gc_hdr*h=(sp_gc_hdr*)((char*)a-sizeof(sp_gc_hdr));h->size+=sizeof(sp_float)*a->cap;sp_gc_bytes_add(sizeof(sp_float)*a->cap);}return a;}
+static sp_FloatArray*sp_FloatArray_new(void){return sp_FloatArray_new_cap(16);}
 static void sp_FloatArray_init_embedded(sp_FloatArray*a){a->cap=16;a->data=(sp_float*)sp_pl_alloc(sizeof(sp_float)*a->cap);if(!a->data)sp_oom_die();a->len=0;a->nilbits=NULL;{sp_gc_hdr*h=(sp_gc_hdr*)((char*)a-sizeof(sp_gc_hdr));h->size+=sizeof(sp_float)*a->cap;sp_gc_bytes_add(sizeof(sp_float)*a->cap);}}  /* see sp_IntArray_init_embedded */
 /* see sp_IntArray_set_cap. A shift steps data past the first element
    (sp_FloatArray_shift_o); this gives the slots it stepped past back to the
@@ -345,9 +345,9 @@ static void sp_FloatArray_init_embedded(sp_FloatArray*a){a->cap=16;a->data=(sp_f
    as well when they are more (nc is twice the room). The bits (made at cap,
    and never there while a shift steps) count from data, so they stay */
 static SP_NOINLINE void sp_FloatArray_set_cap(sp_FloatArray*a,sp_int nc){sp_gc_hdr*h=(sp_gc_hdr*)((char*)a-sizeof(sp_gc_hdr));sp_int bc=a->cap;if(a->head>0){SP_ARR_REBASE(a);if(nc<=a->cap){if(SP_UNLIKELY(a->nilbits))a->nilbits=sp_nilbits_resize(a,a->nilbits,bc,a->cap);return;}}sp_int oc=a->cap;if((uintmax_t)nc>SIZE_MAX/sizeof(sp_float))sp_oom_die();sp_gc_bytes_sub(sizeof(sp_float)*oc);h->size-=sizeof(sp_float)*oc;void*nd=sp_pl_realloc(a->data,sizeof(sp_float)*nc);if(!nd)sp_oom_die();a->data=(sp_float*)nd;a->cap=nc;h->size+=sizeof(sp_float)*nc;sp_gc_bytes_add(sizeof(sp_float)*nc);if(SP_UNLIKELY(a->nilbits))a->nilbits=sp_nilbits_resize(a,a->nilbits,bc,nc);}
-static inline void sp_FloatArray_push(sp_FloatArray*a,sp_float v){if(a->frozen){sp_raise_frozen_array_at(a, SP_BUILTIN_FLT_ARRAY);return;}if(a->len>=a->cap)sp_FloatArray_set_cap(a,a->cap*2+1);a->data[a->len++]=v;}
+static inline void sp_FloatArray_push(sp_FloatArray*a,sp_float v){if(a->frozen){sp_raise_frozen_array_at(a, SP_BUILTIN_FLT_ARRAY);return;}sp_int l=SP_ARR_LEN_ONCE(a);if(l>=a->cap)sp_FloatArray_set_cap(a,a->cap*2+1);a->data[l]=v;a->len=l+1;}
 /* Array.new(n, v): see sp_IntArray_new_fill */
-static sp_FloatArray*sp_FloatArray_new_fill(sp_int n,sp_float v){sp_FloatArray*a=(sp_FloatArray*)sp_gc_alloc(sizeof(sp_FloatArray),sp_FloatArray_fin,NULL);if((uintmax_t)n>SIZE_MAX/sizeof(sp_float))sp_oom_die();a->cap=n>16?n:16;a->data=(sp_float*)sp_pl_alloc(sizeof(sp_float)*a->cap);if(!a->data)sp_oom_die();a->nilbits=NULL;for(sp_int i=0;i<n;i++)a->data[i]=v;a->len=n;{sp_gc_hdr*h=(sp_gc_hdr*)((char*)a-sizeof(sp_gc_hdr));h->size+=sizeof(sp_float)*a->cap;sp_gc_bytes_add(sizeof(sp_float)*a->cap);}return a;}
+static sp_FloatArray*sp_FloatArray_new_fill(sp_int n,sp_float v){if((uintmax_t)n>SIZE_MAX/sizeof(sp_float))sp_oom_die();sp_FloatArray*a=sp_FloatArray_new_cap(n);for(sp_int i=0;i<n;i++)a->data[i]=v;a->len=n;return a;}
 static SP_COLD sp_FloatArray*sp_FloatArray_new_nil(sp_int n){sp_FloatArray*a=sp_FloatArray_new_fill(n,0.0);if(n>0){SP_NILBITS_NEW_A(a);SP_NILBITS_SET_RANGE_A(a, 0, n);}return a;}
 static SP_NOINLINE SP_COLD void sp_FloatArray_clr_nil(sp_FloatArray*a,sp_int i);
 static SP_NOINLINE SP_COLD sp_ofloat sp_FloatArray_take_cold(sp_FloatArray*a,sp_int i,sp_float v){if(sp_nilbit_get(a->nilbits,i)){sp_FloatArray_clr_nil(a,i);return sp_ofloat_nil();}return sp_ofloat_of(v);}
@@ -518,21 +518,25 @@ void sp_FloatArray_insert_nil(sp_FloatArray *a, sp_int i);
 /* Array of void* pointers (user-class arrays, FFI pointer arrays). */
 static void sp_PtrArray_fin(void*p){sp_PtrArray*a=(sp_PtrArray*)p;sp_gc_hdr*h=(sp_gc_hdr*)((char*)a-sizeof(sp_gc_hdr));sp_gc_bytes_sub(sizeof(void*)*SP_ARR_BUF_CAP(a));h->size-=sizeof(void*)*SP_ARR_BUF_CAP(a);sp_pl_free(SP_ARR_BUF(a));}
 static void sp_PtrArray_gc_scan(void*p){sp_PtrArray*a=(sp_PtrArray*)p;if(!a->scan_elem)return;for(sp_int i=0;i<a->len;i++){if(a->data[i])a->scan_elem(a->data[i]);}}
-static sp_PtrArray*sp_PtrArray_new_scan(void(*scan_elem)(void*)){sp_PtrArray*a=(sp_PtrArray*)sp_gc_alloc(sizeof(sp_PtrArray),sp_PtrArray_fin,scan_elem?sp_PtrArray_gc_scan:NULL);a->cap=16;a->data=(void**)sp_pl_alloc(sizeof(void*)*a->cap);if(!a->data)sp_oom_die();a->len=0;a->scan_elem=scan_elem;{sp_gc_hdr*h=(sp_gc_hdr*)((char*)a-sizeof(sp_gc_hdr));h->size+=sizeof(void*)*a->cap;sp_gc_bytes_add(sizeof(void*)*a->cap);}return a;}
+/* see sp_IntArray_new_cap */
+static sp_PtrArray*sp_PtrArray_new_scan_cap(void(*scan_elem)(void*),sp_int n){sp_PtrArray*a=(sp_PtrArray*)sp_gc_alloc(sizeof(sp_PtrArray),sp_PtrArray_fin,scan_elem?sp_PtrArray_gc_scan:NULL);if(n<16)n=16;if((uintmax_t)n>SIZE_MAX/sizeof(void*))sp_oom_die();a->cap=n;a->data=(void**)sp_pl_alloc(sizeof(void*)*a->cap);if(!a->data)sp_oom_die();a->len=0;a->scan_elem=scan_elem;{sp_gc_hdr*h=(sp_gc_hdr*)((char*)a-sizeof(sp_gc_hdr));h->size+=sizeof(void*)*a->cap;sp_gc_bytes_add(sizeof(void*)*a->cap);}return a;}
+static sp_PtrArray*sp_PtrArray_new_scan(void(*scan_elem)(void*)){return sp_PtrArray_new_scan_cap(scan_elem,16);}
 static sp_PtrArray*sp_PtrArray_new(void){return sp_PtrArray_new_scan(sp_gc_mark);}
+static sp_PtrArray*sp_PtrArray_new_cap(sp_int n){return sp_PtrArray_new_scan_cap(sp_gc_mark,n);}
 /* PtrArray for raw external pointers (FFI `:ptr` returns, dlopen handles).
    These don't carry sp_gc_hdr -- the default sp_gc_mark element scan would
    read undefined bytes and crash at collection. Skip per-element scanning;
    the array header itself is still GC-tracked. */
 static sp_PtrArray*sp_PtrArray_new_noscan(void){return sp_PtrArray_new_scan(NULL);}
-/* a full array gives back the slots its shifts stepped past (SP_ARR_REBASE),
-   and answers whether that is room enough. Moving the elements costs no more
-   than the shifts that freed the slots did when they are no more than those
-   slots; with fewer, the push grows the array as well, as sp_PolyArray_grow
-   does, or each push would move them all again for a slot or two. Out of
-   line, so the push inlined at each call site keeps its size */
-static SP_NOINLINE int sp_PtrArray_take_back(sp_PtrArray*a){int room=a->head>=a->len;SP_ARR_REBASE(a);return room;}
-static inline void sp_PtrArray_push(sp_PtrArray*a,void*v){sp_gc_wb((void*)a); if(!a)return;if(a->frozen){sp_raise_frozen_array_at(a, SP_BUILTIN_PTR_ARRAY);return;}if(a->len>=a->cap){if(SP_UNLIKELY(a->head>0)&&sp_PtrArray_take_back(a))goto put;sp_gc_hdr*h=(sp_gc_hdr*)((char*)a-sizeof(sp_gc_hdr));sp_gc_bytes_sub(sizeof(void*)*a->cap);h->size-=sizeof(void*)*a->cap;a->cap=((((((a->cap*2))))))+1;void*nd=sp_pl_realloc(a->data,sizeof(void*)*a->cap);if(!nd)sp_oom_die();a->data=(void**)nd;h->size+=sizeof(void*)*a->cap;sp_gc_bytes_add(sizeof(void*)*a->cap);}put:a->data[a->len++]=v;}
+/* A push into a full array: it first gives back the slots its shifts
+   stepped past (SP_ARR_REBASE). Moving the elements costs no more than the
+   shifts that freed the slots did when they are no more than those slots;
+   with fewer, the array grows as well, as sp_PolyArray_grow does, or each
+   push would move them all again for a slot or two. Out of line, as the
+   other pushes' growth is: inlined at each call site, it made a loop that
+   pushes run about twice as long. It never changes len. */
+static SP_NOINLINE void sp_PtrArray_push_grow(sp_PtrArray*a){if(a->head>0){int room=a->head>=a->len;SP_ARR_REBASE(a);if(room)return;}sp_gc_hdr*h=(sp_gc_hdr*)((char*)a-sizeof(sp_gc_hdr));sp_gc_bytes_sub(sizeof(void*)*a->cap);h->size-=sizeof(void*)*a->cap;a->cap=((((((a->cap*2))))))+1;void*nd=sp_pl_realloc(a->data,sizeof(void*)*a->cap);if(!nd)sp_oom_die();a->data=(void**)nd;h->size+=sizeof(void*)*a->cap;sp_gc_bytes_add(sizeof(void*)*a->cap);}
+static inline void sp_PtrArray_push(sp_PtrArray*a,void*v){sp_gc_wb((void*)a); if(!a)return;if(a->frozen){sp_raise_frozen_array_at(a, SP_BUILTIN_PTR_ARRAY);return;}sp_int l=SP_ARR_LEN_ONCE(a);if(l>=a->cap)sp_PtrArray_push_grow(a);a->data[l]=v;a->len=l+1;}
 /* Array#pop on a `<X>_ptr_array`. Returns NULL when empty (matches CRuby's
    nil for typed-element arrays since the slot can't carry nil). #520. */
 static inline void *sp_PtrArray_pop(sp_PtrArray*a){sp_gc_wb((void*)a); if(!a)return NULL;if(a->frozen){sp_raise_frozen_array_at(a, SP_BUILTIN_PTR_ARRAY);return NULL;}if(a->len==0)return NULL;return a->data[--a->len];}
@@ -550,14 +554,10 @@ static inline sp_PtrArray *sp_PtrArray_clear(sp_PtrArray*a){sp_gc_wb((void*)a); 
    never stamped (no emitter boxes one without stamping) reads as opaque
    objects, which is what the erased id always meant. Shared by the runtime
    archive and the generated TU, so only sp_alloc.h/sp_gc.h names appear. */
-/* a String's bytes as an element of a String Array of handles: the
-   literal's own handle for a frozen literal, else a new handle (sp_array.c) */
-void *sp_StrhArray_str_elem(const char *s);
 static inline const char *sp_PtrArray_kind_name(sp_PtrArray *a) {
   switch (a->elem_kind) {
     case SP_PTR_ELEM_INT_ROWS: return "Array[Integer]";
     case SP_PTR_ELEM_FLT_ROWS: return "Array[Float]";
-    case SP_PTR_ELEM_STRBUF: return "String";
     case SP_PTR_ELEM_OBJ: return (a->elem_cls >= 0 && sp_obj_cls_name_fn) ? sp_obj_cls_name_fn(a->elem_cls) : "Object";
     default: return "Object";
   }
@@ -567,7 +567,6 @@ static inline sp_RbVal sp_PtrArray_elem_box(sp_PtrArray *a, void *e) {
   switch (a->elem_kind) {
     case SP_PTR_ELEM_INT_ROWS: return sp_box_obj(e, SP_BUILTIN_INT_ARRAY);
     case SP_PTR_ELEM_FLT_ROWS: return sp_box_obj(e, SP_BUILTIN_FLT_ARRAY);
-    case SP_PTR_ELEM_STRBUF: return sp_box_obj(e, SP_BUILTIN_STRBUF);
     case SP_PTR_ELEM_OBJ: return sp_box_nullable_obj_dyn(e, 0);   /* the object's own class id, a subclass included */
     default: return sp_box_obj(e, SP_BUILTIN_OBJECT);
   }
@@ -599,14 +598,10 @@ static inline const char *sp_PtrArray_val_class(sp_RbVal v) {
 static inline int sp_PtrArray_elem_ok(sp_PtrArray *a, sp_RbVal v, void **out) {
   *out = NULL;
   if (v.tag == SP_TAG_NIL) return 1;
-  /* a String Array of handles takes a String's bytes as a handle of its
-     own, as a handle slot takes a String */
-  if (v.tag == SP_TAG_STR && a->elem_kind == SP_PTR_ELEM_STRBUF) { *out = sp_StrhArray_str_elem(v.v.s); return 1; }
   if (v.tag != SP_TAG_OBJ) return 0;
   switch (a->elem_kind) {
     case SP_PTR_ELEM_INT_ROWS: if (v.cls_id != SP_BUILTIN_INT_ARRAY) return 0; break;
     case SP_PTR_ELEM_FLT_ROWS: if (v.cls_id != SP_BUILTIN_FLT_ARRAY) return 0; break;
-    case SP_PTR_ELEM_STRBUF: if (v.cls_id != SP_BUILTIN_STRBUF) return 0; break;
     case SP_PTR_ELEM_OBJ:
       if (!(a->elem_cls < 0 || v.cls_id == a->elem_cls ||
             (v.cls_id >= 0 && sp_class_le_id_fn && sp_class_le_id_fn(v.cls_id, a->elem_cls)))) return 0;
@@ -677,24 +672,25 @@ void *sp_PtrArray_sample(sp_PtrArray *a);
    inside the struct so empty/short StrArrays skip the data malloc.
    data == inline_data is the discriminator for "still on inline storage". */
 static void sp_StrArray_fin(void*p){sp_StrArray*a=(sp_StrArray*)p;if(SP_ARR_BUF(a)!=a->inline_data){sp_gc_hdr*h=(sp_gc_hdr*)((char*)a-sizeof(sp_gc_hdr));sp_gc_bytes_sub(sizeof(sp_strelem)*SP_ARR_BUF_CAP(a));h->size-=sizeof(sp_strelem)*SP_ARR_BUF_CAP(a);sp_pl_free(SP_ARR_BUF(a));}}
-static void sp_StrArray_scan(void*p){sp_StrArray*a=(sp_StrArray*)p;for(sp_int i=0;i<a->len;i++)SP_SEM(a->data[i]);}
+static void sp_StrArray_scan(void*p){sp_StrArray*a=(sp_StrArray*)p;for(sp_int i=0;i<a->len;i++)sp_strelem_mark(a->data[i]);}
 static sp_StrArray*sp_StrArray_new(void){sp_StrArray*a=(sp_StrArray*)sp_gc_alloc(sizeof(sp_StrArray),sp_StrArray_fin,sp_StrArray_scan);a->cap=SP_STRARR_INLINE;a->data=a->inline_data;a->len=0;return a;}
 static void sp_StrArray_init_embedded(sp_StrArray*a){a->cap=SP_STRARR_INLINE;a->data=a->inline_data;a->len=0;}  /* see sp_IntArray_init_embedded */
-/* sp_PtrArray_take_back */
-static SP_NOINLINE int sp_StrArray_take_back(sp_StrArray*a){int room=a->head>=a->len;SP_ARR_REBASE(a);return room;}
-static inline void sp_StrArray_push_e(sp_StrArray*a,sp_strelem v){sp_gc_wb((void*)a); if(a->frozen){sp_raise_frozen_array_at(a, SP_BUILTIN_STR_ARRAY);return;}if(a->len>=a->cap){if(SP_UNLIKELY(a->head>0)&&sp_StrArray_take_back(a))goto put;sp_gc_hdr*h=(sp_gc_hdr*)((char*)a-sizeof(sp_gc_hdr));sp_int nc=((((((a->cap*2))))))+1;if(a->data==a->inline_data){sp_strelem*nd=(sp_strelem*)sp_pl_alloc(sizeof(sp_strelem)*nc);if(!nd)sp_oom_die();memcpy(nd,a->data,sizeof(sp_strelem)*a->len);a->data=nd;}
-else{sp_gc_bytes_sub(sizeof(sp_strelem)*a->cap);h->size-=sizeof(sp_strelem)*a->cap;void*nd=sp_pl_realloc(a->data,sizeof(sp_strelem)*nc);if(!nd)sp_oom_die();a->data=(sp_strelem*)nd;}a->cap=nc;h->size+=sizeof(sp_strelem)*a->cap;sp_gc_bytes_add(sizeof(sp_strelem)*a->cap);}put:a->data[a->len++]=v;}
-static inline void sp_StrArray_push(sp_StrArray*a,const char*v){sp_StrArray_push_e(a,SP_SEFX(v));}
+/* see sp_PtrArray_push_grow; an array still in its inline slots moves to
+   a buffer of its own */
+static SP_NOINLINE void sp_StrArray_push_grow(sp_StrArray*a){if(a->head>0){int room=a->head>=a->len;SP_ARR_REBASE(a);if(room)return;}sp_gc_hdr*h=(sp_gc_hdr*)((char*)a-sizeof(sp_gc_hdr));sp_int nc=((((((a->cap*2))))))+1;if(a->data==a->inline_data){sp_strelem*nd=(sp_strelem*)sp_pl_alloc(sizeof(sp_strelem)*nc);if(!nd)sp_oom_die();memcpy(nd,a->data,sizeof(sp_strelem)*a->len);a->data=nd;}
+else{sp_gc_bytes_sub(sizeof(sp_strelem)*a->cap);h->size-=sizeof(sp_strelem)*a->cap;void*nd=sp_pl_realloc(a->data,sizeof(sp_strelem)*nc);if(!nd)sp_oom_die();a->data=(sp_strelem*)nd;}a->cap=nc;h->size+=sizeof(sp_strelem)*a->cap;sp_gc_bytes_add(sizeof(sp_strelem)*a->cap);}
+static inline void sp_StrArray_push_e(sp_StrArray*a,sp_strelem v){sp_gc_wb((void*)a); if(a->frozen){sp_raise_frozen_array_at(a, SP_BUILTIN_STR_ARRAY);return;}sp_int l=SP_ARR_LEN_ONCE(a);if(l>=a->cap)sp_StrArray_push_grow(a);a->data[l]=v;a->len=l+1;}
+static inline void sp_StrArray_push(sp_StrArray*a,const char*v){sp_StrArray_push_e(a,sp_strelem_fx(v));}
 static inline sp_int sp_StrArray_length(sp_StrArray*a){return a ? a->len : 0;}
 static inline sp_int sp_StrArray_length_m(sp_StrArray*a){if (SP_UNLIKELY(!a)) sp_nil_recv("length");return a->len;}
 static inline sp_bool sp_StrArray_empty(sp_StrArray*a){sp_gc_wb((void*)a); return a->len==0;}
 static inline sp_strelem sp_StrArray_get_e(sp_StrArray*a,sp_int i){if(!a)return NULL;if(i<0)i+=a->len;if(i<0||i>=a->len)return NULL;return a->data[i];}
 static inline sp_strelem sp_StrArray_get_m_e(sp_StrArray*a,sp_int i){if (SP_UNLIKELY(!a)) sp_nil_recv("[]"); return sp_StrArray_get_e(a,i); }
-/* the element's bytes (SP_SEB): what a reader of the String takes; the element as the container keeps it is the _e form, the handle under SP_ONE_STRING */
+/* the element's bytes (SP_SEB): what a reader of the String takes; the element as the container keeps it is the _e form, the handle */
 static inline const char *sp_StrArray_get(sp_StrArray*a,sp_int i){sp_strelem e=sp_StrArray_get_e(a,i);return SP_SEB(e);}
 static inline const char *sp_StrArray_get_m(sp_StrArray*a,sp_int i){sp_strelem e=sp_StrArray_get_m_e(a,i);return SP_SEB(e);}
 static inline void sp_StrArray_set_e(sp_StrArray*a,sp_int i,sp_strelem v){sp_gc_wb((void*)a); if (SP_UNLIKELY(!a)) sp_nil_recv("[]=");if(a->frozen){sp_raise_frozen_array_at(a, SP_BUILTIN_STR_ARRAY);return;}sp_int orig=i;if(i<0)i+=a->len;if(i<0)sp_raise_cls("IndexError",sp_sprintf("index %lld too small for array; minimum: %lld",(long long)orig,(long long)-a->len));while(i>=a->len)sp_StrArray_push(a,NULL);a->data[i]=v;}  /* the gap is nil, not "" (#3836) */
-static inline void sp_StrArray_set(sp_StrArray*a,sp_int i,const char*v){sp_StrArray_set_e(a,i,SP_SEFX(v));}
+static inline void sp_StrArray_set(sp_StrArray*a,sp_int i,const char*v){sp_StrArray_set_e(a,i,sp_strelem_fx(v));}
 
 /* ---- sp_StrArray cold ops (compiled in lib/sp_array.c) ---- */
 void sp_StrArray_replace(sp_StrArray *dst, sp_StrArray *src);
@@ -711,21 +707,16 @@ void sp_StrArray_uniq_bang(sp_StrArray *a);
 sp_StrArray *sp_StrArray_uniq(sp_StrArray *a);
 const char *sp_StrArray_join(sp_StrArray *a, const char *sep);
 sp_bool sp_StrArray_include_e(sp_StrArray *a, sp_strelem v);
-#ifdef SP_ONE_STRING
-sp_bool sp_StrArray_include_s(sp_StrArray *a, const char *v);
-/* (the bytes compare: a needle is no element to adopt) */
-static inline sp_bool sp_StrArray_include(sp_StrArray *a, const char *v){return sp_StrArray_include_s(a,v);}
-#else
-static inline sp_bool sp_StrArray_include(sp_StrArray *a, const char *v){return sp_StrArray_include_e(a,v);}
-#endif
+/* (the bytes compare: a needle is no element to adopt; _e takes the element) */
+sp_bool sp_StrArray_include(sp_StrArray *a, const char *v);
 sp_StrArray *sp_StrArray_intersect(sp_StrArray *a, sp_StrArray *b);
 sp_bool sp_StrArray_intersect_p(sp_StrArray *a, sp_StrArray *b);
 sp_StrArray *sp_StrArray_union(sp_StrArray *a, sp_StrArray *b);
 sp_StrArray *sp_StrArray_difference(sp_StrArray *a, sp_StrArray *b);
 sp_int sp_StrArray_index_e(sp_StrArray *a, sp_strelem v);
-static inline sp_int sp_StrArray_index(sp_StrArray *a, const char *v){return sp_StrArray_index_e(a,SP_SEFX(v));}
+static inline sp_int sp_StrArray_index(sp_StrArray *a, const char *v){return sp_StrArray_index_e(a,sp_strelem_fx(v));}
 sp_int sp_StrArray_rindex_e(sp_StrArray *a, sp_strelem v);
-static inline sp_int sp_StrArray_rindex(sp_StrArray *a, const char *v){return sp_StrArray_rindex_e(a,SP_SEFX(v));}
+static inline sp_int sp_StrArray_rindex(sp_StrArray *a, const char *v){return sp_StrArray_rindex_e(a,sp_strelem_fx(v));}
 sp_StrArray *sp_StrArray_compact(sp_StrArray *a);
 sp_IntArray *sp_IntArray_compact(sp_IntArray *a);
 sp_FloatArray *sp_FloatArray_compact(sp_FloatArray *a);
@@ -764,9 +755,9 @@ static inline sp_int sp_StrArray_truthy_count(sp_StrArray*a,sp_int limit){sp_int
 sp_strelem sp_StrArray_delete_at_e(sp_StrArray *a, sp_int i);
 sp_strelem sp_StrArray_delete_e(sp_StrArray *a, sp_strelem v);
 static inline const char *sp_StrArray_delete_at(sp_StrArray *a, sp_int i){sp_strelem e=sp_StrArray_delete_at_e(a,i);return SP_SEB(e);}
-static inline const char *sp_StrArray_delete(sp_StrArray *a, const char *v){sp_strelem e=sp_StrArray_delete_e(a,SP_SEFX(v));return SP_SEB(e);}
+static inline const char *sp_StrArray_delete(sp_StrArray *a, const char *v){sp_strelem e=sp_StrArray_delete_e(a,sp_strelem_fx(v));return SP_SEB(e);}
 void sp_StrArray_insert_e(sp_StrArray *a, sp_int i, sp_strelem v);
-static inline void sp_StrArray_insert(sp_StrArray *a, sp_int i, const char *v){sp_StrArray_insert_e(a,i,SP_SEFX(v));}
+static inline void sp_StrArray_insert(sp_StrArray *a, sp_int i, const char *v){sp_StrArray_insert_e(a,i,sp_strelem_fx(v));}
 void sp_StrArray_shuffle_bang(sp_StrArray *a);
 sp_StrArray *sp_StrArray_dup(sp_StrArray *a);
 static inline sp_StrArray *sp_StrArray_to_a(sp_StrArray *a) { return a ? a : sp_StrArray_new(); }
@@ -809,9 +800,9 @@ const char*sp_PtrArray_str_join(sp_PtrArray*a,const char*sep);
 sp_RbVal sp_IntArray_index_poly(sp_IntArray *a, sp_int v);
 sp_RbVal sp_IntArray_rindex_poly(sp_IntArray *a, sp_int v);
 sp_RbVal sp_StrArray_index_poly_e(sp_StrArray *a, sp_strelem v);
-static inline sp_RbVal sp_StrArray_index_poly(sp_StrArray *a, const char *v){return sp_StrArray_index_poly_e(a,SP_SEFX(v));}
+static inline sp_RbVal sp_StrArray_index_poly(sp_StrArray *a, const char *v){return sp_StrArray_index_poly_e(a,sp_strelem_fx(v));}
 sp_RbVal sp_StrArray_rindex_poly_e(sp_StrArray *a, sp_strelem v);
-static inline sp_RbVal sp_StrArray_rindex_poly(sp_StrArray *a, const char *v){return sp_StrArray_rindex_poly_e(a,SP_SEFX(v));}
+static inline sp_RbVal sp_StrArray_rindex_poly(sp_StrArray *a, const char *v){return sp_StrArray_rindex_poly_e(a,sp_strelem_fx(v));}
 sp_oint sp_IntArray_index_opt(sp_IntArray *a, sp_int v);
 sp_oint sp_IntArray_rindex_opt(sp_IntArray *a, sp_int v);
 /* index(nil) / rindex(nil) / include?(nil) / count(nil): the bitmap's view */
@@ -834,19 +825,6 @@ sp_IntArray *sp_IntArray_slice_bang(sp_IntArray *a, sp_int from, sp_int n);
 sp_FloatArray *sp_FloatArray_slice_bang(sp_FloatArray *a, sp_int from, sp_int n);
 sp_StrArray *sp_StrArray_slice_bang(sp_StrArray *a, sp_int from, sp_int n);
 sp_PtrArray *sp_PtrArray_slice_bang(sp_PtrArray *a, sp_int from, sp_int n);
-/* --share-strings: a String Array whose Strings are shared holds their
-   sp_String handles in an sp_PtrArray stamped SP_PTR_ELEM_STRBUF from birth
-   (TY_STRH_ARRAY), so an element read is the String itself and the poly paths
-   box it as one. Element order, growth, the write barrier and the GC scan are
-   the pointer array's; these answer what depends on the Strings' bytes. */
-sp_PtrArray *sp_StrhArray_new(void);
-sp_PtrArray *sp_StrhArray_dup(sp_PtrArray *a);
-static inline sp_PtrArray *sp_StrhArray_to_a(sp_PtrArray *a) { return a ? a : sp_StrhArray_new(); }
-static inline sp_PtrArray *sp_StrhArray_entries(sp_PtrArray *a) { if (SP_UNLIKELY(!a)) sp_nil_recv("entries"); return sp_StrhArray_dup(a); }
-sp_PtrArray *sp_StrhArray_from_strs(sp_StrArray *a);
-sp_bool sp_StrhArray_include(sp_PtrArray *a, const char *v);
-sp_bool sp_StrhArray_eq(sp_PtrArray *a, sp_PtrArray *b);
-const char *sp_StrhArray_join(sp_PtrArray *a, const char *sep);
 
 /* ---- more cold StrArray ops relocated from spinel_rt.h (0 optcarrot
    uses). #include here (not near the top): by this point array.h's own

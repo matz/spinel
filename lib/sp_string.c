@@ -5,41 +5,6 @@
 #include "sp_str.h"   /* sp_str_concat (sp_str_keep_copy) */
 #include <string.h>
 
-/* Only evaluated literal handles join these permanent roots; unused
-   generated slots cost no allocation or marking work. */
-static sp_StringLiteral *sp_string_literals;
-#ifdef SP_THREADS
-static pthread_mutex_t sp_string_literal_lock = PTHREAD_MUTEX_INITIALIZER;
-#endif
-sp_String *sp_String_literal_handle(sp_StringLiteral *slot, const char *s) {
-  sp_String *h = SP_ATOMIC_LOAD(&slot->value, __ATOMIC_ACQUIRE);
-  if (h) return h;
-#ifdef SP_THREADS
-  pthread_mutex_lock(&sp_string_literal_lock);
-#endif
-  h = slot->value;
-  if (!h) {
-    /* The source is static, and this bounded allocation cannot collect
-       while the new handle is being linked into its permanent root. */
-    h = sp_gc_alloc_nogc(sizeof *h, NULL, NULL);
-    h->data = (char *)s;
-    h->len = (int64_t)sp_str_byte_len(s);
-    h->cap = h->len + 1;
-    h->binary = sp_str_is_binary(s);
-    sp_String_freeze(h);
-    slot->next = sp_string_literals;
-    sp_string_literals = slot;
-    SP_ATOMIC_STORE(&slot->value, h, __ATOMIC_RELEASE);
-  }
-#ifdef SP_THREADS
-  pthread_mutex_unlock(&sp_string_literal_lock);
-#endif
-  return h;
-}
-void sp_String_mark_literals(void) {
-  for (sp_StringLiteral *p = sp_string_literals; p; p = p->next) sp_gc_mark(p->value);
-}
-
 void sp_String_prepend(sp_String*s,const char*t){SP_GC_ROOT(s);SP_GC_ROOT_STR(t);if (SP_UNLIKELY(!s)) sp_nil_recv("prepend"); if (!t)return;if(sp_String_is_frozen(s)){sp_raise_frozen_str(s->data);return;}int64_t tl=(int64_t)strlen(t);if(!sp_fd_grow(s,s->len+tl))return;memmove(s->data+tl,s->data,s->len+1);memcpy(s->data,t,tl);s->len+=tl;sp_fd_publish(s);}
 /* String#insert(idx, str): insert at idx; negative idx is relative to len+1. */
 void sp_String_insert(sp_String*s,int64_t idx,const char*t){SP_GC_ROOT(s);SP_GC_ROOT_STR(t);if (SP_UNLIKELY(!s)) sp_nil_recv("insert"); if (!t)return;if(sp_String_is_frozen(s)){sp_raise_frozen_str(s->data);return;}int64_t tl=(int64_t)strlen(t);if(tl==0)return;if(idx<0)idx+=s->len+1;if(idx<0)idx=0;if(idx>s->len)idx=s->len;if(!sp_fd_grow(s,s->len+tl))return;memmove(s->data+idx+tl,s->data+idx,s->len-idx+1);memcpy(s->data+idx,t,tl);s->len+=tl;sp_fd_publish(s);}
@@ -73,11 +38,11 @@ int sp_fd_grow_inline(sp_String *s, int64_t need){
    program's string literals are frozen here already, and so is this one
    (docs/limitations.md). The symbol table's own name is a plain static
    without a header, so each symbol gets one frozen copy with a header (0xf1,
-   its link sp_sym_str_tag and no literal slot: a handle made of it is a new
-   frozen handle), built at its
-   first to_s and kept as long as the symbol is; the collector neither marks
-   nor sweeps it, and its header keeps the length and the hash. The table is
-   guarded by the heap lock, as the dedup table is. */
+   its link sp_sym_str_tag, which names no literal's handle: a handle made
+   of it is a new frozen handle), built at its first to_s and kept as long
+   as the symbol is; the collector neither marks nor sweeps it, and its
+   header keeps the length and the hash. The table is guarded by the heap
+   lock, as the dedup table is. */
 typedef struct { sp_str_hdr h; unsigned char m; char d[]; } sp_sym_str_obj;
 static const char**sp_sym_str_tab=NULL;
 static sp_int sp_sym_str_cap=0;
@@ -116,7 +81,6 @@ const char*sp_sym_to_s_frozen(sp_sym id){
   return r;
 }
 
-#ifdef SP_ONE_STRING
 struct sp_String_s *sp_strelem_of(const char *b) { return sp_String_new_shared(b); }
 const char *sp_str_keep_copy(const char *s) { return sp_str_concat(s, sp_str_empty); }
 /* A Hash's String key made from `len` bytes at `data`: a frozen handle over
@@ -127,4 +91,3 @@ const char *sp_hash_key_from_bytes(const char *data, size_t len, int bin) {
   sp_String_freeze(h);
   return h->data;
 }
-#endif

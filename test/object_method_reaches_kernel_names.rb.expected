@@ -1,0 +1,66 @@
+true
+true
+false
+true
+before 1
+my tap
+i1
+:tap
+my tap
+ss
+:tap
+my tap
+a1
+:tap
+my tap
+h1
+:tap
+my tap
+r1
+:tap
+my tap
+nnil
+:tap
+my tap
+k7
+:tap
+my tap
+xfive
+:tap
+my tap
+s1
+:tap
+my tap
+Foo
+:tap
+[:then, Class]
+[:then, Integer]
+[:then, Integer]
+[:ys, Integer]
+:me
+:me
+:me
+:me
+:me
+:me
+:me
+:mine
+:mine
+:mine
+:mine
+:mine
+:mine
+1
+"s"
+:dup
+:dup
+my tap
+stmt 1
+my tap
+stmt t
+my tap
+stmt 5
+[:then, Integer]
+Symbol
+[:then, Class]
+"b"

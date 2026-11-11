@@ -27,13 +27,6 @@ void refuse_self_singleton_calls(Compiler *c);
 void unsupported_feature_collect(Compiler *c, int id, const char *msg);
 int defer_refusals(void); /* codegen_util.c: explicit opt-in to runtime refusals */
 int defer_refusals_at(const Compiler *c, int node); /* ...or the node's file's `# spinel: defer-refusals` */
-/* (codegen_util.c) a refusal kept as a check where its value arrives,
-   reported and counted as a deferred one; and whether the identity Set's
-   proof marked any node for that check or a refusal where it is emitted
-   (refuse_set_identity_members), with the words they raise */
-void refusal_note_deferred(Compiler *c, int id, const char *msg);
-extern int g_idset_marks;
-extern const char *const g_sid_refusal_msg;
 int ie_class_of(Compiler *c, int node);
 int attr_reader_ty(Compiler *c, int cid, const char *name, TyKind *out);
 int ie_poly_classes_at(Compiler *c, int node, int *out, int max);
@@ -91,7 +84,6 @@ const char *method_sym_arg(Compiler *c, int node);
 int is_method_obj_call(Compiler *c, int node);
 int method_user_override_recv(Compiler *c, int node);
 int method_obj_target_mi(Compiler *c, int node);
-int method_super_target(Compiler *c, int mi);
 int method_obj_alias_owner(Compiler *c, int node, int *sg);
 int method_recv_node(Compiler *c, int recv);
 int method_recv_nodes(Compiler *c, int recv, int **out);
@@ -118,13 +110,8 @@ void du_memo_free(void);
 enum { AN_DROP_CLIMB = VPS_ALL };
 int an_value_dropped(const NodeTable *nt, const int *parent, int node);
 int cow_user_block_value(Compiler *c, const int *parent, int id);
-/* The methods the default build may lend a String parameter's slot by
-   address (elig, c->nscopes entries), and whether it passes parameter pi
-   of method mi by value: no slot and no shared handle reach it, because a
-   member of its name group may not take either. A spliced yielder's
-   parameters alias the caller's String, and are not passed by value.
-   analyze.c */
-void an_byref_eligible_scopes(Compiler *c, char *elig);
+/* The String rule for a local or parameter slot: it holds the handle (analyze_pass.c) */
+int slot_take_string_handle(Compiler *c, LocalVar *lv);
 /* A runtime protocol name: the emitted program can call the method with
    no CallNode of its own (`puts obj` calls to_s). analyze.c */
 int method_name_implicitly_invoked(const char *nm);
@@ -163,11 +150,12 @@ int builtin_method_known_any(const char *m);   /* codegen_call.c */
 int builtin_instance_name_known(const char *m);   /* codegen_call.c */
 int builtin_name_below_object(const char *m);   /* codegen_call.c */
 int builtin_object_method_known(const char *m);   /* builtin_names.c */
-int core_method_vis(const char *cls, const char *m, int inherit);   /* codegen_call_class.c */
+int core_method_vis(const char *cls, const char *m, int inherit, const char **owner);   /* codegen_call_class.c */
 int core_method_name_any(const char *m);   /* codegen_call_class.c: an instance method of any core class */
 const char *core_class_ancestors(const char *cls);   /* codegen_call_class.c */
 int builtin_method_arity(const char *cls, const char *m, int *out);
 int builtin_cmethod_known(const char *cls, const char *name);
+int builtin_cmethod_known_any(const char *name);
 int builtin_instance_method_known(const char *cls, const char *m);   /* codegen_call.c */
 int builtin_instance_name_known(const char *m);   /* codegen_call.c */
 int builtin_super_cmethod_known(const char *cls, const char *name);
@@ -178,7 +166,7 @@ int builtin_recv_owner_classes(const char *name, const char **out, int cap);
 int poly_splat_keyed(const char *name);
 int an_bi_generic_splat(Compiler *c, int id);
 int builtin_kernel_fn_span(const char *name, int with_block, int *lo, int *hi);
-int builtin_arity_violation(Compiler *c, int id);
+int builtin_arity_violation(Compiler *c, int id, int non_nil);
 int is_handler_proc_block(Compiler *c, int id);
 int builtin_class_id(const char *name);
 int class_is_prim_reopen(Compiler *c, int k);
@@ -362,9 +350,9 @@ extern int g_yvt_unify_all;
    bare `yield` returns the block's value -- and since it inlines per call
    site, use THIS site's block value type rather than the unified return. */
 TyKind method_call_ret(Compiler *c, int mi, int call_id);
-/* A program's own Object method serving a call on a builtin receiver of
-   class `cls` that does not have the name itself (see analyze_infer.c). */
-int object_reopen_answers(Compiler *c, const char *cls, int call_id, TyKind *out);
+/* A program's own Object method serving a call on a boxed receiver, for a
+   name the builtin surface lacks (see analyze_infer.c). */
+int object_reopen_answers(Compiler *c, int call_id, TyKind *out);
 int sclass_value_call(Compiler *c, int id);   /* analyze_infer.c */
 /* is_proc_constant / is_proc_literal are declared in analyze.h (codegen needs them). */
 /* 1 if `id` is any proc-creating literal: a proc/lambda/Proc.new call (above)
@@ -413,6 +401,7 @@ TyKind proc_ret_of(Compiler *c, int node);
 TyKind proc_call_ret(Compiler *c, int recv);
 TyKind infer_call(Compiler *c, int id);
 TyKind infer_uncached(Compiler *c, int id);
+void scope_reserve_param(Scope *s);
 void scope_add_param(Scope *s, const char *name, int defnode);
 void collect_def_params(Compiler *c, int def_id, Scope *s);
 char *dm_lit_str(Compiler *c, int lit);
@@ -475,6 +464,8 @@ int new_recv_every_class(Compiler *c, int recv);
 int dm_each_inner(const NodeTable *nt, int call);   /* the define_method call of `[...].each { |v| define_method(...) { } }`, else -1 */
 const char *vis_arg_name(const NodeTable *nt, int arg);   /* a Symbol or String argument's method name (analyze_scope.c) */
 void register_struct_members(Compiler *c, ClassInfo *cls, int val);
+/* The member names a splat's list resolves to (`Struct.new(*KEYS)`), or -1 */
+int resolve_symbol_list(Compiler *c, int node, const char **out, int cap, int depth);
 void register_structs(Compiler *c);
 void register_singleton_defs(Compiler *c);
 void register_attr_versions(Compiler *c);
@@ -683,12 +674,14 @@ int infer_changed_store_types(Compiler *c, const NodeTypes *before);
 int infer_for_index(Compiler *c);
 int infer_catch_block_params(Compiler *c);
 void infer_bigint_loop_locals(Compiler *c);
+/* --no-bigint: refuse each place a Bignum value starts (a node typed Bignum
+   none of whose operands is); see analyze.h g_no_bigint. */
+void refuse_bigint_values(Compiler *c);
 void block_sites_index(Compiler *c);
 int block_sites(Compiler *c, int si, const int **sites);
 int block_site_args(Compiler *c, int si, int site, int call);
 int method_obj_block_sites_each(Compiler *c, int ymi, int call, int depth,
                                 int (*visit)(Compiler *, int, const int *, int, void *), void *ctx);
-int a_super_target(Compiler *c, Scope *m);
 int a_is_fiber_or_gen_create(Compiler *c, int id);   /* analyze.c */
 /* A block's (or a proc literal's) parameters as its binders count them:
    P leading requireds, O optionals, Q posts, R a rest marker (`*r`, `*`,
@@ -1069,6 +1062,12 @@ int desugar_to_h_block(Compiler *c);
 int desugar_ffi_library_functions(Compiler *c);
 int desugar_native_func_defs(Compiler *c);
 int comp_ffi_library_module(const NodeTable *nt, const char *mn);
+/* a literal attach_function of the scalar vocabulary, called through the
+   pointer the attach resolves (#11362): its name, C symbol (NULL: the
+   name), parameter Array node and return spec */
+int ffi_attach_direct(const NodeTable *nt, int call, const char **fname, const char **csym, int *arr,
+                      const char **ret);
+int ffi_attach_direct_stmt(const NodeTable *nt, int body, int call);
 int rewrite_ffi_dynamic_calls(Compiler *c);
 int desugar_builtin_reopen_const_reads(Compiler *c);
 int desugar_builtin_reopen_self_calls(Compiler *c);
@@ -1232,6 +1231,7 @@ int kwh_arg_param(Compiler *c, Scope *m, int pos_argc);
 
 /* --ext-entry designations (see codegen_internal.h / ext-design.md) */
 extern const char *g_ext_entries;
+extern const char *g_ext_classes;
 
 /* the class every value of a boxed-value hash slot holds, or -1 (#4846) */
 int hv_value_class(Compiler *c, int recv);
@@ -1243,4 +1243,13 @@ char **dsend_candidates(Compiler *c, int *out_n);
 int exc_reopen_definers(Compiler *c, const char *mname, int *out, int max);
 
 int infer_cext_builtin_constant(Compiler *c, int node);
+/* What a `super` reaches, from the load record (analyze_elab.c): bits 1 << MX_*, *reach the program defs it reaches first
+   (the caller frees it), *reader an attr reader, *opaque a version with no def to read. A module's def asks every position the
+   module has; a class's, one chain, from after its own def (own 0) or from the class (own 1). */
+enum { MX_NONE, MX_PROGRAM, MX_BUILTIN, MX_UNKNOWN };
+int elab_module_super_owners(Compiler *c, int holder, const char *name, int **reach, int *nreach, int *reader, int *opaque);
+int elab_class_super_owner(Compiler *c, int cls, int own, const char *name, int **reach, int *nreach, int *reader, int *opaque);
+/* A `...` def's method scope takes its parameters after the forwarding lowering (analyze_scope.c) */
+int def_takes_forwarding(const NodeTable *nt, int def);   /* analyze_util.c */
+void scope_forwarding_params(Compiler *c);
 #endif

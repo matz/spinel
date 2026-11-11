@@ -1,0 +1,15 @@
+2 | NoMethodError | NoMethodError | NoMethodError | NoMethodError | [1] | true | true
+2 | NoMethodError | :own_last | "own_join" | NoMethodError | [3] | false | false
+1 | NoMethodError | :mod_last | NoMethodError | NoMethodError | [5] | false | false
+3 | false | NoMethodError | NoMethodError | NoMethodError | NoMethodError | NoMethodError | NoMethodError
+3 | false | NoMethodError | NoMethodError | NoMethodError | NoMethodError | NoMethodError | TypeError
+2 | false | 8 | "78" | Integer | [7] | false | false
+NoMethodError | NoMethodError | 3 | NoMethodError | NoMethodError | NoMethodError | true | true
+NoMethodError | NoMethodError | NoMethodError | NoMethodError | NoMethodError | NoMethodError
+NoMethodError
+NoMethodError
+4
+NoMethodError
+NoMethodError
+NoMethodError
+NoMethodError

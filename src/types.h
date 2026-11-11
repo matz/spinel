@@ -83,6 +83,7 @@ enum {
   PF_VAL_SELF = 1 << 15, /* a mutator whose value is the receiver: the box itself, or for a String the box its variable holds after the write */
   PF_SAME_OK  = 1 << 17, /* ... and contents that are the receiver's own mean no write, so no frozen check (scrub!) */
   PF_ENC      = 1 << 18, /* ... and the new contents carry the result's encoding, which a shared handle takes, binary or text (bytesplice) */
+  PF_STR_TYPED = 1 << 19, /* a String bang for a receiver known to be a String (ty_str_typed_bang_flags), whose row is the mutator kind's for a boxed receiver (reverse!, scrub!); PF_STR_SELF on it says it answers self, PF_SAME_OK that an unchanged String is no write */
   PF_LAST     = 1 << 16  /* answers only once no poly-receiver emitter of its own has claimed the name */
 };
 typedef struct {
@@ -110,8 +111,9 @@ int ty_poly_hash_face_name(const char *nm);
    list of them: its PF_STR_BANG and PF_STR_SELF flags, or 0 for any other
    name. Its plain name is the bang without the '!' (str_bang_plain). */
 unsigned ty_str_bang_flags(const char *name);
-/* ty_str_bang_flags for a receiver known to be a String, which reverse!
-   joins */
+/* ty_str_bang_flags for a receiver known to be a String, which the
+   PF_STR_TYPED rows (reverse!, scrub!) join: PF_STR_BANG, with their
+   PF_STR_SELF and PF_SAME_OK */
 unsigned ty_str_typed_bang_flags(const char *name);
 void str_bang_plain(const char *bang, char *out, int n);
 
@@ -238,14 +240,6 @@ int array_new_copies(TyKind t);
 /* Set while the type fixpoint iterates; defined in analyze.c. Declared here
    because ty_array_of consults it -- see the TY_UNKNOWN case. */
 extern int g_infer_optimistic;
-/* One String representation, the only one: every String slot is the
-   handle. A constant while the branches that test it are folded away
-   (stage 2 of string-one-repr-design.md); ty_array_of and ty_hash_of take
-   a String handle as a String. */
-#define g_one_string 1
-/* ...and so is the share rule it implies (every String slot the handle):
-   what c->share_strings and repr_share_rule() said, folded the same way */
-#define SHARE_ON 1
 /* Set while infer_write_types is re-deriving local types. That pass resets
    every non-param local to UNKNOWN at the top of each round and re-derives in
    node order, so a read reached BEFORE its own write answers UNKNOWN -- and
@@ -442,6 +436,8 @@ typedef struct {
   unsigned char scalar_ret;   /* is_scalar_ret */
   unsigned char store_class;  /* repr_store_class (SC_*) */
   unsigned char box_form;     /* the form --repr-check records for box_text (RF_*) */
+  const char *elem_sfx;       /* typed_elem_sfx: a typed Array's element-store entries */
+  unsigned char elem_held;    /* typed_elem_held: the kind its element is held as */
 } TyTraits;
 #define TY_TRAITS_N ((int)TY_OBJ_RANGE + 1)
 extern const TyTraits ty_traits[TY_TRAITS_N];

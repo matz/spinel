@@ -724,7 +724,16 @@ static void sp_fiber_install_gc_hook(void){if(!sp_gc_mark_suspended_fibers_hook)
 #ifndef SP_FIBER_STACK_CACHE
 #define SP_FIBER_STACK_CACHE 32
 #endif
+/* The table is sized for the largest SPINEL_FIBER_STACK_CACHE the
+   environment may ask for: two words per slot, 16 KB on a 64-bit target and 8
+   KB on a 32-bit one, all of it static. A target that counts static RAM sets
+   both: -DSP_FIBER_STACK_CACHE=2 -DSP_FIBER_STACK_CACHE_MAX=2. */
+#ifndef SP_FIBER_STACK_CACHE_MAX
 #define SP_FIBER_STACK_CACHE_MAX 1024
+#endif
+#if SP_FIBER_STACK_CACHE > SP_FIBER_STACK_CACHE_MAX
+#error "SP_FIBER_STACK_CACHE exceeds SP_FIBER_STACK_CACHE_MAX"
+#endif
 static char  *sp_stk_cache[SP_FIBER_STACK_CACHE_MAX];
 static size_t sp_stk_cache_sz[SP_FIBER_STACK_CACHE_MAX];
 static int    sp_stk_n = 0;

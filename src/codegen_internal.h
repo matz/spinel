@@ -33,6 +33,7 @@ typedef struct { char *p; size_t len, cap; } Buf;
 void buf_putn(Buf *b, const char *s, size_t n);
 void buf_puts(Buf *b, const char *s);
 void buf_erase(Buf *b, size_t off, size_t n);
+void buf_insert_at(Buf *b, size_t at, const char *text);   /* text into b at byte offset at */
 extern int g_no_root_elision;
 extern int g_no_root_frame;
 extern int g_inline_hot;
@@ -40,6 +41,7 @@ extern int g_no_write_barrier;
 extern const char *g_ruby_description;
 void buf_printf(Buf *b, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
 void buf_setf(Buf *b, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
+void buf_vsetf(Buf *b, const char *fmt, va_list ap);
 
 static inline void emit_indent(Buf *b, int n) { for (int i = 0; i < n; i++) buf_puts(b, "  "); }
 
@@ -122,15 +124,10 @@ typedef struct { char **f, **t; int n; } RenCopy;
 void ren_copy_out(RenCopy *k, int from, int n);
 void ren_copy_in(const RenCopy *k, int from);
 void ren_copy_free(RenCopy *k);
-typedef struct { int sv, from; RenCopy k; int fence, arm; } RenPark;
+typedef struct { int sv, from; RenCopy k; int arm; } RenPark;
 RenPark ren_park(int from);
 void ren_unpark(RenPark *p);
 const char *strbuf_local_name(Compiler *c, int recv);
-int ivar_global_slot(Compiler *c, int node, Buf *out);
-int gvar_global_slot(Compiler *c, int node, Buf *out);
-int cvar_global_slot(Compiler *c, int node, Buf *out);
-int lent_global_slot_rebound(Compiler *c, int arg, const char *slot);
-void refuse_lent_global_rebound(Compiler *c, int arg, const char *slot, const char *target, const char *pname);
 int strbuf_ivar_owner(Compiler *c, int node);
 int attr_assign_slot(Compiler *c, int id, int *cid, int *iv);
 const int *codegen_node_parents(Compiler *c, int node);
@@ -165,15 +162,6 @@ void emit_civ_slot_decl(Compiler *c, int cid, const char *nm, const char *ctype,
                         const char *init, Buf *b);
 int ie_class_of(Compiler *c, int node);
 int ie_own_class_of(Compiler *c, int node);
-/* The shared-mutable shim (codegen_stmt.c) re-runs a value-semantics mutator
-   arm against a plain shadow copy, then swaps the handle's bytes for it. A
-   LOCAL receiver is redirected into the shadow by the rename table; an ivar
-   has no name to rename, so the shim publishes the slot it is shadowing here
-   and the ivar emitter resolves reads AND the arm's write-back to the shadow
-   -- the same substitution one level down (#4363). */
-extern const char *g_sb_iv_name;   /* "@bt" while a shim is open, else NULL */
-extern int         g_sb_iv_cid;
-extern char        g_sb_iv_repl[64];
 /* The handle text of recv's slot appended to b, never declined for its
    length, and whether recv has one at all (nothing emitted) */
 int strbuf_slot_text(Compiler *c, int recv, Buf *b);
@@ -196,10 +184,9 @@ void emit_strbuf_param_bind(Compiler *c, const LocalVar *pv, TyKind want, const 
 /* `REF ||= v` / `REF &&= v` on a shared-handle String slot (codegen_expr.c) */
 void emit_strbuf_orw_guard(Compiler *c, const char *ref, int v, int is_or, Buf *b);
 /* The value a write hands a shared-handle String slot `lv` (codegen_stmt.c) */
-void emit_strbuf_value(Compiler *c, LocalVar *lv, int v, Buf *b);
+void emit_strbuf_value(Compiler *c, int v, Buf *b);
 /* The handle such a slot takes from value v: its own, or a new one */
 void emit_strbuf_handle_of(Compiler *c, int v, Buf *b);
-const char *strbuf_new_func(Compiler *c, int v);
 void strbuf_new_of_text(Compiler *c, int v, const char *t, Buf *b);
 /* --share-strings: the handle a value route that answers the String it is
    handed (`+s`, `String(s)`, `s.then { |x| x }`) hands on: 1, or 0 with
@@ -254,8 +241,16 @@ int face_str_bang_sn_call(Compiler *c, int id);
 int sb_block_hoists(Compiler *c, int id);
 int scan_block_hoists(Compiler *c, int id);
 int strbuf_held_chain(const Compiler *c, int r);
-int sb_held_shadow(int node);
+int sb_held_shadow(const Compiler *c, int node);
 int strbuf_held_self_answer(Compiler *c, int r);
+/* --share-strings: the handle held chain r answers (a bang's answer, its
+   receiver's String, or NULL for nil), written to b; 0 and nothing written
+   when r is no such chain or renders no handle. The in-place String rows
+   take it as their receiver (str_mut_open), with no shadow copy. */
+int emit_held_chain_handle(Compiler *c, int r, Buf *b);
+/* Is call id one an in-place String row of stage 7 owns (String#[]=,
+   insert, clear, slice!), which takes its receiver's handle itself? */
+int str_in_place_row(Compiler *c, int id);
 int emit_call_on_held_self_answer(Compiler *c, int id, Buf *b);
 int emit_freeze_self_answer(Compiler *c, int id, int recv, Buf *b);
 int emit_equal_self_answer(Compiler *c, int recv, int arg, Buf *b);
@@ -426,21 +421,12 @@ int operand_allocates_beside(Compiler *c, int v);
    read that hands out the handle or the live buffer copies nothing, and
    one that ran already is its temp. */
 int strbuf_read_copies(Compiler *c, int v);
-/* The same shim over a READER call that hands out the handle
-   (`obj.name[0] = "X"`): no name to rename and no ivar node, so the call node
-   itself reads as the shadow through the argument-override table. */
-/* what sb_reader_shim_open lifted: the node's marks and type as they were,
-   and the views (ntok of them from tok) that hold the lifted ones */
-typedef struct { unsigned char box, demand; TyKind ty; int tok, ntok; } SbReaderSave;
-int sb_reader_shim_open(Compiler *c, int id, int recv, Buf *sref, SbReaderSave *sv);
-void sb_reader_shim_close(Compiler *c, int recv, const SbReaderSave *sv);
-int sb_shadowed_reader(int node);
+int sb_shadowed_reader(const Compiler *c, int node);
 int sb_shim_args_first(Compiler *c, int id, Buf *pre, int indent);
 int str_mut_var_recv(Compiler *c, int recv);
 void emit_str_frozen_check(Compiler *c, int recv, Buf *b);
 int strbuf_boxed_elem_read(Compiler *c, int v);
 int emit_strbuf_read_ref(Compiler *c, int recv, Buf *b);
-int strbuf_object_ref(Compiler *c, int recv, Buf *b);
 /* A String value rendered for a consumer (codegen_str.c, #8328): its C
    expression, and what the expression needs from where it is used, which
    str_form_settle meets. Two flags are needs of the value itself:
@@ -541,7 +527,6 @@ void str_read_handle_close(Buf *b);
    field `h`, String field `e`), written in one place (codegen_str.c) */
 void str_new_handle_open(Buf *b);
 void str_new_handle_close(Buf *b);
-void str_new_handle_open_of(Compiler *c, int v, Buf *b);
 void str_box_kept(Buf *b, int t, const char *h, const char *e);
 /* The box face's arms for a value boxed by its representation: a String
    the plan wraps as the new handle it is (`wrap`), else its bytes */
@@ -571,7 +556,6 @@ void emit_str_form_handle(Compiler *c, int v, Buf *b);
    handles answers (codegen_util.c), and whether an element read reads like
    a variable's slot (a local's Array at a literal or local index) */
 void strh_elem_handle_text(Compiler *c, int v, Buf *b);
-void strh_emit_recv(Compiler *c, int id, int recv, Buf *b);   /* the receiver of an operation on the Array of handles, nil-checked */
 int strh_elem_slot(Compiler *c, int v);
 int strh_handle_call(Compiler *c, int v);
 int one_str_elem_call(Compiler *c, int v, TyKind rt);
@@ -632,16 +616,14 @@ int builtin_method_known(const char *cls, const char *m);
 int builtin_cmethod_known(const char *cls, const char *name);
 int builtin_super_cmethod_known(const char *cls, const char *name);
 int builtin_instance_name_known(const char *m);
-int builtin_classes_below_object_list(const char *m, Buf *out);
-int builtin_id_below_object_answers(int id, const char *m);
 int builtin_instance_method_known(const char *cls, const char *m);
-int builtin_arity_violation(Compiler *c, int id);
+int builtin_arity_violation(Compiler *c, int id, int non_nil);   /* non_nil: a `&.` call's non-nil arm */
 int builtin_object_method_known(const char *m);
 int name_is_enumerable_module_method(const char *m);
 int class_object_answers_builtin(const char *qm, int is_module);
 int emit_poly_object_methods_reflection(Compiler *c, int id, const char *name, int recv, int argc,
                                         const int *argv, Buf *b);
-int emit_object_methods_reflection(Compiler *c, int recv, int cid, const char *name, int all,
+int emit_object_methods_reflection(Compiler *c, int id, int recv, int cid, const char *name, int all,
                                    int arg, Buf *b);
 int scope_reads_callee(Compiler *c, int si);
 int sp_yield_site_type(const Compiler *c, int id, TyKind *out);
@@ -730,7 +712,32 @@ int implicit_self_reader_cid(Compiler *c, int id);
    which the cached headers are read again ("" outside such a loop). */
 int hc_array(Compiler *c, int recv, int is_float, char *d, char *l, char *w, size_t cap);
 void hc_read_len(const char *hd, char *out, size_t cap);
+int hc_ptr_array(Compiler *c, int recv, char *d, char *l, size_t cap);
 int hc_index_in_range(Compiler *c, int recv, int idx);
+/* Co-bounded reads (codegen_stmt.c): a loop proved over the index local
+   bi (the C variable bic) in [0, trip) -- a trip that reads trip_node again
+   at each pass, or -1 -- reads other arrays at that index in place, behind one
+   test ahead of the loop (hcv_begin / hcv_end around the loop's text). A
+   reader that hc_cob_entry or hc_cob_entry_of answers emits both forms
+   between hc_cob_mark(0), (1) and (2): the element at *d, and the read as
+   it was, emitted again with g_hc_cob_off set. */
+void *hcv_begin(Compiler *c, int node, int body, int blk, const char *bi, const char *bic,
+                const char *trip, int trip_node, int walk, Buf **bp);
+extern int g_loop_quiet;   /* the next emit_loop_body leaves its safepoint and finalizer polls to an enclosing loop */
+void hcv_end(Compiler *c, void *v, int indent);
+int hc_cob_entry(Compiler *c, int recv, int idx, char *d, size_t cap);
+int hc_cob_entry_of(Compiler *c, int recv, char *d, size_t cap);
+/* Does the loop with body `body` and block `blk` (-1 for none) leave the
+   variable node `n` reads as it is: a local it neither writes nor binds as a
+   block's parameter, or an instance variable it does not write? */
+int hcv_node_stable(Compiler *c, int body, int blk, int n);
+void hc_cob_mark(Buf *b, int part);
+extern int g_hc_cob_off;
+/* ...and that state, saved and put back around a unit a refusal may abandon
+   (EmitUnitState, codegen.c) */
+typedef struct { void *hc, *hcv; int cob_off, loop_quiet; } HcState;
+void hc_state_save(HcState *s);
+void hc_state_restore(const HcState *s);
 void *hc_iter_begin(Compiler *c, int id, Buf **bp);   /* an Integer block loop's header cache region */
 void hc_iter_end(void *h, Buf **bp, int indent, int keep);
 extern int g_loop_polls_in_cond;   /* the next emit_loop_body leaves its polls to the loop's condition */
@@ -787,6 +794,28 @@ int yield_target_cur(void);
    block current, leave with what enter answered when it is done. */
 typedef struct { const char *label, *var; TyKind rt; int ro, exc, ens, set; } BlockRetHome;
 BlockRetHome block_ret_home_enter(int block, int saved_block);
+/* The whole block context an inline runs its callee's body under: the block
+   current and what its splice binds, the one level out, the forwarded proc
+   and the lowered context, and the break scope a block's `break` leaves.
+   An inliner takes a snapshot of the caller's before it switches to the
+   callee's, and puts the caller's back for the call-site code it emits in
+   between: an argument's `yield` is the caller's. */
+typedef struct {
+  int block_id, block_nren, ytgt_cur;
+  const char *block_param_name, *block_owner_param_name;
+  int yfb, yfb_nren; const char *yfb_owner;
+  const char *blk_brk_fb; int blk_brk_efb;
+  const char *self_fb, *self_deref_fb; int emcls_fb;
+  const char *self_fb2, *self_deref_fb2; int emcls_fb2;
+  int lowered; const char *lowered_blk;
+  int lowered_fb; const char *lowered_blk_fb;
+  const char *ypr, *ypr_expr_ref; int ypr_expr; TyKind yslot;
+  const char *ypr_fb, *ypr_fb2; TyKind yslot_fb, yslot_fb2;
+  const char *brk_var, *ser_var; int brk_ebase, brk_exc_base, brk_rescue_base;
+} InlineBlockCtx;
+void inline_block_ctx_save(InlineBlockCtx *s);
+void inline_block_ctx_restore(const InlineBlockCtx *s);
+
 void block_ret_home_leave(int block, BlockRetHome old);
 extern const char *g_yield_self_fallback;        /* see codegen_util.c */
 extern const char *g_yield_self_fallback2;
@@ -1221,8 +1250,10 @@ int effect_view_open(Compiler *c, int node);
 void emit_expr_as_value_of(Compiler *c, int node, int owner, Buf *b);
 void effect_view_close(Compiler *c, int v);
 /* Does a read of constant (path) node id raise NameError, the constant
-   being defined nowhere the program or the runtime can see? A rescue
-   operand is read so when an exception reaches its clause. */
+   being defined nowhere the program or the runtime can see? A path on a
+   Class value (`klass::NM`) whose NM no class defines raises whatever the
+   value is. A rescue operand is read so when an exception reaches its
+   clause. */
 int const_read_raises(Compiler *c, int id);
 /* The constant path as the program wrote it, for a NameError (codegen_expr.c) */
 void const_path_written(const NodeTable *nt, int id, char *out, size_t cap);
@@ -1292,9 +1323,14 @@ int obj_str_ret_poly(Compiler *c, int cid, int want_inspect);
 int obj_str_ret_strsub(Compiler *c, int cid, int want_inspect);
 const char *exc_builtin_parent(Compiler *c, int ci);
 void emit_stmt(Compiler *c, int id, Buf *b, int indent);
+#ifdef SP_EMIT_TRACE
+/* The trace build's node marker (src/emit_trace.c): 'c' a call, 's' a statement, 'l' a method's last one. */
+void emit_trace_node(Compiler *c, int id, int kind);
+#endif
 /* A require under --load-model=graph, as its value (codegen_stmt.c) */
 void emit_load_call(Compiler *c, int id, Buf *b);
 int emit_autoload_register(Compiler *c, int id, Buf *b);
+int ivar_slot_below(Compiler *c, int k, const char *nm);
 int emit_const_autoload_run(Compiler *c, int id, Buf *b);   /* codegen_util.c */
 void emit_file_feature(const NodeTable *nt, int f, Buf *b);
 void emit_load_path_seed(Compiler *c, Buf *b);
@@ -1419,6 +1455,12 @@ int head_held_box(Compiler *c, int node);
    it (an immediate, a pointer the head's temp roots), the box is declared
    without a root of its own. Answers the temp the arm reads. */
 int hold_operand(Compiler *c, int node, TyKind ty, int boxed, int t, int root, const char *sep, Buf *b);
+/* The hold of String `node` that a slot or a container keeps, as its
+   handle: `sp_String *_t<t> = SP_STR_HDL(<handle>);` and, when `root`, its
+   root, into b. The bytes are taken where the hold is read (SP_STR_B), so
+   an operand that runs between the hold and the read and changes the
+   String in place is seen, and one that rebinds the slot is not. */
+void hold_string_handle_decl(Compiler *c, int node, int t, int root, Buf *b);
 /* hold_operand as a statement of its own in g_pre, at the current indent. */
 int hold_operand_pre(Compiler *c, int node, TyKind ty, int boxed, int t, int root);
 int emit_splat_gather(Compiler *c, Scope *m, const int *argv, const ArgLayout *L);
@@ -1427,10 +1469,6 @@ int emit_splat_gather(Compiler *c, Scope *m, const int *argv, const ArgLayout *L
 int gather_lead_placed(Compiler *c, Scope *m, const int *argv, int argc, int i);
 void emit_gather_arity_check(Compiler *c, Scope *m, int ct);
 void emit_gathered_param(Compiler *c, Scope *m, int i, int ct, Buf *out);
-/* A byref parameter's value with no caller slot to lend: a rooted temp's address. */
-void emit_lent_temp(const char *val, Buf *out);
-/* The slot a String local lends a byref parameter; 0 when it has none. */
-int emit_lent_local(LocalVar *lv, const char *vn, Buf *out);
 /* The parameter of s a bare super in s hands pm's parameter j, or -1. */
 int zsuper_param_source(Compiler *c, Scope *s, Scope *pm, int j);
 int gathered_param_index(Compiler *c, Scope *m, int i, const char *len, char *idx, size_t cap,
@@ -1438,16 +1476,8 @@ int gathered_param_index(Compiler *c, Scope *m, int i, const char *len, char *id
 extern unsigned g_yield_live_mask;   /* emit_proc_yield: positions whose targets take live bytes */
 void refuse_yield_handle_args(Compiler *c, int id);
 int emit_handle_var_ref(Compiler *c, int a, Buf *b);
-unsigned inline_alias_params(Compiler *c, int mi, const int *argv, int pargc, const ArgLayout *L, int blk,
-                             int tag, int *splice_tok);
-void inline_alias_release(Compiler *c, Scope *m, unsigned alias_mask, int splice_tok);
-int splice_store_open(Compiler *c, int w, Buf *b);
-void splice_store_close(Compiler *c, int w, int n, Buf *b);
-void emit_splice_store_text(Compiler *c, int w, const char *lhs, const char *val, int str, Buf *b);
-void emit_inline_locals_aliased(Compiler *c, int mi, int tag, unsigned alias_mask, Buf *b, int din);
-void emit_inline_alias_arg(Compiler *c, int av, Buf *b);
 void emit_inline_bind_params(Compiler *c, Scope *m, int args, const int *argv, int argc,
-                             const ArgLayout *L, unsigned alias_mask, int tag, int saved_nren,
+                             const ArgLayout *L, int tag, int saved_nren,
                              int din, Buf *b);
 /* A splat operand whose static type is nil or a scalar: Ruby spreads nil to
    nothing and any of the others to itself. */
@@ -1627,12 +1657,14 @@ void emit_main_exit(Buf *b);
    rule that declared it (a cell-promoted one is `(*_cell_x)`). See codegen.c. */
 int emit_inlined_param_target(Compiler *c, Scope *m, const char *pname,
                               const char *rn, Buf *b);
+/* A Proc local held in a cell or a capture field: its raw int slot as the
+   target, opening the `(sp_int)(uintptr_t)(` re-encoding (codegen_stmt.c). */
+int emit_proc_cell_lvalue(Compiler *c, int scope_node, const char *nm, Buf *b);
 const char *cell_scan_fn(TyKind t);
 const char *cell_value_struct(TyKind t);
 const char *cell_value_struct_empty(TyKind t);
 const char *cell_value_struct_scan(TyKind t);
 void emit_cell_elem_type(Compiler *c, LocalVar *lv, Buf *b);
-const char *borrowed_string_type(const LocalVar *lv);
 int splat_string_var(Compiler *c, const int *av, int ac, int *fs);
 void refuse_super_splat(Compiler *c, int id, int target);
 void refuse_yield_splat(Compiler *c, int blk, int yc, const int *yv);
@@ -1685,6 +1717,9 @@ int emit_regex_pat_to_buf(Compiler *c, int nid, Buf *b);
 int nameset_has(NameSet *s, const char *nm);
 /* the program's own Array#inspect (a reopened Array), or -1 (codegen.c) */
 int array_user_inspect_mi(Compiler *c);
+/* a pp where the program reopens Array#inspect: printed through
+   sp_pp_inspect (codegen_stmt.c) */
+int pp_leaves_array_inspect(Compiler *c, const char *name);
 void emit_param_cell_publish(Compiler *c, int blk, const char *pname, Buf *b, int indent);
 void nameset_add(NameSet *s, const char *nm);
 /* Emit the C lvalue for local `name` in the current emission context: a
@@ -1695,7 +1730,13 @@ void emit_local_ref(Compiler *c, int scope_node, const char *name, Buf *b);
 void emit_poly_lift_ref(const char *ref, Buf *b);
 int strbuf_marked_yields_handle(Compiler *c, int v);
 void emit_scope_local_ref(Compiler *c, Scope *s, const char *name, Buf *b);
-void emit_typed_elem_value(Compiler *c, int node, TyKind et, Buf *b);
+void emit_typed_elem_value(Compiler *c, int node, TyKind rt, Buf *b);
+void emit_typed_elem_hold(Compiler *c, int node, TyKind rt, const char *text, Buf *b);
+void emit_typed_elem_coerce(Compiler *c, int node, TyKind rt, const char *what, Buf *b);
+const char *typed_elem_sfx(TyKind rt);
+const char *typed_elem_store_sfx(TyKind rt);
+TyKind typed_elem_held(TyKind rt);
+int typed_elem_hold_may_make(Compiler *c, int node, TyKind rt);
 void emit_block_locals_reset(Compiler *c, int blk, Buf *b, int indent);
 const char *resolve_class_alias(Compiler *c, const char *cname);
 const char *resolve_class_alias_chain(Compiler *c, const char *cname);
@@ -1706,13 +1747,9 @@ void emit_yblk_ref(Buf *b);
 /* Emit the lead of a tail value: `return ` or `<result> = `. */
 void emit_tail_lead(Buf *b);
 const char *rename_local(const char *nm);
-const char *rename_local_cell(const char *nm);
-int sb_shim_shadow(const char *name, const char *rn);
-typedef struct { TyKind type, shim_ty; int shim_lift; } SbShimSave;
-SbShimSave sb_shim_enter(LocalVar *lv);
-void sb_shim_leave(LocalVar *lv, SbShimSave sv);
-void sb_shim_lift(Compiler *c, int node);
-void sb_shim_drop(Compiler *c, int node);
+/* A shim shadow's name, by value so a format takes it as `%s` (sb_held_shadow_cname) */
+typedef struct { char s[24]; } ShimShadow;
+ShimShadow sb_held_shadow_cname(int tH);
 /* `unsupported` never returns: it longjmps to the codegen driver's per-unit
    recovery (see g_unsup_recover) when one is armed, else exits. Marked noreturn so every caller's
    "this construct is unsupported" guard correctly treats the code after it as
@@ -1767,11 +1804,6 @@ int defer_refusals(void);
 /* ...for one node: the switch, or its file's `# spinel: defer-refusals` */
 int defer_refusals_at(const Compiler *c, int node);
 extern int g_deferred_diags;   /* the refusals a deferral took (codegen_util.c) */
-/* --defer-refusals: an identity Set's value checked where it arrives
-   (refuse_set_identity_members marks it, codegen_util.c renders it) */
-extern int g_idset_marks;
-extern const char *const g_sid_refusal_msg;
-int emit_idset_checked(Compiler *c, int id, Buf *b, int boxed);
 int time_parse_refusal(Compiler *c, int id, char *msg, size_t cap);
 int emit_stmt_or_defer(Compiler *c, int st, Buf *b, int indent);
 extern int g_stmt_deferrals;       /* refusals emit_stmt_or_defer turned into a raise in place */
@@ -1877,6 +1909,18 @@ static inline const char *isa_match_class_name(Compiler *c, int arg, char *buf, 
   }
   return isa_match_name(c->nt, arg, buf, bufsz);
 }
+/* ...and the class it names, -1 for none of the program's: the node's,
+   or the name's for an argument that is no constant read or path */
+static inline const char *isa_match_class(Compiler *c, int arg, char *buf, size_t bufsz, int *ci) {
+  NodeKind k = arg >= 0 ? nt_kind(c->nt, arg) : NK_NONE;
+  if (k == NK_ConstantReadNode || k == NK_ConstantPathNode) {
+    int n = const_node_class_index(c, arg);
+    if (n >= 0 && c->classes[n].name) { *ci = n; return c->classes[n].name; }
+  }
+  const char *cn = isa_match_name(c->nt, arg, buf, bufsz);
+  *ci = cn ? comp_class_index(c, cn) : -1;
+  return cn;
+}
 /* ...the same by the slot a value constant's entity keys (const_key_at) */
 static inline const char *isa_match_key(Compiler *c, int arg, char *buf, size_t bufsz) {
   const char *k = elab_const_node_key(c, arg);
@@ -1895,10 +1939,17 @@ void emit_const_flag_set(const LocalVar *lv, const char *key, Buf *b, int indent
    after. They emit nothing for a constant with no flag. */
 int emit_const_read_stmt(Compiler *c, int id, Buf *b, int indent);
 int emit_const_read_prefix(Compiler *c, int id, Buf *b);
+int emit_undefined_const_test(Compiler *c, int id, TyKind result, Buf *b);
 void emit_const_read_open(Compiler *c, int id, const LocalVar *lv, Buf *b);
 void emit_const_read_close(Compiler *c, int id, const LocalVar *lv, Buf *b);
 int emit_const_class_call_wrap(Compiler *c, int id, Buf *b, void (*emit)(Compiler *, int, Buf *));
 int emit_const_recv_wrap(Compiler *c, int id, Buf *b);
+/* a hold const_recv_hold_open made: the receiver view, whether the pointer
+   is declared in the prelude (in_pre) or inside a statement expression whose call has a prelude of its own (inl) */
+typedef struct { int view, inl, in_pre; size_t at; Buf own; Buf *sv_pre; } ConstHold;
+int const_recv_hold_open(Compiler *c, int id, Buf *b, ConstHold *h, int inline_only);
+void const_recv_hold_close(Compiler *c, ConstHold *h, Buf *b);
+int str_changing_name(const char *nm);   /* a String method that changes its receiver: a mutator or an encoding one */
 int emit_const_recv_stmt_wrap(Compiler *c, int id, Buf *b, int indent, int tail);
 void emit_const_slot_read(Compiler *c, int id, const LocalVar *lv, const char *key, int slot, int own, Buf *b);
 const char *ffi_c_type(const char *spec);
@@ -1906,6 +1957,7 @@ const char *ffi_c_type(const char *spec);
    Uses standard C types to avoid conflicting with system headers. */
 const char *ffi_cb_arg_ctype(const char *spec);
 void ffi_extern_name(Compiler *c, int fi, Buf *out);
+void ffi_fp_slot_name(Compiler *c, int fi, Buf *out);   /* a via_fp entry's pointer (#11362) */
 int ty_is_struct_valued(TyKind t);   /* see codegen_util.c: struct passed by value */
 const char *native_c_type(const char *spec);
 const char *default_value(TyKind t);
@@ -1967,9 +2019,10 @@ int emit_native_count_mismatch(Compiler *c, int id, int cid, const char *name, i
                                int recv, int argc, const int *argv, Buf *b);
 void emit_ctype(Compiler *c, TyKind t, Buf *b);
 const char *ptr_array_stamp(Compiler *c, TyKind t);   /* "SP_PTR_ELEM_x, cls" for sp_box_ptr_array_k (#4486) */
-const char *ptr_array_new_c(TyKind t);   /* the empty pointer array of kind t: sp_StrhArray_new() for a String handle Array */
+const char *ptr_array_new_c(TyKind t);   /* the empty pointer array of kind t */
 /* "Int" / "Str" / "Float" for the sp_<K>Array_* runtime family. */
 const char *array_kind(TyKind t);
+int array_has_new_cap(const char *k);
 /* "Poly" / "Ptr" / array_kind, for a loop that walks the container. "Ptr" is
    a nested numeric table (sp_PtrArray of row pointers). */
 const char *array_iter_kind(TyKind t);
@@ -2005,7 +2058,7 @@ int emit_empty_container_for_slot(Compiler *c, int v, TyKind slot, Buf *b);
 void emit_frozen_literal(Buf *b, const char *esc, size_t esc_len, size_t raw_len);
 int fzl_text_id(const char *t);
 const char *fzl_id_name(int id);
-void fzl_emit_defs(const char *t, Buf *out, int handles);
+void fzl_emit_defs(const char *t, Buf *out);
 /* Emit a Ruby string literal. len is the true byte count (may exceed strlen
    when the string contains embedded NUL bytes). */
 /* What a `round`-family call's trailing keyword hash says, as far as it can
@@ -2129,6 +2182,7 @@ int emit_gsub_block_expr(Compiler *c, int id, Buf *b);
 int subtree_reads_match_globals(Compiler *c, int root);
 int emit_sum_block_expr(Compiler *c, int id, Buf *b);
 int emit_sum_block_poly_expr(Compiler *c, int id, Buf *b);
+int emit_sum_of_map_expr(Compiler *c, int id, Buf *b);
 int emit_slice_when_chunk_inspect_expr(Compiler *c, int id, Buf *b);
 int emit_product_inspect_expr(Compiler *c, int id, Buf *b);
 int emit_step_array_expr(Compiler *c, int id, Buf *b);
@@ -2354,6 +2408,7 @@ void emit_kw_splat_conv_temp(Compiler *c, const char *tmp);
    some class of the program defines one? Its answer is a new Hash, which
    the temp holding the operand roots. */
 int kw_splat_user_to_hash(Compiler *c);
+int kw_splat_user_may_convert(Compiler *c);   /* a class defines method_missing: a boxed object with no #to_hash may answer one anyway */
 /* A `**` operand of a kind that is no Hash but can still be nil at run time
    -- a nilable Integer or Float slot's nil, a pointer-backed kind's
    NULL -- or that is true or false, which CRuby's TypeError names by value:
@@ -2392,7 +2447,6 @@ int an_yield_site_builtin_answer(Compiler *c, int id, TyKind kind, TyKind *out);
 int an_bop_facts(Compiler *c, const struct BuiltinOp *op, int id);
 const struct BuiltinOp *an_bop_row_for_kind(Compiler *c, int id, TyKind rt);
 const struct BuiltinOp *poly_scalar_row(TyKind k, const char *name, int argc, int has_block);   /* analyze_infer.c */
-int a_super_target(Compiler *c, Scope *m);
 int an_arg_is_shared_handle(Compiler *c, int node);
 int an_super_object_text(Compiler *c, int n, int mi);
 int an_super_struct_text(Compiler *c, int n, int mi);
@@ -2417,6 +2471,7 @@ TyKind an_self_node_type(Compiler *c, int id);
 void ty_recv_call_extra_args(const Compiler *c, const int *av, int argc,
                               TyKind *arg1, int *range_has_float_bound);
 int node_is_empty_container(Compiler *c, int node);
+int emit_call_block_arg_stmt(Compiler *c, int id, Buf *b, int indent);   /* codegen_call.c */
 int an_empty_container_kind(Compiler *c, int b);
 TyKind ffi_spec_to_ty(const char *spec);
 int local_sole_range_node(Compiler *c, int recv);
@@ -2538,6 +2593,10 @@ int emit_env_args_before(Compiler *c, int id);
    statement), -1 for any other call. */
 int env_delete_block_value(Compiler *c, int v);
 void emit_call(Compiler *c, int id, Buf *b);
+/* The class value of builtin class `name` (codegen_call_class.c): its
+   reopening's index when the program reopens it, else its id and name */
+void emit_builtin_class_value(Compiler *c, const char *name, Buf *b);
+void emit_cv_canon(Compiler *c, Buf *b, const char *fmt, ...) __attribute__((format(printf, 3, 4)));
 /* A builtin call the builtin-op table covers (codegen_ops.c): 1 when it
    emitted the call, 0 to keep falling through the chain. */
 struct BuiltinOp;
@@ -2548,8 +2607,18 @@ typedef struct {
   const struct BuiltinOp *op;
   const char *rtext;   /* the receiver's C when the caller already rendered it */
   int t0;              /* a temp the caller took for the family ($T), or 0 */
+  const int *argv;     /* the operands, when the call node does not hold them (a bare super's parameters); NULL: its own */
 } BopCtx;
+/* Kernel's row of kind rt (a template) over operands argv, argc that are not
+   the call id's own arguments. 0 and nothing written when no template row has
+   that count. */
+int emit_builtin_op_operands(Compiler *c, int id, TyKind rt, const char *name, const int *argv, int argc, Buf *b);
 int emit_builtin_op(Compiler *c, int id, int recv, TyKind rt, const char *name, Buf *b);
+/* The answer of call id's Kernel row (BOP_KERNEL, cplan_dispatch_row) for a
+   dispatch's default arm, boxed when the slot is a poly (ret); the operands
+   ran ahead, those with a side effect read their natmp temps atmp (NULL: they
+   are bound already; an operand past them has not run). 0 and nothing written when the row does not emit. */
+int emit_dispatch_row_answer(Compiler *c, int id, const int *atmp, int natmp, TyKind ret, Buf *b);
 int emit_builtin_op_unguarded(Compiler *c, int id, int recv, TyKind rt, const char *name, Buf *b);
 /* the same, the receiver already rendered as rtext by a family that renders
    it once before its own arms */
@@ -2596,6 +2665,9 @@ const char *view_call_name(Compiler *c, int node);
 int view_push_class_is(Compiler *c, int node, int ci);
 int view_class_is(Compiler *c, int node, unsigned reads);
 unsigned view_class_is_read(int tok);
+/* A call re-entered after its enclosing emitter tested the receiver. */
+int view_push_call_nil_tested(Compiler *c, int id);
+int view_call_nil_tested(Compiler *c, int id);
 int emit_delegated_equality(Compiler *c, int id, int negate, Buf *b);
 int view_type_top(int node, TyKind *kind);   /* the open type view on node, if any */
 void view_pop(Compiler *c, int tok);
@@ -2611,13 +2683,19 @@ int view_mark(void);
    prevents a boxed send's class arm from splitting the same call again;
    each_inline and each_dispatch name the call a boxed `each` split is
    emitting the inline and the dispatch arm of (cplan_each_split), so
-   neither arm splits it again. */
-typedef struct { int pd_skip, prbd_skip, builtin_arm, send_split, each_inline, each_dispatch; } ArmCtx;
+   neither arm splits it again. gap_watch names the call an arm emits to
+   see whether a builtin answers it, and the gap of that call
+   (emit_unrouted_gap) sets *gap_hit: the builtin declined it. A gap of
+   another call in the arm's text (in a block the arm splices, an operand)
+   is that call's own raise, which the arm runs. */
+typedef struct { int pd_skip, prbd_skip, builtin_arm, send_split, each_inline, each_dispatch, gap_watch; int *gap_hit; } ArmCtx;
 extern ArmCtx g_arm;
 #define g_pd_skip (g_arm.pd_skip)
 #define g_prbd_skip (g_arm.prbd_skip)
 #define g_poly_builtin_arm (g_arm.builtin_arm)
 int view_push_arm(int pd_skip, int prbd_skip, int builtin_arm);
+/* the arm context with call id's gap watched into *hit (ArmCtx.gap_watch), popped by view_pop */
+int view_push_gap_watch(int id, int *hit);
 /* A node pinned to one face kind for the inference asked under it,
    pushed and popped like a view (view_pop) and put back by view_unwind
    (face_of, analyze.h). */
@@ -2636,21 +2714,17 @@ int stmt_may_rebind_local(Compiler *c, int stmt, int read, const char *name);
    from slot n up. */
 int view_bind(int node, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
 void view_unbind(int n);
-/* One representation flag of node id seen as v for one nested emission,
-   restored by view_pop (or view_unwind on a refusal) like a type view. */
+/* A constant receiver's read effect already ran for the enclosing emission. */
 int view_const_read_done(Compiler *c, int id);
 int view_push_const_read(Compiler *c, int id);
-enum { VR_STRBUF_BOX, VR_HANDLE_DEMAND, VR_POLY_LIFT, VR_NILNARROW, VR_NIL_TESTED, VR_HEAD_HELD, VR_DISCARDED };
+/* A constant receiver's held slot is named by _p<temp> for the enclosing emission. */
+int view_const_slot(Compiler *c, int id);
+int view_push_const_slot(Compiler *c, int id, int temp);
+/* One representation flag of node id seen as v for one nested emission,
+   restored by view_pop (or view_unwind on a refusal) like a type view. */
+enum { VR_STRBUF_BOX, VR_HANDLE_DEMAND, VR_POLY_LIFT, VR_NILNARROW, VR_NIL_TESTED, VR_HEAD_HELD, VR_DISCARDED,
+       VR_STR_SHADOW };
 int view_push_repr(Compiler *c, int id, int flag, int v);
-/* A splice's alias of a caller's variable that the call's block assigns
-   (argument node arg, splice tag, parameter name), and a fence for a C
-   function emitted inside it (ren_park(0) pushes it, ren_unpark pops it);
-   both popped by view_pop. view_splice_next
-   answers the next open entry below position `from` (-1: from the top)
-   and above the innermost fence, or -1. */
-int view_push_splice(int arg, int tag, const char *pname);
-int view_push_fn(void);
-int view_splice_next(int from, int *arg, int *tag, const char **pname);
 /* bumped by every view push, pop and unwind: a per-node memo of a decision
    that reads the flags or the type keys on it */
 unsigned view_epoch(void);
@@ -2737,6 +2811,7 @@ int emit_op_array_sort(Compiler *c, const BopCtx *x, Buf *b);
 int emit_op_array_uniq(Compiler *c, const BopCtx *x, Buf *b);
 int emit_op_array_nmin(Compiler *c, const BopCtx *x, Buf *b);
 int emit_op_array_sum0(Compiler *c, const BopCtx *x, Buf *b);
+int emit_op_boxed_array_count(Compiler *c, const BopCtx *x, Buf *b);
 int emit_op_array_compact_bang(Compiler *c, const BopCtx *x, Buf *b);
 int emit_op_array_flatten(Compiler *c, const BopCtx *x, Buf *b);
 int emit_op_array_push(Compiler *c, const BopCtx *x, Buf *b);
@@ -2748,6 +2823,9 @@ int rationalize_eps_is_number(TyKind et);
 void emit_rationalize_eps_raise(Compiler *c, int arg, Buf *b);
 void emit_rationalize_eps_float(Compiler *c, int arg, TyKind et, Buf *b);
 int emit_op_string_scan_checked(Compiler *c, const BopCtx *x, Buf *b);
+int emit_op_string_aset(Compiler *c, const BopCtx *x, Buf *b);
+int emit_op_string_insert(Compiler *c, const BopCtx *x, Buf *b);
+int emit_op_string_clear(Compiler *c, const BopCtx *x, Buf *b);
 int emit_op_string_slice(Compiler *c, const BopCtx *x, Buf *b);
 int emit_op_string_dedup(Compiler *c, const BopCtx *x, Buf *b);
 int emit_op_string_scrub_block(Compiler *c, const BopCtx *x, Buf *b);
@@ -2853,6 +2931,7 @@ int emit_object_ivar_call(Compiler *c, int id, const char *name, int recv, TyKin
 const char *case_map_suffix(Compiler *c, int argc, const int *argv);
 int emit_op_poly_case_options(Compiler *c, const BopCtx *x, Buf *b);
 int user_defines_or_reads(Compiler *c, const char *name);
+int splat_mutator_block_ok(Compiler *c, int id);
 int poly_cls_value_owns(Compiler *c, int id, const char *name);
 int base_arg_may_gc(Compiler *c, int arg);
 void emit_base_arg(Compiler *c, int arg, int t, char *bv, size_t n, Buf *b);
@@ -2871,6 +2950,10 @@ int poly_name_cmethod_claimed(Compiler *c, const char *name);
 /* Does CRuby take argc arguments to cls#name, by the instance arity table
    (sp_builtin_arity_spec_tbl)? 1 for a name the table has no row for. */
 int builtin_arity_admits(const char *cls, const char *name, int argc);
+void warn_unrouted_call(Compiler *c, int id, const char *what);   /* codegen_util.c */
+int emitted_nomethod_token(const char *txt); /* codegen.c */
+int emitted_no_method(const char *txt);      /* codegen.c */
+int order_operand_inert(Compiler *c, int call, int op, int is_recv);   /* codegen_stmt.c */
 /* ...and the count it expects when it does not (NULL when it admits it) */
 const char *builtin_arity_expected(const char *cls, const char *name, int with_block, int argc,
                                    char *exp, size_t n);
@@ -2904,17 +2987,10 @@ int is_blockless_block_param_call(Compiler *c, int id);
 const char *blockless_block_param_call_name(Compiler *c, int id);
 void emit_block_invoke(Compiler *c, int args_node, Buf *b, int indent, int as_expr, TyKind want_ty);
 typedef struct BiRen BiRen;
-/* A spliced block's parameter aliases (see emit_block_binds), undone by the
-   caller once the body is emitted. */
-typedef struct BlockAliases { Scope *s[16]; const char *nm[16]; int n, open; } BlockAliases;
-void block_alias_hold(BlockAliases *al, Scope *s, LocalVar *lv);
-void block_aliases_release(BlockAliases *al);
 void emit_block_kw_binds(Compiler *c, int blk, int ykw, Scope *bsc, Buf *b, int indent,
-                         int as_expr, BiRen *bi, BlockAliases *al);
-int block_param_wants_alias(Compiler *c, int blk, int k, int n);
-int block_kw_wants_alias(Compiler *c, int blk, const char *key);
+                         int as_expr, BiRen *bi);
 void emit_block_binds(Compiler *c, int blk, const int *yargs, int yc,
-                      Buf *b, int indent, int as_expr, BiRen *bi, BlockAliases *al);
+                      Buf *b, int indent, int as_expr, BiRen *bi);
 int block_binds_gathered(Compiler *c, int blk);
 int emit_boxed_step_binds(Compiler *c, int blk, const char *vals, Buf *b, int indent, int as_expr);
 void emit_yield_proc_call(Compiler *c, int args_node, TyKind result_ty, Buf *b, int indent, int as_expr);
@@ -2961,6 +3037,8 @@ int call_on_builtin_class_missing(Compiler *c, int id);
 int static_block_given_cond(Compiler *c, int pred);
 int static_nil_ivar_cond(Compiler *c, int pred);
 void emit_if(Compiler *c, int id, Buf *b, int indent, int is_unless, int tail);
+void emit_arm_cond(Compiler *c, int pred, int is_unless, Buf *b);
+void emit_ladder_arm_head(Compiler *c, int pred, int is_unless, Buf *b, int indent);
 int emit_poly_class_when(Compiler *c, int cond_id, const char *tmp, Buf *b);
 void emit_class_val_when(const char *cn, int t, Buf *b);
 void emit_pm_eq(Compiler *c, int t, TyKind pt, int valnode, Buf *b);
@@ -3100,6 +3178,9 @@ void emit_scope_decls_ends(Compiler *c, Scope *s, Buf *b, size_t *ends);
 int method_is_void(Scope *s);
 void emit_poly_iter_obj_normalize(Compiler *c, int tv, Buf *b);
 void emit_poly_iter_obj_reject(Compiler *c, int call, int tv, const char *name, Buf *b);
+/* a boxed quantifier's element walk over _t<ta> (codegen_call_operator.c) */
+void emit_poly_quantifier_walk(Compiler *c, int id, int ta, int tp, int tn, int tcnt, int ti,
+                               const char *name, char *ans, size_t cap, Buf *b);
 void emit_poly_iter_obj_reject_as(Compiler *c, int call, int tv, const char *name, const char *shown, Buf *b);
 void emit_poly_iter_recv_reject(Compiler *c, int call, const char *name, Buf *rb, Buf *out, int indent);
 void emit_method_signature(Compiler *c, Scope *s, Buf *b);
@@ -3171,6 +3252,8 @@ const char *oint_unbox(TyKind t);   /* "sp_unbox_oint" / "sp_unbox_ofloat" */
 int oint_kind(TyKind t);
 /* a local's / parameter's slot is an sp_oint / sp_ofloat */
 int slot_is_oint(const LocalVar *lv);
+/* one zip (or product) block param from an element read `src` of type src_ty */
+void emit_zip_block_param(Compiler *c, TyKind slot, TyKind src_ty, const char *src, Buf *b);
 /* the C type of a local's slot: the oint type, or emit_ctype's */
 void emit_slot_ctype(Compiler *c, const LocalVar *lv, Buf *b);
 /* instance ivar iv of class cid has a nil byte in iv__nilb; its index;
@@ -3199,8 +3282,8 @@ extern int g_value_discarded;
 extern int g_bv_dest_oint;
 /* can a `next` of this block body (not a nested block's) hand the slot a
    nil: a bare `next`, `next nil`, a value that can be nil (codegen_call.c) */
-int block_next_may_be_nil(Compiler *c, int id, int depth);
-int block_break_may_be_nil(Compiler *c, int id, int depth);
+int block_next_may_be_nil(Compiler *c, int id);
+int block_break_may_be_nil(Compiler *c, int id);
 /* Struct.new / Data.new of class ci with call id's arguments: the members,
    and the nil bits of members left nil (codegen_call.c) */
 int emit_struct_new_call(Compiler *c, int id, int ci, int argc, const int *argv, Buf *b);

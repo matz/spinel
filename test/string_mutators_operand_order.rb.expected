@@ -1,0 +1,140 @@
+"aQc"
+1
+"aQc"
+2
+five ran
+[IndexError, "string not matched"]
+five ran
+[IndexError, "regexp not matched"]
+"zzQ"
+W
+true
+"QzQ"
+W
+"QzQ"
+"yz"
+"QyzQ"
+[TypeError, "no implicit conversion from nil to integer"]
+"a"
+"b"
+[TypeError, "no implicit conversion of String into Integer"]
+[TypeError, "no implicit conversion from nil to integer"]
+[TypeError, "no implicit conversion of String into Integer"]
+[TypeError, "no implicit conversion of Range into Integer"]
+[FrozenError, "can't modify frozen String: \"abc\""]
+[TypeError, "no implicit conversion from nil to integer"]
+"xbc"
+"axc"
+"aXc"
+[TypeError, "no implicit conversion from nil to integer"]
+[TypeError, "no implicit conversion of Symbol into Integer"]
+[TypeError, "no implicit conversion of Range into Integer"]
+["a", "cd", "bef"]
+"a-bc"
+[TypeError, "no implicit conversion of Integer into String"]
+[IndexError, "index 10 out of string"]
+[TypeError, "no implicit conversion of Integer into String"]
+[TypeError, "no implicit conversion of Integer into String"]
+[IndexError, "index 10 out of string"]
+[RangeError, "10..12 out of range"]
+[RangeError, "10..12 out of range"]
+[TypeError, "no implicit conversion of Integer into String"]
+[IndexError, "string not matched"]
+[TypeError, "no implicit conversion of Integer into String"]
+[IndexError, "regexp not matched"]
+[TypeError, "no implicit conversion of Integer into String"]
+[IndexError, "index 2 out of regexp"]
+[TypeError, "no implicit conversion of Integer into String"]
+[IndexError, "index 10 out of string"]
+[TypeError, "no implicit conversion of Integer into String"]
+[FrozenError, "can't modify frozen String: \"abc\""]
+[FrozenError, "can't modify frozen String: \"abc\""]
+[FrozenError, "can't modify frozen String: \"abc\""]
+[FrozenError, "can't modify frozen String: \"abc\""]
+[RangeError, "10..12 out of range"]
+[RangeError, "-10..1 out of range"]
+[RangeError, "4.. out of range"]
+[TypeError, "no implicit conversion of Integer into String"]
+[IndexError, "index 10 out of string"]
+[IndexError, "negative length -1"]
+"abc"
+302
+601
+299
+302
+""
+102
+301
+250
+"<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<AB"
+"x<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<ab"
+"x<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<ab"
+"Z"
+"Z"
+"Z"
+"Z"
+"Z"
+"Z"
+"Z"
+"qZrs"
+"Zqrs"
+"qrsZ"
+""
+""
+""
+"r"
+"qr"
+"r"
+"rs"
+[FrozenError, "can't modify frozen String: \"qrs\""]
+[IndexError, "index 5 out of string"]
+[FrozenError, "can't modify frozen String: \"qrs\""]
+[FrozenError, "can't modify frozen String: \"qrs\""]
+"Zbc"
+"ZZbc"
+"Zbc"
+""
+[FrozenError, "can't modify frozen String: \"ab\""]
+[IndexError, "negative length -1"]
+[IndexError, "index 10 out of string"]
+[TypeError, "no implicit conversion of Integer into String"]
+[TypeError, "no implicit conversion from nil to integer"]
+[TypeError, "no implicit conversion of String into Integer"]
+[IndexError, "negative length -1"]
+[IndexError, "index 10 out of string"]
+[TypeError, "no implicit conversion of Integer into String"]
+[TypeError, "no implicit conversion from nil to integer"]
+[TypeError, "no implicit conversion of String into Integer"]
+[IndexError, "negative length -1"]
+[IndexError, "negative length -1"]
+[TypeError, "no implicit conversion from nil to integer"]
+[TypeError, "no implicit conversion of Integer into String"]
+[TypeError, "no implicit conversion of String into Integer"]
+[TypeError, "no implicit conversion from nil to integer"]
+[TypeError, "no implicit conversion of String into Integer"]
+[IndexError, "negative length -1"]
+[IndexError, "negative length -1"]
+[IndexError, "negative length -1"]
+1
+"t1bc"
+[2, "t2bc"]
+3
+"tt3bc"
+"t1tt3bc"
+"aXb"
+[ArgumentError, "wrong number of arguments (given 1, expected 2)"]
+[ArgumentError, "wrong number of arguments (given 3, expected 2)"]
+[TypeError, "no implicit conversion of Integer into String"]
+["aqbcdef", "XYZ"]
+["aqbcdef", "XYZ"]
+["b", "XYZ"]
+["bc", "XYZ"]
+["b", "XYZ"]
+["c", "abd!"]
+["b", "acd!"]
+["bc", "XYZ"]
+["bc", "XYZ"]
+["q", "XYZ"]
+["q", "XYZ"]
+["q", "XYZ"]
+["q", "XYZ"]

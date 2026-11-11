@@ -102,6 +102,7 @@ typedef enum {
   BOPE_RANGE_FREEZE,     /* Range#freeze */
   BOPE_TEMPLATE,          /* arg, its placeholders filled (codegen_ops.c) */
   BOPE_PSTATUS_SUCCESS,   /* Process::Status#success?: true, false or nil */
+  BOPE_CLASS_VALUE,       /* #class of a builtin receiver: the class value of the builtin `arg` names (NilClass's for a nil slot) */
   BOPE_PSTATUS_EQ,        /* Process::Status#== / #eql? with no operand */
   /* the concurrency handles (codegen_call_concurrency.c) */
   BOPE_THREAD_SET_REPORT, /* Thread#report_on_exception= */
@@ -187,6 +188,7 @@ typedef enum {
   BOPE_ARRAY_SLICE_GROUPS, /* Array#slice_before / slice_after without a block (stage 3) */
   BOPE_ARRAY_JOIN_STR,    /* Array#* with a String (stage 4) */
   BOPE_ARRAY_PRED_CLASS,  /* Array#any? / all? / none? / one? with a Class (stage 5) */
+  BOPE_CONV_USER_OK,      /* a receiverless implicit conversion, arg(boxed x, user_ok): __kw_hash, __blk_conv (user_ok: a program class may answer by method_missing) */
   /* Method and Proc (codegen_call_method.c) */
   BOPE_METHOD_UNBIND,     /* Method#unbind */
   BOPE_METHOD_SUPER_METHOD, /* Method#super_method */
@@ -203,9 +205,17 @@ typedef enum {
   BOPE_IVAR_REFLECTION,   /* reflection on a builtin value without ivar slots */
   BOPE_FLOAT_RATIONALIZE,
   BOPE_STRING_SCAN_CHECKED,
-  BOPE_STRING_SLICE,     /* String#slice!: lvalue and pattern-dependent */
+  /* String#[]=, #insert, #clear and #slice!, which change the receiver's
+     String in place through its handle (codegen_call_string.c, stage 7) */
+  BOPE_STRING_ASET,
+  BOPE_STRING_INSERT,
+  BOPE_STRING_CLEAR,
+  BOPE_STRING_SLICE,
   BOPE_STRING_DEDUP,     /* String#dedup: -@ under the name a nil receiver is raised with */
   BOPE_STRING_SCRUB_BLOCK, /* String#scrub with a block */
+  BOPE_BOXED_ARRAY_COUNT, /* a count-taking Enumerable read through a box */
+  BOPE_BOXED_ARRAY_ONLY,  /* a boxed Array read that requires an Array */
+  BOPE_BOXED_ARRAY_OR_RANGE, /* a boxed read that accepts Array and Range */
   BOPE__COUNT
 } BopEmit;
 
@@ -335,6 +345,12 @@ typedef struct BuiltinOp {
    Object's methods, so a top-level def of the name is the one a send
    reaches (send_blind_recv_owns does not count the row). */
 #define BOPF_BASIC_OBJECT 2048
+/* The method takes keywords in CRuby (clone(freeze:), round(half:),
+   step(by:, to:), sample(random:), pack(buffer:), lines(chomp:) ...): a `**`
+   operand of its call is the method's own. A name with a row that lacks the
+   flag takes none (bop_name_kwless), and builtin_name_takes_keywords answers
+   for the names a splat dispatch keeps the `**` of. */
+#define BOPF_KEYWORDS 4096
 /* A row of a function the compiler makes calls to and the program cannot
    write (a BOP_KERNEL row such as __env_to_h): it answers a call node the
    compiler made (builtin_only) whatever the program defines, and a call
@@ -403,6 +419,10 @@ typedef struct BuiltinOp {
                                            value kind */
 #define BOPR_ARRAY_SUM_SEED ((TyKind)-27) /* blockless Array#sum(seed): the seed
                                            and element kinds, in the build mode */
+#define BOPR_ARG_LAST    ((TyKind)-28)  /* the last argument's kind (String#[]=:
+                                           an assignment answers its right-hand
+                                           object, whatever the method does
+                                           with it) */
 
 /* argc_max of a row that takes any number of arguments */
 #define BOP_ARGC_ANY 127
@@ -423,6 +443,12 @@ const BuiltinOp *bop_row(int i);
 const BuiltinOp *bop_find(TyKind rt, const char *name, int argc, int has_block);
 /* The flags (BOPF_*) of the row of kind rt for `name`, 0 for none */
 int bop_flags(TyKind rt, const char *name);
+/* Is there a row of `name` whose method takes no keywords in CRuby (a row
+   without BOPF_KEYWORDS, of any kind)? Its call gets a non-empty `**` operand
+   as one positional Hash, and an empty one as nothing. */
+int bop_name_kwless(const char *name);
+/* Is there a row of `name` that takes keywords (BOPF_KEYWORDS)? */
+int bop_name_keywords(const char *name);
 /* Does the builtin answer `name` on a class (or module) itself, taking argc
    arguments and a block when has_block, where no method of the program's
    of the name runs yet: Module's own, as its builtin-op rows (TY_CLASS)
@@ -452,12 +478,13 @@ int bop_covers(TyKind rt);
 /* The kind whose rows a receiver of kind rt reads: rt itself where a row
    covers it, else the Array or Hash family's (every variant shares them). */
 TyKind bop_family_of(TyKind rt);
+int bop_row_takes(TyKind rt, const char *name, int argc, int has_block);
 
 /* What the call answers on a receiver of kind rt: the row's result, with a
    derived result (BOPR_*) worked out from rt. */
 TyKind bop_result(const BuiltinOp *op, TyKind rt);
 /* bop_result for the rows whose answer also turns on the call's operands'
-   kinds (BOPR_ARRAY_PLUS, BOPR_ARRAY_SETOP, BOPR_ARG0, BOPR_ARG1,
+   kinds (BOPR_ARRAY_PLUS, BOPR_ARRAY_SETOP, BOPR_ARG0, BOPR_ARG1, BOPR_ARG_LAST,
    BOPR_HASH_REPLACE, BOPR_HASH_STORE); any other row answers as bop_result
    does. arg_of(ud, i) answers argument i's kind, as for
    bop_find_arg, and is called only for those rows. TY_UNKNOWN where the row
@@ -493,6 +520,11 @@ int bop_answers_recv(TyKind rt, const char *name, int argc, int has_block);
    value, by the Array and the Hash iterator rows (IA_RECV in each family
    that has the name)? */
 int iter_boxed_answers_recv(const char *name);
+/* Does `name` answer a copy of a boxed receiver (BOPF_COPY_CLASS), by the
+   String, Array and Hash rows that have it: 1 when each of them does, 2
+   when the Hash's does and another's does not (Array#compact makes a new
+   Array, Hash#compact a copy), else 0 */
+int bop_boxed_answers_copy(const char *name, int argc);
 /* Is `name` a method every value answers that hands its block the receiver
    itself, once (an any-receiver iterator row yielding YS_RECV: tap, then,
    yield_self)? Its answer is the receiver or the block's value. */
@@ -514,6 +546,7 @@ int bop_args_as_builtin(TyKind rt, const char *name, int argc, int has_block);
 #define BOP_FILE_CLASS ((TyKind)-9) /* a class method of File (`File.join`) */
 #define BOP_ENV      ((TyKind)-10)  /* ENV's methods (`ENV["HOME"]`) */
 #define BOP_FILETEST ((TyKind)-11)  /* FileTest's path tests */
+#define BOP_BOXED_FALLBACK ((TyKind)-12)  /* boxed helpers reached after earlier call routes */
 
 typedef enum {
   BSH_PURE = 1,   /* keeps none of its arguments; answers no value it was handed
@@ -597,6 +630,12 @@ int bop_share(TyKind fam, const char *name);
 int builtin_ops_share_check(void);
 /* Exact name lookup, including iterator contracts. */
 int bop_share_named(TyKind fam, const char *name);
+/* The share row of a call with no receiver of `name` (BOP_KERNEL's), where
+   builtin_only says the compiler made the call: a name whose lowering row is
+   the compiler's own (BOPF_INTERNAL) answers only such a call, as
+   cplan_kernel_row gives it the row; the program's own call of the name
+   reaches no builtin, 0. */
+int bop_share_kernel(const char *name, int builtin_only);
 /* The distinct share kinds of `name` across Object's row and the String,
    Array and Hash rows, whichever of those the receiver turns out to be:
    written to out[0..max), their count answered, 0 when no row names it. */

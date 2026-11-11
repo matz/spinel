@@ -1,11 +1,11 @@
-# A String parameter the body appends to and passes on is lent by reference
-# (the byref ABI) unless a proc captures it. A block lifted to a proc for a
-# poly receiver's `each` captured `io` too, and the group check refused the
-# slot for any cell: the ABI then depended on which of the two passes ran
-# first, and the caller's buffer came back empty. A lifted iteration block
-# is consumed while the call runs, so its cell does not stand in the way;
-# a proc that can outlive the call (a stored proc, a Thread body) still does
-# (#4568, rubys).
+# A String parameter the body appends to and passes on is the caller's String,
+# also when a proc captures it. A block lifted to a proc for a poly receiver's
+# `each` captured `io`, and the cell it made was once taken for a reason to
+# give the parameter a copy: the answer then depended on which of two passes
+# ran first, and the caller's buffer came back empty. A lifted iteration block
+# is consumed while the call runs, so its cell changes nothing; a proc that
+# can outlive the call (a stored proc, a Thread body) is covered by the other
+# probes (#4568, rubys).
 class Comment
   def initialize(t) = @t = t
   def t = @t

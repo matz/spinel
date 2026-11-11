@@ -88,7 +88,7 @@ static void emit_line_param_decl(Compiler *c, int id, const char *pn, int lt, Bu
     lv = bs && raw ? scope_local(bs, raw) : NULL;
   }
   /* a buffer, or a parameter held as the shared handle (--share-strings) */
-  if (repr_of_slot(c, lv).kind == RK_STRBUF || repr_of_slot(c, lv).handle)
+  if (repr_of_slot(c, lv).kind == RK_STRBUF)
     buf_printf(b, " sp_String *lv_%s = sp_String_new_shared(_t%d); SP_GC_ROOT(lv_%s);", pn, lt, pn);
   else buf_printf(b, " const char *lv_%s = _t%d; SP_GC_ROOT_STR(lv_%s);", pn, lt, pn);
 }
@@ -1212,6 +1212,10 @@ int emit_call_poly_io_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
       int qname = argc == 0 && (sp_streq(name, "close") || sp_streq(name, "closed?"));
       /* and a boxed Mutex answers owned? itself, where a stat answers its own */
       int mname = argc == 0 && sp_streq(name, "owned?");
+      /* A path read into a boxed slot (beside a class's reader of the name,
+         whose answer the slot holds too) goes in boxed, as rewind's 0 does
+         below: bare, the String stored into the sp_RbVal did not build. */
+      int boxed_path = argc == 0 && is_path_reader(name) && repr_of(c, id).kind == RK_BOXED;
       int tdr = 0;
       if (dirfn || qname || mname) {
         tdr = ++g_tmp;
@@ -1227,6 +1231,12 @@ int emit_call_poly_io_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
         if (dirfn) {
           buf_printf(b, "_t%d.tag == SP_TAG_OBJ && _t%d.cls_id == SP_BUILTIN_DIR ? ", tdr, tdr);
           if (sp_streq(name, "close")) buf_printf(b, "((void)sp_Dir_close((sp_Dir *)_t%d.v.p), sp_box_nil()) : ", tdr);
+          else if (boxed_path) {
+            char dp[64];
+            snprintf(dp, sizeof dp, "%s((sp_Dir *)_t%d.v.p)", dirfn, tdr);
+            emit_boxed_text(c, TY_STRING, dp, b);
+            buf_puts(b, " : ");
+          }
           else buf_printf(b, "%s((sp_Dir *)_t%d.v.p) : ", dirfn, tdr);
         }
       }
@@ -1289,7 +1299,7 @@ int emit_call_poly_io_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
           free(ab2.p);
         }
         if (is_puts2 && argc == 0) buf_printf(b, "sp_File_write(_t%d, \"\\n\"); ", tio2);
-        buf_puts(b, "((sp_int)0); })");
+        buf_puts(b, repr_of(c, id).kind == RK_BOXED ? "sp_box_nil(); })" : "((sp_int)0); })");   /* (a boxed answer is nil, not the int a nil statement stands for) */
       }
       else if (sp_streq(name, "putc") && argc == 1) {
         buf_printf(b, "sp_File_putc(_t%d, ", tio2); emit_boxed(c, argv[0], b); buf_puts(b, "); })");
@@ -1373,6 +1383,12 @@ int emit_call_poly_io_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
         /* the field's nil (a failed stat) beside it, in the call's form */
         if (node_is_oint(c, id)) buf_printf(b, "sp_stat_field(_t%d, %d); })", tio2, k);
         else buf_printf(b, "sp_oint_arg(sp_stat_field(_t%d, %d)); })", tio2, k);
+      }
+      else if (boxed_path) {
+        char fp[48];
+        snprintf(fp, sizeof fp, "sp_File_path(_t%d)", tio2);
+        emit_boxed_text(c, TY_STRING, fp, b);
+        buf_puts(b, "; })");
       }
       else if (is_path_reader(name))
         buf_printf(b, "sp_File_path(_t%d); })", tio2);
@@ -2434,7 +2450,7 @@ int emit_call_io_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const ch
       free(abs);
       free(aarr);
       free(abin);
-      buf_puts(b, "((sp_int)0)");
+      buf_puts(b, repr_of(c, id).kind == RK_BOXED ? "sp_box_nil()" : "((sp_int)0)");
       free(rb.p); return 1;
     }
     if (sp_streq(name, "sync=") && argc >= 1) {

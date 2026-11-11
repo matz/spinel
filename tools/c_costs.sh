@@ -16,7 +16,7 @@
 # cannot see that; the C can. Counted per program:
 #   snap   handle snapshot copies: sp_str_concat(sp_String_cstr(h), "")
 #   dup    other O(len) copies: sp_*_dup / sp_*_dup_external / sp_*_copy
-#          (sp_str_dup, sp_String_dup, sp_IntArray_dup, sp_strbuf_copy, ...)
+#          (sp_str_dup, sp_String_dup, sp_IntArray_dup, ...)
 #   box    boxings: sp_box_* calls but sp_box_nil
 #   pd     out-of-line dispatch calls: sp_pd_*
 #   root   GC root registrations: SP_GC_ROOT, SP_GC_ROOT_STR, SP_GC_ROOT_RBVAL

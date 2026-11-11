@@ -24,7 +24,6 @@
 #include <string.h>
 #include "value_pos.h"
 #include "analyze.h"
-#include "builtin_names.h"
 
 typedef struct {
   int node;     /* the node to visit, or -1: nil by absence */
@@ -219,10 +218,22 @@ static VpWriteKind vp_write_kind(NodeKind k) {
   }
 }
 
+/* Does a ParenthesesNode hold other than exactly one statement (`()`,
+   `(a; b)`): the leaf VP_PAREN_ONE stops at. Only this node's own count is
+   read, so a cycle of parentheses is left to the walk's budget. */
+static int vp_paren_not_one(const NodeTable *nt, int node) {
+  int body = nt_ref(nt, node, "body"), cnt = 0;
+  if (body >= 0) nt_arr(nt, body, "body", &cnt);
+  return cnt != 1;
+}
+
 static VpStep vp_step(VpWalk *w, VpItem *cur) {
   const NodeTable *nt = w->nt;
   if ((w->flags & VP_PARENS_ONLY) &&
       (nt_kind(nt, cur->node) == NK_ElseNode || nt_kind(nt, cur->node) == NK_InNode))
+    return VPSTEP_LEAF;
+  if ((w->flags & VP_PAREN_ONE) && nt_kind(nt, cur->node) == NK_ParenthesesNode &&
+      vp_paren_not_one(nt, cur->node))
     return VPSTEP_LEAF;
   switch (nt_kind(nt, cur->node)) {
 #include "value_pos_arms.inc"
@@ -386,6 +397,8 @@ static int vp_up_hand(const NodeTable *nt, int p, int child, unsigned flags, uns
 static int vp_up_edge(const NodeTable *nt, int p, int child, unsigned flags, unsigned shapes) {
   if ((flags & VP_PARENS_ONLY) &&
       (nt_kind(nt, p) == NK_ElseNode || nt_kind(nt, p) == NK_InNode)) return VPE_NONE;
+  if ((flags & VP_PAREN_ONE) && nt_kind(nt, p) == NK_ParenthesesNode && vp_paren_not_one(nt, p))
+    return VPE_NONE;
   switch (nt_kind(nt, p)) {
 #include "value_pos_edges.inc"
   default:
@@ -711,11 +724,15 @@ static int vp_check_one(void) {
   nt_node_set_ref(nt, cp, "body", cs);
   nt_node_set_arr(nt, cs, "body", cyc, 1);
   ok &= vp_one(nt, cp, VPS_NONE, &n) == VP1_MANY && n == -1;
+  ok &= vp_one(nt, cp, VPS_NONE | VP_PAREN_ONE, &n) == VP1_MANY && n == -1;
   int clause = nt_new_node(nt, "ElseNode");
   nt_node_set_ref(nt, clause, "statements", ss);
   ok &= vp_one(nt, ps, VPS_NONE | VP_PARENS_ONLY, &n) == VP1_NODE && n == b;
   ok &= vp_one(nt, empty, VPS_NONE | VP_PARENS_ONLY, &n) == VP1_NIL;
   ok &= vp_one(nt, clause, VPS_NONE | VP_PARENS_ONLY, &n) == VP1_NODE && n == clause;
+  ok &= vp_one(nt, ps, VPS_NONE | VP_PAREN_ONE, &n) == VP1_NODE && n == ps;
+  ok &= vp_one(nt, empty, VPS_NONE | VP_PAREN_ONE, &n) == VP1_NODE && n == empty;
+  ok &= vp_one(nt, outer, VPS_NONE | VP_PAREN_ONE, &n) == VP1_NODE && n == b;
   ok &= vp_one(nt, clause, VPS_NONE, &n) == VP1_NODE && n == b;
   ok &= !vp_is_value_edge(nt, clause, ss, VPS_NONE | VP_PARENS_ONLY);
   ok &= vp_is_value_edge(nt, clause, ss, VPS_NONE);
@@ -780,6 +797,7 @@ static int vp_check_climb_budget(void) {
   if (!par) { nt_free(nt); return 0; }
   VpUp up;
   int ok = vp_climb(nt, par, p, VP_ALL_FLAGS, &up) == VPU_GAVE_UP;
+  ok &= vp_climb(nt, par, p, VP_ALL_FLAGS | VP_PAREN_ONE, &up) == VPU_GAVE_UP;
   free(par);
   nt_free(nt);
   return ok;

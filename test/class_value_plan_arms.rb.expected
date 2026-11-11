@@ -1,0 +1,57 @@
+[7, 8]
+[7, 8]
+MyA
+Array
+MyB
+MyH
+{1 => 2}
+{1 => 2}
+[1, 2]
+MyA
+[9, 8]
+[9, 8]
+MyA
+[:x, :x]
+[:x, :x]
+MyA
+[0, 0]
+MyA
+[0, 2, 4]
+[0, 0]
+MyA
+MyB
+[0, 0]
+nil
+MyH
+5
+"arr"
+"mya"
+"arr"
+"foo"
+"obj"
+"foo"
+"obj"
+[1, 2]
+[1, 2]
+"abab"
+7
+8
+7
+7
+8
+7
+"Array"
+0
+"t2"
+"t2"
+"h1"
+"h0"
+8
+Stack
+3
+3
+15
+3
+"odd number of arguments for Hash"
+"invalid number of elements (3 for 1..2)"
+"wrong element type Integer at 0 (expected array)"

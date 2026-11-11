@@ -1,0 +1,61 @@
+1
+1
+true
+1
+[true, true, 0, 0, true]
+[true, true, 1, 1, true]
+[true, true, 6, 5, true]
+[true, true, 3, 3, true]
+[true, true, 2, 2, false]
+true
+true
+true
+true
+3
+"HÉLLO"
+"\"a\\u0000b\""
+false
+false
+false
+false
+true
+false
+true
+"q!"
+"q"
+true
+true
+true
+[:upcase!, "can't modify frozen String: \"frz\""]
+[:clear, "can't modify frozen String: \"frz\""]
+[:succ!, "can't modify frozen String: \"frz\""]
+"can't modify frozen String: \"frz\""
+true
+true
+true
+false
+true
+true
+true
+false
+false
+true
+["a", "b", "c"]
+4
+"z,b,c"
+|
+1
+2
+3
+4
+5
+6
+7
+8
+true
+true
+true
+4
+2
+false
+2

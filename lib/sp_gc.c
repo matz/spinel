@@ -89,6 +89,7 @@ sp_RbVal (*sp_obj_to_hash_fn)(sp_RbVal) = NULL;
 const char *(*sp_obj_to_json_fn)(sp_RbVal) = NULL;
 sp_RbVal (*sp_obj_to_h_fn)(sp_RbVal) = NULL;
 sp_RbVal (*sp_obj_struct_values_fn)(sp_RbVal) = NULL;
+const char *const *sp_poly_root_lacks_names = NULL;
 sp_RbVal (*sp_obj_to_a_fn)(sp_RbVal) = NULL;
 sp_RbVal (*sp_obj_to_ary_fn)(sp_RbVal) = NULL;
 sp_RbVal (*sp_obj_deconstruct_fn)(sp_RbVal) = NULL;
@@ -103,6 +104,7 @@ int (*sp_obj_conv_fn)(int cls_id, void *p, int which, sp_RbVal *out) = NULL;
 const char *(*sp_obj_cls_name_fn)(int cls_id) = NULL;
 int (*sp_bsub_cls_fn)(sp_RbVal v) = NULL;
 int (*sp_cls_visible_fn)(int cls_id) = NULL;
+int (*sp_cls_reopen_fn)(int bid) = NULL;
 int (*sp_class_le_id_fn)(int sub, int super) = NULL;
 sp_RbVal (*sp_class_cmp_fn)(sp_RbVal a, sp_RbVal b) = NULL;
 int (*sp_class_kind_of_name_fn)(int cls, const char *name) = NULL;
@@ -202,7 +204,11 @@ static void sp_gc_verify_snapshot(void){ sp_gc_vsnap_n=0;
   for(sp_gc_hdr*p=sp_gc_heap;p;p=p->next)sp_gc_vsnap_push(p);
 #endif
   for(sp_gc_hdr*p=sp_gc_old_heap;p;p=p->next)sp_gc_vsnap_push(p); if(sp_gc_vsnap_n>1)qsort(sp_gc_vsnap,sp_gc_vsnap_n,sizeof(sp_gc_hdr*),sp_gc_vsnap_cmp); }
-static int sp_gc_obj_registered(sp_gc_hdr *h){ if(sp_slab_owns(h))return sp_slab_is_live(h)&&!sp_slab_is_str(h); uintptr_t hv=(uintptr_t)h; size_t lo=0,hi=sp_gc_vsnap_n; while(lo<hi){ size_t m=lo+(hi-lo)/2; uintptr_t x=(uintptr_t)sp_gc_vsnap[m]; if(x==hv)return 1; if(x<hv)lo=m+1; else hi=m; } return 0; }
+/* A static object the GC never allocated, a frozen literal's String
+   (sp_StringLiteral): its header links to itself, where a listed header
+   links to the next one or to nothing. */
+static int sp_gc_hdr_is_static(const sp_gc_hdr *h){ return h->next == h; }
+static int sp_gc_obj_registered(sp_gc_hdr *h){ if(sp_slab_owns(h))return sp_slab_is_live(h)&&!sp_slab_is_str(h); if(sp_gc_hdr_is_static(h))return 1; uintptr_t hv=(uintptr_t)h; size_t lo=0,hi=sp_gc_vsnap_n; while(lo<hi){ size_t m=lo+(hi-lo)/2; uintptr_t x=(uintptr_t)sp_gc_vsnap[m]; if(x==hv)return 1; if(x<hv)lo=m+1; else hi=m; } return 0; }
 /* Verify diagnostics: which phase/slot the bad pointer came from. */
 int sp_gc_verify_on(void) { return sp_gc_verify; }
 const char *sp_gc_dbg_phase = "?";
@@ -478,12 +484,10 @@ size_t sp_gc_mk_promo_bytes = 0;
 #ifndef SP_GC_NONE   /* (--gc=none: both are inline and mark nothing, lib/sp_gc.h; #10699) */
 void sp_gc_mark_str(const char *s) {
   sp_str_hdr *h = ((sp_str_hdr *)(s - 1)) - 1;
-#ifdef SP_ONE_STRING
   /* a String born inside its handle (sp_str_alloc_born) lives as the
      handle's GC object */
   { void *o = SP_STR_BORN_LINK(h);
     if (o && (char *)o + sizeof(struct sp_String_s) == (char *)h) { sp_gc_mark(o); return; } }
-#endif
   if (sp_slab_owns(h)) {
     int wy;
     /* SPINEL_GC_VERIFY: a string slot the sweep has freed is nobody's to
@@ -504,7 +508,6 @@ void sp_gc_mark_str(const char *s) {
 #endif
 }
 void sp_gc_mark(void*obj){if(!obj)return;unsigned char pm=((unsigned char*)obj)[-1];if((pm|0x04)==0xfe){sp_gc_mark_str((const char*)obj);return;}
-#ifdef SP_ONE_STRING
   /* one representation (string-one-repr-design.md): the bytes of a handle's
      payload (marker 0xfd) are held as a String's read face, in a root, a
      Hash key or a box, so they keep the handle alive: the payload's owner
@@ -514,7 +517,6 @@ void sp_gc_mark(void*obj){if(!obj)return;unsigned char pm=((unsigned char*)obj)[
   /* a view of a payload a growth moved (0xf9, sp_fd_retire): its owner
      still, and the payload is stamped with the cycle that reached it */
   if(pm==0xf9){sp_str_hdr*fh=(sp_str_hdr*)((char*)obj-sizeof(sp_str_hdr)-1);fh->hash=(uint64_t)sp_gc_mark_gen;if(fh->next)sp_gc_mark((void*)fh->next);return;}
-#endif
   if(pm==0xfc||pm==0xff||pm==0xfd||pm==0xf9||pm==0xf1||pm==0xfb||pm==0xf8)return;sp_gc_hdr*h=(sp_gc_hdr*)((char*)obj-sizeof(sp_gc_hdr));if(sp_gc_verify&&!sp_gc_obj_registered(h))sp_gc_verify_fail(obj,h);if(sp_gc_verify_probe_on){if(!h->old&&h->marked==sp_gc_verify_probe)sp_gc_verify_probe_hit=1;return;}if(sp_gc_young_probe_on){if(!h->old)sp_gc_young_probe_hit=1;return;}if(sp_gc_root_phase&&!h->old)h->aged=1;
   int was_young=0;
 #ifdef SP_THREADS

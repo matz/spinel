@@ -1,0 +1,38 @@
+"string"
+uninitialized constant Nope
+string statement
+"done"
+uninitialized constant Nope
+uninitialized constant Nope
+"string boxed"
+uninitialized constant Nope
+uninitialized constant Nope
+"matched"
+uninitialized constant Nope
+uninitialized constant Nope
+uninitialized constant Nope
+uninitialized constant Nope
+uninitialized constant Nope
+"integer"
+uninitialized constant A::Nope
+uninitialized constant A::Nope
+uninitialized constant A::Missing
+uninitialized constant MissingParent
+uninitialized constant Nope
+uninitialized constant Nope
+uninitialized constant String::Nope
+uninitialized constant K::Nope
+"bar"
+"not bar"
+uninitialized constant Date
+nil
+nil
+nil
+"later"
+"token"
+"splat"
+"range"
+"lambda"
+"other known"
+true
+true

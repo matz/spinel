@@ -2426,9 +2426,9 @@ else {
   case PM_IT_LOCAL_VARIABLE_READ_NODE:
     /* `it` inside the block body. Lowered to a regular
        LocalVariableReadNode named "_1" so it pairs with the
-       lowered NumberedParametersNode { maximum: 1 } above. */
-    N("LocalVariableReadNode");
-    S("name", "_1");
+       lowered NumberedParametersNode { maximum: 1 } above; implicit_it keeps it
+       apart from a written `_1` (blockarg_plain_read). */
+    N("LocalVariableReadNode"); S("name", "_1"); I("implicit_it", 1);
     break;
   case PM_INTERPOLATED_SYMBOL_NODE: {
     /* `:"foo_#{x}"`. Carries `parts` like InterpolatedStringNode;
@@ -2795,11 +2795,6 @@ static int source_calls_time_parser(const char *src) {
    sp_feature_enabled(). Definitions here (spinel_parse.c includes no project
    headers); declared extern in compiler.h. */
 int g_strict_require = 0;
-/* A String is shared by reference, as CRuby shares it (#6765): the one
-   mode, with no switch to copy. The compiler's flag and the parser's read
-   of a package's share declarations ask this one test; `--share-strings`
-   is still accepted and changes nothing. */
-int sp_share_strings_env(void) { return 1; }
 int g_strict_require_cli = 0;   /* --strict-require */
 int g_dump_load_graph = 0;    /* --dump-load-graph */
 int sp_parse_reported = 0;    /* the parse failed and said why (the driver adds nothing) */
@@ -5393,14 +5388,13 @@ static int sp_lib_lookup(const char *lib_dir, const char *lib_name, char *out, s
    `path` is the file as found. First, what a native Windows build
    answers differently for it, lib/win32/overlay/<the same path>
    (sp_win32_driver.c). Then a package's share declarations
-   (`native_share`), in <name>.share.rb beside the file; kept apart so
-   that a build without the flag parses no node of them. */
+   (`native_share`), in <name>.share.rb beside the file. */
 static char *sp_lib_text_appended(char *content, const char *path, int tier) {
   if (!content || tier < SP_LIB_BUILTIN) return content;
 #if defined(_WIN32)
   content = sp_w32_overlay(content, path);
 #endif
-  if (sp_share_strings_env() && strlen(path) > 3) {
+  if (strlen(path) > 3) {
     char sp[1100];
     snprintf(sp, sizeof sp, "%.*s.share.rb", (int)(strlen(path) - 3), path);
     char *side = read_file(sp);
@@ -7099,6 +7093,7 @@ typedef struct {
   const pm_parser_t *p;
   int nested;                 /* inside a class or module body */
   pm_constant_id_t def;       /* the def the walk is in, 0 outside one */
+  const pm_node_t *defined;   /* the operand of the defined? the walk is at: it does not run */
 } SpNamesWalk;
 
 static void sp_names_const(SpNamesWalk *w, const char *tag, pm_constant_id_t id) {
@@ -7150,9 +7145,9 @@ static int sp_pm_block_breaks(const pm_node_t *body) {
 /* Whether call `c` passes lo..hi arguments of the kinds `flags` allows and
    has the block and the receiver they ask for (lower_row_nt's test, of a
    parsed call) */
-static int sp_pm_args_fit(const pm_call_node_t *c, int lo, int hi, unsigned flags) {
+static int sp_pm_args_fit(const pm_call_node_t *c, int lo, int hi, unsigned flags, int drop) {
   const pm_node_list_t *args = c->arguments ? &c->arguments->arguments : NULL;
-  int an = args ? (int)args->size : 0;
+  int an = (args ? (int)args->size : 0) - drop;
   if (an < lo || (hi >= 0 && an > hi)) return 0;
   const pm_node_t *blk = c->block;
   if ((flags & LR_NO_BLOCK) && blk) return 0;
@@ -7163,7 +7158,7 @@ static int sp_pm_args_fit(const pm_call_node_t *c, int lo, int hi, unsigned flag
   if ((flags & LR_BLOCK_LITERAL) && !made && (!blk || PM_NODE_TYPE(blk) != PM_BLOCK_NODE)) return 0;
   if ((flags & LR_BREAKS) && (!blk || PM_NODE_TYPE(blk) != PM_BLOCK_NODE)) return 0;
   if ((flags & LR_HAS_RECV) && !c->receiver) return 0;
-  if ((flags & LR_NO_ARGS) && c->arguments) return 0;
+  if ((flags & LR_NO_ARGS) && an > 0) return 0;
   int kwh = 0;
   for (int i = 0; i < an; i++) {
     pm_node_type_t k = PM_NODE_TYPE(args->nodes[i]);
@@ -7186,7 +7181,7 @@ static int sp_pm_const_is(const pm_parser_t *p, const pm_node_t *n, const char *
    `r`? lower_row_nt's question, of a parsed call: the graph decides its
    libraries before flattening. SPINEL_LOWER_ROWS_CHECK holds the two to
    one answer (sp_lower_rows_note, lower_rows_check). */
-static int sp_pm_row_fits(const pm_parser_t *p, const pm_call_node_t *c, const char *name, const LowerRow *r) {
+static int sp_pm_row_fits(const pm_parser_t *p, const pm_call_node_t *c, const char *name, const LowerRow *r, int drop) {
   if (strcmp(name, r->name) != 0) return 0;
   const pm_node_t *recv = c->receiver;
   if (r->recv == LR_RECV_NONE && recv) return 0;
@@ -7197,29 +7192,68 @@ static int sp_pm_row_fits(const pm_parser_t *p, const pm_call_node_t *c, const c
     const pm_call_node_t *rc = (const pm_call_node_t *)recv;
     if (!sp_pm_name_is(p, rc->name, r->recv_name)) return 0;
     if (r->recv_const && !sp_pm_const_is(p, rc->receiver, r->recv_const)) return 0;
-    if (!sp_pm_args_fit(rc, r->rargc_min, r->rargc_max, r->rflags)) return 0;
+    if (!sp_pm_args_fit(rc, r->rargc_min, r->rargc_max, r->rflags, 0)) return 0;
   }
   if (r->recv_calls && recv && PM_NODE_TYPE(recv) == PM_CALL_NODE && !((const pm_call_node_t *)recv)->block) {
     int k = 0;
     while (r->recv_calls[k] && !sp_pm_name_is(p, ((const pm_call_node_t *)recv)->name, r->recv_calls[k])) k++;
     if (!r->recv_calls[k]) return 0;
   }
-  return sp_pm_args_fit(c, r->argc_min, r->argc_max, r->flags);
+  return sp_pm_args_fit(c, r->argc_min, r->argc_max, r->flags, drop);
+}
+
+/* Does call `c` end in `**` operands that may all pass nothing (an empty
+   operand)? Then the analysis splits it into the call with them and the call
+   without (split_kwsplat_calls in analyze.c, whose rule this one repeats:
+   not the operand of `defined?` (`defined`, the node the walk is at, or
+   NULL where it is not known: that call is never split, so the shape this
+   notes for it is never looked for), no splat beside the `**`, no pair-only
+   hash literal among the operands, which is never empty); the one without
+   takes the rows of its own shape. */
+static int sp_pm_kwsplat_may_drop(const pm_call_node_t *c, const pm_node_t *defined) {
+  const pm_node_list_t *args = c->arguments ? &c->arguments->arguments : NULL;
+  if (!args || !args->size || PM_NODE_TYPE(args->nodes[args->size - 1]) != PM_KEYWORD_HASH_NODE ||
+      (const pm_node_t *)c == defined)
+    return 0;
+  const pm_node_list_t *el = &((const pm_keyword_hash_node_t *)args->nodes[args->size - 1])->elements;
+  int drop = 1;
+  for (size_t k = 0; k < args->size - 1; k++) {
+    pm_node_type_t t = PM_NODE_TYPE(args->nodes[k]);
+    if (t == PM_SPLAT_NODE || t == PM_FORWARDING_ARGUMENTS_NODE) drop = 0;
+  }
+  for (size_t k = 0; k < el->size; k++) {
+    if (PM_NODE_TYPE(el->nodes[k]) != PM_ASSOC_SPLAT_NODE) { drop = 0; continue; }
+    const pm_node_t *v = ((const pm_assoc_splat_node_t *)el->nodes[k])->value;
+    if (!v) { drop = 0; continue; }
+    if (PM_NODE_TYPE(v) != PM_HASH_NODE) continue;
+    const pm_node_list_t *he = &((const pm_hash_node_t *)v)->elements;
+    int has_splat = 0;
+    for (size_t q = 0; q < he->size; q++) if (PM_NODE_TYPE(he->nodes[q]) == PM_ASSOC_SPLAT_NODE) has_splat = 1;
+    if (he->size && !has_splat) drop = 0;
+  }
+  return drop;
 }
 
 /* The lowerings call `c` has the shape of (builtin_names.c's rows): each
    names the method or constant it lowers to */
 static void sp_names_lowerings(SpNamesWalk *w, const pm_call_node_t *c, const char *name) {
   const LowerRow *r;
+  int drop = sp_pm_kwsplat_may_drop(c, w->defined);
   for (int i = 0; (r = lower_row_at(i)) != NULL; i++)
-    if (sp_pm_row_fits(w->p, c, name, r))
+    if (sp_pm_row_fits(w->p, c, name, r, 0) || (drop && sp_pm_row_fits(w->p, c, name, r, 1)))
       sp_names_add(w->s, sp_names_target_tag(r->target), r->target, strlen(r->target));
 }
 
 /* SPINEL_LOWER_ROWS_CHECK: each call flattened in graph mode notes the
    lowering rows its parse has the shape of (sp_pm_row_fits), a mask of
    row indices (`lr_rows`); the analysis's lower_rows_check compares it
-   with the rows the node it became matches (lower_row_nt) */
+   with the rows the node it became matches (lower_row_nt). A call that may
+   be split on its `**` operands (sp_pm_kwsplat_may_drop) notes the rows of
+   the call without them too (`lr_rows_drop`), which split_kwsplat_calls
+   hands to the call it builds, so both shapes are checked. Only the first
+   row of a family is compared: the names the graph loads for a call are a
+   superset of the rows' targets by construction (sp_names_add), and extra
+   names are not this check's business. */
 static int g_lower_rows_check = -1;
 static void sp_lower_rows_note(const pm_node_t *node, int id) {
   if (g_lower_rows_check < 0) g_lower_rows_check = getenv("SPINEL_LOWER_ROWS_CHECK") != NULL;
@@ -7228,11 +7262,15 @@ static void sp_lower_rows_note(const pm_node_t *node, int id) {
   const pm_constant_t *nm = pm_constant_pool_id_to_constant(&g_parser->constant_pool, c->name);
   char name[64];
   snprintf(name, sizeof name, "%.*s", (int)nm->length, (const char *)nm->start);
-  long long mask = 0;
+  long long mask = 0, dmask = 0;
   const LowerRow *r;
-  for (int i = 0; i < LOWER_ROWS_MASK_BITS && (r = lower_row_at(i)) != NULL; i++)
-    if (sp_pm_row_fits(g_parser, c, name, r)) mask |= 1LL << i;
+  int drop = sp_pm_kwsplat_may_drop(c, NULL);
+  for (int i = 0; i < LOWER_ROWS_MASK_BITS && (r = lower_row_at(i)) != NULL; i++) {
+    if (sp_pm_row_fits(g_parser, c, name, r, 0)) mask |= 1LL << i;
+    if (drop && sp_pm_row_fits(g_parser, c, name, r, 1)) dmask |= 1LL << i;
+  }
   emit_int(id, "lr_rows", mask);
+  if (drop) emit_int(id, "lr_rows_drop", dmask);
 }
 
 /* Method name `b` given as a value (a Symbol, a String a reflection is
@@ -7322,6 +7360,7 @@ static bool sp_names_visit(const pm_node_t *n, void *data) {
   SpNamesWalk *w = data;
   switch (PM_NODE_TYPE(n)) {
     case PM_CALL_NODE: sp_names_call(w, (const pm_call_node_t *)n); break;
+    case PM_DEFINED_NODE: w->defined = ((const pm_defined_node_t *)n)->value; break;
     case PM_SYMBOL_NODE: {
       /* `:name` or a `%i[]` word (a hash key's `name:` names no method) */
       const pm_symbol_node_t *sy = (const pm_symbol_node_t *)n;
@@ -8219,9 +8258,23 @@ static int sp_graph_flatten(SpLoadGraph *g, int f, const char *source_file) {
     sp_inline_rbs_free();
     return 0;
   }
+  /* a `#<SPINEL_SOURCE>file:line` marker in the file pins the positions
+     after it, as the inline model's map of the spliced buffer does: the
+     file's own map for its parse, the file's own lines elsewhere */
+  int saved_map_n = sp_line_map_n;
+  int *saved_lf = sp_line_file, *saved_lo = sp_line_orig, *saved_lp = sp_line_pop;
+  int *saved_df = sp_disp_file, *saved_dl = sp_disp_line;
+  int own_map = r->text && strstr(r->text, SP_SOURCE_PREFIX) != NULL;
+  if (own_map) sp_build_line_map(r->text, sp_file_table[g_flat_file]);
   g_flat_sites = (SpGraphFlat){ g, r, 0 };
   int start = node_counter, root = flatten(r->src.root);
   g_flat_sites = (SpGraphFlat){ NULL, NULL, 0 };
+  if (own_map) {
+    free(sp_line_file); free(sp_line_orig); free(sp_line_pop); free(sp_disp_file); free(sp_disp_line);
+    sp_line_map_n = saved_map_n;
+    sp_line_file = saved_lf; sp_line_orig = saved_lo; sp_line_pop = saved_lp;
+    sp_disp_file = saved_df; sp_disp_line = saved_dl;
+  }
   sp_inline_rbs_done();
   sp_inline_rbs_free();
   if (!f) out_nt->root_id = root;

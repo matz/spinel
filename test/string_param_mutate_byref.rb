@@ -1,4 +1,4 @@
-# A string param mutated via `<<` is a byref out-param: the append lands in
+# A string param mutated via `<<` is the caller's String: the append lands in
 # the caller's variable, like CRuby's shared-object semantics (the classic
 # pass-an-output-buffer serializer pattern).
 def append(s)
@@ -8,7 +8,7 @@ str = "hello".dup
 append(str)
 puts str
 
-# transitive: a wrapper that passes its param on into a byref slot
+# transitive: a wrapper that passes its param on to one that appends
 def inner(s)
   s << "!"
 end
@@ -28,7 +28,7 @@ r = bang(b)
 puts b
 puts r
 
-# only the mutated param rides byref; its sibling stays a plain value
+# the sibling parameter is only read
 def tag(buf, label)
   buf << "["
   buf << label
@@ -44,7 +44,7 @@ bang("zzz".dup)
 puts "lit ok"
 
 # a plain rebind keeps value semantics: CRuby `s = ...` rebinds the local,
-# invisible to the caller, so the param must NOT ride byref
+# invisible to the caller: a plain rebind points the local at a new String
 def rebind(s)
   s = +"gone"
   s << "!"

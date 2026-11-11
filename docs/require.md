@@ -123,7 +123,7 @@ A few `require`s name a capability Spinel already provides as core, and are
 
 Some stdlib ships with Spinel as Ruby source and is spliced when required --
 `set`, `forwardable`, `optparse` (the bundled release with a few hunks; see `packages/optparse/README.md`), `erb`, `csv`, `pathname`, `digest`, `base64`,
-`fileutils`, `tmpdir`, `zlib`, `open3` (the capture forms), `pty` (`PTY.spawn`; not on
+`fileutils`, `tmpdir`, `etc` (`getlogin`, the user and group lookups by name or id, and `passwd` and `group` with a block; see `packages/etc/etc.rb`), `syslog` (CRuby's Syslog module over syslog(3), without `syslog/logger`; see `packages/syslog/syslog.rb`), `zlib`, `open3` (the capture forms), `pty` (`PTY.spawn`; not on
 wasm32-wasi, which has no fork), `fiddle` (where libffi is,
 like `ffi`),
 `benchmark` (CRuby's own gem, unmodified), `shellwords` (likewise), `find` (likewise, but for one line; see its note),

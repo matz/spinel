@@ -1,10 +1,10 @@
 # chained string appends (`s << a << b`) evaluate each link exactly once and
 # every append lands on the base. The tail form used to re-run the inner
 # links when emitting the return value (doubling the appended text, and
-# writing the doubled string back through a byref param); the value form
+# writing the doubled string back to the receiver); the value form
 # wrote back only the innermost link, so the base missed the later appends.
 
-# tail position, through a mutated parameter (the byref shape)
+# tail position, through a mutated parameter
 def emit(buf, label)
   buf << "[" << label << "]"
 end

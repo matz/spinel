@@ -2183,6 +2183,11 @@ SP_NORETURN static void sp_sock_raise_wait(int writable, const char *op) {SP_GC_
 static int sp_sock_would_block(void) {
   return errno == EAGAIN || errno == EWOULDBLOCK;
 }
+/* The kind of a connection server f accepts: a UNIXServer's is a
+   UNIXSocket, a TCPServer's a TCPSocket (#11346) */
+static const char *sp_sock_accepted_kind(sp_File *f) {
+  return f && f->mode && strcmp(f->mode, "unixserver") == 0 ? SPL("unix") : SPL("tcp");
+}
 /* accept_nonblock -> the new handle, or nil / the :wait_readable marker. */
 sp_File *sp_sock_accept_nb(sp_File *f, sp_bool exc) {SP_GC_ROOT(f);
   extern int sp_net_accept_nb(int sfd);
@@ -2192,7 +2197,7 @@ sp_File *sp_sock_accept_nb(sp_File *f, sp_bool exc) {SP_GC_ROOT(f);
   int e = errno;
   sp_io_nb_end(f, saved);
   errno = e;
-  if (fd >= 0) return sp_io_fdopen_sock(fd, SPL("tcp"));
+  if (fd >= 0) return sp_io_fdopen_sock(fd, sp_sock_accepted_kind(f));
   if (sp_sock_would_block()) {
     if (!exc) return NULL;
     sp_sock_raise_wait(0, "accept");
@@ -2463,7 +2468,7 @@ sp_File *sp_sock_accept(sp_File *f) {SP_GC_ROOT(f);
   int fd = sp_net_accept_unless(fileno(sp_io_use(f)), &f->closed);
   { int e = errno; sp_io_unuse(f); errno = e; }
   if (fd < 0 && SP_ATOMIC_LOAD(&f->closed, __ATOMIC_RELAXED)) sp_raise_cls("IOError", "stream closed in another thread");
-  return sp_io_fdopen_sock(fd, SPL("tcp"));
+  return sp_io_fdopen_sock(fd, sp_sock_accepted_kind(f));
 }
 
 /* `#<File:/etc/passwd>` for a path-backed handle, `#<IO:<STDOUT>>` for a

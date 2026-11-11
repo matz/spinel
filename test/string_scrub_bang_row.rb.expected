@@ -1,0 +1,53 @@
+"abc"
+"abc"
+[97, 239, 191, 189, 98]
+[97, 239, 191, 189, 98]
+"a?b"
+"a?b"
+"a**b"
+"a**b"
+"ABC"
+"ABC"
+"a?b"
+"a?b"
+nil
+"x_"
+nil
+"a!b"
+"a!b"
+true
+"q-"
+"q-"
+"z+"
+"z+"
+"g?"
+nil
+"m."
+["m."]
+"n#"
+{k: "n#"}
+"a?"
+"a?"
+"q"
+"q"
+"a?b"
+true
+["a?b"]
+true
+"hello world"
+"q12"
+"abc"
+FrozenError
+FrozenError
+"abc"
+"q"
+NoMethodError
+"dcba"
+"dcba"
+"xy"
+"xy"
+"yx"
+"xy"
+FrozenError
+"ba"
+[2, 1]

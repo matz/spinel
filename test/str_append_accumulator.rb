@@ -44,7 +44,7 @@ end
 p sizes
 p r
 
-# a param appended through a call stays byref: the caller sees the append
+# a param appended through a call is the caller's String: the caller sees the append
 def feed(buf)
   buf << "!"
 end

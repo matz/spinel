@@ -23,12 +23,8 @@
 #define SP_TAG_BOOL 3
 #define SP_TAG_NIL 4
 #define SP_TAG_OBJ 5
-/* Not 0xfd in the one-String build: there 0xfd marks a handle payload, which sp_gc_mark follows to its owner. */
-#ifdef SP_ONE_STRING
+/* Not 0xfd: 0xfd marks a handle payload, which sp_gc_mark follows to its owner. */
 #define SP_STATIC_GUARD 0xff
-#else
-#define SP_STATIC_GUARD 0xfd
-#endif
 #define SP_TAG_SYM 6
 #define SP_TAG_CLASS 7
 #define SP_TAG_ENCODING 8
@@ -479,9 +475,7 @@ static inline int sp_slab_owns(const void *p) { return (uintptr_t)p - sp_slab_ba
 /* ---- Slab allocator for GC objects and heap strings (lib/sp_slab.c) ----
  * sp_slab_alloc answers a zeroed block of `need` bytes (header included) from
  * the calling worker's size-class chunks, in the current epoch's young
- * generation; sp_slab_alloc_str the same for a heap string (unzeroed, its
- * bytes counted on the string side); sp_slab_alloc_raw a payload no sweep
- * frees. A block's generation, mark and finalizer bit live in its chunk's
+ * generation; sp_slab_alloc_raw a payload no sweep frees. A block's generation, mark and finalizer bit live in its chunk's
  * bitmaps, which is what the sweep reads (sp_slab_sweep_worker) and the
  * mark sets (sp_slab_mark). A size past the largest class, or the allocator
  * off (SPINEL_GC_SLAB=0), falls back to calloc/malloc, and such a block goes
@@ -490,7 +484,6 @@ static inline int sp_slab_owns(const void *p) { return (uintptr_t)p - sp_slab_ba
  * the end of a full cycle, returns fully free chunks to the OS. */
 void *sp_slab_alloc(size_t need);        /* an object: zeroed, in the current epoch's young generation */
 void *sp_slab_alloc_obj(size_t need, void (*fin)(void *), void (*scn)(void *));   /* the same, with the header written */
-void *sp_slab_alloc_str(size_t need);    /* a heap string: young, its bytes counted on the string side */
 void *sp_slab_alloc_raw(size_t need);    /* a payload: no sweep frees it, only sp_slab_free */
 void  sp_slab_free(void *p);
 void  sp_slab_set_fin(void *hdr);        /* the object gained a finalizer or recycler after allocation */
@@ -547,6 +540,8 @@ static inline void sp_gc_mark(void *obj) { (void)obj; }
 #else
 void sp_gc_mark(void *obj);
 #endif
+/* an element of a String container (sp_strelem): nil marks nothing */
+static inline void sp_strelem_mark(sp_strelem e) { if (e) sp_gc_mark((void *)e); }
 void sp_gc_mark_all(void);
 void sp_gc_mark_drain(void);
 extern int sp_gc_minor;
@@ -716,6 +711,11 @@ extern const char *(*sp_obj_to_json_fn)(sp_RbVal);
 /* Symbol-keyed Struct/Data #to_h, for a poly receiver (#2906). */
 extern sp_RbVal (*sp_obj_to_h_fn)(sp_RbVal);
 extern sp_RbVal (*sp_obj_struct_values_fn)(sp_RbVal);
+/* Set by the generated prologue to the NULL-ended list of the Array or
+   Enumerable names a boxed Struct, IO or Symbol lacks that a reopened
+   Object, Kernel or BasicObject defines: that method answers the name, so
+   the run-time checks leave it to the old route. NULL when there is none. */
+extern const char *const *sp_poly_root_lacks_names;
 /* user-object #to_a for container-read poly receivers (#3234): installed by
    the generated prologue when any instantiated class defines a no-arg to_a */
 extern sp_RbVal (*sp_obj_to_a_fn)(sp_RbVal);
@@ -766,6 +766,10 @@ extern int (*sp_bsub_cls_fn)(sp_RbVal v);
 /* the class id Ruby sees for a user class id: a synthesized singleton class
    answers as the class it hides behind (generated sp_cls_visible) */
 extern int (*sp_cls_visible_fn)(int cls_id);
+/* the class index of the program's reopening of builtin class id bid, -1
+   when it has none: such a class value is named by the index, as the
+   constant is (generated sp_cls_reopen) */
+extern int (*sp_cls_reopen_fn)(int bid);
 /* Is user class `sub` the class `super` or a descendant of it? The generated
    class bank installs it; NULL means only an exact id can be trusted. A
    pointer array of one class checks a stored object against it (#4486). */
@@ -806,14 +810,12 @@ static inline void sp_mark_string(const char *s) {
     void *owner = (void *)(((const sp_str_hdr *)(s - 1)) - 1)->next;
     if (owner) sp_gc_mark(owner);
   }
-#ifdef SP_ONE_STRING
   /* one representation: a String born inside its handle and frozen by
      .freeze (0xf1) lives as the handle's GC object too */
   else if ((unsigned char)s[-1] == 0xf1) {
     void *o = SP_STR_BORN_LINK(((const sp_str_hdr *)(s - 1)) - 1);
     if (o && (const char *)o + sizeof(struct sp_String_s) == (const char *)(((const sp_str_hdr *)(s - 1)) - 1)) sp_gc_mark(o);
   }
-#endif
   /* No frozen (0xf1) branch here: this is inlined into optcarrot's GC mark and
      is layout-sensitive. A live frozen heap string is kept immortal by
      sp_str_sweep instead (#1449). */
@@ -840,13 +842,11 @@ static inline void sp_mark_rbval_scratch(sp_RbVal v) {
   const void *h = NULL;
   if (v.tag == SP_TAG_STR || (v.tag == SP_TAG_CLASS && v.cls_id == SP_CLASS_BY_NAME)) { if (v.v.s && ((unsigned char)v.v.s[-1] | 0x04) == 0xfe) h = ((const sp_str_hdr *)(v.v.s - 1)) - 1; }
   else if ((v.tag == SP_TAG_OBJ && v.cls_id != SP_BUILTIN_FOREIGN_PTR && v.cls_id != SP_BUILTIN_REGEX && v.cls_id != SP_BUILTIN_ARGF) || v.tag == SP_TAG_BIGINT) { if (v.v.p) h = (const char *)v.v.p - sizeof(sp_gc_hdr); }
-#ifdef SP_ONE_STRING
   /* (a String born inside its handle: the handle's GC object is the slot) */
   if (h && v.tag != SP_TAG_OBJ && v.tag != SP_TAG_BIGINT) {
     const void *o = SP_STR_BORN_LINK((const sp_str_hdr *)h);
     if (o && (const char *)o + sizeof(struct sp_String_s) == (const char *)h) h = (const char *)o - sizeof(sp_gc_hdr);
   }
-#endif
   if (h && sp_slab_owns(h) && !sp_slab_is_live(h)) return;
   sp_mark_rbval(v);
 }

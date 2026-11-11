@@ -41,6 +41,17 @@ module SQL
 end
 ```
 
+The name may also be a library file name, a path, or an Array of
+candidates, as the ffi gem takes them:
+
+- a file name (`"libturbojpeg.so.0"`, `"libz.1.dylib"`) links that file:
+  `-l:<file>` for GNU ld and lld, which reaches a library installed
+  without its development link; on macOS, whose system libraries link from
+  the SDK's stubs, the `-l` of its base name (`-lz`);
+- a path (`"/opt/x/lib/libfoo.so"`) goes to the linker as it is;
+- an Array (`["libz.1.dylib", "z"]`) links the first candidate this machine
+  has a library file for, or the first one when it has none.
+
 ### `ffi_cflags "..."`
 
 Declares cflags (include dirs, defines, link-search paths) needed for

@@ -52,6 +52,7 @@ static char *op_recv_text(Compiler *c, const BopCtx *x) {
      $Y   an Array receiver's boxed class id, for sp_raise_frozen_array_at
           (array_frozen_cls)
      $eN  argument N by emit_expr
+     $jN  argument N run for its effect, "(void)(...), ": nothing for a plain read (a variable, self, a literal)
      $B / $E  a String Range's begin / end in _t$T, through its handle
           under --share-strings (sp_srange_first / sp_srange_last)
      $bN  argument N boxed (emit_boxed)
@@ -86,6 +87,34 @@ static const char *int_plain_template(const char *name) {
   return NULL;
 }
 
+/* __kw_hash(x), __blk_conv(x): the Hash a `**` operand x stands for, the
+   Proc or nil a `&` operand stands for, converted where it is read (the
+   row's runtime function, over x boxed and whether a program class may
+   answer the conversion by method_missing). */
+static int emit_op_conv_user_ok(Compiler *c, const BopCtx *x, Buf *b) {
+  int argc;
+  const int *argv = call_args(c->nt, x->id, &argc);
+  buf_printf(b, "%s(", x->op->arg);
+  emit_boxed(c, argv[0], b);
+  buf_printf(b, ", %d)", kw_splat_user_may_convert(c));
+  return 1;
+}
+
+/* An operand that is a read of a variable, self or a literal: running it has no
+   effect and cannot raise (a quotient or a constant can, so those are not
+   plain), so a row that ignores it need not emit it ($jN). */
+static int op_operand_is_plain_read(Compiler *c, int id) {
+  switch (nt_kind(c->nt, id)) {
+    case NK_LocalVariableReadNode: case NK_InstanceVariableReadNode: case NK_SelfNode:
+    case NK_IntegerNode: case NK_FloatNode: case NK_NilNode: case NK_TrueNode:
+    case NK_FalseNode: case NK_SymbolNode:
+    case NK_RequiredParameterNode: case NK_OptionalParameterNode:   /* (a bare super's operands) */
+      return 1;
+    default:
+      return 0;
+  }
+}
+
 static int emit_op_template(Compiler *c, const BopCtx *x, Buf *b) {
   static const char tnames[] = "tuvwxyz";
   const char *tmpl = x->op->arg;
@@ -111,7 +140,7 @@ static int emit_op_template(Compiler *c, const BopCtx *x, Buf *b) {
   }
   char *r = NULL, *o = NULL;
   int argc;
-  const int *argv = call_args(c->nt, x->id, &argc);
+  const int *argv = x->argv ? (argc = x->argc, x->argv) : call_args(c->nt, x->id, &argc);
   /* a length row (length, size, count: a plain Integer, never nil) where
      the call's slot holds its nil (a site of a call another receiver of
      which can answer nil): the whole text lifted. Only these names: a row
@@ -243,11 +272,14 @@ static int emit_op_template(Compiler *c, const BopCtx *x, Buf *b) {
       buf_printf(b, "%d", tn[tk - tnames]);
       p++;
     }
-    else if (p[0] == '$' && p[1] && strchr("ebfFicoqs", p[1]) &&
+    else if (p[0] == '$' && p[1] && strchr("ebfFicoqsj", p[1]) &&
              p[2] >= '0' && p[2] <= '9' && p[2] - '0' < argc) {
       int a = argv[p[2] - '0'];
       switch (p[1]) {
       case 'e': emit_expr(c, a, b); break;
+      case 'j':
+        if (!op_operand_is_plain_read(c, a)) { buf_puts(b, "(void)("); emit_expr_for_effect(c, a, b); buf_puts(b, "), "); }
+        break;
       case 'b': emit_boxed(c, a, b); break;
       case 'f': emit_float_expr(c, a, b); break;
       case 'F': emit_float_coerce_expr(c, a, b); break;
@@ -311,6 +343,24 @@ static int emit_op_pstatus_success(Compiler *c, const BopCtx *x, Buf *b) {
   int t = ++g_tmp;
   buf_printf(b, "({ int _t%d = sp_process_status_success_p(sp_process_status_recv(%s, \"success?\")->status);"
                 " _t%d < 0 ? sp_box_nil() : sp_box_bool((sp_bool)_t%d); })", t, r, t, t);
+  free(r);
+  return 1;
+}
+
+/* #class of a builtin receiver (BOPE_CLASS_VALUE): the class value of the
+   builtin the row's arg names (emit_builtin_class_value), and NilClass's
+   for a slot whose NULL is nil ($? before any child was waited for) */
+static int emit_op_class_value(Compiler *c, const BopCtx *x, Buf *b) {
+  char *r = op_recv_text(c, x);
+  int t = ++g_tmp;
+  buf_puts(b, "({ "); emit_ctype(c, x->rt, b);
+  buf_printf(b, " _t%d = %s; ", t, r);
+  if (ty_null_is_nil(x->rt)) {
+    buf_printf(b, "_t%d ? ", t); emit_builtin_class_value(c, x->op->arg, b);
+    buf_puts(b, " : "); emit_builtin_class_value(c, "NilClass", b);
+  }
+  else { buf_printf(b, "(void)_t%d; ", t); emit_builtin_class_value(c, x->op->arg, b); }
+  buf_puts(b, "; })");
   free(r);
   return 1;
 }
@@ -416,10 +466,14 @@ static int (*const bop_emitters[BOPE__COUNT])(Compiler *, const BopCtx *, Buf *)
   [BOPE_RANGE_FREEZE] = emit_op_range_freeze,
   [BOPE_TEMPLATE] = emit_op_template,
   [BOPE_PSTATUS_SUCCESS] = emit_op_pstatus_success,
+  [BOPE_CLASS_VALUE] = emit_op_class_value,
   [BOPE_PSTATUS_EQ] = emit_op_pstatus_eq,
   [BOPE_THREAD_SET_REPORT] = emit_op_thread_set_report,
   [BOPE_FLOAT_RATIONALIZE] = emit_op_float_rationalize,
   [BOPE_STRING_SCAN_CHECKED] = emit_op_string_scan_checked,
+  [BOPE_STRING_ASET] = emit_op_string_aset,
+  [BOPE_STRING_INSERT] = emit_op_string_insert,
+  [BOPE_STRING_CLEAR] = emit_op_string_clear,
   [BOPE_STRING_SLICE] = emit_op_string_slice,
   [BOPE_STRING_DEDUP] = emit_op_string_dedup,
   [BOPE_STRING_SCRUB_BLOCK] = emit_op_string_scrub_block,
@@ -482,6 +536,9 @@ static int (*const bop_emitters[BOPE__COUNT])(Compiler *, const BopCtx *, Buf *)
   [BOPE_ARRAY_UNIQ] = emit_op_array_uniq,
   [BOPE_ARRAY_NMIN] = emit_op_array_nmin,
   [BOPE_ARRAY_SUM0] = emit_op_array_sum0,
+  [BOPE_BOXED_ARRAY_COUNT] = emit_op_boxed_array_count,
+  [BOPE_BOXED_ARRAY_ONLY] = emit_op_boxed_array_count,
+  [BOPE_BOXED_ARRAY_OR_RANGE] = emit_op_boxed_array_count,
   [BOPE_ARRAY_COMPACT_BANG] = emit_op_array_compact_bang,
   [BOPE_ARRAY_FLATTEN] = emit_op_array_flatten,
   [BOPE_ARRAY_PUSH] = emit_op_array_push,
@@ -514,6 +571,7 @@ static int (*const bop_emitters[BOPE__COUNT])(Compiler *, const BopCtx *, Buf *)
   [BOPE_PROC_PARAMETERS] = emit_op_proc_parameters,
   [BOPE_PROC_SOURCE_LOCATION] = emit_op_proc_source_location,
   [BOPE_ARRAY_PRED_CLASS] = emit_op_array_pred_class,
+  [BOPE_CONV_USER_OK] = emit_op_conv_user_ok,
 };
 
 static int emit_builtin_op_ex(Compiler *c, int id, int recv, TyKind rt, const char *name,
@@ -530,7 +588,11 @@ static int emit_builtin_op_ex(Compiler *c, int id, int recv, TyKind rt, const ch
   if (!op || op->emit == BOPE_NONE || !bop_emitters[op->emit]) return 0;
   BopCtx x = { id, recv, argc, rt, name, op, rtext, t0 };
   if (!bop_emitters[op->emit](c, &x, b)) return 0;
-  if (g_plan_check && observe) plan_check_observe(c, id, rt, op);
+  /* A row rendered while the node is the builtin arm of its own boxed send
+     split (emit_send_blind) is one arm of that dispatch, as
+     emit_builtin_op_arm_text's are: the node answers what the dispatch
+     answers (infer_send_blind), so the row is not compared with it */
+  if (g_plan_check && observe && g_arm.send_split != id) plan_check_observe(c, id, rt, op);
   return 1;
 }
 
@@ -575,6 +637,13 @@ int emit_builtin_op_arm_boxed(Compiler *c, int id, int recv, TyKind rt, const ch
 int emit_builtin_op_tmp(Compiler *c, int id, int recv, TyKind rt, const char *name,
                         int t0, Buf *b) {
   return emit_builtin_op_ex(c, id, recv, rt, name, NULL, t0, 0, bop_arg_ntype, 1, b);
+}
+
+int emit_builtin_op_operands(Compiler *c, int id, TyKind rt, const char *name, const int *argv, int argc, Buf *b) {
+  const BuiltinOp *op = bop_find(rt, name, argc, 0);
+  if (!op || op->emit != BOPE_TEMPLATE) return 0;
+  BopCtx x = { id, -1, argc, rt, name, op, NULL, 0, argv };
+  return emit_op_template(c, &x, b);
 }
 
 int emit_builtin_op(Compiler *c, int id, int recv, TyKind rt, const char *name, Buf *b) {

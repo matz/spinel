@@ -76,11 +76,14 @@ typedef struct {
   unsigned head_held:1;   /* a call's nil arm head ran this operand into a
                              temp of its own ahead of the call (VR_HEAD_HELD,
                              a view around the call): it reads as that temp */
+  unsigned str_shadow:2;  /* a String receiver read as a copy of a handle's
+                             bytes its mutator writes back to (VR_STR_SHADOW:
+                             1 a boxed face's, 2 a held chain's shadow) */
   unsigned discarded:1;   /* emitted where its value is thrown away
                              (VR_DISCARDED, a view around the emission) */
   unsigned big:1;         /* an Integer held as an sp_Bigint * */
-  unsigned elems_handle:1; /* a container slot whose String elements are
-                              boxed shared handles (--share-strings) */
+  unsigned elems_handle:1; /* an ivar's container slot whose String elements are
+                              boxed shared handles (set only by repr_of_ivar) */
   unsigned share:1;       /* the shared String handle the --share-strings rule
                              assigned (#6765): a slot that is the handle
                              (repr_of_slot, repr_of_ivar, repr_of_cvar), or a
@@ -120,9 +123,6 @@ typedef struct {
                              or nil (arr_or_nil), and a read of it: an index
                              read takes the runtime's inline array arm,
                              which neither allocates nor needs a root */
-  unsigned volatile_str:1; /* a String local live across a setjmp
-                             (borrowed_volatile): its C slot, and a slot
-                             that borrows it, is `const char * volatile` */
   unsigned char cell;     /* ReprCell: where a local's value lives, for the
                              slot and for a read of it */
   unsigned char strbuf_src; /* ReprStrSrc: where a shared String's box comes
@@ -146,12 +146,8 @@ typedef enum {
 /* Where a local's value lives. */
 typedef enum {
   RC_NONE,       /* its own C variable, lv_<name> */
-  RC_HEAP,       /* is_cell: a heap cell an escaping proc shares with the
+  RC_HEAP        /* is_cell: a heap cell an escaping proc shares with the
                     scope, read and written through *_cell_<name> */
-  RC_BYREF,      /* byref_out: a String parameter the method mutates in
-                    place, the caller's own slot passed as const char ** */
-  RC_ALIAS       /* inline_alias: a parameter an inline expansion binds to
-                    the caller's variable for its duration */
 } ReprCell;
 
 /* Is value v (of representation r) typed as the handle while its own text
@@ -178,6 +174,7 @@ int repr_boxed_reader_handle(Compiler *c, int v);
 /* The representation of node `node`'s value. */
 Repr repr_of(const Compiler *c, int node);
 int repr_self_handle(const Compiler *c, int scope);
+int repr_self_boxed(const Compiler *c, int scope);
 int repr_self_shared(const Compiler *c, int node);
 /* The representation of a local variable's slot (a global's and a
    constant's LocalVar too). */
@@ -215,17 +212,6 @@ int repr_dyn_cls(const Compiler *c, TyKind t);
 /* the flag readers that decide it (old names: box_nullable_arg, the local
    arm of call_returns_nullable_int) */
 int repr_box_nullable_arg(Compiler *c, int v);
-/* Does a container of type t hold its Strings as `const char *` (a typed
-   String Array or a Hash with String values), so none can be the shared
-   handle? */
-int repr_typed_str_container(TyKind t);
-/* A retained typed literal whose String elements need shared handles. */
-int repr_str_literal_shares(Compiler *c, int node);
-/* Does the share rule decide which Strings are the shared handle
-   (--share-strings, #6765)? Codegen asks this, not the flag: where it is
-   0, every emitter takes master's form. */
-/* The share rule is the only one (one representation): folded away. */
-#define repr_share_rule(c) ((void)(c), 1)
 
 /* R1 (--repr-check): the form a boxer gave a value, recorded at each of
    emit_boxed's and emit_boxed_text's returns, and the form repr_of predicts

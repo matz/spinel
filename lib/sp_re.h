@@ -97,11 +97,6 @@ sp_bool sp_re_match_p_at(mrb_regexp_pattern *pat, const char *str, sp_int pos);
 sp_bool sp_re_case_eq(mrb_regexp_pattern *pat, sp_RbVal v);
 /* poly-operand match forms: either side may carry the pattern (#3961) */
 mrb_regexp_pattern *sp_poly_as_pattern(sp_RbVal v);
-/* The literals the program compiled at startup, noted there when an
-   identity Set's value is checked where it arrives (sp_idset_check): a
-   literal is one object per text here, one per literal in CRuby */
-void sp_re_note_literal(const mrb_regexp_pattern *pat);
-int sp_re_noted_literal_p(const void *pat);
 sp_bool sp_poly_match_p(sp_RbVal a, sp_RbVal b);
 sp_bool sp_poly_match_p_at(sp_RbVal a, sp_RbVal b, sp_int pos);
 sp_MatchData *sp_poly_match_data(sp_RbVal a, sp_RbVal b);
@@ -112,7 +107,6 @@ void sp_re_expand_rep(const mrb_regexp_pattern *pat, char **out_io, size_t *olen
 const char *sp_re_gsub(mrb_regexp_pattern *pat, const char *str, const char *rep);
 const char *sp_re_sub(mrb_regexp_pattern *pat, const char *str, const char *rep);
 sp_StrArray *sp_re_scan(mrb_regexp_pattern *pat, const char *str);
-#ifdef SP_ONE_STRING
 /* String#scan with a block, one match a turn over the String as it is then
    (rb_str_scan): sp_re_scan_next answers the next match, a String of its
    own, or NULL past the last; a turn that changed the String's length
@@ -126,7 +120,6 @@ static inline void sp_re_scan_begin(sp_re_scan_it *it, struct sp_String_s *h) {
 }
 const char *sp_re_scan_next(mrb_regexp_pattern *pat, sp_re_scan_it *it);
 sp_PolyArray *sp_re_scan_next_row(mrb_regexp_pattern *pat, sp_re_scan_it *it);
-#endif
 sp_StrArray *sp_re_split(mrb_regexp_pattern *pat, const char *str);
 sp_StrArray *sp_re_split_limit(mrb_regexp_pattern *pat, const char *str, sp_int limit);
 sp_oint sp_re_rindex_opt(mrb_regexp_pattern *pat, const char *str);
@@ -134,6 +127,7 @@ sp_RbVal sp_re_rindex_poly(mrb_regexp_pattern *pat, const char *str);
 sp_RbVal sp_re_index_poly(mrb_regexp_pattern *pat, const char *str);
 const char *sp_str_splice_re(mrb_regexp_pattern *pat, const char *s, const char *val);
 const char *sp_str_slice_re(mrb_regexp_pattern *pat, const char *s, const char **rest_out);
+void sp_re_nth_span(mrb_regexp_pattern *pat, const char *s, sp_int nth, sp_int *b, sp_int *e);   /* s[/re/, nth] = val's span */
 const char *sp_re_alt_join(const char *a, const char *b);  /* `a|b`, NUL-safe */
 const char *sp_re_source(void *pat);
 uint32_t sp_re_source_len(void *pat);   /* its byte length (may hold a NUL) */
@@ -203,6 +197,7 @@ sp_IntArray *sp_MatchData_offset(sp_MatchData *m, sp_int i);
 sp_oint sp_MatchData_bytebegin(sp_MatchData *m, sp_int i);
 sp_oint sp_MatchData_byteend(sp_MatchData *m, sp_int i);
 sp_IntArray *sp_MatchData_byteoffset(sp_MatchData *m, sp_int i);
+const char *sp_MatchData_match(sp_MatchData *m, sp_int i);
 sp_oint sp_MatchData_begin_name(sp_MatchData *m, const char *name);
 sp_oint sp_MatchData_end_name(sp_MatchData *m, const char *name);
 sp_IntArray *sp_MatchData_offset_name(sp_MatchData *m, const char *name);

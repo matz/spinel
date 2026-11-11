@@ -189,6 +189,32 @@ The `# bytes` lines carry their key in the third field rather than the first.
 - A process that forked after startup has the handler in the child but not the
   thread; the child falls back to the flag. Signal the parent.
 
+### Compiling it out: `SP_NO_ALLOC_REPORT`
+
+Off, the report costs one predictable branch per allocation, but its code and
+tables are still in every binary: the counters (`SP_ALLOC_STATS` entries, 8192
+by default) and the type-name table are static arrays, the constructor that
+reads the environment variable is linked whatever the program does, and the
+type-name tags the generated `sp_tu_init` registers keep each container kind's
+scan function in the link. On a target where flash and static RAM are the
+budget (a 32-bit microcontroller), define `SP_NO_ALLOC_REPORT` for both the
+runtime build and the generated C:
+
+```sh
+spinel app.rb -S > app.c
+cc -c app.c -DSP_NO_ALLOC_REPORT ...             # the program
+# and every lib/*.c of the runtime archive, with the same define
+```
+
+`sp_alloc_report_on` becomes the constant 0, every guarded call folds away,
+`sp_alloc_report_tag` becomes a no-op that drops its arguments (so the scan
+functions the generated tags name leave the link too), and `sp_alloc.c`
+defines none of the reporter. The generated C is the same either way. Defining it for the program but
+not the runtime still runs correctly, but the report then misses the
+allocations the program's inlined paths make and has no type names;
+defining it for the runtime but not the program fails at link time on
+`sp_alloc_report_on`. `make no-alloc-report-test` checks both halves.
+
 ## Which one to reach for
 
 Start with `--profile` and a sampler: it tells you which method to look at.

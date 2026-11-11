@@ -200,6 +200,19 @@ typedef struct sp_BoundMethod { void *self; sp_int fn; const char *name; sp_int 
   sp_int proc_params;     /* the rule its proc's #parameters follow,
                              SP_BM_PROC_PARAMS_*: stamped at the bind site
                              (sp_bm_set_proc_params) */
+  const char *ident;      /* "Owner#name" of the builtin method a synthesized
+                             wrapper stands for, a literal; NULL for any other
+                             target. Each `.method(:sym)` on a builtin receiver
+                             gets its own wrapper (its own fn), so two Methods
+                             of one builtin method differ in fn: sp_bm_same and
+                             sp_bm_hash read this key in place of it
+                             (sp_bm_set_ident) */
+  sp_int held;            /* self is the one-element sp_PolyArray a boxed
+                             receiver's wrapper (bam_poly) carries its receiver
+                             in, made afresh by every `.method(:sym)`: the
+                             receiver is that element, so sp_bm_same and
+                             sp_bm_hash read it in place of the holder
+                             (sp_bm_set_held) */
 } sp_BoundMethod;
 void sp_bm_cap_scan(void *p);
 void sp_method_proc_scan(void *p);
@@ -224,7 +237,7 @@ static inline sp_int sp_bm_fn_opaque(sp_int fn) {
   return fn;
 #endif
 }
-static inline sp_BoundMethod *sp_bound_method_new(void *self, sp_int self_kind, sp_int fn, const char *name, sp_int arity) { sp_BoundMethod *m = (sp_BoundMethod *)sp_gc_alloc(sizeof(sp_BoundMethod), NULL, sp_BoundMethod_scan); m->self = self; m->self_kind = self_kind; m->fn = sp_bm_fn_opaque(fn); m->name = name; m->arity = arity; m->desc = NULL; m->params = NULL; m->unbound = 0; m->recv_bound = 0; m->legacy_int_abi = 0; m->legacy_sig = NULL; m->legacy_fixed = 0; m->legacy_rest = 0; m->legacy_ret = SP_BM_RET_INT; m->poly_abi = 0; m->poly_fixed = 0; m->thunk = 0; m->thunk_min = 0; m->thunk_max = 0; m->owner = SP_CLASS_NIL; m->src_file = NULL; m->src_line = 0; m->proc_params = SP_BM_PROC_PARAMS_LIST; return m; }
+static inline sp_BoundMethod *sp_bound_method_new(void *self, sp_int self_kind, sp_int fn, const char *name, sp_int arity) { sp_BoundMethod *m = (sp_BoundMethod *)sp_gc_alloc(sizeof(sp_BoundMethod), NULL, sp_BoundMethod_scan); m->self = self; m->self_kind = self_kind; m->fn = sp_bm_fn_opaque(fn); m->name = name; m->arity = arity; m->desc = NULL; m->params = NULL; m->unbound = 0; m->recv_bound = 0; m->legacy_int_abi = 0; m->legacy_sig = NULL; m->legacy_fixed = 0; m->legacy_rest = 0; m->legacy_ret = SP_BM_RET_INT; m->poly_abi = 0; m->poly_fixed = 0; m->thunk = 0; m->thunk_min = 0; m->thunk_max = 0; m->owner = SP_CLASS_NIL; m->src_file = NULL; m->src_line = 0; m->proc_params = SP_BM_PROC_PARAMS_LIST; m->ident = NULL; m->held = 0; return m; }
 /* Tag a freshly-built Method with whether its target has the legacy sp_int C
    ABI, the per-position type signature, the fixed/rest slot counts, and how
    its sp_int C return boxes. The constructors default to 0 (unsafe), so every
@@ -271,12 +284,71 @@ static inline sp_RbVal sp_bm_box_ret(sp_BoundMethod *m, sp_int raw) {
 static inline sp_int sp_bm_norm_ret(sp_BoundMethod *m, sp_int raw) {
   return (m && SP_BM_RET_KIND(m->legacy_ret) == SP_BM_RET_BOOL) ? ((raw & 0xff) != 0) : raw;
 }
+/* The Method's receiver as a boxed value, for a target that takes self boxed
+   (a reopening of Object): by what the self slot holds. */
+static inline sp_RbVal sp_bm_self_boxed(const sp_BoundMethod *m) {
+  switch (m->self_kind) {
+    case SP_BM_SELF_OBJ:  return sp_box_nullable_obj_dyn(m->self, 0);
+    case SP_BM_SELF_STR:  return sp_box_str((const char *)m->self);
+    case SP_BM_SELF_BOOL: return sp_box_bool((sp_bool)(uintptr_t)m->self);
+    default:              return sp_box_int((sp_int)(uintptr_t)m->self);
+  }
+}
 /* Mark a statically-built instance_method/#unbind result as an UnboundMethod,
    so a later dynamic .call/[] through a container sees m->unbound and raises
    instead of invoking the instance C function with no self (#4395). */
 static inline sp_BoundMethod *sp_bm_set_unbound(sp_BoundMethod *m) { if (m) m->unbound = 1; return m; }
 /* Stamp the rule the Method's proc's #parameters follow (sp_BoundMethod.proc_params). */
 static inline sp_BoundMethod *sp_bm_set_proc_params(sp_BoundMethod *m, sp_int rule) { if (m) m->proc_params = rule; return m; }
+static inline sp_BoundMethod *sp_bm_set_held(sp_BoundMethod *m) { if (m) m->held = 1; return m; }
+static inline sp_BoundMethod *sp_bm_set_ident(sp_BoundMethod *m, const char *ident) { if (m) m->ident = ident; return m; }
+/* The receiver a held Method carries (sp_BoundMethod.held) and whether two
+   holders carry one value: the same tag and class and the same payload word,
+   which is an immediate's value or an object's identity. */
+static inline sp_RbVal sp_bm_held_recv(void *holder) { return sp_PolyArray_get_m((sp_PolyArray *)holder, 0); }
+static inline sp_bool sp_bm_held_recv_same(void *a, void *b) {
+  if (a == b) return 1;
+  sp_RbVal x = sp_bm_held_recv(a), y = sp_bm_held_recv(b);
+  if (x.tag != y.tag || x.cls_id != y.cls_id) return 0;
+  /* a Float is the whole double: on a 32-bit target sp_int is half of it, and
+     1.5 and 2.5 share their low word (compared by bits, as CRuby compares the
+     object: 0.0 and -0.0 are two receivers) */
+  if (x.tag == SP_TAG_FLT) return memcmp(&x.v.f, &y.v.f, sizeof(sp_float)) == 0;
+  return x.v.i == y.v.i;
+}
+/* Method#== / #eql? / #equal? and the Hash-key compare: the same bound receiver
+   and the same target -- one fn, or one builtin method (ident). A class
+   method has no fn (0), so its name tells it apart; an alias of a def shares
+   the fn and is equal, as CRuby's. */
+static inline sp_bool sp_bm_same(const sp_BoundMethod *x, const sp_BoundMethod *y) {
+  if (!x || !y) return x == y;
+  if (x->unbound != y->unbound) return 0;   /* (a Method is never an UnboundMethod's equal) */
+  if (x->held != y->held) return 0;
+  if (x->held) {
+    /* the receivers are the elements of two holders, equal as CRuby's
+       Method#== reads them: one value (an immediate's bits, or one object) */
+    if (!sp_bm_held_recv_same(x->self, y->self)) return 0;
+  }
+  else if (x->self != y->self) return 0;
+  if (x->ident || y->ident) return x->ident && y->ident && strcmp(x->ident, y->ident) == 0;
+  /* a held Method's wrapper is one per `.method(:sym)` site, and a boxed
+     receiver's class is only known at run time, so no ident names its method:
+     the same receiver value and the same name stand for one method (unless the
+     class is reopened between the two calls) */
+  if (x->held) return x->name == y->name || (x->name && y->name && strcmp(x->name, y->name) == 0);
+  if (x->fn != y->fn) return 0;
+  return x->fn != 0 || x->name == y->name || (x->name && y->name && strcmp(x->name, y->name) == 0);
+}
+/* The hash sp_bm_same agrees with. */
+static inline sp_int sp_bm_hash(const sp_BoundMethod *m) {
+  if (!m) return 0;
+  uintptr_t h = m->held ? (uintptr_t)sp_bm_held_recv(m->self).v.i * 31 : (uintptr_t)m->self * 31;
+  const char *k = m->ident ? m->ident : (m->fn == 0 || m->held ? m->name : NULL);
+  if (k) { for (; *k; k++) h = h * 33 + (unsigned char)*k; }
+  else h += (uintptr_t)m->fn;
+  return (sp_int)h;
+}
+
 /* The scalar-kind ABI token of a boxed argument (see abi_sig_token in
    codegen_call.c: TY_INT/TY_BOOL/TY_SYMBOL/TY_NIL are 1/2/3/4), or 0 when the
    value has no scalar sp_int slot at all (a pointer, Float, or Bigint). The
@@ -349,6 +421,7 @@ static inline sp_BoundMethod *sp_bm_unbind(sp_BoundMethod *m) {
   u->src_file = m->src_file;
   u->src_line = m->src_line;
   u->proc_params = m->proc_params;
+  u->ident = m->ident;
   u->unbound = 1;
   u->legacy_int_abi = m->legacy_int_abi;
   u->legacy_sig = m->legacy_sig;

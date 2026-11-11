@@ -54,8 +54,10 @@ module FFI
     native_func :type_align,   [:int],                 :int,     "sp_ffi_type_align"
     native_func :cif_new,      [:int, :int, :int, :int], :int,   "sp_ffi_cif_new"
     native_func :call,         [:int, :int, :int, :int], :void,  "sp_ffi_call"
+    native_func :call_blocking, [:int, :int, :int, :int], :void, "sp_ffi_call_blocking"
     native_func :ret_int,      [:int, :int],           :int,     "sp_ffi_ret_int"
     native_func :put_ret_int,  [:int, :int, :int],     :void,    "sp_ffi_put_ret_int"
+    native_func :note_fp,      [:string, :string, :int], :void,  "sp_ffi_note_fp"
     native_func :closure_new,  [:int, :int],           :int,     "sp_ffi_closure_new"
     native_func :errno,        [],                     :int,     "sp_ffi_errno"
     native_func :set_errno,    [:int],                 :void,    "sp_ffi_set_errno"
@@ -863,10 +865,12 @@ module FFI
   # A FunctionType is a signature: the argument types and the return type.
   # Used as a callback typedef it converts a proc into a C function pointer.
   class FunctionType < Type
-    attr_reader :return_type, :param_types, :varargs
+    attr_reader :return_type, :param_types, :varargs, :blocking
 
     def initialize(ret, params, options = nil)
       super(K_PTR, 8, 8, "CALLBACK")
+      # `blocking: true`: the call runs out of the world (#11350)
+      @blocking = options.is_a?(Hash) && options[:blocking] ? true : false
       @return_type = FFI.find_type(ret)
       ps = []
       @varargs = false
@@ -1040,7 +1044,7 @@ module FFI
       if args.size != params.size
         raise ::ArgumentError, "wrong number of arguments (given #{args.size}, expected #{params.size})"
       end
-      FFI.__invoke(ft.cif, @address, ft.return_type, params, args)
+      FFI.__invoke(ft.cif, @address, ft.return_type, params, args, ft.blocking)
     end
 
     # A C call landed in this closure: unpack the arguments, run the proc,
@@ -1068,7 +1072,7 @@ module FFI
   # One foreign call: marshal, call, unmarshal. Every argument gets a 16-byte
   # aligned slot (a struct by value gets its own size), and `avalues` points
   # at them.
-  def self.__invoke(cif, fn, rtype, params, args)
+  def self.__invoke(cif, fn, rtype, params, args, blocking = false)
     n = params.size
     total = 0
     offs = []
@@ -1093,7 +1097,11 @@ module FFI
       Native.put_int(av + i * 8, Type::K_PTR, slot)
       i += 1
     end
-    Native.call(cif, fn, av, rv)
+    if blocking
+      Native.call_blocking(cif, fn, av, rv)
+    else
+      Native.call(cif, fn, av, rv)
+    end
     result = rtype.void? ? nil : rtype.read_return(rv)
     keep.clear
     buf_s = nil
@@ -1665,10 +1673,12 @@ module FFI
       if addr == 0
         raise FFI::NotFoundError, "Function '#{csym}' not found in [#{libs.map(&:name).join(", ")}]"
       end
-      fn = Function.new(FunctionType.new(rtype, ptypes), Pointer.new(addr))
+      fn = Function.new(FunctionType.new(rtype, ptypes, opts), Pointer.new(addr))
       @ffi_functions ||= {}
       @ffi_functions[name.to_sym] = fn
       ::FFI__Registry.__add(self, name.to_sym, fn)
+      # the compiled program's pointer for a literal attach (#11362)
+      Native.note_fp(self.name.to_s, name.to_s, addr)
       fn
     end
 

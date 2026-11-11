@@ -114,6 +114,29 @@ reports the root group (`phase=root|fibers|globals|scan`) and the object before
 invoking anything. New tests for this family assert under the flag; without it
 they pass against the broken build.
 
+**One kind of GC object is static.** A frozen String literal is one
+`sp_StringLiteral` (`lib/sp_types.h`): a GC header and the handle, defined
+statically per literal the unit names (`fzl_emit_defs`), and by the runtime
+for `nil.to_s`, `true.to_s` and `false.to_s`. It reaches `sp_gc_mark` through
+the last row of the table, as any GC object does, and its header is a real one,
+written by `SP_STRING_LITERAL_INIT`. The collector never allocated it, so no
+list holds it and no sweep, finalizer or recycle reaches it. It holds nothing
+collectable either, since its bytes carry `0xf1`. Its header says the rest:
+
+- `next` points at the header itself, which no listed header does. That is how
+  the `SPINEL_GC_VERIFY` registry check (`sp_gc_obj_registered`) recognises it.
+- `old`: a minor mark returns at it, and a major mark stamps it and stops, since
+  it has no `scan`. This saves the minor mark.
+- `pinned`: it takes no entry in the sticky remembered set.
+- `frozen` is the String's frozen bit. Its size is 0, so it counts nothing to
+  the live bytes.
+
+A store of it takes no write barrier (`wb_value_never_young`, `src/codegen.c`).
+The barrier exists so that a minor mark finds a young object an old holder now
+points at, and an object that is never freed and holds nothing needs no mark to
+survive. The tests pin the self-link: without it, the verifier aborts at the
+first literal it marks. They do not pin `old` or `pinned`, which only save work.
+
 ## Marking
 
 The mark phase is **full by default**. `sp_gc_mark_all` walks every root every
@@ -270,8 +293,7 @@ than a chance:
   ```
 
   A swept object keeps its `sp_gc_hdr` so that this can name its scan hook
-  and size, and a swept string its header, marker byte and length; a block
-  freed explicitly is poison throughout;
+  and size; a block freed explicitly is poison throughout;
 - the program reads a pointer out of it and faults on an address of `0xdb`
   bytes (the reporter says `phase = ?`: the fault is the program's, not the
   mark's), or copies that pointer into a live object, where the next mark
@@ -279,7 +301,7 @@ than a chance:
 - the program reads a number or a string out of it and prints `0xdb` bytes
   where the answer was, which a test's expected output catches.
 
-A block the allocator hands out unzeroed (a string, a raw payload) holds
+A block the allocator hands out unzeroed (a raw payload) holds
 `0xdb` too where it used to hold a dead block's bytes, so a read of memory
 nobody wrote shows the same way.
 

@@ -82,6 +82,27 @@ void holder_ivar(const Compiler *c, int node, int cid, int cls_slot, HolderRef *
   if (!g_holder_bare) out->r = repr_of_holder(c, out);
 }
 
+/* Is constant path `id` read off a Class VALUE (`k::BUF`, `pick::BUF`,
+   `[A, B].each { |k| k::BUF }`), not off a written constant? prt is its
+   parent's type as the caller knows it (repr_of's in the emitters,
+   infer_type's in the analysis). Which constant it names is the run time's:
+   the class the value carries owns it, so the read has no one slot
+   (emit_constant_value switches on the class, the analysis types the
+   agreement of the owners', and a holder answers none). A constant that
+   HOLDS a class (`BLOCK = Probe::Block; BLOCK::CODE`) is a value too; a
+   leaf the record bound to one member's slot (const_leaf_bound) is that
+   constant's. */
+int const_path_on_class_value(const Compiler *c, int id, TyKind prt) {
+  Compiler *mc = (Compiler *)c;
+  const NodeTable *nt = c->nt;
+  if (nt_kind(nt, id) != NK_ConstantPathNode || !const_key_at(mc, id)) return 0;
+  int par = nt_ref(nt, id, "parent");
+  NodeKind pk = par >= 0 ? nt_kind(nt, par) : NK_NONE;
+  if (par < 0 || ((pk == NK_ConstantReadNode || pk == NK_ConstantPathNode) &&
+                  !(pk == NK_ConstantReadNode && an_const_read_is_value(mc, par)))) return 0;
+  return (prt == TY_CLASS || prt == TY_POLY) && !const_leaf_bound(mc, id);
+}
+
 int holder_of_node(const Compiler *c, int node, HolderRef *out) {
   return holder_of_node_in(c, node, holder_cbody(c, node), out);
 }
@@ -141,6 +162,10 @@ int holder_of_node_in(const Compiler *c, int node, int body, HolderRef *out) {
     if (nt_kind(c->nt, node) == NK_ConstantPathNode &&
         (const_path_in_closed_builtin(mc, node) || const_path_misses_toplevel(mc, node)))
       return 0;
+    /* `k::BUF` off a Class value: the class the value carries owns the
+       constant, so there is no one slot (emit_constant_value switches) */
+    if (nt_kind(c->nt, node) == NK_ConstantPathNode &&
+        const_path_on_class_value(c, node, repr_of(c, nt_ref(c->nt, node, "parent")).as_ty)) return 0;
     out->lv = comp_const(mc, const_key_at(mc, node));
     if (!out->lv) return 0;
     break;
@@ -193,7 +218,7 @@ int holder_slot_buf(Compiler *c, const HolderRef *h, Buf *b) {
   case HK_CONST: {
     /* a constant not assigned yet is a NameError at the read; the text stays an lvalue */
     if (!b) return 1;
-    int cptr = (int)nt_int(c->nt, h->node, "const_ptr", 0);   /* its slot, held by emit_const_recv_wrap */
+    int cptr = view_const_slot(c, h->node);   /* its slot, held by emit_const_recv_wrap */
     if (cptr) buf_printf(b, "(*_p%d)", cptr);
     else emit_const_slot_read(c, h->node, h->lv, h->lv->name, 0, 0, b);
     return 1;

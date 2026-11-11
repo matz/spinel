@@ -1,5 +1,5 @@
 # A string handed to a method and RETAINED in an ivar that is mutated in place
-# has to stay the caller's string. The byref machinery only covered a callee
+# has to stay the caller's string. Sharing once covered only a callee
 # that mutates the PARAMETER itself; one that merely stores it and mutates it
 # later, through the ivar, left the caller holding a value copy and the two
 # drifted apart (#4363). Both directions matter: the callee's mutation must
@@ -202,7 +202,7 @@ p [pr.one, pr.two]
 # it holds, and the slot the mutation goes through belongs to a DIFFERENT
 # class, so the mutation census -- which keys on calls whose receiver is an
 # ivar read -- records nothing against the retaining one. The propagation only
-# ever ran param -> argument (a parameter that is byref, or already a handle,
+# ever ran param -> argument (a parameter that is already a handle
 # pulls its call sites' locals into the shared set), so the reading half was
 # handed sp_str_concat(...) -- a snapshot -- and never saw the write. What a
 # handle is PASSED TO is a handle, which is the call-site twin of the rule the

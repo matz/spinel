@@ -90,7 +90,9 @@ on whichever of an fd or the deadline comes first. An
 `syswrite`, and the buffered reads and writes over them) wait the same way,
 on the descriptor between non-blocking record-layer steps. A backtick,
 `system` and `Process.waitpid2` in a green thread wait for the child without
-holding the worker either.
+holding the worker either, and so do the waits with flags (`Process.wait2(pid,
+Process::WUNTRACED)`); `Process::WNOHANG` asks once and answers nil for a child
+still running, with no wait at all.
 
 Why this matters beyond fairness: a collection stops the world at
 safepoints, and a worker sitting in a syscall never reaches one, so a thread

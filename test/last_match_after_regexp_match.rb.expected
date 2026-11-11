@@ -1,0 +1,21 @@
+#<MatchData "ac" 1:"a" 2:nil 3:"c">
+#<MatchData "ac" 1:"a" 2:nil 3:"c">
+["ac", "a", nil, "c"]
+"a"
+nil
+""
+""
+["ac", "a", nil, "c"]
+["a", nil, "c"]
+#<MatchData "a" 1:"a">
+1
+["ca", "c", "a"]
+"a"
+#<MatchData "ca" 1:"c" 2:"a">
+"key"
+"val"
+"val"
+nil
+nil
+#<MatchData "x" 1:"x">
+"x"

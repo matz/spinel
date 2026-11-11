@@ -1,0 +1,24 @@
+ok "top:1"
+ArgumentError: wrong number of arguments (given 1, expected 0)
+ArgumentError: wrong number of arguments (given 1, expected 0)
+ArgumentError: wrong number of arguments (given 2, expected 0)
+arg ran
+ArgumentError: wrong number of arguments (given 1, expected 0)
+ArgumentError: wrong number of arguments (given 1, expected 0)
+ok "String"
+ArgumentError: wrong number of arguments (given 1, expected 0)
+ok "top:6"
+ArgumentError: wrong number of arguments (given 1, expected 0)
+ArgumentError: wrong number of arguments (given 1, expected 0)
+ArgumentError: wrong number of arguments (given 1, expected 0)
+ok "X::T"
+ArgumentError: wrong number of arguments (given 1, expected 0)
+ArgumentError: wrong number of arguments (given 1, expected 0)
+ok nil
+"wrong number of arguments (given 1, expected 0)"
+"wrong number of arguments (given 2, expected 0)"
+"wrong number of arguments (given 1, expected 0)"
+[ArgumentError]
+"F!"
+"G4"
+"G5"

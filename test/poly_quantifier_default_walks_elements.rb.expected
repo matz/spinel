@@ -1,0 +1,10 @@
+[false, true]
+[true, false]
+[false, true]
+[false, true]
+[true, false]
+[false, true]
+[false, true]
+[true, false]
+[:quiet_any, :quiet_none]
+NoMethodError

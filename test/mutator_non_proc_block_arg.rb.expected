@@ -1,0 +1,27 @@
+no implicit conversion of Integer into Proc
+no implicit conversion of String into Proc
+no implicit conversion of Integer into Proc
+no implicit conversion of Integer into Proc
+no implicit conversion of Integer into Proc
+no implicit conversion of Integer into Proc
+no implicit conversion of Integer into Proc
+no implicit conversion of Foo into Proc
+"no implicit conversion of Integer into Proc"
+"no implicit conversion of Integer into Proc"
+TypeError
+[1]
+r
+v
+no implicit conversion of Integer into Proc
+no implicit conversion of Integer into Proc
+[1, 7, 7, 7]
+8
+no implicit conversion of Integer into Proc
+[1, 2, 3, 4, 5]
+true
+{1 => 2}
+{1 => 2, 3 => 4}
+no implicit conversion of Integer into Proc
+"Zbc"
+"X"
+"ZbX"

@@ -85,6 +85,7 @@ int holder_cvar_owner(const Compiler *c, int node, const char *nm, int body);
    class-level global, a top-level method's Toplevel global, nothing
    inside an instance_eval block. */
 int holder_of_node(const Compiler *c, int node, HolderRef *out);
+int const_path_on_class_value(const Compiler *c, int id, TyKind prt);   /* a path read off a Class value: no one slot */
 int holder_of_node_slot(const Compiler *c, int node, HolderRef *out);   /* no Repr */
 /* holder_of_node, in the class body `body` the caller says (codegen passes
    the body it is emitting, g_class_body_id); only a class variable's

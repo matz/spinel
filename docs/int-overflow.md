@@ -22,6 +22,13 @@ spinel app.rb --int-overflow=promote
 | **`wrap`** | two's-complement wraparound, like C (`a + b` with no check) | no | modular arithmetic, hashes, checksums, PRNGs -- anywhere defined wraparound *is* the intent |
 | **`promote`** | promotes the result to an arbitrary-precision integer (bigint) | yes | CRuby-faithful integer math (experimental, see below) |
 
+The mode says what an overflowing operation does. Whether a Bignum may exist
+at all is a separate switch, [`--no-bigint`](#no-bignum-at-all---no-bigint): even
+under `raise` a loop's growth pattern, a literal past `sp_int` and an
+overflowing constant power make one, and `--no-bigint` turns those off too. It
+combines with `raise` and `wrap`; with `promote`, whose overflow is a Bignum,
+it is refused.
+
 The mode applies to integer `+`, `-`, `*`, unary `-`, and (under `promote`) `**`
 and shifts. It does not change division: `1 / 0` is always a
 `ZeroDivisionError` regardless of mode.
@@ -115,6 +122,31 @@ test` run the corpus in the other two modes (each with its own precompiled
 header): the tests that pin a raise-mode RangeError stay out of both, the
 `promote_*` tests run only in promote, and a test whose answer is the Bignum
 the default mode's growth-pattern promotion produced stays out of wrap.
+
+## No Bignum at all: `--no-bigint`
+
+Even under `raise`, a few places produce a Bignum by design: a `while` loop's
+growth pattern (fibonacci-shaped `c = a + b`, self-referential `x *= y`)
+widens its locals, an integer literal past `sp_int` is a Bignum constant, and
+a constant power that overflows folds to one. Each of these links the bigint
+runtime, and on a 32-bit microcontroller that is tens of KB of flash (the
+bigint arithmetic plus the float formatting and libm it reaches).
+
+```sh
+spinel app.rb --no-bigint
+```
+
+- the loop-growth detectors are off: the accumulator stays an `Integer`, and
+  its overflow raises `RangeError` (`integer overflow in +`) like any other
+  raise-mode arithmetic;
+- a value that can only be a Bignum is a compile error at its line, naming the
+  reason: on a 32-bit target, a literal such as `0xdeadbeef` (write it as a
+  negative number, or build it from shifts) or `2**40`;
+- `--no-bigint --int-overflow=promote` is refused (exit 2): promote is
+  overflow into Bignum.
+
+It combines with `raise` (default) and `wrap`. `make no-bigint-test` checks
+the loop, the refusal and that no `sp_bigint_*` symbol is in the binary.
 
 ## Using it when you compile the C yourself
 

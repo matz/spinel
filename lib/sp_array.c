@@ -855,14 +855,12 @@ sp_StrArray*sp_StrArray_uniq(sp_StrArray*a){SP_GC_ROOT(a);sp_StrArray*b=sp_StrAr
    Array is rooted: the joined String's allocation can collect, and the
    encoding pass reads the elements again after it. */
 const char*sp_StrArray_join(sp_StrArray*a,const char*sep){SP_GC_ROOT(a);SP_GC_ROOT_STR(sep);if(!sep)sep="";if(!a)return sp_str_empty;size_t sl=sp_str_byte_len(sep),cap=256;char*buf=(char*)sp_pl_alloc(cap);size_t len=0;for(sp_int i=0;i<a->len;i++){if(i>0){if(len+sl>=cap){cap*=2;buf=(char*)sp_pl_realloc(buf,cap);}memcpy(buf+len,sep,sl);len+=sl;}const char*_e=SP_SEB(a->data[i])?SP_SEB(a->data[i]):"";size_t el=sp_str_byte_len(_e);if(len+el>=cap){cap=((len+el)*2)+1;buf=(char*)sp_pl_realloc(buf,cap);}memcpy(buf+len,_e,el);len+=el;}buf[len]=0;char*r=sp_str_alloc(len);memcpy(r,buf,len);sp_str_set_len(r,len);sp_pl_free(buf);/* the joined encoding, part by part as CRuby picks it (sp_str_enc_step) */{int st=-1;size_t off=0;int sb=sp_str_is_binary(sep);for(sp_int i=0;i<a->len;i++){if(i>0){st=sp_str_enc_step(st,r,off,sep,sl,sb);off+=sl;}const char*_e=SP_SEB(a->data[i])?SP_SEB(a->data[i]):"";size_t el=sp_str_byte_len(_e);st=sp_str_enc_step(st,r,off,_e,el,a->data[i]&&sp_str_is_binary(_e));off+=el;}if(st==1)sp_str_mark_binary(r);}return r;}
-/* An element is rooted as one (SP_SER): under one String it is the handle,
+/* An element is rooted as one (SP_GC_ROOT): it is the handle,
    which SP_GC_ROOT_STR read as bytes and kept nothing of, so the handle
    insert made for a new String was freed while the Array grew. */
-sp_bool sp_StrArray_include_e(sp_StrArray*a,sp_strelem v){SP_GC_ROOT(a);SP_SER(v);if (SP_UNLIKELY(!a)) sp_nil_recv("include?");for(sp_int i=0;i<a->len;i++)if(sp_str_eq(SP_SEB(a->data[i]),SP_SEB(v)))return TRUE;return FALSE;}
-#ifdef SP_ONE_STRING
-/* the same asked with bytes, which under the mode is not an element */
-sp_bool sp_StrArray_include_s(sp_StrArray*a,const char*v){SP_GC_ROOT(a);SP_GC_ROOT_STR(v);if (SP_UNLIKELY(!a)) sp_nil_recv("include?");for(sp_int i=0;i<a->len;i++)if(sp_str_eq(SP_SEB(a->data[i]),v))return TRUE;return FALSE;}
-#endif
+sp_bool sp_StrArray_include_e(sp_StrArray*a,sp_strelem v){SP_GC_ROOT(a);SP_GC_ROOT(v);if (SP_UNLIKELY(!a)) sp_nil_recv("include?");for(sp_int i=0;i<a->len;i++)if(sp_str_eq(SP_SEB(a->data[i]),SP_SEB(v)))return TRUE;return FALSE;}
+/* the same asked with bytes, which is not an element */
+sp_bool sp_StrArray_include(sp_StrArray*a,const char*v){SP_GC_ROOT(a);SP_GC_ROOT_STR(v);if (SP_UNLIKELY(!a)) sp_nil_recv("include?");for(sp_int i=0;i<a->len;i++)if(sp_str_eq(SP_SEB(a->data[i]),v))return TRUE;return FALSE;}
 sp_StrArray*sp_StrArray_intersect(sp_StrArray*a,sp_StrArray*b){SP_GC_ROOT(a);SP_GC_ROOT(b);sp_StrArray*r=sp_StrArray_new();if(!a||!b)return r;
   if (sp_setop_hashes(b->len, a->len)) {
     sp_sset in_b, seen; sp_sset_init(&in_b, b->len, 1); sp_sset_init(&seen, a->len, 1);
@@ -903,8 +901,8 @@ sp_StrArray*sp_StrArray_difference(sp_StrArray*a,sp_StrArray*b){SP_GC_ROOT(a);SP
    nil (NULL) elements are skipped so a holey/sparse array can't crash strcmp. */
 sp_strelem sp_StrArray_min_e(sp_StrArray*a){if (SP_UNLIKELY(!a)) sp_nil_recv("min"); if (a->len<=0)return NULL;sp_strelem m=NULL;for(sp_int i=0;i<a->len;i++){sp_strelem x=a->data[i];if(x&&(!m||sp_str_cmp_bytes(SP_SEB(x),SP_SEB(m))<0))m=x;}return m;}
 sp_strelem sp_StrArray_max_e(sp_StrArray*a){if (SP_UNLIKELY(!a)) sp_nil_recv("max"); if (a->len<=0)return NULL;sp_strelem m=NULL;for(sp_int i=0;i<a->len;i++){sp_strelem x=a->data[i];if(x&&(!m||sp_str_cmp_bytes(SP_SEB(x),SP_SEB(m))>0))m=x;}return m;}
-sp_int sp_StrArray_index_e(sp_StrArray*a,sp_strelem v){SP_GC_ROOT(a);SP_SER(v);for(sp_int i=0;i<a->len;i++)if(sp_str_eq(SP_SEB(a->data[i]),SP_SEB(v)))return i;return -1;}
-sp_int sp_StrArray_rindex_e(sp_StrArray*a,sp_strelem v){SP_GC_ROOT(a);SP_SER(v);for(sp_int i=a->len-1;i>=0;i--)if(sp_str_eq(SP_SEB(a->data[i]),SP_SEB(v)))return i;return -1;}
+sp_int sp_StrArray_index_e(sp_StrArray*a,sp_strelem v){SP_GC_ROOT(a);SP_GC_ROOT(v);for(sp_int i=0;i<a->len;i++)if(sp_str_eq(SP_SEB(a->data[i]),SP_SEB(v)))return i;return -1;}
+sp_int sp_StrArray_rindex_e(sp_StrArray*a,sp_strelem v){SP_GC_ROOT(a);SP_GC_ROOT(v);for(sp_int i=a->len-1;i>=0;i--)if(sp_str_eq(SP_SEB(a->data[i]),SP_SEB(v)))return i;return -1;}
 sp_StrArray*sp_StrArray_compact(sp_StrArray*a){SP_GC_ROOT(a);sp_StrArray*r=sp_StrArray_new();if (SP_UNLIKELY(!a)) sp_nil_recv("compact");for(sp_int i=0;i<a->len;i++)if(a->data[i]!=NULL)sp_StrArray_push_e(r,a->data[i]);return r;}
 /* A scalar array cannot nest, but it can hold nil, so compact has to filter. */
 sp_IntArray*sp_IntArray_compact(sp_IntArray*a){SP_GC_ROOT(a);sp_IntArray*r=sp_IntArray_new();if (SP_UNLIKELY(!a)) sp_nil_recv("compact");for(sp_int i=0;i<a->len;i++)if(!sp_IntArray_elem_nil(a,i))sp_IntArray_push(r,a->data[a->start+i]);return r;}
@@ -929,9 +927,9 @@ sp_FloatArray*sp_FloatArray_nil_cmp_ck(sp_FloatArray*a){if(!a||!a->nilbits)retur
 sp_IntArray*sp_IntArray_nil_sum_ck(sp_IntArray*a,int float_seed){if(!a||!a->nilbits)return a;for(sp_int i=0;i<a->len;i++)if(sp_IntArray_elem_nil(a,i))sp_raise_cls("TypeError",float_seed?"nil can't be coerced into Float":"nil can't be coerced into Integer");return a;}
 sp_FloatArray*sp_FloatArray_nil_sum_ck(sp_FloatArray*a,int float_seed){if(!a||!a->nilbits)return a;for(sp_int i=0;i<a->len;i++)if(sp_FloatArray_elem_nil(a,i))sp_raise_cls("TypeError",(i>0||float_seed)?"nil can't be coerced into Float":"nil can't be coerced into Integer");return a;}
 sp_strelem sp_StrArray_delete_at_e(sp_StrArray*a,sp_int i){SP_GC_ROOT(a); sp_gc_wb((void*)a);if (SP_UNLIKELY(!a)) sp_nil_recv("delete_at");if(i<0)i+=a->len;if(i<0||i>=a->len)return NULL;if(a->frozen){sp_raise_frozen_array_at(a, SP_BUILTIN_STR_ARRAY);return NULL;}sp_strelem v=a->data[i];for(sp_int j=i;j<a->len-1;j++)a->data[j]=a->data[j+1];a->len--;return v;}
-sp_strelem sp_StrArray_delete_e(sp_StrArray*a,sp_strelem v){SP_GC_ROOT(a);SP_SER(v); sp_gc_wb((void*)a);if (SP_UNLIKELY(!a)) sp_nil_recv("delete");if(a->frozen){if(sp_StrArray_index_e(a,v)>=0)sp_raise_frozen_array_at(a, SP_BUILTIN_STR_ARRAY);return NULL;}sp_int w=0;sp_strelem found=NULL;for(sp_int i=0;i<a->len;i++){if(!sp_str_eq(SP_SEB(a->data[i]),SP_SEB(v))){a->data[w]=a->data[i];w++;}
+sp_strelem sp_StrArray_delete_e(sp_StrArray*a,sp_strelem v){SP_GC_ROOT(a);SP_GC_ROOT(v); sp_gc_wb((void*)a);if (SP_UNLIKELY(!a)) sp_nil_recv("delete");if(a->frozen){if(sp_StrArray_index_e(a,v)>=0)sp_raise_frozen_array_at(a, SP_BUILTIN_STR_ARRAY);return NULL;}sp_int w=0;sp_strelem found=NULL;for(sp_int i=0;i<a->len;i++){if(!sp_str_eq(SP_SEB(a->data[i]),SP_SEB(v))){a->data[w]=a->data[i];w++;}
 else{found=a->data[i];}}a->len=w;return found;}
-void sp_StrArray_insert_e(sp_StrArray*a,sp_int i,sp_strelem v){SP_GC_ROOT(a);SP_SER(v); sp_gc_wb((void*)a);if (SP_UNLIKELY(!a)) sp_nil_recv("insert");if(a->frozen){sp_raise_frozen_array_at(a, SP_BUILTIN_STR_ARRAY);return;}sp_int orig=i;if(i<0)i+=a->len+1;if(i<0)sp_raise_cls("IndexError",sp_sprintf("index %lld too small for array; minimum: %lld",(long long)orig,(long long)(-(a->len+1))));while(i>a->len)sp_StrArray_push(a,NULL);/* CRuby pads with nils past the end */sp_StrArray_push_e(a,SP_SEF(sp_str_empty));for(sp_int j=a->len-1;j>i;j--)a->data[j]=a->data[j-1];a->data[i]=v;}
+void sp_StrArray_insert_e(sp_StrArray*a,sp_int i,sp_strelem v){SP_GC_ROOT(a);SP_GC_ROOT(v); sp_gc_wb((void*)a);if (SP_UNLIKELY(!a)) sp_nil_recv("insert");if(a->frozen){sp_raise_frozen_array_at(a, SP_BUILTIN_STR_ARRAY);return;}sp_int orig=i;if(i<0)i+=a->len+1;if(i<0)sp_raise_cls("IndexError",sp_sprintf("index %lld too small for array; minimum: %lld",(long long)orig,(long long)(-(a->len+1))));while(i>a->len)sp_StrArray_push(a,NULL);/* CRuby pads with nils past the end */sp_StrArray_push_e(a,sp_String_new_shared(sp_str_empty));for(sp_int j=a->len-1;j>i;j--)a->data[j]=a->data[j-1];a->data[i]=v;}
 void sp_StrArray_shuffle_bang(sp_StrArray*a){SP_GC_ROOT(a); sp_gc_wb((void*)a);if (SP_UNLIKELY(!a)) sp_nil_recv("shuffle!");if(a->frozen){sp_raise_frozen_array_at(a, SP_BUILTIN_STR_ARRAY);return;}for(sp_int i=a->len-1;i>0;i--){sp_int j=sp_krand_below(i+1);sp_strelem t=a->data[i];a->data[i]=a->data[j];a->data[j]=t;}}
 sp_StrArray*sp_StrArray_dup(sp_StrArray*a){if(!a)return NULL;SP_GC_ROOT(a);sp_StrArray*r=sp_StrArray_new();sp_StrArray_replace(r,a);return r;}
 sp_StrArray*sp_StrArray_sort(sp_StrArray*a){SP_GC_ROOT(a);if (SP_UNLIKELY(!a)) sp_nil_recv("sort");sp_StrArray*b=sp_StrArray_dup(a);sp_StrArray_sort_bang(b);return b;}
@@ -998,7 +996,7 @@ void sp_str_upto_each(const char *s, const char *e, sp_int excl, int (*fn)(const
   }
 }
 static int sp_str_upto_push(const char *m, void *arg) {
-  sp_StrArray_push_e((sp_StrArray *)arg, SP_SEF(m));
+  sp_StrArray_push_e((sp_StrArray *)arg, sp_String_new_shared(m));
   return 0;
 }
 sp_StrArray *sp_StrArray_from_string_range(const char *s, const char *e, sp_int excl) {SP_GC_ROOT_STR(s);SP_GC_ROOT_STR(e);
@@ -1037,8 +1035,8 @@ sp_PtrArray *sp_IntArray_product(sp_IntArray *a, sp_IntArray *b) {
 const char*sp_PtrArray_str_join(sp_PtrArray*a,const char*sep){SP_GC_ROOT(a);SP_GC_ROOT_STR(sep);sp_int al=a->len;if(al==0)return sp_str_empty;size_t sl=strlen(sep),total=0;for(sp_int i=0;i<al;i++){if(i>0)total+=sl;sp_String*s=(sp_String*)a->data[i];if(s)total+=(size_t)s->len;}char*r=sp_str_alloc(total);size_t cur=0;for(sp_int i=0;i<al;i++){if(i>0){memcpy(r+cur,sep,sl);cur+=sl;}sp_String*s=(sp_String*)a->data[i];if(s&&s->len){memcpy(r+cur,s->data,(size_t)s->len);cur+=(size_t)s->len;}}return r;}
 sp_RbVal sp_IntArray_index_poly(sp_IntArray *a, sp_int v)         {SP_GC_ROOT(a); sp_int n = sp_IntArray_index(a, v);   return n < 0 ? sp_box_nil() : sp_box_int(n); }
 sp_RbVal sp_IntArray_rindex_poly(sp_IntArray *a, sp_int v)        {SP_GC_ROOT(a); sp_int n = sp_IntArray_rindex(a, v);  return n < 0 ? sp_box_nil() : sp_box_int(n); }
-sp_RbVal sp_StrArray_index_poly_e(sp_StrArray *a, sp_strelem v)     {SP_GC_ROOT(a);SP_SER(v); sp_int n = sp_StrArray_index_e(a, v);   return n < 0 ? sp_box_nil() : sp_box_int(n); }
-sp_RbVal sp_StrArray_rindex_poly_e(sp_StrArray *a, sp_strelem v)    {SP_GC_ROOT(a);SP_SER(v); sp_int n = sp_StrArray_rindex_e(a, v);  return n < 0 ? sp_box_nil() : sp_box_int(n); }
+sp_RbVal sp_StrArray_index_poly_e(sp_StrArray *a, sp_strelem v)     {SP_GC_ROOT(a);SP_GC_ROOT(v); sp_int n = sp_StrArray_index_e(a, v);   return n < 0 ? sp_box_nil() : sp_box_int(n); }
+sp_RbVal sp_StrArray_rindex_poly_e(sp_StrArray *a, sp_strelem v)    {SP_GC_ROOT(a);SP_GC_ROOT(v); sp_int n = sp_StrArray_rindex_e(a, v);  return n < 0 ? sp_box_nil() : sp_box_int(n); }
 sp_oint sp_IntArray_index_opt(sp_IntArray *a, sp_int v)          {SP_GC_ROOT(a); sp_int n = sp_IntArray_index(a, v);   return n < 0 ? sp_oint_nil() : sp_oint_of(n); }
 sp_oint sp_IntArray_rindex_opt(sp_IntArray *a, sp_int v)         {SP_GC_ROOT(a); sp_int n = sp_IntArray_rindex(a, v);  return n < 0 ? sp_oint_nil() : sp_oint_of(n); }
 /* index(nil) / rindex(nil): the first (last) nil element */
@@ -1166,78 +1164,5 @@ sp_PtrArray *sp_PtrArray_slice_bang(sp_PtrArray *a, sp_int from, sp_int n) {SP_G
   for (sp_int i = 0; i < n; i++) sp_PtrArray_push(r, a->data[from + i]);
   for (sp_int i = from; i + n < a->len; i++) a->data[i] = a->data[i + n];
   a->len -= n;
-  return r;
-}
-
-/* ---- String Arrays of handles (--share-strings, TY_STRH_ARRAY) ---- */
-void *sp_StrhArray_str_elem(const char *s) { return sp_String_new_shared(s); }
-sp_PtrArray *sp_StrhArray_new(void) {
-  sp_PtrArray *a = sp_PtrArray_new();
-  a->elem_kind = SP_PTR_ELEM_STRBUF;
-  return a;
-}
-/* a new Array of the same Strings (dup): stamped as its source is, which
-   sp_PtrArray_dup leaves to the boxing */
-sp_PtrArray *sp_StrhArray_dup(sp_PtrArray *a) {
-  SP_GC_ROOT(a);
-  sp_PtrArray *b = sp_StrhArray_new();
-  SP_GC_ROOT(b);
-  for (sp_int i = 0; a && i < a->len; i++) sp_PtrArray_push(b, a->data[i]);
-  return b;
-}
-/* an Array of String bytes no other name holds (a split, a literal of
-   frozen Strings), each element taken as a handle: a frozen literal's own
-   handle, else a new one, so no name sees a copy */
-sp_PtrArray *sp_StrhArray_from_strs(sp_StrArray *a) {
-  SP_GC_ROOT(a);
-  sp_PtrArray *b = sp_StrhArray_new();
-  SP_GC_ROOT(b);
-  for (sp_int i = 0; a && i < a->len; i++) sp_PtrArray_push(b, SP_SEH(a->data[i]));
-  return b;
-}
-/* the bytes of element e, nil's NULL kept */
-static const char *sp_str_h_bytes(void *e) { return e ? ((sp_String *)e)->data : NULL; }
-sp_bool sp_StrhArray_include(sp_PtrArray *a, const char *v) {
-  SP_GC_ROOT(a); SP_GC_ROOT_STR(v);
-  for (sp_int i = 0; a && i < a->len; i++) {
-    const char *e = sp_str_h_bytes(a->data[i]);
-    if (e ? v && sp_str_eq(e, v) : !v) return TRUE;
-  }
-  return FALSE;
-}
-sp_bool sp_StrhArray_eq(sp_PtrArray *a, sp_PtrArray *b) {
-  if (a == b) return TRUE;
-  if (!a || !b || a->len != b->len) return FALSE;
-  for (sp_int i = 0; i < a->len; i++) {
-    const char *x = sp_str_h_bytes(a->data[i]), *y = sp_str_h_bytes(b->data[i]);
-    if (x ? !y || !sp_str_eq(x, y) : y != NULL) return FALSE;
-  }
-  return TRUE;
-}
-/* join with sp_StrArray_join's rules: nil joins as "", and the result's
-   encoding is picked part by part as CRuby picks it (sp_str_enc_step) */
-const char *sp_StrhArray_join(sp_PtrArray *a, const char *sep) {
-  if (!sep) sep = "";
-  if (!a) return sp_str_empty;
-  SP_GC_ROOT(a); SP_GC_ROOT_STR(sep);
-  size_t sl = sp_str_byte_len(sep), len = 0;
-  for (sp_int i = 0; i < a->len; i++) {
-    const char *e = sp_str_h_bytes(a->data[i]);
-    len += (i > 0 ? sl : 0) + (e ? sp_str_byte_len(e) : 0);
-  }
-  char *r = sp_str_alloc(len);
-  size_t off = 0;
-  int st = -1, sb = sp_str_is_binary(sep);
-  for (sp_int i = 0; i < a->len; i++) {
-    if (i > 0) { memcpy(r + off, sep, sl); st = sp_str_enc_step(st, r, off, sep, sl, sb); off += sl; }
-    const char *e = sp_str_h_bytes(a->data[i]);
-    size_t el = e ? sp_str_byte_len(e) : 0;
-    if (el) memcpy(r + off, e, el);
-    st = sp_str_enc_step(st, r, off, e ? e : "", el, e && sp_str_is_binary(e));
-    off += el;
-  }
-  r[len] = 0;
-  sp_str_set_len(r, len);
-  if (st == 1) sp_str_mark_binary(r);
   return r;
 }

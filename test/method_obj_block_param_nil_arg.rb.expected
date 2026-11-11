@@ -1,0 +1,6 @@
+12
+"nil can't be coerced into Integer"
+3.0
+4
+TypeError
+[11, 12]

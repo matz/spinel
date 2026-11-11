@@ -84,6 +84,8 @@ src/analyze_util.c io_reopen_defs a name's presence in an IO reopening
 src/analyze_util.c io_reopen_ret_mixed a name's presence in an IO reopening
 src/codegen.c exc_class_defines a name's presence on an exception class
 src/codegen_call.c any_class_defines a name's presence
+src/codegen_call.c emit_class_value_responds_helper comp_cmethod_in_chain each class's own class methods, for respond_to? with a run-time name
+src/codegen_call.c emit_reopen_arm_test comp_cmethod_in_chain which classes define a class Class reopening's name otherwise
 src/codegen_call.c class_method_named a name's presence as a class method
 src/codegen_call.c diag_user_defines a name's presence
 src/codegen_call.c exc_subclass_defines a name's presence on an exception class
@@ -149,7 +151,6 @@ src/codegen_util.c exc_text_override_calls_super message / to_s
 
 # a scope's own name, super from its def's name
 src/analyze.c a_block_forwarded_to_proc =u super, by its def's name
-src/analyze.c a_super_target super, by its def's name
 src/analyze.c an_presence_observe a scope's own name
 src/analyze.c an_super_object_text super, by its def's name
 src/analyze.c an_super_struct_text super, by its def's name
@@ -159,7 +160,6 @@ src/analyze.c dyn_site_may_reach a scope's own name
 src/analyze.c dyn_site_misses a scope's own name
 src/analyze.c inline_replacing_def a scope's own name
 src/analyze.c iter_disc_self_targets =cur->name a scope's own name
-src/analyze.c super_parent_method =sn super, by its def's name
 src/analyze.c pf_in_class_dispatch a scope's own name
 src/analyze.c pf_scope_named a scope's own name
 src/analyze.c pf_wanted a scope's own name
@@ -195,9 +195,11 @@ src/codegen.c sg_delegate_scope a scope's own name
 src/codegen.c sg_parent_answers_as_object a scope's own name
 src/codegen.c range_rat_walk_own_def a name's presence in a Range, Enumerable or Integer reopen
 src/codegen.c struct_display_owned whether the program owns a Struct's inspect or to_s
-src/codegen_call_class.c emit_respond_to_runtime_name =c->scopes[s].name a scope's own name
+src/codegen.c ext_emit_method_thunk the class that defines an exported method's name (--ext-class)
+src/codegen.c ext_emit_attr_rows whether a def answers an attr's name (--ext-class)
+src/codegen.c ext_emit_method_tables the class that defines an exported method's name (--ext-class)
+src/codegen_call_class.c rtr_lists_build =c->scopes[s].name a scope's own name
 src/codegen_expr.c defined_super_reaches super, by its def's name
-src/codegen_util.c ivs_super_method super, by its def's name
 src/codegen_util.c proc_form_source a proc form's source method, by its own name
 src/codegen_util.c scope_proc_form_of a scope's own proc-form clone, by its own name
 src/codegen_util.c mc_number_versions whether Object has a top-level function of a main method's own name, which would share its C name
@@ -214,7 +216,7 @@ src/analyze_scope.c pivs_callable_lit a Symbol argument's method
 src/analyze_util.c class_value_bind_call_gap a Symbol argument's method
 src/analyze_util.c class_value_bind_call_target a Symbol argument's method
 src/analyze_util.c method_obj_lookup a Method object's method
-src/analyze_util.c method_super_target super_method: the Method's def's own name, a step up its owner
+src/analyze_util.c ext_method_exported the method a class answers for an exported name (--ext-class)
 src/codegen_call.c class_responds_to a Symbol argument's method (respond_to?)
 src/codegen_call.c method_hidden_from_reflection a reflected method's name
 src/codegen_call.c obj_responds_answer a Symbol argument's method (respond_to?)
@@ -228,6 +230,7 @@ src/codegen_call_class.c emit_refl_im_params a reflected method's name
 src/codegen_call_class.c obj_defines_own whether the receiver's class defines the reflection method itself
 src/codegen_call_class.c emit_refl_method_defined a reflected method's name
 src/codegen_call_method.c emit_method_obj_target =disp arity metadata for a boxed receiver's method, not an invocation target
+src/codegen_call_method.c bam_recv_reopen_answers whether a reopening defines a name on a boxed receiver's builtin class chain, not an invocation target
 src/codegen_call_method.c emit_method_params_by_recv parameters metadata for a boxed receiver's method, as its arity, not an invocation target
 src/codegen_call_method.c emit_op_method_arity a Symbol argument's method
 src/codegen_call_method.c emit_method_source_target a Symbol argument's method
@@ -317,3 +320,4 @@ src/codegen_call.c class_value_builtin_answers whether a reopened Class or Modul
 src/codegen_call.c root_reopen_defines_own whether a reopening of Object, Kernel or BasicObject defines a name itself, for respond_to?
 src/codegen_call.c bool_side_responds whether true's or false's class defines a name itself, for respond_to?
 src/analyze_pass.c sg_override_ret the parent's method of a singleton override's own name, whose answer the override's return must also hold
+src/compiler.c comp_super_site =nm a proc-form clone supers as its owner's proc-form clone, by its name

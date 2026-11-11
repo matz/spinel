@@ -1825,6 +1825,8 @@ def cmd_pack(prj, targets, outdir)
   spin_die("pack: the compiler did not report where its runtime lives") if rtdir == ""
   Dir.glob(File.join(rtdir, "*.c")).each { |f| pack_copy(f, File.join(outdir, "lib", File.basename(f))) }
   Dir.glob(File.join(rtdir, "*.h")).each { |f| pack_copy(f, File.join(outdir, "lib", File.basename(f))) }
+  # (a table a runtime .c includes: lib/sp_unicase_map.inc)
+  Dir.glob(File.join(rtdir, "*.inc")).each { |f| pack_copy(f, File.join(outdir, "lib", File.basename(f))) }
   Dir.glob(File.join(rtdir, "regexp", "*.c")).each { |f| pack_copy(f, File.join(outdir, "lib", "regexp", File.basename(f))) }
   Dir.glob(File.join(rtdir, "regexp", "*.h")).each { |f| pack_copy(f, File.join(outdir, "lib", "regexp", File.basename(f))) }
   Dir.glob(File.join(rtdir, "regexp", "*.inc")).each { |f| pack_copy(f, File.join(outdir, "lib", "regexp", File.basename(f))) }
@@ -2579,7 +2581,7 @@ def cmd_ext_build(root)
   # unique across lib/ and lib/regexp/); the gem then builds with cc alone.
   rt = ext_runtime_dir
   n = 0
-  (Dir.glob(File.join(rt, "*.c")) + Dir.glob(File.join(rt, "*.h")) +
+  (Dir.glob(File.join(rt, "*.c")) + Dir.glob(File.join(rt, "*.h")) + Dir.glob(File.join(rt, "*.inc")) +
    Dir.glob(File.join(rt, "regexp", "*.c")) + Dir.glob(File.join(rt, "regexp", "*.h")) +
    Dir.glob(File.join(rt, "regexp", "*.inc")) + Dir.glob(File.join(rt, "regexp", "shim", "*.h"))).each do |f|
     File.write(File.join(extdir, File.basename(f)), File.read(f))

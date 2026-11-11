@@ -1,5 +1,5 @@
-# Byref eligibility used to require the method name to be unique in the whole
-# program. Two things followed, and both are wrong:
+# Sharing a String parameter's appends used to require the method name to be
+# unique in the whole program. Two things followed, and both are wrong:
 #
 #   1. Adding an UNUSED class with a same-named method took the ABI away from
 #      a method that had it, so a callee's appends stopped reaching the
@@ -7,9 +7,9 @@
 #   2. Two methods that agree perfectly about the parameter were both refused,
 #      which is the ordinary shape: a view layer with `show` in nine modules.
 #
-# What a call site needs is that every arm it can reach agrees on the ABI, so
-# that is what is required now: the whole name group takes it or none does,
-# and a class no one can instantiate is not in the group.
+# What a call site needs is that every arm it can reach takes the parameter
+# the same way (the caller's handle), whichever class defines it, and a class
+# no one can instantiate is not an arm.
 class HtmlWriter
   def write_to(buf)
     buf << ("<p>" * 20_000)

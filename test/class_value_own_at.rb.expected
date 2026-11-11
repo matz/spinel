@@ -1,0 +1,29 @@
+[String, String, Time]
+20
+"stamp1"
+NoMethodError
+NoMethodError
+3
+nil
+7
+"stamp0"
+[1, 2]
+NoMethodError
+NoMethodError
+4
+1970
+["stamp2", "stamp2"]
+NoMethodError
+6
+1
+NoMethodError
+TypeError
+4
+nil
+"b"
+1.5
+"a"
+["stamp5", "stamp3"]
+20
+20
+NoMethodError

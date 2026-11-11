@@ -95,21 +95,19 @@ void sp_StrStrHash_scan(void*p);
 void sp_StrStrHash_init_embedded(sp_StrStrHash*h);
 sp_StrStrHash*sp_StrStrHash_new(void);
 sp_StrStrHash*sp_StrStrHash_new_with_default_e(sp_strelem d);
-static inline sp_StrStrHash*sp_StrStrHash_new_with_default(const char*d){return sp_StrStrHash_new_with_default_e(SP_SEFX(d));}
+static inline sp_StrStrHash*sp_StrStrHash_new_with_default(const char*d){return sp_StrStrHash_new_with_default_e(sp_strelem_fx(d));}
 void sp_StrStrHash_grow(sp_StrStrHash*h);
 sp_strelem sp_StrStrHash_get_e(sp_StrStrHash*h,const char*k);
-/* the element's bytes (SP_SEB): what a reader of the String takes; the element as the container keeps it is the _e form, the handle under SP_ONE_STRING */
+/* the element's bytes (SP_SEB): what a reader of the String takes; the element as the container keeps it is the _e form, the handle */
 static inline const char *sp_StrStrHash_get(sp_StrStrHash*h,const char*k){sp_strelem e=sp_StrStrHash_get_e(h,k);return SP_SEB(e);}
 void sp_StrStrHash_set_e(sp_StrStrHash*h,const char*k,sp_strelem v);
-#ifdef SP_ONE_STRING
 void sp_StrStrHash_mark_env(sp_StrStrHash*h);
-#endif
-static inline void sp_StrStrHash_set(sp_StrStrHash*h,const char*k,const char*v){sp_StrStrHash_set_e(h,k,SP_SEFX(v));}
+static inline void sp_StrStrHash_set(sp_StrStrHash*h,const char*k,const char*v){sp_StrStrHash_set_e(h,k,sp_strelem_fx(v));}
 sp_bool sp_StrStrHash_has_key(sp_StrStrHash*h,const char*k);
 /* h.fetch(k, d) in one probe: the value's bytes, or d when k is absent */
 const char *sp_StrStrHash_fetch_or(sp_StrStrHash*h,const char*k,const char*d);
 sp_bool sp_StrStrHash_has_value_e(sp_StrStrHash*h,sp_strelem v);
-static inline sp_bool sp_StrStrHash_has_value(sp_StrStrHash*h,const char*v){return sp_StrStrHash_has_value_e(h,SP_SEFX(v));}
+static inline sp_bool sp_StrStrHash_has_value(sp_StrStrHash*h,const char*v){return sp_StrStrHash_has_value_e(h,sp_strelem_fx(v));}
 sp_int sp_StrStrHash_length(sp_StrStrHash*h);
 void sp_StrStrHash_delete(sp_StrStrHash*h,const char*k);
 sp_StrArray*sp_StrStrHash_keys(sp_StrStrHash*h);
@@ -126,10 +124,10 @@ void sp_IntStrHash_scan(void*p);
 void sp_IntStrHash_init_embedded(sp_IntStrHash*h);
 sp_IntStrHash*sp_IntStrHash_new(void);
 sp_IntStrHash*sp_IntStrHash_new_with_default_e(sp_strelem d);
-static inline sp_IntStrHash*sp_IntStrHash_new_with_default(const char*d){return sp_IntStrHash_new_with_default_e(SP_SEFX(d));}
+static inline sp_IntStrHash*sp_IntStrHash_new_with_default(const char*d){return sp_IntStrHash_new_with_default_e(sp_strelem_fx(d));}
 void sp_IntStrHash_grow(sp_IntStrHash*h);
 void sp_IntStrHash_set_e(sp_IntStrHash*h,sp_int k,sp_strelem v);
-static inline void sp_IntStrHash_set(sp_IntStrHash*h,sp_int k,const char*v){sp_IntStrHash_set_e(h,k,SP_SEFX(v));}
+static inline void sp_IntStrHash_set(sp_IntStrHash*h,sp_int k,const char*v){sp_IntStrHash_set_e(h,k,sp_strelem_fx(v));}
 sp_strelem sp_IntStrHash_get_e(sp_IntStrHash*h,sp_int k);
 static inline const char *sp_IntStrHash_get(sp_IntStrHash*h,sp_int k){sp_strelem e=sp_IntStrHash_get_e(h,k);return SP_SEB(e);}
 sp_IntStrHash*sp_IntStrHash_merge(sp_IntStrHash*a,sp_IntStrHash*b);
@@ -137,7 +135,7 @@ void sp_IntStrHash_update(sp_IntStrHash*a,sp_IntStrHash*b);
 sp_bool sp_IntStrHash_has_key(sp_IntStrHash*h,sp_int k);
 const char *sp_IntStrHash_fetch_or(sp_IntStrHash*h,sp_int k,const char*d);
 sp_bool sp_IntStrHash_has_value_e(sp_IntStrHash*h,sp_strelem v);
-static inline sp_bool sp_IntStrHash_has_value(sp_IntStrHash*h,const char*v){return sp_IntStrHash_has_value_e(h,SP_SEFX(v));}
+static inline sp_bool sp_IntStrHash_has_value(sp_IntStrHash*h,const char*v){return sp_IntStrHash_has_value_e(h,sp_strelem_fx(v));}
 sp_int sp_IntStrHash_length(sp_IntStrHash*h);
 sp_IntArray*sp_IntStrHash_keys(sp_IntStrHash*h);
 sp_StrArray*sp_IntStrHash_values(sp_IntStrHash*h);

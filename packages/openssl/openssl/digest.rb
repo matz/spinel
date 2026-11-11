@@ -254,7 +254,23 @@ module OpenSSL
 
     def digest = HMAC.digest(@algo, @key, @data)
     def hexdigest = HMAC.hexdigest(@algo, @key, @data)
-    def to_s = hexdigest
+    def base64digest = [digest].pack("m0")
+
+    # As CRuby: inspect and to_s show the MAC (never the key or the data),
+    # and two HMAC objects are equal when their MACs are equal. Anything
+    # that is not an HMAC is not equal, a String with the same hex included.
+    # (CRuby's are aliases of this class's #hexdigest, so a subclass's own
+    # #hexdigest does not change them; the interpolation types it a String)
+    def inspect = "#{HMAC.hexdigest(@algo, @key, @data)}"
+    alias to_s inspect
+
+    def ==(other)
+      return false unless HMAC === other
+      mine = digest
+      theirs = other.digest
+      return false unless mine.bytesize == theirs.bytesize
+      OpenSSL.fixed_length_secure_compare(mine, theirs)
+    end
 
     def reset
       @data = ""

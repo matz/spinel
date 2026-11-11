@@ -40,19 +40,13 @@
    the emission (a class-tag arm's), for the Class emitters that answer
    from a statically known class; like a target it views no cached type.
 
-   view_push_splice marks a spliced method's parameter bound as an alias
-   of the caller's variable (inline_alias_params) that the call's block
-   assigns: the variable's argument node, the splice's tag and the
-   parameter's name. view_push_fn fences a C function emitted while such
-   splices are open (a proc's or a fiber's body), whose code cannot name
-   the splice's slots: view_splice_next walks the open splice entries from
-   the innermost down to the innermost fence. Neither views a node.
-
    view_push_arm does the same for the arm context a poly dispatch's
    builtin arm re-enters the call under (g_arm: the node whose dispatch
    declines its own re-entry, g_pd_skip and g_prbd_skip, and
-   g_poly_builtin_arm, under which no user class owns a name). It is no
-   view of a node: it counts toward neither view_depth nor view_epoch. */
+   g_poly_builtin_arm, under which no user class owns a name), and
+   view_push_gap_watch for the call whose own gap an arm reads as the
+   builtin declining (ArmCtx.gap_watch). Neither is a view of a node: they
+   count toward neither view_depth nor view_epoch. */
 
 #include "codegen_internal.h"
 #include "share.h"
@@ -62,7 +56,8 @@
 
 /* what an entry overrides: the node's type, one representation flag, or
    the arm context */
-enum { VK_TYPE = -1, VK_ARM = -2, VK_FACE = -3, VK_STMT = -4, VK_SPLICE = -5, VK_FN = -6, VK_TARGET = -7, VK_CONVERSION = -8, VK_CONST_READ = -9, VK_CLASS_IS = -10 };
+enum { VK_TYPE = -1, VK_ARM = -2, VK_FACE = -3, VK_STMT = -4, VK_TARGET = -7, VK_CONVERSION = -8,
+       VK_CONST_READ = -9, VK_CLASS_IS = -10, VK_CALL_NIL_TESTED = -11 };
 static struct { Compiler *c; int id; int kind; int saved; int val; ArmCtx arm_saved; const void *pre; } view_stack[VIEW_MAX];
 static int view_face = -1;   /* the innermost face entry, or -1 */
 static int view_stmt = -1;   /* the innermost statement entry, or -1 */
@@ -70,7 +65,7 @@ static int view_sp;
 static int view_nodes;   /* the entries that view a node (all but VK_ARM) */
 static unsigned view_epoch_n;
 
-ArmCtx g_arm = { -1, -1, 0, -1, -1, -1 };
+ArmCtx g_arm = { -1, -1, 0, -1, -1, -1, -1, NULL };
 
 /* Argument-hoist overrides: emit_args_filled pre-evaluates GC-hazardous
    call arguments into rooted temps; emit_expr then substitutes the temp
@@ -154,6 +149,7 @@ static int view_read(Compiler *c, int kind, int id) {
   case VR_NIL_TESTED:    return c->nil_tested[id];
   case VR_HEAD_HELD:     return c->head_held[id];
   case VR_DISCARDED:     return c->value_discarded[id];
+  case VR_STR_SHADOW:    return c->str_shadow[id];
   default:               return (int)c->nilnarrow[id];
   }
 }
@@ -166,6 +162,7 @@ static void view_write(Compiler *c, int kind, int id, int v) {
   case VR_NIL_TESTED:    c->nil_tested[id] = (unsigned char)v; break;
   case VR_HEAD_HELD:     c->head_held[id] = (unsigned char)v; break;
   case VR_DISCARDED:     c->value_discarded[id] = (unsigned char)v; break;
+  case VR_STR_SHADOW:    c->str_shadow[id] = (unsigned char)v; break;
   default:               comp_set_nilnarrow(c, id, (TyKind)v); break;
   }
 }
@@ -199,7 +196,8 @@ static int view_open(Compiler *c, int id, int kind, int v) {
   return tok;
 }
 
-int view_push_arm(int pd_skip, int prbd_skip, int builtin_arm) {
+/* a VK_ARM entry holding the arm context to put back at its pop */
+static int view_save_arm(void) {
   if (view_sp >= VIEW_MAX) {
     view_too_deep();
   }
@@ -208,9 +206,21 @@ int view_push_arm(int pd_skip, int prbd_skip, int builtin_arm) {
   view_stack[tok].id = -1;
   view_stack[tok].kind = VK_ARM;
   view_stack[tok].arm_saved = g_arm;
+  return tok;
+}
+
+int view_push_arm(int pd_skip, int prbd_skip, int builtin_arm) {
+  int tok = view_save_arm();
   g_arm.pd_skip = pd_skip;
   g_arm.prbd_skip = prbd_skip;
   g_arm.builtin_arm = builtin_arm;
+  return tok;
+}
+
+int view_push_gap_watch(int id, int *hit) {
+  int tok = view_save_arm();
+  g_arm.gap_watch = id;
+  g_arm.gap_hit = hit;
   return tok;
 }
 
@@ -337,29 +347,29 @@ int view_class_is(Compiler *c, int node, unsigned reads) {
 }
 unsigned view_class_is_read(int tok) { return tok >= 0 && tok < view_sp ? (unsigned)view_stack[tok].val : 0; }
 
-int view_push_splice(int arg, int tag, const char *pname) { return view_open_mark(VK_SPLICE, arg, tag, pname); }
-int view_push_fn(void) { return view_open_mark(VK_FN, -1, 0, NULL); }
+/* A re-entered call whose enclosing emission already tested its receiver.
+   This marks the call, whereas VR_NIL_TESTED marks a receiver value. */
+int view_push_call_nil_tested(Compiler *c, int id) {
+  int tok = view_open_mark(VK_CALL_NIL_TESTED, id, 0, NULL);
+  view_stack[tok].c = c;
+  view_nodes++;
+  view_epoch_n++;
+  return tok;
+}
 
-int view_splice_next(int from, int *arg, int *tag, const char **pname) {
-  for (int i = (from < 0 || from > view_sp ? view_sp : from) - 1; i >= 0; i--) {
-    if (view_stack[i].kind == VK_FN) return -1;
-    if (view_stack[i].kind != VK_SPLICE) continue;
-    *arg = view_stack[i].id;
-    *tag = view_stack[i].saved;
-    *pname = (const char *)view_stack[i].pre;
-    return i;
-  }
-  return -1;
+int view_call_nil_tested(Compiler *c, int id) {
+  for (int i = view_sp - 1; i >= 0; i--)
+    if (view_stack[i].kind == VK_CALL_NIL_TESTED && view_stack[i].c == c && view_stack[i].id == id) return 1;
+  return 0;
 }
 
 /* the entry on top, put back */
 static void view_close(int tok) {
-  if (view_stack[tok].kind == VK_SPLICE || view_stack[tok].kind == VK_FN) return;
   if (view_stack[tok].kind == VK_ARM) { g_arm = view_stack[tok].arm_saved; return; }
   if (view_stack[tok].kind == VK_FACE) { view_face = view_stack[tok].arm_saved.pd_skip; return; }
   if (view_stack[tok].kind == VK_STMT) { view_stmt = view_stack[tok].saved; return; }
   if (view_stack[tok].kind != VK_TARGET && view_stack[tok].kind != VK_CONVERSION && view_stack[tok].kind != VK_CONST_READ &&
-      view_stack[tok].kind != VK_CLASS_IS)
+      view_stack[tok].kind != VK_CLASS_IS && view_stack[tok].kind != VK_CALL_NIL_TESTED)
     view_write(view_stack[tok].c, view_stack[tok].kind, view_stack[tok].id, view_stack[tok].saved);
   view_nodes--;
   view_epoch_n++;
@@ -437,17 +447,28 @@ void arm_body_infer(Compiler *c, int site, int block, TyKind kind, const int *bo
   }
 }
 
-/* A constant receiver whose read effect the enclosing call already ran. */
-int view_const_read_done(Compiler *c, int id) {
+/* A constant receiver whose read effect already ran (saved is zero), or
+   whose slot address the enclosing call held in _p<saved>. */
+static int view_const_read_find(Compiler *c, int id, int slot) {
   for (int i = view_sp - 1; i >= 0; i--)
-    if (view_stack[i].kind == VK_CONST_READ && view_stack[i].c == c && view_stack[i].id == id) return 1;
-  return 0;
+    if (view_stack[i].kind == VK_CONST_READ && view_stack[i].c == c && view_stack[i].id == id &&
+        (view_stack[i].saved != 0) == slot) return view_stack[i].saved;
+  return -1;
 }
 
-int view_push_const_read(Compiler *c, int id) {
-  int tok = view_open_mark(VK_CONST_READ, id, 0, NULL);
+int view_const_read_done(Compiler *c, int id) { return view_const_read_find(c, id, 0) == 0; }
+
+int view_const_slot(Compiler *c, int id) {
+  int temp = view_const_read_find(c, id, 1);
+  return temp < 0 ? 0 : temp;
+}
+
+int view_push_const_slot(Compiler *c, int id, int temp) {
+  int tok = view_open_mark(VK_CONST_READ, id, temp, NULL);
   view_stack[tok].c = c;
   view_nodes++;
   view_epoch_n++;
   return tok;
 }
+
+int view_push_const_read(Compiler *c, int id) { return view_push_const_slot(c, id, 0); }

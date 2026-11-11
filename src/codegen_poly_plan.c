@@ -2140,9 +2140,11 @@ void emit_poly_prearms0(Compiler *c, int id, const char *name, const PolySpecial
       buf_printf(b, "sp_cls_allocate(_t%d)", tv);
     else if (sp_streq(name, "keyword_init?"))
       buf_printf(b, "sp_cls_keyword_init_p(_t%d)", tv);
-    else
-      buf_printf(b, "({ sp_Class _cs%d = sp_unbox_class(_t%d); _cs%d.cls_id >= 0 ? sp_class_superclass(_cs%d) : sp_builtin_superclass(_cs%d); })",
-                 tv, tv, tv, tv, tv);
+    else {
+      buf_printf(b, "({ sp_Class _cs%d = sp_unbox_class(_t%d); ", tv, tv);
+      emit_cv_canon(c, b, "_cs%d.cls_id >= 0 ? sp_class_superclass(_cs%d) : sp_builtin_superclass(_cs%d)", tv, tv, tv);
+      buf_puts(b, "; })");
+    }
     buf_printf(b, "%s; else ", cbc);
   }
   /* an OpenStruct answers ANY reader with its member value; checked ahead of
@@ -2155,7 +2157,10 @@ void emit_poly_prearms0(Compiler *c, int id, const char *name, const PolySpecial
     buf_printf(b, "if (_t%d.tag == SP_TAG_OBJ && _t%d.cls_id == SP_BUILTIN_OPENSTRUCT) _t%d = ",
                tv, tv, tr);
     if (ret == TY_POLY) buf_puts(b, osget);
-    else emit_unbox_text(c, ret, osget, b);   /* result slot is user-typed (#3264) */
+    /* the result slot is user-typed (#3264): an Integer or Float one that
+       holds nil (an oint) takes the member with its nil, as the other arms'
+       answers are taken */
+    else plan_put_boxed(c, plan_slot_oint(c, id, ret), ret, osget, b);
     buf_puts(b, "; else ");
   }
   /* to_a on a runtime builtin hash/array: pair-array via the boxed
@@ -2515,11 +2520,15 @@ int emit_poly_prearms0_blk(Compiler *c, int id, const char *name, const PolySpec
       buf_puts(b, "; }\nelse ");
     }
   }
-  /* each_line with a block on a boxed String, in a dispatch that exists
-     because a user class also defines it (a buffer that hands the block
-     on): the shared proc is driven over the lines, each a String of its
-     own, and the String answers itself */
-  if (sp_streq(name, "each_line") && argc == 0 && nt_ref(nt, id, "block") >= 0) {
+  /* each_line, each_char, each_byte or each_codepoint with a block on a
+     boxed String, in a dispatch that exists because a user class also
+     defines it (a buffer that hands the block on): the shared proc is
+     driven over the lines or characters, each a String of its own, or over
+     the bytes or codepoints as Integers, and the String answers itself.
+     Without the arm a String reaching `t.each_byte(&b)` fell to the raise. */
+  int str_walk = sp_streq(name, "each_line") || sp_streq(name, "each_char");
+  int int_walk = sp_streq(name, "each_byte") || sp_streq(name, "each_codepoint");
+  if ((str_walk || int_walk) && argc == 0 && nt_ref(nt, id, "block") >= 0) {
     if (blk_tmp0 < 0) {
       int cblk5 = resolve_forwarded_block(c, nt_ref(nt, id, "block"));
       if (cblk5 >= 0) blk_tmp0 = hoist_block_proc(c, cblk5);
@@ -2528,10 +2537,18 @@ int emit_poly_prearms0_blk(Compiler *c, int id, const char *name, const PolySpec
       if (g_plan_check) pa_observe(PA_BUILTIN, PA_KEY_BUILTIN + PB_ENUM_PROC, -1, TY_UNKNOWN, PC_SAME);
       int ta = ++g_tmp, ti = ++g_tmp;
       char lcall[400];
-      snprintf(lcall, sizeof lcall, "({ sp_StrArray *_t%d = sp_str_lines(sp_poly_recv_s(_t%d, \"each_line\")); SP_GC_ROOT(_t%d);"
-                                    " for (sp_int _t%d = 0; _t%d < sp_StrArray_length(_t%d); _t%d++)"
-                                    " sp_penum_call1(_t%d, SP_SEBOX(sp_StrArray_get_e(_t%d, _t%d))); _t%d; })",
-               ta, tv, ta, ti, ti, ta, ti, blk_tmp0, ta, ti, tv);
+      const char *walk = sp_streq(name, "each_line") ? "sp_str_lines" : sp_streq(name, "each_char") ? "sp_str_chars"
+                       : sp_streq(name, "each_byte") ? "sp_str_bytes" : "sp_str_codepoints";
+      if (str_walk)
+        snprintf(lcall, sizeof lcall, "({ sp_StrArray *_t%d = %s(sp_poly_recv_s(_t%d, \"%s\")); SP_GC_ROOT(_t%d);"
+                                      " for (sp_int _t%d = 0; _t%d < sp_StrArray_length(_t%d); _t%d++)"
+                                      " sp_penum_call1(_t%d, SP_SEBOX(sp_StrArray_get_e(_t%d, _t%d))); _t%d; })",
+                 ta, walk, tv, name, ta, ti, ti, ta, ti, blk_tmp0, ta, ti, tv);
+      else
+        snprintf(lcall, sizeof lcall, "({ sp_IntArray *_t%d = %s(sp_poly_recv_s(_t%d, \"%s\")); SP_GC_ROOT(_t%d);"
+                                      " for (sp_int _t%d = 0; _t%d < sp_IntArray_length(_t%d); _t%d++)"
+                                      " sp_penum_call1(_t%d, sp_box_int(sp_IntArray_get(_t%d, _t%d))); _t%d; })",
+                 ta, walk, tv, name, ta, ti, ti, ta, ti, blk_tmp0, ta, ti, tv);
       buf_printf(b, "if (_t%d.tag == SP_TAG_STR || sp_poly_is_strbuf(_t%d)) { _t%d = ", tv, tv, tr);
       if (ret == TY_POLY) buf_puts(b, lcall);
       else emit_unbox_text(c, ret, lcall, b);
@@ -2647,7 +2664,7 @@ void emit_poly_cases0(Compiler *c, int id, int recv, const char *name, const Pol
     view_unbind(g_n_argov - 1);
     /* an emission that fell through to the raise token adds nothing: leave
        those tags on the switch's own default so the message is the same */
-    int kept9 = ib9.p && strncmp(ib9.p, "sp_raise_nomethod(", 18) != 0;
+    int kept9 = ib9.p && !emitted_no_method(ib9.p);
     if (g_plan_check) pa_observe(PA_TRIAL, PA_KEY_TRIAL + PT_CONTAINER, -1, TY_UNKNOWN, kept9);
     if (kept9) {
       buf_puts(b, " case SP_BUILTIN_INT_ARRAY: case SP_BUILTIN_SYM_ARRAY:"
@@ -2704,7 +2721,8 @@ int emit_poly_defaults0(Compiler *c, int id, int recv, const char *name, const P
      blank. Route the fallthrough through the runtime poly converter. */
   if (!obj_default_done && (is_text_conversion(name))) {
     if (g_plan_check) pa_observe(PA_BUILTIN, PA_KEY_BUILTIN + PB_D_TO_S, -1, TY_UNKNOWN, PC_SAME);
-    const char *pfn = sp_streq(name, "to_s") ? "sp_poly_to_s" : "sp_poly_inspect";
+    /* (to_s as the program calls it: a Symbol's is a new String) */
+    const char *pfn = sp_streq(name, "to_s") ? "sp_poly_to_s_call" : "sp_poly_inspect";
     buf_printf(b, " default: _t%d = ", tr);
     if (ret == TY_STRBUF && repr_boxed_to_s_operand(c, id) >= 0) {
       /* (a String subclass instance's to_s is a new String, #9968) */
@@ -2866,22 +2884,27 @@ int emit_poly_defaults0(Compiler *c, int id, int recv, const char *name, const P
     buf_puts(b, "; break;");
     obj_default_done = 1;
   }
-  /* Blockless any? / none?: "is there an element", which every builtin
-     container answers. The switch carries an arm per user class owning the
-     name and none for a builtin, so a slot that may hold an Array OR such
-     an object raised NoMethodError on the Array -- naming Array, whose
-     method it is (#4264). In the DEFAULT, like the conversions around it:
-     a class that defines the name has its own case and never arrives. */
+  /* Blockless any? / none?, which every builtin container answers. The
+     switch carries an arm per user class owning the name and none for a
+     builtin, so a slot that may hold an Array OR such an object raised
+     NoMethodError on the Array -- naming Array, whose method it is (#4264).
+     In the DEFAULT, like the conversions around it: a class that defines
+     the name has its own case and never arrives. They ask whether an
+     element is truthy, which the boxed call's element walk answers
+     (emit_poly_quantifier_walk): asking whether there is one answered
+     `[nil].any?` true and an Integer Range's false. */
   if (!obj_default_done && argc == 0 && nt_ref(nt, id, "block") < 0 &&
       (sp_streq(name, "any?") || sp_streq(name, "none?"))) {
         if (g_plan_check) pa_observe(PA_BUILTIN, PA_KEY_BUILTIN + PB_D_ANY_NONE, -1, TY_UNKNOWN, PC_SAME);
-    int neg = sp_streq(name, "none?");
-    char av[96];
-    snprintf(av, sizeof av, "(sp_poly_length(_t%d) %s 0)", tv, neg ? "==" : ">");
-    buf_printf(b, " default: _t%d = ", tr);
+    int tn = ++g_tmp, tcnt = ++g_tmp, ti = ++g_tmp;
+    char av[96], ans[64];
+    buf_printf(b, " default: { SP_GC_ROOT_RBVAL(_t%d); ", tv);
+    emit_poly_quantifier_walk(c, id, tv, -1, tn, tcnt, ti, name, ans, sizeof ans, b);
+    snprintf(av, sizeof av, "(%s)", ans);
+    buf_printf(b, "_t%d = ", tr);
     if (ret == TY_POLY) emit_boxed_text(c, TY_BOOL, av, b);
     else buf_puts(b, av);
-    buf_puts(b, "; break;");
+    buf_puts(b, "; break; }");
     obj_default_done = 1;
   }
   /* to_h, the same shape: the switch carries an arm per class that defines
@@ -3561,11 +3584,8 @@ void emit_poly_prearms_n(Compiler *c, const char *name, const PolySpecialsN *ps,
        not read as a Range */
     else if (atmp_ty[0] == TY_POLY) {
       buf_printf(b, "if (_t%d.tag == SP_TAG_OBJ && _t%d.cls_id == SP_BUILTIN_RANGE)"
-                    " { _t%d = %s(_t%d.tag == SP_TAG_OBJ && _t%d.cls_id == SP_BUILTIN_RANGE && _t%d.v.p"
-                    " ? sp_range_cover_rng(*(sp_Range *)_t%d.v.p, *(sp_Range *)_t%d.v.p)"
-                    " : sp_range_cover_poly((sp_Range *)_t%d.v.p, _t%d))%s; }\nelse ",
-                 tv, tv, tr, ret == TY_POLY ? "sp_box_bool(" : "",
-                 atmp[0], atmp[0], atmp[0], tv, atmp[0], tv, atmp[0],
+                    " { _t%d = %ssp_range_cover_val((sp_Range *)_t%d.v.p, _t%d)%s; }\nelse ",
+                 tv, tv, tr, ret == TY_POLY ? "sp_box_bool(" : "", tv, atmp[0],
                  ret == TY_POLY ? ")" : "");
       /* a boxed String Range: a String by comparison, a String Range by its
          ends (sp_srange_cover_poly); it answered false */
@@ -3580,8 +3600,14 @@ void emit_poly_prearms_n(Compiler *c, const char *name, const PolySpecialsN *ps,
       char tn7[24]; snprintf(tn7, sizeof tn7, "_t%d", atmp[0]);
       Buf ab7; memset(&ab7, 0, sizeof ab7); emit_boxed_text(c, atmp_ty[0], tn7, &ab7);
       buf_printf(b, "if (_t%d.tag == SP_TAG_OBJ && _t%d.cls_id == SP_BUILTIN_RANGE)"
-                    " { _t%d = %ssp_range_cover_poly((sp_Range *)_t%d.v.p, %s)%s; }\nelse ",
+                    " { _t%d = %ssp_range_cover_val((sp_Range *)_t%d.v.p, %s)%s; }\nelse ",
                  tv, tv, tr, ret == TY_POLY ? "sp_box_bool(" : "", tv, ab7.p ? ab7.p : "sp_box_nil()",
+                 ret == TY_POLY ? ")" : "");
+      /* a Float Range covers a Range by its ends, and no other value of
+         these classes (sp_frange_cover_val) */
+      buf_printf(b, "if (_t%d.tag == SP_TAG_OBJ && _t%d.cls_id == SP_BUILTIN_FLOAT_RANGE && _t%d.v.p)"
+                    " { _t%d = %ssp_frange_cover_val(*(sp_FloatRange *)_t%d.v.p, %s)%s; }\nelse ",
+                 tv, tv, tv, tr, ret == TY_POLY ? "sp_box_bool(" : "", tv, ab7.p ? ab7.p : "sp_box_nil()",
                  ret == TY_POLY ? ")" : "");
       /* a String Range covers by string comparison, as its === does, and a
          String Range by its ends (sp_srange_cover_poly) */
@@ -3608,10 +3634,7 @@ void emit_poly_prearms_n(Compiler *c, const char *name, const PolySpecialsN *ps,
                     " { _t%d = %s", tv, tv, tv, tr, ret == TY_POLY ? "sp_box_bool(" : "");
       /* a boxed Range argument is covered by its ends, not as a scalar */
       if (atmp_ty[0] == TY_POLY)
-        buf_printf(b, "(_t%d.tag == SP_TAG_OBJ && _t%d.cls_id == SP_BUILTIN_RANGE && _t%d.v.p"
-                      " ? sp_frange_cover_rng(*(sp_FloatRange *)_t%d.v.p, *(sp_Range *)_t%d.v.p)"
-                      " : sp_frange_cover_poly(*(sp_FloatRange *)_t%d.v.p, _t%d))",
-                   atmp[0], atmp[0], atmp[0], tv, atmp[0], tv, atmp[0]);
+        buf_printf(b, "sp_frange_cover_val(*(sp_FloatRange *)_t%d.v.p, _t%d)", tv, atmp[0]);
       /* an Integer against the Float bounds exactly (#7505) */
       else if (atmp_ty[0] == TY_INT) buf_printf(b, "sp_frange_cover_i(*(sp_FloatRange *)_t%d.v.p, _t%d)", tv, atmp[0]);
       else buf_printf(b, "sp_frange_cover(*(sp_FloatRange *)_t%d.v.p, (sp_float)_t%d)", tv, atmp[0]);
@@ -5197,11 +5220,22 @@ void emit_poly_defaults_n(Compiler *c, int id, int recv, const char *name, const
     int sum_done = !obj_arity && dl_open && ret == TY_POLY &&
                    emit_poly_default_blk_arm(c, id, name, argc, argv, atmp, atmp_ty, tv, tr, blk_tmp2, b);
     int answer = sum_done ? 1 : 0;
+    /* the builtin's re-entered call reads each keyword value from the temp
+       the dispatch evaluated it into, as the pack-sharing names above do: the
+       keyword hash has no temp of its own here (atmp holds none at its slot) */
+    int kwvmark = g_n_argov;
+    if (kw->kwtmp && bop_share_named(BOP_ANY_ARRAY, name) != BSH_PACK) {
+      for (int e = 0; e < kw->kwn; e++) {
+        int v = nt_ref(nt, kw->kwels[e], "value");
+        if (v >= 0) view_bind(v, "_t%d", kw->kwtmp[e]);
+      }
+    }
     if (!obj_arity && !sum_done && (!dl_open ||
         (!(answer = emit_poly_aset_default(c, name, argc, atmp, atmp_ty, ret, tv, tr, b) ? 2 : 0) &&
          !(answer = emit_poly_builtin_default(c, id, recv, name, argc, argv, atmp, atmp_ty,
                                               ret, tv, is_setter_val ? -1 : tr, 0, b) ? 3 : 0))))
       buf_printf(b, " sp_raise_nomethod(sp_nomethod_msg(\"%s\", _t%d)); break;", name, tv);
+    view_unbind(kwvmark);
     /* A declined builtin trial may leave a nested frame behind. Its
        result belongs to this switch, as the plan's trial does. */
     if (g_plan_check) pa_resume(pa_frame);

@@ -1,0 +1,27 @@
+NilClass: TypeError allocator undefined for NilClass
+TrueClass: TypeError allocator undefined for TrueClass
+FalseClass: TypeError allocator undefined for FalseClass
+Integer: TypeError allocator undefined for Integer
+Float: TypeError allocator undefined for Float
+Symbol: TypeError allocator undefined for Symbol
+Proc: TypeError allocator undefined for Proc
+Thread: TypeError allocator undefined for Thread
+Struct: TypeError allocator undefined for Struct
+Data: TypeError allocator undefined for Data
+via NilClass: TypeError allocator undefined for NilClass
+via TrueClass: TypeError allocator undefined for TrueClass
+via FalseClass: TypeError allocator undefined for FalseClass
+via Integer: TypeError allocator undefined for Integer
+via Float: TypeError allocator undefined for Float
+via Symbol: TypeError allocator undefined for Symbol
+via Proc: TypeError allocator undefined for Proc
+via Thread: TypeError allocator undefined for Thread
+via Struct: TypeError allocator undefined for Struct
+via Data: TypeError allocator undefined for Data
+Rational: NoMethodError
+Complex: NoMethodError
+String: String
+Array: Array
+Hash: Hash
+Object: Object
+Plain: Plain

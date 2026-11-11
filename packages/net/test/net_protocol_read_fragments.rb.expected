@@ -1,0 +1,17 @@
+"abc\r\n"
+"def\r\n"
+"a\r\n\r\n"
+"ab"
+"ab\r"
+EOFError
+"\n\r\nc"
+"long prefix\n"
+"bc\n"
+Net::ReadLimitExceeded
+"abc\r\n"
+"next\r\n"
+"a"
+ArgumentError
+"bcdef"
+Net::ReadLimitExceeded
+1

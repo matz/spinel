@@ -1,0 +1,4 @@
+[3, 1, 2, 1]
+[:r, :a, :h, :to_hash, :b, :to_proc]
+[3, 1, 2]
+[:r, :a, :h, :to_hash, :b, :to_proc, :r, :a, :h, :to_hash, :b, :to_proc]

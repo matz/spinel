@@ -160,7 +160,6 @@ int infer_range_call(Compiler *c, int id, TyKind rt, TyKind *out) {
     /* A name with no row is genuinely undefined: leave it UNKNOWN. The
        respond_to? probe reads that as "not dispatchable" (false), matching
        an ordinary int range, and a real call errors like any unknown method. */
-    if (object_reopen_answers(c, "Range", id, out)) return 1;
     { *out = TY_UNKNOWN; return 1; }
   }
   /* endless literal range: size is the Float infinity; take/first with a

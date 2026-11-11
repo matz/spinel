@@ -13,6 +13,7 @@
  * whose bytes live in a GC string so the collector frees them).
  */
 #include "spinel/runtime.h"
+#include "sp_sched.h"   /* sp_native_enter / sp_native_leave: no-ops without threads */
 #include <dlfcn.h>
 #include <errno.h>
 #include <limits.h>
@@ -49,6 +50,15 @@ sp_int sp_ffi_dlsym(sp_int handle, const char *name) {
   void *h = (void *)(intptr_t)handle;
   void *p = dlsym(h ? h : RTLD_DEFAULT, name);
   return (sp_int)(intptr_t)p;
+}
+
+/* The address an attach_function resolved, for a program that calls the
+   function through a pointer of its declared type instead of libffi (the
+   compiler's via_fp entries, #11362): the program points the hook at the
+   setter of its own pointers before main; with none, nothing is noted. */
+void (*sp_ffi_fp_hook)(const char *, const char *, sp_int);
+void sp_ffi_note_fp(const char *mod, const char *name, sp_int addr) {
+  if (sp_ffi_fp_hook && mod && name) sp_ffi_fp_hook(mod, name, addr);
 }
 
 sp_int sp_ffi_dlclose(sp_int handle) {
@@ -251,6 +261,20 @@ void sp_ffi_call(sp_int cif, sp_int fn, sp_int avalues, sp_int rvalue) {
   ffi_call((ffi_cif *)(intptr_t)cif, FFI_FN((void *)(intptr_t)fn),
            (void *)(intptr_t)rvalue, (void **)(intptr_t)avalues);
   sp_ffi_errno_v = errno;
+}
+
+/* The same call out of the world (`attach_function ..., blocking: true`): a
+   collection another thread starts does not wait for it, as for an ffi_func
+   declared blocking (#11350). The arguments are already marshaled into C
+   memory; the call touches no Ruby object. */
+void sp_ffi_call_blocking(sp_int cif, sp_int fn, sp_int avalues, sp_int rvalue) {
+  errno = sp_ffi_errno_v;
+  sp_native_enter();
+  ffi_call((ffi_cif *)(intptr_t)cif, FFI_FN((void *)(intptr_t)fn),
+           (void *)(intptr_t)rvalue, (void **)(intptr_t)avalues);
+  int e = errno;
+  sp_native_leave();
+  sp_ffi_errno_v = e;
 }
 
 /* A small integer return comes back widened to a full ffi_arg register. */

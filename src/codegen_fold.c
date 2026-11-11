@@ -5207,6 +5207,11 @@ int emit_sort_cmp_expr(Compiler *c, int id, Buf *b) {
      block has a `next` is boxed, as the next's value can be of another
      kind than the tail's */
   if (!nil_cmp && !cmp_boxed && cmp_ans_by_sign(c, cmp_ty) && iter_step_needs_frame(c, block)) nil_cmp = 1;
+  /* a tail with no value of its own -- a `raise`, a call of a method the
+     element lacks (`&:nope`) -- is taken boxed too: it raises for the first
+     pair. Standing down let the blockless sort run, and the block's
+     exception vanished. */
+  if (!cmp_boxed && (cmp_ty == TY_UNKNOWN || cmp_ty == TY_VOID)) nil_cmp = 1;
   if (nil_cmp) cmp_boxed = 1;
   else if (cmp_ty != TY_INT && !cmp_boxed && !cmp_ans_by_sign(c, cmp_ty)) return 0;
   /* an element parameter holding its nil (an Integer array with nils):
@@ -5417,6 +5422,9 @@ int emit_minmax_cmp_expr(Compiler *c, int id, Buf *b) {
      block has a `next` is boxed, as the next's value can be of another
      kind than the tail's */
   if (!nil_cmp && !cmp_boxed && cmp_ans_by_sign(c, cmp_ty) && iter_step_needs_frame(c, block)) nil_cmp = 1;
+  /* a tail with no value of its own raises for the first pair (as in
+     emit_sort_cmp_expr) */
+  if (!cmp_boxed && (cmp_ty == TY_UNKNOWN || cmp_ty == TY_VOID)) nil_cmp = 1;
   if (nil_cmp) cmp_boxed = 1;
   else if (cmp_ty != TY_INT && !cmp_boxed && !cmp_ans_by_sign(c, cmp_ty)) return 0;
   int trv = ++g_tmp, tn = ++g_tmp, tmin = ++g_tmp, tmax = ++g_tmp, ti = ++g_tmp, te = ++g_tmp;

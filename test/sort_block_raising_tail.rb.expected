@@ -1,0 +1,26 @@
+NoMethodError nil_nope
+NoMethodError nil_nope
+NoMethodError nil_nope
+RuntimeError sort
+RuntimeError sort!
+NoMethodError zork
+NoMethodError zork
+NoMethodError zork
+NoMethodError zork
+NoMethodError zork
+NoMethodError zork
+NoMethodError nil_nope
+RuntimeError min
+NoMethodError nil_nope
+NoMethodError nil_nope
+NoMethodError nil_nope
+NoMethodError zork
+NoMethodError zork
+UncaughtThrowError uncaught throw :x
+NoMethodError zork
+[3]
+nil
+[5, 3, 1]
+[3, 1]
+["a", "b"]
+[1, 3]

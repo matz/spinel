@@ -7666,8 +7666,21 @@ int ty_matches_class(Compiler *c, TyKind t, const char *cn, int exact) {
    when it has effects). */
 void emit_frozen_obj_guard(Compiler *c, int cid, const char *selfexpr, Buf *b) {
   if (cid < 0 || cid >= c->nclasses) return;
-  if (!c->classes[cid].freeze_observed || c->classes[cid].is_value_type) return;
+  if (c->classes[cid].is_value_type) return;
+  /* a method a subclass inherits writes the subclass's instance too: one only
+     the subclass freezes is frozen there (Base#memo on a frozen Child) */
+  int below = 0, observed = c->classes[cid].freeze_observed;
+  for (int j = 0; j < c->nclasses; j++)
+    if (j != cid && is_descendant(c, j, cid)) { below = 1; observed |= c->classes[j].freeze_observed; }
+  if (!observed) return;
   const char *rn = class_ruby_name(c, cid) ? class_ruby_name(c, cid) : c->classes[cid].name;
+  /* the receiver may be a subclass's: its own class names it, as CRuby's message does */
+  if (below && c->classes[cid].ary_root <= 0) {
+    buf_printf(b, "if (sp_gc_is_frozen((void *)%s)) sp_raise_frozen_obj(sp_box_obj((void *)%s, (int)(%s)->cls_id), "
+                  "sp_str_concat3((&(\"\\xff\" \"can't modify frozen \")[1]), sp_class_to_s(((sp_Class){(int)(%s)->cls_id, NULL})), (&(\"\\xff\" \"\")[1]))); ",
+               selfexpr, selfexpr, selfexpr, selfexpr);
+    return;
+  }
   /* an Array subclass instance is frozen as its Array is (#7449); a Hash
      subclass instance, as its Hash is, by the header bit, and a String
      subclass instance as its String handle is, by the same bit */

@@ -2447,7 +2447,6 @@ int an_yield_site_builtin_answer(Compiler *c, int id, TyKind kind, TyKind *out);
 int an_bop_facts(Compiler *c, const struct BuiltinOp *op, int id);
 const struct BuiltinOp *an_bop_row_for_kind(Compiler *c, int id, TyKind rt);
 const struct BuiltinOp *poly_scalar_row(TyKind k, const char *name, int argc, int has_block);   /* analyze_infer.c */
-int a_super_target(Compiler *c, Scope *m);
 int an_arg_is_shared_handle(Compiler *c, int node);
 int an_super_object_text(Compiler *c, int n, int mi);
 int an_super_struct_text(Compiler *c, int n, int mi);
@@ -2946,7 +2945,7 @@ int  poly_redispatch_kind(Compiler *c, int id, const char *name, int argc);
 int  face_arg_misfit(Compiler *c, unsigned kind, int arg);
 int  face_args_misfit(Compiler *c, int id, unsigned kind);
 int poly_name_user_claimed(Compiler *c, const char *name, int argc);
-int poly_ostruct_member_call(Compiler *c, int id, const char *name, int recv, int argc);
+int poly_ostruct_member_call(Compiler *c, int id);
 int poly_name_cmethod_claimed(Compiler *c, const char *name);
 /* Does CRuby take argc arguments to cls#name, by the instance arity table
    (sp_builtin_arity_spec_tbl)? 1 for a name the table has no row for. */

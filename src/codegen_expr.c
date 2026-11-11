@@ -2413,7 +2413,7 @@ static int emit_local_ivar_write_expr(Compiler *c, int id, Buf *b, const NodeTab
     }
     /* a `return .. if p.nil?`-guarded param read: unbox the poly slot to the
        non-nil type the narrowing pass proved (#1661) */
-    if (c->nilnarrow[id] != TY_UNKNOWN) {
+    if (comp_nilnarrow_stored(c, id) != TY_UNKNOWN) {
       Buf rb2; memset(&rb2, 0, sizeof rb2);
       emit_local_ref(c, id, lrn, &rb2);
       /* A `rescue K => e` arm's read of a binding two arms share (#4343). The
@@ -2422,9 +2422,9 @@ static int emit_local_ivar_write_expr(Compiler *c, int id, Buf *b, const NodeTab
          not the poly unbox the guards below want. */
       {
         LocalVar *elv = lrn ? scope_local(comp_scope_of(c, id), lrn) : NULL;
-        if (elv && elv->type == TY_EXCEPTION && ty_is_object(c->nilnarrow[id])) {
+        if (elv && elv->type == TY_EXCEPTION && ty_is_object(comp_nilnarrow_stored(c, id))) {
           buf_puts(b, "((");
-          emit_ctype(c, c->nilnarrow[id], b);
+          emit_ctype(c, comp_nilnarrow_stored(c, id), b);
           buf_printf(b, ")%s)", rb2.p ? rb2.p : "");
           free(rb2.p);
           return 1;
@@ -2436,7 +2436,7 @@ static int emit_local_ivar_write_expr(Compiler *c, int id, Buf *b, const NodeTab
          box it never was. */
       {
         LocalVar *nlv = lrn ? scope_local(comp_scope_of(c, id), lrn) : NULL;
-        if (nlv && nlv->type == c->nilnarrow[id] && nlv->type != TY_POLY) {
+        if (nlv && nlv->type == comp_nilnarrow_stored(c, id) && nlv->type != TY_POLY) {
           free(rb2.p);
           emit_local_read_face(c, id, lrn, nlv, b);
           return 1;
@@ -2445,10 +2445,10 @@ static int emit_local_ivar_write_expr(Compiler *c, int id, Buf *b, const NodeTab
       /* An `is_a?(Array)`-narrowed read: a boxed array can be any element-typed
          representation (Int/Float/Str/Poly array), so normalize to a PolyArray
          at runtime rather than casting the raw .v.p to one kind. */
-      if (c->nilnarrow[id] == TY_POLY_ARRAY)
+      if (comp_nilnarrow_stored(c, id) == TY_POLY_ARRAY)
         buf_printf(b, "sp_poly_to_poly_array(%s)", rb2.p ? rb2.p : "");
       else
-        emit_unbox_text(c, c->nilnarrow[id] == TY_STRBUF ? repr_of(c, id).as_ty : c->nilnarrow[id],
+        emit_unbox_text(c, comp_nilnarrow_stored(c, id) == TY_STRBUF ? repr_of(c, id).as_ty : comp_nilnarrow_stored(c, id),
                         rb2.p ? rb2.p : "", b);
       free(rb2.p);
       return 1;
@@ -3486,16 +3486,25 @@ static const char *const_missing_name(Compiler *c, int id, const char *nm, char 
   return buf;
 }
 
-/* The NameError raise of a constant defined nowhere, valued as a Class
-   placeholder. `checks` is the text of the parents' presence checks (it opens
-   a comma expression and ends with ", "), or empty: they go into the message
-   operand, which C evaluates before the raise, so an unset parent's NameError
-   still comes first and the raise stays at the head of the text. */
+/* The NameError raise of a read of a constant defined nowhere, valued as a
+   Class placeholder: const_raise_open, the message operand, const_raise_close.
+   Whatever the message evaluates first (a parent's presence checks, the Class
+   value a path is read on) C evaluates before the raise, so the raise stays at
+   the head of the text: a typed slot takes the read for the raise it is
+   (emit_unresolved_coerced_text), and const_read_raises recognizes it by
+   const_raise_head. */
+static const char const_raise_head[] = "(sp_raise_cls(\"NameError\", ";
+static void const_raise_open(Buf *b) { buf_puts(b, const_raise_head); }
+static void const_raise_close(Buf *b) { buf_puts(b, "), ((sp_Class){-1}))"); }
+
+/* `checks` is the text of the parents' presence checks (it opens a comma
+   expression and ends with ", "), or empty: they go into the message operand,
+   so an unset parent's NameError still comes first. */
 static void emit_const_undefined_raise(Buf *b, const char *checks, const char *name) {
-  buf_puts(b, "(sp_raise_cls(\"NameError\", ");
+  const_raise_open(b);
   if (checks && checks[0]) buf_printf(b, "%s\"uninitialized constant %s\")", checks, name);
   else buf_printf(b, "\"uninitialized constant %s\"", name);
-  buf_puts(b, "), ((sp_Class){-1}))");
+  const_raise_close(b);
 }
 
 /* A constant read: ConstantReadNode and ConstantPathNode (A::B) (emit_expr_node's arms, in their order).
@@ -3971,17 +3980,21 @@ static int emit_constant_value(Compiler *c, int id, Buf *b, Buf *checks, const N
       if (!const_ref_is_rescued(c, id) && !const_ref_is_guarded(c, id))
         warn_undefined_constant(c, id, fullname);
       /* `klass::NM` on a Class value no class's NM answers: the value's class
-         names it, Object's the constant alone, as the switch's default does */
+         names it, Object's the constant alone, as the switch's default does.
+         The value is read in the message operand, so the raise leads the
+         text as it does for a read defined nowhere (const_raise_open). */
       if (nm && par_idc >= 0 && !par_nmc && !nt_kind_is_constant(par_tyc_k)) {
         Repr dr = repr_of(c, par_idc);
         if (dr.as_ty == TY_CLASS || dr.as_ty == TY_POLY) {
           int tk = ++g_tmp, obj_k = comp_core_class(c, CORE_OBJECT), oid = builtin_class_id("Object");
+          const_raise_open(b);
           buf_printf(b, "({ sp_Class _t%d = ", tk);
           if (dr.kind == RK_BOXED) { buf_puts(b, "sp_unbox_class("); emit_boxed(c, par_idc, b); buf_puts(b, ")"); }
           else emit_expr(c, par_idc, b);
-          buf_printf(b, "; sp_raise_cls(\"NameError\", _t%d.cls_id == %d || _t%d.cls_id == %d ? \"uninitialized constant %s\" : sp_sprintf("
-                        "\"uninitialized constant %%s::%s\", sp_class_to_s(_t%d))); ((sp_Class){-1}); })",
+          buf_printf(b, "; _t%d.cls_id == %d || _t%d.cls_id == %d ? \"uninitialized constant %s\" : sp_sprintf("
+                        "\"uninitialized constant %%s::%s\", sp_class_to_s(_t%d)); })",
                      tk, oid, tk, obj_k >= 0 ? obj_k : oid, nm, nm, tk);
+          const_raise_close(b);
           return 1;
         }
       }
@@ -4023,7 +4036,9 @@ static int emit_constant_value(Compiler *c, int id, Buf *b, Buf *checks, const N
 /* Select the persistent slot with the same lookup and guards as a read. */
 /* See codegen_internal.h. The read is emitted aside and dropped: only
    whether it is the NameError's raise is kept (a read that resolves
-   leaves no trace, its temporaries' numbers put back). */
+   leaves no trace, its temporaries' numbers put back). Every such raise,
+   `klass::NM` on a Class value included, is written by const_raise_open,
+   so its head is the one this reads. */
 int const_read_raises(Compiler *c, int id) {
   NodeKind k = nt_kind(c->nt, id);
   if (!nt_kind_is_constant(k) || !comp_const_undefined(c, id)) return 0;
@@ -4033,16 +4048,7 @@ int const_read_raises(Compiler *c, int id) {
   g_pre = &pre;
   emit_expr(c, id, &t);
   g_pre = saved_pre; g_tmp = saved_tmp;
-  static const char raise[] = "(sp_raise_cls(\"NameError\"";
-  /* `klass::NM` on a Class value, NM a constant no class defines: the read
-     holds the value and raises naming it, whatever it is (emit_constant_value) */
-  static const char held[] = "({ sp_Class _t", held_raise[] = "; sp_raise_cls(\"NameError\", _t",
-                    held_end[] = "((sp_Class){-1}); })";
-  size_t n = t.p ? strlen(t.p) : 0;
-  int r = !pre.p && t.p &&
-          (!strncmp(t.p, raise, sizeof raise - 1) ||
-           (!strncmp(t.p, held, sizeof held - 1) && strstr(t.p, held_raise) &&
-            n >= sizeof held_end - 1 && !strcmp(t.p + n - (sizeof held_end - 1), held_end)));
+  int r = !pre.p && t.p && !strncmp(t.p, const_raise_head, sizeof const_raise_head - 1);
   free(t.p); free(pre.p);
   return r;
 }
@@ -4081,12 +4087,14 @@ static int defined_super_reaches(Compiler *c, int sup) {
   int mod = comp_class_is_module(c, (ClassInfo *)ci);
   if (mod && !s->is_cmethod) return -1;   /* its includer's chain decides */
   const Scope *st = comp_super_site(c, s);
+  MethodLookup ml = { .def_class = -1 };
+  int mi = cplan_super_target(c, sup, s, &ml);
   if (comp_super_shadow(c, st)) return 1;
-  int p = comp_super_parent(c, st->class_id, st->is_cmethod);
+  const int p = ml.from;
   const char *u = comp_super_name(c, p, st);
   if (!u) return -1;
   if (s->is_cmethod) {
-    if (p >= 0 && comp_cmethod_in_chain(c, p, u, NULL) >= 0) return 1;
+    if (mi >= 0) return 1;
     if (core_method_vis(mod ? "Module" : "Class", u, 1, NULL) > 0) return 1;
     int root = s->class_id;
     while (c->classes[root].parent >= 0) root = c->classes[root].parent;
@@ -4100,8 +4108,7 @@ static int defined_super_reaches(Compiler *c, int sup) {
   /* an ancestor that undefs the name ahead of any definition: the super
      reaches nothing (`undef :test` in the superclass) */
   if (p >= 0 && comp_is_undeffed_in_chain(c, p, u)) return 0;
-  if (p >= 0 && (comp_method_in_chain(c, p, u, NULL) >= 0 || comp_reader_in_chain(c, p, u, NULL) ||
-                 (setter && comp_writer_in_chain(c, p, base, NULL))))
+  if (mi >= 0 || (p >= 0 && (comp_reader_in_chain(c, p, u, NULL) || (setter && comp_writer_in_chain(c, p, base, NULL)))))
     return 1;
   int v = refl_builtin_vis(c, s->class_id, u, 2, NULL);
   return v < 0 ? -1 : v > 0;

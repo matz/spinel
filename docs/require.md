@@ -101,14 +101,14 @@ STDOUT.winsize
 ### Unsatisfiable requires
 
 A `require` that Spinel cannot satisfy at all -- a stdlib Spinel does not
-implement (`date`, `pp`, `securerandom`, ...) or an unknown name -- is a compile
+implement (`ripper`, `objspace`, `coverage`, ...) or an unknown name -- is a compile
 error under the gate, the same as a missing `require_relative`:
 
 ```
-spinel: cannot load such file -- date (require "date")
+spinel: cannot load such file -- ripper (require "ripper")
 ```
 
-This is honest about the subset: if Spinel cannot provide `date`, the program
+This is honest about the subset: if Spinel cannot provide `ripper`, the program
 genuinely cannot run, and you learn it when you compile rather than via a
 confusing failure later. With the gate off this is a warning instead.
 

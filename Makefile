@@ -5614,7 +5614,9 @@ imemo-shadow-corpus: $(SPINEL)
 
 # The tables infer_type reads are written only through setters that count
 # each change for its memo (#8852). Under SP_TY_GUARD their fields are const,
-# so a direct write anywhere in the compiler does not compile.
+# so a direct write anywhere in the compiler does not compile. The nine
+# viewed node arrays also hide their field names outside compiler.h and
+# their storage/view owners (compiler.c and codegen_view.c).
 ty-setter-check: $(SPINEL)
 	@printf '%s\n' $(patsubst build/csrc/%.o,src/%.c,$(SPINEL_OBJ)) | \
 	 xargs -P $(NPROC) -I{} $(CC) $(CFLAGS) -fsyntax-only -DSP_TY_GUARD -Werror=discarded-qualifiers -Isrc -Ibuild/csrc {} && \

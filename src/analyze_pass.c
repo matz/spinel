@@ -7191,7 +7191,7 @@ int method_answers_receiver(Compiler *c, int mi) {
   int nd = 0;
   const int *ds = comp_descendants(c, c->scopes[mi].class_id, &nd);
   for (int i = 0; i < nd; i++)
-    if (comp_new_receiver(c, ds[i]) && comp_cmethod_in_class(c, ds[i], "new") >= 0) return 0;
+    if (comp_new_receiver(c, ds[i]) && call_target(c, -1, ds[i], "new", CT_CMETHOD | CT_OWN, NULL) >= 0) return 0;
   int lv[16];
   int n = method_value_leaves(c, mi, lv, 16);
   if (n <= 0) return 0;
@@ -9069,7 +9069,7 @@ static int cext_widen_containers(Compiler *c, int v, CextWalk *seen) {
   int constant = nt_int(nt, v, "cext_const_node", 0) - 1;
   if (constant >= 0) {
     changed |= cext_widen_containers(c, constant, seen);
-    if (c->strbuf_box[constant] && !c->strbuf_box[v]) { comp_set_strbuf_box(c, v, 1); changed = 1; }
+    if (comp_strbuf_box_stored(c, constant) && !comp_strbuf_box_stored(c, v)) { comp_set_strbuf_box(c, v, 1); changed = 1; }
     return changed;
   }
   if (nt_kind(nt, v) == NK_CallNode) changed |= cext_demand_reader(c, v);
@@ -13455,7 +13455,7 @@ static int block_reach(Compiler *c, int si, const BlockSig *s, TyKind *pos,
   }
   if (!bsi_fstart || si >= bsi_ns) return 0;
   if (bsi_super && bsi_super[si] && c->scopes[si].class_id >= 0) {
-    int y = forwarding_yield_target(c, a_super_target(c, &c->scopes[si]), 0);
+    int y = forwarding_yield_target(c, cplan_super_target(c, -1, &c->scopes[si], NULL), 0);
     if (y >= 0 && block_reach(c, y, s, pos, absent, kws, seen, 1, depth + 1)) return 1;
   }
   for (int k = 0; k < bsi_flen[si]; k++) {
@@ -20128,7 +20128,7 @@ static int irt_scope(Compiler *c, int s, IrtCtx *x) {
          the other side */
       int node = -1, other = -1; TyKind then = TY_UNKNOWN;
       int tail = (!empty_body && !tail_unreachable && sc->body >= 0) ? sc->body : -1;
-      if (tail >= 0 && tail < c->node_cap && ty_degraded(c->ntype[tail])) { node = tail; then = c->ntype[tail]; }
+      if (tail >= 0 && tail < c->node_cap && ty_degraded(comp_ntype_stored(c, tail))) { node = tail; then = comp_ntype_stored(c, tail); }
       else if (ret_head && ret_next) {
         for (int rid = ret_head[s]; rid >= 0; rid = ret_next[rid]) {
           TyKind rt = return_node_type(c, rid);
@@ -20141,7 +20141,7 @@ static int irt_scope(Compiler *c, int s, IrtCtx *x) {
            first `return` of a different kind (the list's head can be one
            of the same kind, which said "String, where a `return` gives
            String"; String and its mutable refinement are one kind). */
-        TyKind tt = (tail >= 0 && tail < c->node_cap) ? c->ntype[tail] : TY_UNKNOWN;
+        TyKind tt = (tail >= 0 && tail < c->node_cap) ? comp_ntype_stored(c, tail) : TY_UNKNOWN;
         if (tt != TY_UNKNOWN) { node = tail; then = tt; }
         if (ret_head)
           for (int rid = ret_head[s]; rid >= 0; rid = ret_next[rid]) {
@@ -21036,7 +21036,7 @@ void cr_collect_calls(Compiler *c, const NodeTable *nt, int id,
     }
     /* `<m>.super_method` takes a reference to the method one step up m's
        chain, which no call of the program may name: an alias made before a
-       prepend captures m under a name of its own (method_super_target) */
+       prepend captures m under a name of its own (cplan_super_target) */
     int smi = is_super_method_name(nm) ? method_obj_target_mi(c, id) : -1;
     if (smi >= 0) {
       char mark[24];

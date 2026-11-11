@@ -271,6 +271,15 @@ static int cplan_root_under_builtin(Compiler *c, int top) {
   const char *nm = nt_kind(c->nt, sc) == NK_ConstantReadNode ? nt_str(c->nt, sc, "name") : NULL;
   return !(nm && sp_streq(nm, "Object"));
 }
+/* Does the program define `name` on Kernel? Its top-level history holds a
+   version from a Kernel reopening (the def desugar_kernel_reopen made of it,
+   marked kernel_def), whichever version is the live one. A super from a
+   method of Object whose chain ends there reaches that def, which takes the
+   receiver as self: the top-level def has none, so such a super is no
+   builtin's answer either. */
+int cplan_kernel_def(Compiler *c, const char *name) {
+  return elab_main_history_marked(c, name, "kernel_def");
+}
 /* A super's parent-chain target, past inherited copies of the same
    extended definition. Shared by resolution, inference, inline splicing and
    the miss check. Every step is call_target's, with CT_REACH: it skips the
@@ -297,16 +306,28 @@ int cplan_super_chain_mi(Compiler *c, int id, const Scope *s, int par, const cha
     mi = par >= 0 ? call_target(c, id, par, name, side, ml) : -1;
     if (par < 0) *ml = (MethodLookup){ .kind = ML_NONE, .def_class = -1 };
   }
-  /* (a superclass chain ends in Object: a reopening of it is the last
-     class the super looks in) */
-  if (mi < 0 && par >= 0 && !s->is_cmethod) {
-    int top = par;
+  /* (a superclass chain ends in Object, then Kernel and BasicObject: a
+     reopening of each is looked in, in that order; a module's own chain is
+     its includer's) */
+  if (mi < 0 && !s->is_cmethod && s->class_id >= 0 && !comp_class_is_module(c, &c->classes[s->class_id])) {
+    int top = par >= 0 ? par : s->class_id;
     while (c->classes[top].parent >= 0) top = c->classes[top].parent;
-    int obj = comp_super_parent(c, top, 0);
     /* (not under BasicObject: Object is not in that chain; not under another
        builtin: its methods come first, cplan_root_under_builtin) */
-    if (obj >= 0 && obj != top && !class_is_blank_slate(c, top) && !cplan_root_under_builtin(c, top))
-      mi = call_target(c, id, obj, name, CT_REACH, ml);
+    if (!class_is_blank_slate(c, top) && !cplan_root_under_builtin(c, top)) {
+      static const int owners[] = { CORE_KERNEL, CORE_BASIC_OBJECT };
+      int obj = comp_super_parent(c, top, 0);
+      if (obj >= 0 && obj != top) mi = call_target(c, id, obj, name, CT_REACH, ml);
+      /* a reopening of Kernel or BasicObject answers only where no builtin
+         method of the name comes before it (Object's, then Kernel's, as
+         CRuby's tables hold them) */
+      int builtin_first = builtin_owns_instance_method("Object", name);
+      for (int i = 0; mi < 0 && !builtin_first && i < 2; i++) {
+        int k = comp_core_class(c, owners[i]);
+        if (k >= 0) mi = call_target(c, id, k, name, CT_REACH, ml);
+        builtin_first = builtin_owns_instance_method(core_class_name(owners[i]), name);
+      }
+    }
   }
   if (mi < 0) ml->def_class = -1;
   ml->from = start;
@@ -323,7 +344,7 @@ int cplan_super_chain_mi(Compiler *c, int id, const Scope *s, int par, const cha
    them once the entries are made (super_layer_entry). ml is call_target's
    answer for the lookup (NULL: the scope only). */
 static int super_layer_entry(Compiler *c, int id, int t);
-int cplan_super_target(Compiler *c, int id, Scope *s0, MethodLookup *ml) {
+int cplan_super_target(Compiler *c, int id, const Scope *s0, MethodLookup *ml) {
   const Scope *s = comp_super_site(c, s0);
   const char *shadow = comp_super_shadow(c, s);
   MethodLookup own = { .def_class = -1 };
@@ -1386,6 +1407,29 @@ static int ver_chain_count(Compiler *c, int rcls, int sg, const char *name, int 
 static int ct_after_point(Compiler *c, int id) {
   return elab_runs_later(c, id) || elab_in_kept_block(c, id);
 }
+/* The versions call id may meet as cls's `name` over the statements it may
+   run in (elab_call_span), into out[0..cap): how many, where the window
+   holds a version at every state of the call and fits cap; else 0 for a
+   window with a state that holds none yet (a def or the include that
+   brings it comes later) or more than cap, or elab_call_span's negative
+   answer for a window it cannot tell */
+static int ct_every_span(Compiler *c, int id, int cls, const char *name, int sg, const LrDef **out, int cap) {
+  int n = elab_call_span(c, id, cls, name, sg, ct_after_point(c, id), NULL, out, cap);
+  for (int k = 0; k < n && k < cap; k++) if (!out[k]) return 0;
+  return n > cap ? 0 : n;
+}
+/* The version of the one definition d of `name` a call meets (the window's
+   one): d must be a def, or with aliased an alias or a reader (not a
+   mixin's copy, whose window the record does not place yet), that ran
+   there for sure (not under a condition, nor after a statement that may
+   raise in a begin body with rescue clauses: elab_point_partial);
+   ct_def_version's, -1 for any other */
+static int ct_window_def(Compiler *c, int cls, const char *name, int sg, int aliased, const LrDef *d) {
+  if (!d || (d->kind != LR_DEF && !(aliased && (d->kind == LR_ALIAS || d->kind == LR_READER))) || d->may || d->unplaced ||
+      elab_point_partial(c, d->node)) return -1;
+  int dc = -1;
+  return ct_def_version(c, cls, name, sg, d, &dc);
+}
 /* The method call id meets as cls's `name` (singleton when sg) wherever
    it runs: the one version of the name on cls's chain over the statements
    id may run in (elab_call_span), a def that ran there for sure, as
@@ -1394,14 +1438,11 @@ static int ct_after_point(Compiler *c, int id) {
    the window (a def or the include that brings it comes later), more than
    one, or one that may not have run (under a condition, or after a
    statement that may raise in a begin body with rescue clauses:
-   elab_point_partial) */
-static int ct_window_version(Compiler *c, int id, int cls, const char *name, int sg) {
+   elab_point_partial); a def, or with aliased an alias or a reader too
+   (ct_window_def) */
+static int ct_window_version(Compiler *c, int id, int cls, const char *name, int sg, int aliased) {
   const LrDef *ds[2];
-  int n = elab_call_span(c, id, cls, name, sg, ct_after_point(c, id), NULL, ds, 2);
-  if (n != 1 || !ds[0] || ds[0]->kind != LR_DEF || ds[0]->may || ds[0]->unplaced ||
-      elab_point_partial(c, ds[0]->node)) return -1;
-  int dc = -1;
-  return ct_def_version(c, cls, name, sg, ds[0], &dc);
+  return ct_every_span(c, id, cls, name, sg, ds, 2) == 1 ? ct_window_def(c, cls, name, sg, aliased, ds[0]) : -1;
 }
 /* How call id asks the record for the versions it may meet
    (elab_call_meet): after its point where it runs later, and as the
@@ -1625,20 +1666,54 @@ static int ct_implied_row(Compiler *c, int id, const char *name, int op) {
 }
 /* The method the implied call `name` node id makes on operand op (a row:
    a multiple assignment's to_ary of its value, ct_implied_row) runs on an
-   instance of cls: the version the call meets there (ct_window_version);
-   -1 where no row makes the call, or the record cannot prove one. The
-   call is lowered as a call of `name`, which binds through the method
-   table: where an undef of the name on cls's chain leaves the table
-   without it (comp_is_undeffed_in_chain), that call is not the version
-   proved, and there is no answer either. */
-static int ct_implied_version_at(Compiler *c, int id, const char *name, int op, int cls) {
-  if (cls < 0 || !ct_implied_row(c, id, name, op) || comp_is_undeffed_in_chain(c, cls, name)) return -1;
-  return ct_window_version(c, id, cls, name, 0);
-}
-/* ...asked in the record's frame for the call plan (elab_plan_enter), as
-   ct_version asks: the passes that ask it append nodes between the asks */
-int cplan_implied_version(Compiler *c, int id, const char *name, int op, int cls) {
-  int framed = elab_plan_enter(c, id), vi = ct_implied_version_at(c, id, name, op, cls);
+   instance of cls, asked in the record's frame for the call plan
+   (elab_plan_enter), as ct_version asks: the passes that ask it append
+   nodes between the asks. Only where the call's own window holds a version
+   at every state (ct_every_span): a call that may run before any version
+   exists takes the object whole, as CRuby's, and asks no entry. Then:
+   - one version, a def, an alias or a reader that ran there for sure
+     (ct_window_def), which the explicit call of the name the lowering
+     makes binds too: *ml is ML_METHOD;
+   - several, the entry another call of the name made (CT_IMPLIED: the
+     node does not itself call it, and an implied ask makes no entry),
+     unless the chain holds a version a method body makes, which the
+     entry has no arm for: ML_ENTRY;
+   - else none (-1): *ml is ML_TABLE, with the why of the declined window
+     (MLW_UNPLACED no window, MLW_MOVES the chain moves, MLW_MANY any
+     other), or call_target's, and the reader keeps the method table's
+     answer.
+   -1 with ML_TABLE and MLW_UNASKED where no row makes the call; -1 with
+   ML_NONE where cls has no class, or an undef of the name on cls's chain
+   leaves the table without it (comp_is_undeffed_in_chain): the call is
+   lowered as a call of `name`, which binds through the table, so that call
+   is not the version proved. ml may be NULL. */
+int cplan_implied_target(Compiler *c, int id, int op, int cls, const char *name, MethodLookup *ml) {
+  MethodLookup own = { .def_class = -1 }, *m = ml ? ml : &own;
+  *m = (MethodLookup){ .kind = ML_NONE, .def_class = -1 };
+  if (cls < 0 || comp_is_undeffed_in_chain(c, cls, name)) return -1;
+  if (!ct_implied_row(c, id, name, op)) {
+    *m = (MethodLookup){ .kind = ML_TABLE, .why = MLW_UNASKED, .def_class = -1 };
+    return -1;
+  }
+  const LrDef *ds[VER_MAX_ARMS];
+  int framed = elab_plan_enter(c, id), vi = -1, n = ct_every_span(c, id, cls, name, 0, ds, VER_MAX_ARMS);
+  if (n == 1) {
+    /* (the lowering makes an explicit call of the name, which binds as
+       call_target answers it: the two must meet the same version) */
+    vi = ct_window_def(c, cls, name, 0, 1, ds[0]);
+    int why = vi < 0 ? MLW_UNMAPPED : call_target(c, id, cls, name, CT_IMPLIED, NULL) != vi ? MLW_DISAGREE : 0;
+    *m = why ? (MethodLookup){ .kind = ML_TABLE, .why = (unsigned char)why, .def_class = -1 } : (MethodLookup){ .kind = ML_METHOD, .n = 1, .def_class = -1 };
+    if (why) vi = -1;
+  }
+  else if (n >= 2) {
+    /* (an entry has no arm for a version a method body makes) */
+    int first = 0, body = 0, late = 0;
+    ver_chain_count(c, cls, 0, name, &first, &body, &late);
+    int mi = body ? -1 : call_target(c, id, cls, name, CT_IMPLIED, m);
+    if (m->kind == ML_ENTRY && mi >= 0) vi = mi;
+    else if (body || (m->kind != ML_TABLE && m->kind != ML_NONE)) *m = (MethodLookup){ .kind = ML_TABLE, .why = MLW_MANY, .def_class = -1 };
+  }
+  else *m = (MethodLookup){ .kind = ML_TABLE, .why = n == ELAB_SPAN_NO_WINDOW ? MLW_UNPLACED : n == -1 ? MLW_MOVES : MLW_MANY, .def_class = -1 };
   if (framed) elab_plan_leave(c);
   return vi;
 }
@@ -1646,7 +1721,7 @@ int cplan_implied_version(Compiler *c, int id, const char *name, int op, int cls
    operand op reaches when the operand is boxed (a multiple assignment's
    value, the value a block of several parameters takes apart): each
    class a box can hold (comp_poly_candidates) whose no-argument to_ary is
-   the version the record proves there (cplan_implied_version). An Array
+   the version the plan answers there (cplan_implied_target). An Array
    subclass is an Array already. A nested target's element converts at
    its own level, as its MultiTargetNode's implied to_ary of the element
    it takes (emit_massign_poly_target). An operand node of a program
@@ -1663,7 +1738,7 @@ int cplan_boxed_to_ary_classes(Compiler *c, int id, int op, int *out, int cap) {
     int k = pc[i].cls, mi = comp_implicit_to_ary_mi(c, k);
     if (pc[i].native || mi < 0 || mi != pc[i].mi || c->scopes[mi].nparams != 0 || !c->classes[k].instantiated) continue;
     if (oc >= 0 && !is_descendant(c, k, oc)) continue;
-    if (cplan_implied_version(c, id, "to_ary", op, k) == mi) out[n++] = k;
+    if (cplan_implied_target(c, id, op, k, "to_ary", NULL) == mi) out[n++] = k;
   }
   return n;
 }
@@ -1913,12 +1988,13 @@ static int ct_version_at(Compiler *c, int id, int cls, const char *name, unsigne
     int many = n >= 2 || n == ELAB_SPAN_ANY;
     int settled = at == ELAB_NO || elab_chain_settled(c, rcls, sg, name, w.from);
     const Scope *in = comp_scope_of(c, id);
-    /* (an entry only where the call takes it, in a body that may run) */
-    if (none && settled && in && comp_scope_may_run(c, (int)(in - c->scopes)) && c->ver_built && !ml->survey && (ix < 0 || !c->ver_entries[ix].absent))
+    /* (an entry only where the call takes it, in a body that may run; an
+       implied call takes one made for another call and makes none) */
+    if (none && !(flags & CT_IMPLIED) && settled && in && comp_scope_may_run(c, (int)(in - c->scopes)) && c->ver_built && !ml->survey && (ix < 0 || !c->ver_entries[ix].absent))
       ver_absent_note(c, rcls, sg, name, mi, ar, ver_mm_at(c, rcls, sg, p, at, &w), 0);
     /* a call the build did not ask (one in a method made after it) whose
        window spans versions asks the entry the build makes for such a call */
-    else if (many && ix < 0 && settled && in && comp_scope_may_run(c, (int)(in - c->scopes)) && c->ver_built && !ml->survey)
+    else if (many && ix < 0 && !(flags & CT_IMPLIED) && settled && in && comp_scope_may_run(c, (int)(in - c->scopes)) && c->ver_built && !ml->survey)
       ver_absent_note(c, rcls, sg, name, mi, ar, 0, 1);
     vi = ix >= 0 && (many || c->ver_entries[ix].absent == 2) ? c->ver_entries[ix].scope : -1;
     n = ((ml->survey && many) || vi >= 0) && settled ? 2 : 0;
@@ -2194,7 +2270,7 @@ static int user_new_at(Compiler *c, int id, int ci, int *unplaced) {
   int framed = elab_plan_enter(c, id), at = elab_call_method(c, id, ci, nm, 1, 1), absent = at == ELAB_NO;
   /* (a call in a method or a block: the def in force over its window, or
      none over all of it) */
-  int made = at == ELAB_YES || ct_window_version(c, id, ci, nm, 1) == t;
+  int made = at == ELAB_YES || ct_window_version(c, id, ci, nm, 1, 0) == t;
   const LrDef *ds[2];
   if (!made && !absent) absent = elab_call_span(c, id, ci, nm, 1, 0, NULL, ds, 2) == 1 && !ds[0];
   if (framed) elab_plan_leave(c);
@@ -2297,7 +2373,7 @@ int call_target(Compiler *c, int id, int cls, const char *name, unsigned flags, 
     ml->kind = ML_NONE;
     r = -1;
   }
-  else if ((mi = ct_lookup(c, id, cls, name, &flags, ml)) < 0 || id < 0 || (!(flags & (CT_REACH | CT_CAPTURE)) && !ct_calls(c, id, name))) {
+  else if ((mi = ct_lookup(c, id, cls, name, &flags, ml)) < 0 || id < 0 || (!(flags & (CT_REACH | CT_CAPTURE | CT_IMPLIED)) && !ct_calls(c, id, name))) {
     if (mi < 0) ml->kind = ML_NONE;
     else if (ct_versioned(c, mi, name) || c->scopes[mi].mixin_guarded) {   /* (the record was not asked) */
       ml->kind = ML_TABLE;
@@ -6398,7 +6474,7 @@ int cplan_nil(Compiler *c, int id) {
   if (r < 0 || !nm || nt_safe_nav(nt, id)) return CN_NONE;
   /* the receiver as settled, not as a view retypes it: a poly arm's
      unboxed String is never its box's nil */
-  TyKind rt = c->ntype[r];
+  TyKind rt = comp_ntype_stored(c, r);
   /* under --share-strings, a String the rule made the shared handle is
      nil as its NULL handle (#6765) */
   /* Exception text dispatch has the same nil target as an ordinary call,

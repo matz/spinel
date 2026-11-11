@@ -284,6 +284,16 @@ static inline sp_RbVal sp_bm_box_ret(sp_BoundMethod *m, sp_int raw) {
 static inline sp_int sp_bm_norm_ret(sp_BoundMethod *m, sp_int raw) {
   return (m && SP_BM_RET_KIND(m->legacy_ret) == SP_BM_RET_BOOL) ? ((raw & 0xff) != 0) : raw;
 }
+/* The Method's receiver as a boxed value, for a target that takes self boxed
+   (a reopening of Object): by what the self slot holds. */
+static inline sp_RbVal sp_bm_self_boxed(const sp_BoundMethod *m) {
+  switch (m->self_kind) {
+    case SP_BM_SELF_OBJ:  return sp_box_nullable_obj_dyn(m->self, 0);
+    case SP_BM_SELF_STR:  return sp_box_str((const char *)m->self);
+    case SP_BM_SELF_BOOL: return sp_box_bool((sp_bool)(uintptr_t)m->self);
+    default:              return sp_box_int((sp_int)(uintptr_t)m->self);
+  }
+}
 /* Mark a statically-built instance_method/#unbind result as an UnboundMethod,
    so a later dynamic .call/[] through a container sees m->unbound and raises
    instead of invoking the instance C function with no self (#4395). */

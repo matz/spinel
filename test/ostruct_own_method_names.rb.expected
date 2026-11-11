@@ -1,0 +1,10 @@
+true
+true
+true
+false
+#<OpenStruct a=1>
+nil
+nil
+[1, 2]
+#<OpenStruct a=1, members=[1, 2]>
+nil

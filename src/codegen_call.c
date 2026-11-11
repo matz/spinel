@@ -24,7 +24,9 @@ int g_sn_proc_node = -1;
    slot holds. An Integer __bam_r that holds its nil (a dynamic send that
    may pass the wrapper a nil) is an sp_oint, two registers wide: cast as
    sp_int, the callee read its nil flag from whatever the second one held. */
-const char *bm_self_ctype(Scope *tm, int shift) {
+const char *bm_self_ctype(const Compiler *c, Scope *tm, int shift) {
+  /* (a reopening of Object takes self boxed) */
+  if (tm && repr_self_boxed(c, (int)(tm - c->scopes))) return "sp_RbVal";
   if (!tm || shift != 1 || tm->nparams < 1 || !tm->pnames[0] || strcmp(tm->pnames[0], "__bam_r") != 0) return "void *";
   LocalVar *pp = scope_local(tm, tm->pnames[0]);
   if (!pp) return "void *";
@@ -33,11 +35,12 @@ const char *bm_self_ctype(Scope *tm, int shift) {
   if (pp->type == TY_SYMBOL) return "sp_sym";
   return "void *";
 }
-/* The self argument of that call, from the slot text `self` (a raw
-   pointer-sized value): converted to the type bm_self_ctype names. */
-void emit_bm_self_arg(const char *sct, const char *self, Buf *b) {
-  if (strcmp(sct, "sp_oint") == 0) buf_printf(b, "sp_oint_of((sp_int)(uintptr_t)%s)", self);
-  else buf_printf(b, "(%s)(uintptr_t)%s", sct, self);
+/* The self argument of that call, from the Method's text `bm`: its raw
+   pointer-sized self slot converted to the type bm_self_ctype names. */
+void emit_bm_self_arg(const char *sct, const char *bm, Buf *b) {
+  if (strcmp(sct, "sp_oint") == 0) buf_printf(b, "sp_oint_of((sp_int)(uintptr_t)%s->self)", bm);
+  else if (strcmp(sct, "sp_RbVal") == 0) buf_printf(b, "sp_bm_self_boxed(%s)", bm);
+  else buf_printf(b, "(%s)(uintptr_t)%s->self", sct, bm);
 }
 
 static int g_pp_hash_node = -1;
@@ -2873,16 +2876,16 @@ int recv_user_defines(Compiler *c, const char *name) {
    as if the name were unowned -- the switch's own case labels keep the user
    receivers out (#3459). */
 
-/* An OpenStruct can reach boxed call `id`, which reads `name` as its member
-   (ostruct_member_name, cls_fact_may_ostruct): the poly dispatch reads the
-   member ahead of its builtin arms (codegen_poly_plan.c), so a shortcut that
-   answers with one builtin helper steps aside for it. Not inside a builtin
-   arm of that dispatch, where the value is a container (g_poly_builtin_arm),
-   and not for count, whose answer the Range and Enumerable rows type an
-   Integer ahead of the member (it keeps the containers' arm). */
-int poly_ostruct_member_call(Compiler *c, int id, const char *name, int recv, int argc) {
-  return !g_poly_builtin_arm && argc == 0 && recv >= 0 && nt_ref(c->nt, id, "block") < 0 &&
-         ostruct_member_name(name) && !sp_streq(name, "count") && cls_fact_may_ostruct(c, recv);
+/* An OpenStruct can reach boxed call `id`, which reads its name as a member
+   (ostruct_member_read), and the analysis typed it boxed for that: the poly
+   dispatch reads the member ahead of its builtin arms (codegen_poly_plan.c),
+   so a shortcut that answers with one builtin helper steps aside for it. Not
+   inside a builtin arm of that dispatch, where the value is not the
+   OpenStruct (g_poly_builtin_arm). */
+int poly_ostruct_member_call(Compiler *c, int id) {
+  int recv = nt_ref(c->nt, id, "receiver");
+  return !g_poly_builtin_arm && recv >= 0 && comp_ntype(c, id) == TY_POLY &&
+         ostruct_member_read(c, id, comp_recv_type(c, recv));
 }
 
 static int poly_name_user_claimed_walk(Compiler *c, const char *name, int argc) {
@@ -3209,7 +3212,7 @@ static TyKind proc_arg_ty(Compiler *c, int a) {
      nil (strbuf_arg_bang), as it hands it to a method's parameter */
   if (r.as_ty == TY_STRING && strbuf_arg_bang(c, nt_paren_single(c->nt, a))) return TY_STRBUF;
   /* a fresh String lifted into the handle for a boxed parameter it reaches */
-  if (r.as_ty == TY_STRING && c->poly_strbuf_lift[a]) return TY_STRBUF;
+  if (r.as_ty == TY_STRING && comp_poly_strbuf_lift_stored(c, a)) return TY_STRBUF;
   TyKind t = r.as_ty;
   if (t == TY_UNKNOWN && nt_kind(c->nt, a) == NK_ArrayNode && node_is_empty_container(c, a))
     return TY_INT_ARRAY;
@@ -7876,6 +7879,8 @@ int method_legacy_int_abi(Compiler *c, int mi, int recv_bound, char *out_sig, si
   /* both casts pass that receiver as `void *`; an Integer one holding its nil
      is an sp_oint, two registers, and only the thunk passes it as one */
   if (pstart && bam_self_is_oint(m)) return 0;
+  /* (a reopening of Object takes self boxed, which the raw self slot is not) */
+  if (recv_bound && repr_self_boxed(c, mi)) return 0;
   if (!method_bm_ret_kind(c, m, out_ret)) return 0;
   /* An explicit `&blk` adds a trailing sp_Proc* C parameter the legacy cast
      does not supply, so the callee would read garbage for it. */
@@ -7961,6 +7966,7 @@ int method_poly_abi(Compiler *c, int mi, int recv_bound, int *out_fixed, int *ou
   /* both casts pass that receiver as `void *`; an Integer one holding its nil
      is an sp_oint, two registers, and only the thunk passes it as one */
   if (pstart && bam_self_is_oint(m)) return 0;
+  if (recv_bound && repr_self_boxed(c, mi)) return 0;   /* (as method_legacy_int_abi) */
   /* the return may be any boxable kind, not only sp_RbVal: promote leaves a
      bool/Symbol/typed-array/user-object return un-widened over boxed
      parameters (optcarrot's poke_* family), and each such kind has its cast
@@ -9682,7 +9688,7 @@ static int emit_poly_arg_temp(Compiler *c, int node, TyKind ty, int boxed, int t
      own emitter may answer the plain String (`+""`, `"".dup`, an interpolation:
      the mark only asks for it, #7833): the value is taken as the handle, or
      wrapped in a fresh one */
-  int as_handle = !boxed && ty == TY_STRBUF && c->strbuf_box[node] &&
+  int as_handle = !boxed && ty == TY_STRBUF && comp_strbuf_box_stored(c, node) &&
                   nt_kind(c->nt, node) != NK_LocalVariableReadNode &&
                   nt_kind(c->nt, node) != NK_InstanceVariableReadNode;
   /* a read that answers a boxed value (an element of a poly Hash) carries
@@ -27672,7 +27678,7 @@ static int poly_target_call(Compiler *c, int id) {
   const NodeTable *nt = c->nt;
   int r = nt_ref(nt, id, "receiver"), a = nt_ref(nt, id, "arguments");
   const char *nm = nt_str(nt, id, "name");
-  if (r < 0 || a < 0 || !nm || sn_guard_pending(c, id) || c->ntype[r] != TY_POLY ||
+  if (r < 0 || a < 0 || !nm || sn_guard_pending(c, id) || comp_ntype_stored(c, r) != TY_POLY ||
       comp_ntype(c, r) != TY_POLY || !subtree_has_side_effect(c, a) ||
       call_target(c, id, -1, nm, CT_TOP, NULL) >= 0 || any_class_defines(c, nm) ||
       (nil_target_read_rebound(c, r, a) && nt_kind(nt, r) != NK_LocalVariableReadNode))
@@ -27965,14 +27971,14 @@ static int emit_nil_target_cold(Compiler *c, int id, Buf *b) {
    as for any call. `stmt` emits it as a statement at `indent`. */
 static int emit_nil_target_own(Compiler *c, int id, Buf *b, int stmt, int indent) {
   int r = nt_ref(c->nt, id, "receiver");
-  if (!c->nil_tested || comp_ntype(c, r) != TY_STRING || !recv_may_be_sentinel(c, r)) return 0;
+  if (!comp_nil_tested_present(c) || comp_ntype(c, r) != TY_STRING || !recv_may_be_sentinel(c, r)) return 0;
   size_t pre0 = g_pre ? g_pre->len : 0;
   int sv_tmp = g_tmp;
   int vt = view_push_repr(c, r, VR_NIL_TESTED, 3);
   Buf cb; memset(&cb, 0, sizeof cb);
   if (stmt) emit_stmt_inner(c, id, &cb, indent);
   else emit_call_held(c, id, &cb);
-  int ok = c->nil_tested[r] == 4;
+  int ok = comp_nil_tested_stored(c, r) == 4;
   view_pop(c, vt);
   if (ok) buf_puts(b, cb.p ? cb.p : "");
   else {
@@ -30698,7 +30704,7 @@ static void emit_call_unwrapped(Compiler *c, int id, Buf *b) {
     int chain[16], nch = 0, r = nt_ref(c->nt, id, "receiver");
     while (cn && sp_streq(cn, "<<") && r >= 0 && nt_kind(c->nt, r) == NK_CallNode && nch < 16 &&
            nt_str(c->nt, r, "name") && sp_streq(nt_str(c->nt, r, "name"), "<<") &&
-           c->ntype[r] == TY_STRING) {
+           comp_ntype_stored(c, r) == TY_STRING) {
       chain[nch++] = r;
       r = nt_ref(c->nt, r, "receiver");
     }
@@ -32172,7 +32178,8 @@ int emit_method_tramp_fn(Compiler *c, Scope *tm, int shift, const char *fname,
            ivar-reading default still has to read `_m->self`. A class
            method and a top-level def have no self to read. */
         if (tm->class_id >= 0 && !tm->is_cmethod) {
-          snprintf(sb, sizeof sb, "((sp_%s *)_m->self)", c->classes[tm->class_id].c_name);
+          if (repr_self_boxed(c, (int)(tm - c->scopes))) snprintf(sb, sizeof sb, "sp_bm_self_boxed(_m)");
+          else snprintf(sb, sizeof sb, "((sp_%s *)_m->self)", c->classes[tm->class_id].c_name);
           g_self = sb;
           g_self_deref = comp_ty_value_obj(c, ty_object(tm->class_id)) ? "." : "->";
           g_emitting_class_id = tm->class_id;
@@ -32304,7 +32311,7 @@ int emit_method_tramp_fn(Compiler *c, Scope *tm, int shift, const char *fname,
   if (ret_o) buf_puts(&selfc, oint_ctype(tret));
   else if (is_scalar_ret(tret)) emit_ctype(c, tret, &selfc);
   else buf_puts(&selfc, "void");
-  { const char *sct = bm_self_ctype(tm, shift);
+  { const char *sct = bm_self_ctype(c, tm, shift);
     buf_printf(&selfc, " (*)(%s", sct);
     for (int k = shift; k < np; k++) {
       buf_puts(&selfc, ", ");
@@ -32314,7 +32321,7 @@ int emit_method_tramp_fn(Compiler *c, Scope *tm, int shift, const char *fname,
     }
     if (takes_blk) buf_puts(&selfc, ", sp_Proc *");
     buf_puts(&selfc, "))(uintptr_t)_m->fn)(");
-    emit_bm_self_arg(sct, "_m->self", &selfc); }
+    emit_bm_self_arg(sct, "_m", &selfc); }
   if (np > shift || takes_blk) buf_puts(&selfc, ", ");
   buf_puts(&selfc, args.p ? args.p : "");
   buf_puts(&selfc, ")");
@@ -33158,13 +33165,17 @@ void emit_bound_method_call(Compiler *c, int id, int recv, int target, Buf *b) {
   }
   /* a default reading self or an ivar reads the bound receiver */
   char selfp[96] = "";
-  if (self_ful) snprintf(selfp, sizeof selfp, "((sp_%s *)_t%d->self)", c->classes[tm->class_id].c_name, tr);
+  /* (a reopening of Object takes self boxed: its raw slot is boxed by what it holds) */
+  const int boxed_self = self_ful && repr_self_boxed(c, target);
+  if (boxed_self) snprintf(selfp, sizeof selfp, "sp_bm_self_boxed(_t%d)", tr);
+  else if (self_ful) snprintf(selfp, sizeof selfp, "((sp_%s *)_t%d->self)", c->classes[tm->class_id].c_name, tr);
   Buf args; memset(&args, 0, sizeof args);
   const char *sv_arm_self = g_arm_self; const Scope *sv_arm_scope = g_arm_scope;
   int sv_arm_depth = g_arm_depth;
   if (self_ful) { g_arm_self = selfp; g_arm_scope = tm; g_arm_depth = g_expr_depth; }
   const char *lead = "";
-  if (self_ful) { buf_printf(&args, "_t%d->self", tr); lead = ", "; }
+  if (boxed_self) { buf_printf(&args, "%s", selfp); lead = ", "; }
+  else if (self_ful) { buf_printf(&args, "_t%d->self", tr); lead = ", "; }
   else lead = emit_cmethod_self_cls_arg(c, target, method_node_recv_class(c, recv, tm->class_id), &args);
   emit_args_filled(c, target, nt_ref(c->nt, id, "arguments"), lead, &args);
   g_arm_self = sv_arm_self; g_arm_scope = sv_arm_scope; g_arm_depth = sv_arm_depth;
@@ -33180,7 +33191,7 @@ void emit_bound_method_call(Compiler *c, int id, int recv, int target, Buf *b) {
   else emit_ctype(c, tret, &cast);
   buf_puts(&cast, " (*)(");
   int np = 0;
-  if (self_ful) { buf_puts(&cast, "void *"); np++; }
+  if (self_ful) { buf_puts(&cast, boxed_self ? "sp_RbVal" : "void *"); np++; }
   else if (cmethod_takes_self_cls(c, target)) { buf_puts(&cast, "sp_Class"); np++; }
   for (int k = 0; k < tm->nparams; k++) {
     if (np++) buf_puts(&cast, ", ");
@@ -33215,7 +33226,10 @@ void emit_bound_method_call(Compiler *c, int id, int recv, int target, Buf *b) {
 int bind_owner_mismatch(Compiler *c, int target, TyKind ot) {
   Scope *tm = &c->scopes[target];
   int cid = tm->class_id;
+  /* (every object is an Object: a method of the program's Object binds to any) */
   if (cid < 0 || tm->is_cmethod || comp_class_is_module(c, &c->classes[cid])) return 0;
+  /* (a class under BasicObject only is no Object) */
+  if (cid == comp_core_class(c, CORE_OBJECT)) return ty_is_object(ot) && class_is_blank_slate(c, ty_object_class(ot));
   return !class_isa_user(c, ty_object_class(ot), cid);
 }
 
@@ -33246,18 +33260,22 @@ void emit_bind_call(Compiler *c, int id, int target, const int *argv, int argc, 
     return;
   }
   int value = c->classes[cid].is_value_type;
+  /* (a reopening of Object takes self boxed: any value binds to it) */
+  const int boxed_self = repr_self_boxed(c, target);
   int to = ++g_tmp;
   Buf ob; memset(&ob, 0, sizeof ob);
-  emit_expr(c, argv[0], &ob);
+  if (boxed_self) emit_boxed(c, argv[0], &ob);
+  else emit_expr(c, argv[0], &ob);
   emit_indent(g_pre, g_indent);
-  if (value) {
+  if (boxed_self) buf_printf(g_pre, "sp_RbVal _t%d = %s; SP_GC_ROOT_RBVAL(_t%d);\n", to, ob.p ? ob.p : "sp_box_nil()", to);
+  else if (value) {
     emit_ctype(c, ot, g_pre);
     buf_printf(g_pre, " _t%d = %s;\n", to, ob.p ? ob.p : "");
   }
   else buf_printf(g_pre, "void *_t%d = (void *)(%s); SP_GC_ROOT(_t%d);\n", to, ob.p ? ob.p : "NULL", to);
   free(ob.p);
   char selfp[96];
-  if (value) snprintf(selfp, sizeof selfp, "_t%d", to);
+  if (value || boxed_self) snprintf(selfp, sizeof selfp, "_t%d", to);
   else snprintf(selfp, sizeof selfp, "((sp_%s *)_t%d)", c->classes[cid].c_name, to);
   /* a default reading self or an ivar reads obj */
   const char *sv_arm_self = g_arm_self; const Scope *sv_arm_scope = g_arm_scope;
@@ -33286,12 +33304,28 @@ static void emit_bind_call_arm(Compiler *c, int id, int target, const int *argv,
   Scope *tm = &c->scopes[target];
   int cid = tm->class_id;
   const char *cn = c->classes[cid].name;
-  buf_printf(b, "if (!(_t%d.tag == SP_TAG_OBJ && (0", to);
-  for (int k = 0; k < c->nclasses; k++)
-    if (class_isa_user(c, k, cid)) buf_printf(b, " || _t%d.cls_id == %d", to, k);
-  buf_printf(b, "))) sp_raise_cls(\"TypeError\", \"bind argument must be an instance of %s\"); ", cn);
+  /* (a reopening of Object takes self boxed: every value is an instance but
+     an object of a class under BasicObject only) */
+  const int boxed_self = repr_self_boxed(c, target);
+  if (boxed_self) {
+    int any = 0;
+    for (int k = 0; k < c->nclasses; k++) {
+      if (!class_is_blank_slate(c, k)) continue;
+      if (!any) buf_printf(b, "if (_t%d.tag == SP_TAG_OBJ && (0", to);
+      buf_printf(b, " || _t%d.cls_id == %d", to, k);
+      any = 1;
+    }
+    if (any) buf_printf(b, ")) sp_raise_cls(\"TypeError\", \"bind argument must be an instance of %s\"); ", cn);
+  }
+  else {
+    buf_printf(b, "if (!(_t%d.tag == SP_TAG_OBJ && (0", to);
+    for (int k = 0; k < c->nclasses; k++)
+      if (class_isa_user(c, k, cid)) buf_printf(b, " || _t%d.cls_id == %d", to, k);
+    buf_printf(b, "))) sp_raise_cls(\"TypeError\", \"bind argument must be an instance of %s\"); ", cn);
+  }
   char selfp[96];
-  snprintf(selfp, sizeof selfp, "((sp_%s *)_t%d.v.p)", c->classes[cid].c_name, to);
+  if (boxed_self) snprintf(selfp, sizeof selfp, "_t%d", to);
+  else snprintf(selfp, sizeof selfp, "((sp_%s *)_t%d.v.p)", c->classes[cid].c_name, to);
   const char *sv_arm_self = g_arm_self; const Scope *sv_arm_scope = g_arm_scope;
   int sv_arm_depth = g_arm_depth;
   g_arm_self = selfp; g_arm_scope = tm; g_arm_depth = g_expr_depth;
@@ -34772,7 +34806,7 @@ int strbuf_narrowed_box_mutator(Compiler *c, int id) {
   const char *cn = nt_str(nt, id, "name");
   int nch = 0, r = nt_ref(nt, id, "receiver");
   while (is_shovel_name(cn) && r >= 0 && nt_kind(nt, r) == NK_CallNode && nch < 16 &&
-         is_shovel_name(nt_str(nt, r, "name")) && c->ntype[r] == TY_STRING) {
+         is_shovel_name(nt_str(nt, r, "name")) && comp_ntype_stored(c, r) == TY_STRING) {
     nch++;
     r = nt_ref(nt, r, "receiver");
   }
@@ -34811,7 +34845,7 @@ void emit_narrowed_box_mutator(Compiler *c, int id, Buf *b) {
 int strbuf_call_picks_up(Compiler *c, int id) {
   /* (the call answers its String as a const char *: a method whose value
      widened past a String after the pickup was marked answers a box) */
-  if (!(c->strbuf_box[id] && nt_ref(c->nt, id, "block") < 0 && comp_ntype(c, id) != TY_POLY)) return 0;
+  if (!(comp_strbuf_box_stored(c, id) && nt_ref(c->nt, id, "block") < 0 && comp_ntype(c, id) != TY_POLY)) return 0;
   int r = nt_ref(c->nt, id, "receiver");
   if (r < 0) return implicit_self_reader_cid(c, id) < 0;
   if (comp_ntype(c, r) != TY_CLASS) return 0;

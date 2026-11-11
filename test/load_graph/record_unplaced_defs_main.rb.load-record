@@ -9,6 +9,7 @@ entity M: owner main leaf M
 entity G: owner main leaf G
 const M: write#1
 M#hi: def#2 end=yes
+const G: write#3
 G#z: reader#3 unplaced end=no
 G#y: def#3 unplaced vis#3 unplaced private end=no
 G#w: alias#3 unplaced (y: none) private end=no

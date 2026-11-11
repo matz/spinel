@@ -353,9 +353,9 @@ static int poll_pure_node(Compiler *c, int n, int ret_ok, int stores) {
     return 1;
   case NK_LocalVariableWriteNode: case NK_LocalVariableOperatorWriteNode:
     if (!stores && poll_local_on_heap(c, n)) return 0;
-    return poll_scalar_ty(c->ntype[n]) && poll_pure_node(c, nt_ref(nt, n, "value"), ret_ok, stores);
+    return poll_scalar_ty(comp_ntype_stored(c, n)) && poll_pure_node(c, nt_ref(nt, n, "value"), ret_ok, stores);
   case NK_InstanceVariableWriteNode: case NK_InstanceVariableOperatorWriteNode:
-    return stores && poll_scalar_ty(c->ntype[n]) && poll_pure_node(c, nt_ref(nt, n, "value"), ret_ok, stores);
+    return stores && poll_scalar_ty(comp_ntype_stored(c, n)) && poll_pure_node(c, nt_ref(nt, n, "value"), ret_ok, stores);
   case NK_StatementsNode: case NK_ParenthesesNode: case NK_IfNode: case NK_UnlessNode: case NK_ElseNode:
   case NK_AndNode: case NK_OrNode: case NK_WhileNode: case NK_UntilNode: case NK_BreakNode: case NK_NextNode:
     return poll_pure_kids(c, n, ret_ok, stores);
@@ -371,23 +371,23 @@ static int poll_pure_node(Compiler *c, int n, int ret_ok, int stores) {
       if (ak == NK_SplatNode || ak == NK_KeywordHashNode || ak == NK_BlockArgumentNode) return 0;
       if (!poll_pure_node(c, av[i], ret_ok, stores)) return 0;
     }
-    if (recv >= 0 && poll_scalar_ty(c->ntype[recv]) && poll_pure_op(nm))
-      return an <= 1 && poll_pure_node(c, recv, ret_ok, stores) && (an == 0 || poll_scalar_ty(c->ntype[av[0]]));
+    if (recv >= 0 && poll_scalar_ty(comp_ntype_stored(c, recv)) && poll_pure_op(nm))
+      return an <= 1 && poll_pure_node(c, recv, ret_ok, stores) && (an == 0 || poll_scalar_ty(comp_ntype_stored(c, av[0])));
     /* a Float power, and Math's functions of Floats: libm, which touches
        nothing of the runtime (an Integer power may grow into a Bignum) */
-    if (recv >= 0 && sp_streq(nm, "**") && c->ntype[n] == TY_FLOAT && c->ntype[recv] == TY_FLOAT)
-      return an == 1 && poll_pure_node(c, recv, ret_ok, stores) && poll_scalar_ty(c->ntype[av[0]]);
+    if (recv >= 0 && sp_streq(nm, "**") && comp_ntype_stored(c, n) == TY_FLOAT && comp_ntype_stored(c, recv) == TY_FLOAT)
+      return an == 1 && poll_pure_node(c, recv, ret_ok, stores) && poll_scalar_ty(comp_ntype_stored(c, av[0]));
     if (recv >= 0 && nt_kind(nt, recv) == NK_ConstantReadNode && sp_streq(nt_str(nt, recv, "name"), "Math") &&
-        poll_math_fn(nm) && c->ntype[n] == TY_FLOAT && !an_user_defines_method(c, nm)) {
-      for (int i = 0; i < an; i++) if (!poll_scalar_ty(c->ntype[av[i]])) return 0;
+        poll_math_fn(nm) && comp_ntype_stored(c, n) == TY_FLOAT && !an_user_defines_method(c, nm)) {
+      for (int i = 0; i < an; i++) if (!poll_scalar_ty(comp_ntype_stored(c, av[i]))) return 0;
       return 1;
     }
     if (recv >= 0 && nt_kind(nt, recv) != NK_SelfNode && nt_kind(nt, recv) != NK_ConstantReadNode &&
         !poll_pure_node(c, recv, ret_ok, stores)) return 0;
-    if (!poll_scalar_ty(c->ntype[n])) return 0;
+    if (!poll_scalar_ty(comp_ntype_stored(c, n))) return 0;
     if (poll_pure_targets(c, nm, stores)) return 1;
     /* an attribute reader of a scalar instance variable */
-    TyKind rt = recv >= 0 ? c->ntype[recv] : TY_VOID;
+    TyKind rt = recv >= 0 ? comp_ntype_stored(c, recv) : TY_VOID;
     if (an == 0 && recv >= 0 && ty_is_object(rt)) {
       int cid = ty_object_class(rt);
       int cnt; poll_names_of(c, nm, &cnt);
@@ -404,7 +404,7 @@ static int poll_pure_node(Compiler *c, int n, int ret_ok, int stores) {
       char ivn[sizeof base + 1];
       snprintf(ivn, sizeof ivn, "@%s", base);
       int iv = comp_ivar_index(&c->classes[cid], ivn);
-      return iv >= 0 && poll_scalar_ty(c->classes[cid].ivar_types[iv]) && c->classes[cid].ivar_types[iv] == c->ntype[av[0]];
+      return iv >= 0 && poll_scalar_ty(c->classes[cid].ivar_types[iv]) && c->classes[cid].ivar_types[iv] == comp_ntype_stored(c, av[0]);
     }
     return 0;
   }
@@ -578,16 +578,16 @@ int poll_pure_iter(Compiler *c, int id) {
   }
   if (nt_kind(nt, r) == NK_RangeNode) {
     int lo = nt_ref(nt, r, "left"), hi = nt_ref(nt, r, "right");
-    if (lo < 0 || hi < 0 || c->ntype[lo] != TY_INT || c->ntype[hi] != TY_INT) return 0;
+    if (lo < 0 || hi < 0 || comp_ntype_stored(c, lo) != TY_INT || comp_ntype_stored(c, hi) != TY_INT) return 0;
     if (!poll_pure_node(c, lo, 0, 0) || !poll_pure_node(c, hi, 0, 0)) return 0;
   }
-  else if (is_each || !poll_scalar_ty(c->ntype[r]) || c->ntype[r] == TY_BOOL || !poll_pure_node(c, r, 0, 0)) return 0;
+  else if (is_each || !poll_scalar_ty(comp_ntype_stored(c, r)) || comp_ntype_stored(c, r) == TY_BOOL || !poll_pure_node(c, r, 0, 0)) return 0;
   int args = nt_ref(nt, id, "arguments"), an = 0;
   const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &an) : NULL;
   for (int i = 0; i < an; i++) {
     NodeKind ak = nt_kind(nt, av[i]);
     if (ak == NK_SplatNode || ak == NK_KeywordHashNode || ak == NK_BlockArgumentNode) return 0;
-    if (!poll_scalar_ty(c->ntype[av[i]]) || c->ntype[av[i]] == TY_BOOL || !poll_pure_node(c, av[i], 0, 0)) return 0;
+    if (!poll_scalar_ty(comp_ntype_stored(c, av[i])) || comp_ntype_stored(c, av[i]) == TY_BOOL || !poll_pure_node(c, av[i], 0, 0)) return 0;
   }
   /* the block: plain parameters of a scalar kind, a body that is pure */
   int bp = nt_ref(nt, blk, "parameters");
@@ -1980,7 +1980,7 @@ static void emit_str_expr_ex(Compiler *c, int node, int strict, Buf *b) {
      String, with the mark lifted, as emit_boxed_strbuf reads it: this slot
      takes its bytes, and the marked form is the handle, which no
      conversion keeps in a const char * slot */
-  if (node >= 0 && c->strbuf_box[node] && store_value_kind(c, node) == TY_STRBUF) {
+  if (node >= 0 && comp_strbuf_box_stored(c, node) && store_value_kind(c, node) == TY_STRBUF) {
     int sv = view_push_repr(c, node, VR_STRBUF_BOX, 0);
     emit_str_expr_ex(c, node, strict, b);
     view_pop(c, sv);
@@ -2493,7 +2493,7 @@ static int emit_boxed_bang_self(Compiler *c, int node, Buf *b) {
 static void emit_boxed_strbuf(Compiler *c, int node, TyKind t, const Repr *rp, Buf *b) {
   /* a demanded `s.to_s` over a local holding the handle: the conversion
      answers s's String, so the box is s's handle (an_str_conversion_local) */
-  if (c->strbuf_box[node]) {
+  if (comp_strbuf_box_stored(c, node)) {
     int cr = an_str_conversion_local(c, node);
     if (cr >= 0 && comp_ntype(c, cr) == TY_STRBUF) {
       str_box_open(b, 1);
@@ -3428,7 +3428,7 @@ void emit_boxed(Compiler *c, int node, Buf *b) {
 /* The lift a String stored into a boxed slot the rule shares takes
    (poly_strbuf_lift): its box is lifted into its handle. */
 int emit_boxed_lift(Compiler *c, int node) {
-  return node >= 0 && c->poly_strbuf_lift[node] && comp_ntype(c, node) == TY_STRING;
+  return node >= 0 && comp_poly_strbuf_lift_stored(c, node) && comp_ntype(c, node) == TY_STRING;
 }
 
 /* An argument that ran ahead as the handle it hands on (a lifted call
@@ -3596,7 +3596,7 @@ void emit_boxed_by_repr(Compiler *c, int node, Buf *b) {
   /* --share-strings: a boxed call's answer a container store lifts into a
      handle (strbuf_demand_store_leaf), so a mutation through the element
      changes the String the container keeps */
-  if (!lift && node >= 0 && c->poly_strbuf_lift[node] == STRBUF_LIFT_FRESH_CALL &&
+  if (!lift && node >= 0 && comp_poly_strbuf_lift_stored(c, node) == STRBUF_LIFT_FRESH_CALL &&
       repr_of(c, node).kind == RK_BOXED)
     lift = 1;
   if (lift) buf_puts(b, "sp_poly_strbuf_lift(");
@@ -5771,8 +5771,7 @@ void emit_method_signature(Compiler *c, Scope *s, Buf *b) {
     else if (sp_streq(cn, "Float"))   { buf_puts(b, "double self"); }
     else if (sp_streq(cn, "Symbol"))  { buf_puts(b, "sp_int self"); }
     else if (is_immediate_class_name(cn)) { buf_puts(b, "int self"); }
-    else if (sp_streq(cn, "Array") || sp_streq(cn, "Hash")) { buf_puts(b, "sp_RbVal self"); }
-    else if (sp_streq(cn, "Object") || sp_streq(cn, "Numeric")) { buf_puts(b, "sp_RbVal self"); }
+    else if (repr_self_boxed(c, (int)(s - c->scopes))) { buf_puts(b, "sp_RbVal self"); }
     else if (sp_streq(cn, "Range"))   { buf_puts(b, "sp_Range self"); }
     else if (sp_streq(cn, "Time"))    { buf_puts(b, "sp_Time *self"); }
     else if (sp_streq(cn, "Thread"))  { buf_puts(b, "sp_thread *self"); }
@@ -15606,6 +15605,14 @@ static void emit_super_block_arg(Compiler *c, int id, Scope *s, Scope *pm, int l
   else if (s->yields && g_yield_proc_ref) buf_puts(b, g_yield_proc_ref);
   else buf_puts(b, "NULL");
 }
+/* emit_super's target from the super's plan (call_plan.c), or -1. The plan
+   started its lookup where the super does (cplan_super_target), so there is
+   no start to compare. A miss selects the existing builtin or error
+   rendering. */
+static int super_plan_mi(Compiler *c, int id) {
+  const CallPlan *spl = cplan_user(c, id);
+  return spl->via == UC_SUPER ? spl->mi : -1;
+}
 
 /* Inline super { block } when the parent method uses yield.
    Returns 1 if the expansion was emitted, 0 if it should fall through to a
@@ -15614,7 +15621,7 @@ int emit_super_inline(Compiler *c, int id, Buf *b, int indent, int as_expr) {
   if (g_plan_check) ucall_emitted(id);
   Scope *s = comp_scope_of(c, id);
   if (s->class_id < 0 || !s->name) return 0;
-  refuse_super_splat(c, id, a_super_target(c, s));
+  refuse_super_splat(c, id, super_plan_mi(c, id));
   const Scope *st = comp_super_site(c, s);
   int p = comp_super_parent(c, st->class_id, st->is_cmethod);
   int defcls = -1;
@@ -15646,7 +15653,6 @@ int emit_super_inline(Compiler *c, int id, Buf *b, int indent, int as_expr) {
   if (g_plan_check || mi < 0) {
     int odef = -1;
     int omi = shadow ? call_target(c, id, st->class_id, shadow, CT_OWN | CT_REACH | (st->is_cmethod ? CT_CMETHOD : 0), NULL)
-            : p < 0 ? -1
             : cplan_super_chain_mi(c, id, st, p, own, NULL);
     if (!shadow && omi >= 0) odef = c->scopes[omi].class_id;
     if (mi < 0) {
@@ -16054,15 +16060,6 @@ static int struct_super_handle_arg(Compiler *c, int v, Buf *b) {
   return 1;
 }
 
-/* emit_super's target from the super's plan (call_plan.c), or -1. The plan
-   started its lookup where the super does (cplan_super_target), so there is
-   no start to compare. A miss selects the existing builtin or error
-   rendering. */
-static int super_plan_mi(Compiler *c, int id) {
-  const CallPlan *spl = cplan_user(c, id);
-  return spl->via == UC_SUPER ? spl->mi : -1;
-}
-
 /* self, boxed, in a method of class `cls`: a builtin's reopening holds it
    as the builtin's own C value (emit_method_signature) -- a double for a
    Float, the sp_RbVal already for an Array or Object -- and an ordinary
@@ -16080,8 +16077,7 @@ static void emit_reopen_self_boxed(Compiler *c, Scope *s, Buf *b) {
   else if (sp_streq(cn, "Symbol"))  emit_boxed_text(c, TY_SYMBOL, g_self, b);
   else if (sp_streq(rn, "NilClass")) buf_puts(b, "sp_box_nil()");
   else if (sp_streq(rn, "TrueClass") || sp_streq(rn, "FalseClass")) emit_boxed_text(c, TY_BOOL, g_self, b);
-  else if (sp_streq(cn, "Array") || sp_streq(cn, "Hash") || sp_streq(cn, "Object") || sp_streq(cn, "Numeric"))
-    buf_puts(b, g_self);
+  else if (repr_self_boxed(c, (int)(s - c->scopes))) buf_puts(b, g_self);
   else if (sp_streq(cn, "Range")) emit_boxed_text(c, TY_RANGE, g_self, b);
   else if (sp_streq(cn, "Time"))  emit_boxed_text(c, TY_TIME, g_self, b);
   else emit_boxed_text(c, ty_object(cls), g_self, b);
@@ -16141,6 +16137,12 @@ static int emit_super_object_builtin(Compiler *c, int id, Scope *s, const char *
   if (!kind || c->classes[s->class_id].is_value_type) return 0;
   Buf vb; memset(&vb, 0, sizeof vb);
   TyKind vt = TY_BOOL;
+  /* a reopening of Object takes self boxed (emit_method_signature), any
+     value being its receiver: the arms read that value, not a program
+     class's pointer */
+  Buf sb; memset(&sb, 0, sizeof sb);
+  int boxed_self = repr_self_boxed(c, (int)(s - c->scopes));
+  if (boxed_self) emit_reopen_self_boxed(c, s, &sb);
   if (kind == SUPER_OBJ_SAME) {
     Buf kb; memset(&kb, 0, sizeof kb);
     if (nt_kind(c->nt, id) == NK_ForwardingSuperNode) emit_boxed_fwd_param(c, s, 0, &kb);
@@ -16152,9 +16154,9 @@ static int emit_super_object_builtin(Compiler *c, int id, Scope *s, const char *
     int tk = ++g_tmp;
     buf_printf(&vb, "({ sp_RbVal _a%d = %s; SP_GC_ROOT_RBVAL(_a%d); ", tk, kb.p ? kb.p : "sp_box_nil()", tk);
     emit_super_blockarg_effect(c, id, &vb);
-    buf_printf(&vb, "sp_RbVal _s%d = sp_box_nullable_obj_dyn((void *)%s, 0); "
-                    "(sp_bool)(_a%d.tag == _s%d.tag && _a%d.v.p == _s%d.v.p); })",
-               tk, g_self, tk, tk, tk, tk);
+    if (boxed_self) buf_printf(&vb, "sp_RbVal _s%d = %s; ", tk, sb.p);
+    else buf_printf(&vb, "sp_RbVal _s%d = sp_box_nullable_obj_dyn((void *)%s, 0); ", tk, g_self);
+    buf_printf(&vb, "(sp_bool)(_a%d.tag == _s%d.tag && _a%d.v.p == _s%d.v.p); })", tk, tk, tk, tk);
     free(kb.p);
   }
   else if (kind == SUPER_OBJ_ROW) {
@@ -16192,7 +16194,14 @@ static int emit_super_object_builtin(Compiler *c, int id, Scope *s, const char *
     buf_puts(&vb, "({ ");
     emit_super_blockarg_effect(c, id, &vb);
     if (kind == SUPER_OBJ_FALSE) buf_puts(&vb, "((sp_bool)0); })");
-    else if (kind == SUPER_OBJ_FROZEN) buf_printf(&vb, "((sp_bool)sp_gc_is_frozen(%s)); })", g_self);
+    else if (kind == SUPER_OBJ_FROZEN) {
+      if (boxed_self) buf_printf(&vb, "((sp_bool)sp_poly_frozen(%s)); })", sb.p);
+      else buf_printf(&vb, "((sp_bool)sp_gc_is_frozen(%s)); })", g_self);
+    }
+    else if (boxed_self) {
+      vt = TY_POLY;
+      buf_printf(&vb, "%s; })", sb.p);
+    }
     else {
       vt = ty_object(s->class_id);
       buf_printf(&vb, "((sp_%s *)%s); })", c->classes[s->class_id].c_name, g_self);
@@ -16201,6 +16210,7 @@ static int emit_super_object_builtin(Compiler *c, int id, Scope *s, const char *
   if (repr_of(c, id).kind == RK_BOXED) emit_boxed_text(c, vt, vb.p, b);
   else buf_puts(b, vb.p);
   free(vb.p);
+  free(sb.p);
   return 1;
 }
 
@@ -16265,8 +16275,7 @@ void emit_super(Compiler *c, int id, Buf *b) {
   refuse_from_plan(c, id, CRF_LIMIT, "super-refusal");
   if (repr_of(c, id).demand && repr_call_returns_handle(c, id) && emit_strbuf_route(c, id, b)) return;
   if (g_plan_check) ucall_emitted(id);
-  { Scope *ss = comp_scope_of(c, id);
-    if (ss && ss->class_id >= 0 && ss->name) refuse_super_splat(c, id, a_super_target(c, ss)); }
+  refuse_super_splat(c, id, super_plan_mi(c, id));
   Scope *s = comp_scope_of(c, id);
   if (s->class_id < 0 || !s->name) { unsupported(c, id, "super (not in a method)"); return; }
   /* `def inspect = super` / `def to_s = super` reaching Kernel's: the default
@@ -17512,8 +17521,11 @@ static void emit_user_op_dispatch(Compiler *c, Buf *b, const char *fname, const 
       /* no parameter takes the argument: the arm raises, whatever it holds */
       if (api < 0) { gb[0] = 0; snprintf(argbuf, sizeof argbuf, "b"); }
       else if (!user_dispatch_arg(c, m, api, "b", gb, sizeof gb, argbuf, sizeof argbuf)) continue;
+      /* (a reopening of Object takes self boxed, whatever class the arm is for) */
+      const int boxed_self = repr_self_boxed(c, mi);
       char armself[160];
-      snprintf(armself, sizeof armself, "((sp_%s *)a.v.p)", bcase ? c->classes[k].name : dcn);
+      if (boxed_self) snprintf(armself, sizeof armself, "a");
+      else snprintf(armself, sizeof armself, "((sp_%s *)a.v.p)", bcase ? c->classes[k].name : dcn);
       const char *arg = argbuf;
       Buf pre; memset(&pre, 0, sizeof pre);
       Buf args; memset(&args, 0, sizeof args);
@@ -17531,7 +17543,8 @@ static void emit_user_op_dispatch(Compiler *c, Buf *b, const char *fname, const 
       Buf call; memset(&call, 0, sizeof call);
       /* an alias (`alias + |`) resolves to its target's scope: name the C
          function after the RESOLVED method, not the queried operator */
-      if (bcase) buf_printf(&call, "%s(%s%s)", mc_method(c, m), bself, args.p);
+      if (boxed_self) buf_printf(&call, "%s(a%s)", mc_method(c, m), args.p);
+      else if (bcase) buf_printf(&call, "%s(%s%s)", mc_method(c, m), bself, args.p);
       else buf_printf(&call, "%s(%s(sp_%s *)a.v.p%s)", mc_method(c, m), self_vt ? "*" : "", dcn, args.p);
       /* the operands a and b are unrooted: an arm that builds before its call roots them */
       buf_printf(b, "        %s%s*handled = TRUE; return ",
@@ -18062,17 +18075,22 @@ static void emit_obj_valeq_dispatch(Compiler *c, Buf *b) {
     char argb[160], armself[160];
     if (obj_param) snprintf(argb, sizeof argb, "(sp_%s *)b.v.p", c->classes[ty_object_class(pt)].c_name);
     else snprintf(argb, sizeof argb, "b");
-    snprintf(armself, sizeof armself, "((sp_%s *)a.v.p)", dcn);
+    /* (a reopening of Object takes self boxed) */
+    const int boxed_self = repr_self_boxed(c, mi);
+    if (boxed_self) snprintf(armself, sizeof armself, "a");
+    else snprintf(armself, sizeof armself, "((sp_%s *)a.v.p)", dcn);
     const char *arg = argb;
     Buf pre; memset(&pre, 0, sizeof pre);
     Buf args; memset(&args, 0, sizeof args);
     char raise[640];
     int builds = 0;
-    if (emit_arm_args_text(c, mi, armself, &arg, 1, &pre, &args, &builds, raise, sizeof raise))
-      buf_printf(b, "    case %d: { %s%sreturn %s(%s(sp_%s *)a.v.p%s); }\n",
-                 k,
-                 builds ? "SP_GC_ROOT_RBVAL(a); SP_GC_ROOT_RBVAL(b); " : "", pre.p ? pre.p : "",
-                 mc_method(c, m), slf, dcn, args.p);
+    if (emit_arm_args_text(c, mi, armself, &arg, 1, &pre, &args, &builds, raise, sizeof raise)) {
+      buf_printf(b, "    case %d: { %s%sreturn %s(", k,
+                 builds ? "SP_GC_ROOT_RBVAL(a); SP_GC_ROOT_RBVAL(b); " : "", pre.p ? pre.p : "", mc_method(c, m));
+      if (boxed_self) buf_puts(b, "a");
+      else buf_printf(b, "%s(sp_%s *)a.v.p", slf, dcn);
+      buf_printf(b, "%s); }\n", args.p);
+    }
     else
       buf_printf(b, "    case %d: { %s return FALSE; }\n", k, raise);
     free(pre.p); free(args.p);
@@ -18782,8 +18800,8 @@ static void why_hop(WhyOut *o, int id, const char *role, const char *extra) {
   int fid = (int)nt_int(nt, id, "node_file", 0);
   char text[64], rbs[128];
   why_slice(c, id, text, sizeof text);
-  if (id < c->node_cap && c->ntype[id] == TY_UNKNOWN) snprintf(rbs, sizeof rbs, "untyped (no type of its own)");
-  else why_rbs(c, id < c->node_cap ? c->ntype[id] : TY_UNKNOWN, rbs, sizeof rbs);
+  if (id < c->node_cap && comp_ntype_stored(c, id) == TY_UNKNOWN) snprintf(rbs, sizeof rbs, "untyped (no type of its own)");
+  else why_rbs(c, id < c->node_cap ? comp_ntype_stored(c, id) : TY_UNKNOWN, rbs, sizeof rbs);
   if (!o->json) {
     /* a synthesized node (an `__enum_to_a` body, a splice) has no source
        line to point at and nothing to quote */
@@ -18836,7 +18854,7 @@ static int why_pushed_object(Compiler *c, int lit) {
     if (!rn || !sp_streq(rn, nm) || comp_scope_of(c, recv) != ws) continue;
     int args = nt_ref(nt, id, "arguments");
     int n = 0; const int *a = args >= 0 ? nt_arr(nt, args, "arguments", &n) : NULL;
-    if (a && n >= 1 && a[0] < c->node_cap && ty_is_object(c->ntype[a[0]])) return ty_object_class(c->ntype[a[0]]);
+    if (a && n >= 1 && a[0] < c->node_cap && ty_is_object(comp_ntype_stored(c, a[0]))) return ty_object_class(comp_ntype_stored(c, a[0]));
   }
   return -1;
 }
@@ -18845,7 +18863,7 @@ static int why_pushed_object(Compiler *c, int lit) {
    end: two concrete kinds met, or a transient the fixpoint kept. */
 static void why_slot_end(WhyOut *o, const SlotWhy *w, const char *role) {
   Compiler *c = o->c;
-  TyKind now = c->ntype[w->node];
+  TyKind now = comp_ntype_stored(c, w->node);
   char extra[224], b[64];
   int other_ok = w->other >= 0 && w->other < c->node_cap && w->other != w->node;
   /* two concrete kinds met: the slot held one (prev, from `other`) and this
@@ -18856,7 +18874,7 @@ static void why_slot_end(WhyOut *o, const SlotWhy *w, const char *role) {
   int is_ret = sp_streq(role, "returned") || why_return_of(c, w->node) == w;
   int meet = !ty_degraded(w->then) && ((w->prev != TY_UNKNOWN && w->prev != now) || other_ok);
   if (meet) {
-    if (other_ok) why_rbs(c, c->ntype[w->other], b, sizeof b); else why_rbs(c, w->prev, b, sizeof b);
+    if (other_ok) why_rbs(c, comp_ntype_stored(c, w->other), b, sizeof b); else why_rbs(c, w->prev, b, sizeof b);
     snprintf(extra, sizeof extra, ", where %s %s (two kinds meet: untyped)", is_ret ? "a `return` gives" : "the slot was", b);
   }
   else if (now == TY_UNKNOWN) {
@@ -18953,7 +18971,7 @@ static void why_chain(WhyOut *o, const SlotWhy *w, const char *first) {
     int subj = (w->node >= 0 && w->node < c->node_cap) ? w->node : -1;
     if (subj < 0) { why_plain(o, w->reason); return; }
     char extra[256]; snprintf(extra, sizeof extra, " -- %s", w->reason);
-    if (!ty_degraded(c->ntype[subj]) || c->norigin[subj] == subj || c->norigin[subj] < 0) { why_hop(o, subj, "by", extra); return; }
+    if (!ty_degraded(comp_ntype_stored(c, subj)) || c->norigin[subj] == subj || c->norigin[subj] < 0) { why_hop(o, subj, "by", extra); return; }
     why_hop(o, subj, "by", extra);
     SlotWhy on = *w; on.reason = NULL;
     why_chain(o, &on, "from");
@@ -18963,7 +18981,7 @@ static void why_chain(WhyOut *o, const SlotWhy *w, const char *first) {
     why_plain(o, "untraced: no record of what widened it");
     return;
   }
-  if (!ty_degraded(c->ntype[w->node])) { why_slot_end(o, w, first); return; }
+  if (!ty_degraded(comp_ntype_stored(c, w->node))) { why_slot_end(o, w, first); return; }
   int id = w->node, depth = 0;
   const char *role = first;
   int seen[16]; int ns = 0;
@@ -18992,7 +19010,7 @@ static void why_chain(WhyOut *o, const SlotWhy *w, const char *first) {
       why_chain(o, rs, "by");
       return;
     }
-    if (rs && !ty_degraded(c->ntype[rs->node])) {
+    if (rs && !ty_degraded(comp_ntype_stored(c, rs->node))) {
       if (!silent) why_hop(o, id, role, NULL);
       why_slot_end(o, rs, rl->is_param ? "passed" : "written");
       return;
@@ -19003,7 +19021,7 @@ static void why_chain(WhyOut *o, const SlotWhy *w, const char *first) {
       Scope *sc = comp_scope_of(c, id);
       LocalVar *lv = (nm && sc) ? scope_local(sc, nm) : NULL;
       int recv = (lv && lv->is_block_param) ? why_block_recv(c, id, nm) : -1;
-      if (recv >= 0 && recv < c->node_cap && ty_degraded(c->ntype[recv]) && recv != id) {
+      if (recv >= 0 && recv < c->node_cap && ty_degraded(comp_ntype_stored(c, recv)) && recv != id) {
         if (!silent) why_hop(o, id, role, " (a parameter of the block on:)");
         role = "from"; id = recv; last_ln = -1;
         continue;
@@ -19028,12 +19046,12 @@ static void why_chain(WhyOut *o, const SlotWhy *w, const char *first) {
            candidate is the news */
         why_hop(o, id, role, cx);
         const SlotWhy *rw = &c->scopes[cand].ret_why;
-        if (!ty_degraded(c->ntype[rw->node])) { why_slot_end(o, rw, "returned"); return; }
+        if (!ty_degraded(comp_ntype_stored(c, rw->node))) { why_slot_end(o, rw, "returned"); return; }
         role = "returned"; id = rw->node; last_ln = -1; depth++;
         continue;
       }
     }
-    if (lost && !ty_degraded(c->ntype[id])) {
+    if (lost && !ty_degraded(comp_ntype_stored(c, id))) {
       /* a concrete value the chain arrived at: a callee's return that met
          two kinds, else a value the fixpoint saw untyped for a while */
       const SlotWhy *rw = why_return_of(c, id);
@@ -19150,7 +19168,7 @@ static char *build_types_json(Compiler *c) {
   buf_puts(&b, "{\n  \"types\": [\n");
   int tn = 0;
   for (int id = 0; id < nt->count && id < c->node_cap; id++) {
-    TyKind t = c->ntype[id];
+    TyKind t = comp_ntype_stored(c, id);
     /* A parameter is not an expression the typer stamps, so it had no record
        and a consumer found no declaration to go to, and hover on it answered
        the def's signature. Its type is the slot's, the one the signature
@@ -19400,7 +19418,7 @@ static int program_needs_class_machinery(Compiler *c) {
      keeps the bank */
   if (c->nclasses > 0)
     for (int i = 0; i < c->nt->count && i < c->node_cap; i++) {
-      TyKind t = c->ntype[i];
+      TyKind t = comp_ntype_stored(c, i);
       if (t == TY_POLY || ty_is_array(t) || ty_is_hash(t)) return 1;
     }
   const NodeTable *nt = c->nt;
@@ -19542,7 +19560,7 @@ static int scan_ret_leaf_polyish(const VpLeaf *leaf, void *ud) {
   if (leaf->kind != VPK_EXPR) return 1;
   NodeKind k = nt_kind(c->nt, leaf->node);
   if ((k == NK_WhileNode || k == NK_UntilNode) && !loop_value_live(c, leaf->node)) return 0;
-  TyKind t = c->ntype[leaf->node];
+  TyKind t = comp_ntype_stored(c, leaf->node);
   return t == TY_POLY || ty_is_array(t) || ty_is_hash(t);
 }
 /* Does the read of a thread-family constant (node i) run no thread: it sits
@@ -19802,7 +19820,7 @@ static void scan_prologue_features(Compiler *c) {
          own; a loop with no valued break answers nil */
       NodeKind ik = nt_kind(nt, i);
       if (ik == NK_StatementsNode || ((ik == NK_WhileNode || ik == NK_UntilNode) && !loop_value_live(c, i))) continue;
-      SP_TT(c->ntype[i]);
+      SP_TT(comp_ntype_stored(c, i));
     }
     free(dsl);
     free(par);

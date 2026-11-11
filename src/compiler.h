@@ -9,6 +9,8 @@
 #ifndef SPINEL_COMPILER_H
 #define SPINEL_COMPILER_H
 
+#include <stdint.h>
+#include <string.h>
 #include "node_table.h"
 #include "types.h"
 #include "builtin_names.h"
@@ -1278,6 +1280,22 @@ enum { UC_NONE, UC_TOP, UC_INST, UC_CMETH, UC_SUPER, UC_SEND_BLIND, UC_IE,
                        stands for the union the call was typed over */
 typedef struct { int mi; short owner_ci; unsigned char via; } UCallInf;
 
+/* Hide the viewed node arrays from non-owners during ty-setter-check.
+   The renames end with this header, so similarly named fields of other
+   records are unaffected. compiler.c owns allocation/growth/free, and
+   codegen_view.c owns temporary overrides. */
+#if defined(SP_TY_GUARD) && !defined(SP_NODE_FACT_OWNER)
+#define ntype sp_guarded_ntype
+#define nilnarrow sp_guarded_nilnarrow
+#define strbuf_box sp_guarded_strbuf_box
+#define strbuf_handle_demand sp_guarded_strbuf_handle_demand
+#define poly_strbuf_lift sp_guarded_poly_strbuf_lift
+#define nil_tested sp_guarded_nil_tested
+#define head_held sp_guarded_head_held
+#define value_discarded sp_guarded_value_discarded
+#define str_shadow sp_guarded_str_shadow
+#endif
+
 typedef struct {
   const NodeTable *nt;
   AutoloadRegistration *autoloads; int nautoloads, auto_nodes;
@@ -2160,6 +2178,9 @@ int comp_class_owned_const(Compiler *c, int k, const char *nm, const int *cands,
 const char *comp_class_ruby_leaf(const Compiler *c, int k);
 /* a class's enclosing class changed: the class path table is old */
 void comp_class_path_moved(void);
+/* The program class whose Ruby path is PATH ("A::B", "::A::B", or a
+   top-level "A"), whatever name the class table keys it by; -1 for none */
+int comp_class_at_ruby_path(Compiler *c, const char *path);
 int comp_const_write_valued(const Compiler *c, const LocalVar *cv);
 LocalVar *comp_const_intern(Compiler *c, const char *name);
 /* 1 when `pred` is a statically-false `defined?(Const)` if-guard (optionally
@@ -2263,10 +2284,16 @@ int array_mutator_name(const char *nm);
    write-suppression walk and the pipeline walker must agree on it: #3318,
    #3323 and #3324 were each one list updated and another missed. */
 int lazy_stage_name(const char *nm);
-/* Zero-argument builtin methods the poly dispatch serves with a real arm --
-   the `require "ostruct"` member-read catch-all must not swallow them. */
-int poly_builtin_zero_arg_name(const char *m);
+/* a builtin reader's name (size, first, max, ...) a boxed OpenStruct reads
+   as its member beside the containers' arms (analyze_infer.c) */
 int ostruct_member_name(const char *n);
+/* a name an OpenStruct answers with its own (or Object's, Kernel's) method,
+   not with a member (analyze_infer.c) */
+int ostruct_keeps_method(const char *n);
+/* boxed call `id`, on a receiver of type `rt`, may read an OpenStruct member:
+   the analysis types it boxed and codegen serves it through the poly dispatch,
+   which reads the member ahead of the other arms (analyze_infer_recv.c) */
+int ostruct_member_read(Compiler *c, int id, TyKind rt);
 int chain_is_lazy_valued(Compiler *c, int node);      /* CallNode chain evaluating to a Lazy */
 int poly_str_iter_enum(Compiler *c, int id);        /* boxed String iterator answers an Enumerator (analyze_infer_recv.c) */
 int poly_io_codepoint_enum(Compiler *c, int id);   /* boxed each_codepoint takes the IO arm (analyze_infer_recv.c) */
@@ -2551,6 +2578,7 @@ const PolyCand *comp_poly_candidates(Compiler *c, const char *name, int *n);
    (cls_fact_excludes, #8530): what its arms are counted, typed and emitted from */
 const PolyCand *comp_poly_candidates_at(Compiler *c, int id, const char *name, int *n);
 extern unsigned comp_table_gen;
+extern unsigned comp_vis_gen;   /* bumped when a visibility or an undef table changes */
 extern unsigned comp_instantiated_gen;   /* bumped whenever a class's instantiated flag may have moved (compute_instantiated, a C extension's class) */
 void comp_poly_candidates_reset(void);
 /* The classes answering class method `name` through their chain, ascending,
@@ -2721,6 +2749,69 @@ void emit_trace_ask(Compiler *c, int id, int kind, int round, const char *walk);
 void emit_trace_fact(Compiler *c, int id, int kind, int was, int now);
 void emit_trace_sets(Compiler *c, const char *walk);
 #endif
+/* Raw node facts: no bounds fallback, memo dependency, yield hook or
+   String refinement. Callers keep the guards of the original array read. */
+static inline TyKind comp_ntype_stored(const Compiler *c, int id) { return c->ntype[id]; }
+static inline TyKind comp_nilnarrow_stored(const Compiler *c, int id) { return c->nilnarrow[id]; }
+static inline unsigned char comp_strbuf_box_stored(const Compiler *c, int id) { return c->strbuf_box[id]; }
+static inline unsigned char comp_strbuf_handle_demand_stored(const Compiler *c, int id) { return c->strbuf_handle_demand[id]; }
+static inline unsigned char comp_poly_strbuf_lift_stored(const Compiler *c, int id) { return c->poly_strbuf_lift[id]; }
+static inline unsigned char comp_nil_tested_stored(const Compiler *c, int id) { return c->nil_tested[id]; }
+static inline unsigned char comp_head_held_stored(const Compiler *c, int id) { return c->head_held[id]; }
+static inline unsigned char comp_value_discarded_stored(const Compiler *c, int id) { return c->value_discarded[id]; }
+static inline unsigned char comp_str_shadow_stored(const Compiler *c, int id) { return c->str_shadow[id]; }
+
+/* Presence checks for optional storage; these never read an element. */
+static inline int comp_ntype_present(const Compiler *c) { return c->ntype != NULL; }
+static inline int comp_nilnarrow_present(const Compiler *c) { return c->nilnarrow != NULL; }
+static inline int comp_poly_strbuf_lift_present(const Compiler *c) { return c->poly_strbuf_lift != NULL; }
+static inline int comp_nil_tested_present(const Compiler *c) { return c->nil_tested != NULL; }
+static inline int comp_head_held_present(const Compiler *c) { return c->head_held != NULL; }
+static inline int comp_value_discarded_present(const Compiler *c) { return c->value_discarded != NULL; }
+static inline int comp_str_shadow_present(const Compiler *c) { return c->str_shadow != NULL; }
+
+/* Existing unversioned stores, kept separate from the memo-invalidating
+   comp_set_* operations. Routing them here must not add an invalidation. */
+static inline void comp_write_strbuf_box(Compiler *c, int id, unsigned char v) { ((unsigned char *)c->strbuf_box)[id] = v; }
+static inline void comp_write_strbuf_handle_demand(Compiler *c, int id, unsigned char v) { c->strbuf_handle_demand[id] = v; }
+static inline void comp_write_poly_strbuf_lift(Compiler *c, int id, unsigned char v) { c->poly_strbuf_lift[id] = v; }
+static inline void comp_write_nil_tested(Compiler *c, int id, unsigned char v) { c->nil_tested[id] = v; }
+
+/* Byte-for-byte snapshots used by the analysis convergence check. */
+static inline void comp_ntype_snapshot(const Compiler *c, TyKind *out, int n) {
+  memcpy(out, c->ntype, sizeof(TyKind) * (size_t)n);
+}
+static inline int comp_ntype_snapshot_equal(const Compiler *c, const TyKind *old, int n) {
+  return !memcmp(old, c->ntype, sizeof(TyKind) * (size_t)n);
+}
+
+/* The node-mark portion of the analysis state digest. Keep the old byte
+   order, element widths and absent-array checks; mix is analysis's hash. */
+static inline uint64_t comp_node_marks_digest(const Compiler *c, uint64_t h, int n,
+                                             uint64_t (*mix)(uint64_t, const void *, size_t)) {
+  if (c->norigin) h = mix(h, c->norigin, (size_t)n * sizeof *c->norigin);
+  if (c->strbuf_box) h = mix(h, c->strbuf_box, (size_t)n * sizeof *c->strbuf_box);
+  if (c->strbuf_handle_demand) h = mix(h, c->strbuf_handle_demand, (size_t)n * sizeof *c->strbuf_handle_demand);
+  if (c->strbuf_read_raw) h = mix(h, c->strbuf_read_raw, (size_t)n * sizeof *c->strbuf_read_raw);
+  if (c->poly_strbuf_lift) h = mix(h, c->poly_strbuf_lift, (size_t)n * sizeof *c->poly_strbuf_lift);
+  if (c->nil_tested) h = mix(h, c->nil_tested, (size_t)n * sizeof *c->nil_tested);
+  if (c->head_held) h = mix(h, c->head_held, (size_t)n * sizeof *c->head_held);
+  if (c->value_discarded) h = mix(h, c->value_discarded, (size_t)n * sizeof *c->value_discarded);
+  if (c->str_shadow) h = mix(h, c->str_shadow, (size_t)n * sizeof *c->str_shadow);
+  if (c->nilnarrow) h = mix(h, c->nilnarrow, (size_t)n * sizeof *c->nilnarrow);
+  if (c->empty_arr_recv) h = mix(h, c->empty_arr_recv, (size_t)n * sizeof *c->empty_arr_recv);
+  if (c->empty_hash_recv) h = mix(h, c->empty_hash_recv, (size_t)n * sizeof *c->empty_hash_recv);
+  if (c->empty_hash_arg) h = mix(h, c->empty_hash_arg, (size_t)n * sizeof *c->empty_hash_arg);
+  if (c->store_misfit_arg) h = mix(h, c->store_misfit_arg, (size_t)n * sizeof *c->store_misfit_arg);
+  if (c->ivar_widen_src) h = mix(h, c->ivar_widen_src, (size_t)n * sizeof *c->ivar_widen_src);
+  if (c->hash_want) h = mix(h, c->hash_want, (size_t)n * sizeof *c->hash_want);
+  if (c->arr_want) h = mix(h, c->arr_want, (size_t)n * sizeof *c->arr_want);
+  if (c->lw_joined) h = mix(h, c->lw_joined, (size_t)n * sizeof *c->lw_joined);
+  if (c->poly_builtin_ty) h = mix(h, c->poly_builtin_ty, (size_t)n * sizeof *c->poly_builtin_ty);
+  if (c->bop_inf) h = mix(h, c->bop_inf, (size_t)n * sizeof *c->bop_inf);
+  return h;
+}
+
 static inline TyKind comp_set_ntype(Compiler *c, int id, TyKind t) {
 #ifdef SP_EMIT_TRACE
   if (c->ntype[id] != t) emit_trace_fact(c, id, 't', (int)c->ntype[id], (int)t);
@@ -2831,5 +2922,17 @@ int allocate_on_own_class(Compiler *c, int id);    /* allocate on the method's o
 /* An ivar whose type came from an --rbs seed (class_pin_ivar). Codegen reads
    it to decide where a seed assertion belongs (#3412). */
 int class_ivar_pinned(ClassInfo *ci, const char *name);
+
+#if defined(SP_TY_GUARD) && !defined(SP_NODE_FACT_OWNER)
+#undef ntype
+#undef nilnarrow
+#undef strbuf_box
+#undef strbuf_handle_demand
+#undef poly_strbuf_lift
+#undef nil_tested
+#undef head_held
+#undef value_discarded
+#undef str_shadow
+#endif
 
 #endif

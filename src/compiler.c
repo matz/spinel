@@ -1,3 +1,4 @@
+#define SP_NODE_FACT_OWNER 1
 #include <assert.h>
 #include "compiler.h"
 #include "share.h"
@@ -877,6 +878,27 @@ static int class_with_path_key(Compiler *c, const char *p) {
     int k = cpk_tab.slot[j];
     if (class_path_key(c, k, kp, sizeof kp) && sp_streq(kp, p)) return k;
   }
+  return -1;
+}
+/* See compiler.h. */
+int comp_class_at_ruby_path(Compiler *c, const char *path) {
+  if (!path || !*path) return -1;
+  if (path[0] == ':' && path[1] == ':') path += 2;   /* `::A::B` is A::B */
+  /* a class written where its path is spelled out (`module A; class B`) by
+     the key of its leaves; a class keyed with no enclosing link (a native
+     class declared as "IO::Buffer", a class under a builtin) by the Ruby
+     name it carries */
+  char key[512];
+  size_t j = 0;
+  for (const char *p = path; *p && j + 2 < sizeof key; ) {
+    if (p[0] == ':' && p[1] == ':') { key[j++] = '_'; key[j++] = '_'; p += 2; }
+    else key[j++] = *p++;
+  }
+  key[j] = 0;
+  int k = class_with_path_key(c, key);
+  if (k >= 0 && !(c->classes[k].ruby_name_cache && !sp_streq(c->classes[k].ruby_name_cache, path))) return k;
+  for (int i = 0; i < c->nclasses; i++)
+    if (c->classes[i].ruby_name_cache && sp_streq(c->classes[i].ruby_name_cache, path)) return i;
   return -1;
 }
 /* The constant class k owns under NM (comp_const_tail_cands above), or -1:
@@ -2386,11 +2408,14 @@ static void vis_table_set(char ***names, int **kinds, int *n, int *cap, const ch
   (*n)++;
 }
 
+unsigned comp_vis_gen = 0;   /* bumped when a visibility or an undef table changes (the respond_to? lists' memo stamp) */
 void comp_method_vis_set(ClassInfo *ci, const char *name, int kind) {
+  comp_vis_gen++;
   vis_table_set(&ci->vis_names, &ci->vis_kinds, &ci->nvis, &ci->cvis, name, kind);
 }
 
 void comp_cmethod_vis_set(ClassInfo *ci, const char *name, int kind) {
+  comp_vis_gen++;
   vis_table_set(&ci->cm_vis_names, &ci->cm_vis_kinds, &ci->ncm_vis, &ci->ccm_vis, name, kind);
 }
 
@@ -3031,6 +3056,7 @@ int setter_base_name(const char *name, char *out, size_t cap) {
   return 1;
 }
 void comp_add_undef(ClassInfo *ci, const char *name) {
+  comp_vis_gen++;
   name_add(&ci->undefs, &ci->nundefs, &ci->cundefs, name);
 }
 int comp_is_undeffed_in_chain(Compiler *c, int class_id, const char *name) {
@@ -5583,12 +5609,10 @@ int comp_super_object_builtin(Compiler *c, const Scope *s, const char *uname, in
   int root = s->class_id;
   for (int d = 0; c->classes[root].parent >= 0 && d < 64; d++) root = c->classes[root].parent;
   if (kernel && class_is_blank_slate(c, root) && comp_super_parent(c, root, 0) < 0) return 0;
-  const char *own[] = { "Object", "Kernel", "BasicObject" };
-  for (int i = 0; i < 3; i++) {
-    int k = comp_builtin_class_named(c, own[i]);
-    if (k >= 0 && comp_method_in_class(c, k, uname) >= 0) return 0;
-  }
-  return kind;
+  /* (a method of the program's Object, Kernel or BasicObject is the plan's;
+     a program's Kernel def is reached with its receiver as self, which the
+     super cannot give it yet: it raises as it did) */
+  return cplan_super_target(c, id, s, NULL) < 0 && !cplan_kernel_def(c, uname) ? kind : 0;
 }
 
 int comp_super_is_class_new(Compiler *c, int id) {
@@ -5598,8 +5622,7 @@ int comp_super_is_class_new(Compiler *c, int id) {
   if (!s || !s->is_cmethod || s->class_id < 0 || !s->name) return 0;
   if (!sp_streq(comp_scope_user_name(s), "new")) return 0;
   if (comp_super_shadow(c, s)) return 0;
-  int p = c->classes[s->class_id].parent;
-  return p < 0 || comp_cmethod_in_chain(c, p, "new", NULL) < 0;
+  return cplan_super_target(c, id, s, NULL) < 0;
 }
 
 /* Can a `self.new` called on class k build k, k a descendant of the class

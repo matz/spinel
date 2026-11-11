@@ -1133,7 +1133,7 @@ TyKind block_next_value_ntype(const Compiler *c, int node) {
     if (an > 1) return TY_POLY_ARRAY;
     NodeKind ak = nt_kind(nt, av[0]);
     if (ak == NK_SplatNode) return TY_POLY_ARRAY;
-    return c->ntype[av[0]];
+    return comp_ntype_stored(c, av[0]);
   }
   if (k == NK_WhileNode || k == NK_UntilNode || k == NK_ForNode || k == NK_BlockNode ||
       k == NK_LambdaNode || k == NK_DefNode || k == NK_ClassNode || k == NK_ModuleNode)
@@ -1237,7 +1237,7 @@ static int yield_builtin_method_site_type(const Compiler *c, int id, TyKind *out
   if (!op || recv < 0) return 0;
   if (nt_kind(nt, recv) != NK_YieldNode && nt_kind(nt, recv) != NK_CallNode) return 0;
   if (nt_ref(nt, id, "block") >= 0) return 0;
-  if (c->ntype[id] != TY_POLY) return 0;
+  if (comp_ntype_stored(c, id) != TY_POLY) return 0;
   int an = nt_ref(nt, id, "arguments"), ac = 0;
   const int *av = an >= 0 ? nt_arr(nt, an, "arguments", &ac) : NULL;
   TyKind rt;
@@ -1274,7 +1274,7 @@ static int untyped_call_held_boxed(const Compiler *c, int id) {
   static unsigned char *memo;   /* 0 not asked, 1 held, 2 not, 3 being asked */
   static const NodeTable *memo_nt;
   static int cap;
-  if (c->ntype[id] != TY_UNKNOWN || nt_kind(c->nt, id) != NK_CallNode) return 0;
+  if (comp_ntype_stored(c, id) != TY_UNKNOWN || nt_kind(c->nt, id) != NK_CallNode) return 0;
   if (memo_nt != c->nt) { if (cap) memset(memo, 0, (size_t)cap); memo_nt = c->nt; }
   if (id >= cap) {
     int n = c->nt->count > id ? c->nt->count : id + 1;
@@ -1341,7 +1341,7 @@ int sp_yield_site_type(const Compiler *c, int id, TyKind *out) {
     if (fn <= 0 || !fb) break;
     tail = fb[fn - 1];
   }
-  TyKind bt = c->ntype[tail];
+  TyKind bt = comp_ntype_stored(c, tail);
   /* only a CONCRETE per-site answer overrides the cache; an unresolved tail
      leaves the node's own (unified) type in place */
   if (bt == TY_UNKNOWN || bt == TY_VOID) return 0;
@@ -2509,8 +2509,8 @@ int strbuf_ivar_owner(Compiler *c, int node) {
      2 -- neither can be told; reflection lists it as before;
      3 -- the slot has an explicit presence flag: a reflection-only slot,
           or one a read of presence reaches (ivs_tracked). */
-static int ivs_writes_toplevel(Compiler *c, int body, const char *ivn, int cid, int depth, int strict);
-static int ivs_may_observe(Compiler *c, int n, int cid, int depth, int lvl);
+static int ivs_writes_toplevel(Compiler *c, int body, const char *ivn, int mi, int depth, int strict);
+static int ivs_may_observe(Compiler *c, int n, int mi, int depth, int lvl);
 /* Strict, the write must also come before anything that may see the
    object (ivs_may_observe): an observation inside initialize ahead of it
    finds the ivar unset. */
@@ -2524,36 +2524,24 @@ static int ivs_method_sets(Compiler *c, int mi, const char *ivn, int depth, int 
   for (int a = 0; a < 2 && ps >= 0; a++) {
     int dn = 0; const int *ds = nt_arr(c->nt, ps, a ? "keywords" : "optionals", &dn);
     for (int i = 0; i < dn; i++)
-      if (ivs_may_observe(c, nt_ref(c->nt, ds[i], "value"), m->class_id, 0, 0)) return 0;
+      if (ivs_may_observe(c, nt_ref(c->nt, ds[i], "value"), mi, 0, 0)) return 0;
   }
-  return ivs_writes_toplevel(c, nt_ref(c->nt, m->def_node, "body"), ivn, m->class_id, depth, strict);
+  return ivs_writes_toplevel(c, nt_ref(c->nt, m->def_node, "body"), ivn, mi, depth, strict);
 }
 static int ivs_init_sets(Compiler *c, int cid, const char *ivn, int depth, int strict) {
   if (cid < 0) return 0;
   return ivs_method_sets(c, comp_method_in_chain(c, cid, "initialize", NULL), ivn, depth, strict);
 }
-/* The method the `super` at node runs, from a method of class cid, as the
-   emitters resolve it: the shadowed copy in the method's own class (an
-   included module's, a prepend's), else the parent's chain under name.
-   -1 when there is none, -2 when it cannot be told. */
-static int ivs_super_method(Compiler *c, int node, int cid, const char *name) {
-  Scope *s = comp_scope_of(c, node);
-  if (!s || s->is_cmethod) return -2;
-  const Scope *st = comp_super_site(c, s);
-  const char *shadow = comp_super_shadow(c, st);
-  if (shadow) { int mi = comp_method_in_class(c, st->class_id, shadow); return mi < 0 ? -2 : mi; }
-  int pc = comp_super_parent(c, st == s ? cid : st->class_id, 0);
-  return pc < 0 ? -1 : comp_method_in_chain(c, pc, name, NULL);
-}
-/* May code under `n`, run in a method of class cid, see the object's ivars:
+/* May code under `n`, run in method scope mi, see the object's ivars:
    self handed on (kept in an ivar of its own, it is not), a reflective read
    or a print of a variable, in it or in a method of the program's it calls
-   on self (the override of a class below cid too) or the parent's
-   initialize its `super` runs? lvl counts the calls followed; past the
+   on self (the override of a class below mi's too) or the parent's
+   initialize its `super` runs (the plan's for the scope mi: an included
+   module's method shares its nodes with its includers' copies)? lvl counts the calls followed; past the
    levels it follows, or on a call back into a method being walked, it
    answers that it may. */
 static int ivs_never_nil(Compiler *c, int v);
-static int ivs_may_observe(Compiler *c, int n, int cid, int depth, int lvl);
+static int ivs_may_observe(Compiler *c, int n, int mi, int depth, int lvl);
 /* ... in the body of method scope mi. The answer depends on the method
    alone, not on the ivar asked about, so it is kept per scope
    (Compiler.pres_obs). */
@@ -2571,7 +2559,7 @@ static int ivs_body_may_observe(Compiler *c, int mi, int lvl) {
   if (c->pres_obs[mi]) return c->pres_obs[mi] != IVO_NO;
   if (lvl >= 32) return 1;
   c->pres_obs[mi] = IVO_BUSY;
-  int r = ivs_may_observe(c, nt_ref(c->nt, m->def_node, "body"), m->class_id, 0, lvl + 1);
+  int r = ivs_may_observe(c, nt_ref(c->nt, m->def_node, "body"), mi, 0, lvl + 1);
   c->pres_obs[mi] = r ? IVO_MAY : IVO_NO;
   return r;
 }
@@ -2588,17 +2576,17 @@ static int ivs_self_call_may_observe(Compiler *c, int call, int cid, const char 
   }
   return 0;
 }
-static int ivs_may_observe(Compiler *c, int n, int cid, int depth, int lvl) {
+static int ivs_may_observe(Compiler *c, int n, int mi, int depth, int lvl) {
   const NodeTable *nt = c->nt;
+  const int cid = c->scopes[mi].class_id;
   if (n < 0) return 0;
   if (depth > 200) return 1;
   switch (nt_kind(nt, n)) {
     case NK_SelfNode: return 1;
     case NK_SuperNode: case NK_ForwardingSuperNode: {
-      Scope *s = comp_scope_of(c, n);
-      if (!s || !s->name) return 1;
-      int sm = ivs_super_method(c, n, cid, s->name);
-      if (sm == -2 || ivs_body_may_observe(c, sm, lvl)) return 1;
+      Scope *s = &c->scopes[mi];
+      /* (a class method's super cannot be told) */
+      if (!s->name || s->is_cmethod || ivs_body_may_observe(c, cplan_super_target(c, n, s, NULL), lvl)) return 1;
       break;
     }
     case NK_DefinedNode:
@@ -2624,43 +2612,43 @@ static int ivs_may_observe(Compiler *c, int n, int cid, int depth, int lvl) {
     default: break;
   }
   int nr = nt_num_refs(nt, n);
-  for (int i = 0; i < nr; i++) if (ivs_may_observe(c, nt_ref_at(nt, n, i), cid, depth + 1, lvl)) return 1;
+  for (int i = 0; i < nr; i++) if (ivs_may_observe(c, nt_ref_at(nt, n, i), mi, depth + 1, lvl)) return 1;
   int na = nt_num_arrs(nt, n);
   for (int i = 0; i < na; i++) {
     int m = 0; const int *ids = nt_arr_at(nt, n, i, &m);
-    for (int j = 0; j < m; j++) if (ivs_may_observe(c, ids[j], cid, depth + 1, lvl)) return 1;
+    for (int j = 0; j < m; j++) if (ivs_may_observe(c, ids[j], mi, depth + 1, lvl)) return 1;
   }
   return 0;
 }
-static int ivs_writes_toplevel(Compiler *c, int body, const char *ivn, int cid, int depth, int strict) {
+static int ivs_writes_toplevel(Compiler *c, int body, const char *ivn, int mi, int depth, int strict) {
   const NodeTable *nt = c->nt;
   if (body < 0) return 0;
   NodeKind k = nt_kind(nt, body);
   if (k == NK_StatementsNode) {
     int n = 0; const int *st = nt_arr(nt, body, "body", &n);
     for (int i = 0; i < n; i++) {
-      if (ivs_writes_toplevel(c, st[i], ivn, cid, depth, strict)) return 1;
-      if (strict && ivs_may_observe(c, st[i], cid, 0, 0)) return 0;
+      if (ivs_writes_toplevel(c, st[i], ivn, mi, depth, strict)) return 1;
+      if (strict && ivs_may_observe(c, st[i], mi, 0, 0)) return 0;
     }
     return 0;
   }
   if (k == NK_ParenthesesNode || k == NK_BeginNode) {
     /* a begin with a rescue may stop before the write */
     if (k == NK_BeginNode && nt_ref(nt, body, "rescue_clause") >= 0) return 0;
-    return ivs_writes_toplevel(c, nt_ref(nt, body, k == NK_BeginNode ? "statements" : "body"), ivn, cid, depth, strict);
+    return ivs_writes_toplevel(c, nt_ref(nt, body, k == NK_BeginNode ? "statements" : "body"), ivn, mi, depth, strict);
   }
   if (k == NK_InstanceVariableWriteNode || k == NK_InstanceVariableOrWriteNode)
-    return sp_streq(nt_str(nt, body, "name"), ivn) && !(strict && ivs_may_observe(c, body, cid, 0, 0));
+    return sp_streq(nt_str(nt, body, "name"), ivn) && !(strict && ivs_may_observe(c, body, mi, 0, 0));
   if (k == NK_MultiWriteNode) {
     int ln = 0; const int *l = nt_arr(nt, body, "lefts", &ln);
-    if (strict && ivs_may_observe(c, nt_ref(nt, body, "value"), cid, 0, 0)) return 0;
+    if (strict && ivs_may_observe(c, nt_ref(nt, body, "value"), mi, 0, 0)) return 0;
     for (int i = 0; i < ln; i++)
       if (nt_kind(nt, l[i]) == NK_InstanceVariableTargetNode && sp_streq(nt_str(nt, l[i], "name"), ivn)) return 1;
     return 0;
   }
   if (k == NK_SuperNode || k == NK_ForwardingSuperNode) {
-    if (strict && ivs_may_observe(c, nt_ref(nt, body, "arguments"), cid, 0, 0)) return 0;
-    return ivs_method_sets(c, ivs_super_method(c, body, cid, "initialize"), ivn, depth + 1, strict);
+    if (strict && ivs_may_observe(c, nt_ref(nt, body, "arguments"), mi, 0, 0)) return 0;
+    return !c->scopes[mi].is_cmethod && ivs_method_sets(c, cplan_super_target(c, body, &c->scopes[mi], NULL), ivn, depth + 1, strict);
   }
   return 0;
 }
@@ -2672,7 +2660,7 @@ static int ivs_writes_toplevel(Compiler *c, int body, const char *ivn, int cid, 
    0) at a statement before the last first write that is no plain ivar
    write, multiple assignment or super, and at a value, a super's argument
    or a target that could run code of the object's own or write an ivar. */
-static int ivs_order_walk(Compiler *c, int body, int cid, int leaf, int *ord, int *n, int depth);
+static int ivs_order_walk(Compiler *c, int body, int mi, int leaf, int *ord, int *n, int depth);
 static int ivs_order_runs_self(Compiler *c, int v, int depth);
 static int ivs_order_method(Compiler *c, int mi, int leaf, int *ord, int *n, int depth) {
   if (mi == -1) return 1;
@@ -2686,7 +2674,7 @@ static int ivs_order_method(Compiler *c, int mi, int leaf, int *ord, int *n, int
     for (int i = 0; i < dn; i++)
       if (ivs_order_runs_self(c, nt_ref(c->nt, ds[i], "value"), 0)) return 0;
   }
-  return ivs_order_walk(c, nt_ref(c->nt, m->def_node, "body"), m->class_id, leaf, ord, n, depth);
+  return ivs_order_walk(c, nt_ref(c->nt, m->def_node, "body"), mi, leaf, ord, n, depth);
 }
 static int ivs_order_init(Compiler *c, int cid, int leaf, int *ord, int *n, int depth) {
   if (cid < 0) return 1;
@@ -2721,7 +2709,7 @@ static int ivs_order_runs_self(Compiler *c, int v, int depth) {
   }
   return 0;
 }
-static int ivs_order_walk(Compiler *c, int body, int cid, int leaf, int *ord, int *n, int depth) {
+static int ivs_order_walk(Compiler *c, int body, int mi, int leaf, int *ord, int *n, int depth) {
   const NodeTable *nt = c->nt;
   if (body < 0) return 1;
   NodeKind k = nt_kind(nt, body);
@@ -2729,12 +2717,12 @@ static int ivs_order_walk(Compiler *c, int body, int cid, int leaf, int *ord, in
     int cnt = 0; const int *st = nt_arr(nt, body, "body", &cnt);
     /* once every ivar has been entered, the rest cannot change the order */
     for (int i = 0; i < cnt && *n < c->classes[leaf].nivars; i++)
-      if (!ivs_order_walk(c, st[i], cid, leaf, ord, n, depth)) return 0;
+      if (!ivs_order_walk(c, st[i], mi, leaf, ord, n, depth)) return 0;
     return 1;
   }
   if (k == NK_ParenthesesNode ||
       (k == NK_BeginNode && nt_ref(nt, body, "rescue_clause") < 0 && nt_ref(nt, body, "ensure_clause") < 0))
-    return ivs_order_walk(c, nt_ref(nt, body, k == NK_BeginNode ? "statements" : "body"), cid, leaf, ord, n, depth);
+    return ivs_order_walk(c, nt_ref(nt, body, k == NK_BeginNode ? "statements" : "body"), mi, leaf, ord, n, depth);
   if (k == NK_InstanceVariableWriteNode || k == NK_InstanceVariableOrWriteNode) {
     if (ivs_order_runs_self(c, nt_ref(nt, body, "value"), 0)) return 0;
     ivs_order_add(c, leaf, nt_str(nt, body, "name"), ord, n);
@@ -2753,8 +2741,8 @@ static int ivs_order_walk(Compiler *c, int body, int cid, int leaf, int *ord, in
     return 1;
   }
   if (k == NK_SuperNode || k == NK_ForwardingSuperNode)
-    return nt_ref(nt, body, "block") < 0 && !ivs_order_runs_self(c, nt_ref(nt, body, "arguments"), 0) &&
-           ivs_order_method(c, ivs_super_method(c, body, cid, "initialize"), leaf, ord, n, depth + 1);
+    return !c->scopes[mi].is_cmethod && nt_ref(nt, body, "block") < 0 && !ivs_order_runs_self(c, nt_ref(nt, body, "arguments"), 0) &&
+           ivs_order_method(c, cplan_super_target(c, body, &c->scopes[mi], NULL), leaf, ord, n, depth + 1);
   return 0;
 }
 /* A value that is never nil: a literal, a constructor of a class with no
@@ -5108,7 +5096,7 @@ void emit_coerce_text(Compiler *c, int node, TyKind from, TyKind slot, int how,
     return;
   case CF_BOX:
     /* (a String into a boxed slot the rule shares: emit_boxed's lift) */
-    if (node >= 0 && c->poly_strbuf_lift[node] && from == TY_STRING) {
+    if (node >= 0 && comp_poly_strbuf_lift_stored(c, node) && from == TY_STRING) {
       buf_puts(b, "sp_poly_strbuf_lift(");
       emit_boxed_text(c, from, text, b);
       buf_puts(b, ")");

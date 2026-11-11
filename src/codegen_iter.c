@@ -1347,7 +1347,7 @@ void emit_proc_yield(Compiler *c, const char *ref, int yargc, const int *yargv, 
   int lmi = ys && ys->is_lowered_yield ? (int)(ys - c->scopes) : -1;
   unsigned live = 0;
   for (int k = 0; k < nm; k++) {
-    if (!c->strbuf_box[yargv[k]] && (local_is_handle(c, yargv[k]) || ivar_read_is_handle(c, yargv[k]))) {
+    if (!comp_strbuf_box_stored(c, yargv[k]) && (local_is_handle(c, yargv[k]) || ivar_read_is_handle(c, yargv[k]))) {
       vt[nv++] = view_push_repr(c, yargv[k], VR_STRBUF_BOX, 1);
       vt[nv++] = view_push(c, yargv[k], TY_STRBUF);
     }

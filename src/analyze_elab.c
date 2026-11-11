@@ -253,13 +253,16 @@ static int lr_literal_kind(NodeKind k);
 static const char *lr_literal_class(NodeKind k);
 static int lr_lazy_later(Compiler *c, int call);
 static int lr_target_runs_block(Compiler *c, int call);
+static int lr_reopen_answers(Compiler *c, const char *cls, const char *name);
+static int lr_reopens_hold_methods(Compiler *c);
 
 /* When the block of `call` runs, from the syntax alone (the receiver is
    not typed yet): ELAB_BLK_NOW before the call answers, for certain: a
    builtin iterator's (the iterator rows) on a literal of a builtin class
-   the program reopens none of; ELAB_BLK_LATER not now, at a time the
-   syntax does not tell (is_deferred_block_call: a Proc, a method body, a
-   thread, at_exit, ...; with lazy, a builtin lazy chain's whose value
+   no reopening of the program answers by that name (lr_reopen_answers);
+   ELAB_BLK_LATER not now, at a time the syntax does not tell
+   (is_deferred_block_call: a Proc, a method body, a thread, at_exit,
+   ...; with lazy, a builtin lazy chain's whose value
    leaves the expression unforced, lr_lazy_later); ELAB_BLK_ASSUMED taken
    to run before the call answers, as an iterator's name, class_eval and
    kin and a class builder's `Class.new(B) do` read, though a method of
@@ -278,7 +281,8 @@ static int elab_block_when(Compiler *c, int call, int lazy) {
   if (is_deferred_block_call(rn, nm) || (lazy && lr_lazy_later(c, call))) return ELAB_BLK_LATER;
   if (is_eval_exec_family(nm) || is_class_builder(rn, nm)) return ELAB_BLK_ASSUMED;
   if (!iter_row_named(nm)) return ELAB_BLK_UNKNOWN;
-  return rv >= 0 && c->lrec && !c->lrec->nreopens && lr_literal_kind(nt_kind(nt, rv)) ? ELAB_BLK_NOW : ELAB_BLK_ASSUMED;
+  const char *lc = rv >= 0 ? lr_literal_class(nt_kind(nt, rv)) : NULL;
+  return lc && c->lrec && !lr_reopen_answers(c, lc, nm) ? ELAB_BLK_NOW : ELAB_BLK_ASSUMED;
 }
 
 /* When the block of `node` (a call's, or an END's body, run at exit)
@@ -1047,7 +1051,7 @@ static int lr_form_answer(Compiler *c, int node, int cls, int sg);
 typedef struct LrHist { int a, b; char *name; LrDef *v; int n, cap, next, nlink; unsigned char open, late; } LrHist;
 /* sup: the superclass the first header naming one names, as resolved
    there (has_sup); LR_UNKNOWN_CLASS when it is not a class the record knows */
-typedef struct LrClass { LrOpen *open; int nopen, copen; LrMixin *mix; int nmix, cmix, sup, sup_ref; unsigned char has_sup, unheld; } LrClass;   /* unheld: the module is mixed onto a receiver the record holds no class of (an object, `o.extend M`) */
+typedef struct LrClass { LrOpen *open; int nopen, copen; LrMixin *mix; int nmix, cmix, sup, sup_ref; unsigned char has_sup, unheld, vconst; } LrClass;   /* vconst: a header in a value wrote its constant (lr_nested_header) */   /* unheld: the module is mixed onto a receiver the record holds no class of (an object, `o.extend M`) */
 /* LR_NEW: a header's entity names a new class; LR_LATER_ALIAS: one an
    alias written after it reopens until N2b; LR_BUILTIN: it reopens a
    builtin, the class registration names (LrHeader.want) */
@@ -2457,11 +2461,28 @@ static void lr_call(ElabRec *x, int node, int fc, int fs, unsigned char *vs, int
    `&&`). A form records its own arguments (lr_call). */
 typedef struct { ElabRec *x; int fc, fs, fnode; unsigned char *vs; } LrNested;
 static void lr_autoload(ElabRec *x, int node, int fc, int fs, int may);
+static int lr_header_builtin(LoadRecord *r, int node);
+static void lr_nested_header(ElabRec *x, int node, int e) {
+  const NodeTable *nt = x->c->nt;
+  LoadRecord *r = x->r;
+  int owner, ci = elab_header_class(x->c, node, &owner, NULL), cp = nt_ref(nt, node, "constant_path");
+  LrClass *kc = ci >= 0 ? lr_class(r, ci) : NULL;
+  if (!kc || kc->nopen || kc->vconst || cp < 0 || lr_header_builtin(r, node)) return;
+  owner = owner >= LR_MAIN ? lr_const_owner(owner) : nt_kind(nt, cp) == NK_ConstantReadNode ?
+    lr_const_scope_owner(x->c, e) : lr_const_owner(x->c->classes[ci].enclosing_class);
+  lr_write(r, ELAB_CONST, owner, lr_written_name(nt, cp), node, 0, r->st[e].may);
+  /* (not an opening of the class: its body's definitions stay unplaced,
+     as no statement of the load phase runs them) */
+  kc->vconst = 1;
+}
 static int lr_nested_part(void *ud, int ch, ElabPos *q) {
   LrNested *n = ud;
   const NodeTable *nt = n->x->c->nt;
   NodeKind k = nt_kind(nt, ch);
   if (q->kind == EP_LIST || q->kind == EP_NEW || (q->bits & LR_LATE) || q->defer) return 0;
+  /* a header in a value (`p((class K; 1; end))`): its class's first opening
+     defines the constant, as a header statement's does (lr_record_stmt) */
+  if ((k == NK_ClassNode || k == NK_ModuleNode) && !q->may) lr_nested_header(n->x, ch, q->e);
   if (k == NK_ClassNode || k == NK_ModuleNode || k == NK_SingletonClassNode || k == NK_BlockNode ||
       k == NK_LambdaNode || k == NK_DefinedNode) return 0;
   /* q->may is a condition inside the statement (lr_record_stmt starts the
@@ -2564,7 +2585,7 @@ static void lr_record_stmt(ElabRec *x, int e) {
        where that is not known, in the lexical scope for a name, in the
        class the scope walk nested it in for a path. A builtin's reopening
        finds Object's constant and writes none, as in CRuby. */
-    if (kc && !kc->nopen && cp >= 0 && !lr_header_builtin(r, node)) {
+    if (kc && !kc->nopen && !kc->vconst && cp >= 0 && !lr_header_builtin(r, node)) {
       int owner;
       elab_header_class(x->c, node, &owner, NULL);
       owner = owner >= LR_MAIN ? lr_const_owner(owner) : nt_kind(nt, cp) == NK_ConstantReadNode ?
@@ -3745,7 +3766,7 @@ static int lr_target_runs_block(Compiler *c, int call) {
   const char *nm = nt_kind(nt, call) == NK_CallNode ? nt_str(nt, call, "name") : NULL;
   int rv = nm ? nt_ref(nt, call, "receiver") : -1;
   const char *cls = rv >= 0 ? lr_literal_class(nt_kind(nt, rv)) : NULL;
-  if (!r || r->nreopens || !cls || !lr_defines(r, nm) || builtin_answers_ahead_of(cls, nm, "Object")) return 0;
+  if (!r || !cls || !lr_defines(r, nm) || builtin_answers_ahead_of(cls, nm, "Object") || lr_reopen_answers(c, cls, nm)) return 0;
   LoadPoint p = elab_point_of(c, call);
   for (int hop = 0; hop < 8; hop++) {
     const LrDef *d = NULL;
@@ -4226,6 +4247,64 @@ static int lr_chain_versions(Compiler *c, int cls, int sg, const char *name, Ela
   LrWalker w = { lr_vv_own, lr_vv_mixin, NULL, NULL, NULL, NULL, lr_sg_tail_end(name) };
   return lr_walk(c, &w, &v, cls, sg, 0) < 0 || v.n < 0 ? -1 : v.n;
 }
+/* The program's reopening of builtin class or module name: its record
+   class, LR_UNKNOWN_CLASS for one the record holds no class of */
+static int lr_reopening_of(const LoadRecord *r, const char *name) {
+  int slot = builtin_core_class_slot(name);
+  return slot >= 0 ? lr_core(r, slot) : LR_UNKNOWN_CLASS;
+}
+/* The visitor of lr_reopen_answers: a class holds the name when the record
+   keeps any entry of it for the class, placed or not and of any kind (a
+   def, a visibility word, an alias, an undef), or the class's body ran code
+   that may define anything (lr_opaque_defines) */
+static int lr_ro_own(void *ud, int cls, int sg) {
+  LrVers_ *v = ud;
+  return lr_hist(v->c->lrec, cls, sg, v->name, 0) || lr_opaque_defines(v->c->lrec, cls) ? LR_W_STOP : 0;
+}
+/* Can the program's reopenings answer `name` on a value of builtin class
+   cls ahead of the builtin's method: does the reopening of an ancestor of
+   cls, up to the first one whose own table holds the name, hold an entry
+   for it (placed or not, any kind), may it define anything, or mix in a
+   module that may, or is it one the record holds no class of? Object's
+   reopening is such an ancestor; main's top level, which defines into the
+   same table, is read where the call is bound (lr_target_runs_block). An
+   empty reopening (`class Object; end`), or one that holds other names,
+   leaves the builtin's answer. Before the record is made every reopening
+   counts, as it did. */
+static int lr_reopen_answers(Compiler *c, const char *cls, const char *name) {
+  LoadRecord *r = c->lrec;
+  if (!r || !r->nreopens) return 0;
+  if (!r->recorded || !cls || !name) return 1;
+  const char *a;
+  for (int i = 0; (a = builtin_ancestor_at(cls, i)); i++) {
+    if (lr_reopened(r, a)) {
+      int k = lr_reopening_of(r, a);
+      LrVers_ v = { c, name, NULL, 0, 0 };
+      LrWalker w = { lr_ro_own, lr_vv_mixin, NULL, NULL, NULL, NULL, LR_TAIL_N };
+      if (k < LR_MAIN || lr_walk_one(c, &w, &v, k, 0, 0)) return 1;
+    }
+    if (builtin_owns_instance_method(a, name)) return 0;
+  }
+  return 0;
+}
+/* Does a reopening of a builtin the program makes hold a method entry or a
+   mixin, which a builtin's call of a hook may reach (or is it one the
+   record holds no class of)? Before the record is made every reopening
+   counts. */
+static int lr_reopens_hold_methods(Compiler *c) {
+  LoadRecord *r = c->lrec;
+  if (!r || !r->nreopens) return 0;
+  if (!r->recorded) return 1;
+  for (int i = 0; i < r->nreopens; i++) {
+    int k = lr_reopening_of(r, r->reopens[i]), n0 = 0, n1 = 0;
+    const LrClass *kc = k >= LR_MAIN ? lr_class(r, k) : NULL;
+    if (!kc || kc->nmix) return 1;
+    elab_class_surface(c, k, 0, &n0);
+    elab_class_surface(c, k, 1, &n1);
+    if (n0 || n1) return 1;
+  }
+  return 0;
+}
 /* the versions of history h, numbered from 1, onto out[n..cap): the new
    count, -1 past cap */
 static int lr_hist_versions(const LoadRecord *r, const LrHist *h, ElabVersion *out, int n, int cap) {
@@ -4239,6 +4318,16 @@ static int lr_hist_versions(const LoadRecord *r, const LrHist *h, ElabVersion *o
 int elab_history_versions(Compiler *c, int cls, int sg, const char *name, ElabVersion *out, int cap) {
   LoadRecord *r = c->lrec;
   return r && r->recorded ? lr_hist_versions(r, lr_hist(r, cls, sg != 0, name, 0), out, 0, cap) : -1;
+}
+int elab_main_history_marked(Compiler *c, const char *name, const char *mark) {
+  ElabVersion vs[32];
+  int n = elab_history_versions(c, LR_MAIN, 0, name, vs, 32);
+  /* (-1: more versions than the buffer holds, or no record: unsure, which a
+     caller that must not answer past a marked version reads as marked) */
+  if (n < 0) return 1;
+  for (int i = 0; i < n; i++)
+    if (nt_int(c->nt, vs[i].v->node, mark, 0)) return 1;
+  return 0;
 }
 ElabStamp elab_stamp(Compiler *c) {
   const LoadRecord *r = c->lrec;
@@ -4439,9 +4528,10 @@ static const char *lr_literal_class(NodeKind k) {
 }
 
 /* Is call id a definition form given literals or the modules it names,
-   or a builtin literal's method given literals when the program reopens
-   no builtin, with no block argument: one with nothing of the program's
-   to call (a hook the program defines aside)? */
+   or a builtin literal's method given literals when no reopening of a
+   builtin the program makes holds a method or a mixin
+   (lr_reopens_hold_methods), with no block argument: one with nothing of
+   the program's to call (a hook the program defines aside)? */
 static int lr_literal_args(const NodeTable *nt, const int *av, int ac, int form);
 static int lr_call_on_literals(Compiler *c, int id) {
   const NodeTable *nt = c->nt;
@@ -4450,7 +4540,7 @@ static int lr_call_on_literals(Compiler *c, int id) {
   const int *av = an >= 0 ? nt_arr(nt, an, "arguments", &ac) : NULL;
   int form = recv < 0 && nm && definition_form_hooks(nm, 0, hook) > 0;
   return nm && (blk < 0 || nt_kind(nt, blk) == NK_BlockNode) && lr_literal_args(nt, av, ac, form) &&
-         (form || (recv >= 0 && !c->lrec->nreopens && lr_literal_kind(nt_kind(nt, recv))));
+         (form || (recv >= 0 && lr_literal_kind(nt_kind(nt, recv)) && !lr_reopens_hold_methods(c)));
 }
 
 /* Are the arguments av[0..ac) literals (or, to a form, defs as in
@@ -7642,7 +7732,14 @@ int elab_fire_after(Compiler *c, int list, int j) {
    and its body stays encl's. */
 int elab_rec_open(Compiler *c, int node, int cp, const char *cname, int encl) {
   if (!cname) { elab_header_opened(c, node, -1, 0); return encl; }
-  int ci = comp_class_index(c, cname), made = ci < 0;
+  /* the class the header's entity holds (elab_header_entity): the one it
+     reopens, or none for a new one; where the record does not know (an
+     alias, a write that may not have run), the class of its name */
+  const LrHeader *h = c->lrec && c->lrec->walk ? lr_header(c->lrec, node, 0) : NULL;
+  int ci = h && h->want >= 0 && h->want < c->nclasses ? h->want
+         : h && h->want == LR_NEW && comp_class_index(c, cname) < 0 ? -1
+         : comp_class_index(c, cname);
+  int made = ci < 0;
   if (made) {
     comp_class_new(c, cname, node);
     ci = c->nclasses - 1;

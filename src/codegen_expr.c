@@ -1,4 +1,12 @@
 #include "codegen_internal.h"
+
+/* Does class k, or a class below it, hold a slot for ivar nm? A method of
+   k runs on a subclass's instance too, whose slot it then reads. */
+int ivar_slot_below(Compiler *c, int k, const char *nm) {
+  for (int j = 0; nm && j < c->nclasses; j++)
+    if ((j == k || is_descendant(c, j, k)) && comp_ivar_index(&c->classes[j], nm) >= 0) return 1;
+  return 0;
+}
 #include "repr.h"
 #include "share.h"
 #include "holder.h"
@@ -2846,6 +2854,26 @@ static int emit_local_ivar_write_expr(Compiler *c, int id, Buf *b, const NodeTab
     if (tcid3 >= 0) {
       int iv3 = comp_ivar_index(&c->classes[tcid3], nm);
       if (iv3 >= 0) { ivt3 = c->classes[tcid3].ivar_types[iv3]; eh3 = repr_of_ivar(c, tcid3, iv3).elems_handle; }
+      /* an ivar only nil is written to has no slot, here or in a subclass
+         the method can run on: it is nil, so `||=` answers the value it runs
+         (the nil it writes, a frozen receiver refusing the write) and `&&=`
+         answers nil without running it. Read as a field, the C named a
+         member the struct does not have. */
+      /* (an instance method's only: a class body's ivar is the class's, its
+         storage a civ_ static) */
+      else if (cws3 && cws3->class_id >= 0 && !cws3->is_cmethod && !tl3 && comp_ntype(c, v) == TY_NIL &&
+               !ivar_slot_below(c, tcid3, nm)) {
+        if (!is_or) { emit_slot_nil_read(c, comp_ntype(c, id), b); return 1; }
+        Buf fz; memset(&fz, 0, sizeof fz);
+        emit_frozen_obj_guard(c, tcid3, g_self ? g_self : "self", &fz);
+        if (!fz.p) { emit_expr(c, v, b); return 1; }
+        int t = ++g_tmp;
+        buf_printf(b, "({ __auto_type _t%d = ", t);
+        emit_expr(c, v, b);
+        buf_printf(b, "; %s_t%d; })", fz.p, t);
+        free(fz.p);
+        return 1;
+      }
     }
     char ref3[300];
     if (cws3 && cws3->is_cmethod && cid3 >= 0)

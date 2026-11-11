@@ -1330,6 +1330,7 @@ void emit_trace_node(Compiler *c, int id, int kind);
 /* A require under --load-model=graph, as its value (codegen_stmt.c) */
 void emit_load_call(Compiler *c, int id, Buf *b);
 int emit_autoload_register(Compiler *c, int id, Buf *b);
+int ivar_slot_below(Compiler *c, int k, const char *nm);
 int emit_const_autoload_run(Compiler *c, int id, Buf *b);   /* codegen_util.c */
 void emit_file_feature(const NodeTable *nt, int f, Buf *b);
 void emit_load_path_seed(Compiler *c, Buf *b);

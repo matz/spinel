@@ -4243,6 +4243,9 @@ int elab_history_versions(Compiler *c, int cls, int sg, const char *name, ElabVe
 int elab_main_history_marked(Compiler *c, const char *name, const char *mark) {
   ElabVersion vs[32];
   int n = elab_history_versions(c, LR_MAIN, 0, name, vs, 32);
+  /* (-1: more versions than the buffer holds, or no record: unsure, which a
+     caller that must not answer past a marked version reads as marked) */
+  if (n < 0) return 1;
   for (int i = 0; i < n; i++)
     if (nt_int(c->nt, vs[i].v->node, mark, 0)) return 1;
   return 0;

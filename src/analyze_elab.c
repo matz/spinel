@@ -147,9 +147,12 @@ struct LoadRecord {
   unsigned char *clsmod; int clsmod_all; struct { int nhist, ncls, recorded; unsigned ver; } clsmod_of;   /* lr_class_object_modules, and the record state it is of */
   int *mixed, nmixed; struct { int nhist, ncls, recorded; unsigned ver; } mixed_of;   /* lr_mixed */
   /* lr_chain_mixed's answers by class side, [2 * (cls + 1) + sg]: 0 not asked yet, 1 every class of lr_mixed, else 2 +
-     where in list the count and then the classes start; seen, walked and depth the walk's scratch (a class's mark
-     when reached, a module's when its chain is walked, and the deepest start it was walked from); ready from lr_mixin_dups_settle to lr_record_drop; and the record state the answers are of */
-  struct LrAnc { int *at, *list, nlist, clist, *seen, *walked, *depth, mark; unsigned char ready; struct { unsigned long hgen; unsigned shape, ver; int nhist, ncls, nclasses, recorded; } of; } anc;
+     where in list the count (its k) and then the classes start, each with lr_in_ancestry_fixed's answer for it; seen,
+     walked, depth and up the walk's scratch (a class's mark when reached, a module's when its chain is walked, and the
+     deepest start it was walked from, a superclass's mark); ready from lr_mixin_dups_settle to lr_record_drop; and the
+     record state the answers are of */
+  struct LrAnc { int *at, nlist, clist, *seen, *walked, *depth, *up, mark; struct LrAncK { int k, on; } *list; unsigned char ready;
+                 struct { unsigned long hgen; unsigned shape, ver; int nhist, ncls, nclasses, recorded; } of; } anc;
   int *mby, *mby_at, mby_unknown; struct { int nhist, ncls, recorded; unsigned ver; } mby_of;   /* lr_mixed_by: who mixes each module in, as (class + 1) * 2 + singleton, CSR by module + 1 */
   int *rclass; struct { unsigned long hgen, nedits; unsigned shape, nver; int nclasses; } rclass_of;   /* [nclasses] by class: elab_record_class_of's answer + 2, 0 for not asked yet, and the state it is of */
   struct LrSgMaker { int node, cls; unsigned char sure; } *sgm; int nsgm, csgm;   /* lr_sg_makers, with the modules a singleton chain may hold (any of them: sgchain_any) */
@@ -4445,6 +4448,20 @@ static int lr_under(Compiler *c, int cls, int k) {
   return 0;
 }
 
+/* lr_in_ancestry's answer where no point decides it: 1 or 0 for cls or a
+   superclass of it (under, lr_under's answer), a class and main; -1 for a
+   module, which the search at the point finds or not */
+static int lr_in_ancestry_fixed(Compiler *c, int cls, int sg, int k, int under) {
+  int tail[LR_TAIL_N];
+  if (under) return 1;
+  if (k >= 0 && k < c->nclasses && !comp_class_is_module(c, &c->classes[k])) {
+    if ((k == comp_core_class(c, CORE_OBJECT) || k == comp_core_class(c, CORE_BASIC_OBJECT)) &&
+        (sg || cls < 0 || !comp_class_is_module(c, &c->classes[cls]))) return 1;
+    for (int i = sg ? lr_sg_tail_of(c, cls, tail) : 5; i < 5; i++) if (tail[i] == k) return 1;
+    return 0;
+  }
+  return k >= 0 ? -1 : 0;
+}
 /* Is class or module k one of cls's ancestors (its singleton's when sg)
    at p, or may it be: cls, a superclass, a module mixed into one of them?
    Only a superclass puts a class on a chain, whatever is mixed in, so the
@@ -4453,15 +4470,8 @@ static int lr_under(Compiler *c, int cls, int k) {
    says (lr_super ends at main), and a module's singleton's; and on a
    singleton's chain the classes lr_sg_tail ends it in. */
 static int lr_in_ancestry(Compiler *c, int cls, int sg, int k, LoadPoint p) {
-  int tail[LR_TAIL_N];
-  if (lr_under(c, cls, k)) return 1;
-  if (k >= 0 && k < c->nclasses && !comp_class_is_module(c, &c->classes[k])) {
-    if ((k == comp_core_class(c, CORE_OBJECT) || k == comp_core_class(c, CORE_BASIC_OBJECT)) &&
-        (sg || cls < 0 || !comp_class_is_module(c, &c->classes[cls]))) return 1;
-    for (int i = sg ? lr_sg_tail_of(c, cls, tail) : 5; i < 5; i++) if (tail[i] == k) return 1;
-    return 0;
-  }
-  return k >= 0 && lr_search(c, cls, sg, NULL, k, p, 0, 0, NULL, 0) != ELAB_NO;
+  int o = lr_in_ancestry_fixed(c, cls, sg, k, lr_under(c, cls, k));
+  return o >= 0 ? o : lr_search(c, cls, sg, NULL, k, p, 0, 0, NULL, 0) != ELAB_NO;
 }
 
 /* Does node's statement run strictly between p0 and p1, or is it not
@@ -4545,14 +4555,19 @@ static int lr_chain_mixed_make(Compiler *c, int cls, int sg, const int *mk, int 
   if (sg || cls < 0 || cls >= c->nclasses || !comp_class_is_module(c, &c->classes[cls]))
     for (int i = 0, k; i < 2; i++)
       if ((k = comp_core_class(c, i ? CORE_BASIC_OBJECT : CORE_OBJECT)) >= 0) lr_anc_own(&x, k, 0);
+  /* lr_under's walk, once for the chain instead of once per class on it:
+     the classes the record holds that it meets are cls and its superclasses
+     (the classes listed are ones the record holds) */
+  for (int u = cls, d = 0; u >= LR_MAIN && d < lr_chain_bound(c); u = lr_super(c, u), d++)
+    if (lr_class(r, u)) a->up[u + 1] = a->mark;
   int at = a->nlist;
-  a->list = lr_grow(a->list, &a->clist, a->nlist, sizeof(int));
-  a->list[a->nlist++] = 0;
+  a->list = lr_grow(a->list, &a->clist, a->nlist, sizeof *a->list);
+  a->list[a->nlist++] = (struct LrAncK){ 0, 0 };
   for (int i = 0; i < nk; i++)
     if (a->seen[mk[i] + 1] == a->mark) {
-      a->list = lr_grow(a->list, &a->clist, a->nlist, sizeof(int));
-      a->list[a->nlist++] = mk[i];
-      a->list[at]++;
+      a->list = lr_grow(a->list, &a->clist, a->nlist, sizeof *a->list);
+      a->list[a->nlist++] = (struct LrAncK){ mk[i], lr_in_ancestry_fixed(c, cls, sg, mk[i], a->up[mk[i] + 1] == a->mark) };
+      a->list[at].k++;
     }
   return 2 + at;
 }
@@ -4576,31 +4591,43 @@ static int lr_chain_mixed_make(Compiler *c, int cls, int sg, const int *mk, int 
    answers the record drops. One chain's mixed classes are few, where a
    program's are as many as its classes: so a question each call asks of
    each class it may be on (elab_chain_settled, lr_span) is not one over
-   every class. */
-static const int *lr_chain_mixed(Compiler *c, int cls, int sg, int *n) {
+   every class. NULL for every class of lr_mixed. Each class of the
+   chain's comes with lr_in_ancestry's answer where no point decides it
+   (lr_in_ancestry_fixed: of a class, or of cls or a superclass of it), so
+   the question asks only a module's search at the point (lr_chain_on): on
+   a chain as deep as the program, with a class mixing in on each step, a
+   superclass walk per class asked made each ask quadratic in the chain. */
+static const struct LrAncK *lr_chain_mixed(Compiler *c, int cls, int sg, int *n) {
   LoadRecord *r = c->lrec;
   struct LrAnc *a = &r->anc;
   int nk;
   const int *mk = lr_mixed(c, &nk);
-  *n = nk;
-  if (!a->ready || cls < LR_MAIN || cls + 1 >= r->ncls) return mk;
+  if (!a->ready || cls < LR_MAIN || cls + 1 >= r->ncls) return NULL;
   if (!a->at || a->of.hgen != r->hgen || a->of.shape != comp_class_shape_gen() || a->of.ver != r->ver || a->of.nhist != r->nhist ||
       a->of.ncls != r->ncls || a->of.nclasses != c->nclasses || a->of.recorded != r->recorded) {
-    free(a->at); free(a->seen); free(a->walked); free(a->depth);
+    free(a->at); free(a->seen); free(a->walked); free(a->depth); free(a->up);
     a->at = calloc(2 * (size_t)r->ncls, sizeof(int));
     a->seen = calloc((size_t)r->ncls, sizeof(int));
     a->walked = calloc((size_t)r->ncls, sizeof(int));
     a->depth = calloc((size_t)r->ncls, sizeof(int));
-    if (!a->at || !a->seen || !a->walked || !a->depth) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    a->up = calloc((size_t)r->ncls, sizeof(int));
+    if (!a->at || !a->seen || !a->walked || !a->depth || !a->up) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
     a->nlist = 0; a->mark = 0;
     a->of.hgen = r->hgen; a->of.shape = comp_class_shape_gen(); a->of.ver = r->ver; a->of.nhist = r->nhist;
     a->of.ncls = r->ncls; a->of.nclasses = c->nclasses; a->of.recorded = r->recorded;
   }
   int key = 2 * (cls + 1) + (sg != 0);
   if (!a->at[key]) a->at[key] = lr_chain_mixed_make(c, cls, sg != 0, mk, nk);
-  if (a->at[key] == 1) return mk;
-  *n = a->list[a->at[key] - 2];
+  if (a->at[key] == 1) return NULL;
+  *n = a->list[a->at[key] - 2].k;
   return &a->list[a->at[key] - 1];
+}
+/* Is class k one of cls's ancestors (its singleton's when sg) at p:
+   lr_in_ancestry's answer, from the part e keeps of it where k is one of
+   lr_chain_mixed's (e, NULL for none) */
+static int lr_chain_on(Compiler *c, int cls, int sg, const struct LrAncK *e, int k, LoadPoint p) {
+  if (!e) return lr_in_ancestry(c, cls, sg, k, p);
+  return e->on >= 0 ? e->on : lr_search(c, cls, sg, NULL, k, p, 0, 0, NULL, 0) != ELAB_NO;
 }
 
 /* Does cls's chain (its singleton's when sg) change for `name` strictly
@@ -4609,13 +4636,14 @@ static const int *lr_chain_mixed(Compiler *c, int cls, int sg, int *n) {
    define (LR_OPAQUE_DEFINES)? */
 static int lr_chain_moves(Compiler *c, int cls, int sg, const char *name, LoadPoint p0, LoadPoint p1) {
   LoadRecord *r = c->lrec;
-  int nk = 0;
-  const int *mk = lr_chain_mixed(c, cls, sg, &nk);
-  for (int i = 0; i < nk; i++) {
-    int k = mk[i];
+  int nk = 0, nc = 0;
+  const int *mk = lr_mixed(c, &nk);
+  const struct LrAncK *ch = lr_chain_mixed(c, cls, sg, &nc);
+  for (int i = 0; i < (ch ? nc : nk); i++) {
+    int k = ch ? ch[i].k : mk[i];
     const LrClass *kc = lr_class(r, k);
     const LrHist *op = lr_hist(r, LR_KEY_OPAQUE, lr_const_owner(k), "", 0);
-    if (!lr_in_ancestry(c, cls, sg, k, p1)) continue;
+    if (!lr_chain_on(c, cls, sg, ch ? &ch[i] : NULL, k, p1)) continue;
     for (int j = 0; kc && j < kc->nmix; j++) {
       LrMixin *m = &kc->mix[j];
       if (lr_inside(c, m->node, p0, p1) &&
@@ -4633,12 +4661,13 @@ int elab_chain_settled(Compiler *c, int cls, int sg, const char *name, LoadPoint
   if (!r || !r->recorded || !name || cls < LR_MAIN || p.region < 0) return 0;
   lr_run_points(c);
   LoadPoint end = { p.region, r->rend[p.region] };
-  int nk = 0;
-  const int *mk = lr_chain_mixed(c, cls, sg, &nk);
-  for (int i = 0; i < nk; i++) {
-    int k = mk[i];
+  int nk = 0, nc = 0;
+  const int *mk = lr_mixed(c, &nk);
+  const struct LrAncK *ch = lr_chain_mixed(c, cls, sg, &nc);
+  for (int i = 0; i < (ch ? nc : nk); i++) {
+    int k = ch ? ch[i].k : mk[i];
     const LrClass *kc = lr_class(r, k);
-    if (!lr_in_ancestry(c, cls, sg, k, end)) continue;
+    if (!lr_chain_on(c, cls, sg, ch ? &ch[i] : NULL, k, end)) continue;
     if (lr_opaque_defines(r, k)) return 0;
     for (int j = 0; kc && j < kc->nmix; j++) {
       LrMixin *m = &kc->mix[j];
@@ -9319,7 +9348,7 @@ void elab_free(Compiler *c) {
   free(r->srcw);
   free(r->slot); free(r->slot_head); free(r->slotp);
   free(r->fin); free(r->fin_head);
-  free(r->hist); free(r->mixed); free(r->mby); free(r->mby_at); free(r->rclass); free(r->sgm); free(r->sgchain); free(r->unset.key); free(r->unset.un); free(r->anc.at); free(r->anc.list); free(r->anc.seen); free(r->anc.walked); free(r->anc.depth); free(r->clsmod); free(r->hhead); free(r->cls); free(r->vers); free(r->vers_head); free(r->valias); free(r->rdr); free(r->rdr_head); free(r->set);
+  free(r->hist); free(r->mixed); free(r->mby); free(r->mby_at); free(r->rclass); free(r->sgm); free(r->sgchain); free(r->unset.key); free(r->unset.un); free(r->anc.at); free(r->anc.list); free(r->anc.seen); free(r->anc.walked); free(r->anc.depth); free(r->anc.up); free(r->clsmod); free(r->hhead); free(r->cls); free(r->vers); free(r->vers_head); free(r->valias); free(r->rdr); free(r->rdr_head); free(r->set);
   for (int i = 0; i < r->nhdr; i++) free(r->hdr[i].leaf);
   free(r->hdr); free(r->hdr_head);
   free(r->st); free(r->at); free(r->bits); free(r->dscope); free(r->ddef); free(r->rend); free(r->rinst); free(r->urun); free(r->rentry); free(r);

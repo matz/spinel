@@ -4477,39 +4477,97 @@ static SP_UNUSED sp_RbVal sp_poly_nil_no_method(const char *m, sp_RbVal v) { sp_
 static SP_UNUSED sp_int sp_poly_range_bound(sp_RbVal v, sp_int none) { return v.tag == SP_TAG_NIL ? none : sp_poly_to_i(v); }
 /* Enumerating a beginless Range: CRuby's TypeError. */
 static SP_NOINLINE SP_COLD SP_UNUSED void sp_range_nil_begin_raise(void) { sp_raise_cls("TypeError", "can't iterate from NilClass"); }
-/* The sum of an Integer Range's elements, by their closed form instead of a
-   walk: n elements from first by step s add to n * (first + last) / 2. The
-   Array a walk builds holds at most 2**30 elements, so `(1..2**31).sum`
-   answered the sum of the first 2**30 of them. One factor is halved first:
-   n when it is even, else the sum first + last (n - 1 steps apart, an even
-   count of steps, so first + last is even too), which is then the middle
-   element and lies inside the Range. The middle element is computed in
-   unsigned, where it is exact because it is a value of the Range. */
-static SP_UNUSED sp_int sp_range_mid_elem(sp_Range r, sp_int n) {
-  return (sp_int)((uintptr_t)r.first + (uintptr_t)((n - 1) / 2) * (uintptr_t)sp_range_step(r));
+/* The sum of an Integer Range's elements plus an Integer seed, by the
+   closed form instead of a walk: n elements from first by step s add to
+   n * (first + last) / 2. The Array a walk builds holds at most 2**30
+   elements, so `(1..2**31).sum` answered the sum of the first 2**30 of them.
+   It is computed in an integer twice the word's width (SP_RSUM_W), where it
+   is exact for every Range: n is at most 2**w and first + last below 2**w in
+   size, and one of them is halved first (n when it is even; else first +
+   last, which is then even, as the n - 1 steps between them are an even
+   count). The seed is added in the same width, so a sum the seed brings
+   back into the word is no overflow. Only the total that leaves the word
+   follows the overflow mode: a Bignum under promote, RangeError under
+   raise, wrapped under wrap. */
+#if SP_HAVE_INT128 && INTPTR_MAX > INT32_MAX
+#  define SP_RSUM_W sp_int128
+#elif INTPTR_MAX == INT32_MAX
+#  define SP_RSUM_W int64_t
+#endif
+#ifdef SP_RSUM_W
+static SP_UNUSED SP_RSUM_W sp_range_sum_w(sp_Range r, sp_int seed) {
+  if (r.nobeg) sp_range_nil_begin_raise();
+  if (r.noend) sp_raise_cls("RangeError", "cannot convert endless range to an array");
+  sp_int s = sp_range_step(r);
+  if (sp_range_none(r, s)) return (SP_RSUM_W)seed;
+  /* the count less one, exact in unsigned (sp_range_count caps the count) */
+  uintptr_t q = sp_range_span(r, s) / sp_range_ustep(s);
+  SP_RSUM_W n = (SP_RSUM_W)q + 1;
+  SP_RSUM_W ends = (SP_RSUM_W)r.first + (SP_RSUM_W)sp_range_last_elem(r);
+  SP_RSUM_W total = (n & 1) ? n * (ends / 2) : (n / 2) * ends;
+  return total + (SP_RSUM_W)seed;
 }
-/* the sum as an Integer box: a Bignum when it leaves the word under
-   --int-overflow=promote, RangeError under raise, wrapped under wrap,
-   as the Integer arithmetic of each mode does */
-static SP_UNUSED sp_RbVal sp_range_sum_box(sp_Range r) {
+/* does a wide sum fit the word? */
+static SP_UNUSED sp_bool sp_range_sum_fits(SP_RSUM_W v) {
+  return v >= (SP_RSUM_W)INTPTR_MIN && v <= (SP_RSUM_W)INTPTR_MAX;
+}
+#endif
+static SP_UNUSED sp_RbVal sp_range_sum_box(sp_Range r, sp_int seed) {
+#ifdef SP_RSUM_W
+  SP_RSUM_W v = sp_range_sum_w(r, seed);
+  if (sp_range_sum_fits(v)) return sp_box_int((sp_int)v);
+#  ifdef SP_INT_OVERFLOW_MODE_PROMOTE
+  /* past the word: hi * 2**w + lo, with lo in two half-word pieces so each
+     piece fits in a box */
+  const int hw = (int)(sizeof(sp_int) * 4);
+  sp_int hi = (sp_int)(v >> (2 * hw));
+  uintptr_t lo = (uintptr_t)v;
+  uintptr_t half = ((uintptr_t)1 << hw);
+  sp_RbVal acc = sp_poly_mul(sp_box_int(hi), sp_box_int((sp_int)half));
+  SP_GC_ROOT_RBVAL(acc);
+  acc = sp_poly_add(acc, sp_box_int((sp_int)(lo >> hw)));
+  acc = sp_poly_mul(acc, sp_box_int((sp_int)half));
+  return sp_poly_add(acc, sp_box_int((sp_int)(lo & (half - 1))));
+#  elif defined(SP_INT_OVERFLOW_MODE_WRAP)
+  return sp_box_int((sp_int)(uintptr_t)v);
+#  else
+  sp_raise_cls("RangeError", "integer overflow in +");
+  return sp_box_int(0);
+#  endif
+#else
+  /* no double-width integer (a portable build of a 64-bit word): the
+     halved product through the mode's own arithmetic */
   if (r.nobeg) sp_range_nil_begin_raise();
   if (r.noend) sp_raise_cls("RangeError", "cannot convert endless range to an array");
   sp_int n = sp_range_count(r);
-  if (n <= 0) return sp_box_int(0);
-  if (n & 1) return SP_POLY_INT_OP(mul, n, sp_range_mid_elem(r, n));
-  sp_RbVal ends = SP_POLY_INT_OP(add, r.first, sp_range_last_elem(r));
-  SP_GC_ROOT_RBVAL(ends);
-  return sp_poly_mul(sp_box_int(n / 2), ends);
+  if (n <= 0) return sp_box_int(seed);
+  sp_int mid = (sp_int)((uintptr_t)r.first + (uintptr_t)((n - 1) / 2) * (uintptr_t)sp_range_step(r));
+  sp_RbVal total;
+  if (n & 1) total = SP_POLY_INT_OP(mul, n, mid);
+  else {
+    sp_RbVal ends = SP_POLY_INT_OP(add, r.first, sp_range_last_elem(r));
+    SP_GC_ROOT_RBVAL(ends);
+    total = sp_poly_mul(sp_box_int(n / 2), ends);
+  }
+  SP_GC_ROOT_RBVAL(total);
+  return sp_poly_add(total, sp_box_int(seed));
+#endif
 }
-/* the same sum in the word, plus an Integer seed, for the typed sum */
+/* the same sum in the word, for the typed sum */
 static SP_UNUSED sp_int sp_range_sum_i(sp_Range r, sp_int seed) {
-  if (r.nobeg) sp_range_nil_begin_raise();
-  if (r.noend) sp_raise_cls("RangeError", "cannot convert endless range to an array");
-  sp_int n = sp_range_count(r);
-  if (n <= 0) return seed;
-  sp_int total = (n & 1) ? sp_int_mul(n, sp_range_mid_elem(r, n))
-                         : sp_int_mul(n / 2, sp_int_add(r.first, sp_range_last_elem(r)));
-  return sp_int_add(seed, total);
+#ifdef SP_RSUM_W
+  SP_RSUM_W v = sp_range_sum_w(r, seed);
+  if (sp_range_sum_fits(v)) return (sp_int)v;
+#  ifdef SP_INT_OVERFLOW_MODE_WRAP
+  return (sp_int)(uintptr_t)v;
+#  else
+  sp_raise_cls("RangeError", "integer overflow in +");
+  return 0;
+#  endif
+#else
+  sp_RbVal v = sp_range_sum_box(r, seed);
+  return v.v.i;
+#endif
 }
 /* A Float Range bound read out of a box: nil leaves that side open (the
    -/+HUGE_VAL sentinel), anything else converts as a Float bound does; the
@@ -15813,7 +15871,7 @@ static sp_RbVal sp_poly_sum(sp_RbVal v) {
     case SP_BUILTIN_POLY_ARRAY: return sp_PolyArray_sum_poly((sp_PolyArray *)v.v.p);
     case SP_BUILTIN_PTR_ARRAY:  return sp_PolyArray_sum_poly(sp_PtrArray_to_poly((sp_PtrArray *)v.v.p));
     /* a container-read int Range sums like the typed path (#3234) */
-    case SP_BUILTIN_RANGE: return sp_range_sum_box(*(sp_Range *)v.v.p);
+    case SP_BUILTIN_RANGE: return sp_range_sum_box(*(sp_Range *)v.v.p, 0);
     /* an Enumerator's seedless sum is its sum(0), as in CRuby: from the
        first Float on, compensated */
     case SP_BUILTIN_ENUMERATOR: return sp_poly_sum_seed(v, sp_box_int(0));
@@ -15851,11 +15909,14 @@ static sp_RbVal sp_range_sum_seed(sp_Range r, sp_RbVal seed) {
   if (r.noend) sp_raise_cls("RangeError", "cannot convert endless range to an array");
   if (sp_range_count(r) <= 0) return seed;
   SP_GC_ROOT_RBVAL(seed);
+  /* an Integer seed goes into the sum itself, so a seed that brings the
+     total back into the word is no overflow */
+  if (seed.tag == SP_TAG_INT) return sp_range_sum_box(r, seed.v.i);
+  sp_RbVal total = sp_range_sum_box(r, 0);
+  SP_GC_ROOT_RBVAL(total);
   /* through sp_poly_add so a Bignum seed keeps its digits instead of wrapping
      into the sp_int the typed emitter used to hand this path */
-  sp_RbVal total = sp_range_sum_box(r);
-  SP_GC_ROOT_RBVAL(total);
-  if (seed.tag == SP_TAG_INT || seed.tag == SP_TAG_BIGINT)
+  if (seed.tag == SP_TAG_BIGINT)
     return sp_poly_add(total, seed);
   return sp_box_float(sp_poly_Float(seed) + sp_poly_Float(total));
 }

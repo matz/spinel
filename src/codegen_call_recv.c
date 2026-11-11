@@ -15088,10 +15088,9 @@ int emit_range_call(Compiler *c, int id, Buf *b) {
                (argc == 0 || comp_ntype(c, argv[0]) == TY_INT)) {
         /* the closed form, not a walk: the Array a walk builds stops at
            2**30 elements */
-        int ts = ++g_tmp;
-        buf_printf(b, "({ sp_RbVal _t%d = ", ts);
+        buf_printf(b, "sp_range_sum_seed(_t%d, ", t);
         if (argc == 1) emit_boxed(c, argv[0], b); else buf_puts(b, "sp_box_int(0)");
-        buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); sp_poly_add(_t%d, sp_range_sum_box(_t%d)); })", ts, ts, t);
+        buf_puts(b, ")");
       }
       else if (sp_streq(name, "sum") && argc == 1 && comp_ntype(c, argv[0]) == TY_FLOAT) {
         buf_puts(b, "(("); emit_expr(c, argv[0], b);

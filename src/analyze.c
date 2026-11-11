@@ -55231,7 +55231,25 @@ static void an_phase_mutated_answers(Compiler *c) {
   }
 }
 
+/* `END { }` is read as Kernel's at_exit (the parser's end_once call). A
+   program that defines a method named at_exit, or names one by Symbol
+   (alias, define_method, send), could have that call bound to its own
+   method, which would run the END body at once: refuse the pair. */
+static void refuse_end_beside_own_at_exit(Compiler *c) {
+  const NodeTable *nt = c->nt;
+  int end_at = -1;
+  NT_FOREACH_KIND(nt, NK_CallNode, id)
+    if (nt_int(nt, id, "end_once", 0)) { end_at = id; break; }
+  if (end_at < 0) return;
+  int own = 0;
+  NT_FOREACH_KIND(nt, NK_DefNode, d)
+    if (!own && sp_streq(nt_str(nt, d, "name"), "at_exit") && !nt_int(nt, d, "node_bi", 0)) own = 1;
+  NT_FOREACH_KIND(nt, NK_SymbolNode, y)
+    if (!own && sp_streq(nt_str(nt, y, "value"), "at_exit") && !nt_int(nt, y, "node_bi", 0)) own = 1;
+  if (own) unsupported_feature(c, end_at, "END beside a program-defined at_exit method, for now");
+}
 void analyze_program(Compiler *c) {
+  refuse_end_beside_own_at_exit(c);
   double tm_an = sp_timing_now();
   g_an_src_nodes = c->nt->count;
   an_note_written_names(c);

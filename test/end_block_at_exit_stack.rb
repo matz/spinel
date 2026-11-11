@@ -15,6 +15,11 @@ end
 if i > 10
   END { puts "never registered" }
 end
+def reg
+  END { puts "END in a method" }
+end
+p reg
+p reg
 x = 2
 puts "main"
 exit 0

@@ -157,11 +157,12 @@ int emit_call_kernel_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, cons
   if (recv < 0 && sp_streq(name, "at_exit") && nt_ref(nt, id, "block") >= 0 && (end_once || !bare_call_class_owned(c, id))) {
     g_needs_at_exit = 1;
     int to = end_once ? ++g_tmp : 0;
-    if (end_once) buf_printf(b, "({ static int _t%d; _t%d ? (struct sp_Proc *)0 : (_t%d = 1, ", to, to, to);
+    /* END's value is nil: the registering expression is run for its effect */
+    if (end_once) buf_printf(b, "({ static int _t%d; if (!_t%d) { _t%d = 1; ", to, to, to);
     buf_puts(b, "sp_at_exit_push(");
     emit_proc_literal(c, id, b);
     buf_puts(b, ")");
-    if (end_once) buf_puts(b, "); })");
+    if (end_once) buf_puts(b, "; } 0; })");
     return 1;
   }
 

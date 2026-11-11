@@ -13,3 +13,9 @@ false
 "sio"
 5
 "hello"
+nil src: undefined method 'read' for nil
+int src: undefined method 'read' for an instance of Integer
+nil dst: undefined method 'write' for nil
+int dst: undefined method 'write' for an instance of Integer
+path nil dst: undefined method 'write' for nil
+nil src path: undefined method 'read' for nil

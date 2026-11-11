@@ -37,5 +37,17 @@ p File.read(dst)
 out = StringIO.new
 p File.copy_stream(src, out)
 p out.string
+# an endpoint that is neither a stream nor a path is asked for read or write
+def cs(l)
+  yield
+rescue NoMethodError => e
+  puts "#{l}: #{e.message}"
+end
+File.open(dst, "w") { |w| cs("nil src") { IO.copy_stream(nil, w) } }
+File.open(dst, "w") { |w| cs("int src") { IO.copy_stream(5, w) } }
+File.open(src) { |r| cs("nil dst") { IO.copy_stream(r, nil) } }
+File.open(src) { |r| cs("int dst") { IO.copy_stream(r, 5) } }
+cs("path nil dst") { IO.copy_stream(src, nil) }
+cs("nil src path") { IO.copy_stream(nil, dst) }
 File.delete(src)
 File.delete(dst)

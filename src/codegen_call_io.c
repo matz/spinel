@@ -2707,6 +2707,20 @@ int emit_op_io_select(Compiler *c, const BopCtx *x, Buf *b) {
   return emit_io_select(c, argc, argv, b);
 }
 
+/* Is this IO.copy_stream endpoint's kind read at run time? A boxed one's
+   is; so is one that is neither a stream nor a path (nil, an Integer, a
+   Symbol): CRuby asks it for #read or #write, and the boxed check answers
+   its NoMethodError. A String is a path, and a user object is one by its
+   #to_path or #to_str (emit_path_expr, which refuses a class with
+   neither). */
+static int copy_stream_end_boxed(Compiler *c, int node) {
+  Repr r = repr_of(c, node);
+  TyKind t = r.as_ty;
+  if (r.kind == RK_BOXED) return 1;
+  if (t == TY_IO || t == TY_STRING || t == TY_STRBUF || ty_is_object(t)) return 0;
+  return t == TY_NIL || ty_boxable(t);
+}
+
 /* IO.copy_stream(src, dst): read the whole source, write it to the dest,
    returning the byte count. sp_io_copy_stream takes two path strings, so
    a StringIO (#3216) or an IO/socket (#3217, an sp_File*) endpoint passed
@@ -2716,10 +2730,10 @@ int emit_op_io_select(Compiler *c, const BopCtx *x, Buf *b) {
 int emit_op_io_copy_stream(Compiler *c, const BopCtx *x, Buf *b) {
   int argc;
   const int *argv = call_args(c->nt, x->id, &argc);
-  int a0_sio = node_is_stringio(c, argv[0]), a0_io = comp_ntype(c, argv[0]) == TY_IO;
-  int a1_sio = node_is_stringio(c, argv[1]), a1_io = comp_ntype(c, argv[1]) == TY_IO;
-  int a0_poly = repr_of(c, argv[0]).kind == RK_BOXED;
-  int a1_poly = repr_of(c, argv[1]).kind == RK_BOXED;
+  int a0_sio = node_is_stringio(c, argv[0]), a0_io = repr_of(c, argv[0]).as_ty == TY_IO;
+  int a1_sio = node_is_stringio(c, argv[1]), a1_io = repr_of(c, argv[1]).as_ty == TY_IO;
+  int a0_poly = copy_stream_end_boxed(c, argv[0]);
+  int a1_poly = copy_stream_end_boxed(c, argv[1]);
   /* A boxed endpoint may hold a path, including a shared String handle,
      or a stream. Check its kind before reading the payload as sp_File.
      A path beside a stream (`IO.copy_stream(path, io)`) is read or written
@@ -2730,7 +2744,7 @@ int emit_op_io_copy_stream(Compiler *c, const BopCtx *x, Buf *b) {
     buf_printf(b, "({ const char *_t%d = ", td);
     if (a0_poly) {
       int ts = ++g_tmp;
-      buf_puts(b, "({ "); ts = hold_operand(c, argv[0], TY_POLY, 0, ts, 1, " ", b);
+      buf_puts(b, "({ "); ts = hold_operand(c, argv[0], TY_POLY, repr_of(c, argv[0]).kind != RK_BOXED, ts, 1, " ", b);
       buf_printf(b, "(_t%d.tag == SP_TAG_STR || sp_poly_is_strbuf(_t%d))"
                     " ? sp_file_read(sp_poly_unbox_s(_t%d)) : ", ts, ts, ts);
       if (sio_cid >= 0)
@@ -2746,7 +2760,7 @@ int emit_op_io_copy_stream(Compiler *c, const BopCtx *x, Buf *b) {
     buf_printf(b, "; SP_GC_ROOT(_t%d); ", td);
     if (a1_poly) {
       int tdd = ++g_tmp;
-      tdd = hold_operand(c, argv[1], TY_POLY, 0, tdd, 1, " ", b);
+      tdd = hold_operand(c, argv[1], TY_POLY, repr_of(c, argv[1]).kind != RK_BOXED, tdd, 1, " ", b);
       buf_printf(b, "(_t%d.tag == SP_TAG_STR || sp_poly_is_strbuf(_t%d))"
                     " ? sp_file_write(sp_poly_unbox_s(_t%d), _t%d) : ", tdd, tdd, tdd, td);
       if (sio_cid >= 0)

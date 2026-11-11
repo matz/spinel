@@ -3438,16 +3438,51 @@ static int bsv_foreign(TyKind t, TyKind want) {
   return k != TY_INT && k != TY_FLOAT && !ty_is_object(k);
 }
 
+/* The first value arm of expression `v` (an `if`, `unless` or ternary
+   answers one of its branches' last statements, `(e)` its last one) of a
+   kind bsv_foreign takes, or TY_UNKNOWN. The join of the arms can hide one:
+   `next(x == 1 ? "s" : 2)` is boxed, `next(i == 0 ? nil : i)` a nullable
+   Integer. */
+static TyKind bsv_arm_foreign_ty(Compiler *c, int v, TyKind want, int depth) {
+  const NodeTable *nt = c->nt;
+  if (v < 0 || depth > 32) return TY_UNKNOWN;
+  NodeKind k = nt_kind(nt, v);
+  if (k == NK_IfNode || k == NK_UnlessNode || k == NK_ElseNode || k == NK_ParenthesesNode ||
+      k == NK_StatementsNode) {
+    int arms[2] = { -1, -1 };
+    if (k == NK_ParenthesesNode) arms[0] = nt_ref(nt, v, "body");
+    else if (k == NK_StatementsNode) {
+      int n = 0; const int *b = nt_arr(nt, v, "body", &n);
+      arms[0] = n > 0 ? b[n - 1] : -1;
+    }
+    else {
+      arms[0] = nt_ref(nt, v, "statements");
+      if (k != NK_ElseNode) arms[1] = nt_ref(nt, v, k == NK_UnlessNode ? "else_clause" : "subsequent");
+    }
+    for (int i = 0; i < 2; i++) {
+      TyKind t = bsv_arm_foreign_ty(c, arms[i], want, depth + 1);
+      if (t != TY_UNKNOWN) return t;
+    }
+    return TY_UNKNOWN;
+  }
+  TyKind t = infer_type(c, v);
+  return bsv_foreign(t, want) ? t : TY_UNKNOWN;
+}
+
 /* The first `next` value under `node` that binds to the block (as
    block_next_value_ty walks them) of a kind bsv_foreign takes, or
-   TY_UNKNOWN. */
+   TY_UNKNOWN. A value whose join is not such a kind answers its first
+   such arm. */
 static TyKind block_next_foreign_ty(Compiler *c, int node, TyKind want) {
   const NodeTable *nt = c->nt;
   if (node < 0) return TY_UNKNOWN;
   NodeKind k = nt_kind(nt, node);
   if (k == NK_NextNode) {
     TyKind t = block_next_value_ty(c, node);
-    return bsv_foreign(t, want) ? t : TY_UNKNOWN;
+    if (bsv_foreign(t, want)) return t;
+    int a = nt_ref(nt, node, "arguments"); int an = 0;
+    const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &an) : NULL;
+    return an == 1 ? bsv_arm_foreign_ty(c, av[0], want, 0) : TY_UNKNOWN;
   }
   if (k == NK_WhileNode || k == NK_UntilNode || k == NK_ForNode || k == NK_BlockNode ||
       k == NK_LambdaNode || k == NK_DefNode || k == NK_ClassNode || k == NK_ModuleNode)

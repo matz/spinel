@@ -61,3 +61,26 @@ m[0].map! { |x| next :y if x == 1; next 0 if x == 9; x }
 p m
 m[1].map! { |x| next "s" if x == 3; next 0 if x == 9; x }
 p m
+
+# a row whose block stores an Integer and a Float
+n = [[1, 2], [3.5, 4.5]]
+n[0].map! { |x| next 1.5 if x == 1; 2 }
+n[1].map! { |x| next 7 if x == 3.5; x }
+p n
+
+# a boxed local that may hold an Integer or a String Array: each keeps
+# the values its block answers
+def pick(i) = i == 0 ? [1, 2] : ["a", "b"]
+[0, 1].each do |i|
+  b = pick(i)
+  b.map! { |x| next "x" if x == 1; next 3 if x == "a"; x }
+  p b
+end
+
+# a `next` value with arms of two kinds
+t = [1, 2, 3]
+t.map! { |x| next(x == 1 ? "s" : 2) if x < 3; x }
+p t
+u = [1, 2, 3]
+u.fill { |i| next(i == 0 ? nil : i) if i < 2; 9 }
+p u

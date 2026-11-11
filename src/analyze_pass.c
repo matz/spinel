@@ -3604,6 +3604,7 @@ static int infer_write_container_usage(Compiler *c, const NodeTable *nt, int nfb
     if (!ty || nt_int(nt, id, "dyn_arm", 0)) continue;
     int recv, kt = TY_UNKNOWN, vt = TY_UNKNOWN, is_push = 0, is_idx_write = 0, is_splice = 0;
     int is_fill = 0;  /* a fill's span: one value, the element evidence a store's is */
+    int fill_alt = TY_UNKNOWN;  /* a second kind a block's values store, its own evidence */
     int concat_scalar = 0;  /* a concat of no array, which raises rather than stores */
     int splice_arr = 0;     /* a splice's source is a typed array: its kind is the elements' */
     int is_merge = 0;  /* merge!/update: kt and vt are the merged hashes' */
@@ -3864,9 +3865,21 @@ static int infer_write_container_usage(Compiler *c, const NodeTable *nt, int nfb
         if (fnx != TY_UNKNOWN) vt = vt == TY_UNKNOWN ? fnx : ty_unify(vt, fnx);
         if (fnx != TY_UNKNOWN && recv >= 0) {
           TyKind frt = infer_type(c, recv);
-          if (frt != TY_POLY_ARRAY)
+          /* a boxed local may hold Arrays of several kinds: the joined
+             value widens each one where it is built (below), where one
+             answered kind left the others typed */
+          int fboxed = frt == TY_POLY && nt_kind(nt, recv) == NK_LocalVariableReadNode;
+          if (frt != TY_POLY_ARRAY && !fboxed)
             vt = block_store_value_ty(c, fbody, ftail, (TyKind)vt,
                                       ty_is_array(frt) ? ty_array_elem(frt) : TY_UNKNOWN);
+          /* a row read out of a table (`m[0].map! { |x| next 1.5 if x == 1;
+             2 }`) whose block stores an Integer and a Float: each one is its
+             own evidence, as for a row written twice, and the row widens
+             whatever kind it holds. Their boxed join widened nothing. */
+          if (vt == TY_POLY && !ty_is_array(frt) && nt_kind(nt, recv) == NK_CallNode &&
+              (ftail == TY_INT || ftail == TY_FLOAT) && (fnx == TY_INT || fnx == TY_FLOAT) && ftail != fnx) {
+            vt = fnx; fill_alt = ftail;
+          }
         }
         if (vt == TY_VOID) vt = TY_NIL;
         is_idx_write = 1; is_splice = 1; is_fill = 1;
@@ -4057,6 +4070,8 @@ static int infer_write_container_usage(Compiler *c, const NodeTable *nt, int nfb
           changed |= widen_nested_literals(c, recv0, is_push, is_splice, (TyKind)kt, push_elem_ty(c, elem_argv[ai]));
       else
         changed |= widen_nested_literals(c, recv0, is_push, is_splice, (TyKind)kt, (TyKind)vt);
+      if (fill_alt != TY_UNKNOWN)
+        changed |= widen_nested_literals(c, recv0, is_push, is_splice, (TyKind)kt, (TyKind)fill_alt);
     }
     /* fold into a local's type or an ivar's type (an empty `@buf=[]` filled by
        `@buf << x` infers its element type the same way a local does) */

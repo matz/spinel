@@ -2005,8 +2005,11 @@ int poly_key_prim(Compiler *c, int call, const char *name, int argc, int kwh, in
    includes or prepends? A reopen's def that calls super is left out: its
    super does not reach the builtin method on this path, so the helper
    answers it as before. */
+/* Which boxed values of the kind (a Hash, `hash`, or an Array) a method of
+   the program answers `name` for: 1 a plain one (the reopened class's own
+   def, or a module it includes or prepends), 2 a subclass's instance; OR'd. */
 static int poly_builtin_kind_owns(Compiler *c, int id, int hash, const char *name) {
-  int bci = comp_core_class(c, hash ? CORE_HASH : CORE_ARRAY);
+  int bci = comp_core_class(c, hash ? CORE_HASH : CORE_ARRAY), own = 0;
   for (int k = 0; k < c->nclasses; k++) {
     int a = k;
     for (int hops = 0; bci >= 0 && a >= 0 && a != bci && hops < c->nclasses; hops++) a = c->classes[a].parent;
@@ -2018,9 +2021,9 @@ static int poly_builtin_kind_owns(Compiler *c, int id, int hash, const char *nam
     int mi = call_target(c, id, k, name, 0, &ml);
     if (mi < 0) continue;
     if (bci >= 0 && ml.def_class == bci && scope_calls_super(c, mi)) continue;
-    return 1;
+    own |= k == bci ? 1 : 2;
   }
-  return 0;
+  return own;
 }
 
 void emit_poly_prearms0(Compiler *c, int id, const char *name, const PolySpecials0 *ps, TyKind ret,
@@ -2336,12 +2339,21 @@ void emit_poly_prearms0(Compiler *c, int id, const char *name, const PolySpecial
          method has its arm. The guard took every Hash to the helper, and
          sp_poly_last raised NoMethodError for `class Hash; include M; end`
          with M#last; sp_poly_first answered Enumerable#first over M's.
-         A subclass of either that has the name counts too. */
+         A subclass of either that has the name takes the switch for its
+         own instances. */
       int hash_own = poly_builtin_kind_owns(c, id, 1, name);
       int ary_own = poly_builtin_kind_owns(c, id, 0, name);
       buf_printf(b, "if (_t%d.tag == SP_TAG_OBJ && (0", tv);
-      if (!ary_own) buf_printf(b, " || sp_poly_is_array_kind(_t%d.cls_id)", tv);
-      if (!hash_own) buf_printf(b, " || sp_poly_is_hash_kind(_t%d.cls_id)", tv);
+      /* (only a subclass's: a plain one keeps the helper, where the
+         reopening's arm in the switch is a def that calls super, and its
+         super reached Object's) */
+      for (int h = 0; h < 2; h++) {
+        int own = h ? hash_own : ary_own;
+        const char *kind = h ? "sp_poly_is_hash_kind" : "sp_poly_is_array_kind";
+        if (!own) buf_printf(b, " || %s(_t%d.cls_id)", kind, tv);
+        else if (!(own & 1))
+          buf_printf(b, " || (%s(_t%d.cls_id) && !(sp_bsub_cls_fn && sp_bsub_cls_fn(_t%d) >= 0))", kind, tv, tv);
+      }
       buf_printf(b, "%s)) { _t%d = ", tg, tr);
       if (ret == TY_POLY) buf_puts(b, cex);
       else emit_unbox_text(c, ret, cex, b);

@@ -2,7 +2,10 @@
 #include "sp_proc.h"
 #include "sp_exc.h"   /* sp_arity_check */
 
-void sp_Proc_scan(void *p) { sp_Proc *pr = (sp_Proc *)p; if (pr->cap && pr->cap_scan) pr->cap_scan(pr->cap); }
+/* A dup or clone keeps its lineage root (origin) for Proc#== and the hash,
+   which compare roots by address: the root must live as long as any copy of
+   it, or a new Proc allocated at the freed address would equal the copy. */
+void sp_Proc_scan(void *p) { sp_Proc *pr = (sp_Proc *)p; if (pr->cap && pr->cap_scan) pr->cap_scan(pr->cap); if (pr->origin) sp_gc_mark(pr->origin); }
 sp_Proc *sp_proc_new_meta(void *fn, void *cap, void (*cap_scan)(void *), sp_int arity, sp_bool lambda_p, sp_int param_count, const sp_sym *param_kinds, const sp_sym *param_names) { sp_Proc *p = (sp_Proc *)sp_gc_alloc(sizeof(sp_Proc), NULL, sp_Proc_scan); p->fn = fn; p->cap = cap; p->cap_scan = cap_scan; p->arity = arity; p->lambda_p = lambda_p; p->param_count = param_count; p->param_kinds = param_kinds; p->param_names = param_names; return p; }
 /* Proc#dup / #clone: a fresh shallow copy (distinct identity; the capture
    environment is shared, like CRuby). dup drops the frozen flag, clone keeps

@@ -607,6 +607,7 @@ void comp_free(Compiler *c) {
   free(c->def_newest);
   free(c->def_older);
   free(c->def_newer);
+  free(c->def_owners.kd); free(c->def_owners.kc); free(c->def_owners.head); free(c->def_owners.tail); free(c->def_owners.next);
   free(c->shadow_copies);
   free(c->file_scope);
   free(c->load_sets_flag);
@@ -1916,13 +1917,70 @@ int comp_self_method_in_chain(Compiler *c, int class_id, const char *name, int *
   return mi;
 }
 
+void comp_ver_asking(Compiler *c, int on) {
+  struct DefOwners *x = &c->def_owners;
+  c->ver_asking = on;
+  /* (the lists are one asking period's: made again at the next one's first ask) */
+  free(x->kd); free(x->kc); free(x->head); free(x->tail); free(x->next);
+  *x = (struct DefOwners){ 0 };
+}
+/* Compiler.def_owners' slot of (def node d, owner o): its own, or the free
+   one it takes */
+static unsigned def_owners_slot(const struct DefOwners *x, int d, int o) {
+  unsigned j = ((unsigned)d * 2654435761u ^ (unsigned)(o + 1) * 40503u) & (unsigned)(x->cap - 1);
+  while (x->kd[j] >= 0 && (x->kd[j] != d || x->kc[j] != o)) j = (j + 1) & (unsigned)(x->cap - 1);
+  return j;
+}
+/* ...made over the chains as they stand */
+static void def_owners_make(Compiler *c) {
+  struct DefOwners *x = &c->def_owners;
+  int cap = 64;
+  while (cap < 2 * c->nscopes) cap *= 2;
+  if (cap != x->cap) {
+    free(x->kd); free(x->kc); free(x->head); free(x->tail);
+    x->kd = malloc(sizeof(int) * (size_t)cap); x->kc = malloc(sizeof(int) * (size_t)cap);
+    x->head = malloc(sizeof(int) * (size_t)cap); x->tail = malloc(sizeof(int) * (size_t)cap);
+    x->cap = cap;
+  }
+  free(x->next);
+  x->next = malloc(sizeof(int) * (size_t)(c->nscopes > 0 ? c->nscopes : 1));
+  if (!x->kd || !x->kc || !x->head || !x->tail || !x->next) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  for (int i = 0; i < cap; i++) x->kd[i] = -1;
+  for (int d = 0; d < c->ndef_nodes; d++)
+    for (int s = c->def_newest[d]; s >= 0; s = c->def_older[s]) {
+      int o = c->scopes[s].class_id < 0 ? -1 : c->scopes[s].class_id;
+      unsigned j = def_owners_slot(x, d, o);
+      if (x->kd[j] < 0) { x->kd[j] = d; x->kc[j] = o; x->head[j] = s; }
+      else x->next[x->tail[j]] = s;
+      x->tail[j] = s;
+      x->next[s] = -1;
+    }
+  x->nscopes = c->nscopes;
+}
+/* The first scope of def node d's chain that may be cls's (main's for -1),
+   in the chain's order, the others after it through *ix's links (*ix 1:
+   Compiler.def_owners.next) or the chain's (0: comp_def_older). While the
+   entries' build asks, unfrozen, no scope moved, only those cls holds, from
+   def_owners: the survey asks of each call and each class it may bind on,
+   and where a module's method is copied into every class that includes it
+   each copy is on the one def's chain, so walking it made every ask
+   O(classes). Elsewhere the whole chain. */
+static int sm_def_first(Compiler *c, int d, int cls, int *ix) {
+  struct DefOwners *x = &c->def_owners;
+  *ix = c->ver_asking && !sm_frozen && !mv_n && d >= 0 && d < c->ndef_nodes;
+  if (!*ix) return comp_def_newest(c, d);
+  if (!x->next || x->nscopes != c->nscopes) def_owners_make(c);
+  unsigned j = def_owners_slot(x, d, cls < 0 ? -1 : cls);
+  return x->kd[j] < 0 ? -1 : x->head[j];
+}
+
 /* the scope of (class_id, is_cm; top level when class_id < 0) named name
    whose def node is def_node, or -1 */
 static int sm_version(Compiler *c, int class_id, const char *name, int is_cm, int def_node) {
   if (!name || def_node < 0) return -1;
-  int top = class_id < 0;
+  int top = class_id < 0, ix;
   if (!sm_frozen) {
-    for (int s = comp_def_newest(c, def_node); s >= 0; s = comp_def_older(c, s))
+    for (int s = sm_def_first(c, def_node, class_id, &ix); s >= 0; s = ix ? c->def_owners.next[s] : comp_def_older(c, s))
       if ((top ? sm_toplevel(c, s) : sm_owns(c, s, class_id, is_cm)) &&
           c->scopes[s].name && (sp_streq(c->scopes[s].name, name) ||
             (!c->ver_built && c->scopes[s].mixin_guarded && sp_streq(comp_scope_user_name(&c->scopes[s]), name)))) return s;
@@ -1945,7 +2003,8 @@ static int sm_version(Compiler *c, int class_id, const char *name, int is_cm, in
    Not a body a prepend's copy shadows (`__prep <n> m`), which a call
    reaches through the copy */
 static int sm_version_renamed(Compiler *c, int class_id, int is_cm, int def_node) {
-  for (int s = comp_def_newest(c, def_node); s >= 0; s = comp_def_older(c, s))
+  int ix;
+  for (int s = sm_def_first(c, def_node, class_id, &ix); s >= 0; s = ix ? c->def_owners.next[s] : comp_def_older(c, s))
     if (c->scopes[s].name && !c->scopes[s].is_proc_form &&
         c->scopes[s].shadow != SHADOW_PREP &&
         (class_id < 0 ? sm_toplevel(c, s) : sm_owns(c, s, class_id, is_cm))) return s;

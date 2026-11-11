@@ -16835,7 +16835,9 @@ void emit_super(Compiler *c, int id, Buf *b) {
           buf_printf(b, "if (_xi%d < 0) sp_raise_cls(\"NoMethodError\", \"super: no superclass method '%s' for an instance of %s\"); ",
                      pk, uname, scn);
         for (int q = 0; q < xn; q++) {
-          int xm = call_target(c, -1, xr[q], uname, 0, NULL);
+          int xm = call_target(c, id, xr[q], uname, CT_REACH, NULL);
+          /* (a record that finds no version at the super leaves the reopening's last def) */
+          if (xm < 0) xm = call_target(c, -1, xr[q], uname, 0, NULL);
           if (q != xn - 1) buf_printf(b, "_xi%d == %d ? ", pk, q);
           buf_printf(b, "%s((sp_Exception *)%s", mc_method(c, &c->scopes[xm]), g_self);
           if (ty_k == NK_ForwardingSuperNode) emit_zsuper_args(c, s, &c->scopes[xm], ", ", b);

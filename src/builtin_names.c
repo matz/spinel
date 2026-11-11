@@ -2299,25 +2299,29 @@ int builtin_core_is_a(int k, int anc) {
 }
 
 /* The builtins whose keyword hash is one more positional, from CRuby's own
-   facts (builtin_arity.inc): BAK the instance methods, BACK the class
-   methods (fixed arity, no keywords) */
+   facts (builtin_arity.inc): BAK the instance methods, BALK a library's,
+   with the library (io/console's IO#winsize), which hold only where the
+   program has it; BACK the class methods (fixed arity, no keywords) */
 #define BAI(...)
 #define BAM(...)
 #define BAS(...)
 #define BAC(...)
-#define BAK(c,m) {c,m},
+#define BAK(c,m) {c,m,NULL},
 #define BACK(...)
 #define BAKT(...)
 #define BAP(...)
 #define BAL(...)
 #define BALC(...)
-static const struct { const char *cls; const char *m; } sp_builtin_kwpos_tbl[] = {
+#define BALK(f,c,m) {c,m,f},
+static const struct { const char *cls, *m, *feature; } sp_builtin_kwpos_tbl[] = {
 #include "builtin_arity.inc"
-  {NULL, NULL}
+  {NULL, NULL, NULL}
 };
 #undef BAK
 #undef BACK
+#undef BALK
 #define BAK(...)
+#define BALK(...)
 #define BACK(c,m) {c,m},
 static const struct { const char *cls; const char *m; } sp_builtin_cmeth_kwpos_tbl[] = {
 #include "builtin_arity.inc"
@@ -2343,7 +2347,13 @@ static const struct { const char *cls, *m, *key; int cside, max; } sp_builtin_kw
 #undef BACK
 #undef BAL
 #undef BALC
+#undef BALK
 #undef BAP
+/* Does keyword-fact row i hold for this program: a core method's always,
+   a library's where the program has the library */
+static int kwpos_row_fits(int i) {
+  return !sp_builtin_kwpos_tbl[i].feature || sp_feature_enabled(sp_builtin_kwpos_tbl[i].feature);
+}
 /* See builtin_names.h. */
 const char *builtin_kw_taken(const char *cls, const char *name, int cside) {
   for (int i = 0; cls && name && sp_builtin_kw_taken_tbl[i].cls; i++)
@@ -2385,7 +2395,9 @@ int builtin_kw_positional(const char *cls, const char *name, int cside) {
   else if (builtin_method_fixed_any(name) && builtin_class_arity_spec(cls, name, &min, &max, &lo, &hi) && min == max)
     return 1;
   for (int i = 0; sp_builtin_kwpos_tbl[i].cls; i++)
-    if (sp_streq(sp_builtin_kwpos_tbl[i].cls, cls) && sp_streq(sp_builtin_kwpos_tbl[i].m, name)) return 1;
+    if (sp_streq(sp_builtin_kwpos_tbl[i].cls, cls) && sp_streq(sp_builtin_kwpos_tbl[i].m, name) &&
+        kwpos_row_fits(i))
+      return 1;
   return -1;
 }
 /* See builtin_names.h. */
@@ -2393,7 +2405,7 @@ int builtin_name_kwless(const char *name) {
   if (!name) return 0;
   if (bop_name_kwless(name) || bop_class_name_kwless(name) || builtin_method_fixed_any(name)) return 1;
   for (int i = 0; sp_builtin_kwpos_tbl[i].cls; i++)
-    if (sp_streq(sp_builtin_kwpos_tbl[i].m, name)) return 1;
+    if (sp_streq(sp_builtin_kwpos_tbl[i].m, name) && kwpos_row_fits(i)) return 1;
   for (int i = 0; sp_builtin_cmeth_kwpos_tbl[i].cls; i++)
     if (sp_streq(sp_builtin_cmeth_kwpos_tbl[i].m, name)) return 1;
   return 0;
@@ -2412,6 +2424,7 @@ int builtin_name_kwless(const char *name) {
 #define BAP(...)
 #define BAL(...)
 #define BALC(...)
+#define BALK(...)
 static const struct { const char *cls, *m; } self_fact_rows[] = {
 #include "builtin_arity.inc"
 };
@@ -2424,6 +2437,7 @@ static const struct { const char *cls, *m; } self_fact_rows[] = {
 #undef BAKT
 #undef BAL
 #undef BALC
+#undef BALK
 #undef BAP
 /* Does Spinel have values of table class k: a builtin class row, a synthetic slot, or a class the arity facts
    list (StringScanner, Set, StringIO)? */

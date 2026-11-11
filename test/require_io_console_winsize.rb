@@ -24,3 +24,29 @@ begin
 rescue ArgumentError => e
   p e.message
 end
+
+# A keyword hash is one more argument to winsize, which takes none: written
+# out, through a `**` operand, and on a handle read back out of a container,
+# also in a branch beside a call that answers
+f = {extra: 1}
+begin
+  STDOUT.winsize(extra: 1)
+rescue ArgumentError => e
+  p e.message
+end
+begin
+  $stdout.winsize(**f)
+rescue ArgumentError => e
+  p e.message
+end
+begin
+  h.winsize(**f)
+rescue ArgumentError => e
+  p e.message
+end
+begin
+  x = [1].size > 0 ? h.winsize(extra: 1) : h.winsize
+  p x
+rescue ArgumentError => e
+  p e.message
+end

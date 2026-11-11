@@ -4,7 +4,8 @@
    BAI carries both, BAM only Method#arity, BAS only instance counts,
    and BAC class/module counts; BAL and BALC are a library's instance
    and class counts, its name first. BACK names the class methods whose
-   keyword hash counts as a positional (no keywords); BAKT a method that
+   keyword hash counts as a positional (no keywords), BALK a library's
+   instance methods whose hash does, its name first; BAKT a method that
    takes one keyword and counts a hash with any other key as a
    positional, 1 for a class method, then its most positionals. -1 maxima are unbounded; NULL messages
    and unproved -1 minima never reject a call. Block counts are separate.
@@ -3824,6 +3825,36 @@ BACK("Kernel","p")
 BACK("Kernel","pp")
 BACK("Kernel","puts")
 BACK("Kernel","print")
+BALK("io/console","StringIO","getch")
+BALK("io/console","StringIO","getpass")
+BALK("io/console","File","beep")
+BALK("io/console","File","clear_screen")
+BALK("io/console","File","console_mode")
+BALK("io/console","File","console_mode=")
+BALK("io/console","File","cooked")
+BALK("io/console","File","cooked!")
+BALK("io/console","File","cursor")
+BALK("io/console","File","cursor=")
+BALK("io/console","File","cursor_down")
+BALK("io/console","File","cursor_left")
+BALK("io/console","File","cursor_right")
+BALK("io/console","File","cursor_up")
+BALK("io/console","File","echo=")
+BALK("io/console","File","echo?")
+BALK("io/console","File","erase_line")
+BALK("io/console","File","erase_screen")
+BALK("io/console","File","getpass")
+BALK("io/console","File","goto")
+BALK("io/console","File","goto_column")
+BALK("io/console","File","iflush")
+BALK("io/console","File","ioflush")
+BALK("io/console","File","noecho")
+BALK("io/console","File","oflush")
+BALK("io/console","File","scroll_backward")
+BALK("io/console","File","scroll_forward")
+BALK("io/console","File","ttyname")
+BALK("io/console","File","winsize")
+BALK("io/console","File","winsize=")
 BAKT("Kernel","raise","cause",1,3)
 BAKT("Kernel","fail","cause",1,3)
 BAKT("Fiber","raise","cause",0,3)

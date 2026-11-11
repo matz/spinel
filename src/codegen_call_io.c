@@ -834,14 +834,17 @@ static int emit_io_timeout_set(Compiler *c, int id, int recv, int value, Buf *b)
   return 1;
 }
 
+/* See codegen_internal.h. */
+int io_library_count_refused(const BuiltinOp *op, const char *name, int argc) {
+  return op && op->recv == TY_IO && op->feature && !builtin_arity_admits(bop_spec_class(op->recv), name, argc);
+}
 /* A library's IO method (io/console's winsize, winsize=) on a boxed handle:
    a row of the library emits the call, or CRuby refuses its count, which
    the stream check of emit_call_poly_io_arms raises as ArgumentError. An
    operand no row takes (`winsize = "x"`) is left to the general dispatch. */
 static int boxed_io_library_call(Compiler *c, int id, const char *name, int argc) {
   const BuiltinOp *op = emit_builtin_op_row(c, id, TY_IO, name);
-  if (bop_io_library_row(op)) return 1;
-  return op && op->recv == TY_IO && op->feature && !builtin_arity_admits(bop_spec_class(op->recv), name, argc);
+  return bop_io_library_row(op) || io_library_count_refused(op, name, argc);
 }
 
 /* the IO methods on a poly receiver that may hold a stream (write, read, gets, puts, print, ...) */
@@ -1008,21 +1011,29 @@ int emit_call_poly_io_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
        a Queue's closed?, an Enumerator's rewind), by the instance arity
        table, and NoMethodError for any other receiver, once the arguments
        have run. The stream arms below dropped the arguments and ran the
-       method (`o.close(1)` closed the file). A `*` or `**` splat's count
-       is the run time's, and stays with those arms. */
-    int kwsplat = nt_argv_has_kwsplat(nt, argv, argc);
-    if (!iocand && argc > 0 && !kwsplat && !nt_argv_has_splat(nt, argv, argc) &&
+       method (`o.close(1)` closed the file). A keyword hash counts as
+       the call plan says the stream's method takes it
+       (cplan_builtin_hash_positionals): the full branch of a `**` split
+       is one more argument (`h.winsize(**f)`), and a `**` the split left
+       open is the run time's, as a `*` splat's count is, and stays with
+       those arms. */
+    int given = argc;
+    if (nt_argv_kwh(nt, argv, argc) >= 0) {
+      int hp = cplan_builtin_hash_positionals(c, id, "File", name, 0);
+      given = hp < 0 ? -1 : argc - 1 + hp;
+    }
+    if (!iocand && given > 0 && !nt_argv_has_splat(nt, argv, argc) &&
         builtin_arity_admits("File", name, 0) && !builtin_arity_admits("File", name, 1)) {
       static const struct { const char *cls, *id; } owners[] = {
         { "Dir", "SP_BUILTIN_DIR" }, { "Queue", "SP_BUILTIN_QUEUE" },
         { "Enumerator", "SP_BUILTIN_ENUMERATOR" } };
       int tv = ++g_tmp;
-      char msg[96]; arity_message(msg, sizeof msg, argc, 0, 0, NULL);
+      char msg[96]; arity_message(msg, sizeof msg, given, 0, 0, NULL);
       buf_puts(b, "({ "); tv = hold_operand(c, recv, TY_POLY, 1, tv, 1, " ", b);
       for (int k = 0; k < argc; k++) { buf_puts(b, "(void)("); emit_expr_for_effect(c, argv[k], b); buf_puts(b, "); "); }
       buf_printf(b, "if (!(_t%d.tag == SP_TAG_OBJ && (0", tv);
       for (size_t o = 0; o < sizeof owners / sizeof owners[0]; o++)
-        if (!builtin_arity_admits(owners[o].cls, name, argc)) buf_printf(b, " || _t%d.cls_id == %s", tv, owners[o].id);
+        if (!builtin_arity_admits(owners[o].cls, name, given)) buf_printf(b, " || _t%d.cls_id == %s", tv, owners[o].id);
       buf_printf(b, "))) (void)sp_poly_as_io(_t%d, \"%s\"); sp_raise_cls(\"ArgumentError\", \"%s\"); %s; })",
                  tv, name, msg, raise_tail_value(repr_of(c, id).as_ty));
       return 1;

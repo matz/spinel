@@ -40,7 +40,8 @@ int builtin_name_takes_keywords(const char *n);   /* a builtin of the name takes
    class method where cside), as CRuby counts a method that takes no
    keywords: 1; 0 where the method takes keywords; 2 where it takes the one
    keyword builtin_kw_taken names and counts a hash with any other key as
-   a positional; -1 where no fact says. */
+   a positional; -1 where no fact says. A library's method has its fact
+   where the program has the library (io/console's IO#winsize: 1). */
 int builtin_kw_positional(const char *cls, const char *name, int cside);
 /* The one keyword that method takes where its keyword fact is 2 (`cause`
    for Kernel.raise, Kernel.fail and Fiber#raise); NULL otherwise. */
@@ -52,7 +53,8 @@ const char *builtin_kw_taken(const char *cls, const char *name, int cside);
    every such maximum. */
 const char *builtin_name_kw_taken(const char *name, int npos);
 /* Does some builtin of the name take no keywords: an op row or class-side
-   row without BOPF_KEYWORDS, a fixed Method#arity, the facts' BAK or BACK.
+   row without BOPF_KEYWORDS, a fixed Method#arity, the facts' BAK or BACK,
+   or a BALK of a library the program has.
    The `**` split's gate. */
 int builtin_name_kwless(const char *name);
 int is_method_name_reflection(const char *n); /* send family, method public_method instance_method define_method define_singleton_method alias_method singleton_method respond_to? method_defined? */

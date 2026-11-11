@@ -618,6 +618,11 @@ kwpos = inst.select do |cls, m, min, max, _, _, bmin, bmax|
     s && row_kw_positional.(k, m, s[0], s[1], s[4], s[5])
   end
 end
+# A library's instance methods whose keyword hash is one more positional
+# (BALK, its library first), by BAK's rule, probed with the library loaded:
+# io/console's IO#winsize takes none, so `$stdout.winsize(a: 1)` passes one
+# argument. A library's class methods (BALC) have no count to check.
+libkw = lib.select { |_, cls, m, min, max, _, _, bmin, bmax| row_kw_positional.(cls, m, min, max, bmin, bmax) }
 # Keep both facts where available; introspection is not an acceptance rule.
 # Retain Method#arity order, including the receiverless Kernel wrappers.
 counts = inst.to_h { |r| [r[0, 2], r[2..]] }
@@ -628,7 +633,8 @@ out = <<~C
      BAI carries both, BAM only Method#arity, BAS only instance counts,
      and BAC class/module counts; BAL and BALC are a library's instance
      and class counts, its name first. BACK names the class methods whose
-     keyword hash counts as a positional (no keywords); BAKT a method that
+     keyword hash counts as a positional (no keywords), BALK a library's
+     instance methods whose hash does, its name first; BAKT a method that
      takes one keyword and counts a hash with any other key as a
      positional, 1 for a class method, then its most positionals. -1 maxima are unbounded; NULL messages
      and unproved -1 minima never reject a call. Block counts are separate.
@@ -651,6 +657,7 @@ lib.each { |r| render.("BAL", r) }
 libc.each { |r| render.("BALC", r) }
 kwpos.each { |r| render.("BAK", r[0, 2]) }
 cmkw.each { |r| render.("BACK", r[0, 2]) }
+libkw.each { |r| render.("BALK", r[0, 3]) }
 KW_PASSTHROUGH.each do |(cls, side), ms|
   ms.each do |m, key|
     row = (side == :class ? cm : inst).find { |r| r[0] == cls && r[1] == m }

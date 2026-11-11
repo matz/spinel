@@ -4421,11 +4421,14 @@ static int infer_poly_operand_call(Compiler *c, int id, const NodeTable *nt, con
       /* a library's IO method on a poly-carried handle (io/console's
          winsize, winsize=): what the TY_IO row the boxed dispatch emits
          answers. Without this the call falls through to a plain poly result
-         and the `size[0]` that follows reads it as an untyped value. */
+         and the `size[0]` that follows reads it as an untyped value. At a
+         count CRuby refuses, which the dispatch raises, the row's answer
+         too, so the raise's value has the type of the call's other forms. */
       {
         AnBopArgs ba = { c, argv };
         const BuiltinOp *lop = bop_find_arg(TY_IO, name, argc, nt_ref(nt, id, "block") >= 0, an_bop_arg_type, &ba);
-        if (bop_io_library_row(lop)) { *out = an_poly_concrete(c, id, name, lop->result); return 1; }
+        if (bop_io_library_row(lop) || io_library_count_refused(lop, name, argc))
+          { *out = an_poly_concrete(c, id, name, lop->result); return 1; }
       }
       if ((sp_streq(name, "__sp_tty_mode") || sp_streq(name, "__sp_tty_restore")) && argc == 1)
         { *out = an_poly_concrete(c, id, name, TY_INT); return 1; }

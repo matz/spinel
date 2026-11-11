@@ -29,6 +29,10 @@ t("basename e") { File.basename("/a/b.rb", ".rb", **e) }
 t("basename f") { File.basename("/a/b.rb", ".rb", **f) }
 x = [a, "s"][0]
 t("boxed size f") { x.size(**f) }
+# a stream read back out of a container counts the full hash too
+io = [$stdout, 1][0]
+t("boxed flush f") { io.flush(**f) }
+t("boxed closed? f") { io.closed?(**f) }
 # a keyword fact holds only where it holds on each class one kind stands
 # for: SizedQueue#push and #enq take timeout:
 q = SizedQueue.new(3)

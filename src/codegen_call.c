@@ -2487,6 +2487,7 @@ const char *const comparable_names[] = {
 #define BAP(...)
 #define BAL(...)
 #define BALC(...)
+#define BALK(...)
 /* Method#arity reads the introspection column of the shared facts. */
 #define BAI(c,m,a,...) {c,m,a},
 #define BAM(c,m,a) {c,m,a},
@@ -20581,12 +20582,14 @@ sp_builtin_arity_spec_tbl[] = {
    reads them where the program has the library, and nothing else does */
 #undef BAL
 #undef BALC
+#undef BALK
 #define BAI(...)
 #define BAM(...)
 #define BAS(...)
 #define BAC(...)
 #define BAL(f, ...) {__VA_ARGS__, f},
 #define BALC(...)
+#define BALK(...)
 static const SpAritySpec
 sp_builtin_lib_arity_spec_tbl[] = {
 #include "builtin_arity.inc"
@@ -20594,8 +20597,10 @@ sp_builtin_lib_arity_spec_tbl[] = {
 };
 #undef BAL
 #undef BALC
+#undef BALK
 #define BAL(...)
 #define BALC(f, ...) {__VA_ARGS__, f},
+#define BALK(...)
 static const SpAritySpec
 sp_builtin_lib_cmeth_arity_spec_tbl[] = {
 #include "builtin_arity.inc"
@@ -20607,8 +20612,10 @@ sp_builtin_lib_cmeth_arity_spec_tbl[] = {
 #undef BAC
 #undef BAL
 #undef BALC
+#undef BALK
 #define BAL(...)
 #define BALC(...)
+#define BALK(...)
 /* Method#arity of a Numeric method that Integer and Float inherit (abs2,
    quo, +@, step): the Method#arity rows are each class's own methods, so
    these have only the counts the class accepts. One count is the arity, a
@@ -20752,6 +20759,7 @@ sp_builtin_cmeth_arity_spec_tbl[] = {
 #undef BAK
 #undef BAL
 #undef BALC
+#undef BALK
 #undef BAP
 /* Method#parameters of the builtins, by the class or module that defines
    each (BAP: CRuby's instance_method(m).parameters) */
@@ -20762,6 +20770,7 @@ sp_builtin_cmeth_arity_spec_tbl[] = {
 #define BAK(...)
 #define BAL(...)
 #define BALC(...)
+#define BALK(...)
 #define BAP(c,m,p,cside) {c,m,p,cside},
 static const struct { const char *owner, *m, *params; int cside; } sp_builtin_params_tbl[] = {
 #include "builtin_arity.inc"
@@ -20774,6 +20783,7 @@ static const struct { const char *owner, *m, *params; int cside; } sp_builtin_pa
 #undef BAK
 #undef BAL
 #undef BALC
+#undef BALK
 #undef BAP
 /* The parameters CRuby lists for owner's instance method m, as
    sp_BoundMethod.params carries them ("kind[:name]" entries separated by

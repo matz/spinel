@@ -167,6 +167,12 @@ static int node_is_oint_asked(Compiler *c, int node) {
     if (r < 0 || !nm || !ty_is_object(rt)) return nullable_int_value(c, node);
     int cid = ty_object_class(rt), rmi = -1;
     int rk = comp_resolve_member(c, cid, nm, 0, NULL, &rmi);
+    /* `&&=` answers the value on the arm that assigns: nil where it can be,
+       whatever the reader answers (`o.count &&= nil` on an Integer reader) */
+    if (k == NK_CallAndWriteNode && (rk == SP_MEMBER_METHOD || rk == SP_MEMBER_ATTR)) {
+      int v = nt_ref(nt, node, "value");
+      if (v >= 0 && (nt_kind(nt, v) == NK_NilNode || node_has_oint_form(c, v))) return 1;
+    }
     if (rk == SP_MEMBER_METHOD && rmi >= 0) return method_ret_is_oint(&c->scopes[rmi]);
     /* an attr's `||=` stores a nil field's replacement and answers it: nil
        only where the value can be */

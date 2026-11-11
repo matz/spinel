@@ -23464,8 +23464,9 @@ int num_iter_answers_recv(Compiler *c, int id) {
 }
 
 /* Does this statement list end in something that leaves the function -- a
-   `return`, or a bare `raise`/`throw`? Used to decide whether a construct in
-   tail position produces a value at all. Parentheses preserve divergence. */
+   `return`, a bare `raise`/`throw`, or a read of a constant defined nowhere?
+   Used to decide whether a construct in tail position produces a value at
+   all. Parentheses preserve divergence. */
 /* (`exit`, `exit!` and `abort` too, the names the analysis goes by
    (an_call_diverges): it types a call by its method's own rescue where the
    block ends in one, and a splice that took the body to return had no value
@@ -23481,6 +23482,8 @@ int stmts_diverge(Compiler *c, int stmts) {
   if (!lt) return 0;
   if (lk == NK_ReturnNode) return 1;
   if (lk == NK_ParenthesesNode) return stmts_diverge(c, nt_ref(nt, last, "body"));
+  /* a read of a constant defined nowhere raises NameError (const_read_raises) */
+  if (nt_kind_is_constant(lk) && const_read_raises(c, last)) return 1;
   if (lk == NK_CallNode && nt_ref(nt, last, "receiver") < 0 &&
       !bare_call_class_owned(c, last)) {
     const char *nm = nt_str(nt, last, "name");

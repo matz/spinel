@@ -1133,7 +1133,7 @@ TyKind block_next_value_ntype(const Compiler *c, int node) {
     if (an > 1) return TY_POLY_ARRAY;
     NodeKind ak = nt_kind(nt, av[0]);
     if (ak == NK_SplatNode) return TY_POLY_ARRAY;
-    return c->ntype[av[0]];
+    return comp_ntype_stored(c, av[0]);
   }
   if (k == NK_WhileNode || k == NK_UntilNode || k == NK_ForNode || k == NK_BlockNode ||
       k == NK_LambdaNode || k == NK_DefNode || k == NK_ClassNode || k == NK_ModuleNode)
@@ -1237,7 +1237,7 @@ static int yield_builtin_method_site_type(const Compiler *c, int id, TyKind *out
   if (!op || recv < 0) return 0;
   if (nt_kind(nt, recv) != NK_YieldNode && nt_kind(nt, recv) != NK_CallNode) return 0;
   if (nt_ref(nt, id, "block") >= 0) return 0;
-  if (c->ntype[id] != TY_POLY) return 0;
+  if (comp_ntype_stored(c, id) != TY_POLY) return 0;
   int an = nt_ref(nt, id, "arguments"), ac = 0;
   const int *av = an >= 0 ? nt_arr(nt, an, "arguments", &ac) : NULL;
   TyKind rt;
@@ -1274,7 +1274,7 @@ static int untyped_call_held_boxed(const Compiler *c, int id) {
   static unsigned char *memo;   /* 0 not asked, 1 held, 2 not, 3 being asked */
   static const NodeTable *memo_nt;
   static int cap;
-  if (c->ntype[id] != TY_UNKNOWN || nt_kind(c->nt, id) != NK_CallNode) return 0;
+  if (comp_ntype_stored(c, id) != TY_UNKNOWN || nt_kind(c->nt, id) != NK_CallNode) return 0;
   if (memo_nt != c->nt) { if (cap) memset(memo, 0, (size_t)cap); memo_nt = c->nt; }
   if (id >= cap) {
     int n = c->nt->count > id ? c->nt->count : id + 1;
@@ -1341,7 +1341,7 @@ int sp_yield_site_type(const Compiler *c, int id, TyKind *out) {
     if (fn <= 0 || !fb) break;
     tail = fb[fn - 1];
   }
-  TyKind bt = c->ntype[tail];
+  TyKind bt = comp_ntype_stored(c, tail);
   /* only a CONCRETE per-site answer overrides the cache; an unresolved tail
      leaves the node's own (unified) type in place */
   if (bt == TY_UNKNOWN || bt == TY_VOID) return 0;
@@ -5096,7 +5096,7 @@ void emit_coerce_text(Compiler *c, int node, TyKind from, TyKind slot, int how,
     return;
   case CF_BOX:
     /* (a String into a boxed slot the rule shares: emit_boxed's lift) */
-    if (node >= 0 && c->poly_strbuf_lift[node] && from == TY_STRING) {
+    if (node >= 0 && comp_poly_strbuf_lift_stored(c, node) && from == TY_STRING) {
       buf_puts(b, "sp_poly_strbuf_lift(");
       emit_boxed_text(c, from, text, b);
       buf_puts(b, ")");

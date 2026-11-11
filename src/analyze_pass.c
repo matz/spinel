@@ -9047,7 +9047,7 @@ static int cext_widen_containers(Compiler *c, int v, CextWalk *seen) {
   int constant = nt_int(nt, v, "cext_const_node", 0) - 1;
   if (constant >= 0) {
     changed |= cext_widen_containers(c, constant, seen);
-    if (c->strbuf_box[constant] && !c->strbuf_box[v]) { comp_set_strbuf_box(c, v, 1); changed = 1; }
+    if (comp_strbuf_box_stored(c, constant) && !comp_strbuf_box_stored(c, v)) { comp_set_strbuf_box(c, v, 1); changed = 1; }
     return changed;
   }
   if (nt_kind(nt, v) == NK_CallNode) changed |= cext_demand_reader(c, v);
@@ -20106,7 +20106,7 @@ static int irt_scope(Compiler *c, int s, IrtCtx *x) {
          the other side */
       int node = -1, other = -1; TyKind then = TY_UNKNOWN;
       int tail = (!empty_body && !tail_unreachable && sc->body >= 0) ? sc->body : -1;
-      if (tail >= 0 && tail < c->node_cap && ty_degraded(c->ntype[tail])) { node = tail; then = c->ntype[tail]; }
+      if (tail >= 0 && tail < c->node_cap && ty_degraded(comp_ntype_stored(c, tail))) { node = tail; then = comp_ntype_stored(c, tail); }
       else if (ret_head && ret_next) {
         for (int rid = ret_head[s]; rid >= 0; rid = ret_next[rid]) {
           TyKind rt = return_node_type(c, rid);
@@ -20119,7 +20119,7 @@ static int irt_scope(Compiler *c, int s, IrtCtx *x) {
            first `return` of a different kind (the list's head can be one
            of the same kind, which said "String, where a `return` gives
            String"; String and its mutable refinement are one kind). */
-        TyKind tt = (tail >= 0 && tail < c->node_cap) ? c->ntype[tail] : TY_UNKNOWN;
+        TyKind tt = (tail >= 0 && tail < c->node_cap) ? comp_ntype_stored(c, tail) : TY_UNKNOWN;
         if (tt != TY_UNKNOWN) { node = tail; then = tt; }
         if (ret_head)
           for (int rid = ret_head[s]; rid >= 0; rid = ret_next[rid]) {

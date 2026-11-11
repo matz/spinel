@@ -2413,7 +2413,7 @@ static int emit_local_ivar_write_expr(Compiler *c, int id, Buf *b, const NodeTab
     }
     /* a `return .. if p.nil?`-guarded param read: unbox the poly slot to the
        non-nil type the narrowing pass proved (#1661) */
-    if (c->nilnarrow[id] != TY_UNKNOWN) {
+    if (comp_nilnarrow_stored(c, id) != TY_UNKNOWN) {
       Buf rb2; memset(&rb2, 0, sizeof rb2);
       emit_local_ref(c, id, lrn, &rb2);
       /* A `rescue K => e` arm's read of a binding two arms share (#4343). The
@@ -2422,9 +2422,9 @@ static int emit_local_ivar_write_expr(Compiler *c, int id, Buf *b, const NodeTab
          not the poly unbox the guards below want. */
       {
         LocalVar *elv = lrn ? scope_local(comp_scope_of(c, id), lrn) : NULL;
-        if (elv && elv->type == TY_EXCEPTION && ty_is_object(c->nilnarrow[id])) {
+        if (elv && elv->type == TY_EXCEPTION && ty_is_object(comp_nilnarrow_stored(c, id))) {
           buf_puts(b, "((");
-          emit_ctype(c, c->nilnarrow[id], b);
+          emit_ctype(c, comp_nilnarrow_stored(c, id), b);
           buf_printf(b, ")%s)", rb2.p ? rb2.p : "");
           free(rb2.p);
           return 1;
@@ -2436,7 +2436,7 @@ static int emit_local_ivar_write_expr(Compiler *c, int id, Buf *b, const NodeTab
          box it never was. */
       {
         LocalVar *nlv = lrn ? scope_local(comp_scope_of(c, id), lrn) : NULL;
-        if (nlv && nlv->type == c->nilnarrow[id] && nlv->type != TY_POLY) {
+        if (nlv && nlv->type == comp_nilnarrow_stored(c, id) && nlv->type != TY_POLY) {
           free(rb2.p);
           emit_local_read_face(c, id, lrn, nlv, b);
           return 1;
@@ -2445,10 +2445,10 @@ static int emit_local_ivar_write_expr(Compiler *c, int id, Buf *b, const NodeTab
       /* An `is_a?(Array)`-narrowed read: a boxed array can be any element-typed
          representation (Int/Float/Str/Poly array), so normalize to a PolyArray
          at runtime rather than casting the raw .v.p to one kind. */
-      if (c->nilnarrow[id] == TY_POLY_ARRAY)
+      if (comp_nilnarrow_stored(c, id) == TY_POLY_ARRAY)
         buf_printf(b, "sp_poly_to_poly_array(%s)", rb2.p ? rb2.p : "");
       else
-        emit_unbox_text(c, c->nilnarrow[id] == TY_STRBUF ? repr_of(c, id).as_ty : c->nilnarrow[id],
+        emit_unbox_text(c, comp_nilnarrow_stored(c, id) == TY_STRBUF ? repr_of(c, id).as_ty : comp_nilnarrow_stored(c, id),
                         rb2.p ? rb2.p : "", b);
       free(rb2.p);
       return 1;

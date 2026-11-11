@@ -3212,7 +3212,7 @@ static TyKind proc_arg_ty(Compiler *c, int a) {
      nil (strbuf_arg_bang), as it hands it to a method's parameter */
   if (r.as_ty == TY_STRING && strbuf_arg_bang(c, nt_paren_single(c->nt, a))) return TY_STRBUF;
   /* a fresh String lifted into the handle for a boxed parameter it reaches */
-  if (r.as_ty == TY_STRING && c->poly_strbuf_lift[a]) return TY_STRBUF;
+  if (r.as_ty == TY_STRING && comp_poly_strbuf_lift_stored(c, a)) return TY_STRBUF;
   TyKind t = r.as_ty;
   if (t == TY_UNKNOWN && nt_kind(c->nt, a) == NK_ArrayNode && node_is_empty_container(c, a))
     return TY_INT_ARRAY;
@@ -9688,7 +9688,7 @@ static int emit_poly_arg_temp(Compiler *c, int node, TyKind ty, int boxed, int t
      own emitter may answer the plain String (`+""`, `"".dup`, an interpolation:
      the mark only asks for it, #7833): the value is taken as the handle, or
      wrapped in a fresh one */
-  int as_handle = !boxed && ty == TY_STRBUF && c->strbuf_box[node] &&
+  int as_handle = !boxed && ty == TY_STRBUF && comp_strbuf_box_stored(c, node) &&
                   nt_kind(c->nt, node) != NK_LocalVariableReadNode &&
                   nt_kind(c->nt, node) != NK_InstanceVariableReadNode;
   /* a read that answers a boxed value (an element of a poly Hash) carries
@@ -27678,7 +27678,7 @@ static int poly_target_call(Compiler *c, int id) {
   const NodeTable *nt = c->nt;
   int r = nt_ref(nt, id, "receiver"), a = nt_ref(nt, id, "arguments");
   const char *nm = nt_str(nt, id, "name");
-  if (r < 0 || a < 0 || !nm || sn_guard_pending(c, id) || c->ntype[r] != TY_POLY ||
+  if (r < 0 || a < 0 || !nm || sn_guard_pending(c, id) || comp_ntype_stored(c, r) != TY_POLY ||
       comp_ntype(c, r) != TY_POLY || !subtree_has_side_effect(c, a) ||
       call_target(c, id, -1, nm, CT_TOP, NULL) >= 0 || any_class_defines(c, nm) ||
       (nil_target_read_rebound(c, r, a) && nt_kind(nt, r) != NK_LocalVariableReadNode))
@@ -27971,14 +27971,14 @@ static int emit_nil_target_cold(Compiler *c, int id, Buf *b) {
    as for any call. `stmt` emits it as a statement at `indent`. */
 static int emit_nil_target_own(Compiler *c, int id, Buf *b, int stmt, int indent) {
   int r = nt_ref(c->nt, id, "receiver");
-  if (!c->nil_tested || comp_ntype(c, r) != TY_STRING || !recv_may_be_sentinel(c, r)) return 0;
+  if (!comp_nil_tested_present(c) || comp_ntype(c, r) != TY_STRING || !recv_may_be_sentinel(c, r)) return 0;
   size_t pre0 = g_pre ? g_pre->len : 0;
   int sv_tmp = g_tmp;
   int vt = view_push_repr(c, r, VR_NIL_TESTED, 3);
   Buf cb; memset(&cb, 0, sizeof cb);
   if (stmt) emit_stmt_inner(c, id, &cb, indent);
   else emit_call_held(c, id, &cb);
-  int ok = c->nil_tested[r] == 4;
+  int ok = comp_nil_tested_stored(c, r) == 4;
   view_pop(c, vt);
   if (ok) buf_puts(b, cb.p ? cb.p : "");
   else {
@@ -30704,7 +30704,7 @@ static void emit_call_unwrapped(Compiler *c, int id, Buf *b) {
     int chain[16], nch = 0, r = nt_ref(c->nt, id, "receiver");
     while (cn && sp_streq(cn, "<<") && r >= 0 && nt_kind(c->nt, r) == NK_CallNode && nch < 16 &&
            nt_str(c->nt, r, "name") && sp_streq(nt_str(c->nt, r, "name"), "<<") &&
-           c->ntype[r] == TY_STRING) {
+           comp_ntype_stored(c, r) == TY_STRING) {
       chain[nch++] = r;
       r = nt_ref(c->nt, r, "receiver");
     }
@@ -34806,7 +34806,7 @@ int strbuf_narrowed_box_mutator(Compiler *c, int id) {
   const char *cn = nt_str(nt, id, "name");
   int nch = 0, r = nt_ref(nt, id, "receiver");
   while (is_shovel_name(cn) && r >= 0 && nt_kind(nt, r) == NK_CallNode && nch < 16 &&
-         is_shovel_name(nt_str(nt, r, "name")) && c->ntype[r] == TY_STRING) {
+         is_shovel_name(nt_str(nt, r, "name")) && comp_ntype_stored(c, r) == TY_STRING) {
     nch++;
     r = nt_ref(nt, r, "receiver");
   }
@@ -34845,7 +34845,7 @@ void emit_narrowed_box_mutator(Compiler *c, int id, Buf *b) {
 int strbuf_call_picks_up(Compiler *c, int id) {
   /* (the call answers its String as a const char *: a method whose value
      widened past a String after the pickup was marked answers a box) */
-  if (!(c->strbuf_box[id] && nt_ref(c->nt, id, "block") < 0 && comp_ntype(c, id) != TY_POLY)) return 0;
+  if (!(comp_strbuf_box_stored(c, id) && nt_ref(c->nt, id, "block") < 0 && comp_ntype(c, id) != TY_POLY)) return 0;
   int r = nt_ref(c->nt, id, "receiver");
   if (r < 0) return implicit_self_reader_cid(c, id) < 0;
   if (comp_ntype(c, r) != TY_CLASS) return 0;

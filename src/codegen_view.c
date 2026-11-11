@@ -48,6 +48,7 @@
    builtin declining (ArmCtx.gap_watch). Neither is a view of a node: they
    count toward neither view_depth nor view_epoch. */
 
+#define SP_NODE_FACT_OWNER 1
 #include "codegen_internal.h"
 #include "share.h"
 #include <stdarg.h>

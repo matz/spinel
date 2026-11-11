@@ -8985,7 +8985,7 @@ static TyKind infer_call_prelude(Compiler *c, int id) {
       int value = nt_int(c->nt, id, "cext_const_node", 0) - 1;
       if (value >= 0) {
         TyKind type = infer_type(c, value);
-        return c->strbuf_box[id] && type == TY_STRING ? TY_STRBUF : type;
+        return comp_strbuf_box_stored(c, id) && type == TY_STRING ? TY_STRBUF : type;
       }
       int recv = nt_ref(c->nt, id, "receiver"), argc = 0, an = nt_ref(c->nt, id, "arguments");
       const int *argv = an >= 0 ? nt_arr(c->nt, an, "arguments", &argc) : NULL;
@@ -11578,11 +11578,11 @@ TyKind infer_uncached(Compiler *c, int id) {
      a String; a value that has since widened to poly is no handle -- the
      demand saw `x.to_s.strip` while the re-narrow had x re-cleared, and
      the box the value now is was handed on as a String. */
-  if (c->strbuf_box[id]) {
+  if (comp_strbuf_box_stored(c, id)) {
     /* put back before it returns: not a change of the table */
-    ((unsigned char *)c->strbuf_box)[id] = 0;
+    comp_write_strbuf_box(c, id, 0);
     TyKind u = infer_uncached(c, id);
-    ((unsigned char *)c->strbuf_box)[id] = 1;
+    comp_write_strbuf_box(c, id, 1);
     return u == TY_POLY ? TY_POLY : TY_STRBUF;
   }
   /* a multiple assignment's element, read back for desugar_masgn_store_evidence:
@@ -11864,7 +11864,7 @@ TyKind infer_uncached(Compiler *c, int id) {
 
   if (nk == NK_LocalVariableReadNode) {
     /* a `return .. if p.nil?`-guarded param read: the non-nil type (#1661) */
-    if (c->nilnarrow[id] != TY_UNKNOWN) return c->nilnarrow[id];
+    if (comp_nilnarrow_stored(c, id) != TY_UNKNOWN) return comp_nilnarrow_stored(c, id);
     const char *nm = nt_str(nt, id, "name");
     Scope *s = comp_scope_of(c, id);
     /* A kept &block reads as the Proc-or-NULL value passed by the caller. */
@@ -12649,7 +12649,7 @@ static int why_ivar_write_of(Compiler *c, int wid, const char *nm, int cid) {
   Scope *ws = comp_scope_of(c, wid);
   if (!ws || ws->class_id != cid) return -1;
   int v = nt_ref(nt, wid, "value");
-  return (v >= 0 && v < c->node_cap && ty_degraded(c->ntype[v])) ? v : -1;
+  return (v >= 0 && v < c->node_cap && ty_degraded(comp_ntype_stored(c, v))) ? v : -1;
 }
 
 static int why_node_origin(Compiler *c, int id, TyKind t) {
@@ -12665,7 +12665,7 @@ static int why_node_origin(Compiler *c, int id, TyKind t) {
   }
   if (nk == NK_StatementsNode) {
     int n = 0; const int *body = nt_arr(nt, id, "body", &n);
-    if (body && n > 0 && body[n - 1] >= 0 && body[n - 1] < c->node_cap && ty_degraded(c->ntype[body[n - 1]])) return body[n - 1];
+    if (body && n > 0 && body[n - 1] >= 0 && body[n - 1] < c->node_cap && ty_degraded(comp_ntype_stored(c, body[n - 1]))) return body[n - 1];
   }
   if (nk == NK_CallNode) {
     /* a call bound to a user def whose return degraded: the value it
@@ -12673,9 +12673,9 @@ static int why_node_origin(Compiler *c, int id, TyKind t) {
        a class or module (a singleton method). */
     int recv = nt_ref(nt, id, "receiver");
     const char *name = nt_str(nt, id, "name");
-    if (name && (recv < 0 || !(recv < c->node_cap && ty_degraded(c->ntype[recv])))) {
+    if (name && (recv < 0 || !(recv < c->node_cap && ty_degraded(comp_ntype_stored(c, recv))))) {
       int cid = -1, want_cm = 0;
-      if (recv >= 0 && recv < c->node_cap && ty_is_object(c->ntype[recv])) cid = ty_object_class(c->ntype[recv]);
+      if (recv >= 0 && recv < c->node_cap && ty_is_object(comp_ntype_stored(c, recv))) cid = ty_object_class(comp_ntype_stored(c, recv));
       else if (recv >= 0 && (nt_kind(nt, recv) == NK_ConstantReadNode || nt_kind(nt, recv) == NK_ConstantPathNode)) {
         const char *cn = nt_str(nt, recv, "name");
         cid = cn ? const_node_class_index(c, recv) : -1; want_cm = 1;
@@ -12730,13 +12730,13 @@ static int why_node_origin(Compiler *c, int id, TyKind t) {
   for (int i = 0; i < n->nr; i++) {
     int ch = n->r[i].ref;
     if (n->r[i].key && sp_streq(n->r[i].key, "predicate")) continue;
-    if (ch >= 0 && ch < c->node_cap && ch != id && ty_degraded(c->ntype[ch])) return ch;
+    if (ch >= 0 && ch < c->node_cap && ch != id && ty_degraded(comp_ntype_stored(c, ch))) return ch;
   }
   for (int i = 0; i < n->na; i++) {
     if (n->a[i].key && sp_streq(n->a[i].key, "conditions")) continue;
     for (int k = 0; k < n->a[i].n; k++) {
       int ch = n->a[i].ids[k];
-      if (ch >= 0 && ch < c->node_cap && ch != id && ty_degraded(c->ntype[ch])) return ch;
+      if (ch >= 0 && ch < c->node_cap && ch != id && ty_degraded(comp_ntype_stored(c, ch))) return ch;
     }
   }
   return id;
@@ -13027,8 +13027,8 @@ TyKind infer_type(Compiler *c, int id) {
      unaffected. */
   { TyKind fk = face_of(id); if (fk != TY_UNKNOWN) return fk; }
   /* see an_builtin_answer: the asked call's receiver keeps its own type */
-  if (an_builtin_only && id == an_bo_recv && id < c->node_cap && c->ntype[id] != TY_UNKNOWN)
-    return c->ntype[id];
+  if (an_builtin_only && id == an_bo_recv && id < c->node_cap && comp_ntype_stored(c, id) != TY_UNKNOWN)
+    return comp_ntype_stored(c, id);
   /* A depth-0 entry opens a fresh memo generation. A table changed since
      the last look ends what the earlier generations hold: within this tree
      after its own answers, before it with them. */

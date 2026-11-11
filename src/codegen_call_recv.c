@@ -10803,7 +10803,7 @@ static int emit_scalar_recv_arms(Compiler *c, int id, Buf *b, const NodeTable *n
       }
       /* a nil arm that left the test to this guard (emit_nil_target_own)
          learns it was written */
-      if (c->nil_tested && c->nil_tested[recv] == 3) c->nil_tested[recv] = 4;
+      if (comp_nil_tested_present(c) && comp_nil_tested_stored(c, recv) == 3) comp_write_nil_tested(c, recv, 4);
       if (ib->p) buf_puts(b, ib->p);
       buf_puts(b, "; })");
     }
@@ -12147,7 +12147,7 @@ static int emit_struct_recv_call(Compiler *c, int id, Buf *b, const NodeTable *n
       buf_printf(b, " _t%d = ", tvraw); emit_expr(c, argv[1], b); buf_puts(b, ";");
       char rawtxt[32]; snprintf(rawtxt, sizeof rawtxt, "_t%d", tvraw);
       /* a String a shared boxed member takes is its handle (emit_boxed's lift) */
-      int lift = c->poly_strbuf_lift[argv[1]] && vt == TY_STRING;
+      int lift = comp_poly_strbuf_lift_stored(c, argv[1]) && vt == TY_STRING;
       buf_printf(b, " sp_RbVal _t%d = %s", tv, lift ? "sp_poly_strbuf_lift(" : "");
       emit_boxed_text(c, vt, rawtxt, b);
       buf_puts(b, lift ? ");" : ";");
@@ -16236,7 +16236,7 @@ int emit_face_str_bang_pub(Compiler *c, int id, Buf *b) {
 static void emit_poly_recv_lift_pre(Compiler *c, int recv) {
   NodeKind k = nt_kind(c->nt, recv);
   if ((k != NK_LocalVariableReadNode && k != NK_InstanceVariableReadNode) ||
-      !c->poly_strbuf_lift || c->poly_strbuf_lift[recv]) return;
+      !comp_poly_strbuf_lift_present(c) || comp_poly_strbuf_lift_stored(c, recv)) return;
   Buf lv; memset(&lv, 0, sizeof lv);
   emit_expr(c, recv, &lv);
   int t = ++g_tmp;

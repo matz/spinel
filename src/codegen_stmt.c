@@ -3772,7 +3772,7 @@ static int strbuf_route_nonnil(Compiler *c, int v) {
 /* --share-strings: is recv a deep-return pickup (emit_deep_return_pickup)
    that can answer nil (strbuf_pickup_answers_nil)? */
 int strbuf_pickup_may_nil(Compiler *c, int recv) {
-  return recv >= 0 && nt_kind(c->nt, recv) == NK_CallNode && (c->strbuf_box[recv] || c->strbuf_handle_demand[recv]) &&
+  return recv >= 0 && nt_kind(c->nt, recv) == NK_CallNode && (comp_strbuf_box_stored(c, recv) || comp_strbuf_handle_demand_stored(c, recv)) &&
          strbuf_pickup_answers_nil(c, recv);
 }
 static int strbuf_route_recv(Compiler *c, int id, int recv, Buf *out);
@@ -5653,7 +5653,7 @@ void emit_strbuf_ivar_store(Compiler *c, int shared, int v, Buf *b) {
   }
   NodeKind k = u >= 0 ? nt_kind(nt, u) : NK_NilNode;
   if (k == NK_NilNode) { buf_puts(b, "NULL"); return; }
-  if (shared && repr_of(c, u).kind != RK_BOXED && !c->strbuf_box[u] &&
+  if (shared && repr_of(c, u).kind != RK_BOXED && !comp_strbuf_box_stored(c, u) &&
       (k == NK_LocalVariableReadNode || k == NK_InstanceVariableReadNode || repr_static_read_kind(k)) &&
       !strbuf_slot_has(c, u))
     unsupported_feature(c, u, "a String variable is stored into a Struct member or through an attribute "
@@ -13091,7 +13091,7 @@ static int poll_while_counted_step(Compiler *c, int pred, int body, int *stepn, 
   const char *op = nt_str(nt, pred, "name");
   int up = op && (sp_streq(op, "<") || sp_streq(op, "<=")), down = op && (sp_streq(op, ">") || sp_streq(op, ">="));
   int recv = nt_ref(nt, pred, "receiver");
-  if ((!up && !down) || recv < 0 || nt_kind(nt, recv) != NK_LocalVariableReadNode || c->ntype[recv] != TY_INT) return 0;
+  if ((!up && !down) || recv < 0 || nt_kind(nt, recv) != NK_LocalVariableReadNode || comp_ntype_stored(c, recv) != TY_INT) return 0;
   const char *v = nt_str(nt, recv, "name");
   int bn = 0; const int *bv = nt_kind(nt, body) == NK_StatementsNode ? nt_arr(nt, body, "body", &bn) : NULL;
   int step = -1;
@@ -13535,7 +13535,7 @@ static long long chunk_counted_step(Compiler *c, int pred, int body) {
   if (subtree_has_own_next(nt, body) || !poll_while_counted_step(c, pred, body, &w, 1)) return 0;
   int a = nt_ref(nt, pred, "arguments"), ac = 0; const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &ac) : NULL;
   int bd = ac == 1 ? av[0] : -1;
-  if (bd < 0 || c->ntype[bd] != TY_INT) return 0;
+  if (bd < 0 || comp_ntype_stored(c, bd) != TY_INT) return 0;
   NodeKind bk = nt_kind(nt, bd);
   if (bk == NK_IntegerNode) { if (nt_str(nt, bd, "bigval")) return 0; }
   else if (bk == NK_LocalVariableReadNode) { if (subtree_changes_local(c, body, nt_str(nt, bd, "name"))) return 0; }
@@ -17086,7 +17086,7 @@ void emit_boxed_writer_arms(Compiler *c, const char *base, const char *nm,
   }
   /* --share-strings: a String a shared boxed slot takes is its handle, as
      the typed store boxes it (emit_boxed's lift, share_lift_poly_ivar_stores) */
-  int lift = vnode >= 0 && c->poly_strbuf_lift[vnode] && at == TY_STRING;
+  int lift = vnode >= 0 && comp_poly_strbuf_lift_stored(c, vnode) && at == TY_STRING;
   for (int k = 0; k < c->nclasses; k++) {
     /* a native class's own binding of the writer (a StringScanner's `pos=`
        beside a user class's `attr_accessor :pos`): its C call, as the poly
@@ -19317,10 +19317,10 @@ int masgn_boxed_index_keeps(Compiler *c, int t, int e) {
   const NodeTable *nt = c->nt;
   if (t < 0 || nt_kind(nt, t) != NK_IndexTargetNode || e < 0) return 0;
   int r = nt_ref(nt, t, "receiver");
-  TyKind rt = r >= 0 ? c->ntype[r] : TY_UNKNOWN;
+  TyKind rt = r >= 0 ? comp_ntype_stored(c, r) : TY_UNKNOWN;
   if (rt != TY_POLY_ARRAY && rt != TY_POLY && rt != TY_SYM_POLY_HASH && rt != TY_STR_POLY_HASH && rt != TY_POLY_POLY_HASH)
     return 0;
-  TyKind et = c->ntype[e];
+  TyKind et = comp_ntype_stored(c, e);
   NodeKind ek = nt_kind(nt, e);
   return (et == TY_STRING || et == TY_STRBUF) &&
          (ek == NK_ParenthesesNode || ek == NK_IfNode || ek == NK_UnlessNode) && strbuf_cond_has_handle_leaf(c, e);
@@ -23081,7 +23081,7 @@ static void emit_stmt_node(Compiler *c, int id, Buf *b, int indent) {
       if (bvargc > 0) {
         emit_indent(b, indent); buf_printf(b, "%s = ", g_loop_break_var);
         /* a break that leaves a loop read as the handle (emit_strbuf_route) */
-        if (c->strbuf_handle_demand[id]) emit_strbuf_handle_of(c, bvargs[0], b);
+        if (comp_strbuf_handle_demand_stored(c, id)) emit_strbuf_handle_of(c, bvargs[0], b);
         else if (g_ie_res_poly) emit_boxed(c, bvargs[0], b);
         else if (bo) emit_oint_expr(c, bvargs[0], g_ie_next_ty, b);
         else emit_expr(c, bvargs[0], b);
@@ -23178,7 +23178,7 @@ static void emit_stmt_node(Compiler *c, int id, Buf *b, int indent) {
         }
         /* (one representation: a bytes slot takes a value of either face as its bytes) */
         else if (g_ie_next_ty == TY_STRING) { buf_puts(b, "SP_STR_B("); emit_expr(c, nv[0], b); buf_puts(b, ")"); }
-        else if (c->strbuf_handle_demand[id]) emit_strbuf_handle_of(c, nv[0], b);
+        else if (comp_strbuf_handle_demand_stored(c, id)) emit_strbuf_handle_of(c, nv[0], b);
         else if (g_ie_res_poly) emit_boxed(c, nv[0], b);
         else if (g_ie_next_oint && oint_kind(g_ie_next_ty)) emit_oint_expr(c, nv[0], g_ie_next_ty, b);
         else if (g_ie_next_ty == TY_INT || g_ie_next_ty == TY_FLOAT) {

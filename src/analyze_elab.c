@@ -6127,13 +6127,19 @@ static int lr_unplaced(Compiler *c, int node) {
    pass made into a class on the chain, or code the record cannot follow
    (a send, an eval of a String) run on one before p, but code that only
    writes (LR_OPAQUE_WRITES)? */
-static int lr_unordered_supply(Compiler *c, int cls, int sg, const char *name, LoadPoint p) {
+static int lr_unordered_supply(Compiler *c, int cls, int sg, const char *name, LoadPoint p, int own) {
   LoadRecord *r = c->lrec;
-  const LrVers *x = lr_vers(r, name);
+  const LrVers *x = own ? NULL : lr_vers(r, name);
   for (int i = x ? x->first : -1; i >= 0; i = r->hist[i].nlink)
     for (int j = 0; j < r->hist[i].n; j++)
       if (lr_is_version(&r->hist[i].v[j]) && lr_unplaced(c, r->hist[i].v[j].node)) return 1;
-  for (int k = LR_MAIN; k + 1 < r->ncls; k++) {
+  const LrHist *oh = own ? lr_hist(r, cls, sg, name, 0) : NULL;
+  for (int j = 0; oh && j < oh->n; j++)
+    if (lr_is_version(&oh->v[j]) && lr_unplaced(c, oh->v[j].node)) return 1;
+  /* (an ask of cls's own history (own) can be supplied only on cls itself:
+     what its ancestry mixes in is not its own, so the owners are not
+     walked, which would make one ask per class read every class) */
+  for (int k = own ? cls : LR_MAIN; own ? k == cls : k + 1 < r->ncls; k++) {
     const LrClass *kc = lr_class(r, k);
     const LrHist *op = lr_hist(r, LR_KEY_OPAQUE, lr_const_owner(k), "", 0);
     if ((!kc || !kc->nmix) && !op) continue;
@@ -6270,9 +6276,9 @@ static int lr_class_reopen_side(Compiler *c, int cls, int sg, const char *name, 
    it (mm), no code the record cannot follow or supply it cannot order may
    define it, and the call runs at p, not any time after it (an END body,
    a lazy chain's block: elab_runs_later), when a later def may be live */
-static int lr_none_holds(Compiler *c, int id, int owner, int sg, const char *name, LoadPoint p, int mm) {
+static int lr_none_holds(Compiler *c, int id, int owner, int sg, const char *name, LoadPoint p, int mm, int own) {
   if (mm && (elab_method_versions(c, "method_missing") || elab_method_versions(c, "respond_to_missing?"))) return 0;
-  return !elab_runs_unseen(c) && !lr_unordered_supply(c, owner, sg, name, p) && !elab_runs_later(c, id);
+  return !elab_runs_unseen(c) && !lr_unordered_supply(c, owner, sg, name, p, own) && !elab_runs_later(c, id);
 }
 
 int elab_call_method(Compiler *c, int id, int cls, const char *name, int sg, int mm) {
@@ -6299,7 +6305,7 @@ int elab_call_method(Compiler *c, int id, int cls, const char *name, int sg, int
   /* an instance's chain passes Object's reopenings: a module they include */
   int ob = o == ELAB_NO && !sg ? lr_core(r, CORE_OBJECT) : -1;
   if (ob >= 0 && ob != cls) o = elab_method_at(c, ob, name, 0, p, NULL);
-  if (o == ELAB_NO && !lr_none_holds(c, id, cls < 0 ? LR_MAIN : cls, sg, name, p, mm)) return ELAB_UNKNOWN;
+  if (o == ELAB_NO && !lr_none_holds(c, id, cls < 0 ? LR_MAIN : cls, sg, name, p, mm, 0)) return ELAB_UNKNOWN;
   return o;
 }
 
@@ -6313,7 +6319,7 @@ int elab_call_own_method(Compiler *c, int id, int cls, const char *name, int sg,
      mixin that may have run: no answer) */
   if (o == LR_STOP || (o == ELAB_NO && (d || unsure))) return ELAB_UNKNOWN;
   if (o == ELAB_NO) o = lr_class_reopen_side(c, cls, sg, name, p);
-  if (o == ELAB_NO && !lr_none_holds(c, id, cls, sg, name, p, 1)) return ELAB_UNKNOWN;
+  if (o == ELAB_NO && !lr_none_holds(c, id, cls, sg, name, p, 1, !mixins)) return ELAB_UNKNOWN;
   return o;
 }
 

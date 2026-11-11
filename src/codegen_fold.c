@@ -8129,6 +8129,21 @@ static void emit_arg_or_default_fill(Compiler *c, Scope *m, int idx, int provide
         else if (oint_kind(pt) && m && idx >= 0 && idx < m->nparams && m->pnames[idx] &&
                  slot_is_oint(scope_local(m, m->pnames[idx])))
           emit_oint_expr(c, provided, pt, out);
+        /* an argument no conversion fits into a parameter its RBS signature
+           types (an arm of a run-time dispatch this call may never take:
+           `m.classify("gear")` over two modules whose classify take a String
+           and an Array): the seed's TypeError where the call runs, as a boxed
+           argument's check raises it (emit_rbs_checked_text), not a refusal */
+        else if (p && p->rbs_seeded && at != TY_UNKNOWN && at != TY_VOID &&
+                 repr_coerce_text_form(c, provided, at, pt, CO_HOLD) == CF_REFUSE &&
+                 (ty_is_array(pt) || ty_is_hash(pt) || conv_cls_name_of(c, pt))) {
+          const char *want = ty_is_array(pt) ? "Array" : ty_is_hash(pt) ? "Hash" : conv_cls_name_of(c, pt);
+          int tv = ++g_tmp;
+          buf_printf(out, "({ sp_RbVal _t%d = ", tv);
+          emit_boxed(c, provided, out);
+          buf_printf(out, "; sp_raise_cls(\"TypeError\", sp_sprintf(\"wrong argument type %%s (expected %s)\", "
+                          "sp_poly_class_name(_t%d))); %s; })", want, tv, raise_tail_value_c(c, pt));
+        }
         else {
           emit_obj_upcast_prefix(c, pt, at, out);
           emit_coerce(c, provided, pt, CO_HOLD, "a method argument", out);

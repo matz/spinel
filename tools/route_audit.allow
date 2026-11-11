@@ -211,7 +211,7 @@ src/compiler.c comp_super_shadow super, by its def's name
 src/analyze_desugar.c desugar_dynamic_send_inner a dynamic send's candidate names
 src/analyze_desugar.c dsend_class_names a dynamic send's candidate names
 src/analyze_desugar.c dsend_receiver_names_uncached a dynamic send's candidate names
-src/analyze_desugar.c dsend_add_every_object_names a dynamic send's candidate names
+src/analyze_desugar.c dsend_every_object_name a dynamic send's candidate names
 src/analyze_scope.c pivs_callable_lit a Symbol argument's method
 src/analyze_util.c class_value_bind_call_gap a Symbol argument's method
 src/analyze_util.c class_value_bind_call_target a Symbol argument's method

@@ -381,15 +381,17 @@ static const BuiltinOp bop_rows[] = {
   { BOP_KERNEL, "respond_to_missing?", 2, 2, BF_ANY, TY_BOOL, BOPE_TEMPLATE, "($j0$j1(sp_bool)0)" },
 #include "builtin_zero_ops.inc"
   /* Boxed reads that answer a new Array. A zero-argument rotate uses one;
-     shuffle has no count. */
-  { BOP_BOXED_FALLBACK, "take",    1, 1, BF_NONE, TY_POLY_ARRAY, BOPE_BOXED_ARRAY_COUNT, "sp_poly_arr_take_n" },
-  { BOP_BOXED_FALLBACK, "first",   1, 1, BF_NONE, TY_POLY_ARRAY, BOPE_BOXED_ARRAY_COUNT, "sp_poly_arr_take" },
-  { BOP_BOXED_FALLBACK, "last",    1, 1, BF_NONE, TY_POLY_ARRAY, BOPE_BOXED_ARRAY_OR_RANGE, "sp_poly_arr_last_n" },
-  { BOP_BOXED_FALLBACK, "drop",    1, 1, BF_NONE, TY_POLY_ARRAY, BOPE_BOXED_ARRAY_COUNT, "sp_poly_arr_drop" },
-  { BOP_BOXED_FALLBACK, "rotate",  0, 1, BF_NONE, TY_POLY_ARRAY, BOPE_BOXED_ARRAY_ONLY,  "sp_poly_arr_rotate" },
-  { BOP_BOXED_FALLBACK, "min",     1, 1, BF_NONE, TY_POLY_ARRAY, BOPE_BOXED_ARRAY_COUNT, "sp_poly_arr_min_n" },
-  { BOP_BOXED_FALLBACK, "max",     1, 1, BF_NONE, TY_POLY_ARRAY, BOPE_BOXED_ARRAY_COUNT, "sp_poly_arr_max_n" },
-  { BOP_BOXED_FALLBACK, "shuffle", 0, 0, BF_NONE, TY_POLY_ARRAY, BOPE_BOXED_ARRAY_ONLY,  "sp_poly_arr_shuffle" },
+     shuffle has no count. Reached after the earlier routes: a call inference
+     types by a rule of its own (a builtin's super from its reopening, the
+     builtin-only re-derivation) records no row (BOPF_INFERRED) */
+  { BOP_BOXED_FALLBACK, "take",    1, 1, BF_NONE, TY_POLY_ARRAY, BOPE_BOXED_ARRAY_COUNT, "sp_poly_arr_take_n", 0, 0, BOPF_INFERRED },
+  { BOP_BOXED_FALLBACK, "first",   1, 1, BF_NONE, TY_POLY_ARRAY, BOPE_BOXED_ARRAY_COUNT, "sp_poly_arr_take", 0, 0, BOPF_INFERRED },
+  { BOP_BOXED_FALLBACK, "last",    1, 1, BF_NONE, TY_POLY_ARRAY, BOPE_BOXED_ARRAY_OR_RANGE, "sp_poly_arr_last_n", 0, 0, BOPF_INFERRED },
+  { BOP_BOXED_FALLBACK, "drop",    1, 1, BF_NONE, TY_POLY_ARRAY, BOPE_BOXED_ARRAY_COUNT, "sp_poly_arr_drop", 0, 0, BOPF_INFERRED },
+  { BOP_BOXED_FALLBACK, "rotate",  0, 1, BF_NONE, TY_POLY_ARRAY, BOPE_BOXED_ARRAY_ONLY,  "sp_poly_arr_rotate", 0, 0, BOPF_INFERRED },
+  { BOP_BOXED_FALLBACK, "min",     1, 1, BF_NONE, TY_POLY_ARRAY, BOPE_BOXED_ARRAY_COUNT, "sp_poly_arr_min_n", 0, 0, BOPF_INFERRED },
+  { BOP_BOXED_FALLBACK, "max",     1, 1, BF_NONE, TY_POLY_ARRAY, BOPE_BOXED_ARRAY_COUNT, "sp_poly_arr_max_n", 0, 0, BOPF_INFERRED },
+  { BOP_BOXED_FALLBACK, "shuffle", 0, 0, BF_NONE, TY_POLY_ARRAY, BOPE_BOXED_ARRAY_ONLY,  "sp_poly_arr_shuffle", 0, 0, BOPF_INFERRED },
 
   { TY_POLY, "upcase", 0, 0, BF_ANY, TY_POLY, BOPE_TEMPLATE,
     "sp_poly_case_conv($r, sp_str_upcase, \"upcase\")", 0, 0, 0, 1 },

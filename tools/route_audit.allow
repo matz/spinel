@@ -200,7 +200,7 @@ src/codegen.c struct_display_owned whether the program owns a Struct's inspect o
 src/codegen.c ext_emit_method_thunk the class that defines an exported method's name (--ext-class)
 src/codegen.c ext_emit_attr_rows whether a def answers an attr's name (--ext-class)
 src/codegen.c ext_emit_method_tables the class that defines an exported method's name (--ext-class)
-src/codegen_call_class.c emit_respond_to_runtime_name =c->scopes[s].name a scope's own name
+src/codegen_call_class.c rtr_lists_build =c->scopes[s].name a scope's own name
 src/codegen_expr.c defined_super_reaches super, by its def's name
 src/codegen_util.c ivs_super_method super, by its def's name
 src/codegen_util.c proc_form_source a proc form's source method, by its own name

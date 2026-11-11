@@ -7224,8 +7224,7 @@ static int sp_pm_kwsplat_may_drop(const pm_call_node_t *c, const pm_node_t *defi
   for (size_t k = 0; k < el->size; k++) {
     if (PM_NODE_TYPE(el->nodes[k]) != PM_ASSOC_SPLAT_NODE) { drop = 0; continue; }
     const pm_node_t *v = ((const pm_assoc_splat_node_t *)el->nodes[k])->value;
-    if (!v) { drop = 0; continue; }
-    if (PM_NODE_TYPE(v) != PM_HASH_NODE) continue;
+    if (!v || PM_NODE_TYPE(v) != PM_HASH_NODE) continue;
     const pm_node_list_t *he = &((const pm_hash_node_t *)v)->elements;
     int has_splat = 0;
     for (size_t q = 0; q < he->size; q++) if (PM_NODE_TYPE(he->nodes[q]) == PM_ASSOC_SPLAT_NODE) has_splat = 1;

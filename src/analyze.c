@@ -44435,7 +44435,10 @@ static void kwsplat_drop_rows(NodeTable *nt, int id) {
    the positional operands, the `**` conversions, then the `&` operand), and
    only the branch that runs reads them. A `&.` call tests its receiver
    first and runs nothing else when it is nil. The `**nil` and `**{}`
-   operands pass nothing and go at once. A call under `defined?` does not
+   operands pass nothing and go at once. An anonymous `**` is held as
+   `{**}`, which reads the method's keyword rest once the anonymous
+   parameters are named; its Hash is built ahead of a `&` operand's
+   conversion. A call under `defined?` does not
    run, and one with a pair-only hash (`**{a: 1}`) is never empty: both keep
    their call. The name is the gate only to bound the cost: the split is
    exact for any callee, a program's own method of the name included. It
@@ -44482,12 +44485,12 @@ static void split_kwsplat_calls(Compiler *c, int from) {
     if (!ev || ne < 1 || ne > 16) continue;
     for (int i = 0; i < ne; i++) {
       el[i] = ev[i];
-      if (nt_kind(nt, el[i]) != NK_AssocSplatNode || nt_ref(nt, el[i], "value") < 0) ok = 0;
+      if (nt_kind(nt, el[i]) != NK_AssocSplatNode) ok = 0;
     }
     if (!ok || !kwsplat_gated(nt, &al, id, args, n)) continue;
     for (int i = 0; i < ne; i++) {
       int v = nt_ref(nt, el[i], "value"), vn = 0;
-      NodeKind vk = nt_kind(nt, v);
+      NodeKind vk = v >= 0 ? nt_kind(nt, v) : NK_NONE;   /* (an anonymous `**`: the method's, read later) */
       if (vk == NK_HashNode) nt_arr(nt, v, "elements", &vn);
       if (vk == NK_NilNode || (vk == NK_HashNode && vn == 0)) continue;
       if (vk == NK_HashNode && !nt_hash_has_splat(nt, v)) full = 1;
@@ -44538,7 +44541,7 @@ static void split_kwsplat_calls(Compiler *c, int from) {
        its to_proc adds is passed: the conversion runs, then the copy is built
        and tested. With any other `&` operand, or with two `**`, the Hash is
        built first. */
-    int simple = ne == 1 && ndyn == 1 && blockarg_plain_read(nt, bexp);
+    int simple = ne == 1 && ndyn == 1 && nt_ref(nt, dyn[0], "value") >= 0 && blockarg_plain_read(nt, bexp);
     if (simple) {
       int hc = sd_hold(c, nt, NULL, id, "kwh", -1, sd_bcall(nt, "__kw_hash", -1, (int[]){ nt_ref(nt, dyn[0], "value") }, 1), pre, &npre);
       nt_node_set_ref(nt, dyn[0], "value", hc);

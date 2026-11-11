@@ -4589,9 +4589,9 @@ static int emit_held_self_answer_shim(Compiler *c, int id, int r, TyKind ty, Buf
   g_pre = &apre;
   int sv_skip = g_sn_skip;
   if (sn) g_sn_skip = id;   /* (and a `&.` call's nil guard is the shim's) */
-  nt_node_set_int((NodeTable *)c->nt, id, "recv_nil_tested", 1);
+  int nil_view = view_push_call_nil_tested(c, id);
   int handled = emit(c, id, &armb);
-  nt_node_set_int((NodeTable *)c->nt, id, "recv_nil_tested", 0);
+  view_pop(c, nil_view);
   g_sn_skip = sv_skip;
   g_pre = sv_pre;
   view_pop(c, shv);

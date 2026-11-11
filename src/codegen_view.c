@@ -56,7 +56,8 @@
 
 /* what an entry overrides: the node's type, one representation flag, or
    the arm context */
-enum { VK_TYPE = -1, VK_ARM = -2, VK_FACE = -3, VK_STMT = -4, VK_TARGET = -7, VK_CONVERSION = -8, VK_CONST_READ = -9, VK_CLASS_IS = -10 };
+enum { VK_TYPE = -1, VK_ARM = -2, VK_FACE = -3, VK_STMT = -4, VK_TARGET = -7, VK_CONVERSION = -8,
+       VK_CONST_READ = -9, VK_CLASS_IS = -10, VK_CALL_NIL_TESTED = -11 };
 static struct { Compiler *c; int id; int kind; int saved; int val; ArmCtx arm_saved; const void *pre; } view_stack[VIEW_MAX];
 static int view_face = -1;   /* the innermost face entry, or -1 */
 static int view_stmt = -1;   /* the innermost statement entry, or -1 */
@@ -346,13 +347,29 @@ int view_class_is(Compiler *c, int node, unsigned reads) {
 }
 unsigned view_class_is_read(int tok) { return tok >= 0 && tok < view_sp ? (unsigned)view_stack[tok].val : 0; }
 
+/* A re-entered call whose enclosing emission already tested its receiver.
+   This marks the call, whereas VR_NIL_TESTED marks a receiver value. */
+int view_push_call_nil_tested(Compiler *c, int id) {
+  int tok = view_open_mark(VK_CALL_NIL_TESTED, id, 0, NULL);
+  view_stack[tok].c = c;
+  view_nodes++;
+  view_epoch_n++;
+  return tok;
+}
+
+int view_call_nil_tested(Compiler *c, int id) {
+  for (int i = view_sp - 1; i >= 0; i--)
+    if (view_stack[i].kind == VK_CALL_NIL_TESTED && view_stack[i].c == c && view_stack[i].id == id) return 1;
+  return 0;
+}
+
 /* the entry on top, put back */
 static void view_close(int tok) {
   if (view_stack[tok].kind == VK_ARM) { g_arm = view_stack[tok].arm_saved; return; }
   if (view_stack[tok].kind == VK_FACE) { view_face = view_stack[tok].arm_saved.pd_skip; return; }
   if (view_stack[tok].kind == VK_STMT) { view_stmt = view_stack[tok].saved; return; }
   if (view_stack[tok].kind != VK_TARGET && view_stack[tok].kind != VK_CONVERSION && view_stack[tok].kind != VK_CONST_READ &&
-      view_stack[tok].kind != VK_CLASS_IS)
+      view_stack[tok].kind != VK_CLASS_IS && view_stack[tok].kind != VK_CALL_NIL_TESTED)
     view_write(view_stack[tok].c, view_stack[tok].kind, view_stack[tok].id, view_stack[tok].saved);
   view_nodes--;
   view_epoch_n++;

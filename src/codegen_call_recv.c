@@ -4793,9 +4793,9 @@ static int emit_str_mutator_call(Compiler *c, int id, Buf *b, const NodeTable *n
           g_sub_bang_id = subm && sub_bang_reenters(c, id, recv, argc, argv) ? id : -1; g_sub_bang_tm = 0;
           /* the handle is tested above: the plain form reads its bytes, bound
              in _tob, and must not test them again as a handle (cplan_nil) */
-          nt_node_set_int((NodeTable *)nt, id, "recv_nil_tested", 1);
+          int nil_view = view_push_call_nil_tested(c, id);
           emit_expr(c, id, &nbB);
-          nt_node_set_int((NodeTable *)nt, id, "recv_nil_tested", 0);
+          view_pop(c, nil_view);
           /* the plain form read the handle's bytes, and the set_bin below
              writes its answer back into the handle (the bang's own answer,
              when it is used, is the bytes: only a dropped one is declared) */
@@ -4866,9 +4866,9 @@ static int emit_str_mutator_call(Compiler *c, int id, Buf *b, const NodeTable *n
       int sv_sb = g_sub_bang_id;   /* the wrapper or a block form's local, as above */
       g_sub_bang_id = subm2 && sub_bang_reenters(c, id, recv, argc, argv) ? id : -1; g_sub_bang_tm = 0;
       /* the nil test above stands for the plain form's own (cplan_nil) */
-      if (!lvw) nt_node_set_int((NodeTable *)nt, id, "recv_nil_tested", 1);
+      int nil_view = !lvw ? view_push_call_nil_tested(c, id) : -1;
       emit_expr(c, id, &nb);
-      if (!lvw) nt_node_set_int((NodeTable *)nt, id, "recv_nil_tested", 0);
+      if (nil_view >= 0) view_pop(c, nil_view);
       int tsm = g_sub_bang_tm; g_sub_bang_id = sv_sb; g_sub_bang_tm = 0;
       char sm[40] = "";
       if (tsm) snprintf(sm, sizeof sm, " && !_t%d", tsm);

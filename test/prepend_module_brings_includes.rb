@@ -59,3 +59,26 @@ module P8; prepend Q8; end
 module D8; prepend P8; end
 class N8; prepend D8; end
 p N8.ancestors.take(5), N8.new.is_a?(Q8)
+
+# A long chain of modules that each prepend the one before
+module Ch0; end
+module Ch1; prepend Ch0; end
+module Ch2; prepend Ch1; end
+module Ch3; prepend Ch2; end
+module Ch4; prepend Ch3; end
+module Ch5; prepend Ch4; end
+module Ch6; prepend Ch5; end
+module Ch7; prepend Ch6; end
+module Ch8; prepend Ch7; end
+module Ch9; prepend Ch8; end
+module Ch10; prepend Ch9; end
+module Ch11; prepend Ch10; end
+module Ch12; prepend Ch11; end
+module Ch13; prepend Ch12; end
+module Ch14; prepend Ch13; end
+module Ch15; prepend Ch14; end
+module Ch16; prepend Ch15; end
+module Ch17; prepend Ch16; end
+module Ch18; prepend Ch17; end
+class KCh; prepend Ch18; end
+p KCh.ancestors.size, KCh.ancestors.first, KCh.new.is_a?(Ch0)

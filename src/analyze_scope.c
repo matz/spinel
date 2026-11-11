@@ -8732,6 +8732,76 @@ static int body_mixin_dependencies_ready(Compiler *c, int ci, int body_node, con
   return ready;
 }
 
+/* A module no class includes, prepends or extends, through any chain of
+   modules, has no object its instance methods run on (an include through an
+   explicit receiver or into a live object is refused, so every mixin is one
+   of these). Its methods, and the copies a module it includes made in it, are
+   copied away with no copy left: reached by a name some class calls, they
+   were compiled with the module as self and refused the calls the module
+   leaves to its includers (`module Helpers; include StoreLocation; end`, which
+   nothing includes, made StoreLocation's methods Helpers' own). The top
+   level's includes still run as themselves (comp_scope_copied_away), and a
+   module whose instance_method is taken keeps its methods. */
+static void unbound_module_methods_away(Compiler *c) {
+  const NodeTable *nt = c->nt;
+  char *bound = calloc((size_t)(c->nclasses > 0 ? c->nclasses : 1), 1);
+  if (!bound) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  for (int k = 0; k < c->nclasses; k++) {
+    const ClassInfo *ci = &c->classes[k];
+    for (int e = 0; e < ci->nextended_mods; e++)
+      if (ci->extended_mods[e] >= 0 && ci->extended_mods[e] < c->nclasses) bound[ci->extended_mods[e]] = 1;
+    if (!comp_class_is_module(c, ci) || ci->is_builtin_const || ci->is_native_class || ci->cext_extension ||
+        (ci->name && is_builtin_reopen(ci->name)))
+      bound[k] = 1;
+  }
+  for (int i = 0; i < c->ntoplevel_includes; i++)
+    if (c->toplevel_includes[i] >= 0 && c->toplevel_includes[i] < c->nclasses) bound[c->toplevel_includes[i]] = 1;
+  for (int id = 0; id < nt->count; id++) {
+    if (nt_kind(nt, id) != NK_CallNode) continue;
+    const char *nm = nt_str(nt, id, "name");
+    if (!nm) continue;
+    int recv = nt_ref(nt, id, "receiver");
+    if (sp_streq(nm, "instance_method") || sp_streq(nm, "public_instance_method")) {
+      int k = recv >= 0 && (nt_kind(nt, recv) == NK_ConstantReadNode || nt_kind(nt, recv) == NK_ConstantPathNode)
+                ? const_node_class_index(c, recv) : -1;
+      if (k >= 0 && k < c->nclasses) bound[k] = 1;
+      continue;
+    }
+    /* a mixin the walk does not record (one under a condition, `extend M
+       if ...`) may still run: its module is bound. (A module's own include
+       of another binds that one too, which is harmless: that one's methods
+       are copied away into the including module, whose own binding is
+       what decides.) */
+    if (!(sp_streq(nm, "extend") || sp_streq(nm, "include") || sp_streq(nm, "prepend"))) continue;
+    int args = nt_ref(nt, id, "arguments"), argc = 0;
+    const int *argv = args >= 0 ? nt_arr(nt, args, "arguments", &argc) : NULL;
+    for (int a = 0; a < argc; a++) {
+      NodeKind ak = nt_kind(nt, argv[a]);
+      int k = ak == NK_ConstantReadNode || ak == NK_ConstantPathNode ? const_node_class_index(c, argv[a]) : -1;
+      if (k >= 0 && k < c->nclasses) bound[k] = 1;
+    }
+  }
+  for (int changed = 1; changed;) {
+    changed = 0;
+    for (int k = 0; k < c->nclasses; k++) {
+      if (!bound[k]) continue;
+      const ClassInfo *ci = &c->classes[k];
+      for (int m = 0; m < ci->nincluded_mods + ci->nprepended_mods; m++) {
+        int md = m < ci->nincluded_mods ? ci->included_mods[m] : ci->prepended_mods[m - ci->nincluded_mods];
+        if (md >= 0 && md < c->nclasses && !bound[md]) { bound[md] = 1; changed = 1; }
+      }
+    }
+  }
+  for (int s = 1; s < c->nscopes; s++) {
+    Scope *sc = &c->scopes[s];
+    if (sc->class_id < 0 || sc->class_id >= c->nclasses || bound[sc->class_id] || !sc->name || sc->is_cmethod ||
+        sc->is_module_function)
+      continue;
+    sc->is_transplanted_source = 1;
+  }
+  free(bound);
+}
+
 void register_includes(Compiler *c) {
   const NodeTable *nt = c->nt;
   g_list_has_c = c;
@@ -8814,6 +8884,7 @@ void register_includes(Compiler *c) {
         sc->is_transplanted_source = 1;
       }
   }
+  unbound_module_methods_away(c);
   if (g_inc_did_clone) register_locals(c);
 }
 

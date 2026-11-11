@@ -36,6 +36,13 @@ int is_object_class_name(const char *n);   /* Object alone: the top level's cons
 int is_object_root(const char *n);    /* Object Kernel BasicObject: the classes every object has */
 int is_send_family(const char *n);    /* send __send__ public_send */
 int builtin_name_takes_keywords(const char *n);   /* a builtin of the name takes keywords in CRuby (clone, round, lines ...) */
+/* Does a CRuby fact of a method of `feature` hold for this program: a core
+   method's (feature NULL) always, a library's (io/console) where the
+   program writes the require. The default require mode provides a
+   library's methods without the require, but CRuby has no such method
+   there: its counts and keyword facts (BAL, BALC, BALK) and its op rows'
+   keyword answer do not apply, and the call answers as an unknown method's. */
+int builtin_library_fact_holds(const char *feature);
 /* Is a keyword hash one more positional of cls's builtin method `name` (its
    class method where cside), as CRuby counts a method that takes no
    keywords: 1; 0 where the method takes keywords; 2 where it takes the one

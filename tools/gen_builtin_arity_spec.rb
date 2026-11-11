@@ -508,8 +508,9 @@ end
 # public methods a probe receiver answers after the require and not before,
 # and the class methods a class itself defines then -- is probed and written
 # as BAL (instance) and BALC (class) rows that name the library first. Only
-# the count check reads them, for a program that has the library; the core
-# tables (names, reflection) stay the core's.
+# the count check reads them, for a program that requires the library
+# (builtin_library_fact_holds); the core tables (names, reflection) stay the
+# core's.
 LIBRARIES = %w[io/console]
 lib = []
 libc = []

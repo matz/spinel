@@ -20814,14 +20814,17 @@ int builtin_kernel_fn_span(const char *name, int with_block, int *lo, int *hi) {
   return 0;
 }
 /* The row of one spec table for (cls, name); the instance and the class
-   table take in the rows of the libraries the program has. */
-static const SpAritySpec *arity_spec_find(const SpAritySpec *tbl, const char *cls, const char *name) {
+   table take in the rows of the libraries the program requires
+   (builtin_library_fact_holds), or of every library when every_lib (the
+   --check-bop-arity check, which has no program). */
+static const SpAritySpec *arity_spec_find(const SpAritySpec *tbl, const char *cls, const char *name, int every_lib) {
   for (int i = 0; tbl[i].cls; i++)
     if (sp_streq(tbl[i].cls, cls) && sp_streq(tbl[i].m, name)) return &tbl[i];
   const SpAritySpec *lib = tbl == sp_builtin_arity_spec_tbl ? sp_builtin_lib_arity_spec_tbl
                          : tbl == sp_builtin_cmeth_arity_spec_tbl ? sp_builtin_lib_cmeth_arity_spec_tbl : NULL;
   for (int i = 0; lib && lib[i].cls; i++)
-    if (sp_streq(lib[i].cls, cls) && sp_streq(lib[i].m, name) && sp_feature_enabled(lib[i].feature)) return &lib[i];
+    if (sp_streq(lib[i].cls, cls) && sp_streq(lib[i].m, name) && (every_lib || builtin_library_fact_holds(lib[i].feature)))
+      return &lib[i];
   return NULL;
 }
 /* That row read for the bare or the block-carrying call. Answers whether
@@ -20829,7 +20832,7 @@ static const SpAritySpec *arity_spec_find(const SpAritySpec *tbl, const char *cl
    outside the accepted counts. */
 static int arity_spec_row(const SpAritySpec *tbl, const char *cls, const char *name,
                           int with_block, int argc, char *exp, size_t n) {
-  const SpAritySpec *r = arity_spec_find(tbl, cls, name);
+  const SpAritySpec *r = arity_spec_find(tbl, cls, name, 0);
   if (!r) return 0;
   int mn = with_block ? r->blk_min : r->min;
   int mx = with_block ? r->blk_max : r->max;
@@ -20993,13 +20996,13 @@ int builtin_ops_arity_check(void) {
     if (r->flags & BOPF_INTERNAL) continue;   /* a function of the compiler's, not a CRuby method: no count to check */
     const char *cls = bop_spec_class(r->recv);
     if (!cls) continue;
-    bad += bop_row_outside(cls, "#", r, arity_spec_find(sp_builtin_arity_spec_tbl, cls, r->name), kw_used, &checked);
+    bad += bop_row_outside(cls, "#", r, arity_spec_find(sp_builtin_arity_spec_tbl, cls, r->name, 1), kw_used, &checked);
   }
   /* the class-side rows, against their own class's class-method counts */
   for (int i = 0; i < bop_class_row_count(); i++) {
     const BuiltinClassOp *r = bop_class_row(i);
     if (r->op.argc_max == BOP_ARGC_ANY) continue;
-    bad += bop_row_outside(r->cls, ".", &r->op, arity_spec_find(sp_builtin_cmeth_arity_spec_tbl, r->cls, r->op.name),
+    bad += bop_row_outside(r->cls, ".", &r->op, arity_spec_find(sp_builtin_cmeth_arity_spec_tbl, r->cls, r->op.name, 1),
                            kw_used, &checked);
   }
   /* an exemption no row needs any more is a stale hand entry */
@@ -21263,7 +21266,7 @@ static int class_arity_spec_row(Compiler *c, int id, const char *cls, const char
     if (i > 0 && is_builtin_module_name(a)) continue;
     int ci = i > 0 ? comp_class_index(c, a) : -1;
     if (ci >= 0 && cplan_cmethod_target(c, id, ci, name) >= 0) return 0;
-    if (arity_spec_find(sp_builtin_cmeth_arity_spec_tbl, a, name)) {
+    if (arity_spec_find(sp_builtin_cmeth_arity_spec_tbl, a, name, 0)) {
       if (kwh && !hash_counted(c, id, a, name, 1, argc)) return 0;
       return arity_spec_row(sp_builtin_cmeth_arity_spec_tbl, a, name, with_block, *argc, exp, n);
     }
@@ -21393,7 +21396,7 @@ static int arity_violation(Compiler *c, int id, int non_nil, char *exp, size_t n
     /* a name the class inherits from Object unchanged has Object's row: the
        table keeps a class's own row only where the class defines the name,
        and a forwarding name keeps one that never fires */
-    const char *owner = arity_spec_find(itbl, bcn, name) ? bcn : arity_spec_find(itbl, "Object", name) ? "Object" : NULL;
+    const char *owner = arity_spec_find(itbl, bcn, name, 0) ? bcn : arity_spec_find(itbl, "Object", name, 0) ? "Object" : NULL;
     if (!owner || (kwh && !hash_counted(c, id, owner, name, 0, &argc))) return 0;
     arity_spec_row(itbl, owner, name, with_block, argc, exp, n);
     if (!exp[0]) return 0;

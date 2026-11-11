@@ -5460,12 +5460,11 @@ typedef struct { char path[QC_MAXDEPTH][64]; unsigned char lex[QC_MAXDEPTH + 1];
    close a lexical scope -- the leaf's, and a segment's only where it is
    one of the enclosing bodies, since `class A::B` does not see A's
    constants. */
-static int qc_push_written;   /* (qualify_colliding_reads: the headers are keyed already, and the reads match the names written) */
 static int qc_push_header(const NodeTable *nt, int node, char (**pathp)[64], int depth,
                           unsigned char *lex, QCRebase **own) {
   *own = NULL;
   int cp = nt_ref(nt, node, "constant_path");
-  const char *mn = cp < 0 ? NULL : qc_push_written ? nt_str(nt, cp, "name") : nt_key_name(nt, cp);
+  const char *mn = cp >= 0 ? nt_key_name(nt, cp) : NULL;
   if (!mn) return depth;
   char segs[QC_MAXDEPTH][64];
   int ns = qc_header_segs(nt, cp, segs);
@@ -5501,8 +5500,8 @@ static void qc_pop_header(QCRebase *own, unsigned char *lex) {
   free(own);
 }
 
-/* Every class and module body with its path in the model qc_rewrite_reads
-   walks with (the enclosing bodies' names, then its own), in source order:
+/* Every class and module body with its path in the qualify passes' model
+   (the enclosing bodies' names, then its own), in source order:
    qc_resolve_headers looks a compact header's first segment up among the
    ones before it, and the ancestor lookup below uses them all. */
 typedef struct { int node; int depth; char path[QC_MAXDEPTH][64]; } QCDef;
@@ -6089,7 +6088,7 @@ void qc_qualified_name(char *out, size_t cap, const QCWrite *w) {
   strncat(out, w->name, cap - strlen(out) - 1);
 }
 
-/* Reverse-reference flags for qc_rewrite_reads, built once per top-level call
+/* Reverse-reference flags for the qualify passes' reads, built once per top-level call
    (not rescanned per constant node, which made the pass O(constants * nodes) on
    a flattened runtime). qc_cpath_parent[id]: some ConstantPathNode has parent
    == id. qc_def_cpath[id]: some Class/ModuleNode has constant_path == id. */
@@ -6184,27 +6183,10 @@ static int qc_resolve_chain(char (*chain)[64], int cl, int abs_anchor, char (*sc
   }
   return 0;
 }
-/* Is write `a` later in the source than write `b`? Only told apart within
-   one file, by position; a write in another file counts as earlier (the
-   walk order is not source order once passes have moved bodies). */
-static int qc_write_after(const NodeTable *nt, int a, int b) {
-  if (nt_int(nt, a, "node_file", -1) != nt_int(nt, b, "node_file", -1)) return 0;
-  long long la = nt_int(nt, a, "node_line", 0), lb = nt_int(nt, b, "node_line", 0);
-  if (la != lb) return la > lb;
-  return nt_int(nt, a, "node_col", 0) > nt_int(nt, b, "node_col", 0);
-}
-/* The header a superclass read is resolved for (`class Foo < Foo`): the
-   class it defines does not exist yet when CRuby reads the superclass, so
-   lookups skip its write and any later reopening of it. */
-static const QCWrite *qc_skip_write = NULL;
-static int qc_skipped(const QCWrite *w) {
-  return qc_skip_write && sp_streq(w->name, qc_skip_write->name) &&
-         qc_path_eq((char (*)[64])w->path, w->depth, (char (*)[64])qc_skip_write->path, qc_skip_write->depth);
-}
 /* The colliding write of `nm` made directly in the body at `path`, or -1. */
 static int qc_write_in(char (*path)[64], int n, const char *nm, QCWrite *ws, int wn) {
   for (int i = 0; i < wn; i++)
-    if (!qc_skipped(&ws[i]) && sp_streq(ws[i].name, nm) && qc_path_eq(ws[i].path, ws[i].depth, path, n)) return i;
+    if (sp_streq(ws[i].name, nm) && qc_path_eq(ws[i].path, ws[i].depth, path, n)) return i;
   return -1;
 }
 /* A read of `nm` that no enclosing body defines is looked up in the
@@ -6260,51 +6242,7 @@ static int qc_ancestor_lookup(const NodeTable *nt, char (*path)[64], int n, cons
   }
   return supn > 0 ? qc_ancestor_lookup(nt, sup, supn, nm, ws, wn, 0, depth + 1) : -1;
 }
-static int qc_ancestor_write(Compiler *c, char (*path)[64], int n, const char *nm, QCWrite *ws, int wn) {
-  return qc_ancestor_lookup(c->nt, path, n, nm, ws, wn, 1, 0);
-}
 
-/* qc_lex[d]: the body at depth d of qc_rewrite_reads' path is a lexical
-   scope of its own -- not a segment a compact header (`class A::B`) pushed
-   for A, whose constants the body does not see. */
-static unsigned char qc_lex[QC_MAXDEPTH + 1] = {1};
-/* The lexical scopes a compact header whose path starts above the body
-   around it left behind: in `module M; class Top::Foo`, the body's path is
-   Top::Foo, but M is still a lexical scope of it. Innermost last. */
-static struct { char (*path)[64]; int depth; const unsigned char *lex; } qc_outer[QC_MAXDEPTH];
-static int qc_nouter = 0;
-#define QC_MAXSCOPES (QC_MAXDEPTH * (QC_MAXDEPTH + 1) + 1)
-static QCScope qc_scopes[QC_MAXSCOPES];   /* a lookup's, never held across the walk */
-/* The scopes a constant read in the body at `path` (depth deep) is looked
-   up in, innermost first, the top level (n == 0) last. */
-static int qc_lex_scopes(char (*path)[64], int depth, QCScope *out) {
-  int k = 0;
-  for (int p = depth; p >= 1; p--) if (qc_lex[p]) { out[k].path = path; out[k++].n = p; }
-  for (int o = qc_nouter - 1; o >= 0; o--)
-    for (int p = qc_outer[o].depth; p >= 1; p--)
-      if (qc_outer[o].lex[p]) { out[k].path = qc_outer[o].path; out[k++].n = p; }
-  out[k].path = path; out[k++].n = 0;
-  return k;
-}
-/* A path read whose head is a constant HOLDING a module (`S = Web::Status`;
-   `S::EOFError`) names what the module's own path does: the path is
-   resolved as a header's is, and when it goes through an alias the chain
-   becomes the module path, anchored at the top level, so it matches the
-   nested class the colliding-name rename gave a qualified name. Answers the
-   new length, or cl unchanged. */
-static int qc_expand_read_alias(char (*path)[64], int depth, char (*chain)[64], int cl, int *abs_anchor) {
-  if (cl < 2) return cl;
-  QCScope *sc = qc_scopes;
-  int nsc = *abs_anchor ? 1 : qc_lex_scopes(path, depth, sc);
-  if (*abs_anchor) { sc[0].path = path; sc[0].n = 0; }
-  char out[QC_MAXDEPTH + 1][64];
-  int via, n = qc_alias_chain(sc, nsc, chain, cl - 1, out, &via);
-  if (n <= 0 || !via || n + 1 > QC_MAXDEPTH + 1) return cl;
-  snprintf(out[n++], 64, "%s", chain[cl - 1]);
-  for (int i = 0; i < n; i++) snprintf(chain[i], 64, "%s", out[i]);
-  *abs_anchor = 1;
-  return n;
-}
 /* The name a read had before a rename (`X8::S` read as `X8::X8__S`). The
    path lookups take a kept name as proof that the scope holds the constant
    (const_node_class_index): the class pass renames a path only after it
@@ -6312,177 +6250,6 @@ static int qc_expand_read_alias(char (*path)[64], int depth, char (*chain)[64], 
 static void qc_keep_orig_name(const NodeTable *nt, int node) {
   const char *nm = nt_key_name(nt, node);
   if (nm && !nt_str(nt, node, "qc_orig_name")) nt_node_set_str((NodeTable *)nt, node, "qc_orig_name", nm);
-}
-static void qc_rename_read(const NodeTable *nt, int node, int w, const char *qn, int keep) {
-  (void)w;
-  if (keep) qc_keep_orig_name(nt, node);
-  /* (the read keeps the name the program wrote; its key is qc_name, read
-     through nt_key_name) */
-  nt_node_set_str((NodeTable *)nt, node, "qc_name", qn);
-}
-void qc_rewrite_reads(Compiler *c, int node, char (*mods)[64], int mdepth,
-                             QCWrite *ws, int wn) {
-  const NodeTable *nt = c->nt;
-  if (node < 0) return;
-  const char *ty = nt_type(nt, node);
-  NodeKind ty_k = nt_kind(nt, node);
-  if (!ty) return;
-  int depth = mdepth;
-  char (*path)[64] = mods;
-  QCRebase *own = NULL;
-  int outer = 0;
-  if (class_def_opens_cref(nt, node) && depth < QC_MAXDEPTH) {
-    /* `class Foo < Foo` in A: CRuby reads the superclass in the scope
-       around the header, before the constant A::Foo exists, so it names the
-       Foo found from there, not the class being defined. Resolved here with
-       the class's writes skipped, and left alone by the walk below. A
-       reopen (A::Foo written earlier) keeps the old reading. */
-    int sup = class_def_super(nt, node);
-    int hcp = nt_ref(nt, node, "constant_path");
-    const char *hn = hcp >= 0 ? nt_str(nt, hcp, "name") : NULL;
-    if (sup >= 0 && hn && nt_kind(nt, sup) == NK_ConstantReadNode && nt_str(nt, sup, "name") &&
-        sp_streq(nt_str(nt, sup, "name"), hn)) {
-      int h = -1, reopen = 0;
-      for (int i = 0; i < wn; i++) if (ws[i].node == hcp) { h = i; break; }
-      for (int i = 0; h >= 0 && i < wn && !reopen; i++)
-        if (i != h && sp_streq(ws[i].name, ws[h].name) && qc_path_eq(ws[i].path, ws[i].depth, ws[h].path, ws[h].depth) &&
-            !qc_write_after(nt, ws[i].node, hcp))
-          reopen = 1;
-      if (!reopen) {
-        const QCWrite *sv = qc_skip_write;
-        QCWrite self_w; memset(&self_w, 0, sizeof self_w);
-        if (h >= 0) self_w = ws[h];
-        else { snprintf(self_w.name, sizeof self_w.name, "%s", hn); self_w.depth = -1; }
-        qc_skip_write = &self_w;
-        qc_rewrite_reads(c, sup, mods, mdepth, ws, wn);
-        qc_skip_write = sv;
-        nt_node_set_int((NodeTable *)nt, sup, "qc_outer_super", 1);
-      }
-    }
-    depth = qc_push_header(nt, node, &path, depth, qc_lex, &own);
-    if (own && qc_nouter < QC_MAXDEPTH) {
-      qc_outer[qc_nouter].path = mods; qc_outer[qc_nouter].depth = mdepth;
-      qc_outer[qc_nouter++].lex = own->lex;
-      outer = 1;
-    }
-  }
-  else if (ty_k == NK_ConstantReadNode) {
-    /* bare constant read inside a module body: resolve lexically innermost-
-       first against the colliding writes. Skip reads that are a path's parent
-       (handled via the chain) or a class/module definition name. */
-    const char *nm = nt_key_name(nt, node);
-    int part_of_other = (qc_cpath_parent && qc_cpath_parent[node]) ||
-                        (qc_def_cpath && qc_def_cpath[node]) || nt_int(nt, node, "qc_outer_super", 0);
-    if (nm && !part_of_other) {
-      int involved = 0;
-      for (int i = 0; i < wn; i++) if (sp_streq(ws[i].name, nm)) { involved = 1; break; }
-      if (involved) {
-        /* the enclosing modules innermost-first, then the ancestors of the
-           innermost one, then the top level, as Ruby looks a constant up */
-        int matched = -1;
-        QCScope *sc = qc_scopes;
-        int nsc = qc_lex_scopes(path, depth, sc);
-        for (int q = 0; q < nsc && matched < 0; q++) {
-          int pref = sc[q].n;
-          if (pref == 0) break;
-          for (int i = 0; i < wn && matched < 0; i++) {
-            if (qc_skipped(&ws[i]) || !sp_streq(ws[i].name, nm) || ws[i].depth != pref) continue;
-            int ok = 1;
-            for (int j = 0; j < pref && ok; j++) if (!sp_streq(ws[i].path[j], sc[q].path[j])) ok = 0;
-            if (ok) matched = i;
-          }
-        }
-        if (matched < 0 && depth > 0) matched = qc_ancestor_write(c, path, depth, nm, ws, wn);
-        for (int i = 0; i < wn && matched < 0; i++)
-          if (!qc_skipped(&ws[i]) && sp_streq(ws[i].name, nm) && ws[i].depth == 0) matched = i;
-        if (matched >= 0 && ws[matched].depth > 0) {
-          char qn[512]; qc_qualified_name(qn, sizeof qn, &ws[matched]);
-          qc_rename_read(nt, node, matched, qn, 1);
-        }
-      }
-    }
-  }
-  else if (ty_k == NK_ConstantPathNode) {
-    /* only process path heads: skip if this node is some other path's parent */
-    int is_parent = qc_cpath_parent && qc_cpath_parent[node];
-    if (!is_parent) {
-      char chain[QC_MAXDEPTH + 1][64];
-      int abs_anchor = 0;
-      int cl = qc_read_chain(nt, node, chain, &abs_anchor);
-      /* `::X` for a colliding class leaf: every nested X is about to be
-         renamed to its qualified name, so the bare name X is left naming only
-         the top-level X (a user class or the builtin). Read it as the bare
-         constant, which is what the builtin receivers (`File.binwrite`,
-         `Time.at`) are recognised by. */
-      if (cl == 1 && abs_anchor && !(qc_def_cpath && qc_def_cpath[node])) {
-        for (int i = 0; i < wn; i++) {
-          if (!sp_streq(ws[i].name, chain[0])) continue;
-          nt_node_set_type((NodeTable *)nt, node, "ConstantReadNode");
-          nt_node_set_int((NodeTable *)nt, node, "root_anchored", 1);   /* Object's X, for the load record */
-          break;
-        }
-      }
-      if (cl >= 2) {
-        const char *cname = chain[cl - 1];
-        /* does this name participate in a collision? */
-        int involved = 0;
-        for (int i = 0; i < wn; i++) if (sp_streq(ws[i].name, cname)) { involved = 1; break; }
-        if (involved) {
-          /* `Regexp::Syntax::Token::X` reads X in the body `module
-             Regexp::Syntax` opened, which the passes keep at [Syntax],
-             unless an enclosing body defines its own `Regexp` */
-          if (abs_anchor || !qc_head_shadowed(chain[0], path, depth))
-            cl = qc_builtin_head(chain, cl, &abs_anchor);
-          cl = qc_expand_read_alias(path, depth, chain, cl, &abs_anchor);
-          cname = chain[cl - 1];
-        }
-        if (involved) {
-          /* try lexical prefixes innermost-first (relative), or only the root (::) */
-          QCScope *sc = qc_scopes;
-          int nsc = abs_anchor ? 0 : qc_lex_scopes(path, depth, sc);
-          if (abs_anchor) { sc[0].path = path; sc[0].n = 0; nsc = 1; }
-          for (int q = 0; q < nsc; q++) {
-            int pref = sc[q].n;
-            int matched = -1;
-            for (int i = 0; i < wn && matched < 0; i++) {
-              if (!sp_streq(ws[i].name, cname)) continue;
-              if (ws[i].depth != pref + (cl - 1)) continue;
-              int ok = 1;
-              for (int j = 0; j < pref && ok; j++) if (!sp_streq(ws[i].path[j], sc[q].path[j])) ok = 0;
-              for (int j = 0; j < cl - 1 && ok; j++) if (!sp_streq(ws[i].path[pref + j], chain[j])) ok = 0;
-              if (ok) matched = i;
-            }
-            if (matched >= 0) {
-              if (ws[matched].depth > 0) {
-                char qn[512]; qc_qualified_name(qn, sizeof qn, &ws[matched]);
-                qc_rename_read(nt, node, matched, qn, 1);
-              }
-              break;
-            }
-            /* no body at the written path holds it: the class or module the
-               path's head names may still reach it through its ancestors
-               (`Sub::NAME` for a NAME its superclass or an included module
-               holds), as Ruby looks a scoped constant up */
-            if (pref == 0) {
-              char owner[QC_MAXDEPTH][64];
-              int on = qc_resolve_chain(chain, cl - 1, abs_anchor, path, depth, owner);
-              int m = on > 0 ? qc_ancestor_lookup(nt, owner, on, cname, ws, wn, 0, 0) : -1;
-              if (m >= 0 && ws[m].depth > 0) {
-                char qn[512]; qc_qualified_name(qn, sizeof qn, &ws[m]);
-                qc_rename_read(nt, node, m, qn, 0);
-              }
-            }
-          }
-        }
-      }
-    }
-  }
-  int nr = nt_num_refs(nt, node);
-  for (int i = 0; i < nr; i++) qc_rewrite_reads(c, nt_ref_at(nt, node, i), path, depth, ws, wn);
-  int na = nt_num_arrs(nt, node);
-  for (int i = 0; i < na; i++) { int m = 0; const int *ids = nt_arr_at(nt, node, i, &m); for (int k = 0; k < m; k++) qc_rewrite_reads(c, ids[k], path, depth, ws, wn); }
-  if (outer) qc_nouter--;
-  qc_pop_header(own, qc_lex);
 }
 
 /* The qualified names qc_value_collisions gives a constant written under a
@@ -7166,15 +6933,35 @@ void qualify_colliding_classes(Compiler *c) {
 /* Are there reads qualify_colliding_reads will key, after the walk? */
 int qualify_reads_pending(void) { return qc_defer_ws != NULL; }
 
-/* The reads of the classes qualify_colliding_classes keyed, after the walk */
+/* The leaf of a class's C name: what follows its last "__" (Fiddle__Pointer__Release: Release) */
+static const char *qc_c_leaf(const char *cn) {
+  const char *lf = cn;
+  for (const char *p = strstr(cn, "__"); p; p = strstr(p + 1, "__")) if (p[2]) lf = p + 2;
+  return lf;
+}
+/* The reads of the classes qualify_colliding_classes keyed, after the walk,
+   from the load record: a read whose lookup finds a class of the program
+   -- where it stands (elab_class_ref_at), else wherever it finds one
+   (elab_class_named: a read in a method body, in defined?, in a builder's
+   block) -- is keyed by that class's name, when the class is nested (its
+   name is not the one written) and the name written is its leaf; an alias
+   (`Bill = Billing::Invoice`) keeps its own name. qc_value_reads first
+   reads `::X` of a colliding X as Object's X. */
 void qualify_colliding_reads(Compiler *c) {
   const NodeTable *nt = c->nt;
   if (qc_defer_ws) {
-    char mods[QC_MAXDEPTH][64];
+    qc_value_reads(c, qc_defer_ws, qc_defer_wn);
     qc_build_reverse_flags(c);
-    qc_push_written = 1;
-    for (int r = 0; r < nt_nroots(nt); r++) qc_rewrite_reads(c, nt_root(nt, r), mods, 0, qc_defer_ws, qc_defer_wn);
-    qc_push_written = 0;
+    for (int i = 0; i < nt->count; i++) {
+      NodeKind k = nt_kind(nt, i);
+      if ((k != NK_ConstantReadNode && k != NK_ConstantPathNode) || (qc_def_cpath && qc_def_cpath[i])) continue;
+      const char *w = nt_str(nt, i, "name");
+      int ci = elab_class_named(c, i);
+      const char *cn = ci >= 0 ? c->classes[ci].name : NULL;
+      if (!cn || !w || sp_streq(cn, w) || !sp_streq(qc_c_leaf(cn), w)) continue;
+      qc_keep_orig_name(nt, i);
+      nt_node_set_str((NodeTable *)nt, i, "qc_name", cn);
+    }
     qc_free_reverse_flags();
     qc_free_headers();
     free(qc_defer_ws);
@@ -22373,8 +22160,8 @@ static void mark_empty_hash_const_writes(Compiler *c) {
       int dv = nt_ref(nt, op, "value");
       const char *pnm = nt_str(nt, op, "name");
       /* the constant by its bare name or by a path (`Base::EMPTY`, whose node
-         carries the leaf name, qualified by qc_rewrite_reads when it has to
-         be), as the write above spells it (#4511) */
+         carries the leaf name, keyed by qualify_colliding_reads when it has
+         to be), as the write above spells it (#4511) */
       if (dv < 0 || !pnm || (nt_kind(nt, dv) != NK_ConstantReadNode && nt_kind(nt, dv) != NK_ConstantPathNode)) continue;
       const char *dn = nt_str(nt, dv, "name");
       if (!dn || !sp_streq(dn, cn)) continue;

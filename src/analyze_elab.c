@@ -1366,6 +1366,102 @@ static int lr_value_leaf(const VpLeaf *leaf, void *ud) {
   else s->bad = 1;
   return s->bad;
 }
+/* The class a constant read names wherever its lookup finds one, for its
+   key: elab_class_ref_at's where the record settles it; else the class
+   that the constants of one scope write the name as, and only as: for a
+   path its parent's class (a core one too), for a bare name the class
+   bodies around it, innermost first, then main's (a read in a method
+   body, in defined?, or in a builder's block, that may run before the
+   write). LR_UNKNOWN_CLASS for none, or for a scope that writes the name
+   as anything else. */
+static int lr_const_owner(int cls);
+static int lr_class_written_as(Compiler *c, int owner, const char *name) {
+  const LrHist *h = lr_hist(c->lrec, LR_KEY_CONST, lr_const_owner(owner), name, 0);
+  int one = LR_UNKNOWN_CLASS;
+  for (int j = 0; h && j < h->n; j++) {
+    int kc = -1, k = lr_class_of(c, &h->v[j], &kc);
+    if (k < 0 || kc >= 0 || (one >= 0 && one != k)) return LR_UNKNOWN_CLASS;
+    one = k;
+  }
+  return h && h->n ? one : LR_LATER;   /* (LR_LATER: the scope writes no such name) */
+}
+/* The Ruby path a constant path written from a core constant spells
+   (`Regexp::Syntax::Token`), in buf; 0 for a path that does not start at
+   a core constant */
+static int lr_core_path_text(Compiler *c, int node, char *buf, size_t cap) {
+  const NodeTable *nt = c->nt;
+  const char *seg[16]; int ns = 0, x = node, core = -1;
+  for (; x >= 0 && nt_kind(nt, x) == NK_ConstantPathNode && ns < 16; x = nt_ref(nt, x, "parent")) seg[ns++] = lr_written_name(nt, x);
+  if (x < 0 || ns == 16 || nt_kind(nt, x) != NK_ConstantReadNode) return 0;
+  (void)elab_class_ref_at(c, x, &core);
+  if (core < 0) return 0;
+  int len = snprintf(buf, cap, "%s", lr_written_name(nt, x));
+  for (int i = ns - 1; i >= 0 && len < (int)cap; i--) len += snprintf(buf + len, cap - (size_t)len, "::%s", seg[i] ? seg[i] : "");
+  return len < (int)cap;
+}
+/* A path from a core constant the program does not reopen as a class
+   (`Regexp::Syntax::Token`) is absolute: the class whose header spells
+   that Ruby path (the qualify pass's qc_ruby_name, or a compact header's
+   own path), else the class its parent's class writes the name as */
+static int lr_class_written_as(Compiler *c, int owner, const char *name);
+static int lr_class_by_core_path(Compiler *c, int node, int depth) {
+  const NodeTable *nt = c->nt;
+  char path[512], hp[512];
+  if (depth > 8 || !lr_core_path_text(c, node, path, sizeof path)) return LR_UNKNOWN_CLASS;
+  int one = LR_UNKNOWN_CLASS;
+  for (int h = 0; h < nt->count; h++) {
+    NodeKind hk = nt_kind(nt, h);
+    if (hk != NK_ClassNode && hk != NK_ModuleNode) continue;
+    int cp = nt_ref(nt, h, "constant_path");
+    const char *rn = cp >= 0 ? nt_str(nt, cp, "qc_ruby_name") : NULL;
+    if (!rn && cp >= 0 && nt_kind(nt, cp) == NK_ConstantPathNode && lr_core_path_text(c, cp, hp, sizeof hp)) rn = hp;
+    if (!rn || !sp_streq(rn, path)) continue;
+    int k = elab_header_class(c, h, NULL, NULL);
+    if (k < 0 || (one >= 0 && one != k)) return LR_UNKNOWN_CLASS;
+    one = k;
+  }
+  if (one >= 0) return one;
+  int par = nt_ref(nt, node, "parent");
+  if (par < 0 || nt_kind(nt, par) != NK_ConstantPathNode) return LR_UNKNOWN_CLASS;
+  int pc = lr_class_by_core_path(c, par, depth + 1);
+  if (pc < 0) return LR_UNKNOWN_CLASS;
+  int o = lr_class_written_as(c, pc, lr_written_name(nt, node));
+  return o == LR_LATER ? LR_UNKNOWN_CLASS : o;
+}
+static int lr_class_named(Compiler *c, int node, int depth, int core_ok) {
+  const NodeTable *nt = c->nt;
+  int core = -1, ci = elab_class_ref_at(c, node, &core);
+  if (ci != LR_UNKNOWN_CLASS) return ci < LR_MAIN || (core >= 0 && !core_ok) ? LR_UNKNOWN_CLASS : ci;
+  NodeKind k = nt_kind(nt, node);
+  const char *nm = lr_written_name(nt, node);
+  if (depth > 8 || !nm) return LR_UNKNOWN_CLASS;
+  if (k == NK_ConstantPathNode) {
+    int par = nt_ref(nt, node, "parent");
+    int pc = par < 0 ? LR_MAIN : lr_class_named(c, par, depth + 1, 1);
+    if (pc < LR_MAIN) return lr_class_by_core_path(c, node, depth);
+    int o = lr_class_written_as(c, pc, nm);
+    return o == LR_LATER ? LR_UNKNOWN_CLASS : o;
+  }
+  /* (`class Foo < Foo`'s superclass is read around the header, before
+     the class it defines exists: only where the record settles it) */
+  if (k != NK_ConstantReadNode || nt_int(nt, node, "qc_outer_super", 0)) return LR_UNKNOWN_CLASS;
+  const int *par = comp_parent_map(c);
+  for (int a = lr_root_read(nt, node) ? -1 : par[node]; a >= 0; a = par[a]) {   /* (`::X`, read as X: Object's alone) */
+    NodeKind ak = nt_kind(nt, a);
+    if (ak == NK_SingletonClassNode) return LR_UNKNOWN_CLASS;
+    if (ak != NK_ClassNode && ak != NK_ModuleNode) continue;
+    int cls = elab_header_class(c, a, NULL, NULL);
+    if (cls < 0) return LR_UNKNOWN_CLASS;
+    int o = lr_class_written_as(c, cls, nm);
+    if (o != LR_LATER) return o;
+  }
+  int o = lr_class_written_as(c, LR_MAIN, nm);
+  return o == LR_LATER ? LR_UNKNOWN_CLASS : o;
+}
+int elab_class_named(Compiler *c, int node) {
+  int ci = c->lrec ? lr_class_named(c, node, 0, 0) : LR_UNKNOWN_CLASS;
+  return ci >= 0 ? ci : -1;
+}
 int elab_class_candidates(Compiler *c, int node, int **out) {
   LoadRecord *r = elab_fresh(c);
   const NodeTable *nt = c->nt;

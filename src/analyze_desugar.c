@@ -3295,14 +3295,15 @@ int desugar_array_op_to_ary(Compiler *c) {
    call a row of tools/implied_calls.yml says `at` makes on operand op (a
    multiple assignment's value, the element a nested target takes),
    rb_check_array_type's; -1 for none. Only the one the load record proves
-   the object answers there (cplan_implied_version): a to_ary defined, or
+   the object answers there (cplan_implied_target): a to_ary defined, or
    brought in by an include, after the assignment is not answered yet. An
    Array subclass instance is an Array already (comp_implicit_to_ary_mi). */
 static int masgn_to_ary_mi(Compiler *c, TyKind t, int at, int op) {
   int cls = ty_is_object(t) ? ty_object_class(t) : -1;
   int mi = cls >= 0 ? comp_implicit_to_ary_mi(c, cls) : -1;
   if (mi < 0 || c->scopes[mi].nparams != 0 || !ty_is_array(c->scopes[mi].ret)) return -1;
-  return cplan_implied_version(c, at, "to_ary", op, cls) == mi ? mi : -1;
+  int vi = cplan_implied_target(c, at, op, cls, "to_ary", NULL);
+  return vi >= 0 && c->scopes[vi].nparams == 0 && ty_is_array(c->scopes[vi].ret) ? vi : -1;
 }
 /* (analyze_internal.h) */
 int masgn_nests(const NodeTable *nt, int id) {

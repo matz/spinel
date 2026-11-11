@@ -9747,6 +9747,28 @@ void emit_case_match(Compiler *c, int id, Buf *b, int indent, int tail, int valu
   emit_case_match_in(c, id, b, indent, tail, value_cr);
   g_pm_res_oint = sro;
 }
+/* A case tries several array arms against one subject. Cache its typed
+   #deconstruct answer lazily: an earlier arm or a class qualifier may keep
+   the call from being reached, and a failed guard still reuses the answer. */
+static int emit_pm_array_cache(Compiler *c, TyKind pt, const int *conds, int cn, int indent, Buf *b) {
+  if (!ty_is_object(pt)) return -1;
+  int dm = comp_deconstruct_method(c, ty_object_class(pt), NULL);   /* the method the arm calls */
+  if (dm < 0 || !ty_is_array(c->scopes[dm].ret)) return -1;
+  int arrays = 0;
+  for (int w = 0; w < cn; w++) {
+    int guard = -1, neg = 0;
+    int pat = pm_unwrap_guard(c->nt, nt_ref(c->nt, conds[w], "pattern"), &guard, &neg);
+    if (nt_kind(c->nt, pat) == NK_ArrayPatternNode) arrays++;
+  }
+  if (arrays < 2) return -1;
+  int t = ++g_tmp;
+  emit_indent(b, indent); emit_ctype(c, c->scopes[dm].ret, b);
+  buf_printf(b, " _t%d = NULL; ", t);
+  emit_gc_root_tmp(c, c->scopes[dm].ret, t, b);
+  buf_printf(b, " sp_bool _pm_array_ready%d = 0;\n", t);
+  return t;
+}
+
 static void emit_case_match_in(Compiler *c, int id, Buf *b, int indent, int tail, int value_cr) {
   const NodeTable *nt = c->nt;
   int pred = nt_ref(nt, id, "predicate");
@@ -9794,6 +9816,7 @@ static void emit_case_match_in(Compiler *c, int id, Buf *b, int indent, int tail
   }
   int saved_sentinel_t = g_pm_sentinel_t;
   g_pm_sentinel_t = case_subject_boxes_sentinel(c, pred, pt) ? t : -1;
+  int array_cache = emit_pm_array_cache(c, pt, conds, cn, indent, b);
 
   for (int w = 0; w < cn; w++) {
     NodeKind ck = nt_kind(nt, conds[w]);
@@ -9874,15 +9897,27 @@ static void emit_case_match_in(Compiler *c, int id, Buf *b, int indent, int tail
         TyKind rrt = (TyKind)c->scopes[dm].ret;
         TyKind drt = ty_is_array(rrt) ? rrt : TY_POLY_ARRAY;
         const char *dcn = c->classes[ddef].c_name;
-        arm_t = ++g_tmp;
-        emit_indent(b, indent + 1); emit_ctype(c, drt, b);
-        buf_printf(b, " _t%d = ", arm_t);
-        emit_obj_deconstruct_open(c, pt, rrt, t, b);
+        arm_t = array_cache >= 0 ? array_cache : ++g_tmp;
+        emit_indent(b, indent + 1);
+        if (array_cache >= 0) {
+          /* the guard the call's own open/close would write (the class
+             qualifier, else a live subject), written once for the fill */
+          buf_printf(b, "if (!_pm_array_ready%d && ", array_cache);
+          if (g_pm_qual) buf_printf(b, "(%s)", g_pm_qual);
+          else emit_obj_live(c, pt, t, b);
+          buf_puts(b, ") { ");
+        }
+        else { emit_ctype(c, drt, b); buf_puts(b, " "); }
+        buf_printf(b, "_t%d = ", arm_t);
+        if (array_cache < 0) emit_obj_deconstruct_open(c, pt, rrt, t, b);
         if (isv) buf_printf(b, "%s(_t%d)", mc_method(c, &c->scopes[dm]), t);
         else     buf_printf(b, "%s((sp_%s *)_t%d)", mc_method(c, &c->scopes[dm]), dcn, t);
-        emit_obj_deconstruct_close(c, pt, rrt, b);
-        buf_puts(b, ";\n");
-        if (needs_root(drt)) { emit_indent(b, indent + 1); emit_gc_root_tmp(c, drt, arm_t, b); buf_puts(b, "\n"); }
+        if (array_cache < 0) emit_obj_deconstruct_close(c, pt, rrt, b);
+        if (array_cache >= 0) buf_printf(b, "; _pm_array_ready%d = 1; }\n", array_cache);
+        else {
+          buf_puts(b, ";\n");
+          if (needs_root(drt)) { emit_indent(b, indent + 1); emit_gc_root_tmp(c, drt, arm_t, b); buf_puts(b, "\n"); }
+        }
         arm_pt = drt;
         if (obj_deconstruct_guarded(c, pt, rrt)) live_subject = t;
       }

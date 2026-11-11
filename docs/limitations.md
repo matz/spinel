@@ -2038,6 +2038,12 @@ than with `true`.
 
 ## Now supported (older write-ups are stale here)
 
+A `case/in` whose plain array patterns match a typed user object calls its
+`#deconstruct` once for the whole case, as CRuby does, also when an arm's
+elements or guard fail and a later array arm is tried. A separate case or
+one-line match calls it again. Alternative (`|`), find and capture patterns,
+and a subject held as a boxed value, still call it in each arm.
+
 These were limits in an earlier (Ruby self-hosted) version of the compiler and
 now work on current master:
 

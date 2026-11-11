@@ -2774,9 +2774,26 @@ static inline int comp_node_in(const Compiler *c, int id) { return id >= 0 && id
 /* The readers of the node facts. Each answers for any id (-1, one past the
    arrays) and for a Compiler with no arrays yet (node_cap 0) with the
    fact's unset value, so no caller tests the range or the allocation.
-   comp_ntype_stored is the cache alone: no yield-site hook, String
-   refinement or memo dependency (comp_ntype below adds them). */
-static inline TyKind comp_ntype_stored(const Compiler *c, int id) { return comp_node_in(c, id) ? c->ntype[id] : TY_UNKNOWN; }
+
+   A node's type has two readers, by meaning. comp_ntype (below) is the
+   type HERE: at this site of a yield, with the String refinement, noted
+   as a dependency of the inference that asks. comp_ntype_settled is the
+   type the analysis settled for the node: the table's entry, one answer
+   over every site of a yield. While the type fixpoint runs it is the
+   answer so far, and while a type view is open over the node it is the
+   view's. It is the one to read
+    - for a decision the analysis takes and emission asks again, where the
+      two must agree;
+    - to tell a String from its handle (TY_STRING from TY_STRBUF), which
+      comp_ntype reads as one or the other by the node's marks;
+    - beside comp_ntype, to see whether the two differ;
+    - in the yield-site hook and the String refinement, which compute
+      comp_ntype from it;
+    - for the table kept as a whole (saved and put back, recorded,
+      digested);
+    - for a stamp that tells when the type moved;
+    - for a report of what the analysis concluded. */
+static inline TyKind comp_ntype_settled(const Compiler *c, int id) { return comp_node_in(c, id) ? c->ntype[id] : TY_UNKNOWN; }
 static inline TyKind comp_nilnarrow_stored(const Compiler *c, int id) { return comp_node_in(c, id) ? c->nilnarrow[id] : TY_UNKNOWN; }
 static inline unsigned char comp_strbuf_box_stored(const Compiler *c, int id) { return comp_node_in(c, id) ? c->strbuf_box[id] : 0; }
 static inline unsigned char comp_strbuf_handle_demand_stored(const Compiler *c, int id) { return comp_node_in(c, id) ? c->strbuf_handle_demand[id] : 0; }
@@ -2793,7 +2810,7 @@ static inline void comp_write_strbuf_handle_demand(Compiler *c, int id, unsigned
 static inline void comp_write_poly_strbuf_lift(Compiler *c, int id, unsigned char v) { c->poly_strbuf_lift[id] = v; }
 static inline void comp_write_nil_tested(Compiler *c, int id, unsigned char v) { c->nil_tested[id] = v; }
 
-/* The stored types kept and compared as a whole, for the analysis's
+/* The settled types kept and compared as a whole, for the analysis's
    convergence check. A node past the arrays (n may run to the table's
    count) reads and compares as unset. */
 static inline void comp_ntype_snapshot(const Compiler *c, TyKind *out, int n) {
@@ -2892,7 +2909,7 @@ static inline TyKind comp_sn_retype(Compiler *c, int id, TyKind t) {
 TyKind repr_stored_type(const Compiler *c, int id, TyKind t);
 int repr_value_obj(const Compiler *c, TyKind t);
 
-/* Node type cache. */
+/* A node's type here (the other reader is comp_ntype_settled, above). */
 static inline TyKind comp_ntype(const Compiler *c, int id) {
   if (id < 0 || id >= c->nt->count) return TY_UNKNOWN;
   /* (the node's type is its scope's slot: noted for infer_type's memo) */

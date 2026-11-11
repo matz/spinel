@@ -13097,7 +13097,7 @@ static int poll_while_counted_step(Compiler *c, int pred, int body, int *stepn, 
   const char *op = nt_str(nt, pred, "name");
   int up = op && (sp_streq(op, "<") || sp_streq(op, "<=")), down = op && (sp_streq(op, ">") || sp_streq(op, ">="));
   int recv = nt_ref(nt, pred, "receiver");
-  if ((!up && !down) || recv < 0 || nt_kind(nt, recv) != NK_LocalVariableReadNode || comp_ntype_stored(c, recv) != TY_INT) return 0;
+  if ((!up && !down) || recv < 0 || nt_kind(nt, recv) != NK_LocalVariableReadNode || comp_ntype_settled(c, recv) != TY_INT) return 0;
   const char *v = nt_str(nt, recv, "name");
   int bn = 0; const int *bv = nt_kind(nt, body) == NK_StatementsNode ? nt_arr(nt, body, "body", &bn) : NULL;
   int step = -1;
@@ -13541,7 +13541,7 @@ static long long chunk_counted_step(Compiler *c, int pred, int body) {
   if (subtree_has_own_next(nt, body) || !poll_while_counted_step(c, pred, body, &w, 1)) return 0;
   int a = nt_ref(nt, pred, "arguments"), ac = 0; const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &ac) : NULL;
   int bd = ac == 1 ? av[0] : -1;
-  if (bd < 0 || comp_ntype_stored(c, bd) != TY_INT) return 0;
+  if (bd < 0 || comp_ntype_settled(c, bd) != TY_INT) return 0;
   NodeKind bk = nt_kind(nt, bd);
   if (bk == NK_IntegerNode) { if (nt_str(nt, bd, "bigval")) return 0; }
   else if (bk == NK_LocalVariableReadNode) { if (subtree_changes_local(c, body, nt_str(nt, bd, "name"))) return 0; }
@@ -19324,10 +19324,10 @@ int masgn_boxed_index_keeps(Compiler *c, int t, int e) {
   const NodeTable *nt = c->nt;
   if (t < 0 || nt_kind(nt, t) != NK_IndexTargetNode || e < 0) return 0;
   int r = nt_ref(nt, t, "receiver");
-  TyKind rt = comp_ntype_stored(c, r);
+  TyKind rt = comp_ntype_settled(c, r);
   if (rt != TY_POLY_ARRAY && rt != TY_POLY && rt != TY_SYM_POLY_HASH && rt != TY_STR_POLY_HASH && rt != TY_POLY_POLY_HASH)
     return 0;
-  TyKind et = comp_ntype_stored(c, e);
+  TyKind et = comp_ntype_settled(c, e);
   NodeKind ek = nt_kind(nt, e);
   return (et == TY_STRING || et == TY_STRBUF) &&
          (ek == NK_ParenthesesNode || ek == NK_IfNode || ek == NK_UnlessNode) && strbuf_cond_has_handle_leaf(c, e);

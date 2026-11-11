@@ -769,7 +769,7 @@ static int nf_call(NF *f, int v) {
   const NodeTable *nt = f->nt;
   const char *nm = nt_str(nt, v, "name");
   /* only a tracked value's nil: the slots it can reach are tracked */
-  if (!nf_tracked(f->c, comp_ntype_stored(c, v))) return NFW_NONE;
+  if (!nf_tracked(f->c, comp_ntype_settled(c, v))) return NFW_NONE;
   if (nt_safe_nav(nt, v)) return NFW_SAFE_NAV;
   if (!nm) return NFW_OPAQUE;
   int r = nt_ref(nt, v, "receiver");
@@ -778,7 +778,7 @@ static int nf_call(NF *f, int v) {
   int owner = -1, dispatch = CP_NONE;
   int pmi = nf_plan(f, v, &owner, &dispatch);
   if (pmi >= 0) return nf_method_value(f, pmi, owner, dispatch, nm);
-  TyKind rt = comp_ntype_stored(c, r);
+  TyKind rt = comp_ntype_settled(c, r);
   if (sp_streq(nm, "new") || sp_streq(nm, "allocate")) return NFW_NONE;
   /* an attr reader: its ivar */
   if (ty_is_object(rt) || r < 0) {
@@ -811,7 +811,7 @@ static int nf_call(NF *f, int v) {
      nil a mutator or any other method called on its result then meets. A
      boxed receiver (an element of a boxed Array or Hash) answers it as a
      String too. */
-  if (r >= 0 && (rt == TY_STRING || rt == TY_STRBUF || (rt == TY_POLY && comp_ntype_stored(c, v) == TY_STRING)) &&
+  if (r >= 0 && (rt == TY_STRING || rt == TY_STRBUF || (rt == TY_POLY && comp_ntype_settled(c, v) == TY_STRING)) &&
       ty_str_typed_bang_flags(nm) && !(ty_str_typed_bang_flags(nm) & PF_STR_SELF))
     return NFW_NIL;
   /* a removal from an object Array: a queue or a stack the program empties,
@@ -827,7 +827,7 @@ static int nf_call(NF *f, int v) {
     for (int i = 0; picks[i]; i++) {
       if (!sp_streq(nm, picks[i])) continue;
       /* an element of an Array that can hold nil may be nil wherever it is */
-      return comp_ntype_stored(c, v) == ty_array_elem(rt) && nf_elem_tracked(rt) && nf_elem(f, r, 0) ? NFW_ELEM_NIL
+      return comp_ntype_settled(c, v) == ty_array_elem(rt) && nf_elem_tracked(rt) && nf_elem(f, r, 0) ? NFW_ELEM_NIL
              : NFW_ELEM;
     }
     return NFW_NONE;
@@ -841,7 +841,7 @@ static int nf_call(NF *f, int v) {
      value through then) may be nil; a builtin-typed one is taken as not nil
      (see the header) */
   (void)an; (void)av;
-  return ty_is_object(comp_ntype_stored(c, v)) ? NFW_OPAQUE : NFW_NONE;
+  return ty_is_object(comp_ntype_settled(c, v)) ? NFW_OPAQUE : NFW_NONE;
 }
 
 /* ---- one level in: an Array whose elements may be nil ----
@@ -948,7 +948,7 @@ static int nf_elem_slot_op(NF *f, int v, int bits) {
     break;
   case NK_CallNode: {
     int r = nt_ref(nt, v, "receiver"), dc = -1;
-    TyKind rt = comp_ntype_stored(c, r);
+    TyKind rt = comp_ntype_settled(c, r);
     char ivn[256];
     if (r < 0 || !ty_is_object(rt) || nt_ref(nt, v, "arguments") >= 0 ||
         !comp_reader_in_chain(c, ty_object_class(rt), nm, &dc) || dc < 0)
@@ -1076,7 +1076,7 @@ static int nf_elem_uncached(NF *f, int v, int depth) {
     /* `Array.new(n)`'s nils, `Array.new(n, v)`'s v, a block's values */
     if (r >= 0 && nt_kind(nt, r) == NK_ConstantReadNode && is_array_constructor(nt_str(nt, r, "name"), nm)) {
       if (blk >= 0) return nf_written_nil(nf_or(nf_list(f, body), nf_next_nil(f, body, 0))) ? NFW_ELEM_NIL : 0;
-      if (an == 1 && !nf_elem_tracked(comp_ntype_stored(f->c, av[0]))) return NFW_ELEM_NIL;
+      if (an == 1 && !nf_elem_tracked(comp_ntype_settled(f->c, av[0]))) return NFW_ELEM_NIL;
       return an == 2 && nf_written_nil(nf_expr(f, av[1])) ? NFW_ELEM_NIL : 0;
     }
     /* a user method's value: its body's last value */
@@ -1085,7 +1085,7 @@ static int nf_elem_uncached(NF *f, int v, int depth) {
       int mb = f->c->scopes[pmi].body;
       return mb >= 0 ? nf_elem(f, mb, depth + 1) : 0;
     }
-    if (r < 0 || !nf_elem_tracked(comp_ntype_stored(f->c, r))) return 0;
+    if (r < 0 || !nf_elem_tracked(comp_ntype_settled(f->c, r))) return 0;
     /* the mapped element is the block's value */
     if (is_map_alias(nm) && blk >= 0)
       return nf_written_nil(nf_or(nf_list(f, body), nf_next_nil(f, body, 0))) ? NFW_ELEM_NIL : 0;
@@ -1124,8 +1124,8 @@ static void nf_elem_writes(NF *f) {
          value (a choice between an Array and nil) carries no element fact
          of its own, but a nil stored through its slot still lands in the
          Array it was chosen from */
-      int boxed = comp_ntype_stored(c, val) == TY_POLY;
-      if (val < 0 || !(nf_elem_tracked(comp_ntype_stored(c, val)) || comp_ntype_stored(c, val) == TY_POLY_ARRAY || boxed)) continue;
+      int boxed = comp_ntype_settled(c, val) == TY_POLY;
+      if (val < 0 || !(nf_elem_tracked(comp_ntype_settled(c, val)) || comp_ntype_settled(c, val) == TY_POLY_ARRAY || boxed)) continue;
       if (!boxed) nf_elem_mark(f, w, nf_elem(f, val, 0));
       int wf = nf_elem_slot_op(f, w, 0);
       if (wf > 0 && (wf & NF_EL_STORED)) nf_elem_mark_back(f, val, 0);
@@ -1133,7 +1133,7 @@ static void nf_elem_writes(NF *f) {
   NT_FOREACH_KIND(nt, NK_CallNode, id) {
     int recv = mutated_array(c, nt_ref(nt, id, "receiver"));
     /* a boxed receiver stores into whichever Array it holds */
-    if (recv < 0 || !(nf_elem_tracked(comp_ntype_stored(c, recv)) || comp_ntype_stored(c, recv) == TY_POLY)) continue;
+    if (recv < 0 || !(nf_elem_tracked(comp_ntype_settled(c, recv)) || comp_ntype_settled(c, recv) == TY_POLY)) continue;
     int from, to, elems;
     int g = array_mutation_stores(c, id, 1, &from, &to, &elems);
     if (g < 0) continue;
@@ -1167,7 +1167,7 @@ static LocalVar *nf_block_param(NF *f, int blk, int i) {
 static void nf_bind_elems(NF *f, int id, int blk) {
   int recv = -1;
   int np = elem_block_params(f->c, id, &recv);
-  if (!np || !nf_elem_tracked(comp_ntype_stored(f->c, recv)) || !nf_elem(f, recv, 0)) return;
+  if (!np || !nf_elem_tracked(comp_ntype_settled(f->c, recv)) || !nf_elem(f, recv, 0)) return;
   for (int i = 0; i < np; i++) {
     LocalVar *lv = nf_block_param(f, blk, i);
     if (lv && (nf_tracked(f->c, lv->type) || lv->type == TY_POLY)) nf_set(f, &lv->obj_may_nil, NFW_ELEM_NIL);
@@ -1300,7 +1300,7 @@ static int nf_expr_uncached(NF *f, int v) {
     return g ? nf_slot_why(f, &g->obj_may_nil) : NFW_OPAQUE;
   }
   case NK_ConstantReadNode: {
-    if (!nf_tracked(f->c, comp_ntype_stored(c, v))) return NFW_NONE;
+    if (!nf_tracked(f->c, comp_ntype_settled(c, v))) return NFW_NONE;
     LocalVar *k = comp_const_at(c, v);
     return k ? nf_slot_why(f, &k->obj_may_nil) : NFW_OPAQUE;
   }
@@ -1315,7 +1315,7 @@ static int nf_expr_uncached(NF *f, int v) {
   default:
     /* a pattern's binding, a loop's value, an operator write's: may be nil
        where it is tracked */
-    return nf_tracked(f->c, comp_ntype_stored(c, v)) ? NFW_OPAQUE : NFW_NONE;
+    return nf_tracked(f->c, comp_ntype_settled(c, v)) ? NFW_OPAQUE : NFW_NONE;
   }
 }
 
@@ -1421,7 +1421,7 @@ static void nf_writes(NF *f) {
   NT_FOREACH_KIND(nt, NK_InstanceVariableTargetNode, w)
     nf_ivar_write(f, nf_ivar_owner(f, w), nt_str(nt, w, "name"), nf_target_nil(f, w));
   NT_FOREACH_KIND(nt, NK_InstanceVariableOperatorWriteNode, w)
-    nf_ivar_write(f, nf_ivar_owner(f, w), nt_str(nt, w, "name"), nf_tracked(f->c, comp_ntype_stored(c, w)) ? NFW_OPAQUE : 0);
+    nf_ivar_write(f, nf_ivar_owner(f, w), nt_str(nt, w, "name"), nf_tracked(f->c, comp_ntype_settled(c, w)) ? NFW_OPAQUE : 0);
   static const NodeKind cw[] = { NK_ClassVariableWriteNode, NK_ClassVariableOrWriteNode,
                                  NK_ClassVariableAndWriteNode };
   for (int q = 0; q < 3; q++)
@@ -1430,7 +1430,7 @@ static void nf_writes(NF *f) {
   NT_FOREACH_KIND(nt, NK_ClassVariableTargetNode, w)
     nf_ivar_write(f, NF_CVAR, nt_str(nt, w, "name"), nf_target_nil(f, w));
   NT_FOREACH_KIND(nt, NK_ClassVariableOperatorWriteNode, w)
-    nf_ivar_write(f, NF_CVAR, nt_str(nt, w, "name"), nf_tracked(f->c, comp_ntype_stored(c, w)) ? NFW_OPAQUE : 0);
+    nf_ivar_write(f, NF_CVAR, nt_str(nt, w, "name"), nf_tracked(f->c, comp_ntype_settled(c, w)) ? NFW_OPAQUE : 0);
   static const NodeKind gw[] = { NK_GlobalVariableWriteNode, NK_GlobalVariableOrWriteNode,
                                  NK_GlobalVariableAndWriteNode, NK_GlobalVariableTargetNode,
                                  NK_GlobalVariableOperatorWriteNode };
@@ -1678,7 +1678,7 @@ static void nf_calls(NF *f, int **yields, int *nyields) {
           if (k != mi && nf_class_reaches(c, c->scopes[k].class_id, owner)) nf_bind_params(f, id, k, av, an);
         }
     }
-    else if (r >= 0 && comp_ntype_stored(c, r) == TY_POLY && an > 0) {
+    else if (r >= 0 && comp_ntype_settled(c, r) == TY_POLY && an > 0) {
       /* a boxed receiver: every instance method of the name */
       for (int j = nf_byname_first(f, cn); j < f->nbyname; j++) {
         int k = f->byname[j];
@@ -1688,9 +1688,9 @@ static void nf_calls(NF *f, int **yields, int *nyields) {
     }
     /* an attr writer: its ivar */
     char base[256];
-    if (mi < 0 && an == 1 && r >= 0 && ty_is_object(comp_ntype_stored(c, r)) && setter_base_name(cn, base, sizeof base)) {
+    if (mi < 0 && an == 1 && r >= 0 && ty_is_object(comp_ntype_settled(c, r)) && setter_base_name(cn, base, sizeof base)) {
       int dc = -1;
-      if (comp_writer_in_chain(c, ty_object_class(comp_ntype_stored(c, r)), base, &dc) && dc >= 0) {
+      if (comp_writer_in_chain(c, ty_object_class(comp_ntype_settled(c, r)), base, &dc) && dc >= 0) {
         char ivn[260]; snprintf(ivn, sizeof ivn, "@%s", base);
         nf_ivar_write(f, dc, ivn, nf_expr(f, av[0]));
         /* the ivar and the written Array are one Array */
@@ -1930,7 +1930,7 @@ void an_nil_facts(Compiler *c) {
   c->nil_elem_fact = calloc((size_t)nt->count + 1, 1);
   if (!c->nil_elem_fact) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   for (int id = 0; id < nt->count; id++)
-    if (nf_elem_tracked(comp_ntype_stored(c, id))) c->nil_elem_fact[id] = (unsigned char)(nf_elem(&f, id, 0) != 0);
+    if (nf_elem_tracked(comp_ntype_settled(c, id))) c->nil_elem_fact[id] = (unsigned char)(nf_elem(&f, id, 0) != 0);
   free(c->nil_fact);
   c->nil_fact = f.memo;
   c->nil_fact_n = nt->count;
@@ -1966,7 +1966,7 @@ int nil_fact_tracked(TyKind t) {
 
 int nil_fact_node(const Compiler *c, int node) {
   if (node < 0) return 0;
-  if (!c->nil_fact || node >= c->nil_fact_n) return nf_tracked(c, comp_ntype_stored(c, node));
+  if (!c->nil_fact || node >= c->nil_fact_n) return nf_tracked(c, comp_ntype_settled(c, node));
   return (c->nil_fact[node] & 3) == NF_MAY_NIL;
 }
 

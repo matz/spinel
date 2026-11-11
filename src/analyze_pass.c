@@ -20177,7 +20177,7 @@ static int irt_scope(Compiler *c, int s, IrtCtx *x) {
          the other side */
       int node = -1, other = -1; TyKind then = TY_UNKNOWN;
       int tail = (!empty_body && !tail_unreachable && sc->body >= 0) ? sc->body : -1;
-      if (ty_degraded(comp_ntype_stored(c, tail))) { node = tail; then = comp_ntype_stored(c, tail); }
+      if (ty_degraded(comp_ntype_settled(c, tail))) { node = tail; then = comp_ntype_settled(c, tail); }
       else if (ret_head && ret_next) {
         for (int rid = ret_head[s]; rid >= 0; rid = ret_next[rid]) {
           TyKind rt = return_node_type(c, rid);
@@ -20190,7 +20190,7 @@ static int irt_scope(Compiler *c, int s, IrtCtx *x) {
            first `return` of a different kind (the list's head can be one
            of the same kind, which said "String, where a `return` gives
            String"; String and its mutable refinement are one kind). */
-        TyKind tt = comp_ntype_stored(c, tail);
+        TyKind tt = comp_ntype_settled(c, tail);
         if (tt != TY_UNKNOWN) { node = tail; then = tt; }
         if (ret_head)
           for (int rid = ret_head[s]; rid >= 0; rid = ret_next[rid]) {

@@ -5084,7 +5084,7 @@ int *ie_body_retype(Compiler *c, int body, int cls) {
   int *snap = malloc(sizeof(int) * (2 * (size_t)n + 1));
   if (!snap) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   snap[0] = n;
-  for (int i = 0; i < n; i++) { snap[1 + i] = (int)comp_ntype_stored(c, i); snap[1 + n + i] = c->ie_map.cls[i]; }
+  for (int i = 0; i < n; i++) { snap[1 + i] = (int)comp_ntype_settled(c, i); snap[1 + n + i] = c->ie_map.cls[i]; }
   mark_ie_subtree(c, body, cls);
   if (cls >= 0) infer_subtree(c, body);
   return snap;
@@ -27130,13 +27130,13 @@ static int an_boxed_logic_ok(Compiler *c, int node) {
   NodeKind k = nt_kind(nt, node);
   if (k == NK_OrNode || k == NK_AndNode)
     return an_boxed_logic_ok(c, nt_ref(nt, node, "left")) && an_boxed_logic_ok(c, nt_ref(nt, node, "right"));
-  return k != NK_CallNode || comp_ntype_stored(c, node) == TY_POLY || repr_call_returns_handle(c, node) ||
+  return k != NK_CallNode || comp_ntype_settled(c, node) == TY_POLY || repr_call_returns_handle(c, node) ||
          share_value_fresh(c, node, 0) || share_plan_box_handle(c, node);
 }
 static int an_tail_boxed_string(Compiler *c, int node, TailCount *tc) {
   int mi = tc->mi;
   if (tc->in_begin || mi <= 0 || !c->scopes[mi].ret_rbs_seeded ||
-      c->scopes[mi].ret != TY_STRING || node < 0 || comp_ntype_stored(c, node) != TY_POLY) return 0;
+      c->scopes[mi].ret != TY_STRING || node < 0 || comp_ntype_settled(c, node) != TY_POLY) return 0;
   /* the kinds whose unboxing at the return is the one that publishes */
   NodeKind k = nt_kind(c->nt, node);
   if (k == NK_OrNode || k == NK_AndNode) {
@@ -27700,7 +27700,7 @@ static int an_tail_handle(Compiler *c, RetHandles *R, int n, TailCount *tc) {
   if (R->fresh && (k == NK_IfNode || k == NK_UnlessNode))
     return an_tail_arm(c, R, nt_ref(nt, n, "statements"), tc) &&
            an_tail_arm(c, R, nt_ref(nt, n, k == NK_IfNode ? "subsequent" : "else_clause"), tc);
-  if (k == NK_CallNode && comp_ntype_stored(c, n) == TY_NIL) { tc->nils++; return 1; }
+  if (k == NK_CallNode && comp_ntype_settled(c, n) == TY_NIL) { tc->nils++; return 1; }
   if (k == NK_SuperNode || k == NK_ForwardingSuperNode) {
     /* a super into a native class's binding that keeps the String it is
        handed answers that String's handle (#9258) */
@@ -27732,7 +27732,7 @@ static int an_tail_handle(Compiler *c, RetHandles *R, int n, TailCount *tc) {
     tc->reads++;
     return !R->fresh || c->scopes[mi].ret_fresh;
   }
-  if (k != NK_CallNode || (!R->fresh && comp_ntype_stored(c, n) != TY_STRING)) return 0;
+  if (k != NK_CallNode || (!R->fresh && comp_ntype_settled(c, n) != TY_STRING)) return 0;
   if (R->fresh && cplan_user_fresh(c, n)->via == UC_POLY && !share_builtin_fresh(c, n)) return 0;
   int mis[CPT_MAX];
   int cnt = cplan_targets(c, n, mis, CPT_MAX);
@@ -27964,7 +27964,7 @@ static void an_mark_handle_returns(Compiler *c) {
      not build. Unmarked, the call hands its box on. */
   const NodeTable *nt = c->nt;
   NT_FOREACH_KIND(nt, NK_CallNode, n) {
-    if (!comp_strbuf_box_stored(c, n) || comp_ntype_stored(c, n) != TY_POLY) continue;
+    if (!comp_strbuf_box_stored(c, n) || comp_ntype_settled(c, n) != TY_POLY) continue;
     int mis[CPT_MAX];
     int cnt = cplan_targets(c, n, mis, CPT_MAX), poly = cnt > 0;
     for (int i = 0; i < cnt && poly; i++) poly = c->scopes[mis[i]].ret == TY_POLY;
@@ -29592,8 +29592,8 @@ static int param_borrow_attr_read(Compiler *c, int n) {
   if (args >= 0) nt_arr(nt, args, "arguments", &argc);
   int recv = nt_ref(nt, n, "receiver");
   const char *name = nt_str(nt, n, "name");
-  if (argc != 0 || recv < 0 || !name || !ty_is_object(comp_ntype_stored(c, recv))) return 0;
-  int cid = ty_object_class(comp_ntype_stored(c, recv)), defc = cid;
+  if (argc != 0 || recv < 0 || !name || !ty_is_object(comp_ntype_settled(c, recv))) return 0;
+  int cid = ty_object_class(comp_ntype_settled(c, recv)), defc = cid;
   if (cid < 0 || cid >= c->nclasses || !comp_reader_in_chain(c, cid, name, &defc)) return 0;
   if (call_target(c, n, cid, name, 0, NULL) >= 0) return 0;
   int nd = 0; const int *ds = comp_descendants(c, cid, &nd);
@@ -29611,8 +29611,8 @@ static int param_borrow_elem_read(Compiler *c, int n) {
   if (!name || !sp_streq(name, "[]") || recv < 0 || nt_ref(nt, n, "block") >= 0) return 0;
   int args = nt_ref(nt, n, "arguments"), argc = 0;
   const int *argv = args >= 0 ? nt_arr(nt, args, "arguments", &argc) : NULL;
-  TyKind rt = comp_ntype_stored(c, recv);
-  if (argc != 1 || comp_ntype_stored(c, argv[0]) != TY_INT) return 0;
+  TyKind rt = comp_ntype_settled(c, recv);
+  if (argc != 1 || comp_ntype_settled(c, argv[0]) != TY_INT) return 0;
   return rt == TY_INT_ARRAY || rt == TY_FLOAT_ARRAY || rt == TY_STR_ARRAY || rt == TY_INT_ARRAY_ARRAY ||
          rt == TY_FLOAT_ARRAY_ARRAY || ty_is_obj_array(rt);
 }
@@ -29695,7 +29695,7 @@ static int param_borrow_loud_ex(Compiler *c, int n, int *tg, int *ntg) {
     /* `#{x}` calls x.to_s */
     int st = nt_ref(nt, n, "statements");
     int bn = 0; const int *bv = st >= 0 ? nt_arr(nt, st, "body", &bn) : NULL;
-    return bn > 0 && !param_borrow_plain_ty(comp_ntype_stored(c, bv[bn - 1]));
+    return bn > 0 && !param_borrow_plain_ty(comp_ntype_settled(c, bv[bn - 1]));
   }
   case NK_CallNode: {
     const char *name = nt_str(nt, n, "name");
@@ -29707,7 +29707,7 @@ static int param_borrow_loud_ex(Compiler *c, int n, int *tg, int *ntg) {
     int fresh = k == 0 && param_borrow_builtin_new(c, n);
     if (is_opaque_reaching_call(name) && !fresh) return 1;
     int recv = nt_ref(nt, n, "receiver");
-    TyKind rt = recv >= 0 ? comp_ntype_stored(c, recv) : TY_VOID;
+    TyKind rt = recv >= 0 ? comp_ntype_settled(c, recv) : TY_VOID;
     if (k == 0 && (param_borrow_attr_read(c, n) || param_borrow_elem_read(c, n))) return 0;
     if (recv >= 0 && !param_borrow_plain_ty(rt) && rt != TY_CLASS) return 1;
     if ((rt == TY_STRING || rt == TY_STRBUF) && sp_str_mutator(name, 0)) return 1;
@@ -29721,7 +29721,7 @@ static int param_borrow_loud_ex(Compiler *c, int n, int *tg, int *ntg) {
        object it is handed, its own walk sees (and its loudness is this
        call's) */
     for (int i = 0; i < argc && k == 0; i++)
-      if (!param_borrow_plain_ty(comp_ntype_stored(c, argv[i]))) return 1;
+      if (!param_borrow_plain_ty(comp_ntype_settled(c, argv[i]))) return 1;
     return 0;
   }
   default:
@@ -29749,7 +29749,7 @@ static int param_borrow_plain_operand(Compiler *c, int n) {
         const int *av0 = a0 >= 0 ? nt_arr(nt, a0, "arguments", &ac0) : NULL;
         return param_borrow_plain_operand(c, recv) && (ac0 == 0 || param_borrow_plain_operand(c, av0[0]));
       } }
-    TyKind rt = recv >= 0 ? comp_ntype_stored(c, recv) : TY_VOID;
+    TyKind rt = recv >= 0 ? comp_ntype_settled(c, recv) : TY_VOID;
     if ((rt != TY_INT && rt != TY_FLOAT) || nt_ref(nt, n, "block") >= 0) return 0;
     int tg[64];
     if (param_borrow_targets(c, n, tg, 64) != 0 || !param_borrow_plain_operand(c, recv)) return 0;
@@ -37752,7 +37752,7 @@ int scalar_nil_only_call(Compiler *c, int id, TyKind rt) {
 /* ... on a receiver that can hold nil: the call answers nil's value */
 int nullable_scalar_nil_only_call(Compiler *c, int id) {
   int recv = id >= 0 && nt_kind(c->nt, id) == NK_CallNode ? nt_ref(c->nt, id, "receiver") : -1;
-  return recv >= 0 && scalar_nil_only_call(c, id, comp_ntype_stored(c, recv)) && nullable_int_value(c, recv);
+  return recv >= 0 && scalar_nil_only_call(c, id, comp_ntype_settled(c, recv)) && nullable_int_value(c, recv);
 }
 
 /* Can this expression leave nil in an int slot? */
@@ -40088,12 +40088,12 @@ int promote_boxed_var_read(Compiler *c, int v) {
   if (v < 0) return 0;
   switch (nt_kind(c->nt, v)) {
   case NK_InstanceVariableReadNode: case NK_GlobalVariableReadNode: case NK_ClassVariableReadNode:
-    return comp_ntype_stored(c, v) == TY_POLY;
+    return comp_ntype_settled(c, v) == TY_POLY;
   case NK_LocalVariableReadNode: {
     const char *nm = nt_str(c->nt, v, "name");
     Scope *s = nm ? comp_scope_of(c, v) : NULL;
     LocalVar *lv = s ? scope_local(s, nm) : NULL;
-    return (lv && lv->type == TY_POLY) || comp_ntype_stored(c, v) == TY_POLY;
+    return (lv && lv->type == TY_POLY) || comp_ntype_settled(c, v) == TY_POLY;
   }
   default: return 0;
   }
@@ -40109,7 +40109,7 @@ static int site_args_may_be_nil(Compiler *c, const int *av, int an) {
       if (el && site_args_may_be_nil(c, el, en)) return 1;
       continue;
     }
-    TyKind t = comp_ntype_stored(c, v);
+    TyKind t = comp_ntype_settled(c, v);
     if ((t == TY_INT || t == TY_FLOAT) && nullable_int_value(c, v)) return 1;
     /* under promote a boxed ivar (an Integer member) can hand its nil too */
     if (g_promote_mode && promote_boxed_var_read(c, v)) return 1;
@@ -40909,7 +40909,7 @@ static int wnh_copy_target(Compiler *c, int w, const char *name, Scope *sc) {
   if (nt_kind(nt, w) != NK_LocalVariableWriteNode || v < 0 || nt_kind(nt, v) != NK_LocalVariableReadNode ||
       comp_scope_of(c, w) != sc || !wn || !sp_streq(nt_str(nt, v, "name"), name)) return 0;
   LocalVar *y = scope_local(sc, wn);
-  if (!y || y->type != comp_ntype_stored(c, v) || !ty_is_hash(y->type)) return 0;
+  if (!y || y->type != comp_ntype_settled(c, v) || !ty_is_hash(y->type)) return 0;
   /* the copy's own reads, a copy of it not allowed to chain */
   return !wnh_local_escapes_ex(c, sc, wn, NULL, 0);
 }
@@ -41249,7 +41249,7 @@ static void wnh_widen_copies(Compiler *c, Scope *sc, const char *name, TyKind ht
 static void widen_nullable_keyed_hash_literals(Compiler *c) {
   const NodeTable *nt = c->nt;
   NT_FOREACH_KIND(nt, NK_HashNode, id) {
-    TyKind ht = comp_ntype_stored(c, id);
+    TyKind ht = comp_ntype_settled(c, id);
     if (!ty_is_hash(ht)) continue;
     TyKind kt = ty_hash_key(ht), vt = ty_hash_val(ht);
     int kn = 0, vn = 0;
@@ -41258,8 +41258,8 @@ static void widen_nullable_keyed_hash_literals(Compiler *c) {
       if (nt_kind(nt, els[j]) != NK_AssocNode) continue;
       int k = nt_ref(nt, els[j], "key"), v = nt_ref(nt, els[j], "value");
       /* (a boxed key or value -- a promote-widened local -- can be nil too) */
-      if ((kt == TY_INT || kt == TY_FLOAT) && (nullable_int_value(c, k) || comp_ntype_stored(c, k) == TY_POLY)) kn = 1;
-      if ((vt == TY_INT || vt == TY_FLOAT) && (nullable_int_value(c, v) || comp_ntype_stored(c, v) == TY_POLY)) vn = 1;
+      if ((kt == TY_INT || kt == TY_FLOAT) && (nullable_int_value(c, k) || comp_ntype_settled(c, k) == TY_POLY)) kn = 1;
+      if ((vt == TY_INT || vt == TY_FLOAT) && (nullable_int_value(c, v) || comp_ntype_settled(c, v) == TY_POLY)) vn = 1;
     }
     if (!kn && !vn) continue;
     TyKind nk = kn ? TY_POLY : kt, nv = vn ? TY_POLY : vt;
@@ -41302,7 +41302,7 @@ static void widen_nullable_keyed_hash_literals(Compiler *c) {
     if (ms->def_node < 0 || !ty_is_hash(ms->ret)) continue;
     int last = nt_paren_single(nt, scope_body_last(c, mi));
     if (last < 0 || nt_kind(nt, last) != NK_HashNode || comp_scope_of(c, last) != ms) continue;
-    TyKind lt = comp_ntype_stored(c, last);
+    TyKind lt = comp_ntype_settled(c, last);
     if (!ty_is_hash(lt) || lt == ms->ret || ty_hash_val(lt) != TY_POLY || ty_hash_val(ms->ret) == TY_POLY) continue;
     if (ty_hash_key(lt) != ty_hash_key(ms->ret) && ty_hash_key(lt) != TY_POLY) continue;
     if (wnh_widen_ret(c, mi, lt) && ms->body >= 0) wnh_note(ms->body);
@@ -41315,14 +41315,14 @@ static void widen_nullable_keyed_hash_literals(Compiler *c) {
     if (!nm || (!sp_streq(nm, "[]=") && !sp_streq(nm, "store"))) continue;
     int r = nt_ref(nt, id, "receiver");
     if (r < 0 || nt_kind(nt, r) != NK_LocalVariableReadNode) continue;
-    TyKind ht = comp_ntype_stored(c, r);
+    TyKind ht = comp_ntype_settled(c, r);
     if (!ty_is_hash(ht)) continue;
     int a = nt_ref(nt, id, "arguments"), an = 0;
     const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &an) : NULL;
     if (!av || an != 2) continue;
     TyKind kt = ty_hash_key(ht), vt = ty_hash_val(ht);
-    int kn = (kt == TY_INT || kt == TY_FLOAT) && (nullable_int_value(c, av[0]) || comp_ntype_stored(c, av[0]) == TY_POLY);
-    int vn = (vt == TY_INT || vt == TY_FLOAT) && (nullable_int_value(c, av[1]) || comp_ntype_stored(c, av[1]) == TY_POLY);
+    int kn = (kt == TY_INT || kt == TY_FLOAT) && (nullable_int_value(c, av[0]) || comp_ntype_settled(c, av[0]) == TY_POLY);
+    int vn = (vt == TY_INT || vt == TY_FLOAT) && (nullable_int_value(c, av[1]) || comp_ntype_settled(c, av[1]) == TY_POLY);
     if (!kn && !vn) continue;
     TyKind nk = kn ? TY_POLY : kt, nv = vn ? TY_POLY : vt;
     TyKind want = nk == TY_SYMBOL ? TY_SYM_POLY_HASH : ty_hash_of(nk, nv);
@@ -41467,7 +41467,7 @@ static unsigned char *hash_vnil_flag(Compiler *c, TyKind t) {
 }
 int hash_vals_nullable(Compiler *c, int node) {
   if (node < 0) return 0;
-  TyKind t = comp_ntype_stored(c, node) != TY_UNKNOWN ? comp_ntype_stored(c, node) : infer_type(c, node);
+  TyKind t = comp_ntype_settled(c, node) != TY_UNKNOWN ? comp_ntype_settled(c, node) : infer_type(c, node);
   unsigned char *f = hash_vnil_flag(c, t);
   return f && *f;
 }
@@ -43070,7 +43070,7 @@ static int splat_recv_is_builtin_subclass(Compiler *c, int id, const char *name)
     Scope *s = comp_scope_of(c, id);
     if (s && !s->is_cmethod) k = s->class_id;
   }
-  else if (ty_is_object(comp_ntype_stored(c, r))) k = ty_object_class(comp_ntype_stored(c, r));
+  else if (ty_is_object(comp_ntype_settled(c, r))) k = ty_object_class(comp_ntype_settled(c, r));
   return k >= 0 && comp_arysub_name_is_array(c, k, name);
 }
 /* The argument counts a builtin takes, over every builtin receiver that has
@@ -45793,7 +45793,7 @@ static int an_poly_may_be_method(Compiler *c, AnMethodHolders *mh, int v, int de
 }
 static int an_poly_may_be_method_1(Compiler *c, AnMethodHolders *mh, int v, int depth) {
   const NodeTable *nt = c->nt;
-  if (comp_ntype_stored(c, v) == TY_METHOD) return 1;
+  if (comp_ntype_settled(c, v) == TY_METHOD) return 1;
   NodeKind k = nt_kind(nt, v);
   if (k == NK_LocalVariableReadNode) {
     const char *vn = nt_str(nt, v, "name");
@@ -45822,7 +45822,7 @@ static void an_method_holders_build(Compiler *c, AnMethodHolders *mh) {
     int a = nt_ref(nt, id, "arguments"), an = 0;
     const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &an) : NULL;
     int holds = 0;
-    for (int k = 0; k < an && !holds; k++) holds = comp_ntype_stored(c, av[k]) == TY_METHOD;
+    for (int k = 0; k < an && !holds; k++) holds = comp_ntype_settled(c, av[k]) == TY_METHOD;
     if (!holds) continue;
     Scope *rs = rk == NK_LocalVariableReadNode ? comp_scope_of(c, r) : NULL;
     if (rk == NK_LocalVariableReadNode && !rs) continue;
@@ -50769,7 +50769,7 @@ static void an_phase_pre_fixpoint(Compiler *c) {
 static uint64_t an_type_state(Compiler *c) {
   uint64_t h = 0xCBF29CE484222325ull;
 #define AN_TS_MIX(t) (h = (h ^ (uint64_t)(uint32_t)(t)) * 0x100000001B3ull)
-  for (int id = 0; id < c->nt->count && id < c->node_cap; id++) AN_TS_MIX(comp_ntype_stored(c, id));
+  for (int id = 0; id < c->nt->count && id < c->node_cap; id++) AN_TS_MIX(comp_ntype_settled(c, id));
   for (int s = 0; s < c->nscopes; s++) {
     Scope *sc = &c->scopes[s];
     AN_TS_MIX(sc->ret);
@@ -52612,12 +52612,12 @@ static int an_program_makes_method_procs(Compiler *c, AnMethodHolders *mh) {
     const char *nm = nt_str(nt, id, "name");
     int r = nt_ref(nt, id, "receiver");
     if (r >= 0 && is_proc_conversion_name(nm) &&
-        (comp_ntype_stored(c, r) == TY_METHOD || (comp_ntype_stored(c, r) == TY_POLY && an_poly_may_be_method(c, mh, r, 0))))
+        (comp_ntype_settled(c, r) == TY_METHOD || (comp_ntype_settled(c, r) == TY_POLY && an_poly_may_be_method(c, mh, r, 0))))
       return 1;
   }
   NT_FOREACH_KIND(nt, NK_BlockArgumentNode, id) {
     int x = nt_ref(nt, id, "expression");
-    if (x >= 0 && (comp_ntype_stored(c, x) == TY_METHOD || (comp_ntype_stored(c, x) == TY_POLY && an_poly_may_be_method(c, mh, x, 0))))
+    if (x >= 0 && (comp_ntype_settled(c, x) == TY_METHOD || (comp_ntype_settled(c, x) == TY_POLY && an_poly_may_be_method(c, mh, x, 0))))
       return 1;
   }
   return 0;
@@ -52641,7 +52641,7 @@ static int an_block_arg_unnamed_method(Compiler *c, AnMethodHolders *mh, int x) 
   const char *xn = nt_kind(nt, x) == NK_CallNode ? nt_str(nt, x, "name") : NULL;
   if (xn && sp_streq(xn, "to_proc") && nt_ref(nt, x, "arguments") < 0 && nt_ref(nt, x, "receiver") >= 0)
     x = nt_ref(nt, x, "receiver");
-  TyKind xt = comp_ntype_stored(c, x);
+  TyKind xt = comp_ntype_settled(c, x);
   if (xt != TY_METHOD && !(xt == TY_POLY && an_poly_may_be_method(c, mh, x, 0))) return 0;
   return method_recv_node(c, x) < 0;
 }
@@ -52654,7 +52654,7 @@ static void an_dyn_evidence_add(Compiler *c, const int *av, int an, TyKind *dyn_
     return;
   }
   for (int k = 0; k < an && k < 16; k++) {
-    TyKind at = comp_ntype_stored(c, av[k]);
+    TyKind at = comp_ntype_settled(c, av[k]);
     if (at == TY_UNKNOWN || at == TY_VOID) at = TY_POLY;
     dyn_arg[k] = dyn_seen[k] ? ty_unify(dyn_arg[k], at) : at;
     dyn_seen[k] = 1;
@@ -52718,7 +52718,7 @@ static void an_phase_method_backstops(Compiler *c) {
                   !sp_streq(nm, "==="))) continue;
       int r = nt_ref(c->nt, id, "receiver");
       if (r < 0) continue;
-      TyKind rt = comp_ntype_stored(c, r);
+      TyKind rt = comp_ntype_settled(c, r);
       if (rt == TY_PROC ? !(meth_procs && an_proc_may_hold_unnamed_method(c, r))
                         : rt != TY_METHOD && rt != TY_POLY) continue;
       int a = nt_ref(c->nt, id, "arguments");
@@ -52735,7 +52735,7 @@ static void an_phase_method_backstops(Compiler *c) {
       if ((sp_streq(nm, "[]") || sp_streq(nm, "===")) && rt == TY_POLY) {
         int numeric = an > 0 && sp_streq(nm, "[]");
         for (int k = 0; k < an && numeric; k++) {
-          TyKind at = comp_ntype_stored(c, av[k]);
+          TyKind at = comp_ntype_settled(c, av[k]);
           if (at != TY_INT && at != TY_FLOAT) numeric = 0;
         }
         if (!numeric && !an_poly_may_be_method(c, &mholders, r, 0)) continue;
@@ -54074,7 +54074,7 @@ static void an_phase_storage(Compiler *c) {
     int blk2 = nt_ref(c->nt, id, "block");
     int recv2 = nt_ref(c->nt, id, "receiver");
     if (blk2 < 0 || recv2 < 0) continue;
-    TyKind rt2 = comp_ntype_stored(c, recv2);
+    TyKind rt2 = comp_ntype_settled(c, recv2);
     int cls2 = ty_is_object(rt2) ? ty_object_class(rt2) : ie_poly_mark(c, id, rt2);
     if (cls2 < 0) continue;
     int is_ie2 = is_instance_eval_family(nm2);
@@ -54219,7 +54219,7 @@ static void an_phase_storage(Compiler *c) {
     int recv = nt_ref(c->nt, id, "receiver");
     if (recv < 0 ||
         nt_kind(c->nt, recv) != NK_LocalVariableReadNode) continue;
-    if (comp_ntype_stored(c, recv) != TY_STRING) continue;   /* string append only */
+    if (comp_ntype_settled(c, recv) != TY_STRING) continue;   /* string append only */
     const char *vn = nt_str(c->nt, recv, "name");
     Scope *s = vn ? comp_scope_of(c, recv) : NULL;
     LocalVar *lv = s ? scope_local(s, vn) : NULL;
@@ -54299,7 +54299,7 @@ static void an_phase_storage(Compiler *c) {
 static void vt_nil_fact_classes(Compiler *c, unsigned char *fact) {
   const NodeTable *nt = c->nt;
   for (int id = 0; id < nt->count; id++) {
-    TyKind t = comp_ntype_stored(c, id);
+    TyKind t = comp_ntype_settled(c, id);
     if (!ty_is_object(t) || !nil_fact_node(c, id)) continue;
     int q = ty_object_class(t);
     if (q >= 0 && q < c->nclasses) fact[q] = 1;
@@ -54906,7 +54906,7 @@ static void an_phase_reconcile_check(Compiler *c) {
       if (ak == NK_HashNode || ak == NK_KeywordHashNode) { v = alt; vty = aty; }
     }
     if (!vty || (!sp_streq(vty, "HashNode") && !sp_streq(vty, "KeywordHashNode"))) continue;
-    TyKind litt = comp_ntype_stored(c, v);
+    TyKind litt = comp_ntype_settled(c, v);
     /* an EMPTY literal often has no inferred type at all (TY_UNKNOWN) --
        `@near_linedefs ||= {}` -- and can adopt any variant, so let it
        through; the widen-only guard below still applies. */
@@ -55009,8 +55009,8 @@ static void an_phase_reconcile_check(Compiler *c) {
         const char *n4 = nt_str(c->nt, nid2, "name");
         if (!n4 || !sp_streq(n4, nm)) continue;
         if (comp_scope_of(c, nid2) != lsc) continue;
-        if (ty_is_hash(comp_ntype_stored(c, nid2)) || comp_ntype_stored(c, nid2) == TY_RATIONAL ||
-            comp_ntype_stored(c, nid2) == TY_COMPLEX) comp_set_ntype(c, nid2, TY_POLY);
+        if (ty_is_hash(comp_ntype_settled(c, nid2)) || comp_ntype_settled(c, nid2) == TY_RATIONAL ||
+            comp_ntype_settled(c, nid2) == TY_COMPLEX) comp_set_ntype(c, nid2, TY_POLY);
         widened_a_read = 1;
       }
     }
@@ -55033,8 +55033,8 @@ static void an_phase_reconcile_check(Compiler *c) {
         int a2 = nt_ref(c->nt, id, "arguments");
         int an2 = 0; if (a2 >= 0) nt_arr(c->nt, a2, "arguments", &an2);
         if (r2 < 0 || an2 != 1) continue;
-        if (comp_ntype_stored(c, r2) != TY_POLY || comp_ntype_stored(c, id) == TY_POLY) continue;
-        if (comp_ntype_stored(c, id) == TY_UNKNOWN || comp_ntype_stored(c, id) == TY_VOID) continue;
+        if (comp_ntype_settled(c, r2) != TY_POLY || comp_ntype_settled(c, id) == TY_POLY) continue;
+        if (comp_ntype_settled(c, id) == TY_UNKNOWN || comp_ntype_settled(c, id) == TY_VOID) continue;
         comp_set_ntype(c, id, TY_POLY); ch2 = 1;
       }
       if (!ch2) break;
@@ -55128,7 +55128,7 @@ static void an_phase_reconcile_check(Compiler *c) {
     scope_set_ret(sc, TY_POLY);
     wdid = 1;
     comp_set_ntype(c, tail, TY_POLY);
-    if (comp_ntype_stored(c, sc->body) != TY_UNKNOWN) comp_set_ntype(c, sc->body, TY_POLY);
+    if (comp_ntype_settled(c, sc->body) != TY_UNKNOWN) comp_set_ntype(c, sc->body, TY_POLY);
     /* the callers were typed from the old return, and a call still carrying
        the container type hands the boxed value to a typed helper, which does
        not compile */
@@ -55139,7 +55139,7 @@ static void an_phase_reconcile_check(Compiler *c) {
       int args = nt_ref(c->nt, cid, "arguments");
       int ac = 0; if (args >= 0) nt_arr(c->nt, args, "arguments", &ac);
       if (recv < 0 || ac != 0 || nt_ref(c->nt, cid, "block") >= 0) continue;
-      TyKind rt = comp_ntype_stored(c, recv);
+      TyKind rt = comp_ntype_settled(c, recv);
       int hits = (rt == TY_POLY);
       /* the receiver's own chain resolving the name HERE, rather than the
          receiver being exactly this class: a subclass that inherits the method
@@ -55154,13 +55154,13 @@ static void an_phase_reconcile_check(Compiler *c) {
         else if (nt_kind(c->nt, recv) == NK_CallNode && nt_str(c->nt, recv, "name") &&
                  sp_streq(nt_str(c->nt, recv, "name"), "class")) {
           int robj = nt_ref(c->nt, recv, "receiver");
-          TyKind rot = comp_ntype_stored(c, robj);
+          TyKind rot = comp_ntype_settled(c, robj);
           if (ty_is_object(rot)) rci = ty_object_class(rot);
         }
         if (rci >= 0) hits = call_target(c, cid, rci, cn, CT_CMETHOD, NULL) == s;
       }
       if (!hits) continue;
-      if (comp_ntype_stored(c, cid) != TY_UNKNOWN && comp_ntype_stored(c, cid) != TY_VOID && comp_ntype_stored(c, cid) != TY_POLY) {
+      if (comp_ntype_settled(c, cid) != TY_UNKNOWN && comp_ntype_settled(c, cid) != TY_VOID && comp_ntype_settled(c, cid) != TY_POLY) {
         comp_set_ntype(c, cid, TY_POLY);
         if (wnode) wnode[cid] = 1;
       }
@@ -55251,7 +55251,7 @@ static void an_phase_reconcile_check(Compiler *c) {
       NodeTable *ntg = (NodeTable *)c->nt;
       for (int id = 0; id < ntg->count && id < c->node_cap; id++) {
         if (nt_kind(ntg, id) != NK_GlobalVariableReadNode) continue;
-        if (comp_ntype_stored(c, id) != TY_UNKNOWN && comp_ntype_stored(c, id) != TY_NIL) continue;
+        if (comp_ntype_settled(c, id) != TY_UNKNOWN && comp_ntype_settled(c, id) != TY_NIL) continue;
         const char *nm = nt_str(ntg, id, "name");
         const char *rn = nm ? comp_resolve_gvar(c, nm + 1) : NULL;
         LocalVar *g = rn ? comp_gvar(c, rn) : NULL;

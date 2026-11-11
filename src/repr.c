@@ -903,7 +903,7 @@ int repr_call_returns_handle(Compiler *c, int v) {
   }
   if (v < 0 || nt_kind(nt, v) != NK_CallNode) return 0;
   /* a String's value, or one the pickup marks to be stored as the handle */
-  TyKind t = comp_ntype_stored(c, v);
+  TyKind t = comp_ntype_settled(c, v);
   if (t != TY_STRING && !(t == TY_STRBUF && (comp_strbuf_box_stored(c, v) || c->n_cext_extensions))) return 0;
   if (strbuf_io_outbuf(c, v) >= 0) return 1;
   /* a Method's call: the method `method(:m)` names */
@@ -989,7 +989,7 @@ int repr_call_returns_handle(Compiler *c, int v) {
 int repr_boxed_reader_handle(Compiler *c, int v) {
   const NodeTable *nt = c->nt;
   if (v < 0 || nt_kind(nt, v) != NK_CallNode ||
-      (comp_ntype_stored(c, v) != TY_STRING && !(comp_ntype_stored(c, v) == TY_STRBUF && comp_strbuf_box_stored(c, v))) ||
+      (comp_ntype_settled(c, v) != TY_STRING && !(comp_ntype_settled(c, v) == TY_STRBUF && comp_strbuf_box_stored(c, v))) ||
       nt_ref(nt, v, "block") >= 0 ||
       nt_ref(nt, v, "arguments") >= 0) return 0;
   int recv = nt_ref(nt, v, "receiver");
@@ -1020,7 +1020,7 @@ int repr_boxed_to_s_operand(Compiler *c, int v) {
   int recv = nt_ref(nt, v, "receiver");
   if (!is_to_s_name(nm) || recv < 0 || call_plain_argc(c, v) != 0 ||
       nt_ref(nt, v, "block") >= 0 || repr_of(c, recv).kind != RK_BOXED ||
-      (comp_ntype_stored(c, v) != TY_STRING && comp_ntype_stored(c, v) != TY_STRBUF)) return -1;
+      (comp_ntype_settled(c, v) != TY_STRING && comp_ntype_settled(c, v) != TY_STRBUF)) return -1;
   int targets[CPT_MAX], n = cplan_targets(c, v, targets, CPT_MAX);
   if (n < 0) return -1;
   for (int i = 0; i < n; i++) {
@@ -1305,7 +1305,7 @@ Repr repr_of(const Compiler *c, int node) {
   r.kind = RK_NONE;
   r.untyped = 1;
   if (!comp_node_in(c, node)) return r;
-  r.ty = comp_ntype_stored(c, node);
+  r.ty = comp_ntype_settled(c, node);
   r.as_ty = comp_ntype(c, node);
   /* the layout first, from the type it is stored as, then the flags:
      GCC 13's store merging at -O2 drops the nil_cold store when

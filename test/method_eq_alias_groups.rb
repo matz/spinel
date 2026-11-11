@@ -34,3 +34,8 @@ p h[[0, sym].last.method(:to_s)]
 p sym.method(:to_s).receiver
 p sym.method(:to_s) == :abd.method(:to_s)
 p sym.method(:to_s) == 1.method(:to_s)
+puts "a Symbol and an Integer share no receiver"
+x = :a.method(:object_id)
+hits = []
+(0..200).each { |k| hits << k if x == k.method(:object_id) }
+p hits

@@ -24,3 +24,5 @@ true
 :abc
 false
 false
+a Symbol and an Integer share no receiver
+[]

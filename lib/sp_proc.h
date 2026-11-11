@@ -367,6 +367,9 @@ static inline sp_bool sp_bm_same(const sp_BoundMethod *x, const sp_BoundMethod *
   /* (a Boolean receiver is held as 1 or 0 with no reference: false and the
      Integer 0 under one method, object_id, are two receivers) */
   if (!x->held && (x->self_kind == SP_BM_SELF_BOOL) != (y->self_kind == SP_BM_SELF_BOOL)) return 0;
+  /* (a Symbol receiver is held as its id: :a, id 0, and the Integer 0 under
+     object_id are two receivers) */
+  if (!x->held && (x->self_kind == SP_BM_SELF_SYM) != (y->self_kind == SP_BM_SELF_SYM)) return 0;
   if (x->held) {
     /* the receivers are the elements of two holders, equal as CRuby's
        Method#== reads them: one value (an immediate's bits, or one object) */

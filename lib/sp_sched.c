@@ -2704,11 +2704,22 @@ static void sp_sched_par_mark(void) {
   if (sp_gc_ph_on) { sp_gc_ph_mk_helpers += (unsigned long long)g_mk_joined; sp_gc_ph_mk_drains++; }
   SCHED_UNLOCK();
 }
+static int sp_available_cpus(void);   /* defined below; the CPUs this process may run on */
 static void sp_cs_start_sweepers(void) {
   { const char *o = getenv("SPINEL_GC_OWNER"); g_cs_owner_env = !(o && *o == '0'); }
   const char *e = getenv("SPINEL_GC_SWEEPERS");
   int want = e && *e ? atoi(e) : 0;
-  if (want <= 0) { want = g_worker_cap > 0 ? g_worker_cap : 1; if (want > 8) want = 8; }
+  if (want <= 0) {
+    /* On a single CPU nothing sweeps beside the program: a sweeper thread
+       runs only by taking that CPU from the worker, so every collection
+       costs the wake-ups and the switches there and back for a sweep the
+       collector does in the same time itself. No sweeper starts then, the
+       hooks below stay unset, and the collector sweeps under the barrier as
+       it does under SPINEL_GC_CONC=0. A count asked for by name is still
+       started. */
+    if (sp_available_cpus() < 2) return;
+    want = g_worker_cap > 0 ? g_worker_cap : 1; if (want > 8) want = 8;
+  }
   if (want > CS_SWEEPER_MAX) want = CS_SWEEPER_MAX;
   pthread_attr_t at; pthread_attr_init(&at);
   pthread_attr_setstacksize(&at, 1024 * 1024);

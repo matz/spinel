@@ -553,7 +553,7 @@ static void cplan_resolve_call(Compiler *c, int id, CallPlan *p) {
       p->chain = !m->is_cmethod && self && self->class_id >= 0;
       return;
     }
-    int imi = comp_included_method_index(c, name, id);
+    int imi = call_target(c, id, -1, name, CT_INCLUDED, NULL);
     if (imi >= 0) { cplan_set(p, imi, c->scopes[imi].class_id, UC_INCLUDED, CP_DIRECT); return; }
     /* outside a class method, self reaches a program's own Object method */
     Scope *self = comp_scope_of(c, id);
@@ -2359,6 +2359,7 @@ int cplan_cand_arm(Compiler *c, int id, const char *name, int mi, int inst) {
    (ct_on_main), as CRuby's lookup there; its versions are then main's
    chain's, which ends in Object's (*flags gains CT_CMETHOD) */
 static int ct_lookup(Compiler *c, int id, int cls, const char *name, unsigned *flags, MethodLookup *ml) {
+  if (*flags & CT_INCLUDED) return comp_included_method_index(c, name, id);
   int si = (*flags & CT_TOP) && id >= 0 ? comp_main_method(c, name) : -1;
   int mi = si >= 0 && ct_on_main(c, id, name) ? si : ct_table(c, cls, name, *flags, ml ? &ml->def_class : NULL);
   if ((*flags & CT_TOP) && mi >= 0 && c->scopes[mi].is_cmethod) *flags |= CT_CMETHOD;
@@ -2373,7 +2374,8 @@ int call_target(Compiler *c, int id, int cls, const char *name, unsigned flags, 
     ml->kind = ML_NONE;
     r = -1;
   }
-  else if ((mi = ct_lookup(c, id, cls, name, &flags, ml)) < 0 || id < 0 || (!(flags & (CT_REACH | CT_CAPTURE | CT_IMPLIED)) && !ct_calls(c, id, name))) {
+  else if ((mi = ct_lookup(c, id, cls, name, &flags, ml)) < 0 || id < 0 || (flags & CT_INCLUDED) ||
+           (!(flags & (CT_REACH | CT_CAPTURE | CT_IMPLIED)) && !ct_calls(c, id, name))) {
     if (mi < 0) ml->kind = ML_NONE;
     else if (ct_versioned(c, mi, name) || c->scopes[mi].mixin_guarded) {   /* (the record was not asked) */
       ml->kind = ML_TABLE;

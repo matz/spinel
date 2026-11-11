@@ -3310,7 +3310,7 @@ static int yvt_callee_index_scan(Compiler *c, int cid) {
        infer_uncached resolves it: its block feeds that method's yield.
        Missed here, T.twice's return was typed from no block at all, so
        `n = twice { 2 }` under `include T` typed nil */
-    if (rmi < 0) rmi = comp_included_method_index(c, cn, cid);
+    if (rmi < 0 && cn) rmi = call_target(c, cid, -1, cn, CT_INCLUDED, NULL);
   }
   else {
     TyKind crt = infer_type(c, crecv);
@@ -3322,7 +3322,7 @@ static int yvt_callee_index_scan(Compiler *c, int cid) {
              (nt_kind(nt, crecv) == NK_ConstantReadNode ||
               nt_kind(nt, crecv) == NK_ConstantPathNode)) {
       int nci = const_node_class_index(c, crecv);
-      if (nci >= 0) rmi = comp_method_in_chain(c, nci, "initialize", NULL);
+      if (nci >= 0) rmi = call_target(c, cid, nci, "initialize", 0, NULL);
     }
     /* `Klass.m { block }` / `Mod.m { block }` / `NS::Klass.m { block }`: a
        class/module self-method (singleton). Resolve the constant and look
@@ -3384,8 +3384,10 @@ static int yvt_reaches(Compiler *c, int cid, int mi) {
   int a = nt_ref(nt, cid, "arguments");
   int an = 0; const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &an) : NULL;
   if (!init_accepts_kw_call(c, mi, av, an)) return 0;
-  for (int k = 0; k < c->nclasses; k++)
-    if (!c->classes[k].is_struct && comp_method_in_chain(c, k, "initialize", NULL) == mi) return 1;
+  int npc = 0;
+  const PolyCand *pcs = comp_poly_candidates(c, "initialize", &npc);
+  for (int i = 0; i < npc; i++)
+    if (!c->classes[pcs[i].cls].is_struct && pcs[i].mi == mi) return 1;
   return 0;
 }
 

@@ -1,0 +1,7 @@
+class CofRelation
+  def initialize: (untyped model) -> void
+  def scope_attributes: () -> Hash[Symbol, untyped]
+end
+class CofFlash
+  @discard: Array[String]
+end

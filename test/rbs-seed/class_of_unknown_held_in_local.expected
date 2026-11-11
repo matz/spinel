@@ -1,0 +1,4 @@
+0
+no implicit conversion of Integer into String
+no implicit conversion of Symbol into String
+no implicit conversion of nil into String

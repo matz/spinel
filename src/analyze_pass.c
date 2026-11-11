@@ -5984,8 +5984,54 @@ enum { HANDED_CLIMB = VPS_IF | VPS_UNLESS | VPS_CASE | VPS_CASE_IN | VPS_LOGIC |
    whose value is dropped. A conditional, `case` arm, `and`/`or`,
    parentheses or a block of statements passes its last value up to be asked
    the same; a value chosen by a conditional, `case` or `and`/`or` is handed
-   on to the receiver it becomes, as that receiver is no longer one class. */
+   on to the receiver it becomes, as that receiver is no longer one class. A
+   local it is written to hands it on where a read of the local does:
+   `klass = obj.class` read only in an interpolation is consumed. */
+static int value_handed_on_d(const NodeTable *nt, const int *parent, int u, int chosen, int depth);
+
+/* The definition, class body or file `u` is inside: the outermost node a
+   local of it can be read in. */
+static int local_home(const NodeTable *nt, const int *parent, int u) {
+  for (int p = parent[u], guard = nt->count; p >= 0 && guard > 0; p = parent[p], guard--) {
+    NodeKind k = nt_kind(nt, p);
+    if (k == NK_DefNode || k == NK_ClassNode || k == NK_ModuleNode || k == NK_SingletonClassNode ||
+        parent[p] < 0) return p;
+  }
+  return -1;
+}
+
+/* Is the value a local write `w` stores handed on, through the write's own
+   value or any read of the local? Reads of the name anywhere in the same
+   definition count (a block's own local of that name too, which errs on the
+   side of handing on); a `||=`, `&&=` or operator write of it is taken as
+   handing it on. A read that is a call's receiver hands it on. */
+static int local_write_handed_on(const NodeTable *nt, const int *parent, int w, int chosen, int depth) {
+  if (value_handed_on_d(nt, parent, w, chosen, depth + 1)) return 1;
+  const char *nm = nt_str(nt, w, "name");
+  int home = local_home(nt, parent, w);
+  if (!nm || home < 0) return 1;
+  static const NodeKind rw[3] = {
+    NK_LocalVariableOrWriteNode, NK_LocalVariableAndWriteNode, NK_LocalVariableOperatorWriteNode};
+  for (int t = 0; t < 3; t++)
+    NT_FOREACH_KIND(nt, rw[t], x) {
+      if (parent[x] >= 0 && sp_streq(nt_str(nt, x, "name"), nm) && local_home(nt, parent, x) == home)
+        return 1;
+    }
+  NT_FOREACH_KIND(nt, NK_LocalVariableReadNode, r) {
+    if (parent[r] < 0 || !sp_streq(nt_str(nt, r, "name"), nm) || local_home(nt, parent, r) != home)
+      continue;
+    /* a read is taken as a value chosen for the receiver it becomes: the
+       dispatch on `k = self.class; k.mark` reaches the classes that escape */
+    if (value_handed_on_d(nt, parent, r, 1, depth + 1)) return 1;
+  }
+  return 0;
+}
+
 static int value_handed_on(const NodeTable *nt, const int *parent, int u) {
+  return value_handed_on_d(nt, parent, u, 0, 0);
+}
+
+static int value_handed_on_d(const NodeTable *nt, const int *parent, int u, int chosen, int depth) {
   static const char *const passes_recv[] = {
     "method", "public_method", "send", "public_send", "__send__", "then", "tap",
     "itself", "yield_self", "freeze", "dup", "clone", "instance_exec",
@@ -5994,7 +6040,7 @@ static int value_handed_on(const NodeTable *nt, const int *parent, int u) {
     "puts", "print", "p", "pp", "warn", "raise", "format", "sprintf", "printf",
     "is_a?", "kind_of?", "instance_of?", "include", "extend", "prepend",
     "include?", "==", "!=", "===", "equal?", "eql?", "<", "<=", ">", ">=", "<=>", NULL };
-  int chosen = 0;
+  if (depth > 4) return 1;
   for (long guard = nt->count; guard >= 0; guard--) {
     VpUp up;
     VpUpKind ended = vp_climb(nt, parent, u, HANDED_CLIMB, &up);
@@ -6020,6 +6066,9 @@ static int value_handed_on(const NodeTable *nt, const int *parent, int u) {
     /* the `self` of `def self.m` names where m is defined; it is no value
        (taken as one, every class with a class method escaped, #5272) */
     if (pk == NK_DefNode && nt_ref(nt, p, "receiver") == up.node) return 0;
+    /* a local holds it: handed on where the local's reads hand it on */
+    if (pk == NK_LocalVariableWriteNode && nt_ref(nt, p, "value") == up.node)
+      return local_write_handed_on(nt, parent, p, chosen, depth);
     if (pk == NK_CallNode) {
       if (nt_ref(nt, p, "receiver") == up.node) return chosen || str_in(nt_str(nt, p, "name"), passes_recv);
       return 1;

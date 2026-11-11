@@ -21936,7 +21936,7 @@ int desugar_builtin_alias_calls(Compiler *c) {
     if (!nm) continue;
     int recv = nt_ref(nt, id, "receiver"), k = -1;
     if (recv >= 0) {
-      TyKind rt = comp_ntype_settled(c, recv);
+      TyKind rt = comp_ntype(c, recv);
       if (ty_is_object(rt)) k = ty_object_class(rt);
     }
     else {

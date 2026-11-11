@@ -1899,7 +1899,7 @@ static int sh_plain_operand(Compiler *c, int n) {
     return 1;
   case NK_CallNode: {
     int recv = nt_ref(nt, n, "receiver");
-    TyKind rt = recv >= 0 ? comp_ntype_settled(c, recv) : TY_VOID;
+    TyKind rt = recv >= 0 ? comp_ntype(c, recv) : TY_VOID;
     /* a freeze moves no payload and changes no byte: a borrowed key read
        beside one stays the live buffer (`h[k] = k.freeze`) */
     if ((rt == TY_STRING || rt == TY_STRBUF) && is_freeze_name(nt_str(nt, n, "name")) &&
@@ -1944,7 +1944,7 @@ static int sh_hash_key_call(Compiler *c, int n) {
   int recv = nt_ref(nt, n, "receiver");
   const char *name = nt_str(nt, n, "name");
   if (recv < 0 || !name) return 0;
-  TyKind rt = comp_ntype_settled(c, recv);
+  TyKind rt = comp_ntype(c, recv);
   if (rt != TY_STR_INT_HASH && rt != TY_STR_STR_HASH && rt != TY_STR_POLY_HASH) return 0;
   if (sh_has_targets(c, n)) return 0;
   if (is_store_alias(name)) return 1;
@@ -1969,7 +1969,7 @@ void share_mark_borrows(Compiler *c) {
   /* a String-keyed Hash literal stores each entry as such a call does:
      its key, beside a plain value */
   NT_FOREACH_KIND(nt, NK_HashNode, n) {
-    TyKind ht = comp_ntype_settled(c, n);
+    TyKind ht = comp_ntype(c, n);
     if (ht != TY_STR_INT_HASH && ht != TY_STR_STR_HASH && ht != TY_STR_POLY_HASH) continue;
     int en = 0; const int *el = nt_arr(nt, n, "elements", &en);
     for (int i = 0; i < en; i++) {

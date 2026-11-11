@@ -969,7 +969,7 @@ static int share_plan_freeze_read(Compiler *c, int n) {
     return 0;
   NodeKind k = nt_kind(nt, recv);
   if (k != NK_LocalVariableReadNode && k != NK_InstanceVariableReadNode && !repr_static_read_kind(k)) return 0;
-  return (comp_ntype_settled(c, recv) == TY_STRING || comp_ntype_settled(c, recv) == TY_STRBUF) && cplan_targets(c, n, tg, CPT_MAX) == 0;
+  return (comp_ntype(c, recv) == TY_STRING || comp_ntype(c, recv) == TY_STRBUF) && cplan_targets(c, n, tg, CPT_MAX) == 0;
 }
 
 /* The roles of the receivers that a builtin call only reads: a freeze of

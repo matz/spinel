@@ -19465,6 +19465,10 @@ static int program_needs_class_machinery(Compiler *c) {
      keeps the bank */
   if (c->nclasses > 0)
     for (int i = 0; i < c->nt->count && i < c->node_cap; i++) {
+      /* the settled type: the yield-site hook is installed by now, and
+         comp_ntype reads an untyped call to a yielding method as poly.
+         This scan decides what the whole program needs, and that reading
+         alone would keep the bank */
       TyKind t = comp_ntype_settled(c, i);
       if (t == TY_POLY || ty_is_array(t) || ty_is_hash(t)) return 1;
     }
@@ -19607,6 +19611,8 @@ static int scan_ret_leaf_polyish(const VpLeaf *leaf, void *ud) {
   if (leaf->kind != VPK_EXPR) return 1;
   NodeKind k = nt_kind(c->nt, leaf->node);
   if ((k == NK_WhileNode || k == NK_UntilNode) && !loop_value_live(c, leaf->node)) return 0;
+  /* (the settled type, as program_needs_class_machinery reads it and for
+     its reason) */
   TyKind t = comp_ntype_settled(c, leaf->node);
   return t == TY_POLY || ty_is_array(t) || ty_is_hash(t);
 }
@@ -19867,6 +19873,9 @@ static void scan_prologue_features(Compiler *c) {
          own; a loop with no valued break answers nil */
       NodeKind ik = nt_kind(nt, i);
       if (ik == NK_StatementsNode || ((ik == NK_WhileNode || ik == NK_UntilNode) && !loop_value_live(c, i))) continue;
+      /* (the settled type, as program_needs_class_machinery reads it: the
+         hook's poly for an untyped call to a yielding method would alone
+         set polyish, and with it bring in the render banks) */
       SP_TT(comp_ntype_settled(c, i));
     }
     free(dsl);

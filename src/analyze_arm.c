@@ -152,7 +152,7 @@ void an_arm_facts(Compiler *c) {
     }
     /* the sites run in the arms of a dispatch over a boxed value, or over
        a boxed Array's elements */
-    TyKind rt = comp_ntype_settled(c, r);
+    TyKind rt = comp_ntype(c, r);
     if (rt != TY_POLY && rt != TY_POLY_ARRAY) continue;
     const char *p0 = block_param_name(c, block, 0);
     Scope *bs = p0 ? comp_scope_of(c, block) : NULL;

@@ -5,7 +5,7 @@ class Hash
 end
 
 hash = {}
-hash.instance_variable_set(:@tag, 7)
+hash.label = 7
 p hash.slice(:a).merge(b: 1)
 
 def attributes(hash)
@@ -63,3 +63,27 @@ class HashChild < Hash
   end
 end
 p HashChild.new.merge(b: 8)
+
+# A nil Hash ivar is held before its arguments, but tested after them.
+class CopyPreludeStore
+  def initialize(known)
+    @h = (known ? self : nil)&.initial_hash
+  end
+
+  def initial_hash = { a: 1 }
+
+  def add(key, value)
+    @h = @h.merge(key => argument(value)[:b])
+  end
+end
+
+$events.clear
+begin
+  CopyPreludeStore.new(false).add(:b, 9)
+rescue NoMethodError
+  p $events
+  puts "NoMethodError"
+end
+$events.clear
+p CopyPreludeStore.new(true).add(:b, 10)
+p $events

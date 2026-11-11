@@ -29,3 +29,7 @@ false
 true
 []
 [:override, 8]
+[:argument]
+NoMethodError
+{a: 1, b: 10}
+[:argument]

@@ -864,12 +864,11 @@ no_gsub_enum:
       if (!fend) { buf_puts(b, "sp_str_format_polyarr("); emit_expr(c, recv, b); }
       /* the one-element list is held by `_fa` alone while an argument that
          allocates is built (`"%5s|" % ("q" + i.to_s)`); one that already
-         ran into a temp was built before the list */
-      int an = arg_ran_first(argv[0], 0) ? argv[0] : nt_paren_single(c->nt, argv[0]);
-      /* not asked of a statement left alone, and the walk of the argument
-         (subtree_is_pure_read) last */
+         ran into a temp was built before the list, which the walk of the
+         argument (subtree_is_pure_read) answers. Not asked of a statement
+         left alone, and that walk last */
       int runs = !(!fend && str_format_left_alone(c, recv, argv[0])) &&
-                 operand_may_allocate(c, argv[0]) && !arg_ran_first(an, 0) && !subtree_is_pure_read(c, argv[0]);
+                 operand_may_allocate(c, argv[0]) && !subtree_is_pure_read(c, argv[0]);
       /* a number needs no holding: its value is taken ahead of the list
          (`"%5d|" % sq(i)`) and boxed there by the call emit_boxed wrote */
       if (runs && (at == TY_INT || at == TY_FLOAT)) {
@@ -1560,7 +1559,7 @@ int emit_string_handle_append(Compiler *c, int id, Buf *b, const char *name, int
         if (!is_append_concat(name)) {
           int ordered = 0;
           for (int j = 0; j < argc && argc > 1; j++)
-            if (!arg_ran_first(argv[j], 0) && !subtree_is_pure_read(c, argv[j])) ordered = 1;
+            if (!subtree_is_pure_read(c, argv[j])) ordered = 1;
           if (ordered) emit_string_prepend_ordered(c, tb2, argc, argv, b);
           else {
             int tp3 = ++g_tmp;

@@ -744,7 +744,7 @@ int subtree_may_allocate(const NodeTable *nt, int id) {
 int operand_may_allocate(Compiler *c, int id) {
   if (subtree_may_allocate(c->nt, id)) return 1;
   id = nt_paren_single(c->nt, id);
-  if (id < 0 || repr_of(c, id).handle) return 0;
+  if (id < 0 || view_ran_first(id) || repr_of(c, id).handle) return 0;
   if (strbuf_local_name(c, id)) return 1;
   if (repr_self_shared(c, id)) return 1;
   if (repr_static_read_kind(nt_kind(c->nt, id)) && repr_of(c, id).share) return 1;

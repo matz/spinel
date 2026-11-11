@@ -1068,12 +1068,6 @@ static int env_str_checked(const Compiler *c, int v) {
   const char *s = nt_kind(c->nt, v) == NK_StringNode ? nt_str(c->nt, v, "content") : NULL;
   return !s || strlen(s) != nt_str_len(c->nt, v, "content");
 }
-/* Does ENV operand v build a value where it stands, a new String or box
-   that only the C temp it lands in holds? An operand the operand-order
-   rewrite ran ahead of the call is its rooted temp already. */
-static int env_operand_new(Compiler *c, int v) {
-  return !arg_ran_first(v, 0) && operand_allocates_beside(c, v);
-}
 /* ENV name or value (value != 0) node v as a C string, checked */
 static void emit_env_str(Compiler *c, int v, int value, Buf *b) {
   if (env_str_checked(c, v)) buf_puts(b, "sp_env_chk(");
@@ -1665,7 +1659,7 @@ int emit_call_kernel_flow_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
         /* a key the operand builds (`ENV.delete(key(1))`) is a new String
            nothing else holds, and it too reaches unsetenv past that
            allocation; a variable's or a literal's is held where it is */
-        int key_new = !key_handle && env_operand_new(c, eav[0]);
+        int key_new = !key_handle && operand_allocates_beside(c, eav[0]);
         buf_printf(b, "({ const char *_t%d = ", t1); emit_env_str(c, eav[0], 0, b);
         if (key_handle || key_new) buf_printf(b, "; SP_GC_ROOT(_t%d)", t1);
         buf_printf(b, "; const char *_t%d = getenv(_t%d);"
@@ -1754,7 +1748,7 @@ int emit_call_kernel_flow_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
           buf_printf(b, "({ const char *_t%d = ", tk); emit_str_expr(c, argv[0], b);
           /* a key the operand builds (`ENV["K#{i}"] = v`) is held across the
              value's evaluation when that can allocate */
-          if (env_operand_new(c, argv[0]) && env_operand_new(c, argv[1]))
+          if (operand_allocates_beside(c, argv[0]) && operand_allocates_beside(c, argv[1]))
             buf_printf(b, "; SP_GC_ROOT(_t%d)", tk);
           /* a nil VALUE unsets the variable; only the key is strict */
           buf_printf(b, "; const char *_t%d = ", tv); emit_str_expr_nilable(c, argv[1], b);
@@ -1813,7 +1807,7 @@ int emit_call_kernel_flow_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
         int tk = ++g_tmp, tky = ++g_tmp, tv = ++g_tmp, td = ++g_tmp;
         buf_printf(b, "({ const char *_t%d = ", tky); emit_str_expr(c, argv[0], b);
         /* a key the operand builds is held across a default that can allocate */
-        if (argc >= 2 && env_operand_new(c, argv[0]) && env_operand_new(c, argv[1]))
+        if (argc >= 2 && operand_allocates_beside(c, argv[0]) && operand_allocates_beside(c, argv[1]))
           buf_printf(b, "; SP_GC_ROOT(_t%d)", tky);
         /* the default is an argument: it evaluates whether or not the
            variable is set, before the lookup */

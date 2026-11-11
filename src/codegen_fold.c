@@ -9582,10 +9582,12 @@ int hold_operand_pre(Compiler *c, int node, TyKind ty, int boxed, int t, int roo
   return t;
 }
 
-/* See codegen_internal.h. */
-int read_rebound_by(Compiler *c, int x, int after) {
+/* The walk of read_rebound_by and read_code_rebound_by. `bound`: a node
+   bound to a temp the binder marked as run first (view_ran_first) reads
+   that temp, which nothing after it rebinds. */
+static int rebound_walk(Compiler *c, int x, int after, int bound) {
   const NodeTable *nt = c->nt;
-  if (after < 0) return 0;
+  if (after < 0 || (bound && view_ran_first(x))) return 0;
   switch (nt_kind(nt, x)) {
     case NK_LocalVariableReadNode: {
       const char *nm = nt_str(nt, x, "name");
@@ -9624,15 +9626,17 @@ int read_rebound_by(Compiler *c, int x, int after) {
          k: (x = 3))` spread the Array built after the keyword ran */
       if (x < 0) return 0;
       for (int i = 0; i < nt_num_refs(nt, x); i++)
-        if (read_rebound_by(c, nt_ref_at(nt, x, i), after)) return 1;
+        if (rebound_walk(c, nt_ref_at(nt, x, i), after, bound)) return 1;
       for (int i = 0; i < nt_num_arrs(nt, x); i++) {
         int n = 0; const int *ids = nt_arr_at(nt, x, i, &n);
-        for (int j = 0; j < n; j++) if (read_rebound_by(c, ids[j], after)) return 1;
+        for (int j = 0; j < n; j++) if (rebound_walk(c, ids[j], after, bound)) return 1;
       }
       return 0;
     }
   }
 }
+int read_rebound_by(Compiler *c, int x, int after) { return rebound_walk(c, x, after, 1); }
+int read_code_rebound_by(Compiler *c, int x, int after) { return rebound_walk(c, x, after, 0); }
 
 /* The argument `v` of a call binding in parameter order, evaluated ahead of
    the binding into a rooted temp its uses read (emit_arg_temp). A value with no C type -- nil -- is evaluated for its effect

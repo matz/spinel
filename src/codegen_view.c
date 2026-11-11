@@ -149,6 +149,14 @@ int view_bind_temp_read(int node, const char *reader, int t) {
 
 void view_unbind(int n) { g_n_argov = n; }
 
+/* See codegen_internal.h. The latest binding is the one emit_expr writes. */
+int view_ran_first(int node) {
+  if (node < 0) return 0;
+  for (int i = g_n_argov - 1; i >= 0; i--)
+    if (g_argov_node[i] == node) return (g_argov_flag[i] & ARGOV_RAN) != 0;
+  return 0;
+}
+
 unsigned view_epoch(void) { return view_epoch_n; }
 
 /* the slot an entry of `kind` names for node `id` */

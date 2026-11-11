@@ -21629,7 +21629,7 @@ static void emit_class_definition(Compiler *c, int id, Buf *b, int indent) {
   int reads[] = { an_const_read_effect(c, cp).autoload ? cp : nt_ref(nt, cp, "parent"), nt_ref(nt, id, "superclass") };
   for (int i = 0; i < 2; i++)
     if (emit_const_read_stmt(c, reads[i], b, indent)) buf_puts(b, "\n");
-  const char *name = cp >= 0 ? nt_str(nt, cp, "name") : NULL;
+  const char *name = cp >= 0 ? nt_key_name(nt, cp) : NULL;
   int ci = name ? elab_header_class(c, id, NULL, NULL) : g_class_body_id;
   emit_class_presence_store(c, id, b, indent);
   emit_class_body_stmts(c, ci, nt_ref(nt, id, "body"), b, indent);
@@ -22023,7 +22023,7 @@ static int emit_attr_global_const_write_stmt(Compiler *c, int id, Buf *b, int in
     return 1;
   }
   if (sp_streq(ty, "GlobalVariableWriteNode") || sp_streq(ty, "ConstantWriteNode")) {
-    const char *nm = nt_str(nt, id, "name");
+    const char *nm = nt_key_name(nt, id);
     int isg = ty[0] == 'G';
     const char *pfx = isg ? "gv" : "cst";
     const char *raw_key = isg ? nm + 1 : const_key_at(c, id);

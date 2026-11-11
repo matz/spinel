@@ -5053,7 +5053,7 @@ int fi_fiber_stack_risk(Compiler *c) {
     NodeKind k = nt_kind(nt, i);
     if (!ty) continue;
     if (k == NK_ConstantReadNode) {
-      const char *nm = nt_str(nt, i, "name");
+      const char *nm = nt_key_name(nt, i);
       if (nm && (sp_streq(nm, "Fiber") || sp_streq(nm, "Thread") || sp_streq(nm, "Enumerator") ||
                  sp_streq(nm, "Queue") || sp_streq(nm, "SizedQueue") || sp_streq(nm, "Mutex") ||
                  sp_streq(nm, "Monitor") || sp_streq(nm, "ConditionVariable")))
@@ -19451,7 +19451,7 @@ static int program_needs_class_machinery(Compiler *c) {
         need = 1;
     }
     else if (ty_k == NK_ConstantReadNode || ty_k == NK_ConstantPathNode) {
-      const char *nm = nt_str(nt, i, "name");
+      const char *nm = nt_key_name(nt, i);
       if (nm && is_builtin_class_name(nm) && !(raised && raised[i])) need = 1;
     }
   }
@@ -19607,7 +19607,7 @@ static void scan_prologue_features(Compiler *c) {
     else if (ty_k == NK_SymbolNode || ty_k == NK_InterpolatedSymbolNode)
       g_uses_symbols = 1;
     else if (ty_k == NK_ConstantReadNode || ty_k == NK_ConstantPathNode) {
-      const char *nm = nt_str(nt, i, "name");
+      const char *nm = nt_key_name(nt, i);
       if (!nm) continue;
       /* A class a bundled library defines, named without requiring it. CRuby
          raises NameError at run time; here the unknown constant flows into
@@ -21097,7 +21097,7 @@ static void refuse_syserr_errno_const(Compiler *c) {
       int ci = c->node_cbody[st[i]];
       /* the name may come qualified (`MyErr__Errno`) when two classes
          define one */
-      const char *wn = nt_str(c->nt, st[i], "name");
+      const char *wn = nt_key_name(c->nt, st[i]);
       size_t wl = wn ? strlen(wn) : 0;
       if (ci >= 0 && class_is_syserr(c, ci) && wn &&
           (sp_streq(wn, "Errno") || (wl > 7 && sp_streq(wn + wl - 7, "__Errno"))))
@@ -21111,7 +21111,7 @@ static void refuse_syserr_errno_const(Compiler *c) {
     int tg = nt_ref(c->nt, ks[i], "target");
     int par = tg >= 0 ? nt_ref(c->nt, tg, "parent") : -1;
     const char *pn = par >= 0 ? nt_str(c->nt, par, "name") : NULL;
-    if (tg >= 0 && sp_streq(nt_str(c->nt, tg, "name"), "Errno") && pn &&
+    if (tg >= 0 && sp_streq(nt_key_name(c->nt, tg), "Errno") && pn &&
         class_is_syserr(c, const_node_class_index(c, par)))
       unsupported_feature(c, ks[i], "an Errno constant defined in a subclass of SystemCallError "
                                     "(its errno is read from the Errno class above it)");

@@ -1156,7 +1156,7 @@ static void class_reopen_stmt(Compiler *c, int s, int depth) {
     if (nt_ref(nt, s, "superclass") >= 0)
       unsupported_feature(c, s, "`class Class < ...` is not supported: reopen Class without a superclass");
     nt_node_set_type(nt, s, "ModuleNode");
-    nt_node_set_str(nt, cp, "qc_orig_name", nt_str(nt, cp, "name"));   /* the name the program wrote */
+    nt_node_set_str(nt, cp, "qc_orig_name", nt_key_name(nt, cp));   /* the name the program wrote */
     nt_node_set_str(nt, cp, "name", CLASS_REOPEN_NAME);
     return;
   }
@@ -1196,7 +1196,7 @@ void desugar_class_reopen(Compiler *c) {
     NodeKind k = nt_kind(nt, id);
     if (k != NK_ClassNode && k != NK_ModuleNode && k != NK_ConstantWriteNode) continue;
     int cp = k == NK_ConstantWriteNode ? id : nt_ref(nt, id, "constant_path");
-    const char *cn = cp >= 0 ? nt_str(nt, cp, "name") : NULL;
+    const char *cn = cp >= 0 ? nt_key_name(nt, cp) : NULL;
     if (cn && sp_streq(cn, CLASS_REOPEN_NAME))
       unsupported_feature(c, id, "the constant name Class__reopen is reserved by the compiler");
   }
@@ -1610,7 +1610,8 @@ static int record_write_class(Compiler *c, int id, int hdr) {
   int ci = elab_header_class(c, id, NULL, NULL);
   if (ci >= 0) return ci;   /* a subtree two lists share, walked again */
   if (nt_kind(c->nt, id) == NK_ConstantWriteNode) {
-    const char *cname = nt_str(c->nt, id, "name");
+    const char *cname = nt_str(c->nt, id, "qc_name");
+    if (!cname) cname = nt_str(c->nt, id, "name");
     return cname && is_c_ident(cname) ? elab_rec_open(c, id, -1, cname, hdr) : -1;
   }
   char an[48];
@@ -1712,7 +1713,8 @@ static void walk_scope_in(Compiler *c, int id, WalkCtx w) {
   }
   if (ty_k == NK_ClassNode || ty_k == NK_ModuleNode) {
     int cp = nt_ref(c->nt, id, "constant_path");
-    const char *cname = cp >= 0 ? nt_str(c->nt, cp, "name") : NULL;
+    const char *cname = cp >= 0 ? nt_str(c->nt, cp, "qc_name") : NULL;
+    if (!cname && cp >= 0) cname = nt_key_name(c->nt, cp);
     int alias = elab_header_entity(c, id, &w.pos);
     int cls_toplevel = class_id < 0 && cp >= 0 &&
                        nt_kind(c->nt, cp) == NK_ConstantReadNode;
@@ -1769,7 +1771,7 @@ static void walk_scope_in(Compiler *c, int id, WalkCtx w) {
       if (real) {
         char buf[256]; snprintf(buf, sizeof buf, "%s", real);  /* copy: set frees cname */
         nt_set_str((NodeTable *)c->nt, cp, "name", buf);
-        cname = nt_str(c->nt, cp, "name");
+        cname = nt_key_name(c->nt, cp);
         cls_leaf = cname;  /* the old leaf pointed into the freed name */
       }
     }
@@ -2496,7 +2498,8 @@ int mixin_stmt_args(const NodeTable *nt, int st, int *prepend, const int **av) {
    C spelling, which the qualify passes may have renamed); NULL for none. */
 const char *class_def_name(const NodeTable *nt, int def_node) {
   int cp = class_def_path(nt, def_node);
-  return cp >= 0 ? nt_str(nt, cp, "name") : NULL;
+  const char *q = cp >= 0 ? nt_str(nt, cp, "qc_name") : NULL;
+  return q ? q : cp >= 0 ? nt_key_name(nt, cp) : NULL;
 }
 
 /* ...when the definition writes it as a plain constant (`class X`,
@@ -2505,7 +2508,8 @@ const char *class_def_name(const NodeTable *nt, int def_node) {
 const char *class_def_bare_name(const NodeTable *nt, int def_node) {
   int cp = class_def_path(nt, def_node);
   NodeKind k = cp >= 0 ? nt_kind(nt, cp) : NK_NONE;
-  return k == NK_ConstantReadNode || k == NK_ConstantWriteNode ? nt_str(nt, cp, "name") : NULL;
+  const char *q = cp >= 0 ? nt_str(nt, cp, "qc_name") : NULL;
+  return k == NK_ConstantReadNode || k == NK_ConstantWriteNode ? (q ? q : nt_key_name(nt, cp)) : NULL;
 }
 
 /* The body a definition's statements go in, set by a pass that rebuilds
@@ -5719,8 +5723,8 @@ void register_ffi_decls(Compiler *c) {
         for (int dj = 0; dj < nck; dj++) NT_FOREACH_KIND(nt, ck[dj], ucn) {
           int ucp = class_def_is_class(nt, ucn) ? nt_ref(nt, ucn, "constant_path") : -1;
           NodeKind ucpk = nt_kind(nt, ucp);
-          const char *ucpn = ucp >= 0 ? nt_str(nt, ucp, "name") : NULL;
-          if (!ucpn || !sp_streq(ucpn, leaf)) continue;
+          const char *ucpn = ucp >= 0 ? nt_key_name(nt, ucp) : NULL;
+          if (!ucpn || !sp_streq(ucpn, leaf) || nt_str(nt, ucp, "qc_name")) continue;
           /* a class the collision qualifier already registered under its
              own path (`Cache::Store` beside "OpenSSL::X509::Store") is a
              distinct class, not a merge: its registered name is no longer
@@ -7015,7 +7019,9 @@ static void check_class_redeclarations(Compiler *c) {
     NodeKind k = nt_kind(nt, id);
     if (k != NK_ClassNode && k != NK_ModuleNode) continue;
     int cp = nt_ref(nt, id, "constant_path");
-    const char *nm = cp >= 0 ? nt_str(nt, cp, "name") : nt_str(nt, id, "name");
+    /* (the name qualify keys a colliding header by, else the one written) */
+    const char *nm = cp >= 0 && nt_str(nt, cp, "qc_name") ? nt_str(nt, cp, "qc_name")
+                   : cp >= 0 ? nt_key_name(nt, cp) : nt_str(nt, id, "name");
     /* registered before any skip below: a qualified or unnamed-skip
        declaration still counts as an earlier one, as the scan it replaces
        counted every declaration ahead of this node */
@@ -7051,7 +7057,7 @@ static void check_class_redeclarations(Compiler *c) {
       int cw = cws[ci];
       if (cw >= n) break;
       if (nt_kind(nt, cw) != NK_ConstantWriteNode) continue;
-      const char *wn = nt_str(nt, cw, "name");
+      const char *wn = nt_key_name(nt, cw);
       if (!wn || !sp_streq(wn, nm)) continue;
       if (((c->node_cbody && cw < c->node_cap) ? c->node_cbody[cw] : -1) != dcid) continue;
       int v = nt_ref(nt, cw, "value");
@@ -13806,7 +13812,7 @@ static void bc_walk(Bc *b, int id, const char *self, int mode) {
     NodeKind cpk = nt_kind(nt, cp);
     char *full = NULL;
     if (cpk == NK_ConstantReadNode) {
-      const char *nm = nt_str(nt, cp, "name");
+      const char *nm = nt_key_name(nt, cp);
       full = nm ? (top[0] == '?' ? strdup("?") : (sp_streq(nm, "Object") && !*top ? strdup("") : bc_join(top, nm))) : NULL;
     }
     else if (cpk == NK_ConstantPathNode) {

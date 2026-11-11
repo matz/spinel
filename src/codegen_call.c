@@ -2637,7 +2637,7 @@ static int add_listed_const(const char **out, const char **shown, int n, const c
    the leaf of the Ruby path it keeps beside the key. */
 static void class_stmt_const_names(const NodeTable *nt, int stmt, const char **nm, const char **sh) {
   int ncp = nt_ref(nt, stmt, "constant_path");
-  const char *full = ncp >= 0 ? nt_str(nt, ncp, "name") : NULL;
+  const char *full = ncp >= 0 ? nt_key_name(nt, ncp) : NULL;
   *nm = *sh = NULL;
   if (!full) return;
   const char *last = strrchr(full, ':');
@@ -21109,7 +21109,7 @@ static int singleton_def_of(Compiler *c, const char *cn, const char *name) {
         else if (k == NK_ClassNode || k == NK_ModuleNode) {
           int cp = nt_ref(nt, id, "constant_path");
           NodeKind ck = nt_kind(nt, cp);
-          const char *kn = ck == NK_ConstantReadNode ? nt_str(nt, cp, "name") : NULL;
+          const char *kn = ck == NK_ConstantReadNode ? nt_key_name(nt, cp) : NULL;
           if (kn) sdefs_scan(nt, nt_ref(nt, id, "body"), kn, 0);
         }
         else if (k == NK_SingletonClassNode) sdefs_scan(nt, id, NULL, 0);

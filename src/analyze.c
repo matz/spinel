@@ -1824,7 +1824,7 @@ static int marshal_read_as_value(Compiler *c) {
   int *par = an_parent_map(nt), ans = 0;
   for (int id = 0; id < nt->count && !ans; id++) {
     if (nt_kind(nt, id) != NK_ConstantReadNode) continue;
-    const char *nm = nt_str(nt, id, "name");
+    const char *nm = nt_key_name(nt, id);
     if (!is_marshal_const(nm)) continue;
     int p = par ? par[id] : -1;
     const char *meth = p >= 0 && nt_kind(nt, p) == NK_CallNode && nt_ref(nt, p, "receiver") == id ? nt_str(nt, p, "name") : NULL;
@@ -2689,7 +2689,7 @@ int an_program_makes_dir(Compiler *c) {
   for (int id = 0; id < nt->count && !memo; id++) {
     NodeKind k = nt_kind(nt, id);
     if (k != NK_ConstantReadNode && k != NK_ConstantPathNode) continue;
-    const char *nm = nt_str(nt, id, "name");
+    const char *nm = nt_key_name(nt, id);
     if (nm && sp_streq(nm, "Dir")) memo = 1;
   }
   memo_nt = nt; memo_n = nt->count;
@@ -3421,7 +3421,7 @@ static void desugar_env_values(Compiler *c) {
   int n0 = comp_const(c, "ENV") ? 0 : nt->count;
   for (int id = 0; id < n0; id++) {
     if (nt_kind(nt, id) != NK_ConstantReadNode || ok[id]) continue;
-    const char *nm = nt_str(nt, id, "name");
+    const char *nm = nt_key_name(nt, id);
     if (!nm || !sp_streq(nm, "ENV")) continue;
     nt_node_set_type(nt, id, "CallNode");
     /* (ENV itself as a value, a store into which copies as ENV's does:
@@ -3854,7 +3854,7 @@ static int dyn_def_reaches_class_bodies(Compiler *c, int h) {
     if (pk == NK_SingletonClassNode || pk == NK_ModuleNode || pk == NK_BlockNode) return 1;
     if (pk == NK_ClassNode) {
       int cp = nt_ref(nt, p, "constant_path");
-      const char *cn = cp >= 0 ? nt_str(nt, cp, "name") : NULL;
+      const char *cn = cp >= 0 ? nt_key_name(nt, cp) : NULL;
       return !cn || sp_streq(cn, "Module") || sp_streq(cn, "Class");
     }
     if (pk == NK_DefNode) return 1;
@@ -5466,7 +5466,7 @@ static int qc_push_header(const NodeTable *nt, int node, char (**pathp)[64], int
                           unsigned char *lex, QCRebase **own) {
   *own = NULL;
   int cp = nt_ref(nt, node, "constant_path");
-  const char *mn = cp >= 0 ? nt_str(nt, cp, "name") : NULL;
+  const char *mn = cp >= 0 ? nt_key_name(nt, cp) : NULL;
   if (!mn) return depth;
   char segs[QC_MAXDEPTH][64];
   int ns = qc_header_segs(nt, cp, segs);
@@ -5795,7 +5795,7 @@ static void qc_resolve_walk(const NodeTable *nt, int node, char (*path)[64], int
   if (class_def_opens_cref(nt, node) && depth < QC_MAXDEPTH) {
     int cp = nt_ref(nt, node, "constant_path");
     qc_anchor_object_header(nt, cp);
-    const char *mn = cp >= 0 ? nt_str(nt, cp, "name") : NULL;
+    const char *mn = cp >= 0 ? nt_key_name(nt, cp) : NULL;
     char segs[QC_MAXDEPTH][64];
     int aliased = 0, ns = mn ? qc_header_segs(nt, cp, segs) : 0;
     int builtin_hdr = mn && ns == 0 && nt_kind(nt, cp) == NK_ConstantPathNode && nt_ref(nt, cp, "parent") >= 0;
@@ -6697,7 +6697,7 @@ void qc_collect_class_writes(Compiler *c, int node, char (*path)[64], int depth,
   QCRebase *own = NULL;
   if (class_def_opens_cref(nt, node) && depth < QC_MAXDEPTH) {
     int cp = nt_ref(nt, node, "constant_path");
-    const char *mn = cp >= 0 ? nt_str(nt, cp, "name") : NULL;
+    const char *mn = cp >= 0 ? nt_key_name(nt, cp) : NULL;
     if (mn) {
       /* `class A::B`: B is defined in A, so it is recorded as a write under
          A as well as under the module it is written in -- `class X::Foo`
@@ -6909,7 +6909,7 @@ static int qc_unless_defined_runs(const NodeTable *nt, const int *par, int w, in
   for (int h = 0; h < 2; h++)
     NT_FOREACH_KIND(nt, HK[h], o) {
       int cp = nt_ref(nt, o, "constant_path");
-      const char *on = cp >= 0 ? nt_str(nt, cp, "name") : NULL;
+      const char *on = cp >= 0 ? nt_key_name(nt, cp) : NULL;
       if (!on || !sp_streq(on, wn)) continue;
       int ob = qc_enclosing_body(nt, par, o);
       if (ob == body) { if (!qc_written_before(nt, w, o)) return 0; continue; }
@@ -6963,8 +6963,8 @@ static void qc_refuse_conditional_builder(Compiler *c) {
     for (int h = 0; h < 2; h++)
       NT_FOREACH_KIND(nt, HK[h], hd) {
         int cp = nt_ref(nt, hd, "constant_path");
-        if (cp < 0 || nt_kind(nt, cp) != NK_ConstantReadNode || !nt_str(nt, cp, "name") ||
-            !sp_streq(nt_str(nt, cp, "name"), wn) || qc_enclosing_body(nt, par, hd) != body)
+        if (cp < 0 || nt_kind(nt, cp) != NK_ConstantReadNode || !nt_key_name(nt, cp) ||
+            !sp_streq(nt_key_name(nt, cp), wn) || qc_enclosing_body(nt, par, hd) != body)
           continue;
         /* A header that runs first makes its own class, and the write then
            puts the built class in its place: the header's methods are not
@@ -7150,7 +7150,7 @@ void qualify_colliding_classes(Compiler *c) {
     for (int i = 0; i < wn; i++) {
       if (ws[i].depth == 0) continue;
       char qn[512]; qc_qualified_name(qn, sizeof qn, &ws[i]);
-      nt_set_str((NodeTable *)nt, ws[i].node, "name", qn);
+      nt_node_set_str((NodeTable *)nt, ws[i].node, "qc_name", qn);
       /* and the Ruby name the path resolved to, for registration: the
          header's own parent segments (an alias, a module whose name is
          qualified too) need not name the class that encloses it */
@@ -15449,7 +15449,7 @@ int desugar_socket_open_gate(Compiler *c, LowerCtx *lc) {
   for (int id = 0; id < lc->n0; id++) {
     if (nt_kind(nt, id) != NK_ClassNode) continue;
     int cp = nt_ref(nt, id, "constant_path");
-    if (cp >= 0 && is_socket_constructor_class(nt_str(nt, cp, "name"))) return 0;
+    if (cp >= 0 && is_socket_constructor_class(nt_key_name(nt, cp))) return 0;
   }
   return 1;
 }
@@ -22326,7 +22326,7 @@ static void mark_empty_hash_const_writes(Compiler *c) {
   const NodeTable *nt = c->nt;
   for (int id = 0; id < nt->count; id++) {
     if (nt_kind(nt, id) != NK_ConstantWriteNode) continue;
-    const char *cn = nt_str(nt, id, "name");
+    const char *cn = nt_key_name(nt, id);
     int v = nt_ref(nt, id, "value");
     if (!cn || v < 0 || v >= c->node_cap) continue;
     /* `EMPTY = {}.freeze` binds the same literal as `EMPTY = {}` (#4510) */
@@ -37495,8 +37495,8 @@ static int carr_lit(const NodeTable *nt, int v, int *blk) {
 }
 static int carr_is_read(const NodeTable *nt, int n, const char *name) {
   NodeKind k = n >= 0 ? nt_kind(nt, n) : NK_NONE;
-  return (k == NK_ConstantReadNode || k == NK_ConstantPathNode) && nt_str(nt, n, "name") &&
-         sp_streq(nt_str(nt, n, "name"), name);
+  return (k == NK_ConstantReadNode || k == NK_ConstantPathNode) && nt_key_name(nt, n) &&
+         sp_streq(nt_key_name(nt, n), name);
 }
 /* the reads a multiple assignment's value takes apart: each value position of
    the value, by the iterator's `if` and `unless` shapes, that reads the
@@ -37531,7 +37531,7 @@ static const CArr *const_array(Compiler *c, const char *name) {
   for (int id = 0; id < nt->count && !bad; id++) {
     NodeKind k = nt_kind(nt, id);
     const char *wn = NULL; int v = -1;
-    if (k == NK_ConstantWriteNode) { wn = nt_str(nt, id, "name"); v = nt_ref(nt, id, "value"); }
+    if (k == NK_ConstantWriteNode) { wn = nt_key_name(nt, id); v = nt_ref(nt, id, "value"); }
     else if (k == NK_ConstantPathWriteNode) { int tg = nt_ref(nt, id, "target"); wn = tg >= 0 ? nt_str(nt, tg, "name") : NULL; v = nt_ref(nt, id, "value"); }
     else if (k == NK_ConstantOrWriteNode || k == NK_ConstantAndWriteNode || k == NK_ConstantOperatorWriteNode ||
              k == NK_ConstantTargetNode || k == NK_ConstantPathTargetNode) wn = nt_str(nt, id, "name");
@@ -39201,8 +39201,8 @@ static void nn_structure(Compiler *c) {
   nn_no_ivar_facts = nn_no_ivar_slots;
   static const char *const async[] = { "Thread", "Queue", "SizedQueue", "Mutex", "Monitor", "ConditionVariable",
                                        "Signal", "ObjectSpace", NULL };
-  NT_FOREACH_KIND(nt, NK_ConstantReadNode, k) if (nn_name_in(nt_str(nt, k, "name"), async)) nn_no_ivar_facts = 1;
-  NT_FOREACH_KIND(nt, NK_ConstantPathNode, k) if (nn_name_in(nt_str(nt, k, "name"), async)) nn_no_ivar_facts = 1;
+  NT_FOREACH_KIND(nt, NK_ConstantReadNode, k) if (nn_name_in(nt_key_name(nt, k), async)) nn_no_ivar_facts = 1;
+  NT_FOREACH_KIND(nt, NK_ConstantPathNode, k) if (nn_name_in(nt_key_name(nt, k), async)) nn_no_ivar_facts = 1;
   NT_FOREACH_KIND(nt, NK_CallNode, a) {
     const char *an = nt_str(nt, a, "name");
     if (an && (sp_streq(an, "trap") || sp_streq(an, "define_finalizer"))) nn_no_ivar_facts = 1;

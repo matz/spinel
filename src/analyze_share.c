@@ -820,7 +820,7 @@ static ShareFacts *sh_memo_build(Compiler *c) {
   if (!F->blk_dyn || !F->blk_unk || !F->fresh_blk) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   memset(F->fresh_blk, -1, ns);
   NT_FOREACH_KIND(nt, NK_ConstantReadNode, cr)
-    if (!F->ostruct && nt_str(nt, cr, "name") && sp_streq(nt_str(nt, cr, "name"), "OpenStruct")) F->ostruct = 1;
+    if (!F->ostruct && nt_key_name(nt, cr) && sp_streq(nt_key_name(nt, cr), "OpenStruct")) F->ostruct = 1;
   sh_mb_build(F, c);
   sh_index_blocks(F, c);
   return F;

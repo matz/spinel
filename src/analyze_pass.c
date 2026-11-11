@@ -2861,7 +2861,7 @@ static void ppl_build(Compiler *c) {
                            NK_InstanceVariableReadNode, NK_GlobalVariableReadNode };
   for (int k = 0; k < 4; k++)
     NT_FOREACH_KIND(nt, rk[k], r) {
-      const char *rn = nt_str(nt, r, "name");
+      const char *rn = nt_key_name(nt, r);
       if (rn) ppl_slot(NULL, rn)->reads++;
     }
   NT_FOREACH_KIND(nt, NK_CallNode, id) {
@@ -2901,7 +2901,7 @@ static void ppl_build(Compiler *c) {
   for (int k = 0; k < 3; k++)
     NT_FOREACH_KIND(nt, wk[k], w) {
       int v = nt_ref(nt, w, "value");
-      const char *wn = nt_str(nt, w, "name");
+      const char *wn = nt_key_name(nt, w);
       if (v < 0 || v >= n || !wn || !is_proc_create(c, v) || proc_literal_escapes_as_arg(c, v)) continue;
       PplEnt *full = ppl_slot_at(NULL, wn, 0), *bare = wn[0] == '@' ? ppl_slot_at(NULL, wn + 1, 0) : NULL;
       if (!(full && full->reads) && !(bare && bare->reads)) ppl_sight[v] |= 2;
@@ -20746,7 +20746,7 @@ static void cr_collect_versions(Compiler *c, const NodeTable *nt, int id, char *
   const char *names[2];
   CrMarks m = { out, n, cap };
   /* a builtin `new`: the initialize methods the plan says it enters */
-  if (ct_version_marked(c, "initialize") && is_new_name(nt_str(nt, id, "name"))) {
+  if (ct_version_marked(c, "initialize") && is_new_name(nt_key_name(nt, id))) {
     int init[CPT_MAX], ni = cplan_entries(c, id, init, CPT_MAX);
     for (int i = 0; i < ni && is_initialize_name(c->scopes[init[i]].name); i++) {
       char mark[24];

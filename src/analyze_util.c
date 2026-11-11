@@ -107,7 +107,7 @@ static void body_const_writes(const NodeTable *nt, int n, const char *pn, ANameH
   /* (a multiple assignment's target too: `P, Q = ...`) */
   if (k == NK_ConstantWriteNode || k == NK_ConstantOrWriteNode || k == NK_ConstantAndWriteNode ||
       k == NK_ConstantOperatorWriteNode || k == NK_ConstantTargetNode)
-    const_pair_add(out, pn, nt_str(nt, n, "name"));
+    const_pair_add(out, pn, nt_key_name(nt, n));
   int nr = nt_num_refs(nt, n);
   for (int i = 0; i < nr; i++) body_const_writes(nt, nt_ref_at(nt, n, i), pn, out);
   int na = nt_num_arrs(nt, n);
@@ -121,7 +121,7 @@ static void body_const_writes(const NodeTable *nt, int n, const char *pn, ANameH
 static void path_const_write(const NodeTable *nt, int node, ANameHash *out) {
   if (node < 0) return;
   int par = nt_ref(nt, node, "parent");
-  const_pair_add(out, par >= 0 ? nt_str(nt, par, "name") : NULL, nt_str(nt, node, "name"));
+  const_pair_add(out, par >= 0 ? nt_key_name(nt, par) : NULL, nt_key_name(nt, node));
 }
 static const ANameHash *const_pairs_of(Compiler *c) {
   const NodeTable *nt = c->nt;
@@ -393,7 +393,7 @@ int class_lacks_own_const(Compiler *c, int k, const char *nm) {
                                      NK_ConstantOperatorWriteNode, NK_ConstantTargetNode };
   for (int i = 0; i < 5; i++)
     NT_FOREACH_KIND(nt, writes[i], w) {
-      const char *wn = nt_str(nt, w, "name");
+      const char *wn = nt_key_name(nt, w);
       size_t wl = wn ? strlen(wn) : 0;
       if (wn && sp_streq(wn, nm)) return 0;
       if (wl > nl + 2 && sp_streq(wn + wl - nl, nm) && !strncmp(wn + wl - nl - 2, "__", 2)) return 0;
@@ -6470,7 +6470,7 @@ static void si_facts(Compiler *c) {
     if (c->classes[k].name && c->classes[k].def_node >= 0 && is_builtin_class_name(c->classes[k].name)) f->reopen[f->nreopen++] = k;
   for (int id = 0; id < nt->count; id++) {
     NodeKind k = nt_kind(nt, id);
-    const char *nm = (k == NK_ConstantReadNode || k == NK_ConstantPathNode) ? nt_str(nt, id, "name") : NULL;
+    const char *nm = (k == NK_ConstantReadNode || k == NK_ConstantPathNode) ? nt_key_name(nt, id) : NULL;
     if (nm && (sp_streq(nm, "Queue") || sp_streq(nm, "SizedQueue") || sp_streq(nm, "ClosedQueueError"))) f->queues = 1;
     if (k == NK_CallNode && nt_str(nt, id, "name") && sp_streq(nt_str(nt, id, "name"), "lazy")) f->lazy = 1;
   }

@@ -1258,7 +1258,7 @@ static void cf_mark_dead_protocols(CF *f) {
     static const NodeKind ck[] = { NK_ConstantReadNode, NK_ConstantPathNode };
     for (int q = 0; q < 2 && !used; q++)
       NT_FOREACH_KIND(nt, ck[q], id) {
-        const char *cn = nt_str(nt, id, "name");
+        const char *cn = nt_key_name(nt, id);
         if (!cn || !(sp_streq(cn, gates[g]) || (sp_streq(gates[g], "Psych") && sp_streq(cn, "YAML")))) continue;
         int mi = cf_owner_def(f, id, 0, NULL);
         const char *mn = mi >= 0 ? c->scopes[mi].name : NULL;

@@ -548,7 +548,7 @@ int an_class_needs_presence(Compiler *c, int ci) {
    each, and marks those that ask `own_presence`), not a reference to the
    class the passes made of self later. */
 static int const_class_presence(Compiler *c, int id, int program) {
-  const char *nm = nt_str(c->nt, id, "name");
+  const char *nm = nt_key_name(c->nt, id);
   NodeKind ik = nt_kind(c->nt, id);
   int ci = !nm ? -1 : ik == NK_ConstantReadNode || ik == NK_ConstantPathNode ? const_node_class_index(c, id) : comp_class_index(c, nm);
   if (!an_class_needs_presence(c, ci)) return 0;

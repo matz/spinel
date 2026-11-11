@@ -1204,7 +1204,7 @@ typedef struct ElabRec { Compiler *c; LoadRecord *r; int *fc; unsigned char *fs,
 static const char *lr_written_name(const NodeTable *nt, int cp) {
   const char *rn = nt_str(nt, cp, "qc_ruby_name"), *q = rn;
   for (const char *p = rn ? strstr(rn, "::") : NULL; p; p = strstr(p + 2, "::")) q = p + 2;
-  return rn ? q : nt_str(nt, cp, "qc_orig_name") ? nt_str(nt, cp, "qc_orig_name") : nt_str(nt, cp, "name");
+  return rn ? q : nt_str(nt, cp, "qc_orig_name") ? nt_str(nt, cp, "qc_orig_name") : nt_key_name(nt, cp);
 }
 
 static int lr_const_at(Compiler *c, int node, const char *name, LoadPoint p, const LrDef **out, int key);
@@ -8847,7 +8847,7 @@ void elab_dump(Compiler *c, FILE *out) {
   for (int e = 0; e < r->nst; e++) {
     const LrStmt *s = &r->st[e];
     int cp = nt_ref(nt, s->node, "constant_path");
-    const char *nm = cp >= 0 ? nt_str(nt, cp, "name") : nt_str(nt, s->node, "name");
+    const char *nm = cp >= 0 ? nt_key_name(nt, cp) : nt_key_name(nt, s->node);
     fprintf(out, "%*sr%d #%d%s f%d %s%s%s line %d\n", 2 * s->depth, "", s->region, e, s->may ? " may" : "",
             s->file, nt_type(nt, s->node), nm ? " " : "", nm ? nm : "", (int)nt_int(nt, s->node, "node_line", 0));
   }

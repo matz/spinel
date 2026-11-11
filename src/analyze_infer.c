@@ -1706,7 +1706,7 @@ static NameNodes g_cwr;
 static int *const_writes_of(const NodeTable *nt, const char *cname, int *count) {
   if (nnodes_stale(&g_cwr, nt)) {
     NT_FOREACH_KIND(nt, NK_ConstantWriteNode, id) {
-      const char *nm = nt_str(nt, id, "name");
+      const char *nm = nt_key_name(nt, id);
       if (nm) nnodes_add(&g_cwr, nm, id);
     }
     NT_FOREACH_KIND(nt, NK_CallNode, id) {
@@ -2653,7 +2653,7 @@ int an_program_names_name_error(Compiler *c) {
   memo_nt = c->nt; memo = 0;
   for (int id = 0; id < c->nt->count && !memo; id++) {
     if (nt_kind(c->nt, id) != NK_ConstantReadNode && nt_kind(c->nt, id) != NK_ConstantPathNode) continue;
-    const char *n = nt_str(c->nt, id, "name");
+    const char *n = nt_key_name(c->nt, id);
     if (n && (sp_streq(n, "NameError") || sp_streq(n, "NoMethodError"))) memo = 1;
   }
   return memo;

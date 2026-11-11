@@ -3622,6 +3622,7 @@ static int emit_constant_value(Compiler *c, int id, Buf *b, Buf *checks, const N
         return 1;
       }
     }
+    int cptr = view_const_slot(c, id);
     /* `klass::CODE` where the receiver is a VALUE rather than a written path:
        which constant it names is a run-time question, and answering it with
        the leaf-named one made two different receivers answer the same thing --
@@ -3635,7 +3636,7 @@ static int emit_constant_value(Compiler *c, int id, Buf *b, Buf *checks, const N
        ran there, and the receiver runs once) */
     /* (nor is a leaf bound to one member's slot, const_leaf_bound: that
        constant is read below) */
-    if (!nt_int(nt, id, "const_ptr", 0) && const_path_on_class_value(c, id, prt)) {
+    if (!cptr && const_path_on_class_value(c, id, prt)) {
       /* A constant is stored under its OWNER's qualified spelling
          (Probe__Block__CODE) while the class's c_name is its leaf (Block), so
          the owner is found by asking each class whether a constant keyed
@@ -3749,7 +3750,6 @@ static int emit_constant_value(Compiler *c, int id, Buf *b, Buf *checks, const N
     LocalVar *cpcv = nm ? comp_const(c, nm) : NULL;
     if (cpcv && !const_path_reaches_leaf_const(c, id)) cpcv = NULL;
     /* the slot of a flagged constant already read through its receiver (emit_const_recv_wrap) */
-    int cptr = (int)nt_int(nt, id, "const_ptr", 0);
     if (cptr && (cpcv || const_path_on_class_value(c, id, par_idc >= 0 ? repr_of(c, par_idc).as_ty : TY_UNKNOWN))) {
       char sref[40]; snprintf(sref, sizeof sref, "(*_p%d)", cptr);
       if (slot) buf_printf(b, "_p%d", cptr);

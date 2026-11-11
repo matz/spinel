@@ -3597,7 +3597,7 @@ int str_mut_var_recv(Compiler *c, int recv) {
   case NK_ConstantPathNode: {
     /* a call on the slot of a constant read through a receiver that runs: the
        slot's pointer is held (emit_const_recv_wrap), and the node reads it */
-    if (nt_int(nt, recv, "const_ptr", 0)) return 1;
+    if (view_const_slot(c, recv)) return 1;
     /* the path's read resolves through several tables; ask it for its text */
     if (comp_ntype(c, recv) != TY_STRING) return 0;
     int save = g_tmp;
@@ -4629,7 +4629,7 @@ static int const_class_slot_held(Compiler *c, int id, int r);
 static int const_recv_on_class(Compiler *c, int id) {
   const NodeTable *nt = c->nt;
   int r = nt_kind(nt, id) == NK_CallNode ? nt_ref(nt, id, "receiver") : -1;
-  if (r < 0 || nt_kind(nt, r) != NK_ConstantPathNode || nt_int(nt, r, "const_ptr", 0)) return 0;
+  if (r < 0 || nt_kind(nt, r) != NK_ConstantPathNode || view_const_slot(c, r)) return 0;
   const char *nm = nt_str(nt, r, "name");
   return !const_has_flag(nm ? comp_const(c, nm) : NULL) && const_class_slot_held(c, id, r);
 }
@@ -4643,20 +4643,20 @@ static int const_class_slot_held(Compiler *c, int id, int r) {
 /* A call on a flagged constant read through a receiver that runs (`pick::BUF
    << "y"`): the receiver and the flag test run once, into a pointer to the
    slot, and the call reads and writes through it (the lowering of a String
-   mutator names its receiver twice). Declares the pointer in b and marks the
-   receiver node with its temp; the caller emits the call and unmarks. -1
-   when the call is no such one. */
-static int const_recv_hold(Compiler *c, int id, Buf *b, int *view, int stmt, int local_pre) {
+   mutator names its receiver twice). Declares the pointer in b and opens a
+   view of the receiver's slot; the caller emits the call and pops the view.
+   A folded Class read needs only its effects, with no slot held. Returns
+   the view token, or -1 when neither form applies. */
+static int const_recv_hold(Compiler *c, int id, Buf *b, int *holds_slot, int stmt, int local_pre) {
   const NodeTable *nt = c->nt;
   int r = nt_kind(nt, id) == NK_CallNode ? nt_ref(nt, id, "receiver") : -1;
-  *view = -1;
+  if (holds_slot) *holds_slot = 0;
   /* Class receivers can be folded away by constructors and reflection. */
   if (r >= 0 && an_const_read_keeps_class(c, r) && const_value_recv(c, r) < 0 &&
       !view_const_read_done(c, r) && (!an_const_read_is_value(c, r) || cplan_const_user(c, id, r, 0)) && emit_const_read_stmt(c, r, b, 0)) {
-    *view = view_push_const_read(c, r);
-    return r;
+    return view_push_const_read(c, r);
   }
-  if (r < 0 || nt_kind(nt, r) != NK_ConstantPathNode || nt_int(nt, r, "const_ptr", 0)) return -1;
+  if (r < 0 || nt_kind(nt, r) != NK_ConstantPathNode || view_const_slot(c, r)) return -1;
   const char *nm = nt_str(nt, r, "name");
   LocalVar *lv = nm ? comp_const(c, nm) : NULL;
   /* (a call with a block holds only as a statement, where the block's loop
@@ -4677,19 +4677,20 @@ static int const_recv_hold(Compiler *c, int id, Buf *b, int *view, int stmt, int
   else emit_ctype(c, lv->type, b);
   buf_printf(b, " *%s_p%d = %s; ", on_class ? "*" : "", t, slot.p ? slot.p : "NULL");
   free(slot.p); free(own.p);
-  nt_node_set_int((NodeTable *)nt, r, "const_ptr", t);
-  return r;
+  if (holds_slot) *holds_slot = 1;
+  return view_push_const_slot(c, r, t);
 }
 /* A class receiver can disappear before the ordinary call emitter is
    reached (a boxed constructor or a folded expression). */
 int emit_const_class_call_wrap(Compiler *c, int id, Buf *b, void (*emit)(Compiler *, int, Buf *)) {
   if (nt_kind(c->nt, id) != NK_CallNode) return 0;
-  int r = nt_ref(c->nt, id, "receiver"), view;
+  int r = nt_ref(c->nt, id, "receiver");
   if (r < 0 || !an_const_read_keeps_class(c, r) || const_value_recv(c, r) >= 0 || view_const_read_done(c, r)) return 0;
   for (int i = g_n_argov - 1; i >= 0; i--)
     if (g_argov_node[i] == id || g_argov_node[i] == r) return 0;
   Buf pre = {0};
-  if (const_recv_hold(c, id, &pre, &view, 1, 0) < 0) { free(pre.p); return 0; }
+  int view = const_recv_hold(c, id, &pre, NULL, 1, 0);
+  if (view < 0) { free(pre.p); return 0; }
   buf_puts(b, "({ "); buf_puts(b, pre.p); free(pre.p);
   Buf own = {0}, value = {0}; Buf *saved_pre = g_pre;
   g_pre = &own; emit(c, id, &value); g_pre = saved_pre;
@@ -4710,24 +4711,24 @@ int emit_const_class_call_wrap(Compiler *c, int id, Buf *b, void (*emit)(Compile
    receiver is evaluated, after the operands Ruby evaluates first, and what
    the lowering hoists names the pointer from inside its scope. inline_only:
    the caller writes into the statement's prelude itself (a `&.` head) and
-   holds only that form. Fills *h; the receiver node, or -1 when there is
+   holds only that form. Fills *h; returns the view token, or -1 when there is
    nothing to hold; const_recv_hold_close ends it. */
 int const_recv_hold_open(Compiler *c, int id, Buf *b, ConstHold *h, int inline_only) {
   memset(h, 0, sizeof *h);
-  h->view = -1;
   int inl = const_recv_on_class(c, id) && nt_ref(c->nt, id, "block") < 0;
-  if (inline_only && !inl) { h->r = -1; return -1; }
+  if (inline_only && !inl) return -1;
   Buf pre; memset(&pre, 0, sizeof pre);
-  h->r = const_recv_hold(c, id, &pre, &h->view, 0, inl);
-  if (h->r < 0) { free(pre.p); return -1; }
-  h->inl = inl && h->view < 0;
+  int holds_slot;
+  h->view = const_recv_hold(c, id, &pre, &holds_slot, 0, inl);
+  if (h->view < 0) { free(pre.p); return -1; }
+  h->inl = inl && holds_slot;
   if (h->inl) {
     buf_puts(b, "({ "); buf_puts(b, pre.p ? pre.p : "");
     h->at = b->len;
     h->sv_pre = g_pre;
     g_pre = &h->own;
   }
-  else if (g_pre && h->view < 0) {
+  else if (g_pre && holds_slot) {
     h->in_pre = 1;
     emit_indent(g_pre, g_indent); buf_puts(g_pre, pre.p ? pre.p : ""); buf_puts(g_pre, "\n");
   }
@@ -4735,7 +4736,7 @@ int const_recv_hold_open(Compiler *c, int id, Buf *b, ConstHold *h, int inline_o
     buf_puts(b, "({ "); buf_puts(b, pre.p ? pre.p : "");
   }
   free(pre.p);
-  return h->r;
+  return h->view;
 }
 void const_recv_hold_close(Compiler *c, ConstHold *h, Buf *b) {
   if (h->inl) {
@@ -4745,8 +4746,7 @@ void const_recv_hold_close(Compiler *c, ConstHold *h, Buf *b) {
       free(h->own.p);
     }
   }
-  if (h->view >= 0) view_pop(c, h->view);
-  else nt_node_set_int((NodeTable *)c->nt, h->r, "const_ptr", 0);
+  view_pop(c, h->view);
   if (!h->in_pre) buf_puts(b, "; })");
 }
 int emit_const_recv_wrap(Compiler *c, int id, Buf *b) {
@@ -4762,17 +4762,16 @@ int emit_const_recv_wrap(Compiler *c, int id, Buf *b) {
    A tail keeps its value in the caller's statement expression. */
 int emit_const_recv_stmt_wrap(Compiler *c, int id, Buf *b, int indent, int tail) {
   Buf pre; memset(&pre, 0, sizeof pre);
-  int view;
-  int r = const_recv_hold(c, id, &pre, &view, 1, 0);
-  if (r < 0) { free(pre.p); return 0; }
+  int holds_slot;
+  int view = const_recv_hold(c, id, &pre, &holds_slot, 1, 0);
+  if (view < 0) { free(pre.p); return 0; }
   emit_indent(b, indent);
-  int scoped = !tail && view < 0;
+  int scoped = !tail && holds_slot;
   if (scoped) buf_puts(b, "{ ");
   buf_puts(b, pre.p ? pre.p : ""); buf_puts(b, "\n"); free(pre.p);
   if (tail) emit_stmt_tail(c, id, b, indent);
   else emit_stmt(c, id, b, indent + scoped);
-  if (view >= 0) view_pop(c, view);
-  else nt_node_set_int((NodeTable *)c->nt, r, "const_ptr", 0);
+  view_pop(c, view);
   if (scoped) { emit_indent(b, indent); buf_puts(b, "}\n"); }
   return 1;
 }

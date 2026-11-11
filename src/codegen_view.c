@@ -430,17 +430,28 @@ void arm_body_infer(Compiler *c, int site, int block, TyKind kind, const int *bo
   }
 }
 
-/* A constant receiver whose read effect the enclosing call already ran. */
-int view_const_read_done(Compiler *c, int id) {
+/* A constant receiver whose read effect already ran (saved is zero), or
+   whose slot address the enclosing call held in _p<saved>. */
+static int view_const_read_find(Compiler *c, int id, int slot) {
   for (int i = view_sp - 1; i >= 0; i--)
-    if (view_stack[i].kind == VK_CONST_READ && view_stack[i].c == c && view_stack[i].id == id) return 1;
-  return 0;
+    if (view_stack[i].kind == VK_CONST_READ && view_stack[i].c == c && view_stack[i].id == id &&
+        (view_stack[i].saved != 0) == slot) return view_stack[i].saved;
+  return -1;
 }
 
-int view_push_const_read(Compiler *c, int id) {
-  int tok = view_open_mark(VK_CONST_READ, id, 0, NULL);
+int view_const_read_done(Compiler *c, int id) { return view_const_read_find(c, id, 0) == 0; }
+
+int view_const_slot(Compiler *c, int id) {
+  int temp = view_const_read_find(c, id, 1);
+  return temp < 0 ? 0 : temp;
+}
+
+int view_push_const_slot(Compiler *c, int id, int temp) {
+  int tok = view_open_mark(VK_CONST_READ, id, temp, NULL);
   view_stack[tok].c = c;
   view_nodes++;
   view_epoch_n++;
   return tok;
 }
+
+int view_push_const_read(Compiler *c, int id) { return view_push_const_slot(c, id, 0); }

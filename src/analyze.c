@@ -2807,7 +2807,7 @@ static int a_block_forwarded_to_proc(Compiler *c, int id) {
     if (ty_is_object(rt)) mi = call_target(c, id, cls = ty_object_class(rt), name, 0, NULL);
     /* ...and a method of the root classes every receiver reaches (the plan's) */
     if (mi < 0) {
-      CallPlan rp = *cplan_user_fresh(c, id);
+      CallPlan rp = cplan_user_fresh(c, id);
       if (cplan_root_reopen_call(c, id, &rp)) mi = rp.mi;
     }
   }
@@ -12977,7 +12977,7 @@ static int desugar_hash_new_capacity(Compiler *c) {
     int argsn = nt_ref(nt, id, "arguments"), an = 0;
     const int *av = argsn >= 0 ? nt_arr(nt, argsn, "arguments", &an) : NULL;
     if (nt_argv_kwh(nt, av, an) < 0) continue;
-    if (cplan_const_user(c, id, r, 1)) continue;
+    if (cplan_const_user(c, id, r, 1).mi >= 0) continue;
     int en = 0; const int *el = nt_arr(nt, av[an - 1], "elements", &en);
     if (en != 1 || nt_kind(nt, el[0]) != NK_AssocNode) continue;
     int key = nt_ref(nt, el[0], "key"), val = nt_ref(nt, el[0], "value");
@@ -13024,7 +13024,7 @@ static int pin_arg_position_hash_new(Compiler *c) {
       if (rk != NK_ConstantReadNode && rk != NK_ConstantPathNode) continue;
       const char *cn = nt_key_name(nt, arecv);
       if (cn && sp_streq(cn, "Hash")) {
-        if (cplan_const_user(c, a, arecv, 1)) continue;
+        if (cplan_const_user(c, a, arecv, 1).mi >= 0) continue;
         nt_node_set_str(nt, a, "name", "__hash_new_default");
         changed = 1;
       }
@@ -13047,7 +13047,7 @@ static int pin_arg_position_hash_new(Compiler *c) {
     if (rk != NK_ConstantReadNode && rk != NK_ConstantPathNode) continue;
     const char *cn = nt_str(nt, arecv, "name");
     if (cn && sp_streq(cn, "Hash")) {
-      if (cplan_const_user(c, a, arecv, 1)) continue;
+      if (cplan_const_user(c, a, arecv, 1).mi >= 0) continue;
       nt_node_set_str(nt, a, "name", "__hash_new_default");
       changed = 1;
     }
@@ -13085,7 +13085,7 @@ int desugar_kernel_recv(Compiler *c) {
     const char *rn = nt_key_name(nt, recv);
     if (!rn || !sp_streq(rn, "Kernel")) continue;
     const char *mn = nt_str(nt, id, "name");
-    if (!mn || !is_kernel_module_function(mn) || cplan_const_user(c, id, recv, 1)) continue;
+    if (!mn || !is_kernel_module_function(mn) || cplan_const_user(c, id, recv, 1).mi >= 0) continue;
     nt_node_set_ref(nt, id, "receiver", -1);
     /* still Kernel's: a reopening's pass that gives a bare call self
        (desugar_handle_reopen_self_recv) leaves it bare, and no method
@@ -14646,7 +14646,7 @@ int desugar_enum_method_recv(Compiler *c) {
        the hops below would hand it to the element array's builtin */
     { int r0 = nt_ref(nt, id, "receiver");
       if (nm && r0 >= 0 && infer_type(c, r0) == TY_ENUMERATOR &&
-          cplan_user_fresh(c, id)->mi >= 0) continue; }
+          cplan_user_fresh(c, id).mi >= 0) continue; }
     if (desugar_enum_named_call(c, id, nt, nm, &changed)) continue;
     if (!nm || !is_array_enum_method(nm)) continue;
     /* the name the call was written with, where the pre-pass renamed it
@@ -15623,7 +15623,7 @@ static int desugar_file_stat_new(Compiler *c) {
     int par = nt_ref(nt, recv, "parent");
     const char *pn = par >= 0 ? nt_str(nt, par, "name") : NULL;
     if (!pn || !sp_streq(pn, "File")) continue;
-    if (cplan_const_user(c, id, recv, 1)) continue;
+    if (cplan_const_user(c, id, recv, 1).mi >= 0) continue;
     int args = nt_ref(nt, id, "arguments");
     int an = 0;
     if (args >= 0) nt_arr(nt, args, "arguments", &an);
@@ -22860,7 +22860,7 @@ static int an_fresh_string_value(Compiler *c, int v) {
   int sh = bop_share_named(TY_STRING, nm);
   int fresh = rt == TY_POLY ? sh == BSH_SUBST && an_any_scope_by_name(c, nm) < 0
                             : sh == BSH_SUBST || sh == BSH_PURE || sp_streq(nm, "dup");
-  return fresh && cplan_user_fresh(c, v)->dispatch == CP_NONE;
+  return fresh && cplan_user_fresh(c, v).dispatch == CP_NONE;
 }
 /* Does a write of local `vn` under `node` bind anything but a fresh String? */
 static int an_writes_unfresh(Compiler *c, int node, const char *vn, int depth) {
@@ -23795,7 +23795,7 @@ static int strbuf_map_block_tail(Compiler *c, int val) {
   if (blk < 0 || nt_kind(nt, blk) != NK_BlockNode) return -1;
   /* A user method of the name that answers every receiver the call can
      have (CP_DIRECT) returns what it returns, not its block's values. */
-  if (cplan_user_fresh(c, val)->dispatch == CP_DIRECT) return -1;
+  if (cplan_user_fresh(c, val).dispatch == CP_DIRECT) return -1;
   int body = nt_ref(nt, blk, "body");
   if (body < 0 || nt_kind(nt, body) != NK_StatementsNode) return -1;
   int bn = 0; const int *bb = nt_arr(nt, body, "body", &bn);
@@ -25202,8 +25202,8 @@ static int hash_new_no_string_at(Compiler *c, int v, const char *key, int depth)
   int r = nt_ref(nt, v, "receiver");
   if (r >= 0 && nt_kind(nt, r) == NK_ConstantReadNode && sp_streq(nt_str(nt, r, "name"), "Hash"))
     return sp_streq(nt_str(nt, v, "name"), "new") && nt_ref(nt, v, "arguments") < 0 && nt_ref(nt, v, "block") < 0;
-  const CallPlan *p = cplan_user_fresh(c, v);
-  int mi = p->dispatch == CP_DIRECT ? p->mi : -1;
+  const CallPlan p = cplan_user_fresh(c, v);
+  int mi = p.dispatch == CP_DIRECT ? p.mi : -1;
   if (mi < 0 || mi >= c->nscopes) return 0;
   Scope *m = &c->scopes[mi];
   int out[32];
@@ -27305,7 +27305,7 @@ int an_super_object_text(Compiler *c, int n, int mi) {
     return 0;
   /* (a method of an ancestor, an included module's, or an Object
      reopening's, is the call plan's target) */
-  return cplan_user_fresh(c, n)->mi < 0;
+  return cplan_user_fresh(c, n).mi < 0;
 }
 /* The same super in a Struct or Data class's own inspect or to_s, where no
    class of the program above it defines the name: CRuby's Struct#inspect
@@ -27324,7 +27324,7 @@ int an_super_struct_text(Compiler *c, int n, int mi) {
   ClassInfo *ci = &c->classes[s->class_id];
   if (!ci->is_struct || comp_class_is_module(c, ci)) return 0;
   /* (a method of an ancestor or an included module's is the call plan's target) */
-  return cplan_user_fresh(c, n)->mi < 0;
+  return cplan_user_fresh(c, n).mi < 0;
 }
 /* Method mi is decided: yes or no, and for the handle walk its field. */
 static int an_ret_decided(Compiler *c, RetHandles *R, int mi, int yes) {
@@ -27718,21 +27718,21 @@ static int an_tail_handle(Compiler *c, RetHandles *R, int n, TailCount *tc) {
       tc->reads++;
       return 1;
     }
-    const CallPlan *p = cplan_user_fresh(c, n);
-    int mi = p->mi;
+    const CallPlan p = cplan_user_fresh(c, n);
+    int mi = p.mi;
     /* Kernel#inspect / #to_s through super: a new String (an_super_object_text) */
-    if (R->fresh && (p->dispatch != CP_DIRECT || mi <= 0) && an_super_object_text(c, n, tc->mi)) {
+    if (R->fresh && (p.dispatch != CP_DIRECT || mi <= 0) && an_super_object_text(c, n, tc->mi)) {
       if (g_repr_check) repr_channel_predict(c, n, tc->mi, RCH_CLEAR);
       tc->fresh++;
       return 1;
     }
-    if (p->dispatch != CP_DIRECT || mi <= 0 || !an_ret_handle(c, R, mi)) return 0;
+    if (p.dispatch != CP_DIRECT || mi <= 0 || !an_ret_handle(c, R, mi)) return 0;
     if (g_repr_check && !R->fresh) repr_channel_predict(c, n, tc->mi, RCH_PUBLISH);
     tc->reads++;
     return !R->fresh || c->scopes[mi].ret_fresh;
   }
   if (k != NK_CallNode || (!R->fresh && comp_ntype_stored(c, n) != TY_STRING)) return 0;
-  if (R->fresh && cplan_user_fresh(c, n)->via == UC_POLY && !share_builtin_fresh(c, n)) return 0;
+  if (R->fresh && cplan_user_fresh(c, n).via == UC_POLY && !share_builtin_fresh(c, n)) return 0;
   int mis[CPT_MAX];
   int cnt = cplan_targets(c, n, mis, CPT_MAX);
   /* past the plan's list: every method of the name (#9258) */
@@ -28617,7 +28617,7 @@ static void an_call_targets_of(Compiler *c, int u, ACallTargets *t) {
   int byname = an_unique_scope_by_name(c, un);
   if (byname >= 0 && c->scopes[byname].name &&
       sp_streq(c->scopes[byname].name, un) &&
-      cplan_user_fresh(c, u)->mi == byname &&
+      cplan_user_fresh(c, u).mi == byname &&
       !an_recv_builtin_without(c, u, un)) act_add(t, byname);
   /* A name more than one method defines resolves by the call itself, and
      so does an alias, which names no scope of its own. By unique name alone
@@ -28870,7 +28870,7 @@ static void strbuf_arg_index_build(Compiler *c) {
       for (int i = 0; i < t.n; i++) strbuf_arg_index_call(c, x, u, t.v[i]);
     }
     else if (k == NK_SuperNode || k == NK_ForwardingSuperNode) {
-      int mi = cplan_user_fresh(c, u)->mi;
+      int mi = cplan_user_fresh(c, u).mi;
       if (mi >= 0) strbuf_arg_index_call(c, x, u, mi);
     }
   }
@@ -29221,7 +29221,7 @@ static int an_call_targets_scope(Compiler *c, int u, int mi2, Scope *m2) {
   int ae = is_new ? -1 : an_alias_first(c, un), aliased = ae >= 0;
   int byname = named ? an_unique_scope_by_name(c, un) : -1;
   if (named && byname == mi2 &&
-      cplan_user_fresh(c, u)->mi == mi2 &&
+      cplan_user_fresh(c, u).mi == mi2 &&
       !an_recv_builtin_without(c, u, un)) return 1;
   /* a name more than one method defines, or an alias: the targets the call
      itself resolves to, as an_call_targets_of lists them */
@@ -29636,9 +29636,8 @@ static int param_borrow_builtin_new(Compiler *c, int n) {
    every member), into out; 0 for a builtin, -1 when the switch has more
    members than out can hold (none of them is checked). */
 static int param_borrow_targets(Compiler *c, int n, int *out, int cap) {
-  const CallPlan *p = cplan_user_fresh(c, n);
-  if (p->mi < 0 || p->dispatch == CP_REFUSE) return 0;
-  CallPlan plan = *p;
+  const CallPlan plan = cplan_user_fresh(c, n);
+  if (plan.mi < 0 || plan.dispatch == CP_REFUSE) return 0;
   int k = 0;
   out[k++] = plan.mi;
   if (plan.dispatch >= CP_SWITCH) {
@@ -29986,7 +29985,7 @@ static int mark_reader_identity_operands(Compiler *c) {
          an earlier box mark too: its storage type lets operand ordering
          mistake the call for a fresh String to wrap. */
       if (opnd >= 0 && !comp_strbuf_handle_demand_stored(c, opnd) &&
-          repr_call_returns_handle(c, opnd) && cplan_user_fresh(c, w)->dispatch == CP_NONE) {
+          repr_call_returns_handle(c, opnd) && cplan_user_fresh(c, w).dispatch == CP_NONE) {
         comp_set_strbuf_box(c, opnd, 0);
         comp_sn_retype(c, opnd, TY_STRING);
         comp_write_strbuf_handle_demand(c, opnd, 1);
@@ -32561,10 +32560,10 @@ void dyn_blk_params(Compiler *c, int mi, int k, DynParams *out) {
   int h = anh_find(&g_dyn.bnames, c->scopes[mi].name);
   for (int e = h >= 0 ? g_dyn.bhead[h] : -1; e >= 0; e = g_dyn.bnext[e]) {
     int n = g_dyn.bnode[e], b = nt_ref(nt, n, "block");
-    const CallPlan *p = cplan_user_fresh(c, n);
-    if (p->mi >= 0 && p->mi != mi) continue;
-    int hit = p->mi == mi;
-    if (p->mi < 0) {
+    const CallPlan p = cplan_user_fresh(c, n);
+    if (p.mi >= 0 && p.mi != mi) continue;
+    int hit = p.mi == mi;
+    if (p.mi < 0) {
       int rv = nt_ref(nt, n, "receiver");
       const char *bn = rv >= 0 ? builtin_class_of_type(comp_ntype(c, rv)) : NULL;
       int ci = c->scopes[mi].class_id;
@@ -47425,8 +47424,8 @@ static int sa_returned_args_t(Compiler *c, int call, int *out, int cap, int poly
   if (call < 0 || nt_kind(nt, call) != NK_CallNode || comp_strbuf_box_stored(c, call)) return 0;
   int mi = an_call_target_mi(c, call);
   if (mi <= 0) {
-    const CallPlan *p = cplan_user_fresh(c, call);
-    if (p->dispatch == CP_DIRECT && p->via == UC_REOPEN) mi = p->mi;
+    const CallPlan p = cplan_user_fresh(c, call);
+    if (p.dispatch == CP_DIRECT && p.via == UC_REOPEN) mi = p.mi;
   }
   if (mi <= 0) return 0;
   Scope *m = &c->scopes[mi];
@@ -52749,7 +52748,7 @@ static void an_phase_method_backstops(Compiler *c) {
       int bx = ba >= 0 && nt_kind(c->nt, ba) == NK_BlockArgumentNode ? nt_ref(c->nt, ba, "expression") : -1;
       if (bx < 0 || !an_block_arg_unnamed_method(c, &mholders, bx)) continue;
       AnDynEvidence ev = {dyn_arg, dyn_seen};
-      method_obj_block_sites_each(c, cplan_user_fresh(c, u)->mi, u, 0, an_dyn_evidence_site, &ev);
+      method_obj_block_sites_each(c, cplan_user_fresh(c, u).mi, u, 0, an_dyn_evidence_site, &ev);
     }
     free(mholders.scope); free(mholders.name); free(mholders.memo[0]); free(mholders.memo[1]);
   }

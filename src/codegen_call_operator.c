@@ -147,7 +147,7 @@ static int cmp_elem_read(Compiler *c, int node, TyKind t, int *arr, int *idx) {
   if (r < 0 || ac != 1 || repr_of(c, av[0]).as_ty != TY_INT) return 0;
   Repr rr = repr_of(c, r);
   if (rr.elem != (t == TY_FLOAT ? TY_FLOAT : TY_INT)) return 0;
-  if (rr.kind == RK_BOXED || cplan_user(c, node)->dispatch != CP_NONE) return 0;
+  if (rr.kind == RK_BOXED || cplan_user(c, node).dispatch != CP_NONE) return 0;
   *arr = r; *idx = av[0];
   return 1;
 }

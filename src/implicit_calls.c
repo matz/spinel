@@ -97,7 +97,7 @@ static const char *ic_core_receiver(Compiler *c, int id) {
    arguments and block on self. */
 static int ic_super_calls(Compiler *c, int id, IcSink *s) {
   const Scope *sc = comp_scope_of(c, id);
-  if (!c->ic || !c->ic->typed || !sc || sc->class_id < 0 || !sc->name || cplan_user(c, id)->mi >= 0) return 0;
+  if (!c->ic || !c->ic->typed || !sc || sc->class_id < 0 || !sc->name || cplan_user(c, id).mi >= 0) return 0;
   const char *name = comp_scope_def_name(c, sc);
   if (!name) return 0;
   if (!sc->is_cmethod && ic_plain_class(c, sc->class_id) && ic_class_rows(s, name, core_class_ancestors("Object"), id)) return s->n;
@@ -200,13 +200,13 @@ static int ic_module_runs(Compiler *c, int id, int mod) {
     int has = 0;
     for (int j = 0; j < ci->nincluded_mods && !has; j++) has = ci->included_mods[j] == mod;
     if (!has) continue;
-    if (comp_class_is_module(c, &c->classes[k]) || cplan_user_in(c, id, k, CPX_TARGET)->mi < 0) return 0;
+    if (comp_class_is_module(c, &c->classes[k]) || cplan_user_in(c, id, k, CPX_TARGET).mi < 0) return 0;
     includers++;
   }
   for (int j = 0; j < c->ntoplevel_includes; j++) {
     if (c->toplevel_includes[j] != mod) continue;
     int obj = comp_core_class(c, CORE_OBJECT);
-    if (obj < 0 || cplan_user_in(c, id, obj, CPX_TARGET)->mi < 0) return 0;
+    if (obj < 0 || cplan_user_in(c, id, obj, CPX_TARGET).mi < 0) return 0;
     includers++;
   }
   return includers > 0;
@@ -238,7 +238,7 @@ int ic_runs_program_method(Compiler *c, int id) {
   if (recv < 0 && call_target(c, id, -1, name, CT_TOP, NULL) >= 0) return 1;
   if (cls < 0) return 0;
   if (recv < 0 && comp_class_is_module(c, &c->classes[cls])) return ic_module_runs(c, id, cls);
-  if (cplan_user_in(c, id, cls, CPX_TARGET)->mi >= 0) return 1;
+  if (cplan_user_in(c, id, cls, CPX_TARGET).mi >= 0) return 1;
   return ic_plain_class(c, cls) && !object_instance_method_name(name);
 }
 

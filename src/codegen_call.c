@@ -3926,7 +3926,7 @@ static int lazy_src_constant(const NodeTable *nt, int n) {
    too. */
 static int lazy_src_view(Compiler *c, int n) {
   const NodeTable *nt = c->nt;
-  if (nt_kind(nt, n) != NK_CallNode || cplan_user(c, n)->dispatch != CP_NONE) return 0;
+  if (nt_kind(nt, n) != NK_CallNode || cplan_user(c, n).dispatch != CP_NONE) return 0;
   if (nt_ref(nt, n, "receiver") < 0) return 0;
   return repr_of(c, n).as_ty == TY_ENUMERATOR || (is_to_array_alias(nt_str(nt, n, "name")) && nt_int(nt, n, "made_to_a", 0));
 }
@@ -5026,7 +5026,7 @@ static int emit_dynamic_send(Compiler *c, int id, Buf *b) {
       /* did not resolve on this receiver/arity; a method of the program the
          arm reached is kept, whatever its body's value: one that always
          raises (an Array operator given a nil operand) has no type */
-      if (cplan_user(c, arm)->mi < 0 && !dsend_name_diverges(c, nm)) continue;
+      if (cplan_user(c, arm).mi < 0 && !dsend_name_diverges(c, nm)) continue;
       at = TY_NIL;
     }
     if (mo && method_obj_target_mi(c, arm) < 0) continue;
@@ -5050,7 +5050,7 @@ static int emit_dynamic_send(Compiler *c, int id, Buf *b) {
     int sv_arm_argov = g_n_argov;
     ArmProbe ap; arm_probe_begin(c, &ap, &pre);
     volatile int ok;
-    int mi = cplan_user(c, arm)->mi;
+    int mi = cplan_user(c, arm).mi;
     int self_ret = repr_self_handle(c, mi) && repr_call_returns_handle(c, arm);
     /* an arm answering an Integer or Float that may be nil boxes its oint:
        unwrapped first, its nil raised TypeError where the send answers nil */
@@ -10741,7 +10741,7 @@ int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
      directly, before dispatch allocates roots or temporary numbers.
      A delegated target or target view still supplies a user arm under
      another name. */
-  if (rt_boxed && argc == 1 && is_cmp_op(name) && !cplan_user_fresh(c, id)->delegate &&
+  if (rt_boxed && argc == 1 && is_cmp_op(name) && !cplan_user_fresh(c, id).delegate &&
       sp_streq(name, view_call_name(c, id)) &&
       cplan_poly_arms(c, id)->n == 0)
     return 0;
@@ -11983,9 +11983,9 @@ static int recv_new_string(Compiler *c, int n, int depth) {
   const char *nm = nt_str(nt, n, "name");
   int r = nt_ref(nt, n, "receiver");
   TyKind rt = r >= 0 ? comp_ntype(c, r) : TY_UNKNOWN;
-  const CallPlan *pl = cplan_user(c, n);
+  const CallPlan pl = cplan_user(c, n);
   if (!nm || !*nm) return 0;
-  if (pl->mi < 0) {
+  if (pl.mi < 0) {
     int made = 0;
     if (rt == TY_INT || rt == TY_FLOAT)
       made = (sp_streq(nm, "to_s") || sp_streq(nm, "inspect")) && comp_builtin_kind_reopen_mi(c, rt, nm) < 0;
@@ -11993,9 +11993,9 @@ static int recv_new_string(Compiler *c, int n, int depth) {
       for (int k = 0; !made && makes[k]; k++) made = sp_streq(nm, makes[k]) && str_fresh_value(c, n);
     return made && an_prog_never_gives(nm, 0);
   }
-  if (depth >= 3 || pl->dispatch != CP_DIRECT || nt_attr_write(nt, n) ||
-      body_has_return(nt, c->scopes[pl->mi].body)) return 0;
-  return recv_new_string(c, scope_body_last(c, pl->mi), depth + 1) && an_prog_never_gives(nm, 1);
+  if (depth >= 3 || pl.dispatch != CP_DIRECT || nt_attr_write(nt, n) ||
+      body_has_return(nt, c->scopes[pl.mi].body)) return 0;
+  return recv_new_string(c, scope_body_last(c, pl.mi), depth + 1) && an_prog_never_gives(nm, 1);
 }
 /* Does evaluating `n` run none of the program's code and store nothing? A
    pure read, a global, a String literal, and an Array, a Hash, a Range or an
@@ -12087,7 +12087,7 @@ int reopen_self_defaults(Compiler *c, int mi) {
   int fresh = op && !(op->flags & BOPF_COPY_CLASS) &&
       (ty_is_numeric(vt) || vt == TY_STRING || vt == TY_STRBUF || vt == TY_BOOL || vt == TY_SYMBOL) && r >= 0 && comp_recv_type(c, r) == TY_STRING &&
       call_plain_argc(c, v) == 0 && nt_ref(c->nt, v, "block") < 0 &&
-      arg_runs_nothing(c, r) && cplan_user_fresh(c, v)->dispatch == CP_NONE &&
+      arg_runs_nothing(c, r) && cplan_user_fresh(c, v).dispatch == CP_NONE &&
       !is_identity_query(nm) && !bop_name_mutates(nm, 0) && bop_share(TY_STRING, nm) == BSH_PURE;
   if (!pure && fresh) pure = 1;
   if (uses_self && !pure) return 0;
@@ -12099,11 +12099,11 @@ int reopen_self_defaults(Compiler *c, int mi) {
     if (!read && (ty_is_numeric(t) || t == TY_BOOL || t == TY_SYMBOL) &&
         nt_kind(c->nt, d) == NK_CallNode &&
         nt_ref(c->nt, d, "receiver") < 0 && call_plain_argc(c, d) == 0 &&
-        nt_ref(c->nt, d, "block") < 0 && cplan_user_fresh(c, d)->dispatch == CP_NONE)
+        nt_ref(c->nt, d, "block") < 0 && cplan_user_fresh(c, d).dispatch == CP_NONE)
       read = !is_identity_query(nt_str(c->nt, d, "name")) &&
              bop_share(TY_STRING, nt_str(c->nt, d, "name")) == BSH_PURE;
     if (!read && !(operand_is_held_read(c, d) &&
-                   cplan_user_fresh(c, d)->dispatch == CP_NONE)) return 0;
+                   cplan_user_fresh(c, d).dispatch == CP_NONE)) return 0;
     /* a default handing the receiver's String on (returned, in an Array) is
        a copy in the default build, as on the other String sharing routes
        (#7721): it is not refused, and it reads the receiver all the same */
@@ -16910,7 +16910,7 @@ static void delegated_cond_probe(Compiler *c, int id, void *ctx, Buf *b) {
   (void)ctx; emit_cond(c, id, b);
 }
 int emit_delegated_equality(Compiler *c, int id, int negate, Buf *b) {
-  const CallPlan p = *cplan_user(c, id);
+  const CallPlan p = cplan_user(c, id);
   if (p.mi < 0 || p.chain || p.via != UC_INST || !p.delegate || !is_equality_name(p.delegate)) return 0;
   TyKind er = dispatch_ret_over(c, p.owner_ci, p.delegate, 0,
                                p.mi, c->scopes[p.mi].ret, -1);
@@ -17505,7 +17505,7 @@ static int emit_case_eq_call(Compiler *c, int id, Buf *b) {
       }
       /* no direct == : use <=> == 0 when the class supports Comparable */
       /* A synthesized != follows == before Comparable's fallback. */
-      const CallPlan ep = *cplan_user(c, id);
+      const CallPlan ep = cplan_user(c, id);
       if (ep.mi >= 0 && ep.delegate && !is_equality_name(ep.delegate)) {
         /* a `<=>` statically returning a non-{Integer,Float,nil} value is a
            protocol violation, caught at compile time (#2961) */
@@ -18788,8 +18788,8 @@ static int brk_block_direct_only(const NodeTable *nt, int node, int depth) {
    its proc form (emit_reopen_block_call)? The block is then a proc, not a
    spliced loop body. */
 static int call_reaches_reopen_pf(Compiler *c, int id) {
-  const CallPlan *pl = cplan_user(c, id);
-  return pl->mi >= 0 && pl->via == UC_REOPEN && c->scopes[pl->mi].yields && scope_proc_form_of(c, pl->mi) >= 0;
+  const CallPlan pl = cplan_user(c, id);
+  return pl.mi >= 0 && pl.via == UC_REOPEN && c->scopes[pl.mi].yields && scope_proc_form_of(c, pl.mi) >= 0;
 }
 /* The wrapper below can skip its sp_brk_push + setjmp when the iterator
    splices the block as a C loop and every break in it is the goto: a
@@ -26328,7 +26328,7 @@ static int operand_binds_boxed_to_s(Compiler *c, int id, int v) {
   const char *name = nt_str(c->nt, id, "name");
   return nt_kind(c->nt, v) == NK_CallNode && comp_ntype(c, v) == TY_STRING &&
          !arg_ran_first(v, 0) && v != recv && recv >= 0 && repr_of(c, recv).kind == RK_BOXED &&
-         repr_boxed_to_s_operand(c, v) >= 0 && cplan_user(c, v)->dispatch != CP_NONE &&
+         repr_boxed_to_s_operand(c, v) >= 0 && cplan_user(c, v).dispatch != CP_NONE &&
          poly_name_takes_handle(c, name);
 }
 
@@ -27033,9 +27033,9 @@ int reopen_override_block_ok(Compiler *c, int id) {
         return !c->scopes[ami].yields || ((ty_is_array(rt) || ty_is_obj_array(rt)) && sp_streq(nm, "concat"));
     } }
   if (nt_kind(c->nt, blk) != NK_BlockNode) return 0;
-  const CallPlan *p = cplan_user(c, id);
-  return p->via == UC_REOPEN && p->mi >= 0 && c->scopes[p->mi].yields &&
-         c->scopes[p->mi].class_id == comp_core_class(c, CORE_STRING);
+  const CallPlan p = cplan_user(c, id);
+  return p.via == UC_REOPEN && p.mi >= 0 && c->scopes[p.mi].yields &&
+         c->scopes[p.mi].class_id == comp_core_class(c, CORE_STRING);
 }
 /* emit_reopen_primitive_call, with a plain answer lifted into an oint
    where the node is one (a `&.` left to the plain call) */
@@ -29024,7 +29024,7 @@ static int yield_arg_fresh_line(Compiler *c, int a) {
   /* only the builtin's: a method of the program's the call reaches (a
      reopened String's each_line, a File.foreach of its own) may yield a
      String something else still holds */
-  if (cplan_user(c, call)->dispatch != CP_NONE) return 0;
+  if (cplan_user(c, call).dispatch != CP_NONE) return 0;
   const char *rn2 = nt_kind(nt, recv) == NK_ConstantReadNode ? nt_str(nt, recv, "name") : NULL;
   TyKind rt = comp_ntype(c, recv);
   if (rt == TY_STRING || rt == TY_STRBUF)
@@ -30335,8 +30335,8 @@ static int emit_call_bool_sides(Compiler *c, int id, Buf *b) {
         ((ytm >= 0 && !c->scopes[ytm].yields && c->scopes[ytm].blk_param && c->scopes[ytm].blk_param[0]) ||
          (yfm >= 0 && !c->scopes[yfm].yields && c->scopes[yfm].blk_param && c->scopes[yfm].blk_param[0]))) return 0;
   }
-  const CallPlan *pl = cplan_user(c, id);
-  if (pl->via != UC_REOPEN || pl->dispatch != CP_SWITCH || !cplan_bool_sides(c, id, &tmi, &fmi)) return 0;
+  const CallPlan pl = cplan_user(c, id);
+  if (pl.via != UC_REOPEN || pl.dispatch != CP_SWITCH || !cplan_bool_sides(c, id, &tmi, &fmi)) return 0;
   int boxed = repr_of(c, id).kind == RK_BOXED;
   int ow = !boxed && node_is_oint(c, id);
   int tb = ++g_tmp;
@@ -30423,9 +30423,9 @@ void emit_call(Compiler *c, int id, Buf *b) {
    class it was called on, a pointer to an ancestor's type in C; the
    representations name the C types. */
 static int call_ret_narrow_cls(Compiler *c, int id) {
-  const CallPlan *p = cplan_user(c, id);
-  if (!p->answers_receiver) return -1;
-  Repr r = repr_of(c, id), fr = repr_of_ret(c, &c->scopes[p->mi]);
+  const CallPlan p = cplan_user(c, id);
+  if (!p.answers_receiver) return -1;
+  Repr r = repr_of(c, id), fr = repr_of_ret(c, &c->scopes[p.mi]);
   if (r.kind != RK_PTR || !ty_is_object(r.as_ty) || fr.kind != RK_PTR || !ty_is_object(fr.as_ty) || fr.as_ty == r.as_ty) return -1;
   return ty_object_class(r.as_ty);
 }
@@ -30480,8 +30480,8 @@ static int emit_call_recv_held_first(Compiler *c, int id, Buf *b) {
   const char *name = nt_str(nt, id, "name");
   if (recv < 0 || !name || comp_ntype(c, recv) != TY_STRING || arg_ran_first(recv, 0) || nt_safe_nav(nt, id) ||
       nt_ref(nt, id, "block") >= 0 || sp_str_mutator(name, 0) || bop_name_mutates(name, 0)) return 0;
-  const CallPlan *p = cplan_user(c, id);
-  if (p->mi >= 0 || p->dispatch != CP_NONE) return 0;
+  const CallPlan p = cplan_user(c, id);
+  if (p.mi >= 0 || p.dispatch != CP_NONE) return 0;
   int argc = 0;
   const int *argv = call_args(nt, id, &argc);
   if (argc == 0 || nt_argv_has(nt, argv, argc, NT_ARG_SPLAT | NT_ARG_KEYWORDS | NT_ARG_BLOCK)) return 0;
@@ -31163,9 +31163,9 @@ int implicit_self_is_field_read(Compiler *c, int id) {
 
 /* The plan for a bare call with self of class dispatch_cid, including its
    descendant dispatch form when the class's own chain has no method. */
-const CallPlan *implicit_self_plan(Compiler *c, int id, int dispatch_cid) {
-  const CallPlan *spl = cplan_user(c, id);
-  if (!(spl->chain && spl->via == UC_INST && spl->owner_ci == dispatch_cid))
+CallPlan implicit_self_plan(Compiler *c, int id, int dispatch_cid) {
+  CallPlan spl = cplan_user(c, id);
+  if (!(spl.chain && spl.via == UC_INST && spl.owner_ci == dispatch_cid))
     spl = cplan_user_in(c, id, dispatch_cid,
                         g_ie_class_id >= 0 ? CPX_IE : g_emitting_class_id >= 0 ? CPX_EMIT : 0);
   return spl;
@@ -31317,8 +31317,8 @@ int emit_implicit_self_member(Compiler *c, int id, Buf *b) {
      plan read with that self (an instance_exec self, a body emitted for an
      inheriting class, an instance_eval block whose self codegen keeps).
      A missing target is checked in the call-plan layer. */
-  const CallPlan *pl = implicit_self_plan(c, id, dispatch_cid);
-  int mi = pl->chain && pl->via == UC_INST && pl->owner_ci == dispatch_cid ? pl->mi : -1;
+  const CallPlan pl = implicit_self_plan(c, id, dispatch_cid);
+  int mi = pl.chain && pl.via == UC_INST && pl.owner_ci == dispatch_cid ? pl.mi : -1;
   if (g_plan_check) cplan_served("implicit-self");
   cplan_check_missing(c, id, mi, dispatch_cid, name, 0, "implicit-self");
   if (mi >= 0) {
@@ -34945,9 +34945,9 @@ static int emit_const_user_call(Compiler *c, int id, Buf *b) {
   int recv = nt_ref(nt, id, "receiver");
   NodeKind rk = nt_kind(nt, recv);
   if (rk != NK_ConstantReadNode && rk != NK_ConstantPathNode) return 0;
-  const CallPlan *pl = cplan_const_user(c, id, recv, 0);
-  if (!pl) return 0;
-  int yields = c->scopes[pl->mi].yields;
+  const CallPlan pl = cplan_const_user(c, id, recv, 0);
+  if (pl.mi < 0) return 0;
+  int yields = c->scopes[pl.mi].yields;
   if (emit_vis_refusal(c, id, b) || emit_operands_in_order(c, id, b)) return 1;
   /* Yielding wrappers, including blockless calls, use the inline path below;
      they have no standalone C function. */
@@ -35396,7 +35396,7 @@ static void emit_call_body_ordinary(Compiler *c, int id, Buf *b) {
      answers every receiver the lookup reaches it for, ahead of the arms
      below that know the name (Kernel's tap, then, frozen?) */
   if (nt_ref(nt, id, "receiver") >= 0) {
-    CallPlan rp = *cplan_user(c, id);
+    CallPlan rp = cplan_user(c, id);
     /* (a block that breaks is wrapped first, below: the wrapper's own pass,
        with the call as g_brk_skip_id, comes back here; so is a `&.` whose
        nil guard is still ahead, by emit_call_safe_nav_arms, which re-enters

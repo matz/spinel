@@ -1271,7 +1271,7 @@ static int fetch_recv_in_slot(Compiler *c, int recv, int index, const char *rend
     if (!op || !sp_streq(op, "+") || nt_ref(nt, index, "block") >= 0 || ac != 1 ||
         nt_kind(nt, av[0]) != NK_IntegerNode || comp_ntype(c, av[0]) != TY_INT ||
         ir < 0 || nt_kind(nt, ir) != NK_LocalVariableReadNode || comp_ntype(c, ir) != TY_INT ||
-        repr_of(c, ir).kind != RK_SCALAR || cplan_user(c, index)->dispatch != CP_NONE) return 0;
+        repr_of(c, ir).kind != RK_SCALAR || cplan_user(c, index).dispatch != CP_NONE) return 0;
   }
   else if (k != NK_IntegerNode && k != NK_LocalVariableReadNode) return 0;
   return decide_node(nt, recv, "fetch-slot", NULL);
@@ -13296,11 +13296,11 @@ int emit_object_call(Compiler *c, int id, Buf *b) {
     }
     /* Resolve through the plan for this receiver and emitted name.
        Aliases that captured a builtin have no user target in this context. */
-    const CallPlan *opl = cplan_user(c, id);
+    CallPlan opl = cplan_user(c, id);
     if (!sp_streq(name, nt_str(nt, id, "name")) ||
-        !(opl->chain && opl->via == UC_INST && opl->owner_ci == cid))
+        !(opl.chain && opl.via == UC_INST && opl.owner_ci == cid))
       opl = cplan_user_in(c, id, cid, CPX_TARGET);
-    int mi = opl->mi;
+    int mi = opl.mi;
     if (g_plan_check && mi >= 0) cplan_served("object-call");
     cplan_check_missing(c, id, mi, cid, name, 0, "object-call");
     /* a demand-marked read through a simple hand-written reader

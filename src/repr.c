@@ -898,8 +898,8 @@ int repr_call_returns_handle(Compiler *c, int v) {
   v = nt_paren_single(c->nt, v);
   if (repr_super_native_keeps(c, v)) return 1;
   if (v >= 0 && (nt_kind(nt, v) == NK_SuperNode || nt_kind(nt, v) == NK_ForwardingSuperNode)) {
-    const CallPlan *p = cplan_user(c, v);
-    return p->dispatch == CP_DIRECT && repr_self_handle(c, p->mi) && scope_ret_handle(c, p->mi);
+    const CallPlan p = cplan_user(c, v);
+    return p.dispatch == CP_DIRECT && repr_self_handle(c, p.mi) && scope_ret_handle(c, p.mi);
   }
   if (v < 0 || nt_kind(nt, v) != NK_CallNode) return 0;
   /* a String's value, or one the pickup marks to be stored as the handle */
@@ -1092,7 +1092,7 @@ int repr_string_conversion_operand(Compiler *c, int v) {
   return r >= 0 && is_receiver_conversion(nt_str(c->nt, v, "name")) &&
          call_plain_argc(c, v) == 0 && (nt_ref(c->nt, v, "block") < 0 || nt_int(c->nt, v, "dyn_arm", 0)) &&
          comp_recv_type(c, r) == TY_STRING &&
-         (cplan_user(c, v)->dispatch == CP_NONE || repr_user_answers_self(c, v)) ? r : -1;
+         (cplan_user(c, v).dispatch == CP_NONE || repr_user_answers_self(c, v)) ? r : -1;
 }
 /* ENV copies its stored bytes, but a store answers its value operand.
    A boxed operand can still hold plain bytes: an observable alias stays

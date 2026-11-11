@@ -1712,7 +1712,7 @@ int strbuf_hash_default_arg(Compiler *c, int v) {
   const int *argv = call_args(c->nt, v, &argc);
   TyKind rt = recv >= 0 ? repr_of(c, recv).as_ty : TY_UNKNOWN;
   if ((rt != TY_POLY && (!ty_is_hash(rt) || ty_hash_val(rt) != TY_POLY)) || argc != 1 ||
-      cplan_user_fresh(c, v)->dispatch != CP_NONE) return -1;
+      cplan_user_fresh(c, v).dispatch != CP_NONE) return -1;
   /* A dropped frozen literal already keeps its frozen mark in the box. */
   if (share_frozen_literal(c, argv[0]) && an_node_dropped(c, v)) return -1;
   TyKind at = repr_of(c, argv[0]).ty;
@@ -1777,11 +1777,11 @@ static int strbuf_route_operand(Compiler *c, int v) {
   if (is_reduce_alias(nm) && strbuf_route_inject(c, v)) return v;
   if (recv >= 0 && argc == 1 && blk < 0 &&
       bop_share_named(BOP_ANY_ARRAY, nm) == BSH_SUM &&
-      cplan_user(c, v)->dispatch == CP_NONE &&
+      cplan_user(c, v).dispatch == CP_NONE &&
       (ty_is_array(repr_of(c, recv).as_ty) || repr_of(c, recv).as_ty == TY_UNKNOWN) &&
       (comp_ntype(c, argv[0]) == TY_STRING || comp_ntype(c, argv[0]) == TY_STRBUF)) return v;
   if (recv >= 0 && argc == 0 && blk < 0 && comp_recv_type(c, recv) == TY_STRING &&
-      bop_share_named(TY_STRING, nm) == BSH_EMPTY_SELF && cplan_user(c, v)->dispatch == CP_NONE) return recv;
+      bop_share_named(TY_STRING, nm) == BSH_EMPTY_SELF && cplan_user(c, v).dispatch == CP_NONE) return recv;
   if (strbuf_freeze_leaf(c, v)) return recv;
   if (repr_boxed_to_s_operand(c, v) >= 0) return recv;
   /* A builtin conversion on a String returns that same String. */
@@ -1824,7 +1824,7 @@ int strbuf_self_route_slot(Compiler *c, int v, int *uplus, Buf *out) {
      name; frozen? returns a Boolean. */
   int recv = nt_ref(nt, v, "receiver");
   if (x < 0 && recv >= 0 && argc == 0 && (nt_ref(nt, v, "block") < 0 || nt_int(nt, v, "dyn_arm", 0)) &&
-      comp_recv_type(c, recv) == TY_STRING && cplan_user(c, v)->dispatch == CP_NONE &&
+      comp_recv_type(c, recv) == TY_STRING && cplan_user(c, v).dispatch == CP_NONE &&
       (is_receiver_conversion(nm) ||
        (is_freeze_family(nm) && (bop_answers_self(TY_STRING, nm, 0, 0) & BOPF_SELF)))) {
     NodeKind rk = nt_kind(nt, nt_paren_single(c->nt, recv));
@@ -1907,7 +1907,7 @@ static int strbuf_freeze_leaf_d(Compiler *c, int v, int depth) {
   int recv = nm ? nt_ref(nt, v, "receiver") : -1;
   return recv >= 0 && is_freeze_family(nm) &&
          (bop_answers_self(TY_STRING, nm, 0, 0) & BOPF_SELF) && call_plain_argc(c, v) == 0 &&
-         nt_ref(nt, v, "block") < 0 && cplan_user(c, v)->dispatch == CP_NONE && strbuf_assign_route_d(c, recv, depth);
+         nt_ref(nt, v, "block") < 0 && cplan_user(c, v).dispatch == CP_NONE && strbuf_assign_route_d(c, recv, depth);
 }
 int strbuf_freeze_leaf(Compiler *c, int v) { return strbuf_freeze_leaf_d(c, v, 0); }
 int strbuf_assign_route(Compiler *c, int v) { return strbuf_assign_route_d(c, v, 0); }
@@ -2136,10 +2136,10 @@ int strbuf_route_ivar_get(Compiler *c, int v);
 /* a call of a method of the program's own that answers a variable it keeps
    (`def s = @s`) */
 static int strbuf_user_getter_call(Compiler *c, int v) {
-  if (nt_kind(c->nt, v) != NK_CallNode || nt_ref(c->nt, v, "block") >= 0 || cplan_user(c, v)->dispatch != CP_DIRECT ||
-      cplan_user(c, v)->mi < 0)
+  if (nt_kind(c->nt, v) != NK_CallNode || nt_ref(c->nt, v, "block") >= 0 || cplan_user(c, v).dispatch != CP_DIRECT ||
+      cplan_user(c, v).mi < 0)
     return 0;
-  int mi = cplan_user(c, v)->mi, body = c->scopes[mi].body;
+  int mi = cplan_user(c, v).mi, body = c->scopes[mi].body;
   int last = scope_body_last(c, mi);
   if (last < 0) last = body;   /* (an endless def's body is its expression) */
   NodeKind lk = last >= 0 ? nt_kind(c->nt, nt_paren_single(c->nt, last)) : NK_NONE;
@@ -2211,8 +2211,8 @@ static int strbuf_has_return(const NodeTable *nt, int n) {
   return 0;
 }
 int strbuf_inline_mi(Compiler *c, int v) {
-  const CallPlan *p = cplan_user(c, v);
-  if (p->via == UC_REOPEN && repr_self_handle(c, p->mi) && c->scopes[p->mi].yields) return p->mi;
+  const CallPlan p = cplan_user(c, v);
+  if (p.via == UC_REOPEN && repr_self_handle(c, p.mi) && c->scopes[p.mi].yields) return p.mi;
   return call_user_yield_mi(c, v);
 }
 /* Does the last statement `last` of spliced method mi answer the value of
@@ -2226,7 +2226,7 @@ int strbuf_tail_answers_block(Compiler *c, int mi, int last, int depth) {
   if (last < 0) return 0;
   if (nt_kind(nt, last) == NK_YieldNode || is_blk_param_call(c, last, mi)) return 1;
   if (depth >= 4 || nt_kind(nt, last) != NK_CallNode || !call_forwards_own_block(c, last) ||
-      cplan_user(c, last)->dispatch == CP_SWITCH || cplan_user(c, last)->dispatch == CP_PER_ARM) return 0;
+      cplan_user(c, last).dispatch == CP_SWITCH || cplan_user(c, last).dispatch == CP_PER_ARM) return 0;
   int m2 = call_user_yield_mi(c, last), l2 = m2 > 0 ? scope_body_last(c, m2) : -1;
   int bl = block_given_tail_then_last(c, l2);
   return l2 >= 0 && !strbuf_has_return(nt, c->scopes[m2].body) &&
@@ -2333,7 +2333,7 @@ int strbuf_route_inline_call(Compiler *c, int v) {
   }
   /* (a call the C dispatches on the receiver's class runs the clone of
      whichever method answers, which strbuf_inline_mi cannot name) */
-  if (call_breaks(c, v) || cplan_user(c, v)->dispatch == CP_SWITCH || cplan_user(c, v)->dispatch == CP_PER_ARM)
+  if (call_breaks(c, v) || cplan_user(c, v).dispatch == CP_SWITCH || cplan_user(c, v).dispatch == CP_PER_ARM)
     return 0;
   int mi = strbuf_inline_mi(c, v);
   int last = mi > 0 ? scope_body_last(c, mi) : -1;
@@ -2367,9 +2367,9 @@ static int strbuf_route_reopen_pf(Compiler *c, int v) {
   if (blk < 0 || nt_kind(nt, blk) != NK_BlockNode || call_breaks(c, v)) return 0;
   TyKind vt = comp_ntype(c, v);
   if (vt != TY_STRING && vt != TY_STRBUF) return 0;
-  const CallPlan *p = cplan_user(c, v);
-  int mi = p->mi;
-  if (p->via != UC_REOPEN || mi < 0 || c->scopes[mi].class_id != comp_core_class(c, CORE_STRING) ||
+  const CallPlan p = cplan_user(c, v);
+  int mi = p.mi;
+  if (p.via != UC_REOPEN || mi < 0 || c->scopes[mi].class_id != comp_core_class(c, CORE_STRING) ||
       !c->scopes[mi].yields || repr_self_handle(c, mi)) return 0;
   int pf = scope_proc_form_of(c, mi), last = scope_body_last(c, mi);
   return pf >= 0 && c->scopes[pf].ret == TY_POLY && last >= 0 && nt_kind(nt, last) == NK_YieldNode &&
@@ -2416,7 +2416,7 @@ static int strbuf_route_proc_call(Compiler *c, int v) {
   TyKind vt = comp_ntype(c, v);
   return (vt == TY_STRING || vt == TY_STRBUF) && nt_ref(nt, v, "receiver") < 0 &&
          is_catch_name(nt_str(nt, v, "name")) && call_plain_argc(c, v) <= 1 && nt_ref(nt, v, "block") >= 0 &&
-         !bare_call_class_owned(c, v) && cplan_user_fresh(c, v)->mi < 0;
+         !bare_call_class_owned(c, v) && cplan_user_fresh(c, v).mi < 0;
 }
 /* A reflective ivar read is a value route too. Its emitter knows the
    backing slot's representation and answers a handle under the demand. */
@@ -2475,7 +2475,7 @@ int strbuf_route_srange_end(Compiler *c, int v) {
   const char *nm = nt_str(nt, v, "name");
   int recv = nt_ref(nt, v, "receiver");
   if (!nm || recv < 0 || nt_ref(nt, v, "arguments") >= 0 || nt_ref(nt, v, "block") >= 0 ||
-      comp_ntype(c, recv) != TY_STR_RANGE || cplan_user(c, v)->dispatch != CP_NONE) return 0;
+      comp_ntype(c, recv) != TY_STR_RANGE || cplan_user(c, v).dispatch != CP_NONE) return 0;
   if (sp_streq(nm, "begin") || sp_streq(nm, "first")) return 1;
   if (sp_streq(nm, "end") || sp_streq(nm, "last")) return 2;
   return 0;
@@ -2490,7 +2490,7 @@ int strbuf_route_srange_extreme(Compiler *c, int v) {
   const char *nm = nt_str(nt, v, "name");
   int recv = nt_ref(nt, v, "receiver");
   if (!nm || recv < 0 || nt_ref(nt, v, "arguments") >= 0 || nt_ref(nt, v, "block") >= 0 ||
-      comp_ntype(c, recv) != TY_STR_RANGE || cplan_user(c, v)->dispatch != CP_NONE) return 0;
+      comp_ntype(c, recv) != TY_STR_RANGE || cplan_user(c, v).dispatch != CP_NONE) return 0;
   /* (a reopening or a module may define the name, which the plan does not
      see: the builtin's answer is not the call's) */
   if (!is_minmax_query(nm) || share_builtin_overridden(c, "Range", nm)) return 0;
@@ -2832,7 +2832,7 @@ int strbuf_route_clamp(Compiler *c, int v, int *ops) {
   if (!c->share) return 0;
   ops[0] = nt_ref(nt, v, "receiver");
   if (ops[0] < 0 || comp_recv_type(c, ops[0]) != TY_STRING ||
-      cplan_user(c, v)->dispatch != CP_NONE) return 0;
+      cplan_user(c, v).dispatch != CP_NONE) return 0;
   int argc = 0; const int *argv = call_args(nt, v, &argc);
   if (argc == 2) { ops[1] = argv[0]; ops[2] = argv[1]; return 1; }
   if (argc != 1) return 0;
@@ -3263,7 +3263,7 @@ int emit_strbuf_route(Compiler *c, int v, Buf *b) {
     return 1;
   }
   int x = strbuf_route_operand(c, v);
-  if (repr_boxed_to_s_operand(c, v) >= 0 && cplan_user(c, v)->dispatch != CP_NONE) {
+  if (repr_boxed_to_s_operand(c, v) >= 0 && cplan_user(c, v).dispatch != CP_NONE) {
     /* The ordinary dispatch keeps each selected arm's own answer. */
     /* Without user targets, the builtin route below already carries the handle. */
     int sb = view_push_repr(c, v, VR_STRBUF_BOX, 0);
@@ -3713,7 +3713,7 @@ int strbuf_builtin_tail(Compiler *c, int v) {
      dispatch: emit_strbuf_handle_of takes each arm's answer as a handle,
      the box's own where the default arm answers the String in it) */
   return (t == TY_STRING || t == TY_STRBUF) &&
-         (cplan_user_fresh(c, v)->dispatch == CP_NONE || strbuf_route_reopen_pf(c, v) ||
+         (cplan_user_fresh(c, v).dispatch == CP_NONE || strbuf_route_reopen_pf(c, v) ||
           repr_boxed_to_s_operand(c, v) >= 0) &&
          (strbuf_value_carries(c, v) || strbuf_bang_tail(c, v)) &&
          (!built || strbuf_tail_answer_kept(c, v));
@@ -5273,7 +5273,7 @@ static int strbuf_dup_call(Compiler *c, int v) {
   if (!nm || recv < 0 || (!sp_streq(nm, "dup") && !sp_streq(nm, "clone"))) return 0;
   TyKind rt = repr_of(c, recv).as_ty;
   if (rt != TY_STRING && rt != TY_STRBUF) return 0;
-  if (cplan_user(c, v)->dispatch != CP_NONE) return 0;
+  if (cplan_user(c, v).dispatch != CP_NONE) return 0;
   return sp_streq(nm, "dup") ? 1 : 2;
 }
 static void emit_strbuf_seq_nil(Compiler *c, int v, Buf *b);
@@ -5323,7 +5323,7 @@ void emit_strbuf_value(Compiler *c, int v, Buf *b) {
      which need their own handle; the demand alone is no reader slot. */
   /* User calls keep their existing return pickup. */
   int fresh = rpv.strbuf_src == RS_FRESH &&
-              nt_kind(c->nt, v) == NK_CallNode && cplan_user(c, v)->dispatch == CP_NONE &&
+              nt_kind(c->nt, v) == NK_CallNode && cplan_user(c, v).dispatch == CP_NONE &&
               share_value_fresh(c, v, 0);
   /* a String's dup or clone where the program keeps instance variables on
      Strings (Compiler.bivar_table): the new String is made as a handle so
@@ -23506,7 +23506,7 @@ int stmts_diverge(Compiler *c, int stmts) {
   if (lk == NK_CallNode && nt_ref(nt, last, "receiver") < 0 &&
       !bare_call_class_owned(c, last)) {
     const char *nm = nt_str(nt, last, "name");
-    if (nm && is_diverging_call(nm) && cplan_user_fresh(c, last)->mi < 0) return 1;
+    if (nm && is_diverging_call(nm) && cplan_user_fresh(c, last).mi < 0) return 1;
   }
   return 0;
 }
@@ -23607,7 +23607,7 @@ void emit_stmt_tail_inner(Compiler *c, int id, Buf *b, int indent) {
   if (k == NK_CallNode && nt_ref(nt, id, "receiver") < 0 &&
       nt_str(nt, id, "name") && !bare_call_class_owned(c, id) &&
       (sp_streq(nt_str(nt, id, "name"), "raise") || sp_streq(nt_str(nt, id, "name"), "fail") ||
-       sp_streq(nt_str(nt, id, "name"), "throw")) && cplan_user_fresh(c, id)->mi < 0) {
+       sp_streq(nt_str(nt, id, "name"), "throw")) && cplan_user_fresh(c, id).mi < 0) {
     emit_indent(b, indent); emit_expr(c, id, b); buf_puts(b, ";\n");
     return;
   }
@@ -25485,7 +25485,7 @@ static int emit_array_mutate_stmt_body(Compiler *c, int id, Buf *b, int indent) 
   /* A contextual user target (or refusal) owns this Array call. Decline
      before output, including the fresh route; the ordinary path emits
      that plan. Other receiver families keep their own admission. */
-  if (ty_is_array(rt) && sp_streq(name, "concat") && cplan_user(c, id)->dispatch != CP_NONE) return 0;
+  if (ty_is_array(rt) && sp_streq(name, "concat") && cplan_user(c, id).dispatch != CP_NONE) return 0;
   /* a `&.` String mutator's guard, unless the receiver is a shim's shadow
      (sb_shadowed_reader): the shim took the receiver and tested it, and the
      guard read the shadow ahead of the statement, before the shim declared it */

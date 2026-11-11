@@ -9,9 +9,11 @@
 
    A plan is memoized per node, but only where the node is read as itself:
    no view, no instance_exec scope move or class, no inline splice. Inside
-   one of those it is computed afresh and not kept. Nothing reads it to
-   emit yet; --plan-check compares it with inference's record and with the
-   binding codegen made. */
+   one of those it is computed afresh and not kept. Every ask returns the
+   plan by value, so the caller's copy is its own: no later ask, of this
+   call or another (resolving one reads Reprs and the analysis, which ask
+   other plans), can change it under the caller. --plan-check compares it
+   with inference's record and with the binding codegen made. */
 #ifndef SPINEL_CALL_PLAN_H
 #define SPINEL_CALL_PLAN_H
 
@@ -97,13 +99,10 @@ int cplan_root_reopen_owner(Compiler *c, const CallPlan *p);
    of the builtin arms (not an alias that captured the builtin's method,
    nor an exception accessor picked at run time, nor a private or
    protected method of a name a builtin has, nor one closed to the call)?
-   The analysis asks cplan_user_fresh's plan, its types still moving. The
-   ask reads Reprs, which can resolve another call's plan into the one
-   cplan_user and cplan_user_fresh return: a caller that reads p after it
-   passes its own copy. */
+   The analysis asks cplan_user_fresh's plan, its types still moving. */
 int cplan_root_reopen_call(Compiler *c, int id, const CallPlan *p);
 /* The method of the program's that p binds directly to a call on a builtin value, a root class's or a reopened class's yielding one, -1 where p binds none: its answer, a yield's block value included, is the call's. */
-int cplan_reopen_target(Compiler *c, const CallPlan *p);
+int cplan_reopen_target(Compiler *c, CallPlan p);
 /* Does any scope define an instance method `name` every object answers: the
    top level's, or Object's, Kernel's or BasicObject's own? The name-level
    twin of cplan_root_reopen, for the desugars that run before types exist
@@ -148,7 +147,7 @@ int cplan_missing_guard(Compiler *c, int t);
 int cplan_capture_arm(Compiler *c, int id, int t);
 CallPlan cplan_send_arm(Compiler *c, int id);
 CallPlan cplan_exception_render(Compiler *c, int id, int ci);
-const CallPlan *cplan_user(Compiler *c, int id);
+CallPlan cplan_user(Compiler *c, int id);
 /* The program's def a builtin's wrapper, method mi, stands for in place of
    the builtin where its Method is made (a reopen's def of the name), -1
    where it stands for the builtin, -2 where the record cannot tell */
@@ -330,10 +329,12 @@ int cplan_bool_sides(Compiler *c, int id, int *tmi, int *fmi);
 void cplan_check_missing(Compiler *c, int id, int mi, int ci, const char *name, int cmeth, const char *site);
 /* The same plan resolved afresh and never kept, for a reader that runs in
    the analysis, before the memo is codegen's to fill (the nil facts,
-   analyze_nil.c): it answers from the types as they stand. The answer
-   lasts until the next call. */
-const CallPlan *cplan_user_fresh(Compiler *c, int id);
-const CallPlan *cplan_const_user(Compiler *c, int id, int recv, int fresh);
+   analyze_nil.c): it answers from the types as they stand. */
+CallPlan cplan_user_fresh(Compiler *c, int id);
+/* A call on a constant receiver recv: the program's singleton method it
+   binds (fresh: resolved as cplan_user_fresh is), or, where it binds none,
+   a plan of no method (mi -1). */
+CallPlan cplan_const_user(Compiler *c, int id, int recv, int fresh);
 /* The user methods whose return is call node id's value, into out (at
    most cap): its plan's method and, for a switch, each member. A reader of
    what the call answers asks this; a reader of what the call enters (the
@@ -485,7 +486,7 @@ int cplan_record_sclass_early(Compiler *c, int id);
    self_ci < 0 is the node's own context, cplan_user. */
 /* CPX_TARGET reads only the direct chain target under its name view, respecting builtin-only aliases. */
 enum { CPX_IE = 1, CPX_EMIT = 2, CPX_ARM = 4, CPX_TARGET = 8 };
-const CallPlan *cplan_user_in(Compiler *c, int id, int self_ci, int flags);
+CallPlan cplan_user_in(Compiler *c, int id, int self_ci, int flags);
 /* Is the node codegen is at read as itself: no view, no instance_exec scope
    move or class, no inline splice? Only there may a memo per node answer
    (cplan_user's, the String plan's in share_plan.c). */

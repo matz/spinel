@@ -3105,9 +3105,9 @@ int emit_owner_class_test(Compiler *c, int recv, const char *name, int tv, int n
 
 int emit_send_blind(Compiler *c, int id, Buf *b) {
   if (nt_str(c->nt, id, "send_blind")) {
-    const CallPlan *plan = cplan_user(c, id);
-    if (plan->via == UC_SEND_BLIND) { emit_method_call(c, id, b); return 1; }
-    int smi = plan->send_fallback;
+    const CallPlan plan = cplan_user(c, id);
+    if (plan.via == UC_SEND_BLIND) { emit_method_call(c, id, b); return 1; }
+    int smi = plan.send_fallback;
     if (smi >= 0) {
       int srcv = nt_ref(c->nt, id, "receiver");
       /* A boxed receiver answers by its class at run time: one whose class

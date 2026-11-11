@@ -1283,8 +1283,8 @@ int infer_object_call(Compiler *c, int id, TyKind rt, TyKind *out) {
         comp_subclass_answers(c, cid, name)) {
       /* Runtime-name send arms on boxed self may include classes the descendant plan excludes. */
       if (g_plan_check && !nt_int(nt, id, "dyn_arm", 0)) {
-        const CallPlan *p = cplan_user_fresh(c, id);
-        if (p->mi >= 0) an_user_call_record(c, id, p->mi, p->via, p->owner_ci);
+        const CallPlan p = cplan_user_fresh(c, id);
+        if (p.mi >= 0) an_user_call_record(c, id, p.mi, p.via, p.owner_ci);
       }
       *out = TY_POLY; return 1;
     }

@@ -1352,7 +1352,7 @@ int emit_call_kernel_flow_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
         const char *lty = nt_type(nt, last);
         const char *lnm = (lty && sp_streq(lty, "CallNode")) ? nt_str(nt, last, "name") : NULL;
         int last_throw = (lnm && is_throw_name(lnm) && nt_ref(nt, last, "receiver") < 0 &&
-                          cplan_user_fresh(c, last)->mi < 0);
+                          cplan_user_fresh(c, last).mi < 0);
         Repr lr = repr_of(c, last);
         TyKind lt = lr.as_ty;
         /* TY_NIL includes a tail `loop { throw ... }` (a break-less loop

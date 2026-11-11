@@ -184,7 +184,7 @@ static int interp_changes_var(Compiler *c, int n, NodeKind vk, const char *vn) {
     const char *nm = k == NK_CallNode ? nt_str(nt, n, "name") : NULL;
     int has_blk = k == NK_CallNode && nt_ref(nt, n, "block") >= 0;
     int callish = nm && is_rebinding_reach_call(nm);
-    int user = k == NK_CallNode && (cplan_user(c, n)->mi >= 0 || cplan_user(c, n)->dispatch != CP_NONE);
+    int user = k == NK_CallNode && (cplan_user(c, n).mi >= 0 || cplan_user(c, n).dispatch != CP_NONE);
     int opaque = user || has_blk || callish || k == NK_YieldNode || k == NK_SuperNode || k == NK_ForwardingSuperNode ||
                  k == NK_LambdaNode;
     if (opaque && vn) {
@@ -214,9 +214,9 @@ static int interp_changes_var(Compiler *c, int n, NodeKind vk, const char *vn) {
 static const char *interp_reader_var(Compiler *c, int call, char *buf, size_t cap) {
   const NodeTable *nt = c->nt;
   if (nt_kind(nt, call) != NK_CallNode) return NULL;
-  const CallPlan *p = cplan_user(c, call);
-  if (p->mi >= 0 && p->dispatch == CP_DIRECT) {
-    int body = c->scopes[p->mi].body, n = 0;
+  const CallPlan p = cplan_user(c, call);
+  if (p.mi >= 0 && p.dispatch == CP_DIRECT) {
+    int body = c->scopes[p.mi].body, n = 0;
     const int *st = body >= 0 && nt_kind(nt, body) == NK_StatementsNode ? nt_arr(nt, body, "body", &n) : NULL;
     int last = n == 1 ? st[0] : (body >= 0 && nt_kind(nt, body) == NK_InstanceVariableReadNode ? body : -1);
     return last >= 0 && nt_kind(nt, last) == NK_InstanceVariableReadNode ? nt_str(nt, last, "name") : NULL;
@@ -225,7 +225,7 @@ static const char *interp_reader_var(Compiler *c, int call, char *buf, size_t ca
   const char *nm = nt_str(nt, call, "name");
   int r = nt_ref(nt, call, "receiver");
   Scope *sc = comp_scope_of(c, call);
-  if (p->mi < 0 && nm && (r < 0 || nt_kind(nt, r) == NK_SelfNode) && nt_ref(nt, call, "arguments") < 0 &&
+  if (p.mi < 0 && nm && (r < 0 || nt_kind(nt, r) == NK_SelfNode) && nt_ref(nt, call, "arguments") < 0 &&
       nt_ref(nt, call, "block") < 0 && sc && sc->class_id >= 0 && !sc->is_cmethod &&
       comp_reader_in_chain(c, sc->class_id, nm, NULL)) {
     snprintf(buf, cap, "@%s", nm);
@@ -249,7 +249,7 @@ static int interp_var_read_late(Compiler *c, const int *parts, int n, int k, int
   while (b >= 0 && nt_kind(nt, b) == NK_CallNode) {
     const char *nm = nt_str(nt, b, "name");
     int r = nt_paren_single(c->nt, nt_ref(nt, b, "receiver")), argc = call_plain_argc(c, b);
-    if (!nm || r < 0 || comp_ntype(c, r) != TY_STRING || cplan_user(c, b)->mi >= 0) break;
+    if (!nm || r < 0 || comp_ntype(c, r) != TY_STRING || cplan_user(c, b).mi >= 0) break;
     int self = (bop_answers_self(TY_STRING, nm, argc, nt_ref(nt, b, "block") >= 0) & (BOPF_SELF | BOPF_SELF_OR_NIL)) ||
                (argc == 0 && is_string_self_answer(nm));
     if (!self) break;

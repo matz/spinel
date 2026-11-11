@@ -189,10 +189,10 @@ static int nf_written_before(NF *f, int rd, ElabVar kind, const char *name) {
    plan reads the settled types and tables, which the rounds do not change */
 static int nf_plan(NF *f, int id, int *owner, int *dispatch) {
   if (f->pl_mi[id] == -2) {
-    const CallPlan *p = cplan_user_fresh(f->c, id);
-    f->pl_mi[id] = p->dispatch == CP_REFUSE ? -1 : p->mi;
-    f->pl_owner[id] = p->owner_ci;
-    f->pl_disp[id] = p->dispatch;
+    const CallPlan p = cplan_user_fresh(f->c, id);
+    f->pl_mi[id] = p.dispatch == CP_REFUSE ? -1 : p.mi;
+    f->pl_owner[id] = p.owner_ci;
+    f->pl_disp[id] = p.dispatch;
   }
   if (owner) *owner = f->pl_owner[id];
   if (dispatch) *dispatch = f->pl_disp[id];

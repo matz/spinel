@@ -607,13 +607,13 @@ static int inline_target_plan(Compiler *c, int id, const char *name, int recv, i
                               InlineTarget *t) {
   const NodeTable *nt = c->nt;
   t->mi = -1; t->recv_class = -1; t->cm_class = -1; t->cm_self_id = 0; t->implicit_self = 0;
-  const CallPlan *p;
+  CallPlan p;
   if (recv < 0 && g_ie_class_id >= 0) {
     /* inside an instance_eval/exec splice self is the rebound receiver: its
        class's lookup first, then the call as its own */
     p = cplan_user_in(c, id, g_ie_class_id, CPX_IE);
-    if (p->chain && p->via == UC_INST && p->owner_ci == g_ie_class_id) {
-      t->mi = p->mi; t->recv_class = g_ie_class_id;
+    if (p.chain && p.via == UC_INST && p.owner_ci == g_ie_class_id) {
+      t->mi = p.mi; t->recv_class = g_ie_class_id;
       return 1;
     }
   }
@@ -622,13 +622,13 @@ static int inline_target_plan(Compiler *c, int id, const char *name, int recv, i
            !(nt_kind(nt, recv) == NK_ConstantReadNode || nt_kind(nt, recv) == NK_ConstantPathNode)) {
     /* a poly arm (#2448): self is pre-bound to a cast of the boxed receiver,
        and the concrete class is supplied out of band */
-    CallPlan q = *cplan_user_in(c, id, g_inline_recv_class, CPX_ARM);
+    CallPlan q = cplan_user_in(c, id, g_inline_recv_class, CPX_ARM);
     t->recv_class = g_inline_recv_class;
     if (q.chain && q.via == UC_INST && q.owner_ci == g_inline_recv_class) t->mi = q.mi;
     return 1;
   }
   else p = cplan_user(c, id);
-  if (p->mi < 0) return 0;
+  if (p.mi < 0) return 0;
   if (recv < 0) {
     Scope *encl = comp_scope_of(c, id);
     int ecls = encl ? encl->class_id : -1;
@@ -637,31 +637,31 @@ static int inline_target_plan(Compiler *c, int id, const char *name, int recv, i
        body's (comp_cbody_call_mi) */
     int top_ok = ecls >= 0 || g_class_body_id < 0 ||
                  (c->node_cbody[id] == g_class_body_id && !(encl && encl->name));
-    if (ecls >= 0 && p->via == UC_INST && p->chain && p->owner_ci == ecls) {
+    if (ecls >= 0 && p.via == UC_INST && p.chain && p.owner_ci == ecls) {
       /* a switch whose default is a top-level def or Object's method
          (cplan_self_root_override): the def is the free function the
          lookup names, Object's method no target of self's chain */
-      int rcls = c->scopes[p->mi].class_id;
-      if (rcls < 0) { t->mi = p->mi; return 1; }
+      int rcls = c->scopes[p.mi].class_id;
+      if (rcls < 0) { t->mi = p.mi; return 1; }
       if (rcls == comp_core_class(c, CORE_OBJECT) && rcls != ecls) return 0;
-      t->mi = p->mi; t->implicit_self = 1;
+      t->mi = p.mi; t->implicit_self = 1;
       return 1;
     }
-    if (ecls >= 0 && encl->is_cmethod && p->via == UC_CMETH && p->owner_ci == ecls &&
-        c->scopes[p->mi].is_cmethod) {
-      t->mi = p->mi;
+    if (ecls >= 0 && encl->is_cmethod && p.via == UC_CMETH && p.owner_ci == ecls &&
+        c->scopes[p.mi].is_cmethod) {
+      t->mi = p.mi;
       return 1;
     }
-    if (ecls < 0 && g_class_body_id >= 0 && p->via == UC_CMETH && p->owner_ci == g_class_body_id &&
+    if (ecls < 0 && g_class_body_id >= 0 && p.via == UC_CMETH && p.owner_ci == g_class_body_id &&
         c->node_cbody[id] == g_class_body_id) {
-      t->mi = p->mi; t->cm_class = g_class_body_id;
+      t->mi = p.mi; t->cm_class = g_class_body_id;
       return 1;
     }
-    if (top_ok && p->via == UC_TOP) { t->mi = p->mi; return 1; }
-    if (top_ok && p->via == UC_INCLUDED) {
-      if (!scope_uses_ivars(c, p->mi)) {
-        t->mi = p->mi;
-        if (c->scopes[p->mi].is_cmethod) t->cm_class = c->scopes[p->mi].class_id;
+    if (top_ok && p.via == UC_TOP) { t->mi = p.mi; return 1; }
+    if (top_ok && p.via == UC_INCLUDED) {
+      if (!scope_uses_ivars(c, p.mi)) {
+        t->mi = p.mi;
+        if (c->scopes[p.mi].is_cmethod) t->cm_class = c->scopes[p.mi].class_id;
       }
       return 1;
     }
@@ -675,8 +675,8 @@ static int inline_target_plan(Compiler *c, int id, const char *name, int recv, i
   int bci = rk == NK_SelfNode ? class_body_self_ci(c, recv) : -1;
   if (narrow && !cname && bci < 0) {
     TyKind rt = comp_ntype(c, recv);
-    if (p->via == UC_INST && p->chain && ty_is_object(rt) && p->owner_ci == ty_object_class(rt)) {
-      t->mi = p->mi; t->recv_class = p->owner_ci;
+    if (p.via == UC_INST && p.chain && ty_is_object(rt) && p.owner_ci == ty_object_class(rt)) {
+      t->mi = p.mi; t->recv_class = p.owner_ci;
       return 1;
     }
     return 0;
@@ -684,23 +684,23 @@ static int inline_target_plan(Compiler *c, int id, const char *name, int recv, i
   /* (the class the node names: an alias's too) */
   int ci = cname ? const_node_class_index(c, recv) : bci >= 0 ? bci : self_class_static_ci(c, recv);
   if (ci < 0 && cname) ci = comp_class_index(c, cname);
-  if (p->via == UC_CMETH && !p->by_name && (cname || ci >= 0)) {
-    if (ci >= 0 && p->owner_ci == ci) { t->mi = p->mi; t->cm_class = ci; return 1; }
-    if (!narrow && cname && builtin_class_id(cname) && p->owner_ci == c->scopes[p->mi].class_id &&
-        p->owner_ci != ci) {
-      t->mi = p->mi; t->cm_class = p->owner_ci; t->cm_self_id = builtin_class_id(cname);
+  if (p.via == UC_CMETH && !p.by_name && (cname || ci >= 0)) {
+    if (ci >= 0 && p.owner_ci == ci) { t->mi = p.mi; t->cm_class = ci; return 1; }
+    if (!narrow && cname && builtin_class_id(cname) && p.owner_ci == c->scopes[p.mi].class_id &&
+        p.owner_ci != ci) {
+      t->mi = p.mi; t->cm_class = p.owner_ci; t->cm_self_id = builtin_class_id(cname);
       return 1;
     }
     return 0;
   }
-  if (ci < 0 && p->via == UC_INST && p->chain) {
+  if (ci < 0 && p.via == UC_INST && p.chain) {
     TyKind rt = comp_ntype(c, recv);
     /* Object's method as the default of a switch on self's class
        (cplan_self_root_override): no target of the receiver's chain */
-    int rcls = c->scopes[p->mi].class_id;
-    if (rcls == comp_core_class(c, CORE_OBJECT) && rcls != p->owner_ci) return 0;
-    if (ty_is_object(rt) && p->owner_ci == ty_object_class(rt)) {
-      t->mi = p->mi; t->recv_class = p->owner_ci;
+    int rcls = c->scopes[p.mi].class_id;
+    if (rcls == comp_core_class(c, CORE_OBJECT) && rcls != p.owner_ci) return 0;
+    if (ty_is_object(rt) && p.owner_ci == ty_object_class(rt)) {
+      t->mi = p.mi; t->recv_class = p.owner_ci;
       return 1;
     }
   }
@@ -5482,8 +5482,8 @@ static int iter_tap_slice_string_arms(Compiler *c, int id, Buf *b, int indent, c
      is called (the expression path), and one closed to the call raises
      there */
   if (sp_streq(name, "tap") && recv >= 0) {
-    const CallPlan *tp = cplan_user(c, id);
-    if ((tp->mi >= 0 && tp->via != UC_POLY) || cplan_root_closed(c, id, NULL) >= 0) return -1;   /* (a boxed receiver's dispatch keeps its statement form) */
+    const CallPlan tp = cplan_user(c, id);
+    if ((tp.mi >= 0 && tp.via != UC_POLY) || cplan_root_closed(c, id, NULL) >= 0) return -1;   /* (a boxed receiver's dispatch keeps its statement form) */
   }
   if (sp_streq(name, "tap") && recv >= 0) {
     TyKind et = repr_of(c, recv).as_ty;

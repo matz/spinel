@@ -86,9 +86,9 @@ int cplan_self_root_override(Compiler *c, int id, int scls, int root_mi) {
 }
 
 int cplan_root_switch(Compiler *c, int id, int scls) {
-  const CallPlan *p = cplan_user(c, id);
-  if (p->mi < 0 || p->via != UC_INST || !p->chain || p->owner_ci != scls || scls < 0) return 0;
-  int rc = c->scopes[p->mi].class_id, oci = comp_core_class(c, CORE_OBJECT);
+  const CallPlan p = cplan_user(c, id);
+  if (p.mi < 0 || p.via != UC_INST || !p.chain || p.owner_ci != scls || scls < 0) return 0;
+  int rc = c->scopes[p.mi].class_id, oci = comp_core_class(c, CORE_OBJECT);
   return rc < 0 || (rc == oci && scls != oci);
 }
 
@@ -253,9 +253,9 @@ int cplan_root_reopen_call(Compiler *c, int id, const CallPlan *p) {
 }
 
 /* See call_plan.h. */
-int cplan_reopen_target(Compiler *c, const CallPlan *p) {
-  return p->mi >= 0 && p->via == UC_REOPEN && p->dispatch == CP_DIRECT &&
-         (cplan_root_reopen_owner(c, p) || c->scopes[p->mi].yields) ? p->mi : -1;
+int cplan_reopen_target(Compiler *c, CallPlan p) {
+  return p.mi >= 0 && p.via == UC_REOPEN && p.dispatch == CP_DIRECT &&
+         (cplan_root_reopen_owner(c, &p) || c->scopes[p.mi].yields) ? p.mi : -1;
 }
 
 /* A method the program adds to Object under the name of a class-gated
@@ -788,19 +788,21 @@ static void cplan_resolve(Compiler *c, int id, CallPlan *p) {
    Ordinary user classes never need this precedence decision; native package
    bindings supply their own builtin names. The caller supplies the receiver
    node; a receiver that is not a constant has no target. */
-const CallPlan *cplan_const_user(Compiler *c, int id, int recv, int fresh) {
+CallPlan cplan_const_user(Compiler *c, int id, int recv, int fresh) {
   const NodeTable *nt = c->nt;
   NodeKind rk = recv >= 0 ? nt_kind(nt, recv) : NK_NONE;
   const char *cn = rk == NK_ConstantReadNode || rk == NK_ConstantPathNode ? const_key_at(c, recv) : NULL;
-  if (!cn || c->nclasses == 0) return NULL;
+  CallPlan none;
+  cplan_set(&none, -1, -1, UC_NONE, CP_NONE);
+  if (!cn || c->nclasses == 0) return none;
   int ci = comp_class_index(c, cn);
-  if (ci < 0) return NULL;
+  if (ci < 0) return none;
   if (!c->classes[ci].is_native_class && !c->classes[ci].is_builtin_const &&
       (c->n_native_funcs == 0 || comp_native_find(c, cn, nt_str(nt, id, "name")) < 0) &&
-      (c->n_ffi_funcs == 0 || ffi_find_func(c, cn, nt_str(nt, id, "name")) < 0)) return NULL;
-  if (nt_int(nt, id, "builtin_only", 0)) return NULL;
-  const CallPlan *p = fresh ? cplan_user_fresh(c, id) : cplan_user(c, id);
-  return p->mi >= 0 && p->via == UC_CMETH && p->dispatch == CP_DIRECT ? p : NULL;
+      (c->n_ffi_funcs == 0 || ffi_find_func(c, cn, nt_str(nt, id, "name")) < 0)) return none;
+  if (nt_int(nt, id, "builtin_only", 0)) return none;
+  const CallPlan p = fresh ? cplan_user_fresh(c, id) : cplan_user(c, id);
+  return p.mi >= 0 && p.via == UC_CMETH && p.dispatch == CP_DIRECT ? p : none;
 }
 
 /* Ask the native-block dispatch of the call once into blk (see
@@ -960,14 +962,14 @@ int cplan_missing_guard(Compiler *c, int t) {
 }
 int cplan_capture_arm(Compiler *c, int id, int t) {
   int sup = t >= 0 && c->scopes[t].def_node >= 0 ? (int)nt_int(c->nt, c->scopes[t].def_node, "behind_super", 0) - 1 : -1;
-  int mw = sup >= 0 && cplan_user(c, sup)->mi < 0 && !cplan_user(c, sup)->core_hook ? cplan_capture_missing(c, id) : -1;
+  int mw = sup >= 0 && cplan_user(c, sup).mi < 0 && !cplan_user(c, sup).core_hook ? cplan_capture_missing(c, id) : -1;
   return mw >= 0 ? mw : t;
 }
 
 /* A literal-name arm emitted on boxed self uses the existing boxed
    candidates. Its record must not admit new arms to the outer send. */
 CallPlan cplan_send_arm(Compiler *c, int id) {
-  CallPlan p = *cplan_user_fresh(c, id);
+  CallPlan p = cplan_user_fresh(c, id);
   int recv = nt_ref(c->nt, id, "receiver");
   if (p.mi < 0 && nt_int(c->nt, id, "dyn_arm", 0) &&
       (recv < 0 || nt_kind(c->nt, recv) == NK_SelfNode)) {
@@ -1023,10 +1025,10 @@ CallPlan cplan_exception_render(Compiler *c, int id, int xcm) {
 
 /* a plan answered is what the asker reads next: the method's value and
    parameters, the owning class's slots (infer_type's memo, imemo_dep_*) */
-static const CallPlan *cplan_dep(const CallPlan *p) {
-  if (p->mi >= 0) IMEMO_DEP_SCOPE(p->mi);
-  if (p->send_fallback >= 0) IMEMO_DEP_SCOPE(p->send_fallback);
-  if (p->owner_ci >= 0) IMEMO_DEP_CLASS(p->owner_ci);
+static CallPlan cplan_dep(CallPlan p) {
+  if (p.mi >= 0) IMEMO_DEP_SCOPE(p.mi);
+  if (p.send_fallback >= 0) IMEMO_DEP_SCOPE(p.send_fallback);
+  if (p.owner_ci >= 0) IMEMO_DEP_CLASS(p.owner_ci);
   return p;
 }
 /* The name call node id finally calls: its own, or for a send-family call
@@ -3454,8 +3456,8 @@ int cplan_kernel_row(Compiler *c, int id, const char *name) {
   int own = recv < 0 || nt_kind(nt, recv) == NK_SelfNode;
   if (!cplan_dispatch_row(c, id) || (self >= 0 && own && call_target(c, id, self, name, 0, NULL) >= 0)) return 0;
   /* ...and no method of the program's answers the call by the plan (a descendant's override) */
-  const CallPlan *p = cplan_user_fresh(c, id);
-  return p->mi < 0 && p->send_fallback < 0;
+  const CallPlan p = cplan_user_fresh(c, id);
+  return p.mi < 0 && p.send_fallback < 0;
 }
 
 const char *cplan_self_text(Compiler *c, int id, int ci, char *buf, size_t cap) {
@@ -3468,28 +3470,28 @@ const char *cplan_self_text(Compiler *c, int id, int ci, char *buf, size_t cap) 
   return buf;
 }
 
-const CallPlan *cplan_user_in(Compiler *c, int id, int self_ci, int flags) {
-  static CallPlan ctx;
+CallPlan cplan_user_in(Compiler *c, int id, int self_ci, int flags) {
   if (self_ci < 0) return cplan_user(c, id);
+  CallPlan ctx;
   cplan_set(&ctx, -1, -1, UC_NONE, CP_NONE);
   if (id < 0 || id >= c->node_cap || self_ci >= c->nclasses || nt_kind(c->nt, id) != NK_CallNode)
-    return &ctx;
-  if ((flags & CPX_TARGET) && nt_int(c->nt, id, "builtin_only", 0)) return &ctx;
+    return ctx;
+  if ((flags & CPX_TARGET) && nt_int(c->nt, id, "builtin_only", 0)) return ctx;
   const char *name = flags & CPX_TARGET ? view_call_name(c, id) : nt_str(c->nt, id, "name");
   int mi = name ? call_target(c, id, self_ci, name, 0, NULL) : -1;
   if (mi >= 0) {
     int form = flags & CPX_TARGET ? CP_DIRECT : cplan_dispatch_form(c, id, self_ci, name, 1);
     cplan_set(&ctx, mi, self_ci, UC_INST, form);
     ctx.chain = 1;
-    return cplan_dep(&ctx);
+    return cplan_dep(ctx);
   }
-  if (flags & CPX_TARGET) return &ctx;
+  if (flags & CPX_TARGET) return ctx;
   /* a miss is no method, but a dispatch on the class still has a form: a
      method only descendants define takes the switch */
   if (!(flags & CPX_IE) && name) {
     cplan_set(&ctx, -1, self_ci, UC_INST, cplan_dispatch_form(c, id, self_ci, name, 0));
     ctx.chain = 1;
-    return &ctx;
+    return ctx;
   }
   if (flags & CPX_IE) {
 #ifndef NDEBUG
@@ -3500,31 +3502,27 @@ const CallPlan *cplan_user_in(Compiler *c, int id, int self_ci, int flags) {
     assert(g_tmp == tmp0);
 #endif
   }
-  return cplan_dep(&ctx);
+  return cplan_dep(ctx);
 }
 
-const CallPlan *cplan_user(Compiler *c, int id) {
-  static CallPlan fresh;
-  if (id < 0 || id >= c->node_cap) { cplan_set(&fresh, -1, -1, UC_NONE, CP_NONE); return &fresh; }
+CallPlan cplan_user(Compiler *c, int id) {
+  CallPlan res;
+  if (id < 0 || id >= c->node_cap) { cplan_set(&res, -1, -1, UC_NONE, CP_NONE); return res; }
   int plain = cplan_plain_ctx();
   const char *nm = nt_str(c->nt, id, "name");
   if (plain && id < g_cp_cap && g_cp_have[id]) {
     const char *mn = g_cp_name[id];
-    if (mn ? nm && sp_streq(mn, nm) : !nm) return cplan_dep(&g_cp_memo[id]);
+    if (mn ? nm && sp_streq(mn, nm) : !nm) return cplan_dep(g_cp_memo[id]);
     plain = 0;
   }
 #ifndef NDEBUG
   int tmp0 = g_tmp;
 #endif
-  /* (resolved into a local: resolving may ask the analysis, which asks the
-     plan of another call, and that call writes `fresh` too) */
-  CallPlan res;
   cplan_resolve(c, id, &res);
-  fresh = res;
 #ifndef NDEBUG
   assert(g_tmp == tmp0);   /* resolving emits nothing */
 #endif
-  if (!plain) return cplan_dep(&fresh);
+  if (!plain) return cplan_dep(res);
   if (id >= g_cp_cap) {
     int ncap = g_cp_cap ? g_cp_cap : 1024;
     while (ncap <= id) ncap *= 2;
@@ -3535,21 +3533,19 @@ const CallPlan *cplan_user(Compiler *c, int id) {
     memset(g_cp_name + g_cp_cap, 0, (size_t)(ncap - g_cp_cap) * sizeof *g_cp_name);
     g_cp_cap = ncap;
   }
-  g_cp_memo[id] = fresh;
+  g_cp_memo[id] = res;
   free(g_cp_name[id]);
   g_cp_name[id] = nm ? strdup(nm) : NULL;
   g_cp_have[id] = 1;
-  return cplan_dep(&g_cp_memo[id]);
+  return cplan_dep(res);
 }
 
-const CallPlan *cplan_user_fresh(Compiler *c, int id) {
-  static CallPlan fresh;
-  cplan_set(&fresh, -1, -1, UC_NONE, CP_NONE);
-  if (id < 0 || id >= c->node_cap) return &fresh;
-  CallPlan res;   /* (a local: see cplan_user) */
+CallPlan cplan_user_fresh(Compiler *c, int id) {
+  CallPlan res;
+  cplan_set(&res, -1, -1, UC_NONE, CP_NONE);
+  if (id < 0 || id >= c->node_cap) return res;
   cplan_resolve(c, id, &res);
-  fresh = res;
-  return cplan_dep(&fresh);
+  return cplan_dep(res);
 }
 
 /* The class a constructor call builds: a constant receiver's or a local's
@@ -3739,15 +3735,14 @@ static int ct_template_self(Compiler *c, int id, int *out) {
 static int ct_resolve(Compiler *c, int id, int *out) {
   int text = ct_exception_text(c, id, out);
   if (text != -2) return text;
-  const CallPlan *p = cplan_user_fresh(c, id);
-  if (p->mi < 0 || p->dispatch == CP_REFUSE) {
-    int tmpl = p->dispatch == CP_REFUSE ? -2 : ct_template_self(c, id, out);
+  const CallPlan plan = cplan_user_fresh(c, id);
+  if (plan.mi < 0 || plan.dispatch == CP_REFUSE) {
+    int tmpl = plan.dispatch == CP_REFUSE ? -2 : ct_template_self(c, id, out);
     if (tmpl != -2) return tmpl;
     int recv = nt_ref(c->nt, id, "receiver");
     if (recv >= 0 && comp_ntype(c, recv) == TY_UNKNOWN) return CPT_UNKNOWN;
     return 0;
   }
-  CallPlan plan = *p;
   int n = 0;
   out[n++] = plan.mi;
   if (plan.dispatch < CP_SWITCH) return n;
@@ -3802,8 +3797,8 @@ TyKind cplan_poly_operator_ret(Compiler *c, int id) {
   int recv = nt_ref(c->nt, id, "receiver"), argc = 0;
   call_args(c->nt, id, &argc);
   if (argc != 1 || recv < 0 || comp_ntype(c, recv) != TY_POLY) return TY_UNKNOWN;
-  const CallPlan *p = cplan_user_fresh(c, id);
-  if (p->via != UC_POLY || p->mi < 0) return TY_UNKNOWN;
+  const CallPlan p = cplan_user_fresh(c, id);
+  if (p.via != UC_POLY || p.mi < 0) return TY_UNKNOWN;
   int n = 0, found = 0;
   const PolyCand *pcs = comp_poly_candidates_at(c, id, name, &n);
   for (int i = 0; i < n; i++) {
@@ -3837,8 +3832,8 @@ int cplan_cbody_direct(Compiler *c, int id) {
   const Scope *s = comp_scope_of(c, id);
   int r = nt_ref(nt, id, "receiver");
   if ((s && s->name) || (r >= 0 && nt_kind(nt, r) != NK_SelfNode)) return 0;
-  const CallPlan *p = cplan_user(c, id);
-  return p->mi >= 0 && p->via == UC_CMETH && p->dispatch == CP_DIRECT && p->owner_ci == c->node_cbody[id];
+  const CallPlan p = cplan_user(c, id);
+  return p.mi >= 0 && p.via == UC_CMETH && p.dispatch == CP_DIRECT && p.owner_ci == c->node_cbody[id];
 }
 
 int cplan_target_binds(Compiler *c, int id, int mi) {
@@ -3871,9 +3866,9 @@ int cplan_targets_unknown_why(Compiler *c, int id, int cap) {
   int tmp[CPT_MAX];
   if (cplan_targets(c, id, tmp, cap > CPT_MAX ? CPT_MAX : cap) != CPT_UNKNOWN) return CPT_WHY_NONE;
   if (g_ct_n[id] >= 0) return CPT_WHY_CAP;   /* resolved, past the caller's cap */
-  const CallPlan *p = cplan_user_fresh(c, id);
+  const CallPlan p = cplan_user_fresh(c, id);
   int recv = nt_ref(c->nt, id, "receiver");
-  if ((p->mi < 0 || p->dispatch == CP_REFUSE) && recv >= 0 && comp_ntype(c, recv) == TY_UNKNOWN)
+  if ((p.mi < 0 || p.dispatch == CP_REFUSE) && recv >= 0 && comp_ntype(c, recv) == TY_UNKNOWN)
     return CPT_WHY_RECV_UNTYPED;
   return CPT_WHY_CAP;
 }
@@ -3976,7 +3971,7 @@ static int ct_new_entries(Compiler *c, int id, int *out) {
   NodeKind k = nt_kind(c->nt, id);
   if (k == NK_SuperNode || k == NK_ForwardingSuperNode) return ct_super_new_initializers(c, id, out);
   if (k != NK_CallNode || !is_new_name(nt_str(c->nt, id, "name"))) return -2;
-  return cplan_user_fresh(c, id)->dispatch != CP_NONE ? ct_mixed_new_entries(c, id, out) : ct_new_initializers(c, id, out);
+  return cplan_user_fresh(c, id).dispatch != CP_NONE ? ct_mixed_new_entries(c, id, out) : ct_new_initializers(c, id, out);
 }
 
 int cplan_entries(Compiler *c, int id, int *out, int cap) {
@@ -4016,13 +4011,13 @@ int cplan_name_bound_names(const char *name, const char *names[2]) {
    it runs for a receiver whose class does not define the name
    (emit_send_blind), which neither list holds. */
 int cplan_emitted_targets(Compiler *c, int id, int *out, int cap) {
-  const CallPlan *p = cplan_user_fresh(c, id);
-  int fb = p->send_fallback, n = 0;
+  const CallPlan p = cplan_user_fresh(c, id);
+  int fb = p.send_fallback, n = 0;
   if (fb >= 0) {
     if (cap < 1) return CPT_UNKNOWN;
     out[n++] = fb;
   }
-  if (p->via != UC_POLY || p->mi < 0 || p->dispatch == CP_REFUSE) {
+  if (p.via != UC_POLY || p.mi < 0 || p.dispatch == CP_REFUSE) {
     int m = cplan_entries(c, id, out + n, cap - n);
     if (m == CPT_UNKNOWN) return m;
     for (int i = n; i < n + m; i++)
@@ -4170,9 +4165,9 @@ static int limit_exempt(Compiler *c, int id, int lx) {
   case LX_BINDING: {
     /* a switch over every class with a class method of the name (a class
        value, bare or boxed) leaves the classes without one on the builtin */
-    const CallPlan *p = cplan_user_fresh(c, id);
-    return p->dispatch != CP_NONE && !p->by_name &&
-           !(p->via == UC_POLY && p->mi >= 0 && c->scopes[p->mi].is_cmethod);
+    const CallPlan p = cplan_user_fresh(c, id);
+    return p.dispatch != CP_NONE && !p.by_name &&
+           !(p.via == UC_POLY && p.mi >= 0 && c->scopes[p.mi].is_cmethod);
   }
   }
   return 0;
@@ -4836,13 +4831,13 @@ static void cplan_refuse_resolve(Compiler *c, int id, CallPlan *p, char *buf, si
   cplan_set(p, -1, -1, UC_NONE, CP_NONE);
   NodeKind k = nt_kind(c->nt, id);
   if (k == NK_SuperNode || k == NK_ForwardingSuperNode) {
-    const CallPlan *sp = cplan_user(c, id);
-    if (sp->dispatch == CP_REFUSE) {
+    const CallPlan sp = cplan_user(c, id);
+    if (sp.dispatch == CP_REFUSE) {
       Scope *s = comp_scope_of(c, id);
       char msg[2400];
       snprintf(msg, sizeof msg, "%s.%s: %s", c->classes[s->class_id].name,
-               comp_scope_user_name(s), sp->msg);
-      cplan_refuse_set(p, sp->rfrom, sp->rkind, msg, buf, cap);
+               comp_scope_user_name(s), sp.msg);
+      cplan_refuse_set(p, sp.rfrom, sp.rkind, msg, buf, cap);
     }
     return;
   }
@@ -6012,7 +6007,7 @@ static int cplan_own_value_leaf(const VpLeaf *leaf, void *ud) {
   NodeKind k = leaf->kind == VPK_EXPR ? nt_kind(w->c->nt, leaf->node) : NK_NONE;
   /* (a walk that gave up is taken as dead: the refusal is the safe answer) */
   if (leaf->kind == VPK_GAVE_UP ||
-      ((k == NK_SuperNode || k == NK_ForwardingSuperNode) && cplan_user(w->c, leaf->node)->mi < 0)) {
+      ((k == NK_SuperNode || k == NK_ForwardingSuperNode) && cplan_user(w->c, leaf->node).mi < 0)) {
     w->dead = 1;
     return 0;
   }
@@ -6046,7 +6041,7 @@ static int cplan_mm_answers(Compiler *c, int mm) {
   unsigned char *f = cplan_scope_facts(c, mm);
   if (!(*f & SSF_MM_ASKED)) {
     *f |= SSF_MM_ASKED;   /* (a cycle of hand-ons answers nothing) */
-    int sup = cplan_body_super(c, mm), up = sup >= 0 ? cplan_user(c, sup)->mi : -1;
+    int sup = cplan_body_super(c, mm), up = sup >= 0 ? cplan_user(c, sup).mi : -1;
     if (sup < 0 || (up >= 0 && cplan_mm_answers(c, up))) *f |= SSF_MM_ANSWERS;
   }
   return (*f & SSF_MM_ANSWERS) != 0;
@@ -6056,9 +6051,9 @@ static int cplan_mm_answers(Compiler *c, int mm) {
    Spinel does not dispatch: one that answers for self (cplan_mm_answers), on
    the chain of the class or of a descendant, as self may be one? */
 int cplan_super_needs_method_missing(Compiler *c, int id) {
-  const CallPlan *p = cplan_user(c, id);
+  const CallPlan p = cplan_user(c, id);
   Scope *s = comp_scope_of(c, id);
-  if (!s || p->via != UC_SUPER || p->mi < 0 || !cplan_value_dead_super(c, p->mi)) return 0;
+  if (!s || p.via != UC_SUPER || p.mi < 0 || !cplan_value_dead_super(c, p.mi)) return 0;
   for (int k = -1; k < c->nclasses; k++) {
     if (k >= 0 && (k == s->class_id || !is_descendant(c, k, s->class_id))) continue;
     int mm = cplan_mm_method(c, k < 0 ? s->class_id : k, s->is_cmethod);

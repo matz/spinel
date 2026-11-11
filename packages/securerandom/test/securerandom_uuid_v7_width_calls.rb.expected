@@ -1,0 +1,30 @@
+-1: ArgumentError: extra_timestamp_bits must be in 0..12
+calls=
+0: 0000075b-cd15-7123-8567-89abcdef1032
+calls=clock:millisecond;bytes:10;
+1: 0000075b-cd15-7923-8567-89abcdef1032
+calls=bytes:10;clock:nanosecond;
+2: 0000075b-cd15-7923-8567-89abcdef1032
+calls=bytes:10;clock:nanosecond;
+3: 0000075b-cd15-7b23-8567-89abcdef1032
+calls=bytes:10;clock:nanosecond;
+4: 0000075b-cd15-7a23-8567-89abcdef1032
+calls=bytes:10;clock:nanosecond;
+5: 0000075b-cd15-7a23-8567-89abcdef1032
+calls=bytes:10;clock:nanosecond;
+6: 0000075b-cd15-7a63-8567-89abcdef1032
+calls=bytes:10;clock:nanosecond;
+7: 0000075b-cd15-7a63-8567-89abcdef1032
+calls=bytes:10;clock:nanosecond;
+8: 0000075b-cd15-7a73-8567-89abcdef1032
+calls=bytes:10;clock:nanosecond;
+9: 0000075b-cd15-7a7b-8567-89abcdef1032
+calls=bytes:10;clock:nanosecond;
+10: 0000075b-cd15-7a7b-8567-89abcdef1032
+calls=bytes:10;clock:nanosecond;
+11: 0000075b-cd15-7a79-8567-89abcdef1032
+calls=bytes:10;clock:nanosecond;
+12: 0000075b-cd15-7a78-8123-456789abcdef
+calls=clock:nanosecond;bytes:8;
+13: ArgumentError: extra_timestamp_bits must be in 0..12
+calls=

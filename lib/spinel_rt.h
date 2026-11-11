@@ -564,12 +564,10 @@ static inline double sp_process_clock_gettime(void) {
 #endif
 }
 
-/* Nanoseconds from the given clock id, for Process.clock_gettime with an
-   integer unit (the caller scales to us/ms/s or a float). */
-static inline int64_t sp_process_clock_ns(sp_int clock_id) {
+static inline int64_t sp_process_clock_units(sp_int clock_id, int64_t ns_per_unit) {
   struct timespec ts;
   if (clock_gettime((clockid_t)clock_id, &ts) != 0) ts.tv_sec = ts.tv_nsec = 0;
-  return (int64_t)ts.tv_sec * 1000000000LL + (int64_t)ts.tv_nsec;
+  return (int64_t)ts.tv_sec * (1000000000LL / ns_per_unit) + (int64_t)ts.tv_nsec / ns_per_unit;
 }
 
 /* Clock resolution in nanoseconds, for Process.clock_getres (#3045). */

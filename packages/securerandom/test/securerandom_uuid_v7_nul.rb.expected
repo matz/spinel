@@ -1,0 +1,13 @@
+ArgumentError: invalid value for Integer(): "3\u0000"
+ArgumentError: invalid value for Integer(): "\u0000"
+ArgumentError: invalid value for Integer(): "3\u0000tail"
+ArgumentError: invalid value for Integer(): "3\u0000\n\"\\"
+ArgumentError: invalid value for Integer(): "3\x00"
+ArgumentError: invalid value for Integer(): "bad\n\t\"\\"
+ArgumentError: invalid value for Integer(): "9223372036854775808\u0000"
+ArgumentError: invalid value for Integer(): "18446744073709551615\u0000"
+ArgumentError: extra_timestamp_bits must be in 0..12
+ArgumentError: invalid value for Integer(): "-9223372036854775809\u0000"
+ArgumentError: invalid value for Integer(): "-18446744073709551615\u0000"
+ArgumentError: extra_timestamp_bits must be in 0..12
+ArgumentError: extra_timestamp_bits must be in 0..12

@@ -1,0 +1,27 @@
+nil: TypeError: can't convert nil into Integer
+to_int nil: TypeError: can't convert IntNil into Integer
+to_int String: TypeError: can't convert IntString into Integer
+to_int Float: TypeError: can't convert IntFloat into Integer
+to_int raises: TypeError: can't convert IntRaise into Integer
+to_int Bigint 0: 0000075b-cd15-7123-8567-89abcdef1032
+to_int Bigint 12: 0000075b-cd15-7a78-8123-456789abcdef
+to_int Bigint 13: ArgumentError: extra_timestamp_bits must be in 0..12
+private to_int: 0000075b-cd15-7a78-8123-456789abcdef
+Float -1.0: ArgumentError: extra_timestamp_bits must be in 0..12
+Float -0.999: 0000075b-cd15-7123-8567-89abcdef1032
+Float -0.0: 0000075b-cd15-7123-8567-89abcdef1032
+Float 0.999: 0000075b-cd15-7123-8567-89abcdef1032
+Float 11.999: 0000075b-cd15-7a79-8567-89abcdef1032
+Float 12.999: 0000075b-cd15-7a78-8123-456789abcdef
+Float 13.0: ArgumentError: extra_timestamp_bits must be in 0..12
+Float 1.0e+100: ArgumentError: extra_timestamp_bits must be in 0..12
+Float -1.0e+100: ArgumentError: extra_timestamp_bits must be in 0..12
+Float Infinity: FloatDomainError: Infinity
+Float -Infinity: FloatDomainError: -Infinity
+Float NaN: FloatDomainError: NaN
+Rational -3/2: ArgumentError: extra_timestamp_bits must be in 0..12
+Rational -1/2: 0000075b-cd15-7123-8567-89abcdef1032
+Rational 25/2: 0000075b-cd15-7a78-8123-456789abcdef
+Rational 13/1: ArgumentError: extra_timestamp_bits must be in 0..12
+Rational 1267650600228229401496703205376/3: ArgumentError: extra_timestamp_bits must be in 0..12
+Rational -1267650600228229401496703205376/3: ArgumentError: extra_timestamp_bits must be in 0..12

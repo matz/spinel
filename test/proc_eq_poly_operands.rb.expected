@@ -1,0 +1,12 @@
+proc/itself: true false true true
+proc/dup: true false true true
+proc/clone: true false true true
+proc/dup of dup: true false true true
+proc/another proc: false true false false
+proc/lambda: false true false false
+lambda/dup: true false true true
+curry/another curry: false true false false
+curry/itself: true false true true
+:p
+nil
+:boxed

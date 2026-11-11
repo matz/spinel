@@ -285,7 +285,7 @@ static int emit_cmp_reopen_arm(Compiler *c, int id, int recv, const int *argv, B
   snprintf(rv, sizeof rv, "_t%d", rt0);
   if (g_cmp_reopen_id == id || g_n_argov >= MAX_ARG_OVERRIDE || !poly_cmp_reopen_test(c, rv, rtest, sizeof rtest))
     return 0;
-  int mk = view_bind(recv, "%s", rv);
+  int mk = view_bind_temp(recv, rt0);
   int sv = g_cmp_reopen_id; g_cmp_reopen_id = id;
   Buf db; memset(&db, 0, sizeof db);
   Buf *svp = g_pre; Buf dpre; memset(&dpre, 0, sizeof dpre); g_pre = &dpre;
@@ -1214,7 +1214,7 @@ int emit_call_compare_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
     if (ty_is_object(rt)) {
       int cid5 = ty_object_class(rt);
       if (call_target(c, id, cid5, name, 0, NULL) >= 0) {
-        Buf selfb = emit_cmp_self(c, recv, rt);
+        Buf selfb = emit_cmp_self(c, recv, rt, NULL);
         emit_dispatch(c, cid5, name, selfb.p, nt_ref(nt, id, "arguments"), -1, b);
         free(selfb.p);
         return 1;
@@ -1240,7 +1240,7 @@ int emit_call_compare_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
           buf_printf(b, "(sp_poly_cmp_ck(_t%d, _t%d) %s 0)", ta, tb2, name);
           return 1;
         }
-        Buf selfb = emit_cmp_self(c, recv, rt);
+        Buf selfb = emit_cmp_self(c, recv, rt, NULL);
         buf_puts(b, "(");
         emit_dispatch(c, cid4, "<=>", selfb.p, nt_ref(nt, id, "arguments"), -1, b);
         buf_printf(b, " %s 0)", name);

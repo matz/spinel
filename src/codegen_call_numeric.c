@@ -844,7 +844,7 @@ int poly_scalar_arms_open(Compiler *c, int id, PolyScalarArms *pa, Buf *b) {
   pa->hn = hoist_dispatch_args(c, nt_ref(nt, id, "arguments"), &pa->hsv, &pa->hvw);
   argov_reserve();
   pa->bslot = g_n_argov;
-  view_bind(recv, "_t%d", tv);
+  view_bind_temp(recv, tv);
   pa->open = 1;
   Buf ab; memset(&ab, 0, sizeof ab);
   for (int i = 0; i < ns; i++) {

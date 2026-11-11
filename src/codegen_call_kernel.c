@@ -108,7 +108,7 @@ int emit_dispatch_row_answer(Compiler *c, int id, const int *atmp, int natmp, Ty
   int ov = g_n_argov;
   if (atmp)
     for (int a = 0; a < argc && a < natmp; a++)
-      if (subtree_has_side_effect(c, argv[a])) view_bind(argv[a], "_t%d", atmp[a]);
+      if (subtree_has_side_effect(c, argv[a])) view_bind_temp(argv[a], atmp[a]);
   Buf rb; memset(&rb, 0, sizeof rb);
   const BuiltinOp *op = name ? bop_find(BOP_KERNEL, name, argc, nt_ref(c->nt, id, "block") >= 0) : NULL;
   int ok = op && emit_builtin_op_arm_text(c, id, -1, BOP_KERNEL, name, NULL, 0, &rb);   /* (one arm of a dispatch: the node answers what the dispatch does) */

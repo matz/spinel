@@ -5437,7 +5437,7 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
           if (any_pf9) {
             int tsd = ++g_tmp;
             tsd = hold_operand_pre(c, recv, TY_POLY, 1, tsd, 1);
-            view_bind(recv, "_t%d", tsd);
+            view_bind_temp(recv, tsd);
             int vw = view_push(c, recv, TY_POLY);
             int svcv = g_cls_value_recv; g_cls_value_recv = recv;
             int done9 = emit_unresolved_call(c, id, b);

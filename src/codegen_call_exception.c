@@ -22,7 +22,7 @@ static void emit_exc_own_render_raw(Compiler *c, int id, int recv, int xcm, cons
     buf_printf(b, "({ sp_%s *_t%d = ", c->classes[xcm].c_name, t);
     emit_expr(c, recv, b);
     buf_printf(b, "; SP_GC_ROOT(_t%d); _t%d ? ", t, t);
-    int mark = view_bind(recv, "_t%d", t);
+    int mark = view_bind_temp(recv, t);
     int tested = view_push_repr(c, recv, VR_NIL_TESTED, 1);
     emit_exc_own_render_raw(c, id, recv, xcm, plan, b);
     view_pop(c, tested); view_unbind(mark);
@@ -538,7 +538,7 @@ int emit_call_exception_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, c
     buf_printf(b, "({ sp_RbVal _t%d = sp_box_nullable_obj((void *)(", tv);
     emit_expr(c, recv, b);
     buf_printf(b, "), SP_BUILTIN_EXCEPTION); SP_GC_ROOT_RBVAL(_t%d); ", tv);
-    int slot = view_bind(recv, "_t%d", tv);
+    int slot = view_bind_temp(recv, tv);
     int vw = view_push(c, recv, TY_POLY);
     int sv_skip = exc_um_skip; exc_um_skip = id;
     /* `e.cause&.m`: the nil test is taken here, and the re-entry is past

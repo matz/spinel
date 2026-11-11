@@ -45,7 +45,7 @@ static void emit_boxed_array_read(Compiler *c, int id, int receiver, const char 
       }
       else temp = hold_operand(c, operand, TY_POLY, 1, temp, 1, " ", &call);
       g_pre = saved_pre;
-      count_binding = view_bind(operand, "_t%d", temp);
+      count_binding = view_bind_temp(operand, temp);
       count_view = view_push(c, operand, TY_POLY);
     }
     buf_printf(&call, "if (!sp_poly_face_array_ok(_t%d)) sp_raise_poly_nomethod(\"%s\", _t%d); %s(_t%d",

@@ -1795,7 +1795,7 @@ static int emit_gsub_block_split(Compiler *c, int id, int recv, Buf *b) {
   buf_printf(g_pre, "sp_RbVal _t%d = %s; SP_GC_ROOT_RBVAL(_t%d); sp_RbVal _t%d = sp_box_nil(); SP_GC_ROOT_RBVAL(_t%d);\n",
              tr, rb.p ? rb.p : "sp_box_nil()", tr, tres, tres);
   free(rb.p);
-  int slot = view_bind(recv, "_t%d", tr);
+  int slot = view_bind_temp(recv, tr);
   Buf *sv_pre = g_pre;
   int sv_split = g_gsub_split_id, sv_disp = g_gsub_dispatch_id;
   /* the String's scan */
@@ -5368,7 +5368,7 @@ int emit_minmax_cmp_expr(Compiler *c, int id, Buf *b) {
     buf_printf(g_pre, "sp_PolyArray *_t%d = sp_enum_items_from(%s); SP_GC_ROOT(_t%d);\n",
                ta, rb.p ? rb.p : "sp_box_nil()", ta);
     free(rb.p);
-    view_bind(recv, "_t%d", ta);
+    view_bind_temp(recv, ta);
     int v = view_push(c, recv, TY_POLY_ARRAY);
     int handled = emit_minmax_cmp_expr(c, id, b);
     view_pop(c, v);
@@ -5384,7 +5384,7 @@ int emit_minmax_cmp_expr(Compiler *c, int id, Buf *b) {
     buf_printf(g_pre, "sp_IntArray *_t%d = ({ sp_Range _t%d = %s; sp_range_to_ia(_t%d); }); SP_GC_ROOT(_t%d);\n",
                ta, tr, rb.p ? rb.p : "", tr, ta);
     free(rb.p);
-    view_bind(recv, "_t%d", ta);
+    view_bind_temp(recv, ta);
     int v = view_push(c, recv, TY_INT_ARRAY);
     int handled = emit_minmax_cmp_expr(c, id, b);
     view_pop(c, v);
@@ -5679,7 +5679,7 @@ int emit_collect_expr(Compiler *c, int id, Buf *b) {
       buf_printf(g_pre, "sp_IntArray *_t%d = ({ sp_Range _t%d = %s; sp_range_to_ia(_t%d); }); SP_GC_ROOT(_t%d);\n",
                  ta, tr, rb.p ? rb.p : "", tr, ta);
       free(rb.p);
-      view_bind(es_recv, "_t%d", ta);
+      view_bind_temp(es_recv, ta);
       int v = view_push(c, es_recv, TY_INT_ARRAY);
       int done = emit_collect_expr(c, id, b);
       view_pop(c, v);
@@ -9220,7 +9220,7 @@ static void ran_first_bind_o(int v, int t, int th, int to) {
     }
     g_ran_hnd[g_n_ran_hnd++] = (RanHandle){ g_n_argov, v, t, th, 0 };
   }
-  if (to) view_bind_o(v, "_t%d", t); else view_bind(v, "_t%d", t);
+  if (to) view_bind_temp_o(v, t); else view_bind_temp(v, t);
 }
 /* --share-strings: String node v whose handle ran into _t<th>: its reads
    are that handle's String (sp_strbuf_read_pub), as a variable's that holds
@@ -9323,7 +9323,7 @@ static void emit_arg_temp(Compiler *c, int v) {
     emit_gc_root_tmp_refs(c, TY_STR_RANGE, tr, g_pre);
     buf_puts(g_pre, "\n");
     free(rb.p);
-    view_bind(recv, "_t%d", tr);
+    view_bind_temp(recv, tr);
   }
   /* One representation: a String argument that is a handle (a slot's read,
      a container's element) is held AS the handle, one temp, and read where
@@ -10043,7 +10043,7 @@ static void ds_operand_reads_temp(Compiler *c, int node, int tmp) {
     if (oint_kind(ty)) view_bind_o(node, "%s", oint_nil(ty));
     else view_bind(node, "%s", nil ? nil : default_value_from_compiler(c, ty));
   }
-  else view_bind(node, "_t%d", tmp);
+  else view_bind_temp(node, tmp);
 }
 
 /* `s` as a C string literal: a key a message names (`"q\"z"`) may carry
@@ -12087,7 +12087,7 @@ static void emit_strict_args(Compiler *c, int mi, const int *argv, int pos_argc,
         else if (comp_ty_value_obj(c, vt)) { buf_puts(pre, " "); emit_gc_root_tmp_refs(c, vt, t, pre); }
         else if (needs_root(vt)) buf_printf(pre, " SP_GC_ROOT(_t%d);", t);
         buf_puts(pre, "\n");
-        view_bind(v, "_t%d", t);
+        view_bind_temp(v, t);
       }
       free(vb.p);
     }
@@ -12110,7 +12110,7 @@ static void emit_strict_args(Compiler *c, int mi, const int *argv, int pos_argc,
       emit_indent(pre, g_indent);
       buf_printf(pre, "%s _t%d = %s(_t%d, \"%s\");\n", c_type_name(vt), tv, fn, held[i], what ? what : "");
       if (bx) view_bind(v, "%s(_t%d)", bx, tv);
-      else view_bind(v, "_t%d", tv);
+      else view_bind_temp(v, tv);
     }
     else {
       Buf ob; memset(&ob, 0, sizeof ob); emit_oint_expr(c, v, vt, &ob);
@@ -12413,7 +12413,7 @@ void emit_args_filled_argv(Compiler *c, int callee_idx, const int *argv, int arg
         emit_indent(g_pre, g_indent);
         buf_printf(g_pre, "sp_String *_t%d = SP_STR_HDL(%s); SP_GC_ROOT(_t%d);\n", ht, hb.p, ht);
         free(hb.p);
-        view_bind(argv[k], "_t%d", ht);
+        view_bind_temp(argv[k], ht);
         if (held) held[k] = ht;
         continue;
       }
@@ -12460,7 +12460,7 @@ void emit_args_filled_argv(Compiler *c, int callee_idx, const int *argv, int arg
         emit_indent(g_pre, g_indent);
         buf_printf(g_pre, "%s _t%d = %s;\n", oint_ctype(at), ht, hb.p ? hb.p : oint_nil(at));
         free(hb.p);
-        view_bind_o(argv[k], "_t%d", ht);
+        view_bind_temp_o(argv[k], ht);
         continue;
       }
       /* As in emit_arg_temp, a fresh handle's input is still plain text. */
@@ -12489,7 +12489,7 @@ else {
         buf_puts(g_pre, "\n");
       }
       free(hb.p);
-      view_bind(argv[k], "_t%d", ht);
+      view_bind_temp(argv[k], ht);
       if (held && root) held[k] = ht;
     }
   }

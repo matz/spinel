@@ -2064,9 +2064,9 @@ static int emit_poly_cls_value_builtin(Compiler *c, int id, const char *name, in
   /* the result slot's form, as the dispatch seeded it: an Integer / Float
      answer that can be nil is held as the oint */
   int slot_o = oint_kind(ret) && node_is_oint(c, id);
-  int slot = view_bind(recv, "sp_unbox_class(_t%d)", tv);
+  int slot = view_bind_temp_read(recv, "sp_unbox_class", tv);
   for (int a = 0; a < argc; a++)
-    if (subtree_has_side_effect(c, argv[a])) view_bind(argv[a], "_t%d", atmp[a]);
+    if (subtree_has_side_effect(c, argv[a])) view_bind_temp(argv[a], atmp[a]);
   int va = view_push_arm(id, g_prbd_skip, 1);
   /* the call's own gap is a raise too (ArmCtx.gap_watch) */
   int gap = 0;
@@ -2140,7 +2140,7 @@ static int cls_value_known_arm(Compiler *c, int id, int k, unsigned unsettled, i
   /* each argument runs once, in the arm that is taken */
   for (int a = 0; a < argc; a++) if (subtree_has_side_effect(c, argv[a])) return 0;
   int sv_tmp = g_tmp;
-  int slot = view_bind(recv, "sp_unbox_class(_t%d)", tv);
+  int slot = view_bind_temp_read(recv, "sp_unbox_class", tv);
   int va = view_push_arm(id, g_prbd_skip, 1);
   /* the call's own gap is a raise too (ArmCtx.gap_watch) */
   int gap = 0;
@@ -2244,7 +2244,7 @@ static int emit_cls_value_switch(Compiler *c, int id, Buf *b) {
      it compiles without the switch (master's raise, with its arguments) */
   Buf eb; memset(&eb, 0, sizeof eb);
   argov_reserve();
-  view_bind(recv, "_t%d", tv);
+  view_bind_temp(recv, tv);
   int sv = g_cls_tag_skip;
   g_cls_tag_skip = id;
   if (boxed) emit_boxed(c, id, &eb);
@@ -4934,7 +4934,7 @@ static int emit_dynamic_send(Compiler *c, int id, Buf *b) {
        nil's NoMethodError, not the unwrap's TypeError */
     if (oint_kind(rt) && node_is_oint(c, recv)) {
       buf_printf(hd, "%s _t%d = ", oint_ctype(rt), tr); emit_oint_expr(c, recv, rt, hd); buf_puts(hd, "; ");
-      view_bind_o(recv, "_t%d", tr);
+      view_bind_temp_o(recv, tr);
     }
     else {
       emit_ctype(c, rt, hd); buf_printf(hd, " _t%d = ", tr);
@@ -4943,7 +4943,7 @@ static int emit_dynamic_send(Compiler *c, int id, Buf *b) {
       /* (the sequence that set the local the arms read: the receiver ran
          once, and this value only names it in a NoMethodError) */
       buf_puts(hd, "; "); emit_gc_root_tmp(c, rt, tr, hd);
-      view_bind(recv, "_t%d", tr);
+      view_bind_temp(recv, tr);
     }
     g_pre = outer_pre;
     if (dsr) {
@@ -4980,7 +4980,7 @@ static int emit_dynamic_send(Compiler *c, int id, Buf *b) {
     if (ppre.p) buf_puts(b, ppre.p);
     if (ph.p) buf_puts(b, ph.p);
     free(ppre.p); free(ph.p);
-    view_bind(sym, "_t%d", tp);
+    view_bind_temp(sym, tp);
     /* the receiver as the arms read it: its temp, or the local a
        --share-strings receiver was evaluated into */
     emit_boxed(c, dsr && !recv_held ? nt_ref(nt, arms[0], "receiver") : recv, &sockr);
@@ -8333,7 +8333,7 @@ static int poly_arg_held_oint(Compiler *c, int v, TyKind held) {
 static int bind_poly_arg_temp(Compiler *c, int v, TyKind held, int tn) {
   if (poly_arg_held_oint(c, v, held))
     return view_bind_o(v, "%s(_t%d)", oint_unbox(repr_of(c, v).as_ty), tn);
-  return view_bind(v, "_t%d", tn);
+  return view_bind_temp(v, tn);
 }
 
 /* The receiver of the push being emitted whose builtin arms box their new
@@ -8418,7 +8418,7 @@ static int emit_poly_str_prearm(Compiler *c, int id, int recv, const char *name,
   { char seen[48];
     snprintf(seen, sizeof seen, "if (_t%d.tag == SP_TAG_STR)", tv);
     if (b->p && strstr(b->p, seen)) return 0; }
-  int slot = view_bind(recv, "_t%d", tv);
+  int slot = view_bind_temp(recv, tv);
   int pa_kept = 0;
   /* Only an argument that can RUN something needs the hoisted temp: a literal
      re-emits identically, and for a pattern argument the emitter needs the
@@ -8764,7 +8764,7 @@ static int bi_default_probe(Compiler *c, int id, int recv, const char *name, int
                             const int *atmp, const TyKind *atmp_ty, TyKind ret, TyKind bt, int slot_o,
                             int nil_fwd, int tv, Buf *nb, char **arm_pre, int *box_o) {
   const NodeTable *nt = c->nt;
-  int slot = view_bind(recv, "_t%d", tv);
+  int slot = view_bind_temp(recv, tv);
   /* a splat into Object's own method (poly_default_obj_spreads) spreads the
      list the dispatch already flattened into its temp, a boxed Array: its
      operand is not read a second time */
@@ -8775,7 +8775,7 @@ static int bi_default_probe(Compiler *c, int id, int recv, const char *name, int
     if (nt_kind(nt, argv[a]) == NK_SplatNode && obj_spread && nsv < POLY_OBJ_SPREAD_MAX) {
       int ex = nt_ref(nt, argv[a], "expression");
       if (ex >= 0) {
-        view_bind(ex, "_t%d", atmp[a]);
+        view_bind_temp(ex, atmp[a]);
         sviews[nsv++] = view_push(c, ex, TY_POLY_ARRAY);
       }
       continue;
@@ -14810,7 +14810,7 @@ int emit_struct_new_call(Compiler *c, int id, int ci, int argc, const int *argv,
       else if (needs_root(vt)) buf_printf(g_pre, " SP_GC_ROOT(_t%d);", t);
       buf_puts(g_pre, "\n");
       free(vb.p);
-      int sl = view_bind(v, "_t%d", t);
+      int sl = view_bind_temp(v, t);
       if (bind0 < 0) bind0 = sl;
       continue;
     }
@@ -16677,7 +16677,8 @@ void emit_pre_root(Compiler *c, TyKind t, int tmp) {
 /* The text an object comparison passes as `self` to the user method it
    dispatches to (the caller frees it). A local, an instance variable or self
    is read in place; any other receiver is evaluated once into a g_pre temp,
-   and that temp is rooted. The operand is evaluated after the receiver and
+   and that temp is rooted (its number in *tmp, when tmp is given; -1 for a
+   read in place). The operand is evaluated after the receiver and
    commonly allocates -- `Set[1] == Set[2]` builds the right Set after the
    left one is bound -- and a fresh receiver held only by the temp was
    collected under that allocation, its pool slot handed to the operand, so
@@ -16685,9 +16686,10 @@ void emit_pre_root(Compiler *c, TyKind t, int tmp) {
    false. The general operand-order pass declines a call whose arm hoists
    into g_pre, which is what these emitters do, so they bound theirs bare --
    and into fixed buffers that cut a long in-place name short. */
-Buf emit_cmp_self(Compiler *c, int recv, TyKind rt) {
+Buf emit_cmp_self(Compiler *c, int recv, TyKind rt, int *tmp) {
   const NodeTable *nt = c->nt;
   NodeKind rk = nt_kind(nt, recv);
+  if (tmp) *tmp = -1;
   if ((rk == NK_LocalVariableReadNode ||
               rk == NK_InstanceVariableReadNode ||
               rk == NK_SelfNode)) {
@@ -16702,6 +16704,7 @@ Buf emit_cmp_self(Compiler *c, int recv, TyKind rt) {
   buf_printf(g_pre, " _t%d = %s;\n", t, rb.p ? rb.p : "");
   free(rb.p);
   emit_pre_root(c, rt, t);
+  if (tmp) *tmp = t;
   Buf out; memset(&out, 0, sizeof out);
   buf_printf(&out, "_t%d", t);
   return out;
@@ -16735,7 +16738,7 @@ static void emit_cmp_derived_eq(Compiler *c, int id, int recv, int arg, int ecid
   int args = nt_ref(c->nt, id, "arguments");
   int same_ok = !comp_ty_value_obj(c, rt) &&
                 ((ty_is_object(at) && !comp_ty_value_obj(c, at)) || at == TY_POLY);
-  Buf selfb = emit_cmp_self(c, recv, rt);
+  Buf selfb = emit_cmp_self(c, recv, rt, NULL);
   int cmi = comp_method_in_chain(c, ecid, "<=>", NULL);
   /* a Bignum answer is a pointer, which `== 0` would read as NULL */
   int big = cmi >= 0 && c->scopes[cmi].ret == TY_BIGINT;
@@ -16774,8 +16777,8 @@ static void emit_cmp_derived_eq(Compiler *c, int id, int recv, int arg, int ecid
   /* emit_cmp_self reads a local, an ivar or self in place; anything else it
      evaluates into a fresh `_tN`, which the dispatch then reads */
   int t0 = g_tmp, tn = -1;
-  Buf argb = emit_cmp_self(c, arg, at);
-  int mark = sscanf(argb.p, "_t%d", &tn) == 1 && tn > t0 ? view_bind(arg, "_t%d", tn) : -1;
+  Buf argb = emit_cmp_self(c, arg, at, NULL);
+  int mark = sscanf(argb.p, "_t%d", &tn) == 1 && tn > t0 ? view_bind_temp(arg, tn) : -1;
   buf_puts(b, eq ? "(" : "(!(");
   if (ar.kind == RK_BOXED)
     buf_printf(b, "((%s).tag == SP_TAG_OBJ && (void *)(%s).v.p == (void *)(%s))", argb.p, argb.p, selfb.p);
@@ -16861,7 +16864,8 @@ static int emit_eq_on_nil_slot(Compiler *c, int id, int recv, int arg, int ecid,
                (at == TY_INT || at == TY_FLOAT || at == TY_BOOL || at == TY_SYMBOL);
   if (!lit_nil && ar.kind != RK_PTR && ar.kind != RK_BOXED && !scalar) return 0;
   if (nil_eq_is_the_programs(c)) return 0;
-  Buf selfb = emit_cmp_self(c, recv, rt);
+  int st;
+  Buf selfb = emit_cmp_self(c, recv, rt, &st);
   int mark = -1;
   Buf argb; memset(&argb, 0, sizeof argb);
   NodeKind ak = nt_kind(nt, arg);
@@ -16884,12 +16888,12 @@ static int emit_eq_on_nil_slot(Compiler *c, int id, int recv, int arg, int ecid,
     buf_printf(g_pre, " _t%d = %s;\n", ta, vb.p ? vb.p : "");
     free(vb.p);
     buf_printf(&argb, "_t%d", ta);
-    mark = ao ? view_bind_o(arg, "_t%d", ta) : view_bind(arg, "_t%d", ta);
+    mark = ao ? view_bind_temp_o(arg, ta) : view_bind_temp(arg, ta);
   }
   buf_printf(b, "((%s) ? %s", selfb.p, eq || !sp_streq(name, "==") ? "" : "!");
   int mi = call_target(c, id, ecid, name, 0, NULL);
   int ret = view_push(c, id, dispatch_ret_over(c, ecid, name, 0, mi, mi >= 0 ? c->scopes[mi].ret : TY_BOOL, -1));
-  int self = view_bind(recv, "%s", selfb.p);
+  int self = st >= 0 ? view_bind_temp(recv, st) : view_bind(recv, "%s", selfb.p);
   int target = view_push_target(c, id, name), tested = view_push_repr(c, recv, VR_NIL_TESTED, 1);
   emit_cond(c, id, b);
   view_pop(c, tested); view_pop(c, target); view_pop(c, ret); view_unbind(self);
@@ -17498,7 +17502,7 @@ static int emit_case_eq_call(Compiler *c, int id, Buf *b) {
       int emi = call_target(c, id, ecid, name, 0, NULL);
       if (emi >= 0) {
         if (emit_eq_on_nil_slot(c, id, recv, argv[0], ecid, name, eq, b)) return 1;
-        Buf selfb = emit_cmp_self(c, recv, rt);
+        Buf selfb = emit_cmp_self(c, recv, rt, NULL);
         emit_dispatch(c, ecid, name, selfb.p, nt_ref(nt, id, "arguments"), nt_ref(nt, id, "block"), b);
         free(selfb.p);
         return 1;
@@ -17526,7 +17530,7 @@ static int emit_case_eq_call(Compiler *c, int id, Buf *b) {
         int eqm2 = comp_method_in_chain(c, ecid, "==", NULL);
         if (eqm2 >= 0) {
           if (emit_eq_on_nil_slot(c, id, recv, argv[0], ecid, "==", 0, b)) return 1;
-          Buf selfb = emit_cmp_self(c, recv, rt);
+          Buf selfb = emit_cmp_self(c, recv, rt, NULL);
           buf_puts(b, "(!");
           emit_dispatch(c, ecid, "==", selfb.p, nt_ref(nt, id, "arguments"), -1, b);
           buf_puts(b, ")");
@@ -17579,7 +17583,7 @@ static int emit_case_eq_call(Compiler *c, int id, Buf *b) {
         /* the operand boxes after the receiver and may allocate; a fresh
            receiver (a slice the comparison itself built) has to sit in a
            rooted temp across that, which is emit_cmp_self's whole job */
-        Buf selfb = emit_cmp_self(c, recv, rt);
+        Buf selfb = emit_cmp_self(c, recv, rt, NULL);
         if (!eq) buf_puts(b, "(!");
         buf_printf(b, "%s(%s", c->native_methods[nmi].csym, selfb.p ? selfb.p : "");
         buf_puts(b, ", ");
@@ -18910,7 +18914,7 @@ void emit_brk_wrapped_call(Compiler *c, int id, Buf *b) {
     free(rb.p);
     if (needs_root(normal_ty)) { buf_puts(g_pre, " "); emit_gc_root_tmp(c, normal_ty, spill, g_pre); }
     buf_puts(g_pre, "\n");
-    view_bind(wrecv, "_t%d", spill);
+    view_bind_temp(wrecv, spill);
     spilled_argov = 1;
   }
   emit_indent(g_pre, g_indent);
@@ -21713,7 +21717,7 @@ static int emit_poly_arity_guard(Compiler *c, int id, Buf *b) {
                argc, exps[q]);
     if (q + 1 < n) emit_indent(g_pre, g_indent);
   }
-  view_bind(recv, "_t%d", tv);
+  view_bind_temp(recv, tv);
   int sv = g_poly_arity_node; g_poly_arity_node = id;
   emit_call(c, id, b);
   g_poly_arity_node = sv;
@@ -21802,7 +21806,7 @@ static int emit_case_opts_guard(Compiler *c, int id, Buf *b) {
   if (plain && !rt_turkic) emit_boxed(c, recv, b);
   else { char tn[32]; snprintf(tn, sizeof tn, "_t%d", tv); emit_boxed_text(c, rt, tn, b); }
   buf_printf(b, ")%s ", (plain && !rt_turkic) ? "," : ";");
-  if (!plain || rt_turkic) view_bind(recv, "_t%d", tv);
+  if (!plain || rt_turkic) view_bind_temp(recv, tv);
   int sv = g_case_opts_node; g_case_opts_node = id;
   emit_call(c, id, b);
   g_case_opts_node = sv;
@@ -21908,7 +21912,7 @@ static int emit_bivar_copy_wrap(Compiler *c, int id, Buf *b) {
     buf_puts(&guard, " ");
     g_ivar_nil_guarded_id = id;
   }
-  int slot = view_bind(recv, "%s", rn);
+  int slot = view_bind_temp(recv, t);
   /* The call's nil test and argument temps can read the held receiver.
      Keep that prelude inside the wrap, after its declaration. */
   Buf pre = {0, 0, 0}, call = {0, 0, 0};
@@ -21961,7 +21965,7 @@ static int emit_splat_to_a_check_wrap(Compiler *c, int id, Buf *b) {
   emit_ctype(c, rt, rd);
   buf_printf(rd, " _t%d = %s; SP_GC_ROOT(_t%d);%s", tr, rb.p ? rb.p : "NULL", tr, g_pre ? "\n" : " ");
   free(rb.p);
-  int slot = view_bind(r, "_t%d", tr);
+  int slot = view_bind_temp(r, tr);
   int vw = view_push(c, id, t);
   int save = g_splat_to_a_inner;
   g_splat_to_a_inner = id;
@@ -23765,7 +23769,7 @@ int hoist_dispatch_args(Compiler *c, int argsN, int **sv, int **vw) {
         free(vb.p);
         hoisted_sv[hoisted_n] = g_n_argov;
         hoisted_vw[hoisted_n] = -1;   /* read where it stands: its own type */
-        view_bind(v, "_t%d", ht);
+        view_bind_temp(v, ht);
         hoisted_n++;
       }
       if (conv) {
@@ -23793,7 +23797,7 @@ int hoist_dispatch_args(Compiler *c, int argsN, int **sv, int **vw) {
     argov_reserve();
     int ht = hoist_boxed_rooted(c, hn[a]);
     hoisted_sv[hoisted_n] = g_n_argov;
-    view_bind(hn[a], "_t%d", ht);
+    view_bind_temp(hn[a], ht);
     hoisted_vw[hoisted_n] = view_push(c, hn[a], TY_POLY);
     hoisted_n++;
   }
@@ -24119,7 +24123,7 @@ static int emit_unrouted_gap(Compiler *c, int id, Buf *b) {
 static void emit_call_reboxed(Compiler *c, int id, int recv, Buf *b) {
   int tsd = ++g_tmp;
   tsd = hold_operand_pre(c, recv, TY_POLY, 1, tsd, 1);
-  view_bind(recv, "_t%d", tsd);
+  view_bind_temp(recv, tsd);
   if (g_plan_check) {   /* the re-entry, held against the plan before the view */
     int pa_frame = pa_begin(id);
     pa_observe(PA_BUILTIN, PA_KEY_BUILTIN + PB_SUBDISPATCH, -1, TY_UNKNOWN, PC_SAME);
@@ -24476,7 +24480,7 @@ int emit_unresolved_call(Compiler *c, int id, Buf *b) {
       buf_printf(g_pre, ")sp_poly_as_handle(%s, %s, \"%s\");\n",
                  krb.p ? krb.p : "sp_box_nil()", ty_nullable_builtin_id(kt), knm);
       free(krb.p);
-      view_bind(recv, "_t%d", tkv);
+      view_bind_temp(recv, tkv);
       int vw = view_push(c, recv, kt);
       int fv = view_push_face(recv, kt);
       int svkn = g_handle_face_node; g_handle_face_node = id;
@@ -24546,7 +24550,7 @@ int emit_unresolved_call(Compiler *c, int id, Buf *b) {
                    thv, hrb.p ? hrb.p : "sp_box_nil()", hnm, thv);
       }
       free(hrb.p);
-      view_bind(recv, "_t%d", thv);
+      view_bind_temp(recv, thv);
       int vw = view_push(c, recv, TY_POLY_POLY_HASH);
       /* and pin it for the inference too: the cached type alone does not hold,
          because anything under the re-emission that asks re-establishes it and
@@ -24741,7 +24745,7 @@ int emit_unresolved_call(Compiler *c, int id, Buf *b) {
           Buf eb2; memset(&eb2, 0, sizeof eb2);
           if (g_cls_value_recv != recv) {
             argov_reserve();   /* past the hoisted arguments, however many */
-            int slot2 = view_bind(recv, "_t%d", tv);
+            int slot2 = view_bind_temp(recv, tv);
             int sv2 = g_cls_tag_skip;
             g_cls_tag_skip = id;
             /* (Array#at kept by name for a class method `at`) */
@@ -24795,7 +24799,7 @@ int emit_unresolved_call(Compiler *c, int id, Buf *b) {
           }
           if (tv >= 0 && emit_cls_value_sg_accessor_of(c, id, recv, kt, nm, argc, argv, &sg)) {
             Buf eb3; memset(&eb3, 0, sizeof eb3);
-            int slot3 = view_bind(recv, "_t%d", tv);
+            int slot3 = view_bind_temp(recv, tv);
             int sv3 = g_cls_tag_skip;
             g_cls_tag_skip = id;
             emit_boxed(c, id, &eb3);
@@ -26789,7 +26793,7 @@ static int emit_operands_in_order(Compiler *c, int id, Buf *b) {
         continue;
       }
       if (fb[i]) {
-        view_bind(node[i], "_t%d", tmp[i]);
+        view_bind_temp(node[i], tmp[i]);
         held[nh++] = view_push(c, node[i], TY_POLY);
         continue;
       }
@@ -26799,10 +26803,10 @@ static int emit_operands_in_order(Compiler *c, int id, Buf *b) {
         if (ty[i] == TY_STRING)
           snprintf(g_argov_text[g_n_argov - 1], ARGOV_TEXT_LEN, "SP_STR_B(_t%d)", tmp[i]);
       }
-      else if (oo[i]) view_bind_o(node[i], "_t%d", tmp[i]);
+      else if (oo[i]) view_bind_temp_o(node[i], tmp[i]);
       /* (one representation: the temp is of either face; its reads are bytes) */
-      else if (ty[i] == TY_STRING) view_bind(node[i], "SP_STR_B(_t%d)", tmp[i]);
-      else view_bind(node[i], "_t%d", tmp[i]);
+      else if (ty[i] == TY_STRING) view_bind_temp_read(node[i], "SP_STR_B", tmp[i]);
+      else view_bind_temp(node[i], tmp[i]);
       if (ty[i] == TY_STRBUF) {
         held[nh++] = view_push_repr(c, node[i], VR_HEAD_HELD, 1);
       }
@@ -27859,7 +27863,7 @@ static void emit_nil_target_head_r(Compiler *c, int id, Buf *b, const char *lead
     }
     free(ob.p); free(op.p);
     if (hstr) ran_first_bind_read(node[i], t);
-    else if (ko) view_bind_o(node[i], "_t%d", t); else view_bind(node[i], "_t%d", t);
+    else if (ko) view_bind_temp_o(node[i], t); else view_bind_temp(node[i], t);
     int tok = view_push_repr(c, node[i], VR_HEAD_HELD, 1);
     if (*held < 0) *held = tok;
     if (node[i] == r) snprintf(rtext, sizeof rtext, "_t%d", t);
@@ -28659,7 +28663,7 @@ static int emit_recv_snapshot(Compiler *c, int id, Buf *b) {
   emit_gc_root_tmp(c, t, tn, g_pre);
   buf_puts(g_pre, "\n");
   free(rb.p);
-  view_bind(recv, "_t%d", tn);
+  view_bind_temp(recv, tn);
   int saved = g_recv_snapshot_node;
   g_recv_snapshot_node = id;
   emit_call(c, id, b);
@@ -30295,7 +30299,7 @@ static void emit_bool_side(Compiler *c, int id, int recv, int tb, int mi, int bo
   /* (a yielding method has no function of its own: its proc form, with the
      call's block as a proc, self the value held in _t<tb>) */
   if (mi >= 0 && c->scopes[mi].yields) {
-    int slot = view_bind(recv, "_t%d", tb);
+    int slot = view_bind_temp(recv, tb);
     ucall_arm_push();   /* (one arm of the plan's CP_SWITCH) */
     int done = emit_reopen_block_call(c, id, recv, mi, NULL, &nb);
     ucall_arm_pop();
@@ -30338,7 +30342,7 @@ static void emit_bool_side(Compiler *c, int id, int recv, int tb, int mi, int bo
   }
   else {
     t = an_builtin_answer(c, id);
-    int slot = view_bind(recv, "_t%d", tb);
+    int slot = view_bind_temp(recv, tb);
     int va = view_push_arm(id, g_prbd_skip, 1);
     int vw = t != TY_UNKNOWN && t != TY_POLY ? view_push(c, id, t) : -1;
     if (boxed && vw < 0) emit_boxed(c, id, &nb), t = TY_POLY;
@@ -30775,7 +30779,7 @@ static void emit_call_unwrapped(Compiler *c, int id, Buf *b) {
     char nr[160]; nil_recv_raise_text(c, id, nr, sizeof nr);
     buf_printf(&decl, " _t%d = %s; SP_GC_ROOT(_t%d); if (_t%d == NULL) %s; ",
                tg, rb.p ? rb.p : "NULL", tg, tg, nr);
-    int slot = view_bind(grecv, "_t%d", tg);
+    int slot = view_bind_temp(grecv, tg);
     size_t pre0 = g_pre ? g_pre->len : 0;
     Buf cb; memset(&cb, 0, sizeof cb);
     emit_call_held(c, id, &cb);
@@ -30877,7 +30881,7 @@ static int at_index_convert(Compiler *c, int id, Buf *b) {
   buf_printf(b, "sp_RbVal _t%d = sp_box_int(sp_poly_arg_int_chk(", t);
   emit_expr(c, argv[0], b);
   buf_puts(b, ")); ");
-  return view_bind(argv[0], "_t%d", t);
+  return view_bind_temp(argv[0], t);
 }
 
 /* `recv.at(i)` that desugar_array_at rewrote to `[]` before the receiver's
@@ -30923,7 +30927,7 @@ static int emit_at_without_array(Compiler *c, int id, Buf *b) {
     int t = ++g_tmp;
     buf_puts(b, "({ "); t = hold_operand(c, recv, TY_POLY, 0, t, 1, " ", b);
     buf_printf(b, "if (SP_UNLIKELY(_t%d.tag == SP_TAG_NIL)) sp_nil_recv(\"%s\"); ", t, fl);
-    view_bind(recv, "_t%d", t);
+    view_bind_temp(recv, t);
     int sv_chk = g_at_chk_id; g_at_chk_id = id;
     emit_at_call_held(c, id, b);
     g_at_chk_id = sv_chk;
@@ -30969,10 +30973,10 @@ static int emit_at_without_array(Compiler *c, int id, Buf *b) {
       buf_printf(b, " _t%d = ", ta);
       if (ko) emit_oint_expr(c, argv[i], at, b); else emit_expr(c, argv[i], b);
       buf_puts(b, "; ");
-      if (ko) view_bind_o(argv[i], "_t%d", ta); else view_bind(argv[i], "_t%d", ta);
+      if (ko) view_bind_temp_o(argv[i], ta); else view_bind_temp(argv[i], ta);
     }
     buf_printf(b, "sp_poly_ary_chk(_t%d, \"at\", 0); ", t);
-    view_bind(recv, "_t%d", t);
+    view_bind_temp(recv, t);
     at_index_convert(c, id, b);
     int sv_chk = g_at_chk_id; g_at_chk_id = id;
     emit_at_call_held(c, id, b);
@@ -30994,7 +30998,7 @@ static int emit_at_without_array(Compiler *c, int id, Buf *b) {
     if (argc != 1 || repr_of(c, argv[0]).kind != RK_BOXED) return 0;
     int sv_n = g_n_argov;
     buf_puts(b, "({ ");
-    view_bind(recv, "_t%d", hold_operand_pre(c, recv, rt, 0, ++g_tmp, 1));
+    view_bind_temp(recv, hold_operand_pre(c, recv, rt, 0, ++g_tmp, 1));
     at_index_convert(c, id, b);
     int sv_chk = g_at_chk_id; g_at_chk_id = id;
     emit_at_call_held(c, id, b);
@@ -31059,7 +31063,7 @@ static void emit_call_held(Compiler *c, int id, Buf *b) {
     buf_printf(g_pre, " _t%d = %s;\n", t, rb.p ? rb.p : "");
     free(rb.p);
     emit_pre_root(c, rt, t);
-    if (opt) view_bind_o(rrecv, "_t%d", t); else view_bind(rrecv, "_t%d", t);
+    if (opt) view_bind_temp_o(rrecv, t); else view_bind_temp(rrecv, t);
     emit_call_held(c, id, b);
     view_unbind(g_n_argov - 1);
     return;
@@ -32595,7 +32599,7 @@ int emit_ie_poly(Compiler *c, int id, Buf *b) {
     g_pre = &ab; g_indent = sv_ind + 1;
     emit_indent(g_pre, g_indent);
     buf_printf(g_pre, "sp_%s %s_t%d = %s(sp_%s *)_t%d.v.p;\n", cn, val ? "" : "*", ts, val ? "*" : "", cn, tv);
-    view_bind(recv, "_t%d", ts);
+    view_bind_temp(recv, ts);
     int vw = view_push(c, recv, ty_object(k));
     int fv = view_push_face(recv, ty_object(k));
     int sv_node = g_ie_poly_node; g_ie_poly_node = id;
@@ -32661,7 +32665,7 @@ int emit_ie_poly(Compiler *c, int id, Buf *b) {
     int sv_disc = g_ie_discard_value; g_ie_discard_value = !keep;
     int sv_nil = g_ie_nil_ivars; g_ie_nil_ivars = id + 1;
     /* the receiver already evaluated into _t<tv> for the dispatch */
-    view_bind(recv, "_t%d", tv);
+    view_bind_temp(recv, tv);
     /* typed as the boxed self, not as a lone candidate class */
     int *fsnap = ie_body_retype(c, body, -2 - id);
     if (fsnap) infer_subtree(c, body);
@@ -35117,7 +35121,7 @@ static int emit_reopen_call_first(Compiler *c, int id, int recv, TyKind rt, cons
   if (ro_recv) { memset(&rx, 0, sizeof rx); emit_oint_expr(c, recv, rt, &rx); }
   else rx = expr_buf(c, recv);
   g_pre = &pre;
-  if (!reread) view_bind(recv, "_t%d", t);
+  if (!reread) view_bind_temp(recv, t);
   int sv_skip = g_sn_skip; g_sn_skip = id;
   int vw = box ? view_push(c, id, nat) : -1;
   /* an Integer / Float answer of a guard that can stop is the `&.`'s oint,

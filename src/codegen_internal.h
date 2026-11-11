@@ -641,8 +641,11 @@ extern int  *g_argov_node;
    the C did not build (#7604). view_bind checks the length now. */
 #define ARGOV_TEXT_LEN 160
 extern char (*g_argov_text)[ARGOV_TEXT_LEN];
-/* Per slot: ARGOV_OINT, the bound text is an oint (view_bind_o). */
+/* Per slot: ARGOV_OINT, the bound text is an oint (view_bind_o); ARGOV_RAN,
+   it is a temp the binder assigned before the binding is read
+   (view_bind_temp). */
 #define ARGOV_OINT 1u
+#define ARGOV_RAN  2u
 extern unsigned char *g_argov_flag;
 int view_bind_o(int node, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
 extern int  g_n_argov;
@@ -2717,6 +2720,14 @@ int stmt_may_rebind_local(Compiler *c, int stmt, int read, const char *name);
    view_bind answers the binding's slot; view_unbind(n) drops every binding
    from slot n up. */
 int view_bind(int node, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
+/* As view_bind, to the temp _t<t> that the binder assigned the node's value
+   (or a conversion of it) before any read of the binding: the slot records
+   ARGOV_RAN. view_bind_temp_o is view_bind_o's form, and
+   view_bind_temp_read binds `reader(_t<t>)` for a reader that only reads the
+   temp (SP_STR_B, sp_unbox_class). */
+int view_bind_temp(int node, int t);
+int view_bind_temp_o(int node, int t);
+int view_bind_temp_read(int node, const char *reader, int t);
 void view_unbind(int n);
 /* A constant receiver's read effect already ran for the enclosing emission. */
 int view_const_read_done(Compiler *c, int id);

@@ -6471,7 +6471,7 @@ static int masgn_hold_target_parts(Compiler *c, int id) {
       emit_gc_root_tmp(c, vt, t, g_pre);
       buf_puts(g_pre, "\n");
       free(vb.p);
-      view_bind(v, "_t%d", t);
+      view_bind_temp(v, t);
       held++;
     }
   }
@@ -6717,7 +6717,7 @@ static void emit_expr_node(Compiler *c, int id, Buf *b) {
       emit_gc_root_tmp(c, st, ts, &lb);
       buf_puts(&lb, "\n");
       free(eb.p);
-      view_bind(subs[i], "_t%d", ts);
+      view_bind_temp(subs[i], ts);
     }
     int tr = ++g_tmp;
     Buf rb; memset(&rb, 0, sizeof rb);
@@ -7201,7 +7201,7 @@ static void emit_expr_node(Compiler *c, int id, Buf *b) {
            boxes (ran_first_handle), not its variable's, which the stores
            may have rebound */
         if (vt == TY_STRBUF) ran_first_bind(v, t, t);
-        else view_bind(v, "_t%d", t);
+        else view_bind_temp(v, t);
       }
       free(vb.p);
       held++;

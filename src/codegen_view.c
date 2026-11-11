@@ -136,6 +136,17 @@ int view_bind_o(int node, const char *fmt, ...) {
   return slot;
 }
 
+/* See codegen_internal.h. */
+static int view_ran(int slot) {
+  g_argov_flag[slot] |= ARGOV_RAN;
+  return slot;
+}
+int view_bind_temp(int node, int t) { return view_ran(view_bind(node, "_t%d", t)); }
+int view_bind_temp_o(int node, int t) { return view_ran(view_bind_o(node, "_t%d", t)); }
+int view_bind_temp_read(int node, const char *reader, int t) {
+  return view_ran(view_bind(node, "%s(_t%d)", reader, t));
+}
+
 void view_unbind(int n) { g_n_argov = n; }
 
 unsigned view_epoch(void) { return view_epoch_n; }

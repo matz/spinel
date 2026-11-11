@@ -766,7 +766,7 @@ int emit_op_method_bind(Compiler *c, const BopCtx *x, Buf *b) {
   buf_printf(b, "({ sp_BoundMethod *_t%d = ", tr); emit_expr(c, x->recv, b);
   buf_printf(b, "; SP_GC_ROOT(_t%d); ", tr);
   int rr = hold_operand(c, argv[0], repr_of(c, argv[0]).as_ty, 0, ++g_tmp, 1, " ", b);
-  vr = view_bind(argv[0], "_t%d", rr);
+  vr = view_bind_temp(argv[0], rr);
   for (int i = 0; i < n; i++) {
     if (i < n - 1) buf_printf(b, "_t%d->fn == (sp_int)(uintptr_t)&%s ? ", tr, mc_method(c, &c->scopes[to[i]]));
     if (!emit_method_bind_target(c, x, b, to[i])) {
@@ -951,7 +951,7 @@ int emit_op_method_source_location(Compiler *c, const BopCtx *x, Buf *b) {
   int to[2 * (VER_MAX_ARMS + 1)], n = cplan_method_held(c, mi, plan.method_node, to), tr = ++g_tmp;
   buf_printf(b, "({ sp_BoundMethod *_t%d = ", tr); emit_expr(c, x->recv, b);
   buf_printf(b, "; SP_GC_ROOT(_t%d); ", tr);
-  int vr = view_bind(x->recv, "_t%d", tr);
+  int vr = view_bind_temp(x->recv, tr);
   for (int i = 0; i < n; i++) {
     if (i < n - 1) buf_printf(b, "_t%d->fn == (sp_int)(uintptr_t)&%s ? ", tr, mc_method(c, &c->scopes[to[i]]));
     if (!emit_method_source_target(c, x, b, to[i], plan.method_node)) {
@@ -1806,7 +1806,7 @@ int emit_call_callable_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, co
       emit_indent(g_pre, g_indent);
       buf_printf(g_pre, "sp_Proc *_t%d = %s; SP_GC_ROOT(_t%d);\n", tq, rq.p ? rq.p : "NULL", tq);
       free(rq.p);
-      int slot = view_bind(recv, "_t%d", tq);
+      int slot = view_bind_temp(recv, tq);
       int sv = g_sn_proc_node; g_sn_proc_node = id;
       Buf cb; memset(&cb, 0, sizeof cb);
       /* an Integer / Float answer is an sp_oint: nil for the skipped call,
@@ -2067,7 +2067,7 @@ static int emit_method_obj_target(Compiler *c, int id, Buf *b, const NodeTable *
         return 0;
       }
       buf_printf(b, "; SP_GC_ROOT(_t%d); ", tr);
-      int vr = view_bind(recv, "_t%d", tr);
+      int vr = view_bind_temp(recv, tr);
       emit_call_callable_arms(c, id, b, nt, "call", recv, argc - 1, argv + 1);
       view_unbind(vr);
       buf_puts(b, "; })");
@@ -2561,7 +2561,7 @@ int emit_call_method_obj_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
   /* Evaluate and root the receiver before testing the cells. */
   if (recv >= 0) {
     int rr = hold_operand(c, recv, repr_of(c, recv).as_ty, 0, ++g_tmp, 1, " ", b);
-    vr = view_bind(recv, "_t%d", rr);
+    vr = view_bind_temp(recv, rr);
   }
   buf_printf(b, "sp_BoundMethod *_t%d; ", tr);
   for (int i = 0; i < n; i++) {
@@ -3092,7 +3092,7 @@ int emit_send_blind(Compiler *c, int id, Buf *b) {
         tv = hold_operand_pre(c, srcv, TY_POLY, 1, tv, 1);
         int sac = 0; const int *sav = call_args(c->nt, id, &sac);
         int sv_argov = g_n_argov;
-        view_bind(srcv, "_t%d", tv);
+        view_bind_temp(srcv, tv);
         if (sav && sac > 0) emit_args_in_source_order(c, sav, sac, g_pre);
         buf_printf(b, "(((_t%d.tag == SP_TAG_OBJ && (0", tv);
         const PolyPlan *arms = cplan_poly_arms(c, id);

@@ -4477,6 +4477,40 @@ static SP_UNUSED sp_RbVal sp_poly_nil_no_method(const char *m, sp_RbVal v) { sp_
 static SP_UNUSED sp_int sp_poly_range_bound(sp_RbVal v, sp_int none) { return v.tag == SP_TAG_NIL ? none : sp_poly_to_i(v); }
 /* Enumerating a beginless Range: CRuby's TypeError. */
 static SP_NOINLINE SP_COLD SP_UNUSED void sp_range_nil_begin_raise(void) { sp_raise_cls("TypeError", "can't iterate from NilClass"); }
+/* The sum of an Integer Range's elements, by their closed form instead of a
+   walk: n elements from first by step s add to n * (first + last) / 2. The
+   Array a walk builds holds at most 2**30 elements, so `(1..2**31).sum`
+   answered the sum of the first 2**30 of them. One factor is halved first:
+   n when it is even, else the sum first + last (n - 1 steps apart, an even
+   count of steps, so first + last is even too), which is then the middle
+   element and lies inside the Range. The middle element is computed in
+   unsigned, where it is exact because it is a value of the Range. */
+static SP_UNUSED sp_int sp_range_mid_elem(sp_Range r, sp_int n) {
+  return (sp_int)((uintptr_t)r.first + (uintptr_t)((n - 1) / 2) * (uintptr_t)sp_range_step(r));
+}
+/* the sum as an Integer box: a Bignum when it leaves the word under
+   --int-overflow=promote, RangeError under raise, wrapped under wrap,
+   as the Integer arithmetic of each mode does */
+static SP_UNUSED sp_RbVal sp_range_sum_box(sp_Range r) {
+  if (r.nobeg) sp_range_nil_begin_raise();
+  if (r.noend) sp_raise_cls("RangeError", "cannot convert endless range to an array");
+  sp_int n = sp_range_count(r);
+  if (n <= 0) return sp_box_int(0);
+  if (n & 1) return SP_POLY_INT_OP(mul, n, sp_range_mid_elem(r, n));
+  sp_RbVal ends = SP_POLY_INT_OP(add, r.first, sp_range_last_elem(r));
+  SP_GC_ROOT_RBVAL(ends);
+  return sp_poly_mul(sp_box_int(n / 2), ends);
+}
+/* the same sum in the word, plus an Integer seed, for the typed sum */
+static SP_UNUSED sp_int sp_range_sum_i(sp_Range r, sp_int seed) {
+  if (r.nobeg) sp_range_nil_begin_raise();
+  if (r.noend) sp_raise_cls("RangeError", "cannot convert endless range to an array");
+  sp_int n = sp_range_count(r);
+  if (n <= 0) return seed;
+  sp_int total = (n & 1) ? sp_int_mul(n, sp_range_mid_elem(r, n))
+                         : sp_int_mul(n / 2, sp_int_add(r.first, sp_range_last_elem(r)));
+  return sp_int_add(seed, total);
+}
 /* A Float Range bound read out of a box: nil leaves that side open (the
    -/+HUGE_VAL sentinel), anything else converts as a Float bound does; the
    bits record an open side (nil_bit) or an Integer one (int_bit) for
@@ -15779,15 +15813,7 @@ static sp_RbVal sp_poly_sum(sp_RbVal v) {
     case SP_BUILTIN_POLY_ARRAY: return sp_PolyArray_sum_poly((sp_PolyArray *)v.v.p);
     case SP_BUILTIN_PTR_ARRAY:  return sp_PolyArray_sum_poly(sp_PtrArray_to_poly((sp_PtrArray *)v.v.p));
     /* a container-read int Range sums like the typed path (#3234) */
-    case SP_BUILTIN_RANGE: {
-      sp_IntArray *ia = sp_range_to_ia(*(sp_Range *)v.v.p);
-      SP_GC_ROOT(ia);
-#ifdef SP_INT_OVERFLOW_MODE_PROMOTE
-      return sp_IntArray_sum_promote(ia, 0);
-#else
-      return sp_box_int(sp_IntArray_sum(ia, 0));
-#endif
-    }
+    case SP_BUILTIN_RANGE: return sp_range_sum_box(*(sp_Range *)v.v.p);
     /* an Enumerator's seedless sum is its sum(0), as in CRuby: from the
        first Float on, compensated */
     case SP_BUILTIN_ENUMERATOR: return sp_poly_sum_seed(v, sp_box_int(0));
@@ -15825,22 +15851,13 @@ static sp_RbVal sp_range_sum_seed(sp_Range r, sp_RbVal seed) {
   if (r.noend) sp_raise_cls("RangeError", "cannot convert endless range to an array");
   if (sp_range_count(r) <= 0) return seed;
   SP_GC_ROOT_RBVAL(seed);
-  sp_IntArray *ia = sp_range_to_ia(r);
-  SP_GC_ROOT(ia);
-#ifdef SP_INT_OVERFLOW_MODE_PROMOTE
-  sp_RbVal promoted = sp_IntArray_sum_promote(ia, 0);
-  SP_GC_ROOT_RBVAL(promoted);
-  if (seed.tag == SP_TAG_INT || seed.tag == SP_TAG_BIGINT)
-    return sp_poly_add(promoted, seed);
-  return sp_box_float(sp_poly_Float(seed) + sp_poly_Float(promoted));
-#else
-  sp_int total = sp_IntArray_sum(ia, 0);
   /* through sp_poly_add so a Bignum seed keeps its digits instead of wrapping
      into the sp_int the typed emitter used to hand this path */
+  sp_RbVal total = sp_range_sum_box(r);
+  SP_GC_ROOT_RBVAL(total);
   if (seed.tag == SP_TAG_INT || seed.tag == SP_TAG_BIGINT)
-    return sp_poly_add(sp_box_int(total), seed);
-  return sp_box_float(sp_poly_Float(seed) + (sp_float)total);
-#endif
+    return sp_poly_add(total, seed);
+  return sp_box_float(sp_poly_Float(seed) + sp_poly_Float(total));
 }
 /* Is this a value CRuby's Array#sum keeps in its EXACT accumulation phase --
    the Integer/Rational family, which adds without dropping a digit? A Float is

@@ -15086,13 +15086,16 @@ int emit_range_call(Compiler *c, int id, Buf *b) {
       /* promote typed the sum poly: the total can leave the word */
       else if (sp_streq(name, "sum") && argc <= 1 && repr_of(c, id).kind == RK_BOXED &&
                (argc == 0 || comp_ntype(c, argv[0]) == TY_INT)) {
-        buf_printf(b, "sp_IntArray_fold_v(sp_range_to_ia(_t%d), ", t);
+        /* the closed form, not a walk: the Array a walk builds stops at
+           2**30 elements */
+        int ts = ++g_tmp;
+        buf_printf(b, "({ sp_RbVal _t%d = ", ts);
         if (argc == 1) emit_boxed(c, argv[0], b); else buf_puts(b, "sp_box_int(0)");
-        buf_puts(b, ", 0)");
+        buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); sp_poly_add(_t%d, sp_range_sum_box(_t%d)); })", ts, ts, t);
       }
       else if (sp_streq(name, "sum") && argc == 1 && comp_ntype(c, argv[0]) == TY_FLOAT) {
         buf_puts(b, "(("); emit_expr(c, argv[0], b);
-        buf_printf(b, ") + (double)sp_IntArray_sum(sp_range_to_ia(_t%d), 0))", t);
+        buf_printf(b, ") + (double)sp_range_sum_i(_t%d, 0))", t);
       }
       /* Range#sum takes an INTEGER seed exactly and runs every other class
          through Kernel#Float, answering a Float -- so a Bignum seed wrapped
@@ -15106,12 +15109,12 @@ int emit_range_call(Compiler *c, int id, Buf *b) {
         buf_puts(b, ")");
       }
       else if (sp_streq(name, "sum") && argc == 1) {
-        buf_printf(b, "sp_IntArray_sum(sp_range_to_ia(_t%d), ", t);
+        buf_printf(b, "sp_range_sum_i(_t%d, ", t);
         emit_int_expr(c, argv[0], b);
         buf_puts(b, ")");
       }
       else if (sp_streq(name, "sum"))
-        buf_printf(b, "sp_IntArray_sum(sp_range_to_ia(_t%d), 0)", t);
+        buf_printf(b, "sp_range_sum_i(_t%d, 0)", t);
       else if (sp_streq(name, "exclude_end?"))
         buf_printf(b, "sp_range_excl_end(_t%d)", t);
       else if (is_eql_or_equal(name)) {

@@ -225,6 +225,9 @@ int cplan_super_chain_mi(Compiler *c, int id, const Scope *s, int par, const cha
    from (-1: a prepend chain with no next) */
 int cplan_super_target(Compiler *c, int id, const Scope *s, MethodLookup *ml);
 int cplan_kernel_def(Compiler *c, const char *name);   /* a version of the name's top-level history is a program Kernel def */
+/* Does call id run Kernel's raise: a receiverless `raise` or `fail` that no
+   method of the program answers (a class's own `raise`, a top-level def)? */
+int cplan_kernel_raise(Compiler *c, int id);
 /* Does the Class row for call id, named name, on the class value recv answer
    the call? Not where a class method of the program's does (the plan binds
    it a target), nor where the row is a private method's and the call names

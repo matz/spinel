@@ -1063,15 +1063,12 @@ int loop_has_valued_break(Compiler *c, int root) {
   return 0;
 }
 
-/* A receiverless `raise`/`fail` call: it diverges, so in a value position it
-   yields no value (its C form is void). A branch whose value is such a call
-   must be emitted as a statement, not assigned to the result temp. */
+/* A call that runs Kernel's raise (cplan_kernel_raise): it diverges, so in
+   a value position it yields no value (its C form is void). A branch whose
+   value is such a call must be emitted as a statement, not assigned to the
+   result temp. */
 static int node_is_raise(Compiler *c, int nd) {
-  const NodeTable *nt = c->nt;
-  if (nd < 0 || nt_kind(nt, nd) != NK_CallNode) return 0;
-  if (nt_ref(nt, nd, "receiver") >= 0) return 0;
-  const char *nm = nt_str(nt, nd, "name");
-  return nm && (is_raise_alias(nm));
+  return nd >= 0 && cplan_kernel_raise(c, nd);
 }
 
 /* One arm of a value-position if/unless: box a concrete arm into a poly

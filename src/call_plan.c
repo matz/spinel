@@ -296,6 +296,13 @@ static int cplan_root_under_builtin(Compiler *c, int top) {
 int cplan_kernel_def(Compiler *c, const char *name) {
   return elab_main_history_marked(c, name, "kernel_def");
 }
+/* See call_plan.h. */
+int cplan_kernel_raise(Compiler *c, int id) {
+  const NodeTable *nt = c->nt;
+  if (nt_kind(nt, id) != NK_CallNode || nt_ref(nt, id, "receiver") >= 0) return 0;
+  const char *nm = nt_str(nt, id, "name");
+  return nm && is_raise_alias(nm) && cplan_user(c, id)->dispatch == CP_NONE;
+}
 /* A super's parent-chain target, past inherited copies of the same
    extended definition. Shared by resolution, inference, inline splicing and
    the miss check. Every step is call_target's, with CT_REACH: it skips the

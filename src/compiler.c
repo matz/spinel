@@ -5583,12 +5583,10 @@ int comp_super_object_builtin(Compiler *c, const Scope *s, const char *uname, in
   int root = s->class_id;
   for (int d = 0; c->classes[root].parent >= 0 && d < 64; d++) root = c->classes[root].parent;
   if (kernel && class_is_blank_slate(c, root) && comp_super_parent(c, root, 0) < 0) return 0;
-  const char *own[] = { "Object", "Kernel", "BasicObject" };
-  for (int i = 0; i < 3; i++) {
-    int k = comp_builtin_class_named(c, own[i]);
-    if (k >= 0 && comp_method_in_class(c, k, uname) >= 0) return 0;
-  }
-  return kind;
+  /* (a method of the program's Object, Kernel or BasicObject is the plan's;
+     a program's Kernel def is reached with its receiver as self, which the
+     super cannot give it yet: it raises as it did) */
+  return cplan_super_target(c, id, s, NULL) < 0 && !cplan_kernel_def(c, uname) ? kind : 0;
 }
 
 int comp_super_is_class_new(Compiler *c, int id) {
@@ -5598,8 +5596,7 @@ int comp_super_is_class_new(Compiler *c, int id) {
   if (!s || !s->is_cmethod || s->class_id < 0 || !s->name) return 0;
   if (!sp_streq(comp_scope_user_name(s), "new")) return 0;
   if (comp_super_shadow(c, s)) return 0;
-  int p = c->classes[s->class_id].parent;
-  return p < 0 || comp_cmethod_in_chain(c, p, "new", NULL) < 0;
+  return cplan_super_target(c, id, s, NULL) < 0;
 }
 
 /* Can a `self.new` called on class k build k, k a descendant of the class

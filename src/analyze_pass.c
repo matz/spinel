@@ -7169,7 +7169,7 @@ int method_answers_receiver(Compiler *c, int mi) {
   int nd = 0;
   const int *ds = comp_descendants(c, c->scopes[mi].class_id, &nd);
   for (int i = 0; i < nd; i++)
-    if (comp_new_receiver(c, ds[i]) && comp_cmethod_in_class(c, ds[i], "new") >= 0) return 0;
+    if (comp_new_receiver(c, ds[i]) && call_target(c, -1, ds[i], "new", CT_CMETHOD | CT_OWN, NULL) >= 0) return 0;
   int lv[16];
   int n = method_value_leaves(c, mi, lv, 16);
   if (n <= 0) return 0;
@@ -13433,7 +13433,7 @@ static int block_reach(Compiler *c, int si, const BlockSig *s, TyKind *pos,
   }
   if (!bsi_fstart || si >= bsi_ns) return 0;
   if (bsi_super && bsi_super[si] && c->scopes[si].class_id >= 0) {
-    int y = forwarding_yield_target(c, a_super_target(c, &c->scopes[si]), 0);
+    int y = forwarding_yield_target(c, cplan_super_target(c, -1, &c->scopes[si], NULL), 0);
     if (y >= 0 && block_reach(c, y, s, pos, absent, kws, seen, 1, depth + 1)) return 1;
   }
   for (int k = 0; k < bsi_flen[si]; k++) {
@@ -21014,7 +21014,7 @@ void cr_collect_calls(Compiler *c, const NodeTable *nt, int id,
     }
     /* `<m>.super_method` takes a reference to the method one step up m's
        chain, which no call of the program may name: an alias made before a
-       prepend captures m under a name of its own (method_super_target) */
+       prepend captures m under a name of its own (cplan_super_target) */
     int smi = is_super_method_name(nm) ? method_obj_target_mi(c, id) : -1;
     if (smi >= 0) {
       char mark[24];

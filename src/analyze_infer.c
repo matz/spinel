@@ -11555,7 +11555,7 @@ static TyKind ctr_site_join(TyKind nat, TyKind want) {
 /* What a super that comp_super_object_builtin answers (kind) is typed: self for
    itself, the row's result for Kernel's row, a Boolean for the rest. */
 static TyKind super_object_type(Compiler *c, const Scope *s, const char *uname, int id, int kind) {
-  return kind == SUPER_OBJ_SELF ? ty_object(s->class_id)
+  return kind == SUPER_OBJ_SELF ? (repr_self_boxed(c, (int)(s - c->scopes)) ? TY_POLY : ty_object(s->class_id))
        : kind == SUPER_OBJ_ROW ? comp_super_kernel_row(c, s, uname, id)->result : TY_BOOL;
 }
 TyKind infer_uncached(Compiler *c, int id) {
@@ -12404,7 +12404,7 @@ TyKind infer_uncached(Compiler *c, int id) {
        (emit_super_data_with) */
     if (!s->is_cmethod && uname && sp_streq(uname, "with") &&
         c->classes[s->class_id].is_struct && c->classes[s->class_id].is_data) none = ty_object(s->class_id);
-    if (p < 0) return none;
+    if (p < 0 && mi < 0) return none;
     /* a subclass of a native class (#9269): super reaches the native
        class's constructor (initialize) or binding */
     if (mi < 0 && !s->is_cmethod && uname && c->classes[s->class_id].nsub_root > 0) {
@@ -13273,10 +13273,10 @@ int super_reaches_exc_text(Compiler *c, int id, int reopen) {
   if (!s || s->class_id < 0 || !s->name || s->is_cmethod || comp_super_shadow(c, s) ||
       !class_is_exc_subclass(c, s->class_id))
     return 0;
-  int p = comp_super_parent(c, s->class_id, 0);
-  const char *uname = comp_super_name(c, p, s);
-  if (!uname || !is_exception_message(uname) || (p >= 0 && comp_method_in_chain(c, p, uname, NULL) >= 0))
-    return 0;
+  MethodLookup ml = { .def_class = -1 };
+  if (cplan_super_target(c, id, s0, &ml) >= 0) return 0;
+  const char *uname = comp_super_name(c, ml.from, s);
+  if (!uname || !is_exception_message(uname)) return 0;
   int xr[8], xn = reopen ? exc_reopen_definers(c, uname, xr, 8) : 0;
   for (int q = 0; q < xn; q++)
     if (xr[q] != s->class_id) return 0;

@@ -617,6 +617,8 @@ int elab_versions_late(Compiler *c, const char *name, const ElabVersion *vs, int
 /* ...and the versions of cls's own history of `name` alone, numbered as
    there */
 int elab_history_versions(Compiler *c, int cls, int sg, const char *name, ElabVersion *out, int cap);
+/* ...and whether main's top-level history of `name` holds a version whose node carries the int mark `mark` (set by a desugar) */
+int elab_main_history_marked(Compiler *c, const char *name, const char *mark);
 /* The state of the record and the node table an answer of elab_chain_versions
    was read from: a kept answer holds while the stamp does (the table's
    version, and the record's made-ness, size and map). */
@@ -1322,7 +1324,6 @@ const char *block_param_multi_leaf(Compiler *c, int block, int idx, int leaf_idx
 const char *method_sym_arg(Compiler *c, int node);   /* :sym arg name, or NULL */
 int is_method_obj_call(Compiler *c, int node);        /* is node a method(:sym) call? */
 int method_obj_target_mi(Compiler *c, int node);      /* target method scope idx, or -1 */
-int method_super_target(Compiler *c, int mi);         /* the scope <m>.super_method answers, or -1 */
 int method_obj_alias_owner(Compiler *c, int node, int *sg); /* the class an alias it names was made in, or -1 */
 /* The class whose chain a `method(:sym)` node's lookup searched: its
    receiver's (a constant's, self's, an object's class), which a Method of a

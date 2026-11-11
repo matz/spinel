@@ -271,6 +271,15 @@ static int cplan_root_under_builtin(Compiler *c, int top) {
   const char *nm = nt_kind(c->nt, sc) == NK_ConstantReadNode ? nt_str(c->nt, sc, "name") : NULL;
   return !(nm && sp_streq(nm, "Object"));
 }
+/* Does the program define `name` on Kernel? Its top-level history holds a
+   version from a Kernel reopening (the def desugar_kernel_reopen made of it,
+   marked kernel_def), whichever version is the live one. A super from a
+   method of Object whose chain ends there reaches that def, which takes the
+   receiver as self: the top-level def has none, so such a super is no
+   builtin's answer either. */
+int cplan_kernel_def(Compiler *c, const char *name) {
+  return elab_main_history_marked(c, name, "kernel_def");
+}
 /* A super's parent-chain target, past inherited copies of the same
    extended definition. Shared by resolution, inference, inline splicing and
    the miss check. Every step is call_target's, with CT_REACH: it skips the
@@ -297,16 +306,28 @@ int cplan_super_chain_mi(Compiler *c, int id, const Scope *s, int par, const cha
     mi = par >= 0 ? call_target(c, id, par, name, side, ml) : -1;
     if (par < 0) *ml = (MethodLookup){ .kind = ML_NONE, .def_class = -1 };
   }
-  /* (a superclass chain ends in Object: a reopening of it is the last
-     class the super looks in) */
-  if (mi < 0 && par >= 0 && !s->is_cmethod) {
-    int top = par;
+  /* (a superclass chain ends in Object, then Kernel and BasicObject: a
+     reopening of each is looked in, in that order; a module's own chain is
+     its includer's) */
+  if (mi < 0 && !s->is_cmethod && s->class_id >= 0 && !comp_class_is_module(c, &c->classes[s->class_id])) {
+    int top = par >= 0 ? par : s->class_id;
     while (c->classes[top].parent >= 0) top = c->classes[top].parent;
-    int obj = comp_super_parent(c, top, 0);
     /* (not under BasicObject: Object is not in that chain; not under another
        builtin: its methods come first, cplan_root_under_builtin) */
-    if (obj >= 0 && obj != top && !class_is_blank_slate(c, top) && !cplan_root_under_builtin(c, top))
-      mi = call_target(c, id, obj, name, CT_REACH, ml);
+    if (!class_is_blank_slate(c, top) && !cplan_root_under_builtin(c, top)) {
+      static const int owners[] = { CORE_KERNEL, CORE_BASIC_OBJECT };
+      int obj = comp_super_parent(c, top, 0);
+      if (obj >= 0 && obj != top) mi = call_target(c, id, obj, name, CT_REACH, ml);
+      /* a reopening of Kernel or BasicObject answers only where no builtin
+         method of the name comes before it (Object's, then Kernel's, as
+         CRuby's tables hold them) */
+      int builtin_first = builtin_owns_instance_method("Object", name);
+      for (int i = 0; mi < 0 && !builtin_first && i < 2; i++) {
+        int k = comp_core_class(c, owners[i]);
+        if (k >= 0) mi = call_target(c, id, k, name, CT_REACH, ml);
+        builtin_first = builtin_owns_instance_method(core_class_name(owners[i]), name);
+      }
+    }
   }
   if (mi < 0) ml->def_class = -1;
   ml->from = start;
@@ -323,7 +344,7 @@ int cplan_super_chain_mi(Compiler *c, int id, const Scope *s, int par, const cha
    them once the entries are made (super_layer_entry). ml is call_target's
    answer for the lookup (NULL: the scope only). */
 static int super_layer_entry(Compiler *c, int id, int t);
-int cplan_super_target(Compiler *c, int id, Scope *s0, MethodLookup *ml) {
+int cplan_super_target(Compiler *c, int id, const Scope *s0, MethodLookup *ml) {
   const Scope *s = comp_super_site(c, s0);
   const char *shadow = comp_super_shadow(c, s);
   MethodLookup own = { .def_class = -1 };

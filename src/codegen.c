@@ -5771,8 +5771,7 @@ void emit_method_signature(Compiler *c, Scope *s, Buf *b) {
     else if (sp_streq(cn, "Float"))   { buf_puts(b, "double self"); }
     else if (sp_streq(cn, "Symbol"))  { buf_puts(b, "sp_int self"); }
     else if (is_immediate_class_name(cn)) { buf_puts(b, "int self"); }
-    else if (sp_streq(cn, "Array") || sp_streq(cn, "Hash")) { buf_puts(b, "sp_RbVal self"); }
-    else if (sp_streq(cn, "Object") || sp_streq(cn, "Numeric")) { buf_puts(b, "sp_RbVal self"); }
+    else if (repr_self_boxed(c, (int)(s - c->scopes))) { buf_puts(b, "sp_RbVal self"); }
     else if (sp_streq(cn, "Range"))   { buf_puts(b, "sp_Range self"); }
     else if (sp_streq(cn, "Time"))    { buf_puts(b, "sp_Time *self"); }
     else if (sp_streq(cn, "Thread"))  { buf_puts(b, "sp_thread *self"); }
@@ -15606,6 +15605,14 @@ static void emit_super_block_arg(Compiler *c, int id, Scope *s, Scope *pm, int l
   else if (s->yields && g_yield_proc_ref) buf_puts(b, g_yield_proc_ref);
   else buf_puts(b, "NULL");
 }
+/* emit_super's target from the super's plan (call_plan.c), or -1. The plan
+   started its lookup where the super does (cplan_super_target), so there is
+   no start to compare. A miss selects the existing builtin or error
+   rendering. */
+static int super_plan_mi(Compiler *c, int id) {
+  const CallPlan *spl = cplan_user(c, id);
+  return spl->via == UC_SUPER ? spl->mi : -1;
+}
 
 /* Inline super { block } when the parent method uses yield.
    Returns 1 if the expansion was emitted, 0 if it should fall through to a
@@ -15614,7 +15621,7 @@ int emit_super_inline(Compiler *c, int id, Buf *b, int indent, int as_expr) {
   if (g_plan_check) ucall_emitted(id);
   Scope *s = comp_scope_of(c, id);
   if (s->class_id < 0 || !s->name) return 0;
-  refuse_super_splat(c, id, a_super_target(c, s));
+  refuse_super_splat(c, id, super_plan_mi(c, id));
   const Scope *st = comp_super_site(c, s);
   int p = comp_super_parent(c, st->class_id, st->is_cmethod);
   int defcls = -1;
@@ -15646,7 +15653,6 @@ int emit_super_inline(Compiler *c, int id, Buf *b, int indent, int as_expr) {
   if (g_plan_check || mi < 0) {
     int odef = -1;
     int omi = shadow ? call_target(c, id, st->class_id, shadow, CT_OWN | CT_REACH | (st->is_cmethod ? CT_CMETHOD : 0), NULL)
-            : p < 0 ? -1
             : cplan_super_chain_mi(c, id, st, p, own, NULL);
     if (!shadow && omi >= 0) odef = c->scopes[omi].class_id;
     if (mi < 0) {
@@ -16054,15 +16060,6 @@ static int struct_super_handle_arg(Compiler *c, int v, Buf *b) {
   return 1;
 }
 
-/* emit_super's target from the super's plan (call_plan.c), or -1. The plan
-   started its lookup where the super does (cplan_super_target), so there is
-   no start to compare. A miss selects the existing builtin or error
-   rendering. */
-static int super_plan_mi(Compiler *c, int id) {
-  const CallPlan *spl = cplan_user(c, id);
-  return spl->via == UC_SUPER ? spl->mi : -1;
-}
-
 /* self, boxed, in a method of class `cls`: a builtin's reopening holds it
    as the builtin's own C value (emit_method_signature) -- a double for a
    Float, the sp_RbVal already for an Array or Object -- and an ordinary
@@ -16080,8 +16077,7 @@ static void emit_reopen_self_boxed(Compiler *c, Scope *s, Buf *b) {
   else if (sp_streq(cn, "Symbol"))  emit_boxed_text(c, TY_SYMBOL, g_self, b);
   else if (sp_streq(rn, "NilClass")) buf_puts(b, "sp_box_nil()");
   else if (sp_streq(rn, "TrueClass") || sp_streq(rn, "FalseClass")) emit_boxed_text(c, TY_BOOL, g_self, b);
-  else if (sp_streq(cn, "Array") || sp_streq(cn, "Hash") || sp_streq(cn, "Object") || sp_streq(cn, "Numeric"))
-    buf_puts(b, g_self);
+  else if (repr_self_boxed(c, (int)(s - c->scopes))) buf_puts(b, g_self);
   else if (sp_streq(cn, "Range")) emit_boxed_text(c, TY_RANGE, g_self, b);
   else if (sp_streq(cn, "Time"))  emit_boxed_text(c, TY_TIME, g_self, b);
   else emit_boxed_text(c, ty_object(cls), g_self, b);
@@ -16141,6 +16137,12 @@ static int emit_super_object_builtin(Compiler *c, int id, Scope *s, const char *
   if (!kind || c->classes[s->class_id].is_value_type) return 0;
   Buf vb; memset(&vb, 0, sizeof vb);
   TyKind vt = TY_BOOL;
+  /* a reopening of Object takes self boxed (emit_method_signature), any
+     value being its receiver: the arms read that value, not a program
+     class's pointer */
+  Buf sb; memset(&sb, 0, sizeof sb);
+  int boxed_self = repr_self_boxed(c, (int)(s - c->scopes));
+  if (boxed_self) emit_reopen_self_boxed(c, s, &sb);
   if (kind == SUPER_OBJ_SAME) {
     Buf kb; memset(&kb, 0, sizeof kb);
     if (nt_kind(c->nt, id) == NK_ForwardingSuperNode) emit_boxed_fwd_param(c, s, 0, &kb);
@@ -16152,9 +16154,9 @@ static int emit_super_object_builtin(Compiler *c, int id, Scope *s, const char *
     int tk = ++g_tmp;
     buf_printf(&vb, "({ sp_RbVal _a%d = %s; SP_GC_ROOT_RBVAL(_a%d); ", tk, kb.p ? kb.p : "sp_box_nil()", tk);
     emit_super_blockarg_effect(c, id, &vb);
-    buf_printf(&vb, "sp_RbVal _s%d = sp_box_nullable_obj_dyn((void *)%s, 0); "
-                    "(sp_bool)(_a%d.tag == _s%d.tag && _a%d.v.p == _s%d.v.p); })",
-               tk, g_self, tk, tk, tk, tk);
+    if (boxed_self) buf_printf(&vb, "sp_RbVal _s%d = %s; ", tk, sb.p);
+    else buf_printf(&vb, "sp_RbVal _s%d = sp_box_nullable_obj_dyn((void *)%s, 0); ", tk, g_self);
+    buf_printf(&vb, "(sp_bool)(_a%d.tag == _s%d.tag && _a%d.v.p == _s%d.v.p); })", tk, tk, tk, tk);
     free(kb.p);
   }
   else if (kind == SUPER_OBJ_ROW) {
@@ -16192,7 +16194,14 @@ static int emit_super_object_builtin(Compiler *c, int id, Scope *s, const char *
     buf_puts(&vb, "({ ");
     emit_super_blockarg_effect(c, id, &vb);
     if (kind == SUPER_OBJ_FALSE) buf_puts(&vb, "((sp_bool)0); })");
-    else if (kind == SUPER_OBJ_FROZEN) buf_printf(&vb, "((sp_bool)sp_gc_is_frozen(%s)); })", g_self);
+    else if (kind == SUPER_OBJ_FROZEN) {
+      if (boxed_self) buf_printf(&vb, "((sp_bool)sp_poly_frozen(%s)); })", sb.p);
+      else buf_printf(&vb, "((sp_bool)sp_gc_is_frozen(%s)); })", g_self);
+    }
+    else if (boxed_self) {
+      vt = TY_POLY;
+      buf_printf(&vb, "%s; })", sb.p);
+    }
     else {
       vt = ty_object(s->class_id);
       buf_printf(&vb, "((sp_%s *)%s); })", c->classes[s->class_id].c_name, g_self);
@@ -16201,6 +16210,7 @@ static int emit_super_object_builtin(Compiler *c, int id, Scope *s, const char *
   if (repr_of(c, id).kind == RK_BOXED) emit_boxed_text(c, vt, vb.p, b);
   else buf_puts(b, vb.p);
   free(vb.p);
+  free(sb.p);
   return 1;
 }
 
@@ -16265,8 +16275,7 @@ void emit_super(Compiler *c, int id, Buf *b) {
   refuse_from_plan(c, id, CRF_LIMIT, "super-refusal");
   if (repr_of(c, id).demand && repr_call_returns_handle(c, id) && emit_strbuf_route(c, id, b)) return;
   if (g_plan_check) ucall_emitted(id);
-  { Scope *ss = comp_scope_of(c, id);
-    if (ss && ss->class_id >= 0 && ss->name) refuse_super_splat(c, id, a_super_target(c, ss)); }
+  refuse_super_splat(c, id, super_plan_mi(c, id));
   Scope *s = comp_scope_of(c, id);
   if (s->class_id < 0 || !s->name) { unsupported(c, id, "super (not in a method)"); return; }
   /* `def inspect = super` / `def to_s = super` reaching Kernel's: the default
@@ -17512,8 +17521,11 @@ static void emit_user_op_dispatch(Compiler *c, Buf *b, const char *fname, const 
       /* no parameter takes the argument: the arm raises, whatever it holds */
       if (api < 0) { gb[0] = 0; snprintf(argbuf, sizeof argbuf, "b"); }
       else if (!user_dispatch_arg(c, m, api, "b", gb, sizeof gb, argbuf, sizeof argbuf)) continue;
+      /* (a reopening of Object takes self boxed, whatever class the arm is for) */
+      const int boxed_self = repr_self_boxed(c, mi);
       char armself[160];
-      snprintf(armself, sizeof armself, "((sp_%s *)a.v.p)", bcase ? c->classes[k].name : dcn);
+      if (boxed_self) snprintf(armself, sizeof armself, "a");
+      else snprintf(armself, sizeof armself, "((sp_%s *)a.v.p)", bcase ? c->classes[k].name : dcn);
       const char *arg = argbuf;
       Buf pre; memset(&pre, 0, sizeof pre);
       Buf args; memset(&args, 0, sizeof args);
@@ -17531,7 +17543,8 @@ static void emit_user_op_dispatch(Compiler *c, Buf *b, const char *fname, const 
       Buf call; memset(&call, 0, sizeof call);
       /* an alias (`alias + |`) resolves to its target's scope: name the C
          function after the RESOLVED method, not the queried operator */
-      if (bcase) buf_printf(&call, "%s(%s%s)", mc_method(c, m), bself, args.p);
+      if (boxed_self) buf_printf(&call, "%s(a%s)", mc_method(c, m), args.p);
+      else if (bcase) buf_printf(&call, "%s(%s%s)", mc_method(c, m), bself, args.p);
       else buf_printf(&call, "%s(%s(sp_%s *)a.v.p%s)", mc_method(c, m), self_vt ? "*" : "", dcn, args.p);
       /* the operands a and b are unrooted: an arm that builds before its call roots them */
       buf_printf(b, "        %s%s*handled = TRUE; return ",
@@ -18062,17 +18075,22 @@ static void emit_obj_valeq_dispatch(Compiler *c, Buf *b) {
     char argb[160], armself[160];
     if (obj_param) snprintf(argb, sizeof argb, "(sp_%s *)b.v.p", c->classes[ty_object_class(pt)].c_name);
     else snprintf(argb, sizeof argb, "b");
-    snprintf(armself, sizeof armself, "((sp_%s *)a.v.p)", dcn);
+    /* (a reopening of Object takes self boxed) */
+    const int boxed_self = repr_self_boxed(c, mi);
+    if (boxed_self) snprintf(armself, sizeof armself, "a");
+    else snprintf(armself, sizeof armself, "((sp_%s *)a.v.p)", dcn);
     const char *arg = argb;
     Buf pre; memset(&pre, 0, sizeof pre);
     Buf args; memset(&args, 0, sizeof args);
     char raise[640];
     int builds = 0;
-    if (emit_arm_args_text(c, mi, armself, &arg, 1, &pre, &args, &builds, raise, sizeof raise))
-      buf_printf(b, "    case %d: { %s%sreturn %s(%s(sp_%s *)a.v.p%s); }\n",
-                 k,
-                 builds ? "SP_GC_ROOT_RBVAL(a); SP_GC_ROOT_RBVAL(b); " : "", pre.p ? pre.p : "",
-                 mc_method(c, m), slf, dcn, args.p);
+    if (emit_arm_args_text(c, mi, armself, &arg, 1, &pre, &args, &builds, raise, sizeof raise)) {
+      buf_printf(b, "    case %d: { %s%sreturn %s(", k,
+                 builds ? "SP_GC_ROOT_RBVAL(a); SP_GC_ROOT_RBVAL(b); " : "", pre.p ? pre.p : "", mc_method(c, m));
+      if (boxed_self) buf_puts(b, "a");
+      else buf_printf(b, "%s(sp_%s *)a.v.p", slf, dcn);
+      buf_printf(b, "%s); }\n", args.p);
+    }
     else
       buf_printf(b, "    case %d: { %s return FALSE; }\n", k, raise);
     free(pre.p); free(args.p);

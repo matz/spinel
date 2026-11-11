@@ -5220,11 +5220,22 @@ void emit_poly_defaults_n(Compiler *c, int id, int recv, const char *name, const
     int sum_done = !obj_arity && dl_open && ret == TY_POLY &&
                    emit_poly_default_blk_arm(c, id, name, argc, argv, atmp, atmp_ty, tv, tr, blk_tmp2, b);
     int answer = sum_done ? 1 : 0;
+    /* the builtin's re-entered call reads each keyword value from the temp
+       the dispatch evaluated it into, as the pack-sharing names above do: the
+       keyword hash has no temp of its own here (atmp holds none at its slot) */
+    int kwvmark = g_n_argov;
+    if (kw->kwtmp && bop_share_named(BOP_ANY_ARRAY, name) != BSH_PACK) {
+      for (int e = 0; e < kw->kwn; e++) {
+        int v = nt_ref(nt, kw->kwels[e], "value");
+        if (v >= 0) view_bind(v, "_t%d", kw->kwtmp[e]);
+      }
+    }
     if (!obj_arity && !sum_done && (!dl_open ||
         (!(answer = emit_poly_aset_default(c, name, argc, atmp, atmp_ty, ret, tv, tr, b) ? 2 : 0) &&
          !(answer = emit_poly_builtin_default(c, id, recv, name, argc, argv, atmp, atmp_ty,
                                               ret, tv, is_setter_val ? -1 : tr, 0, b) ? 3 : 0))))
       buf_printf(b, " sp_raise_nomethod(sp_nomethod_msg(\"%s\", _t%d)); break;", name, tv);
+    view_unbind(kwvmark);
     /* A declined builtin trial may leave a nested frame behind. Its
        result belongs to this switch, as the plan's trial does. */
     if (g_plan_check) pa_resume(pa_frame);

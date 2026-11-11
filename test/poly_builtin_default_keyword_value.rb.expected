@@ -1,0 +1,5 @@
+{a: 1, path: "/p1"}
+Opts#merge! /p2
+2
+{path: "/p3", at: 30}
+3

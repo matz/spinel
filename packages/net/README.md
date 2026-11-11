@@ -3,6 +3,12 @@
 `require "net/http"` and `require "net/https"`: an HTTP/HTTPS client written
 for Spinel; see the top of `net/http.rb` for what it leaves out.
 
+`Net::HTTPResponse.read_new(buffered_io)` reads one response head and selects
+the response class by status code. It folds continuation lines and preserves
+repeated header values; entity bytes stay in the caller's `Net::BufferedIO`.
+The parser follows net-http 0.9.1 and uses net-protocol 0.2.2's positional
+`readuntil(terminator, ignore_eof = false)` API.
+
 `require "net/smtp"`: Net::SMTP, ruby/net-smtp's SMTP client (a bundled gem
 since Ruby 3.1), over `net/protocol`, ruby/net-protocol's base for Ruby's
 network clients (a default gem). Their vendored versions are:

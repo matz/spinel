@@ -1,0 +1,138 @@
+Net::HTTPContinue
+[true, true, true]
+Net::HTTPSwitchProtocol
+[true, true, true]
+Net::HTTPProcessing
+[true, true, true]
+Net::HTTPEarlyHints
+[true, true, true]
+Net::HTTPOK
+[true, true, true]
+Net::HTTPCreated
+[true, true, true]
+Net::HTTPAccepted
+[true, true, true]
+Net::HTTPNonAuthoritativeInformation
+[true, true, true]
+Net::HTTPNoContent
+[true, true, true]
+Net::HTTPResetContent
+[true, true, true]
+Net::HTTPPartialContent
+[true, true, true]
+Net::HTTPMultiStatus
+[true, true, true]
+Net::HTTPAlreadyReported
+[true, true, true]
+Net::HTTPIMUsed
+[true, true, true]
+Net::HTTPMultipleChoices
+[true, true, true]
+Net::HTTPMovedPermanently
+[true, true, true]
+Net::HTTPFound
+[true, true, true]
+Net::HTTPSeeOther
+[true, true, true]
+Net::HTTPNotModified
+[true, true, true]
+Net::HTTPUseProxy
+[true, true, true]
+Net::HTTPTemporaryRedirect
+[true, true, true]
+Net::HTTPPermanentRedirect
+[true, true, true]
+Net::HTTPBadRequest
+[true, true, true]
+Net::HTTPUnauthorized
+[true, true, true]
+Net::HTTPPaymentRequired
+[true, true, true]
+Net::HTTPForbidden
+[true, true, true]
+Net::HTTPNotFound
+[true, true, true]
+Net::HTTPMethodNotAllowed
+[true, true, true]
+Net::HTTPNotAcceptable
+[true, true, true]
+Net::HTTPProxyAuthenticationRequired
+[true, true, true]
+Net::HTTPRequestTimeout
+[true, true, true]
+Net::HTTPConflict
+[true, true, true]
+Net::HTTPGone
+[true, true, true]
+Net::HTTPLengthRequired
+[true, true, true]
+Net::HTTPPreconditionFailed
+[true, true, true]
+Net::HTTPPayloadTooLarge
+[true, true, true]
+Net::HTTPURITooLong
+[true, true, true]
+Net::HTTPUnsupportedMediaType
+[true, true, true]
+Net::HTTPRangeNotSatisfiable
+[true, true, true]
+Net::HTTPExpectationFailed
+[true, true, true]
+Net::HTTPMisdirectedRequest
+[true, true, true]
+Net::HTTPUnprocessableEntity
+[true, true, true]
+Net::HTTPLocked
+[true, true, true]
+Net::HTTPFailedDependency
+[true, true, true]
+Net::HTTPUpgradeRequired
+[true, true, true]
+Net::HTTPPreconditionRequired
+[true, true, true]
+Net::HTTPTooManyRequests
+[true, true, true]
+Net::HTTPRequestHeaderFieldsTooLarge
+[true, true, true]
+Net::HTTPUnavailableForLegalReasons
+[true, true, true]
+Net::HTTPInternalServerError
+[true, true, true]
+Net::HTTPNotImplemented
+[true, true, true]
+Net::HTTPBadGateway
+[true, true, true]
+Net::HTTPServiceUnavailable
+[true, true, true]
+Net::HTTPGatewayTimeout
+[true, true, true]
+Net::HTTPVersionNotSupported
+[true, true, true]
+Net::HTTPVariantAlsoNegotiates
+[true, true, true]
+Net::HTTPInsufficientStorage
+[true, true, true]
+Net::HTTPLoopDetected
+[true, true, true]
+Net::HTTPNotExtended
+[true, true, true]
+Net::HTTPNetworkAuthenticationRequired
+[true, true, true]
+Net::HTTPInformation
+[true, true, true]
+Net::HTTPSuccess
+[true, true, true]
+Net::HTTPRedirection
+[true, true, true]
+Net::HTTPClientError
+[true, true, true]
+Net::HTTPClientError
+[true, true, true]
+Net::HTTPServerError
+[true, true, true]
+Net::HTTPUnknownResponse
+[true, true, true]
+Net::HTTPUnknownResponse
+[true, true, true]
+[true, true]
+[false, true]

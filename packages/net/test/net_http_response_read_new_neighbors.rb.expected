@@ -1,0 +1,73 @@
+Net::HTTPOK
+[true, true, true]
+[true, true]
+true
+IOError
+4
+Net::HTTPOK
+[true, true, true]
+[false, false]
+false
+IOError
+0
+Net::HTTPOK
+[false, true, false]
+[false, false]
+false
+IOError
+0
+Net::HTTPNotFound
+[false, false, false]
+[false, false]
+false
+IOError
+0
+Net::HTTPSuccess
+[true, false, false]
+[false, false]
+false
+IOError
+0
+Net::HTTPServerError
+[true, false, false]
+[false, false]
+false
+IOError
+0
+Net::HTTPUnknownResponse
+[true, false, false]
+[false, false]
+false
+IOError
+0
+Net::HTTPBadResponse
+2
+Net::HTTPBadResponse
+2
+EOFError
+0
+Net::HTTPBadResponse
+2
+Net::HTTPOK
+[true, true, true]
+[false, false]
+false
+IOError
+0
+Net::HTTPOK
+[true, true, false]
+[false, false]
+false
+IOError
+0
+Net::HTTPOK
+[true, true, true]
+[true, true]
+false
+IOError
+0
+Net::HTTPBadResponse
+2
+Net::HTTPBadResponse
+2
+[true, true]

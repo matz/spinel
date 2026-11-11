@@ -58,8 +58,11 @@
 #               method it runs (cplan_implied_target), so the call is one the
 #               plan binds by version: the survey makes the version entries it
 #               takes and reachability keeps them (call_node_implied_names).
-#               A row without it keeps the last definition, and gets no entry
-#               that nothing would call. Temporary: each row gets it in the
+#               Only a planned row's call is answered by the plan
+#               (ct_implied_row): a row without it keeps the last definition,
+#               and gets no entry that nothing would call. Every lowering of
+#               a planned row's sites calls the plan's answer, a version or
+#               the entry (emit_boxed_to_ary_arms). Needs an operand. Temporary: each row gets it in the
 #               change that moves its reader onto the plan, and the key goes
 #               once every row has it (#10866, step 2).
 #
@@ -93,8 +96,8 @@ nodes:
   MultiWriteNode:          {calls: [{name: to_ary, operand: value, side: inst, when: nonliteral, planned: true}]}
   MultiTargetNode:         {calls: [{name: to_ary, operand: yielded, side: inst, planned: true}]}
   ImplicitRestNode:        {calls: [{name: to_ary, operand: yielded, side: inst}]}
-  BlockParametersNode:     {calls: [{name: to_ary, operand: yielded, side: inst, when: multi_target}]}
-  NumberedParametersNode:  {calls: [{name: to_ary, operand: yielded, side: inst, when: multi_target}]}
+  BlockParametersNode:     {calls: [{name: to_ary, operand: yielded, side: inst, when: multi_target, planned: true}]}
+  NumberedParametersNode:  {calls: [{name: to_ary, operand: yielded, side: inst, when: multi_target, planned: true}]}
   XStringNode:             {calls: [{name: "`", operand: self, side: both}]}
   InterpolatedXStringNode: {calls: [{name: "`", operand: self, side: both}]}
 

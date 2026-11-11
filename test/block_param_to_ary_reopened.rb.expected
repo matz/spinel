@@ -1,0 +1,16 @@
+[[1, 2], [7, 8], ["s", nil], [nil, nil]]
+[[1, 2, 9]]
+[[1, 2], [7, 8], ["s", nil], [nil, nil]]
+[[1, 2], [7, 8], ["s", nil], [nil, nil]]
+[1, 2, 0]
+[[3, 4], [7, 8], ["s", nil], [nil, nil]]
+[[3, 4, 9]]
+[[3, 4], [7, 8], ["s", nil], [nil, nil]]
+[[3, 4], [7, 8], ["s", nil], [nil, nil]]
+[3, 4, 0]
+[[#<K>, nil], [7, 8], ["s", nil], [nil, nil]]
+[[#<K>, nil, 9]]
+[[#<K>, nil], [7, 8], ["s", nil], [nil, nil]]
+TypeError: can't convert K to Array (K#to_ary gives Integer)
+TypeError: can't convert K to Array (K#to_ary gives Integer)
+TypeError: can't convert K to Array (K#to_ary gives Integer)

@@ -1687,13 +1687,14 @@ void cplan_accessor_met(Compiler *c, int id, int cls, const char *name, CplanAcc
   }
 }
 /* Does node id make the implied call `name` on operand op (a node, or an
-   NTI_ word): a row of tools/implied_calls.yml says so (nt_implied_calls),
-   the rows the load record reads */
+   NTI_ word): a planned row of tools/implied_calls.yml says so
+   (nt_implied_calls), the rows the load record reads and the survey makes
+   the entries of (call_node_implied_names) */
 static int ct_implied_row(Compiler *c, int id, const char *name, int op) {
   NtImplied rows[16];
   int n = nt_implied_calls(c->nt, id, rows, 16);
   for (int i = 0; i < n && i < 16; i++)
-    if (rows[i].operand == op && sp_streq(rows[i].name, name)) return 1;
+    if (rows[i].planned && rows[i].operand == op && sp_streq(rows[i].name, name)) return 1;
   return 0;
 }
 /* The method the implied call `name` node id makes on operand op (a row:
@@ -1759,8 +1760,13 @@ int cplan_implied_target(Compiler *c, int id, int op, int cls, const char *name,
    it takes (emit_massign_poly_target). An operand node of a program
    class's type (op >= 0) is boxed as that object, and reaches only the
    to_ary of its class or a subclass; one of another type (a Hash, a
-   scalar) none. Into out[0..cap), ascending; the count. */
-int cplan_boxed_to_ary_classes(Compiler *c, int id, int op, int *out, int cap) {
+   scalar) none. Into out[0..cap), ascending, with the method each class
+   runs there into ans[0..cap) when ans is given, and how: the table's, a
+   version the window proves, or the entry (the plan's MethodLookup); the
+   count. A class the plan answers
+   none for (a call that may run before any version exists) keeps the
+   object, as CRuby's does before a to_ary is defined. */
+int cplan_boxed_to_ary_classes(Compiler *c, int id, int op, int *out, CplanToAry *ans, int cap) {
   int n = 0, np = 0;
   TyKind ot = op >= 0 ? comp_ntype(c, op) : TY_POLY;
   int oc = ty_is_object(ot) ? ty_object_class(ot) : -1;
@@ -1770,7 +1776,11 @@ int cplan_boxed_to_ary_classes(Compiler *c, int id, int op, int *out, int cap) {
     int k = pc[i].cls, mi = comp_implicit_to_ary_mi(c, k);
     if (pc[i].native || mi < 0 || mi != pc[i].mi || c->scopes[mi].nparams != 0 || !c->classes[k].instantiated) continue;
     if (oc >= 0 && !is_descendant(c, k, oc)) continue;
-    if (cplan_implied_target(c, id, op, k, "to_ary", NULL) == mi) out[n++] = k;
+    MethodLookup ml;
+    int vi = cplan_implied_target(c, id, op, k, "to_ary", &ml);
+    if (vi < 0 || c->scopes[vi].nparams != 0) continue;
+    if (ans) ans[n] = (CplanToAry){ vi, ml.kind == ML_ENTRY ? CTA_ENTRY : vi == mi ? CTA_TABLE : CTA_VERSION };
+    out[n++] = k;
   }
   return n;
 }

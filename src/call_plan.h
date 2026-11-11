@@ -375,9 +375,15 @@ int cplan_targets(Compiler *c, int id, int *out, int cap);
    NULL) saying ML_TABLE (the reader keeps the table's answer) or ML_NONE
    (no row, or an undef on the chain) */
 int cplan_implied_target(Compiler *c, int id, int op, int cls, const char *name, MethodLookup *ml);
+/* How a class's boxed to_ary runs where the plan answers it: the method
+   table's method (the one sp_obj_to_ary calls), the version entry, or
+   another version its window proves */
+typedef enum { CTA_TABLE, CTA_ENTRY, CTA_VERSION } CtaHow;
+typedef struct CplanToAry { int mi; CtaHow how; } CplanToAry;
 /* The classes whose to_ary that call reaches on a boxed operand, where
-   the record proves it: into out[0..cap), the count */
-int cplan_boxed_to_ary_classes(Compiler *c, int id, int op, int *out, int cap);
+   the record proves it: into out[0..cap), with the method each runs
+   there and how into ans[0..cap) (may be NULL); the count */
+int cplan_boxed_to_ary_classes(Compiler *c, int id, int op, int *out, CplanToAry *ans, int cap);
 /* The program's `[]=` an index store on an instance of class cls calls:
    its method scope, with the class defining it in *cdef when cdef is
    given; -1 when the chain has none that takes a key and a value. */

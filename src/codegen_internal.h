@@ -2977,6 +2977,15 @@ int splice_to_ary_mi(Compiler *c, TyKind rhs_ty);
 TyKind emit_splice_to_ary_src(Compiler *c, int id, int rhs_node, TyKind rhs_ty, int mi, int ta, Buf *b, Buf *out);
 void emit_to_ary_dispatch(Compiler *c, int id, int cid, const char *selfptr, Buf *out);
 int emit_boxed_to_ary(Compiler *c, int id, int op, int src, Buf *b, int indent);
+struct CplanToAry;   /* (call_plan.h) */
+/* The conversions of the boxed value v (an lvalue) to the Array the
+   classes ks[0..n) answer, each as vs[i] says (cplan_boxed_to_ary_classes),
+   every test led by the C condition text guard (empty, or ending in
+   " && "); an unrooted v holds the answer through a rooted temp */
+void emit_boxed_to_ary_arms(Compiler *c, const int *ks, const struct CplanToAry *vs, int n, const char *guard, const char *v, int rooted, Buf *b, int indent);
+/* The boxed answer of to_ary method mi, of class defc's, called on the
+   program object the sp_RbVal v holds (sp_obj_to_ary's arm): into b. */
+void emit_obj_to_ary_call(Compiler *c, int mi, int defc, const char *v, Buf *b);
 void emit_index_op_write(Compiler *c, int id, Buf *b, int indent);
 void emit_index_and_or_write(Compiler *c, int id, Buf *b, int indent, int is_or);
 int scope_has_return(Compiler *c, int scope_idx);

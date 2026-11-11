@@ -3557,14 +3557,20 @@ static inline int sp_poly_is_user_obj(sp_RbVal v) {
    as CRuby's to_ary: a program object answering #to_ary becomes that
    Array, and one whose #to_ary answers a non-Array is CRuby's TypeError.
    Anything else comes back as it was, for the caller's own error. */
-static sp_RbVal sp_poly_ary_operand(sp_RbVal v) {
-  if (!(sp_poly_is_user_obj(v) && v.v.p && sp_obj_to_ary_fn)) return v;
-  sp_RbVal a = sp_obj_to_ary_fn(v);
+/* What the to_ary answer a of program object v makes of it, as CRuby's
+   rb_check_array_type: an Array is the value, nil keeps the object, and
+   any other answer is CRuby's TypeError. A call site that calls its own
+   version of to_ary hands that version's answer here. */
+static sp_RbVal sp_poly_ary_answer(sp_RbVal v, sp_RbVal a) {
   if (a.tag == SP_TAG_NIL) return v;
   if (a.tag == SP_TAG_OBJ && a.v.p && sp_poly_is_array_kind(a.cls_id)) return a;
   const char *cn = sp_poly_class_name(v);
   sp_raise_cls("TypeError", sp_sprintf("can't convert %s to Array (%s#to_ary gives %s)", cn, cn, sp_poly_class_name(a)));
   return v;
+}
+static sp_RbVal sp_poly_ary_operand(sp_RbVal v) {
+  if (!(sp_poly_is_user_obj(v) && v.v.p && sp_obj_to_ary_fn)) return v;
+  return sp_poly_ary_answer(v, sp_obj_to_ary_fn(v));
 }
 
 /* One element of Array#to_h, converted as CRuby's rb_check_array_type: a

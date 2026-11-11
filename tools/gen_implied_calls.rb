@@ -126,6 +126,8 @@ def make_row(kind, c, where, errors)
   errors << "#{where}: unknown condition #{c["when"].inspect}" unless CONDS.key?(c["when"])
   errors << "#{where}: unknown absent #{c["absent"].inspect}" unless ABSENTS.key?(c["absent"])
   errors << "#{where}: `planned` is true or absent" unless [nil, true].include?(c["planned"])
+  # (the plan binds a call made on an operand; none has no class to ask)
+  errors << "#{where}: a `planned` row needs an operand" if c["planned"] && c["operand"].to_s == "none"
   operand = c["operand"].to_s
   steps = []
   if WORDS.key?(operand)

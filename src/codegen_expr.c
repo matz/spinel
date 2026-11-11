@@ -1860,13 +1860,24 @@ int emit_call_or_write_via_methods(Compiler *c, int id, int is_or, Buf *b) {
      g_pre is captured and spliced here, in the branch that assigns, so a
      short-circuited `||=`/`&&=` runs none of it, as emit_slot_orw_value_o
      does. */
+  /* a nilable number on the right of a writer whose parameter can be nil
+     stays in its oint form through the call and the answer: unwrapped, a
+     nil raised before the writer could take it (`self.n &&= other`) */
+  LocalVar *wpv = NULL;
+  if (wk == SP_MEMBER_METHOD && wvis == SP_VIS_PUBLIC) {
+    Scope *ws = &c->scopes[wmi];
+    wpv = (ws->nparams > 0 && ws->pnames[0]) ? scope_local(ws, ws->pnames[0]) : NULL;
+  }
+  int vo = wpv && slot_is_oint(wpv) && wpv->type == vt && oint_kind(vt) && node_has_oint_form(c, v);
   { Buf vpre, vval; memset(&vpre, 0, sizeof vpre); memset(&vval, 0, sizeof vval);
     Buf *saved_pre = g_pre; g_pre = &vpre;
-    if (vt == TY_POLY && repr_of(c, v).kind != RK_BOXED) emit_boxed(c, v, &vval);
+    if (vo) emit_oint_expr(c, v, vt, &vval);
+    else if (vt == TY_POLY && repr_of(c, v).kind != RK_BOXED) emit_boxed(c, v, &vval);
     else emit_expr(c, v, &vval);
     g_pre = saved_pre;
     if (vpre.p) buf_puts(b, vpre.p);
-    emit_ctype(c, vt, b); buf_printf(b, " _t%d = %s; ", tw, vval.p ? vval.p : "");
+    if (vo) buf_puts(b, oint_ctype(vt)); else emit_ctype(c, vt, b);
+    buf_printf(b, " _t%d = %s; ", tw, vval.p ? vval.p : "");
     free(vpre.p); free(vval.p); }
   if (vt == TY_POLY) buf_printf(b, "SP_GC_ROOT_RBVAL(_t%d); ", tw);
   else if (!is_scalar_ret(vt) && !comp_ty_value_obj(c, vt)) buf_printf(b, "SP_GC_ROOT(_t%d); ", tw);
@@ -1884,7 +1895,8 @@ int emit_call_or_write_via_methods(Compiler *c, int id, int is_or, Buf *b) {
       char sw[32]; snprintf(sw, sizeof sw, "_t%d", tw);
       /* a writer whose parameter can be nil takes the oint: the plain value
          lifted (`self.count ||= 0` on an Integer? writer) */
-      if (pv && slot_is_oint(pv) && pt == vt && oint_kind(vt)) buf_printf(b, "%s(%s)", oint_of(vt), sw);
+      if (vo) buf_puts(b, sw);
+      else if (pv && slot_is_oint(pv) && pt == vt && oint_kind(vt)) buf_printf(b, "%s(%s)", oint_of(vt), sw);
       else emit_coerce_text(c, v, vt, pt, CO_HOLD, sw, "a conditional attribute writer's argument", b);
     }
     buf_puts(b, ")");
@@ -1912,6 +1924,13 @@ int emit_call_or_write_via_methods(Compiler *c, int id, int is_or, Buf *b) {
     if (m) buf_printf(b, "%s ", m);
   }
   { char sw[32]; snprintf(sw, sizeof sw, "_t%d", tw);
+    if (vo) {
+      if (wo && vt == want) buf_puts(b, sw);
+      else if (want == TY_POLY) buf_printf(b, "%s(%s)", oint_box(vt), sw);
+      else buf_printf(b, "%s(%s)", oint_arg(vt), sw);
+      buf_puts(b, "; }); })");
+      return 1;
+    }
     if (wo) buf_printf(b, "%s(", oint_of(want));
     if (vt == want) buf_puts(b, sw);
     else if (want == TY_POLY) emit_boxed_text(c, vt, sw, b);

@@ -516,6 +516,9 @@ typedef struct { const char *name; int module; unsigned flags; const char *const
    NoMethodError because of the answer needs it sure, and an unknown builtin
    is none. */
 int builtin_method_answers(const char *cls, const char *name, int sg, int certain);
+/* The first name of the group of builtin cls's instance methods that CRuby's
+   Method#== calls one method, name itself when it has no alias. */
+const char *builtin_method_canonical(const char *cls, const char *name);
 /* The builtin class or module whose own singleton methods hold public `name`
    first on the class side of builtin class or module cls, in a library the
    program has, as CRuby's lookup finds it ahead of Class's or Module's

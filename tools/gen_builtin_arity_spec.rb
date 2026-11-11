@@ -428,6 +428,11 @@ def spec_covers(wide, narrow)
     wmin >= 0 && wmin <= nmin && (wmax < 0 || (nmax >= 0 && nmax <= wmax))
   end
 end
+# KIND_CLASSES: the classes one TyKind's rows stand for; a keyword fact
+# (BAK, below) holds for such a row only where it holds on each class, at
+# that class's own counts (SizedQueue#push takes timeout:, Queue#push none)
+KIND_CLASSES = { "Queue" => %w[Queue SizedQueue] }
+kind_specs = inst.select { |r| KIND_CLASSES.each_value.any? { |ks| ks.include?(r[0]) } }.to_h { |r| [r[0, 2], r[2..]] }
 sized = inst.select { |r| r[0] == "SizedQueue" }.to_h { |r| [r[1], r[2..]] }
 inst.reject! { |r| r[0] == "SizedQueue" }
 inst.map! do |r|
@@ -462,26 +467,31 @@ end
 # has, so `BasicSocket.for_fd(1, autoclose: false)` passes two arguments;
 # else, where a side's maximum is proved, the instance side's keyword probe
 # on each such side (File.basename(p, s, a: 1): given 3, expected 1..2).
-# CLASS_KW_PASSTHROUGH methods take one keyword and pass any other key as
-# one more positional, so the probe's unknown key reads as a method that
-# takes none: they keep no row, and the run aborts if one stops taking
-# its keyword.
-#   Kernel.raise                     cause:
-CLASS_KW_PASSTHROUGH = { "Kernel" => { "raise" => :cause } }
-CLASS_KW_PASSTHROUGH.each do |cls, ms|
+# KW_PASSTHROUGH methods, of a class (BACK) or its instances (BAK), take
+# one keyword and pass any other key as one more positional, so the probe's
+# unknown key reads as a method that takes none: they keep no row, and the
+# run aborts if one stops taking its keyword (an unborn Fiber checks the
+# arguments before it refuses the raise).
+#   Kernel.raise, Fiber#raise        cause:
+KW_PASSTHROUGH = {
+  ["Kernel", :class] => { "raise" => :cause },
+  ["Fiber", :instance] => { "raise" => :cause },
+}
+KW_PASSTHROUGH.each do |(cls, side), ms|
   ms.each do |m, key|
+    recv = side == :class ? Object.const_get(cls) : INSTANCE_RECEIVERS.fetch(cls).call
     r = begin
-      Object.const_get(cls).__send__(m, RuntimeError, "a", nil, key => nil)
+      recv.__send__(m, RuntimeError, "a", nil, key => nil)
     rescue ArgumentError => e
       e
     rescue Exception
       nil
     end
-    abort "#{cls}.#{m} no longer takes #{key}: beside its most positionals" if r.is_a?(ArgumentError)
+    abort "#{cls} #{m} no longer takes #{key}: beside its most positionals" if r.is_a?(ArgumentError)
   end
 end
 cmkw = cm.select do |cls, m, min, max, _, _, bmin, bmax|
-  next false if CLASS_KW_PASSTHROUGH.fetch(cls, {}).key?(m)
+  next false if KW_PASSTHROUGH.fetch([cls, :class], {}).key?(m)
   const = CLASS_CONSTANTS.fetch(cls) { Object.const_get(cls) }
   meth = const.method(m)
   next false if meth.parameters.any? { |kind, _| %i[key keyreq keyrest].include?(kind) }
@@ -581,11 +591,29 @@ abort "Method#arity dump failed" unless $?.success? && !dump.empty?
 params, arity_all = dump.partition { |r| r[0] == "P" }
 arity_all.map! { |c, m, a| [c, m, a.to_i] }
 kernel_arity, arity = arity_all.partition { |r| r[0] == "Kernel" }
-kwpos = inst.select do |cls, m, min, max, _, _, bmin, bmax|
+# The instance methods whose keyword hash is one more positional (BAK): the
+# keyword probe on each side whose maximum is proved; or a fixed arity and
+# no keyword parameters where no Method#arity row says so (a module's
+# method: Comparable#between?, Enumerable#each_slice); on each class a
+# KIND_CLASSES row stands for, and never for a KW_PASSTHROUGH method
+arity_rows = arity.to_h { |c, m, a| [[c, m], a] }
+row_kw_positional = lambda do |cls, m, min, max, bmin, bmax|
   sides = [[min, max, false], [bmin, bmax, true]].select { |lo, hi, _| lo >= 0 && hi >= 0 }
   thunk = INSTANCE_RECEIVERS.fetch(cls)
-  next false if sides.empty? || (thunk.call.method(m).arity rescue 0) >= 0
+  next false if sides.empty?
+  meth = (thunk.call.method(m) rescue nil)
+  if meth && meth.arity >= 0
+    next !arity_rows.key?([cls, m]) && meth.parameters.none? { |kind, _| %i[key keyreq keyrest].include?(kind) }
+  end
   sides.all? { |_, hi, blk| kw_positional?(thunk, m.to_sym, hi, block: blk) }
+end
+kwpos = inst.select do |cls, m, min, max, _, _, bmin, bmax|
+  next false if KW_PASSTHROUGH.fetch([cls, :instance], {}).key?(m)
+  next row_kw_positional.(cls, m, min, max, bmin, bmax) unless KIND_CLASSES.key?(cls)
+  KIND_CLASSES[cls].all? do |k|
+    s = kind_specs[[k, m]]
+    s && row_kw_positional.(k, m, s[0], s[1], s[4], s[5])
+  end
 end
 # Keep both facts where available; introspection is not an acceptance rule.
 # Retain Method#arity order, including the receiverless Kernel wrappers.

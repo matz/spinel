@@ -17887,8 +17887,12 @@ int desugar_value_form_drop_block(Compiler *c) {
         if (et != TY_PROC && et != TY_NIL) continue;
       }
     } else if (nt_kind(nt, blk) != NK_BlockNode) continue;
+    /* (a keyword hash is the value where the call plan counts it as one
+       positional, these names taking no keywords: a pair, or the `**` split's
+       full branch; one the run time decides keeps the block) */
     int argc = 0; const int *av = call_args(nt, id, &argc);
-    if (argc != 1 || nt_kind(nt, av[0]) == NK_SplatNode || nt_kind(nt, av[0]) == NK_KeywordHashNode ||
+    if (argc != 1 || nt_kind(nt, av[0]) == NK_SplatNode ||
+        (nt_kind(nt, av[0]) == NK_KeywordHashNode && cplan_hash_positionals(c, id, 1) != 1) ||
         nt_kind(nt, av[0]) == NK_BlockArgumentNode) continue;
     const char *nm = nt_str(nt, id, "name");
     int w = 0;

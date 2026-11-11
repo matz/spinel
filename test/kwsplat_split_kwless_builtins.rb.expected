@@ -1,0 +1,25 @@
+first e: [3]
+first f: ArgumentError: wrong number of arguments (given 2, expected 0..1)
+join f: ArgumentError: wrong number of arguments (given 2, expected 0..1)
+key? e: true
+key? f: ArgumentError: wrong number of arguments (given 2, expected 1)
+between? e: true
+between? f: ArgumentError: wrong number of arguments (given 3, expected 2)
+each_slice f: ArgumentError: wrong number of arguments (given 2, expected 1)
+count block e: 2
+count block f: 0
+safe nav f: ArgumentError: wrong number of arguments (given 2, expected 0..1)
+send f: ArgumentError: wrong number of arguments (given 2, expected 0..1)
+exist? e: true
+exist? f: ArgumentError: wrong number of arguments (given 2, expected 1)
+basename e: "b"
+basename f: ArgumentError: wrong number of arguments (given 3, expected 1..2)
+boxed size f: ArgumentError: wrong number of arguments (given 1, expected 0)
+sized push: 1
+sized push e: 2
+sized enq w: 3
+fiber raise cause: "x"
+local for_fd e: "abc"
+local basename e: "b"
+local basename f: TypeError: no implicit conversion of Hash into String
+local sqrt e: 4

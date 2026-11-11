@@ -231,6 +231,14 @@ int cplan_kernel_def(Compiler *c, const char *name);   /* a version of the name'
    an explicit receiver and does not ignore visibility (a send does): that is
    NoMethodError. */
 int cplan_class_row(Compiler *c, int id, int recv, const char *name);
+/* How many positionals call id's trailing keyword hash adds for a callee
+   whose keyword fact is kwpos (builtin_kw_positional): 0 for none, a hash
+   that spreads nothing (`**{}`, `**nil`) or keywords the callee takes; 1 for
+   one it passes as a Hash (a key, or the full branch split_kwsplat_calls
+   made, whose hash is not empty); -1 where the run time decides (an open
+   `**` the split left: under defined?, beside a splat, or one whose callee
+   no fact speaks for). 0 for a call with no keyword hash. */
+int cplan_hash_positionals(Compiler *c, int id, int kwpos);
 /* The class-side row (bop_class_find) call id takes on builtin class cls,
    its constant receiver: NULL where none of cls's singleton chain has one,
    or where a class method the program gives a class of the chain, up to

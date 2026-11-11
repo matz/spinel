@@ -3168,6 +3168,11 @@ const char *bop_class_owner(const char *cls, const char *name) {
   return NULL;
 }
 
+int bop_class_name_kwless(const char *name) {
+  for (size_t k = 0; name && k < sizeof bop_class_rows / sizeof bop_class_rows[0]; k++)
+    if (sp_streq(bop_class_rows[k].op.name, name) && !(bop_class_rows[k].op.flags & BOPF_KEYWORDS)) return 1;
+  return 0;
+}
 int bop_class_keywords(const char *cls, const char *name) {
   int kw = -1;
   for (size_t k = 0; cls && name && k < sizeof bop_class_rows / sizeof bop_class_rows[0]; k++)

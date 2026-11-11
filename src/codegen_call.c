@@ -21224,6 +21224,15 @@ static int const_reads_builtin_value(Compiler *c, int recv) {
   return ty_is_array(rt) || ty_is_hash(rt) || rt == TY_STRING || rt == TY_STRBUF ||
          rt == TY_INT || rt == TY_FLOAT || rt == TY_SYMBOL || rt == TY_IO;
 }
+/* Count call id's trailing keyword hash into *argc as the call plan says a
+   callee of keyword fact kwpos sees it (cplan_hash_positionals): 0 where
+   the run time decides. */
+static int hash_counted(Compiler *c, int id, int kwpos, int *argc) {
+  int hp = cplan_hash_positionals(c, id, kwpos);
+  if (hp < 0) return 0;
+  *argc -= 1 - hp;
+  return 1;
+}
 /* CRuby's counts for class method `name` of builtin class cls: its own row
    of the facts, or the row of the class of its singleton chain that has
    the method (bop_class_owner: File.sysopen is IO's), read as CRuby finds
@@ -21233,8 +21242,8 @@ static int const_reads_builtin_value(Compiler *c, int recv) {
    defines on the chain, up to that class, keeps its own count. A keyword
    hash (kwh) is counted as the class whose counts are read takes it
    (builtin_kw_positional): apart, leaving *argc the positionals CRuby's message
-   gives, or as a positional; one that spreads a `**` operand (kwh 2) adds
-   no positional only where it is taken apart. Nothing says: not counted. */
+   gives, or as a positional, as many as the call plan says it adds
+   (cplan_hash_positionals). Nothing says: not counted. */
 static int class_arity_spec_row(Compiler *c, int id, const char *cls, const char *name,
                                 int with_block, int *argc, int kwh, char *exp, size_t n) {
   const char *owner = is_new_name(name) ? NULL : bop_class_owner(cls, name);
@@ -21244,9 +21253,7 @@ static int class_arity_spec_row(Compiler *c, int id, const char *cls, const char
     int ci = i > 0 ? comp_class_index(c, a) : -1;
     if (ci >= 0 && cplan_cmethod_target(c, id, ci, name) >= 0) return 0;
     if (arity_spec_find(sp_builtin_cmeth_arity_spec_tbl, a, name)) {
-      int kp = kwh ? builtin_kw_positional(a, name, 1) : 1;
-      if (kp < 0 || (kwh == 2 && kp == 1)) return 0;
-      *argc -= !kp;
+      if (kwh && !hash_counted(c, id, builtin_kw_positional(a, name, 1), argc)) return 0;
       return arity_spec_row(sp_builtin_cmeth_arity_spec_tbl, a, name, with_block, *argc, exp, n);
     }
     if (!owner || sp_streq(a, owner)) break;
@@ -21272,8 +21279,6 @@ static int arity_violation(Compiler *c, int id, int non_nil, char *exp, size_t n
   /* a constant that holds a value (`C = [1]; C.<<(2, 3)`) is checked by
      its value's class below, not as a class object */
   if (rty2_k == NK_ConstantReadNode && const_reads_builtin_value(c, recv)) rty2_k = NK_CallNode;
-  if (kwh && recv < 0) return 0;
-  if (kwh == 2 && rty2_k != NK_ConstantReadNode) return 0;   /* (a `**` operand's count is open) */
   if (recv < 0) {
     /* A bare call resolves to the enclosing class's chain, then to a
        top-level def or a reopened Kernel or Object, and only then to the
@@ -21289,6 +21294,7 @@ static int arity_violation(Compiler *c, int id, int non_nil, char *exp, size_t n
       return 0;
     if (call_target(c, id, -1, name, CT_TOP, NULL) >= 0 ||
         reopened_owns(c, "Kernel", name) || reopened_owns(c, "Object", name)) return 0;
+    if (kwh && !hash_counted(c, id, builtin_kw_positional("Kernel", name, 1), &argc)) return 0;
     if (!arity_spec_row(ctbl, "Kernel", name, with_block, argc, exp, n) || !exp[0]) return 0;
     *eval_recv = 0;
   }
@@ -21376,11 +21382,9 @@ static int arity_violation(Compiler *c, int id, int non_nil, char *exp, size_t n
     /* a name the class inherits from Object unchanged has Object's row: the
        table keeps a class's own row only where the class defines the name,
        and a forwarding name keeps one that never fires */
-    const char *owner = bcn;
-    if (!arity_spec_row(itbl, bcn, name, with_block, argc, exp, n)) {
-      if (!arity_spec_row(itbl, "Object", name, with_block, argc, exp, n)) return 0;
-      owner = "Object";
-    }
+    const char *owner = arity_spec_find(itbl, bcn, name) ? bcn : arity_spec_find(itbl, "Object", name) ? "Object" : NULL;
+    if (!owner || (kwh && !hash_counted(c, id, builtin_kw_positional(owner, name, 0), &argc))) return 0;
+    arity_spec_row(itbl, owner, name, with_block, argc, exp, n);
     if (!exp[0]) return 0;
     /* a reopened builtin that defines the name keeps its own dispatch --
        the receiver's class, the other class its kind stands for, or the
@@ -21391,7 +21395,6 @@ static int arity_violation(Compiler *c, int id, int non_nil, char *exp, size_t n
     if (reopened_owns(c, bcn, name) || reopened_owns(c, owner, name) ||
         (twin && reopened_owns(c, twin, name)) ||
         (sp_streq(owner, "Object") && toplevel_def(c, name))) return 0;
-    if (kwh && builtin_kw_positional(owner, name, 0) != 1) return 0;
   }
   *given = argc;
   return 1;
@@ -21674,7 +21677,10 @@ static int poly_arity_plan(Compiler *c, int id, int non_nil, int mm_aside, const
   int recv = nt_ref(nt, id, "receiver");
   if (!name || recv < 0 || repr_of(c, recv).kind != RK_BOXED) return 0;
   int argc = 0, kwh, with_block = arity_call_block(c, id, non_nil, &argc, &kwh);
-  if (with_block < 0 || kwh == 2) return 0;
+  /* (a keyword hash the plan counts as a Hash, which poly_arity_rows checks
+     every class passes as one; one it counts as nothing would change the
+     count the guard words) */
+  if (with_block < 0 || (kwh && cplan_hash_positionals(c, id, 1) != 1)) return 0;
   if (recv_user_defines(c, name) || call_target(c, id, -1, name, CT_TOP, NULL) >= 0) return 0;
   /* a method_missing anywhere: the classes whose chain answers it, or every
      class while the chain memo cannot be trusted */

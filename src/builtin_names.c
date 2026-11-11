@@ -2353,6 +2353,16 @@ int builtin_kw_positional(const char *cls, const char *name, int cside) {
     if (sp_streq(sp_builtin_kwpos_tbl[i].cls, cls) && sp_streq(sp_builtin_kwpos_tbl[i].m, name)) return 1;
   return -1;
 }
+/* See builtin_names.h. */
+int builtin_name_kwless(const char *name) {
+  if (!name) return 0;
+  if (bop_name_kwless(name) || bop_class_name_kwless(name) || builtin_method_fixed_any(name)) return 1;
+  for (int i = 0; sp_builtin_kwpos_tbl[i].cls; i++)
+    if (sp_streq(sp_builtin_kwpos_tbl[i].m, name)) return 1;
+  for (int i = 0; sp_builtin_cmeth_kwpos_tbl[i].cls; i++)
+    if (sp_streq(sp_builtin_cmeth_kwpos_tbl[i].m, name)) return 1;
+  return 0;
+}
 
 /* The names CRuby's own facts give Object, BasicObject, Kernel, Module and
    Class (builtin_arity.inc), sorted once per self kind for

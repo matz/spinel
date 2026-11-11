@@ -44386,7 +44386,7 @@ static void kwsplat_aliases_build(NodeTable *nt, KwAliases *al) {
   int *work = malloc(sizeof(int) * (size_t)(al->n + 1)), nw = 0;
   if (!work) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   for (int i = 0; i < al->n; i++)
-    if (bop_name_kwless(al->old_[i]) && !anh_has(&al->gated, al->new_[i])) { anh_add(&al->gated, al->new_[i]); work[nw++] = i; }
+    if (builtin_name_kwless(al->old_[i]) && !anh_has(&al->gated, al->new_[i])) { anh_add(&al->gated, al->new_[i]); work[nw++] = i; }
   for (int w = 0; w < nw; w++) {
     const char *nm = al->new_[work[w]];
     if (!by_old.nb) break;
@@ -44403,7 +44403,9 @@ static int kwsplat_alias_gated(NodeTable *nt, KwAliases *al, const char *name) {
 /* Is the call bound to a method that takes no keywords, or to one the
    program's names cannot rule out? The call's own name decides, or for a
    send the literal Symbol it names; a send of a name known only at run time
-   may reach any method, so it is split too. */
+   may reach any method, so it is split too. A `new` reaches the program's
+   own initialize as often as a builtin's, which no fact speaks for: it
+   stays whole. */
 static int kwsplat_gated(NodeTable *nt, KwAliases *al, int id, const int *args, int n) {
   const char *nm = nt_str(nt, id, "name");
   if (!nm) return 0;
@@ -44412,7 +44414,7 @@ static int kwsplat_gated(NodeTable *nt, KwAliases *al, int id, const int *args, 
     nm = call_sent_name(nt, id, NULL);
     if (!nm) return 1;
   }
-  return bop_name_kwless(nm) || kwsplat_alias_gated(nt, al, nm);
+  return !is_new_name(nm) && (builtin_name_kwless(nm) || kwsplat_alias_gated(nt, al, nm));
 }
 /* SPINEL_LOWER_ROWS_CHECK: the call split_kwsplat_calls leaves without its
    `**` operands has the rows of its own shape, which the parse noted as
@@ -44573,6 +44575,7 @@ static void split_kwsplat_calls(Compiler *c, int from) {
     if (!stmt) nt_node_set_int(nt, call, "node_in_place", 1);
     for (int j = bare; j < nt->count; j++) nt_node_set_int(nt, j, "node_in_place", 1);
     hargs[n - 1] = kh;
+    nt_node_set_int(nt, kh, "kwsplit_full", 1);   /* (the branch runs for a hash that is not empty) */
     nt_node_set_ref(nt, call, "arguments", an);
     nt_node_set_arr(nt, an, "arguments", hargs, n);
     int test = sd_bcall(nt, "empty?", kread, NULL, 0);

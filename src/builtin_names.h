@@ -40,6 +40,10 @@ int builtin_name_takes_keywords(const char *n);   /* a builtin of the name takes
    class method where cside), as CRuby counts a method that takes no
    keywords: 1; 0 where the method takes keywords; -1 where no fact says. */
 int builtin_kw_positional(const char *cls, const char *name, int cside);
+/* Does some builtin of the name take no keywords: an op row or class-side
+   row without BOPF_KEYWORDS, a fixed Method#arity, the facts' BAK or BACK.
+   The `**` split's gate. */
+int builtin_name_kwless(const char *name);
 int is_method_name_reflection(const char *n); /* send family, method public_method instance_method define_method define_singleton_method alias_method singleton_method respond_to? method_defined? */
 int is_code_eval_name(const char *n);  /* eval class_eval module_eval instance_eval: given its code as a String */
 int is_symbol_conversion(const char *n); /* to_sym intern: a Symbol made of a value */

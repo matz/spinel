@@ -2854,6 +2854,31 @@ int cplan_self_class(Compiler *c, int id) {
   if (framed) elab_plan_leave(c);
   return ci;
 }
+/* Does the keyword hash or Hash literal h spread a key: 1; 0 where its
+   `**` operands are nil or literals that spread nothing; -1 where one is
+   the run time's (an anonymous `**` too). */
+static int spread_elements(const NodeTable *nt, int h) {
+  int en = 0, sp = 0;
+  const int *els = nt_arr(nt, h, "elements", &en);
+  for (int e = 0; e < en && sp <= 0; e++) {
+    if (nt_kind(nt, els[e]) != NK_AssocSplatNode) return 1;
+    int v = nt_ref(nt, els[e], "value");
+    NodeKind vk = v >= 0 ? nt_kind(nt, v) : NK_NONE;
+    int one = vk == NK_NilNode ? 0 : vk == NK_HashNode ? spread_elements(nt, v) : -1;
+    if (one != 0) sp = one;
+  }
+  return sp;
+}
+/* See call_plan.h. */
+int cplan_hash_positionals(Compiler *c, int id, int kwpos) {
+  int argc = 0;
+  const int *argv = call_args(c->nt, id, &argc);
+  if (argc == 0 || nt_kind(c->nt, argv[argc - 1]) != NK_KeywordHashNode) return 0;
+  int h = argv[argc - 1];
+  int sp = nt_int(c->nt, h, "kwsplit_full", 0) ? 1 : spread_elements(c->nt, h);
+  if (sp == 0 || kwpos == 0) return 0;
+  return kwpos == 1 ? sp : -1;
+}
 /* See call_plan.h. */
 const BuiltinClassOp *cplan_builtin_class_row(Compiler *c, int id, const char *cls) {
   const char *name = nt_str(c->nt, id, "name");

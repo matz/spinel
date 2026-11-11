@@ -512,6 +512,8 @@ const char *bop_class_owner(const char *cls, const char *name);
    its own class-side rows say (BOPF_KEYWORDS): 1, 0 for rows without the
    flag, -1 where cls has no row of the name. */
 int bop_class_keywords(const char *cls, const char *name);
+/* Does a class-side row of the name, of any class, lack BOPF_KEYWORDS? */
+int bop_class_name_kwless(const char *name);
 int bop_class_row_count(void);
 const BuiltinClassOp *bop_class_row(int i);   /* the i-th class-side row, NULL past the last */
 

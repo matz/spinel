@@ -146,6 +146,10 @@ struct LoadRecord {
   long nentries, indexed;
   unsigned char *clsmod; int clsmod_all; struct { int nhist, ncls, recorded; unsigned ver; } clsmod_of;   /* lr_class_object_modules, and the record state it is of */
   int *mixed, nmixed; struct { int nhist, ncls, recorded; unsigned ver; } mixed_of;   /* lr_mixed */
+  /* lr_chain_mixed's answers by class side, [2 * (cls + 1) + sg]: 0 not asked yet, 1 every class of lr_mixed, else 2 +
+     where in list the count and then the classes start; seen, walked and depth the walk's scratch (a class's mark
+     when reached, a module's when its chain is walked, and the deepest start it was walked from); ready from lr_mixin_dups_settle to lr_record_drop; and the record state the answers are of */
+  struct LrAnc { int *at, *list, nlist, clist, *seen, *walked, *depth, mark; unsigned char ready; struct { unsigned long hgen; unsigned shape, ver; int nhist, ncls, nclasses, recorded; } of; } anc;
   int *mby, *mby_at, mby_unknown; struct { int nhist, ncls, recorded; unsigned ver; } mby_of;   /* lr_mixed_by: who mixes each module in, as (class + 1) * 2 + singleton, CSR by module + 1 */
   int *rclass; struct { unsigned long hgen, nedits; unsigned shape, nver; int nclasses; } rclass_of;   /* [nclasses] by class: elab_record_class_of's answer + 2, 0 for not asked yet, and the state it is of */
   struct LrSgMaker { int node, cls; unsigned char sure; } *sgm; int nsgm, csgm;   /* lr_sg_makers, with the modules a singleton chain may hold (any of them: sgchain_any) */
@@ -2697,6 +2701,7 @@ static void lr_record_drop(LoadRecord *r) {
   r->slot_builds = -1;
   r->nentries = 0; r->indexed = r->opened = r->lated = -1;   /* the by-name index and the open and late bits are of the dropped histories */
   r->hgen++;
+  r->anc.ready = 0;   /* (the mixins' duplicate answers are dropped with them) */
   free(r->surf); free(r->surf_at); r->surf = NULL; r->surf_at = NULL;
   free(r->bread); r->bread = NULL; r->nbread = 0;   /* (read through the dropped histories) */
 }
@@ -4022,6 +4027,7 @@ static void lr_mixin_dups_settle(Compiler *c) {
   for (int k = 0; k < r->ncls; k++)
     for (int i = 0; i < r->cls[k].nmix; i++)
       lr_mixin_dup(c, k - 1, elab_mix_on_singleton(r->cls[k].mix[i].kind), &r->cls[k], i);
+  r->anc.ready = 1;   /* (lr_chain_mixed's walk reads them) */
 }
 
 /* One ancestor's part of the search of `name` (or of module `mod`): cls's
@@ -4151,7 +4157,9 @@ static int lr_sg_chain_runs(Compiler *c, int cls, const char *name, LoadPoint p,
    Class, Module, Object (main's top level with it), Kernel, BasicObject, an instance's Object, Kernel, BasicObject.
    core (NULL: the reopenings only) is asked each one's own table, by CORE_*, right after its reopening. A visitor
    returns 0 to go on, else the walk ends with its code; the walk answers -1 where a class is not the record's or the
-   chain is longer than it can be. tail_end: how much of the singleton tail is read (lr_sg_tail_end, LR_TAIL_N: all). */
+   chain is longer than it can be. tail_end: how much of the singleton tail is read (lr_sg_tail_end, LR_TAIL_N: all).
+   enter (NULL: every one) is asked before a mixin's module is walked, with the depth its chain starts at: nonzero
+   leaves that module out (a reader that has walked it from there or deeper already). */
 static int lr_hist_versions(const LoadRecord *r, const LrHist *h, ElabVersion *out, int n, int cap);
 enum { LR_W_STOP = 1, LR_W_END = 2 };
 typedef struct LrWalker {
@@ -4162,6 +4170,7 @@ typedef struct LrWalker {
   int (*core)(void *ud, int core);
   int (*unsure)(void *ud, int cls, int ref);
   int tail_end;
+  int (*enter)(void *ud, int mod, int depth);
 } LrWalker;
 static int lr_walk(Compiler *c, const LrWalker *w, void *ud, int cls, int sg, int depth);
 /* mixin i of cls (class record k): nothing where its module is already among the ancestors (CRuby's no-op re-include,
@@ -4172,7 +4181,8 @@ static int lr_walk_mixin(Compiler *c, const LrWalker *w, void *ud, int cls, int 
   int dup = lr_mixin_dup(c, cls, sg, k, i), mod, rc;
   if (dup == ELAB_YES) return 0;
   if (dup == ELAB_UNKNOWN && w->unsure && (rc = w->unsure(ud, cls, m->ref))) return rc;
-  return (mod = lr_later(c, &m->mod, m->ref)) < 0 ? w->mixin(ud, cls, m->ref) : lr_walk(c, w, ud, mod, 0, depth + 1);
+  if ((mod = lr_later(c, &m->mod, m->ref)) < 0) return w->mixin(ud, cls, m->ref);
+  return w->enter && w->enter(ud, mod, depth + 1) ? 0 : lr_walk(c, w, ud, mod, 0, depth + 1);
 }
 /* the mixins of one kind a class holds, latest first: pass 0 its prepends (a singleton's), 2 its includes (extends) */
 static int lr_walk_mixins(Compiler *c, const LrWalker *w, void *ud, int cls, int sg, int pass, int depth) {
@@ -4268,7 +4278,7 @@ static int lr_vv_mixin(void *ud, int cls, int ref) {
 }
 static int lr_chain_versions(Compiler *c, int cls, int sg, const char *name, ElabVersion *out, int cap) {
   LrVers_ v = { c, name, out, 0, cap };
-  LrWalker w = { lr_vv_own, lr_vv_mixin, NULL, NULL, NULL, NULL, lr_sg_tail_end(name) };
+  LrWalker w = { lr_vv_own, lr_vv_mixin, NULL, NULL, NULL, NULL, lr_sg_tail_end(name), NULL };
   return lr_walk(c, &w, &v, cls, sg, 0) < 0 || v.n < 0 ? -1 : v.n;
 }
 /* The program's reopening of builtin class or module name: its record
@@ -4304,7 +4314,7 @@ static int lr_reopen_answers(Compiler *c, const char *cls, const char *name) {
     if (lr_reopened(r, a)) {
       int k = lr_reopening_of(r, a);
       LrVers_ v = { c, name, NULL, 0, 0 };
-      LrWalker w = { lr_ro_own, lr_vv_mixin, NULL, NULL, NULL, NULL, LR_TAIL_N };
+      LrWalker w = { lr_ro_own, lr_vv_mixin, NULL, NULL, NULL, NULL, LR_TAIL_N, NULL };
       if (k < LR_MAIN || lr_walk_one(c, &w, &v, k, 0, 0)) return 1;
     }
     if (builtin_owns_instance_method(a, name)) return 0;
@@ -4464,8 +4474,8 @@ static int lr_inside(Compiler *c, int node, LoadPoint p0, LoadPoint p1) {
 }
 
 /* The classes that carry a mixin or code the record cannot follow, in order:
-   of the others a chain takes nothing (lr_chain_moves, elab_chain_settled).
-   Kept for the histories as they stand. */
+   of the others a chain takes nothing (lr_chain_moves, elab_chain_settled,
+   through lr_chain_mixed). Kept for the histories as they stand. */
 static const int *lr_mixed(Compiler *c, int *n) {
   LoadRecord *r = c->lrec;
   if (!r->mixed || r->mixed_of.nhist != r->nhist || r->mixed_of.ncls != r->ncls || r->mixed_of.recorded != r->recorded || r->mixed_of.ver != r->ver) {
@@ -4482,6 +4492,117 @@ static const int *lr_mixed(Compiler *c, int *n) {
   return r->mixed;
 }
 
+/* lr_chain_mixed's walk: each class it reaches is marked; it ends (1) at a
+   class the record does not hold, and lr_walk's mixin and unsure steps end
+   it: a module the record cannot name, or one that may already be among the
+   ancestors. A module whose chain it has walked from as deep a start leaves
+   out (lr_anc_enter): walked again from there, it would reach the same
+   classes, end where it ended, and pass lr_chain_bound only where the deeper
+   walk did; from a deeper start it is walked again. So a module reached
+   along many paths (modules that include each other's includers) is walked
+   once per depth it is reached at, not once per path, and a cycle, whose
+   every lap starts deeper, still walks until the bound ends it. */
+typedef struct { struct LrAnc *a; LoadRecord *r; } LrAncWalk;
+static int lr_anc_own(void *ud, int cls, int sg) {
+  LrAncWalk *x = ud;
+  (void)sg;
+  if (!lr_class(x->r, cls)) return 1;
+  x->a->seen[cls + 1] = x->a->mark;
+  return 0;
+}
+static int lr_anc_stop(void *ud, int cls, int ref) {
+  (void)ud; (void)cls; (void)ref;
+  return 1;
+}
+static int lr_anc_enter(void *ud, int mod, int depth) {
+  LrAncWalk *x = ud;
+  if (mod + 1 >= x->r->ncls) return 0;   /* (the walk ends at it: no record class) */
+  if (x->a->walked[mod + 1] == x->a->mark && x->a->depth[mod + 1] >= depth) return 1;
+  x->a->walked[mod + 1] = x->a->mark;
+  x->a->depth[mod + 1] = depth;
+  return 0;
+}
+/* lr_chain_mixed's answer for cls's chain (its singleton's when sg), as
+   LrAnc.at keeps it */
+static int lr_chain_mixed_make(Compiler *c, int cls, int sg, const int *mk, int nk) {
+  LoadRecord *r = c->lrec;
+  struct LrAnc *a = &r->anc;
+  LrAncWalk x = { a, r };
+  LrWalker w = { lr_anc_own, lr_anc_stop, NULL, NULL, NULL, lr_anc_stop, lr_sg_tail_end(NULL), lr_anc_enter };
+  const LrClass *km = lr_class(r, LR_MAIN);
+  int tail[LR_TAIL_N], last = cls, sup;
+  /* (the tail's Object step takes main's includes, not a prepend of main's,
+     which lr_search takes as main's own step) */
+  for (int i = 0; sg && km && i < km->nmix; i++)
+    if (km->mix[i].kind == LR_PREPEND) return 1;
+  /* (lr_walk starts a singleton's tail where the last class of its
+     superclass steps starts it, lr_in_ancestry where cls does: they part
+     where a chain ends at a module) */
+  for (int d = 0; sg && d < lr_chain_bound(c) && (sup = lr_super(c, last)) > LR_MAIN; d++) last = sup;
+  if (sg && lr_sg_tail_of(c, last, tail) != lr_sg_tail_of(c, cls, tail)) return 1;
+  a->mark++;
+  if (lr_walk(c, &w, &x, cls, sg, 0)) return 1;
+  if (sg || cls < 0 || cls >= c->nclasses || !comp_class_is_module(c, &c->classes[cls]))
+    for (int i = 0, k; i < 2; i++)
+      if ((k = comp_core_class(c, i ? CORE_BASIC_OBJECT : CORE_OBJECT)) >= 0) lr_anc_own(&x, k, 0);
+  int at = a->nlist;
+  a->list = lr_grow(a->list, &a->clist, a->nlist, sizeof(int));
+  a->list[a->nlist++] = 0;
+  for (int i = 0; i < nk; i++)
+    if (a->seen[mk[i] + 1] == a->mark) {
+      a->list = lr_grow(a->list, &a->clist, a->nlist, sizeof(int));
+      a->list[a->nlist++] = mk[i];
+      a->list[at]++;
+    }
+  return 2 + at;
+}
+/* The classes of lr_mixed that may be on cls's chain (its singleton's when
+   sg) at any point, in lr_mixed's order: lr_in_ancestry answers no for each
+   class of lr_mixed left out, so a loop over lr_mixed that skips a class
+   lr_in_ancestry answers no for loops over these instead. They are the
+   classes lr_walk reaches from cls, at no point in particular: each step
+   lr_search takes looking for a module at some p is one of lr_walk's (the
+   same order and depths, less the mixins not run by p), and lr_walk stops
+   where lr_search answers unknown for any module (a class the record does
+   not hold, a module it cannot name, one that may already be among the
+   ancestors, a chain longer than it can be); with Object and BasicObject,
+   which lr_in_ancestry puts on a class's and a singleton's chain. Where the
+   walk stops, on a singleton's chain where main has a prepend (which the
+   tail's Object step does not take), and on one whose tail the walk would
+   start elsewhere than lr_in_ancestry does, every class of lr_mixed. Asked once
+   per class side while the record's mixins, superclasses and classes hold
+   (hgen, the class shapes, the counts, lr_mixed's own state), and only from
+   lr_mixin_dups_settle on: before it lr_walk's duplicate asks would keep
+   answers the record drops. One chain's mixed classes are few, where a
+   program's are as many as its classes: so a question each call asks of
+   each class it may be on (elab_chain_settled, lr_span) is not one over
+   every class. */
+static const int *lr_chain_mixed(Compiler *c, int cls, int sg, int *n) {
+  LoadRecord *r = c->lrec;
+  struct LrAnc *a = &r->anc;
+  int nk;
+  const int *mk = lr_mixed(c, &nk);
+  *n = nk;
+  if (!a->ready || cls < LR_MAIN || cls + 1 >= r->ncls) return mk;
+  if (!a->at || a->of.hgen != r->hgen || a->of.shape != comp_class_shape_gen() || a->of.ver != r->ver || a->of.nhist != r->nhist ||
+      a->of.ncls != r->ncls || a->of.nclasses != c->nclasses || a->of.recorded != r->recorded) {
+    free(a->at); free(a->seen); free(a->walked); free(a->depth);
+    a->at = calloc(2 * (size_t)r->ncls, sizeof(int));
+    a->seen = calloc((size_t)r->ncls, sizeof(int));
+    a->walked = calloc((size_t)r->ncls, sizeof(int));
+    a->depth = calloc((size_t)r->ncls, sizeof(int));
+    if (!a->at || !a->seen || !a->walked || !a->depth) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    a->nlist = 0; a->mark = 0;
+    a->of.hgen = r->hgen; a->of.shape = comp_class_shape_gen(); a->of.ver = r->ver; a->of.nhist = r->nhist;
+    a->of.ncls = r->ncls; a->of.nclasses = c->nclasses; a->of.recorded = r->recorded;
+  }
+  int key = 2 * (cls + 1) + (sg != 0);
+  if (!a->at[key]) a->at[key] = lr_chain_mixed_make(c, cls, sg != 0, mk, nk);
+  if (a->at[key] == 1) return mk;
+  *n = a->list[a->at[key] - 2];
+  return &a->list[a->at[key] - 1];
+}
+
 /* Does cls's chain (its singleton's when sg) change for `name` strictly
    between p0 and p1: a module that has or may have the name mixed into a
    class on it, code the record cannot follow run on one of them that may
@@ -4489,7 +4610,7 @@ static const int *lr_mixed(Compiler *c, int *n) {
 static int lr_chain_moves(Compiler *c, int cls, int sg, const char *name, LoadPoint p0, LoadPoint p1) {
   LoadRecord *r = c->lrec;
   int nk = 0;
-  const int *mk = lr_mixed(c, &nk);
+  const int *mk = lr_chain_mixed(c, cls, sg, &nk);
   for (int i = 0; i < nk; i++) {
     int k = mk[i];
     const LrClass *kc = lr_class(r, k);
@@ -4513,7 +4634,7 @@ int elab_chain_settled(Compiler *c, int cls, int sg, const char *name, LoadPoint
   lr_run_points(c);
   LoadPoint end = { p.region, r->rend[p.region] };
   int nk = 0;
-  const int *mk = lr_mixed(c, &nk);
+  const int *mk = lr_chain_mixed(c, cls, sg, &nk);
   for (int i = 0; i < nk; i++) {
     int k = mk[i];
     const LrClass *kc = lr_class(r, k);
@@ -9198,7 +9319,7 @@ void elab_free(Compiler *c) {
   free(r->srcw);
   free(r->slot); free(r->slot_head); free(r->slotp);
   free(r->fin); free(r->fin_head);
-  free(r->hist); free(r->mixed); free(r->mby); free(r->mby_at); free(r->rclass); free(r->sgm); free(r->sgchain); free(r->unset.key); free(r->unset.un); free(r->clsmod); free(r->hhead); free(r->cls); free(r->vers); free(r->vers_head); free(r->valias); free(r->rdr); free(r->rdr_head); free(r->set);
+  free(r->hist); free(r->mixed); free(r->mby); free(r->mby_at); free(r->rclass); free(r->sgm); free(r->sgchain); free(r->unset.key); free(r->unset.un); free(r->anc.at); free(r->anc.list); free(r->anc.seen); free(r->anc.walked); free(r->anc.depth); free(r->clsmod); free(r->hhead); free(r->cls); free(r->vers); free(r->vers_head); free(r->valias); free(r->rdr); free(r->rdr_head); free(r->set);
   for (int i = 0; i < r->nhdr; i++) free(r->hdr[i].leaf);
   free(r->hdr); free(r->hdr_head);
   free(r->st); free(r->at); free(r->bits); free(r->dscope); free(r->ddef); free(r->rend); free(r->rinst); free(r->urun); free(r->rentry); free(r);
@@ -10039,7 +10160,7 @@ static int lr_sup_builtin_step(void *ud, int cls, int sg) {
 }
 static int lr_sup_core_step(void *ud, int core);
 static int lr_sup_done_step(void *ud, int cls, int sg);
-static const LrWalker lr_sup_walker = { lr_sup_own_step, lr_sup_mixin_step, lr_sup_builtin_step, lr_sup_done_step, lr_sup_core_step, lr_sup_mixin_step, LR_TAIL_N };
+static const LrWalker lr_sup_walker = { lr_sup_own_step, lr_sup_mixin_step, lr_sup_builtin_step, lr_sup_done_step, lr_sup_core_step, lr_sup_mixin_step, LR_TAIL_N, NULL };
 /* a core class's own table, right after the program's reopening of it (lr_walk's tail) */
 static int lr_sup_core_step(void *ud, int core) {
   LrSup *s = ud;

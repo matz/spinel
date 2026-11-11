@@ -34111,6 +34111,32 @@ int respond_to_static_answer(Compiler *c, int id, int recv, TyKind rt, const cha
       else return -1;
     }
   }
+  /* A builtin value reaches a method of a program's reopening of a builtin
+     module or class among its ancestors between its own class and Object
+     (`module Comparable; def me` asked of a String, `module Enumerable`
+     of a Range, `class Numeric` of an Integer), by its visibility there.
+     The probe typed no such call, so the answer read false. */
+  if (!resolved && recv >= 0 && !ty_is_object(rt) && rt != TY_CLASS && rt != TY_IO &&
+      rt != TY_POLY && rt != TY_UNKNOWN && rt != TY_BOOL) {
+    static const char *const rat[] = { "Rational", "Numeric", "Comparable", "Object", NULL };
+    static const char *const cpx[] = { "Complex", "Numeric", "Comparable", "Object", NULL };
+    const char *const *anc = builtin_value_ancestry(rt);
+    if (rt == TY_RATIONAL) anc = rat;
+    else if (rt == TY_COMPLEX) anc = cpx;
+    const char *bn = anc ? anc[0] : NULL;
+    int bcls = bn ? core_of_type(rt) : -1;
+    int bci = bcls >= 0 ? comp_core_class(c, bcls) : -1;
+    if (bn && !builtin_method_known(bn, qm) && (bci < 0 || comp_method_in_chain(c, bci, qm, NULL) < 0)) {
+      for (int a = 1; !resolved && anc[a] && !sp_streq(anc[a], "Object"); a++) {
+        int k = comp_class_index(c, anc[a]);
+        if (k < 0 || comp_method_in_chain(c, k, qm, NULL) < 0) continue;
+        int v = comp_method_vis_in_chain(c, k, qm);
+        if (v == SP_VIS_PUBLIC) resolved = yes = 1;
+        else if (foldable) { resolved = 1; yes = include_all; }
+        else return -1;
+      }
+    }
+  }
   /* An IO answers by its kind -- a File, a socket, a server socket, a stat
      share the type -- which only the handle knows: sp_io_responds decides at
      run time. A method an Object reopening defines answers here; one an

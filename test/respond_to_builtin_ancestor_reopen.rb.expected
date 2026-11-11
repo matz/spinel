@@ -1,0 +1,45 @@
+true
+true
+true
+true
+true
+true
+true
+true
+false
+true
+false
+true
+true
+true
+true
+false
+true
+true
+true
+false
+false
+false
+false
+false
+false
+1
+5
+4
+[Integer, true, false, true, false, true]
+[Float, true, false, true, false, true]
+[String, true, false, false, false, true]
+[Symbol, true, false, false, false, true]
+[NilClass, false, false, false, false, false]
+[TrueClass, false, false, false, false, false]
+[Array, false, true, false, false, false]
+[Hash, false, true, false, false, false]
+[Range, false, true, false, false, false]
+[Pt, true, false, false, false, true]
+[Plain, false, false, false, false, false]
+[Integer, true, false, true, false, true]
+[Time, true, false, false, false, true]
+[Rational, true, false, true, false, true]
+true
+true
+false

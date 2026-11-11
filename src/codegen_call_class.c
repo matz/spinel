@@ -667,6 +667,21 @@ static int obj_defines_own(Compiler *c, int recv, const char *name) {
   return ty_is_object(t) && comp_method_in_chain(c, ty_object_class(t), name, NULL) >= 0;
 }
 
+/* The builtin classes whose values have builtin module or class `kn`
+   (Comparable, Numeric, Enumerable) among their ancestors, for a program
+   that reopens it; NULL for any other name. */
+static const char *const *builtin_ancestor_holders(Compiler *c, int k) {
+  const char *kn = c->classes[k].name;
+  static const char *const cmp[] = { "Integer", "Float", "Rational", "Complex", "String", "Symbol", "Time", NULL };
+  static const char *const num[] = { "Integer", "Float", "Rational", "Complex", NULL };
+  static const char *const en[] = { "Array", "Hash", "Range", "Set", "Enumerator", NULL };
+  if (!kn || !c->classes[k].is_builtin_const || c->classes[k].enclosing_class >= 0) return NULL;
+  if (sp_streq(kn, "Comparable")) return cmp;
+  if (sp_streq(kn, "Numeric")) return num;
+  if (sp_streq(kn, "Enumerable")) return en;
+  return NULL;
+}
+
 /* Only the builtin-only fallback calls this: user methods and reflection
    overrides have already selected their own paths. The core method inventory
    proves absence, including inherited methods. Tags with no single core
@@ -1098,6 +1113,22 @@ int emit_call_reflection_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
             const char *kn = c->classes[k].name;
             int root = kn && is_object_root(kn);
             if (root) { root_seen = 1; continue; }
+            /* a reopened builtin module or class a builtin value has among
+               its ancestors (`module Comparable` of a String): no value is
+               keyed by it, so the value's builtin class answers */
+            const char *const *holders = has ? builtin_ancestor_holders(c, k) : NULL;
+            if (holders) {
+              buf_printf(b, "%s(sp_str_in_list(sp_poly_class_name(_t%d), (const char *const[]){", first ? "" : " || ", tv);
+              for (int h = 0; holders[h]; h++) buf_printf(b, "\"%s\", ", holders[h]);
+              buf_puts(b, "NULL})");
+              if (nonpublic) {
+                if (ia_once) buf_printf(b, " && _ia%d", tv);
+                else buf_puts(b, argc >= 2 && iak == NK_TrueNode ? " && 1" : " && 0");
+              }
+              buf_puts(b, ")");
+              first = 0;
+              continue;
+            }
             if (has) { if (nown < (int)(sizeof own / sizeof own[0])) own[nown++] = k; else own_full = 1; }
             if (!has) {
               buf_printf(b, "%s(_k%d == %d && (", first ? "" : " || ", tv, k);

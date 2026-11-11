@@ -11645,18 +11645,6 @@ static int program_defines_method_named(Compiler *c, const char *name) {
     if (!c->scopes[si].is_cmethod && c->scopes[si].name && sp_streq(c->scopes[si].name, name)) return 1;
   return 0;
 }
-/* ... one every object answers: the top level's, or Object's, Kernel's or
-   BasicObject's own */
-static int program_defines_object_method_named(Compiler *c, const char *name) {
-  for (int si = 1; si < c->nscopes; si++) {
-    Scope *sc = &c->scopes[si];
-    if (sc->is_cmethod || !sc->name || !sp_streq(sc->name, name)) continue;
-    const char *cn = sc->class_id >= 0 && sc->class_id < c->nclasses ? c->classes[sc->class_id].name : NULL;
-    if (!cn || sp_streq(cn, "Object") || sp_streq(cn, "Kernel") || sp_streq(cn, "BasicObject") ||
-        sc->class_id == c->toplevel_class) return 1;
-  }
-  return 0;
-}
 int builtin_instance_method_known(const char *cls, const char *m);
 /* May call `call`, of `name` on a receiver of type rt, reach a method the
    program defines? A name the builtin class defines itself (Mutex#synchronize,
@@ -11682,7 +11670,7 @@ static int recv_may_reach_program_method(Compiler *c, int call, TyKind rt, const
     else k = comp_builtin_class_named(c, bn);
   }
   if (k >= 0 && call_target(c, call, k, name, 0, NULL) >= 0) return 1;
-  return !own && program_defines_object_method_named(c, name);
+  return !own && cplan_object_method_named(c, name);
 }
 
 /* The in-place Array iterators have no blockless form yet (CRuby's
@@ -19043,7 +19031,7 @@ static int bx_program_aliases(Compiler *c, const char *nm) {
    the top level or in a module the top level includes
    (bx_owner_in_string_chain), or by an alias? */
 static int bx_kernel_name_own(Compiler *c, const char *nm) {
-  if (program_defines_object_method_named(c, nm) || bx_program_aliases(c, nm)) return 1;
+  if (cplan_object_method_named(c, nm) || bx_program_aliases(c, nm)) return 1;
   for (int i = 0; bx_cmp_recv_cls[i]; i++) {
     int k = comp_builtin_class_named(c, bx_cmp_recv_cls[i]);
     int mi = k >= 0 ? comp_method_in_chain(c, k, nm, NULL) : -1;

@@ -5460,10 +5460,12 @@ static void iter_hold_built_str_recv(Compiler *c, int recv, const int *argv, int
    with a block (answers 1 emitted, 0 declined, -1 to go on) */
 static int iter_tap_slice_string_arms(Compiler *c, int id, Buf *b, int indent, const NodeTable *nt, int block, const char *name, int recv, int body, const char *p0_orig, const char *p0, TyKind rt) {
   /* recv.tap { |p| body } -- run block for side effects, preserve outer var */
-  /* an object whose class writes its own tap is called */
-  if (sp_streq(name, "tap") && recv >= 0 && ty_is_object(repr_of(c, recv).as_ty) &&
-      comp_method_in_chain(c, ty_object_class(repr_of(c, recv).as_ty), "tap", NULL) >= 0)
-    return -1;
+  /* a tap the program writes, its class's own or one every object answers,
+     is called (the expression path) */
+  if (sp_streq(name, "tap") && recv >= 0) {
+    const CallPlan *tp = cplan_user(c, id);
+    if (tp->mi >= 0 && tp->via != UC_POLY) return -1;   /* (a boxed receiver's dispatch keeps its statement form) */
+  }
   if (sp_streq(name, "tap") && recv >= 0) {
     TyKind et = repr_of(c, recv).as_ty;
     /* a receiver of no type -- a call proven to raise NoMethodError -- is

@@ -2805,6 +2805,11 @@ static int a_block_forwarded_to_proc(Compiler *c, int id) {
   else {
     TyKind rt = infer_type(c, recv);
     if (ty_is_object(rt)) mi = call_target(c, id, cls = ty_object_class(rt), name, 0, NULL);
+    /* ...and a method of the root classes every receiver reaches (the plan's) */
+    if (mi < 0) {
+      const CallPlan *rp = cplan_root_reopen_call(c, id, cplan_user_fresh(c, id));
+      if (rp) mi = rp->mi;
+    }
   }
   if (mi < 0) return 0;
   /* a yielding method a subclass overrides is not spliced: the cls_id switch
@@ -48812,6 +48817,8 @@ int desugar_tap_value_write_at(Compiler *c, LowerCtx *lc, int id) {
   int v = nt_ref(nt, id, "value");
   if (!x || v < 0 || nt_kind(nt, v) != NK_CallNode || !sp_streq(nt_str(nt, v, "name"), "tap") ||
       nt_ref(nt, v, "arguments") >= 0 || nt_safe_nav(nt, v)) return 0;
+  /* a tap of the program's that every object answers keeps the call as written */
+  if (cplan_object_method_named(c, "tap")) return 0;
   int blk = nt_ref(nt, v, "block"), r = nt_ref(nt, v, "receiver");
   if (blk < 0 || nt_kind(nt, blk) != NK_BlockNode || r < 0) return 0;
   NodeKind rk = nt_kind(nt, nt_paren_single(c->nt, r));

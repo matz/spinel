@@ -20731,6 +20731,13 @@ int builtin_cmethod_known(const char *cls, const char *name) {
           (builtin_method_known(cls, name) || is_kernel_module_function(name)));
 }
 
+/* Does any builtin class or module have a class method of this name? */
+int builtin_cmethod_known_any(const char *name) {
+  for (int i = 0; name && sp_builtin_cmeth_arity_spec_tbl[i].cls; i++)
+    if (sp_streq(sp_builtin_cmeth_arity_spec_tbl[i].m, name)) return 1;
+  return 0;
+}
+
 static void refl_builtin_cls_rows(const char *k, const char *skip, ReflNames *r) {
   int own_new = sp_streq(k, "IO") || sp_streq(k, "Array") || sp_streq(k, "String") || sp_streq(k, "StringIO");
   for (int i = 0; sp_builtin_cmeth_arity_spec_tbl[i].cls; i++) {
@@ -23071,7 +23078,7 @@ static int emit_object_reopen_vis_refusal(Compiler *c, int id, int vrecv, TyKind
     int bid = bn ? builtin_class_id(bn) : 0;
     if (bid && comp_builtin_class_named(c, bn) < 0) {
       int mod = is_builtin_module_name(bn);
-      if (core_class_value_answers(bn, vnm) || core_class_value_answers(mod ? "Module#" : "Class#", vnm) || builtin_class_id_answers(bid, vnm, 1) || class_value_builtin_answers(c, vnm, !mod) ||
+      if (cplan_class_value_answers(c, vrecv, vnm) || class_value_builtin_answers(c, vnm, !mod) ||
           object_reopen_class_value_owns(c, id, oci, vnm, 0, mod ? -3 : -2)) return 0;
       snprintf(cvname, sizeof cvname, "%s %s", mod ? "module" : "class", bn);
       cname = cvname; named = 1;
@@ -35264,6 +35271,14 @@ static void emit_call_body_ordinary(Compiler *c, int id, Buf *b) {
     }
   }
   if (emit_or_take_back(c, id, b, emit_vis_refusal)) return;
+  /* a method of a root class (Object, Numeric, NilClass) the plan binds
+     answers every receiver the lookup reaches it for, ahead of the arms
+     below that know the name (Kernel's tap, then, frozen?) */
+  { const CallPlan *rp = nt_ref(nt, id, "receiver") >= 0 ? cplan_root_reopen_call(c, id, cplan_user(c, id)) : NULL;
+    if (rp && rp->dispatch == CP_DIRECT) {
+      if (g_plan_check) cplan_served("root-reopen");
+      if (emit_root_reopen_call(c, id, b, nt, nt_ref(nt, id, "receiver"), rp->owner_ci, rp->mi)) return;
+    } }
   if (emit_anon_struct_value(c, id, b)) return;
   /* push/append/<< on an empty array literal in value position: the literal
      has no storage to mutate and returns self, so `[].push(1, 2)` is just the

@@ -88,6 +88,22 @@ typedef struct {
   const char *delegate;     /* the protocol method name, before alias resolution */
 } CallPlan;
 
+/* Is plan p a program's method on a root of the builtin classes (Object,
+   or Numeric or NilClass ahead of it), one that answers every receiver the
+   lookup reaches it for (cplan_root_reopen)? The kinds of reopening below
+   that, a builtin class's own, bind by the receiver's type. */
+int cplan_root_reopen_owner(Compiler *c, const CallPlan *p);
+/* ...and call id's plan p where it is such a binding that answers the call
+   ahead of the builtin arms (not an alias that captured the builtin's
+   method, nor an exception accessor picked at run time, nor a private or
+   protected method of a name a builtin has), else NULL. The
+   analysis asks cplan_user_fresh's plan, its types still moving. */
+const CallPlan *cplan_root_reopen_call(Compiler *c, int id, const CallPlan *p);
+/* Does any scope define an instance method `name` every object answers: the
+   top level's, or Object's, Kernel's or BasicObject's own? The name-level
+   twin of cplan_root_reopen, for the desugars that run before types exist
+   (it holds for a receiver whose builtin class owns the name too). */
+int cplan_object_method_named(Compiler *c, const char *name);
 int cplan_accessor_classes(Compiler *c, int id, int *out, int cap);
 /* ...and the methods a super in s that no call stands for may run, into
    to[VER_MAX_ARMS]: that one, or each version a layer of a mixin's copies
@@ -732,6 +748,17 @@ const PolyPlan *cplan_poly_sub(Compiler *c, int id);
    NilClass answers, and for the other values nothing or Object's public
    method: dispatched boxed (PB_SUBDISPATCH) */
 int cplan_nil_scalar_reach(Compiler *c, int id);
+/* Does a class value (recv, typed Class) answer `name` with a method of
+   CRuby's before Object's instance method: its class's singleton chain
+   (File.basename), or Class's and Module's own? A constant names the class;
+   a class held in a variable could be any builtin one. */
+int cplan_class_value_answers(Compiler *c, int recv, const char *name);
+/* ...and the analysis' reading of it, before the nullability settles: call
+   id of name on recv (type rt) is answered boxed, NilClass's method for nil
+   and Object's for the rest (cplan_nil_scalar_form_ok, NilClass's public
+   method, and a String, an Integer or Float beside Object's public one or
+   that may be nil) */
+int cplan_nil_scalar_boxed(Compiler *c, int id, const char *name, int recv, TyKind rt);
 /* the most splats the boxed default arm spreads into Object's method */
 #define POLY_OBJ_SPREAD_MAX 8
 int cplan_nil_scalar_form_ok(Compiler *c, int id, const char *name);

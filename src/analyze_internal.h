@@ -156,6 +156,7 @@ int core_method_name_any(const char *m);   /* codegen_call_class.c: an instance 
 const char *core_class_ancestors(const char *cls);   /* codegen_call_class.c */
 int builtin_method_arity(const char *cls, const char *m, int *out);
 int builtin_cmethod_known(const char *cls, const char *name);
+int builtin_cmethod_known_any(const char *name);
 int builtin_instance_method_known(const char *cls, const char *m);   /* codegen_call.c */
 int builtin_instance_name_known(const char *m);   /* codegen_call.c */
 int builtin_super_cmethod_known(const char *cls, const char *name);
@@ -350,9 +351,9 @@ extern int g_yvt_unify_all;
    bare `yield` returns the block's value -- and since it inlines per call
    site, use THIS site's block value type rather than the unified return. */
 TyKind method_call_ret(Compiler *c, int mi, int call_id);
-/* A program's own Object method serving a call on a builtin receiver of
-   class `cls` that does not have the name itself (see analyze_infer.c). */
-int object_reopen_answers(Compiler *c, const char *cls, int call_id, TyKind *out);
+/* A program's own Object method serving a call on a boxed receiver, for a
+   name the builtin surface lacks (see analyze_infer.c). */
+int object_reopen_answers(Compiler *c, int call_id, TyKind *out);
 int sclass_value_call(Compiler *c, int id);   /* analyze_infer.c */
 /* is_proc_constant / is_proc_literal are declared in analyze.h (codegen needs them). */
 /* 1 if `id` is any proc-creating literal: a proc/lambda/Proc.new call (above)

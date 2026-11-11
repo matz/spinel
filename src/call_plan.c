@@ -237,6 +237,11 @@ const CallPlan *cplan_root_reopen_call(Compiler *c, int id, const CallPlan *p) {
   return p;
 }
 
+/* See call_plan.h. */
+int cplan_reopen_yield_target(Compiler *c, const CallPlan *p) {
+  return p->mi >= 0 && p->via == UC_REOPEN && c->scopes[p->mi].yields ? p->mi : -1;
+}
+
 /* A method the program adds to Object under the name of a class-gated
    exception accessor (UncaughtThrowError#tag, KeyError#key, ...): every
    exception but those classes answers it, as CRuby's lookup reaches Object.

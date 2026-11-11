@@ -328,6 +328,10 @@ static int node_is_oint_asked(Compiler *c, int node) {
        (`class Symbol; def mark = ...`) */
     if (mi < 0 && !io_bi && r >= 0 && rt != TY_POLY && rt != TY_UNKNOWN && !ty_is_object(rt))
       mi = comp_builtin_kind_reopen_mi(c, rt, nm);
+    /* ... or the yielding one the plan binds to the call: it answers its
+       yield's block value */
+    if (mi < 0 && !io_bi && r >= 0 && rt != TY_POLY && rt != TY_UNKNOWN && !ty_is_object(rt))
+      mi = cplan_reopen_yield_target(c, cplan_user(c, node));
     /* a method whose return widened past the call's (a yielding method
        answering its block, typed per call site): the call's own analysis */
     if (mi >= 0 && (c->scopes[mi].ret == TY_POLY || c->scopes[mi].ret == TY_UNKNOWN)) return nullable_int_value(c, node);

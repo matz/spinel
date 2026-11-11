@@ -34654,6 +34654,8 @@ void emit_reopen_pf_call(Compiler *c, int id, int pf, int cblk, const char *recv
   /* (an Integer or Float that can be nil is an oint: boxed with its nil) */
   else if (wr.kind == RK_BOXED && method_ret_is_oint(&c->scopes[pf])) emit_boxed_ret_call(c, &c->scopes[pf], oc.p, b);
   else if (wr.kind == RK_BOXED && pr != TY_POLY) emit_boxed_text(c, pr, oc.p, b);
+  /* (a boxed answer a call site reads with its nil keeps it: `nil.f { |v| v }` over `yield nil`) */
+  else if (wr.kind == RK_OPT && pr == TY_POLY && oint_kind(want)) buf_printf(b, "%s(%s)", oint_unbox(want), oc.p);
   else if (wr.kind != RK_BOXED && pr == TY_POLY && is_scalar_ret(want)) emit_unbox_text(c, want, oc.p, b);
   else buf_puts(b, oc.p);
   free(oc.p);

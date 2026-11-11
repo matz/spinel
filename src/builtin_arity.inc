@@ -6,7 +6,7 @@
    and class counts, its name first. BACK names the class methods whose
    keyword hash counts as a positional (no keywords); BAKT a method that
    takes one keyword and counts a hash with any other key as a
-   positional, 1 for a class method. -1 maxima are unbounded; NULL messages
+   positional, 1 for a class method, then its most positionals. -1 maxima are unbounded; NULL messages
    and unproved -1 minima never reject a call. Block counts are separate.
    Kernel Method#arity describes receiverless method(:name) wrappers.
    BAP is Method#parameters by the class or module that defines the
@@ -2104,6 +2104,7 @@ BAC("Kernel","Complex",1,2,"1..2","1..2",1,2,"1..2","1..2")
 BAC("Kernel","throw",1,2,"1..2","1..2",1,2,"1..2","1..2")
 BAC("Kernel","catch",0,1,NULL,"0..1",0,1,NULL,"0..1")
 BAC("Kernel","raise",0,3,NULL,"0..3",0,3,NULL,"0..3")
+BAC("Kernel","fail",0,3,NULL,"0..3",0,3,NULL,"0..3")
 BAC("Kernel","rand",0,1,NULL,"0..1",0,1,NULL,"0..1")
 BAC("Kernel","srand",0,1,NULL,"0..1",0,1,NULL,"0..1")
 BAC("Kernel","caller",0,2,NULL,"0..2",0,2,NULL,"0..2")
@@ -3823,8 +3824,9 @@ BACK("Kernel","p")
 BACK("Kernel","pp")
 BACK("Kernel","puts")
 BACK("Kernel","print")
-BAKT("Kernel","raise","cause",1)
-BAKT("Fiber","raise","cause",0)
+BAKT("Kernel","raise","cause",1,3)
+BAKT("Kernel","fail","cause",1,3)
+BAKT("Fiber","raise","cause",0,3)
 BAP("String","%","req",1)
 BAP("String","*","req",1)
 BAP("String","+","req",1)

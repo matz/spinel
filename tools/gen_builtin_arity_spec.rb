@@ -192,7 +192,7 @@ CLASS_TARGETS = {
   "Random"  => %w[new rand srand],
   "ENV"     => %w[fetch key? has_key? include? member? assoc rassoc values_at],
   "Kernel"  => %w[format sprintf Integer Float String Array Hash Rational Complex
-                  throw catch raise rand srand caller lambda proc binding block_given?
+                  throw catch raise fail rand srand caller lambda proc binding block_given?
                   local_variables global_variables respond_to_missing?],
   # the class-side surface of the constants a program names bare: GC, Fiber
   # and Thread are not classes the compiler declares; a class Struct.new or
@@ -470,12 +470,14 @@ end
 # KW_PASSTHROUGH methods, of a class or its instances, take one keyword and
 # pass a hash with any other key as one more positional, so the probe's
 # unknown key reads as a method that takes none: they keep no BACK or BAK
-# row but a BAKT row naming the keyword, and the run aborts if one stops
-# taking it (an unborn Fiber checks the arguments before it refuses the
-# raise).
-#   Kernel.raise, Fiber#raise        cause:
+# row but a BAKT row naming the keyword and the side's most positionals,
+# and the run aborts if one stops taking it (an unborn Fiber checks the
+# arguments before it refuses the raise). Thread#raise takes cause: too, but
+# counts its arguments only on a live thread (a dead one answers nil for any
+# count), so no fact counts it.
+#   Kernel.raise, Kernel.fail, Fiber#raise        cause:
 KW_PASSTHROUGH = {
-  ["Kernel", :class] => { "raise" => :cause },
+  ["Kernel", :class] => { "raise" => :cause, "fail" => :cause },
   ["Fiber", :instance] => { "raise" => :cause },
 }
 KW_PASSTHROUGH.each do |(cls, side), ms|
@@ -628,7 +630,7 @@ out = <<~C
      and class counts, its name first. BACK names the class methods whose
      keyword hash counts as a positional (no keywords); BAKT a method that
      takes one keyword and counts a hash with any other key as a
-     positional, 1 for a class method. -1 maxima are unbounded; NULL messages
+     positional, 1 for a class method, then its most positionals. -1 maxima are unbounded; NULL messages
      and unproved -1 minima never reject a call. Block counts are separate.
      Kernel Method#arity describes receiverless method(:name) wrappers.
      BAP is Method#parameters by the class or module that defines the
@@ -649,7 +651,13 @@ lib.each { |r| render.("BAL", r) }
 libc.each { |r| render.("BALC", r) }
 kwpos.each { |r| render.("BAK", r[0, 2]) }
 cmkw.each { |r| render.("BACK", r[0, 2]) }
-KW_PASSTHROUGH.each { |(cls, side), ms| ms.each { |m, key| render.("BAKT", [cls, m, key.to_s, side == :class ? 1 : 0]) } }
+KW_PASSTHROUGH.each do |(cls, side), ms|
+  ms.each do |m, key|
+    row = (side == :class ? cm : inst).find { |r| r[0] == cls && r[1] == m }
+    abort "#{cls} #{m}: a KW_PASSTHROUGH method needs its counts" unless row && row[3] >= 0
+    render.("BAKT", [cls, m, key.to_s, side == :class ? 1 : 0, row[3]])
+  end
+end
 params.each { |_, k, m, ps, cside| render.("BAP", [k, m, ps, cside.to_i]) }
 summary = "#{arity.length + kernel_arity.length} Method#arity + #{inst.length} instance + #{cm.length} class-method + #{lib.length + libc.length} library + #{params.length} parameters entries"
 if ARGV.include?("--check")

@@ -11,4 +11,35 @@ kernel **e: RuntimeError: w
 kernel **f: ArgumentError: wrong number of arguments (given 4, expected 0..3)
 kernel **g: RuntimeError: w
 kernel **h: ArgumentError: wrong number of arguments (given 4, expected 0..3)
+fail zz: ArgumentError: wrong number of arguments (given 4, expected 0..3)
+fail cause: RuntimeError: w
+fail **e: RuntimeError: w
+fail **f: ArgumentError: wrong number of arguments (given 4, expected 0..3)
+fail **h: ArgumentError: wrong number of arguments (given 4, expected 0..3)
+Kernel.fail zz: ArgumentError: wrong number of arguments (given 4, expected 0..3)
+Kernel.fail **f: ArgumentError: wrong number of arguments (given 4, expected 0..3)
+Kernel.raise **g: RuntimeError: w
+Kernel.raise **h: ArgumentError: wrong number of arguments (given 4, expected 0..3)
+kernel 4 **e: ArgumentError: wrong number of arguments (given 4, expected 0..3)
+kernel 4 **f: ArgumentError: wrong number of arguments (given 5, expected 0..3)
+kernel 4 **g: ArgumentError: wrong number of arguments (given 4, expected 0..3)
+kernel 4 zz: ArgumentError: wrong number of arguments (given 5, expected 0..3)
+kernel 4 cause: ArgumentError: wrong number of arguments (given 4, expected 0..3)
+kernel 4 cause **e: ArgumentError: wrong number of arguments (given 4, expected 0..3)
+fail 5 **f: ArgumentError: wrong number of arguments (given 6, expected 0..3)
+fiber 4 **e: ArgumentError: wrong number of arguments (given 4, expected 0..3)
+fiber 4 **h: ArgumentError: wrong number of arguments (given 5, expected 0..3)
+kernel 4 cause **f: ArgumentError: wrong number of arguments (given 5, expected 0..3)
+kernel cause **e: RuntimeError: w
+kernel cause **f: ArgumentError: wrong number of arguments (given 4, expected 0..3)
+kernel **g zz: ArgumentError: wrong number of arguments (given 4, expected 0..3)
+kernel **e cause: RuntimeError: w
+kernel **{zz}: ArgumentError: wrong number of arguments (given 4, expected 0..3)
+kernel 4 **{zz}: ArgumentError: wrong number of arguments (given 5, expected 0..3)
+kernel **{cause}: RuntimeError: w
+fiber cause **f: ArgumentError: wrong number of arguments (given 4, expected 0..3)
+fiber cause **e: RuntimeError: w
+<1><2><{}>fail 4 order: ArgumentError: wrong number of arguments (given 5, expected 0..3)
+<:a><{zz: 1}>kernel order: ArgumentError: wrong number of arguments (given 4, expected 0..3)
+9
 kernel 2 **g: RuntimeError: w

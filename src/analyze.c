@@ -44406,20 +44406,24 @@ static int kwsplat_alias_gated(NodeTable *nt, KwAliases *al, const char *name) {
    may reach any method, so it is split too. A `new` reaches the program's
    own initialize as often as a builtin's, which no fact speaks for: it
    stays whole. *taken is the one keyword a builtin of the name takes where
-   it passes a hash with any other key on (builtin_name_kw_taken), else
-   NULL. */
+   it passes a hash with any other key on and the call's positionals reach
+   its most (builtin_name_kw_taken), else NULL: below that, both branches
+   would be the same call; past it, each branch is refused with its own
+   count. */
 static int kwsplat_gated(NodeTable *nt, KwAliases *al, int id, const int *args, int n, const char **taken) {
   const char *nm = nt_str(nt, id, "name");
+  int npos = n - 1;
   *taken = NULL;
   if (!nm) return 0;
   if (is_send_family(nm)) {
     if (n < 2) return 0;
     nm = call_sent_name(nt, id, NULL);
     if (!nm) return 1;
+    npos--;
   }
   if (is_new_name(nm)) return 0;
   if (builtin_name_kwless(nm) || kwsplat_alias_gated(nt, al, nm)) return 1;
-  return (*taken = builtin_name_kw_taken(nm)) != NULL;
+  return (*taken = builtin_name_kw_taken(nm, npos)) != NULL;
 }
 /* SPINEL_LOWER_ROWS_CHECK: the call split_kwsplat_calls leaves without its
    `**` operands has the rows of its own shape, which the parse noted as
@@ -44436,11 +44440,14 @@ static void kwsplat_drop_rows(NodeTable *nt, int id) {
                            k.empty? ? r.m(x) : r.m(x, **k))
 
    For a name whose builtin takes one keyword and passes a hash with any
-   other key on as one more positional (`raise`, cause:), the test is
-   whether the hash holds another key, and both branches pass it:
+   other key on as one more positional (`raise`, cause:), called with its
+   most positionals or more, the test is whether the hash holds another key,
+   read without building one, and both branches pass it; there the hash may
+   mix pairs and `**` operands (`cause: c, **h`). A hash of pairs and
+   `**{...}` literals only is left to the plan, which reads its keys:
 
-     recv.m(a, **kw)  =>  (...; k.except(:cause).empty? ? r.m(x, **k)
-                                                       : r.m(x, **k))
+     recv.m(a, b, c, **kw)  =>  (...; k.size == (k.key?(:cause) ? 1 : 0) ?
+                                        r.m(x, y, z, **k) : r.m(x, y, z, **k))
 
    The branches are copies of the call, so its flags, its block and its
    `&.` carry over; the operands are held in CRuby's order (the receiver,
@@ -44450,15 +44457,17 @@ static void kwsplat_drop_rows(NodeTable *nt, int id) {
    operands pass nothing and go at once. An anonymous `**` is held as
    `{**}`, which reads the method's keyword rest once the anonymous
    parameters are named; its Hash is built ahead of a `&` operand's
-   conversion. A call under `defined?` does not
-   run, and one with a pair-only hash (`**{a: 1}`) is never empty: both keep
-   their call. The name is the gate only to bound the cost: the split is
-   exact for any callee, a program's own method of the name included. It
-   runs ahead of everything that reads a call, so each later step sees the
-   two branches as calls written so, and nodes made here are scanned too (a
-   literal block's copy holds its own calls). The graph model decides which
-   builtins/ files to load from the parse, before this runs, and repeats
-   this rule there (sp_names_lowerings in spinel_parse.c). */
+   conversion. A call under `defined?` does not run, and one with a
+   pair-only hash (`**{a: 1}`) or with pairs beside its `**` operands is
+   never empty: both keep their call, except where the taken keyword's test
+   above splits it (that test drops no operand). The name is the gate only
+   to bound the cost: the split is exact for any callee, a program's own
+   method of the name included. It runs ahead of everything that reads a
+   call, so each later step sees the two branches as calls written so, and
+   nodes made here are scanned too (a literal block's copy holds its own
+   calls). The graph model decides which builtins/ files to load from the
+   parse, before this runs, and repeats this rule there (sp_names_lowerings
+   in spinel_parse.c). */
 static void split_kwsplat_calls(Compiler *c, int from) {
   NodeTable *nt = (NodeTable *)c->nt;
   KwAliases al;
@@ -44492,16 +44501,21 @@ static void split_kwsplat_calls(Compiler *c, int from) {
     int ok = 1;
     for (int i = 0; i < n - 1; i++)
       if (nt_kind(nt, args[i]) == NK_SplatNode || nt_kind(nt, args[i]) == NK_ForwardingArgumentsNode) ok = 0;
-    int ne = 0, el[16], dyn[16], ndyn = 0, full = 0;
+    int ne = 0, el[16], dyn[16], ndyn = 0, full = 0, pairs = 0, splats = 0;
     const int *ev = nt_arr(nt, kh, "elements", &ne);
     if (!ev || ne < 1 || ne > 16) continue;
     for (int i = 0; i < ne; i++) {
       el[i] = ev[i];
-      if (nt_kind(nt, el[i]) != NK_AssocSplatNode) ok = 0;
+      if (nt_kind(nt, el[i]) != NK_AssocSplatNode) pairs = 1;
+      else splats = 1;
     }
     const char *taken;
-    if (!ok || !kwsplat_gated(nt, &al, id, args, n, &taken)) continue;
+    if (!ok || !splats || !kwsplat_gated(nt, &al, id, args, n, &taken) || (pairs && !taken)) continue;
     for (int i = 0; i < ne; i++) {
+      if (nt_kind(nt, el[i]) != NK_AssocSplatNode) {
+        dyn[ndyn++] = el[i];   /* (a pair: built into the held hash in its place) */
+        continue;
+      }
       int v = nt_ref(nt, el[i], "value"), vn = 0;
       NodeKind vk = v >= 0 ? nt_kind(nt, v) : NK_NONE;   /* (an anonymous `**`: the method's, read later) */
       if (vk == NK_HashNode) nt_arr(nt, v, "elements", &vn);
@@ -44509,7 +44523,7 @@ static void split_kwsplat_calls(Compiler *c, int from) {
       if (vk == NK_HashNode && !nt_hash_has_splat(nt, v)) full = 1;
       dyn[ndyn++] = el[i];
     }
-    if (full) continue;
+    if (full && !taken) continue;
     if (ndyn == 0) {
       /* nothing to pass: the keyword hash goes */
       if (n > 1) nt_node_set_arr(nt, an, "arguments", args, n - 1);
@@ -44518,6 +44532,14 @@ static void split_kwsplat_calls(Compiler *c, int from) {
       kwsplat_drop_rows(nt, id);
       continue;
     }
+    /* (a taken keyword's hash of pairs and literals: the plan reads its keys) */
+    int rt = 0;
+    for (int i = 0; i < ndyn; i++)
+      if (nt_kind(nt, dyn[i]) == NK_AssocSplatNode) {
+        int v = nt_ref(nt, dyn[i], "value");
+        if (v < 0 || nt_kind(nt, v) != NK_HashNode || nt_hash_has_splat(nt, v)) rt = 1;
+      }
+    if (taken && !rt) continue;
     /* what runs after each operand decides which reads are held */
     int recv = nt_ref(nt, id, "receiver"), blk = nt_ref(nt, id, "block"), safe = nt_safe_nav(nt, id);
     int bexp = blk >= 0 && nt_kind(nt, blk) == NK_BlockArgumentNode ? nt_ref(nt, blk, "expression") : -1;
@@ -44597,13 +44619,18 @@ static void split_kwsplat_calls(Compiler *c, int from) {
     nt_node_set_int(nt, kh, "kwsplit_full", 1);   /* (the branch runs for a hash that is not empty, or holds another key) */
     nt_node_set_ref(nt, call, "arguments", an);
     nt_node_set_arr(nt, an, "arguments", hargs, n);
-    int left = kread;
+    int test;
     if (taken) {
-      int sym = nt_new_node(nt, "SymbolNode");
+      int sym = nt_new_node(nt, "SymbolNode"), one = nt_new_node(nt, "IntegerNode"), zero = nt_new_node(nt, "IntegerNode");
       nt_node_set_str(nt, sym, "value", taken);
-      left = sd_bcall(nt, "except", kread, &sym, 1);
+      nt_node_set_int(nt, one, "value", 1);
+      nt_node_set_int(nt, zero, "value", 0);
+      int has = sd_bcall(nt, "key?", nt_clone_subtree(nt, kread), &sym, 1);
+      int want = sd_if(nt, has, one, zero);
+      test = sd_bcall(nt, "==", sd_bcall(nt, "size", kread, NULL, 0), &want, 1);
     }
-    int test = sd_bcall(nt, "empty?", left, NULL, 0);
+    else
+      test = sd_bcall(nt, "empty?", kread, NULL, 0);
     pre[npre++] = sd_if(nt, test, bare, call);
     if (safe) {
       /* a nil receiver answers nil before any operand runs */

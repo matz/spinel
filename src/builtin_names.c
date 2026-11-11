@@ -2326,12 +2326,13 @@ static const struct { const char *cls; const char *m; } sp_builtin_cmeth_kwpos_t
 #undef BACK
 #undef BAKT
 #define BACK(...)
-#define BAKT(c,m,k,cside) {c,m,k,cside},
+#define BAKT(c,m,k,cside,max) {c,m,k,cside,max},
 /* BAKT: the methods that take one keyword and pass a hash with any other
-   key on as one more positional (Kernel.raise and Fiber#raise, cause:) */
-static const struct { const char *cls, *m, *key; int cside; } sp_builtin_kw_taken_tbl[] = {
+   key on as one more positional (Kernel.raise, Kernel.fail and Fiber#raise,
+   cause:), with their most positionals */
+static const struct { const char *cls, *m, *key; int cside, max; } sp_builtin_kw_taken_tbl[] = {
 #include "builtin_arity.inc"
-  {NULL, NULL, NULL, 0}
+  {NULL, NULL, NULL, 0, 0}
 };
 #undef BAKT
 #undef BAI
@@ -2352,14 +2353,16 @@ const char *builtin_kw_taken(const char *cls, const char *name, int cside) {
   return NULL;
 }
 /* See builtin_names.h. */
-const char *builtin_name_kw_taken(const char *name) {
+const char *builtin_name_kw_taken(const char *name, int npos) {
   const char *key = NULL;
+  int at_max = 0;
   for (int i = 0; name && sp_builtin_kw_taken_tbl[i].cls; i++) {
     if (!sp_streq(sp_builtin_kw_taken_tbl[i].m, name)) continue;
     if (key && !sp_streq(key, sp_builtin_kw_taken_tbl[i].key)) return NULL;
     key = sp_builtin_kw_taken_tbl[i].key;
+    if (npos >= sp_builtin_kw_taken_tbl[i].max) at_max = 1;
   }
-  return key;
+  return at_max ? key : NULL;
 }
 /* See builtin_names.h. The facts' BAKT first; then the instance side: a
    fixed Method#arity, or a fixed accepted count where the class has no

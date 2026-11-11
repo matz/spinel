@@ -21226,14 +21226,10 @@ static int const_reads_builtin_value(Compiler *c, int recv) {
          rt == TY_INT || rt == TY_FLOAT || rt == TY_SYMBOL || rt == TY_IO;
 }
 /* Count call id's trailing keyword hash into *argc as the call plan says
-   builtin cls's method `name` (its class method where cside) sees it, by
-   its keyword fact (builtin_kw_positional; cplan_hash_positionals, or
-   cplan_hash_positionals_past for a method that takes one keyword and
-   passes any other on): 0 where the run time decides. */
+   builtin cls's method `name` (its class method where cside) sees it
+   (cplan_builtin_hash_positionals): 0 where the run time decides. */
 static int hash_counted(Compiler *c, int id, const char *cls, const char *name, int cside, int *argc) {
-  int kwpos = builtin_kw_positional(cls, name, cside);
-  int hp = kwpos == 2 ? cplan_hash_positionals_past(c, id, builtin_kw_taken(cls, name, cside))
-                      : cplan_hash_positionals(c, id, kwpos);
+  int hp = cplan_builtin_hash_positionals(c, id, cls, name, cside);
   if (hp < 0) return 0;
   *argc -= 1 - hp;
   return 1;

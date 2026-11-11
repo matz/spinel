@@ -242,13 +242,16 @@ int cplan_class_row(Compiler *c, int id, int recv, const char *name);
    `**` the split left: under defined?, beside a splat, or one whose callee
    no fact speaks for). 0 for a call with no keyword hash. */
 int cplan_hash_positionals(Compiler *c, int id, int kwpos);
-/* The same for a callee that takes the one keyword `key` and passes a hash
-   with any other key on as one more positional (builtin_kw_taken): 1 where
-   a literal key is another or the hash is the full branch of a split
-   (split_kwsplat_calls tests for another key), 0 where every element is
-   `key:` or spreads nothing or the hash is the split's other branch, -1
-   where a `**` operand is the run time's. */
-int cplan_hash_positionals_past(Compiler *c, int id, const char *key);
+/* The same for builtin cls's method `name` (its class method where cside),
+   by its keyword fact (builtin_kw_positional). A method that takes the one
+   keyword builtin_kw_taken names and passes a hash with any other key on
+   counts that hash: 1 where a literal key is another or the hash is the
+   full branch of a split (split_kwsplat_calls tests for another key), 0
+   where every element is that keyword or spreads nothing or the hash is
+   the split's other branch, -1 where a `**` operand is the run time's
+   (the split, which runs from the method's most positionals on, gives each
+   of its branches a count). */
+int cplan_builtin_hash_positionals(Compiler *c, int id, const char *cls, const char *name, int cside);
 /* The class-side row (bop_class_find) call id takes on builtin class cls,
    its constant receiver: NULL where none of cls's singleton chain has one,
    or where a class method the program gives a class of the chain, up to

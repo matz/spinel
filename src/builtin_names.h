@@ -43,11 +43,14 @@ int builtin_name_takes_keywords(const char *n);   /* a builtin of the name takes
    a positional; -1 where no fact says. */
 int builtin_kw_positional(const char *cls, const char *name, int cside);
 /* The one keyword that method takes where its keyword fact is 2 (`cause`
-   for Kernel.raise and Fiber#raise); NULL otherwise. */
+   for Kernel.raise, Kernel.fail and Fiber#raise); NULL otherwise. */
 const char *builtin_kw_taken(const char *cls, const char *name, int cside);
-/* The keyword every builtin named `name` that takes one that way takes;
-   NULL where none does, or two take different ones. */
-const char *builtin_name_kw_taken(const char *name);
+/* The keyword every builtin named `name` that takes one that way takes,
+   where `npos` positionals reach the most one of them takes (from there a
+   hash with another key is one more refused argument, which CRuby's message
+   counts); NULL where none does, two take different ones, or npos is below
+   every such maximum. */
+const char *builtin_name_kw_taken(const char *name, int npos);
 /* Does some builtin of the name take no keywords: an op row or class-side
    row without BOPF_KEYWORDS, a fixed Method#arity, the facts' BAK or BACK.
    The `**` split's gate. */

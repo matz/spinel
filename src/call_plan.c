@@ -152,15 +152,16 @@ static const char *cplan_builtin_name_of(Compiler *c, int cid) {
    singleton chain (File.basename), or Class's and Module's own? A constant
    names the class; a class held in a variable could be any builtin one. A
    constant of a builtin's name is the builtin, a program's reopening of it
-   included (`class File; end`), unless it names a class of the program's own
-   (a nested `Foo::File`), which only Class's and Module's methods precede. */
+   included (`class File; end`, or one in Object's body), unless it names a
+   class of the program's own (a nested `Foo::File`), which only Class's and
+   Module's methods precede. */
 int cplan_class_value_answers(Compiler *c, int recv, const char *name) {
   const NodeTable *nt = c->nt;
   NodeKind rk = recv >= 0 ? nt_kind(nt, recv) : NK_NONE;
   int named = rk == NK_ConstantReadNode || rk == NK_ConstantPathNode;
   const char *bn = rk == NK_ConstantReadNode || (rk == NK_ConstantPathNode && nt_ref(nt, recv, "parent") < 0) ? nt_key_name(nt, recv) : NULL;
   int ci = named ? const_node_class_index(c, recv) : -1;
-  int own = ci >= 0 && !(c->classes[ci].is_builtin_const && c->classes[ci].enclosing_class < 0);
+  int own = ci >= 0 && !(c->classes[ci].is_builtin_const && !comp_class_in_namespace(c, ci));
   if (own || !bn || !(is_builtin_class_name(bn) || is_builtin_module_const_name(bn)))
     return (!bn && !own && builtin_cmethod_known_any(name)) || core_class_value_answers("Class#", name) || core_class_value_answers("Module#", name);
   /* (a module of the table with no class id, Process or GC, has its singleton methods in the arity rows) */

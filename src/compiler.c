@@ -1292,7 +1292,15 @@ static void class_hash_add(Compiler *c, int i) {
 void comp_class_nested(Compiler *c, int k, int encl) {
   c->classes[k].enclosing_class = encl;
   int core = builtin_core_class_slot(c->classes[k].name);
-  if (encl >= 0 && core >= 0 && c->core_cls[core] == k) c->core_cls[core] = -1;
+  if (comp_class_in_namespace(c, k) && core >= 0 && c->core_cls[core] == k) c->core_cls[core] = -1;
+}
+
+/* See compiler.h. Object's body is the top level's: CRuby's Object holds
+   the top-level constants, so `class Object; module Process` reopens the
+   builtin Process, though the class records Object as its enclosure. */
+int comp_class_in_namespace(const Compiler *c, int k) {
+  int e = c->classes[k].enclosing_class;
+  return e >= 0 && e != comp_core_class(c, CORE_OBJECT);
 }
 
 ClassInfo *comp_class_new(Compiler *c, const char *name, int def_node) {

@@ -2228,6 +2228,7 @@ int const_seg_builtin(Compiler *c, int id);
 /* Classes. */
 ClassInfo *comp_class_new(Compiler *c, const char *name, int def_node);
 void       comp_class_nested(Compiler *c, int k, int encl);   /* class k lies inside class encl: not the builtin its leaf names */
+int        comp_class_in_namespace(const Compiler *c, int k);   /* does class k lie inside a class or module other than Object, whose body is the top level's? */
 int comp_toplevel_class_make(Compiler *c);
 int        comp_class_index(Compiler *c, const char *name);   /* -1 if none */
 /* The first-created class for a CORE_* slot, -1 if no class has been made

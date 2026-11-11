@@ -1063,20 +1063,21 @@ int call_node_names(Compiler *c, int id, const char *out[2]) {
   return n;
 }
 /* See call_plan.h. */
-int call_node_implied_names(Compiler *c, int id, IcCall *out, int max) {
-  NtImplied buf[16], *rows = buf;
-  int nr = nt_implied_calls(c->nt, id, buf, 16), n = 0;
+IcCall *call_node_implied_names(Compiler *c, int id, IcCall *buf, int cap, int *count) {
+  NtImplied rb[16], *rows = rb;
+  int nr = nt_implied_calls(c->nt, id, rb, 16), n = 0;
   if (nr > 16) {
     if (!(rows = malloc(sizeof *rows * (size_t)nr))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
     nt_implied_calls(c->nt, id, rows, nr);
   }
-  for (int i = 0; i < nr; i++) {
-    if (!rows[i].planned || rows[i].operand == NTI_NONE) continue;
-    if (n < max) out[n] = (IcCall){ .name = rows[i].name, .operand = rows[i].operand, .target = rows[i].target };
-    n++;
-  }
-  if (rows != buf) free(rows);
-  return n;
+  IcCall *out = buf;
+  if (nr > cap && !(out = malloc(sizeof *out * (size_t)nr))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  for (int i = 0; i < nr; i++)
+    if (rows[i].planned && rows[i].operand != NTI_NONE)
+      out[n++] = (IcCall){ .name = rows[i].name, .operand = rows[i].operand, .target = rows[i].target };
+  if (rows != rb) free(rows);
+  *count = n;
+  return out;
 }
 /* does node id itself call `name` (not a method the language calls for it)? */
 static int ct_calls(Compiler *c, int id, const char *name) {
@@ -2887,12 +2888,9 @@ static void ct_implied_ask(Compiler *c, int id, const char *nm, int k, unsigned 
   if (k >= 0 && !(flags & (CT_CMETHOD | CT_TOP))) a->fn(c, id, nm, k, flags | CT_IMPLIED, a->arg);
 }
 void ct_implied_classes(Compiler *c, int id, int (*versioned)(Compiler *, const char *), CtClassFn fn, void *arg) {
-  IcCall buf[16], *calls = buf;
-  int n = call_node_implied_names(c, id, buf, 16);
-  if (n > 16) {
-    if (!(calls = malloc(sizeof *calls * (size_t)n))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-    call_node_implied_names(c, id, calls, n);
-  }
+  IcCall buf[16];
+  int n = 0;
+  IcCall *calls = call_node_implied_names(c, id, buf, 16, &n);
   CtImpliedAsk a = { fn, arg };
   for (int i = 0; i < n; i++)
     if (versioned(c, calls[i].name))
@@ -7801,12 +7799,9 @@ static void ver_named_facts(Compiler *c, VerNamedAsks *q, int demand) {
     const char *cn[2];
     int nn = call_node_names(c, id, cn), ac = 0, sym = k == NK_AliasMethodNode ? nt_ref(nt, id, "old_name") : k == NK_BlockArgumentNode ? nt_ref(nt, id, "expression") : -1;
     for (int i = 0; i < nn; i++) ver_name_add(&rn, &nrn, cn[i]);
-    IcCall ib[16], *ic = ib;
-    int ni = call_node_implied_names(c, id, ib, 16);
-    if (ni > 16) {
-      if (!(ic = malloc(sizeof *ic * (size_t)ni))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-      call_node_implied_names(c, id, ic, ni);
-    }
+    IcCall ib[16];
+    int ni = 0;
+    IcCall *ic = call_node_implied_names(c, id, ib, 16, &ni);
     for (int i = 0; i < ni; i++) ver_name_add(&rn, &nrn, ic[i].name);
     if (ic != ib) free(ic);
     if (sym >= 0 && nt_kind(nt, sym) == NK_SymbolNode) ver_name_add(&rn, &nrn, nt_str(nt, sym, "value"));

@@ -181,18 +181,19 @@ enum { CT_CMETHOD = 1, CT_OWN = 2, CT_TOP = 4, CT_REACH = 8, CT_CAPTURE = 16, CT
    A send of a literal name (`send`, `__send__`, `public_send`) calls that
    name too, a second one. */
 int call_node_names(Compiler *c, int id, const char *out[2]);
-/* The calls node id makes CRuby make that the plan binds by version, into
-   out[0..max): an implied call whose lowering asks the plan which method it
-   runs (cplan_implied_target), as its row of tools/implied_calls.yml says
-   (NtImplied.planned), with the operand that receives it; how many (more
-   than max when out was short). The collectors that read call_node_names
+/* The calls node id makes CRuby make that the plan binds by version: an
+   implied call whose lowering asks the plan which method it runs
+   (cplan_implied_target), as its row of tools/implied_calls.yml says
+   (NtImplied.planned), with the operand that receives it. Into buf[0..cap)
+   when they fit, else an array it allocates, which the caller frees; their
+   count in *count. The collectors that read call_node_names
    for a call's own names read these too: the entries' survey and
    reachability's version marks (ct_implied_classes), and the open
    histories' asks (ver_named_facts). A builtin's callbacks are not among
    them yet: their rows do not say which operand an asked callback lands on,
    nor with what arguments. */
 struct IcCall;
-int call_node_implied_names(Compiler *c, int id, struct IcCall *out, int max);
+struct IcCall *call_node_implied_names(Compiler *c, int id, struct IcCall *buf, int cap, int *count);
 /* The name call node id finally calls: its own, or a send-family call's
    literal first argument (a send of a send unwound); *used is the number
    of arguments the sends took. NULL when that name is computed or absent. */

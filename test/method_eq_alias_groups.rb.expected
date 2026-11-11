@@ -1,0 +1,28 @@
+alias spellings, typed and read back
+true
+true
+true
+true
+true
+true
+true
+:n
+:n
+:n
+another method of the same receiver
+false
+false
+a typed array's push
+true
+true
+:push
+:wpush
+false
+a Symbol receiver
+true
+:sym
+:abc
+false
+false
+a Symbol and an Integer share no receiver
+[]

@@ -519,6 +519,10 @@ int builtin_method_answers(const char *cls, const char *name, int sg, int certai
 /* The first name of the group of builtin cls's instance methods that CRuby's
    Method#== calls one method, name itself when it has no alias. */
 const char *builtin_method_canonical(const char *cls, const char *name);
+/* " a b c ": the names of cls's alias group of `canonical` (heap, never freed), NULL for none. */
+const char *builtin_method_alias_group(const char *cls, const char *canonical);
+/* One number for every name that is an alias of another in any builtin class. */
+unsigned builtin_name_group_hash(const char *name);
 /* The builtin class or module whose own singleton methods hold public `name`
    first on the class side of builtin class or module cls, in a library the
    program has, as CRuby's lookup finds it ahead of Class's or Module's

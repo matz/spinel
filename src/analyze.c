@@ -4965,24 +4965,30 @@ static void ie_rself_mark_literals(Compiler *c) {
   }
 }
 
+/* Grow the instance_eval/exec self map to the node table's size, the new
+   entries answering "no instance_eval receiver" (-1, 0, -1), which is what a
+   node of its own is until a build marks it. The node table grows after the
+   build too (mid-analysis, when forwarded callables are desugared into
+   synthetic blocks; at emission, for a node the emitter makes), so the
+   per-node reads and writes below fit it first. */
+static void ie_map_fit(Compiler *c) {
+  const NodeTable *nt = c->nt;
+  if (c->ie_map.cap >= nt->count) return;
+  int *gc = realloc(c->ie_map.cls, sizeof(int) * (size_t)nt->count);
+  unsigned char *gn = gc ? realloc(c->ie_map.nonobj, (size_t)nt->count) : NULL;
+  int *go = gn ? realloc(c->ie_map.own, sizeof(int) * (size_t)nt->count) : NULL;
+  if (!go) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  for (int i = c->ie_map.cap; i < nt->count; i++) { gc[i] = -1; gn[i] = 0; go[i] = -1; }
+  c->ie_map.cls = gc;
+  c->ie_map.nonobj = gn;
+  c->ie_map.own = go;
+  c->ie_map.cap = nt->count;
+}
+
 /* (Re)build the instance_eval/exec node→class map from current receiver types. */
 void build_ie_map(Compiler *c) {
   const NodeTable *nt = c->nt;
-  /* sized to nt->count, which can grow mid-analysis when forwarded callables
-     are desugared into synthetic blocks; resize so per-node writes stay bounded */
-  if (c->ie_map.cap < nt->count) {
-    int *grown = realloc(c->ie_map.cls, sizeof(int) * (size_t)nt->count);
-    if (!grown) return;  /* OOM: keep the old map rather than leak/deref NULL */
-    unsigned char *gn = realloc(c->ie_map.nonobj, (size_t)nt->count);
-    if (!gn) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-    int *go = realloc(c->ie_map.own, sizeof(int) * (size_t)nt->count);
-    if (!go) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-    for (int i = c->ie_map.cap; i < nt->count; i++) { grown[i] = -1; gn[i] = 0; go[i] = -1; }
-    c->ie_map.cls = grown;
-    c->ie_map.nonobj = gn;
-    c->ie_map.own = go;
-    c->ie_map.cap = nt->count;
-  }
+  ie_map_fit(c);
   /* (each entry that changes moves its node's scope: the build runs
      inferences of its own, which read the map as it stands) */
   for (int i = 0; i < c->ie_map.cap; i++)
@@ -5070,10 +5076,13 @@ int ie_own_class_of(Compiler *c, int node) {
 
 int *ie_body_retype(Compiler *c, int body, int cls) {
   int n = c->nt->count;
-  if (body < 0 || !c->ie_map.cls || c->ie_map.cap < n || c->ie_map.cls[body] == cls)
-    return NULL;
+  /* a node made since the build (the emitter's) has no entry yet: fit the map
+     rather than decline, or the body keeps the analysis's self class */
+  if (body < 0 || !c->ie_map.cls) return NULL;
+  ie_map_fit(c);
+  if (c->ie_map.cls[body] == cls) return NULL;
   int *snap = malloc(sizeof(int) * (2 * (size_t)n + 1));
-  if (!snap) return NULL;
+  if (!snap) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   snap[0] = n;
   for (int i = 0; i < n; i++) { snap[1 + i] = (int)comp_ntype_stored(c, i); snap[1 + n + i] = c->ie_map.cls[i]; }
   mark_ie_subtree(c, body, cls);

@@ -3342,35 +3342,26 @@ void propagate_bigint_cascade(Compiler *c) {
   }
 }
 
-/* For nodes inside an instance_eval/exec block, the receiver's class id; -1
-   elsewhere. Lets bare calls/ivar refs in the block resolve against the
-   receiver's class during inference (codegen mirrors this via an_ie_class_id). */
-int *g_ie_node_class = NULL;
-static int g_ie_node_class_cap = 0;
-/* nodes inside an instance_eval / exec block over a receiver of no class
-   of the program's (nil, a number, a String): its ivars are nil there.
-   Sized as g_ie_node_class. */
-static unsigned char *g_ie_nonobj = NULL;
-/* the class a block body's own instance_eval / exec call (or a forwarder to
-   one) runs it on; -1 for a body that only sits inside such a block, whose
-   class it shares in g_ie_node_class. Sized as g_ie_node_class. */
-static int *g_ie_own = NULL;
+/* The instance_eval/exec self map is c->ie_map (compiler.h): for nodes inside
+   an instance_eval/exec block, the receiver's class id; -1 elsewhere. Lets
+   bare calls/ivar refs in the block resolve against the receiver's class
+   during inference (codegen mirrors this via an_ie_class_id). */
 static void mark_ie_own(Compiler *c, int body, int cls) {
-  if (body >= 0 && body < g_ie_node_class_cap) g_ie_own[body] = cls;
+  if (body >= 0 && body < c->ie_map.cap) c->ie_map.own[body] = cls;
   mark_ie_subtree(c, body, cls);
 }
 static void mark_ie_nonobj(Compiler *c, int node) {
-  if (node < 0 || node >= g_ie_node_class_cap) return;
+  if (node < 0 || node >= c->ie_map.cap) return;
   NodeKind k = nt_kind(c->nt, node);
   if (k == NK_DefNode || k == NK_ClassNode || k == NK_ModuleNode) return;
-  if (!g_ie_nonobj[node]) { g_ie_nonobj[node] = 1; comp_touch_node(c, node); }
+  if (!c->ie_map.nonobj[node]) { c->ie_map.nonobj[node] = 1; comp_touch_node(c, node); }
   int nr = nt_num_refs(c->nt, node);
   for (int i = 0; i < nr; i++) mark_ie_nonobj(c, nt_ref_at(c->nt, node, i));
   int na = nt_num_arrs(c->nt, node);
   for (int i = 0; i < na; i++) { int n = 0; const int *ids = nt_arr_at(c->nt, node, i, &n); for (int j = 0; j < n; j++) mark_ie_nonobj(c, ids[j]); }
 }
-int ie_nonobj_node(int node) {
-  return g_ie_nonobj && node >= 0 && node < g_ie_node_class_cap && g_ie_nonobj[node];
+int ie_nonobj_node(Compiler *c, int node) {
+  return c->ie_map.nonobj && node >= 0 && node < c->ie_map.cap && c->ie_map.nonobj[node];
 }
 
 void mark_ie_subtree(Compiler *c, int node, int cls) {
@@ -3380,7 +3371,7 @@ void mark_ie_subtree(Compiler *c, int node, int cls) {
   if (!ty) return;
   /* a nested def/class starts a fresh self; don't bleed the rebind into it */
   if (ty_k == NK_DefNode || ty_k == NK_ClassNode || ty_k == NK_ModuleNode) return;
-  if (g_ie_node_class[node] != cls) { g_ie_node_class[node] = cls; comp_touch_node(c, node); }
+  if (c->ie_map.cls[node] != cls) { c->ie_map.cls[node] = cls; comp_touch_node(c, node); }
   int nr = nt_num_refs(c->nt, node);
   for (int i = 0; i < nr; i++) mark_ie_subtree(c, nt_ref_at(c->nt, node, i), cls);
   int na = nt_num_arrs(c->nt, node);
@@ -4979,23 +4970,23 @@ void build_ie_map(Compiler *c) {
   const NodeTable *nt = c->nt;
   /* sized to nt->count, which can grow mid-analysis when forwarded callables
      are desugared into synthetic blocks; resize so per-node writes stay bounded */
-  if (g_ie_node_class_cap < nt->count) {
-    int *grown = realloc(g_ie_node_class, sizeof(int) * (size_t)nt->count);
+  if (c->ie_map.cap < nt->count) {
+    int *grown = realloc(c->ie_map.cls, sizeof(int) * (size_t)nt->count);
     if (!grown) return;  /* OOM: keep the old map rather than leak/deref NULL */
-    unsigned char *gn = realloc(g_ie_nonobj, (size_t)nt->count);
+    unsigned char *gn = realloc(c->ie_map.nonobj, (size_t)nt->count);
     if (!gn) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-    int *go = realloc(g_ie_own, sizeof(int) * (size_t)nt->count);
+    int *go = realloc(c->ie_map.own, sizeof(int) * (size_t)nt->count);
     if (!go) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-    for (int i = g_ie_node_class_cap; i < nt->count; i++) { grown[i] = -1; gn[i] = 0; go[i] = -1; }
-    g_ie_node_class = grown;
-    g_ie_nonobj = gn;
-    g_ie_own = go;
-    g_ie_node_class_cap = nt->count;
+    for (int i = c->ie_map.cap; i < nt->count; i++) { grown[i] = -1; gn[i] = 0; go[i] = -1; }
+    c->ie_map.cls = grown;
+    c->ie_map.nonobj = gn;
+    c->ie_map.own = go;
+    c->ie_map.cap = nt->count;
   }
   /* (each entry that changes moves its node's scope: the build runs
      inferences of its own, which read the map as it stands) */
-  for (int i = 0; i < g_ie_node_class_cap; i++)
-    if (g_ie_nonobj[i]) { g_ie_nonobj[i] = 0; comp_touch_node(c, i); }
+  for (int i = 0; i < c->ie_map.cap; i++)
+    if (c->ie_map.nonobj[i]) { c->ie_map.nonobj[i] = 0; comp_touch_node(c, i); }
   int *pend = malloc(sizeof(int) * (size_t)nt->count);
   if (!pend) return;
   int pend_n = nt->count;
@@ -5003,8 +4994,8 @@ void build_ie_map(Compiler *c) {
   g_ief_ready = 0;
   for (int i = 0; i < nt->count; i++) {
     pend[i] = -1;
-    g_ie_own[i] = -1;
-    if (g_ie_node_class[i] != -1) { g_ie_node_class[i] = -1; comp_touch_node(c, i); }
+    c->ie_map.own[i] = -1;
+    if (c->ie_map.cls[i] != -1) { c->ie_map.cls[i] = -1; comp_touch_node(c, i); }
   }
   ie_param_n = 0;
   for (int pass = 0; pass < 2; pass++)
@@ -5066,27 +5057,25 @@ void build_ie_map(Compiler *c) {
 
 /* The receiver class for a node inside an instance_eval/exec block, or -1. */
 int ie_class_of(Compiler *c, int node) {
-  (void)c;
-  /* g_ie_node_class is sized to nt->count per fixpoint iteration; a node
+  /* the map is sized to nt->count per fixpoint iteration; a node
      synthesized mid-iteration (id >= cap) has no instance_eval receiver yet. */
-  return (g_ie_node_class && node >= 0 && node < g_ie_node_class_cap)
-           ? g_ie_node_class[node] : -1;
+  return (c->ie_map.cls && node >= 0 && node < c->ie_map.cap)
+           ? c->ie_map.cls[node] : -1;
 }
 
 /* The class a block body's own instance_eval/exec runs it on, or -1. */
 int ie_own_class_of(Compiler *c, int node) {
-  (void)c;
-  return (g_ie_own && node >= 0 && node < g_ie_node_class_cap) ? g_ie_own[node] : -1;
+  return (c->ie_map.own && node >= 0 && node < c->ie_map.cap) ? c->ie_map.own[node] : -1;
 }
 
 int *ie_body_retype(Compiler *c, int body, int cls) {
   int n = c->nt->count;
-  if (body < 0 || !g_ie_node_class || g_ie_node_class_cap < n || g_ie_node_class[body] == cls)
+  if (body < 0 || !c->ie_map.cls || c->ie_map.cap < n || c->ie_map.cls[body] == cls)
     return NULL;
   int *snap = malloc(sizeof(int) * (2 * (size_t)n + 1));
   if (!snap) return NULL;
   snap[0] = n;
-  for (int i = 0; i < n; i++) { snap[1 + i] = (int)comp_ntype_stored(c, i); snap[1 + n + i] = g_ie_node_class[i]; }
+  for (int i = 0; i < n; i++) { snap[1 + i] = (int)comp_ntype_stored(c, i); snap[1 + n + i] = c->ie_map.cls[i]; }
   mark_ie_subtree(c, body, cls);
   if (cls >= 0) infer_subtree(c, body);
   return snap;
@@ -5097,7 +5086,7 @@ void ie_body_restore(Compiler *c, int *snap) {
   int n = snap[0];
   for (int i = 0; i < n; i++) {
     comp_set_ntype(c, i, (TyKind)snap[1 + i]);
-    if (g_ie_node_class[i] != snap[1 + n + i]) { g_ie_node_class[i] = snap[1 + n + i]; comp_touch_node(c, i); }
+    if (c->ie_map.cls[i] != snap[1 + n + i]) { c->ie_map.cls[i] = snap[1 + n + i]; comp_touch_node(c, i); }
   }
   free(snap);
 }
@@ -5204,10 +5193,10 @@ int attr_decl_call(Compiler *c, int id) {
    infers the new ivar's type from its assignment. */
 int register_ie_block_ivars(Compiler *c) {
   const NodeTable *nt = c->nt;
-  if (!g_ie_node_class) return 0;
+  if (!c->ie_map.cls) return 0;
   int changed = 0;
   for (int id = 0; id < nt->count; id++) {
-    int cls = g_ie_node_class[id];
+    int cls = c->ie_map.cls[id];
     if (cls < 0) continue;
     const char *ty = nt_type(nt, id);
     NodeKind k = nt_kind(nt, id);
@@ -39402,7 +39391,7 @@ int nullable_int_value(Compiler *c, int v) {
     int cid = s ? s->class_id : -1;
     /* inside an instance_eval / exec splice the ivar is the receiver's;
        a receiver of no class of the program's has none: nil */
-    if (ie_nonobj_node(v)) return 1;
+    if (ie_nonobj_node(c, v)) return 1;
     if (ie_class_of(c, v) >= 0) cid = ie_class_of(c, v);
     if (cid < 0) cid = c->toplevel_class;
     if (cid < 0 || cid >= c->nclasses) return 0;

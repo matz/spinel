@@ -1956,6 +1956,19 @@ typedef struct {
      answered the query the other way, so a form that would declines */
   char **def_asked;
   int ndef_asked, cdef_asked;
+  /* the instance_eval / exec self map (analyze.c), sized to the node table:
+     per node, the receiver's class id (-1 outside such a block; -2 - the call's
+     id where the receivers differ); whether the receiver is of no class of the
+     program's (nil, a number, a String), so its ivars are nil; and the class a
+     block body's own instance_eval / exec call (or a forwarder to one) runs it
+     on, -1 for a body that only sits inside such a block, whose class it shares
+     in cls. All three have cap entries. */
+  struct {
+    int *cls;
+    unsigned char *nonobj;
+    int *own;
+    int cap;
+  } ie_map;
 } Compiler;
 enum { PRES_UNMARKED = 1, PRES_REMOVED = 2 };
 

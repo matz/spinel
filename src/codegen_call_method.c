@@ -484,7 +484,7 @@ static void emit_method_owner_class(Compiler *c, int mn, int mi, int unbound, Bu
 static const char *method_builtin_ident(Compiler *c, int mn, int mi, int unbound, char *buf, size_t n) {
   const char *bn, *sym = mi >= 0 ? bam_builtin_sym(c, mi, NULL) : NULL;
   if (!sym || method_owner_ci(c, mn, mi, unbound, &(int){0}, &bn) >= 0 || !bn) return NULL;
-  snprintf(buf, n, "%s#%s", bn, sym);
+  snprintf(buf, n, "%s#%s", bn, builtin_method_canonical(bn, sym));
   return buf;
 }
 

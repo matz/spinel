@@ -2100,6 +2100,23 @@ static const BuiltinMethodTable *bmt_find(const char *name) {
   return name ? bsearch(name, BUILTIN_METHOD_TABLES, sizeof BUILTIN_METHOD_TABLES / sizeof *BUILTIN_METHOD_TABLES,
                         sizeof *BUILTIN_METHOD_TABLES, bmt_cmp) : NULL;
 }
+/* The name CRuby's Method#== knows builtin cls's instance method `name` by:
+   the first of the names that are one method (Array#size and #length;
+   TrueClass#to_s and #inspect), or `name` itself for a method with no
+   alias. Two Methods of one builtin method are equal whichever name made
+   them, so the Method's identity key is built from this. */
+static int bmt_alias_cmp(const void *k, const void *e) {
+  const char *const *key = k;
+  const BmtAlias *a = e;
+  int c = strcmp(key[0], a->owner);
+  return c ? c : strcmp(key[1], a->name);
+}
+const char *builtin_method_canonical(const char *cls, const char *name) {
+  if (!cls || !name) return name;
+  const char *key[2] = { cls, name };
+  const BmtAlias *a = bsearch(key, BMT_ALIASES, sizeof BMT_ALIASES / sizeof *BMT_ALIASES, sizeof *BMT_ALIASES, bmt_alias_cmp);
+  return a ? a->canonical : name;
+}
 /* The libraries the program requires, in the table's flag bits (bit 0:
    none needed), and whether a name's flags hold for them: a reader that
    must be sure a method exists (must) counts only what CRuby has with no

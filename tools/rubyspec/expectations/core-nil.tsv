@@ -12,7 +12,7 @@ inspect_spec__001	PASS
 match_spec__001	PASS
 match_spec__002	HARNESS-SKEW
 nil_spec__001	PASS
-nilclass_spec__001	FAIL
+nilclass_spec__001	PASS
 nilclass_spec__002	PASS
 or_spec__001	HARNESS-SKEW
 rationalize_spec__001	PASS

@@ -276,7 +276,7 @@ static int elab_block_when(Compiler *c, int call, int lazy) {
   const NodeTable *nt = c->nt;
   const char *nm = nt_kind(nt, call) == NK_CallNode ? nt_str(nt, call, "name") : NULL;
   int rv = nm ? nt_ref(nt, call, "receiver") : -1;
-  const char *rn = rv >= 0 && nt_kind(nt, rv) == NK_ConstantReadNode ? nt_str(nt, rv, "name") : NULL;
+  const char *rn = rv >= 0 && nt_kind(nt, rv) == NK_ConstantReadNode ? nt_key_name(nt, rv) : NULL;
   if (!nm) return ELAB_BLK_UNKNOWN;
   if (is_deferred_block_call(rn, nm) || (lazy && lr_lazy_later(c, call))) return ELAB_BLK_LATER;
   if (is_eval_exec_family(nm) || is_class_builder(rn, nm)) return ELAB_BLK_ASSUMED;
@@ -350,7 +350,7 @@ static int lr_lazy_later(Compiler *c, int call) {
 static int elab_opens_frame(const NodeTable *nt, int call) {
   const char *nm = nt_str(nt, call, "name");
   int rv = nt_ref(nt, call, "receiver");
-  const char *rn = rv >= 0 && nt_kind(nt, rv) == NK_ConstantReadNode ? nt_str(nt, rv, "name") : NULL;
+  const char *rn = rv >= 0 && nt_kind(nt, rv) == NK_ConstantReadNode ? nt_key_name(nt, rv) : NULL;
   return nm && (is_eval_exec_family(nm) || is_class_builder(rn, nm));
 }
 
@@ -5118,7 +5118,7 @@ static void lr_rta_node(LrRta *t, int id) {
          : rk == NK_SelfNode ? lr_rta_self(t, id) : LR_UNKNOWN_CLASS;
   by = nm && is_send_family(nm) ? (ac ? call_sent_name(nt, id, NULL) : "")
      : nm && (is_method_object_maker(nm) || is_enumerator_maker(nm)) ? (ac ? vis_arg_name(nt, av[0]) : "") : nm;
-  if (!by || (ac && is_code_eval_name(nm)) || is_method_bind_name(by) || is_object_loader(rk == NK_ConstantReadNode ? nt_str(nt, recv, "name") : NULL, by, ac)) {
+  if (!by || (ac && is_code_eval_name(nm)) || is_method_bind_name(by) || is_object_loader(rk == NK_ConstantReadNode ? nt_key_name(nt, recv) : NULL, by, ac)) {
     lr_rta_all(t, 0);
     lr_rta_any(t);
     return;
@@ -5144,7 +5144,7 @@ static void lr_rta_node(LrRta *t, int id) {
   }
   /* raise makes an object of a class it is given, or a core one of a
      message; Timeout.timeout one of its klass */
-  int ka = is_raise_alias(by) ? 0 : rk == NK_ConstantReadNode && is_timeout_call(nt_str(nt, recv, "name"), by) ? 1 : -1;
+  int ka = is_raise_alias(by) ? 0 : rk == NK_ConstantReadNode && is_timeout_call(nt_key_name(nt, recv), by) ? 1 : -1;
   ak = ka >= 0 && ka < ac ? nt_kind(nt, av[ka]) : NK_StringNode;
   if (ak == NK_ConstantReadNode || ak == NK_ConstantPathNode) {
     if ((d = lr_rta_const(t, av[ka])) >= LR_MAIN) lr_rta_call_on(t, "exception", d, 0);
@@ -8700,7 +8700,7 @@ int elab_defines(Compiler *c, int cls, const char *name) {
 int elab_mixin_module(Compiler *c, const LrMixin *m) {
   if (m->mod >= 0) return m->mod;
   NodeKind k = m->ref >= 0 ? nt_kind(c->nt, m->ref) : NK_NilNode;
-  return k == NK_ConstantReadNode || k == NK_ConstantPathNode ? elab_module_named(c, nt_str(c->nt, m->ref, "name")) : -1;
+  return k == NK_ConstantReadNode || k == NK_ConstantPathNode ? elab_module_named(c, nt_key_name(c->nt, m->ref)) : -1;
 }
 
 /* ---- SPINEL_ELAB_CHECK ---- */
@@ -9670,7 +9670,7 @@ void elab_const_keys(Compiler *c) {
             lr_key_queue(&q, &nq, &cq, id, es[i].key);
           break;
         }
-      const char *rn = nt_str(nt, id, "name");
+      const char *rn = nt_key_name(nt, id);
       if (check && rn && nm && !sp_streq(rn, nm))
         fprintf(stderr, "constkey: unresolved-renamed %s %s line %lld name=%s written=%s\n", o == ELAB_NO ? "no" : "unknown",
                 nt_type(nt, id), (long long)nt_int(nt, id, "node_line", 0), rn, nm);

@@ -4670,7 +4670,7 @@ int desugar_env_enum(Compiler *c) {
     const char *nm = nt_str(nt, id, "name");
     int recv = nt_ref(nt, id, "receiver");
     if (!nm || recv < 0 || nt_kind(nt, recv) != NK_ConstantReadNode) continue;
-    const char *rn = nt_str(nt, recv, "name");
+    const char *rn = nt_key_name(nt, recv);
     if (!rn || !sp_streq(rn, "ENV")) continue;
     int is_enum = env_enum_method(nm);
     /* fetch WITH a block rides the snapshot's block-aware Hash#fetch (#2745) */
@@ -12323,7 +12323,7 @@ static int rsc_shadowed(char **names, int nn, const char *nm) {
 int desugar_errno_aliases_left(Compiler *c, LowerCtx *lc, int id) {
   const NodeTable *nt = c->nt;
   int par = nt_ref(nt, id, "parent");
-  const char *leaf = nt_str(nt, id, "name");
+  const char *leaf = nt_key_name(nt, id);
   if (par < 0 || !leaf || nt_kind(nt, par) != NK_ConstantReadNode) return 0;
   const char *pn = nt_str(nt, par, "name");
   /* IO::EWOULDBLOCKWaitReadable / Writable are IO::EAGAINWait* where
@@ -13773,7 +13773,7 @@ static int fwd_target_shape(FwdCtx *fx, int def, int call, int is_super) {
   }
   if (!is_super && recv >= 0 &&
       (fwd_node_is(nt, recv, "ConstantReadNode") || fwd_node_is(nt, recv, "ConstantPathNode"))) {
-    int us = fwd_class_new_shape_of(nt, nt_str(nt, recv, "name"));
+    int us = fwd_class_new_shape_of(nt, nt_key_name(nt, recv));
     if (us != -1) return us;
   }
   if (is_super) {
@@ -16909,7 +16909,7 @@ static int stored_enum_write(Compiler *c, int id, int n0) {
     "partition", "take_while", "drop_while", "find_index", "index", "rindex", "minmax_by", "reverse_each", "each_entry", "gsub", "gsub!", NULL };
   NodeTable *nt = (NodeTable *)c->nt;
   int x = nt_ref(nt, id, "receiver");
-  const char *nm = nt_str(nt, id, "name"), *vn = nt_str(nt, x, "name");
+  const char *nm = nt_key_name(nt, id), *vn = nt_key_name(nt, x);
   if (!nm || !sp_streq(nm, "each") || nt_ref(nt, id, "block") < 0 || nt_ref(nt, id, "arguments") >= 0 ||
       nt_kind(nt, x) != NK_LocalVariableReadNode || !vn) return -1;
   int w = -1, nw = 0;
@@ -17070,7 +17070,7 @@ static int local_class_test(const NodeTable *nt, int pred, int *local, const cha
   if (!*case_eq && !is_kind_query(nm)) return 0;
   int lv = *case_eq ? av[0] : recv, kc = *case_eq ? recv : av[0];
   if (nt_kind(nt, lv) != NK_LocalVariableReadNode || nt_kind(nt, kc) != NK_ConstantReadNode) return 0;
-  *local = lv; *kn = nt_str(nt, kc, "name"); *exact = is_instance_of_query(nm);
+  *local = lv; *kn = nt_key_name(nt, kc); *exact = is_instance_of_query(nm);
   return *kn != NULL;
 }
 
@@ -17531,8 +17531,8 @@ int desugar_builtin_splat_forward(Compiler *c) {
     /* Time.new takes the fields one by one: a splatted Array local
        (`Time.new(*fields)`) was read whole as the year. (Time's other
        makers, at, utc, local, gm and mktime, read a splat as it is.) */
-    int tnew = nt_kind(nt, recv) == NK_ConstantReadNode && nt_str(nt, recv, "name") &&
-               sp_streq(nt_str(nt, recv, "name"), "Time") &&
+    int tnew = nt_kind(nt, recv) == NK_ConstantReadNode && nt_key_name(nt, recv) &&
+               sp_streq(nt_key_name(nt, recv), "Time") &&
                /* (a reopen of Time leaves Time.new alone unless it defines its own) */
                (comp_core_class(c, CORE_TIME) < 0 || comp_cmethod_in_chain(c, comp_core_class(c, CORE_TIME), "new", NULL) < 0) &&
                sp_streq(nm, "new") && nt_ref(nt, id, "block") < 0 && rest && ms && ty_is_array(infer_type(c, sv));
@@ -17763,7 +17763,7 @@ static int value_block_name_free(Compiler *c, const char *name) {
     /* Struct.new / Data.define name members; another `new` takes values */
     if (w >= 7) {
       int rc = nt_ref(nt, k, "receiver");
-      const char *rn = rc >= 0 && nt_kind(nt, rc) == NK_ConstantReadNode ? nt_str(nt, rc, "name") : NULL;
+      const char *rn = rc >= 0 && nt_kind(nt, rc) == NK_ConstantReadNode ? nt_key_name(nt, rc) : NULL;
       if (!rn || !sp_streq(rn, w == 7 ? "Struct" : "Data")) continue;
     }
     /* define_method and alias_method name the method first; the others name one in each argument */
@@ -21429,7 +21429,7 @@ static int enc_query(const NodeTable *nt, int id, const char **cn) {
   if (recv < 0) return ENC_NONE;
   NodeKind rk = nt_kind(nt, recv);
   if (rk != NK_ConstantReadNode && !(rk == NK_ConstantPathNode && nt_ref(nt, recv, "parent") < 0)) return ENC_NONE;
-  const char *rn = nt_str(nt, recv, "name");
+  const char *rn = nt_key_name(nt, recv);
   if (!rn || !sp_streq(rn, "Encoding")) return ENC_NONE;
   const char *nm = nt_str(nt, id, "name");
   if (!nm) return ENC_NONE;

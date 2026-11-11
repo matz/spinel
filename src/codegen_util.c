@@ -4455,7 +4455,7 @@ static void const_read_name(Compiler *c, int id, char *out, size_t cap) {
   for (int k = id; k >= 0 && n < 16; k = nt_kind(nt, k) == NK_ConstantPathNode ? nt_ref(nt, k, "parent") : -1) {
     /* a receiver that is no constant (a class held in a variable) has no name here */
     const char *nm = k == id || nt_kind_is_constant(nt_kind(nt, k))
-                     ? nt_str(nt, k, "name") : NULL;
+                     ? nt_key_name(nt, k) : NULL;
     const char *us = nm ? strstr(nm, "__") : NULL;
     while (us && strstr(us + 2, "__")) us = strstr(us + 2, "__");
     if (nm) segs[n++] = us ? us + 2 : nm;
@@ -4618,7 +4618,7 @@ static int const_recv_on_class(Compiler *c, int id) {
   const NodeTable *nt = c->nt;
   int r = nt_kind(nt, id) == NK_CallNode ? nt_ref(nt, id, "receiver") : -1;
   if (r < 0 || nt_kind(nt, r) != NK_ConstantPathNode || view_const_slot(c, r)) return 0;
-  const char *nm = nt_str(nt, r, "name");
+  const char *nm = nt_key_name(nt, r);
   return !const_has_flag(nm ? comp_const(c, nm) : NULL) && const_class_slot_held(c, id, r);
 }
 static int const_class_slot_held(Compiler *c, int id, int r) {
@@ -4645,7 +4645,7 @@ static int const_recv_hold(Compiler *c, int id, Buf *b, int *holds_slot, int stm
     return view_push_const_read(c, r);
   }
   if (r < 0 || nt_kind(nt, r) != NK_ConstantPathNode || view_const_slot(c, r)) return -1;
-  const char *nm = nt_str(nt, r, "name");
+  const char *nm = nt_key_name(nt, r);
   LocalVar *lv = nm ? comp_const(c, nm) : NULL;
   /* (a call with a block holds only as a statement, where the block's loop
      reads the pointer from the statement's own scope) */

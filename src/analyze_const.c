@@ -161,7 +161,7 @@ static int cw_value_walk(ConstWalk *w, int id, int depth) {
       }
       int rv = cw_value(w, r, depth + 1);
       if (rv == 0) return 0;
-      const char *rn = nt_kind(nt, r) == NK_ConstantReadNode ? nt_str(nt, r, "name") : NULL;
+      const char *rn = nt_kind(nt, r) == NK_ConstantReadNode ? nt_key_name(nt, r) : NULL;
       /* Struct.new, Data.define, Class.new, Module.new run the body they take */
       if (rn && is_class_builder(rn, nm) && !w->hooks && !w->reopened) {
         if (blk < 0) return 1;
@@ -389,7 +389,7 @@ void an_const_presence(Compiler *c) {
     /* def Math.f, class << Math, Math.define_singleton_method ... */
     if (k == NK_DefNode || k == NK_SingletonClassNode || k == NK_CallNode) {
       int r = nt_ref(nt, id, k == NK_SingletonClassNode ? "expression" : "receiver");
-      if (r >= 0 && nt_kind(nt, r) == NK_ConstantReadNode && is_math_module_name(nt_str(nt, r, "name")) &&
+      if (r >= 0 && nt_kind(nt, r) == NK_ConstantReadNode && is_math_module_name(nt_key_name(nt, r)) &&
           !(k == NK_CallNode && is_math_fn_name(nt_str(nt, id, "name"))))
         w.math_own = 1;
     }

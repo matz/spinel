@@ -301,7 +301,7 @@ static int builtin_scope_lacks_member(Compiler *c, int seg);
 static int const_path_scope(Compiler *c, int seg, int *missing) {
   const NodeTable *nt = c->nt;
   NodeKind sk = nt_kind(nt, seg);
-  const char *nm = nt_str(nt, seg, "name");
+  const char *nm = nt_key_name(nt, seg);
   if (!nm) return -1;
   if (sk == NK_ConstantReadNode) {
     int k = comp_class_index(c, nm);
@@ -674,7 +674,7 @@ int const_path_in_closed_builtin(Compiler *c, int id) {
   /* `Encoding::X` or `::Encoding::X` */
   if (!(pk == NK_ConstantReadNode || (pk == NK_ConstantPathNode && nt_ref(nt, par, "parent") < 0)))
     return 0;
-  const char *pn = nt_str(nt, par, "name"), *nm = nt_str(nt, id, "name");
+  const char *pn = nt_key_name(nt, par), *nm = nt_key_name(nt, id);
   if (!pn || !nm || sp_streq(pn, "Object")) return 0;
   if (!is_builtin_class_name(pn) && !is_builtin_module_name(pn) && !is_builtin_exception_name(pn)) return 0;
   if (comp_const(c, pn)) return 0;
@@ -1020,7 +1020,7 @@ const char *superclass_builtin_exc_name(const NodeTable *nt, int sc) {
   if (!sty) return NULL;
   int is_read = sk == NK_ConstantReadNode, is_path = sk == NK_ConstantPathNode;
   if (!is_read && !is_path) return NULL;
-  const char *leaf = nt_str(nt, sc, "name");
+  const char *leaf = nt_key_name(nt, sc);
   if (!leaf) return NULL;
   if (is_path) {
     char q[256]; size_t o = strlen(leaf);
@@ -1369,7 +1369,7 @@ int node_is_empty_container(Compiler *c, int node) {
   if (!nm || !sp_streq(nm, "new")) return 0;
   int r = nt_ref(nt, node, "receiver");
   if (r < 0 || nt_kind(nt, r) != NK_ConstantReadNode) return 0;
-  const char *rn = nt_str(nt, r, "name");
+  const char *rn = nt_key_name(nt, r);
   if (!rn || (!sp_streq(rn, "Array") && !sp_streq(rn, "Hash"))) return 0;
   int ca = nt_ref(nt, node, "arguments");
   int argc = 0; if (ca >= 0) nt_arr(nt, ca, "arguments", &argc);
@@ -1529,7 +1529,7 @@ int class_recv_static_ci(Compiler *c, int node) {
   const NodeTable *nt = c->nt;
   NodeKind k = nt_kind(nt, node);
   if ((k == NK_ConstantReadNode || k == NK_ConstantPathNode) &&
-      nt_str(nt, node, "name"))
+      nt_key_name(nt, node))
     return const_node_class_index(c, node);
   if (k == NK_SelfNode) return class_body_self_ci(c, node);
   return class_var_static_ci(c, node);
@@ -1700,7 +1700,7 @@ int str_self_call(const NodeTable *nt, int id) {
 }
 int fiber_storage_recv(const NodeTable *nt, int recv) {
   NodeKind rk = nt_kind(nt, recv);
-  const char *rn = nt_str(nt, recv, "name");
+  const char *rn = nt_key_name(nt, recv);
   if (rk == NK_ConstantReadNode) return rn && sp_streq(rn, "Fiber");
   if (rk != NK_CallNode) return 0;
   int rr = nt_ref(nt, recv, "receiver");
@@ -2186,7 +2186,7 @@ int const_get_recv_class(Compiler *c, int call, int recv) {
   const NodeTable *nt = c->nt;
   NodeKind rk = nt_kind(nt, recv);
   if (rk == NK_ConstantReadNode || rk == NK_ConstantPathNode) {
-    const char *nm = nt_str(nt, recv, "name");
+    const char *nm = nt_key_name(nt, recv);
     if (!nm) return CG_NONE;
     int k = const_node_class_index(c, recv);
     if (k >= 0) return k;
@@ -4645,7 +4645,7 @@ int is_handler_proc_block(Compiler *c, int id) {
     nt_str(nt, recv, "name") && sp_streq(nt_str(nt, recv, "name"), "Signal");
   }
   if (recv >= 0 && nt_kind(nt, recv) == NK_ConstantReadNode &&
-      nt_str(nt, recv, "name") && sp_streq(nt_str(nt, recv, "name"), "ENV") &&
+      nt_key_name(nt, recv) && sp_streq(nt_key_name(nt, recv), "ENV") &&
       is_select_bang(name))
     return 1;
   return 0;
@@ -5098,7 +5098,7 @@ static int method_obj_lookup(Compiler *c, int node, int *cls, int *sg) {
                          nt_kind(nt, recv) == NK_ConstantPathNode)) {
     /* `Outer::Mod.method(:m)` names the class by its last segment, as every
        other constant receiver resolves */
-    const char *rn2 = nt_str(nt, recv, "name");
+    const char *rn2 = nt_key_name(nt, recv);
     k = class_recv_static_ci(c, recv), side = 1;
     if (k < 0) k = rn2 ? comp_class_index(c, rn2) : -1;
     if (k >= 0) goto found;
@@ -5563,7 +5563,7 @@ int call_user_yield_mi(Compiler *c, int id) {
        the key classes are indexed under */
     const char *cname = ((rk == NK_ConstantReadNode ||
                                  rk == NK_ConstantPathNode))
-                        ? nt_str(nt, recv, "name") : NULL;
+                        ? nt_key_name(nt, recv) : NULL;
     /* ... and `self.class.run { }` by the class self.class names, as the
        inliner does (self_class_static_ci) */
     int ci = cname ? const_node_class_index(c, recv) : self_class_static_ci(c, recv);
@@ -6254,7 +6254,7 @@ static const char *const si_protocol_names[] = {
 
 /* May a `raise` of the class constant ref raise a StopIteration? */
 static int si_class_may_stop(Compiler *c, int ref, int depth) {
-  const char *nm = nt_str(c->nt, ref, "name");
+  const char *nm = nt_key_name(c->nt, ref);
   if (!nm || depth > 64) return 1;
   if (sp_streq(nm, "StopIteration") || sp_streq(nm, "ClosedQueueError")) return 1;
   /* (a read or a path asks the node: a nested class's leaf, `raise SSLError`

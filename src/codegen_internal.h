@@ -51,14 +51,14 @@ static inline void emit_indent(Buf *b, int n) { for (int i = 0; i < n; i++) buf_
 static inline const char *isa_const_name(const NodeTable *nt, int arg) {
   const char *t = arg >= 0 ? nt_type(nt, arg) : NULL;
   if (!t) return NULL;
-  if (sp_streq(t, "ConstantReadNode")) return nt_str(nt, arg, "name");
+  if (sp_streq(t, "ConstantReadNode")) return nt_key_name(nt, arg);
   /* A ConstantPathNode names a class by its last segment, whether root-scoped
      (`::Integer`, parent < 0) or namespace-qualified (`Outer::Thing`, parent
      >= 0). Resolving the latter too lets is_a? answer a namespace-qualified
      class instead of falling to the dynamic path, which raised on a builtin
      receiver where CRuby returns false (#3258). */
   if (sp_streq(t, "ConstantPathNode"))
-    return nt_str(nt, arg, "name");
+    return nt_key_name(nt, arg);
   return NULL;
 }
 
@@ -73,7 +73,7 @@ static inline const char *isa_const_qualname(const NodeTable *nt, int arg, char 
   if (!t) return NULL;
   if (sp_streq(t, "ConstantReadNode")) return nt_str(nt, arg, "name");
   if (!sp_streq(t, "ConstantPathNode")) return NULL;
-  const char *leaf = nt_str(nt, arg, "name");
+  const char *leaf = nt_key_name(nt, arg);
   if (!leaf) return NULL;
   char segs[8][64]; int nseg = 0; int ok = 1;
   int qpar = nt_ref(nt, arg, "parent");

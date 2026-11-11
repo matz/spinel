@@ -5753,7 +5753,7 @@ void emit_assign(Compiler *c, int id, Buf *b, int indent) {
     int aargs = nt_ref(c->nt, v, "arguments"); int aac = 0;
     if (aargs >= 0) nt_arr(c->nt, aargs, "arguments", &aac);
     if (ark == NK_ConstantReadNode &&
-        sp_streq(nt_str(c->nt, ar, "name") ? nt_str(c->nt, ar, "name") : "", "Array") && aac == 0)
+        sp_streq(nt_key_name(c->nt, ar) ? nt_key_name(c->nt, ar) : "", "Array") && aac == 0)
       is_empty_array = 1;
   }
   int hn = 0;
@@ -5764,7 +5764,7 @@ void emit_assign(Compiler *c, int id, Buf *b, int indent) {
     int hr = nt_ref(c->nt, v, "receiver");
     NodeKind hrk = nt_kind(c->nt, hr);
     if ((hrk == NK_ConstantReadNode || hrk == NK_ConstantPathNode) &&
-        sp_streq(nt_str(c->nt, hr, "name") ? nt_str(c->nt, hr, "name") : "", "Hash")) {
+        sp_streq(nt_key_name(c->nt, hr) ? nt_key_name(c->nt, hr) : "", "Hash")) {
       is_hash_new = 1;
       int ha = nt_ref(c->nt, v, "arguments");
       int hac = 0;
@@ -6990,7 +6990,7 @@ int static_isa_cond(Compiler *c, int pred) {
   int args = nt_ref(nt, pred, "arguments");
   int ac = 0; const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &ac) : NULL;
   if (ac != 1 || !av || nt_kind(nt, av[0]) != NK_ConstantReadNode) return -1;
-  const char *target_name = nt_str(nt, av[0], "name");
+  const char *target_name = nt_key_name(nt, av[0]);
   if (!target_name) return -1;
   /* A scalar local against a builtin class is answered from its type. Not a
      bool (TrueClass/FalseClass depends on the value), not a Queue (shares its
@@ -7469,7 +7469,7 @@ static int emit_poly_class_when_value(Compiler *c, int cond_id, const char *tmp,
   const NodeTable *nt = c->nt;
   NodeKind ck = nt_kind(nt, cond_id);
   if (!nt_kind_is_constant(ck)) return 0;
-  const char *cn = nt_str(nt, cond_id, "name");
+  const char *cn = nt_key_name(nt, cond_id);
   if (!cn) return 0;
   /* a qualified path naming a known builtin (exception) class matches by its
      FULL name -- raised exceptions carry "Errno::ENOENT", not "ENOENT" */
@@ -15595,7 +15595,7 @@ int rescue_is_catchall_name(const char *n) {
 static int rescue_operand_is_class_name(Compiler *c, int op) {
   NodeKind k = nt_kind(c->nt, op);
   if (k != NK_ConstantReadNode && k != NK_ConstantPathNode) return 0;
-  const char *n = nt_str(c->nt, op, "name");
+  const char *n = nt_key_name(c->nt, op);
   if (!n || !comp_const(c, n)) return 1;
   /* (a class alias no read reaches before its assignment names its class) */
   return comp_class_index(c, n) >= 0 || is_builtin_class_name(n) || is_builtin_module_name(n) ||
@@ -15774,7 +15774,7 @@ void emit_rescue(Compiler *c, int id, Buf *b, int indent, int fr, const char *re
       if (!first) buf_puts(b, " || ");
       int effect = emit_const_read_prefix(c, exc[i], b);
       first = 0;
-      const char *ename = nt_str(nt, exc[i], "name");
+      const char *ename = nt_key_name(nt, exc[i]);
       /* a class alias matches as the class it names */
       if (ename && comp_class_index(c, ename) < 0 && comp_const(c, ename)) {
         const char *an = const_node_match_class_name(c, exc[i]);
@@ -22919,7 +22919,7 @@ static void emit_stmt_node(Compiler *c, int id, Buf *b, int indent) {
     NodeKind exk = nt_kind(nt, sexpr);
     int class_self = exk == NK_SelfNode;
     if (!class_self && exk == NK_ConstantReadNode) {
-      const char *cn = nt_str(nt, sexpr, "name");
+      const char *cn = nt_key_name(nt, sexpr);
       class_self = cn && const_node_class_index(c, sexpr) >= 0;
     }
     if (class_self || nt_int(nt, nt_ref(nt, id, "body"), "singleton_body", 0)) {
@@ -23974,7 +23974,7 @@ void emit_stmt_tail_inner(Compiler *c, int id, Buf *b, int indent) {
      would drop it and return nil. Route them to the value path below. The
      in-place filters answer nil or the receiver by what they removed, which
      only their value form knows. */
-  const char *tv_name = nt_str(nt, id, "name");
+  const char *tv_name = nt_key_name(nt, id);
   int is_tail_valued = k == NK_CallNode && tv_name &&
                        nt_ref(nt, id, "block") >= 0 &&
                        (sp_streq(tv_name, "tap") ||

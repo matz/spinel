@@ -377,7 +377,7 @@ static int poll_pure_node(Compiler *c, int n, int ret_ok, int stores) {
        nothing of the runtime (an Integer power may grow into a Bignum) */
     if (recv >= 0 && sp_streq(nm, "**") && comp_ntype_stored(c, n) == TY_FLOAT && comp_ntype_stored(c, recv) == TY_FLOAT)
       return an == 1 && poll_pure_node(c, recv, ret_ok, stores) && poll_scalar_ty(comp_ntype_stored(c, av[0]));
-    if (recv >= 0 && nt_kind(nt, recv) == NK_ConstantReadNode && sp_streq(nt_str(nt, recv, "name"), "Math") &&
+    if (recv >= 0 && nt_kind(nt, recv) == NK_ConstantReadNode && sp_streq(nt_key_name(nt, recv), "Math") &&
         poll_math_fn(nm) && comp_ntype_stored(c, n) == TY_FLOAT && !an_user_defines_method(c, nm)) {
       for (int i = 0; i < an; i++) if (!poll_scalar_ty(comp_ntype_stored(c, av[i]))) return 0;
       return 1;
@@ -1808,7 +1808,7 @@ static int class_is_user_numeric(Compiler *c, int cid) {
     int sup = class_def_super(nt, c->classes[k].def_node);
     if (sup < 0) continue;
     NodeKind sk = nt_kind(nt, sup);
-    const char *sn = (sk == NK_ConstantReadNode || sk == NK_ConstantPathNode) ? nt_str(nt, sup, "name") : NULL;
+    const char *sn = (sk == NK_ConstantReadNode || sk == NK_ConstantPathNode) ? nt_key_name(nt, sup) : NULL;
     if (sn && sp_streq(sn, "Numeric")) return 1;
   }
   return 0;
@@ -8708,7 +8708,7 @@ int proc_does_nonlocal_return(Compiler *c, int create) {
   int is_proc = (recv < 0 && sp_streq(cn, "proc"));
   int is_proc_new = (sp_streq(cn, "new") && recv >= 0 &&
                      nt_kind(c->nt, recv) == NK_ConstantReadNode &&
-                     nt_str(c->nt, recv, "name") && sp_streq(nt_str(c->nt, recv, "name"), "Proc"));
+                     nt_key_name(c->nt, recv) && sp_streq(nt_key_name(c->nt, recv), "Proc"));
   if (!is_proc && !is_proc_new) return 0;
   if (nt_ref(c->nt, create, "block") < 0) return 0;
   return proc_body_has_return(c, proc_body_node(c, create));
@@ -11648,7 +11648,7 @@ int class_is_exc_subclass(Compiler *c, int ci) {
   int ans = 0;
   for (int k = ci, guard = 0; k >= 0 && guard < 256; guard++) {
     int sc = class_def_super(c->nt, c->classes[k].def_node);
-    const char *sn = sc >= 0 ? nt_str(c->nt, sc, "name") : NULL;
+    const char *sn = sc >= 0 ? nt_key_name(c->nt, sc) : NULL;
     if (superclass_builtin_exc_name(c->nt, sc)) { ans = 1; break; }
     int next = c->classes[k].parent;
     /* The parent links are not resolved yet when the rescue-arm specialization
@@ -19200,7 +19200,7 @@ static char *build_types_json(Compiler *c) {
       if (eln > 0) buf_printf(&b, ",\"end_line\":%d,\"end_col\":%d", eln, (int)nt_int(nt, id, "node_end_col", 0)); }
     { const char *kind = nt_type(nt, id);
       if (kind) { buf_puts(&b, ",\"kind\":\""); json_escape_into(&b, kind); buf_puts(&b, "\""); }
-      const char *nm = nt_str(nt, id, "name");
+      const char *nm = nt_key_name(nt, id);
       if (nm && *nm) { buf_puts(&b, ",\"name\":\""); json_escape_into(&b, nm); buf_puts(&b, "\""); } }
     buf_puts(&b, ",\"type\":\"");
     Buf tag; memset(&tag, 0, sizeof tag);
@@ -19350,7 +19350,7 @@ int class_builtin_superclass(Compiler *c, int i) {
   int sc_node = class_def_super(c->nt, c->classes[i].def_node);
   if (sc_node >= 0) {
     NodeKind sc_k = nt_kind(c->nt, sc_node);
-    const char *sc_nm = (sc_k == NK_ConstantReadNode || sc_k == NK_ConstantPathNode) ? nt_str(c->nt, sc_node, "name") : NULL;
+    const char *sc_nm = (sc_k == NK_ConstantReadNode || sc_k == NK_ConstantPathNode) ? nt_key_name(c->nt, sc_node) : NULL;
     /* an exception path is read whole: the leaf of Math::DomainError,
        "DomainError", has no id, and the class sat under Object */
     const char *exc_nm = superclass_builtin_exc_name(c->nt, sc_node);
@@ -21833,7 +21833,7 @@ static void emit_class_machinery(const NodeTable *nt, Compiler *c, Buf *b, char 
         if (sc >= 0) {
           NodeKind sk = nt_kind(c->nt, sc);
           if (sk == NK_ConstantReadNode || sk == NK_ConstantPathNode)
-            par = nt_str(c->nt, sc, "name");
+            par = nt_key_name(c->nt, sc);
           /* a builtin exception by its whole path (Errno::ENOENT) */
           const char *bpar = superclass_builtin_exc_name(c->nt, sc);
           if (bpar) par = bpar;

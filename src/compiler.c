@@ -2649,7 +2649,7 @@ int comp_sg_reader_candidates(Compiler *c, int call_id, int *out, int max) {
   if (recv < 0) return 0;
   NodeKind rk = nt_kind(nt, recv);
   if (rk != NK_ConstantReadNode && rk != NK_ConstantPathNode) return 0;
-  const char *rn = nt_str(nt, recv, "name");
+  const char *rn = nt_key_name(nt, recv);
   int ci = const_node_class_index(c, recv);
   if (ci < 0 || !comp_is_sg_reader(&c->classes[ci], nm)) return 0;
   return comp_sg_const_candidates(c, ci, nm, out, max);
@@ -3357,7 +3357,7 @@ int comp_ffi_const_at(Compiler *c, int node, int *out) {
   if (node < 0) return 0;
   NodeKind k = nt_kind(nt, node);
   if (k != NK_ConstantPathNode) return 0;
-  const char *leaf = nt_str(nt, node, "name");
+  const char *leaf = nt_key_name(nt, node);
   int par = nt_ref(nt, node, "parent");
   NodeKind pk = nt_kind(nt, par);
   const char *mod = (pk == NK_ConstantReadNode || pk == NK_ConstantPathNode)
@@ -4108,7 +4108,7 @@ static void cv_build(Compiler *c) {
     if (is_constant_or_object_reflection(nm)) all = 1;
     /* Marshal.load can make any class's object; a program's own `load` is no
        such call */
-    if (recv >= 0 && nt_kind(nt, recv) == NK_ConstantReadNode && is_marshal_load(nt_str(nt, recv, "name"), nm))
+    if (recv >= 0 && nt_kind(nt, recv) == NK_ConstantReadNode && is_marshal_load(nt_key_name(nt, recv), nm))
       all = 1;
     if (is_method_owner_query(nm)) owner = 1;
     if (is_method_object_maker(nm)) methods = 1;
@@ -4127,7 +4127,7 @@ static void cv_build(Compiler *c) {
        own runs elsewhere */
     int plain = blk < 0 && is_class_plain_query(nm);
     if (!plain && blk < 0 && rk != NK_SelfNode) {
-      const char *cn = nt_str(nt, recv, "name");
+      const char *cn = nt_key_name(nt, recv);
       for (int k = cv_leaf_next(c, cn, -1); k >= 0 && k < nk && !plain; k = cv_leaf_next(c, cn, k))
         plain = call_target(c, n, k, nm, CT_CMETHOD, NULL) >= 0;
     }
@@ -4154,7 +4154,7 @@ static void cv_build(Compiler *c) {
     }
   }
   /* constants read as values, and self in a class's own body */
-  NT_FOREACH_KIND(nt, NK_ConstantReadNode, n) if (!nonval[n]) cv_mark_name(c, v, nt_str(nt, n, "name"));
+  NT_FOREACH_KIND(nt, NK_ConstantReadNode, n) if (!nonval[n]) cv_mark_name(c, v, nt_key_name(nt, n));
   NT_FOREACH_KIND(nt, NK_ConstantPathNode, n) if (!nonval[n]) cv_mark_name(c, v, nt_key_name(nt, n));
   for (int k = 0; k < nk; k++) {
     int dn = c->classes[k].def_node;
@@ -5105,7 +5105,7 @@ int comp_main_method(Compiler *c, const char *name) {
 int class_is_blank_slate(Compiler *c, int ci) {
   for (int k = ci; k >= 0; k = c->classes[k].parent) {
     int sc = class_def_super(c->nt, c->classes[k].def_node);
-    const char *sn = sc >= 0 ? nt_str(c->nt, sc, "name") : NULL;
+    const char *sn = sc >= 0 ? nt_key_name(c->nt, sc) : NULL;
     if (sn && sp_streq(sn, "BasicObject")) return 1;
     if (sn && c->classes[k].parent < 0) return 0;   /* rooted at another builtin */
   }

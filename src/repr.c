@@ -902,7 +902,7 @@ int repr_call_returns_handle(Compiler *c, int v) {
      the return channel before making its own String. delete's
      missing-key block answers its value the same way. */
   if (recv >= 0 && nt_kind(nt, recv) == NK_ConstantReadNode &&
-      is_env_const(nt_str(nt, recv, "name")) && !comp_const(c, "ENV") &&
+      is_env_const(nt_key_name(nt, recv)) && !comp_const(c, "ENV") &&
       bop_share_named(BOP_ENV, nm) == BSH_FETCH) {
     int argc = 0; const int *argv = call_args(nt, v, &argc);
     int tail = env_delete_block_value(c, v);
@@ -1092,7 +1092,7 @@ int repr_env_store_operand(Compiler *c, int v) {
   if (v < 0 || nt_kind(nt, v) != NK_CallNode) return -1;
   int r = nt_ref(nt, v, "receiver"), argc = 0;
   const int *argv = call_args(nt, v, &argc);
-  return r >= 0 && nt_kind(nt, r) == NK_ConstantReadNode && is_env_const(nt_str(nt, r, "name")) &&
+  return r >= 0 && nt_kind(nt, r) == NK_ConstantReadNode && is_env_const(nt_key_name(nt, r)) &&
          !comp_const(c, "ENV") && argc == 2 && bop_share_named(BOP_ENV, nt_str(nt, v, "name")) == BSH_LAST &&
          (repr_of(c, argv[1]).kind != RK_BOXED || share_value_unobserved(c, argv[1])) &&
          (repr_of(c, argv[0]).handle || share_value_fresh(c, argv[0], 0) || !subtree_has_side_effect(c, argv[1]))

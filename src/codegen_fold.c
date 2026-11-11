@@ -14060,7 +14060,7 @@ int recv_is_const(const NodeTable *nt, int recv, const char *name) {
   if (!rty) return 0;
   if (rk == NK_ConstantReadNode ||
       (rk == NK_ConstantPathNode && nt_ref(nt, recv, "parent") < 0)) {
-    const char *n = nt_str(nt, recv, "name");
+    const char *n = nt_key_name(nt, recv);
     return n && sp_streq(n, name);
   }
   return 0;

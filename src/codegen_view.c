@@ -23,6 +23,11 @@
    stack beside the views, popped by view_unbind, and a refusal's
    view_unwind drops the ones bound since its mark with the rest.
 
+   view_bind_park takes the bindings of one method's own nodes out of sight
+   for a copy of its body spliced inside another copy (the same nodes, the
+   enclosing copy's temps). Each parked binding is an entry on the view
+   stack, so view_bind_unpark or a refusal's view_unwind puts it back.
+
    view_push_target gives a call its effective method name for one emission.
    The node stays intact; cache depth, epochs and refusal unwinding include it.
 
@@ -58,7 +63,7 @@
 /* what an entry overrides: the node's type, one representation flag, or
    the arm context */
 enum { VK_TYPE = -1, VK_ARM = -2, VK_FACE = -3, VK_STMT = -4, VK_TARGET = -7, VK_CONVERSION = -8,
-       VK_CONST_READ = -9, VK_CLASS_IS = -10, VK_CALL_NIL_TESTED = -11 };
+       VK_CONST_READ = -9, VK_CLASS_IS = -10, VK_CALL_NIL_TESTED = -11, VK_BIND_PARKED = -12 };
 static struct { Compiler *c; int id; int kind; int saved; int val; ArmCtx arm_saved; const void *pre; } view_stack[VIEW_MAX];
 static int view_face = -1;   /* the innermost face entry, or -1 */
 static int view_stmt = -1;   /* the innermost statement entry, or -1 */
@@ -137,6 +142,29 @@ int view_bind_o(int node, const char *fmt, ...) {
 }
 
 void view_unbind(int n) { g_n_argov = n; }
+
+/* See codegen_internal.h. A parked binding keeps its slot and its text; its
+   node reads as none any lookup asks for (-1 is one they do ask for: a call
+   with no receiver), until the entry that parked it is closed. */
+#define BIND_PARKED(node) (-2 - (node))
+static int view_open_mark(int kind, int node, int v, const void *p);
+int view_bind_park(Compiler *c, const Scope *m, int call) {
+  int n = 0;
+  for (int i = 0; i < g_n_argov; i++) {
+    int node = g_argov_node[i], in = 0;
+    const int *par = node >= 0 ? codegen_node_parents(c, node) : NULL;
+    for (int p = node; par && p >= 0 && p < c->cg_parent_n && p != call && !in; p = par[p])
+      in = p == m->def_node || p == m->body;
+    if (!in) continue;
+    view_open_mark(VK_BIND_PARKED, i, node, NULL);
+    g_argov_node[i] = BIND_PARKED(node);
+    n++;
+  }
+  return n;
+}
+void view_bind_unpark(Compiler *c, int n) {
+  while (n-- > 0) view_pop(c, view_sp - 1);
+}
 
 unsigned view_epoch(void) { return view_epoch_n; }
 
@@ -369,6 +397,11 @@ static void view_close(int tok) {
   if (view_stack[tok].kind == VK_ARM) { g_arm = view_stack[tok].arm_saved; return; }
   if (view_stack[tok].kind == VK_FACE) { view_face = view_stack[tok].arm_saved.pd_skip; return; }
   if (view_stack[tok].kind == VK_STMT) { view_stmt = view_stack[tok].saved; return; }
+  if (view_stack[tok].kind == VK_BIND_PARKED) {
+    /* (a refusal may have dropped the binding itself: its slot is then free, or another's) */
+    if (g_argov_node[view_stack[tok].id] == BIND_PARKED(view_stack[tok].saved)) g_argov_node[view_stack[tok].id] = view_stack[tok].saved;
+    return;
+  }
   if (view_stack[tok].kind != VK_TARGET && view_stack[tok].kind != VK_CONVERSION && view_stack[tok].kind != VK_CONST_READ &&
       view_stack[tok].kind != VK_CLASS_IS && view_stack[tok].kind != VK_CALL_NIL_TESTED)
     view_write(view_stack[tok].c, view_stack[tok].kind, view_stack[tok].id, view_stack[tok].saved);

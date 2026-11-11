@@ -879,6 +879,8 @@ int emit_inline_call_x(Compiler *c, int id, Buf *b, int indent, int as_expr) {
      depth, before the body's) */
   if (g_plan_check) ucall_observe(c, id, mi, recv_class >= 0 ? recv_class : cm_class, 0);
   g_inline_depth++;
+  /* this copy's own nodes start unbound (view_bind_park) */
+  int parked = view_bind_park(c, m, id);
   int saved_nren = g_nren, saved_block = g_block_id;
   int saved_bnren = g_block_nren, saved_yfbn = g_yield_block_fallback_nren;
   const char *saved_bown = g_block_owner_param_name, *saved_yfbpn = g_yield_block_fallback_param_name;
@@ -1255,6 +1257,7 @@ int emit_inline_call_x(Compiler *c, int id, Buf *b, int indent, int as_expr) {
   g_yield_lowered_blk_fallback = saved_lbnf;
   g_current_scope_is_lowered = saved_low;
   g_lowered_blk_name = saved_lbn;
+  view_bind_unpark(c, parked);
   if (g_inline_depth > 0) g_inline_depth--;
   free(yprocbuf.p);
   return 1;

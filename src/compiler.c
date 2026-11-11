@@ -3237,8 +3237,8 @@ static const char *resolve_alias_side(Compiler *c, int class_id, const char *nam
              location`). Asked only once an alias is found, which most
              lookups never do. */
           for (int d = from; d >= 0 && d != cid; d = c->classes[d].parent)
-            if (sg == 1 ? comp_cmethod_in_class(c, d, name) >= 0 || sg_accessor_own(c, d, name)
-                        : comp_method_in_class(c, d, name) >= 0 || comp_is_reader(&c->classes[d], name)) return name;
+            if (call_target(c, -1, d, name, CT_OWN | (sg == 1 ? CT_CMETHOD : 0), NULL) >= 0 ||
+                (sg == 1 ? sg_accessor_own(c, d, name) : comp_is_reader(&c->classes[d], name))) return name;
           next = ci->alias_old[i];
           /* An alias of an INHERITED method names the body that was in effect
              where the alias appeared, so a redefinition in this class must not
@@ -3262,7 +3262,7 @@ static const char *resolve_alias_side(Compiler *c, int class_id, const char *nam
       /* on the class side, a module the class extends brings its instance
          aliases as the class's own -- behind the class methods the class
          defines itself, which its singleton class answers first */
-      if (sg == 1 && !next && comp_cmethod_in_class(c, cid, name) >= 0) break;
+      if (sg == 1 && !next && call_target(c, -1, cid, name, CT_OWN | CT_CMETHOD, NULL) >= 0) break;
       for (int e = 0; sg == 1 && !next && e < ci->nextended_mods; e++) {
         int m = ci->extended_mods[e];
         if (m < 0 || m >= c->nclasses) continue;
@@ -4277,7 +4277,6 @@ const PolyCand *comp_cmethod_candidates(Compiler *c, const char *name, int *n) {
    not another descendant walk per representation query. The candidate memo's
    stamps invalidate it too; a temporarily moved scope must answer fresh. */
 int comp_method_overridden(Compiler *c, int cid, const char *name, int cmeth) {
-  if (g_method_table_check) mtab_read(c, MT_METHOD_OVERRIDDEN, cid, cmeth ? MTS_CMETH : MTS_INST, name);
   if (cid < 0 || cid >= c->nclasses || !name) return 0;
   struct pc_entry *memo = !cmeth && !mv_n ? pc_memo(c, name) : NULL;
   if (memo) {
@@ -4293,7 +4292,7 @@ int comp_method_overridden(Compiler *c, int cid, const char *name, int cmeth) {
     int k = ds[i];
     if (k == cid) continue;
     if (!sp_streq(cmeth ? comp_resolve_cm_alias_at(c, k, name, NULL) : comp_resolve_alias(c, k, name), name) ||
-        (cmeth ? comp_cmethod_in_class(c, k, name) : comp_method_in_class(c, k, name)) >= 0) {
+        call_target(c, -1, k, name, CT_OWN | (cmeth ? CT_CMETHOD : 0), NULL) >= 0) {
       overridden = 1;
       break;
     }
@@ -5361,8 +5360,7 @@ const char *comp_super_shadow(Compiler *c, const Scope *s) {
   snprintf(key, sizeof key, "%s%s", m->is_cmethod ? "self." : "", m->name);
   const char *t = comp_prep_chain_target(c, m->class_id, key);
   if (m == s || !t) return t;
-  int (*in_class)(Compiler *, int, const char *) = m->is_cmethod ? comp_cmethod_in_class : comp_method_in_class;
-  int k = in_class(c, m->class_id, t);
+  int k = call_target(c, -1, m->class_id, t, CT_OWN | (m->is_cmethod ? CT_CMETHOD : 0), NULL);
   if (k < 0) return NULL;
   return c->scopes[k].pf_clone ? c->scopes[c->scopes[k].pf_clone - 1].name : t;
 }
@@ -5514,8 +5512,7 @@ int comp_super_parent(Compiler *c, int class_id, int is_cmethod) {
 int comp_scope_pf_clone(Compiler *c, const Scope *s) {
   if (s->pf_clone) return s->pf_clone - 1;
   if (!s->pf_by_name || !s->name) return -1;
-  int last = s->class_id < 0 ? comp_method_index(c, s->name)
-           : (s->is_cmethod ? comp_cmethod_in_class : comp_method_in_class)(c, s->class_id, s->name);
+  int last = call_target(c, -1, s->class_id, s->name, s->class_id < 0 ? CT_TOP : CT_OWN | (s->is_cmethod ? CT_CMETHOD : 0), NULL);
   return last >= 0 && last != s->idx && c->scopes[last].pf_clone ? c->scopes[last].pf_clone - 1 : -1;
 }
 
@@ -5833,8 +5830,7 @@ const char *comp_super_name(Compiler *c, int parent, const Scope *s) {
      it yields, else its plain method. Asking the chain for the clone found a
      grandparent's and skipped a parent that overrides without yielding
      (CodeRabbit on #4996). */
-  int bm = s->is_cmethod ? comp_cmethod_in_chain(c, parent, base, NULL)
-                         : comp_method_in_chain(c, parent, base, NULL);
+  int bm = call_target(c, -1, parent, base, CT_REACH | (s->is_cmethod ? CT_CMETHOD : 0), NULL);
   return bm >= 0 && c->scopes[bm].pf_clone ? name : base;
 }
 
@@ -5998,7 +5994,7 @@ int allocate_super_reaches_class(Compiler *c, int id) {
   if (comp_class_is_module(c, &c->classes[cid]) || class_is_exc_subclass(c, cid) ||
       c->classes[cid].is_native_class || class_builtin_parent(c, cid) != -116) return 0;   /* (Object) */
   int p = comp_super_parent(c, cid, 1);
-  if (p >= 0 && comp_cmethod_in_chain(c, p, "allocate", NULL) >= 0) return 0;
+  if (p >= 0 && call_target(c, id, p, "allocate", CT_CMETHOD | CT_REACH, NULL) >= 0) return 0;
   /* nor one a module the class extends defines (the super reaches it) */
   for (int i = 1; i < c->nscopes; i++)
     if (c->scopes[i].is_cmethod && c->scopes[i].class_id == cid && c->scopes[i].origin_module_ci > 0 &&

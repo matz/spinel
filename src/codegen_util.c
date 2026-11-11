@@ -6649,7 +6649,7 @@ int exc_has_user_msg_override(Compiler *c) {
     for (int i = 0; i < c->nclasses; i++) {
       if (!class_is_exc_reopen(c, i)) continue;
       for (int k = 0; k < 2; k++) {
-        int mi = comp_method_in_chain(c, i, k ? "to_s" : "message", NULL);
+        int mi = call_target(c, -1, i, k ? "to_s" : "message", 0, NULL);
         if (mi >= 0 && c->scopes[mi].class_id == i && (TyKind)c->scopes[mi].ret == TY_STRING) return 1;
       }
     }
@@ -6658,10 +6658,10 @@ int exc_has_user_msg_override(Compiler *c) {
     /* Only a string-returning override is dispatched (see codegen_program),
        so gate on TY_STRING to match -- otherwise a non-string override would
        route every exception query through an empty dispatcher for nothing. */
-    int mi_msg = comp_method_in_chain(c, i, "message", NULL);
+    int mi_msg = call_target(c, -1, i, "message", 0, NULL);
     if (mi_msg >= 0 && (TyKind)c->scopes[mi_msg].ret == TY_STRING)
       return 1;
-    int mi_tos = comp_method_in_chain(c, i, "to_s", NULL);
+    int mi_tos = call_target(c, -1, i, "to_s", 0, NULL);
     if (mi_tos >= 0 && (TyKind)c->scopes[mi_tos].ret == TY_STRING)
       return 1;
   }
@@ -6703,7 +6703,7 @@ int exc_has_nonstring_msg_override(Compiler *c) {
   for (int i = 0; i < c->nclasses; i++) {
     if (!class_is_exc_subclass(c, i)) continue;
     for (int k = 0; k < 2; k++) {
-      int mi = comp_method_in_chain(c, i, k ? "to_s" : "message", NULL);
+      int mi = call_target(c, -1, i, k ? "to_s" : "message", 0, NULL);
       if (mi < 0) continue;
       TyKind rk = (TyKind)c->scopes[mi].ret;
       if (rk != TY_STRING && rk != TY_UNKNOWN) return 1;

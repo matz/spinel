@@ -131,7 +131,6 @@ static const char *prim_name(int prim) {
   case MT_INCLUDED_METHOD_INDEX: return "comp_included_method_index";
   case MT_READER_IN_CHAIN: return "comp_reader_in_chain";
   case MT_WRITER_IN_CHAIN: return "comp_writer_in_chain";
-  case MT_METHOD_OVERRIDDEN: return "comp_method_overridden";
   case MT_IS_UNDEFFED_IN_CHAIN: return "comp_is_undeffed_in_chain";
   case MT_METHOD_VIS_IN_CHAIN: return "comp_method_vis_in_chain";
   }

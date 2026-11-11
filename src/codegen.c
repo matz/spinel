@@ -11729,7 +11729,7 @@ int exc_reopen_definers(Compiler *c, const char *mname, int *out, int max) {
   if (!g_excf_any || !g_excf_reopen) return 0;
   for (int i = 0; i < g_excf_nreopen && n < max; i++) {
     int k = g_excf_reopen[i];
-    int mi = comp_method_in_chain(c, k, mname, NULL);
+    int mi = call_target(c, -1, k, mname, 0, NULL);
     if (mi < 0 || c->scopes[mi].class_id != k) continue;
     out[n++] = k;
   }
@@ -12539,7 +12539,7 @@ static int struct_member_owns(Compiler *c, int cid, const char *nm) {
 }
 /* Does the program (a def) or a member own class cid's inspect or to_s? */
 static int struct_display_owned(Compiler *c, int cid, const char *nm) {
-  return comp_method_in_chain(c, cid, nm, NULL) >= 0 || struct_member_owns(c, cid, nm);
+  return call_target(c, -1, cid, nm, 0, NULL) >= 0 || struct_member_owns(c, cid, nm);
 }
 /* The sp_<C name>_<fn> that answers class cid's default text: inspect when
    nothing owns it, else to_s when nothing owns that, else a copy of its own
@@ -16835,7 +16835,7 @@ void emit_super(Compiler *c, int id, Buf *b) {
           buf_printf(b, "if (_xi%d < 0) sp_raise_cls(\"NoMethodError\", \"super: no superclass method '%s' for an instance of %s\"); ",
                      pk, uname, scn);
         for (int q = 0; q < xn; q++) {
-          int xm = comp_method_in_chain(c, xr[q], uname, NULL);
+          int xm = call_target(c, -1, xr[q], uname, 0, NULL);
           if (q != xn - 1) buf_printf(b, "_xi%d == %d ? ", pk, q);
           buf_printf(b, "%s((sp_Exception *)%s", mc_method(c, &c->scopes[xm]), g_self);
           if (ty_k == NK_ForwardingSuperNode) emit_zsuper_args(c, s, &c->scopes[xm], ", ", b);

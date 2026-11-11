@@ -22850,14 +22850,18 @@ static void emit_stmt_node(Compiler *c, int id, Buf *b, int indent) {
         ivt2 == TY_FIBER || ivt2 == TY_THREAD || ivt2 == TY_QUEUE || ivt2 == TY_MUTEX || ivt2 == TY_CONDVAR || ivt2 == TY_PROC || ivt2 == TY_IO ||
         ivt2 == TY_MATCHDATA || ivt2 == TY_EXCEPTION || ivt2 == TY_REGEX)
       snprintf(cond2, sizeof cond2, "%s%s", is_or ? "!" : "", ref2);
+    /* the store into an object's own slot is a write like `@x = v`'s: a frozen receiver refuses it, where it runs */
+    int obj_slot = sc2 >= 0 && strncmp(ref2, "civ_", 4) != 0;
     if (cond2[0]) {
       emit_indent(b, indent);
       buf_printf(b, "if (%s) { ", cond2);
       if (vpre.p) buf_puts(b, vpre.p);
+      if (obj_slot) emit_frozen_obj_guard(c, sc2, g_self ? g_self : "self", b);
       buf_printf(b, "%s = %s; }\n", ref2, vval.p ? vval.p : "");
     }
     else if (!is_or) {
       emit_indent(b, indent);
+      if (obj_slot) emit_frozen_obj_guard(c, sc2, g_self ? g_self : "self", b);
       buf_printf(b, "%s = ", ref2);
       emit_coerce(c, v, ivt2, CO_HOLD, "an instance variable's `||=` or `&&=`", b); buf_puts(b, ";\n");
     }

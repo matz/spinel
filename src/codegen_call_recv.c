@@ -3756,8 +3756,12 @@ static int emit_typed_array_call(Compiler *c, int id, Buf *b, const NodeTable *n
          the store begun, its setup lines landed inside the call. */
       Repr vr = repr_of(c, fbb[fbn - 1]);
       TyKind vt = vr.as_ty;
+      /* A `next` value is boxed too: the slot typed from the tail alone
+         took `next "s"` beside an Integer tail as an sp_int, and the C did
+         not build. */
       IterStep st; emit_iter_step_open(c, fblk, sp_streq(fk, "Poly") && (vr.kind == RK_BOXED || vr.untyped ||
-        ((vr.strbuf_src != RS_NONE || strbuf_value_carries(c, fbb[fbn - 1])))), g_indent + 1, &st);
+        ((vr.strbuf_src != RS_NONE || strbuf_value_carries(c, fbb[fbn - 1]))) ||
+        block_next_value_ty(c, fbody) != TY_UNKNOWN), g_indent + 1, &st);
       Buf vb; memset(&vb, 0, sizeof vb); vt = emit_iter_step_tail(c, &st, &vb);
       emit_indent(g_pre, g_indent + 1);
       /* A value of a kind the typed array cannot hold, which the analysis

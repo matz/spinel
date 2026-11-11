@@ -520,7 +520,7 @@ void expand_struct_forwarding_super(Compiler *c) {
     int si = id < c->node_cap ? c->nscope[id] : -1;
     if (si <= 0 || si >= c->nscopes) continue;
     Scope *s = &c->scopes[si];
-    if (s->is_cmethod || s->class_id < 0 || !s->name || !sp_streq(s->name, "initialize") ||
+    if (s->is_cmethod || s->class_id < 0 || !s->name || !is_initialize_name(s->name) ||
         !scope_is_forwarding(c, s)) continue;
     ClassInfo *cls = &c->classes[s->class_id];
     if (!cls->is_struct && !cls->is_data) continue;

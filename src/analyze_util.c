@@ -3365,14 +3365,14 @@ static int yvt_reaches(Compiler *c, int cid, int mi) {
      from all of them, the clone's copies too. */
   Scope *m = &c->scopes[mi];
   if (m->ctor_cycle && m->class_id >= 0 && !c->classes[m->class_id].is_struct &&
-      sp_streq(comp_scope_user_name(m), "initialize") && ctor_site_on_cycle(c, cid, mi))
+      is_initialize_name(comp_scope_user_name(m)) && ctor_site_on_cycle(c, cid, mi))
     return 0;
   if (yvt_callee_index(c, cid) == mi) return 1;
   /* the rest is a `new` reaching an initialize: the method's side first,
      before the site's fields are read (every site asks this of every
      yielding method) */
   const char *mn = c->scopes[mi].name;
-  if (!mn || !sp_streq(mn, "initialize") || !c->scopes[mi].yields) return 0;
+  if (!mn || !is_initialize_name(mn) || !c->scopes[mi].yields) return 0;
   const NodeTable *nt = c->nt;
   const char *cn = nt_str(nt, cid, "name");
   int crecv = nt_ref(nt, cid, "receiver");

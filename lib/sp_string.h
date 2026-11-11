@@ -19,13 +19,8 @@ int sp_str_ascii_only(const char *s);
    zeroed, so every other handle starts at 0 with no store. */
 typedef struct sp_String_s sp_String;   /* the struct is in sp_types.h, beside sp_strelem */
 
-/* A generated frozen literal owns its handle slot. The tagged header link
-   distinguishes that slot from the aligned links in the string heap. */
-typedef struct sp_StringLiteral {
-  sp_String *value;
-  struct sp_StringLiteral *next;
-} sp_StringLiteral;
-static inline sp_StringLiteral *sp_String_literal_slot(const char *s) {
+/* The handle of a frozen literal's bytes s, or NULL for any other bytes */
+static inline sp_String *sp_String_of_literal(const char *s) {
   if (!s || ((const unsigned char *)s)[-1] != 0xf1) return NULL;
   const sp_str_hdr *h = ((const sp_str_hdr *)(s - 1)) - 1;
   /* a slab string's link is never written (its chunk's bitmaps hold what
@@ -33,20 +28,7 @@ static inline sp_StringLiteral *sp_String_literal_slot(const char *s) {
      word there, which may be odd */
   if (sp_slab_owns(h)) return NULL;
   uintptr_t p = (uintptr_t)h->next;
-  return p & 1 ? (sp_StringLiteral *)(p - 1) : NULL;
-}
-sp_String *sp_String_literal_handle(sp_StringLiteral *slot, const char *s);
-/* The handle of a literal the generated code names with its slot (_fzl_N):
-   the slot read directly, where sp_String_new_shared asks the marks, the
-   header and the slab first, about 20 instructions a store (`@tag = "n"`
-   in each bm_gcbench Node) */
-static inline sp_String *sp_String_literal_of(sp_StringLiteral *slot, const char *s) {
-  sp_String *h = SP_ATOMIC_LOAD(&slot->value, __ATOMIC_ACQUIRE);
-  return h ? h : sp_String_literal_handle(slot, s);
-}
-void sp_String_mark_literals(void);
-static inline const void *sp_String_identity(sp_String *h) {
-  return h && sp_String_literal_slot(h->data) ? (const void *)h->data : (const void *)h;
+  return p & 1 ? (sp_String *)(p - 1) : NULL;
 }
 
 /* Per-mutable-string freeze flag rides in the GC header alongside `marked`. */
@@ -226,11 +208,11 @@ static inline void sp_String_append_bin(sp_String*s,const char*t){
    layout, misreads as frozen; cf. the #282 marker-probe lesson). */
 /* Symbol#to_s and #id2name: the symbol's name, frozen (lib/sp_string.c) */
 const char*sp_sym_to_s_frozen(sp_sym id);
-/* With literal slots, the handle a literal or a live payload already has is
-   found inline, and only a String that needs a new handle calls the
-   constructor below: its frame (six saved registers and the stack guard)
-   cost a literal's store about 45 instructions (`@e = "c"` in a by-value
-   object's initialize, bm_object_new_init). */
+/* The handle a literal or a live payload already has is found inline,
+   and only a String that needs a new handle calls the constructor below:
+   its frame (six saved registers and the stack guard) cost a literal's
+   store about 45 instructions (`@e = "c"` in a by-value object's
+   initialize, bm_object_new_init). */
 /* U2 (string-u2-design.md): the handle a heap String was born inside
    (sp_str_alloc_born), or NULL for one that was not: the header's link names
    the handle right in front of it */
@@ -253,7 +235,7 @@ static inline sp_String*sp_String_adopt(const char*s,sp_String*o){
   return o;
 }
 /* A static of one byte or none (0xff: the character table s[i] answers
-   from, and the empty String) has no header, mark or literal slot to ask:
+   from, and the empty String) has no header, mark or literal object to ask:
    its handle is laid out directly, as sp_String_new_inline_len would lay it
    out. Taking a character into a local made one through the general
    constructor, about 200 instructions of the 300 bm_json_parse spent per
@@ -280,10 +262,10 @@ static inline sp_String*sp_String_new_shared(const char*s){
   if(mk==0xfd){sp_String*o=(sp_String*)(void*)((sp_str_hdr*)sp_fd_base(s))->next;if(o)return o;}
   if(mk==0xfe||mk==0xfa){sp_String*o=sp_str_born_owner(s);if(o)return sp_String_adopt(s,o);}
   if(mk==0xff&&(!s[0]||!s[1]))return sp_String_new_static1((unsigned char)s[0]);
-  if(mk==0xf1){sp_StringLiteral*l=sp_String_literal_slot(s);if(l){sp_String*lh=SP_ATOMIC_LOAD(&l->value,__ATOMIC_ACQUIRE);if(lh)return lh;}
+  if(mk==0xf1){sp_String*lh=sp_String_of_literal(s);if(lh)return lh;
     /* (a heap String .freeze made 0xf1 is no literal: its handle, when it
        was born in one) */
-    else{sp_String*o=sp_str_born_owner(s);if(o)return sp_String_adopt(s,o);}
+    sp_String*o=sp_str_born_owner(s);if(o)return sp_String_adopt(s,o);
   }
   return sp_String_new_shared_make(s);
 }
@@ -315,10 +297,6 @@ static SP_NOINLINE sp_String*sp_String_new_shared_make(const char*s){
   int bin=sp_str_is_binary(s);
   int frozen=sp_str_is_frozen_val(s);
   int mk=((const unsigned char*)s)[-1];
-  /* (one representation: the runtime takes a literal's bytes into an
-     element itself, sp_strelem_of, so its own copy asks the slot too) */
-  sp_StringLiteral *literal = sp_String_literal_slot(s);
-  if (literal) { sp_String *lh = SP_ATOMIC_LOAD(&literal->value, __ATOMIC_ACQUIRE); return lh ? lh : sp_String_literal_handle(literal, s); }
   int64_t len=(int64_t)sp_str_byte_len(s);
   /* one representation: every String a slot takes becomes a handle, so the
      payload is laid out inside the object when it fits (no malloc, no
@@ -355,9 +333,9 @@ static inline sp_String*sp_String_new_fresh(const char*s){
   int frozen=sp_str_is_frozen_val(s);
   int mk=((const unsigned char*)s)[-1];
   /* (one representation: the runtime takes a literal's bytes into an
-     element itself, sp_strelem_of, so its own copy asks the slot too) */
-  sp_StringLiteral *literal = sp_String_literal_slot(s);
-  if (literal) { sp_String *lh = SP_ATOMIC_LOAD(&literal->value, __ATOMIC_ACQUIRE); return lh ? lh : sp_String_literal_handle(literal, s); }
+     element itself, sp_strelem_of, so its own copy is the literal too) */
+  sp_String *lh = sp_String_of_literal(s);
+  if (lh) return lh;
   int64_t len=(int64_t)sp_str_byte_len(s);
   sp_String*r=sp_String_new_inline_len(s,len);
   if(bin){r->binary=1;sp_fd_publish(r);}

@@ -1136,16 +1136,28 @@ double sp_lgamma_pos(double x) {  /* x > 0 */
 
 sp_PolyArray *sp_math_lgamma(double x) {
   int sign = 1; double v;
+  /* -Infinity is outside lgamma's domain and raises, as CRuby's does for it
+     and for no other argument; the message names the function unquoted, like
+     the other Math.* ones. +Infinity is the limit gamma grows to: the series
+     below would compute inf - inf there and answer NaN. */
+  if (x == -INFINITY)
+    sp_raise_cls("Math::DomainError", "Numerical argument is out of domain - lgamma");
   if (x > 0.0) {
-    v = sp_lgamma_pos(x);
+    v = isinf(x) ? INFINITY : sp_lgamma_pos(x);
   }
   else if (x == floor(x)) {
     /* pole at every non-positive integer -- detect it directly, since
        sin(M_PI * x) is not exactly 0 there in floating point (#3016).
        gamma approaches -inf from the -0 side, so -0.0 alone reports sign
-       -1 (CRuby/C99 lgamma_r) (#3116). */
+       -1 (CRuby/C99 lgamma_r) (#3116). The sign at a pole is unspecified
+       by C99, so CRuby's answer follows its libm: glibc says -1 at every
+       negative integer and macOS says 1. Spinel answers what Ruby's own
+       documentation lists (lgamma(-1.0) # => [Infinity, -1], and -2.0,
+       -3.0, -4.0 alike), which is the glibc answer the CI runners give;
+       Ruby decides +-0.0 itself, so only +0.0 keeps 1. ruby/spec leaves the
+       sign at -1 unchecked. */
     v = INFINITY;
-    if (x == 0.0 && signbit(x)) sign = -1;
+    sign = (x == 0.0 && !signbit(x)) ? 1 : -1;
   }
   else {
     double s = sin(M_PI * x);

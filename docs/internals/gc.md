@@ -114,6 +114,29 @@ reports the root group (`phase=root|fibers|globals|scan`) and the object before
 invoking anything. New tests for this family assert under the flag; without it
 they pass against the broken build.
 
+**One kind of GC object is static.** A frozen String literal is one
+`sp_StringLiteral` (`lib/sp_types.h`): a GC header and the handle, defined
+statically per literal the unit names (`fzl_emit_defs`), and by the runtime
+for `nil.to_s`, `true.to_s` and `false.to_s`. It reaches `sp_gc_mark` through
+the last row of the table, as any GC object does, and its header is a real one,
+written by `SP_STRING_LITERAL_INIT`. The collector never allocated it, so no
+list holds it and no sweep, finalizer or recycle reaches it. It holds nothing
+collectable either, since its bytes carry `0xf1`. Its header says the rest:
+
+- `next` points at the header itself, which no listed header does. That is how
+  the `SPINEL_GC_VERIFY` registry check (`sp_gc_obj_registered`) recognises it.
+- `old`: a minor mark returns at it, and a major mark stamps it and stops, since
+  it has no `scan`. This saves the minor mark.
+- `pinned`: it takes no entry in the sticky remembered set.
+- `frozen` is the String's frozen bit. Its size is 0, so it counts nothing to
+  the live bytes.
+
+A store of it takes no write barrier (`wb_value_never_young`, `src/codegen.c`).
+The barrier exists so that a minor mark finds a young object an old holder now
+points at, and an object that is never freed and holds nothing needs no mark to
+survive. The tests pin the self-link: without it, the verifier aborts at the
+first literal it marks. They do not pin `old` or `pinned`, which only save work.
+
 ## Marking
 
 The mark phase is **full by default**. `sp_gc_mark_all` walks every root every

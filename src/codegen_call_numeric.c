@@ -189,8 +189,8 @@ int emit_call_bigint_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, cons
     if (sp_streq(name, "class") && argc == 0) {
       /* NULL is the slot's nil */
       if (node_may_be_null_nil(c, recv))
-        buf_printf(b, "((sp_Class){(%s) ? -100 : %d})", r, builtin_class_id("NilClass"));
-      else buf_printf(b, "((void)(%s), ((sp_Class){-100}))", r);  /* Integer */
+        buf_printf(b, "((sp_Class){(%s) ? %d : %d})", r, cv_builtin_class_id(c, "Integer"), cv_builtin_class_id(c, "NilClass"));
+      else buf_printf(b, "((void)(%s), ((sp_Class){%d}))", r, cv_builtin_class_id(c, "Integer"));
       free(rs.p); return 1;
     }
     /* coerce(n): [n, self], both boxed (#3129), for an Integer n. Any other

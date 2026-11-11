@@ -188,12 +188,12 @@ and coercions; not every handwritten argument or element store uses it.
 - **Strings (#9258).** A String is one object, as in CRuby: every String
   slot holds its handle, so a change made through one name is seen through
   every other name that holds the same String (`dup`, `clone` and
-  `String.new` make a new one). It is the only representation, and
-  `--share-strings` is accepted and does nothing. The share analysis that
-  chose between two representations is gone; what is left of the String plan
-  and the byte routes (`share_plan_*`, `strbuf_*`, `emit_strbuf_*`) is being
-  removed, so a change does not add to them. A program that answers
-  differently from CRuby is welcome as a new issue, with a reduction.
+  `String.new` make a new one). It is the only representation. The share
+  analysis that chose between two representations is gone; what is left of
+  the String plan and the byte routes (`share_plan_*`, `strbuf_*`,
+  `emit_strbuf_*`) is being removed, so a change does not add to them. A
+  program that answers differently from CRuby is welcome as a new issue,
+  with a reduction.
 
 ## Stacked pull requests
 

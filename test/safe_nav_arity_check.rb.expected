@@ -1,0 +1,56 @@
+ArgumentError: wrong number of arguments (given 1, expected 0)
+ArgumentError: wrong number of arguments (given 1, expected 0)
+ArgumentError: wrong number of arguments (given 1, expected 0)
+nil
+ArgumentError: wrong number of arguments (given 1, expected 0)
+"l"
+ArgumentError: wrong number of arguments (given 0, expected 1..2)
+ArgumentError: wrong number of arguments (given 0, expected 1..2)
+{}
+nil
+ArgumentError: wrong number of arguments (given 0, expected 1)
+ArgumentError: wrong number of arguments (given 1, expected 0)
+ArgumentError: wrong number of arguments (given 0, expected 1..2)
+"b"
+"ABC"
+ArgumentError: wrong number of arguments (given 1, expected 0)
+ArgumentError: wrong number of arguments (given 2, expected 0..1)
+ArgumentError: wrong number of arguments (given 1, expected 0)
+ArgumentError: wrong number of arguments (given 1, expected 0)
+ArgumentError: wrong number of arguments (given 0, expected 1..2)
+nil
+ArgumentError: wrong number of arguments (given 1, expected 0)
+5
+ArgumentError: wrong number of arguments (given 2, expected 0..1)
+ArgumentError: wrong number of arguments (given 0, expected 1..2)
+ArgumentError: wrong number of arguments (given 2, expected 0..1)
+nil
+nil
+nil
+nil
+3
+[1, 2]
+5
+ArgumentError: wrong number of arguments (given 1, expected 0)
+ArgumentError: wrong number of arguments (given 1, expected 0)
+[2, 3, 4]
+[1, 2, 3]
+nil
+ArgumentError: wrong number of arguments (given 0, expected 1)
+ArgumentError: wrong number of arguments (given 2, expected 1)
+ArgumentError: wrong number of arguments (given 1, expected 0)
+1
+nil
+ArgumentError: wrong number of arguments (given 0, expected 1)
+r
+ArgumentError: wrong number of arguments (given 1, expected 0)
+ra
+ArgumentError: wrong number of arguments (given 2, expected 0..1)
+arg
+ArgumentError: wrong number of arguments (given 1, expected 0)
+arg2
+ArgumentError: wrong number of arguments (given 1, expected 0)
+arg
+ArgumentError: wrong number of arguments (given 1, expected 0)
+nil
+nil

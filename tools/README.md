@@ -710,6 +710,125 @@ calls): repr_diff reports `ivar Holder @buf: c=const char * -> c=sp_String
 *`, c_costs a new snapshot copy inside the loop of `sp_Holder_run`, and
 alloc_diff the bytes going from 1,000,091 to 202,000,123.
 
+## emit_trace
+
+Which emitters produced a call's C, and which arm of the call chain took
+it. A call goes through `emit_call_body_ordinary`, a chain of over a
+hundred `if (arm) return;` tests, and several arms write near-identical C,
+so the output does not say which one ran. `make build/spinel-trace` builds
+the compiler a second time with `-finstrument-functions` and
+`-DSP_EMIT_TRACE` (as `build/spinel-work` is built with `-DSP_WORK_COUNT`):
+the hooks in `src/emit_trace.c` write every function entered during code
+generation to the file `SPINEL_EMIT_TRACE` names, with a marker at each
+call and statement. The normal compiler has none of it. The tool, a CRuby
+script, runs that build on one program and prints the trees of one line, or
+of every line:
+
+```
+ruby tools/emit_trace.rb [--prefix P] [--all] PROG.rb [LINE]
+ruby tools/emit_trace.rb --analysis [--prefix P] [--all] PROG.rb LINE
+```
+
+```
+poly.rb:9:7  call speak  `pet.speak`
+  emit_call_body
+    emit_cext_call
+    emit_missing_call
+      cplan_missing
+    emit_call_body_ordinary
+      ...
+      emit_poly_builtin_method
+        repr_of
+      emit_poly_method_dispatch                 <- took the call
+        emit_or_take_back
+          emit_range_literal_cover
+        repr_of (x2)
+        cplan_poly_arms
+        ...
+```
+
+The arms above the mark were tried and declined. The word after `call` is
+the name the compiler emits, which a rewrite may have changed (a `send`
+with a literal name shows the method it names); after `stmt` it is the
+node's type, and after `tail`, the last statement of a method that answers
+it. A call in statement position can be written by `emit_stmt`'s own chain
+before it reaches `emit_call_body`: it then has no tree of its own, and its
+statement's tree shows the emitters.
+`| grep -E '^[^ ]|took the call'` keeps the heads and the arms.
+
+The compiler emits some nodes more than once: an arm may emit the call as a
+trial and drop the text when it declines (`emit_operands_in_order` emits the
+call again with its operands bound), and a method spliced in at several
+calls is emitted at each. Every emission has a tree. The trace records what
+ran, not which text was kept, so the head of a tree emitted inside a call
+names that call and the arm it was emitted in, as
+`(in emit_operands_in_order of 61:9 call +)`: when that arm is above the
+mark in the enclosing call's tree, it declined, and the emission was its
+trial. The tool exits 1 when the compile fails, after printing what was
+emitted up to there.
+
+`--analysis PROG.rb LINE` asks the question before that one: why the
+emitter sees a node as it does. For each node of the line it prints what the
+analysis decided, in the order it did: the class set (the `cf_` rules
+`cf_node` ran for the node in each walk, and the set each walk and their
+meet left), each change of the type, and the nil fact. A change comes with
+its pass (the name the analysis driver gives `nt_set_pass`), the fixpoint
+round, the functions it was asked from, and the tree under `infer_type` or
+`nf_expr`:
+
+```
+poly.rb:9:7  speak  `pet.speak`
+  class set: Cat, Dog +builtin  (closed, open, unified, meet)
+  class set rules
+    pass an_cls_facts closed rounds 0-5
+    cf_node
+      cf_call
+        ...
+  type: unknown -> string
+    pass infer_write_types round 2
+    from main > codegen_program > analyze_program > an_phase_infer_fixpoint > infer_write_types > local_write_ty
+    infer_type
+      infer_uncached
+        infer_call
+          infer_call_inner
+            infer_type  [LocalVariableReadNode 9:7]
+            ...
+            infer_poly_call
+              an_user_recv_defines_method (x16)
+                ...
+            infer_poly_operand_call             <- last rule called
+              ...
+      = unknown -> string
+  nil fact: not nil
+    ...
+```
+
+"Last rule called" is the last `infer_` (or `nf_`) function the inference
+called before it returned. `infer_uncached`, `infer_call_inner` and
+`nf_expr_uncached` are mostly chains of `if (rule) return`, so it is usually
+the rule that answered; what the tree shows after the mark is the chain's
+own code, which may have answered instead, and the mark is on the chain
+itself where that code went on to another node's inference. An
+`infer_type` with a node in brackets computed that node inside this one, and
+is one line here: a node of the same line has its own tree, and another
+line's is that line's to ask about. Without a node it computed nothing: it
+answered from its memo, or from the guard against asking itself. A type a
+pass writes itself (a widening, the re-narrow's clear) shows the pass and
+the functions it was written from. An inference that changed nothing is not
+shown; one that repeats the one before it is shown once with its rounds, a
+tree printed earlier is referred to, and the rounds of one class walk are
+shown as one tree. The class sets are solved
+over the whole program, so a set's tree is the rules that ran for the node,
+not the flow from elsewhere that grew it (`SPINEL_CLS_FLOW=why` names the
+rule that made a set every class).
+
+The trace build takes about twice the normal compile. With a LINE the tool
+has the hooks record only that line's calls and statements
+(`SPINEL_EMIT_TRACE_LINE`), a trace under a megabyte; without one the trace
+is large, 174 MB for the 323 lines of `benchmark/bm_ao_render.rb`. It is
+for one program at a time. `make emit-trace-test` keeps it building,
+outside `make test`.
+
 ## Adding a tool
 
 Drop `tools/<name>.rb` (subset Ruby, `require_relative "tool_common"`
@@ -820,6 +939,7 @@ file, no compiler, a bad option). This is a contract.
 | `fetch-slot` | a one-argument Array#fetch reads a plain rooted local with an inert integer index (a literal, local or builtin local-plus-literal); denied, the receiver temp is rooted |
 | `push-slot` | the temp holding the receiver of `a << x` (and of unshift, prepend) takes no root, the receiver's own slot keeping it; denied, it is rooted |
 | `aon-get` | an index read whose receiver is proved a poly array or nil skips the dispatch on its type; denied, it dispatches |
+| `hc-cobound` | a loop proved over its index reads every other array at that index in place, behind one test ahead of the loop that each reaches as far as the loop runs with no nil below (the loop is emitted twice); denied, the loop is emitted once, every such read checked |
 | `index-sum` | an index `x + c` or `x - c` read or stored in a loop that holds the array's header is summed wrapped, its checked sum taken again only where the bounds compare fails (#8782); denied, the sum is checked first |
 
 Not keyed, because the other answer is not simply the slower one: the

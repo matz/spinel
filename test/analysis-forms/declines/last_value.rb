@@ -1,5 +1,6 @@
-# The class-body macro form declines: a call that ends the class body, whose
-# value the macro's last statement does not give.
+# The class-body macro form declines: a call that ends an arm of a
+# conditional ending the class body, whose value the macro's last
+# statement does not give.
 class Base
   def self.mk(n)
     if n == :a
@@ -10,6 +11,8 @@ class Base
   end
 end
 class Foo < Base
-  mk :a
+  if true
+    mk :a
+  end
 end
 p Foo.new.a

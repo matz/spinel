@@ -63,7 +63,11 @@ int emit_poly_concat_splat(Compiler *c, int t, int splat, Buf *b) {
    known only at run time. Gather them (a splat through sp_splat_to_array),
    print each one's inspect, and answer what Kernel#p does: nil for none, the
    argument for one, the array for more. */
-static int emit_p_splat_value(Compiler *c, int argc, const int *argv, Buf *b) {
+/* the inspect a value-form p or pp prints with (pp_leaves_array_inspect) */
+static const char *p_inspect_fn(Compiler *c, const char *name) {
+  return pp_leaves_array_inspect(c, name) ? "sp_pp_inspect" : "sp_poly_inspect";
+}
+static int emit_p_splat_value(Compiler *c, const char *name, int argc, const int *argv, Buf *b) {
   const NodeTable *nt = c->nt;
   int t = ++g_tmp;
   buf_printf(b, "({ sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d); ", t, t);
@@ -76,9 +80,9 @@ static int emit_p_splat_value(Compiler *c, int argc, const int *argv, Buf *b) {
     }
   }
   buf_printf(b, "for (sp_int _i%d = 0; _i%d < _t%d->len; _i%d++) { "
-                "sp_puts_line(sp_poly_inspect(_t%d->data[_i%d])); } "
+                "sp_puts_line(%s(_t%d->data[_i%d])); } "
                 "_t%d->len == 0 ? sp_box_nil() : _t%d->len == 1 ? _t%d->data[0] : sp_box_poly_array(_t%d); })",
-             t, t, t, t, t, t, t, t, t, t);
+             t, t, t, t, p_inspect_fn(c, name), t, t, t, t, t, t);
   return 1;
 }
 
@@ -96,9 +100,36 @@ static int emit_kconv_obj_nil(Compiler *c, int arg, int ci, const char *m1, cons
   return 1;
 }
 
+/* See codegen_internal.h. */
+int emit_dispatch_row_answer(Compiler *c, int id, const int *atmp, int natmp, TyKind ret, Buf *b) {
+  int argc = 0;
+  const int *argv = call_args(c->nt, id, &argc);
+  const char *name = nt_str(c->nt, id, "name");
+  int ov = g_n_argov;
+  if (atmp)
+    for (int a = 0; a < argc && a < natmp; a++)
+      if (subtree_has_side_effect(c, argv[a])) view_bind(argv[a], "_t%d", atmp[a]);
+  Buf rb; memset(&rb, 0, sizeof rb);
+  const BuiltinOp *op = name ? bop_find(BOP_KERNEL, name, argc, nt_ref(c->nt, id, "block") >= 0) : NULL;
+  int ok = op && emit_builtin_op_arm_text(c, id, -1, BOP_KERNEL, name, NULL, 0, &rb);   /* (one arm of a dispatch: the node answers what the dispatch does) */
+  view_unbind(ov);
+  if (ok && ret == TY_POLY) emit_boxed_text(c, op->result, rb.p ? rb.p : "", b);
+  else if (ok) buf_puts(b, rb.p ? rb.p : "");
+  free(rb.p);
+  return ok;
+}
+
 int emit_call_kernel_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc, const int *argv) {
   /* a receiverless builtin the rows name (BOP_KERNEL): the desugared ENV snapshot */
-  if (recv < 0 && cplan_kernel_row(c, id, name) && emit_builtin_op(c, id, -1, BOP_KERNEL, name, b)) return 1;
+  if (cplan_kernel_row(c, id, name)) {
+    /* (a send's explicit receiver runs first, for its effect) */
+    int ext = recv >= 0 && nt_kind(nt, recv) != NK_SelfNode;
+    if (ext) { buf_puts(b, "((void)("); emit_expr_for_effect(c, recv, b); buf_puts(b, "), "); }
+    if (emit_builtin_op(c, id, -1, BOP_KERNEL, name, b)) {
+      if (ext) buf_puts(b, ")");
+      return 1;
+    }
+  }
   /* Kernel's private select is IO.select, after user methods (Kernel.select
      reaches here bare: desugar_kernel_recv drops the receiver). */
   if (recv < 0 && sp_streq(name, "select") && argc >= 1 && argc <= 4 &&
@@ -966,7 +997,7 @@ int emit_call_kernel_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, cons
      value is boxed once, printed through the poly inspect (which consults
      the user-object hook), and unboxed back to the static type. */
   if (recv < 0 && !bare_call_class_owned(c, id) && (is_inspect_print(name)) && nt_ref(nt, id, "block") < 0 &&
-      nt_argv_has_splat(nt, argv, argc)) return emit_p_splat_value(c, argc, argv, b);
+      nt_argv_has_splat(nt, argv, argc)) return emit_p_splat_value(c, name, argc, argv, b);
   /* p(a, b, ...) as a value: prints each argument's inspect, returns the
      argument array. */
   if (recv < 0 && !bare_call_class_owned(c, id) && (is_inspect_print(name)) && argc >= 2 && nt_ref(nt, id, "block") < 0) {
@@ -978,15 +1009,15 @@ int emit_call_kernel_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, cons
       buf_puts(b, "); ");
     }
     buf_printf(b, "for (sp_int _i%d = 0; _i%d < _t%d->len; _i%d++) { "
-                  "sp_puts_line(sp_poly_inspect(_t%d->data[_i%d])); } %s_t%d; })",
-               t, t, t, t, t, t, sp_streq(name, "p") ? "fflush(stdout); " : "", t);
+                  "sp_puts_line(%s(_t%d->data[_i%d])); } %s_t%d; })",
+               t, t, t, t, p_inspect_fn(c, name), t, t, sp_streq(name, "p") ? "fflush(stdout); " : "", t);
     return 1;
   }
   if (recv < 0 && !bare_call_class_owned(c, id) && (is_inspect_print(name)) && argc == 1 && nt_ref(nt, id, "block") < 0) {
     TyKind at = repr_of(c, argv[0]).as_ty;
     int t = ++g_tmp;
     buf_puts(b, "({ "); t = hold_operand(c, argv[0], TY_POLY, 1, t, 1, " ", b);
-    buf_printf(b, "sp_puts_line(sp_poly_inspect(_t%d)); %s", t,
+    buf_printf(b, "sp_puts_line(%s(_t%d)); %s", p_inspect_fn(c, name), t,
                sp_streq(name, "p") ? "fflush(stdout); " : "");   /* p flushes, as CRuby's does */
     char tv[16]; snprintf(tv, sizeof tv, "_t%d", t);
     /* a nullable number printed and handed on answers its oint */
@@ -1529,7 +1560,7 @@ int emit_call_kernel_flow_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
       }
       /* the remaining query/mutation surface (#2832) */
       if (enm && sp_streq(enm, "class") && eac == 0) {
-        buf_puts(b, "((sp_Class){(sp_int)-116, SPL(\"Object\")})");   /* ENV is an Object singleton */
+        emit_builtin_class_value(c, "Object", b);   /* ENV is an Object singleton */
         return 1;
       }
       if (enm && sp_streq(enm, "frozen?") && eac == 0) {

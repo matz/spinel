@@ -1,0 +1,101 @@
+<< handle: true ["x", "abc"]
+push handle: true ["x", "abc", "abc", "abc"]
+[]= handle: true ["abc", "abc", "abc", "abc"]
+[]= value handle: true ["abc", "abc", "abc", "abc"]
+  answer same: true
+insert handle: true ["abc", "abc", "abc", "abc", "abc"]
+unshift handle: true ["abc", "abc", "abc", "abc", "abc", "abc"]
+fill handle: true ["abc", "abc", "abc", "abc", "abc", "abc"]
+concat handle: true ["y", "abc", "abc", "abc", "abc", "abc", "abc"]
+literal handle: true ["z", "abc"]
+<< method: true ["x", "made1"]
+push method: true ["x", "made1", "made1", "made1"]
+[]= method: true ["made1", "made1", "made1", "made1"]
+[]= value method: true ["made1", "made1", "made1", "made1"]
+  answer same: true
+insert method: true ["made1", "made1", "made1", "made1", "made1"]
+unshift method: true ["made1", "made1", "made1", "made1", "made1", "made1"]
+fill method: true ["made1", "made1", "made1", "made1", "made1", "made1"]
+concat method: true ["y", "made1", "made1", "made1", "made1", "made1", "made1"]
+literal method: true ["z", "made1"]
+<< builtin: true ["x", "ABC"]
+push builtin: true ["x", "ABC", "ABC", "ABC"]
+[]= builtin: true ["ABC", "ABC", "ABC", "ABC"]
+[]= value builtin: true ["ABC", "ABC", "ABC", "ABC"]
+  answer same: true
+insert builtin: true ["ABC", "ABC", "ABC", "ABC", "ABC"]
+unshift builtin: true ["ABC", "ABC", "ABC", "ABC", "ABC", "ABC"]
+fill builtin: true ["ABC", "ABC", "ABC", "ABC", "ABC", "ABC"]
+concat builtin: true ["y", "ABC", "ABC", "ABC", "ABC", "ABC", "ABC"]
+literal builtin: true ["z", "ABC"]
+<< literal: true ["x", "lit"]
+push literal: true ["x", "lit", "lit", "lit"]
+[]= literal: true ["lit", "lit", "lit", "lit"]
+[]= value literal: true ["lit", "lit", "lit", "lit"]
+  answer same: true
+insert literal: true ["lit", "lit", "lit", "lit", "lit"]
+unshift literal: true ["lit", "lit", "lit", "lit", "lit", "lit"]
+fill literal: true ["lit", "lit", "lit", "lit", "lit", "lit"]
+concat literal: true ["y", "lit", "lit", "lit", "lit", "lit", "lit"]
+literal literal: true ["z", "lit"]
+<< onechar: true ["x", "a"]
+push onechar: true ["x", "a", "a", "a"]
+[]= onechar: true ["a", "a", "a", "a"]
+[]= value onechar: true ["a", "a", "a", "a"]
+  answer same: true
+insert onechar: true ["a", "a", "a", "a", "a"]
+unshift onechar: true ["a", "a", "a", "a", "a", "a"]
+fill onechar: true ["a", "a", "a", "a", "a", "a"]
+concat onechar: true ["y", "a", "a", "a", "a", "a", "a"]
+literal onechar: true ["z", "a"]
+<< nil: true ["x", nil]
+push nil: true ["x", nil, nil, nil]
+[]= nil: true [nil, nil, nil, nil]
+[]= value nil: true [nil, nil, nil, nil]
+  answer same: true
+insert nil: true [nil, nil, nil, nil, nil]
+unshift nil: true [nil, nil, nil, nil, nil, nil]
+fill nil: true [nil, nil, nil, nil, nil, nil]
+concat nil: true ["y", nil, nil, nil, nil, nil, nil]
+literal nil: true ["z", nil]
+["made4", "abc?", "c", "ABC", "b", "made3", "lit", "ABC", "a"]
+["ABC!", "a", "lit", "made5", nil]
+"abc"
+mut!
+mut!?
+["MUT!?", "MUT!?"]
+"MUT!?"
+[true, true, true]
+["p", "abc", nil, nil, "abc"]
+true
+true
+["p", "abc", nil, nil, "abc", "abc"]
+["f0", "f1", "f2", "f3", "f4", "f5"]
+["abc", "w", "abc", "w"]
+true
+["gh"]
+["k", "k"]
+true
+FrozenError
+FrozenError
+FrozenError
+FrozenError
+FrozenError
+FrozenError
+["c"]
+["s", "a", "r"]
+101
+21
+["lit", "s", "lit"]
+["r", "c"]
+true
+true
+["a!", "a!", "a!"]
+true
+true
+true
+["p", "b?"]
+"b?"
+true
+true
+done

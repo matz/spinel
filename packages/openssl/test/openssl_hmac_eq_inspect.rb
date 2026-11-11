@@ -25,3 +25,9 @@ D = Data.define(:m)
 p D.new(m: OpenSSL::HMAC.new("k", "SHA256"))
 class LoudH < OpenSSL::HMAC; def hexdigest = "LOUD"; end
 l = LoudH.new("key", "SHA256"); l << "a"; p l
+# #to_s is the same alias of HMAC's own #hexdigest, so LoudH's does not
+# change it, in a call, an interpolation or puts; a subclass's own #to_s runs
+p l.to_s, "#{l}"
+puts l
+class OwnS < OpenSSL::HMAC; def to_s = "own"; end
+p OwnS.new("key", "SHA256").to_s

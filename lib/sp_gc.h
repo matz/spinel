@@ -711,6 +711,11 @@ extern const char *(*sp_obj_to_json_fn)(sp_RbVal);
 /* Symbol-keyed Struct/Data #to_h, for a poly receiver (#2906). */
 extern sp_RbVal (*sp_obj_to_h_fn)(sp_RbVal);
 extern sp_RbVal (*sp_obj_struct_values_fn)(sp_RbVal);
+/* Set by the generated prologue to the NULL-ended list of the Array or
+   Enumerable names a boxed Struct, IO or Symbol lacks that a reopened
+   Object, Kernel or BasicObject defines: that method answers the name, so
+   the run-time checks leave it to the old route. NULL when there is none. */
+extern const char *const *sp_poly_root_lacks_names;
 /* user-object #to_a for container-read poly receivers (#3234): installed by
    the generated prologue when any instantiated class defines a no-arg to_a */
 extern sp_RbVal (*sp_obj_to_a_fn)(sp_RbVal);
@@ -761,6 +766,10 @@ extern int (*sp_bsub_cls_fn)(sp_RbVal v);
 /* the class id Ruby sees for a user class id: a synthesized singleton class
    answers as the class it hides behind (generated sp_cls_visible) */
 extern int (*sp_cls_visible_fn)(int cls_id);
+/* the class index of the program's reopening of builtin class id bid, -1
+   when it has none: such a class value is named by the index, as the
+   constant is (generated sp_cls_reopen) */
+extern int (*sp_cls_reopen_fn)(int bid);
 /* Is user class `sub` the class `super` or a descendant of it? The generated
    class bank installs it; NULL means only an exact id can be trusted. A
    pointer array of one class checks a stored object against it (#4486). */

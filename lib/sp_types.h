@@ -303,6 +303,16 @@ typedef struct{sp_int*data;sp_int start;sp_int len;sp_int cap;int32_t frozen;uin
 typedef struct{sp_float*data;sp_int len;sp_int cap;int32_t frozen;uint32_t nil_lo;uint64_t*nilbits;int32_t head;}sp_FloatArray;
 _Static_assert(sizeof(void *) != 8 || (sizeof(sp_IntArray) == 48 && sizeof(sp_FloatArray) == 48),
                "the Int / Float array blocks keep their slab class");
+/* A push reads `len` once, as one load of that field alone, and stores
+   l + 1 without reading it back (sp_IntArray_push, sp_FloatArray_push,
+   sp_PolyArray_push, sp_PtrArray_push, sp_StrArray_push_e). A compiler otherwise loads len together with the
+   field beside it in one wide load -- clang on arm64 len and cap, gcc on
+   x86 start and len -- right after the previous push stored len alone, and
+   a load wider than a store still in flight to the same bytes waits for it
+   to reach the cache: a loop that pushes ran about twice as long. The grow
+   calls never change len, so l stays right across them. The volatile only
+   keeps that one load narrow; it is not there for threads. */
+#define SP_ARR_LEN_ONCE(a) (*(volatile sp_int *)&(a)->len)
 /* the array may hold a nil (the fast whole-array test; exact bits are read
    per element through sp_IntArray_elem_nil / sp_FloatArray_elem_nil) */
 #define SP_MAY_NIL(a) ((a)->nilbits != NULL)
@@ -320,11 +330,33 @@ typedef struct{void**data;sp_int len;sp_int cap;void(*scan_elem)(void*);int32_t 
 #define SP_PTR_ELEM_OBJ      1   /* user objects, elem_cls = the static class (-1: read each object's own) */
 #define SP_PTR_ELEM_INT_ROWS 2   /* sp_IntArray rows (Array[Array[Integer]]) */
 #define SP_PTR_ELEM_FLT_ROWS 3   /* sp_FloatArray rows (Array[Array[Float]]) */
-#define SP_PTR_ELEM_STRBUF   4   /* sp_String handles: a String Array whose Strings are shared (--share-strings) */
 /* the element of a String Array (and a String Hash's value): the handle
    (SP_SEB spells the bytes face) */
 /* the shared String handle (sp_string.h) */
 struct sp_String_s { char *data; int64_t len; int64_t cap; unsigned binary; };
+/* A frozen literal is one static String object: a GC header and the handle,
+   beside its static bytes ([sp_str_hdr][0xf1][bytes][NUL]), whose header
+   links to the handle, tagged with bit 0 to tell it from the aligned links
+   of the string heap (sp_String_of_literal). The generated unit defines one
+   per literal it names (fzl_emit_defs) and the runtime its own frozen
+   Strings (sp_alloc.c), each with SP_STRING_LITERAL_INIT, so the handle is
+   a constant address: no slot to load, no handle made on first use and no
+   root to keep it.
+
+   The header is the GC's contract for an object it never allocated: it
+   links to itself, which no list's header does (sp_gc_hdr_is_static), so
+   the verify registry accepts it (sp_gc_obj_registered); `old` keeps a
+   minor mark off it, and a major one stamps it and stops, since it has no
+   scan; `pinned` keeps it off the sticky remembered set; `frozen` is the
+   String's frozen bit (sp_String_is_frozen); a size of 0 counts nothing to
+   the live bytes. No sweep reaches it, since no list holds it, and it
+   holds nothing collectable, so a store of it needs no barrier
+   (wb_value_never_young). */
+typedef struct sp_StringLiteral { sp_gc_hdr g; struct sp_String_s s; } sp_StringLiteral;
+/* The constant initializer of literal object `o` over its bytes `d`, `len`
+   bytes long: a static's initializer cannot be a function's answer. */
+#define SP_STRING_LITERAL_INIT(o, d, len) \
+  { { .next = &(o).g, .frozen = 1, .pinned = 1, .old = 1 }, { (char *)(d), (len), (len) + 1, 0 } }
 typedef struct sp_String_s *sp_strelem;
 /* head: the slots a shift stepped past (SP_ARR_BUF, above) */
 typedef struct{sp_strelem*data;sp_int len;sp_int cap;int32_t frozen;int32_t head;sp_strelem inline_data[SP_STRARR_INLINE];}sp_StrArray;

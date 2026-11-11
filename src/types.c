@@ -80,7 +80,7 @@ static const PolyFace ty_poly_face_tbl[] = {
   /* and the Enumerable names that had no arm at all */
   {"grep", PF_ENUM, 1, 1, -1}, {"minmax_by", PF_ENUM, 0, 0, 1},
   /* The String mutators String alone owns. */
-  {"setbyte", PF_STRING | PF_MUT, 2, 2, 0}, {"scrub!", PF_STRING | PF_MUT | PF_VAL_SELF | PF_SAME_OK, 0, 1, -1},
+  {"setbyte", PF_STRING | PF_MUT, 2, 2, 0}, {"scrub!", PF_STRING | PF_MUT | PF_VAL_SELF | PF_SAME_OK | PF_STR_TYPED | PF_STR_SELF, 0, 1, -1},
   {"bytesplice", PF_STRING | PF_MUT | PF_VAL_SELF | PF_ENC, 2, 5, 0}, {"append_as_bytes", PF_STRING | PF_MUT | PF_VAL_SELF, 0, -1, 0},
   /* The names String and Array share: the receiver's run-time kind picks
      the arm. concat's arguments are of the receiver's own kind in CRuby
@@ -88,7 +88,7 @@ static const PolyFace ty_poly_face_tbl[] = {
      inference has typed as the other kind rules that arm out. */
   {"concat", PF_STRING | PF_MUT | PF_ARGS_OWN | PF_VAL_SELF, 0, -1, 0}, {"concat", PF_ARRAY | PF_MUT | PF_VAL_SELF | PF_ARGS_OWN, 0, -1, 0},
   {"prepend", PF_STRING | PF_MUT | PF_ARGS_OWN | PF_VAL_SELF, 0, -1, 0}, {"prepend", PF_ARRAY | PF_MUT | PF_VAL_SELF, 0, -1, 0},
-  {"reverse!", PF_STRING | PF_MUT | PF_VAL_SELF, 0, 0, 0}, {"reverse!", PF_ARRAY | PF_MUT | PF_VAL_SELF, 0, 0, 0},
+  {"reverse!", PF_STRING | PF_MUT | PF_VAL_SELF | PF_STR_TYPED | PF_STR_SELF, 0, 0, 0}, {"reverse!", PF_ARRAY | PF_MUT | PF_VAL_SELF, 0, 0, 0},
   {"slice!", PF_STRING | PF_MUT, 1, 2, 0}, {"slice!", PF_ARRAY | PF_MUT, 1, 2, 0},
   /* The Hash mutators, on a Hash at run time; a typed variant takes the
      result back from the general copy it was normalized to, and the value is
@@ -192,12 +192,14 @@ unsigned ty_str_bang_flags(const char *name) {
   return 0;
 }
 unsigned ty_str_typed_bang_flags(const char *name) {
-  unsigned fl = ty_str_bang_flags(name);
-  /* reverse! is a String bang too, answering self, but its face rows are
-     the mutator kind's (PF_MUT | PF_VAL_SELF): Array has it as well, so a
-     boxed receiver's reverse! is either, and answers poly */
-  if (!fl && name && sp_streq(name, "reverse!")) fl = PF_STR_BANG | PF_STR_SELF;
-  return fl;
+  if (!name) return 0;
+  /* reverse! and scrub! are String bangs too, answering self, but their
+     face rows are the mutator kind's (PF_MUT | PF_VAL_SELF): Array has
+     reverse! as well, so a boxed receiver's is either, and answers poly */
+  for (const PolyFace *r = ty_poly_face_tbl; r->name; r++)
+    if ((r->flags & (PF_STR_BANG | PF_STR_TYPED)) && sp_streq(name, r->name))
+      return PF_STR_BANG | (r->flags & (PF_STR_SELF | PF_SAME_OK));
+  return 0;
 }
 void str_bang_plain(const char *bang, char *out, int n) {
   size_t len = bang ? strlen(bang) : 0;
@@ -1131,7 +1133,7 @@ int g_traits_promote = 0;
 const TyTraits ty_traits_promote_rational = {
   "sp_Rational", "(sp_Rational){0}", "(sp_Rational){0}", NULL, "sp_promote_rat_box", NULL,
   "sp_promote_rat_box($e)", NULL, NULL, "(*(sp_Rational *)($e).v.p)", "(*(sp_Rational *)($e).v.p)",
-  NULL, NULL, NULL, NULL, 0, 0, 1, 1, 3, 10 };
+  NULL, NULL, NULL, NULL, 0, 0, 1, 1, 3, 10, NULL, 0 };
 
 /* A builtin value's type, which lays out no instance variables: a String,
    a number, true, false, nil, a Symbol, a Range (of any endpoints), a Random,

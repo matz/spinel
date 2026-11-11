@@ -496,7 +496,7 @@ static int node_is_oint_asked(Compiler *c, int node) {
                                         sp_streq(nm, "byteindex") || sp_streq(nm, "byterindex"))) return 1;
     /* String#getbyte past the end, IO#getbyte at end of file: nil */
     if (sp_streq(nm, "getbyte") && r >= 0 && !oint_kind(rt)) return 1;
-    if (sp_streq(nm, "exitstatus") || sp_streq(nm, "termsig") ||
+    if (sp_streq(nm, "exitstatus") || sp_streq(nm, "termsig") || sp_streq(nm, "stopsig") ||
         sp_streq(nm, "world_readable?") || sp_streq(nm, "world_writable?")) return 1;
     if (r >= 0 && ty_is_array(rt) &&
         (sp_streq(nm, "index") || sp_streq(nm, "rindex") || sp_streq(nm, "find_index") || sp_streq(nm, "delete_at") || sp_streq(nm, "delete") ||
@@ -612,8 +612,7 @@ static void repr_layout(Repr *r, TyKind t) {
    proven to hold only a PolyArray or nil. A read of the local says the
    same. */
 static void repr_slot_storage(Repr *r, const LocalVar *lv) {
-  r->cell = (unsigned char)(lv->inline_alias ? RC_ALIAS : lv->is_cell ? RC_HEAP : RC_NONE);
-  r->volatile_str = lv->borrowed_volatile != 0;
+  r->cell = (unsigned char)(lv->is_cell ? RC_HEAP : RC_NONE);
   r->arr_or_nil = lv->arr_or_nil == 1 && lv->type == TY_POLY;
 }
 
@@ -1035,6 +1034,19 @@ int repr_self_handle(const Compiler *c, int scope) {
   return scope_self_is_string(c, scope);
 }
 
+/* Is self of instance method `scope` a boxed value (sp_RbVal)? It is in a
+   reopening of Object, Numeric, Array or Hash: any value of the builtin, or
+   an instance of a program class below it, is the receiver. */
+int repr_self_boxed(const Compiler *c, int scope) {
+  if (scope < 0) return 0;
+  const Scope *s = &c->scopes[scope];
+  if (s->is_cmethod || s->class_id < 0) return 0;
+  static const int cores[] = { CORE_OBJECT, CORE_NUMERIC, CORE_ARRAY, CORE_HASH };
+  for (size_t i = 0; i < sizeof cores / sizeof cores[0]; i++)
+    if (s->class_id == comp_core_class(c, cores[i])) return 1;
+  return 0;
+}
+
 int repr_self_shared(const Compiler *c, int node) {
   if (node < 0 || nt_kind(c->nt, node) != NK_SelfNode) return 0;
   Scope *s = comp_scope_of((Compiler *)c, node);
@@ -1298,6 +1310,7 @@ Repr repr_of(const Compiler *c, int node) {
   r.nil_cold = c->nil_tested ? c->nil_tested[node] == 2 : 0;
   r.head_held = c->head_held ? c->head_held[node] != 0 : 0;
   r.discarded = c->value_discarded ? c->value_discarded[node] != 0 : 0;
+  r.str_shadow = c->str_shadow ? c->str_shadow[node] & 3 : 0;
   /* a node is boxed as the type it is stored as; a nil-guard narrowing is
      read where the value is used, not where it is boxed */
   TyKind kt = r.as_ty;
@@ -1791,11 +1804,39 @@ int repr_static_read_kind(NodeKind k) {
   return k == NK_GlobalVariableReadNode || k == NK_ConstantReadNode || k == NK_ConstantPathNode ||
          k == NK_ClassVariableReadNode;
 }
+/* The repr_static_share of a path read off a Class value
+   (const_path_on_class_value): the slots the class value can name all hold
+   the shared handle, so the read is the handle of whichever class it
+   carries. The slots are the constants keyed "<...>__NM" and a top-level
+   NM, as emit_constant_value's switch lists them. (Each ask lists the
+   constants and allocates; the shape is rare.) */
+static int const_class_value_share(const Compiler *c, int id) {
+  Compiler *mc = (Compiler *)c;
+  const char *nm = const_key_at(mc, id);
+  int *cands, n = comp_const_tail_cands(mc, nm, &cands), all = 1, seen = 0;
+  for (int i = 0; i < n && all; i++, seen++) {
+    Repr r = repr_of_slot(c, &c->consts[cands[i]]);
+    all = r.share || (c->n_cext_extensions && r.handle);
+  }
+  free(cands);
+  LocalVar *top = comp_const(mc, nm);
+  if (top && all) {
+    Repr r = repr_of_slot(c, top);
+    all = r.share || (c->n_cext_extensions && r.handle);
+    seen++;
+  }
+  return all && seen > 0;
+}
 /* repr_of's `share` for a read or write node of a global, a constant or a
    class variable: its slot's (only the rule makes one the handle) */
 int repr_static_share(const Compiler *c, int node) {
   HolderRef h;
   if (node < 0 || !holder_static_node(nt_kind(c->nt, node))) return 0;
+  /* `k::BUF` off a Class value has no one holder: it is the handle when
+     every slot its class can name is */
+  if (nt_kind(c->nt, node) == NK_ConstantPathNode &&
+      const_path_on_class_value(c, node, repr_of(c, nt_ref(c->nt, node, "parent")).as_ty))
+    return const_class_value_share(c, node);
   return holder_of_node(c, node, &h) && (h.r.share || (c->n_cext_extensions && h.r.handle));
 }
 
@@ -1927,7 +1968,6 @@ static const char *repr_cell_name(int cell) {
   switch ((ReprCell)cell) {
   case RC_NONE:  return "";
   case RC_HEAP:  return " cell=heap";
-  case RC_ALIAS: return " cell=alias";
   }
   return " cell=?";
 }
@@ -1935,10 +1975,10 @@ static const char *repr_cell_name(int cell) {
 static void repr_dump_line(const Compiler *c, ReprLines *ls, const char *where, Repr r) {
   char ty[256], line[1024];
   repr_dump_ty(c, r.ty, ty, sizeof ty);
-  snprintf(line, sizeof line, "%s: %s ty=%s%s%s%s%s%s%s%s", where, repr_kind_name(r.kind), ty,
+  snprintf(line, sizeof line, "%s: %s ty=%s%s%s%s%s%s%s", where, repr_kind_name(r.kind), ty,
            r.handle ? " handle" : "", r.may_nil ? " may_nil" : "", r.dyn_cls ? " dyn_cls" : "",
            r.elem_nil_marked ? " elem_nil" : "", r.arr_or_nil ? " arr_or_nil" : "",
-           repr_cell_name(r.cell), r.volatile_str ? " volatile" : "");
+           repr_cell_name(r.cell));
   if (ls->n == ls->cap) {
     ls->cap = ls->cap ? ls->cap * 2 : 64;
     ls->v = realloc(ls->v, (size_t)ls->cap * sizeof *ls->v);

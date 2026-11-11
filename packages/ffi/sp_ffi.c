@@ -52,6 +52,15 @@ sp_int sp_ffi_dlsym(sp_int handle, const char *name) {
   return (sp_int)(intptr_t)p;
 }
 
+/* The address an attach_function resolved, for a program that calls the
+   function through a pointer of its declared type instead of libffi (the
+   compiler's via_fp entries, #11362): the program points the hook at the
+   setter of its own pointers before main; with none, nothing is noted. */
+void (*sp_ffi_fp_hook)(const char *, const char *, sp_int);
+void sp_ffi_note_fp(const char *mod, const char *name, sp_int addr) {
+  if (sp_ffi_fp_hook && mod && name) sp_ffi_fp_hook(mod, name, addr);
+}
+
 sp_int sp_ffi_dlclose(sp_int handle) {
   return handle ? (sp_int)dlclose((void *)(intptr_t)handle) : 0;
 }

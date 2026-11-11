@@ -57,6 +57,7 @@ module FFI
     native_func :call_blocking, [:int, :int, :int, :int], :void, "sp_ffi_call_blocking"
     native_func :ret_int,      [:int, :int],           :int,     "sp_ffi_ret_int"
     native_func :put_ret_int,  [:int, :int, :int],     :void,    "sp_ffi_put_ret_int"
+    native_func :note_fp,      [:string, :string, :int], :void,  "sp_ffi_note_fp"
     native_func :closure_new,  [:int, :int],           :int,     "sp_ffi_closure_new"
     native_func :errno,        [],                     :int,     "sp_ffi_errno"
     native_func :set_errno,    [:int],                 :void,    "sp_ffi_set_errno"
@@ -1676,6 +1677,8 @@ module FFI
       @ffi_functions ||= {}
       @ffi_functions[name.to_sym] = fn
       ::FFI__Registry.__add(self, name.to_sym, fn)
+      # the compiled program's pointer for a literal attach (#11362)
+      Native.note_fp(self.name.to_s, name.to_s, addr)
       fn
     end
 

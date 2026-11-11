@@ -159,6 +159,8 @@ Compiler *comp_new(const NodeTable *nt) {
   if (!c->head_held) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   c->value_discarded = calloc((size_t)n, 1);
   if (!c->value_discarded) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  c->str_shadow = calloc((size_t)n, 1);
+  if (!c->str_shadow) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   c->nscope = calloc((size_t)n, sizeof(int));   /* default scope 0 */
   c->node_cbody = malloc((size_t)n * sizeof(int));   /* enclosing class-body, -1 = none */
   for (int i = 0; i < n; i++) c->node_cbody[i] = -1;
@@ -482,6 +484,8 @@ void comp_grow_node_arrays(Compiler *c) {
   if (!c->head_held) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   c->value_discarded = realloc(c->value_discarded, (size_t)n);
   if (!c->value_discarded) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  c->str_shadow = realloc(c->str_shadow, (size_t)n);
+  if (!c->str_shadow) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   c->nscope = realloc(c->nscope, sizeof(int) * (size_t)n);
   c->node_cbody = realloc(c->node_cbody, sizeof(int) * (size_t)n);
   c->empty_arr_recv = realloc((char *)c->empty_arr_recv, (size_t)n);
@@ -498,7 +502,7 @@ void comp_grow_node_arrays(Compiler *c) {
   for (int i = c->node_cap; i < n; i++) c->bop_inf[i] = NULL;
   c->ucall_inf = realloc(c->ucall_inf, sizeof *c->ucall_inf * (size_t)n);
   memset(c->ucall_inf + c->node_cap, 0, sizeof *c->ucall_inf * (size_t)(n - c->node_cap));
-  for (int i = c->node_cap; i < n; i++) { ((TyKind *)c->ntype)[i] = TY_UNKNOWN; c->norigin[i] = -1; ((TyKind *)c->nilnarrow)[i] = TY_UNKNOWN; c->nscope[i] = 0; c->node_cbody[i] = -1; ((char *)c->empty_arr_recv)[i] = 0; ((char *)c->empty_hash_recv)[i] = 0; ((char *)c->empty_hash_arg)[i] = 0; c->store_misfit_arg[i] = 0; c->ivar_widen_src[i] = 0; ((TyKind *)c->hash_want)[i] = TY_UNKNOWN; ((TyKind *)c->arr_want)[i] = TY_UNKNOWN; ((TyKind *)c->poly_builtin_ty)[i] = TY_UNKNOWN; c->lw_joined[i] = TY_UNKNOWN; ((unsigned char *)c->strbuf_box)[i] = 0; c->strbuf_handle_demand[i] = 0; c->strbuf_read_raw[i] = 0; c->poly_strbuf_lift[i] = 0; c->nil_tested[i] = 0; c->head_held[i] = 0; c->value_discarded[i] = 0; }
+  for (int i = c->node_cap; i < n; i++) { ((TyKind *)c->ntype)[i] = TY_UNKNOWN; c->norigin[i] = -1; ((TyKind *)c->nilnarrow)[i] = TY_UNKNOWN; c->nscope[i] = 0; c->node_cbody[i] = -1; ((char *)c->empty_arr_recv)[i] = 0; ((char *)c->empty_hash_recv)[i] = 0; ((char *)c->empty_hash_arg)[i] = 0; c->store_misfit_arg[i] = 0; c->ivar_widen_src[i] = 0; ((TyKind *)c->hash_want)[i] = TY_UNKNOWN; ((TyKind *)c->arr_want)[i] = TY_UNKNOWN; ((TyKind *)c->poly_builtin_ty)[i] = TY_UNKNOWN; c->lw_joined[i] = TY_UNKNOWN; ((unsigned char *)c->strbuf_box)[i] = 0; c->strbuf_handle_demand[i] = 0; c->strbuf_read_raw[i] = 0; c->poly_strbuf_lift[i] = 0; c->nil_tested[i] = 0; c->head_held[i] = 0; c->value_discarded[i] = 0; c->str_shadow[i] = 0; }
   c->node_cap = n;
 }
 
@@ -541,6 +545,9 @@ void comp_free(Compiler *c) {
   free(c->missing_order);
   c->missing_order = NULL;
   c->missing_order_n = 0;
+  free(c->unrouted_warned);
+  c->unrouted_warned = NULL;
+  c->unrouted_warned_n = 0;
   free(c->hash_default_arg_memo);
   c->hash_default_arg_memo = NULL;
   free(c->blk_body_map);
@@ -572,7 +579,7 @@ void comp_free(Compiler *c) {
   c->pres_names = NULL; c->pres_flags = NULL; c->npres = c->cpres = 0;
   free(c->nil_fact);
   free(c->nil_elem_fact);
-  free(c->cls_fact); cls_pool_free(c->cls_pool, c->ncls_pool); free(c->cls_kind);
+  free(c->cls_fact); cls_pool_free(c->cls_pool, c->ncls_pool); free(c->cls_bk_sub); free(c->cls_bk_sub_ok); cplan_send_owners_free(c);
   free(c->send_param_memo);
   free(c->node_ord); free(c->node_base); free(c->node_pbase);
   for (int k = 0; k < c->node_tag_cap; k++) if (c->node_tag[k] && *c->node_tag[k]) free(c->node_tag[k]);
@@ -642,12 +649,14 @@ void comp_free(Compiler *c) {
   free(c->gvars);
   free(c->gvar_ix);
   gvar_writes_free(c);
+  const_pairs_free(c);
   free(c->mih_head);
   free(c->mih_first);
   free(c->mih_nodes);
   free(c->mih_calls);
   for (int i = 0; i < c->nconsts; i++) free(c->consts[i].name);
   free(c->consts);
+  const_writes_free(c);
   free(c->toplevel_includes);
   free(c->toplevel_extends);
   free(c->ary_viewed);
@@ -657,6 +666,7 @@ void comp_free(Compiler *c) {
   }
   free(c->ffi_sources);
   free(c->nscope);
+  free(c->str_shadow);
   if (c->stmt_wr_names)
     for (int i = 0; i < c->stmt_wr_cap; i++) free(c->stmt_wr_names[i]);
   free(c->stmt_wr_names); free(c->stmt_wr_state); free(c->stmt_wr_mark);
@@ -867,6 +877,27 @@ static int class_with_path_key(Compiler *c, const char *p) {
     int k = cpk_tab.slot[j];
     if (class_path_key(c, k, kp, sizeof kp) && sp_streq(kp, p)) return k;
   }
+  return -1;
+}
+/* See compiler.h. */
+int comp_class_at_ruby_path(Compiler *c, const char *path) {
+  if (!path || !*path) return -1;
+  if (path[0] == ':' && path[1] == ':') path += 2;   /* `::A::B` is A::B */
+  /* a class written where its path is spelled out (`module A; class B`) by
+     the key of its leaves; a class keyed with no enclosing link (a native
+     class declared as "IO::Buffer", a class under a builtin) by the Ruby
+     name it carries */
+  char key[512];
+  size_t j = 0;
+  for (const char *p = path; *p && j + 2 < sizeof key; ) {
+    if (p[0] == ':' && p[1] == ':') { key[j++] = '_'; key[j++] = '_'; p += 2; }
+    else key[j++] = *p++;
+  }
+  key[j] = 0;
+  int k = class_with_path_key(c, key);
+  if (k >= 0 && !(c->classes[k].ruby_name_cache && !sp_streq(c->classes[k].ruby_name_cache, path))) return k;
+  for (int i = 0; i < c->nclasses; i++)
+    if (c->classes[i].ruby_name_cache && sp_streq(c->classes[i].ruby_name_cache, path)) return i;
   return -1;
 }
 /* The constant class k owns under NM (comp_const_tail_cands above), or -1:
@@ -2376,11 +2407,14 @@ static void vis_table_set(char ***names, int **kinds, int *n, int *cap, const ch
   (*n)++;
 }
 
+unsigned comp_vis_gen = 0;   /* bumped when a visibility or an undef table changes (the respond_to? lists' memo stamp) */
 void comp_method_vis_set(ClassInfo *ci, const char *name, int kind) {
+  comp_vis_gen++;
   vis_table_set(&ci->vis_names, &ci->vis_kinds, &ci->nvis, &ci->cvis, name, kind);
 }
 
 void comp_cmethod_vis_set(ClassInfo *ci, const char *name, int kind) {
+  comp_vis_gen++;
   vis_table_set(&ci->cm_vis_names, &ci->cm_vis_kinds, &ci->ncm_vis, &ci->ccm_vis, name, kind);
 }
 
@@ -3021,6 +3055,7 @@ int setter_base_name(const char *name, char *out, size_t cap) {
   return 1;
 }
 void comp_add_undef(ClassInfo *ci, const char *name) {
+  comp_vis_gen++;
   name_add(&ci->undefs, &ci->nundefs, &ci->cundefs, name);
 }
 int comp_is_undeffed_in_chain(Compiler *c, int class_id, const char *name) {
@@ -3590,7 +3625,7 @@ static int mixin_answers_first(Compiler *c, int cid, const char *name, int compa
   int master = comp_method_in_chain(c, cid, name, NULL) < 0 && !comp_reader_in_chain(c, cid, name, NULL);
   if (cid < 0 || cid >= c->nclasses || !name) return master;
   /* a name Enumerable does not have (each, join, index ...): the program's alone */
-  if (core_method_vis(comparable ? "Comparable" : "Enumerable", name, 0) <= 0) return master;
+  if (core_method_vis(comparable ? "Comparable" : "Enumerable", name, 0, NULL) <= 0) return master;
   /* the topmost class that has Enumerable among its ancestors, by an include
      of its own or of a module: below it the include is a no-op. A Struct, an Array or a native class has Enumerable of its
      own, at a place the includes do not show: master's answer there. */
@@ -4299,6 +4334,60 @@ const int *comp_descendants(Compiler *c, int cid, int *n) {
   }
   *n = desc_counts[cid]; return desc_lists[cid];
 }
+/* Does no class inherit from class cid? A reopened builtin class (Object,
+   Exception, Array ...) never is one: its subclasses' parent links do not
+   name it (a class under Object has parent -1, `E < StandardError` names a
+   builtin, and builtins are not classes of the program), so a scan of the
+   parents cannot show them. */
+int comp_class_is_leaf(Compiler *c, int cid) {
+  const char *nm = c->classes[cid].name;
+  if (is_builtin_class_name(nm) || is_builtin_exception_name(nm)) return 0;
+  for (int j = 0; j < c->nclasses; j++) if (c->classes[j].parent == cid) return 0;
+  return 1;
+}
+/* The builtin class id of reopened builtin k whose class value a value
+   answers (`[1].class`), 0 for a class that has none or whose values are
+   named otherwise (a module, an exception, an IO). Such a class value is
+   named by the reopening's own class index, as the constant `Array` is: the
+   compiler writes the index (cv_builtin_class_index), and the generated
+   sp_cls_reopen maps the id the runtime finds to it. */
+int cv_reopen_builtin_id(Compiler *c, int k) {
+  const char *nm = c->classes[k].name;
+  if (!is_builtin_reopen(nm) || is_builtin_exception_name(nm) || io_family_name(nm) ||
+      comp_class_is_module(c, &c->classes[k])) return 0;
+  return builtin_class_id(nm);
+}
+/* Does the program reopen a builtin whose class value is named by the
+   reopening's index: the generated sp_cls_reopen then maps the builtin's id
+   to it */
+int comp_reopens_cv_builtin(Compiler *c) {
+  for (int k = 0; k < c->nclasses; k++) if (cv_reopen_builtin_id(c, k)) return 1;
+  return 0;
+}
+/* ...and the other way: the class index that names builtin class `name`'s
+   class value, -1 when the program does not reopen it and the value carries
+   the builtin's id and name */
+int cv_builtin_class_index(Compiler *c, const char *name) {
+  int k = comp_builtin_class_named(c, name);
+  return k >= 0 && sp_streq(c->classes[k].name, name) && cv_reopen_builtin_id(c, k) ? k : -1;
+}
+/* ...and the id a class value of builtin `name` carries: that index, else
+   the builtin's own id */
+int cv_builtin_class_id(Compiler *c, const char *name) {
+  int k = cv_builtin_class_index(c, name);
+  return k >= 0 ? k : builtin_class_id(name);
+}
+/* Does a class-value switch give class k an arm: every class but a reopened
+   builtin that carries no class value id */
+int comp_cv_arm_class(Compiler *c, int k) {
+  return !is_builtin_reopen(c->classes[k].name) || cv_reopen_builtin_id(c, k) != 0;
+}
+/* Does `K[..]` on class k build an instance of it from the arguments: a
+   Struct or Data class, an Array or Hash subclass (not a String or Time one) */
+int comp_class_builds_by_aref(Compiler *c, int k) {
+  ClassInfo *ci = &c->classes[k];
+  return ci->is_struct || ci->is_data || (comp_ary_root(c, k) >= 0 && !ci->ary_str && !ci->ary_time);
+}
 void comp_descendants_reset(void) {
   for (int i = 0; i < desc_nclasses; i++) free(desc_lists[i]);
   free(desc_lists); free(desc_counts); desc_lists = NULL; desc_counts = NULL; desc_nclasses = -1;
@@ -4321,55 +4410,6 @@ int comp_is_local_write(NodeKind k) {
   return k == NK_LocalVariableWriteNode || k == NK_LocalVariableTargetNode ||
          k == NK_LocalVariableOrWriteNode || k == NK_LocalVariableAndWriteNode ||
          k == NK_LocalVariableOperatorWriteNode;
-}
-/* Does the subtree under n assign the variable read node `arg` reads: a
-   local of the same scope, or an instance variable, by any write kind
-   (plain, operator, `||=`, `&&=`, a multiple-assignment target)? */
-static int comp_subtree_writes_var(Compiler *c, int n, int arg, const char *name, int depth) {
-  const NodeTable *nt = c->nt;
-  if (n < 0 || depth > 300) return 0;
-  NodeKind k = nt_kind(nt, n);
-  int ivar = nt_kind(nt, arg) == NK_InstanceVariableReadNode;
-  int w = ivar ? k == NK_InstanceVariableWriteNode || k == NK_InstanceVariableOrWriteNode ||
-                 k == NK_InstanceVariableAndWriteNode || k == NK_InstanceVariableOperatorWriteNode ||
-                 k == NK_InstanceVariableTargetNode
-               : comp_is_local_write(k);
-  if (w && nt_str(nt, n, "name") && sp_streq(nt_str(nt, n, "name"), name) &&
-      (ivar || comp_scope_of(c, n) == comp_scope_of(c, arg))) return 1;
-  int nr = nt_num_refs(nt, n);
-  for (int i = 0; i < nr; i++)
-    if (comp_subtree_writes_var(c, nt_ref_at(nt, n, i), arg, name, depth + 1)) return 1;
-  int na = nt_num_arrs(nt, n);
-  for (int i = 0; i < na; i++) {
-    int an = 0; const int *av = nt_arr_at(nt, n, i, &an);
-    for (int j = 0; j < an; j++)
-      if (comp_subtree_writes_var(c, av[j], arg, name, depth + 1)) return 1;
-  }
-  return 0;
-}
-int comp_node_writes_var(Compiler *c, int n, int arg) {
-  const NodeTable *nt = c->nt;
-  NodeKind ak = arg >= 0 ? nt_kind(nt, arg) : NK__COUNT;
-  const char *name = arg >= 0 ? nt_str(nt, arg, "name") : NULL;
-  if (n < 0 || !name || (ak != NK_LocalVariableReadNode && ak != NK_InstanceVariableReadNode)) return 0;
-  return comp_subtree_writes_var(c, n, arg, name, 0);
-}
-int comp_block_rebinds_arg(Compiler *c, int blk, int arg) {
-  const NodeTable *nt = c->nt;
-  NodeKind ak = arg >= 0 ? nt_kind(nt, arg) : NK__COUNT;
-  const char *name = arg >= 0 ? nt_str(nt, arg, "name") : NULL;
-  if (blk < 0 || !name || (ak != NK_LocalVariableReadNode && ak != NK_InstanceVariableReadNode)) return 0;
-  if (ak == NK_LocalVariableReadNode) {
-    LocalVar *lv = scope_local(comp_scope_of(c, arg), name);
-    if (lv && lv->proc_rebinds) return 1;
-    return nt_kind(nt, blk) == NK_BlockNode && comp_subtree_writes_var(c, blk, arg, name, 0);
-  }
-  /* an instance variable: a write in the block, or one a method the block
-     calls on self makes, or anything else that runs code the walk cannot
-     name (subtree_may_write_ivar); a block passed as a value (`&pr`) is a
-     proc whose body is not known here */
-  if (nt_kind(nt, blk) != NK_BlockNode) return 1;
-  return subtree_may_write_ivar(c, nt_ref(nt, blk, "body"), name, comp_ivar_owner(c, arg), 0);
 }
 static int comp_chain_alloc(int **head, int **next, int nb, int n, int *built) {
   *head = malloc((size_t)nb * sizeof(int));
@@ -5263,7 +5303,6 @@ LocalVar *scope_local_intern(Scope *s, const char *name) {
   { lv->is_cell = 0; comp_touch_scope(lv->owner); }
   lv->cell_shadow = 0;
   lv->cell_outlives = 0;
-  lv->inline_alias = 0;
   lv->init_guarded = 0;
   lv->rbs_seeded = 0;
   lv->rbs_type = TY_UNKNOWN;
@@ -5497,8 +5536,9 @@ const Scope *comp_super_site(Compiler *c, const Scope *s) {
 /* What a `super` that no program ancestor answers reaches when the
    method is one of BasicObject's or Kernel's that Spinel answers for any
    object of a program class: SUPER_OBJ_SAME (==, equal?, eql?: the same
-   object), SUPER_OBJ_FALSE (!, nil?, respond_to_missing?),
-   SUPER_OBJ_FROZEN (frozen?) or SUPER_OBJ_SELF (itself); 0 for any
+   object), SUPER_OBJ_FALSE (!, nil?), SUPER_OBJ_FROZEN (frozen?),
+   SUPER_OBJ_SELF (itself) or SUPER_OBJ_ROW (the name of a Kernel builtin row,
+   respond_to_missing?: the row's answer); 0 for any
    other, and for a super `id` that
    passes a splat, a keyword, a forwarded list or a count the method does
    not take. Only a plain class qualifies
@@ -5509,22 +5549,26 @@ const Scope *comp_super_site(Compiler *c, const Scope *s) {
    the name in a program's Object, Kernel or BasicObject is not this one. */
 int class_is_comparable(Compiler *c, int cid);   /* codegen_call.c */
 int is_descendant(Compiler *c, int k, int anc);
+/* See compiler.h. */
+int comp_zsuper_plain_params(Compiler *c, const Scope *s, int *out, int cap) {
+  const NodeTable *nt = c->nt;
+  int pn = s->def_node >= 0 ? nt_ref(nt, s->def_node, "parameters") : -1, n = 0, k = 0;
+  if (pn < 0) return 0;
+  const char *arrs[] = { "posts", "keywords" };
+  for (int i = 0; i < 2; i++) { (void)nt_arr(nt, pn, arrs[i], &k); if (k) return -1; }
+  if (nt_ref(nt, pn, "rest") >= 0 || nt_ref(nt, pn, "keyword_rest") >= 0) return -1;
+  /* (an optional's value as it stands is passed too) */
+  const int *rq = nt_arr(nt, pn, "requireds", &n), *op = nt_arr(nt, pn, "optionals", &k);
+  if (n + k != s->nparams) return -1;
+  for (int i = 0; out && i < n + k && i < cap; i++) out[i] = i < n ? rq[i] : op[i - n];
+  return n + k;
+}
 /* The plain argument count a super passes, or -1 for a splat, a keyword
-   or a forwarded list: a bare super's comes from the method's parameters,
-   which must all be required ones. */
+   or a forwarded list: a bare super's comes from the method's requireds
+   and optionals (comp_zsuper_plain_params). */
 static int super_plain_argc(Compiler *c, int id, const Scope *s) {
   const NodeTable *nt = c->nt;
-  if (nt_kind(nt, id) == NK_ForwardingSuperNode) {
-    int pn = s->def_node >= 0 ? nt_ref(nt, s->def_node, "parameters") : -1, n = 0, k = 0;
-    if (pn < 0) return 0;
-    const char *arrs[] = { "posts", "keywords" };
-    for (int i = 0; i < 2; i++) { (void)nt_arr(nt, pn, arrs[i], &k); if (k) return -1; }
-    if (nt_ref(nt, pn, "rest") >= 0 || nt_ref(nt, pn, "keyword_rest") >= 0) return -1;
-    /* (an optional's value as it stands is passed too) */
-    (void)nt_arr(nt, pn, "requireds", &n);
-    (void)nt_arr(nt, pn, "optionals", &k);
-    return n + k == s->nparams ? n + k : -1;
-  }
+  if (nt_kind(nt, id) == NK_ForwardingSuperNode) return comp_zsuper_plain_params(c, s, NULL, 0);
   int sa = nt_ref(nt, id, "arguments"), n = 0;
   const int *av = sa >= 0 ? nt_arr(nt, sa, "arguments", &n) : NULL;
   for (int i = 0; i < n; i++) {
@@ -5534,33 +5578,40 @@ static int super_plain_argc(Compiler *c, int id, const Scope *s) {
   }
   return n;
 }
+const BuiltinOp *comp_super_kernel_row(Compiler *c, const Scope *s, const char *uname, int id) {
+  const BuiltinOp *op = uname ? bop_find(BOP_KERNEL, uname, super_plain_argc(c, id, s), 0) : NULL;
+  return op && !(op->flags & BOPF_INTERNAL) ? op : NULL;
+}
 int comp_super_object_builtin(Compiler *c, const Scope *s, const char *uname, int id) {
   if (!s || s->is_cmethod || !uname || s->class_id < 0 || s->class_id >= c->nclasses) return 0;
   int kind = 0, nargs = 0, kernel = 0;
+  /* Kernel's own row of the name (BOP_KERNEL) answers the super from any
+     program class: the core classes that define the name themselves
+     (Exception's private one) answer as the row does */
+  const BuiltinOp *krow = comp_super_kernel_row(c, s, uname, id);
+  int any_core = krow != NULL;
   if (sp_streq(uname, "==") || sp_streq(uname, "equal?")) { kind = SUPER_OBJ_SAME; nargs = 1; }
   else if (sp_streq(uname, "eql?")) { kind = SUPER_OBJ_SAME; nargs = 1; kernel = 1; }
   else if (sp_streq(uname, "!")) kind = SUPER_OBJ_FALSE;
   else if (sp_streq(uname, "nil?")) { kind = SUPER_OBJ_FALSE; kernel = 1; }
   else if (sp_streq(uname, "frozen?")) { kind = SUPER_OBJ_FROZEN; kernel = 1; }
   else if (sp_streq(uname, "itself")) { kind = SUPER_OBJ_SELF; kernel = 1; }
-  else if (sp_streq(uname, RESPOND_TO_MISSING_NAME)) { kind = SUPER_OBJ_FALSE; nargs = 2; kernel = 1; }
+  else if (any_core) { kind = SUPER_OBJ_ROW; nargs = super_plain_argc(c, id, s); kernel = 1; }
   if (!kind || super_plain_argc(c, id, s) != nargs) return 0;
   /* (Comparable reached through Object's own include answers == too) */
-  if (!comp_plain_class(c, s->class_id) || class_is_comparable(c, s->class_id)) return 0;
+  if (!any_core && (!comp_plain_class(c, s->class_id) || class_is_comparable(c, s->class_id))) return 0;
   /* the method runs for a subclass's instance too, and a subclass that
      includes Comparable answers == by <=> */
-  for (int k = 0; k < c->nclasses; k++)
+  for (int k = 0; k < c->nclasses && !any_core; k++)
     if (k != s->class_id && is_descendant(c, k, s->class_id) &&
         (!comp_plain_class(c, k) || class_is_comparable(c, k))) return 0;
   int root = s->class_id;
   for (int d = 0; c->classes[root].parent >= 0 && d < 64; d++) root = c->classes[root].parent;
   if (kernel && class_is_blank_slate(c, root) && comp_super_parent(c, root, 0) < 0) return 0;
-  const char *own[] = { "Object", "Kernel", "BasicObject" };
-  for (int i = 0; i < 3; i++) {
-    int k = comp_class_index(c, own[i]);
-    if (k >= 0 && comp_method_in_class(c, k, uname) >= 0) return 0;
-  }
-  return kind;
+  /* (a method of the program's Object, Kernel or BasicObject is the plan's;
+     a program's Kernel def is reached with its receiver as self, which the
+     super cannot give it yet: it raises as it did) */
+  return cplan_super_target(c, id, s, NULL) < 0 && !cplan_kernel_def(c, uname) ? kind : 0;
 }
 
 int comp_super_is_class_new(Compiler *c, int id) {
@@ -5570,8 +5621,7 @@ int comp_super_is_class_new(Compiler *c, int id) {
   if (!s || !s->is_cmethod || s->class_id < 0 || !s->name) return 0;
   if (!sp_streq(comp_scope_user_name(s), "new")) return 0;
   if (comp_super_shadow(c, s)) return 0;
-  int p = c->classes[s->class_id].parent;
-  return p < 0 || comp_cmethod_in_chain(c, p, "new", NULL) < 0;
+  return cplan_super_target(c, id, s, NULL) < 0;
 }
 
 /* Can a `self.new` called on class k build k, k a descendant of the class
@@ -5687,10 +5737,52 @@ int comp_scope_may_run(Compiler *c, int s) {
    a scope of that name is a copy or none is. A SHADOW_INC name is not checked,
    so the answer is not exact: a program method spelled like an include copy
    (in a class whose copies do not include that name) counts as one too. */
-int comp_name_is_shadow_copy(Compiler *c, const char *name, int kind) {
-  if (!name) return 0;
+/* The copies by the hash of their names, open-addressed (a name may be two
+   copies': `__inc` copies of one method in two classes), each slot a scope
+   index. The answer is read off the scope, so a copy's kind is the one it
+   has now; the set is read while the scope index is frozen (the passes that
+   rename scopes run while it is not, as comp_method_index's note says) and
+   rebuilt when a copy or a scope was added or the index's epoch moved.
+   Before it, every call target resolved compared the name with every copy's:
+   an application with thousands of prepend copies spent half of its
+   inference in the comparisons. */
+static int *g_shn;
+static int g_shn_cap, g_shn_n, g_shn_scopes;
+static unsigned g_shn_gen;
+static const Compiler *g_shn_c;
+static void shadow_names_build(Compiler *c) {
+  g_shn_c = c; g_shn_n = c->nshadow_copies; g_shn_scopes = c->nscopes; g_shn_gen = comp_scope_index_gen();
+  int cap = 64;
+  while (cap < c->nshadow_copies * 2) cap *= 2;
+  if (cap != g_shn_cap) {
+    free(g_shn);
+    g_shn = malloc(sizeof *g_shn * (size_t)cap);
+    if (!g_shn) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    g_shn_cap = cap;
+  }
+  for (int i = 0; i < cap; i++) g_shn[i] = -1;
   for (int i = 0; i < c->nshadow_copies; i++) {
-    const Scope *s = &c->scopes[c->shadow_copies[i]];
+    int si = c->shadow_copies[i];
+    const char *nm = c->scopes[si].name;
+    if (!nm) continue;
+    unsigned h = name_idx_hash(nm) & (unsigned)(cap - 1);
+    while (g_shn[h] >= 0) h = (h + 1) & (unsigned)(cap - 1);
+    g_shn[h] = si;
+  }
+}
+int comp_name_is_shadow_copy(Compiler *c, const char *name, int kind) {
+  if (!name || c->nshadow_copies == 0) return 0;
+  if (!comp_scope_index_is_frozen()) {
+    for (int i = 0; i < c->nshadow_copies; i++) {
+      const Scope *s = &c->scopes[c->shadow_copies[i]];
+      if (s->shadow == kind && s->name && sp_streq(s->name, name)) return 1;
+    }
+    return 0;
+  }
+  if (g_shn_c != c || g_shn_n != c->nshadow_copies || g_shn_scopes != c->nscopes || g_shn_gen != comp_scope_index_gen())
+    shadow_names_build(c);
+  for (unsigned h = name_idx_hash(name) & (unsigned)(g_shn_cap - 1); g_shn[h] >= 0; h = (h + 1) & (unsigned)(g_shn_cap - 1)) {
+    const Scope *s = &c->scopes[g_shn[h]];
     if (s->shadow == kind && s->name && sp_streq(s->name, name)) return 1;
   }
   return 0;
@@ -5808,10 +5900,12 @@ const char *poly_enum_op_for(const char *name) {
 }
 /* Does a poly dispatch's builtin pre-arm (emit_poly_prearms0_blk) drive a
    zero-argument call's block of this name as a proc: an Enumerable walk,
-   each_index, times, a String's each_line, a Mutex's synchronize? */
+   each_index, times, a String's each_line, each_char, each_byte or
+   each_codepoint, a Mutex's synchronize? */
 int poly_blk_prearm_name(const char *name) {
   return poly_enum_op_for(name) ||
          (name && (sp_streq(name, "each_index") || sp_streq(name, "times") || sp_streq(name, "each_line") ||
+                 sp_streq(name, "each_char") || sp_streq(name, "each_byte") || sp_streq(name, "each_codepoint") ||
                  sp_streq(name, "synchronize")));
 }
 
@@ -5872,8 +5966,7 @@ int self_class_static_ci(Compiler *c, int recv) {
   Scope *s = comp_scope_of(c, recv);
   int cid = s ? s->class_id : -1;
   if (cid < 0 || comp_class_is_module(c, &c->classes[cid])) return -1;
-  for (int j = 0; j < c->nclasses; j++) if (c->classes[j].parent == cid) return -1;
-  return cid;
+  return comp_class_is_leaf(c, cid) ? cid : -1;
 }
 
 /* A `super` in a class's own `def self.allocate` that no class method
@@ -5926,6 +6019,28 @@ int allocate_super_reaches_class(Compiler *c, int id) {
    in an Exception class, ...) nor a parent's own allocate that answers:
    that super has no target here, so such a call keeps Class#allocate as
    before. */
+/* `<class value>.allocate` where the class value is no written-out constant
+   (`x.class.allocate`, a local holding a class): a call the generated
+   sp_cls_allocate answers, as it does a boxed class value, and whose value is
+   boxed. A constant has its own static arm; a `self` receiver and a program
+   that gives some class a class method `allocate` of its own keep the paths
+   they had (that method is the user dispatch's). One rule for the analyzer's
+   type of the call, the emitter, and the pass that asks for the sp_cls_*
+   answers (g_gen_cls_answers). */
+int comp_class_value_allocate(Compiler *c, int id) {
+  const NodeTable *nt = c->nt;
+  if (nt_kind(nt, id) != NK_CallNode) return 0;
+  const char *name = nt_str(nt, id, "name");
+  int recv = nt_ref(nt, id, "receiver");
+  if (recv < 0 || !name || !sp_streq(name, "allocate") || nt_ref(nt, id, "arguments") >= 0 ||
+      nt_ref(nt, id, "block") >= 0 || comp_ntype(c, recv) != TY_CLASS)
+    return 0;
+  NodeKind rk = nt_kind(nt, recv);
+  if (rk == NK_ConstantReadNode || rk == NK_ConstantPathNode || rk == NK_SelfNode) return 0;
+  for (int k = 0; k < c->nclasses; k++)
+    if (comp_cmethod_in_chain(c, k, "allocate", NULL) >= 0) return 0;
+  return 1;
+}
 int comp_own_allocate(Compiler *c, int ci, int call) {
   NodeTable *nt = (NodeTable *)c->nt;
   if (ci < 0 || ci >= c->nclasses) return 0;
@@ -5987,8 +6102,10 @@ int self_class_base_ci(Compiler *c, int recv) {
    call, which resolve statically through their own dispatch. A method
    returning a class value was left with nowhere to dispatch, so the chained
    call was rejected outright even though the value at run time was right
-   (#3415). */
-int class_recv_is_dynamic(Compiler *c, int recv) {
+   (#3415). This is the receiver's shape alone, a constant judged by its
+   writes (const_writes_may_hold_class): it reads no type, for the census
+   ahead of the type fixpoint (cplan_cv_ctor_shape). */
+int class_recv_may_be_dynamic(Compiler *c, int recv) {
   const NodeTable *nt = c->nt;
   const char *rty = recv >= 0 ? nt_type(nt, recv) : NULL;
   NodeKind rk = nt_kind(nt, recv);
@@ -6003,7 +6120,7 @@ int class_recv_is_dynamic(Compiler *c, int recv) {
       rk == NK_AndNode || rk == NK_OrNode)
     return 1;
   /* A constant assigned a class value (`K = make`) names no class it knows */
-  if (rk == NK_ConstantReadNode || rk == NK_ConstantPathNode) return const_class_value_only(c, recv);
+  if (rk == NK_ConstantReadNode || rk == NK_ConstantPathNode) return const_writes_may_hold_class(c, recv);
   if (rk != NK_CallNode) return 0;
   /* `self.class` in a class with no subclass resolves to that class
      statically and has its own arms on both sides; treating it as dynamic
@@ -6012,6 +6129,14 @@ int class_recv_is_dynamic(Compiler *c, int recv) {
   if (comp_sg_reader_const(c, recv) >= 0) return 0;
   { int cand[4]; if (comp_sg_reader_candidates(c, recv, cand, 4) >= 2) return 0; }
   return 1;
+}
+/* ...and once the types are known: a constant whose slot is typed Class or
+   poly (const_class_value_only). */
+int class_recv_is_dynamic(Compiler *c, int recv) {
+  NodeKind rk = nt_kind(c->nt, recv);
+  if (rk == NK_ConstantReadNode || rk == NK_ConstantPathNode)
+    return nt_type(c->nt, recv) && const_class_value_only(c, recv);
+  return class_recv_may_be_dynamic(c, recv);
 }
 
 

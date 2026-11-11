@@ -76,6 +76,12 @@ extern int g_promote_mode;
 /* --int-overflow=wrap: an Integer stays a machine integer, wrapping; no
    local is widened to Bignum by the loop-growth detectors */
 extern int g_wrap_mode;
+/* --no-bigint: no value may be a Bignum. The loop-growth detectors leave
+   accumulating locals at Integer (their overflow raises, as anywhere else in
+   raise mode), and a value that could only be a Bignum -- a literal past
+   sp_int, a constant power that overflows -- is refused at compile time
+   (refuse_bigint_values). For targets where the bigint runtime does not fit. */
+extern int g_no_bigint;
 void an_rat_boxed_mark(int id);
 int an_rat_boxed(int id);
 int an_rat_value(Compiler *c, int n);
@@ -194,6 +200,7 @@ void elab_check_sort(Compiler *c, const int *now, const int *rec, int n, const i
 void elab_dump(Compiler *c, FILE *out);
 void elab_free(Compiler *c);
 void elab_note_const_writes(Compiler *c);   /* the source's constant writes, before any pass */
+void elab_note_spliced_const_write(Compiler *c, int node);   /* ...and one a form of the walk splices in (#10791) */
 int elab_source_writes_const(Compiler *c, const char *name, int top);   /* ...one of them writes `name` (top: where the top level finds it) */
 int elab_consts_by_value(Compiler *c, int unheld);   /* may it write a constant by a name it computes (const_set, eval; unheld: autoload, const_missing)? */
 int elab_lexical_header(const NodeTable *nt, const int *par, int id);   /* the header whose body is id's lexical scope, -1 for the top level */
@@ -313,6 +320,13 @@ static inline const char *const_key_at(Compiler *c, int node) {
    or NULL for none registered: the analysis readers ask by node (#10787
    PR 3a), so a slot can later be the entity's instead of a name's */
 LocalVar *comp_const_at(Compiler *c, int node);
+/* The constant writes (`NAME = v`, `NAME ||= v`, ...) of the slot key
+   `key` (const_key_at), newest first: const_writes_head gives the first or
+   -1, const_writes_next the one after a write or -1. The chain holds until
+   the tree or the keys change. */
+int const_writes_head(Compiler *c, const char *key);
+int const_writes_next(Compiler *c, int node);
+void const_writes_free(Compiler *c);
 /* the version of cls's method `name` (singleton when sg) live at p, through
    its ancestors as they stood at p; *out (when asked) the version found. A
    hook (`inherited`, `included`, `method_added`, ...) is asked as the
@@ -342,7 +356,9 @@ void elab_open_histories(Compiler *c, void (*fn)(void *arg, int cls, int sg, con
    when sg; main's when cls < 0, both its sides, as the top-level functions
    are) where it runs: ELAB_YES / NO / UNKNOWN, for a reader that acts on
    ELAB_NO. ELAB_UNKNOWN, not ELAB_NO, for a call at no point, in a block a
-   call may keep to run later, or a pass made (a hook the language calls);
+   call may keep to run later, one that runs any time after its point (an
+   END body, a lazy chain's block: elab_runs_later), or a pass made (a hook
+   the language calls);
    for a chain through a class whose superclass the record does not hold
    (`Struct.new`, a core class); after an undef or a removal of an earlier
    definition; and where what the record cannot order may supply the name
@@ -356,6 +372,13 @@ void elab_open_histories(Compiler *c, void (*fn)(void *arg, int cls, int sg, con
    make a none unknown (an alias's original is looked up in the method tables
    alone, so a method that only they answer is none); a call passes 1. */
 int elab_call_method(Compiler *c, int id, int cls, const char *name, int sg, int mm);
+/* ...the same of cls's own methods alone (its singleton's own when sg), as
+   a call that asks the class itself sees them (CT_OWN: singleton_methods(false)):
+   its own history of name at the call, none of its ancestors'; with
+   mixins, its side's prepends' and includes' or extends' too, each from
+   its point on (the Class reopening's class side reads its instance side
+   too, as elab_call_method does) */
+int elab_call_own_method(Compiler *c, int id, int cls, const char *name, int sg, int mixins);
 /* the class a record builder made (`Foo = Struct.new(:a)`), or one whose
    header's superclass is the class a builder makes (`class Foo <
    Struct.new(:a)`), that cls is or inherits from; -1 for none. Past it
@@ -594,6 +617,8 @@ int elab_versions_late(Compiler *c, const char *name, const ElabVersion *vs, int
 /* ...and the versions of cls's own history of `name` alone, numbered as
    there */
 int elab_history_versions(Compiler *c, int cls, int sg, const char *name, ElabVersion *out, int cap);
+/* ...and whether main's top-level history of `name` holds a version whose node carries the int mark `mark` (set by a desugar) */
+int elab_main_history_marked(Compiler *c, const char *name, const char *mark);
 /* The state of the record and the node table an answer of elab_chain_versions
    was read from: a kept answer holds while the stamp does (the table's
    version, and the record's made-ness, size and map). */
@@ -715,6 +740,7 @@ const NodeKind *class_def_kinds(int *n);   /* the node kinds a definition can be
 const NodeKind *class_def_module_kinds(int *n);   /* ...a module's definition can be */
 int class_def_builder(const NodeTable *nt, int def_node);   /* a constant write's Class.new / Module.new call that defines a class, -1 for none */
 int class_def_path(const NodeTable *nt, int def_node);   /* the constant node it writes: a header's path, a builder's write or path target */
+int mixin_stmt_args(const NodeTable *nt, int st, int *prepend, const int **av);   /* a body's receiverless include/prepend: its argument count, -1 for another node */
 const char *class_def_name(const NodeTable *nt, int def_node);   /* the constant name it writes, NULL for none */
 const char *class_def_bare_name(const NodeTable *nt, int def_node);   /* ...written as a plain constant, NULL under a path */
 void class_def_set_body(NodeTable *nt, int def_node, int body);   /* its body statements, as a pass rebuilds them */
@@ -726,6 +752,7 @@ int class_def_is_class(const NodeTable *nt, int def_node);   /* written as `clas
 int class_def_opens_frame(const NodeTable *nt, int def_node);   /* self and definee are the class */
 int class_def_opens_cref(const NodeTable *nt, int def_node);   /* its constants are a scope of their own */
 int program_writes_const_in(Compiler *c, const char *pn, const char *nm);   /* in a body of pn, or `pn::nm = v` */
+void const_pairs_free(Compiler *c);   /* the pairs program_writes_const_in kept (analyze_util.c) */
 /* what a class builder's call (Class.new, Module.new) makes, as the
    builders' lowering noted it ahead of the walk (elab_builder_note); a copy
    answers as the node it copies: EB_NONE for none noted; EB_DYNAMIC_SUPER,
@@ -810,6 +837,11 @@ ElabEntry *elab_replaced_attrs(Compiler *c, int *n);
 void elab_attr_scope(Compiler *c, const ElabEntry *e, int scope);
 /* does class cls's own side hold such an accessor version of name? */
 int elab_attr_replaced(Compiler *c, int cls, const char *name);
+/* Does a later method of class cls's own instance side replace its
+   attr_* accessor `name` (a writer's as `x=`) as the load phase ends: the
+   class's last version of the name the registration applies is a def, an
+   alias or another method, not the accessor? */
+int elab_inst_attr_replaced(Compiler *c, int cls, const char *name);
 /* The attr_* call that declares the accessor name (a writer's as `x=`)
    class cls's instances answer: its own, or a module's it includes or
    prepends, or a superclass's; -1 for none (a Struct's or a Data's member,
@@ -897,6 +929,13 @@ int an_push_widens_fresh(Compiler *c, int id);
    (analyze_infer.c) */
 enum { AN_LIFT_INT = 1, AN_LIFT_FLOAT = 2, AN_LIFT_STRING = 4, AN_LIFT_SYMBOL = 8, AN_LIFT_OTHER = 16 };
 int an_push_lifts_boxed(Compiler *c, int id);
+/* The parameter of a literal lambda that an `in` arm's pattern (or the one
+   under its guard) calls with the subject, as Proc#=== does: exactly one
+   required parameter the body does not assign, a body that leaves only by its
+   last value, and no === of the program's own on Proc. Analysis types that
+   parameter from the subject and codegen inlines the call; any other lambda pattern is left as
+   it was. Its RequiredParameterNode, or -1 (analyze_pass.c). */
+int case_in_lambda_param(Compiler *c, int lam);
 /* the value of node n is dropped where it is: a statement's, a loop
    body's, an ensure clause's (an_value_dropped, analyze_infer.c) */
 int an_node_dropped(Compiler *c, int n);
@@ -937,11 +976,6 @@ int an_send_name_is_computed(Compiler *c, int arg);
 /* Is scope si an iterator synth_struct_each generated, not a def? */
 int scope_is_struct_synth(Compiler *c, int si);
 int an_str_mutator_name(const char *nm);
-/* Does inlined yielding method mi lend its parameter j at a call whose
-   literal block is blk: append to it, hand it to a lent parameter, or yield
-   it to a block parameter the block lends? The splice then binds it as an
-   alias of the caller's variable. */
-int an_inline_param_lent(Compiler *c, int mi, int j, int blk);
 /* A String handed to a proc, a lambda or a Method (#6179): what the targets
    a `.call` / `.()` / `[]` / `.yield` / `===` on a Proc or Method value can
    reach do with its argument at one position. Filled by dyn_call_reach, for
@@ -1072,7 +1106,7 @@ int an_elem_read_in_bounds(Compiler *c, int id);
 /* is position pos of a multiple assignment's value, read from a constant Array of a proven length, within it and no nil (a position from the end is not asked)? */
 int masgn_const_elem_in_range(Compiler *c, int value, long long pos);
 int scalar_nil_only_call(Compiler *c, int id, TyKind rt);
-int an_scalar_reopen_answers(Compiler *c, int id, const char *name, int recv, TyKind rt, int bonly);   /* analyze_infer.c */
+int an_builtin_reopen_answers(Compiler *c, int id, const char *name, int recv, TyKind rt, int bonly);   /* analyze_infer.c */
 int nullable_scalar_nil_only_call(Compiler *c, int id);
 int nullable_int_elem_array(Compiler *c, int node);
 /* an Array literal with an element and no splat: it is never empty */
@@ -1290,7 +1324,6 @@ const char *block_param_multi_leaf(Compiler *c, int block, int idx, int leaf_idx
 const char *method_sym_arg(Compiler *c, int node);   /* :sym arg name, or NULL */
 int is_method_obj_call(Compiler *c, int node);        /* is node a method(:sym) call? */
 int method_obj_target_mi(Compiler *c, int node);      /* target method scope idx, or -1 */
-int method_super_target(Compiler *c, int mi);         /* the scope <m>.super_method answers, or -1 */
 int method_obj_alias_owner(Compiler *c, int node, int *sg); /* the class an alias it names was made in, or -1 */
 /* The class whose chain a `method(:sym)` node's lookup searched: its
    receiver's (a constant's, self's, an object's class), which a Method of a
@@ -1417,11 +1450,6 @@ int std_stream_bare_call_own(Compiler *c, int id, const char *nm);   /* bare nm 
    arguments are Integers, no argument is a splat, a keyword Hash or a block
    argument, and no method of the program's own stands in for Array's. */
 int strh_call_op(Compiler *c, int call, TyKind rt);
-/* ...and the same for the gate's rounds, where an argument whose type is
-   not settled yet counts as the type asked (the gate runs again, and
-   refuses for good, once it is) */
-int strh_call_op_in(Compiler *c, int call, TyKind rt, int unknown_ok);
-int strh_literal_held(Compiler *c, int n);   /* an Array literal a variable of any kind is written */
 int strh_var_read(const NodeTable *nt, int n);   /* a variable's read, whatever its kind of variable */
 
 #endif

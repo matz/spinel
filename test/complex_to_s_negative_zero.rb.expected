@@ -1,0 +1,24 @@
+(1, -0.0): to_s="1-0.0i" inspect=(1-0.0i) interp=1-0.0i
+(0, -0.0): to_s="0-0.0i" inspect=(0-0.0i) interp=0-0.0i
+(-0.0, -0.0): to_s="-0.0-0.0i" inspect=(-0.0-0.0i) interp=-0.0-0.0i
+(0.0, -0.0): to_s="0.0-0.0i" inspect=(0.0-0.0i) interp=0.0-0.0i
+(1.5, -0.0): to_s="1.5-0.0i" inspect=(1.5-0.0i) interp=1.5-0.0i
+(-0.0, 0.0): to_s="-0.0+0.0i" inspect=(-0.0+0.0i) interp=-0.0+0.0i
+(-0.0, 1): to_s="-0.0+1i" inspect=(-0.0+1i) interp=-0.0+1i
+(1, 0.0): to_s="1+0.0i" inspect=(1+0.0i) interp=1+0.0i
+(1, -inf): to_s="1-Infinity*i" inspect=(1-Infinity*i) interp=1-Infinity*i
+(1, inf): to_s="1+Infinity*i" inspect=(1+Infinity*i) interp=1+Infinity*i
+(-inf, -inf): to_s="-Infinity-Infinity*i" inspect=(-Infinity-Infinity*i) interp=-Infinity-Infinity*i
+(1, nan): to_s="1+NaN*i" inspect=(1+NaN*i) interp=1+NaN*i
+(1, -nan): to_s="1+NaN*i" inspect=(1+NaN*i) interp=1+NaN*i
+(nan, nan): to_s="NaN+NaN*i" inspect=(NaN+NaN*i) interp=NaN+NaN*i
+(1, -2.5): to_s="1-2.5i" inspect=(1-2.5i) interp=1-2.5i
+(-1, -2): to_s="-1-2i" inspect=(-1-2i) interp=-1-2i
+(1, 2): to_s="1+2i" inspect=(1+2i) interp=1+2i
+(1.0, 2.0): to_s="1.0+2.0i" inspect=(1.0+2.0i) interp=1.0+2.0i
+1-0.0i
+-1-0.0i
+-1+0i
+(1-0.0i)
+[(1-0.0i)]
+0-0.0i 2+3i

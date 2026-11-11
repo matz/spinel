@@ -472,9 +472,20 @@ static void emit_method_owner_class(Compiler *c, int mn, int mi, int unbound, Bu
   const char *bn;
   int sg, ci = method_owner_ci(c, mn, mi, unbound, &sg, &bn);
   if (ci < 0 && !bn && bam_builtin_sym(c, mi, NULL)) buf_puts(b, "SP_CLASS_NIL");
-  else if (bn || ci < 0) buf_printf(b, "((sp_Class){(sp_int)-1, SPL(\"%s\")})", bn ? bn : "Object");
+  else if (bn || ci < 0) emit_builtin_class_value(c, bn ? bn : "Object", b);
   else if (sg) buf_printf(b, "((sp_Class){sp_sclass_id(%d), NULL})", ci);
   else buf_printf(b, "((sp_Class){%d, NULL})", ci);
+}
+
+/* The identity key of the builtin method a synthesized wrapper mi stands for,
+   "Owner#name" (sp_BoundMethod.ident), or NULL for any other target. Each
+   `.method(:sym)` on a builtin receiver has a wrapper of its own, so the
+   wrapper's address cannot say that two Methods are one method: this does. */
+static const char *method_builtin_ident(Compiler *c, int mn, int mi, int unbound, char *buf, size_t n) {
+  const char *bn, *sym = mi >= 0 ? bam_builtin_sym(c, mi, NULL) : NULL;
+  if (!sym || method_owner_ci(c, mn, mi, unbound, &(int){0}, &bn) >= 0 || !bn) return NULL;
+  snprintf(buf, n, "%s#%s", bn, sym);
+  return buf;
 }
 
 /* Where method mi stands, for #source_location: 1 and its def's file and
@@ -629,14 +640,17 @@ int emit_op_method_unbind(Compiler *c, const BopCtx *x, Buf *b) {
   /* (an unknown target's fact is the source Method's) */
   char ppv[32];
   const char *pp = tmu >= 0 ? proc_params_arg(method_proc_params(c, tmu)) : (snprintf(ppv, sizeof ppv, "_t%d->proc_params", tvu), ppv);
-  buf_puts(b, "; ");
+  /* (the source Method's key: two unbinds of one builtin method stay one
+     method. Read before the copy is allocated: the allocation may collect the
+     source, which nothing here roots.) */
+  buf_printf(b, "; const char *_i%d = _t%d->ident; sp_bm_set_ident(", tvu, tvu);
   if (pp) buf_puts(b, "sp_bm_set_proc_params(");
   buf_printf(b, "sp_bm_set_unbound(sp_bm_set_abi(sp_bound_method_new_d(NULL, SP_BM_SELF_NONE, _t%d->fn, _t%d->name, _t%d->arity, ", tvu, tvu, tvu);
   if (tmu >= 0) emit_method_desc_args(c, mnu, tmu, -1, method_sym_arg(c, mnu), 1, 0, b);
   else buf_printf(b, "NULL, _t%d->params, _t%d->owner, _t%d->src_file, _t%d->src_line", tvu, tvu, tvu, tvu);
   buf_printf(b, "), 0, _t%d->legacy_int_abi, _t%d->legacy_sig, _t%d->legacy_fixed, _t%d->legacy_rest, _t%d->legacy_ret, _t%d->poly_abi, _t%d->poly_fixed))", tvu, tvu, tvu, tvu, tvu, tvu, tvu);
   if (pp) buf_printf(b, ", %s)", pp);
-  buf_puts(b, "; })");
+  buf_printf(b, ", _i%d); })", tvu);
   return 1;
   return 0;
 }
@@ -647,8 +661,10 @@ int emit_op_method_super_method(Compiler *c, const BopCtx *x, Buf *b) {
   int recv = x->recv;
   int mnp = method_recv_node(c, recv);
   int imip = mnp >= 0 ? method_obj_target_mi(c, mnp) : -1;
-  int pmip = method_super_target(c, imip);
+  int pmip = imip >= 0 ? cplan_super_target(c, -1, &c->scopes[imip], NULL) : -1;
   if (pmip >= 0) {
+    /* a yielding target is called through the clone that is emitted for it (#3399) */
+    const int pfi = scope_proc_form_of(c, pmip), fmip = pfi >= 0 ? pfi : pmip;
     int tvp = ++g_tmp;
     buf_printf(b, "({ sp_BoundMethod *_t%d = ", tvp);
     emit_expr(c, recv, b);
@@ -659,22 +675,22 @@ int emit_op_method_super_method(Compiler *c, const BopCtx *x, Buf *b) {
     const char *pp = proc_params_arg(method_proc_params(c, pmip));
     if (pp) buf_puts(b, "sp_bm_set_proc_params(");
     buf_printf(b, "%ssp_bm_set_thunk(sp_bm_set_abi(sp_bound_method_new_d(_t%d->self, _t%d->self_kind, (sp_int)(uintptr_t)&", sup_unb ? "sp_bm_set_unbound(" : "", tvp, tvp);
-    buf_puts(b, mc_method(c, &c->scopes[pmip]));
+    buf_puts(b, mc_method(c, &c->scopes[fmip]));
     buf_puts(b, ", ");
-    emit_str_literal(b, c->scopes[pmip].name ? c->scopes[pmip].name : "?");
+    emit_str_literal(b, comp_scope_user_name(&c->scopes[pmip]));
     { int ar; if (method_scope_arity(c, pmip, &ar)) buf_printf(b, ", (sp_int)%d", ar); else buf_puts(b, ", (sp_int)-1"); }
     buf_puts(b, ", ");
-    emit_method_desc_args(c, -1, pmip, -1, c->scopes[pmip].name, sup_unb, 0, b);
+    emit_method_desc_args(c, -1, pmip, -1, comp_scope_user_name(&c->scopes[pmip]), sup_unb, 0, b);
     buf_puts(b, ")");
     { char _s[8 * 64 + 1]; int _fx = 0, _rs = 0, _rt = 0, _pf = 0, _prt = 0;
-      int _ab = method_legacy_int_abi(c, pmip, !sup_unb, _s, sizeof _s, &_fx, &_rs, &_rt);
-      int _pa = method_poly_abi(c, pmip, !sup_unb, &_pf, &_prt);
+      int _ab = method_legacy_int_abi(c, fmip, !sup_unb, _s, sizeof _s, &_fx, &_rs, &_rt);
+      int _pa = method_poly_abi(c, fmip, !sup_unb, &_pf, &_prt);
       char _rbb[32]; snprintf(_rbb, sizeof _rbb, "_t%d->recv_bound", tvp);
       /* the parent's binding is the source Method's: an instance method
          is receiver-bound, a class method is not */
       int _prb = c->scopes[pmip].class_id >= 0 && !c->scopes[pmip].is_cmethod;
       int _tmin = 0, _tmax = 0;
-      const char *_th = sup_unb ? NULL : emit_method_thunk(c, pmip, _prb, &_tmin, &_tmax);
+      const char *_th = sup_unb ? NULL : emit_method_thunk(c, fmip, _prb, &_tmin, &_tmax);
       emit_bm_abi_args(b, _rbb, _ab, _s, _fx, _rs, _ab ? _rt : _prt, _pa, _pf, _th, _tmin, _tmax); }
     if (sup_unb) buf_puts(b, ")");
     if (pp) buf_printf(b, ", %s)", pp);
@@ -1016,7 +1032,7 @@ int emit_op_method_owner(Compiler *c, const BopCtx *x, Buf *b) {
     buf_printf(b, "((void)("); emit_expr_for_effect(c, recv, b);
     buf_puts(b, "), ");
     if (osg) emit_method_owner_class(c, mn, target, unbound, b);
-    else buf_printf(b, "((sp_Class){(sp_int)-1, SPL(\"%s\")})", ocn);
+    else emit_builtin_class_value(c, ocn, b);
     buf_puts(b, ")");
     return 1;
   }
@@ -1034,7 +1050,7 @@ int emit_op_method_owner(Compiler *c, const BopCtx *x, Buf *b) {
       const char *own = builtin_method_owner(mcls, osym);
       if (own) mcls = own;
       buf_printf(b, "((void)("); emit_expr_for_effect(c, recv, b);
-      buf_printf(b, "), ((sp_Class){(sp_int)-1, SPL(\"%s\")}))", mcls);
+      buf_puts(b, "), "); emit_builtin_class_value(c, mcls, b); buf_puts(b, ")");
       return 1;
     }
   }
@@ -1045,7 +1061,7 @@ int emit_op_method_owner(Compiler *c, const BopCtx *x, Buf *b) {
     if (method_recv_owner_unknown(c, recv)) return 0;
     buf_puts(b, "({ sp_Class _o = sp_bm_owner(");
     emit_expr(c, recv, b);
-    buf_puts(b, "); sp_class_nil_p(_o) ? (sp_Class){(sp_int)-1, SPL(\"Object\")} : _o; })");
+    buf_puts(b, "); sp_class_nil_p(_o) ? "); emit_builtin_class_value(c, "Object", b); buf_puts(b, " : _o; })");
     return 1;
   }
   return 0;
@@ -1742,7 +1758,7 @@ int emit_call_callable_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, co
       else if (oret) buf_puts(b, oint_ctype(tret));
       else emit_ctype(c, tret, b);
       buf_puts(b, " (*)(");
-      const char *sct = bm_self_ctype(tm, shift);
+      const char *sct = bm_self_ctype(c, tm, shift);
       if (arm == 0) buf_puts(b, sct);
       for (int k = 0; k < eargc; k++) {
         if (arm == 0 || k) buf_puts(b, ", ");
@@ -1756,7 +1772,7 @@ int emit_call_callable_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, co
       }
       if (arm != 0 && eargc == 0) buf_puts(b, "void");
       buf_printf(b, "))(uintptr_t)_t%d->fn)(", tr);
-      if (arm == 0) { char sx[32]; snprintf(sx, sizeof sx, "_t%d->self", tr); emit_bm_self_arg(sct, sx, b); }
+      if (arm == 0) { char sx[32]; snprintf(sx, sizeof sx, "_t%d", tr); emit_bm_self_arg(sct, sx, b); }
       for (int k = 0; k < eargc; k++) {
         if (arm == 0 || k) buf_puts(b, ", ");
         buf_printf(b, "_t%d", atmp[k]);
@@ -2226,6 +2242,13 @@ static int emit_method_obj_target(Compiler *c, int id, Buf *b, const NodeTable *
     if (bop) builtin_method_params("Array", sym, &in_c);
     const char *pp = proc_params_arg(mi >= 0 ? method_proc_params(c, mi) : bop && in_c ? PROC_PARAMS_ARITY : PROC_PARAMS_LIST);
     if (mmq >= 0 && (self_rooted || recv < 0)) emit_missing_guard(c, id, mi, mmq, self_rooted ? self_tmp : -1, b);
+    char identbuf[256];
+    const char *ident = method_builtin_ident(c, id, mi, 0, identbuf, sizeof identbuf);
+    /* (the holder a boxed receiver rides in is new on every call: the Method
+       says so, and == / hash read the receiver inside it) */
+    int held = self_receiver && bam_poly;
+    if (held) buf_puts(b, "sp_bm_set_held(");
+    if (ident) buf_puts(b, "sp_bm_set_ident(");
     if (pp) buf_puts(b, "sp_bm_set_proc_params(");
     buf_puts(b, mi >= 0 || bop ? "sp_bm_set_thunk(sp_bm_set_abi(sp_bound_method_new_d(" : "sp_bm_set_thunk(sp_bm_set_abi(sp_bound_method_new(");
     if (self_rooted) buf_printf(b, "_t%d", self_tmp);
@@ -2417,7 +2440,7 @@ static int emit_method_obj_target(Compiler *c, int id, Buf *b, const NodeTable *
       /* (the facts name Array for each of the ops; none answered is nil) */
       const char *aown = builtin_method_owner("Array", sym);
       buf_puts(b, ", NULL, NULL, ");
-      if (aown) buf_printf(b, "((sp_Class){(sp_int)-1, SPL(\"%s\")})", aown);
+      if (aown) emit_builtin_class_value(c, aown, b);
       else buf_puts(b, "SP_CLASS_NIL");
       buf_puts(b, ", NULL, (sp_int)0");
     }
@@ -2429,6 +2452,8 @@ static int emit_method_obj_target(Compiler *c, int id, Buf *b, const NodeTable *
                        mi >= 0 ? mi_fixed : bop_argc, mi >= 0 ? mi_rest : bop_rest,
                        mi >= 0 ? (mi_legacy ? mi_ret : mi_pret) : bop_ret, mi_poly, mi_pfixed, _th, _tmin, _tmax); }
     if (pp) buf_printf(b, ", %s)", pp);
+    if (ident) { buf_puts(b, ", "); emit_str_literal(b, ident); buf_puts(b, ")"); }
+    if (held) buf_puts(b, ")");
     if (mmq >= 0 && (self_rooted || recv < 0)) buf_puts(b, ")");
     if (self_rooted) buf_puts(b, "; })");
     return 1;
@@ -3060,15 +3085,13 @@ int emit_send_blind(Compiler *c, int id, Buf *b) {
            class name reads */
         { Buf lb; memset(&lb, 0, sizeof lb);
           const char *snm = nt_str(c->nt, id, "name");
-          int nl = 0, ri = 0;
-          for (const char *bn; (bn = builtin_next_class_answering(&ri, snm)); )
-            buf_printf(&lb, "%s\"%s\"", nl++ ? ", " : "(const char *const[]){", bn);
-          for (int k = 0; k < c->nclasses; k++) {
-            const char *rn = class_ruby_name(c, k);
-            if (rn && !comp_class_is_module(c, &c->classes[k]) &&
-                builtin_id_below_object_answers(class_builtin_parent(c, k), snm))
-              buf_printf(&lb, "%s\"%s\"", nl++ ? ", " : "(const char *const[]){", rn);
-          }
+          int nl = cplan_send_split_owners(c, srcv, snm, NULL, 0);
+          const char **owners = nl ? malloc(sizeof *owners * (size_t)nl) : NULL;
+          if (nl && !owners) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+          if (nl) cplan_send_split_owners(c, srcv, snm, owners, nl);
+          for (int i = 0; i < nl; i++)
+            buf_printf(&lb, "%s\"%s\"", i ? ", " : "(const char *const[]){", owners[i]);
+          free(owners);
           if (nl) {
             buf_puts(&lb, ", NULL}");
             buf_printf(b, " || sp_str_in_list(sp_poly_class_name(_t%d), %s)", tv, lb.p);

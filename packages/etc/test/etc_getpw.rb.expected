@@ -1,0 +1,14 @@
+Etc::Passwd
+true
+true
+true
+true
+true
+true
+true
+true
+true
+0
+"root"
+"can't find user for no-such-user-xyz"
+"can't find user for 1073741824"

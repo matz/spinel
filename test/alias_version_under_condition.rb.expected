@@ -1,0 +1,13 @@
+:foo1
+:foo1
+:bar2
+:bar2
+1
+[:s, Integer]
+[:s, Integer]
+[:s, Float]
+[:s, Float]
+[:s, Scalar]
+[:s, Scalar]
+:m2
+:m2

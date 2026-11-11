@@ -1496,7 +1496,7 @@ int emit_call_compare_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
       nt_kind(nt, recv) == NK_ConstantReadNode && nt_str(nt, recv, "name")) {
     const char *mcn = nt_str(nt, recv, "name");
     if ((sp_streq(mcn, "Comparable") || sp_streq(mcn, "Enumerable")) &&
-        comp_class_index(c, mcn) < 0) {
+        comp_builtin_class_named(c, mcn) < 0) {
       buf_puts(b, "sp_poly_kind_of_builtin(");
       emit_boxed(c, argv[0], b);
       buf_printf(b, ", \"%s\")", mcn);
@@ -1606,6 +1606,27 @@ static int bigint_not_overridden(Compiler *c) {
 }
 
 /* String concatenation, unary -@ +@ ~ !, element stores and the arithmetic on a poly operand */
+/* A block given to a builtin push, append or unshift with no argument:
+   these never call a block, so it can be left out when nothing in it runs
+   in CRuby either. That holds for a literal block, for `&nil` and a lambda
+   literal, and for a local or instance variable read whose type is Proc
+   (or nil). Any other `&x` keeps the generic dispatch, because CRuby
+   calls its to_proc (or raises TypeError) before the call. A local that
+   holds nil on some path is boxed, so it keeps that dispatch too. */
+static int mutator0_block_droppable(Compiler *c, int id) {
+  const NodeTable *nt = c->nt;
+  int blk = nt_ref(nt, id, "block");
+  if (blk < 0 || nt_kind(nt, blk) == NK_BlockNode) return 1;
+  if (nt_kind(nt, blk) != NK_BlockArgumentNode) return 0;
+  int ex = nt_ref(nt, blk, "expression");
+  if (ex < 0) return 0;
+  NodeKind ek = nt_kind(nt, ex);
+  if (ek == NK_NilNode || ek == NK_LambdaNode) return 1;
+  if (ek != NK_LocalVariableReadNode && ek != NK_InstanceVariableReadNode) return 0;
+  TyKind et = comp_ntype(c, ex);
+  return et == TY_PROC || et == TY_NIL;
+}
+
 int emit_call_operator_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc, const int *argv, TyKind rt, TyKind a0) {
   /* An operator override owns its poly arm before the builtin protocol's
      delegation. The existing dispatch reads each arm's planned target. */
@@ -1646,7 +1667,7 @@ int emit_call_operator_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, co
         return 1;
       } }
     NodeKind rk = nt_kind(nt, recv);
-    if (str_mut_var_recv(c, recv) || sb_held_shadow(recv)) {
+    if (str_mut_var_recv(c, recv)) {
       /* a fresh unfrozen empty: the shared frozen "" would make a later
          mutation of the cleared receiver raise */
       buf_puts(b, "({ sp_str_check_mutable("); emit_expr(c, recv, b);
@@ -1770,96 +1791,11 @@ int emit_call_operator_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, co
                th2, dn2, th2, tp2, th2, ans);
     return 1;
   }
-  /* value-position String#[]= (s[i] = v / s[i, n] = v / s[range] = v / s["sub"]
-     = v on an assignable receiver): run the mutate statement, the expression's
-     value is the assigned string (#2370). */
-  /* A reader call handing out the shared handle takes the same statement,
-     through its shim (#3227). */
-  /* (--share-strings: so does a call answering its receiver over a
-     handle, `id(s).concat(x)[0] = v`, held as that handle first, run once:
-     the store takes it from the temp, ran_first_handle) */
-  int aset_route = recv >= 0 && repr_of(c, recv).as_ty == TY_STRING &&
-                   strbuf_self_route(c, recv) && g_n_argov + 2 < MAX_ARG_OVERRIDE;
-  /* (one a `&.` guard holds already is taken from there: ran_first_handle) */
-  int aset_held = aset_route && ran_first_handle(recv) >= 0;
-  if (recv >= 0 && sp_streq(name, "[]=") && (argc == 2 || argc == 3) &&
-      ((repr_of(c, recv).as_ty == TY_STRING &&
-        (nt_kind(nt, recv) == NK_LocalVariableReadNode ||
-         nt_kind(nt, recv) == NK_InstanceVariableReadNode)) ||
-       (repr_of(c, recv).as_ty == TY_STRBUF && nt_kind(nt, recv) == NK_CallNode) || aset_route ||
-       /* or the shadow a shim reads it as (emit_held_self_answer_shim) */
-       sb_held_shadow(recv))) {
-    int rslot = g_n_argov;
-    size_t rpre0 = g_pre->len;
-    if (aset_route && !aset_held) {
-      int th = ++g_tmp, tb = ++g_tmp;
-      emit_indent(g_pre, g_indent);
-      buf_printf(g_pre, "sp_String *_t%d = ", th);
-      emit_strbuf_handle_of(c, nt_paren_single(c->nt, recv), g_pre);
-      buf_printf(g_pre, "; SP_GC_ROOT(_t%d);\n", th);
-      emit_indent(g_pre, g_indent);
-      buf_printf(g_pre, "if (SP_UNLIKELY(!_t%d)) sp_raise_nomethod(sp_nomethod_msg(\"[]=\", sp_box_nil()));\n", th);
-      emit_indent(g_pre, g_indent);
-      buf_printf(g_pre, "const char *_t%d = sp_String_cstr(_t%d); (void)_t%d;\n", tb, th, tb);
-      ran_first_bind(recv, tb, th);
-    }
-    /* the value is evaluated once, into a temp the store reads and the
-       expression answers: evaluated again after the store, a call with
-       effects ran twice, and a value the store read through a boxed
-       dispatch came back boxed where the call answers a String */
-    int va = argv[argc - 1];
-    TyKind vt = repr_of(c, va).as_ty, want = repr_of(c, id).as_ty;
-    if (vt == TY_STRING || vt == TY_POLY) {
-      int tv = ++g_tmp;
-      char tn[24]; snprintf(tn, sizeof tn, "_t%d", tv);
-      /* in the prelude, where the store hoists its own reads of it */
-      size_t pre0 = g_pre->len;
-      Buf vb; memset(&vb, 0, sizeof vb);
-      emit_expr(c, va, &vb);
-      emit_indent(g_pre, g_indent);
-      if (vt == TY_POLY) buf_printf(g_pre, "sp_RbVal %s = %s; SP_GC_ROOT_RBVAL(%s);\n", tn, vb.p ? vb.p : "sp_box_nil()", tn);
-      else buf_printf(g_pre, "const char *%s = %s; SP_GC_ROOT(%s);\n", tn, vb.p ? vb.p : "NULL", tn);
-      int slot = view_bind(va, "%s", tn);
-      Buf mb; memset(&mb, 0, sizeof mb);
-      int ok = emit_array_mutate_stmt(c, id, &mb, 0);
-      view_unbind(slot);
-      if (ok) {
-        buf_puts(b, "({ ");
-        buf_puts(b, mb.p ? mb.p : "");
-        if (want == vt || want == TY_UNKNOWN || want == TY_VOID) buf_puts(b, tn);
-        else if (vt == TY_POLY) emit_unbox_text(c, want, tn, b);
-        else emit_boxed_text(c, vt, tn, b);
-        buf_puts(b, "; })");
-        free(vb.p); free(mb.p);
-        if (aset_route) view_unbind(rslot);
-        return 1;
-      }
-      /* no store to run: the value is the plain path's to evaluate */
-      g_pre->len = pre0; if (g_pre->p) g_pre->p[pre0] = 0;
-      free(vb.p); free(mb.p);
-    }
-    Buf mb; memset(&mb, 0, sizeof mb);
-    if (emit_array_mutate_stmt(c, id, &mb, 0)) {
-      buf_puts(b, "({ ");
-      buf_puts(b, mb.p ? mb.p : "");
-      /* a value of a class with no #to_str (an Integer, a Symbol, nil, an
-         Array): the store raised CRuby's TypeError converting it, so the
-         String the call answers is never read. Evaluated again as the
-         value, it went into the String slot and did not build. */
-      if (want == TY_STRING && vt != TY_STRBUF && vt != TY_UNKNOWN && !ty_is_object(vt))
-        buf_puts(b, raise_tail_value(want));
-      else emit_expr(c, argv[argc - 1], b);
-      buf_puts(b, "; })");
-      free(mb.p);
-      if (aset_route) view_unbind(rslot);
-      return 1;
-    }
-    free(mb.p);
-    if (aset_route) {
-      view_unbind(rslot);
-      g_pre->len = rpre0; if (g_pre->p) g_pre->p[rpre0] = 0;
-    }
-  }
+  /* String#[]= (and insert, clear, slice!) change the receiver's String in
+     place through its handle; []= answers the right-hand object (the String
+     rows of stage 7) */
+  if (recv >= 0 && (rt == TY_STRING || rt == TY_STRBUF) &&
+      emit_builtin_op_stage(c, id, recv, TY_STRING, name, 7, b)) return 1;
   /* poly `<<` in expression position: sp_poly_shl dispatches on the runtime tag
      (Integer#<< shift -> boxed int, Array#push append -> the array) and returns
      a poly either way, matching the statement-level path. */
@@ -1877,7 +1813,7 @@ int emit_call_operator_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, co
      keeps the generic dispatch, as a def of it does; that dispatch's own
      builtin arm (g_poly_builtin_arm), where the value is no instance of
      such a class, takes this arm back. */
-  if (recv >= 0 && rt == TY_POLY && argc == 0 && nt_ref(nt, id, "block") < 0 &&
+  if (recv >= 0 && rt == TY_POLY && argc == 0 && mutator0_block_droppable(c, id) &&
       is_array_self_mutator0(name) &&
       (g_poly_builtin_arm || (!an_user_defines_method(c, name) && !comp_name_reader_any(c, name)))) {
     int t = ++g_tmp;
@@ -1952,13 +1888,23 @@ int emit_call_operator_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, co
     return 1;
   }
 
-  /* default Object#<=>: 0 when the operands are the same object, nil otherwise
-     (identity). Only for a reference user object with no user `<=>` (#2686). */
+  /* default Object#<=>: 0 when the operands are the same object or ==, nil
+     otherwise. Only for a reference user object with no user `<=>` (#2686). */
   if (sp_streq(name, "<=>") && argc == 1 && recv >= 0 && ty_is_object(rt) &&
       !comp_ty_value_obj(c, rt) && comp_method_in_chain(c, ty_object_class(rt), "<=>", NULL) < 0 &&
       comp_native_method_find(c, ty_object_class(rt), "<=>", 1, 0) < 0) {
-    const char *cn = c->classes[ty_object_class(rt)].c_name;
-    if (comp_ntype(c, argv[0]) == rt) {
+    const ClassInfo *rci = &c->classes[ty_object_class(rt)];
+    const char *cn = rci->c_name;
+    /* a class whose == is not identity (its own, or a Struct's or a Data's
+       field-wise one): CRuby's rb_equal, the same object first, then == */
+    if (rci->is_struct || rci->is_data || comp_method_in_chain(c, ty_object_class(rt), "==", NULL) >= 0) {
+      int ta = ++g_tmp, tb = ++g_tmp;
+      buf_printf(b, "({ sp_RbVal _t%d = ", ta); emit_boxed(c, recv, b);
+      buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); sp_RbVal _t%d = ", ta, tb); emit_boxed(c, argv[0], b);
+      buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); sp_poly_rb_equal(_t%d, _t%d) ? sp_box_int(0) : sp_box_nil(); })",
+                 tb, ta, tb);
+    }
+    else if (comp_ntype(c, argv[0]) == rt) {
       int ta = ++g_tmp, tb = ++g_tmp;
       buf_printf(b, "({ sp_%s *_t%d = ", cn, ta); emit_expr(c, recv, b);
       buf_printf(b, "; sp_%s *_t%d = ", cn, tb); emit_expr(c, argv[0], b);

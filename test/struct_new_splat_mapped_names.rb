@@ -17,3 +17,12 @@ D = Data.define(*%w[w h].map(&:to_sym))
 d = D.new(w: 5, h: 6)
 p d.h
 p d
+# a to_sym, map or sort of the program's own in another class (not String,
+# Array or Symbol) leaves the names readable
+class Tag; def to_sym = :tag; def map = [:m]; def sort = [:s]; def <=>(o) = 0; end
+E = Struct.new(*%w[k j].map(&:to_sym))
+p E.members, Tag.new.to_sym
+F = Struct.new(*%i[z y].sort)
+p F.members
+# ... also where the program names Array, String and Symbol elsewhere
+p [].is_a?(Array), "".is_a?(String), :a.is_a?(Symbol)

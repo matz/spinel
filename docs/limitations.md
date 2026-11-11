@@ -1025,9 +1025,21 @@ x = nil
 r = (begin; x.nope; rescue NoMethodError; "runtime"; end)   # => "runtime"
 ```
 
-A name CRuby *does* define on that class, which Spinel has not implemented, is
-a different thing entirely: that is a gap in Spinel, and it reports itself as
-an `unsupported call` naming the node, not as a `NoMethodError`.
+A name CRuby *does* give the receiver's class, at a visibility the call reaches
+and an argument count it accepts, which Spinel has no route for, is a different
+thing entirely: that is a gap in Spinel, and it is not a `NoMethodError`. The
+build warns of it, naming the CRuby method, and the call raises
+`NotImplementedError` where it runs, after its receiver and arguments have run:
+
+```ruby
+a = 1
+p local_variables   # spinel: t.rb:2: warning: Kernel#local_variables is not supported (raises NotImplementedError when reached)
+```
+
+`NotImplementedError` is a `ScriptError`, so a `rescue NameError` or
+`rescue NoMethodError` around such a call does not catch it. A call in code that
+never runs (a branch not taken, a method nothing calls) gets the warning if it
+is compiled, and the program builds and answers as before.
 
 #### A typed array holds one kind of element
 
@@ -1302,15 +1314,17 @@ The same applies to `freeze` on these values: they are value-frozen already
 (`frozen?` is `true`), and `freeze` is an identity no-op.
 
 So it is for the numbers CRuby keeps as objects while Spinel holds them by
-value: an Integer outside the fixnum range (from 2**62 up and below
--2**62), and a Float that is no flonum (`-0.0`, a NaN, an infinity, a
-magnitude past 2**256 or below 2**-254), as for a `Time`. Two equal ones are
-`equal?`, where CRuby answers `false` for two separately made objects and
-`true` for one. A Hash or a Set under `compare_by_identity` finds its keys
-the same way, so two equal such keys made apart are one entry here and two
-in CRuby (`h[2**64] = 1; h[2**64] = 2; h.size` is 1). Every other value's
-identity is CRuby's: an object of the program's, an Array, a Hash, a String
-(a literal is one object per content, as under frozen string literals; one
+value in a machine word: an Integer outside the fixnum range that still
+fits 64 bits (2**62 up to 2**63, and below -2**62), and a Float that is no
+flonum (`-0.0`, a NaN, an infinity, a magnitude past 2**256 or below
+2**-254). Two equal ones are `equal?`, where CRuby answers `false` for two
+separately made objects and `true` for one, and a Hash or a Set under
+`compare_by_identity` keeps two equal such keys made apart as one entry
+(CRuby keeps two). A larger Integer is a Bignum object here as there, and
+a boxed Rational, Complex, Range or Time keeps its own box, so an identity
+Hash or Set keeps those apart as CRuby does. Every other value's identity
+is CRuby's: an object of the program's, an Array, a Hash, a String (a
+literal is one object per content, as under frozen string literals; one
 made afresh is a new one; `-s` answers the literal of its content), a
 Symbol, an Integer in the fixnum range, a flonum, nil, true and false.
 
@@ -2023,6 +2037,16 @@ than with `true`.
 ---
 
 ## Now supported (older write-ups are stale here)
+
+A `case/in` whose plain array patterns match a typed user object calls its
+`#deconstruct` once for the whole case, as CRuby does, also when an arm's
+elements or guard fail and a later array arm is tried. A separate case or
+one-line match calls it again. Alternative (`|`), find and capture patterns,
+and a subject held as a boxed value, still call it in each arm.
+
+A statement `case` whose subject is of another kind than a splatted list of
+Integers, Strings or Floats (`case [1, 2] when *ints`, `case "a" when *ints`,
+`case :a when *strs`) runs the list and does not match, as CRuby does.
 
 These were limits in an earlier (Ruby self-hosted) version of the compiler and
 now work on current master:

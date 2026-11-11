@@ -1,0 +1,18 @@
+:a
+:p
+:a
+:own
+:a
+:a
+:p
+:a
+:b2
+:b2
+:own
+"uninitialized constant Other::Z"
+:own
+NameError
+:own
+"uninitialized constant Other::Z"
+:base3
+:a3

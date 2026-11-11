@@ -89,6 +89,7 @@ sp_RbVal (*sp_obj_to_hash_fn)(sp_RbVal) = NULL;
 const char *(*sp_obj_to_json_fn)(sp_RbVal) = NULL;
 sp_RbVal (*sp_obj_to_h_fn)(sp_RbVal) = NULL;
 sp_RbVal (*sp_obj_struct_values_fn)(sp_RbVal) = NULL;
+const char *const *sp_poly_root_lacks_names = NULL;
 sp_RbVal (*sp_obj_to_a_fn)(sp_RbVal) = NULL;
 sp_RbVal (*sp_obj_to_ary_fn)(sp_RbVal) = NULL;
 sp_RbVal (*sp_obj_deconstruct_fn)(sp_RbVal) = NULL;
@@ -103,6 +104,7 @@ int (*sp_obj_conv_fn)(int cls_id, void *p, int which, sp_RbVal *out) = NULL;
 const char *(*sp_obj_cls_name_fn)(int cls_id) = NULL;
 int (*sp_bsub_cls_fn)(sp_RbVal v) = NULL;
 int (*sp_cls_visible_fn)(int cls_id) = NULL;
+int (*sp_cls_reopen_fn)(int bid) = NULL;
 int (*sp_class_le_id_fn)(int sub, int super) = NULL;
 sp_RbVal (*sp_class_cmp_fn)(sp_RbVal a, sp_RbVal b) = NULL;
 int (*sp_class_kind_of_name_fn)(int cls, const char *name) = NULL;
@@ -202,7 +204,11 @@ static void sp_gc_verify_snapshot(void){ sp_gc_vsnap_n=0;
   for(sp_gc_hdr*p=sp_gc_heap;p;p=p->next)sp_gc_vsnap_push(p);
 #endif
   for(sp_gc_hdr*p=sp_gc_old_heap;p;p=p->next)sp_gc_vsnap_push(p); if(sp_gc_vsnap_n>1)qsort(sp_gc_vsnap,sp_gc_vsnap_n,sizeof(sp_gc_hdr*),sp_gc_vsnap_cmp); }
-static int sp_gc_obj_registered(sp_gc_hdr *h){ if(sp_slab_owns(h))return sp_slab_is_live(h)&&!sp_slab_is_str(h); uintptr_t hv=(uintptr_t)h; size_t lo=0,hi=sp_gc_vsnap_n; while(lo<hi){ size_t m=lo+(hi-lo)/2; uintptr_t x=(uintptr_t)sp_gc_vsnap[m]; if(x==hv)return 1; if(x<hv)lo=m+1; else hi=m; } return 0; }
+/* A static object the GC never allocated, a frozen literal's String
+   (sp_StringLiteral): its header links to itself, where a listed header
+   links to the next one or to nothing. */
+static int sp_gc_hdr_is_static(const sp_gc_hdr *h){ return h->next == h; }
+static int sp_gc_obj_registered(sp_gc_hdr *h){ if(sp_slab_owns(h))return sp_slab_is_live(h)&&!sp_slab_is_str(h); if(sp_gc_hdr_is_static(h))return 1; uintptr_t hv=(uintptr_t)h; size_t lo=0,hi=sp_gc_vsnap_n; while(lo<hi){ size_t m=lo+(hi-lo)/2; uintptr_t x=(uintptr_t)sp_gc_vsnap[m]; if(x==hv)return 1; if(x<hv)lo=m+1; else hi=m; } return 0; }
 /* Verify diagnostics: which phase/slot the bad pointer came from. */
 int sp_gc_verify_on(void) { return sp_gc_verify; }
 const char *sp_gc_dbg_phase = "?";

@@ -1,0 +1,9 @@
+B.exception ["bb"]
+[B, "BB"]
+B.exception []
+[B, "B"]
+B.exception ["x", "y"]
+[ArgumentError, "wrong number of arguments (given 2, expected 0..1)"]
+[W, "w/dflt"]
+"2/1"
+[S, "bye"]

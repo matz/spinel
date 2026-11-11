@@ -8258,9 +8258,23 @@ static int sp_graph_flatten(SpLoadGraph *g, int f, const char *source_file) {
     sp_inline_rbs_free();
     return 0;
   }
+  /* a `#<SPINEL_SOURCE>file:line` marker in the file pins the positions
+     after it, as the inline model's map of the spliced buffer does: the
+     file's own map for its parse, the file's own lines elsewhere */
+  int saved_map_n = sp_line_map_n;
+  int *saved_lf = sp_line_file, *saved_lo = sp_line_orig, *saved_lp = sp_line_pop;
+  int *saved_df = sp_disp_file, *saved_dl = sp_disp_line;
+  int own_map = r->text && strstr(r->text, SP_SOURCE_PREFIX) != NULL;
+  if (own_map) sp_build_line_map(r->text, sp_file_table[g_flat_file]);
   g_flat_sites = (SpGraphFlat){ g, r, 0 };
   int start = node_counter, root = flatten(r->src.root);
   g_flat_sites = (SpGraphFlat){ NULL, NULL, 0 };
+  if (own_map) {
+    free(sp_line_file); free(sp_line_orig); free(sp_line_pop); free(sp_disp_file); free(sp_disp_line);
+    sp_line_map_n = saved_map_n;
+    sp_line_file = saved_lf; sp_line_orig = saved_lo; sp_line_pop = saved_lp;
+    sp_disp_file = saved_df; sp_disp_line = saved_dl;
+  }
   sp_inline_rbs_done();
   sp_inline_rbs_free();
   if (!f) out_nt->root_id = root;

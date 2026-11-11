@@ -1,0 +1,19 @@
+"obj 1!"
+Object
+"obj 2"
+42
+"obj"
+:foo
+:b
+#<Method: B#foo()>
+0
+B
+42
+42
+[:o, C, 2]
+[:o, D, 3]
+[:o, C, 4]
+[:o, C]
+[:o, C]
+"bind argument must be an instance of Object"
+"bind argument must be an instance of Object"

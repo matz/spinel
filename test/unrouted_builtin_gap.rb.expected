@@ -1,0 +1,51 @@
+class body: NotImplementedError: spinel: Module#class_variables is not supported
+main: NotImplementedError: spinel: Kernel#local_variables is not supported
+main global: NotImplementedError: spinel: Kernel#global_variables is not supported
+eval false
+instance method: NotImplementedError: spinel: Kernel#private_methods is not supported
+class method: NotImplementedError: spinel: Kernel#local_variables is not supported
+eval false
+explicit Integer receiver: NotImplementedError: spinel: Kernel#singleton_methods is not supported
+eval false
+builtin class value: NotImplementedError: spinel: Module#instance_methods is not supported
+module value: NotImplementedError: spinel: Module#constants is not supported
+module function: NotImplementedError: spinel: Kernel.global_variables is not supported
+send: NotImplementedError: spinel: Kernel#local_variables is not supported
+not a NameError: NotImplementedError
+not a NoMethodError: NotImplementedError
+made public: NotImplementedError: spinel: Kernel#global_variables is not supported
+operand of a builtin arm: NotImplementedError: spinel: Kernel#global_variables is not supported
+3
+block through new: answered
+nil block through new's super: NotImplementedError: spinel: Array#min is not supported
+bare instance_method: NotImplementedError: spinel: Module#instance_method is not supported
+typed hash: NotImplementedError: spinel: Hash#transform_values is not supported
+name that is there: NotImplementedError: spinel: Module#instance_method is not supported
+name an alias adds: NotImplementedError: spinel: Module#instance_method is not supported
+package method: NotImplementedError: spinel: Module#instance_method is not supported
+pp method: NotImplementedError: spinel: Module#instance_method is not supported
+slice
+gap in a spliced block: NotImplementedError: spinel: Kernel#global_variables is not supported
+slice
+a
+gap in a String iterator's block: NotImplementedError: spinel: Kernel#global_variables is not supported
+pick 0
+block argument 0: NotImplementedError: spinel: Kernel#singleton_methods is not supported
+pick 1
+block argument 1: NotImplementedError: spinel: Kernel#singleton_methods is not supported
+pick 2
+block argument 2: NotImplementedError: spinel: Kernel#singleton_methods is not supported
+pick 3
+block argument 3: NotImplementedError: spinel: Kernel#singleton_methods is not supported
+pick 4
+block argument 4: NotImplementedError: spinel: Kernel#singleton_methods is not supported
+pick 5
+block argument 5: TypeError: no implicit conversion of Array into Proc
+pick 6
+block argument 6: TypeError: no implicit conversion of Range into Proc
+pick 7
+block argument 7: TypeError: no implicit conversion of Object into Proc
+class side of Module: NotImplementedError: spinel: Module.constants is not supported
+Module's own: NotImplementedError: spinel: Module.constants is not supported
+Class's own allocate: NotImplementedError: spinel: Class.allocate is not supported
+Complex.polar with no argument: NotImplementedError: spinel: Complex.polar is not supported

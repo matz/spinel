@@ -125,9 +125,9 @@ extern const char *const sp_str_frozen_true;
 extern const char *const sp_str_frozen_false;
 /* Symbol#to_s's String (sp_sym_to_s_frozen): frozen static storage with a
    header, 0xf1, whose `next` link names sp_sym_str_tag. The link is free to
-   carry the mark: the String is on no sweep list and has no literal slot
-   (an even link is none). A Hash compared by identity asks it, as CRuby
-   answers a new String at each to_s. */
+   carry the mark: the String is on no sweep list and is no literal (an
+   even link names no literal's handle). A Hash compared by identity asks
+   it, as CRuby answers a new String at each to_s. */
 extern const sp_str_hdr sp_sym_str_tag;
 static inline int sp_str_is_sym_name(const char *s) {
   return s && ((const unsigned char *)s)[-1] == 0xf1 &&
@@ -250,11 +250,25 @@ void sp_gc_collect_request(void);   /* explicit GC.start: same barrier, forced *
 
 /* SPINEL_ALLOC_REPORT counters (#1336): defined in sp_alloc.c. The `on` flag
    is set once by a constructor from the env var; the hot entry points guard
-   their count call on it (one predictable branch when off). */
+   their count call on it (one predictable branch when off).
+   SP_NO_ALLOC_REPORT compiles the feature out: the flag is the constant 0, so
+   every guarded call folds away, and sp_alloc.c drops the counters, the type
+   name table and the constructor that installs the report signal handler --
+   which, being a constructor, is otherwise linked into every program. For
+   targets that count static RAM and flash (32-bit MCUs); define it for both
+   the runtime build and the generated TU. The tags sp_tu_init registers
+   become no-ops that drop their arguments, so the scan function each one
+   names stops holding that kind's code in the link, with the generated C
+   unchanged. */
+#ifdef SP_NO_ALLOC_REPORT
+#define sp_alloc_report_on 0
+#define sp_alloc_report_tag(scan, name) ((void)0)
+#else
 extern int sp_alloc_report_on;
+void sp_alloc_report_tag(void *scan, const char *name);
+#endif
 void sp_alloc_report_count(void *scan, size_t bytes);
 void sp_alloc_report_str(size_t bytes);
-void sp_alloc_report_tag(void *scan, const char *name);
 
 /* Binary (ASCII-8BIT) strings. spinel keeps no per-string encoding tag:
    String#length counts UTF-8 code points while the bytes stay valid UTF-8 and
@@ -419,7 +433,15 @@ static inline int sp_str_is_ascii7(const char *s) {
 }
 static inline void sp_str_mark_ascii7(const char *s) {
   if (!s || !sp_str_has_hdr(s)) return;
-  (((sp_str_hdr *)(s - 1)) - 1)->size |= SP_STR_SIZE_ASCII7;
+  sp_str_hdr *h = ((sp_str_hdr *)(s - 1)) - 1;
+  if (h->size & SP_STR_SIZE_ASCII7) return;
+  /* a frozen literal's header is read-only (fzl_emit_defs): a 7-bit one has
+     the bit from the start, and one that only counts as many characters as
+     bytes (invalid UTF-8, sp_str_length) is left unmarked. The test, the
+     marker and the link sp_String_of_literal reads, also passes over a
+     frozen slab String whose stale link is odd: that one is walked again. */
+  if (((const unsigned char *)s)[-1] == 0xf1 && ((uintptr_t)h->next & 1)) return;
+  h->size |= SP_STR_SIZE_ASCII7;
 }
 
 static inline size_t sp_str_byte_len(const char *s) {
@@ -999,7 +1021,7 @@ static inline sp_PolyArray *sp_PolyArray_new_cap(sp_int n) {
   if (n > a->cap) sp_PolyArray_grow_to(a, n);
   return a;
 }
-static inline void sp_PolyArray_push(sp_PolyArray *a, sp_RbVal v) { if (!a) return; sp_gc_wb((void*)a); if (a->frozen) { sp_raise_frozen_array_at(a, SP_BUILTIN_POLY_ARRAY); return; } if (a->len >= a->cap) sp_PolyArray_grow(a); a->data[a->len++] = v; }
+static inline void sp_PolyArray_push(sp_PolyArray *a, sp_RbVal v) { if (!a) return; sp_gc_wb((void*)a); if (a->frozen) { sp_raise_frozen_array_at(a, SP_BUILTIN_POLY_ARRAY); return; } sp_int l = SP_ARR_LEN_ONCE(a); if (l >= a->cap) sp_PolyArray_grow(a); a->data[l] = v; a->len = l + 1; }
 static inline sp_RbVal sp_PolyArray_get(sp_PolyArray *a, sp_int i) { if (!a) return sp_box_nil(); if ((unsigned long long)i < (unsigned long long)a->len) return a->data[i]; if (i < 0) i += a->len; if (i < 0 || i >= a->len) return sp_box_nil(); return a->data[i]; }
 static inline sp_RbVal sp_PolyArray_get_m(sp_PolyArray *a, sp_int i) { if (SP_UNLIKELY(!a)) sp_nil_recv("[]"); return sp_PolyArray_get(a, i); }
 /* ---- relocated from spinel_rt.h: frozen-string check primitives used
@@ -1013,6 +1035,12 @@ static inline sp_RbVal sp_PolyArray_get_m(sp_PolyArray *a, sp_int i) { if (SP_UN
 static inline sp_bool sp_str_fd_owner_frozen(const char *s) {
   void *owner = (void *)(((const sp_str_hdr *)(s - 1)) - 1)->next;
   return owner && ((sp_gc_hdr *)((char *)owner - sizeof(sp_gc_hdr)))->frozen;
+}
+/* The handle that owns a String's own bytes (marker 0xfd, whose header
+   names it), or NULL for any other bytes or a payload nothing owns. */
+static inline struct sp_String_s *sp_str_fd_owner(const char *s) {
+  if (!s || ((const unsigned char *)s)[-1] != 0xfd) return NULL;
+  return (struct sp_String_s *)(void *)(((const sp_str_hdr *)(s - 1)) - 1)->next;
 }
 /* 0xf1 = heap string frozen by an explicit .freeze call.
    Unlike 0xff (rodata literal) this marker lives in a malloc'd buffer

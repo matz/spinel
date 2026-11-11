@@ -5,3 +5,9 @@
 [3, 4]
 6
 #<data D w=5, h=6>
+[:k, :j]
+:tag
+[:y, :z]
+true
+true
+true

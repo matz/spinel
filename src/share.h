@@ -49,11 +49,10 @@ int share_call_stores_block(Compiler *c, int n);
 int sh_may_hold(const Compiler *c, TyKind t);
 
 
-/* Under --share-strings, once the analysis is final: mark each String-keyed
-   Hash call's key that reads a shared handle, with nothing run between the
-   read and the call, as strbuf_read_raw, so it hands over the live buffer
-   instead of a copy. Answers how many it marked. */
-int share_mark_borrows(Compiler *c);
+/* Once the analysis is final: mark each String-keyed Hash call's key that
+   reads a shared handle, with nothing run between the read and the call,
+   as strbuf_read_raw, so it hands over the live buffer instead of a copy. */
+void share_mark_borrows(Compiler *c);
 
 /* Does method scope mi answer no String: each expression its value can be
    (a nil among them) is none a String can be, by its type or form or by what
@@ -128,9 +127,6 @@ int share_value_unobserved(Compiler *c, int n);
    String and one in a method no call reaches. */
 enum { SHN_NO, SHN_YES };
 int share_value_needs_handle(Compiler *c, int v);
-/* ... asked for the target of a multiple write that stores v, an element
-   of an Array literal it splits into its targets (also through a splat) */
-int share_store_needs_handle(Compiler *c, int v);
 /* Does node n hand over the shared handle (or a box holding it), not a
    copy of its bytes? The carry a deferred route is checked against
    (share_route_defer), and the String plan's supply for a value held as
@@ -146,14 +142,13 @@ int share_node_carry_kind(const Compiler *c, int n, int *op);
 int share_node_carry_kind_unlifted(const Compiler *c, int n, int *op);
 
 /* ---- the String plan (share_plan.c, #8328) ----
-   For each String value under --share-strings, once the analysis is final:
-   what its consumer needs, what its producer supplies, and the form those
-   give. A consumer asks for a String in the plan's form through
-   emit_str_form (codegen_internal.h); --share-check compares the plan with
-   the conversion each emitted site has. */
+   For each String value, once the analysis is final: what its consumer
+   needs, what its producer supplies, and the form those give. A consumer
+   asks for a String in the plan's form through emit_str_form
+   (codegen_internal.h). */
 enum { SPN_BYTES, SPN_NEW, SPN_OBJECT };              /* need */
 enum { SPS_BYTES, SPS_HANDLE };                       /* supply */
-enum { SPF_BYTES, SPF_HANDLE, SPF_WRAP, SPF_REFUSE }; /* form */
+enum { SPF_BYTES, SPF_HANDLE, SPF_WRAP, SPF_COPY };   /* form */
 /* the role of a value's consumer: it takes the value (keeps, changes,
    compares or hands it on), reads its bytes, tests it for nil or false,
    stores it into a multiple write's target, or asks its identity (equal?,
@@ -201,8 +196,6 @@ enum { SPR_TAKE, SPR_READ, SPR_TEST, SPR_STORE, SPR_IDENTITY, SPR_BOX };
 enum { SPK_NONE, SPK_BOX, SPK_SLOT, SPK_DEMANDED, SPK_ELEM, SPK_SLOT_POLY, SPK_FROZEN, SPK_SELF, SPK_BANG_BOX,
        SPK_PROC_CALL, SPK_POLY_ARMS, SPK_EXC_MESSAGE, SPK_EXC_SUPER, SPK_PUBLISHED, SPK_READER, SPK_WRITE,
        SPK_ASSIGN, SPK_OPERAND, SPK_BLOCK_VALUE, SPK_YIELD, SPK_COND, SPK_SEQUENCE, SPK_LIFT, SPK__COUNT };
-/* Can a store's target take value v as a handle (share_plan.c)? */
-int share_plan_store_renders(Compiler *c, int v);
 /* ...which, for an element of multiple write mw, the seal asks of the write */
 int share_plan_multi_renders(Compiler *c, int mw, int e);
 /* ...and emit_expr gives it as the handle already (share_plan.c)? */
@@ -212,8 +205,6 @@ typedef struct {
   unsigned char kind;   /* SPK_*, which share_plan_of fills where the supply
                            was asked (a need above bytes) */
 } SharePlan;
-/* the form a need and a supply give */
-int share_plan_form(int need, int supply);
 /* Fill the memo of each node's need (the end of repr_seal); free it with
    the Compiler. */
 void share_plan_build(Compiler *c);
@@ -223,12 +214,7 @@ void share_plan_free(Compiler *c);
    asked live (*memo, which may be NULL, says which); the supply always
    asked live, as it reads repr_of. */
 SharePlan share_plan_of(Compiler *c, int v, int role, int *memo);
-/* The memo's need of node v where codegen is, or -1 where it cannot answer. */
-int share_plan_memo_need(Compiler *c, int v);
-/* The value's need (what a taker needs), asked live (--share-check
-   compares the memo with it), and the plan for a consumer in `role` with
-   that need given. */
-int share_plan_need(Compiler *c, int v);
+/* The plan for a consumer in `role` of node v, whose need is given. */
 SharePlan share_plan_with_need(Compiler *c, int v, int role, int need);
 /* The role of the consumer node v sits in, as the program has it (a taker
    for a node made after seal), and the role of its second consumer, or -1:

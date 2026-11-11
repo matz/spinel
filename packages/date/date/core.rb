@@ -11,7 +11,7 @@ class Date
 
   class << self
     # Same as Date.new.
-    def civil(year = -4712, month = 1, day = 1, start = DEFAULT_SG)
+    def civil(year = -4712, month = 1, day = 1, start = ITALY)
       if Integer === year && Integer === month && Integer === day &&
          month >= 1 && month <= 12 && day >= 1 && day <= 28
         # Days 1..28 exist in every month of both the Julian and Gregorian
@@ -24,10 +24,12 @@ class Date
         a = yy / 100
         gjd = gjd_base - 1524 + 2 - a + a / 4
         if gjd >= start
-          return new_from_jd(gjd, start)
+          # month/day are in the 1..12 / 1..28 fast-path range, so year, month
+          # and day are already the final civil fields; cache them directly.
+          return new_from_jd(gjd, start, year, month, day)
         else
           jjd = gjd_base - 1524
-          return new_from_jd(jjd, start) if jjd < start
+          return new_from_jd(jjd, start, year, month, day) if jjd < start
           # gjd < start <= jjd: date falls in the reform gap; fall through to
           # civil_fallback, which raises "invalid date".
         end
@@ -56,9 +58,7 @@ class Date
     # See argument {start}[rdoc-ref:language/calendars.rdoc@Argument+start].
     #
     # Related: Date.jd.
-    def new(year = -4712, month = 1, day = 1, start = DEFAULT_SG)
-      civil(year, month, day, start)
-    end
+    alias_method :new, :civil
 
     # call-seq:
     #   Date.valid_civil?(year, month, mday, start = Date::ITALY) -> true or false
@@ -73,7 +73,7 @@ class Date
     # See argument {start}[rdoc-ref:language/calendars.rdoc@Argument+start].
     #
     # Related: Date.jd, Date.new.
-    def valid_civil?(year, month, day, start = DEFAULT_SG)
+    def valid_civil?(year, month, day, start = ITALY)
       return false unless year.is_a?(Numeric) && month.is_a?(Numeric) && day.is_a?(Numeric)
       !!internal_valid_civil?(year, month, day, start)
     end
@@ -103,11 +103,10 @@ class Date
     # See argument {start}[rdoc-ref:language/calendars.rdoc@Argument+start].
     #
     # Related: Date.new.
-    def jd(jd = 0, start = DEFAULT_SG)
-      check_numeric(jd, "jd")
-      jd = Integer(jd)
+    def jd(jd = 0, start = ITALY)
+      jd = convert_numeric_to_int(jd, "jd")
       obj = allocate
-      obj.__send__(:init_from_jd, jd, start)
+      obj.__send__(:initialize, jd, start)
       obj
     end
 
@@ -122,7 +121,7 @@ class Date
     # See argument {start}[rdoc-ref:language/calendars.rdoc@Argument+start].
     #
     # Related: Date.jd.
-    def valid_jd?(jd, _start = DEFAULT_SG)
+    def valid_jd?(jd, _start = ITALY)
       jd.is_a?(Numeric)
     end
 
@@ -185,7 +184,7 @@ class Date
     # See argument {start}[rdoc-ref:language/calendars.rdoc@Argument+start].
     #
     # Related: Date.jd, Date.new.
-    def ordinal(year = -4712, yday = 1, start = DEFAULT_SG)
+    def ordinal(year = -4712, yday = 1, start = ITALY)
       if Integer === year && Integer === yday && yday >= 1 && yday <= 365
         jd1 = civil_to_jd(year, 1, 1, start)
         jd = jd1 + yday - 1
@@ -195,10 +194,8 @@ class Date
           return new_from_jd(jd, start)
         end
       end
-      check_numeric(yday, "yday")
-      check_numeric(year, "year")
-      year = Integer(year)
-      yday = Integer(yday)
+      yday = convert_numeric_to_int(yday, "yday")
+      year = convert_numeric_to_int(year, "year")
       jd = internal_valid_ordinal?(year, yday, start)
       raise Date::Error, "invalid date" unless jd
       new_from_jd(jd, start)
@@ -216,7 +213,7 @@ class Date
     # See argument {start}[rdoc-ref:language/calendars.rdoc@Argument+start].
     #
     # Related: Date.jd, Date.ordinal.
-    def valid_ordinal?(year, day, start = DEFAULT_SG)
+    def valid_ordinal?(year, day, start = ITALY)
       return false unless year.is_a?(Numeric) && day.is_a?(Numeric)
       !!internal_valid_ordinal?(year, day, start)
     end
@@ -263,7 +260,7 @@ class Date
     # See argument {start}[rdoc-ref:language/calendars.rdoc@Argument+start].
     #
     # Related: Date.jd, Date.new, Date.ordinal.
-    def commercial(cwyear = -4712, cweek = 1, cwday = 1, start = DEFAULT_SG)
+    def commercial(cwyear = -4712, cweek = 1, cwday = 1, start = ITALY)
       if Integer === cwyear && Integer === cweek && Integer === cwday &&
          cweek >= 1 && cweek <= 52 && cwday >= 1 && cwday <= 7
         # ISO 8601: every normal year has at least 52 weeks, but the
@@ -272,12 +269,9 @@ class Date
         jd = commercial_to_jd(cwyear, cweek, cwday, start)
         return new_from_jd(jd, start) if jd < commercial_to_jd(cwyear + 1, 1, 1, start)
       end
-      check_numeric(cwday, "cwday")
-      check_numeric(cweek, "cweek")
-      check_numeric(cwyear, "year")
-      cwyear = Integer(cwyear)
-      cweek = Integer(cweek)
-      cwday = Integer(cwday)
+      cwday  = convert_numeric_to_int(cwday, "cwday")
+      cweek  = convert_numeric_to_int(cweek, "cweek")
+      cwyear = convert_numeric_to_int(cwyear, "year")
       jd = internal_valid_commercial?(cwyear, cweek, cwday, start)
       raise Date::Error, "invalid date" unless jd
       new_from_jd(jd, start)
@@ -297,7 +291,7 @@ class Date
     # See argument {start}[rdoc-ref:language/calendars.rdoc@Argument+start].
     #
     # Related: Date.jd, Date.commercial.
-    def valid_commercial?(year, week, day, start = DEFAULT_SG)
+    def valid_commercial?(year, week, day, start = ITALY)
       return false unless year.is_a?(Numeric) && week.is_a?(Numeric) && day.is_a?(Numeric)
       !!internal_valid_commercial?(year, week, day, start)
     end
@@ -311,7 +305,7 @@ class Date
     #
     # See argument {start}[rdoc-ref:language/calendars.rdoc@Argument+start].
     #
-    def today(start = DEFAULT_SG)
+    def today(start = ITALY)
       t = Time.now
       jd = civil_to_jd(t.year, t.mon, t.mday, start)
       new_from_jd(jd, start)
@@ -327,22 +321,20 @@ class Date
 
     private
 
-    # Reject non-Numeric arguments, mirroring C's check_numeric.
-    # The C extension uses NUM2INT/check_numeric and raises TypeError for
-    # non-Numeric input, whereas Integer() would coerce strings like "0xa".
-    def check_numeric(obj, field)
+    # Convert a Numeric argument to an Integer. Rejects non-Numeric input up
+    # front: a bare Integer() conversion would coerce numeric-looking strings
+    # such as "0xa", so require a Numeric here and raise TypeError otherwise.
+    def convert_numeric_to_int(obj, field)
       unless Numeric === obj
         raise TypeError, "invalid #{field} (not numeric)"
       end
+      Integer(obj)
     end
 
     def civil_fallback(year, month, day, start)
-      check_numeric(day, "day")
-      check_numeric(month, "month")
-      check_numeric(year, "year")
-      year  = Integer(year)
-      month = Integer(month)
-      day   = Integer(day)
+      day   = convert_numeric_to_int(day, "day")
+      month = convert_numeric_to_int(month, "month")
+      year  = convert_numeric_to_int(year, "year")
       jd = internal_valid_civil?(year, month, day, start)
       raise Date::Error, "invalid date" unless jd
       new_from_jd(jd, start)
@@ -566,29 +558,23 @@ class Date
     # Internal object factory
     # ---------------------------------------------------------------------------
 
-    # Build a Date from a Julian Day Number (integer part), start, and optional day fraction.
-    def new_from_jd(jd, sg, df = nil)
+    # Build a Date from a Julian Day Number and start. When the civil fields
+    # are already known (e.g. the Date.new fast path), pass them so the new
+    # instance can cache them instead of recomputing from the Julian Day.
+    # df: the day fraction a Date carries, as the C extension's does.
+    def new_from_jd(jd, sg, year = nil, month = nil, day = nil, df = nil)
       obj = allocate
-      obj.__send__(:init_from_jd, jd, sg, df)
+      obj.__send__(:initialize, jd, sg, year, month, day, df)
       obj
     end
 
     # Parse offset string like "+09:00", "-07:30", "Z" to seconds.
     def offset_str_to_sec(str)
-      case str
-      when 'Z', 'z', 'UTC', 'GMT'
-        0
-      when /\A([+-])(\d{1,2}):?(\d{2})(?::(\d{2}))?\z/
-        sign = $1 == '+' ? 1 : -1
-        h, m, s = $2.to_i, $3.to_i, ($4 || '0').to_i
-        sign * (h * 3600 + m * 60 + s)
-      when /\A([+-])(\d{2})(\d{2})\z/
-        sign = $1 == '+' ? 1 : -1
-        h, m = $2.to_i, $3.to_i
-        sign * (h * 3600 + m * 60)
-      else
-        0
-      end
+      # Use the full date_zone_to_diff port so named zones (JST, PST, ...),
+      # hour-only forms (+09, +9) and the out-of-range check are handled; an
+      # unrecognized or out-of-range zone yields 0, which the C extension
+      # treats as no offset.
+      sp_zone_to_diff(str) || 0
     end
 
   end
@@ -854,9 +840,10 @@ class Date
   #
   # See argument {start}[rdoc-ref:language/calendars.rdoc@Argument+start].
   #
-  def new_start(start = DEFAULT_SG)
+  def new_start(start = ITALY)
     obj = self.class.allocate
-    # Store the cutover as a Float, matching the C extension (see init_from_jd).
+    # Store the cutover as a Float so #start/#hash/marshal stay consistent
+    # (see #initialize).
     obj.set_jd_start(@jd, Float(start.to_f))
     obj
   end
@@ -998,8 +985,8 @@ class Date
     end
   end
 
-  # #<, #>, #==, #<=, #>= are all provided by Comparable via #<=>, matching
-  # the C extension, which includes Comparable and defines only #<=> and #===.
+  # #<, #>, #==, #<=, #>= are all provided by Comparable via #<=>; only #<=>
+  # and #=== are defined explicitly.
 
   def eql?(other)
     other.is_a?(Date) && @jd == other.jd && day_fraction == other.day_fraction
@@ -1087,19 +1074,19 @@ class Date
 
   # The construction behind + and -: a Date from its day number and day
   # fraction, a DateTime from its time of day as well (DateTime defines
-  # these two for itself). CRuby has one + and one - for both classes, so
+  # these hooks for itself). CRuby has one + and one - for both classes, so
   # an alias a program takes of either in Date (activesupport's
   # plus_without_duration) names the method a DateTime runs too; these hooks
   # keep it so, where a DateTime#+ of its own would be another method.
   private def _plus_days(n)
-    self.class.__send__(:new_from_jd, @jd + n, @start, @day_fraction)
+    self.class.__send__(:new_from_jd, @jd + n, @start, nil, nil, nil, @day_fraction)
   end
 
   private def _plus_fraction(r)
     total = r + day_fraction
     days = total.floor
     frac = total - days
-    self.class.__send__(:new_from_jd, @jd + days, @start, frac == 0 ? nil : frac)
+    self.class.__send__(:new_from_jd, @jd + days, @start, nil, nil, nil, frac == 0 ? nil : frac)
   end
 
   # call-seq:
@@ -1122,6 +1109,8 @@ class Date
   def -(other)
     case other
     when Date
+      # one answer for Date and DateTime alike, as the C extension's one
+      # method gives it: a DateTime's offset counts
       ajd - other.ajd
     when Integer
       _plus_days(-other)
@@ -1437,9 +1426,12 @@ class Date
   # @rbs other: Date
   def initialize_copy(other)
     # Assign every ivar in the canonical order so copies share the same shape
-    # as freshly constructed instances (see init_from_jd). The fields are
-    # read through the readers below, not instance_variable_get, so the
-    # compiler knows what each one holds.
+    # as freshly constructed instances (see #initialize). This stays an explicit
+    # copy rather than delegating to #initialize: DateTime overrides #initialize
+    # with an incompatible (year, month, day, ...) signature, so a shared
+    # initialize_copy must not dispatch through it. The fields are read through
+    # the readers below, not instance_variable_get, so the compiler knows what
+    # each one holds.
     @jd            = Integer(other.copied_jd)
     @start         = Float(other.copied_start)
     @day_fraction  = other.copied_day_fraction
@@ -1491,7 +1483,7 @@ class Date
       # Format 1.4/1.6: [jd_like, sg_or_bool]
       jd_like, sg_or_bool = array
       sg = sg_or_bool == true ? GREGORIAN : (sg_or_bool == false ? JULIAN : sg_or_bool.to_f)
-      init_from_jd(jd_like.to_i, sg)
+      initialize(jd_like.to_i, sg)
     when 3
       # Format 1.8: [ajd, of, sg]
       ajd, _of, sg = array
@@ -1499,20 +1491,20 @@ class Date
       raw_jd = ajd + 0.5r
       jd = raw_jd.floor
       df = raw_jd - jd
-      init_from_jd(jd, sg, df == 0 ? nil : df)
+      initialize(jd, sg, nil, nil, nil, df == 0 ? nil : df)
     when 6
       # Current format: [nth, jd, df, sf, of, sg]
       _nth, jd, df, sf, _of, sg = array
       sg = normalize_start(sg)
       if df != 0 || sf != 0
-        day_frac = (Rational(df) + sf) / 86400
-        init_from_jd(jd, sg, day_frac)
+        initialize(jd, sg, nil, nil, nil, (Rational(df) + sf) / 86400)
       else
-        init_from_jd(jd, sg)
+        initialize(jd, sg)
       end
     else
       raise TypeError, "invalid marshal data"
     end
+    self
   end
 
   #  call-seq:
@@ -1551,11 +1543,11 @@ class Date
     if keys
       if keys.size == 1
         case keys[0]
-        when :year  then { year: year }
-        when :month then { month: month }
-        when :day   then { day: day }
-        when :wday  then { wday: wday }
-        when :yday  then { yday: yday }
+        when :year  then { year: }
+        when :month then { month: }
+        when :day   then { day: }
+        when :wday  then { wday: }
+        when :yday  then { yday: }
         else {}
         end
       else
@@ -1573,7 +1565,7 @@ class Date
         h
       end
     else
-      { year: year, month: month, day: day, wday: wday, yday: yday }
+      { year:, month:, day:, wday:, yday: }
     end
   end
 
@@ -1600,26 +1592,12 @@ class Date
     y_s = y >= 1000 ? y.to_s : (y >= 0 ? format('%04d', y) : format('-%04d', -y))
     w = (@jd + 1) % 7
     if instance_of?(Date)
-      "#{ASCTIME_DAYS[w]} #{ASCTIME_MONS[@month]} #{d_s} 00:00:00 #{y_s}".force_encoding(Encoding::US_ASCII)
+      "#{ABBR_DAYNAMES[w]} #{ABBR_MONTHNAMES[@month]} #{d_s} 00:00:00 #{y_s}"
     else
-      "#{ASCTIME_DAYS[w]} #{ASCTIME_MONS[@month]} #{d_s} #{PAD2[internal_hour]}:#{PAD2[internal_min]}:#{PAD2[internal_sec]} #{y_s}".force_encoding(Encoding::US_ASCII)
+      "#{ABBR_DAYNAMES[w]} #{ABBR_MONTHNAMES[@month]} #{d_s} #{PAD2[internal_hour]}:#{PAD2[internal_min]}:#{PAD2[internal_sec]} #{y_s}"
     end
   end
   alias_method :ctime, :asctime
-
-  # call-seq:
-  #   iso8601    ->  string
-  #
-  # Equivalent to #strftime with argument <tt>'%Y-%m-%d'</tt>
-  # (or its {shorthand form}[rdoc-ref:language/strftime_formatting.rdoc@Shorthand+Conversion+Specifiers]
-  # <tt>'%F'</tt>);
-  #
-  #   Date.new(2001, 2, 3).iso8601 # => "2001-02-03"
-  #
-  def iso8601
-    to_s
-  end
-  alias_method :xmlschema, :iso8601
 
   # call-seq:
   #   rfc3339 -> string
@@ -1630,7 +1608,7 @@ class Date
   #   Date.new(2001, 2, 3).rfc3339 # => "2001-02-03T00:00:00+00:00"
   #
   def rfc3339
-    (to_s << 'T00:00:00+00:00').force_encoding(Encoding::US_ASCII)
+    to_s << 'T00:00:00+00:00'
   end
 
   # call-seq:
@@ -1647,9 +1625,9 @@ class Date
     y = @year
     y_s = y >= 1000 ? y.to_s : (y >= 0 ? format('%04d', y) : format('-%04d', -y))
     if instance_of?(Date)
-      "#{RFC2822_DAYS[w]}, #{@day}#{RFC_MON_SPACE[@month]}#{y_s} 00:00:00 +0000".force_encoding(Encoding::US_ASCII)
+      "#{ABBR_DAYNAMES[w]}, #{@day}#{RFC_MON_SPACE[@month]}#{y_s} 00:00:00 +0000"
     else
-      "#{RFC2822_DAYS[w]}, #{@day}#{RFC_MON_SPACE[@month]}#{y_s} #{PAD2[internal_hour]}:#{PAD2[internal_min]}:#{PAD2[internal_sec]} +0000".force_encoding(Encoding::US_ASCII)
+      "#{ABBR_DAYNAMES[w]}, #{@day}#{RFC_MON_SPACE[@month]}#{y_s} #{PAD2[internal_hour]}:#{PAD2[internal_min]}:#{PAD2[internal_sec]} +0000"
     end
   end
   alias_method :rfc822, :rfc2822
@@ -1668,9 +1646,9 @@ class Date
     y = @year
     y_s = y >= 1000 ? y.to_s : (y >= 0 ? format('%04d', y) : format('-%04d', -y))
     if instance_of?(Date)
-      "#{ASCTIME_DAYS[w]}, #{PAD2[@day]}#{RFC_MON_SPACE[@month]}#{y_s} 00:00:00 GMT".force_encoding(Encoding::US_ASCII)
+      "#{ABBR_DAYNAMES[w]}, #{PAD2[@day]}#{RFC_MON_SPACE[@month]}#{y_s} 00:00:00 GMT"
     else
-      "#{ASCTIME_DAYS[w]}, #{PAD2[@day]}#{RFC_MON_SPACE[@month]}#{y_s} #{PAD2[internal_hour]}:#{PAD2[internal_min]}:#{PAD2[internal_sec]} GMT".force_encoding(Encoding::US_ASCII)
+      "#{ABBR_DAYNAMES[w]}, #{PAD2[@day]}#{RFC_MON_SPACE[@month]}#{y_s} #{PAD2[internal_hour]}:#{PAD2[internal_min]}:#{PAD2[internal_sec]} GMT"
     end
   end
 
@@ -1718,13 +1696,25 @@ class Date
     y = @year
     if y >= 1000
       # Fast path: 4-digit year needs no zero-padding (most common case).
-      (y.to_s << suffix).force_encoding(Encoding::US_ASCII)
+      y.to_s << suffix
     elsif y >= 0
-      (format('%04d', y) << suffix).force_encoding(Encoding::US_ASCII)
+      format('%04d', y) << suffix
     else
-      (format('-%04d', -y) << suffix).force_encoding(Encoding::US_ASCII)
+      format('-%04d', -y) << suffix
     end
   end
+
+  # call-seq:
+  #   iso8601    ->  string
+  #
+  # Equivalent to #strftime with argument <tt>'%Y-%m-%d'</tt>
+  # (or its {shorthand form}[rdoc-ref:language/strftime_formatting.rdoc@Shorthand+Conversion+Specifiers]
+  # <tt>'%F'</tt>);
+  #
+  #   Date.new(2001, 2, 3).iso8601 # => "2001-02-03"
+  #
+  alias_method :iso8601, :to_s
+  alias_method :xmlschema, :iso8601
 
   # call-seq:
   #   inspect -> string
@@ -1735,11 +1725,11 @@ class Date
   #   # => "#<Date: 2001-02-03 ((2451944j,0s,0n),+0s,2299161j)>"
   #
   def inspect
-    "#<Date: #{to_s} ((#{@jd}j,0s,0n),+0s,#{inspect_sg}j)>".force_encoding(Encoding::US_ASCII)
+    "#<Date: #{to_s} ((#{@jd}j,0s,0n),+0s,#{inspect_sg}j)>"
   end
 
-  # Format the start (cutover) for #inspect the way the C extension does:
-  # "Inf"/"-Inf" for the infinite sentinels and an integer for whole values.
+  # Format the start (cutover) for #inspect: "Inf"/"-Inf" for the infinite
+  # sentinels and an integer for whole values.
   private def inspect_sg
     sg = @start
     if sg == Float::INFINITY
@@ -1767,24 +1757,27 @@ class Date
 
   # Normalize a start value coming from old marshal formats: a Date::Infinity
   # object becomes the equivalent Float (start is stored as a Float/Integer
-  # internally, like the C extension's double).
+  # internally).
   def normalize_start(sg)
     sg.is_a?(Infinity) ? sg.to_f : sg
   end
 
-  def init_from_jd(jd, sg, df = nil)
+  def initialize(jd, sg, year = nil, month = nil, day = nil, df = nil)
     @jd            = Integer(jd)
-    # Store the cutover as a Float, matching the C extension (which keeps it as
-    # a double). Keeps #start, #hash and marshal output consistent regardless of
-    # whether the caller passed an Integer (e.g. ITALY) or a Float sentinel.
+    # Store the cutover as a Float. Keeps #start, #hash and marshal output
+    # consistent regardless of whether the caller passed an Integer (e.g. ITALY)
+    # or a Float sentinel.
     @start         = Float(sg.to_f)
     @day_fraction  = df
-    # Initialize the lazily-computed civil ivars up front so every Date
-    # instance shares a single object shape regardless of which accessors
-    # are called. (yday/cweek/cwyear are not cached; see #yday/#cweek.)
-    @year          = nil
-    @month         = nil
-    @day           = nil
+    # Cache the civil fields when the caller already knows them (Date.new via
+    # the fast path passes them), so #year/#month/#day need not recompute them.
+    # When unknown they stay nil and are computed lazily by #internal_civil.
+    # Every instance assigns all three here, so the object shape is stable
+    # regardless of which path constructed it. (yday/cweek/cwyear are not
+    # cached; see #yday/#cweek.)
+    @year          = year
+    @month         = month
+    @day           = day
   end
 
   def internal_civil
@@ -1809,8 +1802,8 @@ class Date
     @year  = 100 * b + d - 4800 + m / 10
   end
 
-  # Compute [cwyear, cweek] from the Julian Day. Not cached, matching the
-  # C extension, which recomputes commercial fields on each access.
+  # Compute [cwyear, cweek] from the Julian Day. Recomputed on each access
+  # rather than cached, since commercial fields are rarely read repeatedly.
   def compute_commercial
     y, cw, = self.class.__send__(:jd_to_commercial, @jd, @start)
     [y, cw]

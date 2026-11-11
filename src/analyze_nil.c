@@ -401,7 +401,7 @@ static int nf_class_excludes_nil(Compiler *c, int p) {
       sp_streq(k, "Kernel")) return 0;
   /* a builtin class the program does not reopen (String, Hash, Integer):
      nil is no instance of one, but it is of a builtin module */
-  if (comp_class_index(c, k) < 0)
+  if (const_node_class_index(c, av[0]) < 0)
     return ak == NK_ConstantReadNode && is_builtin_class_name(k) && !is_builtin_module_name(k);
   int ndk = 0; const NodeKind *dk = class_def_module_kinds(&ndk);
   for (int dh = 0; dh < ndk; dh++)
@@ -1334,8 +1334,14 @@ static int nf_expr(NF *f, int v) {
   f->memo[v] = NF_BUSY;
   int sv = f->guarded;
   f->guarded = 0;
+#ifdef SP_EMIT_TRACE
+  emit_trace_ask(f->c, v, 'n', f->round, NULL);
+#endif
   int r = nf_expr_uncached(f, v);
   f->memo[v] = nf_code(r, f->guarded);
+#ifdef SP_EMIT_TRACE
+  emit_trace_fact(f->c, v, 'n', 0, f->memo[v]);
+#endif
   f->guarded = sv;
   return r;
 }

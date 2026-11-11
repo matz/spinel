@@ -7,6 +7,7 @@
 #include "types.h"
 #include "builtin_names.h"
 #include "analyze_internal.h"
+#include "../lib/sp_kernel_private.h"
 
 int is_zip_name(const char *n) {
   return sp_streq(n, "zip");
@@ -535,6 +536,20 @@ int is_reflective_access(const char *n) {
          sp_streq(n, "const_get") || sp_streq(n, "const_set") || sp_streq(n, "remove_instance_variable") ||
          sp_streq(n, "remove_class_variable") || sp_streq(n, "remove_const");
 }
+/* The methods whose CRuby answer turns on the name they are given: a
+   NameError for one not allowed as a name of its kind, or for one that is
+   not there. The reflective accesses of a variable or constant by name and
+   the questions about one (`Object.class_variable_get("x")`,
+   `const_source_location("lower")`), the method-list calls (attr_reader,
+   remove_method, undef_method) and alias_method, the visibility calls given
+   names, and ruby2_keywords. (The method lookups by name, instance_method
+   and method, are the call plan's cu_lookup_by_name.) */
+int is_name_checked_call(const char *n) {
+  return n && (is_reflective_access(n) || is_const_query_name(n) || is_const_visibility_name(n) ||
+               is_cvar_defined_name(n) || is_ivar_reflection_name(n) ||
+               is_method_list_call(n) || is_alias_method_name(n) || visibility_of_name(n) ||
+               class_method_vis_of_name(n) || sp_streq(n, "ruby2_keywords"));
+}
 /* The reflective listings of a kind of variable */
 int is_reflective_listing(const char *n) {
   return sp_streq(n, "instance_variables") || sp_streq(n, "class_variables") || sp_streq(n, "constants");
@@ -760,6 +775,8 @@ int is_method_owner_query(const char *n) {
 }
 
 int is_instance_method_name(const char *n) { return n && (sp_streq(n, "instance_method") || sp_streq(n, "public_instance_method")); }
+/* public_instance_method, public_method: the lookups that take public methods only */
+int is_public_method_lookup(const char *n) { return n && (sp_streq(n, "public_instance_method") || sp_streq(n, "public_method")); }
 /* method, public_method: a Method of the receiver's own method by name */
 int is_bound_method_maker(const char *n) { return n && (sp_streq(n, "method") || sp_streq(n, "public_method")); }
 /* super_method: the Method of the same method one step up its owner's chain */
@@ -1025,6 +1042,13 @@ int is_substitution(const char *n) {
 
 int is_substitution_bang(const char *n) {
   return sp_streq(n, "gsub!") || sp_streq(n, "sub!");
+}
+
+/* The String mutators the reassignment arms raise FrozenError for on a
+   String literal receiver, once their arguments ran (str_mutate_reassign_arms) */
+int is_str_reassign_mutator(const char *n) {
+  return sp_streq(n, "prepend") || sp_streq(n, "<<") || sp_streq(n, "concat") || sp_streq(n, "replace") ||
+         sp_streq(n, "delete_prefix!") || sp_streq(n, "delete_suffix!");
 }
 
 int is_encoding_mutator(const char *n) {
@@ -1548,6 +1572,24 @@ static int builtin_name_in(const char *name, const char *const *names) {
   return 0;
 }
 
+/* The globals the runtime sets, by name without the `$` (the punctuation ones
+   are told by their spelling): their values are the runtime's objects, not
+   a write of the program's. tools/runtime_gvar_check.rb holds the list
+   against CRuby's global_variables. */
+int is_runtime_gvar_name(const char *n) {
+  static const char *const names[] = { "stdout", "stderr", "stdin", "PROGRAM_NAME", "LOAD_PATH", "LOADED_FEATURES",
+                                       "VERBOSE", "DEBUG", "FILENAME", "_", NULL };
+  return n && builtin_name_in(n, names);
+}
+
+/* The constants the runtime defines that are no class or module (the classes are is_builtin_class_name's): the
+   standard streams, ARGV and the rest, DATA (which only a program with __END__ has), and every RUBY_ one.
+   tools/runtime_gvar_check.rb holds the list against CRuby's Object.constants. */
+int is_runtime_const_name(const char *n) {
+  static const char *const names[] = { "STDIN", "STDOUT", "STDERR", "ARGV", "ARGF", "ENV", "DATA", "TOPLEVEL_BINDING", NULL };
+  return n && (builtin_name_in(n, names) || !strncmp(n, "RUBY_", 5));
+}
+
 /* A builtin module the ancestors tables list by its (negative) builtin id
    (Comparable, Enumerable, Kernel, Math): that id, 0 for any other name */
 int builtin_mixin_module_id(const char *n) {
@@ -1846,6 +1888,8 @@ int is_env_const(const char *n) { return n && sp_streq(n, "ENV"); }
 /* RUBY_DESCRIPTION and its siblings: a builtin constant that is a frozen
    String (one object, read after read) */
 int is_engine_string_const(const char *n) {
+  /* (the String ones of the RUBY_ constants, by name: is_runtime_const_name takes the whole prefix, for a
+     constant the program must not be taken to define, and RUBY_PATCHLEVEL is an Integer) */
   return n && (sp_streq(n, "RUBY_DESCRIPTION") || sp_streq(n, "RUBY_VERSION") || sp_streq(n, "RUBY_PLATFORM") ||
                sp_streq(n, "RUBY_ENGINE") || sp_streq(n, "RUBY_ENGINE_VERSION") ||
                sp_streq(n, "RUBY_RELEASE_DATE") || sp_streq(n, "RUBY_REVISION") || sp_streq(n, "RUBY_COPYRIGHT"));
@@ -1985,6 +2029,20 @@ int is_instance_method_list(const char *n) {
     "protected_instance_methods", NULL };
   return builtin_name_in(n, names);
 }
+/* The visibilities method list n shows, a mask of 1 << SP_VIS_*:
+   instance_methods, methods and singleton_methods list the public and
+   protected methods, public_methods and a public_, protected_ or private_
+   instance_methods form its one kind; 0 for any other name */
+int method_list_vis_mask(const char *n) {
+  static const char *const pub_prot[] = { "instance_methods", "methods", "singleton_methods", NULL };
+  static const char *const pub[] = { "public_instance_methods", "public_methods", NULL };
+  static const char *const prot[] = { "protected_instance_methods", NULL };
+  static const char *const priv[] = { "private_instance_methods", NULL };
+  return builtin_name_in(n, pub_prot) ? 1 << SP_VIS_PUBLIC | 1 << SP_VIS_PROTECTED
+       : builtin_name_in(n, pub) ? 1 << SP_VIS_PUBLIC
+       : builtin_name_in(n, prot) ? 1 << SP_VIS_PROTECTED
+       : builtin_name_in(n, priv) ? 1 << SP_VIS_PRIVATE : 0;
+}
 /* The Module methods that read a class's method table: the instance-method
    lists and instance_method */
 int is_instance_method_table_read(const char *n) { return n && (is_instance_method_list(n) || sp_streq(n, "instance_method")); }
@@ -2061,16 +2119,38 @@ static int bmt_has(const char *const *names, const unsigned short *flags, int n,
   }
   return 0;
 }
+/* Does t undefine m itself (sing_side: on its singleton class)? */
+static int bmt_undefines(const BuiltinMethodTable *t, const char *m, int sing_side) {
+  return sing_side ? bmt_has(t->sundef, NULL, t->nsundef, m, 0, 0) : bmt_has(t->undef, NULL, t->nundef, m, 0, 0);
+}
 /* Does an ancestor of t ahead of root (NULL: any) have m among its own instance methods (sing_side: singleton
-   methods of a class); pub: only a public one counts */
-static int bmt_ancestors_have(const BuiltinMethodTable *t, const char *m, int sing_side, unsigned must, int pub, const char *root) {
+   methods of a class); pub: only a public one counts. 1 it does (*who, when given, names it), -1 the lookup
+   reaches an ancestor that undefines m first (it stops there), 0 neither */
+static int bmt_ancestors_have(const BuiltinMethodTable *t, const char *m, int sing_side, unsigned must, int pub, const char *root,
+                              const char **who) {
   for (int i = 0; i < t->nanc; i++) {
     if (root && !strcmp(t->ancestors[i], root)) break;
     const BuiltinMethodTable *a = bmt_find(t->ancestors[i]);
     if (!a || (must && !((t->aflags[i] & must) && (a->flags & must)))) continue;
-    if (sing_side ? !a->module && bmt_has(a->sing, a->sflags, a->nsing, m, must, pub) : bmt_has(a->inst, a->iflags, a->ninst, m, must, pub)) return 1;
+    if (sing_side && a->module) continue;
+    if (sing_side ? bmt_has(a->sing, a->sflags, a->nsing, m, must, pub) : bmt_has(a->inst, a->iflags, a->ninst, m, must, pub)) {
+      if (who) *who = t->ancestors[i];
+      return 1;
+    }
+    if (bmt_undefines(a, m, sing_side)) return -1;
   }
   return 0;
+}
+/* The class side of t ahead of Class's or Module's instance methods: a class's own and its superclasses'
+   singleton methods, a module's own; public m there is 1 (*who names the class or module that has it), an
+   undefine on the way -1, neither 0 */
+static int bmt_singleton_chain(const BuiltinMethodTable *t, const char *m, unsigned must, const char **who) {
+  if (!t->module) return bmt_ancestors_have(t, m, 1, must, 1, NULL, who);
+  if (bmt_has(t->sing, t->sflags, t->nsing, m, must, 1)) {
+    if (who) *who = t->name;
+    return 1;
+  }
+  return bmt_undefines(t, m, 1) ? -1 : 0;
 }
 int builtin_method_answers(const char *cls, const char *name, int sg, int certain) {
   const BuiltinMethodTable *t = bmt_find(cls);
@@ -2081,26 +2161,54 @@ int builtin_method_answers(const char *cls, const char *name, int sg, int certai
      it is no sure answer */
   if (!t) return !certain && cls && (builtin_core_class_slot(cls) >= 0 || is_builtin_reopen_name(cls));
   if (must && !(t->flags & must)) return 0;
-  if (!sg) return bmt_ancestors_have(t, name, 0, must, 1, NULL);
+  if (!sg) return bmt_ancestors_have(t, name, 0, must, 1, NULL, NULL) > 0;
   /* a class's singleton chain: its own and its superclasses' singleton methods,
      then Class's instance methods and its ancestors'; a module's own singleton
-     methods, then Module's */
-  if (bmt_has(t->sing, t->sflags, t->nsing, name, must, 1) || (!t->module && bmt_ancestors_have(t, name, 1, must, 1, NULL))) return 1;
+     methods, then Module's. An undefine on the way ends it */
+  int own = bmt_singleton_chain(t, name, must, NULL);
+  if (own) return own > 0;
   const BuiltinMethodTable *k = bmt_find(t->module ? "Module" : "Class");
-  return k && bmt_ancestors_have(k, name, 0, must, 1, NULL);
+  return k && bmt_ancestors_have(k, name, 0, must, 1, NULL, NULL) > 0;
+}
+const char *builtin_singleton_owner(const char *cls, const char *name) {
+  const BuiltinMethodTable *t = cls && name ? bmt_find(cls) : NULL;
+  unsigned must = bmt_loaded();
+  const char *who = NULL;
+  if (!t || !(t->flags & must)) return NULL;
+  return bmt_singleton_chain(t, name, must, &who) > 0 ? who : NULL;
 }
 
 /* Does an ancestor of builtin class cls ahead of root (NULL: any ancestor) own instance method m, of any
    visibility (a lookup finds a private builtin method first too), in a library the program has (none, or one
-   it requires)? A class whose ancestry lacks root (a module, BasicObject) is not below it: 0, as is a class
-   with no table. */
+   it requires)? One that undefines m (Complex#floor) counts too: the lookup ends there, ahead of root. A class
+   whose ancestry lacks root (a module, BasicObject) is not below it: 0, as is a class with no table. */
 int builtin_answers_ahead_of(const char *cls, const char *m, const char *root) {
   const BuiltinMethodTable *t = bmt_find(cls);
   unsigned must = bmt_loaded();
   if (!t || !m || !(t->flags & must)) return 0;
   int below = !root;
   for (int i = 0; !below && i < t->nanc; i++) below = !strcmp(t->ancestors[i], root);
-  return below && bmt_ancestors_have(t, m, 0, must, 0, root);
+  return below && bmt_ancestors_have(t, m, 0, must, 0, root, NULL) != 0;
+}
+/* The i-th ancestor of builtin class or module cls in CRuby's lookup order (0: cls itself), counting only those a
+   library the program has defines; NULL past the last, and for a name with no table. The walk of a mixin's `super`
+   steps through these, asking each for the name it looks up (builtin_owns_instance_method). */
+const char *builtin_ancestor_at(const char *cls, int i) {
+  const BuiltinMethodTable *t = bmt_find(cls);
+  unsigned must = bmt_loaded();
+  if (!t || !(t->flags & must)) return NULL;
+  for (int k = 0; k < t->nanc; k++) {
+    const BuiltinMethodTable *a = bmt_find(t->ancestors[k]);
+    if (!a || !((t->aflags[k] & must) && (a->flags & must))) continue;
+    if (i-- == 0) return t->ancestors[k];
+  }
+  return NULL;
+}
+/* Does builtin class or module cls own instance method m itself, of any visibility, in a library the program has? */
+int builtin_owns_instance_method(const char *cls, const char *m) {
+  const BuiltinMethodTable *t = bmt_find(cls);
+  unsigned must = bmt_loaded();
+  return t && m && (t->flags & must) && bmt_has(t->inst, t->iflags, t->ninst, m, must, 0);
 }
 /* does the builtin class with run-time id `id` (-105 for Hash), or a builtin class above it and below Object,
    answer m? A program's class under it (`class MyH < Hash`) answers m by that method before a top-level def */
@@ -2108,6 +2216,18 @@ int builtin_id_below_object_answers(int id, const char *m) {
   const BuiltinClass *r = NULL;
   for (int i = 0; id && (r = builtin_class_at(i)) && r->id != id; i++) {}
   return r && builtin_answers_ahead_of(r->name, m, "Object");
+}
+
+/* See builtin_names.h. The ancestors are the tables' (the class's own methods' owners ahead of Object and the
+   modules it includes). A class with no table, or a slot with no name, is unknown: below anything. */
+int builtin_core_is_a(int k, int anc) {
+  if (k == anc) return 1;
+  const char *kn = core_class_name(k), *an = core_class_name(anc);
+  const BuiltinMethodTable *t = kn ? bmt_find(kn) : NULL;
+  if (!t || !an) return 1;
+  for (int i = 0; i < t->nanc; i++)
+    if (!strcmp(t->ancestors[i], an)) return 1;
+  return 0;
 }
 
 /* The names CRuby's own facts give Object, BasicObject, Kernel, Module and
@@ -2152,7 +2272,7 @@ static int self_fact_cmp(const void *a, const void *b) { return strcmp(*(const c
 /* main's own methods, beside Object's: its singleton's (`to_s`, `inspect`
    answer "main") and the private ones a top-level body calls as a class
    body would (`include`, `private`, `define_method`, ...) */
-static int main_self_method(const char *m) {
+int main_self_method(const char *m) {
   static const char *const MAINM[] = { "to_s", "inspect", "include", "public", "private", "define_method",
                                        "using", "ruby2_keywords", NULL };
   return builtin_name_in(m, MAINM);
@@ -2264,25 +2384,10 @@ const char *encoding_const_name(const char *nm) {
 }
 
 int strh_op(const char *n, int argc, int block) {
-  if (!n) return STRH_NONE;
-  if (block == 1) {
-    if (argc == 0 && sp_streq(n, "each")) return STRH_EACH;
-    return STRH_NONE;
-  }
-  if (block) return STRH_NONE;
+  if (!n || block) return STRH_NONE;
   if (argc == 1 && is_element_at_alias(n)) return STRH_ELEM;
   if (argc == 0 && is_endpoint_query(n)) return STRH_ELEM;
-  if (argc == 2 && sp_streq(n, "[]=")) return STRH_STORE;
-  if (argc >= 1 && is_push_alias(n) && (argc == 1 || !sp_streq(n, "<<"))) return STRH_PUSH;
   if (argc == 0 && (sp_streq(n, "pop") || sp_streq(n, "shift"))) return STRH_TAKE;
-  if (argc == 0 && is_len_alias(n)) return STRH_LEN;
-  if (argc == 0 && sp_streq(n, "empty?")) return STRH_EMPTY;
-  if (argc == 0 && sp_streq(n, "dup")) return STRH_DUP;
-  if (argc == 0 && sp_streq(n, "to_a")) return STRH_SELF;
-  if (argc <= 1 && sp_streq(n, "join")) return STRH_JOIN;
-  if (argc == 1 && sp_streq(n, "include?")) return STRH_INCLUDE;
-  if (argc == 1 && sp_streq(n, "==")) return STRH_EQ;
-  if (argc == 0 && (sp_streq(n, "inspect") || sp_streq(n, "to_s"))) return STRH_INSPECT;
   return STRH_NONE;
 }
 
@@ -2292,8 +2397,6 @@ int strh_op(const char *n, int argc, int block) {
 
 
 int is_pop_name(const char *n) { return n && sp_streq(n, "pop"); }
-
-int is_first_name(const char *n) { return n && sp_streq(n, "first"); }
 
 int is_mul_op(const char *n) { return n && sp_streq(n, "*"); }
 
@@ -2738,7 +2841,8 @@ int is_stdlib_const_name(const char *n) {
   return 0;
 }
 
-/* A name CRuby (or a library spinel provides) answers at the top level. */
+/* A name CRuby (or a library spinel provides) answers at the top level: the classes and modules, and the
+   constants of is_runtime_const_name (listed here by name, but DATA, which a program has only with __END__). */
 int is_toplevel_const_name(const char *n) {
   static const char *const names[] = {
     "ARGF", "ARGV", "ArgumentError", "Array", "BasicObject", "Binding", "Class", "ClosedQueueError",
@@ -2776,4 +2880,30 @@ int is_constless_builtin_name(const char *n) {
   };
   for (int i = 0; names[i]; i++) if (sp_streq(names[i], n)) return 1;
   return is_builtin_exception_name(n) && !strchr(n, ':');
+}
+
+/* The builtin classes whose allocator CRuby leaves undefined: `K.allocate`
+   raises TypeError "allocator undefined for K" (checked against CRuby 4.0 by
+   test/allocate_undefined_allocator_builtins.rb). Rational and Complex undef
+   `allocate` itself (NoMethodError), so they are not here; String, Array,
+   Hash and Object answer an instance. Both the static `K.allocate` and the
+   runtime's dispatch on a class value read this list. */
+static const char *const allocator_undefined_names[] = {
+  "Integer", "Float", "Symbol", "NilClass", "TrueClass", "FalseClass", "Proc", "Thread", "Struct", "Data", NULL
+};
+int is_allocator_undefined_class(const char *n) {
+  if (!n) return 0;
+  for (int i = 0; allocator_undefined_names[i]; i++) if (sp_streq(allocator_undefined_names[i], n)) return 1;
+  return 0;
+}
+const char *allocator_undefined_class_at(int i) {
+  return i >= 0 && i < (int)(sizeof allocator_undefined_names / sizeof *allocator_undefined_names) - 1 ? allocator_undefined_names[i] : NULL;
+}
+
+/* The methods Kernel defines private (sp_kernel_private.h). */
+int kernel_private_method(const char *name) {
+#define X(n) if (name && sp_streq(name, n)) return 1;
+  SP_KERNEL_PRIVATE(X)
+#undef X
+  return 0;
 }

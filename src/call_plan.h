@@ -88,6 +88,22 @@ typedef struct {
   const char *delegate;     /* the protocol method name, before alias resolution */
 } CallPlan;
 
+/* Is plan p a program's method on a root of the builtin classes (Object,
+   or Numeric or NilClass ahead of it), one that answers every receiver the
+   lookup reaches it for (cplan_root_reopen)? The kinds of reopening below
+   that, a builtin class's own, bind by the receiver's type. */
+int cplan_root_reopen_owner(Compiler *c, const CallPlan *p);
+/* ...and call id's plan p where it is such a binding that answers the call
+   ahead of the builtin arms (not an alias that captured the builtin's
+   method, nor an exception accessor picked at run time, nor a private or
+   protected method of a name a builtin has), else NULL. The
+   analysis asks cplan_user_fresh's plan, its types still moving. */
+const CallPlan *cplan_root_reopen_call(Compiler *c, int id, const CallPlan *p);
+/* Does any scope define an instance method `name` every object answers: the
+   top level's, or Object's, Kernel's or BasicObject's own? The name-level
+   twin of cplan_root_reopen, for the desugars that run before types exist
+   (it holds for a receiver whose builtin class owns the name too). */
+int cplan_object_method_named(Compiler *c, const char *name);
 int cplan_accessor_classes(Compiler *c, int id, int *out, int cap);
 /* ...and the methods a super in s that no call stands for may run, into
    to[VER_MAX_ARMS]: that one, or each version a layer of a mixin's copies
@@ -155,8 +171,14 @@ enum { CT_CMETHOD = 1, CT_OWN = 2, CT_TOP = 4, CT_REACH = 8, CT_CAPTURE = 16 };
    target's name, a `recv.m op= v`'s reader and writer; how many (0 for any
    other node). call_target binds a call of one of them to the method
    version it runs; a method the language calls for the node keeps the
-   last version. Super contributes the enclosing method's original name. */
+   last version. Super contributes the enclosing method's original name.
+   A send of a literal name (`send`, `__send__`, `public_send`) calls that
+   name too, a second one. */
 int call_node_names(Compiler *c, int id, const char *out[2]);
+/* The name call node id finally calls: its own, or a send-family call's
+   literal first argument (a send of a send unwound); *used is the number
+   of arguments the sends took. NULL when that name is computed or absent. */
+const char *call_sent_name(const NodeTable *nt, int id, int *used);
 /* What call_target answers besides the scope. kind: ML_METHOD, a method the
    record proves (a placed version, or a name with one version that no call
    runs ahead of); ML_ENTRY, the scope of an entry (or the copies' entry)
@@ -173,7 +195,8 @@ int call_node_names(Compiler *c, int id, const char *out[2]);
    so a caller that presets it finds it as it was (not so for
    cplan_super_target and cplan_super_chain_mi, which set *ml whole). from:
    the class a super's lookup started from, written by those two only. Only
-   cplan_resolve_super reads kind, and nothing reads why yet. */
+   cplan_resolve_super and cplan_presence read kind, and nothing reads why
+   yet. */
 typedef enum { ML_METHOD, ML_ENTRY, ML_NONE, ML_TABLE } MlKind;
 /* why the table answers: no window, or an unplaced capture (UNPLACED); the
    chain moves inside the window (MOVES); two or more versions, or a window
@@ -193,13 +216,45 @@ int cplan_super_chain_mi(Compiler *c, int id, const Scope *s, int par, const cha
 /* The method `super` in s reaches (its prepend chain's next, else the parent
    chain's); ml as call_target's, and ml->from the class the lookup started
    from (-1: a prepend chain with no next) */
-int cplan_super_target(Compiler *c, int id, Scope *s, MethodLookup *ml);
+int cplan_super_target(Compiler *c, int id, const Scope *s, MethodLookup *ml);
+int cplan_kernel_def(Compiler *c, const char *name);   /* a version of the name's top-level history is a program Kernel def */
 /* Does the Class row for call id, named name, on the class value recv answer
    the call? Not where a class method of the program's does (the plan binds
    it a target), nor where the row is a private method's and the call names
    an explicit receiver and does not ignore visibility (a send does): that is
    NoMethodError. */
 int cplan_class_row(Compiler *c, int id, int recv, const char *name);
+/* A call that builds an instance of an Array or Hash subclass (or, with
+   `[]`, of a Struct or Data class: cplan_as_new) from its arguments through
+   a Class value known only at run time (a parameter, an element, a call's
+   answer): `k[..]` while no class of the program defines a class method
+   `[]`, or `k.new(..)` with arguments. The one place that says
+   so; inference, the kind evidence, the instantiation pass and the emitters
+   read it. */
+typedef enum { CVC_NONE, CVC_AREF, CVC_NEW } CvCtor;
+CvCtor cplan_cv_ctor(Compiler *c, int id);
+/* ...the same on the call's shape alone, for the census ahead of the type
+   fixpoint (compute_instantiated): it reads no type (a constant receiver is
+   judged by its writes, class_recv_may_be_dynamic), and a `[]` it answers
+   CVC_AREF is one whose receiver may hold a Class value, which
+   cplan_cv_ctor then asks the receiver's type to settle */
+CvCtor cplan_cv_ctor_shape(Compiler *c, int id);
+/* ...whether a call of form f builds an instance of class k when its
+   receiver holds k: a subclass of Array or Hash that runs no constructor of
+   its own for the call (`new` reaches an initialize or a self.new; `[]`
+   skips an initialize, as CRuby's does) */
+int cplan_cv_ctor_class(Compiler *c, CvCtor f, int k);
+/* ...and whether class k is one call id builds: one cplan_cv_ctor_class
+   takes that the receiver may hold (poly_cls_value_reaches) */
+int cplan_cv_ctor_builds(Compiler *c, int id, int k);
+/* Does call id construct class k, when its receiver holds k, as `new`
+   does (the class's initialize or a record's generated constructor taking
+   the arguments)? A `new`, and a Class value's `[]` (cplan_cv_ctor) on a
+   Struct or Data class, whose `[]` is its `new` (CRuby's Struct::[] and
+   Data::[], which never run a `new` the program defines). With k < 0: on
+   some class of the program. Which classes the receiver may hold is the
+   reach facts' (dynamic_new_may_reach, new_recv_classes). */
+int cplan_as_new(Compiler *c, int id, int k);
 /* Does call `id`, which has no receiver, take the BOP_KERNEL row of its name: an internal row for a call the compiler made, any other where no method of the program's own (a top-level function or the enclosing class's) answers the name? */
 int cplan_kernel_row(Compiler *c, int id, const char *name);
 /* Does the call id on a known class (recv) run the program's own class
@@ -364,6 +419,19 @@ int cplan_target_binds(Compiler *c, int id, int mi);
    else -- a define_method block, an accessor, a wrapper the compiler made --
    takes every count. */
 int cplan_def_takes_argc(Compiler *c, int mi, int argc);
+/* Can class method mi be the arm of call id, a call with argc arguments
+   (splat of them splats) on a Class value known only at run time? A
+   candidate that cannot is not a possible receiver for THAT call site --
+   CRuby raises ArgumentError there -- so it must not veto the whole dispatch
+   (#4129). Without a splat this is cplan_target_binds' judgement, which
+   takes a trailing keyword hash as the callee's keywords: counted as one
+   more positional argument against parameters that count the keywords,
+   `def self.answer(id:, input:)` refused `k.answer(id: 1, input: {})`. With
+   a splat the count is known only at run time: each may spread to nothing,
+   so a candidate the other arguments leave room in may take it, and its arm
+   binds through the gather, which judges the count there. Codegen's arms
+   and the inference of their answer both ask this. */
+int cplan_cls_arm_takes(Compiler *c, int id, int mi, int argc, int splat);
 /* Is call id a class body's call on self (receiverless or `self.`) that
    the plan binds to one method of the body's class (UC_CMETH, CP_DIRECT)?
    That binding is the one method the call runs, so reachability follows it
@@ -632,6 +700,7 @@ const PolyPlan *cplan_poly(Compiler *c, int id);
    receiver form). Cheaper: the builtin families and trials, which only the
    --plan-check shadow compares, are left out. */
 const PolyPlan *cplan_poly_arms(Compiler *c, int id);
+int cplan_send_split_owners(Compiler *c, int recv, const char *name, const char **out, int max);   /* the classes a boxed send of name tests: the builtin ones recv may be, and the program's under them */
 /* Resolve the complete plan without reading or writing the per-node memo.
    Use while inference facts are still moving; the scratch plan is overwritten
    by the next fresh resolve, so finish reading it before another planner call. */
@@ -681,6 +750,17 @@ const PolyPlan *cplan_poly_sub(Compiler *c, int id);
    NilClass answers, and for the other values nothing or Object's public
    method: dispatched boxed (PB_SUBDISPATCH) */
 int cplan_nil_scalar_reach(Compiler *c, int id);
+/* Does a class value (recv, typed Class) answer `name` with a method of
+   CRuby's before Object's instance method: its class's singleton chain
+   (File.basename), or Class's and Module's own? A constant names the class;
+   a class held in a variable could be any builtin one. */
+int cplan_class_value_answers(Compiler *c, int recv, const char *name);
+/* ...and the analysis' reading of it, before the nullability settles: call
+   id of name on recv (type rt) is answered boxed, NilClass's method for nil
+   and Object's for the rest (cplan_nil_scalar_form_ok, NilClass's public
+   method, and a String, an Integer or Float beside Object's public one or
+   that may be nil) */
+int cplan_nil_scalar_boxed(Compiler *c, int id, const char *name, int recv, TyKind rt);
 /* the most splats the boxed default arm spreads into Object's method */
 #define POLY_OBJ_SPREAD_MAX 8
 int cplan_nil_scalar_form_ok(Compiler *c, int id, const char *name);
@@ -768,6 +848,23 @@ int cplan_nil_program_served(Compiler *c, int id);  /* codegen_call.c: nil's met
    a global, an ivar, an unseen caller) is not. */
 int cplan_nil_written(int why);
 
+/* ---- CB_*: what a call's `&` argument does ----
+   A `&fe` argument is bound as written (a Proc, Method, Symbol, Hash, an
+   object with to_proc, nil), or cannot become a block and raises TypeError
+   after the receiver and the arguments have run (a value whose type is
+   none of those and cannot be nil), or may be either, known where it runs
+   (a boxed value, or a typed one that may be nil). Only the builtins
+   convert: a program that defines to_proc, respond_to? or
+   respond_to_missing? binds every one as written. *cn is the class the
+   TypeError names ("" for a Boolean), set for CB_RAISE and for a typed
+   CB_CHECK; NULL for a boxed one. */
+typedef enum {
+  CB_BINDS,    /* bound as written */
+  CB_RAISE,    /* TypeError: no implicit conversion of *cn into Proc */
+  CB_CHECK     /* decided where it runs */
+} CplanBlockArg;
+int cplan_block_arg(Compiler *c, int id, const char **cn);
+
 /* ---- CM_*: a call that finds no method where it runs ----
    Whether call id -- receiverless, on self, or on a constant naming a
    program class -- runs at a load point where the program's method of its
@@ -779,6 +876,29 @@ int cplan_nil_written(int why);
    otherwise; anon may be NULL). Pure. */
 typedef enum { CM_NONE, CM_NAMEERROR, CM_NOMETHOD } CplanMissing;
 int cplan_missing(Compiler *c, int id, char *self_text, size_t cap, int *anon);
+/* ---- CU_*: a builtin name CRuby answers that no route of the compiler took ----
+   cplan_missing's mirror: that one proves CRuby raises for a program's
+   name; this one reads CRuby's tables for a builtin's. Whether call id --
+   receiverless, on self, on a constant or on a typed value -- names a method
+   its receiver's class answers with the visibility the call's shape reaches
+   (an explicit receiver reaches public methods, send and a receiverless call
+   any, public_send public), at an argument count the arity facts have a row
+   for and admit, when no builtin-op row takes the call (a row's decline is
+   that route's rejection of an operand, which CRuby raises over too):
+   CU_GAP, with owner the CRuby method ("Kernel#local_variables",
+   "Module#instance_methods", "Kernel.global_variables"). CU_RAISES: the
+   tables hold the receiver and it does not answer the name that way, so
+   the gate's raise stands. CU_NONE: the plan cannot tell the receiver's
+   class (a boxed value, a self the record does not settle, a module's
+   instance side), or the arity facts have no row, and the gate behaves as
+   before. *nil_answers (when asked) is whether NilClass has the method too:
+   a receiver that may be nil is then one gap, else nil is the NoMethodError
+   for nil. CU_RAISES_NAME: a lookup by a literal name (Module#instance_method,
+   method) whose name the record proves is nowhere, which raises CRuby's
+   NameError, with owner holding its message. Not a CP_REFUSE: read only where codegen's last fallback is
+   reached (emit_unresolved_call), as cplan_nil's answers are. Pure. */
+typedef enum { CU_NONE, CU_RAISES, CU_RAISES_NAME, CU_GAP } CplanUnrouted;
+CplanUnrouted cplan_unrouted(Compiler *c, int id, char *owner, size_t cap, int *nil_answers);
 /* The visibility bit (1 public, 2 protected, 4 private) CRuby gives
    instance method m of a builtin class where reflection call node runs,
    for a name the program's own methods of the class leave open: of class
@@ -799,6 +919,10 @@ int cplan_builtin_method_vis(Compiler *c, int node, int ci, const char *cls, con
    program defines a method_missing anywhere: spinel does not dispatch to
    one, and the call keeps the answer it had. Pure. */
 CplanMissing cplan_dispatch_miss(Compiler *c, int id, int cid);
+/* Does that dispatch's default arm take a builtin Kernel row (BOP_KERNEL) of
+   the call's name in place of the raise: the row answers self of any class
+   without a method of the name (Kernel#respond_to_missing?'s false)? */
+int cplan_dispatch_row(Compiler *c, int id);
 /* Does the subtree at id hold a call cplan_missing answers, in a block or
    an operand alike? */
 int cplan_subtree_missing(Compiler *c, int id);
@@ -818,8 +942,9 @@ int cplan_missing_in_order(Compiler *c, int v);
 /* The class call id's constant receiver recv names where the call runs, as
    the load record resolves the reference there (elab_class_ref_at): -1 for
    none of the program's (Object's top level), below -1 for one it does not
-   know */
-int cplan_const_recv_class(Compiler *c, int id, int recv);
+   know; *core (when asked) is the core class's slot when the name stands
+   for a builtin class or module, also one the program reopens, else -1 */
+int cplan_const_recv_class(Compiler *c, int id, int recv, int *core);
 /* The self where call id runs, as the load record has it there
    (elab_self_at), asked in the plan's frame: a program class or module,
    -1 for main, below -1 for one it does not know */
@@ -904,6 +1029,31 @@ int cplan_presence_class(Compiler *c, int id);
    (respond_to_missing_defined). */
 typedef struct { int n; char cell[VER_MAX_ARMS][32]; int val[VER_MAX_ARMS]; int els; } CplanCells;
 int cplan_cmethod_presence(Compiler *c, int id, int cls, const char *name, int include_all, CplanCells *out);
+/* Whether name answers on cls's chain where presence site id runs, as a
+   call of the name there finds it, from call_target with CT_REACH (side: 0
+   for an instance's chain, CT_CMETHOD for the class side, with CT_OWN for
+   cls's own methods alone). PR_PRESENT: a method or an accessor; PR_ABSENT:
+   none (the builtin tiers may answer), as the tables have it or because the
+   record proves none is live where id runs; PR_TABLE: the record gives no
+   proof and the reader keeps the final tables' answer, as in a block a
+   call on a receiver of no one type may run later. out->table is that
+   answer for every kind (a hidden method, a Data class's generated iterator
+   and, under CT_OWN, a module's copy are no method of the class's). */
+typedef enum { PR_PRESENT, PR_ABSENT, PR_TABLE } PresenceKind;
+typedef struct { int table; } CplanPresence;
+PresenceKind cplan_presence(Compiler *c, int id, int cls, unsigned side, const char *name, CplanPresence *out);
+/* Does method-list call id leave out name, a candidate the final tables
+   list for cls's side (side as cplan_presence's: CT_CMETHOD for
+   singleton_methods, CT_OWN for a `false` form): where the question proves
+   that no method of it is live there although the tables hold one? A name
+   with no version on cls's chain and side is a row's or a member's
+   (version 0), which the row answers: it is not asked. Every other answer
+   is the tables', the list's own visibility and undef filter among it,
+   until visibility is per version and an undef answers at the point. On
+   the instance side, a list call keeps every name exempt from the record's
+   order (refl_any, lr_late_asked), so call_target answers there from the
+   tables, the list with it: only the class side answers at the point. */
+int cplan_list_omits(Compiler *c, int id, int cls, unsigned side, const char *name);
 /* What version entry scope e's else arm finds while no version of its
    chain is live, as respond_to? and a Method's maker see it
    (VerEntry.finds): a public method, a private or protected one, or none

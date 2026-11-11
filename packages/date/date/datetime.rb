@@ -2,8 +2,10 @@
 
 class DateTime < Date
 
-  STRFTIME_DATETIME_DEFAULT_FMT = '%FT%T%:z'.encode(Encoding::US_ASCII)
-  private_constant :STRFTIME_DATETIME_DEFAULT_FMT
+  # Sentinel marking an hour/minute/second argument that was not passed, so a
+  # trailing fraction can be rejected only when a smaller unit was actually given.
+  UNSET = Object.new
+  private_constant :UNSET
 
   # ---------------------------------------------------------------------------
   # Initializer
@@ -11,32 +13,49 @@ class DateTime < Date
 
   # call-seq:
   #   DateTime.new(year=-4712, month=1, day=1, hour=0, minute=0, second=0, offset=0, start=Date::ITALY) -> datetime
-  def initialize(year = -4712, month = 1, day = 1, hour = 0, minute = 0, second = 0, offset = 0, start = ITALY)
-    year   = Integer(year)
-    month  = Integer(month)
-    of_sec = _str_offset_to_sec(offset)
+  def initialize(year = -4712, month = 1, day = 1, hour = UNSET, minute = UNSET, second = UNSET, offset = 0, start = ITALY)
+    hour_given   = !UNSET.equal?(hour)
+    minute_given = !UNSET.equal?(minute)
+    second_given = !UNSET.equal?(second)
+    hour   = 0 if UNSET.equal?(hour)
+    minute = 0 if UNSET.equal?(minute)
+    second = 0 if UNSET.equal?(second)
 
-    raise TypeError, "expected numeric" unless day.is_a?(Numeric)
+    # Validate argument types in the C extension's order (offset, then second
+    # down to year) so the same field is reported first when several are bad.
+    of_sec = self.class.__send__(:_parse_of, offset)
+    raise TypeError, "invalid second (not numeric)" unless second.is_a?(Numeric)
+    raise TypeError, "invalid minute (not numeric)" unless minute.is_a?(Numeric)
+    raise TypeError, "invalid hour (not numeric)" unless hour.is_a?(Numeric)
+    raise TypeError, "invalid day (not numeric)" unless day.is_a?(Numeric)
+    raise TypeError, "invalid month (not numeric)" unless month.is_a?(Numeric)
+    month = Integer(month)
+    raise TypeError, "invalid year (not numeric)" unless year.is_a?(Numeric)
+    year  = Integer(year)
 
-    # Fractional day/hour/minute: propagate fraction to smaller units
+    # A fractional day/hour/minute is only allowed as the last argument given;
+    # if a smaller unit was also supplied, the C extension rejects the fraction.
+    # These checks run before the date-validity check, as in the C extension.
     day_r    = day.to_r
-    day_i    = day_r.floor
-    day_frac = day_r - day_i
-    day      = day_i
+    day_frac = day_r - day_r.floor
+    hour_r0  = hour.to_r
+    hour_f0  = hour_r0 - hour_r0.floor
+    minute_r0 = minute.to_r
+    minute_f0 = minute_r0 - minute_r0.floor
+    raise Date::Error, "invalid fraction" if day_frac  != 0 && (hour_given || minute_given || second_given)
+    raise Date::Error, "invalid fraction" if hour_f0   != 0 && (minute_given || second_given)
+    raise Date::Error, "invalid fraction" if minute_f0 != 0 && second_given
 
+    day = day_r.floor
     jd = self.class.__send__(:internal_valid_civil?, year, month, day, start)
     raise Date::Error, "invalid date" unless jd
 
-    raise TypeError, "expected numeric" unless hour.is_a?(Numeric)
-    raise TypeError, "expected numeric" unless minute.is_a?(Numeric)
-    raise TypeError, "expected numeric" unless second.is_a?(Numeric)
-
     # Propagate fractions to smaller units
-    hour_r    = hour.to_r   + day_frac   * 24
+    hour_r    = hour_r0 + day_frac * 24
     hour_i    = hour_r.floor
     hour_frac = hour_r - hour_i
 
-    minute_r    = minute.to_r + hour_frac   * 60
+    minute_r    = minute_r0 + hour_frac * 60
     minute_i    = minute_r.floor
     minute_frac = minute_r - minute_i
 
@@ -58,9 +77,7 @@ class DateTime < Date
   # Returns the hour in range (0..23):
   #
   #   DateTime.new(2001, 2, 3, 4, 5, 6).hour # => 4
-  def hour
-    @hour
-  end
+  attr_reader :hour
 
   # call-seq:
   #   min -> integer
@@ -68,9 +85,7 @@ class DateTime < Date
   # Returns the minute in range (0..59):
   #
   #   DateTime.new(2001, 2, 3, 4, 5, 6).min # => 5
-  def min
-    @min
-  end
+  attr_reader :min
   alias minute min
 
   # call-seq:
@@ -79,9 +94,7 @@ class DateTime < Date
   # Returns the second in range (0..59):
   #
   #   DateTime.new(2001, 2, 3, 4, 5, 6).sec # => 6
-  def sec
-    @sec_i
-  end
+  attr_reader :sec
   alias second sec
 
   # call-seq:
@@ -91,9 +104,7 @@ class DateTime < Date
   # (Rational(0, 1)...Rational(1, 1)):
   #
   #   DateTime.new(2001, 2, 3, 4, 5, 6.5).sec_fraction # => (1/2)
-  def sec_fraction
-    @sec_frac
-  end
+  attr_reader :sec_fraction
   alias second_fraction sec_fraction
 
   # call-seq:
@@ -113,7 +124,11 @@ class DateTime < Date
   #
   #    DateTime.parse('04pm+0730').zone		#=> "+07:30"
   def zone
-    _of2str(@of)
+    sign = @of < 0 ? '-' : '+'
+    abs  = @of.abs
+    h    = abs / 3600
+    m    = (abs % 3600) / 60
+    format('%s%02d:%02d'.encode(Encoding::US_ASCII), sign, h, m)
   end
 
   # call-seq:
@@ -123,8 +138,8 @@ class DateTime < Date
   #
   #   DateTime.new(2001,2,3,12).day_fraction # => (1/2)
   def day_fraction
-    Rational(@hour * 3600 + @min * 60 + @sec_i, 86400) +
-      Rational(@sec_frac.numerator, @sec_frac.denominator * 86400)
+    Rational(@hour * 3600 + @min * 60 + @sec, 86400) +
+      Rational(@sec_fraction.numerator, @sec_fraction.denominator * 86400)
   end
 
   # call-seq:
@@ -136,11 +151,7 @@ class DateTime < Date
   #    DateTime.new(2001,2,3,4,5,6,'+7').ajd	#=> (11769328217/4800)
   #    DateTime.new(2001,2,2,14,5,6,'-7').ajd	#=> (11769328217/4800)
   def ajd
-    jd_r = Rational(@jd)
-    time_r = Rational(@hour * 3600 + @min * 60 + @sec_i, 86400) +
-             Rational(@sec_frac.numerator, @sec_frac.denominator * 86400)
-    of_r = Rational(@of, 86400)
-    jd_r + time_r - of_r - 0.5r
+    Rational(@jd) + day_fraction - offset - 0.5r
   end
 
   # ---------------------------------------------------------------------------
@@ -151,12 +162,12 @@ class DateTime < Date
   # CRuby has it): the construction they come down to is here, from the day
   # number and the time of day.
   private def _plus_days(n)
-    self.class.__send__(:_new_dt_from_jd_time, @jd + n, @hour, @min, @sec_i, @sec_frac, @of, @start)
+    self.class.__send__(:_new_dt_from_jd_time, @jd + n, @hour, @min, @sec, @sec_fraction, @of, @start)
   end
 
   private def _plus_fraction(r)
     extra_sec = r * 86400
-    total_r   = Rational(@jd) * 86400 + @hour * 3600 + @min * 60 + @sec_i + @sec_frac + extra_sec
+    total_r   = Rational(@jd) * 86400 + @hour * 3600 + @min * 60 + @sec + @sec_fraction + extra_sec
     _from_total_sec_r(total_r)
   end
 
@@ -166,7 +177,7 @@ class DateTime < Date
   # Returns a new DateTime object representing the time +n+ months later;
   # the time of day and offset are preserved. (Date#<< delegates to this.)
   def >>(n)
-    self.class.__send__(:_new_dt_from_jd_time, month_shifted_jd(n), @hour, @min, @sec_i, @sec_frac, @of, @start)
+    self.class.__send__(:_new_dt_from_jd_time, month_shifted_jd(n), @hour, @min, @sec, @sec_fraction, @of, @start)
   end
 
   # call-seq:
@@ -181,7 +192,7 @@ class DateTime < Date
   #
   # See argument {start}[rdoc-ref:language/calendars.rdoc@Argument+start].
   def new_start(start = Date::ITALY)
-    self.class.__send__(:_new_dt_from_jd_time, @jd, @hour, @min, @sec_i, @sec_frac, @of, start)
+    self.class.__send__(:_new_dt_from_jd_time, @jd, @hour, @min, @sec, @sec_fraction, @of, start)
   end
 
   # call-seq:
@@ -193,14 +204,14 @@ class DateTime < Date
   #				#=> #<DateTime: 2001-02-03T04:05:06-02:00 ...>
   #    d.new_offset('+09:00')	#=> #<DateTime: 2001-02-03T15:05:06+09:00 ...>
   def new_offset(of = 0)
-    of_sec = _str_offset_to_sec(of)
+    of_sec = self.class.__send__(:_parse_of, of)
     # Keep the same absolute instant, re-expressed in the new offset: shift the
     # locally stored wall-clock fields by the change in offset.
-    total = @jd * 86400 + @hour * 3600 + @min * 60 + @sec_i + (of_sec - @of)
+    total = @jd * 86400 + @hour * 3600 + @min * 60 + @sec + (of_sec - @of)
     jd2, rem = total.divmod(86400)
     h, rem = rem.divmod(3600)
     m, s = rem.divmod(60)
-    self.class.__send__(:_new_dt_from_jd_time, jd2, h, m, s, @sec_frac, of_sec, @start)
+    self.class.__send__(:_new_dt_from_jd_time, jd2, h, m, s, @sec_fraction, of_sec, @start)
   end
 
   # ---------------------------------------------------------------------------
@@ -217,7 +228,7 @@ class DateTime < Date
   #
   # For other formats,
   # see {Formats for Dates and Times}[rdoc-ref:language/strftime_formatting.rdoc]:
-  def strftime(format = STRFTIME_DATETIME_DEFAULT_FMT)
+  def strftime(format = '%FT%T%:z'.encode(Encoding::US_ASCII))
     super(format)
   end
 
@@ -230,11 +241,11 @@ class DateTime < Date
   #    DateTime.parse('2001-02-03T04:05:06.123456789+07:00').jisx0301(9)
   #				#=> "H13.02.03T04:05:06.123456789+07:00"
   def jisx0301(n = 0)
-    n = n.to_i
+    n = _num_to_int(n)
     ERA_TABLE.each do |start_jd, era, base_year|
       if @jd >= start_jd
         era_year = year - base_year
-        if n == 0
+        if n <= 0
           return format('%s%02d.%02d.%02dT%02d:%02d:%02d%s',
                         era, era_year, month, day, hour, min, sec, zone)
         else
@@ -258,8 +269,8 @@ class DateTime < Date
   #    DateTime.parse('2001-02-03T04:05:06.123456789+07:00').iso8601(9)
   #				#=> "2001-02-03T04:05:06.123456789+07:00"
   def iso8601(n = 0)
-    n = n.to_i
-    if n == 0
+    n = _num_to_int(n)
+    if n <= 0
       strftime('%Y-%m-%dT%H:%M:%S%:z')
     else
       sf   = sec_fraction
@@ -315,16 +326,16 @@ class DateTime < Date
     if keys
       if keys.size == 1
         case keys[0]
-        when :year         then { year: year }
-        when :month        then { month: month }
-        when :day          then { day: day }
-        when :wday         then { wday: wday }
-        when :yday         then { yday: yday }
-        when :hour         then { hour: hour }
-        when :min          then { min: min }
-        when :sec          then { sec: sec }
-        when :sec_fraction then { sec_fraction: sec_fraction }
-        when :zone         then { zone: zone }
+        when :year         then { year: }
+        when :month        then { month: }
+        when :day          then { day: }
+        when :wday         then { wday: }
+        when :yday         then { yday: }
+        when :hour         then { hour: }
+        when :min          then { min: }
+        when :sec          then { sec: }
+        when :sec_fraction then { sec_fraction: }
+        when :zone         then { zone: }
         else {}
         end
       else
@@ -347,13 +358,10 @@ class DateTime < Date
         h
       end
     else
-      { year: year, month: month, day: day, wday: wday, yday: yday,
-        hour: hour, min: min, sec: sec, sec_fraction: sec_fraction, zone: zone }
+      { year:, month:, day:, wday:, yday:,
+        hour:, min:, sec:, sec_fraction:, zone: }
     end
   end
-
-  DATETIME_TO_S_FMT = '%Y-%m-%dT%H:%M:%S%:z'.encode(Encoding::US_ASCII).freeze
-  private_constant :DATETIME_TO_S_FMT
 
   # call-seq:
   #    dt.to_s  ->  string
@@ -364,7 +372,7 @@ class DateTime < Date
   #     DateTime.new(2001,2,3,4,5,6,'-7').to_s
   #				#=> "2001-02-03T04:05:06-07:00"
   def to_s
-    strftime(DATETIME_TO_S_FMT)
+    strftime('%Y-%m-%dT%H:%M:%S%:z'.encode(Encoding::US_ASCII))
   end
 
   # call-seq:
@@ -376,21 +384,21 @@ class DateTime < Date
   #   # => "#<DateTime: 2001-02-03T04:05:06+07:00 ((2451943j,75906s,0n),+25200s,2299161j)>"
   #
   # The Julian Day number and seconds are given in UTC; the offset and start
-  # (cutover) follow, matching the C extension's format.
+  # (cutover) follow.
   def inspect
-    utc_total = @jd * 86400 + @hour * 3600 + @min * 60 + @sec_i - @of
+    utc_total = @jd * 86400 + @hour * 3600 + @min * 60 + @sec - @of
     utc_jd, utc_sec = utc_total.divmod(86400)
-    nano = @sec_frac * 1_000_000_000
+    nano = @sec_fraction * 1_000_000_000
     nano_s = nano.denominator == 1 ? nano.numerator.to_s : "(#{nano.numerator}/#{nano.denominator})"
     of_s = @of < 0 ? "-#{-@of}" : "+#{@of}"
-    "#<DateTime: #{to_s} ((#{utc_jd}j,#{utc_sec}s,#{nano_s}n),#{of_s}s,#{inspect_sg}j)>".force_encoding(Encoding::US_ASCII)
+    "#<DateTime: #{to_s} ((#{utc_jd}j,#{utc_sec}s,#{nano_s}n),#{of_s}s,#{inspect_sg}j)>"
   end
 
   def hash
-    if @hour == 0 && @min == 0 && @sec_i == 0
+    if @hour == 0 && @min == 0 && @sec == 0
       [@jd, @start].hash
     else
-      [@jd, @hour, @min, @sec_i, @start].hash
+      [@jd, @hour, @min, @sec, @start].hash
     end
   end
 
@@ -400,10 +408,13 @@ class DateTime < Date
 
   # :nodoc:
   def marshal_dump
-    # 6-element format: [nth, jd, df, sf, of, sg]
-    df = @hour * 3600 + @min * 60 + @sec_i
-    sf = (@sec_frac * 1_000_000_000).to_r  # nanoseconds as Rational
-    [0, @jd, df, sf, @of, @start]
+    # 6-element format: [nth, jd, df, sf, of, sg]. Like the C extension, jd and
+    # df hold the UTC instant (local time minus the offset), and sf is the
+    # sub-second part scaled to nanoseconds, kept as an Integer when whole.
+    jd_carry, df = (@hour * 3600 + @min * 60 + @sec - @of).divmod(86400)
+    sf = @sec_fraction * 1_000_000_000
+    sf = sf.numerator if sf.denominator == 1
+    [0, @jd + jd_carry, df, sf, @of, @start]
   end
 
   # :nodoc:
@@ -430,15 +441,18 @@ class DateTime < Date
     when 6
       _nth, jd, df, sf, of, sg = array
       sg = normalize_start(sg)
-      h  = df / 3600
-      df -= h * 3600
-      m  = df / 60
-      s  = df % 60
+      # jd/df hold the UTC instant; shift by the offset to recover local time.
+      jd_carry, local_df = (df + of).divmod(86400)
+      jd += jd_carry
+      h  = local_df / 3600
+      m  = (local_df % 3600) / 60
+      s  = local_df % 60
       sf_r = sf.is_a?(Rational) ? (sf / 1_000_000_000) : Rational(sf.to_i, 1_000_000_000)
       _init_datetime(jd, h, m, s, sf_r, of, sg)
     else
       raise TypeError, "invalid marshal data"
     end
+    self
   end
 
   # ---------------------------------------------------------------------------
@@ -468,9 +482,9 @@ class DateTime < Date
   def to_time
     y, m, d = self.class.__send__(:jd_to_gregorian, @jd)
     if @of == 0
-      Time.utc(y, m, d, @hour, @min, @sec_i + @sec_frac)
+      Time.utc(y, m, d, @hour, @min, @sec + @sec_fraction)
     else
-      Time.new(y, m, d, @hour, @min, @sec_i + @sec_frac, @of)
+      Time.new(y, m, d, @hour, @min, @sec + @sec_fraction, @of)
     end
   end
 
@@ -479,9 +493,9 @@ class DateTime < Date
   # ---------------------------------------------------------------------------
 
   class << self
-    def new(year = -4712, month = 1, day = 1, hour = 0, minute = 0, second = 0, offset = 0, start = Date::ITALY)
+    def new(*args)
       instance = allocate
-      instance.__send__(:initialize, year, month, day, hour, minute, second, offset, start)
+      instance.__send__(:initialize, *args)
       instance
     end
     alias_method :civil, :new
@@ -496,7 +510,7 @@ class DateTime < Date
     # not support specification of flags and width unlike strftime.
     #
     # See also strptime(3) and #strftime.
-    def _strptime(string = JULIAN_EPOCH_DATETIME, format = '%FT%T%z')
+    def _strptime(string, format = '%FT%T%z')
       Date._strptime(string, format)
     end
 
@@ -525,7 +539,7 @@ class DateTime < Date
     #				#=> #<DateTime: 2001-02-03T16:00:00+07:00 ...>
     #
     # See also strptime(3) and #strftime.
-    def strptime(string = JULIAN_EPOCH_DATETIME, format = '%FT%T%z', start = Date::ITALY)
+    def strptime(string = '-4712-01-01T00:00:00+00:00', format = '%FT%T%z', start = Date::ITALY)
       hash = _strptime(string, format)
       _dt_new_by_frags(hash, start)
     end
@@ -540,35 +554,21 @@ class DateTime < Date
     #    DateTime.jd(2451945)	#=> #<DateTime: 2001-02-04T00:00:00+00:00 ...>
     #    DateTime.jd(Rational('0.5'))
     #				#=> #<DateTime: -4712-01-01T12:00:00+00:00 ...>
-    def jd(jd = 0, hour = 0, minute = 0, second = 0, offset = 0, start = Date::ITALY)
-      raise TypeError, "no implicit conversion of #{jd.class} into Integer" unless jd.is_a?(Numeric)
+    def jd(jd = 0, hour = UNSET, minute = UNSET, second = UNSET, offset = 0, start = Date::ITALY)
+      hour_given   = !UNSET.equal?(hour);   hour   = 0 if UNSET.equal?(hour)
+      minute_given = !UNSET.equal?(minute); minute = 0 if UNSET.equal?(minute)
+      second_given = !UNSET.equal?(second); second = 0 if UNSET.equal?(second)
+
+      # Validate in the C extension's order (offset, second, minute, hour, jd).
+      of_sec = _parse_of(offset)
+      _check_hms_types(hour, minute, second)
+      raise TypeError, "invalid jd (not numeric)" unless jd.is_a?(Numeric)
+
       jd_r = jd.to_r
       jd_i = jd_r.floor
-      h = Integer(hour)
-      m = Integer(minute)
-      of_sec = _parse_of(offset)
-      if jd_i != jd_r
-        # Fractional JD: convert fraction to extra seconds and handle overflow
-        frac_sec = (jd_r - jd_i) * 86400
-        second = second.to_r + frac_sec
-        sec_i, sec_f = _split_sec(second)
-        if sec_i >= 60
-          carry_m, sec_i = sec_i.divmod(60)
-          m += carry_m
-        end
-        if m >= 60
-          carry_h, m = m.divmod(60)
-          h += carry_h
-        end
-        if h >= 24
-          carry_d, h = h.divmod(24)
-          jd_i += carry_d
-        end
-      else
-        # Integer JD: pass raw values to _normalize_hms (non-cascading)
-        sec_i, sec_f = _split_sec(second)
-      end
-      _new_dt_from_jd_time(jd_i, h, m, sec_i, sec_f, of_sec, start)
+      _check_time_fractions(jd_r - jd_i, hour, minute, second,
+                            hour_given, minute_given, second_given)
+      _build_dt_folded(jd_i, jd_r - jd_i, hour, minute, second, of_sec, start)
     end
 
     # call-seq:
@@ -581,12 +581,24 @@ class DateTime < Date
     #				#=> #<DateTime: 2001-02-03T04:05:06+07:00 ...>
     #    DateTime.ordinal(2001,-332,-20,-55,-54,'+7')
     #				#=> #<DateTime: 2001-02-03T04:05:06+07:00 ...>
-    def ordinal(year = -4712, yday = 1, hour = 0, minute = 0, second = 0, offset = 0, start = Date::ITALY)
-      jd_v = internal_valid_ordinal?(Integer(year), Integer(yday), start)
-      raise Date::Error, "invalid date" unless jd_v
+    def ordinal(year = -4712, yday = 1, hour = UNSET, minute = UNSET, second = UNSET, offset = 0, start = Date::ITALY)
+      hour_given   = !UNSET.equal?(hour);   hour   = 0 if UNSET.equal?(hour)
+      minute_given = !UNSET.equal?(minute); minute = 0 if UNSET.equal?(minute)
+      second_given = !UNSET.equal?(second); second = 0 if UNSET.equal?(second)
+
+      # Validate in the C extension's order (offset, second, minute, hour, yday, year).
       of_sec = _parse_of(offset)
-      sec_i, sec_f = _split_sec(second)
-      _new_dt_from_jd_time(jd_v, Integer(hour), Integer(minute), sec_i, sec_f, of_sec, start)
+      _check_hms_types(hour, minute, second)
+      raise TypeError, "invalid yday (not numeric)" unless yday.is_a?(Numeric)
+      raise TypeError, "invalid year (not numeric)" unless year.is_a?(Numeric)
+
+      yday_r = yday.to_r
+      yday_i = yday_r.floor
+      _check_time_fractions(yday_r - yday_i, hour, minute, second,
+                            hour_given, minute_given, second_given)
+      jd_v = internal_valid_ordinal?(Integer(year), yday_i, start)
+      raise Date::Error, "invalid date" unless jd_v
+      _build_dt_folded(jd_v, yday_r - yday_i, hour, minute, second, of_sec, start)
     end
 
     # call-seq:
@@ -598,12 +610,26 @@ class DateTime < Date
     #    DateTime.commercial(2002)	#=> #<DateTime: 2001-12-31T00:00:00+00:00 ...>
     #    DateTime.commercial(2001,5,6,4,5,6,'+7')
     #				#=> #<DateTime: 2001-02-03T04:05:06+07:00 ...>
-    def commercial(cwyear = -4712, cweek = 1, cwday = 1, hour = 0, minute = 0, second = 0, offset = 0, start = Date::ITALY)
-      jd_v = internal_valid_commercial?(Integer(cwyear), Integer(cweek), Integer(cwday), start)
-      raise Date::Error, "invalid date" unless jd_v
+    def commercial(cwyear = -4712, cweek = 1, cwday = 1, hour = UNSET, minute = UNSET, second = UNSET, offset = 0, start = Date::ITALY)
+      hour_given   = !UNSET.equal?(hour);   hour   = 0 if UNSET.equal?(hour)
+      minute_given = !UNSET.equal?(minute); minute = 0 if UNSET.equal?(minute)
+      second_given = !UNSET.equal?(second); second = 0 if UNSET.equal?(second)
+
+      # Validate in the C extension's order (offset, second, minute, hour,
+      # cwday, cweek, cwyear).
       of_sec = _parse_of(offset)
-      sec_i, sec_f = _split_sec(second)
-      _new_dt_from_jd_time(jd_v, Integer(hour), Integer(minute), sec_i, sec_f, of_sec, start)
+      _check_hms_types(hour, minute, second)
+      raise TypeError, "invalid cwday (not numeric)" unless cwday.is_a?(Numeric)
+      raise TypeError, "invalid cweek (not numeric)" unless cweek.is_a?(Numeric)
+      raise TypeError, "invalid year (not numeric)"  unless cwyear.is_a?(Numeric)
+
+      cwday_r = cwday.to_r
+      cwday_i = cwday_r.floor
+      _check_time_fractions(cwday_r - cwday_i, hour, minute, second,
+                            hour_given, minute_given, second_given)
+      jd_v = internal_valid_commercial?(Integer(cwyear), Integer(cweek), cwday_i, start)
+      raise Date::Error, "invalid date" unless jd_v
+      _build_dt_folded(jd_v, cwday_r - cwday_i, hour, minute, second, of_sec, start)
     end
 
     # call-seq:
@@ -628,7 +654,7 @@ class DateTime < Date
     end
 
     # Normalize hour/min/sec.
-    # Negative values: add one period (non-cascading, matching C's c_valid_time_f?).
+    # Negative values: add one period (non-cascading).
     # After normalization, validate ranges and raise Date::Error if out of range.
     # 24:00:00 is valid (normalizes to next day 00:00:00).
     def _normalize_hms(jd, h, m, s)
@@ -644,6 +670,38 @@ class DateTime < Date
         h = 0
       end
       [jd, h, m, s]
+    end
+
+    # Type-check the time-of-day arguments shared by jd/ordinal/commercial, in
+    # the C extension's order (second, then minute, then hour).
+    def _check_hms_types(hour, minute, second)
+      raise TypeError, "invalid second (not numeric)" unless second.is_a?(Numeric)
+      raise TypeError, "invalid minute (not numeric)" unless minute.is_a?(Numeric)
+      raise TypeError, "invalid hour (not numeric)"   unless hour.is_a?(Numeric)
+    end
+
+    # A fractional date field or hour/minute is only allowed as the last value
+    # given; if a smaller unit was also supplied, the C extension rejects it.
+    def _check_time_fractions(date_frac, hour, minute, second,
+                              hour_given, minute_given, second_given)
+      hr = hour.to_r
+      mr = minute.to_r
+      raise Date::Error, "invalid fraction" if date_frac != 0 && (hour_given || minute_given || second_given)
+      raise Date::Error, "invalid fraction" if (hr - hr.floor) != 0 && (minute_given || second_given)
+      raise Date::Error, "invalid fraction" if (mr - mr.floor) != 0 && second_given
+    end
+
+    # Fold the fractional date part and the hour/minute/second into normalized
+    # time fields (a fraction cascades into the next smaller unit) and build.
+    def _build_dt_folded(jd_i, date_frac, hour, minute, second, of_sec, start)
+      hour_r   = hour.to_r + date_frac * 24
+      h_i      = hour_r.floor
+      minute_r = minute.to_r + (hour_r - h_i) * 60
+      m_i      = minute_r.floor
+      second_r = second.to_r + (minute_r - m_i) * 60
+      sec_i    = second_r.floor
+      sec_f    = second_r - sec_i
+      _new_dt_from_jd_time(jd_i, h_i, m_i, sec_i, sec_f, of_sec, start)
     end
 
     # call-seq:
@@ -819,22 +877,43 @@ class DateTime < Date
       case offset
       when String
         Date.__send__(:offset_str_to_sec, offset)
-      when Rational
-        (offset * 86400).to_i
-      when Numeric
-        (offset * 86400).to_i
-      else
+      when Integer
+        # Only whole-day offsets of -1, 0, or 1 are valid; anything else is
+        # ignored (offset 0), matching the C extension.
+        return offset * 86400 if offset == -1 || offset == 0 || offset == 1
+        warn("invalid offset is ignored", uplevel: 0) if $VERBOSE
         0
-      end
-    end
-
-    def _split_sec(second)
-      if second.is_a?(Rational) || second.is_a?(Float)
-        s_r = second.to_r
-        s_i = s_r.floor
-        [s_i, s_r - s_i]
+      when Float
+        # Valid only within +/- one day; out of range is ignored. A fractional
+        # second is rounded (with a warning), matching the C extension.
+        sec = offset * 86400
+        if sec < -86400 || sec > 86400
+          warn("invalid offset is ignored", uplevel: 0) if $VERBOSE
+          return 0
+        end
+        n = sec.round
+        warn("fraction of offset is ignored", uplevel: 0) if $VERBOSE && n != sec
+        n
+      when Numeric
+        # Rational (and other numerics via to_r). Convert to seconds, round a
+        # fractional value (with a warning), then range-check against +/- one
+        # day; out of range is ignored, matching the C extension.
+        r = offset.to_r
+        raise TypeError, "#{offset.class} can't be used as offset" unless r.is_a?(Rational)
+        sec = r * 86400
+        if sec.denominator == 1
+          n = sec.numerator
+        else
+          n = sec.round
+          warn("fraction of offset is ignored", uplevel: 0) if $VERBOSE
+        end
+        if n < -86400 || n > 86400
+          warn("invalid offset is ignored", uplevel: 0) if $VERBOSE
+          return 0
+        end
+        n
       else
-        [Integer(second), 0r]
+        raise TypeError, "expected numeric"
       end
     end
 
@@ -846,6 +925,16 @@ class DateTime < Date
 
   private
 
+  # Coerce n to an Integer the way the C extension's NUM2INT does: accept an
+  # Integer or anything with #to_int (e.g. Float, Rational), and otherwise
+  # raise TypeError rather than falling back to #to_i.
+  def _num_to_int(n)
+    return n if Integer === n
+    return n.to_int if n.respond_to?(:to_int)
+    raise TypeError, n.nil? ? "no implicit conversion from nil to integer" :
+                              "no implicit conversion of #{n.class} into Integer"
+  end
+
   def internal_hour
     @hour
   end
@@ -855,11 +944,11 @@ class DateTime < Date
   end
 
   def internal_sec
-    @sec_i
+    @sec
   end
 
   def sec_frac
-    @sec_frac
+    @sec_fraction
   end
 
   def of_seconds
@@ -867,18 +956,42 @@ class DateTime < Date
   end
 
   def zone_str
-    _of2str(@of)
+    zone
+  end
+
+  # Overrides of the Date strftime time-part helpers (see Date#strftime_hms):
+  # a DateTime renders its actual time instead of the Date literals.
+  def strftime_hms
+    "#{PAD2[@hour]}:#{PAD2[@min]}:#{PAD2[@sec]}"
+  end
+
+  def strftime_hm
+    "#{PAD2[@hour]}:#{PAD2[@min]}"
+  end
+
+  def strftime_r12
+    h = @hour % 12
+    h = 12 if h == 0
+    "#{PAD2[h]}:#{PAD2[@min]}:#{PAD2[@sec]} #{@hour < 12 ? 'AM' : 'PM'}"
+  end
+
+  def strftime_zoff
+    of = @of
+    sign = of < 0 ? '-' : '+'
+    abs = of.abs
+    "#{sign}#{PAD2[abs / 3600]}#{PAD2[(abs % 3600) / 60]}"
   end
 
   def _init_datetime(jd, h, m, s, sf, of, sg)
     @jd            = Integer(jd)
-    # Store the cutover as a Float, matching the C extension (see init_from_jd).
+    # Store the cutover as a Float so #start/#hash/marshal stay consistent
+    # (see Date#initialize).
     @start         = Float(sg.to_f)
     @day_fraction  = nil
     @hour          = Integer(h)
     @min           = Integer(m)
-    @sec_i         = Integer(s)
-    @sec_frac      = Rational(sf)
+    @sec           = Integer(s)
+    @sec_fraction  = Rational(sf)
     @of            = of.to_i
     # Initialize lazily-computed (inherited from Date) civil ivars up front so
     # every DateTime instance shares a single object shape.
@@ -895,29 +1008,6 @@ class DateTime < Date
     else
       [Integer(second), 0r]
     end
-  end
-
-  def _str_offset_to_sec(offset)
-    case offset
-    when String
-      self.class.__send__(:_parse_of, offset)
-    when Rational
-      (offset * 86400).to_i
-    when Numeric
-      r = offset.to_r
-      raise TypeError, "#{offset.class} can't be used as offset" unless r.is_a?(Rational)
-      (r * 86400).to_i
-    else
-      0
-    end
-  end
-
-  def _of2str(of)
-    sign = of < 0 ? '-' : '+'
-    abs  = of.abs
-    h    = abs / 3600
-    m    = (abs % 3600) / 60
-    format('%s%02d:%02d'.encode(Encoding::US_ASCII), sign, h, m)
   end
 
   def _from_total_sec_r(total_r)

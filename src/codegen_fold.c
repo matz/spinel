@@ -6,6 +6,19 @@
 #include "share.h"
 #include <ctype.h>
 
+/* Is a Method's wrapper (`__bam_N`) one of an operator's (`__bam_r <op>
+   __bam_a`): its body's call is named by punctuation */
+static int bam_wrapper_is_operator(Compiler *c, const Scope *m) {
+  const NodeTable *nt = c->nt;
+  int d = m->def_node, body = d >= 0 ? nt_ref(nt, d, "body") : -1;
+  if (body >= 0 && nt_kind(nt, body) == NK_StatementsNode) {
+    int n = 0; const int *st = nt_arr(nt, body, "body", &n);
+    body = n ? st[n - 1] : -1;
+  }
+  const char *op = body >= 0 && nt_kind(nt, body) == NK_CallNode ? nt_str(nt, body, "name") : NULL;
+  return op && op[0] && !(op[0] == '_' || (op[0] >= 'a' && op[0] <= 'z') || (op[0] >= 'A' && op[0] <= 'Z'));
+}
+
 /* One representation: a block parameter bound to a typed String Array's
    element holds the handle the Array keeps (the element is one), so its
    slot is the handle's; the body is inferred over that slot where the
@@ -5110,6 +5123,16 @@ int emit_sortby_expr(Compiler *c, int id, Buf *b) {
   return 1;
 }
 
+/* A comparator block's typed answer that is not an Integer but still has
+   a sign: CRuby's rb_cmpint reads a Bignum by it, and asks a Float or a
+   Rational `> 0` and `< 0`. A program with its own `>` or `<` may answer
+   those calls, so the sign is not read for a Float or a Rational then. */
+static int cmp_ans_by_sign(Compiler *c, TyKind t) {
+  if (t == TY_BIGINT) return 1;
+  if (t != TY_FLOAT && t != TY_RATIONAL) return 0;
+  return !an_user_defines_method(c, ">") && !an_user_defines_method(c, "<");
+}
+
 /* The sign a sort, min or max comparator block answers for elements `ea`
    and `eb` (C texts of type `et`), from the C answer `ans` of type `cmp_ty`, `boxed` when it is a boxed value.
    A nil answer says the two do not compare, which CRuby reports as
@@ -5119,7 +5142,11 @@ int emit_sortby_expr(Compiler *c, int id, Buf *b) {
 static void emit_cmp_block_sign(Compiler *c, int tail, TyKind cmp_ty, int boxed, const char *ans,
                                 TyKind et, const char *ea, const char *eb, Buf *out) {
   (void)tail;
-  if (!boxed) { buf_printf(out, "(%s)", ans); return; }
+  if (!boxed && cmp_ty == TY_INT) { buf_printf(out, "(%s)", ans); return; }
+  /* a Float, Rational or Bignum answer counts by its sign: it is boxed
+     and read as a boxed answer is */
+  Buf bans; memset(&bans, 0, sizeof bans);
+  if (!boxed) { emit_boxed_text(c, cmp_ty, ans, &bans); ans = bans.p ? bans.p : "sp_box_nil()"; }
   Buf ba; memset(&ba, 0, sizeof ba); emit_boxed_text(c, et, ea, &ba);
   Buf bb; memset(&bb, 0, sizeof bb); emit_boxed_text(c, et, eb, &bb);
   /* an Integer answer that can be nil arrives as its oint (cmp_ty
@@ -5131,7 +5158,7 @@ static void emit_cmp_block_sign(Compiler *c, int tail, TyKind cmp_ty, int boxed,
                tr, ans, tr, ba.p ? ba.p : "sp_box_nil()", bb.p ? bb.p : "sp_box_nil()", tr);
   }
   else buf_printf(out, "sp_poly_cmp_ans(%s, %s, %s)", ans, ba.p ? ba.p : "sp_box_nil()", bb.p ? bb.p : "sp_box_nil()");
-  free(ba.p); free(bb.p);
+  free(ba.p); free(bb.p); free(bans.p);
 }
 
 /* sort { |a, b| a <=> b } as an expression: stable bubble sort of a copy,
@@ -5176,8 +5203,12 @@ int emit_sort_cmp_expr(Compiler *c, int id, Buf *b) {
   int cmp_boxed = 0;
   if (bn > 0) { Repr cmp_r = repr_of(c, bb[bn - 1]); cmp_ty = cmp_r.as_ty; cmp_boxed = cmp_r.kind == RK_BOXED; }
   int nil_cmp = !cmp_boxed && (cmp_ty == TY_NIL || bv_value_may_be_nil(c, block, cmp_ty));
+  /* a Float, Rational or Bignum answer counts by its sign; one whose
+     block has a `next` is boxed, as the next's value can be of another
+     kind than the tail's */
+  if (!nil_cmp && !cmp_boxed && cmp_ans_by_sign(c, cmp_ty) && iter_step_needs_frame(c, block)) nil_cmp = 1;
   if (nil_cmp) cmp_boxed = 1;
-  else if (cmp_ty != TY_INT && !cmp_boxed) return 0;
+  else if (cmp_ty != TY_INT && !cmp_boxed && !cmp_ans_by_sign(c, cmp_ty)) return 0;
   /* an element parameter holding its nil (an Integer array with nils):
      the elements move as oints, and their nil bits with them */
   int ono = 0;
@@ -5263,7 +5294,12 @@ else {
   IterStep st; emit_iter_step_open(c, block, nil_cmp && !ans_o, g_indent, &st);
   Buf cb; memset(&cb, 0, sizeof cb);
   if (ans_o && !emit_iter_step_tail_o(c, &st, TY_INT, &cb)) { ans_o = 0; cmp_boxed = 0; emit_iter_step_tail(c, &st, &cb); }
-  else if (!ans_o) emit_iter_step_tail(c, &st, &cb);
+  else if (!ans_o) {
+    /* the tail as emitted, with the parameters pinned to the element type:
+       a tail read boxed before the pin can come out as a plain value */
+    TyKind at = emit_iter_step_tail(c, &st, &cb);
+    if (cmp_boxed && at != TY_POLY && at != TY_UNKNOWN) { cmp_boxed = 0; cmp_ty = at; }
+  }
   emit_indent(g_pre, g_indent);
   /* take from the left on a tie, so equal elements keep their order */
   char ea[48], eb[48];
@@ -5377,8 +5413,12 @@ int emit_minmax_cmp_expr(Compiler *c, int id, Buf *b) {
   int cmp_boxed = 0;
   if (bn > 0) { Repr cmp_r = repr_of(c, bb[bn - 1]); cmp_ty = cmp_r.as_ty; cmp_boxed = cmp_r.kind == RK_BOXED; }
   int nil_cmp = !cmp_boxed && (cmp_ty == TY_NIL || bv_value_may_be_nil(c, block, cmp_ty));
+  /* a Float, Rational or Bignum answer counts by its sign; one whose
+     block has a `next` is boxed, as the next's value can be of another
+     kind than the tail's */
+  if (!nil_cmp && !cmp_boxed && cmp_ans_by_sign(c, cmp_ty) && iter_step_needs_frame(c, block)) nil_cmp = 1;
   if (nil_cmp) cmp_boxed = 1;
-  else if (cmp_ty != TY_INT && !cmp_boxed) return 0;
+  else if (cmp_ty != TY_INT && !cmp_boxed && !cmp_ans_by_sign(c, cmp_ty)) return 0;
   int trv = ++g_tmp, tn = ++g_tmp, tmin = ++g_tmp, tmax = ++g_tmp, ti = ++g_tmp, te = ++g_tmp;
   Scope *bsc = comp_scope_of(c, block);
   LocalVar *lv_p0 = (bsc && p0) ? scope_local(bsc, p0) : NULL;
@@ -5433,7 +5473,12 @@ int emit_minmax_cmp_expr(Compiler *c, int id, Buf *b) {
   IterStep st; emit_iter_step_open(c, block, nil_cmp && !ans_o, g_indent, &st);
   Buf cm; memset(&cm, 0, sizeof cm);
   if (ans_o && !emit_iter_step_tail_o(c, &st, TY_INT, &cm)) { ans_o = 0; cmp_boxed = 0; emit_iter_step_tail(c, &st, &cm); }
-  else if (!ans_o) emit_iter_step_tail(c, &st, &cm);
+  else if (!ans_o) {
+    /* the tail as emitted, with the parameters pinned to the element type:
+       a tail read boxed before the pin can come out as a plain value */
+    TyKind at = emit_iter_step_tail(c, &st, &cm);
+    if (cmp_boxed && at != TY_POLY && at != TY_UNKNOWN) { cmp_boxed = 0; cmp_ty = at; }
+  }
   g_indent--;
   emit_indent(g_pre, g_indent);
   char ea[48], eb[48];
@@ -6010,7 +6055,7 @@ int emit_collect_expr(Compiler *c, int id, Buf *b) {
        without it here a poly receiver fell through to the dispatch, which has no
        arm for it, and the call raised NoMethodError (#3905). */
     if (bn2 < 1 && !res_poly2) return 0;
-    int trecv2 = ++g_tmp, tn2 = ++g_tmp, tres2 = ++g_tmp, ti2 = ++g_tmp;
+    int trecv2 = ++g_tmp, tn2 = ++g_tmp, tres2 = ++g_tmp, ti2 = ++g_tmp, tarr2 = ++g_tmp;
     Buf rb2; memset(&rb2, 0, sizeof rb2); emit_expr(c, recv, &rb2);
     emit_indent(g_pre, g_indent);
     buf_printf(g_pre, "sp_RbVal _t%d = ", trecv2);
@@ -6061,9 +6106,15 @@ int emit_collect_expr(Compiler *c, int id, Buf *b) {
     else buf_printf(g_pre, "sp_%sArray *_t%d = sp_%sArray_new();\n", rk2, tres2, rk2);
     emit_indent(g_pre, g_indent);
     buf_printf(g_pre, "SP_GC_ROOT(_t%d);\n", tres2);
+    /* an Array of any kind is walked to its length at each step, read
+       through where it keeps it (one load), as the typed walks read it: a
+       block that pushes onto it or pops it changes what is mapped. Anything
+       else keeps the length it started at (a user Enumerable's is its
+       to_a's) */
     emit_indent(g_pre, g_indent);
-    buf_printf(g_pre, "for (sp_int _t%d = 0; _t%d < _t%d; _t%d++) {\n",
-               ti2, ti2, tn2, ti2);
+    buf_printf(g_pre, "const sp_int *_t%d = sp_poly_arr_len_ref(_t%d, &_t%d);\n", tarr2, trecv2, tn2);
+    emit_indent(g_pre, g_indent);
+    buf_printf(g_pre, "for (sp_int _t%d = 0; _t%d < *_t%d; _t%d++) {\n", ti2, ti2, tarr2, ti2);
     /* pin block param to TY_POLY via shadow declaration */
     Scope *csc2 = p0p ? comp_scope_of(c, block) : NULL;
     LocalVar *clv2 = (csc2 && p0p) ? scope_local(csc2, p0p) : NULL;
@@ -7743,7 +7794,7 @@ static void emit_arg_or_default_fill(Compiler *c, Scope *m, int idx, int provide
     /* a default that writes a slot holding the --share-strings handle
        (`v = (@s = +"s")`) binds that handle */
     if (dvP >= 0 && emit_strbuf_write_handle(c, dvP, out)) return;
-    buf_printf(out, "%s(", strbuf_new_func(c, dvP));
+    buf_puts(out, "SP_STR_HDL(");
     /* (in the callee's context, as below) */
     const char *svs = g_self, *svd = g_self_deref;
     int sve = g_emitting_class_id;
@@ -8004,6 +8055,16 @@ static void emit_arg_or_default_fill(Compiler *c, Scope *m, int idx, int provide
 
         else if (oint_kind(pt) && slot_is_oint(p))
           emit_oint_expr(c, provided, pt, out);
+        /* a Method's wrapper (`10.method(:+)`, `__bam_N`) takes what its
+           caller passed, a block's parameter among it: a nil is CRuby's
+           TypeError where the builtin reads it -- the coercion one for an
+           operator's operand (`10 + nil`), the conversion one for another
+           argument -- not a refusal of the program */
+        else if (oint_kind(pt) && node_may_be_nil(c, provided) && m->name && !strncmp(m->name, "__bam_", 6) &&
+                 m->pnames[idx] && !strncmp(m->pnames[idx], "__bam_a", 7)) {
+          int binop_wrap = idx == 1 && m->nparams == 2 && bam_wrapper_is_operator(c, m);
+          emit_oint_unwrap_ck(c, provided, pt, binop_wrap ? g_ck_opnd : NULL, out);
+        }
         else if (oint_kind(pt) && node_may_be_nil(c, provided)) {
           char pw[300];
           snprintf(pw, sizeof pw, "parameter %s of %s", m->pnames[idx] ? m->pnames[idx] : "?", m->name ? m->name : "?");
@@ -8068,6 +8129,21 @@ static void emit_arg_or_default_fill(Compiler *c, Scope *m, int idx, int provide
         else if (oint_kind(pt) && m && idx >= 0 && idx < m->nparams && m->pnames[idx] &&
                  slot_is_oint(scope_local(m, m->pnames[idx])))
           emit_oint_expr(c, provided, pt, out);
+        /* an argument no conversion fits into a parameter its RBS signature
+           types (an arm of a run-time dispatch this call may never take:
+           `m.classify("gear")` over two modules whose classify take a String
+           and an Array): the seed's TypeError where the call runs, as a boxed
+           argument's check raises it (emit_rbs_checked_text), not a refusal */
+        else if (p && p->rbs_seeded && at != TY_UNKNOWN && at != TY_VOID &&
+                 repr_coerce_text_form(c, provided, at, pt, CO_HOLD) == CF_REFUSE &&
+                 (ty_is_array(pt) || ty_is_hash(pt) || conv_cls_name_of(c, pt))) {
+          const char *want = ty_is_array(pt) ? "Array" : ty_is_hash(pt) ? "Hash" : conv_cls_name_of(c, pt);
+          int tv = ++g_tmp;
+          buf_printf(out, "({ sp_RbVal _t%d = ", tv);
+          emit_boxed(c, provided, out);
+          buf_printf(out, "; sp_raise_cls(\"TypeError\", sp_sprintf(\"wrong argument type %%s (expected %s)\", "
+                          "sp_poly_class_name(_t%d))); %s; })", want, tv, raise_tail_value_c(c, pt));
+        }
         else {
           emit_obj_upcast_prefix(c, pt, at, out);
           emit_coerce(c, provided, pt, CO_HOLD, "a method argument", out);
@@ -9427,9 +9503,26 @@ int head_held_box(Compiler *c, int node) {
 }
 
 /* See codegen_internal.h. */
+void hold_string_handle_decl(Compiler *c, int node, int t, int root, Buf *b) {
+  Buf hh; memset(&hh, 0, sizeof hh);
+  emit_strbuf_handle_of(c, node, &hh);
+  buf_printf(b, "sp_String *_t%d = SP_STR_HDL(%s);", t, hh.p ? hh.p : "NULL");
+  if (root) buf_printf(b, " SP_GC_ROOT(_t%d);", t);
+  free(hh.p);
+}
+
+/* See codegen_internal.h. */
 int hold_operand(Compiler *c, int node, TyKind ty, int boxed, int t, int root, const char *sep, Buf *b) {
   /* a value with no C slot of its own (nil) is held boxed */
   if (!boxed && (ty == TY_NIL || ty == TY_VOID || ty == TY_UNKNOWN)) { boxed = 1; ty = TY_POLY; }
+  /* a String that is a handle, and that no head holds, is rendered once,
+     as its handle (below): rendered first as its bytes too, a block or a
+     loop it runs in g_pre ran twice (`s[1] = a.map { s << x; "B" }.first`) */
+  if (!boxed && ty == TY_STRING && repr_of(c, node).strbuf_src == RS_HANDLE && head_held_temp(c, node) < 0) {
+    hold_string_handle_decl(c, node, t, root, b);
+    buf_puts(b, sep);
+    return t;
+  }
   Buf vb; memset(&vb, 0, sizeof vb);
   if (boxed) emit_boxed(c, node, &vb); else emit_expr(c, node, &vb);
   /* the head's temp, read unconverted: no copy, no second root */
@@ -9443,12 +9536,9 @@ int hold_operand(Compiler *c, int node, TyKind ty, int boxed, int t, int root, c
      (SP_STR_B); a bytes temp of it was a view the other operands could
      move (`s.concat(s, s)` grew the payload under it). */
   if (!boxed && ty == TY_STRING && repr_of(c, node).strbuf_src == RS_HANDLE) {
-    Buf hh; memset(&hh, 0, sizeof hh);
-    emit_strbuf_handle_of(c, node, &hh);
-    buf_printf(b, "sp_String *_t%d = SP_STR_HDL(%s);", t, hh.p ? hh.p : "NULL");
-    if (root) buf_printf(b, " SP_GC_ROOT(_t%d);", t);
+    hold_string_handle_decl(c, node, t, root, b);
     buf_puts(b, sep);
-    free(hh.p); free(vb.p);
+    free(vb.p);
     return t;
   }
   /* ...and a String the head holds as its handle, read from it
@@ -12884,11 +12974,17 @@ void emit_obj_dispatch_key(Compiler *c, int cid, const char *selfptr, Buf *b) {
    naming self's class as it runs and staging self as the receiver;
    otherwise, and after the raise, the typed placeholder the result slot
    takes. A per-arm dispatch passes its arguments (argsNode), which no
-   arm ran for this self: CRuby runs them before it finds no method. */
+   arm ran for this self: CRuby runs them before it finds no method. A call
+   with a Kernel row (cplan_dispatch_row) takes the row's answer in the
+   placeholder's place; a dispatch that ran its arguments ahead passes their
+   temps (atmp). */
 static void emit_dispatch_miss_default(Compiler *c, int cid, int miss_id, const char *name, const char *selfptr,
-                                       int argsNode, int rtmp, TyKind ret, TyKind disp_ret, Buf *b) {
+                                       int argsNode, const int *atmp, int natmp, int rtmp, TyKind ret, TyKind disp_ret, Buf *b) {
   int miss = miss_id >= 0 ? cplan_dispatch_miss(c, miss_id, cid) : CM_NONE;
-  if (miss != CM_NONE) {
+  int row = miss_id >= 0 && cplan_dispatch_row(c, miss_id);   /* Kernel's row answers, not a raise */
+  Buf rv; memset(&rv, 0, sizeof rv);
+  int in_block = 0;   /* the row answer is assigned inside the operands' block */
+  if (miss != CM_NONE || (row && argsNode >= 0)) {
     int argc = 0;
     const int *argv = argsNode >= 0 ? nt_arr(c->nt, argsNode, "arguments", &argc) : NULL;
     Buf pb; memset(&pb, 0, sizeof pb);
@@ -12898,28 +12994,40 @@ static void emit_dispatch_miss_default(Compiler *c, int cid, int miss_id, const 
       g_pre = &pb;
       emit_args_run(c, argv, argc);
       g_pre = sv;
+      if (row) emit_dispatch_row_answer(c, miss_id, NULL, 0, ret, &rv);   /* (the operands' temps are bound) */
       view_unbind(ov);
     }
     /* in a block of its own: the arguments' temps are declarations */
     if (pb.p) buf_printf(b, "{ %s", pb.p);
     Buf v; memset(&v, 0, sizeof v);
-    emit_obj_self_box(c, cid, selfptr, &v);
+    if (miss != CM_NONE) emit_obj_self_box(c, cid, selfptr, &v);
     if (miss == CM_NAMEERROR) {
       buf_puts(b, "sp_raise_cls(\"NameError\", sp_stage_recv_msg(sp_sprintf(\"undefined local variable or method '%s' for %s\", ");
       emit_str_literal(b, name);
       buf_printf(b, ", sp_nomethod_recv_desc(%s)), %s)); ", v.p, v.p);
     }
-    else {
+    else if (miss != CM_NONE) {
       buf_puts(b, "sp_raise_poly_nomethod(");
       emit_str_literal(b, name);
       buf_printf(b, ", %s); ", v.p);
     }
     free(v.p);
+    /* (the answer reads the operands' temps, declared in this block) */
+    if (pb.p && rv.p) {
+      buf_printf(b, "_t%d = %s; break; ", rtmp, rv.p);
+      in_block = 1;
+    }
     if (pb.p) buf_puts(b, "} ");
     free(pb.p);
   }
+  /* (a per-arm dispatch ran the arguments ahead, into atmp; with none to run
+     there is nothing to bind) */
+  if (in_block) { free(rv.p); return; }
+  if (row && !rv.p) emit_dispatch_row_answer(c, miss_id, argsNode < 0 ? atmp : NULL, argsNode < 0 ? natmp : 0, ret, &rv);
   buf_printf(b, "_t%d = %s; break;", rtmp,
+             rv.p ? rv.p :
              ret == TY_POLY ? "sp_box_nil()" : g_disp_ro ? oint_nil(disp_ret) : default_value_from_compiler(c, disp_ret));
+  free(rv.p);
 }
 
 /* The dispatch switch for arms that disagree on their parameters: each arm
@@ -12975,7 +13083,7 @@ static void emit_dispatch_per_arm(Compiler *c, int cid, int miss_id, const char 
   else if (dmi >= 0)
     emit_dispatch_arm_call(c, defcls, dmi, selfptr, argsNode, blk_tmp, ret, disp_ret, rtmp, b);
   else
-    emit_dispatch_miss_default(c, cid, miss_id, name, selfptr, argsNode, rtmp, ret, disp_ret, b);
+    emit_dispatch_miss_default(c, cid, miss_id, name, selfptr, argsNode, NULL, 0, rtmp, ret, disp_ret, b);
   buf_printf(b, " } _t%d; })", rtmp);
 }
 
@@ -13818,6 +13926,18 @@ else {
   }
 
   if (!virtual) {
+    /* A yielding method the inliner left to this call (a default that reads
+       self keeps it from splicing) has no function of its own: its proc
+       form, handed the call's block as a proc, or none, as a switch arm
+       calls it. The plain name was never emitted. */
+    int pf_d = m && m->yields ? scope_proc_form_of(c, mi) : -1;
+    Scope *callee = pf_d >= 0 ? &c->scopes[pf_d] : m;
+    if (pf_d >= 0 && blk_node >= 0) blk_tmp = emit_blk_proc_tmp(c, blk_node);
+    /* the clone answers boxed, whatever this call's type: its value goes
+       through the conversion a switch arm's takes (emit_disp_arm_assign) */
+    Buf pf_call; memset(&pf_call, 0, sizeof pf_call);
+    Buf *direct_b = b;
+    if (pf_d >= 0 && !ret_is_void) b = &pf_call;
     /* a value-type receiver is passed by value (no pointer cast); so is
        the self of an Object / Array / Hash / Numeric reopening, which its
        methods take boxed (emit_method_signature) and which has no struct */
@@ -13833,23 +13953,38 @@ else {
          version, and the pointer passed as it was did not compile. Boxed
          as every boxed use of the instance is (arysub_box_id). */
       if (!vptr && cid >= 0 && c->classes[cid].ary_root > 0 && reopen_takes_boxed_self(c, defcls)) {
-        buf_printf(b, "%s(", mc_method(c, m));
+        buf_printf(b, "%s(", mc_method(c, callee));
         emit_boxed_text(c, ty_object(cid), selfptr, b);
       }
-      else buf_printf(b, vptr ? "%s((*%s)" : "%s(%s", mc_method(c, m), selfptr);
+      else buf_printf(b, vptr ? "%s((*%s)" : "%s(%s", mc_method(c, callee), selfptr);
     }
     else
-      buf_printf(b, "%s((sp_%s *)%s", mc_method(c, m), c->classes[defcls].c_name, selfptr);
+      buf_printf(b, "%s((sp_%s *)%s", mc_method(c, callee), c->classes[defcls].c_name, selfptr);
     for (int k = 0; k < np; k++) {
       /* a temp the call ran first keeps its own form: the parameter's */
-      if (m && atmp_o[k] && atmp_ty[k] != TY_POLY) emit_arm_arg(c, m, k, atmp[k], atmp_ty[k], 1, b);
+      if (pf_d >= 0) emit_arm_arg(c, callee, k, atmp[k], atmp_ty[k], atmp_o[k], b);
+      else if (m && atmp_o[k] && atmp_ty[k] != TY_POLY) emit_arm_arg(c, m, k, atmp[k], atmp_ty[k], 1, b);
       else buf_printf(b, ", _t%d", atmp[k]);
+    }
+    if (pf_d >= 0) {
+      if (blk_tmp >= 0) buf_printf(b, ", _t%d", blk_tmp);
+      else buf_puts(b, ", NULL");
     }
     if (needs_blk_arg) {
       if (blk_tmp >= 0) buf_printf(b, ", _t%d", blk_tmp);
       else buf_puts(b, ", NULL");
     }
     buf_puts(b, ")");
+    if (b == &pf_call) {
+      b = direct_b;
+      int rt = ++g_tmp;
+      buf_puts(b, "({ ");
+      if (g_disp_ro) buf_puts(b, oint_ctype(disp_ret)); else emit_ctype(c, disp_ret, b);
+      buf_printf(b, " _t%d; ", rt);
+      emit_disp_arm_assign(c, callee, pf_call.p ? pf_call.p : "", ret, disp_ret, rt, b);
+      buf_printf(b, "_t%d; })", rt);
+      free(pf_call.p);
+    }
     free(atmp); free(atmp_ty); free(atmp_o); arg_layout_free(&L);
     return;
   }
@@ -13894,7 +14029,7 @@ else {
      call to a nonexistent sp_<base>_<name>. */
   if (!m) {
     buf_puts(b, " default: ");
-    emit_dispatch_miss_default(c, cid, miss_id, name, selfptr, -1, rtmp, ret, disp_ret, b);
+    emit_dispatch_miss_default(c, cid, miss_id, name, selfptr, -1, atmp, np, rtmp, ret, disp_ret, b);
     buf_printf(b, " } _t%d; })", rtmp);
     free(atmp); free(atmp_ty); free(atmp_o); arg_layout_free(&L);
     return;

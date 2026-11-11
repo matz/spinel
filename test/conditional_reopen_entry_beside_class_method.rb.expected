@@ -1,0 +1,6 @@
+[:s, Integer]
+[:s, Integer]
+[:s, Float]
+[:s, Float]
+[:dur, 4]
+"wrong number of arguments (given 0, expected 1)"

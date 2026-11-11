@@ -1650,23 +1650,51 @@ int emit_op_poly_case_options(Compiler *c, const BopCtx *x, Buf *b) {
   return 0;
 }
 
+static int str_mut_open(Compiler *c, const BopCtx *x, int *nilchk, Buf *b);
+static void str_mut_nil_check(const BopCtx *x, int t, int nilchk, Buf *b);
+
 /* Boxed slice! arguments select the same overloads as typed arguments.
-   Keep the argument rooted and evaluate it once before re-entering the arms.
-   With a second argument (`slice!(x, n)`, two) only a Regexp and an
-   Integer take one: any other value goes to the Integer arm, which raises
-   TypeError as CRuby does. */
-static int emit_string_slice_poly(Compiler *c, int id, int arg, int two, Buf *b) {
+   The receiver's handle is taken first (str_mut_open, which roots it while
+   the operand can rebind its slot), as the row takes it, then the argument
+   is evaluated once and rooted -- or read where it ran first -- and each
+   arm is the row over that handle (x->t0 its temp, which tells the row it
+   is an arm). With a second argument (`slice!(x, n)`, two) only a Regexp
+   and an Integer take one: any other value goes to the Integer arm, which
+   raises TypeError as CRuby does. */
+static int emit_string_slice_poly(Compiler *c, const BopCtx *x, int arg, int two, Buf *b) {
   if (repr_of(c, arg).kind != RK_BOXED) return 0;
+  int id = x->id, chk, th = str_mut_open(c, x, &chk, b);
+  char rt[32];
+  snprintf(rt, sizeof rt, "_t%d", th);
+  BopCtx arm = *x;
+  arm.rtext = rt; arm.t0 = th;
   int ta = ++g_tmp, tr = ++g_tmp;
-  buf_printf(b, "({ sp_RbVal _t%d = ", ta); emit_boxed(c, arg, b);
+  buf_printf(b, " ({ sp_RbVal _t%d = ", ta); emit_boxed(c, arg, b);
   buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); _t%d = sp_poly_strbuf_deref(_t%d); const char *_t%d; ",
              ta, ta, ta, tr);
   int bind, v;
+  /* the second argument runs before either form reads the first */
+  int b2 = -1;
+  if (two) {
+    int argc;
+    const int *argv = call_args(c->nt, id, &argc);
+    if (!arg_ran_first(argv[1], 0)) {
+      /* held as what it is, an Integer or a box (the row converts it) */
+      Repr r1 = repr_of(c, argv[1]);
+      int bx = r1.kind == RK_BOXED || r1.as_ty != TY_INT || r1.nil_scalar || r1.may_nil;
+      b2 = g_n_argov;
+      int t2 = hold_operand(c, argv[1], bx ? TY_POLY : TY_INT, bx, ++g_tmp, 1, " ", b);
+      view_bind(argv[1], "_t%d", t2);
+    }
+  }
+  /* a nil receiver raises once the arguments ran, before the form is picked */
+  str_mut_nil_check(x, th, chk, b);
+  buf_puts(b, " ");
   if (!two) {
     buf_printf(b, "if (_t%d.tag == SP_TAG_STR) { _t%d = ", ta, tr);
     bind = view_bind(arg, "_t%d.v.s", ta);
     v = view_push(c, arg, TY_STRING);
-    emit_array_call(c, id, b);
+    emit_op_string_slice(c, &arm, b);
     view_pop(c, v);
     view_unbind(bind);
     buf_puts(b, "; }\nelse ");
@@ -1674,53 +1702,25 @@ static int emit_string_slice_poly(Compiler *c, int id, int arg, int two, Buf *b)
   buf_printf(b, "if (_t%d.tag == SP_TAG_OBJ && _t%d.cls_id == SP_BUILTIN_REGEX) { _t%d = ", ta, ta, tr);
   bind = view_bind(arg, "((mrb_regexp_pattern *)_t%d.v.p)", ta);
   v = view_push(c, arg, TY_REGEX);
-  emit_array_call(c, id, b);
+  emit_op_string_slice(c, &arm, b);
   view_pop(c, v);
   view_unbind(bind);
   if (!two) {
     buf_printf(b, "; }\nelse if (_t%d.tag == SP_TAG_OBJ && _t%d.cls_id == SP_BUILTIN_RANGE) { _t%d = ", ta, ta, tr);
     bind = view_bind(arg, "(*(sp_Range *)_t%d.v.p)", ta);
     v = view_push(c, arg, TY_RANGE);
-    emit_array_call(c, id, b);
+    emit_op_string_slice(c, &arm, b);
     view_pop(c, v);
     view_unbind(bind);
   }
+  /* the Integer form takes the box, converted after its frozen check */
   buf_printf(b, "; }\nelse { _t%d = ", tr);
-  bind = view_bind(arg, "sp_poly_arg_int_chk(_t%d)", ta);
-  v = view_push(c, arg, TY_INT);
-  emit_array_call(c, id, b);
-  view_pop(c, v);
+  bind = view_bind(arg, "_t%d", ta);
+  emit_op_string_slice(c, &arm, b);
   view_unbind(bind);
-  buf_printf(b, "; } _t%d; })", tr);
+  buf_printf(b, "; } _t%d; }); })", tr);
+  if (b2 >= 0) view_unbind(b2);
   return 1;
-}
-
-/* The variable at the bottom of a chain of String calls that each answer
-   their receiver itself (BOPF_SELF on the builtin row: `s.insert(0, x)`,
-   `s << x`), or -1: a mutator called on the chain's answer changes that
-   variable's String. */
-static int str_self_chain_root(Compiler *c, int n) {
-  const NodeTable *nt = c->nt;
-  switch (vp_one(nt, n, VPS_NONE | VP_PARENS_ONLY, &n)) {
-  case VP1_NODE: break;
-  case VP1_NIL: return -1;
-  case VP1_MANY: return -1;
-  }
-  while (n >= 0 && nt_kind(nt, n) == NK_CallNode) {
-    int r = nt_ref(nt, n, "receiver");
-    const char *nm = nt_str(nt, n, "name");
-    TyKind rt = r >= 0 ? comp_ntype(c, r) : TY_UNKNOWN;
-    if (!nm || (rt != TY_STRING && rt != TY_STRBUF) || comp_builtin_kind_reopen_mi(c, TY_STRING, nm) >= 0 ||
-        !(bop_answers_self(TY_STRING, nm, call_plain_argc(c, n), nt_ref(nt, n, "block") >= 0) & BOPF_SELF))
-      return -1;
-    switch (vp_one(nt, r, VPS_NONE | VP_PARENS_ONLY, &n)) {
-    case VP1_NODE: break;
-    case VP1_NIL: return -1;
-    case VP1_MANY: return -1;
-    }
-    if (str_mut_var_recv(c, n) || sb_shadowed_reader(n)) return n;
-  }
-  return -1;
 }
 
 /* Is node n's value a String no other name can hold: an interpolation, a
@@ -1788,239 +1788,437 @@ int emit_op_string_dedup(Compiler *c, const BopCtx *x, Buf *b) {
   return 1;
 }
 
+/* ---- String#[]=, #insert, #clear and #slice! (stage 7) ----
+   A String slot holds the String's handle, so these rows change the String
+   where it lives: the receiver's handle is taken once, before the arguments
+   run (CRuby evaluates the receiver first), and the new bytes are written
+   into it (sp_String_set_bin), which every name holding the String sees: a
+   variable, an ivar, self in a reopened String, an element, a call's
+   answer, the temp a `&.` tested, the String a bang on a held chain
+   answers. A String no name holds (a call's fresh answer) is changed in a
+   handle of its own, which nobody else reads.
+
+   Every operand runs once, in Ruby's order -- the receiver, then the
+   arguments left to right -- before any check the method makes (StrMutOp);
+   the checks and conversions then come in the order CRuby makes them,
+   reading the held operands. */
+
+/* Opens `({ sp_String *_t<t> = <the receiver's handle>;` and answers t. A
+   bang on a held chain hands over the handle it answers (emit_held_chain_handle),
+   and a slot its own handle (strbuf_recv_handle_any: a variable's, a
+   captured cell's, a route's over one); any other receiver is the handle
+   of its value (SP_STR_HDL finds the String a payload view belongs to),
+   rooted while the arguments allocate -- a slot's too when an argument can
+   run code. *nilchk says whether the handle can be nil, for
+   str_mut_nil_check once the arguments ran. */
+static int str_mut_open(Compiler *c, const BopCtx *x, int *nilchk, Buf *b) {
+  int t = ++g_tmp;
+  Buf hb; memset(&hb, 0, sizeof hb);
+  Buf lb; memset(&lb, 0, sizeof lb);
+  int held = !x->rtext && emit_held_chain_handle(c, x->recv, &hb);
+  int hr = x->rtext || held ? 0 : strbuf_recv_handle_any(c, x->id, x->recv, &hb, &lb);
+  buf_printf(b, "({ sp_String *_t%d = SP_STR_HDL(", t);
+  if (x->rtext) buf_puts(b, x->rtext);
+  else if (held || hr) buf_puts(b, lb.p ? lb.p : hb.p ? hb.p : "NULL");
+  else emit_expr(c, x->recv, b);
+  buf_puts(b, ");");
+  free(hb.p); free(lb.p);
+  /* (an argument that runs code can rebind the slot, `@s.insert(m, v)`
+     with m setting @s, and the row changes the String it took) */
+  int argc, runs = 0;
+  const int *argv = call_args(c->nt, x->id, &argc);
+  for (int i = 0; i < argc && !runs; i++) runs = subtree_has_side_effect(c, argv[i]);
+  if (hr != 1 || runs) buf_printf(b, " SP_GC_ROOT(_t%d);", t);
+  *nilchk = held || (!hr && repr_of(c, x->recv).may_nil);
+  return t;
+}
+
+/* A nil receiver raises NoMethodError for the row's name, after the
+   arguments ran, as CRuby dispatches */
+static void str_mut_nil_check(const BopCtx *x, int t, int nilchk, Buf *b) {
+  if (nilchk) buf_printf(b, " if (SP_UNLIKELY(!_t%d)) sp_nil_recv_raise(\"%s\");", t, x->op->name);
+}
+
+/* `_t<t>`'s bytes, the String the row reads */
+static void str_mut_bytes(Buf *b, int t) { buf_printf(b, "sp_String_cstr(_t%d)", t); }
+
+/* What insert and clear answer, the receiver: the handle where the call's
+   value is kept as one, else its bytes, the payload view every face macro
+   finds the handle of */
+static void str_mut_self_answer(Compiler *c, const BopCtx *x, int t, Buf *b) {
+  if (repr_of(c, x->id).handle) buf_printf(b, " _t%d; })", t);
+  else buf_printf(b, " sp_strbuf_read_pub(_t%d); })", t);
+}
+
+/* An operand of these rows. One that can run code, or read what a later
+   operand can change, is held in _t<t> by hold_operand -- a String as its
+   handle, its bytes taken where they are used; a boxed value, or an index
+   that is not an Integer, boxed -- and an operand held typed is bound to
+   its temp (view_bind), so the emitters below read the temp where they
+   convert it. t < 0 for an operand read where it is used: a literal, one
+   the call's operand order already ran, a pure read no later operand can
+   change. */
+typedef struct { int node, t, boxed; } StrMutOp;
+
+static int str_mut_inert(Compiler *c, int n, int later_effects) {
+  switch (nt_kind(c->nt, n)) {
+  case NK_StringNode: case NK_IntegerNode: case NK_FloatNode: case NK_NilNode: case NK_SymbolNode:
+  case NK_TrueNode: case NK_FalseNode: case NK_RegularExpressionNode:
+  case NK_SplatNode:   /* insert's `*r`, read where the splice takes it (emit_str_insert_text) */
+    return 1;
+  default:
+    return arg_ran_first(n, 0) || (!later_effects && subtree_is_pure_read(c, n));
+  }
+}
+
+/* Holds argv[i] into *o. As an index (as_index), an Integer stays an
+   sp_int and any other value is held boxed, for the conversion CRuby's
+   NUM2LONG makes (str_mut_index); otherwise the operand is held as what it
+   is. */
+static void str_mut_hold(Compiler *c, const int *argv, int argc, int i, int as_index, StrMutOp *o, Buf *b) {
+  int n = argv[i], later = 0;
+  for (int j = i + 1; j < argc; j++) later |= subtree_has_side_effect(c, argv[j]);
+  Repr r = repr_of(c, n);
+  TyKind ty = r.as_ty;
+  int boxed = r.kind == RK_BOXED || ty == TY_POLY || ty == TY_NIL || ty == TY_VOID || ty == TY_UNKNOWN ||
+              yield_site_type(c, n) == TY_POLY;
+  if (as_index && !(ty == TY_INT && !r.nil_scalar && !r.may_nil)) boxed = 1;
+  o->node = n; o->t = -1; o->boxed = boxed;
+  if (str_mut_inert(c, n, later)) return;
+  buf_puts(b, " ");
+  o->t = hold_operand(c, n, boxed ? TY_POLY : ty, boxed, ++g_tmp, 1, "", b);
+  if (!boxed) view_bind(n, "_t%d", o->t);
+}
+
+/* The sp_int index operand o reads as: an Integer as it is; any other
+   value through CRuby's implicit conversion (sp_poly_arg_int_chk: a Float
+   truncated, a #to_int, and nil, a String or a Range CRuby's TypeError) */
+static void str_mut_index(Compiler *c, const StrMutOp *o, Buf *b) {
+  if (o->t >= 0 && o->boxed) buf_printf(b, "sp_poly_arg_int_chk(_t%d)", o->t);
+  else if (!o->boxed) emit_int_expr(c, o->node, b);
+  else { buf_puts(b, "sp_poly_arg_int_chk("); emit_boxed(c, o->node, b); buf_puts(b, ")"); }
+}
+
+/* o's value boxed */
+static void str_mut_boxed(Compiler *c, const StrMutOp *o, Buf *b) {
+  if (o->t >= 0 && o->boxed) buf_printf(b, "_t%d", o->t);
+  else emit_boxed(c, o->node, b);
+}
+
+/* Converts value operand o to the bytes the splice takes, into a rooted
+   `_s<n>`, and answers n: a String as it is, an object by its #to_str, and
+   any other value raises CRuby's TypeError (sp_str_aset_rep, where the
+   String-slot conversion would splice in a Class's or an Encoding's to_s).
+   The caller places it where CRuby converts the value. */
+static int str_mut_convert(Compiler *c, const StrMutOp *o, Buf *b) {
+  int ts = ++g_tmp;
+  /* (an object's #to_str renders here, inline, rooted as _s<ts>: collected
+     into the call's conversion hold (conv_hold_begin), it was declared in
+     front of the row, ahead of the hold of the operand it reads) */
+  ConvHold *hold0 = g_conv_hold;
+  g_conv_hold = NULL;
+  buf_printf(b, " const char *_s%d = ", ts);
+  /* (insert's `*r` takes out its one element, whatever the splat reads as) */
+  if (o->boxed && nt_kind(c->nt, o->node) != NK_SplatNode) {
+    buf_puts(b, "sp_str_aset_rep("); str_mut_boxed(c, o, b); buf_puts(b, ")");
+  }
+  else emit_str_insert_text(c, o->node, b);
+  buf_printf(b, "; SP_GC_ROOT_STR(_s%d);", ts);
+  g_conv_hold = hold0;
+  return ts;
+}
+
+/* The value of `x[k] = v`: the right-hand object itself, whatever the
+   method did with it, read from its hold in the representation the call's
+   value is kept in */
+static void str_mut_value_answer(Compiler *c, const BopCtx *x, const StrMutOp *o, Buf *b) {
+  Repr w = repr_of(c, x->id);
+  int wbox = w.kind == RK_BOXED || w.as_ty == TY_POLY;
+  buf_puts(b, " ");
+  if (o->t >= 0 && o->boxed) {
+    char tn[24];
+    snprintf(tn, sizeof tn, "_t%d", o->t);
+    if (wbox || w.as_ty == TY_UNKNOWN || w.as_ty == TY_VOID) buf_puts(b, tn);
+    else emit_unbox_text(c, w.as_ty, tn, b);
+  }
+  else if (wbox) emit_boxed(c, o->node, b);
+  else if (w.handle) { buf_puts(b, "SP_STR_HDL("); emit_expr(c, o->node, b); buf_puts(b, ")"); }
+  else emit_expr(c, o->node, b);
+  buf_puts(b, "; })");
+}
+
+/* `_t<t>` takes `s` spliced as `splice` (a call over its bytes), which
+   raises its IndexError first; sp_String_set_bin_enc raises FrozenError
+   after it, the order CRuby checks them in for []= and insert, and takes
+   the splice's encoding, which the compatibility rule picked (an
+   ASCII-only binary receiver takes a UTF-8 value's) */
+static void str_mut_set(Buf *b, int t, const char *splice) {
+  buf_printf(b, " sp_String_set_bin_enc(_t%d, %s);", t, splice);
+}
+
+/* The forms of `[]=`, which CRuby picks by the key's class: an Integer
+   index, a Range, a Regexp, a String, and with three operands a Regexp's
+   group or a start and a length. Any other key (a Float, nil, a boxed one)
+   picks its form at run time, by its class (sp_str_aset_box_key). */
+enum { SA_INDEX, SA_RANGE, SA_RE, SA_STR, SA_BOX, SA_RE_N, SA_SPAN };
+
+/* The pattern text of a Regexp key: a literal's compiled pattern, or the
+   held value's */
+static void str_mut_pattern(Compiler *c, int re, int key, Buf *b) {
+  if (re >= 0) buf_printf(b, "sp_re_pat_%d", re);
+  else emit_expr(c, key, b);
+}
+
+int emit_op_string_aset(Compiler *c, const BopCtx *x, Buf *b) {
+  int argc;
+  const int *argv = call_args(c->nt, x->id, &argc);
+  int re = re_lit_index(c, argv[0]);
+  Repr r0 = repr_of(c, argv[0]);
+  TyKind k0 = r0.kind == RK_BOXED ? TY_POLY : comp_ntype(c, argv[0]);
+  int rx = re >= 0 || k0 == TY_REGEX;
+  int form = argc == 3 ? (rx ? SA_RE_N : SA_SPAN)
+           : rx ? SA_RE : k0 == TY_RANGE ? SA_RANGE : k0 == TY_STRING ? SA_STR
+           : k0 == TY_INT && !r0.nil_scalar && !r0.may_nil ? SA_INDEX : SA_BOX;
+  int chk, t = str_mut_open(c, x, &chk, b), mark = g_n_argov;
+  StrMutOp k[2], v;
+  for (int i = 0; i < argc - 1; i++)
+    str_mut_hold(c, argv, argc, i, i == 1 || form == SA_INDEX || form == SA_SPAN || form == SA_BOX, &k[i], b);
+  str_mut_hold(c, argv, argc, argc - 1, 0, &v, b);
+  str_mut_nil_check(x, t, chk, b);
+  Buf sp; memset(&sp, 0, sizeof sp);
+  Buf cs; memset(&cs, 0, sizeof cs);
+  str_mut_bytes(&cs, t);
+  int tn = ++g_tmp, ts;
+  switch (form) {
+  case SA_BOX:
+    /* the key's class picks the form, each checked in CRuby's order */
+    buf_printf(b, " (void)sp_str_aset_box_key(_t%d, ", t);
+    str_mut_boxed(c, &k[0], b); buf_puts(b, ", "); str_mut_boxed(c, &v, b);
+    buf_puts(b, ");");
+    break;
+  case SA_INDEX:
+    /* s[i] = v: the character at i (-len..len, len appends); the value is
+       converted before the index is checked */
+    buf_printf(b, " sp_int _t%d = ", tn); str_mut_index(c, &k[0], b); buf_puts(b, ";");
+    ts = str_mut_convert(c, &v, b);
+    buf_printf(&sp, "sp_str_splice_at(%s, _t%d, 1, _s%d, 0)", cs.p, tn, ts);
+    break;
+  case SA_RANGE:
+    /* s[range] = v: the range's character span (a negative length inserts);
+       a beginless bound is 0 and an endless one the last index. A start
+       outside the String is CRuby's RangeError, naming the Range, ahead of
+       the value's conversion */
+    buf_printf(b, " sp_Range _r%d = ", tn); emit_expr(c, argv[0], b);
+    buf_printf(b, "; sp_Range _t%d = sp_range_ix(_r%d);", tn, tn);
+    buf_printf(b, " sp_int _len%d = (sp_int)sp_str_length(%s);", tn, cs.p);
+    buf_printf(b, " sp_int _a%d = _t%d.nobeg ? 0 :"
+                  " (_t%d.first < 0 ? _t%d.first + _len%d : _t%d.first);", tn, tn, tn, tn, tn, tn);
+    buf_printf(b, " if (_a%d < 0 || _a%d > _len%d)"
+                  " sp_raise_cls(\"RangeError\", sp_sprintf(\"%%s out of range\", sp_range_str(_r%d)));",
+               tn, tn, tn, tn);
+    buf_printf(b, " int _oe%d = _t%d.noend;", tn, tn);
+    buf_printf(b, " sp_int _e%d = _oe%d ? _len%d - 1 :"
+                  " (_t%d.last < 0 ? _t%d.last + _len%d : _t%d.last);", tn, tn, tn, tn, tn, tn, tn);
+    buf_printf(b, " sp_int _n%d = _e%d - _a%d + ((_t%d.excl && !_oe%d) ? 0 : 1);", tn, tn, tn, tn, tn);
+    ts = str_mut_convert(c, &v, b);
+    buf_printf(&sp, "sp_str_splice_at(%s, _a%d, _n%d < 0 ? 0 : _n%d, _s%d, 1)", cs.p, tn, tn, tn, ts);
+    break;
+  case SA_RE:
+  case SA_RE_N:
+    /* s[/re/] = v and s[/re/, n] = v: group n (0, the match) of the first
+       match, its span found and checked as CRuby checks it (sp_re_nth_span)
+       before v is converted */
+    if (form == SA_RE_N) { buf_printf(b, " sp_int _t%d = ", tn); str_mut_index(c, &k[1], b); buf_puts(b, ";"); }
+    buf_printf(b, " sp_int _b%d, _e%d; sp_re_nth_span(", tn, tn);
+    str_mut_pattern(c, re, argv[0], b);
+    buf_printf(b, ", %s, ", cs.p);
+    if (form == SA_RE_N) buf_printf(b, "_t%d", tn); else buf_puts(b, "0");
+    buf_printf(b, ", &_b%d, &_e%d);", tn, tn);
+    ts = str_mut_convert(c, &v, b);
+    buf_printf(&sp, "sp_str_bytesplice(%s, _b%d, _e%d - _b%d, _s%d)", cs.p, tn, tn, tn, ts);
+    break;
+  case SA_STR:
+    /* s["sub"] = v: the first occurrence; none raises IndexError, before v
+       is converted */
+    buf_printf(b, " const char *_k%d = ", tn); emit_str_expr(c, argv[0], b);
+    buf_printf(b, "; SP_GC_ROOT_STR(_k%d);", tn);
+    buf_printf(b, " sp_oint _a%d = sp_str_index_opt(%s, _k%d);"
+                  " if (_a%d.nil) sp_raise_cls(\"IndexError\", \"string not matched\");", tn, cs.p, tn, tn);
+    ts = str_mut_convert(c, &v, b);
+    buf_printf(&sp, "sp_str_splice_at(%s, _a%d.v, (sp_int)sp_str_length(_k%d), _s%d, 0)", cs.p, tn, tn, ts);
+    break;
+  default:
+    /* s[start, len] = v: the start and the length are converted, and a
+       negative length raises, before the value is (rb_str_update) */
+    buf_printf(b, " sp_int _t%d = ", tn); str_mut_index(c, &k[0], b);
+    buf_printf(b, "; sp_int _l%d = ", tn); str_mut_index(c, &k[1], b); buf_puts(b, ";");
+    buf_printf(b, " if (_l%d < 0) sp_raise_cls(\"IndexError\", sp_sprintf(\"negative length %%lld\", (long long)_l%d));", tn, tn);
+    ts = str_mut_convert(c, &v, b);
+    buf_printf(&sp, "sp_str_splice_at(%s, _t%d, _l%d, _s%d, 0)", cs.p, tn, tn, ts);
+    break;
+  }
+  if (sp.p) str_mut_set(b, t, sp.p);
+  str_mut_value_answer(c, x, &v, b);
+  view_unbind(mark);
+  free(sp.p); free(cs.p);
+  return 1;
+}
+
+int emit_op_string_insert(Compiler *c, const BopCtx *x, Buf *b) {
+  int argc;
+  const int *argv = call_args(c->nt, x->id, &argc);
+  int chk, t = str_mut_open(c, x, &chk, b), mark = g_n_argov;
+  StrMutOp a, v;
+  str_mut_hold(c, argv, argc, 0, 1, &a, b);
+  str_mut_hold(c, argv, argc, 1, 0, &v, b);
+  str_mut_nil_check(x, t, chk, b);
+  /* the index converts first (a Float truncated toward zero, anything but
+     an Integer CRuby's TypeError), then the value */
+  int ti = ++g_tmp;
+  buf_printf(b, " sp_int _t%d = ", ti); str_mut_index(c, &a, b); buf_puts(b, ";");
+  int ts = str_mut_convert(c, &v, b);
+  /* insert(i, x): x spliced in at i; -1 appends, and any other negative i
+     counts from the end and inserts after that character (i + 1); an index
+     past the ends raises IndexError */
+  Buf sp; memset(&sp, 0, sizeof sp);
+  buf_printf(&sp, "sp_str_splice_at(sp_String_cstr(_t%d), _t%d == -1 ? (sp_int)sp_str_length(sp_String_cstr(_t%d)) :"
+                  " _t%d < 0 ? _t%d + 1 : _t%d, 0, _s%d, 0)", t, ti, t, ti, ti, ti, ts);
+  str_mut_set(b, t, sp.p);
+  str_mut_self_answer(c, x, t, b);
+  view_unbind(mark);
+  free(sp.p);
+  return 1;
+}
+
+int emit_op_string_clear(Compiler *c, const BopCtx *x, Buf *b) {
+  /* emptied in place (a frozen String raises, an empty one too) */
+  int chk, t = str_mut_open(c, x, &chk, b);
+  str_mut_nil_check(x, t, chk, b);
+  buf_printf(b, " sp_String_set_bin(_t%d, (&(\"\\xff\")[1]));", t);   /* its encoding kept */
+  str_mut_self_answer(c, x, t, b);
+  return 1;
+}
+
+/* String#slice!: the part it cuts (a new String) or nil. CRuby checks the
+   receiver is not frozen first, hit or miss, after the arguments ran, and
+   converts them after that. The form is picked by the first operand's
+   class: a Regexp (with a group, given two), a String or a Range alone;
+   anything else is an index (a Float truncated, nil and the like CRuby's
+   TypeError), and with two operands the start of a span. */
 int emit_op_string_slice(Compiler *c, const BopCtx *x, Buf *b) {
-  int id = x->id, recv = x->recv, argc;
+  int id = x->id, argc;
   const int *argv = call_args(c->nt, id, &argc);
-  if (argc <= 2 && argc >= 1 && emit_string_slice_poly(c, id, argv[0], argc == 2, b)) return 1;
-  int sb_asgn = str_mut_var_recv(c, recv) || sb_shadowed_reader(recv);
-  /* `s.insert(0, "<").slice!(0, 2)` cuts s's String: the chain runs, in
-     Ruby's order, then the slice! is the variable's own, which every arm
-     below serves (reassigning it, or through a handle's shim). The answer
-     of the chain is the same String, so the slice is the call's value. */
-  if (!sb_asgn) {
-    int root = str_self_chain_root(c, recv);
-    if (root >= 0) {
-      NodeTable *ntw = (NodeTable *)c->nt;
-      int orig = nt_ref(ntw, id, "receiver");
-      buf_puts(b, "({ (void)("); emit_expr_for_effect(c, recv, b); buf_puts(b, "); ");
-      nt_node_set_ref(ntw, id, "receiver", root);
-      emit_expr(c, id, b);
-      nt_node_set_ref(ntw, id, "receiver", orig);
-      buf_puts(b, "; })");
-      return 1;
-    }
+  /* a boxed first argument picks its form at run time (emit_string_slice_poly),
+     also one that ran first; each arm re-enters here (x->t0) with it bound,
+     as a box for the Integer form */
+  if (!x->t0 && emit_string_slice_poly(c, x, argv[0], argc == 2, b)) return 1;
+  int re = re_lit_index(c, argv[0]);
+  Repr r0 = repr_of(c, argv[0]);
+  TyKind k0 = r0.kind == RK_BOXED ? TY_POLY : comp_ntype(c, argv[0]);
+  int rx = re >= 0 || k0 == TY_REGEX;
+  int sform = argc == 1 && k0 == TY_STRING, rform = argc == 1 && k0 == TY_RANGE;
+  int chk, t = str_mut_open(c, x, &chk, b), mark = g_n_argov;
+  StrMutOp a0, a1;
+  str_mut_hold(c, argv, argc, 0, !(rx || sform || rform), &a0, b);
+  if (argc == 2) str_mut_hold(c, argv, argc, 1, 1, &a1, b);
+  str_mut_nil_check(x, t, chk, b);
+  buf_printf(b, " if (sp_String_is_frozen(_t%d)) sp_raise_frozen_str(_t%d->data);", t, t);
+  Buf cs; memset(&cs, 0, sizeof cs);
+  str_mut_bytes(&cs, t);
+  if (sform) {
+    /* slice!(str): its first occurrence removed; the answer is a new
+       String with its bytes */
+    int tk = ++g_tmp;
+    buf_printf(b, " const char *_t%d = ", tk); emit_str_expr(c, argv[0], b);
+    buf_printf(b, "; SP_GC_ROOT_STR(_t%d);", tk);
+    /* the answer is copied before the cut, which can rewrite the bytes the
+       key reads when the key is the receiver itself (`s.slice!(s)`) */
+    buf_printf(b, " const char *_hit%d = NULL; SP_GC_ROOT_STR(_hit%d);"
+                  " if (_t%d && strstr(%s, _t%d)) { _hit%d = sp_str_dup(_t%d);", tk, tk, tk, cs.p, tk, tk, tk);
+    /* sub would set `$~`, which slice! leaves alone; a program that never
+       reads it has sub record nothing */
+    if (g_reads_match_regs)
+      buf_printf(b, " sp_String_set_bin(_t%d, sp_str_remove_first(%s, _hit%d)); }", t, cs.p, tk);
+    else
+      buf_printf(b, " sp_String_set_bin(_t%d, sp_str_sub(%s, _hit%d, (&(\"\\xff\")[1]))); }", t, cs.p, tk);
+    buf_printf(b, " _hit%d; })", tk);
   }
-  /* slice!(start, len) on a String that is no assignable variable (sb_asgn
-     false) answers the part it cuts, as slice!(i) does on any receiver
-     below -- there is nowhere to write a mutated copy back to, so the
-     change (if the receiver turns out mutable at runtime) is seen by
-     nobody, same as the str_fresh_value case this used to require. A
-     frozen literal still raises through sp_str_check_mutable below, the
-     same way slice!(i) already does unconditionally; this arm no longer
-     needs str_fresh_value to tell a literal/ternary/other-non-variable
-     receiver apart from one that is provably fresh, since both get
-     identical codegen once sb_asgn is false. */
-  int span2 = argc == 2 && !sb_asgn && re_lit_index(c, argv[0]) < 0 &&
-              comp_ntype(c, argv[0]) != TY_REGEX;
-  if (argc == 1 && comp_ntype(c, argv[0]) == TY_STRING) {
-    int tp2 = ++g_tmp;
-    buf_puts(b, "({ "); emit_str_frozen_check(c, recv, b);
-    buf_printf(b, " const char *_t%d = ", tp2); emit_expr(c, argv[0], b);
-    buf_printf(b, "; const char *_hit%d = (_t%d && ", tp2, tp2);
-    emit_expr(c, recv, b);
-    buf_puts(b, ") ? strstr("); emit_expr(c, recv, b);
-    buf_printf(b, ", _t%d) : NULL;", tp2);
-    if (sb_asgn) {
-      buf_printf(b, " if (_hit%d) ", tp2);
-      emit_expr(c, recv, b);
-      /* sub would set `$~`, which slice! leaves alone; a program that
-         never reads it has sub record nothing */
-      if (g_reads_match_regs) {
-        buf_printf(b, " = sp_str_remove_first("); emit_expr(c, recv, b);
-        buf_printf(b, ", _t%d);", tp2);
-      }
-      else {
-        buf_printf(b, " = sp_str_sub("); emit_expr(c, recv, b);
-        buf_printf(b, ", _t%d, (&(\"\\xff\")[1]));", tp2);
-      }
-    }
-    buf_printf(b, " _hit%d ? _t%d : (const char *)0; })", tp2, tp2);
-    return 1;
+  else if (rx && argc == 1) {
+    /* slice!(/re/): the first match removed (sp_re_match fills
+       sp_re_match_str with it) */
+    int tm = ++g_tmp;
+    buf_printf(b, " sp_int _t%d = sp_re_match(", tm); str_mut_pattern(c, re, argv[0], b);
+    buf_printf(b, ", %s); const char *_hit%d = _t%d >= 0 ? sp_re_match_str : NULL;"
+                  " if (_hit%d) sp_String_set_bin(_t%d, sp_str_splice_re(", cs.p, tm, tm, tm, t);
+    str_mut_pattern(c, re, argv[0], b);
+    buf_printf(b, ", %s, (&(\"\\xff\")[1]))); _hit%d; })", cs.p, tm);
   }
-  if (argc == 1 && (re_lit_index(c, argv[0]) >= 0 || comp_ntype(c, argv[0]) == TY_REGEX)) {
-    /* slice!(/re/): remove the first match, evaluate to it (or nil).
-       sp_re_match fills sp_re_match_str with the matched run; the splice
-       helper replaces it with the empty string. A Regexp held in a value
-       is read once; a typed one after the receiver, a boxed one before it
-       (emit_string_slice_poly holds it first). */
-    int tm3 = ++g_tmp, ts3 = ++g_tmp;
-    char pat[32];
-    buf_printf(b, "({ const char *_t%d = ", ts3); emit_expr(c, recv, b);
-    buf_printf(b, "; if (_t%d) sp_str_check_mutable(_t%d);", ts3, ts3);
-    if (re_lit_index(c, argv[0]) >= 0) snprintf(pat, sizeof pat, "sp_re_pat_%d", re_lit_index(c, argv[0]));
-    else {
-      int tp3 = ++g_tmp;
-      snprintf(pat, sizeof pat, "_t%d", tp3);
-      buf_printf(b, " mrb_regexp_pattern *_t%d = ", tp3); emit_expr(c, argv[0], b); buf_puts(b, ";");
-    }
-    buf_printf(b, " sp_int _t%d = sp_re_match(%s, _t%d);"
-                  " const char *_hit%d = _t%d >= 0 ? sp_re_match_str : NULL;",
-               tm3, pat, ts3, tm3, tm3);
-    if (sb_asgn) {
-      buf_printf(b, " if (_hit%d) ", tm3);
-      emit_expr(c, recv, b);
-      buf_printf(b, " = sp_str_splice_re(%s, _t%d, (&(\"\\xff\")[1]));", pat, ts3);
-    }
-    buf_printf(b, " _hit%d; })", tm3);
-    return 1;
+  else if (rx) {
+    /* slice!(/re/, n): the nth group of the first match removed, its own
+       span (sp_re_caps), which is not always its first occurrence (#3543) */
+    int tn = ++g_tmp, th = ++g_tmp;
+    buf_printf(b, " sp_int _t%d = ", tn); str_mut_index(c, &a1, b); buf_puts(b, ";");
+    buf_printf(b, " const char *_t%d = sp_re_match(", th); str_mut_pattern(c, re, argv[0], b);
+    buf_printf(b, ", %s) >= 0"
+                  " ? ((_t%d = sp_re_group_nth(_t%d)) == 0 ? sp_re_match_str"
+                  "    : (_t%d >= 1 && _t%d <= 9 ? sp_re_captures[_t%d] : NULL)) : NULL;",
+               cs.p, tn, tn, tn, tn, tn);
+    buf_printf(b, " if (_t%d && _t%d >= 0 && _t%d <= 9) {"
+                  " sp_int _b = sp_re_caps[2 * _t%d], _e = sp_re_caps[2 * _t%d + 1];"
+                  " sp_String_set_bin(_t%d, sp_str_bytesplice(%s, _b, _e - _b, (&(\"\\xff\")[1]))); }"
+                  " _t%d; })",
+               th, tn, tn, tn, tn, t, cs.p, th);
   }
-  if (span2 || (argc == 1 && (comp_ntype(c, argv[0]) == TY_INT || comp_ntype(c, argv[0]) == TY_RANGE))) {
-    /* slice!(i) / slice!(range): the removed part (or nil), reassigning an
-       lvalue receiver; a literal receiver just yields the removed part. */
-    int to = ++g_tmp, tb2 = ++g_tmp, tl2 = ++g_tmp, tn2 = ++g_tmp, tr2 = ++g_tmp;
-    /* rooted across the index or range, which may allocate */
-    buf_printf(b, "({ const char *_t%d = ", to); emit_recv_rooted(c, recv, to, "SP_GC_ROOT_STR", b);
-    buf_printf(b, "sp_str_check_mutable(_t%d);", to);   /* frozen -> FrozenError (#3003) */
-    buf_printf(b, " sp_int _t%d = (sp_int)sp_str_length(_t%d); sp_int _t%d, _t%d;",
-               tn2, to, tb2, tl2);
-    /* slice!(range, n): Ruby has no two-argument overload that takes a
-       Range first -- raises TypeError, after the receiver's own frozen
-       check above (a frozen receiver with a Range first argument still
-       raises FrozenError, not TypeError: CRuby checks mutability before
-       argument shape) and after BOTH arguments' own side effects, in
-       the same left-to-right order Ruby evaluates them in before
-       raising. Neither argument is referenced anywhere else in this
-       arm (the TypeError is unconditional once argc == 2 and argv[0]
-       is a Range), so each needs its own explicit, discarded
-       evaluation here -- the generic operand-hoisting pass ahead of
-       this call only holds an argument it decides this arm's own code
-       will read; CodeRabbit caught on review that leaving argv[0]
-       unevaluated here (as an earlier version of this fix did) drops
-       its side effect entirely, since the hoisting pass evidently
-       does not always hold "the one argument not read downstream"
-       either. Range is the ONLY argv[0] kind the TY_RANGE arm below
-       answers for a plain index; argc == 1 is implied by reaching this
-       `if` with a Range, since argc == 2 is only otherwise possible
-       through span2, checked here first so the TY_RANGE arm no longer
-       sees it. */
-    if (argc == 2 && comp_ntype(c, argv[0]) == TY_RANGE) {
-      buf_puts(b, " (void)("); emit_expr_for_effect(c, argv[0], b); buf_puts(b, ");");
-      buf_puts(b, " (void)("); emit_expr_for_effect(c, argv[1], b); buf_puts(b, ");");
-      buf_puts(b, " sp_raise_cls(\"TypeError\", \"no implicit conversion of Range into Integer\");"
-                  " (const char *)0; })");
-      return 1;
-    }
-    if (comp_ntype(c, argv[0]) == TY_RANGE) {
+  else {
+    /* slice!(i), slice!(start, len), slice!(range): the part removed, by
+       characters, or nil; one index takes a character, so it must be
+       inside, where a span may start at the end ("") */
+    int tb = ++g_tmp, tl = ++g_tmp, tn = ++g_tmp, tr = ++g_tmp;
+    int span = argc == 2 || rform;
+    buf_printf(b, " sp_int _t%d, _t%d;", tb, tl);
+    if (rform) {
       int trg = ++g_tmp;
-      buf_printf(b, " sp_Range _t%d = sp_range_ix(", trg); emit_expr(c, argv[0], b); buf_puts(b, ")");
-      /* a beginless Range (first is INTPTR_MIN) starts at the beginning */
-      buf_printf(b, "; _t%d = _t%d.first == INTPTR_MIN ? 0 : _t%d.first < 0 ? _t%d.first + _t%d : _t%d.first;",
-                 tb2, trg, trg, trg, tn2, trg);
-      /* an endless Range (last is INTPTR_MAX) runs to the end of the String */
+      buf_printf(b, " sp_Range _t%d = sp_range_ix(", trg); emit_expr(c, argv[0], b); buf_puts(b, ");");
+      buf_printf(b, " sp_int _t%d = (sp_int)sp_str_length(%s);", tn, cs.p);
+      /* a beginless Range starts at the beginning, an endless one runs to
+         the end of the String */
+      buf_printf(b, " _t%d = _t%d.first == INTPTR_MIN ? 0 : _t%d.first < 0 ? _t%d.first + _t%d : _t%d.first;",
+                 tb, trg, trg, trg, tn, trg);
       buf_printf(b, " _t%d = _t%d.last == INTPTR_MAX ? _t%d - _t%d :"
                     " (_t%d.last < 0 ? _t%d.last + _t%d : _t%d.last) - _t%d + (_t%d.excl ? 0 : 1);",
-                 tl2, trg, tn2, tb2, trg, trg, tn2, trg, tb2, trg);
-      buf_printf(b, " if (_t%d < 0) _t%d = 0;", tl2, tl2);
+                 tl, trg, tn, tb, trg, trg, tn, trg, tb, trg);
+      buf_printf(b, " if (_t%d < 0) _t%d = 0;", tl, tl);
     }
     else {
-      buf_printf(b, " _t%d = ", tb2); emit_int_expr(c, argv[0], b);
-      if (span2) { buf_printf(b, "; _t%d = ", tl2); emit_int_expr(c, argv[1], b); }
-      else buf_printf(b, "; _t%d = 1", tl2);
-      buf_printf(b, "; if (_t%d < 0) _t%d += _t%d;", tb2, tb2, tn2);
+      buf_printf(b, " _t%d = ", tb); str_mut_index(c, &a0, b);
+      buf_printf(b, "; _t%d = ", tl);
+      if (argc == 2) str_mut_index(c, &a1, b); else buf_puts(b, "1");
+      buf_printf(b, "; sp_int _t%d = (sp_int)sp_str_length(%s);", tn, cs.p);
+      buf_printf(b, " if (_t%d < 0) _t%d += _t%d;", tb, tb, tn);
     }
-    /* a Range may be empty at any position up to the end (`s.slice!(3..)`
-       is ""); one index removes a character, so it must be inside */
     buf_printf(b, " const char *_t%d = NULL;"
                   " if (_t%d >= 0 && _t%d %s _t%d && _t%d >= 0) {"
                   " if (_t%d > _t%d - _t%d) _t%d = _t%d - _t%d;"
-                  " _t%d = sp_str_sub_range(_t%d, _t%d, _t%d);"
-                  " SP_GC_ROOT_STR(_t%d);",
-               tr2,
-               tb2, tb2, span2 || comp_ntype(c, argv[0]) == TY_RANGE ? "<=" : "<", tn2, tl2,
-               tl2, tn2, tb2, tl2, tn2, tb2,
-               tr2, to, tb2, tl2, tr2);
-    if (sb_asgn) {
-      /* the head is rooted while the tail allocates */
-      buf_printf(b, " { const char *_h = sp_str_sub_range(_t%d, 0, _t%d); SP_GC_ROOT_STR(_h); ", to, tb2);
-      emit_expr(c, recv, b);
-      buf_printf(b, " = sp_str_concat(_h, sp_str_sub_range(_t%d, _t%d + _t%d, _t%d - _t%d - _t%d)); }",
-                 to, tb2, tl2, tn2, tb2, tl2);
-    }
-    buf_printf(b, " } _t%d; })", tr2);
-    return 1;
+                  " _t%d = sp_str_sub_range(%s, _t%d, _t%d); SP_GC_ROOT_STR(_t%d);"
+                  " sp_String_set_bin(_t%d, sp_str_splice_at(%s, _t%d, _t%d, (&(\"\\xff\")[1]), 0)); }"
+                  " _t%d; })",
+               tr,
+               tb, tb, span ? "<=" : "<", tn, tl,
+               tl, tn, tb, tl, tn, tb,
+               tr, cs.p, tb, tl, tr,
+               t, cs.p, tb, tl,
+               tr);
   }
-  if (argc == 2 && (re_lit_index(c, argv[0]) >= 0 || comp_ntype(c, argv[0]) == TY_REGEX)) {
-    /* slice!(/re/, n): remove the nth capture group of the first match and
-       evaluate to it. sp_re_caps holds each group's byte span, so the removal
-       is the group's own occurrence rather than the first textual one, which
-       is a different character when the group repeats (#3543). A Regexp held
-       in a value (a parameter, a local no literal resolves) is read once,
-       right after the receiver, in Ruby's own left-to-right argument order --
-       same place emit_string_slice_poly's one-arg sibling above reads it. */
-    int ts = ++g_tmp, tn = ++g_tmp, th = ++g_tmp;
-    char pat[32];
-    /* rooted right after the receiver is evaluated: the Regexp and
-       capture-index operands below can allocate (a non-literal Regexp or
-       a method-call capture index), and a non-variable receiver (a fresh
-       String nothing else holds, such as `(a + b).slice!(re, n)`) has
-       nothing else keeping it alive across that (CodeRabbit, #10838). */
-    buf_printf(b, "({ const char *_t%d = ", ts); emit_expr(c, recv, b);
-    buf_printf(b, "; SP_GC_ROOT_STR(_t%d);", ts);
-    buf_printf(b, " if (_t%d) sp_str_check_mutable(_t%d);", ts, ts);
-    if (re_lit_index(c, argv[0]) >= 0) snprintf(pat, sizeof pat, "sp_re_pat_%d", re_lit_index(c, argv[0]));
-    else {
-      int tp3 = ++g_tmp;
-      snprintf(pat, sizeof pat, "_t%d", tp3);
-      buf_printf(b, " mrb_regexp_pattern *_t%d = ", tp3); emit_expr(c, argv[0], b); buf_puts(b, ";");
-    }
-    buf_printf(b, " sp_int _t%d = ", tn); emit_int_expr(c, argv[1], b);
-    buf_printf(b, "; const char *_t%d = sp_re_match(%s, _t%d) >= 0"
-                  " ? ((_t%d = sp_re_group_nth(_t%d)) == 0 ? sp_re_match_str"
-                  "    : (_t%d >= 1 && _t%d <= 9 ? sp_re_captures[_t%d] : NULL)) : NULL;",
-               th, pat, ts, tn, tn, tn, tn, tn);
-    if (sb_asgn) {
-      buf_printf(b, " if (_t%d && _t%d >= 0 && _t%d <= 9) {"
-                    " sp_int _b = sp_re_caps[2 * _t%d], _e = sp_re_caps[2 * _t%d + 1];"
-                    " const char *_h = sp_str_byteslice(_t%d, 0, _b); SP_GC_ROOT_STR(_h); ",
-                 th, tn, tn, tn, tn, ts);
-      emit_expr(c, recv, b);
-      buf_printf(b, " = sp_str_concat(_h, sp_str_byteslice(_t%d, _e, (sp_int)sp_str_byte_len(_t%d) - _e)); }",
-                 ts, ts);
-    }
-    buf_printf(b, " _t%d; })", th);
-    return 1;
-  }
-  if (sb_asgn && argc == 2) {
-    /* character-indexed splice, not byte-indexed, for a multibyte receiver (#3084) */
-    int ti2 = ++g_tmp, tl2 = ++g_tmp, tn2 = ++g_tmp, tr2 = ++g_tmp;
-    buf_puts(b, "({ "); emit_str_frozen_check(c, recv, b);
-    buf_printf(b, " sp_int _t%d = ", ti2); emit_int_expr(c, argv[0], b);
-    buf_printf(b, "; sp_int _t%d = ", tl2); emit_int_expr(c, argv[1], b);
-    buf_printf(b, "; sp_int _t%d = (sp_int)sp_str_length(", tn2);
-    emit_expr(c, recv, b);
-    buf_printf(b, "); const char *_t%d = NULL;"
-                  " if (_t%d < 0) _t%d += _t%d;"
-                  " if (_t%d >= 0 && _t%d <= _t%d && _t%d >= 0) {"
-                  " if (_t%d > _t%d - _t%d) _t%d = _t%d - _t%d;"
-                  " _t%d = sp_str_sub_range(",
-               tr2,
-               ti2, ti2, tn2,
-               ti2, ti2, tn2, tl2,
-               tl2, tn2, ti2, tl2, tn2, ti2,
-               tr2);
-    emit_expr(c, recv, b);
-    buf_printf(b, ", _t%d, _t%d); ", ti2, tl2);
-    /* the removed part must outlive the three allocations that rebuild the receiver */
-    buf_printf(b, "SP_GC_ROOT_STR(_t%d); ", tr2);
-    /* and the head while the tail allocates */
-    buf_puts(b, "const char *_h = sp_str_sub_range("); emit_expr(c, recv, b);
-    buf_printf(b, ", 0, _t%d); SP_GC_ROOT_STR(_h); ", ti2);
-    emit_expr(c, recv, b);
-    buf_puts(b, " = sp_str_concat(_h, sp_str_sub_range(");
-    emit_expr(c, recv, b);
-    buf_printf(b, ", _t%d + _t%d, _t%d - _t%d - _t%d)); } _t%d; })",
-               ti2, tl2, tn2, ti2, tl2, tr2);
-    return 1;
-  }
-  return 0;
+  view_unbind(mark);
+  free(cs.p);
+  return 1;
+}
+
+/* See codegen_internal.h. */
+int str_in_place_row(Compiler *c, int id) {
+  const NodeTable *nt = c->nt;
+  const char *name = nt_str(nt, id, "name");
+  int argc;
+  (void)call_args(nt, id, &argc);
+  return name && bop_find_stage(TY_STRING, name, argc, nt_ref(nt, id, "block") >= 0, NULL, NULL, 7) != NULL;
 }

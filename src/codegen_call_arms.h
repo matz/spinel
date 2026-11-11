@@ -30,6 +30,7 @@ int emit_call_new_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const c
 int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc, const int *argv);
 void emit_class_value_constants(Compiler *c, const char *cv, int inherit, Buf *b);
 int emit_call_class_method_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc, const int *argv);
+int emit_root_reopen_call(Compiler *c, int id, Buf *b, const NodeTable *nt, int recv, int ci, int mi);
 int emit_call_reopen_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, TyKind rt);
 int emit_call_regexp_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc, const int *argv, TyKind rt, TyKind a0);
 int emit_call_regexp_class_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc, const int *argv);
@@ -70,8 +71,14 @@ int emit_call_proc_literal_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
 /* An ordered, de-duplicated list of method names for the reflection folds.
    A name is recorded once, at its first (most derived) sighting, and listed
    only if that sighting was visible, so a subclass that makes an inherited
-   method private hides the ancestor's public one. */
-typedef struct { char **v; unsigned char *show; int n, cap; } ReflNames;
+   method private hides the ancestor's public one. show[i] holds REFL_SHOWN
+   for a visible sighting and REFL_ROW where a builtin row made it (a
+   method present from the start, version 0, which the row answers). at:
+   the list call the names answer (its node + 1, 0 for a list no one site
+   has), at_cls and at_side the receiver class and side it asks there
+   (refl_at, cplan_list_omits). */
+enum { REFL_SHOWN = 1, REFL_ROW = 2 };
+typedef struct { char **v; unsigned char *show; int n, cap, at, at_cls; unsigned at_side; } ReflNames;
 /* The classes a `k.new(...)` switch gives an ArgumentError arm, grouped by
    message so each message is emitted once. */
 typedef struct { char msg[256]; int *cis; int ncis; } CtorArityArm;
@@ -113,6 +120,8 @@ int any_class_responds(Compiler *c, const char *qm);
 int class_implicit_responds(Compiler *c, int cid, const char *qm);
 int class_struct_kind(Compiler *c, int cid);
 int class_value_responds(Compiler *c, int tv, const char *qm, Buf *b);
+void class_value_responds_runtime(int tv, Buf *b);
+void emit_class_value_responds_helper(Compiler *c, const char *const *texts, int ntexts, Buf *protos, Buf *defs);
 extern const char *const comparable_names[];
 int const_name_is_wrong(const char *s);
 int emit_io_pick(Compiler *c, int tv, const char *name, int public_only, Buf *b);
@@ -202,12 +211,12 @@ int emit_ctor_splice_arm(Compiler *c, int id, int ci, int initm, int rt2, Buf *b
 void emit_exc_msg_arg(Compiler *c, int arg, Buf *b);
 void emit_exc_new_msg(Compiler *c, const char *cn, int arg, Buf *b);
 int emit_exc_sub_new_arm(Compiler *c, int ci, int argc, const int *atmp, int rt2, Buf *b);
+int emit_exc_sub_new_arm_splat(Compiler *c, int ci, int tsa, const char *pre, int rt2, Buf *b);
 int emit_syserr_family_new(Compiler *c, int id, const char *cn, int argc, const int *argv, Buf *b);
 int emit_user_new_arm(Compiler *c, int id, int ci, int argc, const int *atmp, int hoisted, int rt2, Buf *b);
 extern int g_ctor_blk_tmp;
 int hoist_ctor_block(Compiler *c, int id, Buf *b);
 int struct_nil_fills(const ClassInfo *k);
-int cls_arm_takes_argc(Scope *s, int argc, int splat);
 int collect_class_constants(Compiler *c, int ci, int inherit, const char **out, const char **shown,
                             int max, int n, int depth);
 void emit_class_id_is(Compiler *c, int cname, const char *expr, Buf *b);
@@ -229,6 +238,7 @@ void refl_class_instance_methods(Compiler *c, int ci, int pub, int prot, ReflNam
 void refl_module_instance_methods(Compiler *c, int m, int prot, ReflNames *r);
 void refl_module_own_methods(Compiler *c, int m, int pub, int prot, int priv, ReflNames *r);
 void refl_emit_sym_array(Compiler *c, int cid, ReflNames *r, Buf *b);
+void refl_at(ReflNames *r, int id, int cls, unsigned side);
 void refl_free(ReflNames *r);
 void refl_own_instance_methods(Compiler *c, int ci, int pub, int prot, int priv, int with_modules, ReflNames *r);
 void unhoist_dispatch_args(Compiler *c, int n, int *sv, int *vw);
@@ -239,7 +249,7 @@ void emit_struct_kw_member(Compiler *c, ClassInfo *cls, int a, int ht, Buf *b);
 int emit_struct_new_early(Compiler *c, int ci, int argc, const int *argv, int kwh, int *nunk_out, int *late_out, Buf *b);
 void emit_io_reopen_call(Compiler *c, int id, int recv, const char *name, Buf *b);
 int emit_reopen_block_call(Compiler *c, int id, int recv, int mi, const char *box_fn, Buf *b);
-void emit_reopen_pf_call(Compiler *c, int id, int pf, int cblk, const char *recv_text, Buf *b);
+void emit_reopen_pf_call(Compiler *c, int id, int pf, int cblk, const char *recv_text, const char *box_fn, Buf *b);
 /* `fmt % args` where the format is a String made where it is written (an
    interpolation, a call's result) and the arguments allocate: nothing holds
    the format while they are built, and C does not say which of the two is
@@ -308,8 +318,8 @@ int io_line_args_spread(const NodeTable *nt, const int *argv, int argc);
 char adapter_arg_kind(TyKind arr, int is_push, int is_set, int pos);
 int bam_binop_wrapper(const Scope *tm);
 int bm_call_needs_layout(const NodeTable *nt, int id, const int *argv, int argc);
-const char *bm_self_ctype(Scope *tm, int shift);
-void emit_bm_self_arg(const char *sct, const char *self, Buf *b);
+const char *bm_self_ctype(const Compiler *c, Scope *tm, int shift);
+void emit_bm_self_arg(const char *sct, const char *bm, Buf *b);
 int call_arg_sig(Compiler *c, const int *argv, int argc, char *out, size_t cap);
 void emit_adapter_arg_boxed(const char *v, char kind, Buf *out);
 void emit_adapter_arg_static(Compiler *c, int node, char kind, Buf *out);
@@ -328,9 +338,10 @@ int bind_owner_mismatch(Compiler *c, int target, TyKind ot);
 int builtin_method_arity(const char *cls, const char *m, int *out);
 const char *builtin_method_params(const char *owner, const char *m, int *in_c);
 int builtin_method_known(const char *cls, const char *m);
-int core_method_vis(const char *cls, const char *m, int inherit);   /* codegen_call_class.c */
-int refl_builtin_vis(Compiler *c, int ci, const char *m, int inherit);   /* codegen_call_class.c */
+int core_method_vis(const char *cls, const char *m, int inherit, const char **owner);   /* codegen_call_class.c */
+int refl_builtin_vis(Compiler *c, int ci, const char *m, int inherit, const char **owner);   /* codegen_call_class.c */
 const char *core_class_ancestors(const char *cls);   /* codegen_call_class.c */
+const char *core_ancestor_step(const char *p, size_t *len);   /* codegen_call_class.c */
 void core_own_methods_each(const char *cls, size_t cl, void (*f)(void *, const char *, int), void *ud);
 int emit_value_methods_reflection(Compiler *c, int id, Buf *b);   /* codegen_call.c */
 void emit_value_methods_helpers(Compiler *c, const char *const *texts, int ntexts, Buf *protos,

@@ -1,0 +1,19 @@
+10
+true
+true
+12
+true
+{"key-lit" => 599}
+["val-lit"]
+true
+["late-lit"]
+["ivar-lit"]
+true
+true
+2
+true
+true
+true
+true
+"method-lit!"
+"method-lit"

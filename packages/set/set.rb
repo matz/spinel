@@ -46,7 +46,9 @@ class Set
       Set.check_enum(enum)
       # materialize first: the operand may be an Enumerator (or any other
       # Enumerable), whose #each is not reachable through a poly slot (#3625)
-      src = enum.to_a
+      # (an Array as it is, as CRuby's each walks it: a program's own
+      # Array#to_a is no step of a Set's there)
+      src = Array === enum ? enum : enum.to_a
       if block_given?
         src.each { |x| add(yield(x)) }
       else
@@ -353,7 +355,7 @@ class Set
     Set.check_enum(enum)
     # materialize first: a Range (or any other Enumerable) reaching this poly
     # slot does not dispatch #each through it (#3619)
-    enum.to_a.each { |x| add(x) }
+    (Array === enum ? enum : enum.to_a).each { |x| add(x) }
     self
   end
 
@@ -368,7 +370,7 @@ class Set
     end
     @data = []
     @index = nil
-    enum.to_a.each { |x| add(x) }
+    (Array === enum ? enum : enum.to_a).each { |x| add(x) }
     self
   end
 
@@ -393,7 +395,7 @@ class Set
   def subtract(enum)
     check_frozen
     Set.check_enum(enum)
-    enum.to_a.each { |x| remove_member(x) }
+    (Array === enum ? enum : enum.to_a).each { |x| remove_member(x) }
     self
   end
 
@@ -420,7 +422,7 @@ class Set
       @data.each { |x| r.add(x) if other.include?(x) }
       return r
     end
-    other.to_a.each { |x| r.add(x) if include?(x) }
+    (Array === other ? other : other.to_a).each { |x| r.add(x) if include?(x) }
     r
   end
   alias intersection &
@@ -430,7 +432,7 @@ class Set
   def |(other)
     Set.check_enum(other)
     r = same_kind_copy
-    other.to_a.each { |x| r.add(x) }
+    (Array === other ? other : other.to_a).each { |x| r.add(x) }
     r
   end
   alias union |
@@ -440,7 +442,7 @@ class Set
   def -(other)
     Set.check_enum(other)
     r = same_kind_copy
-    other.to_a.each { |x| r.delete(x) }
+    (Array === other ? other : other.to_a).each { |x| r.delete(x) }
     r
   end
   alias difference -

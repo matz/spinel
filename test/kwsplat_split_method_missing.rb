@@ -1,6 +1,7 @@
 # In a program with a method_missing, a `**` call on a boxed receiver is split
 # as in any other: the branch every builtin's count refuses may reach a
-# method_missing, so it answers a boxed value
+# method_missing, so it answers a boxed value. M2 is never built: its
+# method_missing only has to exist (on an M2 the call does not reach it yet)
 class M2
   def method_missing(n, *a, **kw) = [:mm, n, a, kw]
   def respond_to_missing?(*) = true

@@ -459,12 +459,36 @@ CLASS_TARGETS.each do |cls, meths|
 end
 # The class methods whose keyword hash is one more positional (BACK): a
 # fixed Method#arity and no keyword parameters, as BasicSocket.for_fd(fd)
-# has, so `BasicSocket.for_fd(1, autoclose: false)` passes two arguments
-cmkw = cm.select do |cls, m, *|
-  meth = CLASS_CONSTANTS.fetch(cls) { Object.const_get(cls) }.method(m)
-  meth.arity >= 0 && meth.parameters.none? { |kind, _| %i[key keyreq keyrest].include?(kind) }
+# has, so `BasicSocket.for_fd(1, autoclose: false)` passes two arguments;
+# else, where a side's maximum is proved, the instance side's keyword probe
+# on each such side (File.basename(p, s, a: 1): given 3, expected 1..2).
+# CLASS_KW_PASSTHROUGH methods take one keyword and pass any other key as
+# one more positional, so the probe's unknown key reads as a method that
+# takes none: they keep no row, and the run aborts if one stops taking
+# its keyword.
+#   Kernel.raise                     cause:
+CLASS_KW_PASSTHROUGH = { "Kernel" => { "raise" => :cause } }
+CLASS_KW_PASSTHROUGH.each do |cls, ms|
+  ms.each do |m, key|
+    r = begin
+      Object.const_get(cls).__send__(m, RuntimeError, "a", nil, key => nil)
+    rescue ArgumentError => e
+      e
+    rescue Exception
+      nil
+    end
+    abort "#{cls}.#{m} no longer takes #{key}: beside its most positionals" if r.is_a?(ArgumentError)
+  end
 end
-
+cmkw = cm.select do |cls, m, min, max, _, _, bmin, bmax|
+  next false if CLASS_KW_PASSTHROUGH.fetch(cls, {}).key?(m)
+  const = CLASS_CONSTANTS.fetch(cls) { Object.const_get(cls) }
+  meth = const.method(m)
+  next false if meth.parameters.any? { |kind, _| %i[key keyreq keyrest].include?(kind) }
+  next true if meth.arity >= 0
+  sides = [[min, max, false], [bmin, bmax, true]].select { |lo, hi, _| lo >= 0 && hi >= 0 }
+  !sides.empty? && sides.all? { |_, hi, blk| kw_positional?(-> { const }, m.to_sym, hi, block: blk) }
+end
 # The libraries whose methods on a builtin class Spinel answers from the
 # library's builtin-op rows (io/console: IO#winsize, IO.console). Each is
 # loaded after the core surface above is probed, and what it adds -- the
@@ -496,6 +520,27 @@ LIBRARIES.each do |feature|
     end
   end
 end
+# The Kernel functions that take any number of arguments and no keywords
+# (BACK too): CRuby passes the keyword hash as one more argument, which
+# the probe sees in the function's answer or its output (the output
+# functions are probed with $stdout swapped), where a function that takes
+# keywords raises "unknown keyword". The probe passes no argument, then a
+# "%p" (format's). It runs after the libraries' probe: pp loads io/console.
+KERNEL_KW_UNBOUNDED = %w[format sprintf p pp puts print]
+def kw_hash_positional?(m, need)
+  out, $stdout = $stdout, StringIO.new
+  r = Kernel.__send__(m, *Array.new(need, "%p"), __kwprobe: 1)
+  ($stdout.string + r.inspect).include?("__kwprobe")
+rescue Exception
+  false
+ensure
+  $stdout = out
+end
+KERNEL_KW_UNBOUNDED.each do |m|
+  next if cmkw.any? { |r| r[0, 2] == ["Kernel", m] }
+  cmkw << ["Kernel", m] if (0..1).any? { |need| kw_hash_positional?(m, need) }
+end
+
 # Method#arity of each class's OWN public instance methods, read straight off
 # CRuby rather than probed (a C method that counts its own arguments reads
 # -1 here; the spec tables above hold what it accepts), plus the Kernel
@@ -552,7 +597,7 @@ out = <<~C
      BAI carries both, BAM only Method#arity, BAS only instance counts,
      and BAC class/module counts; BAL and BALC are a library's instance
      and class counts, its name first. BACK names the class methods whose
-     keyword hash counts as a positional (fixed arity, no keywords). -1 maxima are unbounded; NULL messages
+     keyword hash counts as a positional (no keywords). -1 maxima are unbounded; NULL messages
      and unproved -1 minima never reject a call. Block counts are separate.
      Kernel Method#arity describes receiverless method(:name) wrappers.
      BAP is Method#parameters by the class or module that defines the

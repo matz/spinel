@@ -44443,8 +44443,9 @@ static void kwsplat_drop_rows(NodeTable *nt, int id) {
    other key on as one more positional (`raise`, cause:), called with its
    most positionals or more, the test is whether the hash holds another key,
    read without building one, and both branches pass it; there the hash may
-   mix pairs and `**` operands (`cause: c, **h`). A hash of pairs and
-   `**{...}` literals only is left to the plan, which reads its keys:
+   mix pairs and `**` operands (`cause: c, **h`), or be pairs alone where a
+   key is computed (`k => v`). A hash of pairs and `**{...}` literals whose
+   keys are literals is left to the plan, which reads them:
 
      recv.m(a, b, c, **kw)  =>  (...; k.size == (k.key?(:cause) ? 1 : 0) ?
                                         r.m(x, y, z, **k) : r.m(x, y, z, **k))
@@ -44510,7 +44511,10 @@ static void split_kwsplat_calls(Compiler *c, int from) {
       else splats = 1;
     }
     const char *taken;
-    if (!ok || !splats || !kwsplat_gated(nt, &al, id, args, n, &taken) || (pairs && !taken)) continue;
+    if (!ok || !kwsplat_gated(nt, &al, id, args, n, &taken) || (pairs && !taken)) continue;
+    /* (a taken keyword's hash of pairs alone is the plan's to count, unless
+       a key is computed: `z => 1` is the run time's) */
+    if (!splats && cplan_hash_holds_key_past(c, kh, taken) >= 0) continue;
     for (int i = 0; i < ne; i++) {
       if (nt_kind(nt, el[i]) != NK_AssocSplatNode) {
         dyn[ndyn++] = el[i];   /* (a pair: built into the held hash in its place) */
@@ -44578,7 +44582,8 @@ static void split_kwsplat_calls(Compiler *c, int from) {
        its to_proc adds is passed: the conversion runs, then the copy is built
        and tested. With any other `&` operand, or with two `**`, the Hash is
        built first. */
-    int simple = ne == 1 && ndyn == 1 && nt_ref(nt, dyn[0], "value") >= 0 && blockarg_plain_read(nt, bexp);
+    int simple = ne == 1 && ndyn == 1 && nt_kind(nt, dyn[0]) == NK_AssocSplatNode && nt_ref(nt, dyn[0], "value") >= 0 &&
+                 blockarg_plain_read(nt, bexp);
     if (simple) {
       int hc = sd_hold(c, nt, NULL, id, "kwh", -1, sd_bcall(nt, "__kw_hash", -1, (int[]){ nt_ref(nt, dyn[0], "value") }, 1), pre, &npre);
       nt_node_set_ref(nt, dyn[0], "value", hc);

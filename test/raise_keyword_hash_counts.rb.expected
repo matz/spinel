@@ -50,5 +50,9 @@ fiber **{k}: RuntimeError: w
 kernel **{k} **{}: RuntimeError: w
 kernel k pair: RuntimeError: w
 kernel cause k pair: RuntimeError: w
+kernel z pair: ArgumentError: wrong number of arguments (given 4, expected 0..3)
+kernel cause z pair: ArgumentError: wrong number of arguments (given 4, expected 0..3)
+fail z pair: ArgumentError: wrong number of arguments (given 4, expected 0..3)
+fiber z pair: ArgumentError: wrong number of arguments (given 4, expected 0..3)
 kernel string key: ArgumentError: wrong number of arguments (given 4, expected 0..3)
 kernel **{string key}: ArgumentError: wrong number of arguments (given 4, expected 0..3)

@@ -7668,7 +7668,14 @@ int elab_fire_after(Compiler *c, int list, int j) {
    and its body stays encl's. */
 int elab_rec_open(Compiler *c, int node, int cp, const char *cname, int encl) {
   if (!cname) { elab_header_opened(c, node, -1, 0); return encl; }
-  int ci = comp_class_index(c, cname), made = ci < 0;
+  /* the class the header's entity holds (elab_header_entity): the one it
+     reopens, or none for a new one; where the record does not know (an
+     alias, a write that may not have run), the class of its name */
+  const LrHeader *h = c->lrec && c->lrec->walk ? lr_header(c->lrec, node, 0) : NULL;
+  int ci = h && h->want >= 0 && h->want < c->nclasses ? h->want
+         : h && h->want == LR_NEW && comp_class_index(c, cname) < 0 ? -1
+         : comp_class_index(c, cname);
+  int made = ci < 0;
   if (made) {
     comp_class_new(c, cname, node);
     ci = c->nclasses - 1;

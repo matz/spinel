@@ -21225,6 +21225,37 @@ static void emit_builtin_reopen_mod_arms(Compiler *c, int **mods, const int *nmo
   }
 }
 
+/* The modules ahead of class or module k in its ancestors (its prepend
+   zone) into out, as CRuby's prepend builds it, in the order k prepends:
+   each prepended module's own order (its zone, the module, the modules it
+   includes, closed in incs) goes in at the front, after the ones its own
+   call put in. A module the zone already has stays where it is, and the
+   next one goes in after it. Answers the length. */
+static int prep_zone_build(Compiler *c, int k, int **preps, const int *npreps,
+                           int **incs, const int *nincs, int *out, int cap, int depth) {
+  int nz = 0;
+  if (k < 0 || k >= c->nclasses || depth > 16) return 0;
+  int *seq = malloc(sizeof(int) * (size_t)cap);
+  if (!seq) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  for (int q = 0; q < npreps[k]; q++) {
+    int pm = preps[k][q], at = 0, ns = 0;
+    if (pm >= 0 && pm < c->nclasses && pm != k) ns = prep_zone_build(c, pm, preps, npreps, incs, nincs, seq, cap, depth + 1);
+    if (ns < cap) seq[ns++] = pm;
+    for (int r = (pm >= 0 && pm < c->nclasses && pm != k ? nincs[pm] : 0) - 1; r >= 0 && ns < cap; r--) seq[ns++] = incs[pm][r];
+    for (int s = 0; s < ns; s++) {
+      int m = seq[s], found = -1;
+      if (m == k) continue;
+      for (int z = 0; z < nz && found < 0; z++) if (out[z] == m) found = z;
+      if (found >= 0) { at = found + 1; continue; }
+      if (nz >= cap) continue;
+      memmove(&out[at + 1], &out[at], sizeof(int) * (size_t)(nz - at));
+      out[at++] = m; nz++;
+    }
+  }
+  free(seq);
+  return nz;
+}
+
 /* The class machinery a program with classes or class values needs: class tables, names, is_a and the class-value runtime (codegen_program's steps, in their order) */
 static void emit_class_machinery(const NodeTable *nt, Compiler *c, Buf *b, char **isa_ext, size_t *isa_ext_at) {
   if (g_needs_class_machinery) {
@@ -21656,31 +21687,13 @@ static void emit_class_machinery(const NodeTable *nt, Compiler *c, Buf *b, char 
         for (int ci = 0; ci < c->nclasses; ci++) {
           if (cls_npreps[ci] == 0) continue;
           buf_printf(b, "    case %d:", ci);
-          /* A prepended module brings its own ancestors with it: the
-             modules it prepends, the module, then the modules it includes
-             (closed above), as `class L; prepend C; end` with C including
-             B gives [C, B, L]. The zone ahead of the class is built as
-             CRuby's prepend builds it, in the order the class prepends:
-             each module goes in at the front after the ones its own call
-             put in, and one the zone already has stays where it is (the
-             next one goes in after it). */
-          int *zone = malloc(sizeof(int) * (size_t)(c->nclasses * 2 + 8)), nz = 0;
+          /* A prepended module brings its own ancestors with it
+             (prep_zone_build), as `class L; prepend C; end` with C
+             including B gives [C, B, L]. */
+          int cap = c->nclasses * 4 + 16, nz = 0;
+          int *zone = malloc(sizeof(int) * (size_t)cap);
           if (!zone) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-          for (int q = 0; q < cls_npreps[ci]; q++) {
-            int pm = cls_preps[ci][q], at = 0;
-            int nsub = pm >= 0 && pm < c->nclasses && pm != ci ? cls_npreps[pm] : 0;
-            int nin = pm >= 0 && pm < c->nclasses && pm != ci ? cls_nincs[pm] : 0;
-            for (int s = -nsub; s <= nin; s++) {
-              int m = s < 0 ? cls_preps[pm][-s - 1] : s == 0 ? pm : cls_incs[pm][nin - s];
-              int found = -1;
-              for (int z = 0; z < nz && found < 0; z++) if (zone[z] == m) found = z;
-              if (m == ci) continue;
-              if (found >= 0) { at = found + 1; continue; }
-              if (nz >= c->nclasses * 2 + 8) continue;
-              memmove(&zone[at + 1], &zone[at], sizeof(int) * (size_t)(nz - at));
-              zone[at++] = m; nz++;
-            }
-          }
+          nz = prep_zone_build(c, ci, cls_preps, cls_npreps, cls_incs, cls_nincs, zone, cap, 0);
           for (int z = 0; z < nz; z++)
             buf_printf(b, " if(sp_class_anc_step(a,want,sp_box_class(((sp_Class){%d}))))return 1;", zone[z]);
           free(zone);

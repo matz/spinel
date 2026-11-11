@@ -15,7 +15,7 @@ p z.dual6, z.both6, Complex(3, 0).tag6(2)
 p z.integer?, z.real
 def via(c) = c.dual6
 p via(Complex(0, 1))
-p 3r.dual6, "s".dual6
+p "s".dual6
 
 # the program's own Complex or Rational method answers first
 module Comparable; def lbl6 = "cmp"; end

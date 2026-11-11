@@ -10,8 +10,6 @@ p (1..n).sum(5)
 p (1..n).sum(0.5)
 p (-n..n).sum
 p (-n..n - 1).sum
-p (1..n).step(3).sum
-p 1.step(n, 7).sum
 r = [1, (1..n)].last
 p r.sum
 p r.sum(2)

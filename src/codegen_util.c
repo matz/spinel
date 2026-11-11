@@ -5166,7 +5166,7 @@ void emit_coerce(Compiler *c, int node, TyKind slot, int how, const char *what, 
   if (oint_kind(slot))
     for (int i = g_n_argov - 1; i >= 0; i--)
       if (g_argov_node[i] == node) {
-        if (!g_argov_oint[i] && nt_kind(c->nt, node) == NK_NilNode) { emit_expr(c, node, b); return; }
+        if (!(g_argov_flag[i] & ARGOV_OINT) && nt_kind(c->nt, node) == NK_NilNode) { emit_expr(c, node, b); return; }
         break;
       }
   if (oint_kind(slot) && node_may_be_nil(c, node)) refuse_nil_store(c, node, slot, what);
@@ -8631,7 +8631,7 @@ int node_may_be_nil(Compiler *c, int node) {
      (a strict parameter's argument, checked at the call: emit_strict_args) */
   for (int i = g_n_argov - 1; i >= 0; i--)
     if (g_argov_node[i] == node) {
-      if (!g_argov_oint[i]) return 0;
+      if (!(g_argov_flag[i] & ARGOV_OINT)) return 0;
       break;
     }
   if (nt_kind(c->nt, node) == NK_NilNode) return 1;
@@ -8639,7 +8639,7 @@ int node_may_be_nil(Compiler *c, int node) {
   if (t == TY_NIL) return 1;
   if (!oint_kind(t)) return 0;
   for (int i = g_n_argov - 1; i >= 0; i--)
-    if (g_argov_node[i] == node) return g_argov_oint[i] && nullable_int_value(c, node);
+    if (g_argov_node[i] == node) return (g_argov_flag[i] & ARGOV_OINT) && nullable_int_value(c, node);
   /* an oint producer the analysis proved never nil (`[a].first`: the
      runtime function's form, not a nil) is unwrapped at the store, which
      keeps the proof honest at run time (sp_oint_arg) */

@@ -9442,7 +9442,7 @@ static int ran_first_temp(int node, int from, const char *text, char *is_o) {
   for (int i = from; text && i < g_n_argov; i++) {
     int t;
     if (g_argov_node[i] == node && sp_streq(g_argov_text[i], text) && sscanf(text, "_t%d", &t) == 1) {
-      if (is_o) *is_o = (char)g_argov_oint[i];   /* the temp holds the value's oint */
+      if (is_o) *is_o = (char)(g_argov_flag[i] & ARGOV_OINT);   /* the temp holds the value's oint */
       return t;
     }
   }

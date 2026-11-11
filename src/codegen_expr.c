@@ -2161,7 +2161,7 @@ void emit_expr(Compiler *c, int id, Buf *b) {
   TyKind ot = opr.as_ty;
   /* a node bound to a hoisted temp (view_bind) is that plain temp */
   int bound = 0, bound_o = 0;
-  for (int i = g_n_argov - 1; i >= 0 && !bound; i--) if (g_argov_node[i] == id) { bound = 1; bound_o = g_argov_oint[i]; }
+  for (int i = g_n_argov - 1; i >= 0 && !bound; i--) if (g_argov_node[i] == id) { bound = 1; bound_o = g_argov_flag[i] & ARGOV_OINT; }
   int is_o = bound ? oint_kind(ot) && bound_o : opr.opt_producer;
   NodeKind ok = nt_kind(c->nt, id);
   int leaf_o = !bound && want_o && !is_o && (ok == NK_NilNode || opr.kind == RK_OPT);

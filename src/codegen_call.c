@@ -2554,6 +2554,12 @@ int builtin_method_known_any(const char *m) {
     if (sp_builtin_arity_tbl[i].m && sp_streq(sp_builtin_arity_tbl[i].m, m)) return 1;
   return 0;
 }
+/* ...of a fixed Method#arity? */
+int builtin_method_fixed_any(const char *m) {
+  for (int i = 0; m && sp_builtin_arity_tbl[i].cls; i++)
+    if (sp_streq(sp_builtin_arity_tbl[i].m, m) && sp_builtin_arity_tbl[i].a >= 0) return 1;
+  return 0;
+}
 /* Arity of a user method target scope (same rule as the Method#arity emit for
    a statically-known TY_METHOD receiver). Returns 1 and writes *out on
    success; 0 if the target has no def node or an unrepresentable signature.
@@ -20743,46 +20749,9 @@ sp_builtin_cmeth_arity_spec_tbl[] = {
 #undef BAS
 #undef BAC
 #undef BAK
-#define BAI(...)
-#define BAM(...)
-#define BAS(...)
-#define BAC(...)
-#define BAK(c,m) {c,m},
-static const struct { const char *cls; const char *m; } sp_builtin_kwpos_tbl[] = {
-#include "builtin_arity.inc"
-  {NULL, NULL}
-};
-#undef BAK
-#undef BACK
-/* The class methods whose keyword hash counts as a positional (BACK) */
-#define BAK(...)
-#define BACK(c,m) {c,m},
-static const struct { const char *cls; const char *m; } sp_builtin_cmeth_kwpos_tbl[] = {
-#include "builtin_arity.inc"
-  {NULL, NULL}
-};
-#undef BAI
-#undef BAM
-#undef BAS
-#undef BAC
-#undef BAK
-#undef BACK
-#define BACK(...)
 #undef BAL
 #undef BALC
 #undef BAP
-static int kwh_counts(const char *cls, const char *name) {
-  int fa, fixed = 0;
-  if (builtin_method_arity(cls, name, &fa)) { if (fa >= 0) return 1; }
-  else for (int i = 0; sp_builtin_arity_tbl[i].cls && !fixed; i++)
-    fixed = sp_streq(sp_builtin_arity_tbl[i].m, name) && sp_builtin_arity_tbl[i].a >= 0;
-  for (int i = 0; fixed && sp_builtin_arity_spec_tbl[i].cls; i++)
-    if (sp_streq(sp_builtin_arity_spec_tbl[i].cls, cls) && sp_streq(sp_builtin_arity_spec_tbl[i].m, name) &&
-        sp_builtin_arity_spec_tbl[i].min >= 0 && sp_builtin_arity_spec_tbl[i].min == sp_builtin_arity_spec_tbl[i].max) return 1;
-  for (int i = 0; sp_builtin_kwpos_tbl[i].cls; i++)
-    if (sp_streq(sp_builtin_kwpos_tbl[i].cls, cls) && sp_streq(sp_builtin_kwpos_tbl[i].m, name)) return 1;
-  return 0;
-}
 /* Method#parameters of the builtins, by the class or module that defines
    each (BAP: CRuby's instance_method(m).parameters) */
 #define BAI(...)
@@ -21255,17 +21224,6 @@ static int const_reads_builtin_value(Compiler *c, int recv) {
   return ty_is_array(rt) || ty_is_hash(rt) || rt == TY_STRING || rt == TY_STRBUF ||
          rt == TY_INT || rt == TY_FLOAT || rt == TY_SYMBOL || rt == TY_IO;
 }
-/* Does class method `name` of builtin class cls take a keyword hash apart
-   from its positionals, as CRuby does for a method that takes keywords: 1,
-   0 where the hash counts as a positional, -1 where nothing says. cls's own
-   class-side rows say (bop_class_keywords), else the facts' fixed-arity
-   class methods, which take no keywords (BACK: BasicSocket.for_fd). */
-static int class_kwh_apart(const char *cls, const char *name) {
-  int kw = bop_class_keywords(cls, name);
-  for (int i = 0; kw < 0 && sp_builtin_cmeth_kwpos_tbl[i].cls; i++)
-    if (sp_streq(sp_builtin_cmeth_kwpos_tbl[i].cls, cls) && sp_streq(sp_builtin_cmeth_kwpos_tbl[i].m, name)) kw = 0;
-  return kw;
-}
 /* CRuby's counts for class method `name` of builtin class cls: its own row
    of the facts, or the row of the class of its singleton chain that has
    the method (bop_class_owner: File.sysopen is IO's), read as CRuby finds
@@ -21274,7 +21232,7 @@ static int class_kwh_apart(const char *cls, const char *name) {
    singleton methods not being inherited, and a class method the program
    defines on the chain, up to that class, keeps its own count. A keyword
    hash (kwh) is counted as the class whose counts are read takes it
-   (class_kwh_apart): apart, leaving *argc the positionals CRuby's message
+   (builtin_kw_positional): apart, leaving *argc the positionals CRuby's message
    gives, or as a positional; one that spreads a `**` operand (kwh 2) adds
    no positional only where it is taken apart. Nothing says: not counted. */
 static int class_arity_spec_row(Compiler *c, int id, const char *cls, const char *name,
@@ -21286,9 +21244,9 @@ static int class_arity_spec_row(Compiler *c, int id, const char *cls, const char
     int ci = i > 0 ? comp_class_index(c, a) : -1;
     if (ci >= 0 && cplan_cmethod_target(c, id, ci, name) >= 0) return 0;
     if (arity_spec_find(sp_builtin_cmeth_arity_spec_tbl, a, name)) {
-      int kw = kwh ? class_kwh_apart(a, name) : 0;
-      if (kw < 0 || (kwh == 2 && kw == 0)) return 0;
-      *argc -= kw;
+      int kp = kwh ? builtin_kw_positional(a, name, 1) : 1;
+      if (kp < 0 || (kwh == 2 && kp == 1)) return 0;
+      *argc -= !kp;
       return arity_spec_row(sp_builtin_cmeth_arity_spec_tbl, a, name, with_block, *argc, exp, n);
     }
     if (!owner || sp_streq(a, owner)) break;
@@ -21433,7 +21391,7 @@ static int arity_violation(Compiler *c, int id, int non_nil, char *exp, size_t n
     if (reopened_owns(c, bcn, name) || reopened_owns(c, owner, name) ||
         (twin && reopened_owns(c, twin, name)) ||
         (sp_streq(owner, "Object") && toplevel_def(c, name))) return 0;
-    if (kwh && !kwh_counts(owner, name)) return 0;
+    if (kwh && builtin_kw_positional(owner, name, 0) != 1) return 0;
   }
   *given = argc;
   return 1;
@@ -21766,7 +21724,7 @@ static int poly_arity_rows(Compiler *c, const char *name, int with_block, int ar
       snprintf(exp, sizeof exp, "%d", a);
     }
     if (!exp[0]) { if (partial) continue; return 0; }   /* this class takes the count */
-    if (kwh && !kwh_counts(CLS[q], name) && !kwh_counts("Object", name)) return 0;
+    if (kwh && builtin_kw_positional(CLS[q], name, 0) != 1 && builtin_kw_positional("Object", name, 0) != 1) return 0;
     tests[n] = TST[q];
     snprintf(exps[n], 32, "%s", exp);
     n++;

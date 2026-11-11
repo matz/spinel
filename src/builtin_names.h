@@ -36,6 +36,10 @@ int is_object_class_name(const char *n);   /* Object alone: the top level's cons
 int is_object_root(const char *n);    /* Object Kernel BasicObject: the classes every object has */
 int is_send_family(const char *n);    /* send __send__ public_send */
 int builtin_name_takes_keywords(const char *n);   /* a builtin of the name takes keywords in CRuby (clone, round, lines ...) */
+/* Is a keyword hash one more positional of cls's builtin method `name` (its
+   class method where cside), as CRuby counts a method that takes no
+   keywords: 1; 0 where the method takes keywords; -1 where no fact says. */
+int builtin_kw_positional(const char *cls, const char *name, int cside);
 int is_method_name_reflection(const char *n); /* send family, method public_method instance_method define_method define_singleton_method alias_method singleton_method respond_to? method_defined? */
 int is_code_eval_name(const char *n);  /* eval class_eval module_eval instance_eval: given its code as a String */
 int is_symbol_conversion(const char *n); /* to_sym intern: a Symbol made of a value */

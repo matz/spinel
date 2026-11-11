@@ -2386,11 +2386,14 @@ static void vis_table_set(char ***names, int **kinds, int *n, int *cap, const ch
   (*n)++;
 }
 
+unsigned comp_vis_gen = 0;   /* bumped when a visibility or an undef table changes (the respond_to? lists' memo stamp) */
 void comp_method_vis_set(ClassInfo *ci, const char *name, int kind) {
+  comp_vis_gen++;
   vis_table_set(&ci->vis_names, &ci->vis_kinds, &ci->nvis, &ci->cvis, name, kind);
 }
 
 void comp_cmethod_vis_set(ClassInfo *ci, const char *name, int kind) {
+  comp_vis_gen++;
   vis_table_set(&ci->cm_vis_names, &ci->cm_vis_kinds, &ci->ncm_vis, &ci->ccm_vis, name, kind);
 }
 
@@ -3031,6 +3034,7 @@ int setter_base_name(const char *name, char *out, size_t cap) {
   return 1;
 }
 void comp_add_undef(ClassInfo *ci, const char *name) {
+  comp_vis_gen++;
   name_add(&ci->undefs, &ci->nundefs, &ci->cundefs, name);
 }
 int comp_is_undeffed_in_chain(Compiler *c, int class_id, const char *name) {

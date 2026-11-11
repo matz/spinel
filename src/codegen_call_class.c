@@ -279,6 +279,98 @@ static void emit_object_reopen_responds(Compiler *c, int k, Buf *pub, Buf *priv)
   }
 }
 
+/* The names class k's chain answers, as the two lists a run-time
+   respond_to? tests (`"a", "b", ` -- public, and the private ones that
+   include_all adds), or the names every object has for k -1 (the Object
+   reopening's). A chain lookup from class k answers a scope owned by k or
+   one of its ancestors (chain_lookup: an alias resumes at an ancestor, and
+   the walk is up the parents), so only those scopes are asked, in the
+   order every scope was. */
+static void rtr_lists_build(Compiler *c, int k, Buf *pb, Buf *vb) {
+  if (k < 0) { emit_object_reopen_responds(c, -1, pb, vb); return; }
+  unsigned char *anc = calloc((size_t)c->nclasses + 1, 1);
+  if (!anc) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  for (int p = k; p >= 0; p = c->classes[p].parent) anc[p] = 1;
+  for (int s = 0; s < c->nscopes; s++)
+    if (c->scopes[s].name && !c->scopes[s].is_cmethod && !c->scopes[s].is_proc_form &&
+        (c->scopes[s].class_id < 0 || (c->scopes[s].class_id < c->nclasses && anc[c->scopes[s].class_id])) &&
+        comp_method_in_chain(c, k, c->scopes[s].name, NULL) == s)
+      emit_responds_name(c, k, c->scopes[s].name, pb, vb);
+  free(anc);
+  /* Native methods are inherited too. The receiver's visibility and
+     undef declarations still decide which list receives each name. */
+  for (int p = k; p >= 0; p = c->classes[p].parent)
+    for (int m = 0; m < c->n_native_methods; m++)
+      if (c->native_methods[m].class_id == p && !c->native_methods[m].kind)
+        emit_responds_name(c, k, c->native_methods[m].name, pb, vb);
+  for (int p = k; p >= 0; p = c->classes[p].parent) {
+    ClassInfo *cl = &c->classes[p];
+    for (int r = 0; r < cl->nreaders; r++) emit_responds_name(c, k, cl->readers[r], pb, vb);
+    for (int w = 0; w < cl->nwriters; w++) {
+      char wn[256];
+      snprintf(wn, sizeof wn, "%s=", cl->writers[w]);
+      emit_responds_name(c, k, wn, pb, vb);
+    }
+    for (int a = 0; a < cl->naliases; a++)
+      if (!comp_name_is_sg_alias_only(c, k, cl->alias_new[a]))   /* a class method's, not the instance's */
+        emit_responds_name(c, k, cl->alias_new[a], pb, vb);
+  }
+  const char *const *imp[] = { enumerable_names, comparable_names, struct_names,
+                               (const char *const[]){ "members", "to_h", "deconstruct", "deconstruct_keys", "with", NULL } };
+  for (int l = 0; l < 4; l++)
+    for (int i = 0; imp[l][i]; i++)
+      if (class_implicit_responds(c, k, imp[l][i])) emit_responds_name(c, k, imp[l][i], pb, vb);
+  /* and the methods of a program's Object reopening the chain does not
+     reach (the class table keeps Object apart), by Object's visibility */
+  emit_object_reopen_responds(c, k, pb, vb);
+}
+/* The lists, kept from one emission to the next while nothing they read
+   has moved: the scope index frozen, with its epoch, the scope and class
+   counts, the class shape (parents, aliases), the reader and writer tables
+   and the visibility and undef tables (comp_vis_gen) as they were. The
+   dynamic send's default-arm probes emit a respond_to? over and over (39
+   emissions on an application, a billion chain lookups between them). An
+   empty list is NULL. */
+typedef struct { char *pub, *priv; unsigned char built; } RtrLists;
+static RtrLists *g_rtr;
+static int g_rtr_n;
+static struct { const Compiler *c; int ncls, nscp, nnat; unsigned sgen, shape, tgen, vgen; } g_rtr_key;
+static void rtr_lists(Compiler *c, int k, const char **pub, const char **priv) {
+  int keyed = comp_scope_index_is_frozen() && !comp_scope_moving();
+  if (keyed && (g_rtr_key.c != c || g_rtr_key.ncls != c->nclasses || g_rtr_key.nscp != c->nscopes ||
+                g_rtr_key.nnat != c->n_native_methods || g_rtr_key.sgen != comp_scope_index_gen() ||
+                g_rtr_key.shape != comp_class_shape_gen() || g_rtr_key.tgen != comp_table_gen ||
+                g_rtr_key.vgen != comp_vis_gen)) {
+    for (int i = 0; i < g_rtr_n; i++) { free(g_rtr[i].pub); free(g_rtr[i].priv); }
+    free(g_rtr);
+    g_rtr_n = c->nclasses + 1;
+    g_rtr = calloc((size_t)g_rtr_n, sizeof *g_rtr);
+    if (!g_rtr) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    g_rtr_key.c = c; g_rtr_key.ncls = c->nclasses; g_rtr_key.nscp = c->nscopes; g_rtr_key.nnat = c->n_native_methods;
+    g_rtr_key.sgen = comp_scope_index_gen(); g_rtr_key.shape = comp_class_shape_gen();
+    g_rtr_key.tgen = comp_table_gen; g_rtr_key.vgen = comp_vis_gen;
+  }
+  RtrLists *e = keyed ? &g_rtr[k + 1] : NULL;
+  if (!e || !e->built) {
+    Buf pb, vb;
+    memset(&pb, 0, sizeof pb);
+    memset(&vb, 0, sizeof vb);
+    rtr_lists_build(c, k, &pb, &vb);
+    if (!e) {
+      /* not kept: handed out until the next ask */
+      static char *held[2];
+      free(held[0]); free(held[1]);
+      held[0] = pb.len ? pb.p : (free(pb.p), NULL);
+      held[1] = vb.len ? vb.p : (free(vb.p), NULL);
+      *pub = held[0]; *priv = held[1];
+      return;
+    }
+    e->pub = pb.len ? pb.p : (free(pb.p), NULL);
+    e->priv = vb.len ? vb.p : (free(vb.p), NULL);
+    e->built = 1;
+  }
+  *pub = e->pub; *priv = e->priv;
+}
 /* respond_to? asked at run time, by the name's string: each class's own
    methods by the value's class, then what every object has. */
 static void emit_respond_to_runtime_name(Compiler *c, int id, Buf *b, int recv, int argc, const int *argv) {
@@ -301,80 +393,31 @@ static void emit_respond_to_runtime_name(Compiler *c, int id, Buf *b, int recv, 
      chain of every name nests as deep as it is long, which overflows
      clang's stack at a few thousand */
   buf_printf(b, "; ((({ sp_bool _r%d = 0; switch (_k%d) {", tv, tv);
-  /* A chain lookup from class k answers a scope owned by k or one of its
-     ancestors (chain_lookup: an alias resumes at an ancestor, and the walk
-     is up the parents), so only those scopes are asked below, in the order
-     every scope was. Asking every scope of every class took about five
-     seconds an emission on an application of 1,300 classes and 45,000
-     scopes, a third of its methods' emission. */
-  unsigned char *anc = calloc((size_t)c->nclasses + 1, 1);
-  if (!anc) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   for (int k = 0; k < c->nclasses; k++) {
     if (comp_class_is_module(c, &c->classes[k])) continue;
-    Buf pb, vb;
-    memset(&pb, 0, sizeof pb);
-    memset(&vb, 0, sizeof vb);
-    for (int p = k; p >= 0; p = c->classes[p].parent) anc[p] = 1;
-    for (int s = 0; s < c->nscopes; s++)
-      if (c->scopes[s].name && !c->scopes[s].is_cmethod && !c->scopes[s].is_proc_form &&
-          (c->scopes[s].class_id < 0 || (c->scopes[s].class_id < c->nclasses && anc[c->scopes[s].class_id])) &&
-          comp_method_in_chain(c, k, c->scopes[s].name, NULL) == s)
-        emit_responds_name(c, k, c->scopes[s].name, &pb, &vb);
-    for (int p = k; p >= 0; p = c->classes[p].parent) anc[p] = 0;
-    /* Native methods are inherited too. The receiver's visibility and
-       undef declarations still decide which list receives each name. */
-    for (int p = k; p >= 0; p = c->classes[p].parent)
-      for (int m = 0; m < c->n_native_methods; m++)
-        if (c->native_methods[m].class_id == p && !c->native_methods[m].kind)
-          emit_responds_name(c, k, c->native_methods[m].name, &pb, &vb);
-    for (int p = k; p >= 0; p = c->classes[p].parent) {
-      ClassInfo *cl = &c->classes[p];
-      for (int r = 0; r < cl->nreaders; r++) emit_responds_name(c, k, cl->readers[r], &pb, &vb);
-      for (int w = 0; w < cl->nwriters; w++) {
-        char wn[256];
-        snprintf(wn, sizeof wn, "%s=", cl->writers[w]);
-        emit_responds_name(c, k, wn, &pb, &vb);
-      }
-      for (int a = 0; a < cl->naliases; a++)
-        if (!comp_name_is_sg_alias_only(c, k, cl->alias_new[a]))   /* a class method's, not the instance's */
-          emit_responds_name(c, k, cl->alias_new[a], &pb, &vb);
-    }
-    const char *const *imp[] = { enumerable_names, comparable_names, struct_names,
-                                 (const char *const[]){ "members", "to_h", "deconstruct", "deconstruct_keys", "with", NULL } };
-    for (int l = 0; l < 4; l++)
-      for (int i = 0; imp[l][i]; i++)
-        if (class_implicit_responds(c, k, imp[l][i])) emit_responds_name(c, k, imp[l][i], &pb, &vb);
-    /* and the methods of a program's Object reopening the chain does not
-       reach (the class table keeps Object apart), by Object's visibility */
-    emit_object_reopen_responds(c, k, &pb, &vb);
+    const char *pub, *priv;
+    rtr_lists(c, k, &pub, &priv);
     /* a class with no names answers none (its undef took them): the
        default arm below is a builtin value's */
-    if (!pb.len && !vb.len) buf_printf(b, " case %d: break;", k);
-    if (pb.len || vb.len) {
+    if (!pub && !priv) buf_printf(b, " case %d: break;", k);
+    if (pub || priv) {
       buf_printf(b, " case %d: _r%d = ", k, tv);
-      if (pb.len) buf_printf(b, "sp_str_in_list(_n%d, (const char *const[]){%sNULL}) || ", tv, pb.p);
-      if (vb.len) buf_printf(b, "(_a%d && sp_str_in_list(_n%d, (const char *const[]){%sNULL})) || ", tv, tv, vb.p);
+      if (pub) buf_printf(b, "sp_str_in_list(_n%d, (const char *const[]){%sNULL}) || ", tv, pub);
+      if (priv) buf_printf(b, "(_a%d && sp_str_in_list(_n%d, (const char *const[]){%sNULL})) || ", tv, tv, priv);
       buf_puts(b, "0; break;");
     }
-    free(pb.p);
-    free(vb.p);
   }
-  free(anc);
   /* a builtin value, or an object of a class with no names of its own,
      answers the Object reopening's methods */
   {
-    Buf pb, vb;
-    memset(&pb, 0, sizeof pb);
-    memset(&vb, 0, sizeof vb);
-    emit_object_reopen_responds(c, -1, &pb, &vb);
-    if (pb.len || vb.len) {
+    const char *pub, *priv;
+    rtr_lists(c, -1, &pub, &priv);
+    if (pub || priv) {
       buf_printf(b, " default: _r%d = ", tv);
-      if (pb.len) buf_printf(b, "sp_str_in_list(_n%d, (const char *const[]){%sNULL}) || ", tv, pb.p);
-      if (vb.len) buf_printf(b, "(_a%d && sp_str_in_list(_n%d, (const char *const[]){%sNULL})) || ", tv, tv, vb.p);
+      if (pub) buf_printf(b, "sp_str_in_list(_n%d, (const char *const[]){%sNULL}) || ", tv, pub);
+      if (priv) buf_printf(b, "(_a%d && sp_str_in_list(_n%d, (const char *const[]){%sNULL})) || ", tv, tv, priv);
       buf_puts(b, "0; break;");
     }
-    free(pb.p);
-    free(vb.p);
   }
   buf_printf(b, " } _r%d; }) || ", tv);
   /* to include_all, Object's private methods (exit, puts) too, but not on

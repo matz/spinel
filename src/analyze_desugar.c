@@ -11376,6 +11376,127 @@ static int raise_name_program_defined(Compiler *c, const char *name) {
     if (c->scopes[i].name && sp_streq(c->scopes[i].name, name)) return 1;
   return 0;
 }
+/* Does class ci answer `raise ci, m` with a class method `exception` of the
+   program's, one Spinel can call wherever the raise at `id` runs? */
+static int raise_own_exception_ok(Compiler *c, int id, int ci) {
+  MethodLookup ml = { .def_class = -1 };
+  int mi = ci >= 0 ? call_target(c, -1, ci, "exception", CT_CMETHOD, &ml) : -1, dc = ml.def_class;
+  /* the method must be there wherever the raise runs: a raise that may
+     run before a later `def self.exception` keeps the raise of K */
+  if (mi < 0 || elab_method_at(c, ci, "exception", 1, elab_point_of(c, id), NULL) != ELAB_YES) return 0;
+  /* a `super` past the program's methods reaches Exception.exception.
+     desugar_exception_super_new spells most of them `self.new`; one it
+     left (beside a `new` of the program's, or with a splat) Spinel's
+     class methods cannot call, so such a method keeps the raise of K.
+     Each method on the super chain is asked, not only the first one */
+  int sm = mi, sdc = dc;
+  for (int step = 0; sm >= 0 && scope_calls_super(c, sm); step++) {
+    int up = sdc >= 0 ? c->classes[sdc].parent : -1;
+    MethodLookup sml = { .def_class = -1 };
+    sm = up >= 0 && step < 64 ? call_target(c, -1, up, "exception", CT_CMETHOD, &sml) : -1;
+    sdc = sml.def_class;
+    if (sm < 0) return 0;
+  }
+  return 1;
+}
+/* `raise k, m` and `raise k` with k a class value (a local, an ivar, a
+   call): CRuby raises what `k.exception(m)` answers. Where classes of the
+   program answer `exception` with a class method of their own (C1, C2,
+   ...), the raise becomes
+     if k.equal?(C1) then raise C1.exception(m)
+     elsif k.equal?(C2) then raise C2.exception(m)
+     else raise k, m end
+   and every other value keeps the raise as written (Exception.exception is
+   `new`, and a value that is not a class keeps its TypeError). The test
+   asks identity, so no `==` of the program runs. A k that is not a variable
+   read is held in a new local first, so it runs once. */
+static int raise_value_own_exception(Compiler *c, int id, int npos) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  int ncand = 0;
+  const PolyCand *cands = comp_cmethod_candidates(c, "exception", &ncand);
+  if (ncand <= 0) return 0;
+  /* the test is the builtin identity: a program's own `equal?` keeps the
+     raise as written */
+  if (raise_name_program_defined(c, "equal?")) return 0;
+  int *own = malloc(sizeof(int) * (size_t)ncand);
+  if (!own) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  /* a class whose method cannot take the call here (a module, a class
+     with no name, one raise_own_exception_ok turns down) has no test of
+     its own: it keeps the raise as written */
+  int nown = 0;
+  for (int q = 0; q < ncand; q++) {
+    int k = cands[q].cls;
+    if (!comp_class_is_module(c, &c->classes[k]) && class_ruby_name(c, k) && raise_own_exception_ok(c, id, k))
+      own[nown++] = k;
+  }
+  if (nown == 0) { free(own); return 0; }
+  int base = nt->count;
+  int args = nt_ref(nt, id, "arguments"), ac = 0;
+  const int *av = nt_arr(nt, args, "arguments", &ac);
+  int recv = av[0];
+  NodeKind rk = nt_kind(nt, recv);
+  int hold = rk != NK_LocalVariableReadNode && rk != NK_InstanceVariableReadNode;
+  char tname[48]; snprintf(tname, sizeof tname, "__rxk_%d", id);
+  /* the raise as written moves to a node of its own, the conditional
+     takes `id`'s number */
+  int kept = nt_new_node(nt, "CallNode");
+  fwd_move_call(c, id, kept, "IfNode");
+  nt_node_set_int(nt, kept, "raise_own_kept", 1);
+  int first = 1, cur = id;
+  for (int q = 0; q < nown; q++) {
+    int k = sus_class_const(c, own[q]);
+    int arm = nt_clone_subtree(nt, kept);
+    int aa = nt_ref(nt, arm, "arguments"), an = 0;
+    const int *aav = nt_arr(nt, aa, "arguments", &an);
+    int ex = fwd_new_call(nt, k, "exception", npos == 2 ? aav[1] : -1);
+    fwd_copy_loc(nt, ex, kept);
+    nt_set_ignore_visibility(nt, ex, 1);   /* raise calls a private one too */
+    nt_node_set_arr(nt, aa, "arguments", &ex, 1);
+    nt_node_set_int(nt, arm, "raise_own_kept", 1);
+    int test;
+    if (hold && first) {
+      test = fwd_new_node_like(nt, kept, "LocalVariableWriteNode");
+      nt_node_set_str(nt, test, "name", tname); nt_node_set_int(nt, test, "depth", 0);
+      nt_node_set_ref(nt, test, "value", recv);
+      scope_local_intern(comp_scope_of(c, id), tname);
+    }
+    else if (hold) {
+      test = fwd_new_node_like(nt, kept, "LocalVariableReadNode");
+      nt_node_set_str(nt, test, "name", tname); nt_node_set_int(nt, test, "depth", 0);
+    }
+    else test = nt_clone_subtree(nt, recv);
+    int iff = first ? id : nt_new_node(nt, "IfNode"), st = nt_new_node(nt, "StatementsNode");
+    nt_node_set_arr(nt, st, "body", &arm, 1);
+    nt_node_set_ref(nt, iff, "predicate", fwd_new_call(nt, test, "equal?", nt_clone_subtree(nt, k)));
+    nt_node_set_ref(nt, iff, "statements", st);
+    if (!first) nt_node_set_ref(nt, cur, "subsequent", iff);
+    cur = iff;
+    first = 0;
+  }
+  if (hold) {
+    int rd = fwd_new_node_like(nt, kept, "LocalVariableReadNode");
+    nt_node_set_str(nt, rd, "name", tname); nt_node_set_int(nt, rd, "depth", 0);
+    int kargs = nt_ref(nt, kept, "arguments"), kn = 0;
+    const int *kav = nt_arr(nt, kargs, "arguments", &kn);
+    int *nav = malloc(sizeof(int) * (size_t)kn);
+    if (!nav) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    for (int j = 0; j < kn; j++) nav[j] = kav[j];
+    nav[0] = rd;
+    nt_node_set_arr(nt, kargs, "arguments", nav, kn);
+    free(nav);
+  }
+  int el = nt_new_node(nt, "ElseNode"), est = nt_new_node(nt, "StatementsNode");
+  nt_node_set_arr(nt, est, "body", &kept, 1);
+  nt_node_set_ref(nt, el, "statements", est);
+  nt_node_set_ref(nt, cur, "subsequent", el);
+  comp_grow_node_arrays(c);
+  for (int j = base; j < nt->count; j++) {
+    c->nscope[j] = c->nscope[id];
+    c->node_cbody[j] = c->node_cbody[id];
+  }
+  free(own);
+  return 1;
+}
 int desugar_raise_own_exception(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int changed = 0;
@@ -11394,32 +11515,24 @@ int desugar_raise_own_exception(Compiler *c) {
     if (ac < 1 || nt_argv_has(nt, av, ac, NT_ARG_SPLAT | NT_ARG_BLOCK | NT_ARG_FORWARDING)) continue;
     int kw = nt_kind(nt, av[ac - 1]) == NK_KeywordHashNode, npos = ac - kw;
     if (npos < 1 || npos > 2) continue;
+    if (nt_int(nt, id, "raise_own_kept", 0)) continue;
     NodeKind k0 = nt_kind(nt, av[0]);
-    if (k0 != NK_ConstantReadNode && k0 != NK_ConstantPathNode) continue;
+    int constant = k0 == NK_ConstantReadNode || k0 == NK_ConstantPathNode;
+    if (!constant && (kw || g_infer_optimistic)) continue;
+    if (!constant) {
+      TyKind kt = infer_type(c, av[0]);
+      if (kt != TY_CLASS && kt != TY_POLY) continue;
+    }
     /* (asked once per name and pass: the scan reads every scope) */
     int fi = nm[0] == 'f';
     if (owned[fi] < 0) owned[fi] = raise_name_program_defined(c, nm);
     if (owned[fi]) continue;
-    int ci = class_recv_static_ci(c, av[0]);
-    MethodLookup ml = { .def_class = -1 };
-    int mi = ci >= 0 ? call_target(c, -1, ci, "exception", CT_CMETHOD, &ml) : -1, dc = ml.def_class;
-    /* the method must be there wherever the raise runs: a raise that may
-       run before a later `def self.exception` keeps the raise of K */
-    if (mi < 0 || elab_method_at(c, ci, "exception", 1, elab_point_of(c, id), NULL) != ELAB_YES) continue;
-    /* a `super` past the program's methods reaches Exception.exception.
-       desugar_exception_super_new spells most of them `self.new`; one it
-       left (beside a `new` of the program's, or with a splat) Spinel's
-       class methods cannot call, so such a method keeps the raise of K.
-       Each method on the super chain is asked, not only the first one */
-    int sm = mi, sdc = dc, past = 0;
-    for (int step = 0; sm >= 0 && scope_calls_super(c, sm); step++) {
-      int up = sdc >= 0 ? c->classes[sdc].parent : -1;
-      MethodLookup sml = { .def_class = -1 };
-      sm = up >= 0 && step < 64 ? call_target(c, -1, up, "exception", CT_CMETHOD, &sml) : -1;
-      sdc = sml.def_class;
-      if (sm < 0) past = 1;
+    if (!constant) {
+      if (raise_value_own_exception(c, id, npos)) changed = 1;
+      continue;
     }
-    if (past) continue;
+    int ci = class_recv_static_ci(c, av[0]);
+    if (!raise_own_exception_ok(c, id, ci)) continue;
     int base = nt->count;
     int ex = fwd_new_call(nt, av[0], "exception", npos == 2 ? av[1] : -1);
     fwd_copy_loc(nt, ex, id);

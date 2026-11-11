@@ -2044,6 +2044,10 @@ elements or guard fail and a later array arm is tried. A separate case or
 one-line match calls it again. Alternative (`|`), find and capture patterns,
 and a subject held as a boxed value, still call it in each arm.
 
+A statement `case` whose subject is of another kind than a splatted list of
+Integers, Strings or Floats (`case [1, 2] when *ints`, `case "a" when *ints`,
+`case :a when *strs`) runs the list and does not match, as CRuby does.
+
 These were limits in an earlier (Ruby self-hosted) version of the compiler and
 now work on current master:
 

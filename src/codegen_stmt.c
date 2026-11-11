@@ -11453,6 +11453,15 @@ void emit_case(Compiler *c, int id, Buf *b, int indent) {
                             "_t%d.tag == SP_TAG_INT && sp_FloatArray_include(_t%d, (double)_t%d.v.i)); })",
                          ts, ta, ts, ts, ta, ts);
           }
+          else if ((at == TY_INT_ARRAY || at == TY_STR_ARRAY || at == TY_FLOAT_ARRAY) && !ty_is_object(pt) &&
+                   ty_object_protocol_family(pt) != ty_object_protocol_family(ty_array_elem(at))) {
+            /* A subject of another family than the list's Integers, Strings or
+               Floats equals none of them by the builtin == and ===: the list
+               runs, and the arm answers false. A user object is left to the
+               switch (Integer#== can call its ==); a reopened builtin == or
+               === is not asked here, as the sibling arms do not ask it. */
+            buf_puts(b, "((void)("); emit_expr_for_effect(c, inner, b); buf_puts(b, "), 0)");
+          }
           else switch (at) {
           case TY_INT_ARRAY:
             buf_printf(b, "({ sp_IntArray *_t%d = ", ta); emit_expr(c, inner, b);

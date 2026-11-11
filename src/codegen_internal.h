@@ -865,6 +865,7 @@ extern int g_class_body_id;
 /* Class id of the scope currently being emitted (-1 if none). Used to resolve
    implicit self calls in included-module methods to the including class. */
 extern int g_emitting_class_id;
+int self_scope_runs_only_inherited(Compiler *c, int e);
 extern int g_scopes_settled;   /* analysis done: scope_is_shadowed caches (codegen_util.c) */
 /* While emitting a compile-time-unrolled define_method body: the loop-var
    name to substitute and the literal node to emit in its place (-1 = none). */

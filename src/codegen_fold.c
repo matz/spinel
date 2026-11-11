@@ -13035,12 +13035,13 @@ static void emit_dispatch_miss_default(Compiler *c, int cid, int miss_id, const 
    to that method would, defaults and arity check included. The argument
    expressions sit inside the arms, so only the entered one evaluates them;
    the default arm runs them before its miss raise (emit_dispatch_miss_default). */
+static int disp_no_self(Compiler *c, int k);
 static void emit_dispatch_per_arm(Compiler *c, int cid, int miss_id, const char *name, const char *selfptr,
                                   int argsNode, int blk_node, int mi, int defcls,
                                   TyKind ret, TyKind disp_ret, Buf *b) {
   int want_blk = 0;
   for (int k = 0; k < c->nclasses && !want_blk; k++) {
-    if (!is_descendant(c, k, cid)) continue;
+    if (!is_descendant(c, k, cid) || disp_no_self(c, k)) continue;
     MethodLookup ml = { .def_class = -1 };
     int kmi = dispatch_arm_scope(c, call_target(c, g_nd_call_id, k, name, 0, &ml));
     if (kmi >= 0 && arm_takes_blk(&c->scopes[kmi])) want_blk = 1;
@@ -13057,7 +13058,7 @@ static void emit_dispatch_per_arm(Compiler *c, int cid, int miss_id, const char 
   ArmText *at = NULL;
   int nat = 0, cat = 0;
   for (int k = 0; k < c->nclasses; k++) {
-    if (!is_descendant(c, k, cid)) continue;
+    if (!is_descendant(c, k, cid) || disp_no_self(c, k)) continue;
     MethodLookup ml = { .def_class = -1 };
     int kmi0 = call_target(c, g_nd_call_id, k, name, 0, &ml);
     int kmi = dispatch_arm_scope(c, kmi0);
@@ -13342,8 +13343,29 @@ static int reopen_takes_boxed_self(Compiler *c, int cid) {
 
 static void emit_dispatch_in(Compiler *c, int cid, const char *name,
                              const char *selfptr, int argsNode, int blk_node, Buf *b);
+/* The enclosing method of the implicit-self call this dispatch emits, when
+   only the classes inheriting it can be self there
+   (self_scope_runs_only_inherited); -1 otherwise */
+static int g_disp_prune_scope = -1;
+/* Is class k no self of the dispatch being emitted: a descendant whose own
+   lookup of the enclosing method is another method? Its arm cannot run,
+   and its parameters are not the call's to check (#11613). */
+static int disp_no_self(Compiler *c, int k) {
+  int e = g_disp_prune_scope;
+  return e >= 0 && call_target(c, c->scopes[e].def_node, k, c->scopes[e].name, 0, NULL) != e;
+}
 void emit_dispatch(Compiler *c, int cid, const char *name,
                           const char *selfptr, int argsNode, int blk_node, Buf *b) {
+  int sv_prune = g_disp_prune_scope;
+  /* a dispatch on self, in a class's own instance method emitted as itself */
+  g_disp_prune_scope = -1;
+  if (selfptr && g_self && sp_streq(selfptr, g_self) && g_ie_class_id < 0 &&
+      g_nd_call_id >= 0 && g_nd_call_id < c->nt->count) {
+    Scope *es = comp_scope_of(c, g_nd_call_id);
+    int e = es ? (int)(es - c->scopes) : -1;
+    if (e >= 0 && (g_emitting_class_id < 0 || g_emitting_class_id == es->class_id) &&
+        self_scope_runs_only_inherited(c, e)) g_disp_prune_scope = e;
+  }
   int sv_disp_ro = g_disp_ro, sv_outer = g_n_disp_outer;
   Buf *pre = g_pre;
   size_t pre_at = pre->len;
@@ -13363,6 +13385,7 @@ void emit_dispatch(Compiler *c, int cid, const char *name,
     }
   g_n_disp_outer = sv_outer;
   g_disp_ro = sv_disp_ro;
+  g_disp_prune_scope = sv_prune;
 }
 static void emit_dispatch_in(Compiler *c, int cid, const char *name,
                              const char *selfptr, int argsNode, int blk_node, Buf *b) {
@@ -13999,7 +14022,7 @@ else {
   ArmText *at = NULL;
   int nat = 0, cat = 0;
   for (int k = 0; k < c->nclasses; k++) {
-    if (!is_descendant(c, k, cid)) continue;
+    if (!is_descendant(c, k, cid) || disp_no_self(c, k)) continue;
     MethodLookup ml = { .def_class = -1 };
     int kmi = call_target(c, g_nd_call_id, k, name, 0, &ml);
     if (kmi < 0) continue;

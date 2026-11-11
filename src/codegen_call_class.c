@@ -6375,6 +6375,101 @@ int emit_call_reopen_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, cons
   return 0;
 }
 
+/* Can instance method e run only with a self whose class looks its name up
+   to e itself? So when e is a class's own def, no other method of its name
+   calls super (an override's super reaches e with the subclass's self), no
+   alias names it, and no alias_method, remove_method (which uncovers it
+   again) or instance_method (whose UnboundMethod a bind runs) names it or
+   a name computed at run time. A descendant whose own lookup of the name is
+   another method is then no self inside e: `Date#marshal_load`'s
+   `initialize(jd, sg, nil, ...)` is never run by a DateTime, whose
+   marshal_load is its own. */
+/* What self_scope_runs_only_inherited reads of the whole program, gathered
+   once: the names a method calling super has (twice when two do), the names
+   an alias, alias_method, remove_method or instance_method gives, and
+   whether one of those names a method at run time. Sorted for bsearch. */
+typedef struct {
+  const NodeTable *nt; int nscopes;
+  const char **sup; int nsup;     /* a name per super-calling method */
+  const char **named; int nnamed;
+  int dynamic;
+} SelfOnlyFacts;
+static int sof_cmp(const void *a, const void *b) {
+  return strcmp(*(const char *const *)a, *(const char *const *)b);
+}
+static int sof_count(const char **v, int n, const char *nm) {
+  const char **at = n ? bsearch(&nm, v, (size_t)n, sizeof *v, sof_cmp) : NULL;
+  if (!at) return 0;
+  const char **lo = at, **hi = at;
+  while (lo > v && strcmp(lo[-1], nm) == 0) lo--;
+  while (hi + 1 < v + n && strcmp(hi[1], nm) == 0) hi++;
+  return (int)(hi - lo) + 1;
+}
+static void sof_push(const char ***v, int *n, int *cap, const char *nm) {
+  if (*n == *cap) {
+    *cap = *cap ? *cap * 2 : 16;
+    *v = (const char **)realloc(*v, sizeof **v * (size_t)*cap);
+    if (!*v) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  }
+  (*v)[(*n)++] = nm;
+}
+static const SelfOnlyFacts *self_only_facts(Compiler *c) {
+  static SelfOnlyFacts f;
+  const NodeTable *nt = c->nt;
+  if (f.nt == nt && f.nscopes == c->nscopes) return &f;
+  free(f.sup); free(f.named);
+  memset(&f, 0, sizeof f);
+  f.nt = nt; f.nscopes = c->nscopes;
+  int csup = 0, cnamed = 0;
+  for (int s = 0; s < c->nscopes; s++)
+    if (c->scopes[s].name && scope_calls_super(c, s)) sof_push(&f.sup, &f.nsup, &csup, c->scopes[s].name);
+  int n = 0;
+  const int *ids = nt_nodes_of_kind(nt, NK_AliasMethodNode, &n);
+  for (int i = 0; i < n; i++) {
+    int on = nt_ref(nt, ids[i], "old_name");
+    const char *an = on >= 0 ? nt_str(nt, on, "value") : NULL;
+    if (an) sof_push(&f.named, &f.nnamed, &cnamed, an);
+    else f.dynamic = 1;
+  }
+  static const char *const W[] = { "alias_method", "remove_method", "instance_method",
+    "public_instance_method", NULL };
+  ids = nt_nodes_of_kind(nt, NK_CallNode, &n);
+  for (int i = 0; i < n; i++) {
+    const char *nm = nt_str(nt, ids[i], "name");
+    int w = 0;
+    for (int k = 0; nm && W[k]; k++) if (sp_streq(nm, W[k])) { w = 1; break; }
+    if (!w) continue;
+    int a = nt_ref(nt, ids[i], "arguments"), ac = 0;
+    const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &ac) : NULL;
+    for (int j = 0; j < ac; j++) {
+      NodeKind ak = nt_kind(nt, av[j]);
+      const char *v = ak == NK_SymbolNode ? nt_str(nt, av[j], "value")
+                    : ak == NK_StringNode ? nt_str(nt, av[j], "content") : NULL;
+      if (v) sof_push(&f.named, &f.nnamed, &cnamed, v);
+      else f.dynamic = 1;
+    }
+  }
+  if (f.nsup) qsort(f.sup, (size_t)f.nsup, sizeof *f.sup, sof_cmp);
+  if (f.nnamed) qsort(f.named, (size_t)f.nnamed, sizeof *f.named, sof_cmp);
+  return &f;
+}
+
+int self_scope_runs_only_inherited(Compiler *c, int e) {
+  const NodeTable *nt = c->nt;
+  if (e < 0 || e >= c->nscopes) return 0;
+  const Scope *es = &c->scopes[e];
+  const char *en = es->name;
+  if (!en || es->is_cmethod || es->is_module_function || es->class_id < 0 ||
+      es->def_node < 0 || nt_kind(nt, es->def_node) != NK_DefNode ||
+      comp_class_is_module(c, &c->classes[es->class_id]))
+    return 0;
+  const SelfOnlyFacts *f = self_only_facts(c);
+  if (f->dynamic || sof_count(f->named, f->nnamed, en)) return 0;
+  /* another method of the name calling super: e's own super is not one */
+  int sup = sof_count(f->sup, f->nsup, en);
+  return sup - (sup && scope_calls_super(c, e)) == 0;
+}
+
 /* an implicit-self call inside an instance method (or an instance_eval block): a member read,
    a dispatch on self's class (a reopen's own method, a descendant's override), or an Object
    reopening's method */

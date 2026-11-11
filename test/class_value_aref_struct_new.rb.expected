@@ -1,0 +1,20 @@
+#<struct S name="x", n=2>
+S
+"X"
+3
+#<struct S name="y", n=nil>
+ArgumentError struct size differs
+#<struct S name="z", n=3.5>
+[1, 2]
+MyA
+:mya
+[1, 2]
+{1 => 2}
+#<struct Pt x=1, y=9>
+#<struct Pt x=1, y=2>
+14
+#<data D x=1, y=2>
+2
+ArgumentError missing keyword: :y
+ArgumentError wrong number of arguments (given 3, expected 0..2)
+7

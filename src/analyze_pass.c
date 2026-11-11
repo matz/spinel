@@ -6325,9 +6325,11 @@ int dynamic_new_may_reach(Compiler *c, int call_id, int cid) {
   return class_value_escapes(c, cid);
 }
 
-/* `klass.new(a, b)` on a Class value the analysis cannot pin: the codegen
-   switch has an arm for every class whose initialize takes this many
-   positionals, and each class the call can reach is constructed by it. Its
+/* `klass.new(a, b)` on a Class value the analysis cannot pin, or a
+   `klass[a, b]` that builds a Struct or Data class as `new` does
+   (cplan_as_new): the codegen switch has an arm for every class whose
+   initialize takes this many positionals, and each class the call can
+   reach is constructed by it. Its
    initialize's parameters take the arguments' types as a static
    `K.new(a, b)` would give them. */
 static int wbas_shared;
@@ -6350,7 +6352,7 @@ static int bind_dynamic_new_initializers(Compiler *c, int call_id) {
   int changed = 0;
   int *seen = (int *)calloc((size_t)(c->nscopes > 0 ? c->nscopes : 1), sizeof(int));
   for (int k = 0; k < c->nclasses; k++) {
-    if (!dynamic_new_may_reach(c, call_id, k)) continue;
+    if (!cplan_as_new(c, call_id, k) || !dynamic_new_may_reach(c, call_id, k)) continue;
     int imi = comp_method_in_chain(c, k, "initialize", NULL);
     /* A Struct or Data built by its generated constructor from `k.new(a: 1)`:
        a member a keyword names with a value of another type than the one
@@ -12044,7 +12046,7 @@ static int infer_param_types_ex(Compiler *c, int settle, const NodeTypes *before
       /* the same without a splat: an argument that reaches an initialize only
          through this call left its parameter typed by the static
          constructions alone, and the arm then read it as their type */
-      if (!static_cls && !splat_new && sp_streq(name, "new")) {
+      if (!static_cls && !splat_new && cplan_as_new(c, id, -1)) {
         TyKind rt1 = infer_type(c, recv);
         if (rt1 == TY_CLASS || rt1 == TY_POLY) changed |= bind_dynamic_new_initializers(c, id);
       }
@@ -12133,8 +12135,8 @@ static int infer_param_types_ex(Compiler *c, int settle, const NodeTypes *before
          class with an initialize binds them as a call (bind_call_params);
          the members the call leaves out are nil, which the nullable pass
          marks without widening them. */
-      if (sp_streq(name, "new") && rty && lci < 0 && rty_k != NK_ConstantReadNode &&
-          rty_k != NK_ConstantPathNode && rty_k != NK_SelfNode) {
+      if (rty && lci < 0 && rty_k != NK_ConstantReadNode && rty_k != NK_ConstantPathNode &&
+          rty_k != NK_SelfNode && cplan_as_new(c, id, -1)) {
         int ks[8], nk = new_recv_classes(c, recv, ks, 8);
         int every = nk == 0 && new_recv_every_class(c, recv);
         int nloop = every ? c->nclasses : nk;

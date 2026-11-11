@@ -81,27 +81,37 @@ static int emit_cv_new_arm(Compiler *c, int id, int ci, int argc, const int *atm
   return 1;
 }
 
+static void emit_cv_positional_new_arm(Compiler *c, int id, int ci, int argc, const int *argv, const int *atmp, int rt2,
+                                       CtorArityArms *aerr, Buf *b);
 /* `k[args]` on a Class value (cplan_cv_ctor): an arm per Array or Hash
-   subclass the fact says it builds, and for Array and Hash themselves
-   (their reopenings, if the program has them, by index and by builtin id);
-   any other class has no `[]`. The result is boxed. */
+   subclass the fact says it builds, the arm of `new` for each Struct or
+   Data class (cplan_cv_ctor's `[]` is their `new`, cplan_as_new), and for
+   Array and Hash themselves (their reopenings, if the program has them, by
+   index and by builtin id); any other class has no `[]`. The result is
+   boxed. */
 static int emit_class_value_aref(Compiler *c, int id, Buf *b, int recv, int argc, const int *argv) {
   if (cplan_cv_ctor(c, id) != CVC_AREF || repr_of(c, id).kind != RK_BOXED) return 0;
   int kt = ++g_tmp, rt2 = ++g_tmp;
   buf_printf(b, "({ sp_Class _t%d = ", kt); emit_expr(c, recv, b); buf_puts(b, "; ");
+  int sv_cbt = hoist_ctor_block(c, id, b);
   Buf av; memset(&av, 0, sizeof av);
   buf_puts(&av, argc ? "(sp_RbVal[]){" : "NULL");
+  int *atmp = calloc((size_t)(argc > 0 ? argc : 1), sizeof(int));
+  if (!atmp) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   for (int a = 0; a < argc; a++) {
-    int t = ++g_tmp;
-    buf_printf(b, "sp_RbVal _t%d = ", t); emit_boxed(c, argv[a], b);
-    buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); ", t);
-    buf_printf(&av, "%s_t%d", a ? ", " : "", t);
+    atmp[a] = ++g_tmp;
+    buf_printf(b, "sp_RbVal _t%d = ", atmp[a]); emit_boxed(c, argv[a], b);
+    buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); ", atmp[a]);
+    buf_printf(&av, "%s_t%d", a ? ", " : "", atmp[a]);
   }
   if (argc) buf_puts(&av, "}");
   char an[24]; snprintf(an, sizeof an, "%d", argc);
   emit_class_value_new_switch(c, rt2, kt, 0, b);
+  CtorArityArms aerr = {0};
   for (int ci = 0; ci < c->nclasses; ci++)
     if (cplan_cv_ctor_builds(c, id, ci)) emit_cv_ctor_arm(c, id, ci, an, av.p, rt2, b);
+    else if (cplan_as_new(c, id, ci)) emit_cv_positional_new_arm(c, id, ci, argc, argv, atmp, rt2, &aerr, b);
+  ctor_arity_emit(&aerr, b);
   /* Array and Hash themselves: their reopening's class index when the
      program has one, else the builtin id */
   for (int hash = 0; hash < 2; hash++) {
@@ -111,7 +121,8 @@ static int emit_class_value_aref(Compiler *c, int id, Buf *b, int recv, int argc
   }
   buf_printf(b, "default: sp_raise_nomethod(sp_sprintf(\"undefined method '[]' for class %%s\", sp_class_to_s(_t%d))); break; } _t%d; })",
              kt, rt2);
-  free(av.p);
+  g_ctor_blk_tmp = sv_cbt;
+  free(av.p); free(atmp);
   return 1;
 }
 
@@ -3080,6 +3091,142 @@ static void ctor_deferred_arm(int ci, const char *msg, Buf *b) {
 }
 
 
+/* The arm of a Class-value `new` with positional arguments, their values
+   in the boxed temps atmp, for class ci: the class's constructor, its
+   initialize or a record's generated one, takes them as at a static
+   `K.new(..)`. A class whose constructor takes some other count gets
+   CRuby's ArgumentError (aerr); one that cannot take them gets no arm. */
+static void emit_cv_positional_new_arm(Compiler *c, int id, int ci, int argc, const int *argv, const int *atmp, int rt2,
+                                       CtorArityArms *aerr, Buf *b) {
+  const NodeTable *nt = c->nt;
+  int initm = comp_method_in_chain(c, ci, "initialize", NULL);
+  /* a class whose constructor takes some other count: CRuby's
+     ArgumentError, where the default arm raised NoMethodError */
+  { char am[256];
+    if (ctor_arity_error(c, ci, initm, argc, am, sizeof am)) {
+      ctor_arity_add(aerr, ci, am);
+      return;
+    } }
+  /* a module has no `new`, and a class no object of may exist has no
+     constructor to name (class_has_ctor, as in the arms below) */
+  if (!class_has_ctor(&c->classes[ci])) return;
+  int np = initm >= 0 ? c->scopes[initm].nparams : 0;
+  int nreq = initm >= 0 ? c->scopes[initm].nrequired : 0;
+  /* A Struct or Data class has a GENERATED constructor taking its members
+     positionally rather than an `initialize` scope, so the arity test above
+     finds nothing and the class was skipped entirely -- the switch came out
+     empty and `instance.class.new(...)` answered the nil seed (#3945). */
+  int kw_ctor = 0;
+  /* A Struct with its own initialize constructs through it, like any
+     class: its sp_<S>_new takes that initialize's parameters. Skipping it
+     here left `k.new(v)` on such a class to the NoMethodError default,
+     while the splat form (emit_class_value_new_kw) built it. A yielding
+     one is spliced at static sites only and has no constructor to call. */
+  if (c->classes[ci].is_struct && initm >= 0 && c->scopes[initm].yields) return;
+  if (c->classes[ci].is_struct && initm < 0) {
+    np = nreq = c->classes[ci].nmembers;
+    /* a positional Hash standing for every member (keywords take the
+       layout of emit_class_value_new_kw) */
+    if (argc == 1 && argv && nt_kind(nt, argv[0]) == NK_HashNode) kw_ctor = 1;
+  }
+  /* An `initialize` with OPTIONAL parameters is reachable at any argc
+     between its required count and its total, with the rest filled from
+     their defaults -- which is what a statically known `Klass.new` has
+     always done. The test here demanded argc == nparams == nrequired, so a
+     constructor as ordinary as `initialize(path, initheader = nil)` matched
+     no class at all, the switch came out EMPTY, and `k.new(x)` answered the
+     nil seed with no diagnostic (#4417). The report read the trigger as
+     nesting because the class that bit was `Net::HTTP::Get`; a top-level
+     class with the same signature does it too.
+     A struct's generated constructor has no scope to take defaults from, so
+     it keeps the exact test, and a default that reads self cannot be
+     evaluated at a call site. Both of those now decline into the raise
+     below rather than into nil. */
+  /* A plain Struct takes fewer members than it has (the rest are nil)
+     and refuses more, as the static `S.new(...)` does; the exact test
+     turned both into NoMethodError. Data and keyword_init keep it. */
+  int nil_fill = initm < 0 && struct_nil_fills(&c->classes[ci]);
+  if (nil_fill && argc > np) {
+    buf_printf(b, "case %d: sp_raise_cls(\"ArgumentError\", \"struct size differs\"); break;", ci);
+    return;
+  }
+  if (!kw_ctor && !nil_fill) {
+    if (initm < 0) {
+      if (argc != np || nreq != np) return;
+    }
+    else {
+      if (!ctor_arm_takes(c, &c->scopes[initm], argc)) return;
+    }
+  }
+  /* the arguments' places by the call's layout, and no class whose
+     parameters could not hold them (ctor_arm_incompat) */
+  Scope *is2 = initm >= 0 ? &c->scopes[initm] : NULL;
+  ArgLayout L;
+  arg_layout(c, is2, NULL, argc, -1, 0, &L);
+  if (ctor_arm_incompat(c, is2, &L, argv)) { arg_layout_free(&L); return; }
+  int pd_uid = is2 && default_refs_earlier_param(c, is2) ? ++g_tmp : 0, pd_base = g_nren;
+  Buf pdpre; memset(&pdpre, 0, sizeof pdpre);
+  Buf ab; memset(&ab, 0, sizeof ab);
+  /* a default reading the instance: allocate first, then run initialize
+     on the object with self bound to it, as emit_ctor_alloc_init does */
+  const char *sv_cs = g_ctor_self, *sv_csd = g_ctor_self_deref;
+  char *selftxt = NULL;
+  int self_t = -1;
+  if (ctor_needs_self_defaults(c, initm, argc)) {
+    self_t = ctor_alloc_decl(c, ci, &pdpre);
+    selftxt = ctor_self_text(c, ci, self_t);
+    g_ctor_self = selftxt;
+    g_ctor_self_deref = comp_ty_value_obj(c, ty_object(ci)) ? "." : "->";
+  }
+  /* the arm's own statements, a default's hoists among them: ahead of
+     the switch they ran for every class */
+  Buf *sv_pre = g_pre;
+  g_pre = &pdpre;
+  for (int j = 0; j < np; j++) {
+    if (j) buf_puts(&ab, ", ");
+    if (is2) {
+      Buf ub; memset(&ub, 0, sizeof ub);
+      emit_ctor_arm_param(c, is2, j, &L, atmp, &pdpre, &ub);
+      ctor_arm_arg(c, is2, j, ub.p ? ub.p : "", pd_uid, &pdpre, &ab); free(ub.p);
+      continue;
+    }
+    TyKind pt = TY_POLY;
+    /* a generated member constructor takes the member's own slot type */
+    if (c->classes[ci].is_struct) {
+      char mvn[300]; snprintf(mvn, sizeof mvn, "@%s", c->classes[ci].readers[j]);
+      int mvi = comp_ivar_index(&c->classes[ci], mvn);
+      if (mvi >= 0 && c->classes[ci].ivar_types[mvi] != TY_UNKNOWN)
+        pt = c->classes[ci].ivar_types[mvi];
+    }
+    char tn[24];
+    if (kw_ctor) {
+      char probe[420];
+      snprintf(probe, sizeof probe,
+               "sp_poly_hash_probe(_t%d, sp_box_sym(sp_sym_intern(\"%s\")), &_kwf)",
+               atmp[0], c->classes[ci].readers[j]);
+      buf_puts(&ab, "({ sp_bool _kwf; sp_RbVal _kwv = ");
+      buf_puts(&ab, probe);
+      buf_puts(&ab, "; (void)_kwf; ");
+      if (pt == TY_POLY) buf_puts(&ab, "_kwv");
+      else emit_unbox_text(c, pt, "_kwv", &ab);
+      buf_puts(&ab, "; })");
+      continue;
+    }
+    if (j >= argc) { buf_puts(&ab, default_value_from_compiler(c, pt)); continue; }   /* a nil-filled member */
+    snprintf(tn, sizeof tn, "_t%d", atmp[j]);
+    if (pt != TY_POLY) emit_unbox_text(c, pt, tn, &ab);
+    else buf_puts(&ab, tn);
+  }
+  arg_layout_free(&L);
+  g_nren = pd_base;
+  g_pre = sv_pre;
+  g_ctor_self = sv_cs; g_ctor_self_deref = sv_csd;
+  free(selftxt);
+  emit_ctor_block_slot(c, id, initm, np > 0 ? ", " : "", &ab);
+  emit_ctor_arm_case(c, ci, rt2, self_t, pdpre.p, ab.p ? ab.p : "", is2 || kw_ctor ? -1 : argc, b);
+  free(pdpre.p); free(ab.p);
+}
+
 const unsigned char *g_poly_new_only = NULL;
 
 /* new and allocate on a Class value, a poly receiver, self's class or a constant */
@@ -3131,132 +3278,7 @@ int emit_call_new_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const c
       if (emit_user_new_arm(c, id, ci, argc, atmp, 1, rt2, b)) continue;
       if (emit_cv_new_arm(c, id, ci, argc, atmp, rt2, b)) continue;
       if (emit_exc_sub_new_arm(c, ci, argc, atmp, rt2, b)) continue;
-      int initm = comp_method_in_chain(c, ci, "initialize", NULL);
-      /* a class whose constructor takes some other count: CRuby's
-         ArgumentError, where the default arm raised NoMethodError */
-      { char am[256];
-        if (ctor_arity_error(c, ci, initm, argc, am, sizeof am)) {
-          ctor_arity_add(&aerr, ci, am);
-          continue;
-        } }
-      /* a module has no `new`, and a class no object of may exist has no
-         constructor to name (class_has_ctor, as in the arms below) */
-      if (!class_has_ctor(&c->classes[ci])) continue;
-      int np = initm >= 0 ? c->scopes[initm].nparams : 0;
-      int nreq = initm >= 0 ? c->scopes[initm].nrequired : 0;
-      /* A Struct or Data class has a GENERATED constructor taking its members
-         positionally rather than an `initialize` scope, so the arity test above
-         finds nothing and the class was skipped entirely -- the switch came out
-         empty and `instance.class.new(...)` answered the nil seed (#3945). */
-      int kw_ctor = 0;
-      /* A Struct with its own initialize constructs through it, like any
-         class: its sp_<S>_new takes that initialize's parameters. Skipping it
-         here left `k.new(v)` on such a class to the NoMethodError default,
-         while the splat form (emit_class_value_new_kw) built it. A yielding
-         one is spliced at static sites only and has no constructor to call. */
-      if (c->classes[ci].is_struct && initm >= 0 && c->scopes[initm].yields) continue;
-      if (c->classes[ci].is_struct && initm < 0) {
-        np = nreq = c->classes[ci].nmembers;
-        /* a positional Hash standing for every member (keywords take the
-           layout of emit_class_value_new_kw) */
-        if (argc == 1 && argv && nt_kind(nt, argv[0]) == NK_HashNode) kw_ctor = 1;
-      }
-      /* An `initialize` with OPTIONAL parameters is reachable at any argc
-         between its required count and its total, with the rest filled from
-         their defaults -- which is what a statically known `Klass.new` has
-         always done. The test here demanded argc == nparams == nrequired, so a
-         constructor as ordinary as `initialize(path, initheader = nil)` matched
-         no class at all, the switch came out EMPTY, and `k.new(x)` answered the
-         nil seed with no diagnostic (#4417). The report read the trigger as
-         nesting because the class that bit was `Net::HTTP::Get`; a top-level
-         class with the same signature does it too.
-         A struct's generated constructor has no scope to take defaults from, so
-         it keeps the exact test, and a default that reads self cannot be
-         evaluated at a call site. Both of those now decline into the raise
-         below rather than into nil. */
-      /* A plain Struct takes fewer members than it has (the rest are nil)
-         and refuses more, as the static `S.new(...)` does; the exact test
-         turned both into NoMethodError. Data and keyword_init keep it. */
-      int nil_fill = initm < 0 && struct_nil_fills(&c->classes[ci]);
-      if (nil_fill && argc > np) {
-        buf_printf(b, "case %d: sp_raise_cls(\"ArgumentError\", \"struct size differs\"); break;", ci);
-        continue;
-      }
-      if (!kw_ctor && !nil_fill) {
-        if (initm < 0) {
-          if (argc != np || nreq != np) continue;
-        }
-        else {
-          if (!ctor_arm_takes(c, &c->scopes[initm], argc)) continue;
-        }
-      }
-      /* the arguments' places by the call's layout, and no class whose
-         parameters could not hold them (ctor_arm_incompat) */
-      Scope *is2 = initm >= 0 ? &c->scopes[initm] : NULL;
-      ArgLayout L;
-      arg_layout(c, is2, NULL, argc, -1, 0, &L);
-      if (ctor_arm_incompat(c, is2, &L, argv)) { arg_layout_free(&L); continue; }
-      int pd_uid = is2 && default_refs_earlier_param(c, is2) ? ++g_tmp : 0, pd_base = g_nren;
-      Buf pdpre; memset(&pdpre, 0, sizeof pdpre);
-      Buf ab; memset(&ab, 0, sizeof ab);
-      /* a default reading the instance: allocate first, then run initialize
-         on the object with self bound to it, as emit_ctor_alloc_init does */
-      const char *sv_cs = g_ctor_self, *sv_csd = g_ctor_self_deref;
-      char *selftxt = NULL;
-      int self_t = -1;
-      if (ctor_needs_self_defaults(c, initm, argc)) {
-        self_t = ctor_alloc_decl(c, ci, &pdpre);
-        selftxt = ctor_self_text(c, ci, self_t);
-        g_ctor_self = selftxt;
-        g_ctor_self_deref = comp_ty_value_obj(c, ty_object(ci)) ? "." : "->";
-      }
-      /* the arm's own statements, a default's hoists among them: ahead of
-         the switch they ran for every class */
-      Buf *sv_pre = g_pre;
-      g_pre = &pdpre;
-      for (int j = 0; j < np; j++) {
-        if (j) buf_puts(&ab, ", ");
-        if (is2) {
-          Buf ub; memset(&ub, 0, sizeof ub);
-          emit_ctor_arm_param(c, is2, j, &L, atmp, &pdpre, &ub);
-          ctor_arm_arg(c, is2, j, ub.p ? ub.p : "", pd_uid, &pdpre, &ab); free(ub.p);
-          continue;
-        }
-        TyKind pt = TY_POLY;
-        /* a generated member constructor takes the member's own slot type */
-        if (c->classes[ci].is_struct) {
-          char mvn[300]; snprintf(mvn, sizeof mvn, "@%s", c->classes[ci].readers[j]);
-          int mvi = comp_ivar_index(&c->classes[ci], mvn);
-          if (mvi >= 0 && c->classes[ci].ivar_types[mvi] != TY_UNKNOWN)
-            pt = c->classes[ci].ivar_types[mvi];
-        }
-        char tn[24];
-        if (kw_ctor) {
-          char probe[420];
-          snprintf(probe, sizeof probe,
-                   "sp_poly_hash_probe(_t%d, sp_box_sym(sp_sym_intern(\"%s\")), &_kwf)",
-                   atmp[0], c->classes[ci].readers[j]);
-          buf_puts(&ab, "({ sp_bool _kwf; sp_RbVal _kwv = ");
-          buf_puts(&ab, probe);
-          buf_puts(&ab, "; (void)_kwf; ");
-          if (pt == TY_POLY) buf_puts(&ab, "_kwv");
-          else emit_unbox_text(c, pt, "_kwv", &ab);
-          buf_puts(&ab, "; })");
-          continue;
-        }
-        if (j >= argc) { buf_puts(&ab, default_value_from_compiler(c, pt)); continue; }   /* a nil-filled member */
-        snprintf(tn, sizeof tn, "_t%d", atmp[j]);
-        if (pt != TY_POLY) emit_unbox_text(c, pt, tn, &ab);
-        else buf_puts(&ab, tn);
-      }
-      arg_layout_free(&L);
-      g_nren = pd_base;
-      g_pre = sv_pre;
-      g_ctor_self = sv_cs; g_ctor_self_deref = sv_csd;
-      free(selftxt);
-      emit_ctor_block_slot(c, id, initm, np > 0 ? ", " : "", &ab);
-      emit_ctor_arm_case(c, ci, rt2, self_t, pdpre.p, ab.p ? ab.p : "", is2 || kw_ctor ? -1 : argc, b);
-      free(pdpre.p); free(ab.p);
+      emit_cv_positional_new_arm(c, id, ci, argc, argv, atmp, rt2, &aerr, b);
     }
     /* A class the switch has no arm for is a program that cannot construct it,
        which is a raise -- the sibling emitter below has always said so. Without

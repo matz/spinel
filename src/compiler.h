@@ -1565,6 +1565,7 @@ typedef struct {
                           as the builtin Object wherever Ruby can see it (its
                           name, #class, instance_of?: visible_cls_id). */
   int has_arysub;      /* some class is an Array or Hash subclass (ClassInfo.ary_root, #7449) */
+  int has_record;      /* some class is a Struct or Data class (register_struct_members) */
   /* the nodes infer_type answered as an Array subclass instance's Array
      (ary_operand, an_ary_viewed_mark), indexed by node; NULL until one is */
   unsigned char *ary_viewed;

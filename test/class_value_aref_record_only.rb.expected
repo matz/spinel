@@ -1,0 +1,5 @@
+#<struct S a=1, b=2>
+#<struct S a=3, b=nil>
+#<data D x=7>
+{1 => 2}
+[1, 2]

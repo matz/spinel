@@ -32845,7 +32845,8 @@ static int ctor_convert_params(Compiler *c) {
    initialize binds (1 for `raise C, s`) and *boxed set when the call
    dispatches on a class value and so hands its arguments over boxed. `C.new`
    reaches C's; `new` or `self.new` in a class method, the class's and its
-   subclasses'; a class value, the classes its switch has an arm for. A
+   subclasses'; a class value, the classes its switch has an arm for (for
+   its `[]`, the Struct and Data classes, whose `[]` is `new`: cplan_as_new). A
    class with a `new` of its own is not constructed by the call. */
 int dynamic_new_may_reach(Compiler *c, int call_id, int cid);
 int ctor_call_targets(Compiler *c, int u, int *first, int *boxed, int *out, int cap) {
@@ -32855,7 +32856,7 @@ int ctor_call_targets(Compiler *c, int u, int *first, int *boxed, int *out, int 
   const char *un = nt_str(nt, u, "name");
   if (!un) return 0;
   int recv = nt_ref(nt, u, "receiver"), cls = -1, sub = 0, any = 0;
-  if (sp_streq(un, "new")) {
+  if (cplan_as_new(c, u, -1)) {
     NodeKind rk = recv >= 0 ? nt_kind(nt, recv) : NK_SelfNode;
     Scope *es = comp_scope_of(c, u);
     if (rk == NK_ConstantReadNode || rk == NK_ConstantPathNode) {
@@ -32891,7 +32892,7 @@ int ctor_call_targets(Compiler *c, int u, int *first, int *boxed, int *out, int 
      exception class (emit_raise_class_value) */
   if (any) {
     for (int k = 0; k < c->nclasses && n < cap; k++) {
-      if (any == 2 ? !dynamic_new_may_reach(c, u, k) : !class_is_exc_subclass(c, k)) continue;
+      if (any == 2 ? !cplan_as_new(c, u, k) || !dynamic_new_may_reach(c, u, k) : !class_is_exc_subclass(c, k)) continue;
       int mi = comp_method_in_chain(c, k, "initialize", NULL);
       if (mi < 0 || c->scopes[mi].is_cmethod) continue;
       int dup = 0;
@@ -42479,9 +42480,9 @@ static void mark_nullable_int_locals(Compiler *c) {
        argument, or to nil when the construction does not supply one
        (`S.new(1)` of two members; a Data raises instead). */
     NT_FOREACH_KIND(nt, NK_CallNode, id) {
-      const char *cn = nt_str(nt, id, "name");
       int recv = nt_ref(nt, id, "receiver");
-      if (!cn || !sp_streq(cn, "new")) continue;
+      /* (a Class value's `[]` on a record builds as its `new`, cplan_as_new) */
+      if (!cplan_as_new(c, id, -1)) continue;
       NodeKind rk = recv >= 0 ? nt_kind(nt, recv) : NK_SelfNode;
       /* the classes the receiver can be: a class value chosen at run time
          (`(c ? A : B).new`, `[A, B][i].new`) is each of them */

@@ -8747,6 +8747,13 @@ static int poly_last_splat(const NodeTable *nt, int argc, const int *argv) {
     if (nt_kind(nt, argv[a]) == NK_SplatNode) last = a;
   return last;
 }
+static int kwh_values_held(const NodeTable *nt, int kwh) {
+  int en = 0;
+  const int *el = nt_arr(nt, kwh, "elements", &en);
+  for (int e = 0; e < en; e++)
+    if (!arg_ran_first(nt_ref(nt, el[e], "value"), 0)) return 0;
+  return 1;
+}
 static int bi_default_probe(Compiler *c, int id, int recv, const char *name, int argc, const int *argv,
                             const int *atmp, const TyKind *atmp_ty, TyKind ret, TyKind bt, int slot_o,
                             int nil_fwd, int tv, Buf *nb, char **arm_pre, int *box_o) {
@@ -8783,6 +8790,9 @@ static int bi_default_probe(Compiler *c, int id, int recv, const char *name, int
       continue;
     }
     if (!subtree_has_side_effect(c, argv[a])) continue;
+    /* (a keyword hash whose values are all held reads them, as the arm
+       check above takes it; atmp holds no temp of the hash itself) */
+    if (nt_kind(nt, argv[a]) == NK_KeywordHashNode && kwh_values_held(nt, argv[a])) continue;
     /* --share-strings: one the dispatch bound with its handle keeps that
        binding (ran_first_handle), the same temp */
     if (ran_first_handle(argv[a]) >= 0) continue;
@@ -8874,13 +8884,10 @@ static int emit_poly_builtin_default_at(Compiler *c, int id, int recv, const cha
   for (int a = 0; a < argc; a++) {
     int is_splat = nt_kind(nt, argv[a]) == NK_SplatNode;
     if (is_splat && !splat_ok) return 0;
-    /* pack reads the keyword's value, already held by operand ordering. */
-    if (nt_kind(nt, argv[a]) == NK_KeywordHashNode && bop_share_named(BOP_ANY_ARRAY, name) == BSH_PACK) {
-      int en = 0, held = 1;
-      const int *el = nt_arr(nt, argv[a], "elements", &en);
-      for (int e = 0; e < en; e++)
-        if (!arg_ran_first(nt_ref(nt, el[e], "value"), 0)) held = 0;
-      if (held) continue;
+    /* a keyword hash whose every value the dispatch already holds (pack's
+       operand ordering, or the per-key temps) is read from those */
+    if (nt_kind(nt, argv[a]) == NK_KeywordHashNode) {
+      if (kwh_values_held(nt, argv[a])) continue;
     }
     /* (--share-strings: an assignment's right-hand side held as the handle
        its arms store, which the re-entry reads as that handle) */

@@ -87,75 +87,144 @@ static unsigned bcv_key_hash(const char *name, const Scope *sc) {
   return h;
 }
 
+/* The class local write `w` assigns by itself: a builtin or program class
+   constant, or a path to a program class (`m = Shop::Inflector`, by the
+   name the class table keys it); NULL for a read of another local, whose
+   fact is that local's; `dyn` for any other value, or a write that binds no
+   value a constant names (a multiple-assignment, for, rescue or pattern
+   target, an op-write). */
+static const char *bcv_write_class(Compiler *c, int w, const char *dyn) {
+  const NodeTable *nt = c->nt;
+  if (!local_write_binds_value(nt_kind(nt, w))) return dyn;
+  int val = nt_ref(nt, w, "value");
+  NodeKind vk = val >= 0 ? nt_kind(nt, val) : NK_NONE;
+  if (vk == NK_ConstantPathNode) {
+    int pci = const_node_class_index(c, val);
+    return pci >= 0 ? c->classes[pci].name : dyn;
+  }
+  if (vk == NK_LocalVariableReadNode) return nt_str(nt, val, "name") ? NULL : dyn;
+  const char *cn = vk == NK_ConstantReadNode ? nt_key_name(nt, val) : NULL;
+  return cn && (is_builtin_class_name(cn) || const_node_class_index(c, val) >= 0) ? cn : dyn;
+}
+
+/* The pass's locals, one per (name, scope), each with the class its writes
+   hold so far: NULL while none is known, a class name, or the pass's `dyn`
+   mark (dynamic). */
+typedef struct {
+  int *head, *next;       /* (name, scope) hash chains over the locals */
+  const char **name;
+  Scope **scope;
+  const char **fact;
+  int *copies;            /* the first copy write that reads the local */
+  int n;
+  unsigned mask;
+} BcvLocals;
+
+/* The local of (name, sc), made when `add` is set; -1 where there is none. */
+static int bcv_local(BcvLocals *t, const char *name, Scope *sc, int add) {
+  unsigned h = bcv_key_hash(name, sc) & t->mask;
+  for (int l = t->head[h]; l >= 0; l = t->next[l])
+    if (t->scope[l] == sc && sp_streq(t->name[l], name)) return l;
+  if (!add) return -1;
+  int l = t->n++;
+  t->name[l] = name; t->scope[l] = sc; t->fact[l] = NULL; t->copies[l] = -1;
+  t->next[l] = t->head[h];
+  t->head[h] = l;
+  return l;
+}
+
+/* The meet of two facts: unknown gives way to a class, and two classes,
+   or dynamic, are dynamic. */
+static const char *bcv_meet(const char *a, const char *b, const char *dyn) {
+  if (!a) return b;
+  if (!b || a == b) return a;
+  return a != dyn && b != dyn && sp_streq(a, b) ? a : dyn;
+}
+
 int desugar_builtin_class_var_recv(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int changed = 0;
   int n0 = nt->count;
 
-  /* Index every local write by (variable name, scope) once, so
-     resolving a receiver's static class scans only the writes that could
-     actually bind it instead of the whole node table per receiver. Turns the
-     pass from O(receivers * N) into O(N) -- the quadratic that stalled the
-     lobsters tree (#3115). Scope belongs in the key because a hot name reused
-     across many scopes otherwise leaves one long chain whose every entry needs
-     its scope resolved. Inlines the old builtin_class_var_static_name
-     resolution over the index. */
+  /* One local per (variable name, scope), indexed once, so a receiver's
+     class is one lookup instead of a scan of the node table per receiver
+     (the quadratic that stalled the lobsters tree, #3115). Scope belongs in
+     the key because a hot name reused across many scopes otherwise leaves
+     one long chain whose every entry needs its scope resolved.
+
+     A local's class is a fixpoint over the copies between locals (`k = IO;
+     r = k`, also the hold a call's split makes of its receiver): a local
+     holds the meet of what its writes assign, and a copy assigns what its
+     source local holds. A fact only moves from unknown to one class to
+     dynamic, and a local whose fact changes re-queues the locals its copies
+     write, so each copy is met at most twice and the pass stays linear. A
+     cycle of copies holds the class coming into it, and one nothing comes
+     into is dynamic. */
   int nbuckets = 16;
   while (nbuckets < n0) nbuckets <<= 1;
-  int *head = malloc((size_t)nbuckets * sizeof(int));
-  int *wnext = malloc((size_t)(n0 > 0 ? n0 : 1) * sizeof(int));
-  if (!head || !wnext) { free(head); free(wnext); return 0; }
-  for (int i = 0; i < nbuckets; i++) head[i] = -1;
-  unsigned mask = (unsigned)nbuckets - 1;
-  for (int w = 0; w < n0; w++) {
-    if (!comp_is_local_write(nt_kind(nt, w))) continue;
-    const char *wn = nt_str(nt, w, "name");
-    if (!wn) continue;
-    unsigned h = bcv_key_hash(wn, comp_scope_of(c, w)) & mask;
-    wnext[w] = head[h];
-    head[h] = w;
-  }
-
-  for (int id = 0; id < n0; id++) {
-    if (nt_kind(nt, id) != NK_CallNode) continue;
-    int recv = nt_ref(nt, id, "receiver");
-    if (recv < 0 || nt_kind(nt, recv) != NK_LocalVariableReadNode) continue;
-    const char *vn = nt_str(nt, recv, "name");
-    if (!vn) continue;
-    Scope *sc = comp_scope_of(c, recv);
-    unsigned h = bcv_key_hash(vn, sc) & mask;
-    /* every write of this local in this scope must assign the SAME builtin (or
-       user-class) constant, else the local is dynamic and does not retarget */
-    const char *cn = NULL;
-    int bail = 0;
-    for (int w = head[h]; w >= 0; w = wnext[w]) {
-      const char *wn = nt_str(nt, w, "name");
-      if (!wn || !sp_streq(wn, vn) || comp_scope_of(c, w) != sc) continue;
-      if (!local_write_binds_value(nt_kind(nt, w))) { bail = 1; break; }
-      int val = nt_ref(nt, w, "value");
-      NodeKind vk = val >= 0 ? nt_kind(nt, val) : NK_NONE;
-      const char *vcn = vk == NK_ConstantReadNode ? nt_str(nt, val, "name") : NULL;
-      /* a path to a class of the program (`m = Shop::Inflector`): that
-         class, by the name the class table keys it */
-      if (vk == NK_ConstantPathNode) {
-        int pci = const_node_class_index(c, val);
-        vcn = pci >= 0 ? c->classes[pci].name : NULL;
-      }
-      else if (vcn && !(is_builtin_class_name(vcn) || const_node_class_index(c, val) >= 0)) vcn = NULL;
-      if (!vcn) { bail = 1; break; }
-      if (cn && !sp_streq(cn, vcn)) { bail = 1; break; }
-      cn = vcn;
+  size_t nn = (size_t)(n0 > 0 ? n0 : 1);
+  char dyn_mark = 0;
+  const char *dyn = &dyn_mark;
+  BcvLocals t = { malloc((size_t)nbuckets * sizeof(int)), malloc(nn * sizeof(int)),
+                  malloc(nn * sizeof(char *)), malloc(nn * sizeof(Scope *)),
+                  malloc(nn * sizeof(char *)), malloc(nn * sizeof(int)), 0,
+                  (unsigned)nbuckets - 1 };
+  int *wloc = malloc(nn * sizeof(int)), *cnext = malloc(nn * sizeof(int));
+  int *queue = malloc(nn * sizeof(int));
+  unsigned char *inq = calloc(nn, 1);
+  int ok = t.head && t.next && t.name && t.scope && t.fact && t.copies && wloc && cnext && queue && inq;
+  if (ok) {
+    for (int i = 0; i < nbuckets; i++) t.head[i] = -1;
+    for (int w = 0; w < n0; w++) {
+      const char *wn = comp_is_local_write(nt_kind(nt, w)) ? nt_str(nt, w, "name") : NULL;
+      if (wn) wloc[w] = bcv_local(&t, wn, comp_scope_of(c, w), 1);
     }
-    if (bail || !cn) continue;
-    int cr = nt_new_node(nt, "ConstantReadNode");
-    if (cr < 0) continue;
-    nt_node_set_str(nt, cr, "name", cn);
-    comp_grow_node_arrays(c);
-    c->nscope[cr] = c->nscope[id];
-    nt_node_set_ref(nt, id, "receiver", cr);
-    changed = 1;
+    /* each write's own class; a copy is chained under the local it reads,
+       and one of a local no write binds is dynamic */
+    for (int w = 0; w < n0; w++) {
+      if (!comp_is_local_write(nt_kind(nt, w)) || !nt_str(nt, w, "name")) continue;
+      const char *wc = bcv_write_class(c, w, dyn);
+      if (!wc) {
+        int val = nt_ref(nt, w, "value");
+        int src = bcv_local(&t, nt_str(nt, val, "name"), comp_scope_of(c, val), 0);
+        if (src >= 0) { cnext[w] = t.copies[src]; t.copies[src] = w; continue; }
+        wc = dyn;
+      }
+      t.fact[wloc[w]] = bcv_meet(t.fact[wloc[w]], wc, dyn);
+    }
+    int qhead = 0, qcount = 0;
+    for (int l = 0; l < t.n; l++)
+      if (t.fact[l]) { queue[qcount++] = l; inq[l] = 1; }
+    while (qcount > 0) {
+      int l = queue[qhead];
+      qhead = (qhead + 1) % t.n; qcount--; inq[l] = 0;
+      for (int d = t.copies[l]; d >= 0; d = cnext[d]) {
+        int to = wloc[d];
+        const char *f = bcv_meet(t.fact[to], t.fact[l], dyn);
+        if (f == t.fact[to]) continue;
+        t.fact[to] = f;
+        if (!inq[to]) { queue[(qhead + qcount++) % t.n] = to; inq[to] = 1; }
+      }
+    }
+
+    for (int id = 0; id < n0; id++) {
+      if (nt_kind(nt, id) != NK_CallNode) continue;
+      int recv = nt_ref(nt, id, "receiver");
+      if (recv < 0 || nt_kind(nt, recv) != NK_LocalVariableReadNode || !nt_str(nt, recv, "name")) continue;
+      int l = bcv_local(&t, nt_str(nt, recv, "name"), comp_scope_of(c, recv), 0);
+      const char *cn = l >= 0 ? t.fact[l] : NULL;
+      if (!cn || cn == dyn) continue;
+      int cr = nt_new_node(nt, "ConstantReadNode");
+      if (cr < 0) continue;
+      nt_node_set_str(nt, cr, "name", cn);
+      comp_grow_node_arrays(c);
+      c->nscope[cr] = c->nscope[id];
+      nt_node_set_ref(nt, id, "receiver", cr);
+      changed = 1;
+    }
   }
-  free(head); free(wnext);
+  free(t.head); free(t.next); free(t.name); free(t.scope); free(t.fact); free(t.copies);
+  free(wloc); free(cnext); free(queue); free(inq);
   return changed;
 }
 

@@ -358,7 +358,8 @@ typedef struct BuiltinOp {
 /* The method takes keywords in CRuby (clone(freeze:), round(half:),
    step(by:, to:), sample(random:), pack(buffer:), lines(chomp:) ...): a `**`
    operand of its call is the method's own. A name with a row that lacks the
-   flag takes none (bop_name_kwless), and builtin_name_takes_keywords answers
+   flag takes none (bop_name_kwless; a library's row where the program
+   requires the library), and builtin_name_takes_keywords answers
    for the names a splat dispatch keeps the `**` of. */
 #define BOPF_KEYWORDS 4096
 /* A row of a function the compiler makes calls to and the program cannot

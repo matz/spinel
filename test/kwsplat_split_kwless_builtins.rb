@@ -37,6 +37,8 @@ t("boxed closed? f") { io.closed?(**f) }
 t("boxed winsize f") { io.winsize(**f) }
 t("boxed winsize pair") { io.winsize(a: 1) }
 t("boxed noecho e") { io.noecho(**e) { |i| 5 } }
+t("boxed winsize e") { io.winsize(**e) }
+t("boxed send winsize= e") { io.send(:winsize=, [1, 2], **e) }
 # a keyword fact holds only where it holds on each class one kind stands
 # for: SizedQueue#push and #enq take timeout:
 q = SizedQueue.new(3)

@@ -3207,12 +3207,16 @@ int bop_flags(TyKind rt, const char *name) {
 }
 
 /* The rows are sorted by kind, so a name's rows lie apart: the scan is over
-   the table, with the first letter tested before the name. */
+   the table, with the first letter tested before the name. A library's row
+   says what CRuby's method takes only where the program requires the
+   library: the default require mode provides it anyway, but there CRuby
+   has no such method, and the call is the program's or NoMethodError's. */
 static int bop_name_rows(const char *name, int want_kw) {
   if (!name) return 0;
   for (int i = 0; i < BOP_NROWS; i++) {
     const BuiltinOp *r = &bop_rows[i];
     if (r->name[0] != name[0] || !sp_streq(r->name, name)) continue;
+    if (r->feature && !sp_feature_required(r->feature)) continue;
     if (!!(r->flags & BOPF_KEYWORDS) == want_kw) return 1;
   }
   return 0;

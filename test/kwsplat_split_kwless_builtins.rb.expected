@@ -20,6 +20,8 @@ boxed closed? f: ArgumentError: wrong number of arguments (given 1, expected 0)
 boxed winsize f: NoMethodError: undefined method 'winsize' for an instance of IO
 boxed winsize pair: NoMethodError: undefined method 'winsize' for an instance of IO
 boxed noecho e: NoMethodError: undefined method 'noecho' for an instance of IO
+boxed winsize e: NoMethodError: undefined method 'winsize' for an instance of IO
+boxed send winsize= e: NoMethodError: undefined method 'winsize=' for an instance of IO
 sized push: 1
 sized push e: 2
 sized enq w: 3

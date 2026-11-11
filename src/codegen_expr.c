@@ -1882,7 +1882,10 @@ int emit_call_or_write_via_methods(Compiler *c, int id, int is_or, Buf *b) {
       LocalVar *pv = (ws->nparams > 0 && ws->pnames[0]) ? scope_local(ws, ws->pnames[0]) : NULL;
       TyKind pt = pv ? pv->type : vt;
       char sw[32]; snprintf(sw, sizeof sw, "_t%d", tw);
-      emit_coerce_text(c, v, vt, pt, CO_HOLD, sw, "a conditional attribute writer's argument", b);
+      /* a writer whose parameter can be nil takes the oint: the plain value
+         lifted (`self.count ||= 0` on an Integer? writer) */
+      if (pv && slot_is_oint(pv) && pt == vt && oint_kind(vt)) buf_printf(b, "%s(%s)", oint_of(vt), sw);
+      else emit_coerce_text(c, v, vt, pt, CO_HOLD, sw, "a conditional attribute writer's argument", b);
     }
     buf_puts(b, ")");
   }

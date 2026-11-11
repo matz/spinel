@@ -1135,7 +1135,7 @@ TyKind hash_merge_block_value_ty(Compiler *c, int id);
    type a yield, and the emitter joins it with the same tail to type the
    splice the yield reads -- one answer for one question. */
 TyKind block_next_value_ty(Compiler *c, int node);
-TyKind block_store_value_ty(Compiler *c, int body, TyKind tail, TyKind joined, TyKind elem);
+TyKind block_store_value_ty(Compiler *c, int body, int tail, TyKind joined, TyKind elem, unsigned *num);
 
 /* True if CallNode `id` is an Enumerable method on a Range that spinel does not
    handle natively but supports on arrays -- served by materializing the range

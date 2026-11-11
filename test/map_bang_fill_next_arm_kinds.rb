@@ -84,3 +84,23 @@ p t
 u = [1, 2, 3]
 u.fill { |i| next(i == 0 ? nil : i) if i < 2; 9 }
 p u
+v = [1, 2, 3]
+v.map! { |x| next(x unless x == 2) if x < 3; 0 }
+p v
+w = [1, 2, 3]
+w.map! { |x| next(case x when 1 then "s" else 2 end) if x < 3; x }
+p w
+y = [1, 2, 3]
+y.map! { |x| next(x == 1 && "s") if x < 3; x }
+p y
+
+# rows whose values join before they meet: several `next`s, a ternary
+r = [[1, 2, 3], [4]]
+r[0].map! { |x| next 1.5 if x == 1; next 7 if x == 2; x }
+p r
+q = [[1, 2, 3], [4]]
+q[0].map! { |x| next 1.5 if x == 1; x == 2 ? 2 : 3.5 }
+p q
+z = [[1, 2, 3], [4]]
+z[0].map! { |x| next(x == 1 ? 1.5 : 2) if x < 3; x }
+p z

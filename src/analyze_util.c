@@ -3438,89 +3438,97 @@ static int bsv_foreign(TyKind t, TyKind want) {
   return k != TY_INT && k != TY_FLOAT && !ty_is_object(k);
 }
 
-/* The first value arm of expression `v` (an `if`, `unless` or ternary
-   answers one of its branches' last statements, `(e)` its last one) of a
-   kind bsv_foreign takes, or TY_UNKNOWN. The join of the arms can hide one:
-   `next(x == 1 ? "s" : 2)` is boxed, `next(i == 0 ? nil : i)` a nullable
-   Integer. */
-static TyKind bsv_arm_foreign_ty(Compiler *c, int v, TyKind want, int depth) {
-  const NodeTable *nt = c->nt;
-  if (v < 0 || depth > 32) return TY_UNKNOWN;
-  NodeKind k = nt_kind(nt, v);
-  if (k == NK_IfNode || k == NK_UnlessNode || k == NK_ElseNode || k == NK_ParenthesesNode ||
-      k == NK_StatementsNode) {
-    int arms[2] = { -1, -1 };
-    if (k == NK_ParenthesesNode) arms[0] = nt_ref(nt, v, "body");
-    else if (k == NK_StatementsNode) {
-      int n = 0; const int *b = nt_arr(nt, v, "body", &n);
-      arms[0] = n > 0 ? b[n - 1] : -1;
-    }
-    else {
-      arms[0] = nt_ref(nt, v, "statements");
-      if (k != NK_ElseNode) arms[1] = nt_ref(nt, v, k == NK_UnlessNode ? "else_clause" : "subsequent");
-    }
-    for (int i = 0; i < 2; i++) {
-      TyKind t = bsv_arm_foreign_ty(c, arms[i], want, depth + 1);
-      if (t != TY_UNKNOWN) return t;
-    }
-    return TY_UNKNOWN;
-  }
-  TyKind t = infer_type(c, v);
-  return bsv_foreign(t, want) ? t : TY_UNKNOWN;
+/* What block_store_value_ty gathers from a block's values: the first of a
+   kind bsv_foreign takes for `want`, and whether one is an Integer (1)
+   and one a Float (2). */
+typedef struct { TyKind want, found; unsigned num; } BsvArms;
+static void bsv_leaf(BsvArms *a, TyKind t) {
+  if (a->found == TY_UNKNOWN && bsv_foreign(t, a->want)) a->found = t;
+  if (t == TY_INT) a->num |= 1;
+  else if (t == TY_FLOAT) a->num |= 2;
 }
 
-/* The first `next` value under `node` that binds to the block (as
-   block_next_value_ty walks them) of a kind bsv_foreign takes, or
-   TY_UNKNOWN. A value whose join is not such a kind answers its first
-   such arm. */
-static TyKind block_next_foreign_ty(Compiler *c, int node, TyKind want) {
+/* Each value arm of expression `v` into `a`: an `if`, `unless`, `case`
+   or `begin` answers each of its branches' last statements (a missing
+   one nil), `&&` and `||` each side, `(e)` its last statement. The join
+   of the arms can hide one the Array cannot hold: `next(x == 1 ? "s" :
+   2)` is boxed, `next(x if x > 1)` a nullable Integer. */
+static void bsv_arms(Compiler *c, int v, BsvArms *a, int depth) {
   const NodeTable *nt = c->nt;
-  if (node < 0) return TY_UNKNOWN;
+  if (v < 0) { bsv_leaf(a, TY_NIL); return; }
+  if (depth > 32) { bsv_leaf(a, infer_type(c, v)); return; }
+  NodeKind k = nt_kind(nt, v);
+  if (k == NK_StatementsNode) {
+    int n = 0; const int *b = nt_arr(nt, v, "body", &n);
+    bsv_arms(c, n > 0 ? b[n - 1] : -1, a, depth + 1);
+  }
+  else if (k == NK_ParenthesesNode || (k == NK_BeginNode && nt_ref(nt, v, "rescue_clause") < 0 &&
+                                       nt_ref(nt, v, "else_clause") < 0))
+    bsv_arms(c, nt_ref(nt, v, k == NK_ParenthesesNode ? "body" : "statements"), a, depth + 1);
+  else if (k == NK_IfNode || k == NK_UnlessNode) {
+    bsv_arms(c, nt_ref(nt, v, "statements"), a, depth + 1);
+    bsv_arms(c, nt_ref(nt, v, k == NK_UnlessNode ? "else_clause" : "subsequent"), a, depth + 1);
+  }
+  else if (k == NK_ElseNode) bsv_arms(c, nt_ref(nt, v, "statements"), a, depth + 1);
+  else if (k == NK_CaseNode) {
+    int nw = 0; const int *whens = nt_arr(nt, v, "conditions", &nw);
+    for (int w = 0; w < nw; w++) bsv_arms(c, nt_ref(nt, whens[w], "statements"), a, depth + 1);
+    bsv_arms(c, nt_ref(nt, v, "else_clause"), a, depth + 1);
+  }
+  else if (k == NK_AndNode || k == NK_OrNode) {
+    bsv_arms(c, nt_ref(nt, v, "left"), a, depth + 1);
+    bsv_arms(c, nt_ref(nt, v, "right"), a, depth + 1);
+  }
+  else bsv_leaf(a, infer_type(c, v));
+}
+
+/* Each `next` value under `node` that binds to the block (as
+   block_next_value_ty walks them) into `a`, arm by arm. */
+static void block_next_arms(Compiler *c, int node, BsvArms *a) {
+  const NodeTable *nt = c->nt;
+  if (node < 0) return;
   NodeKind k = nt_kind(nt, node);
   if (k == NK_NextNode) {
-    TyKind t = block_next_value_ty(c, node);
-    if (bsv_foreign(t, want)) return t;
-    int a = nt_ref(nt, node, "arguments"); int an = 0;
-    const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &an) : NULL;
-    return an == 1 ? bsv_arm_foreign_ty(c, av[0], want, 0) : TY_UNKNOWN;
+    int ar = nt_ref(nt, node, "arguments"); int an = 0;
+    const int *av = ar >= 0 ? nt_arr(nt, ar, "arguments", &an) : NULL;
+    if (an == 1 && nt_kind(nt, av[0]) != NK_SplatNode) bsv_arms(c, av[0], a, 0);
+    else bsv_leaf(a, block_next_value_ty(c, node));
+    return;
   }
   if (k == NK_WhileNode || k == NK_UntilNode || k == NK_ForNode || k == NK_BlockNode ||
       k == NK_LambdaNode || k == NK_DefNode || k == NK_ClassNode || k == NK_ModuleNode)
-    return TY_UNKNOWN;
+    return;
   int nr = nt_num_refs(nt, node);
-  for (int i = 0; i < nr; i++) {
-    TyKind t = block_next_foreign_ty(c, nt_ref_at(nt, node, i), want);
-    if (t != TY_UNKNOWN) return t;
-  }
+  for (int i = 0; i < nr; i++) block_next_arms(c, nt_ref_at(nt, node, i), a);
   int na = nt_num_arrs(nt, node);
   for (int i = 0; i < na; i++) {
     int n = 0; const int *ids = nt_arr_at(nt, node, i, &n);
-    for (int j = 0; j < n; j++) {
-      TyKind t = block_next_foreign_ty(c, ids[j], want);
-      if (t != TY_UNKNOWN) return t;
-    }
+    for (int j = 0; j < n; j++) block_next_arms(c, ids[j], a);
   }
-  return TY_UNKNOWN;
 }
 
 /* The kind a block's value stores into an Array whose elements are `elem`
    (`a.map! { }`, `a.fill { }`), given `joined`, the block's tail type joined
-   with every `next` value (block_next_value_ty). The join can hide a value
-   the Array cannot hold: `next nil` beside an Integer tail joins to a
-   nullable Integer, and `next 1` beside `next "s"` to the boxed kind, which
-   the store evidence leaves alone. So the typed Array stayed, and the nil
-   raised TypeError or the String did not compile. When one value alone is
-   such a kind, it is answered, and the Array widens as it does for a block
+   with every `next` value (block_next_value_ty), and `tail`, its last
+   statement (-1 for none). The join can hide a value the Array cannot
+   hold: `next nil` beside an Integer tail joins to a nullable Integer, and
+   `next 1` beside `next "s"` to the boxed kind, which the store evidence
+   leaves alone. So the typed Array stayed, and the nil raised TypeError or
+   the String did not compile. The first value (tail or `next`, arm by arm)
+   of such a kind is answered, and the Array widens as it does for a block
    with that one value. An `elem` not known yet (TY_UNKNOWN or TY_POLY: a
    row read out of a table) answers so only for values of mixed kinds, with
-   one no Array of numbers or objects holds. `joined` otherwise. */
-TyKind block_store_value_ty(Compiler *c, int body, TyKind tail, TyKind joined, TyKind elem) {
+   one no Array of numbers or objects holds. `joined` otherwise. `*num`
+   is set to 3 when the values hold both an Integer and a Float. */
+TyKind block_store_value_ty(Compiler *c, int body, int tail, TyKind joined, TyKind elem, unsigned *num) {
+  *num = 0;
   if (elem == TY_POLY) elem = TY_UNKNOWN;
   if (elem == TY_UNKNOWN ? joined != TY_POLY : joined != TY_POLY && joined != elem) return joined;
-  TyKind want = elem == TY_STRBUF ? TY_STRING : elem;
-  if (bsv_foreign(tail, want)) return tail;
-  TyKind f = block_next_foreign_ty(c, body, want);
-  return f != TY_UNKNOWN ? f : joined;
+  BsvArms a = { elem == TY_STRBUF ? TY_STRING : elem, TY_UNKNOWN, 0 };
+  bsv_arms(c, tail, &a, 0);
+  block_next_arms(c, body, &a);
+  *num = a.num;
+  return a.found != TY_UNKNOWN ? a.found : joined;
 }
 
 /* The value a block forwarded out of method `emi` (`callee(&)`,

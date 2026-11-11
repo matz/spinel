@@ -19,9 +19,12 @@
 #
 # Each step of #10866's second stage converts one family to ask call_target,
 # and then lists the family in FAIL_FAMILIES (names from the list above): the
-# run fails when a listed family has any site left. The set is empty until a
-# family is converted. The run also fails when a program compiles without the
-# flag and fails or crashes with it.
+# run fails when a listed family has any site left. The run also fails when a
+# program compiles without the flag and fails or crashes with it.
+#
+# A read under a super node of a name other than the super's own (or its
+# shadow's or clone's) is another family's: implied, or presence for a
+# respond_to? that supers.
 #
 # --list FILE: the programs to compile, one per line, in place of the corpus
 # (test/*.rb, packages/*/test/*.rb, benchmark/*.rb, build/optcarrot-single.rb).
@@ -31,7 +34,7 @@
 set -u
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 cd "$ROOT" || exit 2
-FAIL_FAMILIES=""
+FAIL_FAMILIES="super"
 FAMILIES="call implied presence super send lists other pass"
 for f in $FAIL_FAMILIES; do
   case " $FAMILIES " in *" $f "*) ;; *) echo "method-table-check: FAIL_FAMILIES names $f, not one of: $FAMILIES" >&2; exit 2 ;; esac

@@ -150,6 +150,22 @@ static const char *why_name(int why) {
   return "?";
 }
 
+/* Is `name` the method the super at fn calls: the super's own name, the
+   shadow its scope reaches through the prepend chain, or the name its
+   proc-form clone runs under? */
+static int super_reads_own_name(Compiler *c, int fn, const char *name) {
+  const char *own[2];
+  int n = call_node_names(c, fn, own);
+  for (int i = 0; i < n; i++)
+    if (own[i] && sp_streq(own[i], name)) return 1;
+  const Scope *s = comp_scope_of(c, fn);
+  s = s ? comp_super_site(c, s) : NULL;
+  if (!s) return 0;
+  const char *shadow = comp_super_shadow(c, s);
+  const char *u = comp_scope_user_name(s);
+  return (shadow && sp_streq(shadow, name)) || (u && sp_streq(u, name)) || (s->name && sp_streq(s->name, name));
+}
+
 /* The family of the reader: what the node being inferred or emitted is, by
    the names it calls (call_node_names) and the predicates of
    builtin_names.c. A node with no frame is a pass: family "pass", with the
@@ -157,7 +173,14 @@ static const char *why_name(int why) {
 static const char *reader_family(Compiler *c, int fn, const char *name) {
   const NodeTable *nt = c->nt;
   NodeKind k = nt_kind(nt, fn);
-  if (k == NK_SuperNode || k == NK_ForwardingSuperNode) return "super";
+  if (k == NK_SuperNode || k == NK_ForwardingSuperNode) {
+    if (super_reads_own_name(c, fn, name)) return "super";
+    /* another name's question, asked under the super (D3 a): a respond_to? that supers asks presence, any other the implied call */
+    const Scope *s = comp_scope_of(c, fn);
+    s = s ? comp_super_site(c, s) : NULL;
+    const char *sn = s ? comp_scope_user_name(s) : NULL;
+    return sn && (is_respond_to_name(sn) || is_method_defined_query(sn)) ? "presence" : "implied";
+  }
   if (k == NK_BlockArgumentNode) {   /* &:sym calls the name; any other &obj calls its to_proc */
     int ex = nt_ref(nt, fn, "expression");
     return ex >= 0 && nt_kind(nt, ex) == NK_SymbolNode ? "send" : "implied";

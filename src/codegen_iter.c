@@ -3381,10 +3381,10 @@ static int emit_poly_recv_block_dispatch_x(Compiler *c, int id, Buf *b, int inde
   int block = nt_ref(nt, id, "block");
   if (g_prbd_skip == id) return 0;
   int cand[CPB_MAX_CANDS];
-  const PolyPlan *plan = cplan_poly_block(c, id);
+  const PolyPlan plan = cplan_poly_block(c, id);
   int nc = 0;
-  for (int i = 0; i < plan->n; i++)
-    if (plan->arm[i].kind == PA_USER && nc < CPB_MAX_CANDS) cand[nc++] = plan->arm[i].key;
+  for (int i = 0; i < plan.n; i++)
+    if (plan.arm[i].kind == PA_USER && nc < CPB_MAX_CANDS) cand[nc++] = plan.arm[i].key;
   if (nc == 0) return 0;
   int trecv = ++g_tmp;
   /* Build the whole switch into a scratch buffer first. `emit_inline_call`
@@ -3663,8 +3663,8 @@ int emit_poly_recv_block_value(Compiler *c, int id, Buf *b) {
   int recv = nt_ref(nt, id, "receiver");
   if (!name || recv < 0 || nt_ref(nt, id, "block") < 0 || repr_of(c, id).kind != RK_BOXED ||
       repr_of(c, recv).kind != RK_BOXED || g_n_argov + 1 > MAX_ARG_OVERRIDE) return 0;
-  const PolyPlan *plan = cplan_poly_block(c, id);
-  if (!plan->native_block) return 0;
+  const PolyPlan plan = cplan_poly_block(c, id);
+  if (!plan.native_block) return 0;
   int tr = ++g_tmp;
   Buf rb; memset(&rb, 0, sizeof rb);
   emit_boxed(c, recv, &rb);
@@ -4522,7 +4522,7 @@ int each_split_applies(Compiler *c, int id) {
      dispatch's way, as before the split; the inline arm, where the builtins
      run, keeps its inner splits. */
   return g_arm.each_inline != id && g_arm.each_dispatch < 0 && g_n_argov < MAX_ARG_OVERRIDE &&
-         cplan_each_split(c, id)->n > 0;
+         cplan_each_split(c, id).n > 0;
 }
 /* an arm of the split, emitted into `out` under its arm view */
 static int emit_each_split_arm(Compiler *c, int id, int inline_arm, int as_value, Buf *out, int indent) {

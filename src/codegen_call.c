@@ -2216,21 +2216,21 @@ static int emit_cls_value_switch(Compiler *c, int id, Buf *b) {
      class method of the name (no class-method switch serves it) */
   int ncm = 0;
   if (!boxed && (comp_cmethod_candidates(c, nm, &ncm), ncm > 0)) return 0;
-  PolyPlan *p = cplan_poly_cls_values(c, id);
+  const PolyPlan p = cplan_poly_cls_values(c, id);
   Buf arms; memset(&arms, 0, sizeof arms);
   int sv_tmp = g_tmp;
   int tv = ++g_tmp;
   /* asked before the receiver is held, so a call none answers keeps its C */
-  if (!cls_value_known_arms(c, id, p, tv, ret, 1, -1, &arms)) {
+  if (!cls_value_known_arms(c, id, &p, tv, ret, 1, -1, &arms)) {
     g_tmp = sv_tmp;
-    free(arms.p); cplan_poly_free(p); return 0;
+    free(arms.p); return 0;
   }
   int th = hold_operand_pre(c, recv, TY_POLY, 1, tv, 1);
   int frame = g_plan_check ? pa_begin(id) : -1;
   if (th != tv || frame >= 0) {
     free(arms.p); memset(&arms, 0, sizeof arms);
     tv = th;
-    cls_value_known_arms(c, id, p, tv, ret, 1, frame, &arms);
+    cls_value_known_arms(c, id, &p, tv, ret, 1, frame, &arms);
   }
   nd_stamp(id, ND_SWITCH);
   char raise[320];
@@ -2254,7 +2254,6 @@ static int emit_cls_value_switch(Compiler *c, int id, Buf *b) {
   buf_printf(b, "({ %s%s; })", arms.p ? arms.p : "", eb.p && eb.p[0] ? eb.p : raise);
   if (frame >= 0) pa_end(c, frame, p);
   free(eb.p); free(arms.p);
-  cplan_poly_free(p);
   return 1;
 }
 
@@ -10743,7 +10742,7 @@ int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
      another name. */
   if (rt_boxed && argc == 1 && is_cmp_op(name) && !cplan_user_fresh(c, id).delegate &&
       sp_streq(name, view_call_name(c, id)) &&
-      cplan_poly_arms(c, id)->n == 0)
+      cplan_poly_arms(c, id).n == 0)
     return 0;
   /* poly method dispatch: switch on the boxed object's cls_id and call the
      matching class's method (walking the chain for inherited methods),
@@ -10823,10 +10822,9 @@ int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
          collect, and rooting it is pure cost on the hottest shape there is:
          an AST walker reads `node.left` through exactly this dispatch, and
          paying a root push and pop per read made one twice as slow (#282). */
-      /* The plan supplies receiver holding, switch keys and arms. Copy it:
-         outside the memo its buffer belongs to the next resolve. */
-      PolyPlan *pform = cplan_poly_copy(cplan_poly_arms(c, id));
-      unsigned form = pform->flags & ~PPF_SEEN;
+      /* The plan supplies receiver holding, switch keys and arms. */
+      const PolyPlan pform = cplan_poly_arms(c, id);
+      unsigned form = pform.flags & ~PPF_SEEN;
       if (g_plan_check) cplan_served("poly-form0");
       int root_recv = (form & PPF_ROOT) != 0, reads_value = (form & PPF_DEREF) != 0;
       buf_printf(b, "({ sp_RbVal _t%d = ", tv);
@@ -10854,9 +10852,8 @@ int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
       buf_puts(b, ") {");
       if (g_plan_check) pa_resume(pa_frame0);
       if (g_plan_check) pa_flags(form);
-      emit_poly_user_arms0(c, id, name, argc, ret, tv, tr, blk_tmp0, pform, b);
-      emit_poly_enum_includer_arms0(c, id, name, ret, tv, tr, blk_tmp0, pform, b);
-      cplan_poly_free(pform);
+      emit_poly_user_arms0(c, id, name, argc, ret, tv, tr, blk_tmp0, &pform, b);
+      emit_poly_enum_includer_arms0(c, id, name, ret, tv, tr, blk_tmp0, &pform, b);
       if (g_plan_check) pa_resume(pa_frame0);
       emit_poly_cases0(c, id, recv, name, &ps, ret, tv, tr, b);
       /* A method reopened on Object applies to ANY receiver -- boxed scalar
@@ -11274,8 +11271,8 @@ int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
       int blk_tmp2 = emit_poly_prearms_n_blk(c, id, name, &ps, &ptemps, atmp, atmp_ty, &kw, htmp,
                                              is_setter_val, splat_a, splat_last, stk, b);
       /* The plan supplies the switch key form. */
-      PolyPlan *pform = cplan_poly_copy(cplan_poly_arms(c, id));
-      unsigned form = pform->flags & ~PPF_SEEN;
+      const PolyPlan pform = cplan_poly_arms(c, id);
+      unsigned form = pform.flags & ~PPF_SEEN;
       if (g_plan_check) cplan_served("poly-form-n");
       /* a genuine String in a slot whose name a user class owns (#4816) */
       if (kw_pos) emit_poly_str_aset_prearm(c, recv, &ps, &ptemps, b);
@@ -11291,9 +11288,8 @@ int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
       if (g_plan_check) pa_resume(pa_frame);
       if (g_plan_check) pa_flags(form);
       { PolyUserArgs U = { argc, pos_argc, kwh, kwall, kwall_any, kw_pos, has_splat_arg, splat_a, stk,
-                           is_setter_val, blk_tmp2, tv, tr, ret, argv, atmp, htmp, atmp_ty, &kw, pform };
+                           is_setter_val, blk_tmp2, tv, tr, ret, argv, atmp, htmp, atmp_ty, &kw, &pform };
         emit_poly_user_arms_n(c, id, name, &U, b); }
-      cplan_poly_free(pform);
       int is_aref = sp_streq(name, "[]") && argc == 1 && splat_a < 0;
       int is_aref2 = sp_streq(name, "[]") && argc == 2 && splat_a < 0;
       /* fetch with a block answers the block for a missing key: the
@@ -24748,9 +24744,8 @@ int emit_unresolved_call(Compiler *c, int id, Buf *b) {
           /* a Class value whose class has no method of the name: the
              builtin answer for its class (the plan's class-value arms) */
           if (is_class_value_reflection(nm)) {
-            PolyPlan *cvp = cplan_poly_cls_values(c, id);
-            cls_value_known_arms(c, id, cvp, tv, TY_POLY, 0, pa_frame, b);
-            cplan_poly_free(cvp);
+            const PolyPlan cvp = cplan_poly_cls_values(c, id);
+            cls_value_known_arms(c, id, &cvp, tv, TY_POLY, 0, pa_frame, b);
           }
           /* Not a Class at run time: this is whatever the call would have
              compiled to with no class method of the name in the program -- a

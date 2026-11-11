@@ -3147,10 +3147,7 @@ static int poly_cls_value_answers(Compiler *c, int id) {
   int recv = nt_ref(c->nt, id, "receiver");
   if (recv < 0 || !is_class_value_reflection(nt_str(c->nt, id, "name")) || an_builtin_only || face_active() ||
       comp_ntype(c, recv) != TY_POLY) return 0;
-  PolyPlan *p = cplan_poly_cls_values(c, id);
-  int any = p->n > 0;
-  cplan_poly_free(p);
-  if (!any) return 0;
+  if (cplan_poly_cls_values(c, id).n == 0) return 0;
   an_face_push(recv, TY_CLASS);
   TyKind kt = infer_call(c, id);
   an_face_pop();

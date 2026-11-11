@@ -9,11 +9,13 @@
 
    A plan is memoized per node, but only where the node is read as itself:
    no view, no instance_exec scope move or class, no inline splice. Inside
-   one of those it is computed afresh and not kept. Every ask returns the
-   plan by value, so the caller's copy is its own: no later ask, of this
-   call or another (resolving one reads Reprs and the analysis, which ask
-   other plans), can change it under the caller. --plan-check compares it
-   with inference's record and with the binding codegen made. */
+   one of those it is computed afresh and not kept. No plan ask hands out
+   shared storage: every ask returns its plan by value, and the arms and
+   message a plan points to are kept, unchanged, for the compile. So the
+   caller's copy is its own: no later ask, of this call or another
+   (resolving one reads Reprs and the analysis, which ask other plans), can
+   change it under the caller. --plan-check compares it with inference's
+   record and with the binding codegen made. */
 #ifndef SPINEL_CALL_PLAN_H
 #define SPINEL_CALL_PLAN_H
 
@@ -464,11 +466,10 @@ int cplan_exc_object_method(Compiler *c, int call, const char *name);
    answer is dispatch CP_REFUSE with rkind, rfrom and msg, or CP_NONE (no
    refusal the plan can decide; codegen may still refuse on its own state).
    It never runs inference and never emits. Kept per node where the node is
-   read as itself; elsewhere computed afresh, and its msg lasts until the
-   next such call. Codegen raises the plan's refusal where it meets it;
-   --plan-check holds the plan against the refusals codegen reports
-   (refuse_observe, codegen_util.c). */
-const CallPlan *cplan_refuse(Compiler *c, int id);
+   read as itself; elsewhere computed afresh. Codegen raises the plan's
+   refusal where it meets it; --plan-check holds the plan against the
+   refusals codegen reports (refuse_observe, codegen_util.c). */
+CallPlan cplan_refuse(Compiler *c, int id);
 /* the documented-limit family: the node's message or NULL; *stop 0 when
    a limit down the receiver chain is the one to report */
 const char *cplan_feature_why(Compiler *c, int id, int *stop, char *buf, size_t cap);
@@ -529,8 +530,7 @@ enum { CPB_MAX_CANDS = 64 };
    (each arm's method and its proc form), asked once for a call and kept
    here: a caller testing many methods against one plan owns one, zeroed
    in `state`, and passes it to every cplan_virtual_member, so the poly-block
-   plan is built once, not once per method. It holds copies: the plan
-   cplan_poly_block answers is replaced by that function's next call. */
+   plan is built once, not once per method. */
 typedef struct {
   int state;       /* 0: not asked, 1: no native-block dispatch, 2: mi[0..n), 3: too many to hold, ask the plan */
   int n;
@@ -709,21 +709,16 @@ typedef struct PolyPlan_s {
    arguments, the Object reopening's default arm, and how the receiver is
    held and keyed (the plan's slice of emit_poly_method_dispatch so far).
    Pure; kept per node where the node is read as itself. */
-const PolyPlan *cplan_poly(Compiler *c, int id);
+PolyPlan cplan_poly(Compiler *c, int id);
 /* The same plan, as far as emission reads it: the class arms (and the
    receiver form). Cheaper: the builtin families and trials, which only the
    --plan-check shadow compares, are left out. */
-const PolyPlan *cplan_poly_arms(Compiler *c, int id);
+PolyPlan cplan_poly_arms(Compiler *c, int id);
 int cplan_send_split_owners(Compiler *c, int recv, const char *name, const char **out, int max);   /* the classes a boxed send of name tests: the builtin ones recv may be, and the program's under them */
 /* Resolve the complete plan without reading or writing the per-node memo.
-   Use while inference facts are still moving; the scratch plan is overwritten
-   by the next fresh resolve, so finish reading it before another planner call. */
-const PolyPlan *cplan_poly_fresh(Compiler *c, int id);
+   Use while inference facts are still moving. */
+PolyPlan cplan_poly_fresh(Compiler *c, int id);
 int cplan_struct_aset(Compiler *c, int cid, const char *name, int argc);
-/* A plan the caller keeps across emissions that may resolve others (a
-   resolve outside the memo reuses one buffer); cplan_poly_free drops it. */
-PolyPlan *cplan_poly_copy(const PolyPlan *p);
-void cplan_poly_free(PolyPlan *p);
 /* The arms of the statement-level block dispatch (#2448) of the same call:
    each candidate class's method spliced with the block, and its default.
    Computed afresh: the same node may take this dispatch or the method
@@ -737,21 +732,21 @@ int cplan_cand_target(Compiler *c, int id, const char *name, const PolyCand *pc,
    (cplan_cand_target); a reader candidate's; or the same for a class
    value's class methods. inst 0 asks the class-method arms alone. */
 int cplan_cand_arm(Compiler *c, int id, const char *name, int mi, int inst);
-const PolyPlan *cplan_poly_block(Compiler *c, int id);
+PolyPlan cplan_poly_block(Compiler *c, int id);
 /* A boxed receiver's `each { }` that the run-time dispatch serves because a
    class of the program takes a block for `each`: one arm, PB_ENUM_INLINE,
    when the call splits on the receiver's kind, the builtin kinds walking
    inline and any other value taking the dispatch; none when it does not. */
-const PolyPlan *cplan_each_split(Compiler *c, int id);
+PolyPlan cplan_each_split(Compiler *c, int id);
 /* The arms of the class-method tag switch of a call on a poly receiver
    that may hold a Class (emit_unresolved_call): each class's class method
    of the name, or its proc form. Computed afresh. */
 int cplan_cmethod_arm(Compiler *c, int call, int k, const char *nm, MethodLookup *ml, int *pfk);
-const PolyPlan *cplan_poly_cmeth(Compiler *c, int id);
+PolyPlan cplan_poly_cmeth(Compiler *c, int id);
 /* cplan_poly_cmeth's class-value trial arms alone (pa_class_value_trial),
    without the cost of asking every class for a class method of the name.
-   Computed afresh, into a plan the caller drops with cplan_poly_free. */
-PolyPlan *cplan_poly_cls_values(Compiler *c, int id);
+   Computed afresh. */
+PolyPlan cplan_poly_cls_values(Compiler *c, int id);
 int cplan_visibility_class(Compiler *c, int id, int ci);
 int cplan_has_method_missing(Compiler *c, int id, int ci, int cmethod);
 int cplan_super_needs_method_missing(Compiler *c, int id);
@@ -759,7 +754,7 @@ int cplan_cmethod_visible(Compiler *c, int id, int ci, const char *name);
 TyKind cplan_poly_arg_storage(Compiler *c, int id);
 /* The re-entry of a call on an object whose static class cannot answer the
    name while one of its subclasses can (#4023). Computed afresh. */
-const PolyPlan *cplan_poly_sub(Compiler *c, int id);
+PolyPlan cplan_poly_sub(Compiler *c, int id);
 /* a nil-able String/Integer/Float receiver whose name the program's
    NilClass answers, and for the other values nothing or Object's public
    method: dispatched boxed (PB_SUBDISPATCH) */
@@ -794,11 +789,11 @@ int cplan_reopen_own_block(Compiler *c, int id, int mi);
 int cplan_driver_walks_recv(Compiler *c, int id);
 /* The re-entry of a call on a poly receiver as an Array call (#2935).
    Computed afresh. */
-const PolyPlan *cplan_poly_redispatch(Compiler *c, int id);
+PolyPlan cplan_poly_redispatch(Compiler *c, int id);
 /* The face arms of a call on a poly receiver (emit_poly_call): one owner's
    re-entry, a switch over several, or a String's value-form mutator.
    Computed afresh. */
-const PolyPlan *cplan_poly_face(Compiler *c, int id);
+PolyPlan cplan_poly_face(Compiler *c, int id);
 
 /* --plan-check: the arms one emitted switch wrote, held against the plan.
    pa_resume(frame) drops frames a probe abandoned above it, before the
@@ -813,7 +808,7 @@ void pa_observe(int kind, int key, int mi, TyKind vty, int conv);
 /* the same, only into node id's own frame: for a helper more than one
    dispatch shares */
 void pa_observe_at(int id, int kind, int key, int mi, TyKind vty, int conv);
-void pa_end(Compiler *c, int frame, const PolyPlan *p);
+void pa_end(Compiler *c, int frame, PolyPlan p);
 void pa_report(void);
 
 /* ---- CN_*: a call's nil target (#7444) ----

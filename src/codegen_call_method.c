@@ -3124,10 +3124,10 @@ int emit_send_blind(Compiler *c, int id, Buf *b) {
         view_bind(srcv, "_t%d", tv);
         if (sav && sac > 0) emit_args_in_source_order(c, sav, sac, g_pre);
         buf_printf(b, "(((_t%d.tag == SP_TAG_OBJ && (0", tv);
-        const PolyPlan *arms = cplan_poly_arms(c, id);
-        for (int k = 0; k < arms->n; k++)
-          if (arms->arm[k].key >= 0 && arms->arm[k].key < c->nclasses)
-            buf_printf(b, " || _t%d.cls_id == %d", tv, arms->arm[k].key);
+        const PolyPlan arms = cplan_poly_arms(c, id);
+        for (int k = 0; k < arms.n; k++)
+          if (arms.arm[k].key >= 0 && arms.arm[k].key < c->nclasses)
+            buf_printf(b, " || _t%d.cls_id == %d", tv, arms.arm[k].key);
         buf_puts(b, "))");
         /* a builtin value whose class below Object answers the name
            (Integer#to_s) takes the dispatch too: its method comes before

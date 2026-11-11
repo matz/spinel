@@ -357,12 +357,12 @@ static void refuse_report(Compiler *c) {
     int id = g_rfobs[i].id;
     const char *m = g_rfobs[i].msg;
     if (id >= 0 && id < n) seen[id] = 1;
-    const CallPlan *p = cplan_refuse(c, id);
-    if (p->dispatch == CP_REFUSE) {
-      if (sp_streq(p->msg, m)) ok++;
+    const CallPlan p = cplan_refuse(c, id);
+    if (p.dispatch == CP_REFUSE) {
+      if (sp_streq(p.msg, m)) ok++;
       else {
         wrong++;
-        fprintf(stderr, "plan-check: refuse-wrong: node %d: plan \"%s\", codegen \"%s\"\n", id, p->msg, m);
+        fprintf(stderr, "plan-check: refuse-wrong: node %d: plan \"%s\", codegen \"%s\"\n", id, p.msg, m);
       }
     }
     else if (!strncmp(m, "unsupported call: node ", 23)) call++;
@@ -374,11 +374,11 @@ static void refuse_report(Compiler *c) {
   }
   for (int id = 0; id < n; id++) {
     if (seen[id] || nt_kind(c->nt, id) != NK_CallNode) continue;
-    const CallPlan *p = cplan_refuse(c, id);
-    if (p->dispatch != CP_REFUSE) continue;
+    const CallPlan p = cplan_refuse(c, id);
+    if (p.dispatch != CP_REFUSE) continue;
     if (id < g_ucemit_cap && g_ucemit_np[id]) {
       wrong++;
-      fprintf(stderr, "plan-check: refuse-wrong: node %d: plan \"%s\", codegen emitted the call\n", id, p->msg);
+      fprintf(stderr, "plan-check: refuse-wrong: node %d: plan \"%s\", codegen emitted the call\n", id, p.msg);
     }
     else unr++;
   }
@@ -4383,10 +4383,10 @@ void sg_refused_def(Compiler *c, int def) {
    by the decision `from`, so codegen raises it in the plan's words (site: the
    --plan-check reader name). Returns when the plan does not. */
 void refuse_from_plan(Compiler *c, int id, int from, const char *site) {
-  const CallPlan *p = cplan_refuse(c, id);
-  if (p->dispatch != CP_REFUSE || p->rfrom != from) return;
+  const CallPlan p = cplan_refuse(c, id);
+  if (p.dispatch != CP_REFUSE || p.rfrom != from) return;
   if (g_plan_check && !g_unsup_probe) cplan_served(site);
-  unsupported_feature(c, id, p->msg);
+  unsupported_feature(c, id, p.msg);
 }
 
 /* A send with a runtime name, a runtime const_get and a binding call are

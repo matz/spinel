@@ -801,14 +801,14 @@ static int repr_boxed_native_handle(Compiler *c, int v) {
   int recv = nt_ref(c->nt, v, "receiver");
   const char *nm = nt_str(c->nt, v, "name");
   if (recv < 0 || !nm || !repr_recv_boxed(c, recv)) return 0;
-  const PolyPlan *p = cplan_poly_arms(c, v);
+  const PolyPlan p = cplan_poly_arms(c, v);
   int nk = 0, any = 0;
   const int *ks = poly_recv_classes(c, v, &nk);
-  if (p->n <= 0 || !ks || nk <= 0) return 0;
+  if (p.n <= 0 || !ks || nk <= 0) return 0;
   for (int j = 0; j < nk; j++) {
     int arm = -1;
-    for (int i = 0; i < p->n && arm < 0; i++)
-      if (p->arm[i].key == ks[j]) arm = i;
+    for (int i = 0; i < p.n && arm < 0; i++)
+      if (p.arm[i].key == ks[j]) arm = i;
     /* (a class with no arm and no method_missing raises NoMethodError,
        which answers no String: strbuf_poly_user_boxes) */
     if (arm < 0) {
@@ -817,7 +817,7 @@ static int repr_boxed_native_handle(Compiler *c, int v) {
         return 0;
       continue;
     }
-    if (p->arm[arm].kind != PA_NATIVE || !repr_native_arm_handle(c, v, ks[j])) return 0;
+    if (p.arm[arm].kind != PA_NATIVE || !repr_native_arm_handle(c, v, ks[j])) return 0;
     any = 1;
   }
   return any;
@@ -995,10 +995,10 @@ int repr_boxed_reader_handle(Compiler *c, int v) {
   int recv = nt_ref(nt, v, "receiver");
   if (recv < 0 || !repr_recv_boxed(c, recv) ||
       ty_poly_face_owners(nt_str(nt, v, "name"), 0, 0, 1, 1)) return 0;
-  const PolyPlan *p = cplan_poly_arms(c, v);
-  if (p->n == 0) return 0;
-  for (int i = 0; i < p->n; i++)
-    if (p->arm[i].kind != PA_READER || p->arm[i].vty != TY_STRBUF) return 0;
+  const PolyPlan p = cplan_poly_arms(c, v);
+  if (p.n == 0) return 0;
+  for (int i = 0; i < p.n; i++)
+    if (p.arm[i].kind != PA_READER || p.arm[i].vty != TY_STRBUF) return 0;
   /* (an exception in the box answers #message through the exception's
      route, whose fallback takes these readers' boxes: exc_message_boxed_call) */
   return !exc_message_boxed_call(c, v);

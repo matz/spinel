@@ -2456,9 +2456,9 @@ static int exc_text_call_on(Compiler *c, int v, int boxed) {
   /* (the walk lists no builtin value, and an exception of a class of the
      program's own is boxed as the builtin's: an exception class's arm of
      the dispatch plan says one can reach the call) */
-  const PolyPlan *pp = cplan_poly_arms(c, v);
-  for (int i = 0; ks && i < pp->n; i++)
-    if (pp->arm[i].key >= 0 && pp->arm[i].key < c->nclasses && class_is_exc_subclass(c, pp->arm[i].key)) return 1;
+  const PolyPlan pp = cplan_poly_arms(c, v);
+  for (int i = 0; ks && i < pp.n; i++)
+    if (pp.arm[i].key >= 0 && pp.arm[i].key < c->nclasses && class_is_exc_subclass(c, pp.arm[i].key)) return 1;
   /* (a box the walk cannot follow, an Array's element an exception was
      pushed into, can hold an exception of any of the program's classes:
      the route tests the box at run time) */
@@ -26916,19 +26916,19 @@ int strbuf_poly_user_boxes(Compiler *c, int v) {
   /* the dispatch's own arms (an alias's target among them), one for each
      class the receiver can hold: a class with none answers through
      method_missing or raises */
-  const PolyPlan *p = cplan_poly_arms(c, v);
+  const PolyPlan p = cplan_poly_arms(c, v);
   int nk = 0;
   const int *ks = poly_recv_classes(c, v, &nk);
-  if (p->n <= 0) return 0;
+  if (p.n <= 0) return 0;
   int pub = 0;
-  for (int i = 0; i < p->n; i++) {
+  for (int i = 0; i < p.n; i++) {
     /* (an arm of a class the receiver never holds is never taken; with the
        classes unknown, every arm may be) */
     int held = !ks || nk <= 0;
-    for (int j = 0; j < nk && !held; j++) held = p->arm[i].key == ks[j];
+    for (int j = 0; j < nk && !held; j++) held = p.arm[i].key == ks[j];
     if (!held) continue;
-    int ami = p->arm[i].mi;
-    if (p->arm[i].kind != PA_USER || ami < 0) return 0;
+    int ami = p.arm[i].mi;
+    if (p.arm[i].kind != PA_USER || ami < 0) return 0;
     /* (an arm that answers no String, nil or an Integer say, has none for
        another name to see, and boxes as the value it is) */
     if (share_scope_answers_no_string(c, ami)) continue;
@@ -26947,7 +26947,7 @@ int strbuf_poly_user_boxes(Compiler *c, int v) {
      classes) */
   for (int j = 0; j < nk; j++) {
     int hit = 0;
-    for (int i = 0; i < p->n && !hit; i++) hit = p->arm[i].key == ks[j];
+    for (int i = 0; i < p.n && !hit; i++) hit = p.arm[i].key == ks[j];
     if (!hit && (ks[j] < 0 || ks[j] >= c->nclasses || name_is_plain_setter(nm) ||
                  comp_method_in_chain(c, ks[j], "method_missing", NULL) >= 0 ||
                  comp_resolve_member(c, ks[j], nm, 0, NULL, NULL) != SP_MEMBER_NONE))

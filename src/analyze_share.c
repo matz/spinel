@@ -937,9 +937,9 @@ int share_builtin_fresh(Compiler *c, int call) {
   /* A scope-name lookup can miss an alias's method. Every returning user
      arm must occur in the target set whose return identities we check. */
   int tg[CPT_MAX], n = cplan_targets(c, call, tg, CPT_MAX);
-  const PolyPlan *p = cplan_poly_fresh(c, call);
-  for (int i = 0; i < p->n; i++) {
-    const PolyArm *a = &p->arm[i];
+  const PolyPlan p = cplan_poly_fresh(c, call);
+  for (int i = 0; i < p.n; i++) {
+    const PolyArm *a = &p.arm[i];
     if (a->kind != PA_USER && a->kind != PA_PROC_FORM) continue;
     int found = 0;
     for (int j = 0; j < n; j++) if (tg[j] == a->mi) { found = 1; break; }
@@ -952,8 +952,8 @@ int share_builtin_fresh(Compiler *c, int call) {
      some builtin class has; for a name none has (CRuby's tables, as
      strbuf_poly_user_boxes asks) both only raise NoMethodError. */
   int generic_raises = !builtin_object_method_known(name) && !builtin_instance_name_known(name);
-  for (int i = 0; i < p->n; i++) {
-    const PolyArm *a = &p->arm[i];
+  for (int i = 0; i < p.n; i++) {
+    const PolyArm *a = &p.arm[i];
     if (a->kind == PA_USER || a->kind == PA_ARITY || a->kind == PA_VIS || sh_arm_io_read_fresh(c, call, a)) continue;
     if (a->kind == PA_TRIAL && (a->key == PA_KEY_TRIAL + PT_DEFAULT0 ||
                                a->key == PA_KEY_TRIAL + PT_DEFAULT_N)) continue;
@@ -962,7 +962,7 @@ int share_builtin_fresh(Compiler *c, int call) {
       continue;
     return 0;
   }
-  return p->n > 0;
+  return p.n > 0;
 }
 /* ---- calls whose members the plan does not list (#9258) ----
    A call on a boxed receiver whose name more classes define than the plan
@@ -1730,13 +1730,13 @@ static int sh_poly_to_s_self(const Compiler *c, int u) {
   if (recv < 0 || repr_of(c, recv).kind != RK_BOXED ||
       (sci >= 0 && comp_method_in_chain((Compiler *)c, sci, "to_s", NULL) >= 0))
     return 0;
-  const PolyPlan *p = cplan_poly((Compiler *)c, u);
+  const PolyPlan p = cplan_poly((Compiler *)c, u);
   int dflt = 0;
-  for (int i = 0; i < p->n; i++) {
-    if (p->arm[i].kind == PA_TRIAL && p->arm[i].key == PA_KEY_TRIAL + PT_STR) return 0;
-    dflt |= p->arm[i].kind == PA_BUILTIN && p->arm[i].key == PA_KEY_BUILTIN + PB_D_TO_S;
+  for (int i = 0; i < p.n; i++) {
+    if (p.arm[i].kind == PA_TRIAL && p.arm[i].key == PA_KEY_TRIAL + PT_STR) return 0;
+    dflt |= p.arm[i].kind == PA_BUILTIN && p.arm[i].key == PA_KEY_BUILTIN + PB_D_TO_S;
   }
-  return dflt && p->ret == TY_POLY;
+  return dflt && p.ret == TY_POLY;
 }
 /* Is call u's one target a `def m = @iv` reader of an instance method,
    its whole body that read, of a slot its class keeps boxed? */
@@ -1785,10 +1785,10 @@ static int sh_carry_kind(const Compiler *c, int n, int by_repr, int lift, int *o
      String itself: `{ host: req.host }` with two classes answering host. */
   if (u >= 0 && nt_kind(c->nt, u) == NK_CallNode && nt_ref(c->nt, u, "receiver") >= 0 && repr_of(c, nt_ref(c->nt, u, "receiver")).kind == RK_BOXED &&
       nt_ref(c->nt, u, "block") < 0) {
-    const PolyPlan *pp = cplan_poly_arms((Compiler *)c, u);
-    int all = pp->n > 0;
-    for (int i = 0; i < pp->n && all; i++) {
-      const PolyArm *a = &pp->arm[i];
+    const PolyPlan pp = cplan_poly_arms((Compiler *)c, u);
+    int all = pp.n > 0;
+    for (int i = 0; i < pp.n && all; i++) {
+      const PolyArm *a = &pp.arm[i];
       if (a->kind == PA_READER) all = a->vty == TY_STRBUF;
       /* (a method whose return is the handle itself, `h[k] = v`'s value,
          answers it as a reader's arm does) */

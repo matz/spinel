@@ -3561,6 +3561,64 @@ static sp_RbVal sp_poly_ary_operand(sp_RbVal v) {
   sp_raise_cls("TypeError", sp_sprintf("can't convert %s to Array (%s#to_ary gives %s)", cn, cn, sp_poly_class_name(a)));
   return v;
 }
+
+/* One element of Array#to_h, converted as CRuby's rb_check_array_type: a
+   program object with #to_ary (public or not) becomes that Array. One with
+   no to_ary, or whose to_ary answers nil, comes back as it was, for the
+   caller's "wrong element type" error. The caller converts each element
+   just before it checks it, so the to_ary calls and the errors come in
+   CRuby's order. */
+static inline sp_RbVal sp_poly_pair_to_ary(sp_RbVal e) {
+  return sp_poly_is_user_obj(e) && e.v.p ? sp_poly_ary_operand(e) : e;
+}
+/* The rows of Array#transpose, as CRuby's rb_ary_transpose reads them: the
+   row count once, then for each row its Array (a program object through
+   its to_ary, public or not) and a length check against the first row,
+   before the next to_ary runs. Only an array with a program object row
+   is copied; the transpose itself raises for any other row that is no
+   Array. */
+static sp_int sp_poly_arr_len(sp_RbVal a);           /* defined below */
+static sp_PolyArray *sp_PolyArray_append_all(sp_PolyArray *a, sp_PolyArray *b);  /* defined below */
+static sp_PolyArray *sp_poly_transpose_rows(sp_PolyArray *a) {
+  if (!a || !sp_obj_to_ary_fn) return a;
+  sp_int n = a->len, i = 0;
+  for (; i < n; i++) if (sp_poly_is_user_obj(a->data[i]) && a->data[i].v.p) break;
+  if (i == n) return a;
+  SP_GC_ROOT(a);
+  sp_PolyArray *out = sp_PolyArray_new(); SP_GC_ROOT(out);
+  sp_int cols = -1;
+  for (sp_int j = 0; j < n; j++) {
+    sp_RbVal e = j < a->len ? a->data[j] : sp_box_nil();
+    if (sp_poly_is_user_obj(e) && e.v.p) {
+      sp_RbVal got = sp_obj_to_ary_fn(e); SP_GC_ROOT_RBVAL(got);
+      const char *cn = sp_poly_class_name(e);
+      if (got.tag == SP_TAG_NIL) {
+        /* the class probe answers a Bool where the class has a to_ary */
+        if (sp_obj_to_ary_fn((sp_RbVal){ .tag = SP_TAG_OBJ, .cls_id = e.cls_id }).tag == SP_TAG_BOOL)
+          sp_raise_cls("TypeError", sp_sprintf("can't convert %s to Array (%s#to_ary gives NilClass)", cn, cn));
+        sp_raise_cls("TypeError", sp_sprintf("no implicit conversion of %s into Array", cn));
+      }
+      if (!(got.tag == SP_TAG_OBJ && got.v.p && sp_poly_is_array_kind(got.cls_id)))
+        sp_raise_cls("TypeError", sp_sprintf("can't convert %s to Array (%s#to_ary gives %s)", cn, cn, sp_poly_class_name(got)));
+      e = got;
+    }
+    else if (!(e.tag == SP_TAG_OBJ && e.v.p && sp_poly_is_array_kind(e.cls_id))) {
+      /* the transpose raises for this row, after the rows before it */
+      sp_PolyArray_push(out, e);
+      return out;
+    }
+    sp_int len = sp_poly_arr_len(e);
+    if (cols < 0) cols = len;
+    else if (len != cols)
+      sp_raise_cls("IndexError", sp_sprintf("element size differs (%lld should be %lld)", (long long)len, (long long)cols));
+    /* a copy of the row as read now: CRuby takes each row's elements when
+       it reads the row, so a later to_ary that changes it changes nothing */
+    sp_PolyArray *row = sp_PolyArray_new(); SP_GC_ROOT(row);
+    sp_PolyArray_append_all(row, sp_poly_to_poly_array(e));
+    sp_PolyArray_push(out, sp_box_poly_array(row));
+  }
+  return out;
+}
 static int sp_poly_user_cmp(const char *op, sp_RbVal a, sp_RbVal b, sp_RbVal *out);  /* fwd */
 /* An object of the program's subclass of Time or Array (`class Rev <
    Time`) is boxed with the builtin's id. The class its allocation names
@@ -5376,6 +5434,7 @@ static SP_INLINE sp_RbVal sp_poly_ary_chk(sp_RbVal v, const char *m, int range_o
    a hash miss answered 0 instead of raising NoMethodError (#3974). */
 static sp_RbVal sp_poly_struct_values(sp_RbVal v);   /* defined below */
 static sp_int sp_poly_arr_len(sp_RbVal a);           /* defined below */
+static sp_PolyArray *sp_PolyArray_append_all(sp_PolyArray *a, sp_PolyArray *b);  /* defined below */
 /* A Struct's size and length are its member count; a program object of any
    other class has neither. -1 when v is no Struct. */
 static sp_int sp_poly_struct_size(sp_RbVal v) {
@@ -19469,7 +19528,7 @@ static sp_RbVal sp_poly_to_h_val(sp_RbVal v) {
     sp_PolyArray *a = sp_poly_to_a_arr(v); SP_GC_ROOT(a);
     sp_PolyPolyHash *out = sp_PolyPolyHash_new(); SP_GC_ROOT(out);
     for (sp_int i = 0; a && i < a->len; i++) {
-      sp_RbVal e = a->data[i];
+      sp_RbVal e = sp_poly_pair_to_ary(a->data[i]); SP_GC_ROOT_RBVAL(e);
       if (e.tag != SP_TAG_OBJ || !sp_poly_is_array_kind(e.cls_id))
         sp_raise_cls("TypeError", sp_sprintf("wrong element type %s at %lld (expected array)",
                                           sp_poly_class_name(e), (long long)i));

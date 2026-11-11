@@ -1847,7 +1847,13 @@ static int emit_poly_array_call(Compiler *c, int id, Buf *b, const NodeTable *nt
     /* Each pair is a boxed array whose own kind varies (IntArray for [1,2],
        StrArray for ["a","b"], PolyArray for mixed); sp_poly_arr_get boxes an
        element from any of them, so key/value extraction works regardless. */
-    buf_printf(b, " sp_RbVal _t%d = sp_PolyArray_get(_t%d, _t%d);", tp, tr, ti);
+    /* a program object element converts through its to_ary, public or
+       not, just before its check, as CRuby's to_h does; Hash[] keeps
+       its own laxer path */
+    if (!nt_int(nt, id, "hash_brackets", 0))
+      buf_printf(b, " sp_RbVal _t%d = sp_poly_pair_to_ary(sp_PolyArray_get(_t%d, _t%d)); SP_GC_ROOT_RBVAL(_t%d);", tp, tr, ti, tp);
+    else
+      buf_printf(b, " sp_RbVal _t%d = sp_PolyArray_get(_t%d, _t%d);", tp, tr, ti);
     /* every element must be a two-element array; a longer or shorter one
        is an ArgumentError and a non-array a TypeError, where the extra
        elements were simply dropped (#3616). Hash[...] desugars to this

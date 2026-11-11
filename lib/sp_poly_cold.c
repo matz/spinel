@@ -1210,6 +1210,20 @@ sp_RbVal sp_kw_splat_check(sp_RbVal h, const char *const *mem, int n, const unsi
   return named ? sp_box_obj(named, SP_BUILTIN_POLY_POLY_HASH) : h;
 }
 
+/* a checked [k, v] pair, copied: to_h keeps the pair as it was read.  A
+   String key is copied and frozen here, as the Hash does on insert, so a
+   later to_ary that changes it does not change the key either */
+static sp_RbVal sp_poly_pair_copy(sp_RbVal e) {
+  SP_GC_ROOT_RBVAL(e);
+  sp_PolyArray *p = sp_PolyArray_new(); SP_GC_ROOT(p);
+  sp_RbVal k = sp_poly_arr_get(e, 0); SP_GC_ROOT_RBVAL(k);
+  if (k.tag == SP_TAG_STR && k.v.s) k.v.s = sp_hash_key_str(k.v.s);
+  else if (sp_poly_is_strbuf(k)) k = sp_box_str(sp_hash_key_str(sp_String_cstr((sp_String *)k.v.p)));
+  sp_PolyArray_push(p, k);
+  sp_PolyArray_push(p, sp_poly_arr_get(e, 1));
+  return sp_box_poly_array(p);
+}
+
 sp_RbVal sp_poly_to_h_m(sp_RbVal v)
 {
   if (v.tag == SP_TAG_NIL) return sp_box_obj(sp_SymPolyHash_new(), SP_BUILTIN_SYM_POLY_HASH);
@@ -1230,6 +1244,30 @@ sp_RbVal sp_poly_to_h_m(sp_RbVal v)
      boxed hash otherwise -- reading an Integer key as a symbol id built a
      hash whose keys were other programs' symbols (#3972) */
   if (v.tag == SP_TAG_OBJ && sp_poly_is_array_kind(v.cls_id)) {
+    /* every element is checked in order, and a program object's to_ary
+       (any visibility) gives its pair just before its check, as in CRuby:
+       from the first such object on, the pairs are kept in their own
+       array, each one copied as it is checked, so a later to_ary that
+       changes an earlier pair does not change the result (CRuby inserts
+       each pair before it converts the next element) */
+    SP_GC_ROOT_RBVAL(v);
+    sp_PolyArray *conv = NULL; SP_GC_ROOT(conv);
+    for (sp_int i = 0; i < sp_poly_length(v); i++) {
+      sp_RbVal e = sp_poly_arr_get(v, i);
+      if (sp_poly_is_user_obj(e) && e.v.p && !conv) {
+        conv = sp_PolyArray_new();
+        for (sp_int j = 0; j < i; j++) sp_PolyArray_push(conv, sp_poly_pair_copy(sp_poly_arr_get(v, j)));
+      }
+      if (conv) e = sp_poly_pair_to_ary(e);
+      if (!(e.tag == SP_TAG_OBJ && sp_poly_is_array_kind(e.cls_id)))
+        sp_raise_cls("TypeError", sp_sprintf("wrong element type %s at %lld (expected array)",
+                                          sp_poly_class_name(e), (long long)i));
+      if (sp_poly_length(e) != 2)
+        sp_raise_cls("ArgumentError", sp_sprintf("wrong array length at %lld (expected 2, was %lld)",
+                                              (long long)i, (long long)sp_poly_length(e)));
+      if (conv) sp_PolyArray_push(conv, sp_poly_pair_copy(e));
+    }
+    if (conv) v = sp_box_poly_array(conv);
     sp_int n = sp_poly_length(v);
     int all_sym = 1;
     for (sp_int i = 0; i < n && all_sym; i++) {

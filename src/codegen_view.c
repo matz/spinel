@@ -158,12 +158,12 @@ static void view_write(Compiler *c, int kind, int id, int v) {
   switch (kind) {
   case VK_TYPE:          comp_set_ntype(c, id, (TyKind)v); break;
   case VR_STRBUF_BOX:    comp_set_strbuf_box(c, id, (unsigned char)v); break;
-  case VR_HANDLE_DEMAND: c->strbuf_handle_demand[id] = (unsigned char)v; break;
-  case VR_POLY_LIFT:     c->poly_strbuf_lift[id] = (unsigned char)v; break;
-  case VR_NIL_TESTED:    c->nil_tested[id] = (unsigned char)v; break;
-  case VR_HEAD_HELD:     c->head_held[id] = (unsigned char)v; break;
-  case VR_DISCARDED:     c->value_discarded[id] = (unsigned char)v; break;
-  case VR_STR_SHADOW:    c->str_shadow[id] = (unsigned char)v; break;
+  case VR_HANDLE_DEMAND: ((unsigned char *)c->strbuf_handle_demand)[id] = (unsigned char)v; break;
+  case VR_POLY_LIFT:     ((unsigned char *)c->poly_strbuf_lift)[id] = (unsigned char)v; break;
+  case VR_NIL_TESTED:    ((unsigned char *)c->nil_tested)[id] = (unsigned char)v; break;
+  case VR_HEAD_HELD:     ((unsigned char *)c->head_held)[id] = (unsigned char)v; break;
+  case VR_DISCARDED:     ((unsigned char *)c->value_discarded)[id] = (unsigned char)v; break;
+  case VR_STR_SHADOW:    ((unsigned char *)c->str_shadow)[id] = (unsigned char)v; break;
   default:               comp_set_nilnarrow(c, id, (TyKind)v); break;
   }
 }
@@ -369,7 +369,7 @@ int view_call_nil_tested(Compiler *c, int id) {
    says so here, and the arm reads the 4 before it pops. A signal on the
    open view: it counts no edit, like the push and the pop around it. */
 void view_nil_test_written(Compiler *c, int recv) {
-  if (comp_nil_tested_stored(c, recv) == 3) c->nil_tested[recv] = 4;
+  if (comp_nil_tested_stored(c, recv) == 3) ((unsigned char *)c->nil_tested)[recv] = 4;
 }
 
 /* the entry on top, put back */

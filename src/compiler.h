@@ -45,11 +45,16 @@ enum { SP_VIS_PUBLIC = 0, SP_VIS_PRIVATE = 1, SP_VIS_PROTECTED = 2 };
    only inherits it (#4509), so the record is the NODE whose value made the
    slot degrade; the node's own origin (Compiler.norigin) leads on from there
    to the expression the poly was born at. */
-/* The tables infer_type reads are written only through setters that count
-   each change in comp_ty_edits, so that its memo can tell whether an
-   earlier query's answer still holds (#8852). Their fields are const under
-   SP_TY_GUARD (`make ty-setter-check`), so a direct write does not compile
-   there. */
+/* SP_TY_FIELD marks a table whose writers are named: the field is const
+   under SP_TY_GUARD (`make ty-setter-check`), so a direct write does not
+   compile there. The tables infer_type reads have setters that count each
+   change in comp_ty_edits, so that its memo can tell whether an earlier
+   query's answer still holds (#8852). The nine per-node fact arrays
+   (ntype, nilnarrow, strbuf_box, strbuf_handle_demand, poly_strbuf_lift,
+   nil_tested, head_held, value_discarded, str_shadow) are written through
+   the setters and the lift mark's store, by the storage (compiler.c) and
+   by the views (codegen_view.c). Not every one has a counting setter: the
+   stores that count nothing are listed at comp_ask_without_box_mark. */
 #ifdef SP_TY_GUARD
 #define SP_TY_FIELD const
 #else
@@ -1313,7 +1318,7 @@ typedef struct {
   /* --share-strings: the names of the calls whose answer is kept (not
      dropped), sorted, built once on first ask (strbuf_tail_answer_kept) */
   const char **kept_call_names; int nkept_call_names, kept_call_built;
-  unsigned char *strbuf_handle_demand; /* [node_cap] the same demand -- hand out
+  SP_TY_FIELD unsigned char *strbuf_handle_demand; /* [node_cap] the same demand -- hand out
                           the HANDLE, not a reading of it -- carried WITHOUT
                           moving the node's type. strbuf_box above is read as
                           the type as well: infer_uncached answers TY_STRBUF
@@ -1328,7 +1333,7 @@ typedef struct {
                                       no pointer past the call: emit
                                       sp_String_cstr, not a whole-string copy.
                                       The node's TYPE is unchanged (#5745). */
-  unsigned char *poly_strbuf_lift; /* [node_cap] a read of a POLY variable
+  SP_TY_FIELD unsigned char *poly_strbuf_lift; /* [node_cap] a read of a POLY variable
                           handed to a parameter the callee appends to in
                           place: a plain String the variable holds becomes
                           the shared handle (an SP_BUILTIN_STRBUF box) and is
@@ -1338,7 +1343,7 @@ typedef struct {
                           unchanged. STRBUF_LIFT_FRESH_CALL: a boxed call's
                           new String that a container store lifts into a
                           handle (strbuf_demand_store_leaf). */
-  unsigned char *nil_tested; /* [node_cap] a builtin call's receiver whose nil
+  SP_TY_FIELD unsigned char *nil_tested; /* [node_cap] a builtin call's receiver whose nil
                           its nil arm has already tested (cplan_nil, #7444),
                           or an object's under its kind query's nil arm
                           (emit_object_kind_nil): set only as a view
@@ -1353,17 +1358,17 @@ typedef struct {
   int args_in_call_trial; /* nonzero while that trial emits: a call nested
                           in it takes its head without a trial of its own,
                           so nested operators are not emitted 2^depth times */
-  unsigned char *head_held; /* [node_cap] an operand the nil arm's head
+  SP_TY_FIELD unsigned char *head_held; /* [node_cap] an operand the nil arm's head
                           (emit_nil_target_head) ran into a temp of its own
                           ahead of the call: set only as a view
                           (VR_HEAD_HELD) around the call's own emission,
                           where an arm that holds the operand reads that
                           temp (hold_operand) */
-  unsigned char *value_discarded; /* [node_cap] a node emitted where its value
+  SP_TY_FIELD unsigned char *value_discarded; /* [node_cap] a node emitted where its value
                           is thrown away (emit_expr_for_effect: `((void)(...))`,
                           the left of a comma): set only as a view
                           (VR_DISCARDED) around that emission */
-  unsigned char *str_shadow; /* [node_cap] a String receiver bound to a copy
+  SP_TY_FIELD unsigned char *str_shadow; /* [node_cap] a String receiver bound to a copy
                           of a handle's bytes that its mutator writes back to
                           as to a variable (1: a boxed face's receiver,
                           emit_face_arm; 2: a held chain's shadow,
@@ -2881,7 +2886,7 @@ static inline unsigned char comp_set_strbuf_box(Compiler *c, int id, unsigned ch
   return v;
 }
 static inline unsigned char comp_set_strbuf_handle_demand(Compiler *c, int id, unsigned char v) {
-  if (c->strbuf_handle_demand[id] != v) { c->strbuf_handle_demand[id] = v; comp_touch_node(c, id); }
+  if (c->strbuf_handle_demand[id] != v) { ((unsigned char *)c->strbuf_handle_demand)[id] = v; comp_touch_node(c, id); }
   return v;
 }
 /* The analysis's store of the poly lift mark. It counts no edit: the mark
@@ -2891,7 +2896,7 @@ static inline unsigned char comp_set_strbuf_handle_demand(Compiler *c, int id, u
    name's writer calls with comp_ty_edits: a mark that counted would move
    the stamp at each class's own store, and those calls would be walked
    once per class. */
-static inline void comp_mark_poly_strbuf_lift(Compiler *c, int id, unsigned char v) { c->poly_strbuf_lift[id] = v; }
+static inline void comp_mark_poly_strbuf_lift(Compiler *c, int id, unsigned char v) { ((unsigned char *)c->poly_strbuf_lift)[id] = v; }
 /* The answer of ask(c, id) for a strbuf_box-marked node with the mark lent
    for that one call: it is back when the call returns, so the table is as
    it was and nothing is counted. An inference nested in the call reads the

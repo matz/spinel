@@ -5025,6 +5025,16 @@ static void lr_rta_any(LrRta *t) {
    to by headers and builder writes alone (lr_rta_names); LR_CORE for a
    core class the program binds nothing to, or a builder's write the walk
    made no class at (lr_rta_builder) */
+/* The key of constant read `read` while the walk runs (read_key_name's,
+   in the record's own terms) */
+static const char *lr_read_key(Compiler *c, int read) {
+  const NodeTable *nt = c->nt;
+  if (qualify_reads_pending() && !nt_str(nt, read, "qc_name")) {
+    int core = -1, ci = lr_class_ref_at(c, read, &core);
+    if (ci >= 0 && core < 0) return c->classes[ci].name;
+  }
+  return nt_key_name(nt, read);
+}
 static int lr_rta_const(LrRta *t, int node) {
   const NodeTable *nt = t->c->nt;
   const LrDef *d = NULL;
@@ -5142,7 +5152,7 @@ static void lr_rta_node(LrRta *t, int id) {
          : rk == NK_SelfNode ? lr_rta_self(t, id) : LR_UNKNOWN_CLASS;
   by = nm && is_send_family(nm) ? (ac ? call_sent_name(nt, id, NULL) : "")
      : nm && (is_method_object_maker(nm) || is_enumerator_maker(nm)) ? (ac ? vis_arg_name(nt, av[0]) : "") : nm;
-  if (!by || (ac && is_code_eval_name(nm)) || is_method_bind_name(by) || is_object_loader(rk == NK_ConstantReadNode ? nt_key_name(nt, recv) : NULL, by, ac)) {
+  if (!by || (ac && is_code_eval_name(nm)) || is_method_bind_name(by) || is_object_loader(rk == NK_ConstantReadNode ? lr_read_key(t->c, recv) : NULL, by, ac)) {
     lr_rta_all(t, 0);
     lr_rta_any(t);
     return;
@@ -5168,7 +5178,7 @@ static void lr_rta_node(LrRta *t, int id) {
   }
   /* raise makes an object of a class it is given, or a core one of a
      message; Timeout.timeout one of its klass */
-  int ka = is_raise_alias(by) ? 0 : rk == NK_ConstantReadNode && is_timeout_call(nt_key_name(nt, recv), by) ? 1 : -1;
+  int ka = is_raise_alias(by) ? 0 : rk == NK_ConstantReadNode && is_timeout_call(lr_read_key(t->c, recv), by) ? 1 : -1;
   ak = ka >= 0 && ka < ac ? nt_kind(nt, av[ka]) : NK_StringNode;
   if (ak == NK_ConstantReadNode || ak == NK_ConstantPathNode) {
     if ((d = lr_rta_const(t, av[ka])) >= LR_MAIN) lr_rta_call_on(t, "exception", d, 0);

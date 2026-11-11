@@ -5460,11 +5460,12 @@ typedef struct { char path[QC_MAXDEPTH][64]; unsigned char lex[QC_MAXDEPTH + 1];
    close a lexical scope -- the leaf's, and a segment's only where it is
    one of the enclosing bodies, since `class A::B` does not see A's
    constants. */
+static int qc_push_written;   /* (qualify_colliding_reads: the headers are keyed already, and the reads match the names written) */
 static int qc_push_header(const NodeTable *nt, int node, char (**pathp)[64], int depth,
                           unsigned char *lex, QCRebase **own) {
   *own = NULL;
   int cp = nt_ref(nt, node, "constant_path");
-  const char *mn = cp >= 0 ? nt_key_name(nt, cp) : NULL;
+  const char *mn = cp < 0 ? NULL : qc_push_written ? nt_str(nt, cp, "name") : nt_key_name(nt, cp);
   if (!mn) return depth;
   char segs[QC_MAXDEPTH][64];
   int ns = qc_header_segs(nt, cp, segs);
@@ -6990,6 +6991,8 @@ static void qc_refuse_conditional_builder(Compiler *c) {
   }
 }
 
+static QCWrite *qc_defer_ws;
+static int qc_defer_wn;
 void qualify_colliding_classes(Compiler *c) {
   const NodeTable *nt = c->nt;
   QCWrite *ws = NULL; int wn = 0, wcap = 0;
@@ -7141,12 +7144,8 @@ void qualify_colliding_classes(Compiler *c) {
   qci_free(&kx);
   free(kws);
   if (any) {
-    /* rewrite references first (they match against the original leaf names),
-       then qualify the nested definitions themselves */
-    char mods[QC_MAXDEPTH][64];
-    qc_build_reverse_flags(c);
-    for (int r = 0; r < nt_nroots(nt); r++) qc_rewrite_reads(c, nt_root(nt, r), mods, 0, ws, wn);
-    qc_free_reverse_flags();
+    /* the reads are keyed after the walk (qualify_colliding_reads); the
+       headers here, for registration */
     for (int i = 0; i < wn; i++) {
       if (ws[i].depth == 0) continue;
       char qn[512]; qc_qualified_name(qn, sizeof qn, &ws[i]);
@@ -7160,8 +7159,27 @@ void qualify_colliding_classes(Compiler *c) {
       nt_node_set_str((NodeTable *)nt, ws[i].node, "qc_ruby_name", rn);
     }
   }
-  qc_free_headers();
-  free(ws);
+  qc_defer_ws = any ? ws : NULL; qc_defer_wn = any ? wn : 0;
+  if (!any) { qc_free_headers(); free(ws); }
+}
+
+/* Are there reads qualify_colliding_reads will key, after the walk? */
+int qualify_reads_pending(void) { return qc_defer_ws != NULL; }
+
+/* The reads of the classes qualify_colliding_classes keyed, after the walk */
+void qualify_colliding_reads(Compiler *c) {
+  const NodeTable *nt = c->nt;
+  if (qc_defer_ws) {
+    char mods[QC_MAXDEPTH][64];
+    qc_build_reverse_flags(c);
+    qc_push_written = 1;
+    for (int r = 0; r < nt_nroots(nt); r++) qc_rewrite_reads(c, nt_root(nt, r), mods, 0, qc_defer_ws, qc_defer_wn);
+    qc_push_written = 0;
+    qc_free_reverse_flags();
+    qc_free_headers();
+    free(qc_defer_ws);
+  }
+  qc_defer_ws = NULL; qc_defer_wn = 0;
 }
 
 /* True if `name` is used as a local write or block parameter OUTSIDE the given
@@ -49344,7 +49362,10 @@ static void an_phase_desugar_register(Compiler *c) {
      which lowers each splice as it is made; the rows a splice leaves to the
      program run once, at the walk's end */
   host_begin(&hs, &lc);
+  scope_read_keys_from(c);   /* (the reads qualify keys after the walk: read_key_name) */
   AN_STEP_V("elab_program", elab_program(c, &hs));   /* walk_scope of each file's top level, and the load record */
+  scope_read_keys_from(NULL);
+  qualify_colliding_reads(c);
   /* a def in a `K.instance_eval { }` block defines K's class method (the
      record's frame): the scope walk filed its scope before the record saw the
      def, so it is moved here, as `def self.m` in K's body is placed */

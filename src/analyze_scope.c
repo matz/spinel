@@ -2414,6 +2414,20 @@ const NodeKind *class_def_module_kinds(int *n) {
   return kinds;
 }
 
+/* The key of constant read `read`. While the walk runs, a read of a class
+   the program nests under a name it collides on has no key yet
+   (qualify_colliding_reads keys it after the walk): the record answers
+   which class the read names (elab_class_ref_at), and a program class's
+   name is the key. */
+static Compiler *g_read_key_c;
+void scope_read_keys_from(Compiler *c) { g_read_key_c = c; }
+static const char *read_key_name(const NodeTable *nt, int read) {
+  if (g_read_key_c && qualify_reads_pending() && !nt_str(nt, read, "qc_name")) {
+    int core = -1, ci = elab_class_ref_at(g_read_key_c, read, &core);
+    if (ci >= 0 && core < 0) return g_read_key_c->classes[ci].name;
+  }
+  return nt_key_name(nt, read);
+}
 /* The Class.new or Module.new call a constant write holds as its value
    (`X = Class.new(S) do ... end`, `A::B = Module.new do ... end`), the
    write being the class's definition: the call, -1 for any other node. Its
@@ -2425,7 +2439,7 @@ const NodeKind *class_def_module_kinds(int *n) {
 static int builder_call_of(const NodeTable *nt, int def_node, int *module) {
   int val = nt_ref(nt, def_node, "value"), recv = val >= 0 ? nt_ref(nt, val, "receiver") : -1;
   if (recv < 0 || nt_kind(nt, val) != NK_CallNode || nt_kind(nt, recv) != NK_ConstantReadNode) return -1;
-  const char *rn = nt_key_name(nt, recv), *mn = nt_key_name(nt, val);
+  const char *rn = read_key_name(nt, recv), *mn = nt_key_name(nt, val);
   int blk = nt_ref(nt, val, "block");
   if (blk < 0 || nt_kind(nt, blk) != NK_BlockNode) return -1;
   *module = is_module_new(rn, mn);
@@ -2530,7 +2544,7 @@ int class_def_is_record_call(const NodeTable *nt, int val) {
   if (val < 0 || nt_kind(nt, val) != NK_CallNode) return 0;
   int vr = nt_ref(nt, val, "receiver");
   return vr >= 0 && nt_kind(nt, vr) == NK_ConstantReadNode &&
-         is_record_class_builder(nt_key_name(nt, vr), nt_key_name(nt, val));
+         is_record_class_builder(read_key_name(nt, vr), nt_key_name(nt, val));
 }
 
 /* The `Struct.new(...)` / `Data.define(...)` call a constant or local write

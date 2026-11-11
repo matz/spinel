@@ -3427,6 +3427,37 @@ TyKind block_next_value_ty(Compiler *c, int node) {
   return r;
 }
 
+/* The kind a block's value stores into an Array whose elements are `elem`
+   (`a.map! { }`, `a.fill { }`), given `joined`, the block's tail type joined
+   with every `next` value (block_next_value_ty). The join can hide a value
+   the Array cannot hold: `next nil` beside an Integer tail joins to a
+   nullable Integer, and `next 1` beside `next "s"` to the boxed kind, which
+   the store evidence leaves alone. So the typed Array stayed, and the nil
+   raised TypeError or the String did not compile. When one value alone is
+   such a kind, it is answered, and the Array widens as it does for a block
+   with that one value. `joined` otherwise, and when `elem` is not known. */
+TyKind block_store_value_ty(Compiler *c, int body, TyKind tail, TyKind joined, TyKind elem) {
+  if (elem == TY_UNKNOWN || elem == TY_POLY) return joined;
+  if (joined != TY_POLY && joined != elem) return joined;
+  TyKind want = elem == TY_STRBUF ? TY_STRING : elem;
+  TyKind kinds[33]; int nk = 0;
+  kinds[nk++] = tail;
+  int nx[32];
+  int nn = body >= 0 ? an_block_nexts(c->nt, body, nx, 32) : 0;
+  if (nn < 0 || nn >= 32) return joined;
+  for (int q = 0; q < nn; q++) {
+    const NodeTable *nt = c->nt;
+    if (nt_kind(nt, nx[q]) != NK_NextNode) continue;
+    kinds[nk++] = block_next_value_ty(c, nx[q]);
+  }
+  for (int q = 0; q < nk; q++) {
+    TyKind k = kinds[q] == TY_STRBUF ? TY_STRING : kinds[q];
+    if (k == TY_UNKNOWN || k == TY_POLY || k == TY_VOID || k == want) continue;
+    return kinds[q];
+  }
+  return joined;
+}
+
 /* The value a block forwarded out of method `emi` (`callee(&)`,
    `callee(&b)`, `callee(...)`) answers inside it. The forwarding call is one
    node in emi's body, shared by every site emi is spliced into, so the first

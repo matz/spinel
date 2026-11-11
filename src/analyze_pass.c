@@ -3858,9 +3858,15 @@ static int infer_write_container_usage(Compiler *c, const NodeTable *nt, int nfb
         int fblk = nt_ref(nt, id, "block");
         int fbody = nt_ref(nt, fblk, "body");
         int fbn = 0; const int *fbs = fbody >= 0 ? nt_arr(nt, fbody, "body", &fbn) : NULL;
-        vt = fbn > 0 ? infer_type(c, fbs[fbn - 1]) : TY_NIL;
+        TyKind ftail = fbn > 0 ? infer_type(c, fbs[fbn - 1]) : TY_NIL;
+        vt = ftail;
         TyKind fnx = block_next_value_ty(c, fbody);
         if (fnx != TY_UNKNOWN) vt = vt == TY_UNKNOWN ? fnx : ty_unify(vt, fnx);
+        if (fnx != TY_UNKNOWN && recv >= 0) {
+          TyKind frt = infer_type(c, recv);
+          if (ty_is_array(frt) && frt != TY_POLY_ARRAY)
+            vt = block_store_value_ty(c, fbody, ftail, (TyKind)vt, ty_array_elem(frt));
+        }
         if (vt == TY_VOID) vt = TY_NIL;
         is_idx_write = 1; is_splice = 1; is_fill = 1;
         kt = TY_INT;

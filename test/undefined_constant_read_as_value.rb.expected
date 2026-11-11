@@ -1,0 +1,16 @@
+:ok
+uninitialized constant Nope
+uninitialized constant A::Nope
+uninitialized constant String::Nope
+:a
+uninitialized constant String::Nope
+1
+uninitialized constant String::Nope
+"s"
+uninitialized constant String::Nope
+9
+uninitialized constant String::Nope
+uninitialized constant String::Nope
+"uninitialized constant String::Nope"
+7
+uninitialized constant String::NM

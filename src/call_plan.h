@@ -149,8 +149,10 @@ int cplan_bam_reopen_target(Compiler *c, int mi);
    name reached only by arms and captures. */
 /* CT_REACH asks the same lookup for an explicit route such as super.
    CT_CAPTURE selects the definition live at construction, or its entry
-   when the constructor must select an arm at run time. */
-enum { CT_CMETHOD = 1, CT_OWN = 2, CT_TOP = 4, CT_REACH = 8, CT_CAPTURE = 16 };
+   when the constructor must select an arm at run time. CT_IMPLIED asks for
+   a name the node does not itself call but makes CRuby call (a row of
+   tools/implied_calls.yml), which passes the gate on the node's own names. */
+enum { CT_CMETHOD = 1, CT_OWN = 2, CT_TOP = 4, CT_REACH = 8, CT_CAPTURE = 16, CT_IMPLIED = 32 };
 /* The names call node id itself calls, into out: a call's or an attribute
    target's name, a `recv.m op= v`'s reader and writer; how many (0 for any
    other node). call_target binds a call of one of them to the method
@@ -184,8 +186,9 @@ typedef enum { ML_METHOD, ML_ENTRY, ML_NONE, ML_TABLE } MlKind;
 /* why the table answers: no window, or an unplaced capture (UNPLACED); the
    chain moves inside the window (MOVES); two or more versions, or a window
    with no version, and no entry (MANY); a version the plan cannot map
-   (UNMAPPED); the record says no version while the table answers one
-   (DISAGREE); a body that never runs (NEVER); a versioned name answered
+   (UNMAPPED); the record says no version while the table answers one,
+   or the window's version is not the one an explicit call of the name
+   binds (DISAGREE); a body that never runs (NEVER); a versioned name answered
    without asking the record, as for a call with no node or a name the node
    does not itself call (UNASKED) */
 typedef enum { MLW_UNPLACED = 1, MLW_MOVES, MLW_MANY, MLW_UNMAPPED, MLW_DISAGREE, MLW_NEVER, MLW_UNASKED } MlWhy;
@@ -307,10 +310,13 @@ const CallPlan *cplan_const_user(Compiler *c, int id, int recv, int fresh);
    receiver and add members, and nothing here promises a set only grows. */
 enum { CPT_UNKNOWN = -1, CPT_MAX = 64 };
 int cplan_targets(Compiler *c, int id, int *out, int cap);
-/* The version of cls's `name` the implied call node id makes on operand op
-   (a row of tools/implied_calls.yml: a multiple assignment's to_ary of its
-   value) runs, where the load record proves the one; -1 otherwise */
-int cplan_implied_version(Compiler *c, int id, const char *name, int op, int cls);
+/* The method the implied call `name` node id makes on operand op (a row
+   of tools/implied_calls.yml: a multiple assignment's to_ary of its value)
+   runs on an instance of cls: the version the record proves there, else an
+   entry whose every state finds a method; -1 otherwise, with *ml (may be
+   NULL) saying ML_TABLE (the reader keeps the table's answer) or ML_NONE
+   (no row, or an undef on the chain) */
+int cplan_implied_target(Compiler *c, int id, int op, int cls, const char *name, MethodLookup *ml);
 /* The classes whose to_ary that call reaches on a boxed operand, where
    the record proves it: into out[0..cap), the count */
 int cplan_boxed_to_ary_classes(Compiler *c, int id, int op, int *out, int cap);

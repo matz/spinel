@@ -7970,7 +7970,13 @@ static void ver_copy_writes(Compiler *c, const int *par, VerCellsAt *cells, VerW
   }
   free(of);
 }
+static int ver_cells_put(Compiler *c);
 void ver_cells_write(Compiler *c) {
+  ver_cells_put(c);
+  ver_memo_drop(c);   /* (the versions kept before the writes are asked again) */
+}
+/* ...how many it wrote */
+static int ver_cells_put(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   ElabVersion vs[VER_MAX_ARMS];
   VerWrite *w = NULL;
@@ -8074,7 +8080,7 @@ void ver_cells_write(Compiler *c) {
   }
   for (int k = 0; k < nm; k++) elab_record_write(c, made[k]);
   free(made); free(all); free(hz); free(w);
-  ver_memo_drop(c);   /* (the versions kept before the writes are asked again) */
+  return nm;
 }
 void ver_memo_drop(Compiler *c) {
   for (int i = 0; i < c->ver_memo_cap; i++) free(c->ver_memo[i].name);
@@ -8132,6 +8138,17 @@ static int ver_late_make(Compiler *c) {
   c->nver_late = 0;
   return made;
 }
+/* What the kept versions (Compiler.ver_memo) were answered from of the
+   entries: how many, and each one's scope, absence, cells and finds */
+static unsigned long ver_entries_sum(const Compiler *c) {
+  unsigned long h = (unsigned long)c->nver_entries;
+  for (int i = 0; i < c->nver_entries; i++) {
+    const struct VerEntry *e = &c->ver_entries[i];
+    h = h * 1000003ul ^ (unsigned long)(unsigned)e->scope;
+    h = h * 1000003ul ^ (unsigned long)(unsigned)(e->absent * 64 + e->cells * 8 + e->finds);
+  }
+  return h;
+}
 /* The deferred histories a call names now (desugar_dynamic_send makes an
    arm per name a send of a run-time name may take, and a pass may retarget
    a call in place): asked through the index of the calls by name, which
@@ -8139,7 +8156,15 @@ static int ver_late_make(Compiler *c) {
    written now, as the build made the others' (ver_named_asks,
    ver_cells_write); and the entries the typed calls that may meet no
    version ask, and the respond_to?s whose cells stand for such a call
-   (ver_late_make). Changed when it made one. */
+   (ver_late_make). Changed when it made one.
+   The versions kept (Compiler.ver_memo) are asked again only where the
+   demand moved something they were answered from: a deferred history taken,
+   an entry made or changed, a cell written, a scope or a node made or
+   edited. A call whose window spans versions on a chain no entry can be
+   made of notes it at every ask (ver_absent_note), so a program with one
+   such call came here every round of the fixpoint, made nothing, and
+   dropped every kept version: each round asked every call of each class
+   again, and noted the same calls for the next. */
 int ver_entries_demand(Compiler *c) {
   int any = 0, e0 = c->nver_entries, late;
   for (int i = 0; i < c->nver_defer; i++)
@@ -8153,11 +8178,17 @@ int ver_entries_demand(Compiler *c) {
   }
   late = c->nver_late;
   if (!any && !late) return 0;
+  const NodeTable *nt = c->nt;
+  unsigned long sum0 = ver_entries_sum(c), edits0 = nt->edits;
+  unsigned ver0 = nt->version;
+  int taken = any, scopes0 = c->nscopes, nodes0 = nt->count;
   if (any) ver_named_asks(c, 1);
   any = c->nver_entries > e0;
   if (late) late = ver_late_make(c);
   ver_entries_index(c);
-  ver_cells_write(c);
+  if (ver_cells_put(c) || taken || any || late || sum0 != ver_entries_sum(c) || scopes0 != c->nscopes ||
+      nodes0 != nt->count || ver0 != nt->version || edits0 != nt->edits)
+    ver_memo_drop(c);   /* (the versions kept before the entries and the writes are asked again) */
   return any || late;
 }
 

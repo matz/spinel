@@ -3343,8 +3343,15 @@ static int yvt_callee_index_scan(Compiler *c, int cid) {
       if (nci >= 0) rmi = call_target(c, cid, nci, cn, CT_CMETHOD, NULL);
     }
     /* a yielding method the program defines on a builtin class, which the
-       plan binds to a call on a builtin value: its yield's block is this call's */
-    else if (cn) rmi = cplan_reopen_target(c, cplan_user_fresh(c, cid));
+       plan binds to a call on a builtin value: its yield's block is this
+       call's. Asked of the binding alone, not whether the plan dispatches
+       directly: the dispatch moves as the receiver's type does, which no
+       owner of infer_type's memo follows, and a block value kept while it
+       was direct stood after it was not */
+    else if (cn) {
+      const CallPlan *p = cplan_user_fresh(c, cid);
+      if (p->mi >= 0 && p->via == UC_REOPEN && c->scopes[p->mi].yields) rmi = p->mi;
+    }
   }
   return rmi;
 }

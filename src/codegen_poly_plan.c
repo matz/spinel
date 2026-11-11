@@ -2310,8 +2310,19 @@ void emit_poly_prearms0(Compiler *c, int id, const char *name, const PolySpecial
       if (sp_streq(name, "min"))
         snprintf(tg + tn, sizeof tg - (size_t)tn,
                  " || _t%d.cls_id == SP_BUILTIN_TIME", tv);
-      buf_printf(b, "if (_t%d.tag == SP_TAG_OBJ && (sp_poly_is_array_kind(_t%d.cls_id) ||"
-                    " sp_poly_is_hash_kind(_t%d.cls_id)%s)) { _t%d = ", tv, tv, tv, tg, tr);
+      /* A Hash (an Array) whose class in the program answers the name --
+         a reopen's own def, or a module it includes or prepends, which
+         comes ahead of Enumerable -- takes the switch below, where that
+         method has its arm. The guard took every Hash to the helper, and
+         sp_poly_last raised NoMethodError for `class Hash; include M; end`
+         with M#last; sp_poly_first answered Enumerable#first over M's. */
+      int hci = comp_core_class(c, CORE_HASH), aci = comp_core_class(c, CORE_ARRAY);
+      int hash_own = hci >= 0 && call_target(c, id, hci, name, 0, NULL) >= 0;
+      int ary_own = aci >= 0 && call_target(c, id, aci, name, 0, NULL) >= 0;
+      buf_printf(b, "if (_t%d.tag == SP_TAG_OBJ && (0", tv);
+      if (!ary_own) buf_printf(b, " || sp_poly_is_array_kind(_t%d.cls_id)", tv);
+      if (!hash_own) buf_printf(b, " || sp_poly_is_hash_kind(_t%d.cls_id)", tv);
+      buf_printf(b, "%s)) { _t%d = ", tg, tr);
       if (ret == TY_POLY) buf_puts(b, cex);
       else emit_unbox_text(c, ret, cex, b);
       buf_puts(b, "; }\nelse ");

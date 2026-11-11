@@ -20,3 +20,22 @@ p ready.nil?
 p ready[0].size
 w.close
 r.close
+
+# A path beside a stream: the stream is read or written, the path opened
+require "stringio"
+src = File.join(Dir.tmpdir, "spinel_io_class_method_chain_mixed_src.txt")
+dst = File.join(Dir.tmpdir, "spinel_io_class_method_chain_mixed_dst.txt")
+File.write(src, "hello")
+p(File.open(dst, "w") { |w| File.copy_stream(src, w) })
+p File.read(dst)
+p(File.open(src) { |r| File.copy_stream(r, dst) })
+p File.read(dst)
+p(File.open(dst, "w") { |w| IO.copy_stream(src, w) })
+p File.read(dst)
+p IO.copy_stream(StringIO.new("sio"), dst)
+p File.read(dst)
+out = StringIO.new
+p File.copy_stream(src, out)
+p out.string
+File.delete(src)
+File.delete(dst)

@@ -2708,8 +2708,10 @@ int emit_op_io_copy_stream(Compiler *c, const BopCtx *x, Buf *b) {
   int a0_poly = repr_of(c, argv[0]).kind == RK_BOXED;
   int a1_poly = repr_of(c, argv[1]).kind == RK_BOXED;
   /* A boxed endpoint may hold a path, including a shared String handle,
-     or a stream. Check its kind before reading the payload as sp_File. */
-  if (a0_poly || a1_poly) {
+     or a stream. Check its kind before reading the payload as sp_File.
+     A path beside a stream (`IO.copy_stream(path, io)`) is read or written
+     by its kind the same way: the filename copy takes two paths. */
+  if (a0_poly || a1_poly || (a0_sio || a0_io) != (a1_sio || a1_io)) {
     int sio_cid = comp_core_class(c, CORE_STRINGIO);
     int td = ++g_tmp;
     buf_printf(b, "({ const char *_t%d = ", td);

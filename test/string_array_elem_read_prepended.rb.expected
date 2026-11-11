@@ -1,0 +1,39 @@
+pre-min!
+pre-max
+pre-sample
+pre-at0
+pre-fetch1
+pre-dig2
+pre-delete_at0
+pre-delete-b
+pre-max!
+pre-sample!
+pre-at2!
+pre-fetch0!
+pre-dig1!
+pre-delete_at2!
+pre-delete-c!
+pre-fetch1?
+["pre-at1", "pre-dig0", "pre-min", "pre-max", "pre-sample", "pre-fetch2", "pre-delete_at1", "pre-delete-a"]
+false
+false
+false
+false
+false
+false
+false
+pre-min|pre-fetch0|pre-delete-x
+true
+true
+pre-at3pre-dig4
+["b", "a", "c"]
+pre-sample?
+pre-min/pre-max
+7
+PRE-DELETE-B
+["b", "a", "c"]
+true
+c34
+["b1", "a2"]
+false
+["a2"]

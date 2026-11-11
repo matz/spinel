@@ -3864,8 +3864,9 @@ static int infer_write_container_usage(Compiler *c, const NodeTable *nt, int nfb
         if (fnx != TY_UNKNOWN) vt = vt == TY_UNKNOWN ? fnx : ty_unify(vt, fnx);
         if (fnx != TY_UNKNOWN && recv >= 0) {
           TyKind frt = infer_type(c, recv);
-          if (ty_is_array(frt) && frt != TY_POLY_ARRAY)
-            vt = block_store_value_ty(c, fbody, ftail, (TyKind)vt, ty_array_elem(frt));
+          if (frt != TY_POLY_ARRAY)
+            vt = block_store_value_ty(c, fbody, ftail, (TyKind)vt,
+                                      ty_is_array(frt) ? ty_array_elem(frt) : TY_UNKNOWN);
         }
         if (vt == TY_VOID) vt = TY_NIL;
         is_idx_write = 1; is_splice = 1; is_fill = 1;

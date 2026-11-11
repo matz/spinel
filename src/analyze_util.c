@@ -3427,6 +3427,47 @@ TyKind block_next_value_ty(Compiler *c, int node) {
   return r;
 }
 
+/* Is `t` a kind block_store_value_ty answers: a concrete one that is not
+   `want`? With no `want` (the receiver's elements are not known yet: a
+   row read out of a table), one that no typed Array of numbers or objects
+   holds. */
+static int bsv_foreign(TyKind t, TyKind want) {
+  TyKind k = t == TY_STRBUF ? TY_STRING : t;
+  if (k == TY_UNKNOWN || k == TY_POLY || k == TY_VOID) return 0;
+  if (want != TY_UNKNOWN) return k != want;
+  return k != TY_INT && k != TY_FLOAT && !ty_is_object(k);
+}
+
+/* The first `next` value under `node` that binds to the block (as
+   block_next_value_ty walks them) of a kind bsv_foreign takes, or
+   TY_UNKNOWN. */
+static TyKind block_next_foreign_ty(Compiler *c, int node, TyKind want) {
+  const NodeTable *nt = c->nt;
+  if (node < 0) return TY_UNKNOWN;
+  NodeKind k = nt_kind(nt, node);
+  if (k == NK_NextNode) {
+    TyKind t = block_next_value_ty(c, node);
+    return bsv_foreign(t, want) ? t : TY_UNKNOWN;
+  }
+  if (k == NK_WhileNode || k == NK_UntilNode || k == NK_ForNode || k == NK_BlockNode ||
+      k == NK_LambdaNode || k == NK_DefNode || k == NK_ClassNode || k == NK_ModuleNode)
+    return TY_UNKNOWN;
+  int nr = nt_num_refs(nt, node);
+  for (int i = 0; i < nr; i++) {
+    TyKind t = block_next_foreign_ty(c, nt_ref_at(nt, node, i), want);
+    if (t != TY_UNKNOWN) return t;
+  }
+  int na = nt_num_arrs(nt, node);
+  for (int i = 0; i < na; i++) {
+    int n = 0; const int *ids = nt_arr_at(nt, node, i, &n);
+    for (int j = 0; j < n; j++) {
+      TyKind t = block_next_foreign_ty(c, ids[j], want);
+      if (t != TY_UNKNOWN) return t;
+    }
+  }
+  return TY_UNKNOWN;
+}
+
 /* The kind a block's value stores into an Array whose elements are `elem`
    (`a.map! { }`, `a.fill { }`), given `joined`, the block's tail type joined
    with every `next` value (block_next_value_ty). The join can hide a value
@@ -3435,27 +3476,16 @@ TyKind block_next_value_ty(Compiler *c, int node) {
    the store evidence leaves alone. So the typed Array stayed, and the nil
    raised TypeError or the String did not compile. When one value alone is
    such a kind, it is answered, and the Array widens as it does for a block
-   with that one value. `joined` otherwise, and when `elem` is not known. */
+   with that one value. An `elem` not known yet (TY_UNKNOWN or TY_POLY: a
+   row read out of a table) answers so only for values of mixed kinds, with
+   one no Array of numbers or objects holds. `joined` otherwise. */
 TyKind block_store_value_ty(Compiler *c, int body, TyKind tail, TyKind joined, TyKind elem) {
-  if (elem == TY_UNKNOWN || elem == TY_POLY) return joined;
-  if (joined != TY_POLY && joined != elem) return joined;
+  if (elem == TY_POLY) elem = TY_UNKNOWN;
+  if (elem == TY_UNKNOWN ? joined != TY_POLY : joined != TY_POLY && joined != elem) return joined;
   TyKind want = elem == TY_STRBUF ? TY_STRING : elem;
-  TyKind kinds[33]; int nk = 0;
-  kinds[nk++] = tail;
-  int nx[32];
-  int nn = body >= 0 ? an_block_nexts(c->nt, body, nx, 32) : 0;
-  if (nn < 0 || nn >= 32) return joined;
-  for (int q = 0; q < nn; q++) {
-    const NodeTable *nt = c->nt;
-    if (nt_kind(nt, nx[q]) != NK_NextNode) continue;
-    kinds[nk++] = block_next_value_ty(c, nx[q]);
-  }
-  for (int q = 0; q < nk; q++) {
-    TyKind k = kinds[q] == TY_STRBUF ? TY_STRING : kinds[q];
-    if (k == TY_UNKNOWN || k == TY_POLY || k == TY_VOID || k == want) continue;
-    return kinds[q];
-  }
-  return joined;
+  if (bsv_foreign(tail, want)) return tail;
+  TyKind f = block_next_foreign_ty(c, body, want);
+  return f != TY_UNKNOWN ? f : joined;
 }
 
 /* The value a block forwarded out of method `emi` (`callee(&)`,

@@ -54,3 +54,10 @@ e = [1, 2, 3]
 e.map! { |x| next 1 if x == 7; next 2 if x == 2; x * 10 }
 p e
 p e.sum
+
+# a row of a table: its kind is not known where the block is read
+m = [[1, 2], [3]]
+m[0].map! { |x| next :y if x == 1; next 0 if x == 9; x }
+p m
+m[1].map! { |x| next "s" if x == 3; next 0 if x == 9; x }
+p m

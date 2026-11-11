@@ -23,6 +23,11 @@
 #      enum: nt_implied_calls searches it by kind), in the order of the entry
 #   2  a `case NK_<kind>:` for each kind of `literal`
 #   3  a `case NK_<kind>:` for each kind of `not_value`
+# A row of a name under `conversions` carries that name's class as `.target`.
+# A row's `planned: true` (its reader asks the call plan) is emitted as
+# `.planned = 1` on its row. The key is temporary: each reader's move onto the
+# plan sets it for that reader's rows, and once every row has it the key, this
+# field and the check on it are deleted (#10866, step 2's last implied change).
 
 require "yaml"
 require "optparse"
@@ -45,7 +50,9 @@ MAX_STEPS = 3
 RENAMED_NAME = %w[CallOperatorWriteNode CallOrWriteNode CallAndWriteNode].freeze
 
 Step = Struct.new(:field, :kind, :list, :chain)
-Row = Struct.new(:kind, :name, :name_field, :operand, :steps, :side, :cond, :absent, :text)
+Row = Struct.new(:kind, :name, :name_field, :operand, :steps, :side, :cond, :absent, :planned, :target, :text)
+# The builtin classes a conversion may name (lib/sp_builtin_classes.h)
+BUILTIN_CLASSES = File.join(ROOT, "lib", "sp_builtin_classes.h")
 
 # YAML.safe_load_file keeps the last of a repeated key, so a node written twice
 # would pass for written once. Walk the parse tree and name every mapping key
@@ -100,16 +107,25 @@ def load_rows(errors)
     (errors << "#{kind}: needs `calls`, a list of rows" and next) unless calls.is_a?(Array) && !calls.empty?
     calls.each_with_index { |c, i| rows << make_row(kind, c, "#{kind} row #{i + 1}", errors) }
   end
+  conv = y["conversions"] || {}
+  (errors << "#{CALLS}: `conversions` is a map of a name to a class" and conv = {}) unless conv.is_a?(Hash)
+  classes = File.exist?(BUILTIN_CLASSES) ? File.read(BUILTIN_CLASSES).scan(/X\(\w+, "([^"]+)"/).flatten : []
+  conv.each do |name, cls|
+    errors << "conversions: #{name} names no row" unless rows.any? { |r| r.name == name }
+    errors << "conversions: #{name}: #{cls.inspect} is not a builtin class (#{BUILTIN_CLASSES})" unless classes.include?(cls)
+  end
+  rows.each { |r| r.target = conv[r.name] }
   [rows, y["literal"] || [], y["not_value"] || [], y["none"] || [], y["super"] || []]
 end
 
 def make_row(kind, c, where, errors)
-  extra = c.keys - %w[name name_field operand side when absent]
+  extra = c.keys - %w[name name_field operand side when absent planned]
   errors << "#{where}: unknown keys #{extra.join(", ")}" unless extra.empty?
   errors << "#{where}: needs exactly one of `name` and `name_field`" unless c.key?("name") ^ c.key?("name_field")
   errors << "#{where}: unknown side #{c["side"].inspect}" unless SIDES.key?(c["side"])
   errors << "#{where}: unknown condition #{c["when"].inspect}" unless CONDS.key?(c["when"])
   errors << "#{where}: unknown absent #{c["absent"].inspect}" unless ABSENTS.key?(c["absent"])
+  errors << "#{where}: `planned` is true or absent" unless [nil, true].include?(c["planned"])
   operand = c["operand"].to_s
   steps = []
   if WORDS.key?(operand)
@@ -118,7 +134,7 @@ def make_row(kind, c, where, errors)
     steps = parse_steps(operand, errors, where)
     errors << "#{where}: no operand" if steps.empty?
   end
-  Row.new(kind, c["name"], c["name_field"], operand, steps, c["side"], c["when"], c["absent"], where)
+  Row.new(kind, c["name"], c["name_field"], operand, steps, c["side"], c["when"], c["absent"], c["planned"], nil, where)
 end
 
 # ---- the check against the kinds and Prism ----
@@ -198,7 +214,9 @@ def generate(rows, literal, not_value, sup)
   out << "   The calls CRuby makes for a node that the program does not name\n"
   out << "   (nt_implied_calls, src/node_table.c). Included five times, with NTI_PART set to\n"
   out << "     1  one row per call, sorted by node kind:\n"
-  out << "        { kind, side, condition, absent, operand word, steps, name, name field, { steps } }\n"
+  out << "        { kind, side, condition, absent, operand word, steps, name, name field, { steps } },\n"
+  out << "        and .planned = 1 on a row whose reader asks the call plan (temporary, see the yml),\n"
+  out << "        .target on a row of a conversion's name (the yml's `conversions`)\n"
   out << "     2  a case label for each kind that holds a scalar literal\n"
   out << "     3  a case label for each kind that is a pattern or a target, not a value\n"
 out << "     4  a case label for each kind that is a super: the builtin of its def's name\n"
@@ -208,7 +226,8 @@ out << "     5  a case label for each kind that has rows */\n"
     steps = r.steps.map { |s| "{ #{s.field.dump}, #{s.kind ? "NK_#{s.kind}" : 0}, #{s.list ? 1 : 0}, #{s.chain ? 1 : 0} }" }
     word = WORDS[r.operand] || "NTO_PATH"
     out << "  { NK_#{r.kind}, #{SIDES.fetch(r.side)}, #{CONDS.fetch(r.cond)}, #{ABSENTS.fetch(r.absent)}, #{word}, #{steps.size}, " \
-           "#{c_string(r.name)}, #{c_string(r.name_field)}, { #{steps.empty? ? "{ NULL, 0, 0, 0 }" : steps.join(", ")} } },\n"
+           "#{c_string(r.name)}, #{c_string(r.name_field)}, { #{steps.empty? ? "{ NULL, 0, 0, 0 }" : steps.join(", ")} }" \
+           "#{r.planned ? ", .planned = 1" : ""}#{r.target ? ", .target = #{c_string(r.target)}" : ""} },\n"
   end
   out << "#elif NTI_PART == 2\n"
   literal.sort_by { |k| order.fetch(k, 0) }.each { |k| out << "  case NK_#{k}:\n" }

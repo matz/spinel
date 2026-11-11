@@ -54,6 +54,14 @@
 #   absent      what a missing operand field means: skip (default) the row
 #               says nothing, self the call is on self, none the call is made
 #               on something no node holds
+#   planned     true: the lowering of this call asks the call plan which
+#               method it runs (cplan_implied_target), so the call is one the
+#               plan binds by version: the survey makes the version entries it
+#               takes and reachability keeps them (call_node_implied_names).
+#               A row without it keeps the last definition, and gets no entry
+#               that nothing would call. Temporary: each row gets it in the
+#               change that moves its reader onto the plan, and the key goes
+#               once every row has it (#10866, step 2).
 #
 # Reading the table: an operand that is a pattern construct or an assignment
 # target (see `not_value`) is not a value and receives no call; a node that
@@ -82,8 +90,8 @@ nodes:
   SplatNode:               {calls: [{name: to_a, operand: expression, side: inst, when: nonliteral}]}
   AssocSplatNode:          {calls: [{name: to_hash, operand: value, side: inst, when: nonliteral}]}
   BlockArgumentNode:       {calls: [{name: to_proc, operand: expression, side: inst, when: nonliteral}]}
-  MultiWriteNode:          {calls: [{name: to_ary, operand: value, side: inst, when: nonliteral}]}
-  MultiTargetNode:         {calls: [{name: to_ary, operand: yielded, side: inst}]}
+  MultiWriteNode:          {calls: [{name: to_ary, operand: value, side: inst, when: nonliteral, planned: true}]}
+  MultiTargetNode:         {calls: [{name: to_ary, operand: yielded, side: inst, planned: true}]}
   ImplicitRestNode:        {calls: [{name: to_ary, operand: yielded, side: inst}]}
   BlockParametersNode:     {calls: [{name: to_ary, operand: yielded, side: inst, when: multi_target}]}
   NumberedParametersNode:  {calls: [{name: to_ary, operand: yielded, side: inst, when: multi_target}]}
@@ -194,6 +202,16 @@ nodes:
                                     {name: to_s, operand: none, side: inst},
                                     {name: backtrace, operand: none, side: inst},
                                     {name: inspect, operand: none, side: inst}]}
+
+# Conversions that leave a value of their own class as it is: CRuby's
+# rb_check_array_type answers an Array, or an instance of a subclass of it,
+# without calling to_ary. Each name gives the builtin class it converts to;
+# every row of the name then receives no call on an operand of that class,
+# a condition on the operand's type, which the call plan's landing resolver
+# (ct_landing_classes) tests where the types tell. A name joins when the
+# readers of its rows ask the plan.
+conversions:
+  to_ary: Array
 
 # Node kinds that hold a scalar literal: a value no method of the program's can
 # be called on, which `nonliteral` tests.

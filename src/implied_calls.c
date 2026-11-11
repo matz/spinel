@@ -23,6 +23,8 @@ typedef struct {
   unsigned char side, cond, absent, word, nsteps;
   const char *name, *name_field;
   NtiStep step[3];
+  unsigned char planned;   /* the row's `planned` (temporary: tools/implied_calls.yml) */
+  const char *target;      /* its name's conversion target (the yml's `conversions`) */
 } NtiRow;
 
 static const NtiRow nti_rows[] = {
@@ -115,6 +117,8 @@ static void nti_emit(NtiSink *s, int operand) {
     s->out[s->n].name = s->name;
     s->out[s->n].operand = operand;
     s->out[s->n].side = s->row->side;
+    s->out[s->n].planned = s->row->planned;
+    s->out[s->n].target = s->row->target;
   }
   s->n++;
 }

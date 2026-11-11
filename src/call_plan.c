@@ -1062,6 +1062,22 @@ int call_node_names(Compiler *c, int id, const char *out[2]) {
   }
   return n;
 }
+/* See call_plan.h. */
+int call_node_implied_names(Compiler *c, int id, IcCall *out, int max) {
+  NtImplied buf[16], *rows = buf;
+  int nr = nt_implied_calls(c->nt, id, buf, 16), n = 0;
+  if (nr > 16) {
+    if (!(rows = malloc(sizeof *rows * (size_t)nr))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    nt_implied_calls(c->nt, id, rows, nr);
+  }
+  for (int i = 0; i < nr; i++) {
+    if (!rows[i].planned || rows[i].operand == NTI_NONE) continue;
+    if (n < max) out[n] = (IcCall){ .name = rows[i].name, .operand = rows[i].operand, .target = rows[i].target };
+    n++;
+  }
+  if (rows != buf) free(rows);
+  return n;
+}
 /* does node id itself call `name` (not a method the language calls for it)? */
 static int ct_calls(Compiler *c, int id, const char *name) {
   /* Capture asks explicitly; an ordinary call need not enumerate the
@@ -2759,19 +2775,22 @@ static const int *ver_holders(Compiler *c, const char *nm, int *n) {
   *n = m->n[ix];
   return m->pool + m->lo[ix];
 }
-void ct_version_classes(Compiler *c, int id, const char *nm, CtClassFn fn, void *arg) {
+/* What receives a call node id makes: the value of a node (an explicit
+   call's receiver, the operand a syntax row of implied_calls.yml names),
+   self, or a value no node holds (one the node yields or matches), whose
+   class is not known. The one resolver of where a call lands
+   (ct_landing_classes): a builtin's callback rows join it when they say
+   where theirs land (an argument, an element of one, a block's answer). */
+typedef enum { CTL_VALUE, CTL_SELF, CTL_ANY } CtLandKind;
+/* except: the CORE_ slot of a conversion's own class (IcCall.target), whose
+   values (an instance of a subclass too) it leaves as they are; -1 for none */
+typedef struct { CtLandKind kind; int node, except; } CtLanding;
+/* The classes (and sides) a call of nm that node id makes may run on, landing
+   on at (self too where at's node is a SelfNode). Each handed to fn with the
+   flags call_target is asked with (ct_version_classes, ct_implied_classes). */
+static void ct_landing_classes(Compiler *c, int id, CtLanding at, const char *nm, CtClassFn fn, void *arg) {
   const NodeTable *nt = c->nt;
-  NodeKind kind = nt_kind(nt, id);
-  if (kind == NK_SuperNode || kind == NK_ForwardingSuperNode) {
-    Scope *s0 = comp_scope_of(c, id);
-    const Scope *s = s0 ? comp_super_site(c, s0) : NULL;
-    if (s && !comp_super_shadow(c, s)) {
-      int par = comp_super_parent(c, s->class_id, s->is_cmethod);
-      if (par >= 0) fn(c, id, nm, par, CT_REACH | (s->is_cmethod ? CT_CMETHOD : 0), arg);
-    }
-    return;
-  }
-  int r = nt_ref(nt, id, "receiver");
+  int r = at.kind == CTL_VALUE ? at.node : -1;
   NodeKind rk = r >= 0 ? nt_kind(nt, r) : NK_NONE;
   int cref = rk == NK_ConstantReadNode || rk == NK_ConstantPathNode, rc = cref ? elab_class_ref_at(c, r, NULL) : -1;
   /* a constant the record cannot settle to one class (one a run-time
@@ -2779,8 +2798,15 @@ void ct_version_classes(Compiler *c, int id, const char *nm, CtClassFn fn, void 
      its writes may bind there, when the record can list them */
   int *rcs = NULL, nrc = rk == NK_ConstantReadNode && rc < 0 ? elab_class_candidates(c, r, &rcs) : -1;
   TyKind rt = r >= 0 && rk != NK_SelfNode && !cref ? comp_ntype(c, r) : TY_UNKNOWN;
+  /* a value of the conversion's own class lands nowhere: CRuby makes no call
+     (rb_check_array_type answers an Array as it is) */
+  int ek = at.except >= 0 ? comp_core_class(c, at.except) : -1;
+  if (at.except >= 0 && (core_of_type(rt) == at.except || (ty_is_object(rt) && ek >= 0 && is_descendant(c, ty_object_class(rt), ek)))) {
+    free(rcs);
+    return;
+  }
   int oc = comp_core_class(c, CORE_OBJECT);
-  if (r < 0 || rk == NK_SelfNode) {
+  if (at.kind == CTL_SELF || rk == NK_SelfNode) {
     Scope *sc = comp_scope_of(c, id);
     int self_cls = sc && sc->class_id >= 0 ? sc->class_id : c->node_cbody[id];
     ct_class_and_descendants(c, id, nm, -1, CT_TOP, fn, arg);
@@ -2827,6 +2853,43 @@ void ct_version_classes(Compiler *c, int id, const char *nm, CtClassFn fn, void 
   }
   if (oc >= 0) fn(c, id, nm, oc, 0, arg);
   free(rcs);
+}
+void ct_version_classes(Compiler *c, int id, const char *nm, CtClassFn fn, void *arg) {
+  NodeKind kind = nt_kind(c->nt, id);
+  if (kind == NK_SuperNode || kind == NK_ForwardingSuperNode) {
+    Scope *s0 = comp_scope_of(c, id);
+    const Scope *s = s0 ? comp_super_site(c, s0) : NULL;
+    if (s && !comp_super_shadow(c, s)) {
+      int par = comp_super_parent(c, s->class_id, s->is_cmethod);
+      if (par >= 0) fn(c, id, nm, par, CT_REACH | (s->is_cmethod ? CT_CMETHOD : 0), arg);
+    }
+    return;
+  }
+  int r = nt_ref(c->nt, id, "receiver");
+  ct_landing_classes(c, id, (CtLanding){ r >= 0 ? CTL_VALUE : CTL_SELF, r, -1 }, nm, fn, arg);
+}
+/* (an implied call is asked of an instance's class, the side
+   cplan_implied_target answers, with CT_IMPLIED: the node does not name
+   the method it calls) */
+typedef struct { CtClassFn fn; void *arg; } CtImpliedAsk;
+static void ct_implied_ask(Compiler *c, int id, const char *nm, int k, unsigned flags, void *arg) {
+  const CtImpliedAsk *a = arg;
+  if (k >= 0 && !(flags & (CT_CMETHOD | CT_TOP))) a->fn(c, id, nm, k, flags | CT_IMPLIED, a->arg);
+}
+void ct_implied_classes(Compiler *c, int id, int (*versioned)(Compiler *, const char *), CtClassFn fn, void *arg) {
+  IcCall buf[16], *calls = buf;
+  int n = call_node_implied_names(c, id, buf, 16);
+  if (n > 16) {
+    if (!(calls = malloc(sizeof *calls * (size_t)n))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    call_node_implied_names(c, id, calls, n);
+  }
+  CtImpliedAsk a = { fn, arg };
+  for (int i = 0; i < n; i++)
+    if (versioned(c, calls[i].name))
+      ct_landing_classes(c, id, (CtLanding){ calls[i].operand >= 0 ? CTL_VALUE : calls[i].operand == NTI_SELF ? CTL_SELF : CTL_ANY,
+                                             calls[i].operand, calls[i].target ? builtin_core_class_slot(calls[i].target) : -1 },
+                         calls[i].name, ct_implied_ask, &a);
+  if (calls != buf) free(calls);
 }
 
 /* "class U" / "module M" for program class self, "main" for -1, into buf;
@@ -7728,6 +7791,14 @@ static void ver_named_facts(Compiler *c, VerNamedAsks *q, int demand) {
     const char *cn[2];
     int nn = call_node_names(c, id, cn), ac = 0, sym = k == NK_AliasMethodNode ? nt_ref(nt, id, "old_name") : k == NK_BlockArgumentNode ? nt_ref(nt, id, "expression") : -1;
     for (int i = 0; i < nn; i++) ver_name_add(&rn, &nrn, cn[i]);
+    IcCall ib[16], *ic = ib;
+    int ni = call_node_implied_names(c, id, ib, 16);
+    if (ni > 16) {
+      if (!(ic = malloc(sizeof *ic * (size_t)ni))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+      call_node_implied_names(c, id, ic, ni);
+    }
+    for (int i = 0; i < ni; i++) ver_name_add(&rn, &nrn, ic[i].name);
+    if (ic != ib) free(ic);
     if (sym >= 0 && nt_kind(nt, sym) == NK_SymbolNode) ver_name_add(&rn, &nrn, nt_str(nt, sym, "value"));
     if (k != NK_CallNode || !nn || !cn[0]) continue;
     if (nt_vcall(nt, id)) ver_name_add(&vc, &nvc, cn[0]);
@@ -7799,6 +7870,7 @@ void ver_entries_build(Compiler *c) {
        entry a call of the name would take there (cplan_cmethod_presence) */
     int pc = cplan_presence_class(c, id);
     if (pc >= 0 && cplan_presence_asks(c, id, pc, method_sym_arg(c, id))) ver_need(c, id, method_sym_arg(c, id), pc, CT_CMETHOD, &o);
+    ct_implied_classes(c, id, ct_version_named, ver_need, &o);
     for (int i = 0, nn = call_node_names(c, id, names); i < nn; i++) {
       if (!names[i]) continue;
       if (ct_version_named(c, names[i])) ct_version_classes(c, id, names[i], ver_need, &o);

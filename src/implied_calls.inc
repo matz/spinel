@@ -2,7 +2,9 @@
    The calls CRuby makes for a node that the program does not name
    (nt_implied_calls, src/node_table.c). Included five times, with NTI_PART set to
      1  one row per call, sorted by node kind:
-        { kind, side, condition, absent, operand word, steps, name, name field, { steps } }
+        { kind, side, condition, absent, operand word, steps, name, name field, { steps } },
+        and .planned = 1 on a row whose reader asks the call plan (temporary, see the yml),
+        .target on a row of a conversion's name (the yml's `conversions`)
      2  a case label for each kind that holds a scalar literal
      3  a case label for each kind that is a pattern or a target, not a value
      4  a case label for each kind that is a super: the builtin of its def's name
@@ -19,7 +21,7 @@
   { NK_AssocNode, NTS_INST | NTS_CLASS, NTC_NONLITERAL, NTA_SKIP, NTO_PATH, 1, "eql?", NULL, { { "key", 0, 0, 0 } } },
   { NK_AssocSplatNode, NTS_INST, NTC_NONLITERAL, NTA_SKIP, NTO_PATH, 1, "to_hash", NULL, { { "value", 0, 0, 0 } } },
   { NK_BlockArgumentNode, NTS_INST, NTC_NONLITERAL, NTA_SKIP, NTO_PATH, 1, "to_proc", NULL, { { "expression", 0, 0, 0 } } },
-  { NK_BlockParametersNode, NTS_INST, NTC_MULTI_TARGET, NTA_SKIP, NTO_YIELDED, 0, "to_ary", NULL, { { NULL, 0, 0, 0 } } },
+  { NK_BlockParametersNode, NTS_INST, NTC_MULTI_TARGET, NTA_SKIP, NTO_YIELDED, 0, "to_ary", NULL, { { NULL, 0, 0, 0 } }, .target = "Array" },
   { NK_CallAndWriteNode, NTS_INST, NTC_NONE, NTA_SELF, NTO_PATH, 1, NULL, "name", { { "receiver", 0, 0, 0 } } },
   { NK_CallAndWriteNode, NTS_INST, NTC_NONE, NTA_SELF, NTO_PATH, 1, NULL, "write_name", { { "receiver", 0, 0, 0 } } },
   { NK_CallOperatorWriteNode, NTS_INST, NTC_NONE, NTA_SELF, NTO_PATH, 1, NULL, "name", { { "receiver", 0, 0, 0 } } },
@@ -65,7 +67,7 @@
   { NK_HashPatternNode, NTS_INST, NTC_NONE, NTA_SKIP, NTO_MATCHED, 0, "deconstruct_keys", NULL, { { NULL, 0, 0, 0 } } },
   { NK_HashPatternNode, NTS_INST | NTS_CLASS, NTC_NONE, NTA_SKIP, NTO_PATH, 1, "===", NULL, { { "constant", 0, 0, 0 } } },
   { NK_HashPatternNode, NTS_INST | NTS_CLASS, NTC_NONE, NTA_SKIP, NTO_PATH, 2, "===", NULL, { { "elements", 0, 1, 0 }, { "value", 0, 0, 0 } } },
-  { NK_ImplicitRestNode, NTS_INST, NTC_NONE, NTA_SKIP, NTO_YIELDED, 0, "to_ary", NULL, { { NULL, 0, 0, 0 } } },
+  { NK_ImplicitRestNode, NTS_INST, NTC_NONE, NTA_SKIP, NTO_YIELDED, 0, "to_ary", NULL, { { NULL, 0, 0, 0 } }, .target = "Array" },
   { NK_InNode, NTS_INST | NTS_CLASS, NTC_NONE, NTA_SKIP, NTO_PATH, 1, "===", NULL, { { "pattern", 0, 0, 0 } } },
   { NK_IndexAndWriteNode, NTS_INST, NTC_NONE, NTA_SELF, NTO_PATH, 1, "[]", NULL, { { "receiver", 0, 0, 0 } } },
   { NK_IndexAndWriteNode, NTS_INST, NTC_NONE, NTA_SELF, NTO_PATH, 1, "[]=", NULL, { { "receiver", 0, 0, 0 } } },
@@ -82,9 +84,9 @@
   { NK_MatchRequiredNode, NTS_INST, NTC_NONE, NTA_SKIP, NTO_PATH, 1, "inspect", NULL, { { "value", 0, 0, 0 } } },
   { NK_MatchRequiredNode, NTS_INST | NTS_CLASS, NTC_NONE, NTA_SKIP, NTO_PATH, 1, "===", NULL, { { "pattern", 0, 0, 0 } } },
   { NK_ModuleNode, NTS_CLASS, NTC_NONE, NTA_SKIP, NTO_NONE, 0, "const_added", NULL, { { NULL, 0, 0, 0 } } },
-  { NK_MultiTargetNode, NTS_INST, NTC_NONE, NTA_SKIP, NTO_YIELDED, 0, "to_ary", NULL, { { NULL, 0, 0, 0 } } },
-  { NK_MultiWriteNode, NTS_INST, NTC_NONLITERAL, NTA_SKIP, NTO_PATH, 1, "to_ary", NULL, { { "value", 0, 0, 0 } } },
-  { NK_NumberedParametersNode, NTS_INST, NTC_MULTI_TARGET, NTA_SKIP, NTO_YIELDED, 0, "to_ary", NULL, { { NULL, 0, 0, 0 } } },
+  { NK_MultiTargetNode, NTS_INST, NTC_NONE, NTA_SKIP, NTO_YIELDED, 0, "to_ary", NULL, { { NULL, 0, 0, 0 } }, .planned = 1, .target = "Array" },
+  { NK_MultiWriteNode, NTS_INST, NTC_NONLITERAL, NTA_SKIP, NTO_PATH, 1, "to_ary", NULL, { { "value", 0, 0, 0 } }, .planned = 1, .target = "Array" },
+  { NK_NumberedParametersNode, NTS_INST, NTC_MULTI_TARGET, NTA_SKIP, NTO_YIELDED, 0, "to_ary", NULL, { { NULL, 0, 0, 0 } }, .target = "Array" },
   { NK_ProgramNode, NTS_INST, NTC_NONE, NTA_SKIP, NTO_NONE, 0, "message", NULL, { { NULL, 0, 0, 0 } } },
   { NK_ProgramNode, NTS_INST, NTC_NONE, NTA_SKIP, NTO_NONE, 0, "detailed_message", NULL, { { NULL, 0, 0, 0 } } },
   { NK_ProgramNode, NTS_INST, NTC_NONE, NTA_SKIP, NTO_NONE, 0, "to_s", NULL, { { NULL, 0, 0, 0 } } },

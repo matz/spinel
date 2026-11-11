@@ -181,6 +181,18 @@ enum { CT_CMETHOD = 1, CT_OWN = 2, CT_TOP = 4, CT_REACH = 8, CT_CAPTURE = 16, CT
    A send of a literal name (`send`, `__send__`, `public_send`) calls that
    name too, a second one. */
 int call_node_names(Compiler *c, int id, const char *out[2]);
+/* The calls node id makes CRuby make that the plan binds by version, into
+   out[0..max): an implied call whose lowering asks the plan which method it
+   runs (cplan_implied_target), as its row of tools/implied_calls.yml says
+   (NtImplied.planned), with the operand that receives it; how many (more
+   than max when out was short). The collectors that read call_node_names
+   for a call's own names read these too: the entries' survey and
+   reachability's version marks (ct_implied_classes), and the open
+   histories' asks (ver_named_facts). A builtin's callbacks are not among
+   them yet: their rows do not say which operand an asked callback lands on,
+   nor with what arguments. */
+struct IcCall;
+int call_node_implied_names(Compiler *c, int id, struct IcCall *out, int max);
 /* The name call node id finally calls: its own, or a send-family call's
    literal first argument (a send of a send unwound); *used is the number
    of arguments the sends took. NULL when that name is computed or absent. */
@@ -285,6 +297,12 @@ void ver_chain_free(Compiler *c);
 int ct_main_target(Compiler *c, int id, const char *name);
 typedef void (*CtClassFn)(Compiler *c, int id, const char *nm, int k, unsigned flags, void *arg);
 void ct_version_classes(Compiler *c, int id, const char *nm, CtClassFn fn, void *arg);
+/* ...for each call node id makes that the plan binds by version
+   (call_node_implied_names) of a name `versioned` answers (ct_version_named,
+   ct_version_marked): the classes the operand its row names may be, on the
+   instance side, asked with CT_IMPLIED. The receiver walk above and this one
+   resolve where a call lands in one place (ct_landing_classes) */
+void ct_implied_classes(Compiler *c, int id, int (*versioned)(Compiler *, const char *), CtClassFn fn, void *arg);
 /* the version entries a call whose version is known only at run time
    reaches, and the run-time cells they read (#9898) */
 void ver_entries_build(Compiler *c);

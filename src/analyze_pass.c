@@ -20827,6 +20827,7 @@ static void cr_collect_versions(Compiler *c, const NodeTable *nt, int id, char *
   }
   for (int i = 0, nn = call_node_names(c, id, names); i < nn; i++)
     if (ct_version_marked(c, names[i])) ct_version_classes(c, id, names[i], cr_mark_version, &m);
+  ct_implied_classes(c, id, ct_version_marked, cr_mark_version, &m);
 }
 
 /* What a node makes CRuby call that the program does not name (implicit_calls.h):

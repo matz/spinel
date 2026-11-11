@@ -13155,6 +13155,8 @@ static int marshal_ivar_type_ok(TyKind t) {
     case TY_SYMBOL: case TY_BIGINT: case TY_POLY: case TY_NIL:
     /* the shared handle (`attr_reader :buf` and `obj.buf << x`) */
     case TY_STRBUF:
+    /* a Rational held by value (DateTime's @sec_fraction) */
+    case TY_RATIONAL:
       return 1;
     default:
       /* a nested user object reloads with its real cls_id */
@@ -13225,6 +13227,7 @@ static void emit_marshal_box_ivar_n(Compiler *c, TyKind t, const char *expr, con
     case TY_BOOL:   buf_printf(b, "sp_box_bool(%s)", expr); break;
     case TY_SYMBOL: buf_printf(b, "sp_box_sym(%s)", expr); break;
     case TY_BIGINT: buf_printf(b, "(%s ? sp_box_bigint(%s) : sp_box_nil())", expr, expr); break;
+    case TY_RATIONAL: buf_printf(b, "sp_box_rational(%s)", expr); break;
     default:        buf_puts(b, "sp_box_nil()"); break;
   }
 }
@@ -13252,6 +13255,7 @@ static void emit_marshal_unbox_ivar(Compiler *c, TyKind t, Buf *b) {
     /* a Bignum whose value fits the inline representation arrives INT-tagged
        (sp_box_bigint normalizes, #4594): convert rather than answer NULL */
     case TY_BIGINT: buf_puts(b, "(val.tag == SP_TAG_NIL ? NULL : sp_poly_as_bigint(val))"); break;
+    case TY_RATIONAL: buf_puts(b, "(val.tag == SP_TAG_NIL ? (sp_Rational){0} : sp_poly_as_rational(val))"); break;
     default:        buf_puts(b, "0"); break;
   }
 }
@@ -14219,6 +14223,8 @@ static int marshal_iv_set_kind(Compiler *c, int cid, int j) {
   if (t == TY_POLY) return MSET_POLY;
   /* a Boolean field is one byte, its value the test */
   if (t == TY_BOOL) return MSET_BOOL;
+  /* a Rational held by value has no pointer to test */
+  if (t == TY_RATIONAL) return MSET_ALWAYS;
   return MSET_NONNULL;
 }
 /* What the rows are built from: the kinds converted by function, and the

@@ -2298,6 +2298,7 @@ static int lr_foreign_mixin(ElabRec *x, int node, const LrMixin *m, int cls, int
 }
 
 static int lr_const_root_undefined(const NodeTable *nt, int n);
+static int lr_const_path_fails(Compiler *c, int n);
 static int lr_sg_chain_runs(Compiler *c, int cls, const char *name, LoadPoint p, const LrDef **out);
 static int lr_sg_chain_find(Compiler *c, int cls, const char *name, LoadPoint p, const LrDef **out, int *found);
 static void lr_call(ElabRec *x, int node, int fc, int fs, unsigned char *vs, int fnode, int may, int nested) {
@@ -2421,12 +2422,20 @@ static void lr_call(ElabRec *x, int node, int fc, int fs, unsigned char *vs, int
       /* a class among the arguments: TypeError where the statement runs
          (codegen reads the mark), and no mixin, not of the modules beside it */
       if (lr_mix_names_class(x->c, av, ac)) { nt_node_set_int((NodeTable *)nt, node, "mixin_class_arg", 1); continue; }
+      /* an argument whose lookup fails (a constant the program defines
+         nowhere, or `Known::Thing` where Known holds no Thing): the
+         statement raises NameError where it runs, before it mixes any in,
+         so it is no mixin and defines nothing (codegen reads the mark) */
+      int fail = -1;
+      for (int q = 0; q < ac && fail < 0; q++)
+        if (q == i ? mod < 0 && mod != LR_LATER : lr_class_ref_at(x->c, av[q], NULL) < 0)
+          fail = lr_const_path_fails(x->c, av[q]);
+      if (fail >= 0) {
+        int path = nt_kind(nt, fail) == NK_ConstantPathNode && nt_ref(nt, fail, "parent") >= 0;
+        nt_node_set_int((NodeTable *)nt, node, path ? "mixin_undefined_path" : "mixin_undefined_const", path ? fail + 1 : 1);
+        continue;
+      }
       if (mod < 0 && mod != LR_LATER) opaque = LR_OPAQUE_DEFINES;
-      /* a constant the program defines nowhere: the statement raises
-         NameError where it runs, and mixes nothing in (codegen reads the
-         mark) */
-      if (mod < 0 && mod != LR_LATER && lr_const_root_undefined(nt, av[i]))
-        nt_node_set_int((NodeTable *)nt, node, "mixin_undefined_const", 1);
       if (!k) continue;
       k->mix = lr_grow(k->mix, &k->cmix, k->nmix, sizeof *k->mix);
       x->r->hgen++;
@@ -7492,6 +7501,44 @@ static int lr_const_root_undefined(const NodeTable *nt, int n) {
     if (in && sp_streq(in, nm)) return 0;
   }
   return 1;
+}
+/* Can a constant the program does not write by a literal name come to be,
+   from a const_missing or from a const_set or autoload of a computed name? */
+static int lr_const_names_open(const NodeTable *nt) {
+  for (int id = 0; id < nt->count; id++) {
+    NodeKind ik = nt_kind(nt, id);
+    const char *nm = ik == NK_DefNode || ik == NK_CallNode ? nt_str(nt, id, "name") : NULL;
+    if (!nm) continue;
+    if (ik == NK_DefNode && sp_streq(nm, "const_missing")) return 1;
+    if (ik == NK_CallNode && (sp_streq(nm, "const_set") || sp_streq(nm, "autoload"))) {
+      int an = nt_ref(nt, id, "arguments"), ac = 0;
+      const int *av = an >= 0 ? nt_arr(nt, an, "arguments", &ac) : NULL;
+      if (ac < 1 || (nt_kind(nt, av[0]) != NK_SymbolNode && nt_kind(nt, av[0]) != NK_StringNode)) return 1;
+    }
+  }
+  return 0;
+}
+/* The segment of constant read n (`Missing`, `Known::Thing`) its lookup
+   fails on, or -1: a first name the program defines nowhere
+   (lr_const_root_undefined), or a name that a program class or module the
+   path reaches does not hold, nor any of its ancestors, where the read
+   runs, with nothing that could add it (lr_const_names_open). */
+static int lr_const_path_fails(Compiler *c, int n) {
+  const NodeTable *nt = c->nt;
+  int seg[16], ns = 0, x = n;
+  for (; x >= 0 && nt_kind(nt, x) == NK_ConstantPathNode && nt_ref(nt, x, "parent") >= 0 && ns < 16; x = nt_ref(nt, x, "parent")) seg[ns++] = x;
+  if (lr_const_root_undefined(nt, x)) return x;
+  if (ns == 0 || ns == 16 || lr_const_names_open(nt)) return -1;
+  for (int i = ns - 1; i >= 0; i--) {   /* from the root outward */
+    int core = -1, pc = lr_class_ref_at(c, nt_ref(nt, seg[i], "parent"), &core);
+    if (pc < 0 || core >= 0) return -1;   /* (a core class's constants are not the record's) */
+    LoadPoint p = elab_point_of(c, seg[i]);
+    const LrDef *d = NULL;
+    int o = lr_const_in(c, pc, lr_written_name(nt, seg[i]), p, p.region < 0, 0, &d, 0, LR_KEY_EITHER);
+    if (o == ELAB_NO) return seg[i];
+    if (o != ELAB_YES) return -1;
+  }
+  return -1;
 }
 static int lr_opaque_may_define_hook(Compiler *c, int k) {
   const NodeTable *nt = c->nt;

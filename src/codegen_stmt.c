@@ -20451,6 +20451,17 @@ static int emit_call_stmt(Compiler *c, int id, Buf *b, int indent, const NodeTab
                    own ? own : "", own ? "::" : "", rn ? rn : "");
         return 1;
       }
+      /* one whose path fails past its first name (`Known::Thing`): the
+         NameError names the segment and the module it is looked up in */
+      if (nt_int(nt, id, "mixin_undefined_path", 0) > 0) {
+        int sg = nt_int(nt, id, "mixin_undefined_path", 0) - 1;
+        int pci = const_node_class_index(c, nt_ref(nt, sg, "parent"));
+        const char *own = pci >= 0 ? class_ruby_name(c, pci) : NULL, *sn = nt_str(nt, sg, "name");
+        emit_indent(b, indent);
+        buf_printf(b, "sp_raise_cls(\"NameError\", \"uninitialized constant %s%s%s\");\n",
+                   own ? own : "", own ? "::" : "", sn ? sn : "");
+        return 1;
+      }
       if (nt_int(nt, id, "mixin_class_arg", 0)) {
         emit_indent(b, indent);
         buf_puts(b, "sp_raise_cls(\"TypeError\", \"wrong argument type Class (expected Module)\");\n");

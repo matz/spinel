@@ -1,0 +1,4 @@
+NameError: uninitialized constant Known::Thing
+NameError: uninitialized constant Known::Mid
+widget
+here

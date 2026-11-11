@@ -21231,17 +21231,24 @@ static void emit_builtin_reopen_mod_arms(Compiler *c, int **mods, const int *nmo
    includes, closed in incs) goes in at the front, after the ones its own
    call put in. A module the zone already has stays where it is, and the
    next one goes in after it. Answers the length. busy marks the modules
-   whose zone is being built, so a cycle stops and a long chain does not. */
+   whose zone is being built, so a cycle stops and a long chain does not.
+   memo keeps each built zone (memo_n -1 until built), so a module that
+   many modules prepend is built once. */
 static int prep_zone_build(Compiler *c, int k, int **preps, const int *npreps,
-                           int **incs, const int *nincs, int *out, int cap, unsigned char *busy) {
+                           int **incs, const int *nincs, int *out, int cap, unsigned char *busy,
+                           int **memo, int *memo_n) {
   int nz = 0;
   if (k < 0 || k >= c->nclasses || busy[k]) return 0;
+  if (memo_n[k] >= 0) {
+    memcpy(out, memo[k], sizeof(int) * (size_t)memo_n[k]);
+    return memo_n[k];
+  }
   busy[k] = 1;
   int *seq = malloc(sizeof(int) * (size_t)cap);
   if (!seq) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   for (int q = 0; q < npreps[k]; q++) {
     int pm = preps[k][q], at = 0, ns = 0;
-    if (pm >= 0 && pm < c->nclasses && pm != k) ns = prep_zone_build(c, pm, preps, npreps, incs, nincs, seq, cap, busy);
+    if (pm >= 0 && pm < c->nclasses && pm != k) ns = prep_zone_build(c, pm, preps, npreps, incs, nincs, seq, cap, busy, memo, memo_n);
     if (ns < cap) seq[ns++] = pm;
     for (int r = (pm >= 0 && pm < c->nclasses && pm != k ? nincs[pm] : 0) - 1; r >= 0 && ns < cap; r--) seq[ns++] = incs[pm][r];
     for (int s = 0; s < ns; s++) {
@@ -21256,6 +21263,10 @@ static int prep_zone_build(Compiler *c, int k, int **preps, const int *npreps,
   }
   free(seq);
   busy[k] = 0;
+  memo[k] = malloc(sizeof(int) * (size_t)(nz > 0 ? nz : 1));
+  if (!memo[k]) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  memcpy(memo[k], out, sizeof(int) * (size_t)nz);
+  memo_n[k] = nz;
   return nz;
 }
 
@@ -21686,6 +21697,11 @@ static void emit_class_machinery(const NodeTable *nt, Compiler *c, Buf *b, char 
       int any_prep = 0;
       for (int ci = 0; ci < c->nclasses; ci++) if (cls_npreps[ci]) { any_prep = 1; break; }
       if (any_prep) {
+        unsigned char *zone_busy = calloc((size_t)c->nclasses, 1);
+        int **zone_memo = calloc((size_t)c->nclasses, sizeof(int *));
+        int *zone_memo_n = malloc(sizeof(int) * (size_t)c->nclasses);
+        if (!zone_busy || !zone_memo || !zone_memo_n) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+        for (int ci = 0; ci < c->nclasses; ci++) zone_memo_n[ci] = -1;
         buf_puts(b, "    switch(cur.cls_id){\n");
         for (int ci = 0; ci < c->nclasses; ci++) {
           if (cls_npreps[ci] == 0) continue;
@@ -21695,16 +21711,16 @@ static void emit_class_machinery(const NodeTable *nt, Compiler *c, Buf *b, char 
              including B gives [C, B, L]. */
           int cap = c->nclasses * 4 + 16, nz = 0;
           int *zone = malloc(sizeof(int) * (size_t)cap);
-          unsigned char *busy = calloc((size_t)c->nclasses, 1);
-          if (!zone || !busy) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-          nz = prep_zone_build(c, ci, cls_preps, cls_npreps, cls_incs, cls_nincs, zone, cap, busy);
-          free(busy);
+          if (!zone) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+          nz = prep_zone_build(c, ci, cls_preps, cls_npreps, cls_incs, cls_nincs, zone, cap, zone_busy, zone_memo, zone_memo_n);
           for (int z = 0; z < nz; z++)
             buf_printf(b, " if(sp_class_anc_step(a,want,sp_box_class(((sp_Class){%d}))))return 1;", zone[z]);
           free(zone);
           buf_puts(b, " break;\n");
         }
         buf_puts(b, "    }\n");
+        for (int ci = 0; ci < c->nclasses; ci++) free(zone_memo[ci]);
+        free(zone_memo); free(zone_memo_n); free(zone_busy);
       }
     }
     buf_puts(b, "    if(sp_class_anc_step(a,want,sp_box_class(cur)))return 1;\n");

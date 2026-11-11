@@ -3329,9 +3329,12 @@ int sclass_value_call(Compiler *c, int id) {
 /* The type of call `id` bound to the program's method mi of the root class
    (Object, Numeric, NilClass) that the plan found for it. A yielding Object
    method given a block answers what its proc form does, a boxed value
-   (#5779). */
+   (#5779). A block that breaks makes the call answer the union of the
+   method's result and the break value, poly, as the break check types any
+   call (the wrapper asks for the method's own type under g_infer_ignore_brk). */
 static TyKind an_root_reopen_call(Compiler *c, int id, const CallPlan *p) {
   an_user_call_record(c, id, p->mi, UC_REOPEN, p->owner_ci);
+  if (!g_infer_ignore_brk && call_breaks(c, id)) return TY_POLY;
   return p->owner_ci == comp_core_class(c, CORE_OBJECT) && c->scopes[p->mi].yields && nt_ref(c->nt, id, "block") >= 0
          ? TY_POLY : an_user_call(c, id, p->mi, UC_REOPEN, p->owner_ci);
 }

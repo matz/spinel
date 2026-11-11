@@ -150,15 +150,23 @@ static const char *cplan_builtin_name_of(Compiler *c, int cid) {
 /* Does a class value (a call's receiver recv, typed Class) answer `name`
    with a method of CRuby's before Object's instance method: its class's
    singleton chain (File.basename), or Class's and Module's own? A constant
-   names the class; a class held in a variable could be any builtin one. */
+   names the class; a class held in a variable could be any builtin one. A
+   constant of a builtin's name is the builtin, a program's reopening of it
+   included (`class File; end`), unless it names a class of the program's own
+   (a nested `Foo::File`), which only Class's and Module's methods precede. */
 int cplan_class_value_answers(Compiler *c, int recv, const char *name) {
   const NodeTable *nt = c->nt;
   NodeKind rk = recv >= 0 ? nt_kind(nt, recv) : NK_NONE;
+  int named = rk == NK_ConstantReadNode || rk == NK_ConstantPathNode;
   const char *bn = rk == NK_ConstantReadNode || (rk == NK_ConstantPathNode && nt_ref(nt, recv, "parent") < 0) ? nt_key_name(nt, recv) : NULL;
-  int bid = bn && comp_class_index(c, bn) < 0 ? builtin_class_id(bn) : 0;
-  if (!bid) return (!bn && builtin_cmethod_known_any(name)) || core_class_value_answers("Class#", name) || core_class_value_answers("Module#", name);
-  return core_class_value_answers(bn, name) || core_class_value_answers(is_builtin_module_name(bn) ? "Module#" : "Class#", name) ||
-         builtin_class_id_answers(bid, name, 1);
+  int ci = named ? const_node_class_index(c, recv) : -1;
+  int own = ci >= 0 && !(c->classes[ci].is_builtin_const && c->classes[ci].enclosing_class < 0);
+  if (own || !bn || !(is_builtin_class_name(bn) || is_builtin_module_const_name(bn)))
+    return (!bn && !own && builtin_cmethod_known_any(name)) || core_class_value_answers("Class#", name) || core_class_value_answers("Module#", name);
+  /* (a module of the table with no class id, Process or GC, has its singleton methods in the arity rows) */
+  int bid = builtin_class_id(bn);
+  return core_class_value_answers(bn, name) || core_class_value_answers(is_builtin_module_const_name(bn) ? "Module#" : "Class#", name) ||
+         (bid ? builtin_class_id_answers(bid, name, 1) : builtin_cmethod_known(bn, name));
 }
 
 /* A program's own method on builtin class root (CORE_OBJECT, CORE_NUMERIC,
@@ -215,6 +223,8 @@ const CallPlan *cplan_root_reopen_call(Compiler *c, int id, const CallPlan *p) {
      by an exception's class at run time) */
   int recv = nt_ref(c->nt, id, "receiver");
   TyKind rt = recv >= 0 ? comp_ntype(c, recv) : TY_UNKNOWN;
+  /* (`nil&.m` answers nil and calls nothing: the readers' own fold of it) */
+  if (rt == TY_NIL && nt_safe_nav(c->nt, id)) return NULL;
   /* (an Object method beside a NilClass one of the name: a String, Integer or
      Float is answered boxed, as the analysis reads it before the nullability settles) */
   if (p->owner_ci == comp_core_class(c, CORE_OBJECT) && cplan_nil_scalar_boxed(c, id, name, recv, rt)) return NULL;
@@ -233,6 +243,12 @@ const CallPlan *cplan_root_reopen_call(Compiler *c, int id, const CallPlan *p) {
     if ((vis < 0 ? comp_method_vis_declared(c, mc, name, NULL) : vis) != SP_VIS_PUBLIC) return NULL;
   }
   return p;
+}
+
+/* See call_plan.h. */
+int cplan_reopen_target(Compiler *c, const CallPlan *p) {
+  return p->mi >= 0 && p->via == UC_REOPEN && p->dispatch == CP_DIRECT &&
+         (cplan_root_reopen_owner(c, p) || c->scopes[p->mi].yields) ? p->mi : -1;
 }
 
 /* A method the program adds to Object under the name of a class-gated

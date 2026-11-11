@@ -328,6 +328,10 @@ static int node_is_oint_asked(Compiler *c, int node) {
        (`class Symbol; def mark = ...`) */
     if (mi < 0 && !io_bi && r >= 0 && rt != TY_POLY && rt != TY_UNKNOWN && !ty_is_object(rt))
       mi = comp_builtin_kind_reopen_mi(c, rt, nm);
+    /* ... or the one the plan binds to the call (a root class's, a poly
+       receiver's included): its return form is the call's */
+    if (mi < 0 && !io_bi && r >= 0 && !ty_is_object(rt))
+      mi = cplan_reopen_target(c, cplan_user(c, node));
     /* a method whose return widened past the call's (a yielding method
        answering its block, typed per call site): the call's own analysis */
     if (mi >= 0 && (c->scopes[mi].ret == TY_POLY || c->scopes[mi].ret == TY_UNKNOWN)) return nullable_int_value(c, node);
@@ -439,6 +443,13 @@ static int node_is_oint_asked(Compiler *c, int node) {
       int nn = nullable_int_value(c, node);
       g_nn_builtin_call = sv_bc;
       if (nn) return 1;
+      /* ... unless the name is one the program's Object method owns, which
+         is the arm's answer in its own form */
+      if (g_poly_builtin_arm && g_pd_skip == node) {
+        int oc = comp_core_class(c, CORE_OBJECT);
+        int omi = oc >= 0 ? call_target(c, node, oc, nm, 0, NULL) : -1;
+        if (omi >= 0 && method_ret_is_oint(&c->scopes[omi])) return 1;
+      }
     }
     /* `Integer(x, exception: false)` / `Float(x, exception: false)`: nil on
        a failed conversion */

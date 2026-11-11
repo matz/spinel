@@ -39705,6 +39705,10 @@ int nullable_int_value(Compiler *c, int v) {
         }
       }
     }
+    /* a yielding method the program defines on a builtin class that the plan
+       binds to the call answers its block's value, nil included
+       (`nil.f { |v| v }` over `yield nil`) */
+    if (mi < 0 && rcv >= 0 && cn) mi = cplan_reopen_target(c, cplan_user_fresh(c, v));
     if (mi >= 0 && c->scopes[mi].ret_nullable_int) return 1;
     /* A bare (receiverless) call to an attr_reader resolves `mi` through
        comp_self_call_mi straight to the synthesized `def x = @x` scope, but
@@ -42566,7 +42570,7 @@ static void mark_nullable_int_locals(Compiler *c) {
         /* a builtin-typed receiver calling a method the program adds to
            Object that no builtin row serves: codegen's Object fallback
            reaches it, so the nil its arguments carry marks it (`12.enc(nil)`) */
-        else if (rt != TY_POLY && rt != TY_UNKNOWN && rt != TY_VOID && rt != TY_NIL &&
+        else if (rt != TY_POLY && rt != TY_UNKNOWN && rt != TY_VOID &&
                  nt_kind(nt, recv) != NK_ConstantReadNode && nt_kind(nt, recv) != NK_ConstantPathNode &&
                  nt_str(nt, id, "name")) {
           int oci = comp_core_class(c, CORE_OBJECT);

@@ -34703,6 +34703,8 @@ void emit_reopen_pf_call(Compiler *c, int id, int pf, int cblk, const char *recv
   /* (an Integer or Float that can be nil is an oint: boxed with its nil) */
   else if (wr.kind == RK_BOXED && method_ret_is_oint(&c->scopes[pf])) emit_boxed_ret_call(c, &c->scopes[pf], oc.p, b);
   else if (wr.kind == RK_BOXED && pr != TY_POLY) emit_boxed_text(c, pr, oc.p, b);
+  /* (a boxed answer a call site reads with its nil keeps it: `nil.f { |v| v }` over `yield nil`) */
+  else if (wr.kind == RK_OPT && pr == TY_POLY && oint_kind(want)) buf_printf(b, "%s(%s)", oint_unbox(want), oc.p);
   else if (wr.kind != RK_BOXED && pr == TY_POLY && is_scalar_ret(want)) emit_unbox_text(c, want, oc.p, b);
   else buf_puts(b, oc.p);
   free(oc.p);
@@ -35421,7 +35423,11 @@ static void emit_call_body_ordinary(Compiler *c, int id, Buf *b) {
      answers every receiver the lookup reaches it for, ahead of the arms
      below that know the name (Kernel's tap, then, frozen?) */
   { const CallPlan *rp = nt_ref(nt, id, "receiver") >= 0 ? cplan_root_reopen_call(c, id, cplan_user(c, id)) : NULL;
-    if (rp && rp->dispatch == CP_DIRECT) {
+    /* (a block that breaks is wrapped first, below: the wrapper's own pass,
+       with the call as g_brk_skip_id, comes back here; so is a `&.` whose
+       nil guard is still ahead, by emit_call_safe_nav_arms, which re-enters
+       with the call as g_sn_skip) */
+    if (rp && rp->dispatch == CP_DIRECT && (id == g_brk_skip_id || !call_breaks(c, id)) && !sn_guard_pending(c, id)) {
       if (g_plan_check) cplan_served("root-reopen");
       if (emit_root_reopen_call(c, id, b, nt, nt_ref(nt, id, "receiver"), rp->owner_ci, rp->mi)) return;
     } }

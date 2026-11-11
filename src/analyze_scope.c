@@ -1520,7 +1520,7 @@ void header_parent_encloses(Compiler *c, int par, int child, const char *leaf, i
   const char *pn = pc >= 0 ? c->classes[pc].ruby_name_cache : NULL;
   if (pn && has_path && !ruby_path_ends_with(pn, path)) pc = -1;
   if (pc >= 0 && pc != child && !c->classes[pc].is_builtin_const) {
-    c->classes[child].enclosing_class = pc; comp_class_path_moved();
+    comp_class_nested(c, child, pc); comp_class_path_moved();
     return;
   }
   char head[64];

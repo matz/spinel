@@ -2453,9 +2453,11 @@ const char *encoding_const_name(const char *nm) {
 
 int strh_op(const char *n, int argc, int block) {
   if (!n || block) return STRH_NONE;
-  if (argc == 1 && is_element_at_alias(n)) return STRH_ELEM;
-  if (argc == 0 && is_endpoint_query(n)) return STRH_ELEM;
+  if (argc == 1 && (is_element_at_alias(n) || sp_streq(n, "fetch") || sp_streq(n, "dig"))) return STRH_ELEM;
+  if (argc == 0 && (is_endpoint_query(n) || is_minmax_query(n) || sp_streq(n, "sample"))) return STRH_ELEM;
   if (argc == 0 && (sp_streq(n, "pop") || sp_streq(n, "shift"))) return STRH_TAKE;
+  if (argc == 1 && sp_streq(n, "delete_at")) return STRH_TAKE;
+  if (argc == 1 && sp_streq(n, "delete")) return STRH_DELETE;
   return STRH_NONE;
 }
 

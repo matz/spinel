@@ -1447,9 +1447,10 @@ int std_stream_foreign_writer(Compiler *c, const char *nm);   /* an object outpu
 int std_stream_bare_call_own(Compiler *c, int id, const char *nm);   /* bare nm reaches the program's own */
 /* The operation (StrhOp, builtin_names.h) call node `call` is on a String
    Array, whose elements are handles, given the receiver's type rt:
-   STRH_NONE unless rt is TY_STR_ARRAY, the call's index
-   arguments are Integers, no argument is a splat, a keyword Hash or a block
-   argument, and no method of the program's own stands in for Array's. */
+   STRH_NONE unless rt is TY_STR_ARRAY, the call's index is an Integer
+   (delete's needle a String), no argument is a splat, a keyword Hash or a
+   block argument, and no method of the program's own stands in for
+   Array's. */
 int strh_call_op(Compiler *c, int call, TyKind rt);
 int strh_var_read(const NodeTable *nt, int n);   /* a variable's read, whatever its kind of variable */
 

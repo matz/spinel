@@ -4921,17 +4921,18 @@ static int emit_array_hash_literal_expr(Compiler *c, int id, Buf *b, const NodeT
       }
 else {
         Buf el; memset(&el, 0, sizeof el);
+        int is_held = 0;
         /* element preludes flow to g_pre first; an untyped element (a raise
            token, a void call) is coerced to the element type */
         /* an element that can be nil stores with it (the array's own nil) */
         const char *esfx = nil_store_sfx(c, k, els[j]);
         if (esfx[0] && (sp_streq(k, "Int") || sp_streq(k, "Float"))) emit_elem_store_value(c, k, els[j], &el);
         else if (repr_of(c, els[j]).untyped) emit_unresolved_coerced(c, els[j], ty_array_elem(at), &el);
-        else emit_typed_elem_coerce(c, els[j], at, "an Array literal's element", &el);
+        else is_held = emit_typed_elem_coerce(c, els[j], at, "an Array literal's element", &el);
         emit_indent(g_pre, g_indent);
         /* each element as the Array holds it (emit_typed_elem_hold) */
         buf_printf(g_pre, "sp_%sArray_push%s(_t%d, ", k, esfx[0] ? esfx : typed_elem_store_sfx(at), t);
-        if (esfx[0]) buf_puts(g_pre, el.p ? el.p : "");
+        if (esfx[0] || is_held) buf_puts(g_pre, el.p ? el.p : "");
         else emit_typed_elem_hold(c, els[j], at, el.p ? el.p : "", g_pre);
         buf_puts(g_pre, ");\n");
         free(el.p);
@@ -6774,7 +6775,7 @@ static void emit_expr_node(Compiler *c, int id, Buf *b) {
     else if (irr.elem == TY_STRING) {
       buf_printf(b, "({ sp_StrArray *_t%d = ", ta2); emit_expr(c, ir, b);
       buf_printf(b, "; sp_int _t%d = ", tb2); emit_int_expr(c, iav[0], b);
-      buf_printf(b, "; const char *_t%d = SP_STR_B(sp_StrArray_get(_t%d, _t%d));", tc2, ta2, tb2);
+      buf_printf(b, "; const char *_t%d = SP_STR_B(sp_StrArray_get_e(_t%d, _t%d));", tc2, ta2, tb2);
       buf_printf(b, " if (%s_t%d) { ", is_or2 ? "!" : "", tc2);
       emit_guarded_slot_assign(c, iv, tc2, b);
       buf_printf(b, "; sp_StrArray_set(_t%d, _t%d, _t%d); } _t%d; })", ta2, tb2, tc2, tc2);

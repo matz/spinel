@@ -239,8 +239,10 @@ int emit_op_array_last(Compiler *c, const BopCtx *x, Buf *b) {
   }
   else {
     const char *k = array_kind(x->rt);
-    buf_printf(b, "({ %s _t%d = %s%s%s; sp_%sArray_get(_t%d, sp_%sArray_length(_t%d) - 1); })",
-               c_type_name(x->rt), t, pre, rb.p ? rb.p : "", post, k, t, k, t);
+    int rd = typed_elem_read_open(x->rt, x->id, b);
+    buf_printf(b, "({ %s _t%d = %s%s%s; sp_%sArray_get%s(_t%d, sp_%sArray_length(_t%d) - 1); })",
+               c_type_name(x->rt), t, pre, rb.p ? rb.p : "", post, k, typed_elem_store_sfx(x->rt), t, k, t);
+    if (rd) buf_puts(b, ")");
   }
   free(rb.p);
   return 1;
@@ -936,13 +938,14 @@ int emit_op_array_minmax(Compiler *c, const BopCtx *x, Buf *b) {
   if (sp_streq(name, "minmax") && argc == 0 && block < 0) {
     int t = ++g_tmp, o = ++g_tmp;
     int is_str = rt == TY_STR_ARRAY;
-    const char *et = is_str ? "const char *" : rt == TY_FLOAT_ARRAY ? "sp_ofloat " : "sp_oint ";
+    const char *et = is_str ? "sp_String *" : rt == TY_FLOAT_ARRAY ? "sp_ofloat " : "sp_oint ";
     buf_printf(b, "({ sp_%sArray *_t%d = ", k, t); emit_nil_ck_recv(c, recv, rt, "cmp", 0, b);
     buf_puts(b, ";");
     if (is_str) buf_printf(b, " SP_GC_ROOT(_t%d);", t);
     /* an empty receiver answers [nil, nil]: an Integer or Float pair
        carries those nils in its bitmap */
-    const char *ms = is_str ? "" : "_o", *mo = is_str ? "" : "_o";
+    /* (a String Array's extremes are elements, taken and pushed as the handles it holds) */
+    const char *ms = is_str ? typed_elem_store_sfx(rt) : "_o", *mo = ms;
     buf_printf(b, " %s_mn%d = sp_%sArray_min%s(_t%d); %s_mx%d = sp_%sArray_max%s(_t%d);"
                   " sp_%sArray *_t%d = sp_%sArray_new(); sp_%sArray_push%s(_t%d, _mn%d);"
                   " sp_%sArray_push%s(_t%d, _mx%d); _t%d; })",
@@ -1644,7 +1647,7 @@ int emit_op_array_product(Compiler *c, const BopCtx *x, Buf *b) {
     buf_printf(b, " sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d);", tr, tr);
     buf_printf(b, " for (sp_int _t%d = 0; _t%d < sp_%sArray_length(_t%d); _t%d++) {", ti, ti, k, ta, ti);
     buf_printf(b, " sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d); sp_PolyArray_push(_t%d, ", te, te, te);
-    char ee[96]; snprintf(ee, sizeof ee, "sp_%sArray_get(_t%d, _t%d)", k, ta, ti);
+    char ee[96]; typed_elem_getf(ee, sizeof ee, rt, k, "_t%d, _t%d", ta, ti);
     emit_boxed_text(c, ty_array_elem(rt), ee, b);
     buf_printf(b, "); sp_PolyArray_push(_t%d, sp_box_poly_array(_t%d)); }", tr, te);
     buf_printf(b, " _t%d; })", tr);
@@ -2463,6 +2466,7 @@ int emit_call_append_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, cons
       const char *psfx = nil_store_sfx(c, k, argv[a]);
       buf_printf(b, "sp_%sArray_push%s(_t%d, ", k, psfx[0] || art == TY_POLY_ARRAY ? psfx : typed_elem_store_sfx(art), t);
       Buf vb; memset(&vb, 0, sizeof vb);
+      int is_held = 0;
       if (art == TY_POLY_ARRAY) emit_boxed(c, argv[a], &vb);
       /* a poly value into a String, Integer or Float array: its nil is the
          slot's nil, and a value of another kind is refused, as the statement
@@ -2496,9 +2500,9 @@ int emit_call_append_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, cons
       /* an Integer or Float value that can be nil stores with it; any other
          value keeps the push's own coercion (and its refusal wording) */
       else if (oint_kind(elem) && nil_store_sfx(c, k, argv[a])[0]) emit_elem_store_value(c, k, argv[a], &vb);
-      else emit_typed_elem_coerce(c, argv[a], art, "an Array push", &vb);
+      else is_held = emit_typed_elem_coerce(c, argv[a], art, "an Array push", &vb);
       /* the value as the element is held (a String Array's handle) */
-      if (art == TY_POLY_ARRAY || psfx[0]) buf_puts(b, vb.p ? vb.p : "");
+      if (art == TY_POLY_ARRAY || psfx[0] || is_held) buf_puts(b, vb.p ? vb.p : "");
       else emit_typed_elem_hold(c, argv[a], art, vb.p ? vb.p : "", b);
       free(vb.p);
       buf_puts(b, "); ");
@@ -2997,12 +3001,13 @@ int emit_call_array_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const
         if (voint) buf_puts(b, oint_ctype(et)); else emit_ctype(c, held != TY_UNKNOWN ? held : et, b);
         buf_printf(b, " _t%d = ", tv);
         Buf vb; memset(&vb, 0, sizeof vb);
+        int is_held = 0;
         if (vboxed && et == TY_INT) { buf_puts(&vb, "sp_poly_elem_i("); emit_expr(c, argv[1], &vb); buf_puts(&vb, ")"); }
         else if (vboxed && et == TY_STRING) { buf_puts(&vb, "sp_poly_elem_s("); emit_expr(c, argv[1], &vb); buf_puts(&vb, ")"); }
         else if (vboxed && et == TY_FLOAT) { buf_puts(&vb, "sp_poly_elem_f("); emit_expr(c, argv[1], &vb); buf_puts(&vb, ")"); }
         else if (voint) emit_oint_expr(c, argv[1], et, &vb);
-        else emit_typed_elem_coerce(c, argv[1], rt, "an Array element store", &vb);
-        if (voint) buf_puts(b, vb.p ? vb.p : "");
+        else is_held = emit_typed_elem_coerce(c, argv[1], rt, "an Array element store", &vb);
+        if (voint || is_held) buf_puts(b, vb.p ? vb.p : "");
         else emit_typed_elem_hold(c, argv[1], rt, vb.p ? vb.p : "", b);
         free(vb.p);
         const char *vsfx = nil_store_sfx(c, k, argv[1]);

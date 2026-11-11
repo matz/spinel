@@ -6147,8 +6147,15 @@ int strh_call_op(Compiler *c, int call, TyKind rt) {
   const int *av = ca >= 0 ? nt_arr(nt, ca, "arguments", &argc) : NULL;
   if (nt_argv_has(nt, av, argc, NT_ARG_SPLAT | NT_ARG_KEYWORDS | NT_ARG_BLOCK)) return STRH_NONE;
   int op = strh_op(nm, argc, blk < 0 ? 0 : nt_kind(nt, blk) == NK_BlockNode ? 1 : 2);
-  if (op == STRH_ELEM && argc == 1 && comp_ntype(c, av[0]) != TY_INT) return STRH_NONE;
-  if (op != STRH_NONE && share_builtin_overridden(c, "Array", nm)) return STRH_NONE;
+  if (op == STRH_NONE || share_builtin_overridden(c, "Array", nm)) return STRH_NONE;
+  if (argc == 1) {
+    /* (`[]` at an index known only at run time, where the call is typed a
+       String: its emitter reads the element) */
+    TyKind at = comp_ntype(c, av[0]);
+    if (op == STRH_DELETE ? at != TY_STRING
+                          : at != TY_INT && !(at == TY_POLY && is_aref_name(nm) && comp_ntype(c, call) == TY_STRING))
+      return STRH_NONE;
+  }
   return op;
 }
 /* Is node n a read of a variable (a local, an instance variable, a global, a

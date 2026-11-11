@@ -29,13 +29,16 @@ static char *op_recv_text(Compiler *c, const BopCtx *x) {
           Emitted at its first occurrence, repeated after, as $r is. The
           caller's x->rtext is the plain rendering, so a receiver with an
           oint form is rendered again from the node (as the nil? arm does)
-     $O   "_o" for an Integer or Float array receiver, "" for the other
-          kinds: the runtime's `_o` twin answers those elements with their
-          nil (sp_$AArray_pop$O)
+     $O   the suffix of the runtime entry that answers an element as the
+          Array holds it: "_o" for an Integer or Float array receiver (its
+          twin answers the element with its nil, sp_$AArray_pop$O), "_e"
+          for a String Array (the handle), "" for the other kinds
      $<   open and $> close an unwrap of the row's sp_oint / sp_ofloat
           answer where the call's consumer wants it plain (sp_oint_arg, by
           node_is_oint of the call); nothing where it takes the oint. The
-          kind is the row's result, or the call's type when the row has none
+          kind is the row's result, or the call's type when the row has none.
+          For a String Array's element, the handle $O names: the bytes of
+          it (SP_STR_B) unless the call is the raw read (typed_elem_read_raw)
      $h   the receiver held across the arguments (hold_recv_open, rooted
           in a temp of its C type): the hold opens before anything else is
           emitted or any temp is taken, and closes after the row's text
@@ -227,12 +230,17 @@ static int emit_op_template(Compiler *c, const BopCtx *x, Buf *b) {
     }
     else if (p[0] == '$' && p[1] == 'O') {
       if (ty_is_array(x->rt) && oint_kind(ty_array_elem(x->rt))) buf_puts(b, "_o");
+      else buf_puts(b, typed_elem_store_sfx(x->rt));
       p++;
     }
     else if (p[0] == '$' && (p[1] == '<' || p[1] == '>')) {
       TyKind rk = bop_result(x->op, x->rt);
       if (!oint_kind(rk)) rk = repr_of(c, x->id).as_ty;
       if (oint_kind(rk) && !node_is_oint(c, x->id)) buf_printf(b, p[1] == '<' ? "%s(" : ")", oint_arg(rk));
+      /* a String Array's element is its handle: the node's text where it
+         is the raw read, else the bytes */
+      else if (typed_elem_held(x->rt) == TY_STRBUF && !typed_elem_read_raw(x->rt, x->id))
+        buf_puts(b, p[1] == '<' ? "SP_STR_B(" : ")");
       p++;
     }
     /* `$[` ... `$]`: a row answering the plain value, lifted (sp_oint_of)
@@ -312,8 +320,13 @@ static int emit_op_array_first(Compiler *c, const BopCtx *x, Buf *b) {
     buf_printf(b, "sp_%sArray_oget(%s, 0)", ak ? ak : "", r);
     if (!node_is_oint(c, x->id)) buf_puts(b, ")");
   }
-  else if (recv_never_nil(c, x->recv)) buf_printf(b, "sp_%sArray_get(%s, 0)", ak ? ak : "", r);
-  else buf_printf(b, "sp_%sArray_get(sp_nil_recv_named(%s, \"first\"), 0)", ak ? ak : "", r);   /* first, not the [] the read names */
+  else {
+    int rd = typed_elem_read_open(x->rt, x->id, b);
+    const char *sfx = typed_elem_store_sfx(x->rt);
+    if (recv_never_nil(c, x->recv)) buf_printf(b, "sp_%sArray_get%s(%s, 0)", ak ? ak : "", sfx, r);
+    else buf_printf(b, "sp_%sArray_get%s(sp_nil_recv_named(%s, \"first\"), 0)", ak ? ak : "", sfx, r);   /* first, not the [] the read names */
+    if (rd) buf_puts(b, ")");
+  }
   free(r);
   return 1;
 }
@@ -331,7 +344,11 @@ static int emit_op_array_pop_shift(Compiler *c, const BopCtx *x, Buf *b) {
     buf_printf(b, "sp_%sArray_%s_o(%s)", ak ? ak : "", x->name, r);
     if (!node_is_oint(c, x->id)) buf_puts(b, ")");
   }
-  else buf_printf(b, "sp_%sArray_%s(%s)", ak ? ak : "", x->name, r);
+  else {
+    int rd = typed_elem_read_open(x->rt, x->id, b);
+    buf_printf(b, "sp_%sArray_%s%s(%s)", ak ? ak : "", x->name, typed_elem_store_sfx(x->rt), r);
+    if (rd) buf_puts(b, ")");
+  }
   free(r);
   return 1;
 }

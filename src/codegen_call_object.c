@@ -2296,8 +2296,12 @@ int emit_call_safe_nav_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, co
       int sn_cont = needs_root(rrt) && rrt != TY_POLY && rrt != TY_STRING && !ty_is_object(rrt);
       if ((sn_obj || rrt == TY_STRING || sn_scalar || sn_cont) && g_sn_skip != id) {
         int tsn2 = ++g_tmp;
-        /* (an attribute assignment marked to hand out its handle answers it) */
-        TyKind ret2 = (repr_of(c, id).demand || (repr_of(c, id).handle && repr_write_share(c, id)))
+        /* (an attribute assignment marked to hand out its handle answers it,
+           and so does a String Array's element read written as the handle
+           the Array holds: the nil arm and the slot of a hoisted guard are
+           that handle's) */
+        TyKind ret2 = (repr_of(c, id).demand || (repr_of(c, id).handle && repr_write_share(c, id)) ||
+                       typed_elem_read_raw(rrt, id))
                       ? TY_STRBUF : repr_of(c, id).as_ty;
         /* The temp lives in g_pre (statement scope), not an inline ({ }):
            the re-entered dispatch hoists its (substituted) receiver into

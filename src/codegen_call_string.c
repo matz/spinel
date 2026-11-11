@@ -1293,8 +1293,8 @@ int emit_call_symbol_bool_string_arms(Compiler *c, int id, Buf *b, const NodeTab
                  ti, ti, tl, ti);
       if (p0) {
         if (p0_box_poly_ech) buf_printf(b, "lv_%s = %ssp_StrArray_get%s(_t%d, _t%d)); ", p0, ONE_SA_BOXO, ONE_SA_GE, tl, ti);
-        else if (p0_handle_ech) buf_printf(b, "lv_%s = sp_String_new_shared(sp_StrArray_get(_t%d, _t%d)); ", p0, tl, ti);
-        else buf_printf(b, "lv_%s = SP_STR_B(sp_StrArray_get(_t%d, _t%d)); ", p0, tl, ti);   /* (one representation: the line is a handle, the parameter's slot bytes) */
+        else if (p0_handle_ech) buf_printf(b, "lv_%s = sp_StrArray_get_e(_t%d, _t%d); ", p0, tl, ti);
+        else buf_printf(b, "lv_%s = SP_STR_B(sp_StrArray_get_e(_t%d, _t%d)); ", p0, tl, ti);   /* (the line is a handle, the parameter's slot bytes) */
       }
     }
     /* codepoints yields each character's codepoint, not each byte: the String

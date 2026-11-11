@@ -2511,7 +2511,7 @@ static void emit_boxed_strbuf(Compiler *c, int node, TyKind t, const Repr *rp, B
     return;
   }
   /* an element a String Array of handles reads or removes: its handle */
-  if (rp->strbuf_src == RS_HANDLE && strh_handle_call(c, node)) {
+  if (rp->strbuf_src == RS_HANDLE && one_str_elem_call(c, node, TY_UNKNOWN)) {
     str_box_open(b, 1);
     strh_elem_handle_text(c, node, b);
     str_box_close(b);
@@ -6012,7 +6012,7 @@ static int gc_elide_call_ok(const char *id, size_t n, const char *lvname) {
     "sp_slot_oint_ck", "sp_slot_ofloat_ck", "sp_slot_str_ck", "sp_slot_bool_ck",
     "sp_slot_sym_ck",
     "sp_poly_length", "sp_imod", "sp_idiv", "sp_int_bit",
-    "sp_IntArray_get", "sp_FloatArray_get", "sp_StrArray_get", "sp_PolyArray_get",
+    "sp_IntArray_get", "sp_FloatArray_get", "sp_StrArray_get", "sp_StrArray_get_e", "sp_PolyArray_get",
     "sp_IntArray_length", "sp_PolyArray_length",
     /* the write barrier touches the remembered set and nothing else: it cannot
        allocate, and it cannot reach Ruby code */

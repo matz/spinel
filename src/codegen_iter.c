@@ -4399,7 +4399,7 @@ int emit_takewhile_with_index(Compiler *c, int id, Buf *b) {
   if (is_drop) { emit_indent(g_pre, g_indent); buf_printf(g_pre, "int _t%d = 1;\n", tdrop); }
   emit_indent(g_pre, g_indent);
   buf_printf(g_pre, "for (sp_int _t%d = 0; _t%d < sp_%sArray_length(_t%d); _t%d++) {\n", ti, ti, k, ta, ti);
-  char es[64]; snprintf(es, sizeof es, "sp_%sArray_get(_t%d, _t%d)", k, ta, ti);
+  char es[64]; typed_elem_getf(es, sizeof es, srt, k, "_t%d, _t%d", ta, ti);
   TyKind et = sr.elem;
   if (p0lv) {
     emit_indent(g_pre, g_indent + 1);
@@ -5385,7 +5385,7 @@ static void row_param_value(Compiler *c, LocalVar *lv, TyKind pt, const char *k,
      element) into an oint slot or a box */
   else if ((rt == TY_INT_ARRAY || rt == TY_FLOAT_ARRAY) && (pt == TY_POLY || (oint_kind(pt) && slot_is_oint(lv))))
     snprintf(get, sizeof get, "sp_%sArray_oget(_t%d, _t%d + %d)", k, ta, ti, pj);
-  else snprintf(get, sizeof get, "sp_%sArray_get(_t%d, _t%d + %d)", k, ta, ti, pj);
+  else typed_elem_getf(get, sizeof get, rt, k, "_t%d, _t%d + %d", ta, ti, pj);
   /* A typed row can feed a boxed parameter. Keep missed reads nil when
      boxing the element, including the short final slice. */
   if (pt == TY_POLY && (rt == TY_INT_ARRAY || rt == TY_FLOAT_ARRAY))
@@ -5405,7 +5405,7 @@ static void emit_row_param_bind(Compiler *c, int block, int pj, const char *k, T
   Buf val; memset(&val, 0, sizeof val);
   /* (one representation: a String element into the parameter's face, SP_STR_TO) */
   if (k && sp_streq(k, "Str") && (pt == TY_STRING || pt == TY_STRBUF))
-    buf_printf(&val, "SP_STR_TO(lv_%s, sp_StrArray_get(_t%d, _t%d + %d))", rpn, ta, ti, pj);
+    buf_printf(&val, "SP_STR_TO(lv_%s, sp_StrArray_get_e(_t%d, _t%d + %d))", rpn, ta, ti, pj);
   else
   row_param_value(c, lv, pt, k, rt, ta, ti, pj, &val);
   const char *value = val.p ? val.p : "0";
@@ -5794,7 +5794,6 @@ static int iter_tap_slice_string_arms(Compiler *c, int id, Buf *b, int indent, c
     emit_indent(b, indent);
     buf_printf(b, "for (sp_int _t%d = 0; _t%d < sp_StrArray_length(_t%d); _t%d++%s) {\n",
                ti, ti, tm, ti, sc_step);
-    snprintf(sc_get, sizeof sc_get, "sp_StrArray_get(_t%d, _t%d)", tm, ti);
     snprintf(sc_get_e, sizeof sc_get_e, "sp_StrArray_get_e(_t%d, _t%d)", tm, ti);
     }
     free(rb.p);
@@ -5815,7 +5814,9 @@ static int iter_tap_slice_string_arms(Compiler *c, int id, Buf *b, int indent, c
     else {
       if (p0) {
         emit_indent(b, bodyIndent); buf_printf(b, "lv_%s = ", p0);
-        emit_strbuf_param_bind(c, sclv, TY_STRING, sc_get, b);
+        /* (a match of the live scan is bytes, an element of the built Array its handle) */
+        if (live) emit_strbuf_param_bind(c, sclv, TY_STRING, sc_get, b);
+        else buf_printf(b, "SP_STR_TO(lv_%s, %s)", p0, sc_get_e);
         buf_puts(b, ";\n");
       }
       emit_loop_body(c, body, b, bodyIndent);
@@ -6391,7 +6392,7 @@ static int iter_enum_poly_walk_arms(Compiler *c, int id, Buf *b, int indent, con
             /* an oint slot reads the element with its nil (oget) */
             /* (one representation: the element into a slot of either face, SP_STR_TO) */
             if (sp_streq(inner_kk, "Str"))
-              buf_printf(b, "lv_%s = SP_STR_TO(lv_%s, sp_StrArray_get(_t%d, %d));\n", rename_local(pnj), rename_local(pnj), tsub, pj);
+              buf_printf(b, "lv_%s = SP_STR_TO(lv_%s, sp_StrArray_get_e(_t%d, %d));\n", rename_local(pnj), rename_local(pnj), tsub, pj);
             else
             buf_printf(b, "lv_%s = sp_%sArray_%s(_t%d, %d);\n",
                        rename_local(pnj), inner_kk, oj ? "oget" : "get", tsub, pj);
@@ -6523,7 +6524,7 @@ static int iter_enum_poly_walk_arms(Compiler *c, int id, Buf *b, int indent, con
             emit_indent(b, indent + 1);
             int oj = (sp_streq(inner_k, "Int") || sp_streq(inner_k, "Float")) && block_param_slot_is_oint(c, block, pj);
             if (sp_streq(inner_k, "Str"))
-              buf_printf(b, "lv_%s = SP_STR_TO(lv_%s, sp_StrArray_get(_t%d, %d));\n", rename_local(pname2), rename_local(pname2), tsub, pj);
+              buf_printf(b, "lv_%s = SP_STR_TO(lv_%s, sp_StrArray_get_e(_t%d, %d));\n", rename_local(pname2), rename_local(pname2), tsub, pj);
             else
             buf_printf(b, "lv_%s = sp_%sArray_%s(_t%d, %d);\n",
                        rename_local(pname2), inner_k, oj ? "oget" : "get", tsub, pj);
@@ -6538,7 +6539,7 @@ static int iter_enum_poly_walk_arms(Compiler *c, int id, Buf *b, int indent, con
          through g_pre, so point it at this statement buffer. */
       if (np >= 2 && sp_streq(k, "Poly")) {
         char es_as[600];
-        snprintf(es_as, sizeof es_as, "sp_%sArray_get(%s, _t%d)", k, rb.p ? rb.p : "NULL", t);
+        typed_elem_getf(es_as, sizeof es_as, rt, k, "%s, _t%d", rb.p ? rb.p : "NULL", t);
         Buf *sv_pre = g_pre; g_pre = b;
         int did = emit_iter_autosplat(c, block, rt, es_as, indent + 1);
         g_pre = sv_pre;
@@ -6548,18 +6549,15 @@ static int iter_enum_poly_walk_arms(Compiler *c, int id, Buf *b, int indent, con
       if (box_to_poly) {
         /* A nested row is a pointer, not one of the scalar boxes. The same
            helper each_with_index uses covers that and the scalars. */
-        Buf src; memset(&src, 0, sizeof src);
-        buf_printf(&src, "sp_%sArray_get(", k);
-        buf_puts(&src, rb.p ? rb.p : "NULL");
-        buf_printf(&src, ", _t%d)", t);
+        char src[600];
+        typed_elem_getf(src, sizeof src, rt, k, "%s, _t%d", rb.p ? rb.p : "NULL", t);
         buf_printf(b, "lv_%s = ", p0);
-        emit_boxed_elem_read(c, et, src.p ? src.p : "", b);
-        free(src.p);
+        emit_boxed_elem_read(c, et, src, b);
         buf_puts(b, ";\n");
       }
       else if (to_strbuf) {
-        buf_printf(b, "lv_%s = sp_String_new_shared(sp_StrArray_get(", p0);
-        buf_puts(b, rb.p); buf_printf(b, ", _t%d));\n", t);
+        buf_printf(b, "lv_%s = sp_StrArray_get%s(", p0, typed_elem_store_sfx(TY_STR_ARRAY));
+        buf_puts(b, rb.p); buf_printf(b, ", _t%d);\n", t);
       }
       else if (et == TY_POLY && repr_of_slot(c, bp0).kind == RK_STRBUF) {
         /* Sharing can box the source array after the parameter has
@@ -6574,9 +6572,9 @@ static int iter_enum_poly_walk_arms(Compiler *c, int id, Buf *b, int indent, con
         /* an oint slot reads the element with its nil (oget) */
         /* (one representation: the element into a slot of either face, SP_STR_TO) */
         if (sp_streq(k, "Str") && hp)
-          buf_printf(b, "lv_%s = SP_STR_TO(lv_%s, SP_SEB((sp_strelem)%s[_t%d]));\n", p0, p0, hd, t);
+          buf_printf(b, "lv_%s = SP_STR_TO(lv_%s, (sp_strelem)%s[_t%d]);\n", p0, p0, hd, t);
         else if (sp_streq(k, "Str")) {
-          buf_printf(b, "lv_%s = SP_STR_TO(lv_%s, sp_StrArray_get(", p0, p0);
+          buf_printf(b, "lv_%s = SP_STR_TO(lv_%s, sp_StrArray_get_e(", p0, p0);
           buf_puts(b, rb.p); buf_printf(b, ", _t%d));\n", t);
         }
         else if (hp) buf_printf(b, "lv_%s = %s[_t%d];\n", p0, hd, t);
@@ -6591,7 +6589,7 @@ static int iter_enum_poly_walk_arms(Compiler *c, int id, Buf *b, int indent, con
     }
     /* a `*rest` param (splat-only wraps the element; alongside requireds it
        binds empty for scalar elements) */
-    { char rs_es[560]; snprintf(rs_es, sizeof rs_es, "sp_%sArray_get(%s, _t%d)", k, rb.p ? rb.p : "NULL", t);
+    { char rs_es[600]; typed_elem_getf(rs_es, sizeof rs_es, rt, k, "%s, _t%d", rb.p ? rb.p : "NULL", t);
       int rs_np = 0; while (block_param_name(c, block, rs_np)) rs_np++;
       TyKind rs_et = ty_array_elem(rt);
       if (emit_iter_bind_rest(c, block, rs_np, rs_et, rs_es, b, indent + 1) < 0) {
@@ -6737,7 +6735,7 @@ static int iter_ewi_zip_poly_arms(Compiler *c, int id, Buf *b, int indent, const
     if (p0) {
       emit_indent(b, indent + 1);
       if (p0_box_poly) {
-        char src[512]; snprintf(src, sizeof src, "sp_%sArray_get(%s, _t%d)", k, rb.p ? rb.p : "NULL", t);
+        char src[512]; typed_elem_getf(src, sizeof src, rt, k, "%s, _t%d", rb.p ? rb.p : "NULL", t);
         buf_printf(b, "lv_%s = ", p0); emit_boxed_elem_read(c, ewi_et, src, b); buf_puts(b, ";\n");
       }
       else {
@@ -6745,7 +6743,7 @@ static int iter_ewi_zip_poly_arms(Compiler *c, int id, Buf *b, int indent, const
         /* an oint slot reads the element with its nil (oget) */
         /* (one representation: the element into a slot of either face, SP_STR_TO) */
         if (sp_streq(k, "Str")) {
-          buf_printf(b, "lv_%s = SP_STR_TO(lv_%s, sp_StrArray_get(", p0, p0);
+          buf_printf(b, "lv_%s = SP_STR_TO(lv_%s, sp_StrArray_get_e(", p0, p0);
           buf_puts(b, rb.p); buf_printf(b, ", _t%d));\n", t);
         }
         else {
@@ -6770,7 +6768,7 @@ static int iter_ewi_zip_poly_arms(Compiler *c, int id, Buf *b, int indent, const
       /* assign the prologue-declared, slot-rooted rest local (see
          emit_iter_bind_rest) rather than shadow-declaring a fresh one */
       buf_printf(b, "lv_%s = sp_PolyArray_new();\n", rr);
-      char rsrc[512]; snprintf(rsrc, sizeof rsrc, "sp_%sArray_get(%s, _t%d)", k, rb.p ? rb.p : "NULL", t);
+      char rsrc[512]; typed_elem_getf(rsrc, sizeof rsrc, rt, k, "%s, _t%d", rb.p ? rb.p : "NULL", t);
       emit_indent(b, indent + 1);
       buf_printf(b, "sp_PolyArray_push(lv_%s, ", rr);
       emit_boxed_elem_read(c, ewi_et, rsrc, b);
@@ -6885,10 +6883,10 @@ static int iter_ewi_zip_poly_arms(Compiler *c, int id, Buf *b, int indent, const
         int tpz = ++g_tmp;
         char s1[512], s2[512];
         if (recv_poly) snprintf(s1, sizeof s1, "sp_poly_arr_get(%s, _t%d)", rb.p ? rb.p : "sp_box_nil()", t);
-        else snprintf(s1, sizeof s1, "sp_%sArray_get(%s, _t%d)", k, rb.p ? rb.p : "NULL", t);
+        else typed_elem_getf(s1, sizeof s1, rt, k, "%s, _t%d", rb.p ? rb.p : "NULL", t);
         if (arg_poly) snprintf(s2, sizeof s2, "(_t%d < _t%d && _t%d < sp_poly_arr_len_ex(%s) ? sp_poly_each_elem(%s, _t%d) : sp_box_nil())",
                                t, tzn, t, ob.p, ob.p, t);
-        else snprintf(s2, sizeof s2, "sp_%sArray_get(%s, _t%d)", k2, ob.p ? ob.p : "NULL", t);
+        else typed_elem_getf(s2, sizeof s2, a0t, k2, "%s, _t%d", ob.p ? ob.p : "NULL", t);
         emit_indent(b, indent + 1);
         buf_printf(b, "lv_%s = ({ sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d); ", p0, tpz, tpz);
         Buf bx; memset(&bx, 0, sizeof bx);
@@ -6905,7 +6903,7 @@ static int iter_ewi_zip_poly_arms(Compiler *c, int id, Buf *b, int indent, const
       else if (p0 && zlv0) {
         char src[512];
         if (recv_poly) snprintf(src, sizeof src, "sp_poly_arr_get(%s, _t%d)", rb.p ? rb.p : "sp_box_nil()", t);
-        else snprintf(src, sizeof src, "sp_%sArray_get(%s, _t%d)", k, rb.p ? rb.p : "NULL", t);
+        else typed_elem_getf(src, sizeof src, rt, k, "%s, _t%d", rb.p ? rb.p : "NULL", t);
         emit_indent(b, indent + 1); buf_printf(b, "lv_%s = ", p0);
         int ox = !recv_poly && oint_kind(et) && slot_is_oint(zlv0);
         int cobx = hcv && (ox || zlv0->type == et) && iter_cob_open(c, recv, ox, et, t, b);
@@ -6919,7 +6917,7 @@ static int iter_ewi_zip_poly_arms(Compiler *c, int id, Buf *b, int indent, const
         char src2[512];
         if (arg_poly) snprintf(src2, sizeof src2, "(_t%d < _t%d && _t%d < sp_poly_arr_len_ex(%s) ? sp_poly_each_elem(%s, _t%d) : sp_box_nil())",
                                t, tzn, t, ob.p, ob.p, t);
-        else snprintf(src2, sizeof src2, "sp_%sArray_get(%s, _t%d)", k2, ob.p, t);
+        else typed_elem_getf(src2, sizeof src2, a0t, k2, "%s, _t%d", ob.p, t);
         emit_indent(b, indent + 1); buf_printf(b, "lv_%s = ", p1n);
         /* below the receiver's length, which the loop tested the argument
            reaches, its element in place (hcv_begin) */
@@ -7429,8 +7427,9 @@ void emit_srange_walk_open(Compiler *c, int recv, int stride, char *elem, size_t
                 " _t%d += _t%d > 0 ? _t%d : 1, _t%d = _t%d ? _t%d : _t%d) {\n",
              ti, tk, ti, ta, ti, ta, ti, tk, tk, tx, ta, tx, tn);
   emit_indent(b, indent + 1);
-  /* (one representation: the typed Array's element is a handle, read as its bytes here) */
-  buf_printf(b, "const char *_t%d = _t%d ? %ssp_StrArray_get(_t%d, _t%d)%s : _t%d;\n", tc, ta, "SP_STR_B(", ta, ti, ")", tx);
+  /* (the typed Array's element is a handle, read as its bytes here) */
+  buf_printf(b, "const char *_t%d = _t%d ? SP_STR_B(sp_StrArray_get%s(_t%d, _t%d)) : _t%d;\n", tc, ta,
+             typed_elem_store_sfx(TY_STR_ARRAY), ta, ti, tx);
   emit_indent(b, indent + 1);
   buf_printf(b, "if (!_t%d) _t%d = sp_str_succ_n(_t%d, _t%d);\n", ta, tn, tx, tk);
   snprintf(elem, elemcap, "_t%d", tc);

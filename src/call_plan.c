@@ -246,9 +246,14 @@ const CallPlan *cplan_root_reopen_call(Compiler *c, int id, const CallPlan *p) {
 }
 
 /* See call_plan.h. */
+int cplan_reopen_binding(const CallPlan *p) {
+  return p->mi >= 0 && p->via == UC_REOPEN && p->dispatch == CP_DIRECT ? p->mi : -1;
+}
+
+/* See call_plan.h. */
 int cplan_reopen_target(Compiler *c, const CallPlan *p) {
-  return p->mi >= 0 && p->via == UC_REOPEN && p->dispatch == CP_DIRECT &&
-         (cplan_root_reopen_owner(c, p) || c->scopes[p->mi].yields) ? p->mi : -1;
+  int mi = cplan_reopen_binding(p);
+  return mi >= 0 && (cplan_root_reopen_owner(c, p) || c->scopes[mi].yields) ? mi : -1;
 }
 
 /* A method the program adds to Object under the name of a class-gated

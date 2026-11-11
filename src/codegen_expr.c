@@ -1576,6 +1576,9 @@ void emit_slot_orw_value(Compiler *c, TyKind t, int elems_handle, const char *re
    for an object field, NULL for a plain slot that is never nil); a field
    with a bit also names its class, ivar and receiver prefix, so the store
    keeps the bit in step (emit_ivar_value_nilbit). */
+/* What the store of an object's own slot runs first, where the store is taken (the frozen guard `@x = v` takes),
+   set by the ivar's value form around emit_ivar_orw_value; NULL for any other slot. */
+static const char *g_orw_store_guard = NULL;
 void emit_slot_orw_value_o(Compiler *c, TyKind t, int elems_handle, const char *ref, int v, int is_or,
                            const char *niltest, int cid, int iv, const char *pfx, const char *mark, Buf *b) {
   if (!is_or) mark = NULL;
@@ -1673,11 +1676,13 @@ void emit_slot_orw_value_o(Compiler *c, TyKind t, int elems_handle, const char *
   if (unconditional) {
     buf_puts(b, "({ ");
     if (vpre.p) buf_puts(b, vpre.p);
+    if (g_orw_store_guard) buf_puts(b, g_orw_store_guard);
     buf_printf(b, "%s = %s; %s%s%s; })", ref, vval.p ? vval.p : "", mark ? mark : "", mark ? " " : "", ref);
   }
   else {
     buf_printf(b, "({ if (%s) { ", cond);
     if (vpre.p) buf_puts(b, vpre.p);
+    if (g_orw_store_guard) buf_puts(b, g_orw_store_guard);
     buf_printf(b, "%s = %s; } %s%s%s; })", ref, vval.p ? vval.p : "", mark ? mark : "", mark ? " " : "", ref);
   }
   free(vpre.p); free(vval.p);
@@ -2889,7 +2894,16 @@ static int emit_local_ivar_write_expr(Compiler *c, int id, Buf *b, const NodeTab
        handle itself */
     if (repr_of(c, id).handle && repr_write_share(c, id))
       emit_strbuf_orw_share_value(c, id, ref3, v, is_or, -1, NULL, m3, b);
-    else emit_ivar_orw_value(c, id, ivt3, eh3, ref3, v, is_or, m3, b);
+    else {
+      /* the store into an object's own slot is a write like `@x = v`'s: a frozen receiver refuses it, where it runs */
+      Buf fz; memset(&fz, 0, sizeof fz);
+      if (tcid3 >= 0 && strncmp(ref3, "civ_", 4) != 0) emit_frozen_obj_guard(c, tcid3, g_self ? g_self : "self", &fz);
+      const char *sv_guard = g_orw_store_guard;
+      g_orw_store_guard = fz.p;
+      emit_ivar_orw_value(c, id, ivt3, eh3, ref3, v, is_or, m3, b);
+      g_orw_store_guard = sv_guard;
+      free(fz.p);
+    }
     return 1;
   }
   if (sp_streq(ty, "LocalVariableOrWriteNode") || sp_streq(ty, "LocalVariableAndWriteNode")) {

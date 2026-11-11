@@ -45203,6 +45203,57 @@ static int psb_arm(const VpLeaf *leaf, void *ud) {
   if (leaf->kind == VPK_EXPR) psb_collect(a->c, leaf->node, a->elems, a->s, a->depth + 1);
   return 0;
 }
+/* The first parameter of every iterator block in the program (`syms.each
+   { |s| ... }`: the block's scope, the parameter's name, the receiver),
+   read off the table once and kept while the table stands. psb_collect
+   asked for them by walking every call of the program for each local read
+   it followed, at every depth of its recursion; an application whose
+   boxed block arguments reached many reads spent 35 minutes of each
+   round in the walks, and the index answers the same calls. */
+typedef struct { int scope; const char *name; int recv; } PsbIterParam;
+static PsbIterParam *g_pip;
+static int g_pip_n, g_pip_cap;
+static int g_pip_count = -1;
+static unsigned long g_pip_edits;
+static void psb_iter_params(Compiler *c) {
+  const NodeTable *nt = c->nt;
+  if (g_pip_count == nt->count && g_pip_edits == nt->edits + nt->version) return;
+  g_pip_count = nt->count; g_pip_edits = nt->edits + nt->version;
+  g_pip_n = 0;
+  NT_FOREACH_KIND(nt, NK_CallNode, call) {
+    const char *cn = nt_str(nt, call, "name");
+    int blk = nt_ref(nt, call, "block"), recv = nt_ref(nt, call, "receiver");
+    char nb[64];
+    /* a call desugar_builtin_enum_calls moved onto its builtin's copy,
+       `__enum_each_with_index__N(recv, ...)`, by the name it had */
+    if (cn && recv < 0 && strncmp(cn, "__enum_", 7) == 0) {
+      const char *sep = strstr(cn + 7, "__");
+      int an = 0, ar = nt_ref(nt, call, "arguments");
+      const int *av = ar >= 0 ? nt_arr(nt, ar, "arguments", &an) : NULL;
+      if (!sep || an < 1 || (size_t)(sep - cn - 7) >= sizeof nb) continue;
+      memcpy(nb, cn + 7, (size_t)(sep - cn - 7)); nb[sep - cn - 7] = 0;
+      cn = nb; recv = av[0];
+    }
+    if (!cn || blk < 0 || recv < 0 || nt_kind(nt, blk) != NK_BlockNode) continue;
+    if (!sp_streq(cn, "each") && !sp_streq(cn, "map") && !sp_streq(cn, "collect") &&
+        !sp_streq(cn, "flat_map") && !sp_streq(cn, "each_with_index") && !sp_streq(cn, "select") &&
+        !sp_streq(cn, "filter") && !sp_streq(cn, "reject") && !sp_streq(cn, "find"))
+      continue;
+    int bp = nt_ref(nt, blk, "parameters");
+    int ps = bp >= 0 ? nt_ref(nt, bp, "parameters") : -1;
+    int rn = 0; const int *rq = ps >= 0 ? nt_arr(nt, ps, "requireds", &rn) : NULL;
+    if (rn < 1 || !nt_str(nt, rq[0], "name")) continue;
+    if (g_pip_n == g_pip_cap) {
+      g_pip_cap = g_pip_cap ? g_pip_cap * 2 : 256;
+      g_pip = realloc(g_pip, sizeof *g_pip * (size_t)g_pip_cap);
+      if (!g_pip) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    }
+    g_pip[g_pip_n].scope = c->nscope[rq[0]];
+    g_pip[g_pip_n].name = nt_str(nt, rq[0], "name");
+    g_pip[g_pip_n].recv = recv;
+    g_pip_n++;
+  }
+}
 static void psb_collect(Compiler *c, int node, int elems, PsbSyms *s, int depth) {
   const NodeTable *nt = c->nt;
   if (node < 0 || depth > 8) return;
@@ -45233,31 +45284,10 @@ static void psb_collect(Compiler *c, int node, int elems, PsbSyms *s, int depth)
     /* the first parameter of an iterator's block holds an element of its
        receiver: `syms.each { |s| m(&s) }` */
     if (!vn) return;
-    NT_FOREACH_KIND(nt, NK_CallNode, call) {
-      const char *cn = nt_str(nt, call, "name");
-      int blk = nt_ref(nt, call, "block"), recv = nt_ref(nt, call, "receiver");
-      char nb[64];
-      /* a call desugar_builtin_enum_calls moved onto its builtin's copy,
-         `__enum_each_with_index__N(recv, ...)`, by the name it had */
-      if (cn && recv < 0 && strncmp(cn, "__enum_", 7) == 0) {
-        const char *sep = strstr(cn + 7, "__");
-        int an = 0, ar = nt_ref(nt, call, "arguments");
-        const int *av = ar >= 0 ? nt_arr(nt, ar, "arguments", &an) : NULL;
-        if (!sep || an < 1 || (size_t)(sep - cn - 7) >= sizeof nb) continue;
-        memcpy(nb, cn + 7, (size_t)(sep - cn - 7)); nb[sep - cn - 7] = 0;
-        cn = nb; recv = av[0];
-      }
-      if (!cn || blk < 0 || recv < 0 || nt_kind(nt, blk) != NK_BlockNode) continue;
-      if (!sp_streq(cn, "each") && !sp_streq(cn, "map") && !sp_streq(cn, "collect") &&
-          !sp_streq(cn, "flat_map") && !sp_streq(cn, "each_with_index") && !sp_streq(cn, "select") &&
-          !sp_streq(cn, "filter") && !sp_streq(cn, "reject") && !sp_streq(cn, "find"))
-        continue;
-      int bp = nt_ref(nt, blk, "parameters");
-      int ps = bp >= 0 ? nt_ref(nt, bp, "parameters") : -1;
-      int rn = 0; const int *rq = ps >= 0 ? nt_arr(nt, ps, "requireds", &rn) : NULL;
-      if (rn < 1 || !sp_streq(nt_str(nt, rq[0], "name"), vn) || c->nscope[rq[0]] != c->nscope[node]) continue;
-      psb_collect(c, recv, 1, s, depth + 1);
-    }
+    psb_iter_params(c);
+    { int sc = c->nscope[node];
+      for (int i = 0; i < g_pip_n; i++)
+        if (g_pip[i].scope == sc && sp_streq(g_pip[i].name, vn)) psb_collect(c, g_pip[i].recv, 1, s, depth + 1); }
     return;
   }
   case NK_ConstantReadNode: {

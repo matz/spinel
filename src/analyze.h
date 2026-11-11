@@ -770,6 +770,13 @@ void elab_swap_nodes(Compiler *c, int a, int b);
    be, *miss then the name that names nothing (ref's or a parent's) and
    *owner the class it was looked up in (-1: Object's, the top level) */
 int elab_const_ref_at(Compiler *c, int ref, int site, const char **miss, int *owner);
+/* the segment of constant read node (`Missing`, `Known::Thing`) its lookup
+   fails on where the read stands, or -1 for none the record is sure of: a
+   first name the program defines nowhere, or a name a class or module of
+   the program the path reaches does not hold, nor its ancestors, in a
+   program with no const_missing and no const_set or autoload of a computed
+   name */
+int elab_const_path_fails(Compiler *c, int node);
 /* the superclass the first header of cls naming one names, as the record
    resolved it there; -1 when it names none or one the record does not know */
 int elab_class_super(Compiler *c, int cls);

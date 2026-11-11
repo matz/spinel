@@ -1401,7 +1401,12 @@ void const_path_written(const NodeTable *nt, int id, char *out, size_t cap) {
    that can never resolve -- a dropped require reads as a runtime engine bug
    otherwise (#3976). Deduplicated by name so a constant read in a loop body
    warns once. */
+static void warn_undefined_constant_why(Compiler *c, int id, const char *nm, const char *why);
 static void warn_undefined_constant(Compiler *c, int id, const char *nm) {
+  warn_undefined_constant_why(c, id, nm, NULL);
+}
+/* ...with the reason said, where it is neither of the two a read has */
+static void warn_undefined_constant_why(Compiler *c, int id, const char *nm, const char *why) {
   static char seen[64][128];
   static int nseen = 0;
   if (!nm || !*nm) return;
@@ -1414,7 +1419,7 @@ static void warn_undefined_constant(Compiler *c, int id, const char *nm) {
   if (!file || !*file) file = "source.rb";
   /* `Point::LIMIT` with LIMIT written at the top level only: defined, but
      not where the path looks (const_path_misses_toplevel) */
-  const char *why = const_path_misses_toplevel(c, id)
+  if (!why) why = const_path_misses_toplevel(c, id)
     ? "only the top level defines it, which a path through a class or module does not reach"
     : "defined nowhere in the program";
   if (ln > 0)
@@ -4100,6 +4105,25 @@ int const_read_raises(Compiler *c, int id) {
   int r = !pre.p && t.p && !strncmp(t.p, const_raise_head, sizeof const_raise_head - 1);
   free(t.p); free(pre.p);
   return r;
+}
+
+/* See codegen_internal.h. */
+void emit_const_lookup_failure(Compiler *c, int id, Buf *b) {
+  const NodeTable *nt = c->nt;
+  int par = nt_kind(nt, id) == NK_ConstantPathNode ? nt_ref(nt, id, "parent") : -1;
+  if (par < 0 || const_read_raises(c, id)) { emit_expr(c, id, b); return; }
+  int pk = const_node_class_index(c, par);
+  const char *own = pk >= 0 ? class_ruby_name(c, pk) : NULL, *nm = nt_str(nt, id, "written_name");
+  char full[512];
+  if (!nm) nm = nt_str(nt, id, "name");
+  if (own && nm) snprintf(full, sizeof full, "%s::%s", own, nm);
+  else const_path_written(nt, id, full, sizeof full);
+  if (!const_ref_is_rescued(c, id) && !const_ref_is_guarded(c, id))
+    warn_undefined_constant_why(c, id, full, "the class or module the path names it in holds no such constant");
+  Buf pre = {0};
+  emit_const_read_prefix(c, par, &pre);
+  emit_const_undefined_raise(b, pre.p, full);
+  free(pre.p);
 }
 
 static int emit_constant_expr(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *ty, int slot) {

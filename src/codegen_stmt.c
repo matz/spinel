@@ -15607,27 +15607,76 @@ static int rescue_operand_is_class_name(Compiler *c, int op) {
   return comp_class_index(c, n) >= 0 || is_builtin_class_name(n) || is_builtin_module_name(n) ||
          is_builtin_exception_name(n) || const_node_match_class_name(c, op);
 }
+/* Does the runtime give class or module k, or one above it, an exception
+   class nm that no source of the program writes (JSON::ParserError, which
+   `include JSON` lets a module reach under its own name)? */
+static int class_reaches_runtime_exc(Compiler *c, int k, const char *nm, int depth) {
+  if (k < 0 || k >= c->nclasses || depth > 32) return 0;
+  const ClassInfo *ki = &c->classes[k];
+  const char *rn = class_ruby_name(c, k);
+  char qn[256];
+  if (rn && snprintf(qn, sizeof qn, "%s::%s", rn, nm) < (int)sizeof qn && is_exc_name(qn)) return 1;
+  if (class_reaches_runtime_exc(c, ki->parent, nm, depth + 1)) return 1;
+  for (int i = 0; i < ki->nincluded_mods; i++)
+    if (class_reaches_runtime_exc(c, ki->included_mods[i], nm, depth + 1)) return 1;
+  for (int i = 0; i < ki->nprepended_mods; i++)
+    if (class_reaches_runtime_exc(c, ki->prepended_mods[i], nm, depth + 1)) return 1;
+  return 0;
+}
+/* Is path segment seg (`P::NAME`) one whose lookup is sure to fail though
+   its read may answer: the read goes by the last name, and finds a
+   top-level NAME or one nested in another module. Sure where the load
+   record says P holds no NAME, nor its ancestors, in a program with no
+   const_missing (elab_const_path_fails answered seg), the class table
+   agrees (const_path_misses_member: no const_set, no write the record
+   does not follow, no member the runtime gives P), and P is a class or
+   module the program writes. Under a builtin or a native class the match
+   by name stays: the runtime raises some classes by their name alone
+   (IO::Buffer::AccessError), which no read here answers. */
+static int rescue_segment_unheld(Compiler *c, int seg) {
+  int pk = const_node_class_index(c, nt_ref(c->nt, seg, "parent"));
+  if (pk < 0 || c->classes[pk].is_builtin_const || c->classes[pk].is_native_class || c->classes[pk].cext_extension)
+    return 0;
+  const char *nm = nt_str(c->nt, seg, "name");
+  return nm && const_path_misses_member(c, seg) && !class_reaches_runtime_exc(c, pk, nm, 0);
+}
 /* A rescue operand that names a constant defined nowhere (`rescue
    Missing::Thing`): CRuby evaluates it when an exception reaches the
    clause and raises NameError there, the exception being handled its
-   cause. The read raises (and warns at build time, emit_expr), after the
+   cause. The NameError is raised (and warned of at build time) after the
    exception is pushed as the one being handled, as a body's raise does.
-   An int-valued expression for the clause's condition. A path counts
-   only when a segment before its last is missing: the runtime raises
-   some classes by their name alone (IO::Buffer::AccessError), which no
-   read here answers, and the name match keeps catching those. */
+   Answers the constant the lookup fails on, -1 for none: of a path the
+   first segment, as CRuby reads it left to right, that is missing. A
+   segment before the last is missing when its read raises; so is any
+   segment the class or module before it is sure not to hold
+   (rescue_segment_unheld), the last one too: `Outer::Missing` beside a
+   Missing at the top level or in another module, and the Mailer of
+   `Outer::Mailer::TimeoutError`, whose whole read finds the TimeoutError
+   of Outer::Net. Any other path keeps the match by name. */
 static int rescue_operand_undefined(Compiler *c, int op) {
-  NodeKind k = nt_kind(c->nt, op);
-  if (k == NK_ConstantReadNode) return const_read_raises(c, op);
-  if (k != NK_ConstantPathNode) return 0;
-  int par = nt_ref(c->nt, op, "parent");
-  return par >= 0 && const_read_raises(c, par);
+  const NodeTable *nt = c->nt;
+  NodeKind k = nt_kind(nt, op);
+  if (k == NK_ConstantReadNode) return const_read_raises(c, op) ? op : -1;
+  if (k != NK_ConstantPathNode || nt_ref(nt, op, "parent") < 0) return -1;
+  int segs[32], ns = 0;
+  for (int s = op; s >= 0 && ns < 32 && nt_kind_is_constant(nt_kind(nt, s));
+       s = nt_kind(nt, s) == NK_ConstantPathNode ? nt_ref(nt, s, "parent") : -1)
+    segs[ns++] = s;
+  int fail = elab_const_path_fails(c, op);
+  /* outermost first; the first name (segs[ns - 1]) is its read's alone */
+  for (int i = ns - 1; i >= 0; i--)
+    if ((i > 0 && const_read_raises(c, segs[i])) ||
+        (i < ns - 1 && segs[i] == fail && rescue_segment_unheld(c, segs[i])))
+      return segs[i];
+  return -1;
 }
-static void emit_rescue_undefined(Compiler *c, int op, int rc, Buf *b) {
+/* The NameError of the constant rescue_operand_undefined answered, an
+   int-valued expression for the clause's condition. */
+static void emit_rescue_undefined(Compiler *c, int missing, int rc, Buf *b) {
   buf_printf(b, "({ void *_cx_%d = sp_exc_obj[sp_exc_top] ? sp_exc_obj[sp_exc_top]"
                 " : (void *)sp_exc_new_for_catch(_rcls_%d, _rmsg_%d); sp_rescue_push(_cx_%d); (void)",
              rc, rc, rc, rc);
-  emit_expr(c, op, b);
+  emit_const_lookup_failure(c, missing, b);
   buf_puts(b, "; 0; })");
 }
 /* Can rescue clause rc, or one further along its chain, catch an exception
@@ -15698,9 +15747,10 @@ void emit_rescue(Compiler *c, int id, Buf *b, int indent, int fr, const char *re
   buf_printf(b, "const char *_rmsg_%d = sp_exc_msg[sp_exc_top]; (void)_rmsg_%d;\n", rc, rc);
   /* the first operand raises as the clause is reached: its body and the
      clauses after it never run */
-  if (nexc > 0 && rescue_operand_undefined(c, exc[0])) {
+  int missing = nexc > 0 ? rescue_operand_undefined(c, exc[0]) : -1;
+  if (missing >= 0) {
     emit_indent(b, indent);
-    emit_rescue_undefined(c, exc[0], rc, b);
+    emit_rescue_undefined(c, missing, rc, b);
     buf_puts(b, ";\n");
     return;
   }
@@ -15720,7 +15770,7 @@ void emit_rescue(Compiler *c, int id, Buf *b, int indent, int fr, const char *re
     /* `rescue nil, Exception` raises TypeError for the nil, and a call or a
        splat before Exception runs: only class names may come before the
        catchall, else the ordered matcher below keeps their order */
-    if (!rescue_operand_is_class_name(c, exc[i]) || rescue_operand_undefined(c, exc[i])) break;
+    if (!rescue_operand_is_class_name(c, exc[i]) || rescue_operand_undefined(c, exc[i]) >= 0) break;
   }
 
   const char *save_cls = g_rescue_cls, *save_msg = g_rescue_msg;
@@ -15758,10 +15808,11 @@ void emit_rescue(Compiler *c, int id, Buf *b, int indent, int fr, const char *re
           continue;
         }
       }
-      if (rescue_operand_undefined(c, exc[i])) {
+      missing = rescue_operand_undefined(c, exc[i]);
+      if (missing >= 0) {
         if (!first) buf_puts(b, " || ");
         first = 0;
-        emit_rescue_undefined(c, exc[i], rc, b);
+        emit_rescue_undefined(c, missing, rc, b);
         continue;
       }
       /* any other operand (a variable, a call, an ivar, a literal): the clause

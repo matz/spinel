@@ -1,0 +1,30 @@
+top level: uninitialized constant Outer::Missing, cause Missing
+module, class at top level: NameError uninitialized constant Outer::Missing, cause Missing
+class, class at top level: NameError uninitialized constant Holder::Missing, cause Missing
+name defined nowhere: NameError uninitialized constant Outer::Nowhere, cause AppError
+class of another module: NameError uninitialized constant Right::Shared, cause Base::Shared
+class of another module, another raised: NameError uninitialized constant Right::Shared, cause AppError
+class of another class: NameError uninitialized constant Holder::Inner, cause Parent::Inner
+class of another module, a later operand: NameError uninitialized constant Holder::Shared, cause Base::Shared
+builtin under a module: NameError uninitialized constant Outer::ArgumentError, cause ArgumentError
+["NameError", "uninitialized constant Outer::Mailer"]
+two names past the missing one: NameError uninitialized constant Outer::Mailer, cause AppError
+middle name of another module: NameError uninitialized constant Right::Net, cause Outer::Net::TimeoutError
+missing under a nested module: NameError uninitialized constant Outer::Net::Nowhere, cause AppError
+earlier operand matches: caught
+earlier operand does not: NameError uninitialized constant Outer::Missing, cause TypeError
+before Exception: NameError uninitialized constant Outer::Missing, cause RuntimeError
+earlier clause matches: first clause
+nothing raised: 42
+begin as a value: NameError uninitialized constant Outer::Missing, cause Missing
+Left::Clash: Left
+Right::Clash: Right
+nested: Outer::Net::TimeoutError
+Class.new constant: Outer::Made
+through an included module: Includer::Shared
+through a superclass: Child::Inner
+alias in a module: Outer::Renamed
+rooted: ::Missing
+const_set: Dyn::Dynamic
+written into a Module.new: Made::Put
+Math::DomainError: caught Math::DomainError

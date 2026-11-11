@@ -7646,6 +7646,19 @@ static int lr_const_path_fails(Compiler *c, int n) {
   }
   return -1;
 }
+/* See analyze.h. Asked once the record is made, in a frame of its own, as
+   elab_class_ref_at is. */
+int elab_const_path_fails(Compiler *c, int node) {
+  LoadRecord *r = lr_get(c);
+  if (!r->recorded) return -1;
+  if (r->walk || r->plan_depth) return lr_const_path_fails(c, node);
+  int fail = -1;
+  if (elab_plan_enter(c, node)) {
+    fail = lr_const_path_fails(c, node);
+    elab_plan_leave(c);
+  }
+  return fail;
+}
 static int lr_opaque_may_define_hook(Compiler *c, int k) {
   const NodeTable *nt = c->nt;
   const LrHist *op = lr_hist(c->lrec, LR_KEY_OPAQUE, lr_const_owner(k), "", 0);

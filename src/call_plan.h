@@ -195,7 +195,8 @@ const char *call_sent_name(const NodeTable *nt, int id, int *used);
    so a caller that presets it finds it as it was (not so for
    cplan_super_target and cplan_super_chain_mi, which set *ml whole). from:
    the class a super's lookup started from, written by those two only. Only
-   cplan_resolve_super reads kind, and nothing reads why yet. */
+   cplan_resolve_super and cplan_presence read kind, and nothing reads why
+   yet. */
 typedef enum { ML_METHOD, ML_ENTRY, ML_NONE, ML_TABLE } MlKind;
 /* why the table answers: no window, or an unplaced capture (UNPLACED); the
    chain moves inside the window (MOVES); two or more versions, or a window
@@ -1027,6 +1028,31 @@ int cplan_presence_class(Compiler *c, int id);
    (respond_to_missing_defined). */
 typedef struct { int n; char cell[VER_MAX_ARMS][32]; int val[VER_MAX_ARMS]; int els; } CplanCells;
 int cplan_cmethod_presence(Compiler *c, int id, int cls, const char *name, int include_all, CplanCells *out);
+/* Whether name answers on cls's chain where presence site id runs, as a
+   call of the name there finds it, from call_target with CT_REACH (side: 0
+   for an instance's chain, CT_CMETHOD for the class side, with CT_OWN for
+   cls's own methods alone). PR_PRESENT: a method or an accessor; PR_ABSENT:
+   none (the builtin tiers may answer), as the tables have it or because the
+   record proves none is live where id runs; PR_TABLE: the record gives no
+   proof and the reader keeps the final tables' answer, as in a block a
+   call on a receiver of no one type may run later. out->table is that
+   answer for every kind (a hidden method, a Data class's generated iterator
+   and, under CT_OWN, a module's copy are no method of the class's). */
+typedef enum { PR_PRESENT, PR_ABSENT, PR_TABLE } PresenceKind;
+typedef struct { int table; } CplanPresence;
+PresenceKind cplan_presence(Compiler *c, int id, int cls, unsigned side, const char *name, CplanPresence *out);
+/* Does method-list call id leave out name, a candidate the final tables
+   list for cls's side (side as cplan_presence's: CT_CMETHOD for
+   singleton_methods, CT_OWN for a `false` form): where the question proves
+   that no method of it is live there although the tables hold one? A name
+   with no version on cls's chain and side is a row's or a member's
+   (version 0), which the row answers: it is not asked. Every other answer
+   is the tables', the list's own visibility and undef filter among it,
+   until visibility is per version and an undef answers at the point. On
+   the instance side, a list call keeps every name exempt from the record's
+   order (refl_any, lr_late_asked), so call_target answers there from the
+   tables, the list with it: only the class side answers at the point. */
+int cplan_list_omits(Compiler *c, int id, int cls, unsigned side, const char *name);
 /* What version entry scope e's else arm finds while no version of its
    chain is live, as respond_to? and a Method's maker see it
    (VerEntry.finds): a public method, a private or protected one, or none

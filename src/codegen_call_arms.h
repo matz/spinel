@@ -71,8 +71,14 @@ int emit_call_proc_literal_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
 /* An ordered, de-duplicated list of method names for the reflection folds.
    A name is recorded once, at its first (most derived) sighting, and listed
    only if that sighting was visible, so a subclass that makes an inherited
-   method private hides the ancestor's public one. */
-typedef struct { char **v; unsigned char *show; int n, cap; } ReflNames;
+   method private hides the ancestor's public one. show[i] holds REFL_SHOWN
+   for a visible sighting and REFL_ROW where a builtin row made it (a
+   method present from the start, version 0, which the row answers). at:
+   the list call the names answer (its node + 1, 0 for a list no one site
+   has), at_cls and at_side the receiver class and side it asks there
+   (refl_at, cplan_list_omits). */
+enum { REFL_SHOWN = 1, REFL_ROW = 2 };
+typedef struct { char **v; unsigned char *show; int n, cap, at, at_cls; unsigned at_side; } ReflNames;
 /* The classes a `k.new(...)` switch gives an ArgumentError arm, grouped by
    message so each message is emitted once. */
 typedef struct { char msg[256]; int *cis; int ncis; } CtorArityArm;
@@ -232,6 +238,7 @@ void refl_class_instance_methods(Compiler *c, int ci, int pub, int prot, ReflNam
 void refl_module_instance_methods(Compiler *c, int m, int prot, ReflNames *r);
 void refl_module_own_methods(Compiler *c, int m, int pub, int prot, int priv, ReflNames *r);
 void refl_emit_sym_array(Compiler *c, int cid, ReflNames *r, Buf *b);
+void refl_at(ReflNames *r, int id, int cls, unsigned side);
 void refl_free(ReflNames *r);
 void refl_own_instance_methods(Compiler *c, int ci, int pub, int prot, int priv, int with_modules, ReflNames *r);
 void unhoist_dispatch_args(Compiler *c, int n, int *sv, int *vw);

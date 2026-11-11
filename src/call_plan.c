@@ -2010,7 +2010,8 @@ static int cm_self_kind(Compiler *c, int self) {
 }
 /* Does call id run where no method of `name` is live yet, as the record
    proves it at the call (elab_call_method): cls's chain, its class side
-   for CT_CMETHOD, main's top-level functions for CT_TOP? The method the
+   for CT_CMETHOD, main's top-level functions for CT_TOP, for CT_OWN the
+   method mi the tables hold as cls's own (elab_call_own_method)? The method the
    tables answer is then one a later statement defines, and the call
    raises (cplan_missing) or reaches the builtin self answers
    (cplan_self_builtin). Asked in the record's frame, once it is made.
@@ -2035,7 +2036,7 @@ static int ct_builtin_reopen_undefined_at(Compiler *c, int id, int cls, const ch
   if (framed) elab_plan_leave(c);
   return none;
 }
-static int ct_undefined_at(Compiler *c, int id, int cls, const char *name, unsigned flags) {
+static int ct_undefined_at(Compiler *c, int id, int cls, const char *name, unsigned flags, int mi) {
   if (ct_builtin_reopen_undefined_at(c, id, cls, name, flags)) return 1;
   if (!(flags & (CT_CMETHOD | CT_TOP)) || !elab_method_versions(c, name)) return 0;
   /* (a capture that cannot state the NameError keeps the table's method
@@ -2043,8 +2044,15 @@ static int ct_undefined_at(Compiler *c, int id, int cls, const char *name, unsig
   int rcls = flags & CT_TOP ? -1 : cls, sg = (flags & CT_CMETHOD) != 0, first_def = 0, body = 0, cl = 0;
   if (ct_capture_keeps_table(c, id, rcls, sg, name, flags, 0) && (ver_chain_count(c, rcls, sg, name, &first_def, &body, &cl), body))
     return 0;
+  /* CT_OWN asks of the method the tables hold as cls's own (mi): for its
+     own def, cls's own history at the call, whatever an ancestor or an
+     extended module holds; for a module's copy (an extend's), that and
+     the side's mixins, each from its point on; for an inherited copy, the
+     chain, as a call there */
+  const Scope *m = mi >= 0 ? &c->scopes[mi] : NULL;
+  int copy = m && (m->origin_module_ci > 0 || m->is_extend_copy), own = (flags & CT_OWN) && !(m && m->is_cmethod_copy && !copy);
   int framed = elab_plan_enter(c, id);
-  int none = elab_call_method(c, id, flags & CT_TOP ? -1 : cls, name, (flags & CT_CMETHOD) != 0, 1) == ELAB_NO;
+  int none = (own ? elab_call_own_method(c, id, rcls, name, sg, copy) : elab_call_method(c, id, rcls, name, sg, 1)) == ELAB_NO;
   if (framed) elab_plan_leave(c);
   return none && !(nt_ref(c->nt, id, "receiver") >= 0 && !nt_int(c->nt, id, "self_call", 0) &&
                    builtin_self_method_known(name, cm_self_kind(c, flags & CT_TOP ? -1 : cls)) &&
@@ -2106,7 +2114,7 @@ int cplan_sg_slot_call(Compiler *c, int id, int ci, const char *name) {
 int cplan_cmethod_later(Compiler *c, int id, int cls, const char *name) {
   int asked = id >= 0 ? (int)nt_int(c->nt, id, "defined_ask", 0) : 0;
   if (asked) id = asked - 1;   /* defined?'s respond_to?: at the call it asks of */
-  if (id < 0 || cls < 0 || !ct_undefined_at(c, id, cls, name, CT_CMETHOD)) return 0;
+  if (id < 0 || cls < 0 || !ct_undefined_at(c, id, cls, name, CT_CMETHOD, -1)) return 0;
   int framed = elab_plan_enter(c, id);
   int now = elab_blocks_run_now(c, id);
   if (framed) elab_plan_leave(c);
@@ -2312,7 +2320,7 @@ int call_target(Compiler *c, int id, int cls, const char *name, unsigned flags, 
       r = pin;
     }
   }
-  else if (ct_undefined_at(c, id, cls, name, flags)) {
+  else if (ct_undefined_at(c, id, cls, name, flags, mi)) {
     /* a call the record proves runs before any version of a class method or
        a top-level function is defined raises, whatever versions follow; the
        entry's else arm answers only a call that may run before them. One at
@@ -2346,6 +2354,74 @@ int call_target(Compiler *c, int id, int cls, const char *name, unsigned flags, 
   mtab_leave(c);
   if (g_method_table_check && ml->kind == ML_TABLE) mtab_table(c, id, cls, flags, name, ml->why);
   return r;
+}
+
+/* Whether the final tables hold name on cls's side as a method of it: the
+   method mi the table lookup found, or an accessor; mi is the generated
+   iterator of a Data class (or, under CT_OWN, of any Struct), or a module's
+   copy under CT_OWN, no method of the class's */
+static int pr_in_table(Compiler *c, int cls, unsigned side, const char *name, int mi) {
+  ClassInfo *k = &c->classes[cls];
+  char base[256];
+  if (side & CT_CMETHOD) {
+    if (mi >= 0) return 1;
+    if (name_is_plain_setter(name)) return setter_base_name(name, base, sizeof base) && comp_is_sg_writer(k, base);
+    return comp_is_sg_reader(k, name);
+  }
+  int wr = setter_base_name(name, base, sizeof base), parent = k->parent;
+  if (!(side & CT_OWN))
+    return (mi >= 0 && !method_hidden_from_reflection(c, cls, name)) || comp_reader_in_chain(c, cls, name, NULL) ||
+           (wr && comp_writer_in_chain(c, cls, base, NULL));
+  /* attr readers and writers are flattened into descendants at analyze
+     time, so "own" means present here but not in the parent chain */
+  return (mi >= 0 && !scope_is_struct_synth(c, mi) && c->scopes[mi].origin_module_ci == 0) ||
+         (comp_is_reader(k, name) && (parent < 0 || !comp_reader_in_chain(c, parent, name, NULL)) &&
+          !refl_member_of_struct_superclass(c, cls, name)) ||
+         (wr && comp_is_writer(k, base) && (parent < 0 || !comp_writer_in_chain(c, parent, base, NULL)) &&
+          !refl_member_of_struct_superclass(c, cls, base));
+}
+/* Is presence site id in a block its call may run after it answers, as
+   the types tell: the block of a call on a receiver typed no one kind
+   (poly or unknown; a lazy enumerator has no type of its own: `l =
+   [1].lazy; l.map { }`), or of a stage of a lazy chain a desugar runs
+   eagerly over a finite source (its first stage is marked lazy_stage),
+   where CRuby runs it once the chain is forced; up to the def or lambda
+   whose body holds it? The record places such a block at its call, an
+   iterator's name read as run at once, so its none there is not the
+   site's. */
+static int pr_in_untyped_block(Compiler *c, int id) {
+  int n;
+  const int *par = elab_node_parents(c, &n);
+  for (int a = id; a >= 0 && a < n && par[a] >= 0; a = par[a]) {
+    NodeKind k = nt_kind(c->nt, a);
+    int call = par[a], rv;
+    if (k == NK_DefNode || k == NK_LambdaNode) return 0;
+    if (k != NK_BlockNode || nt_kind(c->nt, call) != NK_CallNode || nt_ref(c->nt, call, "block") != a ||
+        (rv = nt_ref(c->nt, call, "receiver")) < 0) continue;
+    TyKind t = comp_ntype(c, rv);
+    if (t == TY_POLY || t == TY_UNKNOWN) return 1;
+    for (int s = call; s >= 0 && nt_kind(c->nt, s) == NK_CallNode; s = nt_ref(c->nt, s, "receiver"))
+      if (nt_int(c->nt, s, "lazy_stage", 0)) return 1;
+  }
+  return 0;
+}
+/* See call_plan.h. */
+PresenceKind cplan_presence(Compiler *c, int id, int cls, unsigned side, const char *name, CplanPresence *out) {
+  MethodLookup ml = { .def_class = -1 };
+  int tmi = ct_table(c, cls, name, side, NULL);
+  *out = (CplanPresence){ .table = pr_in_table(c, cls, side, name, tmi) };
+  if (pr_in_untyped_block(c, id)) return PR_TABLE;
+  call_target(c, id, cls, name, side | CT_REACH, &ml);
+  if (ml.kind == ML_TABLE || ml.kind == ML_ENTRY) return PR_TABLE;
+  if (ml.kind == ML_NONE && tmi >= 0) return PR_ABSENT;   /* (the record: none where id runs) */
+  return out->table ? PR_PRESENT : PR_ABSENT;
+}
+/* See call_plan.h. */
+int cplan_list_omits(Compiler *c, int id, int cls, unsigned side, const char *name) {
+  ElabVersion vs[1];
+  CplanPresence pr;
+  if (id < 0 || cls < 0 || !name || elab_chain_versions(c, cls, (side & CT_CMETHOD) != 0, name, vs, 1) == 0) return 0;
+  return cplan_presence(c, id, cls, side, name, &pr) == PR_ABSENT && pr.table;
 }
 
 int cplan_class_row(Compiler *c, int id, int recv, const char *name) {
@@ -3035,7 +3111,7 @@ static int cplan_capture_absent(Compiler *c, int id, int mi) {
     name = method_sym_arg(c, id);
     if ((m->entry != ENTRY_DISPATCH && m->entry != ENTRY_TABLE) || cplan_entry_finds(c, mi) != VER_FINDS_NONE || is_instance_method_name(nt_str(c->nt, id, "name"))) return 0;
   }
-  else if (cls < 0 || !(ct_undefined_at(c, id, cls, name, CT_CMETHOD) || cm_capture_never_made(c, id, cls, name)) ||
+  else if (cls < 0 || !(ct_undefined_at(c, id, cls, name, CT_CMETHOD, -1) || cm_capture_never_made(c, id, cls, name)) ||
            cm_builtin_answers(c, cls, name)) return 0;
   return cplan_capture_names(c, id, cls, sg, name, m != NULL);
 }

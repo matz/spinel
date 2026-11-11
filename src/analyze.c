@@ -10721,7 +10721,8 @@ static void enum_chain_node(Compiler *c, LowerCtx *lc, int id) {
       int rgt = nt_ref(nt, lz_recv, "right");   /* endless (nil right) stays lazy */
       finite = rgt >= 0 && nt_kind(nt, rgt) == NK_IntegerNode;
     }
-    if (finite) { nt_node_set_ref(nt, id, "receiver", lz_recv); return; }
+    /* (the window is a lazy chain's first stage: lazy_stage, pr_in_untyped_block) */
+    if (finite) { nt_node_set_ref(nt, id, "receiver", lz_recv); nt_node_set_int(nt, id, "lazy_stage", 1); return; }
   }
   /* `{}.merge!(h)` / `{"a" => 1}.update(h)`: nothing else holds the
      literal, so a merge into a new Hash answers the same, and merge
@@ -12380,13 +12381,14 @@ static int desugar_lazy_stateful_stage(Compiler *c) {
       }
     }
     /* does any consumer up the chain need cross-element state? */
-    int node = id, hit = 0;
+    int node = id, hit = 0, stage = -1;
     for (int depth = 0; depth < 16 && !hit; depth++) {
       int call = -1;
       for (int k = 0; k < nt->count; k++)
         if (nt_kind(nt, k) == NK_CallNode &&
             nt_ref(nt, k, "receiver") == node) { call = k; break; }
       if (call < 0) break;
+      if (stage < 0) stage = call;
       const char *cn = nt_str(nt, call, "name");
       if (!cn) break;
       for (int i = 0; stateful[i]; i++) if (sp_streq(cn, stateful[i])) { hit = 1; break; }
@@ -12395,6 +12397,10 @@ static int desugar_lazy_stateful_stage(Compiler *c) {
       node = call;
     }
     if (!hit) continue;
+    /* the chain's first stage is a lazy chain's (lazy_stage): CRuby runs
+       its blocks and the later stages' once the chain is forced, which a
+       method list in them answers by (pr_in_untyped_block) */
+    nt_node_set_int(nt, stage, "lazy_stage", 1);
     /* Rewrite the `lazy` call in place: `each` for the stages that want an
        enumerator receiver, otherwise splice it out so the consumer reads the
        source array directly. */

@@ -13093,7 +13093,7 @@ int emit_object_call(Compiler *c, int id, Buf *b) {
         (sp_streq(name, "methods") || sp_streq(name, "public_methods") ||
          sp_streq(name, "singleton_methods")) &&
         an_object_methods_all_arg(c, ty_object_class(rt), argc, argv) >= 0 &&
-        emit_object_methods_reflection(c, recv, ty_object_class(rt), name,
+        emit_object_methods_reflection(c, id, recv, ty_object_class(rt), name,
                                        an_object_methods_all_arg(c, ty_object_class(rt), argc, argv),
                                        argc > 0 ? argv[0] : -1, b))
       return 1;

@@ -5582,9 +5582,23 @@ static int bam_owner_unknown(Compiler *c, int mi) {
   return dn >= 0 && nt_str(c->nt, dn, "bam_sym") && bam_owner(c, mi, &bn) < 0 && !bn;
 }
 
-/* Does the program make a Method of such a wrapper anywhere? */
+/* Is the Method wrapper mi makes read by the call it is the receiver of and
+   nothing else (`object.method(:to_hash).arity`, hashie's)? That call keeps
+   no Method an owner read elsewhere could reach. */
+static int bam_site_consumed(Compiler *c, int mi) {
+  static const char *const reads[] = { "arity", "call", "name", "parameters", "source_location",
+    "receiver", "owner", "inspect", "to_s", "to_proc", NULL };
+  int dn = c->scopes[mi].def_node;
+  int site = dn >= 0 ? (int)nt_int(c->nt, dn, "bam_site", 0) - 1 : -1;
+  int up = site >= 0 ? comp_recv_parent(c, site) : -1;
+  const char *nm = up >= 0 ? nt_str(c->nt, up, "name") : NULL;
+  for (int i = 0; nm && reads[i]; i++) if (sp_streq(nm, reads[i])) return 1;
+  return 0;
+}
+
+/* Does the program make a Method of such a wrapper anywhere it can be held? */
 static int program_has_bam_owner_unknown(Compiler *c) {
-  for (int i = 0; i < c->nscopes; i++) if (bam_owner_unknown(c, i)) return 1;
+  for (int i = 0; i < c->nscopes; i++) if (bam_owner_unknown(c, i) && !bam_site_consumed(c, i)) return 1;
   return 0;
 }
 

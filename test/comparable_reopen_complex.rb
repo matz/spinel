@@ -25,3 +25,19 @@ p Complex(1, 2).lbl6, 3r.lbl6, "s".lbl6
 # a name only Numeric has keeps the Comparable method for a String
 module Comparable; def truncate = "cmp truncate"; def wt6 = truncate; end
 p "s".wt6, :s.truncate
+
+# a written `is_a?(Complex)` arm in an Object method is not a Complex method
+class Object
+  def probe6
+    if is_a?(Complex)
+      :object
+    end
+  end
+end
+module Comparable; def probe6 = :comparable; end
+p Complex(1, 2).probe6
+
+# a Complex method called from a Comparable method answers for the Complex
+module Comparable; def dual7 = "cmp"; def both7 = [dual7, tag6(1)]; end
+class Complex; def dual7 = "cpx"; end
+p Complex(1, 2).both7

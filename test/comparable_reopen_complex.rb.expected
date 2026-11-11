@@ -10,3 +10,5 @@ false
 "cmp"
 "cmp truncate"
 "cmp truncate"
+:comparable
+["cpx", "t1"]

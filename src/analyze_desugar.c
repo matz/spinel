@@ -18978,8 +18978,13 @@ static int bx_guard_arm_names(const NodeTable *nt, int def, const char *cls) {
     if (!pn || !sp_streq(pn, "is_a?")) continue;
     int args = nt_ref(nt, pr, "arguments");
     const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &an) : NULL;
+    /* (only an arm desugar made: mo_guard_pred gives the call and its
+       argument one place, where a written `is_a?(Complex)` has the
+       argument after the call) */
     if (an == 1 && nt_kind(nt, av[0]) == NK_ConstantReadNode && nt_str(nt, av[0], "name") &&
-        sp_streq(nt_str(nt, av[0], "name"), cls)) return 1;
+        sp_streq(nt_str(nt, av[0], "name"), cls) &&
+        nt_int(nt, av[0], "node_line", -1) == nt_int(nt, pr, "node_line", -2) &&
+        nt_int(nt, av[0], "node_col", -1) == nt_int(nt, pr, "node_col", -2)) return 1;
   }
   return 0;
 }

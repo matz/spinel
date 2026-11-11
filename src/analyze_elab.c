@@ -1787,13 +1787,28 @@ static LrMixKind lr_mix_kind(const NodeTable *nt, int node, const char *nm, int 
    walk: a reference to one before its header waits for the class
    (LR_LATER). So does a Thread or a Fiber an attr declaration names: the
    walk makes its reopening there (handle_attr_form). */
+/* Does the header at node n open a class inside another's body, or under a
+   path (`class A::B`)? It is then A's B, not the builtin its leaf names. */
+static int lr_header_nested(const NodeTable *nt, const int *par, int n) {
+  int cp = nt_ref(nt, n, "constant_path");
+  if (cp >= 0 && nt_kind(nt, cp) == NK_ConstantPathNode) {
+    /* (`class ::B` names the top level's B wherever it stands) */
+    if (nt_ref(nt, cp, "parent") < 0) return 0;
+    return 1;
+  }
+  for (int p = par[n]; p >= 0; p = par[p])
+    if (nt_kind(nt, p) == NK_ClassNode || nt_kind(nt, p) == NK_ModuleNode) return 1;
+  return 0;
+}
 static void lr_reopens_take(Compiler *c) {
   const NodeTable *nt = c->nt;
   LoadRecord *r = c->lrec;
+  const int *par = comp_parent_map(c);
   for (int pass = 0; pass < 3; pass++)
     NT_FOREACH_KIND(nt, pass == 2 ? NK_CallNode : pass ? NK_ModuleNode : NK_ClassNode, n) {
       const char *nm = pass < 2 ? class_def_name(nt, n) : handle_attr_decl(nt, n);
       if (!nm || !(is_builtin_class_name(nm) || is_builtin_module_const_name(nm))) continue;
+      if (pass < 2 && lr_header_nested(nt, par, n)) continue;
       r->reopens = lr_grow(r->reopens, &r->creopens, r->nreopens, sizeof *r->reopens);
       if (!(r->reopens[r->nreopens++] = strdup(nm))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
     }
@@ -7761,6 +7776,8 @@ int elab_rec_open(Compiler *c, int node, int cp, const char *cname, int encl) {
     else if (par < 0 && path) {
       c->classes[ci].enclosing_class = -1; comp_class_path_moved();
     }
+    /* (a class inside another is not the builtin of its leaf's name) */
+    if (c->classes[ci].enclosing_class >= 0) comp_class_nested(c, ci, c->classes[ci].enclosing_class);
   }
   /* A class can be opened bare first (no superclass -- e.g. just to hold a
      nested class) and reopened later with `< Super`. The parent link is read

@@ -483,7 +483,7 @@ static int const_node_class_index_tree(Compiler *c, int id);
    Below 0 when the record does not know (a node a pass made, which it cannot
    place) or the node names none of the program's: the tree's answer below
    is then the one. */
-static int const_node_record_class(Compiler *c, int id) {
+static int const_node_record_class(Compiler *c, int id, int *core) {
   const NodeTable *nt = c->nt;
   if (id < 0 || id >= nt->count || nt_int(nt, id, "node_line", 0) == 0) return -2;
   NodeKind ik = nt_kind(nt, id);
@@ -495,13 +495,20 @@ static int const_node_record_class(Compiler *c, int id) {
   int hp = par ? par[id] : -1;
   if (hp >= 0 && (nt_kind(nt, hp) == NK_ClassNode || nt_kind(nt, hp) == NK_ModuleNode) && nt_ref(nt, hp, "constant_path") == id)
     return elab_header_class(c, hp, NULL, NULL);
-  return elab_class_ref_at(c, id, NULL);
+  return elab_class_ref_at(c, id, core);
 }
 int const_node_class_index(Compiler *c, int id) {
   /* a constant a pass made to name a builtin class (cvb_split's arms) */
   if (id >= 0 && id < c->nt->count && nt_int(c->nt, id, "builtin_ref", 0)) return comp_builtin_class_named(c, nt_str(c->nt, id, "name"));
-  int r = const_node_record_class(c, id);
-  return r >= 0 ? r : const_node_class_index_tree(c, id);
+  int core = -1;
+  int r = const_node_record_class(c, id, &core);
+  if (r >= 0) return r;
+  int k = const_node_class_index_tree(c, id);
+  /* the record resolves the name to the builtin (Object holds no constant of
+     the program's by it): only a top-level class of that name can be the
+     program's reopening of it, not a nested one that shares its leaf
+     (Foo::Process is not Process) */
+  return core != -1 && k >= 0 && c->classes[k].enclosing_class >= 0 ? -1 : k;
 }
 /* The class a constant node names where a raise or a rescue arm matches
    by the class (`raise K`, `rescue K => e`): the one it names, a class

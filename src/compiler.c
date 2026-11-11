@@ -1283,6 +1283,17 @@ static void class_hash_add(Compiler *c, int i) {
   class_hash_link(c, i);
 }
 
+/* Class k lies inside class encl (a header under another's body, or
+   `class A::B`). comp_class_new gave it the core slot its leaf names when
+   it was the first of that name, but a nested `Foo::Process` is not
+   Process: the slot is released, left to the top-level class (made later
+   or never: Process, GC and Random have none of the program's). */
+void comp_class_nested(Compiler *c, int k, int encl) {
+  c->classes[k].enclosing_class = encl;
+  int core = builtin_core_class_slot(c->classes[k].name);
+  if (encl >= 0 && core >= 0 && c->core_cls[core] == k) c->core_cls[core] = -1;
+}
+
 ClassInfo *comp_class_new(Compiler *c, const char *name, int def_node) {
   if (c->nclasses >= c->cclasses) {
     c->cclasses = c->cclasses ? c->cclasses * 2 : 8;

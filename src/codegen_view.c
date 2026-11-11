@@ -66,7 +66,7 @@ static int view_sp;
 static int view_nodes;   /* the entries that view a node (all but VK_ARM) */
 static unsigned view_epoch_n;
 
-ArmCtx g_arm = { -1, -1, 0, -1, -1, -1, -1, NULL };
+ArmCtx g_arm = { -1, -1, 0, -1, -1, -1, -1, NULL, NULL };
 
 /* Argument-hoist overrides: emit_args_filled pre-evaluates GC-hazardous
    call arguments into rooted temps; emit_expr then substitutes the temp
@@ -215,6 +215,7 @@ int view_push_arm(int pd_skip, int prbd_skip, int builtin_arm) {
   g_arm.pd_skip = pd_skip;
   g_arm.prbd_skip = prbd_skip;
   g_arm.builtin_arm = builtin_arm;
+  g_arm.arm_cls = NULL;
   return tok;
 }
 

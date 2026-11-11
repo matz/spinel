@@ -2689,8 +2689,12 @@ int view_mark(void);
    see whether a builtin answers it, and the gap of that call
    (emit_unrouted_gap) sets *gap_hit: the builtin declined it. A gap of
    another call in the arm's text (in a block the arm splices, an operand)
-   is that call's own raise, which the arm runs. */
-typedef struct { int pd_skip, prbd_skip, builtin_arm, send_split, each_inline, each_dispatch, gap_watch; int *gap_hit; } ArmCtx;
+   is that call's own raise, which the arm runs. arm_cls names the builtin
+   class every value of a builtin arm is (String's pre-arm), NULL where the
+   arm takes any builtin's value: the class whose lookup decides whether
+   the arm's call reaches the program's Object method
+   (cplan_arm_object_target). */
+typedef struct { int pd_skip, prbd_skip, builtin_arm, send_split, each_inline, each_dispatch, gap_watch; int *gap_hit; const char *arm_cls; } ArmCtx;
 extern ArmCtx g_arm;
 #define g_pd_skip (g_arm.pd_skip)
 #define g_prbd_skip (g_arm.prbd_skip)

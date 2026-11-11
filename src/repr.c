@@ -443,11 +443,11 @@ static int node_is_oint_asked(Compiler *c, int node) {
       int nn = nullable_int_value(c, node);
       g_nn_builtin_call = sv_bc;
       if (nn) return 1;
-      /* ... unless the name is one the program's Object method owns, which
-         is the arm's answer in its own form */
+      /* ... unless the arm's call reaches the program's Object method,
+         which answers in its own form (in a String's arm, a name String
+         answers is String's own: cplan_arm_object_target) */
       if (g_poly_builtin_arm && g_pd_skip == node) {
-        int oc = comp_core_class(c, CORE_OBJECT);
-        int omi = oc >= 0 ? call_target(c, node, oc, nm, 0, NULL) : -1;
+        int omi = cplan_arm_object_target(c, node, g_arm.arm_cls);
         if (omi >= 0 && method_ret_is_oint(&c->scopes[omi])) return 1;
       }
     }

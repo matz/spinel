@@ -49,6 +49,24 @@ rescue NameError => e
 end
 p v
 
+# Beside a block that answers an Integer or nil, the raise fills that slot.
+def mapped = [1, 2].map { |x| yield(x) }
+p mapped { |x| x if x > 1 }
+report { p mapped { |x| Nope } }
+
+# A path read on the yield's own value, where the block's value is read.
+def inner
+  p yield
+end
+def outer
+  inner { (yield)::Nope }
+end
+def other
+  inner { :ok }
+end
+other { 1 }
+report { outer { String } }
+
 # A path some class defines is still looked up on the value at run time.
 class K
   NM = 7

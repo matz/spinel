@@ -12,5 +12,9 @@ uninitialized constant String::Nope
 uninitialized constant String::Nope
 uninitialized constant String::Nope
 "uninitialized constant String::Nope"
+[nil, 2]
+uninitialized constant Nope
+:ok
+uninitialized constant String::Nope
 7
 uninitialized constant String::NM

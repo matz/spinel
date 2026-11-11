@@ -4034,11 +4034,22 @@ static int emit_constant_value(Compiler *c, int id, Buf *b, Buf *checks, const N
 }
 
 /* Select the persistent slot with the same lookup and guards as a read. */
+/* The value constant path `id` is read on (the `m` of `m::NM`, the `(yield)`
+   of `(yield)::A::NM`), or -1 for a path of constants alone. */
+static int const_path_value_root(const NodeTable *nt, int id) {
+  int p = nt_kind(nt, id) == NK_ConstantPathNode ? nt_ref(nt, id, "parent") : -1;
+  while (p >= 0 && nt_kind(nt, p) == NK_ConstantPathNode) p = nt_ref(nt, p, "parent");
+  return p >= 0 && !nt_kind_is_constant(nt_kind(nt, p)) ? p : -1;
+}
+
 /* See codegen_internal.h. The read is emitted aside and dropped: only
    whether it is the NameError's raise is kept (a read that resolves
    leaves no trace, its temporaries' numbers put back). Every such raise,
    `klass::NM` on a Class value included, is written by const_raise_open,
-   so its head is the one this reads. */
+   so its head is the one this reads. The value a path is read on is bound
+   to a stand-in for that emission (const_path_value_root): its own code (a
+   yield, a call) is no part of the head, and emitted again here it would
+   run its emitters a second time, where the read does not sit. */
 int const_read_raises(Compiler *c, int id) {
   NodeKind k = nt_kind(c->nt, id);
   if (!nt_kind_is_constant(k) || !comp_const_undefined(c, id)) return 0;
@@ -4046,7 +4057,10 @@ int const_read_raises(Compiler *c, int id) {
   memset(&t, 0, sizeof t); memset(&pre, 0, sizeof pre);
   Buf *saved_pre = g_pre; int saved_tmp = g_tmp;
   g_pre = &pre;
+  int root = const_path_value_root(c->nt, id);
+  int vmark = root >= 0 ? view_bind(root, "0") : -1;
   emit_expr(c, id, &t);
+  if (vmark >= 0) view_unbind(vmark);
   g_pre = saved_pre; g_tmp = saved_tmp;
   int r = !pre.p && t.p && !strncmp(t.p, const_raise_head, sizeof const_raise_head - 1);
   free(t.p); free(pre.p);

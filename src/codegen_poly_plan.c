@@ -2007,6 +2007,30 @@ int poly_key_prim(Compiler *c, int call, const char *name, int argc, int kwh, in
    its cls_id switch, for a builtin value (a String, a Symbol, a class, an
    IO, a container) whose method shares its name with a user class's. Each
    writes `if (<tag test>) <result>; else `. */
+
+/* Does the program give Hash (`hash` set) or Array, or one of its
+   subclasses, its own method `name`: a reopen's def, or a module it
+   includes or prepends? A reopen's def that calls super is left out: its
+   super does not reach the builtin method on this path, so the helper
+   answers it as before. */
+static int poly_builtin_kind_owns(Compiler *c, int id, int hash, const char *name) {
+  int bci = comp_core_class(c, hash ? CORE_HASH : CORE_ARRAY);
+  for (int k = 0; k < c->nclasses; k++) {
+    int a = k;
+    for (int hops = 0; bci >= 0 && a >= 0 && a != bci && hops < c->nclasses; hops++) a = c->classes[a].parent;
+    /* a subclass is boxed as its builtin (ary_root), its root a Hash or an Array */
+    int sub = c->classes[k].ary_root > 0 && !comp_ary_is_str(c, k) && !comp_ary_is_time(c, k) &&
+              !comp_ary_is_hash(c, k) == !hash;
+    if ((bci < 0 || a != bci) && !sub) continue;
+    MethodLookup ml; memset(&ml, 0, sizeof ml); ml.def_class = -1;
+    int mi = call_target(c, id, k, name, 0, &ml);
+    if (mi < 0) continue;
+    if (bci >= 0 && ml.def_class == bci && scope_calls_super(c, mi)) continue;
+    return 1;
+  }
+  return 0;
+}
+
 void emit_poly_prearms0(Compiler *c, int id, const char *name, const PolySpecials0 *ps, TyKind ret,
                         int tv, int tr, Buf *b) {
   const NodeTable *nt = c->nt;
@@ -2315,10 +2339,10 @@ void emit_poly_prearms0(Compiler *c, int id, const char *name, const PolySpecial
          comes ahead of Enumerable -- takes the switch below, where that
          method has its arm. The guard took every Hash to the helper, and
          sp_poly_last raised NoMethodError for `class Hash; include M; end`
-         with M#last; sp_poly_first answered Enumerable#first over M's. */
-      int hci = comp_core_class(c, CORE_HASH), aci = comp_core_class(c, CORE_ARRAY);
-      int hash_own = hci >= 0 && call_target(c, id, hci, name, 0, NULL) >= 0;
-      int ary_own = aci >= 0 && call_target(c, id, aci, name, 0, NULL) >= 0;
+         with M#last; sp_poly_first answered Enumerable#first over M's.
+         A subclass of either that has the name counts too. */
+      int hash_own = poly_builtin_kind_owns(c, id, 1, name);
+      int ary_own = poly_builtin_kind_owns(c, id, 0, name);
       buf_printf(b, "if (_t%d.tag == SP_TAG_OBJ && (0", tv);
       if (!ary_own) buf_printf(b, " || sp_poly_is_array_kind(_t%d.cls_id)", tv);
       if (!hash_own) buf_printf(b, " || sp_poly_is_hash_kind(_t%d.cls_id)", tv);

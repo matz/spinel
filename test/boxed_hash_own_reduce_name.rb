@@ -31,5 +31,11 @@ p [{a: 1}, [1, 2]].map { |v| v.sum }
 class SubH < Hash; end
 p [SubH[b: 2], [3]].map { |v| v.first }
 
-# min stays the builtin one: no class of the program defines it
-p [{a: 1}, [5, 4]].map { |v| v.min }
+# a subclass's own def of the name
+class OwnH < Hash; def min = :ownh_min; end
+class OwnA < Array; def sum = :owna_sum; end
+p [OwnH[c: 3], [5, 4]].map { |v| v.min }
+p [OwnA[1, 2], [5, 4], {d: 1}].map { |v| (v.sum rescue :none) }
+
+# max stays the builtin one for an Array: Array's own comes first
+p [{a: 1}, [5, 4]].map { |v| v.max }

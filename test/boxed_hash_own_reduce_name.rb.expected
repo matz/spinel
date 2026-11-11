@@ -5,4 +5,6 @@
 [:pm_max, 2]
 [:own_sum, 3]
 [:em_first, 3]
-[[:a, 1], 4]
+[:ownh_min, 4]
+[:owna_sum, 9, :own_sum]
+[:pm_max, 5]

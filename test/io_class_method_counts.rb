@@ -44,6 +44,22 @@ begin
 rescue ArgumentError => e
   p e.message
 end
+# BasicSocket.for_fd takes no keywords: the hash is one more positional
+begin
+  BasicSocket.for_fd(u.fileno, 2, autoclose: false)
+rescue ArgumentError => e
+  p e.message
+end
+begin
+  BasicSocket.for_fd(u.fileno, autoclose: false)
+rescue ArgumentError => e
+  p e.message
+end
+begin
+  TCPSocket.for_fd(u.fileno, autoclose: false)
+rescue ArgumentError => e
+  p e.message
+end
 u.close
 # the rows are the classes' own methods, as reflection lists them
 p BasicSocket.singleton_methods(false).sort

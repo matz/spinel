@@ -6,5 +6,8 @@
 UDPSocket
 "wrong number of arguments (given 3, expected 1)"
 "wrong number of arguments (given 2, expected 1)"
+"wrong number of arguments (given 3, expected 1)"
+"wrong number of arguments (given 2, expected 1)"
+"wrong number of arguments (given 2, expected 1)"
 [:do_not_reverse_lookup, :do_not_reverse_lookup=, :for_fd]
 []

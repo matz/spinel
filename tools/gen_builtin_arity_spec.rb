@@ -457,6 +457,13 @@ CLASS_TARGETS.each do |cls, meths|
     cm << [cls, m, *s] if s
   end
 end
+# The class methods whose keyword hash is one more positional (BACK): a
+# fixed Method#arity and no keyword parameters, as BasicSocket.for_fd(fd)
+# has, so `BasicSocket.for_fd(1, autoclose: false)` passes two arguments
+cmkw = cm.select do |cls, m, *|
+  meth = CLASS_CONSTANTS.fetch(cls) { Object.const_get(cls) }.method(m)
+  meth.arity >= 0 && meth.parameters.none? { |kind, _| %i[key keyreq keyrest].include?(kind) }
+end
 
 # The libraries whose methods on a builtin class Spinel answers from the
 # library's builtin-op rows (io/console: IO#winsize, IO.console). Each is
@@ -544,7 +551,8 @@ out = <<~C
      Method#arity and accepted positional counts are independent facts.
      BAI carries both, BAM only Method#arity, BAS only instance counts,
      and BAC class/module counts; BAL and BALC are a library's instance
-     and class counts, its name first. -1 maxima are unbounded; NULL messages
+     and class counts, its name first. BACK names the class methods whose
+     keyword hash counts as a positional (fixed arity, no keywords). -1 maxima are unbounded; NULL messages
      and unproved -1 minima never reject a call. Block counts are separate.
      Kernel Method#arity describes receiverless method(:name) wrappers.
      BAP is Method#parameters by the class or module that defines the
@@ -564,6 +572,7 @@ cm.each { |r| render.("BAC", r) }
 lib.each { |r| render.("BAL", r) }
 libc.each { |r| render.("BALC", r) }
 kwpos.each { |r| render.("BAK", r[0, 2]) }
+cmkw.each { |r| render.("BACK", r[0, 2]) }
 params.each { |_, k, m, ps, cside| render.("BAP", [k, m, ps, cside.to_i]) }
 summary = "#{arity.length + kernel_arity.length} Method#arity + #{inst.length} instance + #{cm.length} class-method + #{lib.length + libc.length} library + #{params.length} parameters entries"
 if ARGV.include?("--check")

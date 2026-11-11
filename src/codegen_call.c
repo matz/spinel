@@ -2482,6 +2482,7 @@ const char *const comparable_names[] = {
     "<", ">", "<=", ">=", "==", "between?", "clamp", NULL };
 
 #define BAK(...)
+#define BACK(...)
 #define BAP(...)
 #define BAL(...)
 #define BALC(...)
@@ -20751,11 +20752,22 @@ static const struct { const char *cls; const char *m; } sp_builtin_kwpos_tbl[] =
 #include "builtin_arity.inc"
   {NULL, NULL}
 };
+#undef BAK
+#undef BACK
+/* The class methods whose keyword hash counts as a positional (BACK) */
+#define BAK(...)
+#define BACK(c,m) {c,m},
+static const struct { const char *cls; const char *m; } sp_builtin_cmeth_kwpos_tbl[] = {
+#include "builtin_arity.inc"
+  {NULL, NULL}
+};
 #undef BAI
 #undef BAM
 #undef BAS
 #undef BAC
 #undef BAK
+#undef BACK
+#define BACK(...)
 #undef BAL
 #undef BALC
 #undef BAP
@@ -21241,32 +21253,44 @@ static int const_reads_builtin_value(Compiler *c, int recv) {
   return ty_is_array(rt) || ty_is_hash(rt) || rt == TY_STRING || rt == TY_STRBUF ||
          rt == TY_INT || rt == TY_FLOAT || rt == TY_SYMBOL || rt == TY_IO;
 }
+/* Does class method `name` of builtin class cls take a keyword hash apart
+   from its positionals, as CRuby does for a method that takes keywords: 1,
+   0 where the hash counts as a positional, -1 where nothing says. cls's own
+   class-side rows say (bop_class_keywords), else the facts' fixed-arity
+   class methods, which take no keywords (BACK: BasicSocket.for_fd). */
+static int class_kwh_apart(const char *cls, const char *name) {
+  int kw = bop_class_keywords(cls, name);
+  for (int i = 0; kw < 0 && sp_builtin_cmeth_kwpos_tbl[i].cls; i++)
+    if (sp_streq(sp_builtin_cmeth_kwpos_tbl[i].cls, cls) && sp_streq(sp_builtin_cmeth_kwpos_tbl[i].m, name)) kw = 0;
+  return kw;
+}
 /* CRuby's counts for class method `name` of builtin class cls: its own row
    of the facts, or the row of the class of its singleton chain that has
    the method (bop_class_owner: File.sysopen is IO's), read as CRuby finds
    it. A `new` is the class's own: its counts are its initialize's, never a
    superclass's. The modules a class includes are not on the chain, their
    singleton methods not being inherited, and a class method the program
-   defines on the chain, up to that class, keeps its own count. */
+   defines on the chain, up to that class, keeps its own count. A keyword
+   hash (kwh) is counted as the class whose counts are read takes it
+   (class_kwh_apart): apart, leaving *argc the positionals CRuby's message
+   gives, or as a positional. Nothing says: not counted. */
 static int class_arity_spec_row(Compiler *c, int id, const char *cls, const char *name,
-                                int with_block, int argc, char *exp, size_t n) {
+                                int with_block, int *argc, int kwh, char *exp, size_t n) {
   const char *owner = is_new_name(name) ? NULL : bop_class_owner(cls, name);
   const char *a = cls;
   for (int i = 0; a; a = builtin_ancestor_at(cls, ++i)) {
     if (i > 0 && is_builtin_module_name(a)) continue;
     int ci = i > 0 ? comp_class_index(c, a) : -1;
     if (ci >= 0 && cplan_cmethod_target(c, id, ci, name) >= 0) return 0;
-    if (arity_spec_row(sp_builtin_cmeth_arity_spec_tbl, a, name, with_block, argc, exp, n)) return 1;
+    if (arity_spec_find(sp_builtin_cmeth_arity_spec_tbl, a, name)) {
+      int kw = kwh ? class_kwh_apart(a, name) : 0;
+      if (kw < 0) return 0;
+      *argc -= kw;
+      return arity_spec_row(sp_builtin_cmeth_arity_spec_tbl, a, name, with_block, *argc, exp, n);
+    }
     if (!owner || sp_streq(a, owner)) break;
   }
   return 0;
-}
-/* Does class method `name` of builtin class cls count a keyword hash apart,
-   as CRuby counts it for a method that takes keywords: 1, 0 where it counts
-   as a positional, -1 where no class-side row says. A `new` is the class's
-   own (its initialize's), any other name its owner's on the chain. */
-static int class_kwh_apart(const char *cls, const char *name) {
-  return bop_class_keywords(is_new_name(name) ? cls : bop_class_owner(cls, name), name);
 }
 /* Does call id pass a count CRuby refuses: then exp is the expected range,
    eval_recv whether the receiver is evaluated first, and given the count
@@ -21341,14 +21365,7 @@ static int arity_violation(Compiler *c, int id, int non_nil, char *exp, size_t n
           (!arity_spec_row(itbl, "Object", name, with_block, argc, exp, n) || toplevel_def(c, name)))
         return 0;
     }
-    else {
-      /* a keyword hash the method takes counts apart, CRuby's message
-         giving the positionals alone */
-      int kw = kwh ? class_kwh_apart(cn, name) : 0;
-      if (kw < 0) return 0;
-      argc -= kw;
-      if (!class_arity_spec_row(c, id, cn, name, with_block, argc, exp, n)) return 0;
-    }
+    else if (!class_arity_spec_row(c, id, cn, name, with_block, &argc, kwh, exp, n)) return 0;
     if (!exp[0]) return 0;
     *eval_recv = 0;  /* a constant read has no effect to evaluate */
   }

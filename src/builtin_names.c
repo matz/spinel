@@ -2306,6 +2306,7 @@ int builtin_core_is_a(int k, int anc) {
 #define BAS(c,m,...) {c,m},
 #define BAC(...)
 #define BAK(...)
+#define BACK(...)
 #define BAP(...)
 #define BAL(...)
 #define BALC(...)
@@ -2317,6 +2318,7 @@ static const struct { const char *cls, *m; } self_fact_rows[] = {
 #undef BAS
 #undef BAC
 #undef BAK
+#undef BACK
 #undef BAL
 #undef BALC
 #undef BAP

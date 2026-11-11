@@ -20534,6 +20534,8 @@ static sp_Enumerator *sp_enum_chain_of(sp_RbVal sources) {
     if (!sp_poly_kind_of_builtin(src, "Enumerable"))
       sp_raise_cls("NoMethodError", sp_sprintf("undefined method 'each' for an instance of %s",
                                                sp_poly_class_name(src)));
+    /* a Range of Times is Enumerable and has an #each, which raises */
+    if (src.tag == SP_TAG_OBJ && src.cls_id == SP_BUILTIN_TIME_RANGE && src.v.p) sp_trange_iterate_raise();
     sp_PolyArray *part = sp_enum_items_from(src); SP_GC_ROOT(part);
     for (sp_int j = 0; j < part->len; j++) sp_PolyArray_push(items, part->data[j]);
   }

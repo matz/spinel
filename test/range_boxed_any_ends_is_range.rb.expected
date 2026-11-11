@@ -152,3 +152,8 @@ true
 true
 range
 range
+-- a chain's source: a Range that iterates gives its members, one of Times raises
+3
+27
+32
+TypeError: can't iterate from Time

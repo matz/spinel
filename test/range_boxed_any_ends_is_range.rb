@@ -158,3 +158,12 @@ case tr
 when Range then puts "range"
 else puts "other"
 end
+
+puts "-- a chain's source: a Range that iterates gives its members, one of Times raises"
+[h[:int], h[:str], h[:date], h[:time]].each do |r|
+  begin
+    p Enumerator::Chain.new([0], r).to_a.size
+  rescue TypeError => e
+    puts "#{e.class}: #{e.message}"
+  end
+end

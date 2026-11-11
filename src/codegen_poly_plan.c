@@ -2007,9 +2007,11 @@ int poly_key_prim(Compiler *c, int call, const char *name, int argc, int kwh, in
    answers it as before. */
 /* Which boxed values of the kind (a Hash, `hash`, or an Array) a method of
    the program answers `name` for: 1 a plain one (the reopened class's own
-   def, or a module it includes or prepends), 2 a subclass's instance; OR'd. */
-static int poly_builtin_kind_owns(Compiler *c, int id, int hash, const char *name) {
+   def, or a module it includes or prepends), 2 a subclass's instance; OR'd.
+   The subclasses with a method of their own go into `subs`. */
+static int poly_builtin_kind_owns(Compiler *c, int id, int hash, const char *name, int *subs, int *nsubs) {
   int bci = comp_core_class(c, hash ? CORE_HASH : CORE_ARRAY), own = 0;
+  *nsubs = 0;
   for (int k = 0; k < c->nclasses; k++) {
     int a = k;
     for (int hops = 0; bci >= 0 && a >= 0 && a != bci && hops < c->nclasses; hops++) a = c->classes[a].parent;
@@ -2021,7 +2023,9 @@ static int poly_builtin_kind_owns(Compiler *c, int id, int hash, const char *nam
     int mi = call_target(c, id, k, name, 0, &ml);
     if (mi < 0) continue;
     if (bci >= 0 && ml.def_class == bci && scope_calls_super(c, mi)) continue;
-    own |= k == bci ? 1 : 2;
+    if (k == bci) own |= 1;
+    else if (*nsubs < 16) { own |= 2; subs[(*nsubs)++] = k; }
+    else own |= 1;  /* (too many to list: every value takes the switch) */
   }
   return own;
 }
@@ -2341,18 +2345,25 @@ void emit_poly_prearms0(Compiler *c, int id, const char *name, const PolySpecial
          with M#last; sp_poly_first answered Enumerable#first over M's.
          A subclass of either that has the name takes the switch for its
          own instances. */
-      int hash_own = poly_builtin_kind_owns(c, id, 1, name);
-      int ary_own = poly_builtin_kind_owns(c, id, 0, name);
+      int hsubs[16], nhsubs, asubs[16], nasubs;
+      int hash_own = poly_builtin_kind_owns(c, id, 1, name, hsubs, &nhsubs);
+      int ary_own = poly_builtin_kind_owns(c, id, 0, name, asubs, &nasubs);
       buf_printf(b, "if (_t%d.tag == SP_TAG_OBJ && (0", tv);
-      /* (only a subclass's: a plain one keeps the helper, where the
-         reopening's arm in the switch is a def that calls super, and its
-         super reached Object's) */
+      /* (only the instances of a subclass with its own method leave the
+         helper: in the switch, a plain one or a subclass that inherits
+         the reopening's def that calls super reached Object's method) */
       for (int h = 0; h < 2; h++) {
         int own = h ? hash_own : ary_own;
         const char *kind = h ? "sp_poly_is_hash_kind" : "sp_poly_is_array_kind";
         if (!own) buf_printf(b, " || %s(_t%d.cls_id)", kind, tv);
-        else if (!(own & 1))
-          buf_printf(b, " || (%s(_t%d.cls_id) && !(sp_bsub_cls_fn && sp_bsub_cls_fn(_t%d) >= 0))", kind, tv, tv);
+        else if (!(own & 1)) {
+          /* (a subclass that only inherits the reopening's def keeps the
+             helper too) */
+          const int *subs = h ? hsubs : asubs; int ns = h ? nhsubs : nasubs;
+          buf_printf(b, " || (%s(_t%d.cls_id) && ({ int _bs = sp_bsub_cls_fn ? sp_bsub_cls_fn(_t%d) : -1; 1", kind, tv, tv);
+          for (int q = 0; q < ns; q++) buf_printf(b, " && _bs != %d", subs[q]);
+          buf_puts(b, "; }))");
+        }
       }
       buf_printf(b, "%s)) { _t%d = ", tg, tr);
       if (ret == TY_POLY) buf_puts(b, cex);

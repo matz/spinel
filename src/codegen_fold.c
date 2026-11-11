@@ -5123,14 +5123,39 @@ int emit_sortby_expr(Compiler *c, int id, Buf *b) {
   return 1;
 }
 
+/* Can a program definition answer the `>` or `<` that CRuby's rb_cmpint
+   asks a Float or a Rational comparator answer? A Float owns both, so only
+   a reopened Float or a module the program puts ahead of Float's own
+   methods (prepend, extend) can. A Rational takes them from Comparable,
+   which calls Rational's <=>, so a `>`, `<` or `<=>` of Rational, Numeric
+   or Comparable, or of any module (it may be mixed into one of them), can.
+   A `>` of an unrelated class (a vector's) is none of these: keyed on the
+   name alone, it turned the sign reading off for every sort. */
+static int cmp_sign_ops_overridden(Compiler *c, TyKind t) {
+  static const char *const ops[] = { ">", "<", "<=>" };
+  static const char *const rat_holders[] = { "Rational", "Numeric", "Comparable" };
+  for (int o = 0; o < (t == TY_FLOAT ? 2 : 3); o++) {
+    if (t == TY_FLOAT) {
+      if (share_builtin_overridden(c, "Float", ops[o])) return 1;
+      continue;
+    }
+    for (int h = 0; h < 3; h++)
+      if (share_builtin_overridden(c, rat_holders[h], ops[o])) return 1;
+    int n = 0;
+    const PolyCand *p = comp_poly_candidates(c, ops[o], &n);
+    for (int i = 0; i < n; i++)
+      if ((p[i].mi >= 0 || p[i].rdcls >= 0) && comp_class_is_module(c, &c->classes[p[i].cls])) return 1;
+  }
+  return 0;
+}
 /* A comparator block's typed answer that is not an Integer but still has
    a sign: CRuby's rb_cmpint reads a Bignum by it, and asks a Float or a
-   Rational `> 0` and `< 0`. A program with its own `>` or `<` may answer
-   those calls, so the sign is not read for a Float or a Rational then. */
+   Rational `> 0` and `< 0`. When a program method may answer those calls,
+   the sign is not read for a Float or a Rational. */
 static int cmp_ans_by_sign(Compiler *c, TyKind t) {
   if (t == TY_BIGINT) return 1;
   if (t != TY_FLOAT && t != TY_RATIONAL) return 0;
-  return !an_user_defines_method(c, ">") && !an_user_defines_method(c, "<");
+  return !cmp_sign_ops_overridden(c, t);
 }
 
 /* The sign a sort, min or max comparator block answers for elements `ea`

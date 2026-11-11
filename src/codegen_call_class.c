@@ -667,19 +667,37 @@ static int obj_defines_own(Compiler *c, int recv, const char *name) {
   return ty_is_object(t) && comp_method_in_chain(c, ty_object_class(t), name, NULL) >= 0;
 }
 
-/* The builtin classes whose values have builtin module or class `kn`
-   (Comparable, Numeric, Enumerable) among their ancestors, for a program
-   that reopens it; NULL for any other name. */
-static const char *const *builtin_ancestor_holders(Compiler *c, int k) {
+/* The builtin classes whose values reach `qm` through the program's
+   reopening k of a builtin module or class (Comparable, Numeric,
+   Enumerable) into `out` (NULL-ended, at most 8): those for which k is
+   the first of the value's class, Numeric and the module that defines
+   or undefines qm. 0 when k is no such reopening. */
+static int builtin_ancestor_holders(Compiler *c, int k, const char *qm, const char **out) {
+  static const struct { const char *cls, *mid, *mod; } rows[] = {
+    { "Integer", "Numeric", "Comparable" }, { "Float", "Numeric", "Comparable" },
+    { "Rational", "Numeric", "Comparable" }, { "Complex", "Numeric", "Comparable" },
+    { "String", NULL, "Comparable" }, { "Symbol", NULL, "Comparable" }, { "Time", NULL, "Comparable" },
+    { "Array", NULL, "Enumerable" }, { "Hash", NULL, "Enumerable" }, { "Range", NULL, "Enumerable" },
+    { "Set", NULL, "Enumerable" }, { "Enumerator", NULL, "Enumerable" } };
   const char *kn = c->classes[k].name;
-  static const char *const cmp[] = { "Integer", "Float", "Rational", "Complex", "String", "Symbol", "Time", NULL };
-  static const char *const num[] = { "Integer", "Float", "Rational", "Complex", NULL };
-  static const char *const en[] = { "Array", "Hash", "Range", "Set", "Enumerator", NULL };
-  if (!kn || !c->classes[k].is_builtin_const || c->classes[k].enclosing_class >= 0) return NULL;
-  if (sp_streq(kn, "Comparable")) return cmp;
-  if (sp_streq(kn, "Numeric")) return num;
-  if (sp_streq(kn, "Enumerable")) return en;
-  return NULL;
+  int n = 0;
+  if (!kn || !c->classes[k].is_builtin_const || c->classes[k].enclosing_class >= 0) return 0;
+  if (!sp_streq(kn, "Comparable") && !sp_streq(kn, "Numeric") && !sp_streq(kn, "Enumerable")) return 0;
+  for (unsigned r = 0; r < sizeof rows / sizeof *rows; r++) {
+    const char *chain[3] = { rows[r].cls, rows[r].mid, rows[r].mod };
+    for (int i = 0; i < 3; i++) {
+      if (!chain[i]) continue;
+      int a = comp_class_index(c, chain[i]);
+      if (a < 0) continue;
+      if (comp_is_undeffed_in_chain(c, a, qm) || comp_method_in_class(c, a, qm) >= 0 ||
+          comp_method_in_chain(c, a, qm, NULL) >= 0) {
+        if (a == k && n < 8) out[n++] = rows[r].cls;
+        break;
+      }
+    }
+  }
+  out[n] = NULL;
+  return 1;
 }
 
 /* Only the builtin-only fallback calls this: user methods and reflection
@@ -1116,8 +1134,9 @@ int emit_call_reflection_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
             /* a reopened builtin module or class a builtin value has among
                its ancestors (`module Comparable` of a String): no value is
                keyed by it, so the value's builtin class answers */
-            const char *const *holders = has ? builtin_ancestor_holders(c, k) : NULL;
-            if (holders) {
+            const char *holders[9];
+            if (has && builtin_ancestor_holders(c, k, qm, holders)) {
+              if (!holders[0]) continue;
               buf_printf(b, "%s(sp_str_in_list(sp_poly_class_name(_t%d), (const char *const[]){", first ? "" : " || ", tv);
               for (int h = 0; holders[h]; h++) buf_printf(b, "\"%s\", ", holders[h]);
               buf_puts(b, "NULL})");

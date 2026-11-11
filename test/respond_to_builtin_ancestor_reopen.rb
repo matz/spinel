@@ -38,3 +38,25 @@ vals.each do |v|
 end
 def any_cmp(x) = x.respond_to?(:cmp_pub)
 p any_cmp("s"), any_cmp(2), any_cmp([1])
+
+# a String that may be nil: nil answers its own surface
+def maybe_s(f) = f ? "s" : nil
+p maybe_s(false).respond_to?(:cmp_pub), maybe_s(true).respond_to?(:cmp_pub)
+p ["q"][5].respond_to?(:cmp_pub)
+
+# a second argument known only at run time
+p "s".respond_to?(:cmp_priv, ARGV.size > 5)
+
+# a nearer ancestor hides the name: an undef, or a private def
+module Comparable
+  def hid = 1
+  def nhid = 2
+end
+class String
+  undef_method :hid
+end
+class Numeric
+  private def nhid = 3
+end
+p "s".respond_to?(:hid), 3.respond_to?(:hid), 3.respond_to?(:nhid), "s".respond_to?(:nhid)
+["s", 3, 1.5, :y].each { |x| p [x.respond_to?(:hid), x.respond_to?(:nhid)] }

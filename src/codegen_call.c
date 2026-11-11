@@ -34126,14 +34126,24 @@ int respond_to_static_answer(Compiler *c, int id, int recv, TyKind rt, const cha
     const char *bn = anc ? anc[0] : NULL;
     int bcls = bn ? core_of_type(rt) : -1;
     int bci = bcls >= 0 ? comp_core_class(c, bcls) : -1;
-    if (bn && !builtin_method_known(bn, qm) && (bci < 0 || comp_method_in_chain(c, bci, qm, NULL) < 0)) {
-      for (int a = 1; !resolved && anc[a] && !sp_streq(anc[a], "Object"); a++) {
+    /* (an undef in the value's own class hides the name, as does one in
+       an ancestor nearer than the one that defines it) */
+    if (bn && !builtin_method_known(bn, qm) &&
+        (bci < 0 || (comp_method_in_chain(c, bci, qm, NULL) < 0 && !comp_is_undeffed_in_chain(c, bci, qm)))) {
+      for (int a = 1; anc[a] && !sp_streq(anc[a], "Object"); a++) {
         int k = comp_class_index(c, anc[a]);
-        if (k < 0 || comp_method_in_chain(c, k, qm, NULL) < 0) continue;
+        if (k < 0) continue;
+        if (comp_is_undeffed_in_chain(c, k, qm)) break;
+        if (comp_method_in_chain(c, k, qm, NULL) < 0) continue;
         int v = comp_method_vis_in_chain(c, k, qm);
+        /* (a private or protected one with a second argument only the run
+           time knows is left to the paths below, as before) */
         if (v == SP_VIS_PUBLIC) resolved = yes = 1;
         else if (foldable) { resolved = 1; yes = include_all; }
-        else return -1;
+        /* a String that may be nil holds it as NULL, and nil answers only
+           its own surface: the answer is the value's non-nilness */
+        if (resolved && yes && nil_fact_tracked(rt) && nil_fact_node(c, recv)) g_rto_nil_obj = 1;
+        break;
       }
     }
   }

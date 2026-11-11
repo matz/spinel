@@ -1133,7 +1133,7 @@ TyKind block_next_value_ntype(const Compiler *c, int node) {
     if (an > 1) return TY_POLY_ARRAY;
     NodeKind ak = nt_kind(nt, av[0]);
     if (ak == NK_SplatNode) return TY_POLY_ARRAY;
-    return c->ntype[av[0]];
+    return comp_ntype_stored(c, av[0]);
   }
   if (k == NK_WhileNode || k == NK_UntilNode || k == NK_ForNode || k == NK_BlockNode ||
       k == NK_LambdaNode || k == NK_DefNode || k == NK_ClassNode || k == NK_ModuleNode)
@@ -1237,7 +1237,7 @@ static int yield_builtin_method_site_type(const Compiler *c, int id, TyKind *out
   if (!op || recv < 0) return 0;
   if (nt_kind(nt, recv) != NK_YieldNode && nt_kind(nt, recv) != NK_CallNode) return 0;
   if (nt_ref(nt, id, "block") >= 0) return 0;
-  if (c->ntype[id] != TY_POLY) return 0;
+  if (comp_ntype_stored(c, id) != TY_POLY) return 0;
   int an = nt_ref(nt, id, "arguments"), ac = 0;
   const int *av = an >= 0 ? nt_arr(nt, an, "arguments", &ac) : NULL;
   TyKind rt;
@@ -1274,7 +1274,7 @@ static int untyped_call_held_boxed(const Compiler *c, int id) {
   static unsigned char *memo;   /* 0 not asked, 1 held, 2 not, 3 being asked */
   static const NodeTable *memo_nt;
   static int cap;
-  if (c->ntype[id] != TY_UNKNOWN || nt_kind(c->nt, id) != NK_CallNode) return 0;
+  if (comp_ntype_stored(c, id) != TY_UNKNOWN || nt_kind(c->nt, id) != NK_CallNode) return 0;
   if (memo_nt != c->nt) { if (cap) memset(memo, 0, (size_t)cap); memo_nt = c->nt; }
   if (id >= cap) {
     int n = c->nt->count > id ? c->nt->count : id + 1;
@@ -1341,7 +1341,7 @@ int sp_yield_site_type(const Compiler *c, int id, TyKind *out) {
     if (fn <= 0 || !fb) break;
     tail = fb[fn - 1];
   }
-  TyKind bt = c->ntype[tail];
+  TyKind bt = comp_ntype_stored(c, tail);
   /* only a CONCRETE per-site answer overrides the cache; an unresolved tail
      leaves the node's own (unified) type in place */
   if (bt == TY_UNKNOWN || bt == TY_VOID) return 0;
@@ -4455,7 +4455,7 @@ static void const_read_name(Compiler *c, int id, char *out, size_t cap) {
   for (int k = id; k >= 0 && n < 16; k = nt_kind(nt, k) == NK_ConstantPathNode ? nt_ref(nt, k, "parent") : -1) {
     /* a receiver that is no constant (a class held in a variable) has no name here */
     const char *nm = k == id || nt_kind_is_constant(nt_kind(nt, k))
-                     ? nt_str(nt, k, "name") : NULL;
+                     ? nt_key_name(nt, k) : NULL;
     const char *us = nm ? strstr(nm, "__") : NULL;
     while (us && strstr(us + 2, "__")) us = strstr(us + 2, "__");
     if (nm) segs[n++] = us ? us + 2 : nm;
@@ -4618,7 +4618,7 @@ static int const_recv_on_class(Compiler *c, int id) {
   const NodeTable *nt = c->nt;
   int r = nt_kind(nt, id) == NK_CallNode ? nt_ref(nt, id, "receiver") : -1;
   if (r < 0 || nt_kind(nt, r) != NK_ConstantPathNode || view_const_slot(c, r)) return 0;
-  const char *nm = nt_str(nt, r, "name");
+  const char *nm = nt_key_name(nt, r);
   return !const_has_flag(nm ? comp_const(c, nm) : NULL) && const_class_slot_held(c, id, r);
 }
 static int const_class_slot_held(Compiler *c, int id, int r) {
@@ -4645,7 +4645,7 @@ static int const_recv_hold(Compiler *c, int id, Buf *b, int *holds_slot, int stm
     return view_push_const_read(c, r);
   }
   if (r < 0 || nt_kind(nt, r) != NK_ConstantPathNode || view_const_slot(c, r)) return -1;
-  const char *nm = nt_str(nt, r, "name");
+  const char *nm = nt_key_name(nt, r);
   LocalVar *lv = nm ? comp_const(c, nm) : NULL;
   /* (a call with a block holds only as a statement, where the block's loop
      reads the pointer from the statement's own scope) */
@@ -5096,7 +5096,7 @@ void emit_coerce_text(Compiler *c, int node, TyKind from, TyKind slot, int how,
     return;
   case CF_BOX:
     /* (a String into a boxed slot the rule shares: emit_boxed's lift) */
-    if (node >= 0 && c->poly_strbuf_lift[node] && from == TY_STRING) {
+    if (node >= 0 && comp_poly_strbuf_lift_stored(c, node) && from == TY_STRING) {
       buf_puts(b, "sp_poly_strbuf_lift(");
       emit_boxed_text(c, from, text, b);
       buf_puts(b, ")");
@@ -7666,8 +7666,21 @@ int ty_matches_class(Compiler *c, TyKind t, const char *cn, int exact) {
    when it has effects). */
 void emit_frozen_obj_guard(Compiler *c, int cid, const char *selfexpr, Buf *b) {
   if (cid < 0 || cid >= c->nclasses) return;
-  if (!c->classes[cid].freeze_observed || c->classes[cid].is_value_type) return;
+  if (c->classes[cid].is_value_type) return;
+  /* a method a subclass inherits writes the subclass's instance too: one only
+     the subclass freezes is frozen there (Base#memo on a frozen Child) */
+  int below = 0, observed = c->classes[cid].freeze_observed;
+  for (int j = 0; j < c->nclasses; j++)
+    if (j != cid && is_descendant(c, j, cid)) { below = 1; observed |= c->classes[j].freeze_observed; }
+  if (!observed) return;
   const char *rn = class_ruby_name(c, cid) ? class_ruby_name(c, cid) : c->classes[cid].name;
+  /* the receiver may be a subclass's: its own class names it, as CRuby's message does */
+  if (below && c->classes[cid].ary_root <= 0) {
+    buf_printf(b, "if (sp_gc_is_frozen((void *)%s)) sp_raise_frozen_obj(sp_box_obj((void *)%s, (int)(%s)->cls_id), "
+                  "sp_str_concat3((&(\"\\xff\" \"can't modify frozen \")[1]), sp_class_to_s(((sp_Class){(int)(%s)->cls_id, NULL})), (&(\"\\xff\" \"\")[1]))); ",
+               selfexpr, selfexpr, selfexpr, selfexpr);
+    return;
+  }
   /* an Array subclass instance is frozen as its Array is (#7449); a Hash
      subclass instance, as its Hash is, by the header bit, and a String
      subclass instance as its String handle is, by the same bit */

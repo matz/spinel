@@ -1697,6 +1697,10 @@ static void sp0_store(const Compiler *c, const char *name, int blk, int ncand, i
   unsigned b = (sp_strhash(name) * 2u + (unsigned)blk) % SP0_BUCKETS;
   e->blk = blk; e->ncand = ncand; e->ncall_arm = ncall_arm; e->next = sp0_tab[b]; sp0_tab[b] = e;
 }
+/* The pre-arms a zero-argument call on a boxed receiver takes ahead of its
+   cls_id switch (PolySpecials0: a length, a class value's name or
+   reflection, a predicate, an OpenStruct's member, a stream's rewind, a
+   container's to_a or to_h), and the user candidates the switch counts. */
 void poly_specials0(Compiler *c, int id, const char *name, PolySpecials0 *s) {
   const NodeTable *nt = c->nt;
   int argc = 0;
@@ -1722,26 +1726,14 @@ void poly_specials0(Compiler *c, int id, const char *name, PolySpecials0 *s) {
   int is_cls_members = sp_streq(name, "members") && g_gen_cls_answers &&
                        nt_ref(nt, id, "block") < 0;
   int is_pred = nt_ref(nt, id, "block") < 0 && poly_pred_kind(name, 0);
-  /* When ostruct is in the program a bare `obj.reader` on a poly value may be
-     an OpenStruct member access (any name) -- read it at runtime (#3197).
-     The check keys on cls_id == SP_BUILTIN_OPENSTRUCT, so it cannot alias a
-     user-class arm and coexists with them: a poly value that unions an
-     OpenStruct with user objects (OpenStruct|nil return) still reads the
-     member when a user class happens to define the same name (#3264). */
-  /* An OpenStruct answers ANY reader with a member; but a name the poly
-     dispatch already serves with a real builtin arm must keep that arm, or
-     the member fetch replaces it and returns nil (#3341). */
-  int is_ostruct = argc == 0 && nt_ref(nt, id, "block") < 0 &&
-                   !is_lengthlike && !is_empty && !is_pred &&
-                   !poly_builtin_zero_arg_name(name) &&
-                   sp_feature_required("ostruct");
-  /* the builtins' names an OpenStruct reads as a member
-     (ostruct_member_name: size, first, max, ...) read it too where one can
-     reach the receiver (cls_fact_may_ostruct): the containers' arms read 0,
-     nil or NoMethodError for it, and a class's own method took the rest */
-  if (argc == 0 && nt_ref(nt, id, "block") < 0 && ostruct_member_name(name) &&
-      cls_fact_may_ostruct(c, nt_ref(nt, id, "receiver")))
-    is_ostruct = 1;
+  /* A bare `obj.reader` on a poly value an OpenStruct can reach reads the
+     member when the value is one (ostruct_member_read, which typed the call
+     to hold it, #3197). The check keys on cls_id == SP_BUILTIN_OPENSTRUCT,
+     so it cannot alias a user-class arm and coexists with them: a poly value
+     that unions an OpenStruct with user objects still reads the member when
+     a user class happens to define the same name (#3264), and the builtin
+     arms after it keep the other values' answers (#3341). */
+  int is_ostruct = ostruct_member_read(c, id, comp_recv_type(c, nt_ref(nt, id, "receiver")));
   /* `rewind` on a poly stream (a param unioning StringIO and IO, #3257):
      both are builtins/native classes with no user arm, so without this
      pre-arm the call was silently dropped. */
@@ -2007,6 +1999,37 @@ int poly_key_prim(Compiler *c, int call, const char *name, int argc, int kwh, in
    its cls_id switch, for a builtin value (a String, a Symbol, a class, an
    IO, a container) whose method shares its name with a user class's. Each
    writes `if (<tag test>) <result>; else `. */
+
+/* Does the program give Hash (`hash` set) or Array, or one of its
+   subclasses, its own method `name`: a reopen's def, or a module it
+   includes or prepends? A reopen's def that calls super is left out: its
+   super does not reach the builtin method on this path, so the helper
+   answers it as before. */
+/* Which boxed values of the kind (a Hash, `hash`, or an Array) a method of
+   the program answers `name` for: 1 a plain one (the reopened class's own
+   def, or a module it includes or prepends), 2 a subclass's instance; OR'd.
+   The subclasses with a method of their own go into `subs`. */
+static int poly_builtin_kind_owns(Compiler *c, int id, int hash, const char *name, int *subs, int *nsubs) {
+  int bci = comp_core_class(c, hash ? CORE_HASH : CORE_ARRAY), own = 0;
+  *nsubs = 0;
+  for (int k = 0; k < c->nclasses; k++) {
+    int a = k;
+    for (int hops = 0; bci >= 0 && a >= 0 && a != bci && hops < c->nclasses; hops++) a = c->classes[a].parent;
+    /* a subclass is boxed as its builtin (ary_root), its root a Hash or an Array */
+    int sub = c->classes[k].ary_root > 0 && !comp_ary_is_str(c, k) && !comp_ary_is_time(c, k) &&
+              !comp_ary_is_hash(c, k) == !hash;
+    if ((bci < 0 || a != bci) && !sub) continue;
+    MethodLookup ml; memset(&ml, 0, sizeof ml); ml.def_class = -1;
+    int mi = call_target(c, id, k, name, 0, &ml);
+    if (mi < 0) continue;
+    if (bci >= 0 && ml.def_class == bci && scope_calls_super(c, mi)) continue;
+    if (k == bci) own |= 1;
+    else if (*nsubs < 16) { own |= 2; subs[(*nsubs)++] = k; }
+    else own |= 1;  /* (too many to list: every value takes the switch) */
+  }
+  return own;
+}
+
 void emit_poly_prearms0(Compiler *c, int id, const char *name, const PolySpecials0 *ps, TyKind ret,
                         int tv, int tr, Buf *b) {
   const NodeTable *nt = c->nt;
@@ -2151,16 +2174,20 @@ void emit_poly_prearms0(Compiler *c, int id, const char *name, const PolySpecial
      the cls_id switch since its id is a builtin, not a user class (#3197). */
   if (is_ostruct) {
     if (g_plan_check) pa_observe(PA_BUILTIN, PA_KEY_BUILTIN + PB_OSTRUCT, -1, TY_UNKNOWN, PC_SAME);
-    char osget[192];
-    snprintf(osget, sizeof osget,
-             "sp_OpenStruct_get((sp_OpenStruct *)_t%d.v.p, sp_sym_intern(\"%s\"))", tv, name);
+    /* the member the program named: a call renamed to a builtin's own name
+       (grapheme_clusters to chars, an alias to its reader) keeps the name it
+       was written with (cplan_call_name), whatever its length */
+    Buf osget; memset(&osget, 0, sizeof osget);
+    buf_printf(&osget, "sp_OpenStruct_get((sp_OpenStruct *)_t%d.v.p, sp_sym_intern(\"%s\"))",
+               tv, cplan_call_name(nt, id));
     buf_printf(b, "if (_t%d.tag == SP_TAG_OBJ && _t%d.cls_id == SP_BUILTIN_OPENSTRUCT) _t%d = ",
                tv, tv, tr);
-    if (ret == TY_POLY) buf_puts(b, osget);
+    if (ret == TY_POLY) buf_puts(b, osget.p);
     /* the result slot is user-typed (#3264): an Integer or Float one that
        holds nil (an oint) takes the member with its nil, as the other arms'
        answers are taken */
-    else plan_put_boxed(c, plan_slot_oint(c, id, ret), ret, osget, b);
+    else plan_put_boxed(c, plan_slot_oint(c, id, ret), ret, osget.p, b);
+    free(osget.p);
     buf_puts(b, "; else ");
   }
   /* to_a on a runtime builtin hash/array: pair-array via the boxed
@@ -2310,8 +2337,35 @@ void emit_poly_prearms0(Compiler *c, int id, const char *name, const PolySpecial
       if (sp_streq(name, "min"))
         snprintf(tg + tn, sizeof tg - (size_t)tn,
                  " || _t%d.cls_id == SP_BUILTIN_TIME", tv);
-      buf_printf(b, "if (_t%d.tag == SP_TAG_OBJ && (sp_poly_is_array_kind(_t%d.cls_id) ||"
-                    " sp_poly_is_hash_kind(_t%d.cls_id)%s)) { _t%d = ", tv, tv, tv, tg, tr);
+      /* A Hash (an Array) whose class in the program answers the name --
+         a reopen's own def, or a module it includes or prepends, which
+         comes ahead of Enumerable -- takes the switch below, where that
+         method has its arm. The guard took every Hash to the helper, and
+         sp_poly_last raised NoMethodError for `class Hash; include M; end`
+         with M#last; sp_poly_first answered Enumerable#first over M's.
+         A subclass of either that has the name takes the switch for its
+         own instances. */
+      int hsubs[16], nhsubs, asubs[16], nasubs;
+      int hash_own = poly_builtin_kind_owns(c, id, 1, name, hsubs, &nhsubs);
+      int ary_own = poly_builtin_kind_owns(c, id, 0, name, asubs, &nasubs);
+      buf_printf(b, "if (_t%d.tag == SP_TAG_OBJ && (0", tv);
+      /* (only the instances of a subclass with its own method leave the
+         helper: in the switch, a plain one or a subclass that inherits
+         the reopening's def that calls super reached Object's method) */
+      for (int h = 0; h < 2; h++) {
+        int own = h ? hash_own : ary_own;
+        const char *kind = h ? "sp_poly_is_hash_kind" : "sp_poly_is_array_kind";
+        if (!own) buf_printf(b, " || %s(_t%d.cls_id)", kind, tv);
+        else if (!(own & 1)) {
+          /* (a subclass that only inherits the reopening's def keeps the
+             helper too) */
+          const int *subs = h ? hsubs : asubs; int ns = h ? nhsubs : nasubs;
+          buf_printf(b, " || (%s(_t%d.cls_id) && ({ int _bs = sp_bsub_cls_fn ? sp_bsub_cls_fn(_t%d) : -1; 1", kind, tv, tv);
+          for (int q = 0; q < ns; q++) buf_printf(b, " && _bs != %d", subs[q]);
+          buf_puts(b, "; }))");
+        }
+      }
+      buf_printf(b, "%s)) { _t%d = ", tg, tr);
       if (ret == TY_POLY) buf_puts(b, cex);
       else emit_unbox_text(c, ret, cex, b);
       buf_puts(b, "; }\nelse ");

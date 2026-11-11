@@ -291,7 +291,7 @@ static inline const char *nt_const_key(const NodeTable *nt, int node) {
 }
 static inline const char *nt_const_key_or_name(const NodeTable *nt, int node) {
   const char *k = nt_const_key(nt, node);
-  return k ? k : nt_str(nt, node, "name");
+  return k ? k : nt_key_name(nt, node);
 }
 const char *elab_const_node_key(Compiler *c, int node);   /* the key of the value constant entity a write is of or a read names; NULL for none */
 const char *elab_const_owned_key(Compiler *c, int cls, const char *name);   /* the key of the value constant class cls (LR_MAIN: Object's own) holds under leaf name; NULL for none */
@@ -314,7 +314,7 @@ static inline int const_leaf_bound(Compiler *c, int node) {
 /* the name a constant node's slot goes by: its entity's key, else the name it carries */
 static inline const char *const_key_at(Compiler *c, int node) {
   const char *k = elab_const_node_key(c, node);
-  return k ? k : nt_str(c->nt, node, "name");
+  return k ? k : nt_key_name(c->nt, node);
 }
 /* The value constant slot the node names (its entity's key, const_key_at),
    or NULL for none registered: the analysis readers ask by node (#10787
@@ -1137,6 +1137,7 @@ TyKind hash_merge_block_value_ty(Compiler *c, int id);
    type a yield, and the emitter joins it with the same tail to type the
    splice the yield reads -- one answer for one question. */
 TyKind block_next_value_ty(Compiler *c, int node);
+TyKind block_store_value_ty(Compiler *c, int body, int tail, TyKind joined, TyKind elem, unsigned *num);
 
 /* True if CallNode `id` is an Enumerable method on a Range that spinel does not
    handle natively but supports on arrays -- served by materializing the range

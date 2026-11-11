@@ -161,7 +161,7 @@ static int cw_value_walk(ConstWalk *w, int id, int depth) {
       }
       int rv = cw_value(w, r, depth + 1);
       if (rv == 0) return 0;
-      const char *rn = nt_kind(nt, r) == NK_ConstantReadNode ? nt_str(nt, r, "name") : NULL;
+      const char *rn = nt_kind(nt, r) == NK_ConstantReadNode ? nt_key_name(nt, r) : NULL;
       /* Struct.new, Data.define, Class.new, Module.new run the body they take */
       if (rn && is_class_builder(rn, nm) && !w->hooks && !w->reopened) {
         if (blk < 0) return 1;
@@ -389,7 +389,7 @@ void an_const_presence(Compiler *c) {
     /* def Math.f, class << Math, Math.define_singleton_method ... */
     if (k == NK_DefNode || k == NK_SingletonClassNode || k == NK_CallNode) {
       int r = nt_ref(nt, id, k == NK_SingletonClassNode ? "expression" : "receiver");
-      if (r >= 0 && nt_kind(nt, r) == NK_ConstantReadNode && is_math_module_name(nt_str(nt, r, "name")) &&
+      if (r >= 0 && nt_kind(nt, r) == NK_ConstantReadNode && is_math_module_name(nt_key_name(nt, r)) &&
           !(k == NK_CallNode && is_math_fn_name(nt_str(nt, id, "name"))))
         w.math_own = 1;
     }
@@ -548,7 +548,7 @@ int an_class_needs_presence(Compiler *c, int ci) {
    each, and marks those that ask `own_presence`), not a reference to the
    class the passes made of self later. */
 static int const_class_presence(Compiler *c, int id, int program) {
-  const char *nm = nt_str(c->nt, id, "name");
+  const char *nm = nt_key_name(c->nt, id);
   NodeKind ik = nt_kind(c->nt, id);
   int ci = !nm ? -1 : ik == NK_ConstantReadNode || ik == NK_ConstantPathNode ? const_node_class_index(c, id) : comp_class_index(c, nm);
   if (!an_class_needs_presence(c, ci)) return 0;

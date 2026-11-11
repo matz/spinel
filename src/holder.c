@@ -120,7 +120,7 @@ int holder_of_node_slot(const Compiler *c, int node, HolderRef *out) {
 int holder_of_node_in(const Compiler *c, int node, int body, HolderRef *out) {
   Compiler *mc = (Compiler *)c;
   HolderKind hk = node >= 0 ? holder_kind_of(nt_kind(c->nt, node)) : HK_NONE;
-  const char *nm = hk != HK_NONE ? nt_str(c->nt, node, "name") : NULL;
+  const char *nm = hk != HK_NONE ? nt_key_name(c->nt, node) : NULL;
   /* *out is defined on every answer: a caller may spell it whatever this
      answered */
   memset(out, 0, sizeof *out);

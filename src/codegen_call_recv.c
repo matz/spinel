@@ -3756,8 +3756,12 @@ static int emit_typed_array_call(Compiler *c, int id, Buf *b, const NodeTable *n
          the store begun, its setup lines landed inside the call. */
       Repr vr = repr_of(c, fbb[fbn - 1]);
       TyKind vt = vr.as_ty;
+      /* A `next` value is boxed too: the slot typed from the tail alone
+         took `next "s"` beside an Integer tail as an sp_int, and the C did
+         not build. */
       IterStep st; emit_iter_step_open(c, fblk, sp_streq(fk, "Poly") && (vr.kind == RK_BOXED || vr.untyped ||
-        ((vr.strbuf_src != RS_NONE || strbuf_value_carries(c, fbb[fbn - 1])))), g_indent + 1, &st);
+        ((vr.strbuf_src != RS_NONE || strbuf_value_carries(c, fbb[fbn - 1]))) ||
+        block_next_value_ty(c, fbody) != TY_UNKNOWN), g_indent + 1, &st);
       Buf vb; memset(&vb, 0, sizeof vb); vt = emit_iter_step_tail(c, &st, &vb);
       emit_indent(g_pre, g_indent + 1);
       /* A value of a kind the typed array cannot hold, which the analysis
@@ -10803,7 +10807,7 @@ static int emit_scalar_recv_arms(Compiler *c, int id, Buf *b, const NodeTable *n
       }
       /* a nil arm that left the test to this guard (emit_nil_target_own)
          learns it was written */
-      if (c->nil_tested && c->nil_tested[recv] == 3) c->nil_tested[recv] = 4;
+      if (comp_nil_tested_present(c) && comp_nil_tested_stored(c, recv) == 3) comp_write_nil_tested(c, recv, 4);
       if (ib->p) buf_puts(b, ib->p);
       buf_puts(b, "; })");
     }
@@ -12147,7 +12151,7 @@ static int emit_struct_recv_call(Compiler *c, int id, Buf *b, const NodeTable *n
       buf_printf(b, " _t%d = ", tvraw); emit_expr(c, argv[1], b); buf_puts(b, ";");
       char rawtxt[32]; snprintf(rawtxt, sizeof rawtxt, "_t%d", tvraw);
       /* a String a shared boxed member takes is its handle (emit_boxed's lift) */
-      int lift = c->poly_strbuf_lift[argv[1]] && vt == TY_STRING;
+      int lift = comp_poly_strbuf_lift_stored(c, argv[1]) && vt == TY_STRING;
       buf_printf(b, " sp_RbVal _t%d = %s", tv, lift ? "sp_poly_strbuf_lift(" : "");
       emit_boxed_text(c, vt, rawtxt, b);
       buf_puts(b, lift ? ");" : ";");
@@ -16236,7 +16240,7 @@ int emit_face_str_bang_pub(Compiler *c, int id, Buf *b) {
 static void emit_poly_recv_lift_pre(Compiler *c, int recv) {
   NodeKind k = nt_kind(c->nt, recv);
   if ((k != NK_LocalVariableReadNode && k != NK_InstanceVariableReadNode) ||
-      !c->poly_strbuf_lift || c->poly_strbuf_lift[recv]) return;
+      !comp_poly_strbuf_lift_present(c) || comp_poly_strbuf_lift_stored(c, recv)) return;
   Buf lv; memset(&lv, 0, sizeof lv);
   emit_expr(c, recv, &lv);
   int t = ++g_tmp;
@@ -16513,7 +16517,7 @@ static void emit_poly_str_array_call(Compiler *c, int id, int recv, const char *
 /* A zero-argument call on a boxed receiver (emit_poly_call's arms, in their order) */
 static int emit_poly_call0_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc, const int *argv, TyKind rt, int *out) {
   if (!(recv >= 0 && rt == TY_POLY && argc == 0)) return 0;
-  if (poly_ostruct_member_call(c, id, name, recv, argc)) return 0;
+  if (poly_ostruct_member_call(c, id)) return 0;
   /* Skip when a user class defines nil? so its method wins the dispatch --
      the same reason the to_a arm below gives. A Null Object answering true
      was folded to the tag test and its guard silently never fired. */
@@ -16756,9 +16760,10 @@ static int emit_poly_call0_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
      CRuby's NoMethodError. A user class defining to_sym wins via poly dispatch.
      `intern` answers as `to_sym` does on both, and stands aside, as the
      arm did not exist for it before, wherever the dispatch reads the name
-     some other way: a user reader (an attr_reader, a Struct member) or an
-     OpenStruct member when ostruct is loaded (#3197). */
-  int intern_read = sp_streq(name, "intern") && (sp_feature_required("ostruct") || user_defines_or_reads(c, name));
+     some other way: a user reader (an attr_reader, a Struct member). An
+     OpenStruct's member read takes the dispatch ahead of here
+     (poly_ostruct_member_call, #3197). */
+  int intern_read = sp_streq(name, "intern") && user_defines_or_reads(c, name);
   if (sp_streq(name, "to_sym") || (sp_streq(name, "intern") && !intern_read)) {
     if (!poly_name_user_claimed(c, name, argc)) {
       int t = ++g_tmp;

@@ -221,9 +221,9 @@ int emit_call_file_dir_time_arms(Compiler *c, int id, Buf *b, const NodeTable *n
      these; only the dispatch was missing). FileTest shares File's predicate
      surface (#2819). */
   if (recv >= 0 && nt_kind(nt, recv) == NK_ConstantReadNode &&
-      nt_str(nt, recv, "name") &&
-      (sp_streq(nt_str(nt, recv, "name"), "File") ||
-       sp_streq(nt_str(nt, recv, "name"), "FileTest"))) {
+      nt_key_name(nt, recv) &&
+      (sp_streq(nt_key_name(nt, recv), "File") ||
+       sp_streq(nt_key_name(nt, recv), "FileTest"))) {
     if ((sp_streq(name, "basename") || sp_streq(name, "dirname") || sp_streq(name, "extname")) && argc == 1) {
       /* the path argument must reach sp_file_* as a const char*; emit_path_expr
          coerces a poly / nullable-string path so it does not pass an sp_RbVal
@@ -806,7 +806,7 @@ int emit_call_file_dir_time_arms(Compiler *c, int id, Buf *b, const NodeTable *n
      for a value already typed String, so it costs nothing where inference
      succeeded. */
   if (recv >= 0 && nt_kind(nt, recv) == NK_ConstantReadNode &&
-      nt_str(nt, recv, "name") && sp_streq(nt_str(nt, recv, "name"), "Dir")) {
+      nt_key_name(nt, recv) && sp_streq(nt_key_name(nt, recv), "Dir")) {
     if (sp_streq(name, "for_fd") && argc == 1) {
       buf_puts(b, "sp_Dir_for_fd("); emit_int_expr(c, argv[0], b); buf_puts(b, ")");
       return 1;
@@ -979,7 +979,7 @@ int emit_call_file_dir_time_arms(Compiler *c, int id, Buf *b, const NodeTable *n
 
   /* Time class constructors */
   if (recv >= 0 && nt_kind(nt, recv) == NK_ConstantReadNode &&
-      nt_str(nt, recv, "name") && sp_streq(nt_str(nt, recv, "name"), "Time")) {
+      nt_key_name(nt, recv) && sp_streq(nt_key_name(nt, recv), "Time")) {
     if ((sp_streq(name, "now") || sp_streq(name, "new")) && argc == 0) { buf_puts(b, "sp_time_now()"); return 1; }
     /* Time.now(in: zone): the current instant in the zone the keyword names,
        read as Time.at's `in:` is. With no arm here the call fell through to
@@ -1283,7 +1283,7 @@ int emit_call_module_fn_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, c
 
   /* GC module methods */
   if (recv >= 0 && nt_kind(nt, recv) == NK_ConstantReadNode &&
-      nt_str(nt, recv, "name") && sp_streq(nt_str(nt, recv, "name"), "GC")) {
+      nt_key_name(nt, recv) && sp_streq(nt_key_name(nt, recv), "GC")) {
     if (sp_streq(name, "start") && argc == 0) { buf_puts(b, "(sp_gc_collect_request(), (sp_int)0)"); return 1; }
     /* GC.start(full_mark:, immediate_mark:, immediate_sweep:): one collector,
        one kind of collection -- the options are hints, their values
@@ -1353,7 +1353,7 @@ int emit_call_module_fn_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, c
 
   /* Process module methods */
   if (recv >= 0 && nt_kind(nt, recv) == NK_ConstantReadNode &&
-      nt_str(nt, recv, "name") && sp_streq(nt_str(nt, recv, "name"), "Process")) {
+      nt_key_name(nt, recv) && sp_streq(nt_key_name(nt, recv), "Process")) {
     if (sp_streq(name, "pid") && argc == 0) { buf_puts(b, "((sp_int)getpid())"); return 1; }
     if (sp_streq(name, "times") && argc == 0) { buf_puts(b, "sp_process_times()"); return 1; }
     if (sp_streq(name, "ppid") && argc == 0) { buf_puts(b, "sp_process_ppid()"); return 1; }
@@ -1430,7 +1430,7 @@ int emit_call_module_fn_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, c
 
   /* Integer.sqrt(n) -> integer square root (exact, Newton's method) */
   if (recv >= 0 && nt_kind(nt, recv) == NK_ConstantReadNode &&
-      nt_str(nt, recv, "name") && sp_streq(nt_str(nt, recv, "name"), "Integer") &&
+      nt_key_name(nt, recv) && sp_streq(nt_key_name(nt, recv), "Integer") &&
       sp_streq(name, "sqrt") && argc == 1) {
     if (repr_of(c, argv[0]).big) {
       buf_puts(b, "sp_bigint_isqrt("); emit_expr(c, argv[0], b); buf_puts(b, ")");  /* (#2420) */
@@ -1450,7 +1450,7 @@ int emit_call_module_fn_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, c
 
   /* Marshal (Phase 1): dump a value to a binary String, load one back as poly */
   if (recv >= 0 && nt_kind(nt, recv) == NK_ConstantReadNode &&
-      nt_str(nt, recv, "name") && sp_streq(nt_str(nt, recv, "name"), "Marshal")) {
+      nt_key_name(nt, recv) && sp_streq(nt_key_name(nt, recv), "Marshal")) {
     if (sp_streq(name, "dump") && argc == 1) {
       buf_puts(b, "sp_marshal_dump("); emit_boxed(c, argv[0], b); buf_puts(b, ")");
       return 1;
@@ -1488,7 +1488,7 @@ else {
      program can silence or re-enable a category at run time and Kernel#warn's
      `category:` gate reads the same flags. */
   if (recv >= 0 && nt_kind(nt, recv) == NK_ConstantReadNode &&
-      nt_str(nt, recv, "name") && sp_streq(nt_str(nt, recv, "name"), "Warning")) {
+      nt_key_name(nt, recv) && sp_streq(nt_key_name(nt, recv), "Warning")) {
     /* the category argument as a C string: a literal symbol becomes a string
        literal; a symbol-typed expression resolves through the symbol table */
     int cat_ok = argc >= 1 && nt_type(nt, argv[0]) &&
@@ -1523,7 +1523,7 @@ else {
 
   /* Math module functions -> C math.h equivalents */
   if (recv >= 0 && nt_kind(nt, recv) == NK_ConstantReadNode &&
-      nt_str(nt, recv, "name") && sp_streq(nt_str(nt, recv, "name"), "Math")) {
+      nt_key_name(nt, recv) && sp_streq(nt_key_name(nt, recv), "Math")) {
     /* 1-arg functions */
     /* Domain-restricted functions route through sp_math_* wrappers that
        raise Math::DomainError on out-of-domain input (CRuby parity); the
@@ -1666,7 +1666,7 @@ else {
 
   /* Dir.exist? -> directory test; Dir.exists? was removed in Ruby 4.0 (#2780) */
   if (recv >= 0 && nt_kind(nt, recv) == NK_ConstantReadNode &&
-      nt_str(nt, recv, "name") && sp_streq(nt_str(nt, recv, "name"), "Dir") &&
+      nt_key_name(nt, recv) && sp_streq(nt_key_name(nt, recv), "Dir") &&
       (is_exist_alias(name)) && argc == 1) {
     if (sp_streq(name, "exists?")) {
       buf_puts(b, "({ (void)("); emit_expr_for_effect(c, argv[0], b);
@@ -1750,7 +1750,7 @@ int emit_call_builtin_cmethod_arms(Compiler *c, int id, Buf *b, const NodeTable 
   /* Thread class methods: Thread.current / Thread.pass (recv is the Thread
      constant). Handled before the Class.new dispatch since they are not `new`. */
   if (recv >= 0 && nt_kind(nt, recv) == NK_ConstantReadNode) {
-    const char *tcn = nt_str(nt, recv, "name");
+    const char *tcn = nt_key_name(nt, recv);
     /* IO.popen is not implemented: refused at compile time, as an
        unsupported API is, rather than a NoMethodError the first time the
        line runs (#7199). A program's own IO.popen is its own. */
@@ -2433,7 +2433,7 @@ int emit_call_enum_random_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
   /* Random class methods: Random.rand(n) / Random.rand / Random.bytes(n)
      share a lazily-seeded default instance. */
   if (recv >= 0 && nt_kind(nt, recv) == NK_ConstantReadNode &&
-      nt_str(nt, recv, "name") && sp_streq(nt_str(nt, recv, "name"), "Random")) {
+      nt_key_name(nt, recv) && sp_streq(nt_key_name(nt, recv), "Random")) {
     if (sp_streq(name, "rand")) {
       if (argc >= 1 && repr_of(c, argv[0]).as_ty == TY_FLOAT) {
         buf_puts(b, "sp_Random_rand_float_bound(sp_random_default_get(), ");
@@ -2496,7 +2496,7 @@ int emit_call_enum_random_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
      (sp_enum_product_kw_check), so a `**h` and a String key are named as
      CRuby names them. */
   if (recv >= 0 && nt_kind(nt, recv) == NK_ConstantReadNode &&
-      nt_str(nt, recv, "name") && sp_streq(nt_str(nt, recv, "name"), "Enumerator") &&
+      nt_key_name(nt, recv) && sp_streq(nt_key_name(nt, recv), "Enumerator") &&
       sp_streq(name, "product")) {
     int tf = ++g_tmp;
     buf_printf(b, "({ sp_PolyArray *_t%d = sp_PolyArray_new(); SP_GC_ROOT(_t%d);", tf, tf);

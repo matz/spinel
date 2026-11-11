@@ -727,4 +727,13 @@ extern int g_opt_debug, g_opt_line_map, g_opt_positions, g_opt_warn_widen, g_opt
 extern const char *g_opt_emit_types, *g_opt_emit_rbs, *g_opt_emit_symbol_map, *g_opt_profile_symbol_map,
                   *g_opt_rbs_seed;
 
+
+/* The name a class or module header's constant path is keyed by: the one
+   qualify_colliding_classes gave a colliding header ("qc_name"), else the
+   one the program wrote. (Interim, #10793: the readers move to the class
+   the node opens.) */
+static inline const char *nt_key_name(const NodeTable *nt, int n) {
+  const char *q = nt_str(nt, n, "qc_name");
+  return q ? q : nt_str(nt, n, "name");
+}
 #endif

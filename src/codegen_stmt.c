@@ -3772,7 +3772,7 @@ static int strbuf_route_nonnil(Compiler *c, int v) {
 /* --share-strings: is recv a deep-return pickup (emit_deep_return_pickup)
    that can answer nil (strbuf_pickup_answers_nil)? */
 int strbuf_pickup_may_nil(Compiler *c, int recv) {
-  return recv >= 0 && nt_kind(c->nt, recv) == NK_CallNode && (c->strbuf_box[recv] || c->strbuf_handle_demand[recv]) &&
+  return recv >= 0 && nt_kind(c->nt, recv) == NK_CallNode && (comp_strbuf_box_stored(c, recv) || comp_strbuf_handle_demand_stored(c, recv)) &&
          strbuf_pickup_answers_nil(c, recv);
 }
 static int strbuf_route_recv(Compiler *c, int id, int recv, Buf *out);
@@ -5653,7 +5653,7 @@ void emit_strbuf_ivar_store(Compiler *c, int shared, int v, Buf *b) {
   }
   NodeKind k = u >= 0 ? nt_kind(nt, u) : NK_NilNode;
   if (k == NK_NilNode) { buf_puts(b, "NULL"); return; }
-  if (shared && repr_of(c, u).kind != RK_BOXED && !c->strbuf_box[u] &&
+  if (shared && repr_of(c, u).kind != RK_BOXED && !comp_strbuf_box_stored(c, u) &&
       (k == NK_LocalVariableReadNode || k == NK_InstanceVariableReadNode || repr_static_read_kind(k)) &&
       !strbuf_slot_has(c, u))
     unsupported_feature(c, u, "a String variable is stored into a Struct member or through an attribute "
@@ -5753,7 +5753,7 @@ void emit_assign(Compiler *c, int id, Buf *b, int indent) {
     int aargs = nt_ref(c->nt, v, "arguments"); int aac = 0;
     if (aargs >= 0) nt_arr(c->nt, aargs, "arguments", &aac);
     if (ark == NK_ConstantReadNode &&
-        sp_streq(nt_str(c->nt, ar, "name") ? nt_str(c->nt, ar, "name") : "", "Array") && aac == 0)
+        sp_streq(nt_key_name(c->nt, ar) ? nt_key_name(c->nt, ar) : "", "Array") && aac == 0)
       is_empty_array = 1;
   }
   int hn = 0;
@@ -5764,7 +5764,7 @@ void emit_assign(Compiler *c, int id, Buf *b, int indent) {
     int hr = nt_ref(c->nt, v, "receiver");
     NodeKind hrk = nt_kind(c->nt, hr);
     if ((hrk == NK_ConstantReadNode || hrk == NK_ConstantPathNode) &&
-        sp_streq(nt_str(c->nt, hr, "name") ? nt_str(c->nt, hr, "name") : "", "Hash")) {
+        sp_streq(nt_key_name(c->nt, hr) ? nt_key_name(c->nt, hr) : "", "Hash")) {
       is_hash_new = 1;
       int ha = nt_ref(c->nt, v, "arguments");
       int hac = 0;
@@ -6990,7 +6990,7 @@ int static_isa_cond(Compiler *c, int pred) {
   int args = nt_ref(nt, pred, "arguments");
   int ac = 0; const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &ac) : NULL;
   if (ac != 1 || !av || nt_kind(nt, av[0]) != NK_ConstantReadNode) return -1;
-  const char *target_name = nt_str(nt, av[0], "name");
+  const char *target_name = nt_key_name(nt, av[0]);
   if (!target_name) return -1;
   /* A scalar local against a builtin class is answered from its type. Not a
      bool (TrueClass/FalseClass depends on the value), not a Queue (shares its
@@ -7469,7 +7469,7 @@ static int emit_poly_class_when_value(Compiler *c, int cond_id, const char *tmp,
   const NodeTable *nt = c->nt;
   NodeKind ck = nt_kind(nt, cond_id);
   if (!nt_kind_is_constant(ck)) return 0;
-  const char *cn = nt_str(nt, cond_id, "name");
+  const char *cn = nt_key_name(nt, cond_id);
   if (!cn) return 0;
   /* a qualified path naming a known builtin (exception) class matches by its
      FULL name -- raised exceptions carry "Errno::ENOENT", not "ENOENT" */
@@ -13091,7 +13091,7 @@ static int poll_while_counted_step(Compiler *c, int pred, int body, int *stepn, 
   const char *op = nt_str(nt, pred, "name");
   int up = op && (sp_streq(op, "<") || sp_streq(op, "<=")), down = op && (sp_streq(op, ">") || sp_streq(op, ">="));
   int recv = nt_ref(nt, pred, "receiver");
-  if ((!up && !down) || recv < 0 || nt_kind(nt, recv) != NK_LocalVariableReadNode || c->ntype[recv] != TY_INT) return 0;
+  if ((!up && !down) || recv < 0 || nt_kind(nt, recv) != NK_LocalVariableReadNode || comp_ntype_stored(c, recv) != TY_INT) return 0;
   const char *v = nt_str(nt, recv, "name");
   int bn = 0; const int *bv = nt_kind(nt, body) == NK_StatementsNode ? nt_arr(nt, body, "body", &bn) : NULL;
   int step = -1;
@@ -13535,7 +13535,7 @@ static long long chunk_counted_step(Compiler *c, int pred, int body) {
   if (subtree_has_own_next(nt, body) || !poll_while_counted_step(c, pred, body, &w, 1)) return 0;
   int a = nt_ref(nt, pred, "arguments"), ac = 0; const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &ac) : NULL;
   int bd = ac == 1 ? av[0] : -1;
-  if (bd < 0 || c->ntype[bd] != TY_INT) return 0;
+  if (bd < 0 || comp_ntype_stored(c, bd) != TY_INT) return 0;
   NodeKind bk = nt_kind(nt, bd);
   if (bk == NK_IntegerNode) { if (nt_str(nt, bd, "bigval")) return 0; }
   else if (bk == NK_LocalVariableReadNode) { if (subtree_changes_local(c, body, nt_str(nt, bd, "name"))) return 0; }
@@ -15595,7 +15595,7 @@ int rescue_is_catchall_name(const char *n) {
 static int rescue_operand_is_class_name(Compiler *c, int op) {
   NodeKind k = nt_kind(c->nt, op);
   if (k != NK_ConstantReadNode && k != NK_ConstantPathNode) return 0;
-  const char *n = nt_str(c->nt, op, "name");
+  const char *n = nt_key_name(c->nt, op);
   if (!n || !comp_const(c, n)) return 1;
   /* (a class alias no read reaches before its assignment names its class) */
   return comp_class_index(c, n) >= 0 || is_builtin_class_name(n) || is_builtin_module_name(n) ||
@@ -15774,7 +15774,7 @@ void emit_rescue(Compiler *c, int id, Buf *b, int indent, int fr, const char *re
       if (!first) buf_puts(b, " || ");
       int effect = emit_const_read_prefix(c, exc[i], b);
       first = 0;
-      const char *ename = nt_str(nt, exc[i], "name");
+      const char *ename = nt_key_name(nt, exc[i]);
       /* a class alias matches as the class it names */
       if (ename && comp_class_index(c, ename) < 0 && comp_const(c, ename)) {
         const char *an = const_node_match_class_name(c, exc[i]);
@@ -17086,7 +17086,7 @@ void emit_boxed_writer_arms(Compiler *c, const char *base, const char *nm,
   }
   /* --share-strings: a String a shared boxed slot takes is its handle, as
      the typed store boxes it (emit_boxed's lift, share_lift_poly_ivar_stores) */
-  int lift = vnode >= 0 && c->poly_strbuf_lift[vnode] && at == TY_STRING;
+  int lift = vnode >= 0 && comp_poly_strbuf_lift_stored(c, vnode) && at == TY_STRING;
   for (int k = 0; k < c->nclasses; k++) {
     /* a native class's own binding of the writer (a StringScanner's `pos=`
        beside a user class's `attr_accessor :pos`): its C call, as the poly
@@ -19317,10 +19317,10 @@ int masgn_boxed_index_keeps(Compiler *c, int t, int e) {
   const NodeTable *nt = c->nt;
   if (t < 0 || nt_kind(nt, t) != NK_IndexTargetNode || e < 0) return 0;
   int r = nt_ref(nt, t, "receiver");
-  TyKind rt = r >= 0 ? c->ntype[r] : TY_UNKNOWN;
+  TyKind rt = r >= 0 ? comp_ntype_stored(c, r) : TY_UNKNOWN;
   if (rt != TY_POLY_ARRAY && rt != TY_POLY && rt != TY_SYM_POLY_HASH && rt != TY_STR_POLY_HASH && rt != TY_POLY_POLY_HASH)
     return 0;
-  TyKind et = c->ntype[e];
+  TyKind et = comp_ntype_stored(c, e);
   NodeKind ek = nt_kind(nt, e);
   return (et == TY_STRING || et == TY_STRBUF) &&
          (ek == NK_ParenthesesNode || ek == NK_IfNode || ek == NK_UnlessNode) && strbuf_cond_has_handle_leaf(c, e);
@@ -21629,7 +21629,7 @@ static void emit_class_definition(Compiler *c, int id, Buf *b, int indent) {
   int reads[] = { an_const_read_effect(c, cp).autoload ? cp : nt_ref(nt, cp, "parent"), nt_ref(nt, id, "superclass") };
   for (int i = 0; i < 2; i++)
     if (emit_const_read_stmt(c, reads[i], b, indent)) buf_puts(b, "\n");
-  const char *name = cp >= 0 ? nt_str(nt, cp, "name") : NULL;
+  const char *name = cp >= 0 ? nt_key_name(nt, cp) : NULL;
   int ci = name ? elab_header_class(c, id, NULL, NULL) : g_class_body_id;
   emit_class_presence_store(c, id, b, indent);
   emit_class_body_stmts(c, ci, nt_ref(nt, id, "body"), b, indent);
@@ -22023,7 +22023,7 @@ static int emit_attr_global_const_write_stmt(Compiler *c, int id, Buf *b, int in
     return 1;
   }
   if (sp_streq(ty, "GlobalVariableWriteNode") || sp_streq(ty, "ConstantWriteNode")) {
-    const char *nm = nt_str(nt, id, "name");
+    const char *nm = nt_key_name(nt, id);
     int isg = ty[0] == 'G';
     const char *pfx = isg ? "gv" : "cst";
     const char *raw_key = isg ? nm + 1 : const_key_at(c, id);
@@ -22850,14 +22850,18 @@ static void emit_stmt_node(Compiler *c, int id, Buf *b, int indent) {
         ivt2 == TY_FIBER || ivt2 == TY_THREAD || ivt2 == TY_QUEUE || ivt2 == TY_MUTEX || ivt2 == TY_CONDVAR || ivt2 == TY_PROC || ivt2 == TY_IO ||
         ivt2 == TY_MATCHDATA || ivt2 == TY_EXCEPTION || ivt2 == TY_REGEX)
       snprintf(cond2, sizeof cond2, "%s%s", is_or ? "!" : "", ref2);
+    /* the store into an object's own slot is a write like `@x = v`'s: a frozen receiver refuses it, where it runs */
+    int obj_slot = sc2 >= 0 && strncmp(ref2, "civ_", 4) != 0;
     if (cond2[0]) {
       emit_indent(b, indent);
       buf_printf(b, "if (%s) { ", cond2);
       if (vpre.p) buf_puts(b, vpre.p);
+      if (obj_slot) emit_frozen_obj_guard(c, sc2, g_self ? g_self : "self", b);
       buf_printf(b, "%s = %s; }\n", ref2, vval.p ? vval.p : "");
     }
     else if (!is_or) {
       emit_indent(b, indent);
+      if (obj_slot) emit_frozen_obj_guard(c, sc2, g_self ? g_self : "self", b);
       buf_printf(b, "%s = ", ref2);
       emit_coerce(c, v, ivt2, CO_HOLD, "an instance variable's `||=` or `&&=`", b); buf_puts(b, ";\n");
     }
@@ -22915,7 +22919,7 @@ static void emit_stmt_node(Compiler *c, int id, Buf *b, int indent) {
     NodeKind exk = nt_kind(nt, sexpr);
     int class_self = exk == NK_SelfNode;
     if (!class_self && exk == NK_ConstantReadNode) {
-      const char *cn = nt_str(nt, sexpr, "name");
+      const char *cn = nt_key_name(nt, sexpr);
       class_self = cn && const_node_class_index(c, sexpr) >= 0;
     }
     if (class_self || nt_int(nt, nt_ref(nt, id, "body"), "singleton_body", 0)) {
@@ -23081,7 +23085,7 @@ static void emit_stmt_node(Compiler *c, int id, Buf *b, int indent) {
       if (bvargc > 0) {
         emit_indent(b, indent); buf_printf(b, "%s = ", g_loop_break_var);
         /* a break that leaves a loop read as the handle (emit_strbuf_route) */
-        if (c->strbuf_handle_demand[id]) emit_strbuf_handle_of(c, bvargs[0], b);
+        if (comp_strbuf_handle_demand_stored(c, id)) emit_strbuf_handle_of(c, bvargs[0], b);
         else if (g_ie_res_poly) emit_boxed(c, bvargs[0], b);
         else if (bo) emit_oint_expr(c, bvargs[0], g_ie_next_ty, b);
         else emit_expr(c, bvargs[0], b);
@@ -23178,7 +23182,7 @@ static void emit_stmt_node(Compiler *c, int id, Buf *b, int indent) {
         }
         /* (one representation: a bytes slot takes a value of either face as its bytes) */
         else if (g_ie_next_ty == TY_STRING) { buf_puts(b, "SP_STR_B("); emit_expr(c, nv[0], b); buf_puts(b, ")"); }
-        else if (c->strbuf_handle_demand[id]) emit_strbuf_handle_of(c, nv[0], b);
+        else if (comp_strbuf_handle_demand_stored(c, id)) emit_strbuf_handle_of(c, nv[0], b);
         else if (g_ie_res_poly) emit_boxed(c, nv[0], b);
         else if (g_ie_next_oint && oint_kind(g_ie_next_ty)) emit_oint_expr(c, nv[0], g_ie_next_ty, b);
         else if (g_ie_next_ty == TY_INT || g_ie_next_ty == TY_FLOAT) {
@@ -23970,7 +23974,7 @@ void emit_stmt_tail_inner(Compiler *c, int id, Buf *b, int indent) {
      would drop it and return nil. Route them to the value path below. The
      in-place filters answer nil or the receiver by what they removed, which
      only their value form knows. */
-  const char *tv_name = nt_str(nt, id, "name");
+  const char *tv_name = nt_key_name(nt, id);
   int is_tail_valued = k == NK_CallNode && tv_name &&
                        nt_ref(nt, id, "block") >= 0 &&
                        (sp_streq(tv_name, "tap") ||

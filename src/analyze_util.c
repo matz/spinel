@@ -107,7 +107,7 @@ static void body_const_writes(const NodeTable *nt, int n, const char *pn, ANameH
   /* (a multiple assignment's target too: `P, Q = ...`) */
   if (k == NK_ConstantWriteNode || k == NK_ConstantOrWriteNode || k == NK_ConstantAndWriteNode ||
       k == NK_ConstantOperatorWriteNode || k == NK_ConstantTargetNode)
-    const_pair_add(out, pn, nt_str(nt, n, "name"));
+    const_pair_add(out, pn, nt_key_name(nt, n));
   int nr = nt_num_refs(nt, n);
   for (int i = 0; i < nr; i++) body_const_writes(nt, nt_ref_at(nt, n, i), pn, out);
   int na = nt_num_arrs(nt, n);
@@ -121,7 +121,7 @@ static void body_const_writes(const NodeTable *nt, int n, const char *pn, ANameH
 static void path_const_write(const NodeTable *nt, int node, ANameHash *out) {
   if (node < 0) return;
   int par = nt_ref(nt, node, "parent");
-  const_pair_add(out, par >= 0 ? nt_str(nt, par, "name") : NULL, nt_str(nt, node, "name"));
+  const_pair_add(out, par >= 0 ? nt_key_name(nt, par) : NULL, nt_key_name(nt, node));
 }
 static const ANameHash *const_pairs_of(Compiler *c) {
   const NodeTable *nt = c->nt;
@@ -301,7 +301,7 @@ static int builtin_scope_lacks_member(Compiler *c, int seg);
 static int const_path_scope(Compiler *c, int seg, int *missing) {
   const NodeTable *nt = c->nt;
   NodeKind sk = nt_kind(nt, seg);
-  const char *nm = nt_str(nt, seg, "name");
+  const char *nm = nt_key_name(nt, seg);
   if (!nm) return -1;
   if (sk == NK_ConstantReadNode) {
     int k = comp_class_index(c, nm);
@@ -393,7 +393,7 @@ int class_lacks_own_const(Compiler *c, int k, const char *nm) {
                                      NK_ConstantOperatorWriteNode, NK_ConstantTargetNode };
   for (int i = 0; i < 5; i++)
     NT_FOREACH_KIND(nt, writes[i], w) {
-      const char *wn = nt_str(nt, w, "name");
+      const char *wn = nt_key_name(nt, w);
       size_t wl = wn ? strlen(wn) : 0;
       if (wn && sp_streq(wn, nm)) return 0;
       if (wl > nl + 2 && sp_streq(wn + wl - nl, nm) && !strncmp(wn + wl - nl - 2, "__", 2)) return 0;
@@ -674,7 +674,7 @@ int const_path_in_closed_builtin(Compiler *c, int id) {
   /* `Encoding::X` or `::Encoding::X` */
   if (!(pk == NK_ConstantReadNode || (pk == NK_ConstantPathNode && nt_ref(nt, par, "parent") < 0)))
     return 0;
-  const char *pn = nt_str(nt, par, "name"), *nm = nt_str(nt, id, "name");
+  const char *pn = nt_key_name(nt, par), *nm = nt_key_name(nt, id);
   if (!pn || !nm || sp_streq(pn, "Object")) return 0;
   if (!is_builtin_class_name(pn) && !is_builtin_module_name(pn) && !is_builtin_exception_name(pn)) return 0;
   if (comp_const(c, pn)) return 0;
@@ -1020,7 +1020,7 @@ const char *superclass_builtin_exc_name(const NodeTable *nt, int sc) {
   if (!sty) return NULL;
   int is_read = sk == NK_ConstantReadNode, is_path = sk == NK_ConstantPathNode;
   if (!is_read && !is_path) return NULL;
-  const char *leaf = nt_str(nt, sc, "name");
+  const char *leaf = nt_key_name(nt, sc);
   if (!leaf) return NULL;
   if (is_path) {
     char q[256]; size_t o = strlen(leaf);
@@ -1369,7 +1369,7 @@ int node_is_empty_container(Compiler *c, int node) {
   if (!nm || !sp_streq(nm, "new")) return 0;
   int r = nt_ref(nt, node, "receiver");
   if (r < 0 || nt_kind(nt, r) != NK_ConstantReadNode) return 0;
-  const char *rn = nt_str(nt, r, "name");
+  const char *rn = nt_key_name(nt, r);
   if (!rn || (!sp_streq(rn, "Array") && !sp_streq(rn, "Hash"))) return 0;
   int ca = nt_ref(nt, node, "arguments");
   int argc = 0; if (ca >= 0) nt_arr(nt, ca, "arguments", &argc);
@@ -1529,7 +1529,7 @@ int class_recv_static_ci(Compiler *c, int node) {
   const NodeTable *nt = c->nt;
   NodeKind k = nt_kind(nt, node);
   if ((k == NK_ConstantReadNode || k == NK_ConstantPathNode) &&
-      nt_str(nt, node, "name"))
+      nt_key_name(nt, node))
     return const_node_class_index(c, node);
   if (k == NK_SelfNode) return class_body_self_ci(c, node);
   return class_var_static_ci(c, node);
@@ -1700,7 +1700,7 @@ int str_self_call(const NodeTable *nt, int id) {
 }
 int fiber_storage_recv(const NodeTable *nt, int recv) {
   NodeKind rk = nt_kind(nt, recv);
-  const char *rn = nt_str(nt, recv, "name");
+  const char *rn = nt_key_name(nt, recv);
   if (rk == NK_ConstantReadNode) return rn && sp_streq(rn, "Fiber");
   if (rk != NK_CallNode) return 0;
   int rr = nt_ref(nt, recv, "receiver");
@@ -2186,7 +2186,7 @@ int const_get_recv_class(Compiler *c, int call, int recv) {
   const NodeTable *nt = c->nt;
   NodeKind rk = nt_kind(nt, recv);
   if (rk == NK_ConstantReadNode || rk == NK_ConstantPathNode) {
-    const char *nm = nt_str(nt, recv, "name");
+    const char *nm = nt_key_name(nt, recv);
     if (!nm) return CG_NONE;
     int k = const_node_class_index(c, recv);
     if (k >= 0) return k;
@@ -3427,6 +3427,110 @@ TyKind block_next_value_ty(Compiler *c, int node) {
   return r;
 }
 
+/* Is `t` a kind block_store_value_ty answers: a concrete one that is not
+   `want`? With no `want` (the receiver's elements are not known yet: a
+   row read out of a table), one that no typed Array of numbers or objects
+   holds. */
+static int bsv_foreign(TyKind t, TyKind want) {
+  TyKind k = t == TY_STRBUF ? TY_STRING : t;
+  if (k == TY_UNKNOWN || k == TY_POLY || k == TY_VOID) return 0;
+  if (want != TY_UNKNOWN) return k != want;
+  return k != TY_INT && k != TY_FLOAT && !ty_is_object(k);
+}
+
+/* What block_store_value_ty gathers from a block's values: the first of a
+   kind bsv_foreign takes for `want`, and whether one is an Integer (1)
+   and one a Float (2). */
+typedef struct { TyKind want, found; unsigned num; } BsvArms;
+static void bsv_leaf(BsvArms *a, TyKind t) {
+  if (a->found == TY_UNKNOWN && bsv_foreign(t, a->want)) a->found = t;
+  if (t == TY_INT) a->num |= 1;
+  else if (t == TY_FLOAT) a->num |= 2;
+}
+
+/* Each value arm of expression `v` into `a`: an `if`, `unless`, `case`
+   or `begin` answers each of its branches' last statements (a missing
+   one nil), `&&` and `||` each side, `(e)` its last statement. The join
+   of the arms can hide one the Array cannot hold: `next(x == 1 ? "s" :
+   2)` is boxed, `next(x if x > 1)` a nullable Integer. */
+static void bsv_arms(Compiler *c, int v, BsvArms *a, int depth) {
+  const NodeTable *nt = c->nt;
+  if (v < 0) { bsv_leaf(a, TY_NIL); return; }
+  if (depth > 32) { bsv_leaf(a, infer_type(c, v)); return; }
+  NodeKind k = nt_kind(nt, v);
+  if (k == NK_StatementsNode) {
+    int n = 0; const int *b = nt_arr(nt, v, "body", &n);
+    bsv_arms(c, n > 0 ? b[n - 1] : -1, a, depth + 1);
+  }
+  else if (k == NK_ParenthesesNode || (k == NK_BeginNode && nt_ref(nt, v, "rescue_clause") < 0 &&
+                                       nt_ref(nt, v, "else_clause") < 0))
+    bsv_arms(c, nt_ref(nt, v, k == NK_ParenthesesNode ? "body" : "statements"), a, depth + 1);
+  else if (k == NK_IfNode || k == NK_UnlessNode) {
+    bsv_arms(c, nt_ref(nt, v, "statements"), a, depth + 1);
+    bsv_arms(c, nt_ref(nt, v, k == NK_UnlessNode ? "else_clause" : "subsequent"), a, depth + 1);
+  }
+  else if (k == NK_ElseNode) bsv_arms(c, nt_ref(nt, v, "statements"), a, depth + 1);
+  else if (k == NK_CaseNode) {
+    int nw = 0; const int *whens = nt_arr(nt, v, "conditions", &nw);
+    for (int w = 0; w < nw; w++) bsv_arms(c, nt_ref(nt, whens[w], "statements"), a, depth + 1);
+    bsv_arms(c, nt_ref(nt, v, "else_clause"), a, depth + 1);
+  }
+  else if (k == NK_AndNode || k == NK_OrNode) {
+    bsv_arms(c, nt_ref(nt, v, "left"), a, depth + 1);
+    bsv_arms(c, nt_ref(nt, v, "right"), a, depth + 1);
+  }
+  else bsv_leaf(a, infer_type(c, v));
+}
+
+/* Each `next` value under `node` that binds to the block (as
+   block_next_value_ty walks them) into `a`, arm by arm. */
+static void block_next_arms(Compiler *c, int node, BsvArms *a) {
+  const NodeTable *nt = c->nt;
+  if (node < 0) return;
+  NodeKind k = nt_kind(nt, node);
+  if (k == NK_NextNode) {
+    int ar = nt_ref(nt, node, "arguments"); int an = 0;
+    const int *av = ar >= 0 ? nt_arr(nt, ar, "arguments", &an) : NULL;
+    if (an == 1 && nt_kind(nt, av[0]) != NK_SplatNode) bsv_arms(c, av[0], a, 0);
+    else bsv_leaf(a, block_next_value_ty(c, node));
+    return;
+  }
+  if (k == NK_WhileNode || k == NK_UntilNode || k == NK_ForNode || k == NK_BlockNode ||
+      k == NK_LambdaNode || k == NK_DefNode || k == NK_ClassNode || k == NK_ModuleNode)
+    return;
+  int nr = nt_num_refs(nt, node);
+  for (int i = 0; i < nr; i++) block_next_arms(c, nt_ref_at(nt, node, i), a);
+  int na = nt_num_arrs(nt, node);
+  for (int i = 0; i < na; i++) {
+    int n = 0; const int *ids = nt_arr_at(nt, node, i, &n);
+    for (int j = 0; j < n; j++) block_next_arms(c, ids[j], a);
+  }
+}
+
+/* The kind a block's value stores into an Array whose elements are `elem`
+   (`a.map! { }`, `a.fill { }`), given `joined`, the block's tail type joined
+   with every `next` value (block_next_value_ty), and `tail`, its last
+   statement (-1 for none). The join can hide a value the Array cannot
+   hold: `next nil` beside an Integer tail joins to a nullable Integer, and
+   `next 1` beside `next "s"` to the boxed kind, which the store evidence
+   leaves alone. So the typed Array stayed, and the nil raised TypeError or
+   the String did not compile. The first value (tail or `next`, arm by arm)
+   of such a kind is answered, and the Array widens as it does for a block
+   with that one value. An `elem` not known yet (TY_UNKNOWN or TY_POLY: a
+   row read out of a table) answers so only for values of mixed kinds, with
+   one no Array of numbers or objects holds. `joined` otherwise. `*num`
+   is set to 3 when the values hold both an Integer and a Float. */
+TyKind block_store_value_ty(Compiler *c, int body, int tail, TyKind joined, TyKind elem, unsigned *num) {
+  *num = 0;
+  if (elem == TY_POLY) elem = TY_UNKNOWN;
+  if (elem == TY_UNKNOWN ? joined != TY_POLY : joined != TY_POLY && joined != elem) return joined;
+  BsvArms a = { elem == TY_STRBUF ? TY_STRING : elem, TY_UNKNOWN, 0 };
+  bsv_arms(c, tail, &a, 0);
+  block_next_arms(c, body, &a);
+  *num = a.num;
+  return a.found != TY_UNKNOWN ? a.found : joined;
+}
+
 /* The value a block forwarded out of method `emi` (`callee(&)`,
    `callee(&b)`, `callee(...)`) answers inside it. The forwarding call is one
    node in emi's body, shared by every site emi is spliced into, so the first
@@ -4645,7 +4749,7 @@ int is_handler_proc_block(Compiler *c, int id) {
     nt_str(nt, recv, "name") && sp_streq(nt_str(nt, recv, "name"), "Signal");
   }
   if (recv >= 0 && nt_kind(nt, recv) == NK_ConstantReadNode &&
-      nt_str(nt, recv, "name") && sp_streq(nt_str(nt, recv, "name"), "ENV") &&
+      nt_key_name(nt, recv) && sp_streq(nt_key_name(nt, recv), "ENV") &&
       is_select_bang(name))
     return 1;
   return 0;
@@ -5098,7 +5202,7 @@ static int method_obj_lookup(Compiler *c, int node, int *cls, int *sg) {
                          nt_kind(nt, recv) == NK_ConstantPathNode)) {
     /* `Outer::Mod.method(:m)` names the class by its last segment, as every
        other constant receiver resolves */
-    const char *rn2 = nt_str(nt, recv, "name");
+    const char *rn2 = nt_key_name(nt, recv);
     k = class_recv_static_ci(c, recv), side = 1;
     if (k < 0) k = rn2 ? comp_class_index(c, rn2) : -1;
     if (k >= 0) goto found;
@@ -5563,7 +5667,7 @@ int call_user_yield_mi(Compiler *c, int id) {
        the key classes are indexed under */
     const char *cname = ((rk == NK_ConstantReadNode ||
                                  rk == NK_ConstantPathNode))
-                        ? nt_str(nt, recv, "name") : NULL;
+                        ? nt_key_name(nt, recv) : NULL;
     /* ... and `self.class.run { }` by the class self.class names, as the
        inliner does (self_class_static_ci) */
     int ci = cname ? const_node_class_index(c, recv) : self_class_static_ci(c, recv);
@@ -6254,7 +6358,7 @@ static const char *const si_protocol_names[] = {
 
 /* May a `raise` of the class constant ref raise a StopIteration? */
 static int si_class_may_stop(Compiler *c, int ref, int depth) {
-  const char *nm = nt_str(c->nt, ref, "name");
+  const char *nm = nt_key_name(c->nt, ref);
   if (!nm || depth > 64) return 1;
   if (sp_streq(nm, "StopIteration") || sp_streq(nm, "ClosedQueueError")) return 1;
   /* (a read or a path asks the node: a nested class's leaf, `raise SSLError`
@@ -6470,7 +6574,7 @@ static void si_facts(Compiler *c) {
     if (c->classes[k].name && c->classes[k].def_node >= 0 && is_builtin_class_name(c->classes[k].name)) f->reopen[f->nreopen++] = k;
   for (int id = 0; id < nt->count; id++) {
     NodeKind k = nt_kind(nt, id);
-    const char *nm = (k == NK_ConstantReadNode || k == NK_ConstantPathNode) ? nt_str(nt, id, "name") : NULL;
+    const char *nm = (k == NK_ConstantReadNode || k == NK_ConstantPathNode) ? nt_key_name(nt, id) : NULL;
     if (nm && (sp_streq(nm, "Queue") || sp_streq(nm, "SizedQueue") || sp_streq(nm, "ClosedQueueError"))) f->queues = 1;
     if (k == NK_CallNode && nt_str(nt, id, "name") && sp_streq(nt_str(nt, id, "name"), "lazy")) f->lazy = 1;
   }

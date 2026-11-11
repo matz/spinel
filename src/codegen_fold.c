@@ -9262,7 +9262,7 @@ static int arg_temp_conversion(Compiler *c, int v, TyKind at) {
   if (strbuf_poly_user_base(c, v) >= 0) return 1;
   /* So does a call result lifted into the handle for a boxed parameter: the
      handle its method publishes is taken where the call runs. */
-  if (c->poly_strbuf_lift[v] && strbuf_value_carries(c, v)) return 1;
+  if (comp_poly_strbuf_lift_stored(c, v) && strbuf_value_carries(c, v)) return 1;
   /* --share-strings: and so does a bang on a handle or a box, or a
      conditional with one on an arm, which a parameter that is the handle
      takes as its receiver's String or nil (strbuf_arg_carries) */
@@ -12385,7 +12385,7 @@ void emit_args_filled_argv(Compiler *c, int callee_idx, const int *argv, int arg
          are variables, which are rooted where they live. One the analysis
          lifted (poly_strbuf_lift) is bound as its handle below. */
       if (!seq && at == TY_STRING && m->pnames[k] &&
-          repr_of_slot(c, scope_local(m, m->pnames[k])).kind == RK_BOXED && !c->poly_strbuf_lift[argv[k]] &&
+          repr_of_slot(c, scope_local(m, m->pnames[k])).kind == RK_BOXED && !comp_poly_strbuf_lift_stored(c, argv[k]) &&
           strbuf_srange_tail(c, argv[k]) < 0 &&
           (strbuf_cond_has_handle_leaf(c, argv[k]) || strbuf_srange_arm(c, argv[k]))) root = 0;
       /* a bare read is already rooted where it lives */
@@ -12424,7 +12424,7 @@ void emit_args_filled_argv(Compiler *c, int callee_idx, const int *argv, int arg
       /* --share-strings: a value that hands on a shared String's handle (a
          route, `s << x`) into a parameter that is the handle runs as that
          handle, which the binding takes (ran_first_handle) */
-      if ((repr_of_slot(c, hp).kind == RK_STRBUF || (repr_of_slot(c, hp).kind == RK_BOXED && c->poly_strbuf_lift[argv[k]])) &&
+      if ((repr_of_slot(c, hp).kind == RK_STRBUF || (repr_of_slot(c, hp).kind == RK_BOXED && comp_poly_strbuf_lift_stored(c, argv[k]))) &&
           at == TY_STRING && strbuf_arg_carries(c, argv[k])) {
         emit_strbuf_handle_of(c, argv[k], &hb);
         emit_indent(g_pre, g_indent);
@@ -14060,7 +14060,7 @@ int recv_is_const(const NodeTable *nt, int recv, const char *name) {
   if (!rty) return 0;
   if (rk == NK_ConstantReadNode ||
       (rk == NK_ConstantPathNode && nt_ref(nt, recv, "parent") < 0)) {
-    const char *n = nt_str(nt, recv, "name");
+    const char *n = nt_key_name(nt, recv);
     return n && sp_streq(n, name);
   }
   return 0;

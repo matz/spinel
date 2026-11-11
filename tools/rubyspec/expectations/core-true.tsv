@@ -8,12 +8,12 @@ and_spec__001	HARNESS-SKEW
 case_compare_spec__001	PASS
 case_compare_spec__002	PASS
 dup_spec__001	PASS
-inspect_spec__001	FAIL
+inspect_spec__001	PASS
 or_spec__001	HARNESS-SKEW
 singleton_method_spec__001	REJECT-BYDESIGN
 to_s_spec__001	PASS
 to_s_spec__002	PASS
 to_s_spec__003	PASS
-trueclass_spec__001	FAIL
+trueclass_spec__001	PASS
 trueclass_spec__002	PASS
 xor_spec__001	HARNESS-SKEW

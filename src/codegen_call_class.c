@@ -2221,7 +2221,7 @@ int emit_call_cmethod_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
     NodeKind rty_nv_k = nt_kind(nt, recv);
     const char *nvmod = NULL;
     if (rty_nv_k == NK_ConstantReadNode || rty_nv_k == NK_ConstantPathNode)
-      nvmod = nt_str(nt, recv, "name");
+      nvmod = nt_key_name(nt, recv);
     int nvi = nvmod ? comp_native_find(c, nvmod, name) : -1;
     if (nvi >= 0) {
       const char *feat = c->native_funcs[nvi].feat;
@@ -2294,9 +2294,9 @@ int emit_call_cmethod_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, con
     NodeKind rty_ffi_k = nt_kind(nt, recv);
     const char *rcmod = NULL;
     if (rty_ffi_k == NK_ConstantReadNode)
-      rcmod = nt_str(nt, recv, "name");
+      rcmod = nt_key_name(nt, recv);
     else if (rty_ffi_k == NK_ConstantPathNode)
-      rcmod = nt_str(nt, recv, "name");
+      rcmod = nt_key_name(nt, recv);
     if (rcmod) {
       int fi = -1;
       for (int ffi_i = 0; ffi_i < c->n_ffi_funcs; ffi_i++)
@@ -3028,7 +3028,7 @@ int emit_call_const_cmethod_arms(Compiler *c, int id, Buf *b, const NodeTable *n
     NodeKind rk = nt_kind(nt, recv);
     /* (a class body's self is its class, as the constant would be) */
     int bci = rk == NK_SelfNode ? class_body_self_ci(c, recv) : -1;
-    const char *rname = bci >= 0 ? c->classes[bci].name : nt_str(nt, recv, "name");
+    const char *rname = bci >= 0 ? c->classes[bci].name : nt_key_name(nt, recv);
     if (rk == NK_ConstantReadNode || rk == NK_ConstantPathNode || bci >= 0) {
       int ci = bci >= 0 ? bci : const_node_class_index(c, recv);
       int defcls = -1, mi = -1;
@@ -3746,7 +3746,7 @@ int emit_call_new_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const c
      then fall back to sp_<Sub>_new(args) */
   if (recv >= 0 && sp_streq(name, "new") &&
       nt_kind(nt, recv) == NK_ConstantPathNode) {
-    const char *cn = nt_str(nt, recv, "name");
+    const char *cn = nt_key_name(nt, recv);
     int ci = const_node_class_index(c, recv);
     /* native (C-backed) class reached as ::Name (root-qualified) */
     if (emit_native_ctor(c, id, ci, argc, argv, b)) return 1;
@@ -4801,7 +4801,7 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
     if (nt_type(nt, recv) &&
         (nt_kind(nt, recv) == NK_ConstantReadNode ||
          nt_kind(nt, recv) == NK_ConstantPathNode) &&   /* `Outer::Nested.name(x)`: the leaf keys the class (#4526) */
-        nt_str(nt, recv, "name")) {
+        nt_key_name(nt, recv)) {
       int sci = const_node_class_index(c, recv);
       if (sci >= 0 && call_target(c, id, sci, name, CT_CMETHOD, NULL) >= 0) cls_shadowed = 1;
     }
@@ -5016,7 +5016,7 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
       const char *rcn = nt_type(nt, recv) &&
                         (nt_kind(nt, recv) == NK_ConstantReadNode ||
                          nt_kind(nt, recv) == NK_ConstantPathNode)
-                        ? nt_str(nt, recv, "name") : NULL;
+                        ? nt_key_name(nt, recv) : NULL;
       int rci = rcn ? const_node_class_index(c, recv) : -1;
       /* `self.constants` (a bare `constants` is given self by desugar): in a
          class body self is that class; in a class method it is the class or
@@ -5174,7 +5174,7 @@ int emit_call_class_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
        names, answers instead: emit_call_cmethod_arms calls it) */
     NodeKind rvt2_k = nt_kind(nt, recv);
     const char *rcn2 = ((rvt2_k == NK_ConstantReadNode ||
-                                 rvt2_k == NK_ConstantPathNode)) ? nt_str(nt, recv, "name") : NULL;
+                                 rvt2_k == NK_ConstantPathNode)) ? nt_key_name(nt, recv) : NULL;
     /* an alias of a class (`E = Mod::ParseError`) is no longer renamed to
        the class it names: ask the node which class it is */
     int rci2 = rcn2 ? const_node_class_index(c, recv) : -1;

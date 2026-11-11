@@ -639,6 +639,27 @@ before each `read(2)`.
 - A class Spinel recognizes but has not implemented reports the missing
   **method** (`undefined method 'new' for class ...`), not a missing constant.
 
+### OpenStruct members named like methods
+
+An OpenStruct reads a member by any name it does not answer with a method of
+its own, on a typed receiver and on a boxed one (an OpenStruct read out of an
+Array or a Hash) alike: `row.count`, `row.message`, `row.path`, `row.value`
+or `row.valid?` read the member, while the Arrays, exceptions, Files and
+other values the same call site may hold answer as their own classes do. In
+CRuby a member also shadows a method of the same name. Spinel does not read
+the member:
+
+- for the methods an OpenStruct answers itself, Object's and Kernel's:
+  `class`, `hash`, `object_id`, `dup`, `clone`, `freeze`, `frozen?`, `nil?`,
+  `itself`, `tap`, `then`, `yield_self`, `inspect`, `to_s`, `to_h`,
+  `each_pair`, `send`, `__send__`, `instance_variables`, `methods`, `is_a?`,
+  `kind_of?` and `display`, which answer the method;
+- on a boxed receiver, for a call with a block, a bang name, `enum_for` and
+  `to_enum`, which answer as the receiver's other values do (NoMethodError
+  where none of them has the method).
+
+`row[:count]` and `row["class"]` read any member.
+
 ---
 
 ## By design (deliberate choices)

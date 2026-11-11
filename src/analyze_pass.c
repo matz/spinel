@@ -2861,7 +2861,7 @@ static void ppl_build(Compiler *c) {
                            NK_InstanceVariableReadNode, NK_GlobalVariableReadNode };
   for (int k = 0; k < 4; k++)
     NT_FOREACH_KIND(nt, rk[k], r) {
-      const char *rn = nt_str(nt, r, "name");
+      const char *rn = nt_key_name(nt, r);
       if (rn) ppl_slot(NULL, rn)->reads++;
     }
   NT_FOREACH_KIND(nt, NK_CallNode, id) {
@@ -2901,7 +2901,7 @@ static void ppl_build(Compiler *c) {
   for (int k = 0; k < 3; k++)
     NT_FOREACH_KIND(nt, wk[k], w) {
       int v = nt_ref(nt, w, "value");
-      const char *wn = nt_str(nt, w, "name");
+      const char *wn = nt_key_name(nt, w);
       if (v < 0 || v >= n || !wn || !is_proc_create(c, v) || proc_literal_escapes_as_arg(c, v)) continue;
       PplEnt *full = ppl_slot_at(NULL, wn, 0), *bare = wn[0] == '@' ? ppl_slot_at(NULL, wn + 1, 0) : NULL;
       if (!(full && full->reads) && !(bare && bare->reads)) ppl_sight[v] |= 2;
@@ -3604,6 +3604,7 @@ static int infer_write_container_usage(Compiler *c, const NodeTable *nt, int nfb
     if (!ty || nt_int(nt, id, "dyn_arm", 0)) continue;
     int recv, kt = TY_UNKNOWN, vt = TY_UNKNOWN, is_push = 0, is_idx_write = 0, is_splice = 0;
     int is_fill = 0;  /* a fill's span: one value, the element evidence a store's is */
+    int fill_alt = TY_UNKNOWN;  /* a second kind a block's values store, its own evidence */
     int concat_scalar = 0;  /* a concat of no array, which raises rather than stores */
     int splice_arr = 0;     /* a splice's source is a typed array: its kind is the elements' */
     int is_merge = 0;  /* merge!/update: kt and vt are the merged hashes' */
@@ -3858,9 +3859,28 @@ static int infer_write_container_usage(Compiler *c, const NodeTable *nt, int nfb
         int fblk = nt_ref(nt, id, "block");
         int fbody = nt_ref(nt, fblk, "body");
         int fbn = 0; const int *fbs = fbody >= 0 ? nt_arr(nt, fbody, "body", &fbn) : NULL;
-        vt = fbn > 0 ? infer_type(c, fbs[fbn - 1]) : TY_NIL;
+        TyKind ftail = fbn > 0 ? infer_type(c, fbs[fbn - 1]) : TY_NIL;
+        vt = ftail;
         TyKind fnx = block_next_value_ty(c, fbody);
         if (fnx != TY_UNKNOWN) vt = vt == TY_UNKNOWN ? fnx : ty_unify(vt, fnx);
+        if (fnx != TY_UNKNOWN && recv >= 0) {
+          TyKind frt = infer_type(c, recv);
+          unsigned fnum = 0;
+          /* a boxed local may hold Arrays of several kinds: the joined
+             value widens each one where it is built (below), where one
+             answered kind left the others typed */
+          int fboxed = frt == TY_POLY && nt_kind(nt, recv) == NK_LocalVariableReadNode;
+          if (frt != TY_POLY_ARRAY && !fboxed)
+            vt = block_store_value_ty(c, fbody, fbn > 0 ? fbs[fbn - 1] : -1, (TyKind)vt,
+                                      ty_is_array(frt) ? ty_array_elem(frt) : TY_UNKNOWN, &fnum);
+          /* a row read out of a table (`m[0].map! { |x| next 1.5 if x == 1;
+             2 }`) whose block stores an Integer and a Float: each one is its
+             own evidence, as for a row written twice, and the row widens
+             whatever kind it holds. Their boxed join widened nothing. */
+          if (vt == TY_POLY && !ty_is_array(frt) && nt_kind(nt, recv) == NK_CallNode && fnum == 3) {
+            vt = TY_FLOAT; fill_alt = TY_INT;
+          }
+        }
         if (vt == TY_VOID) vt = TY_NIL;
         is_idx_write = 1; is_splice = 1; is_fill = 1;
         kt = TY_INT;
@@ -4050,6 +4070,8 @@ static int infer_write_container_usage(Compiler *c, const NodeTable *nt, int nfb
           changed |= widen_nested_literals(c, recv0, is_push, is_splice, (TyKind)kt, push_elem_ty(c, elem_argv[ai]));
       else
         changed |= widen_nested_literals(c, recv0, is_push, is_splice, (TyKind)kt, (TyKind)vt);
+      if (fill_alt != TY_UNKNOWN)
+        changed |= widen_nested_literals(c, recv0, is_push, is_splice, (TyKind)kt, (TyKind)fill_alt);
     }
     /* fold into a local's type or an ivar's type (an empty `@buf=[]` filled by
        `@buf << x` infers its element type the same way a local does) */
@@ -6142,7 +6164,7 @@ int class_value_escapes(Compiler *c, int cid) {
     if (k == NK_CallNode) {
       const char *un = nt_str(nt, u, "name");
       int rc = nt_ref(nt, u, "receiver");
-      const char *rn = rc >= 0 && nt_kind(nt, rc) == NK_ConstantReadNode ? nt_str(nt, rc, "name") : NULL;
+      const char *rn = rc >= 0 && nt_kind(nt, rc) == NK_ConstantReadNode ? nt_key_name(nt, rc) : NULL;
       /* an anonymous class, unless a constant names it */
       int anon = un && rn && ((sp_streq(un, "new") && (sp_streq(rn, "Class") || sp_streq(rn, "Struct"))) ||
                               (sp_streq(un, "define") && sp_streq(rn, "Data")));
@@ -6195,7 +6217,7 @@ int class_value_escapes(Compiler *c, int cid) {
       all = 1; break;
     }
     if (k != NK_SelfNode) {
-      const char *cn = nt_str(nt, u, "name");
+      const char *cn = nt_key_name(nt, u);
       for (int d = 0; cn && d < c->nclasses; d++)
         if (c->classes[d].name && sp_streq(c->classes[d].name, cn)) esc[d] = 1;
       continue;
@@ -9047,7 +9069,7 @@ static int cext_widen_containers(Compiler *c, int v, CextWalk *seen) {
   int constant = nt_int(nt, v, "cext_const_node", 0) - 1;
   if (constant >= 0) {
     changed |= cext_widen_containers(c, constant, seen);
-    if (c->strbuf_box[constant] && !c->strbuf_box[v]) { comp_set_strbuf_box(c, v, 1); changed = 1; }
+    if (comp_strbuf_box_stored(c, constant) && !comp_strbuf_box_stored(c, v)) { comp_set_strbuf_box(c, v, 1); changed = 1; }
     return changed;
   }
   if (nt_kind(nt, v) == NK_CallNode) changed |= cext_demand_reader(c, v);
@@ -9847,7 +9869,7 @@ static int psa_call_supplies(Compiler *c, Scope *sc, int pi, int is_init, int is
     int recv = nt_ref(nt, id, "receiver");
     NodeKind rk = recv >= 0 ? nt_kind(nt, recv) : NK_CallNode;
     if (recv >= 0 && (rk == NK_ConstantReadNode || rk == NK_ConstantPathNode)) {
-      const char *rn = nt_str(nt, recv, "name");
+      const char *rn = nt_key_name(nt, recv);
       int rci = rn ? const_node_class_index(c, recv) : -1;
       if (rci >= 0 && sc->class_id >= 0) {
         int under = 0;
@@ -10572,7 +10594,7 @@ int bind_coerce_operator_params(Compiler *c) {
         NodeKind ak = nt_kind(nt, av[0]);
         const char *cn = NULL;
         if (ak == NK_ConstantReadNode || ak == NK_ConstantPathNode)
-          cn = nt_str(nt, av[0], "name");
+          cn = nt_key_name(nt, av[0]);
         if (cn && sc->class_id < c->nclasses && c->classes[sc->class_id].name &&
             sp_streq(cn, c->classes[sc->class_id].name)) continue;   /* its own class */
       }
@@ -11701,7 +11723,7 @@ static int infer_param_types_ex(Compiler *c, int settle, const NodeTypes *before
     if (recv >= 0 && name && c->n_ffi_funcs > 0 && c->n_ffi_callbacks > 0) {
       NodeKind rk_k = nt_kind(nt, recv);
       const char *rcmod = (rk_k == NK_ConstantReadNode || rk_k == NK_ConstantPathNode)
-                          ? nt_str(nt, recv, "name") : NULL;
+                          ? nt_key_name(nt, recv) : NULL;
       int fi = -1;
       for (int k = 0; rcmod && k < c->n_ffi_funcs; k++)
         if (sp_streq(c->ffi_funcs[k].mod, rcmod) && sp_streq(c->ffi_funcs[k].name, name)) { fi = k; break; }
@@ -11734,7 +11756,7 @@ static int infer_param_types_ex(Compiler *c, int settle, const NodeTypes *before
       int ran = 0; const int *rav = rargs >= 0 ? nt_arr(nt, rargs, "arguments", &ran) : NULL;
       if (ran >= 2 && nt_type(nt, rav[0]) &&
           (nt_kind(nt, rav[0]) == NK_ConstantReadNode || nt_kind(nt, rav[0]) == NK_ConstantPathNode)) {
-        const char *rcn = nt_str(nt, rav[0], "name");
+        const char *rcn = nt_key_name(nt, rav[0]);
         int rci = rcn ? const_node_class_index(c, rav[0]) : -1;
         if (rci >= 0 && class_is_exc_subclass(c, rci)) {
           int imi = comp_method_in_chain(c, rci, "initialize", NULL);
@@ -12068,7 +12090,7 @@ static int infer_param_types_ex(Compiler *c, int settle, const NodeTypes *before
       if (rmi >= 0) { changed |= bind_call_params(c, id, rmi); continue; }
       /* M::Sub.new(...) -- resolve by the final path component */
       if (rty_k == NK_ConstantPathNode) {
-        const char *cn = nt_str(nt, recv, "name");
+        const char *cn = nt_key_name(nt, recv);
         int ci = cn ? const_node_class_index(c, recv) : -1;
         /* A Struct or Data is constructed, not called: its arguments type the
            MEMBERS, and that is done once for every receiver spelling by the
@@ -13817,7 +13839,7 @@ int desugar_class_eval_value(Compiler *c) {
     if (!nm || !is_class_eval_family(nm)) continue;
     int recv = nt_ref(nt, id, "receiver");
     if (recv < 0 || nt_kind(nt, recv) != NK_ConstantReadNode) continue;
-    const char *cname = nt_str(nt, recv, "name");
+    const char *cname = nt_key_name(nt, recv);
     int rci = cname ? const_node_class_index(c, recv) : -1;
     if (rci < 0) continue;
     int blk = nt_ref(nt, id, "block");
@@ -14927,7 +14949,7 @@ int desugar_dir_surface(Compiler *c) {
       {
         int mrecv = nt_ref(nt, recv, "receiver");
         if (mrecv >= 0 && nt_kind(nt, mrecv) == NK_ConstantReadNode)
-          mrn = nt_str(nt, mrecv, "name");
+          mrn = nt_key_name(nt, mrecv);
       }
       const char *mnm = nt_str(nt, recv, "name");
       if (mrn && mnm && sp_streq(mrn, "ENV") &&
@@ -15027,7 +15049,7 @@ int desugar_dir_surface(Compiler *c) {
       }
     }
     if (!nm || recv < 0 || nt_kind(nt, recv) != NK_ConstantReadNode) continue;
-    const char *rn = nt_str(nt, recv, "name");
+    const char *rn = nt_key_name(nt, recv);
     if (!rn) continue;
     /* A resolved user singleton is not a builtin rewrite. */
     if (cplan_const_user(c, id, recv, 1)) continue;
@@ -16463,7 +16485,7 @@ static void ple_mark_escaped(Compiler *c, int x) {
     want_kind = 2; want_idx = sc ? sc->class_id : -1;
   }
   else return;
-  const char *vn = nt_str(nt, x, "name");
+  const char *vn = nt_key_name(nt, x);
   if (!vn) return;
   for (int i = 0; i < ple_npw; i++) {
     if (ple_pw[i * 4] != want_kind) continue;
@@ -18153,7 +18175,7 @@ static int infer_block_params_call_arms(Compiler *c, const NodeTable *nt, int id
   int changed = 0;
   /* ENV's missing-key block receives the String key, as fetch's does. */
   if (recv >= 0 && nt_kind(nt, recv) == NK_ConstantReadNode &&
-      is_env_const(nt_str(nt, recv, "name")) && !comp_const(c, "ENV") &&
+      is_env_const(nt_key_name(nt, recv)) && !comp_const(c, "ENV") &&
       bop_share_named(BOP_ENV, name) == BSH_FETCH) {
     const char *p0 = block_param_name(c, block, 0);
     if (p0) changed |= bp_widen(comp_scope_of(c, block), p0, TY_STRING);
@@ -18371,7 +18393,7 @@ static int infer_block_params_call_arms(Compiler *c, const NodeTable *nt, int id
         /* (by the name, not the node: this asks for every such call of
            each inline round, and a program of many splices pays the
            record's answer per round -- scale-test's splices read 2.29x) */
-        const char *cname = nt_str(nt, recv, "name");
+        const char *cname = nt_key_name(nt, recv);
         int cid = cname ? comp_class_index(c, cname) : -1;
         if (cid >= 0) mi = call_target(c, id, cid, name, CT_CMETHOD, NULL);
       }
@@ -18768,7 +18790,7 @@ int infer_block_params(Compiler *c) {
     if (!cname || !sp_streq(cname, "new")) continue;
     int recv = nt_ref(nt, id, "receiver");
     if (recv < 0 || nt_kind(nt, recv) != NK_ConstantReadNode) continue;
-    const char *rn = nt_str(nt, recv, "name");
+    const char *rn = nt_key_name(nt, recv);
     if (!rn || !sp_streq(rn, "Hash")) continue;
     int blk = nt_ref(nt, id, "block");
     if (blk < 0) continue;
@@ -18912,7 +18934,7 @@ int infer_block_params(Compiler *c) {
     int is_const = rrk == NK_ConstantReadNode ||
                    (rrk == NK_ConstantPathNode && nt_ref(nt, recv, "parent") < 0);
     if (!is_const) continue;
-    const char *rn = nt_str(nt, recv, "name");
+    const char *rn = nt_key_name(nt, recv);
     if (!rn || !sp_streq(rn, "Fiber")) continue;
     int blk = nt_ref(nt, id, "block");
     if (blk < 0) continue;
@@ -19555,7 +19577,7 @@ int backprop_call_target(Compiler *c, int call_id) {
   }
   NodeKind rk = nt_kind(nt, recv);
   if (rk == NK_ConstantReadNode || rk == NK_ConstantPathNode) {
-    const char *cn = nt_str(nt, recv, "name");   /* NULL for a non-flat path */
+    const char *cn = nt_key_name(nt, recv);   /* NULL for a non-flat path */
     int ci = const_node_class_index(c, recv);
     return ci >= 0 ? call_target(c, call_id, ci, name, CT_CMETHOD, NULL) : -1;
   }
@@ -20106,7 +20128,7 @@ static int irt_scope(Compiler *c, int s, IrtCtx *x) {
          the other side */
       int node = -1, other = -1; TyKind then = TY_UNKNOWN;
       int tail = (!empty_body && !tail_unreachable && sc->body >= 0) ? sc->body : -1;
-      if (tail >= 0 && tail < c->node_cap && ty_degraded(c->ntype[tail])) { node = tail; then = c->ntype[tail]; }
+      if (tail >= 0 && tail < c->node_cap && ty_degraded(comp_ntype_stored(c, tail))) { node = tail; then = comp_ntype_stored(c, tail); }
       else if (ret_head && ret_next) {
         for (int rid = ret_head[s]; rid >= 0; rid = ret_next[rid]) {
           TyKind rt = return_node_type(c, rid);
@@ -20119,7 +20141,7 @@ static int irt_scope(Compiler *c, int s, IrtCtx *x) {
            first `return` of a different kind (the list's head can be one
            of the same kind, which said "String, where a `return` gives
            String"; String and its mutable refinement are one kind). */
-        TyKind tt = (tail >= 0 && tail < c->node_cap) ? c->ntype[tail] : TY_UNKNOWN;
+        TyKind tt = (tail >= 0 && tail < c->node_cap) ? comp_ntype_stored(c, tail) : TY_UNKNOWN;
         if (tt != TY_UNKNOWN) { node = tail; then = tt; }
         if (ret_head)
           for (int rid = ret_head[s]; rid >= 0; rid = ret_next[rid]) {
@@ -20321,7 +20343,7 @@ int infer_return_types(Compiler *c) {
       NodeKind ak = nt_kind(nt, pav[0]);
       const char *kn = ((ak == NK_ConstantReadNode ||
                                 ak == NK_ConstantPathNode))
-                         ? nt_str(nt, pav[0], "name") : NULL;
+                         ? nt_key_name(nt, pav[0]) : NULL;
       int kcid = kn ? const_node_class_index(c, pav[0]) : -1;
       if (kcid < 0) continue;
       /* single-statement then-arm returning the SAME variable */
@@ -20746,7 +20768,7 @@ static void cr_collect_versions(Compiler *c, const NodeTable *nt, int id, char *
   const char *names[2];
   CrMarks m = { out, n, cap };
   /* a builtin `new`: the initialize methods the plan says it enters */
-  if (ct_version_marked(c, "initialize") && is_new_name(nt_str(nt, id, "name"))) {
+  if (ct_version_marked(c, "initialize") && is_new_name(nt_key_name(nt, id))) {
     int init[CPT_MAX], ni = cplan_entries(c, id, init, CPT_MAX);
     for (int i = 0; i < ni && is_initialize_name(c->scopes[init[i]].name); i++) {
       char mark[24];
@@ -20878,7 +20900,7 @@ static int cr_recv_builtin_class(Compiler *c, const NodeTable *nt, int id, const
   int r = nt_ref(nt, id, "receiver");
   NodeKind rk = r >= 0 ? nt_kind(nt, r) : NK_NONE;
   if (rk != NK_ConstantReadNode && !(rk == NK_ConstantPathNode && nt_ref(nt, r, "parent") < 0)) return 0;
-  const char *cn = nt_str(nt, r, "name");
+  const char *cn = nt_key_name(nt, r);
   return cn && const_node_class_index(c, r) < 0 && is_builtin_class_name(cn);
 }
 
@@ -21038,7 +21060,7 @@ void cr_collect_calls(Compiler *c, const NodeTable *nt, int id,
   if (k0 == NK_CallNode && nm) {
     int r = nt_ref(nt, id, "receiver");
     NodeKind rk = r >= 0 ? nt_kind(nt, r) : NK_NONE;
-    const char *cn = (rk == NK_ConstantReadNode || rk == NK_ConstantPathNode) ? nt_str(nt, r, "name") : NULL;
+    const char *cn = (rk == NK_ConstantReadNode || rk == NK_ConstantPathNode) ? nt_key_name(nt, r) : NULL;
     int k = cn ? const_node_class_index(c, r) : -1;
     int mi = k >= 0 ? call_target(c, id, k, nm, CT_CMETHOD, NULL) : -1;
     /* (a call the plan compiles to the accessor's slot reaches nothing) */
@@ -21083,7 +21105,7 @@ void cr_collect_calls(Compiler *c, const NodeTable *nt, int id,
         sp_streq(nt_str(nt, r, "name"), "new")) {
       int rr = nt_ref(nt, r, "receiver");
       NodeKind rrk = rr >= 0 ? nt_kind(nt, rr) : NK_NONE;
-      const char *kn = (rrk == NK_ConstantReadNode || rrk == NK_ConstantPathNode) ? nt_str(nt, rr, "name") : NULL;
+      const char *kn = (rrk == NK_ConstantReadNode || rrk == NK_ConstantPathNode) ? nt_key_name(nt, rr) : NULL;
       int k = kn ? const_node_class_index(c, rr) : -1;
       /* Class.new / Module.new / Struct.new / Data answer a new CLASS, whose
          class methods include the ones it inherits */

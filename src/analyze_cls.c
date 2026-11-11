@@ -1258,7 +1258,7 @@ static void cf_mark_dead_protocols(CF *f) {
     static const NodeKind ck[] = { NK_ConstantReadNode, NK_ConstantPathNode };
     for (int q = 0; q < 2 && !used; q++)
       NT_FOREACH_KIND(nt, ck[q], id) {
-        const char *cn = nt_str(nt, id, "name");
+        const char *cn = nt_key_name(nt, id);
         if (!cn || !(sp_streq(cn, gates[g]) || (sp_streq(gates[g], "Psych") && sp_streq(cn, "YAML")))) continue;
         int mi = cf_owner_def(f, id, 0, NULL);
         const char *mn = mi >= 0 ? c->scopes[mi].name : NULL;
@@ -3464,7 +3464,7 @@ static void cf_call(CF *f, int v) {
        what it was handed: every call of the function reaches the one twin,
        so what one call hands it was every other call's answer (#10303) */
     int nx = r >= 0 ? cf_is_class_const(f, r) : -1;
-    if (nx >= 0 && comp_native_find(c, nt_str(nt, r, "name"), nm) >= 0) {
+    if (nx >= 0 && comp_native_find(c, nt_key_name(nt, r), nm) >= 0) {
       if (f->rvis >= 0) for (int i = 0; i < argc; i++) cf_edge(f, argv[i], f->rvis);
       cf_native_class_answer(f, v, nx, nm, argc);
       if (blk >= 0 && nt_kind(nt, blk) == NK_BlockNode) cf_all_block_params(f, blk);

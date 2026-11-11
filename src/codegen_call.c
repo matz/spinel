@@ -2637,7 +2637,7 @@ static int add_listed_const(const char **out, const char **shown, int n, const c
    the leaf of the Ruby path it keeps beside the key. */
 static void class_stmt_const_names(const NodeTable *nt, int stmt, const char **nm, const char **sh) {
   int ncp = nt_ref(nt, stmt, "constant_path");
-  const char *full = ncp >= 0 ? nt_str(nt, ncp, "name") : NULL;
+  const char *full = ncp >= 0 ? nt_key_name(nt, ncp) : NULL;
   *nm = *sh = NULL;
   if (!full) return;
   const char *last = strrchr(full, ':');
@@ -2876,16 +2876,16 @@ int recv_user_defines(Compiler *c, const char *name) {
    as if the name were unowned -- the switch's own case labels keep the user
    receivers out (#3459). */
 
-/* An OpenStruct can reach boxed call `id`, which reads `name` as its member
-   (ostruct_member_name, cls_fact_may_ostruct): the poly dispatch reads the
-   member ahead of its builtin arms (codegen_poly_plan.c), so a shortcut that
-   answers with one builtin helper steps aside for it. Not inside a builtin
-   arm of that dispatch, where the value is a container (g_poly_builtin_arm),
-   and not for count, whose answer the Range and Enumerable rows type an
-   Integer ahead of the member (it keeps the containers' arm). */
-int poly_ostruct_member_call(Compiler *c, int id, const char *name, int recv, int argc) {
-  return !g_poly_builtin_arm && argc == 0 && recv >= 0 && nt_ref(c->nt, id, "block") < 0 &&
-         ostruct_member_name(name) && !sp_streq(name, "count") && cls_fact_may_ostruct(c, recv);
+/* An OpenStruct can reach boxed call `id`, which reads its name as a member
+   (ostruct_member_read), and the analysis typed it boxed for that: the poly
+   dispatch reads the member ahead of its builtin arms (codegen_poly_plan.c),
+   so a shortcut that answers with one builtin helper steps aside for it. Not
+   inside a builtin arm of that dispatch, where the value is not the
+   OpenStruct (g_poly_builtin_arm). */
+int poly_ostruct_member_call(Compiler *c, int id) {
+  int recv = nt_ref(c->nt, id, "receiver");
+  return !g_poly_builtin_arm && recv >= 0 && comp_ntype(c, id) == TY_POLY &&
+         ostruct_member_read(c, id, comp_recv_type(c, recv));
 }
 
 static int poly_name_user_claimed_walk(Compiler *c, const char *name, int argc) {
@@ -3212,7 +3212,7 @@ static TyKind proc_arg_ty(Compiler *c, int a) {
      nil (strbuf_arg_bang), as it hands it to a method's parameter */
   if (r.as_ty == TY_STRING && strbuf_arg_bang(c, nt_paren_single(c->nt, a))) return TY_STRBUF;
   /* a fresh String lifted into the handle for a boxed parameter it reaches */
-  if (r.as_ty == TY_STRING && c->poly_strbuf_lift[a]) return TY_STRBUF;
+  if (r.as_ty == TY_STRING && comp_poly_strbuf_lift_stored(c, a)) return TY_STRBUF;
   TyKind t = r.as_ty;
   if (t == TY_UNKNOWN && nt_kind(c->nt, a) == NK_ArrayNode && node_is_empty_container(c, a))
     return TY_INT_ARRAY;
@@ -6163,8 +6163,8 @@ static int emit_complex_rational_call(Compiler *c, int id, Buf *b) {
   if (recv >= 0) {
     NodeKind rrk = nt_kind(nt, recv);
     /* Complex.polar(magnitude, angle) */
-    if (rrk == NK_ConstantReadNode && nt_str(nt, recv, "name") &&
-        sp_streq(nt_str(nt, recv, "name"), "Complex") && sp_streq(name, "polar") && argc >= 1) {
+    if (rrk == NK_ConstantReadNode && nt_key_name(nt, recv) &&
+        sp_streq(nt_key_name(nt, recv), "Complex") && sp_streq(name, "polar") && argc >= 1) {
       if (emit_complex_real_args(c, argv, argc, 1, b)) return 1;
       buf_puts(b, "sp_complex_polar(");
       emit_float_expr(c, argv[0], b);
@@ -6175,8 +6175,8 @@ static int emit_complex_rational_call(Compiler *c, int id, Buf *b) {
       return 1;
     }
     /* Complex.rect(re[, im]) / .rectangular: the component-pair constructor. */
-    if (rrk == NK_ConstantReadNode && nt_str(nt, recv, "name") &&
-        sp_streq(nt_str(nt, recv, "name"), "Complex") &&
+    if (rrk == NK_ConstantReadNode && nt_key_name(nt, recv) &&
+        sp_streq(nt_key_name(nt, recv), "Complex") &&
         (is_rectangular_alias(name)) && argc >= 1 && argc <= 2) {
       if (emit_complex_real_args(c, argv, argc, 0, b)) return 1;
       int fl = (comp_ntype(c, argv[0]) == TY_FLOAT ? 1 : 0) |
@@ -9688,7 +9688,7 @@ static int emit_poly_arg_temp(Compiler *c, int node, TyKind ty, int boxed, int t
      own emitter may answer the plain String (`+""`, `"".dup`, an interpolation:
      the mark only asks for it, #7833): the value is taken as the handle, or
      wrapped in a fresh one */
-  int as_handle = !boxed && ty == TY_STRBUF && c->strbuf_box[node] &&
+  int as_handle = !boxed && ty == TY_STRBUF && comp_strbuf_box_stored(c, node) &&
                   nt_kind(c->nt, node) != NK_LocalVariableReadNode &&
                   nt_kind(c->nt, node) != NK_InstanceVariableReadNode;
   /* a read that answers a boxed value (an element of a poly Hash) carries
@@ -15485,7 +15485,7 @@ static int emit_new_call_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
        self.new keeps its builtin constructor: fall past the user-ctor logic
        to the builtin cn handler below (#3109) */
     int reopen_builtin_new = ci >= 0 && rk == NK_ConstantReadNode &&
-                             is_builtin_reopen(nt_str(nt, recv, "name")) &&
+                             is_builtin_reopen(nt_key_name(nt, recv)) &&
                              comp_cmethod_in_chain(c, ci, "new", NULL) < 0;
     /* native (C-backed) class: the declared constructor (see emit_native_ctor) */
     if (!reopen_builtin_new && emit_native_ctor(c, id, ci, argc, argv, b)) { *out = 1; return 1; }
@@ -16538,7 +16538,7 @@ int emit_class_new_call(Compiler *c, int id, Buf *b) {
      ruby2_keywords_hash pair is a documented compile-time reject, #2846.) */
   if (recv >= 0 && argc == 1 &&
       nt_kind(nt, recv) == NK_ConstantReadNode &&
-      nt_str(nt, recv, "name") && sp_streq(nt_str(nt, recv, "name"), "Hash") &&
+      nt_key_name(nt, recv) && sp_streq(nt_key_name(nt, recv), "Hash") &&
       sp_streq(name, "try_convert")) {
     TyKind at = comp_ntype(c, argv[0]);
     if (ty_is_hash(at)) { emit_boxed(c, argv[0], b); return 1; }
@@ -21042,7 +21042,7 @@ static void sdefs_scan(const NodeTable *nt, int id, const char *cn, int in_singl
        the class's */
     int ex = nt_ref(nt, id, "expression");
     NodeKind ek = nt_kind(nt, ex);
-    const char *scn = ek == NK_ConstantReadNode && !cn ? nt_str(nt, ex, "name")
+    const char *scn = ek == NK_ConstantReadNode && !cn ? nt_key_name(nt, ex)
                     : ek == NK_SelfNode && cn && !in_singleton ? cn : NULL;
     if (scn) sdefs_scan(nt, nt_ref(nt, id, "body"), scn, 1);
   }
@@ -21109,7 +21109,7 @@ static int singleton_def_of(Compiler *c, const char *cn, const char *name) {
         else if (k == NK_ClassNode || k == NK_ModuleNode) {
           int cp = nt_ref(nt, id, "constant_path");
           NodeKind ck = nt_kind(nt, cp);
-          const char *kn = ck == NK_ConstantReadNode ? nt_str(nt, cp, "name") : NULL;
+          const char *kn = ck == NK_ConstantReadNode ? nt_key_name(nt, cp) : NULL;
           if (kn) sdefs_scan(nt, nt_ref(nt, id, "body"), kn, 0);
         }
         else if (k == NK_SingletonClassNode) sdefs_scan(nt, id, NULL, 0);
@@ -21209,7 +21209,7 @@ static int arity_violation(Compiler *c, int id, int non_nil, char *exp, size_t n
     *eval_recv = 0;
   }
   else if (rty2_k == NK_ConstantReadNode) {
-    const char *cn = nt_str(nt, recv, "name");
+    const char *cn = nt_key_name(nt, recv);
     if (!cn) return 0;
     /* the analyzer renames Hash.new-with-default; the spec row is "new" */
     if (sp_streq(name, "__hash_new_default")) name = "new";
@@ -22038,8 +22038,8 @@ int emit_hash_new_arg_guard(Compiler *c, int id, Buf *b) {
   const char *name = nt_str(nt, id, "name");
   int recv = nt_ref(nt, id, "receiver");
   if (!name || !(is_hash_constructor(name)) || recv < 0 ||
-      nt_kind(nt, recv) != NK_ConstantReadNode || !nt_str(nt, recv, "name") ||
-      !sp_streq(nt_str(nt, recv, "name"), "Hash")) return 0;
+      nt_kind(nt, recv) != NK_ConstantReadNode || !nt_key_name(nt, recv) ||
+      !sp_streq(nt_key_name(nt, recv), "Hash")) return 0;
   int anode = nt_ref(nt, id, "arguments"), argc = 0;
   const int *argv = anode >= 0 ? nt_arr(nt, anode, "arguments", &argc) : NULL;
   int npos = argc;
@@ -22402,8 +22402,8 @@ int emit_arg_type_guards(Compiler *c, int id, Buf *b) {
     int ca = nt_ref(nt, id, "arguments");
     int cc = 0; const int *cv = ca >= 0 ? nt_arr(nt, ca, "arguments", &cc) : NULL;
     if (cr >= 0 && cn2 && cc >= 1 && cv && nt_kind(nt, cr) == NK_ConstantReadNode &&
-        nt_str(nt, cr, "name") &&
-        (sp_streq(nt_str(nt, cr, "name"), "Integer") || sp_streq(nt_str(nt, cr, "name"), "Float")) &&
+        nt_key_name(nt, cr) &&
+        (sp_streq(nt_key_name(nt, cr), "Integer") || sp_streq(nt_key_name(nt, cr), "Float")) &&
         (sp_streq(cn2, "sqrt")) && const_node_class_index(c, cr) < 0) {
       NodeKind ak2 = nt_kind(nt, cv[0]);
       if (ak2 == NK_StringNode || ak2 == NK_SymbolNode || ak2 == NK_ArrayNode ||
@@ -27689,7 +27689,7 @@ static int poly_target_call(Compiler *c, int id) {
   const NodeTable *nt = c->nt;
   int r = nt_ref(nt, id, "receiver"), a = nt_ref(nt, id, "arguments");
   const char *nm = nt_str(nt, id, "name");
-  if (r < 0 || a < 0 || !nm || sn_guard_pending(c, id) || c->ntype[r] != TY_POLY ||
+  if (r < 0 || a < 0 || !nm || sn_guard_pending(c, id) || comp_ntype_stored(c, r) != TY_POLY ||
       comp_ntype(c, r) != TY_POLY || !subtree_has_side_effect(c, a) ||
       call_target(c, id, -1, nm, CT_TOP, NULL) >= 0 || any_class_defines(c, nm) ||
       (nil_target_read_rebound(c, r, a) && nt_kind(nt, r) != NK_LocalVariableReadNode))
@@ -27982,14 +27982,14 @@ static int emit_nil_target_cold(Compiler *c, int id, Buf *b) {
    as for any call. `stmt` emits it as a statement at `indent`. */
 static int emit_nil_target_own(Compiler *c, int id, Buf *b, int stmt, int indent) {
   int r = nt_ref(c->nt, id, "receiver");
-  if (!c->nil_tested || comp_ntype(c, r) != TY_STRING || !recv_may_be_sentinel(c, r)) return 0;
+  if (!comp_nil_tested_present(c) || comp_ntype(c, r) != TY_STRING || !recv_may_be_sentinel(c, r)) return 0;
   size_t pre0 = g_pre ? g_pre->len : 0;
   int sv_tmp = g_tmp;
   int vt = view_push_repr(c, r, VR_NIL_TESTED, 3);
   Buf cb; memset(&cb, 0, sizeof cb);
   if (stmt) emit_stmt_inner(c, id, &cb, indent);
   else emit_call_held(c, id, &cb);
-  int ok = c->nil_tested[r] == 4;
+  int ok = comp_nil_tested_stored(c, r) == 4;
   view_pop(c, vt);
   if (ok) buf_puts(b, cb.p ? cb.p : "");
   else {
@@ -28128,7 +28128,7 @@ int cplan_nil_answer_served(Compiler *c, int id) {
   if (t != TY_BOOL) return 0;
   if ((sp_streq(nm, "nil?") || sp_streq(nm, "!") || sp_streq(nm, "frozen?")) && an == 0) return 1;
   if ((sp_streq(nm, "is_a?") || sp_streq(nm, "kind_of?") || sp_streq(nm, "instance_of?")) && an == 1)
-    return nt_kind(nt, av[0]) == NK_ConstantReadNode && nt_str(nt, av[0], "name") != NULL;
+    return nt_kind(nt, av[0]) == NK_ConstantReadNode && nt_key_name(nt, av[0]) != NULL;
   return (sp_streq(nm, "==") || sp_streq(nm, "===") || sp_streq(nm, "eql?") || sp_streq(nm, "equal?") ||
           sp_streq(nm, "!=")) && an == 1;
 }
@@ -29211,7 +29211,7 @@ static int refuse_ctor_copies(Compiler *c, int id, const char *name, int recv) {
   char thr[160];
   if (first) snprintf(thr, sizeof thr, "`raise`");
   else if (recv >= 0 && (nt_kind(nt, recv) == NK_ConstantReadNode || nt_kind(nt, recv) == NK_ConstantPathNode))
-    snprintf(thr, sizeof thr, "`%s.new`", nt_str(nt, recv, "name"));
+    snprintf(thr, sizeof thr, "`%s.new`", nt_key_name(nt, recv));
   else snprintf(thr, sizeof thr, "`new`");
   for (int t = 0; t < n; t++) {
     Scope *m = &c->scopes[tg[t]];
@@ -30399,7 +30399,7 @@ static int emit_call_on_missing_builtin_path(Compiler *c, int id, Buf *b) {
   const NodeTable *nt = c->nt;
   int recv = nt_ref(nt, id, "receiver");
   if (recv < 0 || nt_kind(nt, recv) != NK_ConstantPathNode) return 0;
-  const char *nm = nt_str(nt, recv, "name");
+  const char *nm = nt_key_name(nt, recv);
   if (!nm || !is_builtin_class_name(nm) || !const_path_misses_member(c, recv)) return 0;
   buf_puts(b, "((void)(");
   emit_expr_for_effect(c, recv, b);
@@ -30715,7 +30715,7 @@ static void emit_call_unwrapped(Compiler *c, int id, Buf *b) {
     int chain[16], nch = 0, r = nt_ref(c->nt, id, "receiver");
     while (cn && sp_streq(cn, "<<") && r >= 0 && nt_kind(c->nt, r) == NK_CallNode && nch < 16 &&
            nt_str(c->nt, r, "name") && sp_streq(nt_str(c->nt, r, "name"), "<<") &&
-           c->ntype[r] == TY_STRING) {
+           comp_ntype_stored(c, r) == TY_STRING) {
       chain[nch++] = r;
       r = nt_ref(c->nt, r, "receiver");
     }
@@ -34817,7 +34817,7 @@ int strbuf_narrowed_box_mutator(Compiler *c, int id) {
   const char *cn = nt_str(nt, id, "name");
   int nch = 0, r = nt_ref(nt, id, "receiver");
   while (is_shovel_name(cn) && r >= 0 && nt_kind(nt, r) == NK_CallNode && nch < 16 &&
-         is_shovel_name(nt_str(nt, r, "name")) && c->ntype[r] == TY_STRING) {
+         is_shovel_name(nt_str(nt, r, "name")) && comp_ntype_stored(c, r) == TY_STRING) {
     nch++;
     r = nt_ref(nt, r, "receiver");
   }
@@ -34856,7 +34856,7 @@ void emit_narrowed_box_mutator(Compiler *c, int id, Buf *b) {
 int strbuf_call_picks_up(Compiler *c, int id) {
   /* (the call answers its String as a const char *: a method whose value
      widened past a String after the pickup was marked answers a box) */
-  if (!(c->strbuf_box[id] && nt_ref(c->nt, id, "block") < 0 && comp_ntype(c, id) != TY_POLY)) return 0;
+  if (!(comp_strbuf_box_stored(c, id) && nt_ref(c->nt, id, "block") < 0 && comp_ntype(c, id) != TY_POLY)) return 0;
   int r = nt_ref(c->nt, id, "receiver");
   if (r < 0) return implicit_self_reader_cid(c, id) < 0;
   if (comp_ntype(c, r) != TY_CLASS) return 0;
@@ -35604,7 +35604,7 @@ static void emit_call_body_ordinary(Compiler *c, int id, Buf *b) {
   if (recv >= 0 && argc == 1 &&
       is_kind_query(name) &&
       nt_kind(nt, argv[0]) == NK_ConstantReadNode) {
-    const char *tcn = nt_str(nt, argv[0], "name");
+    const char *tcn = nt_key_name(nt, argv[0]);
     /* Names CRuby defines that is_builtin_class_name doesn't list (the
        is_a? arms below handle several of them by TY kind). The list errs
        generous: a CRuby constant missing here just keeps the old false
@@ -35714,8 +35714,8 @@ static void emit_call_body_ordinary(Compiler *c, int id, Buf *b) {
      class-method arms, which took a reopened Regexp for a class of the
      program's and refused `Regexp.union` as a class method none defines;
      a class method the program gives Regexp itself still goes there */
-  if (recv >= 0 && nt_kind(nt, recv) == NK_ConstantReadNode && nt_str(nt, recv, "name") &&
-      sp_streq(nt_str(nt, recv, "name"), "Regexp")) {
+  if (recv >= 0 && nt_kind(nt, recv) == NK_ConstantReadNode && nt_key_name(nt, recv) &&
+      sp_streq(nt_key_name(nt, recv), "Regexp")) {
     int rci = comp_core_class(c, CORE_REGEXP);
     if ((rci < 0 || call_target(c, id, rci, name, CT_CMETHOD, NULL) < 0) &&
         emit_call_regexp_class_arms(c, id, b, nt, name, recv, argc, argv)) return;

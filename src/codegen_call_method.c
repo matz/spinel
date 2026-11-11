@@ -484,7 +484,7 @@ static void emit_method_owner_class(Compiler *c, int mn, int mi, int unbound, Bu
 static const char *method_builtin_ident(Compiler *c, int mn, int mi, int unbound, char *buf, size_t n) {
   const char *bn, *sym = mi >= 0 ? bam_builtin_sym(c, mi, NULL) : NULL;
   if (!sym || method_owner_ci(c, mn, mi, unbound, &(int){0}, &bn) >= 0 || !bn) return NULL;
-  snprintf(buf, n, "%s#%s", bn, sym);
+  snprintf(buf, n, "%s#%s", bn, builtin_method_canonical(bn, sym));
   return buf;
 }
 
@@ -2618,8 +2618,7 @@ int emit_call_poly_callable_arms(Compiler *c, int id, Buf *b, const NodeTable *n
       /* #name also names a Class and an Encoding, #receiver an exception's:
          take this arm only where the result slot is the boxed one those other
          readings do not use */
-      repr_of(c, id).kind == RK_BOXED &&
-      (!sp_streq(name, "name") || !sp_feature_required("ostruct"))) {
+      repr_of(c, id).kind == RK_BOXED) {
     /* A user READER owns the name just as a user method does: `attr_accessor
        :name` on a class this receiver could be makes the builtin arm the wrong
        answer, and the general cls_id dispatch does emit a reader arm. Counting

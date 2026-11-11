@@ -16459,6 +16459,45 @@ void emit_super(Compiler *c, int id, Buf *b) {
       }
       return;
     }
+    /* Module#include? at the end of the chain: the receiving class's, as a
+       dynamic receiver's default answers it (builtin_ops' TY_CLASS row) --
+       an override's `mod == R ? false : super` raised there */
+    if (cmi < 0 && sp_streq(uname, "include?") && s->class_id >= 0) {
+      int sargs = nt_kind(c->nt, id) == NK_SuperNode ? nt_ref(c->nt, id, "arguments") : -1;
+      int san = 0;
+      const int *sav = sargs >= 0 ? nt_arr(c->nt, sargs, "arguments", &san) : NULL;
+      Buf ab; memset(&ab, 0, sizeof ab);
+      int ok = 0;
+      if (sargs >= 0 && san == 1 && nt_kind(c->nt, sav[0]) != NK_SplatNode) {
+        if (comp_ntype(c, sav[0]) == TY_CLASS) emit_expr(c, sav[0], &ab);
+        else { buf_puts(&ab, "sp_unbox_class("); emit_boxed(c, sav[0], &ab); buf_puts(&ab, ")"); }
+        ok = 1;
+      }
+      else if (sargs < 0 && nt_kind(c->nt, id) != NK_SuperNode && s->nparams == 1 && s->pnames && s->pnames[0]) {
+        LocalVar *lv = scope_local(s, s->pnames[0]);
+        Buf lr; memset(&lr, 0, sizeof lr);
+        emit_local_ref(c, id, s->pnames[0], &lr);
+        if (lv && lv->type == TY_CLASS) buf_puts(&ab, lr.p ? lr.p : "");
+        else buf_printf(&ab, "sp_unbox_class(%s)", lr.p ? lr.p : "sp_box_nil()");
+        free(lr.p);
+        ok = 1;
+      }
+      if (ok) {
+        int tc = ++g_tmp, tm = ++g_tmp;
+        int si = (int)(s - c->scopes);
+        Repr sr = repr_of(c, id);
+        buf_printf(b, "%s({ sp_Class _t%d = ", sr.kind == RK_BOXED ? "sp_box_bool(" : "", tc);
+        if (cmethod_takes_self_cls(c, si)) buf_puts(b, cmethod_cls_token(c, s));
+        else buf_printf(b, "((sp_Class){%d, NULL})", s->class_id);
+        buf_printf(b, "; sp_Class _t%d = %s; if (!sp_class_is_module_val(_t%d)) "
+                      "sp_raise_cls(\"TypeError\", \"wrong argument type Class (expected Module)\"); "
+                      "_t%d.cls_id != _t%d.cls_id && sp_class_le(_t%d, _t%d); })%s",
+                   tm, ab.p ? ab.p : "", tm, tc, tm, tc, tm, sr.kind == RK_BOXED ? ")" : "");
+        free(ab.p);
+        return;
+      }
+      free(ab.p);
+    }
     /* `super` in a class-level ` override is Kernel#` too */
     if (cmi < 0 && sp_streq(uname, "`") && emit_super_backtick(c, id, s, b)) return;
     if (cmi < 0) {

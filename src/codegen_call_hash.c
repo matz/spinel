@@ -1087,12 +1087,23 @@ int emit_op_hash_compact(Compiler *c, const BopCtx *x, Buf *b) {
 }
 
 /* an OpenStruct's methods (the TY_OPENSTRUCT arm): [] / []=, to_h, respond_to?, to_s / inspect,
-   freeze / frozen?, dup / clone, instance_of? */
+   freeze / frozen?, dup / clone, instance_of?, nil?, and a member read, on a typed OpenStruct or
+   on a boxed value one may be */
 int emit_call_openstruct_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc, const int *argv) {
+  /* A boxed value that may be an OpenStruct, read by a name the OpenStruct
+     answers with its member (ostruct_member_read): the poly dispatch reads
+     the member ahead of its other arms, where the builtin emitters after this
+     one answer the name as their own classes do for every value (a boxed
+     File#path, KeyError#key or Thread#value). */
+  if (poly_ostruct_member_call(c, id) && emit_poly_method_dispatch(c, id, b)) {
+    nd_stamp(id, ND_SWITCH);
+    return 1;
+  }
   /* OpenStruct: a dynamic member bag (#3135). `o.k` / `o[:k]` read a boxed
      value (nil when absent), `o.k = v` / `o[:k] = v` write, plus a small
-     fixed method surface. Any other bare name is a member access; a handful
-     of Object/Kernel names fall through to their generic handlers. */
+     fixed method surface. Any other bare name is a member access; the names
+     it answers with its own, Object's or Kernel's method
+     (ostruct_keeps_method) fall through to their generic handlers. */
   if (recv >= 0 && comp_ntype(c, recv) == TY_OPENSTRUCT) {
     if (sp_streq(name, "to_h") && argc == 0) {
       buf_puts(b, "sp_OpenStruct_to_h("); emit_expr(c, recv, b); buf_puts(b, ")");
@@ -1177,22 +1188,17 @@ int emit_call_openstruct_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
       buf_puts(b, "sp_gc_is_frozen("); emit_expr(c, recv, b); buf_puts(b, ")");
       return 1;
     }
-    /* a bare member read `o.k`, unless it is an Object/Kernel method that must
-       keep its normal behaviour */
-    if (argc == 0) {
-      static const char *const OS_METHODS[] = {
-        "class", "nil?", "frozen?", "freeze", "dup", "clone", "hash",
-        "object_id", "itself", "tap", "then", "yield_self", "inspect",
-        "to_s", "to_h", "members", "each_pair", "send", "__send__",
-        "instance_variables", "methods", "is_a?", "kind_of?", NULL };
-      int reserved = 0;
-      for (int mi = 0; OS_METHODS[mi]; mi++)
-        if (sp_streq(name, OS_METHODS[mi])) { reserved = 1; break; }
-      if (!reserved) {
-        buf_puts(b, "sp_OpenStruct_get("); emit_expr(c, recv, b);
-        buf_printf(b, ", sp_sym_intern(\"%s\"))", name);
-        return 1;
-      }
+    /* a typed OpenStruct slot holds NULL for nil */
+    if (sp_streq(name, "nil?") && argc == 0) {
+      buf_puts(b, "(("); emit_expr(c, recv, b); buf_puts(b, ") == NULL)");
+      return 1;
+    }
+    /* a bare member read `o.k`, unless the OpenStruct answers the name with
+       a method of its own (ostruct_keeps_method) */
+    if (argc == 0 && !ostruct_keeps_method(name)) {
+      buf_puts(b, "sp_OpenStruct_get("); emit_expr(c, recv, b);
+      buf_printf(b, ", sp_sym_intern(\"%s\"))", name);
+      return 1;
     }
   }
   return 0;

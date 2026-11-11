@@ -2680,21 +2680,6 @@ static int an_subtree_calls_enum_next(Compiler *c, int root) {
   return 0;
 }
 
-/* Zero-argument builtin methods the poly dispatch already serves with a real
-   arm. `require "ostruct"` turns any other bare name on a poly receiver into
-   a possible OpenStruct member read (#3197); these must NOT be swallowed by
-   that catch-all, or the member lookup replaces the builtin and returns nil
-   (#3341: `switches.uniq` became an OpenStruct member fetch). */
-int poly_builtin_zero_arg_name(const char *m) {
-  static const char *const B[] = {
-    "to_s", "inspect", "length", "size", "count",
-    "uniq", "sort", "reverse", "flatten", "compact", "to_a", "to_h", "to_i",
-    "to_f", "to_sym", "keys", "values", "first", "last", "min", "max", "sum",
-    "pop", "shift", "clear", "dup", "clone", "freeze", "chars", "bytes",
-    "strip", "chomp", "chop", "upcase", "downcase", "capitalize", "swapcase",
-    "succ", "next", "abs", "round", "floor", "ceil", "arity", "call", NULL };
-  return str_in(m, B);
-}
 /* A builtin's name an OpenStruct with a member of the name reads as that
    member, where one can reach a boxed receiver (cls_fact_may_ostruct): the
    containers' arms would answer it for the OpenStruct (size 0, first nil,
@@ -2707,6 +2692,18 @@ int ostruct_member_name(const char *n) {
     "reverse", "compact", "to_sym", "strip", "chomp", "chop", "upcase", "downcase",
     "capitalize", "swapcase", "succ", "next", "abs", "round", "floor", "ceil", NULL };
   return n && str_in(n, M);
+}
+/* The names an OpenStruct answers with its own method, Object's or Kernel's,
+   rather than with a member of the name: the typed receiver's arms
+   (emit_call_openstruct_arms), its type here, and a boxed receiver's member
+   reads (ostruct_member_read) all ask this one list. */
+int ostruct_keeps_method(const char *n) {
+  static const char *const K[] = {
+    "class", "nil?", "frozen?", "freeze", "dup", "clone", "hash", "object_id",
+    "itself", "tap", "then", "yield_self", "inspect", "to_s", "to_h", "each_pair",
+    "send", "__send__", "instance_variables", "methods", "is_a?", "kind_of?",
+    "display", NULL };
+  return n && str_in(n, K);
 }
 /* A user class a poly value can be: one whose construction the census
    (compute_instantiated) found in reachable code, or a reopened builtin
@@ -3643,6 +3640,21 @@ static int an_any_class_cmethod(Compiler *c, const char *name) {
   return 0;
 }
 
+/* A container read the poly dispatch may have to serve from a builtin Array
+   or Hash, beside the answers of a user class owning the name or an
+   OpenStruct's member: record what the builtin surface alone would answer, so
+   codegen can shape that arm (its emitters read the node's own type, and the
+   node holds the union). Computed once per node. The String surface needs
+   the same record, for the same reason: a String reaching the dispatch is
+   served by re-entering the emission, whose answer is a raw `const char *`
+   for half these names and a boxed value for the other half (#4816). */
+static void an_record_poly_builtin(Compiler *c, int id, const char *name) {
+  if (an_builtin_only || an_pure_reads || !c->poly_builtin_ty || id >= c->node_cap ||
+      c->poly_builtin_ty[id] != TY_UNKNOWN) return;
+  if (!poly_container_read_p(name) && !poly_string_read_p(name)) return;
+  comp_set_poly_builtin_ty(c, id, an_builtin_answer(c, id));
+}
+
 /* A boxed receiver or a boxed first operand (infer_call_inner's rules, in their order) */
 static int infer_poly_operand_call(Compiler *c, int id, const NodeTable *nt, const char *name, int recv, int argc, const int *argv, TyKind rt, TyKind a0, TyKind *out) {
   /* poly receiver / poly operand: result type of operations on sp_RbVal */
@@ -3730,31 +3742,10 @@ static int infer_poly_operand_call(Compiler *c, int id, const NodeTable *nt, con
       { *out = op ? bop_result(op, rt) : TY_BOOL; return 1; }
     }
     if (rt == TY_POLY) {
-      /* A container read the poly dispatch may have to serve from a builtin
-         Array or Hash: record what the builtin surface alone would answer, so
-         codegen can shape that arm (its emitters read the node's own type, and
-         the node here holds the union). Computed once per node. */
-      /* The String surface needs the same record, for the same reason: a
-         String reaching the dispatch because a user class owns the name is
-         served by re-entering the emission, whose answer is a raw `const
-         char *` for half these names and a boxed value for the other half
-         (#4816). */
-      /* An OpenStruct that can reach the receiver reads the name as its
-         member (ostruct_member_name): the dispatch reads the member ahead of
-         its builtin arms, so the call holds either, and those arms take
-         their shape from the builtin answer recorded here, as for a name a
-         class owns. */
-      int os_member = recv >= 0 && !an_builtin_only && argc == 0 && nt_ref(nt, id, "block") < 0 &&
-                      ostruct_member_name(name) && !sp_streq(name, "count") && cls_fact_may_ostruct(c, recv);
-      if (recv >= 0 && !an_builtin_only && !an_pure_reads &&
-          (poly_container_read_p(name) || poly_string_read_p(name)) &&
-          nt_ref(nt, id, "block") < 0 && c->poly_builtin_ty &&
-          id < c->node_cap && c->poly_builtin_ty[id] == TY_UNKNOWN &&
-          (an_user_defines_or_reads(c, name) || os_member)) {
-        TyKind bt = an_builtin_answer(c, id);
-        comp_set_poly_builtin_ty(c, id, bt);
-      }
-      if (os_member) { *out = TY_POLY; return 1; }
+      /* a user class owning the name answers beside the builtin, whose
+         answer the dispatch's builtin arm takes its shape from */
+      if (recv >= 0 && nt_ref(nt, id, "block") < 0 && an_user_defines_or_reads(c, name))
+        an_record_poly_builtin(c, id, name);
       if (is_text_conversion(name)) { *out = an_poly_concrete(c, id, name, TY_STRING); return 1; }
       if ((is_substitution(name)) && argc == 2) { *out = an_poly_concrete(c, id, name, TY_STRING); return 1; }
       /* a numeric argument makes it Thread#join(limit), whose answer is the
@@ -4555,8 +4546,9 @@ static int infer_poly_operand_call(Compiler *c, int id, const NodeTable *nt, con
       if (sp_streq(name, "readlines")) { *out = an_poly_concrete(c, id, name, TY_STR_ARRAY); return 1; }
       /* a stat's mode and numeric fields, as the TY_IO arms type them, where
          the poly-IO arm emits them: not where a class method may own the
-         name or an OpenStruct may carry it */
-      if (argc == 0 && !sp_feature_required("ostruct") && boxed_stat_name(name) && !an_any_class_cmethod(c, name))
+         name (an OpenStruct's member is typed ahead of here,
+         ostruct_member_read) */
+      if (argc == 0 && boxed_stat_name(name) && !an_any_class_cmethod(c, name))
         { *out = an_poly_concrete(c, id, name, TY_INT); return 1; }
       /* boxed: an Enumerator answers itself, a stream its 0 */
       if (sp_streq(name, "rewind")) { *out = TY_POLY; return 1; }
@@ -8045,8 +8037,10 @@ static int infer_runtime_value_call(Compiler *c, int id, const NodeTable *nt, co
     if (sp_streq(name, "dig")) { *out = TY_POLY; return 1; }
     if (sp_streq(name, "each_pair") || sp_streq(name, "freeze") ||
         sp_streq(name, "itself")) { *out = TY_OPENSTRUCT; return 1; }
-    /* any other arg-less name (or a `name=` writer) is a dynamic member */
-    { *out = TY_POLY; return 1; }
+    /* any other arg-less name (or a `name=` writer) is a dynamic member; a
+       name the OpenStruct answers with its own method (ostruct_keeps_method)
+       is typed as that method answers, as its arm emits it */
+    if (!(argc == 0 && ostruct_keeps_method(name))) { *out = TY_POLY; return 1; }
   }
   /* TY_ENUMERATOR instance methods */
   if (recv >= 0 && rt == TY_ENUMERATOR) {
@@ -9258,6 +9252,9 @@ static int infer_kernel_row(Compiler *c, int id, const char *name, int argc, con
   *out = bop_result_args(kop, BOP_KERNEL, argc, an_bop_arg_type, &a, 0);
   return *out != TY_UNKNOWN;
 }
+/* The type call node id answers, from its receiver, name and arguments:
+   the rules below, in their order, the first that knows the call deciding
+   it. */
 static TyKind infer_call_inner(Compiler *c, int id) {
   TyKind prelude = infer_call_prelude(c, id);
   if (prelude != TY_UNKNOWN) return prelude;
@@ -9440,6 +9437,18 @@ static TyKind infer_call_inner(Compiler *c, int id) {
      (`hash` as an Integer), which the top-level def need not give. */
   TyKind send_ret;
   if (infer_send_blind(c, id, recv, name, &send_ret)) return send_ret;
+
+  /* A bare reader an OpenStruct can answer with its member
+     (ostruct_member_read): the member, which can be any value, joins what
+     the receiver's other values answer, and the poly dispatch reads it ahead
+     of their arms (#3197). Asked ahead of the rules below, which type the
+     name as a builtin or a class answers it. Not in the builtin answer alone
+     (an_builtin_answer), which those rules give: it shapes the dispatch's
+     builtin arms, whose value is boxed into the call's slot. */
+  if (!bonly && !an_builtin_only && recv >= 0 && ostruct_member_read(c, id, infer_type(c, recv))) {
+    an_record_poly_builtin(c, id, name);
+    return TY_POLY;
+  }
 
   /* The universal predicates and conversions the poly runtime answers as a RAW
      C scalar. The emitters have always known this; the TYPE did not say it, so

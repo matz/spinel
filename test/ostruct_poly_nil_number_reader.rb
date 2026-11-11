@@ -26,3 +26,11 @@ end
 p years, weights
 member = OpenStruct.new(year: 1984, weight: 0.5)
 p member.year, member.weight
+
+# An OpenStruct through the same call keeps a member of another class,
+# which was converted into the readers' Integer slot (1.25 read as 1).
+mixed = {}
+[Day.new(2026, 1.5), OpenStruct.new(year: 1.25, weight: "w"), Week.new(nil, nil)].each_with_index do |d, i|
+  mixed[i] = [d.year, d.weight]
+end
+p mixed

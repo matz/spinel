@@ -2266,10 +2266,16 @@ int array_mutator_name(const char *nm);
    write-suppression walk and the pipeline walker must agree on it: #3318,
    #3323 and #3324 were each one list updated and another missed. */
 int lazy_stage_name(const char *nm);
-/* Zero-argument builtin methods the poly dispatch serves with a real arm --
-   the `require "ostruct"` member-read catch-all must not swallow them. */
-int poly_builtin_zero_arg_name(const char *m);
+/* a builtin reader's name (size, first, max, ...) a boxed OpenStruct reads
+   as its member beside the containers' arms (analyze_infer.c) */
 int ostruct_member_name(const char *n);
+/* a name an OpenStruct answers with its own (or Object's, Kernel's) method,
+   not with a member (analyze_infer.c) */
+int ostruct_keeps_method(const char *n);
+/* boxed call `id`, on a receiver of type `rt`, may read an OpenStruct member:
+   the analysis types it boxed and codegen serves it through the poly dispatch,
+   which reads the member ahead of the other arms (analyze_infer_recv.c) */
+int ostruct_member_read(Compiler *c, int id, TyKind rt);
 int chain_is_lazy_valued(Compiler *c, int node);      /* CallNode chain evaluating to a Lazy */
 int poly_str_iter_enum(Compiler *c, int id);        /* boxed String iterator answers an Enumerator (analyze_infer_recv.c) */
 int poly_io_codepoint_enum(Compiler *c, int id);   /* boxed each_codepoint takes the IO arm (analyze_infer_recv.c) */

@@ -1512,6 +1512,34 @@ int lines_sep_ty(Compiler *c, int a) {
   return t == TY_STRING || t == TY_POLY || t == TY_NIL;
 }
 
+/* See compiler.h. A bare reader on a boxed value an OpenStruct can reach
+   (cls_fact_may_ostruct) reads the member when the value is one, as CRuby
+   does for every name the OpenStruct does not answer with a method of its
+   own, Object's or Kernel's (ostruct_keeps_method): a predicate, a
+   builtin's name (count, uniq, path) or one a class of the program defines
+   (#3264), whose methods answer the other values the receiver can hold.
+   The member is the name as written (cplan_call_name). Bang names and
+   writers are left to their arms, and so is a call in the copy of a
+   builtins/ Enumerable definition (enum_in_copy), whose `each` walks the
+   receiver the program's call was sent to the copy for. */
+int ostruct_member_read(Compiler *c, int id, TyKind rt) {
+  const NodeTable *nt = c->nt;
+  if (rt != TY_POLY || nt_kind(nt, id) != NK_CallNode || !sp_feature_required("ostruct")) return 0;
+  if (nt_int(nt, id, "enum_in_copy", -1) >= 0) return 0;
+  int recv = nt_ref(nt, id, "receiver");
+  const char *name = cplan_call_name(nt, id);   /* the member is the name as written */
+  int argc = 0;
+  call_args(nt, id, &argc);
+  if (recv < 0 || argc != 0 || nt_ref(nt, id, "block") >= 0 || !name || !name[0]) return 0;
+  if (ostruct_keeps_method(name)) return 0;
+  char last = name[strlen(name) - 1];
+  if (last == '!' || last == '=') return 0;
+  return cls_fact_may_ostruct(c, recv);
+}
+
+/* The rules for a call on a boxed receiver (rt), which infer_call_inner
+   asks in their order: the first that knows the call puts its type in
+   *out and answers 1; 0 leaves the call to the rules after them. */
 int infer_poly_call(Compiler *c, int id, TyKind rt, TyKind *out) {
   { const char *nm0 = nt_str(c->nt, id, "name");
     if (nm0 && (sp_streq(nm0, "__to_h_subject") || sp_streq(nm0, "__to_h_key_subject"))) { *out = TY_POLY; return 1; } }
@@ -1564,9 +1592,10 @@ int infer_poly_call(Compiler *c, int id, TyKind rt, TyKind *out) {
   }
   /* #name is a class name (a String) for a boxed Class and the method name (a
      Symbol) for a boxed Method, so where the program builds Method objects at
-     all the static result is poly (#3692) */
+     all the static result is poly (#3692). (An OpenStruct's member is typed
+     ahead of here, ostruct_member_read.) */
   if (recv >= 0 && rt == TY_POLY && argc == 0 && sp_streq(name, "name") &&
-      !sp_feature_required("ostruct") && !an_user_defines_or_reads(c, name)) {
+      !an_user_defines_or_reads(c, name)) {
     if (an_program_builds_methods(c) || an_program_names_name_error(c)) { *out = TY_POLY; return 1; }
     { *out = an_class_concrete(c, id, name, TY_STRING); return 1; }
   }
@@ -2082,20 +2111,13 @@ int infer_poly_call(Compiler *c, int id, TyKind rt, TyKind *out) {
   if (recv >= 0 && rt == TY_POLY && argc >= 1 && nt_ref(nt, id, "block") < 0 &&
       !an_user_recv_defines_method(c, name) && sp_streq(name, "merge"))
     { *out = TY_POLY_POLY_HASH; return 1; }
-  /* When ostruct is in the program, a bare reader on a poly value may be an
-     OpenStruct member (any name, boxed value). The runtime dispatch checks the
-     tag; type it poly so the member is not truncated to a class-name string
-     (#3197). Length/size/predicate readers keep their own arms. */
-  if (recv >= 0 && rt == TY_POLY && argc == 0 && nt_ref(nt, id, "block") < 0 &&
-      !an_user_recv_defines_method(c, name) && sp_feature_required("ostruct") &&
-      name[0] && name[strlen(name) - 1] != '?' && name[strlen(name) - 1] != '!' &&
-      !poly_builtin_zero_arg_name(name))
-    { *out = TY_POLY; return 1; }
-  /* ... and so are the builtins' names an OpenStruct reads as a member
-     (ostruct_member_name: size, first, max, ...), where one can reach the
-     receiver (cls_fact_may_ostruct): the member, or nil, joins what the
-     classes' methods and the containers answer. Elsewhere they keep the
-     type the others give. */
+  /* The builtins' names an OpenStruct reads as a member (ostruct_member_name:
+     size, first, max, ...) answer boxed in the builtin answer too
+     (an_builtin_answer), where an OpenStruct can reach the receiver
+     (cls_fact_may_ostruct): the dispatch's builtin arms for them answer the
+     containers' value boxed, beside the member (the call itself is typed by
+     ostruct_member_read, in infer_call_inner). Elsewhere they keep the type
+     the others give. */
   if (recv >= 0 && rt == TY_POLY && argc == 0 && nt_ref(nt, id, "block") < 0 &&
       ostruct_member_name(name) && cls_fact_may_ostruct(c, recv))
     { *out = TY_POLY; return 1; }

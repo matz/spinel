@@ -17962,6 +17962,12 @@ static int enum_recv_class_owns(Compiler *c, int id, TyKind rt, const char *nm) 
   return enum_class_owns(cls, nm, nt_ref(nt, id, "block") >= 0);
 }
 
+/* Sends a call of an Enumerable method that builtins/enumerable.rb defines
+   to that definition's copy for the call (enum_copy), which walks the
+   receiver's each: an Array, a Hash, a Range, an Enumerator, a program
+   class with Enumerable behind it, or a boxed value, whose call first
+   tests for the classes that answer the name themselves (and for an
+   OpenStruct, which reads its member). Answers whether it rewrote one. */
 int desugar_builtin_enum_calls(Compiler *c) {
   if (sp_builtin_enum_names_n == 0) return 0;
   NodeTable *nt = (NodeTable *)c->nt;
@@ -18082,9 +18088,10 @@ int desugar_builtin_enum_calls(Compiler *c) {
        answers the Range) */
     if (range_own && nt_ref(nt, id, "block") < 0 &&
         !(an_enum_prog_method(c, name) && !builtin_method_known("Range", name))) continue;
-    /* the Range arm of a boxed receiver's minmax (range_arm below): the
-       poly dispatch answers it, off the endpoints */
-    if (nt_int(nt, id, "enum_range_own", 0)) continue;
+    /* the Range arm of a boxed receiver's minmax (range_arm below), and the
+       OpenStruct arm (os_arm): the poly dispatch answers them, off the
+       endpoints or with the member */
+    if (nt_int(nt, id, "enum_range_own", 0) || nt_int(nt, id, "enum_os_own", 0)) continue;
     /* minmax's blockless form on an Array or a Hash keeps its dedicated
        C routine (sp_XArray_min/_max, called once each, no per-element
        nullable-int/GC-root bookkeeping): measured ~80% slower as a
@@ -18348,8 +18355,17 @@ int desugar_builtin_enum_calls(Compiler *c) {
     int scal_arm = rt == TY_POLY && !safe_nav && !range_arm && !wo_arm && nt_int(nt, copy, "enum_own_def", 0);
     if (wo_arm) ndef = 0;   /* the arm as written answers every other class */
     if (wo_arm || range_arm) own_arm = 0;
+    /* A boxed receiver an OpenStruct can reach reads the member of the name
+       when the value is one (ostruct_member_read), as CRuby's OpenStruct,
+       which has no Enumerable, answers it. The Range arm's shape:
+         __r.is_a?(OpenStruct) ? __r.m : generic
+       its OpenStruct arm left to the poly dispatch, which reads the member.
+       Beside a class's own method or a reopening's, the OpenStruct takes the
+       generic arm, as before. */
+    int os_arm = rt == TY_POLY && !safe_nav && ndef == 0 && !wo_arm && !scal_arm && !own_arm &&
+                 ostruct_member_read(c, id, rt);
     int own_stmts = -1;   /* the statements the generic call sits in, for own_arm */
-    if (ndef > 0 || safe_nav || range_arm || wo_arm || scal_arm || own_arm) {
+    if (ndef > 0 || safe_nav || range_arm || wo_arm || scal_arm || own_arm || os_arm) {
       char rn[64]; snprintf(rn, sizeof rn, "__enumrecv_%s", comp_node_tag(c, id));
       int w = nt_new_node(nt, "LocalVariableWriteNode");
       int own = nt_new_node(nt, "CallNode");
@@ -18381,7 +18397,15 @@ int desugar_builtin_enum_calls(Compiler *c) {
       int own_only = own_arm && ndef == 0 && !safe_nav;   /* the own arm's test is the only one */
       if (own_only) pred = enum_owner_chain(c, rn, qn, blk >= 0);
       else if (!safe_nav) pred = range_arm ? enum_is_a_named(c, rn, "Range")
-                          : wo_arm ? enum_is_a_named(c, rn, "Enumerator") : enum_is_a_chain(c, rn, defcls, exact, ndef);
+                          : wo_arm ? enum_is_a_named(c, rn, "Enumerator")
+                          : os_arm ? enum_is_a_named(c, rn, "OpenStruct") : enum_is_a_chain(c, rn, defcls, exact, ndef);
+      /* an OpenStruct joins the Range arm, which the poly dispatch answers */
+      if (os_arm && range_arm && pred >= 0) {
+        int osn = enum_is_a_named(c, rn, "OpenStruct");
+        int orn = osn >= 0 ? nt_new_node(nt, "OrNode") : -1;
+        if (orn >= 0) { nt_node_set_ref(nt, orn, "left", pred); nt_node_set_ref(nt, orn, "right", osn); }
+        pred = orn;
+      }
       if (scal_arm) {
         static const char *const enums[] = { "Array", "Hash", "Range", "Enumerator", "Struct", "IO", "Dir" };
         const int nenums = (int)(sizeof enums / sizeof enums[0]);
@@ -18467,9 +18491,9 @@ int desugar_builtin_enum_calls(Compiler *c) {
       else {
         nt_node_set_str(nt, own, "name", qn);
         nt_node_set_ref(nt, own, "receiver", ownr);
-        /* the class's method: a user arm; a Range's, the poly dispatch's;
-           with_object as written, for what is no Enumerator */
-        nt_node_set_int(nt, own, range_arm ? "enum_range_own" : wo_arm ? "enum_wo_own" : "enum_own", 1);
+        /* the class's method: a user arm; a Range's or an OpenStruct's, the
+           poly dispatch's; with_object as written, for what is no Enumerator */
+        nt_node_set_int(nt, own, range_arm ? "enum_range_own" : wo_arm ? "enum_wo_own" : os_arm ? "enum_os_own" : "enum_own", 1);
         if (args >= 0) nt_node_set_ref(nt, own, "arguments", args);
         if (blk >= 0) nt_node_set_ref(nt, own, "block", blk);
         nt_node_set_arr(nt, wo_arm ? es : ts, "body", &own, 1);

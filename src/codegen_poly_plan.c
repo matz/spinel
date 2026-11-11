@@ -1697,6 +1697,10 @@ static void sp0_store(const Compiler *c, const char *name, int blk, int ncand, i
   unsigned b = (sp_strhash(name) * 2u + (unsigned)blk) % SP0_BUCKETS;
   e->blk = blk; e->ncand = ncand; e->ncall_arm = ncall_arm; e->next = sp0_tab[b]; sp0_tab[b] = e;
 }
+/* The pre-arms a zero-argument call on a boxed receiver takes ahead of its
+   cls_id switch (PolySpecials0: a length, a class value's name or
+   reflection, a predicate, an OpenStruct's member, a stream's rewind, a
+   container's to_a or to_h), and the user candidates the switch counts. */
 void poly_specials0(Compiler *c, int id, const char *name, PolySpecials0 *s) {
   const NodeTable *nt = c->nt;
   int argc = 0;
@@ -1722,26 +1726,14 @@ void poly_specials0(Compiler *c, int id, const char *name, PolySpecials0 *s) {
   int is_cls_members = sp_streq(name, "members") && g_gen_cls_answers &&
                        nt_ref(nt, id, "block") < 0;
   int is_pred = nt_ref(nt, id, "block") < 0 && poly_pred_kind(name, 0);
-  /* When ostruct is in the program a bare `obj.reader` on a poly value may be
-     an OpenStruct member access (any name) -- read it at runtime (#3197).
-     The check keys on cls_id == SP_BUILTIN_OPENSTRUCT, so it cannot alias a
-     user-class arm and coexists with them: a poly value that unions an
-     OpenStruct with user objects (OpenStruct|nil return) still reads the
-     member when a user class happens to define the same name (#3264). */
-  /* An OpenStruct answers ANY reader with a member; but a name the poly
-     dispatch already serves with a real builtin arm must keep that arm, or
-     the member fetch replaces it and returns nil (#3341). */
-  int is_ostruct = argc == 0 && nt_ref(nt, id, "block") < 0 &&
-                   !is_lengthlike && !is_empty && !is_pred &&
-                   !poly_builtin_zero_arg_name(name) &&
-                   sp_feature_required("ostruct");
-  /* the builtins' names an OpenStruct reads as a member
-     (ostruct_member_name: size, first, max, ...) read it too where one can
-     reach the receiver (cls_fact_may_ostruct): the containers' arms read 0,
-     nil or NoMethodError for it, and a class's own method took the rest */
-  if (argc == 0 && nt_ref(nt, id, "block") < 0 && ostruct_member_name(name) &&
-      cls_fact_may_ostruct(c, nt_ref(nt, id, "receiver")))
-    is_ostruct = 1;
+  /* A bare `obj.reader` on a poly value an OpenStruct can reach reads the
+     member when the value is one (ostruct_member_read, which typed the call
+     to hold it, #3197). The check keys on cls_id == SP_BUILTIN_OPENSTRUCT,
+     so it cannot alias a user-class arm and coexists with them: a poly value
+     that unions an OpenStruct with user objects still reads the member when
+     a user class happens to define the same name (#3264), and the builtin
+     arms after it keep the other values' answers (#3341). */
+  int is_ostruct = ostruct_member_read(c, id, comp_recv_type(c, nt_ref(nt, id, "receiver")));
   /* `rewind` on a poly stream (a param unioning StringIO and IO, #3257):
      both are builtins/native classes with no user arm, so without this
      pre-arm the call was silently dropped. */
@@ -2151,16 +2143,20 @@ void emit_poly_prearms0(Compiler *c, int id, const char *name, const PolySpecial
      the cls_id switch since its id is a builtin, not a user class (#3197). */
   if (is_ostruct) {
     if (g_plan_check) pa_observe(PA_BUILTIN, PA_KEY_BUILTIN + PB_OSTRUCT, -1, TY_UNKNOWN, PC_SAME);
-    char osget[192];
-    snprintf(osget, sizeof osget,
-             "sp_OpenStruct_get((sp_OpenStruct *)_t%d.v.p, sp_sym_intern(\"%s\"))", tv, name);
+    /* the member the program named: a call renamed to a builtin's own name
+       (grapheme_clusters to chars, an alias to its reader) keeps the name it
+       was written with (cplan_call_name), whatever its length */
+    Buf osget; memset(&osget, 0, sizeof osget);
+    buf_printf(&osget, "sp_OpenStruct_get((sp_OpenStruct *)_t%d.v.p, sp_sym_intern(\"%s\"))",
+               tv, cplan_call_name(nt, id));
     buf_printf(b, "if (_t%d.tag == SP_TAG_OBJ && _t%d.cls_id == SP_BUILTIN_OPENSTRUCT) _t%d = ",
                tv, tv, tr);
-    if (ret == TY_POLY) buf_puts(b, osget);
+    if (ret == TY_POLY) buf_puts(b, osget.p);
     /* the result slot is user-typed (#3264): an Integer or Float one that
        holds nil (an oint) takes the member with its nil, as the other arms'
        answers are taken */
-    else plan_put_boxed(c, plan_slot_oint(c, id, ret), ret, osget, b);
+    else plan_put_boxed(c, plan_slot_oint(c, id, ret), ret, osget.p, b);
+    free(osget.p);
     buf_puts(b, "; else ");
   }
   /* to_a on a runtime builtin hash/array: pair-array via the boxed

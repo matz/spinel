@@ -21105,10 +21105,18 @@ static void ext_emit_method_tables(Compiler *c, Buf *b) {
               "  return 0;\n}\n");
 }
 
+/* The #message (want_message) or #to_s override a text dispatcher's arm for
+   exception class i calls, with the class that defines it in *dcls, or -1.
+   Only one reachability kept: compute_reachable keeps an exception class's
+   text methods once one of it can exist (cr_collect_program_end), and with
+   them everything they call. A class no code builds has no arm, as its
+   override has no body. */
 static int exc_text_method(Compiler *c, int i, int want_message, int *dcls) {
   int dmsg = -1, dtos = -1;
   int mi_msg = comp_method_in_chain(c, i, "message", &dmsg);
   int mi_tos = comp_method_in_chain(c, i, "to_s", &dtos);
+  if (mi_msg >= 0 && !c->scopes[mi_msg].reachable) mi_msg = -1;
+  if (mi_tos >= 0 && !c->scopes[mi_tos].reachable) mi_tos = -1;
   if (want_message && mi_msg >= 0) { *dcls = dmsg; return mi_msg; }
   if (mi_tos >= 0) { *dcls = dtos; return mi_tos; }
   return -1;
@@ -22856,7 +22864,8 @@ static void emit_exc_text_dispatch_at(Compiler *c, Buf *b, int mode, int *late) 
         int xn0 = exc_reopen_definers(c, fn, xr0, 8);
         for (int q = 0; q < xn0; q++) {
           int mi = comp_method_in_chain(c, xr0[q], fn, NULL);
-          if ((TyKind)c->scopes[mi].ret == TY_STRING) xr[xn++] = xr0[q];
+          /* (one reachability kept, as exc_text_method's) */
+          if (c->scopes[mi].reachable && (TyKind)c->scopes[mi].ret == TY_STRING) xr[xn++] = xr0[q];
         }
         if (xn == 0) continue;
         buf_puts(b, "  { ");
@@ -23719,20 +23728,6 @@ char *codegen_program(const NodeTable *nt) {
       buf_puts(&b, "static int sp_obj_conv_sw(int cls_id, void *p, int which, sp_RbVal *out) SP_COLD SP_NOINLINE;\n");
   }
   if (c->nclasses > 0) buf_puts(&b, "static const char *sp_obj_cls_name_rt(int cls_id) SP_COLD SP_NOINLINE;\n");
-  /* The #message / #to_s dispatchers below call these bodies unconditionally,
-     so a program that defines an override without ever querying it left the
-     dispatcher calling an undeclared function (#3834). Mark them before the
-     prototypes are written. */
-  if (exc_has_user_msg_override(c) || exc_has_nonstring_msg_override(c)) {
-    for (int i = 0; i < c->nclasses; i++) {
-      if (!class_is_exc_subclass(c, i) && !class_is_exc_reopen(c, i)) continue;
-      static const char *const fns[2] = { "message", "to_s" };
-      for (int k = 0; k < 2; k++) {
-        int mi = comp_method_in_chain(c, i, fns[k], NULL);
-        if (mi >= 0 && (TyKind)c->scopes[mi].ret != TY_UNKNOWN) { c->scopes[mi].reachable = 1; comp_touch_scope(c->scopes[mi].idx); }
-      }
-    }
-  }
 
   /* method prototypes (scope 0 is top-level) */
   /* A proc form is named only by a poly dispatch, which is emitted later, so

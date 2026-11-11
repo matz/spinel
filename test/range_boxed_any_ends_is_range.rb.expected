@@ -1,0 +1,154 @@
+-- the ends, through `when Range`
+["1.5", "2.5", "false"]
+["\"a\"", "\"z\"", "false"]
+["1", "2", "false"]
+["2026-01-01 00:00:00 UTC", "2026-02-01 00:00:00 UTC", "false"]
+["#<Ver 1>", "#<Ver 3>", "true"]
+[]
+[]
+-- an Array element
+0: range / range false / [true, true, true, true, true] / [true, true, false]
+1: range / range true / [true, true, true, true, true] / [true, true, false]
+2: range / range false / [true, true, true, true, true] / [true, true, false]
+3: range / range true / [true, true, true, true, true] / [true, true, false]
+4: range / range false / [true, true, true, true, true] / [true, true, false]
+5: range / range true / [true, true, true, true, true] / [true, true, false]
+6: range / range false / [true, true, true, true, true] / [true, true, false]
+7: range / range false / [true, true, true, true, true] / [true, true, false]
+8: range / range false / [true, true, true, true, true] / [true, true, false]
+9: range / range false / [true, true, true, true, true] / [true, true, false]
+10: range / range false / [true, true, true, true, true] / [true, true, false]
+11: range / range true / [true, true, true, true, true] / [true, true, false]
+12: range / range false / [true, true, true, true, true] / [true, true, false]
+13: range / range true / [true, true, true, true, true] / [true, true, false]
+14: range / range false / [true, true, true, true, true] / [true, true, false]
+15: range / range true / [true, true, true, true, true] / [true, true, false]
+16: range / range false / [true, true, true, true, true] / [true, true, false]
+17: range / range false / [true, true, true, true, true] / [true, true, false]
+18: range / range false / [true, true, true, true, true] / [true, true, false]
+19: range / range true / [true, true, true, true, true] / [true, true, false]
+20: range / range false / [true, true, true, true, true] / [true, true, false]
+21: range / range false / [true, true, true, true, true] / [true, true, false]
+22: range / range false / [true, true, true, true, true] / [true, true, false]
+23: range / range false / [true, true, true, true, true] / [true, true, false]
+24: range / range true / [true, true, true, true, true] / [true, true, false]
+25: range / range false / [true, true, true, true, true] / [true, true, false]
+26: range / range false / [true, true, true, true, true] / [true, true, false]
+27: range / range false / [true, true, true, true, true] / [true, true, false]
+28: range / range false / [true, true, true, true, true] / [true, true, false]
+0: number / number / [false, false, false, false, false]
+1: number / number / [false, false, false, false, false]
+2: other / other / [false, false, false, false, false]
+3: other / other / [false, false, false, false, false]
+4: other / other / [false, false, false, false, false]
+5: other / other / [false, false, false, false, false]
+6: other / other / [false, false, false, false, false]
+7: other / other / [false, false, false, false, false]
+8: other / other / [false, false, false, false, false]
+9: enumerable / other / [false, false, false, false, false]
+10: enumerable / other / [false, false, false, false, false]
+-- a class held in a value
+0: [true, true, true, true] [true, true, false, true] [false, false, false, false]
+1: [true, true, true, true] [true, true, false, true] [false, false, false, false]
+2: [true, true, true, true] [true, true, false, true] [false, false, false, false]
+3: [true, true, true, true] [true, true, false, true] [false, false, false, false]
+4: [true, true, true, true] [true, true, false, true] [false, false, false, false]
+5: [true, true, true, true] [true, true, false, true] [false, false, false, false]
+6: [true, true, true, true] [true, true, false, true] [false, false, false, false]
+7: [true, true, true, true] [true, true, false, true] [false, false, false, false]
+8: [true, true, true, true] [true, true, false, true] [false, false, false, false]
+9: [true, true, true, true] [true, true, false, true] [false, false, false, false]
+10: [true, true, true, true] [true, true, false, true] [false, false, false, false]
+11: [true, true, true, true] [true, true, false, true] [false, false, false, false]
+12: [true, true, true, true] [true, true, false, true] [false, false, false, false]
+13: [true, true, true, true] [true, true, false, true] [false, false, false, false]
+14: [true, true, true, true] [true, true, false, true] [false, false, false, false]
+15: [true, true, true, true] [true, true, false, true] [false, false, false, false]
+16: [true, true, true, true] [true, true, false, true] [false, false, false, false]
+17: [true, true, true, true] [true, true, false, true] [false, false, false, false]
+18: [true, true, true, true] [true, true, false, true] [false, false, false, false]
+19: [true, true, true, true] [true, true, false, true] [false, false, false, false]
+20: [true, true, true, true] [true, true, false, true] [false, false, false, false]
+21: [true, true, true, true] [true, true, false, true] [false, false, false, false]
+22: [true, true, true, true] [true, true, false, true] [false, false, false, false]
+23: [true, true, true, true] [true, true, false, true] [false, false, false, false]
+24: [true, true, true, true] [true, true, false, true] [false, false, false, false]
+25: [true, true, true, true] [true, true, false, true] [false, false, false, false]
+26: [true, true, true, true] [true, true, false, true] [false, false, false, false]
+27: [true, true, true, true] [true, true, false, true] [false, false, false, false]
+28: [true, true, true, true] [true, true, false, true] [false, false, false, false]
+0: [false, false, false, false]
+1: [false, false, false, false]
+2: [false, false, false, false]
+3: [false, false, false, false]
+4: [false, false, false, false]
+5: [false, false, false, false]
+6: [false, false, false, false]
+7: [false, false, false, false]
+8: [false, false, false, false]
+9: [false, false, false, false]
+10: [false, false, false, false]
+29
+0
+29
+29
+-- a Hash value
+int: range range false 3
+float: range range false 3
+str: range range false 3
+time: range range false 3
+date: range range true 3
+ver: range range false 3
+none: number number 0
+3
+3
+0
+-- an instance variable
+["range", "range", "range", "range", "range", "range", "other", "other"]
+-- a Struct member, a parameter with a nil default
+1: range 2.5
+2: range 2026-02-01 00:00:00 UTC
+3: range #<Ver 3>
+4: other
+"nil"
+"range 1.5"
+"range 2026-01-01 00:00:00 UTC"
+"range #<Date: 2026-01-01 ((2461042j,0s,0n),+0s,2299161j)>"
+"nil"
+-- inside a pattern, and as a pattern for the elements
+array 1.5 false
+hash 2026
+alternative
+2
+true
+false
+false
+[2, 2]
+Range
+-- a value of the Range's end type
+[true, true, true]
+[true, true, true]
+[false, false, false]
+[true, true, true]
+[true, true, true]
+[false, false, false]
+[true, true, true]
+[false, false, false]
+[true, true, true]
+[false, false, false]
+[true, true, true]
+[true, true, true]
+1.5 2.5 true [true, true, true]
+1.5 nil false [true, true, true]
+nil 2.5 false [true, true, true]
+2026-01-01 00:00:00 UTC 2026-02-01 00:00:00 UTC true [true, true, true]
+2026-01-01 00:00:00 UTC nil false [true, true, true]
+nil 2026-02-01 00:00:00 UTC false [true, true, true]
+-- a slot that holds only one kind of Range
+true
+true
+true
+true
+true
+range
+range

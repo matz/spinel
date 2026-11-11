@@ -7528,8 +7528,9 @@ static int emit_poly_class_when_value(Compiler *c, int cond_id, const char *tmp,
      name is a program class, matched by the class-table arm below */
   else if (sp_streq(cn, "OpenStruct") && sp_feature_required("ostruct"))
     buf_printf(b, "(%s.tag == SP_TAG_OBJ && %s.cls_id == SP_BUILTIN_OPENSTRUCT)", tmp, tmp);
+  /* a Range of any ends: each kind of end boxes under its own class id */
   else if (sp_streq(cn, "Range"))
-    buf_printf(b, "(%s.tag == SP_TAG_OBJ && (%s.cls_id == SP_BUILTIN_RANGE || %s.cls_id == SP_BUILTIN_STR_RANGE))", tmp, tmp, tmp);
+    buf_printf(b, "(%s.tag == SP_TAG_OBJ && sp_poly_is_range_kind(%s.cls_id))", tmp, tmp);
   else if (sp_streq(cn, "Array"))
     buf_printf(b, "(%s.tag == SP_TAG_OBJ && sp_poly_is_array_kind(%s.cls_id))", tmp, tmp);
   else if (sp_streq(cn, "Hash"))

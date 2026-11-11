@@ -6266,7 +6266,7 @@ int emit_root_reopen_call(Compiler *c, int id, Buf *b, const NodeTable *nt, int 
 int emit_call_reopen_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, TyKind rt) {
   /* dispatch user-defined methods on reopened built-in types -- not for an
      alias that captured the builtin (builtin_only) */
-  if (recv >= 0 && !nt_int(nt, id, "builtin_only", 0)) {
+  if (recv >= 0 && !cplan_builtin_call(c, id)) {
     if (rt == TY_RANDOM) {
       const CallPlan *pl = cplan_user(c, id);
       if (pl->mi >= 0 && pl->via == UC_REOPEN && pl->dispatch == CP_DIRECT &&

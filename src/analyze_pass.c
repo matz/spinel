@@ -12427,7 +12427,7 @@ static int infer_param_types_ex(Compiler *c, int settle, const NodeTypes *before
       int bc = core_of_type(rt);
       int bci = bc >= 0 && (bc == CORE_RANDOM || bc == CORE_STRING || builtin_class_of_type(rt))
                 ? comp_core_class(c, bc) : -1;
-      int bmi = bci >= 0 && !nt_int(nt, id, "builtin_only", 0)
+      int bmi = bci >= 0 && !cplan_builtin_call(c, id)
                 ? call_target(c, id, bci, name, 0, NULL) : -1;
       if (bmi >= 0) { changed |= bind_call_params(c, id, bmi); continue; }
       /* Without one, the call reaches Object's universal fallback. */
@@ -14945,7 +14945,7 @@ static int dir_chdir_control_call(NodeTable *nt, int blk, int body) {
   if (call < 0 || one < 0) return -1;
   nt_node_set_int(nt, one, "value", 1);
   nt_node_set_str(nt, call, "name", "times");
-  nt_node_set_int(nt, call, "builtin_only", 1);
+  nt_mark_builtin_call(nt, call);
   nt_node_set_ref(nt, call, "receiver", one);
   nt_node_set_ref(nt, call, "arguments", -1);
   nt_node_set_ref(nt, call, "block", blk);
@@ -15062,7 +15062,7 @@ int desugar_dir_surface(Compiler *c) {
       if (fr2 >= 0) {
         nt_node_set_str(nt, fr2, "name", "File");
         nt_node_set_ref(nt, id, "receiver", fr2);
-        nt_node_set_int(nt, id, "builtin_only", 1);
+        nt_mark_builtin_call(nt, id);
         comp_grow_node_arrays(c);
         c->nscope[fr2] = c->nscope[id];
         changed = 1;
@@ -15107,7 +15107,7 @@ int desugar_dir_surface(Compiler *c) {
         (sp_streq(nm, "read") || sp_streq(nm, "write") || sp_streq(nm, "binread") ||
          sp_streq(nm, "binwrite") || sp_streq(nm, "readlines") || sp_streq(nm, "foreach"))) {
       nt_node_set_str(nt, recv, "name", "File");
-      nt_node_set_int(nt, id, "builtin_only", 1);
+      nt_mark_builtin_call(nt, id);
       rn = "File";
       changed = 1;
     }
@@ -15180,7 +15180,7 @@ int desugar_dir_surface(Compiler *c) {
       if (rargs >= 0) nt_node_set_arr(nt, rargs, "arguments", hargs + 1, fac - 1);
       nt_node_set_str(nt, fread, "name", fnm);
       nt_node_set_str(nt, each, "name", "each_line");
-      nt_node_set_int(nt, each, "builtin_only", 1);
+      nt_mark_builtin_call(nt, each);
       nt_node_set_ref(nt, each, "receiver", fread);
       nt_node_set_ref(nt, each, "arguments", rargs);
       nt_node_set_ref(nt, each, "block", fblk);
@@ -15196,7 +15196,7 @@ int desugar_dir_surface(Compiler *c) {
       nt_node_set_ref(nt, oblk, "parameters", fbparams);
       nt_node_set_ref(nt, oblk, "body", ebody);
       nt_node_set_str(nt, open, "name", "open");
-      nt_node_set_int(nt, open, "builtin_only", 1);
+      nt_mark_builtin_call(nt, open);
       nt_node_set_ref(nt, open, "receiver", recv);
       nt_node_set_ref(nt, open, "arguments", oargs);
       nt_node_set_ref(nt, open, "block", oblk);
@@ -15224,7 +15224,7 @@ int desugar_dir_surface(Compiler *c) {
       int ic = nt_new_node(nt, "CallNode");
       if (ic < 0) continue;
       nt_node_set_str(nt, ic, "name", "readlines");
-      nt_node_set_int(nt, ic, "builtin_only", 1);
+      nt_mark_builtin_call(nt, ic);
       nt_node_set_ref(nt, ic, "receiver", recv);
       nt_node_set_ref(nt, ic, "arguments", nt_ref(nt, id, "arguments"));
       nt_node_set_ref(nt, ic, "block", -1);
@@ -15267,7 +15267,7 @@ int desugar_dir_surface(Compiler *c) {
     const char *alias = dir_surface_alias(nm, 0);
     if (alias) {
       nt_node_set_str(nt, id, "name", alias);
-      nt_node_set_int(nt, id, "builtin_only", 1); changed = 1; continue;
+      nt_mark_builtin_call(nt, id); changed = 1; continue;
     }
 
     /* bare chdir goes home */
@@ -15278,7 +15278,7 @@ int desugar_dir_surface(Compiler *c) {
       if (hc < 0 || hr < 0 || na < 0) continue;
       nt_node_set_str(nt, hr, "name", "Dir");
       nt_node_set_str(nt, hc, "name", "home");
-      nt_node_set_int(nt, hc, "builtin_only", 1);
+      nt_mark_builtin_call(nt, hc);
       nt_node_set_ref(nt, hc, "receiver", hr);
       nt_node_set_ref(nt, hc, "arguments", -1);
       nt_node_set_ref(nt, hc, "block", -1);
@@ -15310,7 +15310,7 @@ int desugar_dir_surface(Compiler *c) {
       int pr = nt_new_node(nt, "ParenthesesNode");
       if (ic < 0 || ec < 0 || nil2 < 0 || st < 0 || pr < 0) continue;
       nt_node_set_str(nt, ic, "name", inner);
-      nt_node_set_int(nt, ic, "builtin_only", 1);
+      nt_mark_builtin_call(nt, ic);
       nt_node_set_ref(nt, ic, "receiver", recv);
       nt_node_set_ref(nt, ic, "arguments", args);
       nt_node_set_ref(nt, ic, "block", -1);
@@ -15336,7 +15336,7 @@ int desugar_dir_surface(Compiler *c) {
             ? NULL : dir_surface_alias(nm, 1);
     if (alias) {
       nt_node_set_str(nt, id, "name", alias);
-      nt_node_set_int(nt, id, "builtin_only", 1); changed = 1; continue;
+      nt_mark_builtin_call(nt, id); changed = 1; continue;
     }
 
     /* chdir(d, &b): the block a method forwards by name. Only a literal
@@ -15460,7 +15460,7 @@ int desugar_dir_surface(Compiler *c) {
       }
       nt_node_set_str(nt, pwdr, "name", "Dir");
       nt_node_set_str(nt, pwdc, "name", "pwd");
-      nt_node_set_int(nt, pwdc, "builtin_only", 1);
+      nt_mark_builtin_call(nt, pwdc);
       nt_node_set_ref(nt, pwdc, "receiver", pwdr);
       nt_node_set_ref(nt, pwdc, "arguments", -1);
       nt_node_set_ref(nt, pwdc, "block", -1);
@@ -15468,7 +15468,7 @@ int desugar_dir_surface(Compiler *c) {
       nt_node_set_ref(nt, wsav, "value", pwdc);
       nt_node_set_str(nt, cd1r, "name", "Dir");
       nt_node_set_str(nt, cd1, "name", "chdir");
-      nt_node_set_int(nt, cd1, "builtin_only", 1);
+      nt_mark_builtin_call(nt, cd1);
       nt_node_set_str(nt, cd1, "chdir_label", "dir_chdir0");  /* CRuby's block-form label */
       nt_node_set_ref(nt, cd1, "receiver", cd1r);
       { int a0 = rdir; nt_node_set_arr(nt, cd1a, "arguments", &a0, 1); }
@@ -15487,7 +15487,7 @@ int desugar_dir_surface(Compiler *c) {
       nt_node_set_ref(nt, wval, "value", value);
       nt_node_set_str(nt, cd2r, "name", "Dir");
       nt_node_set_str(nt, cd2, "name", "chdir");
-      nt_node_set_int(nt, cd2, "builtin_only", 1);
+      nt_mark_builtin_call(nt, cd2);
       nt_node_set_str(nt, cd2, "chdir_label", "dir_chdir0");
       nt_node_set_ref(nt, cd2, "receiver", cd2r);
       nt_node_set_str(nt, rsav, "name", sav);

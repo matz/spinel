@@ -517,6 +517,17 @@ static inline int nt_attr_write(const NodeTable *nt, int id) {
 static inline void nt_set_attr_write(NodeTable *nt, int id, int on) {
   if (on || nt_attr_write(nt, id)) nt_node_set_int(nt, id, "attr_write", on ? 1 : 0);
 }
+/* The call binds the builtin's own method of its name, whatever the program
+   defines: a call a desugar wrote for the compiler's own use, or an alias
+   that captured the builtin. The desugars write the record through these two,
+   and only the call plan reads it (cplan_builtin_call, call_plan.h). The
+   record stays on the node, so a clone of the subtree carries it. */
+static inline void nt_mark_builtin_call(NodeTable *nt, int id) {
+  nt_node_set_int(nt, id, "builtin_only", 1);
+}
+static inline void nt_clear_builtin_call(NodeTable *nt, int id) {
+  nt_node_set_int(nt, id, "builtin_only", 0);
+}
 static inline int nt_ref(const NodeTable *nt, int id, const char *key) {
   NT_WORK();
   if (id < 0 || id >= nt->count) return -1;

@@ -2280,7 +2280,7 @@ int comp_arysub_call(Compiler *c, int id, TyKind rt, TyKind *kind) {
   if (comp_ary_root(c, cid) < 0 || nt_kind(c->nt, id) != NK_CallNode) return 0;
   const char *n = nt_str(c->nt, id, "name");
   if (!n) return 0;
-  if (!nt_int(c->nt, id, "builtin_only", 0) && !comp_arysub_name_is_array(c, cid, n)) return 0;
+  if (!cplan_builtin_call(c, id) && !comp_arysub_name_is_array(c, cid, n)) return 0;
   *kind = comp_ary_kind(c, cid);
   /* A String subclass instance's String is a handle (TY_STRBUF). A call
      that changes it, or answers it, takes it boxed (the poly String arms
@@ -2398,7 +2398,7 @@ int comp_yield_chain_reopened(Compiler *c, int call) {
   for (int n = call, depth = 0; n >= 0 && depth < 16; depth++) {
     if (nt_kind(nt, n) == NK_YieldNode) return 0;
     if (nt_kind(nt, n) != NK_CallNode) return 0;
-    if (!nt_int(nt, n, "builtin_only", 0) && comp_builtin_name_reopened(c, nt_str(nt, n, "name"))) return 1;
+    if (!cplan_builtin_call(c, n) && comp_builtin_name_reopened(c, nt_str(nt, n, "name"))) return 1;
     n = nt_ref(nt, n, "receiver");
   }
   return 0;

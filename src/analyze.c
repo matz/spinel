@@ -3418,7 +3418,7 @@ static void desugar_env_values(Compiler *c) {
     /* (ENV itself as a value, a store into which copies as ENV's does:
        the row of its own, __env_value) */
     nt_node_set_str(nt, id, "name", "__env_value");
-    nt_node_set_int(nt, id, "builtin_only", 1);
+    nt_mark_builtin_call(nt, id);
     nt_node_set_ref(nt, id, "receiver", -1);
     nt_node_set_ref(nt, id, "arguments", -1);
     nt_node_set_ref(nt, id, "block", -1);
@@ -10968,8 +10968,8 @@ static void enum_chain_node(Compiler *c, LowerCtx *lc, int id) {
       /* both are Hash's own, as CRuby's bang form is: a class deriving from
          Hash answers neither with its own replace or transform_values
          (rack's Headers#transform_values is `dup.transform_values!`) */
-      nt_node_set_int(nt, id, "builtin_only", 1);
-      nt_node_set_int(nt, inner, "builtin_only", 1);
+      nt_mark_builtin_call(nt, id);
+      nt_mark_builtin_call(nt, inner);
       nt_node_set_ref(nt, id, "block", -1);
       nt_node_set_ref(nt, id, "arguments", rargs);
       comp_grow_node_arrays(c);
@@ -11291,10 +11291,12 @@ static int bsu_own_method(Compiler *c, int k) {
   return mi >= 0 && mi < c->nscopes && c->scopes[mi].def_node >= 0 &&
          !nt_int(c->nt, c->scopes[mi].def_node, "node_bi", 0);
 }
-/* (is call id one bam_split_user_method asks the receiver's classes of?) */
+/* (is call id one bam_split_user_method asks the receiver's classes of?
+   A call that binds the builtin's `method` is the split's own else arm, or
+   one a desugar wrote for the compiler: either way nothing left to split.) */
 static int bsu_site(Compiler *c, int id, int recv) {
   const NodeTable *nt = c->nt;
-  if (nt_int(nt, id, "builtin_only", 0) || nt_int(nt, id, "user_method_call", 0)) return 0;
+  if (cplan_builtin_call(c, id) || nt_int(nt, id, "user_method_call", 0)) return 0;
   NodeKind rk = nt_kind(nt, recv);
   if (rk != NK_LocalVariableReadNode && rk != NK_SelfNode) return 0;
   if (infer_type(c, recv) != TY_POLY) return 0;
@@ -11393,7 +11395,8 @@ static int bam_split_user_method(Compiler *c, int id, int recv, const char *sym)
     nt_node_set_str(nt, call, "name", "method");
     nt_node_set_ref(nt, call, "receiver", BSU_RECV());
     nt_node_set_ref(nt, call, "arguments", sa);
-    nt_node_set_int(nt, call, j == 0 ? "user_method_call" : "builtin_only", 1);
+    if (j == 0) nt_node_set_int(nt, call, "user_method_call", 1);
+    else nt_mark_builtin_call(nt, call);
     int st = nt_new_node(nt, "StatementsNode");
     nt_node_set_arr(nt, st, "body", &call, 1);
     arm[j] = st;
@@ -11813,7 +11816,7 @@ static int desugar_missing_method_obj(Compiler *c) {
   int changed = 0, n0 = nt->count;
   for (int id = 0; id < n0; id++) {
     if (nt_kind(nt, id) != NK_CallNode || !is_bound_method_maker(nt_str(nt, id, "name")) ||
-        nt_int(nt, id, "mm_target", 0) || nt_int(nt, id, "builtin_only", 0)) continue;
+        nt_int(nt, id, "mm_target", 0) || cplan_builtin_call(c, id)) continue;
     const char *sym = method_sym_arg(c, id);
     int recv = nt_ref(nt, id, "receiver"), k = -1, sc = c->nscope[id];
     TyKind rt = TY_UNKNOWN;
@@ -13092,7 +13095,7 @@ int desugar_kernel_recv(Compiler *c) {
        the program defines of the name answers it (`def warn(m) =
        Kernel.warn(m)` called itself) */
     nt_node_set_int(nt, id, "kernel_recv", 1);
-    nt_node_set_int(nt, id, "builtin_only", 1);
+    nt_mark_builtin_call(nt, id);
     changed = 1;
   }
   return changed;
@@ -13211,7 +13214,7 @@ static int desugar_std_stream_bare_output(Compiler *c) {
       nt_node_set_ref(nt, id, "receiver", gv);
       nt_set_vcall(nt, id, 0);
       /* $stdout's puts now, not the builtin Kernel one */
-      nt_node_set_int(nt, id, "builtin_only", 0);
+      nt_clear_builtin_call(nt, id);
       nt_node_set_int(nt, id, "kernel_recv", 0);
     }
     else {
@@ -13285,7 +13288,7 @@ static int desugar_std_stream_bare_output(Compiler *c) {
       }
       else {
         int fmt = sbo_call(nt, -1, "format", argv, argc, id);
-        if (fmt >= 0 && kern) { nt_node_set_int(nt, fmt, "kernel_recv", 1); nt_node_set_int(nt, fmt, "builtin_only", 1); }
+        if (fmt >= 0 && kern) { nt_node_set_int(nt, fmt, "kernel_recv", 1); nt_mark_builtin_call(nt, fmt); }
         int wr = fmt >= 0 ? sbo_call(nt, sbo_stdout_read(c, id), "write", &fmt, 1, id) : -1;
         int nil = nt_new_node(nt, "NilNode");
         if (wr < 0 || nil < 0) continue;
@@ -14269,7 +14272,7 @@ static int desugar_enum_named_call(Compiler *c, int id, NodeTable *nt, const cha
        where a Hash reopen defines its own []=. */
     int scid = ty_is_object(hrt) ? ty_object_class(hrt) : -1;
     int sub = hrc >= 0 && scid >= 0 && comp_ary_is_hash(c, scid) &&
-              (nt_int(nt, id, "builtin_only", 0) ||
+              (cplan_builtin_call(c, id) ||
                (comp_arysub_name_is_array(c, scid, nm) && !comp_is_undeffed_in_chain(c, scid, nm) &&
                 (comp_method_vis_in_chain(c, scid, nm) == SP_VIS_PUBLIC ||
                  nt_kind(nt, hrc) == NK_SelfNode))) &&
@@ -14277,7 +14280,7 @@ static int desugar_enum_named_call(Compiler *c, int id, NodeTable *nt, const cha
     if (hrc >= 0 && hac == 2 && nt_ref(nt, id, "block") < 0 &&
         (ty_is_hash(hrt) || sub) && an_reopen_owner(c, id, CORE_HASH) < 0) {
       nt_node_set_str(nt, id, "name", "[]=");
-      if (sub) nt_node_set_int(nt, id, "builtin_only", 1);
+      if (sub) nt_mark_builtin_call(nt, id);
       *changed = 1;
     }
     return 1;
@@ -15633,7 +15636,7 @@ static int desugar_file_stat_new(Compiler *c) {
     nt_node_set_str(nt, fc, "name", "File");
     nt_node_set_ref(nt, id, "receiver", fc);
     nt_node_set_str(nt, id, "name", "stat");
-    nt_node_set_int(nt, id, "builtin_only", 1);
+    nt_mark_builtin_call(nt, id);
     comp_grow_node_arrays(c);
     c->nscope[fc] = c->nscope[id];
     changed = 1;
@@ -22919,7 +22922,7 @@ static int scope_calls_itself(Compiler *c, int mi) {
     if (!nm || !sp_streq(nm, m->name)) continue;
     /* a `super` into Array, spelled as self's call to Array's method
        (rewrite_array_subclass_super), is no call of the method itself */
-    if (nt_int(c->nt, id, "builtin_only", 0)) continue;
+    if (cplan_builtin_call(c, id)) continue;
     int recv = nt_ref(c->nt, id, "receiver");
     NodeKind rk = nt_kind(c->nt, recv);
     if (recv < 0 || (rk == NK_SelfNode)) return 1;
@@ -39664,7 +39667,7 @@ int nullable_int_value(Compiler *c, int v) {
        of the name, the probe took the nil a `def length = nil` answers and
        was emitted as an oint, while its emitter -- the builtin's, by the
        same mark -- answers the plain sp_int, and the C did not compile. */
-    if (v == g_nn_builtin_call || nt_int(nt, v, "builtin_only", 0)) return 0;
+    if (v == g_nn_builtin_call || cplan_builtin_call(c, v)) return 0;
     if (mi < 0 && cn) {
       if (rcv >= 0) {
         TyKind rt = infer_type(c, rcv);
@@ -39702,7 +39705,7 @@ int nullable_int_value(Compiler *c, int v) {
            Marked nil-able by a program method of the name that answers nil
            (`def length = nil` in an unrelated class), the call's slot was an
            sp_oint the builtin's sp_int could not initialize. */
-        else if (rt == TY_POLY && !nt_int(nt, v, "builtin_only", 0)) return poly_dispatch_nullable(c, v, cn);
+        else if (rt == TY_POLY && !cplan_builtin_call(c, v)) return poly_dispatch_nullable(c, v, cn);
         /* a class or module value only the run time knows (`g.upd` with g
            a module): any class's method of the name the dispatch can reach,
            as emit's class-value switch reaches them (#8985) */
@@ -43236,7 +43239,7 @@ static int sd_call(NodeTable *nt, const char *name, int recv, const int *args, i
    splat's Array, its length): never a reopened class's own method of the
    name */
 static void sd_builtin(NodeTable *nt, int cl) {
-  nt_node_set_int(nt, cl, "builtin_only", 1);
+  nt_mark_builtin_call(nt, cl);
   nt_node_set_int(nt, cl, "desugar_builtin", 1);   /* typed as the builtin alone (infer_call) */
 }
 static int sd_bcall(NodeTable *nt, const char *name, int recv, const int *args, int n) {
@@ -43739,7 +43742,7 @@ static int splat_dispatch_on_length(Compiler *c, int id, const int *argv, int ar
   int fwd_blk = blk >= 0 && !subst && nt_kind(nt, blk) == NK_BlockNode && nt_int(nt, blk, "fwd_yield", 0);
   /* ...and the `&blk` a super into Array or Hash hands on (builtin_only, the
      subclass rewrites): a read of the block, which every arm shares */
-  if (blk >= 0 && !subst && nt_kind(nt, blk) == NK_BlockArgumentNode && nt_int(nt, id, "builtin_only", 0))
+  if (blk >= 0 && !subst && nt_kind(nt, blk) == NK_BlockArgumentNode && cplan_builtin_call(c, id))
     fwd_blk = 1;
   /* ...and a method's own `&block` handed on to an element read, which
      ignores a block (`def [](*args, &block) = expressions.[](*args, &block)`,
@@ -43797,7 +43800,7 @@ static int splat_dispatch_on_length(Compiler *c, int id, const int *argv, int ar
      splat call, which reaches the user method as any splat call does. */
   /* a call marked as the builtin's (a super into Array or Hash) is never a
      user method's */
-  if (variadic != 2 && !splat_recv_is_builtin_literal(nt, id) && !nt_int(nt, id, "builtin_only", 0) &&
+  if (variadic != 2 && !splat_recv_is_builtin_literal(nt, id) && !cplan_builtin_call(c, id) &&
       !splat_recv_is_builtin_subclass(c, id, cnm)) {
     for (int si = 0; si < c->nscopes; si++) {
       Scope *s = &c->scopes[si];
@@ -46075,7 +46078,7 @@ static void rewrite_prepended_builtin_supers(Compiler *c) {
     nt_set_self_receiver(nt, id, self);
     nt_node_set_ref(nt, id, "arguments", args);
     nt_node_set_str(nt, id, "name", mname);
-    nt_node_set_int(nt, id, "builtin_only", 1);
+    nt_mark_builtin_call(nt, id);
     free(mname);
   }
 }
@@ -46128,7 +46131,7 @@ static void rewrite_ivar_reflection_supers(Compiler *c) {
     nt_set_self_receiver(nt, id, self);
     nt_node_set_ref(nt, id, "arguments", args);
     nt_node_set_str(nt, id, "name", mname);
-    nt_node_set_int(nt, id, "builtin_only", 1);
+    nt_mark_builtin_call(nt, id);
     free(mname);
   }
 }
@@ -46182,7 +46185,7 @@ void rewrite_builtin_cm_alias_call(Compiler *c, int id) {
   NodeTable *nt = (NodeTable *)c->nt;
   const char *nm = nt_str(nt, id, "name");
   int recv = nt_ref(nt, id, "receiver"), ci = -1;
-  if (!nm || nt_int(nt, id, "builtin_only", 0)) return;
+  if (!nm || cplan_builtin_call(c, id)) return;
   if (recv >= 0 && (nt_kind(nt, recv) == NK_ConstantReadNode || nt_kind(nt, recv) == NK_ConstantPathNode))
     ci = const_node_class_index(c, recv);
   else if (recv < 0 || nt_kind(nt, recv) == NK_SelfNode) {
@@ -46213,7 +46216,7 @@ void rewrite_builtin_cm_alias_call(Compiler *c, int id) {
   else if (nt_kind(nt, recv) == NK_SelfNode) nt_node_reset(nt, recv, "ConstantReadNode");
   if (nt_kind(nt, recv) == NK_ConstantReadNode) nt_node_set_str(nt, recv, "name", c->classes[ci].name);
   nt_node_set_str(nt, id, "name", target);
-  nt_node_set_int(nt, id, "builtin_only", 1);
+  nt_mark_builtin_call(nt, id);
   free(target);
 }
 /* Can the program's order not prove that call id runs after the singleton
@@ -46320,7 +46323,7 @@ static void rewrite_builtin_alias_self_calls(Compiler *c, int settled) {
     c->nscope[self] = c->nscope[id];
     nt_set_self_receiver(nt, id, self);
     nt_node_set_str(nt, id, "name", target);
-    nt_node_set_int(nt, id, "builtin_only", 1);
+    nt_mark_builtin_call(nt, id);
     free(target);
   }
 }
@@ -46437,7 +46440,7 @@ static void arysub_super_into(Compiler *c, int at, int n, const char *mname, int
   if (init == 2 && (self = arysub_new_call(c, at, self, "allocate", -1, -1)) < 0) { free(mn); return; }
   if (!init) {
     arysub_set_call(c, n, self, mn, args, blk);
-    nt_node_set_int((NodeTable *)c->nt, n, "builtin_only", 1);
+    nt_mark_builtin_call((NodeTable *)c->nt, n);
   }
   else if (an == 0 && blk < 0 && !sp_streq(bn, "Time")) arysub_set_call(c, n, self, "clear", -1, -1);
   else {
@@ -46445,7 +46448,7 @@ static void arysub_super_into(Compiler *c, int at, int n, const char *mname, int
     /* (a Time has no replace: its subclass's construction sets the Time it embeds) */
     const char *put = sp_streq(bn, "Time") ? "__sp_time_set" : "replace";
     if (an_call >= 0) arysub_set_call(c, n, self, put, arysub_args(c, at, &an_call, 1), -1);
-    if (an_call >= 0 && init == 2) nt_node_set_int((NodeTable *)c->nt, n, "builtin_only", 1);
+    if (an_call >= 0 && init == 2) nt_mark_builtin_call((NodeTable *)c->nt, n);
   }
   nt_set_ignore_visibility((NodeTable *)c->nt, n, 1);
   free(mn);
@@ -46753,10 +46756,10 @@ static void rewrite_array_subclass_new(Compiler *c, int id) {
         sp_streq(nt_str(nt, src, "name"), "to_h")) {
       /* one argument: H's own Hash of its pairs, not the argument itself
          nor its default, and not through a to_h of the program's */
-      nt_node_set_int((NodeTable *)nt, src, "builtin_only", 1);
+      nt_mark_builtin_call((NodeTable *)nt, src);
       int empty = arysub_node(c, "HashNode", id);
       int merged = empty >= 0 ? arysub_new_call(c, id, empty, "merge", arysub_args(c, id, &src, 1), -1) : -1;
-      if (merged >= 0) nt_node_set_int((NodeTable *)nt, merged, "builtin_only", 1);
+      if (merged >= 0) nt_mark_builtin_call((NodeTable *)nt, merged);
       src = merged;
     }
   }
@@ -46770,7 +46773,7 @@ static void rewrite_array_subclass_new(Compiler *c, int id) {
   arysub_set_call(c, id, alloc, tim ? "__sp_time_set" : "replace", arysub_args(c, id, &src, 1), -1);
   /* Array's and Hash's own construction: a `replace` of the class's own is
      never called */
-  nt_node_set_int((NodeTable *)nt, id, "builtin_only", 1);
+  nt_mark_builtin_call((NodeTable *)nt, id);
 }
 
 /* The calls a splat's length dispatch built from nodes m0 on, of a call into
@@ -46790,7 +46793,7 @@ static void arysub_keep_builtin_only(Compiler *c, int m0, const char *name) {
       Scope *s = comp_scope_of(c, n);
       if (!s || comp_ary_root(c, s->class_id) < 0 || !comp_arysub_builtin_name(c, s->class_id, nm)) continue;
     }
-    nt_node_set_int(nt, n, "builtin_only", 1);
+    nt_mark_builtin_call(nt, n);
   }
 }
 
@@ -46813,7 +46816,7 @@ static void arysub_builtin_alias_recv_call(Compiler *c, int id) {
     if (!bi || !rn) return;
     char *target = strdup(rn);
     nt_node_set_str(nt, id, "name", target);
-    nt_node_set_int(nt, id, "builtin_only", 1);
+    nt_mark_builtin_call(nt, id);
     free(target);
     return;
   }
@@ -46935,7 +46938,7 @@ static int tmcv_sub_arm(Compiler *c, int id, int k, const char *nm, int args) {
   int made = arysub_new_call(c, id, tmcv_const(c, id, "Time"), nm, args >= 0 ? nt_clone_subtree(nt, args) : -1, -1);
   int alloc = arysub_new_call(c, id, tmcv_class_read(c, id, k), "allocate", -1, -1);
   int set = arysub_new_call(c, id, alloc, "__sp_time_set", arysub_args(c, id, &made, 1), -1);
-  nt_node_set_int(nt, set, "builtin_only", 1);
+  nt_mark_builtin_call(nt, set);
   return set;
 }
 /* A class whose maker of this name takes no call of this shape answers it
@@ -47255,8 +47258,10 @@ static void rewrite_array_subclass_calls(Compiler *c) {
       rewrite_array_subclass_super(c, id);
       /* the call it became spreads a splat by its length as any builtin
          call's does (expand_static_splat_args ran before it existed); the
-         calls the length dispatch builds stay the builtin's */
-      if (nt_kind(nt, id) == NK_CallNode && nt_int(nt, id, "builtin_only", 0)) {
+         calls the length dispatch builds stay the builtin's. (The rewrite
+         flags the call it makes as binding the builtin's method, so the
+         test asks that fact of the node it just wrote.) */
+      if (nt_kind(nt, id) == NK_CallNode && cplan_builtin_call(c, id)) {
         int m0 = nt->count;
         expand_static_splat_args(c, id, id + 1);
         arysub_keep_builtin_only(c, m0, nt_str(nt, id, "name"));
@@ -47582,7 +47587,7 @@ static int iter_disc_call_recv(Compiler *c, int r) {
   /* (no builtin answers it: on self, none of Object's or Kernel's; on a
      receiver, one of a class of the program's) */
   int rr = nt_ref(nt, r, "receiver");
-  if (!nm || (rr < 0 ? object_public_method_name(nm) || bop_share_kernel(nm, nt_int(nt, r, "builtin_only", 0))
+  if (!nm || (rr < 0 ? object_public_method_name(nm) || bop_share_kernel(nm, cplan_builtin_call(c, r))
                      : !ty_is_object(infer_type(c, rr))))
     return -3;
   int *tg = malloc(sizeof(int) * (size_t)(c->nscopes + 1));

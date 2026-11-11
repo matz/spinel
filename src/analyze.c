@@ -32751,7 +32751,7 @@ static unsigned ctor_append_scan(Compiler *c, int mi, unsigned *kept_out) {
     }
   }
   int pi = m->class_id >= 0 ? cplan_super_target(c, -1, m, NULL) : -1;
-  if (pi < 0 || !c->scopes[pi].name || !sp_streq(c->scopes[pi].name, "initialize")) return app;
+  if (pi < 0 || !c->scopes[pi].name || !is_initialize_name(c->scopes[pi].name)) return app;
   Scope *pm = &c->scopes[pi];
   int ph = 0;
   for (int pj = 0; pj < pm->nparams && !ph; pj++) {

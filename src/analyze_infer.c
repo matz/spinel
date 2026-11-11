@@ -6889,7 +6889,7 @@ static int infer_receiverless_call(Compiler *c, int id, const NodeTable *nt, con
        before a top-level def of the same name (#7213) */
     { int iec = ie_class_of(c, id);
       if (mi >= 0 && iec >= 0 && iec < c->nclasses && call_target(c, id, iec, name, 0, NULL) >= 0) mi = -1; }
-    if (mi < 0 && !nt_int(nt, id, "builtin_only", 0)) { mi = comp_included_method_index(c, name, id); fvia = UC_INCLUDED; }
+    if (mi < 0 && !nt_int(nt, id, "builtin_only", 0)) { mi = call_target(c, id, -1, name, CT_INCLUDED, NULL); fvia = UC_INCLUDED; }
     if (mi >= 0) { *out = an_user_call(c, id, mi, fvia, fvia == UC_TOP ? -1 : c->scopes[mi].class_id); return 1; }
     /* Kernel conversions */
     if (sp_streq(name, "Integer") && (kw_argc == 1 || kw_argc == 2)) {
@@ -9503,7 +9503,7 @@ static TyKind infer_call_inner(Compiler *c, int id) {
   if (recv < 0 && nt_ref(nt, id, "block") < 0 &&
       !nt_str(nt, id, "vis_enforce") && !nt_int(nt, id, "builtin_only", 0)) {
     int bmi = call_target(c, id, -1, name, CT_TOP, NULL), bvia = UC_TOP;
-    if (bmi < 0) { bmi = comp_included_method_index(c, name, id); bvia = UC_INCLUDED; }
+    if (bmi < 0) { bmi = call_target(c, id, -1, name, CT_INCLUDED, NULL); bvia = UC_INCLUDED; }
     if (bmi >= 0) {
       Scope *bsc = comp_scope_of(c, id);
       /* in a block run by instance_eval, self is the receiver (#7213) */

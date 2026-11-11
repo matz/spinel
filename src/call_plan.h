@@ -169,8 +169,10 @@ int cplan_bam_reopen_target(Compiler *c, int mi);
    CT_CAPTURE selects the definition live at construction, or its entry
    when the constructor must select an arm at run time. CT_IMPLIED asks for
    a name the node does not itself call but makes CRuby call (a row of
-   tools/implied_calls.yml), which passes the gate on the node's own names. */
-enum { CT_CMETHOD = 1, CT_OWN = 2, CT_TOP = 4, CT_REACH = 8, CT_CAPTURE = 16, CT_IMPLIED = 32 };
+   tools/implied_calls.yml), which passes the gate on the node's own names.
+   CT_INCLUDED asks the method a module the top level includes brings, as
+   seen from node id (cls is not read); the record is not asked for it yet. */
+enum { CT_CMETHOD = 1, CT_OWN = 2, CT_TOP = 4, CT_REACH = 8, CT_CAPTURE = 16, CT_IMPLIED = 32, CT_INCLUDED = 64 };
 /* The names call node id itself calls, into out: a call's or an attribute
    target's name, a `recv.m op= v`'s reader and writer; how many (0 for any
    other node). call_target binds a call of one of them to the method

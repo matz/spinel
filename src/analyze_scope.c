@@ -520,11 +520,11 @@ void expand_struct_forwarding_super(Compiler *c) {
     int si = id < c->node_cap ? c->nscope[id] : -1;
     if (si <= 0 || si >= c->nscopes) continue;
     Scope *s = &c->scopes[si];
-    if (s->is_cmethod || s->class_id < 0 || !s->name || !sp_streq(s->name, "initialize") ||
+    if (s->is_cmethod || s->class_id < 0 || !s->name || !is_initialize_name(s->name) ||
         !scope_is_forwarding(c, s)) continue;
     ClassInfo *cls = &c->classes[s->class_id];
     if (!cls->is_struct && !cls->is_data) continue;
-    if (cls->parent >= 0 && comp_method_in_chain(c, cls->parent, "initialize", NULL) >= 0) continue;
+    if (cls->parent >= 0 && call_target(c, -1, cls->parent, "initialize", 0, NULL) >= 0) continue;
     int pn = nt_ref(nt, s->def_node, "parameters");
     int nreq = 0, nopt = 0;
     nt_arr(nt, pn, "requireds", &nreq);
@@ -5044,7 +5044,7 @@ static int alias_super_in_extended(Compiler *c, int hold) {
   for (int k = hs->class_id, g = 0; nm && k >= 0 && g < c->nclasses; k = c->classes[k].parent, g++) {
     for (int e = 0; e < c->classes[k].nextended_mods; e++) {
       int m = c->classes[k].extended_mods[e];
-      if (m >= 0 && m < c->nclasses && comp_method_in_class(c, m, nm) >= 0) return 1;
+      if (m >= 0 && m < c->nclasses && call_target(c, -1, m, nm, CT_OWN, NULL) >= 0) return 1;
     }
     if (k == c->classes[k].parent) break;
   }
@@ -7860,7 +7860,7 @@ static int inc_super_behind(Compiler *c, int ci, const char *name, int like) {
      as they came, and `super` passes on what the shadow took, so
      Parent#value(x) behind M#value is still reached as value(7)) */
   int pc = c->classes[ci].parent;
-  int sm = pc >= 0 ? comp_method_in_chain(c, pc, name, NULL) : -1;
+  int sm = pc >= 0 ? call_target(c, -1, pc, name, 0, NULL) : -1;
   int lp = nt_ref(nt, sm >= 0 ? c->scopes[sm].def_node : like, "parameters");
   int params = lp >= 0 ? nt_clone_subtree(nt, lp) : -1;
   nt_node_set_ref(nt, def, "parameters", params);
@@ -8593,7 +8593,7 @@ static int mixin_layers_call_super(Compiler *c, int ci, int mod, int late, int s
     for (int s = 0; s < c->nscopes && !hit; s++) {
       const Scope *m = &c->scopes[s];
       if (m->class_id != b || m->is_cmethod || !m->name || m->shadow || m->entry) continue;
-      int mi = comp_method_in_chain(c, mod, m->name, NULL), bi = comp_method_in_chain(c, b, m->name, NULL);
+      int mi = call_target(c, -1, mod, m->name, 0, NULL), bi = call_target(c, -1, b, m->name, 0, NULL);
       hit = mi >= 0 && bi >= 0 && c->scopes[mi].def_node != c->scopes[bi].def_node &&
             (scope_calls_super(c, mi) || scope_calls_super(c, bi));
     }

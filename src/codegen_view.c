@@ -364,6 +364,14 @@ int view_call_nil_tested(Compiler *c, int id) {
   return 0;
 }
 
+/* A nil arm that leaves the receiver's test to the call's own guard opens
+   VR_NIL_TESTED at 3 (emit_nil_target_own); the guard that writes the test
+   says so here, and the arm reads the 4 before it pops. A signal on the
+   open view: it counts no edit, like the push and the pop around it. */
+void view_nil_test_written(Compiler *c, int recv) {
+  if (comp_nil_tested_stored(c, recv) == 3) c->nil_tested[recv] = 4;
+}
+
 /* the entry on top, put back */
 static void view_close(int tok) {
   if (view_stack[tok].kind == VK_ARM) { g_arm = view_stack[tok].arm_saved; return; }

@@ -6246,3 +6246,11 @@ int comp_class_kw_init(Compiler *c, int ci) {
 const char *comp_class_inspect_suffix(Compiler *c, int ci, const char *name) {
   return is_inspect_name(name) && comp_class_kw_init(c, ci) ? "(keyword_init: true)" : "";
 }
+
+TyKind comp_ask_without_box_mark(Compiler *c, int id, TyKind (*ask)(Compiler *, int)) {
+  unsigned char was = c->strbuf_box[id];
+  ((unsigned char *)c->strbuf_box)[id] = 0;
+  TyKind t = ask(c, id);
+  ((unsigned char *)c->strbuf_box)[id] = was;
+  return t;
+}

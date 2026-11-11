@@ -10807,7 +10807,7 @@ static int emit_scalar_recv_arms(Compiler *c, int id, Buf *b, const NodeTable *n
       }
       /* a nil arm that left the test to this guard (emit_nil_target_own)
          learns it was written */
-      if (comp_nil_tested_stored(c, recv) == 3) comp_write_nil_tested(c, recv, 4);
+      view_nil_test_written(c, recv);
       if (ib->p) buf_puts(b, ib->p);
       buf_puts(b, "; })");
     }

@@ -11582,10 +11582,7 @@ TyKind infer_uncached(Compiler *c, int id) {
      demand saw `x.to_s.strip` while the re-narrow had x re-cleared, and
      the box the value now is was handed on as a String. */
   if (comp_strbuf_box_stored(c, id)) {
-    /* put back before it returns: not a change of the table */
-    comp_write_strbuf_box(c, id, 0);
-    TyKind u = infer_uncached(c, id);
-    comp_write_strbuf_box(c, id, 1);
+    TyKind u = comp_ask_without_box_mark(c, id, infer_uncached);
     return u == TY_POLY ? TY_POLY : TY_STRBUF;
   }
   /* a multiple assignment's element, read back for desugar_masgn_store_evidence:

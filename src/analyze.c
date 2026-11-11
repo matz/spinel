@@ -24540,7 +24540,7 @@ static int strbuf_demand_store_leaf(Compiler *c, int sn, int depth) {
     if (snv->is_param && !snv->is_cell && !snv->is_block_param &&
         an_param_idx(sns, snm) >= 0 && (snv->type == TY_POLY || snv->type == TY_UNKNOWN)) {
       if (comp_poly_strbuf_lift_stored(c, sn)) return 0;
-      comp_write_poly_strbuf_lift(c, sn, 1);
+      comp_mark_poly_strbuf_lift(c, sn, 1);
       snv->poly_lift |= POLY_LIFT_APPENDED;
       return 1;
     }
@@ -24597,7 +24597,7 @@ static int strbuf_demand_store_leaf(Compiler *c, int sn, int depth) {
        (sp_poly_strbuf_lift), so the element is the String the mutation
        reaches; no other name holds that String. */
     if (strbuf_poly_call_fresh(c, snu) && !comp_poly_strbuf_lift_stored(c, snu)) {
-      comp_write_poly_strbuf_lift(c, snu, STRBUF_LIFT_FRESH_CALL);
+      comp_mark_poly_strbuf_lift(c, snu, STRBUF_LIFT_FRESH_CALL);
       ch = 1;
     }
     return ch;
@@ -26132,7 +26132,7 @@ static int share_lift_value(Compiler *c, int v) {
   /* a String-typed value, a conditional's included, is boxed whole */
   if (k != NK_BeginNode && infer_type(c, v) == TY_STRING) {
     int changed = 0;
-    if (!comp_poly_strbuf_lift_stored(c, v)) { comp_write_poly_strbuf_lift(c, v, 1); changed = 1; }
+    if (!comp_poly_strbuf_lift_stored(c, v)) { comp_mark_poly_strbuf_lift(c, v, 1); changed = 1; }
     /* a `||` or `&&` marked whole marks its operands too, as one of mixed
        types does below: the box of each is what an enclosing logic node or
        the return unboxes (an_boxed_logic_ok accepts them as it does). A
@@ -26163,7 +26163,7 @@ static int share_lift_value(Compiler *c, int v) {
       /* Expression-position begins still box their String result whole;
          boxed tails use the arm flags instead. Keep both facts. */
       if (infer_type(c, v) == TY_STRING && !comp_poly_strbuf_lift_stored(c, v)) {
-        comp_write_poly_strbuf_lift(c, v, 1);
+        comp_mark_poly_strbuf_lift(c, v, 1);
         changed = 1;
       }
       for (int r = nt_ref(nt, v, "rescue_clause"); r >= 0; r = nt_ref(nt, r, "subsequent"))
@@ -26280,9 +26280,11 @@ static int share_lift_poly_static_stores(Compiler *c, int kind, const char *name
    the node table last moved? Those calls are the same for every class's
    ivar of the name, and share_lift_value reads only the types (each change
    of which comp_ty_edits counts), the nodes and the marks it sets, so a
-   second walk at the same counts marks nothing. A program of many classes
-   with one attribute name walked all the writer calls once per class
-   (#10546). Answers 0, and records the counts, when the walk is to run. */
+   second walk at the same counts marks nothing. The marks are not counted
+   (comp_mark_poly_strbuf_lift), so a walk that marks leaves the counts it
+   was recorded at and the answer holds. A program of many classes with one
+   attribute name walked all the writer calls once per class (#10546).
+   Answers 0, and records the counts, when the walk is to run. */
 static int sl_writers_lifted(Compiler *c, const char *name) {
   static const Compiler *mc; static const NodeTable *mnt;
   static char **key; static unsigned long *at; static unsigned *atv; static int cap, n;
@@ -29990,13 +29992,13 @@ static int mark_reader_identity_operands(Compiler *c) {
           repr_call_returns_handle(c, opnd) && cplan_user_fresh(c, w)->dispatch == CP_NONE) {
         comp_set_strbuf_box(c, opnd, 0);
         comp_sn_retype(c, opnd, TY_STRING);
-        comp_write_strbuf_handle_demand(c, opnd, 1);
+        comp_set_strbuf_handle_demand(c, opnd, 1);
         /* Boxing a parenthesized operand reads its inner value directly. */
         int inner = nt_paren_single(c->nt, opnd);
         if (inner != opnd) {
           comp_set_strbuf_box(c, inner, 0);
           comp_sn_retype(c, inner, TY_STRING);
-          comp_write_strbuf_handle_demand(c, inner, 1);
+          comp_set_strbuf_handle_demand(c, inner, 1);
         }
         changed = 1;
         continue;
@@ -30019,7 +30021,7 @@ static int mark_reader_identity_operands(Compiler *c) {
       /* A boxed reader's plan can give the same handle answer as a
          statically resolved field. Its demand takes the boxed handle. */
       if (repr_boxed_reader_handle(c, opnd)) {
-        comp_write_strbuf_handle_demand(c, opnd, 1);
+        comp_set_strbuf_handle_demand(c, opnd, 1);
         changed = 1;
         continue;
       }
@@ -30035,7 +30037,7 @@ static int mark_reader_identity_operands(Compiler *c) {
         if (ocid >= 0 && ocid < c->nclasses &&
             comp_resolve_member(c, ocid, nt_str(nt, opnd, "name"), 0, &mdc, NULL) == SP_MEMBER_METHOD && mdc != defc)
           continue; }
-      comp_write_strbuf_handle_demand(c, opnd, 1);
+      comp_set_strbuf_handle_demand(c, opnd, 1);
       changed = 1;
     }
   }
@@ -30164,7 +30166,7 @@ static void strbuf_reconcile_lifted_reads(Compiler *c, const HandleArgTab *hat) 
             !sp_streq(nt_str(nt, r, "name"), vn) || !comp_poly_strbuf_lift_stored(c, r)) continue;
         if (may_str < 0) may_str = poly_var_may_hold_string(c, hat, vn, s, 0, NULL);
         if (may_str) break;
-        comp_write_poly_strbuf_lift(c, r, 0);
+        comp_mark_poly_strbuf_lift(c, r, 0);
       }
     }
   }
@@ -30364,7 +30366,7 @@ static int lift_poly_read(Compiler *c, const HandleArgTab *hat, SbMutTab *lifted
     Scope *as = comp_scope_of(c, a);
     if (!as || comp_ntype(c, a) != TY_POLY) return 0;
     if (as->class_id >= 0 && !as->is_cmethod && comp_ty_value_obj(c, ty_object(as->class_id))) return 0;
-    comp_write_poly_strbuf_lift(c, a, 1);
+    comp_mark_poly_strbuf_lift(c, a, 1);
     return 1;
   }
   if (nt_kind(nt, a) != NK_LocalVariableReadNode) return 0;
@@ -30372,7 +30374,7 @@ static int lift_poly_read(Compiler *c, const HandleArgTab *hat, SbMutTab *lifted
   Scope *vs = vn ? comp_scope_of(c, a) : NULL;
   LocalVar *lv = vs ? scope_local(vs, vn) : NULL;
   if (!lv || lv->type != TY_POLY || !poly_var_may_hold_string(c, hat, vn, vs, 0,NULL)) return 0;
-  comp_write_poly_strbuf_lift(c, a, 1);
+  comp_mark_poly_strbuf_lift(c, a, 1);
   if (lifted) sb_mut_tab_note(lifted, vn, (int)(vs - c->scopes), 1);
   if (lv->is_param && !lv->is_block_param && an_param_idx(vs, vn) >= 0)
     lv->poly_lift |= POLY_LIFT_APPENDED;
@@ -30722,7 +30724,7 @@ static int pull_args_into_handle_params(Compiler *c,
              on the next round (poly_lift). */
           if (alv && alv->type == TY_POLY) {
             if (comp_poly_strbuf_lift_stored(c, an2) || !poly_var_may_hold_string(c, hat, vn2, vs2, 0,NULL)) continue;
-            comp_write_poly_strbuf_lift(c, an2, 1); changed = 1;
+            comp_mark_poly_strbuf_lift(c, an2, 1); changed = 1;
             if (alv->is_param && !alv->is_block_param && an_param_idx(vs2, vn2) >= 0 &&
                 !(alv->poly_lift & POLY_LIFT_APPENDED)) {
               alv->poly_lift |= POLY_LIFT_APPENDED; changed = 1;
@@ -30835,7 +30837,7 @@ static int pull_args_into_handle_params(Compiler *c,
           Scope *vs3 = pass ? s : (an >= 0 ? comp_scope_of(c, an) : NULL);
           LocalVar *v3 = vn3 && vs3 ? scope_local(vs3, vn3) : NULL;
           if (v3 && v3->type == TY_POLY && poly_var_may_hold_string(c, hat, vn3, vs3, 0,NULL)) {
-            if (!pass && !comp_poly_strbuf_lift_stored(c, an)) { comp_write_poly_strbuf_lift(c, an, 1); changed = 1; }
+            if (!pass && !comp_poly_strbuf_lift_stored(c, an)) { comp_mark_poly_strbuf_lift(c, an, 1); changed = 1; }
             if (pass && v3->is_param && !(v3->poly_lift & POLY_LIFT_ZSUPER)) {
               v3->poly_lift |= POLY_LIFT_ZSUPER; changed = 1;
             }
@@ -33142,7 +33144,7 @@ static int dyn_lift_poly_arg(Compiler *c, int n, int k, int a) {
   dyn_reach_value(c, nt_ref(nt, n, "receiver"), k, 0, &r);
   if (r.unlifted) return 0;
   if (!r.app && !(r.unknown && dyn_any_appender(c))) return 0;
-  comp_write_poly_strbuf_lift(c, a, 1);
+  comp_mark_poly_strbuf_lift(c, a, 1);
   if (lv->is_param && !lv->is_block_param && an_param_idx(vs, vn) >= 0) lv->poly_lift |= POLY_LIFT_APPENDED;
   return 1;
 }
@@ -34395,7 +34397,7 @@ static int spread_lift_poly_elems(Compiler *c, const int *av, int ac, int past) 
       Scope *vs = vn ? comp_scope_of(c, a) : NULL;
       LocalVar *lv = vs ? scope_local(vs, vn) : NULL;
       if (!lv || lv->type != TY_POLY || lv->is_block_param || !poly_var_may_hold_string(c, NULL, vn, vs, 0,NULL)) continue;
-      if (!comp_poly_strbuf_lift_stored(c, a)) { comp_write_poly_strbuf_lift(c, a, 1); changed = 1; }
+      if (!comp_poly_strbuf_lift_stored(c, a)) { comp_mark_poly_strbuf_lift(c, a, 1); changed = 1; }
       /* the method's own POLY parameter, or one a local is written from
          (`v = x`): its box is the caller's, so it pulls its callers in */
       if (lv->is_param) changed |= spread_lift_poly_param(c, vs, vn);
@@ -48067,7 +48069,7 @@ static void share_struct_aset_handles(Compiler *c) {
     if (boxed_member) {
       int v = nt_paren_single(nt, uav[0]);
       comp_set_strbuf_box(c, v, 1);
-      comp_write_strbuf_handle_demand(c, v, 1);
+      comp_set_strbuf_handle_demand(c, v, 1);
       continue;
     }
     int one, how = struct_aset_receiver(c, u, &one);
@@ -48092,7 +48094,7 @@ static void share_struct_aset_handles(Compiler *c) {
       }
     }
     comp_set_strbuf_box(c, v, 1);
-    comp_write_strbuf_handle_demand(c, v, 1);
+    comp_set_strbuf_handle_demand(c, v, 1);
   }
 }
 
@@ -55445,7 +55447,7 @@ static void an_phase_mutated_answers(Compiler *c) {
     int tg[CPT_MAX];
     if (!call_reaches_program_method(c, r) && cplan_targets(c, r, tg, CPT_MAX) <= 0 &&
         !an_reader_ivar_of(c, r, &defc, ivb, sizeof ivb)) continue;
-    comp_write_strbuf_handle_demand(c, r, 1);
+    comp_set_strbuf_handle_demand(c, r, 1);
   }
 }
 

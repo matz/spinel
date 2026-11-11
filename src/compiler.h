@@ -2803,13 +2803,6 @@ static inline unsigned char comp_head_held_stored(const Compiler *c, int id) { r
 static inline unsigned char comp_value_discarded_stored(const Compiler *c, int id) { return comp_node_in(c, id) ? c->value_discarded[id] : 0; }
 static inline unsigned char comp_str_shadow_stored(const Compiler *c, int id) { return comp_node_in(c, id) ? c->str_shadow[id] : 0; }
 
-/* Existing unversioned stores, kept separate from the memo-invalidating
-   comp_set_* operations. Routing them here must not add an invalidation. */
-static inline void comp_write_strbuf_box(Compiler *c, int id, unsigned char v) { ((unsigned char *)c->strbuf_box)[id] = v; }
-static inline void comp_write_strbuf_handle_demand(Compiler *c, int id, unsigned char v) { c->strbuf_handle_demand[id] = v; }
-static inline void comp_write_poly_strbuf_lift(Compiler *c, int id, unsigned char v) { c->poly_strbuf_lift[id] = v; }
-static inline void comp_write_nil_tested(Compiler *c, int id, unsigned char v) { c->nil_tested[id] = v; }
-
 /* The settled types kept and compared as a whole, for the analysis's
    convergence check. A node past the arrays (n may run to the table's
    count) reads and compares as unset. */
@@ -2887,6 +2880,28 @@ static inline unsigned char comp_set_strbuf_box(Compiler *c, int id, unsigned ch
   if (c->strbuf_box[id] != v) { ((unsigned char *)c->strbuf_box)[id] = v; comp_touch_node(c, id); }
   return v;
 }
+static inline unsigned char comp_set_strbuf_handle_demand(Compiler *c, int id, unsigned char v) {
+  if (c->strbuf_handle_demand[id] != v) { c->strbuf_handle_demand[id] = v; comp_touch_node(c, id); }
+  return v;
+}
+/* The analysis's store of the poly lift mark. It counts no edit: the mark
+   says how a read is handed on, and the share walks that set it, Repr and
+   the emitters read it; no inference does, so no kept answer of infer_type
+   rests on it. sl_writers_lifted (analyze.c) stamps its walk of an ivar
+   name's writer calls with comp_ty_edits: a mark that counted would move
+   the stamp at each class's own store, and those calls would be walked
+   once per class. */
+static inline void comp_mark_poly_strbuf_lift(Compiler *c, int id, unsigned char v) { c->poly_strbuf_lift[id] = v; }
+/* The answer of ask(c, id) for a strbuf_box-marked node with the mark lent
+   for that one call: it is back when the call returns, so the table is as
+   it was and nothing is counted. An inference nested in the call reads the
+   node unmarked and may memoise what it saw, as it did when the two stores
+   were written out. The other stores of a fact that count nothing are the
+   lift mark's (comp_mark_poly_strbuf_lift, above) and codegen_view.c's: a
+   view's push and pop of strbuf_handle_demand (which comp_ntype reads),
+   poly_strbuf_lift, nil_tested, head_held, value_discarded and str_shadow,
+   and the nil-test signal on an open view (view_nil_test_written). */
+TyKind comp_ask_without_box_mark(Compiler *c, int id, TyKind (*ask)(Compiler *, int));
 static inline TyKind comp_set_nilnarrow(Compiler *c, int id, TyKind t) {
   if (c->nilnarrow[id] != t) { ((TyKind *)c->nilnarrow)[id] = t; comp_touch_node(c, id); }
   return t;

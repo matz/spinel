@@ -2670,6 +2670,7 @@ unsigned view_class_is_read(int tok);
 /* A call re-entered after its enclosing emitter tested the receiver. */
 int view_push_call_nil_tested(Compiler *c, int id);
 int view_call_nil_tested(Compiler *c, int id);
+void view_nil_test_written(Compiler *c, int recv);   /* the guard of emit_nil_target_own's arm wrote its test */
 int emit_delegated_equality(Compiler *c, int id, int negate, Buf *b);
 int view_type_top(int node, TyKind *kind);   /* the open type view on node, if any */
 void view_pop(Compiler *c, int tok);

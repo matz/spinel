@@ -2812,6 +2812,7 @@ int emit_op_array_sort(Compiler *c, const BopCtx *x, Buf *b);
 int emit_op_array_uniq(Compiler *c, const BopCtx *x, Buf *b);
 int emit_op_array_nmin(Compiler *c, const BopCtx *x, Buf *b);
 int emit_op_array_sum0(Compiler *c, const BopCtx *x, Buf *b);
+int emit_op_boxed_array_count(Compiler *c, const BopCtx *x, Buf *b);
 int emit_op_array_compact_bang(Compiler *c, const BopCtx *x, Buf *b);
 int emit_op_array_flatten(Compiler *c, const BopCtx *x, Buf *b);
 int emit_op_array_push(Compiler *c, const BopCtx *x, Buf *b);

@@ -10,6 +10,82 @@
 #include "codegen_call_arms.h"
 #include "repr.h"
 
+static void emit_boxed_array_read(Compiler *c, int id, int receiver, const char *name, int count_node,
+                                  const char *fn, BopEmit op, int default_count, Buf *b) {
+  int array_only = op == BOPE_BOXED_ARRAY_ONLY;
+  /* Check and root the receiver before converting a nullable or boxed count.
+     The conversion may raise or call the program's to_int. */
+  int hold = array_only || (count_node >= 0 &&
+                          (node_has_oint_form(c, count_node) || repr_of(c, count_node).kind == RK_BOXED));
+  int held = hold ? ++g_tmp : -1;
+  int count_binding = -1, count_view = -1;
+  Buf call = {0};
+  Buf recv = {0};
+  emit_expr(c, receiver, &recv);
+  const char *receiver_text = recv.p ? recv.p : "sp_box_nil()";
+  if (hold) buf_printf(&call, "({ sp_RbVal _t%d = ", held);
+  else buf_printf(&call, "%s(", fn);
+  if (array_only) {
+    buf_printf(&call, "%s; SP_GC_ROOT_RBVAL(_t%d); ", receiver_text, held);
+    /* Ruby evaluates the raw count before looking up the method. Hold it
+       here so even a lone scalar-producing expression runs before the
+       guard. The checked Integer conversion below reads the held value. */
+    int splat = count_node >= 0 && nt_kind(c->nt, count_node) == NK_SplatNode;
+    int operand = splat ? nt_ref(c->nt, count_node, "expression") : count_node;
+    if (operand >= 0) {
+      Buf *saved_pre = g_pre;
+      g_pre = &call;
+      int temp = ++g_tmp;
+      if (splat) {
+        Buf items = {0};
+        emit_splat_operand_array(c, operand, &items);
+        buf_printf(&call, "sp_RbVal _t%d = sp_box_poly_array(%s); SP_GC_ROOT_RBVAL(_t%d); ",
+                   temp, items.p, temp);
+        free(items.p);
+      }
+      else temp = hold_operand(c, operand, TY_POLY, 1, temp, 1, " ", &call);
+      g_pre = saved_pre;
+      count_binding = view_bind(operand, "_t%d", temp);
+      count_view = view_push(c, operand, TY_POLY);
+    }
+    buf_printf(&call, "if (!sp_poly_face_array_ok(_t%d)) sp_raise_poly_nomethod(\"%s\", _t%d); %s(_t%d",
+               held, name, held, fn, held);
+  }
+  else {
+    buf_puts(&call, "sp_poly_enum_chk(");
+    if (op == BOPE_BOXED_ARRAY_OR_RANGE)
+      buf_printf(&call, "sp_poly_ary_chk(%s, \"%s\", 1)", receiver_text, name);
+    else buf_puts(&call, receiver_text);
+    buf_printf(&call, ", \"%s\")", name);
+  }
+  free(recv.p);
+  if (hold && !array_only) buf_printf(&call, "; SP_GC_ROOT_RBVAL(_t%d); %s(_t%d", held, fn, held);
+  if (count_node >= 0) {
+    Buf count = {0};
+    emit_int_expr(c, count_node, &count);
+    buf_puts(&call, ", ");
+    buf_puts(&call, count.p ? count.p : "0");
+    free(count.p);
+  }
+  else if (default_count) buf_puts(&call, ", 1");
+  if (count_binding >= 0) {
+    view_pop(c, count_view);
+    view_unbind(count_binding);
+  }
+  buf_puts(&call, hold ? "); })" : ")");
+  emit_unbox_text(c, repr_of(c, id).as_ty, call.p, b);
+  free(call.p);
+}
+
+int emit_op_boxed_array_count(Compiler *c, const BopCtx *x, Buf *b) {
+  if (poly_name_user_claimed(c, x->name, x->argc)) return 0;
+  int argc;
+  const int *argv = call_args(c->nt, x->id, &argc);
+  emit_boxed_array_read(c, x->id, x->recv, x->name, argc ? argv[0] : -1,
+                        x->op->arg, x->op->emit, x->op->argc_max > 0, b);
+  return 1;
+}
+
 /* builtin methods on a poly receiver the runtime answers by the value it holds: inject / reduce(:op), the Array reductions and slices, values_at, Fiber's resume / transfer / raise, Queue's enq / deq */
 int emit_call_poly_builtin_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc, const int *argv, TyKind rt) {
   /* Array-reduction methods on a boxed array element of a poly array (e.g.
@@ -49,59 +125,13 @@ int emit_call_poly_builtin_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
   /* shuffle / sample given `random:` on a boxed Array (emit_array_random_kw):
      the count arm below read the keyword hash as the count */
   if (emit_array_random_kw(c, id, b, nt, name, recv, argc, argv, rt)) return 1;
-  /* The count-taking Array reads on a poly receiver. An array read out of a
-     nested Array or Hash answers Array to #class but had no arm for these, so
-     they raised NoMethodError (#3464). rotate's count is optional. */
-  if (recv >= 0 && rt == TY_POLY && nt_ref(nt, id, "block") < 0 &&
-      (argc == 1 || (argc == 0 && (sp_streq(name, "rotate") || sp_streq(name, "shuffle"))))) {
-    const char *pn9 = NULL;
-    if (sp_streq(name, "take")) pn9 = "sp_poly_arr_take_n";
-    else if (is_first_or_take(name)) pn9 = "sp_poly_arr_take";
-    else if (sp_streq(name, "last")) pn9 = "sp_poly_arr_last_n";
-    else if (sp_streq(name, "drop")) pn9 = "sp_poly_arr_drop";
-    else if (sp_streq(name, "rotate")) pn9 = "sp_poly_arr_rotate";
-    else if (sp_streq(name, "sample")) pn9 = "sp_poly_arr_sample_n";
-    else if (sp_streq(name, "min")) pn9 = "sp_poly_arr_min_n";
-    else if (sp_streq(name, "max")) pn9 = "sp_poly_arr_max_n";
-    else if (sp_streq(name, "shuffle") && argc == 0) pn9 = "sp_poly_arr_shuffle";
-    if (pn9) {
-      if (!poly_name_user_claimed(c, name, argc)) {
-        Buf cb9; memset(&cb9, 0, sizeof cb9);
-        /* a value that is no collection is the call's NoMethodError
-           (sp_poly_enum_chk): nil.take(1) and its siblings answered [] */
-        /* A count that can be nil, or a boxed one, is converted after that
-           check, which goes into a temp first: beside it in the helper's
-           arguments, the C compiler may convert first (x86-64 gcc does), and
-           nil's TypeError came ahead of the NoMethodError */
-        int late9 = argc == 1 && (node_has_oint_form(c, argv[0]) || repr_of(c, argv[0]).kind == RK_BOXED);
-        int tk9 = late9 ? ++g_tmp : -1;
-        if (late9) buf_printf(&cb9, "({ sp_RbVal _t%d = ", tk9);
-        else buf_printf(&cb9, "%s(", pn9);
-        buf_puts(&cb9, "sp_poly_enum_chk(");
-        /* last, rotate, sample and shuffle are Array's alone: a Struct or
-           another program object (sp_poly_ary_chk) has none, where the
-           check below hands on its members or its #each as an Array */
-        int aonly9 = sp_streq(name, "last") || sp_streq(name, "rotate") ||
-                     sp_streq(name, "sample") || sp_streq(name, "shuffle");
-        if (aonly9) buf_puts(&cb9, "sp_poly_ary_chk(");
-        { Buf rb9; memset(&rb9, 0, sizeof rb9); emit_expr(c, recv, &rb9);
-          buf_puts(&cb9, rb9.p ? rb9.p : "sp_box_nil()"); free(rb9.p); }
-        if (aonly9) buf_printf(&cb9, ", \"%s\", 1)", name);
-        buf_printf(&cb9, ", \"%s\")", name);
-        /* (rooted: for a user Enumerable the check answers a new Array, and
-           converting the count may run the program's to_int) */
-        if (late9) buf_printf(&cb9, "; SP_GC_ROOT_RBVAL(_t%d); %s(_t%d", tk9, pn9, tk9);
-        if (argc == 1) { Buf nb9; memset(&nb9, 0, sizeof nb9); emit_int_expr(c, argv[0], &nb9);
-                         buf_puts(&cb9, ", "); buf_puts(&cb9, nb9.p ? nb9.p : "0"); free(nb9.p); }
-        else if (!sp_streq(name, "shuffle")) buf_puts(&cb9, ", 1");   /* rotate's default count */
-        buf_puts(&cb9, late9 ? "); })" : ")");
-        /* the helpers answer a boxed poly array; a slot typed as the array
-           itself takes the pointer out of the box */
-        emit_unbox_text(c, repr_of(c, id).as_ty, cb9.p ? cb9.p : "sp_box_nil()", b);
-        free(cb9.p);
-        return 1;
-      }
-    }
+  if (rt == TY_POLY && emit_builtin_op(c, id, recv, BOP_BOXED_FALLBACK, name, b)) return 1;
+  /* The keyword arm can decline sample(random: ...). Preserve its legacy
+     fallback until keyword dispatch can handle all the accepted shapes. */
+  if (recv >= 0 && rt == TY_POLY && argc == 1 && nt_ref(nt, id, "block") < 0 &&
+      sp_streq(name, "sample") && !poly_name_user_claimed(c, name, argc)) {
+    emit_boxed_array_read(c, id, recv, name, argv[0], "sp_poly_arr_sample_n", BOPE_BOXED_ARRAY_ONLY, 0, b);
+    return 1;
   }
   /* values_at takes any number of indices; collect them into a poly array. */
   if (recv >= 0 && rt == TY_POLY && argc >= 1 && nt_ref(nt, id, "block") < 0 &&

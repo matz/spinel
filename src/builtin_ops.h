@@ -213,6 +213,9 @@ typedef enum {
   BOPE_STRING_SLICE,
   BOPE_STRING_DEDUP,     /* String#dedup: -@ under the name a nil receiver is raised with */
   BOPE_STRING_SCRUB_BLOCK, /* String#scrub with a block */
+  BOPE_BOXED_ARRAY_COUNT, /* a count-taking Enumerable read through a box */
+  BOPE_BOXED_ARRAY_ONLY,  /* a boxed Array read that requires an Array */
+  BOPE_BOXED_ARRAY_OR_RANGE, /* a boxed read that accepts Array and Range */
   BOPE__COUNT
 } BopEmit;
 
@@ -543,6 +546,7 @@ int bop_args_as_builtin(TyKind rt, const char *name, int argc, int has_block);
 #define BOP_FILE_CLASS ((TyKind)-9) /* a class method of File (`File.join`) */
 #define BOP_ENV      ((TyKind)-10)  /* ENV's methods (`ENV["HOME"]`) */
 #define BOP_FILETEST ((TyKind)-11)  /* FileTest's path tests */
+#define BOP_BOXED_FALLBACK ((TyKind)-12)  /* boxed helpers reached after earlier call routes */
 
 typedef enum {
   BSH_PURE = 1,   /* keeps none of its arguments; answers no value it was handed

@@ -3214,6 +3214,10 @@ TyKind infer_call(Compiler *c, int id) {
   if (t == TY_UNKNOWN && boxed_struct_aref_may_construct(c, id)) return TY_POLY;
   int av = t == TY_UNKNOWN ? builtin_arity_violation(c, id, 0) : 0;
   if (av) return av == 2 ? TY_POLY : TY_NIL;
+  /* a count every builtin refuses where a method_missing may answer the
+     call (the full branch of a `**` split among them): what that answers,
+     boxed */
+  if (t == TY_UNKNOWN && builtin_count_refused_boxed(c, id)) return TY_POLY;
   if (t == TY_UNKNOWN && poly_scalar_row_call(c, id)) return TY_POLY;
   if (t == TY_UNKNOWN && poly_cls_value_answers(c, id)) return TY_POLY;
   return t;

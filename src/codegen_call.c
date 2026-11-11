@@ -21401,14 +21401,19 @@ static int arity_violation(Compiler *c, int id, int non_nil, char *exp, size_t n
    the native classes after them. */
 #define POLY_ARITY_BUILTINS 10
 #define POLY_ARITY_MAX 16
-static int poly_arity_plan(Compiler *c, int id, int non_nil, const char **tests, char exps[][32]);
+static int poly_arity_plan(Compiler *c, int id, int non_nil, int mm_aside, const char **tests, char exps[][32]);
 static int poly_arity_rows(Compiler *c, const char *name, int with_block, int argc, int kwh, int partial,
                            const char **tests, char exps[][32]);
 int builtin_arity_violation(Compiler *c, int id, int non_nil) {
   char exp[32]; int eval_recv, given;
   if (arity_violation(c, id, non_nil, exp, sizeof exp, &eval_recv, &given)) return 1;
   const char *tests[POLY_ARITY_MAX]; char exps[POLY_ARITY_MAX][32];
-  return poly_arity_plan(c, id, non_nil, tests, exps) > 0 ? 2 : 0;
+  return poly_arity_plan(c, id, non_nil, 0, tests, exps) > 0 ? 2 : 0;
+}
+/* See codegen_internal.h. */
+int builtin_count_refused_boxed(Compiler *c, int id) {
+  const char *tests[POLY_ARITY_MAX]; char exps[POLY_ARITY_MAX][32];
+  return poly_arity_plan(c, id, 0, 1, tests, exps) > 0;
 }
 
 /* The raise for a count a method refuses: the receiver (when asked) and the
@@ -21661,7 +21666,9 @@ int emit_native_count_mismatch(Compiler *c, int id, int cid, const char *name, i
    on the class the receiver has at run time: ArgumentError with that
    class's range where it has the method, NoMethodError where it has not.
    Fills the classes' runtime tests and ranges; answers how many. */
-static int poly_arity_plan(Compiler *c, int id, int non_nil, const char **tests, char exps[][32]) {
+/* mm_aside: the builtins' counts alone, whatever a method_missing of the
+   program answers (the call's type: builtin_count_refused_boxed) */
+static int poly_arity_plan(Compiler *c, int id, int non_nil, int mm_aside, const char **tests, char exps[][32]) {
   const NodeTable *nt = c->nt;
   const char *name = nt_str(nt, id, "name");
   int recv = nt_ref(nt, id, "receiver");
@@ -21671,8 +21678,8 @@ static int poly_arity_plan(Compiler *c, int id, int non_nil, const char **tests,
   if (recv_user_defines(c, name) || call_target(c, id, -1, name, CT_TOP, NULL) >= 0) return 0;
   /* a method_missing anywhere: the classes whose chain answers it, or every
      class while the chain memo cannot be trusted */
-  int nmm;
-  comp_name_responders(c, "method_missing", 0, &nmm);
+  int nmm = 0;
+  if (!mm_aside) comp_name_responders(c, "method_missing", 0, &nmm);
   if (nmm > 0) return 0;
   /* (an accessor of the name anywhere, from the set of every class's;
      the classes were walked at every boxed dispatch, #10546) */
@@ -21782,7 +21789,7 @@ static int g_poly_arity_node = -1;
 static int emit_poly_arity_guard(Compiler *c, int id, Buf *b) {
   if (g_poly_arity_node == id || g_n_argov >= MAX_ARG_OVERRIDE) return 0;
   const char *tests[POLY_ARITY_MAX]; char exps[POLY_ARITY_MAX][32];
-  int n = poly_arity_plan(c, id, 0, tests, exps);
+  int n = poly_arity_plan(c, id, 0, 0, tests, exps);
   if (n == 0) return 0;
   const NodeTable *nt = c->nt;
   int recv = nt_ref(nt, id, "receiver");

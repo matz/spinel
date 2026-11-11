@@ -618,6 +618,9 @@ int builtin_super_cmethod_known(const char *cls, const char *name);
 int builtin_instance_name_known(const char *m);
 int builtin_instance_method_known(const char *cls, const char *m);
 int builtin_arity_violation(Compiler *c, int id, int non_nil);   /* non_nil: a `&.` call's non-nil arm */
+/* Does every builtin class a boxed receiver of call id can be refuse its
+   count, a method_missing of the program aside (which may answer it)? */
+int builtin_count_refused_boxed(Compiler *c, int id);
 int builtin_object_method_known(const char *m);
 int name_is_enumerable_module_method(const char *m);
 int class_object_answers_builtin(const char *qm, int is_module);

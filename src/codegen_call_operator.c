@@ -1606,6 +1606,27 @@ static int bigint_not_overridden(Compiler *c) {
 }
 
 /* String concatenation, unary -@ +@ ~ !, element stores and the arithmetic on a poly operand */
+/* A block given to a builtin push, append or unshift with no argument:
+   these never call a block, so it can be left out when nothing in it runs
+   in CRuby either. That holds for a literal block, for `&nil` and a lambda
+   literal, and for a local or instance variable read whose type is Proc
+   (or nil). Any other `&x` keeps the generic dispatch, because CRuby
+   calls its to_proc (or raises TypeError) before the call. A local that
+   holds nil on some path is boxed, so it keeps that dispatch too. */
+static int mutator0_block_droppable(Compiler *c, int id) {
+  const NodeTable *nt = c->nt;
+  int blk = nt_ref(nt, id, "block");
+  if (blk < 0 || nt_kind(nt, blk) == NK_BlockNode) return 1;
+  if (nt_kind(nt, blk) != NK_BlockArgumentNode) return 0;
+  int ex = nt_ref(nt, blk, "expression");
+  if (ex < 0) return 0;
+  NodeKind ek = nt_kind(nt, ex);
+  if (ek == NK_NilNode || ek == NK_LambdaNode) return 1;
+  if (ek != NK_LocalVariableReadNode && ek != NK_InstanceVariableReadNode) return 0;
+  TyKind et = comp_ntype(c, ex);
+  return et == TY_PROC || et == TY_NIL;
+}
+
 int emit_call_operator_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc, const int *argv, TyKind rt, TyKind a0) {
   /* An operator override owns its poly arm before the builtin protocol's
      delegation. The existing dispatch reads each arm's planned target. */
@@ -1792,7 +1813,7 @@ int emit_call_operator_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, co
      keeps the generic dispatch, as a def of it does; that dispatch's own
      builtin arm (g_poly_builtin_arm), where the value is no instance of
      such a class, takes this arm back. */
-  if (recv >= 0 && rt == TY_POLY && argc == 0 && nt_ref(nt, id, "block") < 0 &&
+  if (recv >= 0 && rt == TY_POLY && argc == 0 && mutator0_block_droppable(c, id) &&
       is_array_self_mutator0(name) &&
       (g_poly_builtin_arm || (!an_user_defines_method(c, name) && !comp_name_reader_any(c, name)))) {
     int t = ++g_tmp;

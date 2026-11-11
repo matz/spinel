@@ -3074,6 +3074,35 @@ int emit_call_proc_literal_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
   return 0;
 }
 
+/* See codegen_internal.h. */
+int emit_owner_class_test(Compiler *c, int recv, const char *name, int tv, int no_class_values, Buf *b) {
+  int nl = cplan_send_split_owners(c, recv, name, NULL, 0), n = 0;
+  const char **owners = nl ? malloc(sizeof *owners * (size_t)nl) : NULL;
+  if (nl && !owners) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  if (nl) cplan_send_split_owners(c, recv, name, owners, nl);
+  /* a builtin class by its class id, which the value's class name comes
+     with (sp_poly_class_name_id); a class of the program's under one by
+     its name */
+  int ti = 0, ts = 0;
+  Buf names; memset(&names, 0, sizeof names);
+  for (int i = 0; i < nl; i++) {
+    int s = builtin_core_class_slot(owners[i]), bid = builtin_class_id(owners[i]);
+    if (no_class_values && (s == CORE_MODULE || s == CORE_CLASS)) continue;
+    if (b && !n) {
+      ti = ++g_tmp; ts = ++g_tmp;
+      buf_printf(b, "({ int _t%d; const char *_t%d = sp_poly_class_name_id(_t%d, &_t%d); (void)_t%d; (0", ti, ts, tv, ti, ts);
+    }
+    if (b && bid) buf_printf(b, " || _t%d == %d", ti, bid);
+    else if (b) buf_printf(&names, "%s\"%s\"", names.p ? ", " : "", owners[i]);
+    n++;
+  }
+  free(owners);
+  if (b && names.p) buf_printf(b, " || sp_str_in_list(_t%d, (const char *const[]){%s, NULL})", ts, names.p);
+  if (b && n) buf_puts(b, "); })");
+  free(names.p);
+  return n;
+}
+
 int emit_send_blind(Compiler *c, int id, Buf *b) {
   if (nt_str(c->nt, id, "send_blind")) {
     const CallPlan *plan = cplan_user(c, id);
@@ -3107,18 +3136,7 @@ int emit_send_blind(Compiler *c, int id, Buf *b) {
            (`class MyH < Hash` for `default`), by its name as the value's
            class name reads */
         { Buf lb; memset(&lb, 0, sizeof lb);
-          const char *snm = nt_str(c->nt, id, "name");
-          int nl = cplan_send_split_owners(c, srcv, snm, NULL, 0);
-          const char **owners = nl ? malloc(sizeof *owners * (size_t)nl) : NULL;
-          if (nl && !owners) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-          if (nl) cplan_send_split_owners(c, srcv, snm, owners, nl);
-          for (int i = 0; i < nl; i++)
-            buf_printf(&lb, "%s\"%s\"", i ? ", " : "(const char *const[]){", owners[i]);
-          free(owners);
-          if (nl) {
-            buf_puts(&lb, ", NULL}");
-            buf_printf(b, " || sp_str_in_list(sp_poly_class_name(_t%d), %s)", tv, lb.p);
-          }
+          if (emit_owner_class_test(c, srcv, nt_str(c->nt, id, "name"), tv, 0, &lb)) buf_printf(b, " || %s", lb.p);
           free(lb.p); }
         /* (a builtin's emitter may write its answer unboxed, sp_poly_to_s's
            String: boxed by its C type, as the other arm is) */

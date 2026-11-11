@@ -3344,13 +3344,18 @@ static TyKind an_root_reopen_call(Compiler *c, int id, const CallPlan *p) {
    Enumerator, or on a root class (an_root_reopen_call). 0 for any other. */
 static int an_reopen_head_call(Compiler *c, int id, int recv, TyKind *out) {
   TyKind hrt = infer_type(c, recv);
-  const CallPlan *p = hrt != TY_POLY && hrt != TY_UNKNOWN && !nt_int(c->nt, id, "builtin_only", 0) ? cplan_user_fresh(c, id) : NULL;
-  if (p && p->mi >= 0 && p->via == UC_REOPEN && hrt == TY_ENUMERATOR) *out = an_user_call(c, id, p->mi, p->via, p->owner_ci);
-  else if (p && p->mi >= 0 && p->owner_ci == comp_core_class(c, CORE_OBJECT) && cplan_nil_scalar_boxed(c, id, nt_str(c->nt, id, "name"), recv, hrt)) {
+  if (hrt == TY_POLY || hrt == TY_UNKNOWN || nt_int(c->nt, id, "builtin_only", 0)) return 0;
+  /* (a copy: the asks below read Reprs, which can resolve another call's
+     plan into the one cplan_user_fresh returns) */
+  const CallPlan own = *cplan_user_fresh(c, id), *p = &own;
+  /* (a method closed to the call binds none: the call raises) */
+  if (cplan_root_closed(c, id, NULL) >= 0) return 0;
+  if (p->mi >= 0 && p->via == UC_REOPEN && hrt == TY_ENUMERATOR) *out = an_user_call(c, id, p->mi, p->via, p->owner_ci);
+  else if (p->mi >= 0 && p->owner_ci == comp_core_class(c, CORE_OBJECT) && cplan_nil_scalar_boxed(c, id, nt_str(c->nt, id, "name"), recv, hrt)) {
     an_user_call_record(c, id, p->mi, UC_REOPEN, p->owner_ci);   /* (typed boxed below, but bound) */
     return 0;
   }
-  else if (p && (p = cplan_root_reopen_call(c, id, p))) *out = an_root_reopen_call(c, id, p);
+  else if (cplan_root_reopen_call(c, id, p)) *out = an_root_reopen_call(c, id, p);
   else return 0;
   return 1;
 }

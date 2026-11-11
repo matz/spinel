@@ -3167,6 +3167,13 @@ int emit_rooted_arg_list(Compiler *c, const int *argv, int argc,
                          const char *ctype, const char *root,
                          void (*emit)(Compiler *, int, Buf *), int *tmps, Buf *b);
 void emit_split_pre(Compiler *c, int node, void (*emit)(Compiler *, int, Buf *), Buf *pre, Buf *val);
+/* The run-time test that boxed value _t<tv>, the receiver recv of a call of
+   name, is of a class whose own lookup answers name ahead of Object (the
+   classes cplan_send_split_owners gives: a builtin one by its class id, a
+   program's by its name), written to b (NULL: counted only); with
+   no_class_values, without Module's and Class's, which answer class
+   values. The number of classes it tests, 0 for none. */
+int emit_owner_class_test(Compiler *c, int recv, const char *name, int tv, int no_class_values, Buf *b);
 /* A braced conditional arm whose hoisted setup stays inside that arm. */
 void emit_cond_arm(Compiler *c, int node, Buf *b, void (*emit)(Compiler *, int, Buf *, void *), void *ctx);
 void declare_local(Compiler *c, Buf *b, LocalVar *lv, int vol);

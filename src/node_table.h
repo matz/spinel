@@ -497,6 +497,13 @@ static inline int nt_ignore_visibility(const NodeTable *nt, int id) {
 static inline void nt_set_ignore_visibility(NodeTable *nt, int id, int on) {
   nt_node_set_int(nt, id, "ignore_visibility", on ? 1 : 0);
 }
+/* A desugar that writes a value it computes in place of call id makes the
+   call the builtin's identity, `recv.itself`, which no visibility closes
+   (a program's private itself, a top-level def, is not what it runs). */
+static inline void nt_set_itself_call(NodeTable *nt, int id) {
+  nt_node_set_str(nt, id, "name", "itself");
+  nt_set_ignore_visibility(nt, id, 1);
+}
 /* A synthesized implicit-self call spells its receiver explicitly while
    retaining the private-call permission of the receiverless form. An
    explicit denial from a public_send rewrite stays denied. */

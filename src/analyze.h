@@ -785,6 +785,11 @@ int elab_method_vis_at(Compiler *c, int cls, const char *name, int sg, LoadPoint
    Object's own; 0 where main has none there; -1 where the record cannot
    tell (node in a method body, a def under a condition, an undef) */
 int elab_main_method_vis_at(Compiler *c, int node, const char *name);
+/* Is main's def of `name` (a top-level def or alias) the live entry of
+   Object's method table where node runs, rather than Object's own def?
+   The later of the two answers: 1 main's, 0 Object's, -1 where the record
+   cannot tell. */
+int elab_main_def_live_at(Compiler *c, int node, const char *name);
 /* ... when no change of it follows: elab_method_vis_at's answer at p, or -1
    where an entry of the name's histories along cls's superclass chain at or
    after p (one in another region too, whose order is not known, and an

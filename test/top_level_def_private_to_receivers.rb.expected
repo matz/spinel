@@ -1,0 +1,40 @@
+NoMethodError: private method 'tap' called for an instance of Integer
+NoMethodError: private method 'tap' called for an instance of String
+NoMethodError: private method 'itself' called for an instance of Array
+NoMethodError: private method 'itself' called for nil
+NoMethodError: private method 'foo' called for true
+NoMethodError: private method 'foo' called for false
+NoMethodError: private method 'foo' called for an instance of Symbol
+NoMethodError: private method 'foo' called for an instance of Float
+NoMethodError: private method 'foo' called for an instance of Hash
+NoMethodError: private method 'foo' called for an instance of Range
+NoMethodError: private method 'foo' called for an instance of K
+NoMethodError: private method 'foo' called for an instance of S
+NoMethodError: private method 'tap' called for an instance of Integer
+NoMethodError: private method 'foo' called for an instance of Integer
+nil
+NoMethodError: private method 'foo' called for an instance of Integer
+:foo
+:mine
+NoMethodError: private method 'foo' called for an instance of Integer
+NoMethodError: private method 'foo' called for an instance of String
+NoMethodError: private method 'foo' called for an instance of Integer
+:o
+NoMethodError: private method 'bar' called for an instance of Integer
+NoMethodError: private method 'baz' called for an instance of Integer
+:o
+NoMethodError: private method 'kpriv' called for an instance of Integer
+NoMethodError: private method 'npriv' called for an instance of Integer
+NoMethodError: private method 'npriv' called for an instance of Float
+NoMethodError: undefined method 'foo' for an instance of B
+NoMethodError: undefined method 'foo' for an instance of BasicObject
+Set[1, 2]
+4
+["private method 'lvl' called for an instance of Integer", :lvl, ["ab", 2], 1]
+2
+3
+:s
+NoMethodError: private method 'foo' called for an instance of Integer
+nil
+NoMethodError: private method 'foo' called for nil
+NoMethodError: undefined method 'late' for an instance of Integer

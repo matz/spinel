@@ -4226,7 +4226,7 @@ int desugar_int_enum_with_index(Compiler *c) {
       { int items[3] = { w, inner, rd2 };
         nt_node_set_arr(nt, stmts, "body", items, 3); }
       nt_node_set_ref(nt, paren, "body", stmts);
-      nt_node_set_str(nt, id, "name", "itself");
+      nt_set_itself_call(nt, id);
       nt_node_set_ref(nt, id, "receiver", paren);
       nt_node_set_ref(nt, id, "block", -1);
       nt_node_set_ref(nt, id, "arguments", -1);
@@ -4342,7 +4342,7 @@ int desugar_hash_iter_with_index(Compiler *c) {
       /* h.transform_values.each { } -> h.transform_values { } */
       if (!transform) continue;
       nt_node_set_ref(nt, recv, "block", blk);
-      nt_node_set_str(nt, id, "name", "itself");
+      nt_set_itself_call(nt, id);
       nt_node_set_ref(nt, id, "receiver", recv);
       nt_node_set_ref(nt, id, "block", -1);
       changed = 1;
@@ -4424,7 +4424,7 @@ int desugar_hash_iter_with_index(Compiler *c) {
     { int items[2] = { init, recv }; nt_node_set_arr(nt, stmts, "body", items, 2); }
     int paren = nt_new_node(nt, "ParenthesesNode");
     nt_node_set_ref(nt, paren, "body", stmts);
-    nt_node_set_str(nt, id, "name", "itself");
+    nt_set_itself_call(nt, id);
     nt_node_set_ref(nt, id, "receiver", paren);
     nt_node_set_ref(nt, id, "arguments", -1);
     nt_node_set_ref(nt, id, "block", -1);
@@ -5903,7 +5903,7 @@ int desugar_binding_lvget(Compiler *c) {
     nt_node_set_str(nt, lread, "name", vnbuf);
     free(vnbuf);
     nt_node_set_ref(nt, id, "receiver", lread);            /* <local>.itself */
-    nt_node_set_str(nt, id, "name", "itself");
+    nt_set_itself_call(nt, id);
     nt_node_set_ref(nt, id, "arguments", -1);
     /* The `binding` receiver is now orphaned; rename it to a sentinel no pass
        matches so the binding reject (which scans all nodes, including
@@ -21544,7 +21544,7 @@ int desugar_encoding_queries_at(Compiler *c, LowerCtx *lc, int id) {
     int ac = 0;
     int v = nt_arr(nt, nt_ref(nt, id, "arguments"), "arguments", &ac)[0];
     nt_node_set_ref(nt, id, "receiver", -1);
-    nt_node_set_str(nt, id, "name", "itself");
+    nt_set_itself_call(nt, id);
     nt_node_set_ref(nt, id, "arguments", -1);
     nt_node_set_ref(nt, id, "receiver", v);
     return 1;

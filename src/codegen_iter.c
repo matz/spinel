@@ -5479,10 +5479,11 @@ static void iter_hold_built_str_recv(Compiler *c, int recv, const int *argv, int
 static int iter_tap_slice_string_arms(Compiler *c, int id, Buf *b, int indent, const NodeTable *nt, int block, const char *name, int recv, int body, const char *p0_orig, const char *p0, TyKind rt) {
   /* recv.tap { |p| body } -- run block for side effects, preserve outer var */
   /* a tap the program writes, its class's own or one every object answers,
-     is called (the expression path) */
+     is called (the expression path), and one closed to the call raises
+     there */
   if (sp_streq(name, "tap") && recv >= 0) {
     const CallPlan *tp = cplan_user(c, id);
-    if (tp->mi >= 0 && tp->via != UC_POLY) return -1;   /* (a boxed receiver's dispatch keeps its statement form) */
+    if ((tp->mi >= 0 && tp->via != UC_POLY) || cplan_root_closed(c, id, NULL) >= 0) return -1;   /* (a boxed receiver's dispatch keeps its statement form) */
   }
   if (sp_streq(name, "tap") && recv >= 0) {
     TyKind et = repr_of(c, recv).as_ty;

@@ -5778,6 +5778,19 @@ void emit_poly_sum_seed(Compiler *c, int recv, int seed, Buf *b) {
    alone does not say so, since a bare puts, print, p or warn is typed void
    too and does return (nil), so the call must reach a method whose return
    the analyzer settled as void. */
+/* A call no class answers: untyped, on a boxed receiver (a nil a method
+   returns, held in a local), on nil, or on another such call. Its boxed dispatch has
+   no arm and raises NoMethodError, so its value is never read; emit_boxed
+   emits it as the raise beside a nil (`a, b = lookup(n).pair`, `if
+   account.work`, CRuby's NoMethodError for nil). */
+int call_unanswered_boxed(Compiler *c, int id) {
+  const NodeTable *nt = c->nt;
+  if (id < 0 || nt_kind(nt, id) != NK_CallNode || comp_ntype(c, id) != TY_UNKNOWN) return 0;
+  int recv = nt_ref(nt, id, "receiver");
+  if (recv < 0 || nt_safe_nav(nt, id)) return 0;
+  Repr rr = repr_of(c, recv);
+  return rr.kind == RK_BOXED || rr.as_ty == TY_NIL || call_unanswered_boxed(c, recv);
+}
 int call_never_returns(Compiler *c, int id) {
   const NodeTable *nt = c->nt;
   if (id < 0 || nt_kind(nt, id) != NK_CallNode) return 0;

@@ -2036,6 +2036,7 @@ void emit_array_frozen_checked(Compiler *c, int recv, TyKind rt, Buf *b);
 const char *array_frozen_cls(TyKind rt);
 const char *array_to_poly_fn(TyKind t);
 void emit_fresh_lift_recv(Compiler *c, int recv, Buf *b);
+int call_unanswered_boxed(Compiler *c, int id);
 int call_never_returns(Compiler *c, int id);
 /* comp_ntype for a fold seed, with an empty `[]` / `{}` literal resolved to
    its container kind rather than left TY_UNKNOWN (see types.c). */

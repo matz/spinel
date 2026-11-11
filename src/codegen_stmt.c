@@ -6822,7 +6822,8 @@ void emit_op_assign(Compiler *c, int id, Buf *b, int indent) {
    keeps the value's own path. A boolean value is already tested that way. */
 static int cond_operand_testable(Compiler *c, int v) {
   TyKind vt = comp_ntype(c, v);
-  return v >= 0 && vt != TY_UNKNOWN && vt != TY_VOID;
+  /* (a call no class answers is tested for its raise, emit_cond) */
+  return v >= 0 && ((vt != TY_UNKNOWN && vt != TY_VOID) || call_unanswered_boxed(c, v));
 }
 static int cond_is_andor(const NodeTable *nt, int n) {
   NodeKind k = nt_kind(nt, nt_paren_single(nt, n));
@@ -6969,6 +6970,11 @@ void emit_cond(Compiler *c, int id, Buf *b) {
      behind `super ||`): the test is never read either */
   if ((t == TY_UNKNOWN || t == TY_VOID) && call_never_returns(c, id)) {
     buf_puts(b, "(("); emit_expr_for_effect(c, id, b); buf_puts(b, "), 0)"); return;
+  }
+  /* ...and a call no class answers on a boxed receiver (`if account.work`
+     where account is a nil a method returned): its raise */
+  if (t == TY_UNKNOWN && call_unanswered_boxed(c, id)) {
+    buf_puts(b, "sp_poly_truthy("); emit_boxed(c, id, b); buf_puts(b, ")"); return;
   }
   if (t != TY_BOOL) unsupported(c, id, "condition (non-bool)");
   emit_expr(c, id, b);
@@ -19004,7 +19010,8 @@ static int emit_multi_write_scalar(Compiler *c, int id, Buf *b, int indent, cons
   /* poly RHS: destructure with sp_poly_massign_get. Any other value --
      a hash, or a scalar from a call the fill above leaves alone since it
      may return a tuple -- is boxed and destructures as itself. */
-  if (st != TY_UNKNOWN) {
+  /* (a call no class answers raises there, and no target is written) */
+  if (st != TY_UNKNOWN || call_unanswered_boxed(c, value)) {
     int tarr = ++g_tmp;
     emit_indent(b, indent);
     buf_printf(b, "sp_RbVal _t%d = ", tarr);

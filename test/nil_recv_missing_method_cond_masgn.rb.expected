@@ -1,0 +1,7 @@
+NoMethodError: undefined method 'fetch_pair' for nil
+[:a0, :b0]
+NoMethodError: undefined method 'pair' for nil
+NoMethodError: undefined method 'work' for nil
+NoMethodError: undefined method 'work' for nil
+NoMethodError: undefined method 'work' for nil
+NoMethodError: undefined method 'busy' for nil

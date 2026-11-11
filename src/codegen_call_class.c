@@ -589,6 +589,10 @@ int core_method_vis(const char *cls, const char *m, int inherit, const char **ow
   return 0;
 }
 
+int core_method_undefined(const char *cls, const char *m) {
+  return cls && m && core_own_vis(cls, strlen(cls), m, NULL) == CORE_VIS_UNDEF;
+}
+
 /* `private :m` and its kin on class k: the visibility bit it gives m, or 0 */
 static int refl_explicit_vis(const ClassInfo *k, const char *m) {
   for (int i = 0; i < k->nvis; i++)
@@ -678,19 +682,26 @@ static int builtin_ancestor_holders(Compiler *c, int k, const char *qm, const ch
     { "Rational", "Numeric", "Comparable" }, { "Complex", "Numeric", "Comparable" },
     { "String", NULL, "Comparable" }, { "Symbol", NULL, "Comparable" }, { "Time", NULL, "Comparable" },
     { "Array", NULL, "Enumerable" }, { "Hash", NULL, "Enumerable" }, { "Range", NULL, "Enumerable" },
-    { "Set", NULL, "Enumerable" }, { "Enumerator", NULL, "Enumerable" } };
+    { "Set", NULL, "Enumerable" }, { "Enumerator", NULL, "Enumerable" },
+    { "Enumerator::Chain", "Enumerator", "Enumerable" }, { "Enumerator::Product", "Enumerator", "Enumerable" } };
   const char *kn = c->classes[k].name;
   int n = 0;
   if (!kn || !c->classes[k].is_builtin_const || c->classes[k].enclosing_class >= 0) return 0;
   if (!sp_streq(kn, "Comparable") && !sp_streq(kn, "Numeric") && !sp_streq(kn, "Enumerable")) return 0;
+  char wbase[256]; wbase[0] = '\0';
+  int is_wr = setter_base_name(qm, wbase, sizeof wbase);
   for (unsigned r = 0; r < sizeof rows / sizeof *rows; r++) {
     const char *chain[3] = { rows[r].cls, rows[r].mid, rows[r].mod };
+    /* (a builtin method of the class or a builtin ancestor answers first,
+       as does an undef in the class: Rational#numerator, Complex#round) */
+    if (core_method_vis(rows[r].cls, qm, 1, NULL) > 0 || core_method_undefined(rows[r].cls, qm)) continue;
     for (int i = 0; i < 3; i++) {
       if (!chain[i]) continue;
       int a = comp_class_index(c, chain[i]);
       if (a < 0) continue;
       if (comp_is_undeffed_in_chain(c, a, qm) || comp_method_in_class(c, a, qm) >= 0 ||
-          comp_method_in_chain(c, a, qm, NULL) >= 0) {
+          comp_method_in_chain(c, a, qm, NULL) >= 0 || comp_reader_in_chain(c, a, qm, NULL) ||
+          (is_wr && comp_writer_in_chain(c, a, wbase, NULL))) {
         if (a == k && n < 8) out[n++] = rows[r].cls;
         break;
       }
@@ -1136,6 +1147,10 @@ int emit_call_reflection_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
                keyed by it, so the value's builtin class answers */
             const char *holders[9];
             if (has && builtin_ancestor_holders(c, k, qm, holders)) {
+              /* asked where the load record places the call, the def must
+                 have run by then */
+              LoadPoint up = elab_point_of(c, id);
+              if (up.region >= 0 && elab_method_at(c, k, qm, 0, up, NULL) != ELAB_YES) continue;
               if (!holders[0]) continue;
               buf_printf(b, "%s(sp_str_in_list(sp_poly_class_name(_t%d), (const char *const[]){", first ? "" : " || ", tv);
               for (int h = 0; holders[h]; h++) buf_printf(b, "\"%s\", ", holders[h]);

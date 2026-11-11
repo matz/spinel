@@ -60,3 +60,17 @@ class Numeric
 end
 p "s".respond_to?(:hid), 3.respond_to?(:hid), 3.respond_to?(:nhid), "s".respond_to?(:nhid)
 ["s", 3, 1.5, :y].each { |x| p [x.respond_to?(:hid), x.respond_to?(:nhid)] }
+
+# a builtin method of the value's class answers first (Rational#numerator
+# over a private Numeric def); a private reader nearer than Comparable
+# hides the name; a chain enumerator is an Enumerator too
+class Numeric
+  private def numerator = 9
+  attr_reader :feat2
+  private :feat2
+end
+module Comparable; def feat2 = 1; end
+p 3r.respond_to?(:numerator), 3.respond_to?(:feat2), 1.5.respond_to?(:feat2)
+module Enumerable; def ep2 = 1; end
+ch = [1].each + [2].each
+p ch.respond_to?(:ep2), [ch, 1, "s"][0].respond_to?(:ep2)

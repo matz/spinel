@@ -2625,6 +2625,7 @@ int        class_is_exc_subclass(Compiler *c, int ci);   /* analyze.c */
 int        comp_plain_class(Compiler *c, int cid);    /* only Object's and Kernel's builtin methods behind the class: no core class or core module among its ancestors */
 int        comp_enum_behind(Compiler *c, int cid);    /* Enumerable's methods behind the class: Enumerable, or an Array, Struct or native ancestor */
 int        core_method_vis(const char *cls, const char *m, int inherit, const char **owner);   /* codegen_call_class.c */
+int        core_method_undefined(const char *cls, const char *m);   /* does core class cls undefine an ancestor's m itself (Complex#round)? codegen_call_class.c */
 int        comp_is_writer(ClassInfo *ci, const char *name);
 int        comp_any_class_accessor(Compiler *c, const char *name);   /* any class declares a reader or writer of the name */
 int        name_is_plain_setter(const char *name);

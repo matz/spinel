@@ -34128,13 +34128,26 @@ int respond_to_static_answer(Compiler *c, int id, int recv, TyKind rt, const cha
     int bci = bcls >= 0 ? comp_core_class(c, bcls) : -1;
     /* (an undef in the value's own class hides the name, as does one in
        an ancestor nearer than the one that defines it) */
-    if (bn && !builtin_method_known(bn, qm) &&
+    /* (a builtin method of the value's class or a builtin ancestor answers
+       first; an attr reader or writer in the chain is left to the paths
+       below) */
+    size_t ql = strlen(qm);
+    char *qbase = ql > 1 && qm[ql - 1] == '=' ? strndup(qm, ql - 1) : NULL;
+    int acc = comp_name_reader_any(c, qm) || (qbase && comp_name_reader_any(c, qbase));
+    free(qbase);
+    if (bn && !acc && !builtin_method_known(bn, qm) && core_method_vis(bn, qm, 1, NULL) <= 0 &&
+        !core_method_undefined(bn, qm) &&
         (bci < 0 || (comp_method_in_chain(c, bci, qm, NULL) < 0 && !comp_is_undeffed_in_chain(c, bci, qm)))) {
+      LoadPoint up = elab_point_of(c, id);
       for (int a = 1; anc[a] && !sp_streq(anc[a], "Object"); a++) {
         int k = comp_class_index(c, anc[a]);
         if (k < 0) continue;
         if (comp_is_undeffed_in_chain(c, k, qm)) break;
         if (comp_method_in_chain(c, k, qm, NULL) < 0) continue;
+        /* asked where the load record places the call, the def must have
+           run by then (`"s".respond_to?(:m)` ahead of `module Comparable;
+           def m`); else the paths below answer */
+        if (up.region >= 0 && elab_method_at(c, k, qm, 0, up, NULL) != ELAB_YES) break;
         int v = comp_method_vis_in_chain(c, k, qm);
         /* (a private or protected one with a second argument only the run
            time knows is left to the paths below, as before) */

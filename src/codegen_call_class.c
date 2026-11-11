@@ -676,6 +676,29 @@ static int obj_defines_own(Compiler *c, int recv, const char *name) {
    Enumerable) into `out` (NULL-ended, at most 8): those for which k is
    the first of the value's class, Numeric and the module that defines
    or undefines qm. 0 when k is no such reopening. */
+const int *comp_parent_map(Compiler *c);
+/* Has the def of qm in class or module k run where call id runs, as the
+   load record places it? A call in a method body runs once that method's
+   def has run, so the def's own place stands for it. 0 where the record
+   cannot place either. */
+int builtin_ancestor_def_ran(Compiler *c, int id, int k, const char *qm) {
+  LoadPoint up = elab_point_of(c, id);
+  if (up.region < 0) {
+    const int *par = comp_parent_map(c);
+    int d = id;
+    while (d >= 0 && nt_kind(c->nt, d) != NK_DefNode) d = par[d];
+    if (d < 0) return 0;
+    up = elab_point_of(c, d);
+    if (up.region < 0) return 0;
+  }
+  return elab_method_at(c, k, qm, 0, up, NULL) == ELAB_YES;
+}
+/* Does class or module k's chain hold an attr reader or writer of qm? */
+int builtin_ancestor_accessor(Compiler *c, int k, const char *qm) {
+  char wbase[256]; wbase[0] = '\0';
+  int is_wr = setter_base_name(qm, wbase, sizeof wbase);
+  return comp_reader_in_chain(c, k, qm, NULL) || (is_wr && comp_writer_in_chain(c, k, wbase, NULL));
+}
 static int builtin_ancestor_holders(Compiler *c, int k, const char *qm, const char **out) {
   static const struct { const char *cls, *mid, *mod; } rows[] = {
     { "Integer", "Numeric", "Comparable" }, { "Float", "Numeric", "Comparable" },
@@ -699,9 +722,10 @@ static int builtin_ancestor_holders(Compiler *c, int k, const char *qm, const ch
       if (!chain[i]) continue;
       int a = comp_class_index(c, chain[i]);
       if (a < 0) continue;
+      /* (a `private :m` in a nearer class decides there too) */
       if (comp_is_undeffed_in_chain(c, a, qm) || comp_method_in_class(c, a, qm) >= 0 ||
           comp_method_in_chain(c, a, qm, NULL) >= 0 || comp_reader_in_chain(c, a, qm, NULL) ||
-          (is_wr && comp_writer_in_chain(c, a, wbase, NULL))) {
+          (is_wr && comp_writer_in_chain(c, a, wbase, NULL)) || (a != k && refl_explicit_vis(&c->classes[a], qm))) {
         if (a == k && n < 8) out[n++] = rows[r].cls;
         break;
       }
@@ -1149,8 +1173,7 @@ int emit_call_reflection_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
             if (has && builtin_ancestor_holders(c, k, qm, holders)) {
               /* asked where the load record places the call, the def must
                  have run by then */
-              LoadPoint up = elab_point_of(c, id);
-              if (up.region >= 0 && elab_method_at(c, k, qm, 0, up, NULL) != ELAB_YES) continue;
+              if (!builtin_ancestor_def_ran(c, id, k, qm)) continue;
               if (!holders[0]) continue;
               buf_printf(b, "%s(sp_str_in_list(sp_poly_class_name(_t%d), (const char *const[]){", first ? "" : " || ", tv);
               for (int h = 0; holders[h]; h++) buf_printf(b, "\"%s\", ", holders[h]);

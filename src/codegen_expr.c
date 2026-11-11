@@ -3486,16 +3486,25 @@ static const char *const_missing_name(Compiler *c, int id, const char *nm, char 
   return buf;
 }
 
-/* The NameError raise of a constant defined nowhere, valued as a Class
-   placeholder. `checks` is the text of the parents' presence checks (it opens
-   a comma expression and ends with ", "), or empty: they go into the message
-   operand, which C evaluates before the raise, so an unset parent's NameError
-   still comes first and the raise stays at the head of the text. */
+/* The NameError raise of a read of a constant defined nowhere, valued as a
+   Class placeholder: const_raise_open, the message operand, const_raise_close.
+   Whatever the message evaluates first (a parent's presence checks, the Class
+   value a path is read on) C evaluates before the raise, so the raise stays at
+   the head of the text: a typed slot takes the read for the raise it is
+   (emit_unresolved_coerced_text), and const_read_raises recognizes it by
+   const_raise_head. */
+static const char const_raise_head[] = "(sp_raise_cls(\"NameError\", ";
+static void const_raise_open(Buf *b) { buf_puts(b, const_raise_head); }
+static void const_raise_close(Buf *b) { buf_puts(b, "), ((sp_Class){-1}))"); }
+
+/* `checks` is the text of the parents' presence checks (it opens a comma
+   expression and ends with ", "), or empty: they go into the message operand,
+   so an unset parent's NameError still comes first. */
 static void emit_const_undefined_raise(Buf *b, const char *checks, const char *name) {
-  buf_puts(b, "(sp_raise_cls(\"NameError\", ");
+  const_raise_open(b);
   if (checks && checks[0]) buf_printf(b, "%s\"uninitialized constant %s\")", checks, name);
   else buf_printf(b, "\"uninitialized constant %s\"", name);
-  buf_puts(b, "), ((sp_Class){-1}))");
+  const_raise_close(b);
 }
 
 /* A constant read: ConstantReadNode and ConstantPathNode (A::B) (emit_expr_node's arms, in their order).
@@ -3971,17 +3980,21 @@ static int emit_constant_value(Compiler *c, int id, Buf *b, Buf *checks, const N
       if (!const_ref_is_rescued(c, id) && !const_ref_is_guarded(c, id))
         warn_undefined_constant(c, id, fullname);
       /* `klass::NM` on a Class value no class's NM answers: the value's class
-         names it, Object's the constant alone, as the switch's default does */
+         names it, Object's the constant alone, as the switch's default does.
+         The value is read in the message operand, so the raise leads the
+         text as it does for a read defined nowhere (const_raise_open). */
       if (nm && par_idc >= 0 && !par_nmc && !nt_kind_is_constant(par_tyc_k)) {
         Repr dr = repr_of(c, par_idc);
         if (dr.as_ty == TY_CLASS || dr.as_ty == TY_POLY) {
           int tk = ++g_tmp, obj_k = comp_core_class(c, CORE_OBJECT), oid = builtin_class_id("Object");
+          const_raise_open(b);
           buf_printf(b, "({ sp_Class _t%d = ", tk);
           if (dr.kind == RK_BOXED) { buf_puts(b, "sp_unbox_class("); emit_boxed(c, par_idc, b); buf_puts(b, ")"); }
           else emit_expr(c, par_idc, b);
-          buf_printf(b, "; sp_raise_cls(\"NameError\", _t%d.cls_id == %d || _t%d.cls_id == %d ? \"uninitialized constant %s\" : sp_sprintf("
-                        "\"uninitialized constant %%s::%s\", sp_class_to_s(_t%d))); ((sp_Class){-1}); })",
+          buf_printf(b, "; _t%d.cls_id == %d || _t%d.cls_id == %d ? \"uninitialized constant %s\" : sp_sprintf("
+                        "\"uninitialized constant %%s::%s\", sp_class_to_s(_t%d)); })",
                      tk, oid, tk, obj_k >= 0 ? obj_k : oid, nm, nm, tk);
+          const_raise_close(b);
           return 1;
         }
       }
@@ -4021,9 +4034,22 @@ static int emit_constant_value(Compiler *c, int id, Buf *b, Buf *checks, const N
 }
 
 /* Select the persistent slot with the same lookup and guards as a read. */
+/* The value constant path `id` is read on (the `m` of `m::NM`, the `(yield)`
+   of `(yield)::A::NM`), or -1 for a path of constants alone. */
+static int const_path_value_root(const NodeTable *nt, int id) {
+  int p = nt_kind(nt, id) == NK_ConstantPathNode ? nt_ref(nt, id, "parent") : -1;
+  while (p >= 0 && nt_kind(nt, p) == NK_ConstantPathNode) p = nt_ref(nt, p, "parent");
+  return p >= 0 && !nt_kind_is_constant(nt_kind(nt, p)) ? p : -1;
+}
+
 /* See codegen_internal.h. The read is emitted aside and dropped: only
    whether it is the NameError's raise is kept (a read that resolves
-   leaves no trace, its temporaries' numbers put back). */
+   leaves no trace, its temporaries' numbers put back). Every such raise,
+   `klass::NM` on a Class value included, is written by const_raise_open,
+   so its head is the one this reads. The value a path is read on is bound
+   to a stand-in for that emission (const_path_value_root): its own code (a
+   yield, a call) is no part of the head, and emitted again here it would
+   run its emitters a second time, where the read does not sit. */
 int const_read_raises(Compiler *c, int id) {
   NodeKind k = nt_kind(c->nt, id);
   if (!nt_kind_is_constant(k) || !comp_const_undefined(c, id)) return 0;
@@ -4031,18 +4057,12 @@ int const_read_raises(Compiler *c, int id) {
   memset(&t, 0, sizeof t); memset(&pre, 0, sizeof pre);
   Buf *saved_pre = g_pre; int saved_tmp = g_tmp;
   g_pre = &pre;
+  int root = const_path_value_root(c->nt, id);
+  int vmark = root >= 0 ? view_bind(root, "0") : -1;
   emit_expr(c, id, &t);
+  if (vmark >= 0) view_unbind(vmark);
   g_pre = saved_pre; g_tmp = saved_tmp;
-  static const char raise[] = "(sp_raise_cls(\"NameError\"";
-  /* `klass::NM` on a Class value, NM a constant no class defines: the read
-     holds the value and raises naming it, whatever it is (emit_constant_value) */
-  static const char held[] = "({ sp_Class _t", held_raise[] = "; sp_raise_cls(\"NameError\", _t",
-                    held_end[] = "((sp_Class){-1}); })";
-  size_t n = t.p ? strlen(t.p) : 0;
-  int r = !pre.p && t.p &&
-          (!strncmp(t.p, raise, sizeof raise - 1) ||
-           (!strncmp(t.p, held, sizeof held - 1) && strstr(t.p, held_raise) &&
-            n >= sizeof held_end - 1 && !strcmp(t.p + n - (sizeof held_end - 1), held_end)));
+  int r = !pre.p && t.p && !strncmp(t.p, const_raise_head, sizeof const_raise_head - 1);
   free(t.p); free(pre.p);
   return r;
 }

@@ -2592,6 +2592,19 @@ void emit_block_binds(Compiler *c, int blk, const int *yargs, int yc,
   free(rest_lv.p);
 }
 
+/* Is a block's tail a raise of no type, which the splice coerces into the
+   yield's slot of type want_ty: a call no class answers (the gate's
+   NoMethodError, an sp_RbVal, which a boxed slot takes as it is unless
+   --int-overflow=promote made the slot boxed), or a read of a constant
+   defined nowhere (a Class placeholder, which no other slot takes, a boxed
+   one included)? */
+static int block_tail_raises_untyped(Compiler *c, int tail, TyKind want_ty) {
+  if (want_ty == TY_UNKNOWN || want_ty == TY_VOID || want_ty == TY_NIL) return 0;
+  if (const_read_raises(c, tail)) return 1;
+  return (want_ty != TY_POLY || g_promote_mode) &&
+         nt_kind(c->nt, tail) == NK_CallNode && comp_ntype(c, tail) == TY_UNKNOWN;
+}
+
 static int block_tail_lacks_value(Compiler *c, int id, int poly) {
   if (id < 0 || nt_kind(c->nt, id) != NK_CallNode) return 0;
   if (comp_ntype(c, id) != TY_VOID && comp_ntype(c, id) != TY_UNKNOWN) return 0;
@@ -2604,6 +2617,11 @@ static int block_tail_lacks_value(Compiler *c, int id, int poly) {
   return mi >= 0 && method_is_void(&c->scopes[mi]);
 }
 
+/* The splice of the literal block g_block_id where a yield (or a call of
+   the block) runs it: its parameters bound to args_node's values and its
+   body emitted in place, as statements at `indent`, or with as_expr as a
+   statement expression whose value is the block's, read into a slot of
+   type want_ty. */
 void emit_block_invoke(Compiler *c, int args_node, Buf *b, int indent, int as_expr,
                        TyKind want_ty) {
   /* want_ty: the consumer's slot type for the block's value (the YieldNode's
@@ -3030,16 +3048,16 @@ void emit_block_invoke(Compiler *c, int args_node, Buf *b, int indent, int as_ex
     buf_puts(b, "; ");
   }
   else if (as_expr && !nx_own && bn3 > 0 &&
-           (want_ty != TY_POLY || g_promote_mode) && want_ty != TY_UNKNOWN && want_ty != TY_VOID && want_ty != TY_NIL &&
-           nt_kind(nt, nt_paren_single(c->nt, bd3[bn3 - 1])) == NK_CallNode &&
-           comp_ntype(c, nt_paren_single(c->nt, bd3[bn3 - 1])) == TY_UNKNOWN) {
+           block_tail_raises_untyped(c, nt_paren_single(c->nt, bd3[bn3 - 1]), want_ty)) {
     /* An untyped call tail (a method no class answers) lowers to the gate's
        NoMethodError raise, an sp_RbVal; spliced bare, it became the value of
        a statement expression read into the yield's typed slot, and the C did
        not compile when another site's block typed that slot (`try { 1 }` then
        `try { obj.missing }`). The raise never returns, so coerce it to the
        slot as emit_unresolved_coerced does for any typed store; the `next`
-       arm above drops the same tail for the same reason. */
+       arm above drops the same tail for the same reason. A read of a
+       constant defined nowhere is the same raise, valued as a Class
+       (`try { 1 }` then `try { Nope }`). */
     /* Under --int-overflow=promote the slot is poly where it was an
        Integer, and a raise arm of no type answers a placeholder of its own
        (`nil.at(0)`'s 0): evaluated for the raise, the slot gets its nil. */

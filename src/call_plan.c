@@ -155,7 +155,9 @@ int cplan_class_value_answers(Compiler *c, int recv, const char *name) {
   const NodeTable *nt = c->nt;
   NodeKind rk = recv >= 0 ? nt_kind(nt, recv) : NK_NONE;
   const char *bn = rk == NK_ConstantReadNode || (rk == NK_ConstantPathNode && nt_ref(nt, recv, "parent") < 0) ? nt_key_name(nt, recv) : NULL;
-  int bid = bn && comp_class_index(c, bn) < 0 ? builtin_class_id(bn) : 0;
+  /* (a program's reopening of a builtin constant keeps the builtin's own chain; a class of the program's own that merely shares the name has none) */
+  int bci = bn ? comp_class_index(c, bn) : -1;
+  int bid = bn && (bci < 0 || c->classes[bci].is_builtin_const) ? builtin_class_id(bn) : 0;
   if (!bid) return (!bn && builtin_cmethod_known_any(name)) || core_class_value_answers("Class#", name) || core_class_value_answers("Module#", name);
   return core_class_value_answers(bn, name) || core_class_value_answers(is_builtin_module_name(bn) ? "Module#" : "Class#", name) ||
          builtin_class_id_answers(bid, name, 1);

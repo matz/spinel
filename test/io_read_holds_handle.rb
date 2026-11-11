@@ -1,3 +1,4 @@
+# spinel: gc-stress
 # A handle that nothing else holds stays open while its read or pread runs:
 # a collection during the read does not close it
 require "tmpdir"

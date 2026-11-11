@@ -21360,7 +21360,11 @@ static int arity_violation(Compiler *c, int id, int non_nil, char *exp, size_t n
       else if (c->classes[uc].is_data) cn = "DataClass";
       else surface = mod ? "Module" : "Class";
     }
-    if (surface) {
+    /* a builtin class the program reopens keeps the counts of its own class
+       methods (IO.for_fd) for a name the program does not define; the rest
+       is the surface's */
+    int own = !surface || class_is_builtin_reopen(c, uc) ? class_arity_spec_row(c, id, cn, name, with_block, &argc, kwh, exp, n) : 0;
+    if (surface && !own) {
       if (kwh) return 0;   /* (Class's and Module's rows do not say which take keywords) */
       if (reopened_owns(c, surface, name) ||
           (sp_streq(surface, "Class") && reopened_owns(c, "Module", name)) ||
@@ -21369,7 +21373,7 @@ static int arity_violation(Compiler *c, int id, int non_nil, char *exp, size_t n
           (!arity_spec_row(itbl, "Object", name, with_block, argc, exp, n) || toplevel_def(c, name)))
         return 0;
     }
-    else if (!class_arity_spec_row(c, id, cn, name, with_block, &argc, kwh, exp, n)) return 0;
+    else if (!own) return 0;
     if (!exp[0]) return 0;
     *eval_recv = 0;  /* a constant read has no effect to evaluate */
   }

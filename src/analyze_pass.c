@@ -18348,7 +18348,7 @@ static int infer_block_params_call_arms(Compiler *c, const NodeTable *nt, int id
     }
     else {
       TyKind rt0 = infer_type(c, recv);
-      if (rt0 == TY_STRING || rt0 == TY_STRBUF || rt0 == TY_RANDOM || rt0 == TY_FLOAT || rt0 == TY_SYMBOL) {
+      if (rt0 == TY_STRING || rt0 == TY_STRBUF || rt0 == TY_RANDOM || rt0 == TY_FLOAT || rt0 == TY_SYMBOL || rt0 == TY_NIL) {
         mi = cplan_user_fresh(c, id)->mi;
         /* a Random, Float or Symbol method that hands its block a container is
            not called through its proc form either (reopen_yields_known_container) */

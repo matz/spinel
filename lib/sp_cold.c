@@ -1149,9 +1149,15 @@ sp_PolyArray *sp_math_lgamma(double x) {
     /* pole at every non-positive integer -- detect it directly, since
        sin(M_PI * x) is not exactly 0 there in floating point (#3016).
        gamma approaches -inf from the -0 side, so -0.0 alone reports sign
-       -1 (CRuby/C99 lgamma_r) (#3116). */
+       -1 (CRuby/C99 lgamma_r) (#3116). The sign at a pole is unspecified
+       by C99, so CRuby's answer follows its libm: glibc says -1 at every
+       negative integer and macOS says 1. Spinel answers what Ruby's own
+       documentation lists (lgamma(-1.0) # => [Infinity, -1], and -2.0,
+       -3.0, -4.0 alike), which is the glibc answer the CI runners give;
+       Ruby decides +-0.0 itself, so only +0.0 keeps 1. ruby/spec leaves the
+       sign at -1 unchecked. */
     v = INFINITY;
-    if (x == 0.0 && signbit(x)) sign = -1;
+    sign = (x == 0.0 && !signbit(x)) ? 1 : -1;
   }
   else {
     double s = sin(M_PI * x);

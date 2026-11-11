@@ -7126,7 +7126,7 @@ static const char *const object_methods[] = { "to_s", "inspect", "class", "hash"
    aliases (comp_class_shape_gen), and the readers and writers
    (comp_table_gen). */
 static struct { int on, ncls, nscp, keyed; unsigned sgen, shape, tgen; const Compiler *c;
-                char ***names; int *n; char **inames; int ninames; } g_dsn;
+                char ***names; int *n; char **inames; int ninames; int *every; int nevery; } g_dsn;
 static void dsn_inames_free(char **in, int n) {
   for (int i = 0; i < n; i++) free(in[i]);
   free(in);
@@ -7141,8 +7141,10 @@ static void dsn_memo_free(void) {
   }
   free(g_dsn.names); free(g_dsn.n);
   dsn_inames_free(g_dsn.inames, g_dsn.ninames);
+  free(g_dsn.every);
   g_dsn.names = NULL; g_dsn.n = NULL; g_dsn.ncls = g_dsn.nscp = 0;
   g_dsn.inames = NULL; g_dsn.ninames = 0;
+  g_dsn.every = NULL; g_dsn.nevery = 0;
 }
 /* The distinct names of the program's instance methods -- a named scope in
    a class, or a top-level def, that is not a class method -- in the order
@@ -7227,16 +7229,34 @@ static char **dsn_inames(Compiler *c, int *nin, int *owned) {
    send(name) raised NoMethodError for the `try` an Object reopening gives
    every object. Not a blank slate's (`< BasicObject`), which has none of
    them. */
+/* Is name i of `in` defined for every object: by Object's chain or a
+   top-level def (not main's own `def self.k`)? */
+static int dsend_every_object_name(Compiler *c, int oc, const char *nm) {
+  int tm = comp_method_index(c, nm);
+  return (oc >= 0 && comp_method_in_chain(c, oc, nm, NULL) >= 0) || (tm >= 0 && !c->scopes[tm].is_cmethod);
+}
 static void dsend_add_every_object_names(Compiler *c, int cls, char **in, int nin,
                                          char ***names, int *n, int *cap, ANameHash *seen) {
   if (cls >= 0 && class_is_blank_slate(c, cls)) return;
   int oc = comp_builtin_class_named(c, "Object");
-  for (int i = 0; i < nin; i++) {
-    int tm = comp_method_index(c, in[i]);   /* a top-level def, not main's own (`def self.k`) */
-    if ((oc >= 0 && oc != cls && comp_method_in_chain(c, oc, in[i], NULL) >= 0) ||
-        (tm >= 0 && !c->scopes[tm].is_cmethod))
-      dsend_add_name(names, n, cap, seen, in[i]);
+  /* The names are the same for every class: kept with the memo's own
+     instance-method names, they are asked once per memo, not once per class
+     and per name (most of a held run of the pass). For Object itself its
+     chain's names are among the class's own already, and `seen` skips them,
+     as the test of `oc != cls` did. */
+  if (g_dsn.on && in == g_dsn.inames) {
+    if (!g_dsn.every) {
+      g_dsn.every = malloc(sizeof(int) * (size_t)(nin > 0 ? nin : 1));
+      if (!g_dsn.every) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+      g_dsn.nevery = 0;
+      for (int i = 0; i < nin; i++)
+        if (dsend_every_object_name(c, oc, in[i])) g_dsn.every[g_dsn.nevery++] = i;
+    }
+    for (int j = 0; j < g_dsn.nevery; j++) dsend_add_name(names, n, cap, seen, in[g_dsn.every[j]]);
+    return;
   }
+  for (int i = 0; i < nin; i++)
+    if (dsend_every_object_name(c, oc, in[i])) dsend_add_name(names, n, cap, seen, in[i]);
 }
 static int dsend_receiver_names_uncached(Compiler *c, int cls, int subclasses, char ***out);
 static int dsend_receiver_names(Compiler *c, int cls, int subclasses, char ***out) {

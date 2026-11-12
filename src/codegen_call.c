@@ -9417,6 +9417,9 @@ static int pd_region_temps(const char *r, size_t rn, int line_ok, int **tnum_out
 /* the hoisted function's result type when the dispatch's slot is an sp_oint /
    sp_ofloat (nil out of band): set by the dispatcher around its pd_hoist */
 static const char *g_pd_ret_ctype = NULL;
+/* ...and the temp a String dispatch keeps a user arm's publication in, put
+   back in the return channel as the hoisted switch closes (0: none) */
+static int g_pd_pub_keep = 0;
 static int pd_hoist(Compiler *c, int id, const char *name, Buf *b, size_t from, int tr, TyKind rct,
                     const int *pid, const TyKind *pty, int np) {
   if (pd_disabled() || !b->p || b->len <= from) return 0;
@@ -9444,8 +9447,9 @@ static int pd_hoist(Compiler *c, int id, const char *name, Buf *b, size_t from, 
     for (int a = 0; a < np; a++) if (pid[a] == tnum[k]) canon[k] = a;
     if (canon[k] < 0) canon[k] = next++;
   }
-  int tr_canon = -1;
+  int tr_canon = -1, pk_canon = -1;
   for (int k = 0; k < nt; k++) if (tnum[k] == tr) tr_canon = canon[k];
+  for (int k = 0; k < nt; k++) if (g_pd_pub_keep && tnum[k] == g_pd_pub_keep) pk_canon = canon[k];
   if (tr_canon < 0 || !decide_node(c->nt, id, "pd-hoist", name)) { free(tnum); free(tdecl); free(canon); return 0; }
   Buf body; memset(&body, 0, sizeof body);
   for (size_t i = 0; i < rn; ) {
@@ -9513,7 +9517,9 @@ static int pd_hoist(Compiler *c, int id, const char *name, Buf *b, size_t from, 
     emit_current_line_directive(c, &db);   /* the first site it came from */
     buf_puts(&db, "static ");
     buf_printf(&db, sig.p, pd_fn_name(fn));
-    buf_printf(&db, " { %s } return _t%d; }\n", body.p ? body.p : "", tr_canon);
+    buf_printf(&db, " { %s }", body.p ? body.p : "");
+    if (pk_canon >= 0) buf_printf(&db, " _sp_ret_strbuf = _t%d;", pk_canon);
+    buf_printf(&db, " return _t%d; }\n", tr_canon);
     pd_proto[fn] = pb.p; pd_def[fn] = db.p;
   }
   /* the site: the result temp from the call */
@@ -10758,6 +10764,9 @@ int emit_poly_native_arm_stmt(Compiler *c, const char *call, TyKind mret, TyKind
     }
     else if (so) buf_printf(b, "%s(%s)", oint_of(ret), call ? call : "");
     else buf_puts(b, call ? call : "");
+    /* (a binding answering its object's handle publishes it, kept as a
+       user arm's is: g_poly_pub_keep) */
+    if (g_poly_pub_keep) buf_printf(b, "; _t%d = _sp_ret_strbuf", g_poly_pub_keep);
   }
   buf_puts(b, ";");
   return conv;
@@ -11365,6 +11374,20 @@ int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
         else buf_puts(b, trn_o ? oint_nil(ret) : is_scalar_ret(ret) ? default_value_from_compiler(c, ret) : "0");
         buf_puts(b, "; ");
       }
+      /* A String the call's targets publish is picked up from the return
+         channel after the dispatch (repr_call_returns_handle). A builtin
+         arm answers a new String and publishes nothing of its own, but a
+         read of a String argument on the way to it (sp_strbuf_read_pub)
+         left that argument's handle there, and the pickup took the
+         argument for the answer (`text = time.strftime(pattern)` over a
+         Time beside a Date answered the pattern). The channel the dispatch
+         leaves is what a user arm published, kept aside as the arm runs
+         (g_poly_pub_keep), else nothing. */
+      int pub_keep = 0;
+      if (!is_setter_val && ret == TY_STRING && repr_call_returns_handle(c, id)) {
+        pub_keep = ++g_tmp;
+        buf_printf(b, "void *_t%d = NULL; ", pub_keep);
+      }
       /* The builtin index/bit-ref arms use the index as a raw sp_int; unbox it
          when the index temp widened to poly (promote mode). */
       /* only an index call has an argument temp to name: atmp[0] is unset for
@@ -11408,7 +11431,10 @@ int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
       if (g_plan_check) pa_flags(form);
       { PolyUserArgs U = { argc, pos_argc, kwh, kwall, kwall_any, kw_pos, has_splat_arg, splat_a, stk,
                            is_setter_val, blk_tmp2, tv, tr, ret, argv, atmp, htmp, atmp_ty, &kw, &pform };
-        emit_poly_user_arms_n(c, id, name, &U, b); }
+        int pk = g_poly_pub_keep;
+        g_poly_pub_keep = pub_keep;
+        emit_poly_user_arms_n(c, id, name, &U, b);
+        g_poly_pub_keep = pk; }
       int is_aref = sp_streq(name, "[]") && argc == 1 && splat_a < 0;
       int is_aref2 = sp_streq(name, "[]") && argc == 2 && splat_a < 0;
       /* fetch with a block answers the block for a missing key: the
@@ -11446,11 +11472,14 @@ int emit_poly_method_dispatch(Compiler *c, int id, Buf *b) {
         if (stk >= 0) { pid[n] = stk; pty[n++] = TY_POLY_ARRAY; }
         if (blk_tmp2 >= 0) { pid[n] = blk_tmp2; pty[n++] = TY_PROC; }   /* the block's proc */
         g_pd_ret_ctype = trn_o && !is_setter_val ? oint_ctype(ret) : NULL;
+        g_pd_pub_keep = pub_keep;
         pd_done = pd_hoist(c, id, name, b, pd_from, tr, is_scalar_ret(ret) ? ret : TY_INT, pid, pty, n);
         g_pd_ret_ctype = NULL;
+        g_pd_pub_keep = 0;
         free(pid); free(pty);
       }
       if (!pd_done) buf_puts(b, " }");
+      if (!pd_done && pub_keep) buf_printf(b, " _sp_ret_strbuf = _t%d;", pub_keep);
       if (kw_pos) emit_poly_str_aset_writeback(c, recv, &ps, &ptemps, b);
       /* A handle the call is typed a String for answers its bytes, as the
          static receiver's setter does: the handle itself put an sp_String *

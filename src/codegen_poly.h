@@ -70,6 +70,9 @@ int  poly_native_arm_fits(Compiler *c, int k, const char *name, int n, const int
                           const TyKind *atmp_ty, TyKind *mret);
 int  emit_poly_user_arm_n(Compiler *c, int id, int k, const char *call, TyKind mret, Scope *ms, TyKind ret,
                           int tr, int so, int is_setter_val, Buf *b);
+/* The temp a String dispatch whose answer a pickup takes keeps a user arm's
+   publication in, set while its user arms are written (0: none) */
+extern int g_poly_pub_keep;
 void emit_poly_index_cases(TyKind ret, int tr, int tv, const char *idxref, int so, Buf *b);
 int  poly_pred_kind(const char *name, int argc);
 int  poly_exc_cand(Compiler *c, const char *name);

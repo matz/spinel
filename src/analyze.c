@@ -46226,6 +46226,21 @@ static void arysub_super_into(Compiler *c, int at, int n, const char *mname, int
     arysub_set_call(c, n, self, mn, args, blk);
     nt_node_set_int((NodeTable *)c->nt, n, "builtin_only", 1);
   }
+  /* Hash#initialize keeps the entries the subclass's initialize wrote ahead
+     of its super (hashie's Mash: `deep_update(source_hash); super(default)`)
+     and sets only the default or the default proc; Array#initialize replaces
+     the elements, as the arms after these do */
+  else if (init == 1 && sp_streq(bn, "Hash") && blk < 0 && (an == 0 ||
+           (an == 1 && nt_kind(c->nt, nt_arr(c->nt, args, "arguments", &an)[0]) != NK_KeywordHashNode))) {
+    int dv = an == 0 ? arysub_node(c, "NilNode", at) : -1;
+    if (an == 0 && dv >= 0) args = arysub_args(c, at, &dv, 1);
+    if (args >= 0) arysub_set_call(c, n, self, "default=", args, -1);
+  }
+  else if (init == 1 && sp_streq(bn, "Hash") && an == 0) {
+    int made = arysub_builtin_call(c, at, bn, "new", -1, blk);
+    int dp = made >= 0 ? arysub_new_call(c, at, made, "default_proc", -1, -1) : -1;
+    if (dp >= 0) arysub_set_call(c, n, self, "default_proc=", arysub_args(c, at, &dp, 1), -1);
+  }
   else if (an == 0 && blk < 0 && !sp_streq(bn, "Time")) arysub_set_call(c, n, self, "clear", -1, -1);
   else {
     int an_call = arysub_builtin_call(c, at, bn, "new", an ? args : -1, blk);

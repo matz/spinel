@@ -9,3 +9,11 @@ nil
 2
 "a"
 nil
+2
+"shelf"
+"a"
+hash: "NoMethodError"
+range: "NoMethodError"
+bag: "NoMethodError"
+poly array: 2
+poly bag: "NoMethodError"

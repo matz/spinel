@@ -14440,15 +14440,13 @@ static int desugar_enum_named_call(Compiler *c, int id, NodeTable *nt, const cha
        reverse.find lowering as a typed array, provided no class of the
        program defines its own rfind -- then a poly receiver could be that
        class and the call must stay a dispatch. */
-    int rrc_poly = rrc >= 0 && nt_ref(nt, id, "block") >= 0 &&
-                   (infer_type(c, rrc) == TY_POLY || nt_kind(nt, rrc) == NK_YieldNode) &&
-                   !an_user_recv_defines_method(c, "rfind");
-    if (rrc >= 0 && (ty_is_array(infer_type(c, rrc)) || rrc_empty_lit || rrc_poly)) {
+    int rrc_yield = rrc >= 0 && nt_kind(nt, rrc) == NK_YieldNode;
+    if (rrc >= 0 && !rrc_yield && (ty_is_array(infer_type(c, rrc)) || rrc_empty_lit)) {
       /* a typed array's block form is walked backwards by the find loop
          itself (the "rfind" flag below); a poly receiver goes through the
          generic find clone, which only walks forwards, so it needs the
          reversed copy as its receiver */
-      int rev = nt_ref(nt, id, "block") >= 0 && !rrc_poly ? -1 : nt_new_node(nt, "CallNode");
+      int rev = nt_ref(nt, id, "block") >= 0 ? -1 : nt_new_node(nt, "CallNode");
       if (rev >= 0) {
         nt_node_set_str(nt, rev, "name", "reverse");
         nt_node_set_ref(nt, rev, "receiver", rrc);

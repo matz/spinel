@@ -6286,11 +6286,7 @@ static char *sp_splice_builtins(char *source, const char *exe_path,
   /* the spellings the analyzer rewrites onto a builtin's name */
   static const char *const aliases[][2] = { { "with_object", "each_with_object" }, { "collect_concat", "flat_map" }, { "detect", "find" },
     /* Array#index with a block and no argument (desugar_builtin_enum_calls) */
-    { "index", "find_index" },
-    /* Array#rfind { } on a receiver typed only at run time lowers to
-       reverse.find (desugar_enum_named_call): a program that writes rfind
-       and no find still needs find's copy for that site */
-    { "rfind", "find" }, { NULL, NULL } };
+    { "index", "find_index" }, { NULL, NULL } };
   for (int k = 0; aliases[k][0] && !any; k++) {
     int known = 0;
     for (int i = 0; i < sp_builtin_enum_names_n; i++) if (strcmp(sp_builtin_enum_names[i], aliases[k][1]) == 0) known = 1;

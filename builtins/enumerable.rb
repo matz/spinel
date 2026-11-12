@@ -435,6 +435,21 @@ module Enumerable
     end
   end
 
+  def rfind
+    if block_given?
+      found = nil
+      to_a.reverse.each do |x|
+        if yield(x)
+          found = x
+          break
+        end
+      end
+      found
+    else
+      to_a.reverse.each
+    end
+  end
+
   def find_index
     # An accumulator + break, not `return i if yield(x)`: a `return` inside
     # a block only reaches out of an INLINED copy of this method (a plain C

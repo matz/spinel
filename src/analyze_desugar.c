@@ -16910,16 +16910,6 @@ int desugar_builtins(Compiler *c) {
       const int *iav = ia >= 0 ? nt_arr(nt, ia, "arguments", &iac) : NULL;
       if (iac == 0 || (iac == 1 && nt_kind(nt, iav[0]) == NK_SplatNode)) cn0 = "find_index";
     }
-    /* Array#rfind { } on a receiver known only at run time (a yield whose
-       blocks give an Integer array and a String array) is lowered to
-       `recv.reverse.find { }` in the fixpoint (desugar_enum_named_call), a
-       call that was written as rfind: give it the find copy that call will
-       need, or the widened receiver found no copy and the typed find loop
-       stayed shaped for the first block's element type (K-039) */
-    if (cn0 && sp_streq(cn0, "rfind") && nt_ref(nt, id, "block") >= 0 && nt_ref(nt, id, "receiver") >= 0) {
-      int ra = nt_ref(nt, id, "arguments");
-      if (ra < 0) cn0 = "find";
-    }
     /* `recv.send(:tally)` / public_send / __send__ with a literal name is
        retargeted onto `recv.tally` inside the fixpoint
        (desugar_public_send_recv), after this pass: give it its copy under
@@ -18154,6 +18144,24 @@ int desugar_builtin_enum_calls(Compiler *c) {
         infer_type(c, nt_ref(nt, id, "receiver")) == TY_POLY && !enumerator_own_with_object(c, id)) {
       bname = wor->target; wo_arm = 1;
     }
+    /* Array#rfind { } is the one Enumerable-shaped name only Array answers
+       (Hash, Range and an Enumerable class raise NoMethodError in CRuby), so
+       builtins/enumerable.rb's rfind may serve nothing but an Array. A value
+       known only at run time takes the same arm as with_object: the builtin
+       when it is an Array, the call as written for anything else (a class's
+       own rfind, or the NoMethodError); a receiver typed as anything but an
+       Array is left as written. */
+    const char *wo_cls = "Enumerator";
+    if (name && sp_streq(name, "rfind")) {
+      int rfr = nt_ref(nt, id, "receiver");
+      TyKind rft = rfr >= 0 ? infer_type(c, rfr) : TY_UNKNOWN;
+      int rf_lit = rfr >= 0 && nt_kind(nt, rfr) == NK_ArrayNode;
+      if (rft == TY_POLY && !nt_int(nt, id, "enum_wo_own", 0) && !nt_safe_nav(nt, id) &&
+          nt_ref(nt, id, "block") >= 0 && builtin_enum_name_index("rfind") >= 0) {
+        bname = "rfind"; wo_arm = 1; wo_cls = "Array";
+      }
+      else if (!ty_is_array(rft) && !rf_lit) continue;
+    }
     if (builtin_enum_name_index(bname ? bname : name) < 0) continue;
     int recv = nt_ref(nt, id, "receiver");
     if (recv < 0) continue;
@@ -18507,7 +18515,7 @@ int desugar_builtin_enum_calls(Compiler *c) {
       int own_only = own_arm && ndef == 0 && !safe_nav;   /* the own arm's test is the only one */
       if (own_only) pred = enum_owner_chain(c, rn, qn, blk >= 0);
       else if (!safe_nav) pred = range_arm ? enum_is_a_named(c, rn, "Range")
-                          : wo_arm ? enum_is_a_named(c, rn, "Enumerator")
+                          : wo_arm ? enum_is_a_named(c, rn, wo_cls)
                           : os_arm ? enum_is_a_named(c, rn, "OpenStruct") : enum_is_a_chain(c, rn, defcls, exact, ndef);
       /* an OpenStruct joins the Range arm, which the poly dispatch answers */
       if (os_arm && range_arm && pred >= 0) {

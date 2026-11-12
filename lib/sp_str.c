@@ -498,6 +498,15 @@ const char*sp_str_byteslice_range(const char*s,sp_int lo,sp_int hi,int excl,int 
    negative length raises, start is checked against the byte length with
    the original (pre-normalization) index in the message; an overlong span
    clamps to the end. */
+/* CRuby's str_ensure_byte_pos: a byte offset `pos` of `s` (bl bytes long)
+   that falls inside a character, past its first byte, is an IndexError.
+   Either end of the String is a boundary, and a BINARY String has one at
+   every byte. */
+void sp_str_byte_pos_check(const char*s,sp_int bl,sp_int pos){
+  if(pos<=0||pos>=bl||sp_str_is_binary(s))return;
+  if(((unsigned char)s[pos]&0xC0)==0x80)
+    sp_raise_cls("IndexError",sp_sprintf("offset %lld does not land on character boundary",(long long)pos));
+}
 /* CRuby's str_check_beg_len: a byte span of `s` checked and clipped as
    bytesplice reads it -- a negative length, a start outside the String, and
    in a String of characters either end inside one, each an IndexError. */
@@ -507,11 +516,8 @@ static void sp_str_bsp_span(const char*s,sp_int*beg,sp_int*len){
   if(sl<*beg||(*beg<0&&*beg+sl<0))sp_raise_cls("IndexError",sp_sprintf("index %lld out of string",(long long)*beg));
   if(*beg<0)*beg+=sl;
   if(*len>sl-*beg)*len=sl-*beg;   /* never *beg+*len: a huge length overflows it */
-  if(sp_str_is_binary(s))return;
-  sp_int at[2]={*beg,*beg+*len};
-  for(int k=0;k<2;k++)
-    if(at[k]>0&&at[k]<sl&&((unsigned char)s[at[k]]&0xC0)==0x80)
-      sp_raise_cls("IndexError",sp_sprintf("offset %lld does not land on character boundary",(long long)at[k]));
+  sp_str_byte_pos_check(s,sl,*beg);
+  sp_str_byte_pos_check(s,sl,*beg+*len);
 }
 /* String#bytesplice(start, len, str, str_start, str_len): bytes start...start+len
    of s replaced by bytes str_start...str_start+str_len of val. The result
@@ -1051,9 +1057,9 @@ sp_oint sp_str_rindex_from(const char*s,const char*sub,sp_int pos){if(!s)sp_nil_
    arguments are BYTE offsets, not codepoint indices. Byte-oriented throughout
    (sp_bytestr), so no utf8 walk is needed. nil on miss. */
 sp_oint sp_str_byteindex(const char*s,const char*sub){if(!s)sp_nil_recv("byteindex");if(!sub)sp_raise_cls("TypeError","no implicit conversion of nil into String");const char*f=sp_bytestr(s,sp_str_byte_len(s),sub,sp_str_byte_len(sub));return f?sp_oint_of((sp_int)(f-s)):sp_oint_nil();}
-sp_oint sp_str_byteindex_from(const char*s,const char*sub,sp_int start){if(!s)sp_nil_recv("byteindex");if(!sub)sp_raise_cls("TypeError","no implicit conversion of nil into String");sp_int bl=(sp_int)sp_str_byte_len(s);if(start<0)start+=bl;if(start<0||start>bl)return sp_oint_nil();const char*f=sp_bytestr(s+start,(size_t)(bl-start),sub,sp_str_byte_len(sub));return f?sp_oint_of((sp_int)(f-s)):sp_oint_nil();}
+sp_oint sp_str_byteindex_from(const char*s,const char*sub,sp_int start){if(!s)sp_nil_recv("byteindex");if(!sub)sp_raise_cls("TypeError","no implicit conversion of nil into String");sp_int bl=(sp_int)sp_str_byte_len(s);if(start<0)start+=bl;if(start<0||start>bl)return sp_oint_nil();sp_str_byte_pos_check(s,bl,start);const char*f=sp_bytestr(s+start,(size_t)(bl-start),sub,sp_str_byte_len(sub));return f?sp_oint_of((sp_int)(f-s)):sp_oint_nil();}
 sp_oint sp_str_byterindex(const char*s,const char*sub){if(!s)sp_nil_recv("byterindex");if(!sub)sp_raise_cls("TypeError","no implicit conversion of nil into String");size_t sl=sp_str_byte_len(sub);size_t hn=sp_str_byte_len(s);if(sl==0)return sp_oint_of((sp_int)hn);const char*end=s+hn;const char*last=NULL;const char*p=s;while(p<end){const char*f=sp_bytestr(p,(size_t)(end-p),sub,sl);if(!f)break;last=f;p=f+1;}return last?sp_oint_of((sp_int)(last-s)):sp_oint_nil();}
-sp_oint sp_str_byterindex_from(const char*s,const char*sub,sp_int pos){if(!s)sp_nil_recv("byterindex");if(!sub)sp_raise_cls("TypeError","no implicit conversion of nil into String");sp_int bl=(sp_int)sp_str_byte_len(s);if(pos<0)pos+=bl;if(pos<0)return sp_oint_nil();if(pos>bl)pos=bl;size_t sl=sp_str_byte_len(sub);if(sl==0)return sp_oint_of(pos);const char*end=s+bl;const char*p=s;sp_int best=-1;while(p<end){const char*f=sp_bytestr(p,(size_t)(end-p),sub,sl);if(!f)break;sp_int off=(sp_int)(f-s);if(off>pos)break;best=off;p=f+1;}return best<0?sp_oint_nil():sp_oint_of(best);}
+sp_oint sp_str_byterindex_from(const char*s,const char*sub,sp_int pos){if(!s)sp_nil_recv("byterindex");if(!sub)sp_raise_cls("TypeError","no implicit conversion of nil into String");sp_int bl=(sp_int)sp_str_byte_len(s);if(pos<0)pos+=bl;if(pos<0)return sp_oint_nil();if(pos>bl)pos=bl;sp_str_byte_pos_check(s,bl,pos);size_t sl=sp_str_byte_len(sub);if(sl==0)return sp_oint_of(pos);const char*end=s+bl;const char*p=s;sp_int best=-1;while(p<end){const char*f=sp_bytestr(p,(size_t)(end-p),sub,sl);if(!f)break;sp_int off=(sp_int)(f-s);if(off>pos)break;best=off;p=f+1;}return best<0?sp_oint_nil():sp_oint_of(best);}
 /* start/len are codepoint indices/counts. */
 /* The String a one-byte character c reads as: a BINARY string's own, or the
    shared one-character String, which costs no allocation; NULL for NUL,

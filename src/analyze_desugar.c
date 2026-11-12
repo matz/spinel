@@ -21985,6 +21985,15 @@ static const char *alias_builtin_root(const NodeTable *nt, const char *cls, cons
   return NULL;
 }
 
+/* Does a call of `name` among the first n0 nodes pass a block (a literal
+   or a block argument)? */
+static int alias_called_with_block(const NodeTable *nt, const char *name, int n0) {
+  for (int u = 0; u < n0; u++)
+    if (nt_kind(nt, u) == NK_CallNode && nt_ref(nt, u, "block") >= 0 && sp_streq(nt_str(nt, u, "name"), name))
+      return 1;
+  return 0;
+}
+
 int desugar_inherited_aliases(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int n0 = nt->count, changed = 0;
@@ -22036,12 +22045,16 @@ int desugar_inherited_aliases(Compiler *c) {
           nt_node_set_arr(nt, args, "arguments", rd, ar);
           nt_node_set_ref(nt, call, "arguments", args);
         }
-        /* the caller's block reaches the builtin, as through the alias (`raw_each { ... }` of Hash#each) */
-        int bp = fwd_new_node_like(nt, s, "BlockParameterNode"), ba = fwd_new_node_like(nt, s, "BlockArgumentNode");
-        nt_node_set_str(nt, bp, "name", "spinel_alias_b__");
-        nt_node_set_ref(nt, ps, "block", bp);
-        nt_node_set_ref(nt, ba, "expression", local_read_like(nt, s, "spinel_alias_b__"));
-        nt_node_set_ref(nt, call, "block", ba);
+        /* the caller's block reaches the builtin, as through the alias (`raw_each { ... }` of Hash#each):
+           only where the program calls the alias with one, as a builtin that takes no block
+           (Array#size) is no call of the builtin with a block argument */
+        if (alias_called_with_block(nt, nwb, n0)) {
+          int bp = fwd_new_node_like(nt, s, "BlockParameterNode"), ba = fwd_new_node_like(nt, s, "BlockArgumentNode");
+          nt_node_set_str(nt, bp, "name", "spinel_alias_b__");
+          nt_node_set_ref(nt, ps, "block", bp);
+          nt_node_set_ref(nt, ba, "expression", local_read_like(nt, s, "spinel_alias_b__"));
+          nt_node_set_ref(nt, call, "block", ba);
+        }
         nt_node_set_str(nt, call, "name", odb);
         nt_node_set_ref(nt, call, "receiver", self);
         nt_node_set_int(nt, call, "builtin_only", 1);

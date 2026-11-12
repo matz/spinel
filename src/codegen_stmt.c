@@ -25061,15 +25061,27 @@ static int strbuf_recv_hold(Compiler *c, int recv, const char *name, int argc, c
 /* emit_array_mutate_stmt_body's String appends (<< and concat) and its bang
    methods, with and without arguments (answers 1 emitted, 0 declined, -1 to
    go on) */
-/* concat(a, b, ...) onto the handle `sref`: the frozen check first, then
-   every argument taken before anything is appended, as CRuby does (a handle
-   argument reads as a copy, so `s.concat(s, s)` appends the String as it
-   was), then the frozen check, then the appends in order */
+/* Is argument `arg` of a concat of `argc` staged as a copy? One of several
+   is, since every one is taken before any is appended and its String may be
+   the receiver the first append grows, or one a later argument changes. A
+   new String no name holds yet (share_value_fresh: a literal, `x + y`, a
+   method answering its own local's String) is neither, and is staged as it
+   is. */
+static int concat_arg_own(Compiler *c, int argc, int arg) {
+  return argc > 1 && !share_value_fresh(c, arg, 0);
+}
+/* concat(a, b, ...) onto the handle `sref`: every argument taken before
+   anything is appended, as CRuby does (one of several is staged as a copy,
+   concat_arg_own, so `s.concat(s, s)` appends the String as it was), then
+   the frozen check, then the appends in order */
 void emit_str_concat_handle(Compiler *c, const char *sref, int argc, const int *argv, Buf *b, int indent) {
+  /* the last argument whose staging can allocate: its own evaluation, a
+     conversion's answer, or the copy it is staged as */
   int last_alloc = -1;
   for (int a = argc - 1; a >= 0; a--) {
     Repr r = repr_of(c, argv[a]);
-    if (r.as_ty != TY_STRING || (!arg_ran_first(argv[a], 0) && operand_may_allocate(c, argv[a]))) {
+    if (r.as_ty != TY_STRING || concat_arg_own(c, argc, argv[a]) ||
+        (!arg_ran_first(argv[a], 0) && operand_may_allocate(c, argv[a]))) {
       last_alloc = a;
       break;
     }
@@ -25083,11 +25095,18 @@ void emit_str_concat_handle(Compiler *c, const char *sref, int argc, const int *
      argument may be this very String, whose sp_poly_to_s is the live buffer
      the first append grows: it is staged as a copy. */
   int held0 = g_one_held;
-  if (argc > 1) g_one_held = 1;   /* (one representation: a handle argument is read as a copy, as every one was) */
+  /* (one representation: each of several is kept as the copy it is staged
+     as, and no call holds what it is computed from: those operands are read
+     where they run, as a statement's are. Read as copies under g_one_held,
+     the two of `a + b` were made one after the other, the first with no
+     root while the second was made) */
+  if (argc > 1) g_one_held = 0;
   for (int a = 0; a < argc; a++) {
     int boxed = repr_of(c, argv[a]).kind == RK_BOXED;
+    int own = concat_arg_own(c, argc, argv[a]);
     buf_printf(b, " const char *_t%d = %s", base + a, boxed ? "sp_str_concat(" : "");
-    emit_str_append_arg(c, argv[a], rt.p, b);
+    if (own) emit_str_append_arg_own(c, argv[a], rt.p, b);
+    else emit_str_append_arg(c, argv[a], rt.p, b);
     buf_printf(b, "%s;", boxed ? ", \"\")" : "");
     int v = argv[a];
     while (v >= 0 && nt_kind(c->nt, v) == NK_ParenthesesNode) {
@@ -25096,7 +25115,9 @@ void emit_str_concat_handle(Compiler *c, const char *sref, int argc, const int *
       v = n > 0 ? seq[n - 1] : -1;
     }
     int literal = v >= 0 && nt_kind(c->nt, v) == NK_StringNode && !operand_may_allocate(c, v);
-    int held = repr_of(c, argv[a]).as_ty == TY_STRING && arg_ran_first(argv[a], 0);
+    /* (an ordered temp read as it is: one staged as a copy is the copy,
+       which the temp's root does not reach) */
+    int held = !own && repr_of(c, argv[a]).as_ty == TY_STRING && arg_ran_first(argv[a], 0);
     /* Fresh snapshots span later sp_strbuf_read_pub/sp_str_concat copies
        or argument allocations such as sp_str_repeat. append_bin cannot
        collect; an ordered String temp or immortal literal needs no root. */

@@ -1549,6 +1549,9 @@ int emit_unknown_kwarg_raise(Compiler *c, Scope *m, const int *argv, int argc);
    because the rule was written twice and the second copy only had the typed half
    (#4425). */
 void emit_str_append_arg(Compiler *c, int arg, const char *rtext, Buf *b);
+/* ...for a consumer that takes every argument before it appends any: a
+   String argument is read as a copy (emit_str_expr_own). */
+void emit_str_append_arg_own(Compiler *c, int arg, const char *rtext, Buf *b);
 void emit_str_force_encoding(Compiler *c, const char *name, const char *r, const int *argv, int argc, Buf *b);
 int rest_shortfall_required(Compiler *c, Scope *m);
 /* Emit a hash key, unboxing a poly value to the typed-hash's key type. */
@@ -3205,6 +3208,7 @@ void emit_int_expr(Compiler *c, int node, Buf *b);
    an `x + c` whose check waited (codegen.c) */
 void emit_int_index_late(Compiler *c, int node, int tk, char *redo, size_t n, Buf *b);
 void emit_str_expr(Compiler *c, int node, Buf *b);
+void emit_str_expr_own(Compiler *c, int node, Buf *b);
 void emit_path_expr(Compiler *c, int node, Buf *b);
 void emit_to_s_expr(Compiler *c, int node, Buf *b);
 /* Converted String operands held across the call they enter (codegen.c).

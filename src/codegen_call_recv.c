@@ -191,7 +191,7 @@ static void emit_filter_bang_result(const char *name, int trecv, int torig,
    sp_str_concat as a char pointer and the program died (#3544). */
 /* `rtext` is the receiver's C string, already evaluated (a temp or a plain
    local), or NULL: a binary receiver takes the Integer as one byte (#5538). */
-void emit_str_append_arg(Compiler *c, int arg, const char *rtext, Buf *b) {
+static void str_append_arg(Compiler *c, int arg, const char *rtext, int own, Buf *b) {
   if (comp_ntype(c, arg) == TY_INT) {
     if (rtext) buf_printf(b, "sp_int_codepoint_to_str_in(%s, ", rtext);
     else buf_puts(b, "sp_int_codepoint_to_str(");
@@ -217,7 +217,14 @@ void emit_str_append_arg(Compiler *c, int arg, const char *rtext, Buf *b) {
                     " : sp_poly_to_s(_t%d); })", ta, ta, ta);
     return;
   }
-  emit_str_expr(c, arg, b);
+  if (own) emit_str_expr_own(c, arg, b);
+  else emit_str_expr(c, arg, b);
+}
+void emit_str_append_arg(Compiler *c, int arg, const char *rtext, Buf *b) {
+  str_append_arg(c, arg, rtext, 0, b);
+}
+void emit_str_append_arg_own(Compiler *c, int arg, const char *rtext, Buf *b) {
+  str_append_arg(c, arg, rtext, 1, b);
 }
 
 /* A Float index is cut to the Integer it converts to, as CRuby's does (an

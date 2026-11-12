@@ -807,14 +807,14 @@ static int repr_boxed_native_handle(Compiler *c, int v) {
   int recv = nt_ref(c->nt, v, "receiver");
   const char *nm = nt_str(c->nt, v, "name");
   if (recv < 0 || !nm || !repr_recv_boxed(c, recv)) return 0;
-  const PolyPlan *p = cplan_poly_arms(c, v);
+  const PolyPlan p = cplan_poly_arms(c, v);
   int nk = 0, any = 0;
   const int *ks = poly_recv_classes(c, v, &nk);
-  if (p->n <= 0 || !ks || nk <= 0) return 0;
+  if (p.n <= 0 || !ks || nk <= 0) return 0;
   for (int j = 0; j < nk; j++) {
     int arm = -1;
-    for (int i = 0; i < p->n && arm < 0; i++)
-      if (p->arm[i].key == ks[j]) arm = i;
+    for (int i = 0; i < p.n && arm < 0; i++)
+      if (p.arm[i].key == ks[j]) arm = i;
     /* (a class with no arm and no method_missing raises NoMethodError,
        which answers no String: strbuf_poly_user_boxes) */
     if (arm < 0) {
@@ -823,7 +823,7 @@ static int repr_boxed_native_handle(Compiler *c, int v) {
         return 0;
       continue;
     }
-    if (p->arm[arm].kind != PA_NATIVE || !repr_native_arm_handle(c, v, ks[j])) return 0;
+    if (p.arm[arm].kind != PA_NATIVE || !repr_native_arm_handle(c, v, ks[j])) return 0;
     any = 1;
   }
   return any;
@@ -904,8 +904,8 @@ int repr_call_returns_handle(Compiler *c, int v) {
   v = nt_paren_single(c->nt, v);
   if (repr_super_native_keeps(c, v)) return 1;
   if (v >= 0 && (nt_kind(nt, v) == NK_SuperNode || nt_kind(nt, v) == NK_ForwardingSuperNode)) {
-    const CallPlan *p = cplan_user(c, v);
-    return p->dispatch == CP_DIRECT && repr_self_handle(c, p->mi) && scope_ret_handle(c, p->mi);
+    const CallPlan p = cplan_user(c, v);
+    return p.dispatch == CP_DIRECT && repr_self_handle(c, p.mi) && scope_ret_handle(c, p.mi);
   }
   if (v < 0 || nt_kind(nt, v) != NK_CallNode) return 0;
   /* a String's value, or one the pickup marks to be stored as the handle */
@@ -1001,10 +1001,10 @@ int repr_boxed_reader_handle(Compiler *c, int v) {
   int recv = nt_ref(nt, v, "receiver");
   if (recv < 0 || !repr_recv_boxed(c, recv) ||
       ty_poly_face_owners(nt_str(nt, v, "name"), 0, 0, 1, 1)) return 0;
-  const PolyPlan *p = cplan_poly_arms(c, v);
-  if (p->n == 0) return 0;
-  for (int i = 0; i < p->n; i++)
-    if (p->arm[i].kind != PA_READER || p->arm[i].vty != TY_STRBUF) return 0;
+  const PolyPlan p = cplan_poly_arms(c, v);
+  if (p.n == 0) return 0;
+  for (int i = 0; i < p.n; i++)
+    if (p.arm[i].kind != PA_READER || p.arm[i].vty != TY_STRBUF) return 0;
   /* (an exception in the box answers #message through the exception's
      route, whose fallback takes these readers' boxes: exc_message_boxed_call) */
   return !exc_message_boxed_call(c, v);
@@ -1098,7 +1098,7 @@ int repr_string_conversion_operand(Compiler *c, int v) {
   return r >= 0 && is_receiver_conversion(nt_str(c->nt, v, "name")) &&
          call_plain_argc(c, v) == 0 && (nt_ref(c->nt, v, "block") < 0 || nt_int(c->nt, v, "dyn_arm", 0)) &&
          comp_recv_type(c, r) == TY_STRING &&
-         (cplan_user(c, v)->dispatch == CP_NONE || repr_user_answers_self(c, v)) ? r : -1;
+         (cplan_user(c, v).dispatch == CP_NONE || repr_user_answers_self(c, v)) ? r : -1;
 }
 /* ENV copies its stored bytes, but a store answers its value operand.
    A boxed operand can still hold plain bytes: an observable alias stays

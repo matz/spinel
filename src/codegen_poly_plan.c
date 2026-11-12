@@ -138,7 +138,7 @@ static int pa_key_cmp(const void *x, const void *y) {
   return ((const PolyArm *)x)->key - ((const PolyArm *)y)->key;
 }
 
-void pa_end(Compiler *c, int frame, const PolyPlan *p) {
+void pa_end(Compiler *c, int frame, PolyPlan p) {
   if (frame < 0 || frame >= g_pa_n) return;
   PaFrame *f = &g_pa[frame];
   const char *nm = nt_str(c->nt, f->id, "name");
@@ -159,20 +159,20 @@ void pa_end(Compiler *c, int frame, const PolyPlan *p) {
   char pt[400], ct[400];
   g_pa_compared++;
   g_pa_arms += f->n;
-  if ((f->flags & PPF_SEEN) && (f->flags & ~PPF_SEEN) != (p->flags & ~PPF_SEEN)) {
+  if ((f->flags & PPF_SEEN) && (f->flags & ~PPF_SEEN) != (p.flags & ~PPF_SEEN)) {
     fprintf(stderr, "plan-check: poly-conflict: node %d %s: flags: plan %#x, codegen %#x\n", f->id,
-            nm ? nm : "?", p->flags & ~PPF_SEEN, f->flags & ~PPF_SEEN);
+            nm ? nm : "?", p.flags & ~PPF_SEEN, f->flags & ~PPF_SEEN);
     g_pa_conflict++;
   }
   /* both lists by key: the switch writes its tag pre-arms and builtin cases
      around the class arms */
-  PolyArm *pl = p->n ? malloc((size_t)p->n * sizeof *pl) : NULL;
-  if (p->n) memcpy(pl, p->arm, (size_t)p->n * sizeof *pl);
-  qsort(pl, (size_t)p->n, sizeof *pl, pa_key_cmp);
+  PolyArm *pl = p.n ? malloc((size_t)p.n * sizeof *pl) : NULL;
+  if (p.n) memcpy(pl, p.arm, (size_t)p.n * sizeof *pl);
+  qsort(pl, (size_t)p.n, sizeof *pl, pa_key_cmp);
   qsort(f->arm, (size_t)f->n, sizeof *f->arm, pa_key_cmp);
   int i = 0, j = 0;
-  while (i < p->n || j < f->n) {
-    const PolyArm *pa = i < p->n ? &pl[i] : NULL, *ca = j < f->n ? &f->arm[j] : NULL;
+  while (i < p.n || j < f->n) {
+    const PolyArm *pa = i < p.n ? &pl[i] : NULL, *ca = j < f->n ? &f->arm[j] : NULL;
     if (pa && (!ca || pa->key < ca->key)) {
       pa_arm_text(c, pa, pt, sizeof pt);
       fprintf(stderr, "plan-check: poly-missing: node %d %s: plan %s\n", f->id, nm ? nm : "?", pt);
@@ -5007,9 +5007,9 @@ int poly_num_arm(const char *name, int argc) {
    written; the builtin surface's trial is the tail otherwise. */
 static int emit_poly_plan_default_n(Compiler *c, int id, const char *name, int kwh, int pos_argc, int splat_a,
                                     int tv, Buf *b) {
-  const PolyPlan *p = cplan_poly(c, id);
-  for (int i = 0; i < p->n; i++) {
-    const PolyArm *a = &p->arm[i];
+  const PolyPlan p = cplan_poly(c, id);
+  for (int i = 0; i < p.n; i++) {
+    const PolyArm *a = &p.arm[i];
     if (a->key != PA_KEY_DEFAULT || (a->kind != PA_ARITY && a->kind != PA_VIS)) continue;
     if (a->kind == PA_VIS) {
       buf_puts(b, " ");

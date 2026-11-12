@@ -198,7 +198,7 @@ void ucall_observe(Compiler *c, int id, int mi, int owner_ci, int add) {
   if (add) o->flags |= UO_ARM;
   /* the resolver: its method, an arm of the switch it plans, or the
      proc-form clone of its method agrees */
-  { CallPlan method = *cplan_user(c, id);
+  { CallPlan method = cplan_user(c, id);
     if (method.mi < 0) method = cplan_method_call(c, id);
     if (method.mi < 0) method = cplan_send_arm(c, id);
     const CallPlan *pl = &method;
@@ -268,7 +268,7 @@ static void ucall_resolver_report(Compiler *c) {
     const UcallObs *o = id < g_ucobs_cap ? &g_ucobs[id] : NULL;
     int seen = o && o->seen;
     if (inf->via == UC_NONE && !seen) continue;
-    CallPlan method = *cplan_user(c, id);
+    CallPlan method = cplan_user(c, id);
     if (method.mi < 0) method = cplan_method_call(c, id);
     if (method.mi < 0) method = cplan_send_arm(c, id);
     const CallPlan *pl = &method;
@@ -357,12 +357,12 @@ static void refuse_report(Compiler *c) {
     int id = g_rfobs[i].id;
     const char *m = g_rfobs[i].msg;
     if (id >= 0 && id < n) seen[id] = 1;
-    const CallPlan *p = cplan_refuse(c, id);
-    if (p->dispatch == CP_REFUSE) {
-      if (sp_streq(p->msg, m)) ok++;
+    const CallPlan p = cplan_refuse(c, id);
+    if (p.dispatch == CP_REFUSE) {
+      if (sp_streq(p.msg, m)) ok++;
       else {
         wrong++;
-        fprintf(stderr, "plan-check: refuse-wrong: node %d: plan \"%s\", codegen \"%s\"\n", id, p->msg, m);
+        fprintf(stderr, "plan-check: refuse-wrong: node %d: plan \"%s\", codegen \"%s\"\n", id, p.msg, m);
       }
     }
     else if (!strncmp(m, "unsupported call: node ", 23)) call++;
@@ -374,11 +374,11 @@ static void refuse_report(Compiler *c) {
   }
   for (int id = 0; id < n; id++) {
     if (seen[id] || nt_kind(c->nt, id) != NK_CallNode) continue;
-    const CallPlan *p = cplan_refuse(c, id);
-    if (p->dispatch != CP_REFUSE) continue;
+    const CallPlan p = cplan_refuse(c, id);
+    if (p.dispatch != CP_REFUSE) continue;
     if (id < g_ucemit_cap && g_ucemit_np[id]) {
       wrong++;
-      fprintf(stderr, "plan-check: refuse-wrong: node %d: plan \"%s\", codegen emitted the call\n", id, p->msg);
+      fprintf(stderr, "plan-check: refuse-wrong: node %d: plan \"%s\", codegen emitted the call\n", id, p.msg);
     }
     else unr++;
   }
@@ -3662,7 +3662,7 @@ int strbuf_marked_yields_handle(Compiler *c, int v) {
      method calls keep their byte ABI and need a proved return pickup;
      a field reader has its own handle arm. */
   if (ty_is_object(rt)) {
-    int mi = cplan_user(c, v)->mi;
+    int mi = cplan_user(c, v).mi;
     if (mi >= 0) return c->scopes[mi].yields || an_memo_reader_ivar(c, mi) || repr_call_returns_handle(c, v);
   }
   if (rt != TY_STRING && rt != TY_STRBUF) return 1;
@@ -4008,8 +4008,8 @@ int one_tail_fresh(Compiler *c, int n) {
   NodeKind k = nt_kind(c->nt, n);
   if (k == NK_StringNode || k == NK_InterpolatedStringNode) return 1;
   if (k == NK_CallNode) {
-    const CallPlan *pl = cplan_user(c, n);
-    if (pl->mi >= 0 || pl->dispatch != CP_NONE) return 0;
+    const CallPlan pl = cplan_user(c, n);
+    if (pl.mi >= 0 || pl.dispatch != CP_NONE) return 0;
     /* (a builtin answering its receiver, `s.tap { }`, is that String: the
        channel is how the caller finds its handle, which the block may keep;
        without a block it is new when the receiver is, `s[i, n].to_s`) */
@@ -4422,10 +4422,10 @@ void sg_refused_def(Compiler *c, int def) {
    by the decision `from`, so codegen raises it in the plan's words (site: the
    --plan-check reader name). Returns when the plan does not. */
 void refuse_from_plan(Compiler *c, int id, int from, const char *site) {
-  const CallPlan *p = cplan_refuse(c, id);
-  if (p->dispatch != CP_REFUSE || p->rfrom != from) return;
+  const CallPlan p = cplan_refuse(c, id);
+  if (p.dispatch != CP_REFUSE || p.rfrom != from) return;
   if (g_plan_check && !g_unsup_probe) cplan_served(site);
-  unsupported_feature(c, id, p->msg);
+  unsupported_feature(c, id, p.msg);
 }
 
 /* A send with a runtime name, a runtime const_get and a binding call are
@@ -4680,7 +4680,7 @@ static int const_recv_hold(Compiler *c, int id, Buf *b, int *holds_slot, int stm
   if (holds_slot) *holds_slot = 0;
   /* Class receivers can be folded away by constructors and reflection. */
   if (r >= 0 && an_const_read_keeps_class(c, r) && const_value_recv(c, r) < 0 &&
-      !view_const_read_done(c, r) && (!an_const_read_is_value(c, r) || cplan_const_user(c, id, r, 0)) && emit_const_read_stmt(c, r, b, 0)) {
+      !view_const_read_done(c, r) && (!an_const_read_is_value(c, r) || cplan_const_user(c, id, r, 0).mi >= 0) && emit_const_read_stmt(c, r, b, 0)) {
     return view_push_const_read(c, r);
   }
   if (r < 0 || nt_kind(nt, r) != NK_ConstantPathNode || view_const_slot(c, r)) return -1;
@@ -5542,7 +5542,7 @@ static int plain_expr(Compiler *c, int n, int depth) {
     int recv = nt_ref(nt, n, "receiver");
     /* An Integer sum either returns a number or raises, even at INTPTR_MIN. */
     if (nm && recv >= 0 && is_sum_name(nm) && ty_is_array(repr_of(c, recv).as_ty) &&
-        !nt_safe_nav(nt, n) && cplan_user(c, n)->dispatch == CP_NONE) return 1;
+        !nt_safe_nav(nt, n) && cplan_user(c, n).dispatch == CP_NONE) return 1;
     if (!nm || recv < 0 || nt_ref(nt, n, "block") >= 0) return 0;
     if (nt_safe_nav(nt, n)) return 0;   /* nil&.+(1) is nil */
     int args = nt_ref(nt, n, "arguments"), argc = 0;
@@ -6513,7 +6513,7 @@ void emit_str_array_handles(Compiler *c, int v, Buf *b) {
   int u = nt_paren_single(c->nt, v);
   if (u >= 0 && nt_kind(c->nt, u) == NK_CallNode && is_minmax_pair(nt_str(c->nt, u, "name")) &&
       nt_ref(c->nt, u, "arguments") < 0 && nt_ref(c->nt, u, "block") < 0 && nt_ref(c->nt, u, "receiver") >= 0 &&
-      comp_ntype(c, nt_ref(c->nt, u, "receiver")) == TY_STR_RANGE && cplan_user(c, u)->dispatch == CP_NONE &&
+      comp_ntype(c, nt_ref(c->nt, u, "receiver")) == TY_STR_RANGE && cplan_user(c, u).dispatch == CP_NONE &&
       !share_builtin_overridden(c, "Range", "minmax")) {
     int tr = ++g_tmp, tp = ++g_tmp;
     buf_printf(b, "({ sp_StrRange _t%d = ", tr);

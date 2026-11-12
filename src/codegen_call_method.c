@@ -3105,9 +3105,9 @@ int emit_owner_class_test(Compiler *c, int recv, const char *name, int tv, int n
 
 int emit_send_blind(Compiler *c, int id, Buf *b) {
   if (nt_str(c->nt, id, "send_blind")) {
-    const CallPlan *plan = cplan_user(c, id);
-    if (plan->via == UC_SEND_BLIND) { emit_method_call(c, id, b); return 1; }
-    int smi = plan->send_fallback;
+    const CallPlan plan = cplan_user(c, id);
+    if (plan.via == UC_SEND_BLIND) { emit_method_call(c, id, b); return 1; }
+    int smi = plan.send_fallback;
     if (smi >= 0) {
       int srcv = nt_ref(c->nt, id, "receiver");
       /* A boxed receiver answers by its class at run time: one whose class
@@ -3124,10 +3124,10 @@ int emit_send_blind(Compiler *c, int id, Buf *b) {
         view_bind_temp(srcv, tv);
         if (sav && sac > 0) emit_args_in_source_order(c, sav, sac, g_pre);
         buf_printf(b, "(((_t%d.tag == SP_TAG_OBJ && (0", tv);
-        const PolyPlan *arms = cplan_poly_arms(c, id);
-        for (int k = 0; k < arms->n; k++)
-          if (arms->arm[k].key >= 0 && arms->arm[k].key < c->nclasses)
-            buf_printf(b, " || _t%d.cls_id == %d", tv, arms->arm[k].key);
+        const PolyPlan arms = cplan_poly_arms(c, id);
+        for (int k = 0; k < arms.n; k++)
+          if (arms.arm[k].key >= 0 && arms.arm[k].key < c->nclasses)
+            buf_printf(b, " || _t%d.cls_id == %d", tv, arms.arm[k].key);
         buf_puts(b, "))");
         /* a builtin value whose class below Object answers the name
            (Integer#to_s) takes the dispatch too: its method comes before

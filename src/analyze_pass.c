@@ -6227,9 +6227,9 @@ int class_value_escapes(Compiler *c, int cid) {
        constant consumed directly by the call. */
     int p = parent[u];
     if (!passed && p >= 0 && nt_kind(nt, p) == NK_CallNode && nt_ref(nt, p, "receiver") == u) {
-      const CallPlan *cp = cplan_user_fresh(c, p);
-      if (cp->mi >= 0 && cp->via == UC_REOPEN && cp->owner_ci >= 0 &&
-          is_object_root(c->classes[cp->owner_ci].name)) passed = 1;
+      const CallPlan cp = cplan_user_fresh(c, p);
+      if (cp.mi >= 0 && cp.via == UC_REOPEN && cp.owner_ci >= 0 &&
+          is_object_root(c->classes[cp.owner_ci].name)) passed = 1;
     }
     if (!passed) continue;
     if (k == NK_CallNode) {
@@ -6741,12 +6741,12 @@ int is_fresh_array(Compiler *c, int v) {
   if (!nm || r < 0 || !ty_is_array(infer_type(c, v))) return 0;
   if (nt_kind(nt, r) == NK_ConstantReadNode)
     return sp_streq(nm, "new") && sp_streq(nt_str(nt, r, "name"), "Array") &&
-           !cplan_const_user(c, v, r, 1);
+           cplan_const_user(c, v, r, 1).mi < 0;
   TyKind rt = infer_type(c, r);
   if (rt == TY_UNKNOWN || rt == TY_POLY || ty_is_object(rt)) return 0;
   /* a reopen's own method of the name answers what it answers: an Array it
      may hold elsewhere, not a fresh one */
-  if (cplan_user_fresh(c, v)->mi >= 0) return 0;
+  if (cplan_user_fresh(c, v).mi >= 0) return 0;
   if (sp_streq(nm, "to_a")) return !ty_is_array(rt);
   return fresh_array_builtin_name(nm);
 }
@@ -11698,7 +11698,7 @@ static int infer_param_types_ex(Compiler *c, int settle, const NodeTypes *before
         continue;
       }
       if (s->is_proc_form) continue;
-      int pmi = cplan_user(c, id)->mi;
+      int pmi = cplan_user(c, id).mi;
       if (pmi < 0) continue;
       if (ty_k == NK_ForwardingSuperNode) changed |= bind_zsuper_params(c, id, s, &c->scopes[pmi]);
       else changed |= bind_call_params(c, id, pmi);
@@ -12324,8 +12324,8 @@ static int infer_param_types_ex(Compiler *c, int settle, const NodeTypes *before
       /* Equality protocols bind the same delegated target from the plan. */
       const char *bound_name = name;
       if (mi3 < 0 && (is_cmp_op(name) || is_eq_op(name))) {
-        const CallPlan *p = cplan_user_fresh(c, id);
-        if (p->delegate) { mi3 = p->mi; bound_name = p->delegate; }
+        const CallPlan p = cplan_user_fresh(c, id);
+        if (p.delegate) { mi3 = p.mi; bound_name = p.delegate; }
       }
       /* a method the program adds to Object, which the class's chain stops
          short of: the call reaches it (codegen's Object fallback), so its
@@ -15101,7 +15101,7 @@ int desugar_dir_surface(Compiler *c) {
     const char *rn = nt_key_name(nt, recv);
     if (!rn) continue;
     /* A resolved user singleton is not a builtin rewrite. */
-    if (cplan_const_user(c, id, recv, 1)) continue;
+    if (cplan_const_user(c, id, recv, 1).mi >= 0) continue;
     /* IO.read/write/readlines/binread/foreach are the File forms (#2793) */
     if (sp_streq(rn, "IO") &&
         (sp_streq(nm, "read") || sp_streq(nm, "write") || sp_streq(nm, "binread") ||
@@ -18254,7 +18254,7 @@ static int infer_block_params_call_arms(Compiler *c, const NodeTable *nt, int id
     int ymi = -1;
     if (ntgt > 0) {
       if (recv < 0) ymi = comp_self_call_mi(c, id, name);
-      else if (infer_type(c, recv) == TY_STRING || infer_type(c, recv) == TY_STRBUF) ymi = cplan_user_fresh(c, id)->mi;
+      else if (infer_type(c, recv) == TY_STRING || infer_type(c, recv) == TY_STRBUF) ymi = cplan_user_fresh(c, id).mi;
       else if (sp_streq(name, "new") && (nt_kind(nt, recv) == NK_ConstantReadNode ||
                                          nt_kind(nt, recv) == NK_ConstantPathNode)) {
         int cid = nt_str(nt, recv, "name") ? const_node_class_index(c, recv) : -1;
@@ -18309,7 +18309,7 @@ static int infer_block_params_call_arms(Compiler *c, const NodeTable *nt, int id
       nt_kind(nt, recv) == NK_ConstantReadNode && nt_str(nt, recv, "name") &&
       (sp_streq(nt_str(nt, recv, "name"), "File") ||
        sp_streq(nt_str(nt, recv, "name"), "IO")) &&
-      !cplan_const_user(c, id, recv, 1)) {
+      cplan_const_user(c, id, recv, 1).mi < 0) {
     const char *p0 = block_param_name(c, block, 0);
     if (p0) { LocalVar *l = scope_local_intern(comp_scope_of(c, block), p0); l->is_block_param = 1;
               if (l->type != TY_IO) { lv_set_type(l, TY_IO); changed = 1; } }
@@ -18398,7 +18398,7 @@ static int infer_block_params_call_arms(Compiler *c, const NodeTable *nt, int id
     else {
       TyKind rt0 = infer_type(c, recv);
       if (rt0 == TY_STRING || rt0 == TY_STRBUF || rt0 == TY_RANDOM || rt0 == TY_FLOAT || rt0 == TY_SYMBOL || rt0 == TY_NIL) {
-        mi = cplan_user_fresh(c, id)->mi;
+        mi = cplan_user_fresh(c, id).mi;
         /* a Random, Float or Symbol method that hands its block a container is
            not called through its proc form either (reopen_yields_known_container) */
         if (mi > 0 && rt0 != TY_STRING && rt0 != TY_STRBUF && reopen_yields_known_container(c, &c->scopes[mi])) mi = -1;
@@ -18410,11 +18410,11 @@ static int infer_block_params_call_arms(Compiler *c, const NodeTable *nt, int id
          (`m` in `each_with_object([]) { |e, m| }` read the boxed memo the
          reopen yielded as a typed Array and crashed) */
       else if (ty_is_array(rt0) || ty_is_obj_array(rt0) || ty_is_hash(rt0)) {
-        const CallPlan *rp = cplan_user_fresh(c, id);
-        if (rp->mi >= 0 && rp->via == UC_REOPEN &&
-            rp->owner_ci == comp_core_class(c, ty_is_hash(rt0) ? CORE_HASH : CORE_ARRAY) &&
-            c->scopes[rp->mi].yields)
-          mi = rp->mi;
+        const CallPlan rp = cplan_user_fresh(c, id);
+        if (rp.mi >= 0 && rp.via == UC_REOPEN &&
+            rp.owner_ci == comp_core_class(c, ty_is_hash(rt0) ? CORE_HASH : CORE_ARRAY) &&
+            c->scopes[rp.mi].yields)
+          mi = rp.mi;
       }
       if (ty_is_object(rt0)) mi = call_target(c, id, ty_object_class(rt0), name, 0, NULL);
       /* Class.new { |...| }: the yielding method is Class#initialize.
@@ -18871,7 +18871,10 @@ int infer_block_params(Compiler *c) {
     int yields_self = is_tap_alias(cname);
     /* a program's method on a root class that the plan binds takes the
        block: its own yield types the parameter, not the receiver */
-    if (yields_self && cplan_root_reopen_call(c, id, cplan_user_fresh(c, id))) continue;
+    if (yields_self) {
+      const CallPlan p = cplan_user_fresh(c, id);
+      if (cplan_root_reopen_call(c, id, &p)) continue;
+    }
     /* An untyped receiver leaves the param untyped too -- body usage is what
        types it there (`[].tap { |a| a << 1 }` gets its array kind from the
        push). The SLOT still has to exist: codegen binds the param whether or
@@ -19145,7 +19148,8 @@ int infer_block_params(Compiler *c) {
     /* then / yield_self: block param receives the receiver value */
     if ((is_then_alias(name)) && p0) {
       /* (a program's method the plan binds yields it: its yield types it) */
-      if (cplan_root_reopen_call(c, id, cplan_user_fresh(c, id))) continue;
+      const CallPlan rp = cplan_user_fresh(c, id);
+      if (cplan_root_reopen_call(c, id, &rp)) continue;
       Scope *bs = comp_scope_of(c, block);
       LocalVar *plv = scope_local(bs, p0);
       if (plv && lv_is_handle_of(c, plv, rt)) continue;

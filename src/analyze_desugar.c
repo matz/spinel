@@ -3268,7 +3268,7 @@ int desugar_array_op_to_ary(Compiler *c) {
     if (!ty_is_array(infer_type(c, recv))) continue;
     /* A selected program concat (or replace, union, ...) receives the
        original argument. */
-    if ((sp_streq(nm, "concat") || named) && cplan_user_fresh(c, id)->dispatch != CP_NONE) continue;
+    if ((sp_streq(nm, "concat") || named) && cplan_user_fresh(c, id).dispatch != CP_NONE) continue;
     TyKind at = infer_type(c, av[0]);
     if (!ty_is_object(at)) continue;
     int mi = comp_implicit_to_ary_mi(c, ty_object_class(at));

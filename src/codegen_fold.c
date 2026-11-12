@@ -224,10 +224,10 @@ void emit_method_call(Compiler *c, int id, Buf *b) {
      serve this site, which then takes the top-level def by name as it
      always did; --plan-check reports both that fallback and any plan that
      names another method than the by-name lookup. */
-  const CallPlan *pl = cplan_user(c, id);
+  const CallPlan pl = cplan_user(c, id);
   int mi;
-  if (pl->send_fallback >= 0 || (pl->mi >= 0 && (pl->via == UC_TOP || pl->via == UC_SEND_BLIND))) {
-    mi = pl->send_fallback >= 0 ? pl->send_fallback : pl->mi;
+  if (pl.send_fallback >= 0 || (pl.mi >= 0 && (pl.via == UC_TOP || pl.via == UC_SEND_BLIND))) {
+    mi = pl.send_fallback >= 0 ? pl.send_fallback : pl.mi;
     if (g_plan_check) cplan_served("emit_method_call");
     if (g_plan_check && mi != call_target(c, id, -1, name, CT_TOP, NULL))
       fprintf(stderr, "plan-check: cplan-conflict: emit_method_call node %d %s: plan %d, by name %d\n",
@@ -921,7 +921,7 @@ static int fold_boxed_conversion_operand(Compiler *c, int v) {
   if (nm && is_to_s_name(nm) && recv >= 0 && argc == 0) op = recv;
   else if (nm && is_string_class_name(nm) && recv < 0 && argc == 1 && !nt_argv_has_splat(nt, argv, argc) &&
            call_target(c, v, -1, nm, CT_TOP, NULL) < 0 && !bare_call_class_owned(c, v)) op = argv[0];
-  if (op < 0 || repr_of(c, op).kind != RK_BOXED || cplan_user(c, v)->dispatch != CP_NONE) return -1;
+  if (op < 0 || repr_of(c, op).kind != RK_BOXED || cplan_user(c, v).dispatch != CP_NONE) return -1;
   return op;
 }
 
@@ -6793,8 +6793,8 @@ int emit_enum_find_expr(Compiler *c, int id, Buf *b) {
   int recv = nt_ref(nt, id, "receiver");
   if (recv < 0 || comp_ntype(c, recv) != TY_ENUMERATOR) return 0;
   /* the program's own Enumerator method of the name is the call's target */
-  { const CallPlan *up = cplan_user(c, id);
-    if (up->mi >= 0 && up->via == UC_REOPEN) return 0; }
+  { const CallPlan up = cplan_user(c, id);
+    if (up.mi >= 0 && up.via == UC_REOPEN) return 0; }
   /* find(ifnone) { }: the proc answers when nothing matched, exactly as the
      array form serves it. Any other argument stays a loud reject. (#3814) */
   int f_ifnone = !inc && !take && iargc == 1 && iargv &&
@@ -13157,8 +13157,8 @@ static void emit_dispatch_per_arm(Compiler *c, int cid, int miss_id, const char 
    reader (of type reader_ty) dispatch on the runtime class: some descendant
    overrides the reader with a def, and the arms agree on the call's type? */
 int reader_override_arms(Compiler *c, int id, int cid, const char *name, TyKind reader_ty) {
-  const CallPlan *p = cplan_user(c, id);
-  if (p->mi < 0 || p->dispatch < CP_SWITCH) return 0;
+  const CallPlan p = cplan_user(c, id);
+  if (p.mi < 0 || p.dispatch < CP_SWITCH) return 0;
   int base_mi = call_target(c, id, cid, name, 0, NULL);
   TyKind ret = repr_of(c, id).as_ty;
   if (ret == TY_UNKNOWN || ret == TY_VOID || ret == TY_NIL) return 0;
@@ -13222,7 +13222,7 @@ int emit_reader_override_dispatch(Compiler *c, int id, int cid, const char *name
   int want_blk = 0;
   for (int k = 0; k < c->nclasses && !want_blk; k++) {
     if (k == cid || !is_descendant(c, k, cid)) continue;
-    int kmi = cplan_user_in(c, id, k, CPX_ARM)->mi;
+    int kmi = cplan_user_in(c, id, k, CPX_ARM).mi;
     int am = kmi != base_mi ? dispatch_arm_scope(c, kmi) : -1;
     want_blk = am >= 0 && arm_takes_blk(&c->scopes[am]);
   }
@@ -13240,8 +13240,8 @@ int emit_reader_override_dispatch(Compiler *c, int id, int cid, const char *name
   buf_puts(b, ") {");
   for (int k = 0; k < c->nclasses; k++) {
     if (k == cid || !is_descendant(c, k, cid)) continue;
-    const CallPlan *arm = cplan_user_in(c, id, k, CPX_ARM);
-    int kmi0 = arm->mi;
+    const CallPlan arm = cplan_user_in(c, id, k, CPX_ARM);
+    int kmi0 = arm.mi;
     int kd = kmi0 >= 0 ? c->scopes[kmi0].class_id : -1;
     if (kmi0 < 0 || kmi0 == base_mi) continue;
     nd_callee(c, g_nd_call_id, kmi0, kd, 1);
@@ -13479,9 +13479,9 @@ static void emit_dispatch_in(Compiler *c, int cid, const char *name,
   else if (g_nd_call_id >= 0) {
     const char *cnm = nt_str(nt, g_nd_call_id, "name");
     if (cnm && sp_streq(cnm, name)) {
-      dpc = *cplan_user(c, g_nd_call_id);
+      dpc = cplan_user(c, g_nd_call_id);
       if (!(dpc.chain && dpc.via == UC_INST && dpc.owner_ci == cid))
-        dpc = *cplan_user_in(c, g_nd_call_id, cid,
+        dpc = cplan_user_in(c, g_nd_call_id, cid,
                              g_ie_class_id == cid ? CPX_IE : g_emitting_class_id == cid ? CPX_EMIT : CPX_ARM);
       served = 1;
       miss_id = g_nd_call_id;
@@ -13496,7 +13496,7 @@ static void emit_dispatch_in(Compiler *c, int cid, const char *name,
       /* an operator the plan answers through another of the class's methods
          (`!=` through `==`, the comparisons through `<=>`): the dispatch of
          that method is the plan's */
-      dpc = *cplan_user(c, g_nd_call_id);
+      dpc = cplan_user(c, g_nd_call_id);
       if (!dpc.chain && dpc.via == UC_INST && dpc.owner_ci == cid && dpc.mi >= 0 &&
           dpc.delegate && sp_streq(dpc.delegate, name)) {
         served = 1;

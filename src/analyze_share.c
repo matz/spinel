@@ -172,7 +172,8 @@ static int share_target_armed_plan(Compiler *c, const CallPlan *p, int call, int
   return 0;
 }
 int share_target_armed(Compiler *c, int call, int mi) {
-  return share_target_armed_plan(c, cplan_user_fresh(c, call), call, mi);
+  const CallPlan p = cplan_user_fresh(c, call);
+  return share_target_armed_plan(c, &p, call, mi);
 }
 /* The methods call enters (cplan_entries) when `entries`, else those whose
    return is its value (cplan_targets), that the share walk follows. */
@@ -180,9 +181,8 @@ static int sh_targets_in(Compiler *c, int call, int *out, int cap, int entries) 
   int n = entries ? cplan_entries(c, call, out, cap) : cplan_targets(c, call, out, cap), m = 0;
   if (n == CPT_UNKNOWN) return -1;
   if (n == 0) return sh_copied_self_targets(c, call, out, cap);
-  /* the plan once for the call: cplan_user_fresh answers in a buffer the
-     next resolution overwrites, so it is copied */
-  CallPlan p = *cplan_user_fresh(c, call);
+  /* the plan once for the call */
+  CallPlan p = cplan_user_fresh(c, call);
   for (int i = 0; i < n; i++)
     if (share_target_reachable(c, call, out[i]) && share_target_armed_plan(c, &p, call, out[i])) out[m++] = out[i];
   return m;
@@ -225,7 +225,7 @@ static int sh_copied_self_targets(Compiler *c, int call, int *out, int cap) {
   return n;
 }
 int share_target_reachable(Compiler *c, int call, int mi) {
-  if (mi < 0 || mi >= c->nscopes || !c->scopes[mi].is_cmethod || cplan_user_fresh(c, call)->via != UC_POLY)
+  if (mi < 0 || mi >= c->nscopes || !c->scopes[mi].is_cmethod || cplan_user_fresh(c, call).via != UC_POLY)
     return 1;
   int ncc = 0;
   const PolyCand *ccs = comp_cmethod_candidates(c, c->scopes[mi].name, &ncc);
@@ -240,18 +240,18 @@ int share_target_reachable(Compiler *c, int call, int mi) {
 }
 /* does a call reach a user method (sh_targets != 0), without listing them */
 static int sh_has_targets(Compiler *c, int call) {
-  const CallPlan *p = cplan_user_fresh(c, call);
-  if (p->dispatch == CP_REFUSE) return 0;
+  const CallPlan p = cplan_user_fresh(c, call);
+  if (p.dispatch == CP_REFUSE) return 0;
   /* (a module's self call that names no method of the module reaches the
      includers' methods its copies call, sh_copied_self_targets: a `puts`
      they define is no Kernel#puts) */
-  if (p->mi < 0) {
+  if (p.mi < 0) {
     int tg[CPT_MAX];
     return sh_copied_self_targets(c, call, tg, CPT_MAX) != 0;
   }
   /* (a boxed receiver's plan lists only the methods its arms reach:
      share_target_reachable, share_target_armed; none may be left) */
-  if (p->via != UC_POLY) return 1;
+  if (p.via != UC_POLY) return 1;
   int tg[CPT_MAX];
   return sh_targets(c, call, tg, CPT_MAX) != 0;
 }
@@ -937,9 +937,9 @@ int share_builtin_fresh(Compiler *c, int call) {
   /* A scope-name lookup can miss an alias's method. Every returning user
      arm must occur in the target set whose return identities we check. */
   int tg[CPT_MAX], n = cplan_targets(c, call, tg, CPT_MAX);
-  const PolyPlan *p = cplan_poly_fresh(c, call);
-  for (int i = 0; i < p->n; i++) {
-    const PolyArm *a = &p->arm[i];
+  const PolyPlan p = cplan_poly_fresh(c, call);
+  for (int i = 0; i < p.n; i++) {
+    const PolyArm *a = &p.arm[i];
     if (a->kind != PA_USER && a->kind != PA_PROC_FORM) continue;
     int found = 0;
     for (int j = 0; j < n; j++) if (tg[j] == a->mi) { found = 1; break; }
@@ -952,8 +952,8 @@ int share_builtin_fresh(Compiler *c, int call) {
      some builtin class has; for a name none has (CRuby's tables, as
      strbuf_poly_user_boxes asks) both only raise NoMethodError. */
   int generic_raises = !builtin_object_method_known(name) && !builtin_instance_name_known(name);
-  for (int i = 0; i < p->n; i++) {
-    const PolyArm *a = &p->arm[i];
+  for (int i = 0; i < p.n; i++) {
+    const PolyArm *a = &p.arm[i];
     if (a->kind == PA_USER || a->kind == PA_ARITY || a->kind == PA_VIS || sh_arm_io_read_fresh(c, call, a)) continue;
     if (a->kind == PA_TRIAL && (a->key == PA_KEY_TRIAL + PT_DEFAULT0 ||
                                a->key == PA_KEY_TRIAL + PT_DEFAULT_N)) continue;
@@ -962,7 +962,7 @@ int share_builtin_fresh(Compiler *c, int call) {
       continue;
     return 0;
   }
-  return p->n > 0;
+  return p.n > 0;
 }
 /* ---- calls whose members the plan does not list (#9258) ----
    A call on a boxed receiver whose name more classes define than the plan
@@ -1308,7 +1308,7 @@ static int sh_user_call_fresh(Compiler *c, int call, int depth) {
   if (sh_assign_call(c, call)) return 0;
   /* A boxed dispatch can take a builtin arm too: its user targets alone
      do not prove freshness (String#to_s can answer its receiver). */
-  if (cplan_user_fresh(c, call)->via == UC_POLY && !share_builtin_fresh(c, call)) return 0;
+  if (cplan_user_fresh(c, call).via == UC_POLY && !share_builtin_fresh(c, call)) return 0;
   int tg[64];
   int n = cplan_targets(c, call, tg, 64);
   if (n == CPT_UNKNOWN) return sh_name_call_fresh(c, call);
@@ -1610,9 +1610,9 @@ static int sh_value_fresh_leaf(Compiler *c, int n, int depth) {
      call of it does (sh_user_call_fresh); not where it answers a
      parameter, which zsuper hands on unseen */
   if (k == NK_SuperNode || k == NK_ForwardingSuperNode) {
-    const CallPlan *p = cplan_user_fresh(c, n);
-    int mi = p->mi;
-    if (!c->share || p->dispatch != CP_DIRECT || mi <= 0 || mi >= c->nscopes || scope_ret_param(c, mi) >= 0)
+    const CallPlan p = cplan_user_fresh(c, n);
+    int mi = p.mi;
+    if (!c->share || p.dispatch != CP_DIRECT || mi <= 0 || mi >= c->nscopes || scope_ret_param(c, mi) >= 0)
       return 0;
     return scope_ret_fresh(c, mi);
   }
@@ -1730,13 +1730,13 @@ static int sh_poly_to_s_self(const Compiler *c, int u) {
   if (recv < 0 || repr_of(c, recv).kind != RK_BOXED ||
       (sci >= 0 && comp_method_in_chain((Compiler *)c, sci, "to_s", NULL) >= 0))
     return 0;
-  const PolyPlan *p = cplan_poly((Compiler *)c, u);
+  const PolyPlan p = cplan_poly((Compiler *)c, u);
   int dflt = 0;
-  for (int i = 0; i < p->n; i++) {
-    if (p->arm[i].kind == PA_TRIAL && p->arm[i].key == PA_KEY_TRIAL + PT_STR) return 0;
-    dflt |= p->arm[i].kind == PA_BUILTIN && p->arm[i].key == PA_KEY_BUILTIN + PB_D_TO_S;
+  for (int i = 0; i < p.n; i++) {
+    if (p.arm[i].kind == PA_TRIAL && p.arm[i].key == PA_KEY_TRIAL + PT_STR) return 0;
+    dflt |= p.arm[i].kind == PA_BUILTIN && p.arm[i].key == PA_KEY_BUILTIN + PB_D_TO_S;
   }
-  return dflt && p->ret == TY_POLY;
+  return dflt && p.ret == TY_POLY;
 }
 /* Is call u's one target a `def m = @iv` reader of an instance method,
    its whole body that read, of a slot its class keeps boxed? */
@@ -1771,7 +1771,7 @@ static int sh_carry_kind(const Compiler *c, int n, int by_repr, int lift, int *o
   int u = nt_paren_single(c->nt, n);
   if (u >= 0 && nt_kind(c->nt, u) == NK_CallNode && is_freeze_name(nt_str(c->nt, u, "name")) &&
       call_plain_argc((Compiler *)c, u) == 0 && nt_ref(c->nt, u, "block") < 0 &&
-      cplan_user((Compiler *)c, u)->dispatch == CP_NONE) {
+      cplan_user((Compiler *)c, u).dispatch == CP_NONE) {
     int r = nt_ref(c->nt, u, "receiver");
     if (r >= 0 && (share_value_fresh((Compiler *)c, r, 0) || share_node_carries_handle(c, r))) {
       *op = nt_paren_single(c->nt, r);
@@ -1785,10 +1785,10 @@ static int sh_carry_kind(const Compiler *c, int n, int by_repr, int lift, int *o
      String itself: `{ host: req.host }` with two classes answering host. */
   if (u >= 0 && nt_kind(c->nt, u) == NK_CallNode && nt_ref(c->nt, u, "receiver") >= 0 && repr_of(c, nt_ref(c->nt, u, "receiver")).kind == RK_BOXED &&
       nt_ref(c->nt, u, "block") < 0) {
-    const PolyPlan *pp = cplan_poly_arms((Compiler *)c, u);
-    int all = pp->n > 0;
-    for (int i = 0; i < pp->n && all; i++) {
-      const PolyArm *a = &pp->arm[i];
+    const PolyPlan pp = cplan_poly_arms((Compiler *)c, u);
+    int all = pp.n > 0;
+    for (int i = 0; i < pp.n && all; i++) {
+      const PolyArm *a = &pp.arm[i];
       if (a->kind == PA_READER) all = a->vty == TY_STRBUF;
       /* (a method whose return is the handle itself, `h[k] = v`'s value,
          answers it as a reader's arm does) */
@@ -1840,7 +1840,7 @@ static int sh_carry_kind(const Compiler *c, int n, int by_repr, int lift, int *o
      a frozen one, exactly as the typed value route does. */
   if (r.kind == RK_BOXED && nt_kind(c->nt, n) == NK_CallNode &&
       is_unary_plus(nt_str(c->nt, n, "name")) &&
-      cplan_user((Compiler *)c, n)->dispatch == CP_NONE) return SPK_BOX;
+      cplan_user((Compiler *)c, n).dispatch == CP_NONE) return SPK_BOX;
   /* A boxed append answers its receiver's box, appended in place: a chain
      over a base that carries (`(+v) << x`) keeps that base's handle. */
   if (r.kind == RK_BOXED && nt_kind(c->nt, n) == NK_CallNode) {

@@ -1052,8 +1052,8 @@ static int share_plan_box_kept(Compiler *c, int v) {
       if (call < 0 || call >= n) return 0;
       if (nt_kind(nt, call) != NK_CallNode)
         return nt_kind(nt, call) == NK_SuperNode || nt_kind(nt, call) == NK_YieldNode;
-      const CallPlan *cp = cplan_user(c, call);
-      if (cp->mi >= 0 || cp->dispatch != CP_NONE) return 1;
+      const CallPlan cp = cplan_user(c, call);
+      if (cp.mi >= 0 || cp.dispatch != CP_NONE) return 1;
       int k = share_plan_builtin_keeps(c, call);
       if (k != 2) return k;
       v = call;

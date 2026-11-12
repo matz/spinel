@@ -1803,7 +1803,7 @@ int emit_call_freeze_dup_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
    name of the String, and the call answers it (or its frozen face), or nil. */
 static int emit_safe_nav_freeze_handle(Compiler *c, int id, const char *name, int recv, Buf *b) {
   if (g_sn_skip == id || !is_freeze_name(name) || call_plain_argc(c, id) != 0 ||
-      nt_ref(c->nt, id, "block") >= 0 || cplan_user(c, id)->dispatch != CP_NONE) return 0;
+      nt_ref(c->nt, id, "block") >= 0 || cplan_user(c, id).dispatch != CP_NONE) return 0;
   /* a receiver a caller already holds as the handle (emit_bang_self_handle
      binds it) is taken as it is */
   if (repr_of(c, recv).as_ty != TY_STRBUF &&

@@ -1380,7 +1380,7 @@ int node_is_empty_container(Compiler *c, int node) {
   if (!rn || (!sp_streq(rn, "Array") && !sp_streq(rn, "Hash"))) return 0;
   int ca = nt_ref(nt, node, "arguments");
   int argc = 0; if (ca >= 0) nt_arr(nt, ca, "arguments", &argc);
-  return argc == 0 && !cplan_const_user(c, node, r, 1);
+  return argc == 0 && cplan_const_user(c, node, r, 1).mi < 0;
 }
 
 int is_arith_op(const char *op) {
@@ -3349,8 +3349,8 @@ static int yvt_callee_index_scan(Compiler *c, int cid) {
        owner of infer_type's memo follows, and a block value kept while it
        was direct stood after it was not */
     else if (cn) {
-      const CallPlan *p = cplan_user_fresh(c, cid);
-      if (p->mi >= 0 && p->via == UC_REOPEN && c->scopes[p->mi].yields) rmi = p->mi;
+      const CallPlan p = cplan_user_fresh(c, cid);
+      if (p.mi >= 0 && p.via == UC_REOPEN && c->scopes[p.mi].yields) rmi = p.mi;
     }
   }
   return rmi;
@@ -6187,7 +6187,7 @@ int an_kernel_const_recv(Compiler *c, int id, int recv, int fresh) {
   const NodeTable *nt = c->nt;
   if (recv < 0 || nt_kind(nt, recv) != NK_ConstantReadNode) return 0;
   const char *rn = nt_str(nt, recv, "name");
-  return rn && sp_streq(rn, "Kernel") && !cplan_const_user(c, id, recv, fresh);
+  return rn && sp_streq(rn, "Kernel") && cplan_const_user(c, id, recv, fresh).mi < 0;
 }
 
 /* Is `recv` a receiver Kernel#` answers call `id` for: the Kernel module

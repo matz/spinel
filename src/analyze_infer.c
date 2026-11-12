@@ -3147,10 +3147,7 @@ static int poly_cls_value_answers(Compiler *c, int id) {
   int recv = nt_ref(c->nt, id, "receiver");
   if (recv < 0 || !is_class_value_reflection(nt_str(c->nt, id, "name")) || an_builtin_only || face_active() ||
       comp_ntype(c, recv) != TY_POLY) return 0;
-  PolyPlan *p = cplan_poly_cls_values(c, id);
-  int any = p->n > 0;
-  cplan_poly_free(p);
-  if (!any) return 0;
+  if (cplan_poly_cls_values(c, id).n == 0) return 0;
   an_face_push(recv, TY_CLASS);
   TyKind kt = infer_call(c, id);
   an_face_pop();
@@ -3345,17 +3342,15 @@ static TyKind an_root_reopen_call(Compiler *c, int id, const CallPlan *p) {
 static int an_reopen_head_call(Compiler *c, int id, int recv, TyKind *out) {
   TyKind hrt = infer_type(c, recv);
   if (hrt == TY_POLY || hrt == TY_UNKNOWN || nt_int(c->nt, id, "builtin_only", 0)) return 0;
-  /* (a copy: the asks below read Reprs, which can resolve another call's
-     plan into the one cplan_user_fresh returns) */
-  const CallPlan own = *cplan_user_fresh(c, id), *p = &own;
+  const CallPlan p = cplan_user_fresh(c, id);
   /* (a method closed to the call binds none: the call raises) */
   if (cplan_root_closed(c, id, NULL) >= 0) return 0;
-  if (p->mi >= 0 && p->via == UC_REOPEN && hrt == TY_ENUMERATOR) *out = an_user_call(c, id, p->mi, p->via, p->owner_ci);
-  else if (p->mi >= 0 && p->owner_ci == comp_core_class(c, CORE_OBJECT) && cplan_nil_scalar_boxed(c, id, nt_str(c->nt, id, "name"), recv, hrt)) {
-    an_user_call_record(c, id, p->mi, UC_REOPEN, p->owner_ci);   /* (typed boxed below, but bound) */
+  if (p.mi >= 0 && p.via == UC_REOPEN && hrt == TY_ENUMERATOR) *out = an_user_call(c, id, p.mi, p.via, p.owner_ci);
+  else if (p.mi >= 0 && p.owner_ci == comp_core_class(c, CORE_OBJECT) && cplan_nil_scalar_boxed(c, id, nt_str(c->nt, id, "name"), recv, hrt)) {
+    an_user_call_record(c, id, p.mi, UC_REOPEN, p.owner_ci);   /* (typed boxed below, but bound) */
     return 0;
   }
-  else if (cplan_root_reopen_call(c, id, p)) *out = an_root_reopen_call(c, id, p);
+  else if (cplan_root_reopen_call(c, id, &p)) *out = an_root_reopen_call(c, id, &p);
   else return 0;
   return 1;
 }
@@ -3466,8 +3461,8 @@ static TyKind an_user_operator_ret(Compiler *c, int id, int mi, int ci) {
    Other fixed-result shortcuts retain their planned targets the same way. */
 static TyKind an_planned_call_ret(Compiler *c, int id, TyKind ret) {
   if (g_plan_check && !an_builtin_only && !an_pure_reads && id != an_pinned_node) {
-    const CallPlan *p = cplan_user_fresh(c, id);
-    if (p->mi >= 0) an_user_call_record(c, id, p->mi, p->via, p->owner_ci);
+    const CallPlan p = cplan_user_fresh(c, id);
+    if (p.mi >= 0) an_user_call_record(c, id, p.mi, p.via, p.owner_ci);
   }
   return ret;
 }
@@ -3484,8 +3479,8 @@ static void an_user_union_record(Compiler *c, int id, int recv, TyKind rt) {
       (rt == TY_POLY || (ty_is_object(rt) &&
        builtin_operator_delegate(nt_str(c->nt, id, "name"))) || (rt == TY_CLASS &&
        nt_kind(c->nt, recv) != NK_ConstantReadNode && nt_kind(c->nt, recv) != NK_ConstantPathNode))) {
-    const CallPlan *p = cplan_user_fresh(c, id);
-    if (p->mi >= 0) an_user_call_record(c, id, p->mi, rt == TY_CLASS ? UC_POLY : p->via, p->owner_ci);
+    const CallPlan p = cplan_user_fresh(c, id);
+    if (p.mi >= 0) an_user_call_record(c, id, p.mi, rt == TY_CLASS ? UC_POLY : p.via, p.owner_ci);
   }
 }
 
@@ -4957,7 +4952,7 @@ static int infer_builtin_cmethod_call(Compiler *c, int id, const NodeTable *nt, 
     if (rk == NK_ConstantReadNode &&
         nt_key_name(nt, recv) && sp_streq(nt_key_name(nt, recv), "Dir")) {
       if (is_dir_blockless_iter(name) && nt_ref(nt, id, "block") < 0 &&
-          (an_builtin_only || !cplan_const_user(c, id, recv, 1)))
+          (an_builtin_only || cplan_const_user(c, id, recv, 1).mi < 0))
         { *out = TY_ENUMERATOR; return 1; }
       if (sp_streq(name, "pwd") || sp_streq(name, "home")) { *out = TY_STRING; return 1; }
       if (sp_streq(name, "glob") || sp_streq(name, "entries") || sp_streq(name, "children")) { *out = TY_STR_ARRAY; return 1; }
@@ -6016,8 +6011,8 @@ static int infer_operator_call(Compiler *c, int id, const NodeTable *nt, const c
        user method returning the ordering value. Keep that target too. */
     if (g_plan_check && !an_builtin_only && !an_pure_reads && id != an_pinned_node &&
         ty_is_object(rt)) {
-      const CallPlan *p = cplan_user_fresh(c, id);
-      if (p->mi >= 0) an_user_call_record(c, id, p->mi, p->via, p->owner_ci);
+      const CallPlan p = cplan_user_fresh(c, id);
+      if (p.mi >= 0) an_user_call_record(c, id, p.mi, p.via, p.owner_ci);
     }
     *out = TY_BOOL; return 1;
   }
@@ -6503,9 +6498,9 @@ static int infer_class_module_call(Compiler *c, int id, const NodeTable *nt, con
   /* x.class -> a first-class Class value for every known receiver kind
      (name-backed for builtins, id-backed for user objects) */
   if (recv >= 0 && argc == 0 && is_class_query(name)) {
-    const CallPlan *p = cplan_user_fresh(c, id);
-    if (p->mi >= 0 && rt != TY_POLY) { *out = an_user_call(c, id, p->mi, p->via, p->owner_ci); return 1; }
-    if (p->mi >= 0) an_user_call_record(c, id, p->mi, p->via, p->owner_ci);
+    const CallPlan p = cplan_user_fresh(c, id);
+    if (p.mi >= 0 && rt != TY_POLY) { *out = an_user_call(c, id, p.mi, p.via, p.owner_ci); return 1; }
+    if (p.mi >= 0) an_user_call_record(c, id, p.mi, p.via, p.owner_ci);
     /* empty container literal receivers coerce like everywhere else */
     if (rt == TY_UNKNOWN && nt_type(nt, recv)) {
       NodeKind rty0_k = nt_kind(nt, recv);
@@ -6723,8 +6718,8 @@ static int infer_receiverless_call(Compiler *c, int id, const NodeTable *nt, con
               if (kr != TY_UNKNOWN && kr != rt2) rt2 = ty_unify(rt2, kr);
             }
             if (g_plan_check && nt_ref(nt, id, "block") >= 0) {
-              const CallPlan *p = cplan_user_fresh(c, id);
-              if (p->mi >= 0) an_user_call_record(c, id, p->mi, p->via, p->owner_ci);
+              const CallPlan p = cplan_user_fresh(c, id);
+              if (p.mi >= 0) an_user_call_record(c, id, p.mi, p.via, p.owner_ci);
             }
             { *out = rt2; return 1; }
           }
@@ -6738,8 +6733,8 @@ static int infer_receiverless_call(Compiler *c, int id, const NodeTable *nt, con
         int un = cplan_user_new(c, id, self->class_id);
         if (un >= 0 && &c->scopes[un] != self) { *out = an_self_call_ret(c, self, name, un, id); return 1; }
         if (g_plan_check) {
-          const CallPlan *p = cplan_user_fresh(c, id);
-          if (p->mi >= 0) an_user_call_record(c, id, p->mi, p->via, p->owner_ci);
+          const CallPlan p = cplan_user_fresh(c, id);
+          if (p.mi >= 0) an_user_call_record(c, id, p.mi, p.via, p.owner_ci);
         }
         *out = ty_object(self->class_id); return 1;
       }
@@ -7002,8 +6997,8 @@ static int infer_user_method_call(Compiler *c, int id, const NodeTable *nt, cons
      Boolean answer, independently for every receiver arm. */
   TyKind protocol_ret = bonly || an_builtin_only ? TY_UNKNOWN : cplan_poly_operator_ret(c, id);
   if (protocol_ret != TY_UNKNOWN) {
-    const CallPlan *p = cplan_user_fresh(c, id);
-    an_user_call_record(c, id, p->mi, p->via, p->owner_ci);
+    const CallPlan p = cplan_user_fresh(c, id);
+    an_user_call_record(c, id, p.mi, p.via, p.owner_ci);
     *out = protocol_ret; return 1;
   }
 
@@ -8713,10 +8708,12 @@ static int infer_constant_query_call(Compiler *c, int id, const NodeTable *nt, c
      call plan wins in emission and sharing. Inference reads a fresh plan. */
   NodeKind rk = recv >= 0 ? nt_kind(nt, recv) : NK_NONE;
   const char *cn = rk == NK_ConstantReadNode || rk == NK_ConstantPathNode ? nt_key_name(nt, recv) : NULL;
-  const CallPlan *pl = an_builtin_only ? NULL : cplan_const_user(c, id, recv, 1);
-  if (pl) {
-    *out = an_user_call(c, id, pl->mi, UC_CMETH, pl->owner_ci);
-    return 1;
+  if (!an_builtin_only) {
+    const CallPlan pl = cplan_const_user(c, id, recv, 1);
+    if (pl.mi >= 0) {
+      *out = an_user_call(c, id, pl.mi, UC_CMETH, pl.owner_ci);
+      return 1;
+    }
   }
   /* <StructClass>.members at the class level: symbol array, where the
      call reaches no program `members` (call_target) */
@@ -9074,7 +9071,7 @@ int an_push_widens_fresh(Compiler *c, int id) {
   int fa = nt_ref(nt, fr, "arguments");
   if (nt_str(nt, fr, "name") && sp_streq(nt_str(nt, fr, "name"), "freeze") &&
       nt_ref(nt, fr, "receiver") >= 0 && fa < 0 && nt_ref(nt, fr, "block") < 0 &&
-      !nt_safe_nav(nt, fr) && cplan_user_fresh(c, fr)->mi < 0)
+      !nt_safe_nav(nt, fr) && cplan_user_fresh(c, fr).mi < 0)
     recv = nt_ref(nt, fr, "receiver");
   if (!is_fresh_array(c, recv)) return 0;
   TyKind elem = ty_array_elem(rt);
@@ -9236,7 +9233,7 @@ static int infer_accessor_call(Compiler *c, int id, int recv, const char *name, 
       if (mi >= 0) { *out = an_user_call(c, id, mi, UC_CMETH, fold_ci); return 1; }
     }
     /* Stage-2: accessor holds one of several constants; unify their cmethod returns. */
-    CallPlan ap = *cplan_user_fresh(c, id);
+    CallPlan ap = cplan_user_fresh(c, id);
     int cand[32];
     int ncand = cplan_accessor_classes(c, id, cand, 32);
     if (ncand >= 2) {
@@ -9837,7 +9834,7 @@ static TyKind infer_call_inner(Compiler *c, int id) {
   { TyKind ed; if (recv < 0 && infer_enum_desugar_call(name, argc, &ed)) return ed; }
   /* Dir surface (#2823, #2828, #2830) */
   if (recv >= 0 && nt_kind(nt, recv) == NK_ConstantReadNode &&
-      nt_key_name(nt, recv) && sp_streq(nt_key_name(nt, recv), "Dir") && (an_builtin_only || !cplan_const_user(c, id, recv, 1))) {
+      nt_key_name(nt, recv) && sp_streq(nt_key_name(nt, recv), "Dir") && (an_builtin_only || cplan_const_user(c, id, recv, 1).mi < 0)) {
     if (sp_streq(name, "empty?") && argc == 1) return TY_BOOL;
     if (sp_streq(name, "home") && argc == 1) return TY_STRING;
     if (sp_streq(name, "glob") && (argc == 1 || argc == 2)) return TY_STR_ARRAY;
@@ -10081,8 +10078,8 @@ static TyKind infer_call_inner(Compiler *c, int id) {
   /* Kernel#puts / #print return nil; typed so the value form composes. */
   if (recv < 0 && !an_bare_call_class_owned(c, id) && (is_text_print(name)) &&
       nt_ref(nt, id, "block") < 0) {
-    const CallPlan *p = cplan_user_fresh(c, id);
-    return p->mi >= 0 ? an_user_call(c, id, p->mi, p->via, p->owner_ci) : TY_NIL;
+    const CallPlan p = cplan_user_fresh(c, id);
+    return p.mi >= 0 ? an_user_call(c, id, p.mi, p.via, p.owner_ci) : TY_NIL;
   }
   /* a warn's messages rendered as one String, for $stderr's own write
      (desugar_std_stream_bare_warn) */
@@ -10497,7 +10494,7 @@ static int an_empty_container_new(Compiler *c, int b) {
   int k = 0;
   if (rn && sp_streq(rn, "Array")) k = an == 0 && nt_ref(nt, b, "block") < 0 ? 1 : 0;
   else if (rn && sp_streq(rn, "Hash")) k = an <= 1 ? 2 : 0;
-  return k && (an_builtin_only || !cplan_const_user(c, b, r, 1)) ? k : 0;
+  return k && (an_builtin_only || cplan_const_user(c, b, r, 1).mi < 0) ? k : 0;
 }
 
 /* An empty `[]` / `{}` carries no element type of its own, so it caches

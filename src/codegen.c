@@ -118,7 +118,7 @@ static void poll_block_edges(Compiler *c, int n, int t, int **ef, int **et, int 
         }
     }
   }
-  if (k == NK_YieldNode || ((k == NK_SuperNode || k == NK_ForwardingSuperNode) && !cplan_user(c, n)->core_hook)) dyn[t] = 1;
+  if (k == NK_YieldNode || ((k == NK_SuperNode || k == NK_ForwardingSuperNode) && !cplan_user(c, n).core_hook)) dyn[t] = 1;
   int nr = nt_num_refs(nt, n);
   for (int i = 0; i < nr; i++) poll_block_edges(c, nt_ref_at(nt, n, i), t, ef, et, ne, cap, dyn, depth + 1);
   int na = nt_num_arrs(nt, n);
@@ -195,8 +195,8 @@ int poll_scope_on_cycle(Compiler *c, int si) {
         if (pe.tg[k] == from) g_poll_cyc[from] = 1;   /* calls itself */
       }
     }
-    NT_FOREACH_KIND(nt, NK_SuperNode, n) { int f = c->nscope[n]; if (f >= 0 && f < ns && !cplan_user(c, n)->core_hook) dyn[f] = 1; }
-    NT_FOREACH_KIND(nt, NK_ForwardingSuperNode, n) { int f = c->nscope[n]; if (f >= 0 && f < ns && !cplan_user(c, n)->core_hook) dyn[f] = 1; }
+    NT_FOREACH_KIND(nt, NK_SuperNode, n) { int f = c->nscope[n]; if (f >= 0 && f < ns && !cplan_user(c, n).core_hook) dyn[f] = 1; }
+    NT_FOREACH_KIND(nt, NK_ForwardingSuperNode, n) { int f = c->nscope[n]; if (f >= 0 && f < ns && !cplan_user(c, n).core_hook) dyn[f] = 1; }
     /* the edges by source (CSR), and their reverse */
     int *off = calloc((size_t)nv + 2, sizeof(int)), *adj = malloc(sizeof(int) * (size_t)(ne + 1));
     int *roff = calloc((size_t)nv + 2, sizeof(int)), *radj = malloc(sizeof(int) * (size_t)(ne + 1));
@@ -2243,8 +2243,8 @@ int call_answers_no_value(Compiler *c, int node) {
   /* a super whose plan reaches such a method (one that only supers on into
      nothing) */
   if (nt_kind(nt, node) == NK_SuperNode || nt_kind(nt, node) == NK_ForwardingSuperNode) {
-    const CallPlan *spl = cplan_user(c, node);
-    return spl->via == UC_SUPER && spl->mi >= 0 && !c->scopes[spl->mi].yields && method_is_void(&c->scopes[spl->mi]);
+    const CallPlan spl = cplan_user(c, node);
+    return spl.via == UC_SUPER && spl.mi >= 0 && !c->scopes[spl.mi].yields && method_is_void(&c->scopes[spl.mi]);
   }
   if (nt_kind(nt, node) != NK_CallNode) return 0;
   const char *nm = nt_str(nt, node, "name");
@@ -3341,8 +3341,8 @@ int operand_may_change_string(Compiler *c, int n) {
     return 1;
   if (k == NK_CallNode) {
     const char *nm = nt_str(nt, n, "name");
-    const CallPlan *p = cplan_user(c, n);
-    if (!nm || sp_str_mutator(nm, 0) || bop_name_mutates(nm, 0) || p->mi >= 0 || p->dispatch != CP_NONE) return 1;
+    const CallPlan p = cplan_user(c, n);
+    if (!nm || sp_str_mutator(nm, 0) || bop_name_mutates(nm, 0) || p.mi >= 0 || p.dispatch != CP_NONE) return 1;
   }
   for (int i = 0; i < nt_num_refs(nt, n); i++)
     if (operand_may_change_string(c, nt_ref_at(nt, n, i))) return 1;
@@ -4273,7 +4273,7 @@ int cmethod_takes_self_cls(Compiler *c, int si) {
       if (comp_super_is_class_new(c, nid)) { ans = 1; break; }
       /* and any other super runs the method it reaches on that class, which
          may read it even where this body does not */
-      if ((nt_kind(c->nt, nid) == NK_SuperNode || nt_kind(c->nt, nid) == NK_ForwardingSuperNode) && !cplan_user(c, nid)->core_hook) { ans = 1; break; }
+      if ((nt_kind(c->nt, nid) == NK_SuperNode || nt_kind(c->nt, nid) == NK_ForwardingSuperNode) && !cplan_user(c, nid).core_hook) { ans = 1; break; }
       NodeKind ty_k = nt_kind(c->nt, nid);
       if (ty_k == NK_CallNode && nt_ref(c->nt, nid, "receiver") < 0) {
         const char *nm = nt_str(c->nt, nid, "name");
@@ -4789,7 +4789,7 @@ static int fi_body_unforceable(Compiler *c, int id, int depth) {
     case NK_YieldNode:
       return 1;
     case NK_SuperNode: case NK_ForwardingSuperNode:
-      if (cplan_user(c, id)->core_hook) break;
+      if (cplan_user(c, id).core_hook) break;
       return 1;
     default: break;
   }
@@ -15622,8 +15622,8 @@ static void emit_super_block_arg(Compiler *c, int id, Scope *s, Scope *pm, int l
    no start to compare. A miss selects the existing builtin or error
    rendering. */
 static int super_plan_mi(Compiler *c, int id) {
-  const CallPlan *spl = cplan_user(c, id);
-  return spl->via == UC_SUPER ? spl->mi : -1;
+  const CallPlan spl = cplan_user(c, id);
+  return spl.via == UC_SUPER ? spl.mi : -1;
 }
 
 /* Inline super { block } when the parent method uses yield.
@@ -15653,12 +15653,12 @@ int emit_super_inline(Compiler *c, int id, Buf *b, int indent, int as_expr) {
      function, which a yielding parent does not have, and dropped the block
      (`super { |v| yield v + 1 }` in a class that prepends). Those, and
      under --plan-check as the assertion, take the lookup. */
-  const CallPlan *spl = cplan_user(c, id);
+  const CallPlan spl = cplan_user(c, id);
   const char *own = comp_scope_def_name(c, st);
   int mi = -1;
-  if (spl->via == UC_SUPER && spl->mi >= 0 &&
-      (shadow || (c->scopes[spl->mi].name && sp_streq(c->scopes[spl->mi].name, own)))) {
-    mi = spl->mi;
+  if (spl.via == UC_SUPER && spl.mi >= 0 &&
+      (shadow || (c->scopes[spl.mi].name && sp_streq(c->scopes[spl.mi].name, own)))) {
+    mi = spl.mi;
     if (!shadow) defcls = c->scopes[mi].class_id;
   }
   if (g_plan_check && mi >= 0) cplan_served("super-inline");
@@ -16405,7 +16405,7 @@ void emit_super(Compiler *c, int id, Buf *b) {
     /* Module's and Class's own hooks are no-ops answering nil: `super` from a
        program's method_added (Thor's), inherited, included, ... reaches them
        when no ancestor of the program defines one */
-    if (cmi < 0 && cplan_user(c, id)->core_hook) {
+    if (cmi < 0 && cplan_user(c, id).core_hook) {
       Repr hr = repr_of(c, id);
       TyKind ht = hr.as_ty;
       /* an explicit `super(...)` evaluates its arguments, in order, before

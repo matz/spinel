@@ -5154,7 +5154,7 @@ int is_method_obj_call(Compiler *c, int node) {
   /* a receiver whose class has a `method` of the program's own calls that
      (#10719); its super is the builtin, marked builtin_only
      (desugar_method_override_super) */
-  if (sp_streq(nm, "method") && !nt_int(nt, node, "builtin_only", 0) && method_user_override_recv(c, node))
+  if (is_method_ref_name(nm) && !cplan_builtin_call(c, node) && method_user_override_recv(c, node))
     return 0;
   return 1;
 }

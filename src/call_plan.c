@@ -121,7 +121,7 @@ int cplan_self_root_override(Compiler *c, int id, int scls, int root_mi) {
   int recv = nt_kind(nt, id) == NK_CallNode ? nt_ref(nt, id, "receiver") : -1;
   if (nt_kind(nt, id) != NK_CallNode || (recv >= 0 && nt_kind(nt, recv) != NK_SelfNode) || nt_ref(nt, id, "block") >= 0) return 0;
   const char *name = nt_str(nt, id, "name");
-  if (!name || nt_int(nt, id, "builtin_only", 0) || nt_int(nt, id, "kernel_recv", 0)) return 0;
+  if (!name || cplan_builtin_call(c, id) || nt_int(nt, id, "kernel_recv", 0)) return 0;
   Scope *self = comp_scope_of(c, id);
   if (!self || self->is_cmethod || self->class_id != scls || ie_class_of(c, id) >= 0) return 0;
   ClassInfo *ci = &c->classes[scls];
@@ -159,6 +159,21 @@ int cplan_root_switch(Compiler *c, int id, int scls) {
   return rc < 0 || (rc == oci && scls != oci);
 }
 
+/* See call_plan.h. */
+int cplan_builtin_call(const Compiler *c, int id) {
+  return nt_int(c->nt, id, "builtin_only", 0) != 0;
+}
+
+/* See call_plan.h. */
+int comp_call_reaches_own_any(Compiler *c, int id, const char *name) {
+  return !cplan_builtin_call(c, id) && comp_object_defines(c, name);
+}
+/* See call_plan.h. */
+int comp_call_reaches_own(Compiler *c, int id, int class_id, const char *name) {
+  if (cplan_builtin_call(c, id)) return 0;
+  return call_target(c, id, class_id, name, 0, NULL) >= 0 || comp_object_defines(c, name);
+}
+
 static void cplan_set(CallPlan *p, int mi, int owner, int via, int dispatch) {
   p->method_node = -1;
   p->method_call = 0;
@@ -193,7 +208,7 @@ static int cplan_reopen_class(TyKind rt) {
 int cplan_bool_sides(Compiler *c, int id, int *tmi, int *fmi) {
   *tmi = *fmi = -1;
   const char *name = nt_str(c->nt, id, "name");
-  if (!name || nt_int(c->nt, id, "builtin_only", 0)) return 0;
+  if (!name || cplan_builtin_call(c, id)) return 0;
   static const int CN[2] = { CORE_TRUECLASS, CORE_FALSECLASS };
   for (int k = 0; k < 2; k++) {
     int ci = comp_core_class(c, CN[k]);
@@ -288,7 +303,7 @@ int cplan_root_reopen_owner(Compiler *c, const CallPlan *p) {
 /* See call_plan.h. */
 int cplan_root_reopen_call(Compiler *c, int id, const CallPlan *p) {
   const char *name = nt_str(c->nt, id, "name");
-  if (!name || nt_int(c->nt, id, "builtin_only", 0)) return 0;
+  if (!name || cplan_builtin_call(c, id)) return 0;
   if (p->mi < 0 || !cplan_root_reopen_owner(c, p)) return 0;
   /* (p's facts are read before the asks below, which can rewrite it) */
   int mc = c->scopes[p->mi].class_id, at_object = p->owner_ci == comp_core_class(c, CORE_OBJECT);
@@ -574,7 +589,7 @@ int cplan_accessor_classes(Compiler *c, int id, int *out, int cap) {
   const NodeTable *nt = c->nt;
   const char *name = nt_str(nt, id, "name");
   int recv = nt_ref(nt, id, "receiver");
-  if (!name || recv < 0 || nt_int(nt, id, "builtin_only", 0)) return 0;
+  if (!name || recv < 0 || cplan_builtin_call(c, id)) return 0;
   int ci = comp_sg_reader_const(c, recv);
   if (ci >= 0 && call_target(c, id, ci, name, CT_CMETHOD, NULL) >= 0) return 0;
   int n = comp_sg_reader_candidates(c, recv, out, cap);
@@ -594,7 +609,7 @@ int cplan_native_block_possible(Compiler *c, int id, const PolyCand *pc, int n) 
 
 static void cplan_resolve_call(Compiler *c, int id, CallPlan *p) {
   const NodeTable *nt = c->nt;
-  if (nt_int(nt, id, "builtin_only", 0)) return;
+  if (cplan_builtin_call(c, id)) return;
   const char *name = nt_str(nt, id, "name");
   if (!name) return;
   int recv = nt_ref(nt, id, "receiver");
@@ -683,7 +698,7 @@ static void cplan_resolve_call(Compiler *c, int id, CallPlan *p) {
   TyKind rt = comp_ntype(c, recv);
   /* a Class reopen's own method answers a class value first, as the
      inference arm for Range / Time / IO / Class receivers does */
-  if (rt == TY_CLASS && !nt_int(nt, id, "builtin_only", 0)) {
+  if (rt == TY_CLASS) {
     int kci = comp_core_class(c, CORE_CLASS);
     int kmi = kci >= 0 ? call_target(c, id, kci, name, 0, NULL) : -1;
     if (kmi >= 0) { cplan_set(p, kmi, kci, UC_REOPEN, CP_DIRECT); return; }
@@ -789,7 +804,6 @@ static void cplan_resolve_call(Compiler *c, int id, CallPlan *p) {
   /* a reopening of the exception classes that defines the name stands for
      the call; otherwise the call goes on to the Object fallback below */
   if (rt == TY_EXCEPTION) { cplan_exc_reopen(c, id, name, p); if (p->mi >= 0) return; }
-  if (nt_int(nt, id, "builtin_only", 0)) return;
   /* a call written under a builtin alias (detect, collect_concat) that the
      desugar renamed to the builtin's own name reaches a reopen's method of
      the name it was written with, not of the new name */
@@ -886,7 +900,7 @@ CallPlan cplan_const_user(Compiler *c, int id, int recv, int fresh) {
   if (!c->classes[ci].is_native_class && !c->classes[ci].is_builtin_const &&
       (c->n_native_funcs == 0 || comp_native_find(c, cn, nt_str(nt, id, "name")) < 0) &&
       (c->n_ffi_funcs == 0 || ffi_find_func(c, cn, nt_str(nt, id, "name")) < 0)) return none;
-  if (nt_int(nt, id, "builtin_only", 0)) return none;
+  if (cplan_builtin_call(c, id)) return none;
   const CallPlan p = fresh ? cplan_user_fresh(c, id) : cplan_user(c, id);
   return p.mi >= 0 && p.via == UC_CMETH && p.dispatch == CP_DIRECT ? p : none;
 }
@@ -996,7 +1010,7 @@ static int ct_send_shadow(Compiler *c, int id, const char *name) {
 /* A plan-only reader must not lose a user target. This assertion belongs
    with resolution, and never supplies an emission target on a miss. */
 void cplan_check_missing(Compiler *c, int id, int mi, int ci, const char *name, int cmeth, const char *site) {
-  if (!g_plan_check || mi >= 0 || ci < 0 || !name || nt_int(c->nt, id, "builtin_only", 0)) return;
+  if (!g_plan_check || mi >= 0 || ci < 0 || !name || cplan_builtin_call(c, id)) return;
   if (ct_send_shadow(c, id, name)) return;
   int own = cmeth ? comp_cmethod_in_chain(c, ci, name, NULL) : comp_method_in_chain(c, ci, name, NULL);
   NodeKind k = nt_kind(c->nt, id);
@@ -3527,7 +3541,7 @@ int cplan_kernel_row(Compiler *c, int id, const char *name) {
   /* an internal row answers the calls the compiler made (builtin_only: it
      never reaches a method of the program's), whatever the program defines;
      the program's own call of its name never takes it */
-  if (op->flags & BOPF_INTERNAL) return recv < 0 && nt_int(nt, id, "builtin_only", 0);
+  if (op->flags & BOPF_INTERNAL) return recv < 0 && cplan_builtin_call(c, id);
   if (!cplan_kernel_form(c, id, name, 0)) return 0;
   /* an arm pinned to a version runs it, and its else arm (CT_PIN_BUILTIN)
      the row */
@@ -3562,7 +3576,7 @@ CallPlan cplan_user_in(Compiler *c, int id, int self_ci, int flags) {
   cplan_set(&ctx, -1, -1, UC_NONE, CP_NONE);
   if (id < 0 || id >= c->node_cap || self_ci >= c->nclasses || nt_kind(c->nt, id) != NK_CallNode)
     return ctx;
-  if ((flags & CPX_TARGET) && nt_int(c->nt, id, "builtin_only", 0)) return ctx;
+  if ((flags & CPX_TARGET) && cplan_builtin_call(c, id)) return ctx;
   const char *name = flags & CPX_TARGET ? view_call_name(c, id) : nt_str(c->nt, id, "name");
   int mi = name ? call_target(c, id, self_ci, name, 0, NULL) : -1;
   if (mi >= 0) {
@@ -3730,7 +3744,7 @@ static void ct_index_build(Compiler *c) {
    that implicit edge just as it binds an explicit call. */
 static int ct_exception_text(Compiler *c, int id, int *out) {
   const char *name = nt_str(c->nt, id, "name");
-  if (!name || nt_int(c->nt, id, "builtin_only", 0) ||
+  if (!name || cplan_builtin_call(c, id) ||
       !is_exception_message(name) || call_plain_argc(c, id) != 0 ||
       nt_ref(c->nt, id, "block") >= 0) return -2;
   int recv = nt_ref(c->nt, id, "receiver");
@@ -3776,7 +3790,7 @@ static int ct_exception_text(Compiler *c, int id, int *out) {
 static int ct_template_self(Compiler *c, int id, int *out) {
   const NodeTable *nt = c->nt;
   const char *name = nt_str(nt, id, "name");
-  if (!name || nt_ref(nt, id, "receiver") >= 0 || nt_int(nt, id, "builtin_only", 0)) return -2;
+  if (!name || nt_ref(nt, id, "receiver") >= 0 || cplan_builtin_call(c, id)) return -2;
   Scope *sc = comp_scope_of(c, id);
   int cid = sc ? sc->class_id : -1;
   if (!sc || sc->is_cmethod || cid < 0 || cid >= c->nclasses || call_target(c, id, cid, name, 0, NULL) >= 0)

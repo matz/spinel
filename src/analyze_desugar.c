@@ -375,7 +375,7 @@ int desugar_bare_object_reopen_calls(Compiler *c) {
     if (nt_ref(nt, id, "receiver") >= 0 || id >= c->node_cap) continue;
     const char *nm = nt_str(nt, id, "name");
     /* (a builtin_only call is the builtin's, whatever Object defines) */
-    if (!nm || nt_int(nt, id, "builtin_only", 0) || call_target(c, id, obj, nm, CT_OWN, NULL) < 0) continue;
+    if (!nm || cplan_builtin_call(c, id) || call_target(c, id, obj, nm, CT_OWN, NULL) < 0) continue;
     /* in a class body self is the class, and in an instance_eval block
        the receiver */
     Scope *sc = comp_scope_of(c, id);
@@ -4719,7 +4719,7 @@ int desugar_env_enum(Compiler *c) {
     int snap = nt_new_node(nt, "CallNode");
     if (snap < 0) continue;
     nt_node_set_str(nt, snap, "name", "__env_to_h");
-    nt_node_set_int(nt, snap, "builtin_only", 1);
+    nt_mark_builtin_call(nt, snap);
     nt_node_set_ref(nt, snap, "receiver", -1);
     nt_node_set_ref(nt, snap, "arguments", -1);
     nt_node_set_ref(nt, snap, "block", -1);
@@ -8469,7 +8469,7 @@ static int desugar_dynamic_method_inner(Compiler *c) {
     if (cls >= 0) own_method = comp_method_in_chain(c, cls, "method", NULL) >= 0;
     /* the builtin's own (a program `method`'s super, builtin_only): its arms
        are the builtin's too, whatever the class defines */
-    int bonly = nt_int(nt, id, "builtin_only", 0);
+    int bonly = cplan_builtin_call(c, id);
     if ((cls < 0 && rt != TY_POLY) || (own_method && !bonly)) continue;
     char **own = NULL;
     int nown = dsend_receiver_names(c, cls, 1, &own), base = nt->count;
@@ -8485,7 +8485,7 @@ static int desugar_dynamic_method_inner(Compiler *c) {
       nt_set_ignore_visibility(nt, arms[k], nt_ignore_visibility(nt, id));
       nt_node_set_str(nt, arms[k], "dyn_name", own[k]);
       nt_node_set_int(nt, arms[k], "dyn_of", id);
-      if (bonly) nt_node_set_int(nt, arms[k], "builtin_only", 1);
+      if (bonly) nt_mark_builtin_call(nt, arms[k]);
       nt_node_set_ref(nt, arms[k], "arguments", na);
       comp_sym_intern(c, own[k]);
       free(own[k]);
@@ -10353,7 +10353,7 @@ int desugar_to_hash_splat(Compiler *c) {
     nt_node_set_ref(nt, call, "arguments", -1);
     nt_node_set_ref(nt, call, "block", -1);
     if (sub) {
-      nt_node_set_int(nt, call, "builtin_only", 1);
+      nt_mark_builtin_call(nt, call);
       nt_node_set_int(nt, call, "hashsub_splat", 1);
     }
     nt_node_set_ref(nt, id, "value", call);
@@ -11667,7 +11667,7 @@ static int fwd_inert_method_lookup(Compiler *c, int e) {
   if (!is_method_ref_name(nt_str(nt, e, "name"))) return 0;
   /* a `method` the receiver's class writes itself is a call that runs
      code, read once like any other (#10719) */
-  if (sp_streq(nt_str(nt, e, "name"), "method") && !nt_int(nt, e, "builtin_only", 0)) {
+  if (is_method_ref_name(nt_str(nt, e, "name")) && !cplan_builtin_call(c, e)) {
     int r = nt_ref(nt, e, "receiver");
     /* (no receiver: self in an instance method of such a class) */
     if (r < 0 && method_user_override_recv(c, e)) return 0;
@@ -15701,7 +15701,7 @@ static void dmo_rewrite(NodeTable *nt, int n, const int *preq, int npreq, int *c
     nt_node_set_ref(nt, n, "receiver", self);
     nt_node_set_ref(nt, n, "arguments", args);
     nt_node_set_ref(nt, n, "block", -1);
-    nt_node_set_int(nt, n, "builtin_only", 1);
+    nt_mark_builtin_call(nt, n);
     *changed = 1;
     return;
   }
@@ -15766,7 +15766,7 @@ int desugar_concat_builtin_version(Compiler *c) {
   if (like < 0) return 0;
   int call = disp_forward_call(nt, "concat", -1, 0);
   nt_node_set_ref(nt, call, "receiver", nt_new_node(nt, "SelfNode"));
-  nt_node_set_int(nt, call, "builtin_only", 1);
+  nt_mark_builtin_call(nt, call);
   nt_node_set_int(nt, call, "desugar_builtin", 1);
   nt_node_set_int(nt, call, "concat_builtin_version", 1);
   int args = nt_ref(nt, call, "arguments"), argc = 0;
@@ -17452,7 +17452,7 @@ static int enum_is_a_chain(Compiler *c, const char *rn, const int *defcls, const
     nt_node_set_arr(nt, iaa, "arguments", &cr, 1);
     nt_node_set_str(nt, ia, "name", exact[k] ? "instance_of?" : "is_a?");
     /* the class test itself, never a program's instance_of? of the name */
-    if (exact[k]) nt_node_set_int(nt, ia, "builtin_only", 1);
+    if (exact[k]) nt_mark_builtin_call(nt, ia);
     nt_node_set_ref(nt, ia, "receiver", pr);
     nt_node_set_ref(nt, ia, "arguments", iaa);
     if (pred < 0) pred = ia;
@@ -17593,7 +17593,7 @@ int desugar_builtin_splat_forward(Compiler *c) {
     const char *cls = tnew ? NULL : ty_is_array(rt) || ty_is_obj_array(rt) ? "Array" : ty_is_hash(rt) ? "Hash"
                     : rt == TY_STRING ? "String" : rt == TY_TIME ? "Time"
                     : ty_is_object(rt) && comp_ary_is_time(c, ty_object_class(rt)) &&
-                      nt_int(nt, id, "builtin_only", 0) ? "Time" : NULL;
+                      cplan_builtin_call(c, id) ? "Time" : NULL;
     if (!cls && !tnew) continue;
     /* CRuby's own counts (builtin_arity.inc, dumped from ruby itself); Time.new's,
        which it does not list, as CRuby's message gives them */
@@ -19986,7 +19986,7 @@ static int bs_call(BsB *b, int recv, const char *name, const int *args, int n) {
    of the name */
 static int bs_bcall(BsB *b, int recv, const char *name, const int *args, int n) {
   int id = bs_call(b, recv, name, args, n);
-  if (id >= 0) { nt_node_set_int(b->nt, id, "builtin_only", 1); nt_node_set_int(b->nt, id, "desugar_builtin", 1); }
+  if (id >= 0) { nt_mark_builtin_call(b->nt, id); nt_node_set_int(b->nt, id, "desugar_builtin", 1); }
   return id;
 }
 static int bs_stmts(BsB *b, const int *ids, int n) {
@@ -20329,7 +20329,7 @@ int desugar_reduce_splat_args(Compiler *c) {
        the builtins' own: a program that reopens Array#length or #[],
        Integer#== or #>, or String#+ does not reach into them */
     int own[13] = { len[0], len[1], len[2], len[3], eq2, gt2, eq1, ns, m1, msg, i0, i1, i2 };
-    for (int q = 0; q < 13; q++) if (own[q] >= 0) nt_node_set_int(nt, own[q], "builtin_only", 1);
+    for (int q = 0; q < 13; q++) if (own[q] >= 0) nt_mark_builtin_call(nt, own[q]);
     int if1 = bs_if(&b, eq1, &one, 1, &call, 1);
     int if2 = bs_if(&b, gt2, &rz, 1, &if1, 1);
     int if3 = bs_if(&b, eq2, &two, 1, &if2, 1);
@@ -20448,7 +20448,7 @@ int desugar_iter_splat_args(Compiler *c) {
     /* the count and the message are the builtins' own: a program that reopens
        Array#length, Integer#> or String#+ does not reach into them */
     int own[6] = { len, ns, m1, msg, gt, gt >= 0 ? nt_ref(nt, gt, "receiver") : -1 };
-    for (int q = 0; q < 6; q++) if (own[q] >= 0) nt_node_set_int(nt, own[q], "builtin_only", 1);
+    for (int q = 0; q < 6; q++) if (own[q] >= 0) nt_mark_builtin_call(nt, own[q]);
     /* the original call, its receiver read from the temp and no argument */
     nt_node_set_ref(nt, call, "receiver", bs_read(&b, rn));
     nt_node_set_ref(nt, call, "arguments", -1);
@@ -28039,7 +28039,7 @@ static void biv_rewrite(Compiler *c, NodeTable *nt, int node, int mode) {
       /* defined?(@x): "instance-variable" when the value holds it, else nil */
       char ivb[256]; snprintf(ivb, sizeof ivb, "%s", nt_str(nt, v, "name"));
       biv_self_call(nt, v, mode == BIV_OBJECT ? "instance_variable_defined?" : "__bivar_defined", ivb, -1);
-      if (mode == BIV_OBJECT) nt_node_set_int(nt, v, "builtin_only", 1);
+      if (mode == BIV_OBJECT) nt_mark_builtin_call(nt, v);
       int st = fwd_new_node_like(nt, node, "StatementsNode");
       int lit = str_node_like(nt, node, "instance-variable");
       nt_node_set_arr(nt, st, "body", &lit, 1);
@@ -28074,7 +28074,7 @@ static void biv_rewrite(Compiler *c, NodeTable *nt, int node, int mode) {
       /* Object's self can be any receiver: use the reflective layout dispatch,
          bypassing overrides because the source was an ivar, not a call. */
       biv_self_call(nt, node, "instance_variable_get", ivb, -1);
-      nt_node_set_int(nt, node, "builtin_only", 1);
+      nt_mark_builtin_call(nt, node);
     }
     else if (mode == BIV_TABLE) biv_self_call(nt, node, "__bivar_get", ivb, -1);
     else {
@@ -28087,7 +28087,7 @@ static void biv_rewrite(Compiler *c, NodeTable *nt, int node, int mode) {
     int v = nt_ref(nt, node, "value");
     if (mode == BIV_TABLE) { biv_self_call(nt, node, "__bivar_set", ivb, v); c->bivar_table = 1; }
     else biv_self_call(nt, node, "instance_variable_set", ivb, v);
-    if (mode == BIV_OBJECT) nt_node_set_int(nt, node, "builtin_only", 1);
+    if (mode == BIV_OBJECT) nt_mark_builtin_call(nt, node);
   }
 }
 
@@ -29899,8 +29899,9 @@ static int native_twin_def(NodeTable *nt, int like, const char *mn, const char *
   nt_node_set_str(nt, recv, "name", mn);
   nt_node_set_ref(nt, call, "receiver", recv);
   nt_node_set_str(nt, call, "name", fname);
-  /* the call into C, never back into this def */
-  nt_node_set_int(nt, call, "builtin_only", 1);
+  /* the call into C, never back into this def (a twin gets a record of its
+     own, apart from "binds the builtin's method", later) */
+  nt_mark_builtin_call(nt, call);
   if (np > 0) nt_node_set_ref(nt, call, "arguments", args);
   self_def_finish(nt, def, body, fname, np > 0 ? ps : -1, call);
   nt_node_set_int(nt, def, "native_twin", 1);

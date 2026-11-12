@@ -3458,7 +3458,7 @@ static void cf_call(CF *f, int v) {
   /* an alias that captured a builtin (`alias old_dup dup`, #8914) calls the
      builtin: not the method the class defines of the name after it, whose
      answer is not the receiver */
-  if (nt_int(nt, v, "builtin_only", 0)) {
+  if (cplan_builtin_call(c, v)) {
     /* a native_func's twin (desugar_native_func_defs) calls into C, which
        answers a builtin value (cf_native_class_answer), not the module or
        what it was handed: every call of the function reaches the one twin,

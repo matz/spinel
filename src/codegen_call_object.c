@@ -1391,7 +1391,7 @@ int emit_call_freeze_dup_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
          does a method the class defines itself: Nokogiri's Node#dup is a deep
          copy, and the built-in shallow copy took its place (#5450). Not for
          a call an alias captured the builtin for (builtin_only). */
-      !(!nt_int(nt, id, "builtin_only", 0) && ty_is_object(comp_ntype(c, recv)) &&
+      !(!cplan_builtin_call(c, id) && ty_is_object(comp_ntype(c, recv)) &&
         comp_resolve_member(c, ty_object_class(comp_ntype(c, recv)), name, 0, NULL, NULL) != SP_MEMBER_NONE) &&
       !(comp_ntype(c, recv) == TY_POLY && an_user_defines_method(c, name))) {
     int dargs = nt_ref(nt, id, "arguments");
@@ -1582,7 +1582,7 @@ int emit_call_freeze_dup_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
          does a method the class defines itself: Nokogiri's Node#dup is a deep
          copy, and the built-in shallow copy took its place (#5450). Not for
          a call an alias captured the builtin for (builtin_only). */
-      !(!nt_int(nt, id, "builtin_only", 0) && ty_is_object(comp_ntype(c, recv)) &&
+      !(!cplan_builtin_call(c, id) && ty_is_object(comp_ntype(c, recv)) &&
         comp_resolve_member(c, ty_object_class(comp_ntype(c, recv)), name, 0, NULL, NULL) != SP_MEMBER_NONE) &&
       !(argc == 0 && repr_of(c, recv).kind == RK_BOXED && !sp_streq(name, "itself") && user_defines_or_reads(c, name))) {
     int args = nt_ref(nt, id, "arguments");

@@ -2464,21 +2464,10 @@ int        comp_name_reader_any(Compiler *c, const char *name);
    asks it for every argument-less call on a receiver that can be anything,
    at every solve. */
 const int *comp_name_reader_owners(Compiler *c, const char *name, int *n);
-/* does class_id's chain define the method call id names, and does the call reach it? A call
-   marked builtin_only (the super of a program's own reflection, rewritten to
-   self's builtin) does not. */
+/* does Object's program define a method of the name? */
 static inline int comp_object_defines(Compiler *c, const char *name) {
   int oc = comp_core_class(c, CORE_OBJECT);
   return oc >= 0 && comp_method_in_chain(c, oc, name, NULL) >= 0;
-}
-/* does Object's program method of the name answer call id for the receivers no class arm of its
-   dispatch took (builtin values, instances of classes without a method of their own)? */
-static inline int comp_call_reaches_own_any(Compiler *c, int id, const char *name) {
-  return !nt_int(c->nt, id, "builtin_only", 0) && comp_object_defines(c, name);
-}
-static inline int comp_call_reaches_own(Compiler *c, int id, int class_id, const char *name) {
-  if (nt_int(c->nt, id, "builtin_only", 0)) return 0;
-  return comp_method_in_chain(c, class_id, name, NULL) >= 0 || comp_object_defines(c, name);
 }
 int        send_def_just_supers(Compiler *c, int mi);          /* analyze_desugar.c */
 int        send_family_program_owns(Compiler *c, const char *name);

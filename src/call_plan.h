@@ -346,6 +346,19 @@ void cplan_check_missing(Compiler *c, int id, int mi, int ci, const char *name, 
    the analysis, before the memo is codegen's to fill (the nil facts,
    analyze_nil.c): it answers from the types as they stand. */
 CallPlan cplan_user_fresh(Compiler *c, int id);
+/* Does call id bind the builtin's own method of its name, whatever the program
+   defines? A call a desugar wrote for the compiler's own use, or an alias that
+   captured the builtin (nt_mark_builtin_call). It reads the node's record only,
+   no types and no resolution, so every phase may ask it. The plan of such a
+   call is empty. */
+int cplan_builtin_call(const Compiler *c, int id);
+/* Does Object's program method of the name answer call id for the receivers no
+   class arm of its dispatch took (builtin values, instances of classes without
+   a method of their own)? The second also asks class_id's chain. A call that
+   binds the builtin's own method (the super of a program's own reflection,
+   rewritten to self's builtin) is not answered by either. */
+int comp_call_reaches_own_any(Compiler *c, int id, const char *name);
+int comp_call_reaches_own(Compiler *c, int id, int class_id, const char *name);
 /* A call on a constant receiver recv: the program's singleton method it
    binds (fresh: resolved as cplan_user_fresh is), or, where it binds none,
    a plan of no method (mi -1). */

@@ -20325,7 +20325,7 @@ static void reject_range_reopen_nonint(Compiler *c) {
     TyKind rk = comp_ntype(c, rv);
     if (rk != TY_STR_RANGE && rk != TY_FLOAT_RANGE && rk != TY_TIME_RANGE && rk != TY_OBJ_RANGE) continue;
     const char *name = nt_str(nt, id, "name");
-    if (!name || nt_int(nt, id, "builtin_only", 0)) continue;
+    if (!name || cplan_builtin_call(c, id)) continue;
     Scope *sc = comp_scope_of(c, id);
     if (sc && !sc->reachable) continue;
     MethodLookup ml = { .def_class = -1 };

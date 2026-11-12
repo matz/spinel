@@ -2098,7 +2098,7 @@ static int emit_method_obj_target(Compiler *c, int id, Buf *b, const NodeTable *
   }
   /* method(:sym) / <recv>.method(:sym) -> a bound Method object. */
   if (sp_streq(name, "method") && method_sym_arg(c, id) != NULL &&
-      (nt_int(nt, id, "builtin_only", 0) || !method_user_override_recv(c, id))) {
+      (cplan_builtin_call(c, id) || !method_user_override_recv(c, id))) {
     const char *sym = method_sym_arg(c, id);
     int mi = capture;
     if ((mi < 0 || method_obj_of_native_func(c, recv, sym)) &&

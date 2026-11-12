@@ -394,7 +394,7 @@ int an_yield_site_builtin_answer(Compiler *c, int id, TyKind kind, TyKind *out) 
      too (see that function). Other names over non-numeric kinds still take
      the old path: the emitter does not yet box every per-site answer into a
      poly slot, so widening them fails to compile. */
-  if (nt_kind(nt, id) != NK_CallNode || nt_int(nt, id, "builtin_only", 0) ||
+  if (nt_kind(nt, id) != NK_CallNode || cplan_builtin_call(c, id) ||
       !(comp_yield_chain_reopened(c, id) || ty_is_numeric(kind) ||
         yield_site_per_kind_name(nt_str(nt, id, "name")))) return 0;
   int recv = nt_ref(nt, id, "receiver");
@@ -2974,7 +2974,7 @@ TyKind an_class_concrete(Compiler *c, int id, const char *name, TyKind t) {
 int an_bare_call_class_owned(Compiler *c, int id) {
   const NodeTable *nt = c->nt;
   if (nt_ref(nt, id, "receiver") >= 0) return 0;
-  if (nt_int(nt, id, "builtin_only", 0)) return 0;
+  if (cplan_builtin_call(c, id)) return 0;
   const char *name = nt_str(nt, id, "name");
   if (!name) return 0;
   Scope *sc = comp_scope_of(c, id);
@@ -3100,7 +3100,7 @@ static int yield_recv_chain_kind(Compiler *c, int node, TyKind bt, TyKind *out) 
      C compile error). */
   { const char *rn = nt_str(nt, node, "name");
     /* a call an alias captured the builtin for (builtin_only) runs the builtin */
-    int rmi = nt_int(nt, node, "builtin_only", 0) ? -1 : comp_builtin_kind_reopen_mi(c, rk, rn);
+    int rmi = cplan_builtin_call(c, node) ? -1 : comp_builtin_kind_reopen_mi(c, rk, rn);
     if (rmi >= 0) {
       /* still settling in an early round is not a reason to decline: the
          site is answered by the reopen either way, and codegen reads the
@@ -3341,7 +3341,7 @@ static TyKind an_root_reopen_call(Compiler *c, int id, const CallPlan *p) {
    Enumerator, or on a root class (an_root_reopen_call). 0 for any other. */
 static int an_reopen_head_call(Compiler *c, int id, int recv, TyKind *out) {
   TyKind hrt = infer_type(c, recv);
-  if (hrt == TY_POLY || hrt == TY_UNKNOWN || nt_int(c->nt, id, "builtin_only", 0)) return 0;
+  if (hrt == TY_POLY || hrt == TY_UNKNOWN || cplan_builtin_call(c, id)) return 0;
   const CallPlan p = cplan_user_fresh(c, id);
   /* (a method closed to the call binds none: the call raises) */
   if (cplan_root_closed(c, id, NULL) >= 0) return 0;
@@ -6881,15 +6881,15 @@ static int infer_receiverless_call(Compiler *c, int id, const NodeTable *nt, con
        as the call plan takes it (comp_cbody_call_mi); not where an
        instance_eval block's receiver answers the name */
     { int iec = ie_class_of(c, id);
-      int cb = nt_int(nt, id, "builtin_only", 0) || (iec >= 0 && iec < c->nclasses && call_target(c, id, iec, name, 0, NULL) >= 0)
+      int cb = cplan_builtin_call(c, id) || (iec >= 0 && iec < c->nclasses && call_target(c, id, iec, name, 0, NULL) >= 0)
                ? -1 : comp_cbody_call_mi(c, id, name);
       if (cb >= 0) { *out = an_user_call(c, id, cb, UC_CMETH, c->node_cbody[id]); return 1; } }
-    int mi = nt_int(nt, id, "builtin_only", 0) ? -1 : call_target(c, id, -1, name, CT_TOP, NULL), fvia = UC_TOP;
+    int mi = cplan_builtin_call(c, id) ? -1 : call_target(c, id, -1, name, CT_TOP, NULL), fvia = UC_TOP;
     /* in a block run by instance_eval, the receiver's own method answers
        before a top-level def of the same name (#7213) */
     { int iec = ie_class_of(c, id);
       if (mi >= 0 && iec >= 0 && iec < c->nclasses && call_target(c, id, iec, name, 0, NULL) >= 0) mi = -1; }
-    if (mi < 0 && !nt_int(nt, id, "builtin_only", 0)) { mi = call_target(c, id, -1, name, CT_INCLUDED, NULL); fvia = UC_INCLUDED; }
+    if (mi < 0 && !cplan_builtin_call(c, id)) { mi = call_target(c, id, -1, name, CT_INCLUDED, NULL); fvia = UC_INCLUDED; }
     if (mi >= 0) { *out = an_user_call(c, id, mi, fvia, fvia == UC_TOP ? -1 : c->scopes[mi].class_id); return 1; }
     /* Kernel conversions */
     if (sp_streq(name, "Integer") && (kw_argc == 1 || kw_argc == 2)) {
@@ -6987,7 +6987,7 @@ static int infer_receiverless_call(Compiler *c, int id, const NodeTable *nt, con
 /* Does a reopening of the receiver's builtin class answer call id with a
    method of its own, as infer_user_method_call's reopen lookup finds it? */
 int an_builtin_reopen_answers(Compiler *c, int id, const char *name, int recv, TyKind rt, int bonly) {
-  if (recv < 0 || bonly || !name || core_of_type(rt) < 0 || nt_int(c->nt, id, "builtin_only", 0)) return 0;
+  if (recv < 0 || bonly || !name || core_of_type(rt) < 0 || cplan_builtin_call(c, id)) return 0;
   int ci = comp_core_class(c, core_of_type(rt));
   int mi = ci >= 0 ? call_target(c, id, ci, name, 0, NULL) : -1;
   return mi >= 0 && !cplan_reopen_runs_builtin(c, id, mi);
@@ -7147,7 +7147,7 @@ static int infer_user_method_call(Compiler *c, int id, const NodeTable *nt, cons
 
   /* built-in class reopening: look up user-defined methods on scalar built-in
      types -- not for an alias that captured the builtin (builtin_only) */
-  if (recv >= 0 && !bonly && !nt_int(nt, id, "builtin_only", 0)) {
+  if (recv >= 0 && !bonly && !cplan_builtin_call(c, id)) {
     /* true and false: each value's own class's method, or the builtin's
        where its class has none; one answer where they agree, else boxed */
     int tmi, fmi;
@@ -7281,7 +7281,7 @@ static int infer_user_method_call(Compiler *c, int id, const NodeTable *nt, cons
 static int infer_method_proc_call(Compiler *c, int id, const NodeTable *nt, const char *name, int recv, int argc, const int *argv, TyKind rt, TyKind *out) {
   /* method(:sym) / <recv>.method(:sym) -> a bound Method object */
   if (name && sp_streq(name, "method") && method_sym_arg(c, id) != NULL &&
-      (nt_int(nt, id, "builtin_only", 0) || !method_user_override_recv(c, id))) { *out = TY_METHOD; return 1; }
+      (cplan_builtin_call(c, id) || !method_user_override_recv(c, id))) { *out = TY_METHOD; return 1; }
   /* `k.instance_method(:m).bind_call(obj, args)` on a Class value known only
      at run time: whichever class k holds binds its own `m`, each arm boxing
      its answer. */
@@ -8977,7 +8977,7 @@ static int array_hash_reopen_owner(Compiler *c, int id, TyKind rt, const char *n
    it first. */
 int an_reopen_owner(Compiler *c, int id, int cn) {
   const char *name = nt_str(c->nt, id, "orig_name") ? nt_str(c->nt, id, "orig_name") : nt_str(c->nt, id, "name");
-  if (!name || nt_int(c->nt, id, "builtin_only", 0)) return -1;
+  if (!name || cplan_builtin_call(c, id)) return -1;
   int mi = reopen_owner_of(c, id, cn, name);
   /* (a Symbol or Range one; an Array or Hash one keeps the answer the
      inference arm above gives it) */
@@ -9063,7 +9063,7 @@ int an_push_widens_fresh(Compiler *c, int id) {
   TyKind rt = infer_type(c, recv);
   if (rt != TY_STR_ARRAY && rt != TY_INT_ARRAY && rt != TY_FLOAT_ARRAY) return 0;
   /* a program's own Array#push (or <<) answers what it answers */
-  if (!nt_int(nt, id, "builtin_only", 0) && array_hash_reopen_owner(c, id, rt, nm) >= 0) return 0;
+  if (!cplan_builtin_call(c, id) && array_hash_reopen_owner(c, id, rt, nm) >= 0) return 0;
   /* a fresh Array frozen in the same chain (`str.split.freeze << 1`) is
      still held by nothing else: the general Array it becomes keeps the
      frozen flag, so the push raises CRuby's FrozenError */
@@ -9123,7 +9123,7 @@ int an_push_lifts_boxed(Compiler *c, int id) {
   /* (an Array subclass's `dup` is an instance of that class, boxed as its builtin) */
   if (c->has_arysub) return 0;
   /* a program's own Array#push (or <<) answers what it answers */
-  if (!nt_int(nt, id, "builtin_only", 0) &&
+  if (!cplan_builtin_call(c, id) &&
       (array_hash_reopen_owner(c, id, TY_STR_ARRAY, nm) >= 0 || array_hash_reopen_owner(c, id, TY_POLY_ARRAY, nm) >= 0))
     return 0;
   int a = nt_ref(nt, id, "arguments"), ac = 0, kinds = 0;
@@ -9392,7 +9392,7 @@ static TyKind infer_call_inner(Compiler *c, int id) {
         /* an alias that captured an Object / Kernel method
            (`alias original_dup dup`): the builtin's call, past the class's
            own method of the name */
-        else if (!over && !nt_int(nt, id, "builtin_only", 0)) {
+        else if (!over && !cplan_builtin_call(c, id)) {
           int bi = 0;
           const char *brn = comp_resolve_alias_ex(c, oci, name, NULL, &bi);
           if (bi && brn && !sp_streq(brn, name)) {
@@ -9400,7 +9400,7 @@ static TyKind infer_call_inner(Compiler *c, int id) {
             if (!bn) { fprintf(stderr, "out of memory\n"); exit(1); }
             if (!an_pure_reads) {
               nt_node_set_str((NodeTable *)nt, id, "name", bn);
-              nt_node_set_int((NodeTable *)nt, id, "builtin_only", 1);
+              nt_mark_builtin_call((NodeTable *)nt, id);
             }
             bonly = 1;
             name = an_pure_reads ? brn : nt_str(nt, id, "name");
@@ -9411,7 +9411,7 @@ static TyKind infer_call_inner(Compiler *c, int id) {
     }
     /* a call already resolved to a captured builtin keeps it: its name is
        the builtin's now, which the class may alias to its own method */
-    if (aci >= 0 && c->classes[aci].naliases > 0 && !nt_int(nt, id, "builtin_only", 0)) {
+    if (aci >= 0 && c->classes[aci].naliases > 0 && !cplan_builtin_call(c, id)) {
       int bi = 0;
       const char *rn = comp_resolve_alias_ex(c, aci, name, NULL, &bi);
       if (rn && !sp_streq(rn, name)) {
@@ -9419,7 +9419,7 @@ static TyKind infer_call_inner(Compiler *c, int id) {
         name = an_pure_reads ? rn : nt_str(nt, id, "name");
         /* the alias captured the builtin: the class's own method of that
            name, defined or aliased after it, is not this call's */
-        if (bi) { bonly = 1; if (!an_pure_reads) nt_node_set_int((NodeTable *)nt, id, "builtin_only", 1); }
+        if (bi) { bonly = 1; if (!an_pure_reads) nt_mark_builtin_call((NodeTable *)nt, id); }
       }
     }
   }
@@ -9427,7 +9427,7 @@ static TyKind infer_call_inner(Compiler *c, int id) {
   /* Kernel#dup / #clone an alias captured on a program object
      (builtin_only): a copy of the receiver, whatever the class's own method
      of the name answers */
-  if ((bonly || nt_int(nt, id, "builtin_only", 0)) && recv >= 0 && is_copy_alias(name)) {
+  if ((bonly || cplan_builtin_call(c, id)) && recv >= 0 && is_copy_alias(name)) {
     TyKind crt = infer_type(c, recv);
     if (ty_is_object(crt)) return crt;
   }
@@ -9507,7 +9507,7 @@ static TyKind infer_call_inner(Compiler *c, int id) {
      declared sp_StrArray * and assigned a const char *. One rule, asked before
      any builtin arm, keeps the two halves of the compiler on the same method. */
   if (recv < 0 && nt_ref(nt, id, "block") < 0 &&
-      !nt_str(nt, id, "vis_enforce") && !nt_int(nt, id, "builtin_only", 0)) {
+      !nt_str(nt, id, "vis_enforce") && !cplan_builtin_call(c, id)) {
     int bmi = call_target(c, id, -1, name, CT_TOP, NULL), bvia = UC_TOP;
     if (bmi < 0) { bmi = call_target(c, id, -1, name, CT_INCLUDED, NULL); bvia = UC_INCLUDED; }
     if (bmi >= 0) {
@@ -9654,7 +9654,7 @@ static TyKind infer_call_inner(Compiler *c, int id) {
      a String-returning reopen. The scalar reopens (String, Integer, ...) keep
      their place further down, where their rules have long been ordered. */
   if (recv >= 0 && (rt == TY_RANGE || rt == TY_TIME || rt == TY_IO || rt == TY_CLASS) &&
-      !bonly && !nt_int(nt, id, "builtin_only", 0)) {
+      !bonly && !cplan_builtin_call(c, id)) {
     int eci = rt == TY_IO ? io_reopen_class(c, name)
             : comp_core_class(c, rt == TY_RANGE ? CORE_RANGE : rt == TY_TIME ? CORE_TIME : CORE_CLASS);
     int emi = eci >= 0 ? call_target(c, id, eci, name, 0, NULL) : -1;
@@ -9672,7 +9672,7 @@ static TyKind infer_call_inner(Compiler *c, int id) {
     }
     if (emi >= 0) return an_user_call(c, id, emi, UC_REOPEN, eci);
   }
-  if (recv >= 0 && name && ty_array_or_hash(rt) && !bonly && !nt_int(nt, id, "builtin_only", 0)) {
+  if (recv >= 0 && name && ty_array_or_hash(rt) && !bonly && !cplan_builtin_call(c, id)) {
     int ami = array_hash_reopen_owner(c, id, rt, name);
     if (ami >= 0) return an_user_call(c, id, ami, UC_REOPEN, c->scopes[ami].class_id);
   }
@@ -11356,7 +11356,7 @@ int std_stream_assigned(Compiler *c, const char *nm) {
 static TyKind infer_empty_array_reopen(Compiler *c, int id) {
   if (comp_core_class(c, CORE_ARRAY) < 0) return TY_UNKNOWN;
   int call = comp_recv_parent(c, id);
-  if (call >= 0 && !nt_int(c->nt, call, "builtin_only", 0) &&
+  if (call >= 0 && !cplan_builtin_call(c, call) &&
       comp_builtin_kind_reopen_mi(c, TY_POLY_ARRAY, nt_str(c->nt, call, "name")) >= 0)
     return TY_POLY_ARRAY;
   return TY_UNKNOWN;

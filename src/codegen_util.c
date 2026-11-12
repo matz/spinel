@@ -1244,7 +1244,7 @@ static int yield_builtin_method_site_type(const Compiler *c, int id, TyKind *out
   if (!sp_yield_site_type(c, recv, &rt)) return 0;
   /* a site whose class reopens the name: the reopen's return type, for an
      Array or Hash as for a scalar (yield_recv_chain_kind says why) */
-  { int rmi = nt_int(nt, id, "builtin_only", 0) ? -1 : comp_builtin_kind_reopen_mi((Compiler *)c, rt, op);
+  { int rmi = cplan_builtin_call(c, id) ? -1 : comp_builtin_kind_reopen_mi((Compiler *)c, rt, op);
     if (rmi >= 0) {
       TyKind rr = c->scopes[rmi].ret;
       if (rr == TY_UNKNOWN || rr == TY_VOID) return 0;
@@ -3009,7 +3009,7 @@ static int ivs_base_kind(Compiler *c, int cid, const char *ivn) {
       int a = nt_ref(nt, u, "arguments"), ac = 0;
       const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &ac) : NULL;
       if (sp_streq(un, "instance_variable_set")) {
-        if (nt_int(nt, u, "builtin_only", 0) && !poly_ivar_set_reaches(c, u, cid)) continue;
+        if (cplan_builtin_call(c, u) && !poly_ivar_set_reaches(c, u, cid)) continue;
         int nmok = ac == 2 && (nt_kind(nt, av[0]) == NK_SymbolNode || nt_kind(nt, av[0]) == NK_StringNode);
         const char *sn = !nmok ? NULL : nt_kind(nt, av[0]) == NK_SymbolNode ? nt_str(nt, av[0], "value")
                                                                             : nt_str(nt, av[0], "content");

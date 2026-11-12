@@ -202,7 +202,7 @@ static int sh_copied_self_targets(Compiler *c, int call, int *out, int cap) {
   const char *name = nt_kind(nt, call) == NK_CallNode ? nt_str(nt, call, "name") : NULL;
   Scope *s = comp_scope_of(c, call);
   int si = (int)(s - c->scopes);
-  if (!name || nt_ref(nt, call, "receiver") >= 0 || nt_int(nt, call, "builtin_only", 0) || !comp_scope_copied_away(c, si) ||
+  if (!name || nt_ref(nt, call, "receiver") >= 0 || cplan_builtin_call(c, call) || !comp_scope_copied_away(c, si) ||
       s->is_cmethod || s->def_node < 0)
     return 0;
   /* (a name no class answers, a builtin's, reaches none) */
@@ -1135,7 +1135,7 @@ static int sh_self_call_targets(Compiler *c, int call, const char *nm, int *out,
   int ci = cur ? (int)(cur - c->scopes) : -1;
   if (ci <= 0 || cur->is_cmethod || cur->class_id < 0 || !cur->name || cur->def_node < 0) return -1;
   if (core_method_name(nm) || object_public_method_name(nm) ||
-      bop_share_kernel(nm, nt_int(nt, call, "builtin_only", 0)) || bop_share_named(BOP_ANY_RECV, nm))
+      bop_share_kernel(nm, cplan_builtin_call(c, call)) || bop_share_named(BOP_ANY_RECV, nm))
     return -1;
   /* the enclosing method may also run on a class whose chain gives its
      name another method: under an alias, or taken out of its class and
@@ -1575,7 +1575,7 @@ static int sh_builtin_call_pure(Compiler *c, int n) {
   if (!name || is_receiver_conversion(name) || sh_has_targets(c, n)) return 0;
   int recv = nt_ref(c->nt, n, "receiver");
   int s = recv >= 0 ? bop_share_named(sh_family(comp_ntype_settled(c, recv)), name)
-                     : bop_share_kernel(name, nt_int(c->nt, n, "builtin_only", 0));
+                     : bop_share_kernel(name, cplan_builtin_call(c, n));
   if (!s) s = bop_share_named(BOP_ANY_RECV, name);
   return s == BSH_PURE;
 }

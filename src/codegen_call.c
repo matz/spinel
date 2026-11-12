@@ -1029,7 +1029,7 @@ static int np_operand_pure(Compiler *c, int n) {
     int an = 0; const int *av = call_args(nt, n, &an);
     int r = nt_ref(nt, n, "receiver");
     TyKind rt = r >= 0 ? comp_ntype(c, r) : TY_UNKNOWN;
-    return nm && sp_streq(nm, "[]") && (nt_int(nt, n, "builtin_only", 0) || ty_is_array(rt) || ty_is_obj_array(rt)) &&
+    return is_aref_name(nm) && (cplan_builtin_call(c, n) || ty_is_array(rt) || ty_is_obj_array(rt)) &&
            an == 1 && nt_ref(nt, n, "block") < 0 && np_operand_pure(c, r) && np_operand_pure(c, av[0]);
   }
   default:
@@ -30566,7 +30566,7 @@ static void emit_call_inner(Compiler *c, int id, Buf *b) {
      builtin arm re-enters the call -- the program's method of that name
      would take it back to the caller. */
   { int br = nt_ref(c->nt, id, "receiver");
-    if (br >= 0 && nt_int(c->nt, id, "builtin_only", 0) && !g_poly_builtin_arm &&
+    if (br >= 0 && cplan_builtin_call(c, id) && !g_poly_builtin_arm &&
         comp_ntype(c, br) == TY_POLY) {
       int va = view_push_arm(id, g_prbd_skip, 1);
       /* --int-overflow=promote boxed the prepended method's own Integer
@@ -31098,7 +31098,7 @@ static void emit_call_held(Compiler *c, int id, Buf *b) {
 int bare_call_class_owned(Compiler *c, int id) {
   const NodeTable *nt = c->nt;
   if (nt_ref(nt, id, "receiver") >= 0) return 0;
-  if (nt_int(nt, id, "builtin_only", 0)) return 0;
+  if (cplan_builtin_call(c, id)) return 0;
   const char *name = nt_str(nt, id, "name");
   if (!name) return 0;
   Scope *sc = comp_scope_of(c, id);
@@ -35287,7 +35287,7 @@ static void emit_call_body_ordinary(Compiler *c, int id, Buf *b) {
     int recvR = nt_ref(ntR, id, "receiver");
     const char *nmR = nt_str(ntR, id, "name");
     /* an alias that captured the builtin (builtin_only) is the builtin's */
-    if (recvR >= 0 && nmR && reopen_override_block_ok(c, id) && !nt_int(ntR, id, "builtin_only", 0)) {
+    if (recvR >= 0 && nmR && reopen_override_block_ok(c, id) && !cplan_builtin_call(c, id)) {
       TyKind rtR = comp_ntype(c, recvR);
       const char *ocR = rtR == TY_STRING || rtR == TY_STRBUF ? "String"
                       : rtR == TY_INT ? "Integer"
@@ -35356,7 +35356,7 @@ static void emit_call_body_ordinary(Compiler *c, int id, Buf *b) {
      block parameter). */
   {
     const char *bn0 = nt_str(c->nt, id, "name");
-    int bmi0 = bn0 && !nt_int(c->nt, id, "builtin_only", 0) ? call_target(c, id, -1, bn0, CT_TOP, NULL) : -1;
+    int bmi0 = bn0 && !cplan_builtin_call(c, id) ? call_target(c, id, -1, bn0, CT_TOP, NULL) : -1;
     if (bmi0 >= 0 && nt_ref(c->nt, id, "receiver") < 0 &&
         nt_ref(c->nt, id, "block") < 0 &&
         !(bmi0 < c->nscopes && c->scopes[bmi0].yields)) {
@@ -35404,7 +35404,7 @@ static void emit_call_body_ordinary(Compiler *c, int id, Buf *b) {
     int erecv = nt_ref(c->nt, id, "receiver");
     TyKind ert = erecv >= 0 ? comp_ntype(c, erecv) : TY_VOID;
     if (erecv >= 0 && (ert == TY_RANGE || ert == TY_TIME || ert == TY_IO || ert == TY_CLASS) &&
-        nt_ref(c->nt, id, "block") < 0 && !nt_int(c->nt, id, "builtin_only", 0)) {
+        nt_ref(c->nt, id, "block") < 0 && !cplan_builtin_call(c, id)) {
       const char *ename = nt_str(c->nt, id, "name");
       int eci = ert == TY_IO ? io_reopen_class(c, ename)
               : comp_core_class(c, ert == TY_RANGE ? CORE_RANGE : ert == TY_TIME ? CORE_TIME : CORE_CLASS);

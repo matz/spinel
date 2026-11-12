@@ -336,7 +336,7 @@ int emit_call_kernel_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, cons
      `module_function; def format(...)` beside a sibling that calls it
      bare lost to Kernel#format (#4592). Same ownership test every
      other Kernel arm here makes. */
-  int kconv = (recv < 0 && (nt_int(nt, id, "builtin_only", 0) || call_target(c, id, -1, name, CT_TOP, NULL) < 0) &&
+  int kconv = (recv < 0 && (cplan_builtin_call(c, id) || call_target(c, id, -1, name, CT_TOP, NULL) < 0) &&
                !bare_call_class_owned(c, id));
   if (!kconv && recv >= 0) {
     TyKind krt = comp_ntype(c, recv);

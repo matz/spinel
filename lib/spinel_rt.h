@@ -4992,6 +4992,23 @@ static SP_UNUSED sp_bool sp_srange_cover_poly(sp_RbVal recv, sp_RbVal x) {
   int d = strcmp(o.last, r.last);
   return r.excl ? (d < 0 || (d == 0 && o.excl)) : d <= 0;
 }
+/* Range#cover?(range) for an Integer Range a and a String Range b (a Range
+   of Symbols too), as CRuby's r_cover_range_p: an Integer end never compares
+   with a String one, so only a's missing ends can take b in. b is not empty,
+   a has no begin or end where b has one, and an excluded open end of a takes
+   an endless b only when b excludes its end too. */
+static SP_UNUSED sp_bool sp_range_cover_srange(sp_Range a, sp_StrRange b) {
+  int a_end = a.fe || !a.noend;
+  if (a_end && !b.last) return 0;
+  if (!a.nobeg && !b.first) return 0;
+  if (b.first && b.last && (b.excl ? strcmp(b.first, b.last) >= 0 : strcmp(b.first, b.last) > 0)) return 0;
+  /* b's begin against a's ends: an Integer never compares with it */
+  if (b.first && (!a.nobeg || a_end)) return 0;
+  if (b.last && a_end) return 0;
+  /* a has no end: b's end is below it, or both are open (equal) */
+  if (a.excl == b.excl) return 1;
+  return a.excl ? b.last != NULL : 1;
+}
 /* A Range whose begin is decided at run time (`a[0]..a[1]` over a mixed
    Array, `x..3`), or whose end is beside an absent begin: the ends pick the
    Range as CRuby's do. nil is an absent end; Integers make an Integer Range (a Float
@@ -20991,11 +21008,12 @@ static sp_bool sp_range_cover_poly(sp_Range *r, sp_RbVal x) {
   return 0;
 }
 /* Range#cover? of an Integer Range: a boxed Range argument is covered by its
-   ends (r_cover_range_p), an Integer or a Float Range alike; any other value
+   ends (r_cover_range_p), an Integer, a Float or a String Range alike; any other value
    as sp_range_cover_poly says. */
 static SP_UNUSED sp_bool sp_range_cover_val(sp_Range *r, sp_RbVal x) {
   if (x.tag == SP_TAG_OBJ && x.v.p && x.cls_id == SP_BUILTIN_RANGE) return sp_range_cover_rng(*r, *(sp_Range *)x.v.p);
   if (x.tag == SP_TAG_OBJ && x.v.p && x.cls_id == SP_BUILTIN_FLOAT_RANGE) return sp_range_cover_frange(*r, *(sp_FloatRange *)x.v.p);
+  if (x.tag == SP_TAG_OBJ && x.v.p && x.cls_id == SP_BUILTIN_STR_RANGE) return sp_range_cover_srange(*r, SP_SRANGE_OF(x.v.p));
   return sp_range_cover_poly(r, x);
 }
 /* slice_before/slice_after with a pattern VALUE: start a new group before

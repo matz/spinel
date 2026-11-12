@@ -507,8 +507,8 @@ int const_node_class_index(Compiler *c, int id) {
   /* the record resolves the name to the builtin (Object holds no constant of
      the program's by it): only a top-level class of that name can be the
      program's reopening of it, not a nested one that shares its leaf
-     (Foo::Process is not Process) */
-  return core != -1 && k >= 0 && c->classes[k].enclosing_class >= 0 ? -1 : k;
+     (Foo::Process is not Process; Object's body is the top level's) */
+  return core != -1 && k >= 0 && comp_class_in_namespace(c, k) ? -1 : k;
 }
 /* The class a constant node names where a raise or a rescue arm matches
    by the class (`raise K`, `rescue K => e`): the one it names, a class

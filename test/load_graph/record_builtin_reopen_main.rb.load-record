@@ -5,7 +5,7 @@ r0 #1 f0 ClassNode Integer line 5
 r0 #3 f0 ModuleNode Comparable line 8
   r0 #4 f0 DefNode tag line 9
 r0 #5 f0 ClassNode Object line 11
-  r0 #6 f0 ClassNode Object__Float line 12
+  r0 #6 f0 ClassNode Float line 12
     r0 #7 f0 DefNode halve line 13
 r0 #8 f0 ModuleNode Lib line 16
   r0 #9 f0 ClassNode Lib__String line 17
@@ -20,14 +20,14 @@ r0 #17 f0 DefNode __cmp_tag__0 line 9
 class Integer: body#1
 class Comparable: body#3
 class Object: body#5
-class Object__Float: body#6
+class Float: body#6
 class Lib: body#8
 class Lib__String: body#9
 entity Lib: owner main leaf Lib
 entity Lib__String: owner Lib leaf String
 Integer#double: def#2 end=yes
 Comparable#tag: def#4 end=yes
-Object__Float#halve: def#7 end=yes
+Float#halve: def#7 end=yes
 const Lib: write#8
 const Lib::String: write#9
 Lib__String#lib: def#10 end=yes

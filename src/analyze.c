@@ -5484,6 +5484,12 @@ static int qc_push_header(const NodeTable *nt, int node, char (**pathp)[64], int
     if (lex) { memcpy(r->lex, lex, sizeof r->lex); olex = r->lex; }
     *own = r; *pathp = r->path;
   }
+  /* Object's body is the top level's: Object holds the top-level
+     constants, so `class Object` there (or `class ::Object` anywhere)
+     opens no path of its own, and a header in its body names what it
+     names at the top level -- `class Object; class Object` is Object
+     itself, `class Object; class Foo` the top-level Foo */
+  if (base == 0 && ns == 0 && is_object_class_name(mn)) return 0;   /* (its own buffer above: the caller's path stays for the siblings) */
   char (*path)[64] = *pathp;
   int same = 1;   /* path[0..d) is still the enclosing path's */
   for (int i = 0; i < ns; i++) {

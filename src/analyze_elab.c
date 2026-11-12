@@ -1878,13 +1878,14 @@ static LrMixKind lr_mix_kind(const NodeTable *nt, int node, const char *nm, int 
   return is_include_name(nm) ? LR_INCLUDE : pre ? LR_PREPEND : LR_EXTEND;
 }
 
-/* The builtin classes and modules a header of the program reopens, by the
-   name the header makes its class under (lr_reopened), taken before the
-   walk: a reference to one before its header waits for the class
-   (LR_LATER). So does a Thread or a Fiber an attr declaration names: the
-   walk makes its reopening there (handle_attr_form). */
+/* Is node `sup` the constant Object (a superclass, a header's name)? */
+static int elab_names_object(const NodeTable *nt, int sup) {
+  return nt_kind(nt, sup) == NK_ConstantReadNode && nt_str(nt, sup, "name") && is_object_class_name(nt_str(nt, sup, "name"));
+}
 /* Does the header at node n open a class inside another's body, or under a
-   path (`class A::B`)? It is then A's B, not the builtin its leaf names. */
+   path (`class A::B`)? It is then A's B, not the builtin its leaf names.
+   Object's body is the top level's: `class Object; module Process` reopens
+   the builtin, as CRuby's Object holds the top-level constants. */
 static int lr_header_nested(const NodeTable *nt, const int *par, int n) {
   int cp = nt_ref(nt, n, "constant_path");
   if (cp >= 0 && nt_kind(nt, cp) == NK_ConstantPathNode) {
@@ -1892,10 +1893,17 @@ static int lr_header_nested(const NodeTable *nt, const int *par, int n) {
     if (nt_ref(nt, cp, "parent") < 0) return 0;
     return 1;
   }
-  for (int p = par[n]; p >= 0; p = par[p])
+  for (int p = par[n]; p >= 0; p = par[p]) {
+    if (nt_kind(nt, p) == NK_ClassNode && elab_names_object(nt, nt_ref(nt, p, "constant_path"))) continue;
     if (nt_kind(nt, p) == NK_ClassNode || nt_kind(nt, p) == NK_ModuleNode) return 1;
+  }
   return 0;
 }
+/* The builtin classes and modules a header of the program reopens, by the
+   name the header makes its class under (lr_reopened), taken before the
+   walk: a reference to one before its header waits for the class
+   (LR_LATER). So does a Thread or a Fiber an attr declaration names: the
+   walk makes its reopening there (handle_attr_form). */
 static void lr_reopens_take(Compiler *c) {
   const NodeTable *nt = c->nt;
   LoadRecord *r = c->lrec;
@@ -7352,11 +7360,6 @@ void elab_header_opened(Compiler *c, int node, int cls, int made) {
   lr_node_desc(c, node, d, sizeof d);
   fprintf(stderr, "spinel-elab-check: header node=%s kind=%s class=%s entity=%s::%s want=%s\n", d, kind,
           lr_class_name(c, h->cls), lr_class_name(c, h->owner), h->leaf, lr_class_name(c, h->want));
-}
-
-/* Is the superclass node `sup` the constant Object? */
-static int elab_names_object(const NodeTable *nt, int sup) {
-  return nt_kind(nt, sup) == NK_ConstantReadNode && nt_str(nt, sup, "name") && is_object_class_name(nt_str(nt, sup, "name"));
 }
 
 /* ---- hooks fire per point (#9898) ----

@@ -8058,6 +8058,20 @@ static int dsend_poly_builtin_classes(Compiler *c, const char **out, int cap) {
   return n;
 }
 
+/* Is `name` a method only classes the receiver recv never holds define
+   (cls_fact_excludes), one no builtin answers? */
+static int dsend_name_only_outside(Compiler *c, int recv, const char *name) {
+  int lo = 0, hi = -1;
+  if (builtin_recv_arity_span(name, &lo, &hi) || comp_object_defines(c, name)) return 0;
+  int any = 0;
+  for (int k = 0; k < c->nclasses; k++) {
+    if (comp_method_in_class(c, k, name) < 0) continue;
+    if (!cls_fact_excludes(c, recv, k)) return 0;
+    any = 1;
+  }
+  return any;
+}
+
 /* The most arms a computed send dispatches over, and the most it keeps
    with a boxed receiver's builtin names among them. */
 #define DSEND_ARM_CAP 4096
@@ -8238,13 +8252,26 @@ static int desugar_dynamic_send_inner(Compiler *c) {
       if (ty_is_object(rt)) { obj_recv = ty_object_class(rt); nown = dsend_receiver_names(c, obj_recv, 1, &own); }
       else if (rt == TY_POLY || rt == TY_UNKNOWN) {
         int cap = 0; ANameHash seen; memset(&seen, 0, sizeof seen);
+        /* the methods of the classes the receiver can be an instance of
+           (cls_fact_excludes): on `Object.const_get(x).new(req)` those
+           that take `req`, not every class's (each arm costs code, and
+           keeps the methods it reaches) */
         for (int k = 0; k < c->nclasses; k++) {
           if (comp_class_is_module(c, &c->classes[k])) continue;
+          if (cls_fact_excludes(c, recv, k)) continue;
           char **kn = NULL; int nk = dsend_receiver_names(c, k, 0, &kn);
           for (int j = 0; j < nk; j++) { dsend_add_name(&own, &nown, &cap, &seen, kn[j]); free(kn[j]); }
           free(kn);
         }
-        for (int k = 0; k < ncand && k < 256; k++) dsend_add_name(&own, &nown, &cap, &seen, cand[k]);
+        /* (and the program's other names, but where the receiver's classes
+           are bounded, not one only a class outside them defines and no
+           builtin answers: its arm would raise NoMethodError, as the
+           dispatch's default does) */
+        int rbound = !cls_fact_unbounded(c, recv);
+        for (int k = 0; k < ncand && k < 256; k++) {
+          if (rbound && !anh_has(&seen, cand[k]) && dsend_name_only_outside(c, recv, cand[k])) continue;
+          dsend_add_name(&own, &nown, &cap, &seen, cand[k]);
+        }
         /* and the builtins' methods: a boxed value is an Integer or a String
            as often as an object of the program (`[1, "ab"].map(&name)`),
            and only the program's names were arms, so a computed `size`
@@ -8264,7 +8291,13 @@ static int desugar_dynamic_send_inner(Compiler *c) {
         if (plain) {
           nprog = nown;
           if (nheld < 0) nheld = dsend_poly_builtin_classes(c, held, 16);
-          for (int k = 0; k < nheld; k++) dsend_add_builtin_names(c, held[k], &own, &nown, &cap, &seen);
+          for (int k = 0; k < nheld; k++) {
+            /* (not a builtin class the receiver never holds: an instance a
+               class value's `new` builds is no Integer) */
+            int core = builtin_core_class_slot(held[k]);
+            if (core >= 0 && !cls_fact_may_hold_builtin(c, recv, core)) continue;
+            dsend_add_builtin_names(c, held[k], &own, &nown, &cap, &seen);
+          }
         }
         anh_free(&seen);
       }
@@ -8511,6 +8544,9 @@ static int desugar_dynamic_send_inner(Compiler *c) {
         nt_node_set_int(nt, pr, "dsr_recv", 1);
         scope_local_intern(comp_scope_of(c, id), tname);
         for (int k = 0; k < narm; k++) nt_node_set_ref(nt, arms[k], "receiver", ta);
+        /* the arms' receiver holds what the send's did: their dispatch
+           takes the classes that one can be (comp_poly_candidates_at) */
+        cls_fact_same(c, ta, recv);
         nt_node_set_ref(nt, id, "receiver", pr);
       }
     }

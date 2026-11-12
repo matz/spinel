@@ -3014,11 +3014,62 @@ static void cf_call_known(CF *f, int v, int pidx, int recv_el, const char *nm, c
 #undef CF_UT
 }
 
+/* Could an `initialize` (scope `is`) take `argc` plain positional
+   arguments? Counted loosely, so that it answers yes where unsure: a
+   keyword counts as a positional, and a required keyword as a required one
+   (a positional call cannot give it, and raises either way). */
+static int cf_init_may_take(const Scope *is, int argc) {
+  if (is->rest_idx >= 0 || is->fwd_target1 || !is->pnames) return 1;
+  int req = 0;
+  for (int j = 0; j < is->nparams; j++)
+    if (j != is->kwrest_idx && (!is->pdefault || is->pdefault[j] < 0)) req++;
+  return argc <= is->nparams && argc >= req;
+}
+/* `new` (call v) on a receiver that can be anything (`Object.const_get(x)
+   .new(req)`): an instance of a class of the program that can be built so
+   (each built as `X.new` builds it), or a builtin value (String.new,
+   Hash.new, an exception), not every class. A module has no `new`, and a
+   class whose initialize does not take that many positional arguments
+   raises ArgumentError. 0, for every class, where the value may be
+   anything else: an instance's own `new` or method_missing may answer the
+   call, or a class made at run time (Class.new, an anonymous Struct, a C
+   extension's) may be the receiver. Without it, a computed send on such a
+   value dispatched over every class's methods, and its arms kept every
+   method they reach in the binary. */
+static int cf_any_new(CF *f, int v, const int *argv, int argc, int blk) {
+  Compiler *c = f->c;
+  const NodeTable *nt = f->nt;
+  if (v < 0 || c->has_anonymous_classes || f->nanon || c->n_cext_extensions) return 0;
+  CFByName *nb = cf_byname(f, "new");
+  if (nb->n) return 0;
+  for (int k = 0; k < c->nclasses; k++)
+    if (comp_method_in_chain(c, k, "method_missing", NULL) >= 0) return 0;
+  int plain = blk < 0 || nt_kind(nt, blk) == NK_BlockNode;
+  for (int a = 0; a < argc && plain; a++) {
+    NodeKind ak = nt_kind(nt, argv[a]);
+    plain = ak != NK_SplatNode && ak != NK_KeywordHashNode && ak != NK_BlockArgumentNode;
+  }
+  for (int k = 0; k < c->nclasses; k++) {
+    if (comp_class_is_module(c, &c->classes[k])) continue;
+    int initm = plain ? comp_method_in_chain(c, k, "initialize", NULL) : -1;
+    if (initm >= 0 && !cf_init_may_take(&c->scopes[initm], argc)) continue;
+    cf_construct(f, v, k, argv, argc, blk, "new");
+  }
+  /* the builtins' `new` the run-time switch reaches (emit_builtin_new_arms,
+     sp_class_value_new_fallback): a String, an Array, a Hash, an Object or
+     an exception, and no Class object */
+  unsigned long long bk[CLS_BK_WORDS];
+  memcpy(bk, cls_bk_subtree(c, CORE_EXCEPTION), sizeof bk);
+  cf_bk_bit(bk, CORE_STRING); cf_bk_bit(bk, CORE_ARRAY); cf_bk_bit(bk, CORE_HASH); cf_bk_bit(bk, CORE_OBJECT);
+  cf_add_set(f, v, cf_bset_mask(f, 1, 0, 0, bk));
+  return 1;
+}
+
 /* the call on a receiver that can be anything: every method of the name
    takes the arguments and the block; the value is anything */
 static void cf_call_any_at(CF *f, int v, const char *nm, const int *argv, int argc, int blk, int line) {
   Compiler *c = f->c;
-  cf_add_set_at(f, v, CF_ALL, line);
+  if (!(sp_streq(nm, "new") && cf_any_new(f, v, argv, argc, blk))) cf_add_set_at(f, v, CF_ALL, line);
   /* (anything includes a builtin, which yields where no method of the name does) */
   if (blk >= 0 && nt_kind(f->nt, blk) == NK_BlockArgumentNode) cf_blk_local_to_builtin(f, nt_ref(f->nt, blk, "expression"));
   /* a reader of the name answers its ivar's object: the call's value holds
@@ -3927,6 +3978,63 @@ static int cf_bk_own(CF *f, NodeKind k) {
   }
 }
 
+/* The Class objects `x` can be in an if's then-branch whose value is x
+   alone, where the predicate (or a conjunct of an `&&` chain) is `x < K` or
+   `x <= K` on a class K of the program (`klass < Base ? klass : nil`): K's
+   descendants (and K for `<=`), as `Module#<` answers true for no other
+   value and no other value's `<` can pass without raising. -1 when the
+   branch is not such a read, or a value may answer the test otherwise: a
+   method `<`, `<=` or `<=>` of the program's (an instance's, through
+   Comparable, or a class's own), or a class made at run time. */
+static int cf_subclass_test(CF *f, int pred, int stmts) {
+  Compiler *c = f->c;
+  const NodeTable *nt = f->nt;
+  if (pred < 0 || stmts < 0) return -1;
+  int n = 0; const int *b = nt_kind(nt, stmts) == NK_StatementsNode ? nt_arr(nt, stmts, "body", &n) : NULL;
+  int x = b && n == 1 ? b[0] : -1;
+  if (x < 0 || nt_kind(nt, x) != NK_LocalVariableReadNode) return -1;
+  const char *xn = nt_str(nt, x, "name");
+  if (!xn || c->has_anonymous_classes || f->nanon || c->n_cext_extensions) return -1;
+  /* (the predicate: a conjunct at a time, down the `&&` chain) */
+  int stack[32], ns = 0, test = -1, strict = 1;
+  stack[ns++] = pred;
+  while (ns > 0 && test < 0) {
+    int p = stack[--ns];
+    NodeKind pk = nt_kind(nt, p);
+    if (pk == NK_ParenthesesNode) {
+      int pb = nt_ref(nt, p, "body"), pn = 0;
+      const int *pv = pb >= 0 && nt_kind(nt, pb) == NK_StatementsNode ? nt_arr(nt, pb, "body", &pn) : NULL;
+      if (pv && pn == 1 && ns < 32) stack[ns++] = pv[0];
+      continue;
+    }
+    if (pk == NK_AndNode) {
+      if (ns < 31) { stack[ns++] = nt_ref(nt, p, "right"); stack[ns++] = nt_ref(nt, p, "left"); }
+      continue;
+    }
+    const char *cn = pk == NK_CallNode ? nt_str(nt, p, "name") : NULL;
+    if (!cn || !(sp_streq(cn, "<") || sp_streq(cn, "<="))) continue;
+    int r = nt_ref(nt, p, "receiver"), a = nt_ref(nt, p, "arguments"), ac = 0;
+    const int *av = a >= 0 ? nt_arr(nt, a, "arguments", &ac) : NULL;
+    if (r < 0 || nt_kind(nt, r) != NK_LocalVariableReadNode || !sp_streq(nt_str(nt, r, "name"), xn) ||
+        nt_int(nt, r, "depth", 0) != nt_int(nt, x, "depth", 0) || ac != 1 || nt_ref(nt, p, "block") >= 0) continue;
+    NodeKind ak = nt_kind(nt, av[0]);
+    if (ak != NK_ConstantReadNode && ak != NK_ConstantPathNode) continue;
+    int kc = const_node_class_index(c, av[0]);
+    if (kc < 0 || comp_class_is_module(c, &c->classes[kc])) continue;
+    test = kc; strict = sp_streq(cn, "<");
+  }
+  if (test < 0 || subtree_writes_local(c, pred, xn)) return -1;
+  for (int k = 0; k < c->nclasses; k++) {
+    if (comp_method_in_chain(c, k, "<", NULL) >= 0 || comp_method_in_chain(c, k, "<=", NULL) >= 0 ||
+        comp_method_in_chain(c, k, "<=>", NULL) >= 0 || comp_cmethod_in_chain(c, k, "<", NULL) >= 0 ||
+        comp_cmethod_in_chain(c, k, "<=", NULL) >= 0)
+      return -1;
+  }
+  int t = cf_tb(f, 0);
+  for (int k = 0; k < c->nclasses; k++)
+    if ((!strict && k == test) || is_descendant(c, k, test)) cf_tb_bit(f, t, k + c->nclasses);
+  return cf_pool_tb(f, t, 0, 0);
+}
 static void cf_node(CF *f, int v) {
   Compiler *c = f->c;
   const NodeTable *nt = f->nt;
@@ -4047,7 +4155,10 @@ static void cf_node(CF *f, int v) {
   case NK_RescueNode: cf_rescue(f, v); return;
 
   case NK_IfNode: case NK_UnlessNode: {
-    cf_flow(f, cf_tail(f, nt_ref(nt, v, "statements")), v);
+    int then_v = cf_tail(f, nt_ref(nt, v, "statements"));
+    int narrow = k == NK_IfNode ? cf_subclass_test(f, nt_ref(nt, v, "predicate"), nt_ref(nt, v, "statements")) : -1;
+    if (narrow >= 0) cf_add_set(f, v, narrow);
+    else cf_flow(f, then_v, v);
     cf_flow(f, nt_ref(nt, v, k == NK_IfNode ? "subsequent" : "else_clause"), v);
     return;
   }
@@ -5601,6 +5712,16 @@ int cls_fact_excludes(Compiler *c, int recv, int k) {
   if (s->n == 0 && !s->bv && !s->os) return 0;
   if (cls_set_has(s, k)) return 0;
   return 1;
+}
+/* See compiler.h. */
+int cls_fact_excludes_class_value(Compiler *c, int recv, int k) {
+  const ClsSet *s = cls_fact_node(c, recv);
+  if (!s || k < 0 || k >= c->nclasses || !cls_fact_bounded(c, k)) return 0;
+  /* (a receiver no value reaches excludes none, as in cls_fact_excludes;
+     nor one a builtin's answer may be a Class object in, bc, where a Class
+     object of the program's handed to the runtime comes back, #10303) */
+  if ((s->n == 0 && !s->bv && !s->os) || s->bc) return 0;
+  return !cls_set_has(s, k + c->nclasses);
 }
 
 /* See compiler.h. */

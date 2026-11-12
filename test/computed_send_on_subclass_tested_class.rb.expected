@@ -1,0 +1,10 @@
+Users#list 1
+Posts#show 2
+base 3
+NoMethodError show
+no controller Other
+no controller Base
+no controller Missing
+no controller String
+base 9
+nil

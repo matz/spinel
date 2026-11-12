@@ -28008,15 +28008,13 @@ static int civ_name_ok(const char *iv) {
     if (!(isalnum((unsigned char)*q) || *q == '_')) return 0;
   return !isdigit((unsigned char)iv[1]);
 }
-/* the accessors: `kind` 0 the getter, 1 the setter, 2 `defined?(@x)`, 3
-   `instance_variable_defined?(:@x)` (true or false where 2 answers
-   defined?'s string or nil) */
-static const char *const CIV_ACCESSOR_FMT[] = {
-  "__spinel_civget_%s", "__spinel_civset_%s", "__spinel_civdef_%s", "__spinel_civhas_%s" };
+/* the accessors (class_ivar_accessor_fmt): `kind` 0 the getter, 1 the
+   setter, 2 `defined?(@x)`, 3 `instance_variable_defined?(:@x)` (true or
+   false where 2 answers defined?'s string or nil) */
 /* the accessor of `kind` in class node m's body, added once */
 static void civ_ensure_accessor(NodeTable *nt, int m, const char *iv, int kind) {
   char mname[256];
-  snprintf(mname, sizeof mname, CIV_ACCESSOR_FMT[kind], iv + 1);
+  snprintf(mname, sizeof mname, class_ivar_accessor_fmt[kind], iv + 1);
   int body = class_def_body(nt, m);
   if (body < 0 || nt_kind(nt, body) != NK_StatementsNode) {
     body = fwd_new_node_like(nt, m, "StatementsNode");
@@ -28089,7 +28087,7 @@ static void cbi_rewrite_access(NodeTable *nt, int id, const char *cn) {
   int recv = fwd_new_node_like(nt, id, "ConstantReadNode");
   nt_node_set_str(nt, recv, "name", cn);
   char mname[256];
-  snprintf(mname, sizeof mname, CIV_ACCESSOR_FMT[kind], iv + 1);
+  snprintf(mname, sizeof mname, class_ivar_accessor_fmt[kind], iv + 1);
   int args = -1;
   if (kind == 1) {
     int v = nt_ref(nt, id, "value");
@@ -28261,7 +28259,7 @@ int desugar_const_ivar_access(Compiler *c) {
     int kind = setter ? 1 : has ? 3 : 0;
     civ_ensure_accessor(nt, m, iv, kind);
     char mname[256];
-    snprintf(mname, sizeof mname, CIV_ACCESSOR_FMT[kind], iv + 1);
+    snprintf(mname, sizeof mname, class_ivar_accessor_fmt[kind], iv + 1);
     nt_node_set_str(nt, id, "name", mname);
     if (setter) {
       int v = av[1];
@@ -28346,7 +28344,7 @@ static void cbi_rewrite_access_recv(NodeTable *nt, int id, int recv) {
   int line = (int)nt_int(nt, id, "node_line", 0), file = (int)nt_int(nt, id, "node_file", 0);
   int rc = nt_clone_subtree(nt, recv);
   char mname[256];
-  snprintf(mname, sizeof mname, CIV_ACCESSOR_FMT[kind], iv + 1);
+  snprintf(mname, sizeof mname, class_ivar_accessor_fmt[kind], iv + 1);
   int args = -1;
   if (kind == 1) {
     int v = nt_ref(nt, id, "value");

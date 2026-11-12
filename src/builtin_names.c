@@ -2039,6 +2039,19 @@ int is_method_presence_query(const char *n) {
     "private_methods", "protected_methods", "singleton_methods", NULL };
   return builtin_name_in(n, by_name) ? 1 : builtin_name_in(n, lists) ? 2 : builtin_name_in(n, chain_lists) ? 3 : 0;
 }
+/* The class methods that read and write a class's instance variable x for code
+   outside its body (desugar_const_ivar_access, desugar_body_ivars): the
+   getter, the setter, `defined?(@x)` and `instance_variable_defined?(:@x)`
+   (the index is the accessor's kind). Compiler-made, no Ruby method. */
+const char *const class_ivar_accessor_fmt[4] = {
+  "__spinel_civget_%s", "__spinel_civset_%s", "__spinel_civdef_%s", "__spinel_civhas_%s" };
+int is_class_ivar_accessor_name(const char *n) {
+  for (int k = 0; n && k < 4; k++) {
+    size_t l = (size_t)(strchr(class_ivar_accessor_fmt[k], '%') - class_ivar_accessor_fmt[k]);
+    if (strncmp(n, class_ivar_accessor_fmt[k], l) == 0) return 1;
+  }
+  return 0;
+}
 /* A list of an object's own singleton methods (a class's, asked of the class) */
 int is_singleton_method_list(const char *n) { return n && sp_streq(n, "singleton_methods"); }
 /* A list of a class's instance methods, asked of the class or module itself

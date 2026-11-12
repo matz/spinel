@@ -2766,6 +2766,82 @@ static int ct_lookup(Compiler *c, int id, int cls, const char *name, unsigned *f
   if ((*flags & CT_TOP) && mi >= 0 && c->scopes[mi].is_cmethod) *flags |= CT_CMETHOD;
   return mi;
 }
+/* Whether class-side scope si is a copy of another class's `def` (an
+   extended module's method, or an inherited one specialized for a subclass):
+   it shares the source scope's def node, and the source comes first. A
+   class's own class methods leave it out. */
+static int pr_cmethod_copy(Compiler *c, int si) {
+  Scope *s = &c->scopes[si];
+  if (s->origin_module_ci > 0) return 1;
+  if (s->alias_of) return 0;
+  if (s->def_node < 0) return 0;
+  for (int j = an_scopes_named_first(c, s->name); j >= 0 && j < si; j = an_scopes_named_next(c, s->name, j))
+    if (c->scopes[j].def_node == s->def_node && c->scopes[j].class_id != s->class_id) return 1;
+  return 0;
+}
+/* Whether cls's attribute reader (writer: `wr`, name its base) is its own:
+   attr readers and writers are flattened into descendants at analyze time,
+   so "own" means present here but not in the parent chain; a `class T <
+   Struct.new(:a)` member belongs to the anonymous superclass, so it counts
+   as the class's with `copies` only. */
+static int pr_accessor_own(Compiler *c, int cls, const char *name, int wr, int copies) {
+  int parent = c->classes[cls].parent;
+  if (parent >= 0 && (wr ? comp_writer_in_chain(c, parent, name, NULL) : comp_reader_in_chain(c, parent, name, NULL))) return 0;
+  return copies || !refl_member_of_struct_superclass(c, cls, name);
+}
+/* The scope of cls's own body of name that a prepended module's method of
+   the name displaced (`__prep <n> name`, SHADOW_PREP): the entry the class
+   defines under the name, which the module's copy answers; -1 where none. */
+static int pr_prep_body(Compiler *c, int cls, const char *name) {
+  int mi = comp_method_in_class(c, cls, name);
+  if (mi < 0 || c->scopes[mi].origin_module_ci <= 0) return -1;
+  ClassInfo *k = &c->classes[cls];
+  for (int i = 0; i < k->nprep_chain; i++) {
+    if (!k->prep_to[i]) continue;
+    for (int si = an_scopes_named_first(c, k->prep_to[i]); si >= 0; si = an_scopes_named_next(c, k->prep_to[i], si)) {
+      Scope *s = &c->scopes[si];
+      if (s->class_id == cls && s->shadow == SHADOW_PREP && s->origin_module_ci <= 0 && s->shadow_user && sp_streq(s->shadow_user, name)) return si;
+    }
+  }
+  return -1;
+}
+/* Whether cls's alias table holds name as an alias of its side (the
+   alias entry has its own visibility; its original is the name's method):
+   an instance alias, or on the class side a singleton alias or one of a
+   class method; the class's own statements under CT_OWN (an alias an
+   included module made is the module's), else the chain's. */
+static int pr_alias(Compiler *c, int cls, unsigned side, const char *name) {
+  for (int k = cls, g = 0; k >= 0 && g <= c->nclasses; k = c->classes[k].parent, g++) {
+    ClassInfo *kc = &c->classes[k];
+    for (int i = 0; i < kc->naliases; i++) {
+      if (!kc->alias_new[i] || !sp_streq(kc->alias_new[i], name)) continue;
+      int sg = kc->alias_sg && kc->alias_sg[i];
+      if (side & CT_CMETHOD) {
+        const char *od = comp_resolve_cm_alias_at(c, k, name, NULL);
+        if (sg || (comp_cmethod_in_chain(c, k, od, NULL) >= 0 && comp_method_in_chain(c, k, od, NULL) < 0)) return 1;
+      }
+      else if (!sg && (kc->alias_node[i] >= 0 || !(side & CT_OWN))) return 1;
+    }
+    if (side & CT_OWN) break;
+  }
+  return 0;
+}
+/* The visibility a call of name on cls's route checks: the final table's,
+   which a lookup of the name finds declared (public where none is). Under
+   CT_OWN the class's own entry's: a prepend's renamed body of the name is
+   its entry (its shadow name carries the visibility), and an alias that
+   states none takes the visibility its original had at the alias. */
+static int ct_vis(Compiler *c, int cls, const char *name, unsigned flags) {
+  if (cls < 0 || (flags & CT_TOP)) return SP_VIS_PUBLIC;
+  if (flags & CT_CMETHOD) return comp_cmethod_vis_declared(c, cls, name, NULL);
+  if (!(flags & CT_OWN)) return comp_method_vis_declared(c, cls, name, NULL);
+  ClassInfo *k = &c->classes[cls];
+  int si = pr_prep_body(c, cls, name);
+  const char *own = si >= 0 ? c->scopes[si].name : name;
+  for (int i = 0; i < k->nvis; i++)
+    if (sp_streq(k->vis_names[i], own)) return k->vis_kinds[i];
+  return pr_alias(c, cls, CT_OWN, name) ? comp_method_vis_declared(c, cls, name, NULL) : SP_VIS_PUBLIC;
+}
 int call_target(Compiler *c, int id, int cls, const char *name, unsigned flags, MethodLookup *out) {
   MethodLookup own = { .def_class = -1 }, *ml = out ? out : &own;
   int dc0 = ml->def_class, mi = -1, pin, r;
@@ -2837,29 +2913,30 @@ int call_target(Compiler *c, int id, int cls, const char *name, unsigned flags, 
   return r;
 }
 
+
 /* Whether the final tables hold name on cls's side as a method of it: the
-   method mi the table lookup found, or an accessor; mi is the generated
-   iterator of a Data class (or, under CT_OWN, of any Struct), or a module's
-   copy under CT_OWN, no method of the class's */
+   method mi the table lookup found, an accessor or an alias; mi is the
+   generated iterator of a Struct or a Data class, or a module's copy under
+   CT_OWN, no method of the class's. Under CT_OWN the
+   class's own entries: its defs, a prepend's renamed body, its aliases and
+   the accessors it introduces. */
 static int pr_in_table(Compiler *c, int cls, unsigned side, const char *name, int mi) {
   ClassInfo *k = &c->classes[cls];
   char base[256];
   if (side & CT_CMETHOD) {
-    if (mi >= 0) return 1;
-    if (name_is_plain_setter(name)) return setter_base_name(name, base, sizeof base) && comp_is_sg_writer(k, base);
-    return comp_is_sg_reader(k, name);
+    if (mi >= 0 && !((side & CT_OWN) && pr_cmethod_copy(c, mi))) return 1;
+    if (pr_alias(c, cls, side, name)) return 1;
+    if (name_is_plain_setter(name)) return setter_base_name(name, base, sizeof base) && comp_is_sg_writer(k, base) && (!(side & CT_OWN) || comp_sg_accessor_own(c, cls, name));
+    return comp_is_sg_reader(k, name) && (!(side & CT_OWN) || comp_sg_accessor_own(c, cls, name));
   }
-  int wr = setter_base_name(name, base, sizeof base), parent = k->parent;
+  int wr = setter_base_name(name, base, sizeof base);
   if (!(side & CT_OWN))
-    return (mi >= 0 && !method_hidden_from_reflection(c, cls, name)) || comp_reader_in_chain(c, cls, name, NULL) ||
-           (wr && comp_writer_in_chain(c, cls, base, NULL));
-  /* attr readers and writers are flattened into descendants at analyze
-     time, so "own" means present here but not in the parent chain */
+    return (mi >= 0 && !method_hidden_from_reflection(c, cls, name) && !scope_is_struct_synth(c, mi)) || comp_reader_in_chain(c, cls, name, NULL) ||
+           (wr && comp_writer_in_chain(c, cls, base, NULL)) || pr_alias(c, cls, side, name);
   return (mi >= 0 && !scope_is_struct_synth(c, mi) && c->scopes[mi].origin_module_ci == 0) ||
-         (comp_is_reader(k, name) && (parent < 0 || !comp_reader_in_chain(c, parent, name, NULL)) &&
-          !refl_member_of_struct_superclass(c, cls, name)) ||
-         (wr && comp_is_writer(k, base) && (parent < 0 || !comp_writer_in_chain(c, parent, base, NULL)) &&
-          !refl_member_of_struct_superclass(c, cls, base));
+         pr_prep_body(c, cls, name) >= 0 ||
+         (comp_is_reader(k, name) && pr_accessor_own(c, cls, name, 0, 0)) ||
+         (wr && comp_is_writer(k, base) && pr_accessor_own(c, cls, base, 1, 0)) || pr_alias(c, cls, side, name);
 }
 /* Is presence site id in a block its call may run after it answers, as
    the types tell: the block of a call on a receiver typed no one kind
@@ -2890,7 +2967,7 @@ static int pr_in_untyped_block(Compiler *c, int id) {
 PresenceKind cplan_presence(Compiler *c, int id, int cls, unsigned side, const char *name, CplanPresence *out) {
   MethodLookup ml = { .def_class = -1 };
   int tmi = ct_table(c, cls, name, side, NULL);
-  *out = (CplanPresence){ .table = pr_in_table(c, cls, side, name, tmi) };
+  *out = (CplanPresence){ .table = pr_in_table(c, cls, side, name, tmi), .vis = ct_vis(c, cls, name, side) };
   if (pr_in_untyped_block(c, id)) return PR_TABLE;
   call_target(c, id, cls, name, side | CT_REACH, &ml);
   if (ml.kind == ML_TABLE || ml.kind == ML_ENTRY) return PR_TABLE;
@@ -2898,11 +2975,74 @@ PresenceKind cplan_presence(Compiler *c, int id, int cls, unsigned side, const c
   return out->table ? PR_PRESENT : PR_ABSENT;
 }
 /* See call_plan.h. */
+void cplan_table_presence(Compiler *c, int cls, unsigned side, const char *name, CplanPresence *out) {
+  *out = (CplanPresence){ .table = pr_in_table(c, cls, side, name, ct_table(c, cls, name, side, NULL)), .vis = ct_vis(c, cls, name, side) };
+}
+/* See call_plan.h. */
 int cplan_list_omits(Compiler *c, int id, int cls, unsigned side, const char *name) {
   ElabVersion vs[1];
   CplanPresence pr;
   if (id < 0 || cls < 0 || !name || elab_chain_versions(c, cls, (side & CT_CMETHOD) != 0, name, vs, 1) == 0) return 0;
   return cplan_presence(c, id, cls, side, name, &pr) == PR_ABSENT && pr.table;
+}
+
+/* A candidate of a list: nm asked of cls on the list's side, with no site
+   (the final tables' answer, cplan_table_presence), and handed on where the question says cls
+   holds it, with the visibility it gives. */
+static void list_ask(Compiler *c, int cls, unsigned side, const char *nm, CplanCandFn fn, void *ud) {
+  CplanPresence pr;
+  cplan_table_presence(c, cls, side, nm, &pr);
+  if (pr.table) fn(ud, nm, pr.vis);
+}
+/* The instance methods class ci holds: its defs, aliases and attribute
+   accessors, those copied in from an included module and an alias an
+   include made besides unless CT_OWN. */
+static void list_instance_candidates(Compiler *c, int ci, unsigned side, CplanCandFn fn, void *ud) {
+  ClassInfo *k = &c->classes[ci];
+  for (int si = 0; si < c->nscopes; si++) {
+    Scope *s = &c->scopes[si];
+    if (s->class_id != ci || s->is_cmethod || !s->name || !s->name[0]) continue;
+    /* a prepended module's method displaced the class's own body, which
+       carries a shadow name: the name it is listed under is the user's,
+       and a renamed module copy (a second prepend over the first) is none */
+    if (s->shadow == SHADOW_PREP && s->origin_module_ci > 0) continue;
+    list_ask(c, ci, side, s->shadow == SHADOW_PREP ? s->shadow_user : s->name, fn, ud);
+  }
+  for (int i = 0; i < k->naliases; i++)
+    if (k->alias_new[i]) list_ask(c, ci, side, k->alias_new[i], fn, ud);
+  /* accessors are flattened into descendants, so a class lists the ones it
+     introduces */
+  for (int i = 0; i < k->nreaders; i++)
+    if (pr_accessor_own(c, ci, k->readers[i], 0, 1)) list_ask(c, ci, side, k->readers[i], fn, ud);
+  for (int i = 0; i < k->nwriters; i++) {
+    char wn[256]; snprintf(wn, sizeof wn, "%s=", k->writers[i]);
+    if (pr_accessor_own(c, ci, k->writers[i], 1, 1)) list_ask(c, ci, side, wn, fn, ud);
+  }
+}
+/* The class methods cls defines (defs, `class << self` aliases and
+   accessors), then, unless CT_OWN, those of its superclasses and extended
+   modules. */
+static void list_cmethod_candidates(Compiler *c, int cls, unsigned side, CplanCandFn fn, void *ud) {
+  for (int k = cls, g = 0; k >= 0 && g <= c->nclasses; k = c->classes[k].parent, g++) {
+    ClassInfo *kc = &c->classes[k];
+    for (int si = 0; si < c->nscopes; si++) {
+      Scope *s = &c->scopes[si];
+      if (s->class_id == k && s->is_cmethod && s->name && s->name[0]) list_ask(c, cls, side, s->name, fn, ud);
+    }
+    for (int i = 0; i < kc->naliases; i++)
+      if (kc->alias_new[i]) list_ask(c, cls, side, kc->alias_new[i], fn, ud);
+    for (int i = 0; i < kc->nsg_readers; i++) list_ask(c, cls, side, kc->sg_readers[i], fn, ud);
+    for (int i = 0; i < kc->nsg_writers; i++) {
+      char wn[256]; snprintf(wn, sizeof wn, "%s=", kc->sg_writers[i]);
+      list_ask(c, cls, side, wn, fn, ud);
+    }
+    if (side & CT_OWN) break;
+  }
+}
+/* See call_plan.h. */
+void cplan_list_candidates(Compiler *c, int cls, unsigned side, CplanCandFn fn, void *ud) {
+  if (side & CT_CMETHOD) list_cmethod_candidates(c, cls, side, fn, ud);
+  else list_instance_candidates(c, cls, side, fn, ud);
 }
 
 int cplan_class_row(Compiler *c, int id, int recv, const char *name) {

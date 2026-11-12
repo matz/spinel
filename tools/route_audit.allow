@@ -220,7 +220,6 @@ src/analyze_util.c ext_method_exported the method a class answers for an exporte
 src/codegen_call.c class_responds_to a Symbol argument's method (respond_to?)
 src/codegen_call.c method_hidden_from_reflection a reflected method's name
 src/codegen_call.c obj_responds_answer a Symbol argument's method (respond_to?)
-src/codegen_call.c refl_class_singleton_methods a reflected method's name
 src/codegen_call.c refl_module_own a reflected method's name
 src/codegen_call.c respond_to_static_answer =qm a Symbol argument's method (respond_to?)
 src/codegen_call.c root_reopen_defines a Symbol argument's method (respond_to?)
@@ -314,6 +313,8 @@ src/analyze_pass.c cr_mark_implied the implicit-callback rows' method-table name
 src/call_plan.c cps_key_callbacks_run_code the builtin-callback rows' names a builtin []= calls on its keys, in a key's class
 src/call_plan.c ver_entries_build the current own body of each public name before entries are installed
 src/call_plan.c ver_named_one the method an includer holds of a module's open history's name, its copy's or its own
+src/call_plan.c pr_alias the class's alias entry of a name
+src/call_plan.c pr_prep_body the class's body a prepended module's method displaced
 src/compiler.c comp_time_reopen_defines whether the program's reopen of Time defines a name, so a Time subclass's call of it is not taken for Time's in-place conversion or copy
 src/analyze.c rms_builtin_receiver whether a fold's receiver class defines reduce/inject itself, so the fold is the builtin's
 src/codegen_call.c class_value_builtin_answers whether a reopened Class or Module defines a Module method's name, so the builtin answers a class value

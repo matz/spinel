@@ -6634,15 +6634,24 @@ static int cplan_root_def_ran(Compiler *c, int call, int k, const char *name) {
   if (framed) elab_plan_leave(c);
   return n > 0;
 }
+/* Root k's visibility vis of `name` as call `call` meets it: a protected
+   one of Object's, Kernel's or main's is open wherever self is an Object,
+   one of BasicObject's wherever self is anything, but never to
+   public_send */
+static int cplan_root_vis_open(Compiler *c, int call, int k, const char *name, int vis) {
+  int oc = comp_core_class(c, CORE_OBJECT);
+  if (vis == SP_VIS_PROTECTED && !nt_str(c->nt, call, "vis_enforce") &&
+      (k == comp_core_class(c, CORE_BASIC_OBJECT) ||
+       ((k < 0 || k == oc || k == comp_core_class(c, CORE_KERNEL)) && object_protected_open(c, call)) ||
+       (k >= 0 && method_vis_for_caller(c, call, k, name) == SP_VIS_PUBLIC))) vis = SP_VIS_PUBLIC;
+  return vis;
+}
 /* The visibility at call `call` of root k's method `name` (k -1: main's,
    a top-level def, which is Object's private method until `public :name`),
-   as the record has it there, else as declared; -1 where the record
-   cannot tell for main's (a def or a visibility word under a condition),
-   and for a call with no place in the load that may run before every
-   def (cplan_root_def_ran).
-   A protected one of Object's, Kernel's or main's is open wherever self
-   is an Object, one of BasicObject's wherever self is anything, but never
-   to public_send. */
+   as the record has it there, else as declared, as call meets it
+   (cplan_root_vis_open); -1 where the record cannot tell for main's (a
+   def or a visibility word under a condition), and for a call with no
+   place in the load that may run before every def (cplan_root_def_ran). */
 static int cplan_root_vis(Compiler *c, int call, int k, const char *name) {
   int oc = comp_core_class(c, CORE_OBJECT), vis;
   int placed = elab_point_of(c, call).region >= 0;
@@ -6664,11 +6673,26 @@ static int cplan_root_vis(Compiler *c, int call, int k, const char *name) {
     if (vis < 0 && !placed && !cplan_root_def_ran(c, call, k, name)) return -1;
     if (vis < 0) vis = comp_method_vis_declared(c, k, name, NULL);
   }
-  if (vis == SP_VIS_PROTECTED && !nt_str(c->nt, call, "vis_enforce") &&
-      (k == comp_core_class(c, CORE_BASIC_OBJECT) ||
-       ((k < 0 || k == oc || k == comp_core_class(c, CORE_KERNEL)) && object_protected_open(c, call)) ||
-       (k >= 0 && method_vis_for_caller(c, call, k, name) == SP_VIS_PUBLIC))) vis = SP_VIS_PUBLIC;
-  return vis;
+  return cplan_root_vis_open(c, call, k, name, vis);
+}
+/* Has owner's def of `name` (its own part of the lookup) run wherever
+   call `call` runs, where that is not its point: in a lazy chain's block,
+   at each call that forces the chain (elab_lazy_runs), each one run at
+   its own point, with one visibility there (*vis, as the record has it
+   at each)? 0 where the record does not know every such place, one may
+   run before the def, or the visibility is not known at one or differs
+   between them. */
+static int cplan_root_def_runs_first(Compiler *c, int call, int owner, const char *name, int *vis) {
+  int sites[16], n = elab_lazy_runs(c, call, sites, 16);
+  *vis = -1;
+  for (int k = 0; k < n; k++) {
+    LoadPoint sp = elab_point_of(c, sites[k]);
+    if (sp.region < 0 || !elab_blocks_run_now(c, sites[k]) || elab_reached_method_at(c, owner, name, sp) != ELAB_YES) return 0;
+    int v = elab_method_vis_at(c, owner, name, 0, sp);
+    if (v < 0 || (k && v != *vis)) return 0;
+    *vis = v;
+  }
+  return n > 0;
 }
 /* See call_plan.h. */
 int cplan_root_method(Compiler *c, int call, const char *cls, const char *name, int *vis) {
@@ -6701,17 +6725,25 @@ int cplan_root_method(Compiler *c, int call, const char *cls, const char *name, 
        runs before every def, include and visibility change of the name in
        the root's own part of the lookup finds what the lookup finds past it
        (Kernel's tap, ahead of a later `module Kernel; private; def tap`).
+       A call in a lazy chain's block runs where the chain is forced: the
+       def answers it where every such place is after the def, with the
+       visibility the record has there, one at all of them
+       (cplan_root_def_runs_first); where the record does not know every
+       place, or they straddle the def, the call answers from its point
+       (a block a method keeps: telling the two apart takes a run-time
+       check of the root's version).
        (A top-level def's place is asked above; a call with no place in the
        load is cplan_root_vis's, by cplan_root_def_ran. Where the record
        cannot order them, a def under a condition, the def still answers:
        telling the two apart at run time takes a visibility per version the
        entries do not have yet.) */
+    int fv = -1;
     if (mi >= 0 && owner >= 0) {
       LoadPoint cp = elab_point_of(c, call);
-      if (cp.region >= 0 && elab_reached_method_at(c, owner, name, cp) == ELAB_NO) mi = -1;
+      if (cp.region >= 0 && elab_reached_method_at(c, owner, name, cp) == ELAB_NO && !cplan_root_def_runs_first(c, call, owner, name, &fv)) mi = -1;
     }
     if (mi >= 0) {
-      if (vis) *vis = cplan_root_vis(c, call, owner, name);
+      if (vis) *vis = fv >= 0 ? cplan_root_vis_open(c, call, owner, name, fv) : cplan_root_vis(c, call, owner, name);
       return mi;
     }
     /* a builtin's own method answers first, and so does a `public :name`

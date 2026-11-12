@@ -2420,6 +2420,53 @@ static int a_reopen_yielder_takes_block(Compiler *c, int id, TyKind rt, const ch
   return 0;
 }
 
+/* The method of the program's that call id hands its block to, its
+   typed target: a bare call's self's (comp_self_call_mi: a class method
+   inside one, a top-level def after the class chain), and a bare `new`
+   there the class's initialize; a constant naming a class, its class
+   method, and with no `def self.new` its initialize for `new`, as for
+   `self.new` in a class method (*class_recv then 1, when not NULL); an
+   explicit receiver's typed class's; and, with roots, where none answers,
+   a method of the root classes every receiver reaches (the plan's). -1 for
+   none. *cls is the instance class asked, -1 for a class method or none. */
+static int a_block_call_target(Compiler *c, int id, int roots, int *cls, int *class_recv) {
+  const NodeTable *nt = c->nt;
+  const char *name = nt_str(nt, id, "name");
+  int recv = nt_ref(nt, id, "receiver"), mi = -1;
+  *cls = -1;
+  if (class_recv) *class_recv = 0;
+  if (recv < 0) {
+    mi = comp_self_call_mi(c, id, name);
+    Scope *self = comp_scope_of(c, id);
+    if (self && self->class_id >= 0 && !self->is_cmethod) *cls = self->class_id;
+    if (mi < 0 && self && self->class_id >= 0 && self->is_cmethod && is_new_name(name))
+      mi = comp_method_in_chain(c, self->class_id, "initialize", NULL);
+    return mi;
+  }
+  NodeKind rk = nt_kind(nt, recv);
+  int ci = rk == NK_ConstantReadNode || rk == NK_ConstantPathNode ? const_node_class_index(c, recv) : -1;
+  Scope *cs = comp_scope_of(c, id);
+  if (ci >= 0) {
+    mi = call_target(c, id, ci, name, CT_CMETHOD, NULL);
+    if (mi < 0 && is_new_name(name)) mi = comp_method_in_chain(c, ci, "initialize", NULL);
+  }
+  else if (rk == NK_SelfNode && is_new_name(name) && cs && cs->is_cmethod && cs->class_id >= 0 &&
+           comp_cmethod_in_chain(c, cs->class_id, "new", NULL) < 0) {
+    ci = cs->class_id;
+    mi = comp_method_in_chain(c, ci, "initialize", NULL);
+  }
+  else {
+    TyKind rt = infer_type(c, recv);
+    if (ty_is_object(rt)) mi = call_target(c, id, *cls = ty_object_class(rt), name, 0, NULL);
+  }
+  if (class_recv) *class_recv = ci >= 0;
+  if (mi < 0 && roots) {
+    CallPlan rp = cplan_user_fresh(c, id);
+    if (cplan_root_reopen_call(c, id, &rp)) mi = rp.mi;
+  }
+  return mi;
+}
+
 int a_block_is_lifted(Compiler *c, int id) {
   const NodeTable *nt = c->nt;
   NodeKind ty_k = nt_kind(nt, id);
@@ -2458,18 +2505,16 @@ int a_block_is_lifted(Compiler *c, int id) {
   /* so is Fiber.blocking { }'s, which sp_Fiber_blocking_proc calls */
   if (sp_streq(name, "blocking") && recv >= 0 && nt_kind(nt, recv) == NK_ConstantReadNode &&
       nt_str(nt, recv, "name") && sp_streq(nt_str(nt, recv, "name"), "Fiber")) return 1;
-  int mi = -1;
+  /* (an implicit-self call inside a class method resolves to a CLASS
+     method, ahead of a same-named instance method or top-level def, and a
+     bare `new` there to the class's initialize; its literal block is lifted
+     all the same, #2444. `Klass.cmeth { }` / `Mod::Sub.cmeth { }`: a
+     class/module method keeps a real &block the same way an instance method
+     does, so its block is lifted and captures enclosing locals; `Klass.new
+     { }` with no `def self.new` hands it to initialize, which lifts it like
+     any method keeping a real &block: a_block_call_target) */
+  int cls, class_recv, mi = a_block_call_target(c, id, 0, &cls, &class_recv);
   if (recv < 0) {
-    /* an implicit-self call inside a class method resolves to a CLASS
-       method, ahead of a same-named instance method or top-level def; its
-       literal block is lifted all the same (#2444) */
-    mi = comp_self_call_mi(c, id, name);
-    if (mi < 0) {
-      Scope *self = comp_scope_of(c, id);
-      /* and a bare `new` there runs the class's initialize */
-      if (self && self->class_id >= 0 && self->is_cmethod && sp_streq(name, "new"))
-        mi = comp_method_in_chain(c, self->class_id, "initialize", NULL);
-    }
     /* self may be an instance of a subclass whose override of the method
        takes the block (a Phlex component's view_template): the call then
        dispatches on the runtime class and the block becomes a real proc,
@@ -2487,40 +2532,16 @@ int a_block_is_lifted(Compiler *c, int id) {
     }
   }
 else {
-    NodeKind rk = nt_kind(nt, recv);
-    /* `Klass.cmeth { }` / `Mod::Sub.cmeth { }`: a class/module method keeps a
-       real &block the same way an instance method does, so its block is lifted
-       and captures enclosing locals. (Was omitted -- only ty_is_object was
-       handled -- so a block passed to a module method never celled its
-       captures, silently dropping writes to them.) */
-    int const_recv = (rk == NK_ConstantReadNode || rk == NK_ConstantPathNode);
-    int const_is_class = 0;
-    if (const_recv) {
-      int ci = const_node_class_index(c, recv);
-      if (ci >= 0) {
-        const_is_class = 1; mi = call_target(c, id, ci, name, CT_CMETHOD, NULL);
-        /* `Klass.new { }` with no `def self.new` hands the block to
-           initialize, which lifts it like any method keeping a real &block */
-        if (mi < 0 && sp_streq(name, "new")) mi = comp_method_in_chain(c, ci, "initialize", NULL);
-      }
-    }
-    /* `self.new { }` in a class method, as a bare `new { }` there */
-    Scope *cs = comp_scope_of(c, id);
-    if (rk == NK_SelfNode && sp_streq(name, "new") && cs && cs->is_cmethod &&
-        cs->class_id >= 0 && comp_cmethod_in_chain(c, cs->class_id, "new", NULL) < 0) {
-      const_is_class = 1;
-      mi = comp_method_in_chain(c, cs->class_id, "initialize", NULL);
-    }
     /* A constant that names no class is an ordinary VALUE (`CONFIG.each { }`),
        so it is typed like any other receiver -- including poly, whose dispatch
        lifts the block. Reading it as a class name and stopping there left such
        a block unlifted and its captures without storage. */
-    if (!const_is_class) {
+    if (!class_recv) {
       TyKind rt = infer_type(c, recv);
-      if (ty_is_object(rt)) mi = call_target(c, id, ty_object_class(rt), name, 0, NULL);
-      /* A Class value known only at run time dispatches on it to the class
-         methods, which take the block as a real proc the same way */
-      else if (rt == TY_CLASS && class_recv_is_dynamic(c, recv)) {
+      /* (an object's target is a_block_call_target's) A Class value known
+         only at run time dispatches on it to the class methods, which take
+         the block as a real proc the same way */
+      if (rt == TY_CLASS && class_recv_is_dynamic(c, recv)) {
         for (int k = 0; k < c->nclasses; k++) {
           int ck = call_target(c, id, k, name, CT_CMETHOD, NULL);
           if (ck >= 0 && (c->scopes[ck].yields || (c->scopes[ck].blk_param && c->scopes[ck].blk_param[0])))
@@ -2799,25 +2820,7 @@ static int a_block_forwarded_to_proc(Compiler *c, int id) {
       nt_str(nt, recv, "enum_each_wrap") && nt_ref(nt, recv, "receiver") >= 0 &&
       infer_type(c, nt_ref(nt, recv, "receiver")) == TY_ENUMERATOR && an_program_makes_bsearch_enum(c))
     return 1;
-  int mi = -1, cls = -1;
-  if (recv < 0) {
-    Scope *self = comp_scope_of(c, id);
-    if (self && self->class_id >= 0) {
-      mi = call_target(c, id, self->class_id, name, 0, NULL);
-      if (!self->is_cmethod) cls = self->class_id;
-    }
-    /* the class chain misses a top-level def, which a bare call still reaches */
-    if (mi < 0) mi = call_target(c, id, -1, name, CT_TOP, NULL);
-  }
-  else {
-    TyKind rt = infer_type(c, recv);
-    if (ty_is_object(rt)) mi = call_target(c, id, cls = ty_object_class(rt), name, 0, NULL);
-    /* ...and a method of the root classes every receiver reaches (the plan's) */
-    if (mi < 0) {
-      CallPlan rp = cplan_user_fresh(c, id);
-      if (cplan_root_reopen_call(c, id, &rp)) mi = rp.mi;
-    }
-  }
+  int cls, mi = a_block_call_target(c, id, 1, &cls, NULL);
   if (mi < 0) return 0;
   /* a yielding method a subclass overrides is not spliced: the cls_id switch
      calls its proc-form clone with the block as a real proc */
@@ -2826,26 +2829,53 @@ static int a_block_forwarded_to_proc(Compiler *c, int id) {
   return a_scope_forwards_block_to_poly(c, mi) || a_scope_forwards_block_to_keeper(c, mi, 0);
 }
 
+/* (does method scope mi's body keep the block it is given, by the
+   record's reading?) */
+static int a_def_keeps_block(Compiler *c, int mi) {
+  return mi >= 0 && c->scopes[mi].def_node >= 0 && elab_def_keeps_block(c, c->scopes[mi].def_node);
+}
+static int an_call_target_any(Compiler *c, int u, int (*pred)(Compiler *, int));
+/* (does a method call id may run with its block keep it: its typed
+   target, or, once its receiver is typed, any of the call's targets
+   (an_call_targets_of: an override in a class under the receiver's, every
+   method of the name on a receiver of more than one class)? A receiver
+   not typed yet is asked again in a later round: the mark is never taken
+   back, and the targets of an untyped receiver are every method of the
+   name) */
+static int a_block_target_keeps(Compiler *c, int id) {
+  int cls, recv = nt_ref(c->nt, id, "receiver");
+  if (a_def_keeps_block(c, a_block_call_target(c, id, 1, &cls, NULL))) return 1;
+  if (recv >= 0 && nt_kind(c->nt, recv) != NK_SelfNode && infer_type(c, recv) == TY_UNKNOWN) return 0;
+  return an_call_target_any(c, id, a_def_keeps_block);
+}
+
 int a_proc_create_or_lifted(Compiler *c, int id) {
   return is_proc_create(c, id) || a_block_is_lifted(c, id) ||
          a_is_fiber_or_gen_create(c, id) || is_handler_proc_block(c, id);
 }
 
-/* The blocks the load record takes to run at once (ELAB_BLK_ASSUMED: an
-   iterator's name, class_eval and kin) whose typed call target makes them
-   a proc that may outlive the call, as the capture marking reads it
-   (mark_proc_captures): `blk_kept` on the call, so that the call plan
+/* The blocks the load record places at their call's point whose typed
+   call target keeps them: `blk_kept` on the call, so that the call plan
    answers a call in one for any time after its point
-   (elab_in_kept_block). Marked in the fixpoint as the targets settle; a
-   block once kept stays so. Changed when it marked one. */
+   (elab_in_kept_block). One the record takes to run at once
+   (ELAB_BLK_ASSUMED: an iterator's name, class_eval and kin) is kept
+   where the target makes it a proc that may outlive the call, as the
+   capture marking reads it (mark_proc_captures); one given to a method of
+   the program's (ELAB_BLK_UNKNOWN) where the record reads that method's
+   body as keeping it for certain (elab_def_keeps_block): one that only
+   yields to it, or also runs it at once, is not. Marked in the fixpoint
+   as the targets settle; a block once kept stays so. Changed when it
+   marked one. */
 int an_mark_kept_blocks(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int ch = 0;
   if (!c->lrec) return 0;
   NT_FOREACH_KIND(nt, NK_CallNode, id) {
-    int blk = nt_ref(nt, id, "block");
-    if (blk < 0 || nt_kind(nt, blk) != NK_BlockNode || nt_int(nt, id, "blk_kept", 0) || elab_block_runs(c, id) != ELAB_BLK_ASSUMED ||
-        !(a_proc_create_or_lifted(c, id) || a_block_forwarded_to_proc(c, id))) continue;
+    int blk = nt_ref(nt, id, "block"), runs;
+    if (blk < 0 || nt_kind(nt, blk) != NK_BlockNode || nt_int(nt, id, "blk_kept", 0) ||
+        ((runs = elab_block_runs(c, id)) == ELAB_BLK_ASSUMED ? !(a_proc_create_or_lifted(c, id) || a_block_forwarded_to_proc(c, id))
+                                                              : runs != ELAB_BLK_UNKNOWN || !a_block_target_keeps(c, id)))
+      continue;
     nt_node_set_int(nt, id, "blk_kept", 1);
     ch = 1;
   }
@@ -28574,6 +28604,17 @@ static void an_call_targets_of(Compiler *c, int u, ACallTargets *t) {
   act_add(t, mi);
 }
 
+/* Does any scope CallNode `u` statically calls (an_call_targets_of)
+   answer `pred`? */
+static int an_call_target_any(Compiler *c, int u, int (*pred)(Compiler *, int)) {
+  ACallTargets t = { NULL, 0, 0, -1, 0 };
+  an_call_targets_of(c, u, &t);
+  int hit = 0;
+  for (int k = 0; k < t.n && !hit; k++) hit = pred(c, t.v[k]);
+  free(t.v);
+  return hit;
+}
+
 /* The targets of each candidate call, kept for one promote_shared_stored_strings
    pass as strbuf_scope_callers keeps each method's callers. The callers of
    every method of a name are asked of the same calls, and each call was
@@ -51315,7 +51356,7 @@ static void an_phase_infer_fixpoint(Compiler *c) {
     ch |= AN_PASS("desugar_method_call_runtime_name", desugar_method_call_runtime_name(c)); /* method(var).call(a) -> send(var, a) */
     ch |= AN_PASS("desugar_dynamic_send", desugar_dynamic_send(c));             /* recv.send(var, a) -> static name dispatch */
     ch |= AN_PASS("desugar_dynamic_method", desugar_dynamic_method(c));
-    ch |= AN_PASS("mark_kept_blocks", an_mark_kept_blocks(c));               /* an iterator's block its target keeps */
+    ch |= AN_PASS("mark_kept_blocks", an_mark_kept_blocks(c));               /* a block its typed target keeps */
     ch |= AN_PASS("ver_entries_demand", ver_entries_demand(c));               /* a deferred history a call names now */
     ch |= AN_PASS("desugar_dynamic_respond_to", desugar_dynamic_respond_to(c));       /* recv.respond_to?(var) -> static name dispatch */
     ch |= AN_PASS("desugar_toplevel_instance_exec", desugar_toplevel_instance_exec(c));   /* top-level instance_exec(&b) -> b.call */

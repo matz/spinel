@@ -64,3 +64,11 @@ begin
 rescue NameError => e
   p e.name
 end
+
+# a set whose value is used: the raise keeps the call's own type
+begin
+  v = k.instance_variable_set(:"@1", 3)
+  p v + 1
+rescue NameError => e
+  puts e.message
+end

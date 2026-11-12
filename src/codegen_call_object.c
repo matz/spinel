@@ -3544,7 +3544,10 @@ int emit_object_ivar_call(Compiler *c, int id, const char *name, int recv, TyKin
       if (recv >= 0) { buf_puts(b, "(void)("); emit_expr_for_effect(c, recv, b); buf_puts(b, "), "); }
       if (is_set) { buf_puts(b, "(void)("); emit_expr_for_effect(c, argv[1], b); buf_puts(b, "), "); }
       emit_ivar_name_error(c, b, sym, argv[0]);
-      buf_puts(b, ", sp_box_nil())");
+      /* the dead tail in the C type the call already has (a set keeps
+         its value's type: `@1` reads as a slot to the analysis) */
+      Repr rp = repr_of(c, id);
+      buf_printf(b, ", %s)", rp.kind == RK_BOXED ? "sp_box_nil()" : raise_tail_value_c(c, rp.as_ty));
       return 1;
     }
     if (is_set && c->classes[cid].is_data) return emit_data_ivar_set(c, id, recv, argv[1], cid, b);

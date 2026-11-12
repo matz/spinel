@@ -31,3 +31,4 @@ ok 1
 ok false
 ok 3
 :bad
+'@1' is not allowed as an instance variable name

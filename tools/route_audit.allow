@@ -220,7 +220,6 @@ src/analyze_util.c ext_method_exported the method a class answers for an exporte
 src/codegen_call.c class_responds_to a Symbol argument's method (respond_to?)
 src/codegen_call.c method_hidden_from_reflection a reflected method's name
 src/codegen_call.c obj_responds_answer a Symbol argument's method (respond_to?)
-src/codegen_call.c refl_class_singleton_methods a reflected method's name
 src/codegen_call.c refl_module_own a reflected method's name
 src/codegen_call.c respond_to_static_answer =qm a Symbol argument's method (respond_to?)
 src/codegen_call.c root_reopen_defines a Symbol argument's method (respond_to?)

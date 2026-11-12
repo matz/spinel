@@ -5071,6 +5071,14 @@ int name_is_synth_method(Compiler *c, const char *m) {
      has, as `__inc foo`, is the program's own */
   if (comp_name_is_shadow_copy(c, m, SHADOW_INC)) return 1;
   if (comp_name_is_shadow_copy(c, m, SHADOW_PREP)) return 1;
+  /* `__spinel_civget_x` and its kin: the class methods that read and write
+     a class's instance variable x for code outside its body, known by the
+     mark on their DefNode (civ_ensure_accessor), so a method the program
+     names so is its own */
+  if (is_class_ivar_accessor_name(m)) {
+    for (int si = an_scopes_named_first(c, m); si >= 0; si = an_scopes_named_next(c, m, si))
+      if (c->scopes[si].def_node >= 0 && nt_int(c->nt, c->scopes[si].def_node, "civ_accessor", 0)) return 1;
+  }
   /* `m#pf`, the proc-form clone of a yielding method: `#` is never part of a
      Ruby method name */
   if (strchr(m, '#')) return 1;

@@ -1207,6 +1207,9 @@ int cplan_cmethod_presence(Compiler *c, int id, int cls, const char *name, int i
 typedef enum { PR_PRESENT, PR_ABSENT, PR_TABLE } PresenceKind;
 typedef struct { int table, vis; } CplanPresence;
 PresenceKind cplan_presence(Compiler *c, int id, int cls, unsigned side, const char *name, CplanPresence *out);
+/* The table part of that answer alone, with no site (table and vis; the
+   record is not asked): what a list holds before any point is asked. */
+void cplan_table_presence(Compiler *c, int cls, unsigned side, const char *name, CplanPresence *out);
 /* Does method-list call id leave out name, a candidate the final tables
    list for cls's side (side as cplan_presence's: CT_CMETHOD for
    singleton_methods, CT_OWN for a `false` form): where the question proves
@@ -1219,6 +1222,20 @@ PresenceKind cplan_presence(Compiler *c, int id, int cls, unsigned side, const c
    order (refl_any, lr_late_asked), so call_target answers there from the
    tables, the list with it: only the class side answers at the point. */
 int cplan_list_omits(Compiler *c, int id, int cls, unsigned side, const char *name);
+/* The names a method list on cls's side asks about, as the final tables
+   hold them (a class's scopes, aliases and accessors, and for the class side
+   those of its superclasses and extended modules unless CT_OWN), in the
+   order a list shows them, a name once per sighting (the caller keeps its
+   first). Each is asked cplan_presence's question with no site
+   (cplan_table_presence) and handed on, with the visibility the question gives it
+   (SP_VIS_*), where the question says cls holds it as a method: under CT_OWN
+   its own entry. Instance side without CT_OWN: one class's methods, the
+   copies included; a chain's walk is its caller's, which lists the core
+   surfaces between classes. What a list leaves out of what it holds (the
+   compiler's synthesized helpers, a class-side private method) is the
+   list's, not the question's. */
+typedef void (*CplanCandFn)(void *ud, const char *name, int vis);
+void cplan_list_candidates(Compiler *c, int cls, unsigned side, CplanCandFn fn, void *ud);
 /* What version entry scope e's else arm finds while no version of its
    chain is live, as respond_to? and a Method's maker see it
    (VerEntry.finds): a public method, a private or protected one, or none

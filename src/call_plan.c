@@ -2879,11 +2879,74 @@ PresenceKind cplan_presence(Compiler *c, int id, int cls, unsigned side, const c
   return out->table ? PR_PRESENT : PR_ABSENT;
 }
 /* See call_plan.h. */
+void cplan_table_presence(Compiler *c, int cls, unsigned side, const char *name, CplanPresence *out) {
+  *out = (CplanPresence){ .table = pr_in_table(c, cls, side, name, ct_table(c, cls, name, side, NULL)), .vis = ct_vis(c, cls, name, side) };
+}
+/* See call_plan.h. */
 int cplan_list_omits(Compiler *c, int id, int cls, unsigned side, const char *name) {
   ElabVersion vs[1];
   CplanPresence pr;
   if (id < 0 || cls < 0 || !name || elab_chain_versions(c, cls, (side & CT_CMETHOD) != 0, name, vs, 1) == 0) return 0;
   return cplan_presence(c, id, cls, side, name, &pr) == PR_ABSENT && pr.table;
+}
+
+/* A candidate of a list: nm asked of cls on the list's side, with no site
+   (the final tables' answer, cplan_table_presence), and handed on where the question says cls
+   holds it, with the visibility it gives. */
+static void list_ask(Compiler *c, int cls, unsigned side, const char *nm, CplanCandFn fn, void *ud) {
+  CplanPresence pr;
+  cplan_table_presence(c, cls, side, nm, &pr);
+  if (pr.table) fn(ud, nm, pr.vis);
+}
+/* The instance methods class ci holds: its defs, aliases and attribute
+   accessors, those copied in from an included module and an alias an
+   include made besides unless CT_OWN. */
+static void list_instance_candidates(Compiler *c, int ci, unsigned side, CplanCandFn fn, void *ud) {
+  ClassInfo *k = &c->classes[ci];
+  for (int si = 0; si < c->nscopes; si++) {
+    Scope *s = &c->scopes[si];
+    if (s->class_id != ci || s->is_cmethod || !s->name || !s->name[0]) continue;
+    /* a prepended module's method displaced the class's own body, which
+       carries a shadow name: the name it is listed under is the user's,
+       and a renamed module copy (a second prepend over the first) is none */
+    if (s->shadow == SHADOW_PREP && s->origin_module_ci > 0) continue;
+    list_ask(c, ci, side, s->shadow == SHADOW_PREP ? s->shadow_user : s->name, fn, ud);
+  }
+  for (int i = 0; i < k->naliases; i++)
+    if (k->alias_new[i]) list_ask(c, ci, side, k->alias_new[i], fn, ud);
+  /* accessors are flattened into descendants, so a class lists the ones it
+     introduces */
+  for (int i = 0; i < k->nreaders; i++)
+    if (pr_accessor_own(c, ci, k->readers[i], 0, 1)) list_ask(c, ci, side, k->readers[i], fn, ud);
+  for (int i = 0; i < k->nwriters; i++) {
+    char wn[256]; snprintf(wn, sizeof wn, "%s=", k->writers[i]);
+    if (pr_accessor_own(c, ci, k->writers[i], 1, 1)) list_ask(c, ci, side, wn, fn, ud);
+  }
+}
+/* The class methods cls defines (defs, `class << self` aliases and
+   accessors), then, unless CT_OWN, those of its superclasses and extended
+   modules. */
+static void list_cmethod_candidates(Compiler *c, int cls, unsigned side, CplanCandFn fn, void *ud) {
+  for (int k = cls, g = 0; k >= 0 && g <= c->nclasses; k = c->classes[k].parent, g++) {
+    ClassInfo *kc = &c->classes[k];
+    for (int si = 0; si < c->nscopes; si++) {
+      Scope *s = &c->scopes[si];
+      if (s->class_id == k && s->is_cmethod && s->name && s->name[0]) list_ask(c, cls, side, s->name, fn, ud);
+    }
+    for (int i = 0; i < kc->naliases; i++)
+      if (kc->alias_new[i]) list_ask(c, cls, side, kc->alias_new[i], fn, ud);
+    for (int i = 0; i < kc->nsg_readers; i++) list_ask(c, cls, side, kc->sg_readers[i], fn, ud);
+    for (int i = 0; i < kc->nsg_writers; i++) {
+      char wn[256]; snprintf(wn, sizeof wn, "%s=", kc->sg_writers[i]);
+      list_ask(c, cls, side, wn, fn, ud);
+    }
+    if (side & CT_OWN) break;
+  }
+}
+/* See call_plan.h. */
+void cplan_list_candidates(Compiler *c, int cls, unsigned side, CplanCandFn fn, void *ud) {
+  if (side & CT_CMETHOD) list_cmethod_candidates(c, cls, side, fn, ud);
+  else list_instance_candidates(c, cls, side, fn, ud);
 }
 
 int cplan_class_row(Compiler *c, int id, int recv, const char *name) {

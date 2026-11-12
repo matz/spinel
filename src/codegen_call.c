@@ -19364,62 +19364,24 @@ int refl_member_of_struct_superclass(Compiler *c, int ci, const char *m) {
   return 0;
 }
 
+/* A candidate of a method list (cplan_list_candidates), noted shown where
+   its visibility is one the form asks. A list leaves out the helpers the
+   compiler synthesizes (name_is_synth_method), whatever the tables hold. */
+typedef struct { Compiler *c; ReflNames *r; int pub, prot, priv; } ReflCand;
+static void refl_cand_note(void *ud, const char *nm, int vis) {
+  ReflCand *n = ud;
+  if (name_is_synth_method(n->c, nm)) return;
+  refl_note(n->r, nm, refl_vis_wanted(vis, n->pub, n->prot, n->priv));
+}
 /* The instance methods class `ci` itself defines, as
-   Module#instance_methods(false) sees them: its defs, aliases and attribute
-   accessors, without the helpers the compiler synthesizes or a Struct's
-   generated iterators. A method copied in from an included module belongs
-   to the module, and a `class T < Struct.new(:a)` member accessor to the
-   anonymous superclass, so both are listed only with `with_modules` (the
-   whole-chain walk of Object#methods). */
+   Module#instance_methods(false) sees them. A method copied in from an
+   included module belongs to the module, and a `class T < Struct.new(:a)`
+   member accessor to the anonymous superclass, so both are listed only with
+   `with_modules` (the whole-chain walk of Object#methods). */
 void refl_own_instance_methods(Compiler *c, int ci, int pub, int prot, int priv,
                                       int with_modules, ReflNames *r) {
-  ClassInfo *k = &c->classes[ci];
-  int parent = k->parent;
-  for (int si = 0; si < c->nscopes; si++) {
-    Scope *s = &c->scopes[si];
-    if (s->class_id != ci || s->is_cmethod || !s->name || !s->name[0]) continue;
-    /* A prepended module that defines a method the class defines too renames
-       the class's own body to `__prep <n> <name>`, so the module's copy can
-       super into it. The class still defines <name>: list it under that name,
-       with the visibility the rename carried to the body's own name (the
-       name itself answers the module's copy). A renamed module copy (a second
-       prepend over the first) stays out. */
-    const char *nm = s->name;
-    if (s->shadow == SHADOW_PREP) {
-      if (s->origin_module_ci > 0) continue;
-      nm = s->shadow_user;
-    }
-    if (name_is_synth_method(c, nm) || comp_scope_is_private_helper(c, si) || scope_is_struct_synth(c, si)) continue;
-    if (s->origin_module_ci > 0 && !with_modules) continue;
-    refl_note(r, nm, refl_vis_wanted(refl_own_vis(c, ci, si, s->name), pub, prot, priv));
-  }
-  for (int i = 0; i < k->naliases; i++) {
-    const char *an = k->alias_new[i];
-    if (!an || name_is_synth_method(c, an)) continue;
-    if (k->alias_sg && k->alias_sg[i]) continue;   /* a singleton alias: a class method */
-    /* an alias with no statement here is one an included module made
-       (register_include_attrs): the module's, as its methods are */
-    if (k->alias_node[i] < 0 && !with_modules) continue;
-    int v = SP_VIS_PUBLIC, own = 0;
-    for (int j = 0; j < k->nvis; j++)
-      if (sp_streq(k->vis_names[j], an)) { v = k->vis_kinds[j]; own = 1; break; }
-    if (!own) v = comp_method_vis_in_chain(c, ci, an);
-    refl_note(r, an, refl_vis_wanted(v, pub, prot, priv));
-  }
-  /* accessors are flattened into descendants, so "own" is present here and
-     absent from the parent chain */
-  for (int i = 0; i < k->nreaders; i++) {
-    const char *rn = k->readers[i];
-    if (parent >= 0 && comp_reader_in_chain(c, parent, rn, NULL)) continue;
-    if (!with_modules && refl_member_of_struct_superclass(c, ci, rn)) continue;
-    refl_note(r, rn, refl_vis_wanted(comp_method_vis(k, rn), pub, prot, priv));
-  }
-  for (int i = 0; i < k->nwriters; i++) {
-    if (parent >= 0 && comp_writer_in_chain(c, parent, k->writers[i], NULL)) continue;
-    if (!with_modules && refl_member_of_struct_superclass(c, ci, k->writers[i])) continue;
-    char wn[256]; snprintf(wn, sizeof wn, "%s=", k->writers[i]);
-    refl_note(r, wn, refl_vis_wanted(comp_method_vis(k, wn), pub, prot, priv));
-  }
+  ReflCand n = { c, r, pub, prot, priv };
+  cplan_list_candidates(c, ci, with_modules ? 0 : CT_OWN, refl_cand_note, &n);
 }
 /* Enumerable's instance methods in CRuby, all public */
 static const char *const enumerable_method_names[] = {
@@ -19567,55 +19529,17 @@ void refl_module_instance_methods(Compiler *c, int m, int prot, ReflNames *r) {
   refl_free(&all);
 }
 
-/* A class method cloned from another class's `def` (an extended module's
-   method, or an inherited one specialized for a subclass) shares the source
-   scope's def node; the source comes first. */
-static int refl_scope_is_copy(Compiler *c, int si) {
-  Scope *s = &c->scopes[si];
-  if (s->origin_module_ci > 0) return 1;
-  if (s->alias_of) return 0;
-  if (s->def_node < 0) return 0;
-  for (int j = 0; j < si; j++)
-    if (c->scopes[j].def_node == s->def_node && c->scopes[j].class_id != s->class_id) return 1;
-  return 0;
+/* A class-side candidate: singleton_methods lists the public and protected
+   ones. */
+static void refl_cmethod_cand_note(void *ud, const char *nm, int vis) {
+  if (vis != SP_VIS_PRIVATE) refl_cand_note(ud, nm, vis);
 }
-
 /* The names Klass.singleton_methods lists: the class methods `ci` defines
    (defs, `class << self` aliases and accessors), then with `all` those of
    its superclasses and extended modules. */
 void refl_class_singleton_methods(Compiler *c, int ci, int all, ReflNames *r) {
-  for (int k = ci, g = 0; k >= 0 && g <= c->nclasses; k = c->classes[k].parent, g++) {
-    ClassInfo *kc = &c->classes[k];
-    for (int si = 0; si < c->nscopes; si++) {
-      Scope *s = &c->scopes[si];
-      if (s->class_id != k || !s->is_cmethod || !s->name || !s->name[0]) continue;
-      if (strncmp(s->name, "__", 2) == 0 || name_is_synth_method(c, s->name)) continue;
-      if (!all && refl_scope_is_copy(c, si)) continue;
-      /* singleton_methods lists the public and protected ones */
-      if (comp_cmethod_vis_declared(c, k, s->name, NULL) == SP_VIS_PRIVATE) continue;
-      refl_note(r, s->name, 1);
-    }
-    for (int i = 0; i < kc->naliases; i++) {
-      const char *an = kc->alias_new[i];
-      if (!an || name_is_synth_method(c, an) || comp_cmethod_vis_declared(c, k, an, NULL) == SP_VIS_PRIVATE) continue;
-      const char *od = comp_resolve_cm_alias_at(c, k, an, NULL);
-      if ((kc->alias_sg && kc->alias_sg[i]) ||
-          (comp_cmethod_in_chain(c, k, od, NULL) >= 0 && comp_method_in_chain(c, k, od, NULL) < 0))
-        refl_note(r, an, 1);
-    }
-    /* an accessor inherited from an ancestor's `class << self` is the
-       ancestor's own: singleton_methods(false) leaves it out. What the class
-       declares is read from its declarations, the reader and the writer
-       apart: it may declare one half and inherit the other. */
-    for (int i = 0; i < kc->nsg_readers; i++)
-      if (all || comp_sg_accessor_own(c, k, kc->sg_readers[i])) refl_note(r, kc->sg_readers[i], 1);
-    for (int i = 0; i < kc->nsg_writers; i++) {
-      char wn[256]; snprintf(wn, sizeof wn, "%s=", kc->sg_writers[i]);
-      if (!all && !comp_sg_accessor_own(c, k, wn)) continue;
-      refl_note(r, wn, 1);
-    }
-    if (!all) break;
-  }
+  ReflCand n = { c, r, 1, 1, 0 };
+  cplan_list_candidates(c, ci, CT_CMETHOD | (all ? 0 : CT_OWN), refl_cmethod_cand_note, &n);
 }
 
 /* Emit the listed names of `r` as a PolyArray of symbols. Interned at run

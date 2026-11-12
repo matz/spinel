@@ -1,0 +1,30 @@
+#<struct S a=1>
+[#<struct S a=2>]
+#<data D v=1>
+[#<data D v=2>]
+#<struct P x=1, y=2>
+#<struct Q inner=#<struct S a=5>, n=6>
+#<data E a=#<data D v=3>, b=[#<struct S a=4>]>
+{k: #<struct S a=8>, d: #<data D v=9>}
+#<struct S a=1>
+#<data D v=2>
+S<3>
+D(3)
+P!
+#<struct Q inner=S<5>, n=6>
+S<10>
+#<data D v=12>
+#<struct S a=13>
+[D(12), S<13>]
+#<struct S a=14>
+14
+W(S<7>)
+[W(D(8))]
+V!
+#<struct S a=1>
+V!
+[#<struct S a=3>]
+V!
+{s: #<data D v=4>}
+V!
+#<struct S a=5>

@@ -7779,15 +7779,15 @@ void emit_method(Compiler *c, Scope *s, Buf *b) {
   }
   else emit_method_signature(c, s, b);
   buf_puts(b, " {\n");
-  /* the program's own #inspect, #to_s or #message, where the program
-     reopens Array#inspect: it runs as outside a pp, so its p and inspect
+  /* the program's own #inspect, #to_s or #message, where a pp prints
+     through sp_pp_inspect (pp_prints_by_rt): it runs as outside a pp, so its p and inspect
      calls run that method, however it was reached (a Struct member's, an
      exception's message). Each return sets the flag back to its value at
      entry, so the pp that reached the method prints the rest of its value
      without that method. A raise out of it leaves the flag cleared, the
      state outside a pp; a boxed render's call (SP_PP_USER) restores it. */
   if (s->name && (sp_streq(s->name, "inspect") || sp_streq(s->name, "to_s") || sp_streq(s->name, "message")) &&
-      array_user_inspect_mi(c) >= 0)
+      pp_prints_by_rt(c))
     buf_puts(b, "  int _sp_ppw SP_CLEANUP(sp_pp_user_leave) = sp_pp_user_enter();\n");
   /* The singleton override does not exist until the statement that created it
      has run (#4084). The object carries its parent's cls_id until then, so a
@@ -12641,8 +12641,16 @@ static void emit_struct_default_inspect(Compiler *c, ClassInfo *ci, int cid, con
     if (mcn) {
       /* a struct/data (or user-#inspect) member recurses into its own inspect */
       char ivn[128]; snprintf(ivn, sizeof ivn, "%s", iv_c(ci->ivars[i] + 1));
-      buf_printf(b, "  sp_String_append(s, self->iv_%s ? %s((sp_%s *)self->iv_%s) : \"nil\");\n",
-                 ivn, obj_str_fn(c, ty_object_class(mt), 1), mcn, ivn);
+      int mc = ty_object_class(mt);
+      /* inside a pp, a Struct or Data member with its own #inspect shows its
+         record layout too (record_pp_skips_inspect) */
+      if (pp_prints_by_rt(c) && record_pp_skips_inspect(c, mc))
+        buf_printf(b, "  sp_String_append(s, !self->iv_%s ? \"nil\" : sp_pp_printing ? sp_%s_%s((sp_%s *)self->iv_%s) : %s((sp_%s *)self->iv_%s));\n",
+                   ivn, c->classes[mc].c_name, struct_default_text_fn(c, mc), c->classes[mc].c_name, ivn,
+                   obj_str_fn(c, mc, 1), mcn, ivn);
+      else
+        buf_printf(b, "  sp_String_append(s, self->iv_%s ? %s((sp_%s *)self->iv_%s) : \"nil\");\n",
+                   ivn, obj_str_fn(c, mc, 1), mcn, ivn);
     }
     else {
       Buf ivb; memset(&ivb, 0, sizeof ivb); buf_printf(&ivb, "self->iv_%s", iv_c(ci->ivars[i] + 1));
@@ -14312,6 +14320,25 @@ static int class_inspectable(Compiler *c, int i) {
      and printed #<Object> (#3813) */
   return 1;
 }
+/* Does the object inspect switch (sp_obj_inspect_sw) call class cid's own
+   #inspect for an object of cid or of any class below it? Then a pp that
+   prints the boxed object through sp_pp_inspect runs that method as the
+   typed call does. */
+static int obj_arm_calls_own_inspect1(Compiler *c, int i) {
+  ClassInfo *ci = &c->classes[i];
+  if (!class_has_obj_arm(c, i)) return 1;   /* no object of it to print */
+  if (!class_inspectable(c, i) || comp_ty_value_obj(c, ty_object(i))) return 0;
+  int mi = display_method_scope(c, i, 1, NULL);
+  if (mi < 0 || ci->is_native_class) return 0;
+  const Scope *s = &c->scopes[mi];
+  return s->reachable && !s->yields && s->nparams == 0 && (s->ret == TY_STRING || s->ret == TY_POLY);
+}
+int obj_arm_calls_own_inspect(Compiler *c, int cid) {
+  if (cid < 0 || cid >= c->nclasses || !g_emit_obj_dispatch) return 0;
+  for (int i = 0; i < c->nclasses; i++)
+    if ((i == cid || is_descendant(c, i, cid)) && !obj_arm_calls_own_inspect1(c, i)) return 0;
+  return 1;
+}
 /* Does the program have a `def inspect = super` reaching Kernel#inspect
    (an_super_object_text)? Only then is sp_obj_kernel_inspect emitted. */
 int obj_kernel_inspect_used(Compiler *c) {
@@ -14540,8 +14567,8 @@ static void emit_obj_cls_name_rt(Buf *b) {
    sp_pp_printing for the call, so what that method prints or inspects runs
    the program's Array#inspect as CRuby does, also inside a pp. (A raise
    out of the method leaves the flag cleared, the state outside a pp.) */
-static const char *ppu_open(Compiler *c) { return array_user_inspect_mi(c) >= 0 ? "SP_PP_USER(" : ""; }
-static const char *ppu_close(Compiler *c) { return array_user_inspect_mi(c) >= 0 ? ")" : ""; }
+static const char *ppu_open(Compiler *c) { return pp_prints_by_rt(c) ? "SP_PP_USER(" : ""; }
+static const char *ppu_close(Compiler *c) { return pp_prints_by_rt(c) ? ")" : ""; }
 static int emit_display_yield_arm(Compiler *c, int cid, int mi, int def, int by_value, Buf *b) {
   if (mi < 0 || !c->scopes[mi].yields) return 0;
   int pf = scope_proc_form_of(c, mi);
@@ -14695,6 +14722,20 @@ static void emit_obj_inspect_dispatch(Compiler *c, Buf *b) {
   Buf *outer = b; b = &sw;
   buf_puts(b, "static const char *sp_obj_inspect_sw(int cls_id, void *p) {\n");
   emit_hook_object_root(b, "SP_GC_ROOT", "p");
+  /* inside a pp (sp_pp_printing), a Struct or Data class with its own
+     #inspect prints its record layout, as CRuby's pp does
+     (record_pp_skips_inspect) */
+  if (pp_prints_by_rt(c)) {
+    int any = 0;
+    for (int i = 0; i < c->nclasses; i++) {
+      if (!class_has_obj_arm(c, i) || !record_pp_skips_inspect(c, i)) continue;
+      if (!any) buf_puts(b, "  if (sp_pp_printing) switch (cls_id) {\n");
+      any = 1;
+      buf_printf(b, "    case %d: return sp_%s_%s((sp_%s *)p);\n", i, c->classes[i].c_name,
+                 struct_default_text_fn(c, i), c->classes[i].c_name);
+    }
+    if (any) buf_puts(b, "    default: break;\n  }\n");
+  }
   buf_puts(b, "  switch (cls_id) {\n");
   for (int i = 0; i < c->nclasses; i++) {
     if (!class_has_obj_arm(c, i)) continue;
@@ -22809,6 +22850,31 @@ int array_user_inspect_mi(Compiler *c) {
   const Scope *s = &c->scopes[mi];
   if (s->nparams > 0 || s->yields || (s->blk_param && s->blk_param[0]) || (TyKind)s->ret != TY_STRING) return -1;
   return mi;
+}
+/* Does pp print an instance of class cid by the record layout
+   (`#<struct S a=1>`, `#<data D v=1>`) and not by the class's own
+   #inspect? It does for a Struct or Data class that has its own #inspect:
+   CRuby's pp uses Struct#pretty_print / Data#pretty_print, which leave
+   that method out (p still uses it). */
+int record_pp_skips_inspect(Compiler *c, int cid) {
+  if (cid < 0 || cid >= c->nclasses) return 0;
+  ClassInfo *ci = &c->classes[cid];
+  if (!(ci->is_struct || ci->is_data) || ci->is_native_class) return 0;
+  int mi = display_method_scope(c, cid, 1, NULL);
+  return mi >= 0 && c->scopes[mi].reachable;
+}
+/* Does a pp print through sp_pp_inspect? It does where the program reopens
+   Array#inspect, or where it calls pp and has a Struct or Data class with
+   its own #inspect (record_pp_skips_inspect). Then the program's own
+   #inspect, #to_s and #message clear sp_pp_printing while they run. */
+int an_calls_named_first(Compiler *c, const char *name);   /* analyze_internal.h */
+int pp_prints_by_rt(Compiler *c) {
+  static Compiler *at; static int ncls = -1, val;
+  if (at == c && ncls == c->nclasses) return val;
+  at = c; ncls = c->nclasses; val = array_user_inspect_mi(c) >= 0;
+  if (!val && an_calls_named_first(c, "pp") >= 0)
+    for (int i = 0; i < c->nclasses && !val; i++) val = record_pp_skips_inspect(c, i);
+  return val;
 }
 /* sp_class_user_to_s / sp_class_user_inspect: a class's own class method
    to_s or inspect (cls_user_display_mi) for the class printed, NULL for any

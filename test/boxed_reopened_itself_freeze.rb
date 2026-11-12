@@ -35,3 +35,10 @@ begin
 rescue FrozenError => e
   p e.class
 end
+
+# a program class's own itself that calls super leaves the reopened
+# Integer#itself answering for a boxed Integer
+class Wrapped
+  def itself = [:wrapped, super.class]
+end
+p [1, Wrapped.new].map { |v| v.itself }

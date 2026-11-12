@@ -3085,16 +3085,24 @@ static int user_defines_or_reads_walk(Compiler *c, const char *name) {
    square of the program (8% of a scale-400 compile). */
 static char **udrc_name; static unsigned char *udrc_ans; static int udrc_cap, udrc_n;
 static unsigned udrc_gen, udrc_shape; static int udrc_nscopes = -1, udrc_nclasses = -1;
-/* Does an instance method the program defines named `name` call super? A
-   boxed receiver's itself or freeze then keeps the builtin answer: super in
-   a reopened String#itself answered nil and a reopened Integer's did not
-   compile, where the builtin was right for a boxed value. */
+/* Does an instance method named `name` that a builtin value can reach
+   call super: one of a builtin class's reopening, of a class below a
+   builtin, of a module (which a builtin can include) or of the top level?
+   A boxed receiver's itself or freeze then keeps the builtin answer: super
+   in a reopened String#itself answered nil and a reopened Integer's did not
+   compile, where the builtin was right for a boxed value. A program class's
+   own method with super (comp_plain_class) does not count: no builtin value
+   reaches it, and its super works. */
 int user_defines_calls_super(Compiler *c, const char *name) {
   if (!name) return 0;
   for (int s = 0; s < c->nscopes; s++) {
     const Scope *sc = &c->scopes[s];
-    if (sc->def_node >= 0 && !sc->is_cmethod && sc->name && sp_streq(sc->name, name) &&
-        scope_calls_super(c, s)) return 1;
+    if (sc->def_node < 0 || sc->is_cmethod || !sc->name || !sp_streq(sc->name, name)) continue;
+    int k = sc->class_id, core = 0;
+    for (int ck = 0; ck < CORE_N && k >= 0 && !core; ck++) core = comp_core_class(c, ck) == k;
+    if (k >= 0 && k < c->nclasses && !core && !comp_class_is_module(c, &c->classes[k]) && comp_plain_class(c, k))
+      continue;
+    if (scope_calls_super(c, s)) return 1;
   }
   return 0;
 }

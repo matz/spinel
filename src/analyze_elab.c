@@ -3765,35 +3765,42 @@ static int lr_in_closure(Compiler *c, const int *par, int n, int x) {
   }
   return 0;
 }
+/* The local writes a lazy chain's reading has followed (elab_lazy_runs):
+   a chain-on that reaches one again is a cycle (`a = a.map { }` reads its
+   own local). The array is storage, not a limit the reading sets: past
+   it, the reading answers -1, as past cap. */
+typedef struct { int n, w[16]; } LrChainWrites;
 /* The call that runs value x as its receiver (is_proc_invoke), for
-   elab_closure_runs, where that call is not itself in a closure; -1 where
-   x goes anywhere else */
-static int lr_closure_use(Compiler *c, const int *par, int n, int x) {
+   elab_closure_runs, where that call is not itself in a closure, into
+   sites: 1; 0 where x goes anywhere else, -1 past cap */
+static int lr_closure_use(Compiler *c, const int *par, int n, int x, LrChainWrites *seen, int *sites, int cap) {
   VpUp up;
   VpUpKind k = vp_climb(c->nt, par, x, VPS_ALL, &up);
-  return k == VPU_ENDED && nt_kind(c->nt, up.parent) == NK_CallNode && nt_ref(c->nt, up.parent, "receiver") == up.node &&
-         is_proc_invoke(nt_str(c->nt, up.parent, "name")) && !lr_in_closure(c, par, n, up.parent) ? up.parent : -1;
+  (void)seen;
+  if (k != VPU_ENDED || nt_kind(c->nt, up.parent) != NK_CallNode || nt_ref(c->nt, up.parent, "receiver") != up.node ||
+      !is_proc_invoke(nt_str(c->nt, up.parent, "name")) || lr_in_closure(c, par, n, up.parent))
+    return 0;
+  if (cap < 1) return -1;
+  sites[0] = up.parent;
+  return 1;
 }
 /* The calls that run value v (a closure, a lazy chain) as their receiver,
-   use answering each: v's own, or, where v is written whole to a local,
-   each read of it in the same body that use answers (a write that reads
-   it too, `l ||= ...`, does not). How many, into sites[0..cap); -1 past
-   cap. every: -1 also where a read of that local, or v itself, goes
-   anywhere use does not answer, or the write's own value is used
+   use answering them for each use of the value (how many sites it adds,
+   -1 where it does not know them all, or past cap; seen handed on): v's
+   own, or, where v is written whole to a local, each read of it in the
+   same body (a write that reads it too, `l ||= ...`, does not). How many,
+   into sites[0..cap); -1 past cap and where use answers -1. every: -1
+   also where a write reads that local, or the write's own value is used
    (`other = (l = v)`, `f(l = v)`), so that the sites are every place v
    runs. */
-static int lr_value_runs(Compiler *c, const int *par, int n, int v, int (*use)(Compiler *, const int *, int, int),
-                         int every, int *sites, int cap) {
+static int lr_value_runs(Compiler *c, const int *par, int n, int v,
+                         int (*use)(Compiler *, const int *, int, int, LrChainWrites *, int *, int), int every,
+                         LrChainWrites *seen, int *sites, int cap) {
   const NodeTable *nt = c->nt;
-  int ns = 0, at;
+  int ns = 0, m;
   VpUp up;
-  if (vp_climb(nt, par, v, VPS_ALL, &up) != VPU_ENDED || nt_kind(nt, up.parent) != NK_LocalVariableWriteNode) {
-    if ((at = use(c, par, n, v)) >= 0) {
-      if (cap < 1) return -1;
-      sites[ns++] = at;
-    }
-    return every && at < 0 ? -1 : ns;
-  }
+  if (vp_climb(nt, par, v, VPS_ALL, &up) != VPU_ENDED || nt_kind(nt, up.parent) != NK_LocalVariableWriteNode)
+    return use(c, par, n, v, seen, sites, cap);
   static const NodeKind reads[] = { NK_LocalVariableReadNode, NK_LocalVariableOperatorWriteNode,
                                     NK_LocalVariableOrWriteNode, NK_LocalVariableAndWriteNode };
   VpUp wu;
@@ -3805,9 +3812,9 @@ static int lr_value_runs(Compiler *c, const int *par, int n, int v, int (*use)(C
   for (int j = 0; ln && j < 4; j++)
     NT_FOREACH_KIND(nt, reads[j], x) {
       if (x >= n || !sp_streq(nt_str(nt, x, "name"), ln) || elab_body_def(c, x) != body) continue;
-      if (!j && (at = use(c, par, n, x)) >= 0) {
-        if (ns >= cap) return -1;
-        sites[ns++] = at;
+      if (!j) {
+        if ((m = use(c, par, n, x, seen, sites + ns, cap - ns)) < 0) return -1;
+        ns += m;
       }
       else if (every) return -1;
     }
@@ -3823,22 +3830,60 @@ int elab_closure_runs(Compiler *c, int id, int *sites, int cap) {
     if (k == NK_LambdaNode) lam = p;
     else if (k == NK_BlockNode) lam = par[p];
   }
-  return lam < 0 ? -1 : lr_value_runs(c, par, n, lam, lr_closure_use, 0, sites, cap);
+  return lam < 0 ? -1 : lr_value_runs(c, par, n, lam, lr_closure_use, 0, NULL, sites, cap);
 }
 
-/* The call that forces lazy chain x as its receiver, for elab_lazy_runs:
-   any name but one that chains it on (lr_lazy_later's reading); -1 where
-   x goes anywhere else */
-static int lr_lazy_use(Compiler *c, const int *par, int n, int x) {
+/* Does call, taking a builtin lazy chain as its receiver, force it and
+   answer a value that is not the chain: a forcing name
+   (is_lazy_forcing_name; one that forces only given a block, with a
+   literal one: `&b` may hand on nil) the program does not define? */
+static int lr_lazy_forces(Compiler *c, int call) {
+  const NodeTable *nt = c->nt;
+  const char *nm = nt_str(nt, call, "name");
+  int b = nt_ref(nt, call, "block");
+  return is_lazy_forcing_name(nm, b >= 0 && nt_kind(nt, b) == NK_BlockNode) && (!c->lrec || !lr_defines(c->lrec, nm));
+}
+static int lr_lazy_value_runs(Compiler *c, const int *par, int n, int q, LrChainWrites *seen, int *sites, int cap);
+/* The calls that force lazy chain x, a use of it, for lr_lazy_value_runs:
+   the call taking it as its receiver where that forces it (lr_lazy_forces),
+   or, where that chains it on (lr_lazy_later's reading), the calls that
+   force the chain it answers; -1 where x goes anywhere else (a call that
+   hands it on as it is, `each` with no block, `itself`, `dup`: one the
+   record does not follow) */
+static int lr_lazy_use(Compiler *c, const int *par, int n, int x, LrChainWrites *seen, int *sites, int cap) {
   VpUp up;
-  (void)n;
   VpUpKind k = vp_climb(c->nt, par, x, VPS_ALL, &up);
-  return k == VPU_ENDED && nt_kind(c->nt, up.parent) == NK_CallNode && nt_ref(c->nt, up.parent, "receiver") == up.node &&
-         !lr_lazy_chain_call(c->lrec, nt_str(c->nt, up.parent, "name")) ? up.parent : -1;
+  if (k != VPU_ENDED || nt_kind(c->nt, up.parent) != NK_CallNode || nt_ref(c->nt, up.parent, "receiver") != up.node) return -1;
+  if (lr_lazy_forces(c, up.parent)) {
+    if (cap < 1) return -1;
+    sites[0] = up.parent;
+    return 1;
+  }
+  return lr_lazy_chain_call(c->lrec, nt_str(c->nt, up.parent, "name")) ? lr_lazy_value_runs(c, par, n, up.parent, seen, sites, cap)
+                                                                        : -1;
+}
+/* The calls that force the lazy chain call q answers: past the calls that
+   chain it on in its expression, its value's uses (lr_value_runs, every);
+   -1 where its value is written to a local a chain-on of the same chain
+   was already followed through (seen) */
+static int lr_lazy_value_runs(Compiler *c, const int *par, int n, int q, LrChainWrites *seen, int *sites, int cap) {
+  const NodeTable *nt = c->nt;
+  VpUp up;
+  VpUpKind k;
+  while ((k = vp_climb(nt, par, q, VPS_ALL, &up)) == VPU_ENDED && nt_kind(nt, up.parent) == NK_CallNode &&
+         nt_ref(nt, up.parent, "receiver") == up.node && lr_lazy_chain_call(c->lrec, nt_str(nt, up.parent, "name")))
+    q = up.parent;
+  if (k == VPU_ENDED && nt_kind(nt, up.parent) == NK_LocalVariableWriteNode) {
+    for (int i = 0; i < seen->n; i++) if (seen->w[i] == up.parent) return -1;
+    if (seen->n >= (int)(sizeof seen->w / sizeof seen->w[0])) return -1;
+    seen->w[seen->n++] = up.parent;
+  }
+  return lr_value_runs(c, par, n, q, lr_lazy_use, 1, seen, sites, cap);
 }
 int elab_lazy_runs(Compiler *c, int id, int *sites, int cap) {
   const NodeTable *nt = c->nt;
   int n, q = -1;
+  LrChainWrites seen = { 0 };
   const int *par = elab_node_parents(c, &n);
   for (int p = id >= 0 && id < n ? par[id] : -1; p >= 0 && p < n && q < 0; p = par[p]) {
     NodeKind k = nt_kind(nt, p);
@@ -3848,11 +3893,7 @@ int elab_lazy_runs(Compiler *c, int id, int *sites, int cap) {
     if (w == ELAB_BLK_LATER && nt_kind(nt, par[p]) == NK_CallNode && lr_lazy_later(c, par[p])) q = par[p];
     else if (w != ELAB_BLK_NOW) return -1;
   }
-  /* (the chain's last call: the value that leaves the expression) */
-  for (VpUp up; q >= 0 && vp_climb(nt, par, q, VPS_ALL, &up) == VPU_ENDED && nt_kind(nt, up.parent) == NK_CallNode &&
-                nt_ref(nt, up.parent, "receiver") == up.node && lr_lazy_chain_call(c->lrec, nt_str(nt, up.parent, "name"));)
-    q = up.parent;
-  return q < 0 ? -1 : lr_value_runs(c, par, n, q, lr_lazy_use, 1, sites, cap);
+  return q < 0 ? -1 : lr_lazy_value_runs(c, par, n, q, &seen, sites, cap);
 }
 
 int elab_def_keeps_block(Compiler *c, int def) {

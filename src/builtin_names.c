@@ -581,6 +581,10 @@ int is_lambda_constructor(const char *n) {
   return sp_streq(n, "lambda");
 }
 
+/* to_a / force: the calls ending a lazy chain that code generation lowers
+   whole, as its terminal (it tests `first` itself beside them). Which call
+   forces a Lazy at all, for the record's reading of where a chain runs, is
+   is_lazy_forcing_name's question; these are a subset of its names. */
 int is_lazy_force(const char *n) {
   return sp_streq(n, "to_a") || sp_streq(n, "force");
 }
@@ -1857,6 +1861,21 @@ int is_lazy_chain_name(const char *n) {
     "filter", "filter_map", "find_all", "flat_map", "grep", "grep_v", "lazy", "map", "reject", "select", "slice_after",
     "slice_before", "slice_when", "take", "take_while", "uniq", "with_index", NULL };
   return n && builtin_name_in(n, LAZY);
+}
+/* A call on a lazy enumerator that runs its chain before it answers, with a
+   value that is not the chain: always (first, to_a, sum, ...), or given a
+   block (each, find, group_by, ...: with none, each answers the chain on as
+   an enumerator). each_slice, each_cons, each_entry and reverse_each are
+   not among them (given a block they force the chain and answer it again),
+   nor are next and peek (they run it a step at a time). The calls code
+   generation lowers a chain into as its terminal (is_lazy_force: to_a,
+   force; `first`) are a subset of these. */
+int is_lazy_forcing_name(const char *n, int block) {
+  static const char *const ALWAYS[] = { "all?", "any?", "count", "entries", "first", "force", "include?", "inject", "max",
+    "member?", "min", "minmax", "none?", "one?", "reduce", "sort", "sum", "tally", "to_a", "to_h", "to_set", NULL };
+  static const char *const BLOCK[] = { "cycle", "detect", "each", "each_with_index", "each_with_object", "find",
+    "find_index", "group_by", "max_by", "min_by", "minmax_by", "partition", "sort_by", "with_object", "zip", NULL };
+  return n && (builtin_name_in(n, ALWAYS) || (block && builtin_name_in(n, BLOCK)));
 }
 int is_concat_name(const char *n) { return sp_streq(n, "concat"); }
 

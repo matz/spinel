@@ -1921,7 +1921,7 @@ static void lr_reopens_take(Compiler *c) {
   const int *par = comp_parent_map(c);
   for (int pass = 0; pass < 3; pass++)
     NT_FOREACH_KIND(nt, pass == 2 ? NK_CallNode : pass ? NK_ModuleNode : NK_ClassNode, n) {
-      const char *nm = pass < 2 ? class_def_name(nt, n) : handle_attr_decl(nt, n);
+      const char *nm = pass < 2 ? class_def_key(c, n) : handle_attr_decl(nt, n);
       if (!nm || !(is_builtin_class_name(nm) || is_builtin_module_const_name(nm))) continue;
       if (pass < 2 && lr_header_nested(nt, par, n)) continue;
       r->reopens = lr_grow(r->reopens, &r->creopens, r->nreopens, sizeof *r->reopens);
@@ -7706,9 +7706,9 @@ static int lr_frame_const(Compiler *c, int def) {
   int cp = class_def_path(nt, def), r;
   if (class_def_builder(nt, def) < 0)
     return nt_kind(nt, cp) == NK_ConstantReadNode || nt_kind(nt, cp) == NK_ConstantPathNode ? nt_clone_subtree(nt, cp) : -1;
-  if (!class_def_bare_name(nt, def)) return -1;
+  if (!class_def_bare_key(c, def)) return -1;
   r = lr_made(nt, def, "ConstantReadNode");
-  nt_node_set_str(nt, r, "name", class_def_bare_name(nt, def));
+  nt_node_set_str(nt, r, "name", class_def_bare_key(c, def));
   return r;
 }
 

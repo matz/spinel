@@ -751,6 +751,10 @@ int class_def_path(const NodeTable *nt, int def_node);   /* the constant node it
 int mixin_stmt_args(const NodeTable *nt, int st, int *prepend, const int **av);   /* a body's receiverless include/prepend: its argument count, -1 for another node */
 const char *class_def_name(const NodeTable *nt, int def_node);   /* the constant name it writes, NULL for none */
 const char *class_def_bare_name(const NodeTable *nt, int def_node);   /* ...written as a plain constant, NULL under a path */
+/* ...asked of the compiler: where the readers move from the name the header
+   was stamped with to the class it opened (#10793) */
+const char *class_def_key(const Compiler *c, int def_node);
+const char *class_def_bare_key(const Compiler *c, int def_node);
 void class_def_set_body(NodeTable *nt, int def_node, int body);   /* its body statements, as a pass rebuilds them */
 int class_def_body(const NodeTable *nt, int def_node);   /* its body statements, -1 for none */
 int class_def_super(const NodeTable *nt, int def_node);   /* its superclass reference, -1 for none */

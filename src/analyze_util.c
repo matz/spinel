@@ -132,7 +132,7 @@ static const ANameHash *const_pairs_of(Compiler *c) {
   int ndk = 0; const NodeKind *dk = class_def_kinds(&ndk);
   for (int dh = 0; dh < ndk; dh++)
     NT_FOREACH_KIND(nt, dk[dh], d) {
-      const char *dn = class_def_opens_cref(nt, d) ? class_def_name(nt, d) : NULL;
+      const char *dn = class_def_opens_cref(nt, d) ? class_def_key(c, d) : NULL;
       if (dn) body_const_writes(nt, class_def_body(nt, d), dn, &p->keys);
     }
   static const NodeKind writes[] = { NK_ConstantPathWriteNode, NK_ConstantPathOrWriteNode,
@@ -6927,7 +6927,7 @@ static int ext_listed_descendant(Compiler *c, const char *name) {
   const NodeTable *nt = c->nt;
   int found = 0;
   NT_FOREACH_KIND(nt, NK_ClassNode, d) {
-    const char *cn = found ? NULL : class_def_name(nt, d);
+    const char *cn = found ? NULL : class_def_key(c, d);
     if (!cn || sp_streq(cn, name) || !ext_name_listed(cn)) continue;
     const char *sup = ext_const_leaf(nt, class_def_super(nt, d));
     for (int h = 0; sup && !found && h < 64; h++) {

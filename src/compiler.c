@@ -298,7 +298,7 @@ void comp_node_pbases(Compiler *c) {
       }
       else if (ty[0] == 'S') nm = "sclass";
       else {
-        nm = class_def_name(nt, k);
+        nm = class_def_key(c, k);
       }
       const char *nw = nm && *nm ? nm : ty;
       char sp[64];
@@ -4063,7 +4063,7 @@ static void cv_self_answers(Compiler *c, unsigned char *v, int n, const char *cl
     return;
   }
   int body = class_def_opens_frame(nt, n) ? class_def_body(nt, n) : -1;
-  const char *ncls = body >= 0 ? class_def_name(nt, n) : cls;
+  const char *ncls = body >= 0 ? class_def_key(c, n) : cls;
   for (int i = 0; i < nt_num_refs(nt, n); i++) {
     int r = nt_ref_at(nt, n, i);
     if (r == body) cv_self_answers(c, v, r, ncls, discarded, depth + 1);
@@ -4264,11 +4264,11 @@ static void cv_build(Compiler *c) {
   /* (a reopened class's other bodies, and methods defined on a constant) */
   NT_FOREACH_KIND(nt, NK_ClassNode, n) {
     int p = nt_ref(nt, n, "constant_path");
-    if (p >= 0 && cv_self_value(nt, nonval, class_def_body(nt, n), 0)) cv_mark_name_tree(c, v, class_def_name(nt, n));
+    if (p >= 0 && cv_self_value(nt, nonval, class_def_body(nt, n), 0)) cv_mark_name_tree(c, v, class_def_key(c, n));
   }
   NT_FOREACH_KIND(nt, NK_ModuleNode, n) {
     int p = nt_ref(nt, n, "constant_path");
-    if (p >= 0 && cv_self_value(nt, nonval, class_def_body(nt, n), 1)) cv_mark_name_tree(c, v, class_def_name(nt, n));
+    if (p >= 0 && cv_self_value(nt, nonval, class_def_body(nt, n), 1)) cv_mark_name_tree(c, v, class_def_key(c, n));
   }
   NT_FOREACH_KIND(nt, NK_DefNode, n) {
     int r = nt_ref(nt, n, "receiver");

@@ -8111,7 +8111,7 @@ static int const_toplevel_alias(Compiler *c, const char *name) {
     /* a definition whose constants are its own; a write in a Class.new
        block is its cref's, and the write arm below counts it */
     if (class_def_opens_cref(nt, id)) {
-      const char *nm = class_def_name(nt, id);
+      const char *nm = class_def_key(c, id);
       if (nm && sp_streq(nm, name)) ok = 0;
       inside = 1;
     }

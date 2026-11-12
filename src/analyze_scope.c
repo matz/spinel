@@ -1785,7 +1785,7 @@ static void walk_scope_in(Compiler *c, int id, WalkCtx w) {
      class as self and definee (bclass1); its constants stay the cref's */
   else if (class_def_builder(c->nt, id) >= 0) {
     int cp = class_def_path(c->nt, id);
-    builder_class = elab_rec_open(c, id, cp == id ? -1 : cp, class_def_name(c->nt, id), class_cref(c, class_id, w.cblock));
+    builder_class = elab_rec_open(c, id, cp == id ? -1 : cp, class_def_key(c, id), class_cref(c, class_id, w.cblock));
   }
   /* `P = Struct.new(:a) do ... end`, `k = Data.define(:a)`: likewise */
   else if (class_def_record(c->nt, id) >= 0)
@@ -2525,6 +2525,14 @@ const char *class_def_bare_name(const NodeTable *nt, int def_node) {
   NodeKind k = cp >= 0 ? nt_kind(nt, cp) : NK_NONE;
   const char *q = cp >= 0 ? nt_str(nt, cp, "qc_name") : NULL;
   return k == NK_ConstantReadNode || k == NK_ConstantWriteNode ? (q ? q : nt_key_name(nt, cp)) : NULL;
+}
+
+/* See analyze.h. */
+const char *class_def_key(const Compiler *c, int def_node) {
+  return class_def_name(c->nt, def_node);
+}
+const char *class_def_bare_key(const Compiler *c, int def_node) {
+  return class_def_bare_name(c->nt, def_node);
 }
 
 /* The body a definition's statements go in, set by a pass that rebuilds
@@ -5751,7 +5759,7 @@ void register_ffi_decls(Compiler *c) {
   const NodeTable *nt = c->nt;
   int ndk = 0; const NodeKind *dk = class_def_module_kinds(&ndk);
   for (int dh = 0; dh < ndk; dh++) NT_FOREACH_KIND(nt, dk[dh], id) {
-    const char *mname = class_def_is_module(nt, id) ? class_def_name(nt, id) : NULL;
+    const char *mname = class_def_is_module(nt, id) ? class_def_key(c, id) : NULL;
     if (!mname) continue;
     /* A module that extends FFI::Library is the ffi gem's: its ffi_lib,
        attach_function, callback and typedef are runtime calls into the
@@ -7344,7 +7352,7 @@ static void check_builtin_subclasses(Compiler *c) {
     if (sc < 0) continue;
     int cp = nt_ref(nt, id, "constant_path");
     const char *cn = cp >= 0 ? nt_str(nt, cp, "qc_ruby_name") : NULL;  /* `A::OpenStruct`, not its key */
-    if (!cn) cn = class_def_name(nt, id);
+    if (!cn) cn = class_def_key(c, id);
     const char *par = refused_builtin_superclass(c, sc);
     /* an Array or Hash subclass is supported (mark_array_subclasses), beside
        a reopen of its builtin too: the reopen's methods are the builtin's

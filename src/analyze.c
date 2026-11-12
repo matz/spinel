@@ -426,7 +426,7 @@ static void an_note_written_names(Compiler *c) {
         if (sp_streq(nt_str(nt, id, "name") ? nt_str(nt, id, "name") : "", "ERB")) erb++;
         break;
       case NK_ClassNode: case NK_ModuleNode: {
-        const char *cn = class_def_name(nt, id);
+        const char *cn = class_def_key(c, id);
         if (cn && sp_streq(cn, "ERB")) erb--;
         break;
       }
@@ -1207,7 +1207,7 @@ static void cr_live_begin(CrLive *lv, Compiler *c, int *queue, int *qtail) {
   }
   for (int id = 0; id < c->nt->count; id++) {
     if (!class_def_is_class(c->nt, id)) continue;
-    const char *cn = class_def_name(c->nt, id);
+    const char *cn = class_def_key(c, id);
     int i = cn ? anh_find(&lv->seg, cn) : -1;
     if (i < 0 || !cr_live_body_escapes(c, class_def_body(c->nt, id))) continue;
     for (int k = lv->seg_first[i]; k >= 0; k = lv->seg_next[k]) { lv->held_c[k] = lv->held_i[k] = 0; lv->pend_c[k] = -2; }
@@ -6691,7 +6691,7 @@ static int qc_class_name_defined(Compiler *c, const char *nm) {
   int ndk = 0; const NodeKind *dk = class_def_kinds(&ndk);
   for (int dh = 0; dh < ndk; dh++)
     NT_FOREACH_KIND(nt, dk[dh], id) {
-      const char *mn = class_def_is_class(nt, id) || class_def_is_module(nt, id) ? class_def_name(nt, id) : NULL;
+      const char *mn = class_def_is_class(nt, id) || class_def_is_module(nt, id) ? class_def_key(c, id) : NULL;
       if (mn && sp_streq(mn, nm)) return 1;
     }
   return 0;
@@ -9770,7 +9770,7 @@ int an_class_includes_enumerable(Compiler *c, int ci) {
     int ndk = 0; const NodeKind *dk = class_def_kinds(&ndk);
     for (int dh = 0; dh < ndk; dh++) NT_FOREACH_KIND(nt, dk[dh], id) {
       if (!class_def_is_class(nt, id) || !class_body_includes_enumerable(nt, id)) continue;
-      const char *n = class_def_name(nt, id);
+      const char *n = class_def_key(c, id);
       if (n && !anh_has(&g_enum_cls, n)) anh_add(&g_enum_cls, n);
     }
     g_enum_cls_nt = nt; g_enum_cls_cnt = ncls_now;
@@ -15315,7 +15315,7 @@ int desugar_marshal_restore_gate(Compiler *c, LowerCtx *lc) {
   for (int id = 0; id < lc->n0; id++) {
     NodeKind k = nt_kind(nt, id);
     if (k != NK_ModuleNode && k != NK_ClassNode) continue;
-    const char *cn = class_def_name(nt, id);
+    const char *cn = class_def_key(c, id);
     if (cn && sp_streq(cn, "Marshal")) return 0;
   }
   return 1;
@@ -15351,7 +15351,7 @@ int desugar_thread_start_gate(Compiler *c, LowerCtx *lc) {
   if (!own) return 1;
   for (int id = 0; id < lc->n0; id++) {
     if (nt_kind(nt, id) != NK_ClassNode) continue;
-    const char *cn = class_def_name(nt, id);
+    const char *cn = class_def_key(c, id);
     if (cn && sp_streq(cn, "Thread")) return 0;
   }
   return 1;

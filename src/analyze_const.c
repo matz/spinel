@@ -382,7 +382,7 @@ void an_const_presence(Compiler *c) {
       if (dn && (is_native_decl_name(dn) || is_method_missing_name(dn))) w.native_own = 1;
     }
     else if (k == NK_ClassNode || k == NK_ModuleNode) {
-      const char *cn = class_def_name(nt, id);
+      const char *cn = class_def_key(c, id);
       if (cn && (is_builtin_class_name(cn) || is_builtin_reopen_name(cn))) w.reopened = 1;
       if (is_math_module_name(cn)) w.math_own = 1;
     }

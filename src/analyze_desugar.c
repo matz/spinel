@@ -2031,7 +2031,7 @@ int desugar_explicit_receiver_mixin(Compiler *c) {
     int any = 0;
     const char *self_leaf = NULL;
     if (!is_prog) {
-      self_leaf = class_def_name(nt, id);
+      self_leaf = class_def_key(c, id);
       if (!self_leaf) { free(nb); continue; }
     }
     for (int i = 0; i < bn; i++) {
@@ -6296,7 +6296,7 @@ static int engine_method_absent(Compiler *c, const char *cls, const char *m, int
   if (!me_leaf_defined(nt, cls) || depth > 16) return -1;
   int a = 1;
   for (int id = 0; id < nt->count && a > 0; id++) {
-    const char *nm = class_def_name(nt, id);
+    const char *nm = class_def_key(c, id);
     if (!class_def_opens_frame(nt, id) || !nm || !sp_streq(nm, cls)) continue;
     int sc = class_def_super(nt, id), bn = 0;
     if (sc >= 0) a = nt_kind(nt, sc) == NK_ConstantReadNode ? engine_method_absent(c, nt_str(nt, sc, "name"), m, in, depth + 1) : -1;
@@ -6598,7 +6598,7 @@ static int me_record_defines(Compiler *c, const char *cls, const char *m, int in
   /* (a reopen's `private :mem` or undef_method) */
   for (int id = 0; rec && !unknown && id < nt->count; id++) {
     if (!class_def_is_class(nt, id) || subtree_has(nt, in, id)) continue;
-    const char *nm = class_def_name(nt, id);
+    const char *nm = class_def_key(c, id);
     if (nm && sp_streq(nm, cls) && me_stmts_vis(nt, class_def_body(nt, id), m)) unknown = 1;
   }
   if (is_data) *is_data = rec && !unknown ? data : -1;
@@ -13591,7 +13591,7 @@ int desugar_extend_enumerable(Compiler *c, HostStep *h) {
     int taken = 0;
     for (int id = 0; id < n0 && !taken; id++) {
       NodeKind k = nt_kind(nt, id);
-      const char *cn = class_def_is_class(nt, id) || class_def_is_module(nt, id) ? class_def_name(nt, id)
+      const char *cn = class_def_is_class(nt, id) || class_def_is_module(nt, id) ? class_def_key(c, id)
                      : k == NK_ConstantWriteNode || k == NK_ConstantReadNode || k == NK_ConstantPathNode ||
                        k == NK_DefNode || k == NK_CallNode ? nt_str(nt, id, "name")
                      : k == NK_SymbolNode ? nt_str(nt, id, "value") : NULL;
@@ -14066,7 +14066,7 @@ void desugar_extended_module_attrs(Compiler *c) {
   extended_module_names(nt, &extended);
   for (int m = 0; m < n0; m++) {
     if (!class_def_is_module(nt, m)) continue;
-    const char *mn = class_def_name(nt, m);
+    const char *mn = class_def_key(c, m);
     int body = class_def_body(nt, m);
     int n = 0;
     const int *st = body >= 0 ? nt_arr(nt, body, "body", &n) : NULL;
@@ -15973,7 +15973,7 @@ int desugar_conditional_defs(Compiler *c) {
       lone[nlone++] = strdup(base);
     }
     char msg[512], sel[64];
-    const char *cn = g[0].cls >= 0 ? class_def_name(nt, g[0].cls) : NULL;
+    const char *cn = g[0].cls >= 0 ? class_def_key(c, g[0].cls) : NULL;
     if (!cn) snprintf(msg, sizeof msg, "undefined method '%s' for main", base);
     else if (g[0].cm) snprintf(msg, sizeof msg, "undefined method '%s' for %s %s", base,
                                class_def_is_module(nt, g[0].cls) ? "module" : "class", cn);
@@ -19831,7 +19831,7 @@ int desugar_recursive_param_defaults_at(Compiler *c, LowerCtx *lc, int id) {
     for (int p = parent[ds[i].def]; p >= 0; p = parent[p]) {
       if (fwd_node_is(nt, p, "SingletonClassNode")) ds[i].singleton = 1;
       if (class_def_opens_frame(nt, p)) {
-        ds[i].cls = class_def_name(nt, p);
+        ds[i].cls = class_def_key(c, p);
         break;
       }
     }
@@ -19850,7 +19850,7 @@ int desugar_recursive_param_defaults_at(Compiler *c, LowerCtx *lc, int id) {
   if (!rd_classes) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   for (int k = 0; k < n0; k++)
     if (class_def_is_class(nt, k)) {
-      const char *cn = class_def_name(nt, k);
+      const char *cn = class_def_key(c, k);
       if (cn) rd_classes[rd_nclasses++] = (RdClass){ cn, k };
     }
   qsort(rd_classes, (size_t)rd_nclasses, sizeof *rd_classes, rd_class_cmp);
@@ -21973,7 +21973,7 @@ int desugar_send_aliases(Compiler *c) {
   int n0 = nt->count, changed = 0;
   for (int m = 0; m < n0; m++) {
     if (!class_def_opens_cref(nt, m)) continue;
-    const char *cls = class_def_name(nt, m);
+    const char *cls = class_def_key(c, m);
     int body = class_def_body(nt, m);
     int n = 0; const int *st = cls && body >= 0 && nt_kind(nt, body) == NK_StatementsNode ? nt_arr(nt, body, "body", &n) : NULL;
     for (int k = 0; k < n; k++) {
@@ -22043,7 +22043,7 @@ int desugar_inherited_aliases(Compiler *c) {
   int n0 = nt->count, changed = 0;
   for (int m = 0; m < n0; m++) {
     if (!class_def_is_class(nt, m)) continue;
-    const char *cls = class_def_name(nt, m);
+    const char *cls = class_def_key(c, m);
     if (!cls || class_def_super(nt, m) < 0) continue;   /* only a subclass inherits */
     int body = class_def_body(nt, m);
     int n = 0; const int *st0 = body >= 0 && nt_kind(nt, body) == NK_StatementsNode ? nt_arr(nt, body, "body", &n) : NULL;
@@ -23584,7 +23584,7 @@ int desugar_singleton_body_self(Compiler *c) {
       if (!parent && !(parent = an_parent_map(nt))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
       int p = parent[id];
       while (p >= 0 && nt_kind(nt, p) == NK_StatementsNode) p = parent[p];
-      if (p >= 0 && class_def_opens_frame(nt, p)) cls = class_def_bare_name(nt, p);
+      if (p >= 0 && class_def_opens_frame(nt, p)) cls = class_def_bare_key(c, p);
     }
     changed |= sc_walk(nt, nt_ref(nt, id, "body"), cls);
   }
@@ -24717,7 +24717,7 @@ int desugar_included_hooks(Compiler *c, HostStep *h) {
     const char *cls = NULL;
     int body = -1;
     if (class_def_opens_frame(nt, cn)) {
-      cls = class_def_name(nt, cn);
+      cls = class_def_key(c, cn);
       body = class_def_body(nt, cn);
     }
     else if (ck == NK_ConstantWriteNode) {   /* Name = Struct.new(...) do ... end */
@@ -26299,7 +26299,7 @@ int desugar_dynamic_const_get(Compiler *c) {
     else
       for (int m = 0; m < n0 && first < 0; m++) {
         if (!class_def_opens_cref(nt, m)) continue;
-        const char *bn = class_def_name(nt, m);
+        const char *bn = class_def_key(c, m);
         if (bn && sp_streq(bn, mn) && class_def_body(nt, m) >= 0) first = m;
       }
     if (first < 0) continue;
@@ -26930,7 +26930,7 @@ int desugar_builtin_reopen_self_calls(Compiler *c) {
      + "!"; end; String.include(M)`) */
   for (int m = 0; m < n0; m++) {
     if (!class_def_is_module(nt, m)) continue;
-    const char *mn = class_def_bare_name(nt, m);
+    const char *mn = class_def_bare_key(c, m);
     const char *host = mn ? rbself_module_host(nt, n0, mn) : NULL;
     if (!host) continue;
     char *defs[512], *hdefs[512];
@@ -26942,13 +26942,13 @@ int desugar_builtin_reopen_self_calls(Compiler *c) {
   }
   for (int m = 0; m < n0; m++) {
     if (!class_def_is_class(nt, m)) continue;
-    const char *cn = class_def_name(nt, m);
+    const char *cn = class_def_key(c, m);
     if (!cn || !rbself_builtin(cn)) continue;
     /* the methods every body of the class defines */
     char *defs[512]; int nd = 0;
     for (int m2 = 0; m2 < n0; m2++) {
       if (!class_def_is_class(nt, m2)) continue;
-      const char *cn2 = class_def_name(nt, m2);
+      const char *cn2 = class_def_key(c, m2);
       if (!cn2 || !sp_streq(cn2, cn)) continue;
       int b2 = class_def_body(nt, m2);
       int bn2 = 0; const int *bs2 = b2 >= 0 ? nt_arr(nt, b2, "body", &bn2) : NULL;
@@ -28113,7 +28113,7 @@ int desugar_body_ivars(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int n0 = nt->count, changed = 0;
   for (int m = 0; m < n0; m++) {
-    const char *cn = class_def_opens_frame(nt, m) ? class_def_bare_name(nt, m) : NULL;
+    const char *cn = class_def_opens_frame(nt, m) ? class_def_bare_key(c, m) : NULL;
     int body = class_def_body(nt, m);
     if (!cn || body < 0 || nt_kind(nt, body) != NK_StatementsNode) continue;
     int *hits = NULL, cap = 0, nhits = 0, trigger = 0;
@@ -28502,7 +28502,7 @@ int desugar_builtin_ivars(Compiler *c) {
        (`module Q; attr_reader :q; end; class Integer; include Q; end`);
        Object too, as a reopening of Object's methods do */
     if (class_def_is_module(nt, m) && mode != BIV_OBJECT) {
-      const char *mn = class_def_bare_name(nt, m);
+      const char *mn = class_def_bare_key(c, m);
       const char *host = mn && !biv_has(hosts.mf, hosts.nmf, mn) ? biv_host_of(nt, &hosts, mn) : NULL;
       mode = host ? biv_mode(host) : BIV_NONE;
     }
@@ -28615,7 +28615,7 @@ static int mo_class_own_const(Compiler *c, const char *cn, const char *nm, int d
   int ndk = 0; const NodeKind *dk = class_def_kinds(&ndk);
   for (int dh = 0; dh < ndk; dh++)
     NT_FOREACH_KIND(nt, dk[dh], d) {
-      const char *dn = class_def_opens_cref(nt, d) ? class_def_name(nt, d) : NULL;
+      const char *dn = class_def_opens_cref(nt, d) ? class_def_key(c, d) : NULL;
       if (!dn || !sp_streq(dn, cn)) continue;
       int b = class_def_body(nt, d), bn = 0;
       const int *bs = b >= 0 ? nt_arr(nt, b, "body", &bn) : NULL;
@@ -28719,7 +28719,7 @@ int desugar_object_method_builtin_overrides(Compiler *c) {
   /* Object's own instance methods */
   for (int om = 0; om < n0; om++) {
     if (!class_def_is_class(nt, om)) continue;
-    const char *ocn = class_def_name(nt, om);
+    const char *ocn = class_def_key(c, om);
     if (!ocn || !sp_streq(ocn, "Object") || !mo_def_is_toplevel(nt, om)) continue;
     int ob = class_def_body(nt, om);
     int obn = 0; const int *obs = ob >= 0 ? nt_arr(nt, ob, "body", &obn) : NULL;
@@ -28734,7 +28734,7 @@ int desugar_object_method_builtin_overrides(Compiler *c) {
       int ovr[32], ovc[32]; const char *ocls[32]; int no = 0, bad = 0;
       for (int m = 0; m < n0 && !bad; m++) {
         if (!class_def_is_class(nt, m)) continue;
-        const char *cn = class_def_name(nt, m);
+        const char *cn = class_def_key(c, m);
         const char *g = cn ? mo_override_class(cn) : NULL;
         if (!g || !mo_def_is_toplevel(nt, m) || mo_program_owns(nt, n0, cn) || (mo_dispatch_arm(g) && !mo_vis_changed(nt, n0, cn, mname))) continue;
         int b = class_def_body(nt, m);
@@ -30026,7 +30026,7 @@ int desugar_ffi_library_functions(Compiler *c) {
   int changed = 0;
   for (int m = 0; m < n0; m++) {
     if (!class_def_opens_frame(nt, m)) continue;
-    const char *mn = class_def_name(nt, m);
+    const char *mn = class_def_key(c, m);
     int body = class_def_body(nt, m);
     if (!mn || body < 0 || nt_kind(nt, body) != NK_StatementsNode) continue;
     if (!ffi_library_module(nt, mn, n0)) continue;
@@ -30124,7 +30124,7 @@ int desugar_native_func_defs(Compiler *c) {
   int changed = 0;
   for (int m = 0; m < n0; m++) {
     if (!class_def_is_module(nt, m)) continue;
-    const char *mn = class_def_name(nt, m);
+    const char *mn = class_def_key(c, m);
     int body = class_def_body(nt, m);
     if (!mn || body < 0 || nt_kind(nt, body) != NK_StatementsNode) continue;
     if (comp_ffi_library_module(nt, mn)) continue;

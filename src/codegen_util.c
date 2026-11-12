@@ -7614,7 +7614,7 @@ static int tmc_body_includes(const Compiler *c, int k, int mod) {
   for (int dh = 0; dh < ndk; dh++)
     for (int m = comp_kind_first((Compiler *)c, dk[dh]); m >= 0; m = comp_kind_next((Compiler *)c, m)) {
       if (nt_kind(nt, m) != dk[dh] || !class_def_opens_frame(nt, m)) continue;
-      const char *cn = class_def_name(nt, m);
+      const char *cn = class_def_key(c, m);
       if (!cn || !sp_streq(cn, kn)) continue;
       int body = class_def_body(nt, m), bn = 0;
       const int *bb = body >= 0 && nt_kind(nt, body) == NK_StatementsNode ? nt_arr(nt, body, "body", &bn) : NULL;

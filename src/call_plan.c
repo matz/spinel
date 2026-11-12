@@ -7881,8 +7881,22 @@ int cplan_method_held(Compiler *c, int e, int cap, int *out) {
   return m;
 }
 typedef struct { int guard, cls, sg, mi, ar; const char *name; int from; } VerNeed;   /* (from: VerEntry.from) */
-/* ...and, to tell the asks that repeat one, an open addressing table over them (ix holds an index into v, -1 free) */
-typedef struct { VerNeed *v; int n; int *ix; unsigned nb; } VerNeeds;
+/* The part of an ask that a class's chain decides, not the call: whether
+   the chain holds two versions, the method the table answers, and the
+   arity of the entry, for (class, flags, name, the call's plain argument
+   count, ver_call_n) of an ask not on main (CT_TOP, which reads the call's
+   own place). A call of a name that no type bounds yet asks every class
+   holding two versions of it, so each was redone per call and class:
+   classes x calls (#10546's an_pre_fixpoint). ok 0: no entry is asked.
+   from: the copies' entry's VerEntry.from where mi is a module's versioned
+   copy (mixin_copies_module), 0 where it is none, -1 until asked
+   (ver_pre_needed). */
+typedef struct { int cls; unsigned flags; const char *name; int n; int ok, mi, sg, ar, from; } VerPre;
+/* The survey's state for one build (ver_entries_build): the entries the
+   calls need, an open addressing table over them to tell the asks that
+   repeat one (ix holds an index into v, -1 free), and the asks' memo
+   (VerPre, pre: nbpre slots, npre used) */
+typedef struct { VerNeed *v; int n; int *ix; unsigned nb; VerPre *pre; int npre; unsigned nbpre; } VerNeeds;
 static int ver_need_has(const Compiler *c, const VerNeeds *o, VerNeed w) {
   if (ver_entry_ix(c, w.guard, w.from, w.cls, w.sg, w.name, w.ar) >= 0) return 1;
   unsigned at = o->nb ? ver_key_hash(w.cls, w.sg, w.name, w.ar) & (o->nb - 1) : 0;
@@ -7914,39 +7928,30 @@ static void ver_need_add(VerNeeds *o, VerNeed w) {
     o->ix[at] = o->n - 1;
   }
 }
-/* The part of an ask that a class's chain decides, not the call: whether
-   the chain holds two versions, the method the table answers, and the
-   arity of the entry, for (class, flags, name, the call's plain argument
-   count, ver_call_n) of an ask not on main (CT_TOP, which reads the call's
-   own place). A call of a name that no type bounds yet asks every class
-   holding two versions of it, so each was redone per call and class:
-   classes x calls (#10546's an_pre_fixpoint). ok 0: no entry is asked. */
-typedef struct { int cls; unsigned flags; const char *name; int n; int ok, mi, sg, ar; } VerPre;
-static VerPre *ver_pre_tab; static int ver_pre_n; static unsigned ver_pre_nb;
 static unsigned ver_pre_hash(int k, unsigned flags, const char *nm, int n) {
   return ver_mix(sp_strhash(nm) * 31u + (unsigned)(k + 1) * 131u + flags * 7u + (unsigned)(n + 1));
 }
-static const VerPre *ver_pre(Compiler *c, int id, const char *nm, int k, unsigned flags) {
+static VerPre *ver_pre(Compiler *c, VerNeeds *o, int id, const char *nm, int k, unsigned flags) {
   ElabVersion vs[VER_MAX_ARMS];
   int n = ver_call_n(c, id);
-  if (ver_pre_n * 2 >= (int)ver_pre_nb) {
-    unsigned onb = ver_pre_nb; VerPre *op = ver_pre_tab;
-    ver_pre_nb = onb ? onb * 2 : 256;
-    if (!(ver_pre_tab = calloc(ver_pre_nb, sizeof *ver_pre_tab))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  if (o->npre * 2 >= (int)o->nbpre) {
+    unsigned onb = o->nbpre; VerPre *op = o->pre;
+    o->nbpre = onb ? onb * 2 : 256;
+    if (!(o->pre = calloc(o->nbpre, sizeof *o->pre))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
     for (unsigned b = 0; b < onb; b++) {
       if (!op[b].name) continue;
-      unsigned at = ver_pre_hash(op[b].cls, op[b].flags, op[b].name, op[b].n) & (ver_pre_nb - 1);
-      while (ver_pre_tab[at].name) at = (at + 1) & (ver_pre_nb - 1);
-      ver_pre_tab[at] = op[b];
+      unsigned at = ver_pre_hash(op[b].cls, op[b].flags, op[b].name, op[b].n) & (o->nbpre - 1);
+      while (o->pre[at].name) at = (at + 1) & (o->nbpre - 1);
+      o->pre[at] = op[b];
     }
     free(op);
   }
-  unsigned at = ver_pre_hash(k, flags, nm, n) & (ver_pre_nb - 1);
-  for (; ver_pre_tab[at].name; at = (at + 1) & (ver_pre_nb - 1)) {
-    const VerPre *w = &ver_pre_tab[at];
+  unsigned at = ver_pre_hash(k, flags, nm, n) & (o->nbpre - 1);
+  for (; o->pre[at].name; at = (at + 1) & (o->nbpre - 1)) {
+    VerPre *w = &o->pre[at];
     if (w->cls == k && w->flags == flags && w->n == n && sp_streq(w->name, nm)) return w;
   }
-  VerPre p = { k, flags, nm, n, 0, -1, 0, 0 };
+  VerPre p = { k, flags, nm, n, 0, -1, 0, 0, -1 };
   unsigned fl = flags;
   if (elab_chain_versions(c, k, (flags & CT_CMETHOD) != 0, nm, vs, VER_MAX_ARMS) >= 2 &&
       (p.mi = ct_lookup(c, id, k, nm, &fl, NULL)) >= 0 && !c->scopes[p.mi].mixin_guarded && ct_versioned(c, p.mi, nm)) {
@@ -7954,9 +7959,26 @@ static const VerPre *ver_pre(Compiler *c, int id, const char *nm, int k, unsigne
     p.sg = (fl & CT_CMETHOD) != 0;
     p.ar = ver_call_arity(c, id, k, p.sg, nm, p.mi);
   }
-  ver_pre_tab[at] = p;
-  ver_pre_n++;
-  return &ver_pre_tab[at];
+  o->pre[at] = p;
+  o->npre++;
+  return &o->pre[at];
+}
+/* Does the survey already need every entry an ask of p may add: the
+   chain's entry of its (class, side, name, arity) and, where the table's
+   method is a module's versioned copy, the copies' entry (VerPre.from)?
+   An ask answers only which of the two its call needs (ct_version's n and
+   copies), so one whose answers are all needed adds nothing and is not
+   asked. */
+static int ver_pre_needed(Compiler *c, VerNeeds *o, VerPre *p) {
+  VerNeed w = { VER_ENTRY_CHAIN, p->cls, p->sg, p->mi, p->ar, p->name, 0 };
+  if (!ver_need_has(c, o, w)) return 0;
+  if (p->from < 0) {
+    ElabVersion vs[VER_MAX_ARMS];
+    int to[VER_MAX_ARMS], nc = 0;
+    p->from = mixin_copies_module(c, p->mi, to, vs, &nc) + 1;
+  }
+  w.from = p->from;
+  return !w.from || ver_need_has(c, o, w);
 }
 static void ver_need(Compiler *c, int id, const char *nm, int k, unsigned flags, void *arg) {
   ElabVersion vs[VER_MAX_ARMS];
@@ -7969,8 +7991,8 @@ static void ver_need(Compiler *c, int id, const char *nm, int k, unsigned flags,
      ask main's chain, which ends in Object's: ct_lookup. A later prepend's
      copy has its guard entries: ver_entries_build) */
   if (!(flags & CT_TOP)) {
-    const VerPre *p = ver_pre(c, id, nm, k, flags);
-    asked = p->ok;
+    VerPre *p = ver_pre(c, arg, id, nm, k, flags);
+    asked = p->ok && !ver_pre_needed(c, arg, p);
     mi = p->mi; sg = p->sg; ar = p->ar;
   }
   else if (elab_chain_versions(c, rcls, 1, nm, vs, VER_MAX_ARMS) < 2 ||
@@ -8087,7 +8109,7 @@ static int guard_else_bare(Compiler *c, int behind, int cls, int sg, const char 
 void ver_entries_build(Compiler *c) {
   const NodeTable *nt = c->nt;
   const char *names[2];
-  VerNeeds o = { NULL, 0, NULL, 0 };
+  VerNeeds o = { NULL, 0, NULL, 0, NULL, 0, 0 };
   int *gc = NULL, ngc = 0;
   for (int s = 0; s < c->nscopes; s++) {   /* the later prepends' copies */
     if (!c->scopes[s].mixin_guarded) continue;
@@ -8154,8 +8176,7 @@ void ver_entries_build(Compiler *c) {
                          : ver_entry_make(c, NULL, o.v[i].from ? o.v[i].from - 1 : o.v[i].cls, o.v[i].cls, o.v[i].sg, o.v[i].name, o.v[i].mi, o.v[i].ar, 1, NULL, &finds);
     ver_entry_add(c, e >= 0 && o.v[i].guard != VER_ENTRY_LAYER ? c->scopes[e].name : o.v[i].name, (struct VerEntry){ NULL, o.v[i].guard, o.v[i].cls, o.v[i].sg, o.v[i].ar, e, .finds = finds, .from = o.v[i].from, .behind = behind + 1 });
   }
-  free(o.v); free(o.ix);
-  free(ver_pre_tab); ver_pre_tab = NULL; ver_pre_n = 0; ver_pre_nb = 0;   /* (the asks' memo lives for one build) */
+  free(o.v); free(o.ix); free(o.pre);
   ver_entries_index(c);
   /* The table answers the general entry. Copies keep their own super
      chain under a shadow name; argument-specific entries stay hidden. */

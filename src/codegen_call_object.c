@@ -799,6 +799,9 @@ int emit_call_instance_eval_arms(Compiler *c, int id, Buf *b, const NodeTable *n
        answer different kinds, on a receiver not dispatched by class: the
        call is boxed (infer_call's instance_exec arm), so is this site's value */
     int ie_fwd_boxed = 0;
+    /* the block spliced is the one the enclosing splice was given, so its
+       body is that block's definition-site code (as a yield splices it) */
+    int ie_blk_fwd = 0;
     if (nt_call_has_block_arg(nt, id) && call_forwards_own_block(c, id) &&
         g_ie_poly_node != id && (recv < 0 || comp_ntype(c, recv) != TY_POLY)) {
       Scope *fsc = comp_scope_of(c, id);
@@ -822,6 +825,7 @@ int emit_call_instance_eval_arms(Compiler *c, int id, Buf *b, const NodeTable *n
         return 1;
       }
       blk = g_block_id;
+      ie_blk_fwd = blk >= 0;
     }
     TyKind rtype = ie_self_cls >= 0 ? ty_object(ie_self_cls) : comp_ntype(c, recv);
     if (blk >= 0 && ty_is_object(rtype) &&
@@ -1057,6 +1061,17 @@ int emit_call_instance_eval_arms(Compiler *c, int id, Buf *b, const NodeTable *n
           else { g_loop_break_var = NULL; g_ie_next_var = NULL; }
           g_c_loop_depth++;   /* the do{} wrapper makes `continue` valid */
         }
+        /* A forwarded block's body runs in its definition site's block
+           context, as a yield splices it: its own `&block` names the block
+           one level out, not the one being spliced, which re-spliced the
+           same body until the compiler ran out of stack (#11649) */
+        int sv_ieb = g_block_id, sv_iefb = g_yield_block_fallback;
+        const char *sv_iebpn = g_block_param_name, *sv_iebown = g_block_owner_param_name;
+        if (ie_blk_fwd) {
+          g_block_id = g_yield_block_fallback; g_yield_block_fallback = -1;
+          g_block_param_name = g_block_owner_param_name;
+          g_block_owner_param_name = g_yield_block_fallback_param_name;
+        }
         for (int j = 0; j < upto; j++) emit_stmt(c, ie_bb[j], g_pre, g_indent);
         if (!last_as_stmt) {
           Buf vb; memset(&vb, 0, sizeof vb);
@@ -1075,6 +1090,8 @@ int emit_call_instance_eval_arms(Compiler *c, int id, Buf *b, const NodeTable *n
           }
           free(vb.p);
         }
+        g_block_id = sv_ieb; g_yield_block_fallback = sv_iefb;
+        g_block_param_name = sv_iebpn; g_block_owner_param_name = sv_iebown;
         if (ie_bn_wrap) {
           g_c_loop_depth--;
           g_loop_break_var = sv_lb; g_ie_next_var = sv_nx;

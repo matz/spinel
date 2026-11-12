@@ -3627,7 +3627,8 @@ static void block_next_arms(Compiler *c, int node, BsvArms *a) {
    `next 1` beside `next "s"` to the boxed kind, which the store evidence
    leaves alone. So the typed Array stayed, and the nil raised TypeError or
    the String did not compile. The first value (tail or `next`, arm by arm)
-   of such a kind is answered, and the Array widens as it does for a block
+   of such a kind is answered (a nil gives way to a later value of another
+   kind, see bsv_leaf), and the Array widens as it does for a block
    with that one value. An `elem` not known yet (TY_UNKNOWN or TY_POLY: a
    row read out of a table) answers so only for values of mixed kinds, with
    one no Array of numbers or objects holds. `joined` otherwise. `*num`

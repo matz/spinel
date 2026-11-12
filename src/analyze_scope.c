@@ -2768,11 +2768,12 @@ static int rsl_answers_self(const char *m) {
 /* Does read r of the list leave its Array as it is? It may be:
    - the receiver of an Array read (BOP_READ_ARRAY_INTACT) the program does
      not define again; a read that answers the Array itself
-     (`keys.each { }`) only where its value is dropped;
+     (`keys.each { }`, `*keys.freeze`) only where its value is dropped
+     or is itself such a read;
    - a splat operand (`*keys` passes the elements);
    - an interpolation (`"#{keys}"` makes a new String);
    - the argument of puts, print, p or pp (p only where its value is
-     dropped, as p answers its argument). */
+     dropped or is such a read, as p answers its argument). */
 static int rsl_read_keeps_list(Compiler *c, const int *par, int r) {
   const NodeTable *nt = c->nt;
   int p = par[r];
@@ -2782,7 +2783,7 @@ static int rsl_read_keeps_list(Compiler *c, const int *par, int r) {
   if (pk == NK_CallNode && nt_ref(nt, p, "receiver") == r) {
     const char *m = nt_str(nt, p, "name");
     return m && bop_name_has_reader(m, BOP_READ_ARRAY_INTACT) && rsl_no_own_method(nt, m) &&
-           (!rsl_answers_self(m) || comp_value_dropped(c, p));
+           (!rsl_answers_self(m) || comp_value_dropped(c, p) || rsl_read_keeps_list(c, par, p));
   }
   if (pk == NK_StatementsNode) {
     int bn = 0; nt_arr(nt, p, "body", &bn);
@@ -2796,7 +2797,7 @@ static int rsl_read_keeps_list(Compiler *c, const int *par, int r) {
     if (an != 1 || !m || nt_ref(nt, k, "receiver") >= 0 || nt_ref(nt, k, "block") >= 0) return 0;
     if (!rsl_no_own_method(nt, m) || !rsl_no_own_method(nt, "inspect") || !rsl_no_own_method(nt, "to_s")) return 0;
     if (sp_streq(m, "puts") || sp_streq(m, "print")) return 1;
-    return (sp_streq(m, "p") || sp_streq(m, "pp")) && comp_value_dropped(c, k);
+    return (sp_streq(m, "p") || sp_streq(m, "pp")) && (comp_value_dropped(c, k) || rsl_read_keeps_list(c, par, k));
   }
   return 0;
 }

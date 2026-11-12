@@ -329,7 +329,7 @@ static int str_render_ident(Compiler *c, int v, int form, StrForm *sf) {
   else if (emit_strbuf_route_box(c, v, b)) return SPF_HANDLE;
   /* (an element a String Array of handles reads or removes is that
      handle, as a slot's is) */
-  else if (strh_handle_call(c, v)) {
+  else if (one_str_elem_call(c, v, TY_UNKNOWN)) {
     sf->cty = TY_STRBUF;
     strh_elem_handle_text(c, v, b);
     return SPF_HANDLE;

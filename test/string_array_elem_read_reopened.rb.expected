@@ -1,0 +1,39 @@
+own-min!
+own-max
+own-sample
+own-at0
+own-fetch1
+own-dig2
+own-delete_at0
+own-delete-b
+own-max!
+own-sample!
+own-at2!
+own-fetch0!
+own-dig1!
+own-delete_at2!
+own-delete-c!
+own-fetch1?
+["own-at1", "own-dig0", "own-min", "own-max", "own-sample", "own-fetch2", "own-delete_at1", "own-delete-a"]
+false
+false
+false
+false
+false
+false
+false
+own-min|own-fetch0|own-delete-x
+true
+true
+own-at3own-dig4
+["b", "a", "c"]
+own-sample?
+own-min/own-max
+7
+OWN-DELETE-B
+["b", "a", "c"]
+true
+c34
+["b1", "a2"]
+false
+["a2"]

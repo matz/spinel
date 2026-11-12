@@ -2013,6 +2013,7 @@ void emit_typed_elem_value(Compiler *c, int node, TyKind rt, Buf *b) {
   Repr vr = repr_of(c, node);
   TyKind vt = vr.as_ty;
   Buf v; memset(&v, 0, sizeof v);
+  int is_held = 0;
   if (vr.kind == RK_BOXED && (et == TY_INT || et == TY_FLOAT || et == TY_STRING)) {
     buf_printf(&v, "sp_poly_elem_%s(", et == TY_INT ? "i" : et == TY_FLOAT ? "f" : "s");
     emit_expr(c, node, &v);
@@ -2025,8 +2026,9 @@ void emit_typed_elem_value(Compiler *c, int node, TyKind rt, Buf *b) {
     emit_unresolved_coerced(c, node, et, &v);
   else if (et == TY_INT) emit_int_expr_nilable(c, node, &v);
   else if (et == TY_FLOAT) emit_float_expr(c, node, &v);
-  else emit_typed_elem_coerce(c, node, rt, "an Array element", &v);
-  emit_typed_elem_hold(c, node, rt, v.p ? v.p : "", b);
+  else is_held = emit_typed_elem_coerce(c, node, rt, "an Array element", &v);
+  if (is_held) buf_puts(b, v.p ? v.p : "");
+  else emit_typed_elem_hold(c, node, rt, v.p ? v.p : "", b);
   free(v.p);
 }
 /* The suffix of the element-store entries of typed Array kind rt (the
@@ -2051,15 +2053,24 @@ const char *typed_elem_store_sfx(TyKind rt) {
    or refuses it (emit_coerce), the face aside: where the element is held as
    the handle, a String of either face, which that slot takes as it is
    (CF_FIT, its text under SP_STR_B), is written as it is, for
-   emit_typed_elem_hold to take its handle. */
-void emit_typed_elem_coerce(Compiler *c, int node, TyKind rt, const char *what, Buf *b) {
+   emit_typed_elem_hold to take its handle. An element another String
+   container answers (one_str_elem_call) is written as the handle that
+   container holds (strh_elem_handle_text), the element as it is held
+   already: the answer is 1 then, and the text is not handed to
+   emit_typed_elem_hold; 0 for every other text. */
+int emit_typed_elem_coerce(Compiler *c, int node, TyKind rt, const char *what, Buf *b) {
   TyKind et = ty_array_elem(rt), from = TY_UNKNOWN;
   if (typed_elem_held(rt) == TY_STRBUF && repr_coerce_plan(c, node, et, CO_HOLD, &from) == CF_FIT &&
       (from == TY_STRING || from == TY_STRBUF)) {
+    if (repr_of(c, node).kind != RK_BOXED && one_str_elem_call(c, node, TY_UNKNOWN)) {
+      strh_elem_handle_text(c, node, b);
+      return 1;
+    }
     emit_expr(c, node, b);
-    return;
+    return 0;
   }
   emit_coerce(c, node, et, CO_HOLD, what, b);
+  return 0;
 }
 /* text, the value node is written as on its way into an element of rt, as
    the element is held: for the handle, the handle of either face (SP_STR_HDL:
@@ -3894,14 +3905,64 @@ const NativeMethod *strbuf_native_answer(Compiler *c, int n) {
 void strh_elem_handle_text(Compiler *c, int v, Buf *b) {
   /* (one representation: the typed container's own read answers the handle;
      emit_expr reads it as bytes unless the node is named here) */
-  /* (the read answers the element's bytes face, or a temp it is bound to
-     of either face; the handle is its owner, SP_STR_HDL) */
   int save = g_one_elem_raw;
-  g_one_elem_raw = v;
-  buf_puts(b, "SP_STR_HDL(");
-  emit_expr(c, v, b);
-  buf_puts(b, ")");
+  int call = nt_paren_single(c->nt, v);
+  int recv = call >= 0 && nt_kind(c->nt, call) == NK_CallNode ? nt_ref(c->nt, call, "receiver") : -1;
+  /* (a read an emitter has bound to a temp of its own is that temp, in the
+     face its binder chose; the binder names the node it was handed, the
+     read or the parentheses around it) */
+  int bound = 0;
+  for (int i = g_n_argov - 1; i >= 0 && !bound; i--) bound = g_argov_node[i] == call || g_argov_node[i] == v;
+  if (!bound && recv >= 0 && typed_elem_held(repr_of(c, recv).as_ty) == TY_STRBUF &&
+      one_str_elem_call(c, call, TY_UNKNOWN)) {
+    /* a read of an Array that holds the handle, as written (no sequence in
+       parentheses), is the element as the Array holds it: the read's own
+       text (typed_elem_read_raw) */
+    g_one_elem_raw = call;
+    emit_expr(c, call, b);
+  }
+  else {
+    /* (a String Hash's read answers the value's bytes, or a temp it is
+       bound to of either face; the handle is its owner, SP_STR_HDL) */
+    g_one_elem_raw = v;
+    buf_puts(b, "SP_STR_HDL(");
+    emit_expr(c, v, b);
+    buf_puts(b, ")");
+  }
   g_one_elem_raw = save;
+}
+/* Is node id's read of an element of typed Array kind rt written as the
+   handle the Array holds (elem_held), sp_String *: the raw read
+   g_one_elem_raw names, whose consumer (emit_expr, strh_elem_handle_text)
+   takes the face it wants of it? Any other read of such an Array is the
+   element's bytes. The one place an emitter asks which of the two C types
+   its read has. */
+int typed_elem_read_raw(TyKind rt, int id) {
+  return typed_elem_held(rt) == TY_STRBUF && id == g_one_elem_raw;
+}
+/* An element read of typed Array kind rt, written by the emitters of node
+   id as the entry `sp_<k>Array_<fn><typed_elem_store_sfx>(..)`: for an
+   Array that holds the handle, the bytes of the handle that entry answers
+   (SP_STR_B) unless the node is the raw read (typed_elem_read_raw). Opens
+   the wrapper and answers whether it did; the caller closes it with ")". */
+int typed_elem_read_open(TyKind rt, int id, Buf *b) {
+  if (typed_elem_held(rt) != TY_STRBUF || typed_elem_read_raw(rt, id)) return 0;
+  buf_puts(b, "SP_STR_B(");
+  return 1;
+}
+/* The read of an element of typed Array kind rt, whose runtime entries are
+   sp_<k>Array_*, as the value a reader of its element takes: the entry
+   `sp_<k>Array_get<typed_elem_store_sfx>(<args>)`, args the Array and the
+   index as C text (printf-formatted), and for an Array that holds the
+   handle the String's bytes, SP_STR_B of the handle that entry answers.
+   Written to out. */
+void typed_elem_getf(char *out, size_t n, TyKind rt, const char *k, const char *argfmt, ...) {
+  int h = typed_elem_held(rt) == TY_STRBUF;
+  int len = snprintf(out, n, "%ssp_%sArray_get%s(", h ? "SP_STR_B(" : "", k, typed_elem_store_sfx(rt));
+  va_list ap; va_start(ap, argfmt);
+  if (len >= 0 && (size_t)len < n) len += vsnprintf(out + len, n - (size_t)len, argfmt, ap);
+  va_end(ap);
+  if (len >= 0 && (size_t)len < n) snprintf(out + len, n - (size_t)len, h ? "))" : ")");
 }
 /* Is v an element read, pop or shift of a String Array of handles, which
    answers the String's handle (strh_elem_handle_text)? */
@@ -3998,38 +4059,16 @@ int one_str_elem_call(Compiler *c, int v, TyKind rt) {
   { TyKind vt0 = comp_ntype(c, v); if (vt0 != TY_STRING && vt0 != TY_STRBUF) return 0; }
   int recv0 = nt_ref(nt, v, "receiver");
   if (rt == TY_UNKNOWN && recv0 >= 0) rt = comp_ntype(c, recv0);
-  if (rt == TY_STR_ARRAY) {
-    int op = strh_call_op(c, v, TY_STR_ARRAY);
-    if (op == STRH_ELEM || op == STRH_TAKE) return 1;
-    /* (an index known only at run time, the call typed a String: its
-       emitter reads the element, sp_StrArray_get) */
-    const char *nm0 = nt_str(nt, v, "name");
-    int ca0 = nt_ref(nt, v, "arguments"), an0 = 0;
-    const int *av0 = ca0 >= 0 ? nt_arr(nt, ca0, "arguments", &an0) : NULL;
-    if (nm0 && sp_streq(nm0, "[]") && an0 == 1 && nt_ref(nt, v, "block") < 0 &&
-        comp_ntype(c, av0[0]) == TY_POLY && comp_ntype(c, v) == TY_STRING) return 1;
-  }
-  else if (rt != TY_STR_STR_HASH && rt != TY_INT_STR_HASH) return 0;
+  /* (an Array's reads and removals of one element, which the runtime
+     answers as the element, are the builtin's unless the program gives
+     Array a method of the name: strh_call_op) */
+  if (rt == TY_STR_ARRAY) return strh_call_op(c, v, TY_STR_ARRAY) != STRH_NONE;
+  if (rt != TY_STR_STR_HASH && rt != TY_INT_STR_HASH) return 0;
   const char *nm = nt_str(nt, v, "name");
   int ca = nt_ref(nt, v, "arguments"), argc = 0;
   const int *av = ca >= 0 ? nt_arr(nt, ca, "arguments", &argc) : NULL;
   if (!nm || nt_ref(nt, v, "block") >= 0 || nt_argv_has(nt, av, argc, NT_ARG_SPLAT | NT_ARG_KEYWORDS | NT_ARG_BLOCK)) return 0;
-  if (rt == TY_STR_ARRAY) {
-    /* the other reads and removals of one element the runtime answers as
-       the element (sp_StrArray_min, _max, _sample, _delete_at, _delete) */
-    if (argc == 0) return sp_streq(nm, "min") || sp_streq(nm, "max") || sp_streq(nm, "sample");
-    if (argc == 1 && (sp_streq(nm, "delete_at") || sp_streq(nm, "at") || sp_streq(nm, "fetch")))
-      return comp_ntype(c, av[0]) == TY_INT;
-    return argc == 1 && sp_streq(nm, "delete") && comp_ntype(c, av[0]) == TY_STRING;
-  }
   return argc == 1 && (sp_streq(nm, "[]") || sp_streq(nm, "fetch") || sp_streq(nm, "delete"));
-}
-int strh_handle_call(Compiler *c, int v) {
-  const NodeTable *nt = c->nt;
-  if (v < 0 || nt_kind(nt, v) != NK_CallNode) return 0;
-  int recv = nt_ref(nt, v, "receiver");
-  if (one_str_elem_call(c, v, TY_UNKNOWN)) return 1;
-  return 0;
 }
 /* Is v an element read of a String Array of handles that reads like a
    variable's slot: a variable's Array at an index that is an Integer literal
@@ -6493,7 +6532,7 @@ void emit_str_array_handles(Compiler *c, int v, Buf *b) {
      object, so it keeps the frozen flag (`@b = ["x"].freeze`). */
   buf_printf(b, "; SP_GC_ROOT(_t%d); sp_PolyArray *_t%d = _t%d ? sp_PolyArray_new() : NULL; SP_GC_ROOT(_t%d);"
                 " for (sp_int _t%d = 0; _t%d && _t%d < sp_StrArray_length(_t%d); _t%d++)"
-                " sp_PolyArray_push(_t%d, sp_box_nullable_obj(sp_String_new_shared(sp_StrArray_get(_t%d, _t%d)),"
+                " sp_PolyArray_push(_t%d, sp_box_nullable_obj(sp_StrArray_get_e(_t%d, _t%d),"
                 " SP_BUILTIN_STRBUF)); if (_t%d) _t%d->frozen = _t%d->frozen; _t%d; })",
              ta, tp, ta, tp, ti, ta, ti, ta, ti, tp, ta, ti, tp, tp, ta, tp);
 }

@@ -557,11 +557,9 @@ void emit_str_form_handle(Compiler *c, int v, Buf *b);
    a variable's slot (a local's Array at a literal or local index) */
 void strh_elem_handle_text(Compiler *c, int v, Buf *b);
 int strh_elem_slot(Compiler *c, int v);
-int strh_handle_call(Compiler *c, int v);
 int one_str_elem_call(Compiler *c, int v, TyKind rt);
 /* one representation: a block parameter bound to a typed String Array's element is the handle (codegen_fold.c) */
 TyKind one_elem_decl_type(const char *k, TyKind et);
-const char *one_elem_get_sfx(const char *k);
 /* a walk's String Array element `_sa->data[_si]` as the bytes the push or the box takes
    (the element is the handle under the mode; the text is unchanged otherwise) */
 #define ONE_SA_ELEM ("SP_SEB(_sa->data[_si])")
@@ -1733,11 +1731,14 @@ int strbuf_marked_yields_handle(Compiler *c, int v);
 void emit_scope_local_ref(Compiler *c, Scope *s, const char *name, Buf *b);
 void emit_typed_elem_value(Compiler *c, int node, TyKind rt, Buf *b);
 void emit_typed_elem_hold(Compiler *c, int node, TyKind rt, const char *text, Buf *b);
-void emit_typed_elem_coerce(Compiler *c, int node, TyKind rt, const char *what, Buf *b);
+int emit_typed_elem_coerce(Compiler *c, int node, TyKind rt, const char *what, Buf *b);
 const char *typed_elem_sfx(TyKind rt);
 const char *typed_elem_store_sfx(TyKind rt);
 TyKind typed_elem_held(TyKind rt);
 int typed_elem_hold_may_make(Compiler *c, int node, TyKind rt);
+int typed_elem_read_raw(TyKind rt, int id);
+int typed_elem_read_open(TyKind rt, int id, Buf *b);
+void typed_elem_getf(char *out, size_t n, TyKind rt, const char *k, const char *argfmt, ...) __attribute__((format(printf, 5, 6)));
 void emit_block_locals_reset(Compiler *c, int blk, Buf *b, int indent);
 const char *resolve_class_alias(Compiler *c, const char *cname);
 const char *resolve_class_alias_chain(Compiler *c, const char *cname);

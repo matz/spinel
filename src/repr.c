@@ -1133,8 +1133,12 @@ static int repr_strbuf_src(const Compiler *c, int node, TyKind t) {
   NodeKind k = nt_kind(nt, node);
   if (repr_self_shared(c, node)) return RS_HANDLE;
   /* an element a String Array of handles reads or removes is the handle
-     the Array keeps, as a String Range's endpoint is (#8328 step 5) */
-  if ((t == TY_STRING || t == TY_STRBUF) && strh_handle_call(mc, node)) return RS_HANDLE;
+     the Array keeps, as a String Range's endpoint is (#8328 step 5): the
+     call as written. A sequence in parentheses that ends in one is stored
+     as any String of either face is: an argument held ahead of its call
+     as its handle is bound as that handle, and a consumer of bytes without
+     a face of its own (eql?, casecmp?) reads the bound text as it is */
+  if ((t == TY_STRING || t == TY_STRBUF) && k == NK_CallNode && one_str_elem_call(mc, node, TY_UNKNOWN)) return RS_HANDLE;
   if (t == TY_STRING) {
     /* a global holding the handle (--share-strings): its read boxes it */
     if (repr_static_read_kind(k)) return repr_static_share(c, node) ? RS_HANDLE : RS_NONE;

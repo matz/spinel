@@ -562,8 +562,9 @@ int is_class_declaration_call(const char *n);  /* visibility, attr_*, include/ex
    literal block, 2 a block argument). */
 typedef enum {
   STRH_NONE,
-  STRH_ELEM,     /* [](i), at(i), first, last: the element, a String */
-  STRH_TAKE      /* pop, shift: removes and answers the element */
+  STRH_ELEM,     /* [](i), at(i), fetch(i), dig(i), first, last, min, max, sample: the element, a String */
+  STRH_TAKE,     /* pop, shift, delete_at(i): removes and answers the element */
+  STRH_DELETE    /* delete(s): removes the elements equal to a String and answers one of them */
 } StrhOp;
 int strh_op(const char *n, int argc, int block);
 /* the receiver kind a block-taking iterator name belongs to */

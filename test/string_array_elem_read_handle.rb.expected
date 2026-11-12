@@ -1,0 +1,235 @@
+a1
+a12
+c3
+["a127", "b456", "c38"]
+true
+true
+true
+true
+true
+true
+true
+true
+true
+true
+true
+c38x
+["a127", "b456"]
+a127y
+true
+["b456"]
+true
+q!
+["p"]
+nw
+[]
+true
+["x0", "y", "z"]
+y!
+["x0!0", "y!1", "z!2"]
+["x0!0m", "y!1m", "z!2m"]
+true
+["x0!0ms", "y!1ms", "z!2ms"]
+["x0!0msf", "y!1msf", "z!2msf"]
+true
+["x0!0msfw0", "y!1msfw1", "z!2msfw2"]
+true
+[false, true, false]
+true
+["x0!0msfw0.", "y!1msfw1.", "z!2msfw2."]
+["x0!0msfw0.", "y!1msfw1.,", "z!2msfw2.,"]
+xyz
+1
+true
+1
+true
+y!1msfw1.,K
+true
+true
+true
+a!
+a!
+["a!", "b", "", "c", "?"]
+?z
+["a!", "b", "", "c"]
+["a!.", "b.", ".", "c."]
+true
+["x-", "y+-", "z-"]
+true
+true
+true
+true
+true
+true
+true
+a!
+a!
+["c?", "a!"]
+["b"]
+xs+ys+zs+
+true
+["xs+", "ys+", "zs+"]
+nil
+nil
+nil
+nil
+true
+"x"
+"z"
+"x"
+nil
+"z"
+["x", 0]
+[nil, 1]
+["z", 2]
+[false, true, false]
+["x", "z"]
+"z"
+nil
+"x"
+nil
+[]
+nil
+nil
+nil
+nil
+nil
+nil
+a
+nil
+nil
+nil
+nil
+["a"]
+can't modify frozen String: "lit"
+can't modify frozen String: "lit"
+can't modify frozen String: "lit2"
+can't modify frozen String: "lit"
+can't modify frozen String: "a"
+true
+["lit"]
+["made1", "made1", "made3", "made4", "made5g39g39g39", "made5g39g39g39", "made6", "made7", "made9", "MADE10g39g39g39", "made11", "made12", "made101", "made101", "made103", "made104", "made105g39g39g39", "made105g39g39g39", "made106", "made107", "made109", "MADE110g39g39g39", "made111", "made112", "made201", "made201", "made203", "made204", "made205g39g39g39", "made205g39g39g39", "made206", "made207", "made209", "MADE210g39g39g39", "made211", "made212"]
+["a", 1]
+["c", 1]
+["a", 1]
+["b", 1]
+["a", "q"]
+["b", 1]
+["other"]
+["a!", 1]
+["a?", "a?"]
+str=f1
+f2
+f0|f2
+2
+F1
+true
+f1f0f0f2f0f2f1
+index 7 outside of array bounds: -3...3
+got f0
+["f0", "f1", "f2"]
+true
+aa!
+["x", "y"]
+nil
+x?
+true
+[]
+true
+nil
+["n1"]
+q#
+["p"]
+["q", "b<", "z>"]
+true
+true
+[nil, nil]
+["BB", "aa"]
+["BB", "r"]
+["BB?", "r!"]
+true
+true
+true
+true
+in
+["M0", "in", "m2!"]
+["ma0fm", "mbatd", "mclx"]
+true
+true
+true
+true
+true
+true
+true
+true
+true
+mbatd|ma0fm|mclx|ma0fm|mclx
+true
+true
+true
+ma0fms
+mbatd
+mclxp
+n1D
+n2E
+["mbatd"]
+cc
+nil
+nil
+nil
+["bb!", "aa?", "cc!"]
+bb!
+aa?
+cc!
+aa?
+cc!
+aa?+
+bb!
+3
+true
+true
+true
+true
+true
+true
+true
+true
+true
+true
+true
+cc!p
+bb!s
+["aa?"]
+true
+true
+d1D
+["d2"]
+h2
+nil
+["h0^"]
+h2!
+["h0^#", "h1w", "h2!"]
+true
+ae
+true
+false
+true
+aee
+true
+false
+false
+false
+true
+["a"]
+true
+false
+bx
+["a", "c"]
+nil
+["a", "b"]
+["k", "f"]
+["a", "b", "c", "d", "e"]
+["a", "k", "e"]
+["b", "c", "d"]
+qd
+["b", "c"]

@@ -4518,6 +4518,12 @@ int elab_own_method_at(Compiler *c, int cls, const char *name, LoadPoint p) {
   return unsure ? ELAB_UNKNOWN : o == LR_STOP ? ELAB_YES : o;
 }
 
+int elab_reached_method_at(Compiler *c, int cls, const char *name, LoadPoint p) {
+  if (!lr_ready(c, p) || !name) return ELAB_UNKNOWN;
+  int unsure = 0, o = lr_search_one(c, cls, 0, name, -1, p, p.region < 0, 1, NULL, 0, &unsure, 0);
+  return unsure ? ELAB_UNKNOWN : o == LR_STOP ? ELAB_YES : o;
+}
+
 /* Is the version recorded at node in cls's history of `name` on its
    singleton (an alias in a `class << self`), not on its instance side? */
 int elab_version_on_singleton(Compiler *c, int cls, const char *name, int node) {

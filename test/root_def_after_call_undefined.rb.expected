@@ -1,0 +1,19 @@
+undefined method 'obj_priv' for nil
+undefined method 'obj_priv' for an instance of Float
+undefined method 'kern_priv' for nil
+undefined method 'kern_priv' for an instance of Integer
+undefined method 'kern_pub' for nil
+undefined method 'num_pub' for an instance of Integer
+undefined method 'nil_pub' for nil
+undefined method 'obj_pub' for an instance of Foo
+private method 'obj_priv' called for nil
+private method 'obj_priv' called for an instance of Float
+private method 'kern_priv' called for nil
+private method 'kern_priv' called for an instance of Integer
+:kern_pub
+:num_pub
+:nil_pub
+:obj_pub
+"nil"
+private method 'then' called for nil
+private method 'then' called for an instance of Integer

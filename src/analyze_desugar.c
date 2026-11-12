@@ -1534,7 +1534,7 @@ static int kernel_reopen_top(NodeTable *nt, int top, const char **names, int *nn
        methods private instance methods) stays private there and an explicit
        receiver is refused. */
     int *objd = (int *)malloc(sizeof(int) * (size_t)(bn + 1));
-    int nobj = 0;
+    int nobj = 0, made = nt->count;
     for (int k = 0; k < bn; k++) {
       int d = bb0[k];
       if (nt_kind(nt, d) == NK_DefNode && nt_ref(nt, d, "receiver") < 0) {
@@ -1573,6 +1573,10 @@ static int kernel_reopen_top(NodeTable *nt, int top, const char **names, int *nn
         nb[nbn++] = oc;
       }
     }
+    /* the reopening of Object runs where the Kernel reopening stood, once,
+       as its defs do: node_in_place says so of every node made for it to
+       the load record (lr_unplaced), which places them there */
+    for (int j = made; j < nt->count; j++) nt_node_set_int(nt, j, "node_in_place", 1);
     free(objd);
     free(rest);
   }

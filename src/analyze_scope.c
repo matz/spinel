@@ -2751,6 +2751,80 @@ static int rsl_own_method(const NodeTable *nt, const char *cls, const char *name
   }
   return 0;
 }
+/* Can the program change the Array a member-list local or constant holds,
+   so that the list its one write made is not the list a later
+   `Struct.new(*keys)` reads? Each read of it (by name: `name`, a local of
+   scope `scp`, or a constant when scp is NULL), but the read `self_rd`
+   being resolved, must be the receiver of a method that neither changes
+   the Array nor hands it on: `keys << :c`, `keys.sort!`, `add(keys)`,
+   `other = keys` or `keys.each { }` (each answers the Array itself) all
+   can. A splat operand (`*keys`) passes copies of its elements. With
+   `strings`, the elements are Strings the program can change too
+   (`keys.first << "x"`), so only a read that makes new names is safe. */
+static int rsl_list_safe_method(const char *mn, int strings) {
+  static const char *const sym_ok[] = {
+    "size", "length", "count", "empty?", "any?", "none?", "all?", "one?", "include?", "member?",
+    "index", "find_index", "rindex", "first", "last", "[]", "at", "fetch", "dig", "values_at",
+    "map", "collect", "flat_map", "collect_concat", "select", "filter", "reject", "filter_map",
+    "find", "detect", "min", "max", "minmax", "sort", "sort_by", "min_by", "max_by", "reverse",
+    "uniq", "rotate", "take", "drop", "take_while", "drop_while", "zip", "product", "sum",
+    "tally", "group_by", "partition", "each_slice", "each_cons", "chunk_while", "slice_when",
+    "compact", "flatten", "sample", "shuffle", "join", "inspect", "to_s", "hash", "==", "!=",
+    "eql?", "frozen?", "freeze", "dup", "+", "-", "&", "|", "*", "<=>", "to_h", "each_with_object",
+    "inject", "reduce", "cycle", "combination", "permutation", "nil?", "is_a?", "kind_of?",
+    "instance_of?", "respond_to?", "class", NULL };
+  /* a String list: reads that answer new names or no element at all */
+  static const char *const str_ok[] = {
+    "size", "length", "count", "empty?", "include?", "member?", "index", "map", "collect",
+    "sort", "reverse", "uniq", "join", "inspect", "to_s", "hash", "==", "!=", "eql?",
+    "frozen?", "freeze", NULL };
+  const char *const *ok = strings ? str_ok : sym_ok;
+  for (int i = 0; mn && ok[i]; i++) if (sp_streq(ok[i], mn)) return 1;
+  return 0;
+}
+static int rsl_list_may_change(Compiler *c, const char *name, Scope *scp, int self_rd, int strings) {
+  const NodeTable *nt = c->nt;
+  NodeKind rk = scp ? NK_LocalVariableReadNode : NK_ConstantReadNode;
+  int reads = 0, safe = 0;
+  NT_FOREACH_KIND(nt, rk, r) {
+    const char *rn = nt_str(nt, r, "name");
+    if (r == self_rd || !rn || !sp_streq(rn, name) || (scp && comp_scope_of(c, r) != scp)) continue;
+    reads++;
+  }
+  /* `X::KEYS` reaches the constant by another node kind */
+  if (!scp) NT_FOREACH_KIND(nt, NK_ConstantPathNode, r) {
+    const char *rn = nt_str(nt, r, "name");
+    if (rn && sp_streq(rn, name)) return 1;
+  }
+  if (!reads) return 0;
+  NT_FOREACH_KIND(nt, NK_CallNode, k) {
+    int rv = nt_ref(nt, k, "receiver");
+    if (rv < 0 || rv == self_rd || nt_kind(nt, rv) != rk) continue;
+    const char *rn = nt_str(nt, rv, "name");
+    if (!rn || !sp_streq(rn, name) || (scp && comp_scope_of(c, rv) != scp)) continue;
+    if (!rsl_list_safe_method(nt_str(nt, k, "name"), strings)) return 1;
+    safe++;
+  }
+  NT_FOREACH_KIND(nt, NK_SplatNode, k) {
+    int ex = nt_ref(nt, k, "expression");
+    if (ex < 0 || ex == self_rd || nt_kind(nt, ex) != rk) continue;
+    const char *rn = nt_str(nt, ex, "name");
+    if (!rn || !sp_streq(rn, name) || (scp && comp_scope_of(c, ex) != scp)) continue;
+    if (strings) return 1;
+    safe++;
+  }
+  return safe < reads;
+}
+
+/* `%i[a b].freeze`: a list no one can change, whatever its reads do (a
+   change raises FrozenError) */
+static int rsl_frozen_literal(const NodeTable *nt, int v) {
+  if (v < 0 || nt_kind(nt, v) != NK_CallNode) return 0;
+  const char *mn = nt_str(nt, v, "name");
+  int r = nt_ref(nt, v, "receiver");
+  return mn && sp_streq(mn, "freeze") && nt_ref(nt, v, "arguments") < 0 && r >= 0 &&
+         nt_kind(nt, r) == NK_ArrayNode && !rsl_own_method(nt, "Array", "freeze");
+}
 int resolve_symbol_list(Compiler *c, int node, const char **out, int cap, int depth) {
   const NodeTable *nt = c->nt;
   if (node < 0 || depth > 8) return -1;
@@ -2784,13 +2858,17 @@ int resolve_symbol_list(Compiler *c, int node, const char **out, int cap, int de
        be applied inline at the Struct.new (`Struct.new(*keys.reverse)`). */
     int src = -1;
     for (int w = 0; vn && w < nt->count; w++) {
-      if (nt_kind(nt, w) != NK_LocalVariableWriteNode) continue;
+      NodeKind wk = nt_kind(nt, w);
+      if (!comp_is_local_write(wk)) continue;
       const char *wn = nt_str(nt, w, "name");
       if (!wn || !sp_streq(wn, vn) || comp_scope_of(c, w) != scp) continue;
-      if (src >= 0) return -1;
+      /* `keys += [:c]`, `keys ||= ...`, `keys, x = ...`: a second write */
+      if (src >= 0 || wk != NK_LocalVariableWriteNode) return -1;
       src = nt_ref(nt, w, "value");
     }
     if (src < 0) return -1;
+    /* the one write's Array, changed in place after it (`keys << :c`) */
+    if (!rsl_frozen_literal(nt, src) && rsl_list_may_change(c, vn, scp, node, rsl_strings)) return -1;
     return resolve_symbol_list(c, src, out, cap, depth + 1);
   }
   /* a constant the program writes once (`KEYS = %i[a b].freeze`, regexp_parser's
@@ -2806,6 +2884,7 @@ int resolve_symbol_list(Compiler *c, int node, const char **out, int cap, int de
       src = nt_ref(nt, w, "value");
     }
     if (src < 0) return -1;
+    if (!rsl_frozen_literal(nt, src) && rsl_list_may_change(c, cn, NULL, node, rsl_strings)) return -1;
     return resolve_symbol_list(c, src, out, cap, depth + 1);
   }
   /* a receiverless method on a resolvable symbol list that yields another

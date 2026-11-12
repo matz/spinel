@@ -9078,14 +9078,33 @@ int desugar_array_first_last(Compiler *c) {
    path) and never calls to_s on it, so a reopened String#to_s does not
    change `"t=#{"ab"}"`. The rewrite cannot be taken back, so it waits for
    settled types, as desugar_symbol_string_methods does. */
+/* Is a part of static type t a value of core class cn, one of
+   desugar_interp_reopened_to_s's? */
+static int interp_part_of_core(TyKind t, int cn) {
+  switch (cn) {
+    case CORE_INTEGER: return t == TY_INT;
+    case CORE_FLOAT: return t == TY_FLOAT;
+    case CORE_SYMBOL: return t == TY_SYMBOL;
+    case CORE_TRUECLASS: case CORE_FALSECLASS: return t == TY_BOOL;
+    case CORE_ARRAY: return ty_is_array(t) || ty_is_obj_array(t);
+    case CORE_HASH: return ty_is_hash(t);
+    /* an Integer Range only: a method the program defines in Range runs on no
+       other Range (a Float or String part keeps its own conversion) */
+    case CORE_RANGE: return t == TY_RANGE;
+    case CORE_NILCLASS: return t == TY_NIL;
+  }
+  return 0;
+}
 int desugar_interp_reopened_to_s(Compiler *c) {
   if (g_infer_optimistic) return 0;
   /* true and false: either class's own to_s makes the part a call, which
-     picks the side by value (cplan_bool_sides) */
-  static const int names[] = { CORE_INTEGER, CORE_FLOAT, CORE_SYMBOL, CORE_TRUECLASS, CORE_FALSECLASS };
-  const TyKind kinds[] = { TY_INT, TY_FLOAT, TY_SYMBOL, TY_BOOL, TY_BOOL };
-  int own[5], any = 0;
-  for (int k = 0; k < 5; k++) {
+     picks the side by value (cplan_bool_sides). An Array, a Hash, a Range
+     and nil convert by their class's to_s too (`class Array; def to_s`). */
+  static const int names[] = { CORE_INTEGER, CORE_FLOAT, CORE_SYMBOL, CORE_TRUECLASS, CORE_FALSECLASS,
+                               CORE_ARRAY, CORE_HASH, CORE_RANGE, CORE_NILCLASS };
+  enum { NOWN = (int)(sizeof names / sizeof *names) };
+  int own[NOWN], any = 0;
+  for (int k = 0; k < NOWN; k++) {
     int ci = comp_core_class(c, names[k]);
     own[k] = ci >= 0 && comp_method_in_chain(c, ci, "to_s", NULL) >= 0;
     any |= own[k];
@@ -9105,7 +9124,7 @@ int desugar_interp_reopened_to_s(Compiler *c) {
       if (expr < 0) continue;
       TyKind t = infer_type(c, expr);
       int hit = 0;
-      for (int j = 0; j < 5; j++) if (own[j] && t == kinds[j]) hit = 1;
+      for (int j = 0; j < NOWN; j++) if (own[j] && interp_part_of_core(t, names[j])) hit = 1;
       if (!hit) continue;
       int tsc = nt_new_node(nt, "CallNode");
       if (tsc < 0) continue;

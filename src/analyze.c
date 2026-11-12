@@ -5866,26 +5866,7 @@ static void qc_note_builtin_header(const NodeTable *nt, int cp, char (*path)[64]
   for (int i = 0; i < n; i++) snprintf(h->chain[i], 64, "%s", chain[i]);
   for (int i = 0; i < depth; i++) snprintf(h->path[i], 64, "%s", path[i]);
 }
-/* The Ruby path of the body PATH[0..depth) names, each segment followed by
-   `::`, into OUT: a prefix that is the body of a compact header under a
-   builtin (`module Comparable::Ext` holds [Ext]) is spelled as the header
-   wrote it, builtin head first (the longest such header). */
 static int qc_path_eq(char (*a)[64], int an, char (*b)[64], int bn);
-static void qc_ruby_path(char (*path)[64], int depth, char *out, size_t cap) {
-  int best = -1;
-  for (int i = 0; i < qc_nbhdrs; i++) {
-    const QCBuiltinHdr *h = &qc_bhdrs[i];
-    if (h->depth < 1 || h->depth > depth || (best >= 0 && h->depth <= qc_bhdrs[best].depth)) continue;
-    if (qc_path_eq((char (*)[64])h->path, h->depth, path, h->depth)) best = i;
-  }
-  out[0] = 0;
-  int from = 0;
-  if (best >= 0) {
-    for (int k = 0; k < qc_bhdrs[best].n; k++) { strncat(out, qc_bhdrs[best].chain[k], cap - strlen(out) - 1); strncat(out, "::", cap - strlen(out) - 1); }
-    from = qc_bhdrs[best].depth;
-  }
-  for (int k = from; k < depth; k++) { strncat(out, path[k], cap - strlen(out) - 1); strncat(out, "::", cap - strlen(out) - 1); }
-}
 /* A path read chain[0..cl) whose head is a builtin's name and that starts
    with the written path of such a header (the longest) names that
    header's body: the prefix is replaced by the body's path, and the read is
@@ -7038,21 +7019,12 @@ void qualify_colliding_classes(Compiler *c) {
   free(kws);
   if (any) {
     /* the reads are keyed after the walk (qualify_colliding_reads); the
-       headers here, for registration */
+       headers are marked here, with their salt: the walk builds each
+       one's name from its owner as it registers it (walk_class_c_name) */
     for (int i = 0; i < wn; i++) {
       if (ws[i].depth == 0) continue;
-      char qn[512]; qc_qualified_name(qn, sizeof qn, &ws[i]);
-      nt_node_set_str((NodeTable *)nt, ws[i].node, "qc_name", qn);
-      /* the salt, for the walk, which builds the name from the class's
-         owner (walk_class_c_name) */
+      nt_node_set_int((NodeTable *)nt, ws[i].node, "qc_qual", 1);
       if (ws[i].salt) nt_node_set_int((NodeTable *)nt, ws[i].node, "qc_salt", ws[i].salt);
-      /* and the Ruby name the path resolved to, for registration: the
-         header's own parent segments (an alias, a module whose name is
-         qualified too) need not name the class that encloses it */
-      char rn[512];
-      qc_ruby_path(ws[i].path, ws[i].depth, rn, sizeof rn);
-      strncat(rn, ws[i].name, sizeof rn - strlen(rn) - 1);
-      nt_node_set_str((NodeTable *)nt, ws[i].node, "qc_ruby_name", rn);
     }
   }
   qc_defer_ws = any ? ws : NULL; qc_defer_wn = any ? wn : 0;

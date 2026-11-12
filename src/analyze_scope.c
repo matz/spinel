@@ -1356,7 +1356,7 @@ static int block_body_class(const NodeTable *nt, int def_node) {
    CRuby reads it. A header reopening a builder's class (`class A::B` after
    `A::B = Class.new do ... end`) opens one, whatever made the class. */
 static int header_qualified(Compiler *c, int cp, int in_block) {
-  if (cp < 0 || !nt_str(c->nt, cp, "qc_ruby_name")) return 0;
+  if (cp < 0 || !nt_int(c->nt, cp, "qc_qual", 0)) return 0;
   return !in_block;
 }
 
@@ -1545,7 +1545,7 @@ static void wcn_add(char *out, size_t cap, const char *t) { strncat(out, t, cap 
    out and rb untouched, for a name the pass left as written. */
 static int walk_class_c_name(Compiler *c, int id, int np, char *out, size_t cap, char *rb, size_t rcap) {
   const NodeTable *nt = c->nt;
-  if (np < 0 || !nt_str(nt, np, "qc_name") || cap < 2) return 0;
+  if (np < 0 || !nt_int(nt, np, "qc_qual", 0) || cap < 2) return 0;
   int owner = -2;
   elab_header_class(c, id, &owner, NULL);
   NodeKind nk = nt_kind(nt, np);
@@ -1570,6 +1570,8 @@ static int walk_class_c_name(Compiler *c, int id, int np, char *out, size_t cap,
   while (ns > 0) { wcn_add(out, cap, seg[--ns]); wcn_add(out, cap, "__"); }
   const char *leaf = nt_str(nt, np, "name");
   if (leaf) wcn_add(out, cap, leaf);
+  /* the readers after the walk find the name on the node */
+  nt_node_set_str((NodeTable *)nt, np, "qc_name", out);
   /* and its Ruby path, when asked: the owner's, then the leaf */
   if (rb && rcap > 1) {
     rb[0] = 0;

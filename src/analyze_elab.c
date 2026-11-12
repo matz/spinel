@@ -8098,7 +8098,7 @@ static void lr_fire_mixin(Compiler *c, const LrEvent *v, int node, int frame, Lo
   int clone = nt_clone_subtree(nt, hb);
   if (clone < 0) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   InclSubst is = { param, NULL, v->arg, hdr, base };
-  incl_subst(nt, clone, &is, 1);
+  incl_subst(c, nt, clone, &is, 1);
   const char *hl = nt_str(nt, dn, "locals");
   char *fr = strdup(hl ? hl : "");   /* the hook's frame, then the blocks' it unwraps */
   if (!fr) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }

@@ -1493,7 +1493,7 @@ static void kr_self_calls(NodeTable *nt, int node, const char *const *names, int
 enum { KR_MAX = 256 };
 /* One file's top level (statements `top`): its `module Kernel` reopenings'
    defs hoisted, their names added to names[*nn]; the number hoisted. */
-static int kernel_reopen_top(NodeTable *nt, int top, const char **names, int *nn) {
+static int kernel_reopen_top(const Compiler *c, NodeTable *nt, int top, const char **names, int *nn) {
   if (top < 0) return 0;
   int tn = 0; const int *tb0 = nt_arr(nt, top, "body", &tn);
   if (!tb0 || tn == 0) return 0;
@@ -1502,7 +1502,7 @@ static int kernel_reopen_top(NodeTable *nt, int top, const char **names, int *nn
     int st = tb0[i];
     int cp = nt_kind(nt, st) == NK_ModuleNode ? nt_ref(nt, st, "constant_path") : -1;
     if (cp < 0 || nt_kind(nt, cp) != NK_ConstantReadNode) continue;
-    const char *mn = nt_key_name(nt, cp);
+    const char *mn = key_name(c, cp);
     if (!mn || !sp_streq(mn, "Kernel")) continue;
     int body = nt_ref(nt, st, "body");
     int bn = 0; const int *bb = body >= 0 ? nt_arr(nt, body, "body", &bn) : NULL;
@@ -1519,7 +1519,7 @@ static int kernel_reopen_top(NodeTable *nt, int top, const char **names, int *nn
   for (int i = 0; i < tn; i++) {
     int st = tb[i];
     int cp = nt_kind(nt, st) == NK_ModuleNode ? nt_ref(nt, st, "constant_path") : -1;
-    const char *mn = cp >= 0 && nt_kind(nt, cp) == NK_ConstantReadNode ? nt_key_name(nt, cp) : NULL;
+    const char *mn = cp >= 0 && nt_kind(nt, cp) == NK_ConstantReadNode ? key_name(c, cp) : NULL;
     int body = mn && sp_streq(mn, "Kernel") ? nt_ref(nt, st, "body") : -1;
     if (body < 0 || nt_kind(nt, body) != NK_StatementsNode) { nb[nbn++] = st; continue; }
     int bn = 0; const int *bb0 = nt_arr(nt, body, "body", &bn);
@@ -1589,7 +1589,7 @@ int desugar_kernel_reopen(Compiler *c) {
   int n0 = nt->count, hoisted = 0;
   const char *names[KR_MAX]; int nn = 0;
   for (int r = 0; r < nt_nroots(nt); r++)   /* each file's top level */
-    hoisted += kernel_reopen_top(nt, nt_ref(nt, nt_root(nt, r), "statements"), names, &nn);
+    hoisted += kernel_reopen_top(c, nt, nt_ref(nt, nt_root(nt, r), "statements"), names, &nn);
   if (!hoisted) return 0;
   /* Kernel.silence_warnings { } -> silence_warnings { } */
   for (int id = 0; id < n0; id++) {
@@ -2171,10 +2171,10 @@ static int hiv_rewrite_body(NodeTable *nt, int owner, int is_thread) {
   return 1;
 }
 /* 1 Fiber, 2 Thread, 0 neither: a `class Fiber` / `class Thread` reopening */
-static int hiv_handle_class(const NodeTable *nt, int id) {
+static int hiv_handle_class(const Compiler *c, const NodeTable *nt, int id) {
   if (!class_def_is_class(nt, id) || class_def_super(nt, id) >= 0) return 0;
   int cp = nt_ref(nt, id, "constant_path");
-  const char *n = cp >= 0 && nt_kind(nt, cp) == NK_ConstantReadNode ? nt_key_name(nt, cp) : NULL;
+  const char *n = cp >= 0 && nt_kind(nt, cp) == NK_ConstantReadNode ? key_name(c, cp) : NULL;
   return !n ? 0 : sp_streq(n, "Fiber") ? 1 : sp_streq(n, "Thread") ? 2 : 0;
 }
 static const char *hiv_const_leaf(const NodeTable *nt, int r) {
@@ -2187,7 +2187,7 @@ int desugar_handle_ivars(Compiler *c) {
   /* the modules a reopening mixes in: name, which handle, how often */
   const char *mods[64]; int mkind[64], mcount[64], nm = 0;
   for (int id = 0; id < n0; id++) {
-    int h = hiv_handle_class(nt, id), top = nt_kind(nt, id) == NK_ProgramNode;
+    int h = hiv_handle_class(c, nt, id), top = nt_kind(nt, id) == NK_ProgramNode;
     int body = h ? class_def_body(nt, id) : top ? nt_ref(nt, id, "statements") : -1;
     int bn = 0; const int *bb = body >= 0 ? nt_arr(nt, body, "body", &bn) : NULL;
     for (int i = 0; bb && i < bn; i++) {
@@ -2228,7 +2228,7 @@ int desugar_handle_ivars(Compiler *c) {
     }
   }
   for (int id = 0; id < n0; id++) {
-    int h = hiv_handle_class(nt, id);
+    int h = hiv_handle_class(c, nt, id);
     if (!h && class_def_is_module(nt, id)) {
       const char *leaf = hiv_const_leaf(nt, nt_ref(nt, id, "constant_path"));
       for (int j = 0; leaf && j < nm; j++)
@@ -2363,7 +2363,7 @@ static void fpi_rewrite_new(NodeTable *nt, int id) {
   nt_node_set_int(nt, id, "node_line", line);
   nt_node_set_int(nt, id, "node_file", file);
 }
-static int hiv_handle_class(const NodeTable *nt, int id);
+static int hiv_handle_class(const Compiler *c, const NodeTable *nt, int id);
 static const char *hiv_const_leaf(const NodeTable *nt, int r);
 int desugar_fiber_prepended_init(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
@@ -2372,7 +2372,7 @@ int desugar_fiber_prepended_init(Compiler *c) {
   const char *mods[16]; int mcount[16], nm = 0;
   for (int id = 0; id < n0; id++) {
     int top = nt_kind(nt, id) == NK_ProgramNode;
-    int body = hiv_handle_class(nt, id) == 1 ? class_def_body(nt, id) : top ? nt_ref(nt, id, "statements") : -1;
+    int body = hiv_handle_class(c, nt, id) == 1 ? class_def_body(nt, id) : top ? nt_ref(nt, id, "statements") : -1;
     int bn = 0; const int *bb = body >= 0 ? nt_arr(nt, body, "body", &bn) : NULL;
     for (int i = 0; bb && i < bn; i++) {
       int r = nt_kind(nt, bb[i]) == NK_CallNode ? nt_ref(nt, bb[i], "receiver") : -1;
@@ -6950,29 +6950,29 @@ static int mdfold_answer_sure(NodeTable *nt, const int *parent, const char *m, i
 }
 /* The class a receiverless or self call `id` runs in: the name of the class
    or module body it sits in directly (no def or block between), or NULL */
-static const char *mdfold_body_class(NodeTable *nt, const int *parent, int id) {
+static const char *mdfold_body_class(const Compiler *c, NodeTable *nt, const int *parent, int id) {
   for (int p = parent[id]; p >= 0; p = parent[p]) {
     NodeKind k = nt_kind(nt, p);
     if (k == NK_DefNode || k == NK_BlockNode || k == NK_LambdaNode || k == NK_SingletonClassNode) return NULL;
     if (k == NK_ClassNode || k == NK_ModuleNode) {
       int cp = nt_ref(nt, p, "constant_path");
-      return cp >= 0 && nt_kind(nt, cp) == NK_ConstantReadNode ? nt_key_name(nt, cp) : NULL;
+      return cp >= 0 && nt_kind(nt, cp) == NK_ConstantReadNode ? key_name(c, cp) : NULL;
     }
   }
   return NULL;
 }
-static int mdfold_call(NodeTable *nt, const int *parent, int e, int cond) {
+static int mdfold_call(const Compiler *c, NodeTable *nt, const int *parent, int e, int cond) {
   NodeKind k = nt_kind(nt, e);
   if (k == NK_ParenthesesNode) {
     int body = nt_ref(nt, e, "body"), bn = 0;
     const int *bb = body >= 0 && nt_kind(nt, body) == NK_StatementsNode ? nt_arr(nt, body, "body", &bn) : NULL;
-    return bn == 1 ? mdfold_call(nt, parent, bb[0], cond) : 0;
+    return bn == 1 ? mdfold_call(c, nt, parent, bb[0], cond) : 0;
   }
   if (k != NK_CallNode || nt_ref(nt, e, "block") >= 0) return 0;
   const char *nm = nt_str(nt, e, "name");
   int recv = nt_ref(nt, e, "receiver"), args = nt_ref(nt, e, "arguments"), ac = 0;
   const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &ac) : NULL;
-  if (nm && sp_streq(nm, "!") && ac == 0 && recv >= 0) return mdfold_call(nt, parent, recv, cond);
+  if (nm && sp_streq(nm, "!") && ac == 0 && recv >= 0) return mdfold_call(c, nt, parent, recv, cond);
   int mask = !nm ? 0 : sp_streq(nm, "method_defined?") ? 3 : sp_streq(nm, "public_method_defined?") ? 1 :
              sp_streq(nm, "protected_method_defined?") ? 2 : sp_streq(nm, "private_method_defined?") ? 4 : 0;
   if (!mask || ac < 1 || ac > 2) return 0;
@@ -6983,7 +6983,7 @@ static int mdfold_call(NodeTable *nt, const int *parent, int e, int cond) {
                   ak == NK_StringNode ? nt_str(nt, av[0], "content") : NULL;
   NodeKind rk = recv >= 0 ? nt_kind(nt, recv) : NK_SelfNode;
   const char *cls = rk == NK_ConstantReadNode ? nt_str(nt, recv, "name") :
-                    rk == NK_SelfNode ? mdfold_body_class(nt, parent, e) : NULL;
+                    rk == NK_SelfNode ? mdfold_body_class(c, nt, parent, e) : NULL;
   if (!m || !cls || !(is_builtin_class_name(cls) || is_builtin_module_name(cls))) return 0;
   int v = core_method_vis(cls, m, ik == NK_TrueNode, NULL);
   if (v <= 0 || !(v & mask) || !mdfold_answer_sure(nt, parent, m, cond)) return 0;
@@ -6998,7 +6998,7 @@ int desugar_builtin_method_defined_conds(Compiler *c) {
     NodeKind k = nt_kind(nt, id);
     if ((k != NK_IfNode && k != NK_UnlessNode) || !literal_cond_has_def(nt, id)) continue;
     if (!parent && !(parent = an_parent_map(nt))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-    changed |= mdfold_call(nt, parent, nt_ref(nt, id, "predicate"), id);
+    changed |= mdfold_call(c, nt, parent, nt_ref(nt, id, "predicate"), id);
   }
   free(parent);
   return changed;
@@ -12436,7 +12436,7 @@ static const char *sym_or_str_literal(const NodeTable *nt, int node);
    `defined?(::Rails)` inside a `Underscore::Rails`). A write target
    (`::X = 1`, `::X ||= v`) keeps its own node type: the writers read the
    path. */
-static void rsc_mark_nested_defs(const NodeTable *nt, int id, unsigned char *seen,
+static void rsc_mark_nested_defs(const Compiler *c, const NodeTable *nt, int id, unsigned char *seen,
                                  char **names, int *nn, int depth) {
   if (id < 0 || id >= nt->count || seen[id] || depth > 64) return;
   seen[id] = 1;
@@ -12446,16 +12446,16 @@ static void rsc_mark_nested_defs(const NodeTable *nt, int id, unsigned char *see
     if (k == NK_ConstantWriteNode) nm = nt_str(nt, id, "name");
     else {
       int cp = nt_ref(nt, id, "constant_path");
-      if (cp >= 0) nm = nt_key_name(nt, cp);
+      if (cp >= 0) nm = key_name(c, cp);
     }
     if (nm && *nn < 4096) names[(*nn)++] = (char *)nm;
   }
   const SpNode *nd = &nt->nodes[id];
   for (int j = 0; j < nd->nr; j++)
-    rsc_mark_nested_defs(nt, nd->r[j].ref, seen, names, nn, depth + 1);
+    rsc_mark_nested_defs(c, nt, nd->r[j].ref, seen, names, nn, depth + 1);
   for (int j = 0; j < nd->na; j++)
     for (int k2 = 0; k2 < nd->a[j].n; k2++)
-      rsc_mark_nested_defs(nt, nd->a[j].ids[k2], seen, names, nn, depth + 1);
+      rsc_mark_nested_defs(c, nt, nd->a[j].ids[k2], seen, names, nn, depth + 1);
 }
 
 static int rsc_shadowed(char **names, int nn, const char *nm) {
@@ -12524,7 +12524,7 @@ int desugar_root_scoped_constants(Compiler *c) {
     NodeKind k = nt_kind(nt, id);
     if (k != NK_ClassNode && k != NK_ModuleNode) continue;
     int body = nt_ref(nt, id, "body");
-    if (body >= 0) rsc_mark_nested_defs(nt, body, seen, names, &nn, 0);
+    if (body >= 0) rsc_mark_nested_defs(c, nt, body, seen, names, &nn, 0);
   }
   free(seen);
   /* (kept, for the raises disp_raise_with builds later; comp_free frees them) */
@@ -13921,7 +13921,7 @@ static int fwd_target_shape(FwdCtx *fx, int def, int call, int is_super) {
   }
   if (!is_super && recv >= 0 &&
       (fwd_node_is(nt, recv, "ConstantReadNode") || fwd_node_is(nt, recv, "ConstantPathNode"))) {
-    int us = fwd_class_new_shape_of(nt, nt_key_name(nt, recv));
+    int us = fwd_class_new_shape_of(nt, key_name(fx->c, recv));
     if (us != -1) return us;
   }
   if (is_super) {
@@ -15194,10 +15194,10 @@ static int cdef_vis_def(const NodeTable *nt, int id) {
                   ? nt_arr(nt, nt_ref(nt, id, "arguments"), "arguments", &an) : NULL;
   return an == 1 && nt_kind(nt, av[0]) == NK_DefNode ? av[0] : -1;
 }
-static void cdef_path(const NodeTable *nt, int cp, char *p, size_t cap) {
-  if (nt_kind(nt, cp) == NK_ConstantPathNode) cdef_path(nt, nt_ref(nt, cp, "parent"), p, cap);
+static void cdef_path(const Compiler *c, const NodeTable *nt, int cp, char *p, size_t cap) {
+  if (nt_kind(nt, cp) == NK_ConstantPathNode) cdef_path(c, nt, nt_ref(nt, cp, "parent"), p, cap);
   size_t l = strlen(p);
-  snprintf(p + l, cap - l, "/%s", nt_key_name(nt, cp) ? nt_key_name(nt, cp) : "");
+  snprintf(p + l, cap - l, "/%s", key_name(c, cp) ? key_name(c, cp) : "");
 }
 static int cdef_call_names(const NodeTable *nt, int id, const char *nm);
 /* The old-name literal of `alias new old` or of a receiverless
@@ -15262,7 +15262,7 @@ static void cdef_add(CondDef x, CondDef **v, int *n) {
   x.path = strdup(x.path);
   g[(*n)++] = x;
 }
-static void cdef_walk(NodeTable *nt, int id, CondDef x, CondDef **v, int *n) {
+static void cdef_walk(const Compiler *c, NodeTable *nt, int id, CondDef x, CondDef **v, int *n) {
   NodeKind k = nt_kind(nt, id);
   switch (k) {
   case NK_StatementsNode: {
@@ -15272,7 +15272,7 @@ static void cdef_walk(NodeTable *nt, int id, CondDef x, CondDef **v, int *n) {
     if (x.top < 0) y.tst = id;
     for (int i = 0; i < bn; i++) {
       if (x.top < 0) y.top = b[i];
-      cdef_walk(nt, b[i], y, v, n);
+      cdef_walk(c, nt, b[i], y, v, n);
       NodeKind bk = nt_kind(nt, b[i]);
       int nw;
       if (bk != NK_IfNode && bk != NK_UnlessNode && bk != NK_ClassNode && bk != NK_ModuleNode &&
@@ -15292,21 +15292,21 @@ static void cdef_walk(NodeTable *nt, int id, CondDef x, CondDef **v, int *n) {
     if (pk != NK_ElseNode && pk != NK_TrueNode && pk != NK_FalseNode && pk != NK_NilNode) x.here = 1;
     CondDef y = x;
     y.br = nt_ref(nt, id, "statements");
-    cdef_walk(nt, y.br, y, v, n);
-    cdef_walk(nt, nt_ref(nt, id, "subsequent"), x, v, n);
-    cdef_walk(nt, nt_ref(nt, id, "else_clause"), x, v, n);
+    cdef_walk(c, nt, y.br, y, v, n);
+    cdef_walk(c, nt, nt_ref(nt, id, "subsequent"), x, v, n);
+    cdef_walk(c, nt, nt_ref(nt, id, "else_clause"), x, v, n);
     break;
   }
   case NK_ClassNode: case NK_ModuleNode: {
     char p[1024];
     snprintf(p, sizeof p, "%s", x.path);
-    cdef_path(nt, nt_ref(nt, id, "constant_path"), p, sizeof p);
+    cdef_path(c, nt, nt_ref(nt, id, "constant_path"), p, sizeof p);
     x.path = p; x.cls = id; x.cm = 0; x.top = -1; x.here = 0;
-    cdef_walk(nt, nt_ref(nt, id, "body"), x, v, n);
+    cdef_walk(c, nt, nt_ref(nt, id, "body"), x, v, n);
     break;
   }
   case NK_ConstantWriteNode: case NK_ConstantPathWriteNode: case NK_LocalVariableWriteNode:
-    if (nt_kind(nt, nt_ref(nt, id, "value")) == NK_CallNode) cdef_walk(nt, nt_ref(nt, id, "value"), x, v, n);
+    if (nt_kind(nt, nt_ref(nt, id, "value")) == NK_CallNode) cdef_walk(c, nt, nt_ref(nt, id, "value"), x, v, n);
     break;
   case NK_CallNode: {
     /* a block that becomes a class body only later (desugar_class_new_blocks):
@@ -15317,18 +15317,18 @@ static void cdef_walk(NodeTable *nt, int id, CondDef x, CondDef **v, int *n) {
     char p[1024];
     snprintf(p, sizeof p, "%s/#%d", x.path, id);
     x.path = p; x.cls = -2; x.cm = 0; x.top = -1; x.here = 0;
-    cdef_walk(nt, nt_ref(nt, blk, "body"), x, v, n);
+    cdef_walk(c, nt, nt_ref(nt, blk, "body"), x, v, n);
     break;
   }
   default: break;
   }
   if (k == NK_SingletonClassNode && nt_kind(nt, nt_ref(nt, id, "expression")) == NK_SelfNode) {
     x.cm = 1; x.top = -1;
-    cdef_walk(nt, nt_ref(nt, id, "body"), x, v, n);
+    cdef_walk(c, nt, nt_ref(nt, id, "body"), x, v, n);
   }
   else if (cdef_vis_def(nt, id) >= 0) {
     x.vis = nt_str(nt, id, "name");
-    cdef_walk(nt, cdef_vis_def(nt, id), x, v, n);
+    cdef_walk(c, nt, cdef_vis_def(nt, id), x, v, n);
   }
   else if (k == NK_DefNode && x.st >= 0 && nt_str(nt, id, "name") &&
            (nt_ref(nt, id, "receiver") < 0 || nt_kind(nt, nt_ref(nt, id, "receiver")) == NK_SelfNode)) {
@@ -15865,7 +15865,7 @@ int desugar_concat_builtin_version(Compiler *c) {
   CondDef *v = NULL;
   int n = 0, like = -1;
   for (int r = 0; r < nt_nroots(nt); r++)
-    cdef_walk(nt, prog_root_stmts(c, r), (CondDef){ -1, -1, -1, -1, 0, 0, -1, "", "", 0, -1, -1, -1 }, &v, &n);
+    cdef_walk(c, nt, prog_root_stmts(c, r), (CondDef){ -1, -1, -1, -1, 0, 0, -1, "", "", 0, -1, -1, -1 }, &v, &n);
   for (int i = 0; i < n; i++) {
     if (v[i].def >= 0 && !v[i].cm && sp_streq(v[i].path, "/Array") &&
         nt_ref(nt, v[i].cls, "superclass") < 0 && sp_streq(nt_str(nt, v[i].def, "name"), "concat"))
@@ -15945,7 +15945,7 @@ int desugar_conditional_defs(Compiler *c) {
   char **lone = NULL;   /* the names a single def under a run-time condition defines */
   int nlone = 0;
   for (int r = 0; r < nt_nroots(nt); r++)   /* each file's top level */
-    cdef_walk(nt, prog_root_stmts(c, r), (CondDef){ -1, -1, -1, -1, 0, 0, -1, "", "", 0, -1, -1, -1 }, &v, &n);
+    cdef_walk(c, nt, prog_root_stmts(c, r), (CondDef){ -1, -1, -1, -1, 0, 0, -1, "", "", 0, -1, -1, -1 }, &v, &n);
   CondDef *g = malloc(sizeof(CondDef) * (size_t)(n > 0 ? n : 1));
   int *gi = malloc(sizeof(int) * (size_t)(n > 0 ? n : 1));
   if (!g || !gi) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
@@ -17214,7 +17214,7 @@ static int class_case_eq_defined(Compiler *c, int pred) {
    `v.kind_of?(K)`, `v.instance_of?(K)` or `K === v`, K a bare constant.
    Sets *local to the local read, *kn to K's name, *exact to the instance_of?
    form and *case_eq to the `===` form; 0 when the predicate is no such test. */
-static int local_class_test(const NodeTable *nt, int pred, int *local, const char **kn, int *exact, int *case_eq) {
+static int local_class_test(const Compiler *c, const NodeTable *nt, int pred, int *local, const char **kn, int *exact, int *case_eq) {
   if (pred < 0 || nt_kind(nt, pred) != NK_CallNode || nt_ref(nt, pred, "block") >= 0) return 0;
   const char *nm = nt_str(nt, pred, "name");
   int recv = nt_ref(nt, pred, "receiver");
@@ -17225,7 +17225,7 @@ static int local_class_test(const NodeTable *nt, int pred, int *local, const cha
   if (!*case_eq && !is_kind_query(nm)) return 0;
   int lv = *case_eq ? av[0] : recv, kc = *case_eq ? recv : av[0];
   if (nt_kind(nt, lv) != NK_LocalVariableReadNode || nt_kind(nt, kc) != NK_ConstantReadNode) return 0;
-  *local = lv; *kn = nt_key_name(nt, kc); *exact = is_instance_of_query(nm);
+  *local = lv; *kn = key_name(c, kc); *exact = is_instance_of_query(nm);
   return *kn != NULL;
 }
 
@@ -17318,7 +17318,7 @@ int fold_static_is_a(Compiler *c) {
     }
     int recv, exact, case_eq;
     const char *kn;
-    if (!local_class_test(nt, pred, &recv, &kn, &exact, &case_eq)) continue;
+    if (!local_class_test(c, nt, pred, &recv, &kn, &exact, &case_eq)) continue;
     /* a constant that names no class is no test (`R === v` on a Range
        constant, an undefined name's NameError), and a class method `===`
        answers as the program says */
@@ -21691,12 +21691,12 @@ enum { ENC_NONE, ENC_NIL, ENC_UTF8, ENC_ASSIGN, ENC_FIND };
 /* Which query of Encoding the call at id is: default_internal (nil),
    default_external (UTF-8), a setter (its value), find("utf-8") (the constant
    it names, *cn). */
-static int enc_query(const NodeTable *nt, int id, const char **cn) {
+static int enc_query(const Compiler *c, const NodeTable *nt, int id, const char **cn) {
   int recv = nt_ref(nt, id, "receiver");
   if (recv < 0) return ENC_NONE;
   NodeKind rk = nt_kind(nt, recv);
   if (rk != NK_ConstantReadNode && !(rk == NK_ConstantPathNode && nt_ref(nt, recv, "parent") < 0)) return ENC_NONE;
-  const char *rn = nt_key_name(nt, recv);
+  const char *rn = key_name(c, recv);
   if (!rn || !sp_streq(rn, "Encoding")) return ENC_NONE;
   const char *nm = nt_str(nt, id, "name");
   if (!nm) return ENC_NONE;
@@ -21718,13 +21718,13 @@ static int enc_query(const NodeTable *nt, int id, const char **cn) {
 
 int desugar_encoding_queries_left(Compiler *c, LowerCtx *lc, int id) {
   const char *cn = NULL;
-  return enc_query(c->nt, id, &cn) != ENC_NONE;
+  return enc_query(c, c->nt, id, &cn) != ENC_NONE;
 }
 
 int desugar_encoding_queries_at(Compiler *c, LowerCtx *lc, int id) {
   NodeTable *nt = (NodeTable *)c->nt;
   const char *cn = NULL;
-  int q = enc_query(nt, id, &cn);
+  int q = enc_query(c, nt, id, &cn);
   if (q == ENC_NONE) return 0;
   if (q == ENC_NIL) {
     nt_node_reset(nt, id, "NilNode");
@@ -24297,18 +24297,18 @@ static void incl_mod_ivar(NodeTable *nt, int node, const InclSubst *is) {
   if (file) nt_node_set_int(nt, node, "node_file", file);
 }
 
-void incl_subst(NodeTable *nt, int node, const InclSubst *is, int self_mod) {
+void incl_subst(const Compiler *c, NodeTable *nt, int node, const InclSubst *is, int self_mod) {
   if (node < 0) return;
   NodeKind k = nt_kind(nt, node);
   if (k == NK_DefNode || class_def_opens_frame(nt, node)) return;
   if (self_mod && is->mod >= 0 && (k == NK_InstanceVariableOperatorWriteNode ||
                                    k == NK_InstanceVariableOrWriteNode || k == NK_InstanceVariableAndWriteNode)) {
     cbi_lower_op_writes(nt, node);
-    if (nt_kind(nt, node) != k) incl_subst(nt, node, is, self_mod);
+    if (nt_kind(nt, node) != k) incl_subst(c, nt, node, is, self_mod);
     return;
   }
   if (self_mod && is->mod >= 0 && (k == NK_InstanceVariableWriteNode || k == NK_InstanceVariableReadNode)) {
-    if (k == NK_InstanceVariableWriteNode) incl_subst(nt, nt_ref(nt, node, "value"), is, self_mod);
+    if (k == NK_InstanceVariableWriteNode) incl_subst(c, nt, nt_ref(nt, node, "value"), is, self_mod);
     incl_mod_ivar(nt, node, is);
     return;
   }
@@ -24359,7 +24359,7 @@ void incl_subst(NodeTable *nt, int node, const InclSubst *is, int self_mod) {
     int cp = nt_clone_subtree(nt, is->mod);
     if (cp < 0) return;
     nt_node_reset(nt, node, nt_type(nt, cp));
-    nt_node_set_str(nt, node, "name", nt_key_name(nt, cp));
+    nt_node_set_str(nt, node, "name", key_name(c, cp));
     nt_node_set_ref(nt, node, "parent", nt_ref(nt, cp, "parent"));
     if (line) nt_node_set_int(nt, node, "node_line", line);
     if (file) nt_node_set_int(nt, node, "node_file", file);
@@ -24372,7 +24372,7 @@ void incl_subst(NodeTable *nt, int node, const InclSubst *is, int self_mod) {
       int cp = nt_clone_subtree(nt, is->cls_node);
       if (cp < 0) return;
       nt_node_reset(nt, node, nt_type(nt, cp));
-      nt_node_set_str(nt, node, "name", nt_key_name(nt, cp));
+      nt_node_set_str(nt, node, "name", key_name(c, cp));
       nt_node_set_ref(nt, node, "parent", nt_ref(nt, cp, "parent"));
       if (line) nt_node_set_int(nt, node, "node_line", line);
       if (file) nt_node_set_int(nt, node, "node_file", file);
@@ -24390,7 +24390,7 @@ void incl_subst(NodeTable *nt, int node, const InclSubst *is, int self_mod) {
   int nr = nt_num_refs(nt, node);
   for (int i = 0; i < nr; i++) {
     int ch = nt_ref_at(nt, node, i);
-    incl_subst(nt, ch, is, ch == blk ? blk_self_mod : self_mod);
+    incl_subst(c, nt, ch, is, ch == blk ? blk_self_mod : self_mod);
   }
   int na = nt_num_arrs(nt, node);
   for (int i = 0; i < na; i++) {
@@ -24399,7 +24399,7 @@ void incl_subst(NodeTable *nt, int node, const InclSubst *is, int self_mod) {
     int *cp = cnt > 0 ? malloc(sizeof(int) * (size_t)cnt) : NULL;
     if (cnt > 0 && !cp) continue;
     if (cnt > 0) memcpy(cp, ids, sizeof(int) * (size_t)cnt);
-    for (int j = 0; j < cnt; j++) incl_subst(nt, cp[j], is, self_mod);
+    for (int j = 0; j < cnt; j++) incl_subst(c, nt, cp[j], is, self_mod);
     free(cp);
   }
 }
@@ -24837,7 +24837,7 @@ int desugar_included_hooks(Compiler *c, HostStep *h) {
         int clone = nt_clone_subtree(nt, hb);
         if (clone < 0) continue;
         InclSubst is = { param, cls, av[j], hook_mod, -1 };
-        incl_subst(nt, clone, &is, 1);
+        incl_subst(c, nt, clone, &is, 1);
         int hn = 0; const int *hs = nt_kind(nt, clone) == NK_StatementsNode ? nt_arr(nt, clone, "body", &hn) : NULL;
         const char *hl = nt_str(nt, hook, "locals");
         char *frame = strdup(hl ? hl : "");   /* the hook's frame, then the blocks' it unwraps */
@@ -26588,9 +26588,9 @@ static int rbself_body_defs(NodeTable *nt, int n0, int module, const char *cn, c
    `String.include(M)`), and nothing extends with it: its methods then run
    with that builtin value as self, as a reopening's do. NULL otherwise, a
    mixin the walk cannot place included. */
-static const char *rbself_module_host_in(NodeTable *nt, int n0, const char *mod, int strict);
-static const char *rbself_module_host(NodeTable *nt, int n0, const char *mod) {
-  return rbself_module_host_in(nt, n0, mod, 0);
+static const char *rbself_module_host_in(const Compiler *c, NodeTable *nt, int n0, const char *mod, int strict);
+static const char *rbself_module_host(const Compiler *c, NodeTable *nt, int n0, const char *mod) {
+  return rbself_module_host_in(c, nt, n0, mod, 0);
 }
 /* the same, `strict` set (the ivar rewrite, which changes what the
    module's methods read): Object is a host too (`class Object; include M;
@@ -26612,12 +26612,12 @@ static int rbself_names_own_class(NodeTable *nt, int n0, const char *name) {
   }
   return 0;
 }
-static const char *rbself_module_host_in(NodeTable *nt, int n0, const char *mod, int strict) {
+static const char *rbself_module_host_in(const Compiler *c, NodeTable *nt, int n0, const char *mod, int strict) {
   const char *host = NULL;
   int reads = 0, used = 0;
   for (int id = 0; strict && id < n0; id++) {
     NodeKind k = nt_kind(nt, id);
-    if (k == NK_ModuleNode) { int cp = nt_ref(nt, id, "constant_path"); if (cp >= 0 && sp_streq(nt_key_name(nt, cp) ? nt_key_name(nt, cp) : "", mod)) reads--; }
+    if (k == NK_ModuleNode) { int cp = nt_ref(nt, id, "constant_path"); if (cp >= 0 && sp_streq(key_name(c, cp) ? key_name(c, cp) : "", mod)) reads--; }
     if ((k == NK_ConstantReadNode || k == NK_ConstantPathNode) && sp_streq(nt_str(nt, id, "name") ? nt_str(nt, id, "name") : "", mod)) reads++;
   }
   for (int id = 0; id < n0; id++) {
@@ -26760,12 +26760,12 @@ static void brc_path_writes(const NodeTable *nt, const char *cn, BrcNames *u) {
 /* The constants a top-level statement writes: a write in it, under a
    condition or a block, not in a class, module or method body; `::X = v`,
    `Object::X = v` and a class or module header `class X` too */
-static void brc_top_writes(const NodeTable *nt, int n, BrcNames *t) {
+static void brc_top_writes(const Compiler *c, const NodeTable *nt, int n, BrcNames *t) {
   if (n < 0) return;
   NodeKind k = nt_kind(nt, n);
   if (k == NK_ClassNode || k == NK_ModuleNode) {
     int cp = nt_ref(nt, n, "constant_path");
-    if (cp >= 0 && nt_kind(nt, cp) == NK_ConstantReadNode) brc_add(t, nt_key_name(nt, cp));
+    if (cp >= 0 && nt_kind(nt, cp) == NK_ConstantReadNode) brc_add(t, key_name(c, cp));
     return;
   }
   if (k == NK_SingletonClassNode || k == NK_DefNode) return;
@@ -26780,11 +26780,11 @@ static void brc_top_writes(const NodeTable *nt, int n, BrcNames *t) {
       brc_add(t, nt_str(nt, tg, "name"));
   }
   int nr = nt_num_refs(nt, n);
-  for (int i = 0; i < nr; i++) brc_top_writes(nt, nt_ref_at(nt, n, i), t);
+  for (int i = 0; i < nr; i++) brc_top_writes(c, nt, nt_ref_at(nt, n, i), t);
   int na = nt_num_arrs(nt, n);
   for (int i = 0; i < na; i++) {
     int m = 0; const int *ids = nt_arr_at(nt, n, i, &m);
-    for (int q = 0; q < m; q++) brc_top_writes(nt, ids[q], t);
+    for (int q = 0; q < m; q++) brc_top_writes(c, nt, ids[q], t);
   }
 }
 /* the path cn::nm, made at node like */
@@ -26899,19 +26899,19 @@ static void brc_body_defs(NodeTable *nt, int n, const char *cn, const BrcNames *
   }
 }
 /* the name a top-level statement opens a builtin's body by, or NULL */
-static const char *brc_builtin_header(const NodeTable *nt, int st) {
+static const char *brc_builtin_header(const Compiler *c, const NodeTable *nt, int st) {
   if (!class_def_opens_cref(nt, st)) return NULL;
   int cp = nt_ref(nt, st, "constant_path");
-  const char *cn = cp >= 0 && nt_kind(nt, cp) == NK_ConstantReadNode ? nt_key_name(nt, cp) : NULL;
+  const char *cn = cp >= 0 && nt_kind(nt, cp) == NK_ConstantReadNode ? key_name(c, cp) : NULL;
   return cn && (is_builtin_class_name(cn) || is_builtin_module_name(cn)) ? cn : NULL;
 }
 /* the constants the bodies of the builtin cn (`class cn` at the top
    level) and a path write `cn::X = v` may write (u), and, when w is not
    NULL, those the bodies ahead of top-level statement i write for certain */
-static void brc_builtin_writes(const NodeTable *nt, const int *tb, int tn, const char *cn, int i,
+static void brc_builtin_writes(const Compiler *c, const NodeTable *nt, const int *tb, int tn, const char *cn, int i,
                                BrcNames *w, BrcNames *u) {
   for (int j = 0; j < tn; j++) {
-    const char *hn = brc_builtin_header(nt, tb[j]);
+    const char *hn = brc_builtin_header(c, nt, tb[j]);
     if (!hn || !sp_streq(hn, cn)) continue;
     int b = class_def_body(nt, tb[j]), bn = 0;
     const int *bs = b >= 0 ? nt_arr(nt, b, "body", &bn) : NULL;
@@ -26924,7 +26924,7 @@ static void brc_builtin_writes(const NodeTable *nt, const int *tb, int tn, const
 }
 /* fill anc (at most 8) with the builtins above cn whose bodies, or a path
    write `Numeric::X = v`, may write a constant */
-static void brc_ancestors(const NodeTable *nt, const int *tb, int tn, const char *cn, BrcAnc *anc, int *nanc) {
+static void brc_ancestors(const Compiler *c, const NodeTable *nt, const int *tb, int tn, const char *cn, BrcAnc *anc, int *nanc) {
   const char *names[8]; int nn = 0;
   int bid = builtin_class_id(cn);
   if (bid < 0) {
@@ -26940,7 +26940,7 @@ static void brc_ancestors(const NodeTable *nt, const int *tb, int tn, const char
   *nanc = 0;
   for (int a = 0; a < nn; a++) {
     BrcNames u = { NULL, 0, 0 };
-    brc_builtin_writes(nt, tb, tn, names[a], -1, NULL, &u);
+    brc_builtin_writes(c, nt, tb, tn, names[a], -1, NULL, &u);
     if (u.n == 0) { free(u.v); continue; }
     anc[*nanc].name = names[a];
     anc[*nanc].u = u;
@@ -26953,16 +26953,16 @@ int desugar_builtin_reopen_const_reads(Compiler *c) {
   /* the top-level statements in load order, a file's own in its order */
   int tn = 0, *tfile = NULL, *tb = prog_top_seq(c, &tn, &tfile);
   BrcNames top = { NULL, 0, 0 };
-  for (int i = 0; i < tn; i++) brc_top_writes(nt, tb[i], &top);
+  for (int i = 0; i < tn; i++) brc_top_writes(c, nt, tb[i], &top);
   for (int i = 0; i < tn; i++) {
-    const char *cn = brc_builtin_header(nt, tb[i]);
+    const char *cn = brc_builtin_header(c, nt, tb[i]);
     if (!cn) continue;
     BrcNames w = { NULL, 0, 0 }, u = { NULL, 0, 0 };
     /* the constants earlier bodies of the builtin wrote, and those any
        body of it may write (u) */
-    brc_builtin_writes(nt, tb, tn, cn, i, &w, &u);
+    brc_builtin_writes(c, nt, tb, tn, cn, i, &w, &u);
     BrcAnc anc[8]; int nanc = 0;
-    brc_ancestors(nt, tb, tn, cn, anc, &nanc);
+    brc_ancestors(c, nt, tb, tn, cn, anc, &nanc);
     int b = class_def_body(nt, tb[i]), bn = 0;
     const int *bs = b >= 0 ? nt_arr(nt, b, "body", &bn) : NULL;
     for (int q = 0; q < bn; q++) {
@@ -26988,7 +26988,7 @@ int desugar_builtin_reopen_self_calls(Compiler *c) {
   for (int m = 0; m < n0; m++) {
     if (!class_def_is_module(nt, m)) continue;
     const char *mn = class_def_bare_key(c, m);
-    const char *host = mn ? rbself_module_host(nt, n0, mn) : NULL;
+    const char *host = mn ? rbself_module_host(c, nt, n0, mn) : NULL;
     if (!host) continue;
     char *defs[512], *hdefs[512];
     int nd = rbself_body_defs(nt, n0, 1, mn, defs, 0, 512);
@@ -27042,12 +27042,12 @@ int desugar_builtin_reopen_self_calls(Compiler *c) {
    pure-Ruby Date) -- owns the class, and its bodies are not a builtin's
    reopening. A body that only adds instance methods (a gem reopening the
    Date it expects the date library to provide) still is. */
-static int mo_program_owns(const NodeTable *nt, int n0, const char *cn) {
+static int mo_program_owns(const Compiler *c, const NodeTable *nt, int n0, const char *cn) {
   if (!sp_streq(cn, "Date") && !sp_streq(cn, "DateTime")) return 0;
   for (int m = 0; m < n0; m++) {
     if (nt_kind(nt, m) != NK_ClassNode) continue;
     int cp = nt_ref(nt, m, "constant_path");
-    const char *mn = cp >= 0 && nt_kind(nt, cp) == NK_ConstantReadNode ? nt_key_name(nt, cp) : NULL;
+    const char *mn = cp >= 0 && nt_kind(nt, cp) == NK_ConstantReadNode ? key_name(c, cp) : NULL;
     if (!mn || !sp_streq(mn, cn)) continue;
     if (nt_ref(nt, m, "superclass") >= 0) return 1;
     int b = nt_ref(nt, m, "body");
@@ -27164,7 +27164,7 @@ int desugar_builtin_reopen_methods(Compiler *c) {
     const char *g = cn ? mo_guard_class(cn) : NULL;
     if (!g) continue;
     /* a program's own class of the name (with a superclass) is its own */
-    if (class_def_super(nt, m) >= 0 || mo_program_owns(nt, n0, cn)) continue;
+    if (class_def_super(nt, m) >= 0 || mo_program_owns(c, nt, n0, cn)) continue;
     int b = class_def_body(nt, m);
     int bn = 0; const int *bs = b >= 0 ? nt_arr(nt, b, "body", &bn) : NULL;
     int *keep = malloc(sizeof(int) * (size_t)(bn ? bn : 1)); int nk = 0;
@@ -27917,7 +27917,7 @@ static int cev_block_shares_ivar(const NodeTable *nt, int n, const int *hits, in
  * (define_method, a nested class_eval, ...), keep their own ivars. A block
  * instance_eval / instance_exec runs on the class has its reads and
  * `defined?` rewritten the same way when it writes no ivar. */
-static int sce_program_owns_class_eval(const NodeTable *nt);
+static int sce_program_owns_class_eval(const Compiler *c, const NodeTable *nt);
 /* Is the subtree under id an expression a class value's class_eval block
    may run as the class's own statements once its ivars go through the
    class's accessors: ivars, literals, constants, operators and calls on
@@ -28053,7 +28053,7 @@ int desugar_class_eval_ivars(Compiler *c) {
     if (!nm || (!ie && !is_class_eval_family(nm))) continue;
     if (ie && own_ie < 0)
       own_ie = program_defines_name(nt, n0, "instance_eval") || program_defines_name(nt, n0, "instance_exec");
-    if (!ie && own < 0) own = sce_program_owns_class_eval(nt);
+    if (!ie && own < 0) own = sce_program_owns_class_eval(c, nt);
     int r = nt_ref(nt, id, "receiver"), blk = nt_ref(nt, id, "block");
     if (r >= 0 && !ie && blk >= 0 && nt_kind(nt, blk) == NK_BlockNode && nt_ref(nt, id, "arguments") < 0 &&
         (nt_kind(nt, r) == NK_LocalVariableReadNode || nt_kind(nt, r) == NK_CallNode)) {
@@ -28442,7 +28442,7 @@ static int biv_nested(const NodeTable *nt, const int *parent, int id) {
 static int biv_has(const char **v, int n, const char *name) {
   return n && name && bsearch(&name, v, (size_t)n, sizeof(*v), biv_name_cmp) != NULL;
 }
-static void biv_hosts_build(NodeTable *nt, int n0, BivHosts *h) {
+static void biv_hosts_build(const Compiler *c, NodeTable *nt, int n0, BivHosts *h) {
   memset(h, 0, sizeof *h);
   int cmix = 0, cown = 0, cmf = 0;
   h->parent = an_parent_map(nt);
@@ -28494,7 +28494,7 @@ static void biv_hosts_build(NodeTable *nt, int n0, BivHosts *h) {
   for (int id = 0; h->nr && id < n0; id++) {
     NodeKind k = nt_kind(nt, id);
     const char *nm = NULL; int d = 0;
-    if (k == NK_ModuleNode) { int cp = nt_ref(nt, id, "constant_path"); nm = cp >= 0 ? nt_key_name(nt, cp) : NULL; d = -1; }
+    if (k == NK_ModuleNode) { int cp = nt_ref(nt, id, "constant_path"); nm = cp >= 0 ? key_name(c, cp) : NULL; d = -1; }
     else if (k == NK_ConstantReadNode || k == NK_ConstantPathNode) { nm = nt_str(nt, id, "name"); d = 1; }
     if (!nm) continue;
     const char **at = bsearch(&nm, h->rn, (size_t)h->nr, sizeof(*h->rn), biv_name_cmp);
@@ -28504,7 +28504,7 @@ static void biv_hosts_build(NodeTable *nt, int n0, BivHosts *h) {
 static void biv_hosts_free(BivHosts *h) {
   free(h->mix); free(h->rn); free(h->reads); free(h->owner); free(h->parent); free(h->own); free(h->mf);
 }
-/* rbself_module_host_in(nt, n0, mod, 1), from the index */
+/* rbself_module_host_in(c, nt, n0, mod, 1), from the index */
 static const char *biv_host_of(NodeTable *nt, const BivHosts *h, const char *mod) {
   const char **at = mod && h->nr ? bsearch(&mod, h->rn, (size_t)h->nr, sizeof(*h->rn), biv_name_cmp) : NULL;
   if (!at) return NULL;
@@ -28547,7 +28547,7 @@ int desugar_builtin_ivars(Compiler *c) {
         !biv_frozen_literal(nt, nt_ref(nt, id, "receiver")))
       c->bivar_table = 1;
   BivHosts hosts;
-  biv_hosts_build(nt, n0, &hosts);
+  biv_hosts_build(c, nt, n0, &hosts);
   for (int m = 0; m < n0; m++) {
     if (!class_def_opens_frame(nt, m) || class_def_super(nt, m) >= 0) continue;
     int cp = nt_ref(nt, m, "constant_path");
@@ -28793,7 +28793,7 @@ int desugar_object_method_builtin_overrides(Compiler *c) {
         if (!class_def_is_class(nt, m)) continue;
         const char *cn = class_def_key(c, m);
         const char *g = cn ? mo_override_class(cn) : NULL;
-        if (!g || !mo_def_is_toplevel(nt, m) || mo_program_owns(nt, n0, cn) || (mo_dispatch_arm(g) && !mo_vis_changed(nt, n0, cn, mname))) continue;
+        if (!g || !mo_def_is_toplevel(nt, m) || mo_program_owns(c, nt, n0, cn) || (mo_dispatch_arm(g) && !mo_vis_changed(nt, n0, cn, mname))) continue;
         int b = class_def_body(nt, m);
         int bn = 0; const int *bs = b >= 0 ? nt_arr(nt, b, "body", &bn) : NULL;
         for (int k = 0; k < bn; k++) {
@@ -31402,7 +31402,7 @@ static int sce_name_reflective(const char *nm) {
    reaches. A class or module finds Module's own class_eval (and hooks)
    first, so such a def overrides nothing a class body's graft runs --
    activesupport's Kernel#class_eval is this. */
-static int sce_def_below_module(const NodeTable *nt, int def) {
+static int sce_def_below_module(const Compiler *c, const NodeTable *nt, int def) {
   if (nt_ref(nt, def, "receiver") >= 0) return 0;
   static const NodeKind HOLDERS[] = { NK_ModuleNode, NK_ClassNode };
   for (int h = 0; h < 2; h++) {
@@ -31411,7 +31411,7 @@ static int sce_def_below_module(const NodeTable *nt, int def) {
     while (!found && nt_kind_iter_next(&it)) {
       int cp = nt_ref(nt, it.id, "constant_path");
       if (cp < 0 || nt_kind(nt, cp) != NK_ConstantReadNode) continue;
-      const char *cn = nt_key_name(nt, cp);
+      const char *cn = key_name(c, cp);
       if (!cn || !(h == 0 ? sp_streq(cn, "Kernel")
                           : (sp_streq(cn, "Object") || sp_streq(cn, "BasicObject")))) continue;
       int body = class_def_body(nt, it.id), bn = 0;
@@ -31465,11 +31465,11 @@ static int sce_computed_reaches_module(const NodeTable *nt, int n, int ctx, int 
 /* Does the program define, alias, undefine or compute a method whose name
    `named` accepts, where a class or module would reach it? */
 static int sce_program_defines_nodefs(const NodeTable *nt, int (*named)(const char *));
-static int sce_program_defines(const NodeTable *nt, int (*named)(const char *)) {
+static int sce_program_defines(const Compiler *c, const NodeTable *nt, int (*named)(const char *)) {
   int hit = 0;
   NtKindIter it = nt_kind_iter_begin(nt, NK_DefNode);
   while (!hit && nt_kind_iter_next(&it))
-    hit = named(nt_str(nt, it.id, "name")) && !sce_def_below_module(nt, it.id);
+    hit = named(nt_str(nt, it.id, "name")) && !sce_def_below_module(c, nt, it.id);
   nt_kind_iter_close(&it);
   return hit || sce_program_defines_nodefs(nt, named);
 }
@@ -31594,11 +31594,11 @@ static int sce_hook_def_scope(const NodeTable *nt, int def, const char **scope) 
 }
 /* sce_program_defines for the reflective names, but a def scoped to one
    class or module is put in *sc instead of counting for the program */
-static int sce_program_reflects_scoped(const NodeTable *nt, SceScoped *sc) {
+static int sce_program_reflects_scoped(const Compiler *c, const NodeTable *nt, SceScoped *sc) {
   int hit = 0;
   NtKindIter it = nt_kind_iter_begin(nt, NK_DefNode);
   while (!hit && nt_kind_iter_next(&it)) {
-    if (!sce_name_reflective(nt_str(nt, it.id, "name")) || sce_def_below_module(nt, it.id)) continue;
+    if (!sce_name_reflective(nt_str(nt, it.id, "name")) || sce_def_below_module(c, nt, it.id)) continue;
     const char *scope = NULL;
     int where = sce_hook_def_scope(nt, it.id, &scope);
     if (where == 1) sce_scoped_add(sc, scope);
@@ -31648,8 +31648,8 @@ static int sce_name_eval_family(const char *nm) {
   if (nm && *nm == ':') nm++;
   return nm && is_class_eval_family(nm);
 }
-static int sce_program_owns_class_eval(const NodeTable *nt) {
-  return sce_program_defines(nt, sce_name_eval_family);
+static int sce_program_owns_class_eval(const Compiler *c, const NodeTable *nt) {
+  return sce_program_defines(c, nt, sce_name_eval_family);
 }
 /* a bare `private` / `protected` / `public` / `module_function`: a def
    spliced after it takes that visibility, a class_eval'd one does not */
@@ -31737,7 +31737,7 @@ static int sce_body(Compiler *c, HostStep *h, int owner, int body, int at, int n
     int str = vis ? -1 : sce_eval_string(nt, st);
     int each = !vis && str < 0 && nt_kind(nt, st) == NK_CallNode && nt_str(nt, st, "name") &&
                is_each_name(nt_str(nt, st, "name")) && nt_ref(nt, st, "arguments") < 0;
-    if ((str >= 0 || each) && f->gate < 0) f->gate = sce_program_reflects_scoped(nt, &f->scoped);
+    if ((str >= 0 || each) && f->gate < 0) f->gate = sce_program_reflects_scoped(c, nt, &f->scoped);
     if (f->gate > 0 || ((str >= 0 || each) && f->scoped.n > 0 && sce_scoped_reaches(nt, &f->scoped, owner, 0))) { str = -1; each = 0; }
     if ((str >= 0 || each) && known && !framed) {
       sce_scope_of(&scope, locals, 1);
@@ -31849,7 +31849,7 @@ int sce_graft_text(Compiler *c, HostStep *h, int owner, const char *text, int si
   const int *av = NULL;
   int an = 0;
   if (!sce_eval_args(nt, site, &av, &an)) return -1;
-  if (f->gate < 0) f->gate = sce_program_reflects_scoped(nt, &f->scoped);
+  if (f->gate < 0) f->gate = sce_program_reflects_scoped(c, nt, &f->scoped);
   if (f->gate > 0 || (f->scoped.n > 0 && sce_scoped_reaches(nt, &f->scoped, owner, 0))) return -1;
   SceFrame fr = { NULL, 0 };
   int r = sce_graft(c, &fr, NULL, -1, text, site, &at, out, n);

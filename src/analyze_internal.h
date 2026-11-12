@@ -1100,7 +1100,7 @@ typedef struct {
   const char *param, *cls;
   int mod, hook_mod, cls_node;
 } InclSubst;
-void incl_subst(NodeTable *nt, int node, const InclSubst *is, int self_mod);
+void incl_subst(const Compiler *c, NodeTable *nt, int node, const InclSubst *is, int self_mod);
 void incl_emit_stmt(const NodeTable *nt, int s, int **out, int *no, int *cap, char **frame);
 char *incl_frame_add(char *fr, const char *locals);
 int incl_hook_returns(const NodeTable *nt, int node);   /* a `return` that leaves the hook */

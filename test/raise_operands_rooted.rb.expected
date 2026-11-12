@@ -7,3 +7,12 @@
 [19..20, ["k19", [19, 19, 19]]]
 [nil, [nil, true, :sym, 1.5, "lit", "m19"]]
 [[], 19..20, "n19"]
+make_proc ran
+private method 'hidden' called for an instance of Integer
+arg 1
+make_proc ran
+private method 'hidden' called for nil [1]
+TypeError: no implicit conversion of Integer into Proc
+arg 2
+make_proc ran
+undefined method 'later' for main [2]

@@ -6,7 +6,9 @@
 # and #args. A temp is rooted unless its box is an immediate: an empty
 # Array or Hash literal, a bare Array.new, a Range, a String Range and a
 # Rational are boxed as new heap objects, and an allocation after them (the
-# next argument's String) must not collect them.
+# next argument's String) must not collect them. The call's `&expr` runs
+# too, after the arguments and before the raise, as CRuby takes it as the
+# block before it looks the method up.
 def hidden(*a) = :h
 
 def staged
@@ -43,5 +45,31 @@ while i < 20
   i += 1
 end
 p r
+
+def make_proc
+  puts "make_proc ran"
+  proc { 1 }
+end
+def arg(n) = (puts "arg #{n}"; n)
+begin
+  3.hidden(&make_proc)
+rescue NoMethodError => e
+  puts e.message
+end
+begin
+  nil.hidden(arg(1), &make_proc)
+rescue NoMethodError => e
+  puts "#{e.message} #{e.args}"
+end
+begin
+  3.hidden(&1)
+rescue NoMethodError, TypeError => e
+  puts "#{e.class}: #{e.message}"
+end
+begin
+  later(arg(2), &make_proc)
+rescue NoMethodError => e
+  puts "#{e.message} #{e.args}"
+end
 
 def later(*a) = :l

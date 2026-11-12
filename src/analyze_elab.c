@@ -3771,27 +3771,24 @@ static int lr_closure_use(Compiler *c, const int *par, int n, int x) {
   return k == VPU_ENDED && nt_kind(c->nt, up.parent) == NK_CallNode && nt_ref(c->nt, up.parent, "receiver") == up.node &&
          is_proc_invoke(nt_str(c->nt, up.parent, "name")) && !lr_in_closure(c, par, n, up.parent) ? up.parent : -1;
 }
-int elab_closure_runs(Compiler *c, int id, int *sites, int cap) {
+/* The calls that run value v (a closure, a lazy chain) as their receiver,
+   use answering each: v's own, or, where v is written whole to a local,
+   each read of it in the same body that use answers (a write that reads
+   it too, `l ||= ...`, does not). How many, into sites[0..cap); -1 past
+   cap. every: -1 also where a read of that local, or v itself, goes
+   anywhere use does not answer, so that the sites are every place v runs. */
+static int lr_value_runs(Compiler *c, const int *par, int n, int v, int (*use)(Compiler *, const int *, int, int),
+                         int every, int *sites, int cap) {
   const NodeTable *nt = c->nt;
-  int n, lam = -1, ns = 0, at;
-  const int *par = elab_node_parents(c, &n);
-  for (int p = id >= 0 && id < n ? par[id] : -1; p >= 0 && p < n && lam < 0; p = par[p]) {
-    NodeKind k = nt_kind(nt, p);
-    if (k == NK_DefNode || (k == NK_BlockNode && !(par[p] >= 0 && lr_proc_made(c, par[p])))) return -1;
-    if (k == NK_LambdaNode) lam = p;
-    else if (k == NK_BlockNode) lam = par[p];
-  }
+  int ns = 0, at;
   VpUp up;
-  if (lam < 0) return -1;
-  if (vp_climb(nt, par, lam, VPS_ALL, &up) != VPU_ENDED || nt_kind(nt, up.parent) != NK_LocalVariableWriteNode) {
-    if ((at = lr_closure_use(c, par, n, lam)) >= 0) {
+  if (vp_climb(nt, par, v, VPS_ALL, &up) != VPU_ENDED || nt_kind(nt, up.parent) != NK_LocalVariableWriteNode) {
+    if ((at = use(c, par, n, v)) >= 0) {
       if (cap < 1) return -1;
       sites[ns++] = at;
     }
-    return ns;
+    return every && at < 0 ? -1 : ns;
   }
-  /* written whole to a local: each read of it in the same body that
-     invokes it (a write that reads it too, `l ||= ...`, does not) */
   static const NodeKind reads[] = { NK_LocalVariableReadNode, NK_LocalVariableOperatorWriteNode,
                                     NK_LocalVariableOrWriteNode, NK_LocalVariableAndWriteNode };
   const char *ln = nt_str(nt, up.parent, "name");
@@ -3799,12 +3796,58 @@ int elab_closure_runs(Compiler *c, int id, int *sites, int cap) {
   for (int j = 0; ln && j < 4; j++)
     NT_FOREACH_KIND(nt, reads[j], x) {
       if (x >= n || !sp_streq(nt_str(nt, x, "name"), ln) || elab_body_def(c, x) != body) continue;
-      if (!j && (at = lr_closure_use(c, par, n, x)) >= 0) {
+      if (!j && (at = use(c, par, n, x)) >= 0) {
         if (ns >= cap) return -1;
         sites[ns++] = at;
       }
+      else if (every) return -1;
     }
   return ns;
+}
+int elab_closure_runs(Compiler *c, int id, int *sites, int cap) {
+  const NodeTable *nt = c->nt;
+  int n, lam = -1;
+  const int *par = elab_node_parents(c, &n);
+  for (int p = id >= 0 && id < n ? par[id] : -1; p >= 0 && p < n && lam < 0; p = par[p]) {
+    NodeKind k = nt_kind(nt, p);
+    if (k == NK_DefNode || (k == NK_BlockNode && !(par[p] >= 0 && lr_proc_made(c, par[p])))) return -1;
+    if (k == NK_LambdaNode) lam = p;
+    else if (k == NK_BlockNode) lam = par[p];
+  }
+  return lam < 0 ? -1 : lr_value_runs(c, par, n, lam, lr_closure_use, 0, sites, cap);
+}
+
+/* The call that forces lazy chain x as its receiver, for elab_lazy_runs:
+   any name but one that chains it on (lr_lazy_later's reading); -1 where
+   x goes anywhere else */
+static int lr_lazy_use(Compiler *c, const int *par, int n, int x) {
+  VpUp up;
+  (void)n;
+  VpUpKind k = vp_climb(c->nt, par, x, VPS_ALL, &up);
+  return k == VPU_ENDED && nt_kind(c->nt, up.parent) == NK_CallNode && nt_ref(c->nt, up.parent, "receiver") == up.node &&
+         !lr_lazy_chain_call(c->lrec, nt_str(c->nt, up.parent, "name")) ? up.parent : -1;
+}
+int elab_lazy_runs(Compiler *c, int id, int *sites, int cap) {
+  const NodeTable *nt = c->nt;
+  int n, q = -1;
+  const int *par = elab_node_parents(c, &n);
+  for (int p = id >= 0 && id < n ? par[id] : -1; p >= 0 && p < n && q < 0; p = par[p]) {
+    NodeKind k = nt_kind(nt, p);
+    if (k == NK_DefNode || k == NK_LambdaNode || k == NK_PostExecutionNode) return -1;
+    if (k != NK_BlockNode || par[p] < 0 || nt_ref(nt, par[p], "block") != p) continue;
+    int w = elab_block_runs(c, par[p]);
+    if (w == ELAB_BLK_LATER && nt_kind(nt, par[p]) == NK_CallNode && lr_lazy_later(c, par[p])) q = par[p];
+    else if (w != ELAB_BLK_NOW) return -1;
+  }
+  /* (the chain's last call: the value that leaves the expression) */
+  for (VpUp up; q >= 0 && vp_climb(nt, par, q, VPS_ALL, &up) == VPU_ENDED && nt_kind(nt, up.parent) == NK_CallNode &&
+                nt_ref(nt, up.parent, "receiver") == up.node && lr_lazy_chain_call(c->lrec, nt_str(nt, up.parent, "name"));)
+    q = up.parent;
+  return q < 0 ? -1 : lr_value_runs(c, par, n, q, lr_lazy_use, 1, sites, cap);
+}
+
+int elab_def_keeps_block(Compiler *c, int def) {
+  return c->lrec && lr_def_block(c, def) == LRB_KEEPS;
 }
 
 /* How the body of def node `def` holds the block it is given (LRB_*), from
@@ -5053,7 +5096,8 @@ static int lr_node_runs(Compiler *c, int id) {
    class; a method defined by a computed name only calls every name. new,
    allocate, a builder's [], exception and raise make the class
    of a constant they are given (of a class method's self, that class and
-   its subclasses; of `x.class`, none new; else any). Main and the core
+   its subclasses; of `x.class`, none new; else any; raise's of each value
+   position of its argument). Main and the core
    classes have instances from the start. A region no load places runs
    inside the statement of region 0 that loads it, so the walk goes over
    region 0's statements and scans a region's at the first one that may
@@ -5368,6 +5412,30 @@ static void lr_rta_made(LrRta *t, int id, int recv) {
   free(low);
 }
 
+/* ...what one value position of a class raise or Timeout.timeout is given
+   makes: of a constant, its class; of a message or a constructor's call (a
+   node of its own), a core class or the one it makes; of anything else, any
+   class */
+typedef struct { LrRta *t; int id; } LrRtaRaised;
+static int lr_rta_raised(const VpLeaf *leaf, void *ud) {
+  LrRtaRaised *x = ud;
+  LrRta *t = x->t;
+  const NodeTable *nt = t->c->nt;
+  NodeKind k = leaf->kind == VPK_EXPR ? nt_kind(nt, leaf->node) : NK_StringNode;
+  int d;
+  if (leaf->kind == VPK_NIL) return 0;   /* (a TypeError) */
+  if (leaf->kind == VPK_EXPR && (k == NK_ConstantReadNode || k == NK_ConstantPathNode)) {
+    if ((d = lr_rta_const(t, leaf->node)) >= LR_MAIN) lr_rta_call_on(t, "exception", d, 0);
+    lr_rta_made(t, x->id, leaf->node);
+    lr_rta_call(t, "initialize", RQ_INST);
+  }
+  else if (leaf->kind != VPK_EXPR || !(k == NK_StringNode || k == NK_InterpolatedStringNode || (k == NK_CallNode && lr_rta_ctor(t, nt_str(nt, leaf->node, "name"))))) {
+    lr_rta_call(t, "exception", RQ_CLASS | RQ_INST);
+    lr_rta_any(t);
+  }
+  return 0;
+}
+
 static void lr_rta_node(LrRta *t, int id) {
   const NodeTable *nt = t->c->nt;
   const char *nm, *hook[2], *by;
@@ -5419,7 +5487,7 @@ static void lr_rta_node(LrRta *t, int id) {
   recv = nt_ref(nt, id, "receiver");
   an = nt_ref(nt, id, "arguments");
   av = an >= 0 ? nt_arr(nt, an, "arguments", &ac) : NULL;
-  NodeKind rk = recv >= 0 ? nt_kind(nt, recv) : NK_SelfNode, ak;
+  NodeKind rk = recv >= 0 ? nt_kind(nt, recv) : NK_SelfNode;
   int rc = rk == NK_ConstantReadNode || rk == NK_ConstantPathNode ? lr_rta_const(t, recv)
          : rk == NK_SelfNode ? lr_rta_self(t, id) : LR_UNKNOWN_CLASS;
   by = nm && is_send_family(nm) ? (ac ? call_sent_name(nt, id, NULL) : "")
@@ -5449,17 +5517,12 @@ static void lr_rta_node(LrRta *t, int id) {
     lr_rta_call(t, "initialize", RQ_INST);
   }
   /* raise makes an object of a class it is given, or a core one of a
-     message; Timeout.timeout one of its klass */
+     message; Timeout.timeout one of its klass: of each value position of
+     that argument (`raise(n > 8 ? NotImplementedError : ArgumentError, m)`) */
   int ka = is_raise_alias(by) ? 0 : rk == NK_ConstantReadNode && is_timeout_call(lr_read_key(t->c, recv), by) ? 1 : -1;
-  ak = ka >= 0 && ka < ac ? nt_kind(nt, av[ka]) : NK_StringNode;
-  if (ak == NK_ConstantReadNode || ak == NK_ConstantPathNode) {
-    if ((d = lr_rta_const(t, av[ka])) >= LR_MAIN) lr_rta_call_on(t, "exception", d, 0);
-    lr_rta_made(t, id, av[ka]);
-    lr_rta_call(t, "initialize", RQ_INST);
-  }
-  else if (ak != NK_StringNode && ak != NK_InterpolatedStringNode && !(ak == NK_CallNode && lr_rta_ctor(t, nt_str(nt, av[ka], "name")))) {
-    lr_rta_call(t, "exception", RQ_CLASS | RQ_INST);
-    lr_rta_any(t);
+  if (ka >= 0 && ka < ac) {
+    LrRtaRaised x = { t, id };
+    for_each_value_position(nt, av[ka], 0, lr_rta_raised, &x);
   }
   /* a module mixed in by a call the record does not hold as a class's
      (on an object, in a method body): its methods have instances */
@@ -5754,14 +5817,19 @@ int elab_call_window(Compiler *c, int id, ElabWindow *w) {
 
 /* ...in a block the record takes to run at once, one whose typed call
    target keeps it when kept (blk_kept), any when not: a call there may be
-   one a target keeps, before the typed pass has marked it */
+   one a target keeps, before the typed pass has marked it; or in a block
+   given to any other call (ELAB_BLK_UNKNOWN) that its typed target keeps
+   (blk_kept), either way */
 static int lr_in_assumed_block(Compiler *c, const int *par, int n, int id, int kept) {
   const NodeTable *nt = c->nt;
   for (int a = id; a >= 0 && a < n && par[a] >= 0; a = par[a]) {
     NodeKind k = nt_kind(nt, a);
     if (k == NK_DefNode || k == NK_LambdaNode) break;   /* (a body of its own: its window is the def's) */
-    if (k == NK_BlockNode && nt_ref(nt, par[a], "block") == a && (!kept || nt_int(nt, par[a], "blk_kept", 0)) &&
-        elab_block_runs(c, par[a]) == ELAB_BLK_ASSUMED) return 1;
+    if (k != NK_BlockNode || nt_ref(nt, par[a], "block") != a) continue;
+    int marked = nt_int(nt, par[a], "blk_kept", 0);
+    if (kept && !marked) continue;
+    int runs = elab_block_runs(c, par[a]);
+    if (runs == ELAB_BLK_ASSUMED || (marked && runs == ELAB_BLK_UNKNOWN)) return 1;
   }
   return 0;
 }
@@ -6384,8 +6452,9 @@ static void lr_readers(Compiler *c, LoadRecord *r) {
    the window's start, any of several (an entry, ct_version_at); copy: as
    the call in a mixin's copy of its body. In a block the record takes to
    run at once, a call may be one its typed target keeps
-   (elab_in_kept_block), which no pass has marked yet: it is asked as
-   running after its point as well. */
+   (elab_in_kept_block), which no pass has marked yet, and in a block given
+   to a method of the program's, one the pass has marked kept: either is
+   asked as running after its point as well. */
 static int lr_meet_holds(Compiler *c, const ElabMeet *m, const LrDef **ds, int cap, int cls, int sg, const char *name, int def) {
   if (m->at == ELAB_YES) return m->d && m->d->node == def;
   if (m->at == ELAB_NO || m->win != ELAB_YES || (m->n < 1 && m->n != ELAB_SPAN_ANY)) return 0;

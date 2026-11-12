@@ -6670,6 +6670,19 @@ static int cplan_root_vis(Compiler *c, int call, int k, const char *name) {
        (k >= 0 && method_vis_for_caller(c, call, k, name) == SP_VIS_PUBLIC))) vis = SP_VIS_PUBLIC;
   return vis;
 }
+/* Has owner's def of `name` (its own part of the lookup) run wherever
+   call `call` runs, where that is not its point: in a lazy chain's block,
+   at each call that forces the chain (elab_lazy_runs), each one run at
+   its own point? 0 where the record does not know every such place, or
+   one may run before the def. */
+static int cplan_root_def_runs_first(Compiler *c, int call, int owner, const char *name) {
+  int sites[16], n = elab_lazy_runs(c, call, sites, 16);
+  for (int k = 0; k < n; k++) {
+    LoadPoint sp = elab_point_of(c, sites[k]);
+    if (sp.region < 0 || !elab_blocks_run_now(c, sites[k]) || elab_reached_method_at(c, owner, name, sp) != ELAB_YES) return 0;
+  }
+  return n > 0;
+}
 /* See call_plan.h. */
 int cplan_root_method(Compiler *c, int call, const char *cls, const char *name, int *vis) {
   if (vis) *vis = -1;
@@ -6701,6 +6714,12 @@ int cplan_root_method(Compiler *c, int call, const char *cls, const char *name, 
        runs before every def, include and visibility change of the name in
        the root's own part of the lookup finds what the lookup finds past it
        (Kernel's tap, ahead of a later `module Kernel; private; def tap`).
+       A call in a lazy chain's block runs where the chain is forced: the
+       def answers it where every such place is after the def
+       (cplan_root_def_runs_first); where the record does not know every
+       place, or they straddle the def, the call answers from its point
+       (a block a method keeps: telling the two apart takes a run-time
+       check of the root's version).
        (A top-level def's place is asked above; a call with no place in the
        load is cplan_root_vis's, by cplan_root_def_ran. Where the record
        cannot order them, a def under a condition, the def still answers:
@@ -6708,7 +6727,7 @@ int cplan_root_method(Compiler *c, int call, const char *cls, const char *name, 
        entries do not have yet.) */
     if (mi >= 0 && owner >= 0) {
       LoadPoint cp = elab_point_of(c, call);
-      if (cp.region >= 0 && elab_reached_method_at(c, owner, name, cp) == ELAB_NO) mi = -1;
+      if (cp.region >= 0 && elab_reached_method_at(c, owner, name, cp) == ELAB_NO && !cplan_root_def_runs_first(c, call, owner, name)) mi = -1;
     }
     if (mi >= 0) {
       if (vis) *vis = cplan_root_vis(c, call, owner, name);

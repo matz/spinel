@@ -13775,6 +13775,27 @@ static int obj_to_ary_any(Compiler *c) {
   }
   return 0;
 }
+/* sp_obj_to_ary_entry: the version entry of each class whose implied
+   to_ary a boxed site may answer by its entry (the plan's set of them,
+   cplan_to_ary_entries; emit_boxed_to_ary_arms), one
+   switch the sites share as they share sp_obj_to_ary for the table's
+   answers. Written after the bodies, where a site calls it
+   (Compiler.uses_obj_to_ary_entry): a program whose entries only typed
+   sites call (they call the entry itself) has none. */
+static void emit_obj_to_ary_entry_dispatch(Compiler *c, Buf *protos, Buf *defs) {
+  if (!c->uses_obj_to_ary_entry) return;
+  buf_puts(protos, "static sp_RbVal sp_obj_to_ary_entry(sp_RbVal v);\n");
+  buf_puts(defs, "static sp_RbVal sp_obj_to_ary_entry(sp_RbVal v) {\n");
+  emit_hook_object_root(defs, "SP_GC_ROOT_RBVAL", "v");
+  buf_puts(defs, "  switch (v.cls_id) {\n");
+  const CplanToAryEntries *es = cplan_to_ary_entries(c);
+  for (int j = 0; j < es->n; j++) {
+    buf_printf(defs, "    case %d: return ", es->cls[j]);
+    emit_obj_to_ary_call(c, es->scope[j], c->scopes[es->scope[j]].class_id, "v", defs);
+    buf_puts(defs, ";\n");
+  }
+  buf_puts(defs, "    default: return sp_box_nil();\n  }\n}\n");
+}
 static void emit_obj_to_ary_dispatch(Compiler *c, Buf *b) {
   if (!obj_to_ary_any(c)) return;
   buf_puts(b, "static sp_RbVal sp_obj_to_ary(sp_RbVal v) {\n");
@@ -24369,7 +24390,8 @@ char *codegen_program(const NodeTable *nt) {
        value's #methods call of their own */
     const char *vmt[4] = { g_procs.p, body->p, b.p, g_pd_defs.p };
     emit_value_methods_helpers(c, vmt, 4, &g_pd_protos, &g_pd_defs);
-    emit_class_value_responds_helper(c, vmt, 4, &g_pd_protos, &g_pd_defs); }
+    emit_class_value_responds_helper(c, vmt, 4, &g_pd_protos, &g_pd_defs);
+    emit_obj_to_ary_entry_dispatch(c, &g_pd_protos, &g_pd_defs); }
   if (isa_ext) {
     if (calls_poly_is_a(b.p + isa_ext_at) || calls_poly_is_a(g_procs.p) ||
         calls_poly_is_a(body->p) || calls_poly_is_a(g_pd_defs.p))

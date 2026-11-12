@@ -1751,6 +1751,62 @@ int cplan_implied_target(Compiler *c, int id, int op, int cls, const char *name,
   if (framed) elab_plan_leave(c);
   return vi;
 }
+/* The version entry an implied call `name` on an instance of class cls
+   takes where the plan answers an entry (mi: the table's method of the
+   name on cls): the scope, -1 for none made. Its key is the one the
+   plan's answer finds it by (cplan_implied_target, call_target's
+   VER_ENTRY_CHAIN entry of the receiver's class): the receiver class, the
+   name and the arity the versions take, for a call no CallNode makes
+   (ver_call_arity of node -1: no arguments), so the same entry at every
+   site of a syntax row. */
+static int cplan_implied_entry(Compiler *c, int cls, const char *name, int mi) {
+  if (!c->ver_built || cls < 0 || mi < 0) return -1;
+  int ix = ver_entry_ix(c, VER_ENTRY_CHAIN, 0, cls, 0, name, ver_call_arity(c, -1, cls, 0, name, mi));
+  return ix >= 0 ? c->ver_entries[ix].scope : -1;
+}
+/* See call_plan.h. The classes are cplan_boxed_to_ary_classes' (a box can
+   hold them, their to_ary is the table's no-argument one). */
+const CplanToAryEntries *cplan_to_ary_entries(Compiler *c) {
+  if (c->to_ary_entries) return c->to_ary_entries;
+  int np = 0;
+  const PolyCand *pc = comp_poly_candidates(c, "to_ary", &np);
+  CplanToAryEntries *es = calloc(1, sizeof *es);
+  int *cls = malloc(sizeof(int) * (size_t)(np + 1)), *scope = malloc(sizeof(int) * (size_t)(np + 1));
+  if (!es || !cls || !scope) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  es->cls = cls;
+  es->scope = scope;
+  for (int i = 0; i < np; i++) {
+    int k = pc[i].cls, mi = comp_implicit_to_ary_mi(c, k);
+    if (pc[i].native || mi < 0 || mi != pc[i].mi || c->scopes[mi].nparams != 0 || !c->classes[k].instantiated) continue;
+    int e = cplan_implied_entry(c, k, "to_ary", mi);
+    if (e < 0 || !c->scopes[e].reachable) continue;
+    es->cls[es->n] = k;
+    es->scope[es->n++] = e;
+  }
+  c->to_ary_entries = es;
+  return es;
+}
+/* See call_plan.h. */
+void cplan_to_ary_entries_free(Compiler *c) {
+  if (!c->to_ary_entries) return;
+  free(c->to_ary_entries->cls);
+  free(c->to_ary_entries->scope);
+  free(c->to_ary_entries);
+  c->to_ary_entries = NULL;
+}
+/* The entry of class k in the program's set (cplan_to_ary_entries), -1
+   for a class it has none for */
+static int cplan_to_ary_entry_of(Compiler *c, int k) {
+  const CplanToAryEntries *es = cplan_to_ary_entries(c);
+  int lo = 0, hi = es->n - 1;
+  while (lo <= hi) {
+    int m = (lo + hi) / 2;
+    if (es->cls[m] == k) return es->scope[m];
+    if (es->cls[m] < k) lo = m + 1;
+    else hi = m - 1;
+  }
+  return -1;
+}
 /* The classes whose own to_ary the implied to_ary call node id makes on
    operand op reaches when the operand is boxed (a multiple assignment's
    value, the value a block of several parameters takes apart): each
@@ -1780,7 +1836,7 @@ int cplan_boxed_to_ary_classes(Compiler *c, int id, int op, int *out, CplanToAry
     MethodLookup ml;
     int vi = cplan_implied_target(c, id, op, k, "to_ary", &ml);
     if (vi < 0 || c->scopes[vi].nparams != 0) continue;
-    if (ans) ans[n] = (CplanToAry){ vi, ml.kind == ML_ENTRY ? CTA_ENTRY : vi == mi ? CTA_TABLE : CTA_VERSION };
+    if (ans) ans[n] = (CplanToAry){ vi, ml.kind == ML_ENTRY && cplan_to_ary_entry_of(c, k) == vi ? CTA_ENTRY : vi == mi ? CTA_TABLE : CTA_VERSION };
     out[n++] = k;
   }
   return n;

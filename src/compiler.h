@@ -1691,6 +1691,11 @@ typedef struct {
   struct IcState *ic;
   struct YvtIndex *yvt;   /* yield_value_type's call-site index (analyze_internal.h), built on first use */
   int uses_exc_text_handle;  /* emitted shared exception text routes, to_s/message bits */
+  /* a boxed site converts through sp_obj_to_ary_entry (emit_boxed_to_ary_arms):
+     codegen writes that switch after the bodies */
+  int uses_obj_to_ary_entry;
+  /* the classes that switch serves, with their entries (cplan_to_ary_entries) */
+  struct CplanToAryEntries *to_ary_entries;
   char *exc_text_late;  /* the plain exception text dispatchers, defined after the globals (emit_exc_text_dispatch) */
   int exc_text_super;        /* exc_text_override_calls_super's memo: 0 unasked, 1 no, 2 yes */
   /* body-node id -> enclosing BlockNode id (lazy; emit_stmts block-local

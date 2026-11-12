@@ -385,6 +385,16 @@ typedef struct CplanToAry { int mi; CtaHow how; } CplanToAry;
    the record proves it: into out[0..cap), with the method each runs
    there and how into ans[0..cap) (may be NULL); the count */
 int cplan_boxed_to_ary_classes(Compiler *c, int id, int op, int *out, CplanToAry *ans, int cap);
+/* The classes a boxed site's implied to_ary may answer by their version
+   entry, through the program's one switch of them (sp_obj_to_ary_entry):
+   each class a box can hold whose to_ary has an entry made and reachable,
+   cls[0..n) ascending, with that entry in scope[0..n). The entry is the
+   same function at every site, as its key holds the class, the name and
+   an arity no node gives, so the set is the program's: built on the first
+   ask, after the analysis (codegen asks), and freed with the Compiler. */
+typedef struct CplanToAryEntries { int n; int *cls; int *scope; } CplanToAryEntries;
+const CplanToAryEntries *cplan_to_ary_entries(Compiler *c);
+void cplan_to_ary_entries_free(Compiler *c);
 /* The program's `[]=` an index store on an instance of class cls calls:
    its method scope, with the class defining it in *cdef when cdef is
    given; -1 when the chain has none that takes a key and a value. */

@@ -5303,7 +5303,7 @@ static int method_obj_lookup(Compiler *c, int node, int *cls, int *sg) {
      (desugar_builtin_method_obj) -- for an object accessor the wrapper is a
      TOP-LEVEL def, not in the object's own class chain, so resolve it there. */
   if (sym[0] == '_' && sym[1] == '_' && sym[2] == 'b' && sym[3] == 'a' && sym[4] == 'm')
-    return comp_method_index(c, sym);
+    return call_target(c, node, -1, sym, CT_CAPTURE | CT_TOP, NULL);
   if (ty_is_object(rt)) { k = ty_object_class(rt); goto found; }
   /* Klass.method(:cmeth) / Module.method(:mf): the class-side method */
   if (rt == TY_CLASS && (nt_kind(nt, recv) == NK_ConstantReadNode ||

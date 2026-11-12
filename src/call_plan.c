@@ -1741,6 +1741,39 @@ int cplan_reopen_def_public(Compiler *c, int site, int mi, const char *sym) {
   if (framed) elab_plan_leave(c);
   return vis == SP_VIS_PUBLIC;
 }
+static void ct_accessor_met(Compiler *c, int id, int cls, const char *name, CplanAccessor *a);
+/* See call_plan.h. */
+CplanClassArm *cplan_capture_class_arms(Compiler *c, int mn, const char *sym, int *n) {
+  int cap = 8;
+  CplanClassArm *r = malloc(sizeof *r * (size_t)cap);
+  char base[256];
+  int wr = setter_base_name(sym, base, sizeof base), framed = mn >= 0 ? elab_plan_enter(c, mn) : 0;
+  if (!r) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  *n = 0;
+  for (int k = 0; k < c->nclasses; k++) {
+    int reader = comp_reader_in_chain(c, k, sym, NULL), writer = !reader && wr && comp_writer_in_chain(c, k, base, NULL), mi;
+    CplanClassArmKind kind = reader ? CP_CARM_READER : CP_CARM_WRITER;
+    CplanAccessor acc = { -1, -1, -1 };
+    /* an accessor the capture meets (a later def of the name does not
+       replace it), else the def or entry the capture finds, else the
+       class's accessor as the tables have it */
+    if ((reader || writer) && mn >= 0) ct_accessor_met(c, mn, k, sym, &acc);
+    if (acc.owner >= 0) mi = -1;
+    else {
+      mi = call_target(c, mn, k, sym, CT_CAPTURE, NULL);
+      if (mi >= 0) kind = c->scopes[mi].entry != ENTRY_NONE ? CP_CARM_ENTRY : CP_CARM_METHOD;
+      else if (!reader && !writer) continue;
+    }
+    if (*n == cap) {
+      cap *= 2;
+      r = realloc(r, sizeof *r * (size_t)cap);
+      if (!r) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    }
+    r[(*n)++] = (CplanClassArm){ k, mi, kind };
+  }
+  if (framed) elab_plan_leave(c);
+  return r;
+}
 /* (the class whose accessor lists answer cls's `name` on its chain, a
    writer's as `x=`; -1 for none) */
 static int ct_accessor_class(Compiler *c, int cls, const char *name) {

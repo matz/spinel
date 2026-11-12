@@ -1644,8 +1644,10 @@ static char *bam_names_split(const char *s, int *n) {
   return v;
 }
 /* (the version of sym the maker, node site, meets on the ancestors of
-   builtin class cls up to own: the method of a def a reopen gives it
-   there, -1 where none is live, -2 where the record cannot tell) */
+   builtin class cls up to own, or the whole chain where no class owns the
+   builtin's method of the name (own NULL; a name only a reopening of an
+   ancestor defines): the method of a def a reopen gives it there, -1 where
+   none is live, -2 where the record cannot tell) */
 static int bam_reopen_walk(Compiler *c, int site, const char *cls, const char *sym, const char *own) {
   const char *anc = core_class_ancestors(cls);
   if (!anc) return -2;
@@ -1656,7 +1658,7 @@ static int bam_reopen_walk(Compiler *c, int site, const char *cls, const char *s
   if (!ks) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   /* (the ancestors' classes the program reopens, -1 for the others) */
   for (const char *p = names; nk < na && !last; p += strlen(p) + 1) {
-    last = !own || sp_streq(p, own);
+    last = own && sp_streq(p, own);
     lastn = p;
     ks[nk++] = comp_builtin_class_named(c, p);
   }
@@ -1705,6 +1707,9 @@ int cplan_bam_reopen_target(Compiler *c, int mi) {
   const NodeTable *nt = c->nt;
   int dn = mi >= 0 ? c->scopes[mi].def_node : -1;
   const char *sym = dn >= 0 ? nt_str(nt, dn, "bam_sym") : NULL, *own = dn >= 0 ? nt_str(nt, dn, "bam_owner") : NULL;
+  /* (a Comparable's or Numeric's method has no class owner in the facts,
+     but the module or the superclass ends the walk as its owner does) */
+  if (!own && dn >= 0) own = nt_int(nt, dn, "bam_cmp", 0) ? "Comparable" : nt_int(nt, dn, "bam_num", 0) ? "Numeric" : NULL;
   const char *cl = dn >= 0 ? nt_str(nt, dn, "bam_classes") : NULL;
   int site = dn >= 0 ? (int)nt_int(nt, dn, "bam_site", 0) - 1 : -1, nc = 0, r = -1;
   if (!sym || !cl || site < 0) return -1;
@@ -1712,12 +1717,29 @@ int cplan_bam_reopen_target(Compiler *c, int mi) {
   int framed = elab_plan_enter(c, site);
   const char *p = cls;
   for (int i = 0; i < nc; i++, p += strlen(p) + 1) {
-    int ri = bam_reopen_walk(c, site, p, sym, own);
+    /* (a true's or false's own method is its class's: the owner is each
+       class's, where the receiver's class is not known) */
+    const char *po = own ? own : is_boolean_class_name(p) ? builtin_bool_method_owner(p, sym) : NULL;
+    int ri = bam_reopen_walk(c, site, p, sym, po);
     r = i == 0 || ri == r ? ri : -2;
   }
   if (framed) elab_plan_leave(c);
   free(cls);
   return r;
+}
+/* See call_plan.h. */
+int cplan_builtin_reopen_def(Compiler *c, int site, const char *cls, const char *sym, const char *own) {
+  int framed = elab_plan_enter(c, site);
+  int r = bam_reopen_walk(c, site, cls, sym, own);
+  if (framed) elab_plan_leave(c);
+  return r;
+}
+/* See call_plan.h. */
+int cplan_reopen_def_public(Compiler *c, int site, int mi, const char *sym) {
+  int framed = elab_plan_enter(c, site);
+  int vis = mi >= 0 ? elab_method_vis_at(c, c->scopes[mi].class_id, sym, 0, elab_point_of(c, site)) : -1;
+  if (framed) elab_plan_leave(c);
+  return vis == SP_VIS_PUBLIC;
 }
 /* (the class whose accessor lists answer cls's `name` on its chain, a
    writer's as `x=`; -1 for none) */

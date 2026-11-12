@@ -167,6 +167,19 @@ CallPlan cplan_user(Compiler *c, int id);
    the builtin where its Method is made (a reopen's def of the name), -1
    where it stands for the builtin, -2 where the record cannot tell */
 int cplan_bam_reopen_target(Compiler *c, int mi);
+/* The program's def of sym that the Method maker node site meets on the
+   ancestors of builtin class cls up to own (NULL: all of them), the walk
+   cplan_bam_reopen_target asks of a wrapper's classes, asked before there
+   is a wrapper (desugar_builtin_method_obj) and for a boxed receiver's
+   classes (emit_method_params_by_recv). The def's scope where a reopen
+   gives it one live at the maker, -1 where none does, -2 where the record
+   cannot tell. */
+int cplan_builtin_reopen_def(Compiler *c, int site, const char *cls, const char *sym, const char *own);
+/* Is the def mi (cplan_builtin_reopen_def's answer) of sym public where the
+   Method maker node site runs: the visibility the record gives it there, not
+   the final one (a `public :sym` that follows does not count)? Not where the
+   record cannot tell it. */
+int cplan_reopen_def_public(Compiler *c, int site, int mi, const char *sym);
 /* The method scope call `id` runs when it asks for `name`: on cls's
    instance side through its chain, CT_CMETHOD on its class side, CT_OWN
    in cls's own table only, CT_TOP among the top-level functions (cls not

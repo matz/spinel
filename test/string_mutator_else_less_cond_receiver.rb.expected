@@ -1,0 +1,77 @@
+== conditionals
+["new", "new", true]
+["new", "new", true]
+["new", "new", true]
+["new", "new", true]
+["ZZoc", "ZZoc", true]
+["l", "l", true]
+["loc!", "loc!", true]
+["loc!?", "loc!?", true]
+== leaves
+["par", "par", true]
+["ZZlob", "ZZlob", true]
+["read", "read", true]
+["set", "set", "set", true]
+["tee!", "tee!", "tee!", true]
+["ZZee", "ZZee", "ZZee", true]
+["own", "own", true]
+["ZZox", "ZZox", true]
+["box!", "box!", true]
+== kept where an Integer was
+["new", "new", true]
+["loc!", "loc!", true]
+== top level
+["new", "new", true]
+["ZZop", "ZZop", true]
+["tee!", "tee!", "tee!", true]
+== the arm not taken
+NoMethodError
+NoMethodError
+NoMethodError
+["loc"]
+== arguments that allocate
+["f1f2", "f1f2", true]
+["f3f4f5f6f7", "f3f4f5f6f7", true]
+["f10f11f9", "f10f11f9", true]
+== arguments that run code
+["new", "new", true]
+["read", "read", true]
+["box!", "box!", true]
+["ZZee", "ZZee", "ZZee", true]
+["set", "set", "set", true]
+5
+== the String itself as an argument
+["loclocloc", "loclocloc", true]
+["locloc!loc", "locloc!loc", true]
+== an exception's text through &.
+["", 0]
+["", 0]
+["new", 1]
+["new", 1]
+["new", 1]
+["ZZew", 2]
+["ZZEw", 3]
+["new", "new", 1]
+["New", 2]
+"New"
+["undefined method 'clear' for nil", 0]
+["undefined method 'clear' for nil", 0]
+["undefined method 'replace' for nil", 1]
+["undefined method 'concat' for nil", 1]
+["undefined method 'append_as_bytes' for nil", 1]
+["undefined method 'bytesplice' for nil", 2]
+["undefined method 'tr!' for nil", 3]
+[nil, nil, 0]
+[nil, 0]
+nil
+== a `&.` call over a block's answer
+["zza", "zza"]
+["zzb", "zzb"]
+[nil, "la"]
+[nil, "la"]
+== neighbours
+["LOC", "LOC", true]
+["loc!", "loc!", true]
+["new", "new", "you", true]
+["new", "new", true]
+["new", "loc"]

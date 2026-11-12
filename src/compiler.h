@@ -1465,6 +1465,14 @@ typedef struct {
      it, so the chains hold however scopes are renamed or moved */
   int *def_oldest, *def_newest, ndef_nodes;
   int *def_older, *def_newer;
+  /* the same chains by owner, while the entries' build asks
+     (comp_ver_asking), when no scope is made or renamed: per (def node,
+     class, -1 for main) a slot of kd/kc, open addressing, with the first
+     scope of the chain the class holds (head; tail its last while made),
+     next[s] the one after s, in the chain's order; nscopes the count they
+     are of; next NULL for none made. Made at an asking period's first ask
+     and freed when the period ends */
+  struct DefOwners { int *kd, *kc, *head, *tail, *next, cap, nscopes; } def_owners;
   /* the top-level scope of each file root (nt_root), by graph id: 0 for the
      entry (analyze_program.c) */
   int *file_scope;
@@ -1918,7 +1926,8 @@ typedef struct {
   struct MethodTableCheck *mtab;
   /* the entries' build asks its calls (ver_entries_build), which make and
      rename no scope: scope_is_shadowed answers from its table, as where
-     the scope index is frozen, not by a scan per ask */
+     the scope index is frozen, not by a scan per ask, and a version's
+     lookup by def from def_owners (comp_ver_asking sets it) */
   int ver_asking;
   /* the scopes that are hidden copies (Scope.shadow), which
      comp_name_is_shadow_copy reads */
@@ -2440,6 +2449,8 @@ int        comp_self_method_in_chain(Compiler *c, int class_id, const char *name
    renamed its scope; *def_class (when asked) the class that holds it. -1
    when no scope there has that def node. */
 int        comp_method_version(Compiler *c, int class_id, const char *name, int is_cm, int def_node, int *def_class);
+/* the entries' build asks its calls (Compiler.ver_asking) from on to off */
+void       comp_ver_asking(Compiler *c, int on);
 /* ...the class's own body at def node def_node that a later prepend's copy
    shadows (`__prep <n> m`, SHADOW_PREP), which comp_method_version leaves
    out (a call of the name reaches it through the copy), on class_id's

@@ -4628,7 +4628,7 @@ static int infer_new_call(Compiler *c, int id, const NodeTable *nt, const char *
            methods must dispatch); the exception-shaped queries route through
            the base helpers like a specialized rescue var does */
         if (class_inherits_builtin_exception(c, ci))
-          { *out = (comp_method_in_chain(c, ci, "initialize", NULL), ty_object(ci)); return 1; }
+          { *out = ty_object(ci); return 1; }
         int ucnew = cplan_user_new(c, id, ci);
         if (ucnew >= 0) {
           an_user_call_record(c, id, ucnew, UC_CMETH, ci);
@@ -4685,7 +4685,7 @@ static int infer_new_call(Compiler *c, int id, const NodeTable *nt, const char *
            methods must dispatch); the exception-shaped queries route through
            the base helpers like a specialized rescue var does */
         if (class_inherits_builtin_exception(c, ci))
-          { *out = (comp_method_in_chain(c, ci, "initialize", NULL), ty_object(ci)); return 1; }
+          { *out = ty_object(ci); return 1; }
         int ucnew = cplan_user_new(c, id, ci);
         if (ucnew >= 0) {
           an_user_call_record(c, id, ucnew, UC_CMETH, ci);

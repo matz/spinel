@@ -901,7 +901,7 @@ int emit_call_raise_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const
          the operands ran, and only for a cause that cannot hold nil. */
       int first_exc_val = !first_const && ac > 0 && repr_of(c, av[0]).exc;
       int first_ok = first_const ? (first_xc >= 0 ? (class_is_exc_subclass(c, first_xc) &&
-                                                       comp_method_in_chain(c, first_xc, "initialize", NULL) < 0)
+                                                       cplan_new_initialize(c, id, first_xc, NULL) < 0)
                                                   : (first_cn && is_exc_name(first_cn)))
                    : (ac == 1 && first_ty == TY_STRING) || (first_exc_val && cause_never_nil);
       int cause_bad = !cause_exc && first_ok;
@@ -984,11 +984,11 @@ int emit_call_raise_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const
         }
         xc = -1;
       }
-      int ic = (xc >= 0 && class_is_exc_subclass(c, xc))
-                 ? comp_method_in_chain(c, xc, "initialize", NULL) : -1;
-      if (xc >= 0 && ic >= 0 && c->scopes[ic].reachable && ctor_needs_self_defaults(c, ic, 0)) {
+      int ic = (xc >= 0 && class_is_exc_subclass(c, xc)) ? cplan_new_initialize(c, id, xc, NULL) : -1;
+      if (xc >= 0 && ic >= 0 && c->scopes[ic].reachable && (!ctor_new_runs(c, xc, ic) || ctor_needs_self_defaults(c, ic, 0))) {
         /* a default reading the instance runs on the allocated object, as
-           the same `.new` does (emit_ctor_alloc_init) */
+           the same `.new` does (emit_ctor_alloc_init), and a version the
+           constructor does not run on it too */
         buf_puts(b, "sp_raise_exc((sp_Exception *)");
         emit_ctor_alloc_init(c, xc, ic, -1, -1, b);
         buf_puts(b, ")");
@@ -1047,10 +1047,11 @@ int emit_call_raise_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const
       }
       int ic = -1;
       if (xc >= 0 && class_is_exc_subclass(c, xc))
-        ic = comp_method_in_chain(c, xc, "initialize", NULL);
-      if (xc >= 0 && ic >= 0 && c->scopes[ic].reachable && ctor_needs_self_defaults(c, ic, 1)) {
+        ic = cplan_new_initialize(c, id, xc, NULL);
+      if (xc >= 0 && ic >= 0 && c->scopes[ic].reachable && (!ctor_new_runs(c, xc, ic) || ctor_needs_self_defaults(c, ic, 1))) {
         /* a default the message leaves reading the instance runs on the
-           allocated object, as for `Cls.new(msg)` */
+           allocated object, as for `Cls.new(msg)`, and a version the
+           constructor does not run on it too */
         buf_puts(b, "sp_raise_exc((sp_Exception *)");
         emit_ctor_alloc_init_argv(c, xc, ic, &av[1], 1, args, b);
         buf_puts(b, ")");

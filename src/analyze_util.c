@@ -6571,7 +6571,7 @@ static void si_call_targets(Compiler *c, SiFacts *f, int from, int id, const cha
   if (r >= 0 && sp_streq(nm, "new") && (nt_kind(nt, r) == NK_ConstantReadNode || nt_kind(nt, r) == NK_ConstantPathNode)) {
     int k = const_node_class_index(c, r);
     if (k >= 0) {
-      int mi = comp_method_in_chain(c, k, "initialize", NULL);
+      int mi = cplan_new_initialize(c, id, k, NULL);
       if (mi >= 0) si_target(f, from, mi, hit);
       return;
     }

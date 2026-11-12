@@ -1712,6 +1712,9 @@ typedef struct {
   struct CplanToAryEntries *to_ary_entries;
   char *exc_text_late;  /* the plain exception text dispatchers, defined after the globals (emit_exc_text_dispatch) */
   int exc_text_super;        /* exc_text_override_calls_super's memo: 0 unasked, 1 no, 2 yes */
+  /* emitting a body that lands in g_procs ahead of the constructors: a
+     fiber's, a Hash default block's (ahead_body_enter, emit_pool_fwd) */
+  int ahead_bodies;
   /* body-node id -> enclosing BlockNode id (lazy; emit_stmts block-local
      resets). Covers the first blk_body_map_n nodes, extended as the table
      grows; -1 = not a block body. */
@@ -1912,6 +1915,7 @@ typedef struct {
   struct VerChain *ver_chain;   /* how many versions a class's chain holds of a name, by (class, side, name) (call_plan.c, ver_chain_count) */
   struct VerHold *ver_hold;   /* the holders of a name worth asking, by name (call_plan.c, ver_holders) */
   struct NewInits *new_inits;   /* the initialize methods a `new` of a class may run, by class (call_plan.c, cplan_new_initializers) */
+  struct NewSites *new_sites;   /* the initialize each `new` site runs, by (site, class) (call_plan.c, cplan_new_initialize) */
   /* per method scope, made once (call_plan.c, cplan_scope_facts): whether
      it holds a super that reaches no method, and whether a method_missing
      answers for self or hands the name on */

@@ -255,7 +255,7 @@ static int new_site_reaches(Compiler *c, int id, int init) {
   if (rk != NK_ConstantReadNode && rk != NK_ConstantPathNode)
     return 0;
   int cid = const_node_class_index(c, recv);
-  return cid >= 0 && comp_method_in_chain(c, cid, "initialize", NULL) == init;
+  return cid >= 0 && cplan_new_initialize(c, id, cid, NULL) == init;
 }
 
 /* `def initialize(...)` is reached through `Klass.new(...)`, never a call named
@@ -3352,11 +3352,12 @@ static int sg_block_handoff(const NodeTable *nt, int n, const char *blk) {
   return rn && sp_streq(rn, blk);
 }
 
-/* Does class `ci`'s initialize hand its block the new object, and nothing
-   else: every hand-off in it passes `self` first? */
-static int sg_initialize_yields_self(Compiler *c, int ci) {
+/* Does the initialize of class `ci` a `new` (call id) runs there hand its
+   block the new object, and nothing else: every hand-off in it passes
+   `self` first? */
+static int sg_initialize_yields_self(Compiler *c, int id, int ci) {
   const NodeTable *nt = c->nt;
-  int mi = comp_method_in_chain(c, ci, "initialize", NULL);
+  int mi = cplan_new_initialize(c, id, ci, NULL);
   if (mi < 0 || c->scopes[mi].body < 0) return 0;
   const char *blk = c->scopes[mi].blk_param;
   if (blk && !blk[0]) blk = NULL;
@@ -3411,7 +3412,7 @@ static int sg_block_param_new(Compiler *c, int id, const char *name, int *out_ci
     if (nt_kind(nt, n) == NK_CallNode && nt_ref(nt, n, "block") == blk) { call = n; break; }
   if (call < 0) return -1;
   int ci = sg_new_class_ci(c, call);
-  if (ci < 0 || !sg_initialize_yields_self(c, ci)) return -1;
+  if (ci < 0 || !sg_initialize_yields_self(c, call, ci)) return -1;
   *out_ci = ci;
   return call;
 }
@@ -11874,7 +11875,7 @@ static int pivs_param(Compiler *c, Scope *s, const char *pn, char *set, int dept
       int rc = rn ? const_node_class_index(c, r) : -1;
       if (rc < 0) { if (rn && is_builtin_class_name(rn)) continue; return 0; }
       if (comp_cmethod_in_chain(c, rc, "new", NULL) >= 0) return 0;
-      if (comp_method_in_chain(c, rc, "initialize", NULL) != (int)(s - c->scopes)) continue;
+      if (cplan_new_initialize(c, u, rc, NULL) != (int)(s - c->scopes)) continue;
     }
     if (!pn) {
       int r = nt_ref(nt, u, "receiver");

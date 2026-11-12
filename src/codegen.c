@@ -8882,8 +8882,8 @@ static int gen_yields_multi(const Compiler *c, int id, const char *yname) {
   return 0;
 }
 
-/* emitting a fiber body, which lands in g_procs ahead of the constructors */
-static int g_in_fiber_body = 0;
+void ahead_body_enter(Compiler *c) { c->ahead_bodies++; }
+void ahead_body_leave(Compiler *c) { c->ahead_bodies--; }
 
 /* A Fiber or Thread block's parameter list (`pn`, the requireds' count) and,
    for the full binding, every name in it. */
@@ -9311,7 +9311,7 @@ static void emit_fiber_new_here(Compiler *c, int id, Buf *b, int as_gen, int siz
      scope). */
   Buf body_buf = {0};
   Buf *pb = &body_buf;
-  g_in_fiber_body++;
+  ahead_body_enter(c);
   buf_printf(pb, "static void %s(sp_Fiber *_fb) {\n", fname);
   buf_puts(pb, "    SP_GC_SAVE();\n");
   size_t fib_frame_ins = pb->len;
@@ -9641,7 +9641,7 @@ static void emit_fiber_new_here(Compiler *c, int id, Buf *b, int as_gen, int siz
      precede this definition there; both sit at file scope. */
   buf_puts(&g_procs, body_buf.p ? body_buf.p : "");
   free(body_buf.p);
-  g_in_fiber_body--;
+  ahead_body_leave(c);
 
   /* Restore emission state */
   ren_unpark(&ren_sv);
@@ -13040,12 +13040,12 @@ void emit_own_class_alloc(Compiler *c, int id, int base, Buf *b) {
   buf_puts(b, "; })");
 }
 
-/* A proc or fiber body is written out ahead of the classes'
-   constructors, and so ahead of the SP_POOL_DEFINE this names: declare
-   the pool to it (a Class value's `new` built inline in a block did not
-   compile). */
+/* A proc, fiber or Hash default block body is written out ahead of the
+   classes' constructors, and so ahead of the SP_POOL_DEFINE this names:
+   declare the pool to it (a Class value's `new` built inline in a block
+   did not compile). */
 void emit_pool_fwd(Compiler *c, int cid) {
-  if (!g_in_proc_body && !g_in_fiber_body) return;
+  if (!g_in_proc_body && !c->ahead_bodies) return;
   if (g_pool_fwd_n < c->nclasses) {
     g_pool_fwd = realloc(g_pool_fwd, (size_t)c->nclasses);
     memset(g_pool_fwd + g_pool_fwd_n, 0, (size_t)(c->nclasses - g_pool_fwd_n));

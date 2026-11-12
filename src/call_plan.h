@@ -343,6 +343,7 @@ int ct_version_marked(Compiler *c, const char *nm);
 void ver_hold_free(Compiler *c);
 void ver_chain_free(Compiler *c);
 void new_inits_free(Compiler *c);
+void new_sites_free(Compiler *c);
 /* the method call id reaches when it can reach only main's own method of
    name, -1 for none (a call on main where main's method is defined) */
 int ct_main_target(Compiler *c, int id, const char *name);
@@ -441,6 +442,14 @@ int cplan_targets(Compiler *c, int id, int *out, int cap);
    NULL) saying ML_TABLE (the reader keeps the table's answer) or ML_NONE
    (no row, or an undef on the chain) */
 int cplan_implied_target(Compiler *c, int id, int op, int cls, const char *name, MethodLookup *ml);
+/* The initialize the builtin Class#new runs when node id (a `new` the
+   program's `new` does not answer, a `raise K`) builds an instance of
+   class ci: the version the record proves where id runs (*ml ML_METHOD),
+   else the table's method (ML_TABLE; ML_NONE and -1 where ci has no
+   initialize of the program's). Every reader of a construction site asks
+   it, so the site's arity, arguments, block and call name one method. ml
+   may be NULL. */
+int cplan_new_initialize(Compiler *c, int id, int ci, MethodLookup *ml);
 /* Every initialize a builtin `new` of class ci may run, wherever it runs:
    the table's method, then each other version of it the record holds (a
    replaced one, in the history of the class that defines it) that an
@@ -457,6 +466,10 @@ int cplan_implied_target(Compiler *c, int id, int op, int cls, const char *name,
    table's method alone with *whole 0, which a memo of the facts
    (ivar_assigned_in_initialize) would keep as "not set". */
 int cplan_new_initializers(Compiler *c, int ci, int *out, int cap, int *whole);
+/* The initialize a Kernel `raise K` or `raise K, msg` (call id) runs, K a
+   constant naming an exception class of the program's: K.new's there
+   (cplan_new_initialize); -1 for any other call */
+int cplan_raise_initialize(Compiler *c, int id);
 /* The to_ary of the program's through which a value of type t converts
    where node `at` takes it apart (the implied to_ary call a row makes on
    operand op: a multiple assignment's value, the element a nested target

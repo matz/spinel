@@ -5865,6 +5865,17 @@ int elab_runs_later(Compiler *c, int id) {
   }
   return 0;
 }
+int elab_in_unplaced_block(Compiler *c, int id) {
+  int n;
+  const int *par = elab_node_parents(c, &n);
+  for (int a = id; a >= 0 && a < n && par[a] >= 0; a = par[a]) {
+    NodeKind k = nt_kind(c->nt, a);
+    if (k == NK_DefNode || k == NK_LambdaNode) return 0;
+    if (k == NK_PostExecutionNode ||
+        (k == NK_BlockNode && nt_ref(c->nt, par[a], "block") == a && elab_block_runs(c, par[a]) != ELAB_BLK_NOW)) return 1;
+  }
+  return 0;
+}
 void elab_window_open(Compiler *c, ElabWindow *w) {
   LoadRecord *r = elab_fresh(c);
   lr_run_points(c);

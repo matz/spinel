@@ -26645,7 +26645,7 @@ static const char *rbself_module_host_in(const Compiler *c, NodeTable *nt, int n
         const int *bs = b >= 0 ? nt_arr(nt, b, "body", &bn) : NULL;
         for (int k = 0; k < bn; k++)
           if (bs[k] == id) {
-            target = strict && engine_lexically_nested(nt, m) ? NULL : class_def_name(nt, m);
+            target = strict && engine_lexically_nested(nt, m) ? NULL : class_def_key(c, m);
             if (!target) return NULL;
             break;
           }
@@ -28466,7 +28466,7 @@ static void biv_hosts_build(const Compiler *c, NodeTable *nt, int n0, BivHosts *
     }
     int cls = class_def_is_class(nt, id), mod = !cls && class_def_is_module(nt, id);
     if (!cls && !mod) continue;
-    const char *cn = class_def_name(nt, id);
+    const char *cn = class_def_key(c, id);
     if (cn && (!class_def_bare_name(nt, id) || biv_nested(nt, h->parent, id))) {
       h->own = biv_grow(h->own, h->nown, &cown, sizeof *h->own);
       h->own[h->nown++] = cn;

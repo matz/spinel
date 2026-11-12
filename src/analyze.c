@@ -49035,12 +49035,12 @@ int desugar_self_superclass_left(Compiler *c, LowerCtx *lc, int id) {
      the body it stands in is any class's (a frame whose self is a class) */
   if (nt_kind(ntc, id) != NK_ClassNode || !class_def_is_class(ntc, lc->owner)) return 0;
   int sc = nt_ref(ntc, id, "superclass");
-  return class_def_name(ntc, lc->owner) && sc >= 0 && nt_kind(ntc, sc) == NK_SelfNode;
+  return class_def_key(c, lc->owner) && sc >= 0 && nt_kind(ntc, sc) == NK_SelfNode;
 }
 int desugar_self_superclass_at(Compiler *c, LowerCtx *lc, int id) {
   NodeTable *ntc = (NodeTable *)c->nt;
   if (!desugar_self_superclass_left(c, lc, id)) return 0;
-  const char *pn = class_def_name(ntc, lc->owner);
+  const char *pn = class_def_key(c, lc->owner);
   int sc = nt_ref(ntc, id, "superclass");
   int cr = nt_new_node(ntc, "ConstantReadNode");
   if (cr < 0) return 0;

@@ -14,11 +14,9 @@
 # the kernel.
 #
 # Subset. Present: random_bytes/bytes, hex, base64, urlsafe_base64, uuid
-# (and its uuid_v4 alias), alphanumeric, and `random_number` for a positive
-# Integer bound. Not modelled: `random_number`'s Float forms (no argument,
-# a bound below 1, a Float or a Range),
-# `uuid_v7` (needs a millisecond clock and a monotonic counter), `base36`,
-# `choose`, and the `chars:` keyword on `alphanumeric` -- all of which are
+# (and its uuid_v4 alias), uuid_v7, alphanumeric, and `random_number` for a
+# positive Integer bound. Not modelled: `random_number`'s Float forms (no argument,
+# a bound below 1, a Float or a Range), `base36`, `choose`, and the `chars:` keyword on `alphanumeric` -- all of which are
 # renderings a program can write for itself over `random_bytes`, which the
 # absent ones here are not.
 #
@@ -113,6 +111,59 @@ module SecureRandom
 
   def self.uuid_v4
     SecureRandom.uuid
+  end
+
+  def self.uuid_v7(extra_timestamp_bits: 0)
+    bits = extra_timestamp_bits
+    begin
+      bits = 13 if bits.is_a?(Float) && bits.to_f.finite? && (bits <= -1 || bits >= 13)
+      bits = Integer(bits) unless bits.is_a?(Integer)
+    rescue ArgumentError
+      if extra_timestamp_bits.is_a?(String)
+        # CRuby's wide decimal parser ignores a trailing NUL beyond ULONG_MAX.
+        nul = 0
+        nul += 1 while nul < extra_timestamp_bits.bytesize && extra_timestamp_bits.getbyte(nul) != 0
+        text = extra_timestamp_bits.byteslice(0, nul)
+        digits = text.delete("-+_")
+        if nul < extra_timestamp_bits.bytesize && text.match?(/\A[+-]?[1-9](?:_?[0-9])*\z/) &&
+            (digits.length > 20 || (digits.length == 20 && digits >= "18446744073709551616"))
+          raise ArgumentError, "extra_timestamp_bits must be in 0..12"
+        end
+        raise ArgumentError, "invalid value for Integer(): #{extra_timestamp_bits.inspect}"
+      end
+      raise
+    rescue RangeError => error
+      raise unless error.message.start_with?("bignum too big", "integer overflow parsing", "float out of Integer range")
+      bits = 13
+    end
+    # Select a small width without narrowing a Bignum through Integer or case.
+    width = 0
+    width += 1 while width < 13 && bits != width
+    case width
+    when 0 # min timestamp precision
+      ms = Process.clock_gettime(Process::CLOCK_REALTIME, :millisecond)
+      rand = SecureRandom.random_bytes(10)
+      rand.setbyte(0, rand.getbyte(0) & 0x0f | 0x70) # version
+      rand.setbyte(2, rand.getbyte(2) & 0x3f | 0x80) # variant
+      "%08x-%04x-%s" % [(ms & 0x0000_ffff_ffff_0000) >> 16,
+        ms & 0xffff, rand.unpack("H4H4H12").join("-")]
+    when 12 # max timestamp precision
+      ms, ns = Process.clock_gettime(Process::CLOCK_REALTIME, :nanosecond).divmod(1_000_000)
+      extra_bits = ns * 4096 / 1_000_000
+      rand = SecureRandom.random_bytes(8)
+      rand.setbyte(0, rand.getbyte(0) & 0x3f | 0x80) # variant
+      "%08x-%04x-7%03x-%s" % [(ms & 0x0000_ffff_ffff_0000) >> 16,
+        ms & 0xffff, extra_bits, rand.unpack("H4H12").join("-")]
+    when (0..12) # the generic version is slower than the special cases above
+      rand_a, rand_b1, rand_b2, rand_b3 = SecureRandom.random_bytes(10).unpack("nnnN")
+      rand_mask_bits = 12 - width
+      ms, ns = Process.clock_gettime(Process::CLOCK_REALTIME, :nanosecond).divmod(1_000_000)
+      "%08x-%04x-%04x-%04x-%04x%08x" % [(ms & 0x0000_ffff_ffff_0000) >> 16, ms & 0xffff,
+        0x7000 | ((ns * (1 << width) / 1_000_000) << rand_mask_bits) |
+          rand_a & ((1 << rand_mask_bits) - 1), 0x8000 | (rand_b1 & 0x3fff), rand_b2, rand_b3]
+    else
+      raise ArgumentError, "extra_timestamp_bits must be in 0..12"
+    end
   end
 
   # `n` characters from A-Z, a-z, 0-9, uniformly.

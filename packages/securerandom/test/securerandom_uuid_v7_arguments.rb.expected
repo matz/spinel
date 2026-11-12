@@ -1,0 +1,34 @@
+integer 0: 018bcfe5-687b-75a5-a5a5-a5a5a5a5a5a5
+integer 12: 018bcfe5-687b-774f-a5a5-a5a5a5a5a5a5
+float 1.5: 018bcfe5-687b-75a5-a5a5-a5a5a5a5a5a5
+float 0.9: 018bcfe5-687b-75a5-a5a5-a5a5a5a5a5a5
+float -0.9: 018bcfe5-687b-75a5-a5a5-a5a5a5a5a5a5
+float 12.9: 018bcfe5-687b-774f-a5a5-a5a5a5a5a5a5
+string decimal: 018bcfe5-687b-77a5-a5a5-a5a5a5a5a5a5
+string hex: 018bcfe5-687b-774f-a5a5-a5a5a5a5a5a5
+string whitespace: 018bcfe5-687b-77a5-a5a5-a5a5a5a5a5a5
+string binary: 018bcfe5-687b-75a5-a5a5-a5a5a5a5a5a5
+to_int: 018bcfe5-687b-7745-a5a5-a5a5a5a5a5a5
+to_i: 018bcfe5-687b-77a5-a5a5-a5a5a5a5a5a5
+fallback: 018bcfe5-687b-77a5-a5a5-a5a5a5a5a5a5
+rational: 018bcfe5-687b-77a5-a5a5-a5a5a5a5a5a5
+complex real: 018bcfe5-687b-77a5-a5a5-a5a5a5a5a5a5
+complex imaginary: RangeError: can't convert 1+1i into Integer
+negative: ArgumentError: extra_timestamp_bits must be in 0..12
+too large: ArgumentError: extra_timestamp_bits must be in 0..12
+float below: ArgumentError: extra_timestamp_bits must be in 0..12
+float above: ArgumentError: extra_timestamp_bits must be in 0..12
+nil: TypeError: can't convert nil into Integer
+true: TypeError: can't convert true into Integer
+false: TypeError: can't convert false into Integer
+symbol: TypeError: can't convert Symbol into Integer
+invalid string: ArgumentError: invalid value for Integer(): "x"
+fractional string: ArgumentError: invalid value for Integer(): "1.5"
+object: TypeError: can't convert Object into Integer
+bad to_int: TypeError: can't convert V7BadInt into Integer
+conversion raises: TypeError: can't convert V7Raises into Integer
+infinity: FloatDomainError: Infinity
+nan: FloatDomainError: NaN
+018bcfe5-687b-75a5-a5a5-a5a5a5a5a5a5
+018bcfe5-687b-774f-a5a5-a5a5a5a5a5a5
+018bcfe5-687b-75a5-a5a5-a5a5a5a5a5a5

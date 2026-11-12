@@ -1,0 +1,8 @@
+int: 0000075b-cd15-7ab2-83d4-e5f60718293a random10;nanosecond;
+float: 0000075b-cd15-7ab2-83d4-e5f60718293a random10;nanosecond;
+rational: 0000075b-cd15-7ab2-83d4-e5f60718293a random10;nanosecond;
+numeric subclass: 0000075b-cd15-7a72-83d4-e5f60718293a to_int;random10;nanosecond;
+string subclass override: 0000075b-cd15-7ab2-83d4-e5f60718293a random10;nanosecond;
+inherited: 0000075b-cd15-7a7a-83d4-e5f60718293a parent_to_int;random10;nanosecond;
+fallback: 0000075b-cd15-79b2-83d4-e5f60718293a to_int_nil;to_i;random10;nanosecond;
+invalid: ArgumentError: extra_timestamp_bits must be in 0..12 

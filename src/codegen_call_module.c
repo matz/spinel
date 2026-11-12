@@ -1384,13 +1384,15 @@ int emit_call_module_fn_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, c
         buf_printf(b, "({ sp_raise_cls(\"ArgumentError\", (&(\"\\xff\" \"unexpected unit: %s\")[1])); 0.0; })", unit);
         return 1;
       }
-      buf_puts(b, sp_streq(name, "clock_getres") ? "(sp_process_clock_res_ns(" : "(sp_process_clock_ns(");
+      int div = !unit ? 0 : sp_streq(unit, "microsecond") ? 1000 : sp_streq(unit, "millisecond") ? 1000000 : sp_streq(unit, "second") ? 1000000000 : 0;
+      int ns_per_unit = sp_streq(name, "clock_gettime") && div && div < 1000000000 ? div : 1;
+      buf_puts(b, div ? "({ int64_t _clock_ticks = " : "(");
+      buf_puts(b, sp_streq(name, "clock_getres") ? "sp_process_clock_res_ns(" : "sp_process_clock_units(");
       if (!emit_clock_id(c, argv[0], b)) emit_int_expr(c, argv[0], b);
+      if (sp_streq(name, "clock_gettime")) buf_printf(b, ", %d", ns_per_unit);
       buf_puts(b, ")");
-      if (unit && sp_streq(unit, "nanosecond")) buf_puts(b, ")");
-      else if (unit && sp_streq(unit, "microsecond")) buf_puts(b, " / 1000)");
-      else if (unit && sp_streq(unit, "millisecond")) buf_puts(b, " / 1000000)");
-      else if (unit && sp_streq(unit, "second")) buf_puts(b, " / 1000000000)");
+      if (div) buf_printf(b, "; _clock_ticks / %d - (_clock_ticks %% %d < 0); })", div / ns_per_unit, div / ns_per_unit);
+      else if (unit && sp_streq(unit, "nanosecond")) buf_puts(b, ")");
       else if (unit && sp_streq(unit, "float_microsecond")) buf_puts(b, " / 1e3)");
       else if (unit && sp_streq(unit, "float_millisecond")) buf_puts(b, " / 1e6)");
       else buf_puts(b, " / 1e9)");  /* float_second (default) */

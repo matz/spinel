@@ -2247,7 +2247,7 @@ void emit_block_binds(Compiler *c, int blk, const int *yargs, int yc,
       int oc = ty_object_class(yr.as_ty);
       int *ks = malloc(sizeof(int) * (size_t)(c->nclasses + 1));
       if (!ks) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-      int nk = cplan_boxed_to_ary_classes(c, nt_ref(nt, blk, "parameters"), NTI_YIELDED, ks, c->nclasses + 1);
+      int nk = cplan_boxed_to_ary_classes(c, nt_ref(nt, blk, "parameters"), NTI_YIELDED, ks, NULL, c->nclasses + 1);
       for (int q = 0; q < nk; q++) yobj_to_ary |= is_descendant(c, ks[q], oc);
       free(ks);
     }

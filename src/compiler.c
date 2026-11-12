@@ -525,6 +525,7 @@ void comp_free(Compiler *c) {
   free(c->ie_map.cls); free(c->ie_map.nonobj); free(c->ie_map.own);
   builtin_given_free(c);
   ic_free(c);
+  cplan_to_ary_entries_free(c);
   yvt_free(c);
   free(c->bsl_gen);
   free(c->bsl_val);

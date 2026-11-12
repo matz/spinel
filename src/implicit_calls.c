@@ -15,12 +15,13 @@ int g_dump_implicit = 0;
 
 typedef struct { IcCall *out; int max, n; } IcSink;
 
-static void ic_push(IcSink *s, const char *name, int operand, unsigned role, int recv) {
+static void ic_push(IcSink *s, const char *name, int operand, unsigned role, int recv, const char *target) {
   if (s->n < s->max) {
     s->out[s->n].name = name;
     s->out[s->n].operand = operand;
     s->out[s->n].role = (unsigned short)role;
     s->out[s->n].recv = (unsigned char)recv;
+    s->out[s->n].target = target;
   }
   s->n++;
 }
@@ -35,7 +36,7 @@ static int ic_builtin_callbacks(IcSink *s, const char *name, const char *recv_cl
   int n = recv_class ? bop_class_callbacks(recv_class, name, &cbs) : bop_name_callbacks(name, &cbs);
   for (int i = 0; i < n; i++)
     for (unsigned bit = 1; bit <= BCR_HOOK; bit <<= 1)   /* (BCR_KEY qualifies the BLOCK call; it is none of its own) */
-      if (bit != BCR_GVAR /* the assignment's row, not a call's */ && (cbs[i].roles & bit) && (roles_wanted & bit)) ic_push(s, cbs[i].name, operand, bit, recv);
+      if (bit != BCR_GVAR /* the assignment's row, not a call's */ && (cbs[i].roles & bit) && (roles_wanted & bit)) ic_push(s, cbs[i].name, operand, bit, recv, NULL);
   return n;
 }
 
@@ -121,7 +122,7 @@ int ic_node_calls(Compiler *c, int id, IcCall *out, int max) {
     row = big;
   }
   for (int i = 0; i < cnt; i++) {
-    ic_push(&s, row[i].name, row[i].operand, 0, 0);
+    ic_push(&s, row[i].name, row[i].operand, 0, 0, row[i].target);
     /* the implied call of a core name is a call of the builtin on its
        operand: the elements of that operand and the operand itself, when it
        is a program subclass of the core class, are handed to its callbacks */

@@ -17787,7 +17787,7 @@ static int masgn_store_may_change_source(Compiler *c, int t) {
   }
   if (k != NK_MultiTargetNode) return cplan_target_store_effect(c, t) != 0;
   int one;
-  if (cplan_boxed_to_ary_classes(c, t, NTI_YIELDED, &one, 1) > 0) return 1;
+  if (cplan_boxed_to_ary_classes(c, t, NTI_YIELDED, &one, NULL, 1) > 0) return 1;
   for (int i = 0, u; (u = masgn_target_at(c->nt, t, i)) >= 0; i++)
     if (masgn_store_may_change_source(c, u)) return 1;
   return 0;

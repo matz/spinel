@@ -198,6 +198,19 @@ enum { CT_CMETHOD = 1, CT_OWN = 2, CT_TOP = 4, CT_REACH = 8, CT_CAPTURE = 16, CT
    A send of a literal name (`send`, `__send__`, `public_send`) calls that
    name too, a second one. */
 int call_node_names(Compiler *c, int id, const char *out[2]);
+/* The calls node id makes CRuby make that the plan binds by version: an
+   implied call whose lowering asks the plan which method it runs
+   (cplan_implied_target), as its row of tools/implied_calls.yml says
+   (NtImplied.planned), with the operand that receives it. Into buf[0..cap)
+   when they fit, else an array it allocates, which the caller frees; their
+   count in *count. The collectors that read call_node_names
+   for a call's own names read these too: the entries' survey and
+   reachability's version marks (ct_implied_classes), and the open
+   histories' asks (ver_named_facts). A builtin's callbacks are not among
+   them yet: their rows do not say which operand an asked callback lands on,
+   nor with what arguments. */
+struct IcCall;
+struct IcCall *call_node_implied_names(Compiler *c, int id, struct IcCall *buf, int cap, int *count);
 /* The name call node id finally calls: its own, or a send-family call's
    literal first argument (a send of a send unwound); *used is the number
    of arguments the sends took. NULL when that name is computed or absent. */
@@ -334,6 +347,12 @@ void ver_chain_free(Compiler *c);
 int ct_main_target(Compiler *c, int id, const char *name);
 typedef void (*CtClassFn)(Compiler *c, int id, const char *nm, int k, unsigned flags, void *arg);
 void ct_version_classes(Compiler *c, int id, const char *nm, CtClassFn fn, void *arg);
+/* ...for each call node id makes that the plan binds by version
+   (call_node_implied_names) of a name `versioned` answers (ct_version_named,
+   ct_version_marked): the classes the operand its row names may be, on the
+   instance side, asked with CT_IMPLIED. The receiver walk above and this one
+   resolve where a call lands in one place (ct_landing_classes) */
+void ct_implied_classes(Compiler *c, int id, int (*versioned)(Compiler *, const char *), CtClassFn fn, void *arg);
 /* the version entries a call whose version is known only at run time
    reaches, and the run-time cells they read (#9898) */
 void ver_entries_build(Compiler *c);
@@ -421,9 +440,25 @@ int cplan_targets(Compiler *c, int id, int *out, int cap);
    NULL) saying ML_TABLE (the reader keeps the table's answer) or ML_NONE
    (no row, or an undef on the chain) */
 int cplan_implied_target(Compiler *c, int id, int op, int cls, const char *name, MethodLookup *ml);
+/* How a class's boxed to_ary runs where the plan answers it: the method
+   table's method (the one sp_obj_to_ary calls), the version entry, or
+   another version its window proves */
+typedef enum { CTA_TABLE, CTA_ENTRY, CTA_VERSION } CtaHow;
+typedef struct CplanToAry { int mi; CtaHow how; } CplanToAry;
 /* The classes whose to_ary that call reaches on a boxed operand, where
-   the record proves it: into out[0..cap), the count */
-int cplan_boxed_to_ary_classes(Compiler *c, int id, int op, int *out, int cap);
+   the record proves it: into out[0..cap), with the method each runs
+   there and how into ans[0..cap) (may be NULL); the count */
+int cplan_boxed_to_ary_classes(Compiler *c, int id, int op, int *out, CplanToAry *ans, int cap);
+/* The classes a boxed site's implied to_ary may answer by their version
+   entry, through the program's one switch of them (sp_obj_to_ary_entry):
+   each class a box can hold whose to_ary has an entry made and reachable,
+   cls[0..n) ascending, with that entry in scope[0..n). The entry is the
+   same function at every site, as its key holds the class, the name and
+   an arity no node gives, so the set is the program's: built on the first
+   ask, after the analysis (codegen asks), and freed with the Compiler. */
+typedef struct CplanToAryEntries { int n; int *cls; int *scope; } CplanToAryEntries;
+const CplanToAryEntries *cplan_to_ary_entries(Compiler *c);
+void cplan_to_ary_entries_free(Compiler *c);
 /* The program's `[]=` an index store on an instance of class cls calls:
    its method scope, with the class defining it in *cdef when cdef is
    given; -1 when the chain has none that takes a key and a value. */

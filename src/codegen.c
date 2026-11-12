@@ -11090,15 +11090,16 @@ else if (orecv >= 0 && onm) {
       if (ck == NK_BlockNode) bpn = nt_ref(nt, create, "parameters");
       else if (ck != NK_LambdaNode && nt_ref(nt, create, "block") >= 0) bpn = nt_ref(nt, nt_ref(nt, create, "block"), "parameters");
       int *ks = bpn >= 0 ? malloc(sizeof(int) * (size_t)(c->nclasses + 1)) : NULL;
-      int nk = ks ? cplan_boxed_to_ary_classes(c, bpn, NTI_YIELDED, ks, c->nclasses + 1) : 0;
+      CplanToAry *vs = bpn >= 0 ? malloc(sizeof *vs * (size_t)(c->nclasses + 1)) : NULL;
+      if (bpn >= 0 && (!ks || !vs)) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+      int nk = ks ? cplan_boxed_to_ary_classes(c, bpn, NTI_YIELDED, ks, vs, c->nclasses + 1) : 0;
       if (nk > 0) {
-        buf_printf(pb, "    if (argc == 1%s%s && _sp_proc_poly_args[0].tag == SP_TAG_OBJ && (",
-                   has_kwp ? " && !_sp_haskw" : "", as_gate ? " && _sp_kwpos != 3" : "");
-        for (int q = 0; q < nk; q++) buf_printf(pb, "%s_sp_proc_poly_args[0].cls_id == %d", q ? " || " : "", ks[q]);
-        buf_puts(pb, ")) { sp_RbVal _sp_ta = sp_poly_ary_operand(_sp_proc_poly_args[0]); SP_GC_ROOT_RBVAL(_sp_ta); "
-                     "_sp_proc_poly_args[0] = _sp_ta; }\n");
+        char guard[64];
+        snprintf(guard, sizeof guard, "argc == 1%s%s && ", has_kwp ? " && !_sp_haskw" : "", as_gate ? " && _sp_kwpos != 3" : "");
+        emit_boxed_to_ary_arms(c, ks, vs, nk, guard, "_sp_proc_poly_args[0]", 0, pb, 2);
       }
-      free(ks); }
+      free(ks);
+      free(vs); }
     buf_puts(pb, "    sp_int _sp_as_buf[16];\n");
     buf_printf(pb, "    if (argc == 1%s%s && _sp_proc_poly_args[0].tag == SP_TAG_OBJ && sp_poly_is_array_kind(_sp_proc_poly_args[0].cls_id)) {\n",
                has_kwp ? " && !_sp_haskw" : "", as_gate ? " && _sp_kwpos != 3" : "");
@@ -13780,6 +13781,27 @@ static int obj_to_ary_any(Compiler *c) {
   }
   return 0;
 }
+/* sp_obj_to_ary_entry: the version entry of each class whose implied
+   to_ary a boxed site may answer by its entry (the plan's set of them,
+   cplan_to_ary_entries; emit_boxed_to_ary_arms), one
+   switch the sites share as they share sp_obj_to_ary for the table's
+   answers. Written after the bodies, where a site calls it
+   (Compiler.uses_obj_to_ary_entry): a program whose entries only typed
+   sites call (they call the entry itself) has none. */
+static void emit_obj_to_ary_entry_dispatch(Compiler *c, Buf *protos, Buf *defs) {
+  if (!c->uses_obj_to_ary_entry) return;
+  buf_puts(protos, "static sp_RbVal sp_obj_to_ary_entry(sp_RbVal v);\n");
+  buf_puts(defs, "static sp_RbVal sp_obj_to_ary_entry(sp_RbVal v) {\n");
+  emit_hook_object_root(defs, "SP_GC_ROOT_RBVAL", "v");
+  buf_puts(defs, "  switch (v.cls_id) {\n");
+  const CplanToAryEntries *es = cplan_to_ary_entries(c);
+  for (int j = 0; j < es->n; j++) {
+    buf_printf(defs, "    case %d: return ", es->cls[j]);
+    emit_obj_to_ary_call(c, es->scope[j], c->scopes[es->scope[j]].class_id, "v", defs);
+    buf_puts(defs, ";\n");
+  }
+  buf_puts(defs, "    default: return sp_box_nil();\n  }\n}\n");
+}
 static void emit_obj_to_ary_dispatch(Compiler *c, Buf *b) {
   if (!obj_to_ary_any(c)) return;
   buf_puts(b, "static sp_RbVal sp_obj_to_ary(sp_RbVal v) {\n");
@@ -13791,18 +13813,23 @@ static void emit_obj_to_ary_dispatch(Compiler *c, Buf *b) {
     int defc = -1;
     int mi = obj_to_ary_method(c, i, &defc);
     if (mi < 0) continue;
-    TyKind mret = (TyKind)c->scopes[mi].ret;
     buf_printf(b, "    case %d: if (!v.v.p) return sp_box_bool(1); return ", i);
-    char callx[256];
-    int vobj = comp_ty_value_obj(c, ty_object(defc));
-    snprintf(callx, sizeof callx, vobj ? "%s(*(sp_%s *)v.v.p)" : "%s((sp_%s *)v.v.p)",
-             mc_method(c, &c->scopes[mi]), c->classes[defc].c_name);
-    if (mret == TY_POLY) buf_puts(b, callx);
-    else { Buf bx; memset(&bx, 0, sizeof bx); emit_boxed_text(c, mret, callx, &bx);
-           buf_puts(b, bx.p ? bx.p : "sp_box_nil()"); free(bx.p); }
+    emit_obj_to_ary_call(c, mi, defc, "v", b);
     buf_puts(b, ";\n");
   }
   buf_puts(b, "    default: return sp_box_nil();\n  }\n}\n");
+}
+/* (codegen_internal.h) */
+void emit_obj_to_ary_call(Compiler *c, int mi, int defc, const char *v, Buf *b) {
+  TyKind mret = (TyKind)c->scopes[mi].ret;
+  Buf cx; memset(&cx, 0, sizeof cx);
+  int vobj = comp_ty_value_obj(c, ty_object(defc));
+  buf_printf(&cx, vobj ? "%s(*(sp_%s *)%s.v.p)" : "%s((sp_%s *)%s.v.p)",
+             mc_method(c, &c->scopes[mi]), c->classes[defc].c_name, v);
+  if (mret == TY_POLY) buf_puts(b, cx.p);
+  else { Buf bx; memset(&bx, 0, sizeof bx); emit_boxed_text(c, mret, cx.p, &bx);
+         buf_puts(b, bx.p ? bx.p : "sp_box_nil()"); free(bx.p); }
+  free(cx.p);
 }
 /* Data#with copy-update, installed as sp_obj_with_fn. cls_id switch over every
    instantiated Data: construct a fresh instance whose members come from the
@@ -24359,7 +24386,8 @@ char *codegen_program(const NodeTable *nt) {
        value's #methods call of their own */
     const char *vmt[4] = { g_procs.p, body->p, b.p, g_pd_defs.p };
     emit_value_methods_helpers(c, vmt, 4, &g_pd_protos, &g_pd_defs);
-    emit_class_value_responds_helper(c, vmt, 4, &g_pd_protos, &g_pd_defs); }
+    emit_class_value_responds_helper(c, vmt, 4, &g_pd_protos, &g_pd_defs);
+    emit_obj_to_ary_entry_dispatch(c, &g_pd_protos, &g_pd_defs); }
   if (isa_ext) {
     if (calls_poly_is_a(b.p + isa_ext_at) || calls_poly_is_a(g_procs.p) ||
         calls_poly_is_a(body->p) || calls_poly_is_a(g_pd_defs.p))

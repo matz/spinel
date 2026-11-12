@@ -27,6 +27,13 @@ typedef struct {
                               such as a StatementsNode may stand for its last
                               statement), or an NTI_ code */
   unsigned char side;      /* NTS_ bits: both when the operand is an object or a class */
+  unsigned char planned;   /* the call's lowering asks the call plan which method it
+                              runs (cplan_implied_target): it is one of the calls the
+                              plan binds by version (call_node_implied_names). The
+                              row's `planned` key, temporary until every row has it */
+  const char *target;      /* the builtin class the call converts to, whose values it
+                              leaves as they are (the yml's `conversions`); NULL for a
+                              call that is no such conversion */
 } NtImplied;
 
 /* The calls node `id` makes: written to out[0..max), their number answered

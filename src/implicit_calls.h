@@ -24,7 +24,7 @@
    cover: it may call anything */
 #define IC_ANY (-1)
 
-typedef struct {
+typedef struct IcCall {
   const char *name;
   int operand;         /* a syntax row: the node whose value receives the call,
                           or an NTI_ code. A builtin's callback: the call node,
@@ -32,6 +32,9 @@ typedef struct {
   unsigned short role; /* 0 for a syntax row, else one BCR_ bit */
   unsigned char recv;  /* 1: `operand` is the receiver itself (the callbacks of an
                           implied call), not a call node */
+  const char *target;  /* a syntax row's conversion: the builtin class whose values
+                          it leaves as they are, receiving no call
+                          (implied_calls.yml `conversions`); NULL for none */
 } IcCall;
 
 /* What node `id` makes CRuby call without naming it: its kind's rows, and for a

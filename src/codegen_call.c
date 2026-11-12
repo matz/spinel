@@ -17826,24 +17826,99 @@ void emit_to_ary_dispatch(Compiler *c, int id, int cid, const char *selfptr, Buf
 /* The boxed value _t<src> node id takes apart, converted as the implied
    to_ary call its row makes on operand op (cplan_boxed_to_ary_classes):
    a rooted temp holding it, made the Array an object of one of those
-   classes answers (sp_poly_ary_operand: a nil answer keeps the object,
-   any other is CRuby's TypeError); its number. src itself, and no C,
-   where no class's to_ary is reached. */
+   classes answers; its number. src itself, and no C, where no class's
+   to_ary is reached (emit_boxed_to_ary_arms). */
 int emit_boxed_to_ary(Compiler *c, int id, int op, int src, Buf *b, int indent) {
   int *ks = malloc(sizeof(int) * (size_t)(c->nclasses + 1));
-  if (!ks) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-  int n = cplan_boxed_to_ary_classes(c, id, op, ks, c->nclasses + 1), t = src;
+  CplanToAry *vs = malloc(sizeof *vs * (size_t)(c->nclasses + 1));
+  if (!ks || !vs) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  int n = cplan_boxed_to_ary_classes(c, id, op, ks, vs, c->nclasses + 1), t = src;
   if (n > 0) {
     t = ++g_tmp;
     emit_indent(b, indent);
     buf_printf(b, "sp_RbVal _t%d = _t%d; SP_GC_ROOT_RBVAL(_t%d);\n", t, src, t);
-    emit_indent(b, indent);
-    buf_printf(b, "if (_t%d.tag == SP_TAG_OBJ && (", t);
-    for (int i = 0; i < n; i++) buf_printf(b, "%s_t%d.cls_id == %d", i ? " || " : "", t, ks[i]);
-    buf_printf(b, ")) _t%d = sp_poly_ary_operand(_t%d);\n", t, t);
+    char v[32];
+    snprintf(v, sizeof v, "_t%d", t);
+    emit_boxed_to_ary_arms(c, ks, vs, n, "", v, 1, b, indent);
   }
   free(ks);
+  free(vs);
   return t;
+}
+/* The test opening the conversion of the classes ks[i] whose vs[i] is
+   the table's */
+static void emit_boxed_to_ary_table_test(const int *ks, const CplanToAry *vs, int n, const char *guard, const char *v, Buf *b, int indent) {
+  emit_indent(b, indent);
+  buf_printf(b, "if (%s%s.tag == SP_TAG_OBJ && (", guard, v);
+  for (int i = 0, q = 0; i < n; i++)
+    if (vs[i].how == CTA_TABLE) buf_printf(b, "%s%s.cls_id == %d", q++ ? " || " : "", v, ks[i]);
+  buf_puts(b, ")");
+}
+/* The test opening the conversion of the nentry classes ks[i] whose vs[i]
+   is their entry. sp_obj_to_ary_entry answers nil, keeping the object,
+   for a class it has no case for, so the test names whichever is
+   shorter: those classes, or the classes it has a case for (the
+   program's set, cplan_to_ary_entries) that the site answers otherwise
+   (none where every class it serves takes its entry here), and the C a
+   site adds stays bounded by the classes whose answer at it is not the
+   program's one. ks ascends, as the set does. */
+static void emit_boxed_to_ary_entry_test(Compiler *c, const int *ks, const CplanToAry *vs, int n, int nentry, const char *guard, const char *v, Buf *b, int indent) {
+  const CplanToAryEntries *es = cplan_to_ary_entries(c);
+  int nother = es->n - nentry;
+  emit_indent(b, indent);
+  buf_printf(b, "if (%s%s.tag == SP_TAG_OBJ && ", guard, v);
+  if (nother >= nentry) {
+    buf_puts(b, "(");
+    for (int i = 0, q = 0; i < n; i++)
+      if (vs[i].how == CTA_ENTRY) buf_printf(b, "%s%s.cls_id == %d", q++ ? " || " : "", v, ks[i]);
+    buf_puts(b, ") && ");
+  }
+  else if (nother > 0) {
+    buf_puts(b, "!(");
+    for (int j = 0, i = 0, q = 0; j < es->n; j++) {
+      while (i < n && ks[i] < es->cls[j]) i++;
+      if (i < n && ks[i] == es->cls[j] && vs[i].how == CTA_ENTRY) continue;
+      buf_printf(b, "%s%s.cls_id == %d", q++ ? " || " : "", v, es->cls[j]);
+    }
+    buf_puts(b, ") && ");
+  }
+  buf_printf(b, "%s.v.p", v);
+}
+/* (codegen_internal.h) The classes whose answer is the table's convert
+   through sp_obj_to_ary (sp_poly_ary_operand) behind one test of them,
+   as they did before versions; those whose answer is their version entry
+   through the one call of sp_obj_to_ary_entry the program has for them
+   (cplan_to_ary_entries); each class the window answers another version
+   for gets an arm of its own that calls it, so a site's own arms are
+   bounded by such classes. The two latter hand the answer to
+   sp_poly_ary_answer: nil keeps the object, any other non-Array is
+   CRuby's TypeError. */
+void emit_boxed_to_ary_arms(Compiler *c, const int *ks, const CplanToAry *vs, int n, const char *guard, const char *v, int rooted, Buf *b, int indent) {
+  int count[3] = { 0, 0, 0 };
+  for (int i = 0; i < n; i++) count[vs[i].how]++;
+  /* (an unrooted v holds the answer through a rooted temp) */
+  const char *open = rooted ? "" : "{ sp_RbVal _sp_ta = ", *close = rooted ? ";" : "; SP_GC_ROOT_RBVAL(_sp_ta); ";
+  if (count[CTA_TABLE] > 0) {
+    emit_boxed_to_ary_table_test(ks, vs, n, guard, v, b, indent);
+    if (rooted) buf_printf(b, ") %s = sp_poly_ary_operand(%s);\n", v, v);
+    else buf_printf(b, ") %ssp_poly_ary_operand(%s)%s%s = _sp_ta; }\n", open, v, close, v);
+  }
+  if (count[CTA_ENTRY] > 0) {
+    c->uses_obj_to_ary_entry = 1;
+    emit_boxed_to_ary_entry_test(c, ks, vs, n, count[CTA_ENTRY], guard, v, b, indent);
+    buf_printf(b, ") %s%ssp_poly_ary_answer(%s, sp_obj_to_ary_entry(%s))%s", rooted ? v : open, rooted ? " = " : "", v, v, close);
+    if (rooted) buf_puts(b, "\n");
+    else buf_printf(b, "%s = _sp_ta; }\n", v);
+  }
+  for (int i = 0; i < n; i++) {
+    if (vs[i].how != CTA_VERSION) continue;
+    emit_indent(b, indent);
+    buf_printf(b, "if (%s%s.tag == SP_TAG_OBJ && %s.cls_id == %d && %s.v.p) %s%ssp_poly_ary_answer(%s, ",
+               guard, v, v, ks[i], v, rooted ? v : open, rooted ? " = " : "", v);
+    emit_obj_to_ary_call(c, vs[i].mi, c->scopes[vs[i].mi].class_id, v, b);
+    if (rooted) buf_puts(b, ");\n");
+    else buf_printf(b, ")%s%s = _sp_ta; }\n", close, v);
+  }
 }
 
 /* Bind the splice RHS object to `_tq<ta>` (rooted -- the to_ary dispatch and

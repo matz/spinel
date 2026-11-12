@@ -8751,6 +8751,188 @@ int desugar_dynamic_respond_to(Compiler *c) {
   return changed;
 }
 
+/* `recv.respond_to?(:m)` where the program defines respond_to_missing?:
+   CRuby's Object#respond_to? answers true for a method it finds and else
+   returns respond_to_missing?(:m, include_all) as a true or false. The
+   method-table answer (the fold and its arms) never asked the program's
+   respond_to_missing?, so `R.new.respond_to?(:dyn)` printed false. The call
+   becomes
+     (t = recv; t.respond_to?(:m, ia) || (t.respond_to_missing?(:m, ia ? true : false) ? true : false))
+   on a temp, the second call visibility-blind as CRuby's own call is (a
+   private respond_to_missing? answers too). A builtin value reaches
+   Kernel's respond_to_missing? row (false) unless the program reopens a
+   root. Left alone: a call that may run where a respond_to_missing? is not
+   defined (rtm_live_at), a program with its own respond_to? (its own answer,
+   whose super is Object's), a name known only at run time, a safe-navigation
+   call, and a splat or block argument. */
+static int rtm_lit_or_temp(Compiler *c, NodeTable *nt, int id, int v, const char *tname, int *wr) {
+  NodeKind k = nt_kind(nt, v);
+  *wr = -1;
+  if (k == NK_TrueNode || k == NK_FalseNode || k == NK_NilNode || k == NK_SelfNode) return 0;
+  int w = nt_new_node(nt, "LocalVariableWriteNode");
+  if (w < 0) return -1;
+  nt_node_set_str(nt, w, "name", tname); nt_node_set_int(nt, w, "depth", 0);
+  nt_node_set_ref(nt, w, "value", v);
+  scope_local_intern(comp_scope_of(c, id), tname);
+  *wr = w;
+  return 1;
+}
+static int rtm_read(NodeTable *nt, int lit, const char *tname, int temp) {
+  if (!temp) return nt_clone_subtree(nt, lit);
+  int r = nt_new_node(nt, "LocalVariableReadNode");
+  if (r < 0) return -1;
+  nt_node_set_str(nt, r, "name", tname); nt_node_set_int(nt, r, "depth", 0);
+  return r;
+}
+static int rtm_bool_of(NodeTable *nt, int pred) {
+  int t = nt_new_node(nt, "TrueNode"), f = nt_new_node(nt, "FalseNode");
+  int ys = nt_new_node(nt, "StatementsNode"), ns = nt_new_node(nt, "StatementsNode");
+  int el = nt_new_node(nt, "ElseNode"), ifn = nt_new_node(nt, "IfNode");
+  if (t < 0 || f < 0 || ys < 0 || ns < 0 || el < 0 || ifn < 0) return -1;
+  nt_node_set_arr(nt, ys, "body", &t, 1);
+  nt_node_set_arr(nt, ns, "body", &f, 1);
+  nt_node_set_ref(nt, el, "statements", ns);
+  nt_node_set_ref(nt, ifn, "predicate", pred);
+  nt_node_set_ref(nt, ifn, "statements", ys);
+  nt_node_set_ref(nt, ifn, "subsequent", el);
+  return ifn;
+}
+/* Does every respond_to_missing? the program defines stand where call id
+   runs: its def applied whenever its body runs (not under a run-time
+   condition), and the version live at the call's point, or every version
+   over the window it may run in one of the program's (none absent)? A
+   call ahead of the def (`p r.respond_to?(:x); class R; def
+   respond_to_missing?`) or a def under a condition leaves the call to the
+   method-table answer, as before. */
+/* May a call at p run on an instance of class k or of a class under it? A
+   module's holders are not followed: 1. */
+static int rtm_holders_live(Compiler *c, int k, LoadPoint p) {
+  if (comp_class_is_module(c, &c->classes[k])) return 1;
+  for (int j = 0; j < c->nclasses; j++)
+    if ((j == k || is_descendant(c, j, k)) && elab_class_live_at(c, j, 0, p)) return 1;
+  return 0;
+}
+int class_mixes_in(Compiler *c, int cid, int mod, int depth);   /* codegen_call.c */
+/* May a call whose receiver is typed rt (TY_UNKNOWN: any) reach a
+   respond_to_missing? of class or module k: is k on the chain of the
+   receiver's class or of a class under it? */
+static int rtm_may_reach(Compiler *c, TyKind rt, int k) {
+  if (!ty_is_object(rt)) return 1;
+  int cid = ty_object_class(rt), mod = comp_class_is_module(c, &c->classes[k]);
+  for (int j = 0; j < c->nclasses; j++) {
+    if (j != cid && !is_descendant(c, j, cid)) continue;
+    if (j == k || is_descendant(c, j, k) || (mod && class_mixes_in(c, j, k, 0))) return 1;
+  }
+  return 0;
+}
+static int rtm_live_at(Compiler *c, int id) {
+  int recv = nt_ref(c->nt, id, "receiver");
+  TyKind rt = TY_UNKNOWN;
+  if (recv >= 0) rt = infer_type(c, recv);
+  else {
+    Scope *es = comp_scope_of(c, id);
+    if (es && es->class_id >= 0 && !es->is_cmethod) rt = ty_object(es->class_id);
+  }
+  for (int s = 0; s < c->nscopes; s++) {
+    const Scope *sc = &c->scopes[s];
+    if (!sc->name || sc->def_node < 0 || !sp_streq(sc->name, RESPOND_TO_MISSING_NAME)) continue;
+    if (!sc->is_cmethod && sc->class_id >= 0 && !rtm_may_reach(c, rt, sc->class_id)) continue;
+    if (sc->class_id < 0 || !elab_def_applied(c, sc->def_node)) return 0;
+    ElabMeet m; const LrDef *out[8];
+    elab_call_meet(c, id, sc->class_id, RESPOND_TO_MISSING_NAME, sc->is_cmethod ? 1 : 0, 0, &m, out, 8);
+    if (m.at == ELAB_YES && m.d) continue;
+    /* not defined yet where the call runs: fine while no object it would
+       answer for can exist there yet (a class opened later) */
+    if (m.at == ELAB_NO && !sc->is_cmethod && !rtm_holders_live(c, sc->class_id, elab_point_of(c, id))) continue;
+    if (m.at != ELAB_UNKNOWN || m.win != ELAB_YES || m.n < 1 || m.n > 8) return 0;
+    for (int i = 0; i < m.n; i++) if (!out[i]) return 0;
+  }
+  return 1;
+}
+int desugar_respond_to_missing(Compiler *c) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  int has_rtm = 0;
+  for (int s = 0; s < c->nscopes; s++) {
+    const char *sn = c->scopes[s].name;
+    if (!sn || c->scopes[s].def_node < 0) continue;
+    if (sp_streq(sn, "respond_to?")) return 0;
+    if (sp_streq(sn, "respond_to_missing?")) has_rtm = 1;
+  }
+  if (!has_rtm) return 0;
+  int changed = 0, n0 = nt->count;
+  for (int id = 0; id < n0; id++) {
+    if (nt_kind(nt, id) != NK_CallNode) continue;
+    const char *nm = nt_str(nt, id, "name");
+    if (!nm || !sp_streq(nm, "respond_to?") || nt_int(nt, id, "rtm_or", 0) ||
+        nt_int(nt, id, "dyn_arm", 0) || nt_safe_nav(nt, id) || nt_ref(nt, id, "block") >= 0) continue;
+    int args = nt_ref(nt, id, "arguments");
+    int argc = 0; const int *argv = args >= 0 ? nt_arr(nt, args, "arguments", &argc) : NULL;
+    if (argc < 1 || argc > 2 || !argv) continue;
+    NodeKind k0 = nt_kind(nt, argv[0]);
+    const char *sym = k0 == NK_SymbolNode ? nt_str(nt, argv[0], "value")
+                    : k0 == NK_StringNode ? nt_str(nt, argv[0], "content") : NULL;
+    if (!sym || !*sym || !rtm_live_at(c, id)) continue;
+    if (argc == 2 && (nt_kind(nt, argv[1]) == NK_SplatNode || nt_kind(nt, argv[1]) == NK_BlockArgumentNode)) continue;
+    char sbuf[256];
+    if (strlen(sym) >= sizeof sbuf) continue;
+    snprintf(sbuf, sizeof sbuf, "%s", sym);   /* copy before realloc */
+    int recv = nt_ref(nt, id, "receiver"), a1 = argc == 2 ? argv[1] : -1, a0 = argv[0];
+    char tr[64], ti[64];
+    snprintf(tr, sizeof tr, "__rtm_r%s", comp_node_tag(c, id));
+    snprintf(ti, sizeof ti, "__rtm_i%s", comp_node_tag(c, id));
+    int base = nt->count;
+    int rw = -1, iw = -1;
+    int rtemp = recv >= 0 ? rtm_lit_or_temp(c, nt, id, recv, tr, &rw) : 0;
+    int itemp = a1 >= 0 ? rtm_lit_or_temp(c, nt, id, a1, ti, &iw) : 0;
+    if (rtemp < 0 || itemp < 0) continue;
+    /* the method-table answer: the call as written, on the temps */
+    int keep = nt_clone_subtree(nt, id);
+    nt_node_set_int(nt, keep, "rtm_or", 1);
+    if (recv >= 0) nt_node_set_ref(nt, keep, "receiver", rtm_read(nt, recv, tr, rtemp));
+    { int ka = nt_new_node(nt, "ArgumentsNode"), kv[2];
+      kv[0] = nt_clone_subtree(nt, a0);
+      if (a1 >= 0) kv[1] = rtm_read(nt, a1, ti, itemp);
+      nt_node_set_arr(nt, ka, "arguments", kv, a1 >= 0 ? 2 : 1);
+      nt_node_set_ref(nt, keep, "arguments", ka); }
+    /* respond_to_missing?(:m, include_all as true or false) */
+    int rr = recv >= 0 ? rtm_read(nt, recv, tr, rtemp) : nt_new_node(nt, "SelfNode");
+    int sn = nt_new_node(nt, "SymbolNode");
+    nt_node_set_str(nt, sn, "value", sbuf);
+    int ia = a1 >= 0 ? rtm_bool_of(nt, rtm_read(nt, a1, ti, itemp)) : nt_new_node(nt, "FalseNode");
+    int mc = nt_new_node(nt, "CallNode"), ma = nt_new_node(nt, "ArgumentsNode");
+    { int mv[2] = { sn, ia }; nt_node_set_arr(nt, ma, "arguments", mv, 2); }
+    nt_node_set_ref(nt, mc, "receiver", rr);
+    nt_node_set_str(nt, mc, "name", "respond_to_missing?");
+    nt_node_set_ref(nt, mc, "arguments", ma);
+    nt_node_set_ref(nt, mc, "block", -1);
+    nt_set_ignore_visibility(nt, mc, 1);
+    nt_node_set_str(nt, mc, "send_blind", "1");
+    int orn = nt_new_node(nt, "OrNode");
+    nt_node_set_ref(nt, orn, "left", keep);
+    nt_node_set_ref(nt, orn, "right", rtm_bool_of(nt, mc));
+    int stm[3], ns = 0;
+    if (rw >= 0) stm[ns++] = rw;
+    if (iw >= 0) stm[ns++] = iw;
+    stm[ns++] = orn;
+    int body = nt_new_node(nt, "StatementsNode");
+    nt_node_set_arr(nt, body, "body", stm, ns);
+    long long line = nt_int(nt, id, "node_line", 0), file = nt_int(nt, id, "node_file", 0);
+    nt_node_reset(nt, id, "ParenthesesNode");
+    nt_node_set_ref(nt, id, "body", body);
+    nt_node_set_int(nt, id, "node_line", line);
+    nt_node_set_int(nt, id, "node_file", file);
+    comp_sym_intern(c, sbuf);
+    comp_grow_node_arrays(c);
+    for (int j = base; j < nt->count; j++) {
+      c->nscope[j] = c->nscope[id];
+      if (!nt_int(nt, j, "node_line", 0)) nt_node_set_int(nt, j, "node_line", line);
+      if (!nt_int(nt, j, "node_file", 0)) nt_node_set_int(nt, j, "node_file", file);
+    }
+    changed = 1;
+  }
+  return changed;
+}
+
 /* `recv.respond_to?(:m)` with an explicit receiver and a literal method name:
    synthesize a probe `recv.m` call. The analyze fixpoint types the probe with
    the ordinary resolver, so its inferred type tells codegen whether spinel can

@@ -1042,6 +1042,7 @@ int desugar_toplevel_instance_exec(Compiler *c);
 int desugar_binding_lvget(Compiler *c);
 int desugar_step_kwargs(Compiler *c);
 int desugar_defined_method_call(Compiler *c);
+int desugar_respond_to_missing(Compiler *c);
 int desugar_respond_to_probe(Compiler *c);
 int desugar_symbol_to_proc_call(Compiler *c);
 int desugar_call_op_write(Compiler *c);

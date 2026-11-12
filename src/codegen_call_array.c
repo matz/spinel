@@ -635,7 +635,7 @@ int emit_op_array_setop(Compiler *c, const BopCtx *x, Buf *b) {
     buf_printf(&pre, "({ sp_%sArray *_t%d = %s; SP_GC_ROOT(_t%d); ", k, tr, rx.p ? rx.p : "", tr);
     free(rx.p);
     int sv = g_n_argov;
-    view_bind(recv, "_t%d", tr);
+    view_bind_temp(recv, tr);
     for (int j = 0; j < argc; j++) {
       Repr ar = repr_of(c, argv[j]);
       if (ar.untyped) continue;
@@ -646,7 +646,7 @@ int emit_op_array_setop(Compiler *c, const BopCtx *x, Buf *b) {
       buf_puts(&pre, "; ");
       emit_gc_root_tmp(c, ar.as_ty, ta, &pre);
       buf_puts(&pre, " ");
-      view_bind(argv[j], "_t%d", ta);
+      view_bind_temp(argv[j], ta);
     }
     nil_recv_check(name, tr, &pre);
     int tok = view_push_repr(c, recv, VR_NIL_TESTED, 1);
@@ -2790,7 +2790,7 @@ int aset_range_held(Compiler *c, TyKind rt, const int *argv) {
 void emit_aset_range_held(Compiler *c, int id, int recv, TyKind rt, const int *argv, Buf *b) {
   buf_puts(b, "({ ");
   int tr = hold_operand(c, recv, rt, 0, ++g_tmp, 1, " ", b);
-  int rbind = view_bind(recv, "_t%d", tr);
+  int rbind = view_bind_temp(recv, tr);
   int ti = ++g_tmp;
   buf_printf(b, "sp_RbVal _t%d = ", ti); emit_expr(c, argv[0], b);
   /* A boxed value (promote's Integers): held once, each arm takes it boxed
@@ -2801,7 +2801,7 @@ void emit_aset_range_held(Compiler *c, int id, int recv, TyKind rt, const int *a
     int tv = ++g_tmp;
     buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); sp_RbVal _t%d = ", ti, tv); emit_boxed(c, argv[1], b);
     buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); if ((_t%d = sp_poly_frange_ix(_t%d)).tag == SP_TAG_OBJ && _t%d.cls_id == SP_BUILTIN_RANGE) { (void)", tv, ti, ti, ti);
-    int vbind = view_bind(argv[1], "_t%d", tv);
+    int vbind = view_bind_temp(argv[1], tv);
     int vv = view_push(c, argv[1], TY_POLY);
     int bind = view_bind(argv[0], "(*(sp_Range *)_t%d.v.p)", ti);
     int v = view_push(c, argv[0], TY_RANGE);
@@ -2859,7 +2859,7 @@ static int slice_bang_range_held(Compiler *c, int id, TyKind rt, int argc, const
 static void emit_slice_bang_range_held(Compiler *c, int id, int recv, TyKind rt, const int *argv, Buf *b) {
   buf_puts(b, "({ ");
   int tr = hold_operand(c, recv, rt, 0, ++g_tmp, 1, " ", b);
-  int rbind = view_bind(recv, "_t%d", tr);
+  int rbind = view_bind_temp(recv, tr);
   int ti = ++g_tmp;
   buf_printf(b, "sp_RbVal _t%d = ", ti); emit_expr(c, argv[0], b);
   buf_printf(b, "; SP_GC_ROOT_RBVAL(_t%d); ((_t%d = sp_poly_frange_ix(_t%d)).tag == SP_TAG_OBJ && _t%d.cls_id == SP_BUILTIN_RANGE) ? ", ti, ti, ti, ti);
@@ -2921,12 +2921,12 @@ int frange_index_view(Compiler *c, int id) {
   for (int i = 0; i < n; i++) {
     if (comp_ntype(c, argv[i]) != TY_FLOAT_RANGE) continue;
     if (!subtree_is_pure_read(c, argv[i]) && g_pre) {
-      if (!held) view_bind(recv, "_t%d", hold_operand_pre(c, recv, repr_of(c, recv).as_ty, 0, ++g_tmp, 1));
+      if (!held) view_bind_temp(recv, hold_operand_pre(c, recv, repr_of(c, recv).as_ty, 0, ++g_tmp, 1));
       held = 1;
       for (; done < i; done++)
         if (comp_ntype(c, argv[done]) != TY_FLOAT_RANGE &&
             (!subtree_is_pure_read(c, argv[done]) || read_rebound_by(c, argv[done], argv[i])))
-          view_bind(argv[done], "_t%d", hold_operand_pre(c, argv[done], repr_of(c, argv[done]).as_ty, 0, ++g_tmp, 1));
+          view_bind_temp(argv[done], hold_operand_pre(c, argv[done], repr_of(c, argv[done]).as_ty, 0, ++g_tmp, 1));
       done = i + 1;
       /* (a literal in parentheses too: `(f(1.5)..f(2.5))` left its ends
          to the C argument order, which runs the last first under gcc) */
@@ -2935,7 +2935,7 @@ int frange_index_view(Compiler *c, int id) {
         for (int e = 0; e < 2; e++) {
           int x = nt_ref(nt, rn, e ? "right" : "left");
           if (x >= 0 && !subtree_is_pure_read(c, x))
-            view_bind(x, "_t%d", hold_operand_pre(c, x, repr_of(c, x).as_ty, 0, ++g_tmp, 1));
+            view_bind_temp(x, hold_operand_pre(c, x, repr_of(c, x).as_ty, 0, ++g_tmp, 1));
         }
     }
     Buf ab = expr_buf(c, argv[i]);
@@ -2945,7 +2945,7 @@ int frange_index_view(Compiler *c, int id) {
       int t = ++g_tmp;
       emit_indent(g_pre, g_indent);
       buf_printf(g_pre, "sp_Range _t%d = sp_frange_ix(%s);\n", t, at);
-      view_bind(argv[i], "_t%d", t);
+      view_bind_temp(argv[i], t);
     }
     else { free(ab.p); view_unwind(mark); return -1; }
     free(ab.p);
@@ -3177,7 +3177,7 @@ static int arysub_bind(Compiler *c, int n, TyKind k) {
       int bx = ++g_tmp;
       emit_indent(g_pre, g_indent);
       buf_printf(g_pre, "sp_RbVal _t%d = sp_box_nullable_obj((void *)_t%d, SP_BUILTIN_STRBUF); SP_GC_ROOT_RBVAL(_t%d);\n", bx, t, bx);
-      return view_bind(n, "_t%d", bx);
+      return view_bind_temp(n, bx);
     }
     /* (one representation: the read face is the payload itself, which a
        String slot takes back to the instance; the copy is made here, or
@@ -3197,7 +3197,7 @@ static int arysub_bind(Compiler *c, int n, TyKind k) {
     int t = ++g_tmp;
     emit_indent(g_pre, g_indent);
     buf_printf(g_pre, "%s *_t%d = (%s *)(%s); SP_GC_ROOT(_t%d);\n", at, t, at, rb.p ? rb.p : "NULL", t);
-    slot = view_bind(n, "_t%d", t);
+    slot = view_bind_temp(n, t);
   }
   free(cast.p);
   free(rb.p);

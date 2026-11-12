@@ -3509,7 +3509,7 @@ static int emit_poly_recv_block_dispatch_x(Compiler *c, int id, Buf *b, int inde
     int ts = ++g_tmp, tf = ++g_tmp;
     Buf ab; memset(&ab, 0, sizeof ab);
     Buf fb; memset(&fb, 0, sizeof fb);
-    int slot = view_bind(recv, "_t%d", ts);
+    int slot = view_bind_temp(recv, ts);
     /* the arm's own call declines where it is the gap (the String or IO
        emission has no route for it), not where a call in the block it
        splices is (ArmCtx.gap_watch) */
@@ -3529,7 +3529,7 @@ static int emit_poly_recv_block_dispatch_x(Compiler *c, int id, Buf *b, int inde
     }
     if (io_iter) {
       view_unbind(slot);
-      view_bind(recv, "_t%d", tf);
+      view_bind_temp(recv, tf);
       int gw = view_push_gap_watch(id, &io_gap);
       int v = view_push(c, recv, TY_IO);
       emit_stmt(c, id, &fb, indent + 2);
@@ -3586,7 +3586,7 @@ static int emit_poly_recv_block_dispatch_x(Compiler *c, int id, Buf *b, int inde
   if (!emitted_default && g_prbd_skip != id && g_n_argov + 1 <= MAX_ARG_OVERRIDE) {
     /* on the heap: the probe may longjmp back after the emitter wrote to it */
     Buf *ab = calloc(1, sizeof *ab);
-    int slot = view_bind(recv, "_t%d", trecv);
+    int slot = view_bind_temp(recv, trecv);
     int va = view_push_arm(g_pd_skip, id, 1);
     /* this call's gap (emit_unrouted_gap) is the builtin declining too: it
        reaches the gap reader outside the probe, which warns. A gap of another
@@ -3673,7 +3673,7 @@ int emit_poly_recv_block_value(Compiler *c, int id, Buf *b) {
   Buf rb; memset(&rb, 0, sizeof rb);
   emit_boxed(c, recv, &rb);
   Buf sb; memset(&sb, 0, sizeof sb);
-  int slot = view_bind(recv, "_t%d", tr);
+  int slot = view_bind_temp(recv, tr);
   int ok = emit_poly_recv_block_dispatch_x(c, id, &sb, 1, tr);
   view_unbind(g_n_argov - 1);
   if (ok && sb.p)
@@ -4501,7 +4501,7 @@ int iter_recv_bind_once(Compiler *c, int node) {
      keep, the binding being read again as the answer after it */
   else if (ot == TY_STR_RANGE) { buf_puts(g_pre, " "); emit_gc_root_tmp_refs(c, ot, t, g_pre); }
   buf_puts(g_pre, "\n");
-  view_bind(node, "_t%d", t);
+  view_bind_temp(node, t);
   return 1;
 }
 
@@ -4550,7 +4550,7 @@ static int emit_each_split(Compiler *c, int id, int as_value, Buf *b, int indent
   int t = ++g_tmp;
   Buf rb; memset(&rb, 0, sizeof rb);
   emit_expr(c, recv, &rb);
-  view_bind(recv, "_t%d", t);
+  view_bind_temp(recv, t);
   Buf ib, db, dp;
   memset(&ib, 0, sizeof ib); memset(&db, 0, sizeof db); memset(&dp, 0, sizeof dp);
   int ok = emit_each_split_arm(c, id, 1, as_value, &ib, indent + 2);
@@ -4663,7 +4663,7 @@ int emit_iter_value_expr(Compiler *c, int id, Buf *b) {
      splice only when it handles the shape, else leave the node to the
      later handlers untouched */
   int ta = ++g_tmp;
-  view_bind(recv, "_t%d", ta);
+  view_bind_temp(recv, ta);
   Buf body; memset(&body, 0, sizeof body);
   /* a boxed `each` answers from the walk it runs (sp_poly_each_walk_answer) */
   int twres = rr.kind == RK_BOXED && is_each_name(name) ? ++g_tmp : 0;
@@ -7747,7 +7747,7 @@ static int emit_iteration_stmt_body(Compiler *c, int id, Buf *b, int indent) {
     buf_printf(b, "sp_IntArray *_t%d = ({ sp_Range _t%d = %s; sp_range_to_ia(_t%d); }); SP_GC_ROOT(_t%d);\n",
                ta, tr, rb.p ? rb.p : "", tr, ta);
     free(rb.p);
-    view_bind(recv, "_t%d", ta);
+    view_bind_temp(recv, ta);
     int v = view_push(c, recv, TY_INT_ARRAY);
     int done = emit_iteration_stmt(c, id, b, indent);
     view_pop(c, v);

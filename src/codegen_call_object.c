@@ -1355,7 +1355,7 @@ int emit_call_freeze_dup_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
       free(fzref.p);
       if (fzrun) {
         int fzcall = nt_kind(nt, fzb) == NK_CallNode;
-        int mk = fzcall ? view_bind(fzb, "%s", thr) : -1;
+        int mk = fzcall ? view_bind_temp(fzb, th) : -1;
         buf_puts(b, " (void)(");
         emit_expr_for_effect(c, recv, b);
         buf_puts(b, ");");

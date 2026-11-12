@@ -4642,7 +4642,7 @@ static int emit_str_mut_recv_once(Compiler *c, int recv, int lvw, Buf *b) {
   int t = ++g_tmp;
   buf_printf(b, "const char *_t%d = ", t);
   emit_recv_rooted(c, recv, t, "SP_GC_ROOT_STR", b);
-  return view_bind(recv, "_t%d", t);
+  return view_bind_temp(recv, t);
 }
 
 /* String#bytesplice's new bytes over receiver bytes `rs` (an expression read
@@ -4837,7 +4837,7 @@ static int emit_str_mutator_call(Compiler *c, int id, Buf *b, const NodeTable *n
             view_push_repr(c, recv, VR_HANDLE_DEMAND, 0);
             nC = 2;
             if (was_sb) { view_push(c, recv, TY_STRING); nC = 3; }
-            view_bind(recv, "_t%d", tob);
+            view_bind_temp(recv, tob);
           }
           /* a sibling, an operand or the block may run a sub of its own: the
              call enters the runtime through its wrapper, and a block form answers
@@ -4902,7 +4902,7 @@ static int emit_str_mutator_call(Compiler *c, int id, Buf *b, const NodeTable *n
         emit_indent(g_pre, g_indent);
         buf_printf(g_pre, "if (!_t%d) sp_nil_recv(\"%s\");\n", th, sb_bang);
         free(hb.p);
-        hbind = view_bind(recv, "_t%d", th);
+        hbind = view_bind_temp(recv, th);
       }
       size_t recv_at = b->len;
       buf_printf(b, "({ const char *_t%d = ", to); emit_expr(c, recv, b); buf_puts(b, "; (void)_t"); buf_printf(b, "%d; ", to);
@@ -4916,7 +4916,7 @@ static int emit_str_mutator_call(Compiler *c, int id, Buf *b, const NodeTable *n
       if (subm2) buf_puts(g_pre ? g_pre : b, "sp_re_sub_matched = 0; ");
       char *sv_nm = nt_node_swap_str((NodeTable *)nt, id, "name", sb_plain);
       Buf nb; memset(&nb, 0, sizeof nb);
-      int nbind = lvw || held || hbind >= 0 ? -1 : view_bind(recv, "_t%d", to);
+      int nbind = lvw || held || hbind >= 0 ? -1 : view_bind_temp(recv, to);
       int sv_sb = g_sub_bang_id;   /* the wrapper or a block form's local, as above */
       g_sub_bang_id = subm2 && sub_bang_reenters(c, id, recv, argc, argv) ? id : -1; g_sub_bang_tm = 0;
       /* the nil test above stands for the plain form's own (cplan_nil) */
@@ -5407,7 +5407,7 @@ int emit_array_call(Compiler *c, int id, Buf *b) {
         emit_ctype(c, rt0, g_pre);
         buf_printf(g_pre, " _t%d = %s; SP_GC_ROOT(_t%d);\n", ta0, ra0.p ? ra0.p : "NULL", ta0);
         free(ra0.p);
-        view_bind(recv0, "_t%d", ta0);
+        view_bind_temp(recv0, ta0);
         buf_puts(b, "({ ");
         emit_stmt(c, id, b, 0);
         view_unbind(g_n_argov - 1);
@@ -5789,7 +5789,7 @@ static int emit_array_call_arms(Compiler *c, int id, Buf *b) {
     buf_printf(g_pre, "sp_PolyArray *_t%d = sp_Enumerator_to_a(%s); SP_GC_ROOT(_t%d);\n",
                ta, rb.p ? rb.p : "", ta);
     free(rb.p);
-    view_bind(recv, "_t%d", ta);
+    view_bind_temp(recv, ta);
     int v = view_push(c, recv, TY_POLY_ARRAY);
     emit_expr(c, id, b);
     view_pop(c, v);
@@ -5818,7 +5818,7 @@ static int emit_array_call_arms(Compiler *c, int id, Buf *b) {
     buf_printf(g_pre, "sp_PolyArray *_t%d = sp_poly_arr_recv(%s, \"%s\"); SP_GC_ROOT(_t%d);\n",
                ta, rb.p ? rb.p : "sp_box_nil()", name, ta);
     free(rb.p);
-    view_bind(recv, "_t%d", ta);
+    view_bind_temp(recv, ta);
     int v = view_push(c, recv, TY_POLY_ARRAY);
     emit_expr(c, id, b);
     view_pop(c, v);
@@ -6073,7 +6073,7 @@ static int emit_array_call_arms(Compiler *c, int id, Buf *b) {
     buf_printf(g_pre, "sp_PolyArray *_t%d = sp_poly_arr_recv(%s, \"zip\"); SP_GC_ROOT(_t%d);\n",
                ta, rb.p ? rb.p : "sp_box_nil()", ta);
     free(rb.p);
-    view_bind(recv, "_t%d", ta);
+    view_bind_temp(recv, ta);
     int v = view_push(c, recv, TY_POLY_ARRAY);
     emit_expr(c, id, b);
     view_pop(c, v);
@@ -6159,7 +6159,7 @@ static int emit_array_call_arms(Compiler *c, int id, Buf *b) {
     buf_printf(g_pre, "sp_PolyArray *_t%d = sp_poly_enum_recv_arr(%s, \"%s\"); SP_GC_ROOT(_t%d);\n",
                ta, rb.p ? rb.p : "sp_box_nil()", name, ta);
     free(rb.p);
-    view_bind(recv, "_t%d", ta);
+    view_bind_temp(recv, ta);
     int v = view_push(c, recv, TY_POLY_ARRAY);
     /* and pin it for the inference too, the way the hash face does: the cached
        type alone does not survive a safe-navigation guard, whose re-emission
@@ -6666,8 +6666,8 @@ static int emit_hash_nilkey_read(Compiler *c, int id, const char *name, int recv
   else buf_puts(b, "({ sp_StrArray *_va = sp_StrArray_new(); sp_StrArray_push(_va, NULL); _va; })");
   buf_puts(b, " : ");
   /* the hit: the ordinary emission, the key and receiver read through their binds */
-  int kb = (kbox && kt != TY_NIL) ? view_bind(key, "_t%d", tk) : view_bind(key, "_t%d.v", tk);
-  int rb2 = view_bind(recv, "_t%d", tr);
+  int kb = (kbox && kt != TY_NIL) ? view_bind_temp(key, tk) : view_bind(key, "_t%d.v", tk);
+  int rb2 = view_bind_temp(recv, tr);
   int sv = g_nilkey_busy; g_nilkey_busy = id;
   Buf hb; memset(&hb, 0, sizeof hb);
   emit_call(c, id, &hb);
@@ -8902,11 +8902,11 @@ static int str_hold_operands(Compiler *c, int argc, const int *argv, Buf *b) {
         buf_printf(b, "%s _t%d = ", oint_ctype(r.as_ty), t);
         emit_oint_expr(c, v, r.as_ty, b);
         buf_puts(b, "; ");
-        view_bind_o(v, "_t%d", t);
+        view_bind_temp_o(v, t);
         continue;
       }
       int t = hold_operand(c, v, r.as_ty, 0, ++g_tmp, 1, " ", b);
-      view_bind(v, "_t%d", t);
+      view_bind_temp(v, t);
     }
   }
   return got;
@@ -10117,7 +10117,7 @@ static int str_arms_poly_pattern(Compiler *c, int id, Buf *b, const NodeTable *n
   int bind1 = g_n_argov;
   if (argc == 2 && !nt_is_literal_arg(nt, argv[1])) {
     int t1 = hold_operand(c, argv[1], comp_ntype(c, argv[1]), 0, ++g_tmp, 1, " ", &eb);
-    bind1 = view_bind(argv[1], "_t%d", t1);
+    bind1 = view_bind_temp(argv[1], t1);
   }
   /* a receiver that can be nil raises its NoMethodError here, once the
      operands have run: the arms below read a NULL receiver as no match
@@ -10150,7 +10150,7 @@ static int str_arms_poly_pattern(Compiler *c, int id, Buf *b, const NodeTable *n
   /* anything else: split and partition say CRuby's "expected Regexp" */
   if (sp_streq(name, "split") || is_partition_family(name))
     bind = view_bind(argv[0], sp_streq(name, "split") ? "sp_poly_pattern_chk(_t%d, 1)" : "sp_poly_pattern_chk(_t%d, 0)", tp);
-  else bind = view_bind(argv[0], "_t%d", tp);
+  else bind = view_bind_temp(argv[0], tp);
   g_poly_pattern_open = 1;
   ok = ok && str_arms_text(c, id, &eb, nt, name, recv, argc, argv, rs);
   /* only ever entered closed, so closing is restoring */
@@ -11030,12 +11030,12 @@ static int setter_value_open(Compiler *c, int id, Buf *b, TyKind *vt_out, int *s
   if (boxed) { emit_indent(g_pre, g_indent); buf_printf(g_pre, "SP_GC_ROOT_RBVAL(_t%d);\n", tv); }
   else if (comp_ty_value_obj(c, vt)) { emit_indent(g_pre, g_indent); emit_gc_root_tmp_refs(c, vt, tv, g_pre); buf_puts(g_pre, "\n"); }
   else if (needs_root(vt)) { emit_indent(g_pre, g_indent); buf_printf(g_pre, "SP_GC_ROOT(_t%d);\n", tv); }
-  if (so) view_bind_o(argv[0], "_t%d", tv);
+  if (so) view_bind_temp_o(argv[0], tv);
   /* a nil operand reads as nil's C value, as a hoisted one does: bound to
      the boxed temp, an `Origin?` parameter was initialized from an sp_RbVal
      (the operand already ran into the temp) */
   else if (vt == TY_NIL || vt == TY_VOID) view_bind(argv[0], "0");
-  else view_bind(argv[0], "_t%d", tv);
+  else view_bind_temp(argv[0], tv);
   buf_puts(b, "({ (void)(");
   *vt_out = boxed ? TY_POLY : vt;
   *so_out = so;
@@ -12359,9 +12359,9 @@ static int emit_object_kind_nil(Compiler *c, int id, Buf *b, const NodeTable *nt
         emit_indent(g_pre, g_indent);
         emit_ctype(c, at, g_pre); buf_printf(g_pre, " _t%d = %s;\n", ta, ab.p ? ab.p : "");
         free(ab.p);
-        view_bind(argv[0], "_t%d", ta);
+        view_bind_temp(argv[0], ta);
       }
-      view_bind(recv, "_t%d", tr);
+      view_bind_temp(recv, tr);
       Buf ib; memset(&ib, 0, sizeof ib);
       int vt = view_push_repr(c, recv, VR_NIL_TESTED, 1);
       int ok = emit_object_call(c, id, &ib);
@@ -15209,7 +15209,7 @@ int emit_range_call(Compiler *c, int id, Buf *b) {
     buf_printf(g_pre, "sp_PolyArray *_t%d = sp_enum_items_from(%s); SP_GC_ROOT(_t%d);\n",
                ta, rb.p ? rb.p : "sp_box_nil()", ta);
     free(rb.p);
-    view_bind(recv, "_t%d", ta);
+    view_bind_temp(recv, ta);
     int v = view_push(c, recv, TY_POLY_ARRAY);
     /* find_all on the pair array is Enumerable select (a hash receiver only
        lands here through the redispatch, so the hash-returning Hash#select
@@ -15228,7 +15228,7 @@ int emit_range_call(Compiler *c, int id, Buf *b) {
       view_pop(c, v);
       view_unbind(g_n_argov - 1);   /* re-emit the REAL receiver, not the override */
       emit_expr(c, recv, b);
-      view_bind(recv, "_t%d", ta);
+      view_bind_temp(recv, ta);
       v = view_push(c, recv, TY_POLY_ARRAY);
       buf_puts(b, "; })");
     }
@@ -15246,7 +15246,7 @@ int emit_range_call(Compiler *c, int id, Buf *b) {
     buf_printf(g_pre, "sp_IntArray *_t%d = ({ sp_Range _t%d = %s; sp_range_to_ia(_t%d); }); SP_GC_ROOT(_t%d);\n",
                ta, tr, rb.p ? rb.p : "", tr, ta);
     free(rb.p);
-    view_bind(recv, "_t%d", ta);
+    view_bind_temp(recv, ta);
     int v = view_push(c, recv, TY_INT_ARRAY);
     emit_call(c, id, b);
     view_pop(c, v);
@@ -15577,7 +15577,8 @@ static TyKind emit_face_arm(Compiler *c, int id, unsigned kind, unsigned flags, 
   if (kind == PF_ARRAY && sp_streq(name, "concat")) {
     int argc = 0, saved = g_n_argov;
     const int *argv = call_args(nt, id, &argc);
-    view_bind(recv, "%s", rs);
+    if (box) view_bind_temp(recv, box);
+    else view_bind(recv, "%s", rs);
     int ok = emit_builtin_array_concat(c, id, recv, TY_POLY, argv, argc, 0, val);
     view_unbind(saved);
     if (ok) { free(rb.p); return TY_POLY; }
@@ -15688,7 +15689,7 @@ static TyKind emit_face_arm(Compiler *c, int id, unsigned kind, unsigned flags, 
       break;
   }
   free(rb.p);
-  view_bind(recv, "%s", tn.s);
+  view_bind_temp(recv, t);
   /* the call's own form, as its reader takes it: asked before the receiver
      is pinned to the owner, under which the owner's answer is the form */
   Repr outer = repr_of(c, id);
@@ -16358,7 +16359,7 @@ static void emit_face_str_bang(Compiler *c, int id, unsigned own, int pub, Buf *
   free(rbb.p);
   char tob_rd[160];
   snprintf(tob_rd, sizeof tob_rd, " const char *_t%d = sp_poly_recv_s(_t%d, \"%s\"); SP_GC_ROOT(_t%d);", tob, tvb, bang, tob);
-  view_bind(recv, "_t%d", tob);
+  view_bind_temp(recv, tob);
   int v = view_push(c, recv, TY_STRING);
   int vb = boxed ? view_push(c, id, TY_STRING) : -1;
   char *sv_nm = nt_node_swap_str((NodeTable *)nt, id, "name", plain);
@@ -16532,10 +16533,10 @@ int emit_boxed_class_aref(Compiler *c, int id, Buf *b) {
       emit_ctype(c, at, b);
       buf_printf(b, " _t%d = ", ta); emit_expr(c, argv[i], b); buf_puts(b, "; ");
       if (ty_gc_rootable(c, at)) { emit_gc_root_tmp(c, at, ta, b); buf_puts(b, " "); }
-      view_bind(argv[i], "_t%d", ta);
+      view_bind_temp(argv[i], ta);
     }
     buf_printf(b, "(_t%d.tag == SP_TAG_CLASS && (%s)) ? ", tsv, ids.p);
-    view_bind(recv, "_t%d", tsv);
+    view_bind_temp(recv, tsv);
     /* what either re-entry hoists (the arity guard of a builtin `[]`) reads
        the temps bound above, which live only inside this expression: it runs
        in its own arm, not ahead of the statement */
@@ -18781,7 +18782,7 @@ static void emit_poly_str_transform(Compiler *c, int recv, int argc, const int *
       int boxed = r.kind == RK_STRBUF;
       ta[i] = hold_operand_pre(c, argv[i], r.as_ty, boxed, ++g_tmp, 1);
       if (boxed) views[i] = view_push(c, argv[i], TY_POLY);
-      view_bind(argv[i], "_t%d", ta[i]);
+      view_bind_temp(argv[i], ta[i]);
     }
     int ts = ++g_tmp;
     emit_indent(g_pre, g_indent);
@@ -19098,7 +19099,7 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
     int tav[2] = {0, 0};
     for (int i = 0; held && i < argc; i++)
       tav[i] = hold_operand(c, argv[i], comp_ntype(c, argv[i]), 0, ++g_tmp, 1, " ", b);
-    for (int i = 0; held && i < argc; i++) view_bind(argv[i], "_t%d", tav[i]);
+    for (int i = 0; held && i < argc; i++) view_bind_temp(argv[i], tav[i]);
     int tkeys = -1;
     if (has_splat) {
       /* A splat contributes all of its elements, so the key list has a length
@@ -19165,7 +19166,7 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
       }
       else {
         int rmark = g_n_argov;
-        view_bind(recv, "_t%d", tsv);
+        view_bind_temp(recv, tsv);
         char *sv_nm = nt_node_swap_str((NodeTable *)nt, id, "name", "[]");
         Buf ib; memset(&ib, 0, sizeof ib); emit_call(c, id, &ib);
         nt_node_restore_str((NodeTable *)nt, id, "name", sv_nm);
@@ -19293,7 +19294,7 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
                  tr, tv, tr, tv);
       emit_boxed(c, argv[0], b);
       buf_printf(b, "); else _t%d = ", tr);
-      int slot = view_bind(recv, "_t%d", tv);
+      int slot = view_bind_temp(recv, tv);
       int sv = g_endless_step_node; g_endless_step_node = id;
       Buf fb; memset(&fb, 0, sizeof fb);
       int ok = emit_face_switch(c, id, kinds, &fb);
@@ -19425,7 +19426,7 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
       buf_printf(g_pre, "mrb_regexp_pattern *_t%d = sp_poly_as_pattern(%s);\n",
                  trx, rbx.p ? rbx.p : "sp_box_nil()");
       free(rbx.p);
-      view_bind(recv, "_t%d", trx);
+      view_bind_temp(recv, trx);
       int v = view_push(c, recv, TY_REGEX);
       emit_call(c, id, b);
       view_pop(c, v);
@@ -19954,7 +19955,7 @@ int emit_poly_call(Compiler *c, int id, Buf *b) {
     if (nt_str(nt, id, "bang_splice") && g_n_argov < MAX_ARG_OVERRIDE) {
       int tv = ++g_tmp;
       tv = hold_operand_pre(c, recv, TY_POLY, 0, tv, 1);
-      view_bind(recv, "_t%d", tv);
+      view_bind_temp(recv, tv);
       buf_printf(b, "sp_poly_hash_splice(_t%d, ", tv); emit_boxed(c, argv[0], b); buf_puts(b, ")");
       view_unbind(g_n_argov - 1);
       return 1;

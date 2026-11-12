@@ -545,7 +545,7 @@ int emit_strbuf_io_read(Compiler *c, int id, Buf *b) {
     else held[i] = hold_operand(c, argv[i], TY_POLY, 1, ++g_tmp, 1, " ", b);
   }
   for (int i = 0; i < argc; i++) {
-    marks[i] = view_bind(argv[i], "_t%d", held[i]);
+    marks[i] = view_bind_temp(argv[i], held[i]);
     views[i] = view_push(c, argv[i], TY_POLY);
   }
   char r[128];

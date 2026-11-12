@@ -895,7 +895,7 @@ int emit_op_hash_to_a(Compiler *c, const BopCtx *x, Buf *b) {
   if (sp_streq(x->name, "entries")) buf_puts(b, "(sp_nil_recv(\"entries\"), (sp_PolyArray *)NULL)");
   else buf_puts(b, "sp_PolyArray_new()");
   buf_puts(b, " : ");
-  int slot = view_bind(recv, "_t%d", th);
+  int slot = view_bind_temp(recv, th);
   emit_hash_pairs_expr(c, recv, rt, hn, b);
   view_unbind(slot);
   buf_puts(b, "; })");

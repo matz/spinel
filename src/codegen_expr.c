@@ -2166,7 +2166,7 @@ void emit_expr(Compiler *c, int id, Buf *b) {
   TyKind ot = opr.as_ty;
   /* a node bound to a hoisted temp (view_bind) is that plain temp */
   int bound = 0, bound_o = 0;
-  for (int i = g_n_argov - 1; i >= 0 && !bound; i--) if (g_argov_node[i] == id) { bound = 1; bound_o = g_argov_oint[i]; }
+  for (int i = g_n_argov - 1; i >= 0 && !bound; i--) if (g_argov_node[i] == id) { bound = 1; bound_o = g_argov_flag[i] & ARGOV_OINT; }
   int is_o = bound ? oint_kind(ot) && bound_o : opr.opt_producer;
   NodeKind ok = nt_kind(c->nt, id);
   int leaf_o = !bound && want_o && !is_o && (ok == NK_NilNode || opr.kind == RK_OPT);
@@ -6496,7 +6496,7 @@ static int masgn_hold_target_parts(Compiler *c, int id) {
       emit_gc_root_tmp(c, vt, t, g_pre);
       buf_puts(g_pre, "\n");
       free(vb.p);
-      view_bind(v, "_t%d", t);
+      view_bind_temp(v, t);
       held++;
     }
   }
@@ -6742,7 +6742,7 @@ static void emit_expr_node(Compiler *c, int id, Buf *b) {
       emit_gc_root_tmp(c, st, ts, &lb);
       buf_puts(&lb, "\n");
       free(eb.p);
-      view_bind(subs[i], "_t%d", ts);
+      view_bind_temp(subs[i], ts);
     }
     int tr = ++g_tmp;
     Buf rb; memset(&rb, 0, sizeof rb);
@@ -7226,7 +7226,7 @@ static void emit_expr_node(Compiler *c, int id, Buf *b) {
            boxes (ran_first_handle), not its variable's, which the stores
            may have rebound */
         if (vt == TY_STRBUF) ran_first_bind(v, t, t);
-        else view_bind(v, "_t%d", t);
+        else view_bind_temp(v, t);
       }
       free(vb.p);
       held++;

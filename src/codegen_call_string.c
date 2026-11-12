@@ -1684,7 +1684,7 @@ static int emit_string_slice_poly(Compiler *c, const BopCtx *x, int arg, int two
       int bx = r1.kind == RK_BOXED || r1.as_ty != TY_INT || r1.nil_scalar || r1.may_nil;
       b2 = g_n_argov;
       int t2 = hold_operand(c, argv[1], bx ? TY_POLY : TY_INT, bx, ++g_tmp, 1, " ", b);
-      view_bind(argv[1], "_t%d", t2);
+      view_bind_temp(argv[1], t2);
     }
   }
   /* a nil receiver raises once the arguments ran, before the form is picked */
@@ -1715,7 +1715,7 @@ static int emit_string_slice_poly(Compiler *c, const BopCtx *x, int arg, int two
   }
   /* the Integer form takes the box, converted after its frozen check */
   buf_printf(b, "; }\nelse { _t%d = ", tr);
-  bind = view_bind(arg, "_t%d", ta);
+  bind = view_bind_temp(arg, ta);
   emit_op_string_slice(c, &arm, b);
   view_unbind(bind);
   buf_printf(b, "; } _t%d; }); })", tr);
@@ -1887,7 +1887,7 @@ static void str_mut_hold(Compiler *c, const int *argv, int argc, int i, int as_i
   if (str_mut_inert(c, n, later)) return;
   buf_puts(b, " ");
   o->t = hold_operand(c, n, boxed ? TY_POLY : ty, boxed, ++g_tmp, 1, "", b);
-  if (!boxed) view_bind(n, "_t%d", o->t);
+  if (!boxed) view_bind_temp(n, o->t);
 }
 
 /* The sp_int index operand o reads as: an Integer as it is; any other

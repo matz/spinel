@@ -5168,6 +5168,19 @@ static int cmp_ans_by_sign(Compiler *c, TyKind t) {
   return !cmp_sign_ops_overridden(c, t);
 }
 
+/* Is the comparator block's tail `tail` a call with no value of its own
+   (cmp_ty TY_UNKNOWN or TY_VOID): a `raise`, a `throw`, a call of a method
+   the element lacks (`&:nope` becomes `{ |a, b| a.nope(b) }`)? It is taken
+   as a boxed answer, so the block runs and raises for the first pair.
+   Standing down let the blockless sort, min or max run, and the block and
+   its exception vanished. A `break` or `return` tail is no call: it stays
+   on the path it had. */
+static int cmp_tail_raises(Compiler *c, int tail, TyKind cmp_ty, int cmp_boxed) {
+  const NodeTable *nt = c->nt;
+  if (cmp_boxed || (cmp_ty != TY_UNKNOWN && cmp_ty != TY_VOID)) return 0;
+  return tail >= 0 && nt_kind(nt, tail) == NK_CallNode && nt_ref(nt, tail, "block") < 0;
+}
+
 /* The sign a sort, min or max comparator block answers for elements `ea`
    and `eb` (C texts of type `et`), from the C answer `ans` of type `cmp_ty`, `boxed` when it is a boxed value.
    A nil answer says the two do not compare, which CRuby reports as
@@ -5242,6 +5255,7 @@ int emit_sort_cmp_expr(Compiler *c, int id, Buf *b) {
      block has a `next` is boxed, as the next's value can be of another
      kind than the tail's */
   if (!nil_cmp && !cmp_boxed && cmp_ans_by_sign(c, cmp_ty) && iter_step_needs_frame(c, block)) nil_cmp = 1;
+  if (cmp_tail_raises(c, bn > 0 ? bb[bn - 1] : -1, cmp_ty, cmp_boxed)) nil_cmp = 1;
   if (nil_cmp) cmp_boxed = 1;
   else if (cmp_ty != TY_INT && !cmp_boxed && !cmp_ans_by_sign(c, cmp_ty)) return 0;
   /* an element parameter holding its nil (an Integer array with nils):
@@ -5458,6 +5472,7 @@ int emit_minmax_cmp_expr(Compiler *c, int id, Buf *b) {
      block has a `next` is boxed, as the next's value can be of another
      kind than the tail's */
   if (!nil_cmp && !cmp_boxed && cmp_ans_by_sign(c, cmp_ty) && iter_step_needs_frame(c, block)) nil_cmp = 1;
+  if (cmp_tail_raises(c, bn > 0 ? bb[bn - 1] : -1, cmp_ty, cmp_boxed)) nil_cmp = 1;
   if (nil_cmp) cmp_boxed = 1;
   else if (cmp_ty != TY_INT && !cmp_boxed && !cmp_ans_by_sign(c, cmp_ty)) return 0;
   int trv = ++g_tmp, tn = ++g_tmp, tmin = ++g_tmp, tmax = ++g_tmp, ti = ++g_tmp, te = ++g_tmp;

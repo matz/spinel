@@ -13167,6 +13167,9 @@ static int ctor_block_by_proc(Compiler *c, int id, int ci) {
 int ctor_block_dispatchable(Compiler *c, int id) {
   if (nt_ref(c->nt, id, "block") < 0 || ctor_block_spliceable(c, id)) return 1;
   for (int k = 0; k < c->nclasses; k++) {
+    /* (only a class the call can construct: a module's initialize, or one
+       of a class this receiver is never, has no arm of this dispatch) */
+    if (comp_class_is_module(c, &c->classes[k]) || !dynamic_new_may_reach(c, id, k)) continue;
     int im = comp_method_in_chain(c, k, "initialize", NULL);
     if (im >= 0 && c->scopes[im].yields && !ctor_block_by_proc(c, id, k)) return 0;
   }

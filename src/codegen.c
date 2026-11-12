@@ -9127,7 +9127,7 @@ static void emit_fiber_new_here(Compiler *c, int id, Buf *b, int as_gen, int siz
   int body = nt_ref(nt, blk, "body");
   Scope *encl = comp_scope_of(c, id);
   /* a Thread's parameters may be typed from its arguments (emit_thread_param_unbox) */
-  int is_thread = !as_gen && recv_is_const(nt, nt_ref(nt, id, "receiver"), "Thread");
+  int is_thread = !as_gen && recv_is_const(c, nt, nt_ref(nt, id, "receiver"), "Thread");
 
   /* Collect locals written inside this fiber body (not in nested blocks). */
   NameSet fib_locals = {0};
@@ -11656,7 +11656,7 @@ int class_is_exc_subclass(Compiler *c, int ci) {
   for (int k = ci, guard = 0; k >= 0 && guard < 256; guard++) {
     int sc = class_def_super(c->nt, c->classes[k].def_node);
     const char *sn = sc >= 0 ? key_name(c, sc) : NULL;
-    if (superclass_builtin_exc_name(c->nt, sc)) { ans = 1; break; }
+    if (superclass_builtin_exc_name(c, c->nt, sc)) { ans = 1; break; }
     int next = c->classes[k].parent;
     /* The parent links are not resolved yet when the rescue-arm specialization
        asks, so a two-level chain (`class B < A; class A < StandardError`) ended
@@ -11901,7 +11901,7 @@ int obj_str_ret_strsub(Compiler *c, int cid, int want_inspect) {
 const char *exc_builtin_parent(Compiler *c, int ci) {
   for (int k = ci; k >= 0; k = c->classes[k].parent) {
     int sc = class_def_super(c->nt, c->classes[k].def_node);
-    const char *sn = superclass_builtin_exc_name(c->nt, sc);
+    const char *sn = superclass_builtin_exc_name(c, c->nt, sc);
     if (sn) return sn;
   }
   return "StandardError";
@@ -19432,7 +19432,7 @@ int class_builtin_superclass(Compiler *c, int i) {
     const char *sc_nm = (sc_k == NK_ConstantReadNode || sc_k == NK_ConstantPathNode) ? key_name(c, sc_node) : NULL;
     /* an exception path is read whole: the leaf of Math::DomainError,
        "DomainError", has no id, and the class sat under Object */
-    const char *exc_nm = superclass_builtin_exc_name(c->nt, sc_node);
+    const char *exc_nm = superclass_builtin_exc_name(c, c->nt, sc_node);
     if (exc_nm) sc_nm = exc_nm;
     if (sc_nm) { int bid = builtin_class_id(sc_nm); if (bid != 0) builtin_par = bid; }
   }
@@ -19450,7 +19450,7 @@ const char *class_builtin_superclass_name(Compiler *c, int i) {
   if (c->classes[i].is_struct) return NULL;
   int sc_node = class_def_super(c->nt, c->classes[i].def_node);
   if (sc_node < 0) return NULL;
-  const char *sc_nm = superclass_builtin_exc_name(c->nt, sc_node);
+  const char *sc_nm = superclass_builtin_exc_name(c, c->nt, sc_node);
   if (!sc_nm || builtin_class_id(sc_nm) != 0) return NULL;
   return errno_canonical_name(sc_nm);
 }
@@ -21996,7 +21996,7 @@ static void emit_class_machinery(const NodeTable *nt, Compiler *c, Buf *b, char 
           if (sk == NK_ConstantReadNode || sk == NK_ConstantPathNode)
             par = key_name(c, sc);
           /* a builtin exception by its whole path (Errno::ENOENT) */
-          const char *bpar = superclass_builtin_exc_name(c->nt, sc);
+          const char *bpar = superclass_builtin_exc_name(c, c->nt, sc);
           if (bpar) par = bpar;
         }
         if (!par && c->classes[i].parent >= 0)

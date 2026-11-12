@@ -100,28 +100,28 @@ static void const_pair_add(ANameHash *out, const char *pn, const char *nm) {
 }
 /* The constants subtree n (not entering a nested class, module or method)
    writes, as pn's */
-static void body_const_writes(const NodeTable *nt, int n, const char *pn, ANameHash *out) {
+static void body_const_writes(const Compiler *c, const NodeTable *nt, int n, const char *pn, ANameHash *out) {
   if (n < 0) return;
   NodeKind k = nt_kind(nt, n);
   if (k == NK_ClassNode || k == NK_ModuleNode || k == NK_SingletonClassNode || k == NK_DefNode) return;
   /* (a multiple assignment's target too: `P, Q = ...`) */
   if (k == NK_ConstantWriteNode || k == NK_ConstantOrWriteNode || k == NK_ConstantAndWriteNode ||
       k == NK_ConstantOperatorWriteNode || k == NK_ConstantTargetNode)
-    const_pair_add(out, pn, nt_key_name(nt, n));
+    const_pair_add(out, pn, key_name(c, n));
   int nr = nt_num_refs(nt, n);
-  for (int i = 0; i < nr; i++) body_const_writes(nt, nt_ref_at(nt, n, i), pn, out);
+  for (int i = 0; i < nr; i++) body_const_writes(c, nt, nt_ref_at(nt, n, i), pn, out);
   int na = nt_num_arrs(nt, n);
   for (int i = 0; i < na; i++) {
     int m = 0;
     const int *ids = nt_arr_at(nt, n, i, &m);
-    for (int j = 0; j < m; j++) body_const_writes(nt, ids[j], pn, out);
+    for (int j = 0; j < m; j++) body_const_writes(c, nt, ids[j], pn, out);
   }
 }
 /* the path `pn::nm` (or `::pn::nm`) that node is; none for `self::nm` */
-static void path_const_write(const NodeTable *nt, int node, ANameHash *out) {
+static void path_const_write(const Compiler *c, const NodeTable *nt, int node, ANameHash *out) {
   if (node < 0) return;
   int par = nt_ref(nt, node, "parent");
-  const_pair_add(out, par >= 0 ? nt_key_name(nt, par) : NULL, nt_key_name(nt, node));
+  const_pair_add(out, par >= 0 ? key_name(c, par) : NULL, key_name(c, node));
 }
 static const ANameHash *const_pairs_of(Compiler *c) {
   const NodeTable *nt = c->nt;
@@ -133,15 +133,15 @@ static const ANameHash *const_pairs_of(Compiler *c) {
   for (int dh = 0; dh < ndk; dh++)
     NT_FOREACH_KIND(nt, dk[dh], d) {
       const char *dn = class_def_opens_cref(nt, d) ? class_def_key(c, d) : NULL;
-      if (dn) body_const_writes(nt, class_def_body(nt, d), dn, &p->keys);
+      if (dn) body_const_writes(c, nt, class_def_body(nt, d), dn, &p->keys);
     }
   static const NodeKind writes[] = { NK_ConstantPathWriteNode, NK_ConstantPathOrWriteNode,
                                      NK_ConstantPathAndWriteNode, NK_ConstantPathOperatorWriteNode };
   for (int i = 0; i < 4; i++)
-    NT_FOREACH_KIND(nt, writes[i], w) path_const_write(nt, nt_ref(nt, w, "target"), &p->keys);
-  NT_FOREACH_KIND(nt, NK_ConstantPathTargetNode, t) path_const_write(nt, t, &p->keys);
+    NT_FOREACH_KIND(nt, writes[i], w) path_const_write(c, nt, nt_ref(nt, w, "target"), &p->keys);
+  NT_FOREACH_KIND(nt, NK_ConstantPathTargetNode, t) path_const_write(c, nt, t, &p->keys);
   /* a self-alias write the desugaring dropped (desugar_constant_path_self_alias) */
-  NT_FOREACH_KIND(nt, NK_NilNode, d) path_const_write(nt, (int)nt_int(nt, d, "dropped_target", -1), &p->keys);
+  NT_FOREACH_KIND(nt, NK_NilNode, d) path_const_write(c, nt, (int)nt_int(nt, d, "dropped_target", -1), &p->keys);
   p->nt = nt; p->ver = nt->version; p->edits = nt->edits; p->count = nt->count;
   return &p->keys;
 }
@@ -1034,13 +1034,13 @@ int builtin_class_val_id(const char *name) {
    and `raise E` failed. A path whose whole name is no builtin keeps the
    leaf reading it always had (`::StandardError`, `Mod::RuntimeError`). The
    result is a stable string: the qualified forms are interned here. */
-const char *superclass_builtin_exc_name(const NodeTable *nt, int sc) {
+const char *superclass_builtin_exc_name(const Compiler *c, const NodeTable *nt, int sc) {
   const char *sty = sc >= 0 ? nt_type(nt, sc) : NULL;
   NodeKind sk = nt_kind(nt, sc);
   if (!sty) return NULL;
   int is_read = sk == NK_ConstantReadNode, is_path = sk == NK_ConstantPathNode;
   if (!is_read && !is_path) return NULL;
-  const char *leaf = nt_key_name(nt, sc);
+  const char *leaf = key_name(c, sc);
   if (!leaf) return NULL;
   if (is_path) {
     char q[256]; size_t o = strlen(leaf);
@@ -1074,7 +1074,7 @@ const char *superclass_builtin_exc_name(const NodeTable *nt, int sc) {
 }
 int class_inherits_builtin_exception(Compiler *c, int ci) {
   for (int k = ci; k >= 0; k = c->classes[k].parent)
-    if (superclass_builtin_exc_name(c->nt, class_def_super(c->nt, c->classes[k].def_node)))
+    if (superclass_builtin_exc_name(c, c->nt, class_def_super(c->nt, c->classes[k].def_node)))
       return 1;
   return 0;
 }
@@ -1794,9 +1794,9 @@ int str_self_call(const NodeTable *nt, int id) {
     return 1;
   return ac == 2 && sp_streq(nm, "insert");
 }
-int fiber_storage_recv(const NodeTable *nt, int recv) {
+int fiber_storage_recv(const Compiler *c, const NodeTable *nt, int recv) {
   NodeKind rk = nt_kind(nt, recv);
-  const char *rn = nt_key_name(nt, recv);
+  const char *rn = key_name(c, recv);
   if (rk == NK_ConstantReadNode) return rn && sp_streq(rn, "Fiber");
   if (rk != NK_CallNode) return 0;
   int rr = nt_ref(nt, recv, "receiver");

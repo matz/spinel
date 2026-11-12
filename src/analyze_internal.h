@@ -142,7 +142,7 @@ int const_path_in_closed_builtin(Compiler *c, int id);
 int const_path_misses_toplevel(Compiler *c, int id);
 int builtin_module_at(int i, const char **name, int *id);
 int is_builtin_exception_name(const char *n);
-const char *superclass_builtin_exc_name(const NodeTable *nt, int sc);   /* analyze_util.c */
+const char *superclass_builtin_exc_name(const Compiler *c, const NodeTable *nt, int sc);   /* analyze_util.c */
 int is_syserr_family_name(const char *n);           /* analyze_util.c */
 int builtin_method_known(const char *cls, const char *m);
 int builtin_method_known_any(const char *m);   /* codegen_call.c */

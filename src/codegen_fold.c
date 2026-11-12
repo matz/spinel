@@ -14142,14 +14142,14 @@ else {
 
 /* True if `recv` names the constant `name` either as a bare ConstantReadNode
    or as a root-anchored absolute path `::name` (ConstantPathNode, no parent). */
-int recv_is_const(const NodeTable *nt, int recv, const char *name) {
+int recv_is_const(const Compiler *c, const NodeTable *nt, int recv, const char *name) {
   if (recv < 0) return 0;
   const char *rty = nt_type(nt, recv);
   NodeKind rk = nt_kind(nt, recv);
   if (!rty) return 0;
   if (rk == NK_ConstantReadNode ||
       (rk == NK_ConstantPathNode && nt_ref(nt, recv, "parent") < 0)) {
-    const char *n = nt_key_name(nt, recv);
+    const char *n = key_name(c, recv);
     return n && sp_streq(n, name);
   }
   return 0;

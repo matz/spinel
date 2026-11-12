@@ -19022,7 +19022,7 @@ int infer_block_params(Compiler *c) {
     const char *cname = nt_str(nt, id, "name");
     if (!cname || !sp_streq(cname, "new")) continue;
     int recv = nt_ref(nt, id, "receiver"), blk = nt_ref(nt, id, "block");
-    if (!recv_is_const(nt, recv, "Thread") || blk < 0 || nt_kind(nt, blk) != NK_BlockNode) continue;
+    if (!recv_is_const(c, nt, recv, "Thread") || blk < 0 || nt_kind(nt, blk) != NK_BlockNode) continue;
     int pn = nt_ref(nt, blk, "parameters");
     int inner = pn >= 0 ? nt_ref(nt, pn, "parameters") : -1;
     if (inner < 0) continue;

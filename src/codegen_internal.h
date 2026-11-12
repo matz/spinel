@@ -1899,7 +1899,7 @@ int const_path_in_closed_builtin(Compiler *c, int id);
 int const_path_misses_toplevel(Compiler *c, int id);
 int builtin_module_at(int i, const char **name, int *id);
 int is_builtin_exception_name(const char *n);
-const char *superclass_builtin_exc_name(const NodeTable *nt, int sc);   /* analyze_util.c */
+const char *superclass_builtin_exc_name(const Compiler *c, const NodeTable *nt, int sc);   /* analyze_util.c */
 const char *errno_canonical_name(const char *n);   /* analyze_util.c */
 int is_syserr_family_name(const char *n);           /* analyze_util.c */
 int class_is_syserr(Compiler *c, int ci);          /* codegen_call.c */
@@ -2622,7 +2622,7 @@ int emit_reader_override_handle(Compiler *c, int id, int cid, const char *name, 
                                 const char *reader, int boxed, Buf *b);
 TyKind reader_override_ty(Compiler *c, int id, int cid, const char *name);
 int emit_tap_then_expr(Compiler *c, int id, Buf *b);
-int recv_is_const(const NodeTable *nt, int recv, const char *name);
+int recv_is_const(const Compiler *c, const NodeTable *nt, int recv, const char *name);
 int sp_is_fiber_storage_recv(const NodeTable *nt, int recv);
 int emit_ctor_yield_inline(Compiler *c, int id, int ci, Buf *b);
 int emit_env_args_before(Compiler *c, int id);

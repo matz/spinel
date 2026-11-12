@@ -1508,7 +1508,7 @@ int emit_call_kernel_flow_arms(Compiler *c, int id, Buf *b, const NodeTable *nt,
 
   /* Fiber[:k] / Fiber.current[:k] -> sp_Fiber_storage_get */
   if (recv >= 0 && sp_streq(name, "[]") && argc == 1) {
-    if (fiber_storage_recv(nt, recv)) {
+    if (fiber_storage_recv(c, nt, recv)) {
       buf_puts(b, "sp_Fiber_storage_get(sp_fiber_current, ");
       emit_fiber_storage_key(c, argv[0], b);
       buf_puts(b, ")");

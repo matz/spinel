@@ -1322,7 +1322,7 @@ int emit_call_module_fn_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, c
   }
 
   /* Fiber class methods: Fiber.yield(val) and Fiber.current */
-  if (recv_is_const(nt, recv, "Fiber")) {
+  if (recv_is_const(c, nt, recv, "Fiber")) {
     if (sp_streq(name, "yield")) {
       /* Fiber.yield(a, b) hands the resumer [a, b] */
       emit_fiber_pass_call(c, "sp_Fiber_yield", NULL, argc, argv, b);

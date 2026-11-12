@@ -11364,7 +11364,7 @@ int desugar_exception_class_ctor(Compiler *c) {
     else if (constant || rt == TY_CLASS) {
       ci = class_recv_static_ci(c, recv);
       if (ci < 0 && constant && !const_class_value_only(c, recv)) {
-        const char *en = superclass_builtin_exc_name(nt, recv);
+        const char *en = superclass_builtin_exc_name(c, nt, recv);
         if (!en || !is_builtin_exception_name(en)) continue;
         exc_ctor_spell_new(c, id);
         changed = 1;

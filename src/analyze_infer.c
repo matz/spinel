@@ -1703,10 +1703,10 @@ static void nnodes_sort(NameNodes *x) {
   for (int i = 0; i < x->names.n; i++) qsort(x->ids[i], (size_t)x->n[i], sizeof(int), nnodes_cmp);
 }
 static NameNodes g_cwr;
-static int *const_writes_of(const NodeTable *nt, const char *cname, int *count) {
+static int *const_writes_of(const Compiler *c, const NodeTable *nt, const char *cname, int *count) {
   if (nnodes_stale(&g_cwr, nt)) {
     NT_FOREACH_KIND(nt, NK_ConstantWriteNode, id) {
-      const char *nm = nt_key_name(nt, id);
+      const char *nm = key_name(c, id);
       if (nm) nnodes_add(&g_cwr, nm, id);
     }
     NT_FOREACH_KIND(nt, NK_CallNode, id) {
@@ -1937,7 +1937,7 @@ static int ivar_array_elems_all_int_array(Compiler *c, int cid, const char *ivna
 static int const_array_elems_all_int_array_impl(Compiler *c, const char *cname) {
   const NodeTable *nt = c->nt;
   int saw = 0, nw = 0;
-  int *ws __attribute__((cleanup(nnodes_free_ids))) = const_writes_of(nt, cname, &nw);
+  int *ws __attribute__((cleanup(nnodes_free_ids))) = const_writes_of(c, nt, cname, &nw);
   for (int wi = 0; wi < nw; wi++) {
     int id = ws[wi];
     NodeKind k = nt_kind(nt, id);
@@ -4640,7 +4640,7 @@ static int infer_new_call(Compiler *c, int id, const NodeTable *nt, const char *
         if (!(cn && is_builtin_reopen(cn))) { *out = ty_object(ci); return 1; }
       }
       /* a builtin exception by its whole path (Errno::ENOENT.new) */
-      if (cn && (is_builtin_exception_name(cn) || superclass_builtin_exc_name(nt, recv)))
+      if (cn && (is_builtin_exception_name(cn) || superclass_builtin_exc_name(c, nt, recv)))
         { *out = TY_EXCEPTION; return 1; }
       /* ::Array.new / ::String.new / ::StringIO.new etc. */
       if (is_array_class_name(cn) && argc == 2 && nt_ref(nt, id, "block") < 0)
@@ -7813,7 +7813,7 @@ static int infer_exception_call(Compiler *c, int id, const NodeTable *nt, const 
                      (nt_kind(nt, recv) == NK_ConstantPathNode &&
                       const_node_class_index(c, recv) < 0))) {
     /* by its whole path: Errno::ENOENT.to_tty? */
-    const char *ecn = superclass_builtin_exc_name(nt, recv);
+    const char *ecn = superclass_builtin_exc_name(c, nt, recv);
     if (ecn && is_builtin_exception_name(ecn) && sp_streq(name, "to_tty?")) { *out = TY_BOOL; return 1; }
   }
 
@@ -10158,9 +10158,9 @@ static TyKind infer_call_inner(Compiler *c, int id) {
   }
 
   /* Fiber storage: Fiber[:k] and Fiber.current[:k] -> poly */
-  if (recv >= 0 && sp_streq(name, "[]") && argc == 1 && fiber_storage_recv(nt, recv)) return TY_POLY;
+  if (recv >= 0 && sp_streq(name, "[]") && argc == 1 && fiber_storage_recv(c, nt, recv)) return TY_POLY;
   /* Fiber[:k] = v -> returns v's type */
-  if (recv >= 0 && sp_streq(name, "[]=") && argc == 2 && fiber_storage_recv(nt, recv)) return infer_type(c, argv[1]);
+  if (recv >= 0 && sp_streq(name, "[]=") && argc == 2 && fiber_storage_recv(c, nt, recv)) return infer_type(c, argv[1]);
   /* ENV[key] -> string or nil (use TY_STRING; null means nil). ENV.fetch
      answers its default on a miss, so the call is the union of String with
      the default's type: a String or nil default keeps the nullable string,

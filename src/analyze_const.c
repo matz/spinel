@@ -161,7 +161,7 @@ static int cw_value_walk(ConstWalk *w, int id, int depth) {
       }
       int rv = cw_value(w, r, depth + 1);
       if (rv == 0) return 0;
-      const char *rn = nt_kind(nt, r) == NK_ConstantReadNode ? nt_key_name(nt, r) : NULL;
+      const char *rn = nt_kind(nt, r) == NK_ConstantReadNode ? key_name(w->c, r) : NULL;
       /* Struct.new, Data.define, Class.new, Module.new run the body they take */
       if (rn && is_class_builder(rn, nm) && !w->hooks && !w->reopened) {
         if (blk < 0) return 1;

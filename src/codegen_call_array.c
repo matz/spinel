@@ -2521,7 +2521,7 @@ int emit_call_append_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, cons
 int emit_call_store_value_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc, const int *argv, TyKind rt) {
   /* Fiber[:k] = v (expression form) */
   if (sp_streq(name, "[]=") && argc == 2 && recv >= 0) {
-    if (fiber_storage_recv(nt, recv)) {
+    if (fiber_storage_recv(c, nt, recv)) {
       Repr fvtr = repr_of(c, argv[1]);
       TyKind fvt = fvtr.as_ty;
       /* Fiber storage is poly-valued. A nil/void/untyped value has no scalar

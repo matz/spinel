@@ -2671,9 +2671,9 @@ static int add_listed_const(const char **out, const char **shown, int n, const c
 /* The key and the shown name of the class or module a `class`/`module`
    statement STMT names: the leaf of its header, and for a qualified class
    the leaf of the Ruby path it keeps beside the key. */
-static void class_stmt_const_names(const NodeTable *nt, int stmt, const char **nm, const char **sh) {
+static void class_stmt_const_names(const Compiler *c, const NodeTable *nt, int stmt, const char **nm, const char **sh) {
   int ncp = nt_ref(nt, stmt, "constant_path");
-  const char *full = ncp >= 0 ? nt_key_name(nt, ncp) : NULL;
+  const char *full = ncp >= 0 ? key_name(c, ncp) : NULL;
   *nm = *sh = NULL;
   if (!full) return;
   const char *last = strrchr(full, ':');
@@ -2732,7 +2732,7 @@ static int class_body_constants(Compiler *c, int ci, const char **out, const cha
         /* the twin a class that extends Enumerable answers it through
            (desugar_extend_enumerable) is the compiler's, not the program's */
         if (nt_int(nt, stmts[k], "enum_twin", 0)) continue;
-        class_stmt_const_names(nt, stmts[k], &nm, &sh);
+        class_stmt_const_names(c, nt, stmts[k], &nm, &sh);
       }
       if (nm) n = add_listed_const(out, shown, n, nm, sh);
     }
@@ -2751,7 +2751,7 @@ static int class_path_constants(Compiler *c, int ci, const char **out, const cha
       int k = class_def_is_class(nt, id) || class_def_is_module(nt, id) ? path_header_class(c, id) : -1;
       if (n >= max || k < 0 || c->classes[k].enclosing_class != ci) continue;
       const char *nm, *sh;
-      class_stmt_const_names(nt, id, &nm, &sh);
+      class_stmt_const_names(c, nt, id, &nm, &sh);
       if (nm) n = add_listed_const(out, shown, n, nm, sh);
     }
   for (int r = 0; r < nt_nroots(nt); r++) {   /* each file's top level */
@@ -5655,7 +5655,7 @@ void emit_concurrency_raise(Compiler *c, const char *rtext, int argc, const int 
     /* a builtin exception by its whole path (Errno::ENOENT), a class of the
        program by its Ruby name */
     int xc = const_node_class_index(c, argv[0]);
-    const char *cn = xc >= 0 ? class_ruby_name(c, xc) : superclass_builtin_exc_name(nt, argv[0]);
+    const char *cn = xc >= 0 ? class_ruby_name(c, xc) : superclass_builtin_exc_name(c, nt, argv[0]);
     if (!cn) cn = nt_str(nt, argv[0], "name");
     buf_printf(b, "\"%s\", ", cn);
     if (xc >= 0 ? class_is_syserr(c, xc) : is_syserr_family_name(cn)) {
@@ -15607,7 +15607,7 @@ static int emit_new_call_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
       { *out = 1; return 1; }
     }
     /* a builtin exception by its whole path: Errno::ENOENT, not "ENOENT" */
-    const char *cn = superclass_builtin_exc_name(nt, recv);
+    const char *cn = superclass_builtin_exc_name(c, nt, recv);
     if (!cn) cn = nt_str(nt, recv, "name");
     if (cn && is_exc_name(cn)) {
       /* a reopening's own initialize runs on the runtime's exception */
@@ -21208,7 +21208,7 @@ static void sdefs_add(const char *cn, const char *name) {
   g_sdefs_head[b] = g_nsdefs++;
 }
 
-static void sdefs_scan(const NodeTable *nt, int id, const char *cn, int in_singleton) {
+static void sdefs_scan(const Compiler *c, const NodeTable *nt, int id, const char *cn, int in_singleton) {
   const char *ty = id >= 0 ? nt_type(nt, id) : NULL;
   NodeKind ty_k = nt_kind(nt, id);
   if (!ty) return;
@@ -21224,9 +21224,9 @@ static void sdefs_scan(const NodeTable *nt, int id, const char *cn, int in_singl
        the class's */
     int ex = nt_ref(nt, id, "expression");
     NodeKind ek = nt_kind(nt, ex);
-    const char *scn = ek == NK_ConstantReadNode && !cn ? nt_key_name(nt, ex)
+    const char *scn = ek == NK_ConstantReadNode && !cn ? key_name(c, ex)
                     : ek == NK_SelfNode && cn && !in_singleton ? cn : NULL;
-    if (scn) sdefs_scan(nt, nt_ref(nt, id, "body"), scn, 1);
+    if (scn) sdefs_scan(c, nt, nt_ref(nt, id, "body"), scn, 1);
   }
   else if (ty_k == NK_CallNode) {
     const char *nm = nt_str(nt, id, "name");
@@ -21240,13 +21240,13 @@ static void sdefs_scan(const NodeTable *nt, int id, const char *cn, int in_singl
       const char *dm = sp_streq(a0, "SymbolNode") ? nt_str(nt, av[0], "value") : NULL;
       if (in_singleton && cn && dm && sp_streq(nm, "define_method")) sdefs_add(cn, dm);
     }
-    sdefs_scan(nt, nt_ref(nt, id, "block"), cn, in_singleton);   /* `[1].each do def m` */
+    sdefs_scan(c, nt, nt_ref(nt, id, "block"), cn, in_singleton);   /* `[1].each do def m` */
   }
   else if (ty_k == NK_StatementsNode) {
     int n = 0; const int *st = nt_arr(nt, id, "body", &n);
-    for (int i = 0; i < n; i++) sdefs_scan(nt, st[i], cn, in_singleton);
+    for (int i = 0; i < n; i++) sdefs_scan(c, nt, st[i], cn, in_singleton);
   }
-  else if (ty_k == NK_BlockNode) sdefs_scan(nt, nt_ref(nt, id, "body"), cn, in_singleton);
+  else if (ty_k == NK_BlockNode) sdefs_scan(c, nt, nt_ref(nt, id, "body"), cn, in_singleton);
   else if (ty_k == NK_IfNode || ty_k == NK_UnlessNode || ty_k == NK_ElseNode ||
            ty_k == NK_WhenNode || ty_k == NK_InNode || ty_k == NK_RescueNode ||
            ty_k == NK_EnsureNode || ty_k == NK_BeginNode || ty_k == NK_CaseNode ||
@@ -21255,9 +21255,9 @@ static void sdefs_scan(const NodeTable *nt, int id, const char *cn, int in_singl
     static const char *const KEYS[] = { "statements", "subsequent", "else_clause",
                                         "rescue_clause", "ensure_clause" };
     for (size_t k = 0; k < sizeof KEYS / sizeof KEYS[0]; k++)
-      sdefs_scan(nt, nt_ref(nt, id, KEYS[k]), cn, in_singleton);
+      sdefs_scan(c, nt, nt_ref(nt, id, KEYS[k]), cn, in_singleton);
     int n = 0; const int *cs = nt_arr(nt, id, "conditions", &n);
-    for (int i = 0; i < n; i++) sdefs_scan(nt, cs[i], cn, in_singleton);
+    for (int i = 0; i < n; i++) sdefs_scan(c, nt, cs[i], cn, in_singleton);
   }
   /* a class, module or def of its own is another scope */
 }
@@ -21292,9 +21292,9 @@ static int singleton_def_of(Compiler *c, const char *cn, const char *name) {
           int cp = nt_ref(nt, id, "constant_path");
           NodeKind ck = nt_kind(nt, cp);
           const char *kn = ck == NK_ConstantReadNode ? key_name(c, cp) : NULL;
-          if (kn) sdefs_scan(nt, nt_ref(nt, id, "body"), kn, 0);
+          if (kn) sdefs_scan(c, nt, nt_ref(nt, id, "body"), kn, 0);
         }
-        else if (k == NK_SingletonClassNode) sdefs_scan(nt, id, NULL, 0);
+        else if (k == NK_SingletonClassNode) sdefs_scan(c, nt, id, NULL, 0);
       }
     }
   }

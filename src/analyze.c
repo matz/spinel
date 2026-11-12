@@ -9717,7 +9717,7 @@ static void synth_struct_each(Compiler *c) {
 static ANameHash g_enum_cls;
 static const NodeTable *g_enum_cls_nt;
 static int g_enum_cls_cnt = -1;
-static int class_body_includes_enumerable(const NodeTable *nt, int id);
+static int class_body_includes_enumerable(const Compiler *c, const NodeTable *nt, int id);
 int an_class_includes_enumerable(Compiler *c, int ci) {
   const NodeTable *nt = c->nt;
   if (ci < 0 || ci >= c->nclasses) return 0;
@@ -9734,7 +9734,7 @@ int an_class_includes_enumerable(Compiler *c, int ci) {
     anh_free(&g_enum_cls); memset(&g_enum_cls, 0, sizeof g_enum_cls);
     int ndk = 0; const NodeKind *dk = class_def_kinds(&ndk);
     for (int dh = 0; dh < ndk; dh++) NT_FOREACH_KIND(nt, dk[dh], id) {
-      if (!class_def_is_class(nt, id) || !class_body_includes_enumerable(nt, id)) continue;
+      if (!class_def_is_class(nt, id) || !class_body_includes_enumerable(c, nt, id)) continue;
       const char *n = class_def_key(c, id);
       if (n && !anh_has(&g_enum_cls, n)) anh_add(&g_enum_cls, n);
     }
@@ -9786,7 +9786,7 @@ static int an_enum_reaches(Compiler *c, int ci) {
   free(seen);
   return r;
 }
-static int class_body_includes_enumerable(const NodeTable *nt, int id) {
+static int class_body_includes_enumerable(const Compiler *c, const NodeTable *nt, int id) {
   int body = class_def_body(nt, id);
   int bn = 0; const int *bb = body >= 0 ? nt_arr(nt, body, "body", &bn) : NULL;
   for (int k = 0; k < bn; k++) {
@@ -9796,7 +9796,7 @@ static int class_body_includes_enumerable(const NodeTable *nt, int id) {
     int an = nt_ref(nt, bb[k], "arguments");
     int n2 = 0; const int *av = an >= 0 ? nt_arr(nt, an, "arguments", &n2) : NULL;
     for (int j = 0; j < n2; j++) {
-      const char *mn = nt_key_name(nt, av[j]);
+      const char *mn = key_name(c, av[j]);
       if (mn && sp_streq(mn, "Enumerable")) return 1;
     }
   }
@@ -41608,7 +41608,7 @@ static int mark_nullable_thread_params(Compiler *c) {
   NT_FOREACH_KIND(nt, NK_CallNode, id) {
     const char *tn = nt_str(nt, id, "name");
     int tr = nt_ref(nt, id, "receiver"), tb = nt_ref(nt, id, "block");
-    if (!tn || !sp_streq(tn, "new") || !recv_is_const(nt, tr, "Thread") || tb < 0 || nt_kind(nt, tb) != NK_BlockNode) continue;
+    if (!tn || !sp_streq(tn, "new") || !recv_is_const(c, nt, tr, "Thread") || tb < 0 || nt_kind(nt, tb) != NK_BlockNode) continue;
     int tp = nt_ref(nt, tb, "parameters"), ti = tp >= 0 ? nt_ref(nt, tp, "parameters") : -1;
     int ta = nt_ref(nt, id, "arguments"), tac = 0, trn = 0;
     const int *tav = ta >= 0 ? nt_arr(nt, ta, "arguments", &tac) : NULL;
@@ -42918,11 +42918,11 @@ static int splat_user_method_rejects(Compiler *c, const char *name, int n) {
 /* A default constructor consumes the expanded value, not the Array
    enclosing it. Its share row identifies that argument flow in both builds,
    independently of String sharing; its positional range is zero to one. */
-static int splat_constructor_arity(const NodeTable *nt, int id, const char *name, int *lo) {
+static int splat_constructor_arity(const Compiler *c, const NodeTable *nt, int id, const char *name, int *lo) {
   if (lo) *lo = 0;
   if (!is_new_name(name)) return -1;
   int recv = nt_ref(nt, id, "receiver");
-  const char *cn = nt_kind(nt, recv) == NK_ConstantReadNode ? nt_key_name(nt, recv) : NULL;
+  const char *cn = nt_kind(nt, recv) == NK_ConstantReadNode ? key_name(c, recv) : NULL;
   /* Range.new(first, last, exclude_end = false): each arm is the literal's
      constructor spelling (desugar_class_literal_ctors) */
   if (cn && sp_streq(cn, "Range") && sp_streq(name, "new")) {
@@ -43599,7 +43599,7 @@ static int splat_dispatch_on_length(Compiler *c, int id, const int *argv, int ar
      CRuby's tables, the block-carrying call's where there is a block */
   int odyn = 0, spec = 0;
   int ctor_lo = 0;
-  int ctor = splat_constructor_arity(nt, id, cnm, &ctor_lo);
+  int ctor = splat_constructor_arity(c, nt, id, cnm, &ctor_lo);
   if (ctor >= 0) { lo = ctor_lo; hi = ctor; variadic = 0; }
   else if (!splat_builtin_range(cnm, &lo, &hi, &variadic)) {
     if (splat_dyn_arm_range(c, id, cnm, blk >= 0, &lo, &hi, &variadic)) odyn = 1;
@@ -44085,7 +44085,7 @@ void expand_static_splat_args(Compiler *c, int from, int count) {
     const char *cnm = nt_str(nt, id, "name");
     if (!cnm) continue;
     int listed = splat_builtin_arity(cnm) >= 0 || sp_streq(cnm, "slice") || sp_streq(cnm, "fill");
-    if (!listed && splat_constructor_arity(nt, id, cnm, NULL) < 0 &&
+    if (!listed && splat_constructor_arity(c, nt, id, cnm, NULL) < 0 &&
         !splat_builtin_range(cnm, NULL, NULL, NULL) &&
         !splat_dyn_arm_range(c, id, cnm, nt_ref(nt, id, "block") >= 0, NULL, NULL, NULL) &&
         ((nt_ref(nt, id, "block") >= 0 && !splat_value_or_block_name(cnm)) ||
@@ -48997,7 +48997,7 @@ int desugar_send_class_makers_left(Compiler *c, LowerCtx *lc, int id) {
   if (!nm || !(sp_streq(nm, "send") || sp_streq(nm, "public_send") || sp_streq(nm, "__send__"))) return 0;
   int rv = nt_ref(ntm, id, "receiver");
   if (rv < 0 || nt_kind(ntm, rv) != NK_ConstantReadNode) return 0;
-  const char *rn = nt_key_name(ntm, rv);
+  const char *rn = key_name(c, rv);
   int sa = nt_ref(ntm, id, "arguments"), sac = 0;
   const int *sav = sa >= 0 ? nt_arr(ntm, sa, "arguments", &sac) : NULL;
   if (sac < 1 || sac - 1 > 64 || nt_kind(ntm, sav[0]) != NK_SymbolNode) return 0;

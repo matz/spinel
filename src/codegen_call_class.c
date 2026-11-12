@@ -633,7 +633,7 @@ static int refl_builtin_vis_walk(Compiler *c, int ci, const char *m, int inherit
   if (ri->is_struct) sup = ri->is_data ? "Data" : "Struct";
   else {
     int sc = class_def_super(c->nt, ri->def_node);
-    const char *exc = sc >= 0 ? superclass_builtin_exc_name(c->nt, sc) : NULL;
+    const char *exc = sc >= 0 ? superclass_builtin_exc_name(c, c->nt, sc) : NULL;
     NodeKind sk = sc >= 0 ? nt_kind(c->nt, sc) : NK_NilNode;
     if (exc) sup = exc;
     else if (sk == NK_ConstantReadNode || sk == NK_ConstantPathNode) sup = nt_str(c->nt, sc, "name");
@@ -3915,7 +3915,7 @@ int emit_call_new_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const c
       }
     }
     if (ci < 0) {
-      const char *qn = superclass_builtin_exc_name(nt, recv);
+      const char *qn = superclass_builtin_exc_name(c, nt, recv);
       if (qn) cn = qn;
     }
     /* (`::NoMethodError.new(msg, name, args, receiver: r)`, a root-anchored

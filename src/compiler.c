@@ -5067,7 +5067,7 @@ int comp_sret_next(const Compiler *c, int r) {
    answer. Syntax only, over the whole node table (a required package's
    source too), so it is asked once per version of the table and again when
    the table grows. */
-static int bare_gets_scan(const NodeTable *nt) {
+static int bare_gets_scan(const Compiler *c, const NodeTable *nt) {
   for (int i = 0; i < nt->count; i++) {
     const char *ty = nt_type(nt, i);
     NodeKind ty_k = nt_kind(nt, i);
@@ -5084,7 +5084,7 @@ static int bare_gets_scan(const NodeTable *nt) {
     }
     else if (ty_k == NK_InterpolatedSymbolNode) return 0;
     else if (ty_k == NK_ConstantReadNode || ty_k == NK_ConstantPathNode) {
-      const char *cn = nt_key_name(nt, i);
+      const char *cn = key_name(c, i);
       if (cn && sp_streq(cn, "BasicObject")) return 0;
     }
     else if (ty_k == NK_GlobalVariableReadNode) {
@@ -5120,7 +5120,7 @@ int comp_bare_gets_is_argf(Compiler *c) {
   static int memo_count = -1, memo_ans = 0;
   if (memo_nt != c->nt || memo_ver != c->nt->version || memo_count != c->nt->count) {
     memo_nt = c->nt; memo_ver = c->nt->version; memo_count = c->nt->count;
-    memo_ans = bare_gets_scan(c->nt);
+    memo_ans = bare_gets_scan(c, c->nt);
   }
   return memo_ans;
 }

@@ -6729,8 +6729,10 @@ static sp_RbVal sp_poly_round_n(sp_RbVal v, sp_int n) {
   if (SP_UNLIKELY(v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_TIME && v.v.p)) return sp_box_timev(sp_timev_round_to(*(sp_Time *)v.v.p, n, 2)); 
   if (v.tag == SP_TAG_FLT) {
     double x = v.v.f;
-    if (n > 0) { double f = pow(10, (double)n); if (isinf(f)) return sp_box_float(x);
-      double r = round(x * f) / f; return sp_box_float((x != 0.0 && r == 0.0) ? 0.0 : r); }  /* +0.0 normalize (#3235) */
+    /* the typed Float#round(n)'s own rounding, which corrects a tie the
+       scaled product fell short of (1.005 * 100 is 100.49999999999999) */
+    if (n > 0) { double r = sp_float_prec_op(x, n, SP_PREC_ROUND);
+      return sp_box_float((x != 0.0 && r == 0.0) ? 0.0 : r); }  /* +0.0 normalize (#3235) */
     sp_poly_flo_domain_ck(x);
     double f = pow(10, (double)(-n));
     return isinf(f) ? sp_box_int(0) : sp_box_f_to_int(round(x / f) * f);

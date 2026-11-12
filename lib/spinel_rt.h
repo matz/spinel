@@ -6787,6 +6787,13 @@ static inline int sp_poly_is_hash_kind(int cls_id) {
          cls_id == SP_BUILTIN_INT_STR_HASH || cls_id == SP_BUILTIN_INT_INT_HASH || cls_id == SP_BUILTIN_STR_POLY_HASH ||
          cls_id == SP_BUILTIN_SYM_POLY_HASH || cls_id == SP_BUILTIN_POLY_POLY_HASH;
 }
+/* A boxed Range carries the class id of its representation, which its ends
+   choose (Integers, Floats, Strings, Times, the program's objects); its
+   class is Range under every one of them */
+static inline int sp_poly_is_range_kind(int cls_id) {
+  return cls_id == SP_BUILTIN_RANGE || cls_id == SP_BUILTIN_FLOAT_RANGE || cls_id == SP_BUILTIN_STR_RANGE ||
+         cls_id == SP_BUILTIN_TIME_RANGE || cls_id == SP_BUILTIN_OBJ_RANGE;
+}
 /* `try_convert` on a class known only at run time: the argument when it
    already is one of that class, nil otherwise, which is what the typed
    emitters answer for a constant receiver; Integer takes a Float through
@@ -14527,9 +14534,7 @@ static sp_bool sp_poly_kind_of_builtin(sp_RbVal v, const char *cn) {
   int is_rat = (v.tag == SP_TAG_OBJ && (v.cls_id == SP_BUILTIN_RATIONAL || v.cls_id == SP_BUILTIN_BIG_RATIONAL));
   int is_cpx = (v.tag == SP_TAG_OBJ && v.cls_id == SP_BUILTIN_COMPLEX);
   int is_arr = (v.tag == SP_TAG_OBJ && sp_poly_is_array_kind(v.cls_id));
-  int is_range = (v.tag == SP_TAG_OBJ && (v.cls_id == SP_BUILTIN_RANGE ||
-                                          v.cls_id == SP_BUILTIN_FLOAT_RANGE ||
-                                          v.cls_id == SP_BUILTIN_STR_RANGE));
+  int is_range = (v.tag == SP_TAG_OBJ && sp_poly_is_range_kind(v.cls_id));
   int is_hash = (v.tag == SP_TAG_OBJ &&
                  (v.cls_id == SP_BUILTIN_POLY_POLY_HASH || v.cls_id == SP_BUILTIN_SYM_POLY_HASH ||
                   v.cls_id == SP_BUILTIN_STR_POLY_HASH || v.cls_id == SP_BUILTIN_STR_STR_HASH ||
@@ -20627,6 +20632,8 @@ static sp_Enumerator *sp_enum_chain_of(sp_RbVal sources) {
     if (!sp_poly_kind_of_builtin(src, "Enumerable"))
       sp_raise_cls("NoMethodError", sp_sprintf("undefined method 'each' for an instance of %s",
                                                sp_poly_class_name(src)));
+    /* a Range of Times is Enumerable and has an #each, which raises */
+    if (src.tag == SP_TAG_OBJ && src.cls_id == SP_BUILTIN_TIME_RANGE && src.v.p) sp_trange_iterate_raise();
     sp_PolyArray *part = sp_enum_items_from(src); SP_GC_ROOT(part);
     for (sp_int j = 0; j < part->len; j++) sp_PolyArray_push(items, part->data[j]);
   }

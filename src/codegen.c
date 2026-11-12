@@ -21819,7 +21819,8 @@ static void emit_class_machinery(const NodeTable *nt, Compiler *c, Buf *b, char 
          box with no handle is not one */
       "    if(v.cls_id==SP_BUILTIN_STRBUF&&v.v.p)return ((sp_Class){-102});\n"
       "    if(sp_poly_is_array_kind(v.cls_id))return ((sp_Class){-104});\n"
-      "    if(v.cls_id==SP_BUILTIN_RANGE||v.cls_id==SP_BUILTIN_STR_RANGE)return ((sp_Class){-106});\n"
+      /* a Range of any ends: each kind of end boxes under its own class id */
+      "    if(sp_poly_is_range_kind(v.cls_id))return ((sp_Class){-106});\n"
       "    if(v.cls_id==SP_BUILTIN_TIME)return ((sp_Class){-107});\n"
       "    if(v.cls_id==SP_BUILTIN_PROC)return ((sp_Class){-118});\n"
       /* a Rational (small or big) and a Complex are Numerics, not Objects */

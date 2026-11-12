@@ -1,0 +1,39 @@
+one 42 a
+42 two "" sym buf b,c,d,e,f
+v3 6 g,h
+p/p 5/5 i,i,j,j
+q/after 1.5/after k,after,l,after
+before/r before/[1, 2] before,m,before,n
+true
+true
+abc! true 6 o,p,q,r
+A:u/arg
+A:7/arg
+B:u/arg
+B:7/arg
+s,arg,t,arg,s,arg,t,arg
+["z1", "z2"]
+["3", "6"]
+u1,u2,v1,v2
+f
+9
+pv
+8
+pv
+8
+pv/after
+8/after
+deep
+10
+y,z,w,x,w,x,w,after,x,after,A,B
+n/n/n/n 3/3 O,P,P,O,P,P,Q,R,R,Q,R,R
+n/after/after before/9 S,T,after,after,before,U,before,V
+n 17 W,X,Y,Z,a
+three 11 C,D
+four 12 E,F
+five 13 G,H
+six 14 I,J
+seven 15 K,L
+x!
+y!
+M,N

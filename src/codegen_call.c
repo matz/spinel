@@ -273,6 +273,8 @@ int emit_ctor_yield_inline(Compiler *c, int id, int ci, Buf *b) {
   }
 
   int tag = ++g_tmp;
+  /* this copy's own nodes start unbound (view_bind_park) */
+  int parked = view_bind_park(c, m, id);
   /* the call's arguments are the caller's code: `Set.new(yield)` yields to the
      caller's block, whatever block the spliced initialize runs under */
   InlineBlockCtx caller_bc;
@@ -532,6 +534,7 @@ int emit_ctor_yield_inline(Compiler *c, int id, int ci, Buf *b) {
   g_yield_emitting_class_fallback2 = saved_emcls_fb2;
   g_yield_self_deref_fallback = saved_deref_fb;
   g_yield_emitting_class_fallback = saved_emcls_fb;
+  view_bind_unpark(c, parked);
   return 1;
 }
 

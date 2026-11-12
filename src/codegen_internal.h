@@ -2719,6 +2719,18 @@ int stmt_may_rebind_local(Compiler *c, int stmt, int read, const char *name);
    from slot n up. */
 int view_bind(int node, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
 void view_unbind(int n);
+/* The bindings of method m's own nodes, out of sight while the copy of m's
+   body that `call` splices is emitted: they are an enclosing copy's. A
+   yielding method is spliced at each call, and a block given to one call
+   may call the method again (`M.f { M.f { 1 } }`), so the second copy is
+   emitted inside the first, at the first's `yield`, with the same node
+   ids. An argument the first ran ahead into a temp (emit_arg_temp) is still
+   bound there, and the second read that temp for its own argument and
+   never ran it. The call's own operands are the caller's and stay bound.
+   Answers how many it parked, for view_bind_unpark; a refusal's
+   view_unwind puts them back with the views. */
+int view_bind_park(Compiler *c, const Scope *m, int call);
+void view_bind_unpark(Compiler *c, int n);
 /* A constant receiver's read effect already ran for the enclosing emission. */
 int view_const_read_done(Compiler *c, int id);
 int view_push_const_read(Compiler *c, int id);

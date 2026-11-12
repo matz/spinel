@@ -2859,6 +2859,12 @@ static void emit_boxed_impl(Compiler *c, int node, Buf *b) {
     }
   }
   TyKind t = tr.as_ty;
+  /* A yield that already ran into a temp (an argument the call sequenced or
+     rooted ahead of its binding, arg_ran_first) is that temp, boxed below by
+     the representation the temp was given. The arms here answer the block's
+     value where they stand: they call the proc or splice the block, and for
+     a temp ran it a second time (`C.str(yield)` into a boxed parameter). */
+  int yield_runs = nt_kind(c->nt, node) == NK_YieldNode && !arg_ran_first(node, 0);
   /* Lowered self-recursive yield in a boxed value position (a `{ yield }` block
      whose value rides the universal proc slot): the enclosing method's block is
      the runtime __yblk__ proc, which publishes its boxed result into
@@ -2867,7 +2873,7 @@ static void emit_boxed_impl(Compiler *c, int node, Buf *b) {
      == -1 but is not a missing-block case). Checked before the raise because
      emit_boxed, unlike the expr-position YieldNode emitter, is now reached for
      a lowered yield tail once every proc returns through the boxed channel. */
-  if (nt_kind(c->nt, node) == NK_YieldNode && g_current_scope_is_lowered) {
+  if (yield_runs && g_current_scope_is_lowered) {
     int yargs = nt_ref(c->nt, node, "arguments");
     int yargc = 0; const int *yargv = yargs >= 0 ? nt_arr(c->nt, yargs, "arguments", &yargc) : NULL;
     buf_puts(b, "((void)");
@@ -2885,13 +2891,13 @@ static void emit_boxed_impl(Compiler *c, int node, Buf *b) {
   /* A proc-form body has no inline block by construction -- the block arrives
      as an sp_Proc * parameter -- so the yield lowers to a call on it, not to
      the no-block raise (#3399). */
-  if (g_yield_proc_ref && nt_kind(c->nt, node) == NK_YieldNode) {
+  if (g_yield_proc_ref && yield_runs) {
     /* This helper's callers want a BOXED value, so ask for the poly form. */
     emit_yield_proc_call(c, nt_ref(c->nt, node, "arguments"), TY_POLY, b, 0, 1);
     RC(RF_YIELD, RW_YIELD);
     return;
   }
-  if (nt_kind(c->nt, node) == NK_YieldNode && g_block_id < 0) {
+  if (yield_runs && g_block_id < 0) {
     /* An unguarded yield with no block raises LocalJumpError. A guarded yield
        folds its guard to a compile-time false and sits inside an `if (0)`, so
        the raise never executes there; the boxed nil keeps the comma expression
@@ -2913,7 +2919,7 @@ static void emit_boxed_impl(Compiler *c, int node, Buf *b) {
       RC(RF_NULLABLE, RW_NONE);
       return;
     } }
-  if (g_block_id >= 0 && nt_kind(c->nt, node) == NK_YieldNode) {
+  if (g_block_id >= 0 && yield_runs) {
     /* A forwarding block (`wrap { yield }` handing its own block on) has a
        yield for its tail, and that node's cached type is one site's too:
        the value at THIS site is what the block one level out answers, the
@@ -15716,6 +15722,8 @@ int emit_super_inline(Compiler *c, int id, Buf *b, int indent, int as_expr) {
   /* --plan-check: the super is spliced from mi */
   if (g_plan_check) ucall_observe(c, id, mi, shadow ? s->class_id : defcls, 0);
   int tag = ++g_tmp;
+  /* this copy's own nodes start unbound (view_bind_park) */
+  int parked = view_bind_park(c, m, id);
   int saved_nren = g_nren, saved_block = g_block_id;
   int saved_bnren = g_block_nren, saved_yfbn = g_yield_block_fallback_nren;
   const char *saved_bpn = g_block_param_name;
@@ -15912,6 +15920,7 @@ int emit_super_inline(Compiler *c, int id, Buf *b, int indent, int as_expr) {
   g_yield_proc_ref_fallback = saved_ypr_fb; g_yield_slot_ty_fallback = saved_yslot_fb;
   g_yield_proc_ref_fallback2 = saved_ypr_fb2; g_yield_slot_ty_fallback2 = saved_yslot_fb2;
   g_current_scope_is_lowered = saved_low;
+  view_bind_unpark(c, parked);
   free(fwd_pb.p);
   return 1;
 }

@@ -597,6 +597,8 @@ or a `def self.` defines, inherited ones included, and the `attr_*`
 readers and writers; a method with an optional, rest, keyword or block
 parameter stays out of it, as does a private or protected one, and one
 with a parameter whose kind the thunk cannot check a host's argument
-against (a Range, a Time, a Symbol, an IO, ...). A host
+against (a Range, a Time, a Symbol, an IO, ...). When two classes of the
+program have one name (`A::Base`, `B::Base`), name the one you export by
+its path: the name alone is refused. A host
 that reads source at run time (a REPL) reaches the program's classes and
 objects through it; `test/ext/methods_host.c` is a worked example.

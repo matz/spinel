@@ -6752,11 +6752,11 @@ static int ext_param_ty_checked(TyKind t) {
   }
 }
 
-/* Whether the list names class_id: a class or module of the program (not
-   a reopened builtin, not a package's native class). A module exports its
-   singleton methods only. */
-/* Whether the list names a class of that name: as written (`Sub`), or as
-   the last name of a path (`ExtSub::Sub`); `all` names every class. */
+/* Whether the list names a definition of that leaf name: as written
+   (`Sub`), or as the last name of a path (`ExtSub::Sub`); `all` names
+   every one. The loose test, for a definition the class table does not
+   hold yet (ext_listed_descendant); a class of the table is asked by
+   ext_class_listed. */
 static int ext_name_listed(const char *name) {
   if (!g_ext_classes || !*g_ext_classes || !name) return 0;
   if (sp_streq(g_ext_classes, "all")) return 1;
@@ -6772,11 +6772,80 @@ static int ext_name_listed(const char *name) {
   return 0;
 }
 
-int ext_class_exported(Compiler *c, int class_id) {
-  if (!g_ext_classes || !*g_ext_classes || class_id < 0 || class_id >= c->nclasses) return 0;
+/* Whether path (`A::B`, or `::A::B`) is the Ruby path of class k: the
+   Ruby leaves of k and of the classes that enclose it, read against the
+   segments of path from its end. By the names, not by the table's keys: a
+   top-level class named `A__Base` has the key of A::Base. A reopened
+   Object's constants are top-level ones. */
+static int ext_class_path_is(Compiler *c, int k, const char *path) {
+  int obj = comp_core_class(c, CORE_OBJECT);
+  if (path[0] == ':' && path[1] == ':') path += 2;
+  const char *end = path + strlen(path);
+  for (int e = k; ; ) {
+    const char *leaf = e >= 0 && e < c->nclasses ? comp_class_ruby_leaf(c, e) : NULL;
+    size_t n = leaf ? strlen(leaf) : 0;
+    if (!n || (size_t)(end - path) < n || strncmp(end - n, leaf, n) != 0) return 0;
+    end -= n;
+    e = c->classes[e].enclosing_class;
+    if (end == path) return e < 0 || e == obj;
+    if (end - path < 2 || end[-1] != ':' || end[-2] != ':' || e < 0 || e == obj) return 0;
+    end -= 2;
+  }
+}
+
+/* Whether one name of the list, item (len bytes), names class k: a path
+   (`A::B`) names the class whose Ruby path it is; a name alone names each
+   class whose Ruby leaf it is, whatever encloses it (`Sub` for
+   ExtSub::Sub). Two classes of one leaf (A::Base and B::Base) are keyed
+   by their paths in the table, so a name alone names both: the check of
+   the list (analyze.c) refuses it. */
+static int ext_item_names(Compiler *c, const char *item, size_t len, int k) {
+  char buf[512];
+  if (len == 0 || len >= sizeof buf) return 0;
+  memcpy(buf, item, len);
+  buf[len] = 0;
+  if (strstr(buf, "::")) return ext_class_path_is(c, k, buf);
+  const char *leaf = comp_class_ruby_leaf(c, k);
+  return leaf && sp_streq(leaf, buf);
+}
+
+/* Whether the list names class k; `all` names every class. */
+static int ext_class_listed(Compiler *c, int k) {
+  if (sp_streq(g_ext_classes, "all")) return 1;
+  for (const char *p = g_ext_classes; *p; ) {
+    const char *e = strchr(p, ',');
+    size_t len = e ? (size_t)(e - p) : strlen(p);
+    if (ext_item_names(c, p, len, k)) return 1;
+    if (!e) break;
+    p = e + 1;
+  }
+  return 0;
+}
+
+/* Whether class_id is one the list can export: a class or module of the
+   program (not a reopened builtin, not a package's native class). A module
+   exports its singleton methods only. */
+static int ext_class_exportable(Compiler *c, int class_id) {
+  if (class_id < 0 || class_id >= c->nclasses) return 0;
   ClassInfo *ci = &c->classes[class_id];
-  if (!ci->name || is_builtin_reopen(ci->name) || ci->is_native_class) return 0;
-  return ext_name_listed(ci->name);
+  return ci->name && !is_builtin_reopen(ci->name) && !ci->is_native_class;
+}
+
+int ext_item_classes(Compiler *c, const char *item, int *a, int *b) {
+  int n = 0;
+  *a = *b = -1;
+  for (int k = 0; k < c->nclasses; k++) {
+    if (!ext_class_exportable(c, k) || !ext_item_names(c, item, strlen(item), k)) continue;
+    if (n == 0) *a = k;
+    else if (n == 1) *b = k;
+    n++;
+  }
+  return n;
+}
+
+int ext_class_exported(Compiler *c, int class_id) {
+  if (!g_ext_classes || !*g_ext_classes) return 0;
+  return ext_class_exportable(c, class_id) && ext_class_listed(c, class_id);
 }
 
 /* Whether scope si is the method the chain of class_id answers for its

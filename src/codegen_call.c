@@ -3085,6 +3085,20 @@ static int user_defines_or_reads_walk(Compiler *c, const char *name) {
    square of the program (8% of a scale-400 compile). */
 static char **udrc_name; static unsigned char *udrc_ans; static int udrc_cap, udrc_n;
 static unsigned udrc_gen, udrc_shape; static int udrc_nscopes = -1, udrc_nclasses = -1;
+/* Does an instance method the program defines named `name` call super? A
+   boxed receiver's itself or freeze then keeps the builtin answer: super in
+   a reopened String#itself answered nil and a reopened Integer's did not
+   compile, where the builtin was right for a boxed value. */
+int user_defines_calls_super(Compiler *c, const char *name) {
+  if (!name) return 0;
+  for (int s = 0; s < c->nscopes; s++) {
+    const Scope *sc = &c->scopes[s];
+    if (sc->def_node >= 0 && !sc->is_cmethod && sc->name && sp_streq(sc->name, name) &&
+        scope_calls_super(c, s)) return 1;
+  }
+  return 0;
+}
+
 int user_defines_or_reads(Compiler *c, const char *name) {
   if (comp_name_is_shadow_copy(c, name, SHADOW_PREP)) return 0;
   if (g_poly_builtin_arm) return 0;

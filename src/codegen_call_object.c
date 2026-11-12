@@ -1414,10 +1414,7 @@ int emit_call_freeze_dup_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
       /* a generated READER of the name owns it, as in CRuby (#4190), and so
          does a method the class defines itself: Nokogiri's Node#dup is a deep
          copy, and the built-in shallow copy took its place (#5450). Not for
-         a call an alias captured the builtin for (builtin_only). A boxed
-         receiver of a name the program defines (`class Integer; def itself
-         = :ii`) takes the per-class dispatch: itself too, which answered
-         the value itself for every element of `[1, "s"].map(&:itself)`. */
+         a call an alias captured the builtin for (builtin_only). */
       !(!cplan_builtin_call(c, id) && ty_is_object(comp_ntype(c, recv)) &&
         comp_resolve_member(c, ty_object_class(comp_ntype(c, recv)), name, 0, NULL, NULL) != SP_MEMBER_NONE) &&
       !(comp_ntype(c, recv) == TY_POLY && an_user_defines_method(c, name))) {
@@ -1611,10 +1608,13 @@ int emit_call_freeze_dup_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, 
          a call an alias captured the builtin for (builtin_only). A boxed
          receiver of a name the program defines (`class Integer; def itself
          = :ii`) takes the per-class dispatch: itself too, which answered
-         the value itself for every element of `[1, "s"].map(&:itself)`. */
+         the value itself for every element of `[1, "s"].map(&:itself)`.
+         Not while a method of the name calls super (user_defines_calls_super):
+         a reopened builtin's super does not reach the builtin method yet. */
       !(!cplan_builtin_call(c, id) && ty_is_object(comp_ntype(c, recv)) &&
         comp_resolve_member(c, ty_object_class(comp_ntype(c, recv)), name, 0, NULL, NULL) != SP_MEMBER_NONE) &&
-      !(argc == 0 && repr_of(c, recv).kind == RK_BOXED && user_defines_or_reads(c, name))) {
+      !(argc == 0 && repr_of(c, recv).kind == RK_BOXED && user_defines_or_reads(c, name) &&
+        (!is_itself_name(name) || !user_defines_calls_super(c, name)))) {
     int args = nt_ref(nt, id, "arguments");
     int argc0 = 0; if (args >= 0) nt_arr(nt, args, "arguments", &argc0);
     /* hash, string, array, and native-bound object dup/clone require real

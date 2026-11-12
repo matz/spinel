@@ -17195,8 +17195,8 @@ static int emit_poly_call0_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
   }
   /* a program's own freeze (`class Integer; def freeze = :fz`) is
      answered by the per-class dispatch below, with the builtin freeze as
-     its default arm */
-  if (sp_streq(name, "freeze") && !user_defines_or_reads(c, name)) { buf_puts(b, "sp_poly_freeze("); emit_expr(c, recv, b); buf_puts(b, ")"); { *out = 1; return 1; } }
+     its default arm (not while one calls super: user_defines_calls_super) */
+  if (sp_streq(name, "freeze") && (!user_defines_or_reads(c, name) || user_defines_calls_super(c, name))) { buf_puts(b, "sp_poly_freeze("); emit_expr(c, recv, b); buf_puts(b, ")"); { *out = 1; return 1; } }
   /* the receiver of a boxed to_h { } rewritten onto map (analyze.c) */
   if (sp_streq(name, "__to_h_subject")) { buf_puts(b, "sp_poly_to_h_subject("); emit_boxed(c, recv, b); buf_puts(b, ")"); { *out = 1; return 1; } }
   if (sp_streq(name, "__to_h_key_subject")) { buf_puts(b, "sp_poly_to_h_key_subject("); emit_boxed(c, recv, b); buf_puts(b, ")"); { *out = 1; return 1; } }

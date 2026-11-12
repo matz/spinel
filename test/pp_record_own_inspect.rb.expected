@@ -20,3 +20,11 @@ S<10>
 14
 W(S<7>)
 [W(D(8))]
+V!
+#<struct S a=1>
+V!
+[#<struct S a=3>]
+V!
+{s: #<data D v=4>}
+V!
+#<struct S a=5>

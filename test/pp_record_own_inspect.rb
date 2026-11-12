@@ -36,3 +36,11 @@ class W
 end
 pp W.new(S.new(7))
 pp [W.new(D.new(8))]
+# beside an object whose class has its own #inspect, a record in the same
+# pp still prints its layout
+class V; def inspect = "V!"; end
+pp V.new, S.new(1)
+pp V.new, [S.new(3)]
+pp V.new, {s: D.new(4)}
+rest = [S.new(5)]
+pp(V.new, *rest)

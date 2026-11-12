@@ -14320,6 +14320,25 @@ static int class_inspectable(Compiler *c, int i) {
      and printed #<Object> (#3813) */
   return 1;
 }
+/* Does the object inspect switch (sp_obj_inspect_sw) call class cid's own
+   #inspect for an object of cid or of any class below it? Then a pp that
+   prints the boxed object through sp_pp_inspect runs that method as the
+   typed call does. */
+static int obj_arm_calls_own_inspect1(Compiler *c, int i) {
+  ClassInfo *ci = &c->classes[i];
+  if (!class_has_obj_arm(c, i)) return 1;   /* no object of it to print */
+  if (!class_inspectable(c, i) || comp_ty_value_obj(c, ty_object(i))) return 0;
+  int mi = display_method_scope(c, i, 1, NULL);
+  if (mi < 0 || ci->is_native_class) return 0;
+  const Scope *s = &c->scopes[mi];
+  return s->reachable && !s->yields && s->nparams == 0 && (s->ret == TY_STRING || s->ret == TY_POLY);
+}
+int obj_arm_calls_own_inspect(Compiler *c, int cid) {
+  if (cid < 0 || cid >= c->nclasses || !g_emit_obj_dispatch) return 0;
+  for (int i = 0; i < c->nclasses; i++)
+    if ((i == cid || is_descendant(c, i, cid)) && !obj_arm_calls_own_inspect1(c, i)) return 0;
+  return 1;
+}
 /* Does the program have a `def inspect = super` reaching Kernel#inspect
    (an_super_object_text)? Only then is sp_obj_kernel_inspect emitted. */
 int obj_kernel_inspect_used(Compiler *c) {

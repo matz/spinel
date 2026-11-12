@@ -1750,6 +1750,8 @@ int array_user_inspect_mi(Compiler *c);
    own #inspect; does a pp print through sp_pp_inspect (codegen.c) */
 int record_pp_skips_inspect(Compiler *c, int cid);
 int pp_prints_by_rt(Compiler *c);
+/* does sp_obj_inspect_sw call class cid's own #inspect (codegen.c) */
+int obj_arm_calls_own_inspect(Compiler *c, int cid);
 /* a pp that prints through sp_pp_inspect (codegen_stmt.c) */
 int pp_leaves_own_inspect(Compiler *c, const char *name);
 void emit_param_cell_publish(Compiler *c, int blk, const char *pname, Buf *b, int indent);

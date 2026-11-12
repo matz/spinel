@@ -804,12 +804,14 @@ int emit_output_spilled(Compiler *c, const char *name, int argc, const int *argv
      sp_pp_inspect */
   int pp_own = argc >= 1 && pp_leaves_own_inspect(c, name);
   /* (an object whose class has its own #inspect prints by that method, as
-     CRuby's pp does: it keeps its typed emission. A Struct or Data does
-     not: its record layout prints) */
+     CRuby's pp does: boxed, the object inspect switch calls it outside the
+     pp (SP_PP_USER). Where that switch does not call it, the whole pp keeps
+     its typed emission. A Struct or Data prints its record layout) */
   for (int k = 0; k < argc && pp_own; k++) {
     TyKind at = repr_of(c, argv[k]).as_ty;
     if (ty_is_object(at) && comp_method_in_chain(c, ty_object_class(at), "inspect", NULL) >= 0 &&
-        !record_pp_skips_inspect(c, ty_object_class(at))) pp_own = 0;
+        !record_pp_skips_inspect(c, ty_object_class(at)) && !obj_arm_calls_own_inspect(c, ty_object_class(at)))
+      pp_own = 0;
   }
   if (argc < 2 && !pp_own) return 0;
   int effectful = pp_own;

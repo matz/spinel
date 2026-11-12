@@ -2791,6 +2791,9 @@ int view_ran_first(int node);
    (view_hold): emit_args_filled_argv's handle temps and the boxed temps
    hoist_dispatch_args roots. */
 int view_held(int node);
+/* ...and the temp's text, or NULL when the node's latest binding is not held:
+   an argument that renders as it is passed on as that temp. */
+const char *view_held_text(int node);
 /* The temp the binding at `slot` names is rooted for as long as the binding
    lives. Called by the binder that rooted it, right after view_bind_temp.
    Only a ran-first slot takes it. */

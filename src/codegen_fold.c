@@ -8733,7 +8733,10 @@ else {
    in-sequence assignment (`a = {...}; foo(a)` as an operand passed a stale `a`).
    That matches the g_argov skip in emit_args_filled. A param default like `{}`
    (provided < 0) is a fresh allocation and does want the root -- #1445.
-   A node an outer emitter bound to a rooted temp (view_held) is rooted already.
+   A node an outer emitter bound to a rooted temp (view_held) is no exception
+   here: that temp is rooted, but a parameter that converts it (a String Range
+   boxed into a poly one) builds a new value from it, which nothing roots.
+   emit_arg_rooted asks whether the argument renders as the temp itself.
    A String Range is no pointer, but it carries two Strings by value (and,
    built --share-strings, their handles): one made in the list is held by
    nothing once its own expression ends, and a later argument that
@@ -8741,7 +8744,6 @@ else {
 int arg_wants_root(Compiler *c, TyKind pt, int provided) {
   if (pt != TY_POLY && pt != TY_STR_RANGE && !needs_root(pt)) return 0;
   if (provided < 0) return 1;
-  if (view_held(provided)) return 0;
   NodeKind ak = nt_kind(c->nt, provided);
   return !((ak == NK_LocalVariableReadNode ||
                    ak == NK_InstanceVariableReadNode ||
@@ -8903,9 +8905,13 @@ static void emit_arg_rooted(Compiler *c, Scope *m, int idx, int provided, int he
     free(ab.p);
     return;
   }
-  char ht[24] = "";
+  /* the temp the argument was bound to and rooted in, by this call's hoist
+     (held) or by an outer emitter (view_held_text): passed on when the
+     argument renders as it, rooted anew when the parameter converts it */
+  char ht[ARGOV_TEXT_LEN] = "";
   if (held > 0) snprintf(ht, sizeof ht, "_t%d", held);
-  if (held > 0 && provided >= 0 && ab.p && sp_streq(ab.p, ht)) {
+  else if (provided >= 0 && view_held_text(provided)) snprintf(ht, sizeof ht, "%s", view_held_text(provided));
+  if (ht[0] && provided >= 0 && ab.p && sp_streq(ab.p, ht)) {
     emit_obj_upcast_prefix(c, pt, comp_ntype(c, provided), out);
     buf_puts(out, ht);
   }

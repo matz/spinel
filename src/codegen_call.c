@@ -22521,6 +22521,16 @@ int emit_arg_type_guards(Compiler *c, int id, Buf *b) {
           else
             buf_printf(b, "; sp_range_cover_rng(_t%d, _t%d); })", tR, tA);
           return 1;
+        }
+        /* a String Range (a Range of Symbols): no Integer end compares with
+           its ends, so only the receiver's missing ends take it in
+           (sp_range_cover_srange) */
+        if (sp_streq(rn2, "cover?") && ar3.as_ty == TY_STR_RANGE && ar3.kind != RK_BOXED) {
+          int tA = ++g_tmp, tR = ++g_tmp;
+          buf_printf(b, "({ sp_StrRange _t%d = ", tA); emit_expr(c, rv2[0], b);
+          buf_printf(b, "; sp_Range _t%d = ", tR); emit_expr(c, rr2, b);
+          buf_printf(b, "; sp_range_cover_srange(_t%d, _t%d); })", tR, tA);
+          return 1;
         } }
       if (float_range_arg) {
         buf_puts(b, "({ (void)("); emit_expr_for_effect(c, rr2, b); buf_puts(b, "); FALSE; })");
@@ -22546,8 +22556,10 @@ int emit_arg_type_guards(Compiler *c, int id, Buf *b) {
                         " ? sp_range_cover_rng(_t%d, *(sp_Range *)_t%d.v.p)"
                         " : (_t%d.tag == SP_TAG_OBJ && _t%d.v.p && _t%d.cls_id == SP_BUILTIN_FLOAT_RANGE)"
                         " ? sp_range_cover_frange(_t%d, *(sp_FloatRange *)_t%d.v.p)"
+                        " : (_t%d.tag == SP_TAG_OBJ && _t%d.v.p && _t%d.cls_id == SP_BUILTIN_STR_RANGE)"
+                        " ? sp_range_cover_srange(_t%d, SP_SRANGE_OF(_t%d.v.p))"
                         " : sp_poly_case_eq(sp_box_range(_t%d), _t%d); })",
-                     tA, tA, tA, tA, tR, tA, tA, tA, tA, tR, tA, tR, tA);
+                     tA, tA, tA, tA, tR, tA, tA, tA, tA, tR, tA, tA, tA, tA, tR, tA, tR, tA);
           return 1;
         }
         if (at3 != TY_INT && at3 != TY_FLOAT && at3 != TY_BIGINT) {

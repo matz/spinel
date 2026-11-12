@@ -431,7 +431,7 @@ module Enumerable
           break
         end
       end
-      if !hit && !ifnone.nil?
+      if !hit && !nil.equal?(ifnone)
         found = ifnone.call
       end
       found

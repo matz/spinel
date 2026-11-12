@@ -547,10 +547,25 @@ int elab_call_window(Compiler *c, int id, ElabWindow *w);
    cap. Where its value, or a read of that local, goes anywhere else it may
    run at any time, which no site places. */
 int elab_closure_runs(Compiler *c, int id, int *sites, int cap);
-/* ...and whether node id is in a block the record takes to run at once
-   (ELAB_BLK_ASSUMED) whose typed call target keeps it (Call node
-   `blk_kept`), with no def or lambda between: node id may then run any
-   time after its point, and elab_window_open widens w to its region's end. */
+/* ...and the calls that force the lazy chain whose block node id is in
+   (elab_block_runs answers it later: lr_lazy_later), with only blocks run
+   at once between: the chain's value written whole to a local, each call
+   on a read of it in the same body that does not chain it on. How many;
+   -1 for no such chain, past cap, and where the chain, or a read of that
+   local, goes anywhere else (handed on, chained on, returned), so that
+   every site is where the block may run. */
+int elab_lazy_runs(Compiler *c, int id, int *sites, int cap);
+/* does the body of def node `def` keep the block it is given for later,
+   for certain, by the record's reading of its uses of the block (a store,
+   a closure that escapes, a hand-on to a call that keeps it), with none
+   that runs it now or is unsure? */
+int elab_def_keeps_block(Compiler *c, int def);
+/* ...and whether node id is in a block whose typed call target keeps it
+   (Call node `blk_kept`, an_mark_kept_blocks: one the record takes to run
+   at once, ELAB_BLK_ASSUMED, or one given to a method of the program's,
+   ELAB_BLK_UNKNOWN), with no def or lambda between: node id may then run
+   any time after its point, and elab_window_open widens w to its region's
+   end. */
 int elab_in_kept_block(Compiler *c, int id);
 /* ...and whether node id is in a block the record answers later
    (elab_block_runs: a lazy chain's) or in an END body: it may run any time

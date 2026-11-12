@@ -15686,9 +15686,10 @@ static TyKind emit_face_arm(Compiler *c, int id, unsigned kind, unsigned flags, 
   /* ...and the reverse: a call whose slot holds an Integer or Float with its
      nil (the program's method of the name answers one) over an owner that
      answers the plain scalar (Random#seed beside a user reader `seed`) is
-     wrapped into that form, which the call's readers take it as */
-  int wrap_o = outer.kind == RK_OPT && outer.opt_producer && outer.as_ty == nat &&
-               (nat == TY_INT || nat == TY_FLOAT) && !arm_o;
+     wrapped into that form, which the call's readers take it as. An owner
+     whose answer is the oint under the pin (bsearch, byteindex) already
+     answers that form. */
+  int wrap_o = keep_o && !arm_o && outer.kind == RK_OPT && outer.opt_producer && outer.as_ty == nat;
   /* a block mutator over a boxed Array may run on the box itself
      (emit_array_filter_loop), and then has nothing to write back */
   int slr = g_face_live_recv, slb = g_face_live_box, slu = g_face_live_used;

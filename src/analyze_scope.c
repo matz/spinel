@@ -1785,11 +1785,14 @@ static void walk_scope_in(Compiler *c, int id, WalkCtx w) {
      class as self and definee (bclass1); its constants stay the cref's */
   else if (class_def_builder(c->nt, id) >= 0) {
     int cp = class_def_path(c->nt, id);
+    elab_builder_entity(c, id, &w.pos);
     builder_class = elab_rec_open(c, id, cp == id ? -1 : cp, class_def_key(c, id), class_cref(c, class_id, w.cblock));
   }
   /* `P = Struct.new(:a) do ... end`, `k = Data.define(:a)`: likewise */
-  else if (class_def_record(c->nt, id) >= 0)
+  else if (class_def_record(c->nt, id) >= 0) {
+    elab_builder_entity(c, id, &w.pos);
     builder_class = record_write_class(c, id, w.hdr);
+  }
   else if (ty_k == NK_DefNode) {
     const char *name = nt_str(c->nt, id, "name");
     Scope *s = comp_scope_new(c, name, id);

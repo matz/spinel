@@ -7601,6 +7601,35 @@ int elab_header_entity(Compiler *c, int node, const ElabPos *pos) {
   return h->found >= 0 && nt_kind(nt, h->found) == NK_ConstantWriteNode ? h->found : -1;
 }
 
+/* ...and, as the walk reaches a class builder's write `node` (`X =
+   Class.new do`, `A::B = Struct.new(:a)`), before registration makes its
+   class: the owner of the name it writes, as a header's: the class whose
+   body is its lexical scope for `X =`, the class A names there for `A::B
+   =`, Object for `::B =`. (Only the owner: the builder's class is made at
+   the write, and no entity verdict is asked of it.) */
+void elab_builder_entity(Compiler *c, int node, const ElabPos *pos) {
+  LoadRecord *r = c->lrec;
+  const NodeTable *nt = c->nt;
+  if (!r || !r->walk || pos->e < 0) return;
+  NodeKind k = nt_kind(nt, node);
+  int owner;
+  if (k == NK_ConstantWriteNode) owner = lr_cref(c, pos->e);
+  else if (k == NK_ConstantPathWriteNode) {
+    int t = nt_ref(nt, node, "target"), par = t >= 0 ? nt_ref(nt, t, "parent") : -1;
+    if (t < 0) return;
+    if (par >= 0) {
+      lr_fit(r, nt->count);
+      ElabPos q = elab_child(c, node, t, pos);
+      for (int x = par; x >= 0 && (nt_kind(nt, x) == NK_ConstantPathNode || nt_kind(nt, x) == NK_ConstantReadNode);
+           x = nt_kind(nt, x) == NK_ConstantPathNode ? nt_ref(nt, x, "parent") : -1)
+        lr_place(r, x, &q);
+    }
+    owner = par < 0 ? LR_MAIN : lr_class_ref_at(c, par, NULL);
+  }
+  else return;
+  lr_header(r, node, 1)->owner = owner < LR_MAIN ? LR_UNKNOWN_CLASS : owner;
+}
+
 static const char *lr_class_name(Compiler *c, int cls) {
   return cls == LR_MAIN ? "main" : cls == LR_NEW ? "new" : cls >= 0 && cls < c->nclasses ? c->classes[cls].name : "?";
 }

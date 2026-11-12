@@ -452,6 +452,7 @@ void elab_walk_leave(Compiler *c, int e);
 void elab_walk_rest(Compiler *c, int id, ElabPos pos);
 void elab_walk_site(Compiler *c, int id, const ElabPos *pos);
 int elab_header_entity(Compiler *c, int node, const ElabPos *pos);
+void elab_builder_entity(Compiler *c, int node, const ElabPos *pos);
 void elab_header_opened(Compiler *c, int node, int cls, int made);
 int elab_rec_open(Compiler *c, int node, int cp, const char *cname, int encl);
 void header_parent_encloses(Compiler *c, int par, int child, const char *leaf, int named);

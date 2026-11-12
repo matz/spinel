@@ -30801,6 +30801,7 @@ static int builtin_reopen_call_closed(Compiler *c, int id) {
 }
 static void emit_call_inner(Compiler *c, int id, Buf *b) {
   if (emit_call_on_held_self_answer(c, id, b)) return;
+  if (emit_main_text_call(c, id, b)) return;
   refuse_prepass_at_emit(c, id);
   if (emit_call_recv_held_first(c, id, b)) return;
   if (g_plan_check) ucall_emitted(id);

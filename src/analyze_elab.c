@@ -4600,6 +4600,16 @@ int elab_method_at(Compiler *c, int cls, const char *name, int sg, LoadPoint p, 
   return o == LR_STOP ? ELAB_NO : o;
 }
 
+int elab_main_singleton_at(Compiler *c, const char *name, LoadPoint p, const LrDef **out) {
+  if (out) *out = NULL;
+  if (!lr_ready(c, p) || !name) return ELAB_UNKNOWN;
+  int unsure = 0, o = lr_search_one(c, LR_MAIN, 1, name, -1, p, p.region < 0, 0, out, 0, &unsure, 0);
+  if (unsure) return ELAB_UNKNOWN;
+  if (o == ELAB_YES) return ELAB_YES;
+  if (out) *out = NULL;
+  /* (an undef there stops the search: none; else the core's, from the start) */
+  return o == ELAB_NO && main_singleton_method(name) ? ELAB_YES : o == ELAB_UNKNOWN ? ELAB_UNKNOWN : ELAB_NO;
+}
 int elab_own_method_at(Compiler *c, int cls, const char *name, LoadPoint p) {
   if (!lr_ready(c, p) || !name) return ELAB_UNKNOWN;
   const LrDef *v = NULL;

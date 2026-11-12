@@ -327,6 +327,13 @@ LocalVar *comp_const_at(Compiler *c, int node);
 int const_writes_head(Compiler *c, const char *key);
 int const_writes_next(Compiler *c, int node);
 void const_writes_free(Compiler *c);
+/* What main's own singleton answers for `name` at p, ahead of Object's
+   table: ELAB_YES with *out a program's `def self.m` (or alias) there, or
+   with *out NULL the core's own singleton method (main_singleton_method:
+   `to_s`, `inspect`) that main has from the start; ELAB_NO when the
+   singleton holds no method of the name, ELAB_UNKNOWN when the record
+   cannot say. */
+int elab_main_singleton_at(Compiler *c, const char *name, LoadPoint p, const LrDef **out);
 /* the version of cls's method `name` (singleton when sg) live at p, through
    its ancestors as they stood at p; *out (when asked) the version found. A
    hook (`inherited`, `included`, `method_added`, ...) is asked as the
@@ -1390,6 +1397,7 @@ int method_recv_nodes(Compiler *c, int recv, int **out); /* every one a re-writt
 int method_recv_stamped(Compiler *c, int recv);           /* ...each from a bind site that stamps its position */
 int method_recv_owner_unknown(Compiler *c, int recv);     /* may a Method expr hold a builtin's whose owner no fact names */
 int bam_owner(Compiler *c, int mi, const char **name);     /* the owner a builtin's or accessor's wrapper stands for */
+int bam_main_singleton(Compiler *c, int mi);   /* does the wrapper stand for a method of main's singleton? */
 int bam_struct_member(Compiler *c, int mi);                 /* is it a Struct member's accessor wrapper */
 int method_expr_is_unbound(Compiler *c, int recv);    /* instance_method with no #bind crossed */
 int proc_to_proc_method_nodes(Compiler *c, int recv, int **out); /* the method(:sym) nodes behind <method>.to_proc */

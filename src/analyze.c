@@ -11514,7 +11514,10 @@ static int desugar_builtin_method_obj(Compiler *c) {
     int poly_self = rt == TY_POLY || rt == TY_FLOAT || (g_promote_mode && (rt == TY_INT || rt == TY_BIGINT));
     /* the typed-array (kind, op) trampoline path owns these */
     if (ty_is_array(rt) && sp_streq(sym, "push")) continue;
-    if (comp_method_index(c, sym) >= 0) continue;     /* a same-named top-level def wins */
+    /* main's own `to_s` (cplan_main_singleton_call) comes ahead of a
+       same-named top-level def, which otherwise wins */
+    int main_sg = cplan_main_singleton_call(c, id);
+    if (!main_sg && comp_method_index(c, sym) >= 0) continue;
     int cmp_only = 0;   /* a Comparable method the class does not define itself */
     int num_only = 0;   /* a Numeric method Integer or Float inherits */
     int sym_arity = 0, have_arity = 0;   /* the builtin's Method#arity */
@@ -11620,6 +11623,7 @@ static int desugar_builtin_method_obj(Compiler *c) {
     if (name_is_plain_setter(sym)) nt_set_attr_write(nt, call, 1);   /* `__bam_r.attr = __bam_a` */
     /* a Method calls its method whatever its visibility, as send does */
     nt_set_ignore_visibility(nt, call, 1);
+    if (main_sg) nt_mark_builtin_call(nt, call);   /* the builtin's, whatever Object's table holds */
     if (nt_int(nt, id, "dyn_of", -1) >= 0) nt_node_set_int(nt, call, "dyn_arm", 1);
     if (cargs >= 0) nt_node_set_ref(nt, call, "arguments", cargs);
     int body = nt_new_node(nt, "StatementsNode");
@@ -11629,6 +11633,7 @@ static int desugar_builtin_method_obj(Compiler *c) {
     nt_node_set_ref(nt, def, "parameters", params);
     nt_node_set_ref(nt, def, "body", body);
     if (poly_self) nt_node_set_int(nt, def, "bam_poly", 1);
+    if (main_sg) nt_node_set_int(nt, def, "bam_main_sg", 1);   /* (bam_main_singleton) */
     /* a boxed value's class may lack sym: the bind asks it (codegen) */
     if (poly_self && rt == TY_POLY && bam_poly_may_lack(c, sym)) nt_node_set_int(nt, def, "bam_may_lack", 1);
     /* the builtin's own name, for Method#name, #arity and #inspect: the body
@@ -51229,6 +51234,7 @@ static void an_phase_infer_fixpoint(Compiler *c) {
     ch |= AN_PASS("desugar_class_body_bare_new", desugar_class_body_bare_new(c));      /* class body `new(x)` -> `Klass.new(x)` */
     ch |= AN_PASS("desugar_bare_class_self_calls", desugar_bare_class_self_calls(c));    /* cmethod `const_get(:K)` -> `self.const_get(:K)` */
     ch |= AN_PASS("desugar_ie_bare_object_calls", desugar_ie_bare_object_calls(c));     /* instance_eval { is_a?(K) } -> self.is_a?(K) */
+    ch |= AN_PASS("desugar_main_singleton_calls", desugar_main_singleton_calls(c));  /* `to_s` on main: its singleton's, the builtin's */
     ch |= AN_PASS("desugar_bare_object_reopen_calls", desugar_bare_object_reopen_calls(c));  /* Object reopened: `helper` -> `self.helper` */
     ch |= AN_PASS("desugar_descendant_reader_calls", desugar_descendant_reader_calls(c));
     ch |= AN_PASS("desugar_masgn_store_evidence", desugar_masgn_store_evidence(c));     /* h[k], o.x = v, w -> detached h[k] = v, o.x = w as type evidence */

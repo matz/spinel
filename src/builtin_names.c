@@ -2517,13 +2517,18 @@ const char *builtin_next_class_answering(int *i, const char *m) {
   return NULL;
 }
 static int self_fact_cmp(const void *a, const void *b) { return strcmp(*(const char *const *)a, *(const char *const *)b); }
-/* main's own methods, beside Object's: its singleton's (`to_s`, `inspect`
-   answer "main") and the private ones a top-level body calls as a class
-   body would (`include`, `private`, `define_method`, ...) */
+/* main's singleton methods the core gives it: `to_s` and `inspect`, which
+   answer "main" */
+int main_singleton_method(const char *m) {
+  static const char *const MAINS[] = { "to_s", "inspect", NULL };
+  return builtin_name_in(m, MAINS);
+}
+/* main's own methods, beside Object's: its singleton's (main_singleton_method)
+   and the private ones a top-level body calls as a class body would
+   (`include`, `private`, `define_method`, ...) */
 int main_self_method(const char *m) {
-  static const char *const MAINM[] = { "to_s", "inspect", "include", "public", "private", "define_method",
-                                       "using", "ruby2_keywords", NULL };
-  return builtin_name_in(m, MAINM);
+  static const char *const MAINM[] = { "include", "public", "private", "define_method", "using", "ruby2_keywords", NULL };
+  return main_singleton_method(m) || builtin_name_in(m, MAINM);
 }
 /* See builtin_names.h. Kernel's module functions and Object's surface
    answer on every self; the facts' Object, BasicObject and Kernel methods

@@ -459,6 +459,56 @@ int desugar_ie_bare_object_calls(Compiler *c) {
   return changed;
 }
 
+/* main's own singleton has `to_s` and `inspect` from the start (they
+   answer "main"), ahead of Object's table, which `class Object; def to_s`,
+   a Kernel reopening or a top-level `def to_s` adds to. A call on main the
+   plan finds its singleton answers so (ML_SINGLETON) is the builtin's, on
+   self; its `method(:to_s)` captures that one, on self too. The plan's
+   answer may turn in a later round, once the instance_eval facts are in (a
+   proc an instance_exec runs on another object is not on main), so the
+   pass unmarks a call it marked (main_sg); the self it gave is the call's
+   own self either way. Every call is asked before any is changed: a node
+   the pass adds would have the record rebuilt for the next question. */
+int desugar_main_singleton_calls(Compiler *c) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  int n0 = nt->count, ntodo = 0;
+  int *todo = malloc(sizeof(int) * (size_t)(n0 > 0 ? n0 : 1));   /* id to mark, -1 - id to unmark */
+  if (!todo) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  NT_FOREACH_KIND(nt, NK_CallNode, id) {
+    int args = nt_ref(nt, id, "arguments"), argc = 0, was = nt_int(nt, id, "main_sg", 0);
+    int cap = is_bound_method_maker(nt_str(nt, id, "name"));
+    if (args >= 0) nt_arr(nt, args, "arguments", &argc);   /* (a retargeted send's may be empty) */
+    /* (a capture is only given its self: the wrapper desugar_builtin_method_obj
+       then makes of it renames the symbol) */
+    if (id >= n0 || id >= c->node_cap || argc != cap || nt_ref(nt, id, "block") >= 0 ||
+        (cap && nt_ref(nt, id, "receiver") >= 0) || (!was && cplan_builtin_call(c, id))) continue;
+    int on = cplan_main_singleton_call(c, id);
+    if (on != (was != 0)) todo[ntodo++] = on ? id : -1 - id;
+  }
+  for (int t = 0; t < ntodo; t++) {
+    int id = todo[t] >= 0 ? todo[t] : -1 - todo[t];
+    if (todo[t] < 0) {
+      nt_clear_builtin_call(nt, id);
+      nt_node_set_int(nt, id, "main_sg", 0);
+      continue;
+    }
+    if (nt_ref(nt, id, "receiver") < 0) {
+      int sn = nt_new_node(nt, "SelfNode");
+      if (sn < 0) continue;
+      comp_grow_node_arrays(c);
+      c->nscope[sn] = c->nscope[id];
+      c->node_cbody[sn] = c->node_cbody[id];
+      nt_set_self_receiver(nt, id, sn);
+    }
+    if (!is_bound_method_maker(nt_str(nt, id, "name"))) {
+      nt_mark_builtin_call(nt, id);
+      nt_node_set_int(nt, id, "main_sg", 1);
+    }
+  }
+  free(todo);
+  return ntodo > 0;
+}
+
 /* A method the program adds to Object (`class Object; def helper ...`) is
    every object's, so a receiverless `helper` in another class's instance
    method is `self.helper` (#5779). A class's chain stops short of Object, so

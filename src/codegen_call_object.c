@@ -88,6 +88,13 @@ static int hash_reader_class(Compiler *c) {
   return 0;
 }
 
+/* See codegen_call_arms.h. */
+int emit_main_text_call(Compiler *c, int id, Buf *b) {
+  if (!cplan_main_text_call(c, id)) return 0;
+  buf_puts(b, "SPL(\"main\")");
+  return 1;
+}
+
 int emit_call_identity_arms(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc, const int *argv, TyKind rt) {
   /* between?(lo, hi): lo <= self <= hi */
   if (sp_streq(name, "between?") && argc == 2) {

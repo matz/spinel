@@ -8449,7 +8449,21 @@ static int desugar_dynamic_method_inner(Compiler *c) {
     int recv = nt_ref(nt, id, "receiver"), args = nt_ref(nt, id, "arguments"), argc = 0, dn = 0;
     if (args >= 0) nt_arr(nt, args, "arguments", &argc);
     nt_arr(nt, id, "dyn_send_arms", &dn);
-    if (recv < 0 || argc != 1 || dn > 0 || method_sym_arg(c, id)) continue;
+    if (argc != 1 || dn > 0 || method_sym_arg(c, id)) continue;
+    if (recv < 0) {
+      /* A receiverless `method(name)` in a method is `self.method(name)`, as
+         a receiverless send is (desugar_dynamic_send): hashie's
+         `method(method_key)` for a key the Mash answers. */
+      Scope *ss = comp_scope_of(c, id);
+      if (!ss || ss->class_id < 0) continue;
+      int sn = nt_new_node(nt, "SelfNode");
+      if (sn < 0) continue;
+      comp_grow_node_arrays(c);
+      c->nscope[sn] = c->nscope[id];
+      nt_set_self_receiver(nt, id, sn);
+      recv = sn;
+      changed = 1;
+    }
     TyKind rt = infer_type(c, recv);
     int cls = ty_is_object(rt) ? ty_object_class(rt) : -1, own_method = 0;
     if (cls >= 0) own_method = comp_method_in_chain(c, cls, "method", NULL) >= 0;

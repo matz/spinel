@@ -1533,6 +1533,46 @@ void header_parent_encloses(Compiler *c, int par, int child, const char *leaf, i
 }
 
 
+static void wcn_add(char *out, size_t cap, const char *t) { strncat(out, t, cap - strlen(out) - 1); }
+/* The C name of the class the header or builder `id` opens, when the
+   qualify pass found its leaf colliding (its name node `np` carries the
+   salt it gave, and the name it stamped): the class's owner, as the
+   record holds it, and the owner's enclosing chain, each by the last name
+   of its Ruby path, then the leaf, joined by `__` after the salt's
+   underscores (`_Outer__Foo`). A compact header under a builtin
+   (`module Comparable::Ext`) is nested in nothing, so the builtin is no
+   part of the name. 0, with out untouched, for a name the pass left as
+   written. */
+static int walk_class_c_name(Compiler *c, int id, int np, char *out, size_t cap) {
+  const NodeTable *nt = c->nt;
+  if (np < 0 || !nt_str(nt, np, "qc_name") || cap < 2) return 0;
+  int owner = -2;
+  elab_header_class(c, id, &owner, NULL);
+  NodeKind nk = nt_kind(nt, np);
+  int par = nk == NK_ConstantPathNode || nk == NK_ConstantPathTargetNode ? nt_ref(nt, np, "parent") : -1;
+  /* an owner the record does not hold (a path under a builtin it has no
+     class for): the class the path names, as registration nests it
+     (header_parent_encloses) */
+  if (owner < -1 && par >= 0) {
+    char path[256];
+    int pc = header_parent_path(nt, par, path, sizeof path) ? class_by_ruby_path(c, path) : -1;
+    if (pc < 0) pc = const_node_class_index(c, par);
+    owner = pc >= 0 && !c->classes[pc].is_builtin_const ? pc : -1;
+  }
+  out[0] = 0;
+  for (int k = 0; k < (int)nt_int(nt, np, "qc_salt", 0); k++) wcn_add(out, cap, "_");
+  const char *seg[QC_MAXDEPTH + 1]; int ns = 0;
+  for (int k = owner; k >= 0 && ns <= QC_MAXDEPTH; k = c->classes[k].enclosing_class) {
+    const char *rn = class_ruby_name(c, k), *q = rn;
+    for (const char *p = strstr(rn, "::"); p; p = strstr(p + 2, "::")) q = p + 2;
+    seg[ns++] = q;
+  }
+  while (ns > 0) { wcn_add(out, cap, seg[--ns]); wcn_add(out, cap, "__"); }
+  const char *leaf = nt_str(nt, np, "name");
+  if (leaf) wcn_add(out, cap, leaf);
+  return 1;
+}
+
 /* `class C < S` (or `C = Class.new(S) do ... end`) where the constant S
    names nothing where the header stands (elab_const_ref_at): CRuby raises
    NameError there, before the class exists or its body runs. The header
@@ -1611,8 +1651,8 @@ static int record_write_class(Compiler *c, int id, int hdr) {
   int ci = elab_header_class(c, id, NULL, NULL);
   if (ci >= 0) return ci;   /* a subtree two lists share, walked again */
   if (nt_kind(c->nt, id) == NK_ConstantWriteNode) {
-    const char *cname = nt_str(c->nt, id, "qc_name");
-    if (!cname) cname = nt_str(c->nt, id, "name");
+    char wname[600];
+    const char *cname = walk_class_c_name(c, id, id, wname, sizeof wname) ? wname : nt_str(c->nt, id, "name");
     return cname && is_c_ident(cname) ? elab_rec_open(c, id, -1, cname, hdr) : -1;
   }
   char an[48];
@@ -1714,9 +1754,9 @@ static void walk_scope_in(Compiler *c, int id, WalkCtx w) {
   }
   if (ty_k == NK_ClassNode || ty_k == NK_ModuleNode) {
     int cp = nt_ref(c->nt, id, "constant_path");
-    const char *cname = cp >= 0 ? nt_str(c->nt, cp, "qc_name") : NULL;
-    if (!cname && cp >= 0) cname = key_name(c, cp);
     int alias = elab_header_entity(c, id, &w.pos);
+    char wname[600];
+    const char *cname = walk_class_c_name(c, id, cp, wname, sizeof wname) ? wname : cp >= 0 ? key_name(c, cp) : NULL;
     int cls_toplevel = class_id < 0 && cp >= 0 &&
                        nt_kind(c->nt, cp) == NK_ConstantReadNode;
     /* An earlier pass mangles a nested name to `Outer__Inner`: test the leaf. */
@@ -1786,7 +1826,9 @@ static void walk_scope_in(Compiler *c, int id, WalkCtx w) {
   else if (class_def_builder(c->nt, id) >= 0) {
     int cp = class_def_path(c->nt, id);
     elab_builder_entity(c, id, &w.pos);
-    builder_class = elab_rec_open(c, id, cp == id ? -1 : cp, class_def_key(c, id), class_cref(c, class_id, w.cblock));
+    char wname[600];
+    const char *bname = walk_class_c_name(c, id, cp, wname, sizeof wname) ? wname : class_def_key(c, id);
+    builder_class = elab_rec_open(c, id, cp == id ? -1 : cp, bname, class_cref(c, class_id, w.cblock));
   }
   /* `P = Struct.new(:a) do ... end`, `k = Data.define(:a)`: likewise */
   else if (class_def_record(c->nt, id) >= 0) {

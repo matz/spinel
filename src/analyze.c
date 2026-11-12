@@ -7043,6 +7043,9 @@ void qualify_colliding_classes(Compiler *c) {
       if (ws[i].depth == 0) continue;
       char qn[512]; qc_qualified_name(qn, sizeof qn, &ws[i]);
       nt_node_set_str((NodeTable *)nt, ws[i].node, "qc_name", qn);
+      /* the salt, for the walk, which builds the name from the class's
+         owner (walk_class_c_name) */
+      if (ws[i].salt) nt_node_set_int((NodeTable *)nt, ws[i].node, "qc_salt", ws[i].salt);
       /* and the Ruby name the path resolved to, for registration: the
          header's own parent segments (an alias, a module whose name is
          qualified too) need not name the class that encloses it */

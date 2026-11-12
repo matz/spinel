@@ -3024,6 +3024,43 @@ static int ct_program_may_take(Compiler *c, const char *nm) {
   return !nm || an_user_defines_method(c, nm) || an_user_defines_method(c, METHOD_MISSING_NAME) ||
          comp_main_method(c, nm) >= 0 || (comp_cmethod_candidates(c, nm, &ncm), ncm > 0);
 }
+/* Is every block between node id and the body it runs in (a def's, a
+   class body's, a file's) run at once where its call runs: one the record
+   proves runs so (elab_block_runs: ELAB_BLK_NOW, a builtin iterator's on
+   a literal of a builtin class no reopening answers the name on, or a
+   method of the program's whose body runs it before it answers), or one
+   it takes to run so by its call's name (ELAB_BLK_ASSUMED: an iterator's
+   name, tap, then) where no method of the program's can take that call
+   over (ct_program_may_take) and no lazy enumerator keeps it (a name of
+   is_lazy_chain_name: `l.map { }` on a Lazy held in a variable runs when
+   the chain is forced)? A lambda, an END body, the block of any other
+   call, or of one a program method of its name may answer (and keep the
+   block for later), may run after id's point. */
+static int ct_blocks_run_at_once(Compiler *c, int id) {
+  const NodeTable *nt = c->nt;
+  int n = 0;
+  const int *par = elab_node_parents(c, &n);
+  for (int p = id >= 0 && id < n ? par[id] : -1, k = 0; p >= 0 && p < n && k < n; p = par[p], k++) {
+    NodeKind pk = nt_kind(nt, p);
+    if (pk == NK_DefNode || pk == NK_ClassNode || pk == NK_ModuleNode || pk == NK_SingletonClassNode) return 1;
+    if (pk == NK_LambdaNode || pk == NK_PostExecutionNode) return 0;
+    if (pk != NK_BlockNode) continue;
+    int call = par[p], w;
+    if (call < 0 || call >= n || nt_kind(nt, call) != NK_CallNode || nt_ref(nt, call, "block") != p ||
+        ((w = elab_block_runs(c, call)) != ELAB_BLK_NOW && (w != ELAB_BLK_ASSUMED || is_lazy_chain_name(nt_str(nt, call, "name")) || ct_program_may_take(c, nt_str(nt, call, "name")))))
+      return 0;
+  }
+  return 1;
+}
+/* Does call id run before every version of `name` on cls's route (flags
+   and mi as ct_undefined_at's), as the record proves it: none is live at
+   its point (ct_undefined_at), it does not run any time after it
+   (ct_after_point), and every block around it runs at once
+   (ct_blocks_run_at_once)? A presence question there finds none at
+   every run (call_target's MLW_RECORD for a name with no method scope). */
+static int ct_before_versions(Compiler *c, int id, int cls, const char *name, unsigned flags, int mi) {
+  return ct_undefined_at(c, id, cls, name, flags, mi) && !ct_after_point(c, id) && ct_blocks_run_at_once(c, id);
+}
 /* Does the copy a class-side alias of the name makes (Scope.alias_of) in a
    class of ci's chain below the one declaring the name's `class << self`
    accessor stand in front of the accessor ci inherits? The alias is that
@@ -3501,6 +3538,10 @@ int call_target(Compiler *c, int id, int cls, const char *name, unsigned flags, 
            (!(flags & (CT_REACH | CT_CAPTURE | CT_IMPLIED)) && !ct_calls(c, id, name))) {
     if (mi < 0) {
       if (ml->kind != ML_SINGLETON) ml->kind = ML_NONE;
+      /* (a reach ask, whose reader tells a none the record proves from one
+         the tables give: an accessor has no method scope, so the record's
+         proof is asked here, where the call runs before every version) */
+      if (ml->kind == ML_NONE && (flags & CT_REACH) && id >= 0 && ct_before_versions(c, id, cls, name, flags, -1)) ml->why = MLW_RECORD;
     }
     else if (ct_versioned(c, mi, name) || c->scopes[mi].mixin_guarded) {   /* (the record was not asked) */
       ml->kind = ML_TABLE;
@@ -3529,11 +3570,11 @@ int call_target(Compiler *c, int id, int cls, const char *name, unsigned flags, 
        entry's else arm answers only a call that may run before them. One at
        a point that may run any time after it (ct_after_point) takes the
        entry, whose cells tell at run time; with no entry, it raises too:
-       nothing proves it runs after a def */
+       nothing proves it runs after a def (MLW_RECORD) */
     int vi = ct_versioned(c, mi, name) && ct_after_point(c, id) ? ct_version(c, id, cls, name, flags, mi, ml) : -1;
     if (vi >= 0 && c->scopes[vi].entry) r = vi;
     else {
-      *ml = (MethodLookup){ .kind = ML_NONE, .def_class = dc0 };
+      *ml = (MethodLookup){ .kind = ML_NONE, .why = MLW_RECORD, .def_class = dc0 };
       r = -1;
     }
   }
@@ -3628,11 +3669,11 @@ static int pr_in_untyped_block(Compiler *c, int id) {
 /* See call_plan.h. */
 PresenceKind cplan_presence(Compiler *c, int id, int cls, unsigned side, const char *name, CplanPresence *out) {
   MethodLookup ml = { .def_class = -1 };
-  int tmi = pr_table(c, cls, side, name, out);
+  pr_table(c, cls, side, name, out);
   if (pr_in_untyped_block(c, id)) return PR_TABLE;
   call_target(c, id, cls, name, side | CT_REACH, &ml);
   if (ml.kind == ML_TABLE || ml.kind == ML_ENTRY) return PR_TABLE;
-  if (ml.kind == ML_NONE && tmi >= 0) return PR_ABSENT;   /* (the record: none where id runs) */
+  if (ml.kind == ML_NONE && ml.why == MLW_RECORD) return PR_ABSENT;   /* (the record's none) */
   return out->table ? PR_PRESENT : PR_ABSENT;
 }
 /* See call_plan.h. */

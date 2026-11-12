@@ -3363,21 +3363,6 @@ int desugar_array_op_to_ary(Compiler *c) {
   return changed;
 }
 
-/* The to_ary of the program's, answering an Array, through which a value
-   of type t converts where node `at` takes it apart: the implied to_ary
-   call a row of tools/implied_calls.yml says `at` makes on operand op (a
-   multiple assignment's value, the element a nested target takes),
-   rb_check_array_type's; -1 for none. Only the one the load record proves
-   the object answers there (cplan_implied_target): a to_ary defined, or
-   brought in by an include, after the assignment is not answered yet. An
-   Array subclass instance is an Array already (comp_implicit_to_ary_mi). */
-static int masgn_to_ary_mi(Compiler *c, TyKind t, int at, int op) {
-  int cls = ty_is_object(t) ? ty_object_class(t) : -1;
-  int mi = cls >= 0 ? comp_implicit_to_ary_mi(c, cls) : -1;
-  if (mi < 0 || c->scopes[mi].nparams != 0 || !ty_is_array(c->scopes[mi].ret)) return -1;
-  int vi = cplan_implied_target(c, at, op, cls, "to_ary", NULL);
-  return vi >= 0 && c->scopes[vi].nparams == 0 && ty_is_array(c->scopes[vi].ret) ? vi : -1;
-}
 /* (analyze_internal.h) */
 int masgn_nests(const NodeTable *nt, int id) {
   static const char *const arrs[] = { "lefts", "rights" };
@@ -3470,7 +3455,7 @@ static int masgn_to_ary_nested(Compiler *c, NodeTable *nt, int id, int value) {
     for (int j = 0, n = side ? rn : ln; j < n; j++) {
       int e = side ? (rest && en - rn + j >= ln ? en - rn + j : -1) : j, tp;
       els = nt_arr(nt, value, "elements", &en);
-      int mi = e < 0 || e >= en || nt_kind(nt, ts[j]) != NK_MultiTargetNode ? -1 : masgn_to_ary_mi(c, infer_type(c, els[e]), ts[j], NTI_YIELDED);
+      int mi = e < 0 || e >= en || nt_kind(nt, ts[j]) != NK_MultiTargetNode ? -1 : cplan_typed_to_ary(c, infer_type(c, els[e]), ts[j], NTI_YIELDED, NULL);
       if (mi < 0 || (masgn_nests(nt, ts[j]) && masgn_element_may_convert(c, ty_array_elem(c->scopes[mi].ret))) ||
           (tp = masgn_to_ary_call(nt, els[e])) < 0) continue;
       int *nels = malloc(sizeof(int) * (size_t)en);
@@ -3518,7 +3503,7 @@ static int masgn_to_ary_nested_kept(Compiler *c, NodeTable *nt, int id, int valu
   return ok;
 }
 /* A multiple assignment CRuby destructures through a to_ary of the
-   program's (masgn_to_ary_mi) took the object as the one element: `a, b =
+   program's (cplan_typed_to_ary) took the object as the one element: `a, b =
    obj` now reads `obj&.to_ary`, where the assignment's value is thrown away
    (an_node_dropped), or the temp form where it is read
    (masgn_to_ary_kept); a nested target, the element of a literal value
@@ -3545,7 +3530,7 @@ int desugar_masgn_to_ary(Compiler *c) {
       if (did && !an_node_dropped(c, id)) did = masgn_to_ary_nested_kept(c, nt, id, value, orig, en);
       free(orig);
     }
-    else if (nt_kind(nt, value) != NK_ArrayNode && (mi = masgn_to_ary_mi(c, infer_type(c, value), id, value)) >= 0 &&
+    else if (nt_kind(nt, value) != NK_ArrayNode && (mi = cplan_typed_to_ary(c, infer_type(c, value), id, value, NULL)) >= 0 &&
              !(masgn_nests(nt, id) && masgn_element_may_convert(c, ty_array_elem(c->scopes[mi].ret)))) {
       if (!an_node_dropped(c, id)) did = masgn_to_ary_kept(c, nt, id, value);
       else if ((tp = masgn_to_ary_call(nt, value)) >= 0) { nt_node_set_ref(nt, id, "value", tp); did = 1; }

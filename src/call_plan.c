@@ -1957,6 +1957,19 @@ int cplan_boxed_to_ary_classes(Compiler *c, int id, int op, int *out, CplanToAry
   return n;
 }
 
+/* See call_plan.h. An Array subclass instance is an Array already
+   (comp_implicit_to_ary_mi). */
+int cplan_typed_to_ary(Compiler *c, TyKind t, int at, int op, int *boxed) {
+  if (boxed) *boxed = 0;
+  int cls = ty_is_object(t) ? ty_object_class(t) : -1;
+  int mi = cls >= 0 ? comp_implicit_to_ary_mi(c, cls) : -1;
+  if (mi < 0 || c->scopes[mi].nparams != 0) return -1;
+  int vi = cplan_implied_target(c, at, op, cls, "to_ary", NULL);
+  if (vi < 0 || c->scopes[vi].nparams != 0) return -1;
+  if (ty_is_array(c->scopes[mi].ret) && ty_is_array(c->scopes[vi].ret)) return vi;
+  if (boxed) *boxed = 1;
+  return -1;
+}
 /* See call_plan.h. */
 int cplan_index_writer(Compiler *c, int cls, int *cdef) {
   int dc = -1;

@@ -4855,6 +4855,11 @@ static int infer_write_multi_assign(Compiler *c, const NodeTable *nt) {
                               vk == NK_ForwardingSuperNode || vk == NK_YieldNode);
       if (vty && value >= 0 && !multi_src) {
         TyKind st = infer_type(c, value);
+        /* an object the plan converts boxed gives its targets the boxed
+           conversion's elements (cplan_typed_to_ary) */
+        int boxed = 0;
+        cplan_typed_to_ary(c, st, id, value, &boxed);
+        if (boxed) st = TY_POLY;
         if (st != TY_UNKNOWN && st != TY_NIL && !ty_is_array(st) && !ty_is_obj_array(st) && !ty_is_hash(st)) {
           for (int i = 0; i < ln; i++) {
             const char *lty_s = nt_type(nt, lefts[i]) ? nt_type(nt, lefts[i]) : "";

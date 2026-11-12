@@ -18636,7 +18636,11 @@ static int emit_multi_write_scalar(Compiler *c, int id, Buf *b, int indent, cons
      so it must take the runtime-destructure path below, not the
      scalar fill -- which handed the whole array to the first target. So
      must an Array of a class's objects. */
-  if (vty && !multi_src && !ty_is_array(st) && !ty_is_obj_array(st) && !ty_is_hash(st) && st != TY_UNKNOWN && st != TY_POLY) {
+  /* nor must an object the plan converts boxed (cplan_typed_to_ary): the
+     path below converts it */
+  int boxed = 0;
+  cplan_typed_to_ary(c, st, id, value, &boxed);
+  if (vty && !multi_src && !boxed && !ty_is_array(st) && !ty_is_obj_array(st) && !ty_is_hash(st) && st != TY_UNKNOWN && st != TY_POLY) {
     for (int i = 0; i < ln; i++) {
       const char *lty = nt_type(nt, lefts[i]);
       NodeKind lk = nt_kind(nt, lefts[i]);
@@ -19083,8 +19087,10 @@ static int emit_multi_write_scalar(Compiler *c, int id, Buf *b, int indent, cons
        row), an object boxed here too: the desugar leaves whole an object
        whose to_ary Array may hold one a nested target converts in turn
        (masgn_element_may_convert), and `(a, b), c = Pair.new(p, 3)` took
-       the Pair as the one element. The plan answers which classes it
-       reaches (cplan_boxed_to_ary_classes): none for a Hash or a scalar. */
+       the Pair as the one element; and one whose to_ary versions may give
+       other than an Array of the table's type (cplan_typed_to_ary). The
+       plan answers which classes it reaches (cplan_boxed_to_ary_classes):
+       none for a Hash or a scalar. */
     tarr = emit_boxed_to_ary(c, id, value, tarr, b, indent);
     /* its elements as the assignment spreads them (masgn_takes_elements_first) */
     if (masgn_takes_elements_first(c, id, value)) tarr = masgn_take_elements_boxed(tarr, b, indent);

@@ -3092,6 +3092,14 @@ static int emit_bivar_table_op(Compiler *c, const BopCtx *x, char op, Buf *b) {
   return 1;
 }
 
+/* The dead value after that raise, in the C form call `id` already has:
+   boxed, an oint that carries its nil, or the plain zero of its type. */
+const char *ivar_raise_tail(Compiler *c, int id) {
+  Repr rp = repr_of(c, id);
+  if (rp.kind == RK_BOXED) return "sp_box_nil()";
+  if (oint_kind(rp.as_ty) && node_is_oint(c, id)) return oint_nil(rp.as_ty);
+  return raise_tail_value_c(c, rp.as_ty);
+}
 void emit_ivar_name_error(Compiler *c, Buf *b, const char *sym, int arg) {
   size_t n = strlen(sym ? sym : "") + 64;
   char *msg = malloc(n);
@@ -3544,10 +3552,8 @@ int emit_object_ivar_call(Compiler *c, int id, const char *name, int recv, TyKin
       if (recv >= 0) { buf_puts(b, "(void)("); emit_expr_for_effect(c, recv, b); buf_puts(b, "), "); }
       if (is_set) { buf_puts(b, "(void)("); emit_expr_for_effect(c, argv[1], b); buf_puts(b, "), "); }
       emit_ivar_name_error(c, b, sym, argv[0]);
-      /* the dead tail in the C type the call already has (a set keeps
-         its value's type: `@1` reads as a slot to the analysis) */
-      Repr rp = repr_of(c, id);
-      buf_printf(b, ", %s)", rp.kind == RK_BOXED ? "sp_box_nil()" : raise_tail_value_c(c, rp.as_ty));
+      /* (a set keeps its value's type: `@1` reads as a slot to the analysis) */
+      buf_printf(b, ", %s)", ivar_raise_tail(c, id));
       return 1;
     }
     if (is_set && c->classes[cid].is_data) return emit_data_ivar_set(c, id, recv, argv[1], cid, b);

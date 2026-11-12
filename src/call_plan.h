@@ -1198,10 +1198,14 @@ int cplan_cmethod_presence(Compiler *c, int id, int cls, const char *name, int i
    record proves none is live where id runs; PR_TABLE: the record gives no
    proof and the reader keeps the final tables' answer, as in a block a
    call on a receiver of no one type may run later. out->table is that
-   answer for every kind (a hidden method, a Data class's generated iterator
-   and, under CT_OWN, a module's copy are no method of the class's). */
+   answer for every kind (a hidden method, a Struct's or Data class's
+   generated iterator and, under CT_OWN, a module's copy are no method of the
+   class's; an alias, a prepend's renamed body and a class-side accessor are,
+   as the class's own entries); out->vis the visibility the call checks of
+   it: the final table's, public where it declares none, until visibility is
+   per version; the class's own entry's under CT_OWN. */
 typedef enum { PR_PRESENT, PR_ABSENT, PR_TABLE } PresenceKind;
-typedef struct { int table; } CplanPresence;
+typedef struct { int table, vis; } CplanPresence;
 PresenceKind cplan_presence(Compiler *c, int id, int cls, unsigned side, const char *name, CplanPresence *out);
 /* Does method-list call id leave out name, a candidate the final tables
    list for cls's side (side as cplan_presence's: CT_CMETHOD for

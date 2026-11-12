@@ -1665,6 +1665,10 @@ static void lr_def(ElabRec *x, int def, int fc, int fs, int bvis, int may) {
   int body = nt_int(nt, def, "alias_forwarder", 0) ? nt_ref(nt, def, "body") : -1, n = 0;
   const int *st = body >= 0 ? nt_arr(nt, body, "body", &n) : NULL;
   const char *fwd = n == 1 && nt_kind(nt, st[0]) == NK_CallNode ? nt_str(nt, st[0], "name") : NULL;
+  /* a forwarder to a builtin's method (desugar_inherited_aliases' over a Hash
+     subclass's `[]=`): no program def of the name gives it a visibility, and
+     the builtin's, which the alias kept, is public */
+  if (fwd && nt_int(nt, st[0], "builtin_only", 0)) bvis = BVIS_PUBLIC;
   lr_method(x, cls, sg, nt_str(nt, def, "name"), def, LR_DEF, bvis, may, fwd);
 }
 

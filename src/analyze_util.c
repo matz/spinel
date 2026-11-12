@@ -1541,6 +1541,78 @@ int class_recv_static_ci(Compiler *c, int node) {
   if (k == NK_SelfNode) return class_body_self_ci(c, node);
   return class_var_static_ci(c, node);
 }
+/* Is class a class b or one above or below it, by the parent chain as
+   written (an ivar of one is an ivar of the other's instances)? */
+static int civ_related(Compiler *c, int a, int b) {
+  for (int x = a; x >= 0; x = c->classes[x].parent) if (x == b) return 1;
+  for (int x = b; x >= 0; x = c->classes[x].parent) if (x == a) return 1;
+  return 0;
+}
+/* The program class an ivar read in an instance method holds, as
+   class_var_static_ci reads a local: every store to the ivar in an
+   instance method of its class, or of a class above or below it, is a
+   plain write (or `||=`, `&&=`) of the same class constant, and no
+   attribute writer, top-level or module method, or literal-named
+   instance_variable_set stores it. -1 otherwise. A slot no write has
+   reached yet is nil, and a store these do not see (a computed name, an
+   instance_eval block) may put another class there: only the run time
+   tells, and the Method's maker tests it (emit_method_obj_target). */
+static int class_ivar_static_ci_raw(Compiler *c, int node);
+int class_ivar_static_ci(Compiler *c, int node) {
+  const NodeTable *nt = c->nt;
+  if (node < 0 || node >= nt->count || nt_kind(nt, node) != NK_InstanceVariableReadNode) return -1;
+  /* the scan reads the whole program: once per read while the tree and
+     the class table stay as they are (the answer + 2; 0 not asked) */
+  static int *memo; static int memo_cap, memo_ncls; static unsigned memo_ver;
+  if (nt->version != memo_ver || c->nclasses != memo_ncls || nt->count > memo_cap) {
+    if (nt->count > memo_cap) {
+      memo_cap = nt->count * 2;
+      free(memo);
+      memo = malloc(sizeof *memo * (size_t)memo_cap);
+      if (!memo) { fprintf(stderr, "out of memory\n"); exit(1); }
+    }
+    memset(memo, 0, sizeof *memo * (size_t)memo_cap);
+    memo_ver = nt->version; memo_ncls = c->nclasses;
+  }
+  if (!memo[node]) memo[node] = class_ivar_static_ci_raw(c, node) + 2;
+  return memo[node] - 2;
+}
+static int class_ivar_static_ci_raw(Compiler *c, int node) {
+  const NodeTable *nt = c->nt;
+  const char *vn = nt_str(nt, node, "name");
+  Scope *sc = vn ? comp_scope_of(c, node) : NULL;
+  int own = sc && !sc->is_cmethod ? sc->class_id : -1;
+  if (own < 0 || own == c->toplevel_class || comp_class_is_module(c, &c->classes[own])) return -1;
+  for (int k = 0; k < c->nclasses; k++)
+    if (comp_is_writer(&c->classes[k], vn + 1) && civ_related(c, k, own)) return -1;
+  static const NodeKind stores[] = { NK_InstanceVariableWriteNode, NK_InstanceVariableOrWriteNode,
+                                     NK_InstanceVariableAndWriteNode, NK_InstanceVariableOperatorWriteNode,
+                                     NK_InstanceVariableTargetNode };
+  int found = -1;
+  for (size_t s = 0; s < sizeof stores / sizeof stores[0]; s++)
+    for (int w = comp_kind_first(c, stores[s]); w >= 0; w = comp_kind_next(c, w)) {
+      const char *wn = nt_str(nt, w, "name");
+      Scope *ws = wn && sp_streq(wn, vn) ? comp_scope_of(c, w) : NULL;
+      /* (a class body's or a class method's store is the class's own ivar,
+         and the top level's main's) */
+      if (!ws || !ws->name || ws->is_cmethod) continue;
+      int k = ws->class_id;
+      if (k < 0 || k == c->toplevel_class || comp_class_is_module(c, &c->classes[k])) return -1;
+      if (!civ_related(c, k, own)) continue;
+      int val = nt_ref(nt, w, "value");
+      NodeKind vk = val >= 0 ? nt_kind(nt, val) : NK_NONE;
+      int ci = stores[s] != NK_InstanceVariableOperatorWriteNode && stores[s] != NK_InstanceVariableTargetNode &&
+               (vk == NK_ConstantReadNode || vk == NK_ConstantPathNode) ? const_node_class_index(c, val) : -1;
+      if (ci < 0 || is_builtin_reopen(c->classes[ci].name) || (found >= 0 && found != ci)) return -1;
+      found = ci;
+    }
+  if (found < 0) return -1;
+  NT_FOREACH_KIND(nt, NK_SymbolNode, y)
+    if (nt_str(nt, y, "value") && sp_streq(nt_str(nt, y, "value"), vn)) return -1;
+  NT_FOREACH_KIND(nt, NK_StringNode, y)
+    if (nt_str(nt, y, "content") && sp_streq(nt_str(nt, y, "content"), vn)) return -1;
+  return found;
+}
 /* The class or module `self` is at node: the one whose body holds it,
    outside a method (self_class_body), as `self.m` there reaches it; -1 in a
    `class << X` body (self is X's singleton class) or a block whose self
@@ -5235,6 +5307,14 @@ static int method_obj_lookup(Compiler *c, int node, int *cls, int *sg) {
   if (rt == TY_CLASS) {
     k = self_class_static_ci(c, recv), side = 1;
     if (k >= 0) goto found;
+  }
+  /* `@k.method(:cmeth)` on an ivar holding one class: that class's
+     class-side method, as a local's resolves through its constant; the
+     Method's maker tests the slot's class at run time
+     (emit_method_obj_target), since an unwritten slot is nil */
+  if (rt == TY_CLASS && nt_kind(nt, recv) == NK_InstanceVariableReadNode) {
+    k = class_ivar_static_ci(c, recv), side = 1;
+    if (k >= 0 && call_target(c, node, k, sym, CT_CAPTURE | CT_CMETHOD, NULL) >= 0) goto found;
   }
   return -1;
 found:

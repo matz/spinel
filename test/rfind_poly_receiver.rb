@@ -73,3 +73,11 @@ raises("range") { (1..3).rfind { |x| x > 0 } }
 raises("bag") { Bag.new.rfind { |x| x > 0 } }
 raises("poly array") { ask([1, 2]) }
 raises("poly bag") { ask(Bag.new) }
+
+# `rfind.each { }` is `rfind { }` (the Enumerator's each runs the method it
+# came from): the typed lowering turns the blockless inner call into
+# reverse.find, and the chained call must be answered by a copy of find, not
+# of rfind, or the array is reversed twice and the first match comes back.
+p [1, 2, 3].rfind.each { |x| x < 3 }
+p [1, 2, 3].rfind.each { |x| false }
+p %w[a bb cc].rfind.each { |s| s.size == 2 }

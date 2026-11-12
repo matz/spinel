@@ -16937,6 +16937,13 @@ int desugar_builtins(Compiler *c) {
       if (er >= 0 && nt_kind(nt, er) == NK_CallNode && nt_ref(nt, er, "block") < 0) { cn0 = nt_str(nt, er, "name"); cr0 = nt_ref(nt, er, "receiver"); each_site = 1; }
     }
     if (cn0 && sp_streq(cn0, "with_object")) cn0 = "each_with_object";
+    /* `arr.rfind.each { blk }`: only a typed Array chains (a poly receiver's
+       blockless rfind is not an Enumerator), and the typed lowering has
+       already turned the blockless inner call into `arr.reverse.find`, which
+       the chain rule then hands to this outer node. The site's copy is the
+       find the call ends up named, not the rfind it was written as, or the
+       copy reverses an array that arrives reversed */
+    if (each_site && cn0 && sp_streq(cn0, "rfind")) cn0 = "find";
     /* Array#index with a block and no argument is find_index, renamed so in
        the fixpoint once the receiver is an Array (desugar_builtin_enum_calls);
        so is the block-only arm a delegator's `index(*args, &block)` splits

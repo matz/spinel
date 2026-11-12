@@ -1,0 +1,10 @@
+[:int_itself, :str_itself, :a]
+[:int_freeze, :str_freeze, :a]
+[:int_itself, :str_itself, :a]
+[:int_freeze, :str_freeze, :a]
+:int_freeze
+:str_itself
+[:tagged, :b]
+true
+true
+FrozenError

@@ -17140,17 +17140,29 @@ static int emit_poly_call0_arms(Compiler *c, int id, Buf *b, const NodeTable *nt
      CRuby's Enumerator, as on a typed String (sp_poly_str_each_enum), where
      it outlives its expression or is asked what an Array does not answer
      (poly_str_iter_enum); walked where it is made, the Array chars / lines
-     / bytes answers walks the same items. */
+     / bytes answers walks the same items. The analysis counts a class
+     nothing instantiates where this does not (StringIO's each_line, loaded
+     with net/http and never made), and types the call untyped then: the
+     answer is boxed for that slot. */
   if (argc == 0 && nt_ref(nt, id, "block") < 0 && !user_defines_or_reads(c, name) &&
       is_str_each_iter(name)) {
+    int boxed = repr_of(c, id).kind == RK_BOXED;
+    Buf vb; memset(&vb, 0, sizeof vb);
+    TyKind vt;
     if (poly_str_iter_enum(c, id)) {
-      buf_puts(b, "sp_poly_str_each_enum("); emit_boxed(c, recv, b); buf_printf(b, ", SPL(\"%s\"))", name);
-      { *out = 1; return 1; }
+      buf_puts(&vb, "sp_poly_str_each_enum("); emit_boxed(c, recv, &vb); buf_printf(&vb, ", SPL(\"%s\"))", name);
+      vt = TY_ENUMERATOR;
     }
-    const char *fn = sp_streq(name, "each_char") ? "sp_str_chars"
-                   : sp_streq(name, "each_line") ? "sp_str_lines"
-                   : sp_streq(name, "each_byte") ? "sp_str_bytes" : "sp_str_codepoints";
-    buf_printf(b, "%s(sp_poly_recv_s(", fn); emit_expr(c, recv, b); buf_printf(b, ", \"%s\"))", name);
+    else {
+      const char *fn = sp_streq(name, "each_char") ? "sp_str_chars"
+                     : sp_streq(name, "each_line") ? "sp_str_lines"
+                     : sp_streq(name, "each_byte") ? "sp_str_bytes" : "sp_str_codepoints";
+      buf_printf(&vb, "%s(sp_poly_recv_s(", fn); emit_expr(c, recv, &vb); buf_printf(&vb, ", \"%s\"))", name);
+      vt = sp_streq(name, "each_byte") || sp_streq(name, "each_codepoint") ? TY_INT_ARRAY : TY_STR_ARRAY;
+    }
+    if (boxed) emit_boxed_text(c, vt, vb.p ? vb.p : "", b);
+    else buf_puts(b, vb.p ? vb.p : "");
+    free(vb.p);
     { *out = 1; return 1; }
   }
   if (sp_streq(name, "freeze"))     { buf_puts(b, "sp_poly_freeze("); emit_expr(c, recv, b); buf_puts(b, ")"); { *out = 1; return 1; } }

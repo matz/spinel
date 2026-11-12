@@ -376,6 +376,15 @@ int cplan_targets(Compiler *c, int id, int *out, int cap);
    NULL) saying ML_TABLE (the reader keeps the table's answer) or ML_NONE
    (no row, or an undef on the chain) */
 int cplan_implied_target(Compiler *c, int id, int op, int cls, const char *name, MethodLookup *ml);
+/* The to_ary of the program's through which a value of type t converts
+   where node `at` takes it apart (the implied to_ary call a row makes on
+   operand op: a multiple assignment's value, the element a nested target
+   takes), rb_check_array_type's, where the lowering can take its answer
+   typed: the version the plan answers (cplan_implied_target) when it and
+   the table's method answer an Array type; -1 otherwise. Only the one the
+   load record proves the object answers there: a to_ary defined, or
+   brought in by an include, after the assignment is not answered yet. */
+int cplan_typed_to_ary(Compiler *c, TyKind t, int at, int op);
 /* How a class's boxed to_ary runs where the plan answers it: the method
    table's method (the one sp_obj_to_ary calls), the version entry, or
    another version its window proves */

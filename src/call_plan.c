@@ -334,9 +334,14 @@ int cplan_arm_object_target(Compiler *c, int call, const char *cls) {
 }
 
 /* See call_plan.h. */
+int cplan_reopen_binding(CallPlan p) {
+  return p.mi >= 0 && p.via == UC_REOPEN && p.dispatch == CP_DIRECT ? p.mi : -1;
+}
+
+/* See call_plan.h. */
 int cplan_reopen_target(Compiler *c, CallPlan p) {
-  return p.mi >= 0 && p.via == UC_REOPEN && p.dispatch == CP_DIRECT &&
-         (cplan_root_reopen_owner(c, &p) || c->scopes[p.mi].yields) ? p.mi : -1;
+  int mi = cplan_reopen_binding(p);
+  return mi >= 0 && (cplan_root_reopen_owner(c, &p) || c->scopes[mi].yields) ? mi : -1;
 }
 
 /* A method the program adds to Object under the name of a class-gated

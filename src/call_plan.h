@@ -110,7 +110,13 @@ int cplan_root_reopen_call(Compiler *c, int id, const CallPlan *p);
    NULL), Object's method of the name, where the arm's re-entered call
    lands (emit_root_reopen_call). */
 int cplan_arm_object_target(Compiler *c, int call, const char *cls);
-/* The method of the program's that p binds directly to a call on a builtin value, a root class's or a reopened class's yielding one, -1 where p binds none: its answer, a yield's block value included, is the call's. */
+/* The method of the program's that p binds directly to a call on a builtin
+   value (a root class's or a reopened builtin class's), -1 where p binds
+   none: its answer is the call's. */
+int cplan_reopen_binding(CallPlan p);
+/* ...of those, a root class's or a yielding one, -1 otherwise: its answer,
+   a yield's block value included, is the call's ahead of the builtin's own
+   lowering of the name. */
 int cplan_reopen_target(Compiler *c, CallPlan p);
 /* Does any scope define an instance method `name` every object answers: the
    top level's, or Object's, Kernel's or BasicObject's own? The name-level

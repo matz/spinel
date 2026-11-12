@@ -39447,8 +39447,11 @@ int nullable_int_value(Compiler *c, int v) {
         nullable_int_elem_expr(c, rcv0, 0)) return 1;
     int rcv = nt_ref(nt, v, "receiver");
     /* a receiverless call resolves as emission does: the class-method chain
-       in a class method, then the instance chain, a top-level def last */
-    int mi = cn && rcv < 0 ? comp_self_call_mi(c, v, cn) : (cn ? call_target(c, v, -1, cn, CT_TOP, NULL) : -1);
+       in a class method, then the instance chain, a top-level def last; a
+       call on a builtin value asks the plan for the method of the program's
+       it binds (a yielding one answers its block's value, nil included:
+       `nil.f { |v| v }` over `yield nil`) */
+    int mi = !cn ? -1 : rcv < 0 ? comp_self_call_mi(c, v, cn) : cplan_reopen_binding(cplan_user_fresh(c, v));
     /* the builtin's own answer: no method of the program is a target -- the
        dispatch's builtin arm re-entering its call (g_nn_builtin_call), and
        a call the desugaring made the builtin's alone (builtin_only: the
@@ -39516,10 +39519,10 @@ int nullable_int_value(Compiler *c, int v) {
         }
       }
     }
-    /* a yielding method the program defines on a builtin class that the plan
-       binds to the call answers its block's value, nil included
-       (`nil.f { |v| v }` over `yield nil`) */
-    if (mi < 0 && rcv >= 0 && cn) mi = cplan_reopen_target(c, cplan_user_fresh(c, v));
+    /* A top-level def is private: of the calls with a receiver only
+       `self.f` reaches it, not one on another value, whose own class's
+       method (or none) is the target */
+    if (mi < 0 && rcv >= 0 && cn && nt_kind(nt, rcv) == NK_SelfNode) mi = call_target(c, v, -1, cn, CT_TOP, NULL);
     if (mi >= 0 && c->scopes[mi].ret_nullable_int) return 1;
     /* A bare (receiverless) call to an attr_reader resolves `mi` through
        comp_self_call_mi straight to the synthesized `def x = @x` scope, but

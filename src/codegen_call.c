@@ -18859,10 +18859,13 @@ void emit_brk_wrapped_call(Compiler *c, int id, Buf *b) {
   int light = brk_wrapper_light(c, id);
   /* A builtin self-returning iterator (each / each_with_index / ...) has no
      value-producing emitter: run it as a statement and use the receiver as
-     the no-break result. A user method resolving through the inliner takes
-     the normal value path (its return value is the result, NOT the receiver
-     -- name-matching alone would be wrong for a user `each`). */
-  int self_ret = wrecv >= 0 && call_user_yield_mi(c, id) < 0 &&
+     the no-break result. A call the plan binds to one method of the
+     program's takes the normal value path (the method's return value is the
+     result, NOT the receiver -- name-matching alone would be wrong for a
+     user `each`, and for an Object or Kernel `each` the plan binds on a
+     builtin value: `5.each { }`). */
+  CallPlan wp = cplan_user(c, id);
+  int self_ret = wrecv >= 0 && !(wp.mi >= 0 && wp.dispatch == CP_DIRECT) &&
                  (brk_iter_returns_self(wname) ||
                   /* a Float range's step answers the range too */
                   (wname && sp_streq(wname, "step") && (comp_ntype(c, wrecv) == TY_FLOAT_RANGE ||

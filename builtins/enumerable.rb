@@ -420,14 +420,19 @@ module Enumerable
     end
   end
 
-  def find
+  def find(ifnone = nil)
     if block_given?
       found = nil
+      hit = false
       each do |x|
         if yield(x)
           found = x
+          hit = true
           break
         end
+      end
+      if !hit && ifnone
+        found = ifnone.call
       end
       found
     else

@@ -15637,6 +15637,9 @@ static TyKind emit_face_arm(Compiler *c, int id, unsigned kind, unsigned flags, 
   }
   free(rb.p);
   view_bind(recv, "%s", tn.s);
+  /* the call's own form, as its reader takes it: asked before the receiver
+     is pinned to the owner, under which the owner's answer is the form */
+  Repr outer = repr_of(c, id);
   int sv_shadow = shadow ? view_push_repr(c, recv, VR_STR_SHADOW, 1) : -1;
   TyKind as = ty_poly_face_kind(kind);
   int v = view_push(c, recv, as);
@@ -15678,6 +15681,12 @@ static TyKind emit_face_arm(Compiler *c, int id, unsigned kind, unsigned flags, 
      widened it) */
   int arm_o = 0;
   if (keep_o) { int vi = view_push(c, id, nat); arm_o = node_is_oint(c, id); view_pop(c, vi); }
+  /* ...and the reverse: a call whose slot holds an Integer or Float with its
+     nil (the program's method of the name answers one) over an owner that
+     answers the plain scalar (Random#seed beside a user reader `seed`) is
+     wrapped into that form, which the call's readers take it as */
+  int wrap_o = outer.kind == RK_OPT && outer.opt_producer && outer.as_ty == nat &&
+               (nat == TY_INT || nat == TY_FLOAT) && !arm_o;
   /* a block mutator over a boxed Array may run on the box itself
      (emit_array_filter_loop), and then has nothing to write back */
   int slr = g_face_live_recv, slb = g_face_live_box, slu = g_face_live_used;
@@ -15695,6 +15704,11 @@ static TyKind emit_face_arm(Compiler *c, int id, unsigned kind, unsigned flags, 
   /* the raise token below is no oint, whatever the emitter noted on its way
      to declining: it is handed on as the token */
   if (got_o && cb.p && emitted_no_method(cb.p)) got_o = TY_UNKNOWN;
+  if (wrap_o && !got_o && cb.p && !emitted_no_method(cb.p)) {
+    Buf ob; memset(&ob, 0, sizeof ob);
+    buf_printf(&ob, "%s(%s)", oint_of(nat), cb.p);
+    free(cb.p); cb = ob;
+  }
   if (got_o) {
     Buf ob; memset(&ob, 0, sizeof ob);
     Repr slotr = repr_of(c, id);

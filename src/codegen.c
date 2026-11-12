@@ -19983,6 +19983,9 @@ typedef struct EmitUnitState {
      refusal inside a cached loop left the region pointing into its frame,
      and the next unit's reads cached through it */
   HcState hc;
+  /* yielding-method inlining in flight: a refusal inside an inlined body
+     skips the inliner's decrement */
+  int inline_depth;
 } EmitUnitState;
 
 void emit_unit_state_save(Compiler *c, EmitUnitState *s) {
@@ -19990,6 +19993,7 @@ void emit_unit_state_save(Compiler *c, EmitUnitState *s) {
   hc_state_save(&s->hc);
   s->move_depth = comp_scope_move_depth();
   s->view_depth = view_mark();
+  s->inline_depth = inline_splice_depth();
   s->ret_type = g_ret_type; s->fn_ret_type = g_fn_ret_type; s->fn_ret_oint = g_fn_ret_oint; s->result_ty = g_result_ty;
   s->c_ret_void = g_c_ret_void; s->in_proc_body = g_in_proc_body; s->result_poly = g_result_poly;
   s->proc_lost_yield_scope = g_proc_lost_yield_scope;
@@ -20048,6 +20052,7 @@ void emit_unit_state_restore(Compiler *c, const EmitUnitState *s) {
   hc_state_restore(&s->hc);
   comp_scope_move_unwind(s->move_depth);
   view_unwind(s->view_depth);
+  inline_splice_depth_reset(s->inline_depth);
   g_ret_type = s->ret_type; g_fn_ret_type = s->fn_ret_type; g_fn_ret_oint = s->fn_ret_oint; g_result_ty = s->result_ty;
   g_c_ret_void = s->c_ret_void; g_in_proc_body = s->in_proc_body; g_result_poly = s->result_poly;
   g_proc_lost_yield_scope = s->proc_lost_yield_scope;

@@ -1794,6 +1794,7 @@ void ucall_emitted(int id);
 void ucall_refused(int id);
 /* how deep emit_inline_call_x is in spliced bodies (codegen_iter.c) */
 int inline_splice_depth(void);
+void inline_splice_depth_reset(int d);
 /* One refusal: where and what. Recorded in order for --emit-types. */
 typedef struct { const char *file; int line; const char *msg; } SpDiag;
 extern SpDiag *g_diags;

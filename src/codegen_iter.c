@@ -93,6 +93,7 @@ static int pure_forwarding_target(Compiler *c, int mi, int depth) {
 #define SP_INLINE_DEPTH_MAX 64
 static int g_inline_depth = 0;
 int inline_splice_depth(void) { return g_inline_depth; }
+void inline_splice_depth_reset(int d) { g_inline_depth = d; }
 
 /* The block a spliced block's own `yield` reaches, per enclosing inline: a
    literal block passed to an inlined method yields to the block that was

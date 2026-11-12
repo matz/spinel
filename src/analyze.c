@@ -4674,6 +4674,97 @@ int ie_block_body(Compiler *c, int blk) {
   return body;
 }
 
+/* The literal blocks a `&x` handed to instance_eval / instance_exec can be,
+   where `x` reads one back through a method that stores its block in an ivar
+   and answers it when called without one (OmniAuth's `uid do ... end`, read as
+   `ancestor.uid` in `context.instance_eval(&ancestor.uid)`): each `case` / `if`
+   arm, each such reader, and each call of the reader's name given a literal
+   block. Their count into out (at most cap), or -1 for an expression whose
+   blocks are not all such. */
+static int ie_stored_reader_ivar(Compiler *c, const Scope *s) {
+  const NodeTable *nt = c->nt;
+  if (!s->blk_param || !s->blk_param[0] || s->body < 0) return -1;
+  int found = -1;
+  NT_FOREACH_KIND(nt, NK_InstanceVariableWriteNode, w) {
+    if (comp_scope_of(c, w) != s) continue;
+    int v = nt_ref(nt, w, "value");
+    if (v < 0 || nt_kind(nt, v) != NK_LocalVariableReadNode || !sp_streq(nt_str(nt, v, "name"), s->blk_param)) continue;
+    const char *iv = nt_str(nt, w, "name");
+    if (!iv || (found >= 0 && !sp_streq(nt_str(nt, found, "name"), iv))) return -1;
+    found = w;
+  }
+  return found;
+}
+int ie_trace_bodies(Compiler *c, int x, int *out, int cap, int depth) {
+  const NodeTable *nt = c->nt;
+  if (x < 0 || depth > 8) return -1;
+  switch (nt_kind(nt, x)) {
+    case NK_ParenthesesNode: return ie_trace_bodies(c, nt_ref(nt, x, "body"), out, cap, depth + 1);
+    case NK_StatementsNode: {
+      int n = 0; const int *st = nt_arr(nt, x, "body", &n);
+      return n > 0 ? ie_trace_bodies(c, st[n - 1], out, cap, depth + 1) : -1;
+    }
+    case NK_IfNode: case NK_UnlessNode: {
+      int a = ie_trace_bodies(c, nt_ref(nt, x, "statements"), out, cap, depth + 1);
+      if (a < 0) return -1;
+      int els = nt_ref(nt, x, nt_kind(nt, x) == NK_IfNode ? "subsequent" : "else_clause");
+      if (els < 0) return a;
+      if (nt_kind(nt, els) == NK_ElseNode) els = nt_ref(nt, els, "statements");
+      int b = ie_trace_bodies(c, els, out + a, cap - a, depth + 1);
+      return b < 0 ? -1 : a + b;
+    }
+    case NK_CaseNode: {
+      int nw = 0, total = 0; const int *arms = nt_arr(nt, x, "conditions", &nw);
+      for (int i = 0; i < nw; i++) {
+        int k = ie_trace_bodies(c, nt_ref(nt, arms[i], "statements"), out + total, cap - total, depth + 1);
+        if (k < 0) return -1;
+        total += k;
+      }
+      int els = nt_ref(nt, x, "else_clause");
+      if (els >= 0 && nt_kind(nt, els) == NK_ElseNode) els = nt_ref(nt, els, "statements");
+      if (els >= 0) {
+        int k = ie_trace_bodies(c, els, out + total, cap - total, depth + 1);
+        if (k < 0) return -1;
+        total += k;
+      }
+      return total;
+    }
+    case NK_CallNode:
+      /* an arm that raises hands no block on */
+      if (nt_ref(nt, x, "receiver") < 0 && nt_str(nt, x, "name") && sp_streq(nt_str(nt, x, "name"), "raise")) return 0;
+      break;
+    default: return -1;
+  }
+  const char *nm = nt_str(nt, x, "name");
+  if (!nm || nt_ref(nt, x, "arguments") >= 0 || nt_ref(nt, x, "block") >= 0) return -1;
+  int readers = 0;
+  for (int si = 0; si < c->nscopes; si++) {
+    const Scope *s = &c->scopes[si];
+    /* (a method of the name that takes no block, or one that does not store it, answers no
+       block a literal gave it: `def uid` on the instance, Logger#info; a value of another
+       class reaching the instance_eval is refused there, by the proc's own class) */
+    if (!s->name || !sp_streq(s->name, nm) || !s->blk_param || !s->blk_param[0]) continue;
+    if (ie_stored_reader_ivar(c, s) < 0) continue;
+    readers++;
+  }
+  if (!readers) return -1;
+  int total = 0;
+  NT_FOREACH_KIND(nt, NK_CallNode, call) {
+    const char *cn = nt_str(nt, call, "name");
+    int b = nt_ref(nt, call, "block");
+    if (!cn || !sp_streq(cn, nm) || b < 0) continue;
+    /* (a call that reaches a reader: a receiverless one in a class body, or on a constant) */
+    int cr = nt_ref(nt, call, "receiver");
+    const Scope *cs = comp_scope_of(c, call);
+    int in_body = cs && cs->def_node < 0 && call < c->node_cap && c->node_cbody[call] >= 0;
+    if (!(cr < 0 ? in_body : nt_kind(nt, cr) == NK_ConstantReadNode || nt_kind(nt, cr) == NK_SelfNode)) continue;
+    if (nt_kind(nt, b) != NK_BlockNode) return -1;
+    if (total >= cap) return -1;
+    out[total++] = nt_ref(nt, b, "body");
+  }
+  return total;
+}
+
 /* The names a method that takes a block can be reached by: its own, and
    any alias (method lookup resolves one to another name). Listed once per
    build_ie_map, whose walk alone asks; a name in neither forwards nothing
@@ -5050,6 +5141,16 @@ void build_ie_map(Compiler *c) {
     if (body < 0 && !pass && nt_kind(nt, blk) == NK_BlockArgumentNode && is_instance_eval_family(nm)) {
       int tr = ie_param_literals(c, blk, cls);
       if (tr >= 0) nt_node_set_int((NodeTable *)nt, id, "ie_param_traced", tr + 1);
+    }
+    if (body < 0 && pass && nt_kind(nt, blk) == NK_BlockArgumentNode && is_instance_eval_family(nm)) {
+      int traced[16];
+      int tn = ie_trace_bodies(c, nt_ref(nt, blk, "expression"), traced, 16, 0);
+      for (int t = 0; t < tn; t++) {
+        int tb = traced[t];
+        if (tb < 0) continue;
+        pend[tb] = pend[tb] == -1 || pend[tb] == cls ? cls : -2 - id;
+        mark_ie_own(c, tb, pend[tb]);
+      }
     }
     if (body < 0) continue;
     if (pass) pend[body] = pend[body] == -1 || pend[body] == cls ? cls : -2 - id;

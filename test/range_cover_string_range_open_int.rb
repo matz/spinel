@@ -22,3 +22,11 @@ def f(x) = (nil..nil).cover?(x)
 [("a".."c"), (1..2), 3, ("c".."a"), (1.0..2.0), ("x"...)].each { |v| p f(v) }
 def g(r, x) = r.cover?(x)
 [(nil..nil), (1..3), (nil...nil)].each { |rr| p g(rr, "a".."b") }
+# an end changed in place after the Range was made, and an end with a NUL byte
+lo = +"a"
+hi = +"c"
+sr = lo..hi
+hi.replace("0")
+p (nil..nil).cover?(sr)
+p (nil..nil).cover?("a\0".."a")
+p (nil..nil).cover?("a"..."a\0")

@@ -4992,16 +4992,18 @@ static SP_UNUSED sp_bool sp_srange_cover_poly(sp_RbVal recv, sp_RbVal x) {
   int d = strcmp(o.last, r.last);
   return r.excl ? (d < 0 || (d == 0 && o.excl)) : d <= 0;
 }
-/* Range#cover?(range) for an Integer Range a and a String Range b (a Range
-   of Symbols too), as CRuby's r_cover_range_p: an Integer end never compares
+/* Range#cover?(range) for an Integer Range a and a String Range b (a boxed
+   Range of Symbols too), as CRuby's r_cover_range_p: an Integer end never compares
    with a String one, so only a's missing ends can take b in. b is not empty,
    a has no begin or end where b has one, and an excluded open end of a takes
    an endless b only when b excludes its end too. */
 static SP_UNUSED sp_bool sp_range_cover_srange(sp_Range a, sp_StrRange b) {
+  /* (an end held as a String handle reads as its current text) */
+  b = sp_srange_live(b);
   int a_end = a.fe || !a.noend;
   if (a_end && !b.last) return 0;
   if (!a.nobeg && !b.first) return 0;
-  if (b.first && b.last && (b.excl ? strcmp(b.first, b.last) >= 0 : strcmp(b.first, b.last) > 0)) return 0;
+  if (b.first && b.last && (b.excl ? sp_str_cmp_bytes(b.first, b.last) >= 0 : sp_str_cmp_bytes(b.first, b.last) > 0)) return 0;
   /* b's begin against a's ends: an Integer never compares with it */
   if (b.first && (!a.nobeg || a_end)) return 0;
   if (b.last && a_end) return 0;

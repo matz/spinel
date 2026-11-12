@@ -577,7 +577,14 @@ printf 'class Holder; end\nclass Maker\n  def self.new = Holder\nend\nMaker.new.
 refused autoload "unresolved autoload owner"
 printf 'END { puts "lib END" }\nputs "lib"\n' > "$tmp/end/lib.rb"
 printf 'require_relative "lib"\nputs "main"\n' > "$tmp/end/main.rb"
-refused end "an END block in a required file"
+# An END block in a required file registers where its load runs it (an
+# at_exit), so it runs once, after main, as CRuby runs it.
+if "$SPINEL" --load-model=graph "$tmp/end/main.rb" -o "$tmp/end/bin" >"$tmp/end/out" 2>&1; then
+  "$tmp/end/bin" >"$tmp/end/run" 2>&1
+  printf 'lib\nmain\nlib END\n' | cmp -s - "$tmp/end/run" || fail "an END block in a required file did not run after main"
+else
+  fail "an END block in a required file did not compile"; sed -n 1,3p "$tmp/end/out"
+fi
 printf 'include Helpers\n' > "$tmp/mixin/lib.rb"
 printf 'module Helpers\n  LEVEL = 1\nend\nrequire_relative "lib"\np LEVEL\n' > "$tmp/mixin/main.rb"
 refused mixin "a top-level include in a required file"

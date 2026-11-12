@@ -1495,11 +1495,25 @@ int emit_array_splat_mutator(Compiler *c, int id, Buf *b) {
    String representation the parameter's slot can be the handle (a block
    that keeps the String it is handed), and the element is taken in the
    slot's face, as map! takes it. */
+/* Does find's block parameter hold its nil beside the Integer or Float (an
+   array that took a write past its end holds nils, and the analysis gives
+   the slot the room for one)? The loop below then reads the element the way
+   that slot holds it, as the builtin's copy does with _oget. */
+static int find_param_is_oint(Compiler *c, int block, const char *bp0, TyKind et) {
+  Scope *ms = comp_scope_of(c, block);
+  LocalVar *mlv = ms && bp0 ? scope_local(ms, bp0) : NULL;
+  return mlv && oint_kind(et) && slot_is_oint(mlv);
+}
+
 static void emit_find_elem_decl(Compiler *c, int block, const char *bp0, const char *bp, TyKind rt, const char *k,
                                 TyKind et, int trecv, int ti) {
   Scope *ms = comp_scope_of(c, block);
   LocalVar *mlv = ms && bp0 ? scope_local(ms, bp0) : NULL;
   emit_indent(g_pre, g_indent + 1);
+  if (find_param_is_oint(c, block, bp0, et)) {
+    buf_printf(g_pre, "%s lv_%s = sp_%sArray_oget(_t%d, _t%d);\n", oint_ctype(et), bp, k, trecv, ti);
+    return;
+  }
   if (sp_streq(k, "Str") && mlv && mlv->type == TY_STRBUF) {
     emit_ctype(c, TY_STRBUF, g_pre);
     buf_printf(g_pre, " lv_%s = SP_STR_TO(lv_%s, sp_StrArray_get_e(_t%d, _t%d));\n", bp, bp, trecv, ti);
@@ -1979,7 +1993,10 @@ static int emit_kind_array_iter_call(Compiler *c, int id, Buf *b, const NodeTabl
       { Buf eltxt; memset(&eltxt, 0, sizeof eltxt);
         if (bp) buf_printf(&eltxt, "lv_%s", bp);
         else { char rd[96]; typed_elem_getf(rd, sizeof rd, rt, k, "_t%d, _t%d", trecv, ti); buf_puts(&eltxt, rd); }
-        emit_boxed_text(c, et, eltxt.p, g_pre); free(eltxt.p); }
+        if (bp && find_param_is_oint(c, block, block_param_name(c, block, 0), et))
+          buf_printf(g_pre, "%s(%s)", oint_box(et), eltxt.p);
+        else emit_boxed_text(c, et, eltxt.p, g_pre);
+        free(eltxt.p); }
       buf_printf(g_pre, "; _tf%d = 1; break; }\n", tfn);
       free(cb.p);
       emit_indent(g_pre, g_indent); buf_puts(g_pre, "}\n");
@@ -2024,7 +2041,9 @@ static int emit_kind_array_iter_call(Compiler *c, int id, Buf *b, const NodeTabl
         int sv = g_indent; g_indent++;
         emit_iter_step_cond(c, &st, 1, &cb); g_indent = sv; }
       emit_indent(g_pre, g_indent + 1);
-      if (bp && oint_kind(et)) buf_printf(g_pre, "if (%s) { _t%d = %s(lv_%s); break; }\n", cb.p ? cb.p : "0", tres, oint_of(et), bp);
+      if (bp && find_param_is_oint(c, block, block_param_name(c, block, 0), et))
+        buf_printf(g_pre, "if (%s) { _t%d = lv_%s; break; }\n", cb.p ? cb.p : "0", tres, bp);
+      else if (bp && oint_kind(et)) buf_printf(g_pre, "if (%s) { _t%d = %s(lv_%s); break; }\n", cb.p ? cb.p : "0", tres, oint_of(et), bp);
       /* (one representation: the parameter may hold the handle; the answer
          slot is the element's own type) */
       else if (bp && et == TY_STRING)

@@ -17551,6 +17551,30 @@ static int class_lacks_enumerable(Compiler *c, int k) {
   return !comp_enum_behind(c, k);
 }
 
+/* `rn.is_a?(cls)` for a builtin class, and not an instance of a class of the
+   program that defines the method itself (defcls[0..nd) with exact unset): an
+   Array subclass with its own rfind is an Array, and its own method answers */
+static int enum_is_a_chain(Compiler *c, const char *rn, const int *defcls, const int *exact, int ndef);
+static int enum_array_not_own(Compiler *c, const char *rn, const char *cls, const int *defcls, const int *exact, int nd) {
+  NodeTable *nt = (NodeTable *)c->nt;
+  int base = enum_is_a_named(c, rn, cls);
+  if (base < 0) return -1;
+  int own[64], zero[64], no = 0;
+  for (int k = 0; k < nd && no < 64; k++) if (!exact[k]) { own[no] = defcls[k]; zero[no] = 0; no++; }
+  if (no == 0) return base;
+  int chain = enum_is_a_chain(c, rn, own, zero, no);
+  int par = nt_new_node(nt, "ParenthesesNode"), pst = nt_new_node(nt, "StatementsNode");
+  int notn = nt_new_node(nt, "CallNode"), andn = nt_new_node(nt, "AndNode");
+  if (chain < 0 || par < 0 || pst < 0 || notn < 0 || andn < 0) return -1;
+  nt_node_set_arr(nt, pst, "body", &chain, 1);
+  nt_node_set_ref(nt, par, "body", pst);
+  nt_node_set_str(nt, notn, "name", "!");
+  nt_node_set_ref(nt, notn, "receiver", par);
+  nt_node_set_ref(nt, andn, "left", base);
+  nt_node_set_ref(nt, andn, "right", notn);
+  return andn;
+}
+
 /* `rn.is_a?(K) || ...` over the classes `defcls`; `instance_of?` for one
    whose `exact` is set (a class with no Enumerable, whose subclass may
    include it) */
@@ -18218,7 +18242,7 @@ int desugar_builtin_enum_calls(Compiler *c) {
       int rfr = nt_ref(nt, id, "receiver");
       TyKind rft = rfr >= 0 ? infer_type(c, rfr) : TY_UNKNOWN;
       int rf_lit = rfr >= 0 && nt_kind(nt, rfr) == NK_ArrayNode;
-      if (rft == TY_POLY && !nt_int(nt, id, "enum_wo_own", 0) && !nt_safe_nav(nt, id) &&
+      if (rft == TY_POLY && !nt_int(nt, id, "enum_wo_own", 0) &&
           nt_ref(nt, id, "block") >= 0 && builtin_enum_name_index("rfind") >= 0) {
         bname = "rfind"; wo_arm = 1; wo_cls = "Array";
       }
@@ -18533,6 +18557,9 @@ int desugar_builtin_enum_calls(Compiler *c) {
        whose answer is CRuby's NoMethodError. (`is_a?(Enumerable)` itself
        answers false for a boxed builtin.) */
     int scal_arm = rt == TY_POLY && !safe_nav && !range_arm && !wo_arm && nt_int(nt, copy, "enum_own_def", 0);
+    /* rfind's arm keeps the classes that define it: an Array subclass with its
+       own rfind is an Array too, and must not take the builtin's walk */
+    int wo_nd = wo_arm ? ndef : 0;
     if (wo_arm) ndef = 0;   /* the arm as written answers every other class */
     if (wo_arm || range_arm) own_arm = 0;
     /* A boxed receiver an OpenStruct can reach reads the member of the name
@@ -18577,7 +18604,7 @@ int desugar_builtin_enum_calls(Compiler *c) {
       int own_only = own_arm && ndef == 0 && !safe_nav;   /* the own arm's test is the only one */
       if (own_only) pred = enum_owner_chain(c, rn, qn, blk >= 0);
       else if (!safe_nav) pred = range_arm ? enum_is_a_named(c, rn, "Range")
-                          : wo_arm ? enum_is_a_named(c, rn, wo_cls)
+                          : wo_arm ? enum_array_not_own(c, rn, wo_cls, defcls, exact, wo_nd)
                           : os_arm ? enum_is_a_named(c, rn, "OpenStruct") : enum_is_a_chain(c, rn, defcls, exact, ndef);
       /* an OpenStruct joins the Range arm, which the poly dispatch answers */
       if (os_arm && range_arm && pred >= 0) {
@@ -18635,7 +18662,7 @@ int desugar_builtin_enum_calls(Compiler *c) {
       /* the class's own method, on the same receiver, with the block; under
          a safe navigation the nil arm answers nil and the class arm, when
          there is one, sits inside it */
-      if (safe_nav && ndef == 0) {
+      if (safe_nav && ndef == 0 && !wo_arm) {
         nt_node_set_type(nt, own, "NilNode");
         nt_node_set_arr(nt, ts, "body", &own, 1);
       }
@@ -18646,16 +18673,19 @@ int desugar_builtin_enum_calls(Compiler *c) {
         int ces = nt_new_node(nt, "StatementsNode");
         int celse = nt_new_node(nt, "ElseNode");
         if (nil_n < 0 || ifc < 0 || cts < 0 || ces < 0 || celse < 0) { free(chained); free(in_default); free(defcls); return changed; }
-        /* pred so far is `__r.nil?`; the class test becomes the inner if */
-        int cpred = enum_is_a_chain(c, rn, defcls, exact, ndef);
+        /* pred so far is `__r.nil?`; the class test becomes the inner if. A
+           with_object-shaped arm (rfind) tests for its builtin instead: the
+           builtin's copy when it holds, the call as written when it does not */
+        int cpred = wo_arm ? enum_array_not_own(c, rn, wo_cls, defcls, exact, wo_nd)
+                           : enum_is_a_chain(c, rn, defcls, exact, ndef);
         if (cpred < 0) { free(chained); free(in_default); free(defcls); return changed; }
         nt_node_set_str(nt, own, "name", qn);
         nt_node_set_ref(nt, own, "receiver", ownr);
-        nt_node_set_int(nt, own, "enum_own", 1);   /* the class's method: a user arm */
+        nt_node_set_int(nt, own, wo_arm ? "enum_wo_own" : "enum_own", 1);   /* the class's method: a user arm */
         if (args >= 0) nt_node_set_ref(nt, own, "arguments", args);
         if (blk >= 0) nt_node_set_ref(nt, own, "block", blk);
-        nt_node_set_arr(nt, cts, "body", &own, 1);
-        nt_node_set_arr(nt, ces, "body", &gen, 1);
+        nt_node_set_arr(nt, wo_arm ? ces : cts, "body", &own, 1);
+        nt_node_set_arr(nt, wo_arm ? cts : ces, "body", &gen, 1);
         nt_node_set_ref(nt, celse, "statements", ces);
         nt_node_set_ref(nt, ifc, "predicate", cpred);
         nt_node_set_ref(nt, ifc, "statements", cts);
@@ -18679,7 +18709,7 @@ int desugar_builtin_enum_calls(Compiler *c) {
         nt_node_set_arr(nt, wo_arm ? es : ts, "body", &own, 1);
       }
       /* the builtin's copy, with a copy of the block */
-      if (!(safe_nav && ndef > 0)) nt_node_set_arr(nt, wo_arm ? ts : es, "body", &gen, 1);
+      if (!(safe_nav && (ndef > 0 || wo_arm))) nt_node_set_arr(nt, wo_arm ? ts : es, "body", &gen, 1);
       if (own_arm && !own_only) {
         int cel = -1;   /* the else of the safe navigation's inner class test */
         if (safe_nav && ndef > 0) {

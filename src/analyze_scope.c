@@ -2424,6 +2424,12 @@ void register_locals(Compiler *c) {
     if (k == NK_InstanceVariableWriteNode ||
         k == NK_InstanceVariableReadNode ||
         k == NK_InstanceVariableOperatorWriteNode ||
+        /* `@x ||= v` always writes on its first run (the ivar starts nil),
+           so it defines the ivar as a plain write does: `@c ||= nil` alone
+           left the class no slot, and instance_variables, inspect and
+           instance_variable_defined? never saw @c. (`@x &&= v` writes only
+           a truthy ivar, which some other write made.) */
+        k == NK_InstanceVariableOrWriteNode ||
         /* the multi-assign target form (`@a, @b = ...`) also defines the ivar,
            so it must be interned for the struct field (#3273). */
         k == NK_InstanceVariableTargetNode) {

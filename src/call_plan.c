@@ -1882,6 +1882,10 @@ static int new_inits_list(Compiler *c, int ci, int *out, int *whole) {
   if (nh < 0) *whole = 0;
   if (nh <= 1) return n;
   int ns = elab_instance_span(c, ci, "initialize", ds, VER_MAX_ARMS), all = ns < 0 || ns > VER_MAX_ARMS;
+  /* (an interval of the span with no version, after a removal: an instance
+     made there runs no initialize of the program's) */
+  for (int j = 0; !all && j < ns; j++)
+    if (!ds[j]) *whole = 0;
   for (int i = 0; i < nh; i++) {
     const LrDef *d = hv[i].v;
     int met = all;

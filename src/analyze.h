@@ -334,6 +334,8 @@ void const_writes_free(Compiler *c);
 int elab_method_at(Compiler *c, int cls, const char *name, int sg, LoadPoint p, const LrDef **out);
 /* ...and whether the program gives cls's instance side a method `name` of its own at p, or through a prepend: what shadows the class's own core method (an ancestor's, a Numeric's or Object's, does not, nor an include's); ELAB_YES also for one removed, ELAB_UNKNOWN for one that may not have run (under a condition) */
 int elab_own_method_at(Compiler *c, int cls, const char *name, LoadPoint p);
+/* ...and whether cls's instance side reaches a method `name` at p from its own part of the lookup: its prepends, its own entries (a visibility change of the name too) and its includes, not its superclass; ELAB_YES also for one removed */
+int elab_reached_method_at(Compiler *c, int cls, const char *name, LoadPoint p);
 /* may a call at p run on cls: on its class object (sg) once a header has
    opened it, on an instance once one may exist? 1 where the record cannot
    tell */

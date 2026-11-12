@@ -2322,16 +2322,21 @@ static int cm_self_kind(Compiler *c, int self) {
    instance keeps its tables' target, which its dispatch arms are built
    on, and so does a call on an explicit receiver of a name a builtin
    answers on any self (`U.format`, private in CRuby). */
-/* ...and a builtin class's reopening, on its instance side: a call the
+/* ...and the top-level reopening of a builtin class or module whose
+   values carry its class id (builtin_class_id: the roots, Array, String,
+   Comparable, StandardError; not Random, Method or LoadError, which have
+   none, nor a class of the program's own, which keeps the tables' target
+   its dispatch arms are built on), on its instance side: a call the
    record proves runs before the reopening's method of `name` is defined
    reaches the builtin's method of the name, as in CRuby (#10719: `p
    a.sum` ahead of `class Array; def sum`), where the builtin has one, of
    its own or of a module it includes (Comparable's between?, Enumerable's
-   tally) */
+   tally); where it has none, the call finds no method, and its
+   NoMethodError is the undefined method's (`nil.foo` ahead of `class
+   Object; private def foo`, `[1].foo` ahead of `class Array; def foo`) */
 static int ct_builtin_reopen_undefined_at(Compiler *c, int id, int cls, const char *name, unsigned flags) {
   if ((flags & (CT_CMETHOD | CT_TOP | CT_OWN)) || cls < 0 || cls >= c->nclasses || !c->classes[cls].name ||
-      c->classes[cls].enclosing_class >= 0 || (builtin_class_id(c->classes[cls].name) >= 0 && !cplan_is_root_class(c, cls)) ||
-      !builtin_answers_ahead_of(c->classes[cls].name, name, NULL) ||
+      c->classes[cls].enclosing_class >= 0 || !builtin_class_id(c->classes[cls].name) ||
       !elab_method_versions(c, name))
     return 0;
   int framed = elab_plan_enter(c, id);
@@ -6692,6 +6697,19 @@ int cplan_root_method(Compiler *c, int call, const char *cls, const char *name, 
     /* (a reopened builtin's own method below the roots answers by its
        class's arms) */
     if (mi >= 0 && !root) return -1;
+    /* a root's def answers from where it runs: a call the record proves
+       runs before every def, include and visibility change of the name in
+       the root's own part of the lookup finds what the lookup finds past it
+       (Kernel's tap, ahead of a later `module Kernel; private; def tap`).
+       (A top-level def's place is asked above; a call with no place in the
+       load is cplan_root_vis's, by cplan_root_def_ran. Where the record
+       cannot order them, a def under a condition, the def still answers:
+       telling the two apart at run time takes a visibility per version the
+       entries do not have yet.) */
+    if (mi >= 0 && owner >= 0) {
+      LoadPoint cp = elab_point_of(c, call);
+      if (cp.region >= 0 && elab_reached_method_at(c, owner, name, cp) == ELAB_NO) mi = -1;
+    }
     if (mi >= 0) {
       if (vis) *vis = cplan_root_vis(c, call, owner, name);
       return mi;

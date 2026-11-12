@@ -1,0 +1,28 @@
+nil tap nil
+nil
+int tap 1
+1
+true tap
+true
+str tap
+"s"
+ary tap
+[1]
+obj tap
+Foo
+class tap
+Foo
+nil public_send tap
+nil
+"nil"
+true
+2.5
+private method 'tap' called for nil
+private method 'tap' called for an instance of Integer
+private method 'tap' called for true
+private method 'tap' called for an instance of Foo
+private method 'tap' called for nil
+private method 'then' called for nil
+private method 'frozen?' called for an instance of Integer
+private method 'dup' called for an instance of Float
+:kernel_tap

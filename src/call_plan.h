@@ -956,7 +956,8 @@ int cplan_nil_program_responds(Compiler *c, const char *name, int include_all);
 /* The program's method CRuby's lookup of `name` on an instance of
    builtin class cls reaches first at the roots (NilClass, Numeric,
    Object -- a top-level def is Object's from where it runs, and the later
-   of the two defs answers --, Kernel, BasicObject), for call `call`: its
+   of the two defs answers --, Kernel, BasicObject; a root's def the record
+   proves runs after the call is passed over), for call `call`: its
    scope, with *vis (may be NULL) its visibility at the call (-1 where the
    record cannot tell), or -1 when a builtin's method answers first (*vis
    then its visibility), a reopened builtin below the roots has one, none

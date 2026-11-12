@@ -550,10 +550,11 @@ int elab_closure_runs(Compiler *c, int id, int *sites, int cap);
 /* ...and the calls that force the lazy chain whose block node id is in
    (elab_block_runs answers it later: lr_lazy_later), with only blocks run
    at once between: the chain's value written whole to a local, each call
-   on a read of it in the same body that does not chain it on. How many;
-   -1 for no such chain, past cap, and where the chain, or a read of that
-   local, goes anywhere else (handed on, chained on, returned), so that
-   every site is where the block may run. */
+   on a read of it in the same body that forces it (is_lazy_forcing_name),
+   followed through the calls that chain it on into another such local.
+   How many; -1 for no such chain, past cap, and where the chain, or a read
+   of such a local, goes anywhere else (handed on as it is, to a method,
+   returned), so that every site is where the block may run. */
 int elab_lazy_runs(Compiler *c, int id, int *sites, int cap);
 /* does the body of def node `def` keep the block it is given for later,
    for certain, by the record's reading of its uses of the block (a store,

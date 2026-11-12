@@ -3088,6 +3088,10 @@ static int ivs_tracked(Compiler *c, int cid, const char *ivn, int *memo, int *bm
   }
   return tracked;
 }
+/* (ivs_kind's cycle state: the depth of asks in flight, whether one was
+   re-entered, and a generation the memos derived from it are kept under) */
+static int g_ivs_depth = 0, g_ivs_cycled = 0;
+static unsigned g_ivs_flush_gen = 0;
 static int ivs_kind(Compiler *c, int cid, const char *ivn) {
   if (cid < 0 || cid >= c->nclasses || !ivn) return 2;
   ClassInfo *ci = &c->classes[cid];
@@ -3103,9 +3107,32 @@ static int ivs_kind(Compiler *c, int cid, const char *ivn) {
   int *memo = c->pres_memo;
   int slot = iv < 64 ? cid * 64 + iv : -1;
   if (slot >= 0 && memo[slot] >= 0) return memo[slot];
-  int kind = slot >= 0 && memo[n + slot] >= 0 ? memo[n + slot] : ivs_base_kind(c, cid, ivn);
-  if (slot >= 0) memo[n + slot] = kind;
+  /* A value the answer asks after can ask after this ivar again (a
+     setter's argument read through its holder's representation, a family
+     member's tracking): the ask in flight answers 2, which takes the flag,
+     and so does the ask that was re-entered. -2 marks the ask in flight,
+     -3 one that was re-entered. */
+  if (slot >= 0 && memo[slot] <= -2) { memo[slot] = -3; g_ivs_cycled = 1; return 2; }
+  if (slot >= 0) memo[slot] = -2;
+  g_ivs_depth++;
+  int base = slot >= 0 && memo[n + slot] >= 0 ? memo[n + slot] : ivs_base_kind(c, cid, ivn);
+  if (slot >= 0 && memo[slot] == -3) base = 2;
+  if (slot >= 0) memo[n + slot] = base;
+  int kind = base;
   if (c->pres_seen && ivs_tracked(c, cid, ivn, memo, memo + n)) kind = 3;
+  g_ivs_depth--;
+  if (slot >= 0 && memo[slot] == -3) kind = base = 2;
+  /* the answers memoized while an ask was in flight were derived from the
+     provisional 2 one handed out: kept, a field's reads and writes could
+     take different answers (one class's store leaving the flag another
+     class's layout reads). Dropped once the outermost ask has its own,
+     which every ask after it reads. */
+  if (g_ivs_cycled && g_ivs_depth == 0) {
+    g_ivs_cycled = 0;
+    for (int i = 0; i < c->pres_memo_n; i++) memo[i] = -1;
+    g_ivs_flush_gen++;
+    if (slot >= 0) memo[n + slot] = base;
+  }
   if (slot >= 0) memo[slot] = kind;
   return kind;
 }
@@ -8292,11 +8319,11 @@ int ivar_has_nilbit(Compiler *c, int cid, int iv) {
   if (!g_scopes_settled) return ivar_has_nilbit_walk(c, cid, iv);
   static signed char **memo = NULL;
   static int *memo_n = NULL, memo_ncls = -1;
-  static unsigned memo_shape;
-  if (memo_ncls != c->nclasses || memo_shape != comp_class_shape_gen()) {
+  static unsigned memo_shape, memo_flush;
+  if (memo_ncls != c->nclasses || memo_shape != comp_class_shape_gen() || memo_flush != g_ivs_flush_gen) {
     for (int k = 0; k < memo_ncls; k++) free(memo[k]);
     free(memo); free(memo_n);
-    memo_ncls = c->nclasses; memo_shape = comp_class_shape_gen();
+    memo_ncls = c->nclasses; memo_shape = comp_class_shape_gen(); memo_flush = g_ivs_flush_gen;
     memo = calloc((size_t)(memo_ncls > 0 ? memo_ncls : 1), sizeof *memo);
     memo_n = calloc((size_t)(memo_ncls > 0 ? memo_ncls : 1), sizeof *memo_n);
     if (!memo || !memo_n) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
@@ -8308,8 +8335,13 @@ int ivar_has_nilbit(Compiler *c, int cid, int iv) {
     memset(memo[cid], -1, (size_t)(ci->nivars > 0 ? ci->nivars : 1));
     memo_n[cid] = ci->nivars;
   }
-  if (memo[cid][iv] < 0) memo[cid][iv] = (signed char)ivar_has_nilbit_walk(c, cid, iv);
-  return memo[cid][iv];
+  if (memo[cid][iv] >= 0) return memo[cid][iv];
+  /* (a cycle the walk runs into drops the memo, ivs_kind: the answer of
+     an ask that saw it go is not kept) */
+  unsigned gen = g_ivs_flush_gen;
+  int v = ivar_has_nilbit_walk(c, cid, iv);
+  if (gen == g_ivs_flush_gen && memo_n[cid] == ci->nivars) memo[cid][iv] = (signed char)v;
+  return v;
 }
 static int ivar_has_nilbit_walk(Compiler *c, int cid, int iv) {
   ClassInfo *ci = &c->classes[cid];

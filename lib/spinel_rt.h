@@ -1336,6 +1336,7 @@ const char *sp_File_readpartial_into(sp_File *f, sp_int n, sp_String *buf);
 /* IO#pread(len, offset): read without moving the file position. Inline
    because it allocates from this TU's string heap (#3038). */
 static inline const char *sp_File_pread(sp_File *f, sp_int len, sp_int off) {
+  SP_GC_ROOT(f);   /* `File.new(path).pread(n, off)` holds the handle nowhere else */
   sp_pread_check(f, len, 0);
   if (len < 0) len = 0;
   char *buf = (char *)sp_str_alloc((size_t)len);
@@ -1357,6 +1358,7 @@ static inline const char *sp_File_pread_checked(sp_File *f, sp_int len, sp_int o
 /* IO#pread answering NULL at EOF instead of raising, for the same reason as
    sp_File_readpartial_or_nil. */
 static inline const char *sp_File_pread_or_nil(sp_File *f, sp_int len, sp_int off) {
+  SP_GC_ROOT(f);   /* `File.new(path).pread(n, off, buf)` holds the handle nowhere else */
   sp_pread_check(f, len, 1);
   if (len < 0) len = 0;
   char *buf = (char *)sp_str_alloc((size_t)len);
@@ -1382,6 +1384,7 @@ const char *sp_slurp_stream(FILE *fp);
 const char *sp_slurp_stream_err(FILE *fp, int *err);
 sp_File *sp_File_set_encoding(sp_File *f, sp_RbVal ext, sp_RbVal in);
 static inline const char *sp_File_read(sp_File *f) {
+  SP_GC_ROOT(f);   /* `IO.for_fd(fd).read` holds the handle nowhere else */
   sp_io_check_readable(f);
   if (SP_ATOMIC_LOAD(&f->timeout, __ATOMIC_ACQUIRE)) return sp_File_read_timed(f, -1);
   sp_io_wait_readable(f);
@@ -1411,6 +1414,7 @@ static inline const char *sp_File_read(sp_File *f) {
    naming "ODES" with a nonsense size, and the renderer then drew 1496 pixels
    out of 76800. */
 static inline const char *sp_File_read_n(sp_File *f, sp_int n) {
+  SP_GC_ROOT(f);   /* `File.new(path).read(n)` holds the handle nowhere else */
   /* a negative length is CRuby's ArgumentError, checked before the stream */
   if (n < 0) sp_raise_cls("ArgumentError", sp_sprintf("negative length %lld given", (long long)n));
   sp_io_check_readable(f);

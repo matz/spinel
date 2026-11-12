@@ -1970,10 +1970,6 @@ spinel: test/reject/struct_new_runtime_member_names.rb:6: Struct.new with member
 spinel: test/reject/struct_subclass_own_new_superclass.rb:7: unsupported superclass expression (a call other than Struct.new, Data.define, a Struct subclass's new or a blockless Class.new(Constant)): write the superclass as a constant
 == test/reject/struct_subclass_own_new_superclass.rb [promote] rc=1
 spinel: test/reject/struct_subclass_own_new_superclass.rb:7: unsupported superclass expression (a call other than Struct.new, Data.define, a Struct subclass's new or a blockless Class.new(Constant)): write the superclass as a constant
-== test/reject/subclass_array_builtin_alias_recv.rb [default] rc=1
-spinel: test/reject/subclass_array_builtin_alias_recv.rb:11: calling `raw_size`, an alias of Array#size in Log, on a receiver is not supported yet (it would run the class's own `size`); call it without a receiver inside the class
-== test/reject/subclass_array_builtin_alias_recv.rb [promote] rc=1
-spinel: test/reject/subclass_array_builtin_alias_recv.rb:11: calling `raw_size`, an alias of Array#size in Log, on a receiver is not supported yet (it would run the class's own `size`); call it without a receiver inside the class
 == test/reject/subclass_array_class_new_call.rb [default] rc=1
 spinel: test/reject/subclass_array_class_new_call.rb:5: Class.new(Array) without a block is not supported yet (the call makes its class at run time); declare it as `class Name < Array`
 == test/reject/subclass_array_class_new_call.rb [promote] rc=1

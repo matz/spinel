@@ -6490,9 +6490,12 @@ int cplan_nil(Compiler *c, int id) {
   int r = nt_ref(nt, id, "receiver");
   const char *nm = cplan_call_name(nt, id);
   if (r < 0 || !nm || nt_safe_nav(nt, id)) return CN_NONE;
-  /* the receiver as settled, not as a view retypes it: a poly arm's
-     unboxed String is never its box's nil */
-  TyKind rt = comp_ntype_stored(c, r);
+  /* the receiver's stored type, which an open type view on it writes (so
+     under one this is the view's), tested below against its type here: a
+     receiver the two differ on (a yield typed by its site, a String and
+     its handle where the refinement reads one as the other) has no nil
+     arm */
+  TyKind rt = comp_ntype_settled(c, r);
   /* under --share-strings, a String the rule made the shared handle is
      nil as its NULL handle (#6765) */
   /* Exception text dispatch has the same nil target as an ordinary call,

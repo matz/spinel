@@ -10857,7 +10857,7 @@ static int emit_scalar_recv_arms(Compiler *c, int id, Buf *b, const NodeTable *n
       }
       /* a nil arm that left the test to this guard (emit_nil_target_own)
          learns it was written */
-      if (comp_nil_tested_present(c) && comp_nil_tested_stored(c, recv) == 3) comp_write_nil_tested(c, recv, 4);
+      view_nil_test_written(c, recv);
       if (ib->p) buf_puts(b, ib->p);
       buf_puts(b, "; })");
     }
@@ -16307,7 +16307,7 @@ int emit_face_str_bang_pub(Compiler *c, int id, Buf *b) {
 static void emit_poly_recv_lift_pre(Compiler *c, int recv) {
   NodeKind k = nt_kind(c->nt, recv);
   if ((k != NK_LocalVariableReadNode && k != NK_InstanceVariableReadNode) ||
-      !comp_poly_strbuf_lift_present(c) || comp_poly_strbuf_lift_stored(c, recv)) return;
+      comp_poly_strbuf_lift_stored(c, recv)) return;
   Buf lv; memset(&lv, 0, sizeof lv);
   emit_expr(c, recv, &lv);
   int t = ++g_tmp;

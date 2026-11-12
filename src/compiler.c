@@ -477,15 +477,15 @@ void comp_grow_node_arrays(Compiler *c) {
   c->norigin = realloc(c->norigin, sizeof(int) * (size_t)n);
   c->nilnarrow = realloc((TyKind *)c->nilnarrow, sizeof(TyKind) * (size_t)n);
   c->strbuf_box = realloc((unsigned char *)c->strbuf_box, (size_t)n);
-  c->strbuf_handle_demand = realloc(c->strbuf_handle_demand, (size_t)n);
+  c->strbuf_handle_demand = realloc((unsigned char *)c->strbuf_handle_demand, (size_t)n);
   c->strbuf_read_raw = realloc(c->strbuf_read_raw, (size_t)n);
-  c->poly_strbuf_lift = realloc(c->poly_strbuf_lift, (size_t)n);
-  c->nil_tested = realloc(c->nil_tested, (size_t)n);
-  c->head_held = realloc(c->head_held, (size_t)n);
+  c->poly_strbuf_lift = realloc((unsigned char *)c->poly_strbuf_lift, (size_t)n);
+  c->nil_tested = realloc((unsigned char *)c->nil_tested, (size_t)n);
+  c->head_held = realloc((unsigned char *)c->head_held, (size_t)n);
   if (!c->head_held) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-  c->value_discarded = realloc(c->value_discarded, (size_t)n);
+  c->value_discarded = realloc((unsigned char *)c->value_discarded, (size_t)n);
   if (!c->value_discarded) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-  c->str_shadow = realloc(c->str_shadow, (size_t)n);
+  c->str_shadow = realloc((unsigned char *)c->str_shadow, (size_t)n);
   if (!c->str_shadow) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
   c->nscope = realloc(c->nscope, sizeof(int) * (size_t)n);
   c->node_cbody = realloc(c->node_cbody, sizeof(int) * (size_t)n);
@@ -503,7 +503,7 @@ void comp_grow_node_arrays(Compiler *c) {
   for (int i = c->node_cap; i < n; i++) c->bop_inf[i] = NULL;
   c->ucall_inf = realloc(c->ucall_inf, sizeof *c->ucall_inf * (size_t)n);
   memset(c->ucall_inf + c->node_cap, 0, sizeof *c->ucall_inf * (size_t)(n - c->node_cap));
-  for (int i = c->node_cap; i < n; i++) { ((TyKind *)c->ntype)[i] = TY_UNKNOWN; c->norigin[i] = -1; ((TyKind *)c->nilnarrow)[i] = TY_UNKNOWN; c->nscope[i] = 0; c->node_cbody[i] = -1; ((char *)c->empty_arr_recv)[i] = 0; ((char *)c->empty_hash_recv)[i] = 0; ((char *)c->empty_hash_arg)[i] = 0; c->store_misfit_arg[i] = 0; c->ivar_widen_src[i] = 0; ((TyKind *)c->hash_want)[i] = TY_UNKNOWN; ((TyKind *)c->arr_want)[i] = TY_UNKNOWN; ((TyKind *)c->poly_builtin_ty)[i] = TY_UNKNOWN; c->lw_joined[i] = TY_UNKNOWN; ((unsigned char *)c->strbuf_box)[i] = 0; c->strbuf_handle_demand[i] = 0; c->strbuf_read_raw[i] = 0; c->poly_strbuf_lift[i] = 0; c->nil_tested[i] = 0; c->head_held[i] = 0; c->value_discarded[i] = 0; c->str_shadow[i] = 0; }
+  for (int i = c->node_cap; i < n; i++) { ((TyKind *)c->ntype)[i] = TY_UNKNOWN; c->norigin[i] = -1; ((TyKind *)c->nilnarrow)[i] = TY_UNKNOWN; c->nscope[i] = 0; c->node_cbody[i] = -1; ((char *)c->empty_arr_recv)[i] = 0; ((char *)c->empty_hash_recv)[i] = 0; ((char *)c->empty_hash_arg)[i] = 0; c->store_misfit_arg[i] = 0; c->ivar_widen_src[i] = 0; ((TyKind *)c->hash_want)[i] = TY_UNKNOWN; ((TyKind *)c->arr_want)[i] = TY_UNKNOWN; ((TyKind *)c->poly_builtin_ty)[i] = TY_UNKNOWN; c->lw_joined[i] = TY_UNKNOWN; ((unsigned char *)c->strbuf_box)[i] = 0; ((unsigned char *)c->strbuf_handle_demand)[i] = 0; c->strbuf_read_raw[i] = 0; ((unsigned char *)c->poly_strbuf_lift)[i] = 0; ((unsigned char *)c->nil_tested)[i] = 0; ((unsigned char *)c->head_held)[i] = 0; ((unsigned char *)c->value_discarded)[i] = 0; ((unsigned char *)c->str_shadow)[i] = 0; }
   c->node_cap = n;
 }
 
@@ -668,7 +668,7 @@ void comp_free(Compiler *c) {
   }
   free(c->ffi_sources);
   free(c->nscope);
-  free(c->str_shadow);
+  free((unsigned char *)c->str_shadow);
   if (c->stmt_wr_names)
     for (int i = 0; i < c->stmt_wr_cap; i++) free(c->stmt_wr_names[i]);
   free(c->stmt_wr_names); free(c->stmt_wr_state); free(c->stmt_wr_mark);
@@ -6245,4 +6245,12 @@ int comp_class_kw_init(Compiler *c, int ci) {
    its name and to_s, a positional Struct or a Data class (#3947) */
 const char *comp_class_inspect_suffix(Compiler *c, int ci, const char *name) {
   return is_inspect_name(name) && comp_class_kw_init(c, ci) ? "(keyword_init: true)" : "";
+}
+
+TyKind comp_ask_without_box_mark(Compiler *c, int id, TyKind (*ask)(Compiler *, int)) {
+  unsigned char was = c->strbuf_box[id];
+  ((unsigned char *)c->strbuf_box)[id] = 0;
+  TyKind t = ask(c, id);
+  ((unsigned char *)c->strbuf_box)[id] = was;
+  return t;
 }

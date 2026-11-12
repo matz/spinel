@@ -27697,7 +27697,7 @@ static int poly_target_call(Compiler *c, int id) {
   const NodeTable *nt = c->nt;
   int r = nt_ref(nt, id, "receiver"), a = nt_ref(nt, id, "arguments");
   const char *nm = nt_str(nt, id, "name");
-  if (r < 0 || a < 0 || !nm || sn_guard_pending(c, id) || comp_ntype_stored(c, r) != TY_POLY ||
+  if (r < 0 || a < 0 || !nm || sn_guard_pending(c, id) || comp_ntype_settled(c, r) != TY_POLY ||
       comp_ntype(c, r) != TY_POLY || !subtree_has_side_effect(c, a) ||
       call_target(c, id, -1, nm, CT_TOP, NULL) >= 0 || any_class_defines(c, nm) ||
       (nil_target_read_rebound(c, r, a) && nt_kind(nt, r) != NK_LocalVariableReadNode))
@@ -27990,7 +27990,7 @@ static int emit_nil_target_cold(Compiler *c, int id, Buf *b) {
    as for any call. `stmt` emits it as a statement at `indent`. */
 static int emit_nil_target_own(Compiler *c, int id, Buf *b, int stmt, int indent) {
   int r = nt_ref(c->nt, id, "receiver");
-  if (!comp_nil_tested_present(c) || comp_ntype(c, r) != TY_STRING || !recv_may_be_sentinel(c, r)) return 0;
+  if (comp_ntype(c, r) != TY_STRING || !recv_may_be_sentinel(c, r)) return 0;
   size_t pre0 = g_pre ? g_pre->len : 0;
   int sv_tmp = g_tmp;
   int vt = view_push_repr(c, r, VR_NIL_TESTED, 3);
@@ -30723,7 +30723,7 @@ static void emit_call_unwrapped(Compiler *c, int id, Buf *b) {
     int chain[16], nch = 0, r = nt_ref(c->nt, id, "receiver");
     while (cn && sp_streq(cn, "<<") && r >= 0 && nt_kind(c->nt, r) == NK_CallNode && nch < 16 &&
            nt_str(c->nt, r, "name") && sp_streq(nt_str(c->nt, r, "name"), "<<") &&
-           comp_ntype_stored(c, r) == TY_STRING) {
+           comp_ntype_settled(c, r) == TY_STRING) {
       chain[nch++] = r;
       r = nt_ref(c->nt, r, "receiver");
     }
@@ -34871,7 +34871,7 @@ int strbuf_narrowed_box_mutator(Compiler *c, int id) {
   const char *cn = nt_str(nt, id, "name");
   int nch = 0, r = nt_ref(nt, id, "receiver");
   while (is_shovel_name(cn) && r >= 0 && nt_kind(nt, r) == NK_CallNode && nch < 16 &&
-         is_shovel_name(nt_str(nt, r, "name")) && comp_ntype_stored(c, r) == TY_STRING) {
+         is_shovel_name(nt_str(nt, r, "name")) && comp_ntype_settled(c, r) == TY_STRING) {
     nch++;
     r = nt_ref(nt, r, "receiver");
   }

@@ -78,11 +78,11 @@ static void arm_record_x(Compiler *c, int block, LocalVar *lv, TyKind kind, int 
   else for (int j = 0; j < bn; j++) arm_collect(nt, bb[j], &nodes, &len, &cap, 0);
   TyKind *bsaved = malloc(sizeof *bsaved * (size_t)(blen ? blen : 1));
   if (!bsaved) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-  for (int i = 0; i < blen; i++) bsaved[i] = bnodes[i] < c->node_cap ? comp_ntype_stored(c, bnodes[i]) : TY_UNKNOWN;
+  for (int i = 0; i < blen; i++) bsaved[i] = comp_ntype_settled(c, bnodes[i]);
   TyKind *saved = malloc(sizeof *saved * (size_t)(len ? len : 1));
   TyKind *types = malloc(sizeof *types * (size_t)(len ? len : 1));
   if (!saved || !types) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
-  for (int i = 0; i < len; i++) saved[i] = nodes[i] < c->node_cap ? comp_ntype_stored(c, nodes[i]) : TY_UNKNOWN;
+  for (int i = 0; i < len; i++) saved[i] = comp_ntype_settled(c, nodes[i]);
   /* a block whose first parameter is no plain one (`|*r|`): the sites
      retype the body with no slot set, and so does this */
   TyKind lsaved = lv ? lv->type : TY_UNKNOWN;
@@ -105,7 +105,7 @@ static void arm_record_x(Compiler *c, int block, LocalVar *lv, TyKind kind, int 
   if (lv) lv_set_type(lv, kind);
   for (int j = 0; j < bn; j++) infer_type(c, bb[j]);
   if (extra >= 0) infer_type(c, extra);
-  for (int i = 0; i < len; i++) types[i] = nodes[i] < c->node_cap ? comp_ntype_stored(c, nodes[i]) : TY_UNKNOWN;
+  for (int i = 0; i < len; i++) types[i] = comp_ntype_settled(c, nodes[i]);
   if (lv) lv_set_type(lv, lsaved);
   for (int i = 0; i < len; i++) if (nodes[i] < c->node_cap) comp_set_ntype(c, nodes[i], saved[i]);
   for (int i = 0; i < blen; i++) if (bnodes[i] < c->node_cap) comp_set_ntype(c, bnodes[i], bsaved[i]);
@@ -152,7 +152,7 @@ void an_arm_facts(Compiler *c) {
     }
     /* the sites run in the arms of a dispatch over a boxed value, or over
        a boxed Array's elements */
-    TyKind rt = comp_ntype_stored(c, r);
+    TyKind rt = comp_ntype(c, r);
     if (rt != TY_POLY && rt != TY_POLY_ARRAY) continue;
     const char *p0 = block_param_name(c, block, 0);
     Scope *bs = p0 ? comp_scope_of(c, block) : NULL;

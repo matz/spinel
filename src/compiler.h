@@ -45,11 +45,16 @@ enum { SP_VIS_PUBLIC = 0, SP_VIS_PRIVATE = 1, SP_VIS_PROTECTED = 2 };
    only inherits it (#4509), so the record is the NODE whose value made the
    slot degrade; the node's own origin (Compiler.norigin) leads on from there
    to the expression the poly was born at. */
-/* The tables infer_type reads are written only through setters that count
-   each change in comp_ty_edits, so that its memo can tell whether an
-   earlier query's answer still holds (#8852). Their fields are const under
-   SP_TY_GUARD (`make ty-setter-check`), so a direct write does not compile
-   there. */
+/* SP_TY_FIELD marks a table whose writers are named: the field is const
+   under SP_TY_GUARD (`make ty-setter-check`), so a direct write does not
+   compile there. The tables infer_type reads have setters that count each
+   change in comp_ty_edits, so that its memo can tell whether an earlier
+   query's answer still holds (#8852). The nine per-node fact arrays
+   (ntype, nilnarrow, strbuf_box, strbuf_handle_demand, poly_strbuf_lift,
+   nil_tested, head_held, value_discarded, str_shadow) are written through
+   the setters and the lift mark's store, by the storage (compiler.c) and
+   by the views (codegen_view.c). Not every one has a counting setter: the
+   stores that count nothing are listed at comp_ask_without_box_mark. */
 #ifdef SP_TY_GUARD
 #define SP_TY_FIELD const
 #else
@@ -1313,7 +1318,7 @@ typedef struct {
   /* --share-strings: the names of the calls whose answer is kept (not
      dropped), sorted, built once on first ask (strbuf_tail_answer_kept) */
   const char **kept_call_names; int nkept_call_names, kept_call_built;
-  unsigned char *strbuf_handle_demand; /* [node_cap] the same demand -- hand out
+  SP_TY_FIELD unsigned char *strbuf_handle_demand; /* [node_cap] the same demand -- hand out
                           the HANDLE, not a reading of it -- carried WITHOUT
                           moving the node's type. strbuf_box above is read as
                           the type as well: infer_uncached answers TY_STRBUF
@@ -1328,7 +1333,7 @@ typedef struct {
                                       no pointer past the call: emit
                                       sp_String_cstr, not a whole-string copy.
                                       The node's TYPE is unchanged (#5745). */
-  unsigned char *poly_strbuf_lift; /* [node_cap] a read of a POLY variable
+  SP_TY_FIELD unsigned char *poly_strbuf_lift; /* [node_cap] a read of a POLY variable
                           handed to a parameter the callee appends to in
                           place: a plain String the variable holds becomes
                           the shared handle (an SP_BUILTIN_STRBUF box) and is
@@ -1338,7 +1343,7 @@ typedef struct {
                           unchanged. STRBUF_LIFT_FRESH_CALL: a boxed call's
                           new String that a container store lifts into a
                           handle (strbuf_demand_store_leaf). */
-  unsigned char *nil_tested; /* [node_cap] a builtin call's receiver whose nil
+  SP_TY_FIELD unsigned char *nil_tested; /* [node_cap] a builtin call's receiver whose nil
                           its nil arm has already tested (cplan_nil, #7444),
                           or an object's under its kind query's nil arm
                           (emit_object_kind_nil): set only as a view
@@ -1353,17 +1358,17 @@ typedef struct {
   int args_in_call_trial; /* nonzero while that trial emits: a call nested
                           in it takes its head without a trial of its own,
                           so nested operators are not emitted 2^depth times */
-  unsigned char *head_held; /* [node_cap] an operand the nil arm's head
+  SP_TY_FIELD unsigned char *head_held; /* [node_cap] an operand the nil arm's head
                           (emit_nil_target_head) ran into a temp of its own
                           ahead of the call: set only as a view
                           (VR_HEAD_HELD) around the call's own emission,
                           where an arm that holds the operand reads that
                           temp (hold_operand) */
-  unsigned char *value_discarded; /* [node_cap] a node emitted where its value
+  SP_TY_FIELD unsigned char *value_discarded; /* [node_cap] a node emitted where its value
                           is thrown away (emit_expr_for_effect: `((void)(...))`,
                           the left of a comma): set only as a view
                           (VR_DISCARDED) around that emission */
-  unsigned char *str_shadow; /* [node_cap] a String receiver bound to a copy
+  SP_TY_FIELD unsigned char *str_shadow; /* [node_cap] a String receiver bound to a copy
                           of a handle's bytes that its mutator writes back to
                           as to a variable (1: a boxed face's receiver,
                           emit_face_arm; 2: a held chain's shadow,
@@ -2766,40 +2771,56 @@ void emit_trace_ask(Compiler *c, int id, int kind, int round, const char *walk);
 void emit_trace_fact(Compiler *c, int id, int kind, int was, int now);
 void emit_trace_sets(Compiler *c, const char *walk);
 #endif
-/* Raw node facts: no bounds fallback, memo dependency, yield hook or
-   String refinement. Callers keep the guards of the original array read. */
-static inline TyKind comp_ntype_stored(const Compiler *c, int id) { return c->ntype[id]; }
-static inline TyKind comp_nilnarrow_stored(const Compiler *c, int id) { return c->nilnarrow[id]; }
-static inline unsigned char comp_strbuf_box_stored(const Compiler *c, int id) { return c->strbuf_box[id]; }
-static inline unsigned char comp_strbuf_handle_demand_stored(const Compiler *c, int id) { return c->strbuf_handle_demand[id]; }
-static inline unsigned char comp_poly_strbuf_lift_stored(const Compiler *c, int id) { return c->poly_strbuf_lift[id]; }
-static inline unsigned char comp_nil_tested_stored(const Compiler *c, int id) { return c->nil_tested[id]; }
-static inline unsigned char comp_head_held_stored(const Compiler *c, int id) { return c->head_held[id]; }
-static inline unsigned char comp_value_discarded_stored(const Compiler *c, int id) { return c->value_discarded[id]; }
-static inline unsigned char comp_str_shadow_stored(const Compiler *c, int id) { return c->str_shadow[id]; }
+/* node_cap bounds every per-node array. nt->count runs ahead of it between
+   a node's append and comp_grow_node_arrays: a node there has no entry yet
+   and reads as unset. */
+static inline int comp_node_in(const Compiler *c, int id) { return id >= 0 && id < c->node_cap; }
 
-/* Presence checks for optional storage; these never read an element. */
-static inline int comp_ntype_present(const Compiler *c) { return c->ntype != NULL; }
-static inline int comp_nilnarrow_present(const Compiler *c) { return c->nilnarrow != NULL; }
-static inline int comp_poly_strbuf_lift_present(const Compiler *c) { return c->poly_strbuf_lift != NULL; }
-static inline int comp_nil_tested_present(const Compiler *c) { return c->nil_tested != NULL; }
-static inline int comp_head_held_present(const Compiler *c) { return c->head_held != NULL; }
-static inline int comp_value_discarded_present(const Compiler *c) { return c->value_discarded != NULL; }
-static inline int comp_str_shadow_present(const Compiler *c) { return c->str_shadow != NULL; }
+/* The readers of the node facts. Each answers for any id (-1, one past the
+   arrays) and for a Compiler with no arrays yet (node_cap 0) with the
+   fact's unset value, so no caller tests the range or the allocation.
 
-/* Existing unversioned stores, kept separate from the memo-invalidating
-   comp_set_* operations. Routing them here must not add an invalidation. */
-static inline void comp_write_strbuf_box(Compiler *c, int id, unsigned char v) { ((unsigned char *)c->strbuf_box)[id] = v; }
-static inline void comp_write_strbuf_handle_demand(Compiler *c, int id, unsigned char v) { c->strbuf_handle_demand[id] = v; }
-static inline void comp_write_poly_strbuf_lift(Compiler *c, int id, unsigned char v) { c->poly_strbuf_lift[id] = v; }
-static inline void comp_write_nil_tested(Compiler *c, int id, unsigned char v) { c->nil_tested[id] = v; }
+   A node's type has two readers, by meaning. comp_ntype (below) is the
+   type HERE: at this site of a yield, with the String refinement, noted
+   as a dependency of the inference that asks. comp_ntype_settled is the
+   type the analysis settled for the node: the table's entry, one answer
+   over every site of a yield. While the type fixpoint runs it is the
+   answer so far, and while a type view is open over the node it is the
+   view's. It is the one to read
+    - for a decision the analysis takes and emission asks again, where the
+      two must agree;
+    - to tell a String from its handle (TY_STRING from TY_STRBUF), which
+      comp_ntype reads as one or the other by the node's marks;
+    - beside comp_ntype, to see whether the two differ;
+    - in the yield-site hook and the String refinement, which compute
+      comp_ntype from it;
+    - for the table kept as a whole (saved and put back, recorded,
+      digested);
+    - for a stamp that tells when the type moved;
+    - for a report of what the analysis concluded. */
+static inline TyKind comp_ntype_settled(const Compiler *c, int id) { return comp_node_in(c, id) ? c->ntype[id] : TY_UNKNOWN; }
+static inline TyKind comp_nilnarrow_stored(const Compiler *c, int id) { return comp_node_in(c, id) ? c->nilnarrow[id] : TY_UNKNOWN; }
+static inline unsigned char comp_strbuf_box_stored(const Compiler *c, int id) { return comp_node_in(c, id) ? c->strbuf_box[id] : 0; }
+static inline unsigned char comp_strbuf_handle_demand_stored(const Compiler *c, int id) { return comp_node_in(c, id) ? c->strbuf_handle_demand[id] : 0; }
+static inline unsigned char comp_poly_strbuf_lift_stored(const Compiler *c, int id) { return comp_node_in(c, id) ? c->poly_strbuf_lift[id] : 0; }
+static inline unsigned char comp_nil_tested_stored(const Compiler *c, int id) { return comp_node_in(c, id) ? c->nil_tested[id] : 0; }
+static inline unsigned char comp_head_held_stored(const Compiler *c, int id) { return comp_node_in(c, id) ? c->head_held[id] : 0; }
+static inline unsigned char comp_value_discarded_stored(const Compiler *c, int id) { return comp_node_in(c, id) ? c->value_discarded[id] : 0; }
+static inline unsigned char comp_str_shadow_stored(const Compiler *c, int id) { return comp_node_in(c, id) ? c->str_shadow[id] : 0; }
 
-/* Byte-for-byte snapshots used by the analysis convergence check. */
+/* The settled types kept and compared as a whole, for the analysis's
+   convergence check. A node past the arrays (n may run to the table's
+   count) reads and compares as unset. */
 static inline void comp_ntype_snapshot(const Compiler *c, TyKind *out, int n) {
-  memcpy(out, c->ntype, sizeof(TyKind) * (size_t)n);
+  int m = n < c->node_cap ? n : c->node_cap;
+  if (m > 0) memcpy(out, c->ntype, sizeof(TyKind) * (size_t)m);
+  for (int i = m > 0 ? m : 0; i < n; i++) out[i] = TY_UNKNOWN;
 }
 static inline int comp_ntype_snapshot_equal(const Compiler *c, const TyKind *old, int n) {
-  return !memcmp(old, c->ntype, sizeof(TyKind) * (size_t)n);
+  int m = n < c->node_cap ? n : c->node_cap;
+  if (m > 0 && memcmp(old, c->ntype, sizeof(TyKind) * (size_t)m)) return 0;
+  for (int i = m > 0 ? m : 0; i < n; i++) if (old[i] != TY_UNKNOWN) return 0;
+  return 1;
 }
 
 /* The node-mark portion of the analysis state digest. Keep the old byte
@@ -2864,6 +2885,28 @@ static inline unsigned char comp_set_strbuf_box(Compiler *c, int id, unsigned ch
   if (c->strbuf_box[id] != v) { ((unsigned char *)c->strbuf_box)[id] = v; comp_touch_node(c, id); }
   return v;
 }
+static inline unsigned char comp_set_strbuf_handle_demand(Compiler *c, int id, unsigned char v) {
+  if (c->strbuf_handle_demand[id] != v) { ((unsigned char *)c->strbuf_handle_demand)[id] = v; comp_touch_node(c, id); }
+  return v;
+}
+/* The analysis's store of the poly lift mark. It counts no edit: the mark
+   says how a read is handed on, and the share walks that set it, Repr and
+   the emitters read it; no inference does, so no kept answer of infer_type
+   rests on it. sl_writers_lifted (analyze.c) stamps its walk of an ivar
+   name's writer calls with comp_ty_edits: a mark that counted would move
+   the stamp at each class's own store, and those calls would be walked
+   once per class. */
+static inline void comp_mark_poly_strbuf_lift(Compiler *c, int id, unsigned char v) { ((unsigned char *)c->poly_strbuf_lift)[id] = v; }
+/* The answer of ask(c, id) for a strbuf_box-marked node with the mark lent
+   for that one call: it is back when the call returns, so the table is as
+   it was and nothing is counted. An inference nested in the call reads the
+   node unmarked and may memoise what it saw, as it did when the two stores
+   were written out. The other stores of a fact that count nothing are the
+   lift mark's (comp_mark_poly_strbuf_lift, above) and codegen_view.c's: a
+   view's push and pop of strbuf_handle_demand (which comp_ntype reads),
+   poly_strbuf_lift, nil_tested, head_held, value_discarded and str_shadow,
+   and the nil-test signal on an open view (view_nil_test_written). */
+TyKind comp_ask_without_box_mark(Compiler *c, int id, TyKind (*ask)(Compiler *, int));
 static inline TyKind comp_set_nilnarrow(Compiler *c, int id, TyKind t) {
   if (c->nilnarrow[id] != t) { ((TyKind *)c->nilnarrow)[id] = t; comp_touch_node(c, id); }
   return t;
@@ -2876,7 +2919,7 @@ static inline TyKind comp_set_nilnarrow(Compiler *c, int id, TyKind t) {
    while it emits that arm, because dispatches downstream read the cache to
    type their own temps (#4070). */
 static inline TyKind comp_sn_retype(Compiler *c, int id, TyKind t) {
-  if (id < 0 || id >= c->nt->count) return t;
+  if (!comp_node_in(c, id)) return t;
   TyKind old = c->ntype[id];
   comp_set_ntype(c, id, t);
   return old;
@@ -2886,15 +2929,16 @@ static inline TyKind comp_sn_retype(Compiler *c, int id, TyKind t) {
 TyKind repr_stored_type(const Compiler *c, int id, TyKind t);
 int repr_value_obj(const Compiler *c, TyKind t);
 
-/* Node type cache. */
+/* A node's type here (the other reader is comp_ntype_settled, above). */
 static inline TyKind comp_ntype(const Compiler *c, int id) {
   if (id < 0 || id >= c->nt->count) return TY_UNKNOWN;
   /* (the node's type is its scope's slot: noted for infer_type's memo) */
-  if (imemo_dep_on) imemo_dep_scope(id < c->node_cap && c->nscope ? c->nscope[id] : -1);
+  if (imemo_dep_on) imemo_dep_scope(comp_node_in(c, id) ? c->nscope[id] : -1);
   if (sp_yield_site_type_hook) {
     TyKind yt;
     if (sp_yield_site_type_hook(c, id, &yt)) return yt;
   }
+  if (!comp_node_in(c, id)) return TY_UNKNOWN;
   /* TY_STRBUF is a codegen-only storage refinement (mutable sp_String for a
      `<<`-appended local). All type-directed logic treats it as a string;
      codegen consults the raw scope-local type where the distinction matters.

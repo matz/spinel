@@ -909,7 +909,7 @@ int repr_call_returns_handle(Compiler *c, int v) {
   }
   if (v < 0 || nt_kind(nt, v) != NK_CallNode) return 0;
   /* a String's value, or one the pickup marks to be stored as the handle */
-  TyKind t = comp_ntype_stored(c, v);
+  TyKind t = comp_ntype_settled(c, v);
   if (t != TY_STRING && !(t == TY_STRBUF && (comp_strbuf_box_stored(c, v) || c->n_cext_extensions))) return 0;
   if (strbuf_io_outbuf(c, v) >= 0) return 1;
   /* a Method's call: the method `method(:m)` names */
@@ -995,7 +995,7 @@ int repr_call_returns_handle(Compiler *c, int v) {
 int repr_boxed_reader_handle(Compiler *c, int v) {
   const NodeTable *nt = c->nt;
   if (v < 0 || nt_kind(nt, v) != NK_CallNode ||
-      (comp_ntype_stored(c, v) != TY_STRING && !(comp_ntype_stored(c, v) == TY_STRBUF && comp_strbuf_box_stored(c, v))) ||
+      (comp_ntype_settled(c, v) != TY_STRING && !(comp_ntype_settled(c, v) == TY_STRBUF && comp_strbuf_box_stored(c, v))) ||
       nt_ref(nt, v, "block") >= 0 ||
       nt_ref(nt, v, "arguments") >= 0) return 0;
   int recv = nt_ref(nt, v, "receiver");
@@ -1026,7 +1026,7 @@ int repr_boxed_to_s_operand(Compiler *c, int v) {
   int recv = nt_ref(nt, v, "receiver");
   if (!is_to_s_name(nm) || recv < 0 || call_plain_argc(c, v) != 0 ||
       nt_ref(nt, v, "block") >= 0 || repr_of(c, recv).kind != RK_BOXED ||
-      (comp_ntype_stored(c, v) != TY_STRING && comp_ntype_stored(c, v) != TY_STRBUF)) return -1;
+      (comp_ntype_settled(c, v) != TY_STRING && comp_ntype_settled(c, v) != TY_STRBUF)) return -1;
   int targets[CPT_MAX], n = cplan_targets(c, v, targets, CPT_MAX);
   if (n < 0) return -1;
   for (int i = 0; i < n; i++) {
@@ -1314,24 +1314,24 @@ Repr repr_of(const Compiler *c, int node) {
   r.ty = r.as_ty = r.narrowed = r.elem = r.key = r.val = r.range = TY_UNKNOWN;
   r.kind = RK_NONE;
   r.untyped = 1;
-  if (node < 0 || node >= c->nt->count) return r;
-  r.ty = comp_ntype_stored(c, node);
+  if (!comp_node_in(c, node)) return r;
+  r.ty = comp_ntype_settled(c, node);
   r.as_ty = comp_ntype(c, node);
   /* the layout first, from the type it is stored as, then the flags:
      GCC 13's store merging at -O2 drops the nil_cold store when
      repr_layout's bitfield stores come after it; setting the layout first
      avoids it */
   repr_layout(&r, r.as_ty);
-  r.narrowed = comp_nilnarrow_present(c) ? comp_nilnarrow_stored(c, node) : TY_UNKNOWN;
+  r.narrowed = comp_nilnarrow_stored(c, node);
   r.handle = comp_strbuf_box_stored(c, node) != 0;
   r.demand = comp_strbuf_handle_demand_stored(c, node) != 0;
   r.read_raw = c->strbuf_read_raw ? c->strbuf_read_raw[node] != 0 : 0;
-  r.poly_lift = comp_poly_strbuf_lift_present(c) ? comp_poly_strbuf_lift_stored(c, node) != 0 : 0;
-  r.nil_tested = comp_nil_tested_present(c) ? comp_nil_tested_stored(c, node) != 0 : 0;
-  r.nil_cold = comp_nil_tested_present(c) ? comp_nil_tested_stored(c, node) == 2 : 0;
-  r.head_held = comp_head_held_present(c) ? comp_head_held_stored(c, node) != 0 : 0;
-  r.discarded = comp_value_discarded_present(c) ? comp_value_discarded_stored(c, node) != 0 : 0;
-  r.str_shadow = comp_str_shadow_present(c) ? comp_str_shadow_stored(c, node) & 3 : 0;
+  r.poly_lift = comp_poly_strbuf_lift_stored(c, node) != 0;
+  r.nil_tested = comp_nil_tested_stored(c, node) != 0;
+  r.nil_cold = comp_nil_tested_stored(c, node) == 2;
+  r.head_held = comp_head_held_stored(c, node) != 0;
+  r.discarded = comp_value_discarded_stored(c, node) != 0;
+  r.str_shadow = comp_str_shadow_stored(c, node) & 3;
   /* a node is boxed as the type it is stored as; a nil-guard narrowing is
      read where the value is used, not where it is boxed */
   TyKind kt = r.as_ty;

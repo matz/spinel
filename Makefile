@@ -5609,10 +5609,13 @@ imemo-shadow-corpus: $(SPINEL)
 # each change for its memo (#8852). Under SP_TY_GUARD their fields are const,
 # so a direct write anywhere in the compiler does not compile. The nine
 # viewed node arrays also hide their field names outside compiler.h and
-# their storage/view owners (compiler.c and codegen_view.c).
+# their storage/view owners (compiler.c and codegen_view.c). A pointer that
+# drops the const is gcc's -Wdiscarded-qualifiers; clang takes that for an
+# unknown option and has the warning under a name of its own.
+TY_GUARD_QUAL := -Werror=discarded-qualifiers $(if $(filter clang,$(CC_KIND)),-Werror=incompatible-pointer-types-discards-qualifiers)
 ty-setter-check: $(SPINEL)
 	@printf '%s\n' $(patsubst build/csrc/%.o,src/%.c,$(SPINEL_OBJ)) | \
-	 xargs -P $(NPROC) -I{} $(CC) $(CFLAGS) -fsyntax-only -DSP_TY_GUARD -Werror=discarded-qualifiers -Isrc -Ibuild/csrc {} && \
+	 xargs -P $(NPROC) -I{} $(CC) $(CFLAGS) -fsyntax-only -DSP_TY_GUARD $(TY_GUARD_QUAL) -Isrc -Ibuild/csrc {} && \
 	 echo "ty-setter-check: pass"
 
 # The ty_traits table (types.c) against the functions each column names,

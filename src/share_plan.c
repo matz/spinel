@@ -122,7 +122,7 @@ static int share_plan_self_recv(Compiler *c, int v) {
   int r = nt_paren_single(nt, nt_ref(nt, v, "receiver")), tg[CPT_MAX];
   int any_recv = nm && ((sp_streq(nm, "itself") && call_plain_argc(c, v) == 0 && nt_ref(nt, v, "block") < 0) ||
                         (is_tap_name(nm) && nt_ref(nt, v, "block") >= 0));
-  if (!nm || r < 0 || (comp_ntype_stored(c, r) != TY_STRING && comp_ntype_stored(c, r) != TY_STRBUF && !(any_recv && comp_ntype_stored(c, r) == TY_POLY)))
+  if (!nm || r < 0 || (comp_ntype_settled(c, r) != TY_STRING && comp_ntype_settled(c, r) != TY_STRBUF && !(any_recv && comp_ntype_settled(c, r) == TY_POLY)))
     return -1;
   /* (a String's to_s or to_str answers the String itself where it is no
      subclass's instance, BOPF_SELF_EXACT: a bang's on a boxed receiver,
@@ -969,7 +969,7 @@ static int share_plan_freeze_read(Compiler *c, int n) {
     return 0;
   NodeKind k = nt_kind(nt, recv);
   if (k != NK_LocalVariableReadNode && k != NK_InstanceVariableReadNode && !repr_static_read_kind(k)) return 0;
-  return (comp_ntype_stored(c, recv) == TY_STRING || comp_ntype_stored(c, recv) == TY_STRBUF) && cplan_targets(c, n, tg, CPT_MAX) == 0;
+  return (comp_ntype(c, recv) == TY_STRING || comp_ntype(c, recv) == TY_STRBUF) && cplan_targets(c, n, tg, CPT_MAX) == 0;
 }
 
 /* The roles of the receivers that a builtin call only reads: a freeze of
@@ -1010,7 +1010,7 @@ static int share_plan_builtin_keeps(Compiler *c, int call) {
   const char *nm = nt_str(nt, call, "name");
   int recv = nt_ref(nt, call, "receiver");
   if (!nm) return 0;
-  TyKind rt = recv >= 0 ? comp_ntype_stored(c, recv) : TY_UNKNOWN;
+  TyKind rt = comp_ntype_settled(c, recv);
   TyKind fams[6];
   int nf = 0;
   if (rt == TY_STRING || rt == TY_STRBUF) fams[nf++] = TY_STRING;
@@ -1130,7 +1130,7 @@ void share_plan_build(Compiler *c) {
   for (int v = 0; v < n; v++) {
     Scope *sc = comp_scope_of(c, v);
     c->share_plan[v] = sc && !sc->reachable ? SPN_ASK : (unsigned char)share_plan_need(c, v);
-    c->share_plan_ty[v] = comp_ntype_stored(c, v);
+    c->share_plan_ty[v] = comp_ntype_settled(c, v);
   }
   c->share_plan_n = n;
   c->share_plan_ver = c->nt->version;
@@ -1150,7 +1150,7 @@ static int share_plan_plain_ctx(void) {
 /* The memo's need of node v where codegen is, or -1 where it cannot answer. */
 static int share_plan_memo_need(Compiler *c, int v) {
   int m = v >= 0 && v < c->share_plan_n && (c->share_plan[v] & SPM_NEED) != SPN_ASK &&
-          c->nt->version == c->share_plan_ver && comp_ntype_stored(c, v) == c->share_plan_ty[v] && share_plan_plain_ctx();
+          c->nt->version == c->share_plan_ver && comp_ntype_settled(c, v) == c->share_plan_ty[v] && share_plan_plain_ctx();
   return m ? c->share_plan[v] & SPM_NEED : -1;
 }
 

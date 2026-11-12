@@ -158,12 +158,12 @@ static void view_write(Compiler *c, int kind, int id, int v) {
   switch (kind) {
   case VK_TYPE:          comp_set_ntype(c, id, (TyKind)v); break;
   case VR_STRBUF_BOX:    comp_set_strbuf_box(c, id, (unsigned char)v); break;
-  case VR_HANDLE_DEMAND: c->strbuf_handle_demand[id] = (unsigned char)v; break;
-  case VR_POLY_LIFT:     c->poly_strbuf_lift[id] = (unsigned char)v; break;
-  case VR_NIL_TESTED:    c->nil_tested[id] = (unsigned char)v; break;
-  case VR_HEAD_HELD:     c->head_held[id] = (unsigned char)v; break;
-  case VR_DISCARDED:     c->value_discarded[id] = (unsigned char)v; break;
-  case VR_STR_SHADOW:    c->str_shadow[id] = (unsigned char)v; break;
+  case VR_HANDLE_DEMAND: ((unsigned char *)c->strbuf_handle_demand)[id] = (unsigned char)v; break;
+  case VR_POLY_LIFT:     ((unsigned char *)c->poly_strbuf_lift)[id] = (unsigned char)v; break;
+  case VR_NIL_TESTED:    ((unsigned char *)c->nil_tested)[id] = (unsigned char)v; break;
+  case VR_HEAD_HELD:     ((unsigned char *)c->head_held)[id] = (unsigned char)v; break;
+  case VR_DISCARDED:     ((unsigned char *)c->value_discarded)[id] = (unsigned char)v; break;
+  case VR_STR_SHADOW:    ((unsigned char *)c->str_shadow)[id] = (unsigned char)v; break;
   default:               comp_set_nilnarrow(c, id, (TyKind)v); break;
   }
 }
@@ -362,6 +362,14 @@ int view_call_nil_tested(Compiler *c, int id) {
   for (int i = view_sp - 1; i >= 0; i--)
     if (view_stack[i].kind == VK_CALL_NIL_TESTED && view_stack[i].c == c && view_stack[i].id == id) return 1;
   return 0;
+}
+
+/* A nil arm that leaves the receiver's test to the call's own guard opens
+   VR_NIL_TESTED at 3 (emit_nil_target_own); the guard that writes the test
+   says so here, and the arm reads the 4 before it pops. A signal on the
+   open view: it counts no edit, like the push and the pop around it. */
+void view_nil_test_written(Compiler *c, int recv) {
+  if (comp_nil_tested_stored(c, recv) == 3) ((unsigned char *)c->nil_tested)[recv] = 4;
 }
 
 /* the entry on top, put back */

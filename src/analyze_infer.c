@@ -11586,10 +11586,7 @@ TyKind infer_uncached(Compiler *c, int id) {
      demand saw `x.to_s.strip` while the re-narrow had x re-cleared, and
      the box the value now is was handed on as a String. */
   if (comp_strbuf_box_stored(c, id)) {
-    /* put back before it returns: not a change of the table */
-    comp_write_strbuf_box(c, id, 0);
-    TyKind u = infer_uncached(c, id);
-    comp_write_strbuf_box(c, id, 1);
+    TyKind u = comp_ask_without_box_mark(c, id, infer_uncached);
     return u == TY_POLY ? TY_POLY : TY_STRBUF;
   }
   /* a multiple assignment's element, read back for desugar_masgn_store_evidence:
@@ -12656,7 +12653,7 @@ static int why_ivar_write_of(Compiler *c, int wid, const char *nm, int cid) {
   Scope *ws = comp_scope_of(c, wid);
   if (!ws || ws->class_id != cid) return -1;
   int v = nt_ref(nt, wid, "value");
-  return (v >= 0 && v < c->node_cap && ty_degraded(comp_ntype_stored(c, v))) ? v : -1;
+  return ty_degraded(comp_ntype_settled(c, v)) ? v : -1;
 }
 
 static int why_node_origin(Compiler *c, int id, TyKind t) {
@@ -12672,7 +12669,7 @@ static int why_node_origin(Compiler *c, int id, TyKind t) {
   }
   if (nk == NK_StatementsNode) {
     int n = 0; const int *body = nt_arr(nt, id, "body", &n);
-    if (body && n > 0 && body[n - 1] >= 0 && body[n - 1] < c->node_cap && ty_degraded(comp_ntype_stored(c, body[n - 1]))) return body[n - 1];
+    if (body && n > 0 && ty_degraded(comp_ntype_settled(c, body[n - 1]))) return body[n - 1];
   }
   if (nk == NK_CallNode) {
     /* a call bound to a user def whose return degraded: the value it
@@ -12680,9 +12677,9 @@ static int why_node_origin(Compiler *c, int id, TyKind t) {
        a class or module (a singleton method). */
     int recv = nt_ref(nt, id, "receiver");
     const char *name = nt_str(nt, id, "name");
-    if (name && (recv < 0 || !(recv < c->node_cap && ty_degraded(comp_ntype_stored(c, recv))))) {
+    if (name && (recv < 0 || !ty_degraded(comp_ntype_settled(c, recv)))) {
       int cid = -1, want_cm = 0;
-      if (recv >= 0 && recv < c->node_cap && ty_is_object(comp_ntype_stored(c, recv))) cid = ty_object_class(comp_ntype_stored(c, recv));
+      if (ty_is_object(comp_ntype_settled(c, recv))) cid = ty_object_class(comp_ntype_settled(c, recv));
       else if (recv >= 0 && (nt_kind(nt, recv) == NK_ConstantReadNode || nt_kind(nt, recv) == NK_ConstantPathNode)) {
         const char *cn = nt_key_name(nt, recv);
         cid = cn ? const_node_class_index(c, recv) : -1; want_cm = 1;
@@ -12737,13 +12734,13 @@ static int why_node_origin(Compiler *c, int id, TyKind t) {
   for (int i = 0; i < n->nr; i++) {
     int ch = n->r[i].ref;
     if (n->r[i].key && sp_streq(n->r[i].key, "predicate")) continue;
-    if (ch >= 0 && ch < c->node_cap && ch != id && ty_degraded(comp_ntype_stored(c, ch))) return ch;
+    if (ch != id && ty_degraded(comp_ntype_settled(c, ch))) return ch;
   }
   for (int i = 0; i < n->na; i++) {
     if (n->a[i].key && sp_streq(n->a[i].key, "conditions")) continue;
     for (int k = 0; k < n->a[i].n; k++) {
       int ch = n->a[i].ids[k];
-      if (ch >= 0 && ch < c->node_cap && ch != id && ty_degraded(comp_ntype_stored(c, ch))) return ch;
+      if (ch != id && ty_degraded(comp_ntype_settled(c, ch))) return ch;
     }
   }
   return id;
@@ -13034,8 +13031,8 @@ TyKind infer_type(Compiler *c, int id) {
      unaffected. */
   { TyKind fk = face_of(id); if (fk != TY_UNKNOWN) return fk; }
   /* see an_builtin_answer: the asked call's receiver keeps its own type */
-  if (an_builtin_only && id == an_bo_recv && id < c->node_cap && comp_ntype_stored(c, id) != TY_UNKNOWN)
-    return comp_ntype_stored(c, id);
+  if (an_builtin_only && id == an_bo_recv && comp_ntype_settled(c, id) != TY_UNKNOWN)
+    return comp_ntype_settled(c, id);
   /* A depth-0 entry opens a fresh memo generation. A table changed since
      the last look ends what the earlier generations hold: within this tree
      after its own answers, before it with them. */

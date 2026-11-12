@@ -15612,19 +15612,32 @@ static int rescue_operand_is_class_name(Compiler *c, int op) {
 }
 /* Does the runtime give class or module k, or one above it, an exception
    class nm that no source of the program writes (JSON::ParserError, which
-   `include JSON` lets a module reach under its own name)? */
-static int class_reaches_runtime_exc(Compiler *c, int k, const char *nm, int depth) {
+   `include JSON` lets a module reach under its own name)? `seen` holds, per
+   class, one more than the least depth the search entered it at (0: not
+   yet): a class met again no nearer is not searched again, since modules
+   that each include several of the ones before them are reached by a
+   number of routes that grows with every link. */
+static int class_reaches_runtime_exc_from(Compiler *c, int k, const char *nm, int depth, int *seen) {
   if (k < 0 || k >= c->nclasses || depth > 32) return 0;
+  if (seen[k] && seen[k] <= depth + 1) return 0;
+  seen[k] = depth + 1;
   const ClassInfo *ki = &c->classes[k];
   const char *rn = class_ruby_name(c, k);
   char qn[256];
   if (rn && snprintf(qn, sizeof qn, "%s::%s", rn, nm) < (int)sizeof qn && is_exc_name(qn)) return 1;
-  if (class_reaches_runtime_exc(c, ki->parent, nm, depth + 1)) return 1;
+  if (class_reaches_runtime_exc_from(c, ki->parent, nm, depth + 1, seen)) return 1;
   for (int i = 0; i < ki->nincluded_mods; i++)
-    if (class_reaches_runtime_exc(c, ki->included_mods[i], nm, depth + 1)) return 1;
+    if (class_reaches_runtime_exc_from(c, ki->included_mods[i], nm, depth + 1, seen)) return 1;
   for (int i = 0; i < ki->nprepended_mods; i++)
-    if (class_reaches_runtime_exc(c, ki->prepended_mods[i], nm, depth + 1)) return 1;
+    if (class_reaches_runtime_exc_from(c, ki->prepended_mods[i], nm, depth + 1, seen)) return 1;
   return 0;
+}
+static int class_reaches_runtime_exc(Compiler *c, int k, const char *nm) {
+  int *seen = calloc((size_t)(c->nclasses > 0 ? c->nclasses : 1), sizeof *seen);
+  if (!seen) return 1;   /* unknown: keep the match by name */
+  int r = class_reaches_runtime_exc_from(c, k, nm, 0, seen);
+  free(seen);
+  return r;
 }
 /* Is path segment seg (`P::NAME`) one whose lookup is sure to fail though
    its read may answer: the read goes by the last name, and finds a
@@ -15641,7 +15654,7 @@ static int rescue_segment_unheld(Compiler *c, int seg) {
   if (pk < 0 || c->classes[pk].is_builtin_const || c->classes[pk].is_native_class || c->classes[pk].cext_extension)
     return 0;
   const char *nm = nt_str(c->nt, seg, "name");
-  return nm && const_path_misses_member(c, seg) && !class_reaches_runtime_exc(c, pk, nm, 0);
+  return nm && const_path_misses_member(c, seg) && !class_reaches_runtime_exc(c, pk, nm);
 }
 /* A rescue operand that names a constant defined nowhere (`rescue
    Missing::Thing`): CRuby evaluates it when an exception reaches the

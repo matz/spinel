@@ -1,0 +1,2 @@
+rescued M0::Held: h
+NameError: uninitialized constant M34::Nope (RuntimeError)

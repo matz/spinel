@@ -1611,9 +1611,13 @@ static void lr_event(ElabRec *x, int cls, int sg, const char *name, LrKind kind,
    stands, and an alias, or an alias's forwarder (lr_def), takes its
    original's visibility */
 static int lr_chain_open(Compiler *c, int cls);
+static int lr_original_vis(Compiler *c, int cls, const char *name, int node);
 static void lr_method(ElabRec *x, int cls, int sg, const char *name, int node, LrKind kind, int bvis, int may, const char *target) {
   if (cls < LR_MAIN || !name || (x->body && lr_chain_open(x->c, cls))) return;   /* (lr_body_versions) */
-  int vis = lr_vis(bvis), ov = target ? lr_vis_at(x->c, cls, target, sg, elab_point_of(x->c, node)) : -1;
+  /* an alias (or the forwarder of one) takes the visibility of the method the chain of its class finds as its
+     original at the alias, a builtin's among them (`alias pp puts` is private, as Kernel#puts is), not its section's */
+  int vis = lr_vis(bvis), ov = target && !sg && cls >= LR_MAIN && (kind == LR_ALIAS || kind == LR_DEF) ? lr_original_vis(x->c, cls, target, node) : -1;
+  if (ov < 0 && target) ov = lr_vis_at(x->c, cls, target, sg, elab_point_of(x->c, node));
   const LrHist *th = x->unplaced && target ? lr_hist(x->r, cls, sg, target, 0) : NULL;
   for (int i = th ? th->n - 1 : -1; i >= 0; i--)   /* an unplaced body's own original, which no query at a point sees */
     if (th->v[i].unplaced && th->v[i].kind <= LR_VIS) { ov = th->v[i].vis; break; }
@@ -1670,7 +1674,8 @@ static void lr_def(ElabRec *x, int def, int fc, int fs, int bvis, int may) {
   const char *fwd = n == 1 && nt_kind(nt, st[0]) == NK_CallNode ? nt_str(nt, st[0], "name") : NULL;
   /* a forwarder to a builtin's method (desugar_inherited_aliases' over a Hash
      subclass's `[]=`): no program def of the name gives it a visibility, and
-     the builtin's, which the alias kept, is public */
+     the builtin's, which the alias kept (lr_method asks it, lr_original_vis), is public where
+     the record cannot say */
   if (fwd && nt_int(nt, st[0], "builtin_only", 0)) bvis = BVIS_PUBLIC;
   lr_method(x, cls, sg, nt_str(nt, def, "name"), def, LR_DEF, bvis, may, fwd);
 }
@@ -8889,11 +8894,11 @@ int elab_main_method_vis_at(Compiler *c, int node, const char *name) {
   if (od) {
     if (later < 0 || !md) return -1;
     /* An Object entry ahead of main's def (`alias_method :m, :to_s`)
-       leaves main's def (or main's visibility word) the answer. Main's
-       alias is not read here: it takes the visibility of its source
-       method. An Object entry after main's last entry that is no
-       visibility word is not read here either. */
-    if (later == 1 && md->kind != LR_DEF && md->kind != LR_VIS) return -1;
+       leaves main's def, alias (which holds the visibility of its source
+       method, lr_original_vis) or visibility word the answer. An Object
+       entry after main's last entry that is no visibility word is not
+       read here. */
+    if (later == 1 && md->kind != LR_DEF && md->kind != LR_ALIAS && md->kind != LR_VIS) return -1;
     if (later == 2 && od->kind != LR_VIS) return -1;
     if (later == 2) v = od->vis;
   }
@@ -10654,6 +10659,118 @@ static int lr_sup_chain(LrSup *s, int cls, int sg) {
   int rc = lr_walk(s->c, &lr_sup_walker, s, cls, sg, 0);
   if (rc < 0) s->ans = MX_UNKNOWN;
   return rc != 0 && rc != LR_W_END;
+}
+/* ---- the visibility of the method an alias captured ----
+   The visibility of `name` where the walk of cls's chain first finds an owner of it at the alias's point p: a
+   version of the program's (its def's, or the visibility word's after it; an alias holds its original's) or a
+   builtin's table (core_method_vis), the one visitor of the chain (lr_walk) that reads all of it: the program's
+   classes and modules, Object's reopening and main's top level as one table, builtin mixins, a builtin
+   superclass or Struct, and the core classes at the chain's end, Kernel's reopening and then Kernel's table among
+   them. -1 where nothing owns it or the record cannot follow (an opaque define on the way, a superclass or a
+   module it does not know, an undef). */
+/* Is call node a mixin (include, prepend, extend) of builtin modules alone (`include Enumerable`)? The walk reads them
+   (lr_bv_mixin), so the record's opaque entry for the call says nothing more */
+static int lr_builtin_mixin_call(Compiler *c, int node) {
+  const NodeTable *nt = c->nt;
+  const char *nm = nt_str(nt, node, "name");
+  int an = nt_ref(nt, node, "arguments"), ac = 0;
+  const int *av = an >= 0 ? nt_arr(nt, an, "arguments", &ac) : NULL;
+  if (!nm || !is_mixin_call(nm) || ac == 0) return 0;
+  for (int i = 0; i < ac; i++) {
+    const char *bn = nt_kind_is_constant(nt_kind(nt, av[i])) ? lr_written_name(nt, av[i]) : NULL;
+    if (!bn || !is_builtin_module_name(bn)) return 0;
+  }
+  return 1;
+}
+typedef struct { Compiler *c; const char *name; LoadPoint p; int vis, kvis; } LrBVis;
+static int lr_bv_answer(LrBVis *b, int bits) {
+  b->vis = (bits & 4) ? SP_VIS_PRIVATE : (bits & 2) ? SP_VIS_PROTECTED : SP_VIS_PUBLIC;
+  return LR_W_STOP;
+}
+/* the latest entry of cls's history of the name before p that is no def of a reopened Kernel */
+static const LrDef *lr_bv_last(const LrBVis *b, int cls) {
+  const LrHist *h = cls >= LR_MAIN ? lr_hist(b->c->lrec, cls, 0, b->name, 0) : NULL;
+  for (int j = h ? h->n - 1 : -1; j >= 0; j--) {
+    const LrDef *v = &h->v[j];
+    if (v->kind <= LR_VIS && !nt_int(b->c->nt, v->node, "kernel_def", 0) && !v->unplaced &&
+        elab_cmp(elab_point_of(b->c, v->node), b->p) == PROG_BEFORE) return v;
+  }
+  return NULL;
+}
+static int lr_bv_own(void *ud, int cls, int sg) {
+  LrBVis *b = ud;
+  Compiler *c = b->c;
+  const LrDef *d = NULL;
+  const LrHist *oh = lr_hist(c->lrec, LR_KEY_OPAQUE, lr_const_owner(cls), "", 0);
+  for (int i = 0; oh && i < oh->n; i++) {   /* a define the record cannot read, that may have run before p */
+    const LrDef *o = &oh->v[i];
+    const char *nm = o->kind == LR_OPAQUE && o->vis == LR_OPAQUE_DEFINES ? nt_str(c->nt, o->node, "name") : NULL;
+    if (!nm || !(o->unplaced || elab_cmp(elab_point_of(c, o->node), b->p) != PROG_AFTER) || lr_builtin_mixin_call(c, o->node)) continue;
+    /* a literal send passes where the name it sends defines nothing */
+    const char *sent = is_send_family(nm) ? call_sent_name(c->nt, o->node, NULL) : NULL;
+    if (sent && !lr_defines(c->lrec, sent) && !is_method_naming_call(sent) && !visibility_of_name(sent)) continue;
+    return LR_W_STOP;
+  }
+  if (!sg && lr_object_table(c, cls)) {   /* the reopening's and main's, one table */
+    const LrDef *md = NULL, *od = NULL;
+    int later = elab_main_object_later(c, b->name, b->p, 0, &md, &od);
+    if (later < 0) return LR_W_STOP;
+    d = later == 1 ? md : later == 2 ? od : NULL;
+    if (d && nt_int(c->nt, d->node, "kernel_def", 0)) {
+      /* a def of a reopened Kernel stands at the top level (main's, private) and in Object's reopening (a copy) too: it is
+         Kernel's method, read at Kernel's step (lr_bv_core) if no other entry of the one table is the later */
+      const LrDef *m2 = lr_bv_last(b, LR_MAIN), *o2 = lr_bv_last(b, lr_core(c->lrec, CORE_OBJECT));
+      int ord = m2 && o2 ? elab_order(c, m2->node, o2->node) : PROG_BEFORE;
+      b->kvis = od && nt_int(c->nt, od->node, "kernel_def", 0) ? od->vis : -1;
+      if (ord == PROG_UNKNOWN) return LR_W_STOP;
+      d = m2 && (!o2 || ord == PROG_AFTER) ? m2 : o2;
+    }
+    if (!d) return 0;
+    if (d->kind == LR_UNDEF || d->kind == LR_REMOVE) return LR_W_STOP;
+    b->vis = d->vis;
+    return LR_W_STOP;
+  }
+  int o = lr_own(c, lr_hist(c->lrec, cls, sg, b->name, 0), b->p, b->p.region < 0, 1, &d);
+  if (o == ELAB_NO) return 0;
+  if (o == ELAB_YES && d) b->vis = d->vis;
+  return LR_W_STOP;
+}
+static int lr_bv_mixin(void *ud, int cls, int ref) {   /* a builtin module (Enumerable), or one the record does not know */
+  LrBVis *b = ud;
+  const char *bn = nt_kind_is_constant(nt_kind(b->c->nt, ref)) ? lr_written_name(b->c->nt, ref) : NULL;
+  int v;
+  (void)cls;
+  if (!bn || !is_builtin_module_name(bn)) return LR_W_STOP;
+  return (v = core_method_vis(bn, b->name, 0, NULL)) > 0 ? lr_bv_answer(b, v) : 0;
+}
+static int lr_bv_builtin(void *ud, int cls, int sg) {   /* a class whose chain goes on in a builtin */
+  LrBVis *b = ud;
+  Compiler *c = b->c;
+  int module = cls >= 0 && comp_class_is_module(c, &c->classes[cls]), v;
+  const char *core = cls >= 0 && lr_core_reopening(c, cls) ? c->classes[cls].name : NULL;
+  if (module) return !sg && core && (v = core_method_vis(core, b->name, 0, NULL)) > 0 ? lr_bv_answer(b, v) : 0;
+  const char *bsup = core ? NULL : lr_record_root(c, cls);
+  if (!bsup && !core) bsup = lr_builtin_super(c, cls);
+  if ((core || bsup) && !sg) return (v = core_method_vis(core ? core : bsup, b->name, 1, NULL)) > 0 ? lr_bv_answer(b, v) : LR_W_STOP;
+  LrClass *k = lr_class(c->lrec, cls);
+  return !core && !bsup && k && k->has_sup && lr_later(c, &k->sup, k->sup_ref) < LR_MAIN ? LR_W_STOP : 0;   /* a superclass the record does not know */
+}
+static int lr_bv_core(void *ud, int core) {   /* a core class's own table, right after the program's reopening of it */
+  LrBVis *b = ud;
+  int v = core_method_vis(core_class_name(core), b->name, 0, NULL);
+  if (core == CORE_KERNEL && b->kvis >= 0) {   /* the def of a reopened Kernel, where Object's table has no other */
+    b->vis = b->kvis;
+    return LR_W_STOP;
+  }
+  return v > 0 ? lr_bv_answer(b, v) : 0;
+}
+static int lr_bv_done(void *ud, int cls, int sg) { (void)ud; (void)cls; (void)sg; return LR_W_STOP; }
+static int lr_bv_unsure(void *ud, int cls, int ref) { (void)ud; (void)cls; (void)ref; return LR_W_STOP; }
+static const LrWalker lr_bv_walker = { lr_bv_own, lr_bv_mixin, lr_bv_builtin, lr_bv_done, lr_bv_core, lr_bv_unsure, LR_TAIL_N, NULL };
+/* See the declaration at lr_method: the visibility (SP_VIS_*) of the method `name` that alias node's class cls finds where it runs, -1 for none */
+static int lr_original_vis(Compiler *c, int cls, const char *name, int node) {
+  LrBVis b = { c, name, elab_point_of(c, node), -1, -1 };
+  return lr_walk(c, &lr_bv_walker, &b, cls, 0, 0) < 0 ? -1 : b.vis;
 }
 static void lr_sup_out(LrSup *s, int **reach, int *nreach, int *reader, int *opaque) {
   *reach = s->reach; *nreach = s->nreach; *reader = s->reader; *opaque = s->opaque;

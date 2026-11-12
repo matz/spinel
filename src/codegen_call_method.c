@@ -477,6 +477,13 @@ static void emit_method_owner_class(Compiler *c, int mn, int mi, int unbound, Bu
   else buf_printf(b, "((sp_Class){%d, NULL})", ci);
 }
 
+/* The skip of builtin_method_class_canon_map: the program's reopening of
+   cls may answer the name ahead of the builtin's method. */
+typedef struct { Compiler *c; const char *name; } BmReopenSkip_;
+static int bm_reopen_skip(void *ud, const char *cls) {
+  BmReopenSkip_ *s = ud;
+  return elab_reopen_answers(s->c, cls, s->name);
+}
 /* The identity key of the builtin method a synthesized wrapper mi stands for,
    "Owner#name" (sp_BoundMethod.ident), or NULL for any other target. Each
    `.method(:sym)` on a builtin receiver has a wrapper of its own, so the
@@ -2250,6 +2257,18 @@ static int emit_method_obj_target(Compiler *c, int id, Buf *b, const NodeTable *
        CRuby writes in C: it takes the same key, or it would compare and hash
        by its own function against the same Method read back out of a container) */
     if (!ident && bop) { snprintf(identbuf, sizeof identbuf, "Array#%s", builtin_method_canonical("Array", sym)); ident = identbuf; }
+    /* (a receiver whose element or key kinds no write fixed, `x = []` or `h = {}`,
+       binds the builtin by its name alone, with no wrapper: its class is the
+       static one, so its method takes the same key, and `x.method(:size)` and
+       `x.method(:length)` are one method. A class whose subclass instance the
+       slot may hold, or whose reopening may answer the name, is left out.) */
+    if (!ident && mi < 0 && !bop && self_receiver && !bam_poly && !program_has_arysub(c)) {
+      TyKind st = repr_of(c, recv).as_ty;
+      const char *scls = st == TY_STRING ? "String" : st == TY_SYMBOL ? "Symbol"
+                       : ty_is_array(st) ? "Array" : ty_is_hash(st) ? "Hash" : NULL;
+      const char *sown = scls && !elab_reopen_answers(c, scls, sym) ? builtin_method_owner(scls, sym) : NULL;
+      if (sown) { snprintf(identbuf, sizeof identbuf, "%s#%s", sown, builtin_method_canonical(sown, sym)); ident = identbuf; }
+    }
     /* (the holder a boxed receiver rides in is new on every call: the Method
        says so, and == / hash read the receiver inside it) */
     int held = self_receiver && bam_poly;
@@ -2473,8 +2492,20 @@ static int emit_method_obj_target(Compiler *c, int id, Buf *b, const NodeTable *
         own = ownbuf;
         al = builtin_method_alias_group(own, hash + 1);
       }
+      /* a held Method's receiver class is known only at run time: it
+         carries, for each builtin class where its name has other spellings,
+         the method the name calls there, and two held Methods of one
+         receiver compare those (sp_bm_held_alias_same). A class whose
+         reopening may answer the name first is left out. */
+      char *map = NULL;
+      if (held && !ident) {
+        BmReopenSkip_ sk = { c, disp };
+        map = builtin_method_class_canon_map(disp, bm_reopen_skip, &sk);
+        al = map;
+      }
       buf_puts(b, ", ");
       if (al) emit_str_literal(b, al); else buf_puts(b, "NULL");
+      free(map);
       buf_printf(b, ", (sp_int)%uu)", builtin_name_group_hash(ident && hash ? hash + 1 : disp));
     }
     if (mmq >= 0 && (self_rooted || recv < 0)) buf_puts(b, ")");

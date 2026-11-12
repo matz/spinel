@@ -4407,6 +4407,11 @@ static int lr_reopen_answers(Compiler *c, const char *cls, const char *name) {
   }
   return 0;
 }
+/* lr_reopen_answers for other files: may the program's reopenings answer
+   name on a value of builtin class cls ahead of the builtin's method? */
+int elab_reopen_answers(Compiler *c, const char *cls, const char *name) {
+  return lr_reopen_answers(c, cls, name);
+}
 /* Does a reopening of a builtin the program makes hold a method entry or a
    mixin, which a builtin's call of a hook may reach (or is it one the
    record holds no class of)? Before the record is made every reopening

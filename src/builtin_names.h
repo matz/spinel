@@ -523,6 +523,7 @@ const char *builtin_method_canonical(const char *cls, const char *name);
 const char *builtin_method_alias_group(const char *cls, const char *canonical);
 /* One number for every name that is an alias of another in any builtin class. */
 unsigned builtin_name_group_hash(const char *name);
+char *builtin_method_class_canon_map(const char *name, int (*skip)(void *, const char *), void *ud);
 /* The builtin class or module whose own singleton methods hold public `name`
    first on the class side of builtin class or module cls, in a library the
    program has, as CRuby's lookup finds it ahead of Class's or Module's

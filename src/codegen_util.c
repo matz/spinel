@@ -6720,7 +6720,9 @@ const char *bigint_arith_fn(const char *op) {
 }
 /* True if any user exception subclass overrides #message or #to_s, so the
    default exception message/to_s path must dispatch to the user method rather
-   than reporting the stored message (which defaults to the class name). */
+   than reporting the stored message (which defaults to the class name). Only
+   an override reachability kept counts: the dispatcher has an arm for no
+   other (exc_text_method). */
 int exc_has_user_msg_override(Compiler *c) {
   /* a builtin exception's reopening defining either (`class StandardError;
      def to_s`) serves every exception under it */
@@ -6729,7 +6731,7 @@ int exc_has_user_msg_override(Compiler *c) {
       if (!class_is_exc_reopen(c, i)) continue;
       for (int k = 0; k < 2; k++) {
         int mi = call_target(c, -1, i, k ? "to_s" : "message", 0, NULL);
-        if (mi >= 0 && c->scopes[mi].class_id == i && (TyKind)c->scopes[mi].ret == TY_STRING) return 1;
+        if (mi >= 0 && c->scopes[mi].class_id == i && c->scopes[mi].reachable && (TyKind)c->scopes[mi].ret == TY_STRING) return 1;
       }
     }
   for (int i = 0; i < c->nclasses; i++) {
@@ -6738,10 +6740,10 @@ int exc_has_user_msg_override(Compiler *c) {
        so gate on TY_STRING to match -- otherwise a non-string override would
        route every exception query through an empty dispatcher for nothing. */
     int mi_msg = call_target(c, -1, i, "message", 0, NULL);
-    if (mi_msg >= 0 && (TyKind)c->scopes[mi_msg].ret == TY_STRING)
+    if (mi_msg >= 0 && c->scopes[mi_msg].reachable && (TyKind)c->scopes[mi_msg].ret == TY_STRING)
       return 1;
     int mi_tos = call_target(c, -1, i, "to_s", 0, NULL);
-    if (mi_tos >= 0 && (TyKind)c->scopes[mi_tos].ret == TY_STRING)
+    if (mi_tos >= 0 && c->scopes[mi_tos].reachable && (TyKind)c->scopes[mi_tos].ret == TY_STRING)
       return 1;
   }
   return 0;

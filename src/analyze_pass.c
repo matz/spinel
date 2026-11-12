@@ -20917,8 +20917,12 @@ static void cr_collect_implied(Compiler *c, const NodeTable *nt, int id, char **
 
 /* The end of the program: an uncaught exception is printed through its class's
    message, detailed_message, to_s and backtrace, so the exception classes'
-   methods of those names run (a program's own are the only ones asked). The
-   rows are the same for every file's root. */
+   methods of those names run (a program's own are the only ones asked): a
+   program class's once one of it can exist (the mark is held for its class,
+   cr_live_reach_as), a builtin exception's reopening's as the runtime raises
+   one. These are the methods the text dispatchers call (exc_text_method), so
+   what they call is kept with them. The rows are the same for every file's
+   root. */
 void cr_collect_program_end(Compiler *c, char ***out, int *n, int *cap) {
   const NodeTable *nt = c->nt;
   NtImplied rows[16];
@@ -20928,7 +20932,8 @@ void cr_collect_program_end(Compiler *c, char ***out, int *n, int *cap) {
     const Scope *sc = &c->scopes[s];
     if (!sc->name || sc->is_cmethod || sc->class_id < 0) continue;
     for (int i = 0; i < nr; i++) {
-      if (!sp_streq(sc->name, rows[i].name) || !class_is_exc_subclass(c, sc->class_id)) continue;
+      if (!sp_streq(sc->name, rows[i].name) ||
+          !(class_is_exc_subclass(c, sc->class_id) || class_is_exc_reopen(c, sc->class_id))) continue;
       char mark[32], cause[120];
       snprintf(mark, sizeof mark, "\x01%d", s);
       snprintf(cause, sizeof cause, "ProgramNode: %s of an uncaught exception", rows[i].name);

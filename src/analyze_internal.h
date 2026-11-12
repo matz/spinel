@@ -1211,6 +1211,9 @@ void refuse_readonly_global_write(Compiler *c);
 /* Defined in codegen.c; the analyzer uses it to specialize/type a
    `rescue <UserExc> => e` binding (#1415). */
 int class_is_exc_subclass(Compiler *c, int ci);
+/* (and a builtin exception's reopening, whose text methods the uncaught
+   exception printer asks, cr_collect_program_end) */
+int class_is_exc_reopen(Compiler *c, int ci);
 /* the native-binding registries' growth and `;`-merge (analyze_scope.c),
    shared with a bundled extension's __cext_link (analyze_cext.c) */
 void ffi_semi_append(char **slot, const char *add);

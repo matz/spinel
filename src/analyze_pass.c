@@ -3877,8 +3877,7 @@ static int infer_write_container_usage(Compiler *c, const NodeTable *nt, int nfb
              value widens each one where it is built (below), where one
              answered kind left the others typed */
           int fboxed = frt == TY_POLY && nt_kind(nt, recv) == NK_LocalVariableReadNode;
-          if (frt != TY_POLY_ARRAY && !fboxed)
-{
+          if (frt != TY_POLY_ARRAY && !fboxed) {
             TyKind fbv = block_store_value_ty(c, fbody, fbn > 0 ? fbs[fbn - 1] : -1, (TyKind)vt,
                                               ty_is_array(frt) ? ty_array_elem(frt) : TY_UNKNOWN, &fnum);
             if (fnx != TY_UNKNOWN || fbv != TY_NIL) vt = fbv;

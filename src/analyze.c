@@ -1332,11 +1332,18 @@ void compute_reachable(Compiler *c, int typed) {
       char list[2048];
       snprintf(list, sizeof list, "%s", g_ext_classes);
       for (char *tok = strtok(list, ","); tok; tok = strtok(NULL, ",")) {
-        /* the table names a class by its last name; a path (`A::B`) names B */
-        const char *leaf = strrchr(tok, ':');
-        int ci2 = comp_class_index(c, leaf ? leaf + 1 : tok);
-        if (ci2 < 0 || !ext_class_exported(c, ci2)) {
+        /* a path (`A::B`) names one class; a name alone names each class
+           of that leaf, and two of them (A::Base, B::Base) leave the
+           choice to the path */
+        int a, b;
+        int n = ext_item_classes(c, tok, &a, &b);
+        if (n == 0) {
           fprintf(stderr, "spinel: --ext-class `%s` does not name a class of the program\n", tok);
+          exit(1);
+        }
+        if (n > 1) {
+          fprintf(stderr, "spinel: --ext-class `%s` names %d classes (%s, %s%s): name one by its path\n",
+                  tok, n, class_ruby_name(c, a), class_ruby_name(c, b), n > 2 ? ", ..." : "");
           exit(1);
         }
       }

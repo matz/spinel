@@ -2550,6 +2550,9 @@ int        comp_method_vis_in_chain(Compiler *c, int class_id, const char *name)
    call by name through the exported method table (fixed positional
    parameters whose types and whose result cross the boundary). */
 int        ext_class_exported(Compiler *c, int class_id);
+/* The classes ext_class_exported can export that one name of the list,
+   item, names: their count, with the first two in *a and *b (-1 for none) */
+int        ext_item_classes(Compiler *c, const char *item, int *a, int *b);
 int        ext_method_exported(Compiler *c, int class_id, int si, int typed);
 int        ext_scope_host_callable(Compiler *c, int si);
 int        ext_ty_crosses(TyKind t);

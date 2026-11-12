@@ -1796,6 +1796,18 @@ ext-test: $(SPINEL) $(SP_RT_LIB) $(SP_RT_MT_LIB) $(SPINEL_TIMEOUT)
 	    cmp -s "$$tmp/out" test/ext/expected_methods_sub && [ $$rc -eq 0 ] || { echo "ext-test: FAIL (--ext-class subclass host output mismatch, or status $$rc)"; diff -u test/ext/expected_methods_sub "$$tmp/out" || true; ok=0; }; \
 	  else echo "ext-test: FAIL (--ext-class subclass host C did not compile)"; sed -n 1,6p "$$tmp/cc.err"; ok=0; fi; \
 	fi; \
+	if [ $$ok -eq 1 ]; then \
+	  if ! $(SPINEL) test/ext/dup_leaf.rb -c --no-line-map --ext-init Init_ext_dup \
+	      --ext-entry ExtDup.go --ext-class ExtDupB::Base -o "$$tmp/d.c" >/dev/null 2>&1; then \
+	    echo "ext-test: FAIL (--ext-class path emission with two classes of one leaf name)"; ok=0; \
+	  elif ! grep -Fq '"b")[1]), 0,' "$$tmp/d.c" || grep -Fq '"a")[1]), 0,' "$$tmp/d.c" || grep -Fq '"c")[1]), 0,' "$$tmp/d.c"; then \
+	    echo "ext-test: FAIL (--ext-class ExtDupB::Base exports a class other than ExtDupB::Base)"; ok=0; \
+	  fi; \
+	  if $(SPINEL) test/ext/dup_leaf.rb -c --no-line-map --ext-init Init_ext_dup \
+	      --ext-entry ExtDup.go --ext-class Base -o "$$tmp/d.c" >"$$tmp/d.out" 2>&1; then \
+	    echo "ext-test: FAIL (--ext-class Base named two classes and compiled)"; ok=0; \
+	  else grep -q "names 2 classes" "$$tmp/d.out" || { echo "ext-test: FAIL (--ext-class Base refused without naming both classes)"; sed -n 1,3p "$$tmp/d.out"; ok=0; }; fi; \
+	fi; \
 	rm -rf "$$tmp"; \
 	if [ $$ok -eq 1 ]; then echo "ext-test: pass"; else exit 1; fi
 

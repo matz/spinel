@@ -1,5 +1,6 @@
 #include "analyze_internal.h"
 #include "builtin_names.h"
+#include "builtin_ops.h"
 #include "call_plan.h"
 #include "share.h"
 #include "value_pos.h"
@@ -2754,66 +2755,66 @@ static int rsl_own_method(const NodeTable *nt, const char *cls, const char *name
 /* Can the program change the Array a member-list local or constant holds,
    so that the list its one write made is not the list a later
    `Struct.new(*keys)` reads? Each read of it (by name: `name`, a local of
-   scope `scp`, or a constant when scp is NULL), but the read `self_rd`
-   being resolved, must be the receiver of a method that neither changes
-   the Array nor hands it on: `keys << :c`, `keys.sort!`, `add(keys)`,
-   `other = keys` or `keys.each { }` (each answers the Array itself) all
-   can. A splat operand (`*keys`) passes copies of its elements. With
-   `strings`, the elements are Strings the program can change too
-   (`keys.first << "x"`), so only a read that makes new names is safe. */
-static int rsl_list_safe_method(const char *mn, int strings) {
-  static const char *const sym_ok[] = {
-    "size", "length", "count", "empty?", "any?", "none?", "all?", "one?", "include?", "member?",
-    "index", "find_index", "rindex", "first", "last", "[]", "at", "fetch", "dig", "values_at",
-    "map", "collect", "flat_map", "collect_concat", "select", "filter", "reject", "filter_map",
-    "find", "detect", "min", "max", "minmax", "sort", "sort_by", "min_by", "max_by", "reverse",
-    "uniq", "rotate", "take", "drop", "take_while", "drop_while", "zip", "product", "sum",
-    "tally", "group_by", "partition", "each_slice", "each_cons", "chunk_while", "slice_when",
-    "compact", "flatten", "sample", "shuffle", "join", "inspect", "to_s", "hash", "==", "!=",
-    "eql?", "frozen?", "freeze", "dup", "+", "-", "&", "|", "*", "<=>", "to_h", "each_with_object",
-    "inject", "reduce", "cycle", "combination", "permutation", "nil?", "is_a?", "kind_of?",
-    "instance_of?", "respond_to?", "class", NULL };
-  /* a String list: reads that answer new names or no element at all */
-  static const char *const str_ok[] = {
-    "size", "length", "count", "empty?", "include?", "member?", "index", "map", "collect",
-    "sort", "reverse", "uniq", "join", "inspect", "to_s", "hash", "==", "!=", "eql?",
-    "frozen?", "freeze", NULL };
-  const char *const *ok = strings ? str_ok : sym_ok;
-  for (int i = 0; mn && ok[i]; i++) if (sp_streq(ok[i], mn)) return 1;
+   scope `scp`, or a constant when scp is NULL) must leave the Array as it
+   is and must not hand it on (rsl_read_keeps_list). */
+static int rsl_no_own_method(const NodeTable *nt, const char *m) {
+  return !rsl_own_method(nt, "Array", m) && !rsl_own_method(nt, "Object", m) &&
+         !rsl_own_method(nt, "Kernel", m);
+}
+/* the reads that answer the Array itself: `keys.each { }.push(:c)` */
+static int rsl_answers_self(const char *m) {
+  return sp_streq(m, "each") || sp_streq(m, "each_with_index") || sp_streq(m, "freeze") || is_to_a_name(m);
+}
+/* Does read r of the list leave its Array as it is? It may be:
+   - the receiver of an Array read (BOP_READ_ARRAY_INTACT) the program does
+     not define again; a read that answers the Array itself
+     (`keys.each { }`) only where its value is dropped;
+   - a splat operand (`*keys` passes the elements);
+   - an interpolation (`"#{keys}"` makes a new String);
+   - the argument of puts, print, p or pp (p only where its value is
+     dropped, as p answers its argument). */
+static int rsl_read_keeps_list(Compiler *c, const int *par, int r) {
+  const NodeTable *nt = c->nt;
+  int p = par[r];
+  if (p < 0) return 0;
+  NodeKind pk = nt_kind(nt, p);
+  if (pk == NK_SplatNode) return 1;
+  if (pk == NK_CallNode && nt_ref(nt, p, "receiver") == r) {
+    const char *m = nt_str(nt, p, "name");
+    return m && bop_name_has_reader(m, BOP_READ_ARRAY_INTACT) && rsl_no_own_method(nt, m) &&
+           (!rsl_answers_self(m) || comp_value_dropped(c, p));
+  }
+  if (pk == NK_StatementsNode) {
+    int bn = 0; nt_arr(nt, p, "body", &bn);
+    return bn == 1 && par[p] >= 0 && nt_kind(nt, par[p]) == NK_EmbeddedStatementsNode &&
+           rsl_no_own_method(nt, "to_s") && rsl_no_own_method(nt, "inspect");
+  }
+  if (pk == NK_ArgumentsNode && par[p] >= 0 && nt_kind(nt, par[p]) == NK_CallNode) {
+    int k = par[p], an = 0;
+    nt_arr(nt, p, "arguments", &an);
+    const char *m = nt_str(nt, k, "name");
+    if (an != 1 || !m || nt_ref(nt, k, "receiver") >= 0 || nt_ref(nt, k, "block") >= 0) return 0;
+    if (!rsl_no_own_method(nt, m) || !rsl_no_own_method(nt, "inspect") || !rsl_no_own_method(nt, "to_s")) return 0;
+    if (sp_streq(m, "puts") || sp_streq(m, "print")) return 1;
+    return (sp_streq(m, "p") || sp_streq(m, "pp")) && comp_value_dropped(c, k);
+  }
   return 0;
 }
-static int rsl_list_may_change(Compiler *c, const char *name, Scope *scp, int self_rd, int strings) {
+static int rsl_list_may_change(Compiler *c, const char *name, Scope *scp) {
   const NodeTable *nt = c->nt;
-  NodeKind rk = scp ? NK_LocalVariableReadNode : NK_ConstantReadNode;
-  int reads = 0, safe = 0;
-  NT_FOREACH_KIND(nt, rk, r) {
-    const char *rn = nt_str(nt, r, "name");
-    if (r == self_rd || !rn || !sp_streq(rn, name) || (scp && comp_scope_of(c, r) != scp)) continue;
-    reads++;
-  }
   /* `X::KEYS` reaches the constant by another node kind */
   if (!scp) NT_FOREACH_KIND(nt, NK_ConstantPathNode, r) {
     const char *rn = nt_str(nt, r, "name");
     if (rn && sp_streq(rn, name)) return 1;
   }
-  if (!reads) return 0;
-  NT_FOREACH_KIND(nt, NK_CallNode, k) {
-    int rv = nt_ref(nt, k, "receiver");
-    if (rv < 0 || rv == self_rd || nt_kind(nt, rv) != rk) continue;
-    const char *rn = nt_str(nt, rv, "name");
-    if (!rn || !sp_streq(rn, name) || (scp && comp_scope_of(c, rv) != scp)) continue;
-    if (!rsl_list_safe_method(nt_str(nt, k, "name"), strings)) return 1;
-    safe++;
+  const int *par = NULL;
+  NT_FOREACH_KIND(nt, scp ? NK_LocalVariableReadNode : NK_ConstantReadNode, r) {
+    const char *rn = nt_str(nt, r, "name");
+    if (!rn || !sp_streq(rn, name) || (scp && comp_scope_of(c, r) != scp)) continue;
+    if (!par) par = comp_parent_map(c);
+    if (!rsl_read_keeps_list(c, par, r)) return 1;
   }
-  NT_FOREACH_KIND(nt, NK_SplatNode, k) {
-    int ex = nt_ref(nt, k, "expression");
-    if (ex < 0 || ex == self_rd || nt_kind(nt, ex) != rk) continue;
-    const char *rn = nt_str(nt, ex, "name");
-    if (!rn || !sp_streq(rn, name) || (scp && comp_scope_of(c, ex) != scp)) continue;
-    if (strings) return 1;
-    safe++;
-  }
-  return safe < reads;
+  return 0;
 }
 
 /* `%i[a b].freeze`: a list no one can change, whatever its reads do (a
@@ -2868,7 +2869,7 @@ int resolve_symbol_list(Compiler *c, int node, const char **out, int cap, int de
     }
     if (src < 0) return -1;
     /* the one write's Array, changed in place after it (`keys << :c`) */
-    if (!rsl_frozen_literal(nt, src) && rsl_list_may_change(c, vn, scp, node, rsl_strings)) return -1;
+    if (!rsl_frozen_literal(nt, src) && rsl_list_may_change(c, vn, scp)) return -1;
     return resolve_symbol_list(c, src, out, cap, depth + 1);
   }
   /* a constant the program writes once (`KEYS = %i[a b].freeze`, regexp_parser's
@@ -2877,14 +2878,17 @@ int resolve_symbol_list(Compiler *c, int node, const char **out, int cap, int de
     const char *cn = nt_str(nt, node, "name");
     int src = -1;
     for (int w = 0; cn && w < nt->count; w++) {
-      if (nt_kind(nt, w) != NK_ConstantWriteNode) continue;
+      NodeKind wk = nt_kind(nt, w);
+      if (wk != NK_ConstantWriteNode && wk != NK_ConstantOperatorWriteNode && wk != NK_ConstantOrWriteNode &&
+          wk != NK_ConstantAndWriteNode && wk != NK_ConstantTargetNode) continue;
       const char *wn = nt_str(nt, w, "name");
       if (!wn || !sp_streq(wn, cn)) continue;
-      if (src >= 0) return -1;
+      /* `KEYS += [:c]`, `KEYS ||= ...`, `KEYS, X = ...`: a second write */
+      if (src >= 0 || wk != NK_ConstantWriteNode) return -1;
       src = nt_ref(nt, w, "value");
     }
     if (src < 0) return -1;
-    if (!rsl_frozen_literal(nt, src) && rsl_list_may_change(c, cn, NULL, node, rsl_strings)) return -1;
+    if (!rsl_frozen_literal(nt, src) && rsl_list_may_change(c, cn, NULL)) return -1;
     return resolve_symbol_list(c, src, out, cap, depth + 1);
   }
   /* a receiverless method on a resolvable symbol list that yields another

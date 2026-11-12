@@ -1,5 +1,6 @@
 # Struct.new(*keys) / Data.define(*keys) over a list the program only reads
-# (size, include?, first, sort, a splat, map(&:to_sym)) or freezes keeps its
+# (size, include?, first, sort, each, p, an interpolation, a splat,
+# map(&:to_sym)) or freezes keeps its
 # names at compile time. A list the program changes in place is refused
 # (test/reject/struct_new_member_list_changed.rb).
 k = %i[b a]
@@ -15,6 +16,9 @@ P = Struct.new(*KEYS)
 p P.new(1, 2)
 
 DK = %i[u v]
+DK.each_with_index { |s, i| p [s, i] }
+p DK
+puts "dk: #{DK}"
 D = Data.define(*DK)
 p D.new(u: 1, v: 2), DK.length
 

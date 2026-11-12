@@ -6,6 +6,10 @@ true
 :x
 :y
 #<struct P x=1, y=2>
+[:u, 0]
+[:v, 1]
+[:u, :v]
+dk: [:u, :v]
 #<data D u=1, v=2>
 2
 [:p, :q]

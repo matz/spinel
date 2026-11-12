@@ -20,8 +20,9 @@ module M
   def respond_to_missing?(n, ip) = n == :mm || super
 end
 class T; include M; end
-class K
-  def self.respond_to_missing?(n, ip = false) = n == :kk
+class R
+  def self.cm = respond_to?(:dyn)
+  def self.cm2 = self.respond_to?(:dyn)
 end
 cnt = 0
 mk = -> { cnt += 1; Q.new }
@@ -32,7 +33,7 @@ p mk.().respond_to?(:qx), cnt, mk.().respond_to?(:zz, true), cnt
 p $log
 p S.new.respond_to?(:real), S.new.ask, S.new.ask2, S.new.respond_to?(:dyn)
 p T.new.respond_to?(:mm), T.new.respond_to?(:nn)
-p K.respond_to?(:kk), K.respond_to?(:zz)
+p R.cm, R.cm2, R.respond_to?(:dyn)
 p 5.respond_to?(:dyn), "s".respond_to?(:upcase), nil.respond_to?(:dyn)
 [R.new, Q.new, 3, "x", T.new, nil].each { |v| p [v.respond_to?(:dyn), v.respond_to?(:qa), v.respond_to?(:mm)] }
 p $log.size

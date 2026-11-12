@@ -239,6 +239,20 @@ int desugar_class_body_bare_new(Compiler *c) {
   return changed;
 }
 
+/* A receiverless `members`, without arguments or a block, in a class method
+   of a Struct or Data class that neither removed the method nor defines one:
+   the class's own, which self answers there. */
+static int record_cmethod_bare_members(Compiler *c, int id) {
+  const NodeTable *nt = c->nt;
+  const Scope *s = comp_scope_of(c, id);
+  if (!s->name || !s->is_cmethod || s->class_id < 0 || !c->classes[s->class_id].is_struct ||
+      nt_ref(nt, id, "receiver") >= 0 || nt_ref(nt, id, "arguments") >= 0 || nt_ref(nt, id, "block") >= 0) return 0;
+  const LrDef *d = NULL;
+  elab_method_at(c, s->class_id, "members", 1, elab_point_of(c, id), &d);
+  return !(d && (d->kind == LR_UNDEF || d->kind == LR_REMOVE)) &&
+         call_target(c, id, s->class_id, "members", CT_CMETHOD, NULL) < 0;
+}
+
 /* A receiverless `const_get(:K)` or `const_defined?(:K)` in a class method,
    or in the class body itself, is sent to the class -- the implicit self
    there. It was left without
@@ -260,14 +274,32 @@ int desugar_bare_class_self_calls(Compiler *c) {
     int want = -2;
     for (size_t k = 0; k < sizeof surf / sizeof surf[0]; k++)
       if (sp_streq(nm, surf[k].name)) { want = surf[k].argc; break; }
-    if (want == -2) continue;
+    int rec = want == -2 && sp_streq(nm, "members") && record_cmethod_bare_members(c, id);
+    if (want == -2 && !rec) continue;
     if (nt_ref(nt, id, "receiver") >= 0) continue;
     if (id >= c->node_cap) continue;
     Scope *sc = comp_scope_of(c, id);
     int in_cmethod = sc && sc->name && sc->is_cmethod && sc->class_id >= 0;
     int in_body = (!sc || !sc->name) && c->node_cbody[id] >= 0;
     if (!in_cmethod && !in_body) continue;
-    if (want >= 0) {
+    /* A Struct or Data class answers `members` itself, ahead of Object's (a
+       top-level def): in its class method the bare call is `self.members`,
+       as it is in the block that builds the class (cb_struct_act). A block
+       there can run on another self: the call in one keeps its bare form
+       where instance_eval or instance_exec runs the block, or where the
+       program hands either of them a proc at all. */
+    if (rec) {
+      const int *par = comp_parent_map(c);
+      int blk = 0, rebinds = ie_class_of(c, id) != -1;
+      for (int a = par[id]; a >= 0 && a != sc->def_node && !blk; a = par[a])
+        blk = nt_kind(nt, a) == NK_BlockNode || nt_kind(nt, a) == NK_LambdaNode;
+      if (blk && !rebinds) NT_FOREACH_KIND(nt, NK_CallNode, u) {
+        int ub = nt_ref(nt, u, "block");
+        rebinds |= ub >= 0 && nt_kind(nt, ub) == NK_BlockArgumentNode && is_instance_eval_family(nt_str(nt, u, "name"));
+      }
+      if (rebinds) continue;
+    }
+    if (!rec && want >= 0) {
       int argc = 0, an = nt_ref(nt, id, "arguments");
       if (an >= 0) nt_arr(nt, an, "arguments", &argc);
       if (!in_cmethod || argc != want || nt_ref(nt, id, "block") >= 0) continue;

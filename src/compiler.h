@@ -2372,6 +2372,7 @@ int        comp_cvar_index(ClassInfo *ci, const char *name);  /* class var; -1 i
 int        comp_cvar_intern(ClassInfo *ci, const char *name); /* find or add; returns index */
 int        comp_cvar_owner(const Compiler *c, int cid, const char *name); /* the class whose slot holds @@name */
 int        cvar_name_ok(const char *n);   /* `@@` and an identifier: a reflection call's literal name that is not one raises NameError */
+int        ivar_name_ok(const char *n);   /* `@` and an identifier: a reflection call's literal name that is not one raises NameError */
 /* Find the instance-method scope index for class_id + method name, or -1. */
 int        comp_method_in_class(Compiler *c, int class_id, const char *name);
 int        comp_method_overridden(Compiler *c, int cid, const char *name, int cmeth);

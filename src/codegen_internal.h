@@ -2753,6 +2753,10 @@ int view_push_repr(Compiler *c, int id, int flag, int v);
 unsigned view_epoch(void);
 void view_unwind(int mark);   /* back to a view_mark(): views, arm contexts and bindings */
 int emit_op_ivar_reflection(Compiler *c, const BopCtx *x, Buf *b);
+/* CRuby's NameError for `sym`, a literal name that is no instance variable
+   name (ivar_name_ok): `sp_raise_cls(...)`, a statement-free expression */
+void emit_ivar_name_error(Compiler *c, Buf *b, const char *sym, int arg);
+const char *ivar_raise_tail(Compiler *c, int id);   /* that raise's dead value, in the call's C form */
 int emit_exc_ivar_call(Compiler *c, int id, const char *name, int recv, Buf *b);
 /* The concurrency handles' row emitters (codegen_call_concurrency.c) */
 int emit_op_thread_set_report(Compiler *c, const BopCtx *x, Buf *b);

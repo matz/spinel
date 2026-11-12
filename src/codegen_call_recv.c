@@ -18061,6 +18061,25 @@ static void emit_poly_ivar_set_computed(Compiler *c, int id, int recv, TyKind rt
 static int emit_poly_ivar_call(Compiler *c, int id, Buf *b, const NodeTable *nt, const char *name, int recv, int argc, const int *argv, TyKind rt, int *out) {
   /* an exception class of the program's that defines the method answers it */
   if (rt == TY_EXCEPTION && exc_class_defines(c, name)) return 0;
+  /* a literal name that is no instance variable name (`"bad"`, `:@1`):
+     CRuby's NameError on any receiver, after the receiver and the other
+     arguments are evaluated. Falling through reached no arm, and the call
+     raised NoMethodError. */
+  if (recv >= 0 && (rt == TY_POLY || rt == TY_EXCEPTION) && nt_ref(nt, id, "block") < 0 &&
+      ((sp_streq(name, "instance_variable_get") && argc == 1) ||
+       (sp_streq(name, "instance_variable_set") && argc == 2) ||
+       (sp_streq(name, "instance_variable_defined?") && argc == 1)) &&
+      (nt_kind(nt, argv[0]) == NK_SymbolNode || nt_kind(nt, argv[0]) == NK_StringNode) &&
+      poly_ivar_builtin_arm(c, id, name)) {
+    const char *sym = nt_str(nt, argv[0], nt_kind(nt, argv[0]) == NK_SymbolNode ? "value" : "content");
+    if (!ivar_name_ok(sym)) {
+      buf_puts(b, "((void)("); emit_expr_for_effect(c, recv, b); buf_puts(b, "), ");
+      for (int k = 1; k < argc; k++) { buf_puts(b, "(void)("); emit_expr_for_effect(c, argv[k], b); buf_puts(b, "), "); }
+      emit_ivar_name_error(c, b, sym, argv[0]);
+      buf_printf(b, ", %s)", ivar_raise_tail(c, id));
+      *out = 1; return 1;
+    }
+  }
   /* instance_variable_get with a computed name on a POLY receiver: the
      class dispatch of the literal form below, each arm reading by name */
   if (recv >= 0 && (rt == TY_POLY || rt == TY_EXCEPTION) && sp_streq(name, "instance_variable_get") &&

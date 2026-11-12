@@ -2543,7 +2543,17 @@ static void cf_member_params(CF *f, int x, int mi) {
   }
 }
 
-/* `X.new(...)`: an instance of the user class X, initialized */
+/* The initialize methods a `new` of class x may run, each of which a
+   construction binds (cplan_new_initializers), into ms[0..VER_MAX_ARMS):
+   how many. Where the plan cannot list them all, the table's and those it
+   could: a flow into each of them is a flow into every one there is. */
+static int cf_inits(Compiler *c, int x, int *ms) {
+  int whole;
+  return cplan_new_initializers(c, x, ms, VER_MAX_ARMS, &whole);
+}
+
+/* `X.new(...)`: an instance of the user class X, initialized by each
+   initialize it may run */
 static void cf_construct(CF *f, int v, int x, const int *argv, int argc, int blk, const char *nm) {
   Compiler *c = f->c;
   const NodeTable *nt = f->nt;
@@ -2559,8 +2569,9 @@ static void cf_construct(CF *f, int v, int x, const int *argv, int argc, int blk
   int cn = sp_streq(nm, "new") ? comp_cmethod_in_chain(c, x, "new", NULL) : -1;
   if (cn >= 0 && cf_user_target(f, v, cn, argv, argc, blk)) return;
   if (sp_streq(nm, "allocate")) return;
-  int init = comp_method_in_chain(c, x, "initialize", NULL);
-  if (init >= 0) { cf_user_target(f, -1, init, argv, argc, blk); return; }
+  int ms[VER_MAX_ARMS], ni = cf_inits(c, x, ms);
+  for (int i = 0; i < ni; i++) cf_user_target(f, -1, ms[i], argv, argc, blk);
+  if (ni > 0) return;
   if (k->is_struct || k->is_data) cf_member_args(f, x, argv, argc);
   if (blk >= 0 && nt_kind(nt, blk) == NK_BlockNode) cf_all_block_params(f, blk);
 }
@@ -2576,29 +2587,33 @@ static void cf_self_new(CF *f, int v, int cid, const int *argv, int argc, int bl
   if (f->pool[dsi].all) { for (int i = 0; i < argc; i++) cf_all(f, argv[i]); return; }
   for (int i = cls_set_next(&f->pool[dsi], -1); i >= 0; i = cls_set_next(&f->pool[dsi], i)) {
     cf_construct(f, -1, i, argv, argc, blk, nm);
-    int init = zsuper_of >= 0 ? comp_method_in_chain(c, i, "initialize", NULL) : -1;
-    if (init < 0) continue;
-    const Scope *s = &c->scopes[zsuper_of], *ts = &c->scopes[init];
-    for (int p = 0; p < s->nparams && p < ts->nparams; p++) cf_flow(f, cf_param_el(f, zsuper_of, p), cf_param_el(f, init, p));
+    int ms[VER_MAX_ARMS], ni = zsuper_of >= 0 ? cf_inits(c, i, ms) : 0;
+    for (int q = 0; q < ni; q++) {
+      const Scope *s = &c->scopes[zsuper_of], *ts = &c->scopes[ms[q]];
+      for (int p = 0; p < s->nparams && p < ts->nparams; p++) cf_flow(f, cf_param_el(f, zsuper_of, p), cf_param_el(f, ms[q], p));
+    }
   }
 }
 
 /* `d.with(k: v)` on a Data x: a new instance, initialized as `new`
    initializes one from the given keywords and the receiver's other
-   members, which x's own initialize takes as keywords */
+   members, which each initialize of x's it may run takes as keywords */
 static void cf_data_with(CF *f, int v, int x, const int *argv, int argc) {
   Compiler *c = f->c;
   ClassInfo *k = &c->classes[x];
   if (v >= 0) cf_add_set(f, v, f->own[x]);
-  int init = comp_method_in_chain(c, x, "initialize", NULL);
-  if (init < 0) { cf_member_args(f, x, argv, argc); return; }
-  cf_bind_args(f, init, argv, argc);
-  Scope *m = &c->scopes[init];
-  for (int r = 0; r < k->nreaders; r++) {
-    int me = cf_member_el(f, x, k->readers[r]);
-    for (int i = 0; i < m->nparams; i++)
-      if (m->pnames[i] && sp_streq(m->pnames[i], k->readers[r]) && cf_param_is_kw(f, m, i)) cf_flow(f, me, cf_param_el(f, init, i));
-    if (m->kwrest_idx >= 0) cf_store(f, cf_param_el(f, init, m->kwrest_idx), me);
+  int ms[VER_MAX_ARMS], ni = cf_inits(c, x, ms);
+  if (ni <= 0) { cf_member_args(f, x, argv, argc); return; }
+  for (int q = 0; q < ni; q++) {
+    int init = ms[q];
+    cf_bind_args(f, init, argv, argc);
+    Scope *m = &c->scopes[init];
+    for (int r = 0; r < k->nreaders; r++) {
+      int me = cf_member_el(f, x, k->readers[r]);
+      for (int i = 0; i < m->nparams; i++)
+        if (m->pnames[i] && sp_streq(m->pnames[i], k->readers[r]) && cf_param_is_kw(f, m, i)) cf_flow(f, me, cf_param_el(f, init, i));
+      if (m->kwrest_idx >= 0) cf_store(f, cf_param_el(f, init, m->kwrest_idx), me);
+    }
   }
 }
 /* `s[i] = v` on a Struct x: v is in the member a Symbol, a String or an
@@ -3617,8 +3632,9 @@ static void cf_call(CF *f, int v) {
        whose parameters are any builtin */
     int rk0 = is_raise_alias(nm) && argc >= 2 ? cf_is_class_const(f, argv[0]) : -1;
     for (int i = rk0 >= 0 ? cls_set_next(&f->pool[f->desc[rk0]], -1) : -1; i >= 0; i = cls_set_next(&f->pool[f->desc[rk0]], i)) {
-      int init = comp_method_in_chain(c, i, "initialize", NULL);
-      for (int p = 0; init >= 0 && p < c->scopes[init].nparams; p++) cf_add_set(f, cf_param_el(f, init, p), cf_bk_any(f));
+      int ms[VER_MAX_ARMS], ni = cf_inits(c, i, ms);
+      for (int q = 0; q < ni; q++)
+        for (int p = 0; p < c->scopes[ms[q]].nparams; p++) cf_add_set(f, cf_param_el(f, ms[q], p), cf_bk_any(f));
     }
     /* self is the receiver (`def seal = freeze` answers self, a bare
        `each` in an Array subclass iterates self) */

@@ -1866,6 +1866,80 @@ int cplan_implied_target(Compiler *c, int id, int op, int cls, const char *name,
   if (framed) elab_plan_leave(c);
   return vi;
 }
+/* The versions of the history that holds the table's method (its class's
+   own), into out[0..VER_MAX_ARMS): with one, the table's is the one; with
+   more, those an instance meets over the load (elab_instance_span), or
+   every one where the record cannot tell them apart. How many; *whole as
+   cplan_new_initializers says. */
+static int new_inits_list(Compiler *c, int ci, int *out, int *whole) {
+  int tm = comp_method_in_chain(c, ci, "initialize", NULL), n = 0, dc;
+  *whole = 1;
+  if (tm < 0) return 0;
+  out[n++] = tm;
+  ElabVersion hv[VER_MAX_ARMS];
+  const LrDef *ds[VER_MAX_ARMS];
+  int nh = elab_history_versions(c, c->scopes[tm].class_id, 0, "initialize", hv, VER_MAX_ARMS);
+  if (nh < 0) *whole = 0;
+  if (nh <= 1) return n;
+  int ns = elab_instance_span(c, ci, "initialize", ds, VER_MAX_ARMS), all = ns < 0 || ns > VER_MAX_ARMS;
+  for (int i = 0; i < nh; i++) {
+    const LrDef *d = hv[i].v;
+    int met = all;
+    for (int j = 0; j < ns && !met; j++) met = ds[j] == d;
+    if (!met) continue;
+    /* (a removal or an undef: what is behind it, or none of the program's) */
+    int vi = d->kind == LR_REMOVE || d->kind == LR_UNDEF ? -1 : ct_def_version(c, ci, "initialize", 0, d, &dc), dup = 0;
+    if (vi < 0) { *whole = 0; continue; }
+    for (int j = 0; j < n; j++) dup |= out[j] == vi;
+    if (dup) continue;
+    if (n == VER_MAX_ARMS) { *whole = 0; break; }
+    out[n++] = vi;
+  }
+  return n;
+}
+/* The lists, kept by class for the record and the method table as they
+   stand (elab_stamp, nscopes, nclasses): each ivar fact of each class asks
+   them, and a class of many ivars asked the record its history and span
+   once an ivar. pool[lo[k]] is how many, the next whether that is whole,
+   then the methods; lo[k] < 0 where not asked yet. */
+struct NewInits { int *lo, *pool, ncls, nscopes, npool, cpool; ElabStamp stamp; };
+void new_inits_free(Compiler *c) {
+  struct NewInits *m = c->new_inits;
+  if (!m) return;
+  free(m->lo); free(m->pool); free(m);
+  c->new_inits = NULL;
+}
+/* See call_plan.h. */
+int cplan_new_initializers(Compiler *c, int ci, int *out, int cap, int *whole) {
+  struct NewInits *m = c->new_inits;
+  *whole = 1;
+  if (ci < 0 || ci >= c->nclasses) return 0;
+  if (m && (!elab_stamp_same(m->stamp, elab_stamp(c)) || m->nscopes != c->nscopes || m->ncls != c->nclasses)) { new_inits_free(c); m = NULL; }
+  if (!m) {
+    if (!(c->new_inits = m = calloc(1, sizeof *m)) || !(m->lo = malloc(sizeof(int) * (size_t)c->nclasses))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    for (int k = 0; k < c->nclasses; k++) m->lo[k] = -1;
+    m->stamp = elab_stamp(c);
+    m->nscopes = c->nscopes;
+    m->ncls = c->nclasses;
+  }
+  if (m->lo[ci] < 0) {
+    int ms[VER_MAX_ARMS], w, n = new_inits_list(c, ci, ms, &w);
+    if (m->npool + n + 2 > m->cpool) {
+      m->cpool = m->npool + n + 2 > 2 * m->cpool ? m->npool + n + 2 : 2 * m->cpool;
+      if (!(m->pool = realloc(m->pool, sizeof(int) * (size_t)m->cpool))) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+    }
+    m->lo[ci] = m->npool;
+    m->pool[m->npool++] = n;
+    m->pool[m->npool++] = w;
+    memcpy(m->pool + m->npool, ms, sizeof(int) * (size_t)n);
+    m->npool += n;
+  }
+  const int *e = m->pool + m->lo[ci];
+  int n = e[0] < cap ? e[0] : cap;
+  memcpy(out, e + 2, sizeof(int) * (size_t)n);
+  *whole = e[1] && e[0] <= cap;
+  return n;
+}
 /* The version entry an implied call `name` on an instance of class cls
    takes where the plan answers an entry (mi: the table's method of the
    name on cls): the scope, -1 for none made. Its key is the one the

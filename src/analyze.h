@@ -586,6 +586,11 @@ void elab_window_open(Compiler *c, ElabWindow *w);
    define). */
 enum { ELAB_SPAN_ANY = -2 };
 int elab_method_span(Compiler *c, int cls, const char *name, int sg, const ElabWindow *w, const LrDef **out, int cap);
+/* ...over the whole load and after it, for an instance of cls: the
+   versions of its instance method `name` an object with cls among its
+   ancestors may meet from the first statement one may exist (lr_rta) on;
+   -1 in a program of more regions too */
+int elab_instance_span(Compiler *c, int cls, const char *name, const LrDef **out, int cap);
 /* The versions call id may meet as cls's `name` (singleton when sg), the
    one fact the call plan binds the call from (ct_version_at) and the record
    asks whether a version is met by (elab_version_met): where the call runs

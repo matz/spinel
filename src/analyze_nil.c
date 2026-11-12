@@ -317,12 +317,14 @@ static int nf_ivar_def(NF *f, int n, const char *ivn, int mi, int depth) {
   }
 }
 
-/* Does `new` on class k leave ivar ivn set: k's initialize writes it on
-   every path? */
+/* Does `new` on class k leave ivar ivn set: every initialize it may run
+   (cplan_new_initializers) writes it on every path? */
 static int nf_init_sets(NF *f, int k, const char *ivn) {
-  int mi = comp_method_in_chain(f->c, k, "initialize", NULL);
-  if (mi < 0 || f->c->scopes[mi].body < 0) return 0;
-  return nf_ivar_def_list(f, f->c->scopes[mi].body, ivn, mi, 0);
+  int ms[VER_MAX_ARMS], whole, n = cplan_new_initializers(f->c, k, ms, VER_MAX_ARMS, &whole);
+  if (!whole) return 0;
+  for (int i = 0; i < n; i++)
+    if (f->c->scopes[ms[i]].body < 0 || !nf_ivar_def_list(f, f->c->scopes[ms[i]].body, ivn, ms[i], 0)) return 0;
+  return n > 0;
 }
 
 /* A write of ivar `ivn` into an instance of class k may store nil: a write

@@ -10416,7 +10416,19 @@ int elab_class_super_owner(Compiler *c, int cls, int own, const char *name, int 
   return 1 << (got ? s.ans : MX_NONE);
 }
 
-/* See node_table.h. */
+/* See analyze.h. */
 const char *key_name(const Compiler *c, int n) {
-  return nt_key_name(c->nt, n);
+  const NodeTable *nt = c->nt;
+  /* a class or module header the qualify pass named: the class the header
+     opened, as the load record holds it (the name the class was given) */
+  if (c->lrec && n >= 0 && nt_str(nt, n, "qc_name")) {
+    const int *par = comp_parent_map((Compiler *)c);
+    int h = n < c->cg_parent_n ? par[n] : -1;
+    NodeKind hk = h >= 0 ? nt_kind(nt, h) : NK_ProgramNode;
+    if ((hk == NK_ClassNode || hk == NK_ModuleNode) && nt_ref(nt, h, "constant_path") == n) {
+      int ci = elab_header_class(c, h, NULL, NULL);
+      if (ci >= 0 && ci < c->nclasses && c->classes[ci].name) return c->classes[ci].name;
+    }
+  }
+  return nt_key_name(nt, n);
 }

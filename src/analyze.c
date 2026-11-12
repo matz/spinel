@@ -51741,13 +51741,38 @@ static void an_phase_infer_fixpoint(Compiler *c) {
   if (AN_PASS("an_settle_seed_boxes", an_settle_seed_boxes(c))) an_phase_infer_fixpoint(c);
 }
 
+/* Is name nm the method name want, or an alias name whose chain of old
+   names leads to it? The names found are walked in turn, each once, as
+   an_scope_call_candidates walks them. */
+static int nd_alias_reaches(Compiler *c, const char *want, const char *nm) {
+  if (sp_streq(want, nm)) return 1;
+  ANameHash seen; memset(&seen, 0, sizeof seen);
+  int nnames = 1, found = 0; const char **all = malloc(sizeof *all);
+  if (!all) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+  all[0] = want; anh_add(&seen, want);
+  for (int i = 0; i < nnames && !found; i++)
+    for (int e = an_alias_by_old_first(c, all[i]); e >= 0; e = ao_next[e]) {
+      const char *an = ao_new[e];
+      if (sp_streq(an, nm)) { found = 1; break; }
+      if (anh_has(&seen, an)) continue;
+      anh_add(&seen, an);
+      all = realloc(all, sizeof *all * (size_t)(nnames + 1));
+      if (!all) { fprintf(stderr, "spinel: out of memory\n"); exit(1); }
+      all[nnames++] = an;
+    }
+  anh_free(&seen); free(all);
+  return found;
+}
+
 /* Can a call leave out positional optional parameter i of method scope
    sc, so the parameter takes its default? 1 unless every call of the
    method's name (an_scope_call_candidates: its aliases too, and `new`
    for initialize) passes it by position with no splat. A block, a
    lambda, a keyword parameter and a method with a rest or post
-   parameter answer 1. A call this list does not see (a send) only keeps
-   the parameter unboxed, as it was. */
+   parameter answer 1. A Method object of the name (`method(:m)`, also
+   through `send(:method, :m)`, an alias of the name, or a name only the
+   run time knows) answers 1 too. Another call this list does not see (a
+   `send(:m)`) only keeps the parameter unboxed, as it was. */
 static int nil_default_maybe_taken(Compiler *c, Scope *sc, int i) {
   const NodeTable *nt = c->nt;
   if (!sc->name || sc->def_node < 0 || nt_kind(nt, sc->def_node) != NK_DefNode ||
@@ -51763,6 +51788,21 @@ static int nil_default_maybe_taken(Compiler *c, Scope *sc, int i) {
   for (int k = 0; k < no; k++)
     if (nt_str(nt, opts[k], "name") && sp_streq(nt_str(nt, opts[k], "name"), sc->pnames[i])) pos = nr + k;
   if (pos < 0) return 1;
+  /* A Method object of the name (`method(:m).call`, `&method(:m)`) is
+     called with any count, and no call of the name shows it. A name
+     only the run time knows (`method(n)`) may be this one too. */
+  static const char *const mref[] = { "method", "public_method", "singleton_method",
+                                      "instance_method", "public_instance_method", NULL };
+  for (int r = 0; mref[r]; r++)
+    for (int u = an_calls_named_first(c, mref[r]); u >= 0; u = an_calls_named_next(u)) {
+      int args = nt_ref(nt, u, "arguments"), an = 0;
+      const int *av = args >= 0 ? nt_arr(nt, args, "arguments", &an) : NULL;
+      if (an != 1) continue;
+      NodeKind ak = nt_kind(nt, av[0]);
+      const char *sv = ak == NK_SymbolNode ? nt_str(nt, av[0], "value") :
+                       ak == NK_StringNode ? nt_str(nt, av[0], "unescaped") : NULL;
+      if (!sv || nd_alias_reaches(c, sc->name, sv)) return 1;
+    }
   int nc = 0, taken = 0;
   int *cands = an_scope_call_candidates(c, sc, &nc);
   for (int k = 0; k < nc && !taken; k++) {

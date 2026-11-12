@@ -509,14 +509,22 @@ int desugar_main_singleton_calls(Compiler *c) {
   return ntodo > 0;
 }
 
+/* (in class or module body `body`, does call id's name find a method of the
+   class's own side first: its class methods, or Class's or Module's?) */
+static int cbody_class_side_answers(Compiler *c, int id, int body, const char *nm) {
+  return comp_cbody_call_mi(c, id, nm) >= 0 ||
+         builtin_answers_ahead_of(comp_class_is_module(c, &c->classes[body]) ? "Module" : "Class", nm, "Object");
+}
 /* A method the program adds to Object (`class Object; def helper ...`) is
    every object's, so a receiverless `helper` in another class's instance
    method is `self.helper` (#5779). A class's chain stops short of Object, so
    the bare call found nothing there: a plain one raised NameError at run
    time and a yielding one was refused, where `self.helper` already reaches
-   Object's method. Give it self, at the top level too, where self is main.
-   A module's method runs on its includer and an instance_eval block on its
-   receiver; both are left as they were. */
+   Object's method. Give it self, at the top level too, where self is main,
+   and in a class or module body, where self is the class (when neither its
+   class methods nor Class's or Module's own answer the name, which CRuby's
+   lookup meets first). A module's method runs on its includer and an
+   instance_eval block on its receiver; both are left as they were. */
 int desugar_bare_object_reopen_calls(Compiler *c) {
   int obj = comp_core_class(c, CORE_OBJECT);
   if (obj < 0) return 0;
@@ -527,18 +535,18 @@ int desugar_bare_object_reopen_calls(Compiler *c) {
     const char *nm = nt_str(nt, id, "name");
     /* (a builtin_only call is the builtin's, whatever Object defines) */
     if (!nm || cplan_builtin_call(c, id) || call_target(c, id, obj, nm, CT_OWN, NULL) < 0) continue;
-    /* in a class body self is the class, and in an instance_eval block
-       the receiver */
+    /* (in an instance_eval block self is the receiver) */
     Scope *sc = comp_scope_of(c, id);
-    if (((!sc || !sc->name) && c->node_cbody[id] >= 0) || ie_class_of(c, id) >= 0) continue;
-    int cls = sc ? sc->class_id : -1;
+    if (ie_class_of(c, id) >= 0) continue;
+    int body = (!sc || !sc->name) ? c->node_cbody[id] : -1, cls = sc ? sc->class_id : -1;
+    if (body >= 0 && cbody_class_side_answers(c, id, body, nm)) continue;
     if (sc && sc->is_cmethod) continue;
     if (cls >= 0) {
       if (cls == obj || comp_class_is_module(c, &c->classes[cls])) continue;
       if (call_target(c, id, cls, nm, 0, NULL) >= 0) continue;
     }
-    /* at the top level self is main, an Object; a top-level `def` of the
-       name is the one the bare call means */
+    /* at the top level self is main, an Object; there and in a class
+       body, a top-level `def` of the name is the one the bare call means */
     else if (call_target(c, id, -1, nm, CT_TOP, NULL) >= 0) continue;
     int sn = nt_new_node(nt, "SelfNode");
     if (sn < 0) continue;
@@ -9842,7 +9850,10 @@ int desugar_call_or_write_reopen(Compiler *c) {
    top-level function already serves. It went through main's dispatch,
    where the def is not, and raised NoMethodError (#5061). The rule is
    syntactic, as CRuby's is: only a bare `self` node, not `(self)` and not
-   a local holding it. */
+   a local holding it. A class or module body's `self.m` is the same
+   receiverless call there where Object's own history holds a version of
+   the name at the call, as Object's table then answers the call by its one
+   entry; before any, the call stays as it was. */
 int desugar_main_self_call(Compiler *c) {
   NodeTable *nt = (NodeTable *)c->nt;
   int changed = 0;
@@ -9870,7 +9881,13 @@ int desugar_main_self_call(Compiler *c) {
        Reflected calls retain their own visibility policy at emission. */
     if (recv < 0 || nt_kind(nt, recv) != NK_SelfNode) continue;
     if (nt_safe_nav(nt, id)) continue;
-    if (!self_is_main(c, recv) || nt_int(nt, recv, "ie_self", 0)) continue;
+    if (nt_int(nt, recv, "ie_self", 0)) continue;
+    /* (and a class or module body's: when neither its class methods nor
+       Class's or Module's own answer the name, and an Object def of it is
+       live there) */
+    int body = self_is_main(c, recv) ? -2 : self_class_body(c, recv);
+    if (body == -1 || (body >= 0 && (cbody_class_side_answers(c, id, body, name) ||
+                                     elab_object_own_version_at(c, name, elab_point_of(c, id)) != ELAB_YES))) continue;
     if (call_target(c, id, -1, name, CT_TOP, NULL) < 0) continue;   /* no top-level def */
     if (!nt_ignore_visibility(nt, id) && !nt_str(nt, id, "send_blind") &&
         !nt_str(nt, id, "vis_enforce") && !cplan_has_method_missing(c, id, -1, 0)) continue;

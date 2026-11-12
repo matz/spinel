@@ -5290,7 +5290,14 @@ static int method_obj_lookup(Compiler *c, int node, int *cls, int *sg) {
     int mi = comp_self_call_mi(c, node, sym);
     if (mi < 0) return cplan_capture_missing(c, node);
     k = c->scopes[mi].class_id, side = k >= 0 && c->scopes[mi].is_cmethod;
-    if (k < 0) return call_target(c, node, k, sym, CT_CAPTURE | CT_TOP, NULL);
+    if (k < 0) {
+      /* (a version of Object's that main's top-level ask meets is the
+         capture's on Object: ML_OBJECT) */
+      MethodLookup tl = { .def_class = -1 };
+      int t = call_target(c, node, k, sym, CT_CAPTURE | CT_TOP, &tl);
+      if (t >= 0 || tl.kind != ML_OBJECT) return t;
+      k = comp_core_class(c, CORE_OBJECT);
+    }
     goto found;
   }
   /* `self.method(:m)` in a class method: self is the class */

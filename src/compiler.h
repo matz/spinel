@@ -2657,6 +2657,8 @@ int        class_is_exc_subclass(Compiler *c, int ci);   /* analyze.c */
 int        comp_plain_class(Compiler *c, int cid);    /* only Object's and Kernel's builtin methods behind the class: no core class or core module among its ancestors */
 int        comp_enum_behind(Compiler *c, int cid);    /* Enumerable's methods behind the class: Enumerable, or an Array, Struct or native ancestor */
 int        core_method_vis(const char *cls, const char *m, int inherit, const char **owner);   /* codegen_call_class.c */
+int        core_vis_of_bit(int bit);   /* codegen_call_class.c: SP_VIS_* of a core_method_vis bit */
+int        core_bit_of_vis(int vis);   /* ...and the bit of an SP_VIS_* */
 int        core_method_undefined(const char *cls, const char *m);
 int        builtin_ancestor_def_ran(Compiler *c, int id, int k, const char *qm);   /* codegen_call_class.c */
 int        builtin_ancestor_accessor(Compiler *c, int k, const char *qm);   /* codegen_call_class.c */   /* does core class cls undefine an ancestor's m itself (Complex#round)? codegen_call_class.c */

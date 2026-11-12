@@ -637,11 +637,14 @@ int elab_chain_settled(Compiler *c, int cls, int sg, const char *name, LoadPoint
    first (prepends, own, includes, then the superclass's; where a
    singleton's chain ends, the instance methods it goes on into: for
    main's own singleton, Object's), into
-   out[0..cap): each with its history (hist, the run-time cell its
-   statement writes, call_plan.c's version entries) and its number there,
-   1-based. How many; -1 when a class on the chain is one the record does
-   not hold, a mixin's module is not known, or past cap. */
-typedef struct { const LrDef *v; int hist, n; } ElabVersion;
+   out[0..cap): each with its history (hist), the run-time cell its
+   statement writes (cell, call_plan.c's version entries: its history's,
+   or for main's and Object's histories of a name, which are one entry of
+   Object's table, the one both write) and its number there, 1-based, in
+   the record's order over both. How many; -1 when a class on the chain is
+   one the record does not hold, a mixin's module is not known, or past
+   cap. */
+typedef struct { const LrDef *v; int hist, cell, n; } ElabVersion;
 int elab_chain_versions(Compiler *c, int cls, int sg, const char *name, ElabVersion *out, int cap);
 /* the late bit of the histories of `name` that versions vs[0..n) are in
    (elab_chain_versions): 2 where a call may run ahead of the first version
@@ -653,6 +656,15 @@ int elab_versions_late(Compiler *c, const char *name, const ElabVersion *vs, int
 /* ...and the versions of cls's own history of `name` alone, numbered as
    there */
 int elab_history_versions(Compiler *c, int cls, int sg, const char *name, ElabVersion *out, int cap);
+/* ...and whether main's history of `name` and Object's are one entry of
+   Object's method table, each holding a version (a top-level def and a
+   reopening of Object's): their versions write one cell, and a call on main
+   meets them along Object's chain */
+int elab_main_object_one_entry(Compiler *c, const char *name);
+/* ...and whether Object's own history of `name` (its reopenings' defs, not
+   main's top-level ones) holds a live version at p: ELAB_YES, ELAB_NO, or
+   ELAB_UNKNOWN where the record cannot say */
+int elab_object_own_version_at(Compiler *c, const char *name, LoadPoint p);
 /* ...and whether main's top-level history of `name` holds a version whose node carries the int mark `mark` (set by a desugar) */
 int elab_main_history_marked(Compiler *c, const char *name, const char *mark);
 /* The state of the record and the node table an answer of elab_chain_versions

@@ -1,0 +1,20 @@
+:object
+[:object, :object, :object, :object]
+:main
+[:main, :main, :main, :main]
+:object2
+[:object2, :object2, :object2, :object2]
+:object2
+:object2
+:main2
+[:main2, :main2, :main2, :main2]
+:main2
+true
+true
+true
+[:object3, "Tally"]
+[:object3, "main"]
+:main3
+:main3
+true
+false
